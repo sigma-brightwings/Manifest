@@ -1,8 +1,20 @@
-# Plan — outfitting, weapons in the controls, debris, and the law
+# Manifest — the plan
 
-Scope: slot-based outfitting, fire groups on the mouse, salvageable polygonal
-debris, combat reputation, and a police force that fines you before it kills
-you. Plus pilot/ship identity on the F5 page.
+**The single design document.** `DESIGN-NOTES-WEAPONS-AND-BEACON.md` has
+been folded into this file and removed; anything that referred to it means
+the weapons and beacon sections here.
+
+It began as a plan for outfitting and combat and grew past that. It now
+covers weapons, the law, debris and salvage, mining, the economy and how
+piracy reaches it, faction war and territory, who hunts whom, the mission
+board, subfactions and crew, hydrogen, comms, black holes and radiation,
+the pulsar beacon, and eventually a fleet.
+
+**Start with the Status section immediately below** — it is checked
+against the source rather than against memory, and it is the fastest way
+to know what is real. `CHANGELOG.md` carries what changed and whether
+saves survive; `CLAUDE.md` carries the doctrines and the toolchain
+quirks.
 
 ---
 
@@ -167,11 +179,12 @@ robbing."
 
 ---
 
-## ⚠️ Reconciling with `DESIGN-NOTES-WEAPONS-AND-BEACON.md`
+## The weapon retier, and what it replaced
 
-That document post-dates this plan and revises part of it. Read it
-alongside this section; where they disagree, the disagreement is listed
-here rather than silently resolved.
+A later design pass revised this plan's original weapon scheme. Both are
+recorded because the disagreement is the useful part — the first version
+is still what the *numbers* were tuned against, and knowing why they
+moved is worth more than only knowing where they landed.
 
 ### The conflict that matters: what a tier IS
 
@@ -234,6 +247,62 @@ cannon*, which is a different and much larger weapon than a muon rifle.
   The notes' recommendation — cost it like the shield/reactor tradeoff
   rather than a flat gate — is the same instinct as the power budget, and
   it already has machinery.
+
+---
+
+## Why beams, and why missiles are the only projectile
+
+*Absorbed from `DESIGN-NOTES-WEAPONS-AND-BEACON.md`, now folded into this
+file.*
+
+**The method both halves of this section follow:** take a real physical
+property seriously and let it hand you the balance number, rather than
+picking one by feel. That is already this project's design language — the
+mass budget, real reaction-mass cost, the atmosphere modelled as a bucket
+against a pipe — and it is why the particle tiers came out as a range
+ladder rather than a damage ladder.
+
+Primary weapons are particle beams. At combat ranges they are effectively
+instantaneous: no travel time, no leading a shot. Missiles are the only
+weapon with flight time. That is a clean split of two different skills:
+
+- **Beams — aim and precision.** Can you hold it on target while both
+  ships manoeuvre.
+- **Missiles — Newtonian interception.** Can you predict where a burning
+  target will be when the seeker arrives.
+
+Concentrating all the prediction skill onto missiles alone is what makes
+each weapon *feel* like a different problem rather than a different
+number.
+
+**Two consequences that matter for implementation:**
+
+- **Turret AI never needs a firing solution.** With no lead to compute,
+  a turret only has to track and hold — cheap, and it means turret
+  effectiveness has to come from somewhere else (see the open questions).
+- **A beam is a line drawn for one frame**, not a simulated object
+  tracked every frame. Reuse the existing render path; do not stand up a
+  parallel projectile/VFX system. This is a real constraint on a Latitude
+  5420 with integrated graphics, not a stylistic preference.
+
+### Open questions, still open
+
+- **What is photon's downside?** Flat damage at unlimited range needs a
+  cost somewhere or it dominates by having none. Current answer is heat
+  and low damage-per-shot; that may not be enough, and rate-of-fire or
+  capacitor drain are the untried levers.
+- **Turret gating by hull size.** S manual-aim only, L can mount one — is
+  M a real choice with a real cost, or is a turret purely an L privilege?
+  Recommend costing it like the shield/reactor tradeoff that already
+  exists rather than a flat size gate, since the machinery is there.
+- **Is NPC-vs-NPC beam fire ever simulated**, or is full hitscan fidelity
+  player-only? Recommend player-only, for the same reason rails-vs-n-body
+  exists: nobody is dodging by feel in a fight nobody is watching. Phase 9
+  assumes this.
+- **What makes a turret good or bad** once there is no lead solution to
+  get right? Transverse speed already degrades the abstract gunnery — does
+  that survive into a hitscan model, or does tracking rate become the
+  stat?
 
 ---
 
@@ -1676,13 +1745,38 @@ From `DESIGN-NOTES-WEAPONS-AND-BEACON.md`. Recorded here because it
 touches more existing systems than anything else outstanding, and because
 one of its open questions has a cheap answer.
 
-**The chain of reasoning is unusually tight:** neutrinos cannot be blocked
-or shadowed, which makes them useless as a weapon and perfect as a signal.
-Detecting them needs supernova-scale output, so the transmitter is
-necessarily enormous and fixed — never shipborne. Attaching it to a pulsar
-supplies that output *and* an unspoofable clock, which is what makes a
-treaty-enforced neutral installation credible: **no faction has to trust
-another, only that the pulsar keeps spinning.**
+**The chain of reasoning is unusually tight**, and it started as a joke —
+a planet-sterilising neutrino beam, which does not work, because a
+neutrino beam could pass through a light-year of lead and half of it still
+would not interact. That inverts into something real: **the property that
+makes neutrinos useless as a weapon makes them the one signal nothing can
+block, jam, or shadow** — not dust, not gas, not a planet, not a star.
+This is a genuine proposed communication method (Learned, Pakvasa & Zee,
+2009) on exactly that logic.
+
+**The scale constraint is what fixes where this lives in the world.**
+SN 1987A is the real proof neutrinos are detectable across galactic
+distances — and even at ~10⁵⁸ emitted, Earth's entire detector network
+registered about two dozen events between them. So a beacon audible
+across a galaxy needs supernova-adjacent output to transmit and something
+the size of a small moon to receive. It is necessarily a fixed, enormous,
+faction-scale installation. **Never something a ship carries**, which is
+what keeps it a place rather than a gadget.
+
+**Attaching it to a pulsar solves the output problem for free** and adds
+a second property worth more than the first: a pulsar's rotation is a
+fixed, physically locked, absurdly precise clock — some are timed to
+fractions of a microsecond, which is why real spacecraft-navigation
+proposals use them. If the beacon's modulation rides the pulsar's own
+rotation, its rhythm is public, verifiable and impossible to fake, because
+**nobody can spin up a counterfeit pulsar.** That is what makes a
+treaty-enforced neutral installation credible: no faction has to trust
+another, only that the pulsar keeps spinning.
+
+It also sets the failure state. The way to attack this is not to capture
+it — it is to tamper with the receiver hardware bolted onto it, without
+being seen. Which is this game's witness doctrine, pointed at the highest-
+stakes target on the map, rather than a capture-the-flag beat.
 
 ### The mechanic that makes it a place rather than a landmark
 
@@ -1725,6 +1819,19 @@ formations are exactly where blind exits should be worst.
 Cheaper, too. One exit-precision term keyed on local gravity beats a
 bespoke system attached to one installation.
 
+### Two more open questions
+
+- **Is beacon control narrative or systemic?** A mission-arc device, or an
+  ongoing property — faster reinforcement for whoever holds it, a
+  player-purchasable guaranteed distress relay? Undecided. Leaning
+  systemic, because a comms channel that cannot be jammed is exactly the
+  sort of thing Phase 8's wars should be fought over, and pure flavour
+  wastes the setup.
+- **Where does the treaty live mechanically?** Flavour text, or does
+  standing react when someone is caught interfering? If sabotage here is
+  a real contract, the treaty has to have teeth, or the whole neutral-
+  ground premise is set dressing.
+
 ### Scale discipline
 
 This is a large feature with a lot of surface — economy, slipspace,
@@ -1732,6 +1839,12 @@ factions, missions, comms. It should be **one installation in one
 region**, not a category of object, until it has been played. And it
 depends on Phase 8 (control) and Phase 12 (a reason to be crossing that
 region at all) being real first.
+
+**The installation itself should be remote, automated and unpleasant to
+approach** — pulsar environments are intensely radioactive, often binary,
+sometimes carrying an accretion disc — rather than somewhere anyone
+casually lives. Which is the radiation system from earlier in this
+document, arriving where it was always going to be needed.
 
 ---
 

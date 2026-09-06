@@ -116,7 +116,7 @@ has to be looked at.
 
 ## Documents
 
-- `PLAN-COMBAT-OUTFITTING.md` — the current work: outfitting, weapons,
+- `PLAN.md` — the current work: outfitting, weapons,
   debris, mining, and the police
 - `CHANGELOG.md` — what changed in each alpha, and whether your save
   survives it

@@ -1,7 +1,7 @@
 # Working on Manifest
 
 Orientation for a coding assistant picking this up cold. Read this, then
-`PLAN-COMBAT-OUTFITTING.md`'s **Status** section — between them you should
+`PLAN.md`'s **Status** section — between them you should
 not need to re-derive anything from the conversation that produced them.
 
 ## What this is
@@ -16,7 +16,7 @@ run under node for the tests via `module.exports`.
 
 | File | What it holds |
 |---|---|
-| `PLAN-COMBAT-OUTFITTING.md` | The design. Phases 1–13, with a **Status** section marking what is built, what is inert, and what is untouched. Verified against source, not memory. |
+| `PLAN.md` | The design. Phases 1–13, with a **Status** section marking what is built, what is inert, and what is untouched. Verified against source, not memory. |
 | `CHANGELOG.md` | What changed per alpha, and — its own heading — **whether saves survive**. |
 | `FLIGHT-CARD.md` | The controls. |
 | `README.md` | Layout, how to run, how to build. |

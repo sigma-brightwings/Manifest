@@ -12,7 +12,7 @@ before they update.
 
 ## Unreleased — alpha 5 (in progress)
 
-Outfitting, weapons, and the law. See `PLAN-COMBAT-OUTFITTING.md` for the
+Outfitting, weapons, and the law. See `PLAN.md` for the
 full design and the phases still outstanding.
 
 ### Added
@@ -209,7 +209,7 @@ new system.
   test is the deliverable — the rule is enforced now rather than believed.
 
 - **Weapons retiered by particle, with range falloff.** Following
-  `DESIGN-NOTES-WEAPONS-AND-BEACON.md`, a laser's tier is now what it
+  `PLAN.md`, a laser's tier is now what it
   fires rather than how big its emitter is, and the particle decides how
   damage behaves with distance:
 
