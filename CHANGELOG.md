@@ -181,6 +181,41 @@ full design and the phases still outstanding.
   shot, maps to **Class 2 intermittent**, which is where that behaviour
   actually belongs on the new ladder.
 
+### Fixed
+
+- **Beams left the ship sideways.** They were drawn from `ship.pos`, which
+  in the cockpit is eight centimetres *behind* the pilot's eye — projecting
+  a point at a depth of roughly zero threw the origin toward infinity, so
+  the shot swept in across the canopy instead of running down the nose.
+  They now leave the **guns the model actually has**: `glb2hulls` records
+  every `laserEmitter` node, so the courier's beams come off its chin guns,
+  81 cm under the axis and at the nose — beneath the console, where you can
+  see them from the seat. 33 of the 39 models carry real muzzles; the six
+  that do not (capitals and escape pods) fall back to an offset derived
+  from the hull.
+
+- **And they stayed where they were fired.** A beam is now resolved live at
+  both ends — muzzle from the ship's current attitude, far end from the
+  target or from the current nose — so it no longer detaches at 5.5 km/s,
+  nor pivots about its muzzle into the fan of stale rays that time
+  compression turned it into.
+
+- **The guns do not fire under time compression.** Cooldowns run on sim
+  time, so at 500x every weapon cycled every frame: sixty shots a second,
+  a hull cooked instantly, and nothing aimable, since the cone test was
+  running against targets that jump hundreds of kilometres between frames.
+  The refusal says so rather than quietly doing something absurd.
+
+- **Beams are visible again from outside.** A 22 km beam with the camera
+  120,000 km out was a third of a pixel, which is why the guns appeared not
+  to work in the exterior view at all. The drawn length is floored, and the
+  tracer is now a bright core inside a wider bloom instead of a hairline.
+
+- **The mouse works outside the cockpit.** Mouse 2 fires group B and the
+  side button launches in any view; mouse 1 stays the camera out there,
+  because swinging the view around the ship is what the exterior view is
+  for. Releasing the side button no longer cut the primary trigger.
+
 ### Saves
 
 **Existing careers load, with their gear.** The save version is

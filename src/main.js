@@ -1026,14 +1026,24 @@
     G.trigger.aLatch = false; G.trigger.bLatch = false;
   }
 
-  /* Can this click be a trigger pull at all? Every case where a click means
+  /* Can a click be a trigger pull at all? Every case where a click means
    * something else has to be excluded first, and each exclusion here is a
    * bug that would otherwise be indistinguishable from the guns not
-   * working. */
-  function mouseArmed() {
+   * working. View-independent: the guns do not stop existing because you
+   * pulled the camera outside to watch. */
+  function weaponsLive() {
     return flying() && !menuOpen() && !G.cursor.active &&
-           G.viewMode === 'cockpit' && G.mouseAim &&
            !G.hyper && !G.ship.docked && !G.ship.landed;
+  }
+
+  /* Mouse 1 is a trigger only where it is not already the camera. In the
+   * exterior view, left-drag swings the view around the ship and that is
+   * what the view is FOR, so out there the primary group stays on Space and
+   * only the buttons nothing else wants — right, and the side button — do
+   * any shooting. Gating all three on the cockpit was the reason the mouse
+   * appeared to do nothing at all from outside. */
+  function mouseArmed() {
+    return weaponsLive() && G.viewMode === 'cockpit' && G.mouseAim;
   }
 
   /* Which button, treating "didn't say" as the main one. Synthetic events —
@@ -1371,7 +1381,7 @@
       }
 
       var btn = mouseButton(e);
-      if (mouseArmed()) {
+      if (weaponsLive()) {
         /* The latch is what makes a TAP fire. Held state is read once per
          * frame, so a press and release inside one frame — a quick click,
          * or any synthetic event pair — would set the trigger and clear it
@@ -1379,10 +1389,25 @@
          * silently not go off. The latch survives the release until the
          * frame after it has been read, so a click is exactly one shot and
          * a hold is sustained fire, which is what both gestures mean. */
-        if (btn === 0) { G.trigger.a = true; G.trigger.aLatch = true; return; }
+        if (btn === 0 && mouseArmed()) {
+          G.trigger.a = true; G.trigger.aLatch = true; return;
+        }
         if (btn === 2) { G.trigger.b = true; G.trigger.bLatch = true; return; }
-        if (btn === 1) {
-          if (e.preventDefault) e.preventDefault();   // else it is autoscroll
+        /* Missiles on the side button (mouse 4) and on the wheel click.
+         *
+         * Mouse 4 is the one you want: it is where a thumb already rests, it
+         * is not a button you press by accident, and clicking a scroll wheel
+         * hard enough to register tends to scroll at the same time. The wheel
+         * stays bound anyway because plenty of mice and every trackpad have
+         * no fourth button, and B works from the keyboard regardless — a
+         * binding nobody can reach is not a binding.
+         *
+         * Deliberately NOT a held trigger like the guns. A missile is a
+         * discrete thing you spend, and it needs a lock (fireMissile refuses
+         * without one and says so), so leaning on the button would just
+         * repeat the same refusal several times a second. */
+        if (btn === 3 || btn === 1) {
+          if (e.preventDefault) e.preventDefault();
           Combat.fireMissile(G.sys, G, G.t, HOOKS);
           return;
         }
@@ -1403,14 +1428,27 @@
     });
     window.addEventListener('mouseup', function (e) {
       dragging = false;
-      if (mouseButton(e) === 2) G.trigger.b = false;
-      else G.trigger.a = false;
+      /* Only the two buttons that ARE triggers release one. The `else` here
+       * used to catch the side button too, so launching a missile mid-burst
+       * cut your own guns. */
+      var up = mouseButton(e);
+      if (up === 2) G.trigger.b = false;
+      else if (up === 0) G.trigger.a = false;
       if (G.nodeDrag) { G.nodeDrag = null; G.nodeStale = 0; }
     });
     /* Without this, mouse 2 opens the browser's context menu mid-fight —
      * over the canvas only, so a right-click on anything else on the page
      * still behaves like the web. */
     canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    /* And without this, mouse 4 is the browser's Back button: launching a
+     * missile would navigate out of the game and lose the flight. Chrome
+     * raises that navigation off auxclick rather than off the mousedown we
+     * already swallowed, so both have to be caught — as does the wheel
+     * click, which is otherwise autoscroll. Canvas only, so the rest of the
+     * page still behaves like a page. */
+    canvas.addEventListener('auxclick', function (e) {
+      if (mouseButton(e) !== 0) e.preventDefault();
+    });
     /* A held trigger and a lost window is a ship that goes on firing at
      * nothing until you come back to it. Same reasoning as the keys reset
      * below, and the same failure it prevents. */
@@ -4496,6 +4534,11 @@
    * plume. Explosions are an expanding pair of rings that live under a
    * second, because the aftermath of one is a debris field the canister
    * system already draws. */
+  /* Shortest a beam is ever drawn, in pixels. Small enough that it never
+   * reads as a bar across a close-quarters fight, big enough to catch the
+   * eye at a zoom where the whole ship is two pixels. */
+  var MIN_BEAM_PX = 14;
+
   function drawCombatFx(ctx, cam) {
     var i, a, b;
     var nowS = performance.now() / 1000;
@@ -4505,18 +4548,62 @@
       ctx.globalCompositeOperation = 'lighter';
       for (i = 0; i < G.beams.length; i++) {
         var beam = G.beams[i];
-        a = cam.project(beam.from); b = cam.project(beam.to);
+        /* The player's own beams carry a muzzle in the SHIP'S axes and are
+         * resolved here, against the attitude the ship has right now. Two
+         * bugs die on this line: the origin is no longer eight centimetres
+         * behind the pilot's eye, where projecting it divided by a depth of
+         * nothing and threw the beam sideways off the canopy; and it no
+         * longer stays where the ship WAS, which at 5.5 km/s left the beam
+         * half a kilometre astern before it faded. */
+        var origin = (beam.fromShip && beam.muzzle)
+          ? Render.localToWorld(G.ship, beam.muzzle.r, beam.muzzle.u, beam.muzzle.f)
+          : beam.from;
+        /* And the far end has to be just as live, or the beam pivots about
+         * its muzzle as the ship moves and the view fills with a fan of
+         * stale rays — which is precisely what 25x warp made of it. Follow
+         * the target if there still is one, otherwise run out along the
+         * CURRENT nose; fall back to the frozen point for anything that
+         * never had either, which is every NPC's fire. */
+        var far = beam.to;
+        if (beam.target && beam.target.pos) far = beam.target.pos;
+        else if (beam.fromShip && beam.range) far = V.addScaled(origin, G.ship.fwd, beam.range);
+        a = cam.project(origin); b = cam.project(far);
         if (!a || !b) continue;
-        ctx.strokeStyle = beam.color || '#ff6b5a';
-        ctx.globalAlpha = beam.miss ? 0.35 : 0.85;
-        ctx.lineWidth = beam.miss ? 1 : 2;
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
         /* A miss is drawn missing: skewed past the target rather than
          * through it, so being hard to hit LOOKS like being hard to hit. */
-        if (beam.miss) ctx.lineTo(b.x + (beam.missX || (beam.missX = (Math.random() - 0.5) * 60)),
-                                  b.y + (beam.missY || (beam.missY = (Math.random() - 0.5) * 60)));
-        else ctx.lineTo(b.x, b.y);
+        var ex = b.x, ey = b.y;
+        if (beam.miss) {
+          ex += (beam.missX || (beam.missX = (Math.random() - 0.5) * 60));
+          ey += (beam.missY || (beam.missY = (Math.random() - 0.5) * 60));
+        }
+        /* A 22 km beam with the camera 120,000 km out is a third of a pixel,
+         * so from the exterior view's default zoom the guns appeared not to
+         * fire at all — which is exactly how it was reported. A beam is a
+         * TRACER: its whole job is to say that a shot happened. So the drawn
+         * length is floored, along its own direction, and nothing else is
+         * touched — the aim, the range envelope, the falloff and the damage
+         * are all decided in combat.js and none of them can see this. */
+        var dx = ex - a.x, dy = ey - a.y, L = Math.hypot(dx, dy);
+        if (L > 1e-6 && L < MIN_BEAM_PX) {
+          ex = a.x + dx / L * MIN_BEAM_PX;
+          ey = a.y + dy / L * MIN_BEAM_PX;
+        }
+        /* Drawn twice: a wide, dim core and a bright thin line down the
+         * middle of it. A single 2px stroke was thin enough to disappear
+         * against a planet, and simply widening it turns the beam into a
+         * bar. Two passes under `lighter` give it a hot centre and a bloom,
+         * which is what a beam looks like and costs one extra stroke on a
+         * path that draws a handful of lines a frame. */
+        ctx.strokeStyle = beam.color || '#ff6b5a';
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(ex, ey);
+        ctx.globalAlpha = beam.miss ? 0.12 : 0.30;
+        ctx.lineWidth = beam.miss ? 3 : 6;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+        ctx.globalAlpha = beam.miss ? 0.40 : 0.95;
+        ctx.lineWidth = beam.miss ? 1.5 : 2.5;
         ctx.stroke();
       }
       ctx.restore();

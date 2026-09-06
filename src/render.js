@@ -503,6 +503,32 @@
     return global.HullLib ? Object.keys(global.HullLib) : [];
   }
 
+  /* ---- where the guns are, from the art rather than from a guess ---------
+   * glb2hulls records the `laserEmitter` node of every gun each model
+   * carries — the tip of the barrel, in the same normalised frame as the
+   * vertices — so this converts them into the ship's own axes in km, ready
+   * to be handed to localToWorld. The courier's come out at x ±0.045,
+   * y −0.081, z 0.5: a symmetric pair of CHIN guns at the nose, under the
+   * console, which is where the model has always had them and nowhere near
+   * where combat.js used to guess.
+   *
+   * Ordered left to right by the tool. Returns an empty array for a model
+   * with no guns modelled — capitals and escape pods — and the caller falls
+   * back to a derived offset rather than drawing from nowhere. */
+  function hullMuzzles(kind) {
+    var id = HULL_ASSIGN[kind] || HULL_ASSIGN.courier;
+    var m = global.HullLib && global.HullLib[id];
+    if (!m || !m.muzzles) return [];
+    return m.muzzles.map(function (p) {
+      return { r: p[0] * SHIP_LEN, u: p[1] * SHIP_LEN, f: p[2] * SHIP_LEN };
+    });
+  }
+
+  /* The player flies the courier hull whatever they bought — drawShipModel
+   * hard-codes it — so the muzzles have to come off the same model, or the
+   * beams would leave a ship that is not the one on screen. */
+  function shipMuzzles() { return hullMuzzles('courier'); }
+
   function assignHull(kind, id) {
     if (id && !(global.HullLib && global.HullLib[id])) return false;
     if (id) HULL_ASSIGN[kind] = id; else delete HULL_ASSIGN[kind];
@@ -2805,6 +2831,12 @@
     lighten: lighten,
     shipScreenLength: shipScreenLength,
     drawShipModel: drawShipModel,
+    /* Exported for the beam renderer, which has to turn a muzzle offset in
+     * the ship's own axes into a world point every frame. It is the same
+     * transform the cockpit and every hull model already run on; there was
+     * no reason for combat effects to grow a second copy of it. */
+    localToWorld: localToWorld,
+    hullMuzzles: hullMuzzles, shipMuzzles: shipMuzzles,
     SHIP_LEN: SHIP_LEN,
     drawAttitudeLadder: drawAttitudeLadder,
     drawFlightPathMarker: drawFlightPathMarker,

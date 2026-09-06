@@ -160,10 +160,16 @@ Every gun starts on group A; move one to B on the `F5` → FIT page. Then:
 | | Group A | Group B | Missile |
 |---|---|---|---|
 | Keyboard | `Space` | `Shift`+`Space` | `B` |
-| Mouse aim (`F9`) | mouse 1 | mouse 2 | middle button |
+| Cockpit, mouse aim (`F9`) | mouse 1 | mouse 2 | mouse 4, or the wheel click |
+| Exterior view | *(Space)* | mouse 2 | mouse 4, or the wheel click |
 
 Hold either; hold both. With mouse aim on, the mouse flies the ship with no
-button held, which is what frees the buttons up to be triggers.
+button held, which is what frees the buttons up to be triggers. In the
+exterior view mouse 1 stays the camera, because swinging the view around
+the ship is what that view is for.
+
+**No firing under time compression.** Drop to 1x (`,`) first — at warp your
+guns cycle every frame and the shot cannot be aimed at anything.
 
 **Beams heat your own hull.** Every shot puts its rated waste heat into the
 ship, and the catalogue prints the figure. A bare hull sheds 18 units a second,

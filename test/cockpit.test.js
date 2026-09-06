@@ -292,6 +292,67 @@ console.log('--- the near plane sits inside the console ---');
         deepest.toExponential(2) + ' km vs clip ' + Render.NEAR_CLIP.toExponential(2));
 })();
 
+/* The bug this catches, in one sentence: a beam drawn from ship.pos starts
+ * EIGHT CENTIMETRES BEHIND the pilot's eye, and projecting a point at a
+ * depth of about zero divides by about zero — so the origin flew off toward
+ * infinity and the beam swept in sideways across the canopy instead of
+ * running down the nose. Nothing in the suite could see it, because the
+ * tests are blind to layout and this one was reported by looking at it.
+ *
+ * It is checkable, though, and this is the check: every muzzle must project
+ * in FRONT of the near plane, from the seat, with the head turned or not. */
+console.log('--- the guns are in front of the pilot ---');
+(function () {
+  var Combat = require('../src/combat.js');
+  var looks = [{ yaw: 0, pitch: 0 },
+               { yaw: 0.8, pitch: 0 },       // head hard right
+               { yaw: -0.8, pitch: 0 },
+               { yaw: 0, pitch: 0.5 }];      // and up
+
+  var keys = Combat.slotKeys(ship).filter(function (k) {
+    return Combat.slotType(k) === 'hardpoint';
+  });
+  check('the hull has hardpoints to hang guns on', keys.length >= 2, keys.join(','));
+
+  looks.forEach(function (look) {
+    var cam = new Render.Camera();
+    cam.buildCockpit(ship, 1600, 900, look);
+    var tag = 'yaw ' + look.yaw + ' pitch ' + look.pitch;
+    keys.forEach(function (k, n) {
+      var world = Combat.muzzleWorld(ship, Combat.muzzleOf(ship, k));
+      var p = cam.project(world);
+      check(tag + ': muzzle ' + n + ' is in front of the eye', !!p,
+            'projected null — behind the camera');
+      if (p) {
+        check(tag + ': muzzle ' + n + ' is clear of the near plane',
+              p.depth > Render.NEAR_CLIP * 1.5,
+              p.depth.toExponential(2) + ' km vs clip ' + Render.NEAR_CLIP.toExponential(2));
+        /* The real symptom was a coordinate in the tens of thousands, from
+         * flen divided by a depth of nothing. Anything on the canvas at all
+         * would have been fine; this is the assertion that would have
+         * failed. */
+        check(tag + ': muzzle ' + n + ' projects somewhere on the canvas',
+              Math.abs(p.x) < 20000 && Math.abs(p.y) < 20000,
+              p.x.toFixed(0) + ',' + p.y.toFixed(0));
+      }
+    });
+  });
+
+  /* And the muzzles are actually apart, so a group firing together draws
+   * lines that converge instead of one line several times over. */
+  var a = Combat.muzzleOf(ship, keys[0]), b = Combat.muzzleOf(ship, keys[1]);
+  check('two hardpoints are on opposite sides of the axis', a.r * b.r < 0,
+        a.r.toFixed(5) + ' vs ' + b.r.toFixed(5));
+  check('and the muzzles sit forward of the seat', a.f > 0 && b.f > 0);
+
+  /* Documenting the original defect so nobody reintroduces it: the ship's
+   * own origin is NOT a place you can draw from in the cockpit. */
+  var camF = new Render.Camera();
+  camF.buildCockpit(ship, 1600, 900, { yaw: 0, pitch: 0 });
+  check('the ship origin itself is behind the eye — which is why beams moved',
+        camF.project(ship.pos) === null);
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

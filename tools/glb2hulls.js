@@ -120,6 +120,23 @@ function materialColour(g, idx) {
 var INTERIOR_RE = /cockpitInterior|pilotSeat/i;
 var GLASS_RE = /cockpitGlass/i;
 
+/* ---- and where the guns actually are ------------------------------------
+ * Every armed model carries its weapons as named nodes — `laser0`/`laser1`,
+ * or `laserChin0`/`laserChin1` on the courier — each with a `laserPylon`,
+ * a `laserBarrel` and a `laserEmitter`. That last one is the muzzle: it is
+ * the tip of the barrel, modelled, in the right place, on every hull.
+ *
+ * combat.js used to guess this with four hand-tuned constants, which was
+ * wrong twice over — the guess did not match the art, and it could not,
+ * because a chin gun and a wing gun are not in the same place. Recording
+ * the emitters here means a beam leaves the barrel the artist drew, and a
+ * model redesigned tomorrow moves its own gunfire with it.
+ *
+ * Each emitter is kept as a SEPARATE instance rather than merged into one
+ * box: two guns are two muzzles, and a merged bound would put both beams
+ * out of the centreline between them. */
+var EMITTER_RE = /laserEmitter/i;
+
 /* ---- one model ---------------------------------------------------------- */
 function convert(file) {
   var g = parseGlb(fs.readFileSync(file));
@@ -129,8 +146,9 @@ function convert(file) {
   var glassMin = [Infinity, Infinity, Infinity];
   var glassMax = [-Infinity, -Infinity, -Infinity];
   var sawGlass = false;
+  var emitters = [];        // one accumulated bounding box per laserEmitter
 
-  function walk(nodeIdx, parentMat, inInterior) {
+  function walk(nodeIdx, parentMat, inInterior, inEmitter) {
     var node = j.nodes[nodeIdx];
     var local = node.matrix ? node.matrix.slice()
                             : matFromTRS(node.translation, node.rotation, node.scale);
@@ -139,12 +157,23 @@ function convert(file) {
     /* Classification is INHERITED: a named parent carries unnamed children
      * with it, which is how these files are actually assembled. */
     var interior = inInterior || INTERIOR_RE.test(name);
+    /* A new emitter opens a new box; a child of one keeps adding to its
+     * parent's, so a multi-part muzzle stays a single gun. */
+    var emitter = inEmitter;
+    if (!emitter && EMITTER_RE.test(name)) {
+      emitter = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
+      emitters.push(emitter);
+    }
 
     if (node.mesh !== undefined) {
       var mesh = j.meshes[node.mesh];
       var mname = name || mesh.name || '';
       var mine = interior || INTERIOR_RE.test(mname);
       var isGlass = GLASS_RE.test(mname);
+      if (!emitter && EMITTER_RE.test(mname)) {
+        emitter = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
+        emitters.push(emitter);
+      }
       var into = mine ? inr : ext;
       for (var p = 0; p < mesh.primitives.length; p++) {
         var prim = mesh.primitives[p];
@@ -161,6 +190,12 @@ function convert(file) {
               if (w[a0] > glassMax[a0]) glassMax[a0] = w[a0];
             }
           }
+          if (emitter) {
+            for (var a1 = 0; a1 < 3; a1++) {
+              if (w[a1] < emitter.min[a1]) emitter.min[a1] = w[a1];
+              if (w[a1] > emitter.max[a1]) emitter.max[a1] = w[a1];
+            }
+          }
         }
         var col = materialColour(g, prim.material);
         var idx = prim.indices !== undefined
@@ -173,12 +208,14 @@ function convert(file) {
       }
     }
     for (var ch = 0; ch < (node.children || []).length; ch++) {
-      walk(node.children[ch], world, interior);
+      walk(node.children[ch], world, interior, emitter);
     }
   }
 
   var scene = j.scenes[j.scene || 0];
-  for (var r = 0; r < scene.nodes.length; r++) walk(scene.nodes[r], matIdentity(), false);
+  for (var r = 0; r < scene.nodes.length; r++) {
+    walk(scene.nodes[r], matIdentity(), false, null);
+  }
 
   /* Normalise: centred on the origin, unit length along the LONGEST axis.
    * These assets follow the glTF convention (+Y up, front toward +Z), which
@@ -244,6 +281,23 @@ function convert(file) {
       mid: [r3((gmin[0] + gmax[0]) / 2), r3((gmin[1] + gmax[1]) / 2),
             r3((gmin[2] + gmax[2]) / 2)]
     };
+  }
+  /* The muzzles, in the same normalised frame as everything else: the
+   * FORWARD FACE of each emitter box, not its centre, because a beam leaves
+   * the end of a barrel rather than the middle of one.
+   *
+   * Sorted left to right across the hull, so hardpoint order is stable
+   * between runs and between models — glTF node order is whatever the
+   * authoring tool wrote, and letting that decide which gun is hardpoint 0
+   * would reshuffle a player's fire groups whenever a model was re-exported. */
+  var live = emitters.filter(function (e) { return isFinite(e.min[0]); });
+  if (live.length) {
+    out.muzzles = live.map(function (e) {
+      var c = place([(e.min[0] + e.max[0]) / 2,
+                     (e.min[1] + e.max[1]) / 2,
+                     e.max[2]]);
+      return c;
+    }).sort(function (p, q) { return p[0] - q[0] || p[1] - q[1] || p[2] - q[2]; });
   }
   return out;
 }

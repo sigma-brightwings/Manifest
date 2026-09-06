@@ -1606,14 +1606,121 @@
     return out;
   }
 
+  /* ---- where a beam actually comes from ----------------------------------
+   * A beam used to be drawn from `ship.pos`, and in the cockpit that is
+   * EIGHT CENTIMETRES BEHIND THE PILOT'S EYE (render.js EYE_FWD, with the
+   * hull authored around the seat). Projecting a point that close to the
+   * camera divides by a depth of roughly zero, so the origin flew off toward
+   * infinity and the beam swept in sideways from the edge of the canopy.
+   * From outside it merely looked like it left the middle of the hull, which
+   * is why this survived as long as it did.
+   *
+   * So a muzzle is a real place on the hull, given in the SHIP'S OWN AXES
+   * (x right, y up, z forward) in km. Two things follow:
+   *
+   *   - It is ahead of the eye, so it projects sanely from the seat.
+   *   - It is an OFFSET, not a world point, so the renderer resolves it
+   *     against the ship's CURRENT attitude every frame. The old frozen
+   *     world point detached visibly — at 5.5 km/s the ship travels half a
+   *     kilometre during a beam's 90 ms life and the beam stayed behind.
+   *
+   * Hardpoints alternate starboard and port and step outboard in pairs, so a
+   * group firing together visibly converges on the target instead of drawing
+   * one line several times over. The spread scales with the hull, cube root
+   * because mass goes as volume — a Mule's guns sit wider than a Dart's.
+   *
+   * The LENGTH does not scale, and that is deliberate rather than lazy:
+   * render.js draws every hull at one SHIP_LEN, so stretching the muzzles to
+   * match a Mule's tonnage would hang them off a hull that is not there.
+   * When the renderer draws hulls at their real sizes, HULL_LEN is the one
+   * number that has to follow it. */
+  /* These four were MEASURED by looking at it, not chosen on paper, and the
+   * first set was wrong in a way only the seat could show. A muzzle 1.6 m
+   * off the axis and 5.5 m ahead subtends 16 degrees from the pilot's eye —
+   * against a 68-degree canopy that put the beam's origin a quarter of the
+   * screen off-centre, so the shot still read as a slash across the view
+   * rather than as two guns converging ahead of the nose.
+   *
+   * Further forward and closer in fixes it by arithmetic: 1.0 m out at 8.5 m
+   * ahead is under 7 degrees, which sits just inside the canopy sill where
+   * a gun on a small ship actually looks like it is. The guns are still far
+   * enough apart to read as separate weapons converging, which is the whole
+   * reason they are offset at all. */
+  var HULL_LEN = 0.010;        // km — render.js SHIP_LEN, 10 m nose to tail
+  var MUZZLE_FWD = 0.85;       // of hull length, ahead of the origin: the nose
+  var MUZZLE_DOWN = 0.06;      // and slightly under the axis, where guns hang
+  var MUZZLE_SPREAD = 0.10;    // half-span of the innermost pair
+
+  /* Which hardpoint this is, counted in slot order — the same stable order
+   * every fit is keyed against, so a gun does not change muzzle because
+   * something was sold out of another slot. */
+  function hardpointIndex(ship, key) {
+    var keys = slotKeys(ship), n = 0;
+    for (var i = 0; i < keys.length; i++) {
+      if (slotType(keys[i]) !== 'hardpoint') continue;
+      if (keys[i] === key) return n;
+      n++;
+    }
+    return 0;
+  }
+
+  function muzzleOf(ship, key) {
+    var n = hardpointIndex(ship, key);
+
+    /* THE ART IS THE AUTHORITY. Every armed model carries a `laserEmitter`
+     * node at the tip of each barrel, and glb2hulls now records them, so ask
+     * the renderer where the guns on this hull actually are rather than
+     * guessing. On the courier that is a symmetric pair of CHIN guns at the
+     * nose, 81 cm under the axis — under the console, which is exactly where
+     * a beam should appear to come from when you are sitting behind it, and
+     * a place no set of hand-tuned constants was going to find by itself.
+     *
+     * More hardpoints than modelled guns is not an error: a Kestrel has
+     * three and the courier hull has two barrels. The extra ones wrap round
+     * and are nudged outboard, so they still read as separate weapons rather
+     * than as two beams drawn exactly on top of each other. */
+    var real = (global.Render && global.Render.shipMuzzles) ? global.Render.shipMuzzles() : null;
+    if (real && real.length) {
+      var m = real[n % real.length];
+      var wrap = Math.floor(n / real.length);
+      if (!wrap) return { r: m.r, u: m.u, f: m.f };
+      return { r: m.r * (1 + 0.5 * wrap), u: m.u, f: m.f };
+    }
+
+    /* Fallback, for a hull whose model carries no guns — capitals and
+     * escape pods today — and for any headless context with no renderer.
+     * Derived from the hull rather than typed in: heavier is wider, cube
+     * root because mass goes as volume. */
+    var h = hullOf(ship);
+    var girth = Math.min(1.5, Math.pow(((h && h.dryMass) || 42) / 42, 1 / 3));
+    var side = (n % 2) ? -1 : 1;              // starboard first, then port
+    var rank = 1 + Math.floor(n / 2) * 0.7;   // stepping outboard in pairs
+    return { r: side * HULL_LEN * MUZZLE_SPREAD * girth * rank,
+             u: -HULL_LEN * MUZZLE_DOWN,
+             f: HULL_LEN * MUZZLE_FWD };
+  }
+
+  function muzzleWorld(ship, mz) {
+    var p = V.clone(ship.pos);
+    p = V.addScaled(p, ship.right, mz.r);
+    p = V.addScaled(p, ship.up, mz.u);
+    return V.addScaled(p, ship.fwd, mz.f);
+  }
+
   /* One emitter, one shot. Split out of fireGun because a group fires
    * several of these in the same frame, and each one draws its own beam and
    * rolls its own range falloff — a group is not one bigger gun. */
-  function fireOne(sys, G, t, gun, hooks) {
+  function fireOne(sys, G, t, gun, key, hooks) {
     var s = G.ship;
     var now = (typeof performance !== 'undefined' ? performance.now() : 0) / 1000;
 
-    var beamEnd = V.addScaled(s.pos, s.fwd, gun.range);
+    /* The muzzle moves where the beam is DRAWN from and nothing else. The
+     * hit test below still runs from the ship's origin down its own nose,
+     * because five metres of offset is meaningless against a 22 km envelope
+     * and pretending otherwise would make each hardpoint a slightly
+     * different weapon for no gain anybody could perceive. */
+    var mz = muzzleOf(s, key);
+    var beamEnd = V.addScaled(muzzleWorld(s, mz), s.fwd, gun.range);
     var hit = null, hitDist = Infinity;
     var cands = targetsInRange(sys, G, t, gun.range + 1);
     for (var i = 0; i < cands.length; i++) {
@@ -1623,8 +1730,24 @@
       }
     }
 
+    /* BOTH ENDS ARE LIVE, and that is not a refinement — it is the whole
+     * correctness condition. Tracking the muzzle while leaving the far end
+     * frozen where it was fired makes every beam still on screen stretch
+     * into a ray as the ship flies on, and at 25x warp — where a 90 ms beam
+     * spans three hundred kilometres of travel — the screen fills with a
+     * fan of them. Freezing both ends instead is the old bug: the beam is
+     * left behind the ship rather than leaving it.
+     *
+     * So: `muzzle` is an offset in the ship's axes, and the far end is
+     * either the TARGET (resolved from its live position, so the line
+     * follows what you are shooting) or simply `range` down the current
+     * nose. `from` and `to` stay as the world points at the instant of
+     * firing, for anything that wants a straight answer and as the fallback
+     * once a target stops existing. */
     (G.beams = G.beams || []).push({
-      from: V.clone(s.pos), to: hit ? V.clone(hit.pos) : beamEnd,
+      from: muzzleWorld(s, mz), muzzle: mz, fromShip: true,
+      to: hit ? V.clone(hit.pos) : beamEnd,
+      target: hit || null, range: gun.range,
       color: gun.color, until: now + 0.09
     });
 
@@ -1667,6 +1790,26 @@
     var s = G.ship;
     if (s.docked || s.landed) return 0;
 
+    /* NOT UNDER TIME COMPRESSION. Cooldowns run on sim time — deliberately,
+     * so a weapon belongs to the world it fires in — which at 500x means
+     * every gun cycles every frame: sixty shots a second of real time, a
+     * hull cooked in an instant, and five stale beams on screen at once
+     * because each one lives 90 ms of REAL time while the ship crosses
+     * three hundred kilometres. It also cannot be aimed: the cone test runs
+     * against targets that jump hundreds of km between frames, so a hit is
+     * luck rather than skill.
+     *
+     * The file already says "in a real fight warp is pinned to 1x". This is
+     * that sentence enforced rather than assumed, and it is a refusal with
+     * a reason rather than a trigger that quietly does something absurd. */
+    if (G.warpIndex > 0) {
+      if (hooks && hooks.say && t >= (G.warpFireAt || -Infinity) + 4) {
+        G.warpFireAt = t;
+        hooks.say('Not under time compression — press , to drop to 1x', 4);
+      }
+      return 0;
+    }
+
     var guns = gunsInGroup(s, group);
     if (!guns.length) {
       /* Refusals carry reasons. Group B is empty on every ship that has
@@ -1689,7 +1832,7 @@
       var e = guns[i];
       if (t < (cools[e.key] || 0)) continue;
       cools[e.key] = t + e.item.cooldown;
-      fireOne(sys, G, t, e.item, hooks);
+      fireOne(sys, G, t, e.item, e.key, hooks);
       fired++;
     }
     /* One report for the volley. Three emitters cycling together should
@@ -1721,8 +1864,15 @@
     }
     if (!best) return;
     G.turretCoolUntil = t + tur.cooldown;
+    /* The turret sits on the spine, above the axis and further back than the
+     * fixed guns — it traverses, so it wants to see all round rather than to
+     * point down the nose. Same offset treatment as the hardpoints, and for
+     * the same reason: from the seat, a beam leaving the ship's origin
+     * leaves from behind your own head. */
+    var turMz = { r: 0, u: HULL_LEN * 0.12, f: HULL_LEN * 0.18 };
     (G.beams = G.beams || []).push({
-      from: V.clone(s.pos), to: V.clone(best.live.pos),
+      from: muzzleWorld(s, turMz), muzzle: turMz, fromShip: true,
+      to: V.clone(best.live.pos), target: best.live,
       color: tur.color, until: now + 0.07
     });
     if (hooks && hooks.sound) hooks.sound('turret');
@@ -2263,6 +2413,7 @@
     fireGun: fireGun, fireGroup: fireGroup, fireMissile: fireMissile,
     groupOf: groupOf, setGroup: setGroup, toggleGroup: toggleGroup,
     gunsInGroup: gunsInGroup,
+    muzzleOf: muzzleOf, muzzleWorld: muzzleWorld, HULL_LEN: HULL_LEN,
     manifestFor: manifestFor,
     damageNpc: damageNpc, damagePlayer: damagePlayer, killNpc: killNpc,
     liftTrader: liftTrader,
