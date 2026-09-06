@@ -167,6 +167,76 @@ robbing."
 
 ---
 
+## ⚠️ Reconciling with `DESIGN-NOTES-WEAPONS-AND-BEACON.md`
+
+That document post-dates this plan and revises part of it. Read it
+alongside this section; where they disagree, the disagreement is listed
+here rather than silently resolved.
+
+### The conflict that matters: what a tier IS
+
+| | This plan (**built**) | Design notes (**newer**) |
+|---|---|---|
+| Tiers are | emitter **power** — Class 1/2/3, 1.8–13 MW | **particle** — photon / pion-kaon / muon |
+| Differentiated by | delivery vs the shield model (pulse ×0.6, beam ×1.5) | **range falloff** |
+| Range | fixed, 9–23 km per item | photon **flat and unlimited**; pion steep falloff; muon holds |
+| Top player tier | Class 3, buyable at `warm` standing | muon is **capital / planetary defence only** |
+
+**The sharpest incompatibility is photon range.** Nine catalogue items
+currently priced and balanced around a 9–23 km ladder cannot coexist with
+"instant, unlimited range, no falloff" — that single property collapses
+the ladder, and the notes say as much themselves ("needs a real downside
+somewhere or it's just a better gun").
+
+**The merge I would propose, if asked:** the two schemes are more
+compatible than they look, because each supplies the axis the other
+lacks. Keep the 3 × 3 shape — it is built, tested and sized — but let
+**particle type become what the tier means**, and add falloff:
+
+- **Photon** — universal, no falloff, lowest damage. The unlimited range
+  is paid for in heat and in damage-at-any-range, not in a range number.
+- **Pion / kaon** — hits hardest inside ~10 km, falls off steeply. The
+  brawler tier. This is the honest home for what is currently Class 2/3.
+- **Muon** — holds damage to long range, capital and planetary defence
+  only, as both documents already agree.
+
+Delivery (pulse / intermittent / beam) stays the second axis, so the
+count and the shield interaction survive. What changes is that `range`
+stops being a hard cutoff and becomes a falloff curve — a real change to
+`fireGun`'s damage application, and to nine catalogue entries.
+
+**Decided:** merge as above. Particle becomes the tier, falloff replaces
+hard range cutoffs, the 3 × 3 shape and the shield interaction survive.
+Old ids stay as aliases so nothing already saved or tested breaks.
+
+**Also decided:** the muon tier *is* eventually reachable by players —
+heavily gated, on the largest hulls — rather than capital-only forever.
+It keeps a ceiling worth climbing toward and gives Class-3 money
+somewhere to go; the capital ship stays distinct through the muon *burst
+cannon*, which is a different and much larger weapon than a muon rifle.
+
+### Smaller notes
+
+- **Muon-only-for-capitals is consistent** with this plan's existing muon
+  section; it just means the player's ceiling is the pion tier until
+  capital hulls exist. Worth being deliberate about, since it lowers the
+  top of the player's damage ladder.
+- **"13 ship types"** — the imported set is **11** (capital, courier,
+  escape_pod, fighter, freighter, h2_freighter, liner, police, shuttle,
+  trader, tug). Either two are planned and unbuilt, or the count is off.
+- **Combat is only half dice.** The notes describe it as an abstract
+  hit-chance placeholder; that is true of `updateNpcFire` (NPCs rolling
+  against the player), but the **player's own fire is already a hitscan
+  cone test** in `fireGun`. Only the NPC half needs replacing.
+- **Turret gating by hull size** is another job for the `-s`/`-m`/`-l`
+  distinction, which Phase 11 also wants for crew. Both point the same
+  way: make size a real property and the 22 unused models start flying.
+  The notes' recommendation — cost it like the shield/reactor tradeoff
+  rather than a flat gate — is the same instinct as the power budget, and
+  it already has machinery.
+
+---
+
 ## Weapons: the laser catalogue
 
 Three classes by emitter size, three varieties by how the energy is
@@ -1600,6 +1670,71 @@ capacity against radiation mass against the slot either one costs you.
 
 ---
 
+## Phase 14 — the pulsar neutrino beacon
+
+From `DESIGN-NOTES-WEAPONS-AND-BEACON.md`. Recorded here because it
+touches more existing systems than anything else outstanding, and because
+one of its open questions has a cheap answer.
+
+**The chain of reasoning is unusually tight:** neutrinos cannot be blocked
+or shadowed, which makes them useless as a weapon and perfect as a signal.
+Detecting them needs supernova-scale output, so the transmitter is
+necessarily enormous and fixed — never shipborne. Attaching it to a pulsar
+supplies that output *and* an unspoofable clock, which is what makes a
+treaty-enforced neutral installation credible: **no faction has to trust
+another, only that the pulsar keeps spinning.**
+
+### The mechanic that makes it a place rather than a landmark
+
+Ships do not sail toward lighthouses, and the notes get this right. What
+puts traffic there is danger: a pulsar is a neutron star, so dropping out
+of slipspace nearby without a precise timing reference should be
+genuinely hazardous. The beacon becomes a **mandatory waypoint** for
+anyone crossing that region — the relationship a ship has to a light
+marking a strait, not to a destination.
+
+Everything else follows from captive traffic:
+
+- **A toll economy.** A port nobody can route around is the one place a
+  docking fee is unavoidable — a natural fit for the living market, and a
+  port whose prices are set by position rather than production.
+- **A faction motive with no sentiment in it.** Whoever holds it holds the
+  one channel in the region that cannot be jammed. That is a concrete
+  reason to contest a world, which is what Phase 8's wars want.
+- **Guaranteed witnesses.** A chokepoint with constant traffic is the
+  worst possible place to commit a crime under this game's witness
+  doctrine — and therefore the most interesting one.
+- **Sabotage rather than capture.** The failure state is tampering with
+  the receiver hardware without being seen, which is Phase 10's sabotage
+  contract pointed at the highest-stakes target on the map.
+
+### The open question, and my answer
+
+> *Does slipspace exit-precision near a gravity well become a general
+> mechanic, or is it beacon-specific?*
+
+**General, with the beacon as its most dramatic instance.** A rule that
+exists in one place is a special case the player learns once and never
+uses again; a general rule turns every neutron star, black hole and gas
+giant into terrain, makes the star map worth reading before a jump, and
+gives the beacon its significance *because* it is the exception that
+makes a dangerous region passable — rather than because it is scripted to
+matter. It also composes with the black-hole anchors above: dense
+formations are exactly where blind exits should be worst.
+
+Cheaper, too. One exit-precision term keyed on local gravity beats a
+bespoke system attached to one installation.
+
+### Scale discipline
+
+This is a large feature with a lot of surface — economy, slipspace,
+factions, missions, comms. It should be **one installation in one
+region**, not a category of object, until it has been played. And it
+depends on Phase 8 (control) and Phase 12 (a reason to be crossing that
+region at all) being real first.
+
+---
+
 ## Idea — black holes as galactic anchors
 
 **The framing that makes this work: the killer is the radiation field, not
@@ -1708,6 +1843,31 @@ reached. Nothing in `sim.js` needs to change.
 The visual (an accretion disc, lensing) is a separate and much larger
 question; lensing in particular is a real shader problem and should not be
 what gates the feature. A black disc that occludes stars would do.
+
+---
+
+## Awaited: two more ship types
+
+Models to follow. Both fill gaps the systems already have:
+
+- **A naval variant of the police interceptor.** The `navy` class
+  currently flies the capital hull, which is right for a warship and wrong
+  for a patrol — a navy that only fields capital ships cannot be
+  *dispatched* the way Phase 9's hunters need to be. A naval interceptor
+  is the hull those hunters should arrive in, with the capital reserved
+  for something you are meant to run from.
+
+- **A fuel and repair tender.** This one earns its place mechanically
+  rather than decoratively: **running dry is currently a dead end.** A
+  stranded ship has no resolution but a reload, which is the worst kind of
+  failure state — one the game notices and offers nothing for. A rescue
+  service turns that into a transaction with a price, and it composes with
+  everything nearby: expensive far from a refinery (Phase 12's haulage),
+  slow to arrive at the frontier, and a legitimate thing for a pirate to
+  impersonate.
+
+Neither is urgent. Both are more useful than the medical ship they
+replace, because each answers a question the simulation is already asking.
 
 ---
 

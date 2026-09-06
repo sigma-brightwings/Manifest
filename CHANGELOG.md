@@ -180,6 +180,32 @@ new system.
   `readdirSync` is not recursive, so the superseded folders are excluded
   from conversion automatically.
 
+- **Weapons retiered by particle, with range falloff.** Following
+  `DESIGN-NOTES-WEAPONS-AND-BEACON.md`, a laser's tier is now what it
+  fires rather than how big its emitter is, and the particle decides how
+  damage behaves with distance:
+
+  | Tier | Falloff | Character |
+  |---|---|---|
+  | **Photon** | none | massless, does not decay — longest reach, least damage, universal |
+  | **Pion / kaon** | 0.85 | ~26 ns lifetime, loses coherence fast — brutal close, near-useless far |
+  | **Muon** | 0.25 | ~2.2 µs, time dilation carries it — holds damage at range |
+
+  Measured at the extremes: a photon pulse delivers 5.0 at 2 km and 5.0 at
+  22 km; a pion pulse 19.5 at 1 km and **3.0** at its own maximum; a muon
+  pulse 23.8 close and 18.0 at 34 km. Range stops being a cutoff and
+  becomes a curve.
+
+  The 3 × 3 shape, the shield interaction (pulse ×0.6, beam ×1.5) and the
+  power budget all survive — only what a tier *means* changed.
+
+  **Every old id still resolves.** `c1pulse` … `c3beam`, plus the original
+  `pulse` and `beam`, are aliases. This mattered more than it looked: they
+  had to be added to `EQUIPMENT`, not just `GUNS`, because a save stores
+  ids *in slots* and a lookup that missed one would have silently dropped
+  the player's gun on load. Fits now normalise to the canonical id the
+  first time they are touched.
+
 - **A port sells only what it makes. It buys anything.** The market is
   asymmetric now, which is what turns a trade route into a route rather
   than a price lookup — you cannot buy computers at a farming co-op just

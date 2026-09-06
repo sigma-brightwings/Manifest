@@ -60,11 +60,36 @@
     beam:         { vsShield: 1.5, vsHull: 0.7 }
   };
 
-  function laser(id, name, cls, variety, price, power, mass, dmg, cooldown,
+  /* ---- what a beam is made of --------------------------------------------
+   * The TIER is the particle, and the particle decides how damage behaves
+   * with distance. This is the one place in the catalogue where a real
+   * physical property hands over the balance number instead of taste.
+   *
+   *   photon     massless, does not decay. No falloff at all, and the
+   *              longest reach — paid for in damage, not in range.
+   *   pion/kaon  charged pion lifetime ~26 ns, kaon ~12 ns: 100-200x
+   *              shorter-lived than a muon at the same accelerator gamma,
+   *              so the beam loses coherence fast. Brutal up close,
+   *              worthless at distance. The brawler's gun.
+   *   muon       ~2.2 microseconds, long enough that time dilation carries
+   *              it across a real gap. The only tier that holds its damage
+   *              out to range, and the only one needing an accelerator big
+   *              enough to justify what it costs.
+   *
+   * `falloff` is how much of the damage is lost at maximum range:
+   * 0 keeps all of it, 0.85 keeps a seventh. See damageAtRange. */
+  var PARTICLE = {
+    photon: { falloff: 0.00, label: 'photon' },
+    pion:   { falloff: 0.85, label: 'pion' },
+    muon:   { falloff: 0.25, label: 'muon' }
+  };
+
+  function laser(id, name, particle, variety, price, power, mass, dmg, cooldown,
                  range, heat, color, avail, pitch) {
     var d = LASER_DELIVERY[variety];
+    var p = PARTICLE[particle];
     return { id: id, name: name, slot: 'hardpoint', kind: 'gun',
-             cls: cls, variety: variety,
+             particle: particle, variety: variety, falloff: p.falloff,
              price: price, power: power, mass: mass,
              dmg: dmg, cooldown: cooldown, range: range, heat: heat,
              vsShield: d.vsShield, vsHull: d.vsHull, color: color,
@@ -73,53 +98,79 @@
              pitch: pitch };
   }
 
+  /* Damage actually delivered at a distance. Range stays a hard maximum —
+   * past it the beam is not worth drawing — but inside it the particle
+   * decides the curve. The 1.5 exponent keeps a pion respectable through
+   * the first third of its reach and then drops it off a cliff, which is
+   * what "close-quarters weapon" should mean in the hands rather than on
+   * paper. */
+  function damageAtRange(gun, dist) {
+    if (!gun) return 0;
+    if (dist > gun.range) return 0;
+    var f = gun.falloff || 0;
+    if (!f) return gun.dmg;
+    var x = Math.max(0, Math.min(1, dist / gun.range));
+    return gun.dmg * (1 - f * Math.pow(x, 1.5));
+  }
+
   /* The `pitch` on every item is the yard's own copy — what a salesman
    * standing in a cold hangar would actually say about the thing. It is
    * not a stat line; the stat line is right next to it. Where a pitch is
    * unflattering that is deliberate: a catalogue where every entry is
    * enthusiastic is a catalogue nobody reads twice. */
   var GUNS = {
-    /* Class 1 — light emitters. Anyone will sell you one. */
-    c1pulse: laser('c1pulse', 'Class 1 pulse laser', 1, 'pulse',
-                   900, 1.8, 1.5, 5, 0.40, 9, 2, '#ff6b5a', [0, -100],
+    /* PHOTON — the universal baseline. No falloff, longest reach, least
+     * damage per shot. Anyone will sell you one. */
+    phpulse: laser('phpulse', 'Photon pulse laser', 'photon', 'pulse',
+                   900, 1.8, 1.5, 5, 0.40, 22, 2, '#ff6b5a', [0, -100],
                    'Every hull leaves the yard with one. There is a reason.'),
-    c1int:   laser('c1int', 'Class 1 intermittent laser', 1, 'intermittent',
-                   1700, 2.4, 2.0, 13, 1.00, 12, 4, '#ff8f4a', [0, -100],
+    phint:   laser('phint', 'Photon intermittent laser', 'photon', 'intermittent',
+                   1700, 2.4, 2.0, 13, 1.00, 26, 4, '#ff8f4a', [0, -100],
                    'Hits harder, waits longer. Patience in a housing.'),
-    c1beam:  laser('c1beam', 'Class 1 beam laser', 1, 'beam',
-                   3100, 3.0, 2.5, 2, 0.12, 15, 12, '#ff3b8a', [0, -100],
-                   'Continuous output at a pocket price. Runs cool enough to forget.'),
+    phbeam:  laser('phbeam', 'Photon beam laser', 'photon', 'beam',
+                   3100, 3.0, 2.5, 2, 0.12, 30, 12, '#ff3b8a', [0, -100],
+                   'Reaches as far as you can aim it. Light does not get tired.'),
 
-    /* Class 2 — medium. Wants a developed port and a civil word for you. */
-    c2pulse: laser('c2pulse', 'Class 2 pulse laser', 2, 'pulse',
-                   3400, 4.2, 3.5, 11, 0.40, 11, 5, '#ff5a44', [0.45, 0],
-                   'The workhorse. Nothing clever about it, nothing wrong with it.'),
-    c2int:   laser('c2int', 'Class 2 intermittent laser', 2, 'intermittent',
-                   6200, 5.2, 4.0, 30, 1.00, 15, 9, '#ff7a2e', [0.45, 0],
-                   'Thirty points a second apart. Discipline, sold by the tonne.'),
-    c2beam:  laser('c2beam', 'Class 2 beam laser', 2, 'beam',
-                   9800, 6.5, 5.0, 4.5, 0.12, 19, 26, '#ff2f77', [0.45, 0],
-                   'Strips a shield like old paint. Your hull will notice.'),
+    /* PION — the brawler. Enormous close, nearly nothing at its own
+     * maximum range. Wants a developed port and a civil word for you. */
+    pipulse: laser('pipulse', 'Pion pulse accelerator', 'pion', 'pulse',
+                   3400, 4.2, 3.5, 20, 0.40, 11, 5, '#c86bff', [0.45, 0],
+                   'Devastating in a knife fight. Bring a knife.'),
+    piint:   laser('piint', 'Pion intermittent accelerator', 'pion', 'intermittent',
+                   6200, 5.2, 4.0, 52, 1.00, 13, 9, '#a86bff', [0.45, 0],
+                   'Fifty-two points, if you are close enough to regret it.'),
+    pibeam:  laser('pibeam', 'Kaon beam accelerator', 'pion', 'beam',
+                   9800, 6.5, 5.0, 8, 0.12, 15, 26, '#8a5aff', [0.45, 0],
+                   'Strips a shield like old paint. You will have to get close.'),
 
-    /* Class 3 — heavy. Shipyard economies, and only for friends. */
-    c3pulse: laser('c3pulse', 'Class 3 pulse laser', 3, 'pulse',
-                   14000, 9.0, 7.0, 24, 0.40, 13, 11, '#ff4630', [0.70, 10],
-                   'Capital-adjacent. Bring a reactor and a firm opinion.'),
-    c3int:   laser('c3int', 'Class 3 intermittent laser', 3, 'intermittent',
-                   24000, 11.0, 8.0, 62, 1.00, 18, 18, '#ff6a18', [0.70, 10],
-                   'Sixty-two points, once a second, until something stops being there.'),
-    c3beam:  laser('c3beam', 'Class 3 beam laser', 3, 'beam',
-                   38000, 13.0, 9.0, 9, 0.16, 23, 45, '#ff1f6b', [0.70, 10],
+    /* MUON — the only tier that keeps its damage at distance. Reachable,
+     * eventually, and priced like an argument you have already won. */
+    mupulse: laser('mupulse', 'Muon pulse accelerator', 'muon', 'pulse',
+                   14000, 9.0, 7.0, 24, 0.40, 34, 11, '#6bd5ff', [0.70, 10],
+                   'Reach without apology. Bring a reactor and a firm opinion.'),
+    muint:   laser('muint', 'Muon intermittent accelerator', 'muon', 'intermittent',
+                   24000, 11.0, 8.0, 62, 1.00, 40, 18, '#5ab8ff', [0.70, 25],
+                   'Sixty-two points, once a second, from further than they can answer.'),
+    mubeam:  laser('mubeam', 'Muon beam accelerator', 'muon', 'beam',
+                   38000, 13.0, 9.0, 9, 0.16, 46, 45, '#4a9bff', [0.80, 40],
                    'If it is still there after four seconds, check your aim — not the gun.')
   };
 
-  /* The two ids the game shipped with, kept alive as aliases so old saves,
-   * old tests and every `s.gun === 'pulse'` in the codebase keep meaning
-   * something. They point AT the new objects rather than copying them, so
-   * there is exactly one set of numbers. */
-  var LEGACY_GUN = { pulse: 'c1pulse', beam: 'c2int' };
-  GUNS.pulse = GUNS.c1pulse;
-  GUNS.beam = GUNS.c2int;
+  /* Every id this game has ever shipped, kept alive as an alias so old
+   * saves, old tests and every `s.gun === 'pulse'` in the codebase keep
+   * meaning something. Aliases point AT the new objects rather than
+   * copying them, so there is exactly one set of numbers per weapon.
+   *
+   * The mapping is by ROLE, not by name: the old Class 1/2/3 ladder was
+   * emitter power, and power is still what the new tiers cost, so a
+   * Class 2 owner wakes up holding the pion of the same delivery. */
+  var LEGACY_GUN = {
+    pulse: 'phpulse', beam: 'piint',
+    c1pulse: 'phpulse', c1int: 'phint', c1beam: 'phbeam',
+    c2pulse: 'pipulse', c2int: 'piint', c2beam: 'pibeam',
+    c3pulse: 'mupulse', c3int: 'muint', c3beam: 'mubeam'
+  };
+  for (var _lg in LEGACY_GUN) GUNS[_lg] = GUNS[LEGACY_GUN[_lg]];
 
   /* The turret moved to a UTILITY slot. It is not a gun you aim — the file
    * header calls the hardpoints "fixed guns you aim with the nose", and
@@ -296,7 +347,14 @@
     for (var i = 0; i < tables.length; i++) {
       for (var k in tables[i]) {
         var item = tables[i][k];
-        if (item && item.id) EQUIPMENT[item.id] = item;   // aliases collapse
+        if (!item || !item.id) continue;
+        EQUIPMENT[item.id] = item;
+        /* AND under the key it was found at, so every legacy id resolves
+         * here too. This is not a convenience for tests: a save written
+         * before the particle retier stores `c1pulse` in a slot, and a
+         * lookup that missed it would silently drop the player's gun on
+         * load. Aliases must reach the table the fit system reads. */
+        EQUIPMENT[k] = item;
       }
     }
   })();
@@ -435,7 +493,9 @@
   function fitItem(ship, id, key) {
     var v = canFit(ship, id, key);
     if (!v.ok) return v;
-    fitMap(ship)[v.key] = id;
+    /* Store the CANONICAL id, not whatever alias was passed in, so a save
+     * normalises forward the first time an old fit is touched. */
+    fitMap(ship)[v.key] = EQUIPMENT[id].id;
     syncLegacy(ship);
     return { ok: true, key: v.key, item: EQUIPMENT[id] };
   }
@@ -1364,7 +1424,10 @@
 
     if (!hit) return;
     var spec = hit.spec || liftTrader(sys, hit, t);
-    if (spec) damageNpc(sys, G, spec, gun.dmg, t, hooks);
+    /* The particle decides what actually arrives. A photon delivers its
+     * whole load at any range it can reach; a pion that connects at the
+     * edge of its envelope is barely worth the power it drew. */
+    if (spec) damageNpc(sys, G, spec, damageAtRange(gun, hitDist), t, hooks);
   }
 
   /* The turret. Buyable disinterest: it picks the nearest thing that is
@@ -1392,7 +1455,7 @@
       color: tur.color, until: now + 0.07
     });
     if (hooks && hooks.sound) hooks.sound('turret');
-    damageNpc(sys, G, best, tur.dmg, t, hooks);
+    damageNpc(sys, G, best, damageAtRange(tur, bestD), t, hooks);
   }
 
   /* ---- missiles ---------------------------------------------------------
@@ -1823,8 +1886,8 @@
    * of the hull. Credits, standing and warrants are part of you. */
   function stripForRespawn(ship) {
     ship.cargo = {};
-    ship.fit = { hardpoint0: 'c1pulse' };   // the gear was part of the hull
-    ship.gun = 'c1pulse';
+    ship.fit = { hardpoint0: 'phpulse' };   // the gear was part of the hull
+    ship.gun = 'phpulse';
     ship.turret = null;
     ship.shield = null;
     ship.shieldHp = 0;
@@ -1846,7 +1909,8 @@
     HULLS: HULLS,
     EQUIPMENT: EQUIPMENT, LEGACY_GUN: LEGACY_GUN,
     SLOT_ORDER: SLOT_ORDER, SLOT_LABEL: SLOT_LABEL, RESALE: RESALE,
-    LASER_DELIVERY: LASER_DELIVERY,
+    LASER_DELIVERY: LASER_DELIVERY, PARTICLE: PARTICLE,
+    damageAtRange: damageAtRange,
     slotKeys: slotKeys, slotType: slotType, firstFreeSlot: firstFreeSlot,
     fittedList: fittedList, fitSummary: fitSummary, canFit: canFit,
     fitItem: fitItem, unfitItem: unfitItem, sellFitted: sellFitted,

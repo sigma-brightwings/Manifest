@@ -96,16 +96,16 @@ section('--- fitting out ---');
 (function () {
   var G = makeG();
   check('you start with a pulse laser and a whole hull',
-        G.ship.gun === 'c1pulse' && G.ship.hullHp === G.ship.hullMax);
+        G.ship.gun === 'phpulse' && G.ship.hullHp === G.ship.hullMax);
   check('and it is actually in a hardpoint, not just a field',
-        G.ship.fit.hardpoint0 === 'c1pulse', JSON.stringify(G.ship.fit));
+        G.ship.fit.hardpoint0 === 'phpulse', JSON.stringify(G.ship.fit));
 
   G.ship.credits = 20000;          // the Class 2 ladder costs more than the old beam
   var before = G.ship.credits;
   var r = Combat.buyOutfit(G, 'gun', 'beam');
   check('buying the legacy beam id fits the Class 2 intermittent it maps to',
         r === Combat.GUNS.beam.price && G.ship.credits === before - r &&
-        G.ship.gun === 'c2int');
+        G.ship.gun === 'piint');
 
   G.ship.credits = 10;
   check('a purchase you cannot afford does not happen',
@@ -133,11 +133,11 @@ section('--- slots, power and mass ---');
 
   var sum = Combat.fitSummary(s);
   check('the starting fit draws its listed power',
-        Math.abs(sum.powerUsed - Combat.GUNS.c1pulse.power) < 1e-9 &&
+        Math.abs(sum.powerUsed - Combat.GUNS.phpulse.power) < 1e-9 &&
         sum.powerCap === 9.0, sum.powerUsed + ' / ' + sum.powerCap);
 
   /* The headline refusal: 13 MW will not run on a 9 MW hull. */
-  var no = Combat.canFit(s, 'c3beam');
+  var no = Combat.canFit(s, 'mubeam');
   check('a Class 3 beam will not fit a Talon at any price', !no.ok, no.why);
   check('and it says why, in words', /MW/.test(no.why || ''), no.why);
 
@@ -148,12 +148,12 @@ section('--- slots, power and mass ---');
   K.ship.credits = 500000;
   Combat.buyHull(K, 'kestrel');
   check('a Kestrel cannot run a Class 3 beam alongside its starter gun',
-        !Combat.canFit(K.ship, 'c3beam').ok);
+        !Combat.canFit(K.ship, 'mubeam').ok);
   Combat.sellFitted(K, 'hardpoint0');
-  var yes = Combat.canFit(K.ship, 'c3beam');
+  var yes = Combat.canFit(K.ship, 'mubeam');
   check('but can carry one on a bare hull', yes.ok, yes.why || '');
   if (yes.ok) {
-    Combat.fitItem(K.ship, 'c3beam', yes.key);
+    Combat.fitItem(K.ship, 'mubeam', yes.key);
     var ksum = Combat.fitSummary(K.ship);
     var shield = Combat.canFit(K.ship, 'shield');
     check('and then has no power left for a shield — the glass cannon is arithmetic',
@@ -182,7 +182,7 @@ section('--- slots, power and mass ---');
   Rk.ship.credits = 500000;
   Combat.buyHull(Rk, 'kestrel');
   Combat.sellFitted(Rk, 'hardpoint0');
-  Combat.fitItem(Rk.ship, 'c3beam');
+  Combat.fitItem(Rk.ship, 'mubeam');
   check('a bare Kestrel cannot add a shield to a Class 3 beam',
         !Combat.canFit(Rk.ship, 'shield').ok);
   var rfit = Combat.fitItem(Rk.ship, 'reactor2');
@@ -208,7 +208,7 @@ section('--- slots, power and mass ---');
   var cash = R.ship.credits;
   var got = Combat.sellFitted(R, 'hardpoint0');
   check('selling a fitting refunds part of list and clears the slot',
-        got === Math.round(Combat.GUNS.c1pulse.price * Combat.RESALE) &&
+        got === Math.round(Combat.GUNS.phpulse.price * Combat.RESALE) &&
         R.ship.credits === cash + got && !R.ship.fit.hardpoint0 && !R.ship.gun,
         String(got));
 })();
@@ -241,7 +241,7 @@ section('--- migrating a career that predates slots ---');
   Combat.migrateFit(s);
 
   check('the old beam becomes the Class 2 intermittent',
-        s.fit.hardpoint0 === 'c2int' && s.gun === 'c2int', JSON.stringify(s.fit));
+        s.fit.hardpoint0 === 'piint' && s.gun === 'piint', JSON.stringify(s.fit));
   check('the turret lands in a utility slot',
         s.fit.utility0 === 'turret' && s.turret === 'turret');
   check('the shield survives the move', s.shield === 'shield');
@@ -342,28 +342,28 @@ section('--- what a port will sell you ---');
   port.market.dev = 0.10;
   var poor = Combat.stockAt(G, port);
   check('a frontier port does not stock the heavy classes',
-        !find(poor, 'c3beam') && !find(poor, 'c2beam'),
+        !find(poor, 'mubeam') && !find(poor, 'c2beam'),
         poor.length + ' lines');
-  check('but it will sell you a Class 1', !!find(poor, 'c1pulse'));
+  check('but it will sell you a Class 1', !!find(poor, 'phpulse'));
 
   /* Standing gates access to what IS on the shelf. */
   port.market.dev = 0.90;
   G.standing[fac] = 0;
   var rich = Combat.stockAt(G, port);
-  var c3 = find(rich, 'c3beam');
+  var c3 = find(rich, 'mubeam');
   check('a developed port stocks Class 3', !!c3);
   check('but will not sell it to a stranger', c3 && !c3.available, c3 && c3.why);
   check('and says what would change that', c3 && /standing/i.test(c3.why || ''), c3 && c3.why);
 
   G.standing[fac] = 40;
   var friendly = Combat.stockAt(G, port);
-  check('a friend can buy it', find(friendly, 'c3beam').available);
+  check('a friend can buy it', find(friendly, 'mubeam').available);
 
   /* And being wanted closes the weapon counter, but not the whole shop. */
   G.wanted[fac] = Combat.WANTED_HUNT + 100;
   var hot = Combat.stockAt(G, port);
-  check('a wanted pilot is not sold guns', !find(hot, 'c1pulse').available,
-        find(hot, 'c1pulse').why);
+  check('a wanted pilot is not sold guns', !find(hot, 'phpulse').available,
+        find(hot, 'phpulse').why);
   check('nor a turret', !find(hot, 'turret').available);
   check('but can still buy a reactor — it is not a weapon',
         find(hot, 'reactor1').available);
@@ -591,12 +591,12 @@ section('--- taking hits ---');
 
   Combat.stripForRespawn(G.ship);
   check('the respawn hull is a stock Talon with the starter gun',
-        G.ship.hullId === 'talon' && G.ship.gun === 'c1pulse' &&
+        G.ship.hullId === 'talon' && G.ship.gun === 'phpulse' &&
         G.ship.hullHp === Combat.HULLS.talon.hullMax &&
         Object.keys(G.ship.cargo).length === 0);
   check('and the slots came back empty but for that gun',
         Object.keys(G.ship.fit).length === 1 &&
-        G.ship.fit.hardpoint0 === 'c1pulse', JSON.stringify(G.ship.fit));
+        G.ship.fit.hardpoint0 === 'phpulse', JSON.stringify(G.ship.fit));
 })();
 
 section('--- contracts ---');
