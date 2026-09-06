@@ -1,0 +1,25 @@
+# Dependencies and build output
+node_modules/
+dist/
+build/icon.png
+
+# ref/ is deliberately NOT ignored. tools/glb2hulls.js consumes the .glb
+# models, so without them the ship meshes cannot be regenerated and the
+# repo is not self-contained. They are also the only copy that exists.
+
+# Scratch
+_basetest/
+*.log
+npm-debug.log*
+
+# OS and editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*~
+  
+# Generated-file backups. Git is the backup now.  
+*.prev  

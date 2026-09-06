@@ -1,0 +1,67 @@
+{
+  "name": "manifest",
+  "productName": "Manifest",
+  "version": "0.1.0",
+  "description": "Gravity, clockwork, cockpit and cargo.",
+  "private": true,
+  "license": "UNLICENSED",
+  "author": "Astra",
+  "_comment_desktopName": "Read by electron-builder, not by npm: it becomes the Linux .desktop filename and the window's WM_CLASS, which is what lets a desktop environment link the running window to its launcher icon.",
+  "desktopName": "procedural-space-game.desktop",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "icon": "node tools/make-icon.js",
+    "serve": "node tools/serve.js",
+    "lint": "node tools/lint-globals.js",
+    "test": "node tools/lint-globals.js && node test/physics.test.js && node test/render.test.js && node test/cockpit.test.js && node test/economy.test.js && node test/nodes.test.js && node test/ships.test.js && node test/galaxy.test.js && node test/combat.test.js && node test/arcs.test.js",
+    "dist": "npm run icon && electron-builder --win --linux",
+    "dist:win": "npm run icon && electron-builder --win",
+    "dist:linux": "npm run icon && electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.kawartha.proceduralspacegame",
+    "productName": "Procedural Space Game",
+    "copyright": "Copyright © 2026",
+    "artifactName": "ProceduralSpaceGame-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "asar": false,
+    "files": [
+      "index.html",
+      "src/**/*",
+      "electron/**/*",
+      "README.md",
+      "FLIGHT-CARD.md"
+    ],
+    "win": {
+      "target": [
+        { "target": "portable", "arch": ["x64"] },
+        { "target": "nsis", "arch": ["x64"] }
+      ]
+    },
+    "portable": {
+      "artifactName": "ProceduralSpaceGame-${version}-portable.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "artifactName": "ProceduralSpaceGame-Setup-${version}.exe"
+    },
+    "linux": {
+      "target": [
+        { "target": "tar.gz", "arch": ["x64"] }
+      ],
+      "category": "Game",
+      "synopsis": "Gravity, clockwork, cockpit and cargo."
+    }
+  }
+}

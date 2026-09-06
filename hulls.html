@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hull Library — every imported ship model, by ID</title>
+<style>
+  html, body { margin: 0; background: #04060c; color: #cfe0ff;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  h1 { font-size: 15px; color: #ffe6a8; margin: 16px 18px 2px; }
+  p  { font-size: 11px; color: #7e93b3; margin: 2px 18px 12px; }
+  #grid { display: flex; flex-wrap: wrap; gap: 10px; padding: 0 14px 20px; }
+  .cell { background: #070c14; border: 1px solid #24435a; border-radius: 3px;
+          padding: 4px; cursor: pointer; }
+  .cell.sel { border-color: #b4f0ff; }
+  .cell div { text-align: center; font-size: 11px; color: #9ff0dc; padding: 2px 0 3px; }
+  #big { position: fixed; right: 18px; top: 14px; background: rgba(7,12,20,0.97);
+         border: 1px solid #4a97b0; padding: 8px; display: none; }
+  #big div { text-align: center; font-size: 13px; color: #b4f0ff; padding: 4px; }
+</style>
+</head>
+<body>
+<h1>HULL LIBRARY</h1>
+<p>Every imported model, spinning, labelled with its ID — the code the game assigns
+   roles by. Click one for a closer look. Current casting is in
+   <code>Render.HULL_ASSIGN</code> (src/render.js); change any line of it, or say the
+   word and it changes.</p>
+<div id="grid"></div>
+<div id="big"><canvas id="bigc" width="420" height="420"></canvas><div id="bigl"></div></div>
+
+<script src="src/hulls.js"></script>
+<script>
+/* A deliberately tiny standalone renderer — orthographic, painter-sorted,
+ * lambert off a fixed light — so this page owes the game nothing and works
+ * even when the game is mid-surgery. */
+(function () {
+  'use strict';
+  var lib = window.HullLib;
+  var ids = Object.keys(lib);
+  var cells = [];
+
+  function decompress(id) {
+    var s = lib[id];
+    return { v: s.v, f: s.f, c: s.ci.map(function (i) { return s.pal[i]; }) };
+  }
+
+  function draw(ctx, mesh, size, angle) {
+    ctx.clearRect(0, 0, size, size);
+    var ca = Math.cos(angle), sa = Math.sin(angle);
+    var tilt = 0.42, ct = Math.cos(tilt), st = Math.sin(tilt);
+    var L = norm([0.5, 0.8, -0.6]);
+    var scale = size * 0.82;
+
+    var pts = mesh.v.map(function (p) {
+      // yaw about +y, then tip the camera down a little
+      var x = p[0] * ca + p[2] * sa;
+      var z = -p[0] * sa + p[2] * ca;
+      var y = p[1] * ct - z * st;
+      var d = p[1] * st + z * ct;
+      return [size / 2 + x * scale, size / 2 - y * scale, d, x, y, z];
+    });
+
+    var tris = [];
+    for (var i = 0; i < mesh.f.length; i++) {
+      var f = mesh.f[i];
+      var a = pts[f[0]], b = pts[f[1]], c = pts[f[2]];
+      var n = cross(sub3(mesh.v[f[1]], mesh.v[f[0]]), sub3(mesh.v[f[2]], mesh.v[f[0]]));
+      var nl = Math.hypot(n[0], n[1], n[2]) || 1;
+      // NOT named "shade": a var of that name hoists over the shade()
+      // helper for the whole function and turns every fill into a
+      // call-a-number TypeError.
+      var lambert = Math.abs((n[0] * L[0] + n[1] * L[1] + n[2] * L[2]) / nl);
+      tris.push({ a: a, b: b, c: c, d: (a[2] + b[2] + c[2]) / 3,
+                  col: mesh.c[i], sh: 0.3 + 0.7 * lambert });
+    }
+    tris.sort(function (p, q) { return q.d - p.d; });
+    for (var t = 0; t < tris.length; t++) {
+      var tr = tris[t];
+      ctx.fillStyle = shade(tr.col, tr.sh);
+      ctx.beginPath();
+      ctx.moveTo(tr.a[0], tr.a[1]); ctx.lineTo(tr.b[0], tr.b[1]); ctx.lineTo(tr.c[0], tr.c[1]);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+
+  function sub3(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+  function cross(a, b) {
+    return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  }
+  function norm(a) { var l = Math.hypot(a[0], a[1], a[2]); return [a[0] / l, a[1] / l, a[2] / l]; }
+  function shade(col, s) {
+    var lit = col.charAt(0) === '!';
+    if (lit) { col = col.slice(1); s = 1.1; }
+    var n = parseInt(col.slice(1), 16);
+    var r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+    return 'rgb(' + Math.min(255, Math.round(r * s)) + ',' +
+           Math.min(255, Math.round(g * s)) + ',' + Math.min(255, Math.round(b * s)) + ')';
+  }
+
+  var grid = document.getElementById('grid');
+  var big = document.getElementById('big'), bigc = document.getElementById('bigc');
+  var selected = null;
+
+  ids.forEach(function (id) {
+    var cell = document.createElement('div'); cell.className = 'cell';
+    var cv = document.createElement('canvas'); cv.width = 150; cv.height = 150;
+    var label = document.createElement('div'); label.textContent = id;
+    cell.appendChild(cv); cell.appendChild(label); grid.appendChild(cell);
+    cell.onclick = function () {
+      selected = selected === id ? null : id;
+      big.style.display = selected ? 'block' : 'none';
+      document.getElementById('bigl').textContent = id +
+        '   (' + lib[id].f.length + ' tris)';
+      cells.forEach(function (c2) { c2.cell.classList.toggle('sel', c2.id === selected); });
+    };
+    cells.push({ id: id, cell: cell, ctx: cv.getContext('2d'), mesh: decompress(id) });
+  });
+
+  var t0 = performance.now();
+  function paint(a) {
+    cells.forEach(function (c2) { draw(c2.ctx, c2.mesh, 150, a); });
+    if (selected) {
+      var m = cells.filter(function (c2) { return c2.id === selected; })[0];
+      draw(bigc.getContext('2d'), m.mesh, 420, a * 0.6);
+    }
+  }
+  /* One synchronous paint before the loop: a hidden tab never fires rAF at
+   * all, and a gallery that is blank until the window is looked at is a
+   * gallery that photographs blank. */
+  paint(0.8);
+  (function frame() {
+    paint((performance.now() - t0) / 1800 + 0.8);
+    requestAnimationFrame(frame);
+  })();
+  window.paint = paint;   // hand-crank for scripted screenshots
+})();
+</script>
+</body>
+</html>

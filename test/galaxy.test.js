@@ -1,0 +1,221 @@
+/* galaxy.test.js — the cluster, and jumping between its stars.
+ *
+ *     node test/galaxy.test.js
+ *
+ * The thing most worth defending here is that Gen.starPreview and
+ * Gen.generateSystem can never disagree. The map draws a hundred and fifty
+ * star names without generating a hundred and fifty systems; if the cheap
+ * path and the real path ever diverged, the chart would quietly lie about
+ * where you were going and nothing else would notice.
+ */
+var V = require('../src/vec3.js');
+var Eco = require('../src/economy.js');
+var Gen = require('../src/generate.js');
+var Galaxy = require('../src/galaxy.js');
+var Sim = require('../src/sim.js');
+
+var pass = 0, fail = 0;
+function check(n, c, d) { if (c) pass++; else { fail++; console.log('  FAIL  ' + n + (d ? '   ' + d : '')); } }
+
+console.log('--- the cluster ---');
+(function () {
+  var g = Galaxy.build('kawartha');
+  check('the requested number of stars was placed', g.stars.length === Galaxy.DEFAULT_STARS,
+        String(g.stars.length));
+  check('star zero carries the game seed unchanged', g.home.seed === 'kawartha');
+  check('star zero sits at the origin', g.home.x === 0 && g.home.y === 0 && g.home.z === 0);
+
+  // The preview and the full generator must agree, always.
+  var mismatch = 0;
+  for (var i = 0; i < g.stars.length; i += 7) {
+    var full = Gen.generateSystem(g.stars[i].seed);
+    var pre = Gen.starPreview(g.stars[i].seed);
+    if (full.root.type !== pre.cls || full.root.mass !== pre.mass ||
+        full.root.temp !== pre.temp || full.name !== pre.name) mismatch++;
+  }
+  check('the map preview matches full generation exactly', mismatch === 0, mismatch + ' mismatches');
+
+  var tooClose = 0, outside = 0;
+  for (i = 0; i < g.stars.length; i++) {
+    if (Math.hypot(g.stars[i].x, g.stars[i].y) > g.radius * 1.01) outside++;
+    for (var j = i + 1; j < g.stars.length; j++) {
+      if (Galaxy.distance3(g.stars[i], g.stars[j]) < 1.1 - 1e-9) tooClose++;
+    }
+  }
+  check('no two stars occupy the same point', tooClose === 0, tooClose + ' pairs');
+  check('every star is inside the cluster radius', outside === 0, outside + ' outside');
+
+  var names = {}, dup = 0;
+  g.stars.forEach(function (s) { if (names[s.name]) dup++; names[s.name] = 1; });
+  check('no two stars share a name', dup === 0, dup + ' duplicates');
+
+  // Determinism, the whole point.
+  var a = Galaxy.build('kawartha'), b = Galaxy.build('kawartha');
+  check('the same seed builds the same cluster',
+        JSON.stringify(a.stars) === JSON.stringify(b.stars));
+  check('a different seed builds a different cluster',
+        JSON.stringify(a.stars) !== JSON.stringify(Galaxy.build('kawartha ').stars));
+})();
+
+console.log('--- jump economics ---');
+(function () {
+  var g = Galaxy.build('kawartha');
+  var sys = Gen.generateSystem(g.home.seed);
+  var planet = sys.bodies.filter(function (b) { return b.kind === 'planet'; })[1];
+  var ship = Sim.circularOrbit(planet, sys, 0, planet.radius * 0.5, 0, 0);
+
+  var emptyRange = Galaxy.maxRange(ship);
+  check('an empty ship has a useful range', emptyRange > 15 && emptyRange < 40,
+        emptyRange.toFixed(2) + ' ly');
+  ship.cargo.ores = 64;
+  Sim.refreshShip(ship);
+  var ladenRange = Galaxy.maxRange(ship);
+  check('a full hold shortens your reach', ladenRange < emptyRange * 0.7,
+        emptyRange.toFixed(1) + ' -> ' + ladenRange.toFixed(1) + ' ly');
+  delete ship.cargo.ores;
+  Sim.refreshShip(ship);
+
+  // There must be somewhere to go on the first tank, from anywhere.
+  var stranded = 0;
+  for (var i = 0; i < g.stars.length; i++) {
+    var r = Galaxy.reachable(g, g.stars[i], ship);
+    if (!r.length) stranded++;
+  }
+  check('no star is a dead end on a full tank', stranded === 0, stranded + ' dead ends');
+
+  var plan = Galaxy.jumpPlan(g, g.home, Galaxy.reachable(g, g.home, ship)[0].star, ship);
+  check('a reachable jump is possible', plan.possible);
+  check('it costs propellant', plan.fuel > 0 && plan.fuel < ship.fuel);
+  check('it costs days, not seconds', plan.seconds > 3600 * 12, (plan.seconds / 86400).toFixed(2) + ' d');
+
+  // Exhausting the tank makes everything unreachable, and says so honestly.
+  ship.fuel = 0;
+  Sim.refreshShip(ship);
+  check('a dry tank reaches nothing', Galaxy.maxRange(ship) === 0);
+  var dead = Galaxy.jumpPlan(g, g.home, g.stars[5], ship);
+  check('and an impossible jump reports its shortfall', !dead.possible && dead.shortfall > 0);
+})();
+
+console.log('--- every port sells fuel, so nowhere is a trap ---');
+(function () {
+  var dry = 0, ports = 0;
+  for (var i = 0; i < 60; i++) {
+    var sys = Gen.generateSystem('seed-' + i);
+    sys.ports.forEach(function (p) {
+      ports++;
+      var q = Eco.price(p, Eco.FUEL_ID, 0);
+      if (!q || q.buy === null || !(q.buy > 0)) dry++;
+    });
+  }
+  check('every port in every system will sell you hydrogen', dry === 0,
+        dry + ' of ' + ports + ' ports cannot');
+})();
+
+console.log('--- the clock moves, and the market moves with it ---');
+(function () {
+  var sys = Gen.generateSystem('kawartha');
+  var port = sys.ports[0];
+  var cid = port.market.order.filter(function (c) { return c !== 'waste'; })[0];
+  var before = Eco.price(port, cid, 0).mid;
+  var after = Eco.price(port, cid, Galaxy.jumpSeconds(6)).mid;   // a six light-year hop
+  check('prices are not the same after a jump-length transit', Math.abs(after - before) > 1e-9,
+        before.toFixed(1) + ' -> ' + after.toFixed(1));
+
+  // ... and it is exact, not integrated: asking directly equals asking
+  // after walking there, which is what makes a jump free to evaluate.
+  var t = Galaxy.jumpSeconds(19);
+  var direct = Eco.analyticStock(port, cid, t);
+  for (var k = 0; k < 40; k++) Eco.analyticStock(port, cid, k * 5e4);
+  check('the destination market is exact at the arrival instant',
+        Math.abs(Eco.analyticStock(port, cid, t) - direct) < 1e-12);
+})();
+
+console.log('--- galactic territory ---');
+(function () {
+  var g = Galaxy.build('kawartha');
+
+  check('up to three factions actually hold ground', g.factions.length >= 2 && g.factions.length <= 3,
+        g.factions.length + ' factions');
+  check('every faction has a name and colour', g.factions.every(function (f) {
+    return f.name && f.color && f.id && !f.outlaw;
+  }));
+  check('every star has a controlling faction', g.stars.every(function (s) {
+    return !!g.factionById[s.factionId];
+  }));
+
+  // Ownership must actually be nearest-capital, not just "some faction".
+  var wrong = 0;
+  g.stars.forEach(function (s) {
+    var bestId = null, bestD = Infinity;
+    g.factions.forEach(function (f) {
+      var cap = g.byId[f.capitalId];
+      var d = Galaxy.distance3(s, cap);
+      if (d < bestD) { bestD = d; bestId = f.id; }
+    });
+    if (bestId !== s.factionId) wrong++;
+  });
+  check('ownership is nearest-capital, star by star', wrong === 0, wrong + ' mismatches');
+
+  // Determinism, same as everything else in this game.
+  var g2 = Galaxy.build('kawartha');
+  var same = g.stars.every(function (s, i) { return s.factionId === g2.stars[i].factionId; });
+  check('the same seed draws the same territory map', same);
+  check('same seed draws the same faction roster',
+        JSON.stringify(g.factions) === JSON.stringify(g2.factions));
+
+  var g3 = Galaxy.build('a different seed entirely');
+  var identical = g.factions.length === g3.factions.length &&
+    g.factions.every(function (f, i) { return f.name === g3.factions[i].name; });
+  check('a different seed draws a different roster', !identical);
+
+  // The whole point: two systems the same faction controls must show the
+  // SAME faction identity, not two independently-rolled ones.
+  var byFaction = {};
+  g.stars.forEach(function (s) { (byFaction[s.factionId] = byFaction[s.factionId] || []).push(s); });
+  var fid = Object.keys(byFaction).filter(function (k) { return byFaction[k].length >= 2; })[0];
+  check('at least one faction controls more than one star (a real region)', !!fid);
+  if (fid) {
+    var pair = byFaction[fid];
+    var sysA = systemForStar(g, pair[0]);
+    var sysB = systemForStar(g, pair[1]);
+    check('two systems in the same region share the same primary faction identity',
+          sysA.factions[0].id === sysB.factions[0].id &&
+          sysA.factions[0].name === sysB.factions[0].name &&
+          sysA.factions[0].color === sysB.factions[0].color,
+          sysA.factions[0].name + ' vs ' + sysB.factions[0].name);
+  }
+
+  // The legacy path — no galaxy context — must be untouched.
+  var bare = Gen.generateSystem('seed-legacy-check');
+  check('a bare seed with no galaxy context still gets 1-4 locally-rolled factions',
+        bare.factions.length >= 1 && bare.factions.length <= 4);
+
+  function systemForStar(galaxy, star) {
+    var fac = galaxy.factionById[star.factionId];
+    return Gen.generateSystem(star.seed, { faction: fac, allFactions: galaxy.factions });
+  }
+})();
+
+console.log('--- a whole galaxy generates without complaint ---');
+(function () {
+  var g = Galaxy.build('kawartha');
+  var bad = 0, totalPorts = 0, totalPatrols = 0, habitable = 0;
+  for (var i = 0; i < g.stars.length; i += 5) {
+    var sys = Gen.generateSystem(g.stars[i].seed);
+    if (!sys.ports.length) bad++;
+    totalPorts += sys.ports.length;
+    totalPatrols += (sys.patrols || []).length;
+    habitable += sys.bodies.filter(function (b) { return b.habitable; }).length;
+    // Every port must still hold to the same invariants everywhere.
+    sys.ports.forEach(function (p) {
+      if (!p.market || !p.faction) bad++;
+    });
+  }
+  check('every sampled system has ports, markets and flags', bad === 0, bad + ' bad');
+  console.log('  sampled 30 systems: ' + totalPorts + ' ports, ' + totalPatrols +
+              ' patrols, ' + habitable + ' habitable worlds');
+})();
+
+console.log('');
+console.log(pass + ' passed, ' + fail + ' failed');
+process.exit(fail ? 1 : 0);
