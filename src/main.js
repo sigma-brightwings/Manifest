@@ -1068,9 +1068,21 @@
        * anything else looks at it: left to itself a browser takes Alt as
        * "focus the menu bar", which pulls keyboard focus clean out of the
        * canvas and leaves the ship deaf mid-burn. */
+      /* The two Alts are the two ways of taking the mouse off the stick, and
+       * they are symmetric on purpose: LEFT hands it to the interface, RIGHT
+       * hands it to your neck. Right Alt was already being swallowed here
+       * and thrown away, so the test for it predates the feature.
+       *
+       * Free-look exists because mouse-aim now steers with no button held —
+       * which is what freed the buttons to be triggers, and which left no
+       * way at all to look around. A modifier rather than a toggle, for the
+       * reason setCursorMode already gives: you reach for it, do one thing,
+       * and let go, so there is never a state to be surprised by while
+       * somebody is shooting at you. */
       if (e.key === 'Alt') {
         e.preventDefault();
         if (e.location !== 2) setCursorMode(true);   // 2 = right Alt
+        else setFreeLook(true);
         return;
       }
 
@@ -1341,13 +1353,19 @@
       }
     });
     window.addEventListener('keyup', function (e) {
-      if (e.key === 'Alt') { setCursorMode(false); return; }
+      /* Both, unconditionally. A keyup does not always report the location
+       * the keydown did — and a free-look that latches on because the
+       * release came back as the wrong Alt is a ship that has stopped
+       * answering the mouse for no visible reason. */
+      if (e.key === 'Alt') { setCursorMode(false); setFreeLook(false); return; }
       G.keys[e.key.toLowerCase()] = false;
     });
     /* Alt-tabbing away releases the key somewhere we will never hear about
      * it, and a cursor mode that latches on is a mouse that has stopped
      * flying the ship for no visible reason. */
-    window.addEventListener('blur', function () { setCursorMode(false); G.keys = {}; });
+    window.addEventListener('blur', function () {
+      setCursorMode(false); setFreeLook(false); G.keys = {};
+    });
 
     /* ---- the mouse as a weapon -------------------------------------------
      * The conflict, stated plainly: in the cockpit, left-drag already turns
@@ -1468,8 +1486,12 @@
        * held, and it has to be, now that the buttons are triggers: keeping
        * the old drag requirement would have meant you could only turn the
        * ship while firing it. Everywhere else a drag is still a drag. */
-      var aiming = mouseArmed();
-      if (!dragging && !aiming) return;
+      var aiming = mouseArmed() && !G.freeLook;
+      /* Free-look reaches the head with no button held too — the whole
+       * point is that it replaces the stick, not that it adds a drag. */
+      var looking = G.freeLook && G.viewMode === 'cockpit' && flying() &&
+                    !menuOpen() && !G.cursor.active;
+      if (!dragging && !aiming && !looking) return;
       var dx = e.clientX - lastX, dy = e.clientY - lastY;
       /* The same gesture means two, now three, different things depending
        * on where you are sitting and which way you told F9 you wanted it.
@@ -1479,6 +1501,7 @@
        * are flying, and the mouse is a stick. */
       if (aiming) aimBy(dx, dy);
       else if (G.viewMode === 'cockpit') lookBy(dx * 0.0042, -dy * 0.0042);
+      // (free-look lands in the branch above: cockpit, head, not the stick)
       else {
         G.cam.yaw -= dx * 0.006;
         G.cam.pitch += dy * 0.006;
@@ -1829,6 +1852,24 @@
         return false;
     }
     return false;
+  }
+
+  /* Hold right Alt and the mouse stops flying the ship and starts turning
+   * your head. Letting go puts the view back where it was looking, because
+   * a held free-look that leaves your head hanging off to port is a control
+   * you have to remember to undo — and the entire argument for a modifier
+   * over a toggle is that there is nothing to remember.
+   *
+   * The aim command is zeroed on the way IN, not just on the way out: the
+   * mouse has been feeding a decaying rate, and carrying that into a look
+   * would have the ship keep turning while you are only glancing sideways. */
+  function setFreeLook(on) {
+    on = !!on;
+    if (G.freeLook === on) return;
+    G.freeLook = on;
+    if (G.viewMode !== 'cockpit') return;
+    G.aimCmd.yaw = 0; G.aimCmd.pitch = 0;
+    if (!on) { G.look.yaw = 0; G.look.pitch = 0; }
   }
 
   function setMouseAim(on) {
@@ -4539,6 +4580,51 @@
    * eye at a zoom where the whole ship is two pixels. */
   var MIN_BEAM_PX = 14;
 
+  /* How long a tracer takes to cross the weapon's whole envelope, in real
+   * seconds. Nothing in the simulation reads this: the shot has already hit
+   * or missed by the time the first pixel is drawn. It is slow purely so
+   * that firing LOOKS like firing — at true beam speed the whole event
+   * occupies less than one frame and the gun reads as broken, which is how
+   * this arrived as a bug report in the first place. */
+  var TRACER_CROSS = 0.30;
+  var TRACER_NEAR_W = 7.0;    // px, at the muzzle
+  var TRACER_FAR_W = 1.2;     // px, at the far end — perspective, faked cheaply
+
+  /* A tapered, fading quad between two screen points. Canvas cannot vary a
+   * stroke's width along its length, so this is a filled polygon with a
+   * gradient — exactly the trick drawExhaust already uses on the torch
+   * plumes, and for the same reason: a tapered quad reads far better than
+   * any number of triangles, and a plume and a tracer are the same problem.
+   *
+   * Wide and bright at the muzzle, thin and faint at the far end, which is
+   * what gives the shot its direction without needing an arrowhead. */
+  function taperedTracer(ctx, ax, ay, bx, by, w0, w1, color, a0, a1) {
+    var dx = bx - ax, dy = by - ay, L = Math.hypot(dx, dy);
+    if (!(L > 0.5)) return;
+    var nx = -dy / L, ny = dx / L;
+    var g = ctx.createLinearGradient(ax, ay, bx, by);
+    g.addColorStop(0, hexToRgba(color, a0));
+    g.addColorStop(1, hexToRgba(color, a1));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(ax + nx * w0, ay + ny * w0);
+    ctx.lineTo(bx + nx * w1, by + ny * w1);
+    ctx.lineTo(bx - nx * w1, by - ny * w1);
+    ctx.lineTo(ax - nx * w0, ay - ny * w0);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  /* The beam colours in the catalogue are '#rrggbb'; a gradient needs an
+   * alpha per stop, so they have to be unpacked. */
+  function hexToRgba(hex, a) {
+    var h = String(hex || '#ff6b5a').replace('#', '');
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    var n = parseInt(h, 16);
+    return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' +
+           (n & 255) + ',' + a.toFixed(3) + ')';
+  }
+
   function drawCombatFx(ctx, cam) {
     var i, a, b;
     var nowS = performance.now() / 1000;
@@ -4555,8 +4641,26 @@
          * nothing and threw the beam sideways off the canopy; and it no
          * longer stays where the ship WAS, which at 5.5 km/s left the beam
          * half a kilometre astern before it faded. */
-        var origin = (beam.fromShip && beam.muzzle)
-          ? Render.localToWorld(G.ship, beam.muzzle.r, beam.muzzle.u, beam.muzzle.f)
+        /* From the seat, the tracer comes from under the nose rather than
+         * from the true barrel: the real chin gun is only nine degrees below
+         * the boresight, above the canopy sill, so a line drawn from it
+         * starts in clear air attached to nothing. Render.seatMuzzle puts
+         * the apparent origin below the sill, where the hull would be hiding
+         * the barrel if the cockpit view drew a hull. Outside, the real
+         * emitters are used — out there you can see the guns. */
+        var mz = beam.muzzle;
+        if (beam.fromShip && mz && G.viewMode === 'cockpit') {
+          /* Just below the instrument deck — deckTop() is already this
+           * file's answer to "where the screen stops belonging to the
+           * world", so the tracer emerges from behind the panels rather
+           * than from a fixed angle that only suited one window. The 26 px
+           * is how far under the edge it starts, which is enough that the
+           * near end is genuinely hidden and not enough to waste travel. */
+          var drop = ((deckTop(cam.h) + 26) - cam.cy) / cam.flen;
+          mz = Render.seatMuzzle(beam.side || 1, drop);
+        }
+        var origin = (beam.fromShip && mz)
+          ? Render.localToWorld(G.ship, mz.r, mz.u, mz.f)
           : beam.from;
         /* And the far end has to be just as live, or the beam pivots about
          * its muzzle as the ship moves and the view fills with a fan of
@@ -4587,24 +4691,52 @@
         if (L > 1e-6 && L < MIN_BEAM_PX) {
           ex = a.x + dx / L * MIN_BEAM_PX;
           ey = a.y + dy / L * MIN_BEAM_PX;
+          dx = ex - a.x; dy = ey - a.y; L = MIN_BEAM_PX;
         }
-        /* Drawn twice: a wide, dim core and a bright thin line down the
-         * middle of it. A single 2px stroke was thin enough to disappear
-         * against a planet, and simply widening it turns the beam into a
-         * bar. Two passes under `lighter` give it a hot centre and a bloom,
-         * which is what a beam looks like and costs one extra stroke on a
-         * path that draws a handful of lines a frame. */
-        ctx.strokeStyle = beam.color || '#ff6b5a';
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(ex, ey);
-        ctx.globalAlpha = beam.miss ? 0.12 : 0.30;
-        ctx.lineWidth = beam.miss ? 3 : 6;
-        ctx.lineCap = 'round';
-        ctx.stroke();
-        ctx.globalAlpha = beam.miss ? 0.40 : 0.95;
-        ctx.lineWidth = beam.miss ? 1.5 : 2.5;
-        ctx.stroke();
+
+        /* How far the tracer has got. Purely cosmetic — see TRACER_CROSS.
+         * A beam is drawn full length from the first frame because that is
+         * what "continuous" means; the other two travel. */
+        var age = nowS - (beam.born || nowS);
+        var head = beam.variety === 'beam'
+          ? 1
+          : Math.max(0.06, Math.min(1, age / TRACER_CROSS));
+        /* And it fades out over the last third of its life rather than
+         * vanishing, so a burst trails off instead of blinking. */
+        var life = (beam.until - (beam.born || nowS)) || 0.42;
+        var fade = Math.max(0, Math.min(1, (1 - (age / life)) * 3));
+        if (fade <= 0) continue;
+
+        var dim = beam.miss ? 0.4 : 1;
+        var w0 = TRACER_NEAR_W * dim, w1 = TRACER_FAR_W * dim;
+        var col = beam.color || '#ff6b5a';
+        var hx = a.x + dx * head, hy = a.y + dy * head;
+
+        if (beam.variety === 'intermittent') {
+          /* A broken line: the delivery is bursts, so the tracer is too.
+           * Each dash is its own tapered quad, which keeps the near-bright
+           * falloff running across the whole run rather than restarting it
+           * inside every segment. */
+          var DASH = 7, lit = 0.62;
+          for (var d = 0; d < DASH; d++) {
+            var t0 = (d / DASH) * head, t1 = ((d + lit) / DASH) * head;
+            taperedTracer(ctx,
+              a.x + dx * t0, a.y + dy * t0, a.x + dx * t1, a.y + dy * t1,
+              w0 + (w1 - w0) * t0, w0 + (w1 - w0) * t1,
+              col, fade * (0.95 - 0.75 * t0), fade * (0.95 - 0.75 * t1));
+          }
+        } else if (beam.variety === 'beam') {
+          // Continuous, and the widest of the three: the load never stops.
+          taperedTracer(ctx, a.x, a.y, hx, hy, w0 * 1.25, w1, col,
+                        fade * 0.95, fade * 0.12);
+        } else {
+          /* A pulse is a bolt, so it has a body rather than reaching all the
+           * way back to the muzzle — a short bright slug with a tail. */
+          var tail = Math.max(0, head - 0.22);
+          taperedTracer(ctx,
+            a.x + dx * tail, a.y + dy * tail, hx, hy,
+            w0 * 0.55, w0 * 1.05, col, fade * 0.25, fade * 1.0);
+        }
       }
       ctx.restore();
     }
@@ -7197,8 +7329,9 @@
        * than none: it teaches the wrong gesture and then the player blames
        * the ship. */
       var hint = G.viewMode === 'cockpit'
-        ? 'H help   ·   ' + (G.mouseAim ? 'mouse aims · 1/2 fire groups · mid launches'
-                                        : 'drag to look') +
+        ? 'H help   ·   ' + (G.freeLook ? 'FREE LOOK — release right Alt to fly'
+                             : G.mouseAim ? 'mouse aims · R-Alt looks · 1/2 fire · 4 launches'
+                                          : 'drag to look') +
           '   ·   wheel / +- zoom   ·   Esc menu   ·   Enter exterior   ·   '
         : 'H help   ·   drag to orbit   ·   wheel / +- zoom   ·   Esc menu   ·   Enter cockpit   ·   ';
       ctx.fillText(hint +

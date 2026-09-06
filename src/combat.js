@@ -1744,11 +1744,20 @@
      * nose. `from` and `to` stay as the world points at the instant of
      * firing, for anything that wants a straight answer and as the fallback
      * once a target stops existing. */
+    /* `variety` and `born` are for the renderer: a pulse is drawn as a bolt
+     * that travels, an intermittent as a broken line, a beam as a solid one.
+     * THE TRACER IS THE ONLY THING THAT MOVES. The weapon is still hitscan
+     * and the damage above has already landed — a beam at combat ranges is
+     * instantaneous and this game's whole weapon design rests on that, so
+     * putting travel time in the picture must not put any in the physics.
+     * The tracer is slow because a shot you cannot see is a shot that reads
+     * as a broken gun, not because the shot is slow. */
     (G.beams = G.beams || []).push({
       from: muzzleWorld(s, mz), muzzle: mz, fromShip: true,
       to: hit ? V.clone(hit.pos) : beamEnd,
       target: hit || null, range: gun.range,
-      color: gun.color, until: now + 0.09
+      variety: gun.variety || 'pulse', side: mz.r < 0 ? -1 : 1,
+      color: gun.color, born: now, until: now + 0.42
     });
 
     /* The hull pays for the shot, and this is the line that finally gives

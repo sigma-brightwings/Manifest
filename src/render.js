@@ -529,6 +529,46 @@
    * beams would leave a ship that is not the one on screen. */
   function shipMuzzles() { return hullMuzzles('courier'); }
 
+  /* ---- and where a tracer APPEARS to come from, from the seat ------------
+   * The real chin guns are 5 m ahead of the origin and 81 cm under it, which
+   * from an eye 8 cm forward subtends nine degrees below the boresight. That
+   * is physically right and dramatically useless: the canopy sill is
+   * twenty-one degrees down, so a tracer drawn from the true muzzle starts
+   * ABOVE the sill, in clear air, and reads as a line that begins in front
+   * of the ship attached to nothing.
+   *
+   * The reason is that reality is doing some occluding we are not: from a
+   * real seat those barrels are hidden under your own nose, and the beam is
+   * first seen where it clears the hull. The cockpit view draws no exterior
+   * hull, so nothing hides the start and it floats.
+   *
+   * So the seat gets an APPARENT muzzle: same side, but low and close, so
+   * the tracer comes up from beneath the console and out under the nose,
+   * which is where it would appear from if the hull were in the way. Twenty-
+   * seven degrees down puts it just below the sill's twenty-one. The
+   * exterior view keeps the true emitters — out there you can see the guns,
+   * so nothing needs faking.
+   *
+   * HOW FAR DOWN IS MEASURED, NOT PICKED. The first attempt used a fixed
+   * twenty-seven degrees, which was chosen against one window and was wrong
+   * in every other: in a short window the instrument deck covers everything
+   * more than a few degrees below the boresight, so the tracer's origin sat
+   * behind the panels and only the last fifth of its travel was ever seen.
+   * The caller passes `drop`, the downward angle as a ratio of focal
+   * lengths, worked out from deckTop() — so the tracer enters from just
+   * under the deck at any window shape, and still swings correctly with the
+   * head because it remains an honest point in the ship's frame.
+   *
+   * Metres, like everything else in this section. */
+  var SEAT_MUZZLE = { r: 0.36, f: 1.45 };
+
+  function seatMuzzle(side, drop) {
+    var f = SEAT_MUZZLE.f * M;
+    return { r: (side < 0 ? -1 : 1) * SEAT_MUZZLE.r * M,
+             u: -f * (drop > 0 ? drop : 0.35),
+             f: f };
+  }
+
   function assignHull(kind, id) {
     if (id && !(global.HullLib && global.HullLib[id])) return false;
     if (id) HULL_ASSIGN[kind] = id; else delete HULL_ASSIGN[kind];
@@ -2837,6 +2877,7 @@
      * no reason for combat effects to grow a second copy of it. */
     localToWorld: localToWorld,
     hullMuzzles: hullMuzzles, shipMuzzles: shipMuzzles,
+    seatMuzzle: seatMuzzle,
     SHIP_LEN: SHIP_LEN,
     drawAttitudeLadder: drawAttitudeLadder,
     drawFlightPathMarker: drawFlightPathMarker,

@@ -168,6 +168,17 @@ button held, which is what frees the buttons up to be triggers. In the
 exterior view mouse 1 stays the camera, because swinging the view around
 the ship is what that view is for.
 
+**Hold right `Alt` to look around** without letting go of the ship — the
+mouse turns your head instead of the nose, and releasing it puts the view
+back where it was. (Left `Alt` is the other one: it hands the mouse to the
+interface.)
+
+**The tracers tell you which gun is firing.** A pulse throws a bolt, an
+intermittent a broken line, a beam a solid one — all of them widest and
+brightest at the muzzle. They travel slowly enough to see, which is a lie
+told only to your eyes: the weapon is hitscan and the shot has already
+landed before the first pixel is drawn.
+
 **No firing under time compression.** Drop to 1x (`,`) first — at warp your
 guns cycle every frame and the shot cannot be aimed at anything.
 
