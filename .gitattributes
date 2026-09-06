@@ -1,0 +1,9 @@
+# Normalise line endings in the repo, check out native.
+# Without this every file shows as modified on a machine with the other convention.
+* text=auto
+
+# Binary: never touch these.
+*.glb binary
+*.png binary
+*.ico binary
+*.exe binary

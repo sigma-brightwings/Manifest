@@ -23,3 +23,6 @@ desktop.ini
   
 # Generated-file backups. Git is the backup now.  
 *.prev  
+
+# Scratch test output.
+_test_output.txt
