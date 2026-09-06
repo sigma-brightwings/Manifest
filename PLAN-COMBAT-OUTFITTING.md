@@ -1846,6 +1846,40 @@ what gates the feature. A black disc that occludes stars would do.
 
 ---
 
+## Later — the player commands a fleet
+
+The X-series shape: you stop being a pilot and become an owner. Recorded
+now because several decisions already taken point at it, and it is much
+cheaper to keep the door open than to cut one later.
+
+**What already leans this way:**
+
+- Ships are `spec` objects steered by `steerNpc`, and Phase 9's work makes
+  that steering take an arbitrary target instead of always the player.
+  A ship you own is a spec with your flag on it.
+- Traffic already runs on rails with timetables and manifests, which is
+  exactly what an owned trade ship needs — a route, a cargo, a schedule.
+- Crew, wages and hull sizes (Phase 11) are the cost model a fleet needs
+  to be a decision rather than an accumulation.
+- Subfaction standing (Phase 11) gives an owned fleet somewhere to belong.
+
+**The two hard questions, worth deciding before any of it is built:**
+
+1. **What does the player DO while the fleet works?** X answers this with
+   an order interface and a lot of waiting. This game's answer should
+   probably be that a fleet is *leverage on the systems already here* —
+   your freighters generate the shortfalls and supply shares that Phase 8
+   turns into territory — rather than an idle-income button.
+2. **Simulation cost.** Owned ships far from the player must ride rails
+   like everything else, or the frame budget goes. That is already the
+   project's answer to every "what happens off-screen" question, so it is
+   not a new problem — but a fleet makes it load-bearing.
+
+Not soon. But nothing in the current design should assume there is only
+ever one ship with the player's flag on it.
+
+---
+
 ## Awaited: two more ship types
 
 Models to follow. Both fill gaps the systems already have:

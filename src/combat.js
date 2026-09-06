@@ -305,6 +305,18 @@
     dart:  { id: 'dart', name: 'Dart Interceptor', price: 61000, mesh: 'police',
              dryMass: 30, thrustKN: 2200, thrusterCap: 10, fuelCap: 20,
              cargoCap: 22, hullMax: 80,
+             /* THE RULE, checked by the hull-budget test: a reactor must
+              * run every core system the hull has room for AND still
+              * light the cheapest gun. Only shuttles fly unarmed.
+              *
+              * Audited rather than assumed, and the audit was a surprise:
+              * the Dart looked like the hull that would fail, because
+              * shield + heat shield + turret is 5.4 MW of its 7.0 and the
+              * cheapest gun needs 1.8. It never fails, because it cannot
+              * carry all three anyway — those three weigh 10 t against a
+              * 9 t budget, so MASS BINDS BEFORE POWER on this hull and
+              * the lockout is unreachable. 7.0 stands. The test is the
+              * point: the rule is now enforced rather than believed. */
              slots: { hardpoint: 2, utility: 1, internal: 2 },
              powerMW: 7.0, fitMass: 9,
              blurb: 'outruns everything; carries nothing' },
@@ -613,6 +625,39 @@
   };
   var NPC_GUN = { dmg: 5, range: 12, cooldown: 1.1 };
 
+  /* ---- merchantmen shoot back --------------------------------------------
+   * Freighters used to carry no guns at all, which made robbing one a
+   * chore rather than a decision: you closed, you demanded, and nothing
+   * could happen to you. Now everything flies armed EXCEPT SHUTTLES.
+   *
+   * Deliberately feeble. A trader's gun is not meant to win — it is meant
+   * to make a robbery cost you hull and time, so that the mercenary escort
+   * is still worth hiring and a pirate still prefers the soft target. The
+   * real defence is the second line below: a merchantman screams for help
+   * in half the time an armed ship takes, because it has nothing better to
+   * do with those seconds. That leans on the witness system already in
+   * place rather than on damage, which is where this game's teeth are.
+   *
+   * A shuttle stays unarmed, and that is a role rather than a weakness —
+   * it is the hull nobody scans twice, which is exactly what you want when
+   * the cargo is a sabotage device. */
+  var TRADER_GUN = { dmg: 2, range: 8, cooldown: 2.2 };
+  var UNARMED_CLASSES = { shuttle: true };
+
+  var DISTRESS_DELAY_ARMED = 10;   // a warship backs itself for a while
+  var DISTRESS_DELAY_CIVIL = 5;    // a freighter calls the moment it is hit
+
+  function isArmedNpc(spec) {
+    if (!spec) return false;
+    return !UNARMED_CLASSES[spec.cls];
+  }
+
+  function distressDelayFor(spec) {
+    if (!spec) return DISTRESS_DELAY_ARMED;
+    var civil = spec.kind === 'trader' || UNARMED_CLASSES[spec.cls];
+    return civil ? DISTRESS_DELAY_CIVIL : DISTRESS_DELAY_ARMED;
+  }
+
   var ATTACK_STANDOFF = 6;       // km — where an attacker tries to sit
   var AIM_CONE = 0.035;          // rad — generous, ships are tens of metres
   var WITNESS_RANGE = 150000;    // km — "the same patch of space"
@@ -743,7 +788,12 @@
     /* Being shot at is an argument everybody understands. Armed ships turn
      * and fight; unarmed ones run. Either way the crime clock starts. */
     if (spec.kind === 'trader' || spec.cls === 'shuttle') {
+      /* A merchantman still RUNS — it is not going to win and it knows it
+       * — but if it has a gun it fires while it goes. `defending` is
+       * deliberately not `hostileToPlayer`: it shoots, it does not hunt,
+       * and it will still break off the moment it can. */
       spec.mode = 'breakoff';
+      if (isArmedNpc(spec)) spec.defending = true;
     } else {
       spec.mode = 'attack';
       spec.hostileToPlayer = true;
@@ -942,7 +992,7 @@
        * very distress call killNpc had just silenced — a corpse filing its
        * own murder report — which the test suite caught on the first run. */
     } else if (!victim.distressAt) {
-      victim.distressAt = t + DISTRESS_DELAY;
+      victim.distressAt = t + distressDelayFor(victim);
       victim.distressKind = kind;
     } else if (BOUNTY[kind] > BOUNTY[victim.distressKind || 'assault']) {
       victim.distressKind = kind;   // the charge escalates with the act
@@ -1562,21 +1612,28 @@
 
     for (var i = 0; i < patrols.length; i++) {
       var sp = patrols[i];
-      if (!sp.live || sp.dead || !sp.hostileToPlayer) continue;
-      if (sp.kind === 'trader') continue;               // freighters carry no guns
+      if (!sp.live || sp.dead) continue;
+      /* Two ways to be shooting at the player: hunting them, or being
+       * robbed by them. The second is new — a merchantman that fires
+       * while it runs. */
+      if (!sp.hostileToPlayer && !sp.defending) continue;
+      if (!isArmedNpc(sp)) continue;                    // shuttles carry nothing
+
+      var gun = (sp.kind === 'trader' || sp.defending) ? TRADER_GUN : NPC_GUN;
       var d = V.dist(sp.live.pos, s.pos);
-      if (d > NPC_GUN.range) continue;
+      if (d > gun.range) continue;
       if (t < (sp.coolUntil || 0)) continue;
-      sp.coolUntil = t + NPC_GUN.cooldown;
+      sp.coolUntil = t + gun.cooldown;
 
       var transverse = V.len(V.sub(s.vel, sp.live.vel));
       var chance = Math.max(0.12, Math.min(0.85,
-        1.0 - d / NPC_GUN.range * 0.5 - transverse * 1.4));
+        1.0 - d / gun.range * 0.5 - transverse * 1.4));
       (G.beams = G.beams || []).push({
         from: V.clone(sp.live.pos), to: V.clone(s.pos),
-        color: '#ff8a76', until: now + 0.07, miss: Math.random() > chance
+        color: gun === TRADER_GUN ? '#ffc46b' : '#ff8a76',
+        until: now + 0.07, miss: Math.random() > chance
       });
-      if (Math.random() < chance) damagePlayer(G, NPC_GUN.dmg, hooks);
+      if (Math.random() < chance) damagePlayer(G, gun.dmg, hooks);
       else if (hooks && hooks.sound) hooks.sound('nearMiss');
     }
   }
@@ -1919,6 +1976,11 @@
     SINK: SINK, sinkRackSize: sinkRackSize, armSink: armSink,
     addHeat: addHeat, updateSink: updateSink,
     WITNESS_RANGE: WITNESS_RANGE, DISTRESS_DELAY: DISTRESS_DELAY,
+    TRADER_GUN: TRADER_GUN, NPC_GUN: NPC_GUN,
+    UNARMED_CLASSES: UNARMED_CLASSES,
+    DISTRESS_DELAY_ARMED: DISTRESS_DELAY_ARMED,
+    DISTRESS_DELAY_CIVIL: DISTRESS_DELAY_CIVIL,
+    isArmedNpc: isArmedNpc, distressDelayFor: distressDelayFor,
     WANTED_HUNT: WANTED_HUNT, BOUNTY: BOUNTY, ATTACK_STANDOFF: ATTACK_STANDOFF,
     SMUGGLING_FINE_PER_TONNE: SMUGGLING_FINE_PER_TONNE, SEARCH_FLOOR: SEARCH_FLOOR,
     DUMPING_FINE_PER_TONNE: DUMPING_FINE_PER_TONNE, REPORT_FLOOR: REPORT_FLOOR,

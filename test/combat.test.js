@@ -120,6 +120,75 @@ section('--- fitting out ---');
         String(G.ship.missiles));
 })();
 
+section('--- no hull is locked out of a weapon ---');
+(function () {
+  /* THE RULE: a hull's reactor must run every core system it has slots
+   * for AND still light the cheapest gun in the catalogue. A ship that
+   * cannot be armed once it is properly fitted is a ship nobody would
+   * fly, and only shuttles are meant to be unarmed. */
+  var cheapest = null;
+  for (var id in Combat.EQUIPMENT) {
+    var it = Combat.EQUIPMENT[id];
+    if (it.kind !== 'gun') continue;
+    if (!cheapest || it.power < cheapest.power) cheapest = it;
+  }
+  check('there is a cheapest gun to reason about', !!cheapest,
+        cheapest && cheapest.name + ' at ' + cheapest.power + ' MW');
+
+  var core = ['shield', 'heatshield', 'turret'];
+  var order = ['dart', 'talon', 'kestrel', 'mule'];
+  for (var h = 0; h < order.length; h++) {
+    var hull = Combat.HULLS[order[h]];
+    var probe = { hullId: hull.id, fit: {} };
+    var draw = 0;
+    /* Fit everything essential this hull has room for, then check a gun
+     * still fits afterwards. */
+    for (var c = 0; c < core.length; c++) {
+      var v = Combat.canFit(probe, core[c]);
+      if (v.ok) {
+        probe.fit[v.key] = core[c];
+        draw += Combat.EQUIPMENT[core[c]].power;
+      }
+    }
+    var armed = Combat.canFit(probe, cheapest.id);
+    check(hull.name + ' can still arm itself fully fitted', armed.ok,
+          'core draw ' + draw.toFixed(1) + ' of ' + hull.powerMW +
+          ' MW' + (armed.ok ? '' : ' — ' + armed.why));
+  }
+})();
+
+section('--- merchantmen shoot back, shuttles do not ---');
+(function () {
+  check('a freighter counts as armed', Combat.isArmedNpc({ cls: 'freighter' }));
+  check('a tanker counts as armed', Combat.isArmedNpc({ cls: 'tanker' }));
+  check('a shuttle does not', !Combat.isArmedNpc({ cls: 'shuttle' }));
+
+  check('a trader gun is feeble next to a warship gun',
+        Combat.TRADER_GUN.dmg < Combat.NPC_GUN.dmg / 2 &&
+        Combat.TRADER_GUN.range < Combat.NPC_GUN.range,
+        Combat.TRADER_GUN.dmg + ' dmg vs ' + Combat.NPC_GUN.dmg);
+
+  check('but a merchantman calls for help in half the time',
+        Combat.distressDelayFor({ kind: 'trader' }) <
+        Combat.distressDelayFor({ kind: 'police' }),
+        Combat.distressDelayFor({ kind: 'trader' }) + 's vs ' +
+        Combat.distressDelayFor({ kind: 'police' }) + 's');
+
+  /* Being shot at makes a freighter defend itself without making it a
+   * hunter — it fires while it runs, and it still runs. */
+  var G = makeG();
+  var victim = fakeVictim(G, { kind: 'trader', cls: 'freighter', range: 5 });
+  Combat.damageNpc(G.sys, G, victim, 4, 0, HOOKS);
+  check('a hit freighter defends itself', victim.defending === true);
+  check('but does not turn into a hunter',
+        !victim.hostileToPlayer && victim.mode === 'breakoff');
+
+  var G2 = makeG();
+  var pod = fakeVictim(G2, { kind: 'trader', cls: 'shuttle', range: 5 });
+  Combat.damageNpc(G2.sys, G2, pod, 4, 0, HOOKS);
+  check('a shuttle has nothing to defend itself with', !pod.defending);
+})();
+
 section('--- slots, power and mass ---');
 (function () {
   var G = makeG();
@@ -427,8 +496,11 @@ section('--- the witness doctrine ---');
   var victim = fakeVictim(G, { range: 5, faction: 'quietfac' });
   Combat.crime(G.sys, G, G.t, 'assault', victim, HOOKS);
   check('no witness, no immediate bounty', !(G.wanted.quietfac > 0));
+  /* The delay is per-victim now: a merchantman with nothing better to do
+   * with the next few seconds calls sooner than a warship does. */
   check('but the victim starts its distress clock',
-        victim.distressAt === G.t + Combat.DISTRESS_DELAY);
+        victim.distressAt === G.t + Combat.distressDelayFor(victim),
+        'delay ' + Combat.distressDelayFor(victim) + 's for a ' + victim.kind);
 
   // Kill it before the call goes out: silence, forever.
   Combat.killNpc(G.sys, G, victim, G.t + 2, HOOKS);

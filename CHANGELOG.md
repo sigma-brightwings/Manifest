@@ -180,6 +180,34 @@ new system.
   `readdirSync` is not recursive, so the superseded folders are excluded
   from conversion automatically.
 
+- **Merchantmen shoot back. Only shuttles fly unarmed.** `updateNpcFire`
+  used to skip every trader outright — *"freighters carry no guns"* — so
+  robbing one was a chore rather than a decision. Now everything is armed
+  except shuttles.
+
+  Deliberately feeble: a trader's gun does 2 damage at 8 km against a
+  warship's 5 at 12 km. It is not meant to win, only to make a robbery
+  cost hull and time so the mercenary escort is still worth hiring and a
+  pirate still prefers the soft target. **The real defence is the clock**
+  — a merchantman calls for help in 5 seconds where an armed ship takes
+  10, which leans on the witness system rather than on damage.
+
+  A hit freighter now sets `defending` rather than `hostileToPlayer`: it
+  fires while it runs, and it still runs.
+
+  The shuttle staying unarmed is a role, not a weakness — it is the hull
+  nobody scans twice, which is what you want when the cargo is a sabotage
+  device.
+
+- **A hull-budget rule, now enforced by test:** a reactor must run every
+  core system the hull has room for and still light the cheapest gun.
+  **The audit found the rule already held**, and was a useful surprise —
+  the Dart looked like the failing case (shield + heat shield + turret is
+  5.4 MW of its 7.0, and a gun needs 1.8) but it cannot carry all three
+  anyway: those three weigh 10 t against its 9 t budget, so **mass binds
+  before power** and the lockout is unreachable. No numbers changed. The
+  test is the deliverable — the rule is enforced now rather than believed.
+
 - **Weapons retiered by particle, with range falloff.** Following
   `DESIGN-NOTES-WEAPONS-AND-BEACON.md`, a laser's tier is now what it
   fires rather than how big its emitter is, and the particle decides how
