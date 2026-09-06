@@ -144,6 +144,10 @@
     missionSel: 0,
     mouseAim: false,      // F9: mouse steers the nose instead of the head
     aimSens: 1.0,
+    /* Held mouse triggers, one per fire group, live only while mouse-aim is
+     * on. Combat.update reads these alongside the Space key each frame — a
+     * beam is a trigger you lean on, not a click. */
+    trigger: { a: false, b: false },
     /* The mouse's contribution to the attitude command, in the same -1..1
      * units the arrow keys produce. It decays rather than being consumed,
      * so holding the mouse still mid-drag holds a rate instead of dropping
@@ -1008,6 +1012,37 @@
 
   var canvas, ctx, dragging = false, lastX = 0, lastY = 0;
 
+  /* Held mouse-trigger state, read by Combat.update every frame. Module
+   * scope rather than inside bindInput because everything that takes the
+   * mouse away — losing the window, dropping out of mouse-aim, opening a
+   * screen — has to be able to let go of the trigger, and a ship that goes
+   * on firing at nothing because the release never arrived is the worst
+   * possible version of this bug. */
+  function releaseTriggers() {
+    if (!G.trigger) return;
+    G.trigger.a = false; G.trigger.b = false;
+    /* Latches go too. Letting go because the window was lost or the mode
+     * changed is not a shot the player asked for. */
+    G.trigger.aLatch = false; G.trigger.bLatch = false;
+  }
+
+  /* Can this click be a trigger pull at all? Every case where a click means
+   * something else has to be excluded first, and each exclusion here is a
+   * bug that would otherwise be indistinguishable from the guns not
+   * working. */
+  function mouseArmed() {
+    return flying() && !menuOpen() && !G.cursor.active &&
+           G.viewMode === 'cockpit' && G.mouseAim &&
+           !G.hyper && !G.ship.docked && !G.ship.landed;
+  }
+
+  /* Which button, treating "didn't say" as the main one. Synthetic events —
+   * the render suite's, and anything else that dispatches by hand — carry
+   * no `button`, and reading undefined as "not the left button" turned every
+   * one of them into a no-op. Nothing else in this file had ever looked at
+   * `button` before triggers arrived, so nothing was passing one. */
+  function mouseButton(e) { return (e && e.button) || 0; }
+
   function bindInput() {
     window.addEventListener('keydown', function (e) {
       /* Space is the trigger, and left to itself a browser takes it as
@@ -1304,12 +1339,27 @@
      * flying the ship for no visible reason. */
     window.addEventListener('blur', function () { setCursorMode(false); G.keys = {}; });
 
+    /* ---- the mouse as a weapon -------------------------------------------
+     * The conflict, stated plainly: in the cockpit, left-drag already turns
+     * your head. Mouse 1 cannot both look and fire.
+     *
+     * The resolution is that mouse weapons are part of MOUSE-AIM MODE (F9).
+     * With it on, the mouse is a stick and does not need a held button to
+     * steer, so the buttons are free to be triggers: 1 fires group A, 2
+     * fires group B, and the middle button launches the selected missile —
+     * which is where missiles had to go once both main buttons became
+     * triggers. With mouse-aim off, nothing below changes: left-drag looks
+     * around exactly as it always did, and Space and B still shoot, because
+     * somebody flying on a trackpad still needs to fight.
+     *
+     * G.trigger is HELD state, read by Combat.update each frame, not a
+     * one-shot on the click: a beam is a trigger you lean on. */
     canvas.addEventListener('mousedown', function (e) {
       lastX = e.clientX; lastY = e.clientY;
 
       /* Buttons first, always. The icon bar and every control on a mode
        * screen live here, and a click that lands on one must never also
-       * swing the camera or turn the pilot's head. */
+       * swing the camera, turn the pilot's head, or fire the guns. */
       if (global.Sound) global.Sound.poke();
       var spot = overHot(e.clientX, e.clientY);
       if (spot) { HOOKS.sound('click'); spot.fn(); return; }
@@ -1319,6 +1369,25 @@
         beginHandleDrag();
         return;                       // never both grab a handle and pan
       }
+
+      var btn = mouseButton(e);
+      if (mouseArmed()) {
+        /* The latch is what makes a TAP fire. Held state is read once per
+         * frame, so a press and release inside one frame — a quick click,
+         * or any synthetic event pair — would set the trigger and clear it
+         * again without a single frame ever seeing it, and the gun would
+         * silently not go off. The latch survives the release until the
+         * frame after it has been read, so a click is exactly one shot and
+         * a hold is sustained fire, which is what both gestures mean. */
+        if (btn === 0) { G.trigger.a = true; G.trigger.aLatch = true; return; }
+        if (btn === 2) { G.trigger.b = true; G.trigger.bLatch = true; return; }
+        if (btn === 1) {
+          if (e.preventDefault) e.preventDefault();   // else it is autoscroll
+          Combat.fireMissile(G.sys, G, G.t, HOOKS);
+          return;
+        }
+      }
+
       /* Nothing to drag on a full-screen mode: the world is not visible, so
        * a drag would be turning a camera nobody can see. The orbit map is
        * the exception — turning the world is what it is for. */
@@ -1326,12 +1395,26 @@
       /* A modal stopped the world; dragging the camera around behind it is
        * not something the click was asking for. */
       if (menuOpen()) return;
+      /* Only the left button pans. Before triggers existed every button
+       * landed here, so a right-click swung the camera and opened the
+       * browser menu on top of it. */
+      if (btn !== 0) return;
       dragging = true;
     });
-    window.addEventListener('mouseup', function () {
+    window.addEventListener('mouseup', function (e) {
       dragging = false;
+      if (mouseButton(e) === 2) G.trigger.b = false;
+      else G.trigger.a = false;
       if (G.nodeDrag) { G.nodeDrag = null; G.nodeStale = 0; }
     });
+    /* Without this, mouse 2 opens the browser's context menu mid-fight —
+     * over the canvas only, so a right-click on anything else on the page
+     * still behaves like the web. */
+    canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    /* A held trigger and a lost window is a ship that goes on firing at
+     * nothing until you come back to it. Same reasoning as the keys reset
+     * below, and the same failure it prevents. */
+    window.addEventListener('blur', releaseTriggers);
     window.addEventListener('mousemove', function (e) {
       /* With the cursor out, the mouse belongs to the interface: it does not
        * turn the pilot's head and it does not swing the camera. This is the
@@ -1343,7 +1426,12 @@
         lastX = e.clientX; lastY = e.clientY;
         return;
       }
-      if (!dragging) return;
+      /* Mouse-aim is the one mode where the mouse steers with NO button
+       * held, and it has to be, now that the buttons are triggers: keeping
+       * the old drag requirement would have meant you could only turn the
+       * ship while firing it. Everywhere else a drag is still a drag. */
+      var aiming = mouseArmed();
+      if (!dragging && !aiming) return;
       var dx = e.clientX - lastX, dy = e.clientY - lastY;
       /* The same gesture means two, now three, different things depending
        * on where you are sitting and which way you told F9 you wanted it.
@@ -1351,7 +1439,7 @@
        * Inside, you are either turning your head — so the view follows the
        * mouse rather than opposing it, which is what a head does — or you
        * are flying, and the mouse is a stick. */
-      if (G.viewMode === 'cockpit' && G.mouseAim) aimBy(dx, dy);
+      if (aiming) aimBy(dx, dy);
       else if (G.viewMode === 'cockpit') lookBy(dx * 0.0042, -dy * 0.0042);
       else {
         G.cam.yaw -= dx * 0.006;
@@ -1707,8 +1795,11 @@
 
   function setMouseAim(on) {
     G.mouseAim = !!on;
-    say(G.mouseAim ? 'Mouse aim engaged — drag steers the nose'
-                   : 'Mouse aim off — drag turns your head', 3);
+    /* Dropping out of it must let go of the triggers, or the guns keep
+     * firing on a button the mode no longer reads. */
+    if (!G.mouseAim) releaseTriggers();
+    say(G.mouseAim ? 'Mouse aim ON — the mouse is the stick, 1 and 2 are the fire groups, middle launches'
+                   : 'Mouse aim off — drag turns your head, Space and B shoot', 4);
   }
 
   /* ---- the cruise drive -------------------------------------------------
@@ -2257,6 +2348,9 @@
   function setCursorMode(on) {
     if (G.cursor.active === on) return;
     G.cursor.active = on;
+    /* Either direction: taking the mouse away for the interface has to let
+     * go of the triggers, and so does handing it back. */
+    releaseTriggers();
     if (!on) {
       G.nodeDrag = null;
       G.cursor.over = null;
@@ -7010,8 +7104,14 @@
       /* modeFrame already drew the help and frame-rate line in its own
        * title bar; there is nothing to add down here. */
     } else {
+      /* Mouse aim no longer needs a held button — the buttons are the fire
+       * groups now — so the hint stopped being true the moment that
+       * changed. A control hint that describes the previous build is worse
+       * than none: it teaches the wrong gesture and then the player blames
+       * the ship. */
       var hint = G.viewMode === 'cockpit'
-        ? 'H help   ·   drag to ' + (G.mouseAim ? 'aim' : 'look') +
+        ? 'H help   ·   ' + (G.mouseAim ? 'mouse aims · 1/2 fire groups · mid launches'
+                                        : 'drag to look') +
           '   ·   wheel / +- zoom   ·   Esc menu   ·   Enter exterior   ·   '
         : 'H help   ·   drag to orbit   ·   wheel / +- zoom   ·   Esc menu   ·   Enter cockpit   ·   ';
       ctx.fillText(hint +
@@ -8157,8 +8257,13 @@
       ['Q / E', 'roll'],
       ['', ''],
       ['COMBAT  (buy better at any shipyard — F5 while docked)', ''],
-      ['Space', 'fire the guns down the nose — F9 mouse aim helps'],
+      ['Space', 'fire group A down the nose  —  hold it'],
+      ['Shift+Space', 'fire group B  —  assign guns to it on F5, FIT'],
       ['B', 'launch a missile at the locked ship  (respawns when crashed)'],
+      ['', 'with F9 mouse aim on: mouse 1 and 2 are the two groups,'],
+      ['', 'the middle button launches, and the nose follows the mouse'],
+      ['', 'a beam strips shields, a pulse opens hulls — carry both'],
+      ['', 'every shot heats your own hull; a bare one sheds 18/s'],
       ['', 'the turret, once fitted, fires itself at hostiles'],
       ['', 'shields soak hits and recharge when things go quiet'],
       ['', 'hull repairs cost credits at the yard; at zero you lose'],

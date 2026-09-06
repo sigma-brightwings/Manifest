@@ -1139,6 +1139,27 @@
                         : 'Nothing in that slot', 4);
               };
             })(key, item.name), false);
+        /* Fire-group assignment gets its own row rather than sharing the
+         * slot's. The slot row is SELL, and a control that sometimes sells
+         * a 38,000 cr gun and sometimes moves it between triggers is a
+         * control nobody will click twice.
+         *
+         * Guns only — nothing else has a trigger. Group membership is the
+         * one thing about a loadout you cannot change in flight, which is
+         * deliberate: choosing it is preparation, not a mid-fight menu. */
+        if (item.kind === 'gun') {
+          var grp = Combat.groupOf(s, key);
+          row('    └ FIRE GROUP ' + grp.toUpperCase(),
+              grp === 'a'
+                ? 'mouse 1, or Space — click to move to group B'
+                : 'mouse 2, or Shift+Space — click to move to group A',
+              (function (k) {
+                return function () {
+                  var now = Combat.toggleGroup(s, k);
+                  say('Moved to fire group ' + now.toUpperCase(), 3);
+                };
+              })(key), false);
+        }
       } else {
         row(label + ':  empty', 'buy something to fill it',
             function () { G.yardTab = 'buy'; }, true);

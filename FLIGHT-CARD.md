@@ -76,8 +76,9 @@ click again to lock one as your nav target. Leaving hands your camera back
 exactly as you left it.
 
 **3. `F9` — try mouse aim.** Two ways to fly, one switch: the mouse turns your
-head, or the mouse points the nose. `Enter` toggles; the sensitivity is on the
-same screen.
+head, or the mouse points the nose — and with it on, the nose follows the mouse
+with no button held, so mouse 1 and 2 become the two fire groups and the middle
+button launches. `Enter` toggles; the sensitivity is on the same screen.
 
 **4. `F3` — local navigation.** Everything in the system, nearest first, with the
 lock in detail beside it and the scope at full height. `[` and `]` cycle the lock
@@ -147,11 +148,30 @@ wall on every side rather than in the open. Undocking climbs back up the same sh
 
 ## Fighting, robbing, and getting paid
 
-**Guns.** `Space` fires down the nose (mouse-aim on `F9` makes this a fair
-fight). You start with a pulse laser; the yard sells a beam laser, an
-auto-turret that fires itself at hostiles, a self-charging shield, and Hawk
-missiles — `B` launches one at the locked ship. Everything upgradable is on
-`F5` while docked, next to hull repairs.
+**Guns.** `Space` fires down the nose, `B` launches a missile at the locked
+ship. You start with a photon pulse laser; the yard sells nine, an auto-turret
+that fires itself at hostiles, a self-charging shield, and Hawk missiles.
+Everything upgradable is on `F5` while docked, next to hull repairs.
+
+**Fire groups.** A hull with more than one hardpoint has two triggers, because
+a beam strips a shield and a pulse opens a hull, and carrying both is the point.
+Every gun starts on group A; move one to B on the `F5` → FIT page. Then:
+
+| | Group A | Group B | Missile |
+|---|---|---|---|
+| Keyboard | `Space` | `Shift`+`Space` | `B` |
+| Mouse aim (`F9`) | mouse 1 | mouse 2 | middle button |
+
+Hold either; hold both. With mouse aim on, the mouse flies the ship with no
+button held, which is what frees the buttons up to be triggers.
+
+**Beams heat your own hull.** Every shot puts its rated waste heat into the
+ship, and the catalogue prints the figure. A bare hull sheds 18 units a second,
+so a photon beam (12/s) can be held down forever, a kaon beam (26/s) gives you
+about twelve seconds, and a muon beam (46/s) under four. The ablative heat
+shield covers all of them, which quietly makes a re-entry module combat gear —
+and a **heat sink** buys about ten seconds of continuous heavy fire per charge,
+then goes overboard white-hot with your heat in it, where anyone can see it.
 
 **Getting shot.** Shields soak first and recharge when things go quiet; hull
 does not — repairs cost credits at the yard. At zero hull you lose the ship,

@@ -157,6 +157,13 @@
         heatshield: s.heatshield,
         shieldHp: s.shieldHp, missiles: s.missiles, sinks: s.sinks,
         fit: s.fit || {},
+        /* Which trigger each hardpoint answers to. Additive, and absent
+         * from every save written before fire groups existed — groupOf()
+         * reads a missing entry as group A, so an old career comes back
+         * firing everything on the primary trigger, which is exactly what
+         * it was doing before the update. No version bump: a bump does not
+         * migrate old saves, it deletes them. */
+        groups: s.groups || {},
         /* Named things belong to the pilot, not the hull. */
         reg: s.reg || null, shipName: s.shipName || null
       },
@@ -249,6 +256,9 @@
     if (global.Combat) {
       s.fit = (d.fit && typeof d.fit === 'object') ? d.fit : null;
       global.Combat.migrateFit(s);
+      /* Missing on any save older than fire groups, and that is fine: an
+       * absent entry reads as group A. */
+      s.groups = (d.groups && typeof d.groups === 'object') ? d.groups : {};
     }
     Sim.refreshShip(s);
 

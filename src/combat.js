@@ -23,6 +23,11 @@
   'use strict';
 
   var V = global.V;
+  /* Needed for hashString, which is how a pirate's hold and purse are
+   * derived from its registration rather than rolled. Under node the
+   * globals are assembled by the test harness in load order; the require
+   * fallback is what lets combat.js be pulled in on its own. */
+  var RNG = global.RNG || (typeof require !== 'undefined' ? require('./rng.js') : null);
 
   /* ---- catalogues -------------------------------------------------------
    * Prices in credits. Ranges in km, damage in hull points, cooldowns in
@@ -603,6 +608,11 @@
     list = list.slice().sort(function (a, b) {
       return (b.item.power || 0) - (a.item.power || 0);
     });
+    /* Where each fitting ENDED UP, old slot key to new. A Kestrel's
+     * hardpoint2 is a Talon's hardpoint1, so anything keyed by slot — fire
+     * groups, so far — has to be carried across rather than left pointing
+     * at a slot that has moved or stopped existing. */
+    var moved = {};
     for (var i = 0; i < list.length; i++) {
       var v = canFit(probe, list[i].item.id);
       if (!v.ok) {
@@ -610,8 +620,19 @@
                  toHull.name + ' — ' + v.why + '; sell it first' };
       }
       probe.fit[v.key] = list[i].item.id;
+      moved[list[i].key] = v.key;
     }
-    return { ok: true, fit: probe.fit };
+    return { ok: true, fit: probe.fit, moved: moved };
+  }
+
+  /* Rewrite the group map through a replan's key mapping. Anything whose
+   * slot did not survive is simply dropped — it is not on the ship any
+   * more, so a trigger assignment for it would be a lie. */
+  function remapGroups(ship, moved) {
+    var old = groupMap(ship), next = {};
+    for (var k in old) if (moved[k]) next[moved[k]] = old[k];
+    ship.groups = next;
+    return next;
   }
 
   /* What an NPC hull takes to crack, by class. Assigned lazily the first
@@ -812,6 +833,89 @@
     if (spec.hullHp <= 0) killNpc(sys, G, spec, t, hooks);
   }
 
+  /* ---- a hold is a pure function of the ship that carries it --------------
+   * killNpc used to invent a pirate's cargo with bare Math.random() at the
+   * moment of death, which broke the first doctrine in two separate ways.
+   * The same pirate, on the same seed, carried different goods every time it
+   * died — and robbing one ALIVE then killing it could disagree about what
+   * it had been holding, because only one of those two paths ever invented a
+   * manifest at all.
+   *
+   * Same trick regCode already uses, and for the reason its own comment
+   * gives: the ship reads the same forever "without a byte of stored state".
+   *
+   * SALTED WITH THE SYSTEM SEED, because buildPatrols numbers its specs n0,
+   * n1, n2... PER SYSTEM. Unsalted, every system's n3 would carry identical
+   * cargo — the sort of pattern a player notices about twenty minutes before
+   * they stop trusting the generator. (Corridor drop-outs were the other
+   * worry here: their ids are 'drop-' + a slipspace contact id, and those
+   * come from `new RNG('galaxy-lane|...')` and `'corridor-hunt|...|window'`,
+   * both seeded, so they hash stably across loads too.)
+   *
+   * BIASED TO LOCAL TRADE, because a pirate's hold is somebody else's cargo
+   * and what is worth stealing here is what flies here. sys.traffic already
+   * carries every route's manifest, so loot ends up saying something true
+   * about where you are: a system running medicine has pirates full of
+   * medicine, and that is worth more than a global loot table. */
+  var FALLBACK_LOOT = ['medicine', 'computers', 'alloys', 'ores', 'luxuries'];
+
+  function localGoods(sys) {
+    if (!sys) return FALLBACK_LOOT;
+    if (sys._loot) return sys._loot;
+    var seen = {}, out = [], traffic = sys.traffic || [];
+    for (var i = 0; i < traffic.length; i++) {
+      var legs = [traffic[i].out || [], traffic[i].back || []];
+      for (var j = 0; j < legs.length; j++) {
+        for (var k = 0; k < legs[j].length; k++) {
+          var cid = legs[j][k] && legs[j][k].cid;
+          /* Waste is a disposal contract, not loot. Nobody fences it, and a
+           * hold full of it is a punishment rather than a prize. */
+          if (!cid || cid === 'waste' || seen[cid]) continue;
+          seen[cid] = true; out.push(cid);
+        }
+      }
+    }
+    /* Sorted, because route order is generation order: if traffic is ever
+     * re-ranked, an unsorted list would silently re-index every pirate's
+     * hold in the galaxy. */
+    out.sort();
+    sys._loot = out.length ? out : FALLBACK_LOOT;
+    return sys._loot;
+  }
+
+  /* DERIVED ONCE, THEN OWNED. The instant anything reads a hold it becomes
+   * stored state on the spec — the same lazy pattern npcHull() already uses
+   * for hull points — because the moment the player takes cargo off a ship
+   * the pure function has stopped being the truth. */
+  function manifestFor(sys, spec) {
+    if (!spec) return [];
+    if (spec.manifest && spec.manifest.length) return spec.manifest;
+    var goods = localGoods(sys);
+    var h = RNG.hashString('hold|' + ((sys && sys.seed) || '?') + '|' +
+                           (spec.id || spec.name || '?'));
+    /* Three independent draws out of one hash: which commodity, how much of
+     * it, and whether there is a second one at all. Shifted rather than
+     * re-hashed, so there is one call and one place to look. */
+    var pick = goods[h % goods.length];
+    var man = [{ cid: pick, tonnes: 3 + ((h >>> 8) % 8) }];
+    if (((h >>> 16) & 3) === 0 && goods.length > 1) {
+      var second = goods[(h >>> 20) % goods.length];
+      if (second !== pick) man.push({ cid: second, tonnes: 2 + ((h >>> 24) % 5) });
+    }
+    spec.manifest = man;
+    return man;
+  }
+
+  /* The single read point for "what is this ship carrying", so robbery,
+   * death and any future cargo scanner cannot disagree. Traders keep their
+   * route-derived manifests, which are better grounded still; the hash only
+   * fills in for ships that have no route to inherit one from. */
+  function holdOf(sys, spec) {
+    var man = (spec && (spec.manifest || (spec.live && spec.live.manifest))) || [];
+    if (man.length || !spec || spec.kind !== 'pirate') return man;
+    return manifestFor(sys, spec);
+  }
+
   function killNpc(sys, G, spec, t, hooks) {
     spec.dead = true;
     var at = spec.live ? spec.live.pos : null;
@@ -828,18 +932,22 @@
       /* Traffic manifests quote quantity as `qty`; the test dummies and the
        * player quote `tonnes`. Reading only one of them made every real
        * freighter "run empty" — a bug only a live robbery could show. */
-      var man = spec.manifest || (spec.live && spec.live.manifest) || [];
-      /* A pirate flies no manifest, but it has been robbing people — the
-       * hold is somebody else's cargo, and it spills like anyone's. */
-      if (!man.length && spec.kind === 'pirate') {
-        man = [{ cid: Math.random() < 0.5 ? 'medicine' : 'computers',
-                 tonnes: 3 + Math.floor(Math.random() * 8) }];
-      }
+      /* A pirate flies no route and so no manifest, but it has been robbing
+       * people — the hold is somebody else's cargo and it spills like
+       * anyone's. holdOf derives that hold from the ship's own id, so the
+       * same wreck always throws the same goods. */
+      var man = holdOf(sys, spec);
       var dropped = 0;
       for (var i = 0; i < man.length && dropped < 3; i++) {
         var amount = man[i] && (man[i].qty || man[i].tonnes) || 0;
         if (!(amount > 0)) continue;
-        var fake = { pos: at, vel: vel, fwd: { x: Math.random() - 0.5, y: Math.random() - 0.5, z: 0.2 } };
+        /* The scatter direction is derived too, and from the same hash as
+         * the hold: a replayed kill should throw its canisters the same way
+         * it did the first time. */
+        var sc = RNG.hashString('spill|' + (spec.id || '?') + '|' + i);
+        var fake = { pos: at, vel: vel,
+                     fwd: { x: ((sc & 255) / 255) - 0.5,
+                            y: (((sc >>> 8) & 255) / 255) - 0.5, z: 0.2 } };
         global.Sim.dropCanister(sys, fake, man[i].cid,
                                 Math.max(1, Math.round(amount * 0.3)), t);
         dropped++;
@@ -1453,19 +1561,57 @@
     return dot > Math.cos(AIM_CONE + Math.atan2(0.08, dist));
   }
 
-  function fireGun(sys, G, t, hooks) {
+  /* ---- fire groups --------------------------------------------------------
+   * A hull with three hardpoints is not three guns, it is a LOADOUT, and the
+   * shield model is what makes that a decision: a beam strips a shield and
+   * struggles with armour, a pulse is the reverse. Carrying both is the
+   * intended answer, so both have to be reachable inside the same fight
+   * without opening a menu.
+   *
+   * Two groups, two SEPARATE triggers — not one trigger and a cycle key.
+   * The whole point is to switch mid-burst, and a mode whose state you have
+   * to remember is a mode you will get wrong while somebody is shooting at
+   * you. A is the default for everything, so a ship that has never been to
+   * the yard still fires all of it on the first trigger anyone finds.
+   *
+   * Membership is stored per SLOT KEY rather than per weapon id, because two
+   * of the same gun in different hardpoints is exactly the case that wants
+   * them split — and the id cannot tell them apart. */
+  function groupMap(ship) {
+    if (!ship.groups || typeof ship.groups !== 'object') ship.groups = {};
+    return ship.groups;
+  }
+
+  function groupOf(ship, key) {
+    return groupMap(ship)[key] === 'b' ? 'b' : 'a';
+  }
+
+  function setGroup(ship, key, g) {
+    groupMap(ship)[key] = (g === 'b') ? 'b' : 'a';
+    return groupOf(ship, key);
+  }
+
+  function toggleGroup(ship, key) {
+    return setGroup(ship, key, groupOf(ship, key) === 'a' ? 'b' : 'a');
+  }
+
+  function gunsInGroup(ship, group) {
+    var want = (group === 'b') ? 'b' : 'a';
+    var list = fittedList(ship), out = [];
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i];
+      if (e.type !== 'hardpoint' || e.item.kind !== 'gun') continue;
+      if (groupOf(ship, e.key) === want) out.push(e);
+    }
+    return out;
+  }
+
+  /* One emitter, one shot. Split out of fireGun because a group fires
+   * several of these in the same frame, and each one draws its own beam and
+   * rolls its own range falloff — a group is not one bigger gun. */
+  function fireOne(sys, G, t, gun, hooks) {
     var s = G.ship;
-    var gun = GUNS[s.gun];
-    if (!gun || s.docked || s.landed) return;
-    /* Cooldowns run on SIM time. In a real fight warp is pinned to 1x and
-     * the two clocks agree; everywhere else — scripted playtests, any
-     * future warp shenanigans — the weapon belongs to the world it fires
-     * in, not to the wall clock. The BEAM's fade stays on real time,
-     * because a flash is for the player's eyes. */
-    if (t < (G.gunCoolUntil || 0)) return;
-    G.gunCoolUntil = t + gun.cooldown;
     var now = (typeof performance !== 'undefined' ? performance.now() : 0) / 1000;
-    if (hooks && hooks.sound) hooks.sound('laser');
 
     var beamEnd = V.addScaled(s.pos, s.fwd, gun.range);
     var hit = null, hitDist = Infinity;
@@ -1482,13 +1628,78 @@
       color: gun.color, until: now + 0.09
     });
 
-    if (!hit) return;
+    /* The hull pays for the shot, and this is the line that finally gives
+     * the heat sink something to absorb — the rack, the charges and addHeat
+     * have all been built and tested with nothing generating heat.
+     *
+     * `heat` is a SUSTAINED rate in units per second, so one shot is worth
+     * heat x cooldown. A weapon held down then costs exactly its catalogue
+     * figure and a weapon fired in taps costs proportionally less, with no
+     * second number to keep in step with the first. It is also what "apply
+     * beam damage per tick, not per shot" means on the heat side: a beam is
+     * already modelled as a very short cooldown, so its per-tick share falls
+     * out of the same arithmetic.
+     *
+     * Through addHeat rather than ship.heat, so a live sink takes its cut
+     * and the gun code never has to know sinks exist. */
+    addHeat(G, (gun.heat || 0) * (gun.cooldown || 0));
+
+    if (!hit) return null;
     var spec = hit.spec || liftTrader(sys, hit, t);
     /* The particle decides what actually arrives. A photon delivers its
      * whole load at any range it can reach; a pion that connects at the
      * edge of its envelope is barely worth the power it drew. */
     if (spec) damageNpc(sys, G, spec, damageAtRange(gun, hitDist), t, hooks);
+    return spec;
   }
+
+  /* Cooldowns run on SIM time. In a real fight warp is pinned to 1x and the
+   * two clocks agree; everywhere else — scripted playtests, any future warp
+   * shenanigans — the weapon belongs to the world it fires in, not to the
+   * wall clock. The BEAM's fade stays on real time, because a flash is for
+   * the player's eyes.
+   *
+   * A cooldown is per SLOT, not per ship. Two guns in one group are two
+   * triggers pulled at once; sharing one cooldown would have made a second
+   * gun do nothing at all, which is the fitting equivalent of selling
+   * somebody a module that silently has no effect. */
+  function fireGroup(sys, G, t, group, hooks) {
+    var s = G.ship;
+    if (s.docked || s.landed) return 0;
+
+    var guns = gunsInGroup(s, group);
+    if (!guns.length) {
+      /* Refusals carry reasons. Group B is empty on every ship that has
+       * never been to the yard, and a trigger that does nothing at all is
+       * indistinguishable from a broken trigger. Rate-limited because this
+       * arrives from a key the player is HOLDING DOWN. */
+      if (hooks && hooks.say && t >= (G.emptyGroupAt || -Infinity) + 4) {
+        G.emptyGroupAt = t;
+        hooks.say(fittedList(s).length
+          ? 'Fire group ' + String(group).toUpperCase() +
+            ' is empty — assign a gun to it in the yard (F5)'
+          : 'No guns fitted', 4);
+      }
+      return 0;
+    }
+
+    var cools = G.gunCool = G.gunCool || {};
+    var fired = 0;
+    for (var i = 0; i < guns.length; i++) {
+      var e = guns[i];
+      if (t < (cools[e.key] || 0)) continue;
+      cools[e.key] = t + e.item.cooldown;
+      fireOne(sys, G, t, e.item, hooks);
+      fired++;
+    }
+    /* One report for the volley. Three emitters cycling together should
+     * sound like a ship firing, not like three ships. */
+    if (fired && hooks && hooks.sound) hooks.sound('laser');
+    return fired;
+  }
+
+  /* Everything written before groups existed pulls the primary trigger. */
+  function fireGun(sys, G, t, hooks) { return fireGroup(sys, G, t, 'a', hooks); }
 
   /* The turret. Buyable disinterest: it picks the nearest thing that is
    * actively hostile and keeps hitting it, all round, no aiming, which is
@@ -1515,6 +1726,12 @@
       color: tur.color, until: now + 0.07
     });
     if (hooks && hooks.sound) hooks.sound('turret');
+    /* The turret is bolted to the same hull and its waste heat goes the same
+     * place. It has carried a heat rating in the catalogue since it was
+     * written; this is the line that spends it. Cheap enough (3/s against a
+     * bare hull's 18/s shed) that it will never cook you on its own, which
+     * is right — you paid 5,600 credits not to think about it. */
+    addHeat(G, (tur.heat || 0) * (tur.cooldown || 0));
     damageNpc(sys, G, best, damageAtRange(tur, bestD), t, hooks);
   }
 
@@ -1661,8 +1878,32 @@
       }
     }
 
-    // Player trigger: held key, respecting each weapon's own cooldown.
-    if (G.keys[' '] && G.panel === 0) fireGun(sys, G, t, hooks);
+    /* Player triggers: HELD, each weapon respecting its own cooldown.
+     *
+     * Two sources, or'd together, because they are the same trigger reached
+     * two ways. On the keyboard, Shift splits Space between the groups
+     * exactly as it already splits G (grid / gear), T (dock / match) and /
+     * (flight mode / assist) — every letter was spoken for long before
+     * weapons wanted a second one, and a modifier on a trigger you already
+     * know beats a new letter you have to learn. On the mouse, main.js sets
+     * G.trigger from the buttons in mouse-aim mode.
+     *
+     * Both groups can be held at once, and that is allowed rather than
+     * merely tolerated: a beam group stripping the shield while a pulse
+     * group works the hull is the loadout the shield model was built to
+     * reward, and forbidding it here would quietly delete that build. */
+    if (G.panel === 0) {
+      var trig = G.trigger || {};
+      var spaceHeld = !!G.keys[' '];
+      /* The latch is a press that has not yet been seen by a frame. Read it
+       * once and clear it, so a click too short to span a frame still fires
+       * exactly one volley instead of none. */
+      var wantA = trig.a || trig.aLatch || (spaceHeld && !G.keys.shift);
+      var wantB = trig.b || trig.bLatch || (spaceHeld && G.keys.shift);
+      trig.aLatch = false; trig.bLatch = false;
+      if (wantA) fireGroup(sys, G, t, 'a', hooks);
+      if (wantB) fireGroup(sys, G, t, 'b', hooks);
+    }
     updateSink(G, t, hooks);
     updateTurret(sys, G, t, hooks);
     updateMissiles(sys, G, t, dtSim, hooks);
@@ -1741,7 +1982,10 @@
 
     // A trader with a gun on it complies, resentfully.
     if (what === 'cargo') {
-      var man = spec.manifest || (spec.live && spec.live.manifest) || [];
+      /* The same read point killNpc uses. Robbing a pirate alive and then
+       * shooting it used to disagree about what it had aboard, because only
+       * the death path ever invented a manifest. */
+      var man = holdOf(sys, spec);
       var gave = 0;
       for (var i = 0; i < man.length && gave < 2; i++) {
         var amount = man[i] && (man[i].qty || man[i].tonnes) || 0;
@@ -1758,7 +2002,11 @@
                        : spec.name + ' is running empty. Nothing to take.', 5);
       }
     } else {
-      var cash = 150 + Math.round(Math.random() * 700);
+      /* Derived, not rolled: a ship carries the money it carries, and
+       * re-demanding after a reload should not be a way to reroll the
+       * payout. Same hash family as the hold, different salt. */
+      var cash = 150 + (RNG.hashString('purse|' + ((sys && sys.seed) || '?') +
+                                       '|' + (spec.id || spec.name || '?')) % 701);
       s.credits += cash;
       if (hooks && hooks.say) hooks.say(spec.name + ' transfers ' + cash + ' cr and runs.', 5);
     }
@@ -1943,6 +2191,7 @@
     s.hullMax = to.hullMax;
     s.hullHp = to.hullMax;         // a new hull arrives whole
     s.fit = moved.fit;             // the gear came across, replanned
+    remapGroups(s, moved.moved);   // and so did which trigger it answers to
     syncLegacy(s);
     global.Sim.refreshShip(s);
     return { ok: true, cost: cost };
@@ -1954,6 +2203,7 @@
   function stripForRespawn(ship) {
     ship.cargo = {};
     ship.fit = { hardpoint0: 'phpulse' };   // the gear was part of the hull
+    ship.groups = {};                       // and so were the trigger assignments
     ship.gun = 'phpulse';
     ship.turret = null;
     ship.shield = null;
@@ -2010,7 +2260,10 @@
     UNCLEARED_FINE: UNCLEARED_FINE,
     initShip: initShip, npcHull: npcHull,
     update: update,
-    fireGun: fireGun, fireMissile: fireMissile,
+    fireGun: fireGun, fireGroup: fireGroup, fireMissile: fireMissile,
+    groupOf: groupOf, setGroup: setGroup, toggleGroup: toggleGroup,
+    gunsInGroup: gunsInGroup,
+    manifestFor: manifestFor,
     damageNpc: damageNpc, damagePlayer: damagePlayer, killNpc: killNpc,
     liftTrader: liftTrader,
     crime: crime, witnessNear: witnessNear,

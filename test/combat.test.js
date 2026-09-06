@@ -480,7 +480,10 @@ section('--- shooting things ---');
   check('an unarmed trader runs rather than fights', victim.mode === 'breakoff');
   check('and the beam was drawn', G.beams.length > 0);
 
-  G.gunCoolUntil = 0;
+  /* Cooldowns are per SLOT since fire groups landed — one gun in a group is
+   * no longer one gun on the ship, so there is no single ship-wide clock to
+   * zero. G.gunCool is keyed by slot key. */
+  G.gunCool = {};
   G.ship.fwd = V.norm({ x: 0, y: 0, z: 1 });   // now aim at nothing
   var hp = victim.hullHp;
   Combat.fireGun(G.sys, G, G.t, HOOKS);
@@ -489,11 +492,172 @@ section('--- shooting things ---');
   /* Closer than the fleeing trader, because both test dummies sit on the
    * same bearing and the gun rightly hits the nearest thing in the cone. */
   var cop = fakeVictim(G, { kind: 'police', cls: 'police', range: 3, faction: 'lawfac' });
-  G.gunCoolUntil = 0;
+  G.gunCool = {};
   G.ship.fwd = V.norm(V.sub(cop.live.pos, G.ship.pos));
   Combat.fireGun(G.sys, G, G.t, HOOKS);
   check('an armed ship shot at turns and fights',
         cop.hostileToPlayer === true && cop.mode === 'attack');
+})();
+
+section('--- fire groups ---');
+(function () {
+  var G = makeG();
+  G.ship.credits = 200000;
+  Combat.buyHull(G, 'kestrel');            // three hardpoints to play with
+  Combat.buyEquipment(G, 'phbeam', 'hardpoint1');
+
+  check('a fresh ship puts everything on the primary trigger',
+        Combat.gunsInGroup(G.ship, 'a').length === 2 &&
+        Combat.gunsInGroup(G.ship, 'b').length === 0);
+
+  var said = null;
+  var LOUD = { say: function (m) { said = m; }, sound: function () {} };
+  check('an empty group fires nothing',
+        Combat.fireGroup(G.sys, G, G.t, 'b', LOUD) === 0);
+  /* Refusals carry reasons: a trigger that silently does nothing is
+   * indistinguishable from a broken trigger. */
+  check('and says why, rather than doing nothing quietly',
+        !!said && said.indexOf('group B') >= 0, said);
+
+  Combat.toggleGroup(G.ship, 'hardpoint1');
+  check('moving a gun moves it out of the other group',
+        Combat.groupOf(G.ship, 'hardpoint1') === 'b' &&
+        Combat.gunsInGroup(G.ship, 'a').length === 1 &&
+        Combat.gunsInGroup(G.ship, 'b').length === 1);
+
+  /* Two guns in one group are two triggers pulled at once, not one gun
+   * firing twice as fast — so the cooldowns have to be per SLOT. Sharing
+   * one would have made the second gun do nothing at all. */
+  var pair = makeG();
+  pair.ship.credits = 200000;
+  Combat.buyHull(pair, 'kestrel');
+  Combat.buyEquipment(pair, 'phpulse', 'hardpoint1');
+  var prey = fakeVictim(pair, { range: 2 });
+  pair.ship.fwd = V.norm(V.sub(prey.live.pos, pair.ship.pos));
+  var fired = Combat.fireGroup(pair.sys, pair, pair.t, 'a', HOOKS);
+  check('both guns in a group fire on the same trigger pull', fired === 2,
+        fired + ' of 2');
+  check('and each drew its own beam', pair.beams.length === 2);
+  check('a second pull inside the cooldown fires nothing',
+        Combat.fireGroup(pair.sys, pair, pair.t + 0.01, 'a', HOOKS) === 0);
+  check('and it fires again once the cooldown has run',
+        Combat.fireGroup(pair.sys, pair, pair.t + 1.0, 'a', HOOKS) === 2);
+
+  /* A Kestrel's hardpoint2 is not a Talon's, so a group assignment keyed by
+   * slot has to travel with the gear when the hull changes under it. */
+  var swap = makeG();
+  swap.ship.credits = 200000;
+  Combat.buyHull(swap, 'kestrel');
+  Combat.buyEquipment(swap, 'phbeam', 'hardpoint1');
+  Combat.setGroup(swap.ship, 'hardpoint1', 'b');
+  Combat.buyHull(swap, 'talon');
+  check('a gun keeps its trigger across a hull change',
+        Combat.gunsInGroup(swap.ship, 'b').length === 1 &&
+        Combat.gunsInGroup(swap.ship, 'b')[0].item.id === 'phbeam',
+        JSON.stringify(swap.ship.groups));
+})();
+
+section('--- beams heat your own hull ---');
+(function () {
+  /* The heat sink was built, tested and completely inert: nothing in the
+   * game generated weapon heat for it to absorb. These are the tests that
+   * say it is switched on. */
+  var G = makeG();
+  G.ship.credits = 200000;
+  Combat.buyEquipment(G, 'phbeam', 'hardpoint0');   // 12 heat/s, 0.12 s cycle
+  var beam = Combat.GUNS.phbeam;
+  G.ship.heat = 0;
+
+  Combat.fireGroup(G.sys, G, G.t, 'a', HOOKS);
+  var perShot = beam.heat * beam.cooldown;
+  check('a shot puts its own waste heat into the hull',
+        Math.abs(G.ship.heat - perShot) < 1e-9,
+        G.ship.heat.toFixed(3) + ' vs ' + perShot.toFixed(3));
+
+  /* Held down, a weapon should cost exactly its catalogue figure per second
+   * — that is the whole reason one shot is worth heat x cooldown rather
+   * than a second number kept in step by hand. */
+  var t = G.t, shots = 0;
+  G.ship.heat = 0;
+  for (var i = 0; i < 200; i++) {
+    t += 0.01;
+    if (Combat.fireGroup(G.sys, G, t, 'a', HOOKS)) shots++;
+  }
+  var rate = G.ship.heat / 2.0;          // two seconds of trigger
+  check('and held down it costs its catalogue rate per second',
+        Math.abs(rate - beam.heat) < beam.heat * 0.06,
+        rate.toFixed(1) + ' /s vs catalogue ' + beam.heat + ' /s');
+
+  // A live sink takes its share of it, through addHeat, with no special case.
+  var S = makeG();
+  S.ship.credits = 200000;
+  Combat.buyEquipment(S, 'phbeam', 'hardpoint0');
+  Combat.buyEquipment(S, 'sinklauncher');
+  Combat.buyOutfit(S, 'sink', null);
+  S.ship.heat = 0;
+  Combat.armSink(S, 0, HOOKS);
+  Combat.fireGroup(S.sys, S, 0, 'a', HOOKS);
+  check('a live sink takes its cut of weapon heat too',
+        S.ship.heat < perShot - 1e-9 && S.sink.held > 0,
+        'hull ' + S.ship.heat.toFixed(3) + ', sink ' + S.sink.held.toFixed(3));
+})();
+
+section('--- a hold is a function of the ship that carries it ---');
+(function () {
+  /* The doctrine this fixes: killNpc used to invent a pirate's cargo with
+   * bare Math.random(), so the same wreck on the same seed threw different
+   * goods every time — and robbing one alive could disagree with killing
+   * it about what it had been carrying. */
+  var G = makeG();
+  var a = { id: 'n7', kind: 'pirate', name: 'The Test' };
+  var b = { id: 'n7', kind: 'pirate', name: 'The Test' };
+  var m1 = Combat.manifestFor(G.sys, a);
+  var m2 = Combat.manifestFor(G.sys, b);
+  check('the same ship in the same system carries the same hold',
+        JSON.stringify(m1) === JSON.stringify(m2), JSON.stringify(m1));
+
+  var other = { id: 'n8', kind: 'pirate', name: 'The Other' };
+  var m3 = Combat.manifestFor(G.sys, other);
+  check('a different ship does not', JSON.stringify(m3) !== JSON.stringify(m1),
+        JSON.stringify(m3));
+
+  /* Salted with the system seed, because buildPatrols numbers its specs
+   * n0, n1, n2... PER SYSTEM: unsalted, every system's n7 would be
+   * carrying the identical crate. */
+  var far = { bodies: [], seed: 'somewhere-else', traffic: G.sys.traffic };
+  var m4 = Combat.manifestFor(far, { id: 'n7', kind: 'pirate' });
+  check('and the same id in another system carries something else',
+        JSON.stringify(m4) !== JSON.stringify(m1), JSON.stringify(m4));
+
+  check('the hold is real cargo, in real tonnes',
+        m1.length > 0 && typeof m1[0].cid === 'string' && m1[0].tonnes > 0);
+
+  /* Derived once, then owned: the moment anything reads a hold it becomes
+   * stored state, because the player is about to take things out of it. */
+  check('reading a hold stores it on the ship', a.manifest === m1);
+  a.manifest = [{ cid: 'grain', tonnes: 1 }];
+  check('and a stored hold wins over the hash',
+        Combat.manifestFor(G.sys, a)[0].cid === 'grain');
+
+  // Loot is drawn from what actually flies here, not a global table.
+  var flown = {};
+  (G.sys.traffic || []).forEach(function (r) {
+    (r.out || []).concat(r.back || []).forEach(function (l) { flown[l.cid] = true; });
+  });
+  var local = Combat.manifestFor(G.sys, { id: 'n99', kind: 'pirate' });
+  check('and it is something that actually flies in this system',
+        !!flown[local[0].cid], local[0].cid);
+
+  /* Robbery and death read one hold. Before this they read two, because
+   * only the death path ever invented one. */
+  var R = makeG();
+  var pirate = fakeVictim(R, { kind: 'pirate', cls: 'pirate', range: 3,
+                               manifest: [] });
+  pirate.id = 'n42';
+  var robbed = Combat.manifestFor(R.sys, pirate);
+  var killed = Combat.manifestFor(R.sys, pirate);
+  check('robbing a pirate and killing it agree about the hold',
+        JSON.stringify(robbed) === JSON.stringify(killed));
 })();
 
 section('--- the witness doctrine ---');

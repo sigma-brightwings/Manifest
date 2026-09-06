@@ -29,6 +29,9 @@ verified by loading the modules and inspecting what is actually there.
 |---|---|
 | **Phase 1 — the slot model** | typed slots, power and mass budgets, nine lasers, three reactors, sell-back at 45%, `canFit` reasons, `replanFit` on hull change, `migrateFit`, save persistence |
 | **Phase 2 — the F5 page** | text entry primitive, pilot/ship/registration editing, yard rebuilt in three tabs, `stockAt` port filtering, scrolling with wheel + scrollbar, yard named for the port's role |
+| **Phase 3 — weapons in the control scheme** | `fireGroup` over the fitted hardpoints with per-slot cooldowns, two groups on two triggers (`Space` / `Shift+Space`, mouse 1 / mouse 2, middle button launches), mouse-aim steers with no button held, `contextmenu` suppressed, group assignment on the F5 FIT page, `groups` in the save |
+| **Weapon heat** *(the other half of Phase 3)* | every shot spends `heat × cooldown` through `addHeat`; the turret too. This is what switched the heat sinks on |
+| **Seed discipline: pirate holds** *(pulled forward from Phase 4)* | `manifestFor` / `holdOf` hash `'hold\|sys.seed\|spec.id'`, biased to local trade, derived once then owned; canister scatter and the robbery purse derived too |
 | **Heat sinks** *(part of Phase 5)* | launcher, charges, `armSink`, `addHeat`, `updateSink`, ejection record |
 | **Hull roles** *(not originally a phase)* | `liner` traffic class, `navy` patrol class, hull assignments, `killNavy` / `killLiner` charges, navy as a piracy deterrent |
 | **The settlement chain** *(not originally a phase)* | `Eco.setPressure` 0.25–3.0, `Eco.galaxyProfile`, byte-identical at 1.0, tested |
@@ -37,20 +40,32 @@ verified by loading the modules and inspecting what is actually there.
 
 ### Built but inert ⚠️
 
-- **Heat sinks have nothing to absorb.** `addHeat` is written and tested,
-  but no weapon puts heat into the hull yet. Phase 3 closes this.
 - **The grey market has no goods.** `stockAt` honours a `grey` flag and
   **zero catalogue items set it**, so that branch is unreachable. The
-  bootleg seeker and its cook-off do not exist.
+  bootleg seeker and its cook-off do not exist. *This is now the largest
+  piece of dead code in the project* — the heat sinks that used to keep it
+  company have been switched on.
 - **The muon cannon does not exist** as an item.
+- **The ejected heat sink is a record, not an object.** `G.sinkEjections`
+  is written and nothing reads it; it becomes a physical scanner return
+  with the Phase 4 debris system.
+- **A hardpoint can be assigned to a fire group but there is no way to see
+  which group is firing from the cockpit.** The F5 FIT page is the only
+  place group membership is visible, and mid-fight that is the wrong place.
+  An MFD readout is owed.
 
 ### Not started ☐
 
-Phases 3, 4, 5 (apart from heat sinks), 6, 7, 8, 9, 10, 11, 12, 13.
+Phases 4 (apart from the pirate-manifest fix, pulled forward), 5 (apart
+from heat sinks), 6, 7, 8, 9, 10, 11, 12, 13.
 
-**One correction to an earlier claim in this document:** the seed-discipline
-fix is *not* done — `combat.js` still generates a pirate's improvised
-manifest with `Math.random()`. That lands with Phase 4.
+**The seed-discipline correction is now closed.** `combat.js` no longer
+invents a pirate's manifest with `Math.random()`; `manifestFor` hashes it
+from the ship's own id, salted with the system seed, and `holdOf` is the
+single read point so robbery and death cannot disagree. The remaining
+`Math.random()` calls in `combat.js` are all in-the-moment die rolls that
+are *meant* to be unrepeatable — a customs search, a witness deciding to
+talk, an NPC's shot connecting — and those are not generation.
 
 ---
 
@@ -625,7 +640,29 @@ and a price stops it being a thing you fiddle with every dock.
 
 ---
 
-## Phase 3 — weapons in the control scheme (`main.js`)
+## ✅ Phase 3 — weapons in the control scheme (`main.js`) — BUILT
+
+*Built as described below, with two deviations, both taken deliberately.*
+
+**Deviation 1: two triggers, not one trigger and a cycle key.** The plan
+left "switch between them mid-fight" unspecified. It is now mouse 1 for
+group A and mouse 2 for group B, with the missile moving to the middle
+button — because the whole point is switching mid-burst, and a mode whose
+state you have to remember is a mode you will get wrong while somebody is
+shooting at you. Both can be held at once, which is what makes the
+beam-then-pulse loadout actually playable rather than merely purchasable.
+
+**Deviation 2: `Shift`+`Space` is the keyboard's second trigger.** Every
+letter was spoken for long before weapons wanted one, so the second trigger
+is a modifier on the first — the same split the codebase already uses for
+G (grid / gear), T (dock / match) and / (mode / assist).
+
+**Also built:** cooldowns became per-slot rather than per-ship (sharing one
+would have made a second gun in a group do nothing at all); group
+assignment lives on the F5 FIT page as its own row per gun, so the control
+that moves a 38,000 cr laser between triggers is never the same control
+that sells it; `groups` is additive in the save and a missing entry reads
+as group A, so an old career loads firing everything on the primary.
 
 **The conflict, stated plainly.** In the cockpit, left-drag currently turns
 your head (or aims, with F9 mouse-aim on). Mouse 1 cannot both fire and
@@ -701,7 +738,21 @@ scoop, one expiry.
 victim's id, so a replayed kill throws the same shards — never
 `Math.random()`.
 
-### A pirate's hold is a function of its registration
+### ✅ A pirate's hold is a function of its registration — BUILT
+
+*Pulled forward out of Phase 4 and built as described, because it was a
+live doctrine violation sitting in the tree rather than a feature waiting
+its turn. `manifestFor(sys, spec)` hashes `'hold|sys.seed|spec.id'` —
+`sys.seed`, not `sys.id`, which does not exist — biased to `sys.traffic`'s
+commodities and memoised onto the spec. `holdOf(sys, spec)` is the single
+read point, so `killNpc` and `demandFrom` cannot disagree. The canister
+scatter direction and the cash a robbed ship hands over are hashed the same
+way, so neither can be rerolled by reloading.*
+
+*The corridor-id worry below was checked and is fine: drop-out ids are
+`'drop-' + ` a slipspace contact id, and those come from
+`new RNG('galaxy-lane|…')` and `'corridor-hunt|…|window'` — both seeded, so
+they hash stably across loads.*
 
 `killNpc` currently invents a pirate's cargo with bare `Math.random()` at
 the moment of death. Replace it with a hash of the ship's own id — the
@@ -829,13 +880,16 @@ makes it worth flying rather than holding a button:
 A star can be scooped the same way, off the solar wind, and the same rule
 applies: over the poles.
 
-### ✅ Heat sinks (utility rack + consumable) — BUILT, waiting on Phase 3
+### ✅ Heat sinks (utility rack + consumable) — BUILT AND LIVE
 
 *The rack, the charges, `armSink`, `addHeat` and the ejection record all
-exist and are tested. Nothing generates weapon heat yet, so a sink
-currently has nothing to absorb — Phase 3 is what switches it on. The
-ejected block is recorded in `G.sinkEjections` but is not yet a physical
-object; that is Phase 4.*
+exist and are tested, and as of Phase 3 there is finally weapon heat for a
+sink to absorb: every shot spends `heat × cooldown` through `addHeat`. The
+ejected block is still only recorded in `G.sinkEjections` and is not yet a
+physical object; that remains Phase 4.*
+
+*Unverified in play: the ten-seconds-per-charge figure below is arithmetic,
+not measurement. It wants a fight before anyone trusts it.*
 
 A one-shot block of ablative mass that soaks your heat and is then thrown
 overboard. The answer to "this one absolutely cannot be allowed to

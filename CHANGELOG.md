@@ -17,6 +17,50 @@ full design and the phases still outstanding.
 
 ### Added
 
+- **Fire groups, and a second trigger.** A hull with more than one hardpoint
+  now has two of them. Every gun starts on group A; move one to B on the F5
+  FIT page and it answers a different trigger:
+
+  | | Group A | Group B | Missile |
+  |---|---|---|---|
+  | Keyboard | `Space` | `Shift`+`Space` | `B` |
+  | Mouse aim (`F9`) | mouse 1 | mouse 2 | middle button |
+
+  Hold either, or both at once — a beam group stripping the shield while a
+  pulse group works the hull is the loadout the shield model was built to
+  reward, so forbidding it would have quietly deleted that build. Cooldowns
+  are per *slot*: two guns in one group are two triggers pulled together, not
+  one gun firing twice as fast.
+
+- **The mouse is a weapon, in mouse-aim mode.** With `F9` aim on, the nose
+  now follows the mouse with **no button held** — which is what frees the
+  buttons to be triggers, and what fixes the previous arrangement where you
+  could only turn the ship while dragging. Mouse-aim off is unchanged:
+  left-drag turns your head, `Space` and `B` still shoot. Right-click over
+  the canvas no longer opens the browser menu mid-fight.
+
+- **Beams heat your own hull — for real this time.** The heat sink shipped
+  built, tested and completely inert because nothing in the game generated
+  weapon heat. Now every shot puts its rated waste heat in, through the same
+  `addHeat` a live sink intercepts. One shot costs `heat × cooldown`, so a
+  weapon held down costs exactly the figure the catalogue prints and one
+  fired in taps costs proportionally less, with no second number to keep in
+  step. Against a bare hull's 18/s shed: a photon beam (12/s) can be held
+  down forever, a kaon beam (26/s) gives about twelve seconds, a muon beam
+  (46/s) under four. The turret's own heat rating is now spent too.
+
+- **A pirate's hold is a pure function of its registration.** It used to be
+  invented with `Math.random()` at the moment of death, which broke the
+  project's first doctrine two ways: the same wreck on the same seed threw
+  different goods every time, and robbing a pirate *alive* could disagree
+  with killing it about what it had been carrying, because only the death
+  path ever invented a manifest. Both now read one hashed hold — salted with
+  the system seed, since patrol ids are numbered per system — and the loot is
+  drawn from **what actually flies in that system**, so a run on medicine
+  means pirates full of medicine. The scatter of the canisters and the cash a
+  robbed ship hands over are derived the same way, so neither can be rerolled
+  by reloading.
+
 - **Equipment slots.** Every hull now has typed slots — hardpoint, utility,
   internal — plus a **reactor output budget in megawatts** and a **fit
   tonnage budget**. What you can carry is now a decision instead of a
@@ -104,9 +148,9 @@ full design and the phases still outstanding.
   rather than suspending one and cannot rescue you once you are cooking.
   Ejects itself when full or expired.
 
-  The plumbing (`Combat.addHeat`) is in and tested; weapon heat itself
-  arrives with the fire-group work, and the ejected sink becomes a real
-  tumbling object with the debris system.
+  The plumbing (`Combat.addHeat`) is in and tested, and weapon heat now
+  actually arrives — see fire groups above, which is what switched this on.
+  The ejected sink becomes a real tumbling object with the debris system.
 
 - **Every item has a sales pitch** — the yard's own copy, shown after the
   numbers on any line you can actually afford and fit. Where a pitch is
@@ -142,9 +186,13 @@ full design and the phases still outstanding.
 **Existing careers load, with their gear.** The save version is
 deliberately *not* bumped: `readSlot` and `load` discard any payload whose
 version does not match exactly, so a bump would not migrate old saves, it
-would delete them. The change is additive — a `fit` map is written
-alongside the four legacy weapon fields, and `Combat.migrateFit` rebuilds
-a fit from those fields when `fit` is absent.
+would delete them. The change is additive — a `fit` map and a `groups` map
+are written alongside the four legacy weapon fields, and
+`Combat.migrateFit` rebuilds a fit from those fields when `fit` is absent.
+
+A save written before fire groups existed has no `groups`, and a missing
+entry reads as group A — so an old career comes back firing everything on
+the primary trigger, which is exactly what it was doing before the update.
 
 A migrated ship keeps everything it owned even if the new budgets would not
 strictly allow it. Confiscating something a player already paid for because
