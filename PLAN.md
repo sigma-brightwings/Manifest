@@ -1993,28 +1993,34 @@ ever one ship with the player's flag on it.
 
 ---
 
-## Awaited: two more ship types
+## ✅ Two more ship types — MODELS IN, one mechanic outstanding
 
-Models to follow. Both fill gaps the systems already have:
+Both imported (39 models total, every one with a cockpit interior).
 
-- **A naval variant of the police interceptor.** The `navy` class
-  currently flies the capital hull, which is right for a warship and wrong
-  for a patrol — a navy that only fields capital ships cannot be
-  *dispatched* the way Phase 9's hunters need to be. A naval interceptor
-  is the hull those hunters should arrive in, with the capital reserved
-  for something you are meant to run from.
+- **✅ Naval interceptor.** `navy` now flies `navy-m` instead of
+  `capital-m`, which was wrong in a way that mattered: a navy that only
+  fields capital hulls cannot be *dispatched*, and dispatched hunters are
+  exactly what Phase 9 needs. The capital is now free for what it is
+  actually for — the thing you are meant to run from.
 
-- **A fuel and repair tender.** This one earns its place mechanically
-  rather than decoratively: **running dry is currently a dead end.** A
-  stranded ship has no resolution but a reload, which is the worst kind of
-  failure state — one the game notices and offers nothing for. A rescue
-  service turns that into a transaction with a price, and it composes with
-  everything nearby: expensive far from a refinery (Phase 12's haulage),
-  slow to arrive at the frontier, and a legitimate thing for a pirate to
-  impersonate.
+- **⚠️ Rescue tender.** The hull, the class and the law are in; **the
+  rescue mechanic is not.** Tenders fly a short local loop in any system
+  developed enough to keep a crew waiting — 23 of 25 sampled systems have
+  one. They are unarmed, and killing one costs 14,000 cr, more than
+  killing a patrol cutter: a cutter came looking for you, the tender was
+  on its way to help somebody. It is the one hull whose only defence is
+  that everyone agrees not to.
 
-Neither is urgent. Both are more useful than the medical ship they
-replace, because each answers a question the simulation is already asking.
+  **Still to build — and this is the point of the ship:** running dry is
+  a dead end. A stranded pilot has no resolution but a reload, which is
+  the worst kind of failure state, one the game notices and offers
+  nothing for. Calling a tender turns that into a transaction, and it
+  composes with what is already here: priced by distance from a refinery
+  (Phase 12's haulage), slow to reach the frontier, and an obvious thing
+  for a pirate to impersonate.
+
+  Putting the ship in the sky first is deliberate. Being able to *see*
+  the service is half of knowing you can call it.
 
 ---
 

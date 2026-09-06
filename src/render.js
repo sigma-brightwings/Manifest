@@ -465,7 +465,12 @@
     merc: 'fighter-l',
     pirate: 'fighter-m',
     liner: 'liner-m',
-    navy: 'capital-m'
+    /* Was 'capital-m', which was wrong in a way that mattered: a navy that
+     * only fields capital hulls cannot be DISPATCHED, and dispatched
+     * hunters are what the notoriety work needs. The capital is now free
+     * for what it is actually for — the thing you run from. */
+    navy: 'navy-m',
+    tender: 'tender-m'
   };
 
   /* The liner and the capital now have classes of their own — a light run

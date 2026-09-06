@@ -180,6 +180,25 @@ new system.
   `readdirSync` is not recursive, so the superseded folders are excluded
   from conversion automatically.
 
+- **Two new ship classes: naval interceptor and rescue tender.** 39 models
+  now, all six new ones carrying cockpit interiors and canopy boxes.
+
+  **Navy flies `navy-m` instead of `capital-m`.** That was a real
+  mismatch, not a cosmetic one: a navy that only fields capital hulls
+  cannot be *dispatched*, and dispatched hunters are what the notoriety
+  work needs. The capital hull is now free for what it is for.
+
+  **Rescue tenders** run a short local loop in any system developed enough
+  to keep a crew standing by — 23 of 25 sampled systems have one. Unarmed
+  by design, like the shuttle, but for the opposite reason: what protects
+  a tender is that shooting one costs **14,000 cr**, more than killing a
+  patrol cutter. A cutter came looking for you; the tender was on its way
+  to help somebody.
+
+  The rescue *mechanic* is not built. The ship is in the sky first on
+  purpose — being able to see the service is half of knowing you can call
+  it.
+
 - **Merchantmen shoot back. Only shuttles fly unarmed.** `updateNpcFire`
   used to skip every trader outright — *"freighters carry no guns"* — so
   robbing one was a chore rather than a decision. Now everything is armed

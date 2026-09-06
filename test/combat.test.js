@@ -187,6 +187,13 @@ section('--- merchantmen shoot back, shuttles do not ---');
   var pod = fakeVictim(G2, { kind: 'trader', cls: 'shuttle', range: 5 });
   Combat.damageNpc(G2.sys, G2, pod, 4, 0, HOOKS);
   check('a shuttle has nothing to defend itself with', !pod.defending);
+
+  /* The rescue tender is the other unarmed hull, and the only one whose
+   * protection is entirely legal rather than physical. */
+  check('a tender is unarmed too', !Combat.isArmedNpc({ cls: 'tender' }));
+  check('and killing one costs more than killing a patrol cutter',
+        Combat.BOUNTY.killTender > Combat.BOUNTY.killPolice,
+        Combat.BOUNTY.killTender + ' vs ' + Combat.BOUNTY.killPolice);
 })();
 
 section('--- slots, power and mass ---');

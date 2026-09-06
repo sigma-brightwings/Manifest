@@ -1222,10 +1222,18 @@
      * For now it only patrols: hunting the player on notoriety is a
      * separate piece of work, and a navy that merely EXISTS in the sky of
      * well-governed systems is worth having on its own. */
-    navy:   { size: 0.240, color: '#b8c6d8', accel: 0.0060, label: 'naval cutter' }
+    navy:   { size: 0.240, color: '#b8c6d8', accel: 0.0060, label: 'naval cutter' },
+    /* A rescue tender. Unarmed on purpose — its protection is that
+     * shooting one is an unusually serious crime, not that it can fight
+     * back. Present now so the hull is in the sky before the mechanic
+     * that calls one exists; being able to SEE the service is half of
+     * knowing you can use it. */
+    tender: { size: 0.095, color: '#ffd36b', accel: 0.0125, label: 'rescue tender' }
   };
   var NAVY_NAMES = ['Resolute', 'Intransigent', 'Adamant', 'Sovereign', 'Implacable',
                     'Vigilant', 'Unyielding', 'Redoubt'];
+  var TENDER_NAMES = ['Samaritan', 'Good Turn', 'Lifeline', 'Standby', 'Helping Hand',
+                      'Second Wind', 'Fair Wind', 'Salvor'];
   var POLICE_NAMES = ['Vigil', 'Sentinel', 'Warden', 'Picket', 'Marshal', 'Bastion',
                       'Cordon', 'Lictor'];
   var MERC_NAMES = ['Hired', 'Contract', 'Retainer', 'Bondsman', 'Freelance'];
@@ -1332,6 +1340,32 @@
         rail: { type: 'route', route: patrolRoute('n' + (id - 1), '', nspec, NA, NB, sys, rng) }
       });
     });
+
+    /* Rescue tenders. One per system that has enough traffic to justify
+     * the standing cost of keeping a crew waiting — which is what
+     * development measures. They run a short local loop rather than a
+     * long haul, because a tender that is halfway across the system when
+     * you call is not a rescue service. */
+    (function () {
+      if (ports.length < 2) return;
+      var dev = sys.development === undefined ? 0.5 : sys.development;
+      if (dev < 0.35) return;
+      var TA = ports[rng.int(0, ports.length - 1)];
+      var TB = ports.filter(function (p) { return p !== TA; })[0];
+      if (!TB) return;
+      var tspec = { cls: 'tender', accel: PATROL_CLASSES.tender.accel,
+                    size: PATROL_CLASSES.tender.size,
+                    color: PATROL_CLASSES.tender.color,
+                    label: PATROL_CLASSES.tender.label };
+      sys.patrols.push({
+        id: 'n' + (id++), kind: 'tender', faction: TA.faction || null,
+        name: rng.pick(TENDER_NAMES),
+        className: PATROL_CLASSES.tender.label,
+        color: PATROL_CLASSES.tender.color,
+        size: PATROL_CLASSES.tender.size, accel: PATROL_CLASSES.tender.accel,
+        rail: { type: 'route', route: patrolRoute('n' + (id - 1), '', tspec, TA, TB, sys, rng) }
+      });
+    })();
 
     /* Escorts shadow a real freight run — same endpoints, same schedule,
      * a minute behind. Flying in loose formation with a freighter is the

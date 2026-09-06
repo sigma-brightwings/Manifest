@@ -621,7 +621,8 @@
     shuttle: 25, freighter: 55, tanker: 75, hauler: 40,
     police: 70, merc: 95, pirate: 80,
     liner: 110,          // big, soft, and full of people
-    navy: 260            // you do not crack one of these with a Class 1
+    navy: 260,           // you do not crack one of these with a photon
+    tender: 60           // built to tow, not to take hits
   };
   var NPC_GUN = { dmg: 5, range: 12, cooldown: 1.1 };
 
@@ -642,7 +643,10 @@
    * it is the hull nobody scans twice, which is exactly what you want when
    * the cargo is a sabotage device. */
   var TRADER_GUN = { dmg: 2, range: 8, cooldown: 2.2 };
-  var UNARMED_CLASSES = { shuttle: true };
+  /* A rescue tender is unarmed for the same reason an ambulance is: what
+   * protects it is that shooting one is unthinkable and expensive, not
+   * that it can shoot back. See BOUNTY.killTender. */
+  var UNARMED_CLASSES = { shuttle: true, tender: true };
 
   var DISTRESS_DELAY_ARMED = 10;   // a warship backs itself for a while
   var DISTRESS_DELAY_CIVIL = 5;    // a freighter calls the moment it is hit
@@ -665,8 +669,13 @@
   var WANTED_HUNT = 800;         // bounty at which police attack and ports refuse
   /* Killing a warship is not the same offence as killing a patrol cutter,
    * and a liner is full of people who were going somewhere. */
+  /* Shooting a rescue tender sits above killing a patrol cutter, and it
+   * should: a cutter came looking for you, and the tender was on its way
+   * to help somebody. It is the one hull in the game whose only defence
+   * is that everyone agrees not to. */
   var BOUNTY = { demand: 400, assault: 300, kill: 2800, killPolice: 6000,
-                 killNavy: 12000, killLiner: 9000, smuggling: 0 };
+                 killNavy: 12000, killLiner: 9000, killTender: 14000,
+                 smuggling: 0 };
   var SMUGGLING_FINE_PER_TONNE = 180;   // cr/t, on top of losing the cargo itself
   var SEARCH_FLOOR = 0.12;   // even the most permissive system still checks sometimes
 
@@ -844,7 +853,8 @@
 
     if (spec.liftedFrom) spec.liftedFrom.dead = true;
     if (spec.kind !== 'pirate') {
-      var charge = spec.kind === 'navy' ? 'killNavy'
+      var charge = spec.kind === 'tender' ? 'killTender'
+                 : spec.kind === 'navy' ? 'killNavy'
                  : spec.kind === 'police' ? 'killPolice'
                  : spec.cls === 'liner' ? 'killLiner'
                  : 'kill';
