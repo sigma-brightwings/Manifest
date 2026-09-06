@@ -1509,6 +1509,8 @@
       Eco.buildPortMarket(port, host, sys, er.fork('mkt-' + port.id));
     }
 
+    priceFuelByHaulage(sys);
+
     /* Guarantee somewhere to dump the waste. A system where every port is a
      * producer and none will take it is a dead-end mechanic: the player
      * would see the payout, fill the hold, and then discover there is
@@ -1742,6 +1744,61 @@
   /* Orbital radius of `body` measured about `ancestor` — one hop for a
    * station about its planet, the planet's own orbit when the two ports are
    * around different worlds. */
+  /* ---- what fuel costs where ---------------------------------------------
+   * Hydrogen is skimmed from gas and ice giants and carried everywhere
+   * else, so its price should be the price of the haul. Every port still
+   * SELLS it — that guarantee is in economy.js and it is a gameplay
+   * promise, not a physical one — but a port a long way from any giant
+   * pays for every tonne to be brought in, and passes that on.
+   *
+   * Distance is measured as the difference in orbital radius about the
+   * star, not as a distance at some instant: it is a structural fact about
+   * where a port sits, and a structural factor must not depend on t. A
+   * port ORBITING a giant reads zero and gets the refinery price.
+   *
+   * The consequence is the interesting part, and it was not designed in —
+   * it falls out. A rich mining world far from any giant charges more for
+   * its ores AND pays more for its fuel, so its real margin can be worse
+   * than a poorer world sitting next to a refinery. "Expensive wares" and
+   * "profitable to work" stop being the same statement, which is exactly
+   * the sort of thing a trade game should make you learn by flying. */
+  var FUEL_HAUL_PER_AU = 0.055;   // fraction added to the structural price
+  var FUEL_HAUL_CAP = 0.85;       // never more than this over the refinery
+  var FUEL_NO_GIANT = 0.95;       // a system with nothing to skim imports it
+
+  function priceFuelByHaulage(sys) {
+    var ports = sys.ports || [];
+    if (!ports.length) return;
+
+    var giants = sys.bodies.filter(function (b) {
+      return b.type === 'gasGiant' || b.type === 'iceGiant';
+    });
+
+    for (var i = 0; i < ports.length; i++) {
+      var row = ports[i].market && ports[i].market.rows[Eco.FUEL_ID];
+      if (!row) continue;
+
+      var haul;
+      if (!giants.length) {
+        haul = FUEL_NO_GIANT;      // nothing in this system to skim
+      } else {
+        var here = radiusAbout(ports[i], sys.root, sys);
+        var best = Infinity;
+        for (var g = 0; g < giants.length; g++) {
+          /* A port whose host IS the giant has hauled it nowhere. */
+          var anc = ports[i].parentBody;
+          if (anc === giants[g]) { best = 0; break; }
+          var there = giants[g].orbit ? giants[g].orbit.a : here;
+          best = Math.min(best, Math.abs(here - there));
+        }
+        var au = best / AU;
+        haul = Math.min(FUEL_HAUL_CAP, au * FUEL_HAUL_PER_AU);
+      }
+      row.local *= 1 + haul;
+      row.haul = Math.round(haul * 100) / 100;   // for the market screen
+    }
+  }
+
   function radiusAbout(body, ancestor, sys) {
     var p = body;
     while (p && p.parentBody !== ancestor) p = p.parentBody;

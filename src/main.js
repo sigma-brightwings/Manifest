@@ -2592,7 +2592,14 @@
     var port = G.market.port;
 
     if (tonnes > 0) {
-      if (row.buy === null) { say(row.name + ': not sold here', 2); return; }
+      /* A refusal has to teach the rule, or the row just looks broken.
+       * A port sells what it produces and buys anything, so the honest
+       * answer names the port as a consumer and points somewhere else. */
+      if (row.buy === null) {
+        say(port.name + ' consumes ' + row.name.toLowerCase() +
+            ', it does not export it — they will buy yours', 4);
+        return;
+      }
       var can = maxBuyable(row);
       tonnes = Math.min(tonnes, can);
       if (tonnes <= 0) {

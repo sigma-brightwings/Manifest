@@ -645,11 +645,47 @@ console.log('--- market: prices and the player ledger ---');
 (function () {
   var sys = Gen.generateSystem('kawartha');
   var port = sys.ports[0];
-  var cid = port.market.order.filter(function (c) { return c !== 'waste'; })[0];
+  /* A good this port actually EXPORTS — since the market is asymmetric, a
+   * good it merely consumes has no buy price at all, and the spread is
+   * only meaningful on something you can do both halves of. */
+  var cid = port.market.order.filter(function (c) {
+    return c !== 'waste' && port.market.rows[c].exporter;
+  })[0] || port.market.order.filter(function (c) { return c !== 'waste'; })[0];
 
   var p = Eco.price(port, cid, 0);
   check('a traded good has a positive price', p.buy > 0 && p.sell > 0);
   check('buy price exceeds sell price (there is a spread)', p.buy > p.sell);
+
+  /* The asymmetry itself: a port sells what it makes and buys anything.
+   * Fuel is the deliberate exception — every port resells it, because
+   * only a fifth of them produce it and the alternative is stranding
+   * people who did not plan two jumps ahead. */
+  (function () {
+    var sellable = 0, buyable = 0, consumed = 0, total = 0;
+    for (var i = 0; i < sys.ports.length; i++) {
+      var list = Eco.priceList(sys.ports[i], 0);
+      for (var j = 0; j < list.length; j++) {
+        var r = list[j];
+        if (r.id === 'waste') continue;
+        total++;
+        if (r.buy !== null) sellable++;
+        if (r.accepts) buyable++;
+        if (r.buy === null && r.sell > 0) consumed++;
+      }
+    }
+    check('a port does not sell everything it stocks', sellable < total,
+          sellable + ' of ' + total);
+    check('but it buys everything', buyable === total, buyable + ' of ' + total);
+    check('and what it consumes, it still pays for', consumed > 0,
+          consumed + ' consumed goods still quote a sell price');
+
+    var noFuel = sys.ports.filter(function (pt) {
+      var q = Eco.price(pt, Eco.FUEL_ID, 0);
+      return q && q.buy === null;
+    });
+    check('every port will sell you fuel', noFuel.length === 0,
+          noFuel.length + ' could not');
+  })();
 
   // Scarcity, not a table, sets the price: emptying the shelf raises it.
   var full = Eco.price(port, cid, 0).mid;

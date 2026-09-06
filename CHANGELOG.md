@@ -180,6 +180,45 @@ new system.
   `readdirSync` is not recursive, so the superseded folders are excluded
   from conversion automatically.
 
+- **A port sells only what it makes. It buys anything.** The market is
+  asymmetric now, which is what turns a trade route into a route rather
+  than a price lookup — you cannot buy computers at a farming co-op just
+  because there are some in the warehouse, since that stock is what the
+  colony eats, not merchandise. Supply is a fact about a place; demand is
+  a fact about a need.
+
+  Measured before committing to it: 53% of rows are exporters, an average
+  port sells 6.8 of the 12.8 goods it lists, and **no port in any sampled
+  system is left with nothing to sell**. A refusal names the reason —
+  *"Waypoint Dock consumes grain, it does not export it — they will buy
+  yours"* — rather than greying a row out.
+
+  **Fuel is the deliberate exception.** Only 20% of ports produce
+  hydrogen while every port stocks and burns it, so a strict rule would
+  leave four ports in five unable to sell fuel and strand anyone who did
+  not plan two jumps ahead. A port that imports fuel and resells it is
+  what a fuel depot *is*.
+
+- **Hydrogen is priced by the haul.** Its structural price now scales with
+  the port's distance from the nearest gas or ice giant — 5.5% per AU,
+  capped at +85%, with a flat +95% in a system that has no giant to skim
+  at all. Distance is orbital radius about the star, not a distance at an
+  instant, because a structural factor must not depend on `t`.
+
+  | Port role | avg fuel price |
+  |---|---|
+  | Refinery (at a giant) | **42** |
+  | Mining head | 91 |
+  | Orbital port | 101 |
+  | Highport | 137 |
+
+  6.5× between the cheapest and dearest port across 25 seeds. The good
+  part fell out rather than being designed: a rich mining world far from
+  any giant charges more for its ores *and* pays more for its fuel, so its
+  real margin can be worse than a poorer world sitting beside a refinery.
+  "Expensive wares" and "profitable to work" stop being the same
+  statement.
+
 - **Mission board: a headline and a long form.** `text` is what the job is
   — terse, factual, hard-capped at 240 characters so a board stays
   scannable however baroque later mission types get. `desc` is who is

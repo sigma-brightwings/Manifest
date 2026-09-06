@@ -512,13 +512,43 @@
 
     var scarcity = 0.55 + 0.95 * (1 - fill);
     var mid = com.base * row.local * scarcity;
+
+    /* ---- the asymmetry ---------------------------------------------------
+     * A PORT SELLS ONLY WHAT IT MAKES. It will buy anything.
+     *
+     * That is how a real port works and it is what makes a trade route a
+     * route rather than a price lookup: you cannot buy computers at a
+     * farming co-op merely because there are some in its warehouse — that
+     * stock is what the colony is going to eat through, not merchandise.
+     * Sourcing becomes a question about geography, which is the question
+     * this whole economy exists to ask.
+     *
+     * Buying is unconditional in the other direction, because a port with
+     * a shortage does not care who you are. That is the asymmetry: supply
+     * is a fact about a place, demand is a fact about a need.
+     *
+     * FUEL IS THE EXCEPTION, and it has to be. Measured across 25 seeds,
+     * only 20% of ports produce hydrogen while every port stocks and burns
+     * it — the strict rule would leave four ports in five unable to sell
+     * you fuel and strand a player who did not plan two jumps ahead. A
+     * port that imports fuel and resells it is not a loophole, it is what
+     * a fuel depot IS. Price still does the honest work here: hydrogen is
+     * cheap where it is skimmed and dear where it was carried.
+     *
+     * Everything else was measured too: 53% of rows are exporters, an
+     * average port sells 6.8 of the 12.8 goods it lists, and no port in
+     * any sampled system is left with nothing to sell. */
+    var sells = row.exporter || cid === FUEL_ID;
+
     return {
       id: cid, name: com.name, mid: mid,
-      buy: mid * (1 + SPREAD / 2),      // what the player pays per tonne
+      // null, not zero: the market screen already reads null as "—" and
+      // maxBuyable already refuses to quote against it.
+      buy: sells ? mid * (1 + SPREAD / 2) : null,
       sell: mid * (1 - SPREAD / 2),     // what the player is paid per tonne
       stock: st, cap: row.cap, fill: fill,
       exporter: row.exporter, importer: row.importer,
-      tradeable: true, accepts: true
+      tradeable: sells, accepts: true
     };
   }
 

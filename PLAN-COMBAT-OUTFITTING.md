@@ -1169,6 +1169,34 @@ Fragments should also be **selected by the mission's own seed**, not by
 `Math.random()`, so a board reads the same when you come back to it — the
 same doctrine as the pirate holds.
 
+### The board should have people on it, not just contracts
+
+**Requested, not yet built.** Today the board is a list of jobs that come
+from nowhere. It should be a place where you can *contact* somebody:
+
+- **Grey-market suppliers reachable from the board.** The grey market
+  currently has no goods and no door. Making the contact the door solves
+  both — you do not browse illegal gear, you get put in touch with
+  somebody who has it, and the standing that gates the certified market
+  is replaced here by whether anyone will vouch for you.
+- **Open-ended quest givers.** A named contact who offers work
+  repeatedly, remembers what you did last time, and whose offers change as
+  standing does. `arcs.js` already casts authored chapter chains against
+  real ports; the missing half is a *person* the chain belongs to, so a
+  campaign reads as somebody asking rather than as a board refreshing.
+- **Missions integrated with both.** A contract from a named contact
+  should be visibly different from an anonymous board posting — better
+  paid, more dangerous, and unavailable to a stranger.
+
+The pieces that already exist: `arcs.js` chains, faction standing,
+`stockAt`'s standing gates, the `desc` long-form field, and the
+comms/hail machinery. What is missing is the contact as a first-class
+thing with an identity, a memory, and a location.
+
+Sequencing note: this wants Phase 11's **subfactions** first, or every
+contact ends up working for the same undifferentiated faction and the
+"who vouches for you" question has only one answer.
+
 ### Sabotage
 
 The elegant version reuses machinery that already exists rather than
