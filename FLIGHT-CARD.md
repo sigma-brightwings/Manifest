@@ -199,6 +199,14 @@ shield covers all of them, which quietly makes a re-entry module combat gear —
 and a **heat sink** buys about ten seconds of continuous heavy fire per charge,
 then goes overboard white-hot with your heat in it, where anyone can see it.
 
+**Knowing what you are shooting at.** Two scanners in the utility slot, and
+they differ in *precision*, not access. The **hull scanner** (2,200 cr) gives
+you a bar — enough to answer "is this one nearly dead". The **combat scanner**
+(9,500 cr) gives you the numbers, hull and shields both — which is what you
+need to answer "can I break it before its escort arrives". One at a time; the
+reading shows on the TARGET page. With neither fitted you get no row at all,
+because a blank reading and an undamaged ship must not look the same.
+
 **Getting shot.** Shields soak first and recharge when things go quiet; hull
 does not — repairs cost credits at the yard. At zero hull you lose the ship,
 the cargo and the fittings, never the credits or the reputation. Pirates whose

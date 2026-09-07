@@ -256,6 +256,32 @@
                     minDev: 0.55, minStanding: 0, minCrime: 0, grey: false,
                     pitch: 'Three chances to fire for longer than your hull agrees with.' },
 
+    /* ---- scanners ---------------------------------------------------------
+     * Two tiers of one question — how much fight is left in that ship — and
+     * what separates them is PRECISION, not access.
+     *
+     * The cheap one gives you a bar. That is enough to answer "is this one
+     * nearly dead", which is the question you have mid-fight, and it is not
+     * enough to answer "can I break it before its escort arrives", which is
+     * the question you have before you start one. So the expensive one buys
+     * PLANNING rather than sight, and a pilot who never upgrades is not shut
+     * out of anything — they are reading a gauge instead of a figure, which
+     * is how most instruments in this cockpit already work.
+     *
+     * Both are `uniqueGroup: 'scanner'` because they answer the same
+     * question: carrying both is two utility slots spent to learn one thing,
+     * and the fit check should say so rather than take the money. */
+    hullscan: { id: 'hullscan', name: 'Hull scanner', slot: 'utility',
+                kind: 'scanner', scan: 1, price: 2200, power: 0.6, mass: 1,
+                uniqueGroup: 'scanner',
+                minDev: 0.30, minStanding: -100, minCrime: 0, grey: false,
+                pitch: 'Tells you how badly they are hurt. Not how much they can take.' },
+    combatscan: { id: 'combatscan', name: 'Combat scanner', slot: 'utility',
+                  kind: 'scanner', scan: 2, price: 9500, power: 1.8, mass: 2,
+                  uniqueGroup: 'scanner',
+                  minDev: 0.60, minStanding: 0, minCrime: 0, grey: false,
+                  pitch: 'Hull and shields, in numbers. Knowing is most of winning.' },
+
     /* ---- reactors -------------------------------------------------------
      * The answer to "my hull will not run this gun", and the module that
      * finally makes the MASS budget matter. Until these existed, power was
@@ -894,6 +920,49 @@
     var id = R && R.HULL_ASSIGN && R.HULL_ASSIGN[cls];
     var m = /-(s|m|l)$/.exec(id || '');
     return m ? m[1] : 'm';
+  }
+
+  /* ---- what your scanner can tell you ------------------------------------
+   * 0 nothing, 1 a fraction, 2 the numbers. Reads off the slots like
+   * everything else, so fitting one is the only step. */
+  function scanLevel(ship) {
+    var list = fittedList(ship), best = 0;
+    for (var i = 0; i < list.length; i++) {
+      var it = list[i].item;
+      if (it.kind === 'scanner' && (it.scan || 0) > best) best = it.scan;
+    }
+    return best;
+  }
+
+  /* A reading on one ship, or null if you have nothing fitted to read it
+   * with. Deliberately returns null rather than zeroes: "no scanner" and
+   * "an undamaged ship" must not look the same on the instrument.
+   *
+   * Asking settles the lazy hull and shield assignments early. That is safe
+   * precisely because both are pure functions of the spec's class — looking
+   * at a ship cannot change what it turns out to be made of, it only
+   * decides it sooner, which is the same trick npcHull has always played on
+   * the first shot. */
+  function scanShip(ship, spec) {
+    var level = scanLevel(ship);
+    if (!level || !spec) return null;
+    npcHull(spec);
+    npcShield(spec);
+    var max = spec.hullMax || 1;
+    var out = {
+      level: level,
+      hullFrac: Math.max(0, Math.min(1, (spec.hullHp || 0) / max))
+    };
+    if (spec.shieldMax > 0) {
+      out.shieldFrac = Math.max(0, Math.min(1, (spec.shieldHp || 0) / spec.shieldMax));
+    }
+    if (level >= 2) {
+      out.hullHp = spec.hullHp;
+      out.hullMax = spec.hullMax;
+      out.shieldHp = spec.shieldHp || 0;
+      out.shieldMax = spec.shieldMax || 0;
+    }
+    return out;
   }
 
   function npcShield(spec) {
@@ -2879,6 +2948,7 @@
     syncLegacy: syncLegacy, migrateFit: migrateFit, replanFit: replanFit,
     buyEquipment: buyEquipment, stockAt: stockAt,
     SINK: SINK, sinkRackSize: sinkRackSize, armSink: armSink,
+    scanLevel: scanLevel, scanShip: scanShip,
     addHeat: addHeat, updateSink: updateSink,
     WITNESS_RANGE: WITNESS_RANGE, DISTRESS_DELAY: DISTRESS_DELAY,
     TRADER_GUN: TRADER_GUN, NPC_GUN: NPC_GUN,

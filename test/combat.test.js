@@ -329,6 +329,54 @@ section('--- migrating a career that predates slots ---');
   check('migrating twice is a no-op', JSON.stringify(s.fit) === before);
 })();
 
+section('--- scanners ---');
+(function () {
+  var G = makeG();
+  var s = G.ship;
+  s.credits = 100000;
+  var prey = fakeVictim(G, { kind: 'pirate', cls: 'pirate', range: 4 });
+
+  /* Nothing fitted reads as NOTHING, not as zeroes — "no scanner" and "an
+   * undamaged ship" must never look the same on the instrument. */
+  check('with no scanner there is no reading',
+        Combat.scanLevel(s) === 0 && Combat.scanShip(s, prey) === null);
+
+  Combat.fitItem(s, 'hullscan');
+  var r1 = Combat.scanShip(s, prey);
+  check('a hull scanner reads a fraction', !!r1 && r1.level === 1 &&
+        r1.hullFrac === 1, r1 && r1.hullFrac);
+  check('and deliberately not the numbers',
+        r1.hullHp === undefined && r1.hullMax === undefined);
+
+  /* Asking settles the lazy hull, which is safe because npcHull is a pure
+   * function of the class — looking cannot change what it is made of. */
+  check('scanning assigned the hull it was always going to have',
+        prey.hullMax === Combat.npcHull(prey) || prey.hullMax > 0,
+        String(prey.hullMax));
+
+  Combat.damageNpc(G.sys, G, prey, prey.hullMax * 0.5, G.t, HOOKS);
+  var r2 = Combat.scanShip(s, prey);
+  check('a hurt ship reads hurt', r2.hullFrac < 1 && r2.hullFrac > 0,
+        r2.hullFrac.toFixed(2));
+
+  /* One scanner at a time: they answer the same question, so two of them
+   * is two utility slots spent to learn one thing. */
+  var both = Combat.canFit(s, 'combatscan');
+  check('the two scanners will not both fit', !both.ok, both.why);
+
+  Combat.sellFitted(G, Combat.fittedList(s).filter(function (e) {
+    return e.item.kind === 'scanner';
+  })[0].key);
+  Combat.fitItem(s, 'combatscan');
+  var r3 = Combat.scanShip(s, prey);
+  check('the combat scanner reads the numbers', r3.level === 2 &&
+        r3.hullMax > 0 && typeof r3.hullHp === 'number',
+        r3.hullHp.toFixed(0) + ' / ' + r3.hullMax);
+  check('and reports the shield as well',
+        typeof r3.shieldMax === 'number' && typeof r3.shieldHp === 'number',
+        r3.shieldHp + ' / ' + r3.shieldMax);
+})();
+
 section('--- heat sinks ---');
 (function () {
   var G = makeG();

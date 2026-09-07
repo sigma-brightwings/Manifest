@@ -7124,6 +7124,19 @@
   }
 
   /* --- TARGET: everything about the lock --------------------------------- */
+  /* A relative reading, drawn as a bar rather than a percentage, because a
+   * bar is what an instrument that cannot count gives you — and reading
+   * "63%" off a scanner that is only rated to say "about two thirds" would
+   * be the cheap module quietly pretending to be the expensive one. */
+  function pctBar(frac) {
+    var n = Math.max(0, Math.min(8, Math.round(frac * 8)));
+    return new Array(n + 1).join('█') + new Array(8 - n + 1).join('·');
+  }
+
+  function hullInk(frac) {
+    return frac > 0.6 ? '#7dffb0' : frac > 0.25 ? '#ffd36b' : '#ff8a76';
+  }
+
   function drawTargetPage(ctx) {
     var nav = navTargetState();
     mfdShell(ctx, 'TARGET', nav ? '[ ] cycle    L release    T clamp / auto-dock'
@@ -7168,6 +7181,25 @@
       mfdRow(ctx, y + 112, 'carrying', man.length
         ? clipText(man.map(function (m) { return Eco.BY_ID[m.cid].name; }).join(', '), 18)
         : '—', MFD_DIM);
+
+      /* What the scanner sees, if you bought one. Nothing at all without —
+       * an empty row would say "this ship is undamaged", which is a
+       * different and much more dangerous claim than "you cannot tell". */
+      var scan = Combat.scanShip(G.ship, nav.obj.spec || nav.obj);
+      if (scan) {
+        var hullTxt = scan.level >= 2
+          ? Math.round(scan.hullHp) + ' / ' + scan.hullMax
+          : pctBar(scan.hullFrac);
+        mfdRow(ctx, y + 128, 'hull', hullTxt, hullInk(scan.hullFrac));
+        if (scan.shieldFrac !== undefined) {
+          var shTxt = scan.level >= 2
+            ? Math.round(scan.shieldHp) + ' / ' + scan.shieldMax
+            : pctBar(scan.shieldFrac);
+          mfdRow(ctx, y + 144, 'shield', shTxt, '#7fd6c0');
+        } else if (scan.level >= 2) {
+          mfdRow(ctx, y + 144, 'shield', 'none fitted', MFD_DIM);
+        }
+      }
     } else {
       mfdRow(ctx, y + 96, 'radius', fmtDist(nav.obj.radius));
       mfdRow(ctx, y + 112, 'gravity',
