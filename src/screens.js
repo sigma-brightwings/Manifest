@@ -786,6 +786,15 @@
     var fitted = fittedEquipment();
     ctx.save();
     ctx.font = '11px ui-monospace, monospace';
+    /* Both halves of the row clipped to the panel they are actually in. The
+     * old fixed 26 and 30 characters assumed a wide window: on a narrow one
+     * they add up to far more than the panel holds, so the name and the
+     * value were drawn straight through each other — "Photon intermittent
+     * laser" over "62 dmg · GROUP A". Split the lane instead, and let a
+     * small window clip harder on its own. */
+    var lane = Math.max(60, leftW - 24);
+    var nameCap = Math.max(8, Math.floor(lane * 0.44 / 6.7));
+    var valCap = Math.max(6, Math.floor(lane * 0.52 / 6.7));
     for (var f = 0; f < fitted.length; f++) {
       var yy = eqY + 40 + f * 15;
       if (yy > eqY + eqH - 22) break;
@@ -795,10 +804,10 @@
        * Everything below them is a fact about the hull. */
       var idRow = f < 3;
       ctx.fillStyle = idRow ? '#7fd6c0' : MFD_INK;
-      ctx.fillText(clipText(row.name, 26), pad + 12, yy);
+      ctx.fillText(clipText(row.name, nameCap), pad + 12, yy);
       ctx.fillStyle = row.uncertified ? '#ffb86b' : (idRow ? '#ffffff' : MFD_DIM);
       ctx.textAlign = 'right';
-      ctx.fillText(clipText(row.value + (row.uncertified ? '  UNCERTIFIED' : ''), 30),
+      ctx.fillText(clipText(row.value + (row.uncertified ? '  UNCERTIFIED' : ''), valCap),
                    pad + leftW - 12, yy);
       ctx.textAlign = 'left';
       if (idRow) {
@@ -808,12 +817,23 @@
         hot(pad + 8, yy - 11, hotW, 14, (function (which) {
           return function () { editIdentity(which); };
         })(['pilot', 'ship', 'reg'][f]), 'rename');
+      } else if (row.gun) {
+        /* Weapons management, on the page called MY SHIP rather than only
+         * at a yard: which trigger a gun answers to is the one loadout
+         * decision you might want to revisit between one fight and the
+         * next, and docking to do it is not an interesting cost. */
+        hot(pad + 8, yy - 11, leftW - 16, 14, (function (k) {
+          return function () {
+            var now = Combat.toggleGroup(s, k);
+            say('Moved to fire group ' + now.toUpperCase(), 3);
+          };
+        })(row.slotKey), 'fire group');
       }
     }
     ctx.fillStyle = 'rgba(160,185,220,0.5)';
     ctx.font = '10px ui-monospace, monospace';
-    ctx.fillText(s.docked ? 'click the top three to rename  ·  fittings sell in the yard'
-                          : 'click pilot or ship name to change  ·  registration in dock',
+    ctx.fillText(s.docked ? 'click a gun to change its fire group  ·  fittings sell in the yard'
+                          : 'click a gun to change its fire group  ·  top rows rename',
                  pad + 12, eqY + eqH - 10);
     ctx.restore();
 
@@ -1277,8 +1297,19 @@
     var list = Combat.fittedList(s);
     for (var i = 0; i < list.length; i++) {
       var it = list[i].item, val;
-      if (it.kind === 'gun') val = it.dmg + ' dmg · ' + it.range + ' km';
-      else if (it.kind === 'turret') val = 'automatic';
+      /* A gun reports which TRIGGER it answers to, not its range: the range
+       * is on the yard's shelf where you were deciding whether to buy it,
+       * and by the time it is bolted on, the live question is which of your
+       * two triggers it fires from. Clicking the row moves it — the yard
+       * used to be the only place that could, which made a loadout decision
+       * something you could not revisit until you next docked. */
+      if (it.kind === 'gun') {
+        val = it.dmg + ' dmg · GROUP ' + Combat.groupOf(s, list[i].key).toUpperCase();
+        out.push({ name: it.name, value: val, uncertified: !!it.grey,
+                   slotKey: list[i].key, gun: true });
+        continue;
+      }
+      if (it.kind === 'turret') val = 'automatic';
       else if (it.kind === 'shield') val = Math.round(s.shieldHp) + ' / ' + it.cap;
       else if (it.kind === 'heatshield') val = it.shed + ' units/s';
       else if (it.kind === 'reactor') val = '+' + it.powerBonus.toFixed(1) + ' MW';
@@ -1782,7 +1813,241 @@
     ], '#7e93b3', '#cfe0ff', Math.min(360, pw - 60));
   }
 
-  /* --- F10: manoeuvre nodes ---------------------------------------------- */
+  /* --- F10: the manifest --------------------------------------------------
+   * What you are carrying, who it belongs to, and what it is worth — the
+   * three questions a hold raises, which until now were answered on three
+   * different screens or not at all.
+   *
+   * It is not a second inventory. F5 lists the hold and lets you throw
+   * things out of it; this page is about the CARGO'S OBLIGATIONS. Which
+   * tonnes are spoken for by a contract and must not be sold, which tonnes
+   * are illegal to be carrying at all, and where in this system the rest of
+   * it is worth the most. Selling contract freight by accident and finding
+   * out at the deadline is the specific mistake this exists to prevent. */
+  function bestMarketFor(cid) {
+    var sys = G.sys;
+    if (!sys || !sys.bodies) return null;
+    var best = null;
+    for (var i = 0; i < sys.bodies.length; i++) {
+      var b = sys.bodies[i];
+      if (!b.market) continue;
+      var q = Eco.price(b, cid, G.t);
+      if (!q || q.sell === null) continue;
+      if (!best || q.sell > best.sell) best = { sell: q.sell, port: b };
+    }
+    return best;
+  }
+
+  /* Tonnes of each commodity that a signed contract is expecting to see
+   * delivered. Keyed by commodity, because two hauls of grain are four
+   * tonnes of grain you cannot touch, not two separate piles. */
+  function committedTonnes() {
+    var out = {}, list = G.missions || [];
+    for (var i = 0; i < list.length; i++) {
+      var m = list[i];
+      if (!m || !m.cid || !(m.tonnes > 0)) continue;
+      out[m.cid] = (out[m.cid] || 0) + m.tonnes;
+    }
+    return out;
+  }
+
+  function drawManifestScreen(ctx, w, bottom) {
+    var s = G.ship;
+    var port = s.docked ? G.sys.byId[s.docked] : null;
+    var top = modeFrame(ctx, w, bottom, 'CARGO MANIFEST',
+                        port ? 'M trade   ·   F5 to jettison'
+                             : 'best prices are in this system only');
+    var pad = 14;
+    var colH = bottom - top - pad * 2;
+    var leftW = Math.min(620, w * 0.55);
+    var held = heldCargo();
+    var owed = committedTonnes();
+
+    /* --- the hold, left --- */
+    panelBox(ctx, pad, top + pad, leftW, colH, 'HOLD MANIFEST');
+
+    /* Four columns, and the status one is LEFT-aligned with a lane of its
+     * own. Right-aligning it against a fraction of the panel put "free to
+     * sell" straight through the tonnage — "12 tfree to sell" — and welded
+     * the two headers into "STATUSBEST IN SYSTEM". Tests cannot see either;
+     * only looking at it can. */
+    var cName = pad + 16;
+    var cTon = pad + leftW * 0.45;          // right-aligned
+    var cStat = pad + leftW * 0.49;         // left-aligned, its own lane
+    var cVal = pad + leftW - 16;            // right-aligned
+    /* Clipped to the lane it has, in characters, at the width this font
+     * actually measures rather than the width I assumed: "Structural
+     * alloys" ran straight into the tonnage at 12px because 8.4 px/char is
+     * not 7.2. Derived, so a narrower panel clips harder on its own. */
+    var nameChars = Math.max(6, Math.floor((cTon - cName - 34) / 8.4));
+
+    var hy = top + pad + 46;
+    ctx.save();
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText('COMMODITY', cName, hy);
+    ctx.fillText('STATUS', cStat, hy);
+    ctx.textAlign = 'right';
+    ctx.fillText('TONNES', cTon, hy);
+    ctx.fillText(port ? 'VALUE HERE' : 'BEST HERE', cVal, hy);
+    ctx.textAlign = 'left';
+    ctx.restore();
+
+    /* Tall enough for the second line every row can carry — the port whose
+     * price is being quoted. A variable row height meant a row with a port
+     * name pushed the one under it and the list stopped lining up. */
+    var rowH = 32, total = 0, contraT = 0, y = hy + 10;
+    if (!held.length) {
+      ctx.save();
+      ctx.font = '13px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('HOLD EMPTY', pad + 16, y + 20);
+      ctx.font = '11px ui-monospace, monospace';
+      ctx.fillText(s.cargoCap + ' tonnes available.', pad + 16, y + 40);
+      ctx.restore();
+    }
+    for (var i = 0; i < held.length; i++) {
+      if (y + rowH > top + pad + colH - 10) {
+        ctx.save();
+        ctx.font = '10px ui-monospace, monospace';
+        ctx.fillStyle = MFD_DIM;
+        ctx.fillText('+' + (held.length - i) + ' more', pad + 16,
+                     top + pad + colH - 14);
+        ctx.restore();
+        break;
+      }
+      var it = held[i];
+      var row = Eco.BY_ID[it.cid];
+      var illegal = !!(row && row.contraband);
+      var due = owed[it.cid] || 0;
+      if (illegal) contraT += it.tonnes;
+
+      /* The status word is the whole point of the page, so it is the only
+       * thing on the row allowed a colour of its own. */
+      var status = 'free to sell', ink = MFD_DIM;
+      if (illegal) { status = 'CONTRABAND'; ink = '#ff8a76'; }
+      else if (due >= it.tonnes) { status = 'CONTRACT'; ink = '#ffd36b'; }
+      else if (due > 0) { status = due + ' t on contract'; ink = '#ffd36b'; }
+
+      var mk = port ? Eco.price(port, it.cid, G.t) : null;
+      var worth = null, where = null;
+      if (mk && mk.sell !== null) worth = mk.sell * it.tonnes;
+      else if (!port) {
+        var b2 = bestMarketFor(it.cid);
+        if (b2) { worth = b2.sell * it.tonnes; where = b2.port.name; }
+      }
+      if (worth !== null && !illegal) total += worth;
+
+      ctx.save();
+      ctx.font = '12px ui-monospace, monospace';
+      ctx.fillStyle = it.cid === 'waste' ? '#ffb86b' : MFD_INK;
+      ctx.fillText(clipText(it.name, nameChars), cName, y + 15);
+      ctx.font = '10px ui-monospace, monospace';
+      ctx.fillStyle = ink;
+      ctx.fillText(status, cStat, y + 15);
+      ctx.textAlign = 'right';
+      ctx.font = '12px ui-monospace, monospace';
+      ctx.fillStyle = MFD_INK;
+      ctx.fillText(it.tonnes.toFixed(it.tonnes < 1 ? 2 : 0) + ' t', cTon, y + 15);
+      ctx.font = '11px ui-monospace, monospace';
+      ctx.fillText(worth !== null ? fmtCredits(worth) : '—', cVal, y + 15);
+      if (where) {
+        ctx.font = '9px ui-monospace, monospace';
+        ctx.fillStyle = MFD_DIM;
+        ctx.fillText(clipText(where, 20), cVal, y + 26);
+      }
+      ctx.textAlign = 'left';
+      ctx.restore();
+      y += rowH;
+    }
+
+    /* --- contracts and the totals, right --- */
+    var rx = pad * 2 + leftW, rw = w - rx - pad;
+    var conH = colH * 0.62;
+    panelBox(ctx, rx, top + pad, rw, conH, 'WHAT IS SPOKEN FOR');
+
+    var list = G.missions || [];
+    var cy2 = top + pad + 46;
+    if (!list.length) {
+      ctx.save();
+      ctx.font = '11px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      /* Clipped to the panel it is drawn in, in characters, because this
+       * panel is whatever the window leaves it and the sentence is not. */
+      ctx.fillText(clipText('No contracts signed. Everything aboard is yours.',
+                            Math.max(8, Math.floor((rw - 32) / 6.1))),
+                   rx + 16, cy2 + 6);
+      ctx.restore();
+    }
+    for (var c = 0; c < list.length; c++) {
+      if (cy2 + 34 > top + pad + conH - 8) break;
+      var m = list[c];
+      var left = m.deadline - G.t;
+      var late = left <= 0;
+      ctx.save();
+      ctx.font = '11px ui-monospace, monospace';
+      ctx.fillStyle = late ? '#ff8a76' : MFD_INK;
+      ctx.fillText(clipText((m.tonnes || 0) + ' t ' + (m.cid || '—'), 26),
+                   rx + 16, cy2 + 6);
+      ctx.font = '10px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      var dst = m.to && G.sys.byId[m.to] ? G.sys.byId[m.to].name : (m.toName || '—');
+      ctx.fillText(clipText('to ' + dst, 30), rx + 16, cy2 + 20);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = late ? '#ff8a76' : (left < 86400 ? '#ffd36b' : MFD_DIM);
+      ctx.fillText(late ? 'OVERDUE' : fmtTime(left) + ' left', rx + rw - 16, cy2 + 6);
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText(fmtCredits(m.pay || 0), rx + rw - 16, cy2 + 20);
+      ctx.textAlign = 'left';
+      ctx.restore();
+      cy2 += 34;
+    }
+
+    var sy2 = top + pad + conH + pad;
+    var sh = top + pad + colH - sy2;
+    panelBox(ctx, rx, sy2, rw, sh, 'TOTALS');
+    var used = 0;
+    for (var u = 0; u < held.length; u++) used += held[u].tonnes;
+    var lines = [
+      ['Hold', used.toFixed(used < 1 ? 2 : 0) + ' / ' + s.cargoCap + ' t'],
+      ['Credits', fmtCredits(s.credits)],
+      [port ? 'Worth here' : 'Best in system', fmtCredits(total)]
+    ];
+    if (contraT > 0) lines.push(['Contraband aboard', contraT.toFixed(0) + ' t']);
+    ctx.save();
+    ctx.font = '11px ui-monospace, monospace';
+    for (var L = 0; L < lines.length; L++) {
+      var ly = sy2 + 46 + L * 18;
+      if (ly > sy2 + sh - 8) break;
+      var warn = lines[L][0] === 'Contraband aboard';
+      ctx.fillStyle = warn ? '#ff8a76' : MFD_DIM;
+      ctx.fillText(lines[L][0], rx + 16, ly);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = warn ? '#ff8a76' : MFD_INK;
+      ctx.fillText(lines[L][1], rx + rw - 16, ly);
+      ctx.textAlign = 'left';
+    }
+    ctx.restore();
+  }
+
+  /* The framed box every panel on these pages is drawn inside. Was copied
+   * three times before this existed. */
+  function panelBox(ctx, x, y, w, h, title) {
+    ctx.save();
+    ctx.fillStyle = '#040a0e';
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = MFD_EDGE;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 2, y + 2, w - 4, h - 4);
+    ctx.fillStyle = '#12414f';
+    ctx.fillRect(x + 4, y + 4, w - 8, 19);
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText(title, x + 10, y + 18);
+    ctx.restore();
+  }
+
+  /* --- Shift+F2: manoeuvre nodes ------------------------------------------ */
   function drawNodeScreen(ctx, w, bottom) {
     var top = modeFrame(ctx, w, bottom, 'MANOEUVRE PLANNING',
                         'I place   ·   ± adjust   ·   \\ execute');
@@ -2093,6 +2358,7 @@
       case 'missions':   drawMissionScreen(ctx, w, bottom); return true;
       case 'jump':       drawJumpScreen(ctx, w, bottom); return true;
       case 'aim':        drawAimScreen(ctx, w, bottom); return true;
+      case 'manifest':   drawManifestScreen(ctx, w, bottom); return true;
       case 'node':       drawNodeScreen(ctx, w, bottom); return true;
     }
     return false;

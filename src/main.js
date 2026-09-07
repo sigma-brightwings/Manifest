@@ -1232,10 +1232,14 @@
         e.preventDefault();
         if (!G.hyper && !G.market) {
           var fkIdx = parseInt(fk[1], 10) - 1;
+          /* Shift+F2 is the manoeuvre planner, parked beside the orbit map
+           * it belongs with after F10 went to the manifest. Same shift-splits-
+           * a-key idea as G, T and / elsewhere in this file. */
+          if (fkIdx === 1 && e.shiftKey) selectPanel(modeIndex('node'));
           /* F1 twice: already flying, so the second press flips between the
            * cockpit and the exterior chase camera. One key, both ways of
            * looking at your own ship. */
-          if (fkIdx === 0 && flying()) toggleView();
+          else if (fkIdx === 0 && flying()) toggleView();
           else selectPanel(fkIdx);
         }
         return;
@@ -1792,8 +1796,23 @@
     { key: 'F7',  label: 'MISSIONS', id: 'missions',   icon: 'missions' },
     { key: 'F8',  label: 'JUMP',     id: 'jump',       icon: 'jump' },
     { key: 'F9',  label: 'AIM',      id: 'aim',        icon: 'aim' },
-    { key: 'F10', label: 'NODES',    id: 'node',       icon: 'node' }
+    { key: 'F10', label: 'MANIFEST', id: 'manifest',   icon: 'manifest' },
+    /* Off the bar and off the function keys, and it lost that slot on its
+     * merits: the burn controls — I to place, ± to adjust, \ to execute —
+     * are global keys that already work from the cockpit, so this screen was
+     * never the planner, only its readout. The orbit data it printed reads
+     * off the MFDs now. Shift+F2 keeps it next door to the orbit map, which
+     * is what you are looking at when you plan a burn anyway. */
+    { key: 'Shift+F2', label: 'NODES', id: 'node', icon: 'node', hidden: true }
   ];
+  /* The ten that get a slot on the bar and a function key. Anything past
+   * them is reachable, but by its own binding. */
+  var BAR_MODES = 10;
+
+  function modeIndex(id) {
+    for (var mi = 0; mi < MODES.length; mi++) if (MODES[mi].id === id) return mi;
+    return 0;
+  }
   /* The old name, kept pointing at the new table: the manoeuvre-node work
    * reaches for PANELS and there is no reason to make it care. */
   var PANELS = MODES;
@@ -6480,7 +6499,10 @@
    * Every slot is clickable, because a bar of labelled buttons that you can
    * only reach from the keyboard is a keyboard shortcut wearing a costume. */
   function drawIconBar(ctx, w, y) {
-    var n = MODES.length;
+    /* Ten slots, not MODES.length: the manoeuvre planner lives past the end
+     * of the bar on its own binding, and an eleventh button would squeeze
+     * the other ten to say so. */
+    var n = BAR_MODES;
     var slotW = Math.min(132, (w - 12) / n);
     var x0 = (w - slotW * n) / 2;
 
@@ -6575,6 +6597,19 @@
         ctx.beginPath();
         ctx.moveTo(cx - r * 0.85, cy); ctx.lineTo(cx + r * 0.85, cy);
         ctx.stroke();
+        break;
+      case 'manifest':                      // a clipboard with ruled lines
+        ctx.rect(cx - r * 0.7, cy - r * 0.9, r * 1.4, r * 1.8);
+        ctx.stroke();
+        ctx.beginPath();                    // the clip at the top
+        ctx.rect(cx - r * 0.26, cy - r * 1.06, r * 0.52, r * 0.28);
+        ctx.stroke();
+        for (var ml = 0; ml < 3; ml++) {
+          var my = cy - r * 0.3 + ml * r * 0.45;
+          ctx.beginPath();
+          ctx.moveTo(cx - r * 0.42, my); ctx.lineTo(cx + r * 0.42, my);
+          ctx.stroke();
+        }
         break;
       case 'galaxy':                        // scattered stars
         ctx.arc(cx, cy, r * 0.95, 0, K.TAU);

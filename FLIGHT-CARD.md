@@ -26,7 +26,8 @@ reading, and the old 178-pixel instrument band was pretending you could do both.
 | `F7` | Mission status |
 | `F8` | Jump to hyperspace |
 | `F9` | Keyboard / mouse aim |
-| `F10` | Manoeuvre planning |
+| `F10` | Cargo manifest |
+| `Shift`+`F2` | Manoeuvre planning |
 
 `1`–`0` do the same thing, for browsers with opinions about F1 and F5. `Esc`
 always comes back to the cockpit. **The icon bar along the bottom is clickable,
@@ -162,7 +163,8 @@ Everything upgradable is on `F5` while docked, next to hull repairs.
 
 **Fire groups.** A hull with more than one hardpoint has two triggers, because
 a beam strips a shield and a pulse opens a hull, and carrying both is the point.
-Every gun starts on group A; move one to B on the `F5` → FIT page. Then:
+Every gun starts on group A; **click a gun on `F5` to move it to B** — from the
+fitted list, in flight, not only at a yard. Then:
 
 | | Group A | Group B | Missile |
 |---|---|---|---|
