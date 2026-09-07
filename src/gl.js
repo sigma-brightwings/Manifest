@@ -402,6 +402,7 @@
     'in vec3 aNrm;',
     'in vec3 aCol;',
     'in float aEmis;',
+    'in float aAlpha;',
     'uniform vec3 uModelRel;',     // model origin, already relative to the eye
     'uniform mat3 uRot;',          // the frame's right/up/fwd, as a basis
     'uniform float uScale;',
@@ -409,9 +410,11 @@
     'uniform float uFlen;',
     'uniform vec2 uCenterPx, uViewportPx;',
     'out vec3 vNrm; out vec3 vCol; out float vEmis; out vec3 vRel;',
+    'out float vAlpha;',
     'void main() {',
     '  vec3 rel = uModelRel + uRot * (aPos * uScale);',
     '  vNrm = uRot * aNrm; vCol = aCol; vEmis = aEmis; vRel = rel;',
+    '  vAlpha = aAlpha;',
     '  float depth = dot(rel, uFwd);',
     '  if (depth <= 1e-7) { gl_Position = vec4(2.0, 2.0, 0.0, 1.0); return; }',
     '  float k = uFlen / depth;',
@@ -430,9 +433,14 @@
     '#version 300 es',
     'precision highp float;',
     'in vec3 vNrm; in vec3 vCol; in float vEmis; in vec3 vRel;',
+    'in float vAlpha;',
     'uniform vec3 uSunDir;',
     'uniform vec3 uFwd;',
     'uniform float uNear, uInvLogRange;',
+    /* Whole-mesh opacity, multiplied into the per-face alpha. 1.0 is the
+     * default and the opaque path short-circuits on it, so a hull costs one
+     * float compare and nothing else. */
+    'uniform float uAlpha;',
     /* Re-entry plasma. uGlow is Sim.updateHeating's normalised flux and
      * uWind is the direction the air is arriving from, both already
      * computed by the flight model — the shader invents nothing, it only
@@ -440,7 +448,55 @@
     'uniform float uGlow;',
     'uniform vec3 uWind;',
     'out vec4 frag;',
+
+    /* ---- SCREEN-DOOR TRANSPARENCY, and why it is not alpha blending -----
+     *
+     * An 8x8 ordered dither: keep the fragment if its opacity beats this
+     * pixel's threshold, throw it away otherwise. What survives is a fine
+     * mesh of holes, and at the size these things occupy on screen the eye
+     * reads that as glass.
+     *
+     * THE REASON IT IS THIS AND NOT BLENDING is depth. This pass draws
+     * hulls in queue order with the depth buffer on and no sorting
+     * whatsoever — which is the whole trick that lets a ship pass behind a
+     * planet correctly. Real alpha blending needs back-to-front order per
+     * triangle, so making one face translucent would have dragged a sort
+     * into a pass deliberately built without one, and a merged mesh like a
+     * port's dressing cannot be sorted as a unit anyway: the glass and the
+     * crop it covers are in the same draw call. A discarded fragment writes
+     * no depth and a kept one writes its own, so this needs no sort, no
+     * blend state, and no separate pass. It composites correctly against
+     * anything, including other dithered glass.
+     *
+     * What it costs: the pattern is locked to screen pixels, so it crawls
+     * against a moving hull rather than sticking to it, and below a few
+     * pixels across there are not enough samples left for the shape to
+     * read. Both are acceptable for a greenhouse pane the size of a
+     * thumbnail; neither would be for a full-screen canopy.
+     *
+     * The matrix is the standard recursive Bayer, built by interleaving the
+     * bits of (x^y) and y. Verified in node before it was written here:
+     * over an 8x8 tile it is a bijection onto 0..63, and at 50% every 2x2
+     * block is exactly half lit, which is what makes it disperse instead of
+     * clump. Get those bit positions wrong and it still compiles — it just
+     * quietly turns into blotches. */
+    'float bayer8(ivec2 p) {',
+    '  int x = (p.x ^ p.y) & 7;',
+    '  int y = p.y & 7;',
+    '  int v = ((x >> 2) & 1)',
+    '        | (((y >> 2) & 1) << 1)',
+    '        | (((x >> 1) & 1) << 2)',
+    '        | (((y >> 1) & 1) << 3)',
+    '        | ((x & 1) << 4)',
+    '        | ((y & 1) << 5);',
+    /* +0.5 centres each level in its bucket, so alpha 1/64 keeps one pixel
+     * in 64 rather than none, and alpha 1.0 never discards. */
+    '  return (float(v) + 0.5) / 64.0;',
+    '}',
+
     'void main() {',
+    '  float a = vAlpha * uAlpha;',
+    '  if (a < 0.999 && a < bayer8(ivec2(gl_FragCoord.xy))) discard;',
     '  float depth = dot(vRel, uFwd);',
     '  gl_FragDepth = clamp(log2(max(uNear, depth) / uNear) * uInvLogRange, 0.0, 1.0);',
     '  vec3 n = normalize(vNrm);',
@@ -575,7 +631,8 @@
       meshUni = uniforms(gl, meshProg, ['uModelRel', 'uRot', 'uScale',
                                         'uRight', 'uUp', 'uFwd', 'uFlen',
                                         'uCenterPx', 'uViewportPx', 'uSunDir',
-                                        'uNear', 'uInvLogRange', 'uGlow', 'uWind']);
+                                        'uNear', 'uInvLogRange', 'uGlow', 'uWind',
+                                        'uAlpha']);
     } catch (e) {
       if (global.console) console.error(e.message);
       GL.available = false; gl = null; return false;
@@ -681,6 +738,7 @@
     var nrm = new Float32Array(tris * 9);
     var col = new Float32Array(tris * 9);
     var emi = new Float32Array(tris * 3);
+    var alp = new Float32Array(tris * 3);
 
     for (var i = 0; i < tris; i++) {
       var f = mesh.f[i];
@@ -693,9 +751,23 @@
       var nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
       nx /= nl; ny /= nl; nz /= nl;
 
-      var raw = (mesh.c && mesh.c[i]) || '#b8c6d8';
-      var lit = String(raw).charAt(0) === '!';
-      var rgbv = rgb(lit ? String(raw).slice(1) : raw);
+      /* The face-material prefixes. '!' is emissive, '~h' is glass at
+       * opacity h/15 — see FACE_MATERIALS in render.js, which is where the
+       * convention is documented and where paintMesh parses the identical
+       * two characters for the 2D path. Parsed in both rather than shared,
+       * because gl.js loads without render.js and should keep doing so. */
+      var raw = String((mesh.c && mesh.c[i]) || '#b8c6d8');
+      var lit = raw.charAt(0) === '!';
+      var glass = raw.charAt(0) === '~';
+      var fa = 1;
+      if (glass) {
+        var h = parseInt(raw.charAt(1), 16);
+        fa = (h >= 0 && h <= 15) ? h / 15 : 1;
+        raw = raw.slice(2);
+      } else if (lit) {
+        raw = raw.slice(1);
+      }
+      var rgbv = rgb(raw);
 
       var tri = [a, b, c];
       for (var k = 0; k < 3; k++) {
@@ -704,6 +776,7 @@
         nrm[o] = nx; nrm[o + 1] = ny; nrm[o + 2] = nz;
         col[o] = rgbv[0]; col[o + 1] = rgbv[1]; col[o + 2] = rgbv[2];
         emi[i * 3 + k] = lit ? 1 : 0;
+        alp[i * 3 + k] = fa;
       }
     }
 
@@ -718,6 +791,7 @@
     }
     attr(pos, 'aPos', 3); attr(nrm, 'aNrm', 3);
     attr(col, 'aCol', 3); attr(emi, 'aEmis', 1);
+    attr(alp, 'aAlpha', 1);
     gl.bindVertexArray(null);
 
     mesh._gl = { vao: vaoM, count: tris * 3, id: ++meshSeq };
@@ -726,7 +800,7 @@
 
   /* Queue one hull. `frame` is the renderer's own {pos, right, up, fwd} —
    * the same object paintMesh takes — and `scale` its length in km. */
-  GL.queueMesh = function (cam, frame, mesh, scale, sunDir, glow, wind) {
+  GL.queueMesh = function (cam, frame, mesh, scale, sunDir, glow, wind, alpha) {
     if (!gl || !meshProg || !mesh || !mesh.f || !mesh.f.length) return false;
     /* The double-precision subtraction that keeps this usable. Everything
      * the shader sees is small; the big numbers never leave JavaScript. */
@@ -738,7 +812,11 @@
     meshQueue.push({ mesh: mesh, rel: rel, scale: scale, sun: sunDir,
                      r: frame.right, u: frame.up, f: frame.fwd, cam: cam,
                      glow: (glow > 0 && wind) ? glow : 0,
-                     wind: wind || ZERO3 });
+                     wind: wind || ZERO3,
+                     /* Undefined means opaque, not zero. A caller that has
+                      * never heard of alpha must not get an invisible hull. */
+                     alpha: (typeof alpha === 'number' && alpha >= 0 && alpha < 1)
+                            ? alpha : 1 });
     return true;
   };
 
@@ -903,10 +981,16 @@
 
   function drawMeshes() {
     if (!meshQueue.length) return;
-    /* Opaque, and depth-tested against the planets already in the buffer —
-     * which is what lets a ship pass behind a world instead of being
-     * painter-sorted in front of it. Blending off: every hull face is
-     * solid, and leaving it on would cost fill rate for nothing. */
+    /* Depth-tested against the planets already in the buffer — which is
+     * what lets a ship pass behind a world instead of being painter-sorted
+     * in front of it.
+     *
+     * BLENDING STAYS OFF even now that some faces are translucent, and that
+     * is the point of doing it with a dither: glass here is a pattern of
+     * kept and discarded fragments, not a blend, so this pass still needs
+     * no blend state and — more importantly — still needs no sort. Turning
+     * blending on would cost fill rate for nothing and would not make the
+     * glass any more correct. */
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LESS);
     gl.disable(gl.BLEND);
@@ -931,6 +1015,7 @@
       gl.uniform3f(meshUni.uSunDir, m.sun.x, m.sun.y, m.sun.z);
       gl.uniform1f(meshUni.uGlow, m.glow);
       gl.uniform3f(meshUni.uWind, m.wind.x, m.wind.y, m.wind.z);
+      gl.uniform1f(meshUni.uAlpha, m.alpha);
       /* Column-major, and the columns are the frame's own axes — so a
        * local +x lands along `right`, +y along `up`, +z along `fwd`,
        * matching localToWorld() in render.js exactly. */

@@ -895,25 +895,58 @@
   var BERTH_COUNT = 6;           // five interchangeable, plus the large one
   var BAY_LIFT = 0.04;           // the model stands this proud of the ground
 
+  /* What a MODELLED bay says about itself, or null. Field by field, so a
+   * model that declares a floor and a mouth but no chamber gets its own
+   * floor and mouth and the shared table's chamber — rather than an
+   * all-or-nothing swap that would punish a half-finished model.
+   *
+   * Reached through `global` at call time rather than bound at load:
+   * render.js owns the port library and loads after this file. Ports are
+   * keyed by ROLE, which is what the model files are named for.
+   *
+   * These numbers are load-bearing. The camera clamps against chamberX/Y
+   * and floorZ/ceilZ, and berthOffset parks ships against berthY — so this
+   * is the function that decides whether a modelled shed is somewhere a
+   * ship can actually sit, and it is why the converter warns about a berth
+   * outside its own chamber instead of quietly writing it out. */
+  function modelledBay(port) {
+    var R = global.Render;
+    if (!R || !R.libPort || !R.portModelFor || !port) return null;
+    /* THE SAME KEY THE RENDERER DRAWS WITH. Not a second guess at it: if
+     * this picked 'surface' where portModelFor picks 'bay' — which an
+     * earlier version of this function did — the game would draw one shed
+     * and park ships to another one's dimensions. */
+    var got = R.libPort(R.portModelFor(port));
+    return got && got.geom ? got.geom : null;
+  }
+
   function bayGeometry(port) {
     var r = port.radius || 1;
     var depth = (port.shaftDepth || 0) / r;
+    var m = modelledBay(port) || {};
+    var num = function (a, b) { return typeof a === 'number' ? a : b; };
+    var floorZ = num(m.floorZ, -depth);
     return {
       depth: depth,
-      mouthR: BAY_MOUTH_R,
-      throatR: BAY_THROAT_R,
-      chamberX: BAY_CHAMBER_X,
-      chamberY: BAY_CHAMBER_Y,
-      floorZ: -depth,                       // top face of the hangar floor
-      ceilZ: -depth + BAY_HEADROOM,
-      berthY: BAY_BERTH_Y,
-      standoff: BAY_STANDOFF,
-      berths: BERTH_COUNT,
+      mouthR: num(m.mouthR, BAY_MOUTH_R),
+      throatR: num(m.throatR, BAY_THROAT_R),
+      chamberX: num(m.chamberX, BAY_CHAMBER_X),
+      chamberY: num(m.chamberY, BAY_CHAMBER_Y),
+      floorZ: floorZ,                       // top face of the hangar floor
+      /* HEADROOM IS A HEIGHT, NOT A CEILING. A model gives an absolute
+       * ceilZ; the constant gives a height above the floor. Reading the
+       * model's ceiling as if it were a height would put the roof under the
+       * floor of any deep bay, so the two are combined here rather than
+       * being allowed to look interchangeable. */
+      ceilZ: num(m.ceilZ, floorZ + BAY_HEADROOM),
+      berthY: num(m.berthY, BAY_BERTH_Y),
+      standoff: num(m.standoff, BAY_STANDOFF),
+      berths: num(m.berths, BERTH_COUNT),
       /* How far the whole model stands proud of the ground. It exists so
        * the apron does not z-fight the planet's own surface, and the sim
        * has to add it too or the ship parks a few tens of metres under
        * the floor it is supposed to be standing on. */
-      lift: BAY_LIFT
+      lift: num(m.lift, BAY_LIFT)
     };
   }
 

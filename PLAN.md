@@ -1,8 +1,9 @@
 # Manifest — the plan
 
-**The single design document.** `DESIGN-NOTES-WEAPONS-AND-BEACON.md` has
-been folded into this file and removed; anything that referred to it means
-the weapons and beacon sections here.
+**The single design document.** `DESIGN-NOTES-WEAPONS-AND-BEACON.md` and
+`SLIPSPACE-TODO.md` have both been folded into this file; anything that
+referred to either one means the weapons/beacon sections and Phase 15
+(slipspace) here.
 
 It began as a plan for outfitting and combat and grew past that. It now
 covers weapons, the law, debris and salvage, mining, the economy and how
@@ -37,6 +38,12 @@ verified by loading the modules and inspecting what is actually there.
 | **The settlement chain** *(not originally a phase)* | `Eco.setPressure` 0.25–3.0, `Eco.galaxyProfile`, byte-identical at 1.0, tested |
 | **Wider habitable zone, more planets** *(not originally a phase)* | 6–12 planets, optimistic HZ, tighter orbit spacing; 2+ habitable worlds in half of systems |
 | **Model pipeline** *(not originally a phase)* | `glb2hulls` splits cockpit interiors from hulls and emits the canopy box; 33 redesigned models imported |
+| **Slipspace core** *(not originally a phase)* | Mass-scaled transit time, interstellar lane timetable, wakes and wake scanning, `Shift+J` wake-following, a flyable interdiction corridor with HUD, the interstellar drop-out locale — see Phase 15 |
+| **Phase 4 — death, debris and salvage** | Eight-shard mesh pool built once, wreckage spawned on `killNpc` and hashed off the victim, a cheap ballistic path in `sys.canisters` with no rail, a global cap, salvage through the existing scoop — see Phase 4 |
+| **Slipspace outfitting and the interdiction payoff** *(Phase 15 items 1, 2, 6)* | Both slipspace modules are `EQUIPMENT` in four classes each; a torn-out hauler now carries a hold worth taking and a purse it can only hand over once; bolts draw as elongating streaks |
+| **Shields on both sides, and impact effects** *(not originally a phase)* | NPC shields gated by class and by the model's own size letter, `splitDamage` as one rule for everyone, a form-fitting shell that flares and dissipates where it is hit, a hull bloom where a shot gets through, and a canopy flare so you can see your own — see the shield section. **Tested, never looked at** |
+| **A berthed ship is inside a building** *(not originally a phase)* | `enclosedPort()` is the single predicate; berthed at a surface port the stars, grid, orbit lines, every other body, the trajectory, the traffic and the canopy sun-glare are all suppressed and only the port itself is drawn. F2 is exempt — asking for the orbit chart from inside a hangar must not answer with a blank map |
+| **Dithered glass** *(not originally a phase)* | Face-material prefixes: `!` emissive, `~h` glass at `h/15`. An 8×8 ordered-dither `discard` in the mesh shader for the GPU path, real `globalAlpha` in `paintMesh` for the 2D one. First consumer is the greenhouse panes, which had been opaque — sealing the emissive crop that is the whole point of the building inside an unlit drum. **Tested, never looked at** |
 
 ### Built but inert ⚠️
 
@@ -53,11 +60,35 @@ verified by loading the modules and inspecting what is actually there.
   which group is firing from the cockpit.** The F5 FIT page is the only
   place group membership is visible, and mid-fight that is the wrong place.
   An MFD readout is owed.
+*(The two slipspace entries that were here — unpurchasable modules, and an
+interdiction that ended in an empty room — are both closed. See Phase 15.)*
 
 ### Not started ☐
 
-Phases 4 (apart from the pirate-manifest fix, pulled forward), 5 (apart
-from heat sinks), 6, 7, 8, 9, 10, 11, 12, 13.
+Phases 5 (apart from heat sinks), 6, 7, 8, 9, 10, 11, 12, 13, and the rest
+of 15 — escort for hire, ship-to-ship trade, and flares.
+
+**Phase 4 is now built**, which unblocks two things that were waiting on it:
+the ejected heat sink can become the physical scanner return it was always
+meant to be (`G.sinkEjections` is still written and still unread), and
+mining fragments in Phase 5 are the same shards from a second source.
+
+**The shield shell deliberately does NOT use the new dither**, and this is
+worth writing down because unifying them looks like an obvious tidy-up. The
+shell is drawn *additively* on the 2D layer, and its rim brightness is a
+free consequence of overlapping faces adding up along the silhouette. A
+dither cannot add: a kept fragment replaces and a discarded one contributes
+nothing, so moving the shell onto the dithered mesh path would lose the rim
+entirely and buy nothing. Dithering replaces *source-over* transparency, not
+additive. The glass domes are the right consumer; the shield is not.
+
+**What the dither costs, for whoever reaches for it next.** The pattern is
+locked to screen pixels, so it crawls against a moving hull instead of
+sticking to it, and below a few pixels across there are not enough samples
+left for the shape to read at all. Fine for a greenhouse pane the size of a
+thumbnail. Not fine for a full-screen canopy — that one wants real blending
+and the sort that comes with it. The geodesic glass domes still being
+modelled are the case this was built for and are not in yet.
 
 **The seed-discipline correction is now closed.** `combat.js` no longer
 invents a pirate's manifest with `Math.random()`; `manifestFor` hashes it
@@ -699,7 +730,190 @@ key. Group assignment lives in the yard, not in a menu mid-flight.
 
 ---
 
-## Phase 4 — death, debris, salvage (`combat.js`, `sim.js`, `render.js`)
+## Shields, on both sides of the gun — WRITTEN, UNRUN
+
+⚠️ **Nothing in this section has been executed.** It was written in a session
+where Desktop Commander would not connect, so the suites could not be run and
+neither could `node --check`. The tests below the code were written at the
+same time and are equally unrun. Treat every number here as intended rather
+than as measured, except the two marked as measured, which came from a probe
+run earlier in the same session while the shell was still connected.
+
+### The find that made this bigger than an animation
+
+The request was for a bloom on the hull and an absorbing shield bubble. The
+first thing the work turned up is that **`vsShield` and `vsHull` have been on
+every gun in the catalogue since the particle retier and nothing has ever
+read them.** There was exactly one shield in the game, it belonged to the
+player, and the player's own guns never hit it — so the pulse-soaks /
+beam-drains interaction that this document spends a page arguing for has been
+inert the whole time, along with the entire argument for carrying two kinds
+of gun.
+
+Giving NPCs shields is what switches it on, and that matters more than the
+effect that asked for it.
+
+**Measured, before the shell went down** — a naval cutter, 90 shield over 260
+hull, hit with a flat 20-point shot so only the delivery differs:
+
+| | shots to kill |
+|---|---|
+| beam alone | 22 |
+| pulse alone | 19 |
+| intermittent alone | 18 |
+| **beam, then pulse** | **14** |
+
+Twenty-two per cent better than the best single weapon, and the first time in
+this project that a second hardpoint has been worth anything. Fire groups were
+built for exactly this and have had nothing to reward until now.
+
+### Who carries one
+
+Per class, in the same voice as `NPC_HULL`. A generator is 4,800 credits, two
+megawatts and four tonnes, so warships and money have them and working hulls
+would rather have the tonnage.
+
+| | shield | |
+|---|---|---|
+| shuttle | 0 / 0 / 15 | per size letter — only the large variant has the room |
+| escape pod | 0 | never, at any size |
+| freighter, tanker, hauler | 0 | a working hull would rather have the four tonnes |
+| pirate | 20 | grey-market kit on a hull one bad week from scrap |
+| tender | 25 | unarmed, and built to survive somebody else's fight |
+| police | 30 | |
+| merc | 40 | this is what you are paying for |
+| liner | 45 | insured, and full of people |
+| navy | 90 | you do not crack one of these with a photon |
+
+**Size is a real property and it already existed.** Every imported hull comes
+as `-s`, `-m` and `-l` — thirteen families, thirty-nine models — and
+`Render.HULL_ASSIGN` says which one a class flies. So the rule reads through
+that table rather than off a hardcoded number, which means
+`Render.assignHull('shuttle', 'shuttle-l')` moves the shield with the model,
+as it should. An earlier attempt gated on `spec.size` in kilometres instead;
+that was replaced because it would have zeroed a large shuttle too, and
+because the letter is what the assets actually carry.
+
+### What a hit looks like
+
+Three effects, and the point of having three is that **which one you see tells
+you whether the shield is holding**, from any distance and without reading a
+number.
+
+- **The shell.** The hull's own mesh inflated along its vertex normals by
+  0.12 of a hull length — about 1.2 m on a ten-metre courier, which is a
+  medium drive bell's width and the standoff the request asked for. Not a
+  sphere: a field projected from a hull has that hull's silhouette, which is
+  the one thing this renderer's mesh design says survives at combat range.
+  Memoised per kind, for the same reason the shard pool is fixed — `gl.js`
+  caches GPU buffers on the mesh object.
+- **The flare, and the dissipation, in one curve.** A bump centred on the
+  impact whose *width grows* toward the whole shell while its *height decays*.
+  Early it is a hard bright point, halfway a spreading glow, at the end a
+  faint even wash over everything, then nothing. Spot, spread, dissipate — no
+  ring to tune, no per-vertex state, and exact at any `t`, which is the same
+  property the rails and the market have and for the same reason.
+- **The bloom.** A hot sphere on the plating where a shot got through.
+  Deliberately a different *shape* from the shell flare rather than a
+  different colour: the flare spreads across a surface, the bloom sits on
+  one. A shot that punches through a failing shield produces both at once,
+  which is exactly what that moment is.
+
+**The hue is the gauge.** The field runs cold blue-white when it is holding,
+through amber, to hot red when it is nearly down — cool-to-hot being the same
+language the hull-temperature bar, the re-entry glow and the drive plume
+already speak, so it needs no explaining the first time you see it.
+
+**And you can see your own, from the seat.** You cannot see your own hull from
+the cockpit, so the whole feature would have been invisible in ordinary play.
+A soaked hit now blooms on the inside of the canopy *in the direction it came
+from* — which makes it a warning as well as an effect, because the direction
+is where the shooter is. A hit from behind, which `projectDir` cannot answer,
+pins to the correct edge of the view; dead astern goes to the bottom, because
+that is where you would flinch.
+
+### Two bugs caught by reading, not by playing
+
+Both were found reviewing the code with no way to run it, and both are the
+kind that hide:
+
+- **A zero-damage shot divided by zero.** `damageAtRange` takes a pion to
+  nearly nothing at the edge of its envelope, and `splitDamage` computed
+  `soaked / offered` with both at zero. A `NaN` written into `shieldHp` is a
+  ship that can never be hurt again and a shield bar that reads blank
+  forever. Nobody notices the shot that did nothing until every shot after it
+  does nothing too.
+- **The flare ran on the wrong clock.** Impacts were stamped in *sim* seconds
+  and the flash life is in *real* seconds, so at 500× warp a half-second
+  animation would have been over inside one frame. This file already had the
+  rule written down — `nowSeconds()`'s own comment says anything that
+  "blinks, flashes or pulses because it is a physical light" belongs on the
+  wall clock — and there was already a helper for it, so the fix was to use
+  the one that existed rather than add a second one to pick wrong.
+
+`spec.lastHitAt` stays on sim time on purpose, because what it gates is the
+shield's regeneration delay, which is a delay in the world rather than in the
+eye. Two clocks, two jobs.
+
+### Still owed
+
+- [ ] **Run it.** Ten suites, `node --check`, `lint-globals`.
+- [ ] **Cost the shell pass.** It is three transforms and three projections
+      per face, and an imported hull carries far more triangles than the
+      procedural ones. There is a `SHELL_MIN_PX` gate at 16 px with a
+      one-fill fallback below it, but the number was chosen rather than
+      measured and the per-face cost has not been put against the ~25 ms
+      predictor budget the way the debris field was.
+- [ ] **Look at it.** The alphas — 0.055 for the resting rim, 0.50 for the
+      flare — are guesses. Tests cannot say whether a field reads as a field.
+
+---
+
+## ✅ Phase 4 — death, debris, salvage — BUILT
+
+*Built as designed below, with the shard pool in `render.js`, the physics in
+`sim.js`, the spawn in `killNpc`, and the drawing and scoop in `main.js`.
+Four things worth recording — three where the design's own argument decided
+it, and one that was measured:*
+
+- **In `sys.canisters`, not beside it.** The plan proposed routing only
+  *salvage* shards through the canister list. Building it that way needs a
+  second list for the visual shards anyway, and then a second collision test,
+  a second scoop and a second expiry sweep — four chances to forget one. So
+  the whole field goes in the same array with `kind: 'debris'` and the
+  handful of places that care branch once. A shard with a `cid` is simply a
+  canister shaped like a piece of a ship.
+- **The physics is a different path, deliberately.** No `stepShip`, no
+  substepping, no terrain impact, no Kepler rail — out of the wake radius a
+  shard is *gone*, not asleep. And **one dominant body, resolved at spawn and
+  never again**: a shard covers a few kilometres in its ninety-second life,
+  so whatever dominated where it died still dominates where it dies.
+- **Costed, not asserted.** A full 96-shard field runs `updateCanisters` in
+  **0.0143 ms/frame** — about one and a half `Sim.acceleration` calls, on a
+  frame that already spends ~25 ms in the predictor. The dominant-body
+  shortcut is what buys that; resolving one per shard per frame would have
+  made it ninety-six of them. One whole wreck costs 0.0168 ms to spawn, once.
+- **Nothing is created and nothing is counted twice.** Three lines of the
+  hold go out as intact crates and the rest of the manifest is aboard when
+  the ship breaks up, so it comes off as salvage on the shards. A ship robbed
+  empty first still breaks up and has nothing on it worth taking — one hold,
+  two ways out of it.
+
+Two consequences that fell out rather than being designed: an emptied salvage
+shard keeps drifting and keeps being drawn, because it is still a piece of a
+ship and only its `cid` is cleared (which is also what stops it being scooped
+twice); and the radar draws scrap as a dim grey dot and salvage as the same
+amber cross a crate gets, because what the radar is for here is telling you
+which of the sixteen pieces of that freighter is worth flying to.
+
+**Still owed: somebody has to look at it.** `render.test.js` proves a debris
+field survives being drawn in both views, with salvage in it, at both the
+model and the too-small-for-a-model sizes. It cannot prove it reads as a ship
+coming apart.
+
+### The design, as written
+
+
 
 **Shard meshes: a fixed pool, built once.** `gl.js` caches GPU buffers on
 the mesh object (`mesh._gl`). Generating a unique mesh per shard would
@@ -1899,6 +2113,254 @@ approach** — pulsar environments are intensely radioactive, often binary,
 sometimes carrying an accretion disc — rather than somewhere anyone
 casually lives. Which is the radiation system from earlier in this
 document, arriving where it was always going to be needed.
+
+---
+
+## Phase 15 — slipspace: outfitting, the interdiction payoff, and rendering fixes
+
+*From `SLIPSPACE-TODO.md`, written at the end of the slipspace session
+(2026-09-05) and folded in here. Everything under **Built** is on disk and
+green across 1,352 tests; everything under **Owed** is designed and agreed
+but not implemented.*
+
+### Built
+
+See the Status section's slipspace row above for the full list —
+mass-scaled transit time, the lane timetable, wakes and wake scanning,
+wake-following, the flyable interdiction corridor, the interstellar
+drop-out locale, and the corridor HUD. Transit time is calibrated so a
+fully laden reference hull still takes 6.97 h/ly against the old flat 7 —
+nothing about existing play changed; what's new is that unloading buys you
+speed.
+
+### Owed
+
+**1. The two modules are not purchasable.** `Slip.MODULES` defines the
+**Wake Baffle** (6k–28k cr) and the **Harmonic Transit Anchor** (28k–140k
+cr), priced per hull class, and the corridor reads them off
+`ship.modules = { baffle, anchor }`. **This is the wrong home for them.**
+`combat.js` already has a full outfitting system — `EQUIPMENT`,
+`slots: { hardpoint, utility, internal }`, `buyOutfit`, `fitMap`, priced
+and mass-costed, bought on F5 while docked (Phase 1). Both modules should
+be `EQUIPMENT` entries in the `internal` slot type, and `Slip.moduleEffective`
+should read the fit map rather than a bespoke field. Doing it that way gets
+the shop UI, the save/load, the mass penalty and the "wrong class for this
+hull" refusal for free, all of which would otherwise have to be written
+twice.
+
+- [x] Move both modules into `combat.js` `EQUIPMENT` — **four classes each**
+      rather than two items with a class stat, because the class is what the
+      field covers and so it is which item you bought
+- [x] Point `Slip.fittedClass` / `moduleEffective` at `Combat.fittedList`
+- [x] `ship.modules` kept as a **fallback**, not deleted — the corridor tests
+      set it and anything already carrying one keeps working, the same
+      courtesy the equipment table extends to legacy weapon ids
+- [x] Confirmed in `Save.snapshot` via the existing fit map
+
+The design stays in `Slip.MODULES` — price, wake factor, resist factor — and
+`combat.js` adds only what it takes to bolt one on. `SLIP_MODULES` is built
+from that price table at load, so neither file grows a copy of the other's
+numbers and adding a class later needs one edit.
+
+| | Mass | Draw | Price | minDev | Standing |
+|---|---|---|---|---|---|
+| Wake Baffle I–IV | 2–6 t | 0.8–2.0 MW | 6k–28k | 0.45 | any |
+| Transit Anchor I–IV | 4–11 t | 3.2–7.0 MW | 28k–140k | 0.70 | `warm` |
+
+The payoff is that the budget now tells the story the bespoke field could
+not: a Class IV anchor on a Talon is 7.0 of its 9.0 MW and 11 of its 14 t —
+legal, ruinous, and visibly so *before* you spend, with the cheapest gun
+refused in words afterwards. Nobody had to write a rule saying "don't".
+
+**A false alarm worth recording, because the method is the point.** The
+gates were measured against 2,000 generated ports before being trusted —
+this project has shipped two that excluded 100% of cases — and the first
+measurement reported *the entire top of the catalogue* as unbuyable: all
+three muon lasers, both upgrade reactors, and the new anchors. The gates
+were fine. The measurement called `generateSystem` with a star **object**
+instead of a star **seed**, got the same system two hundred times, and read
+seven distinct `dev` values off it. Called correctly, `dev` reaches 0.98 and
+the ladder is the intended rarity curve — muons and anchors at ~26% of
+ports, the top tier at ~19%. That check now lives in `combat.test.js` rather
+than in a scratch file, because a measurement that can be wrong that quietly
+belongs in the suite.
+
+**2. ✅ Robbing the ship you tore out — DONE, and the gap was not what it
+looked like.** The claim above was that "nothing points `Combat.demandFrom`
+at it". That is false: the planted spec is an ordinary ship contact, so
+F4 → `Piracy…` → *Demand* already reached it and already paid. Flying the
+sequence in a harness found the real reasons it played as an empty room, and
+they were worse than a missing call.
+
+- **The freighter was carrying nothing.** `holdOf` fell back to a hashed
+  manifest only for `kind === 'pirate'`, and a lane hauler is a *trader* on
+  an interstellar route no system's traffic list has ever heard of — so it
+  inherited no manifest and reported "running empty" every single time. The
+  fallback is now widened to `tornOut` as well. Widened, not dropped: any
+  manifest-less trader falling back would hand cargo to every deadheading
+  ship in the galaxy, which is a much larger change and not obviously right.
+- **The purse was an infinite bank.** Both the purse and the hold were pure
+  functions read fresh on every demand, so a compliant freighter paid its
+  whole purse and a third of its hold *as often as you asked* — and since
+  the corridor plants exactly such a freighter beside you in deep space with
+  nothing else to do, one successful interdiction retired you. Both now
+  follow the hold's own stated doctrine, **derive once then own it**, to the
+  end. That meant fixing two places where an emptied store read as an
+  underived one and quietly refilled itself: `manifestFor` tested `.length`
+  rather than presence, and rounding the dumped share up to a minimum of one
+  tonne meant a hold could be approached forever without arriving.
+- **The load was far too small, and far too flat.** Measured across ten
+  galaxy seeds and 2,858 lane legs: packet 151 t, trader 416, liner 654,
+  freighter 1,104, bulker 2,717. The first scaling handed a median hauler a
+  ten-tonne hold and a 3,600 t bulker twenty, against a Talon that carries
+  64 — and the ladder was nearly flat, so which contact you chased made no
+  difference worth the chase. Cargo now runs at roughly 4% of all-up mass
+  (packet ~12 t, freighter ~49, bulker ~111), which makes the corridor a
+  place where you **choose**: the fat contact is worth several times the thin
+  one and is also the one your interdictor can barely hold. Money is *not*
+  deadweight and keeps its own gentle curve, topping out near 2,500 cr — the
+  prize is a hold you then have to go and sell, which is the right emphasis
+  for a game about trade.
+- **Nobody was told the door was there.** The arrival now names the move, and
+  names it truthfully: there are no witnesses in deep space, but the victim
+  still squawks its own distress call about ten seconds in. Robbing someone
+  out here is not a free crime — it is a crime with one witness, who is
+  currently running away.
+
+- [x] `Combat.demandFrom` reaches the torn-out ship — it already did; the
+      hold, the purse and the prompt were what was missing
+- [x] What a freighter does afterwards: it **runs**, on the reserve fuel the
+      drop-out granted it. Measured rather than assumed — `breakoff` steering
+      already accelerates it away at 0.0013 km/s², so it leaves slowly, the
+      way a laden hull should. No new behaviour was needed, and the "and
+      runs" in the message turned out to be honest.
+
+**3. Escort for hire, over COMMS.** Agreed design, not built. Hail an
+outbound ship on F4 and offer to fly it to its port of call for a fee.
+
+- Refused unless the **destination system's `crimeScore`** is above a
+  threshold — they do not want company through policed space, and that
+  refusal is what makes lawless space feel different
+- Fee scales with cargo value and distance, paid **on arrival intact**
+- You have to actually be there when they arrive, which means jumping the
+  same lane and holding station
+
+**4. Ship-to-ship trade over COMMS.** Newer ask, not designed in detail.
+Offer to trade wares with a ship you have hailed, with availability and
+price gated on your criminal record and your standing with that ship's
+faction. Worth noting before building: **faction standing already
+exists** — `Missions.bumpStanding`, `Missions.standingLabel`, standing
+dented by smuggling fines, campaign chapters paying standing, and `Combat`
+tracking bounties per faction. Start-at-zero and rise-by-trading is close
+to what is already there; the rival-faction penalty is the part that is
+genuinely new.
+
+- [ ] Confirm what `bumpStanding` already does before adding a second system
+- [ ] Decide whether trading in a faction's space raises standing
+      passively, or only missions do
+- [ ] Decide which mission types carry a rival penalty
+
+**5. Flares/chaff as a consumable.** Seeker missiles **already exist** —
+`MISSILES.hawk` ("Hawk seeker", 420 cr, rack of 8), `Combat.fireMissile`,
+real homing, launched with B at a ship lock. What does not exist is any
+way to defeat one.
+
+- [ ] Flares/chaff as a consumable in the existing outfitter, bought in
+      quantity like missiles are
+- [ ] A key to deploy (every unshifted letter is taken — expect a shifted
+      binding, and note the keydown switch matches **lowercased** keys, so
+      `case 'G'` is silently unreachable)
+- [ ] Seeker re-targets onto the decoy with some probability, rather than a
+      flat immunity window
+
+**6. ✅ Weapon bolt rendering — DONE.** Reported in play: the laser animation
+was **too chunky and too slow**. The repetition rate was right; the bolts
+moved as fat short slugs.
+
+- [x] `Render.boltSpan(age, cross)` returns the streak's two ends as
+      fractions of the muzzle-to-target run, and it **elongates**: a pulse
+      emitter fires a bunch of charged particles, a bunch debunches, and the
+      packet stretches linearly with distance covered. The animation comes
+      out of a real property of a real particle beam rather than a number
+      picked by feel — the same method the weapon tiers and the atmosphere
+      model already use. A free consequence: once the head arrives the head
+      stops and the tail keeps going, so the streak **collapses into the
+      impact point** instead of blinking out.
+- [x] Thinned — the core went 7.0 px → 2.4 and gained a wide dim halo, which
+      is exactly the wake lightning's fix. A bright bar has no centre for the
+      eye to find; splitting glow from shape lets the core get hot.
+- [x] `TRACER_CROSS` 0.30 s → 0.20 s. It was slow because a slug is only
+      visible where it happens to be; a streak says "a shot happened" along
+      its whole length, so the head can cross faster without the event
+      disappearing between frames.
+
+**And then the perspective, which was a second report on the same feature.**
+The streak fixed the *shape* and left the projection wrong in two ways, both
+because the tracer was still drawn between two projected endpoints:
+
+- **The width was a pixel ramp** — 2.4 px to 0.55, over a constant whose own
+  comment admitted it was "perspective, faked cheaply". Every shot tapered by
+  the same 4.4×: one down the boresight at something 20 km away and one
+  crossing the canopy broadside got identical ramps, when broadside both ends
+  are the same distance off and it should be a ribbon of constant width.
+- **The travel was linear in pixels.** A point moving at constant speed down a
+  receding ray does not cross the screen at a constant rate — it should appear
+  to slow sharply as it goes. Sliding uniformly is exactly what makes a thing
+  read as painted on the glass, and it is what survived the first fix.
+
+Both die the same way: `Render.boltRibbon` interpolates along the **world**
+ray and takes each sample's width from that sample's own depth. The line
+stays straight — perspective maps lines to lines — so what is sampled is the
+width, which varies hyperbolically, and the spacing, which is the travel.
+Drawn as one closed polygon rather than a run of quads, because butting quads
+under `lighter` double-cover every seam and leave a ladder of bright rungs
+down the middle of the bolt.
+
+**A measurement caught the naive version.** The first pass used an honest
+physical radius — a 1.5 m packet — and the new test showed what that means at
+this game's scale: the width hits its floor at 1.8 km while the guns reach
+9–23 km and encounter standoffs run 6–45. Every bolt would have been a flat
+hairline end to end, which is not correct perspective, it is *no* perspective
+with a physical justification stapled on. The radius is now openly an
+exaggeration chosen to put the taper where the fighting is — capped inside
+3.3 km, real taper to 24 km, floored beyond — and the comment says so.
+
+**Still owed: somebody has to look at it.** The suite can now hold the
+projection to account — broadside is a constant-width ribbon, receding is not,
+and equal steps down a receding ray crowd together on screen — but it still
+cannot say whether the result reads well.
+
+**7. Never verified.**
+
+- [ ] The corridor and the drop-out have **never been flown by hand** in a
+      browser. They pass in `render.test.js`, which drives the real game,
+      but nobody has sat in the seat and tried to interdict a freighter.
+- [ ] The corridor HUD's layout has not been looked at on a narrow window.
+      Tests are structurally blind to layout — see `CLAUDE.md`.
+
+### Traps this work hit, worth not repeating
+
+**Grep for a top-level name before adding one.** A new `strokePath` in
+`render.js` collided with the existing one; the later declaration silently
+wins, every polyline caller handed its `cam` to the wrong parameter, and
+the whole renderer died — which surfaced as "laser firing is broken."
+Third time this exact trap has been hit in this project.
+
+**A hash is not automatically a hash.** `wakeHash(id, i)` appended the
+index to a shared prefix and read the high bits; FNV-1a does not diffuse a
+last-byte change upward, so all nine arcs of a wake came out identical and
+drew stacked on top of each other. Salt goes first, plus an avalanche
+tail. Measure the spread of any seeded value derived this way.
+
+**Anything that names a place must be cleared on arrival.**
+`enterInterstellar` inherited `G.homeStation` from the system just left,
+and the HUD walked a dead reference every frame. `enterSystem` has a long
+reset list for exactly this reason.
+
+**`render.test.js` is order-dependent.** The options-menu test near the
+end passes only because earlier sections leave the sliders on their stops.
+New blocks that call `newGame` must snapshot and restore the twelve
+tracked preferences, or they break a test two thousand lines away.
 
 ---
 

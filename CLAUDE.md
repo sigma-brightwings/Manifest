@@ -83,6 +83,18 @@ the previous build and let you conclude the wrong thing.
   Superseded models live in `ref/glb-superseded/` and are excluded because
   `readdirSync` is not recursive. Each model carries its cockpit interior
   as named nodes; the tool splits them and emits the canopy box.
+- Port models: the same tool in `--ports` mode, `node tools/glb2hulls.js
+  ref/ports --ports` into the generated `src/ports.js`, keyed by port ROLE.
+  **`src/ports.js` is optional** — absent, every role falls back to its
+  procedural mesh. Three things differ from ships and each is marked PORTS
+  in the tool: **+z is up out of the ground** (not +y up), scale comes from
+  a declared `portPad` rather than the longest axis, and the anchors are
+  **load-bearing** — `bayGeometry` reads a modelled bay's own floor,
+  chamber and berth count, so a wrong anchor parks a ship inside a wall.
+  The convention is `ref/PORT-MODELS.md`; `tools/make-port-fixture.js`
+  writes synthetic port `.glb`s so the pipeline can be tested without art.
+  `Render.portModelFor` is the single key deciding both which mesh is drawn
+  and whose dimensions are used — do not grow a second copy of it.
 
 ## Target hardware
 

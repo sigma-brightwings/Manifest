@@ -254,6 +254,16 @@
       try { history.replaceState(null, '', '#' + encodeURIComponent(seed)); } catch (e) {}
     }
     say(G.sys.name + '  —  ' + G.galaxy.stars.length + ' stars within reach of seed "' + seed + '"', 6);
+    /* A pad is only a good opening if the way off it is obvious — and it has
+     * to be ONE line, because `say` holds a single message. Two calls here
+     * meant the first was overwritten before it was ever drawn, so the
+     * player was told which key launches and never told what they were
+     * sitting on. */
+    if (G.startedDocked) {
+      say('Docked at ' + G.startedDocked.name +
+          '  —  M trade, F5 yard, F4 for launch clearance, then U', 12);
+      G.startedDocked = null;
+    }
   }
 
   /* Systems are cached by star, not regenerated. Generation is
@@ -357,6 +367,94 @@
       G.reported = false;
     } else {
       spawnShip(host, station, G.t);
+      /* A NEW CAREER STARTS ON A PAD, not in a parking orbit.
+       *
+       * It used to open in a circular orbit above the home world, which
+       * meant you began holding an orbit you had not established and did not
+       * understand, looking at your own hull from an exterior camera whose
+       * up is the world z axis and which therefore has no idea where the
+       * planet's down is.
+       *
+       * (This is NOT what "it spawns on its side" turned out to be. That was
+       * Sim.dockShip randomising roll through anyPerpendicular, which
+       * save.js's re-dock on load then applied to every restored career —
+       * see the note there. The spawn attitude itself measured exactly level
+       * across five seeds. Both are fixed; they were separate.)
+       *
+       * Docked is a better first frame in every way. You are stationary,
+       * nothing is decaying, the trade console and the yard are both
+       * available before you have risked anything, and LAUNCHING is the
+       * first thing you choose to do rather than the thing that has already
+       * happened to you. It also means the first orbit you fly is one you
+       * put yourself into, which is the lesson this game is actually about.
+       *
+       * Only on `fresh`, and only if the home world HAS somewhere to dock.
+       * A respawn after a crash still arrives in orbit — being handed back
+       * your ship on a pad would quietly undo the cost of having crashed. */
+      if (opts.fresh) {
+        /* A GROUND PORT FIRST, and a station only if the world has none.
+         *
+         * Not a preference about scenery — the two dock paths are not equally
+         * safe to drop a ship into. The surface branch of Sim.dockShip places
+         * the ship itself: it assigns a berth, positions the hull in the shed
+         * and sets a level attitude with the nose out toward the doors. The
+         * orbital branch captures the ship's CURRENT offset from the station,
+         * which is right for something that has just flown a rendezvous and
+         * wrong for us — spawnShip has just put the hull at 93% of the
+         * station's orbital radius, so latching there would leave the player
+         * "docked" a few hundred kilometres off the port.
+         *
+         * So the station case snaps the ship onto the clamps first, and the
+         * ground case needs nothing. */
+        var startPort = (G.sys.ports || []).filter(function (p) {
+          return p.surface && p.parentBody === host && p.market;
+        })[0] || station;
+        if (startPort) {
+          if (!startPort.surface) {
+            var ps = Sim.bodyState(startPort, G.sys, G.t);
+            G.ship.pos = V.clone(ps.pos);
+            G.ship.vel = V.clone(ps.vel);
+          }
+          /* ARRIVE CLEARED, and this one bit almost immediately.
+           *
+           * Being docked makes the arrival check fire, and an arrival with
+           * no clearance is an offence: the first frame of a brand-new
+           * career charged 500 credits and logged the player FUGITIVE at
+           * their own home port, for the crime of existing there. Worse, it
+           * cascaded — a fugitive is refused docking, so the auto-dock tests
+           * two thousand lines away started failing with "docked=null",
+           * which reads like a broken autopilot rather than a fine.
+           *
+           * Clearance is SPENT on arrival, so granting it here is not a
+           * favour, it is the correct bookkeeping for a ship that is already
+           * on the pad: it had permission, and using it consumed it. */
+          G.ship.cleared = G.ship.cleared || {};
+          G.ship.cleared[startPort.id] = true;
+          Sim.dockShip(G.ship, startPort, G.sys, G.t);
+          /* G.homeStation IS DELIBERATELY LEFT ALONE. It looks like the
+           * field for "the port you started at", and it is not: respawnShip
+           * passes it straight to spawnShip, which reads `station.orbit.a`
+           * to pick a parking altitude. A surface port has no `.orbit`, so
+           * pointing homeStation at one turns the next crash into a
+           * TypeError. It stays the orbital station, which is what every
+           * reader of it already assumes. */
+          G.spawnHost = host;
+          G.viewMode = 'cockpit';
+          G.dockTarget = null;
+          G.dockStatus = null;
+          /* NO LAUNCH CLEARANCE, deliberately. Both permissions are spent at
+           * the moment they are used, so a ship that is already on the pad
+           * has already spent its docking clearance — and asking for the
+           * way OUT is a far better first action than being handed it.
+           * It puts the player on the comms channel in the first minute,
+           * which is where half this game's content lives and which nothing
+           * else was ever going to teach them.
+           *
+           * It is only a good opening if it cannot read as being stuck, so
+           * newGame says the two keys out loud below. */
+          G.startedDocked = startPort;
+        }
+      }
     }
 
     G.focus = host;
@@ -374,6 +472,12 @@
     /* A lock on something in the system you just left is not a lock, it is
      * a stale id that happens to match a different body. Release it. */
     G.navTarget = null;
+    /* And a wake chase ends when you arrive: either you are here because you
+     * followed it, in which case it is spent, or you went somewhere else, in
+     * which case it was abandoned. Either way the intercept arithmetic was
+     * computed from a departure point you are no longer standing on. */
+    G.wakeChase = null;
+    G._wakes = null;
     G.autodock = null;
     G.cruise = null;
     G.ledgerLog = [];
@@ -519,6 +623,8 @@
     G.lastDtSim = 0;
     G.starMap = null;
     G.panel = 0;
+    G.wakeChase = null;
+    G._wakes = null;
   }
 
   /* The other hull, as a patrol spec on a real (if absurdly slow) orbit. */
@@ -855,6 +961,21 @@
 
     if (mine) {
       say('TORN OUT — ' + other.name + ' is dead in the water beside you', 9);
+      /* AND WHAT TO DO WITH IT. The chase, the lock and the drop-out were
+       * all built before there was anything to do at the end of them, and
+       * the arrival read as an empty room partly because nobody was told
+       * where the door was: the demand lives on the comms channel, three
+       * keys away, and a player who has never robbed anyone in-system has no
+       * reason to guess that. Said as a separate line from the alarm so it
+       * survives being skimmed.
+       *
+       * And it says what is TRUE about doing it here, which is not "nobody
+       * will know". There are no witnesses in deep space — witnessNear finds
+       * nothing, because there is nothing — but the victim still squawks its
+       * own distress call about ten seconds in, and that is what puts a
+       * bounty on you. So the line points at the real decision rather than
+       * promising a free crime the law will immediately disprove. */
+      say('F4 to hail them. No witnesses out here — but they can still call it in.', 9);
     } else {
       say('INTERDICTED — ' + other.name + ' has pulled you out of the corridor', 9);
     }
@@ -1289,7 +1410,14 @@
         case 'y': G.showTraffic = !G.showTraffic;
                   say(G.showTraffic ? 'Traffic shown' : 'Traffic hidden', 2); break;
         case '`': case '~': cycleRenderScale(); break;
-        case 'j': openStarMap(); break;
+        /* J is the chart; Shift+J lays a course in from whatever wake the
+         * scanner can currently read. A shifted branch inside the one case,
+         * NOT a `case 'J'` — this switch matches lowercased keys, so an
+         * upper-case case label is silently unreachable. */
+        case 'j':
+          if (e.shiftKey) followWake();
+          else openStarMap();
+          break;
         case 'z': toggleCruise(); break;
 
         /* Manoeuvre nodes. Deliberately a cluster on the right of the
@@ -3908,6 +4036,30 @@
     return (port && port.surface) ? port : null;
   }
 
+  /* ---- INSIDE A PORT, and therefore nowhere else ------------------------
+   * When the ship is berthed in a shed, the shed is the whole world. The
+   * camera clamp already keeps the eye between its walls and `buried`
+   * already takes the stars away — but that left the planets, the orbit
+   * lines, the ecliptic grid, the traffic and the sun's glare all still
+   * being drawn, so you looked past the end of the hangar and saw the solar
+   * system. Half-enclosed reads worse than not enclosed at all: it makes
+   * the walls look like a texture rather than a room.
+   *
+   * So this is the one predicate every world-drawing step asks, and when it
+   * answers, only two things are drawn: the port itself, and what is inside
+   * it with you.
+   *
+   * SURFACE PORTS ONLY, and that is not an oversight. Docking at an orbital
+   * station is a clamp on the OUTSIDE of it — you are hanging off a ring in
+   * open space and you should see the sky, because it is there. When the
+   * orbital stations grow the interiors their design already describes —
+   * bays you fly into, a hall you are carried to — they will want this too,
+   * and the way in is to widen this function rather than to teach every
+   * caller a second rule. */
+  function enclosedPort() {
+    return berthedPort();
+  }
+
   function clampCameraToEnclosure() {
     if (G.viewMode === 'cockpit') return;   // the eye is the pilot's, not a boom
     var port = berthedPort();
@@ -3952,18 +4104,33 @@
     if (!cans || !cans.length) return;
     for (var i = cans.length - 1; i >= 0; i--) {
       var c = cans[i];
+      /* Most wreckage is wreckage. A shard only goes aboard if something on
+       * it survived worth having — the rest is scrap you fly through, and
+       * quietly hoovering it up would turn a debris field into a chore. */
+      if (!c.cid || !(c.tonnes > 0)) continue;
       if (V.dist(c.pos, G.ship.pos) > 0.08) continue;
       if (V.dist(c.vel, G.ship.vel) > 0.02) continue;
       var free = G.ship.cargoCap - Sim.cargoMass(G.ship);
       if (free <= 0) { say('Hold full — canister left drifting', 3); return; }
       var take = Math.min(c.tonnes, free);
-      G.ship.cargo[c.cid] = (G.ship.cargo[c.cid] || 0) + take;
+      /* Read the commodity BEFORE the shard is emptied — clearing `cid` is
+       * how an emptied shard stops being scoopable, and reading it
+       * afterwards named the haul `undefined`. */
+      var cid = c.cid;
+      G.ship.cargo[cid] = (G.ship.cargo[cid] || 0) + take;
       Sim.refreshShip(G.ship);
       c.tonnes -= take;
-      if (c.tonnes <= 1e-9) cans.splice(i, 1);
-      var good = Eco.BY_ID[c.cid];
-      say('Scooped ' + take.toFixed(take < 1 ? 2 : 0) + 't ' +
-          (good ? good.name : c.cid), 4);
+      /* An emptied shard is still a piece of a ship, so it keeps drifting
+       * and keeps being drawn; an emptied crate was only ever its contents
+       * and goes. Clearing the cid is what stops it being scooped twice. */
+      if (c.tonnes <= 1e-9) {
+        if (c.kind === 'debris') { c.cid = null; c.tonnes = 0; c.name = 'Wreckage'; }
+        else cans.splice(i, 1);
+      }
+      var good = Eco.BY_ID[cid];
+      say((c.kind === 'debris' ? 'Salvaged ' : 'Scooped ') +
+          take.toFixed(take < 1 ? 2 : 0) + 't ' +
+          (good ? good.name : cid), 4);
       HOOKS.sound('scoop');
     }
   }
@@ -4000,10 +4167,26 @@
      * stars in it and becomes something you can believe is a wall. Without
      * this you look past the end of the hangar and see the galaxy. */
     var buried = undergroundHost(cam);
+    /* Berthed in a shed: the shed is the world. See enclosedPort.
+     *
+     * EXCEPT IN THE ORBIT MAP, which is a chart rather than a window. F2 is
+     * the player asking to see the system from outside itself; answering
+     * with the inside of a hangar because that is where the hull happens to
+     * be parked would be a blank screen and a bug report. The suppression
+     * below is about what you can SEE from where you are, and a chart is
+     * not a thing you see from anywhere. */
+    var inside = mapMode() ? null : enclosedPort();
+
+    /* Rock behind a shed as well as behind a burrow. `buried` is a
+     * geometric test — is the eye below the planet's radius — and a camera
+     * up at the mouth of a shallow bay can be berthed and still just above
+     * it, which would have shown one frame of empty space through the roof
+     * on the way in. */
+    var rock = buried || inside;
 
     if (glLive()) {
       ctx.clearRect(0, 0, w, h);
-      global.GLWorld.begin(buried ? ROCK_CLEAR : null);
+      global.GLWorld.begin(rock ? ROCK_CLEAR : null);
       /* Cut the shaft mouth out of the world it is sunk into. Without this
        * the planet's own surface is drawn straight across the opening —
        * the sphere has no hole in it — so from outside you get a painted
@@ -4014,7 +4197,7 @@
         global.GLWorld.setSurfaceHole(shaft.hostId, shaft.mouth, shaft.radius);
       }
     } else {
-      ctx.fillStyle = buried ? ROCK_CLEAR_CSS : '#04060c';
+      ctx.fillStyle = rock ? ROCK_CLEAR_CSS : '#04060c';
       ctx.fillRect(0, 0, w, h);
     }
 
@@ -4052,7 +4235,7 @@
     /* No stars underground. They are the one thing that cannot possibly be
      * true down there, and they are exactly what made a berthed ship look
      * like it was parked in orbit. */
-    if (!buried) {
+    if (!buried && !inside) {
       if (glLive()) global.GLWorld.drawStars(cam);
       else Render.drawStarfield(ctx, cam, G.stars);
     }
@@ -4069,8 +4252,12 @@
     var starScreen = cam.project(starPos);
     _starPos = starPos;
 
+    /* None of the system's furniture belongs in a hangar. The grid is a
+     * plane through the ecliptic, the orbit lines are hundreds of thousands
+     * of kilometres across, and both would be drawn straight through the
+     * wall you are parked against. */
     G.gridStep = 0;
-    if (G.showGrid) {
+    if (G.showGrid && !inside) {
       G.gridStep = Render.drawEclipticGrid(ctx, cam, cam.target, cam.dist * 1.15);
     }
 
@@ -4078,7 +4265,7 @@
      * this instant, which is why the shape is cached in local space. Forced
      * on in the orbit map, whatever the O toggle says — a map of orbits
      * with the orbits hidden is a joke at the player's expense. */
-    if (G.showOrbits || mapMode()) {
+    if ((G.showOrbits || mapMode()) && !inside) {
       for (var i = 0; i < G.sys.bodies.length; i++) {
         var b = G.sys.bodies[i];
         if (!b.orbit) continue;
@@ -4117,6 +4304,15 @@
     var items = [];
     for (var j = 0; j < G.sys.bodies.length; j++) {
       var body = G.sys.bodies[j];
+      /* Inside a shed, the only body worth drawing is the shed. Everything
+       * else — the world it is cut into most of all — would be painted
+       * across the room you are standing in, because an impostor sphere has
+       * no notion of being outside a wall.
+       *
+       * The port stays in the list rather than being drawn separately, so
+       * it keeps its labels, its lamps, its doors and its dressing without
+       * any of that machinery learning about this case. */
+      if (inside && body !== inside) continue;
       var pos = body.underground
         ? Sim.portEntrance(body, G.sys, G.t).pos
         : Sim.bodyPosition(body, G.sys, G.t);
@@ -4130,8 +4326,10 @@
     for (var m = 0; m < items.length; m++) drawBody(ctx, cam, items[m], starScreen);
     placeLabels(ctx, G.labelQueue, w, h);
 
-    /* Predicted trajectory — the whole point of the exercise. */
-    if (G.showPrediction && G.trajectory) {
+    /* Predicted trajectory — the whole point of the exercise. Not while
+     * berthed: a ship on the clamps has no trajectory worth predicting, and
+     * the path it last had is a line across the hangar wall. */
+    if (G.showPrediction && G.trajectory && !inside) {
       // The prediction is stored relative to its reference body; anchor it to
       // wherever that body is right now.
       var tOff = Sim.bodyPosition(G.trajectory.reference, G.sys, G.t);
@@ -4157,9 +4355,18 @@
      * jump point is drawn in front of the cloud it is about to make rather
      * than behind it. They are also on the traffic toggle, because that is
      * exactly what they are — the timetable, seen after the fact. */
-    if (G.showTraffic) drawWakes(ctx, cam);
+    /* Neither belongs in a hangar. A wake hangs outside the last planet in
+     * the system, and the nearest freighter is thousands of kilometres up —
+     * both would be drawn through the roof. */
+    if (G.showTraffic && !inside) drawWakes(ctx, cam);
 
-    if (G.showTraffic) drawTraffic(ctx, cam);
+    if (G.showTraffic && !inside) drawTraffic(ctx, cam);
+
+    /* Wreckage before the muzzle flashes, so a shard tumbling through a
+     * beam is lit by it rather than drawn over it. Not on the traffic
+     * toggle: Y hides the timetable, and what is left of a ship you shot is
+     * not the timetable. */
+    drawDebris(ctx, cam);
 
     /* Weapons fire, missiles and explosions render regardless of the
      * traffic toggle: Y hides the timetable, not the fight. */
@@ -4439,16 +4646,23 @@
     if (!list.length) return;
     var sunPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
     var radius = Slip.jumpRingRadius(G.sys);
-    /* Sized as a fraction of the ring rather than a fixed number of km, so a
-     * wake looks the same relative to its system whether that system is a
-     * tight red dwarf or a sprawling one. */
-    var size = radius * 0.020;
+    /* Size comes off the WAKE, and it is a function of the tonnage that tore
+     * it (Slip.wakeRadius) — a bulk hauler leaves a hole five times the one
+     * a packet leaves, so which mark is worth flying to is legible from
+     * across the system before you have scanned anything.
+     *
+     * It is a real physical size, not a fraction of the system. Scaling it
+     * to the jump ring was the first attempt and was wrong twice over: a
+     * wake at two percent of a ring is five and a half MILLION kilometres
+     * across — thirty times the scan range, so you would be reading a cloud
+     * you were nowhere near the edge of — and in a big system it rendered as
+     * a screen-filling wash of orange that washed the whole game out. */
     var now = performance.now() / 1000;
 
     for (var i = 0; i < list.length; i++) {
       var w = list[i];
       var pos = Slip.wakePosition(w, sunPos, radius);
-      var p = Render.drawWake(ctx, cam, pos, w, size, now);
+      var p = Render.drawWake(ctx, cam, pos, w, w.radius || 30000, now);
       if (!p) continue;
 
       /* Label it only once it is worth reading. A sky full of permanently
@@ -4458,15 +4672,117 @@
       var read = Slip.scanWake(w, d);
       if (!read.inRange) continue;
 
+      /* On its own dark backing, and offset clear of the cloud.
+       *
+       * Without the backing this collided with the body labels — a wake sits
+       * out among the planets, and "DEPARTURE WAKE / Perdor · 72.9 min ago"
+       * landing on top of "Mirven" made both unreadable. The label dropper
+       * that handles colliding BODY labels does not know about this text, so
+       * the caption has to be able to survive being drawn over anything.
+       *
+       * Offset down-right of the cloud rather than centred on it, so the
+       * arcs stay visible next to the words describing them. */
       ctx.save();
       ctx.font = '10px ui-monospace, monospace';
-      var col = w.kind === 'departure' ? '#ff9a86' : '#8fc4ff';
-      ctx.fillStyle = col;
       var head = (w.kind === 'departure' ? 'DEPARTURE WAKE' : 'ARRIVAL WAKE');
-      ctx.fillText(head, p.x + 12, p.y - 4);
-      ctx.fillStyle = 'rgba(160,190,230,0.85)';
-      ctx.fillText(wakeReadLine(read, w), p.x + 12, p.y + 8);
+      var body = wakeReadLine(read, w);
+      var lx = p.x + 16, ly = p.y + 14;
+      var bw = Math.max(ctx.measureText(head).width, ctx.measureText(body).width);
+      ctx.fillStyle = 'rgba(4,7,13,0.78)';
+      ctx.fillRect(lx - 5, ly - 12, bw + 10, 28);
+      ctx.fillStyle = w.kind === 'departure' ? '#ff9a86' : '#8fc4ff';
+      ctx.fillText(head, lx, ly);
+      ctx.fillStyle = 'rgba(170,198,235,0.9)';
+      ctx.fillText(body, lx, ly + 12);
       ctx.restore();
+    }
+  }
+
+  /* ---- following a wake --------------------------------------------------
+   * The verb the whole scanning mechanic exists to serve. Reading a wake
+   * tells you where somebody went; this is what turns that into going after
+   * them, and it answers the only question that matters before you spend the
+   * fuel — can you actually beat them there?
+   *
+   * The answer degrades with the scan, on purpose. A full read knows their
+   * tonnage and can give you a real intercept point. A partial read knows
+   * only the hull class, so it estimates from a typical ship of that class
+   * and says that it is estimating. A faint read cannot say at all. That is
+   * what makes closing on a fresh wake worth the flying: not better prose,
+   * but the difference between a decision and a gamble.
+   *
+   * Shift+J, because J is the chart and this lays a course in on it. Every
+   * unshifted letter on the keyboard was already spoken for. */
+  function followWake() {
+    if (!Slip || !G.galaxy) return;
+    var best = bestWakeRead();
+    if (!best) { say('No slipspace wake within scanner range', 3); return; }
+
+    var read = best.read, wake = best.wake;
+    if (!read.destination) {
+      say('That trail is too thin to name a star — get closer, or find a fresher one', 4);
+      return;
+    }
+
+    /* Lay the course in the same way the chart does, so JUMP (F8) picks it
+     * up unchanged. Selecting by INDEX into the live candidate list rather
+     * than stashing a star object, because that list is rebuilt constantly
+     * and a held reference would go stale exactly the way nav locks used
+     * to. */
+    var list = jumpCandidates();
+    var sel = -1;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].to.id === read.destination.id) { sel = i; break; }
+    }
+    if (sel < 0) {
+      say('Their destination is not on the chart from here', 4);
+      return;
+    }
+    G.starMap = { sel: sel, list: list };
+    var plan = list[sel];
+
+    /* Can we catch them? Their tonnage first-hand if the scan got it, from
+     * the hull class if it only got that far, and otherwise not at all. */
+    var tonnes = read.tonnes ||
+                 (read.hullClass ? Slip.classTypicalTonnes(read.hullClass) : 0);
+    var estimated = !read.tonnes && !!read.hullClass;
+
+    var who = read.name || (read.className ? 'a ' + read.className : 'somebody');
+    var head = 'Course laid for ' + read.destinationName + ' — following ' + who;
+
+    if (!plan.possible) {
+      say(head + '. Not enough propellant for the jump: needs ' +
+          plan.fuel.toFixed(1) + ' t', 7);
+      G.wakeChase = null;
+      return;
+    }
+    if (!tonnes) {
+      say(head + '. Too faint to judge her speed — you are jumping blind', 7);
+      G.wakeChase = { starId: read.destination.id, name: who, blind: true };
+      return;
+    }
+
+    var chase = Slip.pursuit(plan.distance, tonnes, read.departedAt,
+                             Slip.allUpMass(G.ship), G.t, 1);
+    G.wakeChase = {
+      starId: read.destination.id,
+      starName: read.destinationName,
+      name: who,
+      blind: false,
+      estimated: estimated,
+      at: chase.at,
+      possible: chase.possible,
+      remaining: chase.remainingSeconds
+    };
+
+    if (!chase.possible) {
+      say(head + '. ' + (estimated ? 'On a class estimate, she' : 'She') +
+          ' lands before you could draw level — you would arrive behind her', 8);
+    } else {
+      say(head + '. Intercept at ' + (chase.at * 100).toFixed(0) +
+          '% of the corridor, ' + fmtTime(chase.remaining) +
+          ' of corridor left to hold her' +
+          (estimated ? '  (estimated from hull class)' : ''), 9);
     }
   }
 
@@ -4542,6 +4858,17 @@
         ctx.restore();
       }
 
+      /* The field goes on AFTER the hull, because it is in front of it — it
+       * stands a metre or so off the plating, and drawing it first would put
+       * the ship on top of its own shield. Outside the size branch, though:
+       * a ship too small for a model still has a shield worth seeing flare,
+       * and drawShipShield picks the cheap path for itself. */
+      drawShipShield(ctx, cam, s, lenPx);
+
+      /* Blooms likewise: at that distance the flash is the only thing
+       * telling you the shot landed at all. */
+      drawHullBlooms(ctx, cam, s);
+
       /* A hostile gets a hard bracket regardless of how small it is. Losing
        * track of the pirate because it was two pixels wide is not the kind
        * of difficulty this game is after. */
@@ -4569,12 +4896,325 @@
     }
   }
 
+  /* ---- shields, and what a hit does to one ------------------------------
+   * HOW LONG A FIELD STAYS VISIBLE, and this is the answer to "faint only
+   * when charged and recently hit". A shell drawn all the time around every
+   * armed ship in the sky would cost the silhouette, which the mesh design
+   * says is the only information that survives at combat distances, and it
+   * would also tell you who has shields before you have earned the right to
+   * know. A shell drawn ONLY during the half-second flash would deny you the
+   * readout exactly when you need it, which is while somebody is shooting at
+   * you. So it lights on the first hit and stays lit through the fight,
+   * fading out a few seconds after the last one.
+   *
+   * Six seconds is not arbitrary: it is `MODULES.shield.regenDelay`, the
+   * quiet period a shield needs before it starts refilling. So the field is
+   * visible for exactly as long as it is still *under fire* by the shield's
+   * own definition, and it goes dark at the moment it starts recovering.
+   * One number, two meanings, no second thing to tune. */
+  var SHIELD_LINGER = 6;
+  var SHIELD_FADE = 1.6;          // s of that spent fading out
+
+  /* 0 when the field should not be drawn at all, up to 1 just after a hit. */
+  function shieldLit(spec, tSim) {
+    if (!spec || !(spec.shieldMax > 0) || !(spec.shieldHp > 0)) return 0;
+    var since = tSim - (spec.lastHitAt || -1e9);
+    if (!(since >= 0) || since > SHIELD_LINGER) return 0;
+    var left = SHIELD_LINGER - since;
+    return left >= SHIELD_FADE ? 1 : left / SHIELD_FADE;
+  }
+
+  /* IMPACT STAMPS ARE REAL SECONDS, not sim seconds — see the note on
+   * Combat.markImpact. A flash is for the player's eyes, so it runs on the
+   * player's clock, exactly as the beam fade already does, and handing one of
+   * these a sim time would make every flare vanish inside a frame under warp.
+   *
+   * The clock is `nowSeconds()` from the top of this file, whose own comment
+   * is this rule written down: "anything that blinks, flashes or pulses
+   * because it is a physical light... should be driven from here, so that
+   * time warp and pausing leave it alone." A second helper beside it would
+   * have been one more thing to pick the wrong one of. */
+  function liveImpacts(spec, nowS) {
+    var out = [], list = spec && spec.impacts;
+    if (!list) return out;
+    for (var i = 0; i < list.length; i++) {
+      if (nowS - list[i].at <= Render.SHIELD_FLASH_LIFE) out.push(list[i]);
+    }
+    return out;
+  }
+
+  /* Below this the shell is not worth walking. A form-fitting field on a
+   * twelve-pixel ship is a twelve-pixel blob whichever way you compute it,
+   * and the shell pass costs three transforms and three projections PER FACE
+   * — the one part of this feature with a real per-frame price, since an
+   * imported hull carries far more triangles than the procedural ones do.
+   * So there are two paths and the small one is a single gradient, which at
+   * that size is indistinguishable and costs one fill. */
+  var SHELL_MIN_PX = 16;
+
+  function drawShipShield(ctx, cam, s, lenPx) {
+    var spec = s.spec || s;
+    /* Two clocks, deliberately: the LINGER is a game-time quantity, because
+     * it is the shield's own regeneration delay, so it reads G.t. The FLARES
+     * are lights, so they read the wall clock. */
+    var lit = shieldLit(spec, G.t);
+    if (!(lit > 0)) return;
+    var nowS = nowSeconds();
+    var charge = spec.shieldHp / spec.shieldMax;
+    var live = liveImpacts(spec, nowS);
+    if (lenPx >= SHELL_MIN_PX) {
+      Render.drawShellField(ctx, cam, s, s.size, s.cls, charge, lit, live, nowS);
+    } else {
+      farShieldGlow(ctx, cam, s, charge, lit, live, lenPx, nowS);
+    }
+  }
+
+  /* The distant form of a field: a soft disc the size of the ship's own
+   * shell, brightening when it is struck. It carries the same hue, so the
+   * "that one's shield is nearly down" read survives all the way out to the
+   * range where the ship itself is a marker dot. */
+  function farShieldGlow(ctx, cam, s, charge, lit, impacts, lenPx, nowS) {
+    var p = cam.project(s.pos);
+    if (!p) return;
+    var flare = 0;
+    for (var i = 0; i < impacts.length; i++) {
+      flare = Math.max(flare, Render.shellFlare(1, nowS - impacts[i].at));
+    }
+    var a = lit * (0.10 + 0.55 * flare);
+    if (!(a > 0.005)) return;
+    var col = Render.shieldTint(charge);
+    var n = parseInt(col.slice(1), 16);
+    var cr = (n >> 16) & 255, cg = (n >> 8) & 255, cb = n & 255;
+    var R = Math.max(4, lenPx * 0.85 * (1 + Render.SHIELD_STANDOFF * 2));
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    var g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, R);
+    g.addColorStop(0, 'rgba(' + cr + ',' + cg + ',' + cb + ',' + a.toFixed(3) + ')');
+    g.addColorStop(0.6, 'rgba(' + cr + ',' + cg + ',' + cb + ',' + (a * 0.45).toFixed(3) + ')');
+    g.addColorStop(1, 'rgba(' + cr + ',' + cg + ',' + cb + ',0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, R, 0, K.TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /* ---- your own shield, from the seat ------------------------------------
+   * THE PROBLEM THIS SOLVES. Everything above draws a shell around a HULL,
+   * and from the cockpit you cannot see your own hull — so the entire
+   * feature would have been invisible during ordinary play, visible only if
+   * you happened to be flying in the exterior view when somebody shot you.
+   * A soaked hit had no expression in here at all: hullHit already flares
+   * the cabin and can take a console screen out, but that only fires when
+   * damage reaches the plating. A shield doing its job was silent.
+   *
+   * So the flare comes to you. The field wraps the canopy a metre out, and a
+   * hit anywhere on it lights a wide soft patch of your view in the
+   * direction it came from — which makes it a WARNING as well as an effect,
+   * because the direction is where the shooter is.
+   *
+   * BEARING, NOT POSITION. cam.projectDir is the projection for things at
+   * effective infinity, and it is the right one here: the flare's screen
+   * place is a direction, not a point. Projecting an actual point on the
+   * shell would put it 1.2 m from the eye, where the perspective divide
+   * blows it up across the whole screen — the same trap the beam muzzles
+   * fell into.
+   *
+   * AND WHEN IT CAME FROM BEHIND, which projectDir cannot answer, the flare
+   * is pinned to the edge of the view on the correct side. That is the case
+   * that matters most: being shot from an angle you are not looking at is
+   * exactly when you need to be told where to look. */
+  function drawCanopyShieldFlare(ctx, cam, w, h) {
+    var s = G.ship;
+    var cap = s.shield ? Combat.MODULES.shield.cap : 0;
+    if (!(cap > 0)) return;
+    var list = s.impacts;
+    if (!list || !list.length) return;
+
+    var col = Render.shieldTint(Math.max(0, s.shieldHp) / cap);
+    var n = parseInt(col.slice(1), 16);
+    var cr = (n >> 16) & 255, cg = (n >> 8) & 255, cb = n & 255;
+    var R = Math.min(w, h) * 0.30;
+    var nowS = nowSeconds();
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (var i = 0; i < list.length; i++) {
+      var im = list[i];
+      if (!im.soaked) continue;               // the plating's business, not the field's
+      var age = nowS - im.at;
+      var amp = Render.shellFlare(1, age);    // 1 = dead centre of the flare
+      if (!(amp > 0.004)) continue;
+
+      var dir = im.dir;
+      var x, y;
+      var p = dir ? cam.projectDir(dir) : null;
+      if (p) {
+        x = p.x; y = p.y;
+      } else {
+        /* Behind, or nowhere in particular. Put it at the edge on the side
+         * it came from, using the bearing's own components in the camera's
+         * axes — and dead astern, which has no side, goes to the bottom,
+         * because that is where you would flinch. */
+        var sx = dir ? V.dot(dir, cam.r) : 0;
+        var sy = dir ? V.dot(dir, cam.u) : -1;
+        var m = Math.hypot(sx, sy);
+        if (!(m > 1e-6)) { sx = 0; sy = -1; m = 1; }
+        x = w / 2 + (sx / m) * w * 0.46;
+        y = h / 2 - (sy / m) * h * 0.46;
+      }
+
+      var a = Math.min(0.62, amp * 0.62);
+      var g = ctx.createRadialGradient(x, y, 0, x, y, R);
+      g.addColorStop(0, 'rgba(' + cr + ',' + cg + ',' + cb + ',' + a.toFixed(3) + ')');
+      g.addColorStop(0.45, 'rgba(' + cr + ',' + cg + ',' + cb + ',' +
+                     (a * 0.35).toFixed(3) + ')');
+      g.addColorStop(1, 'rgba(' + cr + ',' + cg + ',' + cb + ',0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(x, y, R, 0, K.TAU);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  /* ---- and what an unshielded hit looks like ----------------------------
+   * A bloom on the plating, and it is deliberately a different SHAPE from
+   * the shield flare rather than a different colour. The shield's flare
+   * spreads across a surface; this is a hot sphere sitting on one, because
+   * that is what a few megawatts arriving on a metre of hull actually makes.
+   *
+   * So which effect you are looking at tells you whether the shield is still
+   * holding, from any distance and without reading a number — which is the
+   * whole point of having two of them. A shot that punches through a failing
+   * shield produces both at once, and that is exactly what that moment is.
+   *
+   * Drawn in screen space as a radial gradient rather than as geometry: it
+   * is a glow, it has no surface, and the same argument the beams and the
+   * plumes already make applies. */
+  var BLOOM_LIFE = 0.45;
+
+  function drawHullBlooms(ctx, cam, s) {
+    var spec = s.spec || s;
+    var list = spec && spec.impacts;
+    if (!list || !list.length) return;
+    var nowS = nowSeconds();
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (var i = 0; i < list.length; i++) {
+      var im = list[i];
+      if (!im.through) continue;                  // the shield held; nothing here
+      var age = nowS - im.at;
+      if (!(age >= 0) || age > BLOOM_LIFE) continue;
+      var u = age / BLOOM_LIFE;
+
+      /* On the hull, on the side it came from. Half the ship's own length
+       * out from the centre puts it on the plating rather than inside. */
+      var at = s.pos;
+      if (im.dir) at = V.addScaled(s.pos, im.dir, s.size * 0.42);
+      var p = cam.project(at);
+      if (!p) continue;
+
+      /* Grows a little and fades a lot — an expanding shell of hot vapour
+       * coming off the plating, which is what the damage actually is. */
+      var rPx = Math.max(2.2, s.size * 0.35 * p.scale) * (0.45 + 1.15 * u);
+      var a = (1 - u) * (1 - u) * Math.min(1, 0.35 + im.hull / 30);
+      if (!(a > 0.004)) continue;
+
+      var g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rPx);
+      g.addColorStop(0, 'rgba(255,246,226,' + (a * 0.95).toFixed(3) + ')');
+      g.addColorStop(0.35, 'rgba(255,190,120,' + (a * 0.6).toFixed(3) + ')');
+      g.addColorStop(1, 'rgba(255,110,60,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, rPx, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  /* ---- wreckage, drawn ---------------------------------------------------
+   * Shards tumble, so each one needs an attitude every frame. It is built
+   * here rather than stored on the shard, for two reasons: an orthonormal
+   * basis is three vectors of state per fragment and there can be ninety-six
+   * of them, and a rotation is cheaper to evaluate than to keep correct —
+   * anything that STORES a basis has to re-orthonormalise it or it shears,
+   * which is a bug this project has already had once on the player's hull.
+   *
+   * So the spin is an axis, a rate and a phase, and the frame is a function
+   * of the clock. It is exact at any t, which is the same property the rails
+   * and the market both have and for the same reason.
+   *
+   * Rodrigues, written out. Two rotations of one fixed pair of axes about
+   * the shard's own spin axis — no matrices, no allocations beyond the frame
+   * itself, and it runs inside the per-frame budget the predictor has
+   * already spent most of. */
+  var shardFrame = { pos: null, right: null, up: null, fwd: null };
+
+  function spinFrame(c, tSec) {
+    var ang = c.phase + c.spinRate * tSec;
+    var k = c.spinAxis, ca = Math.cos(ang), sa = Math.sin(ang);
+    /* A seed axis that is never parallel to the spin axis, so the cross
+     * product below cannot collapse. */
+    var seed = Math.abs(k.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+    var a = V.norm(V.cross(k, seed));
+    var b = V.cross(k, a);                       // already unit: k ⟂ a, both unit
+    shardFrame.pos = c.pos;
+    shardFrame.fwd = { x: a.x * ca + b.x * sa, y: a.y * ca + b.y * sa,
+                       z: a.z * ca + b.z * sa };
+    shardFrame.up = k;
+    shardFrame.right = V.cross(shardFrame.up, shardFrame.fwd);
+    return shardFrame;
+  }
+
+  function drawDebris(ctx, cam) {
+    var list = G.sys.canisters;
+    if (!list || !list.length) return;
+    var sunPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
+    var tSec = performance.now() / 1000;
+
+    ctx.save();
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i];
+      if (c.kind !== 'debris') continue;
+      var sp = cam.project(c.pos);
+      if (!sp) continue;
+      if (sp.x < -40 || sp.x > cam.w + 40 || sp.y < -40 || sp.y > cam.h + 40) continue;
+
+      /* Fading out over the last quarter of its life, so a field thins
+       * rather than blinking out a piece at a time. */
+      var left = (c.expires - G.t) / Sim.DEBRIS_LIFE;
+      var fade = left > 0.25 ? 1 : Math.max(0, left / 0.25);
+      if (fade <= 0) continue;
+
+      var lenPx = c.lengthKm * sp.scale;
+      if (lenPx > 3) {
+        ctx.globalAlpha = fade;
+        Render.drawShardModel(ctx, cam, spinFrame(c, tSec), c.lengthKm,
+                              V.norm(V.sub(sunPos, c.pos)),
+                              c.cid ? '#c8b487' : '#8d949e', c.shard);
+        ctx.globalAlpha = 1;
+      } else {
+        /* Too small for a model and too important to drop: a debris field
+         * you cannot see is a debris field you fly into. Salvage keeps its
+         * warmer colour all the way down, because at this size the colour is
+         * the only thing telling you which piece to go to. */
+        ctx.globalAlpha = fade * (c.cid ? 0.95 : 0.55);
+        ctx.fillStyle = c.cid ? '#ffd36b' : '#7c848f';
+        var d = c.cid ? 1.9 : 1.2;
+        ctx.fillRect(sp.x - d / 2, sp.y - d / 2, d, d);
+        ctx.globalAlpha = 1;
+      }
+    }
+    ctx.restore();
+  }
+
   /* ---- weapons fire, drawn ---------------------------------------------
    * Beams are two projected points and a bright line — a laser has no
    * transit time worth animating at these ranges. Missiles are a dot and a
    * plume. Explosions are an expanding pair of rings that live under a
-   * second, because the aftermath of one is a debris field the canister
-   * system already draws. */
+   * second, and what is left once they fade is the debris field drawDebris
+   * paints above — which is what those rings were standing in for. */
   /* Shortest a beam is ever drawn, in pixels. Small enough that it never
    * reads as a bar across a close-quarters fight, big enough to catch the
    * eye at a zoom where the whole ship is two pixels. */
@@ -4585,10 +5225,62 @@
    * or missed by the time the first pixel is drawn. It is slow purely so
    * that firing LOOKS like firing — at true beam speed the whole event
    * occupies less than one frame and the gun reads as broken, which is how
-   * this arrived as a bug report in the first place. */
-  var TRACER_CROSS = 0.30;
-  var TRACER_NEAR_W = 7.0;    // px, at the muzzle
-  var TRACER_FAR_W = 1.2;     // px, at the far end — perspective, faked cheaply
+   * this arrived as a bug report in the first place.
+   *
+   * It was 0.30 s while a bolt was a short slug, because a slug is only
+   * visible where it happens to be and had to dawdle to be seen at all.
+   * Render.boltSpan made the bolt a STREAK that elongates as it travels, and
+   * a streak says "a shot happened" along its whole length — so the head can
+   * cross faster without the event disappearing between frames, which is the
+   * other half of the "too chunky and too slow" report. */
+  var TRACER_CROSS = 0.20;
+
+  /* Hairline core, wide faint halo — the same fix the wake lightning needed
+   * and for the same reason. The old 7 px core was doing the glow AND the
+   * shape with one stroke, which is what read as chunky: a bright bar has no
+   * centre for the eye to find. Splitting them lets the core get thin enough
+   * to look hot while the halo carries the light. Under 'lighter' the two
+   * passes add, so the middle of the streak still burns out to white. */
+  var TRACER_HALO_W = 3.6;    // halo width, as a multiple of the core
+  var TRACER_HALO_A = 0.20;   // halo alpha, as a fraction of the core's
+
+  /* ---- and the bolt is an OBJECT, not a decal ----------------------------
+   * Reported twice, and the second report was the real one: the perspective
+   * was wrong. Two separate faults, both from drawing the tracer in screen
+   * space between two projected endpoints.
+   *
+   * 1. THE WIDTH WAS A PIXEL RAMP. It ran 2.4 px at the muzzle to 0.55 at the
+   *    far end, and the constant was frankly labelled "perspective, faked
+   *    cheaply". So every shot narrowed by the same 4.4x whatever its
+   *    geometry — a bolt fired down the boresight at something 20 km ahead
+   *    and a bolt crossing the canopy broadside tapered identically. Broadside
+   *    both ends are the same distance away and the thing should be a uniform
+   *    ribbon; down the boresight the far end should be far thinner than 4.4x.
+   *
+   * 2. THE TRAVEL WAS INTERPOLATED ON THE SCREEN. `a.x + dx * head` walks the
+   *    head at a constant rate in PIXELS, and a point moving at constant speed
+   *    down a receding ray does not do that — it should appear to slow sharply
+   *    as it goes away from you. Sliding at uniform screen speed is exactly
+   *    what makes a thing read as painted on the glass rather than flying
+   *    through the world, and it is what survived the first fix.
+   *
+   * Both die the same way: interpolate in WORLD space and project each
+   * sample, so the foreshortening and the width both fall out of the camera
+   * instead of being guessed at. A straight world segment still projects to a
+   * straight screen segment — perspective maps lines to lines — so the streak
+   * needs no bending; what it needs is its WIDTH sampled along its length,
+   * because that varies hyperbolically with depth.
+   *
+   * The sampling itself lives in `Render.boltRibbon`, with the rest of the
+   * drawing maths and for the same reason `boltSpan` does: it can be held to
+   * the camera there without a canvas, and "broadside is a constant-width
+   * ribbon, receding is not" is a claim a test can actually make.
+   *
+   * Kept here: the two widths for the tiny-on-screen fallback below, where
+   * there is no perspective left to get right and the whole event is a few
+   * pixels of tick mark. */
+  var TRACER_NEAR_W = 2.4;
+  var TRACER_FAR_W = 0.55;
 
   /* A tapered, fading quad between two screen points. Canvas cannot vary a
    * stroke's width along its length, so this is a filled polygon with a
@@ -4613,6 +5305,65 @@
     ctx.lineTo(ax - nx * w0, ay - ny * w0);
     ctx.closePath();
     ctx.fill();
+  }
+
+  /* A tracer as two passes: a wide dim halo, then a hairline core on top.
+   * Every weapon variety goes through this rather than through taperedTracer
+   * directly, so none of them can drift back into being one fat bar. */
+  function glowTracer(ctx, ax, ay, bx, by, w0, w1, color, a0, a1) {
+    taperedTracer(ctx, ax, ay, bx, by,
+                  w0 * TRACER_HALO_W, w1 * TRACER_HALO_W, color,
+                  a0 * TRACER_HALO_A, a1 * TRACER_HALO_A);
+    taperedTracer(ctx, ax, ay, bx, by, w0, w1, color, a0, a1);
+  }
+
+  /* One pass of a streak, as a ribbon along the WORLD ray between two
+   * fractions of it. See the note by BOLT_R for why this is not done between
+   * two projected endpoints.
+   *
+   * Drawn as a single polygon rather than as a run of quads. Butting quads
+   * end to end under 'lighter' double-covers every seam and leaves a ladder
+   * of faint bright rungs down the middle of the bolt; one closed outline up
+   * one side and back down the other has no seams to brighten, and is one
+   * fill instead of four.
+   *
+   * Returns false if any sample is behind the camera, which is the caller's
+   * cue to fall back — a ray that straddles the eye has no honest ribbon. */
+  function worldTracerPass(ctx, cam, rib, col, a0, a1, wMul, aMul) {
+    var n = rib.length - 1, i;
+    var dx = rib[n].x - rib[0].x, dy = rib[n].y - rib[0].y;
+    var L = Math.hypot(dx, dy);
+    if (!(L > 0.4)) return;                      // nothing to draw, but valid
+    var nx = -dy / L, ny = dx / L;
+    var g = ctx.createLinearGradient(rib[0].x, rib[0].y, rib[n].x, rib[n].y);
+    g.addColorStop(0, hexToRgba(col, a0 * aMul));
+    g.addColorStop(1, hexToRgba(col, a1 * aMul));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(rib[0].x + nx * rib[0].w * wMul, rib[0].y + ny * rib[0].w * wMul);
+    for (i = 1; i <= n; i++) {
+      ctx.lineTo(rib[i].x + nx * rib[i].w * wMul, rib[i].y + ny * rib[i].w * wMul);
+    }
+    for (i = n; i >= 0; i--) {
+      ctx.lineTo(rib[i].x - nx * rib[i].w * wMul, rib[i].y - ny * rib[i].w * wMul);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  /* `wScale` carries both the miss dimming and the variety's own thickness —
+   * a beam is the fattest of the three because the load never stops arriving,
+   * a pulse the thinnest. It multiplies the PHYSICAL radius, before the floor
+   * and the cap, so at long range everything converges on the same hairline
+   * and the difference between the varieties is one you only see up close.
+   * That is the correct way round: at 20 km you are being told a shot
+   * happened, not which emitter fired it. */
+  function worldTracer(ctx, cam, origin, seg, f0, f1, col, a0, a1, wScale) {
+    var rib = Render.boltRibbon(cam, origin, seg, f0, f1, wScale);
+    if (!rib) return false;
+    worldTracerPass(ctx, cam, rib, col, a0, a1, TRACER_HALO_W, TRACER_HALO_A);
+    worldTracerPass(ctx, cam, rib, col, a0, a1, 1, 1);
+    return true;
   }
 
   /* The beam colours in the catalogue are '#rrggbb'; a gradient needs an
@@ -4673,13 +5424,34 @@
         else if (beam.fromShip && beam.range) far = V.addScaled(origin, G.ship.fwd, beam.range);
         a = cam.project(origin); b = cam.project(far);
         if (!a || !b) continue;
+
         /* A miss is drawn missing: skewed past the target rather than
-         * through it, so being hard to hit LOOKS like being hard to hit. */
-        var ex = b.x, ey = b.y;
+         * through it, so being hard to hit LOOKS like being hard to hit.
+         *
+         * THE SKEW MOVED INTO THE WORLD. It used to be added to the projected
+         * endpoint, which was fine while the streak was drawn between two
+         * screen points and is not fine now that the whole ray is walked in
+         * world space — a far end that exists only on the screen has no
+         * fractions along it to interpolate. So the offset is applied to the
+         * world point instead, in the camera's own axes and scaled by that
+         * point's depth, which reproduces exactly the same on-screen skew at
+         * any range or zoom while leaving a real ray to sample.
+         *
+         * The roll stays `Math.random`: whether a shot connects is an
+         * in-the-moment die roll, which the seed doctrine explicitly exempts,
+         * and it is memoised on the beam so it does not jitter frame to
+         * frame. */
         if (beam.miss) {
-          ex += (beam.missX || (beam.missX = (Math.random() - 0.5) * 60));
-          ey += (beam.missY || (beam.missY = (Math.random() - 0.5) * 60));
+          if (beam.missX === undefined) {
+            beam.missX = (Math.random() - 0.5) * 60;
+            beam.missY = (Math.random() - 0.5) * 60;
+          }
+          var mk = b.depth / cam.flen;             // pixels -> km at that depth
+          far = V.addScaled(far, cam.r, beam.missX * mk);
+          far = V.addScaled(far, cam.u, -beam.missY * mk);   // screen y is down
+          b = cam.project(far) || b;
         }
+        var ex = b.x, ey = b.y;
         /* A 22 km beam with the camera 120,000 km out is a third of a pixel,
          * so from the exterior view's default zoom the guns appeared not to
          * fire at all — which is exactly how it was reported. A beam is a
@@ -4698,9 +5470,8 @@
          * A beam is drawn full length from the first frame because that is
          * what "continuous" means; the other two travel. */
         var age = nowS - (beam.born || nowS);
-        var head = beam.variety === 'beam'
-          ? 1
-          : Math.max(0.06, Math.min(1, age / TRACER_CROSS));
+        var span = Render.boltSpan(age, TRACER_CROSS);
+        var head = beam.variety === 'beam' ? 1 : Math.max(0.06, span.head);
         /* And it fades out over the last third of its life rather than
          * vanishing, so a burst trails off instead of blinking. */
         var life = (beam.until - (beam.born || nowS)) || 0.42;
@@ -4708,34 +5479,68 @@
         if (fade <= 0) continue;
 
         var dim = beam.miss ? 0.4 : 1;
-        var w0 = TRACER_NEAR_W * dim, w1 = TRACER_FAR_W * dim;
         var col = beam.color || '#ff6b5a';
+
+        /* THE RAY, in the world. Every fraction below is a fraction of THIS,
+         * not of the projected line, which is the whole correction. */
+        var seg = V.sub(far, origin);
+
+        /* Under the floor there is no perspective left to get right: the
+         * entire shot is a dozen pixels of tick mark whose only job is to say
+         * a gun went off, and the world ray it came from is shorter than one
+         * sample. So that case keeps the old screen-space draw, floor and
+         * all — this is the exterior-view fix from two builds ago and it must
+         * not be lost to a correction it has nothing to do with. */
+        var tiny = L <= MIN_BEAM_PX + 0.001;
+        var w0 = TRACER_NEAR_W * dim, w1 = TRACER_FAR_W * dim;
         var hx = a.x + dx * head, hy = a.y + dy * head;
 
         if (beam.variety === 'intermittent') {
-          /* A broken line: the delivery is bursts, so the tracer is too.
-           * Each dash is its own tapered quad, which keeps the near-bright
-           * falloff running across the whole run rather than restarting it
-           * inside every segment. */
-          var DASH = 7, lit = 0.62;
-          for (var d = 0; d < DASH; d++) {
-            var t0 = (d / DASH) * head, t1 = ((d + lit) / DASH) * head;
-            taperedTracer(ctx,
-              a.x + dx * t0, a.y + dy * t0, a.x + dx * t1, a.y + dy * t1,
-              w0 + (w1 - w0) * t0, w0 + (w1 - w0) * t1,
-              col, fade * (0.95 - 0.75 * t0), fade * (0.95 - 0.75 * t1));
+          /* A broken line: the delivery is bursts, so the tracer is too. The
+           * dashes are cut from the WORLD ray, so they crowd together toward
+           * the far end exactly as evenly spaced things do when they recede —
+           * which on the old screen-space parameterisation they never did. */
+          var DASH = 7, lit = 0.62, d, t0, t1;
+          for (d = 0; d < DASH; d++) {
+            t0 = (d / DASH) * head; t1 = ((d + lit) / DASH) * head;
+            if (tiny || !worldTracer(ctx, cam, origin, seg, t0, t1, col,
+                                     fade * (0.95 - 0.75 * t0),
+                                     fade * (0.95 - 0.75 * t1), dim)) {
+              glowTracer(ctx,
+                a.x + dx * t0, a.y + dy * t0, a.x + dx * t1, a.y + dy * t1,
+                w0 + (w1 - w0) * t0, w0 + (w1 - w0) * t1,
+                col, fade * (0.95 - 0.75 * t0), fade * (0.95 - 0.75 * t1));
+            }
           }
         } else if (beam.variety === 'beam') {
           // Continuous, and the widest of the three: the load never stops.
-          taperedTracer(ctx, a.x, a.y, hx, hy, w0 * 1.25, w1, col,
-                        fade * 0.95, fade * 0.12);
+          if (tiny || !worldTracer(ctx, cam, origin, seg, 0, head, col,
+                                   fade * 0.95, fade * 0.12, dim * 1.25)) {
+            glowTracer(ctx, a.x, a.y, hx, hy, w0 * 1.25, w1, col,
+                       fade * 0.95, fade * 0.12);
+          }
         } else {
-          /* A pulse is a bolt, so it has a body rather than reaching all the
-           * way back to the muzzle — a short bright slug with a tail. */
-          var tail = Math.max(0, head - 0.22);
-          taperedTracer(ctx,
-            a.x + dx * tail, a.y + dy * tail, hx, hy,
-            w0 * 0.55, w0 * 1.05, col, fade * 0.25, fade * 1.0);
+          /* A pulse is a packet of particles, and a packet debunches — so it
+           * is drawn as a streak that ELONGATES behind its head rather than
+           * as a fixed-length slug sliding along the run. Render.boltSpan
+           * carries the reasoning and the two numbers.
+           *
+           * Bright at the head and falling away down the tail, because that
+           * is which end the dense part of the bunch is at: the leaders have
+           * outrun the stragglers, so the light thins out behind them.
+           *
+           * Measured against the floored `head` rather than span.head, so the
+           * first-frame floor survives into the length test — otherwise a
+           * shot's opening frame computes a zero-length streak and draws
+           * nothing at all. */
+          if (head - span.tail > 1e-4) {
+            if (tiny || !worldTracer(ctx, cam, origin, seg, span.tail, head,
+                                     col, fade * 0.05, fade * 1.0, dim * 0.7)) {
+              glowTracer(ctx, a.x + dx * span.tail, a.y + dy * span.tail,
+                         hx, hy, w0 * 0.5, w0 * 0.9, col,
+                         fade * 0.05, fade * 1.0);
+            }
+          }
         }
       }
       ctx.restore();
@@ -4810,8 +5615,10 @@
 
     if (shell) {
       /* No star to glare off the canopy while you are between them — the
-       * tunnel does its own lighting. */
-      if (G.hyper) {
+       * tunnel does its own lighting. Nor under a roof: the sun is on the
+       * far side of several metres of hangar, and a lens flare through it
+       * was the last thing still insisting you were outdoors. */
+      if (G.hyper || enclosedPort()) {
         Render.drawGlass(ctx, apertures, w, h, {});
       } else {
         var starPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
@@ -4885,6 +5692,10 @@
       ctx.textAlign = 'left';
       ctx.restore();
     }
+    /* Last thing on the glass, and INSIDE the clip on purpose: the field
+     * flares a metre outside the canopy, so you see it through the glass and
+     * it should be cut off by the frame exactly as the sky is. */
+    drawCanopyShieldFlare(ctx, cam, w, h);
     Render.glassEnd(ctx);
 
     if (shell) {
@@ -5377,7 +6188,15 @@
     /* Jettisoned cargo reads as a cross: not a ship, not a rock, and worth
      * a second look if it is not yours. */
     var cans = Sim.canistersAll(G.sys);
-    for (i = 0; i < cans.length; i++) blip(cans[i].pos, '#ffd36b', 'cross', false);
+    for (i = 0; i < cans.length; i++) {
+      var cn = cans[i];
+      /* Wreckage is a dim dot and salvage is the same cross a crate gets —
+       * because what the radar is for is telling you which of the sixteen
+       * pieces of that freighter is worth flying to. Scrap still shows: a
+       * debris field you cannot see is a debris field you fly into. */
+      if (cn.kind === 'debris' && !cn.cid) blip(cn.pos, '#6b7480', 'dot', false);
+      else blip(cn.pos, '#ffd36b', 'cross', false);
+    }
   }
 
   /* ---- the three screens in the dashboard -------------------------------
@@ -6574,11 +7393,22 @@
        * refinery or a shipyard. */
       var labelCol = b.underground ? '#a9d6ff' : b.surface ? '#ffd9a8' : '#9ff0dc';
       if (rpx > 3.5) {
-        var frame = stationFrame(b);
+        var model = stationModelFor(b);
+        /* A MODELLED STATION MAY TURN ONLY PART OF ITSELF. If the art
+         * declared a `stationSpin` ring, the shell is drawn on a frame that
+         * does not rotate and the ring on one that does — so a hub keeps
+         * still and stays something you can aim a docking approach at.
+         * Anything without that bucket, procedural ports included, spins as
+         * one piece exactly as it always did. */
+        var turns = Render.portSpins(model);
+        var frame = stationFrame(b, turns);
         if (frame) {
           var sun = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), item.pos));
-          Render.drawStationModel(ctx, cam, frame, b.radius, sun,
-                                  stationModelFor(b), b.color);
+          Render.drawStationModel(ctx, cam, frame, b.radius, sun, model, b.color);
+          if (turns) {
+            Render.drawPortPart(ctx, cam, stationFrame(b), b.radius, sun,
+                                model, 'spin', b.color);
+          }
           /* The town, the boards and the pad lighting. Held to a higher
            * threshold than the pad itself: the dressing is detail, and
            * detail smaller than a few pixels is cost without information. */
@@ -6735,26 +7565,13 @@
     return st.at;
   }
 
-  /* Which model a port wears. Driven by what the place actually does, so a
-   * refinery looks like a refinery from a long way out — the silhouette is
-   * the first thing you learn about a port and it should be true. */
-  var STATION_MODELS = {
-    orbital: 'orbital', highport: 'highport', refinery: 'refinery',
-    shipyard: 'shipyard', agri: 'agri', mining: 'mining',
-    reprocessing: 'reprocessing'
-  };
-
+  /* Which model a port wears. The rule moved to Render.portModelFor, because
+   * it now decides which imported model's DIMENSIONS bayGeometry reads as
+   * well as which mesh gets drawn — and a copy of it here would eventually
+   * draw one shed while parking ships in the shape of another. This is the
+   * name the rest of this file already calls. */
   function stationModelFor(station) {
-    if (station.underground) return 'underground';
-    /* Every surface port is a shaft now, so the flat apron model is no
-     * longer what any of them look like — a shallow field gets the same
-     * collar-shaft-hangar structure, just less of it. The old 'surface'
-     * mesh is left in the library rather than deleted: nothing points at
-     * it, and it is the one thing that would have to be rebuilt from
-     * scratch if this decision is ever reversed. */
-    if (station.surface) return 'bay';
-    var role = station.market && station.market.role;
-    return STATION_MODELS[role] || 'orbital';
+    return Render.portModelFor(station);
   }
 
   /* Stations carry no attitude in the simulation — nothing needs one, so
@@ -6775,7 +7592,19 @@
   var PAD_GROUND_LIFT = (Gen && Gen.bayGeometry)
     ? Gen.bayGeometry({ radius: 1, shaftDepth: 1 }).lift : 0.04;
 
-  function stationFrame(station) {
+  /* `still` asks for the frame WITHOUT the spin applied.
+   *
+   * The procedural stations turn by rotating the whole frame, which is
+   * right for them: a wheel with a hub drawn as one mesh has to spin as one
+   * thing. An imported model can do better — it can declare which part
+   * turns, with a `stationSpin` node — and then the hub must NOT spin,
+   * because a hub that rotates with its own ring is a hub with no docking
+   * bay you can aim at. So a modelled station is drawn twice: shell on the
+   * still frame, ring on the turning one.
+   *
+   * Surface ports ignore the flag. They are bolted down and their frame
+   * comes from local vertical, so there is no spin to leave out. */
+  function stationFrame(station, still) {
     /* An underground bay is hung from its ENTRANCE, not from where it truly
      * is. The mesh already carries the drop down the shaft in its own
      * geometry (see stationMeshes().underground); anchoring the frame at
@@ -6826,7 +7655,7 @@
     // Spin about the station's own axis: one turn every couple of minutes,
     // scaled so bigger rings turn more slowly, as they must.
     var rate = 0.06 / Math.max(0.4, station.radius);
-    var ang = G.t * rate;
+    var ang = still ? 0 : G.t * rate;
     var a = V.rotateAroundAxis(up, normal, ang);
     var b = V.rotateAroundAxis(prograde, normal, ang);
     return { pos: ss.pos, fwd: normal, right: a, up: b };
@@ -6923,6 +7752,41 @@
       ctx.beginPath(); ctx.arc(sp.x, sp.y, 3.4, 0, K.TAU); ctx.fill();
       ctx.beginPath(); ctx.arc(sp.x, sp.y, 8, 0, K.TAU); ctx.stroke();
       ctx.restore();
+    }
+    /* Both outside the size branch, same reasoning as the traffic versions:
+     * being zoomed out is not a reason to miss having been hit. Your own
+     * field goes on the courier hull, because drawShipModel hard-codes that
+     * mesh — a form-fitting shield has to fit the ship that is on screen. */
+    playerShieldShell(ctx, cam);
+    drawHullBlooms(ctx, cam, G.ship);
+  }
+
+  /* Your own shell. The player's ship carries the same three fields every
+   * NPC does — shieldMax, shieldHp and impacts — because damagePlayer and
+   * damageNpc go through one splitDamage and one markImpact, so there is
+   * nothing here to keep in step with the other path. */
+  function playerShieldShell(ctx, cam) {
+    var s = G.ship;
+    var cap = s.shield ? Combat.MODULES.shield.cap : 0;
+    if (!(cap > 0) || !(s.shieldHp > 0)) return;
+    /* lastHitAt on the player is REAL milliseconds — damagePlayer has always
+     * written performance.now() there, because the regen tick compares it
+     * against a millisecond clock. The NPC path writes sim seconds. So the
+     * linger is computed here rather than through shieldLit, which would
+     * otherwise be handed two different units and quietly believe both. */
+    var sinceS = ((typeof performance !== 'undefined' ? performance.now() : 0)
+                  - (s.lastHitAt || -1e9)) / 1000;
+    if (!(sinceS >= 0) || sinceS > SHIELD_LINGER) return;
+    var leftS = SHIELD_LINGER - sinceS;
+    var lit = leftS >= SHIELD_FADE ? 1 : leftS / SHIELD_FADE;
+    var lenPx = Render.shipScreenLength(cam, s);
+    var nowS = nowSeconds();
+    var live = liveImpacts(s, nowS);
+    if (lenPx >= SHELL_MIN_PX) {
+      Render.drawShellField(ctx, cam, s, Render.SHIP_LEN, 'courier',
+                            s.shieldHp / cap, lit, live, nowS);
+    } else {
+      farShieldGlow(ctx, cam, s, s.shieldHp / cap, lit, live, lenPx, nowS);
     }
   }
 
@@ -7252,6 +8116,38 @@
       vg.addColorStop(1, 'rgba(255,60,40,' + (0.38 * f).toFixed(3) + ')');
       ctx.fillStyle = vg;
       ctx.fillRect(0, 0, w, h);
+      ctx.restore();
+    }
+
+    /* --- a wake chase: persistent, because it is a standing intention ---
+     * say() fades after nine seconds, and the whole point of laying in a
+     * course off a wake is that you then fly for a while before jumping. If
+     * the only record of who you are chasing and whether you can catch them
+     * disappeared while you were still climbing out of the gravity well, the
+     * player would have to re-scan the wake — which by then may have faded
+     * past the fidelity that told them in the first place. */
+    /* NOT during a jump. The corridor board occupies y 54 upward and this
+     * banner sits at 106, so the two would overlap — and inside the corridor
+     * the chase has stopped being an intention anyway: the contact list in
+     * front of you is the live version of the same information. Exactly the
+     * class of collision the tests are structurally blind to, which is why
+     * it is worth the extra clause rather than a look-and-see. */
+    if (G.wakeChase && flying() && !G.hyper) {
+      var wc = G.wakeChase;
+      var wcText = 'CHASING ' + wc.name +
+        (wc.starName ? '  →  ' + wc.starName : '') + '   ·   ' +
+        (wc.blind ? 'speed unknown'
+         : !wc.possible ? 'she lands first'
+         : 'intercept ' + (wc.at * 100).toFixed(0) + '%' +
+           (wc.estimated ? ' (est)' : ''));
+      ctx.save();
+      ctx.font = '11px ui-monospace, monospace';
+      var wcW = ctx.measureText(wcText).width;
+      panel(ctx, (w - wcW) / 2 - 14, 106, wcW + 28, 26);
+      ctx.fillStyle = wc.blind ? '#ffb86b' : (wc.possible ? '#7dffb0' : '#ff8a76');
+      ctx.textAlign = 'center';
+      ctx.fillText(wcText, w / 2, 123);
+      ctx.textAlign = 'left';
       ctx.restore();
     }
 
@@ -7866,6 +8762,53 @@
     G.title = { sel: 0, edit: null, note: 'Career committed to the autosave.' };
   }
 
+  /* ---- and quitting for real ---------------------------------------------
+   * The comment on quitToTitle says quit "does not close the window — there
+   * is no IPC to the shell to do it with". That was true of the shell and
+   * never true of the platform: an Electron renderer calling window.close()
+   * closes its own BrowserWindow, and electron/main.js already quits the app
+   * when the last window goes. So this needs no preload and no IPC — which
+   * matters, because that file's stated reason for having neither is that
+   * handing the renderer Node would widen what a bug could reach, and this
+   * costs exactly nothing against it.
+   *
+   * A BROWSER WILL REFUSE, and has to say so rather than offering a dead
+   * button. window.close() only works on a window a script opened, so in an
+   * ordinary tab the call quietly does nothing at all — which is the failure
+   * mode this project keeps naming: indistinguishable from a bug. The
+   * refusal carries its reason, the way canFit's does.
+   *
+   * The desktop build is recognised by its ORIGIN. electron/main.js serves
+   * the game over `game://` precisely so it has a real one, and nothing else
+   * in the world does — a far more honest test than sniffing the user agent
+   * for the word Electron, which is a string anything may claim. */
+  function isDesktopShell() {
+    return typeof location !== 'undefined' && location.protocol === 'game:';
+  }
+
+  function quitGame() {
+    /* The autosave first, and in every case, including the one where the
+     * window then refuses to close. Someone who quits and finds themselves
+     * still looking at the title screen must not also have lost the hour.
+     * beforeunload commits too, but only if the close actually happens. */
+    if (global.Save && G.ship && !G.ship.crashed) global.Save.store(G);
+    storePrefs();
+
+    if (!isDesktopShell()) {
+      if (G.title) {
+        G.title.note = 'A browser will not let a page close its own tab — ' +
+                       'close it yourself. Your career is saved.';
+      }
+      return;
+    }
+    if (G.title) G.title.note = 'Closing…';
+    try {
+      if (typeof window !== 'undefined' && window.close) window.close();
+    } catch (e) {
+      if (G.title) G.title.note = 'The window refused to close.';
+    }
+  }
+
   function menuItems() {
     return [
       { label: 'Resume', hint: 'back to the ship', run: closeMenu },
@@ -7888,7 +8831,15 @@
       { label: 'New career', hint: 'a seed is a universe',
         run: beginSeedEntry },
       { label: 'Options', hint: 'sound, display, flight, keys',
-        run: function () { G.title = null; G.menu = { page: 'options', sel: firstOption(), edit: null, note: null, fromTitle: true }; } }
+        run: function () { G.title = null; G.menu = { page: 'options', sel: firstOption(), edit: null, note: null, fromTitle: true }; } },
+      /* Last, and set apart by its hint rather than by a separator: it is the
+       * only item here that does not come back. The hint tells the truth
+       * about which build you are in before you press it, so nobody clicks a
+       * button in a browser tab expecting the window to go away. */
+      { label: 'Quit',
+        hint: isDesktopShell() ? 'close the window — the autosave is committed first'
+                               : 'a browser tab cannot close itself',
+        run: quitGame }
     ];
   }
 
@@ -8432,6 +9383,7 @@
     var lines = [
       ['GAME', ''],
       ['Esc', 'pause menu — save, load, options, quit to the main menu'],
+      ['', 'and the main menu has Quit, which closes the window'],
       ['P', 'pause the clock without leaving the cockpit'],
       ['', ''],
       ['VIEW', ''],
@@ -8463,6 +9415,18 @@
       ['[ and ]', 'step the lock through everything in the system'],
       ['L', 'release the lock'],
       ['T', 'assign the docking clamp to a locked station'],
+      ['J', 'slipspace chart'],
+      ['', ''],
+      ['SLIPSPACE WAKES  (red where a ship left, blue where one arrived)', ''],
+      ['', 'they hang outside the last planet, each on the bearing of'],
+      ['', 'wherever its ship was going — no scan key, the scanner reads'],
+      ['', 'whatever you fly close to, and reads it better the fresher it is'],
+      ['Shift+J', 'lay in a course after the wake the scanner can see,'],
+      ['', 'and say whether you could actually beat them there'],
+      ['', ''],
+      ['IN THE CORRIDOR  (only when there is traffic on the lane)', ''],
+      [', and .', 'throttle — a lever, not a tap. Match their speed to hold them'],
+      ['Space', 'hold an interdiction lock on whoever you are alongside'],
       ['', ''],
       ['FLIGHT  (burn directions are shown as arrows, lower left)', ''],
       ['W / S', 'prograde / retrograde  —  raises or lowers the far side'],
@@ -8547,6 +9511,13 @@
       ['', 'what you eject becomes a canister on your old trajectory —'],
       ['', 'it falls, it can be scanned, and anyone quick can collect it'],
       ['', 'fitted equipment is listed but has no eject control'],
+      ['', ''],
+      ['SALVAGE', ''],
+      ['', 'a destroyed ship comes apart, and some of the pieces carry'],
+      ['', 'what was still in its hold. drift onto one gently — under'],
+      ['', '80 m and 20 m/s — and it goes aboard like any canister'],
+      ['', 'on the radar: amber cross is worth taking, grey dot is scrap'],
+      ['', 'wreckage clears after about a minute and a half, or when you leave'],
       ['', ''],
       ['MANOEUVRE NODES  (plan a burn, see the orbit, then fly it)', ''],
       ['I', 'place a node at the next apoapsis  ·  again cycles pro/nor/rad/time'],
@@ -8802,6 +9773,11 @@
   }
 
   G.newGame = newGame;
+  /* Exposed for the same reason newGame is: a headless playtest needs to be
+   * able to arrive somewhere without starting a career. It is also the hook
+   * Save.restore already takes, so this is not a new entry point into the
+   * world — it is the existing one, named. */
+  G.enterSystem = enterSystem;
   /* One hand-cranked frame. The browser parks requestAnimationFrame the
    * moment the tab is hidden, which is correct for players and useless for
    * a script trying to playtest through a hidden pane — this is the crank

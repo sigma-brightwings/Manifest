@@ -70,6 +70,16 @@
     return HULL_CLASSES[HULL_CLASSES.length - 1];
   }
 
+  /* A representative tonnage for a hull class, for when a scan resolved the
+   * class but not the mass. Used to answer "could I catch her" off a partial
+   * read — which is the whole reason fidelity matters to the chase decision
+   * rather than only to the flavour text: a good scan lets you work out
+   * whether the pursuit is on before you spend the fuel, a poor one leaves
+   * you guessing, and no scan at all leaves you unable to say. */
+  var CLASS_TYPICAL = { I: 150, II: 400, III: 1200, IV: 2600 };
+
+  function classTypicalTonnes(id) { return CLASS_TYPICAL[id] || 0; }
+
   function hullClassById(id) {
     for (var i = 0; i < HULL_CLASSES.length; i++) {
       if (HULL_CLASSES[i].id === id) return HULL_CLASSES[i];
@@ -164,12 +174,36 @@
     return m.price[classId] || 0;
   }
 
-  /* What is fitted, as a hull-class id, or null. Stored on the ship as
-   * `ship.modules = { baffle: 'I', anchor: null }` so it saves with the ship
-   * for free, exactly the way docking clearance does. */
+  /* What is fitted, as a hull-class id, or null.
+   *
+   * IT USED TO BE `ship.modules = { baffle: 'I', anchor: null }` — a field
+   * invented here because the corridor needed somewhere to look and nothing
+   * else was reaching for it. That was the wrong home and it cost the
+   * feature everything an outfitting system provides: there was no way to
+   * BUY either module, no mass, no power draw, no save, and no refusal when
+   * one would not go. `combat.js` had all of that already.
+   *
+   * So the modules are now `EQUIPMENT` entries in the internal slot — four
+   * classes each, since the class is what the field covers — and this reads
+   * the fit map. The design still lives up in MODULES above: price, wake
+   * factor, resist factor. combat.js owns only what it takes to bolt one on.
+   *
+   * The old field is still read as a fallback, deliberately. It is what the
+   * corridor tests set, and anything already carrying one keeps working —
+   * the same courtesy the equipment table extends to legacy weapon ids, and
+   * for the same reason: a migration that silently drops the player's
+   * ninety-five-thousand-credit anchor is not a migration. */
   function fittedClass(ship, kind) {
-    if (!ship || !ship.modules) return null;
-    return ship.modules[kind] || null;
+    if (!ship) return null;
+    var Combat = global.Combat;
+    if (Combat && Combat.fittedList) {
+      var list = Combat.fittedList(ship);
+      for (var i = 0; i < list.length; i++) {
+        var it = list[i].item;
+        if (it && it.slipKind === kind) return it.slipClass;
+      }
+    }
+    return (ship.modules && ship.modules[kind]) || null;
   }
 
   /* A module only works if it is rated for the hull it is bolted to. Fitting
@@ -586,8 +620,9 @@
      * range sooner and reads worse while it lasts — one number doing both
      * jobs, which is why the baffle is worth its price without needing a
      * second mechanic. */
-    var fade = 1 - (age / WAKE_LIFE);
-    fade = fade * fade;                       // disperses fast at first
+    var linear = Math.max(0, 1 - (age / WAKE_LIFE));
+    var fade = linear * linear;               // disperses fast at first
+    var full = wakeRadius(st.leg.tonnes);
     var baffled = st.leg.baffle
       ? (MODULES.baffle.wakeFactor[st.leg.baffle] || 0.4) : 1;
     return {
@@ -601,12 +636,49 @@
       dir: b,
       age: age,
       life: WAKE_LIFE,
+      /* The hole this hull tore, in km — a function of tonnage alone, so a
+       * test can assert that a bulker's mark really is bigger than a
+       * packet's regardless of when it is looked at. */
+      radiusFull: full,
+      /* What is left of it NOW. A wake does not only dim as it disperses, it
+       * CLOSES: space is pulling itself back together, and a mark that faded
+       * while staying the same size would read as a light being turned down
+       * rather than a wound healing. Shrinks to 45% over its life, on a
+       * gentler curve than the brightness so an old wake is faint and small
+       * rather than vanishing at the same rate on both axes. */
+      radius: full * (0.45 + 0.55 * linear),
       strength: fade * baffled,
       baffled: !!st.leg.baffle,
       departedAt: st.departedAt,
       arrivesAt: st.arrivesAt,
       run: st
     };
+  }
+
+  /* How big a hole does a given hull tear?
+   *
+   * Size scales with the mass that went through, so a wake reports the
+   * tonnage of its ship BEFORE you have scanned anything — you can pick the
+   * bulk hauler's wake out of a scattering of packet trails from across the
+   * system and decide which one is worth flying to. That is real intel
+   * carried by the picture rather than by a readout, which is the best kind.
+   *
+   * A 0.42 exponent rather than linear: mass spans forty to one across the
+   * lane classes and a linear map would make a packet invisible next to a
+   * bulker. This gives about a five-fold spread — 14,000 km for the
+   * smallest, 67,000 for the largest — which is plainly readable without
+   * the small ones vanishing.
+   *
+   * Deliberately NOT reduced by a baffle. A baffle scatters the return so
+   * nobody can tell WHO you are; it cannot disguise how much ship went
+   * through the hole. Size is honest, detail is not — and that split is
+   * what stops the baffle from being an invisibility cloak. */
+  var WAKE_RADIUS_REF = 30000;      // km, for a 500 t hull
+  var WAKE_RADIUS_REF_TONNES = 500;
+
+  function wakeRadius(tonnes) {
+    var m = Math.max(1, tonnes || WAKE_RADIUS_REF_TONNES);
+    return WAKE_RADIUS_REF * Math.pow(m / WAKE_RADIUS_REF_TONNES, 0.42);
   }
 
   /* Where in the system does a wake actually hang?
@@ -644,14 +716,62 @@
 
   /* World position of a wake, given where the system's star is right now.
    * Kept Sim-free — the caller passes the star's position, because this file
-   * deliberately knows nothing about how bodies move. */
+   * deliberately knows nothing about how bodies move.
+   *
+   * SCATTERED, not on a ring. The first version put every wake at exactly
+   * `ring` distance along the exact bearing of its destination, which meant
+   * every ship that ever used a given lane left its mark on the same point
+   * in space — a handful of fixed pins rather than a system with traffic
+   * moving through it. Ships do not all leave from the same doorway.
+   *
+   * So each wake gets a deterministic offset of its own, drawn from its id:
+   * a spread of distances from well inside the outermost orbit to somewhat
+   * beyond it, and a bearing scattered around — but still BIASED TOWARD —
+   * the star it was heading for. The bias is worth keeping: it is what lets
+   * a player notice that the marks on one side of the system all point the
+   * same way and work out where the traffic goes without scanning anything.
+   *
+   * Deterministic in the wake's id, so a wake does not wander between frames
+   * or between sessions. Cached on the wake because it is asked for every
+   * frame by the renderer and the scanner both. */
   function wakePosition(wake, sunPos, radius) {
-    var d = wake.dir;
+    if (!wake._off) {
+      var rng = new RNG('wake-place|' + wake.id);
+      var h1 = rng.next(), h2 = rng.next(), h3 = rng.next(), h4 = rng.next();
+      var d = wake.dir;
+      /* Two directions perpendicular to the bearing, to spread it sideways
+       * and out of the plane without needing any rotation machinery. */
+      var up = Math.abs(d.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+      var p1 = cross3(d, up); p1 = norm3(p1);
+      var p2 = norm3(cross3(d, p1));
+      var a = (h2 - 0.5) * 1.15, b = (h3 - 0.5) * 0.75;
+      var v = norm3({
+        x: d.x + p1.x * a + p2.x * b,
+        y: d.y + p1.y * a + p2.y * b,
+        z: d.z + p1.z * a + p2.z * b
+      });
+      wake._off = { v: v, r: 0.42 + 0.85 * h1, tilt: (h4 - 0.5) * 0.25 };
+    }
+    var o = wake._off;
+    var R = radius * o.r;
     return {
-      x: sunPos.x + d.x * radius,
-      y: sunPos.y + d.y * radius,
-      z: sunPos.z + d.z * radius
+      x: sunPos.x + o.v.x * R,
+      y: sunPos.y + o.v.y * R,
+      z: sunPos.z + o.v.z * R + radius * o.tilt * 0.10
     };
+  }
+
+  function cross3(a, b) {
+    return {
+      x: a.y * b.z - a.z * b.y,
+      y: a.z * b.x - a.x * b.z,
+      z: a.x * b.y - a.y * b.x
+    };
+  }
+
+  function norm3(v) {
+    var l = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) || 1;
+    return { x: v.x / l, y: v.y / l, z: v.z / l };
   }
 
   /* ---- reading a wake ----------------------------------------------------
@@ -1153,6 +1273,8 @@
     HULL_CLASSES: HULL_CLASSES,
     hullClassFor: hullClassFor,
     hullClassById: hullClassById,
+    CLASS_TYPICAL: CLASS_TYPICAL,
+    classTypicalTonnes: classTypicalTonnes,
     allUpMass: allUpMass,
 
     BASE_HOURS_PER_LY: BASE_HOURS_PER_LY,
@@ -1214,6 +1336,8 @@
     wakesAt: wakesAt,
     jumpRingRadius: jumpRingRadius,
     wakePosition: wakePosition,
+    wakeRadius: wakeRadius,
+    WAKE_RADIUS_REF: WAKE_RADIUS_REF,
     scanFidelity: scanFidelity,
     scanWake: scanWake,
 

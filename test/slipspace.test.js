@@ -222,6 +222,124 @@ section('wakes');
   for (var q = 0; q < w1.length; q++) if (w1[q].id !== w2[q].id) sameIds = false;
   ok(sameIds, 'and the same wakes, by id');
 
+  /* SIZE IS MASS. A wake reports the tonnage that tore it before you have
+   * scanned a thing, which is what lets you pick which mark is worth flying
+   * to from across a system. */
+  ok(S.wakeRadius(3600) > S.wakeRadius(90) * 3,
+     'a bulk hauler tears a far bigger hole than a packet');
+  ok(S.wakeRadius(3600) < S.wakeRadius(90) * 9,
+     'but not so much bigger that a packet becomes invisible');
+  var risesWithMass = true;
+  for (var rm = 50; rm < 4000; rm += 97) {
+    if (S.wakeRadius(rm + 97) <= S.wakeRadius(rm)) risesWithMass = false;
+  }
+  ok(risesWithMass, 'wake size rises monotonically with tonnage');
+  near(S.wakeRadius(500), S.WAKE_RADIUS_REF, 1e-6,
+     'the reference tonnage gives the reference radius');
+  var carriesRadius = true, matchesTonnes = true, shrinks = true;
+  w1.forEach(function (x) {
+    if (!(x.radius > 0) || !(x.radiusFull > 0)) carriesRadius = false;
+    if (Math.abs(x.radiusFull - S.wakeRadius(x.leg.tonnes)) > 1e-6) matchesTonnes = false;
+    if (x.radius > x.radiusFull + 1e-9) shrinks = false;
+  });
+  ok(carriesRadius, 'every wake carries a full and a current radius');
+  ok(matchesTonnes, 'and the full one is what its tonnage says it should be');
+  ok(shrinks, 'and the current one never exceeds it');
+
+  /* A WAKE CLOSES AS IT AGES. Space is pulling itself back together, so an
+   * old mark is smaller as well as fainter — a wake that only dimmed would
+   * read as a light being turned down rather than a wound healing. */
+  var young = null, old = null;
+  for (var ai = 0; ai < 20000 && (!young || !old); ai++) {
+    var wl = S.wakesAt(g, g.home, ai * 700);
+    for (var aj = 0; aj < wl.length; aj++) {
+      var wk = wl[aj];
+      if (!young && wk.age < 900) young = wk;
+      if (!old && wk.age > S.WAKE_LIFE * 0.85) old = wk;
+    }
+  }
+  ok(!!young && !!old, 'the timetable offers both a fresh and a nearly-gone wake');
+  if (young && old) {
+    ok(young.radius / young.radiusFull > 0.95, 'a fresh wake is close to full size');
+    ok(old.radius / old.radiusFull < 0.60, 'a nearly-gone one has closed up substantially');
+    ok(old.strength < young.strength, 'and is fainter too');
+    /* Both axes, but not at the same rate — brightness goes quadratically
+     * and size linearly, so the old one is very faint and merely small. */
+    ok((old.strength / young.strength) < (old.radius / old.radiusFull),
+       'brightness fades faster than the hole closes');
+  }
+
+  /* A baffle must NOT shrink the hole. It scatters the return so nobody can
+   * tell who you are; it cannot disguise how much ship went through. That
+   * split is what stops it being an invisibility cloak. */
+  var baffledSame = true;
+  w1.forEach(function (x) {
+    if (x.baffled && Math.abs(x.radiusFull - S.wakeRadius(x.leg.tonnes)) > 1e-6) {
+      baffledSame = false;
+    }
+  });
+  ok(baffledSame, 'a baffle hides who you are, not how big you are');
+
+  /* SCATTERED AROUND THE SYSTEM, not pinned to a ring. Every ship that used
+   * a lane once left its mark on exactly the same point in space, which read
+   * as a few fixed pins rather than a system with traffic moving through it. */
+  var sunAt = { x: 0, y: 0, z: 0 };
+  var ring = 5e8;
+  var placed = [], distinct = true, spread = 0;
+  /* Deduped BY ID. Sampling across times returns the same physical wake
+   * repeatedly — its id carries the moment its ship left, not the moment we
+   * looked — and counting those as separate wakes would have this assert
+   * complain that a wake is in the same place as itself. */
+  var manyT = [], seenIds = {};
+  for (var st2 = 0; st2 < 3000000 && manyT.length < 12; st2 += 900) {
+    var wl2 = S.wakesAt(g, g.home, st2);
+    for (var k2 = 0; k2 < wl2.length; k2++) {
+      if (seenIds[wl2[k2].id]) continue;
+      seenIds[wl2[k2].id] = 1;
+      manyT.push(wl2[k2]);
+    }
+  }
+  ok(manyT.length >= 6, 'gathered a decent sample of wakes to place');
+  manyT.forEach(function (x) {
+    var pp = S.wakePosition(x, sunAt, ring);
+    var d = Math.sqrt(pp.x * pp.x + pp.y * pp.y + pp.z * pp.z);
+    placed.push({ p: pp, d: d });
+    spread = Math.max(spread, d);
+  });
+  var minD = Math.min.apply(null, placed.map(function (q) { return q.d; }));
+  var maxD = Math.max.apply(null, placed.map(function (q) { return q.d; }));
+  ok(maxD / minD > 1.4, 'wakes sit at a range of distances, not all on one ring (' +
+     (maxD / minD).toFixed(2) + 'x)');
+  /* No two on the same spot. */
+  for (var m1 = 0; m1 < placed.length && distinct; m1++) {
+    for (var m2 = m1 + 1; m2 < placed.length; m2++) {
+      var dx = placed[m1].p.x - placed[m2].p.x;
+      var dy = placed[m1].p.y - placed[m2].p.y;
+      var dz = placed[m1].p.z - placed[m2].p.z;
+      if (Math.sqrt(dx * dx + dy * dy + dz * dz) < ring * 0.01) distinct = false;
+    }
+  }
+  ok(distinct, 'no two wakes land on top of each other');
+
+  /* But placement is still STABLE — a wake must not wander between frames. */
+  var anchor = manyT[0];
+  var q1 = S.wakePosition(anchor, sunAt, ring);
+  var q2 = S.wakePosition(anchor, sunAt, ring);
+  ok(q1.x === q2.x && q1.y === q2.y && q1.z === q2.z,
+     'and a given wake is always in the same place');
+  /* And it still leans toward where its ship was going, so the sky stays
+   * readable as a traffic map. */
+  var leans = 0, tested = 0;
+  manyT.forEach(function (x) {
+    var pp = S.wakePosition(x, sunAt, ring);
+    var l = Math.sqrt(pp.x * pp.x + pp.y * pp.y + pp.z * pp.z) || 1;
+    var dot = (pp.x / l) * x.dir.x + (pp.y / l) * x.dir.y + (pp.z / l) * x.dir.z;
+    tested++;
+    if (dot > 0.5) leans++;
+  });
+  ok(leans / tested > 0.7,
+     'most wakes still lean toward the star their ship was heading for');
+
   /* Direction. A departure wake points at where the ship went, which is
    * what makes the sky readable before you scan anything. */
   var pointed = true;

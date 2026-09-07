@@ -887,6 +887,137 @@ section('--- jettisoned cargo is an object, not a deletion ---');
         sys.canisters.length === 0 && !!doomed);
 })();
 
+section('--- a destroyed ship comes apart ---');
+(function () {
+  var sys = Gen.generateSystem('kawartha');
+  var planet = sys.bodies.filter(function (b) { return b.kind === 'planet'; })[0];
+  var here = Sim.bodyPosition(planet, sys, 0);
+  var at = { x: here.x + 400, y: here.y, z: here.z };
+  var vel = { x: 0, y: 3, z: 0 };
+  sys.canisters = [];
+
+  var made = Sim.spawnDebris(sys, 'n7', at, vel, 0.06, 0,
+                             [{ cid: 'alloys', tonnes: 12 }]);
+  check('a wreck throws a handful of shards', made.length >= 6 && made.length <= 16,
+        made.length + ' shards');
+  check('and they are in the canister list, not a second one',
+        sys.canisters.length === made.length &&
+        Sim.debrisAll(sys).length === made.length);
+
+  /* SEED DISCIPLINE. The doctrine's first rule, in the one place it would
+   * never be noticed if it were broken: nobody re-watches an explosion
+   * frame by frame, which is exactly why Math.random() here would have
+   * survived. */
+  var sys2 = Gen.generateSystem('kawartha');
+  sys2.canisters = [];
+  var again = Sim.spawnDebris(sys2, 'n7', at, vel, 0.06, 0,
+                              [{ cid: 'alloys', tonnes: 12 }]);
+  var same = again.length === made.length;
+  for (var q = 0; q < made.length && same; q++) {
+    if (V.dist(made[q].vel, again[q].vel) > 1e-12) same = false;
+    if (made[q].shard !== again[q].shard) same = false;
+    if (Math.abs(made[q].spinRate - again[q].spinRate) > 1e-12) same = false;
+  }
+  check('the same wreck throws the same pieces the same way', same);
+
+  var sys3 = Gen.generateSystem('kawartha');
+  sys3.canisters = [];
+  var other = Sim.spawnDebris(sys3, 'n8', at, vel, 0.06, 0, []);
+  check('and a different ship does not',
+        V.dist(other[0].vel, made[0].vel) > 1e-9);
+
+  /* The index has to reach the hash properly. `wakeHash` appended it to a
+   * shared prefix and read the high bits, FNV-1a did not diffuse it upward,
+   * and every arc of a wake came out identical and drew stacked on itself. */
+  var dirs = {}, meshes = {}, distinct = 0;
+  for (var d = 0; d < made.length; d++) {
+    var key = made[d].vel.x.toFixed(9) + ',' + made[d].vel.y.toFixed(9);
+    if (!dirs[key]) { dirs[key] = true; distinct++; }
+    meshes[made[d].shard] = true;
+  }
+  check('every shard goes its own way rather than stacking',
+        distinct === made.length, distinct + ' of ' + made.length);
+  check('and they are not all the same mesh',
+        Object.keys(meshes).length > 2, Object.keys(meshes).length + ' shapes');
+
+  /* Thrown outward from the wreck, carrying the ship's own velocity — an
+   * explosion happens TO a ship, it does not stop one. */
+  var outward = true, carried = true;
+  for (var e = 0; e < made.length; e++) {
+    if (V.dot(V.sub(made[e].pos, at), V.sub(made[e].vel, vel)) <= 0) outward = false;
+    if (V.dist(made[e].vel, vel) > 0.5) carried = false;
+  }
+  check('each shard flies away from where the ship was', outward);
+  check('and inherits the velocity it had', carried);
+
+  /* Salvage rides on the shards, so the scoop and the hold accounting work
+   * on it with no second system. Most of the field is scrap. */
+  var withCargo = made.filter(function (c) { return c.cid && c.tonnes > 0; });
+  check('some of the wreck is worth taking', withCargo.length >= 1 && withCargo.length <= 4,
+        withCargo.length + ' salvageable');
+  check('but most of it is scrap you fly through', withCargo.length < made.length / 2);
+  var salvaged = 0;
+  withCargo.forEach(function (c) { salvaged += c.tonnes; });
+  check('and the salvage is a fraction of the hold, not a copy of it',
+        salvaged > 0 && salvaged < 12, salvaged + ' t of 12');
+
+  /* THE CHEAP PATH, and why it is a different one. A shard is integrated
+   * near the player and simply dropped when it is not — no Kepler rail,
+   * because solving an ellipse for something that will not exist by the
+   * time it completes a degree of it is work done for nobody. */
+  var p0 = V.clone(made[0].pos);
+  var tt = 0;
+  for (var i = 0; i < 30; i++) { Sim.updateCanisters(sys, at, tt, 1); tt += 1; }
+  check('shards are simulated while you are watching', Sim.debrisAll(sys).length === made.length);
+  check('and they move', V.dist(Sim.debrisAll(sys)[0].pos, p0) > 1e-6);
+  var railed = Sim.debrisAll(sys).filter(function (c) { return c.rail; });
+  check('without ever being put on a rail', railed.length === 0);
+
+  /* It falls. One gravity evaluation against the body that dominated where
+   * it died is the whole model, and it has to actually bend the path. */
+  var sys4 = Gen.generateSystem('kawartha');
+  sys4.canisters = [];
+  var low = Sim.circularOrbit(planet, sys4, 0, planet.radius * 0.5, 0, 0);
+  var one = Sim.spawnDebris(sys4, 'g1', low.pos, { x: 0, y: 0, z: 0 }, 0.05, 0, [])[0];
+  var d0 = V.dist(one.pos, Sim.bodyPosition(planet, sys4, 0));
+  var t4 = 0;
+  for (var f = 0; f < 60; f++) { Sim.updateCanisters(sys4, low.pos, t4, 1); t4 += 1; }
+  var d1 = V.dist(one.pos, Sim.bodyPosition(planet, sys4, t4));
+  check('a shard dropped from rest falls toward the planet', d1 < d0,
+        d0.toFixed(1) + ' -> ' + d1.toFixed(1) + ' km');
+
+  /* Out of the area it is gone, which is what the player asked for and what
+   * the wake radius already means. */
+  Sim.updateCanisters(sys, { x: 1e12, y: 0, z: 0 }, tt, 1);
+  check('leaving the area throws the wreckage away', Sim.debrisAll(sys).length === 0);
+
+  /* Ninety seconds, not a day. */
+  var sys5 = Gen.generateSystem('kawartha');
+  sys5.canisters = [];
+  Sim.spawnDebris(sys5, 'x1', at, vel, 0.06, 0, []);
+  Sim.updateCanisters(sys5, at, Sim.DEBRIS_LIFE * 0.5, 1);
+  check('wreckage is still there half a life in', Sim.debrisAll(sys5).length > 0);
+  Sim.updateCanisters(sys5, at, Sim.DEBRIS_LIFE + 1, 1);
+  check('and gone after ninety seconds', Sim.debrisAll(sys5).length === 0);
+  check('which is far shorter than a canister lives',
+        Sim.DEBRIS_LIFE < Sim.CANISTER_LIFE / 100);
+
+  /* CAPPED, oldest first. An uncapped field is a memory leak that grows
+   * with the body count, on a machine with integrated graphics. */
+  var sys6 = Gen.generateSystem('kawartha');
+  sys6.canisters = [];
+  var crate = Sim.dropCanister(sys6, { pos: at, vel: vel, fwd: { x: 1, y: 0, z: 0 } },
+                               'grain', 5, 0);
+  for (var kk = 0; kk < 40; kk++) {
+    Sim.spawnDebris(sys6, 'kill' + kk, at, vel, 0.20, 0, []);
+  }
+  check('the debris field is capped however many ships die',
+        Sim.debrisAll(sys6).length <= Sim.DEBRIS_MAX,
+        Sim.debrisAll(sys6).length + ' of ' + Sim.DEBRIS_MAX);
+  check('and the cap never eats somebody\'s cargo',
+        sys6.canisters.indexOf(crate) >= 0);
+})();
+
 /* Atmospheres, drag and re-entry heat. The thing these guard is that an
  * atmosphere is invisible until it kills you: there is no way to see from
  * the screen that density is wrong by a factor of a thousand until a ship

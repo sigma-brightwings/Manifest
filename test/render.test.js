@@ -17,16 +17,44 @@ var pass = 0, fail = 0;
 function check(n, c, d) { if (c) pass++; else { fail++; console.log('  FAIL  ' + n + (d ? '   ' + d : '')); } }
 
 /* ---- the fake canvas -------------------------------------------------- */
-var drawn = { texts: [], calls: 0 };
+var drawn = { texts: [], calls: 0, glass: [] };
 
 function makeCtx() {
   var noop = function () { drawn.calls++; };
+  var alphaStack = [];
   var ctx = {
+    globalAlpha: 1,
     canvas: null,
-    save: noop, restore: noop, beginPath: noop, closePath: noop,
+    /* save/restore actually stack globalAlpha, unlike the rest of this
+     * stub. A no-op restore would let a leaked opacity look like a clean
+     * one — the drawing code would fail to put it back, the stub would
+     * never notice, and every hull painted after a pane of glass would come
+     * out washed out in the real game only. */
+    save: function () { drawn.calls++; alphaStack.push(this.globalAlpha); },
+    restore: function () {
+      drawn.calls++;
+      if (alphaStack.length) this.globalAlpha = alphaStack.pop();
+    },
+    beginPath: noop, closePath: noop,
     moveTo: noop, lineTo: noop, quadraticCurveTo: noop, bezierCurveTo: noop,
     arc: noop, arcTo: noop, ellipse: noop, rect: noop,
-    fill: noop, stroke: noop, clip: noop,
+    /* TRANSLUCENT fills only, and only those. Translucency is otherwise
+     * invisible to a stub — globalAlpha is a property nobody reads — and it
+     * is the one observable that separates a pane of glass from a solid
+     * wall of the same colour.
+     *
+     * Opaque fills are deliberately not recorded. The suite steps many
+     * thousands of frames and paints a few hundred triangles in most of
+     * them, so keeping all of them would be a six-figure array of objects
+     * held for the whole run to answer a question nothing asks. */
+    fill: function () {
+      drawn.calls++;
+      var a = this.globalAlpha;
+      if (typeof a === 'number' && a < 1) {
+        drawn.glass.push({ style: this.fillStyle, alpha: a });
+      }
+    },
+    stroke: noop, clip: noop,
     fillRect: noop, strokeRect: noop, clearRect: noop,
     setLineDash: noop, translate: noop, scale: noop, rotate: noop,
     setTransform: noop, transform: noop, drawImage: noop,
@@ -143,9 +171,154 @@ function frame(dt) {
 
 function frames(n, dt) { for (var i = 0; i < n; i++) frame(dt); }
 
+/* A NEW CAREER NOW STARTS ON A PAD, and almost every section below was
+ * written when it started in a parking orbit. Rather than each one quietly
+ * coping, they say what they need: `newFlying` starts a career and gets it
+ * off the ground, `G.newGame` is left for the one section that is about the
+ * opening state itself.
+ *
+ * This matters more than it looks. The three tests that failed when the
+ * docked start landed were not testing docking at all — a wake chase, the
+ * chase banner, and auto-dock — and none of them failed loudly. They ran
+ * their guard loops to exhaustion, 6,433 and 8,000 frames apiece, and took
+ * the whole suite past its time budget. A test that starts in the wrong
+ * state does not usually announce it; it just gets slow and wrong. */
+/* It is NOT enough to undock. The fresh career now berths at a port on the
+ * planet's SURFACE, so undocking leaves the ship sitting just off a pad a
+ * couple of hundred kilometres under the orbital station — which is a
+ * completely different problem from the parking orbit these sections were
+ * written against. Auto-dock, told to fly from there to the station, ran its
+ * 6,279-frame guard out and reported nothing, and the failure said
+ * "docked=null" rather than "your fixture moved".
+ *
+ * So this reproduces the OLD opening state exactly: the parking orbit
+ * spawnShip used to leave you in, 93% of the station's orbital radius at the
+ * station's own inclination. */
+function newFlying(seed) {
+  G.newGame(seed);
+  frames(1);
+  var host = G.spawnHost;
+  var station = G.homeStation;
+  G.ship.docked = null;
+  G.ship.dockOffset = null;
+  G.dockTarget = null;
+  G.dockStatus = null;
+  if (host) {
+    var alt = (station && station.orbit)
+      ? station.orbit.a * 0.93 - host.radius
+      : host.radius * 0.55;
+    if (alt < host.radius * 0.06) alt = host.radius * 0.25;
+    var fresh = Sim.circularOrbit(host, G.sys, G.t, alt,
+      (station && station.orbit) ? station.orbit.inc : 0.05, 0.6);
+    G.ship.pos = fresh.pos; G.ship.vel = fresh.vel;
+    G.ship.fwd = fresh.fwd; G.ship.up = fresh.up; G.ship.right = fresh.right;
+    Sim.refreshShip(G.ship);
+  }
+  G.viewMode = 'orbit';
+  frames(1);
+}
+
 function errorsSince(mark) {
   return drawn.texts.slice(mark).filter(function (t) { return t.indexOf('error:') === 0; });
 }
+
+/* ---- the opening state ---------------------------------------------------
+ * The one section that wants a career exactly as a new player gets it, so
+ * it calls G.newGame rather than newFlying. It runs before everything else
+ * and leaves the world airborne so the sections after it see what they were
+ * written against. */
+console.log('--- a new career starts on a pad ---');
+(function () {
+  G.newGame('kawartha');
+  frames(2);
+
+  check('a fresh career begins docked', !!G.ship.docked, String(G.ship.docked));
+  var port = G.sys.byId[G.ship.docked];
+  check('at a real port with a market to trade at', !!port && !!port.market,
+        port && port.name);
+  check('and the game knows it as home', G.homeStation === port);
+  check('stationary, not holding an orbit it did not establish',
+        V.len(G.ship.thrust) === 0 && !G.autodock && !G.cruise);
+
+  /* THE THING THE ORIGINAL REPORT WAS ABOUT. The ship was never actually on
+   * its side — the attitude was exactly level and stayed level in roll, and
+   * the pitch drift is the orbital rate, which is correct for a hull with
+   * nothing holding its attitude. What looked wrong was the opening FRAME:
+   * the exterior camera's up is the world z axis, and the spawn orbit is
+   * nearly the world xy plane, so a level ship was drawn belly-sideways.
+   * Docked in the seat is unambiguous, so this pins the view too. */
+  check('and looking out of the cockpit rather than at the hull from a'
+        + ' camera with no idea where down is', G.viewMode === 'cockpit',
+        G.viewMode);
+
+  /* Launch clearance is NOT granted: asking for it is the first action, and
+   * newGame says which keys do that. What must not happen is being unable
+   * to find out. */
+  check('with no launch clearance yet — asking is the first thing you do',
+        !W.Combat.launchCleared(G, port));
+  /* Read off G.message rather than the drawn text, because `say` holds ONE
+   * message — which is the bug this check caught: the opening was two calls,
+   * so the line naming the port was overwritten before it was ever drawn. */
+  check('and the way off the pad is spelled out in one message',
+        /F4/.test(G.message || '') && /U$|U\b/.test(G.message || '') &&
+        /Docked at/.test(G.message || ''), G.message);
+
+  /* A respawn after a crash still arrives in ORBIT, not on a pad — being
+   * handed your ship back berthed would quietly undo the cost of having
+   * crashed. The docked start is gated on `fresh`, which respawnShip does
+   * not pass, and this is the assertion that keeps that true: enterSystem
+   * without `fresh` leaves the ship flying. */
+  /* A BERTHED SHIP IS LEVEL, and this is the one the original report was
+   * actually about. dockShip's orbital branch built `right` from
+   * anyPerpendicular, which picks any vector at right angles to the nose —
+   * an arbitrary bank angle. Nobody would notice except that save.js
+   * re-docks on load and main.js restores the autosave at boot, so quitting
+   * on the clamps and coming back meant coming back on your side, ladder
+   * reading ninety degrees, before touching anything. */
+  var lvDock = Sim.localVertical(G.ship.pos, G.sys, G.t);
+  var attDock = Sim.attitudeAngles(G.ship, lvDock.up);
+  check('a ship on the pad is level, not banked',
+        Math.abs(attDock.rollDeg) < 1.0, attDock.rollDeg + '°');
+
+  /* And at a station, which is the path that was broken. Docked by hand at
+   * an orbital port from a silly attitude: the roll must come out level
+   * regardless of what it was before. */
+  var orbPort = (G.sys.ports || []).filter(function (p) { return !p.surface; })[0];
+  check('the home system has an orbital port to test against', !!orbPort);
+  if (orbPort) {
+    var ops = Sim.bodyState(orbPort, G.sys, G.t);
+    G.ship.docked = null;
+    G.ship.pos = V.addScaled(ops.pos, { x: 1, y: 0, z: 0 }, 0.4);
+    G.ship.vel = V.clone(ops.vel);
+    /* Deliberately absurd: rolled onto its back. */
+    G.ship.up = V.scale(G.ship.up, -1);
+    G.ship.right = V.scale(G.ship.right, -1);
+    Sim.refreshShip(G.ship);
+    Sim.dockShip(G.ship, orbPort, G.sys, G.t);
+    frames(1);
+    var lvSt = Sim.localVertical(G.ship.pos, G.sys, G.t);
+    var attSt = Sim.attitudeAngles(G.ship, lvSt.up);
+    check('docking at a station levels the ship instead of banking it at random',
+          Math.abs(attSt.rollDeg) < 1.0, attSt.rollDeg + '°');
+    check('and its up points away from what it is orbiting — gear down',
+          V.dot(G.ship.up, lvSt.up) > 0.99, V.dot(G.ship.up, lvSt.up).toFixed(4));
+    /* The offset is captured from where the ship IS, so a ship snapped onto
+     * the clamps stays on them rather than floating a few hundred km off. */
+    check('and it is actually at the port, not merely flagged as docked',
+          V.dist(G.ship.pos, Sim.bodyState(orbPort, G.sys, G.t).pos) < 2,
+          V.dist(G.ship.pos, ops.pos).toFixed(2) + ' km');
+  }
+
+  check('the harness can arrive somewhere without starting a career',
+        typeof G.enterSystem === 'function');
+  G.enterSystem(G.here, {});
+  frames(2);
+  check('re-entering a system without a fresh career does not berth you',
+        !G.ship.docked, String(G.ship.docked));
+
+  newFlying('kawartha');                 // leave the world as the rest expects
+  check('and the harness can get it airborne again', !G.ship.docked);
+})();
 
 function scenario(name, setup, count) {
   var mark = drawn.texts.length;
@@ -703,9 +876,1037 @@ console.log('--- the yard, the board, and a fight on screen ---');
   frames(2);
 })();
 
+/* A tracer's length is the thing that was wrong — the bolts read as fat
+ * short slugs, and the fix was to let the packet debunch as it flies. The
+ * drawing itself is invisible to this harness (the stub records no
+ * geometry), but the span that drives it is a pure function and can be held
+ * to the physics it claims. */
+console.log('--- bolt span ---');
+(function () {
+  var R = W.Render;
+  check('the bolt span is exported', typeof R.boltSpan === 'function');
+  if (typeof R.boltSpan !== 'function') return;
+
+  var CROSS = 0.20;
+  var born = R.boltSpan(0, CROSS);
+  check('a bolt starts at the muzzle', born.head === 0 && born.tail === 0);
+
+  /* The head is linear in time until it arrives, and arrives exactly once. */
+  var quarter = R.boltSpan(CROSS * 0.25, CROSS);
+  var half = R.boltSpan(CROSS * 0.5, CROSS);
+  check('the head crosses at a constant rate',
+        Math.abs(quarter.head - 0.25) < 1e-9 && Math.abs(half.head - 0.5) < 1e-9,
+        quarter.head + ' / ' + half.head);
+  check('the head stops at the target and does not overshoot',
+        R.boltSpan(CROSS, CROSS).head === 1 &&
+        R.boltSpan(CROSS * 4, CROSS).head === 1);
+
+  /* The whole point: it gets LONGER on the way out. Monotonically, so there
+   * is no frame where it briefly shortens and reads as a stutter. */
+  var prev = -1, grew = true, samples = 0;
+  for (var f = 0; f <= 1; f += 0.05) {
+    var s = R.boltSpan(CROSS * f, CROSS);
+    if (s.len < prev - 1e-9) grew = false;
+    prev = s.len; samples++;
+  }
+  check('the streak elongates all the way to the target', grew && samples > 15,
+        samples + ' samples');
+  check('and it is several times its muzzle length by arrival',
+        R.boltSpan(CROSS, CROSS).len > R.boltSpan(CROSS * 0.02, CROSS).len * 4,
+        R.boltSpan(CROSS, CROSS).len + ' vs ' + R.boltSpan(CROSS * 0.02, CROSS).len);
+
+  /* Long enough to read as a streak rather than a dot, short enough that it
+   * is not simply a bar from the muzzle to the target — which is what the
+   * beam variety is for, and the two must not look the same. */
+  var atHit = R.boltSpan(CROSS, CROSS).len;
+  check('the streak is a streak, not a dot and not a bar',
+        atHit > 0.25 && atHit < 0.75, String(atHit));
+
+  /* After arrival the head is pinned and the tail keeps running, so the
+   * streak collapses into the impact point instead of blinking out. */
+  var after = R.boltSpan(CROSS * 1.2, CROSS);
+  check('the tail keeps going after the head arrives',
+        after.tail > R.boltSpan(CROSS, CROSS).tail && after.head === 1,
+        after.tail + ' > ' + R.boltSpan(CROSS, CROSS).tail);
+  var gone = R.boltSpan(CROSS * 3, CROSS);
+  check('and the streak is eventually gone rather than inverted',
+        gone.len === 0 && gone.tail <= gone.head, gone.len + ' / ' + gone.tail);
+
+  /* Nothing here may hand the caller a fraction outside the run, or the
+   * tracer would be drawn behind the muzzle or past the target. */
+  var sane = true;
+  for (var g = -0.5; g <= 3; g += 0.07) {
+    var q = R.boltSpan(CROSS * g, CROSS);
+    if (!(q.tail >= 0 && q.tail <= 1 && q.head >= 0 && q.head <= 1 &&
+          q.tail <= q.head)) sane = false;
+  }
+  check('every span stays inside the muzzle-to-target run', sane);
+
+  /* A zero or missing cross would divide by nothing; it falls back rather
+   * than handing the renderer a NaN to draw with. */
+  var safe = R.boltSpan(0.1, 0);
+  check('a missing crossing time falls back instead of going NaN',
+        isFinite(safe.head) && isFinite(safe.tail) && safe.head > 0);
+
+  /* ---- and the perspective, which was the second report ----------------
+   * The bolt was drawn between two projected endpoints with the width on a
+   * fixed pixel ramp, so every shot tapered identically however it was
+   * pointed, and the head crossed the screen at a constant rate however far
+   * it was receding. Both of those are what "the perspective is wrong" looks
+   * like, and both are testable off a real camera without a canvas. */
+  var cam = new R.Camera();
+  cam.eye = { x: 0, y: 0, z: 0 };
+  cam.f = { x: 0, y: 0, z: 1 };      // looking down +z
+  cam.r = { x: 1, y: 0, z: 0 };
+  cam.u = { x: 0, y: 1, z: 0 };
+  cam.near = 0.001;
+  cam.flen = 600; cam.cx = 800; cam.cy = 450; cam.w = 1600; cam.h = 900;
+
+  /* The distances below are all inside the taper band — roughly 3 km to
+   * 22 km at this focal length. That is deliberate and it is the thing the
+   * first version of this test failed to check: with an honestly physical
+   * 1.5 m packet the width floors at 1.8 km, so every sample at combat range
+   * came back at exactly the floor and "constant width broadside" passed by
+   * being constant everywhere. A test that cannot fail is not a test. */
+
+  /* BROADSIDE: a shot crossing the view at a constant 8 km. Both ends are
+   * the same distance away, so it must be a ribbon of CONSTANT width — the
+   * case the old fixed 4.4x taper got most visibly wrong. */
+  var side = R.boltRibbon(cam, { x: -6, y: 0, z: 8 }, { x: 12, y: 0, z: 0 },
+                          0, 1, 1);
+  check('a broadside shot projects a ribbon', !!side);
+  if (side) {
+    var wMin = Infinity, wMax = 0;
+    side.forEach(function (s) { wMin = Math.min(wMin, s.w); wMax = Math.max(wMax, s.w); });
+    check('and it is the same width along its whole length',
+          wMax - wMin < 1e-9 || wMax / wMin < 1.02, wMin + ' .. ' + wMax);
+  }
+
+  /* RECEDING: a shot fired away from the camera and off to one side, from
+   * 4 km out to 20. Now the far end genuinely is further away, so it must
+   * narrow — and the samples must CROWD toward the far end, which is the
+   * travel half of the bug. Angled rather than straight down the boresight,
+   * because a shot exactly along the view axis projects to a single point
+   * and has no spacing to measure. */
+  var away = R.boltRibbon(cam, { x: 0.5, y: 0, z: 4 }, { x: 5.5, y: 0, z: 16 },
+                          0, 1, 1);
+  check('a receding shot projects a ribbon', !!away);
+  if (away && side) {
+    var n = away.length - 1;
+    check('a receding shot narrows with distance', away[0].w > away[n].w,
+          away[0].w + ' -> ' + away[n].w);
+    check('and it narrows differently from a broadside one — which is the '
+          + 'whole bug', (away[0].w / away[n].w) > (side[0].w / side[n].w) * 1.5,
+          (away[0].w / away[n].w).toFixed(2) + ' vs ' +
+          (side[0].w / side[n].w).toFixed(2));
+
+    /* THE TRAVEL. Evenly spaced fractions of a receding world ray do not
+     * land evenly on the screen: they bunch toward the vanishing point. The
+     * old code walked the head linearly in pixels, which is why a bolt slid
+     * at uniform speed and read as painted on the glass. */
+    var gaps = [];
+    for (var g = 0; g < n; g++) {
+      gaps.push(Math.hypot(away[g + 1].x - away[g].x, away[g + 1].y - away[g].y));
+    }
+    var shrinking = true;
+    for (var h = 1; h < gaps.length; h++) if (gaps[h] > gaps[h - 1] + 1e-9) shrinking = false;
+    check('equal steps down a receding ray crowd together on screen',
+          shrinking && gaps[0] > gaps[gaps.length - 1] * 1.2,
+          gaps.map(function (x) { return x.toFixed(1); }).join(' '));
+
+    /* Broadside, the same steps stay evenly spaced — no false foreshortening
+     * on a shot that is not going anywhere. */
+    var even = true;
+    for (var e = 1; e < n; e++) {
+      var g0 = Math.hypot(side[1].x - side[0].x, side[1].y - side[0].y);
+      var ge = Math.hypot(side[e + 1].x - side[e].x, side[e + 1].y - side[e].y);
+      if (Math.abs(ge - g0) > 0.01) even = false;
+    }
+    check('and broadside they stay evenly spaced', even);
+  }
+
+  /* The floor and the cap. A bolt a kilometre out must still be a visible
+   * hairline, and one a metre from the eye must not become the canopy. */
+  var farOff = R.boltRibbon(cam, { x: 0, y: 0, z: 4000 }, { x: 1, y: 0, z: 0 },
+                            0, 1, 1);
+  check('a distant bolt is floored to a hairline rather than vanishing',
+        !!farOff && farOff[0].w === R.BOLT_MIN_W, farOff && String(farOff[0].w));
+  var muzzle = R.boltRibbon(cam, { x: 0, y: 0, z: 0.0015 },
+                            { x: 0.001, y: 0, z: 0 }, 0, 1, 1);
+  check('and one at the muzzle is capped rather than filling the canopy',
+        !!muzzle && muzzle[0].w === R.BOLT_MAX_W, muzzle && String(muzzle[0].w));
+
+  /* A ray that straddles the eye has no honest ribbon; the caller is meant
+   * to fall back rather than draw a folded one. */
+  check('a ray through the camera refuses rather than folding',
+        R.boltRibbon(cam, { x: 0, y: 0, z: -50 }, { x: 0, y: 0, z: 100 },
+                     0, 1, 1) === null);
+})();
+
+/* Wreckage. The mesh pool is the part with a real constraint behind it —
+ * gl.js caches GPU buffers on the mesh object, so a unique mesh per shard
+ * would upload a buffer per fragment of every kill and never free one. */
+console.log('--- wreckage ---');
+(function () {
+  var R = W.Render;
+  check('the shard pool is exported', typeof R.shardMeshes === 'function');
+  if (typeof R.shardMeshes !== 'function') return;
+
+  var pool = R.shardMeshes();
+  check('it is a small fixed pool', pool.length === R.SHARD_COUNT && pool.length <= 12,
+        pool.length + ' shapes');
+  check('BUILT ONCE — object identity is what makes the GPU cache work',
+        R.shardMeshes() === pool && R.shardMeshes()[0] === pool[0]);
+  check('every shard is a closed mesh with faces',
+        pool.every(function (m) { return m.v.length >= 8 && m.f.length >= 12; }));
+
+  /* Seeded from one fixed stream, so the same eight shapes exist in every
+   * system of every seed — a property of the game, like a hull model, not
+   * of any place in it. */
+  var shapes = {};
+  pool.forEach(function (m) { shapes[JSON.stringify(m.v)] = true; });
+  check('and no two of them are the same shape',
+        Object.keys(shapes).length === pool.length);
+
+  /* Plates, not dice: a roughly cubical shard tumbles into a speck and
+   * reads as dirt on the canopy rather than as part of a ship. */
+  var platey = pool.every(function (m) {
+    var lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
+    m.v.forEach(function (p) {
+      for (var a = 0; a < 3; a++) {
+        if (p[a] < lo[a]) lo[a] = p[a];
+        if (p[a] > hi[a]) hi[a] = p[a];
+      }
+    });
+    var w = hi[0] - lo[0], t = hi[1] - lo[1], l = hi[2] - lo[2];
+    return Math.max(w, l) > t * 1.6;
+  });
+  check('each one is a plate rather than a lump', platey);
+
+  /* And the sim's mesh index has to actually land in this pool — the two
+   * halves live in different files and combat.test.js can only bound the
+   * index against a literal. */
+  var sysD = G.sys;
+  sysD.canisters = [];
+  var made = Sim.spawnDebris(sysD, 'render-probe', V.clone(G.ship.pos),
+                             V.clone(G.ship.vel), 0.08, G.t,
+                             [{ cid: 'alloys', tonnes: 9 }]);
+  check('every shard the sim makes indexes a mesh that exists',
+        made.every(function (c) { return !!pool[c.shard]; }));
+
+  /* Checked BEFORE any frames run. The field is planted on top of the
+   * player here, so stepping the game immediately scoops the salvage and
+   * clears its cid — which is the scoop working, and which quietly emptied
+   * this assertion when it sat after the draw. */
+  var salv = made.filter(function (c) { return c.cid; });
+  check('some of it is worth taking', salv.length > 0);
+  check('and the rest carries nothing to take',
+        made.length - salv.length > salv.length);
+
+  /* THE THING THE UNIT TESTS CANNOT SEE: does a field of tumbling wreckage
+   * survive being drawn, in both views, with salvage in it? */
+  var mark = drawn.texts.length;
+  var threw = null;
+  G.panel = 0;
+  try {
+    ['cockpit', 'orbit'].forEach(function (v) { G.viewMode = v; frames(4); });
+  } catch (e) { threw = e; }
+  check('a debris field renders in both views',
+        !threw && errorsSince(mark).length === 0,
+        threw ? threw.message + ' | ' + String(threw.stack).split('\n')[1]
+              : errorsSince(mark)[0]);
+
+  /* Salvage goes aboard through the canister path and scrap does not, so a
+   * debris field is something to pick through rather than to hoover. The
+   * field above is planted right on the ship, so four frames is enough for
+   * the scoop to have taken what it could. */
+  check('flying through it takes the salvage and leaves the scrap',
+        made.filter(function (c) { return c.cid; }).length < salv.length,
+        salv.length + ' -> ' + made.filter(function (c) { return c.cid; }).length);
+  check('and the scrap is still there to fly through',
+        Sim.debrisAll(sysD).length === made.length, Sim.debrisAll(sysD).length + '');
+
+  sysD.canisters = [];
+  G.viewMode = 'cockpit';
+  frames(2);
+})();
+
+/* Shields. The shell is a hull mesh pushed out along its own normals, so
+ * the testable claims are geometric: it wraps the ship, it stands off it by
+ * the right amount, and there is exactly one of them per kind — that last
+ * one for the same reason the shard pool is fixed, because gl.js caches GPU
+ * buffers on the mesh object. */
+console.log('--- shields ---');
+(function () {
+  var R = W.Render;
+  check('the shell mesh is exported', typeof R.shellMesh === 'function');
+  if (typeof R.shellMesh !== 'function') return;
+
+  var shell = R.shellMesh('courier');
+  var hull = R.shipMeshes().courier;
+  check('BUILT ONCE — object identity is what makes the GPU cache work',
+        R.shellMesh('courier') === shell);
+
+  /* A FIXED BUDGET, WHATEVER THE MODEL. The first version was a true offset
+   * of the hull, which is prettier and cost 1.8-4.8 ms PER SHIP because the
+   * imported models run to thousands of triangles — four shielded ships came
+   * to 12.2 ms against a renderer that costs about 3 ms for everything else.
+   * The resolution is this file's decision now, not the modeller's. */
+  var counts = ['courier', 'police', 'navy', 'freighter', 'tanker']
+    .map(function (k) { return R.shellMesh(k).f.length; });
+  check('every shell costs the same however dense the hull is',
+        counts.every(function (n) { return n === counts[0]; }), counts.join(' '));
+  check('and that is a couple of hundred faces, not a couple of thousand',
+        counts[0] < 400 && counts[0] < hull.f.length / 4,
+        counts[0] + ' vs the hull\'s ' + hull.f.length);
+  check('with no degenerate faces', shell.f.every(function (f) {
+    return f[0] !== f[1] && f[1] !== f[2] && f[0] !== f[2];
+  }));
+  check('and every index inside the vertex list', shell.f.every(function (f) {
+    return f.every(function (ix) { return ix >= 0 && ix < shell.v.length; });
+  }));
+
+  /* Held OFF the hull, by about the width of a medium engine bell. Measured
+   * on the bounding box, because a per-vertex distance is not the claim —
+   * concave corners legitimately pinch inward. */
+  function box(m) {
+    var lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
+    m.v.forEach(function (p) {
+      for (var a = 0; a < 3; a++) {
+        if (p[a] < lo[a]) lo[a] = p[a];
+        if (p[a] > hi[a]) hi[a] = p[a];
+      }
+    });
+    return { lo: lo, hi: hi };
+  }
+  var bh = box(hull), bs = box(shell);
+  var grew = true, tooMuch = false;
+  for (var a = 0; a < 3; a++) {
+    if (!(bs.hi[a] > bh.hi[a] && bs.lo[a] < bh.lo[a])) grew = false;
+    /* Standoff is per-side, so each dimension should gain about twice it.
+     * Generous bounds: a normal that averages several faces does not point
+     * straight out, so the real growth is a little under the nominal. */
+    var gain = (bs.hi[a] - bs.lo[a]) - (bh.hi[a] - bh.lo[a]);
+    if (gain > R.SHIELD_STANDOFF * 3) tooMuch = true;
+  }
+  check('the shell stands outside the hull on every axis', grew,
+        JSON.stringify(bs.hi) + ' vs ' + JSON.stringify(bh.hi));
+  check('and only by about the standoff, not by a whole hull length', !tooMuch);
+
+  /* Every face knows which way it lies from the ship's centre — that table
+   * is what makes the impact maths a dot product instead of a cross. */
+  check('each face carries a unit direction from the hull centre',
+        !!shell.dirs && shell.dirs.length === shell.f.length &&
+        shell.dirs.every(function (d) {
+          return Math.abs(Math.hypot(d[0], d[1], d[2]) - 1) < 1e-9;
+        }));
+
+  /* Reassigning a class must rebuild its shell, or a form-fitting field
+   * would fit the wrong ship — worse than a sphere. */
+  var before = R.shellMesh('shuttle');
+  R.assignHull('shuttle', 'shuttle-l');
+  check('reassigning a hull throws its old shell away',
+        R.shellMesh('shuttle') !== before);
+
+  /* And while the shuttle is on the large model it can carry a generator —
+   * the size letter is a real property and it lives in HULL_ASSIGN. */
+  var bigShuttle = { cls: 'shuttle' };
+  W.Combat.npcShield(bigShuttle);
+  check('a large shuttle has the room for a shield',
+        W.Combat.hullSize('shuttle') === 'l' && bigShuttle.shieldMax > 0,
+        W.Combat.hullSize('shuttle') + ' / ' + bigShuttle.shieldMax);
+  R.assignHull('shuttle', 'shuttle-s');
+  var smallShuttle = { cls: 'shuttle' };
+  W.Combat.npcShield(smallShuttle);
+  check('and a small one does not', smallShuttle.shieldMax === 0);
+  var pod = { cls: 'escape_pod' };
+  W.Combat.npcShield(pod);
+  check('nor an escape pod, at any size', pod.shieldMax === 0);
+
+  /* THE HUE IS THE GAUGE. A shield you cannot read is a number on a panel
+   * you are not looking at during a fight. */
+  function rgb(hex) {
+    var n = parseInt(hex.slice(1), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  var full = rgb(R.shieldTint(1)), half = rgb(R.shieldTint(0.5)), gone = rgb(R.shieldTint(0.02));
+  check('a full shield reads cool', full[2] > full[0], full.join(','));
+  check('a failing one reads hot', gone[0] > gone[2], gone.join(','));
+  check('and it runs one way, not back and forth',
+        full[2] > half[2] && half[2] > gone[2],
+        full[2] + ' > ' + half[2] + ' > ' + gone[2]);
+  var sane = true;
+  for (var f = -0.5; f <= 1.5; f += 0.05) {
+    if (!/^#[0-9a-f]{6}$/.test(R.shieldTint(f))) sane = false;
+  }
+  check('every charge, in range or out, is a valid colour', sane);
+
+  /* THE FLARE. One curve does spot, spread and dissipate: a bump centred on
+   * the impact whose width grows to cover the shell while its height decays. */
+  var atHit = R.shellFlare(1, 0);
+  var farSide = R.shellFlare(-1, 0);
+  check('a fresh hit is bright where it landed', atHit > 0.9, String(atHit));
+  check('and dark on the far side of the ship', farSide < atHit * 0.05,
+        String(farSide));
+
+  /* The far side lights up LATER — that is the energy spreading, and it is
+   * the thing the user asked for. */
+  var farEarly = R.shellFlare(-1, R.SHIELD_FLASH_LIFE * 0.1);
+  var farMid = R.shellFlare(-1, R.SHIELD_FLASH_LIFE * 0.5);
+  check('the far side brightens as the energy spreads into the bubble',
+        farMid > farEarly, farEarly.toFixed(5) + ' -> ' + farMid.toFixed(5));
+  check('while the impact point itself is fading',
+        R.shellFlare(1, R.SHIELD_FLASH_LIFE * 0.5) < atHit);
+  check('and it is all over afterwards',
+        R.shellFlare(1, R.SHIELD_FLASH_LIFE * 1.01) === 0 &&
+        R.shellFlare(-1, R.SHIELD_FLASH_LIFE * 2) === 0);
+  var finite = true;
+  for (var c = -1; c <= 1; c += 0.1) {
+    for (var g = -0.2; g < R.SHIELD_FLASH_LIFE * 1.2; g += 0.05) {
+      var val = R.shellFlare(c, g);
+      if (!isFinite(val) || val < 0) finite = false;
+    }
+  }
+  check('and never negative or NaN anywhere in its domain', finite);
+
+  /* THE THING THE UNIT TESTS CANNOT SEE: does a shielded ship under fire
+   * actually survive being drawn, in both views, with a flare on it?
+   *
+   * This calls newGame, so it snapshots the twelve tracked preferences and
+   * puts them back at the end. The harness note near the corridor block
+   * explains why: the options test two thousand lines further down only
+   * passes because earlier sections leave the sliders on their stops, and a
+   * block that resets them makes it fail for no visible reason. */
+  var prefsBefore = {
+    soundVolume: G.soundVolume, soundMuted: G.soundMuted,
+    showOrbits: G.showOrbits, showPrediction: G.showPrediction,
+    showGrid: G.showGrid, showTraffic: G.showTraffic,
+    cockpitChrome: G.cockpitChrome, assist: G.assist,
+    flightMode: G.flightMode, mouseAim: G.mouseAim,
+    aimSens: G.aimSens, showHelp: G.showHelp
+  };
+  newFlying('kawartha');
+  frames(2);
+  var mark = drawn.texts.length;
+  var spec = (G.sys.patrols || [])[0];
+  var threw = null;
+  if (spec) {
+    spec.cls = 'navy';
+    delete spec.hullHp; delete spec.shieldMax;
+    W.Combat.npcHull(spec); W.Combat.npcShield(spec);
+    /* Built the way liftTrader builds one, fields and all. A hand-rolled
+     * `live` missing `name` is not a shield bug — it is a malformed ship,
+     * and the NAV panel walks every live contact and clips its name, so the
+     * first version of this test crashed the dashboard rather than the
+     * renderer. Worth the extra lines: the thing under test is the shell,
+     * and the fixture should not be the reason it fails. */
+    spec.live = { pos: V.addScaled(V.clone(G.ship.pos), G.ship.fwd, 3),
+                  vel: V.clone(G.ship.vel), fwd: V.clone(G.ship.fwd),
+                  up: V.clone(G.ship.up), right: V.clone(G.ship.right),
+                  spec: spec, id: spec.id, name: spec.name || 'Test Cutter',
+                  kind: spec.kind, cls: spec.cls,
+                  className: spec.className || 'naval cutter',
+                  size: spec.size || 0.24, color: spec.color || '#b8c6d8',
+                  faction: spec.faction || null, phase: 'live' };
+    /* lastHitAt is SIM time (it gates regeneration, a delay in the world);
+     * an impact's `at` is REAL seconds (it drives a light). Getting those two
+     * the wrong way round is the bug this pair of lines exists to pin. */
+    spec.lastHitAt = G.t;
+    spec.impacts = [{ dir: { x: 1, y: 0, z: 0 }, at: performance.now() / 1000,
+                      shield: 8, hull: 0, soaked: true, through: false }];
+    try {
+      ['cockpit', 'orbit'].forEach(function (v) { G.viewMode = v; frames(3); });
+    } catch (e) { threw = e; }
+    check('a shielded ship under fire renders in both views',
+          !threw && errorsSince(mark).length === 0,
+          threw ? threw.message + ' | ' + String(threw.stack).split('\n')[1]
+                : errorsSince(mark)[0]);
+  }
+
+  /* And the player's own, which is the half you actually experience: a
+   * soaked hit has to bloom on the canopy, because you cannot see your own
+   * hull from the seat. */
+  var mark2 = drawn.texts.length;
+  var threw2 = null;
+  G.ship.shield = 'shield';
+  G.ship.shieldHp = 20;
+  G.ship.lastHitAt = performance.now();
+  var nowS = performance.now() / 1000;
+  G.ship.impacts = [{ dir: V.clone(G.ship.fwd), at: nowS,
+                      shield: 6, hull: 0, soaked: true, through: false },
+                    /* One from dead astern, which projectDir cannot answer
+                     * and which must pin to the edge rather than vanish. */
+                    { dir: V.scale(G.ship.fwd, -1), at: nowS,
+                      shield: 4, hull: 0, soaked: true, through: false },
+                    /* And one that came through, which is the bloom. */
+                    { dir: V.clone(G.ship.right), at: nowS,
+                      shield: 2, hull: 9, soaked: true, through: true }];
+  try {
+    ['cockpit', 'orbit'].forEach(function (v) { G.viewMode = v; frames(3); });
+  } catch (e) { threw2 = e; }
+  check('your own shield draws from the seat and from outside',
+        !threw2 && errorsSince(mark2).length === 0,
+        threw2 ? threw2.message + ' | ' + String(threw2.stack).split('\n')[1]
+               : errorsSince(mark2)[0]);
+
+  G.ship.impacts = [];
+  G.ship.shield = null;
+  G.ship.shieldHp = 0;
+  G.ship.lastHitAt = 0;
+  G.viewMode = 'cockpit';
+  for (var pk in prefsBefore) G[pk] = prefsBefore[pk];
+  frames(2);
+})();
+
+/* Imported ports. The pipeline is: model -> glb2hulls --ports -> ports.js ->
+ * here, and the part worth guarding is that the anchors are LOAD-BEARING —
+ * a modelled bay's own dimensions have to reach the camera clamp and the
+ * berths, or the model is decoration pretending to be geometry. */
+console.log('--- imported ports ---');
+(function () {
+  var R = W.Render;
+  var Gen = W.Gen || global.Gen;
+  check('the port library reader is exported', typeof R.libPort === 'function');
+  if (typeof R.libPort !== 'function') return;
+
+  /* WITH NOTHING LOADED, which is the shipping state today: ports.js is
+   * generated and optional, and every role has to fall back to the
+   * procedural mesh it already had. */
+  /* On W, not on node's `global`. render.js's IIFE is handed `window` when
+   * one exists, so its `global` IS this harness's fake window — the same
+   * trap that stopped sim.js resolving RNG headlessly. */
+  var had = W.PortLib;
+  W.PortLib = undefined;
+  R.reloadPorts();
+  check('with no port library, nothing is claimed', R.libPort('orbital') === null);
+  check('and there are no port ids', R.portIds().length === 0);
+  var bare = R.stationMeshes();
+  check('every procedural role still exists',
+        !!bare.orbital && !!bare.highport && !!bare.refinery && !!bare.shipyard &&
+        !!bare.surface && !!bare.bay && !!bare.underground);
+
+  /* And a bay with no model gets the shared constant table, unchanged. */
+  var fakePort = { radius: 2, shaftDepth: 1.8, surface: true };
+  var g0 = Gen.bayGeometry(fakePort);
+  check('an unmodelled bay uses the shared table',
+        g0.mouthR === 0.55 && g0.chamberX === 1.30 && g0.chamberY === 0.80 &&
+        g0.berths === 6, JSON.stringify(g0));
+  check('and its floor is its own shaft depth',
+        Math.abs(g0.floorZ + 0.9) < 1e-9, String(g0.floorZ));
+  check('with the ceiling a HEIGHT above that floor, not an absolute',
+        Math.abs((g0.ceilZ - g0.floorZ) - 0.36) < 1e-9,
+        g0.floorZ + ' -> ' + g0.ceilZ);
+
+  /* NOW WITH A MODEL. Shaped exactly as the converter writes it — the
+   * numbers below are the ones tools/make-port-fixture.js produces and
+   * were checked against the tool's output by hand. */
+  /* Held in a variable because a later block swaps the library out to test
+   * pooling and has to put this one back — the checks after it are written
+   * against these two fixtures. */
+  var fixtureLib = {
+    bay: {
+      kind: 'surface',
+      v: [[0, 0, 0], [1, 0, 0], [0, 1, 0]], f: [[0, 1, 2]],
+      pal: ['#808080'], ci: [0],
+      geom: { floorZ: -0.9, ceilZ: -0.58, mouthR: 0.42,
+              chamberX: 1.6, chamberY: 0.9, berths: 3 },
+      anchors: {
+        berths: [{ mid: [-0.95, -0.6, -0.9] }, { mid: [0, -0.6, -0.9] },
+                 { mid: [0.95, -0.6, -0.9] }],
+        signs: [{ mid: [0, -0.55, 0.04] }]
+      }
+    },
+    orbital: {
+      kind: 'orbital',
+      v: [[0, 0, 0], [1, 0, 0], [0, 1, 0]], f: [[0, 1, 2]],
+      pal: ['#808080'], ci: [0],
+      spin: { v: [[0, 0, 0], [1, 0, 0], [0, 0, 1]], f: [[0, 1, 2]],
+              pal: ['#909090'], ci: [0] },
+      anchors: { docks: [{ mid: [0, -0.3, 0] }, { mid: [0, 0.3, 0] }] }
+    }
+  };
+  W.PortLib = fixtureLib;
+  R.reloadPorts();
+
+  var p = R.libPort('bay');
+  check('a modelled port is read back', !!p && p.kind === 'surface');
+  check('its palette is decompressed into per-face colours',
+        !!p && p.shell.c.length === p.shell.f.length && p.shell.c[0] === '#808080');
+  check('and it is cached rather than rebuilt', R.libPort('bay') === p);
+  var st = R.libPort('orbital');
+  check('a spinning ring is kept apart from the hub that does not turn',
+        !!st && !!st.spin && st.spin.f.length === 1);
+  check('and its dock anchors survive', !!st.anchors && st.anchors.docks.length === 2);
+
+  /* THE LOAD-BEARING BIT. The modelled bay's own dimensions must reach
+   * bayGeometry, because that is what the camera clamps against and what
+   * places ships in berths. */
+  var g1 = Gen.bayGeometry({ radius: 2, shaftDepth: 1.8, surface: true });
+  check('a modelled bay overrides the shared table',
+        g1.chamberX === 1.6 && g1.chamberY === 0.9 && g1.mouthR === 0.42,
+        JSON.stringify(g1));
+  check('and its berth count comes from the model', g1.berths === 3, String(g1.berths));
+  check('its ceiling is taken as an ABSOLUTE height, not added to the floor',
+        Math.abs(g1.ceilZ + 0.58) < 1e-9, String(g1.ceilZ));
+  check('leaving a usable headroom rather than a roof under the floor',
+        g1.ceilZ > g1.floorZ, g1.floorZ + ' -> ' + g1.ceilZ);
+  check('and anything the model did not declare still falls back',
+        g1.throatR === 0.45 && g1.standoff === 0.012,
+        g1.throatR + ' / ' + g1.standoff);
+
+  /* A MODEL THAT TURNS PART OF ITSELF. The procedural stations spin by
+   * rotating the whole frame, which is right for a wheel drawn as one
+   * mesh — but it means a modelled hub would rotate with its own ring, and
+   * a hub that turns is not something you can aim a docking approach at. So
+   * a declared `stationSpin` bucket is drawn on its own frame.
+   *
+   * This is also the gap that would have silently eaten a modelled ring:
+   * the first wiring only took `shell` into the mesh table, so anything in
+   * the spin bucket was dropped and never drawn at all. */
+  check('a role whose model declares a spinning part says so',
+        R.portSpins('orbital') === true);
+  check('and one that does not, does not', R.portSpins('bay') === false);
+  check('nor does a procedural role with no model at all',
+        R.portSpins('refinery') === false);
+  /* And it actually draws. A camera far enough back that the whole thing
+   * projects, and a frame in front of it. */
+  var pcam = new R.Camera();
+  pcam.eye = { x: 0, y: 0, z: 0 };
+  pcam.f = { x: 0, y: 0, z: 1 }; pcam.r = { x: 1, y: 0, z: 0 };
+  pcam.u = { x: 0, y: 1, z: 0 };
+  pcam.near = 0.001; pcam.flen = 667;
+  pcam.cx = 800; pcam.cy = 450; pcam.w = 1600; pcam.h = 900;
+  var pframe = { pos: { x: 0, y: 0, z: 40 }, fwd: { x: 0, y: 0, z: 1 },
+                 up: { x: 0, y: 1, z: 0 }, right: { x: 1, y: 0, z: 0 } };
+  var before = drawn.calls;
+  check('the spinning part draws on its own frame',
+        R.drawPortPart(ctxStub, pcam, pframe, 2, { x: 0, y: 0, z: -1 },
+                       'orbital', 'spin', '#ffffff') === true);
+  check('and it really put something on the canvas', drawn.calls > before,
+        (drawn.calls - before) + ' calls');
+  check('asking for a part that is not there is a no-op, not a throw',
+        R.drawPortPart(ctxStub, pcam, pframe, 2, { x: 0, y: 0, z: -1 },
+                       'bay', 'spin', '#ffffff') === false);
+  check('and neither is asking a role with no model at all',
+        R.drawPortPart(ctxStub, pcam, pframe, 2, { x: 0, y: 0, z: -1 },
+                       'refinery', 'spin', '#ffffff') === false);
+
+  /* ---- SEVERAL MODELS FOR ONE ROLE -------------------------------------
+   * The art does not divide the way the roles do: one surface role and
+   * several cities, one buried role and several deep bays, seven orbital
+   * roles and four space stations. So a role points at a LIST, and which
+   * entry a port gets is HASHED FROM THE PORT — never drawn — because a
+   * city has to be the same city every time you fly back to it. */
+  var portA = { id: 'p-alpha', surface: true };
+  var portB = { id: 'p-beta', surface: true };
+  check('with no assignment a role is its own procedural key',
+        R.portModelFor(portA) === 'bay', R.portModelFor(portA));
+
+  R.assignPort('bay', ['city-a', 'city-b', 'city-c']);
+  var a1 = R.portModelFor(portA), b1 = R.portModelFor(portB);
+  check('an assigned role hands out one of its models',
+        ['city-a', 'city-b', 'city-c'].indexOf(a1) >= 0, a1);
+  check('the SAME port gets the SAME model every time it is asked',
+        R.portModelFor(portA) === a1 && R.portModelFor(portA) === a1, a1);
+  check('and it survives being asked from a fresh object with the same id',
+        R.portModelFor({ id: 'p-alpha', surface: true }) === a1, a1);
+
+  /* Spread, not sameness: a list of three that always answered 'city-a'
+   * would pass every check above and be worthless. */
+  var spread = {};
+  for (var pn = 0; pn < 60; pn++) {
+    spread[R.portModelFor({ id: 'port-' + pn, surface: true })] = true;
+  }
+  check('different ports do get different models',
+        Object.keys(spread).length === 3, Object.keys(spread).join(' '));
+
+  /* A single-entry list is the old one-to-one behaviour exactly. */
+  R.assignPort('underground', 'deep-drum');
+  check('a role with one model always gives that one',
+        R.portModelFor({ id: 'x', underground: true }) === 'deep-drum');
+
+  /* THE INDIRECTION HAS TO REACH THE DIMENSIONS TOO. It is not enough for
+   * an assignment to change which mesh is drawn — bayGeometry has to follow
+   * the same pointer, or the game draws one shed and parks ships to
+   * another's floor. Assign the role at the model the fixture library
+   * actually holds and the modelled numbers must come back. */
+  R.assignPort('bay', 'bay');
+  var gA = Gen.bayGeometry({ id: 'p-alpha', surface: true, radius: 2, shaftDepth: 1.8 });
+  check('an assignment redirects the DIMENSIONS, not just the mesh',
+        gA.chamberX === 1.6 && gA.berths === 3, JSON.stringify(gA));
+  R.assignPort('bay', ['city-a', 'city-b', 'city-c']);
+  var gB = Gen.bayGeometry({ id: 'p-alpha', surface: true, radius: 2, shaftDepth: 1.8 });
+  check('and pointing it at an unmodelled name falls back to the table',
+        gB.chamberX === 1.30 && gB.berths === 6, JSON.stringify(gB));
+
+  R.assignPort('bay', null);
+  R.assignPort('underground', null);
+  check('clearing an assignment falls back to the procedural key',
+        R.portModelFor(portA) === 'bay' &&
+        R.portModelFor({ id: 'x', underground: true }) === 'underground');
+
+  /* ---- POOLS BY FILENAME ------------------------------------------------
+   * The route that needs no code at all: the prefix says which pool a model
+   * joins, so four station-* files spread across all seven orbital roles
+   * just by being in the folder. */
+  W.PortLib = {
+    'station-ring': { kind: 'orbital', v: [[0, 0, 0]], f: [], pal: [], ci: [] },
+    'station-drum': { kind: 'orbital', v: [[0, 0, 0]], f: [], pal: [], ci: [] },
+    'station-spindle': { kind: 'orbital', v: [[0, 0, 0]], f: [], pal: [], ci: [] },
+    'station-cluster': { kind: 'orbital', v: [[0, 0, 0]], f: [], pal: [], ci: [] },
+    'city-market': { kind: 'surface', v: [[0, 0, 0]], f: [], pal: [], ci: [] },
+    'city-tiered': { kind: 'surface', v: [[0, 0, 0]], f: [], pal: [], ci: [] },
+    'deep-silo': { kind: 'surface', v: [[0, 0, 0]], f: [], pal: [], ci: [] }
+  };
+  R.reloadPorts();
+
+  check('station-* forms the orbital pool',
+        R.poolFor('orbital').length === 4 && R.poolFor('refinery').length === 4,
+        R.poolFor('orbital').join(' '));
+  check('city-* the surface pool, deep-* the buried one',
+        R.poolFor('bay').length === 2 && R.poolFor('underground').length === 1,
+        R.poolFor('bay').join(' ') + ' | ' + R.poolFor('underground').join(' '));
+  check('and the pools do not leak into each other',
+        R.poolFor('orbital').every(function (id) { return id.indexOf('station-') === 0; }));
+
+  /* Every orbital role draws from the same four, which is what "pooled"
+   * means — and the four are actually spread across ports rather than one
+   * of them answering everything. */
+  var orbSeen = {};
+  for (var q = 0; q < 80; q++) {
+    orbSeen[R.portModelFor({ id: 'st-' + q, market: { role: 'refinery' } })] = true;
+  }
+  check('a pooled role spreads across all four models',
+        Object.keys(orbSeen).length === 4, Object.keys(orbSeen).join(' '));
+  check('and a different role draws from the same pool',
+        R.poolFor('agri').join() === R.poolFor('shipyard').join());
+  check('a surface port gets a city, not a station',
+        R.portModelFor({ id: 'c1', surface: true }).indexOf('city-') === 0,
+        R.portModelFor({ id: 'c1', surface: true }));
+  check('and a buried one gets the deep model',
+        R.portModelFor({ id: 'u1', underground: true }) === 'deep-silo');
+
+  /* Stable across repeated asks, which is the doctrine. */
+  var pooled = R.portModelFor({ id: 'st-7', market: { role: 'agri' } });
+  check('a pooled pick is stable for the same port',
+        R.portModelFor({ id: 'st-7', market: { role: 'agri' } }) === pooled, pooled);
+
+  /* PRECEDENCE. A file named for the role pins it; an explicit assignment
+   * beats even that. This is how legibility is bought back one role at a
+   * time rather than all or nothing. */
+  W.PortLib.shipyard = { kind: 'orbital', v: [[0, 0, 0]], f: [], pal: [], ci: [] };
+  R.reloadPorts();
+  check('a file named for a role pins that role out of the pool',
+        R.portModelFor({ id: 'sy1', market: { role: 'shipyard' } }) === 'shipyard');
+  check('while its neighbours stay pooled',
+        R.portModelFor({ id: 'sy1', market: { role: 'agri' } }).indexOf('station-') === 0);
+  R.assignPort('shipyard', 'station-cluster');
+  check('and an explicit assignment beats the named file',
+        R.portModelFor({ id: 'sy1', market: { role: 'shipyard' } }) === 'station-cluster');
+  R.assignPort('shipyard', null);
+
+  /* Put the two-fixture library back: the checks below this were written
+   * against it, and a block that changes the world for everything after it
+   * is the thing the corridor section's own note warns about. */
+  W.PortLib = fixtureLib;
+  R.reloadPorts();
+
+  /* Berths are numbered left to right, which is what stops a re-export
+   * moving a parked ship. */
+  var xs = p.anchors.berths.map(function (b) { return b.mid[0]; });
+  var rising = true;
+  for (var i = 1; i < xs.length; i++) if (xs[i] <= xs[i - 1]) rising = false;
+  check('berths are ordered across the shed', rising, xs.join(' '));
+
+  /* An imported role takes over the mesh the renderer draws, and the roles
+   * it does not supply keep theirs. */
+  var meshes = W.Render.libPort ? R.stationMeshes() : null;
+  check('an imported port replaces its procedural mesh',
+        !!meshes && meshes.bay.f.length === 1,
+        meshes && String(meshes.bay.f.length));
+  check('and an unmodelled role keeps the procedural one',
+        !!meshes && meshes.refinery.f.length > 20,
+        meshes && String(meshes.refinery.f.length));
+
+  W.PortLib = had;
+  R.reloadPorts();
+  frames(1);
+})();
+
+/* Berthed in a shed, the shed is the world. The camera clamp already kept
+ * the eye between the walls and the stars were already gone, but the
+ * planets, orbit lines, grid, traffic and trajectory were all still drawn —
+ * so you looked past the end of the hangar and saw the solar system. Half
+ * enclosed reads worse than not enclosed: it makes the walls look like a
+ * texture rather than a room. */
+console.log('--- docked, the dock is all there is ---');
+(function () {
+  var prefs = {
+    showOrbits: G.showOrbits, showGrid: G.showGrid, showTraffic: G.showTraffic,
+    showPrediction: G.showPrediction, soundVolume: G.soundVolume,
+    soundMuted: G.soundMuted, cockpitChrome: G.cockpitChrome, assist: G.assist,
+    flightMode: G.flightMode, mouseAim: G.mouseAim, aimSens: G.aimSens,
+    showHelp: G.showHelp
+  };
+
+  G.newGame('kawartha');          // a fresh career begins berthed
+  frames(2);
+  check('the career starts berthed', !!G.ship.docked);
+
+  /* NOT WHEREVER THE CAREER STARTED, and this is the correction to a test
+   * that asserted it was. The fresh start prefers a surface port on the
+   * host world and falls back to the orbital station when that world has
+   * none — measured across 40 galaxies, 16 start on a pad and 24 at the
+   * station. Both are spaceports and both are correct, so a test that
+   * demanded a pad was failing the game for a coin toss.
+   *
+   * Only a surface port has an inside (berthedPort filters on `.surface`),
+   * so the enclosure is tested by berthing at one deliberately. Every seed
+   * sampled had between three and twelve of them, so this is not luck. */
+  var port = (G.sys.ports || []).filter(function (p) {
+    return p.surface && p.market;
+  })[0];
+  check('and the system has a surface port, which is the kind with an inside',
+        !!port, port && port.name);
+  if (!port) { for (var k0 in prefs) G[k0] = prefs[k0]; return; }
+  G.ship.cleared = G.ship.cleared || {};
+  G.ship.cleared[port.id] = true;
+  Sim.dockShip(G.ship, port, G.sys, G.t);
+  frames(2);
+  check('berthed in it', G.ship.docked === port.id, String(G.ship.docked));
+
+  /* Everything on, so the suppression is doing the work rather than the
+   * toggles happening to be off. */
+  G.showOrbits = true; G.showGrid = true;
+  G.showTraffic = true; G.showPrediction = true;
+  G.viewMode = 'orbit';
+  G.panel = 0;
+  frames(3);
+
+  var mark = drawn.texts.length;
+  var before = drawn.calls;
+  frames(3);
+  check('the docked exterior view draws without error',
+        errorsSince(mark).length === 0, errorsSince(mark)[0]);
+  check('and it still draws SOMETHING — the dock itself',
+        drawn.calls > before + 30, (drawn.calls - before) + ' calls');
+
+  /* Two observables, both deterministic. `gridStep` is set to 0 before the
+   * branch and only written inside it, so berthed it is exactly 0. And the
+   * bodies loop is what fills labelQueue, so with every body but the port
+   * skipped there is at most one label in it — the port's own. */
+  check('the ecliptic grid is not drawn through the hangar wall',
+        G.gridStep === 0, String(G.gridStep));
+  var dockedLabels = G.labelQueue.length;
+  check('and no other body is drawn — at most the dock itself',
+        dockedLabels <= 1, dockedLabels + ' labels');
+
+  /* Undock and the world comes back. This is the half that proves the
+   * suppression is conditional rather than a toggle someone left off. */
+  Sim.undockShip(G.ship, G.sys, G.t, 0.003);
+  G.dockTarget = null; G.dockStatus = null;
+  frames(3);
+  check('and once undocked the rest of the system is drawn again',
+        G.labelQueue.length > dockedLabels,
+        dockedLabels + ' -> ' + G.labelQueue.length + ' labels');
+
+  /* THE ESCAPE HATCH, and the bug this nearly shipped as. F2 is the orbit
+   * chart — the player asking to see the system from outside itself.
+   * Answering with the inside of a hangar because that is where the hull is
+   * parked would be a blank map. */
+  Sim.dockShip(G.ship, port, G.sys, G.t);
+  frames(2);
+  check('docked again', !!G.ship.docked);
+  var mark2 = drawn.texts.length;
+  /* Through the key, not by poking state: mapMode reads G.panel via MODES,
+   * so setting a `mode` field would have tested nothing at all. */
+  var pressKey = listeners.keydown[0];
+  pressKey({ key: 'F2', shiftKey: false, preventDefault: function () {} });
+  frames(3);
+  /* The assertion IS that the system is visible: if the enclosure
+   * suppression reached the chart, this would be at most one label. */
+  check('the chart still shows the system while berthed',
+        G.labelQueue.length > 1,
+        G.labelQueue.length + ' labels, panel ' + G.panel);
+  check('and it draws cleanly', errorsSince(mark2).length === 0,
+        errorsSince(mark2)[0]);
+
+  pressKey({ key: 'Escape', shiftKey: false, preventDefault: function () {} });
+  frames(2);
+
+  newFlying('kawartha');
+  for (var k in prefs) G[k] = prefs[k];
+  frames(2);
+})();
+
+/* Glass, in two renderers and one shader.
+ *
+ * The greenhouses are the case that forced this. generate.js grows them
+ * because a colony on an unbreathable world has to make its own air, and
+ * render.js draws an EMISSIVE crop inside each one and then a glass drum
+ * over it — with a comment saying that green is the whole point of the
+ * building. The glass was opaque, so the point of the building was sealed
+ * inside an unlit drum and never appeared on screen at all.
+ *
+ * WHAT THESE TESTS CANNOT DO: compile the shader. There is no GL in node,
+ * so the GPU half is checked by pinning the dither matrix — the one part of
+ * it that fails silently and looks like a texture bug rather than an error. */
+console.log('--- glass ---');
+(function () {
+  var R = W.Render;
+  var Gen = W.Gen || global.Gen;
+  var mat = R.faceMaterial;
+  check('a plain colour is opaque and lit by the sun',
+        mat('#405060').color === '#405060' && mat('#405060').alpha === 1 &&
+        mat('#405060').lit === false);
+  check("'!' still means emissive, and emissive is still opaque",
+        mat('!#405060').color === '#405060' && mat('!#405060').lit === true &&
+        mat('!#405060').alpha === 1);
+  check("'~9' means glass at nine fifteenths",
+        mat('~9#405060').color === '#405060' &&
+        Math.abs(mat('~9#405060').alpha - 9 / 15) < 1e-9,
+        String(mat('~9#405060').alpha));
+  check('and the hex digit runs the whole range, f being solid glass',
+        mat('~0#405060').alpha === 0 && mat('~f#405060').alpha === 1,
+        mat('~0#405060').alpha + '..' + mat('~f#405060').alpha);
+  /* A malformed prefix has to read as OPAQUE. Falling back to zero would
+   * make a typo in one face colour delete a whole building, which reads as
+   * a mesh that failed to load rather than as the one-character mistake it
+   * is. */
+  check('a malformed opacity digit falls back to opaque, not invisible',
+        mat('~z#405060').alpha === 1 && mat('~z#405060').color === '#405060');
+  check('and no colour at all still means "use the tint"',
+        mat(null).color === null && mat(null).alpha === 1);
+
+  /* The 2D path, end to end: build a real port's dressing mesh and paint
+   * it. The observable is the stub's translucent-fill log — a pane of glass
+   * and a solid wall of the same colour are otherwise identical. */
+  newFlying('kawartha');
+  frames(2);
+  var domePort = null, i;
+  for (i = 0; i < (G.sys.ports || []).length; i++) {
+    var p = G.sys.ports[i];
+    if (p.surface && p.dressing && p.dressing.domes && p.dressing.domes.length) {
+      domePort = p; break;
+    }
+  }
+  check('a surface port in the seeded system has greenhouses', !!domePort,
+        domePort && domePort.name);
+
+  if (domePort) {
+    var mesh = R.portDressingMesh(domePort);
+    check('its dressing mesh builds', !!(mesh && mesh.f && mesh.f.length));
+
+    if (mesh && mesh.c) {
+      var glassFaces = 0, cropFaces = 0;
+      for (i = 0; i < mesh.c.length; i++) {
+        var m = mat(mesh.c[i]);
+        if (m.alpha < 1) glassFaces++;
+        /* The crop is the only emissive green in there. */
+        if (m.lit && /^#[0-9a-f]{6}$/i.test(m.color)) {
+          var n = parseInt(m.color.slice(1), 16);
+          if (((n >> 8) & 255) > ((n >> 16) & 255) + 30) cropFaces++;
+        }
+      }
+      check('the panes are translucent', glassFaces > 0, glassFaces + ' faces');
+      check('and there is a lit crop underneath to see through them',
+            cropFaces > 0, cropFaces + ' faces');
+    }
+
+    /* And it reaches the canvas. paintMesh is called directly rather than
+     * through a frame, because the GPU layer is absent under node and the
+     * frame path would take the fallback anyway — this makes that explicit
+     * instead of depending on it. */
+    var before = drawn.glass.length;
+    var gcam = new R.Camera();
+    gcam.eye = { x: 0, y: 0, z: 0 };
+    gcam.f = { x: 0, y: 0, z: 1 }; gcam.r = { x: 1, y: 0, z: 0 };
+    gcam.u = { x: 0, y: 1, z: 0 };
+    gcam.near = 0.001; gcam.flen = 667;
+    gcam.cx = 800; gcam.cy = 450; gcam.w = 1600; gcam.h = 900;
+    var gframe = { pos: { x: 0, y: 0, z: 40 }, fwd: { x: 0, y: 0, z: 1 },
+                   up: { x: 0, y: 1, z: 0 }, right: { x: 1, y: 0, z: 0 } };
+    ctxStub.globalAlpha = 1;
+    R.paintMesh(ctxStub, gcam, gframe, mesh, domePort.radius || 1,
+                { x: 0, y: 0, z: 1 }, '#8894a8');
+    check('painting it fills something at less than full opacity',
+          drawn.glass.length > before,
+          (drawn.glass.length - before) + ' translucent fills');
+    var got = drawn.glass.slice(before);
+    var right = 0;
+    for (i = 0; i < got.length; i++) {
+      if (Math.abs(got[i].alpha - 9 / 15) < 1e-9) right++;
+    }
+    check('at exactly the opacity the face asked for', right === got.length,
+          right + '/' + got.length);
+    /* globalAlpha is a sticky property. Leaving it below 1 would silently
+     * wash out every hull painted after a greenhouse. */
+    check('and the opacity is put back before anything else is drawn',
+          !(ctxStub.globalAlpha < 1), String(ctxStub.globalAlpha));
+  }
+
+  /* ---- the dither matrix, pinned ---------------------------------------
+   * A reference implementation of the shader's bayer8, verified here for
+   * the two properties that make it a Bayer matrix rather than blotches:
+   * over one 8x8 tile it hits all 64 levels exactly once, and at 50% every
+   * 2x2 block is exactly half lit. Then the shader's own six bit terms are
+   * read out of the GLSL and compared, which is what catches the real
+   * failure mode — a transposed shift compiles perfectly and just quietly
+   * clumps the pattern into visible blocks. */
+  function bayer8(px, py) {
+    var x = (px ^ py) & 7, y = py & 7;
+    return (((x >> 2) & 1)) | (((y >> 2) & 1) << 1) |
+           (((x >> 1) & 1) << 2) | (((y >> 1) & 1) << 3) |
+           ((x & 1) << 4) | ((y & 1) << 5);
+  }
+  var seen = {}, distinct = 0;
+  for (var jy = 0; jy < 8; jy++) {
+    for (var ix = 0; ix < 8; ix++) {
+      var v = bayer8(ix, jy);
+      if (!seen[v]) { seen[v] = 1; distinct++; }
+    }
+  }
+  check('the dither matrix hits all 64 levels exactly once', distinct === 64,
+        distinct + ' distinct');
+  var worst = 0;
+  for (jy = 0; jy < 8; jy += 2) {
+    for (ix = 0; ix < 8; ix += 2) {
+      var on = 0;
+      for (var b = 0; b < 2; b++) {
+        for (var a = 0; a < 2; a++) if (bayer8(ix + a, jy + b) < 32) on++;
+      }
+      worst = Math.max(worst, Math.abs(on - 2));
+    }
+  }
+  check('and it disperses — every 2x2 is half lit at 50%', worst === 0,
+        'worst imbalance ' + worst);
+
+  /* The GLSL as text. There is no WebGL under node, so the shader cannot be
+   * compiled here — but it is a string in a file, and the one part of it
+   * that fails SILENTLY is worth reading even so. Sliced to the bayer8 body
+   * so the pattern below cannot match arithmetic from anywhere else. */
+  var glsrc = require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'src', 'gl.js'), 'utf8');
+  var at = glsrc.indexOf('float bayer8');
+  var src = at < 0 ? '' : glsrc.slice(at, at + 900);
+  check('the mesh shader carries a dither at all', at >= 0);
+  /* Six terms of the form ((x >> N) & 1) << M, in source order. Read as
+   * pairs so whitespace and formatting can change without breaking this,
+   * but a swapped shift or a swapped destination bit cannot. */
+  var terms = [];
+  var re = /\(\((x|y) >> (\d)\) & 1\)|\((x|y) & 1\)/g, mm;
+  while ((mm = re.exec(src))) {
+    terms.push(mm[1] ? (mm[1] + mm[2]) : (mm[3] + '0'));
+  }
+  check('and its bit order is the one verified above',
+        terms.join(',') === 'x2,y2,x1,y1,x0,y0', terms.join(','));
+  check('the opaque path short-circuits, so a hull pays one compare',
+        /a < 0\.999 && a < bayer8/.test(glsrc) && /discard/.test(glsrc));
+})();
+
 console.log('--- underground bays ---');
 (function () {
-  G.newGame('kawartha');
+  newFlying('kawartha');
   frames(2);
   var mark = drawn.texts.length;
   var callsBefore = drawn.calls;
@@ -912,7 +2113,7 @@ scenario('landed', function () {
   G.ship.impactSpeed = 1.2;
 }, 2);
 scenario('flying again', function () {
-  G.newGame('kawartha');
+  newFlying('kawartha');
 }, 3);
 
 scenario('out of reaction mass', function () {
@@ -953,7 +2154,7 @@ console.log('--- an encounter, drawn ---');
 
 console.log('--- a jump, end to end ---');
 (function () {
-  G.newGame('kawartha');
+  newFlying('kawartha');
   frames(2);
   var before = G.here.id, t0 = G.t, fuel0 = G.ship.fuel;
   var reach = Galaxy.reachable(G.galaxy, G.here, G.ship);
@@ -1012,14 +2213,14 @@ console.log('--- a jump, end to end ---');
 
 console.log('--- the tunnel, drawn ---');
 (function () {
-  G.newGame('kawartha');
+  newFlying('kawartha');
   frames(2);
   var reach = Galaxy.reachable(G.galaxy, G.here, G.ship);
   var plan = Galaxy.jumpPlan(G.galaxy, G.here, reach[0].star, G.ship);
 
   // Both views, all the way through, with the head turned.
   ['cockpit', 'orbit'].forEach(function (mode) {
-    G.newGame('kawartha');
+    newFlying('kawartha');
     frames(2);
     G.viewMode = mode;
     G.look.yaw = mode === 'cockpit' ? 0.9 : 0;
@@ -1050,7 +2251,7 @@ console.log('--- the tunnel, drawn ---');
   }
 
   // Controls are dead in the tunnel: nothing you press should fly the ship.
-  G.newGame('kawartha');
+  newFlying('kawartha');
   frames(2);
   doJumpViaMap();
   frames(3);
@@ -1160,7 +2361,7 @@ console.log('--- the slipspace corridor ---');
 
   /* --- it draws, in both views, with the head turned ------------------- */
   ['cockpit', 'orbit'].forEach(function (mode) {
-    G.newGame('kawartha');
+    newFlying('kawartha');
     frames(2);
     G.viewMode = mode;
     G.look.yaw = mode === 'cockpit' ? 0.8 : 0;
@@ -1182,7 +2383,7 @@ console.log('--- the slipspace corridor ---');
   });
 
   /* --- the three live keys, and only those three ----------------------- */
-  G.newGame('kawartha');
+  newFlying('kawartha');
   frames(2);
   jumpViaMap();
   if (G.hyper) {
@@ -1221,7 +2422,7 @@ console.log('--- the slipspace corridor ---');
   }
 
   /* --- interdicting somebody, and landing in deep space ---------------- */
-  G.newGame('kawartha');
+  newFlying('kawartha');
   frames(2);
   var fuelBefore = G.ship.fuel;
   jumpViaMap();
@@ -1253,6 +2454,50 @@ console.log('--- the slipspace corridor ---');
           G.sys && String(G.sys.patrols.length));
     check('and we are pointed at them', !!G.navTarget);
 
+    /* THE PAYOFF, end to end. The chase, the lock and the drop-out were all
+     * built before there was anything to do at the end of them: the planted
+     * ship flies an interstellar lane, no system's traffic list has ever
+     * heard of it, so it inherited no manifest and reported itself running
+     * empty every single time. An empty room at the end of the best sequence
+     * in the game. */
+    var tornSpec = G.sys.patrols[0];
+    var hold = W.Combat.holdOf(G.sys, tornSpec);
+    check('the ship we tore out is actually carrying something',
+          hold.length > 0 && (hold[0].qty || hold[0].tonnes) > 0,
+          JSON.stringify(hold));
+    check('and it has a purse worth taking',
+          W.Combat.purseOf(G.sys, tornSpec) > 0,
+          String(W.Combat.purseOf(G.sys, tornSpec)));
+
+    /* Reachable from the seat, not just from the API — the demand lives on
+     * the comms channel and this is the path a player actually walks. */
+    G.panel = 3;
+    frames(2);
+    var cl = W.Screens.commsContacts();
+    var si = -1;
+    for (var cc = 0; cc < cl.length; cc++) if (cl[cc].kind === 'ship') { si = cc; break; }
+    check('the torn-out ship is on the comms list', si >= 0);
+    if (si >= 0) {
+      G.commsSel = si;
+      frames(2);
+      var pirOpt = G.hotspots.filter(function (s) { return s.hint === 'Piracy…'; })[0];
+      check('and the piracy option is on its channel', !!pirOpt);
+
+      var quiet = { say: function () {}, sound: function () {} };
+      var credBefore = G.ship.credits;
+      W.Combat.demandFrom(G.sys, G, G.t, cl[si].obj, 'credits', quiet);
+      var afterFirst = G.ship.credits;
+      check('a demand out here actually pays', afterFirst > credBefore,
+            (afterFirst - credBefore) + ' cr');
+      W.Combat.demandFrom(G.sys, G, G.t, cl[si].obj, 'credits', quiet);
+      W.Combat.demandFrom(G.sys, G, G.t, cl[si].obj, 'credits', quiet);
+      check('and asking again does not — no infinite bank in deep space',
+            G.ship.credits === afterFirst,
+            (G.ship.credits - afterFirst) + ' cr extra');
+    }
+    G.panel = 0;
+    frames(2);
+
     /* THE THING THE UNIT TESTS CANNOT SEE: does a place with no planets,
      * no ports and a star a light year away actually survive being drawn? */
     var threw3 = null;
@@ -1281,7 +2526,7 @@ console.log('--- the slipspace corridor ---');
   }
 
   /* --- being interdicted ----------------------------------------------- */
-  G.newGame('kawartha');
+  newFlying('kawartha');
   frames(2);
   jumpViaMap();
   if (G.hyper) {
@@ -1309,7 +2554,7 @@ console.log('--- the slipspace corridor ---');
   }
 
   /* --- an anchor turns the same hunter away ---------------------------- */
-  G.newGame('kawartha');
+  newFlying('kawartha');
   frames(2);
   G.ship.modules = { anchor: 'I', baffle: null };
   jumpViaMap();
@@ -1334,7 +2579,7 @@ console.log('--- the slipspace corridor ---');
    * presses were being swallowed by a jump that was still running. */
   G.hyper = null;
   G.keys = {};
-  G.newGame('kawartha');
+  newFlying('kawartha');
   for (var pk in prefsBefore) G[pk] = prefsBefore[pk];
   frames(2);
 })();
@@ -1349,7 +2594,7 @@ console.log('--- slipspace wakes ---');
   var prefs = { showTraffic: G.showTraffic, aimSens: G.aimSens,
                 soundVolume: G.soundVolume, showHelp: G.showHelp };
 
-  G.newGame('kawartha');
+  newFlying('kawartha');
   frames(2);
 
   /* Find a moment when the home star actually has wakes. The timetable owes
@@ -1431,14 +2676,101 @@ console.log('--- slipspace wakes ---');
         isFinite(Slip.jumpRingRadius(deep)) && Slip.jumpRingRadius(deep) > 0,
         String(Slip.jumpRingRadius(deep)));
 
-  G.newGame('kawartha');
+  /* --- following a wake, through the real key handler ------------------
+   * This is the verb the whole scanning mechanic exists for: read a wake,
+   * lay in a course after it, and be told whether the chase is on. */
+  function pressK(k, shift) {
+    listeners.keydown[0]({ key: k, shiftKey: !!shift,
+                           preventDefault: function () {} });
+  }
+
+  /* Out of range first: it must refuse rather than lay in a course to
+   * nowhere. */
+  G.ship.pos = { x: wpos.x + Slip.WAKE_SCAN_RANGE * 4, y: wpos.y, z: wpos.z };
+  G.wakeChase = null;
+  G.starMap = null;
+  frames(1);
+  pressK('J', true);
+  frames(1);
+  check('Shift+J with no wake in range lays in nothing', !G.wakeChase && !G.starMap);
+
+  /* Now sitting on it. */
+  G.ship.pos = { x: wpos.x + 400, y: wpos.y, z: wpos.z };
+  frames(1);
+  var readNow = Slip.scanWake(target, 400);
+  pressK('J', true);
+  frames(1);
+  check('Shift+J on a readable wake lays in a chase', !!G.wakeChase,
+        readNow.note);
+  if (G.wakeChase) {
+    check('and it names the star the wake pointed at',
+          G.wakeChase.starId === readNow.destination.id,
+          G.wakeChase.starId + ' vs ' + readNow.destination.id);
+    check('and the chart is sitting on that same star',
+          !!G.starMap && G.starMap.list[G.starMap.sel].to.id === readNow.destination.id);
+    /* A full read must produce an actual verdict, not a shrug. */
+    if (readNow.tonnes) {
+      check('a full read yields a real intercept verdict',
+            G.wakeChase.blind === false && typeof G.wakeChase.at === 'number',
+            JSON.stringify({ blind: G.wakeChase.blind, at: G.wakeChase.at }));
+      check('and does not claim to be an estimate',
+            G.wakeChase.estimated === false);
+    }
+  }
+
+  /* The persistent banner must survive the transient message fading — that
+   * is the entire reason it exists, since you fly for a while before you
+   * jump and re-scanning may no longer give you the same fidelity. */
+  var markC = drawn.texts.length;
+  frames(3);
+  check('the chase banner is drawn while flying',
+        drawn.texts.slice(markC).some(function (s) {
+          return typeof s === 'string' && s.indexOf('CHASING') === 0;
+        }),
+        drawn.texts.slice(markC).slice(0, 5).join(' | '));
+
+  /* Shift+J must NOT also open the chart — J does that, and a shifted
+   * binding that fires both would make the unshifted one unusable. */
+  G.starMap = null;
+  G.panel = 0;
+  pressK('J', true);
+  frames(1);
+  check('Shift+J does not open the chart screen', G.panel === 0, String(G.panel));
+
+  /* A partial read should estimate from the hull class and SAY so, rather
+   * than either refusing or pretending to certainty. Exercised directly,
+   * since finding a wake at exactly the right fidelity is not something the
+   * timetable owes us. */
+  var midRead = Slip.scanWake(target, Slip.WAKE_SCAN_RANGE * 0.62);
+  if (midRead.hullClass && !midRead.tonnes) {
+    check('a class-only read still estimates a tonnage',
+          Slip.classTypicalTonnes(midRead.hullClass) > 0,
+          midRead.hullClass);
+  }
+  check('every hull class has a representative tonnage',
+        ['I', 'II', 'III', 'IV'].every(function (c) {
+          return Slip.classTypicalTonnes(c) > 0;
+        }));
+  check('and they rise with the class',
+        Slip.classTypicalTonnes('I') < Slip.classTypicalTonnes('II') &&
+        Slip.classTypicalTonnes('II') < Slip.classTypicalTonnes('III') &&
+        Slip.classTypicalTonnes('III') < Slip.classTypicalTonnes('IV'));
+
+  /* And arriving anywhere clears the chase — its arithmetic was computed
+   * from a departure point you are no longer standing on. */
+  G.wakeChase = { starId: 'x', name: 'ghost', blind: true };
+  newFlying('kawartha');
+  frames(2);
+  check('a new career clears any wake chase', !G.wakeChase);
+
+  newFlying('kawartha');
   for (var k in prefs) G[k] = prefs[k];
   frames(2);
 })();
 
 console.log('--- the cruise drive ---');
 (function () {
-  G.newGame('kawartha');
+  newFlying('kawartha');
   frames(2);
   var keydown = listeners.keydown[0];
   function press(k) { keydown({ key: k, shiftKey: false, preventDefault: function () {} }); }
@@ -1522,7 +2854,7 @@ console.log('--- the cruise drive ---');
 
 console.log('--- auto-dock ---');
 (function () {
-  G.newGame('kawartha');
+  newFlying('kawartha');
   frames(2);
   var keydown = listeners.keydown[0];
   function press(k) { keydown({ key: k, shiftKey: false, preventDefault: function () {} }); }
@@ -1576,7 +2908,7 @@ console.log('--- auto-dock ---');
  * neither of them can be flown into the ground by a sign error. */
 console.log('--- match orbit and follow ---');
 (function () {
-  G.newGame('kawartha');
+  newFlying('kawartha');
   frames(2);
   var keydown = listeners.keydown[0];
   function press(k, shift) {
@@ -1647,7 +2979,7 @@ console.log('--- match orbit and follow ---');
    * spins the cruise drive up itself, flies the leg, drops out near the
    * station and hands over to the approach law. Two million km away is the
    * case that used to be a refusal message. */
-  G.newGame('kawartha');
+  newFlying('kawartha');
   frames(2);
   var far2 = G.sys.ports.filter(function (p) { return !p.surface; })[0];
   var fs = Sim.bodyState(far2, G.sys, G.t);
@@ -1686,7 +3018,7 @@ function fmtKm(k) { return k > 1000 ? (k / 1000).toFixed(1) + ' Mm' : k.toFixed(
  * nothing, and that the repair is a real transaction. */
 console.log('--- damage in the cockpit ---');
 (function () {
-  G.newGame('kawartha');
+  newFlying('kawartha');
   frames(2);
   G.viewMode = 'cockpit';
   G.showCockpitFrame = true;
@@ -1743,7 +3075,7 @@ console.log('--- damage in the cockpit ---');
  * the autopilot actually flies the plan rather than just claiming to. */
 console.log('--- manoeuvre nodes ---');
 (function () {
-  G.newGame('kawartha');
+  newFlying('kawartha');
   frames(2);
   var keydown = listeners.keydown[0];
   var keyup = listeners.keyup[0];
@@ -2260,6 +3592,45 @@ console.log('--- quit to the main menu ---');
   mark = drawn.texts.length;
   frames(3);
   check('which draws like any other', errorsSince(mark).length === 0, errorsSince(mark)[0]);
+
+  /* ---- and quitting the game, not just the career -----------------------
+   * The title screen was the only way out of a career and had no way out of
+   * the GAME, so the last thing on it was Options. */
+  G.title = { sel: 0, edit: null, note: null };
+  var qMark = drawn.texts.length;
+  frames(2);
+  check('the main menu offers a way out of the game',
+        drawn.texts.slice(qMark).indexOf('Quit') >= 0);
+
+  /* In a browser it must refuse in words. window.close() only works on a
+   * window a script opened, so in a tab the call does nothing whatsoever —
+   * the failure mode this project keeps naming as indistinguishable from a
+   * bug. The harness has no `game:` origin, so this is the browser path. */
+  var closed = 0;
+  W.close = function () { closed++; };
+  G.title = { sel: 0, edit: null, note: null };
+  frames(2);
+  press('ArrowUp');                            // wraps to the last item: Quit
+  press('Enter');
+  check('quitting from a browser tab does not pretend to close it', closed === 0);
+  check('and says why, rather than doing nothing at all',
+        !!G.title && /close/i.test(G.title.note || ''), G.title && G.title.note);
+  check('the career is committed even though the window stayed open',
+        !!W.Save.load(G.seed));
+
+  /* Under the desktop shell it really does close. The shell is recognised by
+   * its origin — electron/main.js serves the game over `game://` — rather
+   * than by sniffing a user-agent string anything may claim. */
+  var protoBefore = global.location.protocol;
+  global.location.protocol = 'game:';
+  G.title = { sel: 0, edit: null, note: null };
+  frames(2);
+  press('ArrowUp');
+  press('Enter');
+  check('under the desktop shell it closes the window', closed === 1,
+        String(closed));
+  global.location.protocol = protoBefore;
+  delete W.close;
 
   // Escape out of the title screen resumes rather than trapping you.
   G.title = { sel: 0, edit: null, note: null };

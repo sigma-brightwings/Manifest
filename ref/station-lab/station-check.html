@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Station checks</title>
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.184.0/build/three.module.js" } }
+</script>
+<style>
+  body { margin: 0; background: #16181a; color: #dfe3e0; font: 12px/1.5 "SF Mono", Menlo, monospace; padding: 16px; }
+  h2 { font-size: 13px; color: #d6c24a; margin: 18px 0 6px; }
+  pre { margin: 0; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<pre id="out">running…</pre>
+<script type="module">
+import * as THREE from 'three';
+window.THREE = THREE;
+const station = await import('./station.js');
+const { STATION_TYPES } = station;
+const tests = await import('./station-tests.js');
+
+const lines = [];
+const log = s => lines.push(s);
+
+log('=== checkAll ===');
+for (const [key, t] of Object.entries(STATION_TYPES)) {
+  for (const size of ['S', 'M', 'L']) {
+    const st = t.build(key.toUpperCase() + '-001', size);
+    const p = tests.checkStation(st);
+    log(`${key.padEnd(9)} ${size}  ${String(p.length).padStart(2)}  ${p.slice(0, 3).join(' | ')}`);
+  }
+}
+
+// ---- ring geometry probe ----
+log('\n=== ring vertical layout ===');
+for (const size of ['S', 'M', 'L']) {
+  const st = STATION_TYPES.ring.build('RING-001', size);
+  st.updateMatrixWorld(true);
+  const named = n => {
+    const o = st.getObjectByName(n);
+    if (!o) return 'missing';
+    const b = new THREE.Box3().setFromObject(o);
+    return `${b.min.y.toFixed(2)}–${b.max.y.toFixed(2)}`;
+  };
+  const half = st.getObjectByName('ringHalf');
+  const mir = st.getObjectByName('ringHalfMirrored');
+  const hb = new THREE.Box3().setFromObject(half);
+  const mb = new THREE.Box3().setFromObject(mir);
+  log(`${size}  lower ${hb.min.y.toFixed(2)}–${hb.max.y.toFixed(2)}  upper ${mb.min.y.toFixed(2)}–${mb.max.y.toFixed(2)}  trunk ${named('joiningHub')}  berthL ${named('berthL')}`);
+}
+
+// ---- ring islands, in full ----
+log('\n=== ring islands (L) ===');
+{
+  const st = STATION_TYPES.ring.build('RING-001', 'L');
+  log(tests.checkConnectivity(st).join('\n') || 'none');
+}
+
+// ---- cylinder conveyor bed / roller registration ----
+log('\n=== cylinder conveyor seating ===');
+for (const size of ['S', 'M', 'L']) {
+  const st = STATION_TYPES.cylinder.build('CYL-001', size);
+  log(`${size}  problems ${tests.checkConveyorSeating(st).length}`);
+}
+// house rule 8: prove the assertion actually fires
+log('\n=== seating sensitivity (displace one roller radially) ===');
+{
+  const probe = STATION_TYPES.cylinder.build('CYL-001', 'M');
+  const bedName = (() => {
+    let n = null;
+    probe.traverse(o => { if (!n && o.isMesh && /ConveyorBed$/.test(o.name)) n = o.name; });
+    return n;
+  })();
+  if (!bedName) {
+    log('n/a — rebuilt cylinder has no bay conveyors; the route uses a lift + transfer line');
+  } else {
+    for (const d of [0, 0.06, 0.1, 0.2, 0.4, 1.0]) {
+      const st = STATION_TYPES.cylinder.build('CYL-001', 'M');
+      const bed = st.getObjectByName(bedName);
+      const r = st.getObjectByName(bedName.replace(/Bed$/, 'Roller0'));
+      st.updateMatrixWorld(true);
+      const axis = new THREE.Vector3(0, 1, 0).applyQuaternion(bed.getWorldQuaternion(new THREE.Quaternion()));
+      r.position.add(axis.multiplyScalar(d));
+      const p = tests.checkConveyorSeating(st);
+      log(`+${d.toFixed(2)}  ${p.length ? p[0] : 'pass'}`);
+    }
+  }
+}
+
+// ---- docking route: aperture -> airlock -> lift -> hangar ----
+log('\n=== docking route + door sweep ===');
+for (const [key, t] of Object.entries(STATION_TYPES)) {
+  for (const size of ['S', 'M', 'L']) {
+    const st = t.build(key.toUpperCase() + '-001', size);
+    const p = tests.checkDockingRoute(st), d = tests.checkDoorSweep(st);
+    log(`${key.padEnd(9)} ${size}  route ${String(p.length).padStart(2)}  sweep ${String(d.length).padStart(2)}  ${(d[0] || p[0] || '').slice(0, 72)}`);
+  }
+}
+
+// ---- doors: does the driver move them, and does the seal check fire? ----
+log('\n=== station doors ===');
+{
+  const st = STATION_TYPES.cylinder.build('CYL-001', 'M');
+  const bays = station.berthDoorsOf(st);
+  const leaf = st.getObjectByName('berthLBlastDoorL');
+  const openX = leaf.position.x;
+  station.setStationDoors(st, 1);
+  const closedX = leaf.position.x;
+  station.setStationDoors(st, 0);
+  log(`bays ${Object.keys(bays).join(', ')}`);
+  log(`berthLBlastDoorL  open x=${openX.toFixed(2)}  closed x=${closedX.toFixed(2)}  travel ${Math.abs(closedX - openX).toFixed(2)}  restored ${leaf.position.x.toFixed(2)}`);
+  log(`seal at rest: ${tests.checkDoorClosure(st).length} problems`);
+  // house rule 8: the seal check must fail when the leaves cannot meet
+  const bad = STATION_TYPES.cylinder.build('CYL-001', 'M');
+  const bl = bad.getObjectByName('berthLBlastDoorL');
+  bl.userData.door.closedX -= 0.08;
+  log(`leaf 0.08 shy of centre: ${tests.checkDoorClosure(bad)[0] || 'STILL PASSES — check is vacuous'}`);
+  const over = STATION_TYPES.cylinder.build('CYL-001', 'M');
+  over.getObjectByName('berthLBlastDoorR').userData.door.closedX += 0.9;
+  log(`leaf 0.90 past jamb: ${tests.checkDoorClosure(over)[0] || 'STILL PASSES — check is vacuous'}`);
+}
+
+document.getElementById('out').textContent = lines.join('\n');
+</script>
+</body>
+</html>

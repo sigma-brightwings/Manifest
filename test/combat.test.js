@@ -761,11 +761,48 @@ section('--- a kill leaves things behind ---');
   G.sys.canisters = [];
   var victim = fakeVictim(G, { range: 4, manifest: [{ cid: 'grain', tonnes: 30 }] });
   Combat.killNpc(G.sys, G, victim, G.t, HOOKS);
-  check('the manifest spills as canisters', (G.sys.canisters || []).length > 0);
+  check('the manifest spills as canisters',
+        (G.sys.canisters || []).filter(function (c) { return c.kind === 'canister'; }).length > 0);
   check('the wreck flashes', G.explosions.length > 0);
   check('and the ship is gone from the sky', Sim.shipsAll(G.sys, G.t).every(function (s) {
     return s.id !== victim.id;
   }));
+
+  /* AND THE HULL COMES APART. The explosion had been standing in for this
+   * since combat existed — two expanding rings and then nothing, as though
+   * the ship had been deleted rather than destroyed. */
+  var shards = Sim.debrisAll(G.sys);
+  check('the hull comes apart into wreckage', shards.length >= 6, shards.length + ' shards');
+  /* Drawable: a mesh index, a size and a spin. The index is bounded here
+   * rather than against Render.SHARD_COUNT because this suite deliberately
+   * does not load the renderer; render.test.js holds the two together. */
+  check('and it is drawable — a mesh, a size and a spin',
+        shards.every(function (c) {
+          return c.shard >= 0 && c.shard < 8 &&
+                 c.lengthKm > 0 && c.spinRate > 0 && !!c.spinAxis;
+        }));
+
+  /* Nothing is created and nothing is counted twice: the cargo that spilled
+   * intact and the salvage on the shards are two halves of one hold. */
+  var crates = 0, salv = 0;
+  (G.sys.canisters || []).forEach(function (c) {
+    if (c.kind === 'debris') { if (c.cid) salv += c.tonnes; }
+    else crates += c.tonnes;
+  });
+  check('the wreck accounts for part of the hold, not more than it',
+        crates + salv > 0 && crates + salv <= 30, (crates + salv).toFixed(1) + ' t of 30');
+
+  /* A ship whose hold was already emptied by robbery leaves scrap and no
+   * salvage — the hold is one number and every path reads it. */
+  var E = makeG(true);
+  E.sys.canisters = [];
+  var stripped = fakeVictim(E, { range: 4, manifest: [] });
+  stripped.manifest = [];
+  Combat.killNpc(E.sys, E, stripped, E.t, HOOKS);
+  var left = Sim.debrisAll(E.sys);
+  check('a ship robbed first still breaks up', left.length >= 6);
+  check('but there is nothing left on it to salvage',
+        left.every(function (c) { return !c.cid; }));
 })();
 
 section('--- piracy, from the demanding end ---');
@@ -813,6 +850,385 @@ section('--- piracy, from the demanding end ---');
   var v5 = fakeVictim(G5, { range: 100, faction: 'farfac' });
   Combat.demandFrom(G5.sys, G5, G5.t, v5.live, 'cargo', HOOKS);
   check('too far away to threaten anyone', !(G5.wanted.farfac > 0) && !v5.distressAt);
+
+  /* A SHIP IS ROBBED ONCE, and this is the reason the section exists.
+   *
+   * Both the purse and the hold were pure functions read fresh on every
+   * demand, so a compliant freighter paid its whole purse and a third of its
+   * hold every single time you asked — and since the corridor plants exactly
+   * such a freighter next to you in deep space with nothing else to do, one
+   * successful interdiction was an unlimited supply of money and the rest of
+   * the economy was optional. */
+  var G6 = makeG(true);
+  var v6 = fakeVictim(G6, { range: 10, faction: 'purse1' });
+  var c0 = G6.ship.credits;
+  Combat.demandFrom(G6.sys, G6, G6.t, v6.live, 'credits', HOOKS);
+  var paid = G6.ship.credits - c0;
+  check('the first credit demand pays out', paid > 0, String(paid));
+  Combat.demandFrom(G6.sys, G6, G6.t, v6.live, 'credits', HOOKS);
+  Combat.demandFrom(G6.sys, G6, G6.t, v6.live, 'credits', HOOKS);
+  check('and asking again gets nothing — the safe is empty, not refilled',
+        G6.ship.credits === c0 + paid, (G6.ship.credits - c0) + ' vs ' + paid);
+
+  /* The same for cargo, and it must actually reach zero: rounding the dumped
+   * share up to a minimum of one tonne meant a hold could be approached
+   * forever without arriving, which is the same bug wearing a hat. */
+  var G7 = makeG(true);
+  G7.sys.canisters = [];
+  var v7 = fakeVictim(G7, { range: 10, faction: 'purse2',
+                            manifest: [{ cid: 'computers', qty: 12 }] });
+  var pulls = 0, dry = 0;
+  for (var q = 0; q < 30; q++) {
+    var had = (G7.sys.canisters || []).length;
+    Combat.demandFrom(G7.sys, G7, G7.t, v7.live, 'cargo', HOOKS);
+    if ((G7.sys.canisters || []).length > had) pulls++; else { dry++; break; }
+  }
+  check('a hold empties in a handful of demands rather than never',
+        pulls > 1 && pulls < 12 && dry === 1, pulls + ' pulls');
+  var left = Combat.holdOf(G7.sys, v7);
+  check('and what is left of it is nothing at all',
+        left.length === 0, JSON.stringify(left));
+
+  /* An emptied hold is OWNED. Reading it must not look like "never derived"
+   * and quietly hash a fresh cargo into the ship you just cleaned out. */
+  check('an emptied hold stays empty when read again',
+        Combat.holdOf(G7.sys, v7).length === 0 &&
+        Combat.manifestFor(G7.sys, v7).length === 0);
+
+  /* A ship torn out of a lane has no route to inherit a manifest from — that
+   * is why the whole interdiction feature used to end in an empty room. */
+  var G8 = makeG(true);
+  var torn = { id: 'drop-abc', kind: 'trader', name: 'Halcyon Drover',
+               tonnes: 620, tornOut: true };
+  var tornHold = Combat.holdOf(G8.sys, torn);
+  check('a torn-out lane hauler is carrying something',
+        tornHold.length > 0 && (tornHold[0].tonnes || tornHold[0].qty) > 0,
+        JSON.stringify(tornHold));
+
+  /* An ordinary manifest-less trader is NOT given cargo by the same route —
+   * the fallback was widened to lane haulers deliberately, not dropped. */
+  var plain = { id: 'n5', kind: 'trader', name: 'Somebody' };
+  check('but an ordinary empty trader is still empty',
+        Combat.holdOf(G8.sys, plain).length === 0);
+
+  /* Size follows the hull, and follows it far enough to be worth choosing
+   * between: a bulk hauler is a much bigger prize than a packet, which is
+   * what makes picking a contact in the corridor a decision. */
+  var packet = Combat.holdOf(G8.sys, { id: 'drop-p', kind: 'trader',
+                                       tonnes: 150, tornOut: true });
+  var bulker = Combat.holdOf(G8.sys, { id: 'drop-p', kind: 'trader',
+                                       tonnes: 2700, tornOut: true });
+  function tot(m) {
+    var n = 0; for (var i = 0; i < m.length; i++) n += (m[i].qty || m[i].tonnes || 0);
+    return n;
+  }
+  check('a bulk hauler carries several times a packet',
+        tot(bulker) > tot(packet) * 4, tot(packet) + ' t vs ' + tot(bulker) + ' t');
+
+  /* And an in-system pirate, which has no tonnage figure, is untouched by
+   * any of it — every hold already hashed in the galaxy must still hash the
+   * same, or the change was not additive. */
+  var noTonnage = Combat.manifestFor(G8.sys, { id: 'n7', kind: 'pirate' });
+  check('a pirate with no tonnage keeps the hold it always had',
+        noTonnage.length > 0 && (noTonnage[0].tonnes >= 3 && noTonnage[0].tonnes <= 10),
+        JSON.stringify(noTonnage));
+})();
+
+section('--- the slipspace modules are things you can buy ---');
+(function () {
+  /* They were priced and read by the corridor from the day it was built, and
+   * they lived in a bespoke `ship.modules` field — so there was no shop, no
+   * save, no mass, no draw and no refusal. This is that field folded into
+   * the outfitting system that already had all five. */
+  var Slip = global.Slipspace || require(path.join(SRC, 'slipspace.js'));
+  var classes = ['I', 'II', 'III', 'IV'];
+  var kinds = ['baffle', 'anchor'];
+
+  var all = true, priced = true, internal = true;
+  kinds.forEach(function (kind) {
+    classes.forEach(function (c) {
+      var it = Combat.EQUIPMENT[kind + c];
+      if (!it) { all = false; return; }
+      if (it.price !== Slip.MODULES[kind].price[c]) priced = false;
+      if (it.slot !== 'internal') internal = false;
+      if (!(it.mass > 0) || !(it.power > 0)) priced = false;
+    });
+  });
+  check('all eight are in the catalogue', all);
+  check('and every one is an internal fitting with a mass and a draw', internal);
+  check('priced from slipspace.js, so there is one price table and not two',
+        priced);
+
+  /* Bought through the ordinary counter, and the corridor sees it. */
+  var G = makeG();
+  G.ship.credits = 400000;
+  var bought = Combat.buyEquipment(G, 'anchorI');
+  check('an anchor can simply be bought', bought.ok, bought.why);
+  check('and the corridor reads it off the fit map',
+        Slip.fittedClass(G.ship, 'anchor') === 'I',
+        String(Slip.fittedClass(G.ship, 'anchor')));
+  check('a Talon is a class I hull, so a class I anchor actually works',
+        Slip.moduleEffective(G.ship, 'anchor') === true);
+
+  /* One field inside another is not a build. */
+  var again = Combat.buyEquipment(G, 'anchorIII');
+  check('a second anchor is refused, with a reason',
+        !again.ok && /already fitted/.test(again.why || ''), again.why);
+  var baf = Combat.buyEquipment(G, 'baffleI');
+  check('but a baffle is a different module and goes in beside it', baf.ok, baf.why);
+
+  /* THE POINT OF MOVING THEM. The budget now tells the story that the
+   * bespoke field could not: an oversized anchor is legal and ruinous, and
+   * it says so before you spend rather than after. */
+  var H = makeG();
+  H.ship.credits = 400000;
+  var big = Combat.buyEquipment(H, 'anchorIV');
+  check('an oversized anchor is allowed onto a small hull', big.ok, big.why);
+  var sum = Combat.fitSummary(H.ship);
+  check('and it eats nearly the whole reactor doing it', sum.powerFree < 1,
+        sum.powerFree + ' MW free');
+  var gun = Combat.canFit(H.ship, 'phpulse');
+  check('so the cheapest gun will not light — refused, in words',
+        !gun.ok && /MW/.test(gun.why || ''), gun.why);
+
+  /* The old field still works for anything that still writes it — the same
+   * courtesy the equipment table extends to legacy weapon ids. */
+  var L = makeG();
+  L.ship.modules = { anchor: 'II', baffle: null };
+  check('the old bespoke field is still honoured', Slip.fittedClass(L.ship, 'anchor') === 'II');
+  check('and a ship with neither has neither',
+        Slip.fittedClass(makeG().ship, 'anchor') === null);
+
+  /* It saves, because the fit map already did. */
+  var snap = Save.snapshot(G);
+  check('an anchor rides along in the save via the fit map',
+        !!snap && !!snap.ship && JSON.stringify(snap.ship.fit).indexOf('anchorI') >= 0,
+        snap && snap.ship && JSON.stringify(snap.ship.fit));
+
+  /* A GATE THAT NOBODY CAN REACH IS NOT A GATE. This project has shipped two
+   * of those — a navy needing development > 0.62 when the maximum is 0.61,
+   * and a liner needing a pair of settled worlds that essentially never
+   * co-occur — so anything with a minDev is now held to actually existing
+   * somewhere. Sampled rather than reasoned about, for the same reason.
+   *
+   * (The check earned its place immediately: a first pass at measuring this
+   * called generateSystem with a star object instead of a star SEED, got the
+   * same system two hundred times, and reported the entire top of the
+   * catalogue as unbuyable. The gates were fine. The measurement was not,
+   * which is its own argument for keeping the measurement in the suite.) */
+  var reach = {}, ports = 0;
+  var seeds = ['kawartha', 'aldebar', 'muirneach', 'tesselate', 'ordovix'];
+  for (var s = 0; s < seeds.length; s++) {
+    var gal = Galaxy.build(seeds[s]);
+    for (var i = 0; i < Math.min(4, gal.stars.length); i++) {
+      var sys = Gen.generateSystem(gal.stars[i].seed);
+      var bodies = sys.bodies || [];
+      for (var b = 0; b < bodies.length; b++) {
+        var p = bodies[b];
+        if (!p.market) continue;
+        ports++;
+        var dev = typeof p.market.dev === 'number' ? p.market.dev : 0;
+        for (var id in Combat.EQUIPMENT) {
+          var it = Combat.EQUIPMENT[id];
+          if (it.id !== id) continue;
+          if (dev >= (it.minDev || 0)) reach[id] = (reach[id] || 0) + 1;
+        }
+      }
+    }
+  }
+  var dead = [];
+  for (var id2 in Combat.EQUIPMENT) {
+    if (Combat.EQUIPMENT[id2].id !== id2) continue;
+    if (!reach[id2]) dead.push(id2);
+  }
+  check('every catalogue item is stocked SOMEWHERE across five seeds',
+        dead.length === 0, dead.join(', ') + '  (of ' + ports + ' ports)');
+  check('and the anchors are rare rather than everywhere',
+        reach.anchorI > 0 && reach.anchorI < ports * 0.6,
+        reach.anchorI + ' of ' + ports + ' ports');
+})();
+
+section('--- NPCs have shields, and the delivery model finally means something ---');
+(function () {
+  /* THE FIND THIS SECTION EXISTS FOR. `vsShield` and `vsHull` have been on
+   * every gun in the catalogue since the particle retier and NOTHING READ
+   * THEM: there was one shield in the game, it belonged to the player, and
+   * the player's own guns never hit it. The pulse-soaks / beam-drains
+   * interaction the whole weapon design rests on was inert. */
+  var flat = { vsShield: 1, vsHull: 1 };
+  var pulse = Combat.LASER_DELIVERY.pulse;
+  var beam = Combat.LASER_DELIVERY.beam;
+
+  var bare = Combat.splitDamage(0, 20, pulse);
+  check('with no shield up, a pulse goes straight to the hull at its hull rate',
+        bare.shield === 0 && Math.abs(bare.hull - 24) < 1e-9, JSON.stringify(bare));
+
+  var pv = Combat.splitDamage(100, 20, pulse);
+  var bv = Combat.splitDamage(100, 20, beam);
+  check('a beam strips a full shield far faster than a pulse',
+        bv.shield > pv.shield * 2, pv.shield + ' vs ' + bv.shield);
+  check('and neither reaches the hull through a full one',
+        pv.hull === 0 && bv.hull === 0);
+
+  /* The part that was never written down: what happens to the REST of a
+   * shot that breaks through. The fraction of the shot the shield actually
+   * absorbed is the fraction that was spent. */
+  var brk = Combat.splitDamage(5, 20, pulse);
+  check('a shot that breaks through spends only what the shield took',
+        brk.shield === 5 && brk.hull > 0 && brk.hull < 24,
+        JSON.stringify(brk));
+  check('and it is a real breakthrough, flagged as one', brk.through === true);
+
+  var thin = Combat.splitDamage(1, 20, beam);
+  check('a beam wastes almost nothing on a nearly-dead shield',
+        thin.shield === 1 && thin.hull > 12, JSON.stringify(thin));
+
+  /* MEASURED, and this is the number the design has been waiting for: two
+   * groups beat one gun. Strip with the beam, switch, open with the pulse. */
+  function shotsToKill(plan) {
+    var spec = { id: 'z' + plan, cls: 'navy' };
+    Combat.npcHull(spec); Combat.npcShield(spec);
+    var n = 0;
+    while (spec.hullHp > 0 && n < 10000) {
+      var v = plan === 'switch' ? (spec.shieldHp > 0 ? beam : pulse)
+            : plan === 'beam' ? beam : pulse;
+      var sp = Combat.splitDamage(spec.shieldHp, 20, v);
+      spec.shieldHp -= sp.shield; spec.hullHp -= sp.hull;
+      n++;
+    }
+    return n;
+  }
+  var sw = shotsToKill('switch'), bo = shotsToKill('beam'), po = shotsToKill('pulse');
+  check('switching groups mid-fight beats either gun alone',
+        sw < bo && sw < po, 'switch ' + sw + '  beam ' + bo + '  pulse ' + po);
+  check('and beats them by enough to be worth the second hardpoint',
+        sw <= po * 0.85, sw + ' vs ' + po);
+
+  /* WHO CARRIES ONE. A working hull would rather have the four tonnes. */
+  function capOf(cls) {
+    var s = { cls: cls };
+    Combat.npcShield(s);
+    return s.shieldMax;
+  }
+  check('warships and money are shielded',
+        capOf('navy') > capOf('merc') && capOf('merc') > capOf('police') &&
+        capOf('police') > 0, [capOf('navy'), capOf('merc'), capOf('police')].join(' '));
+  check('working hulls are not',
+        capOf('freighter') === 0 && capOf('tanker') === 0 && capOf('hauler') === 0);
+  check('a rescue tender is — unarmed, and built to survive somebody else\'s fight',
+        capOf('tender') > 0, String(capOf('tender')));
+  check('a pirate\'s is feeble rather than absent',
+        capOf('pirate') > 0 && capOf('pirate') < capOf('police'),
+        String(capOf('pirate')));
+  check('and an unknown hull flies bare rather than throwing',
+        capOf('something-new') === 0);
+
+  /* SIZE. render.js is not loaded in this suite, so hullSize falls back to
+   * 'm' — which is the case worth pinning here: a shuttle at medium and an
+   * escape pod at any size carry nothing. The -l shuttle is checked in
+   * render.test.js, where the model table actually exists. */
+  check('hullSize falls back to m with no model library loaded',
+        Combat.hullSize('shuttle') === 'm');
+  check('a medium shuttle has nowhere to put a generator', capOf('shuttle') === 0);
+  check('and an escape pod never does', capOf('escape_pod') === 0);
+
+  /* Through damageNpc: the shield goes first, and the hull only after. */
+  var G = makeG(true);
+  var v = fakeVictim(G, { kind: 'pirate', cls: 'police', range: 5, faction: 'sf' });
+  v.cls = 'police';
+  delete v.hullHp; delete v.shieldMax;
+  Combat.npcHull(v); Combat.npcShield(v);
+  var hull0 = v.hullHp, shield0 = v.shieldHp;
+  check('the victim starts shielded', shield0 > 0, String(shield0));
+  Combat.damageNpc(G.sys, G, v, 10, G.t, HOOKS, pulse, { x: 1, y: 0, z: 0 });
+  check('a hit drains the shield first', v.shieldHp < shield0 && v.hullHp === hull0,
+        v.shieldHp + ' / ' + v.hullHp);
+
+  /* Keep hitting it and the hull starts taking it. */
+  for (var i = 0; i < 40; i++) {
+    Combat.damageNpc(G.sys, G, v, 10, G.t, HOOKS, pulse, { x: 1, y: 0, z: 0 });
+  }
+  check('once the shield is gone the hull takes it', v.shieldHp <= 0 && v.hullHp < hull0);
+
+  /* IMPACTS, which is what every effect reads. */
+  var I = makeG(true);
+  var iv = fakeVictim(I, { kind: 'pirate', cls: 'merc', range: 5, faction: 'if' });
+  iv.cls = 'merc';
+  delete iv.hullHp; delete iv.shieldMax;
+  Combat.damageNpc(I.sys, I, iv, 5, I.t, HOOKS, pulse, { x: 100, y: 0, z: 0 });
+  check('a hit is recorded for the renderer', !!iv.impacts && iv.impacts.length === 1);
+  if (iv.impacts && iv.impacts.length) {
+    var im = iv.impacts[0];
+    check('as a unit direction toward whatever hit it',
+          !!im.dir && Math.abs(Math.sqrt(im.dir.x * im.dir.x + im.dir.y * im.dir.y +
+                                         im.dir.z * im.dir.z) - 1) < 1e-9,
+          JSON.stringify(im.dir));
+    check('and it says the shield took this one',
+          im.soaked === true && im.through === false, JSON.stringify(im));
+  }
+  /* A missile has no variety and goes off ON the hull, so both extras are
+   * optional and it must not throw for want of them. */
+  var threw = null;
+  try { Combat.damageNpc(I.sys, I, iv, 5, I.t, HOOKS); } catch (e) { threw = e; }
+  check('a missile can still do damage without a direction or a delivery',
+        !threw, threw && threw.message);
+  check('and its impact simply has no direction',
+        iv.impacts[iv.impacts.length - 1].dir === null);
+
+  for (var k = 0; k < 20; k++) {
+    Combat.damageNpc(I.sys, I, iv, 1, I.t, HOOKS, pulse, { x: 1, y: 1, z: 0 });
+  }
+  check('the impact list is capped rather than growing all fight',
+        iv.impacts.length <= Combat.MAX_IMPACTS,
+        iv.impacts.length + ' of ' + Combat.MAX_IMPACTS);
+
+  /* REGEN, off the same two numbers the player's shield uses. */
+  var R = makeG(true);
+  var rv = fakeVictim(R, { kind: 'pirate', cls: 'navy', range: 5, faction: 'rf' });
+  rv.cls = 'navy';
+  delete rv.hullHp; delete rv.shieldMax;
+  Combat.damageNpc(R.sys, R, rv, 30, R.t, HOOKS, pulse, { x: 1, y: 0, z: 0 });
+  var dented = rv.shieldHp;
+  check('the navy took it on the shield', dented < rv.shieldMax, String(dented));
+  Combat.update(R.sys, R, R.t + 1, 1, HOOKS);
+  check('and does not recover a point while it is still being shot at',
+        rv.shieldHp === dented, String(rv.shieldHp));
+  Combat.update(R.sys, R, R.t + Combat.MODULES.shield.regenDelay + 2, 1, HOOKS);
+  check('but refills once things go quiet', rv.shieldHp > dented, String(rv.shieldHp));
+  Combat.update(R.sys, R, R.t + 10000, 10000, HOOKS);
+  check('and never past full', rv.shieldHp === rv.shieldMax,
+        rv.shieldHp + ' / ' + rv.shieldMax);
+
+  /* A ZERO-DAMAGE SHOT. damageAtRange takes a pion to nearly nothing at the
+   * edge of its envelope, and the split used to divide zero by zero there —
+   * a NaN into shieldHp is a ship that can never be hurt again. */
+  var z = Combat.splitDamage(40, 0, pulse);
+  check('a shot that delivers nothing divides nothing by nothing',
+        z.shield === 0 && z.hull === 0 &&
+        isFinite(z.shield) && isFinite(z.hull), JSON.stringify(z));
+  var Z = makeG(true);
+  var zv = fakeVictim(Z, { kind: 'pirate', cls: 'navy', range: 5, faction: 'zf' });
+  zv.cls = 'navy';
+  delete zv.hullHp; delete zv.shieldMax;
+  Combat.npcHull(zv); Combat.npcShield(zv);
+  var zs = zv.shieldHp, zh = zv.hullHp;
+  Combat.damageNpc(Z.sys, Z, zv, 0, Z.t, HOOKS, pulse, { x: 1, y: 0, z: 0 });
+  check('and leaves the ship exactly as it was, not NaN',
+        zv.shieldHp === zs && zv.hullHp === zh,
+        zv.shieldHp + ' / ' + zv.hullHp);
+  check('with no flare recorded for a hit that did not happen',
+        !zv.impacts || zv.impacts.length === 0);
+
+  /* An unshielded hull must not have gained one by accident — the whole
+   * point of the gate is that most of the sky is still soft. */
+  var F = makeG(true);
+  var fv = fakeVictim(F, { range: 5, faction: 'ff' });
+  fv.cls = 'freighter';
+  delete fv.hullHp; delete fv.shieldMax;
+  var fh = Combat.npcHull(fv);
+  Combat.damageNpc(F.sys, F, fv, 12, F.t, HOOKS, pulse, { x: 1, y: 0, z: 0 });
+  check('a freighter still takes it straight on the plating',
+        fv.shieldMax === 0 && fv.hullHp < fh, fv.hullHp + ' of ' + fh);
 })();
 
 section('--- taking hits ---');

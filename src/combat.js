@@ -28,6 +28,13 @@
    * globals are assembled by the test harness in load order; the require
    * fallback is what lets combat.js be pulled in on its own. */
   var RNG = global.RNG || (typeof require !== 'undefined' ? require('./rng.js') : null);
+  /* Needed for the two slipspace modules, which are catalogue entries here
+   * and design — price, wake factor, resist factor — over there. Same
+   * fallback and the same reason: this file has to be loadable alone, and a
+   * dependency that only holds because galaxy.js happens to pull slipspace
+   * in first is a dependency waiting to break. */
+  var Slip = global.Slipspace ||
+             (typeof require !== 'undefined' ? require('./slipspace.js') : null);
 
   /* ---- catalogues -------------------------------------------------------
    * Prices in credits. Ranges in km, damage in hull points, cooldowns in
@@ -358,9 +365,86 @@
   var SLOT_LABEL = { hardpoint: 'Hardpoint', utility: 'Utility',
                      internal: 'Internal', capital: 'Capital mount' };
 
+  /* ---- the two slipspace modules, as things you can actually buy ---------
+   * They existed before this: Slip.MODULES has priced a Wake Baffle and a
+   * Harmonic Transit Anchor per hull class since the corridor was built, and
+   * the corridor reads them. But they lived in a bespoke `ship.modules`
+   * field, which meant no shop, no save, no mass, no power and no refusal —
+   * a whole parallel outfitting system with one item in each hand.
+   *
+   * So the DESIGN stays in slipspace.js, where the wake factor and the
+   * resist factor are, and the FITTING lives here, where slots and budgets
+   * are. Neither file grows a copy of the other's numbers.
+   *
+   * WHY EIGHT ITEMS AND NOT TWO. Both modules are sized to the hull they
+   * cover — an undersized field leaves most of the ship sticking out of it —
+   * so the class is not a stat on one item, it is which item you bought.
+   * Four classes each, and the budget then tells the story the old bespoke
+   * field could not: a Class IV anchor on a Talon is 7 of its 9 megawatts
+   * and 11 of its 14 tonnes, which is legal, ruinous, and visibly so before
+   * you spend a credit. No rule had to be written to say "don't".
+   *
+   * MASS AND POWER SCALE WITH COVERAGE, because that is what the class means.
+   * The anchor draws heavily and the baffle barely does: holding a corridor
+   * open against a harmonic is work, and scattering what you have already
+   * left behind is not.
+   *
+   * The gates match the rest of the catalogue rather than inventing a scale:
+   * a baffle sits with the light kit, an anchor with the Class 3 lasers at
+   * `warm` standing, because both are what a developed port sells to
+   * somebody it likes. */
+  var SLIP_FIT = {
+    baffle: {
+      slotType: 'internal', label: 'Wake Baffle',
+      mass: { I: 2, II: 3, III: 4, IV: 6 },
+      power: { I: 0.8, II: 1.1, III: 1.5, IV: 2.0 },
+      minDev: 0.45, minStanding: 0,
+      pitch: 'What you leave at the mouth of a jump, smeared until it is not worth reading.'
+    },
+    anchor: {
+      slotType: 'internal', label: 'Harmonic Transit Anchor',
+      mass: { I: 4, II: 6, III: 8, IV: 11 },
+      power: { I: 3.2, II: 4.2, III: 5.4, IV: 7.0 },
+      minDev: 0.70, minStanding: 10,
+      pitch: 'The cheap opportunist stops being able to touch you. The serious one still can.'
+    }
+  };
+
+  var SLIP_MODULES = {};
+  (function () {
+    if (!Slip || !Slip.MODULES) return;
+    var classes = ['I', 'II', 'III', 'IV'];
+    for (var kind in SLIP_FIT) {
+      var fit = SLIP_FIT[kind], design = Slip.MODULES[kind];
+      if (!design) continue;
+      for (var c = 0; c < classes.length; c++) {
+        var cid = classes[c], price = design.price[cid];
+        if (!price) continue;
+        var id = kind + cid;
+        SLIP_MODULES[id] = {
+          id: id,
+          name: design.name + ' ' + cid,
+          slot: fit.slotType,
+          kind: 'slip' + kind,
+          /* One of each, whatever the class. Two anchors do not stack — the
+           * second field is inside the first — and a Class I under a Class
+           * III is the same accounting error the reactors already refuse. */
+          uniqueGroup: 'slip' + kind,
+          slipKind: kind, slipClass: cid,
+          price: price,
+          mass: fit.mass[cid], power: fit.power[cid],
+          minDev: fit.minDev, minStanding: fit.minStanding,
+          minCrime: 0, grey: false,
+          pitch: fit.pitch,
+          blurb: design.blurb
+        };
+      }
+    }
+  })();
+
   var EQUIPMENT = {};
   (function () {
-    var tables = [GUNS, TURRETS, MODULES];
+    var tables = [GUNS, TURRETS, MODULES, SLIP_MODULES];
     for (var i = 0; i < tables.length; i++) {
       for (var k in tables[i]) {
         var item = tables[i][k];
@@ -742,6 +826,141 @@
     return spec.hullHp;
   }
 
+  /* ---- and what it takes to get THROUGH to the hull ----------------------
+   * NPCs have never had shields. Everything shot at one went straight into
+   * hullHp, which had a consequence nobody had noticed: `vsShield` and
+   * `vsHull` have been on every gun in the catalogue since the particle
+   * retier and NOTHING HAS EVER READ THEM. There was exactly one shield in
+   * the game, it belonged to the player, and the player's own guns never hit
+   * it — so the pulse-soaks / beam-drains interaction that the whole weapon
+   * design rests on has been inert the entire time. This is the change that
+   * switches it on, which matters more than the animation that asked for it.
+   *
+   * WHO CARRIES ONE is a statement about the ship, in the same voice as
+   * NPC_HULL above. Warships and money have them; working hulls mostly do
+   * not, because a generator is 4,800 credits, two megawatts and four tonnes
+   * and a freighter would rather have the tonnage.
+   *
+   * The rescue tender is the interesting entry: unarmed, and shielded. It
+   * flies INTO fights to pull people out, so what keeps it alive is being
+   * hard to kill by accident rather than being able to shoot back — which is
+   * the same argument BOUNTY.killTender already makes from the other end.
+   *
+   * A pirate's is deliberately feeble. It is grey-market kit on a hull that
+   * is one bad week from being scrap, and twenty points is the difference
+   * between a fight and a formality without being a wall.
+   *
+   * Lazy, exactly like npcHull, so the generator still never has to know
+   * combat exists. */
+  /* SIZE IS A REAL PROPERTY, and it lives in the model library rather than
+   * here. Every imported hull comes in three variants — `shuttle-s`,
+   * `shuttle-m`, `shuttle-l` and so on for all thirteen families — and
+   * `Render.HULL_ASSIGN` says which one a class actually flies. So an entry
+   * below may be one number for every size, or a per-size object when the
+   * variant is the whole point:
+   *
+   *   - A SHUTTLE only has the volume for a generator in its largest form.
+   *     Four tonnes and two megawatts is a lot to find on a hull whose job
+   *     is being the one nobody scans twice.
+   *   - AN ESCAPE POD never does, at any size. There is nothing aboard one
+   *     but people and an hour of air, and a pod that could be shielded
+   *     would be a pod somebody argued about shooting.
+   *
+   * Read through HULL_ASSIGN rather than off a number, because the
+   * assignment is editable at runtime — `Render.assignHull('pirate',
+   * 'fighter-s')` is offered as a design surface — and a shuttle that has
+   * been reassigned to the large model should get the large model's answer.
+   * Reached through `global` at call time, not bound at load: render.js
+   * loads AFTER this file, and npcShield only ever runs once something has
+   * been shot at, which is long after boot. */
+  var NPC_SHIELD = {
+    escape_pod: { s: 0, m: 0, l: 0 },   // never, at any size
+    shuttle: { s: 0, m: 0, l: 15 },     // only the big one has the room
+    freighter: 0, tanker: 0, hauler: 0,
+    pirate: 20,          // bought off the same counter as its lasers
+    police: 30,
+    tender: 25,          // unarmed, and built to survive somebody else's fight
+    merc: 40,            // this is what you are paying for
+    liner: 45,           // insured, and full of people
+    navy: 90             // you do not crack one of these with a photon
+  };
+
+  /* 's' | 'm' | 'l', off the model this class is currently assigned. Falls
+   * back to 'm' rather than to nothing, so a class with no model — or a run
+   * with render.js absent, which the headless suites are — still gets the
+   * middle answer instead of an undefined one. */
+  function hullSize(cls) {
+    var R = global.Render;
+    var id = R && R.HULL_ASSIGN && R.HULL_ASSIGN[cls];
+    var m = /-(s|m|l)$/.exec(id || '');
+    return m ? m[1] : 'm';
+  }
+
+  function npcShield(spec) {
+    if (spec.shieldMax === undefined) {
+      var cap = NPC_SHIELD[spec.cls];
+      if (cap === undefined) cap = 0;                 // unknown hulls fly bare
+      else if (typeof cap === 'object') cap = cap[hullSize(spec.cls)] || 0;
+      spec.shieldMax = cap;
+      spec.shieldHp = cap;
+    }
+    return spec.shieldHp;
+  }
+
+  /* ---- one rule for both sides of a fight --------------------------------
+   * The shield is a BUCKET, and the delivery multipliers say how much of a
+   * shot the bucket is any good against. What was never written down is what
+   * happens to a shot that BREAKS THROUGH one, and getting that wrong would
+   * quietly undo the design:
+   *
+   *   - the shot arrives carrying `dmg`
+   *   - against the shield it delivers `dmg * vsShield`
+   *   - whatever fraction of THAT the shield actually absorbs is the
+   *     fraction of the shot that was spent
+   *   - the rest of the shot goes on to the hull, at `vsHull`
+   *
+   * So a pulse wastes 40% of its punch on a full bucket and then opens the
+   * plating at x1.2 once the bucket is empty; a beam strips the bucket at
+   * x1.5 and is a poor tin-opener afterwards.
+   *
+   * MEASURED, against a naval cutter — 90 shield over 260 hull — with a flat
+   * 20-point shot, so only the delivery differs:
+   *
+   *     beam alone            22 shots
+   *     pulse alone           19
+   *     intermittent alone    18
+   *     BEAM, THEN PULSE      14      <- strip with one group, open with the other
+   *
+   * Twenty-two per cent better than the best single weapon, and it is the
+   * first time in this project that carrying two kinds of gun has been worth
+   * anything at all. Fire groups were built for exactly this and have had
+   * nothing to reward until now.
+   *
+   * Returns what to subtract from each, so the two callers cannot drift. */
+  var FLAT_DELIVERY = { vsShield: 1, vsHull: 1 };
+
+  function splitDamage(shieldHp, dmg, delivery) {
+    var d = delivery || FLAT_DELIVERY;
+    var vs = d.vsShield === undefined ? 1 : d.vsShield;
+    var vh = d.vsHull === undefined ? 1 : d.vsHull;
+    /* A ZERO-DAMAGE SHOT, which is a real thing: damageAtRange takes a pion
+     * to nearly nothing at the edge of its envelope. Without this line the
+     * `soaked / offered` below is 0/0, and a NaN written into shieldHp is a
+     * ship that can never be hurt again and a shield bar that reads blank
+     * forever. Caught by reading rather than by playing, which is the only
+     * way it would ever have been caught — nobody notices the shot that did
+     * nothing until every shot after it does nothing too. */
+    if (!(dmg > 0)) return { shield: 0, hull: 0, through: false };
+    if (!(shieldHp > 0) || !(vs > 0)) {
+      return { shield: 0, hull: dmg * vh, through: true };
+    }
+    var offered = dmg * vs;
+    var soaked = Math.min(shieldHp, offered);
+    var spent = soaked / offered;                 // share of the shot used up
+    var left = dmg * (1 - spent);
+    return { shield: soaked, hull: left * vh, through: left > 1e-9 };
+  }
+
   /* ---- lifting a trader off its rail ------------------------------------
    * Traffic ships are pure functions of t and normally never simulated.
    * The moment one is attacked or extorted it needs to be able to flee,
@@ -810,10 +1029,86 @@
 
   /* ---- damage ----------------------------------------------------------- */
 
-  function damageNpc(sys, G, spec, dmg, t, hooks) {
+  /* ---- where a hit landed, for the things that draw it -------------------
+   * The single seam between the combat model and every impact effect. It
+   * records a DIRECTION rather than a point: a unit vector in world space
+   * from the ship's centre toward whatever hit it, which is all the renderer
+   * needs to find the spot on a hull or a shell and is the one thing that
+   * stays meaningful while the ship keeps flying. A stored world point would
+   * be half a kilometre astern within a second at combat speeds — the same
+   * bug the beam muzzles had.
+   *
+   * SHORT AND CAPPED. These live for the length of an animation, not for the
+   * length of a fight, and a ship under sustained beam fire takes a hit every
+   * frame. Oldest out first, four at a time, which is more than the eye can
+   * separate anyway.
+   *
+   * STAMPED IN REAL SECONDS, NOT SIM SECONDS, and this file already says why
+   * a few hundred lines down: "the BEAM's fade stays on real time, because a
+   * flash is for the player's eyes." An impact flare is the same kind of
+   * thing. Sim time is the wrong clock for it — it runs at up to 500x, so a
+   * half-second animation stamped in sim seconds would be over inside one
+   * frame the moment anything was compressed.
+   *
+   * `spec.lastHitAt` deliberately stays on SIM time, because what it gates is
+   * the shield's regeneration delay, and that is a delay in the world rather
+   * than in the eye. Two clocks, two jobs; the only mistake would be using
+   * one for both.
+   *
+   * Nothing here is seeded, and nothing here needs to be: an impact is a
+   * consequence of a shot that has already happened, so replaying the shot
+   * replays the impact. There is no draw to get wrong. */
+  var MAX_IMPACTS = 4;
+
+  function nowSec() {
+    return (typeof performance !== 'undefined' ? performance.now() : 0) / 1000;
+  }
+
+  function markImpact(target, from, split) {
+    if (!target || !split) return;
+    /* A shot that delivered nothing gets no flare. `splitDamage` returns a
+     * zero split for a pion that has run out of envelope, and without this
+     * line the shell would light up for a hit that did not happen — which is
+     * the worst kind of tell, because the player would learn to trust it. */
+    if (!(split.shield > 0) && !(split.hull > 0)) return;
+    var at = target.live ? target.live.pos : target.pos;
+    var dir = null;
+    if (from && at) {
+      var d = V.sub(from, at), l = V.len(d);
+      if (l > 1e-9) dir = V.scale(d, 1 / l);
+    }
+    /* No direction to be had — a missile, or a shot from something that has
+     * already stopped existing. Facing the camera is the honest fallback:
+     * the flare is a thing that happened to this ship, and putting it
+     * somewhere arbitrary on the far side would hide it for no reason. */
+    var list = target.impacts || (target.impacts = []);
+    list.push({
+      dir: dir, at: nowSec(),
+      shield: split.shield, hull: split.hull,
+      /* Which of the two effects this is. A shot fully soaked flares on the
+       * shell; one that came through blooms on the plating; one that did
+       * both does both, which is exactly what a shield failing looks like. */
+      soaked: split.shield > 0, through: split.hull > 1e-9
+    });
+    while (list.length > MAX_IMPACTS) list.shift();
+  }
+
+  /* `delivery` and `from` are both additive and both optional. A missile
+   * passes neither — it has no variety and detonates on contact rather than
+   * arriving from anywhere in particular — and gets a flat split and a
+   * bloom on the hull's own centre, which is the truth about a missile. */
+  function damageNpc(sys, G, spec, dmg, t, hooks, delivery, from) {
     npcHull(spec);
-    spec.hullHp -= dmg;
+    npcShield(spec);
+    var split = splitDamage(spec.shieldHp, dmg, delivery);
+    spec.shieldHp -= split.shield;
+    spec.hullHp -= split.hull;
     spec.lastHitAt = t;
+    /* When the shield next starts refilling. Pushed back by every hit, so a
+     * ship under sustained fire never recovers a point of it — the same
+     * shape the player's regenDelay has. */
+    spec.shieldIdleAt = t + MODULES.shield.regenDelay;
+    markImpact(spec, from, split);
 
     /* Being shot at is an argument everybody understands. Armed ships turn
      * and fight; unarmed ones run. Either way the crime clock starts. */
@@ -887,20 +1182,83 @@
    * stored state on the spec — the same lazy pattern npcHull() already uses
    * for hull points — because the moment the player takes cargo off a ship
    * the pure function has stopped being the truth. */
+  /* ---- HOW BIG THE PRIZE IS, when the hull's tonnage is known ------------
+   *
+   * An in-system pirate is a spec off buildPatrols and carries no tonnage
+   * figure, so both scales below return 1 and every existing hold and purse
+   * in the galaxy hashes to exactly what it hashed to before — the additive
+   * discipline, applied to a number rather than to a save field.
+   *
+   * A LANE HAULER does carry one, because the slipspace timetable sizes each
+   * leg. That is what makes the corridor a place where you CHOOSE: the fat
+   * contact is worth more and is also the one your interdictor can barely
+   * hold, and both halves of that trade read off the same number.
+   *
+   * MEASURED, NOT PICKED. Sampled across ten galaxy seeds, 2,858 lane legs:
+   *
+   *     packet 151 t · trader 416 · liner 654 · freighter 1104 · bulker 2717
+   *     overall  min 90   p25 289   median 522   p75 1133   max 3592
+   *
+   * The first attempt at this scaled by 1 + t/900 capped at 3, which handed
+   * a median hauler a ten-tonne hold and a 3,600 t bulker twenty — against a
+   * Talon that carries 64 t. Two things were wrong with that and only one of
+   * them was the size: the ladder was also nearly FLAT, so which contact you
+   * chased down the corridor made no difference worth the chase. This is the
+   * project's own rule about thresholds — sample the distribution first —
+   * caught for once before it shipped rather than after.
+   *
+   * CARGO is deadweight, and deadweight is roughly what a hauler is. At
+   * t/170 against the 3–10 t base draw the ladder comes out at about 4% of
+   * all-up mass, which reads:
+   *
+   *     packet ~12 t · trader ~22 · liner ~32 · freighter ~49 · bulker ~111
+   *
+   * A packet is scraps, a freighter is a good day, and a bulker is MORE THAN
+   * A TALON CAN LIFT — which is the correct feeling for piracy and hands the
+   * big hulls a reason to exist without anyone writing a rule. Capped at 20
+   * so the top of the range stays inside a Mule's 160 t hold. */
+  function cargoScale(spec) {
+    var t = spec && spec.tonnes;
+    if (!(typeof t === 'number' && t > 0)) return 1;
+    return Math.min(20, 1 + t / 170);
+  }
+
+  /* MONEY IS NOT DEADWEIGHT. What is in the safe is operating cash, and a
+   * bulk hauler does not carry six times a trader's float just because it
+   * displaces six times as much. So the purse gets its own, much gentler
+   * curve — topping out around 2,500 cr — and the cargo stays the real
+   * prize. That is the right emphasis for a game about trade: the payoff for
+   * interdicting a freighter should be a hold you then have to go and SELL,
+   * not a number that goes up. */
+  function purseScale(spec) {
+    var t = spec && spec.tonnes;
+    if (!(typeof t === 'number' && t > 0)) return 1;
+    return 1 + Math.min(2, t / 900);
+  }
+
   function manifestFor(sys, spec) {
     if (!spec) return [];
-    if (spec.manifest && spec.manifest.length) return spec.manifest;
+    /* PRESENCE, NOT LENGTH. This tested `.length` and so could not tell a
+     * hold that has never been derived from one that has been emptied — so a
+     * robbed ship regenerated a fresh cargo on the very next demand and the
+     * hold refilled itself forever. Exactly the shape of the purse bug
+     * below, reached from the other side: "derive once, then own it" has to
+     * mean owning the answer NOTHING as well. */
+    if (spec.manifest) return spec.manifest;
     var goods = localGoods(sys);
     var h = RNG.hashString('hold|' + ((sys && sys.seed) || '?') + '|' +
                            (spec.id || spec.name || '?'));
     /* Three independent draws out of one hash: which commodity, how much of
      * it, and whether there is a second one at all. Shifted rather than
      * re-hashed, so there is one call and one place to look. */
+    var k = cargoScale(spec);
     var pick = goods[h % goods.length];
-    var man = [{ cid: pick, tonnes: 3 + ((h >>> 8) % 8) }];
+    var man = [{ cid: pick, tonnes: Math.round((3 + ((h >>> 8) % 8)) * k) }];
     if (((h >>> 16) & 3) === 0 && goods.length > 1) {
       var second = goods[(h >>> 20) % goods.length];
-      if (second !== pick) man.push({ cid: second, tonnes: 2 + ((h >>> 24) % 5) });
+      if (second !== pick) {
+        man.push({ cid: second, tonnes: Math.round((2 + ((h >>> 24) % 5)) * k) });
+      }
     }
     spec.manifest = man;
     return man;
@@ -909,11 +1267,54 @@
   /* The single read point for "what is this ship carrying", so robbery,
    * death and any future cargo scanner cannot disagree. Traders keep their
    * route-derived manifests, which are better grounded still; the hash only
-   * fills in for ships that have no route to inherit one from. */
+   * fills in for ships that have no route to inherit one from.
+   *
+   * A SHIP TORN OUT OF SLIPSPACE IS EXACTLY THAT SHIP, and leaving it out of
+   * the fallback is what made the whole interdiction feature end in an empty
+   * room: you chase a freighter down a corridor, hold the lock, tear it into
+   * deep space — and it reports itself running empty, every time, because it
+   * flies an interstellar lane that no system's traffic list has ever heard
+   * of and so inherits nothing.
+   *
+   * The guard is widened to `tornOut` rather than dropped, deliberately. Any
+   * manifest-less trader falling back would hand cargo to every ship in the
+   * galaxy that is legitimately deadheading, which is a much larger change
+   * than this one and not obviously right. Lane haulers are a closed class:
+   * they have no route to inherit from and never will. */
   function holdOf(sys, spec) {
-    var man = (spec && (spec.manifest || (spec.live && spec.live.manifest))) || [];
-    if (man.length || !spec || spec.kind !== 'pirate') return man;
+    if (!spec) return [];
+    /* First, because an owned hold is the truth even when it is empty. */
+    if (spec.manifest) return spec.manifest;
+    var man = (spec.live && spec.live.manifest) || [];
+    if (man.length) return man;
+    if (spec.kind !== 'pirate' && !spec.tornOut) return man;
     return manifestFor(sys, spec);
+  }
+
+  /* WHAT IS IN THE SAFE, and it is in there ONCE.
+   *
+   * Derived, not rolled: a ship carries the money it carries, and re-demanding
+   * after a reload should not be a way to reroll the payout. Same hash family
+   * as the hold, different salt.
+   *
+   * But derived is only half of it. The purse was a pure function read fresh
+   * on every demand, which meant a torn-out freighter paid out its full purse
+   * every time you asked and a successful interdiction was an unlimited
+   * supply of credits — you never had to fly anywhere again. So it follows
+   * the hold's doctrine to the end: DERIVE ONCE, THEN OWN IT. The moment the
+   * money changes hands the pure function has stopped being the truth, and
+   * what is left on the spec is the truth instead.
+   *
+   * Scaled by hull tonnage, but on purseScale's gentle curve rather than the
+   * hold's — see the note there for why money and deadweight are not the
+   * same quantity. */
+  function purseOf(sys, spec) {
+    if (!spec) return 0;
+    if (typeof spec.purse === 'number') return spec.purse;
+    var base = 150 + (RNG.hashString('purse|' + ((sys && sys.seed) || '?') +
+                                     '|' + (spec.id || spec.name || '?')) % 701);
+    spec.purse = Math.round(base * purseScale(spec));
+    return spec.purse;
   }
 
   function killNpc(sys, G, spec, t, hooks) {
@@ -952,6 +1353,26 @@
                                 Math.max(1, Math.round(amount * 0.3)), t);
         dropped++;
       }
+
+      /* AND THE SHIP ITSELF COMES APART. The explosion above has been
+       * standing in for this since combat existed — a pair of expanding
+       * rings and then nothing, as though the hull had been deleted rather
+       * than destroyed.
+       *
+       * What the wreck carries is what the hold did NOT spill as intact
+       * cargo: three lines go out as canisters, and the rest of the manifest
+       * is aboard when it breaks up, so it comes off as salvage on the
+       * shards. Nothing is created and nothing is counted twice — the same
+       * hold, split between what survived the blast in its crate and what
+       * did not.
+       *
+       * Keyed on the victim's id, so a replayed kill throws the same pieces
+       * the same way. spawnDebris owns that; this only has to hand it
+       * something stable to hash. */
+      if (global.Sim && global.Sim.spawnDebris) {
+        global.Sim.spawnDebris(sys, spec.id || spec.name || 'wreck',
+                               at, vel, spec.size, t, man.slice(dropped));
+      }
     }
 
     /* A destroyed victim never files its report. This one line is the
@@ -976,14 +1397,18 @@
     if (hooks && hooks.sound) hooks.sound('explosion');
   }
 
-  function damagePlayer(G, dmg, hooks) {
+  /* `delivery` and `from` are additive here for the same reasons they are on
+   * damageNpc, and they matter more: this is the ship the player is sitting
+   * inside, and the direction is what lets the cockpit put the flare on the
+   * right piece of canopy. NPC guns carry no variety, so the split is flat
+   * until something out there mounts a real laser. */
+  function damagePlayer(G, dmg, hooks, delivery, from) {
     var s = G.ship;
     s.lastHitAt = (typeof performance !== 'undefined' ? performance.now() : 0);
-    if (s.shield && s.shieldHp > 0) {
-      var soaked = Math.min(s.shieldHp, dmg);
-      s.shieldHp -= soaked;
-      dmg -= soaked;
-    }
+    var split = splitDamage(s.shield ? s.shieldHp : 0, dmg, delivery);
+    if (s.shield) s.shieldHp -= split.shield;
+    markImpact(s, from, split);
+    dmg = split.hull;
     if (dmg > 0) {
       s.hullHp -= dmg;
       if (hooks && hooks.sound) hooks.sound('hit');
@@ -1781,7 +2206,13 @@
     /* The particle decides what actually arrives. A photon delivers its
      * whole load at any range it can reach; a pion that connects at the
      * edge of its envelope is barely worth the power it drew. */
-    if (spec) damageNpc(sys, G, spec, damageAtRange(gun, hitDist), t, hooks);
+    /* The gun goes through as the delivery, which is what finally makes
+     * `vsShield` and `vsHull` mean something, and the muzzle goes through as
+     * the direction so the flare lands on the side you actually shot. */
+    if (spec) {
+      damageNpc(sys, G, spec, damageAtRange(gun, hitDist), t, hooks,
+                gun, muzzleWorld(s, mz));
+    }
     return spec;
   }
 
@@ -1891,7 +2322,7 @@
      * bare hull's 18/s shed) that it will never cook you on its own, which
      * is right — you paid 5,600 credits not to think about it. */
     addHeat(G, (tur.heat || 0) * (tur.cooldown || 0));
-    damageNpc(sys, G, best, damageAtRange(tur, bestD), t, hooks);
+    damageNpc(sys, G, best, damageAtRange(tur, bestD), t, hooks, tur, s.pos);
   }
 
   /* ---- missiles ---------------------------------------------------------
@@ -1975,6 +2406,9 @@
           pos: V.clone(ms.pos),
           at: (typeof performance !== 'undefined' ? performance.now() : 0), size: 1.2
         });
+        /* No delivery and no direction: a warhead has no variety, and it goes
+         * off ON the hull rather than arriving from anywhere. Both arguments
+         * are optional precisely so this line does not have to lie. */
         damageNpc(sys, G, tgt, ms.dmg, t, hooks);
         if (hooks && hooks.sound) hooks.sound('explosion');
         continue;
@@ -2019,7 +2453,9 @@
         color: gun === TRADER_GUN ? '#ffc46b' : '#ff8a76',
         until: now + 0.07, miss: Math.random() > chance
       });
-      if (Math.random() < chance) damagePlayer(G, gun.dmg, hooks);
+      if (Math.random() < chance) {
+        damagePlayer(G, gun.dmg, hooks, gun, V.clone(sp.live.pos));
+      }
       else if (hooks && hooks.sound) hooks.sound('nearMiss');
     }
   }
@@ -2035,6 +2471,21 @@
       if (nowMs - (s.lastHitAt || 0) > MODULES.shield.regenDelay * 1000) {
         s.shieldHp = Math.min(MODULES.shield.cap, s.shieldHp + MODULES.shield.regen * dtSim);
       }
+    }
+    /* And the same for everyone else, off the same two numbers, so there is
+     * one shield in this game with two owners rather than two shields.
+     * Cheap: it runs only over specs that have already been shot at, since
+     * shieldMax is undefined until npcShield is called and npcShield is only
+     * called by damageNpc. A sky full of ships nobody has fired on costs one
+     * `undefined` test each. */
+    var pats = sys.patrols || [];
+    for (var rg = 0; rg < pats.length; rg++) {
+      var rs = pats[rg];
+      if (rs.dead || !(rs.shieldMax > 0)) continue;
+      if (rs.shieldHp >= rs.shieldMax) continue;
+      if (t < (rs.shieldIdleAt || 0)) continue;
+      rs.shieldHp = Math.min(rs.shieldMax,
+                             rs.shieldHp + MODULES.shield.regen * dtSim);
     }
 
     /* Player triggers: HELD, each weapon respecting its own cooldown.
@@ -2139,7 +2590,13 @@
       return;
     }
 
-    // A trader with a gun on it complies, resentfully.
+    /* A trader with a gun on it complies, resentfully — and a ship that has
+     * already complied has nothing more to comply WITH. Both branches below
+     * take from a store and leave it emptier, rather than reading a pure
+     * function that cheerfully answers the same thing forever. That was not
+     * a rounding error: a torn-out freighter paid its whole purse on every
+     * demand, so one successful interdiction was an infinite bank and the
+     * rest of the economy became optional. */
     if (what === 'cargo') {
       /* The same read point killNpc uses. Robbing a pirate alive and then
        * shooting it used to disagree about what it had aboard, because only
@@ -2149,25 +2606,54 @@
       for (var i = 0; i < man.length && gave < 2; i++) {
         var amount = man[i] && (man[i].qty || man[i].tonnes) || 0;
         if (!(amount > 0)) continue;
+        /* A third of the hold, and THE LOT once a third stops being worth
+         * arguing about. Without that last clause the round-up floor of one
+         * tonne is never reached from above and the ship dribbles a canister
+         * a demand forever — the cargo version of the purse bug, arrived at
+         * by a different route. A ship down to its last couple of tonnes
+         * hands them over; nobody haggles at gunpoint over one tonne. */
+        var taken = Math.max(1, Math.round(amount * 0.35));
+        if (amount - taken < 2) taken = amount;
         var fake = { pos: spec.live ? spec.live.pos : contactState.pos,
                      vel: spec.live ? spec.live.vel : contactState.vel,
                      fwd: { x: 0.3, y: 0.7, z: 0.2 } };
-        global.Sim.dropCanister(sys, fake, man[i].cid,
-                                Math.max(1, Math.round(amount * 0.35)), t);
+        global.Sim.dropCanister(sys, fake, man[i].cid, taken, t);
+        /* WRITTEN BACK. What it dumped is off the manifest, so a second
+         * demand takes a third of what is LEFT and the ship runs dry after a
+         * few — and so that killing it afterwards spills the remainder
+         * rather than the load it started with. The hold is one number and
+         * every path that touches it now agrees. */
+        if (man[i].qty !== undefined) man[i].qty -= taken;
+        else man[i].tonnes = amount - taken;
         gave++;
       }
+      /* Empty lines are dropped rather than left as zeroes, so "running
+       * empty" is a real answer instead of a list of nothings. */
+      for (var z = man.length - 1; z >= 0; z--) {
+        if (!((man[z].qty || man[z].tonnes) > 0)) man.splice(z, 1);
+      }
+      /* And the drained hold is OWNED, on the spec, whichever list it came
+       * off. A lifted trader's manifest lives on `spec.live`, which goes
+       * away the moment the ship sleeps — parking the emptied array here is
+       * what stops "I robbed you" from being forgotten by a nap. */
+      spec.manifest = man;
       if (hooks && hooks.say) {
         hooks.say(gave ? spec.name + ' dumps cargo and runs — scoop it before it drifts'
                        : spec.name + ' is running empty. Nothing to take.', 5);
       }
     } else {
-      /* Derived, not rolled: a ship carries the money it carries, and
-       * re-demanding after a reload should not be a way to reroll the
-       * payout. Same hash family as the hold, different salt. */
-      var cash = 150 + (RNG.hashString('purse|' + ((sys && sys.seed) || '?') +
-                                       '|' + (spec.id || spec.name || '?')) % 701);
-      s.credits += cash;
-      if (hooks && hooks.say) hooks.say(spec.name + ' transfers ' + cash + ' cr and runs.', 5);
+      var cash = purseOf(sys, spec);
+      if (cash > 0) {
+        spec.purse = 0;
+        s.credits += cash;
+        if (hooks && hooks.say) hooks.say(spec.name + ' transfers ' + cash + ' cr and runs.', 5);
+      } else if (hooks && hooks.say) {
+        /* Named as a second visit rather than as a refusal, because it is
+         * not one — the ship is not defying you, it is broke. A player who
+         * has just been paid should be told the well is dry, not left
+         * clicking a button that silently does nothing. */
+        hooks.say(spec.name + ' has already emptied its account. There is nothing left.', 5);
+      }
     }
     spec.mode = 'breakoff';
   }
@@ -2423,7 +2909,9 @@
     groupOf: groupOf, setGroup: setGroup, toggleGroup: toggleGroup,
     gunsInGroup: gunsInGroup,
     muzzleOf: muzzleOf, muzzleWorld: muzzleWorld, HULL_LEN: HULL_LEN,
-    manifestFor: manifestFor,
+    manifestFor: manifestFor, holdOf: holdOf, purseOf: purseOf,
+    npcShield: npcShield, splitDamage: splitDamage, hullSize: hullSize,
+    NPC_SHIELD: NPC_SHIELD, MAX_IMPACTS: MAX_IMPACTS,
     damageNpc: damageNpc, damagePlayer: damagePlayer, killNpc: killNpc,
     liftTrader: liftTrader,
     crime: crime, witnessNear: witnessNear,

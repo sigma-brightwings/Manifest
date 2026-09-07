@@ -503,6 +503,326 @@
     return global.HullLib ? Object.keys(global.HullLib) : [];
   }
 
+  /* ---- imported ports ----------------------------------------------------
+   * Same shape as libHull, against global.PortLib, keyed by the port's ROLE
+   * rather than by a model id — because a port's identity in this game IS
+   * its role. There is no assignment table to go through: a file called
+   * `refinery.glb` is what a refinery looks like.
+   *
+   * WHOLLY OPTIONAL. src/ports.js is generated, is not required by
+   * index.html, and when it is absent every role falls back to the
+   * procedural mesh it has today. That is not politeness — it is the same
+   * rule the ship library follows, and it is what lets a half-modelled
+   * folder be dropped in without taking the game down.
+   *
+   * A port model may split its geometry into a static shell, an `interior`
+   * only visible from inside, and a `spin` bucket that turns; the three are
+   * decompressed separately and cached, because a ring that rotates cannot
+   * share a mesh object with a hub that does not. */
+  var PORT_CACHE = {};
+
+  function decompress(src) {
+    var mesh = { v: src.v, f: src.f, c: [] };
+    for (var i = 0; i < src.ci.length; i++) mesh.c.push(src.pal[src.ci[i]]);
+    return mesh;
+  }
+
+  function libPort(role) {
+    var lib = global.PortLib;
+    if (!lib || !role || !lib[role]) return null;
+    if (PORT_CACHE[role]) return PORT_CACHE[role];
+    var src = lib[role];
+    var out = {
+      kind: src.kind,
+      shell: decompress(src),
+      interior: src.interior ? decompress(src.interior) : null,
+      spin: src.spin ? decompress(src.spin) : null,
+      anchors: src.anchors || null,
+      geom: src.geom || null
+    };
+    PORT_CACHE[role] = out;
+    return out;
+  }
+
+  function portIds() {
+    return global.PortLib ? Object.keys(global.PortLib) : [];
+  }
+
+  /* Drop everything derived from the port library.
+   *
+   * In the game this is never needed: index.html loads ports.js before
+   * render.js, so the library is already there the first time a station
+   * mesh is asked for. It exists for the two cases that are not the game —
+   * a test that installs a library after boot, and the hull viewer page,
+   * which is the whole point of being able to swap models without a
+   * restart. Same role assignHull plays for ships. */
+  function reloadPorts() {
+    PORT_CACHE = {};
+    POOL_CACHE = null;
+    STATION_MESHES = null;
+  }
+
+  /* ---- which model a port wears, and it is ONE rule ----------------------
+   * Driven by what the place actually does, so a refinery looks like a
+   * refinery from a long way out — the silhouette is the first thing you
+   * learn about a port and it should be true.
+   *
+   * MOVED HERE FROM main.js, and the move is the point. This key now
+   * decides two separate things: which mesh gets drawn, and which imported
+   * model's DIMENSIONS bayGeometry reads. Those two disagreeing would draw
+   * one shed and park ships in the shape of another, which is the exact
+   * class of bug that keeps costing this project a day — so there is one
+   * implementation and generate.js and main.js both call it.
+   *
+   * It lives in render.js because render.js owns the mesh library and loads
+   * after generate.js, which reaches for it lazily through `global`. */
+  var STATION_MODELS = {
+    orbital: 'orbital', highport: 'highport', refinery: 'refinery',
+    shipyard: 'shipyard', agri: 'agri', mining: 'mining',
+    reprocessing: 'reprocessing'
+  };
+
+  /* What KIND of port this is, before any model is chosen. Three answers,
+   * and they are the three that behave differently rather than three that
+   * merely look different: a buried bay, a bay on the surface, and a thing
+   * in orbit. */
+  function portRole(station) {
+    if (!station) return 'orbital';
+    if (station.underground) return 'underground';
+    /* Every surface port is a shaft now, so the flat apron model is no
+     * longer what any of them look like — a shallow field gets the same
+     * collar-shaft-hangar structure, just less of it. The old 'surface'
+     * mesh is left in the library rather than deleted: nothing points at
+     * it, and it is the one thing that would have to be rebuilt from
+     * scratch if this decision is ever reversed. */
+    if (station.surface) return 'bay';
+    var role = station.market && station.market.role;
+    return STATION_MODELS[role] || 'orbital';
+  }
+
+  /* ---- WHICH model, when a role has several ------------------------------
+   * The same shape HULL_ASSIGN has for ships, and for the same reason: the
+   * person naming the models is not the person who wrote this file. A role
+   * maps to a LIST of model ids, and a role with one entry behaves exactly
+   * as the old one-to-one table did.
+   *
+   * It has to be a list because the art does not divide the way the roles
+   * do. There are seven orbital roles and there will be four space station
+   * models; there is one surface role and there will be several cities, and
+   * several buried bays. Neither of those is a mistake — a refinery and a
+   * farm genuinely should not share a silhouette, and two farming worlds
+   * genuinely should not be the same building twice.
+   *
+   * Default is `[role]`, which is the procedural mesh's own key, so a role
+   * nobody has modelled keeps the mesh it has today.
+   *
+   * WHICH VARIANT A PORT GETS IS HASHED FROM THE PORT, not drawn. Doctrine:
+   * the same seed is the same universe, so a port has to be the same
+   * building every time you fly to it, across a save and a reload, forever.
+   * A Math.random() here would be invisible for about twenty minutes and
+   * then permanently untrustworthy. */
+  var PORT_ASSIGN = {};
+
+  /* ---- POOLS BY FILENAME, so dropping models in needs no code -----------
+   * A model's name says which pool it joins. Three prefixes, matching the
+   * three kinds of port that behave differently:
+   *
+   *     station-ring.glb   station-drum.glb    -> any orbital role
+   *     city-market.glb    city-arcology.glb   -> any surface port
+   *     deep-silo.glb      deep-cavern.glb     -> any buried bay
+   *
+   * A port then gets one of its pool, hashed from its own id. So four space
+   * stations spread across all seven orbital roles, three cities across
+   * every settled world, and nothing has to be assigned by hand.
+   *
+   * WHAT THIS TRADES AWAY, stated plainly because the code used to argue
+   * the other way: pooling means a refinery and a farm can wear the same
+   * hull, so you can no longer tell what a port DOES from its silhouette on
+   * approach. That was a real piece of information and it is being spent on
+   * variety instead. The role is still on the label and in the market, and a
+   * single role can still be pinned to its own model — either by naming a
+   * file exactly after it, or with assignPort — so the trade is reversible
+   * one role at a time rather than all or nothing.
+   *
+   * Precedence, most specific first:
+   *   1. an explicit assignPort for the role
+   *   2. a model named exactly after the role  (`refinery.glb`)
+   *   3. the role's pool by prefix             (`station-*`)
+   *   4. the procedural mesh
+   */
+  var PORT_POOL = { underground: 'deep', bay: 'city' };
+
+  /* ---- PATTERNS, AND SIZES, WHICH ARE NOT THE SAME KIND OF CHOICE --------
+   * The station art arrives as PATTERN x SIZE: four orbital patterns —
+   * cylinder, spine, ring, cradle — each in S, M and L, so twelve models
+   * for the orbital roles alone, with cities and buried bays to follow.
+   *
+   * Those two axes must not be picked the same way, and treating them alike
+   * would have been the easy mistake:
+   *
+   *   PATTERN is variety. Nothing about a port says whether it should be a
+   *   ring or a spine, so it is hashed off the port's own id — stable
+   *   forever, different between neighbours.
+   *
+   *   SIZE IS MEANING. STATIONS.md is explicit that size changes bay count
+   *   and overall span, so it is how much traffic the place handles — and
+   *   the port already knows that. Hashing it would put a six-berth hub over
+   *   a mining outpost and a one-berth stub over a capital world, which is
+   *   worse than having one size.
+   *
+   * MEASURED, because this project has shipped two thresholds that excluded
+   * every case. Population per port, 15 galaxy seeds, 1,418 ports:
+   *
+   *              n     p25   median   p75    p90    max
+   *   orbital    650   928   1712     2872   4028   5858
+   *   surface    467    60    180      784   1823   4392
+   *   underground 301   70    168      463   1428   4427
+   *
+   * The three distributions are nothing like each other — orbital ports are
+   * an order of magnitude busier — so ONE set of cuts would have made two
+   * thirds of orbital stations L and a fifth of surface ones. Hence a set
+   * per class, placed near the 40th and 80th percentiles.
+   *
+   * Deliberately NOT even thirds: a biggest-size station should be a
+   * landmark, and a third of everything is not a landmark. What the cuts
+   * below actually produce, measured over the same 1,418 ports:
+   *
+   *                 S     M     L
+   *   all ports    40%   38%   22%
+   *   orbital      38%   40%   22%
+   *   bay          42%   35%   23%
+   *   underground  41%   39%   21%
+   *
+   * Even across all three classes, which is the thing that would have been
+   * wrong with shared cuts and is the reason for measuring rather than
+   * picking. */
+  var PORT_SIZE_CUTS = {
+    orbital: [1400, 3100],
+    bay: [130, 1000],
+    underground: [130, 620]
+  };
+
+  /* Which pattern belongs to which class. Explicit rather than derived from
+   * the filename, because the names are meaningful and their maker chose
+   * them — the same reason HULL_ASSIGN is a table and not a naming rule. */
+  var PORT_PATTERNS = {
+    cylinder: 'orbital', spine: 'orbital', ring: 'orbital', cradle: 'orbital'
+  };
+
+  var POOL_CACHE = null;
+  var SIZE_SUFFIX = /-(s|m|l)$/i;
+
+  /* One of three, and only three things behave differently. */
+  function portClass(role) {
+    return role === 'bay' ? 'bay' : (role === 'underground' ? 'underground' : 'orbital');
+  }
+
+  function portSizeFor(station, role) {
+    var cuts = PORT_SIZE_CUTS[portClass(role)] || PORT_SIZE_CUTS.orbital;
+    var pop = station && station.market && station.market.pop;
+    /* No market to read — a fixture, or a port type that does not trade.
+     * Middle, because it is the one that is never badly wrong. */
+    if (!(pop > 0)) return 'm';
+    return pop < cuts[0] ? 's' : (pop < cuts[1] ? 'm' : 'l');
+  }
+
+  /* The distinct pattern STEMS available for a role, size suffixes stripped.
+   * Two ways a stem qualifies: it is named in PORT_PATTERNS for this class,
+   * or it carries the class's prefix (`station-`, `city-`, `deep-`), which
+   * is the zero-table path for art whose names nobody has declared yet.
+   *
+   * Sorted, because Object.keys order is whatever the generated file happens
+   * to list and it must not be what decides which building a port gets —
+   * the same argument that sorts the muzzles and the berths. */
+  function poolFor(role) {
+    if (!POOL_CACHE) POOL_CACHE = {};
+    var cls = portClass(role);
+    if (POOL_CACHE[cls]) return POOL_CACHE[cls];
+    var lib = global.PortLib || {};
+    var pre = (PORT_POOL[role] || 'station') + '-';
+    var seen = {}, out = [];
+    Object.keys(lib).forEach(function (id) {
+      var stem = id.replace(SIZE_SUFFIX, '');
+      var ok = PORT_PATTERNS[stem] === cls || stem.indexOf(pre) === 0;
+      if (!ok || seen[stem]) return;
+      seen[stem] = true;
+      out.push(stem);
+    });
+    out.sort();
+    POOL_CACHE[cls] = out;
+    return out;
+  }
+
+  function pick(list, station, salt) {
+    if (list.length === 1) return list[0];
+    var key = (station && (station.id || station.name)) || salt;
+    var h = RNG ? RNG.hashString('portmodel|' + key) : 0;
+    return list[h % list.length];
+  }
+
+  /* A stem plus the size the port has earned, degrading gracefully: the
+   * exact size, then the bare stem, then whatever size of that stem does
+   * exist. A pattern modelled at M only should be used at M rather than
+   * silently falling back to a procedural mesh. */
+  function sizedModel(stem, size) {
+    var lib = global.PortLib || {};
+    if (lib[stem + '-' + size]) return stem + '-' + size;
+    if (lib[stem]) return stem;
+    var alt = ['m', 'l', 's'];
+    for (var i = 0; i < alt.length; i++) {
+      if (lib[stem + '-' + alt[i]]) return stem + '-' + alt[i];
+    }
+    return null;
+  }
+
+  function portModelFor(station) {
+    var role = portRole(station);
+    var size = portSizeFor(station, role);
+
+    /* An explicit assignment wins, and is still size-aware: assign a role a
+     * list of STEMS and each port gets the right size of the one it drew. */
+    var list = PORT_ASSIGN[role];
+    if (list && list.length) {
+      var chosen = pick(list, station, role);
+      return sizedModel(chosen, size) || chosen;
+    }
+    /* A file named for the role pins that role, which is how one-model-per-
+     * role stays the zero-configuration path even once pools exist. */
+    var byRole = sizedModel(role, size);
+    if (byRole) return byRole;
+
+    var pool = poolFor(role);
+    if (pool.length) {
+      var stem = pick(pool, station, role);
+      return sizedModel(stem, size) || stem;
+    }
+    return role;
+  }
+
+  /* Point a role at one or more models. `ids` may be a string or an array;
+   * null clears back to the procedural mesh. Offered as a design surface the
+   * way assignHull is — the models are named by whoever made them, and this
+   * is where that naming meets the game. */
+  function assignPort(role, ids) {
+    if (!role) return false;
+    if (ids === null || ids === undefined) delete PORT_ASSIGN[role];
+    else PORT_ASSIGN[role] = [].concat(ids);
+    reloadPorts();
+    return true;
+  }
+
+  /* NOTE ON NAMING, because there are two ways in and both are supported.
+   *
+   * stationMeshes folds EVERY model in the library into the mesh table under
+   * its own id. So a file named after a role — `refinery.glb` — takes over
+   * that role with no assignment at all, which is the zero-configuration
+   * path and the right one while there is one model per role.
+   *
+   * PORT_ASSIGN is for when that stops being true: several cities, several
+   * buried bays, four space stations against seven orbital roles. Then the
+   * models get whatever names their maker gave them and this table says
+   * which role reaches for which. */
+
   /* ---- where the guns are, from the art rather than from a guess ---------
    * glb2hulls records the `laserEmitter` node of every gun each model
    * carries — the tip of the barrel, in the same normalised frame as the
@@ -569,10 +889,134 @@
              f: f };
   }
 
+  /* ---- and how long a bolt is, at each moment of its flight --------------
+   * Reported in play: the bolts were "too chunky and too slow" — fat short
+   * slugs sliding down the run. The slug was the mistake. A tracer is not a
+   * rigid object being carried along a line; it is a length of glowing
+   * stuff, and how long it is is the whole read.
+   *
+   * THE LENGTH IS PHYSICAL, NOT PICKED. A pulse emitter fires a BUNCH of
+   * charged particles, and a bunch debunches: the particles leave with a
+   * small spread in velocity, the quick ones pull ahead of the slow ones,
+   * and the packet stretches linearly with the distance it has covered.
+   * That is a real property of a real particle beam, and it hands us the
+   * animation instead of us having to invent one — the same method the
+   * weapon tiers, the mass budget and the atmosphere model all use.
+   *
+   * So the packet has two numbers and both mean something:
+   *
+   *   BOLT_MUZZLE_LEN  how long the packet is as it clears the emitter, as
+   *                    a fraction of the whole run. Short — this is the
+   *                    emitter's pulse duration, not a design knob.
+   *   BOLT_DISPERSION  the fractional velocity spread dv/v. It is what the
+   *                    packet's length grows BY per unit of distance
+   *                    travelled, which is why the streak elongates.
+   *
+   * The consequence worth stating: once the head arrives the head stops and
+   * the TAIL KEEPS GOING, so the streak collapses into the far point rather
+   * than blinking out. That collapse is the impact, and it costs nothing —
+   * it falls out of running the same two ends past each other.
+   *
+   * Returns fractions of the muzzle-to-target run, so the caller can stay
+   * in whatever space it has already projected into. */
+  var BOLT_MUZZLE_LEN = 0.06;
+  var BOLT_DISPERSION = 0.42;
+
+  function boltSpan(age, cross) {
+    var c = cross > 0 ? cross : 0.2;
+    var p = (age > 0 ? age : 0) / c;          // 1 = the moment of arrival
+    var head = p < 1 ? p : 1;
+    var len = BOLT_MUZZLE_LEN + BOLT_DISPERSION * head;
+    var tail = p - len;
+    if (tail < 0) tail = 0;
+    if (tail > head) tail = head;             // arrived and gone
+    return { tail: tail, head: head, len: head - tail };
+  }
+
+  /* ---- and how WIDE it is, and where along it the samples fall -----------
+   * The second half of the bolt report, and the one that took two goes.
+   *
+   * A tracer used to be drawn between two projected endpoints, with the width
+   * running down a fixed pixel ramp — 2.4 px at the muzzle to 0.55 at the far
+   * end, over a constant whose own comment said "perspective, faked cheaply".
+   * Two things were wrong with that and both of them look like bad
+   * perspective:
+   *
+   *   - EVERY shot tapered by the same 4.4x. One fired down the boresight at
+   *     something 20 km ahead and one crossing the canopy broadside got
+   *     identical ramps. Broadside, both ends are the same distance away and
+   *     the bolt should be a ribbon of constant width.
+   *   - THE TRAVEL WAS LINEAR IN PIXELS. A point moving at a constant speed
+   *     down a receding ray does not cross the screen at a constant rate; it
+   *     should appear to slow sharply as it goes. Sliding uniformly is what
+   *     makes a thing read as painted on the glass.
+   *
+   * So the ribbon is sampled along the WORLD ray and each sample carries the
+   * width its own depth implies. The screen line stays straight — perspective
+   * maps lines to lines — so what is being sampled is only the width, which
+   * varies hyperbolically, and the spacing, which is what fixes the travel.
+   *
+   * BOLT_R IS AN EXAGGERATION, AND SAYING SO IS THE POINT. The first attempt
+   * used an honest physical radius — a particle packet a metre and a half
+   * across — and the test caught what that means at this game's scale: the
+   * width hits its floor at 1.8 km and never moves again, while the guns
+   * reach 9 to 23 km and the encounter standoffs run from 6 to 45. Every
+   * bolt would have been a flat hairline over its entire length, which is not
+   * "correct perspective", it is no perspective at all with a physical
+   * justification stapled to it. A real three-metre object at 20 km subtends
+   * nothing and would simply be invisible.
+   *
+   * So the radius is chosen to put the TAPER where the fighting is, and the
+   * rest of this file's honesty about tracers applies: a tracer's whole job
+   * is to say that a shot happened, which is the same argument MIN_BEAM_PX
+   * already makes out loud. At the default seat view — 900 px tall, 68° —
+   * the focal length is 667 px, and 18 m reads as
+   *
+   *     capped (3.6 px) inside  3.3 km
+   *     real taper              3.3 km to 24 km
+   *     floored (0.5 px) beyond 24 km
+   *
+   * — which brackets the range every gun in the catalogue works at. What is
+   * NOT faked, and what the report was about, is that the width now comes off
+   * each sample's own depth, so the taper responds to where the shot is
+   * actually pointed instead of being the same ramp every time.
+   *
+   * Kept as a world radius against `scale` rather than as a pixel curve, so
+   * zooming in still widens a bolt the way it widens everything else.
+   *
+   * Returns null if any sample is behind the camera. A ray that straddles the
+   * eye has no honest ribbon, and the caller is expected to fall back rather
+   * than draw a folded one. */
+  var BOLT_R = 0.018;         // km — apparent radius, see above
+  var BOLT_MIN_W = 0.5;       // px
+  var BOLT_MAX_W = 3.6;       // px
+  var BOLT_SEGS = 4;          // samples-1; the line is straight, only w varies
+
+  function boltRibbon(cam, origin, seg, f0, f1, wScale) {
+    var n = BOLT_SEGS, out = [], i;
+    var s = wScale > 0 ? wScale : 1;
+    for (i = 0; i <= n; i++) {
+      var f = f0 + (f1 - f0) * (i / n);
+      var p = cam.project({ x: origin.x + seg.x * f,
+                            y: origin.y + seg.y * f,
+                            z: origin.z + seg.z * f });
+      if (!p) return null;
+      var w = BOLT_R * p.scale * s;
+      if (w < BOLT_MIN_W) w = BOLT_MIN_W;
+      else if (w > BOLT_MAX_W) w = BOLT_MAX_W;
+      out.push({ x: p.x, y: p.y, w: w, depth: p.depth });
+    }
+    return out;
+  }
+
   function assignHull(kind, id) {
     if (id && !(global.HullLib && global.HullLib[id])) return false;
     if (id) HULL_ASSIGN[kind] = id; else delete HULL_ASSIGN[kind];
     SHIP_MESHES = null;               // rebuilt with the new casting on next use
+    /* And the shells with them, or a reassigned class would wear the old
+     * hull's field — a form-fitting shield that fits the wrong ship is
+     * worse than a sphere. */
+    SHELL_MESHES = {};
     return true;
   }
 
@@ -729,6 +1173,427 @@
       if (imported) SHIP_MESHES[kind] = imported;
     }
     return SHIP_MESHES;
+  }
+
+  /* ---- wreckage ----------------------------------------------------------
+   * A FIXED POOL, BUILT ONCE, AND THAT IS THE WHOLE DESIGN CONSTRAINT.
+   *
+   * gl.js caches its GPU buffers ON THE MESH OBJECT (`mesh._gl`) — see the
+   * note there about object identity being what makes the cache work. So a
+   * unique mesh per shard would upload a fresh vertex buffer for every
+   * fragment of every kill and never free one: a leak that grows with the
+   * body count, on a machine with integrated graphics. Exactly why
+   * SHIP_MESHES is memoised, and the same answer — build a handful, then
+   * instance them at different scales, spins and tints. Eight shapes is
+   * plenty; nobody has ever counted the pieces of an explosion.
+   *
+   * SEEDED, LIKE EVERYTHING ELSE. One fixed stream, not the system's, because
+   * the pool is a property of the GAME rather than of any place in it — the
+   * same eight shards should exist in every system of every seed, the way
+   * every hull model does. What varies per kill is which of them you get and
+   * how they are thrown, and THAT is hashed off the victim (see sim.js).
+   *
+   * Built by jittering a box's eight corners rather than by writing out
+   * vertices: a hull plate torn off a ship is a flat-ish irregular quad with
+   * a couple of bent edges, which is what a distorted box already is, and it
+   * keeps the closed topology that the face-sorting painter needs. One
+   * corner of each is pinched hard toward its neighbour, which turns the
+   * cube into a wedge and stops the pool reading as eight dice. */
+  var SHARD_MESHES = null;
+  var SHARD_COUNT = 8;
+
+  function shardMeshes() {
+    if (SHARD_MESHES) return SHARD_MESHES;
+    var rng = new RNG('debris-shards');
+    var out = [];
+    for (var s = 0; s < SHARD_COUNT; s++) {
+      /* Plate-ish: appreciably wider than it is thick. A shard that is
+       * roughly cubical tumbles into a dot and reads as a speck of dirt on
+       * the canopy rather than as part of a ship. */
+      var hx = rng.range(0.30, 0.50);
+      var hy = rng.range(0.06, 0.16);
+      var hz = rng.range(0.24, 0.55);
+      var m = box(hx, hy, hz);
+      for (var v = 0; v < m.v.length; v++) {
+        m.v[v][0] += rng.range(-hx * 0.42, hx * 0.42);
+        m.v[v][1] += rng.range(-hy * 0.55, hy * 0.55);
+        m.v[v][2] += rng.range(-hz * 0.42, hz * 0.42);
+      }
+      /* Pinch one corner onto the far side of the plate: the torn edge. */
+      var pick = rng.int(0, 7), toward = (pick + 2) % 8;
+      for (var a = 0; a < 3; a++) {
+        m.v[pick][a] += (m.v[toward][a] - m.v[pick][a]) * rng.range(0.55, 0.85);
+      }
+      out.push(m);
+    }
+    SHARD_MESHES = out;
+    return SHARD_MESHES;
+  }
+
+  /* ---- shields -----------------------------------------------------------
+   * A shield is not a sphere around the ship. It is a skin: the hull's own
+   * shape, held off the plating by about the width of a medium engine bell.
+   * A bubble would be simpler and would look like every other game's bubble;
+   * a form-fitting shell says what this one is — a field projected FROM the
+   * hull, so it has the hull's silhouette, which is also the one piece of
+   * information this renderer's whole mesh design says survives at combat
+   * distances.
+   *
+   * FIRST ATTEMPT: INFLATE THE HULL along its vertex normals — a true offset
+   * surface, the hull's exact shape pushed out. It looked right and it was
+   * measured and it is gone, because the imported models are not low-poly at
+   * all:
+   *
+   *     courier    2,352 faces   1.76 ms      <- ONE shell, one frame
+   *     police     2,472         2.08
+   *     navy       3,112         1.92
+   *     freighter  5,180         3.59
+   *     tanker     6,144         4.81
+   *     four shielded ships in view          12.20 ms/frame
+   *
+   * Against a renderer that costs about 3 ms for everything else it draws,
+   * and on a machine faster than the Latitude this ships on. One tanker's
+   * field cost more than the entire rest of the frame. That is not a
+   * threshold to tune, it is a design that does not fit.
+   *
+   * WHERE IT LANDED, measured the same way:
+   *
+   *     any hull      196 faces   0.09-0.25 ms
+   *     four shielded ships in view          0.51 ms/frame
+   *
+   * Twenty-four times cheaper, and about a sixth of the rest of the
+   * renderer rather than four times it. Two changes got that, and the
+   * second one mattered more than the face count: the resolution is now
+   * fixed at 196 triangles whatever the model, AND the vertices are
+   * transformed and projected ONCE each instead of once per face that uses
+   * them — six times over, with three allocations each time.
+   *
+   * SO THE SHELL IS A ROUNDED BOX FITTED TO THE HULL, at a resolution this
+   * file chooses rather than one the modeller chose. A superellipsoid —
+   * |x/a|^p + |y/b|^p + |z/c|^p = 1 — with p = 4, which is a box with
+   * generously rounded edges. Fitted to the hull's own half-extents plus the
+   * standoff, so it still follows the ship's PROPORTIONS: an interceptor's
+   * field is long and thin, a tanker's is fat. That is what "form-fitting
+   * rather than a bubble" has to mean at a cost that fits, and a smooth
+   * surface arguably suits a field better than a faceted one did.
+   *
+   * p = 4 rather than 2 is the point. A plain ellipsoid inscribed in a boxy
+   * hull leaves the corners of the plating sticking out through the field;
+   * at p = 4 the shell hugs a box closely enough that nothing pokes through
+   * without it ballooning at the flat faces.
+   *
+   * HOW FAR OUT IS A REAL NUMBER. The hull is normalised to length one and
+   * drawn at SHIP_LEN, ten metres nose to tail. A medium drive bell in these
+   * models runs 0.07 to 0.10 in radius — the merc's booms are tube(6, 0.07,
+   * ...) and the tanker's ring 0.16 — so a bell's width is around 0.14 and
+   * the standoff is a shade under that. On a ten-metre courier that is about
+   * 1.2 m of clear air between plating and field, which is close enough to
+   * read as a skin rather than a balloon and far enough to be visibly not
+   * touching. It scales with the hull, so a 240 m naval cutter carries a
+   * proportionally identical field rather than the same absolute gap.
+   *
+   * ON THE GPU THIS WOULD ALL BE FREE. Two thousand triangles is nothing for
+   * a graphics card, and a per-FRAGMENT fresnel and flare would look better
+   * than the per-face version below. It is the right long-term home for this
+   * and it is deliberately not done yet: gl.js has no translucent pass at
+   * all — no blend state, no depth-write-off ordering, no shader for it — and
+   * this file's own rule is that the 2D path stays a complete renderer in
+   * its own right, so the cheap version has to exist regardless. Doing the
+   * GPU pass buys back the exact hull shape; it does not remove the need for
+   * what is here.
+   *
+   * MEMOISED PER MODEL, and that is not an optimisation. gl.js caches its
+   * GPU buffers on the mesh object, so a shell generated per ship would
+   * upload a vertex buffer per ship per frame and never free one — the same
+   * leak the shard pool exists to avoid, on a machine with integrated
+   * graphics. One shell per hull kind, for the life of the process. */
+  var SHIELD_STANDOFF = 0.12;
+  var SHELL_LON = 14;         // segments around
+  var SHELL_LAT = 8;          // rings from pole to pole
+  var SHELL_P = 4;            // superellipsoid exponent: 2 is an egg, 4 a rounded box
+  var SHELL_MESHES = {};
+
+  /* The hull's half-extents, which is what the field has to clear. */
+  function halfExtents(mesh) {
+    var hx = 0, hy = 0, hz = 0;
+    for (var i = 0; i < mesh.v.length; i++) {
+      var p = mesh.v[i];
+      if (Math.abs(p[0]) > hx) hx = Math.abs(p[0]);
+      if (Math.abs(p[1]) > hy) hy = Math.abs(p[1]);
+      if (Math.abs(p[2]) > hz) hz = Math.abs(p[2]);
+    }
+    /* A floor, because a couple of the imported models are nearly flat on
+     * one axis and a zero semi-axis is a degenerate surface. */
+    return [Math.max(hx, 0.02), Math.max(hy, 0.02), Math.max(hz, 0.02)];
+  }
+
+  function shellMesh(kind) {
+    var k = kind || 'courier';
+    if (SHELL_MESHES[k]) return SHELL_MESHES[k];
+    var hull = shipMeshes()[k] || shipMeshes().courier;
+    var e = halfExtents(hull);
+    var a = e[0] + SHIELD_STANDOFF, b = e[1] + SHIELD_STANDOFF,
+        c = e[2] + SHIELD_STANDOFF;
+
+    /* A lat/long sphere pushed onto the superellipsoid. Generating the
+     * sphere first and solving for the radius along each direction keeps the
+     * topology trivially correct — poles included — where the closed-form
+     * superellipsoid parametrisation has to special-case them. */
+    var LON = SHELL_LON, LAT = SHELL_LAT, ip = 1 / SHELL_P;
+    var v = [], f = [], dirs = [], i, j;
+
+    function push(dx, dy, dz) {
+      var t = Math.pow(Math.pow(Math.abs(dx / a), SHELL_P) +
+                       Math.pow(Math.abs(dy / b), SHELL_P) +
+                       Math.pow(Math.abs(dz / c), SHELL_P), -ip);
+      v.push([dx * t, dy * t, dz * t]);
+    }
+
+    /* Rings, poles included as single vertices so there are no slivers. */
+    push(0, 0, -1);                                     // 0: aft pole
+    for (j = 1; j < LAT; j++) {
+      var th = Math.PI * (j / LAT);
+      var sz = -Math.cos(th), sr = Math.sin(th);
+      for (i = 0; i < LON; i++) {
+        var ph = K.TAU * (i / LON);
+        push(sr * Math.cos(ph), sr * Math.sin(ph), sz);
+      }
+    }
+    push(0, 0, 1);                                      // last: forward pole
+    var top = v.length - 1;
+
+    function ring(j, i) { return 1 + (j - 1) * LON + (i % LON); }
+
+    for (i = 0; i < LON; i++) f.push([0, ring(1, i + 1), ring(1, i)]);
+    for (j = 1; j < LAT - 1; j++) {
+      for (i = 0; i < LON; i++) {
+        var A = ring(j, i), B = ring(j, i + 1);
+        var C = ring(j + 1, i + 1), D = ring(j + 1, i);
+        f.push([A, B, C]); f.push([A, C, D]);
+      }
+    }
+    for (i = 0; i < LON; i++) f.push([top, ring(LAT - 1, i), ring(LAT - 1, i + 1)]);
+
+    /* Which way each face lies from the ship's own centre, as a unit vector
+     * in the hull's frame. Cached with the mesh because it never changes,
+     * and it does double duty: the impact maths needs it, and it stands in
+     * for the face NORMAL in the fresnel term. On a star-shaped surface like
+     * this one the two are close enough that the difference is invisible in
+     * a soft edge-brightness term, and using it saves a cross product and
+     * two allocations per face per frame. */
+    for (i = 0; i < f.length; i++) {
+      var fa = v[f[i][0]], fb = v[f[i][1]], fc = v[f[i][2]];
+      var cx = (fa[0] + fb[0] + fc[0]) / 3;
+      var cy = (fa[1] + fb[1] + fc[1]) / 3;
+      var cz = (fa[2] + fb[2] + fc[2]) / 3;
+      var l = Math.sqrt(cx * cx + cy * cy + cz * cz) || 1;
+      dirs.push([cx / l, cy / l, cz / l]);
+    }
+
+    SHELL_MESHES[k] = { v: v, f: f, dirs: dirs, semi: [a, b, c] };
+    return SHELL_MESHES[k];
+  }
+
+  /* ---- what colour a shield is, and why it changes -----------------------
+   * A shield that looks the same at full charge and at its last two points
+   * is a shield you cannot read, and the number lives on a panel you are not
+   * looking at during a fight. So the field itself is the gauge: it runs
+   * from a cold blue-white when it is holding, through amber as it goes, to
+   * a hot red when it is nearly down.
+   *
+   * The direction is not arbitrary. Cool-to-hot is the same language every
+   * other overheating thing in this game uses — the hull temperature bar,
+   * the re-entry glow, the drive plume — so it needs no explanation the
+   * first time you see it: a field going red is a field working too hard.
+   *
+   * Returns '#rrggbb'. `frac` is charge remaining, 1 down to 0. */
+  var SHIELD_STOPS = [
+    [0.00, 255, 92, 74],      // nearly down — hot, and unmistakable
+    [0.35, 255, 168, 74],     // going
+    [0.70, 120, 226, 255],    // holding
+    [1.00, 186, 244, 255]     // full — almost white
+  ];
+
+  function shieldTint(frac) {
+    var f = frac < 0 ? 0 : (frac > 1 ? 1 : frac);
+    var lo = SHIELD_STOPS[0], hi = SHIELD_STOPS[SHIELD_STOPS.length - 1], i;
+    for (i = 0; i < SHIELD_STOPS.length - 1; i++) {
+      if (f >= SHIELD_STOPS[i][0] && f <= SHIELD_STOPS[i + 1][0]) {
+        lo = SHIELD_STOPS[i]; hi = SHIELD_STOPS[i + 1];
+        break;
+      }
+    }
+    var span = hi[0] - lo[0];
+    var u = span > 1e-9 ? (f - lo[0]) / span : 0;
+    var r = Math.round(lo[1] + (hi[1] - lo[1]) * u);
+    var g = Math.round(lo[2] + (hi[2] - lo[2]) * u);
+    var b = Math.round(lo[3] + (hi[3] - lo[3]) * u);
+    return '#' + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
+  }
+
+  /* ---- how bright a point on the shell is, this instant -------------------
+   * The impact animation, and the whole of it is one expression.
+   *
+   * A hit lands, the field goes bright and opaque where it was struck, and
+   * that energy spreads out into the rest of the bubble and dissipates. So:
+   * a bump centred on the impact whose WIDTH GROWS from a spot to the whole
+   * shell while its HEIGHT DECAYS. Early it is a hard bright point; halfway
+   * it is a spreading glow; at the end it is a faint even wash over
+   * everything, and then nothing. Spot, spread, dissipate, in one curve —
+   * no ring to tune, no per-vertex state to store, and exact at any t, which
+   * is the same property the rails and the market have and for the same
+   * reason.
+   *
+   * WORKED IN COSINE, NOT ANGLE. The caller has a dot product already; an
+   * acos per face per impact per frame would be the most expensive thing
+   * here and it buys nothing, because the curve is arbitrary anyway.
+   * `cosd` is 1 at the impact and -1 opposite it. */
+  var SHIELD_FLASH_LIFE = 0.55;   // s — a splash, not a light show
+  var SHIELD_SPOT0 = 0.22;        // initial width, in units of (1 - cos)
+
+  function shellFlare(cosd, age) {
+    if (!(age >= 0) || age > SHIELD_FLASH_LIFE) return 0;
+    var u = age / SHIELD_FLASH_LIFE;
+    /* Width grows toward 2, which is the full (1 - cos) range — by then the
+     * bump covers the entire shell and IS the dissipated glow. */
+    var w = SHIELD_SPOT0 + (2.2 - SHIELD_SPOT0) * Math.pow(u, 0.55);
+    var amp = Math.pow(1 - u, 1.6);
+    var d = (1 - cosd) / w;
+    return amp * Math.exp(-d * d);
+  }
+
+  /* ---- and the shell, drawn ----------------------------------------------
+   * NOT through paintMesh, and not through the GPU layer either. paintMesh
+   * paints opaque, sorted, lit triangles, which is the opposite of what a
+   * field is; queueMesh has no alpha at all. So the shell is its own pass on
+   * the 2D canvas over the world, exactly where the beams and the wreckage
+   * already draw.
+   *
+   * ADDITIVE, AND THAT DOES THE WORK FOR FREE. Under 'lighter' the faces
+   * that overlap along the silhouette add up, so the rim comes out bright
+   * without a rim term — which is how a real field reads, because that is
+   * where you are looking through the most of it. The explicit fresnel below
+   * only leans into what the geometry is already doing.
+   *
+   * `charge` is 0..1 of shield remaining, and drives the hue through
+   * shieldTint: a field going red is a field about to stop being a field.
+   * `lit` is how visible the shell is at all right now — the answer to
+   * "faint only when charged and recently hit" — and the caller owns it,
+   * because only the caller knows how long ago the last hit was.
+   *
+   * `impacts` are {dir, at} in WORLD space; they are converted into the
+   * hull's frame once here rather than per face, which is the difference
+   * between three dot products and three hundred. */
+  function drawShellField(ctx, cam, frame, lengthKm, kind, charge, lit,
+                          impacts, tSec) {
+    if (!(lit > 0.004)) return 0;
+    var shell = shellMesh(kind);
+    var col = shieldTint(charge);
+    var n = parseInt(col.slice(1), 16);
+    var cr = (n >> 16) & 255, cg = (n >> 8) & 255, cb = n & 255;
+
+    /* Impact directions in the hull's own axes. The frame's basis is
+     * orthonormal, so the inverse rotation is just three dots against it. */
+    var loc = [], i, j;
+    if (impacts) {
+      for (i = 0; i < impacts.length; i++) {
+        var im = impacts[i];
+        var age = tSec - im.at;
+        if (!(age >= 0) || age > SHIELD_FLASH_LIFE) continue;
+        var d = im.dir;
+        if (!d) {
+          /* No direction — a warhead, or a shooter that has stopped
+           * existing. Toward the camera, so the flare is at least somewhere
+           * the player can see rather than arbitrarily on the far side. */
+          d = V.norm(V.sub(cam.eye, frame.pos));
+        }
+        loc.push({
+          x: V.dot(d, frame.right), y: V.dot(d, frame.up), z: V.dot(d, frame.fwd),
+          age: age, power: im.shield > 0 ? 1 : 0.45
+        });
+      }
+    }
+
+    /* VERTICES ONCE, NOT PER FACE. Each vertex is shared by about six
+     * triangles, so transforming and projecting inside the face loop did all
+     * of this six times over and allocated three objects each time round.
+     * Flat arrays and no allocation at all is the single biggest saving in
+     * this function — bigger than dropping the face count was. */
+    var nv = shell.v.length;
+    var sx = new Array(nv), sy = new Array(nv), ok = new Array(nv);
+    for (i = 0; i < nv; i++) {
+      var p = shell.v[i];
+      var wp = localToWorld(frame, p[0] * lengthKm, p[1] * lengthKm, p[2] * lengthKm);
+      var pr = cam.project(wp);
+      if (pr) { sx[i] = pr.x; sy[i] = pr.y; ok[i] = 1; } else { ok[i] = 0; }
+    }
+
+    /* Which way the camera lies, in the HULL's axes — once, for the whole
+     * ship. The fresnel below is then a dot product against the precomputed
+     * face directions, with no cross products and no allocations in the
+     * loop. Treating the whole ship as having one view direction is exact at
+     * any range where the ship is small against the camera distance, which
+     * is every range a ship is ever drawn at. */
+    var toEye = V.norm(V.sub(cam.eye, frame.pos));
+    var ex = V.dot(toEye, frame.right);
+    var ey = V.dot(toEye, frame.up);
+    var ez = V.dot(toEye, frame.fwd);
+
+    var drawn = 0;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (i = 0; i < shell.f.length; i++) {
+      var f = shell.f[i];
+      var i0 = f[0], i1 = f[1], i2 = f[2];
+      if (!ok[i0] || !ok[i1] || !ok[i2]) continue;
+
+      /* Edge-on is brighter. A field is a surface you see THROUGH, so the
+       * amount of it between you and the far side is what you are looking
+       * at, and that is greatest where the surface turns away. */
+      var fd = shell.dirs[i];
+      var facing = fd[0] * ex + fd[1] * ey + fd[2] * ez;
+      if (facing < 0) facing = -facing;
+      var fres = 0.16 + 0.84 * (1 - facing) * (1 - facing);
+
+      /* And brighter still where it has just been hit. */
+      var fl = 0;
+      for (j = 0; j < loc.length; j++) {
+        var L = loc[j];
+        fl += L.power * shellFlare(fd[0] * L.x + fd[1] * L.y + fd[2] * L.z, L.age);
+      }
+
+      var alpha = lit * (0.055 * fres + 0.50 * fl);
+      if (alpha < 0.004) continue;
+      if (alpha > 0.92) alpha = 0.92;
+
+      /* The flare washes toward white as it peaks — energy arriving, rather
+       * than more of the same colour. */
+      var wash = fl > 1 ? 1 : fl;
+      var r = Math.round(cr + (255 - cr) * wash * 0.7);
+      var g = Math.round(cg + (255 - cg) * wash * 0.7);
+      var bl = Math.round(cb + (255 - cb) * wash * 0.7);
+
+      ctx.fillStyle = 'rgba(' + r + ',' + g + ',' + bl + ',' + alpha.toFixed(3) + ')';
+      ctx.beginPath();
+      ctx.moveTo(sx[i0], sy[i0]);
+      ctx.lineTo(sx[i1], sy[i1]);
+      ctx.lineTo(sx[i2], sy[i2]);
+      ctx.closePath();
+      ctx.fill();
+      drawn++;
+    }
+    ctx.restore();
+    return drawn;
+  }
+
+  /* One shard, at whatever size and attitude the sim says. Same shape as
+   * drawHullModel, and it hands off to the GPU for the same reason: the
+   * fallback painter has to stay a complete renderer in its own right. */
+  function drawShardModel(ctx, cam, frame, lengthKm, sunDir, tint, index) {
+    var pool = shardMeshes();
+    var mesh = pool[((index | 0) % pool.length + pool.length) % pool.length];
+    if (gpuWorld() && global.GLWorld.queueMesh(cam, frame, mesh, lengthKm, sunDir)) return;
+    paintMesh(ctx, cam, frame, mesh, lengthKm, sunDir, tint);
   }
 
   /* ---- one model per kind of station ------------------------------------
@@ -1016,6 +1881,18 @@
       reprocessing: reprocessing, surface: surface,
       bay: bay, underground: underground
     };
+
+    /* Imported models take over any role they are supplied for; the
+     * procedural ports above remain the fallback for everything the library
+     * does not cover — so the game runs identically with ports.js absent.
+     * Exactly the arrangement shipMeshes uses for hulls, and for the same
+     * reason: a folder with three ports modelled and seven not should give
+     * you three modelled ports, not a broken sky. */
+    var ids = portIds();
+    for (var pi = 0; pi < ids.length; pi++) {
+      var got = libPort(ids[pi]);
+      if (got && got.shell && got.shell.f.length) STATION_MESHES[ids[pi]] = got.shell;
+    }
     return STATION_MESHES;
   }
 
@@ -1074,13 +1951,13 @@
       if (V.dot(normal, toCam) < 0) normal = V.scale(normal, -1);
       var pa = cam.project(a), pb = cam.project(b), pc = cam.project(c);
       if (!pa || !pb || !pc) continue;
-      var col = (mesh.c && mesh.c[i]) || null;
-      var lit = col && col.charAt(0) === '!';
+      var mat = faceMaterial((mesh.c && mesh.c[i]) || null);
       tris.push({
         pa: pa, pb: pb, pc: pc,
         depth: (pa.depth + pb.depth + pc.depth) / 3,
-        color: lit ? col.slice(1) : (col || tint),
-        shade: lit ? 1.15 : 0.26 + 0.70 * Math.max(0, V.dot(normal, sunDir))
+        color: mat.color || tint,
+        alpha: mat.alpha,
+        shade: mat.lit ? 1.15 : 0.26 + 0.70 * Math.max(0, V.dot(normal, sunDir))
       });
     }
     tris.sort(function (p, q) { return q.depth - p.depth; }); // far first
@@ -1088,8 +1965,24 @@
     ctx.save();
     ctx.strokeStyle = edge || 'rgba(10,14,22,0.55)';
     ctx.lineWidth = 0.6;
+    /* SET, not assumed. The tracking below only writes globalAlpha when it
+     * changes, so it has to know what it is — and inheriting a caller's
+     * half-transparent state would paint every opaque triangle in the mesh
+     * at that opacity while believing it was at 1. */
+    ctx.globalAlpha = 1;
+    var alpha = 1;
     for (var t = 0; t < tris.length; t++) {
       var tr = tris[t];
+      /* Real alpha here, a dither on the GPU. The two paths differ because
+       * their constraints do: this one already sorts every triangle far to
+       * near, which is exactly what blending needs and exactly what the GPU
+       * pass refuses to do. Same number in, same glass out — so a dome
+       * looks like itself whichever renderer drew it, which is the standing
+       * rule for this pair of functions.
+       *
+       * Set only on change. globalAlpha is cheap but not free, and a hull
+       * is a few hundred triangles of which none are glass. */
+      if (tr.alpha !== alpha) { alpha = tr.alpha; ctx.globalAlpha = alpha; }
       ctx.fillStyle = shadeTint(tr.color, tr.shade);
       ctx.beginPath();
       ctx.moveTo(tr.pa.x, tr.pa.y);
@@ -1100,6 +1993,40 @@
       ctx.stroke();
     }
     ctx.restore();
+  }
+
+  /* ---- FACE MATERIALS ----------------------------------------------------
+   * A mesh carries one colour string per face, and the first character or
+   * two may be a material prefix:
+   *
+   *   '#rrggbb'    plain, lit by the sun
+   *   '!#rrggbb'   emissive — flat 1.15, unlit, for anything self-lit
+   *   '~h#rrggbb'  glass at opacity h/15, h a single hex digit
+   *
+   * The hex digit rather than a shared GLASS_ALPHA constant because the
+   * value has to reach the GPU uploader too, and a constant duplicated in
+   * two modules is a constant that drifts. It travels with the face.
+   *
+   * gl.js parses the identical two characters in uploadMesh for the GPU
+   * path — deliberately duplicated rather than shared, because gl.js loads
+   * without render.js and should keep doing so. Add a prefix here, add it
+   * there; there are only ever going to be a handful. */
+  function faceMaterial(raw) {
+    if (!raw) return { color: null, lit: false, alpha: 1 };
+    var c = raw.charAt(0);
+    if (c === '!') return { color: raw.slice(1), lit: true, alpha: 1 };
+    if (c === '~') {
+      var h = parseInt(raw.charAt(1), 16);
+      return {
+        color: raw.slice(2),
+        lit: false,
+        /* A malformed digit reads as opaque. Glass that fails to be glass
+         * is a cosmetic disappointment; glass that reads as alpha 0 is an
+         * invisible building, which looks like the mesh failed to load. */
+        alpha: (h >= 0 && h <= 15) ? h / 15 : 1
+      };
+    }
+    return { color: raw, lit: false, alpha: 1 };
   }
 
   /* Shade a hull colour by a lighting factor. Accepts the '#rrggbb' the
@@ -1298,6 +2225,7 @@
   var DRESS_WALL = '#5c6472';      // concrete under a strange sun
   var DRESS_POST = '#3f454f';
   var GLASS_TINT = '#9fc9d8';      // greenhouse panes, cold and a bit dirty
+  var GLASS = '~9' + GLASS_TINT;   // ...and 9/15 opaque. See faceMaterial.
 
   function portDressingMesh(port) {
     if (port._dressMesh !== undefined) return port._dressMesh;
@@ -1350,11 +2278,17 @@
       // sits over it.
       merge(mesh, tube(8, dm.rad * 0.86, dm.rad * 0.62, hh * 0.42, true),
             dx, dy, hh * 0.42, 1, '!' + dm.crop);
-      // Glass: two tiers, the upper one drawn in.
+      /* Glass: two tiers, the upper one drawn in — and TRANSLUCENT, which
+       * it had to be for any of the above to be true. The crop is drawn
+       * first and smaller so that "the glass sits over it", and that is
+       * precisely what went wrong: opaque glass over it meant the thing the
+       * comment calls the whole point of the building was sealed inside an
+       * unlit drum and never drawn. Nine-fifteenths is enough pane to read
+       * as a surface and enough gap to see the green through. */
       merge(mesh, tube(8, dm.rad, dm.rad * 0.88, hh * 0.5, true),
-            dx, dy, hh * 0.5, 1, GLASS_TINT);
+            dx, dy, hh * 0.5, 1, GLASS);
       merge(mesh, tube(8, dm.rad * 0.88, dm.rad * 0.34, hh * 0.5, true),
-            dx, dy, hh * 1.5, 1, GLASS_TINT);
+            dx, dy, hh * 1.5, 1, GLASS);
       // A kerb, so it is planted on the ground rather than resting on it.
       addBox(mesh, [dx, dy, 0.006],
              [dm.rad * 1.08, 0, 0], [0, dm.rad * 1.08, 0], [0, 0, 0.006], DRESS_POST);
@@ -1410,6 +2344,31 @@
     var mesh = stationMeshes()[model] || stationMeshes().orbital;
     if (gpuWorld() && global.GLWorld.queueMesh(cam, frame, mesh, radiusKm, sunDir)) return;
     paintMesh(ctx, cam, frame, mesh, radiusKm, sunDir, tint, 'rgba(12,20,30,0.6)');
+  }
+
+  /* One named part of an IMPORTED port — the bucket a modeller separated
+   * out. Returns false when there is nothing to draw, which is the normal
+   * answer: the procedural ports have no parts, and a model that did not
+   * declare a spinning ring simply has no `spin` bucket.
+   *
+   * Kept separate from drawStationModel rather than folded into it because
+   * the two are drawn on DIFFERENT FRAMES — that is the whole reason the
+   * split exists — and a function that took one frame and used two would be
+   * lying about what it does. */
+  function drawPortPart(ctx, cam, frame, radiusKm, sunDir, role, part, tint) {
+    var lib = libPort(role);
+    var mesh = lib && lib[part];
+    if (!mesh || !mesh.f.length) return false;
+    if (gpuWorld() && global.GLWorld.queueMesh(cam, frame, mesh, radiusKm, sunDir)) return true;
+    paintMesh(ctx, cam, frame, mesh, radiusKm, sunDir, tint, 'rgba(12,20,30,0.6)');
+    return true;
+  }
+
+  /* Does this role's model turn part of itself? The caller needs to know
+   * BEFORE it picks a frame, so it cannot be answered by trying to draw. */
+  function portSpins(role) {
+    var lib = libPort(role);
+    return !!(lib && lib.spin && lib.spin.f.length);
   }
 
   /* An on-screen arrow. Direction is shown as an actual arrow pointing the
@@ -1630,15 +2589,57 @@
    * you come back to it — a cloud that reshuffled each frame would sparkle
    * like static and, worse, would stop being a landmark you could recognise.
    * Time enters only as a slow, smooth writhe. */
-  var WAKE_ARCS = 9;
+  /* Three elements, and the combination is the point — it is what makes a
+   * slipstream track mark look like nothing else in the game:
+   *
+   *   the CLOUD    bright in the middle, dimming out; the hole itself
+   *   the LIGHTNING jagged bolts arcing across it; the energy still in it
+   *   the RIM       a few torn arc fragments at the edge; where it was cut
+   *
+   * The rim shards were the whole effect in the first version and were far
+   * too loud for it — concentric rings read as a built structure, a gate or
+   * a portal, when the fiction is violence done to space. Demoted to a few
+   * faint fragments at the very edge they do the opposite job: they give the
+   * hole a ragged boundary, so the cloud looks like it is escaping through
+   * something torn rather than simply hanging there. */
+  var WAKE_ARCS = 5;
+  /* Six bolts at a 28% duty cycle, which works out at roughly one and a half
+   * lit at any instant. Four at 16% was the first try and it left the cloud
+   * completely quiet about half the time — a hole in space that spends half
+   * its life doing nothing does not read as high-energy, it reads as a smudge
+   * with an occasional glitch. */
+  var WAKE_BOLTS = 6;
+  var WAKE_BOLT_DUTY = 0.28;
 
+  /* SALT FIRST, AND A FINAL AVALANCHE. Both halves of that were a bug.
+   *
+   * This started as plain FNV-1a over `id + '|' + salt`, and every one of a
+   * wake's nine arcs came out with nearly the same number: h1 between 0.73
+   * and 0.77, h2 between 0.33 and 0.37. So all nine drew at the same radius,
+   * the same angle and the same span, stacked precisely on top of each
+   * other — and a cloud that was supposed to be nine faint filaments
+   * rendered as ONE thick bright crescent flung off to the side. It looked
+   * so much like a stray weapon tracer that it got reported as one.
+   *
+   * The cause is that appending the salt changes only the LAST byte or two,
+   * and FNV's final multiply does not diffuse a late change upward into the
+   * high bits — which are exactly the bits `h / 2^32` reads. Putting the
+   * salt at the front gives every subsequent byte a chance to spread it, and
+   * the xor-shift-multiply tail guarantees the top bits depend on all of it.
+   *
+   * The lesson generalises: any time a seeded value is derived by tacking an
+   * index onto a shared prefix, check the SPREAD of what comes out rather
+   * than trusting that a hash is a hash. */
   function wakeHash(str, salt) {
     var h = 2166136261 >>> 0;
-    var s = str + '|' + salt;
+    var s = salt + '#' + str;
     for (var i = 0; i < s.length; i++) {
       h ^= s.charCodeAt(i);
       h = Math.imul(h, 16777619) >>> 0;
     }
+    h ^= h >>> 13;
+    h = Math.imul(h, 0x5bd1e995) >>> 0;
+    h ^= h >>> 15;
     return (h >>> 0) / 4294967296;
   }
 
@@ -1652,65 +2653,241 @@
     var strength = Math.max(0, Math.min(1, wake.strength));
     if (strength <= 0.004) return p;
 
-    /* Floor the drawn radius so a distant wake is still a visible mote
-     * rather than a sub-pixel nothing — the whole point of a wake is that
-     * you can spot one from across a system and go and look at it. */
-    var r = Math.max(3.5, size * p.scale);
+    /* Floored AND capped, and both bounds were earned.
+     *
+     * The floor keeps a distant wake a visible mote instead of a sub-pixel
+     * nothing — the whole point is that you can spot one from across a
+     * system and go and look at it.
+     *
+     * The CAP is the one a playtest found. The glow is painted out to 2.1
+     * times this radius, so at a close approach an uncapped wake filled the
+     * entire viewport with orange haze and washed the whole game out. A
+     * cloud you have flown inside should bloom, not blind — past a certain
+     * screen size there is nothing more to show and a great deal to ruin. */
+    /* The floor SCALES with the hull, rather than being a flat 3.5 px.
+     *
+     * A flat floor threw away the whole point of sizing a wake by mass: from
+     * across a system every mark is sub-pixel, so every mark clamped to the
+     * same dot and a bulk hauler's trail looked exactly like a packet's. The
+     * one place where "which of these is worth flying to" most needs
+     * answering is precisely the place you cannot yet resolve them.
+     *
+     * A couple of pixels of difference is enough — it is a size comparison
+     * between neighbouring motes, not an absolute reading. */
+    var floor = 2.2 + Math.min(3.2, size / 22000);
+    var r = Math.max(floor, Math.min(Math.min(cam.w, cam.h) * 0.10, size * p.scale));
+    /* FOUR colours, not two, and the split matters.
+     *
+     * The bloom is deep and saturated; the arcs are bright and desaturated.
+     * The first version drew the arcs in the same two colours as the glow,
+     * which meant that on a departure wake — where the glow is red — every
+     * arc rolled onto the darker of the two became invisible against it, and
+     * about half of a nine-arc cloud simply did not exist. What you saw was
+     * a dim blob with one crescent hanging off it.
+     *
+     * Arcs have to be LIGHTER than the thing they sit inside, whatever
+     * colour that thing is. */
     var depart = wake.kind === 'departure';
-    var hot = depart ? '255,120,86' : '110,180,255';
-    var cool = depart ? '255,40,60' : '60,110,255';
+    var glowCore = depart ? '255,96,64' : '92,146,255';
+    var glowEdge = depart ? '176,26,34' : '34,68,205';
+    var boltCore = depart ? '255,242,224' : '236,248,255';  // the strike itself
+    var boltHalo = depart ? '255,138,86' : '128,196,255';   // what it lights up
 
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
 
-    /* The bloom first, so the arcs sit inside their own glow. */
-    var glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 2.1);
-    glow.addColorStop(0, 'rgba(' + hot + ',' + (0.30 * strength).toFixed(3) + ')');
-    glow.addColorStop(0.45, 'rgba(' + cool + ',' + (0.14 * strength).toFixed(3) + ')');
-    glow.addColorStop(1, 'rgba(' + cool + ',0)');
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, r * 2.1, 0, Math.PI * 2);
-    ctx.fill();
+    /* ---- the cloud ------------------------------------------------------
+     * Brightest at the middle, dimming all the way out — a hole punched in
+     * space, not a ring. Built from several overlapping radial gradients at
+     * small deterministic offsets rather than one clean circle, because a
+     * single centred gradient reads as a lens flare and a few lopsided ones
+     * read as something with volume that got torn rather than drawn. */
+    var puffs = r > 6 ? 5 : 1;
+    for (var q = 0; q < puffs; q++) {
+      var ph1 = wakeHash(wake.id, 'puff' + q);
+      var ph2 = wakeHash(wake.id, 'puffa' + q);
+      var ph3 = wakeHash(wake.id, 'puffr' + q);
+      /* The first puff is dead centre and the brightest; the rest lean off
+       * it. Drifting slowly, so the cloud churns without ever travelling. */
+      var off = q === 0 ? 0 : r * (0.10 + 0.26 * ph3);
+      var oa = ph2 * Math.PI * 2 + tSec * (0.05 + ph1 * 0.09) * (depart ? 1 : -1);
+      var cx = p.x + Math.cos(oa) * off;
+      var cy = p.y + Math.sin(oa) * off;
+      var pr = r * (q === 0 ? 1.55 : (0.70 + 0.55 * ph1));
+      var amp = strength * (q === 0 ? 0.30 : 0.13) *
+                (0.75 + 0.25 * Math.sin(tSec * (0.5 + ph1) + ph2 * 6.28));
 
-    if (r > 5) {
+      var g = ctx.createRadialGradient(cx, cy, 0, cx, cy, pr);
+      g.addColorStop(0, 'rgba(' + glowCore + ',' + amp.toFixed(3) + ')');
+      g.addColorStop(0.42, 'rgba(' + glowEdge + ',' + (amp * 0.45).toFixed(3) + ')');
+      g.addColorStop(1, 'rgba(' + glowEdge + ',0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(cx, cy, pr, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    /* ---- the lightning --------------------------------------------------
+     * Jagged bolts arcing ACROSS the cloud, which is what says high-energy
+     * rather than merely luminous.
+     *
+     * This replaced concentric arc fragments, which were the first attempt
+     * and were wrong in a way worth recording: rings read as a structure —
+     * a portal, a gate, something built — and the fiction here is violence
+     * done to space, not machinery. A bolt that crosses the middle says
+     * "punched through"; a ring around the outside says "opened neatly".
+     *
+     * Each bolt STROBES on its own cycle rather than being drawn every
+     * frame, because lightning that is permanently on is not lightning, it
+     * is wire. And the path is regenerated per STRIKE, not per frame: the
+     * shape is seeded from (wake, bolt, strike index), so it holds still for
+     * the fifth of a second it is visible and is a different shape next
+     * time. Drawing a fresh random path every frame would flicker like
+     * static and cost the determinism the rest of this file is built on. */
+    if (r > 6) {
       ctx.lineCap = 'round';
-      for (var i = 0; i < WAKE_ARCS; i++) {
-        var h1 = wakeHash(wake.id, i);
-        var h2 = wakeHash(wake.id, i + 40);
-        var h3 = wakeHash(wake.id, i + 80);
-        /* Each arc sits on its own shell and creeps round at its own rate.
-         * The rates are small and irrational-ish so the whole cloud never
-         * comes back into alignment and starts looking like a gear. */
-        var rad = r * (0.30 + 0.72 * h1);
-        var spin = (h2 - 0.5) * 0.22 + (depart ? -0.06 : 0.06);
-        var a0 = h2 * Math.PI * 2 + tSec * spin;
-        var span = (0.35 + 1.15 * h3) * (1 - 0.35 * strength);
-        var wob = Math.sin(tSec * (0.4 + h1 * 0.7) + h3 * 6.28) * r * 0.05;
+      ctx.lineJoin = 'round';
 
-        ctx.strokeStyle = 'rgba(' + (h1 > 0.55 ? hot : cool) + ',' +
-                          (strength * (0.20 + 0.55 * h3)).toFixed(3) + ')';
-        ctx.lineWidth = Math.max(0.8, r * (0.030 + 0.045 * h1));
+      /* ---- the torn rim ------------------------------------------------
+       * A few short arc fragments right at the boundary, creeping round at
+       * their own rates. Faint on purpose: they are the edge of the wound,
+       * not the subject. */
+      for (var a2 = 0; a2 < WAKE_ARCS; a2++) {
+        var g1 = wakeHash(wake.id, 'rim' + a2);
+        var g2 = wakeHash(wake.id, 'rima' + a2);
+        var g3 = wakeHash(wake.id, 'rims' + a2);
+        var rad = r * (0.88 + 0.30 * g1);
+        var a0 = g2 * Math.PI * 2 + tSec * ((g1 - 0.5) * 0.16 + (depart ? -0.05 : 0.05));
+        var span = 0.22 + 0.62 * g3;
+        ctx.strokeStyle = 'rgba(' + boltHalo + ',' +
+                          (strength * (0.16 + 0.20 * g3)).toFixed(3) + ')';
+        ctx.lineWidth = Math.max(0.8, r * 0.016);
         ctx.beginPath();
-        ctx.arc(p.x, p.y, Math.max(1, rad + wob), a0, a0 + span);
+        ctx.arc(p.x, p.y, rad, a0, a0 + span);
         ctx.stroke();
       }
 
-      /* A brighter core, because the tear itself is where the energy went
-       * in. Small — most of the read is the arcs around it. */
-      ctx.fillStyle = 'rgba(' + hot + ',' + (0.5 * strength).toFixed(3) + ')';
+      for (var b = 0; b < WAKE_BOLTS; b++) {
+        var f1 = wakeHash(wake.id, 'b' + b);
+        var f2 = wakeHash(wake.id, 'ba' + b);
+        var f3 = wakeHash(wake.id, 'bp' + b);
+
+        /* Its own rhythm, and it is FAST. Period between a fifth and two
+         * thirds of a second, lit for the first third of each cycle.
+         *
+         * It ran at 0.8-2.3 s to begin with and looked wrong for a reason
+         * worth writing down: at that rate you watch each bolt appear,
+         * linger and fade, which reads as something being switched on and
+         * off. Real electrical discharge is faster than the eye can follow
+         * individual strikes — you perceive a continuous crackle. Cutting
+         * the period by four is what turns a blinking line into a cloud that
+         * is alive. */
+        var period = 0.22 + f1 * 0.40;
+        var cyc = (tSec / period + f3) % 1;
+        var lit = cyc < WAKE_BOLT_DUTY ? 1 - (cyc / WAKE_BOLT_DUTY) : 0;
+        if (lit <= 0.02) continue;
+        lit = lit * lit;                       // snap bright, decay fast
+
+        var strike = Math.floor(tSec / period + f3);
+        var key = b + ':' + strike;
+
+        /* Endpoints on opposite-ish sides, so the bolt crosses the cloud
+         * rather than clipping its edge. */
+        var ea = wakeHash(wake.id, 'e' + key) * Math.PI * 2;
+        var spread = Math.PI * (0.55 + 0.45 * wakeHash(wake.id, 'f' + key));
+        var ra = r * (0.55 + 0.50 * wakeHash(wake.id, 'g' + key));
+        var rb = r * (0.55 + 0.50 * wakeHash(wake.id, 'h' + key));
+        var x0 = p.x + Math.cos(ea) * ra, y0 = p.y + Math.sin(ea) * ra;
+        var x1 = p.x + Math.cos(ea + spread) * rb, y1 = p.y + Math.sin(ea + spread) * rb;
+
+        var path = boltPath(wake.id, key, x0, y0, x1, y1, r * 0.38);
+
+        /* Halo first, then the strike inside it — that is what makes a thin
+         * white line look like it is lighting up the gas around it.
+         *
+         * THIN. These were 7.5% and 2.2% of the radius, and at close range
+         * that painted a rounded-off red ROD across the cloud rather than a
+         * discharge: thick enough that the jag disappeared inside the stroke
+         * width and the whole thing read as a solid bar. Lightning is a
+         * hairline with a glow around it — the brightness does the work, not
+         * the width. */
+        ctx.strokeStyle = 'rgba(' + boltHalo + ',' +
+                          (strength * lit * 0.40).toFixed(3) + ')';
+        ctx.lineWidth = Math.max(1.2, r * 0.030);
+        strokeBolt(ctx, path);
+
+        ctx.strokeStyle = 'rgba(' + boltCore + ',' +
+                          (strength * lit * 0.95).toFixed(3) + ')';
+        ctx.lineWidth = Math.max(0.7, r * 0.010);
+        strokeBolt(ctx, path);
+      }
+
+      /* The tear itself: a small hard-white centre that the whole cloud is
+       * pouring out of. */
+      ctx.fillStyle = 'rgba(' + boltCore + ',' + (0.38 * strength).toFixed(3) + ')';
       ctx.beginPath();
-      ctx.arc(p.x, p.y, Math.max(1, r * 0.10), 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, Math.max(1, r * 0.09), 0, Math.PI * 2);
       ctx.fill();
-    } else {
-      ctx.fillStyle = 'rgba(' + hot + ',' + (0.75 * strength).toFixed(3) + ')';
+    } else if (r > 2) {
+      /* Too small to resolve structure: one mote, in the colour that says
+       * which kind it is. From across a system that is all a wake needs to
+       * be — something worth turning toward. */
+      ctx.fillStyle = 'rgba(' + boltHalo + ',' + (0.8 * strength).toFixed(3) + ')';
       ctx.beginPath();
-      ctx.arc(p.x, p.y, r * 0.55, 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, r * 0.6, 0, Math.PI * 2);
       ctx.fill();
     }
 
     ctx.restore();
     return p;
+  }
+
+  /* Midpoint displacement, four levels — the cheapest thing that looks like
+   * lightning. Each subdivision pushes the midpoint sideways by a shrinking
+   * amount, so the line acquires detail at every scale instead of being a
+   * uniformly wiggly noodle. Seeded, so one strike holds its shape. */
+  function boltPath(id, key, x0, y0, x1, y1, jag) {
+    var pts = [{ x: x0, y: y0 }, { x: x1, y: y1 }];
+    var amp = jag, n = 0;
+    /* Five levels, not four: thirty-two segments rather than sixteen. The
+     * extra level is what keeps the kinks finer than the stroke is wide, so
+     * the jag survives being drawn instead of being swallowed by the line. */
+    for (var level = 0; level < 5; level++) {
+      var next = [pts[0]];
+      for (var i = 0; i < pts.length - 1; i++) {
+        var a = pts[i], c = pts[i + 1];
+        var mx = (a.x + c.x) / 2, my = (a.y + c.y) / 2;
+        var dx = c.x - a.x, dy = c.y - a.y;
+        var len = Math.hypot(dx, dy) || 1;
+        // Perpendicular, scaled by this level's amplitude.
+        var d = (wakeHash(id, 'j' + key + ':' + (n++)) - 0.5) * 2 * amp;
+        next.push({ x: mx + (-dy / len) * d, y: my + (dx / len) * d });
+        next.push(c);
+      }
+      pts = next;
+      amp *= 0.55;
+    }
+    return pts;
+  }
+
+  /* `strokeBolt`, NOT `strokePath`.
+   *
+   * This was called strokePath for about ten minutes and it broke the whole
+   * renderer. There is already a strokePath in this file — the world-space
+   * polyline helper at the top, signature (ctx, cam, pts, style, width, …) —
+   * and a second top-level declaration of the same name silently wins,
+   * because that is what function declarations do. Every existing caller
+   * then handed its `cam` to my `pts`, and orbit lines, trajectory plots and
+   * everything else drawn as a polyline threw on `pts[0].x`.
+   *
+   * Same trap as the orbitalBasis collision in sim.js, from the same cause:
+   * a new top-level name added to a large single-scope file without grepping
+   * for it first. Nothing warns. GREP FIRST. */
+  function strokeBolt(ctx, pts) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke();
   }
 
   /* Flight path marker: where the ship is actually GOING, as distinct from
@@ -2853,11 +4030,22 @@
     drawShipExhaust: drawShipExhaust,
     drawWake: drawWake,
     WAKE_ARCS: WAKE_ARCS,
+    WAKE_BOLTS: WAKE_BOLTS,
+    wakeHash: wakeHash,
+    boltPath: boltPath,
     DRIVE_SPEC: DRIVE_SPEC,
     paintMesh: paintMesh,
+    faceMaterial: faceMaterial,
     shipMeshes: shipMeshes,
     libHull: libHull, hullIds: hullIds, assignHull: assignHull,
     HULL_ASSIGN: HULL_ASSIGN,
+    libPort: libPort, portIds: portIds, reloadPorts: reloadPorts,
+    portModelFor: portModelFor, STATION_MODELS: STATION_MODELS,
+    portRole: portRole, assignPort: assignPort, PORT_ASSIGN: PORT_ASSIGN,
+    poolFor: poolFor, PORT_POOL: PORT_POOL,
+    portClass: portClass, portSizeFor: portSizeFor,
+    PORT_PATTERNS: PORT_PATTERNS, PORT_SIZE_CUTS: PORT_SIZE_CUTS,
+    drawPortPart: drawPortPart, portSpins: portSpins,
     stationMeshes: stationMeshes,
     box: box, tube: tube, rimRing: rimRing, mergeMesh: merge,
     makeStarfield: makeStarfield,
@@ -2876,8 +4064,21 @@
      * transform the cockpit and every hull model already run on; there was
      * no reason for combat effects to grow a second copy of it. */
     localToWorld: localToWorld,
+    shardMeshes: shardMeshes, drawShardModel: drawShardModel,
+    SHARD_COUNT: SHARD_COUNT,
+    /* The shield. `shellMesh` and `shieldTint` and `shellFlare` are exported
+     * for the same reason boltRibbon is: they are the parts a test can hold
+     * to account without a canvas. */
+    shellMesh: shellMesh, drawShellField: drawShellField,
+    shieldTint: shieldTint, shellFlare: shellFlare,
+    SHIELD_STANDOFF: SHIELD_STANDOFF, SHIELD_FLASH_LIFE: SHIELD_FLASH_LIFE,
     hullMuzzles: hullMuzzles, shipMuzzles: shipMuzzles,
     seatMuzzle: seatMuzzle,
+    /* Exported for the same reason seatMuzzle is: the beam renderer lives in
+     * main.js but the geometry of a tracer belongs with the rest of the
+     * drawing maths, where it can be tested without a canvas. */
+    boltSpan: boltSpan, boltRibbon: boltRibbon,
+    BOLT_MIN_W: BOLT_MIN_W, BOLT_MAX_W: BOLT_MAX_W, BOLT_SEGS: BOLT_SEGS,
     SHIP_LEN: SHIP_LEN,
     drawAttitudeLadder: drawAttitudeLadder,
     drawFlightPathMarker: drawFlightPathMarker,

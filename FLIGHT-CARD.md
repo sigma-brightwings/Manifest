@@ -116,6 +116,13 @@ on the scope as a yellow cross, and it is still there if you come back for it.
 The point is the mass budget: a full hold cannot outrun a pirate, and this is the
 lever that argument leaves you holding.
 
+**Salvage.** A ship you destroy comes apart, and some of the pieces still carry
+what was in its hold. Drift onto one gently — the same 80 metres and 20 m/s a
+canister wants — and it goes aboard. On the scope an **amber cross is worth
+taking** and a **grey dot is scrap**; the scrap is drawn because a debris field
+you cannot see is a debris field you fly into. Wreckage clears after about a
+minute and a half, or the moment you leave the area.
+
 **9. `Z` — cruise.** Only works well clear of a planet. `,` and `.` set speed. The
 starfield should streak. **I suspect it is too fast to aim** — it tops out around
 six times lightspeed and a turn takes seconds.

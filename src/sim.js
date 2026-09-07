@@ -19,6 +19,15 @@
 
   var V = global.V || require('./vec3.js');
   var K = global.Kepler || require('./kepler.js');
+  /* Bound the same way, and needed for the same reason vec3 is: wreckage is
+   * hashed off the victim's id rather than rolled. Bound at the top rather
+   * than reached for through `global` at the call site — regCode below does
+   * that and falls back to a hash of ZERO when it is missing, which for a
+   * registration is a cosmetic wrong answer and for a debris field would be
+   * every shard thrown in exactly the same direction. Under a browser-shaped
+   * harness the globals hang off `window`, not off node's global, so the
+   * bare name does not resolve; this is what the require fallback is for. */
+  var RNG = global.RNG || require('./rng.js');
   /* The reference hull is defined in generate.js, because the generator has
    * to know what a ship can do before it can decide where ports may be. */
   var Gen = global.Gen || (typeof require !== 'undefined' ? require('./generate.js') : null);
@@ -1695,9 +1704,55 @@
      * keeps it zero, the hull renders as a point, and anything that flies
      * along the nose (cruise, most obviously) silently stops moving the
      * ship at all. Fall back to the station's own prograde instead. */
+    /* LEVEL FIRST, POINTING SECOND. The obvious construction — face the
+     * station, then roll so up is as near the radial as it can be — is not
+     * good enough, because it is only level when the nose happens to be
+     * perpendicular to the radial. Approach a station from directly below it
+     * and the nose IS the radial, at which point "as near as it can be" is
+     * forty degrees off and the ship sits on the clamps cocked over.
+     *
+     * A berthed ship should be level whatever it flew in along, so up is the
+     * radial outright and the nose gets whatever is left: the direction of
+     * the station flattened into the horizontal plane. Being parked straight
+     * matters more than aiming the nose exactly at the port. */
+    /* THE UP REFERENCE IS NOT basis.radial. `orbitalBasis` takes absolute
+     * position and normalises it, so its radial points away from the SYSTEM
+     * ORIGIN — the star — not away from the planet the station is orbiting.
+     * That is harmless for the dockOffset above, which only needs a
+     * consistent frame that turns with the station, and it is quite wrong as
+     * a local vertical: it left a berthed ship fifty-eight degrees off level
+     * and reading three degrees of roll.
+     *
+     * orbitalBasisAt already answers this properly, against whatever body
+     * actually dominates where the station is. */
     var facing = V.scale(rel, -1);
-    ship.fwd = V.len(facing) > 1e-9 ? V.norm(facing) : V.clone(basis.prograde);
-    ship.right = anyPerpendicular(ship.fwd);
+    var upRef = orbitalBasisAt(ts.pos, ts.vel, sys, t).radial;
+    var flat = V.sub(facing, V.scale(upRef, V.dot(facing, upRef)));
+    ship.fwd = V.len(flat) > 1e-9 ? V.norm(flat) : V.clone(basis.prograde);
+    /* LEVEL, NOT ARBITRARY, and this line was a real bug for as long as
+     * saves have existed.
+     *
+     * `anyPerpendicular` picks any vector at right angles to the nose. That
+     * is fine for making a basis and terrible for making an ATTITUDE: the
+     * roll it produces is whatever falls out of the arithmetic, so a ship on
+     * the clamps sat at some random bank angle.
+     *
+     * Which nobody would mind, except that save.js re-docks on load —
+     * restore() sets the saved fwd/up/right and then calls dockShip, which
+     * lands here and throws the restored attitude away. Its own comment says
+     * saves are made on a station's clamps "given when saves happen", and
+     * main.js restores the autosave at boot. So the common path was: quit
+     * docked, come back, and be lying on your side, with the attitude ladder
+     * reading ninety degrees of bank before you had touched anything.
+     *
+     * circularOrbit already solved this for the spawn and its comment
+     * describes the identical symptom. Same construction here: right from
+     * fwd x radial puts UP along the local vertical, so a berthed ship is
+     * level and its gear points at the planet. The fallback is only reachable
+     * with the nose exactly along the radial, where "level" has no meaning. */
+    ship.right = V.cross(ship.fwd, upRef);
+    ship.right = V.len(ship.right) > 1e-9
+      ? V.norm(ship.right) : anyPerpendicular(ship.fwd);
     ship.up = V.cross(ship.right, ship.fwd);
   }
 
@@ -2330,6 +2385,17 @@
 
       var near = V.dist(c.pos, shipPos) < WAKE_RANGE;
 
+      /* Wreckage takes the cheap path and takes it first. Out of range it is
+       * simply dropped rather than parked on an ellipse — the player asked
+       * for despawn-on-leaving-the-area, and the wake radius is already this
+       * game's definition of "the area". */
+      if (c.kind === 'debris') {
+        if (!near) continue;
+        if (dtSim > 0) stepDebris(c, sys, t, dtSim);
+        keep.push(c);
+        continue;
+      }
+
       if (near) {
         // Waking: pick up wherever the rail says it got to.
         if (c.rail) {
@@ -2366,6 +2432,200 @@
   }
 
   function canistersAll(sys) { return sys.canisters || []; }
+
+  /* ---- wreckage ---------------------------------------------------------
+   * What is left of a ship, and the thing the explosion has been standing in
+   * for since combat existed. Also, eventually, what comes off a rock under
+   * a mining laser — same shards, same physics, same scoop, two sources.
+   *
+   * IN sys.canisters, NOT BESIDE IT. A shard shares almost everything with a
+   * jettisoned crate: it drifts, it expires, it is a scanner return, it can
+   * be flown into, and some of it is worth taking aboard. Giving it its own
+   * list would mean a second collision test, a second scoop, a second
+   * expiry sweep and a second thing to remember on every code path that
+   * touches loose objects — four chances to forget one. So it goes in the
+   * same array with `kind: 'debris'`, and the handful of places that care
+   * branch once.
+   *
+   * WHAT IT DOES NOT SHARE IS THE PHYSICS, and that is deliberate. A canister
+   * lives a DAY of game time and is put on a Kepler rail when it sleeps,
+   * because it has to still be there — and still be moving correctly — when
+   * you come back for it tomorrow. A shard lives ninety seconds. Solving an
+   * ellipse for something that will not exist by the time it completes one
+   * degree of it is work done for nobody, and the frame budget on the target
+   * machine is not there to spend: the trajectory predictor already costs
+   * ~25 ms and the renderer ~3 ms. So debris gets:
+   *
+   *   - no Kepler rail. Out of range is GONE, not asleep.
+   *   - no stepShip, no substepping, no impact test against terrain. One
+   *     gravity evaluation and a velocity-Verlet-ish half step.
+   *   - ONE dominant body, resolved at spawn and never again. A shard covers
+   *     a few kilometres in its whole life, so the body that dominates where
+   *     it died still dominates where it dies. This is the single biggest
+   *     saving here and it costs nothing in fidelity.
+   *
+   * MEASURED, because the rule is that anything on the per-frame path gets
+   * costed against the budget explicitly rather than asserted to be cheap.
+   * A FULL field — 96 shards, the cap — through updateCanisters:
+   *
+   *     updateCanisters, full field   0.0143 ms/frame
+   *     spawnDebris, one whole wreck  0.0168 ms   (once per kill, not per frame)
+   *     one Sim.acceleration call     0.0097 ms   <- the unit to compare against
+   *
+   * So the worst case the cap allows is about one and a half gravity
+   * evaluations a frame, against a predictor that costs ~25 ms and a
+   * renderer that costs ~3. It is the dominant-body shortcut that buys this:
+   * resolving one per shard per frame would have made it 96 of them.
+   */
+  var DEBRIS_LIFE = 90;          // seconds of game time
+  var DEBRIS_MAX = 96;           // shards alive at once, system-wide
+  var DEBRIS_SALVAGE_FRAC = 0.3; // share of a wreck's hold that survives it
+
+  /* Everything about a wreck is a pure function of the ship that made it, so
+   * a replayed kill throws the same pieces the same way. Math.random() here
+   * would have been invisible — nobody re-watches an explosion frame by
+   * frame — which is exactly the kind of place the doctrine exists to cover.
+   *
+   * One hash, read in slices, the same way manifestFor does it: one call and
+   * one place to look when a shard comes out wrong. */
+  function shardHash(id, i) {
+    /* Salt FIRST and avalanche after. `wakeHash` learned this the hard way:
+     * appending the index to a shared prefix and reading the high bits does
+     * not diffuse in FNV-1a, so every arc of a wake came out identical and
+     * drew stacked on top of itself. */
+    var h = RNG.hashString('shard|' + i + '|' + id);
+    h ^= h >>> 13; h = (h * 0x5bd1e995) >>> 0; h ^= h >>> 15;
+    return h >>> 0;
+  }
+
+  /* Blow a ship apart. `at`/`vel` are where and how fast it was going; the
+   * shards inherit that and get a radial kick, because an explosion is a
+   * thing that happens to a ship rather than a thing that stops it. */
+  function spawnDebris(sys, id, at, vel, size, t, salvage) {
+    if (!sys || !at) return [];
+    if (!sys.canisters) sys.canisters = [];
+
+    /* Count follows the hull. A shuttle coming apart should not litter the
+     * sky the way a bulk freighter does. */
+    var scale = Math.max(0.02, size || 0.06);
+    var n = Math.max(6, Math.min(16, Math.round(8 + scale * 90)));
+
+    /* Resolved once, for all of them — see the note above. */
+    var dom = dominantBody(at, sys, t);
+    var domId = dom ? dom.id : null;
+
+    var made = [];
+    for (var i = 0; i < n; i++) {
+      var h = shardHash(id, i);
+
+      /* A direction off the hash, not off Math.random. Spherical, and taken
+       * from two independent slices so the shards do not band. */
+      var u = ((h & 1023) / 1023) * 2 - 1;              // cos(polar)
+      var az = (((h >>> 10) & 1023) / 1023) * K.TAU;
+      var r = Math.sqrt(Math.max(0, 1 - u * u));
+      var dir = { x: r * Math.cos(az), y: r * Math.sin(az), z: u };
+
+      /* Kick, in km/s. Scaled to hull size — a big ship holds more energy —
+       * and spread over a wide range so the field stretches instead of
+       * expanding as a shell, which is what actually reads as an explosion. */
+      var kick = (0.004 + ((h >>> 20) & 255) / 255 * 0.026) * (0.6 + scale * 6);
+
+      var c = {
+        kind: 'debris',
+        id: 'dbr' + (sys.canisterSeq = (sys.canisterSeq || 0) + 1),
+        name: 'Wreckage',
+        shard: (h >>> 28) & 7,                          // which mesh
+        /* Metres, roughly: a plate off a hull, not a whole deck. */
+        lengthKm: 0.006 + ((h >>> 5) & 31) / 31 * 0.020,
+        tint: null,
+        pos: V.addScaled(at, dir, 0.004),
+        vel: V.addScaled(vel || ZERO, dir, kick),
+        /* Tumble: an axis and a rate. Anything torn off something that just
+         * exploded is spinning, and a shard that does not is a floating
+         * brick. */
+        spinAxis: { x: ((h >>> 3) & 255) / 255 - 0.5,
+                    y: ((h >>> 11) & 255) / 255 - 0.5,
+                    z: ((h >>> 19) & 255) / 255 - 0.5 },
+        spinRate: 0.4 + ((h >>> 26) & 15) / 15 * 2.6,   // rad/s
+        phase: (h & 63) / 63 * K.TAU,
+        born: t,
+        expires: t + DEBRIS_LIFE,
+        domId: domId,
+        radius: 0.003
+      };
+      var sl = V.len(c.spinAxis);
+      c.spinAxis = sl > 1e-6 ? V.scale(c.spinAxis, 1 / sl) : { x: 0, y: 0, z: 1 };
+      sys.canisters.push(c);
+      made.push(c);
+    }
+
+    /* SOME OF IT IS WORTH TAKING. Salvage rides on the shards rather than on
+     * a parallel object, so the scoop, the hold accounting and the scanner
+     * all work on it with no new code — a shard with a `cid` is a canister
+     * that happens to be shaped like a piece of a ship. */
+    if (salvage && salvage.length) {
+      var slots = Math.min(made.length, Math.max(2, Math.min(4, salvage.length + 1)));
+      var put = 0;
+      for (var s = 0; s < salvage.length && put < slots; s++) {
+        var amount = (salvage[s].qty || salvage[s].tonnes || 0) * DEBRIS_SALVAGE_FRAC;
+        if (!(amount > 0)) continue;
+        /* Spread over up to two shards so salvage is a small FIELD to fly
+         * through rather than one lucky pixel. */
+        var pieces = amount > 6 ? 2 : 1;
+        for (var p = 0; p < pieces && put < slots; p++, put++) {
+          var sh = made[put];
+          sh.cid = salvage[s].cid;
+          sh.tonnes = Math.max(0.1, Math.round((amount / pieces) * 10) / 10);
+          sh.name = 'Salvage';
+          sh.lengthKm = Math.max(sh.lengthKm, 0.014);   // worth spotting
+        }
+      }
+    }
+
+    /* Globally capped, oldest first. An uncapped field is a memory leak that
+     * grows with the body count, and the oldest shards are the ones the
+     * player has already stopped looking at. Only debris is culled — a
+     * jettisoned canister is somebody's cargo and is not litter. */
+    var live = 0, k;
+    for (k = 0; k < sys.canisters.length; k++) {
+      if (sys.canisters[k].kind === 'debris') live++;
+    }
+    while (live > DEBRIS_MAX) {
+      for (k = 0; k < sys.canisters.length; k++) {
+        if (sys.canisters[k].kind === 'debris') { sys.canisters.splice(k, 1); break; }
+      }
+      live--;
+    }
+    return made;
+  }
+
+  /* One shard, one frame. Deliberately not stepShip: see the note above. */
+  function stepDebris(c, sys, t, dt) {
+    var parent = c.domId && sys.byId ? sys.byId[c.domId] : null;
+    if (parent && parent.mu > 0) {
+      var bp = bodyPosition(parent, sys, t);
+      var dx = bp.x - c.pos.x, dy = bp.y - c.pos.y, dz = bp.z - c.pos.z;
+      var d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 > 1e-9) {
+        var d = Math.sqrt(d2), a = parent.mu / d2 / d;   // mu/d^2, then normalise
+        c.vel.x += dx * a * dt;
+        c.vel.y += dy * a * dt;
+        c.vel.z += dz * a * dt;
+      }
+    }
+    c.pos.x += c.vel.x * dt;
+    c.pos.y += c.vel.y * dt;
+    c.pos.z += c.vel.z * dt;
+  }
+
+  function debrisAll(sys) {
+    var list = sys.canisters, out = [];
+    if (!list) return out;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].kind === 'debris') out.push(list[i]);
+    }
+    return out;
+  }
 
   var Sim = {
     orbitMu: orbitMu,
@@ -2440,6 +2700,8 @@
     dropCanister: dropCanister,
     updateCanisters: updateCanisters,
     canistersAll: canistersAll,
+    spawnDebris: spawnDebris, debrisAll: debrisAll, stepDebris: stepDebris,
+    DEBRIS_LIFE: DEBRIS_LIFE, DEBRIS_MAX: DEBRIS_MAX,
     CANISTER_LIFE: CANISTER_LIFE,
     WAKE_RANGE: WAKE_RANGE,
     SLEEP_RANGE: SLEEP_RANGE,

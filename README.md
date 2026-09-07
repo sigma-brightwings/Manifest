@@ -13,8 +13,9 @@ first, then orbits, then planets, then everything that lives on them. Every
 star system is a pure function of its seed, so the same seed gives the same
 universe every time, on any machine, forever.
 
-Currently at **alpha 5** (in progress). Not released, not public, not
-finished.
+Currently at **alpha 5** (in progress). Public, unreleased, and unfinished
+in that order — the source is here because it is easier to be told what is
+broken than to find it alone. See **Beta testing** below.
 
 ## What it is
 
@@ -42,6 +43,69 @@ Some things it does that are worth knowing about:
   the canopy glass; data-heavy readouts live on physical panels set into
   the dashboard and drawn in perspective. Panels can be shot out, and it
   costs money to put them right.
+
+## What works right now
+
+Enough to fly, trade, fight, get arrested and land somewhere you should
+not have.
+
+- **Flight and orbits.** Newtonian flight with a trajectory predictor,
+  orbital-frame and ship-frame control modes, flight assist that needs a
+  nearby lock to have anything to hold you against, and time warp.
+- **A whole system, cheaply.** 6–12 planets per star, traffic and patrols
+  and drifting canisters on Kepler rails until you close, then integrated
+  properly.
+- **Outfitting.** Typed slots with power and mass budgets, nine lasers,
+  three reactors, shields, heat sinks, sell-back at 45%, and refusals that
+  tell you in words why a thing will not fit.
+- **Weapons.** Two fire groups on two triggers, per-slot cooldowns, an
+  auto-turret, seekers, and weapon heat that will cook you if you hold the
+  trigger down.
+- **The law.** A crime is only a crime if somebody reports it — a witness
+  at the scene, or the victim itself, which starts transmitting a few
+  seconds into the attack. Bounties are per-faction; fugitives get hunted.
+- **Death and salvage.** Ships break into wreckage hashed off the victim,
+  shards fly a cheap ballistic path, and you scoop what is left.
+- **Slipspace.** Mass-scaled transit, an interstellar lane timetable,
+  wakes you can scan and follow, and an interdiction corridor you can be
+  torn into and have to fly out of.
+- **Ports and interiors.** Berth at a surface port and you are genuinely
+  inside a building — no stars, no orbit lines, just the port.
+- **Saves.** Six manual slots plus a per-seed autosave.
+
+Honest about the gaps: the grey market has a flag and no goods behind it,
+fire-group membership is invisible from the cockpit mid-fight, and several
+recently built visual systems have passing tests but have never actually
+been looked at. `PLAN.md` keeps a Status section that is checked against
+the source rather than against memory.
+
+## Beta testing
+
+**Testers wanted, and the useful kind of report is the specific kind.**
+
+What is most valuable, roughly in order:
+
+1. **Anything that looks wrong.** The test suite is blind to layout — it
+   can prove a cockpit panel projects where it should and cannot tell you
+   the panel is unreadable. Screenshots are worth more than descriptions.
+2. **Seeds that generate something broken.** Every universe is a pure
+   function of its seed, so a seed is a complete bug report on its own.
+   Send the seed and where in it you were.
+3. **Where the flight model fights you** rather than being hard. Those are
+   different, and only a second pilot can tell them apart.
+4. **Performance.** The development machine is a rugged Latitude 5420, so
+   it is already a slow target — but if it stutters on yours, say what you
+   were doing and what was on screen.
+5. **Refusals that do not explain themselves.** A greyed-out button that
+   will not say what is wrong is a bug by this project's rules.
+
+Send reports to **support.manifest@agentmail.to**. Include the alpha from
+`CHANGELOG.md`, your seed, and your OS. There is no build to download yet
+— clone it and run `npm install && npm start`, and see **Running it**
+below.
+
+Fair warning: saves do not always survive an alpha. `CHANGELOG.md` says
+so under its own heading each time.
 
 ## Running it
 
@@ -91,6 +155,7 @@ src/            the game, one module per concern, no bundler
 test/           node test scripts, no framework
 tools/          dev server, icon builder, glb -> hull converter
 ref/glb/        source ship models, consumed by tools/glb2hulls.js
+ref/station-lab/  standalone sketch for station geometry, not wired in yet
 electron/       desktop shell
 ```
 

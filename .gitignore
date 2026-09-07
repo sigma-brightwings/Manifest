@@ -26,3 +26,17 @@ desktop.ini
 
 # Scratch test output.
 _test_output.txt
+
+# The models/ staging area. Every .glb in it duplicates ref/glb/ — which is
+# the copy tools/glb2hulls.js actually consumes — and a third copy sits
+# under "models/Manifest Models/uploads/". Tracking it would write the same
+# ~60 MB into history three times and git never lets those bytes go again.
+# The one thing in there that was not a duplicate, the station-design
+# sketch, has been lifted out to ref/station-lab/ and is tracked there.
+models/
+
+# Synthetic port models. Unlike ref/, these are GENERATED — recreate them
+# with `node tools/make-port-fixture.js` — and they are binary, which is
+# the one thing a diff cannot help with. Real port art belongs in
+# ref/ports/ and is tracked like every other model.
+test/fixtures/

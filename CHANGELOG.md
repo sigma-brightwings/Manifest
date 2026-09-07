@@ -17,6 +17,77 @@ full design and the phases still outstanding.
 
 ### Added
 
+- **A berthed ship is inside a building.** Park in a surface port and the
+  hangar is now the whole world: no stars, no ecliptic grid, no orbit lines,
+  no other planets, no traffic, and no sun-glare across the canopy. Before
+  this the walls were there but you could see the solar system past the end
+  of them, which read worse than no walls at all — it made the room look
+  like a texture. Pressing **F2** for the orbit chart still shows you the
+  system, because answering "show me the system" with the inside of a shed
+  would just be a blank map.
+
+- **Glass is translucent.** Every port town grows greenhouses — a colony on
+  a world nobody can breathe on has to make its own air — and the crop
+  inside them is lit precisely so that you can tell there is something alive
+  in there from a long way off. The panes over it were solid, so you never
+  saw it. Now you do.
+
+- **Everyone has shields now, and you can see them work.** Warships and money carry a
+  field; freighters, shuttles and escape pods do not. When something hits one
+  it **flares where it was struck and the energy spreads out across the rest
+  of the bubble and dissipates**, and the field is not a sphere — it is the
+  ship's own shape, held about a metre off the plating. A shot that gets
+  through makes a hot bloom on the hull instead, so which effect you see tells
+  you whether the shield is still holding without reading a number.
+
+  The field also **changes colour as it wears down** — cold blue-white while
+  it holds, amber as it goes, hot red when it is nearly gone. And because you
+  cannot see your own hull from the cockpit, a hit you soak now blooms on the
+  inside of the canopy in the direction it came from, which doubles as a
+  warning about where the shooter is.
+
+- **And carrying two kinds of gun finally pays.** The pulse-soaks /
+  beam-drains numbers have been printed on every laser in the shop since the
+  weapons were retiered, and nothing in the game ever read them — there was
+  only one shield, it was yours, and your own guns never hit it. Now that
+  other ships have fields, the whole thing switches on: against a naval
+  cutter, stripping with a beam and then opening the hull with a pulse takes
+  **14 shots against 18 for the best single weapon**. That is what fire groups
+  were for.
+
+- **Ships come apart when you kill them.** The explosion has been standing in
+  for this since combat existed — two expanding rings and then nothing, as
+  though the hull had been deleted rather than destroyed. A wreck now throws
+  six to sixteen tumbling shards, more from a bigger hull, and **some of them
+  are worth taking**: what did not spill as intact crates was aboard when the
+  ship broke up, so it comes off as salvage you scoop the same way you scoop
+  anything else. The radar tells you which is which — scrap is a dim grey
+  dot, salvage is the amber cross a crate gets — because picking through a
+  debris field is the game, and hoovering one is not.
+
+  Same seed, same wreck: the pieces are hashed off the ship's own id, so a
+  replayed kill throws the same shards the same way. They live ninety seconds
+  and vanish when you leave, which is what stops a system that has seen a
+  hundred fights from being a hundred fights' worth of litter.
+
+- **The two slipspace modules are things you can buy.** The Wake Baffle and
+  the Harmonic Transit Anchor have been priced and read by the corridor since
+  it was built, and there was no way to purchase either one. They are now
+  ordinary fittings in the internal slot — **four classes each**, because the
+  class is what the field covers — so they cost power, cost tonnage, save
+  with the ship, and refuse in words when they will not go.
+
+  | | Mass | Draw | Price |
+  |---|---|---|---|
+  | Wake Baffle I–IV | 2–6 t | 0.8–2.0 MW | 6,000–28,000 cr |
+  | Transit Anchor I–IV | 4–11 t | 3.2–7.0 MW | 28,000–140,000 cr |
+
+  A baffle needs a moderately developed port; an anchor needs a developed one
+  that likes you, the same counter that sells the muon lasers. And the budget
+  now says what a bespoke field could not: a Class IV anchor on a Talon is
+  seven of its nine megawatts and eleven of its fourteen tonnes, which is
+  legal, ruinous, and visible before you spend rather than after.
+
 - **Fire groups, and a second trigger.** A hull with more than one hardpoint
   now has two of them. Every gun starts on group A; move one to B on the F5
   FIT page and it answers a different trigger:
@@ -164,6 +235,17 @@ full design and the phases still outstanding.
 
 ### Changed
 
+- **A new career starts on a spaceport, not in orbit.** ⚠️ *Written but not
+  yet run.* You begin docked at a port on the home world — stationary, with
+  the trade console and the yard available before you have risked anything —
+  and getting off the pad is the first thing you choose to do rather than the
+  thing that has already happened to you. Launch clearance is not handed to
+  you: hail port control on `F4`, then `U`. The first orbit you fly is one you
+  put yourself into, which is the thing this game is actually about.
+
+  A respawn after a crash still puts you back in orbit. Being handed your ship
+  back on a pad would quietly undo the cost of having crashed.
+
 - **The auto-turret moved to a utility slot.** Hardpoints are for guns you
   aim with the nose, which is what this game's guns have always been.
 - **Duplicate uniques are refused rather than sold.** A second shield
@@ -180,8 +262,53 @@ full design and the phases still outstanding.
 - The old `pulse` maps to **Class 1 pulse**; the old `beam`, at 15 damage a
   shot, maps to **Class 2 intermittent**, which is where that behaviour
   actually belongs on the new ladder.
+- **Bolts are streaks now, not slugs.** They were reported as too chunky and
+  too slow, and the slug was the mistake: a pulse emitter fires a bunch of
+  charged particles, a bunch debunches as it travels, so the bolt **gets
+  longer on the way out** and then collapses into the point of impact rather
+  than blinking away. The core is a third of its old width with a soft halo
+  behind it — a bright bar has no centre for the eye to find — and the whole
+  thing crosses in 0.20 s instead of 0.30, because a streak says a shot
+  happened along its entire length and no longer has to dawdle to be seen.
+
+- **And bolts are in the world now, not on the glass.** A tracer used to be
+  drawn between two projected points with its width on a fixed pixel ramp, so
+  every shot tapered by the same amount whichever way it was pointed, and the
+  bolt slid across the screen at a constant rate however far it was going
+  away from you. Both are fixed at once by walking the **world** ray and
+  taking each point's width from its own distance: a shot crossing your view
+  broadside is now an even ribbon, one fired away down the boresight narrows
+  and its travel visibly slows as it recedes.
+
+- **A Quit button on the main menu.** The title screen could start a career,
+  load one and resume one, and had no way to leave the game — you closed the
+  window. It now closes it for you, committing the autosave first. In a
+  browser tab it says why it cannot instead of quietly doing nothing.
+- **A robbed freighter now stays robbed.** Demanding cargo or credits used to
+  pay out in full every time you asked, which one interdiction in deep space
+  turned into an unlimited supply of money. A ship hands over its purse once
+  and its hold a third at a time until there is none, and says so.
+- **Interdicting a hauler is worth doing.** The ship you tear out of
+  slipspace carries a hold scaled to its tonnage — roughly 4% of all-up mass,
+  so a packet is about twelve tonnes and a bulk hauler about a hundred and
+  ten, more than a Talon can lift. Which contact you chase down the corridor
+  is now a decision rather than a formality.
 
 ### Fixed
+
+- **A new career started at a spaceport, banked ninety degrees.** Docking
+  chose the roll arbitrarily off whatever axis happened to be perpendicular
+  to the ship, so a berthed hull sat on its side with its landing gear
+  pointing at a wall. It is now levelled against the local horizon, and the
+  attitude measures exactly level across every seed tried. A career that
+  starts on the pad also **arrives with its docking clearance already
+  spent** rather than being fined 500 credits and logged as a fugitive at
+  its own home port on the first frame of the game.
+
+- **Greenhouses were sealed drums.** The lit crop inside every one of them
+  was drawn, and then hidden behind its own opaque glass — so the one
+  feature meant to make a port town legible at night was never once
+  visible.
 
 - **Beams left the ship sideways.** They were drawn from `ship.pos`, which
   in the cockpit is eight centimetres *behind* the pilot's eye — projecting
@@ -216,6 +343,26 @@ full design and the phases still outstanding.
   because swinging the view around the ship is what the exterior view is
   for. Releasing the side button no longer cut the primary trigger.
 
+- **Your ship came back from a save lying on its side.** ⚠️ *Fix written but
+  not yet run.* Docking at an orbital station built the ship's attitude from
+  an arbitrary perpendicular to its nose, so the bank angle it ended up at was
+  whatever the arithmetic happened to produce. On its own nobody would notice
+  — but loading a career re-docks the ship, and the game restores the autosave
+  when it starts, and saves are almost always made on the clamps. So the
+  ordinary path was: quit docked, come back, and find yourself banked ninety
+  degrees with the attitude ladder reading it, before touching anything. A
+  berthed ship is now level, with its gear toward whatever it is orbiting.
+
+  The spawn attitude itself was never wrong — measured across five seeds it is
+  exactly level, and the slow pitch drift afterwards is the orbital rate,
+  which is correct for a hull with nothing holding its attitude.
+
+- **A ship torn out of slipspace was always empty.** It flies an interstellar
+  lane that no system's traffic list has ever heard of, so it inherited no
+  manifest and reported itself running empty however many times you asked.
+  The chase, the lock and the drop-out all worked and paid off in an empty
+  room; they now pay off in a freighter's hold.
+
 ### Saves
 
 **Existing careers load, with their gear.** The save version is
@@ -233,6 +380,26 @@ A migrated ship keeps everything it owned even if the new budgets would not
 strictly allow it. Confiscating something a player already paid for because
 the rules changed underneath them is the worst possible introduction to a
 new system.
+
+**A slipspace module bought before this update still works.** They used to
+live on a bespoke `ship.modules` field rather than in the fit map; that field
+is still read as a fallback, so an anchor already aboard keeps holding your
+corridor. New ones are bought and stored as ordinary equipment.
+
+**The docked start only applies to new careers.** It runs on the fresh-game
+path, so loading an existing save puts you back exactly where you left off,
+in flight or on a pad as you were. The levelled berthing attitude is
+computed at docking rather than stored, so an old save that was written
+while parked crooked comes back level.
+
+**Wreckage is not saved, on purpose.** A debris field lives ninety seconds
+and vanishes when you leave the area. Serialising one would mean loading into
+somebody else's explosion.
+
+**Shields need no migration.** An NPC's is assigned the first time something
+shoots at it, exactly as its hull points already were, so nothing about a
+saved career has to know they exist. Your own shield is the module you already
+bought; what is new is only what it looks like when it works.
 
 - **`glb2hulls.js` now splits cockpit interiors out of the hull.** The
   redesigned ship models carry `cockpitInterior` / `pilotSeat` /
