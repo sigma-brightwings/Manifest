@@ -71,12 +71,26 @@ not have.
   torn into and have to fly out of.
 - **Ports and interiors.** Berth at a surface port and you are genuinely
   inside a building — no stars, no orbit lines, just the port.
+- **Markets that are alive rather than tabulated.** Prices come from
+  scarcity — a mining world's ore is cheap because it has too much of it,
+  not because a designer typed a low number. Every port's stock is a
+  closed-form function of time, so you can skip a year ahead and get the
+  exact figure for the cost of a few multiplies, and the wobble you see in
+  a price is a *named freighter arriving*: each scheduled delivery leaves
+  its own decaying sawtooth at its destination. Ports near your ship run a
+  genuine stepped simulation instead, seeded from the analytic value on
+  waking and folding their accumulated divergence back into a decaying
+  ledger on going dormant — exactly one number crosses that boundary, and
+  it forgets. Your own trades move prices through that same ledger.
 - **Saves.** Six manual slots plus a per-seed autosave.
 
-Honest about the gaps: the grey market has a flag and no goods behind it,
-fire-group membership is invisible from the cockpit mid-fight, and several
-recently built visual systems have passing tests but have never actually
-been looked at. `PLAN.md` keeps a Status section that is checked against
+Honest about the gaps: piracy does not yet reach the economy — blow up a
+freighter and its delivery is still counted at the far end, because
+nothing cancels a scheduled arrival (that is Phase 6, and the decaying
+ledger it needs is already built). The grey market has a flag and no goods
+behind it, fire-group membership is invisible from the cockpit mid-fight,
+and several recently built visual systems have passing tests but have
+never actually been looked at. `PLAN.md` keeps a Status section that is checked against
 the source rather than against memory.
 
 ## Beta testing
@@ -100,9 +114,14 @@ What is most valuable, roughly in order:
    will not say what is wrong is a bug by this project's rules.
 
 Send reports to **support.manifest@agentmail.to**. Include the alpha from
-`CHANGELOG.md`, your seed, and your OS. There is no build to download yet
-— clone it and run `npm install && npm start`, and see **Running it**
-below.
+`CHANGELOG.md`, your seed, and your OS. There are built binaries under
+**Releases** — Windows portable, Windows installer, Linux tar.gz — or
+clone it and run `npm install && npm start`; see **Running it** below.
+
+The binaries are unsigned, so Windows SmartScreen will interrupt you. That
+is what an unsigned executable from a stranger on the internet is supposed
+to look like, and you are right to be suspicious of it — the source is
+here to read, and building it yourself takes two commands.
 
 Fair warning: saves do not always survive an alpha. `CHANGELOG.md` says
 so under its own heading each time.
