@@ -23,6 +23,29 @@ None. `checkAll(STATION_TYPES)` reports 0 problems for all 4 patterns × 3 sizes
 
 ### Fixed since last handoff
 
+**Ring berth names collided across the two halves.** The mirror is
+`halfGrp.clone(true)`, so every berth existed twice under the same name — and a
+name is how everything outside `station.js` addresses a berth. `berthDoorsOf`
+builds a map keyed by name, so the mirror (traversed second) overwrote the
+original: **a ring station reported three bays when it has five**, and
+`setStationDoors` closed the upper ring's berth doors while the lower ring's
+stayed wide open. `getObjectByName` had the opposite bias and could only ever
+reach the lower half — so the half you could address was the half that did not
+move. Measured on ring M before the fix: closing the doors moved the mirrored
+leaf 3.30 and the original 0.00.
+
+Each half now stamps its letter into its `^berth` names — `berthSM0A` and
+`berthSM0B` — inserted after the leading word and index rather than appended,
+which is what keeps the existing patterns working: `berthsOf` still matches
+`^berthSM`, and `checkDockingRoute` still finds `/Throat$/` and `/InnerGate$/`
+inside the group. Clone first, stamp after, so the halves stay an exact copy
+that differs only in what its berths are called. `berthTrunkBrace*A/B` became
+`*L/R` in the same pass — those are the trunk's two flanks, and two different
+meanings sharing one pair of letters is how you get a `berthTrunkBrace0AA`.
+
+After: 5 bays, both leaves travelling 3.30. Only `^berth` names are stamped —
+the ring runs, spars and hub duplicate too, but nothing addresses those by name.
+
 **Ring mirror offset.** The mirrored upper ring was placed at `halfH + gap`,
 which put its ring plane at the joining trunk's mid-height and ran the ring
 straight through the heavy berth. The offset now derives from the trunk:
@@ -184,6 +207,25 @@ station, and the blockers are primary structure, not clutter:
 | spine | `keel`, the berth blocks, neighbouring door houses |
 | ring | `berthPylon*` and the under-pylon clutter |
 | cradle | `spine`, `trussL`, truss braces, the light tubes |
+
+**The route check now has a contact floor**, the same 0.25 of shared volume
+`checkDoorSweep` has always used, named once as `CONTACT_MIN` so the two cannot
+drift apart. It had none, and measuring its output showed **152 of 285 reported
+hits were zero-volume surface decor** — greebles, deck decals, caution stripes,
+hoses, crates, stand legs — grazing the corridor's bounding box. It does not
+soften the check: every blocker below measures 100% of the corridor's own
+volume and hundreds of units of its own. What it buys is a report you can read.
+`berthSM0A` went from `berthPylon0,berthSM0UnderGreeble0,berthSM0UnderGreeble4`
+to just `berthPylon0A`, and the spine's tails from +52 to +2.
+
+**The ring's two halves are two separate docking stations sharing one
+inventory** (design answer, this session). So a *hull* should never route out of
+one half and into the other — it parks in its own half's hangar; only the cargo
+reaches the shared hold. `checkDockingRoute` currently picks its waypoints with
+`near()`, which takes the globally nearest lift car and stand regardless of
+half, which is why the B-half berths report a long tail of the A-half's
+structure. Deliberately **not** fixed yet: the route wants to be per-half, and
+that is a thing to decide while cutting the hangars in, not before.
 
 This is the measurement behind the decision to put the **hangars inside the
 hulls**. The berths currently open into solid structure a metre or two inboard

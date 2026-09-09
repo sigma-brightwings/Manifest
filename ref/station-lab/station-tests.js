@@ -303,8 +303,7 @@ export function checkDoorSweep(station) {
         if (own.has(m.node) || ENCLOSURE.test(m.node.name)) return;
         const it = m.box.clone().intersect(swept);
         if (it.isEmpty()) return;
-        const s = it.getSize(new T.Vector3());
-        if (s.x * s.y * s.z > 0.25) hits.push(m.node.name);
+        if (volOf(it) > CONTACT_MIN) hits.push(m.node.name);
       });
       if (hits.length)
         problems.push(`DOOR-SWEEPS-STRUCTURE ${leaf.name} through ${hits.slice(0, 3).join(',')}${hits.length > 3 ? ` +${hits.length - 3}` : ''}`);
@@ -332,6 +331,13 @@ const ROUTE_OK = /^hall|^transferMain|^transferLift|^liftGuide|Conveyor|^groundS
  * can tell the difference. Kept as an explicit named list so it cannot quietly
  * grow to cover a real obstruction. */
 const ENCLOSURE = /^shell(Outer|Inner)$|^endPlate|^endFrame|^endCapAft$|^bayShell|^bayWall|^screenWall|^transferDeck$/;
+
+/* Shared volume below which two boxes are touching rather than colliding.
+ * checkDoorSweep has used 0.25 since it was written; checkDockingRoute had no
+ * floor at all, which is why it reported hoses and caution stripes alongside
+ * the keel. One number, named, so the two checks cannot drift apart on what
+ * counts as contact. */
+const CONTACT_MIN = 0.25;
 
 export function checkDockingRoute(station) {
   const problems = [];
@@ -365,7 +371,23 @@ export function checkDockingRoute(station) {
         const vol = new T.Box3().setFromCenterAndSize(p, size);
         all.forEach(m => {
           if (own.has(m.node) || ROUTE_OK.test(m.node.name) || ENCLOSURE.test(m.node.name)) return;
-          if (vol.intersectsBox(m.box)) hits.add(m.node.name);
+          if (!vol.intersectsBox(m.box)) return;
+          /* The same contact floor checkDoorSweep has used all along. Without
+           * it this check counted ANY box touch, and measuring the output
+           * showed 152 of 285 reported hits were zero-volume surface decor —
+           * greebles, deck decals, caution stripes, hoses, crates, stand legs
+           * — grazing the corridor's bounding box.
+           *
+           * This does not soften the check. The blockers it exists to find
+           * are primary structure and they measure at 100% of the corridor's
+           * own volume and hundreds of units of their own: heavyHall,
+           * berthSM*Block, berthPylon*, joiningHub, lightTube*. Nothing near
+           * the floor is load-bearing. What it buys is a report you can read
+           * — the structural blockers were being buried under decals, and
+           * this check is the measurement the hangars-inside-the-hulls
+           * rebuild is working against. */
+          const bit = m.box.clone().intersect(vol);
+          if (volOf(bit) > CONTACT_MIN) hits.add(m.node.name);
         });
       }
     }

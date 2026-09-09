@@ -1010,6 +1010,36 @@ export function buildSpineStation(label = 'ORB-2', size = 'M') {
   return finish(st, 'spineStation', label);
 }
 
+/* Stamp a ring half's letter into its berth-scoped names.
+ *
+ * Two identical halves means two of every name, and a NAME is how everything
+ * outside this file addresses a berth. `berthDoorsOf` builds a map keyed by
+ * name, so the mirror — traversed second — silently overwrote the original:
+ * a ring station reported THREE bays when it has five, and `setStationDoors`
+ * closed the upper ring's berth doors while the lower ring's stayed wide
+ * open. `getObjectByName` had the opposite bias and could only ever reach the
+ * lower half, so the half you could address was the half that did not move.
+ *
+ * Measured before this fix, closing the doors on a ring M: the mirrored leaf
+ * travelled 3.30, the original 0.00.
+ *
+ * The letter goes after the leading word and its index rather than on the end
+ * of the name, and that placement is the whole trick — it keeps every
+ * existing pattern working. `berthsOf` still matches `^berthSM`, and the
+ * route check still finds `/Throat$/` and `/InnerGate$/` inside the group:
+ * berthSM0Throat becomes berthSM0AThroat, not berthSM0ThroatA.
+ *
+ * Only `^berth` names are stamped. The ring runs, spars and hub duplicate as
+ * well, but nothing addresses those by name, and renaming them would break
+ * the billboard lookup below for no gain. */
+function designateHalf(grp, letter) {
+  grp.traverse(n => {
+    if (!n.name || !/^berth/.test(n.name)) return;
+    n.name = n.name.replace(/^([A-Za-z]+)(\d*)/, (m, word, digits) => word + digits + letter);
+  });
+  return grp;
+}
+
 /* ---------- 3. RING STATION ----------
  * Four berth pylons hung from a square torus, with the traffic-control hub in
  * the middle on radial spars. The heavy berth occupies the hub's underside so a
@@ -1085,7 +1115,11 @@ export function buildRingStation(label = 'ORB-3', size = 'M') {
     trunkRail.rotation.y = a; halfGrp.add(trunkRail);
     [-1, 1].forEach(sd2 => {
       // diagonal braces from the trunk shoulders up into the ring
-      const brace = box(0.5, trunkH * 1.25, 0.5, matEngine, 'berthTrunkBrace' + i + (sd2 < 0 ? 'A' : 'B'));
+      /* L/R rather than A/B: these are the two FLANKS of one trunk, and A/B
+       * now means which half of the double ring you are on. Two different
+       * things sharing one pair of letters in one name is how you get a
+       * berthTrunkBrace0AA. */
+      const brace = box(0.5, trunkH * 1.25, 0.5, matEngine, 'berthTrunkBrace' + i + (sd2 < 0 ? 'L' : 'R'));
       brace.position.set(Math.sin(a) * R + Math.cos(a) * sd2 * (bw * 0.5 + 0.7),
         trunkY + trunkH * 0.1,
         Math.cos(a) * R - Math.sin(a) * sd2 * (bw * 0.5 + 0.7));
@@ -1153,8 +1187,14 @@ export function buildRingStation(label = 'ORB-3', size = 'M') {
   const gap = big.h * 1.6 + 6.0;
   halfGrp.updateMatrixWorld(true);
   const halfBox = new T.Box3().setFromObject(halfGrp);
-  st.add(halfGrp);
+  /* Clone FIRST, then stamp: the two halves stay an exact copy of one
+   * structure — which is the whole reason the mirror is a clone rather than a
+   * second hand-placed build — and differ only in what their berths are
+   * called. Stamping before the clone would have copied the A into B. */
   const mirrorGrp = halfGrp.clone(true);
+  designateHalf(halfGrp, 'A');
+  designateHalf(mirrorGrp, 'B');
+  st.add(halfGrp);
   mirrorGrp.name = 'ringHalfMirrored';
   mirrorGrp.rotation.set(Math.PI, Math.PI, 0);
   /* Offset derived from the TRUNK, not from the half's own height. The trunk
