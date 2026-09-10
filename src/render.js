@@ -3301,16 +3301,23 @@
    * perpendicular to the bearing, so the panel faces the seat; `up` is
    * vertical rotated back about that same axis by `lean`, so the top of the
    * screen tips away from the pilot the way a real console does. */
-  function mfdCorners(m, grow) {
+  function mfdCorners(m, grow, spec) {
     var s = Math.sin(m.bearing), c = Math.cos(m.bearing);
     var hw = m.hw + (grow || 0), hh = m.hh + (grow || 0) * 0.4;
-    var cx = s * m.r, cz = c * m.r;
+    /* The console grows with the bridge, but the SCREENS grow more slowly
+     * than the room does — a bigger ship gets a wider dash, not letters you
+     * can read from the airlock. Square root of the scale, so a 1.16x room
+     * carries a 1.08x screen. */
+    var k = spec ? spec.size : 1;
+    var ks = spec ? Math.sqrt(spec.size) : 1;
+    hw *= ks; hh *= ks;
+    var cx = s * m.r * k, cz = c * m.r * k;
     var rx = c, rz = -s;                                   // along the width
     var sl = Math.sin(m.lean), cl = Math.cos(m.lean);
     var ux = s * sl, uy = cl, uz = c * sl;                 // up the height
     function corner(sx, sy) {
       return [cx + rx * hw * sx + ux * hh * sy,
-              m.y + uy * hh * sy,
+              m.y * k + uy * hh * sy,
               cz + rz * hw * sx + uz * hh * sy];
     }
     return [corner(-1, 1), corner(1, 1), corner(1, -1), corner(-1, -1)];
@@ -3395,6 +3402,18 @@
     return out;
   }
 
+  /* Scale a local point list about the cockpit origin. The seat is at the
+   * origin, so this grows the room around the pilot rather than pushing the
+   * pilot into a wall. */
+  function scalePts(pts, k) {
+    if (!(k > 0) || Math.abs(k - 1) < 1e-9) return pts;
+    var out = [];
+    for (var i = 0; i < pts.length; i++) {
+      out.push([pts[i][0] * k, pts[i][1] * k, pts[i][2] * k]);
+    }
+    return out;
+  }
+
   function canopyPoly(ship, pts) {
     var out = [];
     for (var i = 0; i < pts.length; i++) {
@@ -3403,9 +3422,274 @@
     return out;
   }
 
-  /* Screen-space outline of the forward canopy opening. */
+  /* ---- THE COCKPIT KIT ---------------------------------------------------
+   * One set of parts, assembled differently per ship.
+   *
+   * Everything above this used to be a single fixed cockpit: one aperture,
+   * one canopy plane at a constant 1.20 m, the same five screens, for every
+   * hull in the game. A Dart interceptor and a Mule freighter sat in
+   * identical rooms behind identical glass, which is the one thing a cockpit
+   * view cannot afford — it is the only part of your own ship you ever
+   * actually look at.
+   *
+   * THE BASELINE IS THE OLD COCKPIT, deliberately. Every multiplier below is
+   * 1.0 for the Talon, so the Talon's bridge is the one that was tuned by
+   * hand and is still exactly that. The constants above it — the side
+   * windows reaching to 86 degrees, the near clip at 12 cm, the chamfered
+   * corners — carry reasoning that took real work to arrive at, and throwing
+   * them away to build something "properly parametric" would have thrown the
+   * reasoning away with them. Other hulls deviate from a known-good room.
+   *
+   * THREE INPUTS, and they are deliberately different KINDS of input:
+   *
+   *   TYPE decides the character of the room. An interceptor wraps more
+   *   glass round a tighter seat; a freighter has a heavy brow and sits you
+   *   back behind more structure. That is a table, because the four hulls
+   *   are named things with intent behind them.
+   *
+   *   SIZE scales it. Read off dryMass, which every hull has and every hull
+   *   that does not exist yet will also have — so a new hull gets a sane
+   *   bridge without anyone adding a row.
+   *
+   *   FLAIR is seeded, and is cosmetic only. It never moves a screen you
+   *   have to read or a window you have to see through.
+   */
+
+  var COCKPIT_ARCH = {
+    /* wrap  how far round the glass reaches
+     * room  overall scale of the bridge
+     * brow  how much structure sits above the glass
+     * rake  fallback lean when the hull has no model to measure */
+    dart:    { wrap: 1.24, room: 0.90, brow: 0.82, rake: 0.60 },
+    talon:   { wrap: 1.00, room: 1.00, brow: 1.00, rake: 0.46 },
+    kestrel: { wrap: 1.09, room: 1.07, brow: 1.02, rake: 0.42 },
+    mule:    { wrap: 0.86, room: 1.16, brow: 1.22, rake: 0.26 }
+  };
+  /* Which drawn model a player hull wears, so the rake can be measured off
+   * the thing you can actually see out of. */
+  var COCKPIT_CLASS = { talon: 'courier', dart: 'fighter',
+                        kestrel: 'trader', mule: 'freighter' };
+
+  var FINENESS_CACHE = {};
+
+  /* Length over width of the hull's own mesh. A long fine nose wants steeply
+   * raked glass; a blunt one wants it upright. Measured from the model
+   * rather than chosen, which is the whole of "make the rake match the
+   * hull" — and memoised, because it walks every vertex. */
+  function hullFineness(hullId) {
+    if (FINENESS_CACHE[hullId] !== undefined) return FINENESS_CACHE[hullId];
+    var out = null;
+    var modelId = HULL_ASSIGN[COCKPIT_CLASS[hullId] || hullId];
+    var mesh = modelId ? libHull(modelId) : null;
+    if (mesh && mesh.v && mesh.v.length) {
+      var minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      for (var i = 0; i < mesh.v.length; i++) {
+        var v = mesh.v[i];
+        if (v[0] < minX) minX = v[0];
+        if (v[0] > maxX) maxX = v[0];
+        if (v[2] < minZ) minZ = v[2];
+        if (v[2] > maxZ) maxZ = v[2];
+      }
+      var wdt = maxX - minX, len = maxZ - minZ;
+      if (wdt > 1e-9 && len > 1e-9) out = len / wdt;
+    }
+    FINENESS_CACHE[hullId] = out;
+    return out;
+  }
+
+  /* The identity the flair hangs off.
+   *
+   * `bornId` AND NOT `reg`. A registration is something the player types on
+   * the yard page and changes whenever they like; hanging the shape of the
+   * bridge on it would mean renaming your ship rebuilt its cockpit around
+   * you. `bornId` is stamped once when the hull is bought and never touched
+   * again, so the room you learned is the room you keep. */
+  function cockpitSeed(ship) {
+    return 'cockpit|' + (ship.hullId || 'talon') + '|' +
+           (ship.bornId || ship.hullId || 'origin');
+  }
+
+  function cockpitSpec(ship) {
+    if (!ship) ship = {};
+    var key = cockpitSeed(ship);
+    if (ship._cockpit && ship._cockpit.key === key) return ship._cockpit;
+
+    var arch = COCKPIT_ARCH[ship.hullId] || COCKPIT_ARCH.talon;
+    /* Size, from the one number every hull has. The Talon's 42 t is the
+     * pivot, so it comes out at exactly 1.0 and the tuned cockpit is
+     * untouched. The cube root because this is a volume becoming a length —
+     * doubling a ship's mass does not double the width of its bridge. */
+    var mass = (ship.dryMass > 0) ? ship.dryMass : 42;
+    var size = Math.pow(mass / 42, 1 / 3);
+    /* Clamped, and this is a threshold worth being explicit about: the four
+     * player hulls span 30-80 t, which is 0.89 to 1.24 of this. The clamp is
+     * for the hulls that do not exist yet — a 400 t hull should read as
+     * roomy, not as a cathedral with the instruments out of reach. */
+    size = Math.max(0.86, Math.min(1.30, size));
+
+    var rng = new RNG(key);
+    /* Flair. Small, and cosmetic only: it tips the console a degree or two
+     * and decides how the frame is broken up. Nothing here moves a screen
+     * you have to read or narrows a window you have to see through. */
+    var flair = {
+      lean: rng.range(-0.035, 0.035),
+      mullion: rng.range(0.010, 0.020),
+      panes: 3 + (rng.range(0, 1) < 0.45 ? 2 : 0),
+      trim: rng.pick(['#1a222e', '#1b2530', '#182029'])
+    };
+
+    /* Rake, measured where possible. Fineness runs about 2 for a blunt hull
+     * and 5+ for a needle; mapped onto a lean the eye reads as the glass
+     * following the nose. Falls back to the archetype's own figure when the
+     * hull has no model loaded, which is every hull under the test harness. */
+    var fine = hullFineness(ship.hullId);
+    var rake = (fine === null) ? arch.rake
+      : Math.max(0.18, Math.min(0.72, 0.10 + (fine - 1.6) * 0.14));
+
+    /* How far the whole band tips. Small on purpose: this shifts what you
+     * are looking at, so a big value would aim a freighter at the floor.
+     * Talon's 0.46 comes out at about 1.8 degrees, a Dart's 0.60 at 3.4 —
+     * enough to feel different between hulls, not enough to fight. */
+    var rakeBias = (rake - 0.42) * 0.10;
+
+    var spec = {
+      key: key,
+      arch: arch, size: size, flair: flair, rake: rake, rakeBias: rakeBias,
+      fineness: fine,
+      /* Distance from the eye to the glass, and the arc it covers. */
+      reach: CANOPY_Z * arch.room * size,
+      /* The main screen keeps the span the old flat window had — its
+       * corners sat at x = +-1.22 on a plane 1.20 ahead, which is 45.5
+       * degrees — so the view forward is unchanged and only widens. */
+      centreAngle: 0.795,
+      /* And the wrap reaches past it. 1.15 rad is 66 degrees a side, so a
+       * Talon can see 20 degrees further round than it could, and a Dart
+       * nearly 30. This is the number that makes the change worth making. */
+      halfAngle: Math.max(0.85, 1.15 * arch.wrap),
+      /* Elevations, taken straight off the old flat window so the view
+       * forward is unchanged: its top sat at y = 0.62 on a plane 1.20
+       * ahead, which is 27.3 degrees up, and its sill at -0.46, 21 down.
+       * `brow` raises or lowers the top edge from there — a freighter wears
+       * more structure above the glass, an interceptor almost none. */
+      topAngle: Math.atan(0.62 / (CANOPY_Z * arch.room) / arch.brow) - rakeBias,
+      botAngle: -Math.atan(0.46 / (CANOPY_Z * arch.room)) - rakeBias,
+      mfdScale: size
+    };
+    ship._cockpit = spec;
+    return spec;
+  }
+
+  /* The canopy, as a ring of flat panes around the pilot rather than one
+   * sheet in front of them.
+   *
+   * WHY FACETS AND NOT A PLANE. A single pane can only be square-on to one
+   * direction, so everything you see through its edges is seen through glass
+   * you are looking at obliquely — and there is nothing beyond its edge at
+   * all, which is why turning your head used to find hull where a window
+   * should be. An arc of panes wraps the view around you, and the strips of
+   * structure BETWEEN them are not drawn: they are simply where the shell
+   * does not get punched through, so the frame is a consequence of the glass
+   * rather than a second thing to keep in step with it.
+   *
+   * The rake tilts every pane by pulling the top edge back toward the pilot,
+   * which is what a windscreen following a nose actually does. */
+  function canopySegments(spec) {
+    /* A MAIN SCREEN WITH QUARTER-LIGHTS, not a row of equal panes.
+     *
+     * Dividing the arc evenly was the first attempt and it was wrong in a
+     * way the suite caught immediately: the centre pane is the one the game
+     * calls "the window", and splitting a 90-degree arc five ways left it
+     * covering 29% of the view when it used to cover most of it. You do not
+     * fly by looking through a mullion. So the centre keeps roughly the span
+     * the old flat window had, and the wrap is added OUTSIDE it — which is
+     * what makes this more visibility rather than the same visibility cut
+     * into strips. */
+    /* THE WINDSCREEN STAYS FLAT, and that is the correction that took three
+     * attempts to arrive at.
+     *
+     * A band on a sphere has an exact angular elevation everywhere — but a
+     * pinhole camera projects y/z, which for a spherical band works out as
+     * tan(e)/cos(a). At the 45-degree corners that is 1.41x, so the glass
+     * bows a long way off the top and bottom of the screen. The suite was
+     * right to call it: the window came out spanning twice the height of the
+     * view and covering 2% of it.
+     *
+     * That bow is not a bug in the maths, it is what a wrap-around surface
+     * genuinely does through a flat projection — which is precisely why real
+     * windscreens are flat glass and the wrap comes from separate panes
+     * angled outboard. So the main screen is the old aperture, unchanged and
+     * still carrying its hand-tuned chamfers, and the visibility is added
+     * beside it. */
+    var k = spec.size;
+    var z = spec.reach / CANOPY_Z;        // the aperture was authored at CANOPY_Z
+    var out = [];
+    var main = [];
+    for (var i = 0; i < APERTURE.length; i++) {
+      main.push([APERTURE[i][0] * k, APERTURE[i][1] * k - spec.rakeBias * 2,
+                 CANOPY_Z * z * k]);
+    }
+    out.push(main);
+
+    /* The quarter-lights. Hinged off the aperture's own outer edge so they
+     * cannot drift away from it, swept outboard and aft — flat panes at an
+     * angle, which is what makes the frame between them read as structure
+     * rather than as a seam. `wrap` decides how far round they reach. */
+    var reach = 0.34 * spec.arch.wrap;
+    var side = [
+      [1.22 * k, 0.30 * k, CANOPY_Z * z * k],
+      [(1.22 + reach) * k, (0.30 - 0.02) * k, CANOPY_Z * z * k * (1 - reach * 0.62)],
+      [(1.22 + reach) * k, (-0.16 - 0.04) * k, CANOPY_Z * z * k * (1 - reach * 0.62)],
+      [1.22 * k, -0.16 * k, CANOPY_Z * z * k]
+    ];
+    out.push(side);
+    out.push(mirrorX(side));
+    return out;
+
+    /* CORNERS ARE ANGLES, NOT HEIGHTS, and getting that wrong is the second
+     * mistake this function made. The first version put the top edge at a
+     * constant y on a cylinder of radius r — but a corner at 45 degrees of
+     * bearing sits at z = cos(45)*r, two thirds of the way in, so the same
+     * height reads as a far steeper angle out at the edges than it does
+     * dead ahead. The panes ran off the top and bottom of the screen and
+     * the window came out covering minus 28% of the view.
+     *
+     * On a sphere every corner is the same distance from the eye, so an
+     * elevation of 27 degrees is 27 degrees whichever way you are facing.
+     * That is what a wrap-around canopy is: a band of sky at a fixed angular
+     * height, not a fence at a fixed physical one.
+     *
+     * PURE SPHERICAL, and the rake deliberately does not touch it. Leaning
+     * the glass by shifting z was the third thing tried here and it broke
+     * the band in a way that is obvious in hindsight: z at the outer corners
+     * is already small, so a fixed offset swung them from 45 to 50 degrees
+     * off-axis and pushed the pane off the side of the screen. On a sphere
+     * the horizontal angle IS the bearing and the elevation IS the
+     * elevation, exactly, at every corner — which is the property that makes
+     * the wrap behave, and it is not worth trading for a lean.
+     *
+     * So the rake moves the BAND instead, biasing both edges together (see
+     * `rakeBias`): a fine-nosed hull sits you looking a little further over
+     * the nose, a blunt one sits you more upright behind it. Same
+     * information, read off the same model, expressed where it cannot
+     * distort the geometry. */
+  }
+
+  /* How much of `rake` becomes lean. Rake runs 0.18..0.72 across the hulls;
+   * at full strength that tipped the glass through 25 degrees and changed
+   * its distance by 40%, which is a windscreen lying in your lap. Half of it
+   * over the half-height above the eye is a lean you can see and not one you
+   * have to duck under. */
+  var RAKE_LEAN = 0.5;
+
+  /* Screen-space outline of the forward canopy opening — the centre pane,
+   * which is the one the glass wash and the shield flare treat as "the
+   * windscreen". The full set is on `apertureSet`. */
   function aperturePath(cam, ship) {
-    return clipProject(cam, canopyPoly(ship, APERTURE));
+    /* Segment 0 IS the windscreen — the quarter-lights are appended after
+     * it, so this stays the main pane whatever the flair did. */
+    var segs = canopySegments(cockpitSpec(ship));
+    return segs.length ? clipProject(cam, localPoly(ship, segs[0]))
+                       : clipProject(cam, canopyPoly(ship, APERTURE));
   }
 
   /* Every opening you can see out of, front and both sides. The hull is
@@ -3413,10 +3697,21 @@
    * lets you look left and find a window there. */
   function apertureSet(cam, ship) {
     var list = [];
-    add('front', aperturePath(cam, ship));
-    add('left', clipProject(cam, localPoly(ship, SIDE_WINDOW)));
-    add('right', clipProject(cam, localPoly(ship, mirrorX(SIDE_WINDOW))));
-    add('floor', clipProject(cam, localPoly(ship, FLOOR_WINDOW)));
+    /* EVERY PANE, not one window. The centre keeps the id 'front' because
+     * the glass wash and the canopy shield flare look for exactly that —
+     * they treat it as "the windscreen" and want a single quad to sit on.
+     * The rest carry their own ids and are punched out just the same, which
+     * is what turns the wrap into visibility rather than decoration. */
+    var spec = cockpitSpec(ship);
+    var segs = canopySegments(spec);
+    for (var s = 0; s < segs.length; s++) {
+      add(s === 0 ? 'front' : ('front-' + s),
+          clipProject(cam, localPoly(ship, segs[s])));
+    }
+    var side = scalePts(SIDE_WINDOW, spec.size);
+    add('left', clipProject(cam, localPoly(ship, side)));
+    add('right', clipProject(cam, localPoly(ship, mirrorX(side))));
+    add('floor', clipProject(cam, localPoly(ship, scalePts(FLOOR_WINDOW, spec.size))));
     return list;
 
     /* Drop anything that clipping left entirely off screen. A window you
@@ -3544,6 +3839,7 @@
   /* Everything between the pilot and the glass. */
   function drawCockpitInterior(ctx, cam, ship, w, h) {
     var i;
+    var spec = cockpitSpec(ship);
 
     /* Side consoles, overhead panel and rear bulkhead — the things that
      * make turning your head worth doing. Clipped, because at wide head
@@ -3610,10 +3906,11 @@
       /* A housing a little proud of the screen on every side, so each panel
        * is a box standing on the console rather than a rectangle painted on
        * it, and a stalk down to the dash so it is holding itself up. */
-      var bez = projQuad.apply(null, [cam, ship].concat(mfdCorners(mt, 0.022)));
+      var bez = projQuad.apply(null,
+        [cam, ship].concat(mfdCorners(mt, 0.022, spec)));
       if (bez) fillPoly(ctx, bez, '#0a0f16', 'rgba(140,175,215,0.30)');
 
-      var quad = projQuad.apply(null, [cam, ship].concat(mfdCorners(mt)));
+      var quad = projQuad.apply(null, [cam, ship].concat(mfdCorners(mt, 0, spec)));
       if (!quad) continue;
 
       // Unlit backing, so a panel the caller declines to fill still reads as
@@ -3621,7 +3918,36 @@
       fillPoly(ctx, quad, '#050a0e');
 
       var b = polyBounds(quad);
-      mfds.push({ id: mt.id, quad: quad, w: mt.w, h: mt.h });
+      /* WORLD corners as well as screen ones. The GPU path needs the panel
+       * as a thing in the world — the screen quad is the projection, and
+       * projecting is exactly what we are handing to the hardware. Built
+       * from the same mfdCorners the outline used, so the housing and the
+       * glass cannot end up describing different rectangles. */
+      var loc = mfdCorners(mt, 0, spec), world = [];
+      for (var wc = 0; wc < 4; wc++) {
+        world.push(localToWorld(ship, loc[wc][0] * M, loc[wc][1] * M,
+                                loc[wc][2] * M));
+      }
+      var panel = { id: mt.id, quad: quad, w: mt.w, h: mt.h,
+                    world: world, cam: cam };
+
+      /* CUT THE GLASS OUT. #gl is beneath #view, so a panel drawn on the GPU
+       * would be hidden behind the console it is mounted in unless the
+       * console has a hole where the screen goes. `destination-out` clears
+       * the 2D layer to transparent inside the quad, and the textured quad
+       * shows through it. The housing, bezel and stalk above stay 2D: they
+       * are opaque furniture and were never the thing that skewed. */
+      if (mfdGpu(panel)) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = '#000';
+        ctx.beginPath();
+        tracePath(ctx, quad);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      mfds.push(panel);
       emitters.push({ x: b.cx, y: b.cy });
     }
 
@@ -3873,7 +4199,69 @@
    * Corners arrive as [topLeft, topRight, bottomRight, bottomLeft]. Returns
    * false when the panel is degenerate or too small to be worth drawing, in
    * which case the caller must not call mfdEnd. */
+  /* One offscreen surface per panel id, kept between frames. A readout is
+   * redrawn every frame, so the canvas is reused and only its contents
+   * change — allocating 460x178 five times a frame would be the expensive
+   * part of an otherwise cheap pass. */
+  var MFD_SURFACES = {};
+
+  function mfdSurface(panel) {
+    var s = MFD_SURFACES[panel.id];
+    if (!s || s.canvas.width !== panel.w || s.canvas.height !== panel.h) {
+      var cv = (typeof document !== 'undefined' && document.createElement)
+        ? document.createElement('canvas') : null;
+      if (!cv) return null;                     // headless: the 2D path serves
+      cv.width = panel.w; cv.height = panel.h;
+      var c2 = cv.getContext ? cv.getContext('2d') : null;
+      if (!c2) return null;
+      s = MFD_SURFACES[panel.id] = { canvas: cv, ctx: c2 };
+    }
+    return s;
+  }
+
+  /* Can this panel go through the GPU as a real quad in the world? */
+  function mfdGpu(panel) {
+    return !!(panel && panel.world && global.GLWorld &&
+              global.GLWorld.available && global.GLWorld.panels);
+  }
+
+  /* Map a flat pixel space (0,0)-(w,h) onto the panel and return the context
+   * to draw the readout into. Returns false when the panel is degenerate or
+   * too small to be worth drawing, in which case the caller must not call
+   * mfdEnd.
+   *
+   * TWO PATHS, AND THE RETURN VALUE IS WHY THIS CHANGED SHAPE. It used to
+   * return a boolean and transform the caller's own context. That transform
+   * is an affine built from three of the quad's four corners, and an affine
+   * maps a rectangle to a PARALLELOGRAM — it cannot express perspective, and
+   * the fourth corner is precisely the information it throws away. The
+   * outline was clipped with all four, so the housing was a true perspective
+   * quad with a parallelogram of content sliding around inside it as the
+   * camera turned. Canvas 2D has no homography to fix that with.
+   *
+   * So when the GPU layer is up, the readout is drawn into an offscreen
+   * canvas at its own natural size and handed to gl.js as a textured quad in
+   * the world, where the perspective divide is what the hardware does
+   * anyway. When it is not, the old affine still runs and the old skew comes
+   * with it — which is worse than correct and much better than blank. */
   function mfdBegin(ctx, panel) {
+    if (mfdGpu(panel)) {
+      var s = mfdSurface(panel);
+      if (s) {
+        s.ctx.save();
+        s.ctx.setTransform(1, 0, 0, 1, 0, 0);
+        /* Cleared to opaque black rather than transparent: the console has a
+         * hole cut in it for this, and anything the readout does not paint
+         * would otherwise be open space seen through the screen. */
+        s.ctx.globalCompositeOperation = 'source-over';
+        s.ctx.globalAlpha = 1;
+        s.ctx.fillStyle = '#050a0e';
+        s.ctx.fillRect(0, 0, panel.w, panel.h);
+        panel.surface = s;
+        return s.ctx;
+      }
+    }
+
     var q = panel.quad;
     var area = Math.abs((q[1].x - q[0].x) * (q[3].y - q[0].y) -
                         (q[3].x - q[0].x) * (q[1].y - q[0].y));
@@ -3888,10 +4276,24 @@
     var c = (q[3].x - q[0].x) / panel.h, d = (q[3].y - q[0].y) / panel.h;
     if (Math.abs(a * d - b * c) < 1e-9) { ctx.restore(); return false; }
     ctx.transform(a, b, c, d, q[0].x, q[0].y);
-    return true;
+    panel.surface = null;
+    return ctx;
   }
 
-  function mfdEnd(ctx) { ctx.restore(); }
+  /* `panel` is optional so an older two-argument call still balances the
+   * save/restore; it is required to hand a panel to the GPU. */
+  function mfdEnd(ctx, panel) {
+    if (panel && panel.surface) {
+      panel.surface.ctx.restore();
+      if (global.GLWorld && global.GLWorld.queuePanel && panel.cam) {
+        global.GLWorld.queuePanel(panel.cam, panel.world,
+                                  panel.surface.canvas, 1);
+      }
+      panel.surface = null;
+      return;
+    }
+    ctx.restore();
+  }
 
   /* Everything drawn between these two is on the canopy glass: clipped to
    * the window, tinted, and additively blended so it glows through whatever
@@ -3988,6 +4390,8 @@
     M: M,
     CANOPY_Z: CANOPY_Z,
     APERTURE: APERTURE,
+    cockpitSpec: cockpitSpec, canopySegments: canopySegments,
+    hullFineness: hullFineness, COCKPIT_ARCH: COCKPIT_ARCH,
     MFD_SLOTS: MFD_SLOTS,
     MFD_MOUNTS: MFD_MOUNTS,
     FLOOR_WINDOW: FLOOR_WINDOW,

@@ -18,7 +18,8 @@
 
   var V = global.V, K = global.Kepler, Sim = global.Sim,
       Render = global.Render, Eco = global.Economy, Galaxy = global.Galaxy,
-      Combat = global.Combat, Missions = global.Missions, Arcs = global.Arcs;
+      Combat = global.Combat, Missions = global.Missions, Arcs = global.Arcs,
+      Gen = global.Gen;
 
   /* Wired by main.js at boot. Unpacked to bare names so the moved code is
    * byte-for-byte the code that was tested in its old home. */
@@ -487,9 +488,79 @@
     return out;
   }
 
+  /* ---- the traffic log --------------------------------------------------
+   * Thirty deep, newest last, scrolled with [ and ]. Every line the game has
+   * said to you since you started, which before this went to a three-second
+   * toast and then nowhere: a refusal you glanced away from was gone, and the
+   * only way to find out why you had been turned away was to try again.
+   *
+   * Repeats are collapsed with a count by logMessage(), so a port refusing
+   * you once a second is one line reading x14 rather than fourteen lines
+   * flushing everything you wanted to read. */
+  function drawMessageLog(ctx, x, y, w, h) {
+    var log = (G.msgLog || []);
+    ctx.save();
+    ctx.fillStyle = '#040a0e';
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = MFD_EDGE;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 2, y + 2, w - 4, h - 4);
+    ctx.fillStyle = '#12414f';
+    ctx.fillRect(x + 4, y + 4, w - 8, 19);
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    var scrolled = Math.max(0, G.msgScroll || 0);
+    ctx.fillText('TRAFFIC LOG' + (log.length ? '   ' + log.length + ' held' : ''), x + 10, y + 18);
+    if (scrolled > 0) {
+      ctx.fillStyle = '#ffd36b';
+      ctx.fillText('\u2191 ' + scrolled + ' newer', x + w - 110, y + 18);
+    }
+    ctx.restore();
+
+    if (!log.length) {
+      ctx.save();
+      ctx.font = '12px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('CHANNEL QUIET', x + 14, y + 46);
+      ctx.restore();
+      return;
+    }
+
+    var rowH = 15, rows = Math.floor((h - 34) / rowH);
+    /* The window ends `scrolled` entries back from the newest, so [ walks
+       into the past and ] walks back to now. Clamped so scrolling past the
+       oldest entry parks on it rather than emptying the pane. */
+    var end = Math.max(1, log.length - scrolled);
+    var start = Math.max(0, end - rows);
+    ctx.save();
+    ctx.font = '11px ui-monospace, monospace';
+    for (var i = start; i < end; i++) {
+      var e = log[i], yy = y + 34 + (i - start) * rowH;
+      var age = (G.t || 0) - (e.at || 0);
+      ctx.fillStyle = 'rgba(120,150,180,0.65)';
+      ctx.fillText(fmtLogAge(age), x + 10, yy);
+      /* The newest line stays bright; everything behind it dims, so at a
+         glance you can see how far back you are reading. */
+      ctx.fillStyle = (i === log.length - 1) ? '#d8f4ff' : 'rgba(190,215,235,0.8)';
+      var txt = e.text + (e.n > 1 ? '  \u00d7' + e.n : '');
+      ctx.fillText(clipText(txt, Math.max(10, Math.floor((w - 96) / 6.6))), x + 66, yy);
+    }
+    ctx.restore();
+  }
+
+  /* Relative, not absolute: "4m ago" is what you want from a log you are
+     scrolling to work out what just happened. */
+  function fmtLogAge(s) {
+    if (!isFinite(s) || s < 0) s = 0;
+    if (s < 60) return Math.floor(s) + 's';
+    if (s < 3600) return Math.floor(s / 60) + 'm';
+    if (s < 86400) return Math.floor(s / 3600) + 'h';
+    return Math.floor(s / 86400) + 'd';
+  }
+
   function drawCommsScreen(ctx, w, bottom) {
     var top = modeFrame(ctx, w, bottom, 'COMMS',
-                        '↑↓ channel   ·   Enter hail   ·   Y pay fines   ·   * = police');
+                        '↑↓ channel   ·   Enter hail   ·   Y pay fines   ·   [ ] scroll log   ·   * = police');
     var pad = 14;
     var listW = Math.min(460, w * 0.4);
     var colH = bottom - top - pad * 2;
@@ -567,15 +638,21 @@
     }
     ctx.restore();
 
-    /* The channel itself. */
+    /* The channel itself, and under it the LOG. The channel pane gives up its
+       bottom 44% rather than the log going somewhere else on the HUD: what is
+       said to you and who said it belong on the same screen, and the comms
+       screen already owns the scrolling idiom. */
     var rx = pad * 2 + listW, rw = w - rx - pad;
+    var logH = Math.max(120, Math.round(colH * 0.44));
+    var chanH = colH - logH - 10;
+    drawMessageLog(ctx, rx, top + pad + chanH + 10, rw, logH);
     var sel = contacts[G.commsSel];
     ctx.save();
     ctx.fillStyle = '#040a0e';
-    ctx.fillRect(rx, top + pad, rw, colH);
+    ctx.fillRect(rx, top + pad, rw, chanH);
     ctx.strokeStyle = MFD_EDGE;
     ctx.lineWidth = 2;
-    ctx.strokeRect(rx + 2, top + pad + 2, rw - 4, colH - 4);
+    ctx.strokeRect(rx + 2, top + pad + 2, rw - 4, chanH - 4);
     ctx.fillStyle = '#12414f';
     ctx.fillRect(rx + 4, top + pad + 4, rw - 8, 19);
     ctx.font = 'bold 12px ui-monospace, monospace';
@@ -615,7 +692,7 @@
     ctx.font = '10px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(160,185,220,0.55)';
     ctx.fillText('Traffic control answers immediately; ships answer when they feel like it.',
-                 rx + 16, top + pad + colH - 18);
+                 rx + 16, top + pad + chanH - 14);
     ctx.restore();
   }
 
@@ -1081,6 +1158,28 @@
           }, false, { hot: true });
     }
 
+    /* "Let the player corrupt a port" as its own action, not a side effect
+     * of paying off a witness or a customs officer (those two nudge it up
+     * on their own — see combat.js's corruption-lever section). Hidden
+     * entirely once bribery here is maxed out (CORRUPTION_SHIFT_CAP), the
+     * same "not stocked at all" treatment the grey market gives an item
+     * below its threshold, rather than a permanently-disabled row. */
+    if (global.Combat && G.sys &&
+        Combat.decayedShift(G, (G.here || {}).id) < Combat.CORRUPTION_SHIFT_CAP - 0.5) {
+      var briberyNow = Combat.systemCorruption(G, G.sys);
+      var briberyAsk = Combat.bribeCost(G, G.sys, port);
+      var briberyShort = s.credits < briberyAsk;
+      row('BRIBE THE HARBOURMASTER — ' + briberyAsk + ' cr',
+          'corruption ' + briberyNow + ' → ' +
+          Math.min(100, briberyNow + Combat.CORRUPTION_BRIBE_AMOUNT) + ' here' +
+          (briberyShort ? '  ·  short ' + Math.round(briberyAsk - s.credits) + ' cr' : ''),
+          function () {
+            var r = Combat.bribePort(G, G.sys, port);
+            say(r.ok ? 'Paid ' + r.paid + ' cr — the right people here now owe you a favour'
+                     : 'No: ' + r.why, 5);
+          }, briberyShort);
+    }
+
     if (G.yardTab === 'fit') drawYardFit(ctx, x, w, row, s);
     else if (G.yardTab === 'buy') drawYardBuy(ctx, x, w, row, s, port);
     else drawYardHulls(ctx, x, w, row, s);
@@ -1420,6 +1519,33 @@
    * Left: what you have signed and who thinks what of you. Right: the local
    * board, which only exists while you are docked — a mission board is a
    * corkboard in a station corridor, not a radio service. */
+  /* Where a signed contract is actually going. Named from the live world
+   * where it can be — a port knows the body it sits on — and from the
+   * contract's own carried `toName` otherwise, so a destination in a system
+   * you are not standing in still reads.
+   *
+   * The two shapes are genuinely different jobs and the line says so: a
+   * haul or a disposal names one berth, and a courier names a system where
+   * any port at all will do. */
+  function destinationLine(m) {
+    if (m.toPortId) {
+      var p = (G.sys && G.sys.byId) ? G.sys.byId[m.toPortId] : null;
+      if (p) {
+        return '→ ' + p.name +
+               (p.parentBody ? ', ' + p.parentBody.name : '') +
+               (G.here && G.here.name ? ', ' + G.here.name + ' system' : '');
+      }
+      return '→ ' + m.toName;
+    }
+    if (m.toStarId) {
+      var arrived = !!(G.here && G.here.id === m.toStarId);
+      return '→ ' + m.toName +
+             (arrived ? ' — you are here; dock anywhere to hand it over'
+                      : ' — any port there will do');
+    }
+    return '→ ' + (m.toName || 'destination not recorded');
+  }
+
   function drawMissionScreen(ctx, w, bottom) {
     var docked = G.ship.docked ? G.sys.byId[G.ship.docked] : null;
     var top = modeFrame(ctx, w, bottom, 'MISSION STATUS',
@@ -1480,18 +1606,57 @@
       var leftT = m.deadline - G.t;
       var held = G.ship.cargo[m.cid] || 0;
       var short = held + 1e-9 < m.tonnes;
+      var headCols = Math.max(20, Math.floor((leftW - 120) / 7));
+      var subCols = Math.max(24, Math.floor((leftW - 40) / 5.6));
       ctx.save();
       ctx.font = '12px ui-monospace, monospace';
       ctx.fillStyle = m.campaign ? '#ffe07a' : MFD_INK;
-      ctx.fillText((m.campaign ? '★ ' : '') + clipText(m.text, 44), pad + 14, y);
+      ctx.fillText((m.campaign ? '★ ' : '') + clipText(m.text, headCols), pad + 14, y);
       ctx.font = '10px ui-monospace, monospace';
       ctx.fillStyle = leftT < 86400 ? '#ffb86b' : MFD_DIM;
       ctx.fillText('pays ' + fmtCredits(m.pay) + '   ·   due in ' + fmtTime(Math.max(0, leftT)) +
                    (short ? '   ·   FREIGHT MISSING (' + held.toFixed(0) + '/' + m.tonnes + 't)' : ''),
                    pad + 14, y + 14);
-      if (short) { ctx.fillStyle = '#ff8a76'; }
+      /* The destination, spelled out. It has always been on the contract —
+       * accept() copies toPortId/toStarId/toName — and until now the only
+       * way to see it was to hope the generated headline mentioned it. */
+      ctx.fillStyle = '#7fd6c0';
+      ctx.fillText(clipText(destinationLine(m), subCols), pad + 14, y + 27);
       ctx.restore();
-      y += 34;
+
+      /* DETAILS, on the contract this time. `desc` is deliberately CARRIED
+       * onto a signed mission rather than regenerated, and the board has
+       * had the button for it since the text discipline landed; the one
+       * place it was designed to be read did not.
+       *
+       * Sharing `G.missionDesc` with the board is safe rather than lazy: an
+       * accepted mission keeps its offer's id, and `alreadyHave` removes
+       * that id from the board, so the two lists can never both hold it. */
+      var openC = G.missionDesc === m.id;
+      if (m.desc) {
+        btn(ctx, pad + leftW - 96, y - 13, 80, 26, openC ? 'HIDE' : 'DETAILS',
+            (function (id) {
+              return function () { G.missionDesc = (G.missionDesc === id) ? null : id; };
+            })(m.id), { font: 9 });
+      }
+      y += 46;
+
+      if (openC && m.desc) {
+        var dlines = wrapText(m.desc, Math.max(20, Math.floor((leftW - 44) / 5.9)));
+        ctx.save();
+        ctx.fillStyle = 'rgba(8,20,28,0.9)';
+        ctx.fillRect(pad + 14, y - 12, leftW - 30, dlines.length * 13 + 12);
+        ctx.strokeStyle = 'rgba(74,151,176,0.35)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(pad + 14.5, y - 11.5, leftW - 31, dlines.length * 13 + 11);
+        ctx.font = '10px ui-monospace, monospace';
+        ctx.fillStyle = '#9fc4d4';
+        for (var dl = 0; dl < dlines.length; dl++) {
+          ctx.fillText(dlines[dl], pad + 22, y + 2 + dl * 13);
+        }
+        ctx.restore();
+        y += dlines.length * 13 + 16;
+      }
       if (y > top + pad + colH * 0.62) break;
     }
 
@@ -1531,6 +1696,12 @@
     ctx.fillRect(rx, top + pad, rw, colH);
     ctx.strokeStyle = MFD_EDGE;
     ctx.lineWidth = 2;
+    /* colH, not chanH. `chanH` is the COMMS panel's channel height, declared
+     * in a different function entirely — it arrived here with a copied
+     * border and threw a ReferenceError, which main.js catches and paints as
+     * "error:" over the whole frame. So the MISSIONS screen did not render at
+     * all, in any view. The border belongs around the box filled two lines
+     * above, and that box is colH tall. */
     ctx.strokeRect(rx + 2, top + pad + 2, rw - 4, colH - 4);
     ctx.fillStyle = '#12414f';
     ctx.fillRect(rx + 4, top + pad + 4, rw - 8, 19);
@@ -2066,6 +2237,28 @@
   }
 
 
+  /* A REAL spectrograph pointed at a star during a transit reads planet
+   * count and atmospheric composition off the light directly — that is
+   * genuinely remote-observable, unlike a port list or a government, which
+   * are not. `Gen.generateSystem` is pure and deterministic, so calling it
+   * early for a system nobody has flown to yet produces exactly the same
+   * bodies a visit would — this is not "cheating" a peek at hidden data,
+   * it is the same data a visit was always going to reveal, read sooner.
+   *
+   * Cached in the SAME `G.systemCache` a visit uses (`systemFor` in
+   * main.js), because the two are the same computation; `G.visited` alone
+   * is what decides how much of it a caller is allowed to show. Calling
+   * this for a star never marks it visited. */
+  function previewSystem(star) {
+    G.systemCache = G.systemCache || {};
+    if (!G.systemCache[star.id]) {
+      var fac = (G.galaxy && G.galaxy.factionById) ? G.galaxy.factionById[star.factionId] : null;
+      var opts = fac ? { faction: fac, allFactions: G.galaxy.factions } : undefined;
+      G.systemCache[star.id] = Gen.generateSystem(star.seed, opts);
+    }
+    return G.systemCache[star.id];
+  }
+
   /* ---- the star map -----------------------------------------------------
    * A top-down plot of the cluster with height shown as a stem, which is
    * the same idiom the radar uses for the same reason: a flat scatter of a
@@ -2303,7 +2496,7 @@
         ctx.fillStyle = '#7fd6c0';
         ctx.fillText('SURVEYED', dx, sy);
         ctx.restore();
-        rows(ctx, dx, sy + 20, [
+        var infoRows = [
           ['worlds', known.bodies.filter(function (b) { return b.kind === 'planet'; }).length +
             ' planets, ' + known.bodies.filter(function (b) { return b.kind === 'moon'; }).length + ' moons'],
           ['ports', String(known.ports.length)],
@@ -2311,13 +2504,120 @@
           ['habitable', String(known.bodies.filter(function (b) { return b.habitable; }).length)],
           ['government', known.government ? known.government.name : '—'],
           ['crime', known.crimeScore !== undefined ? known.crimeScore + ' / 100 permissive' : '—']
-        ], '#7e93b3', '#cfe0ff', dw);
+        ];
+        /* The two-axis split (violence vs. corruption) exists so a player
+         * can tell "nobody here will stop you" from "everybody here can be
+         * bought" apart — and until now nothing showed it, only their
+         * combined permissivity above. Corruption reads EFFECTIVE, base
+         * plus anything bribed onto this specific star (see
+         * Combat.systemCorruption), and says so when the two differ. */
+        if (known.violence !== undefined) {
+          infoRows.push(['violence', known.violence + ' / 100 (' +
+            Combat.violenceLabel(known.violence) + ')']);
+        }
+        if (known.corruption !== undefined && global.Combat) {
+          var effCorrupt = Combat.systemCorruption(G, known, plan.to.id);
+          var corruptTxt = effCorrupt + ' / 100 (' + Combat.corruptionLabel(effCorrupt) + ')';
+          if (effCorrupt !== known.corruption) {
+            corruptTxt += '  ·  baseline ' + known.corruption + ', you’ve bribed the rest';
+          }
+          infoRows.push(['corruption', corruptTxt]);
+        }
+        if (known.pirateHeld) {
+          infoRows.push(['territory', 'SYNDICATE HELD — waste banned on arrival']);
+        }
+        rows(ctx, dx, sy + 20, infoRows, '#7e93b3', '#cfe0ff', dw);
+
+        /* A fact about the SYSTEM as a whole, not any one world in it — see
+         * Gen.systemNote. Keyed off what actually got generated here (how
+         * many worlds, how many are giants, how many are habitable, how
+         * much port infrastructure exists), not the violence/corruption
+         * axis the rows above already cover. */
+        if (known.systemNote) {
+          var noteY = sy + 20 + infoRows.length * 15 + 14;
+          ctx.save();
+          ctx.font = '10px ui-monospace, monospace';
+          ctx.fillStyle = 'rgba(200,220,245,0.7)';
+          var noteCols = Math.max(20, Math.floor(dw / 5.9));
+          wrapText(known.systemNote, noteCols).forEach(function (ln) {
+            ctx.fillText(ln, dx, noteY);
+            noteY += 13;
+          });
+          ctx.restore();
+        }
       } else {
         ctx.fillStyle = '#7e93b3';
         ctx.fillText('UNSURVEYED', dx, sy);
-        ctx.fillStyle = 'rgba(160,185,220,0.65)';
-        ctx.fillText('spectroscopy gives the star and nothing else.', dx, sy + 20);
-        ctx.fillText('what orbits it is unknown until somebody goes.', dx, sy + 36);
+        ctx.restore();
+
+        /* Nothing on the ground, but plenty in the light: a transit gives
+         * planet count for free, and the star's own spectrum during that
+         * transit gives each planet's atmosphere. What a spectrograph
+         * genuinely cannot tell you — who lives there, who runs it, how
+         * dangerous the place is — is exactly what stays behind
+         * G.visited above. */
+        var preview = Gen ? previewSystem(plan.to) : null;
+        var pPlanets = preview ? preview.bodies.filter(function (b) {
+          return b.kind === 'planet';
+        }) : [];
+
+        ctx.save();
+        ctx.font = '10px ui-monospace, monospace';
+        ctx.fillStyle = 'rgba(160,185,220,0.6)';
+        ctx.fillText('remote spectroscopy — composition only, nothing on the ground', dx, sy + 16);
+        ctx.restore();
+
+        var noteBaseY = sy + 36;
+        /* Word around the dock, not a sensor return — same footing as the
+         * per-world cultureNote below: something you'd have heard about the
+         * PLACE before ever going, not a fact restated in prose. Unlike
+         * that note, this one is keyed off the generated bodies (world
+         * count, giants, habitable count) rather than the government axis,
+         * so it can honestly be said before a visit reveals who runs it. */
+        if (preview && preview.systemNote) {
+          ctx.save();
+          ctx.font = '10px ui-monospace, monospace';
+          ctx.fillStyle = 'rgba(200,220,245,0.7)';
+          var sysCols = Math.max(20, Math.floor(dw / 5.9));
+          wrapText(preview.systemNote, sysCols).forEach(function (ln) {
+            ctx.fillText(ln, dx, noteBaseY);
+            noteBaseY += 13;
+          });
+          ctx.restore();
+          noteBaseY += 6;
+        }
+
+        var scanRows = [
+          ['worlds', pPlanets.length + ' planet' + (pPlanets.length === 1 ? '' : 's') +
+            ' in transit']
+        ];
+        pPlanets.forEach(function (b, idx) {
+          scanRows.push([(idx + 1) + '. ' + b.typeName,
+            (b.composition || '—') + (b.habitable ? '  ·  in the HZ' : '')]);
+        });
+        rows(ctx, dx, noteBaseY, scanRows, '#7e93b3', '#cfe0ff', dw);
+
+        /* A travel-guide's idea of anywhere worth living — see
+         * Gen.buildFlavor. Capped at two worlds so a system with several
+         * habitable candidates cannot run this panel off the bottom of
+         * the screen. */
+        var habitables = pPlanets.filter(function (b) { return b.habitable; }).slice(0, 2);
+        var fy = noteBaseY + scanRows.length * 15 + 16;
+        var cols = Math.max(20, Math.floor(dw / 5.9));
+        ctx.save();
+        ctx.font = '10px ui-monospace, monospace';
+        habitables.forEach(function (b) {
+          ctx.fillStyle = '#7fd6c0';
+          ctx.fillText(b.name.toUpperCase(), dx, fy);
+          fy += 14;
+          ctx.fillStyle = 'rgba(200,220,245,0.75)';
+          var lines = wrapText(b.lifeNote || '', cols).concat(wrapText(b.cultureNote || '', cols));
+          for (var ln = 0; ln < lines.length; ln++) {
+            ctx.fillText(lines[ln], dx, fy);
+            fy += 13;
+          }
+          fy += 6;
+        });
         ctx.restore();
       }
     }

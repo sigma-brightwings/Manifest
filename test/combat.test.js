@@ -258,6 +258,17 @@ section('--- slots, power and mass ---');
   Rk.ship.credits = 500000;
   Combat.buyHull(Rk, 'kestrel');
   Combat.sellFitted(Rk, 'hardpoint0');
+  /* The cargo scoop comes off too, and that is the point rather than a
+   * workaround. A Class 3 beam (9 t), a Mk II reactor (9 t) and a shield
+   * (4 t) come to EXACTLY the Kestrel's 22 t budget, so the one tonne of
+   * scoop every ship now leaves the yard with is the difference between
+   * this build existing and not. A glass cannon does not stop to pick
+   * things up, and the budget says so without anyone writing a rule. */
+  var scoopSlot = Combat.fittedList(Rk.ship).filter(function (f) {
+    return f.item.kind === 'scoop';
+  })[0];
+  if (scoopSlot) Combat.sellFitted(Rk, scoopSlot.key);
+  check('the glass cannon has no room for a scoop', !Combat.hasScoop(Rk.ship));
   Combat.fitItem(Rk.ship, 'mubeam');
   check('a bare Kestrel cannot add a shield to a Class 3 beam',
         !Combat.canFit(Rk.ship, 'shield').ok);
@@ -321,7 +332,14 @@ section('--- migrating a career that predates slots ---');
   check('the turret lands in a utility slot',
         s.fit.utility0 === 'turret' && s.turret === 'turret');
   check('the shield survives the move', s.shield === 'shield');
-  check('nothing was silently confiscated', Combat.fittedList(s).length === 3);
+  /* Four, not three: the gun, turret and shield the legacy fields named,
+   * plus the cargo scoop migrateFit issues to any ship that has never had a
+   * fit map. Catching cargo used to be a property of having a hold and is
+   * now a fitting, so a career that predates slots is handed the thing it
+   * has always been able to do rather than quietly losing it. */
+  check('nothing was silently confiscated, and the scoop was issued',
+        Combat.fittedList(s).length === 4 &&
+        Combat.hasScoop(s), JSON.stringify(s.fit));
 
   // Idempotent: migrating an already-migrated ship changes nothing.
   var before = JSON.stringify(s.fit);
@@ -736,11 +754,21 @@ section('--- the witness doctrine ---');
   check('a surviving victim gets its call out', G2.wanted.talkfac > 0,
         String(G2.wanted.talkfac));
 
-  // Near a station: reported on the spot, no clock involved.
+  // Near a station: seen at once, filed eight seconds later.
   var G3 = makeG();          // in orbit, stations everywhere
   var v3 = fakeVictim(G3, { range: 5, faction: 'seenfac' });
   Combat.crime(G3.sys, G3, G3.t, 'assault', v3, HOOKS);
-  check('a witnessed crime is reported immediately', G3.wanted.seenfac > 0);
+  /* NOT immediately any more, and the change is the point rather than a
+   * regression: a third-party witness has to actually get on the radio, and
+   * the eight seconds that takes ARE the window in which you can buy their
+   * silence. A test asserting instant reporting was asserting that the hush
+   * mechanic could not exist. */
+  check('a witnessed crime is pending, not yet filed',
+        !!G3.pendingReport && !(G3.wanted.seenfac > 0),
+        JSON.stringify(G3.pendingReport || null));
+  Combat.update(G3.sys, G3, G3.t + 9, 1, HOOKS);
+  check('and lands once the witness gets on the radio', G3.wanted.seenfac > 0,
+        String(G3.wanted.seenfac));
 
   // Pirates are fair game, always.
   var G4 = makeG();
@@ -1301,9 +1329,39 @@ section('--- taking hits ---');
         G.ship.hullId === 'talon' && G.ship.gun === 'phpulse' &&
         G.ship.hullHp === Combat.HULLS.talon.hullMax &&
         Object.keys(G.ship.cargo).length === 0);
-  check('and the slots came back empty but for that gun',
-        Object.keys(G.ship.fit).length === 1 &&
-        G.ship.fit.hardpoint0 === 'phpulse', JSON.stringify(G.ship.fit));
+  /* A RESPAWNED SHIP IS A NEW SHIP, and the cargo scoop is the part of that
+   * which had gone missing. It is issued in migrateFit, which only runs its
+   * issuing branch when `fit` is EMPTY — and stripForRespawn wrote a
+   * non-empty map, so the early return fired and no scoop was ever handed
+   * out again.
+   *
+   * The symptom is not "no scoop", it is that PIRACY STOPS WORKING. Rob a
+   * freighter and the canisters it dumps cannot be picked up; the refusal
+   * speaks once every twelve seconds and is easy to miss entirely. You would
+   * conclude the robbery mechanic was broken, not that you were missing a
+   * 1,400 cr fitting you had never been told you lost. */
+  check('a respawned ship still has its cargo scoop', Combat.hasScoop(G.ship));
+  check('and the starter gun', G.ship.fit.hardpoint0 === 'phpulse');
+  check('and nothing it had paid for', !G.ship.shield && !G.ship.turret,
+        JSON.stringify(G.ship.fit));
+})();
+
+section('--- and the two ways to get a ship agree ---');
+(function () {
+  /* The starting fit is one list now. These two used to be assembled by
+   * separate code with no reason to agree, which is how the scoop came to be
+   * issued to new pilots and withheld from every pilot who had ever died. */
+  var fresh = makeG().ship;
+  var reborn = makeG().ship;
+  reborn.credits = 60000;
+  Combat.fitItem(reborn, 'shield');
+  Combat.stripForRespawn(reborn);
+  var a = Object.keys(fresh.fit).sort().map(function (k) { return k + '=' + fresh.fit[k]; });
+  var b = Object.keys(reborn.fit).sort().map(function (k) { return k + '=' + reborn.fit[k]; });
+  check('a new ship and a respawned one carry the same thing',
+        a.join(',') === b.join(','), a.join(',') + '   vs   ' + b.join(','));
+  check('and both of them can pick cargo up',
+        Combat.hasScoop(fresh) && Combat.hasScoop(reborn));
 })();
 
 section('--- contracts ---');
@@ -1446,16 +1504,57 @@ section('--- contraband and the scan ---');
   var cop2 = fakeVictim(G2, { kind: 'police', cls: 'police', faction: 'lawfac' });
   G2.ship.cargo = { grain: 5, narcotics: 10 };
   Sim.refreshShip(G2.ship);
-  Math.random = function () { return 0.01; };
+  /* TWO ROLLS NOW, NOT ONE, and pinning Math.random to a constant stopped
+   * being enough the moment the bribe branch landed. The old test forced
+   * 0.01 to guarantee the search — and that same 0.01 then sailed under the
+   * bribe chance, so the inspector took a payoff, nothing was seized, and
+   * the result carried no `fine` at all. Four checks failed and the code was
+   * innocent.
+   *
+   * So: feed a SEQUENCE. Low first (the search happens), high second (this
+   * inspector is not for sale). A test that pins a shared source of
+   * randomness has to know how many times the code under it draws. */
+  function rolls(seq) {
+    var n = 0;
+    return function () { return seq[Math.min(n++, seq.length - 1)]; };
+  }
+  Math.random = rolls([0.01, 0.99]);
   var r3 = Combat.resolveScan(G2, cop2, HOOKS);
   Math.random = realRandom;
   check('a dirty hold is caught', r3.searched === true && r3.contraband === true);
+  check('and this one would not take a bribe', !r3.bribed, JSON.stringify(r3));
   check('the contraband is seized, the legal freight is not',
         !(G2.ship.cargo.narcotics > 0) && G2.ship.cargo.grain === 5);
-  check('the fine matches the tonnage on the books',
-        r3.fine === Math.round(10 * Combat.SMUGGLING_FINE_PER_TONNE) &&
+  check('the fine matches the tonnage and the severity',
+        r3.fine === Math.round(Combat.fineFor(10, 1)) &&
         G2.wanted.lawfac === r3.fine, String(r3.fine));
   check('and the faction likes you less for it', Missions.standing(G2, 'lawfac') < 20);
+
+  /* The ladder itself: vice, then war, then naval materiel. Asserted as an
+   * ORDER rather than three magic numbers, so retuning the multipliers is a
+   * one-line change and this still guards the thing that matters. */
+  check('arms are a worse crime than narcotics, and naval fuel worse again',
+        Combat.fineFor(10, 1) < Combat.fineFor(10, 2) &&
+        Combat.fineFor(10, 2) < Combat.fineFor(10, 3),
+        [1, 2, 3].map(function (s) { return Combat.fineFor(10, s); }).join(' < '));
+  check('and ten tonnes of naval fuel still costs less than dumping waste in a hold',
+        Combat.fineFor(10, 3) < Combat.WASTE_FINE,
+        Combat.fineFor(10, 3) + ' vs ' + Combat.WASTE_FINE);
+
+  /* Military drive fuel is the case that forces "contraband depends on who
+   * is asking": a legal commodity that is an offence only in the hold of
+   * somebody the navy has not licensed. */
+  var Gm = makeG();
+  Gm.standing = { lawfac: 0 };
+  check('naval fuel is contraband to a pilot with no standing',
+        Combat.contrabandSeverity(Gm, 'milfuel', 'lawfac') === 3);
+  Gm.standing.lawfac = Combat.MILFUEL_LICENCE_STANDING;
+  check('and perfectly legal to one the navy has cleared',
+        Combat.contrabandSeverity(Gm, 'milfuel', 'lawfac') === 0);
+  check('narcotics are illegal to everybody, standing or not',
+        Combat.contrabandSeverity(Gm, 'narcotics', 'lawfac') === 1 &&
+        Combat.contrabandSeverity(Gm, 'arms', 'lawfac') === 2);
+  check('and grain never is', Combat.contrabandSeverity(Gm, 'grain', 'lawfac') === 0);
 
   // The search floor: even a lawless system searches you sometimes.
   var G3 = makeG();
@@ -1754,6 +1853,152 @@ section('--- docking clearance ---');
   check('cleared before the jump', Combat.isCleared(G6, p6));
   Combat.clearAllClearances(G6);
   check('and not after it', !Combat.isCleared(G6, p6));
+})();
+
+/* ---- the control cabinet, and breaking into it ------------------------- */
+console.log('\n--- the control cabinet ---');
+(function () {
+  var G = makeG();
+  var port = (G.sys.ports || []).filter(function (p) { return p.surface; })[0];
+  check('a ground port exists to break into', !!port);
+  if (!port) return;
+  if (!port.faction) port.faction = 'testfac';
+
+  var c = Gen.controlFor(port, G.sys);
+  check('it has a control cabinet', !!c && !!c.security);
+
+  /* DERIVED, NOT ROLLED. The difficulty is part of the world: it must be the
+   * same lock when you come back to it, or the player cannot learn that a
+   * core world is hard and a backwater is not. Read twice through a fresh
+   * generation of the same system, not twice off the same object, since a
+   * memo would make the second read trivially equal. */
+  var sysAgain = Gen.generateSystem('kawartha');   // the seed makeG() uses
+  var again = (sysAgain.ports || []).filter(function (p) {
+    return p.id === port.id;
+  })[0];
+  check('the same port regenerates', !!again, again && again.name);
+  if (again) {
+    var c2 = Gen.controlFor(again, sysAgain);
+    check('and its lock is the same lock — difficulty is derived',
+          Math.abs(c2.security.hackDifficulty - c.security.hackDifficulty) < 1e-12,
+          c.security.hackDifficulty.toFixed(6) + ' vs ' +
+          c2.security.hackDifficulty.toFixed(6));
+    check('and it stands in the same place',
+          c2.at.x === c.at.x && c2.at.y === c.at.y);
+  }
+  check('the difficulty is never certain at either end',
+        c.security.hackDifficulty >= 0.15 && c.security.hackDifficulty <= 0.95,
+        String(c.security.hackDifficulty));
+
+  /* An orbital clamp has no rock to stand a cabinet on. Null, so the caller
+   * can say why rather than silently offering an option that does nothing. */
+  var orb = (G.sys.ports || []).filter(function (p) { return !p.surface; })[0];
+  if (orb) {
+    check('an orbital dock has no cabinet', Gen.controlFor(orb, G.sys) === null);
+    var rOrb = Combat.hackControl(makeG(), orb, HOOKS, 0);
+    check('and refuses with a reason rather than throwing',
+          rOrb.ok === false && rOrb.reason === 'nothing', rOrb.reason);
+  }
+
+  /* THE REFUSALS, each with its own reason. */
+  var Gc = makeG();
+  Combat.requestClearance(Gc, port, HOOKS);
+  var rCleared = Combat.hackControl(Gc, port, HOOKS, 0);
+  check('breaking into a door already open for you is refused',
+        rCleared.ok === false && rCleared.reason === 'cleared', rCleared.reason);
+
+  var Gf = makeG();
+  Gf.ship.pos = { x: 9e9, y: 0, z: 0 };          // nowhere near it
+  var rFar = Combat.hackControl(Gf, port, HOOKS, 0);
+  check('out of range is refused, and says so',
+        rFar.ok === false && rFar.reason === 'range', rFar.reason);
+
+  /* THE BREACH ITSELF opens the doors — the same doors a clearance opens,
+   * which is the whole integration. Forced rather than rolled: the roll is
+   * deliberately unrepeatable, so a test that rolled would be flaky. */
+  var Gb = makeG();
+  check('the doors start shut', !Combat.doorsOpen(Gb, port));
+  Gb.ship.breached = {};
+  Gb.ship.breached[port.id] = true;
+  check('a breach opens them', Combat.doorsOpen(Gb, port));
+  check('and reads as breached here', Combat.breachedHere(Gb, port));
+
+  /* ...but it is NOT a launch clearance. The model says the two are
+   * separate and both are spent where they are used; a breach that let you
+   * out as well would make the way out a non-event. */
+  check('a breach is not a launch clearance',
+        !Combat.launchCleared(Gb, port));
+  /* Nor is it docking clearance: arriving on a forced door is still
+   * arriving unannounced, and should still be booked as such. */
+  check('nor is it docking clearance', !Combat.isCleared(Gb, port));
+
+  /* Local to the system, like every other permission. */
+  Combat.clearAllClearances(Gb);
+  check('and it does not survive the jump', !Combat.breachedHere(Gb, port) &&
+        !Combat.doorsOpen(Gb, port));
+
+  /* A FAILED ATTEMPT IS LOUD. Forced by making it impossible to succeed:
+   * difficulty 1e9 against any rating drives the odds to the 0.02 floor,
+   * so this is not certain — run it until it fails, which it will at once.
+   * The assertion is about what a failure DOES, not that one happened. */
+  /* STAND BESIDE THE CABINET. makeG() parks the ship in a circular orbit,
+   * which is nowhere near a cabinet bolted to a planet — the first version
+   * of these two tests got 'range' two hundred times and reported that a
+   * hopeless lock never fails. Placed through Sim.controlState so the test
+   * asks the game where the thing is rather than guessing. */
+  /* `at` is not optional. The cabinet is bolted to a rotating planet, so
+   * "beside it" is only true at one instant — placing the ship at t=0 and
+   * then hacking at t=100 put it back out of range, which is the same trap
+   * the arrival-rail test fell into comparing two poses eighteen seconds
+   * apart. Position and attempt must share a clock. */
+  function standAtCabinet(g, p, at) {
+    var cs = Sim.controlState(p, g.sys, at);
+    if (cs) g.ship.pos = { x: cs.pos.x, y: cs.pos.y, z: cs.pos.z };
+    return !!cs;
+  }
+
+  var Ga = makeG();
+  var pa = (Ga.sys.ports || []).filter(function (p) { return p.surface; })[0];
+  pa.faction = 'testfac';
+  check('the ship can be put beside the cabinet', standAtCabinet(Ga, pa, 0));
+  check('and is then in range', Sim.controlInRange(Ga.ship, pa, Ga.sys, 0));
+  Gen.controlFor(pa, Ga.sys).security.hackDifficulty = 1e9;
+  var owed0 = (Ga.wanted || {}).testfac || 0;
+  var tries = 0, failed = null;
+  while (tries++ < 200) {
+    Ga.ship.hackAfter = 0;                       // ignore the panel cooldown
+    var r = Combat.hackControl(Ga, pa, HOOKS, 0);
+    if (!r.ok && r.reason === 'failed') { failed = r; break; }
+  }
+  check('a hopeless lock does fail', !!failed, tries + ' tries');
+  if (failed) {
+    check('and it trips the alarm', failed.alarm === true);
+    check('booking a bounty with the cabinet OWNER',
+          ((Ga.wanted || {}).testfac || 0) > owed0,
+          owed0 + ' -> ' + ((Ga.wanted || {}).testfac || 0));
+    check('which the same port then refuses to open for',
+          Combat.dockRefused(Ga, pa) || !Combat.doorsOpen(Ga, pa));
+  }
+
+  /* The panel locks you out for a while, so this is not a button you hold. */
+  var Gk = makeG();
+  var pk = (Gk.sys.ports || []).filter(function (p) { return p.surface; })[0];
+  standAtCabinet(Gk, pk, 100);          // same clock as the attempt below
+  Gk.ship.hackAfter = 500;
+  var rCool = Combat.hackControl(Gk, pk, HOOKS, 100);
+  check('a locked panel refuses until it reopens',
+        rCool.ok === false && rCool.reason === 'cooldown', rCool.reason);
+  /* And out of range beats the cooldown, because it is the more actionable
+   * of the two things wrong: "go there" is advice, "wait" is not, when you
+   * would have had to go there anyway. */
+  Gk.ship.pos = { x: 9e9, y: 0, z: 0 };
+  check('but out of range is the answer when both are true',
+        Combat.hackControl(Gk, pk, HOOKS, 100).reason === 'range');
+
+  /* The bare rating, and the honest fact that no module beats it yet. */
+  check('a bare attempt is worth the documented figure',
+        Combat.breakerRating(makeG().ship) === Combat.HACK_SKILL,
+        String(Combat.breakerRating(makeG().ship)));
 })();
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

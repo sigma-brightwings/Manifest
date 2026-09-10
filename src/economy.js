@@ -76,13 +76,42 @@
     { id: 'genetech', name: 'Gene therapies',   tier: 4, base: 3600, cat: 'luxury' },
     { id: 'luxuries', name: 'Luxury goods',     tier: 4, base: 2450, cat: 'luxury' },
 
+    /* Wine. Agricultural in origin and luxury in trade, which is why it sits
+     * at tier 2 on a tier-0 input: the value is in the growing and the keeping,
+     * not in the grapes. Unlike every other good in this table it is NOT made
+     * from planet type or development — a rich industrial world cannot decide
+     * to start producing it — so it is the one cargo whose supply is a place
+     * rather than a capability. See vineyardAt(). */
+    { id: 'wine',     name: 'Wine',             tier: 2, base: 340,  cat: 'luxury' },
+
     /* The interesting one. Negative base value: a built-up world will pay
      * to have this taken away, and somewhere with nothing to lose will take
      * it for a smaller fee. The margin between those two numbers is a real
      * trade, and unlike every other cargo it runs from rich worlds to poor
      * ones — which is exactly why it is worth having in the game. */
     { id: 'waste',    name: 'Radioactive waste',tier: 1, base: -310, cat: 'special',
-      waste: true }
+      waste: true },
+
+    /* The other end of that trade, and the reason the waste run stops being
+     * a chore nobody wants and becomes a supply chain.
+     *
+     * Reprocessing plants have always been where waste GOES. A plant sitting
+     * close enough to a naval yard to be licensed for it breeds the stuff
+     * back up into slugs a military slipspace drive will burn — the drive
+     * everyone calls a Chernobyl. So the same cargo that a developed world
+     * pays 310 cr/t to be rid of comes out the far end of the same building
+     * at 1,250, and the difference is a licence and a navy next door.
+     *
+     * Tier 3 because it is a manufactured product of a real industry, not a
+     * raw fissile: `fissile` at 980 is what you dig up, this is what a
+     * licensed plant makes out of what everyone else threw away. */
+    /* NOT flagged `contraband`, and that is the point: this is a legal
+     * commodity, bred at licensed plants and sold openly. It becomes an
+     * offence only in the hold of somebody the navy has not licensed to
+     * carry it — see contrabandSeverity in combat.js, which reads the same
+     * standing gate the Chernobyl drive itself is sold behind. */
+    { id: 'milfuel',  name: 'Military drive fuel', tier: 3, base: 1250, cat: 'special',
+      milfuel: true, severity: 3 }
   ];
 
   var BY_ID = {};
@@ -101,8 +130,13 @@
    * SCAN checks for (see combat.js); crime permissivity decides how often
    * one happens and how hard the law comes down when it finds something. */
   var CONTRABAND = [
-    { id: 'narcotics', name: 'Narcotics',        tier: 2, base: 980,  cat: 'contraband', contraband: true },
-    { id: 'arms',      name: 'Restricted arms',  tier: 2, base: 1450, cat: 'contraband', contraband: true }
+    /* `severity` grades the CRIME, not the price. See combat.js
+     * CONTRABAND_SEVERITY: somebody's vice, then somebody's war, then naval
+     * materiel. Radioactive waste inside a Syndicate hold is worse than any
+     * of them and is not on this ladder — it is a flat fine and an
+     * expulsion, in wasteCustoms. */
+    { id: 'narcotics', name: 'Narcotics',        tier: 2, base: 980,  cat: 'contraband', contraband: true, severity: 1 },
+    { id: 'arms',      name: 'Restricted arms',  tier: 2, base: 1450, cat: 'contraband', contraband: true, severity: 2 }
   ];
   var contrabandRegistered = false;
   function registerContraband() {
@@ -141,6 +175,65 @@
     { at: 0.70, goods: ['robotics', 'fusion'] },
     { at: 0.85, goods: ['aicores', 'genetech', 'luxuries'] }
   ];
+
+  /* ---- vineyards --------------------------------------------------------
+   * Wine comes from a PLACE, not from a planet type and not from a
+   * development level. A world qualifies only if it can already farm — if
+   * its NATIVE list grows grain — and then only some of its planetside ports
+   * actually have vineyards under their domes.
+   *
+   * Both answers are derived by HASH, not by drawing from the port's rng.
+   * That is deliberate and it is the substream rule taken one step further:
+   * a draw would shift every number after it and silently re-roll the market
+   * of every port in every existing seed. A hash of the ids consumes nothing,
+   * so adding wine leaves every other row in the game bit-for-bit unchanged.
+   *
+   * VINEYARD_SHARE was SWEPT, not guessed. Across 60 seeds — 754 ports, 418 of
+   * them planetside:
+   *
+   *   share   vineyards        ports stocking wine   systems with any
+   *   0.20    11/418  (2.6%)   39/754  (5.2%)        17%
+   *   0.30    19/418  (4.5%)   67/754  (8.9%)        30%
+   *   0.45    34/418  (8.1%)  116/754 (15.4%)        48%
+   *   0.80    58/418 (13.9%)  174/754 (23.1%)        62%
+   *   1.00    73/418 (17.5%)  212/754 (28.1%)        70%
+   *
+   * Note that even at 1.00 only 17.5% of planetside ports qualify — the
+   * can-it-farm gate does most of the limiting, and the share only decides how
+   * much of the remainder grows grapes rather than something else.
+   *
+   * 0.30: about a third of systems have wine somewhere and roughly one port in
+   * eleven stocks it. That is a cargo you plan a run around. At 0.45 half of
+   * all systems have it, which for a luxury is close enough to everywhere that
+   * nobody would cross a system for it. */
+  var VINEYARD_SHARE = 0.30;
+
+  function canFarm(host) {
+    var nat = NATIVE[host && host.type] || [];
+    for (var i = 0; i < nat.length; i++) if (nat[i] === 'grain') return true;
+    return false;
+  }
+
+  /* Does THIS port have a vineyard? Planetside only: the vines are under a
+   * dome on the ground, so an orbital station cannot have one however rich
+   * the world below it is. */
+  function vineyardAt(port, host) {
+    if (!port || !port.surface || !canFarm(host)) return false;
+    var h = RNG.hashString('vineyard|' + (host && host.id) + '|' + port.id);
+    return (h % 1000) / 1000 < VINEYARD_SHARE;
+  }
+
+  /* Does the WORLD have one anywhere on it? This is what lets the stations
+   * overhead stock wine: they are the export point for what is grown below,
+   * and a station above a world with no vineyard has nothing to export. */
+  function worldHasVineyard(host, sys) {
+    if (!canFarm(host)) return false;
+    var ports = (sys && sys.ports) || [];
+    for (var i = 0; i < ports.length; i++) {
+      if (ports[i].parentBody === host && vineyardAt(ports[i], host)) return true;
+    }
+    return false;
+  }
 
   /* What a settled place burns through regardless of what it makes. */
   var UNIVERSAL_DEMAND = ['water', 'grain'];
@@ -311,6 +404,32 @@
       }
     }
 
+    /* WINE. The only production in this function that is not a function of
+     * planet type, development or role — it is a function of whether there is
+     * a vineyard, which is a property of the place.
+     *
+     * Deliberately NOT drawn from rng: every quantity here comes off `flow`
+     * and the port's own hash, so adding wine to the game did not move a
+     * single existing number in a single existing seed.
+     *
+     * A station overhead produces it too, at a fraction of the rate, and only
+     * when there is a vineyard on the world below. It is not growing anything
+     * — it is the export point, holding what came up the well, which is why
+     * the rate is a share of the ground's and not its own. */
+    var vineHash = RNG.hashString('vinerate|' + port.id) % 1000 / 1000;
+    if (vineyardAt(port, host)) {
+      ensure('wine').prod += flow * (0.16 + vineHash * 0.22);
+    } else if (!port.surface && worldHasVineyard(host, sys)) {
+      ensure('wine').prod += flow * (0.05 + vineHash * 0.09);
+    }
+    /* And everyone with money drinks it, wherever it came from — which is
+     * what makes carrying it a trade rather than a curiosity. Demand scales
+     * on development because wine is a luxury: a frontier rock has other
+     * problems. */
+    if (dev > 0.35) {
+      ensure('wine').cons += flow * dev * (0.05 + (RNG.hashString('winedem|' + port.id) % 1000) / 1000 * 0.10);
+    }
+
     /* The role tips the scales rather than replacing the above — a refinery
      * orbiting a gas giant still trades everything, it just moves a great
      * deal more hydrogen than the next port over. */
@@ -401,6 +520,126 @@
       liveT: 0
     };
     return port.market;
+  }
+
+  /* ---- licensed reprocessing --------------------------------------------
+   * "Reprocessing can be a thing that gets done as close to navy bases as
+   * possible and turns into military slipspace drive fuel."
+   *
+   * WHAT MOVED AND WHAT DID NOT. Reprocessing plants themselves stay
+   * exactly where they were — out on the rocks nobody lives on, which is
+   * where waste has always gone and is the right answer for a dump. What
+   * clusters around the navy is the LICENCE. A plant close enough to a
+   * naval yard to be trusted with the process breeds waste back up into
+   * drive slugs; every other plant just buries it. So the map does not get
+   * redrawn, one industry gets concentrated, and a system that lost its
+   * waste sink did not lose it — nobody's disposal run broke.
+   *
+   * NO RNG DRAWS. Run as a post-pass after the patrols exist (the navy is
+   * what it keys off, and the navy is decided last), and derived entirely
+   * from hashes and from rows that are already there. That is what makes it
+   * additive: every seed that existed before this feature generates the
+   * same system it always did, plus this. Same discipline as the vineyards.
+   *
+   * Supply is deliberately thin. A licensed plant is the ONLY source, and
+   * it is gated on a naval garrison — which measures at about one system in
+   * six. Running a Chernobyl drive is therefore a logistics problem before
+   * it is anything else: the fuel exists in naval space and the places you
+   * would most want to arrive fast are not naval space. */
+  function navyPresent(sys) {
+    var pat = (sys && sys.patrols) || [];
+    for (var i = 0; i < pat.length; i++) {
+      /* A cutter merely CROSSING a pirate hold licenses nothing. */
+      if (pat[i].kind === 'navy' && !pat[i].passing) return true;
+    }
+    return false;
+  }
+
+  function licensedFor(port) {
+    return !!(port && port.market && port.market.role === 'reprocessing');
+  }
+
+  function licenseMilitaryFuel(sys) {
+    if (!navyPresent(sys)) return;
+    var ports = (sys && sys.ports) || [];
+    var i, made = 0;
+
+    for (i = 0; i < ports.length; i++) {
+      var port = ports[i];
+      if (!licensedFor(port)) continue;
+      var mkt = port.market;
+      var waste = mkt.rows.waste;
+      if (!waste) continue;
+
+      /* Yield is off the plant's own intake, not off its size: what a
+       * licensed plant can breed is limited by what it is handed. The
+       * hash gives a stable per-plant efficiency so two plants of the same
+       * capacity are not interchangeable. */
+      var h = RNG.hashString('licence|' + (sys.seed || '?') + '|' + port.id);
+      var yieldFrac = 0.10 + (h % 1000) / 1000 * 0.14;      // 10-24%
+      var prod = Math.max(0.4, (waste.cons || 0) * yieldFrac);
+      /* THE NAVY TAKES MOST OF IT, and that is the point rather than a
+       * balancing fudge. A licensed plant is not an open wholesaler; it is
+       * a supplier under contract, and what reaches the market is the
+       * surplus. Without this the plant reads as a pure exporter, which
+       * drives `local` to its floor, prices the fuel at half base at every
+       * plant in the galaxy, and turns a 1,250 cr/t cargo into a flat
+       * risk-free 3.5x run. The uptake share also varies per plant, so
+       * two licensed plants are worth different amounts to fly to. */
+      var uptake = 0.45 + ((h >>> 10) % 1000) / 1000 * 0.35;   // 45-80%
+      addRow(mkt, 'milfuel', prod, prod * uptake);
+      made++;
+    }
+    if (!made) return;
+
+    /* Somebody has to burn it. Naval hulls do, and they are serviced at
+     * shipyards and highports — so those are where the demand sits, which
+     * also means the fuel has somewhere to go besides your hold. */
+    for (i = 0; i < ports.length; i++) {
+      var p2 = ports[i], r2 = p2.market && p2.market.role;
+      if (r2 !== 'shipyard' && r2 !== 'highport') continue;
+      var h2 = RNG.hashString('milburn|' + (sys.seed || '?') + '|' + p2.id);
+      var burn = 0.8 + (h2 % 1000) / 1000 * 2.2;
+      /* A yard holds its own stock and blends its own slugs, so it is not
+       * a bottomless buyer at a fixed price either. */
+      addRow(p2.market, 'milfuel', burn * (((h2 >>> 10) % 1000) / 1000 * 0.45), burn);
+    }
+  }
+
+  /* Add production or consumption of a commodity to a market that may not
+   * carry it yet, deriving the same shelf/price fields buildPortMarket
+   * would have derived — and inserting it into `order` in the same tier
+   * position, so the trade screen does not list it in a surprising place. */
+  function addRow(mkt, cid, prod, cons) {
+    var row = mkt.rows[cid];
+    if (!row) {
+      row = mkt.rows[cid] = { id: cid, prod: 0, cons: 0, cap: 0, local: 1,
+                              value: BY_ID[cid].base };
+      mkt.order.push(cid);
+      mkt.order.sort(function (a, b) {
+        return (BY_ID[a].tier - BY_ID[b].tier) || (BY_ID[a].base - BY_ID[b].base);
+      });
+    }
+    row.prod += prod; row.cons += cons;
+
+    var throughput = Math.max(row.prod, row.cons, 0.5);
+    row.cap = Math.round(throughput * 9 + 120);
+    var net = row.prod - row.cons;
+    var ratio = net / Math.max(row.prod + row.cons, 1e-6);
+    row.local = clamp(1 - ratio * 0.34, 0.6, 1.5);
+    row.exporter = net > throughput * 0.08;
+    row.importer = net < -throughput * 0.08;
+    row.base = clamp(0.5 + ratio * 0.34, 0.10, 0.93);
+    /* Fixed wobble rather than a rolled one: this runs outside any rng
+     * stream on purpose, and a hash would be a distinction without a
+     * difference on a curve nobody reads directly. */
+    if (row.amp === undefined) {
+      var hp = RNG.hashString('milwave|' + cid + '|' + (row.id || ''));
+      row.amp = 0.03 + (hp % 100) / 100 * 0.08;
+      row.periodS = (9 + (hp >>> 8) % 31) * DAY;
+      row.phase = ((hp >>> 16) % 6283) / 1000;
+    }
+    return row;
   }
 
   /* ---- black markets -----------------------------------------------------
@@ -807,7 +1046,10 @@
     stepLive: stepLive,
     update: update,
     bestBuyers: bestBuyers,
-    wasteSinks: wasteSinks
+    wasteSinks: wasteSinks,
+    licenseMilitaryFuel: licenseMilitaryFuel,
+    navyPresent: navyPresent,
+    MILFUEL_ID: 'milfuel'
   };
 
   global.Economy = Economy;

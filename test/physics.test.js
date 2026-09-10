@@ -1259,10 +1259,145 @@ section('--- landing gear ---');
       return { hit: Sim.checkImpact(sh, sys, 0, true), ship: sh };
     }
     var withGear = atPad(true), without = atPad(false);
-    check('a pad catches a ship with the gear down', !!withGear.hit && !!withGear.ship.docked);
+    /* Docked OR on the arrival rail: a pad with a hangar under it now
+     * carries the hull in rather than parking it on the same frame. What
+     * this check has always been about is whether the pad caught it. */
+    check('a pad catches a ship with the gear down',
+          !!withGear.hit &&
+          (!!withGear.ship.docked || Sim.arrivalActive(withGear.ship)));
     check('and refuses one without it',
           !without.ship.docked && without.ship.gearBalked === true);
   }
+})();
+
+/* ---- the arrival, animated --------------------------------------------- */
+section('the arrival rail');
+(function () {
+  var Galaxy = require(path.join(SRC, 'galaxy.js'));
+  var g = Galaxy.build('kawartha');
+  var sys = Gen.generateSystem(g.stars[0].seed);
+  var port = (sys.ports || []).filter(function (p) { return p.surface && p.market; })[0];
+  check('the seeded system has a surface port to arrive at', !!port,
+        port && port.name);
+  if (!port) return;
+
+  var t0 = 1000;
+  /* Built the way every other test in this file builds one — makeShip takes
+   * a position and a velocity and derives the rest. Somewhere near the port
+   * rather than at the origin, since the origin is the star. */
+  function freshShip() {
+    var near = Sim.bodyPosition(port, sys, t0);
+    var sh = Sim.makeShip(V.add(near, { x: 0, y: 0, z: 0.5 }),
+                          V.clone(Sim.bodyState(port, sys, t0).vel));
+    Sim.refreshShip(sh);
+    return sh;
+  }
+
+  /* THE INVARIANT THAT KEEPS THIS ADDITIVE. Everything that docked before
+   * still docks in one call: save-load re-docks, and three suites dock
+   * directly. If dockShip had become an animation, loading a save would
+   * drop the player into the middle of a lift ride. */
+  var snap = freshShip();
+  Sim.dockShip(snap, port, sys, t0);
+  check('dockShip is still instant, and is still the only thing save needs',
+        snap.docked === port.id && !snap.arrival);
+
+  var sh = freshShip();
+  var began = Sim.beginArrival(sh, port, sys, t0);
+  check('an arrival starts at a surface port', began === true);
+  check('and the ship is NOT docked while it is being carried',
+        !sh.docked && Sim.arrivalActive(sh));
+
+  /* Continuity. A rail with a gap in it reads as the hull teleporting, and
+   * the joins between legs are exactly where that would happen. Sampled
+   * finely across the whole run and every step compared to the last. */
+  var total = Sim.arrivalTotal();
+  var berth = sh.arrival.berth;
+  var prev = null, worst = 0, legsSeen = {};
+  for (var i = 0; i <= 400; i++) {
+    var el = total * i / 400;
+    var pose = Sim.arrivalPose(port, sys, t0, berth, el);
+    if (!pose) { check('pose resolves at el=' + el.toFixed(2), false); return; }
+    legsSeen[pose.legId] = true;
+    if (prev) worst = Math.max(worst, V.dist(pose.pos, prev));
+    prev = pose.pos;
+  }
+  var r = port.radius || 1;
+  check('the path is continuous — no leg boundary teleports the hull',
+        worst < r * 0.25, 'worst step ' + (worst / r).toFixed(4) + ' pad radii');
+  check('and every leg is actually visited',
+        Object.keys(legsSeen).length === Sim.ARRIVAL_LEGS.length,
+        Object.keys(legsSeen).join(','));
+
+  /* The descent must actually descend, and the enclosure must switch on
+   * exactly when the hull goes under the doors — not on arrival. */
+  var basis = Sim.groundBasis(port, sys, t0);
+  function heightAt(el) {
+    var p = Sim.arrivalPose(port, sys, t0, berth, el);
+    return V.dot(V.sub(p.pos, basis.entrance.pos), basis.up) / r;
+  }
+  check('the hull starts above the apron', heightAt(0) > 0, heightAt(0).toFixed(3));
+  check('and ends below it, in the hangar', heightAt(total - 0.01) < 0,
+        heightAt(total - 0.01).toFixed(3));
+
+  var openAir = Sim.arrivalPose(port, sys, t0, berth, 1.0);
+  var underground = Sim.arrivalPose(port, sys, t0, berth, total - 0.01);
+  check('on the apron you are still outside — the sky is real',
+        openAir.enclosed === false, openAir.legId);
+  check('once the car is running you are indoors',
+        underground.enclosed === true, underground.legId);
+
+  /* The doors are a mechanism, not a flag: they have to be open when the
+   * hull needs the hole and shut behind it. */
+  var onPad = Sim.arrivalPose(port, sys, t0, berth, 3.0 + 2.4);
+  check('the apron doors are open while the hull is on the pad',
+        onPad.gates.apron < 0.2, String(onPad.gates.apron.toFixed(3)));
+  check('and sealed again by the bottom of the shaft',
+        underground.gates.apron > 0.8, String(underground.gates.apron.toFixed(3)));
+
+  /* And the rail ends where dockShip would have put it. If these two ever
+   * disagree the hull visibly jumps on the last frame. */
+  var tEnd = t0 + total + 0.001;
+  var run = freshShip();
+  Sim.beginArrival(run, port, sys, t0);
+  Sim.stepArrival(run, sys, tEnd);
+  check('the rail ends docked', run.docked === port.id && !run.arrival);
+  check('in the same berth it was carried to',
+        run.dockOffset && run.dockOffset.berth === berth,
+        run.dockOffset && String(run.dockOffset.berth));
+
+  /* COMPARED AT THE SAME INSTANT, and the first version of this test was
+   * not. It docked one ship at t0 and ran the other to t0+18.5, then
+   * measured the distance between them in absolute space — which came out
+   * at 3893 pad radii, roughly 500 km, because that is how far a port on
+   * an orbiting planet travels in eighteen seconds. The port moves; the
+   * berth does not move relative to the port. */
+  var sameT = freshShip();
+  Sim.dockShip(sameT, port, sys, tEnd);
+  check('and at the pose dockShip sets, so the last frame does not jump',
+        V.dist(run.pos, sameT.pos) < r * 0.02,
+        (V.dist(run.pos, sameT.pos) / r).toFixed(5) + ' pad radii apart');
+  check('facing the same way, too',
+        V.dot(run.fwd, sameT.fwd) > 0.999,
+        'dot ' + V.dot(run.fwd, sameT.fwd).toFixed(5));
+
+  /* An orbital clamp has no shaft to be carried down. It must refuse, so
+   * the caller falls back to the snap that has always happened. */
+  var station = (sys.ports || []).filter(function (p) { return !p.surface; })[0];
+  if (station) {
+    var os = freshShip();
+    check('an orbital station refuses to run an arrival, with no shaft to run',
+          Sim.beginArrival(os, station, sys, t0) === false);
+  }
+
+  /* A port that stops existing under a running arrival — a system change —
+   * must abandon the rail rather than ride it to nowhere. */
+  var orphan = freshShip();
+  Sim.beginArrival(orphan, port, sys, t0);
+  orphan.arrival.port = 'no-such-port';
+  Sim.stepArrival(orphan, sys, t0 + 1);
+  check('an arrival whose port vanished is abandoned, not ridden',
+        !orphan.arrival && !orphan.docked);
 })();
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

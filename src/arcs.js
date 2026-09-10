@@ -120,6 +120,10 @@
       return {
         type: 'courier', cid: 'parcel', tonnes: 1,
         from: port.id, fromName: port.name, toStarId: star.id, toName: star.name + ' system',
+        /* The star OBJECT, kept only long enough for `dress` to hand it to
+         * the prose generator. It is never copied onto a signed contract —
+         * a live galaxy reference has no business in a save. */
+        toStar: star,
         text: 'sealed parcel to the ' + star.name + ' system'
       };
     }
@@ -153,6 +157,29 @@
     };
   }
 
+  /* Every chapter goes through missions.js's own finisher, so a campaign
+   * contract carries the same long form an ordinary one does. Without this
+   * a chapter had `text` and no `desc` at all, and the DETAILS button — on
+   * the board and now on a signed contract — had nothing to open on the one
+   * kind of work that most deserves an explanation.
+   *
+   * `finish` leaves an existing `text` alone, which is exactly what a hook
+   * prefix needs, and writes only the missing `desc`. */
+  function dress(entry, port, sys, here, toStar) {
+    var M = global.Missions;
+    if (!M || !M.finish) return entry;
+    var toPort = null;
+    if (entry.toPortId) {
+      var ps = (sys && sys.ports) || [];
+      for (var i = 0; i < ps.length; i++) {
+        if (ps[i].id === entry.toPortId) { toPort = ps[i]; break; }
+      }
+    }
+    return M.finish(entry, {
+      fromPort: port, toPort: toPort, sys: sys, here: here, toStar: toStar || null
+    });
+  }
+
   /* Chapter zero. Offered like an ordinary contract — a pure function of
    * (port, window) — except it is also gated on the player not already
    * running (or cooling down from) this faction's chain. */
@@ -174,7 +201,7 @@
     if (!offer) return [];
 
     var pay = Math.round(basePay(offer) * CAMPAIGN_PAY_MUL[0]);
-    return [{
+    return [dress({
       id: 'arc|' + fac.id + '|' + tpl.id + '|0|' + win,
       type: offer.type, cid: offer.cid, tonnes: offer.tonnes,
       fromName: offer.fromName, toPortId: offer.toPortId || null,
@@ -182,7 +209,7 @@
       faction: fac.id, pay: pay, deadline: deadlineFor(offer, t),
       text: tpl.hook + ' — ' + offer.text,
       campaign: true, factionId: fac.id, arcId: tpl.id, step: 0
-    }];
+    }, port, sys, here, offer.toStar)];
   }
 
   /* Called by missions.js the instant a campaign chapter is delivered.
@@ -234,14 +261,14 @@
       G.ship.cargo[offer.cid] = (G.ship.cargo[offer.cid] || 0) + offer.tonnes;
       Sim.refreshShip(G.ship);
     }
-    (G.missions = G.missions || []).push({
+    (G.missions = G.missions || []).push(dress({
       id: 'arc|' + m.factionId + '|' + tpl.id + '|' + nextIdx + '|' + win,
       type: offer.type, cid: offer.cid, tonnes: offer.tonnes,
       fromName: offer.fromName, toPortId: offer.toPortId || null,
       toStarId: offer.toStarId || null, toName: offer.toName,
       faction: m.factionId, pay: pay, deadline: deadlineFor(offer, t), text: offer.text,
       campaign: true, factionId: m.factionId, arcId: tpl.id, step: nextIdx
-    });
+    }, port, sys, G.here, offer.toStar));
     progress.step = nextIdx;
     if (hooks && hooks.say) hooks.say(facName + ': next chapter — ' + offer.text, 6);
     if (hooks && hooks.sound) hooks.sound('click');

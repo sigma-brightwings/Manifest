@@ -160,6 +160,39 @@
     return { pos: p, vel: V.clone(basis.entrance.vel), basis: basis, off: off };
   }
 
+  /* Where the port's control cabinet is standing right now, and how far the
+   * ship is from it.
+   *
+   * Placed through `groundBasis` exactly as `berthState` places a berth —
+   * the cabinet's offset is in the same mouth-relative pad-radii frame, so
+   * this is one more consumer of that basis rather than a second derivation
+   * of where the ground is. House rule 6.
+   *
+   * Returns null when the port has no cabinet (an orbital clamp), which is
+   * the answer the caller needs in order to say why. */
+  function controlState(port, sys, t) {
+    var Gen = global.Gen;
+    if (!Gen || !Gen.controlFor) return null;
+    var c = Gen.controlFor(port, sys);
+    if (!c) return null;
+    var basis = groundBasis(port, sys, t);
+    if (!basis) return null;
+    var r = port.radius || 1;
+    var p = V.addScaled(basis.entrance.pos, basis.up, c.at.z * r);
+    p = V.addScaled(p, basis.east, c.at.x * r);
+    p = V.addScaled(p, basis.north, c.at.y * r);
+    return { control: c, pos: p, vel: V.clone(basis.entrance.vel),
+             range: c.commsRange * r, basis: basis };
+  }
+
+  /* In range of the cabinet? Distance in world km against a range expressed
+   * in pad radii, converted once here so no caller has to know the unit. */
+  function controlInRange(ship, port, sys, t) {
+    var cs = controlState(port, sys, t);
+    if (!cs || !ship || !ship.pos) return false;
+    return V.dist(ship.pos, cs.pos) <= cs.range;
+  }
+
   function portEntrance(port, sys, t) {
     var host = port.parentBody;
     var hostState = bodyState(host, sys, t);
@@ -1273,7 +1306,8 @@
   }
 
   function updateEncounters(sys, t, dtSim, ship) {
-    var result = { active: [], demand: null, closest: Infinity, warpCap: Infinity };
+    var result = { active: [], demand: null, closest: Infinity,
+                    dangerClosest: Infinity, warpCap: Infinity };
     var patrols = sys.patrols || [];
     if (!patrols.length) return result;
 
@@ -1333,14 +1367,32 @@
         if (spec.demanding && spec.mode === 'demand') result.demand = spec;
         result.active.push(spec);
         result.closest = Math.min(result.closest, range);
+        /* DANGEROUS is not the same question as CLOSE. A pirate closing to
+         * rob you, or anything already shooting (`hostileToPlayer` — set
+         * the instant a demand times out, a pirate is fired on, or a
+         * wanted player draws a warrant into a fight; see combat.js), is
+         * what actually needs the player's real-time reflexes. A `police`
+         * patrol merely holding you for `mode: 'inspect'` is neither — the
+         * scan "resolves itself the instant it happens... there is no
+         * player choice the way a pirate's demand has one" (resolveScan's
+         * own comment), so there is nothing here to react to and no reason
+         * to make leaving afterward crawl at 1×. */
+        var dangerous = spec.hostileToPlayer ||
+          (spec.kind === 'pirate' && (spec.mode === 'intercept' || spec.mode === 'demand'));
+        if (dangerous) result.dangerClosest = Math.min(result.dangerClosest, range);
       }
     }
 
-    /* Warp policy. Anything awake keeps the clock sane; anything close
-     * pins it, because that is exactly when the player needs to be able to
-     * react in real time. */
+    /* Warp policy. Anything awake keeps the clock sane — good enough for a
+     * routine police scan, or a patrol just sharing your neighbourhood —
+     * and a genuine threat pins it at 1×, because that is exactly when the
+     * player needs to be able to react in real time. Once a scan finishes
+     * (or a pirate breaks off) there is nothing dangerous left nearby and
+     * the cap lifts back to 500 on its own, which is what lets you actually
+     * leave rather than crawling away from an inspector who is done with
+     * you. */
     if (result.active.length) result.warpCap = 500;
-    if (result.closest < CLOSE_RANGE * 4) result.warpCap = 1;
+    if (result.dangerClosest < CLOSE_RANGE * 4) result.warpCap = 1;
     sys._ships = null;   // the live states just moved; drop the per-frame memo
     return result;
   }
@@ -1449,6 +1501,128 @@
   /* Every traffic ship at time t, memoised per time value the same way body
    * positions are — the renderer, the radar and the HUD all ask for this
    * list within a single frame. */
+  /* ---- berth occupancy ---------------------------------------------------
+   * How many of a port's berths are taken, right now, and when the next one
+   * comes free.
+   *
+   * CLOSED FORM, from the same timetable the ships fly. Every route already
+   * knows its own period, cruise and layover, so "is route r moored at port P
+   * at time t" is arithmetic — no counter to keep, nothing to save, nothing to
+   * drift, and the answer is identical after a time warp, a reload, or a jump
+   * out and back. A stateful occupancy count would have been the easier thing
+   * to write and the wrong shape: it is the rails-versus-integration split
+   * applied to a number instead of to a position.
+   *
+   * Capacity comes off the MODEL — bayGeometry reads a modelled bay's own
+   * berth count — so a port with a bigger hangar really does hold more ships,
+   * and re-exporting the model changes the game rather than just the picture.
+   */
+  var DEFAULT_BERTHS = 4;
+
+  /* Does this hull need the large bay? The rule already exists — assignBerth
+   * reserves berth 0 for hulls over 260t and hands out the rest
+   * interchangeably — and the queue has to ask the SAME question, or a ship
+   * would be told to wait for a berth it was not going to be given, or waved
+   * into one it does not fit. One rule, two callers. */
+  function needsLargeBerth(ship) {
+    return ((ship && ship.dryMass) || 0) > 260;
+  }
+
+  /* The same question asked of a traffic route, which carries a class rather
+   * than a mass. The split falls on the gap that already exists in
+   * SHIP_CLASSES — hauler 0.090, freighter 0.120 — so this is not a tuned
+   * threshold, it is the seam in the table. Measured across 25 systems and
+   * 57,400 samples: the large bay is occupied 31% of the time and the five
+   * small ones never once filled, which is what makes waiting a thing that
+   * happens to big ships and not to couriers. */
+  var LARGE_ROUTE_SIZE = 0.10;
+  function routeNeedsLargeBerth(route) {
+    return ((route && route.size) || 0) >= LARGE_ROUTE_SIZE;
+  }
+
+  function berthCapacity(port) {
+    if (!port) return 0;
+    if (typeof port.berths === 'number') return port.berths;
+    if (Gen && Gen.bayGeometry) {
+      var g = Gen.bayGeometry(port);
+      if (g && typeof g.berths === 'number' && g.berths > 0) return g.berths;
+    }
+    return DEFAULT_BERTHS;
+  }
+
+  /* Which traffic routes are sitting at this port at time t, and when each of
+   * them leaves. Sorted by departure so the caller can say how LONG a wait is
+   * rather than only that there is one. */
+  function berthOccupants(port, sys, t) {
+    var out = [];
+    if (!port || !sys || !sys.traffic) return out;
+    for (var i = 0; i < sys.traffic.length; i++) {
+      var route = sys.traffic[i];
+      if (route.from !== port.id && route.to !== port.id) continue;
+      var st = trafficState(route, sys, t);
+      if (!st || st.phase !== 'moored') continue;
+      if (!st.to || st.to.id !== port.id) continue;
+      /* When this one goes. The moored window runs from the end of a cruise
+         to the end of the layover, so the departure is the start of the
+         moored phase plus the layover — derived from the route's own cycle
+         rather than measured, for the same reason the occupancy is. */
+      var cycle = Math.floor((t - route.t0) / route.period);
+      var cycleStart = route.t0 + cycle * route.period;
+      var ph = t - cycleStart;
+      var leaves = (ph < route.cruise + route.layover)
+        ? cycleStart + route.cruise + route.layover
+        : cycleStart + route.period;
+      out.push({ route: route, name: route.name, leavesAt: leaves,
+                 large: routeNeedsLargeBerth(route) });
+    }
+    out.sort(function (a, b) { return a.leavesAt - b.leavesAt; });
+    return out;
+  }
+
+  /* Whether THIS ship can have a berth here, now, and if not how long until
+   * one it can use comes free.
+   *
+   * Full is not a property of the port alone — it is a property of the port
+   * and the hull asking. A courier is essentially never turned away; a
+   * freighter is, because there is one large bay and something is in it about
+   * a third of the time. That asymmetry is the whole feature: it makes what
+   * you fly matter at the door.
+   */
+  function berthStatus(port, sys, t, ship) {
+    var cap = berthCapacity(port);
+    var occ = berthOccupants(port, sys, t);
+    var large = 0, small = 0, i;
+    for (i = 0; i < occ.length; i++) { if (occ[i].large) large++; else small++; }
+
+    var largeCap = cap >= 2 ? 1 : cap;          // berth 0, as assignBerth has it
+    var smallCap = Math.max(0, cap - largeCap);
+
+    var wantsLarge = needsLargeBerth(ship);
+    var used = wantsLarge ? large : small;
+    var mine = wantsLarge ? largeCap : smallCap;
+    var full = used >= mine;
+
+    /* The wait is until a berth OF THE RIGHT KIND frees, not until anything
+       moves: telling a freighter it can go in four minutes because a shuttle
+       is leaving would be a lie it could act on. */
+    var next = 0;
+    if (full) {
+      for (i = 0; i < occ.length; i++) {
+        if (occ[i].large === wantsLarge) { next = occ[i].leavesAt; break; }
+      }
+    }
+    return {
+      capacity: cap, largeCapacity: largeCap, smallCapacity: smallCap,
+      occupied: occ.length, large: large, small: small,
+      wantsLarge: wantsLarge,
+      free: Math.max(0, mine - used),
+      full: full,
+      nextFreeAt: next || t,
+      waitFor: full && next ? Math.max(0, next - t) : 0,
+      occupants: occ
+    };
+  }
+
   function trafficAll(sys, t) {
     if (!sys.traffic || !sys.traffic.length) return [];
     if (sys._traffic && sys._traffic.t === t) return sys._traffic.list;
@@ -1561,7 +1735,19 @@
     if (allowDock) {
       var pad = padCapture(ship, sys, t);
       if (pad) {
-        dockShip(ship, pad, sys, t);
+        /* THIS is where a surface arrival actually begins, and hooking the
+         * other one was not enough. main.js's `dockTarget` path handles a
+         * ship being talked in by traffic control, which in practice means
+         * an orbital clamp; a pad is captured here, deep inside the
+         * integrator, which the comment on main.js's arrival-transition
+         * check already warns has no call site to hook. A rail wired only
+         * to the other path would have been a sequence nobody ever saw —
+         * the same way `vsShield` sat on every gun unread.
+         *
+         * beginArrival refuses when there is no bay geometry to be carried
+         * through, so a bare pad still docks in one frame as it always
+         * did. */
+        if (!beginArrival(ship, pad, sys, t)) dockShip(ship, pad, sys, t);
         ship.landed = false;
         ship.crashed = false;
         ship.landedOn = null;
@@ -1639,6 +1825,13 @@
    * station moves. */
   function dockShip(ship, target, sys, t) {
     var ts = bodyState(target, sys, t);
+    /* Docking instantly ENDS any arrival, and this is the one place that
+     * can be guaranteed to run for all of them: the rail's own last act is
+     * to call this, but so is a save being loaded on top of a running
+     * arrival, and so is anything that decides to skip the show. Left set,
+     * `arrival` would have stepArrival dragging the hull back onto the rail
+     * on the next frame, one frame after dockShip parked it. */
+    if (ship) ship.arrival = null;
 
     /* A pad is not an orbital clamp. There is no orbital frame to express
      * an offset in — the thing is bolted to a planet — so the ship simply
@@ -1761,6 +1954,14 @@
    * ship.docked is set. */
   function updateDockedShip(ship, sys, t) {
     var target = sys.byId[ship.docked];
+    /* A NO-OP FOR A SHIP THAT IS NOT DOCKED, rather than a TypeError.
+     * `bodyState` dereferences `body.id` on its first line, so calling this
+     * on a ship whose `docked` is null threw from two frames deep with a
+     * stack that named neither the caller nor the reason. There is now one
+     * more way to be not-docked than there used to be — being carried in on
+     * the arrival rail — and any caller that gets the state wrong deserves
+     * to do nothing, not to crash. */
+    if (!target) return;
     var ts = bodyState(target, sys, t);
 
     if (target.surface) {
@@ -1794,6 +1995,221 @@
   /* Push away with a small separation velocity along the current offset
    * (i.e., straight out from the station) so undocking never immediately
    * re-triggers capture. */
+  /* ---- THE ARRIVAL, ANIMATED ---------------------------------------------
+   * `dockShip` and `undockShip` have always been scripts — one runs a hull
+   * into a berth off the side of the shed, the other runs it back to the
+   * foot of the shaft and stands it on its tail. Both executed in a single
+   * frame, so the script was something you could read in the source and
+   * never see. This plays it.
+   *
+   * IT IS A RAIL, in the sense doctrine 3 means: a closed-form path
+   * parameterised by elapsed time, not an integration. The ship is not
+   * flying here and nothing is pushing it — a cargo lift and a traverser
+   * are moving it, and those move at a known rate along a known line. The
+   * only correct model of a hull on a traverser is a scripted one.
+   *
+   * The instant versions are DELIBERATELY LEFT INTACT as the rail's
+   * endpoint, and that is what keeps this additive. `save.js` re-docks on
+   * load, and three tests dock directly; if docking had become a
+   * multi-second animation, loading a save would have dropped the player
+   * into the middle of a lift ride and those tests would have run their
+   * guard loops to exhaustion waiting for a state that arrives eighteen
+   * seconds later. So: `beginArrival` starts the show, `stepArrival` runs
+   * it, and the last thing it does is call the same `dockShip` everything
+   * else already calls. Nothing that docks today behaves differently
+   * unless it opts in.
+   *
+   * The frame is the one `berthOffset` and `berthState` already use:
+   * mouth-relative, in pad radii, x along east, y along north, z along up.
+   * Reusing it rather than inventing a second one is house rule 6 — the
+   * lining and the void came apart last time a dimension was derived
+   * twice. */
+
+  /* Seconds per leg, at 1x. These are sim seconds because doors and lifts
+   * are world events, not presentation — but see the warp clamp in main.js:
+   * at 500x the whole arrival would resolve inside one frame, which is the
+   * same bug the weapon cooldowns had. */
+  var ARRIVAL_LEGS = [
+    /* Handover. The autopilot's last metres, nose still where flight left
+     * it, so the cut from flying to being carried is not a snap. */
+    { id: 'approach', dur: 3.0, apron: 1, inner: 1, lift: 0, bay: 1 },
+    /* On the apron with the doors coming open under the hull. The car is
+     * already staged 1.4 below flush — it cannot BE flush while the leaves
+     * are shut, because at flush its deck occupies their slot. That
+     * interlock is mechanical and it is the model's, not mine. */
+    { id: 'pad', dur: 2.5, apron: 0, inner: 1, lift: 0, bay: 1 },
+    /* Down the shaft. The car stays level; the shaft is what is inclined. */
+    { id: 'descend', dur: 6.0, apron: 1, inner: 1, lift: 1, bay: 1 },
+    /* Off the car, through the inboard gate, onto the traverser. */
+    { id: 'traverse', dur: 4.0, apron: 1, inner: 0, lift: 1, bay: 1 },
+    /* Across to the assigned bay and onto the stand. */
+    { id: 'berth', dur: 3.0, apron: 1, inner: 1, lift: 1, bay: 0 }
+  ];
+
+  /* From `descend` onward the hull is under the doors, so this is the leg
+   * at which the sky stops being a thing that exists. main.js reads it
+   * rather than hardcoding an index. */
+  var ARRIVAL_ENCLOSED_FROM = 2;
+
+  function arrivalTotal() {
+    var s = 0;
+    for (var i = 0; i < ARRIVAL_LEGS.length; i++) s += ARRIVAL_LEGS[i].dur;
+    return s;
+  }
+
+  /* Smoothstep. Every leg starts and ends at rest: a traverser that begins
+   * at full speed reads as a hull being thrown across a room. */
+  function ease(u) { return u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u); }
+
+  /* The waypoints, in the mouth-relative pad-radii frame.
+   *
+   * The descent is the interesting one. A 45-degree shaft moves the hull
+   * along the ground by as much as it drops, so the foot of the shaft is
+   * NOT under the pad — it is one drop-length inboard of it. A port that
+   * declares a vertical lift instead gets run = 0 and the same code walks
+   * it straight down. That is the whole of "some traversers are also
+   * elevators": the leg is a line in three dimensions and the angle is
+   * data, not a branch. */
+  function arrivalPath(port, berth) {
+    var Gen = global.Gen;
+    if (!Gen || !Gen.bayGeometry || !Gen.berthOffset) return null;
+    var g = Gen.bayGeometry(port);
+    var off = Gen.berthOffset(port, berth || 0);
+    var stand = g.floorZ + g.lift + g.standoff;
+    var deck = g.lift + g.standoff;
+    /* How far inboard the shaft foot sits. `incline` is the modelled
+     * angle when there is a model; 45 degrees is the default because that
+     * is what the cargo lifts are, and tan(45) = 1 makes run == drop. */
+    var ang = (port.incline && port.incline.angle) || 45;
+    var run = ang >= 89.5 ? 0
+            : Math.abs(g.floorZ) / Math.tan(ang * Math.PI / 180);
+    return [
+      { x: 0, y: 0, z: deck + 0.9 },       // approach, above the apron
+      { x: 0, y: 0, z: deck },             // pad
+      { x: 0, y: -run, z: stand },         // shaft foot
+      { x: off.x, y: -run, z: stand },     // across the hall on the traverser
+      { x: off.x, y: off.y, z: off.z + g.lift + g.standoff }  // the stand
+    ];
+  }
+
+  /* Where the hull is, and which way it is pointing, `el` seconds in.
+   * Pure: same port, same berth, same elapsed gives the same pose, which
+   * is what lets the renderer ask for it without owning any state. */
+  function arrivalPose(port, sys, t, berth, el) {
+    var basis = groundBasis(port, sys, t);
+    var path = arrivalPath(port, berth);
+    if (!basis || !path) return null;
+    var Gen = global.Gen;
+
+    var leg = 0, acc = 0;
+    while (leg < ARRIVAL_LEGS.length - 1 && el >= acc + ARRIVAL_LEGS[leg].dur) {
+      acc += ARRIVAL_LEGS[leg].dur; leg++;
+    }
+    var L = ARRIVAL_LEGS[leg];
+    var u = ease(L.dur > 0 ? (el - acc) / L.dur : 1);
+
+    var a = path[leg], b = path[Math.min(leg + 1, path.length - 1)];
+    var loc = { x: a.x + (b.x - a.x) * u,
+                y: a.y + (b.y - a.y) * u,
+                z: a.z + (b.z - a.z) * u };
+
+    var r = port.radius || 1;
+    var pos = V.addScaled(basis.entrance.pos, basis.up, loc.z * r);
+    pos = V.addScaled(pos, basis.east, loc.x * r);
+    pos = V.addScaled(pos, basis.north, loc.y * r);
+
+    /* ATTITUDE: level, nose along the way it is going. A hull being
+     * carried does not bank and does not turn on the spot — the entire
+     * reason the sorting floor is a corridor with a traverser in it rather
+     * than a roundabout is that a hull never rotates. So the nose follows
+     * the leg, and on the final leg it blends to the berth's own facing,
+     * which is the pose `dockShip` will set when the rail ends. */
+    var dx = b.x - a.x, dy = b.y - a.y;
+    var fwd;
+    if (Math.abs(dx) + Math.abs(dy) > 1e-6) {
+      fwd = V.norm(V.addScaled(V.scale(basis.east, dx), basis.north, dy));
+    } else {
+      fwd = V.clone(basis.north);          // straight down the shaft: keep facing
+    }
+    if (leg === ARRIVAL_LEGS.length - 1) {
+      var off2 = Gen.berthOffset(port, berth || 0);
+      var want = V.scale(basis.north, off2.facing || 1);
+      fwd = V.norm(V.add(V.scale(fwd, 1 - u), V.scale(want, u)));
+    }
+    var up = V.clone(basis.up);
+    var right = V.cross(fwd, up);
+    if (V.len(right) < 1e-9) return null;
+    right = V.norm(right);
+
+    return {
+      pos: pos, vel: V.clone(basis.entrance.vel),
+      fwd: fwd, up: V.norm(V.cross(right, fwd)), right: right,
+      leg: leg, legId: L.id, u: u,
+      enclosed: leg >= ARRIVAL_ENCLOSED_FROM,
+      /* The mechanism poses, 0 open and 1 sealed, matching the model's own
+       * setApronDoors/setInnerGate/setLift/setBayGates. Interpolated within
+       * the leg so a door is caught half open rather than popping. */
+      gates: {
+        apron: mixGate(L.apron, ARRIVAL_LEGS[Math.max(0, leg - 1)].apron, u),
+        inner: mixGate(L.inner, ARRIVAL_LEGS[Math.max(0, leg - 1)].inner, u),
+        lift: L.id === 'descend' ? u : L.lift,
+        bay: mixGate(L.bay, ARRIVAL_LEGS[Math.max(0, leg - 1)].bay, u)
+      }
+    };
+  }
+
+  /* A gate moves at the START of the leg that wants it moved, so it is
+   * open by the time the hull needs the hole. */
+  function mixGate(want, prev, u) {
+    if (want === prev) return want;
+    var k = Math.min(1, u / 0.35);
+    return prev + (want - prev) * k;
+  }
+
+  function arrivalActive(ship) {
+    return !!(ship && ship.arrival);
+  }
+
+  /* Opt in. Returns false when this port cannot be arrived at slowly — an
+   * orbital clamp has no shaft and no traverser — and the caller then does
+   * what it has always done and docks instantly. */
+  function beginArrival(ship, port, sys, t) {
+    if (!ship || !port || !port.surface) return false;
+    if (!arrivalPath(port, 0)) return false;
+    var berth = assignBerth(ship, port);
+    if (!arrivalPose(port, sys, t, berth, 0)) return false;
+    ship.arrival = { port: port.id, berth: berth, at: t, dur: arrivalTotal() };
+    ship.thrust = V.zero();
+    ship.throttle = 0;
+    ship.angRate = { pitch: 0, yaw: 0, roll: 0 };
+    return true;
+  }
+
+  /* One frame of it. Returns the pose so the caller can read `enclosed`
+   * and the gate poses without recomputing them. */
+  function stepArrival(ship, sys, t) {
+    if (!ship || !ship.arrival) return null;
+    var port = sys.byId[ship.arrival.port];
+    /* The port stopped existing — a system change under a running
+     * arrival. Abandon it rather than ride a rail to nowhere. */
+    if (!port) { ship.arrival = null; return null; }
+
+    var el = t - ship.arrival.at;
+    if (!(el >= 0)) el = 0;                 // clock went backwards; start over
+
+    if (el >= ship.arrival.dur) {
+      ship.arrival = null;
+      dockShip(ship, port, sys, t);
+      return null;
+    }
+    var pose = arrivalPose(port, sys, t, ship.arrival.berth, el);
+    if (!pose) { ship.arrival = null; dockShip(ship, port, sys, t); return null; }
+    ship.pos = pose.pos;
+    ship.vel = pose.vel;
+    ship.fwd = pose.fwd; ship.up = pose.up; ship.right = pose.right;
+    return pose;
+  }
+
   function undockShip(ship, sys, t, sepSpeed) {
     var target = sys.byId[ship.docked];
     var ts = bodyState(target, sys, t);
@@ -2647,6 +3063,12 @@
     dockingStatus: dockingStatus,
     dockShip: dockShip,
     updateDockedShip: updateDockedShip,
+    controlState: controlState, controlInRange: controlInRange,
+    beginArrival: beginArrival, stepArrival: stepArrival,
+    arrivalActive: arrivalActive, arrivalPose: arrivalPose,
+    arrivalPath: arrivalPath, arrivalTotal: arrivalTotal,
+    ARRIVAL_LEGS: ARRIVAL_LEGS,
+    ARRIVAL_ENCLOSED_FROM: ARRIVAL_ENCLOSED_FROM,
     undockShip: undockShip,
     GEAR_DRAG_FACTOR: GEAR_DRAG_FACTOR,
     airDensity: airDensity,
@@ -2686,6 +3108,10 @@
     smootherstep: smootherstep,
     trafficState: trafficState,
     trafficAll: trafficAll,
+    berthStatus: berthStatus,
+    berthCapacity: berthCapacity,
+    berthOccupants: berthOccupants,
+    needsLargeBerth: needsLargeBerth,
     nearestTraffic: nearestTraffic,
     bodyStateAt: bodyStateAt,
     patrolState: patrolState,

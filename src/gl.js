@@ -544,6 +544,88 @@
     '}'
   ].join('\n');
 
+  /* ---- PANELS: a screen that is actually in the world --------------------
+   *
+   * THE BUG THIS EXISTS TO KILL. The MFDs were drawn on the 2D canvas by
+   * mapping a flat pixel space onto the panel with `ctx.transform`. That
+   * transform is built from three of the quad's corners and mathematically
+   * cannot use the fourth, because an affine maps a rectangle to a
+   * PARALLELOGRAM and nothing else. The panel's outline was clipped with all
+   * four corners, so the frame was a true perspective quad while its
+   * contents were a parallelogram — they agree only when you are looking
+   * straight on, and diverge further the more you turn your head. That is
+   * the "holographic-but-not" skew: the readout sliding out of its own
+   * housing as the camera moves.
+   *
+   * Canvas 2D cannot fix it. A homography is not an affine, `ctx.transform`
+   * takes six numbers, and the missing two are exactly the ones that carry
+   * perspective. So the panel becomes what it always was in the fiction: a
+   * lit rectangle bolted to the console, at a place in the world, drawn by
+   * the same projection as everything else.
+   *
+   * Perspective correctness is then FREE and not approximated. `gl_Position`
+   * carries w = depth, which is what makes the hardware interpolate the UVs
+   * per fragment with the divide included. There is no subdivision here and
+   * no seams, because there is nothing being approximated.
+   *
+   * THE STACKING, which is the part that needs explaining. #gl is z-index 0
+   * and #view is z-index 1 with a transparent background, so the 2D cockpit
+   * is painted OVER the GPU layer. A panel drawn here would therefore be
+   * hidden behind the console it is mounted in — unless the console has a
+   * hole where the screen goes. It does: render.js punches the glass out
+   * with `destination-out` after drawing the housing, and this shows
+   * through it. The housing, the bezel and the stalk stay 2D, because they
+   * are opaque furniture and were never the thing that skewed. */
+
+  var VERT_PANEL = [
+    '#version 300 es',
+    'in vec3 aPos;',           // corner, already relative to the eye, in km
+    'in vec2 aUV;',
+    'uniform vec3 uRight, uUp, uFwd;',
+    'uniform float uFlen;',
+    'uniform vec2 uCenterPx, uViewportPx;',
+    'out vec2 vUV;',
+    'out float vDepth;',
+    'void main() {',
+    '  vUV = aUV;',
+    '  float depth = dot(aPos, uFwd);',
+    '  vDepth = depth;',
+    /* Behind the eye: park it off-screen rather than letting it wrap round
+     * through the projection, exactly as the mesh pass does. */
+    '  if (depth <= 1e-7) { gl_Position = vec4(2.0, 2.0, 0.0, 1.0); return; }',
+    '  float k = uFlen / depth;',
+    '  vec2 px = uCenterPx + vec2(dot(aPos, uRight), -dot(aPos, uUp)) * k;',
+    '  vec2 ndc = vec2(px.x / uViewportPx.x * 2.0 - 1.0,',
+    '                  1.0 - px.y / uViewportPx.y * 2.0);',
+    /* w = depth. This one line is the entire fix: it is what makes vUV
+     * interpolate with the perspective divide instead of linearly. */
+    '  gl_Position = vec4(ndc * depth, 0.0, depth);',
+    '}'
+  ].join('\n');
+
+  var FRAG_PANEL = [
+    '#version 300 es',
+    'precision highp float;',
+    'in vec2 vUV;',
+    'in float vDepth;',
+    'uniform sampler2D uTex;',
+    'uniform float uNear, uInvLogRange;',
+    'uniform float uAlpha;',
+    'out vec4 frag;',
+    'void main() {',
+    '  gl_FragDepth = clamp(log2(max(uNear, vDepth) / uNear) * uInvLogRange, 0.0, 1.0);',
+    '  vec4 c = texture(uTex, vUV);',
+    /* OPAQUE-BACKED, not additive, and that is a correction to the obvious
+     * first instinct. A lit screen in a dark cockpit reads as additive, and
+     * the 2D path did use `lighter` — but the 2D path was drawing onto a
+     * console that was already there. Here the console has a HOLE cut in it
+     * so this can show through, and behind the hole is open space. Additive
+     * over that would put the starfield through the middle of the readout.
+     * So the panel is a surface: it covers what is behind it. */
+    '  frag = vec4(c.rgb, c.a * uAlpha);',
+    '}'
+  ].join('\n');
+
   /* ---- plumbing --------------------------------------------------------- */
 
   function compile(gl, type, src, label) {
@@ -598,6 +680,8 @@
   var queue = [], vw = 0, vh = 0;
   var starProg = null, starUni = null, starVao = null, starCount = 0;
   var meshProg = null, meshUni = null, meshQueue = [], meshSeq = 0;
+  var panelProg = null, panelUni = null, panelVao = null, panelBuf = null;
+  var panelQueue = [], panelTex = [];
 
   /* The logarithmic depth range. NEAR is ten centimetres, because the
    * cockpit view sits about a metre from its own console; FAR is far past
@@ -658,14 +742,54 @@
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
 
+    /* The panel pass. Six vertices per panel — two triangles — rebuilt every
+     * frame into one dynamic buffer, because a console has a handful of
+     * screens and they move with the ship every single frame. There is
+     * nothing here worth caching. */
+    try {
+      panelProg = link(gl, VERT_PANEL, FRAG_PANEL, 'panel');
+      panelUni = uniforms(gl, panelProg, ['uRight', 'uUp', 'uFwd', 'uFlen',
+                                          'uCenterPx', 'uViewportPx',
+                                          'uNear', 'uInvLogRange',
+                                          'uTex', 'uAlpha']);
+      panelBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, panelBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, 6 * 5 * 4, gl.DYNAMIC_DRAW);
+      panelVao = gl.createVertexArray();
+      gl.bindVertexArray(panelVao);
+      var pPos = gl.getAttribLocation(panelProg, 'aPos');
+      var pUV = gl.getAttribLocation(panelProg, 'aUV');
+      if (pPos >= 0) {
+        gl.enableVertexAttribArray(pPos);
+        gl.vertexAttribPointer(pPos, 3, gl.FLOAT, false, 20, 0);
+      }
+      if (pUV >= 0) {
+        gl.enableVertexAttribArray(pUV);
+        gl.vertexAttribPointer(pUV, 2, gl.FLOAT, false, 20, 12);
+      }
+      gl.bindVertexArray(null);
+    } catch (e2) {
+      /* A panel program that will not compile must not cost the player the
+       * world. The 2D MFD path is still there and still correct — skewed,
+       * which is the bug this was meant to fix, but a skewed readout beats
+       * a black screen. render.js asks `GL.panels` before using this. */
+      if (global.console) console.error(e2.message);
+      panelProg = null;
+    }
+
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     GL.available = true;
+    GL.panels = !!panelProg;
     return true;
   };
 
   GL.available = false;
+  /* Defaulted alongside `available`, so a caller can ask before init has run
+   * or after it failed without a special case. The panel program is allowed
+   * to fail on its own while the rest of the layer still works. */
+  GL.panels = false;
 
   /* Upload the starfield once. It is generated by Render.makeStarfield from
    * the system seed and never changes, so it has no business being rebuilt
@@ -852,6 +976,7 @@
   GL.begin = function (bg) {
     queue.length = 0;
     meshQueue.length = 0;
+    panelQueue.length = 0;
     hole = null;
     if (!gl) return;
     if (bg) gl.clearColor(bg[0], bg[1], bg[2], 1);
@@ -876,10 +1001,112 @@
     return true;
   };
 
+  /* Queue one lit panel. `corners` are WORLD points in the order
+   * [topLeft, topRight, bottomRight, bottomLeft] — the same order the 2D
+   * path uses, so a caller can hand the same array to either. `source` is
+   * anything texImage2D accepts; in practice the offscreen canvas render.js
+   * drew the readout into.
+   *
+   * The eye subtraction happens HERE, in JavaScript doubles, for the same
+   * reason queueMesh does it: a panel a metre away and a star ten billion
+   * km away cannot both be expressed in a float. */
+  GL.queuePanel = function (cam, corners, source, alpha) {
+    if (!gl || !panelProg || !corners || corners.length !== 4 || !source) {
+      return false;
+    }
+    var rel = [], i;
+    for (i = 0; i < 4; i++) {
+      rel.push({ x: corners[i].x - cam.eye.x,
+                 y: corners[i].y - cam.eye.y,
+                 z: corners[i].z - cam.eye.z });
+    }
+    panelQueue.push({ rel: rel, src: source, cam: cam,
+                      alpha: (typeof alpha === 'number') ? alpha : 1 });
+    return true;
+  };
+
+  /* One GL texture per queue slot, reused across frames. The MFD content
+   * changes every frame, so the upload is unavoidable; allocating a new
+   * texture for it would not be. */
+  function panelTexture(i) {
+    if (!panelTex[i]) {
+      var t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      /* CLAMP and LINEAR, no mips. A readout is viewed at roughly its own
+       * size and wrapping would drag the far edge of the screen onto the
+       * near one, which is the sort of artefact that reads as corruption. */
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      panelTex[i] = t;
+    }
+    return panelTex[i];
+  }
+
+  function drawPanels() {
+    if (!panelQueue.length || !panelProg) return;
+    var cam = panelQueue[0].cam;
+
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LESS);
+    /* Ordinary alpha, because the panel is a surface that covers the hole it
+     * shows through. Depth-WRITING stays off: panels are the last thing
+     * drawn, so nothing needs to test against them, and two that overlap on
+     * screen should not fight over the buffer. They are still depth-TESTED,
+     * so a panel behind the hull is still hidden by it. */
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+
+    gl.useProgram(panelProg);
+    gl.bindVertexArray(panelVao);
+    gl.uniform2f(panelUni.uViewportPx, vw, vh);
+    gl.uniform2f(panelUni.uCenterPx, cam.cx, cam.cy);
+    gl.uniform1f(panelUni.uFlen, cam.flen);
+    gl.uniform3f(panelUni.uRight, cam.r.x, cam.r.y, cam.r.z);
+    gl.uniform3f(panelUni.uUp, cam.u.x, cam.u.y, cam.u.z);
+    gl.uniform3f(panelUni.uFwd, cam.f.x, cam.f.y, cam.f.z);
+    gl.uniform1f(panelUni.uNear, DEPTH_NEAR);
+    gl.uniform1f(panelUni.uInvLogRange, INV_LOG_RANGE);
+    gl.uniform1i(panelUni.uTex, 0);
+    gl.activeTexture(gl.TEXTURE0);
+
+    var verts = new Float32Array(30);
+    for (var i = 0; i < panelQueue.length; i++) {
+      var p = panelQueue[i], q = p.rel;
+      /* Two triangles: 0-1-2 and 0-2-3. UVs follow the corner order, so
+       * (0,0) is the top-left of the readout. */
+      var order = [0, 1, 2, 0, 2, 3];
+      var uvs = [[0, 0], [1, 0], [1, 1], [0, 0], [1, 1], [0, 1]];
+      for (var k = 0; k < 6; k++) {
+        var c = q[order[k]], o = k * 5;
+        verts[o] = c.x; verts[o + 1] = c.y; verts[o + 2] = c.z;
+        verts[o + 3] = uvs[k][0]; verts[o + 4] = uvs[k][1];
+      }
+      gl.bindBuffer(gl.ARRAY_BUFFER, panelBuf);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, verts);
+      gl.bindTexture(gl.TEXTURE_2D, panelTexture(i));
+      try {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, p.src);
+      } catch (e) { continue; }      // a zero-sized canvas, mid-resize
+      gl.uniform1f(panelUni.uAlpha, p.alpha);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    }
+
+    gl.bindVertexArray(null);
+    gl.depthMask(true);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  }
+
   GL.end = function () {
     if (!gl) return;
     drawBodies();
     drawMeshes();
+    /* Last, so the screens are lit over a finished world rather than
+     * competing with it — and after the hull, so a panel is depth-tested
+     * against the cockpit it is mounted in. */
+    drawPanels();
   };
 
   function drawBodies() {

@@ -270,6 +270,61 @@ every port when they do.
 
 ---
 
+## `userData.interior` — the one block the game reads
+
+**Run `node tools/validate-ports.js ref/ports` before handing over a model.**
+It names every missing field and, for each, the key the same information
+already lives in — most of these are renames.
+
+Four families were modelled independently and each invented its own words for
+the same three ideas:
+
+| concept | runwayPort | padSite | cityPort | cometOutpost |
+|---|---|---|---|---|
+| ground plane | `groundY` | `surfaceY` | *absent* | `crown.plateauY` |
+| hull space | `bay`+`chamber` | `interiorAnchors` | `stands[]` | `openings[]` |
+| route in | `route[]` | `gates[]` | *absent* | `route{lg,sm}` |
+
+The game cannot read four dialects. `Render.portModelFor` is the single key
+deciding both which mesh is drawn and whose dimensions are used, and a second
+copy of it per family is what house rule 6 exists to prevent. So every pattern
+emits one block on the root node:
+
+```js
+userData.interior = {
+  envelope:   { w, h, d },          // the hull the set is sized to
+  padRadius:  Number,               // so the game can talk in pad radii
+  groundY:    Number,               // surface plane — REQUIRED planetside
+  chambers:   [{ id, kind, w, h, d, floorY, ceilY, x, z }],
+  routes:     [{ id, envelope, waypoints: [{ x, y, z, at }] }],
+  gates:      [{ id, node, kind, plane, aperture, open, closed, requires }],
+  carriers:   [{ id, node, kind, level, angle, from, to }],   // optional
+  control:    { node, at, commsRange, access, security, commands },
+  excavation: [{ x, y, z, w, h, d, tag }],
+  groundCut:  { x, y, z, r } | null
+}
+```
+
+Four things the validator checks that are easy to get wrong:
+
+- **Every route carries its OWN envelope.** One shared envelope looks
+  reasonable right up until a heavy hull is swept down a medium branch, or
+  every medium bay is condemned for being medium.
+- **`plane` on a gate.** `'xy'` is a wall, `'xz'` is a lid. A sampler that
+  assumes vertical reads a lid's depth as a height, finds nothing in the
+  middle of a rock slab, and reports a door that covers nothing as sealed.
+- **`groundY` is not `y = 0`.** The group is grounded so `min.y === 0`, but
+  that is the bottom of the excavation. Ground level is the top of the paving.
+- **`carriers[].kind` may be `'both'`** — some traversers are also elevators —
+  and a 45° cargo lift is `angle: 45` with `level: true`, because the shaft is
+  inclined and the deck is not.
+
+`control` is the command cabinet and it must sit **outside** the excavation: a
+computer that lets you in cannot be inside the thing it lets you into, or
+nobody could get in the first time and there would be nothing to break into.
+
+A file matching `detail-kit*` is a parts library, not a port, and is skipped.
+
 ## Not wired yet, but name them anyway
 
 Reserved names the converter records and the renderer ignores for now. They

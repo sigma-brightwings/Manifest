@@ -233,6 +233,20 @@ robbed at all. Wanted means police shoot on sight and that faction's stations
 refuse you dock (surface pads still work — the smuggler's route). Pay the
 bounty off at 160% somewhere that still takes your calls.
 
+**Forcing a ground panel (`F4` → pick a port → `H`).** A surface port's doors
+are not commanded on the port. They answer to a control cabinet standing out
+on the rock beside the works, and it is exposed — you can set down next to it,
+and so can somebody who was never granted anything. Standing decides whether
+you are *granted* clearance and has no bearing at all on whether the cabinet
+can be *taken*, so this is the way into a port that will never clear you.
+
+You have to be beside it (about sixteen pad radii), and it is loud: a failed
+attempt trips the alarm, books a bounty with the cabinet's owner, and locks
+the panel for 45 seconds. A developed world has better locks than a backwater,
+the same lock every time you come back to it. A breach opens the doors you are
+standing at — it is **not** a launch clearance, and it does not follow you to
+the next system.
+
 **Ships.** Four hulls at the yard: the Talon you fly, a Dart that outruns
 everything and carries nothing, a Kestrel that compromises well, and a Mule
 that is slow, vast, and worth robbing. Trade-in at 70% of list; every hull can

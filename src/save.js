@@ -16,14 +16,62 @@
 (function (global) {
   'use strict';
 
-  /* Still 1, and it must stay 1 for as long as changes are ADDITIVE.
-   * readSlot and load both discard a payload whose version does not match
-   * exactly, so bumping this does not migrate old saves — it deletes them.
-   * The slot/equipment change adds a `fit` field and leaves the four legacy
-   * weapon fields in place; Combat.migrateFit rebuilds a fit from those
-   * when it is absent, so a pre-slot career loads with its gear intact.
-   * Bump this only for a change that genuinely cannot be read forward. */
-  var VERSION = 1;
+  /* ---- version EPOCHS, not version numbers -------------------------------
+   * readSlot and load discard a payload whose version does not match exactly,
+   * so bumping this does not migrate old saves — it DELETES them. That makes
+   * the version a blunt instrument, and the policy follows from that: it is
+   * bumped for CLUSTERS of breaking changes, never for one.
+   *
+   * Bumping per change would mean every removal, however small, throws away
+   * every career saved before it. Batching them means one boundary throws
+   * away one generation of saves, and everything on either side of the
+   * boundary is internally consistent.
+   *
+   * So a removal happens in TWO STEPS, and the gap between them is the whole
+   * point:
+   *
+   *   1. STOP READING the field, and add it to DEPRECATED below. It is still
+   *      written, so a save from before the change still loads and a save
+   *      from after it still loads on an older build. Nothing breaks. This
+   *      step is free and can happen any time.
+   *
+   *   2. At the NEXT epoch bump, delete everything on the shelf at once and
+   *      empty it. That is the only moment a field actually stops being
+   *      written, and it is the moment old saves are discarded anyway.
+   *
+   * The shelf is the part that makes this work rather than being a good
+   * intention: without it, "we'll clean that up at the next bump" is a thing
+   * nobody remembers, and the fields accumulate forever because removing one
+   * on its own was never worth a bump.
+   */
+  /* EPOCH 2 — the Syndicate.
+   *
+   * Bumped because this is a cluster, not a change: galactic territory was
+   * redrawn (balanced major cells, three pirate holds, minor powers),
+   * permissivity was rebuilt on two axes (violence and corruption) instead
+   * of one, and two commodities' worth of new economy hangs off both. A
+   * career from epoch 1 is in a galaxy whose map no longer exists — the
+   * same seed now draws different owners for a third of its stars — so
+   * there is nothing to migrate it to.
+   *
+   * The rule this follows, and the reason it is not VERSION 5 by now: the
+   * number moves for CLUSTERS of major changes, never per change. It is a
+   * marker for "everything below this line can be removed without breaking
+   * anything downstream of it in time", which is only useful if the lines
+   * are far enough apart to be worth drawing. */
+  var VERSION = 2;
+
+  /* Written but no longer read. Delete the lot at the next epoch bump, then
+   * empty this list. Each entry says what replaced it, because "why is this
+   * still here" is the question a reader will actually have.
+   *
+   * Empty right now — the equipment change kept `gun`/`turret`/`shield`/
+   * `heatshield` deliberately live rather than deprecated, since
+   * Combat.migrateFit still reads them to rebuild a `fit` for a pre-slot
+   * career. They are not on the shelf because they are not yet unread. */
+  var DEPRECATED = [
+    // { field: 'ship.oldThing', unreadSince: 'the X change', replacedBy: 'ship.newThing' }
+  ];
 
   function key(seed) { return 'psg1|' + seed; }
 
@@ -147,8 +195,25 @@
       ship: {
         pos: s.pos, vel: s.vel, fwd: s.fwd, up: s.up, right: s.right,
         fuel: s.fuel, thrusterFuel: s.thrusterFuel,
+        /* Whether the military drive is armed. Additive and undefined-safe:
+         * Slipspace.milRunning treats anything but an explicit false as
+         * armed, so a career that predates the drive loads with no drive to
+         * arm and reads correctly either way. */
+        milArmed: s.milArmed,
+        /* Which ordnance is racked and how bad the crate is. Additive: an
+         * older career comes back with an undefined type, which fireMissile
+         * reads as a Hawk — exactly what it was carrying. */
+        missileId: s.missileId, missileBatch: s.missileBatch,
+        missileSeq: s.missileSeq,
         cargo: s.cargo, credits: s.credits,
-        docked: s.docked || null,
+        /* A career saved MID-ARRIVAL comes back parked. During the lift
+         * ride `docked` is still null and the ship's recorded position is
+         * half way down a shaft — restoring that literally would put the
+         * hull in free flight inside solid rock. Recording the destination
+         * instead means load re-docks it at the berth, which is also the
+         * honest reading: you were on your way in, so you arrived.
+         * Additive, and old saves have no `arrival` to consult. */
+        docked: s.docked || (s.arrival ? s.arrival.port : null),
         hullId: s.hullId, hullHp: s.hullHp,
         /* The four legacy fields are still written, and deliberately so:
          * they are what an older build would read if a save travelled
@@ -165,7 +230,12 @@
          * migrate old saves, it deletes them. */
         groups: s.groups || {},
         /* Named things belong to the pilot, not the hull. */
-        reg: s.reg || null, shipName: s.shipName || null
+        reg: s.reg || null, shipName: s.shipName || null,
+        /* Additive, and absent from every save written before the cockpit
+         * kit existed — those load with bornId null and cockpitSpec falls
+         * back to the hull id, which is a stable seed too. So an old career
+         * gets a consistent bridge, just not a uniquely flaired one. */
+        bornId: s.bornId || null
       },
       pilotName: G.pilotName || null,
       standing: G.standing || {},
@@ -174,6 +244,26 @@
        * the same way a dented hull does. */
       deadPanels: G.deadPanels || {},
       wanted: G.wanted || {},
+      /* How many times you have taken an occupied berth, per faction. Additive
+         and NO version bump: an old career loads with none recorded, which is
+         the right answer for a pilot who has never done it. */
+      queueJumps: G.queueJumps || {},
+      /* A witness who is mid-transmission when you save is still
+       * mid-transmission when you load. Additive: an older save has no
+       * field and comes back with nobody talking, which is the correct
+       * reading of "this career predates witnesses being buyable". */
+      pendingReport: G.pendingReport || null,
+      /* An order to leave outlives a save — it is cleared by getting rid of
+       * the cargo, not by quitting to the menu. */
+      expelled: G.expelled || null,
+      /* Corruption you bribed onto a place, not a fact about its
+       * government (that stays in `sys`, regenerated from the seed every
+       * time and never saved — see combat.js's corruption-lever section).
+       * Keyed by star id: { v: points, t: G.t at last touch }, read back
+       * decayed rather than ticked. Additive: an older career loads with
+       * none and every system reads exactly its generated baseline, which
+       * is the correct answer for a pilot who never bribed anyone. */
+      corruptionShift: G.corruptionShift || {},
       missions: G.missions || [],
       doneMissions: G.doneMissions || {},
       campaigns: G.campaigns || {},
@@ -230,6 +320,9 @@
     var s = G.ship, d = data.ship;
     s.pos = d.pos; s.vel = d.vel; s.fwd = d.fwd; s.up = d.up; s.right = d.right;
     s.fuel = d.fuel; s.thrusterFuel = d.thrusterFuel;
+    s.milArmed = d.milArmed;
+    s.missileId = d.missileId; s.missileBatch = d.missileBatch;
+    s.missileSeq = d.missileSeq;
     s.cargo = d.cargo || {}; s.credits = d.credits;
     s.hullId = d.hullId; s.hullHp = d.hullHp;
     s.gun = d.gun; s.turret = d.turret; s.shield = d.shield;
@@ -238,6 +331,7 @@
     s.sinks = d.sinks || 0;
     if (d.reg) s.reg = d.reg;
     s.shipName = d.shipName || null;
+    s.bornId = d.bornId || null;
     G.pilotName = data.pilotName || null;
 
     /* The hull's fixed numbers come from the catalogue, not the save —
@@ -265,6 +359,11 @@
     G.standing = data.standing || {};
     G.deadPanels = data.deadPanels || {};
     G.wanted = data.wanted || {};
+    G.queueJumps = data.queueJumps || {};
+    G.pendingReport = data.pendingReport || null;
+    G.expelled = data.expelled || null;
+    G.corruptionShift = (data.corruptionShift && typeof data.corruptionShift === 'object')
+      ? data.corruptionShift : {};
     G.missions = data.missions || [];
     G.doneMissions = data.doneMissions || {};
     G.campaigns = data.campaigns || {};
@@ -307,7 +406,8 @@
   var Save = {
     snapshot: snapshot, store: store, load: load, clear: clear, restore: restore,
     loadPrefs: loadPrefs, savePrefs: savePrefs,
-    SLOT_COUNT: SLOT_COUNT, slots: slots, readSlot: readSlot,
+    SLOT_COUNT: SLOT_COUNT,
+    DEPRECATED: DEPRECATED, slots: slots, readSlot: readSlot,
     writeSlot: writeSlot, clearSlot: clearSlot, autoLabel: autoLabel, describe: describe
   };
   global.Save = Save;

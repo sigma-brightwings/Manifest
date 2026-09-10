@@ -208,9 +208,36 @@
     return kg.toExponential(2) + ' kg';
   }
 
+  /* Everything that speaks to the player goes through say(), and until now
+   * that meant a line that appeared for three seconds and was then gone for
+   * good — so a docking refusal you looked away from was simply unrecoverable.
+   * The transient line stays, because in-flight you need to be told things
+   * without opening a screen; what is new is that it is also KEPT. The comms
+   * screen reads the log back, thirty deep. */
+  var MSG_LOG_MAX = 30;
+
+  function logMessage(text) {
+    if (!G.msgLog) G.msgLog = [];
+    var last = G.msgLog[G.msgLog.length - 1];
+    /* A message repeated is one entry with a count, not thirty identical
+       lines: traffic control refusing you once a second would otherwise
+       flush the whole log before you could read why. */
+    if (last && last.text === text) {
+      last.n = (last.n || 1) + 1;
+      last.at = G.t;
+      return;
+    }
+    G.msgLog.push({ text: text, at: G.t, n: 1 });
+    if (G.msgLog.length > MSG_LOG_MAX) G.msgLog.splice(0, G.msgLog.length - MSG_LOG_MAX);
+    /* Anchored to the newest unless the player has scrolled back, so reading
+       old traffic is not yanked out from under them by a new arrival. */
+    if (!G.msgScroll) G.msgScroll = 0; else G.msgScroll++;
+  }
+
   function say(msg, seconds) {
     G.message = msg;
     G.messageUntil = performance.now() + (seconds || 3) * 1000;
+    logMessage(msg);
   }
 
   /* ---- setup ---------------------------------------------------------- */
@@ -299,6 +326,11 @@
       }
     }
     G.wasDocked = false;
+
+    /* Customs, if this is Syndicate ground and you brought tailings with
+     * you. Only on ARRIVAL — booting a career or loading a save inside a
+     * hold must not re-levy a fine you already paid. */
+    if (opts.arrive && global.Combat) Combat.wasteCustoms(G, star, G.sys, HOOKS);
 
     G.stars = Render.makeStarfield(star.seed, 1600);
     /* Hand the sky to the GPU layer too. Same array, so the cruise-warp
@@ -693,6 +725,27 @@
   var HYPER_CHARGE = 1.5, HYPER_TUNNEL = 4.4, HYPER_EXIT = 1.3;
   var HYPER_SWAP_AT = 0.52;          // fraction through the tunnel
 
+  /* Fitted is permanent; RUNNING is per-jump. A drive you could not shut
+   * down would make every course into Syndicate space a fine, which would
+   * turn a decision into a wall — the opposite of what banning the WASTE
+   * rather than the hardware was for. */
+  function toggleMilDrive() {
+    if (!Slip.militaryClass(G.ship)) {
+      say('No military drive fitted.', 3);
+      return;
+    }
+    G.ship.milArmed = !Slip.milRunning(G.ship);
+    if (G.ship.milArmed) {
+      var slugs = (G.ship.cargo && G.ship.cargo.milfuel) || 0;
+      say('Military drive ARMED — half transit, burns slugs, breeds waste.' +
+          (slugs > 0 ? '  ' + slugs.toFixed(1) + ' t of fuel aboard.'
+                     : '  NO FUEL ABOARD — it will not take hydrogen.'), 6);
+    } else {
+      say('Military drive shut down — running clean on hydrogen.', 4);
+    }
+    HOOKS.sound('click');
+  }
+
   function doJump(plan) {
     if (!plan || !plan.possible) {
       say('Not enough propellant — that jump needs ' + plan.fuel.toFixed(1) + ' t', 4);
@@ -700,6 +753,29 @@
     }
     if (G.ship.landed) { say('Cannot jump from a planetary surface', 3); return; }
     if (G.hyper) return;
+
+    /* ARRIVING DIRTY. The Syndicate bans radioactive waste in the systems
+     * it holds, and a Chernobyl breeds the stuff into your hold on the way
+     * — so the offence is committed in the corridor and charged the moment
+     * you drop out of it, by which point there is nothing to be done.
+     *
+     * Hence a confirm, on the same two-press idiom as settling a bounty:
+     * the first press states the charge, the second accepts it. A ten
+     * thousand credit mistake should not be one keypress deep, and the way
+     * out of it — shut the drive down, or sell the waste first — is worth
+     * naming while there is still time to take it. */
+    if (plan.arrivesDirty && !(G.dirtyJump && G.dirtyJump.to === plan.to.id &&
+                               G.t <= G.dirtyJump.until)) {
+      G.dirtyJump = { to: plan.to.id, until: G.t + 30 };
+      say('SYNDICATE GROUND — ' + plan.to.name + ' bans tailings. You would arrive with ' +
+          plan.wasteAboard.toFixed(1) + ' t aboard: ' +
+          Combat.WASTE_FINE.toLocaleString() + ' cr and an order to leave.' +
+          (plan.military ? '  Shut the drive down or ' : '  ') +
+          'dump the waste first — or jump again to accept it.', 10);
+      HOOKS.sound('warn');
+      return;
+    }
+    G.dirtyJump = null;
 
     if (G.ship.docked) {
       Sim.undockShip(G.ship, G.sys, G.t, 0.003);
@@ -715,7 +791,18 @@
     Sim.sleepAll(G.sys);
     HOOKS.sound('jump');
 
-    G.ship.fuel = Math.max(0, G.ship.fuel - plan.fuel);
+    /* Pay for the corridor. A Chernobyl takes nothing out of the hydrogen
+     * tank at all — it burns slugs out of the HOLD and puts waste back in
+     * the same place, which is why running hot costs cargo capacity twice
+     * over and why what you arrive carrying is evidence. */
+    if (plan.military) {
+      G.ship.cargo = G.ship.cargo || {};
+      G.ship.cargo.milfuel = Math.max(0, (G.ship.cargo.milfuel || 0) - plan.slugs);
+      if (G.ship.cargo.milfuel < 0.001) delete G.ship.cargo.milfuel;
+      G.ship.cargo.waste = (G.ship.cargo.waste || 0) + plan.waste;
+    } else {
+      G.ship.fuel = Math.max(0, G.ship.fuel - plan.fuel);
+    }
     Sim.refreshShip(G.ship);
     G.starMap = null;
     G.market = null;
@@ -1312,7 +1399,19 @@
           if (e.shiftKey) toggleGear();
           else G.showGrid = !G.showGrid;
           break;
-        case 'h': G.showHelp = !G.showHelp; break;
+        /* H is the help overlay. SHIFT+H is having a word with whoever is
+         * about to transmit — a separate action on a shared key because
+         * there is nowhere else sensible for it to live, and because the
+         * two can never be wanted at the same moment: one is something you
+         * read at leisure, the other has eight seconds on it.
+         *
+         * The price is quoted in the warning the moment you are witnessed,
+         * not behind a second keypress, because the whole decision has to
+         * fit inside those eight seconds. */
+        case 'h':
+          if (e.shiftKey) { Combat.hushWitness(G.sys, G, G.t, HOOKS); break; }
+          G.showHelp = !G.showHelp;
+          break;
         /* Escape means "out of this" everywhere, and it already meant it on
          * every mode screen (modeKey sends you back to flight). In flight
          * there was nothing left to back out to, which is exactly where a
@@ -1422,7 +1521,14 @@
           if (e.shiftKey) followWake();
           else openStarMap();
           break;
-        case 'z': toggleCruise(); break;
+        /* Z is cruise. SHIFT+Z arms or shuts down the military drive —
+         * next to it because they are the same question asked of the two
+         * drives, and because arming a Chernobyl is a thing you do while
+         * looking at a course, not while looking at an outfitter. */
+        case 'z':
+          if (e.shiftKey) { toggleMilDrive(); break; }
+          toggleCruise();
+          break;
 
         /* Manoeuvre nodes. Deliberately a cluster on the right of the
          * keyboard, well away from the thrust and attitude keys — planning
@@ -1900,6 +2006,33 @@
     }
     if (MODES[i].id !== 'galaxy' && MODES[i].id !== 'jump') G.starMap = null;
 
+    /* Docked, F4 opens on the port you are standing in.
+     *
+     * It is the channel you want nine times in ten — clearance to launch, the
+     * ground panel, whatever the harbourmaster last said to you — and it was
+     * never the one selected. The list sorts by range, but the police
+     * frequencies are pinned at range 0 so they can be found in a hurry, and
+     * they therefore sit ahead of the port whose deck you are parked on. So
+     * arriving at the comms screen while docked meant scrolling past every
+     * flag in the system to reach the one you were inside.
+     *
+     * Only on ENTERING the screen (`was !== i`), never while you are on it —
+     * re-selecting under the arrow keys would make the list fight the hand
+     * using it. And it selects rather than hails: opening a channel is a
+     * decision with a price on it, and Enter is where that lives. */
+    if (MODES[i].id === 'comms' && was !== i && G.ship.docked &&
+        global.Screens && global.Screens.commsContacts) {
+      var here = global.Screens.commsContacts();
+      for (var ci = 0; ci < here.length; ci++) {
+        if (here[ci].kind === 'station' && here[ci].obj &&
+            here[ci].obj.id === G.ship.docked) {
+          G.commsSel = ci;
+          G.piracyMenu = null;
+          break;
+        }
+      }
+    }
+
     /* The orbit map borrows the camera. What you were doing with it —
      * cockpit or chase, whatever you were focused on, however far out —
      * is put back exactly when you leave, because a map that scrambles
@@ -1973,6 +2106,20 @@
         /* Y only means anything against a standing quote, so it shadows
          * nothing the player would otherwise want here. */
         if (key === 'y') { payOutstanding(); return true; }
+        /* H forces the ground panel of whichever port is selected. On the
+         * comms list because the cabinet answers on the comms channel and
+         * is addressed to whoever is adjacent to it — the model's own
+         * `channel: 'comms', addressedTo: 'adjacent'`. It shadows nothing:
+         * the list is driven by the arrows and Enter. */
+        if (key === 'h') { forceSelectedPanel(contacts[G.commsSel]); return true; }
+        /* The log scrolls on its own keys — the arrows already belong to the
+           channel list, and stealing them would make the two panes fight. */
+        if (key === '[') {
+          var depth = (G.msgLog || []).length;
+          G.msgScroll = Math.min(Math.max(0, depth - 1), (G.msgScroll || 0) + 1);
+          return true;
+        }
+        if (key === ']') { G.msgScroll = Math.max(0, (G.msgScroll || 0) - 1); return true; }
         return false;
       }
 
@@ -2113,14 +2260,27 @@
      * we are standing in — which is where a drive like this would put you
      * and is the only arrival that is any use. */
     var dom = Sim.dominantBody(G.ship.pos, G.sys, G.t);
-    var bs = Sim.bodyState(dom, G.sys, G.t);
-    var rel = V.sub(G.ship.pos, bs.pos);
-    var r = V.len(rel);
-    if (r > 1e-6 && dom.mu > 0) {
-      var up = V.scale(rel, 1 / r);
-      var ref = Math.abs(up.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 0, y: 1, z: 0 };
-      var along = V.norm(V.cross(ref, up));
-      G.ship.vel = V.addScaled(bs.vel, along, Math.sqrt(dom.mu / r));
+    /* GUARDED, because the guard that was here tested the wrong thing.
+     * `dom.mu > 0` reads mu off dom, so a null dom threw one line before
+     * the test that was meant to catch it — and `bodyState` dereferences
+     * `body.id` immediately, so it threw one line before that.
+     *
+     * dominantBody returns null for a system with no gravitating bodies.
+     * The interstellar locale deliberately keeps its one star so that stays
+     * unreachable today (see Gen.interstellarSystem, which exists precisely
+     * so nothing needs a branch for "nowhere"). But a locale that does not
+     * is one line of generation away, and disengaging the cruise drive
+     * should degrade to "your velocity is left alone", not to a crash. */
+    if (dom) {
+      var bs = Sim.bodyState(dom, G.sys, G.t);
+      var rel = V.sub(G.ship.pos, bs.pos);
+      var r = V.len(rel);
+      if (r > 1e-6 && dom.mu > 0) {
+        var up = V.scale(rel, 1 / r);
+        var ref = Math.abs(up.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 0, y: 1, z: 0 };
+        var along = V.norm(V.cross(ref, up));
+        G.ship.vel = V.addScaled(bs.vel, along, Math.sqrt(dom.mu / r));
+      }
     }
     G.cruise = null;
     G.ship.thrust = V.zero();
@@ -3057,6 +3217,31 @@
     HOOKS.sound('click');
   }
 
+  /* Break into the selected port's control cabinet.
+   *
+   * A SEPARATE ACTION FROM HAILING, deliberately. Enter asks; H takes. Those
+   * are not two flavours of the same request and folding them onto one key
+   * would mean a mis-keyed hail could book you a bounty. */
+  function forceSelectedPanel(contact) {
+    if (!contact) { say('Nobody selected', 2); return; }
+    if (contact.kind !== 'station') {
+      say('Nothing there answers to a ground channel', 3);
+      return;
+    }
+    Combat.hackControl(G, contact.obj, HOOKS, G.t);
+  }
+
+  /* Does forcing this port's panel currently make sense? Used only to decide
+   * whether to MENTION it, which is the whole reason it exists as a
+   * predicate: a refusal that does not say what else you could do is the
+   * greyed-button problem in prose. */
+  function canForcePanel(port) {
+    if (!port || !port.surface) return false;
+    if (Combat.breachedHere(G, port) || Combat.isCleared(G, port)) return false;
+    return !!(Gen.controlFor && Gen.controlFor(port, G.sys) &&
+              Sim.controlInRange(G.ship, port, G.sys, G.t));
+  }
+
   function hailSelected(contact) {
     if (!contact) { say('Nobody selected', 2); return; }
     if (contact.kind === 'authority') { hailAuthority(contact.obj); return; }
@@ -3079,7 +3264,20 @@
       say(port.name + ': "You are already cleared. Come on in."', 4);
       return;
     }
-    Combat.requestClearance(G, port, HOOKS);
+    /* Ask the port how full it is before asking it for a berth. The count is
+       closed-form off the traffic timetable, so it is the same answer the
+       ships themselves are flying to — the port is not making it up. */
+    var res = Combat.requestClearance(G, port, HOOKS,
+                                      Sim.berthStatus(port, G.sys, G.t, G.ship));
+    /* THE REFUSAL CARRIES THE OTHER OPTION. This is where the mechanic is
+     * discovered: a port that will not clear a wanted pilot is exactly the
+     * port that pilot needs, and being told "no" while parked next to an
+     * exposed cabinet should mention the cabinet. Only when it would
+     * actually work, so it is never advice you cannot take. */
+    if (res && !res.granted && canForcePanel(port)) {
+      say(port.name + ' control cabinet is in reach — H to force the panel', 7);
+    }
+    return res;
   }
 
   /* Landing gear.
@@ -3109,6 +3307,11 @@
   }
 
   function jettisonWaste() {
+    /* One key, two emergencies, and they cannot be confused: a hung seeker
+     * is a two-second window with an alarm on it, and if one is live then
+     * "get it off my ship" unambiguously means the rack. The waste is still
+     * there afterwards. */
+    if (G.hungSeeker) { Combat.jettisonRack(G, HOOKS); return; }
     if (heldTonnes('waste') <= 0) { say('No waste aboard', 2); return; }
     jettison('waste', Infinity);
   }
@@ -3163,6 +3366,13 @@
        * out of — is what lets anything later tell an accident from a
        * crime. */
       if (can && good && good.waste) { can.illegal = true; can.dumpedBy = 'player'; }
+      /* Not yours again until it has got clear. Tagged here rather than in
+       * dropCanister for the same reason the waste flag is: sim.js makes
+       * canisters for the airlock, for a dying ship's hold and for a
+       * freighter handing its cargo over, and only the first of those is a
+       * thing the player must not immediately re-swallow. See
+       * scoopCanisters. */
+      if (can) can.armed = false;
     }
 
     /* Dumping waste is a crime and resolves at the moment of the act, the
@@ -3300,7 +3510,12 @@
    * every direction is shown on screen as an arrow pointing where the burn
    * will push you. */
   function orbitalFrame() {
-    var dom = Sim.dominantBody(G.ship.pos, G.sys, G.t);
+    /* Falls back to the root rather than returning null: every caller reads
+     * .prograde/.radial/.normal off this without checking, so handing back
+     * null would move the crash rather than remove it. The root is always a
+     * body, and in the one system where there is nothing else it is also
+     * the correct answer. */
+    var dom = Sim.dominantBody(G.ship.pos, G.sys, G.t) || G.sys.root;
     var bs = Sim.bodyState(dom, G.sys, G.t);
     var rel = V.sub(G.ship.pos, bs.pos);
     var vrel = V.sub(G.ship.vel, bs.vel);
@@ -3574,12 +3789,25 @@
     G.physicsLimited = false;
     G.impactWarning = null;
 
-    if (!G.paused && G.ship.docked) {
+    if (!G.paused && Sim.arrivalActive(G.ship)) {
+      /* BEING CARRIED. Not docked yet and not flying either, so neither of
+       * the branches below is right: there is nothing to integrate, but the
+       * hull is moving and the clock must advance at something a human can
+       * watch. Warp is forced to 1x rather than merely capped — the legs
+       * are measured in sim seconds, and at 500x the entire arrival would
+       * resolve inside a single frame, which is exactly how the weapon
+       * cooldowns managed to fire sixty shots a second. */
+      G.lastDtSim = dtReal;
+      G.t += G.lastDtSim;
+      G.warpIndex = 0;
+      G.arrivalPose = Sim.stepArrival(G.ship, G.sys, G.t);
+    } else if (!G.paused && G.ship.docked) {
       /* Docked: rigidly attached to the target, so there is nothing to
        * integrate and nothing that can go wrong — time is free to run at
        * full warp with no collision risk and no accuracy cap. */
       G.lastDtSim = warp * dtReal;
       G.t += G.lastDtSim;
+      G.arrivalPose = null;
       Sim.updateDockedShip(G.ship, G.sys, G.t);
     } else if (!G.paused && !G.ship.landed) {
       var dtSim = warp * dtReal;
@@ -3732,8 +3960,16 @@
               HOOKS.sound('warn');
             }
           } else {
-            Sim.dockShip(G.ship, G.dockTarget, G.sys, G.t);
-            say('Docked with ' + G.dockTarget.name, 5);
+            /* SLOWLY, if the port has somewhere to carry you. beginArrival
+             * refuses for an orbital clamp — no shaft, no traverser — and
+             * for anything with no bay geometry, and in both cases this
+             * falls back to the snap that has always happened. */
+            if (Sim.beginArrival(G.ship, G.dockTarget, G.sys, G.t)) {
+              say(G.dockTarget.name + ': "Cleared to the pad. Hold for the lift."', 5);
+            } else {
+              Sim.dockShip(G.ship, G.dockTarget, G.sys, G.t);
+              say('Docked with ' + G.dockTarget.name, 5);
+            }
             G.warpIndex = 0;
           }
         }
@@ -3758,7 +3994,11 @@
      * runs once a frame whatever the ship is doing. */
     if (!G.wasDocked && G.ship.docked) {
       var arrivedAt = G.sys.byId[G.ship.docked];
-      if (arrivedAt) Combat.arriveAtPort(G, arrivedAt, HOOKS);
+      /* Occupancy is measured at the instant the clamps close, not when
+         clearance was asked for: a berth that emptied while you flew in is
+         not a berth you stole. */
+      if (arrivedAt) Combat.arriveAtPort(G, arrivedAt, HOOKS,
+                                         Sim.berthStatus(arrivedAt, G.sys, G.t, G.ship));
     }
     G.wasDocked = !!G.ship.docked;
 
@@ -3833,7 +4073,7 @@
         G.warpIndex = maxIdx;
         if (!G.encounterWarned) {
           G.encounterWarned = true;
-          say(G.encounter.closest < 1000
+          say(G.encounter.dangerClosest < 1000
             ? 'Ship alongside — time warp held at ' + WARPS[maxIdx] + '×'
             : 'Traffic closing — time warp limited', 4);
         }
@@ -4076,13 +4316,56 @@
    * and the way in is to widen this function rather than to teach every
    * caller a second rule. */
   function enclosedPort() {
-    return berthedPort();
+    var berthed = berthedPort();
+    if (berthed) return berthed;
+    /* MID-ARRIVAL the answer changes partway through, and that transition
+     * is the best thing this sequence does. On the apron you are outside:
+     * the sky is there, the planet is there, and the doors are opening
+     * under the hull. The moment the car starts down and the leaves seal
+     * over it, the world goes away — not because a flag flipped on arrival
+     * but because something closed above you. `Sim.arrivalPose` decides
+     * which leg that is, so the renderer and the sim cannot disagree
+     * about whether you are indoors. */
+    if (G.arrivalPose && G.arrivalPose.enclosed && G.ship && G.ship.arrival) {
+      var p = G.sys.byId[G.ship.arrival.port];
+      if (p && p.surface) return p;
+    }
+    return null;
   }
 
   function clampCameraToEnclosure() {
     if (G.viewMode === 'cockpit') return;   // the eye is the pilot's, not a boom
-    var port = berthedPort();
+    /* The clamp follows the ENCLOSURE, not the docked flag. Half way down
+     * the shaft the hull is inside a tube and the boom has to be shortened
+     * or the eye ends up in the rock; on the apron it is outside and must
+     * not be, or the camera would snap in the moment traffic control
+     * answered. Same predicate the world-suppression uses, so the two
+     * cannot drift apart. */
+    var port = enclosedPort();
     if (port) {
+      /* IN THE SHAFT, THE SHAFT IS THE ROOM, and getting this wrong is
+       * silent and ugly. `clampCameraToHangar` measures against the
+       * hangar's floor and ceiling; half way down the incline the hull is
+       * well ABOVE that ceiling, so `(ceil - z0)` goes negative, the limit
+       * goes negative, and the boom collapses to MIN_CAM_DIST for the whole
+       * descent — six seconds of the camera welded to the hull during the
+       * one shot this sequence exists for.
+       *
+       * So while the car is running, the limit is the tube's own clear
+       * half-width. Deliberately a radial limit rather than a slab test in
+       * the inclined frame: it is conservative in every direction, it needs
+       * no second derivation of the incline's basis (house rule 6, and the
+       * shaft frame is exactly what got built wrong from a rotation last
+       * time), and the eye cannot leave the tube. A true slab test would
+       * buy a little more room and is worth doing if it ever looks tight. */
+      var ap = G.arrivalPose;
+      if (ap && ap.legId === 'descend') {
+        var clear = (port.incline && port.incline.clear &&
+                     port.incline.clear.perp / (port.radius || 1)) || 1.0;
+        G.cam.dist = Math.max(MIN_CAM_DIST,
+                              Math.min(G.cam.dist, clear * 0.5 - HANGAR_MARGIN));
+        return;
+      }
       clampCameraToHangar(port);
       return;
     }
@@ -4117,18 +4400,59 @@
   /* Collect any canister the ship drifts onto gently. The thresholds are
    * deliberately tight — 80 metres and 20 m/s — because scooping is meant
    * to be a piece of flying, not a vacuum cleaner. */
+  var SCOOP_RANGE = 0.08;      // km
+  var SCOOP_CLOSE = 0.02;      // km/s of relative velocity
+  var noScoopSaidAt = 0;       // wall clock, so the refusal is not per-frame
+
+  /* Without a scoop you can still fly into a crate; you simply cannot have
+   * it. Said on a real-time cooldown because a pilot with no scoop can sit
+   * inside a canister indefinitely and a per-frame refusal would bury
+   * everything else on the message channel. */
+  function sayNoScoop(c) {
+    var now = Date.now();
+    if (now - noScoopSaidAt < 12000) return;
+    noScoopSaidAt = now;
+    var good = Eco.BY_ID[c.cid];
+    say('No cargo scoop fitted — ' + (good ? good.name : c.cid) +
+        ' drifts past. Any yard sells one.', 5);
+  }
+
   function scoopCanisters() {
     if (G.ship.docked || G.ship.landed) return;
     var cans = G.sys.canisters;
     if (!cans || !cans.length) return;
+    var scoop = Combat.hasScoop(G.ship);
     for (var i = cans.length - 1; i >= 0; i--) {
       var c = cans[i];
       /* Most wreckage is wreckage. A shard only goes aboard if something on
        * it survived worth having — the rest is scrap you fly through, and
        * quietly hoovering it up would turn a debris field into a chore. */
       if (!c.cid || !(c.tonnes > 0)) continue;
-      if (V.dist(c.pos, G.ship.pos) > 0.08) continue;
-      if (V.dist(c.vel, G.ship.vel) > 0.02) continue;
+      var near = V.dist(c.pos, G.ship.pos) <= SCOOP_RANGE;
+
+      /* ARMING, and it is the whole reason jettison used to do nothing.
+       * A crate leaves the airlock 50 m behind you — comfortably inside the
+       * 80 m scoop envelope — so the ship inhaled it again on the very next
+       * frame and the hold came out unchanged. Anything you pushed out
+       * yourself is therefore inert until it has actually got clear of you.
+       *
+       * A DISTANCE test rather than a timer, on purpose: a timer measured in
+       * sim seconds evaporates under time compression and a timer measured
+       * in real seconds would let you sit still and wait it out. This one
+       * says the only thing that matters — the crate is not yours again
+       * until it has genuinely got away — and it resolves on its own in
+       * about seven seconds from the 12 m/s shove, or immediately if you
+       * are moving. Cargo somebody ELSE dumped has no `armed` field at all
+       * and is catchable at once, which is what makes robbing a freighter
+       * work. */
+      if (c.armed === false) {
+        if (!near) c.armed = true;
+        continue;
+      }
+
+      if (!near) continue;
+      if (V.dist(c.vel, G.ship.vel) > SCOOP_CLOSE) continue;
+      if (!scoop) { sayNoScoop(c); continue; }
       var free = G.ship.cargoCap - Sim.cargoMass(G.ship);
       if (free <= 0) { say('Hold full — canister left drifting', 3); return; }
       var take = Math.min(c.tonnes, free);
@@ -6452,37 +6776,45 @@
                          fn: (function (id) { return function () { cycleDashPage(id, 1); }; })(p.id) });
       }
 
-      if (!Render.mfdBegin(ctx, p)) continue;
+      /* mfdBegin hands back the context the readout should be drawn into,
+       * which is NOT always the one passed in. On the GPU path it is an
+       * offscreen canvas at the panel's own pixel size, handed to gl.js at
+       * mfdEnd as a textured quad in the world; on the 2D path it is `ctx`
+       * with the old clip and affine applied. Everything below draws in
+       * panel pixel space either way and does not need to know which. */
+      var mc = Render.mfdBegin(ctx, p);
+      if (!mc) continue;
 
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'alphabetic';
+      mc.textAlign = 'left';
+      mc.textBaseline = 'alphabetic';
       if (G.deadPanels && G.deadPanels[p.id]) {
-        drawDeadPanel(ctx, p);
-        Render.mfdEnd(ctx);
+        drawDeadPanel(mc, p);
+        Render.mfdEnd(mc, p);
         continue;
       }
       if (hyper) {
         /* No system to be in, so the pages have nothing true to say and the
          * screens say so rather than drawing a stale one. */
-        mfdShell(ctx, page.title, 'no returns in the tunnel');
-        ctx.font = '12px ui-monospace, monospace';
-        ctx.fillStyle = MFD_DIM;
-        ctx.fillText('HYPERSPACE', 10, MFD_BODY_TOP + 26);
+        mfdShell(mc, page.title, 'no returns in the tunnel');
+        mc.font = '12px ui-monospace, monospace';
+        mc.fillStyle = MFD_DIM;
+        mc.fillText('HYPERSPACE', 10, MFD_BODY_TOP + 26);
       } else if (page.draw) {
-        page.draw(ctx, p.w, p.h);
+        page.draw(mc, p.w, p.h);
       } else {
-        mfdShell(ctx, 'OFF', 'click to bring this panel up');
+        mfdShell(mc, 'OFF', 'click to bring this panel up');
       }
 
       /* A phosphor wash and scanlines, inside the panel's own space so they
        * lie on the glass of the screen and foreshorten with it. */
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.globalAlpha = 0.05;
-      ctx.fillStyle = '#7dffcf';
-      for (var y = 0; y < p.h; y += 3) ctx.fillRect(2, y, p.w - 4, 1);
-      ctx.globalAlpha = 1;
+      mc.globalCompositeOperation = 'lighter';
+      mc.globalAlpha = 0.05;
+      mc.fillStyle = '#7dffcf';
+      for (var y = 0; y < p.h; y += 3) mc.fillRect(2, y, p.w - 4, 1);
+      mc.globalAlpha = 1;
+      mc.globalCompositeOperation = 'source-over';
 
-      Render.mfdEnd(ctx);
+      Render.mfdEnd(mc, p);
     }
   }
 
@@ -8159,7 +8491,16 @@
         ['on', G.ship.landedOn ? G.ship.landedOn.name : '—'],
         ['contact speed', fmtSpeed(G.ship.impactSpeed || 0),
           G.ship.crashed ? '#ff7a7a' : '#7dffb0'],
-        ['surface gravity', fmtSpeed(dom.mu / (dom.radius * dom.radius)) + '²']
+        /* An em dash rather than a number, because `dom` here is a chain of
+         * fallbacks ending in `G.sys.root` and every link in it can be
+         * absent — this is the branch that runs when the ship is neither in
+         * an orbit nor docked, which includes states nobody enumerated.
+         * A readout that says it does not know is a readout; a readout that
+         * throws takes the whole frame down and paints an error string over
+         * the cockpit. This is the exact shape of the reported
+         * "drawing deep space reads .mu off undefined". */
+        ['surface gravity', (dom && dom.mu > 0 && dom.radius > 0)
+          ? fmtSpeed(dom.mu / (dom.radius * dom.radius)) + '²' : '—']
       ], '#7e93b3', '#cfe0ff', 226);
     }
 
@@ -9577,12 +9918,15 @@
       ['Backspace', 'eject radioactive waste from anywhere (forfeits the fee)'],
       ['', 'what you eject becomes a canister on your old trajectory —'],
       ['', 'it falls, it can be scanned, and anyone quick can collect it'],
+      ['', 'it leaves 50 m astern and will not come back aboard until it'],
+      ['', 'has drifted clear, so ejecting cargo is a decision you keep'],
       ['', 'fitted equipment is listed but has no eject control'],
       ['', ''],
-      ['SALVAGE', ''],
+      ['SALVAGE  (needs a cargo scoop fitted — any yard, 1,400 cr)', ''],
       ['', 'a destroyed ship comes apart, and some of the pieces carry'],
       ['', 'what was still in its hold. drift onto one gently — under'],
       ['', '80 m and 20 m/s — and it goes aboard like any canister'],
+      ['', 'no scoop, no catching: dumped cargo just drifts past you'],
       ['', 'on the radar: amber cross is worth taking, grey dot is scrap'],
       ['', 'wreckage clears after about a minute and a half, or when you leave'],
       ['', ''],

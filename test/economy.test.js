@@ -308,9 +308,20 @@ console.log('--- landing on a pad, and getting off it again ---');
   ship.gear = true;
   Sim.refreshShip(ship);
   var res = Sim.advanceShip(ship, sys, t, 1, 3000);
+  /* CAUGHT, which is now either docked or being carried in. A pad with a
+   * hangar under it starts the arrival rail instead of parking the hull in
+   * one frame, so "the pad caught it" is the claim this makes; the berthed
+   * assertions below still need it actually berthed, so the rail is run out
+   * first. Both halves of the original intent survive, separated. */
+  var caught = ship.docked === pad.id || (ship.arrival && ship.arrival.port === pad.id);
   check('a gentle arrival over a pad docks rather than crashes',
-        ship.docked === pad.id && !ship.crashed && !ship.landed,
-        'docked=' + ship.docked + ' crashed=' + ship.crashed + ' landed=' + ship.landed);
+        !!caught && !ship.crashed && !ship.landed,
+        'docked=' + ship.docked + ' arriving=' +
+        (ship.arrival ? ship.arrival.port : 'no') +
+        ' crashed=' + ship.crashed + ' landed=' + ship.landed);
+  if (ship.arrival) Sim.stepArrival(ship, sys, t + Sim.arrivalTotal() + 1);
+  check('and the rail leaves it berthed', ship.docked === pad.id,
+        'docked=' + ship.docked);
   check('and it fills the thruster tank', ship.thrusterFuel === ship.thrusterCap);
 
   /* Berthed, it rides round with the world. The ship is no longer sat on

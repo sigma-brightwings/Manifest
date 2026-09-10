@@ -134,27 +134,98 @@ console.log('--- galactic territory ---');
 (function () {
   var g = Galaxy.build('kawartha');
 
-  check('up to three factions actually hold ground', g.factions.length >= 2 && g.factions.length <= 3,
-        g.factions.length + ' factions');
-  check('every faction has a name and colour', g.factions.every(function (f) {
-    return f.name && f.color && f.id && !f.outlaw;
+  /* THE ROSTER IS THREE LAYERS NOW, and this block used to assume one.
+   *
+   *   majors   the empires. Two or three, capitals by farthest-point
+   *            sampling, splitting most of the galaxy between them.
+   *   outlaw   ONE power, the Syndicate, holding several pockets and no
+   *            realm — which is why it has no capital at all.
+   *   minors   power brokers INSIDE the majors' space, carved out of a
+   *            major's own cell rather than standing beside it.
+   *
+   * Counting all seven together and calling the total "factions that hold
+   * ground" is what made this read as seven empires, and asking every one
+   * of them for a capital is what crashed the file. */
+  var majors  = g.factions.filter(function (f) { return !f.minor && !f.outlaw; });
+  var minors  = g.factions.filter(function (f) { return f.minor; });
+  var outlaws = g.factions.filter(function (f) { return f.outlaw; });
+
+  check('two or three majors hold the galaxy between them',
+        majors.length >= 2 && majors.length <= 3, majors.length + ' majors');
+  check('exactly one outlaw power, and it holds pockets rather than a realm',
+        outlaws.length === 1 && !outlaws[0].capitalId &&
+        (outlaws[0].holdIds || []).length === Galaxy.PIRATE_HOLDS,
+        outlaws.length + ' outlaw, ' +
+        ((outlaws[0] || {}).holdIds || []).length + ' holds');
+  check('and the brokers sit inside that map rather than beside it',
+        minors.length === Galaxy.MINOR_POWERS &&
+        minors.every(function (f) { return !!f.capitalId; }),
+        minors.length + ' minors');
+  check('every faction has a name, an id and a colour', g.factions.every(function (f) {
+    return f.name && f.color && f.id;
   }));
   check('every star has a controlling faction', g.stars.every(function (s) {
     return !!g.factionById[s.factionId];
   }));
 
-  // Ownership must actually be nearest-capital, not just "some faction".
-  var wrong = 0;
-  g.stars.forEach(function (s) {
-    var bestId = null, bestD = Infinity;
-    g.factions.forEach(function (f) {
-      var cap = g.byId[f.capitalId];
-      var d = Galaxy.distance3(s, cap);
-      if (d < bestD) { bestD = d; bestId = f.id; }
-    });
-    if (bestId !== s.factionId) wrong++;
+  var count = {};
+  g.stars.forEach(function (s) { count[s.factionId] = (count[s.factionId] || 0) + 1; });
+
+  /* OWNERSHIP IS NO LONGER NEAREST-CAPITAL and must not be tested as if it
+   * were. A plain Voronoi split gave 67/30/11 on this seed — an empire and
+   * two neighbours, not three peers — so the majors are assigned
+   * capacity-balanced greedy against a cap of ceil(N / majors), and the
+   * pockets are then carved out of the result. The invariant that survives
+   * is the thing that split was FOR. */
+  var share = Math.ceil(g.stars.length / majors.length);
+  var over = majors.filter(function (f) { return (count[f.id] || 0) > share; });
+  check('no major is handed more than an even share of the sky',
+        over.length === 0,
+        majors.map(function (f) { return count[f.id] || 0; }).join('/') +
+        ' against a cap of ' + share);
+
+  /* A capital in somebody else's territory would be absurd, and the greedy
+   * pass pins them before it starts. The Syndicate is exempt by having no
+   * capital to pin — that is what "pockets rather than a realm" means. */
+  var stray = g.factions.filter(function (f) {
+    if (!f.capitalId) return false;
+    var star = g.byId[f.capitalId];
+    return !star || star.factionId !== f.id;
   });
-  check('ownership is nearest-capital, star by star', wrong === 0, wrong + ' mismatches');
+  check('a capital is always held by its own faction', stray.length === 0,
+        stray.map(function (f) { return f.name; }).join(', '));
+
+  var pirateShare = (count.outlaw || 0) / g.stars.length;
+  var minorShare = minors.reduce(function (n, f) {
+    return n + (count[f.id] || 0);
+  }, 0) / g.stars.length;
+  check('the Syndicate holds about the share it was designed to',
+        Math.abs(pirateShare - Galaxy.PIRATE_SHARE) < 0.06,
+        (pirateShare * 100).toFixed(0) + '% vs ' + (Galaxy.PIRATE_SHARE * 100) + '%');
+  check('and the brokers between them hold about theirs',
+        Math.abs(minorShare - Galaxy.MINOR_SHARE) < 0.05,
+        (minorShare * 100).toFixed(0) + '% vs ' + (Galaxy.MINOR_SHARE * 100) + '%');
+
+  /* Every power that is not a major operates INSIDE one, and knows which.
+   * The pocket is carved out of a major's own cell, so the answer is free:
+   * whoever held most of those stars the moment before the pocket took
+   * them. This is what makes the roster three empires with powers inside
+   * them rather than seven peers on one map. */
+  var orphans = g.factions.filter(function (f) {
+    return (f.minor || f.outlaw) && !g.factionById[f.parentId];
+  });
+  check('every broker and the Syndicate name the empire they sit inside',
+        orphans.length === 0, orphans.map(function (f) { return f.name; }).join(', '));
+  check('and a parent is always a major, never another pocket',
+        g.factions.every(function (f) {
+          if (!f.parentId) return true;
+          var p = g.factionById[f.parentId];
+          return p && !p.minor && !p.outlaw;
+        }));
+  check('the Syndicate records a parent for each of its holds',
+        (outlaws[0].holdParents || []).length === Galaxy.PIRATE_HOLDS &&
+        outlaws[0].holdParents.every(function (p) { return !!g.factionById[p]; }),
+        (outlaws[0].holdParents || []).join(', '));
 
   // Determinism, same as everything else in this game.
   var g2 = Galaxy.build('kawartha');

@@ -178,16 +178,279 @@
       });
     }
 
-    for (var s2 = 0; s2 < stars.length; s2++) {
+    /* A BALANCED Voronoi, not a plain one.
+     *
+     * The premise is that the majors split the galaxy roughly evenly —
+     * they are peers, each with a navy. A plain nearest-capital split does
+     * not deliver that and never did: farthest-point sampling puts the
+     * capitals as far apart as possible, which says nothing about how many
+     * stars end up nearer to each. Measured on seed `kawartha` the three
+     * cells came out 67 / 30 / 11 stars — one power holding six times what
+     * another did, which is not three peers, it is an empire and two
+     * neighbours.
+     *
+     * So capacity is capped at an even share and the assignment is greedy
+     * on distance: every (star, capital) pair is sorted nearest-first and
+     * taken in that order, skipping any capital that is already full. A
+     * star only loses its first choice when that faction is out of room,
+     * and it then goes to its next-nearest rather than anywhere — so the
+     * cells stay contiguous regions with slightly negotiated borders,
+     * which is what a border between peers looks like.
+     *
+     * Capitals are pinned to their own faction first: a capital in
+     * somebody else's territory would be absurd, and greedy assignment
+     * alone does not guarantee otherwise. */
+    var cap = Math.ceil(stars.length / factions.length);
+    var counts = {}, s2, f2;
+    for (f2 = 0; f2 < factions.length; f2++) counts[factions[f2].id] = 0;
+    for (s2 = 0; s2 < stars.length; s2++) stars[s2].factionId = null;
+    for (f2 = 0; f2 < factions.length; f2++) {
+      capitals[f2].factionId = factions[f2].id;
+      counts[factions[f2].id]++;
+    }
+
+    var pairs = [];
+    for (s2 = 0; s2 < stars.length; s2++) {
+      if (stars[s2].factionId) continue;
+      for (f2 = 0; f2 < factions.length; f2++) {
+        pairs.push({ s: s2, f: f2, d: distance3(stars[s2], capitals[f2]) });
+      }
+    }
+    pairs.sort(function (a, b) { return a.d - b.d; });
+    for (var pi = 0; pi < pairs.length; pi++) {
+      var pr2 = pairs[pi];
+      if (stars[pr2.s].factionId) continue;
+      var fid = factions[pr2.f].id;
+      if (counts[fid] >= cap) continue;
+      stars[pr2.s].factionId = fid;
+      counts[fid]++;
+    }
+    /* Anything the caps shut out — possible only on the last star or two —
+     * falls back to plain nearest. */
+    for (s2 = 0; s2 < stars.length; s2++) {
+      if (stars[s2].factionId) continue;
       var owner = factions[0], ownerD = distance3(stars[s2], capitals[0]);
-      for (var f2 = 1; f2 < factions.length; f2++) {
+      for (f2 = 1; f2 < factions.length; f2++) {
         var d2 = distance3(stars[s2], capitals[f2]);
         if (d2 < ownerD) { ownerD = d2; owner = factions[f2]; }
       }
       stars[s2].factionId = owner.id;
     }
 
-    return factions;
+    /* The majors are done and their draws are untouched above this line.
+     * Everything that follows claims ground BACK off them, out of its own
+     * stream, so a galaxy generated before pockets existed still lays its
+     * three capitals in exactly the same places. */
+    return factions.concat(assignPockets(rootSeed, stars, capitals));
+  }
+
+  /* --- the powers that are not majors -------------------------------------
+   * Two things live here, and they are the same mechanism with different
+   * numbers: a PIRATE hold and a MINOR power are both a pocket of stars
+   * claimed off a major's Voronoi cell.
+   *
+   * The majors split the galaxy roughly evenly because they are the ones
+   * with navies. What that model was missing is that an even split of a
+   * cluster 84 light years across leaves an enormous amount of ground
+   * nobody is actually standing on. Pirates hold some of it, and so do the
+   * smaller polities that never grew a capital worth the name.
+   *
+   * WHY POCKETS AND NOT A CRIME ROLL. The obvious construction is to
+   * generate every system, look at its crimeScore, and call the lawless
+   * ones pirate space. Two things are wrong with it. It costs 150 full
+   * system generations to draw the map, which is exactly the cost galaxy.js
+   * exists to avoid — a star is a name, a position and a seed until someone
+   * flies there. And crime is rolled per system independently, so the
+   * result is SCATTER: a lawless system next door to a technocracy next
+   * door to another lawless one, which reads as noise rather than as
+   * territory. The same objection the capitals' farthest-point sampling
+   * already answers for the majors.
+   *
+   * So the causality runs the other way, which is also the better story:
+   * the pirates hold this pocket, THEREFORE it is lawless. generate.js
+   * reads the ownership and biases the government roll toward anarchy,
+   * rather than the ownership being read off a government that was rolled
+   * blind. One decision, made where territory is decided.
+   *
+   * Seeds are drawn from the stars FARTHEST from any capital — a syndicate
+   * sets up where the nearest fleet is three weeks away — and spread apart
+   * from each other by the same farthest-point sampling the capitals use,
+   * so three holds are three regions and not one lumpy one. Each hold then
+   * claims its nearest unclaimed neighbours, which is what makes a pocket
+   * contiguous. */
+  var PIRATE_HOLDS = 3;
+  var PIRATE_SHARE = 0.17;    // of all stars — measured, see below
+  var MINOR_POWERS = 3;
+  var MINOR_SHARE  = 0.10;
+
+  function assignPockets(rootSeed, stars, capitals) {
+    var pr = new RNG('galaxy-powers|' + rootSeed);
+    var i, j;
+
+    /* Distance to the nearest major capital, which is the one number both
+     * kinds of pocket are chosen by. */
+    var dcap = [];
+    for (i = 0; i < stars.length; i++) {
+      var d = Infinity;
+      for (j = 0; j < capitals.length; j++) d = Math.min(d, distance3(stars[i], capitals[j]));
+      dcap.push(d);
+    }
+    var capitalIds = {};
+    for (j = 0; j < capitals.length; j++) capitalIds[capitals[j].id] = true;
+
+    var claimed = {};                       // starId -> owning pocket faction id
+    for (j = 0; j < capitals.length; j++) claimed[capitals[j].id] = 'capital';
+
+    /* Stars ranked by how far out they are, so a band can be taken off
+     * either end without sorting twice. */
+    var byRemote = stars.map(function (st, k) { return { st: st, d: dcap[k] }; })
+                        .sort(function (a, b) { return b.d - a.d; });
+
+    function seedPocket(pool, seeds, count) {
+      /* Farthest-point sampling among the candidates, first one drawn. */
+      if (!pool.length) return;
+      seeds.push(pool[pr.int(0, pool.length - 1)]);
+      while (seeds.length < count && seeds.length < pool.length) {
+        var best = null, bestD = -1;
+        for (var a = 0; a < pool.length; a++) {
+          if (seeds.indexOf(pool[a]) >= 0) continue;
+          var near = Infinity;
+          for (var b = 0; b < seeds.length; b++) {
+            near = Math.min(near, distance3(pool[a], seeds[b]));
+          }
+          if (near > bestD) { bestD = near; best = pool[a]; }
+        }
+        if (!best) break;
+        seeds.push(best);
+      }
+    }
+
+    /* Claim the nearest unclaimed stars to a seed, seed included. This is
+     * what makes a hold a REGION: growth is by proximity, so a pocket is
+     * always connected and always convex-ish, whatever the local density. */
+    function grow(seed, want, id) {
+      var order = stars.slice().sort(function (a, b) {
+        return distance3(a, seed) - distance3(b, seed);
+      });
+      var got = 0, from = {};
+      for (var k = 0; k < order.length && got < want; k++) {
+        if (claimed[order[k].id]) continue;
+        /* WHOSE SPACE THIS WAS, and it is free to know. The majors' greedy
+         * pass runs first and leaves no star unassigned, so every star a
+         * pocket takes is already somebody's, and the previous owner is
+         * sitting right here one line before it is overwritten.
+         *
+         * That answers the question the model could not previously answer:
+         * a pocket is not a fourth empire standing beside the three, it is
+         * a power operating INSIDE one of them. Tallied rather than read
+         * off the seed star alone, because a pocket that straddles a border
+         * belongs to whichever side most of it is on. */
+        var was = order[k].factionId;
+        if (was && was !== id) from[was] = (from[was] || 0) + 1;
+        claimed[order[k].id] = id;
+        order[k].factionId = id;
+        got++;
+      }
+      var parent = null, bestN = 0;
+      for (var f in from) if (from[f] > bestN) { bestN = from[f]; parent = f; }
+      return { got: got, parent: parent };
+    }
+
+    var powers = [];
+
+    /* --- pirates: one faction, several holds ----------------------------
+     * ONE syndicate, not three gangs. They are described as closer to a
+     * mafia than to a mob — they keep bases, they run territory, and they
+     * trade with the factions whose law they are outside of. That is a
+     * single organisation with several strongholds, so all three pockets
+     * fly the same flag and a standing you burn in one is burnt in all.
+     *
+     * The id stays the literal string 'outlaw' that generate.js has
+     * reserved for pirates since before any of this existed, so every
+     * `faction === 'outlaw'` test in combat, traffic and the HUD keeps
+     * working and simply starts resolving to a named power. */
+    var remoteThird = byRemote.slice(0, Math.max(PIRATE_HOLDS, Math.floor(stars.length / 3)))
+                              .map(function (r) { return r.st; })
+                              .filter(function (st) { return !capitalIds[st.id]; });
+    var pirateSeeds = [];
+    seedPocket(remoteThird, pirateSeeds, PIRATE_HOLDS);
+    var pirate = {
+      id: 'outlaw',
+      name: Gen.makeName(pr) + ' ' + pr.pick(Gen.PIRATE_STEM),
+      color: '#ff7a6b',
+      outlaw: true,
+      /* Pirates ban radioactive waste in their own space and dump it in
+       * everyone else's. The flag is here rather than inferred from
+       * `outlaw` so that a minor power could adopt the same policy later
+       * without having to become a criminal to do it. */
+      wasteBan: true,
+      holdIds: pirateSeeds.map(function (st) { return st.id; })
+    };
+    var pirateWant = Math.round(stars.length * PIRATE_SHARE);
+    /* One parent per HOLD, aligned with holdIds, plus the dominant one on
+     * the faction itself. A syndicate with three strongholds may well be
+     * embedded in more than one empire at once, and which empire a given
+     * hold sits inside is the interesting question — it decides whose law
+     * is nominally being flouted there and whose officials are the ones
+     * being bought. */
+    var holdTally = {};
+    pirate.holdParents = [];
+    for (i = 0; i < pirateSeeds.length; i++) {
+      var pgrew = grow(pirateSeeds[i], Math.ceil(pirateWant / pirateSeeds.length), 'outlaw');
+      pirate.holdParents.push(pgrew.parent);
+      if (pgrew.parent) holdTally[pgrew.parent] = (holdTally[pgrew.parent] || 0) + pgrew.got;
+    }
+    pirate.parentId = null;
+    var bestHold = 0;
+    for (var hp in holdTally) {
+      if (holdTally[hp] > bestHold) { bestHold = holdTally[hp]; pirate.parentId = hp; }
+    }
+    if (pirateSeeds.length) powers.push(pirate);
+
+    /* --- minor powers ---------------------------------------------------
+     * Small polities with a flag and no fleet. They sit in the middle
+     * band — not the core, where a major would simply have absorbed them,
+     * and not the deep frontier, which is where the pirates already are.
+     * They are ordinary factions in every respect the rest of the game
+     * cares about; `minor` is a display fact, not a rule. */
+    var lo = Math.floor(stars.length * 0.30), hi = Math.floor(stars.length * 0.85);
+    var midBand = byRemote.slice(lo, hi).map(function (r) { return r.st; })
+                          .filter(function (st) { return !claimed[st.id]; });
+    var minorSeeds = [];
+    seedPocket(midBand, minorSeeds, MINOR_POWERS);
+    var minorWant = Math.round(stars.length * MINOR_SHARE);
+    for (i = 0; i < minorSeeds.length; i++) {
+      var mf = {
+        id: 'gm' + i,
+        name: Gen.makeName(pr) + ' ' + pr.pick(Gen.MINOR_STEM),
+        color: Gen.FACTION_COLORS[(capitals.length + i) % Gen.FACTION_COLORS.length],
+        capitalId: minorSeeds[i].id,
+        outlaw: false,
+        minor: true,
+        wasteBan: false,
+        arcSeed: 'galaxy-arc|' + rootSeed + '|gm' + i
+      };
+      var mgrew = grow(minorSeeds[i], Math.ceil(minorWant / minorSeeds.length), mf.id);
+      if (mgrew.got > 0) {
+        /* The empire this broker operates inside. A local manager holds
+         * their systems for somebody, and this is who. */
+        mf.parentId = mgrew.parent;
+        powers.push(mf);
+      }
+    }
+
+    return powers;
+  }
+
+  /* Does this star's owner ban radioactive waste? Asked by the jump
+   * planner before you commit, by the star chart so it can mark the
+   * system, and by the arrival check that levies the fine. One function so
+   * the warning and the penalty can never disagree about where the line
+   * is. */
+  function wasteBanned(galaxy, star) {
+    if (!galaxy || !star) return false;
+    var f = galaxy.factionById[star.factionId];
+    return !!(f && f.wasteBan);
   }
 
   /* ---- jumps ----------------------------------------------------------- */
@@ -217,7 +480,8 @@
    * age a market) keep answering exactly what they answered before. */
   function jumpSeconds(lightYears, ship) {
     if (!ship) return lightYears * HOURS_PER_LY * 3600;
-    return Slip.transitSeconds(lightYears, Slip.allUpMass(ship));
+    return Math.max(0, lightYears) *
+           Slip.hoursPerLyFor(Slip.allUpMass(ship), ship) * 3600;
   }
 
   /* How far could this ship jump right now? Note that spending fuel makes
@@ -228,6 +492,13 @@
   function maxRange(ship) {
     var m = shipAllUpMass(ship);
     if (m <= 0) return 0;
+    /* A ship running hot is limited by the slugs in its hold, not by the
+     * hydrogen it is no longer burning. Quoting the tank here would draw a
+     * jump circle the drive cannot actually reach. */
+    if (Slip.milRunning(ship)) {
+      var slugs = (ship.cargo && ship.cargo.milfuel) || 0;
+      return slugs / (Slip.MIL_FUEL_PER_LY_PER_TONNE * m);
+    }
     return ship.fuel / (FUEL_PER_LY_PER_TONNE * m);
   }
 
@@ -248,16 +519,39 @@
   function jumpPlan(galaxy, fromStar, toStar, ship) {
     var d = distance3(fromStar, toStar);
     var fuel = jumpFuel(ship, d);
+    /* Running a military drive changes what the corridor costs in three
+     * ways at once — half the time, slugs instead of hydrogen, and waste
+     * bred into the hold — and the plan has to quote all three, because
+     * every one of them is something the pilot decides on BEFORE
+     * committing. Especially the last: the waste is what the Syndicate
+     * fines you for, so "what will I be carrying when I arrive" is part of
+     * the plan, not a surprise at the other end. */
+    var hot = Slip.milRunning(ship);
+    var burn = Slip.militaryBurn(ship, d);
+    var slugs = (ship.cargo && ship.cargo.milfuel) || 0;
+    var enoughFuel = hot ? burn.fuel <= slugs : fuel <= ship.fuel;
+    var banned = wasteBanned(galaxy, toStar);
     return {
       from: fromStar, to: toStar, distance: d,
-      fuel: fuel, seconds: jumpSeconds(d, ship),
+      fuel: hot ? 0 : fuel, seconds: jumpSeconds(d, ship),
       /* What the corridor will move you at, so the chart can say it plainly.
        * A pilot deciding whether to drop cargo before a chase needs the
        * hours-per-light-year figure, not just the total. */
-      hoursPerLy: Slip.hoursPerLy(Slip.allUpMass(ship)),
+      hoursPerLy: Slip.hoursPerLyFor(Slip.allUpMass(ship), ship),
       hullClass: Slip.hullClassFor(Slip.allUpMass(ship)).id,
-      possible: fuel <= ship.fuel && toStar !== fromStar,
-      shortfall: Math.max(0, fuel - ship.fuel)
+      military: hot,
+      slugs: burn.fuel,
+      waste: burn.waste,
+      /* Would arriving like this be an offence where you are going? Quoted
+       * whether or not you are running hot, because waste already in the
+       * hold from a previous leg is the same offence. */
+      wasteBan: banned,
+      wasteAboard: ((ship.cargo && ship.cargo.waste) || 0) + burn.waste,
+      arrivesDirty: banned &&
+        (((ship.cargo && ship.cargo.waste) || 0) + burn.waste) > 0,
+      possible: enoughFuel && toStar !== fromStar,
+      shortfall: hot ? Math.max(0, burn.fuel - slugs)
+                     : Math.max(0, fuel - ship.fuel)
     };
   }
 
@@ -273,7 +567,12 @@
     jumpSeconds: jumpSeconds,
     maxRange: maxRange,
     reachable: reachable,
-    jumpPlan: jumpPlan
+    jumpPlan: jumpPlan,
+    wasteBanned: wasteBanned,
+    PIRATE_HOLDS: PIRATE_HOLDS,
+    PIRATE_SHARE: PIRATE_SHARE,
+    MINOR_POWERS: MINOR_POWERS,
+    MINOR_SHARE: MINOR_SHARE
   };
 
   global.Galaxy = Galaxy;

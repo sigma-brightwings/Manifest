@@ -9,7 +9,8 @@ It began as a plan for outfitting and combat and grew past that. It now
 covers weapons, the law, debris and salvage, mining, the economy and how
 piracy reaches it, faction war and territory, who hunts whom, the mission
 board, subfactions and crew, hydrogen, comms, black holes and radiation,
-the pulsar beacon, and eventually a fleet.
+the pulsar beacon, drive upgrades, naval stations and the work they hand
+out, the tow service and the pirate mark, and eventually a fleet.
 
 **Start with the Status section immediately below** — it is checked
 against the source rather than against memory, and it is the fastest way
@@ -42,17 +43,42 @@ verified by loading the modules and inspecting what is actually there.
 | **Phase 4 — death, debris and salvage** | Eight-shard mesh pool built once, wreckage spawned on `killNpc` and hashed off the victim, a cheap ballistic path in `sys.canisters` with no rail, a global cap, salvage through the existing scoop — see Phase 4 |
 | **Slipspace outfitting and the interdiction payoff** *(Phase 15 items 1, 2, 6)* | Both slipspace modules are `EQUIPMENT` in four classes each; a torn-out hauler now carries a hold worth taking and a purse it can only hand over once; bolts draw as elongating streaks |
 | **Shields on both sides, and impact effects** *(not originally a phase)* | NPC shields gated by class and by the model's own size letter, `splitDamage` as one rule for everyone, a form-fitting shell that flares and dissipates where it is hit, a hull bloom where a shot gets through, and a canopy flare so you can see your own — see the shield section. **Tested, never looked at** |
+| **The cockpit kit** *(not originally a phase)* | `Render.cockpitSpec(ship)` — archetype table by hull id for character, cube-rooted `dryMass` for size, seeded flair off `ship.bornId` (stamped in `buyHull`, saved additively, and NOT the editable `reg`). Every multiplier is 1.0 for the Talon so the hand-tuned bridge is untouched and other hulls deviate from it. `canopySegments` gives a flat windscreen — the old `APERTURE`, chamfers and all — plus quarter-lights hinged on its outer edge, and `apertureSet` punches every pane. Rake is measured off the hull's own mesh via `hullFineness`, with the archetype as fallback. **Tested, never looked at** |
+| **MFDs as textured quads** *(not originally a phase)* | `gl.js` gains a panel pass: `GL.queuePanel` takes four world corners and a canvas, and the perspective divide falls out of `gl_Position.w = depth`. `mfdBegin` now RETURNS the context to draw into — an offscreen canvas on the GPU path, the caller's own with the old affine otherwise — and `drawCockpitInterior` punches the glass out of the 2D console with `destination-out` so the quad shows through, since `#gl` sits beneath `#view`. ⚠️ **The GPU half cannot be tested here** (no WebGL under node) and its per-frame upload cost is unmeasured — see below |
+| **The arrival, animated** *(not originally a phase)* | `Sim.beginArrival` / `stepArrival` / `arrivalPose` — a closed-form rail through approach, pad, shaft foot, traverse and berth, driving the apron doors, the level car and the inboard gate off the leg. `dockShip` is deliberately unchanged and is the rail's own endpoint, so `save.js` and the direct callers are untouched; a save taken mid-ride records the destination and reloads berthed. Hooked at `padCapture` inside `checkImpact` — the auto-dock path alone would have made it a sequence nobody ever saw. Warp forced to 1×; the enclosure and the camera clamp both follow the leg, and the shaft gets its own clamp because mid-descent the hull is above the hangar ceiling |
 | **A berthed ship is inside a building** *(not originally a phase)* | `enclosedPort()` is the single predicate; berthed at a surface port the stars, grid, orbit lines, every other body, the trajectory, the traffic and the canopy sun-glare are all suppressed and only the port itself is drawn. F2 is exempt — asking for the orbit chart from inside a hangar must not answer with a blank map |
+| **The Syndicate, and permissivity on two axes** *(not originally a phase — save epoch 2)* | Balanced-capacity Voronoi for the majors, three pirate holds at ~18% of stars under one named Syndicate keeping the reserved `outlaw` id, three minor powers; `sys.violence` and `sys.corruption` as separate scores with `crimeScore` derived from both and the per-government pairs *solved* to preserve the old distribution; no naval garrison in a hold but a cutter in transit; ports in holds, half of them flying a rival flag as the legitimate front door |
+| **Buying and intimidating witnesses** *(not originally a phase)* | `G.pendingReport` gives a third-party witness an 8 s call delay where there was none; `hushQuote` prices silence as cargo — the local going rate sampled from the nearest ten ships and stations, times tonnes of risk by offence — discounted 2%/point above standing 10 and free above 70, where it stops being a purchase and costs faction standing instead; enforceability from corruption plus standing; the roll hashed off the act |
+| **The Chernobyl drive and the waste ban** *(not originally a phase)* | `mildrive` in four classes at the tightest gates in the catalogue; halves `hoursPerLy`, refuses hydrogen, burns `milfuel` slugs out of the hold and breeds `waste` back into it; fitted permanently and *armed* per jump; `milfuel` bred at reprocessing plants licensed by a naval garrison, in a post-pass with no rng draws; the Syndicate bans the WASTE rather than the drive, so `jumpPlan` quotes `arrivesDirty` and `doJump` needs a second press |
+| **The grey market, switched on** *(the plan's own largest dead code)* | Two grey guns that keep their damage and pay in heat and certainty, gated on **corruption** rather than permissivity; the bootleg seeker, its hashed crate quality and a cook-off you get to play — see the availability section |
+| **Heat on both sides of the gun** *(the blocker, now cleared)* | `NPC_SHED` per hull class as a bonus over the bare 18/s, lazy-initialised exactly like `npcShield`; `updateNpcHeat` runs the SAME `Sim.updateHeating` the player uses through a reused proxy; NPC guns spend `heat × cooldown` firing; player shots deposit heat by delivery (`THERMAL_SHARE`), attributed, so a hull that cooks is a kill or an accident depending on who put the heat in; a pirate's seeded cheap rack cooks off when its own hull gets hot enough |
+| **The Syndicate's own arms locker** *(not originally a phase)* | `SYNDICATE_TRUST` (70) as the one fact behind two consequences — no more paying witnesses, and their quartermaster sells the muon-tier `GUNS.syndbeam` — gated in `stockAt` on standing with `outlaw` specifically at a port the Syndicate holds, not the ordinary per-port `minStanding` check; their `police`-kind enforcement wing fires `SYNDICATE_GUN` (~2.9× `NPC_GUN`'s DPS) while a loitering `pirate`-kind raider under the same flag does not |
+| **Corruption: shown, driven, spent, and given teeth** *(not originally a phase)* | `sys.corruption` stays a fact about the government; `G.corruptionShift`, saved per star and read back decayed on a half-life rather than ticked, is what the player actually moves — a small nudge from a witness PAID (never one merely intimidated), a small nudge from a customs officer bribed out of a catch, or a large deliberate one from the new `bribePort` action in the yard screen; `effectiveCorruption`/`systemCorruption` replace every direct read of `sys.corruption` (the grey market gate, `hushQuote`); `resolveScan` gained a bribe-out-of-a-catch branch scaled off it; the F2 survey panel now shows violence and effective corruption (with a qualitative label and the baseline called out when a bribe has moved it) and flags Syndicate-held territory, none of which was visible before |
+| **Time warp only pins to 1x for real danger** *(not originally a phase)* | `updateEncounters` gained `result.dangerClosest`, tracked only across `hostileToPlayer` contacts and intercepting/demanding pirates; the hard 1x floor now reads it instead of the old `closest` (any awake contact), so a routine, no-choice police scan only gets the soft 500x cap — an actual threat still pins exactly as before |
+| **Remote spectroscopy + travel-guide flavour text** *(not originally a phase)* | Every planet type gained a seeded `ATMO_COMPOSITION` string, drawn off its own `flavRng` sibling fork so existing orbits are untouched; the F2 panel's unsurveyed branch previews an unvisited star through the same `Gen.generateSystem`/cache path a real visit uses (`previewSystem`, never touching `G.visited`) to show planet count and composition; every **habitable** planet also gets a whimsical `lifeNote` and a `cultureNote` picked from violence/corruption/pirateHeld-keyed buckets; every **system** additionally gets one `systemNote` keyed off what was actually generated (habitable count, giant count, port count) rather than the government axis, shown both surveyed and unsurveyed |
 | **Dithered glass** *(not originally a phase)* | Face-material prefixes: `!` emissive, `~h` glass at `h/15`. An 8×8 ordered-dither `discard` in the mesh shader for the GPU path, real `globalAlpha` in `paintMesh` for the 2D one. First consumer is the greenhouse panes, which had been opaque — sealing the emissive crop that is the whole point of the building inside an unlit drum. **Tested, never looked at** |
 
 ### Built but inert ⚠️
 
-- **The grey market has no goods.** `stockAt` honours a `grey` flag and
-  **zero catalogue items set it**, so that branch is unreachable. The
-  bootleg seeker and its cook-off do not exist. *This is now the largest
-  piece of dead code in the project* — the heat sinks that used to keep it
-  company have been switched on.
-- **The muon cannon does not exist** as an item.
+- ~~**The grey market has no goods.**~~ **CLOSED.** Two grey guns and a
+  bootleg seeker now set the flag, and the gate moved from `crimeScore` to
+  `sys.corruption` — see the availability section for why that is not a
+  tuning change but a correction.
+- **The muon cannon does not exist** as an item. Note also that its spec
+  below quotes a `pierce` field which **has never existed**: it was written
+  before `splitDamage`, and the model that actually shipped is
+  `vsShield` / `vsHull`, where a shot spends part of itself on the bucket
+  and the remainder carries to the hull. `pierce: 0.85` translates to a low
+  `vsShield` — the shield barely absorbs any of the shot, so nearly all of
+  it goes through — and that is a better fit for the weapon than the
+  original wording, because it makes a capital gun *bypass* a shield rather
+  than have a separate rule.
+- ~~**NPCs have no heat state.**~~ **CLOSED**, and it turned out to be
+  smaller than it looked: `Sim.updateHeating(ship, sys, t, dt)` never
+  mentioned the player. It asks for `heat`, `heatShed`, `pos`, `vel` and
+  `hullHp` and does not care whose they are. Nothing was stopping an NPC
+  from having them except that nobody had handed them over. The casaba
+  howitzer is now unblocked; see the weapons section.
 - **The ejected heat sink is a record, not an object.** `G.sinkEjections`
   is written and nothing reads it; it becomes a physical scanner return
   with the Phase 4 debris system.
@@ -65,13 +91,50 @@ interdiction that ended in an empty room — are both closed. See Phase 15.)*
 
 ### Not started ☐
 
-Phases 5 (apart from heat sinks), 6, 7, 8, 9, 10, 11, 12, 13, and the rest
-of 15 — escort for hire, ship-to-ship trade, and flares.
+Phases 5 (apart from heat sinks), 6, 7, 8, 9, 10, 11, 12, 13, the rest
+of 15 — escort for hire, ship-to-ship trade, and flares — and 16, 17 and 18.
+
+**Item 5 of the play report is BUILT** — the destination line and the
+DETAILS button on a signed contract, and with them the mission-text
+generator and the fact-driven prose from Phase 10. The remaining five are
+unstarted and four are small: the contract resolution card and log, mission
+marks on the nav list and the star chart, and the market's cost basis and
+deal gradient. None of them needs a phase to land in.
 
 **Phase 4 is now built**, which unblocks two things that were waiting on it:
 the ejected heat sink can become the physical scanner return it was always
 meant to be (`G.sinkEjections` is still written and still unread), and
 mining fragments in Phase 5 are the same shards from a second source.
+
+**A CURVED WINDSCREEN BOWS OFF THE SCREEN, and it took three attempts to
+see why** — worth recording so nobody rebuilds it as a curve again. A band on
+a sphere has an exact angular elevation at every bearing, which sounds like
+precisely what a wrap-around canopy wants. But a pinhole camera projects y/z,
+and for that band y/z works out as tan(e)/cos(a): at the 45-degree corners
+that is 1.41x, so the glass runs a long way past the top and bottom of the
+view. The suite reported the window spanning twice the height of the screen
+and covering 2% of it, which is what a bowtie polygon measures as.
+
+The two failed shapes before it are worth knowing too. A cylinder at constant
+height is worse, because a corner at 45 degrees sits at z = cos(45)*r and the
+same height reads as a far steeper angle out at the edges. And rake applied
+as a constant z-offset swung the outer corners from 45 to 50 degrees off-axis,
+because z is already small out there.
+
+The answer is the one real aircraft use: flat windscreen, wrap from separate
+panes angled outboard. The rake then has to move the whole band rather than
+tilt within it, which is what `rakeBias` does — small, because it changes
+where you are looking.
+
+**The MFD panel pass has an UNMEASURED per-frame cost, and it is the one
+number this change owes.** Five panels at 460x178 RGBA is 0.31 MB each, so
+about 1.56 MB of texture upload per frame — roughly 94 MB/s at 60 fps, on a
+Latitude 5420's integrated graphics. That may be nothing or it may be the
+whole 3 ms renderer budget; it cannot be measured from node, because there is
+no WebGL there, so it has to be profiled in the browser before anyone calls
+this done. If it bites, the fix is cheap and obvious: a readout that has not
+changed since last frame does not need re-uploading, and most of them change
+far slower than 60 Hz. Do not pre-emptively optimise it — measure first.
 
 **The shield shell deliberately does NOT use the new dither**, and this is
 worth writing down because unifying them looks like an obvious tidy-up. The
@@ -97,6 +160,197 @@ single read point so robbery and death cannot disagree. The remaining
 `Math.random()` calls in `combat.js` are all in-the-moment die rolls that
 are *meant* to be unrepeatable — a customs search, a witness deciding to
 talk, an NPC's shot connecting — and those are not generation.
+
+---
+
+## Reported from play — 2026-09-08
+
+Six items came back from the seat. Five of them are the same complaint
+wearing different clothes: **the game already knows the thing and will not
+say it.** The sixth is a rule for a feature that does not exist yet, and it
+is written down here so it never has to be discovered by looking at it.
+
+None of these are hard. All of them are the difference between a simulation
+and a game you can play without a second screen open.
+
+### 1. A contract ends and nobody sees it
+
+Not a missing message. `Missions.completeAtDock` already calls
+`say('Contract complete — N cr', 5)` and `update` already says
+`'CONTRACT FAILED: … — fined N cr'` when a deadline passes. The message
+exists and is unread, for three separate reasons:
+
+- **Completion fires inside the arrival rail.** `dockShip` is the rail's
+  own endpoint, several seconds into a closed-form ride through approach,
+  pad, shaft foot, traverse and berth. The line goes up while the player is
+  watching a hangar door move, on a channel that expires in five seconds.
+  By the time the market panel opens it is gone.
+- **Failure fires wherever you happen to be** — possibly mid-fight, on the
+  same one-line channel as combat chatter, weapon heat and customs.
+- **There is no past tense.** `G.ledgerLog` keeps six trade lines because
+  trades needed a record; contracts get nothing at all. An hour later there
+  is no way to find out what happened to a job you signed.
+
+Both halves are needed:
+
+1. **A contract resolution card.** Drawn once when you berth and once on
+   the F7 board, listing every contract that resolved this dock: what
+   completed and what it paid, what failed and what it cost, and the
+   standing that moved. Dismissed on any key. It is the docking equivalent
+   of the arrival rail — the thing that happens *because* you arrived — and
+   unlike a `say` it can be read at leisure.
+2. **`G.contractLog`**, the same shape and the same size as `G.ledgerLog`:
+   `{text, t, ok}`, twelve deep, written by `completeAtDock` and by
+   `update`'s failure branch, drawn under the board. One writer per
+   outcome, so a mission type added later cannot resolve silently.
+
+**Sound carries the verdict before the text does.** Success and failure
+should not share a cue. This is the cheapest half of the whole item.
+
+### 2. The nav list does not know about your contracts
+
+`drawNavScreen`'s CONTACTS column colours rows by `e.hostile` and by
+selection, and by nothing else. Meanwhile `G.missions` carries `toPortId`
+for every haul and disposal and `toStarId` for every courier. The screen
+that exists to answer "where am I going" is the one screen that has not
+been told.
+
+- **Mark the row**, don't recolour it. Hostile is already `#ff8a76` and
+  selection is already `MFD_HOT`; a third colour on the same text would
+  make a hostile mission destination unreadable as either. A leading glyph
+  in the board's own amber — `◆` — plus the contract's tonnage as a right-
+  hand tag, leaves both existing meanings intact.
+- **Two contracts to the same port is one mark**, with a count. The list is
+  already tight at 24 characters of name.
+- **Out-of-system destinations have nothing to mark here**, and pretending
+  otherwise is worse than silence. A courier bound for another star belongs
+  on the star chart, so `drawStarMap` gets the same treatment: a marked ring
+  around any star that a signed contract names. That is the actual fix for
+  "I forgot where this parcel was going."
+
+### 3. The market terminal has no memory of what you paid
+
+`G.ship.cargo` is `{cid: tonnes}` and that is all it has ever been. There is
+no cost basis anywhere in the save, which is why the terminal can show you a
+sell price and cannot tell you whether it is good news.
+
+**The model: a weighted average per commodity.** `G.ship.cargoCost = {cid:
+crPerTonne}`, updated on buy and only on buy:
+
+```
+cost' = (ownTonnes * cost + boughtTonnes * price) / (ownTonnes + boughtTonnes)
+```
+
+Selling does not move it, jettison does not move it, and the entry is
+deleted when the last tonne goes. Chosen over a literal last-price-paid
+(which slanders a cheap load the moment you top it up at an expensive port)
+and over a per-lot ledger (truer, but it changes the shape of the hold
+everywhere — manifest, jettison, scans, piracy, saves — for a readout).
+
+**Three traps, and the first one is the one that will bite:**
+
+- **Contract freight is in the same hold and cost nothing.** `accept()`
+  pushes `offer.tonnes` straight into `G.ship.cargo[offer.cid]`, so 18 t of
+  contract grain sitting on 10 t of bought grain would drag the average to
+  a third of what you actually paid. The average must be kept over
+  **uncommitted tonnage only**: `own = held − committed`, and
+  `committedTonnes()` already exists in `screens.js` and already keys by
+  commodity for exactly this reason.
+- **Salvage and piracy enter at zero, and that is correct.** A scooped
+  canister genuinely cost nothing. It should read as pure margin, because
+  it is.
+- **Negative-price cargo.** Waste is bought at a negative price — the port
+  pays you to take it. A negative cost basis is arithmetically fine and
+  makes the margin rule read backwards, so waste is excluded from the
+  colour rule and keeps the amber treatment it already has.
+
+### 4. Green, amber, red — and what the gradient is measured against
+
+Both price columns get coloured, by two different rules, because they answer
+two different questions.
+
+| Column | Question | Scale |
+|---|---|---|
+| **SELL** | did I make money | your cost basis for that commodity |
+| **BUY** | is this port cheap | that commodity's spread across this system |
+
+**A fixed percentage band would be wrong**, and this is the part worth
+getting right. ±12% on grain (base 64 cr) is eight credits; on AI cores
+(base 4200) it is five hundred. The threshold has to come from what the
+market is actually offering, and the game can already compute that:
+`bestMarketFor(cid)` in `screens.js` walks every port in the system and
+returns the best sell price going. Give it a sibling that returns the worst,
+and the gradient has real ends:
+
+- **SELL** interpolates over `[cost, bestSell]` — full red at or below what
+  you paid, amber at break-even plus the fee you would eat anyway, full
+  green as it approaches the best price in the system. Selling at the best
+  port in the system *is* the green, by construction, and no constant had to
+  be invented to say so.
+- **BUY** interpolates over `[worstBuy, bestBuy]` across the system for that
+  commodity, so a genuinely cheap port glows before you own a tonne of it.
+- **Zero-cost cargo** (salvage, piracy, a contract's freight) is not on the
+  scale at all — it is drawn in the board's amber with the tag that says
+  why, because "infinite margin" is not information.
+
+The honest limit, which the manifest page already states in its own hint:
+**this is system-local knowledge.** The terminal must not imply it knows
+what grain fetches four jumps away.
+
+### 5. ✅ A signed contract cannot explain itself — BUILT
+
+*Both halves landed, plus the headline generator below. Destination line and
+DETAILS button on every active contract, `arcs.js` chapters given a long
+form they never had, and five new checks in `render.test.js` covering a path
+the suite had never exercised: 1,494 green.*
+
+This one is almost embarrassing, because the fix is entirely deletion of an
+omission. **Both halves already exist in the data and neither is drawn.**
+
+- **The destination is on the contract.** `accept()` copies `toPortId`,
+  `toStarId` and `toName` onto the accepted mission. The ACTIVE CONTRACTS
+  column draws `m.text`, the fee, the time remaining and a FREIGHT MISSING
+  warning — and never the destination as a field. It is visible only if the
+  generated headline happened to mention it, which for a haul it does
+  ("18t Grain to Halden Dock") and for a campaign chapter may not.
+- **The long form is on the contract too.** `desc` is deliberately *carried*
+  rather than regenerated — the comment in `accept()` says so in as many
+  words: "a contract you signed a week ago has to still say what it said
+  when you signed it." Then `drawMissionScreen` gives the DETAILS button to
+  the **board** only. The one place `desc` was designed to be readable is
+  the one place it cannot be read.
+
+So: a **DETAILS button on every active contract**, the same
+`G.missionDesc` toggle and the same `wrapText` panel the board already uses
+— the board's version is drawn from `off.desc`, and this one is drawn from
+`m.desc`, and that is the entire difference. Plus a destination line under
+each active contract: **port, body, and system**, spelled out rather than
+inferred from the headline, with the out-of-system case saying which star.
+
+Do this in the same pass as item 2's nav marks. They are the same
+question — *where is this going* — asked on two different screens, and
+answered from the same three fields.
+
+### 6. Turrets go on the outside of a hull
+
+Recorded ahead of the feature, deliberately. **There is no station turret
+code in the project today and no navy base** — `grep` across `src/` finds
+`turret` only as the ship's own auto-turret in `combat.js` and as an
+inventory label in `screens.js`, and `navy` only as a patrol class and a
+ship model. So this is not a bug report against something that exists; it is
+the constraint written down before the first version can get it wrong.
+
+> **A defensive turret is placed on the exterior surface of a station's
+> hull, facing out. Never inside the envelope, never inside a bay.**
+
+The reason it needs saying is that the placement machinery this will reach
+for is `buildPortDressing`, whose `{u, r, h}` — bearing, radii out, height —
+is a **surface-pad** coordinate system, generated for a port sitting on a
+world with a ground plane under it. Feed a station's radius into it
+unchanged and half the emplacements end up inside the drum, invisible from
+outside and clipping through the bay the player is berthed in. The interior
+rules in `starport-interiors` and the exterior dressing are two different
+spaces and turrets belong entirely to the second one.
 
 ---
 
@@ -470,26 +724,57 @@ wants.** `wantedHere(G, port.faction)` already gates docking; it should
 gate the weapon counter too. Being wanted in developed space should mean
 being cut off from developed space's arsenal.
 
-### ⚠️ The grey market — armed, cheap, and incurious — NO ITEMS YET
+### ✅ The grey market — armed, cheap, and incurious — BUILT
 
-*`stockAt` already honours the `grey` flag, but no catalogue entry sets
-it, so this branch is currently unreachable. The bootleg seeker below and
-its cook-off are design only.*
+A corrupt port sells to anyone, asks nothing, and what it has is junk. No
+standing check, no wanted check — this is where a fugitive rearms, and
+that is the point.
 
-A high-crime port (`crimeScore ≥ 60`) sells to anyone, asks nothing, and
-what it has is junk. No standing check, no wanted check — this is where a
-fugitive rearms, and that is the point.
+**The gate is `sys.corruption ≥ 60`, not `crimeScore ≥ 60`, and that is a
+correction rather than a tuning change.** A grey market is a *market*: it
+needs a supply chain, a shopfront and somebody whose job it is to have
+three of a thing in the back. Permissivity is high in an Anarchy for the
+opposite reason to why it is high in a Patronage state — one has bought
+its police, the other has none — and only the first of those has anything
+to sell you.
+
+Measured on seed `kawartha`, and the two numbers are the whole argument:
+
+| Gate | Systems | Ports | Anarchies caught |
+|---|---|---|---|
+| `crimeScore ≥ 60` (as designed) | 29 (19%) | 380 (20%) | **all 5** |
+| `corruption ≥ 60` (as built) | 49 (33%) | 617 (33%) | **0** |
+
+The wider net is also the more discriminating one, because it is finally
+asking the right question. A third of ports is right for the place a
+fugitive rearms: cut off from developed space, you still have to be able
+to *find* one. 239 of those ports are in Syndicate holds, so the syndicate
+is a major supplier without being the only one.
 
 | Item | Character | Price |
 |---|---|---|
-| Grey C1/C2 Intermittent | Reliable enough. The grey market's staple — burst lasers are simple to build badly. | ~65% of list |
-| Cheap heat-seeker | Shorter range, poor lead solution, **loses lock** on a hard turn. Sold by the crate. | ~200 cr |
-| Salvaged Class 2 | No warranty. Higher heat than spec, occasionally fails to cycle. | ~55% of list |
+| **Bootleg intermittent laser** | Full 13 points, **2.0× the heat**, 6% failure to cycle, a hair short on reach. | 1,105 cr (65% of list) |
+| **Salvaged pion accelerator** | Full 20 points close in, **2.2× the heat**, 9% failure to cycle. | 1,870 cr (55% of list) |
+| **Bootleg seeker** | 28 points against the Hawk's 42, a crate of 14 against 8, poorer lead. **7.1 cr per point of damage against the Hawk's 10.0.** | 200 cr |
 
-The drawbacks must be *real tradeoffs, not just worse numbers* — a cheap
-seeker that costs a fifth as much and hits two thirds as often is a
-legitimate purchase, especially in volume. One that is simply bad is a
-trap, and a trap is not a decision.
+**The rule that kept this catalogue empty for so long**, now satisfied: a
+drawback must be a *tradeoff, not a smaller number*. A gun that costs 65%
+as much and does 65% as much is not a decision, it is a longer route to
+the same place. So the grey guns keep their damage, their cooldown and
+nearly their reach, and what they cost you is **heat and certainty** —
+both things the player can already fly around. A weapon at twice the
+thermal load is real in the hands of someone who paces their bursts and a
+liability in the hands of someone who holds the trigger, which makes
+buying one a statement about how you fly.
+
+**The misfire is a live die roll, not a hash, and that is deliberate.**
+The seeded-generation doctrine governs what the *world* is — a pirate's
+hold, a system's government, where a vineyard grows. It does not govern
+whether a bad capacitor holds this particular time. The cooldown is set
+before the test and the heat is spent anyway: the capacitor charged,
+dumped into the housing, and no light came out. You lose the shot and the
+second you were going to fire it in, which is the right punishment and
+stops "it misfired" from being a free pause in an overheating fight.
 
 ### Bootleg ordnance cooks off on the rail
 
@@ -504,11 +789,24 @@ RACK` — and roughly **2 seconds** to dump the rack. Jettison and you lose
 the remaining missiles and keep the ship. Do nothing and it cooks off.
 That is the difference between a punishment and a moment you get to play.
 
-**2. It takes the hardpoint, not a slab of hull.** A cook-off destroys the
-weapon in that slot and deals modest hull damage. That is a repair bill —
-`repairCost` already models exactly this — rather than a run-ender, and it
-makes the true price of bootleg ordnance legible: you are gambling a
-hardpoint, not your life.
+**2. ~~It takes the hardpoint, not a slab of hull.~~ CHANGED IN BUILDING,
+and the reason is worth keeping.** The original had the cook-off destroy
+the hardpoint the rack sat in, so you gambled a fitting against the
+missiles. **There is no missile hardpoint in this game** — `ship.missiles`
+is a bare counter on its own trigger — so there was nothing in that slot
+to lose, which made "jettison the rack" strictly better than doing nothing
+every single time. A choice with a dominant option is not a choice.
+
+So **the hung seeker stays a live round.** Dump the rack and you lose what
+is left, for certain, and take nothing. Ride it out and the hang may clear
+— you keep the crate *and* the shot — or it cooks off and takes the rack
+and a piece of the hull with it (7 points per remaining round, floor 18).
+The odds of clearing are the same heat you are already looking at, rolled
+**at the moment of resolution rather than at the hang**, so cutting your
+burn during those two seconds is a real thing you can do about it. That
+turns the heat gauge from a warning light into a risk meter, and the stake
+scales with the rack: gambling with two rounds is cheap and gambling with
+twelve is a run-ender.
 
 **3. The odds respond to heat.** Unstable propellant is unstable *when
 hot*. Failure chance scales with `ship.heat`:
@@ -539,10 +837,23 @@ to have in a game about flying somewhere to find something out.
   ordnance as `UNCERTIFIED` in amber. A mechanic the player cannot see
   coming is indistinguishable from a bug — the same principle as
   `canFit()` returning a reason.
-- **NPCs fly it too.** Pirates and low-end hostiles should carry the same
-  grey-market seekers, with the same failure roll. Watching a pirate's
-  rack cook off on its own hardpoint is excellent, and it rewards a player
-  who has learned to recognise who is flying cheap gear.
+- **✅ NPCs fly it too — BUILT, on a different trigger, and the difference
+  is the interesting part.** NPCs never launch missiles, so there is no
+  launch for a seeker to hang on; their version could not copy the
+  player's. It triggers instead on the thing that was always the real
+  driver: unstable propellant is unstable WHEN HOT, and a hull carrying a
+  cheap crate that gets hot enough does not need a launch to set it off.
+
+  **Which means the player can now do something to a pirate other than
+  shoot it.** Heat it and let its own ordnance finish the job. `NPC_SHED`
+  puts a pirate at **zero bonus over the bare 18/s** — nobody paid for
+  radiators on a hull bought to be expendable, the same reason its guns
+  came off the grey counter — so it is the hull most likely to cook, and
+  that now says something about pirates rather than being a balance knob.
+
+  55% of pirates carry, and the crate quality is hashed off the ship's id
+  salted with the system seed, same discipline as `manifestFor`. **The
+  cargo is seeded; the ignition is a live roll.**
 
 **The geography this creates** is the whole point: the best gear requires
 being *liked* somewhere developed, and being liked is exactly what a
@@ -555,8 +866,13 @@ on, extended to the arsenal.
 Four fields on each equipment entry, and stock becomes one filter:
 
 ```js
-minDev: 0.70, minStanding: 10, minCrime: 0, grey: false
+minDev: 0.70, minStanding: 10, minCrime: 0, minCorrupt: 0, grey: false
 ```
+
+`minCorrupt` is the field the grey branch actually reads; `minCrime` kept
+its original meaning rather than being quietly redefined, so anything that
+genuinely wants permissivity still has it. `stockAt` falls back to
+`crimeScore` when a system predates `sys.corruption`.
 
 `stockAt(port, G)` returns the catalogue filtered by all four plus the
 wanted check. The yard draws whatever comes back, and shows *why*
@@ -624,6 +940,503 @@ kilometres-long blue searchlight near a world. Which means:
 The blue is not artistic licence either: Cherenkov light is strongest at
 short wavelengths, which is why reactor pools glow that specific blue.
 Using the real spectrum costs nothing and looks correct because it is.
+
+---
+
+## Heat, on both sides of the gun — BUILT
+
+The gap that was blocking two features turned out to be one missing field
+and no missing physics. `Sim.updateHeating(ship, sys, t, dt)` never once
+mentions the player: it asks for `heat`, `heatShed`, `pos`, `vel` and
+`hullHp` and does not care whose they are. So this is the move the shield
+already made — **one rule with two owners** — rather than a second thermal
+model to keep in step.
+
+**Lazy, exactly like `npcShield`.** `heatShed` is undefined until something
+actually heats a ship, and the tick skips anything that has never been
+heated. A sky full of ships nobody has fired on costs one `undefined` test
+each. *What that does not buy:* an NPC that dives into an atmosphere
+without having fired will not burn up. Traffic is on rails between ports
+and does not go aerobraking, and paying for every hull every frame to
+cover it would be the wrong trade.
+
+**`NPC_SHED` is a bonus over the bare 18/s, not a total** — the same slot
+the player's heat shield fills. Getting that wrong is easy and silent, so
+it is written on the table itself. A **pirate sits at 0**: not a ship with
+no cooling, a ship with nothing but its own skin, because nobody paid for
+radiators on a hull bought to be expendable. A **navy cutter is +30**,
+because it is built around the problem. Those two numbers now say
+something about the factions rather than being balance knobs.
+
+### The third axis the delivery model just grew
+
+Player shots deposit heat in what they hit, by delivery:
+
+```js
+THERMAL_SHARE = { pulse: 0.35, intermittent: 0.50, beam: 1.00 }
+```
+
+`vsShield` and `vsHull` already said what a pulse, a burst and a beam are
+good *against*. This says what they leave *behind* — a beam is a sustained
+energy dump, a pulse is impulse. So the beam-then-pulse pairing the
+delivery model was built to reward has a second reason to exist: the beam
+cooks the hull while the pulse opens it.
+
+**And you cannot cook a ship through its bucket.** Heat rides on
+`split.hull`, so a shot the shield absorbs deposits nothing at all. That
+was not designed; it fell out of routing heat through the existing damage
+split, and it is the right answer.
+
+Measured, sustained fire on a pirate (120 hull, 18/s shed, cook-off band
+at 78):
+
+| Gun | Reaches 78 heat | Hull left at that point |
+|---|---|---|
+| Kaon beam accelerator | **1.4 s** | 53 / 120 |
+| Muon beam accelerator | **1.7 s** | 51 / 120 |
+| Photon beam laser | never — kills first at ~7 s | 0 |
+| Photon intermittent | never — kills first | 0 |
+| Pion pulse accelerator | never — kills first | 0 |
+
+So **cooking a hull is a heavy-beam tactic and nothing else**, which is a
+design outcome rather than an accident: it lands exactly where the
+delivery table already said beams belong. The rack does 46 of 120, so it
+is a damage bonus and not a shortcut — you still have to finish the job.
+
+### Attribution, which is the line that makes it a crime or not
+
+`heatBy` records who put the heat in. A hull that cooks to death goes
+through `killNpc` — bounty, witness, the lot — **only if the player did
+it**. A pirate that holds its own trigger too long simply dies, and nobody
+is charged. One field, and it is the whole difference between murder and
+an industrial accident.
+
+---
+
+## The Syndicate's own arms locker — BUILT
+
+Grew directly out of a correction to the mafia framing: "unless you are
+high enough up with the Syndicate, obviously their own enforcement wing
+uses the best possible tech they can buy." The grey market answers "what
+does a stranger get sold in Syndicate space" — the same damage as the
+certified item, at worse heat and a real chance it just does not fire, to
+anyone with the price and a corrupt enough port. This is the other half of
+that sentence: what the Syndicate's *own people* carry, and what it takes
+for a player to be sold the same thing.
+
+**One shared constant, `SYNDICATE_TRUST` (70), used for two facts about
+you.** Past it you stop paying witnesses — `INTIMIDATE_STANDING` is now
+just this constant under its older name — and their quartermaster sells
+you what their enforcement wing flies. Not two coincidentally equal
+numbers; one fact (the Syndicate considers you inside) with two
+consequences.
+
+**`GUNS.syndbeam`** — a Syndicate-issue muon beam accelerator, same numbers
+as the certified `mubeam`, `grey: false` (this is not bootleg — it is the
+genuine article, sold by people unbothered by where it came from). What it
+costs is not heat or certainty like the grey items, it is **trust rather
+than money**: the legitimate path to a muon-tier gun runs through a major
+faction's standing (`minStanding: 40`), which is closed in practice to
+anyone who has spent a career burning that goodwill. This opens a second
+path to the same ceiling through the opposite reputation. `stockAt` gives
+it its own gate — `it.syndicate` — checked against `G.standing.outlaw`
+specifically and only at a port the Syndicate itself holds, rather than
+riding the ordinary `minStanding`-vs-whoever-owns-the-port check every
+other item uses; a wanted-by-the-Syndicate player is refused the same as
+the certified market refuses one the locals want.
+
+**`SYNDICATE_GUN`** on the NPC side — the enforcement wing's own gun,
+built off the same numbers, ~2.9× the flat `NPC_GUN`'s DPS and half again
+its range. Selected in `updateNpcFire` for a `kind: 'police'` patrol flying
+`faction: 'outlaw'` — the mob's own law, generated by the same police loop
+as any legitimate faction's cops, wherever the Syndicate holds ports of its
+own — and *not* for a loitering `kind: 'pirate'` raider, which is a
+different job under the same flag and stays on the ordinary gun. A player
+who meets one of these is being policed by an organisation with better
+hardware than the law usually has, not mugged.
+
+Verified in `syndverify.cjs`: standing below 70 lists the item and refuses
+it by name; standing 70+ at a Syndicate port sells it; wanted by the
+Syndicate refuses regardless of standing; not stocked at all off Syndicate
+turf, any standing; low corruption does not unlock it (the gate is
+standing, not corruption, unlike the grey market); the enforcement wing's
+cooldown reads off `SYNDICATE_GUN`, a legitimate faction's police and a
+loitering pirate both still read off `NPC_GUN`.
+
+**Answers half of the casaba howitzer's open sourcing question, below**:
+a Syndicate-exclusive item is now a real, tested pattern (turf-gated,
+standing-gated, full reliability) rather than a design note. Whether the
+howitzer specifically sits in this tier, the certified tier at ALLIED, or
+both at different prices is still open — this just built the door.
+
+---
+
+## Corruption: shown, driven, spent, and given teeth — BUILT
+
+Asked as "maybe work on the corruption level mechanism", which turned out
+to name four separate gaps once the actual code was checked against it:
+`sys.corruption` was rolled once per system at generation and never
+touched again, never shown to the player split from violence, gated
+exactly two things, and had no player-facing verb at all. All four,
+because they turned out to be one design rather than four:
+
+**The baseline stays exactly what it was.** `sys.corruption`
+(`buildGovernment`) is still a permanent, deterministic fact about a
+system's government — this never writes to it, and nothing here changes
+what a fresh system generates with.
+
+**What moved is a SHIFT on top, and it lives on the save, not the
+system.** `G.corruptionShift[starId] = { v: points, t: G.t at last touch
+}` — additive, undefined-safe, and read back lazily rather than ticked:
+`decayedShift` computes `v * 0.5^(age / CORRUPTION_HALFLIFE)` on demand,
+the same "costs nothing until touched" discipline `npcShield` and the
+heat system already use. Three weeks (`CORRUPTION_HALFLIFE`) to fade by
+half, capped at `CORRUPTION_SHIFT_CAP` (65) no matter how much you spend
+— the government underneath still shows through.
+
+**Three ways to move it, one of them new:**
+
+1. A witness PAID off — never one merely intimidated, which is fear and
+   costs nothing to arrange, see the section above `hushWitness` already
+   had — nudges it up `CORRUPTION_BUMP_HUSH` (1.5). You did not set out to
+   corrupt the place; you did, one bribe at a time.
+2. A customs officer bribed out of a catch (new: `resolveScan` gained a
+   branch after contraband is found but before the fine is levied — a
+   roll scaled `(corruption − HUSH_MIN_CORRUPTION) / 100`, capped at 0.75,
+   distinct from the search-happens-at-all roll that violence already
+   governs above it) nudges it `CORRUPTION_BUMP_CUSTOMS` (2.5) and costs
+   55% of what the fine would have been, cargo kept, no standing hit.
+   Corruption now does something violence cannot: violence explains why
+   nobody looks, corruption explains why somebody looked, found it, and
+   took a cut instead of writing it up.
+3. `bribePort` (new), a deliberate lump sum in the yard screen —
+   "BRIBE THE HARBOURMASTER" sits with REPAIR and PAY OFF BOUNTY, above
+   the tabs, because it is not equipment either. Priced off the port's own
+   development (a richer shopfront costs more to buy into) and discounted
+   by how corrupt the place already is (the marginal bribe is always
+   cheaper than the first one); moves the shift by `CORRUPTION_BRIBE_AMOUNT`
+   (40) in one purchase — most of the way to opening a grey market
+   somewhere it currently has none. The row disappears once bribery here
+   is maxed out, the same "not stocked at all" treatment the grey market
+   itself gives an item below threshold, rather than a permanently greyed
+   row.
+
+**Every existing reader switched from the raw fact to the effective
+number.** `effectiveCorruption(G, base, starId)` — `starId` defaults to
+wherever you currently are, so gameplay checks need not pass one, and the
+F2 chart passes the star it is only looking at — replaces the direct
+`sys.corruption` reads in `stockAt`'s grey market gate and in
+`hushQuote`'s enforceability roll. A bribe that could not open the grey
+market or make a bargain enforceable would not be much of a bribe.
+
+**Shown, finally.** The F2 survey panel had exactly one combined number
+(`crimeScore`, "X / 100 permissive") and nothing underneath it — the whole
+reason the two-axis split existed was so a player could tell "nobody here
+will stop you" from "everybody here can be bought" apart, and there was
+nowhere to read that. Now it lists violence and EFFECTIVE corruption
+separately, each with a qualitative label (`violenceLabel`,
+`corruptionLabel` — bands lined up on the thresholds that actually mean
+something: `HUSH_MIN_CORRUPTION` and the grey market's 60, not picked for
+even spacing), calls out the baseline when a bribe has moved the number
+away from it, and flags Syndicate-held territory — folding in a
+long-pending note that the chart never marked a waste ban at all.
+
+Verified in `corruptverify.cjs`: decay math against the half-life
+directly, the cap, `effectiveCorruption` for the current system versus an
+explicit star you have never bribed, a paid witness bumping corruption
+while an intimidated one does not (sampled across hashed victims until
+each outcome actually occurs, since the stick roll is hashed off the
+act), the customs bribe-out rate tracking its formula at three corruption
+levels, a failed/unaffordable bribe still losing the cargo, a successful
+one keeping it and feeding the shift, `bribeCost` responding correctly to
+both development and existing corruption, `bribePort`'s refusals (at cap,
+and short of cash) spending nothing, and the grey market actually opening
+at a port it was closed at once bribery pushes it over 60.
+
+**Not doing yet.** No failure mode on `bribePort` itself — money always
+works, no risk of the bribe attempt itself being reported, which would be
+the natural next layer of texture once this one has been played with.
+Dumping's own witness-report roll (see the waste ban section) still does
+not go through the hush pipeline at all, paid or intimidated — corruption
+already governs whether that witness is enforceable in spirit, but the
+code path was never connected, and connecting it is a separate, sizeable
+piece of work rather than a natural extension of this one.
+
+---
+
+## Time warp only pins to 1x for something actually dangerous — BUILT
+
+The floor existed for a reason — you need to be able to react in real time
+to a threat — but `updateEncounters` was applying it to *any* awake patrol
+within `CLOSE_RANGE * 4`, including a routine `mode:'inspect'` police scan
+that has no player choice the way a pirate's demand has one. The result:
+getting scanned and cleared by a cop pinned your warp to 1x anyway, making
+it needlessly slow to leave the area afterward even though nothing was
+actually happening.
+
+`result` grew a second distance alongside the existing `closest` (nearest
+awake contact, any kind): `dangerClosest`, tracked only across contacts
+that are genuinely threatening — `spec.hostileToPlayer`, or a `pirate` in
+`intercept`/`demand` mode. The hard 1x floor now reads `dangerClosest`
+instead of `closest`; the softer 500x cap ("something is nearby, don't get
+reckless") still reads `closest`, unchanged. `hostileToPlayer` is the
+existing universal "this will shoot you" flag — set exactly at the moment
+of genuine danger (a pirate's demand timing out, a wanted player's police
+engagement, any transition into an attack mode) and never for a
+no-consequence inspection — so nothing that was ever actually dangerous
+becomes escapable at high warp under the new logic; only the purely
+cosmetic "a patrol happens to be nearby" case gets the relief. The one-shot
+HUD warning in `main.js` was updated to match (`dangerClosest < 1000`
+instead of `closest < 1000`), so the message itself still only fires for a
+real threat.
+
+Verified in `warpverify.cjs` (7 cases, `dtSim=0` to freeze NPC steering so
+synthetic positions/modes hold exactly as set): a non-hostile scan gets
+only the soft cap; a hostile cop, an intercepting pirate, and a demanding
+pirate all still pin to 1x exactly as before; a benign patrol sitting
+right on top of you does not mask a genuine threat farther off (`closest`
+and `dangerClosest` diverge correctly, and the *danger* distance is what
+gates the floor); a threat outside the hard-floor radius only gets the
+soft cap; an empty system has no cap at all. One case needed adjusting
+mid-write: a "far but dangerous pirate" scenario tripped the pre-existing,
+unrelated `policeNearby` rule (any patrol within `POLICE_DETERRENT` of the
+*ship* makes every pirate in the system break off, regardless of the
+pirate's own range) — correct existing behaviour, not a bug, fixed by
+using an already-hostile merc for that case instead.
+
+---
+
+## Remote spectroscopy, and a travel guide's idea of anywhere worth living — BUILT
+
+Two small, related additions to what a system tells you before you have
+ever been there.
+
+**Composition, not just count.** The old F2 panel for an unsurveyed star
+said, flatly, that spectroscopy gives you the star and nothing else — which
+undersold real spectroscopy. Transit photometry gives you planet count for
+free, and transmission spectroscopy during that same transit reads
+atmospheric composition directly off the starlight — genuinely
+remote-observable, unlike a government or a port list, which are not. Every
+planet type in `PLANET_TYPES` got a new `ATMO_COMPOSITION` entry (one or two
+seeded phrasings each, so a rocky world reliably reads "none — hard vacuum"
+and a terran reliably reads "breathable" without every world sounding
+identical), and `atmosphereComposition(type, rng)` picks one.
+
+The unsurveyed branch of the F2 panel now calls a new `previewSystem(star)`
+helper (mirroring `main.js`'s own `systemFor` exactly — same cache, same
+`Gen.generateSystem` call, same options resolution) to get planet count and
+per-planet type/composition, shown through the same `rows()` helper the
+surveyed branch already uses. Because `generateSystem` is pure and
+deterministic, previewing produces byte-identical data to an eventual real
+visit, and `previewSystem` never touches `G.visited` — the only thing that
+was ever hidden (who lives there, who runs it, how dangerous it is) stays
+hidden until somebody actually goes.
+
+The one determinism trap here: composition is decided inside the existing
+per-planet loop, which already draws `prng` sequentially for `classify`,
+mass, eccentricity, inclination, and — critically — the orbital angles
+(`lan`, `argp`, `m0`). Splicing one more draw into that sequence would have
+shifted every subsequent angle for every planet after it, silently
+reshaping every existing seed's orbits. Fixed by forking a sibling stream,
+`flavRng = base.fork('flavor-' + p)`, used only for composition — `prng`'s
+sequence is untouched.
+
+**A travel guide's idea of anywhere worth living.** The original Elite's
+habit of a one-line flavour blurb per world — an absurd creature, a
+travel-guide-voice note on the place — never had an equivalent here.
+`Gen.buildFlavor(sys, base)` now runs right after `buildGovernment` (reading
+`violence`/`corruption`/`pirateHeld`/`government`, all just decided, and
+writing nothing anything downstream reads) and sets `lifeNote` and
+`cultureNote` on every **habitable** planet only — the only worlds anyone
+would bother writing a travel guide about. `lifeNote` is pure whimsy
+(`"Dominant native life: " + adjective + " " + creature + clause`), seeded
+and otherwise disconnected from anything else, with two extra clauses that
+only enter the pool at high violence or high corruption. `cultureNote` is
+not disconnected: it picks from `CULTURE_BUCKETS` — ordered, first-match
+rules keyed on `pirateHeld` / violence / corruption / their combination /
+neither — and appends a line keyed on the government's `lowTechBias`, so
+the prose evokes the same facts the F2 numbers already show rather than
+just restating them. This is deliberately the *rumour* you'd have heard
+before ever visiting, not the number in different words. The F2 panel
+shows up to two habitable worlds' notes, word-wrapped with the existing
+`wrapText` helper.
+
+Verified in `flavorverify.cjs`: two full generations of the same seed
+produce identical orbital elements *and* identical composition (proving
+the sibling-fork fix actually holds); composition is present on every
+planet and keyed sensibly to type across 25 systems (every terran
+mentions breathable air, every gas giant mentions hydrogen, every rocky
+world is vacuum); `buildFlavor` sets flavour text on every habitable
+world and on no non-habitable one, across 40 systems; the same world
+regenerated twice gives back the identical `lifeNote`/`cultureNote`
+(seeded, not re-rolled); and `cultureNote` called directly against
+synthetic pirate-held / violent / corrupt / both / quiet system objects
+produces a distinct line for each bucket.
+
+**A rumour about the SYSTEM, not any one world in it.** `cultureNote`
+covers the government — violence, corruption, who holds the place — and
+repeats per habitable world because that's what you'd actually have heard
+about each one. It says nothing about what kind of *place* the system
+itself is: two systems can have an identical government and still be
+completely different — one a two-world garden cluster, the other six gas
+giants and a fuel depot. `sys.systemNote` (`Gen.systemNote`) fills that
+gap, keyed off `systemProfile(sys)` — planet count, how many are giants,
+how many are habitable, how many ports exist — rather than the
+violence/corruption axis. `SYSTEM_DESC_BUCKETS` is tried in the same
+first-match order as `CULTURE_BUCKETS`: 2+ habitable worlds (rare and
+notable, checked first) → exactly 1 habitable world → all-giants with zero
+habitable (a miner's system) → 4 planets or fewer (sparse) → 5+ ports
+(a busy junction) → the ordinary-system fallback. One per system, set at
+the end of `buildFlavor` via `fr.fork('system')` — a sibling of the
+per-world `fr.fork('world-'+id)` forks already there, and since `fork()`
+is keyed on `(label, seed)` only and never on call order or how many prior
+draws were taken, adding it disturbs nothing the per-world loop already
+set for any existing seed.
+
+Shown on the F2 panel in both branches: for a surveyed system, it prints
+below the existing info rows (worlds/ports/factions/government/etc); for
+an unsurveyed one, it prints right under the spectroscopy disclaimer and
+above the per-planet scan rows, on the same "word around the dock, not a
+sensor return" footing as the per-world culture notes below it — honest to
+show pre-visit because it's about the physically-generated bodies, not the
+government facts that genuinely do stay hidden until `G.visited`.
+
+Verified in `flavorverify.cjs`: every one of 40 systems gets a
+`systemNote`, it varies across systems, and regenerating the same seed
+reproduces it exactly while leaving the per-world notes untouched (proving
+the new leaf fork really is inert against what already existed); and
+`systemNote` called directly against synthetic profiles sharing an
+*identical* government but different generated bodies (2-habitable /
+1-habitable / all-giants / sparse / heavily-ported / ordinary) produces a
+distinct line for each — confirming the bucket logic actually keys off
+generated content and not government, which is the entire point of this
+being a separate note from `cultureNote`.
+
+---
+
+## Two more weapons, designed not built
+
+Both came out of the same observation: **the gun table is already doing
+real physics, and it should keep doing it.** Photon is massless, has no
+falloff and the longest reach. Pion has a 26 ns lifetime, so it is
+devastating close and nearly nothing at its own maximum range. Muon is the
+penetrating one — the particle that actually reaches underground detectors
+— and the only tier that keeps its damage at distance. Each weapon's
+falloff curve *is* that particle's behaviour. Anything added to the table
+has to earn its place the same way.
+
+### The glueball projector — a colour-neutral gun
+
+A gluon *beam* is impossible, and interestingly so: gluons are
+colour-confined, and pulling colour charge apart makes new quark-antiquark
+pairs out of the vacuum rather than letting a free gluon out. What
+confinement *does* let out is a **colour singlet** — which is why free
+pions exist at all, and why there has been a pion accelerator in this game
+since before anyone asked the question.
+
+The exotic colour singlet is a **glueball**: bound gluons, no valence
+quarks, net colour zero. Predicted by QCD, still not cleanly identified
+because it mixes with ordinary mesons. Since every tier here is named for
+a particle, it names itself.
+
+**What it is for.** Neutral colour charge and neutral electric charge
+means no EM coupling, which means **a shield has nothing to grab**. In the
+`splitDamage` model that is a `vsShield` near zero: the bucket does not
+spend the shot, so it carries to the hull. Not "strips shields fast" like
+the kaon beam — *ignores that the shield is there*. Nothing else in the
+table does that, and it makes the weapon an **answer to a problem** rather
+than a rung on a damage ladder. Fire groups were built to reward carrying
+two kinds of gun; this is a third option — do not strip at all.
+
+**What it costs, and it falls out of the same property.** Everything else
+in that table is a laser or an *accelerator*: light, or charged particles
+bent by magnets. **You cannot steer a neutral particle.** No focusing, no
+collimation — a wide cone, poor accuracy, modest damage per hit, short
+reach. A shotgun made of nuclear binding energy.
+
+**Rejected along the way, and worth recording.** An earlier version had
+the string tension give it *inverted* falloff — stronger with range, then
+a hard snap. `damageAtRange` would take it for free (a negative constant
+in `PARTICLE`, and `dist > gun.range` already returns zero). It was
+dropped because it contradicts the fix: once the projectile is colour
+neutral it propagates freely, so there is no string pulling on it in
+flight, and the honest curve for a heavy unstable neutral is a *steep*
+falloff — which is the pion's niche already. The physics fix and the
+backwards curve cannot both be had.
+
+**Cost to build:** one entry in `PARTICLE`, one in `LASER_DELIVERY`, and
+splitting `AIM_CONE` (currently a single shared constant at 0.035 rad) so
+a gun can carry its own. Perhaps fifteen lines.
+
+### The casaba howitzer — ordnance, and a heat weapon
+
+Real, documented, out of the Project Orion work at General Atomics, and
+named after a melon. A **directed thermonuclear blast**: the device goes
+off, X-rays flood a beryllium-oxide channel filler, that plasma slams a
+tungsten plate, and the yield leaves as a jet a couple of degrees wide
+instead of a sphere. Fission-primed fusion specifically, because the
+harder radiation couples better to the ablation. (Performance figures in
+circulation are mostly extrapolation; the concept is well attested.)
+
+The analogy to a conventional shaped charge actively misleads. A Munroe
+charge is *mechanical* — explosive collapsing a liner. A nuclear one has
+no time for that; the transport is radiative, and **the thing being shaped
+is the blast itself**. The tungsten is a working fluid, not shrapnel.
+
+**Why it belongs in the ordnance table rather than the gun table.** That
+table has one entry in it. The casaba is the Hawk's opposite on every
+axis: expensive, racked one, unguided, and not aimed at a target at all —
+**aimed at a direction**.
+
+**Three things it brings that nothing else has:**
+
+1. **A minimum range.** Every weapon in the game has a maximum and argues
+   about the curve on the way there. Nothing has a floor. A device you
+   cannot fire inside your own blast radius is useless in a knife fight —
+   the precise inverse of the pion accelerator, and two weapons that
+   cannot cover for each other is a better tension than another rung.
+2. **The cone, and therefore friendly fire.** `killTender` is 14,000, the
+   highest bounty in the game, above a note saying the tender's only
+   defence is that everyone agrees not to. A casaba that clips one you did
+   not check for is the most expensive keypress in Manifest — and there is
+   now a witness eight seconds from transmitting and a price on their
+   silence.
+3. **It is a heat weapon.** A directed thermonuclear blast does not punch
+   a hole through `splitDamage`; it *cooks*. The heat model is already
+   complete — `HEAT_LIMIT` 100, `BASE_HEAT_SHED` 18/s bare, damage
+   accruing past the limit in `sim.js`, and `addHeat` as a single funnel so
+   a live sink automatically takes its cut. Counterplay is a heat sink
+   burned at exactly the right second, which turns sinks and heat shields
+   from re-entry gear and self-inflicted-gun management into **combat
+   equipment**.
+
+**~~Blocked on NPC heat.~~ UNBLOCKED.** NPCs now carry `heat`, a per-class
+shed rate and the same past-limit damage rule, through the same
+`Sim.updateHeating` the player runs. A thermal weapon will work on both
+sides of the gun the day it is written.
+
+**Delivery shape.** A directed blast is effectively instantaneous at
+combat ranges — nothing to dodge, nothing to shoot down — so the flight
+time lives in the *carrier*: a dumb round that flies out and detonates
+when you say. `MISSILES` already carries a `fuse` field. You are not
+aiming a weapon, you are placing a device and choosing the moment, and the
+minimum range stops being a rule and becomes the consequence of being able
+to trigger it whenever you like, including too early.
+
+**Two open questions, one now narrower.** Whether detonating one in an
+inhabited system should be **its own crime above `killNavy` (12,000)
+regardless of whether it hit anything** — setting off a nuke in somebody's
+sky is not a thing that goes unremarked because you missed, and it would
+be the first offence in the game committed by *firing* rather than by
+connecting, is still fully open. Where it is sold is half-answered: "The
+Syndicate's own arms locker" above built exactly this pattern — a
+turf-gated, standing-gated, full-reliability tier, keyed off
+`SYNDICATE_TRUST` — for `syndbeam`. Whether the howitzer belongs there, at
+a naval yard for ALLIED at a different price, or both, is still a decision
+rather than a fact about the code.
+
+The catalogue name stays "Casaba howitzer" verbatim. Reality already did
+the joke and the table's register is deadpan enough to carry it.
 
 ---
 
@@ -1013,6 +1826,54 @@ corridor drop-outs get `id: 'drop-' + other.id` from the slipspace contact
 list, and whether *that* is seeded has not been traced. If the corridor
 rolls contacts off the wall clock, those need their own salt or they will
 be stable within a session and different across loads.
+
+---
+
+## ✅ The cargo scoop — BUILT, and it closed a hole in jettison
+
+*Reported from play 2026-09-09: jettisoning cargo simply resulted in picking
+it back up.*
+
+**The bug was arithmetic, not logic.** `dropCanister` already pushed a crate
+out 50 m astern at 12 m/s — the right behaviour, and what the plan always
+described. `scoopCanisters` reaches **80 m** at up to 20 m/s. So the crate
+spawned inside the scoop envelope and the ship inhaled it on the next frame.
+Jettison had never once worked, and the suite had a `frames(60)` sitting
+directly on top of it that only checked for exceptions.
+
+Two changes, and they are separable:
+
+1. **Arming.** Anything the player pushes out is inert until it has been
+   further away than the scoop can reach. A **distance** test, not a timer —
+   a timer in sim seconds evaporates under time compression and a timer in
+   real seconds can be waited out sitting still. Cargo dumped by somebody
+   *else* carries no `armed` field and is catchable immediately, which is
+   what makes robbing a freighter work.
+2. **Catching is a fitting.** `cargoscoop`, utility slot, 1,400 cr,
+   `minDev: 0`. `Combat.hasScoop` reads it off the fit rather than a flag,
+   so selling it takes the capability with it.
+
+**Fitted on a new ship** (and issued by `migrateFit` to any save with no fit
+map). Learning the rule by watching your own cargo drift away is a bad first
+lesson; learning it by selling the scoop because you wanted the slot for a
+scanner is a good one. Selling sticks because the scoop lives in the fit map
+and the fit map is what is saved.
+
+**Zero power draw, and the suite is why.** The first version charged 0.4 MW.
+Four measured budget facts moved at once — the starting fit's draw, the
+Kestrel's reactor-then-shield sequence, and the pair of anchor measurements
+that depend on a Talon having exactly 6.8 MW free. A scanner runs
+continuously; a scoop is a hatch and a clamp that work for seconds a day.
+Its price is a tonne and a utility slot, and on a Kestrel that tonne is
+exactly the difference between the Class 3 beam / Mk II reactor / shield
+glass cannon existing and not, because those three come to precisely its
+22 t budget. The budget says "a glass cannon does not stop to pick things
+up" without anyone having written that rule.
+
+**What this unblocks.** Phase 5's mining and Phase 4's salvage both run
+through the same scoop, so the utility slot now has a customer before
+asteroids exist — and the parcel design in Phase 10 wants a *scanner* good
+enough to read a sealed crate, which is the same slot competing again.
 
 ---
 
@@ -1575,6 +2436,144 @@ one impossible.
 Fragments should also be **selected by the mission's own seed**, not by
 `Math.random()`, so a board reads the same when you come back to it — the
 same doctrine as the pirate holds.
+
+### What is actually in the sealed parcel
+
+**Nothing, today.** `registerParcel()` invents `parcel` as a phantom
+commodity — `{ id: 'parcel', name: 'Sealed courier parcel', base: 0,
+tier: 0 }` — registered *after* the catalogue so the market has never heard
+of it and cannot price it, and `accept()` puts one tonne of it in the hold.
+It exists so the hold has something to carry and so `completeAtDock` has
+something to check for. Mechanically the courier contract is "fly to that
+star", and the parcel is the token that proves you did.
+
+That is not wasted. The courier is **the only mission type that makes you
+leave the system**, which makes it the game's tutorial for the lane
+timetable, wakes, the corridor and interdiction, and it should keep doing
+that job. But it leaves something obvious on the table, because a **sealed
+container in the hold is the perfect object for a game that already searches
+holds.**
+
+**The parcel has contents, and you do not know them.** `contents` hashed off
+the mission id — the pirate-hold doctrine exactly: derived once, owned,
+deterministic, not a die roll you can reload away. Weighted so that most of
+it is mundane and specific: legal instruments, medical samples, a machine
+part nobody will trust to general freight, seed stock, a data core,
+somebody's ashes. And sometimes it is not: narcotics, restricted arms, and
+once Phase 18 exists, a sabotage device.
+
+**A sealed parcel is not your crime until it is opened.** `resolveScan`
+already searches holds and already knows what contraband is. Carrying a
+dirty parcel through a customs stop is the whole tension, and the game
+should be exactly as honest about it as the situation is: the seal is
+somebody else's word, and you took the fee.
+
+**You can break the seal.** A button on the contract, and it costs you:
+
+- The contract **voids** — no fee, a standing hit for the breach, and the
+  client's line about discretion turns out to have meant something.
+- You find out what you are carrying.
+- You can then dump it before the border, through the existing `dumping()`
+  path — which is itself a witnessed act with its own consequences.
+
+Three things that already exist (a seeded hash, `resolveScan`, `dumping`)
+plus one flag and one button, and the result is a decision with genuine
+information asymmetry in it.
+
+**And a reason to buy a scanner.** `scanLevel(ship)` already exists and
+already grades a ship's sensors. A good enough scanner should read a sealed
+parcel **without breaking the seal** — which turns an abstract utility-slot
+stat into a thing a courier pilot specifically wants, and gives the Phase 5
+utility slot a customer it does not currently have.
+
+**The fee is the tell, and the tell must be true.** The courier band is
+1,800–4,800 cr for a single tonne, already conspicuous beside a haul's
+`tonnes × 28–55 + 250`. A parcel at the top of that band, from a client the
+pool calls *"someone who did not give a name"*, bound for a system with a
+high `crimeScore`, is the game telling you something without ever lying.
+**So weight the contents table on the fee and on the destination's crime
+score, and draw the client and tone fragments from the same seed.** If a
+nervous `desc` and a fat fee do not actually correlate with dirty contents,
+players learn within an hour to ignore both, and the mechanic is dead.
+
+**What it must not become:** a coin flip that ruins a run with no warning. A
+mid-band fee, a named client and a low-crime destination should be clean
+very nearly always. The uncertainty belongs at the tempting end of the
+board, where the money is.
+
+### ✅ Narrative text, from facts rather than adjectives — BUILT
+
+*`factsFor` / `placePhrase` / `reasonPhrase` in `missions.js`, plus the
+headline generator below. The pools roughly doubled and a `smuggle` set was
+added so `arcs.js`'s off-the-books chapters stop borrowing the haul voice.*
+
+The ask is for mission text with more character in it. The wrong way to get
+there is a bigger `TONE` pool — four entries per type is not the problem.
+**The problem is that there is one sentence shape per type, and it draws on
+almost nothing the world knows.** `describe()` uses the client, the tone,
+the origin name, the destination name, the tonnage and the fee. Everything
+below is already computed, already true, and currently unsaid:
+
+| Fact | Where it lives | What it lets the text say |
+|---|---|---|
+| destination's role | `port.market.roleName` | "the reprocessing plant at Halden Dock", not "Halden Dock" |
+| surplus and deficit at each end | `market.rows[cid].prod − cons` | "they are drowning in it here and short of it there" |
+| development level | `port.market.dev` | a frontier client and a core-world client should not talk alike |
+| surface / orbital / underground | `port.surface`, `port.underground` | "it goes down the shaft, so mind your descent" |
+| crime score en route | `sys.crimeScore` | "the run goes through permissive space" |
+| distance | `Galaxy.distance3` | "nine light years, and they know what that costs" |
+| faction and your standing | `port.faction`, `Missions.standing` | a client who has dealt with you before, or has not |
+| contraband flag | `Eco.BY_ID[cid].contraband` | why the fee is what it is |
+
+**The governing rule does not change, and this is what makes the expansion
+safe**: *the grammar may only combine fragments that describe state the
+mission actually has.* Every row above is a real value read off the offer or
+the world, so adding these makes the text more specific **and** keeps the
+guarantee that a clumsy join is the worst failure available. This is the
+starport signage principle applied to prose — the boards advertise what the
+port genuinely exports, and the contracts should describe the job the
+economy genuinely has.
+
+Two field traps, both already recorded in `starport-dressing` and both
+silent if you get them wrong: **the role id is `port.market.role`, not
+`port.role`**, and `economy.js` exports `PORT_ROLES` but keeps `ROLE_BY_ID`
+private, so a small local lookup is needed.
+
+**✅ The headline generator — BUILT.** Shipped as
+`[URGENCY] [VERB] <core> [— TAIL]`. The shape changed slightly from the
+specification above and the change is the interesting part:
+
+- **`core` replaced `[CARGO] to [PLACE]`.** Whoever builds the offer writes
+  the core — tonnage, commodity, destination — and `headline()` never edits
+  it. That is what guarantees the three facts a headline exists to carry
+  survive every decoration, and it is why `boardAt` now sets `core` where it
+  used to set `text`.
+- **`[PRESSURE]` moved out of the headline entirely.** It is a mood, not a
+  fact, and it belongs in `desc` where there is room for it. What took its
+  place is a *true* tail — "— they are short", "— underground bay" — drawn
+  from the world rather than a pool.
+- **`[URGENCY]` is earned, not rolled.** It appears when `payPressure()`
+  puts the fee in the top quarter of that type's own pay band. A board that
+  shouts is a board worth reading twice, and the shout is honest.
+- **A 64-column budget, checked against the assembled string.** Decorations
+  are added in priority order only while they fit, so a long port name
+  quietly costs you the tail rather than producing a headline that runs off
+  the panel. Measured across a galaxy: longest 64, and the suite holds the
+  board under 80.
+- **All three draws happen before any fit test**, so reordering or adding a
+  decoration later cannot shift the stream and silently reword every board
+  in the galaxy.
+
+**Two fragments were written and then deleted, and the reason generalises.**
+"There is more of it on this dock than anyone here can use" and its matching
+"— surplus here" tail both read well in isolation and were true. They were
+also true of *every haul ever generated*, because `boardAt` only offers a
+haul in a good the origin exports — a tautology dressed as insight, printed
+on two thirds of the board. The pool rule (a fragment must be true of every
+mission of its type) has a mirror image that is just as important: **a
+fact-driven fragment must NOT be true of every mission of its type**, or it
+is noise with a citation. Same test for the 'orbital' role name, which is
+the role a port gets when it has no role, and which is now left unsaid.
 
 ### The board should have people on it, not just contracts
 
@@ -2364,6 +3363,348 @@ tracked preferences, or they break a test two thousand lines away.
 
 ---
 
+## Phase 16 — drives as a career
+
+Two upgrade ladders, both of them things you *buy* rather than things you
+find, and both of them paid for with something other than money.
+
+### The slot: one torch, one perforation drive, never zero
+
+Not `slots: { drive: 2 }` — that lets you bolt on two torches and cancels
+the choice. **Two singleton slot types**, `torch: 1` and `slip: 1`, added to
+every hull's slot table. `slotType()` already strips the trailing digits off
+a key, so `torch1` and `slip1` need no new machinery, and exclusivity comes
+out of the table rather than out of a rule somebody has to remember.
+
+**A drive slot is never empty.** `refreshShip` computes
+`maxAccel = thrustKN / mass`, so an unfitted torch is a ship that cannot
+move, and `hoursPerLy` with no perforation drive is a ship that cannot
+leave the system. Buying a drive is therefore a **swap**, never a fit: the
+old one is sold back at the standard 45% in the same transaction, and
+`unfitItem` refuses a drive key in words. This is the one place the slot
+model needs a genuine exception, and it is worth taking rather than
+pretending a bare hull could fly.
+
+**Migration.** `migrateFit` gives every existing ship a Class 1 torch and a
+Class I perforation drive, whose stats are exactly today's numbers — so
+every save in existence keeps flying identically and the ladder starts at
+where the game already was. Same courtesy the equipment table extends to
+legacy weapon ids.
+
+### Torch drives — acceleration bought with heat and visibility
+
+Rated as multipliers on the hull's own `thrustKN`, so one table covers the
+whole catalogue instead of a number per hull.
+
+| | Thrust | Drive heat at full throttle | Power | Plume |
+|---|---|---|---|---|
+| **Class 1 torch** | ×1.00 | — | 0 | blue, today's |
+| **Class 2 torch** | ×1.45 | ×2.2 baseline | 2.4 MW | amber |
+| **Class 3 torch** | ×2.05 | ×4.0 baseline | 5.6 MW | ethereal violet |
+
+**Heat stops being a gunnery problem.** Today `addHeat` is spent only by
+weapons — `heat × cooldown` per shot, the turret included — so a trader who
+never fires never touches the thermal system and the heat sinks built in
+Phase 5 are, for that pilot, decoration. A torch above Class 1 adds a
+*continuous* term proportional to `throttle²`, and suddenly a hard burn
+across a system is a thermal decision. That is a large amount of already-
+built machinery — `armSink`, `updateSink`, the ejection record, the sink
+rack — switching on for a player who has never been in a fight.
+
+`throttle²` and not `throttle`, because the cost of going fast should punish
+the last 20% of the lever far more than the first 20%. A pilot who cruises
+at three-quarters throttle should be comfortable; a pilot who holds it on
+the stop should be watching the gauge.
+
+**The plume is information, and that is the whole point.** Class 3's violet
+is not a skin. `plumeSignature(ship) = throttle × classFactor × hullSize`
+feeds two gates that already exist:
+
+- **`witnessNear`'s radius scales with it.** Committing a crime while
+  burning hard makes you easier to identify. Coasting is free — the
+  signature falls to the hull's own baseline at zero throttle — and coasting
+  is already how orbital flight works, so the counter-play costs nothing to
+  build and everything to use.
+- **`Sim.updateEncounters` closes from further out.** Patrols and pirates
+  vector in on a bright plume. The class you paid for is the class everyone
+  can see.
+
+**NPCs carry them too**, and this is what turns the colour into a mechanic.
+A naval cutter runs Class 2; an interdictor built to catch you runs Class 3.
+An amber plume closing at range is not a trader, and a violet one is a very
+bad afternoon — read off the sky, before the contact list has resolved a
+name. `drawShipExhaust` already takes its colour from an `EXHAUST` spec
+keyed by `kind`; it gains a colour and a length override, and length scales
+with class because a hotter exhaust leaves faster. Same method as the bolt
+streak and the atmosphere model: the animation comes out of a property, not
+out of taste.
+
+### Slipspace perforation drives — the interstellar half
+
+`hoursPerLy(tonnes) = BASE + (tonnes/100) × PER_100T`, with `BASE = 4.2` and
+`PER_100T = 1.9`. **The drive moves `BASE` and nothing else.**
+
+| | h/ly floor | Interdiction factor | Draw | Price band |
+|---|---|---|---|---|
+| **Perforation I** | 4.20 | ×1.00 | 1.2 MW | fitted, sells at 45% |
+| **Perforation II** | 3.60 | ×0.88 | 2.6 MW | 12k – 55k |
+| **Perforation III** | 3.00 | ×0.76 | 4.4 MW | 45k – 200k |
+| **Perforation IV** | 2.50 | ×0.62 | 6.8 MW | 140k – 600k |
+
+Leaving `PER_100T` alone is deliberate: **unloading stays the way you buy
+speed**, and the drive raises the ceiling rather than flattening the hold's
+story. A laden reference hull at 146 t goes 6.97 → 5.27 h/ly on a Class IV,
+which is a quarter off a long haul; an empty one goes 5.76 → 4.06.
+
+**The trap that would have made this upgrade worth nothing.** `openCorridor`
+sets `hunter.rate = corridorRate(lightYears, tonnes, 0) × 1.15` — the
+hunter's speed is derived from *the player's* nominal rate, so a hunter is
+defined as "15% faster than you, whatever you are". Improve your drive under
+that rule and the hunter improves by exactly as much: the Class IV costs six
+hundred thousand credits and changes nothing about being chased. The hunter
+must be re-based on **its own** mass — `corridorHunter` already picks one,
+110–195 t light and 260–520 t heavy — running a stock Class I. Then
+outrunning a light interdictor in a good drive is a thing that can happen,
+which is what the money is for.
+
+**And the chance itself.** `corridorHunter` rolls
+`chance = 0.04 + (crime/100) × 0.30`, plus 0.08 over 20,000 cr of cargo
+value. The drive multiplies that by the factor above, **floored at 0.03** —
+you can never buy your way to un-interdictable, because a threat you can
+switch off stops being a threat and the corridor stops being a place.
+
+**The baffle and the drive are different jobs and should stay legible as
+two.** The Wake Baffle hides your *trail*: `wakeFactor` is read at line 627
+when somebody scans a wake to work out where you went. The perforation drive
+shortens your *exposure*: fewer hours in the corridor, and a hunter with less
+of it to close in. One is about who follows you tomorrow, the other about
+who catches you today. Both should be buyable, and a pilot who owns both
+should feel like they bought two different things.
+
+### Where they are sold
+
+Same gate structure as the anchors — `minDev`, `minStanding`, `minCrime` —
+so the ladder is a rarity curve rather than a shopping list. Class 3 torches
+and Class IV perforation drives belong at high-development ports and, once
+Phase 17 exists, at naval stations, which is the first thing a rank actually
+buys you.
+
+**Verification owed.** The gates must be measured against generated ports
+before being trusted, and measured *correctly* — `generateSystem` takes a
+star **seed**, not a star **object**, and the anchor work already lost a day
+to that. The check belongs in `combat.test.js` beside the existing one.
+
+---
+
+## Phase 17 — naval stations, and work for a flag
+
+The navy exists in the sky and nowhere else. `PATROL_CLASSES.navy` puts a
+cutter in roughly a system in twelve, `killNavy` is a charge, and that is the
+whole of it: a deterrent with no door. **A naval station is the door.**
+
+### The port role
+
+An eighth entry in `PORT_ROLES` — `{ id: 'navy', name: 'Naval station',
+bias: ['alloys', 'fusion', 'arms'] }` — but generated on a different rule
+from the other seven. Not one per system: **one per faction per few
+systems**, on a high-`dev` world inside that faction's own space, drawn in
+its own `base.fork('navy')` substream so adding it cannot perturb a planet,
+a moon or a patrol that already existed. The same discipline
+`buildPortDressing` follows, for the same reason, with the same test.
+
+Its market is thin and its yard is not. A naval station is where the top of
+the weapons catalogue lives, and it is where **the directed muon burst
+cannon** finally has a home — currently the plan's one DESIGN ONLY item,
+with no plausible shop to put it in. A capital-grade weapon should not be
+for sale at a farming co-op at any price, and "you have to have earned it"
+is a better gate than "it costs a lot".
+
+### Turrets, and the rule from the play report
+
+Naval stations are defended. This is the feature the exterior-only rule
+above was written for, and it is worth restating where the work will happen:
+emplacements are placed on the **hull surface, facing out**, in the
+station's own exterior frame — never in `buildPortDressing`'s surface-pad
+`{u, r, h}` space, which assumes a ground plane and will happily bury half
+of them inside the drum.
+
+They should also **fire**, which is what makes them worth modelling at all.
+A defended station is why Phase 8's blockade is a decision rather than a
+formality, and why attacking a faction's naval station is the loudest thing
+a pilot can do.
+
+### The military board
+
+Not a second mission system. `Missions.boardAt` already builds a
+deterministic board from `(port, window, seed)`, `finish()` already caps the
+headline and writes the long form, and `arcs.js` already casts authored
+chapter chains against real ports. A naval station's board is the same
+machinery with a different offer table and one extra gate.
+
+| Job | Reuses | New |
+|---|---|---|
+| **Patrol sweep** | `killNpc`, `crime`, standing | a kill counter with a deadline |
+| **Convoy escort** | Phase 15's escort-for-hire, whole | pay from the faction, not the ship |
+| **Picket** | the interdiction corridor, whole | a named target instead of a random hunter |
+| **Strike** | `damageNpc`, blockade shortfalls | standing loss with the *victim* faction |
+
+**Rank is standing, relabelled.** `standingLabel` already bands −100..100 at
+−40 / −10 / +10 / +40. Those bands become the rank ladder, so there is no
+second number to keep in sync and no way for your rank and your standing to
+disagree. Strike missions are the ones that cost you elsewhere: taking a
+faction's flag means taking their enemies, and that has to show up as a
+number going down somewhere else on the same screen.
+
+**Closed to the wrong people, in words.** A pilot with a live bounty is
+refused at the desk. A fugitive is refused at the door — `dockRefused`
+already exists. A pilot carrying the pirate mark is refused everything, and
+Phase 18 is about what they do instead.
+
+---
+
+## Phase 18 — the tow, the frame, and the mark
+
+Three things that turn out to be one thing: a service you can hire, an abuse
+of it, and what the galaxy does to you for the abuse.
+
+### Taxi tow
+
+**Fee-based: a tug comes out, grapples you, and moves you and your own ship
+from where you are to where you want to be.**
+
+The reason this earns its place is that the game already has a real dead end
+and no answer for it. Run the reaction mass out and `main.js` says *"Reaction
+mass exhausted — no thrust. Docking refills it free"* to a pilot who cannot
+dock. That is a stranded save. The tow is the answer, and its price is the
+punishment — which is a far better shape than a rescue that costs nothing or
+a game over that costs everything.
+
+- **Hired over COMMS (F4) or from a port**, so it reaches you where the
+  problem is.
+- **Fee scales with your all-up mass and the distance**, with a surcharge in
+  lawless space — the same `crimeScore` that gates everything else. Being
+  towed out of somewhere nobody wants to go is expensive, and that is
+  correct.
+- **In-system first.** Surface, orbit, or dead in the deep. An interstellar
+  tow is a much more expensive second tier and should wait until the first
+  one has been flown.
+- **You keep the seat.** Time-compressed like a long burn, not a cutscene —
+  the arrival rail's precedent, in the other direction. And because you keep
+  the seat, **you can be interdicted mid-tow**, which is exactly what makes
+  a tow through bad space a thing you think about rather than a fast-travel
+  button.
+
+### Framing a tug
+
+A tug's hold is open to you while you are under tow. So you can put
+something in it.
+
+This is **Phase 10's sabotage run backwards**, and it uses the identical
+machinery: `resolveScan` already searches a hold for contraband and already
+treats a sabotage device as the worst thing it can find. Sabotage is you
+carrying the device. Framing is you leaving it in somebody else's ship and
+walking away clean — and when the tug is scanned at the destination, the
+operator is the one who is charged.
+
+**Being seen is the whole risk.** Planting goes through `crime()` like every
+other act in this game, and the tug's own crew is a witness by definition —
+a ship with a transponder, ten metres away, whose job is watching you. So
+the frame does not turn on a die roll about whether it worked; it turns on
+whether anyone can say it was you. That is the same bargain the rest of the
+law runs on, and it needs no new system.
+
+> **Framing somebody for a serious crime, and being caught at it, gets you
+> marked as a pirate.**
+
+Serious means the sabotage device, restricted arms, or anything that would
+have carried a kill charge. Planting a bale of narcotics on a tug is
+ordinary, ugly smuggling and is handled by the existing fine.
+
+### The mark
+
+**Not a new number.** The mark is a **standing floor**: standing with that
+faction is set to −100 and *pinned* there. Trade does not move it. Contracts
+do not move it. `bumpStanding` is allowed to compute a rise and is not
+allowed to apply it, and the F5 standing readout says `MARKED` rather than
+`HOSTILE` so the player can tell a bad reputation from a locked one.
+
+Everything else falls out of machinery that already exists: `dockRefused`
+closes the ports, `wantedHere` makes the patrols hostile on sight,
+`stockAt`'s standing gates empty the yard, the mission board has nothing on
+it, and Phase 17's naval station will not open the door.
+
+### Earning it back — every pirate you kill, wherever you kill it
+
+**A pirate kill counts from anywhere.** Nobody has to be alongside to see
+it, and it does not matter whose space you were in. The road back to the law
+has to be findable by a pilot who has just watched every port on the map
+close, and a redemption you can only earn in the one place you are being
+shot at is not a road, it is a wall with a door painted on it.
+
+**This is not an exemption from "crime is witnessed, not omniscient" — it
+is the other side of the same rule.** A crime needs a witness because it
+depends on somebody *choosing* to report it, and everyone at the scene has a
+reason not to. A dead pirate reports itself. `killNpc` already knows the
+victim's id, class and faction at the instant it fires, and the ship that
+died was carrying a posted bounty: the record is the pirate's own
+transponder, logged by your ship and filed against every flag that had money
+on them. One is a person deciding to talk. The other is a claim, and claims
+do not need company.
+
+- **+6 per kill; twelve lifts the pin**, and standing resumes at −40 —
+  HOSTILE, the bottom of the ordinary ladder, with the ordinary climb ahead
+  of you.
+- **Credit goes to every faction currently holding a mark on you, at
+  once.** The claim goes out on an open channel; it is not a favour done for
+  one government. A pilot marked by three flags digs out of all three
+  together, which is the difference between a chapter of play and a
+  sentence.
+- **One credit per pirate**, keyed on the ship's own id. Ships are already
+  uniquely identified and already seed-derived — `manifestFor` hashes a hold
+  off the registration — so the dedupe is a set in the save and costs
+  nothing. It exists to stop a wing being farmed by re-entering the system,
+  and for no other reason.
+- **No cap per system and no cap per window.** Considered and dropped. A
+  throttle would be friction reintroduced under a different name, and the
+  thing that limits this should be *finding pirates*, which is already a
+  game.
+
+**What was cut here, and why nothing replaces it.** An earlier draft
+required `witnessNear` to see the kill, on the theory that the function
+which convicts you should also be the one that credits you. It was a
+tidy symmetry and it was wrong for this mechanic: it made the only exit
+from the mark run through the exact space where the marking faction's
+patrols are hostile to you on sight, and it left a hole — a kill in the dark
+counting for nothing — that read as a bug every time it happened. Removing
+it takes the drama out of the bookkeeping and puts it back where it belongs,
+on pirates being dangerous.
+
+Raising twelve to sixteen to compensate was considered and rejected for the
+same reason: compensating for a friction you deliberately removed just
+re-adds it wearing a hat. **If the chapter plays too short, raise the
+count** — it is one number, and it is the right lever to reach for.
+
+**The mark still costs you plenty, and it costs you everywhere.** Ports
+shut, yards empty, boards blank, patrols hostile. Hunting pirates while
+carrying that is harder than hunting them clean, wherever you do it — you
+cannot repair, you cannot refit, and you cannot sell what you take without
+finding somewhere that will have you. That is the difficulty. It does not
+need a witness rule on top of it.
+
+**Say the intent out loud, because it is the design.** The mark does not
+lock you out of the game and it is not a fail state with a timer on it. It
+changes what the game is about for a while, and the way out is the one
+honest thing you can do with a gun. Morality as a mechanic, not as a
+punishment for having fun.
+
+**Where this touches Phase 7.** Phase 7's bounty ladder, roadside
+settlement, decay and scan-scaling all stay exactly as written. The mark
+sits *above* that ladder: bounties are money and lapse, the mark is not
+money and does not. A pilot can be clean of every bounty in the galaxy and
+still be marked, and the two readouts must not be the same widget.
+
+---
+
 ## Idea — black holes as galactic anchors
 
 **The framing that makes this work: the killer is the radiation field, not
@@ -2557,8 +3898,12 @@ Design that when the model lands, not before.
 number:
 
 - Killing a **pirate** in a system: `+4` with the local faction, `+8` if it
-  was actively hostile to a witness ship. Being *seen* doing it should
-  matter — the same `witnessNear()` that convicts you can also credit you.
+  was actively hostile to another ship at the time. **No witness needed** —
+  this was originally gated on `witnessNear()` for the symmetry, and Phase
+  18 has since settled the rule for the whole project: *a crime needs a
+  witness because it depends on somebody choosing to report it; a dead
+  pirate reports itself.* The two must not disagree, or the same kill pays
+  under one rule and not the other.
 - Killing a **clean trader**: the existing bounty, plus `−15` standing with
   its faction.
 - Killing **police**: bounty (6000), plus `−40`, which is straight to
@@ -2672,9 +4017,37 @@ reload or the old bundle will lie to you):
 - Kill one at 40 km and confirm the shards are cheap enough not to hitch.
 - Accumulate ~600 cr of fines and let a patrol find you.
 
-**Known hazard:** `save.js` changes touch localStorage, and there is an
-open, undiagnosed bug where live localStorage breaks the slipspace corridor
-tests. Expect it; don't chase it into this work.
+**Known hazard — narrowed, still open.** Live localStorage breaks the
+slipspace corridor section of `render.test.js` (not `slipspace.test.js`,
+which never loads `save.js` at all). Two recorded symptoms: the charge phase
+never advances, and drawing deep space reads `.mu` off undefined.
+
+What is now known, from reading:
+
+- **The second symptom is a real null-dereference and it is fixed.** The NAV
+  panel's "surface gravity" row read `dom.mu` where `dom` is a chain of
+  fallbacks ending in `G.sys.root`, in the branch that runs when the ship is
+  neither orbiting nor docked. It reads `—` when it does not know. Two
+  sibling cases were hardened at the same time: `dropCruise` tested
+  `dom.mu > 0` *after* already dereferencing `dom` twice, and
+  `orbitalFrame` now falls back to the root.
+- **The first symptom is NOT explained yet**, and one obvious theory is
+  wrong: the interstellar locale is deliberately an ordinary system holding
+  one star, precisely so `dominantBody` keeps answering (see
+  `Gen.interstellarSystem`), so "there is no dominant body out there" is
+  false. Do not spend time on it.
+- **The likeliest remaining mechanism is state leaking between runs.**
+  `boot()` calls `newGame(seed)` and then, if `Save.load(seed)` returns
+  anything, `Save.restore` — and with storage live every dock writes a
+  career. If the store is genuinely persistent under node (recent versions
+  ship a real Web Storage), a save from a *previous run* is present at boot,
+  which would make the failure depend on run history rather than on the
+  code. That would explain why it reads as nondeterministic and resisted
+  diagnosis. **Check first:** print `typeof localStorage` under plain node,
+  and whether `fakeStore` is the only thing `save.js` ever sees.
+
+Everything above is reading, not running — Desktop Commander was down. The
+fixes are unverified.
 
 ---
 
@@ -2695,6 +4068,32 @@ tests. Expect it; don't chase it into this work.
 8. Blockade and worlds changing hands. Not before 6 has been played with.
 9. Who hunts whom — pirate opportunism, NPC-on-NPC robbery, naval hunters.
 10. Mission board: sabotage, `desc` field, DESCRIPTION button, 240-char cap.
+11. Drives (Phase 16) — the torch ladder first, the perforation ladder
+    second. They share a slot table and nothing else.
+12. Naval stations and the military board (Phase 17). Wants 7 and 10 first:
+    a rank ladder built on standing needs the standing to mean something,
+    and a military board built before the text discipline inherits the
+    sprawl.
+13. Taxi tow (Phase 18's first third). Independent of everything, and it
+    closes the stranded-save dead end on its own.
+14. Framing and the pirate mark (the rest of 18). Wants 10's sabotage
+    device to exist — the frame is that device pointed the other way.
+
+**Do the play report before any of this.** Five of its six items are an
+afternoon each, they are all "say a thing the game already knows", and
+every phase above adds another thing the game will know and not say. The
+contract card in particular should land before the military board, or Phase
+17 ships four new mission types that resolve as silently as the three
+existing ones do.
+
+**Phase 16 before Phase 17.** A naval station's first real reward is access
+to hardware, and until the drive ladder exists the only hardware to gate is
+the gun catalogue — which makes rank a discount rather than a door.
+
+**Phase 16's torch half wants Phase 5's heat sinks played with first**,
+which they now can be: continuous drive heat is the thing that makes a heat
+sink matter to somebody who never fires a shot, and tuning that against a
+thermal system nobody has flown yet is guessing twice.
 
 Phase 10's text discipline is small and independent — worth doing early
 and out of order, because every later mission type inherits it and

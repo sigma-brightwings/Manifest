@@ -87,59 +87,293 @@
    * this must not consume a draw that offer generation was relying on. */
   var TEXT_MAX = 240;
 
+  /* The headline gets a far tighter budget than the cap, because the cap is
+   * a safety net and this is the actual readable width. The board clips at
+   * roughly eighty characters and the ACTIVE CONTRACTS column at about
+   * fifty, so a headline that spends its whole allowance is a headline
+   * nobody reads the end of. Decorations are added only while they fit, in
+   * priority order, and the CORE is never touched — see `headline`. */
+  var HEAD_BUDGET = 64;
+
+  /* ---- the pools ---------------------------------------------------------
+   * Connective tissue ONLY. Every entry in every pool is true of EVERY
+   * mission of that type, which is what lets the pools grow without the
+   * grammar getting cleverer: a bad draw reads oddly and cannot lie.
+   *
+   * Anything that is NOT true of every mission of its type does not belong
+   * here — it belongs in the fact-driven fragments below, which are chosen
+   * by reading the world rather than by rolling dice. */
   var CLIENT = {
     haul: ['A factor', 'A shipping agent', 'A warehouse clerk',
-           'A consortium buyer', 'A dock supervisor'],
+           'A consortium buyer', 'A dock supervisor', 'A freight broker',
+           'A co-operative steward', 'An outbound loadmaster',
+           'A woman running her father’s dock', 'A bonded warehouseman'],
     courier: ['A quiet man', 'A legal office', 'A shipping agent',
-              'Someone who did not give a name', 'A station registrar'],
+              'Someone who did not give a name', 'A station registrar',
+              'A woman with a courier bond and no small talk',
+              'An estate solicitor', 'A clerk who kept checking the door'],
     disposal: ['The reactor supervisor', 'A waste contractor',
-               'The site foreman', 'An environmental officer']
+               'The site foreman', 'An environmental officer',
+               'A decommissioning crew chief', 'The containment officer'],
+    smuggle: ['A man who does not blink', 'A dock hand with a second job',
+              'Somebody the harbourmaster has not met',
+              'A voice on an unlisted channel']
   };
   var TONE = {
     haul: ['Standard terms.', 'Nothing unusual about it.',
-           'Paid on delivery, as always.', 'Routine work, honestly priced.'],
+           'Paid on delivery, as always.', 'Routine work, honestly priced.',
+           'No surprises in the paperwork, and none expected in the hold.',
+           'They have shipped this way for years.'],
     courier: ['No questions, and none expected.', 'Sealed, and it stays sealed.',
-              'Discretion is most of the fee.', 'Hand it over intact and that is that.'],
+              'Discretion is most of the fee.', 'Hand it over intact and that is that.',
+              'You are being paid to not be curious.',
+              'The seal is their word, not yours.'],
     disposal: ['Licensed disposal only.', 'The paperwork follows the cargo.',
                'Do not be clever about where it ends up.',
-               'Somebody checks. Somebody always checks.']
+               'Somebody checks. Somebody always checks.',
+               'It is legal, it is filthy, and it pays like both.'],
+    smuggle: ['Nobody signs anything.', 'If it is found, it was never theirs.',
+              'The fee is for the risk, not the distance.']
   };
   var PRESSURE = ['They are not in a hurry, but the board clears at the deadline.',
                   'Sooner is better than later.',
                   'The deadline is real; the fine for missing it is realer.',
-                  'They have asked twice already.'];
+                  'They have asked twice already.',
+                  'Late is the same as never, as far as the fee is concerned.',
+                  'The clock started when you read this.'];
 
-  /* Fragments joined with a real fact between them. */
-  function describe(offer) {
+  /* Headline verbs, per type. The courier's carry the article because its
+   * core is a bare noun phrase ("sealed parcel to the Vega system"). */
+  var VERB = {
+    haul: ['Run', 'Lift', 'Shift', 'Move', 'Carry'],
+    disposal: ['Clear', 'Take', 'Haul off'],
+    courier: ['Carry a', 'Run a', 'Hand-carry a'],
+    smuggle: ['Move', 'Quietly shift']
+  };
+  var URGENT = ['Urgent:', 'Priority:', 'Rush:'];
+
+  var DISTANCE_NOTE = ['It is {ly} out, and they know what that costs.',
+                       '{ly} of lane, most of it empty.',
+                       '{ly} away — the deadline allows for a jump and not much else.'];
+  var LAWLESS_NOTE = ['The run goes through space where the law is a suggestion.',
+                      'Nobody out that way is very interested in paperwork.',
+                      'It is not policed space. Price that in yourself.'];
+
+  /* ---- facts the world already knows -------------------------------------
+   * Every field here is read off state the offer or the world ALREADY has,
+   * which is what makes the richer prose safe: the grammar still only
+   * combines fragments that describe state the mission actually has, and
+   * these are simply more of that state than `describe` used to bother with.
+   *
+   * This is the starport-signage principle applied to prose — the boards
+   * advertise what a port genuinely exports, and a contract should describe
+   * the job the economy genuinely has.
+   *
+   * Two field traps, both silent if you get them wrong and both already
+   * recorded against the dressing work: the role id lives on
+   * `port.market.role`, NOT `port.role`; and economy.js keeps `ROLE_BY_ID`
+   * private, so `roleName` off the market is the only lookup available here.
+   *
+   * `ctx` is optional and every field degrades to null. boardAt hands one
+   * over per offer; a caller that does not (arcs.js used not to) still gets
+   * a correct, plainer sentence rather than an exception. */
+  function factsFor(offer, ctx) {
+    ctx = ctx || {};
+    var Eco = global.Economy;
+    var com = (Eco && Eco.BY_ID) ? Eco.BY_ID[offer.cid] : null;
+    var f = {
+      commodity: com ? com.name : offer.cid,
+      contraband: !!(com && com.contraband),
+      roleName: null, role: null, dev: null,
+      surface: false, underground: false,
+      wantsIt: false, shortThere: false, glutHere: false,
+      crime: null, lyAway: null
+    };
+
+    var dst = ctx.toPort;
+    if (dst) {
+      f.surface = !!dst.surface;
+      f.underground = !!dst.underground;
+      if (dst.market) {
+        f.role = dst.market.role || null;
+        f.roleName = dst.market.roleName || null;
+        f.dev = dst.market.dev;
+        var drow = dst.market.rows ? dst.market.rows[offer.cid] : null;
+        if (drow) {
+          f.wantsIt = !!drow.importer || drow.cons > drow.prod * 1.15;
+          f.shortThere = drow.cons > drow.prod * 1.6;
+        }
+      }
+    }
+    var src = ctx.fromPort;
+    if (src && src.market && src.market.rows) {
+      var srow = src.market.rows[offer.cid];
+      if (srow) f.glutHere = srow.prod > srow.cons * 1.6;
+    }
+    if (ctx.sys && ctx.sys.crimeScore !== undefined) f.crime = ctx.sys.crimeScore;
+    if (ctx.here && ctx.toStar && global.Galaxy && global.Galaxy.distance3) {
+      var d = global.Galaxy.distance3(ctx.here, ctx.toStar);
+      if (d > 0) f.lyAway = d;
+    }
+    return f;
+  }
+
+  /* The destination, named as specifically as the world allows — and it
+   * ALWAYS contains `offer.toName` verbatim, because the suite checks that
+   * the prose names the real destination and because that property is the
+   * whole reason this grammar is allowed to exist. */
+  function placePhrase(offer, f) {
+    var name = offer.toName;
+    if (offer.type === 'courier') return 'the ' + name;   // toName is "<star> system"
+    if (f.underground) return 'the underground bay at ' + name;
+    /* 'orbital' is the role a port gets when it has no particular role —
+     * PORT_ROLES gives it an empty bias list — so naming it says nothing
+     * and merely lengthens every second sentence on the board. Every other
+     * role is a real fact about what the place does. */
+    if (f.roleName && f.role !== 'orbital') {
+      return 'the ' + String(f.roleName).toLowerCase() + ' at ' + name;
+    }
+    return name;
+  }
+
+  /* Why this cargo is moving, when the economy has an actual answer. Null
+   * when it does not — a sentence is better omitted than invented.
+   *
+   * `glutHere` is deliberately NOT used for a haul, and the reason is worth
+   * writing down because the first draft did use it and it read badly at
+   * once. boardAt only offers a haul in a good the origin EXPORTS, so "this
+   * dock has more of it than it can use" is true of every haul ever offered
+   * — a tautology dressed as insight, printed on two thirds of the board.
+   * The same test that keeps a pool entry honest applies here: a fragment
+   * that is true of every mission of its type carries no information. A
+   * shortage at the far end is not automatic, so that one stays. */
+  function reasonPhrase(offer, f) {
+    if (offer.type === 'courier') return null;
+    if (offer.type === 'disposal') {
+      return f.role === 'reprocessing'
+        ? 'They hold the licence for it, and nobody nearer does.' : null;
+    }
+    if (offer.type === 'smuggle' && f.glutHere) {
+      // Black-market goods are not sourced from an exporter, so a glut here
+      // is a real and unusual fact rather than the definition of the job.
+      return 'There is more of it on this dock than anyone will admit to.';
+    }
+    if (f.shortThere) return 'They are running short of it, and the price there shows it.';
+    if (f.wantsIt) return 'They buy more of it than they make.';
+    return null;
+  }
+
+  /* How far up its own pay band this offer sits, 0..1, or null for a type
+   * with no band to compare against. This is a REAL tell and it is meant to
+   * be one: a fee at the top of the band is the game saying something is
+   * unusual about the job without ever lying about what. */
+  function payPressure(offer) {
+    var lo, hi;
+    if (offer.type === 'haul') { lo = offer.tonnes * 28 + 250; hi = offer.tonnes * 55 + 250; }
+    else if (offer.type === 'disposal') { lo = offer.tonnes * 60; hi = offer.tonnes * 95; }
+    else if (offer.type === 'courier') { lo = 1800; hi = 4800; }
+    else return null;
+    if (!(hi > lo)) return null;
+    return Math.max(0, Math.min(1, (offer.pay - lo) / (hi - lo)));
+  }
+
+  /* A short true tail, or nothing. Disposal is excluded because its core
+   * already says "reactor waste" and the row is already amber.
+   *
+   * No '— surplus here' tail, for the same reason `reasonPhrase` refuses
+   * the matching sentence: a haul is always sourced from an exporter, so
+   * the tail would print on nearly every row and stop meaning anything.
+   * A headline decoration has to be worth the width it takes. */
+  function headTail(offer, f) {
+    if (offer.type === 'disposal' || offer.type === 'courier') return null;
+    if (f.shortThere) return '— they are short';
+    if (f.underground) return '— underground bay';
+    return null;
+  }
+
+  /* ---- the headline generator --------------------------------------------
+   *   [URGENCY] [VERB] <core> [— TAIL]
+   *
+   * The CORE is supplied by whoever built the offer and is never edited: it
+   * carries the tonnage, the commodity and the destination, which are the
+   * three things a headline exists to say. Everything else is a decoration
+   * that has to earn its place in the budget, and the budget is checked
+   * against the assembled string rather than guessed at per fragment.
+   *
+   * All three draws happen up front, before any of the fit tests, so that
+   * adding or reordering a decoration later cannot shift the stream and
+   * silently reword every board in the galaxy. */
+  function headline(offer, f) {
+    var r = new RNG('head|' + offer.id);
+    var pool = VERB[offer.type];
+    var verb = pool ? r.pick(pool) : null;
+    var urgent = r.pick(URGENT);
+    var tail = headTail(offer, f);
+
+    var s = offer.core ||
+            (offer.tonnes + 't ' + f.commodity + ' to ' + offer.toName);
+    if (verb && (verb + ' ' + s).length <= HEAD_BUDGET) s = verb + ' ' + s;
+    var p = payPressure(offer);
+    if (p !== null && p >= 0.72 && (urgent + ' ' + s).length <= HEAD_BUDGET) {
+      s = urgent + ' ' + s;
+    }
+    if (tail && (s + ' ' + tail).length <= HEAD_BUDGET) s = s + ' ' + tail;
+    return s;
+  }
+
+  /* The long form. Assembled from sentences rather than one template per
+   * type, so a fact that has nothing to say simply contributes nothing. */
+  function describe(offer, f) {
+    f = f || factsFor(offer, null);
     var r = new RNG('desc|' + offer.id);
     var who = r.pick(CLIENT[offer.type] || CLIENT.haul);
     var tone = r.pick(TONE[offer.type] || TONE.haul);
     var push = r.pick(PRESSURE);
-    var what;
+    var far = r.pick(DISTANCE_NOTE);
+    var lawless = r.pick(LAWLESS_NOTE);
+    var where = placePhrase(offer, f);
+    var goods = String(f.commodity || offer.cid).toLowerCase();
+    var out = [];
 
     if (offer.type === 'courier') {
-      what = who + ' at ' + offer.fromName + ' wants a sealed parcel carried to the ' +
-             offer.toName + '. ' + tone;
+      out.push(who + ' at ' + offer.fromName +
+               ' wants a sealed parcel carried to ' + where + '.');
+      if (f.lyAway !== null) out.push(far.replace('{ly}', f.lyAway.toFixed(1) + ' ly'));
     } else if (offer.type === 'disposal') {
-      what = who + ' at ' + offer.fromName + ' has ' + offer.tonnes +
-             ' tonnes of reactor waste to move to ' + offer.toName +
-             ', and is paying to make it somebody else’s problem. ' + tone;
+      out.push(who + ' at ' + offer.fromName + ' has ' + offer.tonnes +
+               ' tonnes of reactor waste to move to ' + where +
+               ', and is paying to make it somebody else’s problem.');
+    } else if (offer.type === 'smuggle') {
+      out.push(who + ' at ' + offer.fromName + ' has ' + offer.tonnes + ' tonnes of ' +
+               goods + ' that never went onto a manifest, bound for ' + where + '.');
     } else {
-      var name = (global.Economy.BY_ID[offer.cid] || {}).name || offer.cid;
-      what = who + ' at ' + offer.fromName + ' has ' + offer.tonnes + ' tonnes of ' +
-             name.toLowerCase() + ' bound for ' + offer.toName +
-             ' and no hull to put it in. ' + tone;
+      out.push(who + ' at ' + offer.fromName + ' has ' + offer.tonnes + ' tonnes of ' +
+               goods + ' bound for ' + where + ' and no hull to put it in.');
     }
-    return what + ' ' + push + '  Fee ' + offer.pay + ' cr on arrival.';
+
+    var why = reasonPhrase(offer, f);
+    if (why) out.push(why);
+    out.push(tone);
+    if (f.crime !== null && f.crime >= 62) out.push(lawless);
+    if (offer.campaign) out.push('This is faction business, and they will remember how it goes.');
+    out.push(push);
+    out.push('Fee ' + offer.pay + ' cr on arrival.');
+    return out.join(' ');
   }
 
   /* Applied to every offer as it is built, so no mission type can ship
-   * without both fields or with a headline that runs off the board. */
-  function finish(offer) {
-    if (offer.text && offer.text.length > TEXT_MAX) {
+   * without both fields or with a headline that runs off the board.
+   *
+   * An offer that arrives with its own `text` keeps it — that is how
+   * arcs.js prefixes a chapter hook onto a cast step. Everything else gets
+   * a generated headline from its `core`. */
+  function finish(offer, ctx) {
+    var f = factsFor(offer, ctx);
+    if (!offer.text) offer.text = headline(offer, f);
+    if (offer.text.length > TEXT_MAX) {
       offer.text = offer.text.slice(0, TEXT_MAX - 1) + '…';
     }
-    if (!offer.desc) offer.desc = describe(offer);
+    if (!offer.desc) offer.desc = describe(offer, f);
     return offer;
   }
 
@@ -152,6 +386,12 @@
     var win = windowIndex(t);
     var rng = new RNG('missions|' + port.id + '|' + win + '|' + sys.seed);
     var offers = [];
+    /* Index-aligned with `offers`. Carries the port and system objects the
+     * prose reads its facts off, so nothing has to be stashed on the offer
+     * itself and no live reference can leak into a signed contract or a
+     * save. A branch that forgets to push one degrades to plainer text
+     * rather than throwing, which is the right way for this to fail. */
+    var ctxs = [];
     var others = (sys.ports || []).filter(function (p) { return p !== port && p.market; });
     var takers = wasteTakers(sys, t);
 
@@ -177,9 +417,10 @@
           faction: port.faction || null,
           pay: Math.round(tonnes * rng.range(28, 55) + 250),
           deadline: t - (t % WINDOW) + HAUL_DEADLINE,
-          text: tonnes + 't ' + (Eco.BY_ID[cid] ? Eco.BY_ID[cid].name : cid) +
+          core: tonnes + 't ' + (Eco.BY_ID[cid] ? Eco.BY_ID[cid].name : cid) +
                 ' to ' + dst.name
         });
+        ctxs.push({ fromPort: port, toPort: dst, sys: sys });
       } else if (roll < 0.78 && galaxy) {
         // COURIER: a parcel to a neighbouring star. Any port there counts.
         var near = galaxy.stars.filter(function (s) {
@@ -196,8 +437,9 @@
           faction: port.faction || null,
           pay: Math.round(rng.range(1800, 4800)),
           deadline: t - (t % WINDOW) + COURIER_DEADLINE,
-          text: 'sealed parcel to the ' + star.name + ' system'
+          core: 'sealed parcel to the ' + star.name + ' system'
         });
+        ctxs.push({ fromPort: port, sys: sys, here: here, toStar: star });
       } else if (takers.length) {
         // DISPOSAL: their waste, your problem, everyone's premium.
         var tk = rng.pick(takers.filter(function (p) { return p !== port; }));
@@ -210,15 +452,18 @@
           faction: port.faction || null,
           pay: Math.round(wt * rng.range(60, 95)),
           deadline: t - (t % WINDOW) + HAUL_DEADLINE,
-          text: wt + 't reactor waste to ' + tk.name
+          core: wt + 't reactor waste to ' + tk.name
         });
+        ctxs.push({ fromPort: port, toPort: tk, sys: sys });
       }
     }
 
-    /* Every offer gets its headline capped and its long form written, in
-     * one place — so a mission type added later cannot ship without both,
-     * and nobody has to remember to call this per branch above. */
-    for (var f = 0; f < offers.length; f++) finish(offers[f]);
+    /* Every offer gets its headline generated and capped and its long form
+     * written, in one place — so a mission type added later cannot ship
+     * without both, and nobody has to remember to call this per branch
+     * above. The ctx is the one thing a branch has to remember, and
+     * forgetting it costs prose detail rather than correctness. */
+    for (var f = 0; f < offers.length; f++) finish(offers[f], ctxs[f]);
 
     // Whatever the player has already taken or finished this window is gone.
     var taken = {};

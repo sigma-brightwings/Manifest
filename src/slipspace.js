@@ -125,6 +125,74 @@
     return Math.max(0, lightYears) * hoursPerLy(tonnes) * 3600;
   }
 
+  /* ---- the military drive ------------------------------------------------
+   * The Chernobyl, as everyone calls it. Navy standard issue, fittable by
+   * anyone who can find one and pay for it.
+   *
+   * It halves the corridor. That is the entire pitch, and it is an enormous
+   * one — half the time means half the market drift, half the head start
+   * you give a freighter you are chasing, half the window for the shortage
+   * you are flying toward to be relieved by somebody closer.
+   *
+   * What it costs is not credits. A Chernobyl will not ingest clean
+   * hydrogen; it eats reprocessed fissile slugs, which exist in about one
+   * system in six (see Economy.licenseMilitaryFuel) and which take up hold
+   * space you were going to sell out of. And it breeds RADIOACTIVE WASTE,
+   * into the same hold, on the way. So the price of arriving in half the
+   * time is arriving with a hold that has evidence in it — and the
+   * Syndicate does not ban the drive, it bans the waste, which means the
+   * ban is a decision rather than a wall: come in cold and nobody has
+   * anything to charge you with.
+   *
+   * ARMED, not merely fitted. A drive you cannot turn off would make every
+   * jump into pirate space a fine, so the fitting is permanent and the
+   * BURN is per-jump. Fit it once; decide every time. */
+  var MIL_FACTOR = 0.5;             // halves hours per light year
+
+  /* CALIBRATED AGAINST HYDROGEN, because a drive that is faster AND cheaper
+   * is not a decision, it is an upgrade you take without thinking.
+   *
+   * The reference hull with an empty hold is 82 t all-up. Ten light years
+   * on hydrogen is 0.016 * 82 * 10 = 13.1 t at 55 cr/t — about 720 cr. The
+   * same jump on slugs is 0.0020 * 82 * 10 = 1.64 t at roughly 1,170 cr/t
+   * where a licensed plant sells it — about 1,900 cr. So halving the
+   * corridor costs a bit under three times the propellant bill, plus a
+   * tonne of waste in the hold you now have to answer for, plus the hold
+   * space both of them occupy on a run you were carrying cargo on.
+   *
+   * That is the shape it should have: a Chernobyl is what you run when
+   * arriving early is worth more than the cargo you gave up to do it. */
+  var MIL_FUEL_PER_LY_PER_TONNE = 0.0020;   // slugs, from the hold
+  var MIL_WASTE_PER_SLUG = 0.62;    // tonnes of waste per tonne burned
+
+  function militaryClass(ship) { return fittedClass(ship, 'mildrive'); }
+
+  /* Fitted AND switched on. `milArmed` defaults to true the first time a
+   * drive is fitted — nobody buys one to leave it cold — but it is a plain
+   * boolean on the ship, so it saves, and an older career without the
+   * field simply has no drive to arm. */
+  function milRunning(ship) {
+    return !!(ship && militaryClass(ship) && ship.milArmed !== false);
+  }
+
+  /* Hours per light year for a SPECIFIC ship, which is the only version a
+   * caller with a ship in hand should use. `hoursPerLy(tonnes)` stays
+   * exactly what it was — the corridor's own physics, with no hardware in
+   * it — because that is what the traffic model and the tests quote. */
+  function hoursPerLyFor(tonnes, ship) {
+    var h = hoursPerLy(tonnes);
+    return milRunning(ship) ? h * MIL_FACTOR : h;
+  }
+
+  /* Slugs burned and waste bred by one jump. Returns zeroes for a ship that
+   * is not running hot, so callers need no branch of their own. */
+  function militaryBurn(ship, lightYears) {
+    if (!milRunning(ship)) return { fuel: 0, waste: 0 };
+    var slugs = Math.max(0, lightYears) * MIL_FUEL_PER_LY_PER_TONNE * allUpMass(ship);
+    return { fuel: slugs, waste: slugs * MIL_WASTE_PER_SLUG };
+  }
+
+
   /* ---- fitted hardware ---------------------------------------------------
    * Both modules are sized to the hull they are fitted to, because the field
    * has to cover the hull: a Class I baffle on a bulk freighter would leave
@@ -152,6 +220,19 @@
        * hidden; it never reaches zero, because a jump is a violent thing and
        * something always tears. */
       wakeFactor: { I: 0.30, II: 0.34, III: 0.40, IV: 0.46 }
+    },
+    /* Priced like the anchor and then some. This is a warship's drive on a
+     * civilian hull: the money is the smallest of its costs, and it should
+     * still be a campaign to get one. */
+    mildrive: {
+      id: 'mildrive',
+      name: 'Military Slipspace Drive',
+      blurb: 'Halves your transit. Will not take hydrogen — it burns ' +
+             'reprocessed fissile slugs and breeds waste into your hold. ' +
+             'Arriving hot where the Syndicate holds ground is a 10,000 cr ' +
+             'fine and an escort to the edge of the system.',
+      price: { I: 44000, II: 78000, III: 130000, IV: 195000 },
+      factor: MIL_FACTOR
     },
     anchor: {
       id: 'anchor',
@@ -1281,6 +1362,13 @@
     HOURS_PER_LY_PER_100T: HOURS_PER_LY_PER_100T,
     MAX_HOURS_PER_LY: MAX_HOURS_PER_LY,
     hoursPerLy: hoursPerLy,
+    hoursPerLyFor: hoursPerLyFor,
+    militaryClass: militaryClass,
+    milRunning: milRunning,
+    militaryBurn: militaryBurn,
+    MIL_FACTOR: MIL_FACTOR,
+    MIL_FUEL_PER_LY_PER_TONNE: MIL_FUEL_PER_LY_PER_TONNE,
+    MIL_WASTE_PER_SLUG: MIL_WASTE_PER_SLUG,
     transitSeconds: transitSeconds,
 
     MODULES: MODULES,

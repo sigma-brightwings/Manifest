@@ -117,8 +117,13 @@ global.prompt = function () { return 'kawartha'; };
  * the conditions the existing tests were written under while chasing it. */
 var fakeStore = {};
 var realStorage = global.localStorage;
+/* PSG_STORAGE=1 pins storage on for the WHOLE file, which is the condition a
+ * browser actually runs under. It exists so the interaction above can be
+ * reproduced on demand instead of by hand-editing this file, and so the day
+ * it is fixed there is a one-word way to prove it. */
+var STORAGE_ALWAYS = process.env.PSG_STORAGE === '1';
 function withStorage(on) {
-  if (on) {
+  if (on || STORAGE_ALWAYS) {
     global.localStorage = {
       getItem: function (k) { return fakeStore[k] === undefined ? null : fakeStore[k]; },
       setItem: function (k, v) { fakeStore[k] = String(v); },
@@ -128,6 +133,8 @@ function withStorage(on) {
     global.localStorage = realStorage;
   }
 }
+
+if (STORAGE_ALWAYS) withStorage(true);
 
 /* Load in the same order index.html does. */
 require('../src/vec3.js');
@@ -446,9 +453,23 @@ console.log('--- dashboard panels ---');
   var rec = makeCtx(), got = null;
   rec.transform = function (a, b, c, d, e, f) { got = [a, b, c, d, e, f]; };
   var panel = panels[1];
+  /* mfdBegin RETURNS THE CONTEXT to draw the readout into, not a boolean.
+   * It used to return true and transform the caller's own context; it now
+   * hands back either that same context (2D path, old affine applied) or an
+   * offscreen one whose canvas becomes a textured quad on the GPU. Callers
+   * test it for truthiness exactly as before — `if (!mfdBegin(...)) continue`
+   * — so the guard is unchanged, but `=== true` is no longer the contract.
+   *
+   * Headless, there is no document.createElement and no GLWorld, so this
+   * takes the 2D path and the affine assertions below still describe what
+   * actually runs. */
   var began = W.Render.mfdBegin(rec, panel);
-  check('a forward-facing panel is big enough to draw on', began === true);
-  if (began) W.Render.mfdEnd(rec);
+  check('a forward-facing panel is big enough to draw on', !!began);
+  check('and mfdBegin hands back something drawable',
+        !!began && typeof began.fillRect === 'function');
+  check('which headless is the caller\'s own context, not an offscreen one',
+        began === rec);
+  if (began) W.Render.mfdEnd(rec, panel);
 
   function at(x, y) {
     return { x: got[0] * x + got[2] * y + got[4], y: got[1] * x + got[3] * y + got[5] };
@@ -751,8 +772,80 @@ console.log('--- the hold, and throwing things out of it ---');
         Object.keys(G.ship.cargo).length === sel - 1,
         sel + ' -> ' + Object.keys(G.ship.cargo).length);
 
+  var afterEject = Sim.cargoMass(G.ship);
   frames(60);
   check('canisters survive being simulated', errorsSince(mark).length === 0, errorsSince(mark)[0]);
+
+  /* THE BUG THIS BLOCK EXISTS FOR, and it hid here for months behind a
+   * frames(60) that only ever checked for exceptions. Jettison was a no-op:
+   * a crate leaves the airlock 50 m astern, the scoop reaches 80 m, and the
+   * ship swallowed it again on the very next frame. The hold came out
+   * unchanged and the only symptom was cargo that would not go away. */
+  check('what you eject stays ejected',
+        Math.abs(Sim.cargoMass(G.ship) - afterEject) < 1e-6,
+        afterEject + ' -> ' + Sim.cargoMass(G.ship));
+  check('and it is still out there to be gone back for',
+        Sim.canistersAll(G.sys).length > 0,
+        Sim.canistersAll(G.sys).length + ' canisters');
+
+  /* The other half: catching is a FITTING now. Plant a crate on the nose
+   * matched to the ship's own velocity, so range and closing speed are both
+   * well inside the envelope and the only thing left deciding is the
+   * equipment. `armed` is deliberately absent — cargo somebody else dumped
+   * is catchable at once, which is what makes robbing a freighter work. */
+  var Combat2 = W.Combat;
+  function plantCrate() {
+    G.sys.canisters = [{
+      kind: 'canister', id: 'testcan', name: 'Cargo canister',
+      cid: 'grain', tonnes: 2,
+      pos: { x: G.ship.pos.x, y: G.ship.pos.y, z: G.ship.pos.z },
+      vel: { x: G.ship.vel.x, y: G.ship.vel.y, z: G.ship.vel.z },
+      born: G.t, expires: G.t + 86400, spin: 0.3, radius: 0.004
+    }];
+  }
+  G.ship.cargo = {};
+  Sim.refreshShip(G.ship);
+  var scoopSlot = Combat2.fittedList(G.ship).filter(function (f) {
+    return f.item.kind === 'scoop';
+  })[0];
+  check('a new ship leaves the yard with a cargo scoop', !!scoopSlot);
+  if (scoopSlot) {
+    Combat2.unfitItem(G.ship, scoopSlot.key);
+    Sim.refreshShip(G.ship);
+    plantCrate();
+    frames(4);
+    check('without a scoop a crate cannot be picked up',
+          !(G.ship.cargo.grain > 0) && G.sys.canisters.length === 1,
+          JSON.stringify(G.ship.cargo));
+
+    Combat2.fitItem(G.ship, 'cargoscoop', scoopSlot.key);
+    Sim.refreshShip(G.ship);
+    plantCrate();
+    frames(4);
+    check('with one fitted the same crate goes aboard',
+          G.ship.cargo.grain === 2, JSON.stringify(G.ship.cargo));
+
+    /* AND AFTER YOU HAVE DIED, which is the state every pilot is in shortly
+     * after their first mistake. stripForRespawn hand-wrote a fit map, and
+     * migrateFit only issues the starting kit when the map is EMPTY — so the
+     * scoop was handed to new pilots and silently withheld from everyone who
+     * had ever been shot down.
+     *
+     * The symptom was not "no scoop". It was that PIRACY STOPPED WORKING: a
+     * robbed freighter dumps its hold exactly as before and none of it can be
+     * picked up, with a refusal that speaks once every twelve seconds. The
+     * two checks above both passed throughout, because both ran on a ship
+     * that had never died. This is the one that would have caught it. */
+    G.ship.cargo = {};
+    Combat2.stripForRespawn(G.ship);
+    Sim.refreshShip(G.ship);
+    check('a respawned ship still has a scoop', Combat2.hasScoop(G.ship),
+          JSON.stringify(G.ship.fit));
+    plantCrate();
+    frames(4);
+    check('so cargo robbed after a respawn still comes aboard',
+          G.ship.cargo.grain === 2, JSON.stringify(G.ship.cargo));
+  }
 
   G.ship.cargo = {};
   G.sys.canisters = [];
@@ -813,6 +906,39 @@ console.log('--- the yard, the board, and a fight on screen ---');
     var before = (G.missions || []).length;
     mousedown({ clientX: acceptBtn.x + 2, clientY: acceptBtn.y + 2 });
     check('clicking ACCEPT signs the contract', (G.missions || []).length === before + 1);
+
+    /* Everything below is the FIRST draw of this screen with a contract
+     * actually in the list. The board above was rendered before anything
+     * was signed, so the ACTIVE CONTRACTS path had never been exercised by
+     * any test at all — which is exactly how it went years carrying a
+     * destination and a long form that nothing drew. */
+    var cMark = drawn.texts.length;
+    frames(2);
+    check('a signed contract renders', errorsSince(cMark).length === 0,
+          errorsSince(cMark)[0]);
+    check('and spells out where it is going',
+          drawn.texts.slice(cMark).some(function (s) {
+            return String(s).indexOf('→ ') === 0;
+          }),
+          drawn.texts.slice(cMark).slice(0, 8).join(' | '));
+
+    var detBtns = G.hotspots.filter(function (s) { return s.hint === 'DETAILS'; })
+                            .sort(function (a, b) { return a.x - b.x; });
+    check('a signed contract offers DETAILS of its own', detBtns.length > 0);
+    var signed = (G.missions || [])[0];
+    check('and it kept the long form it was signed with',
+          !!(signed && signed.desc && signed.desc.length > 20));
+    if (detBtns.length && signed && signed.desc) {
+      // Leftmost is the contract column's; the board's sit further right.
+      mousedown({ clientX: detBtns[0].x + 2, clientY: detBtns[0].y + 2 });
+      var dMark = drawn.texts.length;
+      frames(2);
+      var head3 = signed.desc.split(' ').slice(0, 3).join(' ');
+      check('clicking it opens that long form on the contract',
+            drawn.texts.slice(dMark).some(function (s) {
+              return String(s).indexOf(head3) === 0;
+            }), head3);
+    }
   }
 
   // Undocked again: comms carries the piracy submenu for ship contacts.
@@ -1751,6 +1877,127 @@ console.log('--- docked, the dock is all there is ---');
  * WHAT THESE TESTS CANNOT DO: compile the shader. There is no GL in node,
  * so the GPU half is checked by pinning the dither matrix — the one part of
  * it that fails silently and looks like a texture bug rather than an error. */
+/* The cockpit kit: one set of parts, assembled per ship. */
+console.log('--- the cockpit kit ---');
+(function () {
+  var R = W.Render;
+  function hullShip(id, mass) {
+    return { hullId: id, dryMass: mass, bornId: id + '@test#1' };
+  }
+  var talon = R.cockpitSpec(hullShip('talon', 42));
+  var mule = R.cockpitSpec(hullShip('mule', 80));
+  var dart = R.cockpitSpec(hullShip('dart', 30));
+
+  /* THE TALON IS THE BASELINE, and this is the check that protects the
+   * hand-tuned cockpit from the parametric one. Every multiplier is 1.0 for
+   * it, so its bridge must come out exactly the size it always was. */
+  check('the Talon is the unchanged baseline',
+        Math.abs(talon.size - 1) < 1e-9 &&
+        Math.abs(talon.reach - R.CANOPY_Z) < 1e-9,
+        talon.size + ' / ' + talon.reach);
+
+  check('a heavier hull gets a roomier bridge', mule.size > talon.size,
+        talon.size.toFixed(3) + ' -> ' + mule.size.toFixed(3));
+  check('and a lighter one a tighter bridge', dart.size < talon.size,
+        dart.size.toFixed(3));
+  /* Cube root, not linear: mass is a volume and the bridge is a length.
+   * Mule is 80/42 = 1.9x the mass and must NOT be 1.9x the room. */
+  check('size grows as a length, not as a mass', mule.size < 1.3,
+        mule.size.toFixed(3));
+
+  check('an interceptor wraps more glass than a freighter',
+        dart.arch.wrap > mule.arch.wrap);
+  check('and a freighter carries more brow than an interceptor',
+        mule.arch.brow > dart.arch.brow);
+
+  /* FLAIR IS SEEDED BY bornId, NOT BY reg. A registration is a field the
+   * player edits; if the bridge were hung on it, renaming the ship would
+   * rebuild the cockpit around them. */
+  var a = R.cockpitSpec(hullShip('talon', 42));
+  var b = R.cockpitSpec(hullShip('talon', 42));
+  check('the same ship gets the same cockpit twice',
+        a.flair.panes === b.flair.panes &&
+        Math.abs(a.flair.lean - b.flair.lean) < 1e-12);
+  var renamed = hullShip('talon', 42);
+  renamed.reg = 'ZZ-9999'; renamed.shipName = 'Renamed';
+  check('and renaming or re-registering it does not change the room',
+        Math.abs(R.cockpitSpec(renamed).flair.lean - a.flair.lean) < 1e-12);
+  var other = R.cockpitSpec({ hullId: 'talon', dryMass: 42,
+                              bornId: 'talon@elsewhere#77' });
+  check('but a different hull, bought elsewhere, is a different room',
+        Math.abs(other.flair.lean - a.flair.lean) > 1e-9,
+        a.flair.lean.toFixed(4) + ' vs ' + other.flair.lean.toFixed(4));
+
+  /* A save written before any of this has no bornId at all. It must still
+   * produce a stable cockpit rather than a different one every frame. */
+  var old1 = R.cockpitSpec({ hullId: 'kestrel', dryMass: 60 });
+  var old2 = R.cockpitSpec({ hullId: 'kestrel', dryMass: 60 });
+  check('a save with no bornId still gets a consistent bridge',
+        Math.abs(old1.flair.lean - old2.flair.lean) < 1e-12);
+
+  /* THE CANOPY. Segment 0 is the windscreen and must stay flat — a pane on
+   * a sphere projects as tan(e)/cos(a) and bows off the screen at the
+   * corners, which is exactly what the cockpit suite caught. */
+  var segs = R.canopySegments(talon);
+  check('the canopy is a windscreen plus quarter-lights', segs.length >= 3,
+        segs.length + ' panes');
+  var zs = segs[0].map(function (p) { return p[2]; });
+  var flat = Math.max.apply(null, zs) - Math.min.apply(null, zs);
+  check('the windscreen is flat, so it cannot bow off the view',
+        flat < 1e-9, 'z spread ' + flat.toExponential(1));
+
+  /* The quarter-lights must actually be outboard of it, or they are not
+   * buying any visibility. */
+  var mainX = Math.max.apply(null, segs[0].map(function (p) { return p[0]; }));
+  var wingX = 0;
+  for (var s = 1; s < segs.length; s++) {
+    for (var c = 0; c < segs[s].length; c++) {
+      wingX = Math.max(wingX, Math.abs(segs[s][c][0]));
+    }
+  }
+  check('the quarter-lights reach further out than the windscreen',
+        wingX > mainX, mainX.toFixed(2) + ' -> ' + wingX.toFixed(2));
+  check('and they are hinged on its edge, not floating free',
+        Math.abs(Math.min.apply(null,
+          segs[1].map(function (p) { return Math.abs(p[0]); })) - mainX) < 1e-9);
+
+  /* An interceptor should see further round than a freighter. */
+  function sweep(sp) {
+    var g = R.canopySegments(sp), m = 0;
+    for (var i = 0; i < g.length; i++) {
+      for (var j = 0; j < g[i].length; j++) m = Math.max(m, Math.abs(g[i][j][0]));
+    }
+    return m / sp.size;                 // in hull-independent terms
+  }
+  check('an interceptor sees further round than a freighter',
+        sweep(dart) > sweep(mule),
+        sweep(dart).toFixed(2) + ' vs ' + sweep(mule).toFixed(2));
+
+  /* Rake is read off the hull where a model exists, and falls back to the
+   * archetype where it does not — which is every hull under this harness. */
+  /* RAKE IS MEASURED OFF THE MODEL when there is one, and this harness
+   * loads the hull library — so the Talon's rake comes from its own mesh,
+   * not from the table. Asserting the fallback here was wrong: it would
+   * have passed only in an environment where the feature does nothing. */
+  var fine = R.hullFineness('talon');
+  check('the Talon has a model to measure', typeof fine === 'number' && fine > 0,
+        String(fine));
+  check('and its rake is derived from that hull, not from the table',
+        Math.abs(talon.rake - R.COCKPIT_ARCH.talon.rake) > 1e-9,
+        'measured ' + talon.rake.toFixed(3) +
+        ' vs table ' + R.COCKPIT_ARCH.talon.rake);
+  check('the derived rake stays inside its clamp',
+        talon.rake >= 0.18 && talon.rake <= 0.72, String(talon.rake));
+  /* And the fallback still works for a hull with no model at all. */
+  var nomodel = R.cockpitSpec({ hullId: 'no-such-hull', dryMass: 42 });
+  check('a hull with no model falls back to the archetype',
+        R.hullFineness('no-such-hull') === null &&
+        Math.abs(nomodel.rake - R.COCKPIT_ARCH.talon.rake) < 1e-9,
+        String(nomodel.rake));
+  check('a fine-nosed hull is raked more than a blunt one',
+        dart.rake > mule.rake, dart.rake + ' vs ' + mule.rake);
+})();
+
 console.log('--- glass ---');
 (function () {
   var R = W.Render;

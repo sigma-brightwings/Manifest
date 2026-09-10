@@ -96,6 +96,15 @@
     muon:   { falloff: 0.25, label: 'muon' }
   };
 
+  /* SYNDICATE_TRUST is the one number "high enough up with the Syndicate"
+   * means everywhere it means anything. Past this standing with `outlaw`
+   * you stop paying witnesses (see INTIMIDATE_STANDING below, which is
+   * this same constant under its older name) and their own quartermaster
+   * will sell you what their own enforcement wing carries. One threshold,
+   * because it is one fact about you — the Syndicate has decided you are
+   * inside rather than a customer — not two coincidentally equal ones. */
+  var SYNDICATE_TRUST = 70;
+
   function laser(id, name, particle, variety, price, power, mass, dmg, cooldown,
                  range, heat, color, avail, pitch) {
     var d = LASER_DELIVERY[variety];
@@ -165,8 +174,93 @@
                    'Sixty-two points, once a second, from further than they can answer.'),
     mubeam:  laser('mubeam', 'Muon beam accelerator', 'muon', 'beam',
                    38000, 13.0, 9.0, 9, 0.16, 46, 45, '#4a9bff', [0.80, 40],
-                   'If it is still there after four seconds, check your aim — not the gun.')
+                   'If it is still there after four seconds, check your aim — not the gun.'),
+
+    /* ---- THE GREY MARKET ------------------------------------------------
+     * Stocked where somebody can be bought (corruption >= 60, see stockAt),
+     * sold to anyone, and built by people who were not being watched.
+     *
+     * THE RULE THESE HAD TO SATISFY, and it is the one that kept the
+     * catalogue empty for so long: a drawback must be a TRADEOFF, not a
+     * smaller number. A gun that costs 65% as much and does 65% as much is
+     * not a decision, it is a longer route to the same place. So the grey
+     * versions keep their damage, their cooldown and very nearly their
+     * reach — what they cost you is HEAT and CERTAINTY.
+     *
+     * Both of those are things the player can already fly around. Heat has
+     * sinks, a shed rate and a discipline; a gun that runs at twice the
+     * thermal load is a real weapon in the hands of someone who paces their
+     * bursts and a liability in the hands of someone who holds the trigger.
+     * That makes buying one a statement about how you fly, which is the
+     * only kind of purchase worth putting in a shop.
+     *
+     * And the geography does the rest. The best gear needs to be LIKED
+     * somewhere developed, and being liked is exactly what a career of
+     * piracy costs. Go outlaw and you can still arm yourself — never
+     * well. */
+    greyphint: greyGun(
+      laser('greyphint', 'Bootleg intermittent laser', 'photon', 'intermittent',
+            1105, 2.4, 2.4, 13, 1.00, 24, 8, '#d08a5c', [0, -100, 0, true],
+            'Same thirteen points as the certified one. Runs twice as hot ' +
+            'and sometimes just does not.'),
+      { minCorrupt: 60, misfire: 0.06 }),
+
+    greypipulse: greyGun(
+      laser('greypipulse', 'Salvaged pion accelerator', 'pion', 'pulse',
+            1870, 4.2, 4.0, 20, 0.40, 10, 11, '#9a7ab8', [0, -100, 0, true],
+            'Twenty points off a wreck, at a bit over half list. It will ' +
+            'cook you and it will let you down, and it is still twenty points.'),
+      { minCorrupt: 60, misfire: 0.09 }),
+
+    /* ---- SYNDICATE ISSUE --------------------------------------------------
+     * Not the grey market. The grey market is what somebody bolts together
+     * out of a wreck and sells to a stranger — same damage, worse heat, a
+     * real chance it just does not fire. This is the opposite trade: the
+     * genuine muon-tier accelerator, at muon-tier reliability, sold by
+     * people who do not stock inventory they would be embarrassed to carry
+     * themselves.
+     *
+     * What it costs is not heat or certainty, it is TRUST. The legitimate
+     * path to a muon beam runs through a major faction's good opinion of
+     * you (minStanding 40, see mubeam) — closed, in practice, to anyone
+     * who has spent a career burning that goodwill. The Syndicate opens a
+     * second path with the same ceiling: get far enough inside THEM
+     * instead, at SYNDICATE_TRUST, and their quartermaster sells you the
+     * same accelerator their own enforcement wing carries (see
+     * SYNDICATE_GUN, below, and buildPatrols in generate.js). Two
+     * reputations, one gun at the top of each.
+     *
+     * `syndicate: true` puts this on its own gate in stockAt: stocked only
+     * at a port the Syndicate itself holds, checked against standing with
+     * `outlaw` specifically rather than whoever happens to run the port
+     * you are standing in. */
+    syndbeam: syndicateGun(
+      laser('syndbeam', 'Syndicate-issue beam accelerator', 'muon', 'beam',
+            44000, 13.0, 9.0, 9, 0.16, 46, 45, '#c86bff', [0, -100],
+            'The same gun the enforcement wing flies. Nobody asks where ' +
+            'the serial numbers went.'),
+      { minStanding: SYNDICATE_TRUST })
   };
+
+  /* Ordinary catalogue item, minus the legitimate-standing gate `laser`
+   * would otherwise set — stockAt's `syndicate` branch checks standing
+   * with `outlaw` on its own terms, not the port's nominal minStanding. */
+  function syndicateGun(item, opts) {
+    item.syndicate = true;
+    item.minStanding = opts.minStanding;
+    return item;
+  }
+
+  /* Grey entries are ordinary catalogue items with two extra fields, added
+   * after `laser` rather than threaded through its already-long signature.
+   * `misfire` is read once, in fireGroup. */
+  function greyGun(item, opts) {
+    item.grey = true;
+    item.minCorrupt = opts.minCorrupt;
+    item.misfire = opts.misfire || 0;
+    item.uncertified = true;      // what the yard and the FIT page print in amber
+    return item;
+  }
 
   /* Every id this game has ever shipped, kept alive as an alias so old
    * saves, old tests and every `s.gun === 'pulse'` in the codebase keep
@@ -282,6 +376,50 @@
                   minDev: 0.60, minStanding: 0, minCrime: 0, grey: false,
                   pitch: 'Hull and shields, in numbers. Knowing is most of winning.' },
 
+    /* ---- the cargo scoop --------------------------------------------------
+     * Picking cargo up used to be a property of having a hold, which made
+     * jettison reversible and therefore meaningless — you threw a crate out
+     * and the ship inhaled it again on the way past. Catching is now a
+     * fitting, and that one change gives three separate systems a spine:
+     * throwing cargo overboard to outrun somebody is a decision you cannot
+     * take back, a freighter dumping its hold in front of you is only worth
+     * robbing if you brought the equipment, and a debris field is something
+     * you have to have prepared for rather than something you drive through.
+     *
+     * Cheap, and stocked at `minDev: 0` so the poorest frontier pad has one.
+     * This is a gate, not a paywall — a pilot who cannot afford 1,400 cr has
+     * larger problems than salvage.
+     *
+     * FITTED ON A NEW SHIP, deliberately. Learning the rule by watching your
+     * own cargo drift away is a bad first lesson; learning it by selling the
+     * scoop because you wanted the slot for a scanner is a good one. See
+     * migrateFit, which is also why selling it sticks: the scoop lives in
+     * the fit map like everything else, and the fit map is what is saved.
+     *
+     * Nothing whatsoever to do with the FUEL scoop, which is one of the heat
+     * shield's four jobs and is about skimming a gas giant rather than
+     * catching a crate.
+     *
+     * ZERO POWER DRAW, and that is a decision rather than an oversight. A
+     * scanner and a shield are things a hull runs continuously; a scoop is a
+     * hatch, a clamp and a short conveyor that do work for a few seconds a
+     * day. Billing it a permanent 0.4 MW taxed every build in the game for a
+     * fitting that is idle almost always — and this file already argues, at
+     * the heat shield, that a module which is correct in every build is not
+     * an upgrade but a tax. The first draft did charge it, and the suite
+     * said so immediately: four separate measured budget facts moved,
+     * including the one where an oversized anchor stops fitting a Talon.
+     *
+     * Its price is a tonne of mass and a UTILITY SLOT, which on a Talon
+     * means the scoop is competing with the turret, the sink launcher and
+     * both scanners for one of two. That is a real decision and it is the
+     * one worth having. */
+    cargoscoop: { id: 'cargoscoop', name: 'Cargo scoop', slot: 'utility',
+                  kind: 'scoop', price: 1400, power: 0, mass: 1,
+                  unique: true,
+                  minDev: 0, minStanding: -100, minCrime: 0, grey: false,
+                  pitch: 'Catches whatever you can fly gently enough to catch.' },
+
     /* ---- reactors -------------------------------------------------------
      * The answer to "my hull will not run this gun", and the module that
      * finally makes the MASS budget matter. Until these existed, power was
@@ -313,8 +451,82 @@
   var MISSILES = {
     hawk: { id: 'hawk', name: 'Hawk seeker', price: 420, rack: 8,
             dmg: 42, accel: 0.09, life: 60, fuse: 0.09, speed0: 0.15,
-            pitch: 'Fire and forget. Mostly forget.' }
+            pitch: 'Fire and forget. Mostly forget.' },
+
+    /* The reason anyone pays 420 credits for a Hawk.
+     *
+     * A fifth of the price, a bigger crate, two thirds of the punch and a
+     * seeker that gives up if the target turns hard — all of which is a
+     * legitimate purchase in volume, which is the point. What you are
+     * actually buying is the cook-off risk below. */
+    bootleg: { id: 'bootleg', name: 'Bootleg seeker', price: 200, rack: 14,
+               dmg: 28, accel: 0.065, life: 38, fuse: 0.11, speed0: 0.13,
+               grey: true, minCorrupt: 60, uncertified: true,
+               pitch: 'Sold by the crate, no questions, no paperwork and ' +
+                      'no guarantee it leaves the rail.' }
   };
+
+  /* ---- ordnance that cooks off ------------------------------------------
+   * A flat "5% chance to lose 40 hull on launch" is a slot machine: the
+   * player cannot fly differently in response, so it is a tax with a die
+   * roll attached. Three things turn it into a mechanic.
+   *
+   * 1. IT HANGS BEFORE IT DETONATES. The motor lights and the seeker fails
+   *    to separate. You get an alarm and a few seconds, and what you do
+   *    with them is the whole feature.
+   *
+   * 2. THE ODDS ANSWER TO HOW YOU HAVE BEEN FLYING. Unstable propellant is
+   *    unstable WHEN HOT, so the hang chance scales with `ship.heat` — the
+   *    gauge is already on the dash and already means something. A player
+   *    who holds down a beam and then reaches for bootleg seekers has made
+   *    a choice, and the game is entitled to answer it.
+   *
+   * 3. THE BATCH IS HASHED, NOT ROLLED PER SHOT. A crate carries a hidden
+   *    quality derived from the port and the purchase sequence, so some
+   *    crates are simply clean and some are bad. Firing a few is how you
+   *    find out. That converts raw randomness into INFORMATION THE PLAYER
+   *    CAN GO AND ACQUIRE, which is a much better thing to have in a game
+   *    about flying somewhere to learn something.
+   *
+   * WHERE THIS DEPARTS FROM THE ORIGINAL DESIGN, and why. That design had
+   * the cook-off destroy the hardpoint the rack sat in, so you were
+   * gambling a fitting against the missiles. There is no missile hardpoint
+   * in this game — `ship.missiles` is a bare counter on a separate trigger
+   * — so there is nothing in that slot to lose, and "jettison the rack"
+   * would have been strictly better than doing nothing every single time.
+   * A choice with a dominant option is not a choice.
+   *
+   * So the hung seeker is still a LIVE ROUND. Dump the rack and you lose
+   * what is left, for certain, and take nothing. Ride it out and the hang
+   * may clear — you keep the crate and the shot — or it cooks off and takes
+   * the rack and a piece of the hull with it. The odds of clearing are the
+   * same heat you are already looking at, which makes the gauge a risk
+   * meter rather than a warning light, and the stake scales with how many
+   * rounds are left: gambling with two is cheap and gambling with twelve
+   * is a run-ender. */
+  var HANG_COLD = 0.02, HANG_WARM = 0.04, HANG_HOT = 0.08;
+  var HANG_WINDOW = 2.2;        // s to decide
+  var HANG_CLEAR_COLD = 0.75;   // odds it separates late, cold hull
+  var HANG_CLEAR_HOT = 0.20;    // ...and glowing
+  var COOKOFF_PER_ROUND = 7;    // hull damage per remaining round
+  var COOKOFF_FLOOR = 18;
+
+  /* Base hang chance for the hull's current heat, before batch quality. */
+  function hangChanceFor(heat) {
+    if (heat < 30) return HANG_COLD;
+    if (heat <= 70) return HANG_WARM;
+    return HANG_HOT;
+  }
+
+  /* A crate's hidden quality, 0 (clean) to 1 (rubbish), fixed at purchase.
+   * Doubles the base odds at its worst and very nearly cancels them at its
+   * best, so two crates of the same ordnance are genuinely different
+   * things to be carrying. */
+  function batchFactor(ship) {
+    var q = ship.missileBatch;
+    if (q === undefined || q === null) return 1;
+    return 0.25 + q * 1.75;
+  }
 
   /* Heat sink charges — a consumable, not a fitting, so they live on a
    * counter the way seekers do rather than in a slot. */
@@ -433,6 +645,24 @@
       power: { I: 3.2, II: 4.2, III: 5.4, IV: 7.0 },
       minDev: 0.70, minStanding: 10,
       pitch: 'The cheap opportunist stops being able to touch you. The serious one still can.'
+    },
+    /* The Chernobyl. Heaviest and hungriest thing on the list, because it
+     * is a warship's drive and nobody designed it to be polite about a
+     * civilian's power budget: a Class IV is 16 t and 9 MW, which on a
+     * Talon is most of the ship. That is the honest answer to "why not just
+     * fit the biggest one" and it is visible before you spend a credit,
+     * the same way the anchor's is.
+     *
+     * `minDev 0.80` and `minStanding 40` are the tightest gates in the
+     * catalogue and they are the point: this is navy standard issue, and a
+     * yard sells one to a civilian only if the yard is good enough to build
+     * them and the civilian is ALLIED. Nobody stumbles into one. */
+    mildrive: {
+      slotType: 'internal', label: 'Military Slipspace Drive',
+      mass: { I: 6, II: 9, III: 12, IV: 16 },
+      power: { I: 4.0, II: 5.5, III: 7.2, IV: 9.0 },
+      minDev: 0.80, minStanding: 40,
+      pitch: 'Half the corridor. It will not take hydrogen, and what it leaves in your hold is nobody\'s idea of clean.'
     }
   };
 
@@ -682,6 +912,42 @@
    * becomes the Class 1 pulse it always was; old 'beam' becomes the Class 2
    * intermittent, which is where its 15-damage-per-shot behaviour actually
    * belongs on the new ladder. Nothing is charged and nothing is lost. */
+  /* ---- what a hull leaves the yard carrying -------------------------------
+   * ONE list, and it is one list because of a specific bug.
+   *
+   * A respawned ship and a brand-new one are the same ship, and they were
+   * assembled by two pieces of code with no reason to agree: migrateFit
+   * issued the kit, and stripForRespawn hand-wrote a fit map. When the cargo
+   * scoop stopped being a property of having a hold and became a fitting,
+   * only migrateFit learned about it — and migrateFit issues the kit ONLY
+   * when `fit` is empty, which a respawned ship's never is.
+   *
+   * So every pilot who had ever died flew without a scoop. The symptom was
+   * not "no scoop": it was that ROBBING SHIPS STOPPED WORKING. The freighter
+   * dumps its hold exactly as it always did, and none of it can be picked
+   * up — and the refusal speaks once every twelve seconds, so the obvious
+   * conclusion is that piracy is broken rather than that you are missing a
+   * 1,400 cr fitting nobody told you you had lost.
+   *
+   * The gun is first so it takes hardpoint0, which the yard tests assert. */
+  var STARTING_FIT = ['phpulse', 'cargoscoop'];
+
+  /* Strip a ship back to that list. The hull must already be set: slot keys
+   * are derived from it, so fitting before the hull is decided files the kit
+   * against the wrong slots. */
+  function applyStartingFit(ship) {
+    ship.fit = {};
+    ship.groups = {};
+    for (var i = 0; i < STARTING_FIT.length; i++) {
+      var id = STARTING_FIT[i];
+      var v = canFit(ship, id);
+      var key = v.key || firstFreeSlot(ship, (EQUIPMENT[id] || {}).slot);
+      if (key) ship.fit[key] = id;
+    }
+    syncLegacy(ship);
+    return ship;
+  }
+
   function migrateFit(ship) {
     if (ship.fit && typeof ship.fit === 'object' && Object.keys(ship.fit).length) {
       syncLegacy(ship);
@@ -693,6 +959,22 @@
     if (ship.turret) want.push('turret');
     if (ship.shield) want.push('shield');
     if (ship.heatshield) want.push('heatshield');
+    /* The rest of the starting kit — the cargo scoop today — issued once and
+     * only here. This runs for a brand-new ship and for a save old enough to
+     * have no fit map at all; a career that already has a fit map returned
+     * above and is untouched, which is exactly what makes SELLING the scoop
+     * stick. Last in the list so it can never displace something the player
+     * actually paid for.
+     *
+     * Read off STARTING_FIT rather than named here, so this path and
+     * stripForRespawn cannot drift apart again. Guns are skipped: the gun
+     * comes from the legacy field above, which is the one thing a migrating
+     * save might legitimately disagree with the starting kit about. */
+    for (var si = 0; si < STARTING_FIT.length; si++) {
+      var extra = STARTING_FIT[si];
+      if ((EQUIPMENT[extra] || {}).kind === 'gun') continue;
+      if (want.indexOf(extra) < 0) want.push(extra);
+    }
     for (var i = 0; i < want.length; i++) {
       /* Deliberately forgiving: a legacy ship that would now be over budget
        * keeps its gear anyway. Confiscating something the player already
@@ -755,7 +1037,29 @@
     navy: 260,           // you do not crack one of these with a photon
     tender: 60           // built to tow, not to take hits
   };
-  var NPC_GUN = { dmg: 5, range: 12, cooldown: 1.1 };
+  /* `heat` is spent as `heat * cooldown` per shot, the same arithmetic
+     `fireGroup` uses on the player's guns — so a hostile holding down its
+     trigger loads its hull at a rate you could work out from the dash if
+     it were your ship. 5.5/s against a pirate's 18/s shed (base 18, see
+     NPC_SHED.pirate) means a pirate firing flat out is nowhere near
+     cooking on its own; what tips one over is somebody else's heat on
+     top. */
+  var NPC_GUN = { dmg: 5, range: 12, cooldown: 1.1, heat: 5 };
+
+  /* The Syndicate's own enforcement wing — a `police`-kind patrol flying
+   * under the outlaw flag, spawned by the same loop as any legitimate
+   * faction's cops wherever the Syndicate holds ports of its own (see
+   * buildPatrols in generate.js). It is not a raider: it patrols a beat
+   * between two of the mob's own ports on a timetable, same as the law
+   * anywhere else. "Unless you are high enough up with the Syndicate,
+   * obviously their own enforcement wing uses the best possible tech they
+   * can buy" — so its gun is built off the same numbers as the catalogue's
+   * muon beam (see GUNS.syndbeam) rather than the flat NPC_GUN every other
+   * patrol carries: roughly 2.9x NPC_GUN's DPS and half again its range.
+   * A player who sees one of these is not being mugged, they are being
+   * policed by an organisation with better hardware than the law usually
+   * has. */
+  var SYNDICATE_GUN = { dmg: 11, range: 18, cooldown: 0.85, heat: 9 };
 
   /* ---- merchantmen shoot back --------------------------------------------
    * Freighters used to carry no guns at all, which made robbing one a
@@ -773,7 +1077,7 @@
    * A shuttle stays unarmed, and that is a role rather than a weakness —
    * it is the hull nobody scans twice, which is exactly what you want when
    * the cargo is a sabotage device. */
-  var TRADER_GUN = { dmg: 2, range: 8, cooldown: 2.2 };
+  var TRADER_GUN = { dmg: 2, range: 8, cooldown: 2.2, heat: 2 };
   /* A rescue tender is unarmed for the same reason an ambulance is: what
    * protects it is that shooting one is unthinkable and expensive, not
    * that it can shoot back. See BOUNTY.killTender. */
@@ -818,6 +1122,57 @@
    * producer's end you are paid 310-620 cr/t to load the stuff, so this
    * also has to exceed THAT to stop "load and dump" being free money. */
   var DUMPING_FINE_PER_TONNE = 520;
+
+  /* ---- how bad is it, exactly --------------------------------------------
+   * A flat rate per tonne said every illegal cargo was the same crime, and
+   * it plainly is not. The ladder, worst last:
+   *
+   *   1  narcotics   somebody's vice
+   *   2  arms        somebody's war
+   *   3  milfuel     naval materiel, in hands the navy did not licence
+   *
+   * Radioactive waste inside a Syndicate hold is worse than all three and
+   * is deliberately NOT on this ladder: it is a flat WASTE_FINE and an
+   * expulsion, handled in wasteCustoms, because that is a protection racket
+   * enforcing its own law rather than a state enforcing a graded one.
+   *
+   * The multipliers are chosen against SMUGGLING_FINE_PER_TONNE so that a
+   * typical ten-tonne run lands somewhere meaningful: 1,800 cr of narcotics,
+   * 4,500 of arms, 9,000 of naval fuel — the last of which sits just under
+   * the 10,000 flat fine for waste, which is the ordering we want and it
+   * falls out of the numbers rather than being asserted. */
+  var CONTRABAND_SEVERITY = { 1: 1, 2: 2.5, 3: 5 };
+  var STANDING_HIT = { 1: -8, 2: -14, 3: -22 };
+
+  /* Standing at which the navy considers you fit to be carrying its fuel.
+   * The same gate the Chernobyl drive itself is sold behind, deliberately:
+   * one number, so a pilot cleared to own the drive is cleared to carry
+   * what it burns, and nobody has to discover a second threshold. */
+  var MILFUEL_LICENCE_STANDING = 40;
+
+  function fineFor(tonnes, sev) {
+    return tonnes * SMUGGLING_FINE_PER_TONNE * (CONTRABAND_SEVERITY[sev] || 1);
+  }
+
+  /* WHAT COUNTS AS CONTRABAND DEPENDS ON WHO IS ASKING, and military drive
+   * fuel is the case that forces the distinction. Narcotics and arms are
+   * illegal in anyone's hold. Milfuel is a legal, openly traded commodity —
+   * bred at licensed plants, sold at a listed price — and it is an offence
+   * only when the ship carrying it has no standing with the flag that
+   * stopped it. Flagging it `contraband` in the catalogue would have made
+   * the entire legitimate trade a crime, which is not the same rule at all.
+   *
+   * Returns 0 for "not an offence here", or the severity tier. */
+  function contrabandSeverity(G, cid, fac) {
+    var com = (global.Economy && global.Economy.BY_ID) ? global.Economy.BY_ID[cid] : null;
+    if (!com) return 0;
+    if (com.contraband) return com.severity || 1;
+    if (com.milfuel) {
+      var st = global.Missions ? global.Missions.standing(G, fac) : 0;
+      return st >= MILFUEL_LICENCE_STANDING ? 0 : (com.severity || 3);
+    }
+    return 0;
+  }
   var REPORT_FLOOR = 0.15;   // even a lawless system has someone who talks
 
   /* ---- the player's fittings -------------------------------------------- */
@@ -922,6 +1277,18 @@
     return m ? m[1] : 'm';
   }
 
+  /* Can this ship pick a canister up at all? Read off the fit rather than
+   * off a flag, the same way `fittedEquipment` reads the ship rather than a
+   * table, so selling the scoop takes the capability with it and no second
+   * piece of state can drift out of agreement with the slot. */
+  function hasScoop(ship) {
+    var list = fittedList(ship);
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].item.kind === 'scoop') return true;
+    }
+    return false;
+  }
+
   /* ---- what your scanner can tell you ------------------------------------
    * 0 nothing, 1 a fraction, 2 the numbers. Reads off the slots like
    * everything else, so fitting one is the only step. */
@@ -974,6 +1341,206 @@
       spec.shieldHp = cap;
     }
     return spec.shieldHp;
+  }
+
+  /* ---- heat, on both sides of the gun ------------------------------------
+   * Heat was the player's alone, and it should never have been. The whole
+   * thermal model — a rising load, a shed rate, damage past a limit, sinks
+   * that buy you a few seconds — was sitting in `sim.js` behind a function
+   * that never once mentions the player: `updateHeating(ship, sys, t, dt)`
+   * asks for `heat`, `heatShed`, `pos`, `vel` and `hullHp` and does not
+   * care whose they are. Nothing was stopping an NPC from having them
+   * except that nobody had handed them over.
+   *
+   * That gap was blocking two features at once — bootleg ordnance cooking
+   * off in a pirate's rack, and any weapon whose damage is thermal — and
+   * both were blocked on the same missing field. So this is the same move
+   * the shield already made: ONE RULE WITH TWO OWNERS, rather than two
+   * models to keep in step.
+   *
+   * LAZY, exactly like `npcShield`, and for the same reason. `heatShed` is
+   * undefined until something actually heats this ship, and the tick skips
+   * anything that has never been heated — so a sky full of ships nobody
+   * has fired on costs one `undefined` test each, and a fight costs the
+   * arithmetic for the handful of hulls in it.
+   *
+   * WHAT DOES NOT COME FREE, and is worth being honest about: because the
+   * field only appears when something heats the ship, an NPC that dives
+   * into an atmosphere without having fired does not burn up. That is very
+   * nearly never — traffic is on rails between ports and does not go
+   * aerobraking — and paying for every hull in the system every frame to
+   * cover it would be the wrong trade. */
+  /* How much of a shot stays behind as heat, by delivery. Calibrated
+   * against the shed rates below: a photon beam on a pirate (14/s shed)
+   * nets about +13/s, which walks a cold hull up to the cook-off band in
+   * roughly six seconds of held fire. Enough to be a tactic, nowhere near
+   * enough to replace shooting the thing. */
+  var THERMAL_SHARE = { pulse: 0.35, intermittent: 0.50, beam: 1.00 };
+  var THERMAL_DEFAULT = 0.35;
+  var THERMAL_GAIN = 1.6;
+
+  /* WHAT THIS NUMBER IS, because getting it wrong is easy and silent:
+   * `sim.js` sheds `BASE_HEAT_SHED + ship.heatShed`, so this is the hull's
+   * cooling ABOVE THE BARE 18/s that everything radiates for free — the
+   * same slot the player's heat shield fills. A pirate at 0 is not a ship
+   * with no cooling, it is a ship with nothing but its own skin. */
+  var NPC_SHED = {
+    escape_pod: 0,
+    shuttle: 2,
+    /* Bulk hulls are mostly surface, and carry almost nothing that makes
+     * heat. A freighter is never the ship that cooks. */
+    freighter: 10, tanker: 10, hauler: 8,
+    /* Nothing. Nobody paid for radiators on a hull bought to be expendable,
+     * which is the same reason its guns came off the grey counter — and it
+     * is what makes a pirate the ship most likely to cook its own rack. */
+    pirate: 0,
+    police: 6,
+    merc: 9,
+    tender: 8,
+    liner: 14,
+    /* Built around the problem. You do not overheat one of these. */
+    navy: 30
+  };
+
+  function npcHeat(spec) {
+    if (spec.heatShed === undefined) {
+      spec.heat = 0;
+      spec.heatShed = NPC_SHED[spec.cls];
+      if (spec.heatShed === undefined) spec.heatShed = 18;   // bare hull, as sim.js
+    }
+    return spec.heat;
+  }
+
+  /* Add heat to somebody else's ship. `by` records who did it, because a
+   * hull that cooks itself firing its own guns is an accident and a hull
+   * the player cooked is a kill — and the difference is a bounty. */
+  function addNpcHeat(spec, units, by) {
+    npcHeat(spec);
+    spec.heat += units;
+    if (by) spec.heatBy = by;
+  }
+
+  /* ---- a pirate's rack, and what heat does to it -------------------------
+   * "NPCs fly it too." They could not, before, for a reason that turned out
+   * to be structural rather than lazy: NPCs never launch missiles, so there
+   * is no launch for a seeker to hang on. The player's version of this
+   * mechanic hangs on the rail; theirs cannot.
+   *
+   * So it triggers on the thing that was always the real driver anyway.
+   * Unstable propellant is unstable WHEN HOT — that is the whole design
+   * note — and a hull carrying grey-market ordnance that gets hot enough
+   * does not need a launch to set it off. Which means the player can now
+   * DO something about a pirate other than shoot it: heat it up and let
+   * its own cheap crate finish the job. That is a tactic that did not
+   * exist ten minutes ago and it exists because heat stopped being
+   * player-only.
+   *
+   * SEEDED, like every other fact about a pirate's fit-out. Whether this
+   * one is carrying and how bad the crate is are hashed off the ship's own
+   * id salted with the system seed — the same discipline `manifestFor`
+   * already uses for its hold — so the same pirate in the same system is
+   * always the same gamble, and reloading does not shop for a better one.
+   * The IGNITION is a live roll; the CARGO is not. */
+  var RACK_HEAT = 78;            // where a cheap crate starts to be a problem
+  var RACK_IGNITE_PER_S = 0.22;  // at HEAT_MAX, worst crate — scaled down from there
+  var RACK_DAMAGE = 46;
+
+  function pirateRack(sys, spec) {
+    if (spec.rack === undefined) {
+      /* Only the hulls that would actually be buying grey. A navy cutter
+       * does not run bootleg ordnance and a liner does not run any. */
+      var cheap = spec.kind === 'pirate' || spec.cls === 'pirate';
+      if (!cheap) { spec.rack = null; return null; }
+      var h = RNG.hashString('rack|' + ((sys && sys.seed) || '?') + '|' +
+                             (spec.id || spec.name || '?'));
+      /* Two draws out of one hash, shifted rather than re-hashed: does it
+         carry, and how bad is what it carries. */
+      spec.rack = ((h % 100) < 55)
+        ? { batch: (((h >>> 8) % 1000) / 1000) }
+        : null;
+    }
+    return spec.rack;
+  }
+
+  /* One proxy object, reused. `updateHeating` wants a single thing carrying
+   * position, velocity, heat and hull; an NPC keeps its position on `live`
+   * (which is rebuilt every time it is lifted off its rail) and its heat and
+   * hull on the SPEC (which is not). Copy in, run the shared rule, copy
+   * back — six lines, and no second thermal model to keep in step.
+   *
+   * Heat lives on the spec deliberately: a ship that goes to sleep and
+   * wakes up a few seconds later should still be hot, the same way it is
+   * still damaged. */
+  var HEAT_PROXY = { pos: null, vel: null, heat: 0, heatShed: 0, hullHp: 0 };
+
+  function updateNpcHeat(sys, G, t, dtSim, hooks) {
+    if (!(dtSim > 0)) return;
+    var Sim = global.Sim;
+    if (!Sim || !Sim.updateHeating) return;
+    var pats = sys.patrols || [];
+    for (var i = pats.length - 1; i >= 0; i--) {
+      var sp = pats[i];
+      if (sp.dead || !sp.live) continue;
+      if (sp.heatShed === undefined) continue;      // never been heated
+      var px = HEAT_PROXY;
+      px.pos = sp.live.pos; px.vel = sp.live.vel;
+      px.heat = sp.heat; px.heatShed = sp.heatShed;
+      px.hullHp = sp.hullHp === undefined ? Infinity : sp.hullHp;
+      var dmg = Sim.updateHeating(px, sys, t, dtSim);
+      sp.heat = px.heat;
+      /* The renderer already knows how to draw a glowing hull; handing the
+       * value over means an overheating pirate LOOKS overheating, which is
+       * the only warning anyone else gets. */
+      sp.reentryGlow = px.reentryGlow;
+      /* A cheap crate in a hot hold. Rolled per second rather than per
+         frame, so the odds mean the same thing at any frame rate. */
+      var rk = sp.heat >= RACK_HEAT ? pirateRack(sys, sp) : null;
+      if (rk) {
+        var over = (sp.heat - RACK_HEAT) / Math.max(1, 300 - RACK_HEAT);
+        var pIgnite = RACK_IGNITE_PER_S * over * batchFactor({ missileBatch: rk.batch });
+        if (Math.random() < pIgnite * dtSim) {
+          sp.rack = null;
+          if (sp.hullHp !== undefined) {
+            sp.hullHp = Math.max(0, sp.hullHp - RACK_DAMAGE);
+          }
+          (G.explosions = G.explosions || []).push({
+            pos: V.clone(sp.live.pos), born: t, small: true
+          });
+          if (hooks && hooks.say) {
+            hooks.say((sp.name || 'A pirate') + "'s rack cooked off.", 5);
+          }
+          if (hooks && hooks.sound) hooks.sound('warn');
+          if (sp.hullHp !== undefined && sp.hullHp <= 0) {
+            /* Same attribution question as below: you heated it, you did
+               it. Cooking a pirate's own ordnance off is a kill. */
+            if (sp.heatBy === 'player') killNpc(sys, G, sp, t, hooks);
+            else sp.dead = true;
+            sys._ships = null;
+            continue;
+          }
+        }
+      }
+
+      if (dmg > 0 && sp.hullHp !== undefined) {
+        sp.hullHp = px.hullHp;
+        if (sp.hullHp <= 0) {
+          /* Cooked. Whose kill it is depends on who put the heat in — the
+           * player, if they did it with a thermal weapon; nobody, if the
+           * ship simply held its own trigger too long. `killNpc` files the
+           * charge, so this is the line that decides whether burning a
+           * hull down is murder or an industrial accident. */
+          if (sp.heatBy === 'player') {
+            killNpc(sys, G, sp, t, hooks);
+          } else {
+            sp.dead = true;
+            if (hooks && hooks.say && sp.name) {
+              hooks.say(sp.name + ' cooked itself off.', 5);
+            }
+          }
+          sys._ships = null;
+        }
+      }
+    }
   }
 
   /* ---- one rule for both sides of a fight --------------------------------
@@ -1178,6 +1745,28 @@
      * shape the player's regenDelay has. */
     spec.shieldIdleAt = t + MODULES.shield.regenDelay;
     markImpact(spec, from, split);
+
+    /* A shot is energy arriving, and some of it stays as heat. This is what
+     * turns the new NPC thermal model into something the player can USE
+     * rather than something that only ever happens to them.
+     *
+     * WHAT IT ADDS TO THE DELIVERY MODEL, and it is a third axis for free.
+     * `vsShield` and `vsHull` already say what a pulse, a burst and a beam
+     * are good against. THERMAL_SHARE says what they leave behind. A beam
+     * is a sustained energy dump and heats most; a pulse is impulse and
+     * heats least. So the beam-then-pulse pairing the delivery model was
+     * built to reward now has a second reason to exist: the beam cooks the
+     * hull while the pulse opens it, and against a pirate carrying a cheap
+     * crate that is a genuine third way to win a fight.
+     *
+     * Attributed. `heatBy` is what decides whether a hull that cooks to
+     * death is a kill or an accident, and this is the line that makes the
+     * player the answer. */
+    var share = THERMAL_SHARE[(delivery && delivery.variety) || ''];
+    if (share === undefined) share = THERMAL_DEFAULT;
+    if (split.hull > 0 && share > 0) {
+      addNpcHeat(spec, split.hull * share * THERMAL_GAIN, 'player');
+    }
 
     /* Being shot at is an argument everybody understands. Armed ships turn
      * and fight; unarmed ones run. Either way the crime clock starts. */
@@ -1596,8 +2185,41 @@
     var witness = witnessNear(sys, t, scene, victim, G);
 
     if (witness) {
-      report(G, kind, victim, hooks,
-             witness.name ? 'witnessed by ' + witness.name : 'witnessed');
+      /* A witness used to file instantly. It now takes them a few seconds
+       * to actually call it in, for one reason: without that gap there is
+       * nowhere to stand between the act and the report, and buying
+       * silence needs somewhere to stand. Eight seconds is long enough to
+       * decide and short enough that doing nothing is indistinguishable
+       * from the old behaviour.
+       *
+       * This is deliberately NOT stored on the witness. Traffic ships are
+       * rebuilt from their rails every time t moves, so anything written
+       * on one is gone by the next frame; it lives on G, which is also
+       * what makes it survive a save. */
+      if (!G.pendingReport) {
+        G.pendingReport = {
+          kind: kind, fac: victim.faction || 'civil',
+          at: t + WITNESS_CALL_DELAY,
+          by: witness.name || 'a witness',
+          victimName: victim.name || null
+        };
+        /* Quote the price in the warning itself. The window is eight
+         * seconds; making the player press a second key to find out what
+         * the first key would cost spends most of it on the interface. */
+        if (hooks && hooks.say) {
+          var q0 = hushQuote(sys, G, t);
+          var offer = !q0 ? ''
+            : q0.intimidate ? '  —  Shift+H to have a word (free; they will remember it)'
+            : !q0.possible  ? '  —  ' + q0.reason
+            : '  —  Shift+H: ' + Math.round(q0.price) + ' cr, ~' +
+              Math.round(q0.stick * 100) + '% it holds';
+          hooks.say('WITNESSED by ' + G.pendingReport.by + ' — transmitting in ' +
+                    WITNESS_CALL_DELAY + 's' + offer, 7);
+        }
+        if (hooks && hooks.sound) hooks.sound('warn');
+      } else if ((BOUNTY[kind] || 0) > (BOUNTY[G.pendingReport.kind] || 0)) {
+        G.pendingReport.kind = kind;      // the charge escalates with the act
+      }
       victim.reported = kind;
     } else if (victim.dead) {
       /* A dead victim starts no clock. The kill itself once restarted the
@@ -1628,6 +2250,260 @@
     return null;
   }
 
+  /* ---- buying silence ----------------------------------------------------
+   * The witness system has always had a gap in it and never used it: a
+   * victim who is not killed does not report instantly, it sets
+   * `distressAt` and squawks a few seconds later. That gap is a window,
+   * and this is what you do with it.
+   *
+   * WHY IT IS ENFORCEABLE, which is the whole question. Handing a stranger
+   * money to keep quiet is not a mechanic, it is a donation — nothing stops
+   * them taking it and transmitting anyway. What makes it a bargain is the
+   * syndicate standing behind it: if you go down, the people who take your
+   * money have a problem, and they know it. So the odds of a payment
+   * STICKING are set by how corrupt the system is (is this a place where
+   * that arrangement is normal and understood?) and by your standing with
+   * the pirates (is the threat behind it credible when it is YOU making
+   * it?). In a clean system nobody takes the money at all, because there is
+   * nothing to enforce it with.
+   *
+   * THE PRICE is quoted the way everything else in this game is quoted:
+   * as cargo. A witness prices their silence at the local going rate for
+   * so many tonnes of risk. The rate is sampled from the nearest ten
+   * traders and stations to the scene — whichever are nearer, mixed — so a
+   * murder in front of a wealthy highport costs a great deal more to bury
+   * than the same murder out by a mining head, and the number moves as the
+   * neighbourhood does. The tonnage is what you did.
+   *
+   * THE DISCOUNT starts at standing 10, which is not an arbitrary number:
+   * 10 is exactly where Missions.standingLabel stops saying `neutral` and
+   * starts saying `warm`. The Syndicate gives you a rate the moment it
+   * considers you a friend, and not one point sooner. Each point past that
+   * takes another 2% off, compounding, down to a floor of 0.15.
+   *
+   * AND ABOVE 70 YOU STOP PAYING, which is a different mechanic wearing the
+   * same coat. You are not buying anything at that point — the price does
+   * not fall to zero, the transaction stops being a purchase. Somebody who
+   * is known to be that far inside the Syndicate does not have to open with
+   * a number: they walk over and start a conversation, and the witness
+   * works out the rest on their own. It is more reliable than money for the
+   * obvious reason, and it is not free, because it costs you standing with
+   * the faction whose trader you just leaned on. Paying leaves a witness
+   * bought; intimidating leaves one who remembers you. */
+  var HUSH_FROM_STANDING = 10;    // where `warm` begins — see Missions.standingLabel
+  var HUSH_PER_POINT = 0.98;      // each point past it, compounding
+  var HUSH_FLOOR = 0.15;          // and never below this share of the rate
+  var HUSH_MIN_CORRUPTION = 25;   // below this, nobody here will take it
+  var INTIMIDATE_STANDING = SYNDICATE_TRUST;  // same fact about you as the arms locker
+  var INTIMIDATE_STICK = 0.25;    // fear is better at this than money is
+  var INTIMIDATE_STANDING_COST = 1;  // ...with the faction whose trader it was
+  var HUSH_SAMPLE = 10;           // nearest N traders and stations
+  var WITNESS_CALL_DELAY = 8;     // s — a witness has to actually call it in
+
+  /* An ordinary neighbourhood, in credits per tonne. MEASURED, not chosen:
+   * across 40 systems of seed `kawartha`, 501 port price lists and 1802
+   * route manifests give a combined median of 268 and a mean of 376. 380
+   * is the mean rounded, so a typical place quotes a multiplier near 1 and
+   * the clamp below is doing nothing most of the time. */
+  var TRADE_REFERENCE = 380;
+  var TRADE_MIN = 0.35, TRADE_MAX = 2.6;
+
+  /* How many tonnes of risk each act is. These are the prices of silence,
+   * not of guilt: they track what the witness is taking on by keeping
+   * quiet, which is why killing a rescue tender — the one hull whose only
+   * defence is that everyone agrees not to — is the most expensive thing
+   * on the list by a distance. */
+  var RISK_TONNES = { demand: 1.6, assault: 1.2, kill: 9, killPolice: 18,
+                      killNavy: 34, killLiner: 26, killTender: 40, smuggling: 2 };
+
+  /* The going rate around a point in space. Ships and stations both count
+   * and are ranked together by distance, because "this part of the system"
+   * is a place, not a category — a convoy of ore barges IS the character of
+   * the neighbourhood it is crossing.
+   *
+   * Distances are collected for everything and the price lists are only
+   * built for the ten that survive the sort, so the cost of this is ten
+   * price lists however many ports the system has. */
+  function localTradeRate(sys, G, t, scene) {
+    var Sim = global.Sim, Eco = global.Economy;
+    if (!Sim || !Eco) return TRADE_REFERENCE;
+    var cand = [], i;
+
+    var ships = Sim.shipsAll(sys, t);
+    for (i = 0; i < ships.length; i++) {
+      var sh = ships[i];
+      if (!sh.pos || !sh.manifest || !sh.manifest.length) continue;
+      cand.push({ d: V.dist(sh.pos, scene), ship: sh });
+    }
+    for (i = 0; i < sys.bodies.length; i++) {
+      var b = sys.bodies[i];
+      if (b.kind !== 'station' || !b.market) continue;
+      cand.push({ d: V.dist(Sim.bodyPosition(b, sys, t), scene), port: b });
+    }
+    cand.sort(function (a, c) { return a.d - c.d; });
+
+    var vals = [];
+    for (i = 0; i < cand.length && vals.length < HUSH_SAMPLE; i++) {
+      var v = cand[i].port ? portRate(cand[i].port, t) : cargoRate(cand[i].ship);
+      if (v > 0) vals.push(v);
+    }
+    if (!vals.length) return TRADE_REFERENCE;
+    var sum = 0;
+    for (i = 0; i < vals.length; i++) sum += vals[i];
+    return sum / vals.length;
+  }
+
+  function portRate(port, t) {
+    var Eco = global.Economy;
+    var list = Eco.priceList(port, t), sum = 0, n = 0;
+    for (var i = 0; i < list.length; i++) {
+      /* Waste is the one commodity with a negative price. It is a disposal
+       * fee, not a trade, and averaging it in would make a reprocessing
+       * plant look like a poor neighbourhood when it is simply a grim one. */
+      if (list[i].mid > 0) { sum += list[i].mid; n++; }
+    }
+    return n ? sum / n : 0;
+  }
+
+  function cargoRate(sh) {
+    var Eco = global.Economy, q = 0, v = 0;
+    for (var i = 0; i < sh.manifest.length; i++) {
+      var e = sh.manifest[i];
+      /* Route manifests say `qty`, a pirate's improvised hold says
+       * `tonnes`. Both are tonnes. */
+      var n = e.qty || e.tonnes || 0;
+      var com = Eco.BY_ID[e.cid];
+      if (!com || !n) continue;
+      q += n; v += n * Math.abs(com.base);
+    }
+    return q > 0 ? v / q : 0;
+  }
+
+  /* What is about to be transmitted, if anything, and what it would cost to
+   * stop it. Returns null when there is nothing pending — the caller uses
+   * that to decide whether to offer the option at all. */
+  function hushQuote(sys, G, t) {
+    var target = null;
+    if (G.pendingReport && t < G.pendingReport.at) {
+      target = { pending: G.pendingReport, kind: G.pendingReport.kind,
+                 who: G.pendingReport.by, at: G.pendingReport.at };
+    } else {
+      var patrols = sys.patrols || [];
+      for (var i = 0; i < patrols.length; i++) {
+        var sp = patrols[i];
+        if (!sp.distressAt || t >= sp.distressAt) continue;
+        if (!target || sp.distressAt < target.at) {
+          target = { victim: sp, kind: sp.distressKind || 'assault',
+                     who: sp.name || 'the victim', at: sp.distressAt };
+        }
+      }
+    }
+    if (!target) return null;
+
+    var corrupt = systemCorruption(G, sys);
+    var standing = (G.standing || {}).outlaw || 0;
+    var scene = (target.victim && target.victim.live && target.victim.live.pos) ||
+                (G.ship && G.ship.pos);
+    if (!scene) return null;
+
+    var rate = localTradeRate(sys, G, t, scene);
+    var level = Math.max(TRADE_MIN, Math.min(TRADE_MAX, rate / TRADE_REFERENCE));
+    var tonnes = RISK_TONNES[target.kind] || 2;
+
+    var mult = 1;
+    if (standing > HUSH_FROM_STANDING) {
+      mult = Math.max(HUSH_FLOOR,
+                      Math.pow(HUSH_PER_POINT, standing - HUSH_FROM_STANDING));
+    }
+    target.intimidate = standing >= INTIMIDATE_STANDING;
+
+    target.rate = Math.round(rate);
+    target.level = level;
+    target.tonnes = tonnes;
+    target.standing = standing;
+    target.discount = mult;
+    target.corruption = corrupt;
+    target.price = target.intimidate
+      ? 0
+      : Math.max(50, Math.round(TRADE_REFERENCE * level * tonnes * mult));
+    /* Whether it stays bought. Corruption is the larger term because it is
+     * the institutional fact — an arrangement everyone here understands —
+     * and standing is the personal one on top of it. Neither alone gets you
+     * near certainty, and nothing gets you to it. */
+    target.stick = Math.max(0, Math.min(0.95,
+                     0.35 + corrupt / 180 + Math.max(0, standing) / 220));
+    if (target.intimidate) {
+      target.stick = Math.min(0.97, target.stick + INTIMIDATE_STICK);
+    }
+    /* The corruption floor is about whether a BARGAIN can be enforced, and
+     * a threat is not a bargain. Somebody the Syndicate vouches for that
+     * heavily is frightening in an anarchy too — arguably more so, since
+     * there is nobody to complain to. */
+    target.possible = target.intimidate || corrupt >= HUSH_MIN_CORRUPTION;
+    target.reason = target.possible ? null
+      : 'nobody here will take it — too little corruption to enforce a bargain';
+    return target;
+  }
+
+  /* Pay. Deterministic: the roll is hashed off the ACT, so reloading and
+   * paying again buys you the same answer. Buying silence is a decision,
+   * not a slot machine you can pull twice. */
+  function hushWitness(sys, G, t, hooks) {
+    var q = hushQuote(sys, G, t);
+    if (!q) { if (hooks && hooks.say) hooks.say('Nobody is transmitting.', 3); return null; }
+    if (!q.possible) { if (hooks && hooks.say) hooks.say(q.reason, 5); return null; }
+    if (G.ship.credits < q.price) {
+      if (hooks && hooks.say) {
+        hooks.say('They want ' + Math.round(q.price) + ' cr and you have ' +
+                  Math.round(G.ship.credits) + '.', 5);
+      }
+      return null;
+    }
+
+    if (q.price > 0) G.ship.credits -= q.price;
+    if (q.intimidate) {
+      /* Leaning on somebody is noticed by the flag they fly under, even
+       * when it works. */
+      var vf = q.pending ? q.pending.fac : (q.victim && q.victim.faction);
+      if (vf && vf !== 'outlaw' && global.Missions) {
+        global.Missions.bumpStanding(G, vf, -INTIMIDATE_STANDING_COST);
+      }
+    }
+    var h = RNG.hashString('hush|' + ((sys && sys.seed) || '?') + '|' + q.kind + '|' +
+                           Math.floor(q.at) + '|' + (q.who || '?'));
+    var roll = (h % 10000) / 10000;
+
+    if (roll < q.stick) {
+      if (q.pending) G.pendingReport = null;
+      if (q.victim) { q.victim.distressAt = null; q.victim.distressKind = null; }
+      /* Only a PAID witness corrupts the place. Intimidation is fear, not
+       * an institutional arrangement, and costs the player nothing to set
+       * up — see the section comment above `bumpCorruption`. */
+      if (!q.intimidate) bumpCorruption(G, CORRUPTION_BUMP_HUSH);
+      if (hooks && hooks.say) {
+        hooks.say(q.intimidate
+          ? 'You had a word with ' + q.who + '. Nothing was transmitted.'
+          : 'Paid ' + Math.round(q.price) + ' cr. ' + q.who + ' never saw a thing.', 6);
+      }
+      if (hooks && hooks.sound) hooks.sound('click');
+      return { paid: q.price, stuck: true };
+    }
+
+    /* Took the money and talked. Exactly the risk the pirates are supposed
+     * to be insuring against, which is why standing raises `stick` — and
+     * why it never raises it to 1. */
+    if (q.pending) { G.pendingReport = null; }
+    if (q.victim) { q.victim.distressAt = null; q.victim.distressKind = null; }
+    report(G, q.kind, { faction: q.pending ? q.pending.fac : (q.victim.faction || 'civil') },
+           hooks, 'paid off and reported anyway');
+    if (hooks && hooks.say) {
+      hooks.say(q.intimidate
+        ? q.who + ' called it in anyway. Somebody is braver than they look.'
+        : 'You are out ' + Math.round(q.price) + ' cr and they transmitted anyway.', 7);
+    }
+    return { paid: q.price, stuck: false };
+  }
+
   function report(G, kind, victim, hooks, how) {
     var fac = victim.faction || 'civil';
     G.wanted = G.wanted || {};
@@ -1637,6 +2513,205 @@
                 Math.round(G.wanted[fac]) + ' cr', 6);
     }
     if (hooks && hooks.sound) hooks.sound('warn');
+  }
+
+  /* ---- corruption: a fact about the government, and a lever on top -----
+   * `sys.corruption` (buildGovernment, generate.js) is permanent and
+   * deterministic — a fact about who runs the place, never touched here.
+   * What lives on the SAVE is a SHIFT on top of it, keyed by star id:
+   * `G.corruptionShift[id] = { v: <points>, t: <G.t when last touched> }`.
+   * Positive only — nothing in this game currently makes a place cleaner,
+   * only dirtier — and it decays back toward the baseline on its own,
+   * because a bought official eventually retires. Read lazily rather than
+   * ticked: nothing costs anything until somebody actually bribes someone,
+   * the same discipline `npcShield` and the heat system already use.
+   *
+   * Three ways to move it, all writing through `bumpCorruption`, all read
+   * back through `effectiveCorruption` — and everything that used to read
+   * `sys.corruption` directly (the grey market gate, `hushQuote`'s
+   * enforceability roll) now reads the effective number, because a bribe
+   * that does not change what the game actually does with the place is
+   * not a mechanic, it is a number in a save file:
+   *
+   *   - A witness PAID off (never one merely intimidated — that is fear,
+   *     not corruption, and costs the player nothing to arrange) nudges it
+   *     up a little. You did not set out to corrupt the place; you did it
+   *     one bribe at a time.
+   *   - A customs officer who takes a bribe instead of enforcing (see the
+   *     new branch in `resolveScan`) nudges it up a little more — a more
+   *     direct, more institutional transaction than a bystander pocketing
+   *     cash to stay quiet.
+   *   - `bribePort`, a deliberate lump sum the player can spend at any
+   *     port's yard screen, moves it a lot in one purchase. This is "let
+   *     the player corrupt a port" as its own action, not a side effect of
+   *     something else. */
+  var CORRUPTION_BUMP_HUSH = 1.5;       // one paid-off witness
+  var CORRUPTION_BUMP_CUSTOMS = 2.5;    // one bribed inspection
+  var CORRUPTION_BRIBE_AMOUNT = 40;     // the deliberate, expensive kind
+  var CORRUPTION_SHIFT_CAP = 65;        // the government underneath still
+                                         // shows through no matter how much
+                                         // you spend
+  var CORRUPTION_HALFLIFE = 21 * 86400; // s — three weeks to fade by half
+
+  function decayedShift(G, id) {
+    if (!id) return 0;
+    var e = (G.corruptionShift || {})[id];
+    if (!e || !e.v) return 0;
+    var age = Math.max(0, (G.t || 0) - (e.t || 0));
+    return e.v * Math.pow(0.5, age / CORRUPTION_HALFLIFE);
+  }
+
+  function bumpCorruption(G, amount) {
+    if (!(amount > 0) || !G.here) return;
+    var id = G.here.id;
+    var cur = decayedShift(G, id);
+    G.corruptionShift = G.corruptionShift || {};
+    G.corruptionShift[id] = { v: Math.min(CORRUPTION_SHIFT_CAP, cur + amount), t: G.t };
+  }
+
+  /* `base` is whatever the caller already resolved `sys.corruption` (or its
+   * legacy fallback) to be — this never re-derives that, so every call
+   * site keeps its own existing fallback behaviour for a pre-Syndicate
+   * save exactly as it was. `starId` defaults to the system you are
+   * IN (`G.here`), which is what every gameplay check wants; the F2 chart
+   * passes a star you are only looking at. */
+  function effectiveCorruption(G, base, starId) {
+    var id = starId || (G && G.here && G.here.id);
+    var shift = decayedShift(G, id);
+    if (!shift) return base;
+    return Math.max(0, Math.min(100, Math.round(base + shift)));
+  }
+
+  /* Convenience wrapper for callers (screens.js) that have a system object
+   * but do not want to re-derive the legacy-save fallback themselves. */
+  function systemCorruption(G, sys, starId) {
+    var base = (sys && sys.corruption !== undefined) ? sys.corruption : 40;
+    return effectiveCorruption(G, base, starId);
+  }
+
+  function corruptionLabel(v) {
+    // Bands lined up on the two thresholds that actually mean something —
+    // HUSH_MIN_CORRUPTION and the grey market's minCorrupt (60, see GUNS) —
+    // rather than picked for even spacing.
+    return v < HUSH_MIN_CORRUPTION ? 'clean'
+         : v < 60 ? 'bribeable' : 'bought';
+  }
+  function violenceLabel(v) {
+    return v < 15 ? 'peaceful' : v < 40 ? 'policed'
+         : v < 65 ? 'rough' : 'lawless';
+  }
+
+  /* The deliberate bribe. Priced off the port's own development — a
+   * wealthier, more legitimate shopfront costs more to buy into — and
+   * discounted by how corrupt the place already is, because the marginal
+   * bribe is always cheaper than the first one. */
+  function bribeCost(G, sys, port) {
+    var dev = (port && port.market && typeof port.market.dev === 'number')
+      ? port.market.dev : 0.35;
+    var eff = systemCorruption(G, sys) / 100;
+    return Math.round(18000 * (0.5 + dev) * (1 - eff * 0.6));
+  }
+
+  /* Always returns a result object rather than `null` on refusal, so a
+   * caller with no `hooks` (the yard screen, which composes its own
+   * message the way every other row here does) still has something to
+   * read; a caller that does pass hooks also gets the automatic `say`. */
+  function bribePort(G, sys, port, hooks) {
+    if (!G.here) return { ok: false, why: 'nowhere to bribe anyone from' };
+    if (decayedShift(G, G.here.id) >= CORRUPTION_SHIFT_CAP - 0.5) {
+      if (hooks && hooks.say) hooks.say('There is nobody left here worth buying.', 4);
+      return { ok: false, maxed: true, why: 'there is nobody left here worth buying' };
+    }
+    var cost = bribeCost(G, sys, port);
+    if (G.ship.credits < cost) {
+      if (hooks && hooks.say) {
+        hooks.say('Buying this place costs ' + cost + ' cr — you have ' +
+                  Math.round(G.ship.credits) + '.', 5);
+      }
+      return { ok: false, cost: cost, why: 'short ' + Math.round(cost - G.ship.credits) + ' cr' };
+    }
+    G.ship.credits -= cost;
+    bumpCorruption(G, CORRUPTION_BRIBE_AMOUNT);
+    if (hooks && hooks.say) {
+      hooks.say('Paid ' + cost + ' cr. The right people here now owe you a favour.', 6);
+    }
+    if (hooks && hooks.sound) hooks.sound('click');
+    return { ok: true, paid: cost };
+  }
+
+  /* ---- the waste ban -----------------------------------------------------
+   * "Don't jump into a system where Chernobyl drives are banned."
+   *
+   * Except it is not the drive that is banned, and that distinction is the
+   * whole mechanic. The Syndicate bans RADIOACTIVE WASTE in the systems it
+   * holds, which is both a better law and a funnier one, since their own
+   * disposal arrangements consist of dumping it across everybody else's
+   * back garden. What they will not have is somebody else's tailings
+   * decaying in their sky.
+   *
+   * Because the offence is the cargo and not the hardware:
+   *   - You can fly a Chernobyl into a hold quite legally. Come in cold —
+   *     make the last leg on hydrogen, or sell the waste before you jump —
+   *     and there is nothing to charge you with. The ban is a decision you
+   *     make before committing, which is why jumpPlan quotes `arrivesDirty`
+   *     rather than springing it on arrival.
+   *   - It catches you even without a drive. Hauling somebody else's waste
+   *     to a disposal contract through Syndicate space is the same offence,
+   *     which is exactly the kind of law a protection racket writes.
+   *
+   * Ten thousand, and an order to leave. Paying is not optional in the
+   * sense that a bounty is: this comes straight off your credits, and what
+   * you cannot cover is held against you as a citation, because the people
+   * levying it are standing in front of you. */
+  var WASTE_FINE = 10000;
+  var EXPULSION_GRACE = 900;     // s — how long before they stop asking nicely
+
+  /* One charge per arrival. Keyed to the star and the moment you got here,
+   * so re-entering later is a fresh offence and bouncing between two
+   * systems is not free. */
+  function wasteCustoms(G, star, sys, hooks) {
+    if (!G || !star || !G.galaxy) return null;
+    var Galaxy = global.Galaxy;
+    if (!Galaxy || !Galaxy.wasteBanned(G.galaxy, star)) return null;
+
+    var waste = (G.ship.cargo && G.ship.cargo.waste) || 0;
+    if (waste < 0.05) return null;
+
+    var holder = G.galaxy.factionById[star.factionId];
+    var name = (holder && holder.name) || 'Local control';
+
+    G.ship.credits -= WASTE_FINE;
+    var unpaid = 0;
+    if (G.ship.credits < 0) { unpaid = -G.ship.credits; G.ship.credits = 0; }
+    if (unpaid > 0) {
+      G.wanted = G.wanted || {};
+      G.wanted.outlaw = (G.wanted.outlaw || 0) + unpaid;
+    }
+
+    /* Ordered out. Not a wall — you can stay, and nothing stops you — but
+     * the doors are shut while you are carrying it and everyone here knows
+     * why you are still in the sky. */
+    G.expelled = { star: star.id, faction: 'outlaw', sinceT: G.t,
+                   until: G.t + EXPULSION_GRACE, reason: 'waste' };
+
+    if (hooks && hooks.say) {
+      hooks.say(name + ' customs: "' + waste.toFixed(1) + ' t of tailings in your hold. ' +
+                WASTE_FINE.toLocaleString() + ' cr, and then you leave."' +
+                (unpaid > 0 ? '  (' + Math.round(unpaid) + ' cr of it held against you.)' : ''), 10);
+    }
+    if (hooks && hooks.sound) hooks.sound('warn');
+    return { fine: WASTE_FINE, unpaid: unpaid, waste: waste, faction: 'outlaw' };
+  }
+
+  /* Are you currently under an order to leave, here? Read by the docking
+   * check — a port in a system that has expelled you does not open. */
+  function expelledHere(G, star) {
+    var x = G.expelled;
+    if (!x || !star || x.star !== star.id) return null;
+    /* Clearing it takes getting rid of the cargo, not waiting. */
+    var waste = (G.ship.cargo && G.ship.cargo.waste) || 0;
+    if (waste < 0.05) { G.expelled = null; return null; }
+    return x;
   }
 
   function bountyTotal(G) {
@@ -1658,6 +2733,11 @@
   }
 
   function dockRefused(G, port) {
+    /* Under an order to leave, nothing here opens for you. Not a separate
+     * punishment so much as the same one: "and then you leave" is not a
+     * request if you can still dock, refuel and carry on trading. Dumping
+     * or selling the waste lifts it immediately — see expelledHere. */
+    if (G.expelled && G.here && expelledHere(G, G.here)) return true;
     return port && port.faction && wantedHere(G, port.faction);
   }
 
@@ -1700,10 +2780,12 @@
       return { searched: false };
     }
 
+    var scanFac = spec.faction || 'civil';
     var found = [];
     for (var cid in ship.cargo) {
-      var com = Economy.BY_ID[cid];
-      if (com && com.contraband && ship.cargo[cid] > 1e-9) found.push(cid);
+      if (!(ship.cargo[cid] > 1e-9)) continue;
+      var sev = contrabandSeverity(G, cid, scanFac);
+      if (sev > 0) found.push({ cid: cid, sev: sev });
     }
     if (!found.length) {
       if (hooks && hooks.say) hooks.say(spec.name + ' scans your hold — nothing flagged, cleared', 5);
@@ -1711,29 +2793,65 @@
       return { searched: true, contraband: false };
     }
 
-    var fine = 0, seized = [];
-    found.forEach(function (cid) {
-      var qty = ship.cargo[cid];
-      fine += qty * SMUGGLING_FINE_PER_TONNE;
-      seized.push(qty.toFixed(0) + 't ' + Economy.BY_ID[cid].name);
-      delete ship.cargo[cid];
+    /* Caught red-handed is not the end of it where the inspector can be
+     * bought. This is corruption's own consequence, distinct from what
+     * violence already does above (a lawless place simply has nobody to
+     * do the searching) — here somebody DOES search, and DOES find it, and
+     * takes a cut instead of writing it up. Below HUSH_MIN_CORRUPTION
+     * there is nobody to take the offer, same floor the witness system
+     * uses, and the chance never reaches certainty: a corrupt port still
+     * has the occasional inspector who is not for sale. */
+    var corrupt = systemCorruption(G, sys);
+    var bribeChance = Math.max(0, Math.min(0.75, (corrupt - HUSH_MIN_CORRUPTION) / 100));
+    if (bribeChance > 0 && Math.random() < bribeChance) {
+      var wouldBeFine = 0;
+      found.forEach(function (f) { wouldBeFine += fineFor(ship.cargo[f.cid], f.sev); });
+      var ask = Math.max(50, Math.round(wouldBeFine * 0.55));
+      if (ship.credits >= ask) {
+        ship.credits -= ask;
+        bumpCorruption(G, CORRUPTION_BUMP_CUSTOMS);
+        if (hooks && hooks.say) {
+          hooks.say(spec.name + ' finds it — and a quiet word costs you ' + ask +
+                    ' cr. Cargo stays aboard.', 6);
+        }
+        if (hooks && hooks.sound) hooks.sound('click');
+        return { searched: true, contraband: true, bribed: true, paid: ask };
+      }
+      // Can't afford the quiet word — the book gets thrown after all.
+    }
+
+    var fine = 0, seized = [], worst = 0;
+    found.forEach(function (f) {
+      var qty = ship.cargo[f.cid];
+      fine += fineFor(qty, f.sev);
+      if (f.sev > worst) worst = f.sev;
+      seized.push(qty.toFixed(0) + 't ' + Economy.BY_ID[f.cid].name);
+      delete ship.cargo[f.cid];
     });
     if (global.Sim) global.Sim.refreshShip(ship);
     fine = Math.round(fine);
 
-    var fac = spec.faction || 'civil';
+    var fac = scanFac;
     G.wanted = G.wanted || {};
     G.wanted[fac] = (G.wanted[fac] || 0) + fine;
-    // The faction remembers a smuggler the same way it remembers a blown
-    // contract — bumpStanding lives in missions.js, which always loads
-    // after combat.js, so it is only ever resolved here, at call time.
-    if (global.Missions) global.Missions.bumpStanding(G, fac, -10);
+    /* The faction remembers a smuggler the same way it remembers a blown
+     * contract — bumpStanding lives in missions.js, which always loads
+     * after combat.js, so it is only ever resolved here, at call time.
+     *
+     * Graded by the WORST thing found, not the sum: being caught with a
+     * hold of narcotics and one tonne of naval fuel is a naval-fuel
+     * problem, and averaging it would say otherwise. */
+    if (global.Missions) {
+      global.Missions.bumpStanding(G, fac, STANDING_HIT[worst] || STANDING_HIT[1]);
+    }
 
     if (hooks && hooks.say) {
-      hooks.say('CONTRABAND FOUND: ' + seized.join(', ') + ' seized — fined ' + fine + ' cr', 7);
+      hooks.say((worst >= 3 ? 'NAVAL MATERIEL FOUND: ' : 'CONTRABAND FOUND: ') +
+                seized.join(', ') + ' seized — fined ' + fine + ' cr', 7);
     }
     if (hooks && hooks.sound) hooks.sound('warn');
-    return { searched: true, contraband: true, fine: fine, seized: seized };
+    return { searched: true, contraband: true, fine: fine, seized: seized,
+             severity: worst };
   }
 
   /* ---- dumping ----------------------------------------------------------
@@ -1840,6 +2958,43 @@
   var UNCLEARED_FINE = 500;      // cr, flat
   var HOSTILE_STANDING = -40;    // matches Missions.standingLabel's 'HOSTILE'
 
+  /* ---- cutting the line --------------------------------------------------
+   * A full port refuses clearance and tells you to hold. The clamps still
+   * take you — the gate stays soft, for the same reason it always was — so
+   * you CAN put your hull in a berth somebody else is queued for. Doing it
+   * is free the first ten times and then it is not.
+   *
+   * FREE_JUMPS is not leniency for its own sake. A penalty that starts on the
+   * first offence teaches the player that the queue is a wall, and the whole
+   * point of a soft gate is that it is a decision with a price. Ten is enough
+   * that a pilot who does it in an emergency never notices, and few enough
+   * that one who does it as a habit ends up unwelcome. After that each
+   * offence is a flat -1 with that faction, cumulative and permanent until
+   * they earn it back the ordinary way.
+   *
+   * -1 rather than a scaling penalty deliberately: it has to be legible.
+   * "Every time I barge in I lose a point" is a rule a player can hold in
+   * their head and choose against. */
+  var FREE_JUMPS = 10;
+  var JUMP_STANDING = -1;
+
+  function queueJumpsOf(G, fac) {
+    return ((G && G.queueJumps) || {})[fac] || 0;
+  }
+
+  /* Books one line-cut against a faction and returns what it cost, so the
+   * caller can tell the player rather than silently docking their standing. */
+  function bookQueueJump(G, fac) {
+    G.queueJumps = G.queueJumps || {};
+    var n = (G.queueJumps[fac] || 0) + 1;
+    G.queueJumps[fac] = n;
+    if (n <= FREE_JUMPS) {
+      return { count: n, standing: 0, remaining: FREE_JUMPS - n };
+    }
+    if (global.Missions) global.Missions.bumpStanding(G, fac, JUMP_STANDING);
+    return { count: n, standing: JUMP_STANDING, remaining: 0 };
+  }
+
   function portKey(port) {
     if (!port) return null;
     return typeof port === 'string' ? port : (port.id || null);
@@ -1853,7 +3008,16 @@
   /* Hail a port and ask. Returns { granted, reason, text } — the text is
    * what the port says back, because a refusal the player cannot read the
    * reason for is indistinguishable from a bug. */
-  function requestClearance(G, port, hooks) {
+  /* A wait a pilot can act on. Seconds are useless past a minute and hours
+     are useless under one. */
+  function fmtWait(s) {
+    if (!isFinite(s) || s <= 0) return 'moments';
+    if (s < 90) return Math.round(s) + 's';
+    if (s < 5400) return Math.round(s / 60) + ' min';
+    return (s / 3600).toFixed(1) + ' hr';
+  }
+
+  function requestClearance(G, port, hooks, berths) {
     var k = portKey(port);
     if (!k) return { granted: false, reason: 'nobody', text: 'No one to hail.' };
 
@@ -1870,6 +3034,18 @@
     } else if (((G.standing || {})[fac] || 0) <= HOSTILE_STANDING) {
       res = { granted: false, reason: 'hostile',
               text: name + ': "We know who you are. Clearance DENIED."' };
+    } else if (berths && berths.full) {
+      /* Not a refusal of YOU — a refusal of the moment, and it says so and
+         says how long. A hold with no number attached is indistinguishable
+         from being turned away. */
+      var jumps = queueJumpsOf(G, fac);
+      res = { granted: false, reason: 'full', wait: berths.waitFor,
+              queue: berths.occupied, capacity: berths.capacity,
+              text: name + ': "All ' + berths.capacity + ' berths occupied. Hold at the marker — ' +
+                    fmtWait(berths.waitFor) + ' to the next departure."' };
+      if (jumps >= FREE_JUMPS) {
+        res.text += ' [' + jumps + ' unauthorised arrivals on your record here]';
+      }
     } else {
       G.ship.cleared = G.ship.cleared || {};
       G.ship.cleared[k] = true;
@@ -1885,13 +3061,37 @@
   /* Called the moment a dock or a pad landing completes. Consumes the
    * clearance if there was one, and books the offence if there was not.
    * Returns null when everything was in order. */
-  function arriveAtPort(G, port, hooks) {
+  function arriveAtPort(G, port, hooks, berths) {
     var k = portKey(port);
     if (!k) return null;
 
+    var fac0 = (port.faction) || (G.sys && G.sys.factions && G.sys.factions[0] &&
+                                  G.sys.factions[0].id) || 'civil';
+
+    /* CUTTING THE LINE is a separate offence from arriving unannounced, and
+       they stack. You can hold clearance granted before the port filled up and
+       still be taking a berth somebody is waiting for; you can also barge in
+       uncleared, which is both. Booked on the port being FULL at the moment
+       the clamps close, because that is the fact that harmed anyone. */
+    var jumped = null;
+    if (berths && berths.full) {
+      jumped = bookQueueJump(G, fac0);
+      if (hooks && hooks.say) {
+        var pname = port.name || 'Port control';
+        if (jumped.standing) {
+          hooks.say(pname + ': "You took an occupied berth. That is ' + jumped.count +
+                    ' now — it is going on your record." (standing ' + jumped.standing + ')', 7);
+        } else {
+          hooks.say(pname + ': "You took an occupied berth. Logged. ' +
+                    jumped.remaining + ' more and it starts costing you."', 6);
+        }
+      }
+      if (hooks && hooks.sound) hooks.sound('warn');
+    }
+
     if (isCleared(G, port)) {
       delete G.ship.cleared[k];      // spent: the next visit is a new ask
-      return null;
+      return jumped ? { queueJump: jumped } : null;
     }
 
     var sys = G.sys;
@@ -1926,7 +3126,7 @@
                 ' cr and you are logged FUGITIVE until it is settled."', 7);
     }
     if (hooks && hooks.sound) hooks.sound('warn');
-    return { fine: fine, faction: fac, fugitive: true };
+    return { fine: fine, faction: fac, fugitive: true, queueJump: jumped };
   }
 
   /* ---- launch clearance --------------------------------------------------
@@ -1989,7 +3189,154 @@
    * world that the tests can ask about without a canvas. */
   function doorsOpen(G, port) {
     if (!port || !port.surface) return false;
-    return isCleared(G, port) || launchCleared(G, port);
+    /* A BREACH IS A THIRD LIVE PERMISSION, and adding it here rather than in
+     * the renderer is the whole integration. `ref/PORT-MODELS.md`: "a breach
+     * grants the same command set a clearance does". It does not defeat the
+     * interlocks, because those are mechanical — the car still cannot come
+     * flush while the leaves are shut, and the arrival rail drives the gate
+     * poses off which leg it is on, not off who is allowed to be there. */
+    return isCleared(G, port) || launchCleared(G, port) || breachedHere(G, port);
+  }
+
+  /* ---- BREAKING INTO THE CABINET ----------------------------------------
+   * Faction standing decides the odds of being GRANTED clearance. It has no
+   * bearing whatever on whether the cabinet can be TAKEN — that is the point
+   * of the thing standing outside on the rock where anyone can land beside
+   * it, and it is the smuggler's route into a port that will never clear
+   * them. A ship the whole sector wants can still get through the door.
+   *
+   * What it costs: the attempt is loud. `alarmOnFail` books the offence
+   * against the port's owner, so a failed run at a well-run port turns a
+   * closed door into a bounty, and the same doors are then shut to you by
+   * `dockRefused` for a reason you brought on yourself.
+   *
+   * THE ROLL IS ALLOWED TO BE UNREPEATABLE. Doctrine 1 forbids Math.random
+   * in generation and in anything the player can revisit — the cabinet's
+   * difficulty is derived and stable, and is the part that must not move.
+   * Whether this particular attempt beat it is an in-the-moment die roll,
+   * the same class as a customs search or a witness deciding to talk. */
+
+  var HACK_COOLDOWN = 45;        // s of sim time before the panel will retry
+  var HACK_TOOL = 'breaker';     // the fitted module that makes it possible
+  var HACK_SKILL = 0.30;         // what a bare attempt is worth without one
+
+  function breachedHere(G, port) {
+    var k = portKey(port);
+    return !!(k && G.ship && G.ship.breached && G.ship.breached[k]);
+  }
+
+  /* How good the ship is at this: the best `breach` rating among the fitted
+   * equipment, or the bare-hands figure.
+   *
+   * READ OFF A FIELD RATHER THAN AN ID so that adding the module later is a
+   * data change and not a code change — the same reason `vsShield` lives on
+   * the gun and not in a table of gun names.
+   *
+   * HONEST NOTE: nothing in EQUIPMENT carries `breach` yet, so today every
+   * attempt is the bare 0.30 and this loop always falls through. That makes
+   * the module the next thing this mechanic wants, and it is deliberately
+   * NOT being added in the same pass as the shop catalogue it would have to
+   * be priced and stocked into. Against a backwater at difficulty 0.15 the
+   * bare odds are 0.30/(0.30+0.15) = 67%; against a core world at 0.90 they
+   * are 25%. So the mechanic is playable without the module and clearly
+   * better with it, which is the shape it should have had anyway. */
+  function breakerRating(ship) {
+    var best = HACK_SKILL;
+    if (!ship) return best;
+    var list = fittedList(ship);
+    for (var i = 0; i < list.length; i++) {
+      var b = list[i].item && list[i].item.breach;
+      if (typeof b === 'number' && b > best) best = b;
+    }
+    return best;
+  }
+
+  /* A breach lasts while you are here and is forgotten when you leave, the
+   * same way active pursuit ends at the system boundary. Called from
+   * fleeSystem's neighbourhood rather than kept forever, because a port
+   * whose lock you broke once is not a port you own. */
+  function clearBreaches(G) {
+    if (G.ship) G.ship.breached = {};
+  }
+
+  /* Returns { ok, reason, text, alarm } and never throws. The text is what
+   * the attempt looks like from the cockpit, because a refusal whose reason
+   * the player cannot read is indistinguishable from a bug. */
+  function hackControl(G, port, hooks, t) {
+    var name = (port && port.name) || 'the port';
+    var k = portKey(port);
+    var Gen = global.Gen, Sim = global.Sim;
+
+    if (!k || !port || !port.surface) {
+      return say0(hooks, { ok: false, reason: 'nothing',
+        text: 'Nothing here answers to a ground channel.' });
+    }
+    var c = Gen && Gen.controlFor ? Gen.controlFor(port, G.sys) : null;
+    if (!c) {
+      return say0(hooks, { ok: false, reason: 'nothing',
+        text: name + ' has no ground control cabinet.' });
+    }
+    if (breachedHere(G, port)) {
+      return say0(hooks, { ok: true, reason: 'already',
+        text: name + ' control is already yours.' });
+    }
+    /* ALREADY CLEARED IS A REFUSAL, and a deliberate one. Breaking into a
+     * door that is standing open for you is not a shortcut, it is a crime
+     * with no upside — and letting it succeed silently would teach the
+     * player that hacking is simply what you do at every port. */
+    if (isCleared(G, port)) {
+      return say0(hooks, { ok: false, reason: 'cleared',
+        text: name + ': you already hold clearance. Nothing to break.' });
+    }
+    if (Sim && Sim.controlInRange &&
+        !Sim.controlInRange(G.ship, port, G.sys, t || G.t)) {
+      return say0(hooks, { ok: false, reason: 'range',
+        text: 'Out of range of ' + name + ' control. Set down beside the cabinet.' });
+    }
+    var until = (G.ship && G.ship.hackAfter) || 0;
+    if ((t || G.t) < until) {
+      return say0(hooks, { ok: false, reason: 'cooldown',
+        text: name + ' control has locked its panel. Wait ' +
+              fmtWait(until - (t || G.t)) + '.' });
+    }
+
+    /* The tool matters more than the pilot. Without a breaker fitted this is
+     * a long shot at anything but a backwater, which is what makes the module
+     * worth buying rather than a tax on wanting to use the mechanic. */
+    var tool = breakerRating(G.ship);
+    var diff = c.security.hackDifficulty;
+    var odds = Math.max(0.02, Math.min(0.97, tool / (tool + diff)));
+
+    if (G.ship) G.ship.hackAfter = (t || G.t) + HACK_COOLDOWN;
+
+    if (Math.random() < odds) {
+      G.ship.breached = G.ship.breached || {};
+      G.ship.breached[k] = true;
+      return say0(hooks, { ok: true, reason: null, alarm: false,
+        text: name + ' control: PANEL OPEN. Doors answering.' }, 'click');
+    }
+
+    /* Failed, and heard. The offence is booked against the owner rather than
+     * the generic civil authority: you broke into THEIR cabinet. */
+    var res = { ok: false, reason: 'failed', alarm: true,
+      text: name + ' control: ACCESS REFUSED — alarm tripped.' };
+    if (c.security.alarmOnFail) {
+      var fac = c.security.owner ||
+                (G.sys && G.sys.factions && G.sys.factions[0] &&
+                 G.sys.factions[0].id) || 'civil';
+      G.wanted = G.wanted || {};
+      G.wanted[fac] = (G.wanted[fac] || 0) + BREACH_FINE;
+      if (global.Missions) global.Missions.bumpStanding(G, fac, -8);
+    }
+    return say0(hooks, res, 'warn');
+  }
+
+  var BREACH_FINE = 350;
+
+  function say0(hooks, res, snd) {
+    if (hooks && hooks.say) hooks.say(res.text, 6);
+    if (hooks && hooks.sound) hooks.sound(snd || (res.ok ? 'click' : 'warn'));
+    return res;
   }
 
   /* ---- fugitive status --------------------------------------------------
@@ -2029,6 +3376,13 @@
    * from the jump, alongside everything else that gets reset there. */
   function clearAllClearances(G) {
     if (G && G.ship) G.ship.cleared = {};
+    /* AND THE BREACHES, for the same reason and on the same trip. A panel
+     * you forced is local to the system you forced it in — a port whose lock
+     * you broke once is not a port you own, and carrying breaches across a
+     * jump would quietly turn one good roll into permanent access to a
+     * station you are still wanted at. The cooldown goes too: it is a panel
+     * locking you out, not something you carry. */
+    if (G && G.ship) { G.ship.breached = {}; G.ship.hackAfter = 0; }
   }
 
   /* ---- shooting --------------------------------------------------------- */
@@ -2341,6 +3695,32 @@
       var e = guns[i];
       if (t < (cools[e.key] || 0)) continue;
       cools[e.key] = t + e.item.cooldown;
+
+      /* A salvaged emitter that fails to cycle.
+       *
+       * The cooldown is set BEFORE this test and the heat is spent below,
+       * which is the entire punishment and it is the right one: the
+       * capacitor charged, dumped into the housing, and no light came out.
+       * You lose the shot and the second you were going to fire it in.
+       * Taking the heat as well is what stops "it misfired" from being a
+       * free pause in an overheating fight.
+       *
+       * A live die roll, not a hash, and deliberately so. The seeded-
+       * generation doctrine governs what the WORLD is — a pirate's hold,
+       * a system's government, where a vineyard grows. It does not govern
+       * whether a bad capacitor holds this particular time, which is
+       * exactly the class of in-the-moment roll the project already
+       * accepts alongside a customs search and an NPC's shot connecting. */
+      if (e.item.misfire && Math.random() < e.item.misfire) {
+        addHeat(G, (e.item.heat || 0) * (e.item.cooldown || 0));
+        if (hooks && hooks.say && t >= (G.misfireAt || -Infinity) + 3) {
+          G.misfireAt = t;
+          hooks.say(e.item.name.toUpperCase() + ' FAILED TO CYCLE', 2.5);
+        }
+        if (hooks && hooks.sound) hooks.sound('warn');
+        continue;
+      }
+
       fireOne(sys, G, t, e.item, e.key, hooks);
       fired++;
     }
@@ -2400,6 +3780,11 @@
    * position plus a first-order lead. Proximity-fused, finite fuel. */
   function fireMissile(sys, G, t, hooks) {
     var s = G.ship;
+    /* Nothing else leaves a rail that already has something stuck on it. */
+    if (G.hungSeeker) {
+      if (hooks && hooks.say) hooks.say('Rail is fouled — jettison or wait', 2);
+      return;
+    }
     if (!(s.missiles > 0) || s.docked || s.landed) {
       if (hooks && hooks.say) hooks.say(s.missiles > 0 ? 'Not now' : 'No missiles aboard', 2);
       return;
@@ -2424,8 +3809,25 @@
       if (hooks && hooks.say) hooks.say('Missile needs a ship lock — [ ] a ship first', 3);
       return;
     }
+    var m = MISSILES[s.missileId || 'hawk'] || MISSILES.hawk;
+
+    /* Did it leave the rail? Bootleg ordnance sometimes does not. The round
+     * is spent either way — the motor lit. */
+    if (m.grey) {
+      var pHang = hangChanceFor(s.heat || 0) * batchFactor(s);
+      if (Math.random() < pHang) {
+        s.missiles--;
+        G.hungSeeker = { until: t + HANG_WINDOW, rack: s.missiles, kind: m.id };
+        if (hooks && hooks.say) {
+          hooks.say('SEEKER HUNG — BACKSPACE TO JETTISON RACK (' +
+                    s.missiles + ' left)', HANG_WINDOW);
+        }
+        if (hooks && hooks.sound) hooks.sound('warn');
+        return;
+      }
+    }
+
     s.missiles--;
-    var m = MISSILES.hawk;
     (sys.missiles = sys.missiles || []).push({
       pos: V.addScaled(s.pos, s.fwd, 0.06),
       vel: V.addScaled(s.vel, s.fwd, m.speed0),
@@ -2435,6 +3837,52 @@
     /* Launching at someone is assault the moment the seeker goes hot. */
     crime(sys, G, t, 'assault', target, hooks);
     if (hooks && hooks.sound) hooks.sound('missile');
+  }
+
+  /* Dump the rack. Certain, total, and free of consequences beyond the
+   * ordnance itself — which is exactly what makes riding it out a real
+   * decision rather than a formality. */
+  function jettisonRack(G, hooks) {
+    if (!G.hungSeeker) return false;
+    var lost = G.ship.missiles;
+    G.ship.missiles = 0;
+    G.hungSeeker = null;
+    if (hooks && hooks.say) {
+      hooks.say('Rack away — ' + lost + ' round' + (lost === 1 ? '' : 's') +
+                ' overboard, hull intact.', 5);
+    }
+    if (hooks && hooks.sound) hooks.sound('click');
+    return true;
+  }
+
+  /* The window closing. Cold hulls usually clear; hot ones usually do not.
+   * Rolled at the moment of resolution rather than at the moment of the
+   * hang, so the heat that decides it is the heat you are carrying WHEN IT
+   * MATTERS — cutting your burn during those two seconds is a real thing
+   * you can do about it. */
+  function resolveHungSeeker(sys, G, t, hooks) {
+    var h = G.hungSeeker;
+    if (!h || t < h.until) return;
+    G.hungSeeker = null;
+
+    var heat = G.ship.heat || 0;
+    var span = Math.max(0, Math.min(1, heat / 100));
+    var clear = HANG_CLEAR_COLD + (HANG_CLEAR_HOT - HANG_CLEAR_COLD) * span;
+    if (Math.random() < clear) {
+      if (hooks && hooks.say) hooks.say('Seeker separated late — rail clear.', 4);
+      if (hooks && hooks.sound) hooks.sound('missile');
+      return;
+    }
+
+    var rounds = G.ship.missiles;
+    var dmg = Math.max(COOKOFF_FLOOR, rounds * COOKOFF_PER_ROUND);
+    G.ship.missiles = 0;
+    G.ship.hullHp = Math.max(0, (G.ship.hullHp || 0) - dmg);
+    if (hooks && hooks.say) {
+      hooks.say('RACK COOKED OFF — ' + Math.round(dmg) + ' hull, ' +
+                rounds + ' round' + (rounds === 1 ? '' : 's') + ' gone.', 8);
+    }
+    if (hooks && hooks.sound) hooks.sound('warn');
   }
 
   function updateMissiles(sys, G, t, dtSim, hooks) {
@@ -2508,18 +3956,26 @@
       if (!sp.hostileToPlayer && !sp.defending) continue;
       if (!isArmedNpc(sp)) continue;                    // shuttles carry nothing
 
-      var gun = (sp.kind === 'trader' || sp.defending) ? TRADER_GUN : NPC_GUN;
+      /* The Syndicate's own police patrol — not a loitering pirate, which
+       * stays on NPC_GUN like it always has — carries what its own
+       * enforcement wing can buy. See SYNDICATE_GUN. */
+      var elite = sp.kind === 'police' && sp.faction === 'outlaw';
+      var gun = (sp.kind === 'trader' || sp.defending) ? TRADER_GUN
+              : elite ? SYNDICATE_GUN : NPC_GUN;
       var d = V.dist(sp.live.pos, s.pos);
       if (d > gun.range) continue;
       if (t < (sp.coolUntil || 0)) continue;
       sp.coolUntil = t + gun.cooldown;
+      /* Their emitter, their hull. No `by` — a ship that overheats firing
+         its own guns did that to itself. */
+      addNpcHeat(sp, (gun.heat || 0) * (gun.cooldown || 0), null);
 
       var transverse = V.len(V.sub(s.vel, sp.live.vel));
       var chance = Math.max(0.12, Math.min(0.85,
         1.0 - d / gun.range * 0.5 - transverse * 1.4));
       (G.beams = G.beams || []).push({
         from: V.clone(sp.live.pos), to: V.clone(s.pos),
-        color: gun === TRADER_GUN ? '#ffc46b' : '#ff8a76',
+        color: gun === TRADER_GUN ? '#ffc46b' : elite ? '#c86bff' : '#ff8a76',
         until: now + 0.07, miss: Math.random() > chance
       });
       if (Math.random() < chance) {
@@ -2587,6 +4043,16 @@
     updateTurret(sys, G, t, hooks);
     updateMissiles(sys, G, t, dtSim, hooks);
     updateNpcFire(sys, G, t, dtSim, hooks);
+
+    updateNpcHeat(sys, G, t, dtSim, hooks);
+    resolveHungSeeker(sys, G, t, hooks);
+
+    /* A witness's call, if it was neither bought nor intimidated away. */
+    if (G.pendingReport && t >= G.pendingReport.at) {
+      report(G, G.pendingReport.kind, { faction: G.pendingReport.fac }, hooks,
+             'witnessed by ' + G.pendingReport.by);
+      G.pendingReport = null;
+    }
 
     // Distress calls that were started and never silenced.
     var patrols = sys.patrols || [];
@@ -2755,6 +4221,31 @@
       ? port.market.dev : 0.25;
     var sys = G.sys;
     var crime = (sys && sys.crimeScore !== undefined) ? sys.crimeScore : 40;
+    /* A GREY MARKET IS A MARKET, and that is why it reads corruption rather
+     * than permissivity.
+     *
+     * The original gate was `crimeScore >= 60` — the law looks the other
+     * way, so somebody will sell you a gun. But permissivity is high in an
+     * Anarchy for the opposite reason to why it is high in a Patronage
+     * state: one has bought its police, the other has none. Only the first
+     * of those has a supply chain, a shopfront and somebody whose job it is
+     * to have three of a thing in the back.
+     *
+     * Measured on seed `kawartha`: the old gate caught 19% of systems and
+     * ALL FIVE ANARCHIES. Corruption >= 60 catches 33% of systems and not
+     * one of them. That is the whole argument in two numbers — the wider
+     * net is also the more discriminating one, because it is finally asking
+     * the right question. A third of ports is right for the place a
+     * fugitive rearms: cut off from developed space, you still have to be
+     * able to FIND one.
+     *
+     * Falls back to permissivity for a system generated before corruption
+     * existed, so nothing that predates the two-axis split breaks.
+     *
+     * Reads EFFECTIVE corruption, base plus whatever the player has bribed
+     * onto it — see the corruption-lever section above `bribePort`. A
+     * bribe that could not open this shelf would not be much of a bribe. */
+    var corrupt = effectiveCorruption(G, (sys && sys.corruption !== undefined) ? sys.corruption : crime);
     var fac = port.faction || 'civil';
     var standing = (G.standing || {})[fac] || 0;
     var hot = wantedHere(G, fac);
@@ -2767,9 +4258,24 @@
       var it = EQUIPMENT[id];
       var verdict = null;
 
-      if (it.grey) {
-        /* Grey-market goods exist only where nobody is checking. */
-        if (crime < (it.minCrime || 0)) continue;      // not stocked at all here
+      if (it.syndicate) {
+        /* Syndicate-issue goods exist only where the Syndicate itself is
+         * the landlord, and only once THEY trust you — a different
+         * faction's standing has no say here, which is the whole point:
+         * a made friend of the Allies who has never met the Syndicate
+         * should not see this gun, and a career criminal the Allies want
+         * dead on sight should, provided the mob likes them. */
+        if (fac !== 'outlaw') continue;                // not their turf
+        var outlawStanding = (G.standing || {}).outlaw || 0;
+        if (hot) {
+          verdict = 'they will not arm someone they want';
+        } else if (outlawStanding < (it.minStanding || 0)) {
+          verdict = 'needs ' + (it.minStanding || 0) + '+ standing with the Syndicate';
+        }
+      } else if (it.grey) {
+        /* Grey-market goods exist only where somebody can be bought. */
+        if (corrupt < (it.minCorrupt || 0)) continue;  // not stocked at all here
+        if (crime < (it.minCrime || 0)) continue;
       } else {
         if (dev < (it.minDev || 0)) continue;          // this port is too small
         var armed = it.kind === 'gun' || it.kind === 'turret';
@@ -2847,7 +4353,15 @@
     else if (kind === 'shield') { item = MODULES.shield; ok = !s.shield; }
     else if (kind === 'heatshield') { item = MODULES.heatshield; ok = !s.heatshield; }
     else if (kind === 'missile') {
-      item = MISSILES[id]; ok = !!item && s.missiles < item.rack;
+      item = MISSILES[id];
+      /* ONE TYPE PER RACK. Certified and bootleg rounds do not share a
+       * feed, and more to the point a mixed rack would make the cook-off
+       * unreadable — "is this crate the bad one" is the question the batch
+       * hash exists to let the player answer, and it has no answer if the
+       * rack is two crates at once. Refused with a reason, per the rule
+       * canFit already follows. */
+      ok = !!item && s.missiles < item.rack &&
+           (s.missiles === 0 || (s.missileId || 'hawk') === id);
     }
     else if (kind === 'sink') {
       /* Charges need the launcher, the way seekers would need a rack if
@@ -2858,7 +4372,27 @@
     if (!item || !ok) return null;
     if (s.credits < item.price) return -item.price;
 
-    if (kind === 'missile') { s.credits -= item.price; s.missiles++; return item.price; }
+    if (kind === 'missile') {
+      s.credits -= item.price;
+      /* A NEW CRATE GETS A NEW QUALITY, and the quality belongs to the
+       * crate rather than to the round — buying the first of a batch is
+       * what fixes it, and topping the same rack up does not re-roll it.
+       * Hashed off the port and a per-career purchase counter, so the same
+       * career buying at the same counter twice gets two different crates,
+       * and reloading a save does not shop for a better one. */
+      if (s.missiles === 0) {
+        s.missileId = item.id;
+        if (item.grey) {
+          s.missileSeq = (s.missileSeq || 0) + 1;
+          var bh = RNG.hashString('batch|' + (G.ship.docked || '?') + '|' + s.missileSeq);
+          s.missileBatch = (bh % 1000) / 1000;
+        } else {
+          s.missileBatch = null;
+        }
+      }
+      s.missiles++;
+      return item.price;
+    }
     if (kind === 'sink') { s.credits -= item.price; s.sinks++; return item.price; }
 
     /* A gun replaces whatever is in the first hardpoint, which is what the
@@ -2894,6 +4428,17 @@
     var moved = replanFit(s, to);
     if (!moved.ok) return { ok: false, why: moved.why };
     s.credits -= cost;             // negative cost = they pay you the difference
+    /* THE HULL'S BIRTH MARK. Stamped when the ship is bought and never
+     * touched again — it is what the cockpit's flair is seeded from, so the
+     * bridge you learned stays the bridge you have. Deliberately NOT the
+     * registration: that is a field the player types on the yard page, and
+     * hanging the shape of the room on it would rebuild your cockpit around
+     * you every time you renamed the ship.
+     *
+     * Derived rather than random, so it is the same for the same career
+     * doing the same thing: which hull, bought where, at what hour. */
+    s.bornId = to.id + '@' + (G.here ? G.here.id : 'void') + '#' +
+               Math.round((G.t || 0) / 3600);
     s.hullId = to.id;
     s.dryMass = to.dryMass;
     s.thrustKN = to.thrustKN;
@@ -2916,26 +4461,49 @@
    * of the hull. Credits, standing and warrants are part of you. */
   function stripForRespawn(ship) {
     ship.cargo = {};
-    ship.fit = { hardpoint0: 'phpulse' };   // the gear was part of the hull
-    ship.groups = {};                       // and so were the trigger assignments
-    ship.gun = 'phpulse';
-    ship.turret = null;
-    ship.shield = null;
     ship.shieldHp = 0;
-    ship.heatshield = null;
     ship.heatShed = 0;
     ship.missiles = 0;
     ship.sinks = 0;
+    /* Hull FIRST: slot keys are derived from it, so the kit has to be filed
+     * against the hull it is going into. */
     ship.hullId = 'talon';
     var h = HULLS.talon;
     ship.dryMass = h.dryMass; ship.thrustKN = h.thrustKN;
     ship.thrusterCap = h.thrusterCap; ship.fuelCap = h.fuelCap;
     ship.cargoCap = h.cargoCap;
     ship.hullMax = h.hullMax; ship.hullHp = h.hullMax;
+    /* And then the same kit a ship leaves the yard with — hand-written here
+     * until it fell out of step with the yard and took piracy with it. See
+     * STARTING_FIT. syncLegacy writes gun/turret/shield/heatshield from the
+     * result, so the four legacy fields no longer need setting by hand and
+     * cannot be set WRONG by hand either. */
+    applyStartingFit(ship);
     global.Sim.refreshShip(ship);
   }
 
   var Combat = {
+    npcHeat: npcHeat, addNpcHeat: addNpcHeat, NPC_SHED: NPC_SHED,
+    pirateRack: pirateRack, updateNpcHeat: updateNpcHeat,
+    jettisonRack: jettisonRack, hangChanceFor: hangChanceFor,
+    batchFactor: batchFactor,
+    wasteCustoms: wasteCustoms, expelledHere: expelledHere,
+    WASTE_FINE: WASTE_FINE,
+    hushQuote: hushQuote, hushWitness: hushWitness,
+    HUSH_FROM_STANDING: HUSH_FROM_STANDING,
+    HUSH_MIN_CORRUPTION: HUSH_MIN_CORRUPTION,
+    INTIMIDATE_STANDING: INTIMIDATE_STANDING,
+    RISK_TONNES: RISK_TONNES,
+    localTradeRate: localTradeRate,
+    effectiveCorruption: effectiveCorruption, systemCorruption: systemCorruption,
+    bumpCorruption: bumpCorruption, decayedShift: decayedShift,
+    bribeCost: bribeCost, bribePort: bribePort,
+    corruptionLabel: corruptionLabel, violenceLabel: violenceLabel,
+    CORRUPTION_BUMP_HUSH: CORRUPTION_BUMP_HUSH,
+    CORRUPTION_BUMP_CUSTOMS: CORRUPTION_BUMP_CUSTOMS,
+    CORRUPTION_BRIBE_AMOUNT: CORRUPTION_BRIBE_AMOUNT,
+    CORRUPTION_SHIFT_CAP: CORRUPTION_SHIFT_CAP,
+    CORRUPTION_HALFLIFE: CORRUPTION_HALFLIFE,
     GUNS: GUNS, TURRETS: TURRETS, MODULES: MODULES, MISSILES: MISSILES,
     HULLS: HULLS,
     EQUIPMENT: EQUIPMENT, LEGACY_GUN: LEGACY_GUN,
@@ -2948,27 +4516,38 @@
     syncLegacy: syncLegacy, migrateFit: migrateFit, replanFit: replanFit,
     buyEquipment: buyEquipment, stockAt: stockAt,
     SINK: SINK, sinkRackSize: sinkRackSize, armSink: armSink,
-    scanLevel: scanLevel, scanShip: scanShip,
+    scanLevel: scanLevel, scanShip: scanShip, hasScoop: hasScoop,
     addHeat: addHeat, updateSink: updateSink,
     WITNESS_RANGE: WITNESS_RANGE, DISTRESS_DELAY: DISTRESS_DELAY,
-    TRADER_GUN: TRADER_GUN, NPC_GUN: NPC_GUN,
+    TRADER_GUN: TRADER_GUN, NPC_GUN: NPC_GUN, SYNDICATE_GUN: SYNDICATE_GUN,
+    SYNDICATE_TRUST: SYNDICATE_TRUST,
+    updateNpcFire: updateNpcFire,
     UNARMED_CLASSES: UNARMED_CLASSES,
     DISTRESS_DELAY_ARMED: DISTRESS_DELAY_ARMED,
     DISTRESS_DELAY_CIVIL: DISTRESS_DELAY_CIVIL,
     isArmedNpc: isArmedNpc, distressDelayFor: distressDelayFor,
     WANTED_HUNT: WANTED_HUNT, BOUNTY: BOUNTY, ATTACK_STANDOFF: ATTACK_STANDOFF,
     SMUGGLING_FINE_PER_TONNE: SMUGGLING_FINE_PER_TONNE, SEARCH_FLOOR: SEARCH_FLOOR,
+    CONTRABAND_SEVERITY: CONTRABAND_SEVERITY, STANDING_HIT: STANDING_HIT,
+    MILFUEL_LICENCE_STANDING: MILFUEL_LICENCE_STANDING,
+    contrabandSeverity: contrabandSeverity, fineFor: fineFor,
     DUMPING_FINE_PER_TONNE: DUMPING_FINE_PER_TONNE, REPORT_FLOOR: REPORT_FLOOR,
     resolveScan: resolveScan,
     dumping: dumping,
     isCleared: isCleared,
     requestClearance: requestClearance,
+    queueJumpsOf: queueJumpsOf,
+    FREE_JUMPS: FREE_JUMPS,
     arriveAtPort: arriveAtPort,
     clearAllClearances: clearAllClearances,
     requestLaunch: requestLaunch,
     launchCleared: launchCleared,
     spendLaunch: spendLaunch,
     doorsOpen: doorsOpen,
+    hackControl: hackControl, breachedHere: breachedHere,
+    clearBreaches: clearBreaches, breakerRating: breakerRating,
+    HACK_COOLDOWN: HACK_COOLDOWN, HACK_SKILL: HACK_SKILL,
+    BREACH_FINE: BREACH_FINE,
     isFugitive: isFugitive,
     payFugitive: payFugitive,
     fleeSystem: fleeSystem,

@@ -154,6 +154,42 @@
     };
   }
 
+  /* ---- what a spectrograph actually sees ---------------------------------
+   * `ATMOSPHERES` above is a rendering/flight-model parameter set — density,
+   * scale height, cloud fraction — and always was; it has no chemistry in
+   * it. This is the chemistry, purely descriptive, and it exists because a
+   * real spectrograph pointed at a world during transit reads absorption
+   * lines and gets composition back, not "type: terran". A player looking
+   * at a star from clear across the system is entitled to this even for a
+   * planet nobody has ever landed on — it is genuinely remote-observable,
+   * unlike a government or a port list, which are not.
+   *
+   * A couple of phrasings per type for texture, seeded per planet so the
+   * same world always reads the same way twice. */
+  var ATMO_COMPOSITION = {
+    molten:   ['sulfur dioxide and ash, superheated',
+               'volcanic outgassing — sulfur and chlorine, no free oxygen'],
+    rocky:    ['none — hard vacuum'],
+    desert:   ['thin carbon dioxide, trace argon',
+               'a thin CO2 haze, bone dry'],
+    terran:   ['nitrogen/oxygen — breathable',
+               'nitrogen/oxygen, humid — breathable'],
+    ocean:    ['nitrogen/oxygen, saturated with water vapour — breathable',
+               'nitrogen/oxygen over a world-ocean — breathable'],
+    tundra:   ['thin nitrogen/carbon dioxide — cold, marginal',
+               'nitrogen, with CO2 frozen out at the poles — marginal'],
+    iceball:  ['trace nitrogen, near-vacuum',
+               'a whisper of methane over ice — effectively none'],
+    iceGiant: ['hydrogen/helium/methane — the blue is the methane',
+               'hydrogen/helium, ammonia clouds further down'],
+    gasGiant: ['hydrogen/helium — no surface to stand on and breathe it',
+               'hydrogen/helium with trace hydrocarbons, storms the size of worlds']
+  };
+  function atmosphereComposition(type, rng) {
+    var opts = ATMO_COMPOSITION[type];
+    return opts ? rng.pick(opts) : 'none — hard vacuum';
+  }
+
   var SYL_A = ['ka', 've', 'thal', 'or', 'sy', 'mir', 'dra', 'ael', 'no', 'zu',
                'per', 'lin', 'gor', 'ta', 'ish', 'bel', 'cy', 'rho', 'un', 'sef'];
   var SYL_B = ['ran', 'dor', 'is', 'aq', 'ven', 'tar', 'eth', 'ul', 'ora', 'ynx',
@@ -304,6 +340,13 @@
     var planets = [];
     for (var p = 0; p < axes.length; p++) {
       var prng = base.fork('planet-' + p);
+      /* Own substream, same reason `ugr` is separate from `spr` below:
+       * remote-spectroscopy composition is a feature added long after the
+       * orbital mechanics that already read `prng` in sequence, and a draw
+       * spliced into that sequence would shift every angle drawn after it
+       * — a different orbit for the same seed. Forking a sibling instead
+       * costs nothing and changes nothing that already existed. */
+      var flavRng = base.fork('flavor-' + p);
       var aAU = axes[p] / AU;
       var insol = luminosity / (aAU * aAU);     // Earth = 1
       var type = classify(aAU, frostAU, hzInner, hzOuter, insol, prng);
@@ -332,6 +375,7 @@
         habitable: (aAU >= hzInner && aAU <= hzOuter &&
                     (type === 'terran' || type === 'ocean')),
         atmosphere: makeAtmosphere(type, prng),
+        composition: atmosphereComposition(type, flavRng),
         orbit: {
           parent: star.id, a: axes[p], e: ecc, inc: inc,
           lan: prng.angle(), argp: prng.angle(), m0: prng.angle()
@@ -542,9 +586,19 @@
     buildRotations(sys, base);
     buildFactions(sys, base, opts);
     buildEconomy(sys, base);
-    buildGovernment(sys, base);
+    buildGovernment(sys, base, opts);
+    /* Reads violence/corruption/pirateHeld/government, all just set above,
+     * and nothing after this point reads what it writes — safe to run
+     * anywhere downstream of buildGovernment. Own substream, no draws
+     * taken from anything else. */
+    buildFlavor(sys, base);
     buildTraffic(sys, base);
     buildPatrols(sys, base);
+    /* Licensed reprocessing. AFTER the patrols, because the licence is
+     * granted on a naval garrison being here and the garrison is the last
+     * thing decided. Consumes no rng draws — see Economy.licenseMilitaryFuel
+     * — so it is purely additive to every seed that predates it. */
+    Eco.licenseMilitaryFuel(sys);
     buildContraband(sys, base);
     buildPortDressing(sys, base);
     return sys;
@@ -799,6 +853,90 @@
       });
     }
     return out;
+  }
+
+  /* ---- THE CONTROL CABINET ----------------------------------------------
+   * The apron doors, the lift, the inner gate and the bay gates are not
+   * commanded on the port. They answer to a hardened cabinet standing on the
+   * rock beside the works, and `ref/PORT-MODELS.md` calls it `interior.control`.
+   *
+   * TWO PROPERTIES DO ALL THE WORK, and they are why this is an object in the
+   * world rather than a flag on the port:
+   *
+   *   It is OUTSIDE. A computer that lets you in cannot be inside the thing
+   *   it lets you into, or nobody could get in the first time — and there
+   *   would be nothing to break into either.
+   *
+   *   It is EXPOSED. You can set down beside it, and so can somebody who was
+   *   never granted anything. That is the mechanic: faction standing decides
+   *   the odds of being GRANTED, and has no bearing at all on whether the
+   *   cabinet can be TAKEN.
+   *
+   * Synthesised here rather than read from the model, deliberately. Most
+   * ports in any galaxy have no GLB at all and fall back to a procedural
+   * mesh (see `src/ports.js is optional` in CLAUDE.md); a mechanic that only
+   * existed at modelled ports would be a mechanic almost nobody meets. A
+   * modelled `interior.control` overrides this when one arrives.
+   *
+   * DERIVED, so it is the same cabinet every time you come back to it. The
+   * ATTEMPT is a die roll and is meant to be unrepeatable — that is the
+   * customs-search exemption in doctrine 1 — but the lock's difficulty is
+   * part of the world and must not shift under the player between visits. */
+
+  /* Pad radii. The model quotes 220 units against a pad radius of about
+   * 13.6, so a shade over sixteen. Kept in pad radii like every other port
+   * dimension so it survives a change of model scale. */
+  var CONTROL_RANGE = 16;
+
+  function controlFor(port, sys) {
+    if (!port) return null;
+    if (port._control !== undefined) return port._control;
+    /* An orbital clamp has no rock to stand a cabinet on and no doors of
+     * this kind to open. Null rather than a stub: `refusals carry reasons`
+     * applies to code paths too, and a caller can say why. */
+    if (!port.surface) { port._control = null; return port._control; }
+
+    var dev = (port.market && typeof port.market.dev === 'number')
+              ? port.market.dev : 0.35;
+    /* Salt first, then the two things that identify this cabinet in this
+     * universe — the same shape `manifestFor` hashes a pirate's hold with. */
+    var rng = new RNG('control|' + ((sys && sys.seed) || '') + '|' + port.id);
+
+    /* A developed port has better locks. The jitter is what stops the whole
+     * galaxy's security being a straight function of population — a backwater
+     * with a paranoid administrator is more interesting than a curve.
+     *
+     * The range is deliberately wide but never certain at either end: 0.95
+     * is a lock you will usually fail and 0.15 one you will usually beat,
+     * and neither is 0 or 1, because a mechanic that is sometimes impossible
+     * teaches the player to stop trying it. */
+    var diff = 0.22 + dev * 0.55 + rng.range(-0.12, 0.12);
+    diff = Math.max(0.15, Math.min(0.95, diff));
+
+    port._control = {
+      node: 'controlSystem',
+      channel: 'comms',
+      addressedTo: 'adjacent',
+      commsRange: CONTROL_RANGE,
+      /* Where it stands, in the port's own mouth-relative frame: beside the
+       * apron, on the surface, clear of the door band. `sim.js` turns this
+       * into a world point with `groundBasis`, the same way a berth is
+       * placed, rather than a second derivation of the same geometry. */
+      at: { x: rng.pick([-1, 1]) * rng.range(1.25, 1.8),
+            y: rng.range(-0.35, 0.55), z: 0 },
+      access: { granted: false, needs: 'dockingClearance' },
+      security: {
+        owner: port.faction || null,
+        hackDifficulty: diff,
+        alarmOnFail: true,
+        /* A BREACH IS NOT A LAUNCH CLEARANCE. Both permissions are spent
+         * where they are used and the model says so explicitly; breaking in
+         * gets you through the door you are standing at, and the way out is
+         * still a conversation you have to have. */
+        launchClearance: 'separate'
+      }
+    };
+    return port._control;
   }
 
   function buildPortDressing(sys, base) {
@@ -1087,6 +1225,22 @@
                       'Commonwealth', 'Accord'];
   var FACTION_COLORS = ['#7fb2ff', '#c9a2ff', '#7fd6c0', '#ffc46b', '#ff9fb0', '#9ad87f'];
 
+  /* Names for the powers that are not majors (galaxy.js draws them).
+   *
+   * A syndicate does not call itself an Authority or a Protectorate, and a
+   * three-system polity does not call itself a Commonwealth. Separate word
+   * lists because the name is doing real work: it is the only thing telling
+   * you, on the chart, what KIND of thing owns that pocket. */
+  /* ONE WORD, DELIBERATELY. The other stem lists are variety; this one is
+   * an institution. Every galaxy's pirates are "<somewhere> Syndicate" and
+   * the player learns the word once, the way you learn what a Protectorate
+   * is — the proper name changes between seeds, the noun never does. It
+   * also reads correctly: a syndicate is an organisation with interests and
+   * arrangements, which is what these people are, rather than a mob. */
+  var PIRATE_STEM = ['Syndicate'];
+  var MINOR_STEM  = ['Reach', 'Enclave', 'Holdfast', 'March', 'Free Port',
+                     'Territories', 'Claim', 'Waystation', 'Remnant', 'Verge'];
+
   var OUTLAW = { id: 'outlaw', name: 'Unaligned', color: '#ff7a6b', outlaw: true };
 
   /* opts.faction, when given, is this system's GALACTIC owner — a real
@@ -1106,9 +1260,25 @@
       return b.kind === 'planet' && b.children.some(isStation);
     });
     var list, i;
+    /* The syndicate, if the galaxy named one. Pirates have always used the
+     * reserved id 'outlaw'; galaxy.js now hands that id a real name, a
+     * colour and territory, so every `faction === 'outlaw'` test in combat,
+     * traffic and the HUD keeps working and simply starts resolving to a
+     * power instead of to the word "Unaligned". */
+    var pirate = null;
+    var all = opts.allFactions || [];
+    for (i = 0; i < all.length; i++) if (all[i].outlaw) { pirate = all[i]; break; }
+    if (!pirate) pirate = OUTLAW;
+
     if (opts.faction) {
-      var others = (opts.allFactions || []).filter(function (f) {
-        return f.id !== opts.faction.id;
+      /* Rivals for a contested world are the powers that could plausibly
+       * fly a flag over a port. The syndicate is excluded from that pool
+       * BECAUSE IT IS THE OWNER OR IT IS NOWHERE: pirates do not quietly
+       * hold one dock in somebody else's system, they hold systems. Where
+       * they are the owner they are `opts.faction` and this filter never
+       * sees them. */
+      var others = all.filter(function (f) {
+        return f.id !== opts.faction.id && !f.outlaw;
       });
       list = [opts.faction].concat(others);
     } else {
@@ -1124,8 +1294,8 @@
       }
     }
     sys.factions = list;
-    sys.outlaw = OUTLAW;
-    sys.factionById = { outlaw: OUTLAW };
+    sys.outlaw = pirate;
+    sys.factionById = { outlaw: pirate };
     for (i = 0; i < list.length; i++) sys.factionById[list[i].id] = list[i];
 
     /* A world belongs to one faction (its galactic owner, if there is one);
@@ -1138,7 +1308,17 @@
       var owner = opts.faction || list[w % list.length];
       worlds[w].faction = owner.id;
       var rivals = list.filter(function (f) { return f.id !== owner.id; });
-      var contested = rivals.length > 0 && fr.chance(0.16);
+      /* One world in six is contested and its ports answer to a rival flag.
+       *
+       * In a PIRATE HOLD that rate is much higher, and it is the whole
+       * reason a hold is somewhere you can do business rather than a
+       * no-go region. The syndicate trades with the factions whose law it
+       * is outside of, and a flagged port is where that trade physically
+       * happens — a legitimate front door with a legitimate harbourmaster,
+       * standing in a system the syndicate owns. Drop this and pirate
+       * space becomes a wall instead of a market. */
+      var heldHere = !!(opts.faction && opts.faction.outlaw);
+      var contested = rivals.length > 0 && fr.chance(heldHere ? 0.50 : 0.16);
       var rival = contested ? rivals[w % rivals.length] : null;
       var ports = worlds[w].children.filter(isStation);
       for (var p = 0; p < ports.length; p++) {
@@ -1171,19 +1351,71 @@
    * `lowTechBias` similarly only WEIGHTS which government gets picked
    * (a poor world more often ends up Feudal than Technocracic) — it never
    * decides it outright, for the same reason. */
+  /* TWO AXES, NOT ONE.
+   *
+   * `crimeScore` used to be rolled straight off a single per-government
+   * number, and it conflated two things that are not the same and that the
+   * player needs to tell apart:
+   *
+   *   VIOLENCE   — crime the pirates actually run. Raids, hijackings, the
+   *                muscle. It makes a system DANGEROUS.
+   *   CORRUPTION — what the mafia operates. Bought officials, bought
+   *                witnesses, bought verdicts. It makes a system BUYABLE.
+   *
+   * The clearest way to see that these are different axes is an Anarchy.
+   * It is the most lawless place on the table and it is very nearly the
+   * least corrupt — not because anyone there is honest, but because
+   * corruption requires an institution to corrupt. There is nobody to
+   * bribe and, more to the point, nobody who could make a bribe STICK. Pay
+   * a witness off in an anarchy and you have simply given a stranger your
+   * money. A Patronage state is the mirror image: enforcement is real and
+   * competent, and everything in it has a price.
+   *
+   * That distinction is load-bearing, not flavour. Buying a witness's
+   * silence (see `hushWitness` in combat.js) is priced and made reliable by
+   * CORRUPTION alone. Whether you get shot at on the way in is VIOLENCE.
+   * A single "crime" number could not tell you which kind of trouble you
+   * were flying into.
+   *
+   * PERMISSIVITY — still `sys.crimeScore`, still the number the scan
+   * mechanic and everything downstream reads — is now derived from both,
+   * as a probabilistic OR: enforcement fails if there is no state to
+   * enforce OR if the state has been paid not to.
+   *
+   *     permissivity = 100 - (100 - violence) * (100 - 0.55*corruption)/100
+   *
+   * Corruption is weighted at 0.55 because a bought state still enforces
+   * against everyone who did not pay, so it raises permissivity by less
+   * than outright absence does. The per-government pairs below were then
+   * SOLVED so that the permissivity each one produces lands on the value
+   * that government used to roll directly — the model changed, the
+   * distribution did not, and nothing downstream was silently rebalanced.
+   * (Measured across 150 systems: median permissivity 38 before, 39 after.)
+   *
+   * `lowTechBias` is unchanged: it only ever WEIGHTED which government gets
+   * picked, and it still does. */
   var GOVERNMENTS = [
-    { id: 'anarchy',      name: 'Anarchy',       crime: 90, lowTechBias: 0.95 },
-    { id: 'feudal',       name: 'Feudal',        crime: 68, lowTechBias: 0.85 },
-    { id: 'dictatorship', name: 'Dictatorship',  crime: 60, lowTechBias: 0.65 },
-    { id: 'patronage',    name: 'Patronage',     crime: 55, lowTechBias: 0.55 },
-    { id: 'theocracy',    name: 'Theocracy',     crime: 48, lowTechBias: 0.60 },
-    { id: 'confederacy',  name: 'Confederacy',   crime: 42, lowTechBias: 0.45 },
-    { id: 'collective',   name: 'Collective',    crime: 38, lowTechBias: 0.40 },
-    { id: 'cooperative',  name: 'Cooperative',   crime: 28, lowTechBias: 0.35 },
-    { id: 'corporate',    name: 'Corporate',     crime: 33, lowTechBias: 0.30 },
-    { id: 'democracy',    name: 'Democracy',     crime: 20, lowTechBias: 0.15 },
-    { id: 'technocracy',  name: 'Technocracy',   crime: 12, lowTechBias: 0.05 }
+    //                                        violence corrupt  lowTechBias   (permissivity)
+    { id: 'anarchy',      name: 'Anarchy',      violence: 89, corrupt: 10, lowTechBias: 0.95 }, // 90
+    { id: 'feudal',       name: 'Feudal',       violence: 47, corrupt: 72, lowTechBias: 0.85 }, // 68
+    { id: 'dictatorship', name: 'Dictatorship', violence: 29, corrupt: 80, lowTechBias: 0.65 }, // 60
+    { id: 'patronage',    name: 'Patronage',    violence: 13, corrupt: 88, lowTechBias: 0.55 }, // 55
+    { id: 'theocracy',    name: 'Theocracy',    violence: 36, corrupt: 35, lowTechBias: 0.60 }, // 48
+    { id: 'confederacy',  name: 'Confederacy',  violence: 17, corrupt: 55, lowTechBias: 0.45 }, // 42
+    { id: 'collective',   name: 'Collective',   violence: 26, corrupt: 30, lowTechBias: 0.40 }, // 38
+    { id: 'corporate',    name: 'Corporate',    violence:  8, corrupt: 58, lowTechBias: 0.30 }, // 37
+    { id: 'cooperative',  name: 'Cooperative',  violence: 17, corrupt: 25, lowTechBias: 0.35 }, // 28
+    { id: 'democracy',    name: 'Democracy',    violence:  5, corrupt: 30, lowTechBias: 0.15 }, // 21
+    { id: 'technocracy',  name: 'Technocracy',  violence:  4, corrupt: 14, lowTechBias: 0.05 }  // 11
   ];
+
+  /* How much a bought state buys back. See the derivation above. */
+  var CORRUPTION_WEIGHT = 0.55;
+
+  function permissivity(violence, corruption) {
+    return clamp01to100(Math.round(
+      100 - (100 - violence) * (100 - CORRUPTION_WEIGHT * corruption) / 100));
+  }
   var GOVERNMENT_BY_ID = {};
   for (var _gi = 0; _gi < GOVERNMENTS.length; _gi++) GOVERNMENT_BY_ID[GOVERNMENTS[_gi].id] = GOVERNMENTS[_gi];
 
@@ -1202,9 +1434,23 @@
     return sum / ports.length;
   }
 
-  function buildGovernment(sys, base) {
+  /* What a pirate hold does to the place it holds.
+   *
+   * Not chaos. The syndicate is closer to a mafia than to a mob: it wants
+   * a working port with ships coming through, because that is what there
+   * is to skim. So a held system is GOVERNED — it is simply governed by
+   * people who own the officials rather than by people who answer to them.
+   *
+   * That is why the weighting below pushes TOWARD the corrupt governments
+   * and away from Anarchy. An anarchy would be a syndicate's failure: no
+   * institution left to buy, and therefore nothing to sell. */
+  var PIRATE_VIOLENCE = 10;    // added — the muscle is real
+  var PIRATE_CORRUPT  = 18;    // added — the officials are theirs
+
+  function buildGovernment(sys, base, opts) {
     var gr = base.fork('government');
     var dev = systemDevelopment(sys);
+    var held = !!(opts && opts.faction && opts.faction.outlaw);
 
     // Weight each government by how well its lowTechBias matches this
     // system's actual development, with a floor so nothing is ever
@@ -1212,7 +1458,11 @@
     // rare, not disallowed.
     var weighted = GOVERNMENTS.map(function (g) {
       var align = 1 - Math.abs(g.lowTechBias - (1 - dev));
-      return { g: g, w: 1 + 4 * align * align };
+      var w = 1 + 4 * align * align;
+      /* In a hold, a government is worth having in proportion to how
+       * buyable it is. Anarchy (corrupt 10) is all but excluded. */
+      if (held) w *= 0.4 + 1.6 * (g.corrupt / 100);
+      return { g: g, w: w };
     });
     var total = weighted.reduce(function (s, w) { return s + w.w; }, 0);
     var roll = gr.next() * total;
@@ -1222,13 +1472,220 @@
       if (roll <= 0) { chosen = weighted[i].g; break; }
     }
 
-    var techTerm = (0.5 - dev) * 40;      // low dev pushes crime up, high dev pulls it down
-    var noise = gr.gauss(0, 8);
-    var crime = Math.round(clamp01to100(chosen.crime + techTerm + noise));
+    /* Poverty drives VIOLENCE — that was always what the old tech term
+     * meant, and it attaches to the right axis now. Corruption does not
+     * work that way round: a rich world is not a clean one, it is a world
+     * where the bribes are larger, so development nudges it gently UP
+     * rather than down. Each axis gets its own noise; they are not two
+     * views of one roll. */
+    var violence = clamp01to100(chosen.violence + (0.5 - dev) * 40 + gr.gauss(0, 8));
+    var corrupt  = clamp01to100(chosen.corrupt  + (dev - 0.5) * 14 + gr.gauss(0, 9));
+    if (held) {
+      violence = clamp01to100(violence + PIRATE_VIOLENCE);
+      corrupt  = clamp01to100(corrupt  + PIRATE_CORRUPT);
+    }
 
     sys.government = chosen;
-    sys.crimeScore = crime;
+    sys.violence   = Math.round(violence);
+    sys.corruption = Math.round(corrupt);
+    /* Still the name every downstream reader knows it by. */
+    sys.crimeScore = permissivity(violence, corrupt);
+    sys.pirateHeld = held;
     sys.development = dev;
+  }
+
+  /* --- flavour: a travel-guide's idea of the place -----------------------
+   * Original Elite paired every system with one flavour line — a native
+   * lifeform sketched in a sentence, deliberately absurd ("fuzzy primates"
+   * is the actual voice this owes a debt to) — and this game has several
+   * planets per system rather than one, so the line goes on each
+   * HABITABLE world instead of the system as a whole: the only worlds
+   * anyone would ever write a travel guide about.
+   *
+   * Two lines, not one. `lifeNote` is pure whimsy, seeded and otherwise
+   * unconnected to anything else generated here — there is no mechanic
+   * riding on what the wildlife is called. `cultureNote` is not: it reads
+   * `sys.violence`, `sys.corruption`, `sys.pirateHeld` and the chosen
+   * government's `lowTechBias`, all already decided above, and is written
+   * to evoke them rather than name them. `government`, `violence` and
+   * `corruption` themselves stay exactly what they were — numbers a visit
+   * earns you — so this is deliberately the RUMOUR you would have heard
+   * before you ever went, not the same fact restated in prose. */
+  var LIFE_ADJ = [
+    'fuzzy', 'luminous', 'gelatinous', 'burrowing', 'iridescent', 'flightless',
+    'translucent', 'armoured', 'migratory', 'nocturnal', 'amphibious',
+    'venomous', 'feral', 'semi-aquatic', 'crystalline', 'bioluminescent',
+    'chittering', 'many-legged', 'filter-feeding', 'herd-forming', 'solitary',
+    'airborne', 'subterranean', 'photosynthetic', 'symbiotic', 'colonial',
+    'hive-forming', 'six-limbed', 'shell-backed', 'web-footed'
+  ];
+  var LIFE_NOUN = [
+    'primates', 'kittens', 'eels', 'moths', 'crabs', 'deer', 'toads', 'worms',
+    'lemurs', 'jellyfish', 'beetles', 'otters', 'lizards', 'sloths', 'finches',
+    'octopuses', 'locusts', 'goats', 'ferrets', 'turtles', 'urchins', 'newts',
+    'shrews', 'herons', 'mantises', 'snails', 'voles', 'rays', 'gulls', 'hares'
+  ];
+  var LIFE_CLAUSE = [
+    ' — harmless, but they will not stop watching you.',
+    ', prized locally as pets despite the smell.',
+    ', which the settlers insist are delicious.',
+    ', currently protected by an ordinance nobody enforces.',
+    ', which migrate in patterns visible from orbit.',
+    ', domesticated generations ago for reasons nobody now remembers.',
+    '. A local proverb blames them for everything that goes missing.',
+    ', which sing at dawn whether or not anyone asked them to.',
+    ', mostly ignored by the people who live alongside them.',
+    ', which outnumber the settlers roughly nine to one.'
+  ];
+  var LIFE_CLAUSE_VIOLENT = [
+    ', hunted for sport by whoever currently holds the guns.',
+    ', which learned to avoid the shipping lanes faster than the people did.'
+  ];
+  var LIFE_CLAUSE_CORRUPT = [
+    ', officially a protected species and unofficially a delicacy at the harbourmaster’s table.'
+  ];
+
+  function lifeNote(sys, rng) {
+    var pool = LIFE_CLAUSE.slice();
+    if (sys.violence >= 65) pool = pool.concat(LIFE_CLAUSE_VIOLENT);
+    if (sys.corruption >= 60) pool = pool.concat(LIFE_CLAUSE_CORRUPT);
+    return 'Dominant native life: ' + rng.pick(LIFE_ADJ) + ' ' + rng.pick(LIFE_NOUN) +
+      rng.pick(pool);
+  }
+
+  /* Buckets tried in order, first match wins — a held system reads as held
+   * before anything else about it, the way it would to a visitor too. */
+  var CULTURE_BUCKETS = [
+    { test: function (sys) { return sys.pirateHeld; }, lines: [
+      'Nominally unclaimed. Actually spoken for. Everyone here already knows which is true, and keeps up the paperwork anyway.',
+      'A waystation dressed as a town — cargo moves through faster than the people do, and nobody asks where either came from.',
+      'The hospitality is real. So is the tab you did not agree to.'
+    ] },
+    { test: function (sys) { return sys.violence >= 65 && sys.corruption >= 60; }, lines: [
+      'Run the way a protection racket runs a neighbourhood — quietly, thoroughly, with excellent record-keeping.',
+      'Ask no question you are not prepared to pay to have answered, or to have asked about you.'
+    ] },
+    { test: function (sys) { return sys.violence >= 65; }, lines: [
+      'No one is obviously in charge, which the locals insist is the same as everyone being in charge, right before they ask you to leave.',
+      'Doors here have more locks than windows. Read into that what you like.',
+      'Visitors are welcome. Staying is a separate negotiation.'
+    ] },
+    { test: function (sys) { return sys.corruption >= 60; }, lines: [
+      'Everything has a price, including the things that are supposed to be free.',
+      'Very orderly, provided you already know who to pay.',
+      'The paperwork is immaculate. So is the discretion, for a fee.'
+    ] },
+    { test: function (sys) { return sys.violence < 25 && sys.corruption < 30; }, lines: [
+      'Quiet, orderly, and faintly proud of it — the sort of place that prints its own tourist pamphlets.',
+      'Everything works, on schedule, without anyone seeming to strain for it.',
+      'A pleasant kind of boring. Bring a book.'
+    ] },
+    { test: function () { return true; }, lines: [
+      'Unremarkable, in the way most of the galaxy actually is.',
+      'Neither dangerous nor especially safe — ordinary, and mostly left alone.',
+      'Gets by. Nobody writes home about it, which is its own kind of review.'
+    ] }
+  ];
+
+  function cultureNote(sys, rng) {
+    var bucket = CULTURE_BUCKETS[CULTURE_BUCKETS.length - 1];
+    for (var i = 0; i < CULTURE_BUCKETS.length; i++) {
+      if (CULTURE_BUCKETS[i].test(sys)) { bucket = CULTURE_BUCKETS[i]; break; }
+    }
+    var line = rng.pick(bucket.lines);
+    var bias = (sys.government && sys.government.lowTechBias) || 0.5;
+    if (bias >= 0.6) line += ' Everything here runs on salvage and stubbornness.';
+    else if (bias <= 0.25) line += ' Gleaming, over-engineered, and faintly humourless about it.';
+    return line;
+  }
+
+  /* `cultureNote` is a rumour about the GOVERNMENT (violence, corruption,
+   * who holds the place) — one voice, repeated per habitable world because
+   * that is what a traveller would actually have heard about each one.
+   * `systemNote` is a different kind of line entirely: a rumour about the
+   * SYSTEM ITSELF, and unlike cultureNote it is keyed off what the
+   * generator actually put here — how many worlds, what they are, how much
+   * infrastructure — rather than the two permissivity axes. Two systems
+   * with an identical government can still read completely differently:
+   * one a two-world garden cluster, the other six gas giants and a fuel
+   * depot. This is why nobody would call either one "just another system"
+   * even before knowing a thing about who runs it. One per system, not one
+   * per world — it is a fact about the place as a whole. */
+  function systemProfile(sys) {
+    var bodies = sys.bodies || [];
+    var planets = bodies.filter(function (b) { return b.kind === 'planet'; });
+    var giants = planets.filter(function (p) {
+      return p.type === 'gasGiant' || p.type === 'iceGiant';
+    }).length;
+    var habitable = planets.filter(function (p) { return p.habitable; }).length;
+    var ports = (sys.ports || bodies.filter(isStation)).length;
+    return { planets: planets.length, giants: giants, habitable: habitable, ports: ports };
+  }
+
+  /* Tried in order, first match wins — same discipline as CULTURE_BUCKETS.
+   * A genuinely settled system (2+ habitable worlds) is the rarest and most
+   * notable thing that can be true of a system, so it is checked first;
+   * "busy" and "sparse" are judged after everything more specific has had
+   * its chance, since either can be true of almost any system by accident. */
+  var SYSTEM_DESC_BUCKETS = [
+    { test: function (p) { return p.habitable >= 2; }, lines: [
+      'Two good worlds in one system is rare enough that the people who grew up here rarely bother leaving.',
+      'A genuine cluster, not just a waypoint — enough livable ground that nobody has had to fight over the good one yet.',
+      'Settlers count themselves lucky here, and say so, often, to anyone passing through.'
+    ] },
+    { test: function (p) { return p.habitable === 1; }, lines: [
+      'One good world holds up an entire system\'s worth of traffic — everything else here exists to service it.',
+      'A single green world in an otherwise unremarkable system, and it shows in how much of the sky is aimed at it.',
+      'Take away the one habitable rock and there would be no reason for anyone to be out this far at all.'
+    ] },
+    { test: function (p) { return p.giants >= 2 && p.habitable === 0; }, lines: [
+      'Nothing here to breathe, plenty to skim — this system earns its keep off gas, not ground.',
+      'A miner\'s system: giants for fuel and reagents, and not one world anybody would choose to stand on.',
+      'The traffic here is all cargo. Nobody comes for the view, because there isn\'t one worth having.'
+    ] },
+    { test: function (p) { return p.planets <= 4; }, lines: [
+      'A sparse system, and it shows — barely enough worlds out here to justify the trip.',
+      'Thin pickings. Whatever business exists here, there is not much of it.',
+      'Most ships pass through without stopping. There is little reason to do otherwise.'
+    ] },
+    { test: function (p) { return p.ports >= 5; }, lines: [
+      'Traffic control here earns its pay — this system moves more ships than it has worlds to put them around.',
+      'Busy, cluttered and profitable. Nobody comes here for the scenery.',
+      'A genuine junction. Half the ships passing through are only here to reach somewhere else.'
+    ] },
+    { test: function () { return true; }, lines: [
+      'An ordinary system: a handful of worlds, none of them remarkable, doing what most systems do.',
+      'Nothing here ever demanded a name people would remember, and nothing about it suggests that will change.',
+      'Unremarkable in the way most of the galaxy actually is — which is not the same as empty.'
+    ] }
+  ];
+
+  function systemNote(sys, rng) {
+    var profile = systemProfile(sys);
+    var bucket = SYSTEM_DESC_BUCKETS[SYSTEM_DESC_BUCKETS.length - 1];
+    for (var i = 0; i < SYSTEM_DESC_BUCKETS.length; i++) {
+      if (SYSTEM_DESC_BUCKETS[i].test(profile)) { bucket = SYSTEM_DESC_BUCKETS[i]; break; }
+    }
+    return rng.pick(bucket.lines);
+  }
+
+  function buildFlavor(sys, base) {
+    var fr = base.fork('flavor-culture');
+    var planets = (sys.bodies || []).filter(function (b) {
+      return b.kind === 'planet' && b.habitable;
+    });
+    for (var i = 0; i < planets.length; i++) {
+      var world = planets[i];
+      var wr = fr.fork('world-' + world.id);
+      world.lifeNote = lifeNote(sys, wr);
+      world.cultureNote = cultureNote(sys, wr);
+    }
+    /* Own leaf fork off `fr`, taken after the per-world loop above but
+     * completely unaffected by how many times that loop ran — `fork()` is
+     * keyed on (label, seed), never on call order or prior draws — so
+     * adding this line disturbs nothing that already existed for any
+     * existing seed, including the per-world notes right above it. */
+    sys.systemNote = systemNote(sys, fr.fork('system'));
   }
 
   /* --- ships that are not carrying anything -----------------------------
@@ -1346,6 +1803,18 @@
      * mean of the ports' own `dev`. Both it and crimeScore are already
      * computed by the time buildPatrols runs. */
     (sys.factions || []).forEach(function (fac) {
+      /* The syndicate does not field a navy. It fields pirates, which are
+       * generated below and are a different thing with a different rail. */
+      if (fac.outlaw) return;
+      /* NO FOOTHOLD IN A HOLD. A patrol rail is a STANDING presence: a
+       * warship that lives here, on a timetable, between two ports of its
+       * own. That is precisely what a syndicate will not tolerate and what
+       * the waste ban exists to deny — the ban is the excuse, the absence
+       * of a garrison is the point.
+       *
+       * Passing through is a different matter, and is handled just below.
+       * Denying a fleet a base is not the same as denying it a course. */
+      if (sys.pirateHeld) return;
       var mine = ports.filter(function (p) { return p.faction === fac.id; });
       if (mine.length < 2) return;
       /* Thresholds measured, not guessed: across ten seeds sys.development
@@ -1373,6 +1842,39 @@
         rail: { type: 'route', route: patrolRoute('n' + (id - 1), '', nspec, NA, NB, sys, rng) }
       });
     });
+
+    /* A cutter PASSING THROUGH a hold.
+     *
+     * "The ban would deny the navy a foothold, but in practice it's gonna
+     * be hard to keep them from passing through." So: no garrison above,
+     * and here a cutter on a transit leg between two of the system's ports
+     * regardless of whose flag they fly — it is not based here, it is
+     * crossing. Marked `passing` so the HUD can say so and so nothing
+     * downstream mistakes it for the garrison a hold does not have.
+     *
+     * Uncommon, because the interesting fact about pirate space is that
+     * the navy is usually NOT there. It flies the nearest major's colours:
+     * a fleet crossing somebody else's territory is still somebody's. */
+    if (sys.pirateHeld && ports.length >= 2 && rng.chance(0.18)) {
+      var majors = (sys.factions || []).filter(function (f) { return !f.outlaw; });
+      if (majors.length) {
+        var pf = majors[rng.int(0, majors.length - 1)];
+        var PA = ports[rng.int(0, ports.length - 1)];
+        var PB = ports.filter(function (p) { return p !== PA; })[0];
+        if (PB) {
+          var pspec = { cls: 'navy', accel: PATROL_CLASSES.navy.accel,
+                        size: PATROL_CLASSES.navy.size, color: PATROL_CLASSES.navy.color,
+                        label: PATROL_CLASSES.navy.label };
+          sys.patrols.push({
+            id: 'n' + (id++), kind: 'navy', faction: pf.id, passing: true,
+            name: 'FNS ' + rng.pick(NAVY_NAMES),
+            className: PATROL_CLASSES.navy.label + ' (in transit)', color: pf.color,
+            size: PATROL_CLASSES.navy.size, accel: PATROL_CLASSES.navy.accel,
+            rail: { type: 'route', route: patrolRoute('n' + (id - 1), '', pspec, PA, PB, sys, rng) }
+          });
+        }
+      }
+    }
 
     /* Rescue tenders. One per system that has enough traffic to justify
      * the standing cost of keeping a crew waiting — which is what
@@ -1796,6 +2298,82 @@
       registerDeliveries(B, out, route.t0, cruise, period);
       registerDeliveries(A, back, route.t0, 2 * cruise + layover, period);
     }
+
+    buildFeeders(sys, tr, ports);
+  }
+
+  /* ---- feeders -----------------------------------------------------------
+   * Short-haul small craft, and the reason they exist is a measurement: with
+   * the scheduled routes alone a port's five SMALL berths were occupied at
+   * once 0.00% of the time across 287 ports and 57,400 samples, while the one
+   * large bay was busy 31%. So a freighter had to queue and a courier never
+   * did — which made the whole docking queue invisible to half the fleet.
+   *
+   * Real ports are not quiet at the small end. The scheduled interplanetary
+   * runs are the visible traffic; underneath them sits a constant churn of
+   * local craft that dock for an hour and go. That is what this is.
+   *
+   * THREE properties matter and each is deliberate:
+   *   - built in their OWN fork, AFTER the scheduled routes, so every
+   *     existing route in every existing seed is bit-for-bit unchanged and
+   *     only the new small craft appear;
+   *   - short layovers, so a berth they take comes back in minutes rather
+   *     than the 12 hours an interplanetary layover implies — a queue you
+   *     can actually choose to wait out;
+   *   - no manifests registered. They carry nothing the market models,
+   *     because a feeder that moved cargo would change every price in the
+   *     game, and this is a traffic change, not an economic one.
+   */
+  var FEEDERS_PER_PAIR = 12;
+
+  function buildFeeders(sys, tr, ports) {
+    var fr = tr.fork('feeder');
+    var locals = [];
+    var i, j;
+    for (i = 0; i < ports.length; i++) {
+      for (j = i + 1; j < ports.length; j++) {
+        if (ports[i].parentBody !== ports[j].parentBody) continue;
+        locals.push([ports[i], ports[j]]);
+      }
+    }
+    /* A port with no sibling above the same world still gets local movement —
+       tenders working between the port and the body it orbits. Without this
+       the lone station in a system stayed as empty as before. */
+    if (!locals.length) {
+      for (i = 0; i < ports.length; i++) {
+        for (j = 0; j < ports.length; j++) {
+          if (i === j) continue;
+          locals.push([ports[i], ports[j]]);
+          break;
+        }
+      }
+    }
+    var n = 0;
+    for (var p = 0; p < locals.length; p++) {
+      var A = locals[p][0], B = locals[p][1];
+      var parent = commonParent(A, B, sys);
+      var ra = radiusAbout(A, parent, sys), rb = radiusAbout(B, parent, sys);
+      var dist = Math.max(Math.abs(ra - rb), (ra + rb) * 0.2);
+      for (var k = 0; k < FEEDERS_PER_PAIR; k++) {
+        var spec = SHIP_CLASSES.shuttle;
+        var cruise = Math.max(240, Math.min(2 * Math.sqrt(dist / spec.accel), 6 * 3600));
+        var layover = fr.range(0.02, 0.10) * 86400;      // 30 min to 2.4 hr
+        var period = 2 * (cruise + layover);
+        sys.traffic.push({
+          id: 'f' + n, name: fr.pick(LINE_NAMES) + ' ' + fr.pick(HULL_NAMES),
+          cls: 'shuttle', className: spec.label,
+          size: spec.size * fr.range(0.85, 1.15),
+          color: spec.color,
+          from: A.id, to: B.id, parentId: parent.id,
+          local: true, feeder: true,
+          cruise: cruise, layover: layover, period: period,
+          t0: fr.range(0, period),
+          out: [], back: [],
+          distance: dist
+        });
+        n++;
+      }
+    }
   }
 
   function registerDeliveries(port, manifest, t0, offset, period) {
@@ -1936,6 +2514,8 @@
     makeSurfacePort: makeSurfacePort,
     buildFactions: buildFactions,
     FACTION_STEM: FACTION_STEM,
+    PIRATE_STEM: PIRATE_STEM,
+    MINOR_STEM: MINOR_STEM,
     FACTION_COLORS: FACTION_COLORS,
     makeName: makeName,
     buildGovernment: buildGovernment,
@@ -1947,6 +2527,7 @@
     SHALLOW_DEPTH: SHALLOW_DEPTH,
     bayGeometry: bayGeometry,
     berthOffset: berthOffset,
+    controlFor: controlFor, CONTROL_RANGE: CONTROL_RANGE,
     BERTH_COUNT: BERTH_COUNT,
     UNDERGROUND_DEPTH: UNDERGROUND_DEPTH,
     UNDERGROUND_TUNNEL: UNDERGROUND_TUNNEL,
@@ -1963,7 +2544,10 @@
     buildEconomy: buildEconomy,
     buildTraffic: buildTraffic,
     commonParent: commonParent,
-    radiusAbout: radiusAbout
+    radiusAbout: radiusAbout,
+    atmosphereComposition: atmosphereComposition,
+    buildFlavor: buildFlavor, lifeNote: lifeNote, cultureNote: cultureNote,
+    systemNote: systemNote
   };
 
   global.Gen = Gen;

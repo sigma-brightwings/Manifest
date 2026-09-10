@@ -15,7 +15,255 @@ before they update.
 Outfitting, weapons, and the law. See `PLAN.md` for the
 full design and the phases still outstanding.
 
+### Changed
+
+- **Contraband is graded now.** A flat 180 cr/t said every illegal cargo was
+  the same crime. The ladder, worst last: **narcotics** (somebody's vice),
+  **restricted arms** (somebody's war), **military drive fuel** (naval
+  materiel in hands the navy did not licence). Ten tonnes costs 1,800,
+  4,500, or 9,000 cr — the last of which sits just under the flat 10,000 for
+  carrying radioactive waste into a Syndicate hold, which stays the worst
+  thing on the board and stays off this ladder entirely, because that is a
+  protection racket enforcing its own law rather than a state enforcing a
+  graded one. The standing hit is graded the same way, by the **worst** item
+  found rather than the average: a hold of narcotics with one tonne of naval
+  fuel in it is a naval-fuel problem.
+
+- **Military drive fuel is contraband depending on who is asking.** It is
+  not flagged illegal in the catalogue and it must not be — it is bred at
+  licensed plants and sold at a listed price, and flagging it would have
+  made the whole legitimate trade a crime. It is an offence only in the hold
+  of a pilot with no standing with the flag that stopped them, at the same
+  threshold the Chernobyl drive itself is sold behind. One number, so a
+  pilot cleared to own the drive is cleared to carry what it burns.
+
+### Fixed
+
+- **Piracy stopped working the moment you died.** A respawned ship came back
+  without a cargo scoop, so a robbed freighter dumped its hold exactly as it
+  always had and none of it could be picked up. The refusal speaks once every
+  twelve seconds, which is easy to miss entirely — so the conclusion available
+  to a player was that robbing ships was broken, not that they were missing a
+  1,400 cr fitting nobody had told them they had lost.
+
+  The cause was two pieces of code assembling the same ship with no reason to
+  agree. `migrateFit` issues the starting kit, but only when the fit map is
+  **empty**; `stripForRespawn` hand-wrote a map with the starter gun in it, so
+  the early return fired and the kit was never issued again. When the scoop
+  stopped being a property of having a hold and became a fitting, only one of
+  those two learned about it.
+
+  There is one starting-fit list now (`STARTING_FIT`) and both paths read it,
+  so they cannot drift apart again — and `stripForRespawn` no longer sets the
+  four legacy weapon fields by hand, which means it can no longer set them
+  wrongly by hand either. Two checks that would have caught it: one asserting a
+  new ship and a respawned one carry the same thing, and one in the render
+  suite that robs a crate **after** a respawn and drives the real frame loop.
+  Both were confirmed to fail with the fix removed — the two scoop checks
+  already in the suite passed throughout, because both ran on a ship that had
+  never died.
+
+- **Contraband was being detected and then not punished.** A search would
+  find a dirty hold and the cargo would stay aboard with no fine. The cause
+  was in the suite rather than the game: the test pinned `Math.random` to a
+  single low value to force the search, and once the bribe branch landed
+  that same value also sailed under the bribe roll, so the inspector took a
+  payoff every time. The test now feeds a *sequence* — low to search, high
+  to refuse the bribe — which is what a test has to do once the code under
+  it draws twice.
+
+- **A witnessed crime is no longer expected to be reported instantly.**
+  Same shape of problem: a third-party witness takes eight seconds to get on
+  the radio, and those eight seconds are the window in which their silence
+  can be bought. The old check asserted instant reporting, which amounted to
+  asserting that the hush mechanic could not exist.
+
+- **Jettisoning cargo actually gets rid of it.** It did not. A crate leaves
+  the airlock 50 metres astern; the scoop reaches 80; so the ship swallowed
+  it again on the very next frame and the hold came out unchanged. The only
+  symptom was cargo that would not go away.
+
+  Anything you push out yourself is now inert until it has genuinely got
+  clear of you. That is a **distance** test rather than a timer, on purpose:
+  a timer in sim seconds evaporates under time compression, and a timer in
+  real seconds could be waited out sitting still. It resolves on its own in
+  about seven seconds from the shove the airlock gives it, or instantly if
+  you are moving. Cargo somebody *else* dumped is catchable at once, which
+  is what makes robbing a freighter work at all.
+
+  This had a `frames(60)` sitting right on top of it in the suite that only
+  ever checked for exceptions. It checks the hold now.
+
 ### Added
+
+- **The cargo scoop is a fitting.** Picking things up used to be a property
+  of having a hold, which made throwing cargo overboard reversible and
+  therefore meaningless. It is now a utility-slot item — 1,400 cr, stocked
+  everywhere, **fitted on a new ship** so nobody learns the rule by watching
+  their own cargo drift away.
+
+  Three systems get a spine out of one change: dumping cargo to outrun
+  somebody is a decision you cannot take back, a freighter dumping its hold
+  in front of you is only worth robbing if you brought the equipment, and a
+  debris field is something you prepared for rather than drove through. Sell
+  it if you want the slot — on a Talon it is competing with the turret, the
+  sink launcher and both scanners for one of two.
+
+  It draws **no power**, which is a decision and not an oversight: a scanner
+  runs continuously, a scoop is a hatch and a clamp that work for a few
+  seconds a day. The first version charged it 0.4 MW and the suite
+  immediately reported four separate measured budget facts moving, including
+  the one where an oversized slipspace anchor stops fitting a Talon. Its
+  price is a tonne and a slot — enough that a Class 3 beam, a Mk II reactor
+  and a shield on a Kestrel, which come to *exactly* its 22 t budget, mean
+  the glass cannon flies without one.
+
+  Nothing to do with the fuel scoop, which is one of the heat shield's jobs.
+
+- **A signed contract can finally explain itself.** The ACTIVE CONTRACTS
+  column on F7 now spells out where each job is actually going — the berth,
+  the body it sits on, and the system, or for a courier the star and the
+  fact that any port there will do — and every contract carries its own
+  **DETAILS** button, which opens the long form you signed it with.
+
+  Both of those had been on the contract the whole time. `accept()` copies
+  the destination across and deliberately *carries* the long form rather
+  than regenerating it, so that a job signed a week ago still says what it
+  said when you signed it. The board had the button; the one place the text
+  was designed to be read did not. Now it does, and the F7 screen has tests
+  covering it — signing a contract and then drawing the screen was a path
+  the suite had never once exercised.
+
+- **Mission headlines are generated rather than concatenated.** A board used
+  to read as one fixed sentence shape per job type. It now assembles
+  `[URGENCY] [VERB] <core> [— TAIL]`, where the core — tonnage, commodity,
+  destination — is never touched and everything else has to fit a 64-column
+  budget to appear at all. "Priority: Run 6t Metal ores to Coldwater Post —
+  they are short" instead of "6t Metal ores to Coldwater Post".
+
+  The urgency prefix is a **true tell**: it appears when the fee sits in the
+  top quarter of that job type's own pay band. A board that shouts is a
+  board worth reading twice.
+
+- **Mission prose reads the world instead of a bigger adjective list.** The
+  long form now names the destination's actual role ("the reprocessing plant
+  at Halden Dock"), says when a run goes down a shaft into an underground
+  bay, quotes the real distance in light years for a courier, notices when
+  the far end is genuinely short of what you are carrying, and warns you
+  when the route crosses permissive space. All of it is read off state the
+  mission and the economy already had.
+
+  The rule that makes this safe is unchanged and is the whole reason the
+  generator is allowed to exist: **the grammar may only combine fragments
+  that describe state the mission actually has.** A clumsy join is the worst
+  failure available; a sentence describing a job you cannot do remains
+  structurally impossible.
+
+  Two fragments were written and then deleted for being *true but useless* —
+  "there is more of it on this dock than anyone can use" and a matching
+  "— surplus here" tail. A haul is only ever offered in a good the origin
+  exports, so both were true of every haul ever generated, which is a
+  tautology dressed as insight printed on two thirds of the board.
+
+- **Faction campaign chapters have a long form at all.** `arcs.js` built its
+  own contract objects and never called the finisher, so every campaign
+  chapter shipped with a headline and no description — the one kind of work
+  that most deserves an explanation was the only kind that had none.
+
+- **Your bridge belongs to your ship.** Every hull in the game sat in the same
+  room behind the same glass — a Dart interceptor and a Mule freighter had
+  identical cockpits, which is a poor joke when the cockpit is the only part
+  of your own ship you ever actually look at.
+
+  It is a kit now. **Type** decides the character: an interceptor wraps more
+  glass around a tighter seat, a freighter sits you back behind a heavy brow.
+  **Size** scales it, read off the hull's own mass — so a hull nobody has
+  designed yet still gets a sensible bridge without anyone adding a row to a
+  table. And a little **flair** on top, seeded so it is yours.
+
+  The seed is the hull's birth mark, stamped when you buy it — deliberately
+  *not* the registration, which you can retype on the yard page. Renaming your
+  ship does not rebuild the cockpit around you.
+
+  The Talon's bridge is unchanged, and that is on purpose: every multiplier is
+  1.0 for it, so the room that was tuned by hand is still exactly that room and
+  everything else deviates from a known-good one.
+
+- **The canopy wraps, and it is raked to the hull you are flying.** The old
+  glass was one flat pane at a fixed 1.20 m for every ship. There are
+  quarter-lights outboard of the windscreen now, so turning your head finds
+  more sky and less wall — an interceptor sees noticeably further round than a
+  freighter. The lean of the glass is measured off the hull's own model rather
+  than chosen: a long fine nose gets steeply raked glass, a blunt one sits
+  more upright.
+
+  The windscreen itself stays flat, which is not a shortcut. A curved pane
+  projects as tan(elevation)/cos(bearing) through a flat camera, so it bows
+  off the top and bottom of the view at the corners — which is exactly why
+  real windscreens are flat glass and the wrap comes from separate panes.
+
+- **The cockpit screens stop skewing when you turn your head.** The readouts
+  were drawn by mapping a flat page onto the panel with a 2D transform. That
+  transform is built from three of the screen's four corners and *cannot* use
+  the fourth — an affine maps a rectangle to a parallelogram and nothing else.
+  The housing was drawn with all four, so the frame was a true perspective
+  quad with a parallelogram of content sliding around inside it. The more you
+  turned, the further apart they got.
+
+  Each screen is now a real lit rectangle bolted to the console, drawn by the
+  same projection as the rest of the world, so the perspective is exact rather
+  than approximated — no subdivision, no seams, nothing left over at the
+  corners. The housing, bezel and stalk are still 2D; they are opaque
+  furniture and were never the part that skewed.
+
+  Without WebGL2 the old path still runs, skew and all. A wrong-looking
+  readout beats a blank one.
+
+- **You can break into a starport.** A surface port's doors are not commanded
+  on the port — they answer to a control cabinet standing out on the rock
+  beside the works. It has to be outside, because a computer that lets you in
+  cannot be inside the thing it lets you into. And because it is outside, it
+  is exposed: you can set down beside it, and so can somebody who was never
+  granted anything.
+
+  That is the mechanic. Faction standing decides whether you are **granted**
+  clearance and has no bearing whatever on whether the cabinet can be
+  **taken** — so the port that will never clear you is exactly the one you can
+  still get into. `F4`, pick the port, `H`.
+
+  It is loud. A failed attempt trips the alarm, books a bounty with the
+  cabinet's owner, and locks the panel for 45 seconds — turning a closed door
+  into a warrant, after which the same doors are shut to you for a reason you
+  brought on yourself. A developed world has better locks than a backwater,
+  and it is the **same** lock every time you come back to it: the difficulty
+  is derived from the world, only the roll is a roll.
+
+  Two things it deliberately is not. It is not a launch clearance — getting in
+  is not the same as getting out, and asking for the way out is still a
+  conversation you have to have. And it does not defeat the interlocks, which
+  are mechanical: the lift still cannot come flush while the doors are shut,
+  whoever is giving the orders. A breach also does not follow you to the next
+  system; a port whose lock you broke once is not a port you own.
+
+  You will find out about it the way you should: ask a port that hates you for
+  clearance while parked next to its cabinet, and the refusal mentions it.
+
+- **You can watch yourself being docked.** Landing on a pad with a hangar
+  under it used to park the ship in a single frame. Now the apron doors open
+  under the hull, a level car carries it down the 45° shaft, the inboard gate
+  opens, and a traverser runs it across the floor to its assigned bay — about
+  eighteen seconds, and **the camera is yours the whole time**, so you can
+  orbit the hull while it is being carried. Time compression is held at 1×
+  while it runs, because a sequence measured in seconds resolves into nothing
+  at 500×.
+
+  The best moment is not the machinery, it is the sky: on the apron you are
+  still outside, with the planet and the stars where they should be. When the
+  car starts down and the leaves seal above you, the world goes away — because
+  something closed over your head, not because a flag flipped.
+
+  A bare pad with nothing under it still docks instantly, as do orbital
+  clamps: there is no shaft to be carried down.
 
 - **A berthed ship is inside a building.** Park in a surface port and the
   hangar is now the whole world: no stars, no ecliptic grid, no orbit lines,
@@ -385,6 +633,20 @@ new system.
 live on a bespoke `ship.modules` field rather than in the fit map; that field
 is still read as a fallback, so an anchor already aboard keeps holding your
 corridor. New ones are bought and stored as ordinary equipment.
+
+**A career that predates the cargo scoop keeps one.** `migrateFit` issues
+it to any ship that has never had a fit map, which is every save old enough
+to predate slots and every new ship. A save that already carries a fit map
+is left alone and buys one at the yard — and that asymmetry is deliberate,
+because it is also what makes SELLING the scoop stick: it lives in the fit
+map like every other fitting, and the fit map is what is saved.
+
+**Contracts already in flight are untouched.** A signed mission keeps the
+headline and the destination it was signed with — the new generator runs
+when a board is built, not when a contract is read, so nothing you already
+agreed to changes wording underneath you. The only visible difference is
+that a contract signed before the long form existed has no `desc` and
+therefore shows no DETAILS button; the next one you take will have both.
 
 **The docked start only applies to new careers.** It runs on the fresh-game
 path, so loading an existing save puts you back exactly where you left off,
