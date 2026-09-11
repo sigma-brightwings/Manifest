@@ -8086,16 +8086,40 @@
      * apron and all — inside the planet, where the depth buffer duly hides
      * it. That is exactly what happened the first time: shallow starports
      * simply stopped being drawn. */
-    var ss = station.surface
-      ? Sim.portEntrance(station, G.sys, G.t)
-      : Sim.bodyState(station, G.sys, G.t);
-    var host = station.parentBody;
-    if (!host) return null;
-    var hs = Sim.bodyState(host, G.sys, G.t);
+    /* THE ORBITAL CASE FIRST, and it computes nothing of its own.
+     *
+     * This used to solve for the station's state and its host's up here and
+     * then hand off, and once the berth code needed the same frame that made
+     * it solve for both TWICE per station per frame — Kepler is the
+     * expensive call in this file and the render suite went from four
+     * minutes to more than seven. Everything the orbital branch needs comes
+     * back inside the basis, so it asks once. */
+    if (!station.parentBody) return null;
+    if (!station.surface) {
+      /* ONE DERIVATION, and it lives in sim.js.
+       *
+       * The spin, the axis and the handedness used to be written out here as
+       * well as being needed by the berth code, and two copies of "which way
+       * is this station facing" is exactly the disagreement that parks a
+       * ship inside a wall — the same failure portModelFor exists to prevent
+       * for which mesh gets drawn. Sim.stationBasis returns the frame in the
+       * same shape groundBasis does (up = model +z, east = +x, north = +y),
+       * so the renderer and the berths cannot drift apart.
+       *
+       * `still` is passed through because the caller knows something this
+       * does not: the shell and the turning ring are drawn as two passes of
+       * the same model, one frozen and one not. */
+      var sb = Sim.stationBasis(station, G.sys, G.t, !!still);
+      if (!sb) return null;
+      return { pos: sb.entrance.pos, fwd: sb.up, right: sb.east, up: sb.north };
+    }
+
+    var ss = Sim.portEntrance(station, G.sys, G.t);
+    var hs = Sim.bodyState(station.parentBody, G.sys, G.t);
     var up = V.norm(V.sub(ss.pos, hs.pos));
     if (V.len(up) < 1e-9) return null;
 
-    if (station.surface) {
+    {
       // Model is built flat in xy with +z up, so the pad's "forward" is the
       // local vertical and the other two axes lie along the ground.
       var east = V.norm(V.cross({ x: 0, y: 0, z: 1 }, up));
@@ -8113,17 +8137,6 @@
       var lifted = V.addScaled(ss.pos, up, station.radius * PAD_GROUND_LIFT);
       return { pos: lifted, fwd: up, right: east, up: V.cross(east, up) };
     }
-
-    var prograde = V.norm(V.sub(ss.vel, hs.vel));
-    var normal = V.norm(V.cross(up, prograde));
-    if (V.len(normal) < 1e-9) normal = { x: 0, y: 0, z: 1 };
-    // Spin about the station's own axis: one turn every couple of minutes,
-    // scaled so bigger rings turn more slowly, as they must.
-    var rate = 0.06 / Math.max(0.4, station.radius);
-    var ang = still ? 0 : G.t * rate;
-    var a = V.rotateAroundAxis(up, normal, ang);
-    var b = V.rotateAroundAxis(prograde, normal, ang);
-    return { pos: ss.pos, fwd: normal, right: a, up: b };
   }
 
   function queueLabel(sp, text, color, offset, priority) {

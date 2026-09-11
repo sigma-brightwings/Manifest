@@ -314,6 +314,54 @@ console.log('--- a new career starts on a pad ---');
     check('and it is actually at the port, not merely flagged as docked',
           V.dist(G.ship.pos, Sim.bodyState(orbPort, G.sys, G.t).pos) < 2,
           V.dist(G.ship.pos, ops.pos).toFixed(2) + ' km');
+
+    /* IN THE BAY, not beside it, and this check is the one the old code
+     * would have failed. "At the port" above was satisfied by the ship
+     * sitting anywhere within two kilometres, because docking used to
+     * capture wherever the approach happened to end and freeze it — so a
+     * hull hung in open space off the station's flank while the market and
+     * the comms behaved as though it were on a deck. Astra, looking at
+     * exactly that: "why is the ship floating in empty space and not parked
+     * in the docking bay?"
+     *
+     * AGAINST THE BERTH ITSELF, not against a radius. The first version of
+     * this asked whether the hull was within a bay-sized ball of the
+     * station centre, and it passed with the fix reverted — the approach is
+     * posed 0.4 km out and the shed reaches further than that, so a loose
+     * bound could not tell the two states apart. The exact question is the
+     * useful one: is the ship where the berth is? */
+    check('the dock assigned a berth rather than freezing the approach',
+          !!(G.ship.dockOffset && G.ship.dockOffset.station),
+          JSON.stringify(G.ship.dockOffset));
+
+    /* A berth is a berth on both kinds of port. berthState was written
+     * against groundBasis and therefore answered null for anything in
+     * orbit, which is the single line that kept the whole berth mechanism
+     * off stations — so assert it answers at all. */
+    var oBerthed = Sim.berthState(orbPort, G.sys, G.t,
+                                  (G.ship.dockOffset || {}).berth);
+    check('berthState answers for an orbital port too', !!oBerthed);
+    check('and the hull is standing in it rather than beside the station',
+          !!oBerthed && V.dist(G.ship.pos, oBerthed.pos) < 1e-6,
+          oBerthed ? V.dist(G.ship.pos, oBerthed.pos).toFixed(6) + ' km off its berth'
+                   : 'no berth');
+
+    /* And it keeps answering as the station moves and turns: a docked hull
+     * is re-placed from `t` every frame, so if the frame it is placed in
+     * drifted away from the frame the station is drawn in, the ship would
+     * slide out of its own bay over time rather than all at once. */
+    if (oBerthed) {
+      var slidePos = V.clone(G.ship.pos);
+      frames(120);
+      var oLater = Sim.berthState(orbPort, G.sys, G.t,
+                                  (G.ship.dockOffset || {}).berth);
+      check('and it is still standing in it two seconds later',
+            !!oLater && V.dist(G.ship.pos, oLater.pos) < 1e-6,
+            oLater ? V.dist(G.ship.pos, oLater.pos).toFixed(6) + ' km off' : 'no berth');
+      check('and it moved with the station rather than staying put in space',
+            V.dist(G.ship.pos, slidePos) > 0,
+            'moved ' + V.dist(G.ship.pos, slidePos).toFixed(4) + ' km');
+    }
   }
 
   check('the harness can arrive somewhere without starting a career',

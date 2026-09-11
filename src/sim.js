@@ -129,6 +129,75 @@
     return { up: up, east: east, north: V.cross(east, up), entrance: ent };
   }
 
+  /* ---- the same thing for something in orbit -----------------------------
+   * groundBasis stands on a planet. An orbital station has no ground, so its
+   * local frame is built from its own orbit: the model's +z along the orbit
+   * normal, and its x/y spinning in the orbital plane.
+   *
+   * SAME SHAPE AS groundBasis ON PURPOSE — `up` is the model's +z, `east`
+   * its +x, `north` its +y — because berthState is written against that
+   * shape and a berth is a berth whether the shed is bolted to a rock or
+   * flying round one. That is the whole of what was missing: the berth
+   * arithmetic was already general, and only the frame was surface-only.
+   *
+   * IT MUST MATCH WHAT IS DRAWN, or ships park where the station is not.
+   * The numbers below are main.js's `stationFrame`, moved here so there is
+   * one derivation rather than two that have to be kept in agreement — the
+   * rule the file already states about portModelFor, applied to the other
+   * thing a port has to agree with itself about.
+   *
+   * THE SPIN, and which half of the model it belongs to. A model that
+   * declares a `spin` bucket is drawn as a still shell with a turning ring
+   * on top, and the bays are part of the SHELL: you dock to the hub, which
+   * is precisely why the hub does not turn. A model with no spin bucket
+   * turns as one piece and its bays turn with it. So `still` is not a
+   * preference, it is read off the model, and berths follow the geometry
+   * they are cut into. */
+  function stationSpins(port) {
+    var R = global.Render;
+    if (!R || !R.libPort || !R.portModelFor || !port) return false;
+    /* Cached on the port. This is asked twice per station per frame by the
+     * renderer and again by every berth lookup, and the answer is a property
+     * of which model the port wears — which does not change while the game
+     * is running. Same treatment sys._ships and sys._loot get. */
+    if (port._spins === undefined) {
+      var got = R.libPort(R.portModelFor(port));
+      port._spins = !!(got && got.spin);
+    }
+    return port._spins;
+  }
+
+  function stationBasis(port, sys, t, still) {
+    var host = port && port.parentBody;
+    if (!host) return null;
+    var ss = bodyState(port, sys, t);
+    var hs = bodyState(host, sys, t);
+    var up = V.norm(V.sub(ss.pos, hs.pos));
+    if (V.len(up) < 1e-9) return null;
+    var prograde = V.norm(V.sub(ss.vel, hs.vel));
+    var normal = V.cross(up, prograde);
+    if (V.len(normal) < 1e-9) return null;
+    normal = V.norm(normal);
+    /* One turn every couple of minutes, slower for bigger rings — as it
+     * must be, or the rim runs at an absurd speed. */
+    var rate = 0.06 / Math.max(0.4, port.radius || 1);
+    var frozen = (still === undefined) ? stationSpins(port) : !!still;
+    var ang = frozen ? 0 : t * rate;
+    return {
+      up: normal,
+      east: V.rotateAroundAxis(up, normal, ang),
+      north: V.rotateAroundAxis(prograde, normal, ang),
+      entrance: { pos: V.clone(ss.pos), vel: V.clone(ss.vel) }
+    };
+  }
+
+  /* Either kind of port, one call. Everything that wants "where is this
+   * port's local frame" should come through here rather than choosing. */
+  function portBasis(port, sys, t) {
+    if (!port) return null;
+    return port.surface ? groundBasis(port, sys, t) : stationBasis(port, sys, t);
+  }
+
   /* Which berth a ship gets. Stable per port and per hull size, so you are
    * put back in the same bay when you reload — a starport that reshuffles
    * its parking every time you look away is a starport you cannot learn.
@@ -149,7 +218,14 @@
    * parked in it faces. */
   function berthState(port, sys, t, i) {
     var Gen = global.Gen;
-    var basis = groundBasis(port, sys, t);
+    /* portBasis, not groundBasis. This function was always general — the
+     * berth offsets come out of bayGeometry, which reads a modelled bay
+     * whether that model is a starport or a station — and the only thing
+     * keeping it on the ground was this line. An orbital dock used to leave
+     * the hull frozen wherever it happened to be when clearance came
+     * through, which from the seat is a ship parked in open space a few
+     * hundred metres off a station it is supposedly inside. */
+    var basis = portBasis(port, sys, t);
     if (!basis || !Gen || !Gen.berthOffset) return null;
     var g = Gen.bayGeometry(port);
     var off = Gen.berthOffset(port, i || 0);
@@ -1870,14 +1946,40 @@
       return;
     }
 
+    /* IN A BERTH, not wherever the approach happened to end.
+     *
+     * This used to capture `ship.pos - station.pos` in the orbital frame and
+     * freeze it, which is a perfectly good way to hold a ship still relative
+     * to a moving station and a terrible description of being docked: the
+     * hull stayed hanging in open space a few hundred metres off the hull it
+     * was supposedly inside, while the market, the comms and the refuelling
+     * all behaved as though it were parked on a deck. Astra, looking at it:
+     * "so we're docked right now yeah? Why is the ship floating in empty
+     * space and not parked in the docking bay?"
+     *
+     * The berth arithmetic needed nothing new — see berthState — so this is
+     * now the same two lines the surface branch above runs, and a station
+     * and a starport park a ship the same way for the same reasons.
+     *
+     * The captured offset is KEPT as the fallback. A station with no
+     * modelled bay has no berth to put anything in, and holding position
+     * off its side is the right answer there; it is only wrong when there
+     * is a deck to stand on. */
+    ship.docked = target.id;
+    var oBerth = assignBerth(ship, target);
+    var obs = berthState(target, sys, t, oBerth);
     var basis = orbitalBasis(ts.pos, ts.vel);
     var rel = V.sub(ship.pos, ts.pos);
-    ship.docked = target.id;
-    ship.dockOffset = {
-      radial: V.dot(rel, basis.radial),
-      prograde: V.dot(rel, basis.prograde),
-      normal: V.dot(rel, basis.normal)
-    };
+    var berthFacing = null;
+    if (obs) {
+      ship.dockOffset = { station: true, berth: oBerth };
+    } else {
+      ship.dockOffset = {
+        radial: V.dot(rel, basis.radial),
+        prograde: V.dot(rel, basis.prograde),
+        normal: V.dot(rel, basis.normal)
+      };
+    }
     ship.thrust = V.zero();
     ship.angRate = { pitch: 0, yaw: 0, roll: 0 };
     /* Reaction mass is topped up on the clamps, free. It is a bulk
@@ -1887,6 +1989,39 @@
     ship.thrusterFuel = ship.thrusterCap;
     ship.fuelOut = false;
     refreshShip(ship);
+
+    /* BERTHED: move the hull into the bay FIRST, then work out which way it
+     * is pointing from where it now is. `rel` is recomputed for the same
+     * reason — it was measured from the approach position, and the ship is
+     * no longer there.
+     *
+     * THE POSITION COMES FROM THE BERTH; THE ATTITUDE DOES NOT, and that
+     * split is deliberate. The obvious thing is to take the pose wholesale
+     * from the bay — nose along the berth's facing, up off the bay floor —
+     * which is what a pad does and what this first tried. Three checks said
+     * no, at ninety degrees each: a station's model +z is its ORBIT NORMAL,
+     * so the bay floor is edge-on to the local vertical, and a ship stood on
+     * it reads as lying on its side on every instrument in the cockpit.
+     *
+     * Those checks exist because of a real complaint — quit docked, come
+     * back, and the attitude ladder reads ninety degrees of bank before you
+     * have touched anything — and being level is the settled answer to it.
+     * So level wins, and the nose gets the berth's facing flattened into
+     * the horizontal plane: as much of the bay's own orientation as being
+     * level leaves room for.
+     *
+     * WORTH A LOOK IN THE GAME. If the modelled bays turn out to have their
+     * floors across the orbit normal rather than along it, the honest fix is
+     * in the station models or in what the attitude indicator reads while
+     * docked — not here. This is the conservative version: it puts the ship
+     * in the bay, which is what was actually wrong, and changes nothing
+     * about which way up a docked ship has read for the whole project. */
+    if (obs) {
+      updateDockedShip(ship, sys, t);
+      rel = V.sub(ship.pos, ts.pos);
+      berthFacing = V.scale(obs.basis.north, obs.off.facing || 1);
+    }
+
     // Face the station on capture — cosmetic, but arriving nose-first and
     // ending up staring out into space would look wrong.
     /* Face the station on capture. The guard matters more than it looks:
@@ -1918,7 +2053,11 @@
      *
      * orbitalBasisAt already answers this properly, against whatever body
      * actually dominates where the station is. */
-    var facing = V.scale(rel, -1);
+    /* In a berth, the direction that means something is the berth's own —
+     * out across the open floor of the bay. Off the side of a station with
+     * no bay, it is back toward the thing holding you. Either way it is
+     * flattened against the local vertical below, so the ship is level. */
+    var facing = berthFacing || V.scale(rel, -1);
     var upRef = orbitalBasisAt(ts.pos, ts.vel, sys, t).radial;
     var flat = V.sub(facing, V.scale(upRef, V.dot(facing, upRef)));
     ship.fwd = V.len(flat) > 1e-9 ? V.norm(flat) : V.clone(basis.prograde);
@@ -1983,8 +2122,29 @@
       return target;
     }
 
-    var basis = orbitalBasis(ts.pos, ts.vel);
     var off = ship.dockOffset;
+
+    /* Berthed inside the station, which is now the ordinary case. Recomputed
+     * from `t` every frame exactly like the surface branch above, so a hull
+     * parked in a bay that turns goes round with it rather than being left
+     * behind by its own station. */
+    if (off && off.station) {
+      var sbs = berthState(target, sys, t, off.berth);
+      if (sbs) {
+        ship.pos = sbs.pos;
+        ship.vel = sbs.vel;
+        return target;
+      }
+      /* The model went away under us — a library swapped in the hull viewer,
+       * or a save made against a build that had one. Sit on the station's
+       * centre-line rather than at the origin of the universe, and let the
+       * next dock re-derive a real offset. */
+      ship.pos = V.clone(ts.pos);
+      ship.vel = V.clone(ts.vel);
+      return target;
+    }
+
+    var basis = orbitalBasis(ts.pos, ts.vel);
     var offset = V.add(V.add(V.scale(basis.radial, off.radial), V.scale(basis.prograde, off.prograde)),
                        V.scale(basis.normal, off.normal));
     ship.pos = V.add(ts.pos, offset);
@@ -3101,6 +3261,8 @@
     surfaceOffset: surfaceOffset,
     portEntrance: portEntrance,
     groundBasis: groundBasis,
+    stationBasis: stationBasis,
+    portBasis: portBasis,
     insideShaft: insideShaft,
     berthState: berthState,
     assignBerth: assignBerth,
