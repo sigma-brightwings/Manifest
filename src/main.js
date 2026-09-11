@@ -288,7 +288,7 @@
      * sitting on. */
     if (G.startedDocked) {
       say('Docked at ' + G.startedDocked.name +
-          '  —  M trade, F5 yard, F4 for launch clearance, then U', 12);
+          '  —  F4 to trade or ask to launch, F5 for the yard, then U', 12);
       G.startedDocked = null;
     }
   }
@@ -1383,21 +1383,30 @@
           else G.warpIndex = Math.min(WARPS.length - 1, G.warpIndex + 1);
           break;
         case 'p': G.paused = !G.paused; break;
-        case 'o': G.showOrbits = !G.showOrbits; break;
+        /* V stays. It is the one display toggle that is genuinely a FLYING
+         * decision — you flick the prediction on to see where a burn puts
+         * you and off again to see the sky — so it earns its key in a way
+         * the others below did not. */
         case 'v': G.showPrediction = !G.showPrediction; break;
-        /* G is two things, split by the shift key: the grid unshifted, the
-         * landing gear shifted. They share a case because they have to —
-         * a second `case 'g'` further down is unreachable, which is exactly
-         * how the gear binding failed silently the first time.
+        /* THE DISPLAY TOGGLES ARE GONE FROM THE KEYBOARD. Orbit lines, the
+         * ecliptic grid, traffic, cockpit chrome and render scale were five
+         * letters spent on five checkboxes that were ALREADY in Options, key
+         * hint and all — so the keys were duplicates of settings, not
+         * shortcuts to anything you could not otherwise reach.
          *
-         * Shift for the gear, deliberately: unshifted G is one slip from the
-         * thrust keys, and dropping the gear at speed in an atmosphere is
-         * not a mistake to make with a little finger. F12 was the first
-         * choice and cannot be used at all — Chrome keeps it for the
-         * developer tools and the page never sees the key. */
+         * The argument for cutting them is not tidiness. Every letter one of
+         * them held is a letter some action you actually perform in flight
+         * could not have, and the file has said "every letter was spoken
+         * for" at three separate bindings while five of them were sitting on
+         * preferences you set once and never touch again.
+         *
+         * Gear keeps its key and keeps the shift, for the reason it always
+         * had: unshifted G is one slip from the thrust keys, and dropping
+         * the gear at speed in an atmosphere is not a mistake to make with a
+         * little finger. It is no longer SHARING the key with the grid,
+         * which means the shift is now the only thing on it. */
         case 'g':
           if (e.shiftKey) toggleGear();
-          else G.showGrid = !G.showGrid;
           break;
         /* H is the help overlay. SHIFT+H is having a word with whoever is
          * about to transmit — a separate action on a shared key because
@@ -1445,11 +1454,20 @@
                   : 'ORBITAL frame — W prograde, A/D radial, R/F normal', 5);
           }
           break;
-        case 'n':
-          var freshSeed = prompt('Seed for the new system:', G.seed) || G.seed;
-          if (global.Save) global.Save.clear(freshSeed);  // N means NEW, not "reload"
-          newGame(freshSeed);
-          break;
+        /* N IS GONE, and this one was not about saving a letter.
+         *
+         * It was a single unmodified keystroke — sitting between B and M,
+         * both of which you press in a fight — that opened a browser
+         * `prompt()`, cleared the save and started a new galaxy. No confirm,
+         * no undo, and the only career-ending control in the game reachable
+         * by one finger landing slightly wrong.
+         *
+         * The title screen already does it properly: Esc, Quit to main menu
+         * (which commits the autosave on the way out), New career, and a
+         * real seed field instead of a browser dialog. Two deliberate steps
+         * is the correct amount of friction for ending a career, and that is
+         * also the reason it has NOT been added to the pause menu — a row
+         * that discards your save does not belong one line under Resume. */
         case 'x': killRotation(); break;
         /* B was respawn from the start; missiles arrived later and wanted a
          * key. It stays both, split by context: a crashed ship has no
@@ -1500,26 +1518,24 @@
           clearNavTarget();
           break;
         case 'home': recentreLook(); break;
-        case 'm': openMarket(); break;
-        case 'k':
-          /* A career saved before this key existed comes back without the
-           * field, and NaN % 3 is a state you cannot cycle out of. */
-          G.cockpitChrome = ((G.cockpitChrome || 0) + 1) % 3;
-          G.showCockpitFrame = G.cockpitChrome !== 2;
-          say(G.cockpitChrome === 0 ? 'Instrument band' :
-              G.cockpitChrome === 1 ? 'Band stowed — instruments on the console' :
-                                      'Canopy only', 2.5);
-          break;
-        case 'y': G.showTraffic = !G.showTraffic;
-                  say(G.showTraffic ? 'Traffic shown' : 'Traffic hidden', 2); break;
-        case '`': case '~': cycleRenderScale(); break;
-        /* J is the chart; Shift+J lays a course in from whatever wake the
-         * scanner can currently read. A shifted branch inside the one case,
-         * NOT a `case 'J'` — this switch matches lowercased keys, so an
-         * upper-case case label is silently unreachable. */
+        /* M, K, Y and ` are gone. The market moved to the docked port's own
+         * comms channel — see the station options in screens.js, where the
+         * row reads "Request market data" at range and becomes "Market" on
+         * the deck. The other three were Options rows wearing keys.
+         *
+         * Unshifted J is gone too, and it was the plainest case of all: it
+         * opened the star map, which is F6. One key, one duplicate.
+         *
+         * SHIFT+J STAYS, and deliberately. Laying a course in off a wake is
+         * not a chart action that happens to need the scanner — it is a
+         * SCANNER action that happens to produce a course, and the moment
+         * you want it is the moment the read is good, which is in flight
+         * near where somebody dropped out. Sending the player to a screen to
+         * use a reading that decays while they are looking at the screen
+         * would be the wrong kind of tidy. The key now carries only the
+         * shifted meaning, the same shape as G. */
         case 'j':
           if (e.shiftKey) followWake();
-          else openStarMap();
           break;
         /* Z is cruise. SHIFT+Z arms or shuts down the military drive —
          * next to it because they are the same question asked of the two
@@ -1530,35 +1546,32 @@
           toggleCruise();
           break;
 
-        /* Manoeuvre nodes. Deliberately a cluster on the right of the
-         * keyboard, well away from the thrust and attitude keys — planning
-         * and flying are different activities and a mis-hit should not turn
-         * one into the other. (This is the mistake auto-dock made once, by
-         * living on A, which was also radial-in thrust.) */
-        case 'i':
-          if (e.shiftKey) clearNode();
-          else if (!G.node) placeNode();
-          else cycleNodeAxis(1);
-          break;
-        /* Zoom, unless there is a manoeuvre node up — then these are the
-         * node's delta-v nudge, which is what you want them to be while you
-         * are looking at a burn you are planning. Placing a node is I, so
-         * nothing is lost: only the node's own adjustment shares the keys,
-         * and only while a node exists. Both the shifted and unshifted forms
-         * are bound because the two differ by keyboard layout and nobody
-         * pressing "minus" cares which one the browser reports. */
-        case '-': case '_':
-          if (G.node) adjustNode(-1, e.shiftKey, e.ctrlKey);
-          else zoomBy(1.25, true);
-          break;
-        case '=': case '+':
-          if (G.node) adjustNode(+1, e.shiftKey, e.ctrlKey);
-          else zoomBy(1 / 1.25, true);
-          break;
-        case ';': case ':': snapNode('peri'); break;
-        case "'": case '"': snapNode('apo'); break;
-        case '\\': case '|': startNodeBurn(); break;
-        case 'backspace': jettisonWaste(); break;
+        /* THE MANOEUVRE NODE CLUSTER HAS MOVED TO ITS OWN SCREEN, Shift+F2,
+         * and lives in modeKey('node') now.
+         *
+         * The old comment here argued they were "deliberately a cluster on
+         * the right of the keyboard, well away from the thrust and attitude
+         * keys — planning and flying are different activities". That
+         * reasoning was right and it is exactly why they left: the planner
+         * has a whole screen of its own, and putting the controls for a
+         * different activity on the flying keyboard is the same mistake
+         * that comment was warning about, one step further out.
+         *
+         * Six keys recovered — I, ;, ', \\ outright, and the node branch off
+         * - and =. It does mean you open the planner to plan, which is a
+         * real change: you can no longer drop a node without leaving the
+         * cockpit. That is the trade that was made knowingly.
+         *
+         * ZOOM KEEPS - AND =. They were only ever the node's nudge WHILE a
+         * node existed; with the node branch gone they are simply zoom, in
+         * both the shifted and unshifted spellings because the two differ by
+         * keyboard layout and nobody pressing "minus" cares which one the
+         * browser reports. */
+        case '-': case '_': zoomBy(1.25, true); break;
+        case '=': case '+': zoomBy(1 / 1.25, true); break;
+        /* Backspace is gone: F5 and F10 both carry EJECT buttons on every
+         * cargo line, and waste is the one thing you jettison deliberately
+         * rather than in a hurry. */
         case 'u':
           if (G.ship.docked) {
             /* A surface port is a hangar behind closed doors now, so
@@ -1905,10 +1918,16 @@
     { key: 'F10', label: 'MANIFEST', id: 'manifest',   icon: 'manifest' },
     /* Off the bar and off the function keys, and it lost that slot on its
      * merits: the burn controls — I to place, ± to adjust, \ to execute —
-     * are global keys that already work from the cockpit, so this screen was
-     * never the planner, only its readout. The orbit data it printed reads
-     * off the MFDs now. Shift+F2 keeps it next door to the orbit map, which
-     * is what you are looking at when you plan a burn anyway. */
+     * were global keys that worked from the cockpit, so this screen was only
+     * their readout. The orbit data it printed reads off the MFDs now, and
+     * Shift+F2 keeps it next door to the orbit map, which is what you are
+     * looking at when you plan a burn anyway.
+     *
+     * THAT ARGUMENT HAS SINCE BEEN OVERTAKEN, and the note is left standing
+     * because the order matters: the keys followed the screen here later, in
+     * the pass that cut fifteen bindings off the flight controls. So this is
+     * now the planner AND its readout, and the sentence above describes why
+     * it was safe to move the screen first, not what is true today. */
     { key: 'Shift+F2', label: 'NODES', id: 'node', icon: 'node', hidden: true }
   ];
   /* The ten that get a slot on the bar and a function key. Anything past
@@ -2143,6 +2162,34 @@
         if (key === 'enter') { setMouseAim(!G.mouseAim); return true; }
         if (key === '-' || key === '_') { G.aimSens = Math.max(0.25, G.aimSens - 0.25); return true; }
         if (key === '=' || key === '+') { G.aimSens = Math.min(3, G.aimSens + 0.25); return true; }
+        return false;
+
+      /* The manoeuvre planner's own keyboard, which used to be six bindings
+       * on the flight controls. Same keys, same meanings, same cluster on
+       * the right of the board — they just only answer on the screen that
+       * draws what they are doing.
+       *
+       * `-` and `=` mean the node's delta-v here and zoom out in flight,
+       * which is not a collision: on this screen there is a burn in front of
+       * you and nothing else those keys could sensibly be for. */
+      case 'node':
+        if (key === 'i') {
+          if (e.shiftKey) clearNode();
+          else if (!G.node) placeNode();
+          else cycleNodeAxis(1);
+          return true;
+        }
+        if (key === '-' || key === '_') {
+          if (G.node) { adjustNode(-1, e.shiftKey, e.ctrlKey); return true; }
+          return false;
+        }
+        if (key === '=' || key === '+') {
+          if (G.node) { adjustNode(+1, e.shiftKey, e.ctrlKey); return true; }
+          return false;
+        }
+        if (key === ';' || key === ':') { snapNode('peri'); return true; }
+        if (key === "'" || key === '"') { snapNode('apo'); return true; }
+        if (key === '\\' || key === '|') { startNodeBurn(); return true; }
         return false;
     }
     return false;
@@ -3033,6 +3080,20 @@
     var step = e.shiftKey ? 10 : 1;
     var key = e.key.toLowerCase();
 
+    /* Escape, or M. The way IN is the port's own comms channel now, and M
+     * deliberately does not open this any more — but it still shuts it.
+     *
+     * That asymmetry was briefly removed on the argument that a key which
+     * can close a console it cannot open teaches a binding that half
+     * exists. The argument did not survive contact: the first question
+     * asked of the change was "so how do I close the market now?", from
+     * someone who had just watched it being built. Years of muscle memory
+     * reach for M, and a console that will not answer the key your hand
+     * already pressed is a worse failure than an untidy binding.
+     *
+     * So M stays as a way OUT. It is not a half-binding, it is a courtesy
+     * to the hand — and the one-way version is honest about which direction
+     * the design moved. */
     if (key === 'escape' || key === 'm') { G.market = null; return; }
     if (key === 'arrowdown') { m.sel = Math.min(rows.length - 1, m.sel + 1); return; }
     if (key === 'arrowup') { m.sel = Math.max(0, m.sel - 1); return; }
@@ -7296,7 +7357,12 @@
    * not obviously impossible, but one that reads "11.4 t of 12 t" is, and
    * the ship carries only so much reaction mass. */
   function drawNodePage(ctx) {
-    mfdShell(ctx, 'MANOEUVRE', 'I place / cycle    − =  adjust    ; peri  \' apo    \\ fly');
+    /* The hint names the SCREEN, not the keys, because this page can also be
+     * pinned to a console panel in the cockpit — and the node keys only
+     * answer on the planner now. A readout on the dashboard telling you to
+     * press I, while I does nothing where you are sitting, is the greyed-out
+     * button problem with the label still lit. */
+    mfdShell(ctx, 'MANOEUVRE', 'Shift+F2 to plan');
     var y = MFD_BODY_TOP + 14;
 
     if (!G.node) {
@@ -7541,8 +7607,8 @@
 
   /* --- SHIP: the two tanks, the hold, and the money ---------------------- */
   function drawShipPage(ctx) {
-    mfdShell(ctx, 'SHIP', G.ship.docked ? 'M trade    F refuel    U undock'
-                                        : 'T dock    J chart    Z cruise');
+    mfdShell(ctx, 'SHIP', G.ship.docked ? 'F4 trade    F refuel    U undock'
+                                        : 'T dock    F6 chart    Z cruise');
     var s = G.ship;
     var cargo = Sim.cargoMass(s);
     var y = MFD_BODY_TOP + 14;
@@ -8786,7 +8852,7 @@
       ctx.save();
       ctx.font = '10px ui-monospace, monospace';
       ctx.fillStyle = 'rgba(140,165,200,0.6)';
-      ctx.fillText('hold empty  —  dock at a port and press M to trade', px + 12, py + 90);
+      ctx.fillText('hold empty  —  dock at a port and trade on its channel, F4', px + 12, py + 90);
       ctx.restore();
       return;
     }
@@ -8911,7 +8977,7 @@
     ctx.font = '10px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(160,185,220,0.7)';
     ctx.fillText('↑↓ select   ·   → buy 1t   ·   ← sell 1t   ·   hold Shift for 10t   ·   ' +
-                 'Home buy max   ·   End sell all   ·   F fill tank   ·   U undock   ·   M close',
+                 'Home buy max   ·   End sell all   ·   F fill tank   ·   U undock   ·   Esc or M close',
                  px + 20, py + ph - 34);
     if (G.ledgerLog.length) {
       ctx.fillStyle = '#7fd6c0';
@@ -9350,20 +9416,42 @@
         get: function () { return !!G.soundMuted; },
         set: function (v) { G.soundMuted = !!v; applyAudioPrefs(); } },
 
+      /* The key hints are gone from four of these because the keys are gone.
+       * A hint naming a binding that no longer exists is worse than no hint:
+       * it sends the player to press something and quietly does nothing.
+       * Only V still has one, because V still has a key. */
       { kind: 'head', label: 'DISPLAY' },
-      { kind: 'toggle', label: 'Orbit lines', key: 'O',
+      { kind: 'toggle', label: 'Orbit lines', key: '',
         get: function () { return G.showOrbits; },
         set: function (v) { G.showOrbits = v; } },
       { kind: 'toggle', label: 'Trajectory prediction', key: 'V',
         get: function () { return G.showPrediction; },
         set: function (v) { G.showPrediction = v; } },
-      { kind: 'toggle', label: 'Ecliptic grid', key: 'G',
+      { kind: 'toggle', label: 'Ecliptic grid', key: '',
         get: function () { return G.showGrid; },
         set: function (v) { G.showGrid = v; } },
-      { kind: 'toggle', label: 'Traffic', key: 'Y',
+      { kind: 'toggle', label: 'Traffic', key: '',
         get: function () { return G.showTraffic; },
         set: function (v) { G.showTraffic = v; } },
-      { kind: 'choice', label: 'Cockpit chrome', key: 'K',
+      /* Render scale came here off the backtick, which was the least
+       * discoverable binding in the game — an unlabelled key next to Escape
+       * that quietly changed how sharp everything looked.
+       *
+       * A CHOICE, not an action: every other row in this list answers the
+       * arrow keys, and a row that only moves on Enter is a row the cursor
+       * walks over without appearing to do anything. The options suite
+       * checks exactly that — it drives Right down every row and asserts a
+       * setting changed — and it caught this the first time as row 8. */
+      { kind: 'choice', label: 'Render scale', key: '',
+        options: RENDER_SCALES.map(function (s) {
+          return Math.round(s * 100) + '%' + (s === 1 ? ' — native' : '');
+        }),
+        get: function () {
+          var i = RENDER_SCALES.indexOf(G.renderScale);
+          return i < 0 ? RENDER_SCALES.indexOf(1) : i;
+        },
+        set: function (i) { setRenderScale(RENDER_SCALES[i]); } },
+      { kind: 'choice', label: 'Cockpit chrome', key: '',
         options: ['Instrument band', 'Band stowed', 'Canopy only'],
         get: function () { return G.cockpitChrome || 0; },
         set: function (i) {
@@ -9963,20 +10051,21 @@
       ['P', 'pause'],
       ['', ''],
       ['VIEW', ''],
-      ['O', 'orbit lines'],
       ['V', 'predicted trajectory'],
-      ['G', 'ecliptic grid'],
-      ['Y', 'other ships'],
       ['Shift+T', 'match orbit with the lock (kill relative velocity)'],
       ['Shift+L', 'follow the lock and hold station off it'],
-      ['K', 'band / console instruments / canopy only'],
-      ['`', 'render scale 100 / 75 / 50% — draws the world smaller for frames,'],
-      ['', 'instruments and labels stay sharp either way'],
       ['F11', 'full screen (in the desktop build)'],
       ['click a panel', 'change what that screen shows'],
-      ['N', 'new galaxy from a seed you choose'],
       ['B', 'respawn above your start world after a crash'],
-      ['H', 'close this']
+      ['H', 'close this'],
+      ['', ''],
+      ['NOT ON THE KEYBOARD ANY MORE', ''],
+      ['', 'orbit lines, ecliptic grid, traffic, cockpit chrome and render'],
+      ['', 'scale are all in Options (Esc) — they were keys duplicating'],
+      ['', 'settings that were already there'],
+      ['', 'the market is on F4, the channel for the port you are docked at'],
+      ['', 'the star map is F6; a new career is Esc, quit to menu'],
+      ['', 'manoeuvre planning — place, nudge, snap, burn — is Shift+F2']
     ];
     /* Two columns once the list outgrows the window, split at a section
      * break so a heading never ends up orphaned at the foot of a column.
@@ -10046,14 +10135,18 @@
     return 1;
   }
 
-  function cycleRenderScale() {
-    var i = RENDER_SCALES.indexOf(G.renderScale);
-    G.renderScale = RENDER_SCALES[(i < 0 ? 0 : i + 1) % RENDER_SCALES.length];
-    try { localStorage.setItem(SCALE_KEY, String(G.renderScale)); } catch (e) {}
+  /* Set it outright. Options picks a value from the list rather than
+   * stepping through it, which is what an arrow key on a settings row
+   * should do — the old cycle-on-a-keypress shape came from the binding it
+   * used to live on, not from anything the setting wanted. */
+  function setRenderScale(v) {
+    if (RENDER_SCALES.indexOf(v) < 0) return;
+    G.renderScale = v;
+    try { localStorage.setItem(SCALE_KEY, String(v)); } catch (e) {}
     resize();
-    var pct = Math.round(G.renderScale * 100);
+    var pct = Math.round(v * 100);
     say('Render scale ' + pct + '%' +
-        (G.renderScale === 1 ? ' — native' : ' — world upscaled, instruments sharp'), 3);
+        (v === 1 ? ' — native' : ' — world upscaled, instruments sharp'), 3);
   }
 
   function resize() {
@@ -10090,6 +10183,9 @@
       say: say, selectPanel: selectPanel, hot: hot,
       navList: navList, navTargetState: navTargetState, navMark: navMark,
       jettison: jettison, heldCargo: heldCargo,
+      /* The trade console, handed over because the way IN to it is now the
+       * docked port's own comms channel rather than a letter key. */
+      openMarket: openMarket,
       plottedCourse: plottedCourse, jumpCandidates: jumpCandidates,
       /* The wake read, handed over so the SCANNER page can quote the same
        * thing the world layer is captioning. One source, so the panel and
@@ -10124,14 +10220,15 @@
 
     /* If this seed has a career saved, pick it up where it left off. The
      * universe regenerated identically from the seed a moment ago; the save
-     * carries only what the player did to it. N starts over. */
+     * carries only what the player did to it. Starting over is Esc, quit to
+     * the main menu, New career — no longer a letter key. */
     if (global.Save) {
       var saved = global.Save.load(seed);
       if (saved) {
         try {
           global.Save.restore(G, saved, { enterSystem: enterSystem });
           say('Career restored — ' + fmtCredits(G.ship.credits) + ', ' +
-              fmtEpoch(G.t) + '. N starts a fresh one.', 6);
+              fmtEpoch(G.t) + '.', 6);
         } catch (err) {
           console.error('save restore failed', err);
           say('Save was unreadable — starting fresh', 5);

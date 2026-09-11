@@ -49,14 +49,15 @@ hull (`Enter` still works too). Drag to look around inside; `Home` re-centres.
 The band along the bottom is only what you *touch* (burn rose, throttle, tanks),
 the scope, and what the ship most needs to tell you.
 
-**2a. `K` — stow the band and fly on the console instead.** The dashboard has
+**2a. Cockpit chrome (Options, `Esc`) — stow the band and fly on the console
+instead.** The dashboard has
 five screens on it now: three on an arc in front of you at ten, twelve and two,
 angled toward the seat, and two more on the rear bulkhead — because you can now
 turn a full 180° and a cockpit that rewards looking behind you with a blank wall
 teaches you not to look. **Click any panel to change what it shows** (scope,
 **aft**, orbit, target, nav, ship, cargo, autopilot, node, system). The band and
 the console want the same pixels at the bottom of the screen and no window size
-gives both, so `K` chooses: band, console instruments, or bare canopy.
+gives both, so the setting chooses: band, console instruments, or bare canopy.
 
 **AFT is the one to try first.** It is a camera looking backwards — stars,
 worlds, and every contact behind you boxed with its range, hostiles in red, with
@@ -104,7 +105,10 @@ relative velocity and stops — the manoeuvre that turns a flyby into a
 rendezvous), and **`Shift+L` follows** it and holds station off it until you
 cancel. Both work on ships as well as worlds.
 
-**7. `M` while docked — trade.** Arrow keys buy and sell, `F` refuels.
+**7. `F4` while docked — trade.** Comms opens on the port you are standing in,
+and its channel carries **Market**. At a distance the same row reads *Request
+market data* and just tells you what the place deals in — you have to be on the
+deck to open the exchange. Arrow keys buy and sell, `F` refuels.
 Look for **Radioactive waste**: industrial worlds *pay you* to take it. Roughly
 9,000 credits a run against your 3,200 starting balance, if you can find a
 reprocessing plant to dump it at.
@@ -266,7 +270,8 @@ folder and run `node tools/glb2hulls.js <folder>`.
 forever (yours is on F5; theirs are on the target page and the comms channel).
 
 **The career persists.** Auto-saved every dock and on closing the tab, per
-seed. `N` deliberately starts over. Sound is synthesised live — thrust rumble,
+seed. Starting over is `Esc` → *Quit to main menu* → *New career*, which takes
+two deliberate steps because it discards one. Sound is synthesised live — thrust rumble,
 lasers, the dock clunk — and unmutes on your first keypress.
 
 ---

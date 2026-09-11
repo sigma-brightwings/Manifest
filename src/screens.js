@@ -24,7 +24,7 @@
   /* Wired by main.js at boot. Unpacked to bare names so the moved code is
    * byte-for-byte the code that was tested in its old home. */
   var G, say, selectPanel, hot, navList, navTargetState, navMark, jettison,
-      heldCargo, plottedCourse, jumpCandidates, doJump, complyWithDemand,
+      heldCargo, openMarket, plottedCourse, jumpCandidates, doJump, complyWithDemand,
       hailAuthority, payOutstanding, hailSelected,
       scopeBody, rows, panel, bodyDotColor, setMouseAim,
       fmtDist, fmtSpeed, fmtTime, fmtEpoch, fmtCredits, fmtLy, clipText,
@@ -37,6 +37,7 @@
     say = api.say; selectPanel = api.selectPanel; hot = api.hot;
     navList = api.navList; navTargetState = api.navTargetState;
     navMark = api.navMark; jettison = api.jettison; heldCargo = api.heldCargo;
+    openMarket = api.openMarket;
     plottedCourse = api.plottedCourse; jumpCandidates = api.jumpCandidates;
     doJump = api.doJump; complyWithDemand = api.complyWithDemand;
     hailAuthority = api.hailAuthority; payOutstanding = api.payOutstanding;
@@ -761,9 +762,26 @@
             : 'doors are shut',
         fn: function () { hailSelected(c); }
       });
+      /* ONE ROW, TWO JOBS, because it is the same question asked from two
+       * distances and the answer is a different KIND of thing each time.
+       *
+       * At range you are transmitting — asking a port you can see what it
+       * deals in — and all that comes back is what it deals in. Standing on
+       * its deck you are not asking anybody anything, you are walking into
+       * the exchange, so the row stops being a request and becomes the trade
+       * console.
+       *
+       * M used to be the only door in. That was a whole letter spent on a
+       * door that opens in exactly one place, and the channel for the port
+       * you are standing on is where that door belongs. */
       opts.push({
-        label: 'Request market data', enabled: !!c.obj.market,
+        label: docked ? 'Market' : 'Request market data',
+        enabled: !!c.obj.market,
+        note: !c.obj.market ? 'no registered market'
+            : docked ? 'trade, refuel, repair'
+            : fmtDist(c.range) + ' out',
         fn: function () {
+          if (docked) { openMarket(); return; }
           selectPanel(0);
           say(c.obj.name + ' trades as a ' + (c.obj.market ? c.obj.market.roleName : 'port'), 5);
         }
@@ -834,7 +852,7 @@
    * is a thing you do to freight, not to your own drive. */
   function drawShipScreen(ctx, w, bottom) {
     var top = modeFrame(ctx, w, bottom, 'SHIP STATUS & INVENTORY',
-                        G.ship.docked ? 'M trade   ·   ↑↓ select   ·   Del jettison'
+                        G.ship.docked ? 'F4 trade   ·   ↑↓ select   ·   Del jettison'
                                       : '↑↓ select   ·   Del jettison   ·   Shift+Del all');
     var pad = 14;
     var leftW = Math.min(430, w * 0.36);
@@ -958,7 +976,7 @@
       ctx.fillStyle = MFD_DIM;
       ctx.fillText('HOLD EMPTY', rx + 16, top + pad + 56);
       ctx.font = '11px ui-monospace, monospace';
-      ctx.fillText(s.cargoCap + ' tonnes available. Dock and press M to trade.',
+      ctx.fillText(s.cargoCap + ' tonnes available. Dock, then trade on F4.',
                    rx + 16, top + pad + 78);
       ctx.restore();
       if (port) drawYard(ctx, rx, top + pad + holdH + pad, rw,
@@ -2026,7 +2044,7 @@
     var s = G.ship;
     var port = s.docked ? G.sys.byId[s.docked] : null;
     var top = modeFrame(ctx, w, bottom, 'CARGO MANIFEST',
-                        port ? 'M trade   ·   F5 to jettison'
+                        port ? 'F4 trade   ·   F5 to jettison'
                              : 'best prices are in this system only');
     var pad = 14;
     var colH = bottom - top - pad * 2;

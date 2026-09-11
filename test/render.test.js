@@ -3341,6 +3341,14 @@ console.log('--- manoeuvre nodes ---');
   frames(2);
 
   var mark = drawn.texts.length;
+  /* THE PLANNER HAS ITS OWN SCREEN NOW, and its keyboard went with it. The
+   * six node keys used to answer in the cockpit; they answer on Shift+F2.
+   * This block presses exactly the same keys it always did — the change is
+   * that it has to be looking at the planner first, which is the whole
+   * point of the move and is what this line asserts. */
+  press('F2', { shiftKey: true });
+  check('Shift+F2 leaves the cockpit for the planner', G.panel !== 0,
+        'panel=' + G.panel);
   press('i');
   check('I places a node', !!G.node, 'no node');
   frames(3);
@@ -3375,7 +3383,12 @@ console.log('--- manoeuvre nodes ---');
   check('ignition leads the node by half the burn',
         Math.abs((G.node.t - G.nodePlan.ignition) - G.nodePlan.burn.duration / 2) < 1e-9);
 
-  G.panel = 9;
+  /* Reached by its real binding rather than by index. This line used to be
+   * `G.panel = 9`, which was the node page once and became the MANIFEST
+   * page when F10 was reassigned — so it had quietly been rendering the
+   * wrong screen and asserting only that it did not throw. An index is a
+   * thing that goes stale silently; a keystroke is not. */
+  press('F2', { shiftKey: true });
   frames(2);
   check('the NODE page renders the plan', errorsSince(mark).length === 0, errorsSince(mark)[0]);
 
@@ -3454,6 +3467,12 @@ console.log('--- manoeuvre nodes ---');
   var jumpFuelBefore = G.ship.fuel;
 
   mark = drawn.texts.length;
+  /* Back to the planner: the block above dropped to the cockpit to test the
+   * mouse handles, and the node keys answer on the planner now. Arming is
+   * the one that would bite hardest if it did not — you would be sitting on
+   * the screen that draws the burn, pressing the key that flies it, with
+   * nothing happening. */
+  press('F2', { shiftKey: true });
   press('\\');
   check('\\ arms the autopilot', !!G.nodeBurn && G.nodeBurn.phase === 'align');
 
@@ -3484,6 +3503,7 @@ console.log('--- manoeuvre nodes ---');
   G.ship = Sim.circularOrbit(planet, G.sys, G.t, 900);
   Sim.refreshShip(G.ship);
   frames(2);
+  press('F2', { shiftKey: true });      // the planner owns these keys now
   press('i');
   G.node.dv = { pro: 0.03, nor: 0, rad: 0 };
   G.node.t = G.t + 5;
@@ -3491,6 +3511,8 @@ console.log('--- manoeuvre nodes ---');
   frames(2);
   press('\\');
   check('armed again', !!G.nodeBurn);
+  /* The thrust keys still cancel it from anywhere — taking the controls back
+   * is a flying act and must not require being on the right screen. */
   G.keys.w = true;
   frames(2);
   check('a hand on the thrust keys cancels the autopilot', !G.nodeBurn);
@@ -3591,18 +3613,29 @@ console.log('--- zoom ---');
   check('F1 reframes a camera stranded at the old 1 km floor', G.cam.dist < 0.1,
         G.cam.dist + ' km');
 
-  // ---- a live manoeuvre node still owns the +/- keys.
+  /* ---- a live manoeuvre node NO LONGER steals the zoom keys.
+   *
+   * This used to assert the opposite: with a node up, - and = became its
+   * delta-v nudge and stopped zooming. That meant the camera controls
+   * silently changed meaning depending on whether you happened to have a
+   * burn planned somewhere else in the system, which is the kind of modal
+   * surprise you only forgive in software you wrote yourself.
+   *
+   * The nudge went to the planner with the rest of the node cluster, so in
+   * the cockpit these two are simply zoom, always. */
   G.viewMode = 'orbit';
-  var distNode = G.cam.dist;
-  press('i');                              // place a node
+  G.node = null;
+  press('F2', true);                       // Shift+F2 — the planner owns I now
+  press('i');
   check('a node was placed', !!G.node);
+  press('F1');                             // and back to the cockpit
+  var distNode = G.cam.dist;
   if (G.node) {
     press('=');
-    check('+/- adjust the node rather than the camera while one is up',
-          G.cam.dist === distNode);
+    check('the zoom keys stay the zoom keys with a node up',
+          G.cam.dist !== distNode, 'camera did not move');
   }
-  press('i', true);                        // Shift+I clears it
-  check('and clearing the node hands the keys back', !G.node);
+  G.node = null;
 })();
 
 /* The pause menu is the only screen that is allowed to stop time, and the
@@ -3732,10 +3765,13 @@ console.log('--- options ---');
    * flight controls, which is how the first version of this test fooled
    * itself. */
   function settingsFingerprint() {
+    /* renderScale joined the list when it came off the backtick and became
+     * an Options row — a setting the cursor can reach has to be a setting
+     * this fingerprint can see, or the row reads as doing nothing. */
     return JSON.stringify([G.soundVolume, G.soundMuted, G.showOrbits,
                            G.showPrediction, G.showGrid, G.showTraffic,
                            G.cockpitChrome, G.assist, G.flightMode,
-                           G.mouseAim, G.aimSens, G.showHelp]);
+                           G.mouseAim, G.aimSens, G.showHelp, G.renderScale]);
   }
   function openOptions() {
     if (G.menu && G.menu.page === 'options') return;
