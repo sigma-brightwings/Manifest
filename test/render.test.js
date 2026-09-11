@@ -3945,6 +3945,134 @@ console.log('--- input does not throw ---');
         threw ? threw.message + ' | ' + String(threw.stack).split('\n')[1] : errorsSince(mark)[0]);
 })();
 
+/* ---- the audio graph ---------------------------------------------------
+ * Two bugs, one shipped and one latent, and neither was visible to any test
+ * that existed — because node has no AudioContext, so sound.js disables
+ * itself on load and every call in every other suite is a no-op. A module
+ * that is inert under test is a module with no tests.
+ *
+ * THE SHIPPED ONE: main.js calls Sound.thrust() once a frame with the
+ * throttle. thrust() wanted the shared noise buffer and asked for it by
+ * calling fx('click') — a comment said "builds the buffer quietly" — but
+ * 'click' is a tone and tones never touch the buffer. So the buffer stayed
+ * null, thrust bailed out before starting its node, and it did that AFTER
+ * emitting a 30 ms square blip. Sixty of those a second is what Astra heard
+ * as a constant grinding, and Escape silenced it only because Escape stops
+ * the frame loop.
+ *
+ * THE LATENT ONE: fx() returns early on a name it does not know, so
+ * hooks.sound('alarm') was five call sites of nothing. Silence is a
+ * perfectly good impression of a working sound effect.
+ *
+ * A stub context is installed and sound.js is re-required fresh, because
+ * `enabled` latches false at first load and would otherwise keep this
+ * section as inert as everything else. */
+console.log('--- sound ---');
+(function () {
+  var made = { sources: 0, oscillators: 0, buffers: 0 };
+  function param() {
+    return { value: 0, setValueAtTime: function () {}, linearRampToValueAtTime: function () {},
+             exponentialRampToValueAtTime: function () {}, setTargetAtTime: function () {} };
+  }
+  function node(extra) {
+    var n = { connect: function () {}, disconnect: function () {},
+              start: function () {}, stop: function () {} };
+    for (var k in extra) n[k] = extra[k];
+    return n;
+  }
+  var StubAC = function () {
+    this.currentTime = 0;
+    this.sampleRate = 48000;
+    this.state = 'running';
+    this.destination = node({});
+  };
+  StubAC.prototype.createGain = function () { return node({ gain: param() }); };
+  StubAC.prototype.createOscillator = function () {
+    made.oscillators++;
+    return node({ type: 'sine', frequency: param() });
+  };
+  StubAC.prototype.createBufferSource = function () {
+    made.sources++;
+    return node({ buffer: null, loop: false });
+  };
+  StubAC.prototype.createBiquadFilter = function () {
+    return node({ type: 'lowpass', frequency: param(), Q: param() });
+  };
+  StubAC.prototype.createBuffer = function (ch, len) {
+    made.buffers++;
+    /* A real 1.2 s buffer at 48 kHz is 57,600 floats to fill with
+     * Math.random(). The code under test only cares that it gets an array
+     * of the right length back, so a typed array costs nothing and the
+     * fill loop still runs for real. */
+    var data = new Float32Array(len);
+    return { length: len, getChannelData: function () { return data; } };
+  };
+
+  /* ON `window`, NOT on `global`. sound.js closes over
+   * `typeof window !== 'undefined' ? window : globalThis`, and this harness
+   * gives `window` its own object rather than aliasing it to the node
+   * global — so a stub installed on `global` is invisible to the module
+   * that needs it, and the first run of this section duly measured a drive
+   * that had never been switched on. */
+  var savedAC = W.AudioContext;
+  W.AudioContext = StubAC;
+  var soundPath = require.resolve('../src/sound.js');
+  var savedSound = W.Sound;
+  delete require.cache[soundPath];
+  var S = require('../src/sound.js');
+
+  /* THE REGRESSION. Sixty frames of the drive, exactly as main.js drives
+   * it, and the node must be built once and steered thereafter. */
+  var i;
+  for (i = 0; i < 60; i++) S.thrust(0.5);
+  check('the drive loop starts exactly one source across 60 frames',
+        made.sources === 1, 'sources=' + made.sources);
+  check('and builds the noise buffer exactly once',
+        made.buffers === 1, 'buffers=' + made.buffers);
+  /* The blip itself: thrust must not be making one-shots. An oscillator is
+   * how every one-shot tone in this file is built, so counting them counts
+   * the clicks. */
+  check('the drive loop emits no one-shot tones at all',
+        made.oscillators === 0, 'oscillators=' + made.oscillators);
+
+  /* And it must still be steerable after all that, rather than having
+   * thrown its way into a dead node. */
+  var threw = null;
+  try { S.thrust(0); S.thrust(1); S.mute(true); S.mute(false); S.thrust(0.2); }
+  catch (e) { threw = e; }
+  check('the drive survives being muted and restored', !threw,
+        threw ? threw.message : '');
+
+  /* EVERY NAME THAT IS ASKED FOR EXISTS. Static, over the real sources —
+   * this is the check that would have caught 'alarm' and 'blip', and it
+   * costs nothing to keep. */
+  var fs = require('fs'), path = require('path');
+  var srcDir = path.join(__dirname, '..', 'src');
+  var asked = {};
+  fs.readdirSync(srcDir).forEach(function (f) {
+    if (!/\.js$/.test(f) || f === 'sound.js') return;
+    var txt = fs.readFileSync(path.join(srcDir, f), 'utf8');
+    var re = /(?:sound|fx)\(\s*'([a-zA-Z]+)'\s*\)/g, m;
+    while ((m = re.exec(txt))) {
+      (asked[m[1]] = asked[m[1]] || []).push(f);
+    }
+  });
+  var names = Object.keys(asked);
+  var missing = names.filter(function (n) { return !S.has(n); });
+  check('every sound the game asks for exists in the table',
+        missing.length === 0,
+        missing.map(function (n) { return n + ' (' + asked[n][0] + ')'; }).join(', '));
+  /* Guard the guard: if the scrape ever stops finding call sites, the check
+   * above passes by testing nothing. It found more than a dozen names when
+   * this was written. */
+  check('and the scrape actually found call sites to check',
+        names.length >= 10, 'found ' + names.length);
+
+  W.AudioContext = savedAC;
+  delete require.cache[soundPath];
+  W.Sound = savedSound;
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

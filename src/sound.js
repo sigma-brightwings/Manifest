@@ -61,17 +61,39 @@
     o.start(t0); o.stop(t0 + dur + 0.1);
   }
 
+  /* One second and a bit of white noise, built once and shared by every
+   * noise-based effect and by the drive loop.
+   *
+   * IT IS A FUNCTION, and that is the whole of a bug that made the game
+   * grind. `thrust` needs this buffer, and it used to reach for it with
+   *
+   *     if (!noiseBuf) fx('click');   // builds the buffer quietly
+   *     if (!noiseBuf) return;
+   *
+   * which is a comment describing something that never happened: 'click' is
+   * a `tone`, and tones do not touch the buffer — only `noise` did, and only
+   * as a side effect of being called. So the buffer stayed null, thrust
+   * returned before starting its node, and it did all that AFTER emitting a
+   * 30 ms square blip. main.js calls thrust every frame with the throttle,
+   * so the result was sixty clicks a second, for the life of the session,
+   * which Astra heard as a constant grinding. Escape silenced it because
+   * Escape stops the frame loop.
+   *
+   * A side effect nobody can see is not a constructor. This is. */
   var noiseBuf = null;
+  function noiseBuffer(c) {
+    if (noiseBuf) return noiseBuf;
+    noiseBuf = c.createBuffer(1, c.sampleRate * 1.2, c.sampleRate);
+    var d = noiseBuf.getChannelData(0);
+    for (var i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    return noiseBuf;
+  }
+
   function noise(dur, peak, freq, q, drop) {
     var c = ready();
     if (!c) return;
-    if (!noiseBuf) {
-      noiseBuf = c.createBuffer(1, c.sampleRate * 1.2, c.sampleRate);
-      var d = noiseBuf.getChannelData(0);
-      for (var i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-    }
     var t0 = c.currentTime;
-    var src = c.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+    var src = c.createBufferSource(); src.buffer = noiseBuffer(c); src.loop = true;
     var f = c.createBiquadFilter();
     f.type = 'bandpass'; f.frequency.setValueAtTime(freq, t0); f.Q.value = q || 1;
     if (drop) f.frequency.exponentialRampToValueAtTime(Math.max(20, drop), t0 + dur);
@@ -96,6 +118,18 @@
     undock:    function () { noise(0.3, 0.12, 250, 1, 500); },
     jump:      function () { tone('sine', 60, 780, 2.2, 0.16, 0.4); },
     warn:      function () { tone('square', 660, 660, 0.09, 0.12); tone('square', 520, 520, 0.09, 0.12, 0.12); },
+    /* Both of these were CALLED and did not exist. slipspace's contact and
+     * interdiction events ask for 'blip' and 'alarm', and dropOut asks for
+     * 'alarm' again — five call sites, all of them silently doing nothing,
+     * because fx() returns early on a name it does not know. A missing
+     * entry is indistinguishable from a working one that happens to be
+     * quiet, which is how they survived.
+     *
+     * The alarm is deliberately harsher than `warn`: warn is an instrument
+     * telling you something, and this is somebody reaching for you in the
+     * dark a light year from anywhere. */
+    alarm:     function () { tone('square', 440, 880, 0.16, 0.16); tone('square', 880, 440, 0.16, 0.16, 0.18); },
+    blip:      function () { tone('sine', 1050, 1050, 0.05, 0.07); },
     click:     function () { tone('square', 1400, 900, 0.03, 0.05); },
     pay:       function () { tone('sine', 780, 1240, 0.14, 0.12); },
     scoop:     function () { tone('sine', 300, 520, 0.18, 0.10); }
@@ -113,10 +147,8 @@
     var c = ready();
     if (!c) return;
     if (!thrustNode) {
-      if (!noiseBuf) fx('click');   // builds the buffer quietly
-      if (!noiseBuf) return;
       thrustNode = c.createBufferSource();
-      thrustNode.buffer = noiseBuf; thrustNode.loop = true;
+      thrustNode.buffer = noiseBuffer(c); thrustNode.loop = true;
       var f = c.createBiquadFilter();
       f.type = 'lowpass'; f.frequency.value = 130; f.Q.value = 0.6;
       thrustGain = c.createGain(); thrustGain.gain.value = 0;
@@ -134,7 +166,15 @@
 
   function mute(on) { enabled = !on ? true : false; if (on && thrustGain) thrustGain.gain.value = 0; }
 
-  var Sound = { fx: fx, thrust: thrust, poke: poke, setVolume: setVolume, mute: mute };
+  /* Does the table know this name? For the test that scrapes every
+   * `sound('x')` call site out of the other modules and asserts each one
+   * lands on something — fx() answers a name it does not know with silence,
+   * which is exactly what a working effect sounds like when nothing is
+   * happening, and that is how 'alarm' and 'blip' stayed missing. */
+  function has(name) { return Object.prototype.hasOwnProperty.call(FX, name); }
+
+  var Sound = { fx: fx, thrust: thrust, poke: poke, setVolume: setVolume,
+                mute: mute, has: has };
   global.Sound = Sound;
   if (typeof module !== 'undefined' && module.exports) module.exports = Sound;
 })(typeof window !== 'undefined' ? window : globalThis);
