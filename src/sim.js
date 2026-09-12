@@ -768,6 +768,28 @@
    * fails if you take it deep at speed — there is meant to be a way to die
    * with one fitted, or it is not a decision, just a tax. */
   var BASE_HEAT_SHED = 18;      // what bare hull radiates away, units/s
+
+  /* ---- surface-pad landing ---------------------------------------------
+   * A pad no longer silently refuses a fast approach — you always touch
+   * down, but touching down HARD costs hull, the same way heat does. These
+   * are first-pass numbers meant to be tuned by flying it, not derived.
+   * Speeds are km/s (the sim's native unit): dockMaxSpeed on a pad is
+   * 0.03 = 30 m/s, so LAND_SAFE sits just under a comfortable manual
+   * approach and LAND_FATAL is a genuine smack. */
+  var LAND_SAFE_SPEED  = 0.02;   // km/s — at or below this, a clean seat, no damage
+  var LAND_FATAL_SPEED = 0.09;   // km/s — at or above this, the hull does not survive
+  var LAND_DAMAGE_MAX  = 140;    // hull points dealt at the fatal speed (> any hull's HP)
+  var LAND_GEAR_UP_MULT = 3.0;   // a belly landing (no gear) multiplies the hit
+  /* Contact damage: 0 below safe, ramping to LAND_DAMAGE_MAX at fatal,
+   * squared so a small overspeed is cheap and the top of the range bites.
+   * gearDown false triples it, so setting down on the hull hurts even slow. */
+  function landingDamage(contactSpeed, gearDown) {
+    if (contactSpeed <= LAND_SAFE_SPEED) return 0;
+    var f = (contactSpeed - LAND_SAFE_SPEED) / (LAND_FATAL_SPEED - LAND_SAFE_SPEED);
+    if (f > 1) f = 1;
+    var dmg = f * f * LAND_DAMAGE_MAX;
+    return gearDown ? dmg : dmg * LAND_GEAR_UP_MULT;
+  }
   /* The flux that reads as a fully lit shock layer. Set at 60 to begin
    * with, which was far too low: a survivable entry already runs well past
    * it, so the glow pinned at maximum the moment air was touched and the
@@ -1806,17 +1828,19 @@
       var pad = pads[i];
       var ps = bodyState(pad, sys, t);
       if (V.dist(ps.pos, ship.pos) > pad.dockCaptureRadius) continue;
-      /* Inside the envelope but still on the hull. Flagged rather than
-       * silently ignored: a pad that declines to catch you for a reason you
-       * cannot see is indistinguishable from a broken pad, and the first
-       * thing a player does is try the same approach again. main.js reads
-       * this and says so. */
-      if (!ship.gear) { ship.gearBalked = true; continue; }
       /* Speed relative to the PAD, which is itself being carried round by
        * the world underneath it. Hovering motionless above a spinning
        * planet is not hovering over the pad. */
-      if (V.dist(ship.vel, ps.vel) > (pad.dockMaxSpeed || 0.03)) continue;
-      return pad;
+      var contact = V.dist(ship.vel, ps.vel);
+      /* A pad no longer REFUSES a fast or gear-up approach. The old model
+       * returned null on either — you never landed and got no reason why,
+       * indistinguishable from a broken pad. Now you always touch down when
+       * you are over the pad; how hard you hit and whether the gear was
+       * down is REPORTED, and the caller (checkImpact) turns that into hull
+       * damage via landingDamage. This is the FE2 model: the game lets you
+       * make the mistake and charges you for it, rather than quietly
+       * declining to let you make it. */
+      return { pad: pad, speed: contact, gearDown: !!ship.gear };
     }
     return null;
   }
@@ -1870,20 +1894,31 @@
      * starport is a landing; it should not have to become a collision with
      * the planet before anyone notices. */
     if (allowDock) {
-      var pad = padCapture(ship, sys, t);
-      if (pad) {
-        /* THIS is where a surface arrival actually begins, and hooking the
-         * other one was not enough. main.js's `dockTarget` path handles a
-         * ship being talked in by traffic control, which in practice means
-         * an orbital clamp; a pad is captured here, deep inside the
-         * integrator, which the comment on main.js's arrival-transition
-         * check already warns has no call site to hook. A rail wired only
-         * to the other path would have been a sequence nobody ever saw —
-         * the same way `vsShield` sat on every gun unread.
-         *
-         * beginArrival refuses when there is no bay geometry to be carried
-         * through, so a bare pad still docks in one frame as it always
-         * did. */
+      var cap = padCapture(ship, sys, t);
+      if (cap) {
+        var pad = cap.pad;
+        /* The landing consequence, FE2-style: how hard you hit costs hull.
+         * A clean seat (<= LAND_SAFE_SPEED) is free; a smack ramps to
+         * fatal; gear-up multiplies it. This runs ONLY here, inside the
+         * authoritative allowDock path, so the predictor's throwaway ghosts
+         * never take real damage — the same guard the dock itself relies
+         * on. Heat damage uses the identical `hullHp -= dmg` shape. */
+        var ldmg = landingDamage(cap.speed, cap.gearDown);
+        if (ldmg > 0) {
+          ship.hullHp -= ldmg;
+          ship.lastLandingHit = { dmg: ldmg, speed: cap.speed, gearDown: cap.gearDown, t: t };
+          if (ship.hullHp <= 0) {
+            /* You wrecked it on touchdown. Mark it; main.js reads `crashed`
+             * and runs the loss the same way a hull-zero in combat does. */
+            ship.hullHp = 0;
+            ship.crashed = true;
+            ship.crashedOn = pad;
+            return pad;
+          }
+        }
+        /* THIS is where a surface arrival actually begins. beginArrival
+         * refuses when there is no bay geometry to be carried through, so a
+         * bare pad still docks in one frame as it always did. */
         if (!beginArrival(ship, pad, sys, t)) dockShip(ship, pad, sys, t);
         ship.landed = false;
         ship.crashed = false;
@@ -3410,6 +3445,7 @@
     berthState: berthState,
     assignBerth: assignBerth,
     padCapture: padCapture,
+    landingDamage: landingDamage,
     smootherstep: smootherstep,
     trafficState: trafficState,
     trafficAll: trafficAll,

@@ -1247,26 +1247,46 @@ section('--- landing gear ---');
         upGear.landed && upGear.crashed,
         'at ' + (upGear.impactSpeed * 1000).toFixed(1) + ' m/s');
 
-  /* And a pad refuses to catch a ship with the gear up, raising the flag
-   * main.js turns into a message. */
+  /* A pad now catches you whatever the gear and whatever the speed — the
+   * FE2 model, where the game lets you make the mistake and charges hull
+   * for it rather than silently declining to let you land. Gear down and
+   * gentle is a clean seat; gear up or fast costs hull. */
   if ((sys.pads || []).length) {
     var pad = sys.pads[0];
     var ps = Sim.bodyState(pad, sys, 0);
-    function atPad(gear) {
+    function atPad(gear, extraSpeed) {
       var sh = Sim.makeShip(V.clone(ps.pos), V.clone(ps.vel));
-      sh.gear = gear; sh.gearBalked = false;
+      sh.gear = gear;
+      /* Add closing speed relative to the pad if asked, so we can test a
+       * hard touchdown rather than only a rest-on-the-pad one. */
+      if (extraSpeed) sh.vel = V.addScaled(sh.vel, sh.fwd, extraSpeed);
       Sim.refreshShip(sh);
-      return { hit: Sim.checkImpact(sh, sys, 0, true), ship: sh };
+      Combat.initShip(sh);             // give it a real numeric hull to subtract from
+      var hull0 = sh.hullHp;
+      var hit = Sim.checkImpact(sh, sys, 0, true);
+      return { hit: hit, ship: sh, damage: hull0 - sh.hullHp };
     }
-    var withGear = atPad(true), without = atPad(false);
-    /* Docked OR on the arrival rail: a pad with a hangar under it now
-     * carries the hull in rather than parking it on the same frame. What
-     * this check has always been about is whether the pad caught it. */
+    var gentle = atPad(true, 0);       // gear down, at rest on the pad
+    var bellyGentle = atPad(false, 0); // gear UP, at rest
+    var hardHit = atPad(true, 0.06);   // gear down but coming in fast
+
+    /* Docked OR on the arrival rail: a pad with a hangar under it carries
+     * the hull in rather than parking it on the same frame. What this check
+     * is about is whether the pad caught it at all. */
     check('a pad catches a ship with the gear down',
-          !!withGear.hit &&
-          (!!withGear.ship.docked || Sim.arrivalActive(withGear.ship)));
-    check('and refuses one without it',
-          !without.ship.docked && without.ship.gearBalked === true);
+          !!gentle.hit &&
+          (!!gentle.ship.docked || Sim.arrivalActive(gentle.ship)));
+    check('a gentle gear-down landing takes no hull damage',
+          gentle.damage === 0);
+    check('and it catches a gear-up ship too, no longer refusing it',
+          !!bellyGentle.hit);
+    check('a fast touchdown costs hull',
+          hardHit.damage > 0);
+    /* landingDamage itself: gear-up multiplies the same contact speed. */
+    check('a belly landing hurts more than the same hit with gear down',
+          Sim.landingDamage(0.05, false) > Sim.landingDamage(0.05, true));
+    check('and a gentle touch is free either way',
+          Sim.landingDamage(0.01, false) === 0);
   }
 })();
 
