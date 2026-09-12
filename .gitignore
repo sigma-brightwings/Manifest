@@ -27,12 +27,25 @@ desktop.ini
 # Scratch test output.
 _test_output.txt
 
-# The models/ staging area. Every .glb in it duplicates ref/glb/ — which is
-# the copy tools/glb2hulls.js actually consumes — and a third copy sits
-# under "models/Manifest Models/uploads/". Tracking it would write the same
+# The models/ staging area. Almost every .glb in it duplicated ref/glb/ —
+# the copy tools/glb2hulls.js actually consumes — with a third copy under
+# "models/Manifest Models/uploads/". Tracking it would have written the same
 # ~60 MB into history three times and git never lets those bytes go again.
-# The one thing in there that was not a duplicate, the station-design
-# sketch, has been lifted out to ref/station-lab/ and is tracked there.
+#
+# THE SENTENCE THAT USED TO BE HERE WAS WRONG, and the error was nearly
+# expensive. It said the station-design sketch was "the one thing in there
+# that was not a duplicate". It was not: buried under Manifest Models/
+# uploads/ were twenty-four PORT models — the cylinder station, city ports,
+# runway and pad sites, comets, detail kits — that existed in no other
+# place, fifteen of them planetside ports that station-lab cannot rebuild
+# because the lab exports orbital patterns only. A request to delete the old
+# models would have taken all of it, on the strength of this comment.
+#
+# They are now tracked under ref/ports/ and ref/port-art/ (see that folder's
+# README), and models/ itself is gone. The rule stands for anything staged
+# here in future: this directory is scratch, so check it for originals with
+# tools/rescue-port-art.ps1 before emptying it, and do not trust a comment
+# that says there is nothing here.
 models/
 
 # Synthetic port models. Unlike ref/, these are GENERATED — recreate them
