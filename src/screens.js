@@ -29,7 +29,7 @@
       scopeBody, rows, panel, bodyDotColor, setMouseAim,
       fmtDist, fmtSpeed, fmtTime, fmtEpoch, fmtCredits, fmtLy, clipText,
       drawSystemPage, drawChartPage, drawOrbitPage, drawTargetPage,
-      drawAutoPage, drawNodePage, drawShipPage,
+      drawAutoPage, drawNodePage, drawShipPage, drawGunsPage,
       RADAR_RANGE, MFD_W, MFD_H, MFD_INK, MFD_DIM, MFD_HOT, MFD_EDGE;
 
   function bind(api) {
@@ -50,7 +50,7 @@
     drawSystemPage = api.pages.system; drawChartPage = api.pages.chart;
     drawOrbitPage = api.pages.orbit; drawTargetPage = api.pages.target;
     drawAutoPage = api.pages.auto; drawNodePage = api.pages.node;
-    drawShipPage = api.pages.ship;
+    drawShipPage = api.pages.ship; drawGunsPage = api.pages.guns;
     RADAR_RANGE = api.RADAR_RANGE;
     MFD_W = api.MFD_W; MFD_H = api.MFD_H;
     MFD_INK = api.MFD_INK; MFD_DIM = api.MFD_DIM;
@@ -851,10 +851,53 @@
    * is on the same screen and deliberately has no button, because "eject"
    * is a thing you do to freight, not to your own drive. */
   function drawShipScreen(ctx, w, bottom) {
-    var top = modeFrame(ctx, w, bottom, 'SHIP STATUS & INVENTORY',
-                        G.ship.docked ? 'F4 trade   ·   ↑↓ select   ·   Del jettison'
-                                      : '↑↓ select   ·   Del jettison   ·   Shift+Del all');
+    if (G.shipTab !== 'guns') G.shipTab = 'status';
+    var guns = G.shipTab === 'guns';
+    var top = modeFrame(ctx, w, bottom,
+                        guns ? 'SHIP — GUNS' : 'SHIP STATUS & INVENTORY',
+                        guns ? 'Tab status   ·   space fires A   ·   shift+space fires B'
+                             : (G.ship.docked ? 'Tab guns   ·   F4 trade   ·   ↑↓ select   ·   Del jettison'
+                                              : 'Tab guns   ·   ↑↓ select   ·   Del jettison   ·   Shift+Del all'));
+
+    /* Two tabs across the top: the inventory layout, and the guns board
+     * that used to live on the deck MFD cycle. Clickable, and Tab toggles
+     * them from the keyboard (main.js). The strip sits just under the mode
+     * header and shifts the content down by its height. */
     var pad = 14;
+    var tabH = 22, tabW = 150, tabY = top + 4;
+    var tabs = [ { id: 'status', label: 'STATUS & INVENTORY', wide: true },
+                 { id: 'guns',   label: 'GUNS' } ];
+    var tx = pad;
+    for (var ti = 0; ti < tabs.length; ti++) {
+      var tw = tabs[ti].wide ? tabW : 90;
+      var on = G.shipTab === tabs[ti].id;
+      ctx.fillStyle = on ? '#12414f' : '#081419';
+      ctx.fillRect(tx, tabY, tw, tabH);
+      ctx.strokeStyle = MFD_EDGE; ctx.lineWidth = on ? 2 : 1;
+      ctx.strokeRect(tx + 1, tabY + 1, tw - 2, tabH - 2);
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = on ? '#b4f0ff' : '#5d6f78';
+      ctx.textAlign = 'center';
+      ctx.fillText(tabs[ti].label, tx + tw / 2, tabY + 15);
+      ctx.textAlign = 'left';
+      hot(tx, tabY, tw, tabH, (function (id) {
+        return function () { G.shipTab = id; };
+      })(tabs[ti].id), 'tab');
+      tx += tw + 6;
+    }
+    top = tabY + tabH + 6;   // content starts below the tab strip
+
+    if (guns) {
+      /* The guns board, hosted in a tile the same way the ship page is on
+       * the status tab — it draws into its own flat 460x178 MFD space and
+       * the tile maps that onto this rect, so it needs no fullscreen
+       * variant of its own. */
+      var gw = Math.min(w - pad * 2, 720);
+      var gh = bottom - top - pad;
+      tile(ctx, pad, top, gw, gh, drawGunsPage);
+      return;
+    }
+
     var leftW = Math.min(430, w * 0.36);
     var colH = bottom - top - pad * 2;
     var s = G.ship;

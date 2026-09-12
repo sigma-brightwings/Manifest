@@ -1434,24 +1434,26 @@ console.log('--- the spent heat sink ---');
   frames(2);
 })();
 
-/* The GUNS panel. It exists because fire-group membership was visible only
- * on the F5 FIT page, and the claim being tested is that it says the same
- * thing Combat does — not that it draws, which the panel-cycling section
- * above already covers. */
+/* The GUNS board. It used to be a deck MFD page; it now lives as a tab on
+ * the F5 SHIP screen (its only home). The claim tested is unchanged — that
+ * it says the same thing Combat does — only where it is shown has moved. */
 console.log('--- the guns panel ---');
 (function () {
   newFlying();
   var Combat = W.Combat;
-  var before = G.dashPages.centre;
+  var keydown = listeners.keydown[0];
+  var beforePanel = G.panel, beforeTab = G.shipTab;
   G.viewMode = 'cockpit';
-  G.dashPages.centre = 'guns';
+  keydown({ key: 'F5', shiftKey: false, preventDefault: function () {} });
+  G.shipTab = 'guns';
 
   var mark = drawn.texts.length;
   frame();
   var texts = drawn.texts.slice(mark);
   function saw(s) { return texts.indexOf(s) !== -1; }
 
-  check('the guns page can be put on a panel', saw('GUNS'), texts.slice(0, 8).join(' | '));
+  check('the guns board shows on the SHIP screen guns tab', saw('GUNS'),
+        texts.slice(0, 8).join(' | '));
   check('and it renders without error', errorsSince(mark).length === 0,
         errorsSince(mark)[0]);
   check('both triggers are named', saw('GROUP A') && saw('GROUP B'));
@@ -1496,7 +1498,8 @@ console.log('--- the guns panel ---');
         drawn.texts.slice(m3).join(' | ').slice(0, 160));
   G.warpIndex = warpWas;
 
-  G.dashPages.centre = before;
+  G.panel = beforePanel;
+  G.shipTab = beforeTab;
   frames(2);
 })();
 

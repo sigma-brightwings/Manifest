@@ -1314,6 +1314,17 @@
         return;
       }
 
+      /* Tab, on the F5 SHIP screen, flips between the STATUS & INVENTORY
+       * layout and the GUNS board — the guns page's only home now that it
+       * has left the deck MFD cycle. Handled here, above the mode dispatch,
+       * so it beats Tab's other meanings; everywhere else Tab falls through
+       * to them unchanged. */
+      if (e.key === 'Tab' && !G.hyper && !G.market && modeId() === 'ship') {
+        e.preventDefault();
+        G.shipTab = (G.shipTab === 'guns') ? 'status' : 'guns';
+        return;
+      }
+
       var fk = /^F(10|[1-9])$/.exec(e.key);
       if (fk) {
         e.preventDefault();
@@ -6828,7 +6839,6 @@
     { id: 'target',  title: 'TARGET',  draw: function (ctx) { drawTargetPage(ctx); } },
     { id: 'nav',     title: 'NAV',     draw: function (ctx) { drawNavPage(ctx); } },
     { id: 'ship',    title: 'SHIP',    draw: function (ctx) { drawShipPage(ctx); } },
-    { id: 'guns',    title: 'GUNS',    draw: function (ctx) { drawGunsPage(ctx); } },
     { id: 'cargo',   title: 'CARGO',   draw: function (ctx) { drawCargoPage(ctx); } },
     { id: 'auto',    title: 'AUTO',    draw: function (ctx) { drawAutoPage(ctx); } },
     { id: 'node',    title: 'NODE',    draw: function (ctx) { drawNodePage(ctx); } },
@@ -10480,7 +10490,7 @@
       pages: {
         system: drawSystemPage, chart: drawChartPage, orbit: drawOrbitPage,
         target: drawTargetPage, auto: drawAutoPage, node: drawNodePage,
-        ship: drawShipPage
+        ship: drawShipPage, guns: drawGunsPage
       },
       RADAR_RANGE: RADAR_RANGE,
       MFD_W: MFD_W, MFD_H: MFD_H,
