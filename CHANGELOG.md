@@ -15,6 +15,36 @@ before they update.
 Outfitting, weapons, and the law. See `PLAN.md` for the
 full design and the phases still outstanding.
 
+### Added
+
+- **A GUNS page on the dashboard.** Which hardpoint answers which trigger
+  used to be visible only on the F5 FIT page, and F5 is the wrong place to
+  find it out, because you cannot open the yard while somebody is shooting
+  at you. Click a cockpit panel round to GUNS and it shows both groups with
+  a live count, every hardpoint the hull has — including the empty ones,
+  because a hole in the rack is a fact about your ship — which way each one
+  points, which trigger it is on, and how far through its cycle it is, over
+  the hull-heat bar and the sink's state.
+
+  It stores nothing of its own. Group membership is the same map the
+  trigger reads, readiness is the same cooldown the trigger writes, and the
+  side pointer comes from the muzzle the renderer draws the beam from, so
+  the panel cannot drift out of agreement with the ship. Under time
+  compression, where the triggers refuse, it says so rather than reciting
+  keys that would do nothing.
+
+- **A spent heat sink is now something in the world.** It used to be three
+  numbers in a list nothing read. Ejecting one now throws a tumbling,
+  white-hot block clear of the hull: it drifts on the same physics as
+  wreckage, it is the loudest thing on your scope while it is hot, and it
+  cools to a dull grey brick over about two and a half minutes — half its
+  heat gone every thirty-four seconds. It outlives a piece of wreckage, and
+  the debris of a ship you kill can never delete it.
+
+  Nothing else reacts to it yet. It is a record of where you were and when,
+  sitting in space where anyone could find it, and what a patrol or a
+  seeker does about that is still an open question.
+
 ### Changed
 
 - **Contraband is graded now.** A flat 180 cr/t said every illegal cargo was
@@ -640,6 +670,12 @@ to predate slots and every new ship. A save that already carries a fit map
 is left alone and buys one at the yard — and that asymmetry is deliberate,
 because it is also what makes SELLING the scoop stick: it lives in the fit
 map like every other fitting, and the fit map is what is saved.
+
+**The GUNS page and the spent heat sink cost a save nothing.** Neither the
+canister list nor which page a cockpit panel is showing has ever been
+written to a save, so there is nothing new in the file and nothing to
+migrate. An old career simply gains a page it can click a panel round to,
+and starts leaving blocks behind it the next time a sink ejects.
 
 **Contracts already in flight are untouched.** A signed mission keeps the
 headline and the destination it was signed with — the new generator runs

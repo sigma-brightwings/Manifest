@@ -3084,6 +3084,11 @@
   var DEBRIS_MAX = 96;           // shards alive at once, system-wide
   var DEBRIS_SALVAGE_FRAC = 0.3; // share of a wreck's hold that survives it
 
+  /* Wreckage the cap is allowed to throw away. A spent heat sink is on the
+   * debris path for its physics but is not litter, so it does not count
+   * toward the cap and is never the piece the cap deletes. */
+  function isCullable(c) { return c.kind === 'debris' && !c.sink; }
+
   /* Everything about a wreck is a pure function of the ship that made it, so
    * a replayed kill throws the same pieces the same way. Math.random() here
    * would have been invisible — nobody re-watches an explosion frame by
@@ -3188,14 +3193,16 @@
     /* Globally capped, oldest first. An uncapped field is a memory leak that
      * grows with the body count, and the oldest shards are the ones the
      * player has already stopped looking at. Only debris is culled — a
-     * jettisoned canister is somebody's cargo and is not litter. */
+     * jettisoned canister is somebody's cargo and is not litter, and a spent
+     * heat sink is a record of where you were, which is exactly the thing
+     * the wreck of the ship you just killed must not be allowed to delete. */
     var live = 0, k;
     for (k = 0; k < sys.canisters.length; k++) {
-      if (sys.canisters[k].kind === 'debris') live++;
+      if (isCullable(sys.canisters[k])) live++;
     }
     while (live > DEBRIS_MAX) {
       for (k = 0; k < sys.canisters.length; k++) {
-        if (sys.canisters[k].kind === 'debris') { sys.canisters.splice(k, 1); break; }
+        if (isCullable(sys.canisters[k])) { sys.canisters.splice(k, 1); break; }
       }
       live--;
     }
@@ -3219,6 +3226,78 @@
     c.pos.x += c.vel.x * dt;
     c.pos.y += c.vel.y * dt;
     c.pos.z += c.vel.z * dt;
+  }
+
+  /* ---- the ejected heat sink --------------------------------------------
+   * `G.sinkEjections` has been written and never read since heat sinks were
+   * built, with a note saying the physical object was the debris system's
+   * job. Phase 4 landed; this is that job.
+   *
+   * IT IS A SHARD, not a fourth kind of loose object. Everything a spent
+   * sink needs — drift, expiry, a scanner return, a place in the one array
+   * that already holds loose things — a shard already has, and the file's
+   * own doctrine is that salvage rides on shards rather than beside them
+   * ("a shard with a `cid` is a canister that happens to be shaped like a
+   * piece of a ship"). So a shard with `sink` set is a shard that happens
+   * to be glowing. Three places branch on it and nothing else changes.
+   *
+   * WHAT IT DOES NOT SHARE with wreckage is its lifetime and its cull. It
+   * lives two and a half minutes rather than ninety seconds, because the
+   * point of the thing is that it outlasts the fight that made it; and it
+   * is exempt from DEBRIS_MAX, because being deleted by the sixteen shards
+   * of the ship you just killed is precisely the case it exists for.
+   *
+   * THE HEAT IS CLOSED-FORM, not ticked. A half-life read off `born` costs
+   * nothing per frame, cannot drift if a frame is long or a step is
+   * skipped, and is the same idiom `corruptionShift` already uses. */
+  var SINK_LIFE = 150;          // seconds of game time before it is gone
+  var SINK_HALFLIFE = 34;       // seconds to shed half of what it carries
+  var SINK_SHOVE = 0.025;       // km/s — a launcher throws harder than a hand
+
+  /* What the block is carrying NOW. Anything reading a sink's heat asks
+   * this rather than the stored figure, which is what it left with. */
+  function sinkHeatAt(c, t) {
+    if (!c || !c.sink) return 0;
+    var age = Math.max(0, t - (c.born || 0));
+    return (c.sinkHeat0 || 0) * Math.pow(0.5, age / SINK_HALFLIFE);
+  }
+
+  function spawnSink(sys, ship, heat, t) {
+    if (!sys || !ship) return null;
+    if (!sys.canisters) sys.canisters = [];
+
+    /* Out of the launcher and clear of the hull, away from the nose. Same
+     * reasoning as a jettisoned crate — a block that keeps your exact
+     * velocity is a block you will meet again the moment you decelerate —
+     * except thrown about twice as hard, because this one was fired rather
+     * than pushed. */
+    var away = V.len(ship.fwd) > 1e-9 ? V.norm(ship.fwd) : { x: 1, y: 0, z: 0 };
+    var dom = dominantBody(ship.pos, sys, t);
+
+    var c = {
+      kind: 'debris',
+      sink: true,
+      id: 'snk' + (sys.canisterSeq = (sys.canisterSeq || 0) + 1),
+      name: 'Spent heat sink',
+      shard: 0,
+      lengthKm: 0.005,                                 // 5 m of ablative block
+      sinkHeat0: Math.max(0, heat || 0),
+      pos: V.addScaled(ship.pos, away, -0.06),
+      vel: V.addScaled(ship.vel, away, -SINK_SHOVE),
+      /* It tumbles, but lazily — it was ejected, not blown off. */
+      spinAxis: { x: 0.3, y: 0.9, z: 0.2 },
+      spinRate: 0.7,
+      phase: 0,
+      born: t,
+      expires: t + SINK_LIFE,
+      life: SINK_LIFE,
+      domId: dom ? dom.id : null,
+      radius: 0.003
+    };
+    var sl = V.len(c.spinAxis);
+    c.spinAxis = sl > 1e-6 ? V.scale(c.spinAxis, 1 / sl) : { x: 0, y: 0, z: 1 };
+    sys.canisters.push(c);
+    return c;
   }
 
   function debrisAll(sys) {
@@ -3316,6 +3395,8 @@
     updateCanisters: updateCanisters,
     canistersAll: canistersAll,
     spawnDebris: spawnDebris, debrisAll: debrisAll, stepDebris: stepDebris,
+    spawnSink: spawnSink, sinkHeatAt: sinkHeatAt,
+    SINK_LIFE: SINK_LIFE, SINK_HALFLIFE: SINK_HALFLIFE,
     DEBRIS_LIFE: DEBRIS_LIFE, DEBRIS_MAX: DEBRIS_MAX,
     CANISTER_LIFE: CANISTER_LIFE,
     WAKE_RANGE: WAKE_RANGE,

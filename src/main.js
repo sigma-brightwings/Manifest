@@ -5571,6 +5571,23 @@
     return shardFrame;
   }
 
+  /* A spent sink's colour, from what it is still carrying. Blackbody in
+   * spirit rather than in physics: white-hot straight out of the launcher,
+   * through orange, to the dull iron of a block that has finished. One
+   * function so the hull, the bloom and the scope cannot disagree about how
+   * hot the same object looks. */
+  function sinkRGB(glow) {
+    var g = Math.max(0, Math.min(1, glow));
+    return [Math.round(140 + 115 * g),
+            Math.round(120 + 118 * Math.pow(g, 0.75)),
+            Math.round(110 + 130 * Math.pow(g, 2.6))];
+  }
+
+  function sinkTint(glow) {
+    var c = sinkRGB(glow);
+    return 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
+  }
+
   function drawDebris(ctx, cam) {
     var list = G.sys.canisters;
     if (!list || !list.length) return;
@@ -5586,26 +5603,75 @@
       if (sp.x < -40 || sp.x > cam.w + 40 || sp.y < -40 || sp.y > cam.h + 40) continue;
 
       /* Fading out over the last quarter of its life, so a field thins
-       * rather than blinking out a piece at a time. */
-      var left = (c.expires - G.t) / Sim.DEBRIS_LIFE;
+       * rather than blinking out a piece at a time. A spent heat sink runs
+       * longer than a shard does and carries its own `life`, so the
+       * denominator is the object's rather than the constant's — reading
+       * DEBRIS_LIFE for everything made the sink's first sixty seconds
+       * compute a `left` above 1, which is harmless, and its last thirty
+       * fade on the wrong curve, which is not. */
+      var left = (c.expires - G.t) / (c.life || Sim.DEBRIS_LIFE);
       var fade = left > 0.25 ? 1 : Math.max(0, left / 0.25);
       if (fade <= 0) continue;
+
+      /* A spent sink is the one piece of debris that is a LIGHT SOURCE, and
+       * that is the whole point of it: it is visible because it is hot, it
+       * dims as it cools, and what it looks like is what a scanner is
+       * reading. The colour walks white-hot → orange → dull iron off the
+       * closed-form heat, so the picture and the scope agree without either
+       * being told about the other. */
+      var glow = 0;
+      if (c.sink) {
+        glow = Math.max(0, Math.min(1, Sim.sinkHeatAt(c, G.t) / Combat.SINK.capacity));
+      }
 
       var lenPx = c.lengthKm * sp.scale;
       if (lenPx > 3) {
         ctx.globalAlpha = fade;
         Render.drawShardModel(ctx, cam, spinFrame(c, tSec), c.lengthKm,
                               V.norm(V.sub(sunPos, c.pos)),
-                              c.cid ? '#c8b487' : '#8d949e', c.shard);
+                              c.sink ? sinkTint(glow)
+                                     : (c.cid ? '#c8b487' : '#8d949e'), c.shard);
         ctx.globalAlpha = 1;
+        /* A soft additive bloom around a hot block. Additive so it reads as
+         * emitted rather than painted, and dropped once it is cold, because
+         * a cold sink is a grey brick and should look like one.
+         *
+         * TWO THINGS HERE WERE WRONG THE FIRST TIME and both were only
+         * visible by looking. A FLAT disc at alpha 0.5 under 'lighter' is
+         * not a glow, it is a white circle — additive blending saturates
+         * almost immediately, so the block inside it disappeared. And a
+         * radius of 1.7x the object's own screen length meant that flying
+         * within a hundred metres of one filled the canopy with a
+         * featureless white blob three times the size of the thing making
+         * it. So: a radial gradient that actually falls off, and a radius
+         * that stays a HALO — a little wider than the block, never a
+         * replacement for it. */
+        if (glow > 0.05) {
+          var rad = Math.max(2.5, lenPx * (0.42 + 0.30 * glow));
+          var rgb = sinkRGB(glow);
+          var grad = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, rad);
+          grad.addColorStop(0, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',1)');
+          grad.addColorStop(0.45, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.35)');
+          grad.addColorStop(1, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0)');
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.globalAlpha = fade * (0.18 + 0.32 * glow);
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(sp.x, sp.y, rad, 0, K.TAU);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+          ctx.globalCompositeOperation = 'source-over';
+        }
       } else {
         /* Too small for a model and too important to drop: a debris field
          * you cannot see is a debris field you fly into. Salvage keeps its
          * warmer colour all the way down, because at this size the colour is
-         * the only thing telling you which piece to go to. */
-        ctx.globalAlpha = fade * (c.cid ? 0.95 : 0.55);
-        ctx.fillStyle = c.cid ? '#ffd36b' : '#7c848f';
-        var d = c.cid ? 1.9 : 1.2;
+         * the only thing telling you which piece to go to. A hot sink keeps
+         * its glow down here too, and gets a pixel more, because at this
+         * range it is the brightest thing in the field. */
+        ctx.globalAlpha = fade * (c.sink ? Math.max(0.35, glow) : (c.cid ? 0.95 : 0.55));
+        ctx.fillStyle = c.sink ? sinkTint(glow) : (c.cid ? '#ffd36b' : '#7c848f');
+        var d = c.sink ? 2.2 : (c.cid ? 1.9 : 1.2);
         ctx.fillRect(sp.x - d / 2, sp.y - d / 2, d, d);
         ctx.globalAlpha = 1;
       }
@@ -6597,8 +6663,18 @@
       /* Wreckage is a dim dot and salvage is the same cross a crate gets —
        * because what the radar is for is telling you which of the sixteen
        * pieces of that freighter is worth flying to. Scrap still shows: a
-       * debris field you cannot see is a debris field you fly into. */
-      if (cn.kind === 'debris' && !cn.cid) blip(cn.pos, '#6b7480', 'dot', false);
+       * debris field you cannot see is a debris field you fly into.
+       *
+       * A SPENT HEAT SINK IS THE LOUDEST THING ON THE SCOPE while it is
+       * hot, and that is the point of it: it is a return that says where
+       * you were and when, and it must read that way on your own screen or
+       * the consequence never lands. It gets the same tint as the object
+       * itself and dims with it, so as it cools it quietly becomes another
+       * grey dot — which is exactly what it becomes. */
+      if (cn.sink) {
+        var sg = Math.max(0, Math.min(1, Sim.sinkHeatAt(cn, G.t) / Combat.SINK.capacity));
+        blip(cn.pos, sinkTint(sg), sg > 0.15 ? 'cross' : 'dot', false);
+      } else if (cn.kind === 'debris' && !cn.cid) blip(cn.pos, '#6b7480', 'dot', false);
       else blip(cn.pos, '#ffd36b', 'cross', false);
     }
   }
@@ -6747,6 +6823,7 @@
     { id: 'target',  title: 'TARGET',  draw: function (ctx) { drawTargetPage(ctx); } },
     { id: 'nav',     title: 'NAV',     draw: function (ctx) { drawNavPage(ctx); } },
     { id: 'ship',    title: 'SHIP',    draw: function (ctx) { drawShipPage(ctx); } },
+    { id: 'guns',    title: 'GUNS',    draw: function (ctx) { drawGunsPage(ctx); } },
     { id: 'cargo',   title: 'CARGO',   draw: function (ctx) { drawCargoPage(ctx); } },
     { id: 'auto',    title: 'AUTO',    draw: function (ctx) { drawAutoPage(ctx); } },
     { id: 'node',    title: 'NODE',    draw: function (ctx) { drawNodePage(ctx); } },
@@ -7641,6 +7718,187 @@
            Sim.shipMass(s).toFixed(0) + ' t   ·   ' +
            (s.maxAccel * 1000).toFixed(2) + ' m/s²',
            s.fuelOut ? '#ff7a7a' : MFD_INK);
+  }
+
+  /* --- GUNS: which hardpoint is on which trigger -------------------------
+   * PLAN.md has owed this since fire groups were built: membership was
+   * visible only on the F5 FIT page, and F5 is the wrong place to find it
+   * out, because you cannot open the yard while somebody is shooting at you.
+   *
+   * It invents NO STATE, and that is the design. Membership is Combat's own
+   * `groups` map, readiness is the `G.gunCool` entry the trigger already
+   * writes, and which side of the hull a gun sits on is read off the muzzle
+   * the renderer draws the beam from. There is nothing here that can drift
+   * out of agreement with the ship, because there is nothing here that is
+   * stored twice.
+   *
+   * SIDES ARE POINTERS, not the words port and starboard. A glyph aimed the
+   * way the gun is reads at a glance; at 11px on a panel seen at an angle a
+   * four-letter word does not, and you would be reading it mid-fight.
+   *
+   * EMPTY HARDPOINTS GET A ROW. A hull with a hole in the rack is a fact
+   * about your ship worth knowing, and a list that silently omits it makes
+   * three hardpoints carrying two guns look like a two-hardpoint hull. */
+  var GUN_ROWS = 5;
+
+  function gunSideMark(ship, key) {
+    var mz = Combat.muzzleOf(ship, key);
+    if (!mz || Math.abs(mz.r) < 1e-6) return '▲';
+    return mz.r > 0 ? '▶' : '◀';
+  }
+
+  /* A group's header: how many guns, and whether any of them is mid-cycle.
+   * "FIRING" is derived from the cooldowns rather than from a flag anyone
+   * sets, so it is true exactly when the trigger is doing something. */
+  function gunGroupState(ship, group, cools, t) {
+    var guns = Combat.gunsInGroup(ship, group), busy = 0;
+    for (var i = 0; i < guns.length; i++) {
+      if (t < (cools[guns[i].key] || 0)) busy++;
+    }
+    return { n: guns.length, busy: busy };
+  }
+
+  function drawGunsPage(ctx) {
+    var s = G.ship;
+    var cools = G.gunCool || {};
+    var t = G.t;
+
+    /* The soft-key strip says what the triggers do RIGHT NOW, which for
+     * this page includes the one case where they do nothing: fireGroup
+     * refuses under time compression, so the strip says so rather than
+     * letting you pull a trigger and wonder. */
+    mfdShell(ctx, 'GUNS', G.warpIndex > 0
+      ? 'guns inhibited under time compression — , drops to 1x'
+      : 'space fires A   ·   shift+space fires B   ·   F5 reassigns');
+
+    /* Every hardpoint the hull has, fitted or not, in slot order — the same
+     * stable order muzzles are indexed against, so row three is the gun
+     * that fires from the third barrel. */
+    var byKey = {}, fitted = Combat.fittedList(s), i;
+    for (i = 0; i < fitted.length; i++) byKey[fitted[i].key] = fitted[i].item;
+    var keys = Combat.slotKeys(s), hp = [];
+    for (i = 0; i < keys.length; i++) {
+      if (Combat.slotType(keys[i]) === 'hardpoint') hp.push(keys[i]);
+    }
+
+    if (!hp.length) {
+      ctx.font = '12px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('NO HARDPOINTS', 10, MFD_BODY_TOP + 24);
+      ctx.font = '10px ui-monospace, monospace';
+      ctx.fillText('this hull carries no guns', 10, MFD_BODY_TOP + 44);
+      return;
+    }
+
+    /* The two headers, side by side, each owning half the width. A group
+     * with nothing in it says so — group B is empty on every ship that has
+     * never been to the yard, and that is the single most useful thing this
+     * panel can tell a new pilot. */
+    var half = (MFD_W - 20) / 2;
+    var gs = ['a', 'b'], gi;
+    for (gi = 0; gi < 2; gi++) {
+      var st = gunGroupState(s, gs[gi], cools, t);
+      var x = 10 + gi * half;
+      var live = st.busy > 0;
+      ctx.fillStyle = live ? 'rgba(255,211,107,0.18)' : 'rgba(74,151,176,0.12)';
+      ctx.fillRect(x, MFD_BODY_TOP + 2, half - 6, 18);
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = st.n ? (live ? MFD_HOT : MFD_INK) : '#5d6f78';
+      ctx.fillText('GROUP ' + gs[gi].toUpperCase(), x + 6, MFD_BODY_TOP + 15);
+      ctx.font = '10px ui-monospace, monospace';
+      ctx.textAlign = 'right';
+      ctx.fillStyle = live ? MFD_HOT : (st.n ? MFD_DIM : '#5d6f78');
+      ctx.fillText(live ? 'FIRING' : (st.n ? st.n + (st.n === 1 ? ' gun' : ' guns') : 'empty'),
+                   x + half - 12, MFD_BODY_TOP + 15);
+      ctx.textAlign = 'left';
+    }
+
+    /* One row per hardpoint: which way it points, what is in it, which
+     * trigger it answers to, and how far through its cycle it is. */
+    var shown = Math.min(hp.length, GUN_ROWS);
+    ctx.font = '11px ui-monospace, monospace';
+    for (i = 0; i < shown; i++) {
+      var key = hp[i], item = byKey[key];
+      var y = MFD_BODY_TOP + 38 + i * 15;
+
+      ctx.fillStyle = '#5d6f78';
+      ctx.fillText(gunSideMark(s, key), 10, y);
+
+      if (!item) {
+        ctx.fillStyle = '#5d6f78';
+        ctx.fillText('— empty —', 28, y);
+        continue;
+      }
+
+      /* Something that is not a gun can sit in a hardpoint (the turret
+       * does). It is still worth a row — it is using the slot — but it has
+       * no group and no trigger, so it says what it is and stops. */
+      if (item.kind !== 'gun') {
+        ctx.fillStyle = MFD_DIM;
+        ctx.fillText(clipText(item.name, 26), 28, y);
+        ctx.textAlign = 'right';
+        ctx.fillText('not a gun', MFD_W - 10, y);
+        ctx.textAlign = 'left';
+        continue;
+      }
+
+      var g = Combat.groupOf(s, key);
+      var until = cools[key] || 0;
+      var cycling = t < until;
+      var frac = cycling && item.cooldown > 0
+        ? Math.max(0, Math.min(1, (until - t) / item.cooldown)) : 0;
+
+      ctx.fillStyle = cycling ? MFD_DIM : MFD_INK;
+      ctx.fillText(clipText(item.name, 24), 28, y);
+
+      /* The group letter, boxed, so the column scans as A/B rather than as
+       * two letters in a sentence. */
+      var bx = MFD_W - 150;
+      ctx.fillStyle = cycling ? 'rgba(255,211,107,0.28)' : 'rgba(110,240,192,0.20)';
+      ctx.fillRect(bx, y - 10, 15, 13);
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = cycling ? MFD_HOT : '#6ef0c0';
+      ctx.fillText(g.toUpperCase(), bx + 4, y);
+      ctx.font = '11px ui-monospace, monospace';
+
+      /* Cycle bar: FULL when ready, draining as it cools. A ready gun
+       * reading as a full bar is the same convention as every tank on the
+       * SHIP page, so it is read the same way without being learned. */
+      var barX = bx + 22, barW = MFD_W - 10 - barX;
+      ctx.fillStyle = 'rgba(74,151,176,0.22)';
+      ctx.fillRect(barX, y - 8, barW, 8);
+      ctx.fillStyle = cycling ? '#ffb86b' : '#6ef0c0';
+      ctx.fillRect(barX, y - 8, barW * (1 - frac), 8);
+      ctx.strokeStyle = 'rgba(74,151,176,0.6)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(barX, y - 8, barW, 8);
+    }
+
+    if (hp.length > shown) {
+      ctx.font = '9px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('+' + (hp.length - shown) + ' more on F5', 28,
+                   MFD_BODY_TOP + 38 + shown * 15);
+    }
+
+    /* Hull heat under the rack, because the rack is what puts it there.
+     * Every shot spends heat × cooldown, so the gun list and this bar are
+     * two views of the same decision and belong on the same screen. The
+     * sink is the thing you reach for when it climbs, so its state is on
+     * the same line rather than a page away. */
+    var heat = s.heat || 0, lim = Sim.HEAT_LIMIT;
+    var hf = heat / lim;
+    var sink = G.sink && G.sink.live ? G.sink : null;
+    var sinkTxt;
+    if (sink) sinkTxt = 'SINK LIVE  ' + Math.round(sink.held) + '/' + Combat.SINK.capacity;
+    else if (t < (G.sinkCoolUntil || 0)) sinkTxt = 'sink cycling ' + Math.ceil(G.sinkCoolUntil - t) + 's';
+    else if (Combat.sinkRackSize(s)) sinkTxt = (s.sinks || 0) + ' sinks';
+    else sinkTxt = 'no sink rack';
+
+    mfdLabelled(ctx, MFD_BODY_BOTTOM - 11, 'hull heat  ' + Math.round(heat) + ' / ' + lim,
+                sinkTxt, sink ? MFD_HOT : MFD_DIM);
+    mfdBar(ctx, MFD_BODY_BOTTOM - 8, hf,
+           hf >= 1 ? '#ff7a7a' : (hf > 0.55 ? '#ffb86b' : '#6ef0c0'));
   }
 
   /* --- CARGO: the manifest, priced where you are ------------------------- */

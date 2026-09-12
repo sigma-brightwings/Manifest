@@ -1323,6 +1323,160 @@ console.log('--- wreckage ---');
   frames(2);
 })();
 
+/* The spent heat sink. It rides the debris path for its physics and is not
+ * debris in any other sense, so what is worth checking is precisely the
+ * places it has to differ: it outlives a shard, the wreck of a ship must not
+ * be able to delete it, and its heat is a closed-form read rather than
+ * something ticked — which means it has to be correct after a jump in time
+ * as well as after a frame. */
+console.log('--- the spent heat sink ---');
+(function () {
+  newFlying();
+  var sysS = G.sys;
+  sysS.canisters = [];
+
+  var t0 = G.t;
+  var sink = Sim.spawnSink(sysS, G.ship, 180, t0);
+  check('an ejection makes an object', !!sink);
+  if (!sink) return;
+
+  check('and it goes in the one list loose things live in',
+        sysS.canisters.indexOf(sink) !== -1);
+  check('it rides the shard path rather than being a fourth kind',
+        sink.kind === 'debris' && sink.sink === true);
+  check('it is thrown clear of the ship rather than left in the exhaust',
+        V.dist(sink.vel, G.ship.vel) > 0.01,
+        V.dist(sink.vel, G.ship.vel).toFixed(4) + ' km/s');
+  check('and thrown backwards, not forwards',
+        V.dot(V.sub(sink.pos, G.ship.pos), G.ship.fwd) < 0);
+
+  /* THE HEAT IS THE WHOLE OBJECT. It leaves with what the sink was holding
+   * and sheds half of it per half-life, read off `born` — so a test may
+   * jump time rather than step it, which is the property that makes the
+   * closed-form version worth having. */
+  check('it leaves carrying what the sink was holding',
+        Math.abs(Sim.sinkHeatAt(sink, t0) - 180) < 1e-9,
+        Sim.sinkHeatAt(sink, t0).toFixed(2));
+  check('half of it is gone one half-life later',
+        Math.abs(Sim.sinkHeatAt(sink, t0 + Sim.SINK_HALFLIFE) - 90) < 1e-6,
+        Sim.sinkHeatAt(sink, t0 + Sim.SINK_HALFLIFE).toFixed(2));
+  check('and it is all but cold by the time it expires',
+        Sim.sinkHeatAt(sink, t0 + Sim.SINK_LIFE) < 180 * 0.06,
+        Sim.sinkHeatAt(sink, t0 + Sim.SINK_LIFE).toFixed(2));
+  check('a cold block is not a negative one',
+        Sim.sinkHeatAt(sink, t0 + 10000) >= 0);
+  check('and nothing else in the field claims to be carrying heat',
+        Sim.sinkHeatAt({ kind: 'debris' }, t0) === 0);
+
+  /* It has to still be there when the fight is over, which is the one thing
+   * the debris cap would otherwise take away from it. */
+  check('it outlasts wreckage', Sim.SINK_LIFE > Sim.DEBRIS_LIFE,
+        Sim.SINK_LIFE + ' vs ' + Sim.DEBRIS_LIFE + ' s');
+  for (var w = 0; w < 12; w++) {
+    Sim.spawnDebris(sysS, 'cull-probe-' + w, V.clone(G.ship.pos),
+                    V.clone(G.ship.vel), 0.09, G.t, null);
+  }
+  var shards = Sim.debrisAll(sysS).filter(function (c) { return !c.sink; });
+  check('a dozen wrecks fill the field to the cap',
+        shards.length === Sim.DEBRIS_MAX, shards.length + ' of ' + Sim.DEBRIS_MAX);
+  check('and the cap did not eat the evidence',
+        sysS.canisters.indexOf(sink) !== -1);
+
+  /* Drawn. It is the only piece of debris that is a light source, so the
+   * thing a unit test cannot see is whether the glow survives contact with
+   * both renderers. */
+  var mark = drawn.texts.length, threw = null;
+  G.panel = 0;
+  try {
+    ['cockpit', 'orbit'].forEach(function (v) { G.viewMode = v; frames(3); });
+  } catch (e) { threw = e; }
+  check('a glowing sink renders in both views',
+        !threw && errorsSince(mark).length === 0,
+        threw ? threw.message + ' | ' + String(threw.stack).split('\n')[1]
+              : errorsSince(mark)[0]);
+
+  /* And a cold one, which takes the other branch of every colour decision. */
+  sink.born = G.t - Sim.SINK_LIFE * 0.9;
+  sink.expires = sink.born + Sim.SINK_LIFE;
+  var coldMark = drawn.texts.length, coldThrew = null;
+  try {
+    ['cockpit', 'orbit'].forEach(function (v) { G.viewMode = v; frames(3); });
+  } catch (e2) { coldThrew = e2; }
+  check('and so does a cold one, fading out',
+        !coldThrew && errorsSince(coldMark).length === 0,
+        coldThrew ? coldThrew.message : errorsSince(coldMark)[0]);
+
+  sysS.canisters = [];
+  G.viewMode = 'cockpit';
+  frames(2);
+})();
+
+/* The GUNS panel. It exists because fire-group membership was visible only
+ * on the F5 FIT page, and the claim being tested is that it says the same
+ * thing Combat does — not that it draws, which the panel-cycling section
+ * above already covers. */
+console.log('--- the guns panel ---');
+(function () {
+  newFlying();
+  var Combat = W.Combat;
+  var before = G.dashPages.centre;
+  G.viewMode = 'cockpit';
+  G.dashPages.centre = 'guns';
+
+  var mark = drawn.texts.length;
+  frame();
+  var texts = drawn.texts.slice(mark);
+  function saw(s) { return texts.indexOf(s) !== -1; }
+
+  check('the guns page can be put on a panel', saw('GUNS'), texts.slice(0, 8).join(' | '));
+  check('and it renders without error', errorsSince(mark).length === 0,
+        errorsSince(mark)[0]);
+  check('both triggers are named', saw('GROUP A') && saw('GROUP B'));
+
+  /* A fresh career has its starting gun on trigger A and nothing on B, and
+   * that second fact is the single most useful thing this panel can say —
+   * an empty group is a trigger that does nothing, which is otherwise
+   * indistinguishable from a broken one. */
+  var inA = Combat.gunsInGroup(G.ship, 'a'), inB = Combat.gunsInGroup(G.ship, 'b');
+  check('the starting fit puts a gun on the first trigger', inA.length > 0,
+        inA.length + '');
+  check('and the panel counts the same guns Combat does',
+        saw(inA.length + (inA.length === 1 ? ' gun' : ' guns')),
+        texts.join(' | ').slice(0, 160));
+  if (!inB.length) {
+    check('an empty group says so rather than showing nothing', saw('empty'));
+  }
+  check('the gun in the slot is named on the panel',
+        texts.some(function (t) { return t.indexOf(inA[0].item.name.slice(0, 10)) === 0; }),
+        inA[0].item.name);
+
+  /* Membership is read live, so moving a gun to the other trigger has to
+   * show up on the next frame with nothing else touched. */
+  Combat.setGroup(G.ship, inA[0].key, 'b');
+  var m2 = drawn.texts.length;
+  frame();
+  var t2 = drawn.texts.slice(m2);
+  check('moving a gun to the other trigger moves it on the panel',
+        t2.indexOf('empty') !== -1 && t2.indexOf('GROUP B') !== -1,
+        t2.join(' | ').slice(0, 160));
+  Combat.setGroup(G.ship, inA[0].key, 'a');
+
+  /* fireGroup refuses under time compression. A panel that still said
+   * "space fires A" there would be describing a trigger that does nothing,
+   * so it says the real thing instead. */
+  var warpWas = G.warpIndex;
+  G.warpIndex = 3;
+  var m3 = drawn.texts.length;
+  frame();
+  check('under time compression it says the triggers are inhibited',
+        drawn.texts.slice(m3).some(function (t) { return /inhibited/.test(t); }),
+        drawn.texts.slice(m3).join(' | ').slice(0, 160));
+  G.warpIndex = warpWas;
+
+  G.dashPages.centre = before;
+  frames(2);
+})();
+
 /* Shields. The shell is a hull mesh pushed out along its own normals, so
  * the testable claims are geometric: it wraps the ship, it stands off it by
  * the right amount, and there is exactly one of them per kind — that last

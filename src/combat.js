@@ -2198,7 +2198,7 @@
     return through;
   }
 
-  function updateSink(G, t, hooks) {
+  function updateSink(G, t, hooks, sys) {
     var sk = G.sink;
     if (!sk || !sk.live) return;
     if (t < sk.until && sk.held < SINK.capacity) return;
@@ -2208,14 +2208,21 @@
      * answering a distress call takes to arrive. Same doctrine as the
      * marked waste canister: evidence outlives the act.
      *
-     * The physical object is the debris system's job, so this records the
-     * ejection and leaves the tumbling shard to the phase that owns it. */
+     * IT IS NOW AN OBJECT. This used to say "the physical object is the
+     * debris system's job" and record the ejection for a phase that had not
+     * been built; Phase 4 built it, and `Sim.spawnSink` puts a real tumbling
+     * block in `sys.canisters` on the shard path. The record stays — it is
+     * three numbers, it is what a future customs officer or investigator
+     * would read, and it survives the shard's own 150-second life. */
     sk.live = false;
     G.sinkCoolUntil = t + SINK.cooldown;
     (G.sinkEjections = G.sinkEjections || []).push({
       pos: V.clone(G.ship.pos), vel: V.clone(G.ship.vel),
       heat: sk.held, at: t
     });
+    if (sys && global.Sim && global.Sim.spawnSink) {
+      global.Sim.spawnSink(sys, G.ship, sk.held, t);
+    }
     if (hooks && hooks.say) {
       hooks.say('Sink ejected — ' + Math.round(sk.held) + ' units overboard', 4);
     }
@@ -4090,7 +4097,7 @@
       if (wantA) fireGroup(sys, G, t, 'a', hooks);
       if (wantB) fireGroup(sys, G, t, 'b', hooks);
     }
-    updateSink(G, t, hooks);
+    updateSink(G, t, hooks, sys);
     updateTurret(sys, G, t, hooks);
     updateMissiles(sys, G, t, dtSim, hooks);
     updateNpcFire(sys, G, t, dtSim, hooks);

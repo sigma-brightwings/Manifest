@@ -79,13 +79,30 @@ verified by loading the modules and inspecting what is actually there.
   `hullHp` and does not care whose they are. Nothing was stopping an NPC
   from having them except that nobody had handed them over. The casaba
   howitzer is now unblocked; see the weapons section.
-- **The ejected heat sink is a record, not an object.** `G.sinkEjections`
-  is written and nothing reads it; it becomes a physical scanner return
-  with the Phase 4 debris system.
-- **A hardpoint can be assigned to a fire group but there is no way to see
-  which group is firing from the cockpit.** The F5 FIT page is the only
-  place group membership is visible, and mid-fight that is the wrong place.
-  An MFD readout is owed.
+- ~~**The ejected heat sink is a record, not an object.**~~ **CLOSED.**
+  `Sim.spawnSink` puts a real tumbling block in `sys.canisters` on the
+  Phase 4 shard path — so it drifts, it is a scanner return, and it is
+  drawn. It is a shard with `sink` set rather than a fourth kind of loose
+  object, for the same reason salvage is a shard with a `cid`: everything
+  it needs already exists and three places branch on it. Two things it does
+  NOT share with wreckage: it lives 150 s rather than 90, and it is exempt
+  from `DEBRIS_MAX`, because being deleted by the sixteen shards of the ship
+  you just killed is precisely the case it exists for. The heat is
+  closed-form off a 34 s half-life (`Sim.sinkHeatAt`) rather than ticked —
+  same idiom as `corruptionShift` — and one `sinkRGB` walks white-hot →
+  orange → dull iron, so the hull, the bloom and the scope cannot disagree
+  about how hot the same object looks. `G.sinkEjections` still records the
+  three numbers, which now outlive the block itself.
+- ~~**No way to see which group is firing from the cockpit.**~~ **CLOSED.**
+  The GUNS dashboard page: every hardpoint the hull has (empty ones
+  included), which way it points, what is in it, which trigger it answers
+  to, and how far through its cycle it is, over the hull-heat bar and the
+  sink's state. It stores NOTHING — membership is Combat's `groups` map,
+  readiness is the `G.gunCool` entry the trigger already writes, and the
+  side pointer is read off the muzzle the renderer draws the beam from — so
+  there is nothing here that can drift out of agreement with the ship.
+  Under time compression the soft-key strip says the triggers are inhibited
+  rather than describing a trigger that would refuse.
 *(The two slipspace entries that were here — unpurchasable modules, and an
 interdiction that ended in an empty room — are both closed. See Phase 15.)*
 
@@ -101,10 +118,18 @@ unstarted and four are small: the contract resolution card and log, mission
 marks on the nav list and the star chart, and the market's cost basis and
 deal gradient. None of them needs a phase to land in.
 
-**Phase 4 is now built**, which unblocks two things that were waiting on it:
-the ejected heat sink can become the physical scanner return it was always
-meant to be (`G.sinkEjections` is still written and still unread), and
-mining fragments in Phase 5 are the same shards from a second source.
+**Phase 4 is now built**, which unblocked two things that were waiting on
+it: the ejected heat sink has become the physical scanner return it was
+always meant to be (see above), and mining fragments in Phase 5 are the
+same shards from a second source.
+
+**The spent sink is now an object that nothing reacts to**, which is the
+next question rather than a defect. It is visible, it is hot, it says where
+you were and it cools over two and a half minutes — but no NPC reads it. The
+two obvious consumers, in order of how much they would change: a hot block
+astern is the classic seeker DECOY, and a hot block at a scene is EVIDENCE
+a patrol answering a distress call could act on. Both are design decisions
+rather than plumbing, and neither is started.
 
 **A CURVED WINDSCREEN BOWS OFF THE SCREEN, and it took three attempts to
 see why** — worth recording so nobody rebuilds it as a curve again. A band on
