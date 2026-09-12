@@ -55,6 +55,11 @@
 <script src="src/sound.js"></script>
 <script src="src/save.js"></script>
 <script src="src/hulls.js"></script>
+<!-- Generated from ref/ports by `node tools/glb2hulls.js ref/ports --ports`.
+     OPTIONAL by design: delete it and every port falls back to the
+     procedural mesh render.js builds. It must load BEFORE render.js, which
+     reads global.PortLib when its own library cache is first asked for. -->
+<script src="src/ports.js"></script>
 <script src="src/render.js"></script>
 <script src="src/gl.js"></script>
 <script src="src/screens.js"></script>

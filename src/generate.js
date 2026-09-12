@@ -1058,6 +1058,22 @@
     return got && got.geom ? got.geom : null;
   }
 
+  /* The berths the MODEL declares, each as a box in the port's own
+   * normalised frame, or null when the model declares none.
+   *
+   * Separate from modelledBay because it answers a different question and
+   * degrades separately: a model can know how many bays it has and still
+   * not declare a chamber, which is exactly where the four station patterns
+   * are today. Same key as modelledBay, for the same reason — one decision
+   * about which model a port wears, never two. */
+  function modelledBerths(port) {
+    var R = global.Render;
+    if (!R || !R.libPort || !R.portModelFor || !port) return null;
+    var got = R.libPort(R.portModelFor(port));
+    var b = got && got.anchors && got.anchors.berths;
+    return (b && b.length) ? b : null;
+  }
+
   function bayGeometry(port) {
     var r = port.radius || 1;
     var depth = (port.shaftDepth || 0) / r;
@@ -1098,6 +1114,60 @@
     var g = bayGeometry(port);
     var n = Math.max(1, g.berths);
     var k = ((i % n) + n) % n;
+
+    /* THE MODEL'S OWN BERTH, when it has one. Sorted so berth `k` is the
+     * same alcove every time: glTF node order is whatever the authoring
+     * tool wrote, and letting it decide would move a ship to a different
+     * bay whenever a station was re-exported. Same argument that sorts the
+     * muzzles.
+     *
+     * The anchor box is in the port's normalised frame, which is what this
+     * function returns in, so its centre maps straight across — and it is
+     * measured from the throat panels a hull would actually hit rather than
+     * from a table that assumes every station is the same shed. The largest
+     * bay is the large one, which is how the four patterns are built: one
+     * heavy berth among the S/M ones.
+     *
+     * `standoff` is still added rather than parking the hull at the centre
+     * of the volume, so a ship rests near the deck instead of floating in
+     * the middle of its own bay. */
+    var mb = modelledBerths(port);
+    if (mb && mb.length) {
+      var sorted = mb.slice().sort(function (a, b) {
+        return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
+      });
+      var kk = ((i % sorted.length) + sorted.length) % sorted.length;
+      var bx = sorted[kk];
+      /* An anchor is {min,max,mid} as the converter writes it — but `mid`
+       * is the only field every hand-made and older library is guaranteed
+       * to carry, and reading `min[2]` off one that has none is a TypeError
+       * thrown from inside the docking code. A berth with no extent is a
+       * point, which is a perfectly good answer to "where is this bay". */
+      var vol = function (b) {
+        if (!b.min || !b.max) return 0;
+        return (b.max[0] - b.min[0]) * (b.max[1] - b.min[1]) * (b.max[2] - b.min[2]);
+      };
+      var floorZ = bx.min ? bx.min[2] : bx.mid[2];
+      var biggest = 0;
+      for (var vi = 1; vi < sorted.length; vi++) {
+        if (vol(sorted[vi]) > vol(sorted[biggest])) biggest = vi;
+      }
+      return {
+        x: bx.mid[0],
+        y: bx.mid[1],
+        /* Floor of the bay, not its middle. */
+        z: floorZ + g.standoff,
+        /* Out of the alcove, which for these patterns is away from the
+         * station's axis: a berth on the -y side opens toward +y. The
+         * throat's own +Z would be better still and is carried on the
+         * anchor as `mat`; this is the part to revisit once there is a
+         * picture to check it against. */
+        facing: bx.mid[1] > 0 ? -1 : 1,
+        large: kk === biggest,
+        modelled: true
+      };
+    }
+
     var side = k < BERTH_X.length ? 1 : -1;         // which long wall
     var x = BERTH_X[k % BERTH_X.length];
     return {
@@ -2527,6 +2597,7 @@
     SHALLOW_DEPTH: SHALLOW_DEPTH,
     bayGeometry: bayGeometry,
     berthOffset: berthOffset,
+    modelledBerths: modelledBerths,
     controlFor: controlFor, CONTROL_RANGE: CONTROL_RANGE,
     BERTH_COUNT: BERTH_COUNT,
     UNDERGROUND_DEPTH: UNDERGROUND_DEPTH,

@@ -1967,6 +1967,20 @@ console.log('\n--- the control cabinet ---');
   var tries = 0, failed = null;
   while (tries++ < 200) {
     Ga.ship.hackAfter = 0;                       // ignore the panel cooldown
+    /* AND FORGET ANY BREACH, which is what made this check flaky about one
+     * run in fifty. `odds` is floored — Math.max(0.02, tool/(tool+diff)) —
+     * so even a difficulty of 1e9 opens the door 2% of the time, and that
+     * floor is deliberate: a lock nobody can ever pick is not a mechanic.
+     * But once a try SUCCEEDS the port is breached, and every subsequent
+     * call short-circuits to reason 'already' rather than rolling again —
+     * so a lucky first attempt meant the loop ran all 200 times and never
+     * saw the 'failed' it was waiting for.
+     *
+     * Clearing the breach each time makes every iteration an independent
+     * roll, which is what "does a hopeless lock ever fail" was always
+     * asking. 200 independent tries at 98% is as close to certain as this
+     * suite gets. */
+    if (Ga.ship.breached) Ga.ship.breached = {};
     var r = Combat.hackControl(Ga, pa, HOOKS, 0);
     if (!r.ok && r.reason === 'failed') { failed = r; break; }
   }

@@ -190,10 +190,40 @@ var PORT_SINGLE = {
 
 /* REPEATED boxes — an ordered list, one entry per instance. */
 var PORT_MULTI = {
-  /* The bay volume. `Throat` is STATIONS.md's name and covers both the
-   * shared S/M gate and the heavy one; `berth0` stays as an alias so the
-   * synthetic fixtures and any hand-made bay still convert. */
-  berths: /Throat$|^berth\d/i,
+  /* The bay volume — and it is measured from the throat's PANELS, not from
+   * the throat.
+   *
+   * `Throat$` is STATIONS.md's name for the reference volume and it was the
+   * right thing to look for. It matched nothing, in all four station
+   * patterns, and the cause is worth keeping because it is invisible from
+   * either end. station.js DOES build the volume:
+   *
+   *     const throat = box(w, h, depth, matDeep, tag + 'Throat');
+   *     throat.visible = false;
+   *
+   * It is hidden on purpose — a visible one is a dark slab filling the
+   * aperture, which the lab fixed once already. three's GLTFExporter
+   * defaults to `onlyVisible: true`, and three-d-stage.js exports with
+   * `parseAsync(obj, { binary: true })` and no override. So the one volume
+   * the whole berth system measures against is the one thing the exporter
+   * drops, silently, and every station converted with geom=NONE.
+   *
+   * Turning onlyVisible off would bring it back AND weld every other
+   * invisible helper into the drawn mesh, so the fix belongs here. The
+   * throat's five structural panels do export — ThroatFloor, ThroatRoof,
+   * ThroatWallL, ThroatWallR, ThroatBack — and they line the bay, so their
+   * union IS the bay envelope. Arguably a better measurement than the
+   * reference box: it is the surface a hull would actually hit.
+   *
+   * `^berth\d` is kept but no longer carries this alone — the real groups
+   * are berthL, berthSM0L, berthPylon0, none of which put a digit straight
+   * after "berth". The lamps are excluded (`ThroatLamp0` is a fixture, and
+   * station.js already had to rename them 'lamp…' for the same reason) and
+   * so is anything else that merely mentions a throat.
+   *
+   * MERGED PER BERTH by mergeKey below, or five panels would arrive as five
+   * berths and a cylinder with one bay would report having five. */
+  berths: /Throat(Floor|Roof|WallL|WallR|Back)$|Throat$|^berth\d/i,
   /* Everything that MOVES. The models are static at their stowed/open
    * positions and the game layer is expected to drive them, so each leaf
    * has to arrive as its own instance with its own box — a merged bound
@@ -414,6 +444,34 @@ function convertPort(file) {
   function box() {
     return { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
   }
+
+  /* Which anchor, if any, this node should JOIN rather than start.
+   *
+   * Returns a key that several nodes can agree on, or null to mean "this
+   * node is its own instance" — which is the answer for everything except
+   * berths. A berth's five throat panels all reduce to the berth's own tag,
+   * so they accumulate into one box with one orientation.
+   *
+   * KEYED ON THE PARENT NODE, not on the name, and the difference is not
+   * academic. Keying on the text before 'Throat' looked right and was
+   * measured wrong: the ring station carries its bays in two mirrored
+   * halves, and both halves export panels called `berthSM0ThroatFloor`. A
+   * name key merged a berth with the berth on the OPPOSITE SIDE of the
+   * station, so the ring reported 3 bays instead of 5 and two of those
+   * boxes spanned the whole structure. A box like that would say a hull
+   * fits where it would hit the far wall.
+   *
+   * A node's parent is unique per instance whatever it is called. Using it
+   * also keeps the measurement off the group itself, which is what we want:
+   * the group holds the jambs, the lintel and the sill as well, and those
+   * stand proud of the aperture, so measuring it would report a bay bigger
+   * than the hole a ship actually has to fly through. */
+  var merged = {};
+  function mergeKey(kind, name, parentIdx) {
+    if (kind !== 'berths') return null;
+    if (!/Throat(?:Floor|Roof|WallL|WallR|Back)$/i.test(name)) return null;
+    return 'berth|' + parentIdx;
+  }
   function grow(b, p) {
     for (var a = 0; a < 3; a++) {
       if (p[a] < b.min[a]) b.min[a] = p[a];
@@ -437,7 +495,7 @@ function convertPort(file) {
    * the axis names. glTF front (+Z) therefore becomes the bay's -Y. */
   function toGame(p) { return [p[0], -p[2], p[1]]; }
 
-  function walk(nodeIdx, parentMat, inInterior, inSpin, anchors, inOmit) {
+  function walk(nodeIdx, parentMat, inInterior, inSpin, anchors, inOmit, parentIdx) {
     var node = j.nodes[nodeIdx];
     var local = node.matrix ? node.matrix.slice()
                             : matFromTRS(node.translation, node.rotation, node.scale);
@@ -473,7 +531,19 @@ function convertPort(file) {
     }
     for (k in PORT_MULTI) {
       if (PORT_MULTI[k].test(name)) {
+        /* SEVERAL NODES, ONE ANCHOR. A berth arrives as five separate
+         * throat panels (see PORT_MULTI.berths), and taking each as its own
+         * instance would report a one-bay cylinder as having five. Panels
+         * that share a berth tag share a box: `berthSM0LThroatFloor` and
+         * `berthSM0LThroatBack` both reduce to `berthSM0L`.
+         *
+         * Only the berths merge. Everything else in PORT_MULTI is genuinely
+         * one box per node — four door leaves ARE four leaves — so
+         * mergeKey returns null for them and the old behaviour stands. */
+        var mk = mergeKey(k, name, parentIdx);
+        if (mk && merged[mk]) { mine = merged[mk]; continue; }
         var b = box();
+        if (mk) merged[mk] = b;
         /* THE NODE'S OWN ORIENTATION, kept alongside its bounds.
          *
          * A bounding box has no direction, and for a berth the direction is
@@ -518,13 +588,13 @@ function convertPort(file) {
       }
     }
     for (var ch = 0; ch < (node.children || []).length; ch++) {
-      walk(node.children[ch], world, interior, spin, mine, omit);
+      walk(node.children[ch], world, interior, spin, mine, omit, nodeIdx);
     }
   }
 
   var scene = j.scenes[j.scene || 0];
   for (var r = 0; r < scene.nodes.length; r++) {
-    walk(scene.nodes[r], matIdentity(), false, false, null, false);
+    walk(scene.nodes[r], matIdentity(), false, false, null, false, -1);
   }
 
   /* ---- scale, and where the origin is ----------------------------------

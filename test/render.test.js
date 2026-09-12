@@ -1585,8 +1585,14 @@ console.log('--- imported ports ---');
       geom: { floorZ: -0.9, ceilZ: -0.58, mouthR: 0.42,
               chamberX: 1.6, chamberY: 0.9, berths: 3 },
       anchors: {
-        berths: [{ mid: [-0.95, -0.6, -0.9] }, { mid: [0, -0.6, -0.9] },
-                 { mid: [0.95, -0.6, -0.9] }],
+        /* min/max as well as mid, because that is what the converter
+         * actually writes and a fixture that is easier than the real thing
+         * tests an easier thing. berthOffset reads the floor off `min` to
+         * stand a hull on the deck rather than in the middle of the air;
+         * with mid alone it silently got a different answer. */
+        berths: [{ min: [-1.05, -0.7, -0.9], max: [-0.85, -0.5, -0.75], mid: [-0.95, -0.6, -0.9] },
+                 { min: [-0.12, -0.7, -0.9], max: [0.12, -0.5, -0.72], mid: [0, -0.6, -0.9] },
+                 { min: [0.85, -0.7, -0.9], max: [1.05, -0.5, -0.75], mid: [0.95, -0.6, -0.9] }],
         signs: [{ mid: [0, -0.55, 0.04] }]
       }
     },
@@ -1791,6 +1797,61 @@ console.log('--- imported ports ---');
   var rising = true;
   for (var i = 1; i < xs.length; i++) if (xs[i] <= xs[i - 1]) rising = false;
   check('berths are ordered across the shed', rising, xs.join(' '));
+
+  /* ---- a berth offset lands INSIDE the berth ---------------------------
+   * The number this is standing in for is one nobody can check by reading:
+   * berthOffset used to lay bays out from a constant table — three x
+   * positions against two walls, six berths, every station the same shed —
+   * while the renderer drew whatever the model actually was. Since docking
+   * now parks the hull at the berth, a table that disagrees with the art is
+   * a ship inside a wall, which is the failure PORT-MODELS.md calls out and
+   * the one the anchors exist to prevent.
+   *
+   * So: ask for each berth in turn and assert the answer is within the
+   * model's own box for it. Layout is invisible to this suite, but
+   * containment is arithmetic, and containment is the part that matters. */
+  var gen = W.Gen;
+  var pPort = { id: 'bay-fixture', radius: 1, shaftDepth: 0, surface: true };
+
+  /* THE EXPECTED BOXES COME FROM THE FIXTURE, not from the function under
+   * test. Reading them back through modelledBerths made every check below
+   * conditional on modelledBerths working — so breaking it turned three
+   * assertions into no assertions and the suite went green with one
+   * complaint. The fixture is the ground truth here; if berthOffset stops
+   * consulting the model it falls back to the constant table and the
+   * containment check fails, which is what it is for. */
+  var declared = p.anchors.berths;
+  check('the model\'s berths reach generate.js',
+        !!(gen.modelledBerths && gen.modelledBerths(pPort)),
+        'modelledBerths returned nothing');
+  check('and the bay count comes off the model rather than the constant',
+        gen.bayGeometry(pPort).berths === declared.length,
+        gen.bayGeometry(pPort).berths + ' vs ' + declared.length);
+
+  var outside = [];
+  for (var bi = 0; bi < declared.length; bi++) {
+    var off = gen.berthOffset(pPort, bi);
+    /* x and y must sit inside the box outright. z is the floor plus a
+     * standoff, so it is allowed to be a little ABOVE the top — a ship
+     * parked in a shallow bay stands proud of it — but never below the
+     * floor, which would be through the deck. */
+    var b = declared[bi];
+    if (off.x < b.min[0] || off.x > b.max[0]) outside.push(bi + ':x ' + off.x);
+    if (off.y < b.min[1] || off.y > b.max[1]) outside.push(bi + ':y ' + off.y);
+    if (off.z < b.min[2]) outside.push(bi + ':below the floor ' + off.z);
+  }
+  check('every berth offset lands inside the berth the model declares',
+        outside.length === 0, outside.join(', '));
+
+  /* And asking twice gives the same bay. A re-export reorders glTF nodes
+   * freely, so the sort is what keeps a saved career parked where it
+   * left off. */
+  var twice = true;
+  for (var ti = 0; ti < declared.length; ti++) {
+    var a1 = gen.berthOffset(pPort, ti), a2 = gen.berthOffset(pPort, ti);
+    if (a1.x !== a2.x || a1.y !== a2.y || a1.z !== a2.z) twice = false;
+  }
+  check('and berth numbering is stable between asks', twice);
 
   /* An imported role takes over the mesh the renderer draws, and the roles
    * it does not supply keep theirs. */
