@@ -1104,6 +1104,54 @@
     };
   }
 
+  /* ---- orbital-station interior -----------------------------------------
+   * A surface bay is a shaft cut DOWN into the ground; a station bay is a
+   * HALL cut IN along the ring's hub axis. Same idea — a mouth, a throat,
+   * a chamber, berths on the floor — but the axis is the station's spin
+   * axis, not local vertical, and the proportions are a hall (wide and not
+   * very deep) rather than a well (narrow and deep). Crucially this returns
+   * the SAME SHAPE of object bayGeometry does, so every downstream consumer
+   * — the mesh, the camera clamp, berthOffset — reads it with no second
+   * code path. The z axis here is "into the station along the hub"; the
+   * mesh and camera will orient it with stationFrame, which already exists
+   * and already spins with t.
+   *
+   * Still square, per Astra's note: a station is welded plate too, and only
+   * the ring itself is a thing that turns. */
+  var SBAY_MOUTH_R  = 0.62;      // half-width of the square mouth on the hub face
+  var SBAY_THROAT_R = 0.58;      // the mouth barely necks down — it is a doorway, not a duct
+  var SBAY_CHAMBER_X = 1.55;     // the hall, inside faces, half-extents — wider than a shed
+  var SBAY_CHAMBER_Y = 1.05;
+  var SBAY_DEPTH = 1.7;          // how far IN along the hub the hall runs (a hall, not a well)
+  var SBAY_HEADROOM = 0.9;       // floor to ceiling — a hall you fly a ship down, so tall
+  var SBAY_BERTH_Y = 0.85;       // berths line the long walls
+  var SBAY_STANDOFF = 0.012;
+  var SBAY_BERTHS = 6;
+
+  /* The station's own interior. Keyed off the station's radius the same way
+   * bayGeometry keys off a pad's, so a big ring gets a big hall. Modelled
+   * stations could later declare their own geom the way modelledBay does;
+   * for now every procedural station shares this one table, which is the
+   * same discipline the surface bay started from. */
+  function stationBay(station) {
+    var r = station.radius || 1;
+    var floorZ = -SBAY_HEADROOM * 0.5;   // hall centred on the hub axis line
+    return {
+      depth: SBAY_DEPTH,
+      mouthR: SBAY_MOUTH_R,
+      throatR: SBAY_THROAT_R,
+      chamberX: SBAY_CHAMBER_X,
+      chamberY: SBAY_CHAMBER_Y,
+      floorZ: floorZ,
+      ceilZ: floorZ + SBAY_HEADROOM,
+      berthY: SBAY_BERTH_Y,
+      standoff: SBAY_STANDOFF,
+      berths: SBAY_BERTHS,
+      lift: 0,                           // a station is not standing on anything
+      station: true                      // consumers can tell a hall from a shaft
+    };
+  }
+
   /* Where berth `i` sits, in the same pad-radii mouth-relative frame.
    * Berth 0 is the large one and is given the extra elbow room; the rest
    * are evenly spaced round what is left. Deterministic, so a ship parked
@@ -2613,6 +2661,7 @@
      * hangar drawn somewhere the ship does not actually stop. */
     SHALLOW_DEPTH: SHALLOW_DEPTH,
     bayGeometry: bayGeometry,
+    stationBay: stationBay,
     berthOffset: berthOffset,
     modelledBerths: modelledBerths,
     controlFor: controlFor, CONTROL_RANGE: CONTROL_RANGE,
