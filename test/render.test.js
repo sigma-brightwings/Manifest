@@ -723,16 +723,39 @@ console.log('--- the hull library ---');
    * emissive engine glow somewhere — the converter promises all of this,
    * and a regenerated hulls.js that breaks the promise should fail here,
    * not as a black shape in the sky. */
+  /* MEASURED OVER THE WHOLE MODEL, hull and gear together. The landing
+   * legs are no longer part of `mesh.v` — they come out as separate hinged
+   * parts so they can actually move — but they are still part of the ship,
+   * and the promise being checked here is about the MODEL. Measuring the
+   * hull alone would quietly accept a converter that dropped the legs
+   * somewhere else entirely.
+   *
+   * A part's vertices are relative to its own pivot, so the pivot is what
+   * puts them back in hull space. That makes this check strictly stronger
+   * than it was: it now fails if a leg is emitted in the wrong place, which
+   * is the one mistake the split makes possible. */
   var allGood = true, allLit = true, detail = '';
   for (var i = 0; i < ids.length; i++) {
     var mesh = R.libHull(ids[i]);
     var mins = [1e9, 1e9, 1e9], maxs = [-1e9, -1e9, -1e9];
-    for (var vi = 0; vi < mesh.v.length; vi++) {
-      for (var a = 0; a < 3; a++) {
-        if (mesh.v[vi][a] < mins[a]) mins[a] = mesh.v[vi][a];
-        if (mesh.v[vi][a] > maxs[a]) maxs[a] = mesh.v[vi][a];
+    var a;
+    function grow(x, y, z) {
+      var p = [x, y, z];
+      for (var k = 0; k < 3; k++) {
+        if (p[k] < mins[k]) mins[k] = p[k];
+        if (p[k] > maxs[k]) maxs[k] = p[k];
       }
     }
+    for (var vi = 0; vi < mesh.v.length; vi++) {
+      grow(mesh.v[vi][0], mesh.v[vi][1], mesh.v[vi][2]);
+    }
+    (mesh.gear || []).forEach(function (part) {
+      for (var g = 0; g < part.mesh.v.length; g++) {
+        grow(part.pivot[0] + part.mesh.v[g][0],
+             part.pivot[1] + part.mesh.v[g][1],
+             part.pivot[2] + part.mesh.v[g][2]);
+      }
+    });
     var longest = Math.max(maxs[0] - mins[0], maxs[1] - mins[1], maxs[2] - mins[2]);
     var centred = Math.abs(maxs[0] + mins[0]) < 0.05 &&
                   Math.abs(maxs[1] + mins[1]) < 0.05 &&
@@ -1474,6 +1497,127 @@ console.log('--- the guns panel ---');
   G.warpIndex = warpWas;
 
   G.dashPages.centre = before;
+  frames(2);
+})();
+
+/* The landing gear, which for a long time was three legs welded to the
+ * belly of every ship in the game. The models were authored gear-down and
+ * the converter baked every node transform into the vertices, so the legs
+ * were permanently extended and Shift+G — which was working perfectly the
+ * whole time — had nothing on screen it could change.
+ *
+ * What is worth asserting is the two ends of the travel and the order of
+ * the middle, all measured through Render.gearBounds so this exercises the
+ * renderer's own arithmetic rather than a copy of it. */
+console.log('--- the landing gear ---');
+(function () {
+  var R = W.Render;
+  check('the pose helper is exported', typeof R.gearBounds === 'function');
+  if (typeof R.gearBounds !== 'function') return;
+
+  var ids = R.hullIds();
+  var rigged = ids.filter(function (id) {
+    var m = R.libHull(id);
+    return m && m.gear && m.gear.length;
+  });
+  check('the library ships rigged hulls', rigged.length > 0,
+        rigged.length + ' of ' + ids.length);
+  if (!rigged.length) return;
+
+  /* Every rigged hull, not just the courier: a converter that got the axis
+   * right on one model and wrong on another is exactly the failure this
+   * catches, and it is invisible in a screenshot of the ship you happened
+   * to be flying. */
+  var badAxis = [], badStow = [], noLift = [], noFold = [], badDoor = [];
+  rigged.forEach(function (id) {
+    var m = R.libHull(id);
+    m.gear.forEach(function (p) {
+      var len = Math.hypot(p.axis[0], p.axis[1], p.axis[2]);
+      if (Math.abs(len - 1) > 1e-3) badAxis.push(id);
+      /* A hinge that turns by nothing is a hinge the converter failed to
+       * measure, and it would read on screen as gear that never moves —
+       * which is the bug this whole change exists to fix. */
+      if (!(Math.abs(p.stow) > 0.2)) badStow.push(id + '/' + p.role);
+    });
+
+    var down = R.gearBounds(m, 1), up = R.gearBounds(m, 0);
+
+    /* DEPLOYED, the leg hangs below the bay it came out of; STOWED, it is
+     * pulled back up. Those two comparisons are the whole feature, and both
+     * are claims about this code rather than about the models.
+     *
+     * NOT "the feet are the lowest thing on the ship", which was the first
+     * version of this check and which `bulk-s` fails honestly: its keel
+     * hangs lower than its gear does, so the hauler would settle on its
+     * belly. That is a fact about the art, and asserting it here would be
+     * this suite failing every time a modeller drew a deep hull. */
+    var bay = Infinity;
+    for (var g = 0; g < m.gear.length; g++) {
+      if (m.gear[g].pivot[1] < bay) bay = m.gear[g].pivot[1];
+    }
+    if (!(down.lo[1] < bay - 0.01)) noLift.push(id + ' ' + down.lo[1].toFixed(3) +
+                                                ' vs bay ' + bay.toFixed(3));
+    if (!(up.lo[1] > down.lo[1] + 0.005)) noFold.push(id + ' ' + down.lo[1].toFixed(3) +
+                                                     ' -> ' + up.lo[1].toFixed(3));
+  });
+  check('every hinge axis is a unit vector', badAxis.length === 0, badAxis.join(' '));
+  check('and every hinge actually turns', badStow.length === 0, badStow.slice(0, 4).join(' '));
+  check('deployed, every leg hangs below its own bay', noLift.length === 0,
+        noLift.slice(0, 3).join(' | '));
+  check('and stowing pulls them up into the hull', noFold.length === 0,
+        noFold.slice(0, 3).join(' | '));
+
+  /* THE DOOR LEADS THE LEG. A strut swinging through a shut door is worse
+   * than no animation, so the phases are staggered — and the assertion is
+   * on the ordering rather than on the constants, so retuning the feel does
+   * not break the test. */
+  check('a door is already moving before the leg starts',
+        R.gearPhase('door', 0.2) > 0 && R.gearPhase('strut', 0.2) === 0,
+        R.gearPhase('door', 0.2).toFixed(2) + ' vs ' + R.gearPhase('strut', 0.2).toFixed(2));
+  check('and both are home at the end',
+        R.gearPhase('door', 1) === 1 && R.gearPhase('strut', 1) === 1);
+  check('and both are away at the start',
+        R.gearPhase('door', 0) === 0 && R.gearPhase('strut', 0) === 0);
+
+  /* The travel itself: a switch, and a thing that takes time to follow it. */
+  var probe = { gear: true, gearTravel: 0 };
+  var ticks = 0;
+  while (probe.gearTravel < 1 && ticks < 1000) { Sim.updateGear(probe, 0.1); ticks++; }
+  check('the gear takes about as long as it says to swing',
+        Math.abs(ticks * 0.1 - Sim.GEAR_TRAVEL_TIME) < 0.25,
+        (ticks * 0.1).toFixed(1) + 's vs ' + Sim.GEAR_TRAVEL_TIME);
+  probe.gear = false;
+  Sim.updateGear(probe, 0.1);
+  check('and it comes back up again', probe.gearTravel < 1);
+
+  /* On the ground you are standing on the legs, whatever the switch says —
+   * a berthed ship drawn belly-down would be the same class of lie the
+   * welded-on legs were. */
+  var berthed = { gear: false, docked: 'b1' };
+  Sim.updateGear(berthed, 10);
+  check('a berthed ship is on its gear whatever the switch says',
+        berthed.gearTravel === 1, String(berthed.gearTravel));
+
+  /* An NPC has never been near Sim.updateGear and must still read as a
+   * ship in flight rather than one permanently on approach. */
+  check('a ship the sim has never touched reads as stowed',
+        R.gearTravelOf({}) === 0);
+
+  /* And it survives being drawn, at both ends and mid-swing, in both
+   * views — six extra meshes a frame on whichever path is live. */
+  newFlying();
+  var mark = drawn.texts.length, threw = null;
+  try {
+    [0, 0.32, 1].forEach(function (t) {
+      G.ship.gear = t > 0.5; G.ship.gearTravel = t;
+      ['cockpit', 'orbit'].forEach(function (v) { G.viewMode = v; frames(2); });
+    });
+  } catch (e) { threw = e; }
+  check('a ship renders at every point of the swing, in both views',
+        !threw && errorsSince(mark).length === 0,
+        threw ? threw.message + ' | ' + String(threw.stack).split('\n')[1]
+              : errorsSince(mark)[0]);
+  G.viewMode = 'cockpit';
   frames(2);
 })();
 

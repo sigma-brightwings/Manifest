@@ -825,6 +825,42 @@
     return dmg;
   }
 
+  /* ---- landing gear, as a thing with travel ------------------------------
+   * `ship.gear` is the SWITCH — what the pilot asked for — and every rule
+   * that depends on the gear reads it: the drag area, whether a pad will
+   * catch you, whether open ground is a landing or a wreck. None of that
+   * changes here, deliberately, because a mechanism that is legally down
+   * only when it has finished moving is a new way to bounce off a pad.
+   *
+   * `ship.gearTravel` is where it actually IS, 0 stowed to 1 locked, and it
+   * exists purely so the renderer has something to interpolate. The two are
+   * allowed to disagree for a couple of seconds and nothing but the picture
+   * cares.
+   *
+   * ON SIM TIME, like the weapon cooldowns and for the same stated reason:
+   * the mechanism belongs to the world it is moving in. Under compression
+   * that means it completes almost instantly, which is correct — time
+   * really is passing — and never visible, because warp is pinned to 1x
+   * anywhere you would be lowering the gear.
+   *
+   * ON THE GROUND IT IS DOWN, whatever the switch says. A berthed or landed
+   * ship is standing on its legs; drawing it belly-down on a pad because a
+   * flag was never set would be the same class of lie the baked-in legs
+   * were. */
+  var GEAR_TRAVEL_TIME = 2.4;   // seconds, hinge to lock
+
+  function updateGear(ship, dt) {
+    if (!ship) return 0;
+    var want = (ship.gear || ship.landed || ship.docked) ? 1 : 0;
+    var cur = typeof ship.gearTravel === 'number' ? ship.gearTravel : want;
+    if (dt > 0) {
+      var step = dt / GEAR_TRAVEL_TIME;
+      cur = cur < want ? Math.min(want, cur + step) : Math.max(want, cur - step);
+    }
+    ship.gearTravel = cur;
+    return cur;
+  }
+
   /* A sensible integration step: a fixed small fraction of the orbital period
    * at the current distance from whatever body dominates. Close to a moon
    * that means seconds; out between planets it means many minutes. */
@@ -3341,6 +3377,7 @@
     atmosphereContext: atmosphereContext,
     heatFlux: heatFlux,
     updateHeating: updateHeating,
+    updateGear: updateGear, GEAR_TRAVEL_TIME: GEAR_TRAVEL_TIME,
     HEAT_LIMIT: HEAT_LIMIT,
     predictTrajectory: predictTrajectory,
     beginPrediction: beginPrediction,

@@ -45,6 +45,20 @@ full design and the phases still outstanding.
   sitting in space where anyone could find it, and what a patrol or a
   seeker does about that is still an open question.
 
+- **The landing gear works, and it always did.** Shift+G has been flipping
+  the state correctly for as long as it has existed — the drag changed, pads
+  caught you, the status line said GEAR DOWN — but nothing on the ship
+  moved, so the only conclusion available to a player was that the key was
+  broken. Now three legs swing out of their bays over a couple of seconds,
+  doors first, and fold back in the same order reversed.
+
+  The legs come out of the models rather than being drawn by hand: every
+  hull was already rigged with hinges, doors, struts and feet as separate
+  nodes, and the converter now keeps that rig instead of welding it flat.
+  Thirty-six of the fifty-two hulls have gear. The ones that do not —
+  capitals, liners, navy cutters, freighters, escape pods — are the ships
+  that never touch a pad, which is the right answer rather than a gap.
+
 ### Changed
 
 - **Contraband is graded now.** A flat 180 cr/t said every illegal cargo was
@@ -68,6 +82,14 @@ full design and the phases still outstanding.
   pilot cleared to own the drive is cleared to carry what it burns.
 
 ### Fixed
+
+- **Every ship in the game was flying with its landing gear down.** All
+  fifty-two models were authored with the legs extended, and the converter
+  baked every node transform into the vertices, so three legs were welded to
+  the belly of every hull — in flight, in combat, in slipspace, on the F5
+  hull viewer. Nobody had reported it as a bug, because with nothing able to
+  retract them there was no "up" to compare against; it surfaced only when
+  the gear was given real motion and the belly came out clean.
 
 - **Piracy stopped working the moment you died.** A respawned ship came back
   without a cargo scoop, so a robbed freighter dumped its hold exactly as it
@@ -676,6 +698,13 @@ canister list nor which page a cockpit panel is showing has ever been
 written to a save, so there is nothing new in the file and nothing to
 migrate. An old career simply gains a page it can click a panel round to,
 and starts leaving blocks behind it the next time a sink ejects.
+
+**Nor does the landing gear.** `ship.gear` — the switch, which is what
+every rule reads and what is saved — has not changed meaning. The new
+`gearTravel` is where the legs have physically got to, it is not written to
+the file, and on load it initialises to wherever the switch already is: a
+career saved on a pad comes back standing on its gear, one saved in flight
+comes back clean, and neither sees the mechanism move.
 
 **Contracts already in flight are untouched.** A signed mission keeps the
 headline and the destination it was signed with — the new generator runs

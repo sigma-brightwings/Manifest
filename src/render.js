@@ -527,6 +527,19 @@
     var src = lib[id];
     var mesh = { v: src.v, f: src.f, c: [] };
     for (var i = 0; i < src.ci.length; i++) mesh.c.push(src.pal[src.ci[i]]);
+    /* The parts that move, hung off the hull they belong to. Each carries
+     * its own small mesh plus the pivot and axis it turns about, and the
+     * mesh object is BUILT ONCE here and cached with the hull for exactly
+     * the reason the shard pool is fixed: gl.js caches its GPU buffers on
+     * the mesh object, so a fresh object per frame would upload a vertex
+     * buffer per leg per frame and never free one. */
+    if (src.gear && src.gear.length) {
+      mesh.gear = src.gear.map(function (p) {
+        var pm = { v: p.v, f: p.f, c: [] };
+        for (var k = 0; k < p.ci.length; k++) pm.c.push(p.pal[p.ci[k]]);
+        return { role: p.role, pivot: p.pivot, axis: p.axis, stow: p.stow, mesh: pm };
+      });
+    }
     LIB_CACHE[id] = mesh;
     return mesh;
   }
@@ -2087,10 +2100,139 @@
     return !!(global.GLWorld && global.GLWorld.available);
   }
 
-  function drawHullModel(ctx, cam, frame, lengthKm, sunDir, tint, kind) {
+  /* ---- the parts of a hull that move ------------------------------------
+   * A hinged part is drawn EXACTLY like everything else in this file: a
+   * mesh and a frame. There is no per-part transform in the shader and no
+   * change to the mesh format's meaning — the frame is simply the ship's
+   * own, moved to the part's pivot and turned about the part's own axis.
+   * `drawPortDoors` already does the same thing for a sliding leaf, and the
+   * port library's `spin` bucket for a turning ring; this is that pattern
+   * a third time, which is why neither renderer needed touching.
+   *
+   * THE AUTHORED POSE IS DEPLOYED. Every hull in the library was saved
+   * gear-down, so travel 1 is the model as drawn and travel 0 rotates each
+   * part by its own measured `stow` angle. That is also the standing bug
+   * this fixes: before the split, the legs were welded to the hull and
+   * every ship flew permanently extended.
+   *
+   * THE DOOR LEADS. A strut that swings through a shut door is worse than
+   * no animation at all, so the two roles run on staggered slices of the
+   * same travel — the door is most of the way open before the leg starts
+   * down, and the leg is home before the door closes behind it. One
+   * number, read both ways, so retraction is the reverse of extension
+   * without a second code path. */
+  function gearPhase(role, travel) {
+    var t = Math.max(0, Math.min(1, travel));
+    var p = role === 'door' ? t / 0.45 : (t - 0.35) / 0.65;
+    return Math.max(0, Math.min(1, p));
+  }
+
+  /* The ship's basis, rotated about `axis` by `ang`, with its origin moved
+   * to the part's pivot. Rodrigues on each basis vector — three rotations
+   * of a unit vector per part, which at six parts is nothing against a
+   * frame that already costs milliseconds. */
+  var gearFrame = { pos: null, fwd: null, up: null, right: null };
+
+  function rotAxis(v, k, c, s, kd) {
+    var d = k.x * v.x + k.y * v.y + k.z * v.z;
+    return {
+      x: v.x * c + (k.y * v.z - k.z * v.y) * s + k.x * d * kd,
+      y: v.y * c + (k.z * v.x - k.x * v.z) * s + k.y * d * kd,
+      z: v.z * c + (k.x * v.y - k.y * v.x) * s + k.z * d * kd
+    };
+  }
+
+  function drawHullGear(ctx, cam, frame, mesh, lengthKm, sunDir, tint, travel) {
+    var parts = mesh && mesh.gear;
+    if (!parts || !parts.length) return;
+    var R = frame.right, U = frame.up, F = frame.fwd;
+
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      var ang = p.stow * (1 - gearPhase(p.role, travel));
+
+      /* Pivot and axis are given in the hull's own axes, so both are
+       * resolved against the ship's CURRENT attitude every frame rather
+       * than stored as world points — the same rule the muzzles follow, and
+       * for the same reason: at 5 km/s a frozen world point detaches
+       * visibly within one frame. */
+      var a = p.axis, q = p.pivot;
+      var k = { x: R.x * a[0] + U.x * a[1] + F.x * a[2],
+                y: R.y * a[0] + U.y * a[1] + F.y * a[2],
+                z: R.z * a[0] + U.z * a[1] + F.z * a[2] };
+      var kl = Math.hypot(k.x, k.y, k.z) || 1;
+      k.x /= kl; k.y /= kl; k.z /= kl;
+
+      var c = Math.cos(ang), s = Math.sin(ang), kd = 1 - c;
+      gearFrame.pos = {
+        x: frame.pos.x + (R.x * q[0] + U.x * q[1] + F.x * q[2]) * lengthKm,
+        y: frame.pos.y + (R.y * q[0] + U.y * q[1] + F.y * q[2]) * lengthKm,
+        z: frame.pos.z + (R.z * q[0] + U.z * q[1] + F.z * q[2]) * lengthKm
+      };
+      gearFrame.right = rotAxis(R, k, c, s, kd);
+      gearFrame.up = rotAxis(U, k, c, s, kd);
+      gearFrame.fwd = rotAxis(F, k, c, s, kd);
+
+      if (gpuWorld() && global.GLWorld.queueMesh(cam, gearFrame, p.mesh, lengthKm, sunDir)) continue;
+      paintMesh(ctx, cam, gearFrame, p.mesh, lengthKm, sunDir, tint);
+    }
+  }
+
+  /* Where the gear reaches at a given travel, in the HULL's own axes — the
+   * same frame `mesh.v` is in, so it can be compared against the hull
+   * directly. Runs the identity basis through the same rotation the drawing
+   * does, which is the point: a test that re-derived the pose would be
+   * testing its own arithmetic rather than the renderer's.
+   *
+   * Also what the hull viewer page wants, when it grows a gear switch. */
+  var HULL_R = { x: 1, y: 0, z: 0 };
+  var HULL_U = { x: 0, y: 1, z: 0 };
+  var HULL_F = { x: 0, y: 0, z: 1 };
+
+  function gearBounds(mesh, travel) {
+    var parts = mesh && mesh.gear;
+    if (!parts || !parts.length) return null;
+    var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      var ang = p.stow * (1 - gearPhase(p.role, travel));
+      var a = p.axis;
+      var k = { x: a[0], y: a[1], z: a[2] };
+      var c = Math.cos(ang), s = Math.sin(ang), kd = 1 - c;
+      var R = rotAxis(HULL_R, k, c, s, kd);
+      var U = rotAxis(HULL_U, k, c, s, kd);
+      var F = rotAxis(HULL_F, k, c, s, kd);
+      for (var v = 0; v < p.mesh.v.length; v++) {
+        var q = p.mesh.v[v];
+        var w = [p.pivot[0] + R.x * q[0] + U.x * q[1] + F.x * q[2],
+                 p.pivot[1] + R.y * q[0] + U.y * q[1] + F.y * q[2],
+                 p.pivot[2] + R.z * q[0] + U.z * q[1] + F.z * q[2]];
+        for (var b = 0; b < 3; b++) {
+          if (w[b] < lo[b]) lo[b] = w[b];
+          if (w[b] > hi[b]) hi[b] = w[b];
+        }
+      }
+    }
+    return { lo: lo, hi: hi };
+  }
+
+  /* How far this ship's gear has actually travelled. `gearTravel` is what
+   * sim.js eases; `gear` is the commanded state. A ship with neither — an
+   * NPC, a wreck, anything the sim has not touched — reads as stowed, which
+   * is what a ship in flight should look like. */
+  function gearTravelOf(ship) {
+    if (!ship) return 0;
+    if (typeof ship.gearTravel === 'number') return ship.gearTravel;
+    return ship.gear ? 1 : 0;
+  }
+
+  function drawHullModel(ctx, cam, frame, lengthKm, sunDir, tint, kind, ship) {
     var mesh = shipMeshes()[kind] || shipMeshes().courier;
-    if (gpuWorld() && global.GLWorld.queueMesh(cam, frame, mesh, lengthKm, sunDir)) return;
-    paintMesh(ctx, cam, frame, mesh, lengthKm, sunDir, tint);
+    if (!(gpuWorld() && global.GLWorld.queueMesh(cam, frame, mesh, lengthKm, sunDir))) {
+      paintMesh(ctx, cam, frame, mesh, lengthKm, sunDir, tint);
+    }
+    drawHullGear(ctx, cam, frame, mesh, lengthKm, sunDir, tint,
+                 gearTravelOf(ship || frame));
   }
 
   /* The player's own hull. A ship object already carries pos/fwd/up/right,
@@ -2101,9 +2243,15 @@
    * never taken. */
   function drawShipModel(ctx, cam, ship, sunDir, tint) {
     var mesh = shipMeshes().courier;
-    if (gpuWorld() && global.GLWorld.queueMesh(cam, ship, mesh, SHIP_LEN, sunDir,
-                                               ship.reentryGlow || 0, ship.windDir)) return;
-    paintMesh(ctx, cam, ship, mesh, SHIP_LEN, sunDir, tint);
+    if (!(gpuWorld() && global.GLWorld.queueMesh(cam, ship, mesh, SHIP_LEN, sunDir,
+                                                 ship.reentryGlow || 0, ship.windDir))) {
+      paintMesh(ctx, cam, ship, mesh, SHIP_LEN, sunDir, tint);
+    }
+    /* The legs go on the plain queueMesh path rather than the plasma one.
+     * They are the coldest thing on the ship — the last part to see air on
+     * the way down and the first thing a pad touches — and giving them the
+     * hull's re-entry glow would light them up before the nose. */
+    drawHullGear(ctx, cam, ship, mesh, SHIP_LEN, sunDir, tint, gearTravelOf(ship));
   }
 
   /* ---- torch drives -----------------------------------------------------
@@ -4473,7 +4621,9 @@
     paintMesh: paintMesh,
     faceMaterial: faceMaterial,
     shipMeshes: shipMeshes,
-    libHull: libHull, hullIds: hullIds, assignHull: assignHull,
+    libHull: libHull,
+    gearPhase: gearPhase, gearBounds: gearBounds, gearTravelOf: gearTravelOf,
+    hullIds: hullIds, assignHull: assignHull,
     HULL_ASSIGN: HULL_ASSIGN,
     libPort: libPort, portIds: portIds, reloadPorts: reloadPorts,
     portModelFor: portModelFor, STATION_MODELS: STATION_MODELS,

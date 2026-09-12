@@ -153,6 +153,135 @@ var GLASS_RE = /cockpitGlass/i;
  * out of the centreline between them. */
 var EMITTER_RE = /laserEmitter/i;
 
+/* ---- the parts that MOVE ------------------------------------------------
+ * Every hull is rigged for landing gear — `gearNose`, `gearRearLeft`,
+ * `gearRearRight`, each carrying a static `gearBayPlate` with its caution
+ * stripes, a `gearDoorHinge` over a `gearBayDoor`, and a `gearStrutHinge`
+ * over a `gearStrut`, `gearBrace` and `gearFoot`. There are no animation
+ * clips in the files: `animations: 0` in every one. The hinges are real
+ * nodes, so the geometry supports actuation, but the motion was never
+ * authored.
+ *
+ * AND THE MODELS WERE SAVED GEAR-DOWN. Baking every node transform into the
+ * vertices therefore did not just lose the ability to animate — it welded
+ * three legs to the belly of every ship in the game, permanently extended,
+ * in flight, in combat, in slipspace. That was the actual bug behind
+ * "Shift+G does nothing": the state was flipping correctly the whole time
+ * and there was nothing on screen that could ever have shown it.
+ *
+ * So a node whose name ends in `Hinge` opens its own bucket instead of
+ * writing into the hull, and comes out as a separate small mesh carrying
+ * the pivot and axis it turns about. The static half of the leg — plate and
+ * stripes — stays in the hull, because a bay is a hole in the ship whether
+ * or not anything is hanging out of it. */
+var HINGE_RE = /Hinge$/i;
+
+/* Which leg a part belongs to, and which of the two hinges it is: both are
+ * read off the node names rather than positions, so a model that adds a
+ * fourth leg or a second door needs no change here. */
+var LEG_RE = /^gear(Nose|RearLeft|RearRight|[A-Za-z]*)$/i;
+
+function vNorm(v) {
+  var L = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0] / L, v[1] / L, v[2] / L];
+}
+function vCross(a, b) {
+  return [a[1] * b[2] - a[2] * b[1],
+          a[2] * b[0] - a[0] * b[2],
+          a[0] * b[1] - a[1] * b[0]];
+}
+function vDot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+
+/* Rotate `p` about a unit `axis` through the origin, by `ang`. Rodrigues,
+ * written out rather than pulled in, because this file has no dependencies
+ * and one formula is cheaper than a vector library. */
+function rotAbout(p, axis, ang) {
+  var c = Math.cos(ang), s = Math.sin(ang);
+  var d = vDot(axis, p);
+  var cr = vCross(axis, p);
+  return [p[0] * c + cr[0] * s + axis[0] * d * (1 - c),
+          p[1] * c + cr[1] * s + axis[1] * d * (1 - c),
+          p[2] * c + cr[2] * s + axis[2] * d * (1 - c)];
+}
+
+/* ---- WHICH WAY A HINGE TURNS, derived rather than guessed ---------------
+ * A hinge node's matrix gives three candidate axes and nothing says which
+ * one is the pin. Geometry alone cannot settle it either: a strut is a rod,
+ * so it straddles BOTH axes perpendicular to its length and the two score
+ * identically.
+ *
+ * What does settle it is that these legs are CANTED. Every one of them
+ * leans out of vertical in a single plane — the nose fore-and-aft, the
+ * rears left-and-right — and a hinge pin is perpendicular to the plane its
+ * part swings in. So: take the direction the part extends away from its
+ * pivot, drop its vertical component to get the lean, and the pin is the
+ * cross product of hull-up with that lean. On the courier this returns the
+ * lateral axis for all three doors and the nose strut, and the fore-aft
+ * axis for the two rear struts, which is exactly the rig the artist drew.
+ *
+ * A part with no lean at all — a perfectly vertical strut — has no plane to
+ * derive, and falls back to the hinge node's own local axis that the
+ * geometry is most nearly centred on. */
+var HULL_UP = [0, 1, 0];
+
+function hingeAxis(extendDir, localAxes, spans, centres) {
+  var lean = [extendDir[0], 0, extendDir[2]];
+  if (Math.hypot(lean[0], lean[2]) > 1e-3) {
+    return vNorm(vCross(HULL_UP, vNorm(lean)));
+  }
+  var best = 0, bestScore = Infinity;
+  for (var a = 0; a < 3; a++) {
+    var score = Math.abs(centres[a]) / (spans[a] / 2 + 1e-9) - spans[a];
+    if (score < bestScore) { bestScore = score; best = a; }
+  }
+  return vNorm(localAxes[best]);
+}
+
+/* How far to turn it to stow it, and which way round.
+ *
+ * The authored pose is the DEPLOYED pose — that is what "saved gear-down"
+ * means — so travel runs from the model as drawn to the model tucked away,
+ * and stowed is the part lying flat against the hull.
+ *
+ * FLATNESS ALONE DOES NOT PICK A DIRECTION, and getting this wrong is
+ * visible immediately: there are always TWO rotations that lay a leg flat,
+ * one folding it into the bay and one swinging it up over the spine, and
+ * they score identically on "how vertical is it". The first version scanned
+ * for minimum verticality, found the two tied, kept whichever it reached
+ * first, and put the nose leg through the roof of the ship.
+ *
+ * What breaks the tie is that a bay is INBOARD of the leg that lives in it.
+ * A leg retracts toward the middle of the hull, never away from it — so of
+ * the two flat poses, take the one whose foot ends up nearer the ship's
+ * axis. `outward` is the pivot's own horizontal offset from the hull
+ * centre, which is exactly the direction the leg must not fold toward.
+ *
+ * Both terms in one score, flatness weighted an order of magnitude above
+ * inboardness so it decides the angle and inboardness only decides the
+ * sign. A centreline pivot with no horizontal offset has no preference to
+ * express and falls back to folding aft, which is the convention and, more
+ * to the point, is deterministic. */
+var STOW_AFT = [0, 0, -1];
+
+function stowAngle(extendDir, axis, pivot) {
+  var outward = [pivot[0], 0, pivot[2]];
+  outward = Math.hypot(outward[0], outward[2]) > 1e-4
+    ? vNorm(outward) : STOW_AFT.slice();
+
+  var e0 = vNorm(extendDir);
+  var best = 0;
+  var bestScore = Math.abs(vDot(e0, HULL_UP)) * 10 + vDot(e0, outward);
+  for (var deg = 1; deg <= 180; deg++) {
+    for (var s = -1; s <= 1; s += 2) {
+      var ang = s * deg * Math.PI / 180;
+      var r = vNorm(rotAbout(e0, axis, ang));
+      var score = Math.abs(vDot(r, HULL_UP)) * 10 + vDot(r, outward);
+      if (score < bestScore - 1e-9) { bestScore = score; best = ang; }
+    }
+  }
+  return best;
+}
+
 /* ---- PORTS: the anchors a port carries ---------------------------------
  * Same mechanism as the emitters above — a named node opens one bounding
  * box and its children add to it — applied to the things a PORT has to tell
@@ -269,13 +398,35 @@ function convert(file) {
   var glassMax = [-Infinity, -Infinity, -Infinity];
   var sawGlass = false;
   var emitters = [];        // one accumulated bounding box per laserEmitter
+  var hinged = [];          // one bucket per Hinge node — the parts that move
 
-  function walk(nodeIdx, parentMat, inInterior, inEmitter) {
+  function walk(nodeIdx, parentMat, inInterior, inEmitter, inHinge, legName) {
     var node = j.nodes[nodeIdx];
     var local = node.matrix ? node.matrix.slice()
                             : matFromTRS(node.translation, node.rotation, node.scale);
     var world = matMul(parentMat, local);
     var name = node.name || '';
+
+    /* A hinge opens its own bucket, and everything under it goes in there
+     * rather than into the hull. Nested hinges are not a thing these models
+     * have, and if one ever appears the outer bucket keeps it — which is
+     * wrong but visible, rather than silently dropping the geometry. */
+    /* A hinge is not a leg, and LEG_RE would otherwise match one — the
+     * hinge test comes first so `gearNose/gearStrutHinge` does not come out
+     * named `gearStrutHinge/gearStrutHinge`. */
+    var leg = (!HINGE_RE.test(name) && LEG_RE.test(name)) ? name : legName;
+    var hinge = inHinge;
+    /* A hinge only counts as GEAR if it is inside a gear leg. The tender
+     * carries a ninth `...Hinge` node halfway up its starboard flank —
+     * service gear of some kind, not a landing leg — and claiming it put an
+     * unmovable part in the gear list: no lean to derive an axis from, so
+     * no rotation, so a "moving" part that never moved. Anything outside a
+     * `gear*` subtree stays baked into the hull exactly as before, which is
+     * both correct and a no-op for every model that has one. */
+    if (!hinge && leg && HINGE_RE.test(name)) {
+      hinge = { name: name, leg: leg, world: world, v: [], f: [], c: [] };
+      hinged.push(hinge);
+    }
     /* Classification is INHERITED: a named parent carries unnamed children
      * with it, which is how these files are actually assembled. */
     var interior = inInterior || INTERIOR_RE.test(name);
@@ -296,7 +447,11 @@ function convert(file) {
         emitter = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
         emitters.push(emitter);
       }
-      var into = mine ? inr : ext;
+      /* A hinged part is neither hull nor interior: it is its own small
+       * mesh, drawn with its own frame. The test comes first because a
+       * gear door is exterior geometry and would otherwise be welded into
+       * the hull exactly as it is today. */
+      var into = hinge ? hinge : (mine ? inr : ext);
       for (var p = 0; p < mesh.primitives.length; p++) {
         var prim = mesh.primitives[p];
         if (prim.mode !== undefined && prim.mode !== 4) continue;   // triangles only
@@ -330,13 +485,13 @@ function convert(file) {
       }
     }
     for (var ch = 0; ch < (node.children || []).length; ch++) {
-      walk(node.children[ch], world, interior, emitter);
+      walk(node.children[ch], world, interior, emitter, hinge, leg);
     }
   }
 
   var scene = j.scenes[j.scene || 0];
   for (var r = 0; r < scene.nodes.length; r++) {
-    walk(scene.nodes[r], matIdentity(), false, null);
+    walk(scene.nodes[r], matIdentity(), false, null, null, null);
   }
 
   /* Normalise: centred on the origin, unit length along the LONGEST axis.
@@ -351,11 +506,22 @@ function convert(file) {
    * keeps the seat registered to the canopy. It also means the hull's unit
    * length is unchanged from before this split existed, so nothing that was
    * tuned against the old scale moves. */
+  /* MEASURED OVER THE WHOLE AUTHORED MODEL, gear included, even though the
+   * gear no longer lives in `ext`. Pulling three legs out of the bucket the
+   * bounds are taken from would shrink the vertical span and move the
+   * centre, which would renormalise every hull in the library and quietly
+   * invalidate every number tuned against the old scale — the canopy box,
+   * the muzzles, the cockpit archetypes, SHIP_LEN itself. The split is
+   * meant to change what MOVES, not how big anything is. */
   var mins = [Infinity, Infinity, Infinity], maxs = [-Infinity, -Infinity, -Infinity];
-  for (var i2 = 0; i2 < ext.v.length; i2++) for (var a = 0; a < 3; a++) {
-    if (ext.v[i2][a] < mins[a]) mins[a] = ext.v[i2][a];
-    if (ext.v[i2][a] > maxs[a]) maxs[a] = ext.v[i2][a];
+  function bound(list) {
+    for (var q = 0; q < list.length; q++) for (var b = 0; b < 3; b++) {
+      if (list[q][b] < mins[b]) mins[b] = list[q][b];
+      if (list[q][b] > maxs[b]) maxs[b] = list[q][b];
+    }
   }
+  bound(ext.v);
+  for (var hb = 0; hb < hinged.length; hb++) bound(hinged[hb].v);
   var span = [maxs[0] - mins[0], maxs[1] - mins[1], maxs[2] - mins[2]];
   var mid = [(maxs[0] + mins[0]) / 2, (maxs[1] + mins[1]) / 2, (maxs[2] + mins[2]) / 2];
   var scale = 1 / Math.max(span[0], span[1], span[2], 1e-9);
@@ -412,6 +578,81 @@ function convert(file) {
    * between runs and between models — glTF node order is whatever the
    * authoring tool wrote, and letting that decide which gun is hardpoint 0
    * would reshuffle a player's fire groups whenever a model was re-exported. */
+  /* ---- the moving parts, as their own meshes ----------------------------
+   * Each one is emitted RELATIVE TO ITS OWN PIVOT, so the game draws it with
+   * a frame placed at the pivot and rotated about the axis, which is exactly
+   * the shape `drawPortDoors` already uses for a sliding leaf and the port
+   * library uses for a spinning ring. Nothing about the mesh format or
+   * either renderer has to change: a part is a mesh and a frame, like
+   * everything else this file emits.
+   *
+   * `stow` is the angle that puts it away, measured off the model rather
+   * than typed in — see stowAngle. The game interpolates 0..stow and owns
+   * the timing, because how long a leg takes to swing is a feel decision
+   * and belongs where feel decisions live. */
+  if (hinged.length) {
+    var parts = [];
+    for (var hg = 0; hg < hinged.length; hg++) {
+      var H = hinged[hg];
+      if (!H.f.length) continue;
+      var m = H.world;
+      var pivotRaw = [m[12], m[13], m[14]];
+      var localAxes = [vNorm([m[0], m[1], m[2]]),
+                       vNorm([m[4], m[5], m[6]]),
+                       vNorm([m[8], m[9], m[10]])];
+
+      /* Where the part reaches, measured in the hinge's own frame: spans to
+       * pick a fallback axis with, and a centroid to give the direction it
+       * extends away from the pin. */
+      var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+      var cen = [0, 0, 0];
+      for (var pv = 0; pv < H.v.length; pv++) {
+        var rel = [H.v[pv][0] - pivotRaw[0], H.v[pv][1] - pivotRaw[1], H.v[pv][2] - pivotRaw[2]];
+        cen[0] += rel[0]; cen[1] += rel[1]; cen[2] += rel[2];
+        for (var ax = 0; ax < 3; ax++) {
+          var d = vDot(rel, localAxes[ax]);
+          if (d < lo[ax]) lo[ax] = d;
+          if (d > hi[ax]) hi[ax] = d;
+        }
+      }
+      cen = [cen[0] / H.v.length, cen[1] / H.v.length, cen[2] / H.v.length];
+      var spans = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+      var centres = [(hi[0] + lo[0]) / 2, (hi[1] + lo[1]) / 2, (hi[2] + lo[2]) / 2];
+
+      var axis = hingeAxis(cen, localAxes, spans, centres);
+      /* The PLACED pivot, because "which way is inboard" is a question
+       * about the hull's centre and `place` is what puts the origin there.
+       * Handing stowAngle the raw glTF coordinate would measure outward
+       * from wherever the artist's world origin happened to be. */
+      var pivot = place(pivotRaw);
+      var stow = stowAngle(cen, axis, pivot);
+
+      var pp = palette(H.c);
+      var r4 = function (x) { return Math.round(x * 10000) / 10000; };
+      parts.push({
+        id: H.leg + '/' + H.name,
+        role: /door/i.test(H.name) ? 'door' : 'strut',
+        pivot: pivot,
+        axis: axis.map(r4),
+        stow: r4(stow),
+        v: H.v.map(function (p) {
+          return [Math.round((p[0] - pivotRaw[0]) * scale * 1000) / 1000,
+                  Math.round((p[1] - pivotRaw[1]) * scale * 1000) / 1000,
+                  Math.round((p[2] - pivotRaw[2]) * scale * 1000) / 1000];
+        }),
+        f: H.f, pal: pp.pal, ci: pp.ci
+      });
+    }
+    /* Sorted so the order is stable between runs and between models, for
+     * the same reason the muzzles are: glTF node order is whatever the
+     * authoring tool happened to write. */
+    parts.sort(function (p, q) {
+      return (p.role < q.role ? -1 : p.role > q.role ? 1 : 0) ||
+             p.pivot[2] - q.pivot[2] || p.pivot[0] - q.pivot[0];
+    });
+    if (parts.length) out.gear = parts;
+  }
+
   var live = emitters.filter(function (e) { return isFinite(e.min[0]); });
   if (live.length) {
     out.muzzles = live.map(function (e) {
@@ -793,7 +1034,13 @@ for (var fi = 0; fi < files.length; fi++) {
               m.pal.length + ' colours, span ' + m.span.join(' x ') +
               (m.interior ? '   + interior ' + m.interior.f.length + ' tris'
                           : '   NO INTERIOR') +
-              (m.glass ? '   glass@' + m.glass.mid.join(',') : '   no glass'));
+              (m.glass ? '   glass@' + m.glass.mid.join(',') : '   no glass') +
+              /* Reported per model, because "how many legs came out of this
+               * hull" is the one number that says whether the rig was
+               * found — and a model that silently loses its gear back into
+               * the baked mesh looks completely normal in every other line
+               * of this output. */
+              (m.gear ? '   + ' + m.gear.length + ' hinged' : '   NO GEAR'));
 }
 /* Loud, because a model that arrives without an interior is not an error —
  * it is an older export, and the only way to notice is to be told. */

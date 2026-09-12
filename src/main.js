@@ -4147,6 +4147,11 @@
      * steers on it next frame — one frame of lag nobody can perceive. */
     Combat.update(G.sys, G, G.t, G.lastDtSim || 0, HOOKS);
 
+    /* The legs, moving. Outside the paused/docked guard below on purpose:
+     * a berthed ship still has to READ as standing on its gear, and the
+     * first frame after a load is where that gets decided. */
+    Sim.updateGear(G.ship, G.paused ? 0 : (G.lastDtSim || 0));
+
     /* Re-entry heating, on the live ship only — the predictor's ghosts run
      * the same integrator and must never bank heat of their own. */
     if (!G.paused && !G.ship.docked && G.lastDtSim > 0) {
