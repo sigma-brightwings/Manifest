@@ -1379,7 +1379,17 @@
           (function (hid, nm) {
             return function () {
               var r = Combat.buyHull(G, hid);
-              say(r.ok ? 'Welcome aboard your ' + nm : 'No deal: ' + r.why, 5);
+              if (!r.ok) { say('No deal: ' + r.why, 5); return; }
+              /* Name the standard gear the hull came with, when it is gear
+               * the pilot did not already have. A scoop that silently
+               * appears is indistinguishable from a bug, and a scoop that
+               * silently does NOT appear is the bug that took piracy out
+               * for everyone who had ever died. */
+              var extra = (r.standard || []).map(function (id) {
+                return (Combat.EQUIPMENT[id] || {}).name || id;
+              });
+              say('Welcome aboard your ' + nm +
+                  (extra.length ? ' — fitted as standard: ' + extra.join(', ') : ''), 5);
             };
           })(hull.id, hull.name), false);
     }

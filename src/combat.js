@@ -930,7 +930,56 @@
    * 1,400 cr fitting nobody told you you had lost.
    *
    * The gun is first so it takes hardpoint0, which the yard tests assert. */
-  var STARTING_FIT = ['phpulse', 'cargoscoop'];
+
+  /* ---- two lists, because they answer two different questions -----------
+   *
+   * HULL_STANDARD is what EVERY HULL COMES WITH. It is Astra's rule and it
+   * is not the same as "what a new career starts with": a scoop is fitted
+   * to every hull that leaves a yard, so buying a Kestrel gets you one the
+   * same way buying a car gets you a spare wheel.
+   *
+   * Saleable all the same, and the two facts are not in tension — selling
+   * it is a real choice with a real price, and the next hull you buy simply
+   * arrives with one again. That is why migrateFit's early return has to
+   * stay: a career that already has a fit map is left alone, so selling
+   * STICKS instead of being quietly undone on the next load.
+   *
+   * STARTING_FIT is what a BRAND-NEW SHIP carries — the standard gear plus
+   * the starter gun. The gun is emphatically not standard-with-every-hull:
+   * issuing one per purchase would make hull-buying a gun printer.
+   *
+   * Splitting them fixed a second instance of the same bug. buyHull only
+   * ever replanned the gear you already had onto the new hull, so a pilot
+   * who had sold their scoop and then bought a hull got a hull with no
+   * scoop — which under the rule above is wrong, and fails in exactly the
+   * silent way the respawn bug did. */
+  var HULL_STANDARD = ['cargoscoop'];
+  var STARTING_FIT = ['phpulse'].concat(HULL_STANDARD);
+
+  /* Fit anything on HULL_STANDARD that this ship is missing. Returns the
+   * ids actually added, so a caller can say so rather than leaving the
+   * player to notice.
+   *
+   * Additive and non-destructive: it never displaces something the player
+   * paid for, and it never issues a second of anything already carried. */
+  function addHullStandard(ship) {
+    var added = [];
+    for (var i = 0; i < HULL_STANDARD.length; i++) {
+      var id = HULL_STANDARD[i];
+      if (hasFitted(ship, id)) continue;
+      var v = canFit(ship, id);
+      var key = v.key || firstFreeSlot(ship, (EQUIPMENT[id] || {}).slot);
+      if (key && !ship.fit[key]) { ship.fit[key] = id; added.push(id); }
+    }
+    if (added.length) syncLegacy(ship);
+    return added;
+  }
+
+  function hasFitted(ship, id) {
+    var fit = (ship && ship.fit) || {};
+    for (var k in fit) if (fit[k] === id) return true;
+    return false;
+  }
 
   /* Strip a ship back to that list. The hull must already be set: slot keys
    * are derived from it, so fitting before the hull is decided files the kit
@@ -966,13 +1015,15 @@
      * stick. Last in the list so it can never displace something the player
      * actually paid for.
      *
-     * Read off STARTING_FIT rather than named here, so this path and
-     * stripForRespawn cannot drift apart again. Guns are skipped: the gun
-     * comes from the legacy field above, which is the one thing a migrating
-     * save might legitimately disagree with the starting kit about. */
-    for (var si = 0; si < STARTING_FIT.length; si++) {
-      var extra = STARTING_FIT[si];
-      if ((EQUIPMENT[extra] || {}).kind === 'gun') continue;
+     * Read off HULL_STANDARD, which is precisely "what every hull comes
+     * with" and so is precisely what a migrating save should be given. It
+     * used to walk STARTING_FIT skipping anything of kind 'gun', which
+     * computed the same answer by subtraction — the gun comes from the
+     * legacy field above instead. Naming the list directly means the two
+     * cannot drift, and it stops a second standard fitting being added one
+     * day and silently landing here as a free gun. */
+    for (var si = 0; si < HULL_STANDARD.length; si++) {
+      var extra = HULL_STANDARD[si];
       if (want.indexOf(extra) < 0) want.push(extra);
     }
     for (var i = 0; i < want.length; i++) {
@@ -4451,9 +4502,16 @@
     s.hullHp = to.hullMax;         // a new hull arrives whole
     s.fit = moved.fit;             // the gear came across, replanned
     remapGroups(s, moved.moved);   // and so did which trigger it answers to
+    /* AND THE HULL'S OWN STANDARD GEAR. A scoop is fitted to every hull
+     * that leaves a yard, so one arrives with the ship even if the pilot
+     * sold the last one — see HULL_STANDARD. Done after replanFit so it
+     * fills a gap rather than competing for a slot with something the
+     * player actually chose, and reported back so the yard can say it
+     * happened instead of leaving it to be discovered mid-robbery. */
+    var fitted = addHullStandard(s);
     syncLegacy(s);
     global.Sim.refreshShip(s);
-    return { ok: true, cost: cost };
+    return { ok: true, cost: cost, standard: fitted };
   }
 
   /* ---- death ------------------------------------------------------------ */

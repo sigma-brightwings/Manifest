@@ -1362,6 +1362,59 @@ section('--- and the two ways to get a ship agree ---');
         a.join(',') === b.join(','), a.join(',') + '   vs   ' + b.join(','));
   check('and both of them can pick cargo up',
         Combat.hasScoop(fresh) && Combat.hasScoop(reborn));
+
+  /* ---- and so does every hull that leaves a yard ----------------------
+   * Astra's rule: the scoop is a saleable item, but it is STANDARD WITH
+   * EVERY HULL. Those two facts are not in tension and the code has to
+   * hold both — selling it has to stick, and the next hull has to arrive
+   * with one anyway.
+   *
+   * buyHull only ever replanned the gear you already had onto the new
+   * hull, so this was the same bug the respawn had, in a second place: a
+   * pilot who had sold their scoop and then bought a ship got a ship with
+   * no scoop, and found out the next time they shot a freighter. */
+  var buyer = makeG();
+  buyer.ship.credits = 400000;
+
+  var sold = Combat.sellFitted ? Combat.sellFitted(buyer, scoopKeyOf(buyer.ship)) : null;
+  check('the scoop can be sold', !!sold && !Combat.hasScoop(buyer.ship),
+        sold ? 'still aboard' : 'sell refused');
+
+  /* Selling STICKS across a load — migrateFit's early return is what makes
+   * that true, and it is the reason the fix could not simply re-issue the
+   * kit on every load. */
+  Combat.migrateFit(buyer.ship);
+  check('and selling it sticks rather than being undone on load',
+        !Combat.hasScoop(buyer.ship));
+
+  var bought = Combat.buyHull(buyer, 'kestrel');
+  check('a hull can be bought', bought.ok, bought.why);
+  check('and it arrives with a scoop fitted as standard',
+        Combat.hasScoop(buyer.ship));
+  check('and the yard is told to say so rather than leaving it to be found',
+        !!bought.standard && bought.standard.indexOf('cargoscoop') >= 0,
+        JSON.stringify(bought.standard));
+
+  /* Not a second one for a pilot who kept theirs, and nothing displaced. */
+  var keeper = makeG();
+  keeper.ship.credits = 400000;
+  var beforeN = Object.keys(keeper.ship.fit).length;
+  var k2 = Combat.buyHull(keeper, 'kestrel');
+  var scoops = Object.keys(keeper.ship.fit).filter(function (key) {
+    return keeper.ship.fit[key] === 'cargoscoop';
+  }).length;
+  check('a pilot who kept theirs is not issued a second',
+        k2.ok && scoops === 1 && (k2.standard || []).length === 0,
+        scoops + ' scoops, standard=' + JSON.stringify(k2.standard));
+  check('and nothing they owned was displaced to make room',
+        Object.keys(keeper.ship.fit).length >= beforeN,
+        beforeN + ' -> ' + Object.keys(keeper.ship.fit).length);
+
+  function scoopKeyOf(ship) {
+    var fit = ship.fit || {};
+    for (var k in fit) if (fit[k] === 'cargoscoop') return k;
+    return null;
+  }
 })();
 
 section('--- contracts ---');
