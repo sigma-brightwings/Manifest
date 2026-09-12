@@ -700,6 +700,24 @@ console.log('--- the hull library ---');
 
   check('the library imported every model', ids.length >= 24, ids.length + ' models');
 
+  /* IDS STAY PLAIN. A model id is the contract — it is a filename on disk,
+   * a key in generated JSON, and a value the renderer looks up — so it
+   * lives in the character set all three agree on.
+   *
+   * This is the check that earned the right to rename art rather than work
+   * around it. The 2026-09-11 drop arrived carrying `enf._heavy`, an
+   * abbreviation whose full stop had reached the filename. It survives JSON
+   * because the generator quotes its keys, so nothing broke and nothing
+   * would have, right up until something did — a path split, a regex, a
+   * save migration. Renamed to `enforcer_heavy` at the staging step, and
+   * asserted here so the next odd character is caught at the door.
+   *
+   * That every assignment resolves is checked below, where the casting
+   * table is. */
+  var odd = ids.filter(function (id) { return !/^[A-Za-z0-9_-]+$/.test(id); });
+  check('every model id is safe as a filename and a key', odd.length === 0,
+        odd.join(', '));
+
   /* Every imported model obeys the renderer's contract: unit length on its
    * longest axis, centred on the origin, a colour for every face, and an
    * emissive engine glow somewhere — the converter promises all of this,

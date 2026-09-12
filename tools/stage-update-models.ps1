@@ -31,9 +31,21 @@ New-Item -ItemType Directory -Force -Path 'ref\glb', 'ref\ports', 'ref\port-art'
 # fifth pattern is one edit in each place and visibly the same edit.
 $ORBITAL = @('cylinder', 'ring', 'spine', 'cradle')
 
+# Names the art arrives with that the game cannot live with. An ID is the
+# contract — the hull table, the viewer and every save refer to a model by
+# it — so a character that is only ever going to need quoting or escaping
+# somewhere is worth spending one line on here rather than discovering in a
+# stack trace. "enf._heavy" is an abbreviation that reached the filename;
+# the period survives JSON but has no business in an identifier.
+$RENAME = @{ 'enf._heavy' = 'enforcer_heavy' }
+
 function Get-Stem([string]$name) {
   # "trader-l(3).glb" -> "trader-l";  "detail-kit(1).glb" -> "detail-kit"
-  ($name -replace '\(\d+\)\.glb$', '') -replace '\.glb$', ''
+  $stem = ($name -replace '\(\d+\)\.glb$', '') -replace '\.glb$', ''
+  foreach ($k in $RENAME.Keys) {
+    if ($stem -like ($k + '*')) { $stem = $RENAME[$k] + $stem.Substring($k.Length) }
+  }
+  $stem
 }
 
 function Get-Bucket([string]$stem) {

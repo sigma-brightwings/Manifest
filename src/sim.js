@@ -214,6 +214,31 @@
     return 1 + (h % (n - 1));
   }
 
+  /* WHICH WAY A BERTHED HULL POINTS, in world space, and there is one of
+   * these rather than three.
+   *
+   * A berth's outward direction used to be a scalar — ±1 along the port
+   * frame's north — which can only express two of the six directions a bay
+   * can open. That was survivable while every modelled shed was the same
+   * shed, and stopped being survivable the moment real station art arrived:
+   * a ring opens its side bays along ±x and a spine opens two opposed rows,
+   * none of which is ±north.
+   *
+   * So when the model declares a normal, use it whole; otherwise fall back
+   * to the scalar, which is still what an unmodelled port returns. Three
+   * call sites needed this answer (the surface dock, the orbital dock and
+   * the arrival rail's final leg) and three copies of it would have been
+   * three chances to disagree about which way a ship is parked. */
+  function berthFacing(basis, off) {
+    if (off && off.normal) {
+      var n = off.normal;
+      var v = V.addScaled(V.scale(basis.east, n[0]), basis.north, n[1]);
+      v = V.addScaled(v, basis.up, n[2]);
+      if (V.len(v) > 1e-9) return V.norm(v);
+    }
+    return V.norm(V.scale(basis.north, (off && off.facing) || 1));
+  }
+
   /* Where in the world berth `i` of this port is, and which way the ship
    * parked in it faces. */
   function berthState(port, sys, t, i) {
@@ -1933,8 +1958,7 @@
        * can stand the ship up itself. */
       var bs2 = berthState(target, sys, t, ship.dockOffset.berth);
       if (bs2) {
-        var f = V.scale(bs2.basis.north, bs2.off.facing || 1);
-        ship.fwd = V.norm(f);
+        ship.fwd = berthFacing(bs2.basis, bs2.off);
         ship.up = V.clone(bs2.basis.up);
         ship.right = V.cross(ship.fwd, ship.up);
       } else {
@@ -1970,7 +1994,7 @@
     var obs = berthState(target, sys, t, oBerth);
     var basis = orbitalBasis(ts.pos, ts.vel);
     var rel = V.sub(ship.pos, ts.pos);
-    var berthFacing = null;
+    var berthOut = null;
     if (obs) {
       ship.dockOffset = { station: true, berth: oBerth };
     } else {
@@ -2019,7 +2043,7 @@
     if (obs) {
       updateDockedShip(ship, sys, t);
       rel = V.sub(ship.pos, ts.pos);
-      berthFacing = V.scale(obs.basis.north, obs.off.facing || 1);
+      berthOut = berthFacing(obs.basis, obs.off);
     }
 
     // Face the station on capture — cosmetic, but arriving nose-first and
@@ -2057,7 +2081,7 @@
      * out across the open floor of the bay. Off the side of a station with
      * no bay, it is back toward the thing holding you. Either way it is
      * flattened against the local vertical below, so the ship is level. */
-    var facing = berthFacing || V.scale(rel, -1);
+    var facing = berthOut || V.scale(rel, -1);
     var upRef = orbitalBasisAt(ts.pos, ts.vel, sys, t).radial;
     var flat = V.sub(facing, V.scale(upRef, V.dot(facing, upRef)));
     ship.fwd = V.len(flat) > 1e-9 ? V.norm(flat) : V.clone(basis.prograde);
@@ -2292,8 +2316,11 @@
       fwd = V.clone(basis.north);          // straight down the shaft: keep facing
     }
     if (leg === ARRIVAL_LEGS.length - 1) {
-      var off2 = Gen.berthOffset(port, berth || 0);
-      var want = V.scale(basis.north, off2.facing || 1);
+      /* Blend to the pose dockShip will set when the rail ends, and read it
+       * the same way dockShip does — through berthFacing — so the hull is
+       * not turned to one heading by the animation and snapped to another
+       * the instant it finishes. */
+      var want = berthFacing(basis, Gen.berthOffset(port, berth || 0));
       fwd = V.norm(V.add(V.scale(fwd, 1 - u), V.scale(want, u)));
     }
     var up = V.clone(basis.up);

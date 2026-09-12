@@ -459,11 +459,17 @@
     trade: 'trader-m',
     shuttle: 'shuttle-s',
     freighter: 'freighter-l',
-    tanker: 'h2_freighter-m',
+    /* `bulk` shipped at S only, so it is a single id rather than a family.
+     * It reads as a bulk hauler and the tanker was wearing a hydrogen
+     * freighter, which is now free for the class named after it. */
+    tanker: 'bulk-s',
     hauler: 'tug-m',
     police: 'police-m',
-    merc: 'fighter-l',
-    pirate: 'fighter-m',
+    /* Hired muscle, flying something that looks like hired muscle rather
+     * than a generic fighter. */
+    merc: 'enforcer-l',
+    /* A pirate wants speed more than it wants a gun platform. */
+    pirate: 'runner-m',
     liner: 'liner-m',
     /* Was 'capital-m', which was wrong in a way that mattered: a navy that
      * only fields capital hulls cannot be DISPATCHED, and dispatched
@@ -472,6 +478,32 @@
     navy: 'navy-m',
     tender: 'tender-m'
   };
+
+  /* ---- the 2026-09-11 drop, and what it left unassigned -----------------
+   * Five families arrived with no class to fly as, and a hull nothing
+   * points at is a hull nobody ever sees. Three of them are placed above,
+   * by what their names say they are — which is the only evidence this file
+   * has, and the names were chosen by the person who drew them.
+   *
+   * DELIBERATELY UNASSIGNED, listed here so they read as waiting rather
+   * than as missing:
+   *
+   *   enforcer_heavy-*  the one the syndicate sends. There is no class yet
+   *       that means "the bad one"; the mafia/pirate split is agreed and
+   *       unbuilt, and this is the hull it will want.
+   *   carrier-*         big and military, but the navy already fields a
+   *       cutter and the capital is still the thing you run from. A third
+   *       heavy hull needs a role before it needs an assignment.
+   *   capital-*         unchanged: imported, and waiting.
+   *   escape_pod-*      belongs with the debris work, not with a traffic
+   *       class. It is what is LEFT when a ship dies.
+   *
+   * ALL OF THIS IS DATA. Every assignment above is one Render.assignHull
+   * call to undo, at runtime, and nothing else in the game needs to know —
+   * which is the point of the table. If the carrier turns out to read as a
+   * freighter, or the runner as a courier, moving it is a one-word change.
+   * Look at them in hulls.html before deciding; that page lists every id in
+   * the library whether or not anything flies it. */
 
   /* The liner and the capital now have classes of their own — a light run
    * between two settled worlds is flown as a 'liner', and a faction with

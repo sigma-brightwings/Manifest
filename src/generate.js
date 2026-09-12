@@ -1157,12 +1157,29 @@
         y: bx.mid[1],
         /* Floor of the bay, not its middle. */
         z: floorZ + g.standoff,
-        /* Out of the alcove, which for these patterns is away from the
-         * station's axis: a berth on the -y side opens toward +y. The
-         * throat's own +Z would be better still and is carried on the
-         * anchor as `mat`; this is the part to revisit once there is a
-         * picture to check it against. */
-        facing: bx.mid[1] > 0 ? -1 : 1,
+        /* WHICH WAY THE BAY OPENS, from the throat's own orientation.
+         *
+         * The converter reduces each berth's node transform to a unit
+         * vector and writes it as `normal`, which is the one thing a
+         * bounding box cannot tell you and the simulation cannot
+         * reconstruct. Measured across the four patterns it is exactly the
+         * answer you would draw by hand: a cylinder's single bay opens
+         * along -y, a ring's left-hand bays along -x and its right-hand
+         * ones along +x, a spine's two rows likewise with the nose bay on
+         * -y.
+         *
+         * This replaced a guess — "a berth on the +y side opens toward -y"
+         * — which was wrong for more than half of them. The ring and the
+         * spine carry their side bays at y roughly zero, so the sign test
+         * pointed every one of them the same way, and a hull would have
+         * been parked facing into the wall of its own alcove on one side of
+         * the station.
+         *
+         * `facing` stays alongside it as the scalar the constant-table path
+         * has always returned, so a caller that has not learned about
+         * normals yet still gets an answer rather than undefined. */
+        normal: bx.normal ? bx.normal.slice() : null,
+        facing: bx.normal ? (bx.normal[1] < 0 ? 1 : -1) : 1,
         large: kk === biggest,
         modelled: true
       };
