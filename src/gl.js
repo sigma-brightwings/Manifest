@@ -111,6 +111,7 @@
     'uniform vec3 uSeaColor;',
     'uniform float uIce;',        // how far the caps reach, 0 = none
     'uniform float uSeed;',
+    'uniform float uBanded;',     // 1 = gas/ice giant: latitude bands, not terrain
     'uniform float uSpin;',       // cloud rotation phase, radians
     /* Depth, so a ship can pass behind a planet. The impostor has no
      * geometry to rasterize a depth from, so it computes one: the disc's
@@ -245,6 +246,45 @@
     /* A soft terminator. A hard max(0.0, ndl) gives a knife edge that reads
      * as a rendering artefact rather than as a sunrise. */
     '  float lam = smoothstep(-0.14, 0.30, ndl);',
+
+    /* ---- gas / ice giants: latitude bands, not terrain ------------------
+     * A gas giant has no surface and no coastline; what you see is zonal
+     * banding — stripes of cloud parallel to the equator, each sheared at
+     * its own speed, with the classic storm oval drifting against them. So
+     * a banded world takes a completely different path from the terrain
+     * below and returns early. Latitude is n.y (the world spins about +y
+     * here, the same axis the ice caps use). Bands are fbm in latitude,
+     * warped a little in longitude so edges waver instead of ruling
+     * straight. Each band scrolls in longitude at a speed set by latitude
+     * — fast at the equator, slow at the poles — real differential
+     * rotation with no per-frame physics, just uSpin through a per-latitude
+     * multiplier. One noise eval, same cost as the terrain it replaces. */
+    '  if (uBanded > 0.5) {',
+    '    float lati = n.y;',
+    '    float lon = atan(n.z, n.x);',
+    '    float shear = mix(1.6, 0.35, abs(lati));',
+    '    float ph = lon + uSpin * shear * 40.0;',
+    '    float band = fbm(vec3(lati * 7.0, sin(ph) * 0.5, uSeed));',
+    '    band = mix(band, fbm(vec3(lati * 15.0, cos(ph) * 0.4, uSeed + 5.0)), 0.4);',
+    '    vec3 belt = uColor * 0.72;',
+    '    vec3 zone = mix(uColor, vec3(1.0), 0.22);',
+    '    vec3 gcol = mix(belt, zone, smoothstep(0.35, 0.65, band));',
+    /* The storm oval: fixed seeded home, its own drift speed so it slides
+     * against the bands over time; elliptical, wider in longitude. */
+    '    float spotLat = -0.22 + 0.10 * (fract(uSeed * 0.13) - 0.5);',
+    '    float spotLon = uSpin * 0.55 * 40.0 + uSeed;',
+    '    float dLat = (lati - spotLat) * 3.4;',
+    '    float dLon = sin((lon - spotLon) * 0.5) * 2.2;',
+    '    float spot = 1.0 - smoothstep(0.4, 1.0, sqrt(dLat * dLat + dLon * dLon));',
+    '    gcol = mix(gcol, mix(gcol, vec3(0.85, 0.42, 0.30), 0.75), spot);',
+    '    vec3 gc = gcol * (0.06 + 0.94 * lam);',
+    '    if (uAtmo > 0.0) {',
+    '      float grim = pow(1.0 - z, 3.0);',
+    '      gc += uAtmoColor * grim * uAtmo * (0.08 + 0.45 * lam);',
+    '    }',
+    '    frag = vec4(gc, 1.0);',
+    '    return;',
+    '  }',
 
     /* ---- terrain --------------------------------------------------------
      * An elevation field, thresholded against a sea level, plus ice at the
@@ -726,7 +766,7 @@
                               'uRight', 'uUp', 'uFwd', 'uSunDir', 'uColor',
                               'uIsStar', 'uAtmo', 'uAtmoColor', 'uCloud',
                               'uSeed', 'uSpin', 'uCenterDepth', 'uWorldRadius',
-                              'uNear', 'uInvLogRange',
+                              'uNear', 'uInvLogRange', 'uBanded',
                               'uOcean', 'uSeaColor', 'uIce',
                               'uCenterRel', 'uScreenPx', 'uFlen',
                               'uHoleRel', 'uHoleR']);
@@ -1179,9 +1219,15 @@
       gl.uniform1f(uni.uCloud, at ? at.cloud : 0);
       var terr = terrainOf(b);
       var sc = rgb(terr.sea, [0, 0, 0]);
-      gl.uniform1f(uni.uOcean, isStar ? 0 : terr.ocean);
+      /* Gas and ice giants render as latitude bands, not terrain. The
+       * shader takes a separate path for these and returns before it
+       * touches ocean/ice/cloud, so those are zeroed here only to keep the
+       * uniform state honest. */
+      var banded = (!isStar && (b.type === 'gasGiant' || b.type === 'iceGiant'));
+      gl.uniform1f(uni.uBanded, banded ? 1 : 0);
+      gl.uniform1f(uni.uOcean, (isStar || banded) ? 0 : terr.ocean);
       gl.uniform3f(uni.uSeaColor, sc[0], sc[1], sc[2]);
-      gl.uniform1f(uni.uIce, isStar ? 0 : terr.ice);
+      gl.uniform1f(uni.uIce, (isStar || banded) ? 0 : terr.ice);
       gl.uniform1f(uni.uSeed, hashSeed(b.id));
       gl.uniform1f(uni.uSpin, q.t * 2.2e-5);   // slow; weather, not a blender
       gl.uniform1f(uni.uCenterDepth, q.depth);
