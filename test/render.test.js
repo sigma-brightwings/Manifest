@@ -1884,13 +1884,20 @@ console.log('--- imported ports ---');
   /* And a bay with no model gets the shared constant table, unchanged. */
   var fakePort = { radius: 2, shaftDepth: 1.8, surface: true };
   var g0 = Gen.bayGeometry(fakePort);
+  /* Against the TABLE, not against copied-out numbers. What matters here is
+   * that an unmodelled bay falls back to the shared table at all; the values
+   * in it are tuned against the fleet and have moved twice already, and a
+   * test that restates them just fails every time somebody does the tuning
+   * it is supposed to be protecting. */
+  var tbl = Gen.shaftBay(fakePort);
   check('an unmodelled bay uses the shared table',
-        g0.mouthR === 0.55 && g0.chamberX === 1.30 && g0.chamberY === 0.80 &&
-        g0.berths === 6, JSON.stringify(g0));
+        g0.mouthR === tbl.mouthR && g0.chamberX === tbl.chamberX &&
+        g0.chamberY === tbl.chamberY && g0.berths === tbl.berths,
+        JSON.stringify(g0));
   check('and its floor is its own shaft depth',
         Math.abs(g0.floorZ + 0.9) < 1e-9, String(g0.floorZ));
   check('with the ceiling a HEIGHT above that floor, not an absolute',
-        Math.abs((g0.ceilZ - g0.floorZ) - 0.36) < 1e-9,
+        Math.abs((g0.ceilZ - g0.floorZ) - tbl.headroom) < 1e-9,
         g0.floorZ + ' -> ' + g0.ceilZ);
 
   /* NOW WITH A MODEL. Shaped exactly as the converter writes it — the
@@ -1953,7 +1960,7 @@ console.log('--- imported ports ---');
   check('leaving a usable headroom rather than a roof under the floor',
         g1.ceilZ > g1.floorZ, g1.floorZ + ' -> ' + g1.ceilZ);
   check('and anything the model did not declare still falls back',
-        g1.throatR === 0.45 && g1.standoff === 0.012,
+        g1.throatR === tbl.throatR && g1.standoff === tbl.standoff,
         g1.throatR + ' / ' + g1.standoff);
 
   /* A MODEL THAT TURNS PART OF ITSELF. The procedural stations spin by
@@ -2038,8 +2045,10 @@ console.log('--- imported ports ---');
         gA.chamberX === 1.6 && gA.berths === 3, JSON.stringify(gA));
   R.assignPort('bay', ['city-a', 'city-b', 'city-c']);
   var gB = Gen.bayGeometry({ id: 'p-alpha', surface: true, radius: 2, shaftDepth: 1.8 });
+  var tblB = Gen.shaftBay({ radius: 2, shaftDepth: 1.8 });
   check('and pointing it at an unmodelled name falls back to the table',
-        gB.chamberX === 1.30 && gB.berths === 6, JSON.stringify(gB));
+        gB.chamberX === tblB.chamberX && gB.berths === tblB.berths,
+        JSON.stringify(gB));
 
   R.assignPort('bay', null);
   R.assignPort('underground', null);

@@ -187,6 +187,83 @@ console.log('--- both halves index a model\'s berths the same way ---');
         bad === 0, bad + ' disagreements');
 })();
 
+/* ---- and the shed on the ground ---------------------------------------
+ * Surface ports are the other half of "every station works with every ship",
+ * and they are built from the shared constant table rather than from art, so
+ * there are no berth boxes to measure. What CAN be measured is the four
+ * things that decide whether a hull gets in and fits once it is there: the
+ * hatch it flies through, the headroom over it, the spacing between berths
+ * along the wall, and whether a parked hull stays inside the chamber
+ * instead of sticking out through the far side.
+ *
+ * This is the check the shed did not have when its chamber was 1.30 pad
+ * radii, which is how it came to be 620 m across for a 25 m ship. */
+console.log('--- the shed on the ground ---');
+(function () {
+  var pads = [];
+  for (var i = 0; i < 40; i++) {
+    Gen.generateSystem('shed-sweep-' + i).ports.forEach(function (p) {
+      if (p.surface) pads.push(p.radius);
+    });
+  }
+  pads.sort(function (a, b) { return a - b; });
+  check('there are surface ports to measure', pads.length > 0, pads.length + ' pads');
+  if (!pads.length) return;
+  var sizes = [pads[0], pads[Math.floor(pads.length / 2)], pads[pads.length - 1]];
+  console.log('  pad radii in play: ' + sizes.map(function (r) {
+    return (r * 1000).toFixed(0) + ' m';
+  }).join('  \u00b7  '));
+
+  /* The hull that has to fit is the WORST of the fleet on each axis - the
+   * widest, the tallest and the longest need not be the same ship, and a
+   * shed that only takes the average is a shed that strands somebody. */
+  var worst = { w: 0, h: 0, l: 0 };
+  CLASSES.forEach(function (k) {
+    var sp = Render.hullSpan(k);
+    if (sp.w > worst.w) worst.w = sp.w;
+    if (sp.h > worst.h) worst.h = sp.h;
+    if (sp.l > worst.l) worst.l = sp.l;
+  });
+  console.log('  worst case hull: ' + m(worst.w) + ' wide, ' + m(worst.h) +
+              ' tall, ' + m(worst.l) + ' long');
+
+  var tight = { hatch: Infinity, head: Infinity, pitch: Infinity, depth: Infinity };
+  sizes.forEach(function (r) {
+    var port = { id: 'pad-' + r, surface: true, radius: r, shaftDepth: r * 0.9 };
+    var g = Gen.bayGeometry(port);
+    /* The hatch is square and the hull flies through it nose-first, so what
+     * has to clear is the widest and the tallest of it, not its length. */
+    tight.hatch = Math.min(tight.hatch, (2 * g.mouthR * r) / worst.w);
+    tight.head = Math.min(tight.head, ((g.ceilZ - g.floorZ) * r) / worst.h);
+    /* Berths line the two long walls and a berthed hull points across the
+     * shed, so along the wall neighbours are separated by WIDTH and into the
+     * wall each one needs LENGTH. */
+    var xs = [];
+    for (var b = 0; b < g.berths; b++) xs.push(Gen.berthOffset(port, b).x);
+    xs = xs.filter(function (v, i, a) { return a.indexOf(v) === i; })
+           .sort(function (a2, b2) { return a2 - b2; });
+    for (var i2 = 1; i2 < xs.length; i2++) {
+      tight.pitch = Math.min(tight.pitch, ((xs[i2] - xs[i2 - 1]) * r) / worst.w);
+    }
+    /* From the berth line out to the wall, and back in toward the middle:
+     * half a hull each way, or it is parked through the concrete. */
+    var toWall = (g.chamberY - Math.abs(g.berthY)) * r;
+    tight.depth = Math.min(tight.depth, toWall / (worst.l / 2));
+  });
+
+  check('the hatch passes the widest hull in the fleet', tight.hatch >= 1,
+        tight.hatch.toFixed(2) + 'x');
+  check('there is headroom over the tallest', tight.head >= 1,
+        tight.head.toFixed(2) + 'x');
+  check('neighbouring berths do not overlap', tight.pitch >= 1,
+        tight.pitch.toFixed(2) + 'x');
+  check('and a parked hull stays inside the chamber', tight.depth >= 1,
+        tight.depth.toFixed(2) + 'x');
+  console.log('  tightest: hatch ' + tight.hatch.toFixed(1) + 'x  headroom ' +
+              tight.head.toFixed(1) + 'x  berth pitch ' + tight.pitch.toFixed(1) +
+              'x  berth depth ' + tight.depth.toFixed(1) + 'x');
+})();
+
 Render.assignPort('orbital', null);   // leave the library as we found it
 
 console.log('');

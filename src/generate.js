@@ -1069,12 +1069,30 @@
    * straight cuts and right angles, and the only round thing about one
    * should be the things that actually turn. So the mouth is a square
    * hatch, the shaft is a duct, and the hangar is a shed. */
-  var BAY_MOUTH_R = 0.55;        // half-width of the square mouth
-  var BAY_THROAT_R = 0.45;       // and at the bottom of the duct
-  var BAY_CHAMBER_X = 1.30;      // the shed, inside faces, half-extents
-  var BAY_CHAMBER_Y = 0.80;
-  var BAY_HEADROOM = 0.36;       // floor to ceiling
-  var BAY_BERTH_Y = 0.60;        // berths line the two long walls
+  /* THE SHED IS A BUILDING, NOT A FIELD, and these numbers used to say
+   * otherwise. At 1.30 pad radii the chamber was 260 to 620 m across for a
+   * hull you could park on a tennis court — the far wall half a kilometre
+   * off, which is the "featureless grey field" this very file warns about a
+   * few lines up and then went and built anyway. The apron above it is
+   * unchanged and deliberately so: a big concrete field with a normal-sized
+   * hangar door in it is what an airport looks like, and the field is what
+   * gives a port its sense of place.
+   *
+   * Sized against what has to fit, and the sizing is MEASURED: six berths,
+   * three to a wall, two rows facing each other across a central lane, for
+   * hulls up to 25 m on their longest axis. test/berths.test.js reports the
+   * four numbers that decide it every run — whether the hatch passes the
+   * widest hull, whether there is headroom over the tallest, whether
+   * neighbouring berths overlap, and whether a parked hull stays inside the
+   * chamber instead of sticking out through the wall. The last of those
+   * caught this table's first draft at 0.64x, which is a ship parked
+   * through the concrete. */
+  var BAY_MOUTH_R = 0.20;        // half-width of the square mouth
+  var BAY_THROAT_R = 0.16;       // and at the bottom of the duct
+  var BAY_CHAMBER_X = 0.50;      // the shed, inside faces, half-extents
+  var BAY_CHAMBER_Y = 0.42;
+  var BAY_HEADROOM = 0.20;       // floor to ceiling
+  var BAY_BERTH_Y = 0.26;        // berths line the two long walls
   var BAY_STANDOFF = 0.012;      // gear-to-floor once parked
   var BERTH_COUNT = 6;           // five interchangeable, plus the large one
   var BAY_LIFT = 0.04;           // the model stands this proud of the ground
@@ -2787,6 +2805,10 @@
      * hangar drawn somewhere the ship does not actually stop. */
     SHALLOW_DEPTH: SHALLOW_DEPTH,
     bayGeometry: bayGeometry,
+    /* The shed's own default table, exported so a test can pin the
+     * BEHAVIOUR — an unmodelled bay falls back to the shared table — rather
+     * than pinning the numbers in it, which are tuned and will move again. */
+    shaftBay: shaftBay,
     stationBay: stationBay,
     berthOffset: berthOffset,
     modelledBerths: modelledBerths,

@@ -1108,16 +1108,37 @@
   /* Radius of the apron slab around a shaft mouth, in pad radii. Sized so
    * the retracted door leaves end up entirely inside it — the leaves ride
    * at z 0.005..0.045 and the apron spans -0.05..0.05, so a leaf that has
-   * slid past the mouth is buried in concrete and simply not visible. */
+   * slid past the mouth is buried in concrete and simply not visible.
+   *
+   * The apron KEPT ITS SIZE when the shed below it shrank, and that is the
+   * point rather than an oversight: a wide concrete field with a normal
+   * hangar door in the middle of it is what a working port looks like, and
+   * the field is most of what gives the place a sense of scale. */
   var APRON_R = 1.35;
 
-  /* How far a leaf slides, in pad radii. Big enough that the innermost
-   * tooth clears the 0.55 mouth entirely — a door that is "open" with a
-   * finger still over the hole is a door you cannot fly through. */
-  var DOOR_TRAVEL = 0.74;
+  /* ---- the doors, in MOUTHS rather than in pad radii --------------------
+   *
+   * Every number below used to be written against a mouth of 0.55 pad
+   * radii, which meant the doors silently stopped fitting the day that
+   * constant changed — leaves hanging a quarter of a pad radius past a
+   * hatch a third the size, teeth combing thin air. They are fractions of
+   * whatever the mouth actually is now, read from the one table that
+   * decides it, so the hatch and the thing that covers it cannot disagree.
+   *
+   * Travel is 1.35 mouths: enough that the innermost tooth clears the hole
+   * entirely, because a door that is "open" with a finger still over the
+   * opening is a door you cannot fly through. */
+  function mouthR() {
+    var Gen = global.Gen;
+    return (Gen && Gen.bayGeometry)
+      ? Gen.bayGeometry({ radius: 1, shaftDepth: 1 }).mouthR : 0.20;
+  }
+  var DOOR_TRAVEL_MOUTHS = 1.35;
   var DOOR_SKIN = '#6d7683';
   var DOOR_HAZARD = '#e0a63a';
-  var TOOTH_PITCH = 0.30, TOOTH_HALF = 0.072, TOOTH_REACH = 0.18;
+  /* Of a mouth: tooth spacing, half-height, and how far a tooth reaches
+   * across the centreline into the other leaf's gaps. */
+  var TOOTH_PITCH_M = 0.55, TOOTH_HALF_M = 0.13, TOOTH_REACH_M = 0.33;
 
   /* Draw the approach lamps for a port.
    *
@@ -1151,7 +1172,8 @@
     if (!port || !port.surface || !frame) return;
     stationMeshes();                      // ensures DOOR_LEAVES is built
     if (!DOOR_LEAVES) return;
-    var slide = Math.max(0, Math.min(1, open || 0)) * DOOR_TRAVEL * radiusKm;
+    var slide = Math.max(0, Math.min(1, open || 0)) *
+                (mouthR() * DOOR_TRAVEL_MOUTHS) * radiusKm;
     for (var i = 0; i < 2; i++) {
       var dir = i ? -1 : 1;
       var shifted = {
@@ -2008,17 +2030,24 @@
     function doorLeaf(parity) {
       var m = emptyMesh();
       m.c = [];
-      // The slab. Spans x 0..0.56, which covers the 0.55 mouth radius.
-      merge(m, box(0.28, 0.60, 0.020), 0.28, 0, 0.025, 1, DOOR_SKIN);
+      var MR = mouthR();
+      var half = MR * 1.02;            // spans the mouth with a little lap
+      var span = MR * 1.09;            // and stands proud of it across
+      var pitch = MR * TOOTH_PITCH_M;
+      var tHalf = MR * TOOTH_HALF_M;
+      var reach = MR * TOOTH_REACH_M;
+      var lift = MR * 0.045, thick = MR * 0.036;
+      // The slab, covering its half of the mouth.
+      merge(m, box(half / 2, span, thick), half / 2, 0, lift, 1, DOOR_SKIN);
       // A hazard stripe along the leading edge, so the seam is legible.
-      merge(m, box(0.03, 0.60, 0.021), 0.05, 0, 0.026, 1, DOOR_HAZARD);
+      merge(m, box(MR * 0.055, span, thick * 1.05), MR * 0.09, 0, lift * 1.04,
+            1, DOOR_HAZARD);
       /* Teeth, offset by half a pitch between the two leaves so they
        * interleave. Four on one leaf, three on the other. */
       for (var i = -2; i <= 2; i++) {
-        var y = (i + (parity ? 0.5 : 0)) * TOOTH_PITCH;
-        if (Math.abs(y) > 0.60 - TOOTH_HALF) continue;
-        merge(m, box(TOOTH_REACH / 2, TOOTH_HALF, 0.020),
-              -TOOTH_REACH / 2, y, 0.025, 1, DOOR_SKIN);
+        var y = (i + (parity ? 0.5 : 0)) * pitch;
+        if (Math.abs(y) > span - tHalf) continue;
+        merge(m, box(reach / 2, tHalf, thick), -reach / 2, y, lift, 1, DOOR_SKIN);
       }
       return m;
     }
@@ -4769,7 +4798,10 @@
     drawPortDressing: drawPortDressing,
     drawPortLamps: drawPortLamps,
     drawPortDoors: drawPortDoors,
-    DOOR_TRAVEL: DOOR_TRAVEL,
+    /* How far a leaf slides, in PAD RADII, for anything that needs to
+     * reason about the animation from outside. Derived now rather than
+     * stored, because the doors follow the mouth. */
+    doorTravel: function () { return mouthR() * DOOR_TRAVEL_MOUTHS; },
     APRON_R: APRON_R,
     portDressingMesh: portDressingMesh,
     drawExhaust: drawExhaust,
