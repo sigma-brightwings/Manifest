@@ -1455,7 +1455,26 @@
         if (!b.min || !b.max) return 0;
         return (b.max[0] - b.min[0]) * (b.max[1] - b.min[1]) * (b.max[2] - b.min[2]);
       };
-      var floorZ = bx.min ? bx.min[2] : bx.mid[2];
+      /* THE DECK, MEASURED — not the bottom of the box.
+       *
+       * This read `bx.min[2]` and called it the floor, which is the reading
+       * a bounding box invites and it was wrong on every berth in the
+       * library. The artist hung these boxes with their TOP at the deck and
+       * let them extend down through it, so `min[2]` is sixty-four to
+       * ninety-six metres inside the plating. Every ship in the game has
+       * been parked under the floor it is supposed to be standing on, the
+       * camera has been orbiting a point inside solid structure, and the
+       * screen has filled with the unlit back of a wall — the grey bay.
+       *
+       * Render.berthDeck casts down the berth's own centreline and returns
+       * the plate a hull will rest on. It falls back to the box when it
+       * cannot measure, and this falls back to the old reading when there
+       * is no renderer at all, so a headless caller still gets an answer. */
+      var R2 = global.Render;
+      var deck = (R2 && R2.berthDeck) ? R2.berthDeck(R2.portModelFor(port), i) : null;
+      var floorZ = (deck === null || deck === undefined)
+        ? (bx.min ? bx.min[2] : bx.mid[2])
+        : deck;
       var biggest = 0;
       for (var vi = 1; vi < sorted.length; vi++) {
         if (vol(sorted[vi]) > vol(sorted[biggest])) biggest = vi;

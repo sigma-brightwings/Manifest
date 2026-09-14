@@ -4664,8 +4664,44 @@
    * standing in the wall around it. */
   var THROAT_CAM_FRAC = 0.6;        // of the mouth's half-width
 
+  /* How much of the measured run to the wall the boom is allowed to use.
+   * The table is sampled every 22.5 degrees of yaw, so the direction asked
+   * for can sit up to eleven degrees off the nearest sample and the wall it
+   * finds can be nearer than any of them; the remainder is what pays for
+   * that. */
+  var BOOM_CAM_FRAC = 0.8;
+
   function clampCameraToThroat(port) {
-    if (!Gen || !Gen.bayGeometry || !G.cam) return;
+    if (!G.cam) return;
+
+    /* THE ART FIRST, WHEN THERE IS ANY. Render.boomLimit is a cast against
+     * the station's own triangles from the berth a hull actually parks on —
+     * see the note over berthBoom in render.js for why neither the anchor
+     * box nor the occupancy grid can answer this. It is built once per
+     * berth and cached, so this is a table lookup. */
+    if (Render && Render.boomLimit && Render.portModelFor && Sim.portBasis) {
+      var basis = Sim.portBasis(port, G.sys, G.t);
+      if (basis) {
+        var cp = Math.cos(G.cam.pitch), sp = Math.sin(G.cam.pitch);
+        var cyw = Math.cos(G.cam.yaw), syw = Math.sin(G.cam.yaw);
+        var dir = { x: cp * cyw, y: cp * syw, z: sp };   // target -> eye
+        var d = Render.boomLimit(Render.portModelFor(port), currentBerth(),
+                                 [V.dot(dir, basis.east),
+                                  V.dot(dir, basis.north),
+                                  V.dot(dir, basis.up)]);
+        if (isFinite(d)) {
+          var run = d * (port.radius || 1) * BOOM_CAM_FRAC;
+          if (run < G.cam.dist) G.cam.dist = Math.max(MIN_CAM_DIST, run);
+          return;
+        }
+      }
+    }
+
+    /* NO MODEL, NO MEASUREMENT — fall back to the bay's own mouth. It is
+     * the width of the hole the hull came through, it is in the same table
+     * every other bay dimension comes from, and standing further out than
+     * that is by definition standing in the wall around it. */
+    if (!Gen || !Gen.bayGeometry) return;
     var g = Gen.bayGeometry(port);
     if (!g || !(g.mouthR > 0)) return;
     var lim = g.mouthR * (port.radius || 1) * THROAT_CAM_FRAC;

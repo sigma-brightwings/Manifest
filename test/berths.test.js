@@ -876,6 +876,91 @@ console.log('--- landing in a berth ---');
         stillIn + ' still buried');
 })();
 
+/* ---- a hull parks on the deck, not in it ---------------------------------
+ *
+ * THE BUG THIS PINS. berthOffset read the berth anchor's `min[2]` as the
+ * floor. The anchors are hung with their TOP at the deck and extend down
+ * through it, so `min[2]` is 64-96 m inside the plating on every berth of
+ * every station in the shipped library. Ships parked under the floor, the
+ * camera orbited a point inside solid structure, and the screen filled with
+ * the unlit back of a wall — Astra's grey bay.
+ *
+ * The check is not "the deck is where it is today", which would pin an
+ * accident. It is the invariant that was violated: THE PARK POINT IS IN
+ * OPEN AIR. Render.berthBoom casts 144 directions from it; if it is buried,
+ * every one of them hits almost immediately.
+ *
+ * THE THRESHOLD IS MEASURED, not chosen. Across the whole library the
+ * smallest of those 20,000-odd samples is 0.0070 radii; with the park point
+ * back inside the plating it was 0.0010. 0.0040 sits between them with
+ * room on both sides — a factor of 1.75 below anything the art actually
+ * does, and a factor of 4 above the failure. */
+(function () {
+  var BURIED = 0.0040;                    // port radii
+  var checked = 0, buried = 0, offDeck = 0, worst = Infinity, worstWho = '';
+
+  MODELS.forEach(function (id) {
+    var lib = Render.libPort(id);
+    var mb = lib && lib.anchors && lib.anchors.berths;
+    if (!mb || !mb.length) return;
+    for (var k = 0; k < mb.length; k++) {
+      var deck = Render.berthDeck(id, k);
+      if (deck === null) continue;
+      checked++;
+
+      /* The deck has to lie inside the berth it belongs to. A measurement
+       * that wandered out of the box is a measurement of something else. */
+      var sorted = mb.slice().sort(function (a, b) {
+        return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
+      });
+      var b = sorted[k];
+      if (b.min && b.max && (deck < b.min[2] - 1e-6 || deck > b.max[2] + 1e-6)) {
+        offDeck++;
+        console.log('  FAIL  ' + id + ' berth ' + k + ' put its deck outside its own anchor');
+      }
+
+      var tb = Render.berthBoom(id, k);
+      if (!tb) continue;
+      var m = Infinity;
+      for (var i = 0; i < tb.d.length; i++) if (tb.d[i] < m) m = tb.d[i];
+      if (m < worst) { worst = m; worstWho = id + ' berth ' + k; }
+      if (m < BURIED) {
+        buried++;
+        console.log('  FAIL  ' + id + ' berth ' + k + ' parks its hull in the plating   ' +
+                    m.toFixed(4) + ' radii to the nearest surface');
+      }
+    }
+  });
+
+  check('every modelled berth has a measurable deck', checked > 0, checked + ' berths');
+  check('and the deck is inside the berth it belongs to', offDeck === 0, offDeck + ' astray');
+  check('a hull parks in open air, not inside the plating', buried === 0,
+        'tightest ' + worst.toFixed(4) + ' radii at ' + worstWho);
+
+  /* The boom table is the camera's only defence against the same mistake,
+   * so it has to answer, and it has to answer the same way twice — it is
+   * built once and cached, and a cache that returns null on the second ask
+   * is the bug portSolidity had. */
+  var again = Render.berthBoom(MODELS[0], 0);
+  check('the boom table survives being asked twice', !!again && again.d.length > 0);
+
+  /* And the lookup has to be bounded in every direction, including the two
+   * poles, where the yaw term degenerates. */
+  var bad = 0;
+  [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
+   [0.6, -0.6, 0.5], [-0.3, 0.2, -0.9]].forEach(function (d) {
+    var v = Render.boomLimit(MODELS[0], 0, d);
+    if (!(v > 0) || !isFinite(v)) bad++;
+  });
+  check('the boom lookup is bounded in every direction', bad === 0, bad + ' unbounded');
+
+  /* A role with no model has nothing to measure and must say so rather
+   * than inventing a number — the camera falls back to the bay table. */
+  check('an unmodelled role measures nothing',
+        Render.berthDeck('no-such-station', 0) === null &&
+        !isFinite(Render.boomLimit('no-such-station', 0, [1, 0, 0])));
+})();
+
 Render.assignPort('orbital', null);   // leave the library as we found it
 
 console.log('');

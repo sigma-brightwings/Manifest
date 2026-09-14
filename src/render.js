@@ -2981,6 +2981,251 @@
   /* The bounding box of a model's interior bucket, in its own normalised
    * units, cached per role. Cheap to compute once and the answer never
    * changes while the game is running. */
+  /* ---- how far the boom can run, measured against the art ---------------
+   *
+   * ASTRA WAS ALMOST RIGHT, AND THE MEASUREMENT SAYS WHICH HALF. She said
+   * we were flying into a space that is modelled but not cut out of the
+   * station, so the camera buries in the wall. The cavity IS cut out. It
+   * is simply SMALLER THAN THE BOOM. Sampling 144 directions from where a
+   * hull actually parks, on a station of half a kilometre radius:
+   *
+   *     spine-s    berth 0   min 11 m   p25 17 m   median 32 m
+   *     cradle-m   berth 1   min  1 m   p25  2 m   median 10 m
+   *     ring-m     berth 0   min 10 m   p25 15 m   median 50 m
+   *     cylinder-m berth 0   min 10 m   p25 15 m   median 63 m
+   *
+   * and of those 144 directions, 142 hit something: a berth is enclosed on
+   * essentially every side, which is what a berth ought to be. So a boom of
+   * any ordinary length puts the eye in the plating, every face it can see
+   * is the back of a wall, and the screen fills with flat grey. That is the
+   * whole of the bug. Not sort order, not winding, not the depth buffer,
+   * not un-subtracted solid.
+   *
+   * WHY THE BOX AND THE GRID BOTH FAIL HERE, since both were tried. The
+   * berth anchor is a BOX — 155 x 86 x 65 m on spine-s — and a box drawn
+   * around an alcove contains the alcove's own pillars, gantries and back
+   * wall, so a slab test against it happily concludes that seventy metres
+   * of boom fits. The occupancy grid is a map of where a SHIP may fly, with
+   * the throat deliberately carved open through solid plate, so along the
+   * one axis that matters it reports room where there is metal. Neither is
+   * a map of where the surfaces are. The triangles are.
+   *
+   * So this asks the triangles, once, and remembers. 16 yaw by 9 pitch from
+   * the park point against shell, interior and spin, with a box reject
+   * around the berth so the far side of the station is never tested: 72 ms
+   * for the worst station in the library, cached for the life of the
+   * session. The camera then costs a lookup.
+   *
+   * CONSERVATIVE ON PURPOSE. A lookup takes the SMALLEST of the four
+   * samples bracketing the direction asked for, rather than interpolating
+   * between them. Interpolation would smooth a pillar out of existence
+   * exactly where the boom wants to go through it, and being a few metres
+   * too close is a worse shot but a correct one, where being a few metres
+   * too far is the grey screen again. */
+  var BOOM_YAW = 16, BOOM_PITCH = 9;
+  /* How far out to keep triangles for the test, in port radii. Comfortably
+   * past the longest clear line measured in any bay (0.26 radii), so the
+   * reject never hides a wall the boom could reach. */
+  var BOOM_REACH = 0.5;
+  var BOOM = {};
+
+  function boomDir(iy, ip) {
+    var yaw = (iy % BOOM_YAW) / BOOM_YAW * Math.PI * 2;
+    var pit = (ip / (BOOM_PITCH - 1) - 0.5) * Math.PI;
+    var cp = Math.cos(pit);
+    return [cp * Math.cos(yaw), cp * Math.sin(yaw), Math.sin(pit)];
+  }
+
+  /* Moller-Trumbore, both-sided. Both-sided matters: these meshes are not
+   * watertight (spine-s has 36,698 edges used once against 9,113 shared)
+   * and their winding is 50/50 from any viewpoint, so a front-face-only
+   * test would miss half the walls in the room. */
+  function boomHit(o, d, a, b, c) {
+    var e1x = b[0] - a[0], e1y = b[1] - a[1], e1z = b[2] - a[2];
+    var e2x = c[0] - a[0], e2y = c[1] - a[1], e2z = c[2] - a[2];
+    var px = d[1] * e2z - d[2] * e2y,
+        py = d[2] * e2x - d[0] * e2z,
+        pz = d[0] * e2y - d[1] * e2x;
+    var det = e1x * px + e1y * py + e1z * pz;
+    if (det > -1e-12 && det < 1e-12) return -1;
+    var inv = 1 / det;
+    var tx = o[0] - a[0], ty = o[1] - a[1], tz = o[2] - a[2];
+    var u = (tx * px + ty * py + tz * pz) * inv;
+    if (u < -1e-6 || u > 1 + 1e-6) return -1;
+    var qx = ty * e1z - tz * e1y,
+        qy = tz * e1x - tx * e1z,
+        qz = tx * e1y - ty * e1x;
+    var v = (d[0] * qx + d[1] * qy + d[2] * qz) * inv;
+    if (v < -1e-6 || u + v > 1 + 1e-6) return -1;
+    var t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+    return t > 1e-6 ? t : -1;
+  }
+
+  /* Every triangle of every bucket that could possibly be within reach of
+   * the park point, flattened once so the 144 rays share the work. */
+  function boomTris(lib, o) {
+    var out = [], keys = ['shell', 'interior', 'spin'];
+    for (var k = 0; k < keys.length; k++) {
+      var m = lib[keys[k]];
+      if (!m || !m.f) continue;
+      for (var i = 0; i < m.f.length; i++) {
+        var tri = m.f[i];
+        for (var j = 1; j + 1 < tri.length; j++) {
+          var a = m.v[tri[0]], b = m.v[tri[j]], c = m.v[tri[j + 1]];
+          if (!a || !b || !c) continue;
+          var far = false;
+          for (var ax = 0; ax < 3; ax++) {
+            var lo = Math.min(a[ax], b[ax], c[ax]);
+            var hi = Math.max(a[ax], b[ax], c[ax]);
+            if (lo > o[ax] + BOOM_REACH || hi < o[ax] - BOOM_REACH) { far = true; break; }
+          }
+          if (!far) out.push(a, b, c);
+        }
+      }
+    }
+    return out;
+  }
+
+  /* ---- where the deck actually is --------------------------------------
+   *
+   * A BERTH ANCHOR IS NOT A ROOM, AND READING IT AS ONE PARKED EVERY SHIP
+   * IN THE GAME UNDER THE FLOOR.
+   *
+   * berthOffset took the anchor box's lower bound as the deck and rested a
+   * hull a standoff above it. But the artist anchored these boxes with
+   * their TOP at the deck and let them hang down through it into the
+   * structure below — which is a perfectly ordinary way to place a volume,
+   * and nothing in a bounding box says which end is which. Casting down the
+   * berth's centreline from just under each box's own ceiling, across all
+   * twelve modelled stations:
+   *
+   *     cradle   deck is 77.0-89.0 m above box.min[2]
+   *     cylinder                96.5 m
+   *     ring                78.5-91.5 m
+   *     spine                64.0-74.5 m
+   *
+   * So the park point was sixty-four to ninety-six metres inside solid
+   * plate, on every berth of every station in the library. That is a hull
+   * in the floor, a camera orbiting a point in the floor, and a screen full
+   * of the unlit back of a wall — which is what Astra has been looking at
+   * and calling the interior "just as grey as the exterior". She had the
+   * shape of it: we were inside geometry. It was not that the cavity had
+   * never been cut; it was that we were parked below it.
+   *
+   * MEASURED, NOT ASSUMED, and that is the whole point — `max[2]` would be
+   * right to within a couple of metres today, but it is right by
+   * convention, and a station exported the other way up would put ships in
+   * the ceiling with no test able to tell. The ray finds the plate the hull
+   * will actually rest on. The result is sanity-checked back against the
+   * box it came from, so a miss falls through to the convention rather than
+   * to a number from nowhere. */
+  var DECK = {};
+
+  function berthDeck(role, i) {
+    var lib = libPort(role);
+    var mb = lib && lib.anchors && lib.anchors.berths;
+    if (!mb || !mb.length) return null;
+    var sorted = mb.slice().sort(function (a, b) {
+      return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
+    });
+    var k = ((i % sorted.length) + sorted.length) % sorted.length;
+    var key = role + '#' + k;
+    if (DECK[key] !== undefined) return DECK[key];
+
+    var b = sorted[k];
+    if (!b || !b.mid || !b.min || !b.max) { DECK[key] = null; return null; }
+
+    /* Start a hair under the box's own ceiling so the cast begins in the
+     * open air of the alcove rather than on the lid of the box. */
+    var o = [b.mid[0], b.mid[1], b.max[2] - 1e-4];
+    var T = boomTris(lib, o), best = Infinity;
+    for (var t = 0; t < T.length; t += 3) {
+      var h = boomHit(o, [0, 0, -1], T[t], T[t + 1], T[t + 2]);
+      if (h > 0 && h < best) best = h;
+    }
+    var z = isFinite(best) ? o[2] - best : null;
+    /* A deck outside the box it belongs to is not this berth's deck. */
+    if (z === null || z < b.min[2] || z > b.max[2]) z = b.max[2];
+    DECK[key] = z;
+    return z;
+  }
+
+  /* The table for one berth of one model, in PORT RADII, built on first
+   * ask. Null when the model declares no berths — a procedural station has
+   * no art to measure and falls back to its own table upstream. */
+  function berthBoom(role, i) {
+    var lib = libPort(role);
+    var mb = lib && lib.anchors && lib.anchors.berths;
+    if (!mb || !mb.length) return null;
+    /* THE SAME ORDER generate.js sorts by, and it has to be: a table built
+     * against berth 3 and read for berth 5 is the camera in a wall again,
+     * only intermittently. */
+    var sorted = mb.slice().sort(function (a, b) {
+      return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
+    });
+    var k = ((i % sorted.length) + sorted.length) % sorted.length;
+    var key = role + '#' + k;
+    if (BOOM[key] !== undefined) return BOOM[key];
+
+    var b = sorted[k];
+    if (!b || !b.mid) { BOOM[key] = null; return null; }
+    /* WHERE THE EYE ACTUALLY IS, not where the box is centred. The hull
+     * rests a standoff off the deck and the camera orbits the hull, so the
+     * measurement starts there or it measures the wrong room. */
+    /* THE DECK, not the box floor — see berthDeck. Measuring the room from
+     * a point buried in the plating answers about the plating. */
+    var deck = berthDeck(role, k);
+    if (deck === null) deck = b.min ? b.min[2] : b.mid[2];
+    var g = global.Gen && global.Gen.bayGeometry
+      ? global.Gen.bayGeometry({ role: role, kind: 'station', radius: 1 })
+      : null;
+    var stand = (g && typeof g.standoff === 'number') ? g.standoff : 0.012;
+    var o = [b.mid[0], b.mid[1], deck + stand];
+
+    var T = boomTris(lib, o);
+    var d = new Float32Array(BOOM_YAW * BOOM_PITCH);
+    for (var iy = 0; iy < BOOM_YAW; iy++) {
+      for (var ip = 0; ip < BOOM_PITCH; ip++) {
+        var dir = boomDir(iy, ip), best = Infinity;
+        for (var t = 0; t < T.length; t += 3) {
+          var h = boomHit(o, dir, T[t], T[t + 1], T[t + 2]);
+          if (h > 0 && h < best) best = h;
+        }
+        d[iy * BOOM_PITCH + ip] = isFinite(best) ? best : BOOM_REACH * 2;
+      }
+    }
+    BOOM[key] = { yaw: BOOM_YAW, pitch: BOOM_PITCH, d: d, origin: o };
+    return BOOM[key];
+  }
+
+  /* How far the boom may run from this berth along this direction, in port
+   * radii, or Infinity when there is nothing measured to say otherwise.
+   * `dir` is a unit vector in the MODEL's frame: +x east, +y north, +z up,
+   * the same axes stationFrame hands the renderer. */
+  function boomLimit(role, i, dir) {
+    var tb = berthBoom(role, i);
+    if (!tb || !dir) return Infinity;
+    var x = dir[0], y = dir[1], z = dir[2];
+    var len = Math.sqrt(x * x + y * y + z * z);
+    if (!(len > 1e-9)) return Infinity;
+    x /= len; y /= len; z /= len;
+    var yaw = Math.atan2(y, x);
+    if (yaw < 0) yaw += Math.PI * 2;
+    var fy = yaw / (Math.PI * 2) * tb.yaw;
+    var fp = (Math.asin(Math.max(-1, Math.min(1, z))) / Math.PI + 0.5) * (tb.pitch - 1);
+    var y0 = Math.floor(fy), p0 = Math.floor(fp);
+    var best = Infinity;
+    for (var a = 0; a <= 1; a++) {
+      for (var c = 0; c <= 1; c++) {
+        var yi = ((y0 + a) % tb.yaw + tb.yaw) % tb.yaw;
+        var pi = Math.max(0, Math.min(tb.pitch - 1, p0 + c));
+        var v = tb.d[yi * tb.pitch + pi];
+        if (v < best) best = v;
+      }
+    }
+    return best;
+  }
+
   var INTERIOR_BOUNDS = {};
   function meshBounds(mesh) {
     if (!mesh || !mesh.v || !mesh.v.length) return null;
@@ -5344,6 +5589,9 @@
     insideInterior: insideInterior,
     setIndoors: setIndoors,
     portSolidity: portSolidity,
+    berthDeck: berthDeck,
+    berthBoom: berthBoom,
+    boomLimit: boomLimit,
     portDoors: portDoors,
     carveThroat: carveThroat,
     solidityAt: solidityAt,
