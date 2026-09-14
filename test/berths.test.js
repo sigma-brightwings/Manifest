@@ -833,47 +833,106 @@ console.log('--- landing in a berth ---');
   check('and asking for clearance again lets you back in', rearmed === checkedU,
         rearmed + ' of ' + checkedU);
 
-  /* AND THE WALL. A hull put inside station geometry has to be pushed back
-   * OUT of it — not merely reported, or the next frame finds it there
-   * again and the ship reads as stuck inside a wall. */
-  var stopped = 0, stillIn = 0, checkedW = 0;
-  (sys.ports || []).filter(function (p) { return !p.surface; }).forEach(function (port) {
-    var sol = Sim.stationSolidity(port);
-    var basis = Sim.portBasis(port, sys, 0);
-    if (!sol || !basis) return;
-    /* Find a cell the grid calls wall, and put a ship in the middle of it. */
-    var N = sol.n, wallPt = null;
-    for (var gz = 0; gz < N && !wallPt; gz += 3) {
-      for (var gy = 0; gy < N && !wallPt; gy += 3) {
-        for (var gx = 0; gx < N && !wallPt; gx += 3) {
-          if (sol.grid[(gz * N + gy) * N + gx] !== Render.SOLID_WALL) continue;
-          wallPt = [sol.lo[0] + (gx + 0.5) / sol.inv[0],
-                    sol.lo[1] + (gy + 0.5) / sol.inv[1],
-                    sol.lo[2] + (gz + 0.5) / sol.inv[2]];
-        }
-      }
+  /* AND THE WALL — but "in a wall" is no longer a cell, it is a place.
+   *
+   * THIS TEST USED TO PICK THE CENTRE OF A GRID CELL MARKED WALL, and that
+   * stopped meaning anything. A cell is 48th of a model, so at
+   * STATION_SCALE 3.5 it is 183-315 m across and is marked WALL if ANY
+   * triangle passes through it — its centre is usually open air a long way
+   * from any surface. Asserting that a hull there is a collision was
+   * asserting that a ship flying past a station at two hundred metres
+   * should be flung sideways, which is precisely what the old grid escape
+   * did (1.35 cells, so 248-425 m, every frame) and precisely what Astra
+   * was seeing when she said collision did not work and the camera kept
+   * doing that thing.
+   *
+   * So the requirement is restated in terms of geometry rather than of the
+   * structure that used to approximate it: a hull with SOLID ON EVERY SIDE
+   * within its own length is buried and must be moved; a hull with room in
+   * any direction is flying, and must be left alone. Both halves matter,
+   * and the second is the one that was wrong. */
+  var freed = 0, stillIn = 0, checkedW = 0, falseGrab = 0, checkedF = 0;
+
+  /* Every axis blocked within a hull's length: genuinely inside something. */
+  function boxedIn(role, at, step) {
+    var dirs = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+    for (var i = 0; i < dirs.length; i++) {
+      var d = dirs[i];
+      if (!Render.portSegmentHit(role, at,
+            [at[0] + d[0] * step, at[1] + d[1] * step, at[2] + d[2] * step])) return false;
     }
-    if (!wallPt) return;
-    checkedW++;
+    return true;
+  }
+
+  (sys.ports || []).filter(function (p) { return !p.surface; }).forEach(function (port) {
+    var basis = Sim.portBasis(port, sys, 0);
+    var role = Render.portModelFor(port);
+    var ix = Render.portTriangles(role);
+    if (!basis || !ix) return;
     var r = port.radius || 1;
-    var pos = V.addScaled(basis.entrance.pos, basis.east, wallPt[0] * r);
-    pos = V.addScaled(pos, basis.north, wallPt[1] * r);
-    pos = V.addScaled(pos, basis.up, wallPt[2] * r);
-    var sh = { cls: 'courier', dryMass: 80, hullHp: 100, gear: false,
-               pos: pos, vel: V.clone(Sim.bodyState(port, sys, 0).vel),
+    var step = 0.025 / r;                       // a hull length, in model units
+    var toWorld = function (m) {
+      var w = V.addScaled(basis.entrance.pos, basis.east, m[0] * r);
+      w = V.addScaled(w, basis.north, m[1] * r);
+      return V.addScaled(w, basis.up, m[2] * r);
+    };
+    var fly = function (m) {
+      return { cls: 'courier', dryMass: 80, hullHp: 100, gear: false,
+               pos: toWorld(m), vel: V.clone(Sim.bodyState(port, sys, 0).vel),
                fwd: { x: 1, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 },
                right: { x: 0, y: -1, z: 0 } };
-    var hit = Sim.checkStationImpact(sh, sys, 0);
-    if (hit && hit.port === port) stopped++;
-    if (Sim.stationSolidAt(port, sh.pos, sys, 0) === Render.SOLID_WALL) {
-      stillIn++;
-      console.log('  FAIL  ' + Render.portModelFor(port) + ' leaves a hull inside its wall');
+    };
+
+    /* A genuinely buried point: step off a face along its own normal, into
+     * the structure, until every direction is blocked. */
+    var n = ix.tri.length / 3, buried = null, open = null;
+    for (var k = 0; k < n && (!buried || !open); k += Math.max(1, Math.floor(n / 200))) {
+      var a = ix.tri[k * 3], b = ix.tri[k * 3 + 1], c = ix.tri[k * 3 + 2];
+      var mid = [(a[0]+b[0]+c[0])/3, (a[1]+b[1]+c[1])/3, (a[2]+b[2]+c[2])/3];
+      var e1 = [b[0]-a[0], b[1]-a[1], b[2]-a[2]], e2 = [c[0]-a[0], c[1]-a[1], c[2]-a[2]];
+      var nx = e1[1]*e2[2]-e1[2]*e2[1], ny = e1[2]*e2[0]-e1[0]*e2[2], nz = e1[0]*e2[1]-e1[1]*e2[0];
+      var nl = Math.sqrt(nx*nx+ny*ny+nz*nz);
+      if (!(nl > 1e-12)) continue;
+      nx /= nl; ny /= nl; nz /= nl;
+      var into = [mid[0] - nx * step * 0.4, mid[1] - ny * step * 0.4, mid[2] - nz * step * 0.4];
+      if (!buried && boxedIn(role, into, step)) buried = into;
+      var out = [mid[0] + nx * step * 3, mid[1] + ny * step * 3, mid[2] + nz * step * 3];
+      if (!open && !boxedIn(role, out, step)) open = out;
+    }
+
+    /* HALF ONE: a buried hull is freed. */
+    if (buried) {
+      checkedW++;
+      var sh = fly(buried);
+      Sim.checkStationImpact(sh, sys, 0);
+      var rel = V.sub(sh.pos, basis.entrance.pos);
+      var now = [V.dot(rel, basis.east) / r, V.dot(rel, basis.north) / r,
+                 V.dot(rel, basis.up) / r];
+      if (boxedIn(role, now, step)) {
+        stillIn++;
+        console.log('  FAIL  ' + role + ' leaves a hull buried in its structure');
+      } else freed++;
+    }
+
+    /* HALF TWO, and the one the old test had backwards: a hull in open
+     * space near the station is NOT touched. */
+    if (open) {
+      checkedF++;
+      var sh2 = fly(open);
+      var before = V.clone(sh2.pos);
+      Sim.checkStationImpact(sh2, sys, 0);
+      var moved = V.dist(before, sh2.pos) * 1000;
+      if (moved > 1) {
+        falseGrab++;
+        console.log('  FAIL  ' + role + ' shoved a hull that was in open space ' +
+                    moved.toFixed(0) + ' m');
+      }
     }
   });
-  check('a hull inside station geometry is a collision', stopped === checkedW,
-        stopped + ' of ' + checkedW);
-  check('and it is put back outside rather than left there', stillIn === 0,
-        stillIn + ' still buried');
+  check('a hull buried in station structure is freed', stillIn === 0 && checkedW > 0,
+        freed + ' of ' + checkedW + ' freed');
+  check('and a hull in open space beside a station is left alone',
+        falseGrab === 0 && checkedF > 0, checkedF + ' checked, ' + falseGrab + ' shoved);'.replace(');', ''));
 })();
 
 /* ---- a hull parks on the deck, not in it ---------------------------------

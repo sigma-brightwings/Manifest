@@ -3036,9 +3036,8 @@
     return [cp * Math.cos(yaw), cp * Math.sin(yaw), Math.sin(pit)];
   }
 
-  /* Moller-Trumbore, both-sided. Both-sided matters: these meshes are not
-   * watertight (spine-s has 36,698 edges used once against 9,113 shared)
-   * and their winding is 50/50 from any viewpoint, so a front-face-only
+  /* Moller-Trumbore, both-sided. Both-sided matters because the winding is
+   * 50/50 from any viewpoint, inside or out — measured — so a front-face
    * test would miss half the walls in the room. */
   function boomHit(o, d, a, b, c) {
     var e1x = b[0] - a[0], e1y = b[1] - a[1], e1z = b[2] - a[2];
@@ -3287,6 +3286,183 @@
    * at the largest — finer than a hull at the small end and coarser at the
    * big one. The doors are what a coarse cell would lose, and the doors are
    * carved explicitly, so the resolution never has to find them. */
+  /* ---- the triangles themselves, indexed -------------------------------
+   *
+   * WHY THE VOXEL GRID BELOW IS NOT ENOUGH, AND WHY THAT ONLY BECAME TRUE
+   * RECENTLY. SOLID_N is 48 cells across the model, whatever size the model
+   * is. At STATION_SCALE 0.35 that made a cell 9-47 m — about the length of
+   * a hull, so the grid genuinely approximated the station and a point test
+   * against it was a fair collision check. At 3.5 a cell is 88-466 m. The
+   * ship is 25 m. A single cell is up to eighteen hull-lengths across, and
+   * at that resolution the grid cannot represent a wall, a doorway or a
+   * berth: everything is mush, and Astra's report was exactly right —
+   * collision stopped working when the stations grew.
+   *
+   * RAISING THE RESOLUTION DOES NOT SAVE IT. Ship-sized cells at an 11 km
+   * radius would be 896 to a side: 719 million cells, per model. A uniform
+   * occupancy volume is simply the wrong structure once stations differ in
+   * size by five times and dwarf the thing colliding with them.
+   *
+   * SO ASK THE TRIANGLES. A segment against a surface needs no volume and
+   * no resolution: "did this path cross a face" is exact at any scale, and
+   * it kills tunnelling for free because it tests the whole step rather
+   * than the endpoint.
+   *
+   * A CORRECTION WORTH KEEPING, because it was asserted here in the wrong
+   * form first. An earlier note in this file said these meshes are not
+   * watertight, on a raw count of 36,698 edges used once against 9,113
+   * shared. That count is an artefact: the models carry SPLIT VERTICES for
+   * flat shading, so one seam is several unshared edges at identical
+   * positions. Welded by position, spine, ring and cradle have ZERO
+   * boundary edges — they are closed solids. Only cylinder (4 loops) and
+   * city-port (16) have real openings, and those are the ends and mouths
+   * the art means to leave open. The tests here stay both-sided anyway:
+   * it costs nothing, and it is correct whether or not the next imported
+   * model is closed.
+   *
+   * The index is a uniform grid of TRIANGLE LISTS — cheap to build, cheap to
+   * query, and built once per model and cached. Queries here are always
+   * local (a ship's step is metres, a camera boom a few hundred), so a
+   * query gathers the cells its own bounding box touches rather than
+   * walking a DDA. That is a superset of the cells the segment crosses,
+   * which costs a few extra triangle tests and cannot miss one.
+   *
+   * The occupancy grid stays. It answers a different question — "is this
+   * point in a ROOM of the station", which is about enclosure, not about
+   * surfaces — and it is the right tool for that. */
+  var TRI_N = 32;
+  var TRIDEX = {};
+
+  function portTriangles(role) {
+    if (TRIDEX[role] !== undefined) return TRIDEX[role];
+    TRIDEX[role] = null;
+    var lib = libPort(role);
+    if (!lib) return null;
+
+    var tri = [], keys = ['shell', 'interior', 'spin'];
+    var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (var k = 0; k < keys.length; k++) {
+      var m = lib[keys[k]];
+      if (!m || !m.v || !m.f) continue;
+      for (var i = 0; i < m.f.length; i++) {
+        var f = m.f[i];
+        for (var j = 1; j + 1 < f.length; j++) {
+          var a = m.v[f[0]], b = m.v[f[j]], c = m.v[f[j + 1]];
+          if (!a || !b || !c) continue;
+          tri.push(a, b, c);
+          for (var ax = 0; ax < 3; ax++) {
+            var mn = Math.min(a[ax], b[ax], c[ax]), mx = Math.max(a[ax], b[ax], c[ax]);
+            if (mn < lo[ax]) lo[ax] = mn;
+            if (mx > hi[ax]) hi[ax] = mx;
+          }
+        }
+      }
+    }
+    if (!tri.length) return null;
+
+    var N = TRI_N, size = [0, 0, 0], inv = [0, 0, 0];
+    for (var ax2 = 0; ax2 < 3; ax2++) {
+      /* A flat model — a ring is nearly one — would divide by zero on its
+       * thin axis and index every triangle into one plane of cells. */
+      size[ax2] = Math.max(1e-6, hi[ax2] - lo[ax2]);
+      inv[ax2] = N / size[ax2];
+    }
+    var bins = new Array(N * N * N);
+    var clamp = function (v) { return v < 0 ? 0 : (v > N - 1 ? N - 1 : v); };
+    for (var t = 0; t < tri.length; t += 3) {
+      var p0 = tri[t], p1 = tri[t + 1], p2 = tri[t + 2];
+      var c0 = [], c1 = [];
+      for (var ax3 = 0; ax3 < 3; ax3++) {
+        c0[ax3] = clamp(Math.floor((Math.min(p0[ax3], p1[ax3], p2[ax3]) - lo[ax3]) * inv[ax3]));
+        c1[ax3] = clamp(Math.floor((Math.max(p0[ax3], p1[ax3], p2[ax3]) - lo[ax3]) * inv[ax3]));
+      }
+      for (var x = c0[0]; x <= c1[0]; x++) {
+        for (var y = c0[1]; y <= c1[1]; y++) {
+          for (var z = c0[2]; z <= c1[2]; z++) {
+            var b2 = (x * N + y) * N + z;
+            if (!bins[b2]) bins[b2] = [];
+            bins[b2].push(t);
+          }
+        }
+      }
+    }
+    TRIDEX[role] = { n: N, lo: lo, inv: inv, tri: tri, bins: bins, mark: 0,
+                     seen: new Int32Array(tri.length / 3) };
+    return TRIDEX[role];
+  }
+
+  /* Moller-Trumbore, BOTH-SIDED — see the note above on watertightness. `a`
+   * and `b` are in the model's normalised frame. Returns null, or
+   * { t, normal } with t in [0,1] along the segment and the normal turned
+   * to face back along it, which is the direction anything pushed out of
+   * this surface has to go. */
+  function portSegmentHit(role, a, b) {
+    var ix = portTriangles(role);
+    if (!ix) return null;
+    var N = ix.n, lo = ix.lo, inv = ix.inv, tri = ix.tri, bins = ix.bins;
+    var dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+    if (dx === 0 && dy === 0 && dz === 0) return null;
+
+    var c0 = [], c1 = [];
+    for (var ax = 0; ax < 3; ax++) {
+      var s0 = Math.floor((Math.min(a[ax], b[ax]) - lo[ax]) * inv[ax]);
+      var s1 = Math.floor((Math.max(a[ax], b[ax]) - lo[ax]) * inv[ax]);
+      /* Wholly outside the model on any axis: nothing to hit. */
+      if (s1 < 0 || s0 > N - 1) return null;
+      c0[ax] = s0 < 0 ? 0 : s0;
+      c1[ax] = s1 > N - 1 ? N - 1 : s1;
+    }
+
+    /* One stamp per query so a triangle spanning several cells is tested
+     * once, without clearing an array of 32768 bins between calls. */
+    ix.mark++;
+    var mark = ix.mark, seen = ix.seen;
+    var best = Infinity, bn = null;
+    for (var x = c0[0]; x <= c1[0]; x++) {
+      for (var y = c0[1]; y <= c1[1]; y++) {
+        for (var z = c0[2]; z <= c1[2]; z++) {
+          var bin = bins[(x * N + y) * N + z];
+          if (!bin) continue;
+          for (var q = 0; q < bin.length; q++) {
+            var t0 = bin[q];
+            if (seen[t0 / 3] === mark) continue;
+            seen[t0 / 3] = mark;
+            var p0 = tri[t0], p1 = tri[t0 + 1], p2 = tri[t0 + 2];
+            var e1x = p1[0] - p0[0], e1y = p1[1] - p0[1], e1z = p1[2] - p0[2];
+            var e2x = p2[0] - p0[0], e2y = p2[1] - p0[1], e2z = p2[2] - p0[2];
+            var hx = dy * e2z - dz * e2y,
+                hy = dz * e2x - dx * e2z,
+                hz = dx * e2y - dy * e2x;
+            var det = e1x * hx + e1y * hy + e1z * hz;
+            if (det > -1e-12 && det < 1e-12) continue;
+            var f = 1 / det;
+            var sx = a[0] - p0[0], sy = a[1] - p0[1], sz = a[2] - p0[2];
+            var u = (sx * hx + sy * hy + sz * hz) * f;
+            if (u < -1e-6 || u > 1 + 1e-6) continue;
+            var qx = sy * e1z - sz * e1y,
+                qy = sz * e1x - sx * e1z,
+                qz = sx * e1y - sy * e1x;
+            var vv = (dx * qx + dy * qy + dz * qz) * f;
+            if (vv < -1e-6 || u + vv > 1 + 1e-6) continue;
+            var tt = (e2x * qx + e2y * qy + e2z * qz) * f;
+            if (tt < 0 || tt > 1 || tt >= best) continue;
+            best = tt;
+            var nx = e1y * e2z - e1z * e2y,
+                ny = e1z * e2x - e1x * e2z,
+                nz = e1x * e2y - e1y * e2x;
+            var nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+            nx /= nl; ny /= nl; nz /= nl;
+            /* Face it back along the segment: both-sided hits mean the
+             * winding cannot be trusted to say which side we came from. */
+            if (nx * dx + ny * dy + nz * dz > 0) { nx = -nx; ny = -ny; nz = -nz; }
+            bn = [nx, ny, nz];
+          }
+        }
+      }
+    }
+    return bn ? { t: best, normal: bn } : null;
+  }
+
   var SOLID_N = 48;
   var SOLID_EMPTY = 0, SOLID_WALL = 1, SOLID_OUT = 2, SOLID_IN = 3, SOLID_DOOR = 4;
 
@@ -5589,6 +5765,8 @@
     insideInterior: insideInterior,
     setIndoors: setIndoors,
     portSolidity: portSolidity,
+    portTriangles: portTriangles,
+    portSegmentHit: portSegmentHit,
     berthDeck: berthDeck,
     berthBoom: berthBoom,
     boomLimit: boomLimit,

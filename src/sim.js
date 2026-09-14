@@ -1209,9 +1209,13 @@
         }
         refreshShip(ship);
       }
+      /* WHERE THE HULL WAS, so the collision check can test the PATH
+       * rather than the endpoint. Without it a fast ship steps straight
+       * through a plate and nothing ever notices. */
+      var was = V.clone(ship.pos), wasT = t;
       stepShip(ship, sys, t, h);
       t += h;
-      var hit = checkImpact(ship, sys, t, true);
+      var hit = checkImpact(ship, sys, t, true, was, wasT);
       if (hit) break;
     }
     if (ship.fuelOut) ship.thrust = V.zero();
@@ -2249,7 +2253,75 @@
 
   /* Did the hull just put itself through a station wall? Returns the port
    * it hit, having moved the ship out of it, or null. */
-  function checkStationImpact(ship, sys, t) {
+  /* HOW FAR BACK OFF A SURFACE A STOPPED HULL IS PLACED, as a fraction of
+   * the step that hit it, plus an absolute floor. Purely so the next frame
+   * does not start exactly on the face and re-collide against the same
+   * triangle forever, which reads as being stuck. */
+  /* The nearest hit of the hull's cross-section: the centreline plus four
+   * segments offset by `rad` square to the direction of travel. `rad` is in
+   * the same normalised units as the points. Returns the same shape
+   * portSegmentHit does, so the caller resolves against it unchanged. */
+  function bundleHit(R, role, a, b, rad) {
+    var best = R.portSegmentHit(role, a, b);
+    if (!(rad > 0)) return best;
+    var dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+    var L = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (!(L > 1e-12)) return best;
+    dx /= L; dy /= L; dz /= L;
+    /* Any vector not parallel to the travel, made perpendicular. */
+    var ux = 0, uy = 0, uz = 1;
+    if (Math.abs(dz) > 0.9) { ux = 1; uy = 0; uz = 0; }
+    var d1 = ux * dx + uy * dy + uz * dz;
+    ux -= dx * d1; uy -= dy * d1; uz -= dz * d1;
+    var ul = Math.sqrt(ux * ux + uy * uy + uz * uz) || 1;
+    ux /= ul; uy /= ul; uz /= ul;
+    var vx = dy * uz - dz * uy, vy = dz * ux - dx * uz, vz = dx * uy - dy * ux;
+    var offs = [[ux, uy, uz], [-ux, -uy, -uz], [vx, vy, vz], [-vx, -vy, -vz]];
+    for (var i = 0; i < offs.length; i++) {
+      var o = offs[i];
+      var h = R.portSegmentHit(role,
+        [a[0] + o[0] * rad, a[1] + o[1] * rad, a[2] + o[2] * rad],
+        [b[0] + o[0] * rad, b[1] + o[1] * rad, b[2] + o[2] * rad]);
+      if (h && (!best || h.t < best.t)) best = h;
+    }
+    return best;
+  }
+
+  /* Is this point walled in on every side within a hull's length, and if so
+   * which way is out? Returns [nx, ny, nz, dist] in the model's own frame,
+   * or null when any direction is clear — the test that keeps this from
+   * firing on a ship flying past a station in open space, which is exactly
+   * what the voxel grid's escape could not do once a cell grew to 300 m.
+   * The way out is the direction with the most room, and the distance is
+   * far enough to clear the surface it found. */
+  function triangleEscape(R, role, at, r, ship) {
+    if (!R.hullSpan || !ship || !ship.cls || !(r > 0)) return null;
+    var sp = R.hullSpan(ship.cls);
+    if (!sp) return null;
+    /* A hull's longest dimension, in the model's normalised units. */
+    var step = Math.max(sp.w, sp.h, sp.l) / r;
+    if (!(step > 0)) return null;
+    var dirs = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+    var best = null, bestT = -1;
+    for (var i = 0; i < dirs.length; i++) {
+      var d = dirs[i];
+      var to = [at[0] + d[0] * step, at[1] + d[1] * step, at[2] + d[2] * step];
+      var h = R.portSegmentHit(role, at, to);
+      /* One clear direction and the hull is not buried — it is beside the
+       * station, not inside it. */
+      if (!h) return null;
+      if (h.t > bestT) { bestT = h.t; best = d; }
+    }
+    /* Out along the roomiest axis, far enough to be past what it found. */
+    return [best[0], best[1], best[2], step * (bestT + 0.25)];
+  }
+
+  var WALL_BACKOFF_KM = 0.002;          // 2 m
+  /* And a metre of daylight off the face itself, so the next step does not
+   * begin coplanar with the plate it just stopped against. */
+  var WALL_SKIN_KM = 0.001;             // 1 m
+
+  function checkStationImpact(ship, sys, t, from, fromT) {
     var R = global.Render;
     if (!R || !R.SOLID_WALL) return null;
     var ports = sys.ports || [];
@@ -2258,6 +2330,188 @@
       if (!p || p.surface || !p.docking) continue;
       var r = p.radius || 1;
       if (V.dist(bodyPosition(p, sys, t), ship.pos) > r * 2) continue;
+
+      /* ---- THE PATH, AGAINST THE ART ----------------------------------
+       *
+       * This used to be a point test against the voxel grid, and it was a
+       * fair one while a cell was about the size of a hull. At
+       * STATION_SCALE 3.5 a cell is 88-466 m against a 25 m ship, so the
+       * grid cannot represent a wall at all and collision quietly stopped
+       * working — which is exactly what Astra reported after the stations
+       * grew. Render.portSegmentHit asks the triangles instead: no
+       * resolution to outgrow, no watertightness required (these meshes
+       * have four times as many unshared edges as shared ones), and it
+       * tests the whole STEP rather than its endpoint, so a fast hull
+       * cannot tunnel through a plate between two frames.
+       *
+       * The grid is still right for enclosure — "am I in a room" — which
+       * is what stationSolidAt keeps answering. It was only ever wrong as
+       * a surface. */
+      var basis = portBasis(p, sys, t);
+      var role = R.portModelFor ? R.portModelFor(p) : null;
+      if (basis && role && R.portSegmentHit) {
+        var toModel = function (b, w) {
+          var rel = V.sub(w, b.entrance.pos);
+          return [V.dot(rel, b.east) / r,
+                  V.dot(rel, b.north) / r,
+                  V.dot(rel, b.up) / r];
+        };
+        /* EACH END IN THE FRAME IT WAS MEASURED IN, and this is the whole
+         * difference between a collision check and noise.
+         *
+         * A station's frame is not still: it rides an orbit at tens of
+         * kilometres a second and spins on top of that. Measured here, one
+         * 0.05 s step moves the frame 1521 m. Converting the START of the
+         * step with the frame as it stands at the END therefore produced a
+         * model-space segment a kilometre and a half long, pointing down
+         * the orbit — a path the ship never flew, sweeping through whatever
+         * geometry happened to lie along it. Real crossings were missed and
+         * imaginary ones were available; collision read as simply absent,
+         * which is what Astra kept reporting.
+         *
+         * Converting each end with its own basis gives the hull's path
+         * RELATIVE TO THE STATION, which is the only frame in which "did I
+         * hit that wall" is a meaningful question — and it keeps the spin
+         * honestly, so a ring turning into a stationary ship still hits it. */
+        var fb = (fromT === undefined || fromT === t)
+          ? basis : (portBasis(p, sys, fromT) || basis);
+        var b0 = from ? toModel(fb, from) : null;
+
+        /* ---- THE HULL HAS A WIDTH, AND THAT IS NOT A REFINEMENT ---------
+         *
+         * A single segment tests where the ship's CENTRE went, and a
+         * station is not a solid block — it is an open FRAME. The models
+         * are watertight (welded by position, spine, ring and cradle have
+         * no boundary edges at all), but watertight is not the same as
+         * gapless: each girder is a closed solid with hundreds of metres of
+         * daylight around it. Measured on spine-l, a 600 m line five metres
+         * to the side of a face crosses the entire station without touching
+         * anything. A point-sized ship threads between the members.
+         *
+         * Some of that is architecture and should stay flyable. What should
+         * not is a 25 m hull fitting through a 10 m gap, which a point test
+         * happily allows.
+         *
+         * So the ship stops being a point. A bundle of parallel segments —
+         * the centreline plus four at the hull's own half-width, square to
+         * the direction of travel — is the hull's cross-section, near
+         * enough. A 25 m ship then cannot fit through a 10 m gap, which is
+         * the correct answer whatever the mesh does, and the nearest hit of
+         * the five is the one that stops it.
+         *
+         * Five queries rather than one, at about two microseconds each, and
+         * only for a ship already within two radii of a station. */
+        var hb = (R.hullSpan && ship.cls) ? R.hullSpan(ship.cls) : null;
+        var rad = hb ? Math.max(hb.w, hb.h) * 0.5 / r : 0;
+        var worst = 0, touched = false;
+        /* RESOLVED UNTIL IT IS RESOLVED, not once.
+         *
+         * One pass is enough for a hull meeting one plate square on, and
+         * that is the rare case. A station is a box of plates: kill the
+         * motion into the first face and the hull slides along it straight
+         * into the next one, in the same step. Resolving once and moving on
+         * let it work its way between two surfaces and out the far side —
+         * measured at 29 of 50 head-on shots ending up THROUGH the face
+         * they were aimed at, while collisions were firing the whole time.
+         * That is the shape of Astra's report: it hits something, and then
+         * it keeps going.
+         *
+         * Four passes, because that is a corner in three dimensions plus
+         * one, and a hull that still has somewhere to go after four has
+         * found a crack rather than a wall. */
+        /* OUTSIDE THE LOOP because the buried check below needs it even when
+         * there is no previous position to sweep from — a caller with no
+         * `from` (the chart's ghosts, a direct checkImpact) gets no path
+         * test at all, and `b1` declared inside the loop would be undefined
+         * for it. */
+        var b1 = toModel(basis, ship.pos);
+        for (var pass = 0; b0 && pass < 4; pass++) {
+          b1 = toModel(basis, ship.pos);
+          var sweep = bundleHit(R, role, b0, b1, rad);
+          if (!sweep) break;
+          touched = true;
+
+          /* Back down the way we came — the start of the segment is a place
+           * we know was clear — and then OFF the face along its own normal.
+           * The retreat alone leaves the hull sitting exactly on the plate,
+           * where the next step begins coplanar with it and the crossing
+           * test cannot see the surface it is already touching. A metre of
+           * daylight is what stops that. */
+          var seg = V.sub(ship.pos, from);
+          var segLen = V.len(seg);
+          var back = segLen > 1e-9
+            ? Math.min(1, (WALL_BACKOFF_KM / segLen) + 1e-4) : 0;
+          var u = Math.max(0, sweep.t - back);
+
+          /* The face normal, turned from model axes back into the world. */
+          var nrm = V.norm(V.add(V.add(
+            V.scale(basis.east,  sweep.normal[0]),
+            V.scale(basis.north, sweep.normal[1])),
+            V.scale(basis.up,    sweep.normal[2])));
+
+          ship.pos = V.addScaled(V.addScaled(from, seg, u), nrm, WALL_SKIN_KM);
+
+          var bv2 = bodyVelocity(p, sys, t);
+          var rel2 = V.sub(ship.vel, bv2);
+          var into2 = -V.dot(rel2, nrm);
+          if (into2 < 0) into2 = 0;
+          /* Kill the motion INTO the surface and keep the rest, so a hull
+           * grazing a doorframe slides along it instead of stopping dead. */
+          ship.vel = V.addScaled(ship.vel, nrm, into2);
+          if (into2 > worst) worst = into2;
+        }
+        if (touched) return { port: p, speed: worst };
+        /* NO CROSSING, NO COLLISION — AND THE GRID DOES NOT GET A SECOND
+         * VOTE, which is the single worst bug in this file's history.
+         *
+         * The fallback below asks the voxel grid whether the hull is inside
+         * a wall and, if it says yes, shoves it out by 1.35 CELLS. That was
+         * a sane recovery when a cell was nine metres. At STATION_SCALE 3.5
+         * a cell is 183-315 m, so the push is 248 to 425 m — and because
+         * the grid at that resolution calls most of the space around a
+         * station "wall", it fired on a hull merely flying NEAR one.
+         *
+         * Measured: a ship holding station thirty metres off a plate was
+         * teleported 294 m sideways on its first step and every step after.
+         * That is both of the things Astra has been reporting at once. You
+         * cannot collide with a wall you are being flung away from, so
+         * "collision is still not working"; and the camera's own target
+         * jumps a quarter of a kilometre every frame, so it "keeps doing
+         * that thing". One cause, two symptoms, and it was mine — the grid
+         * was fine until I made the stations ten times bigger.
+         *
+         * Where there are triangles, they are the answer, and silence from
+         * them means open space. The grid keeps the job it is good at:
+         * enclosure, via insideStation — "am I in a room" is a question
+         * about volume, where a coarse cell is a fair approximation, not a
+         * question about surfaces, where it is not. */
+        /* EXCEPT FOR A HULL THAT IS ALREADY BURIED, which is a different
+         * question and needs a different test. A path test sees crossings;
+         * a ship that was PUT inside solid — a save loaded into a station
+         * that has since changed, an undock gone wrong — never crossed
+         * anything and would simply be left there. So: cast a hull's length
+         * along six axes, and if EVERY one of them hits, the ship is inside
+         * something smaller than itself. That cannot fire in open space,
+         * which is precisely what the grid's version could not promise. */
+        var esc2 = triangleEscape(R, role, b1, r, ship);
+        if (esc2) {
+          var en = V.norm(V.add(V.add(
+            V.scale(basis.east,  esc2[0]),
+            V.scale(basis.north, esc2[1])),
+            V.scale(basis.up,    esc2[2])));
+          ship.pos = V.addScaled(ship.pos, en, esc2[3] * r);
+          var bv3 = bodyVelocity(p, sys, t);
+          var into3 = -V.dot(V.sub(ship.vel, bv3), en);
+          if (into3 < 0) into3 = 0;
+          ship.vel = V.addScaled(ship.vel, en, into3);
+          return { port: p, speed: into3 };
+        }
+        continue;
+      }
+
+      /* ONLY WHERE THERE IS NO MODEL TO ASK. A procedural station has no
+       * triangles, so the grid is the only thing that knows where its metal
+       * is, and its escape is better than nothing. */
       if (stationSolidAt(p, ship.pos, sys, t) !== R.SOLID_WALL) continue;
 
       var esc = stationEscape(p, ship.pos, sys, t);
@@ -2328,7 +2582,7 @@
    * copies of the ship through here too, and a ghost latching onto a
    * landing pad would end the prediction with a phantom dock rather than
    * telling the player what they wanted to know. */
-  function checkImpact(ship, sys, t, allowDock) {
+  function checkImpact(ship, sys, t, allowDock, from, fromT) {
     /* THE STATION'S OWN HULL — and ONLY on the authoritative pass.
      *
      * The honest version of this would run for predicted ghosts too, since
@@ -2343,7 +2597,17 @@
      * So: a real hull collides; a drawn prediction does not. If the chart
      * ever needs to know, the place to fix it is a cheaper broad phase, not
      * this line. */
-    var wall = allowDock ? checkStationImpact(ship, sys, t) : null;
+    /* THE BERTH GETS ASKED FIRST, and that ordering is the whole of why a
+     * manual landing did not take. A hull settling onto its own deck IS
+     * touching station geometry, so the wall test fired, pushed it back off
+     * the floor and killed the descent — every frame, forever, and the
+     * capture below never got a hull that was still on the deck to catch.
+     * berthCapture is pure and far more specific (cleared, gear down, slow,
+     * inside a berth that fits), so when it answers, that is the answer.
+     * Ramming a station at speed meets none of those and still hits a
+     * wall. */
+    var landing = allowDock ? berthCapture(ship, sys, t) : null;
+    var wall = (allowDock && !landing) ? checkStationImpact(ship, sys, t, from, fromT) : null;
     if (wall) {
       var wdmg = landingDamage(wall.speed, !!ship.gear);
       if (wdmg > 0) {
@@ -2369,7 +2633,7 @@
        * in — it needs no clamp assigned, no autopilot and no capture
        * envelope, which is the whole point of it. The arrival rail still
        * exists for anyone who assigns a dock target and lets it fly. */
-      var bcap = berthCapture(ship, sys, t);
+      var bcap = landing;
       if (bcap) {
         var bdmg = landingDamage(bcap.speed, bcap.gearDown);
         if (bdmg > 0) {

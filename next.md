@@ -215,6 +215,14 @@ already guards its clock.
 - The force field renders as an opaque lit slab. The `enter` leg now flies
   through one, so this is visible — next time someone is looking at a
   cylinder or cradle port up close.
+- **Puffy white contrails behind ships transiting atmosphere.** Astra's
+  idea, 2026-09-14. Only while in air — `atmospheres.md` already owns the
+  density model the sim uses for drag and re-entry heat, so the trigger is
+  a value that exists rather than a new one: emit while density is above
+  some threshold and speed is high enough, fade with age, and stop the
+  moment the hull is out of atmo. The interesting part is that it makes
+  OTHER traffic legible from the ground and from orbit, which nothing else
+  currently does.
 
 ---
 
