@@ -366,6 +366,120 @@
     return V.norm(V.scale(basis.north, (off && off.facing) || 1));
   }
 
+  /* ---- A STATION IS A SOLID OBJECT -------------------------------------
+   *
+   * Render.portSolidity voxelises a model once and answers "wall / open
+   * space / room" for a point in its normalised frame. This is the half
+   * that knows about PORTS rather than meshes: which role a port wears,
+   * where its doors are, and how to get from a world position into the
+   * model's own frame.
+   *
+   * The doors are cut here, on first use, because where a berth's throat
+   * runs is something Gen.berthApertures answers off the art and render.js
+   * has no business asking a second time. The grid is cached per ROLE and
+   * the cut is in station radii, so every station wearing a model shares
+   * one carved grid — the cut does not depend on how big the station is.
+   *
+   * A station with no modelled berths gets the hall's hatch cut instead,
+   * straight down the hub axis, which is the route its arrival flies. */
+  function stationSolidity(port) {
+    var R = global.Render, Gen = global.Gen;
+    if (!R || !R.portSolidity || !Gen || !port || port.surface) return null;
+    var role = R.portModelFor ? R.portModelFor(port) : null;
+    if (!role) return null;
+    var sol = R.portSolidity(role);
+    if (!sol || sol.carved) return sol;
+
+    var g = Gen.bayGeometry(port);
+    var n = Math.max(1, g.berths), cut = 0;
+    for (var i = 0; i < n; i++) {
+      var ap = Gen.berthApertures ? Gen.berthApertures(port, i) : null;
+      if (!ap || !ap.normal || typeof ap.gate !== 'number') continue;
+      var off = Gen.berthOffset(port, i);
+      /* From well outside the doors, in past the berth to the inner gate.
+       * The lead matters: a corridor that starts AT the door plane leaves a
+       * ship on final approach outside the cut and therefore inside a wall. */
+      var lead = ap.gate + ORBITAL_HOLD_LEAD + 0.2;
+      var deep = (typeof ap.inner === 'number') ? Math.abs(ap.inner) : 0.2;
+      R.carveThroat(sol,
+                    [off.x + ap.normal[0] * lead,
+                     off.y + ap.normal[1] * lead,
+                     off.z + ap.normal[2] * lead],
+                    [-ap.normal[0], -ap.normal[1], -ap.normal[2]],
+                    lead + deep, g.mouthR);
+      cut++;
+    }
+    if (!cut && g.mouthZ > 0) {
+      R.carveThroat(sol, [0, 0, g.mouthZ + ORBITAL_HOLD_LEAD + 0.2], [0, 0, -1],
+                    ORBITAL_HOLD_LEAD + 0.2 + (g.mouthZ - g.floorZ), g.mouthR);
+    }
+    sol.carved = true;
+    return sol;
+  }
+
+  /* What is at this world point, as far as this station is concerned:
+   * Render.SOLID_WALL, SOLID_IN (a room) or SOLID_OUT (open space).
+   *
+   * portBasis, on the STILL frame, because that is the frame the shell is
+   * drawn on and the frame the berths are placed in. A collision hull that
+   * turned while the hull it represents did not would be a wall in a place
+   * with no wall in it. */
+  function stationSolidAt(port, pos, sys, t) {
+    var R = global.Render;
+    if (!R) return 2;
+    var basis = portBasis(port, sys, t);
+    if (!basis) return R.SOLID_OUT;
+    var r = port.radius || 1;
+    var rel = V.sub(pos, basis.entrance.pos);
+    var x = V.dot(rel, basis.east) / r,
+        y = V.dot(rel, basis.north) / r,
+        z = V.dot(rel, basis.up) / r;
+
+    var sol = stationSolidity(port);
+    if (sol && R.solidityAt) return R.solidityAt(sol, x, y, z);
+
+    /* NO MODEL TO VOXELISE — ports.js absent, or a station wearing nothing.
+     * The constant table's hall is then the only room there is, and it is
+     * the room the procedural mesh draws and the arrival flies into, so it
+     * is the room that has to answer here. Nothing is WALL in this case:
+     * without geometry there is no honest way to say where the metal is,
+     * and inventing a box to bounce off would be worse than letting a ship
+     * through a station that has no model. */
+    var Gen = global.Gen;
+    var g = (Gen && Gen.bayGeometry) ? Gen.bayGeometry(port) : null;
+    if (!g) return R.SOLID_OUT;
+    /* Up to the MOUTH rather than the ceiling: the throat above the hall is
+     * inside the station too, and it is the half of the route where the sky
+     * coming back is most obviously wrong. */
+    if (Math.abs(x) <= g.chamberX && Math.abs(y) <= g.chamberY &&
+        z >= g.floorZ && z <= g.mouthZ) return R.SOLID_IN;
+    return R.SOLID_OUT;
+  }
+
+  /* IS THIS POINT INSIDE A STATION — in a room of one, rather than merely
+   * near it? The orbital twin of insideShaft, and it exists for the same
+   * reason: undocking used to drop the sky, the planets and the orbit lines
+   * back on you while the hull was still in the throat, drawn straight
+   * through the station around it. Being docked was never the question; the
+   * question is whether something is over your head.
+   *
+   * Returns the port, so the caller can use it as the enclosure. */
+  function insideStation(pos, sys, t) {
+    var R = global.Render;
+    if (!R || !sys || !sys.ports) return null;
+    for (var i = 0; i < sys.ports.length; i++) {
+      var p = sys.ports[i];
+      if (!p || p.surface || !p.docking) continue;
+      /* Cheap reject first: a point further off than the model can reach is
+       * not in any room of it, and this is what keeps the sweep from asking
+       * every port in the system for a grid it will never use. */
+      var r = p.radius || 1;
+      if (V.dist(pos, bodyPosition(p, sys, t)) > r * 1.8) continue;
+      if (stationSolidAt(p, pos, sys, t) === R.SOLID_IN) return p;
+    }
+    return null;
+  }
+
   /* Where in the world berth `i` of this port is, and which way the ship
    * parked in it faces. */
   function berthState(port, sys, t, i) {
@@ -2279,6 +2393,37 @@
      * out across the open floor of the bay. Off the side of a station with
      * no bay, it is back toward the thing holding you. Either way it is
      * flattened against the local vertical below, so the ship is level. */
+    /* THE BAY WINS. Astra's call, 2026-09-14, after looking at it in the
+     * game — which is exactly what the note above asked for.
+     *
+     * Everything below this was built to keep a berthed ship LEVEL against
+     * the planet, because a station's model +z is its orbit normal and a
+     * ship stood on a bay floor therefore reads as banked on the attitude
+     * ladder. That is true, and the conclusion was backwards: the ladder was
+     * answering a question you stopped asking the moment you docked. Keeping
+     * the instrument happy cost the thing you can actually SEE, which is a
+     * hull lying on its side in its own berth — measured at up = model +x,
+     * ninety degrees out, at every station in the game.
+     *
+     * So a modelled berth gets the bay's own pose, the same three lines the
+     * surface branch above runs and the same three arrivalPose ends on —
+     * which also means the rail no longer snaps the hull to a different
+     * attitude on its last frame. main.js reads the bay's up for the ladder
+     * while you are berthed, so being level has moved to where it belongs:
+     * the instrument, not the hull. */
+    if (obs && berthOut) {
+      ship.fwd = berthOut;
+      ship.right = V.cross(ship.fwd, obs.basis.up);
+      if (V.len(ship.right) < 1e-9) ship.right = anyPerpendicular(ship.fwd);
+      ship.right = V.norm(ship.right);
+      ship.up = V.norm(V.cross(ship.right, ship.fwd));
+      updateDockedShip(ship, sys, t);
+      return;
+    }
+
+    /* AND OFF THE SIDE OF A STATION WITH NO BAY, level still wins, because
+     * there is no deck to be square to and the planet is the only reference
+     * left. Everything from here down is that case. */
     var facing = berthOut || V.scale(rel, -1);
     var upRef = orbitalBasisAt(ts.pos, ts.vel, sys, t).radial;
     var flat = V.sub(facing, V.scale(upRef, V.dot(facing, upRef)));
@@ -3700,6 +3845,12 @@
     portBasis: portBasis,
     insideShaft: insideShaft,
     berthState: berthState,
+    stationSolidity: stationSolidity,
+    stationSolidAt: stationSolidAt,
+    insideStation: insideStation,
+    /* Exported so a test can ask what the berth's own facing IS, rather than
+     * re-deriving it and pinning its own arithmetic instead of the game's. */
+    berthFacing: berthFacing,
     assignBerth: assignBerth,
     hullBox: hullBox, berthBoxes: berthBoxes, boxFits: boxFits,
     berthRoom: berthRoom,

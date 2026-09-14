@@ -3428,6 +3428,35 @@
     }
   }
 
+  /* WHICH WAY IS UP, FOR THE INSTRUMENT.
+   *
+   * In flight it is the planet below you, and it always was. Berthed in a
+   * modelled bay it is the DECK, and that is a change Astra called: a
+   * station's model +z is its orbit normal, so a ship parked square on a bay
+   * floor is genuinely banked relative to the world, and a ladder that
+   * insisted on saying so read as ninety degrees of roll on a ship that was
+   * sitting perfectly still on its clamps.
+   *
+   * The old fix was to roll the HULL until the instrument was happy, which
+   * cost the thing you can see for the sake of the thing you can read. This
+   * is the other way round, and it is the right way round: while you are
+   * standing on a deck, level means level with that deck. It reverts to the
+   * planet the instant you leave, with nothing to remember.
+   *
+   * Only for a MODELLED berth. Held off the side of a station with no bay
+   * there is no deck to be level with, and the planet is still the answer. */
+  function attitudeUp(lv) {
+    var port = dockedPort();
+    if (port && !port.surface && Sim.berthState && G.ship.dockOffset &&
+        G.ship.dockOffset.station) {
+      var bs = Sim.berthState(port, G.sys, G.t, currentBerth());
+      if (bs && bs.off && bs.off.modelled && bs.basis && bs.basis.up) {
+        return bs.basis.up;
+      }
+    }
+    return lv.up;
+  }
+
   /* Landing gear.
    *
    * Refused while docked or landed for the obvious reason: the gear is
@@ -4640,6 +4669,24 @@
        * which leg that is for the port it was asked about, so this does not
        * have to. */
       return G.sys.byId[G.ship.arrival.port] || null;
+    }
+    /* AND THE CASE NEITHER OF THOSE COVERS: still in there, flying.
+     *
+     * Undocking drops you into the throat with the doors open and the sky
+     * back — the stars, the planets, the orbit lines, all painted straight
+     * through the station around you, which is what Astra photographed.
+     * Being DOCKED was never the question. The question is whether there is
+     * something over your head, and the only honest way to answer it is
+     * geometrically: Sim.insideStation asks the model whether this point is
+     * in a room of it. Surface ports have had `insideShaft` for exactly this
+     * since the shafts were built; this is its orbital twin.
+     *
+     * It also covers the half of an arrival and a departure that no flag
+     * describes, and it costs one grid lookup against a cheap distance
+     * reject. */
+    if (Sim.insideStation && !G.hyper) {
+      var within = Sim.insideStation(G.ship.pos, G.sys, G.t);
+      if (within) return within;
     }
     return null;
   }
@@ -6382,7 +6429,7 @@
     }
 
     Render.glassBegin(ctx, aperture);
-    var angles = Render.drawAttitudeLadder(ctx, cam, G.ship, lv.up, w, h);
+    var angles = Render.drawAttitudeLadder(ctx, cam, G.ship, attitudeUp(lv), w, h);
     Render.drawFlightPathMarker(ctx, cam, fr.prograde, w, h);
     // The bank scale is a fixed instrument on the glass ahead of you, so it
     // has no business being drawn once you have looked away from it.

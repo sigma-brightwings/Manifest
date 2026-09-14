@@ -278,21 +278,26 @@ console.log('--- a new career starts on a pad ---');
    * crashed. The docked start is gated on `fresh`, which respawnShip does
    * not pass, and this is the assertion that keeps that true: enterSystem
    * without `fresh` leaves the ship flying. */
-  /* A BERTHED SHIP IS LEVEL, and this is the one the original report was
-   * actually about. dockShip's orbital branch built `right` from
-   * anyPerpendicular, which picks any vector at right angles to the nose —
-   * an arbitrary bank angle. Nobody would notice except that save.js
-   * re-docks on load and main.js restores the autosave at boot, so quitting
-   * on the clamps and coming back meant coming back on your side, ladder
-   * reading ninety degrees, before touching anything. */
-  var lvDock = Sim.localVertical(G.ship.pos, G.sys, G.t);
-  var attDock = Sim.attitudeAngles(G.ship, lvDock.up);
-  check('a ship on the pad is level, not banked',
-        Math.abs(attDock.rollDeg) < 1.0, attDock.rollDeg + '°');
-
-  /* And at a station, which is the path that was broken. Docked by hand at
-   * an orbital port from a silly attitude: the roll must come out level
-   * regardless of what it was before. */
+  /* A BERTHED SHIP IS SQUARE IN ITS BAY, and this pair of checks has now
+   * been on both sides of the same argument.
+   *
+   * The original bug was real: dockShip built `right` from
+   * anyPerpendicular, which picks ANY vector at right angles to the nose, so
+   * the roll was whatever fell out of the arithmetic. save.js re-docks on
+   * load and main.js restores the autosave at boot, so quitting on the
+   * clamps and coming back meant coming back at a random bank angle.
+   *
+   * The fix was to level the hull against the planet, and that was the wrong
+   * half to fix. A station's model +z is its ORBIT NORMAL, so a ship parked
+   * square on a bay floor is genuinely banked relative to the world —
+   * levelling it to the planet therefore rolled it ninety degrees OUT of its
+   * own berth, which is what Astra saw and reported as "the ship is parked
+   * on its side". Being level moved to the instrument (main.js `attitudeUp`)
+   * and the hull got its bay back.
+   *
+   * So what is pinned here is an EXACT attitude rather than merely a
+   * non-random one, which is strictly stronger than what it replaced: nose
+   * along the berth's own normal, up along the bay's floor. */
   var orbPort = (G.sys.ports || []).filter(function (p) { return !p.surface; })[0];
   check('the home system has an orbital port to test against', !!orbPort);
   if (orbPort) {
@@ -300,18 +305,34 @@ console.log('--- a new career starts on a pad ---');
     G.ship.docked = null;
     G.ship.pos = V.addScaled(ops.pos, { x: 1, y: 0, z: 0 }, 0.4);
     G.ship.vel = V.clone(ops.vel);
-    /* Deliberately absurd: rolled onto its back. */
+    /* Deliberately absurd: rolled onto its back. Whatever it flew in at, the
+     * berth decides how it sits. */
     G.ship.up = V.scale(G.ship.up, -1);
     G.ship.right = V.scale(G.ship.right, -1);
     Sim.refreshShip(G.ship);
     Sim.dockShip(G.ship, orbPort, G.sys, G.t);
     frames(1);
-    var lvSt = Sim.localVertical(G.ship.pos, G.sys, G.t);
-    var attSt = Sim.attitudeAngles(G.ship, lvSt.up);
-    check('docking at a station levels the ship instead of banking it at random',
-          Math.abs(attSt.rollDeg) < 1.0, attSt.rollDeg + '°');
-    check('and its up points away from what it is orbiting — gear down',
-          V.dot(G.ship.up, lvSt.up) > 0.99, V.dot(G.ship.up, lvSt.up).toFixed(4));
+    var bay = Sim.berthState(orbPort, G.sys, G.t,
+                             (G.ship.dockOffset || {}).berth);
+    check('the berth answers for a docked station', !!bay);
+    if (bay) {
+      var want = Sim.berthFacing ? Sim.berthFacing(bay.basis, bay.off) : null;
+      if (want) {
+        check('the nose comes out along the berth\'s own normal, whatever it flew in at',
+              V.dot(G.ship.fwd, want) > 0.999,
+              'dot ' + V.dot(G.ship.fwd, want).toFixed(4));
+      }
+      check('and its up is the bay floor, not the planet',
+            V.dot(G.ship.up, bay.basis.up) > 0.999,
+            'dot ' + V.dot(G.ship.up, bay.basis.up).toFixed(4));
+      /* AND THE INSTRUMENT AGREES, which is the other half of the trade.
+       * Read against the bay the ladder says level; read against the planet
+       * it would say ninety degrees, and that is not an error, it is the
+       * ladder answering a question you stopped asking when you docked. */
+      var attBay = Sim.attitudeAngles(G.ship, bay.basis.up);
+      check('so the ladder reads level while you are standing on that deck',
+            Math.abs(attBay.rollDeg) < 1.0, attBay.rollDeg + '°');
+    }
     /* The offset is captured from where the ship IS, so a ship snapped onto
      * the clamps stays on them rather than floating a few hundred km off. */
     check('and it is actually at the port, not merely flagged as docked',
@@ -3924,6 +3945,48 @@ console.log('--- berthed inside a station ---');
   })();
 
   Sim.undockShip(G.ship, G.sys, G.t, 0.003);
+  G.ship.docked = null;
+  G.dockTarget = null;
+})();
+
+/* ---- leaving does not put the sky back inside the station ---------------
+ * Astra photographed this: undock, and the stars, the planets and the orbit
+ * lines are drawn straight through the hull around you, while the ship is
+ * still sitting in the throat. Being DOCKED was never the right question —
+ * the question is whether something is over your head — and enclosedPort
+ * only knew about the docked flag and a running arrival.
+ *
+ * Sim.insideStation answers it off the model's own geometry, so this pins
+ * the geometry rather than the flag: berthed, just-undocked, and well clear
+ * all have to come out right, and the middle one is the bug. */
+console.log('--- leaving a station, still inside it ---');
+(function () {
+  newFlying('kawartha');
+  frames(2);
+  var port = G.sys.ports.filter(function (p) { return !p.surface && p.docking; })[0];
+  check('there is a station to leave', !!port);
+  if (!port || !Sim.insideStation) return;
+
+  Sim.dockShip(G.ship, port, G.sys, G.t);
+  frames(1);
+  check('berthed, the station is where you are',
+        Sim.insideStation(G.ship.pos, G.sys, G.t) === port);
+
+  /* THE MOMENT THE CLAMPS LET GO. Nothing has moved yet — that is the
+   * point. A predicate that keyed off the docked flag flips here; one that
+   * asks the model does not. */
+  Sim.undockShip(G.ship, G.sys, G.t, 0.003);
+  frames(1);
+  check('and the instant the clamps let go, you are still inside it',
+        Sim.insideStation(G.ship.pos, G.sys, G.t) === port,
+        'docked=' + G.ship.docked);
+
+  /* AND OUT. Four radii off is unambiguously space, and if this ever says
+   * otherwise the grid has leaked and the sky would vanish in open flight. */
+  var out = V.addScaled(Sim.bodyPosition(port, G.sys, G.t), { x: 1, y: 0, z: 0 },
+                        (port.radius || 1) * 4);
+  check('but well clear of it you are not', !Sim.insideStation(out, G.sys, G.t));
+
   G.ship.docked = null;
   G.dockTarget = null;
 })();

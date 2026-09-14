@@ -619,11 +619,16 @@
    * a test that installs a library after boot, and the hull viewer page,
    * which is the whole point of being able to swap models without a
    * restart. Same role assignHull plays for ships. */
+  var SOLIDITY = {};
   function reloadPorts() {
     PORT_CACHE = {};
     POOL_CACHE = null;
     STATION_MESHES = null;
     INTERIOR_BOUNDS = {};
+    /* The occupancy grids are voxelised from those meshes, so swapping the
+     * library while the game runs has to drop them too — otherwise the new
+     * models are drawn and the old ones are what you collide with. */
+    SOLIDITY = {};
   }
 
   /* ---- which model a port wears, and it is ONE rule ----------------------
@@ -2766,6 +2771,196 @@
     return out;
   }
 
+  /* ---- IS THIS POINT INSIDE A STATION, AND IS IT INSIDE THE WALL? -------
+   *
+   * Astra: "no collision detection enabled on the interiors or exteriors of
+   * stations", and her call on what to do about it — solid hull, open door.
+   * You cannot fly through a station; the way in is the way in.
+   *
+   * WHY A GRID. A station is not a shape you can write down. A ring is
+   * mostly hole, a spine is arms with gaps between them, and the useful
+   * question — "is there metal here" — has no closed form. Testing the
+   * model's eighteen thousand triangles every frame is out of the question
+   * on the Latitude. So the model is voxelised ONCE per role into a coarse
+   * occupancy grid and every later question is an array index.
+   *
+   * Three states, and the third is the one that does the interesting work:
+   *   SOLID   — a shell or interior surface passes through this cell.
+   *   OUTSIDE — open space reachable from beyond the model.
+   *   INSIDE  — open space that is NOT, i.e. a room.
+   * INSIDE is found by flooding from the grid's own border, so it needs no
+   * definition of "inside" beyond "the outside cannot get here". That is
+   * what lets a ring be mostly hole and still have a hangar.
+   *
+   * THE DOORS ARE CUT AFTERWARDS, and the order matters: a station with its
+   * throats open really IS connected to space, so a flood that ran after the
+   * carve would find the hangar from outside and call the whole interior
+   * OUTSIDE. Flood first, carve second, and a throat's cells are recorded as
+   * inside — which is also what makes the world go away at the right moment
+   * on the way in.
+   *
+   * RESOLUTION is a compromise stated rather than hidden. 48 cells across
+   * the model is 8.8 m at the smallest station the generator makes and 47 m
+   * at the largest — finer than a hull at the small end and coarser at the
+   * big one. The doors are what a coarse cell would lose, and the doors are
+   * carved explicitly, so the resolution never has to find them. */
+  var SOLID_N = 48;
+  var SOLID_EMPTY = 0, SOLID_WALL = 1, SOLID_OUT = 2, SOLID_IN = 3;
+
+  function meshInto(grid, mesh, lo, inv) {
+    if (!mesh || !mesh.v || !mesh.f) return;
+    var V3 = mesh.v, F = mesh.f, N = SOLID_N;
+    for (var fi = 0; fi < F.length; fi++) {
+      var t = F[fi];
+      var a = V3[t[0]], b = V3[t[1]], c = V3[t[2]];
+      if (!a || !b || !c) continue;
+      /* Sample density from the triangle's own size in cells, so a big
+       * panel is not left with holes a ship could slip through and a rivet
+       * is not sampled a thousand times. */
+      var e1 = 0, e2 = 0, k;
+      for (k = 0; k < 3; k++) {
+        e1 = Math.max(e1, Math.abs(b[k] - a[k]) * inv[k]);
+        e2 = Math.max(e2, Math.abs(c[k] - a[k]) * inv[k]);
+      }
+      var n = Math.max(1, Math.ceil(Math.max(e1, e2)));
+      if (n > 64) n = 64;                  // a single triangle is not a budget
+      for (var i = 0; i <= n; i++) {
+        for (var j = 0; i + j <= n; j++) {
+          var u = i / n, v = j / n;
+          var gx = Math.floor(((a[0] + (b[0] - a[0]) * u + (c[0] - a[0]) * v) - lo[0]) * inv[0]);
+          var gy = Math.floor(((a[1] + (b[1] - a[1]) * u + (c[1] - a[1]) * v) - lo[1]) * inv[1]);
+          var gz = Math.floor(((a[2] + (b[2] - a[2]) * u + (c[2] - a[2]) * v) - lo[2]) * inv[2]);
+          if (gx < 0 || gy < 0 || gz < 0 || gx >= N || gy >= N || gz >= N) continue;
+          grid[(gz * N + gy) * N + gx] = SOLID_WALL;
+        }
+      }
+    }
+  }
+
+  function portSolidity(role) {
+    if (SOLIDITY[role] !== undefined) return SOLIDITY[role];
+    var lib = libPort(role);
+    /* Cached as null FIRST so a model with no mesh is not re-examined every
+     * frame, and overwritten with the grid at the end. Forgetting that
+     * second half is what made this return a grid the first time it was
+     * asked and null forever afterwards — which reads exactly like the
+     * feature not working, because it is not. */
+    SOLIDITY[role] = null;
+    var shell = lib && lib.shell;
+    if (!shell || !shell.v || !shell.v.length || !shell.f || !shell.f.length) return null;
+
+    var N = SOLID_N, i, j, a;
+    var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    function span(mesh) {
+      if (!mesh || !mesh.v) return;
+      for (var q = 0; q < mesh.v.length; q++) {
+        for (var a = 0; a < 3; a++) {
+          var x = mesh.v[q][a];
+          if (x < lo[a]) lo[a] = x;
+          if (x > hi[a]) hi[a] = x;
+        }
+      }
+    }
+    span(shell);
+    span(lib.interior);
+    if (!isFinite(lo[0])) return null;
+    /* A margin of one cell all round, so the flood always has a border of
+     * open space to start from even when the hull touches the bound. */
+    var size = [0, 0, 0], inv = [0, 0, 0];
+    for (a = 0; a < 3; a++) {
+      var pad = Math.max(1e-4, (hi[a] - lo[a]) * 0.04);
+      lo[a] -= pad; hi[a] += pad;
+      size[a] = hi[a] - lo[a];
+      inv[a] = N / size[a];
+    }
+
+    var grid = new Uint8Array(N * N * N);
+    meshInto(grid, shell, lo, inv);
+    meshInto(grid, lib.interior, lo, inv);
+
+    /* FLOOD FROM THE BORDER. Everything open that space can reach is
+     * outside; everything else open is a room. */
+    var stack = new Int32Array(N * N * N);
+    var top = 0;
+    function push(x, y, z) {
+      if (x < 0 || y < 0 || z < 0 || x >= N || y >= N || z >= N) return;
+      var idx = (z * N + y) * N + x;
+      if (grid[idx] !== SOLID_EMPTY) return;
+      grid[idx] = SOLID_OUT;
+      stack[top++] = idx;
+    }
+    for (i = 0; i < N; i++) {
+      for (j = 0; j < N; j++) {
+        push(i, j, 0); push(i, j, N - 1);
+        push(i, 0, j); push(i, N - 1, j);
+        push(0, i, j); push(N - 1, i, j);
+      }
+    }
+    while (top > 0) {
+      var idx2 = stack[--top];
+      var z0 = (idx2 / (N * N)) | 0, r = idx2 - z0 * N * N;
+      var y0 = (r / N) | 0, x0 = r - y0 * N;
+      push(x0 + 1, y0, z0); push(x0 - 1, y0, z0);
+      push(x0, y0 + 1, z0); push(x0, y0 - 1, z0);
+      push(x0, y0, z0 + 1); push(x0, y0, z0 - 1);
+    }
+    for (i = 0; i < grid.length; i++) {
+      if (grid[i] === SOLID_EMPTY) grid[i] = SOLID_IN;
+    }
+
+    SOLIDITY[role] = { n: N, lo: lo, inv: inv, size: size, grid: grid, carved: false };
+    return SOLIDITY[role];
+  }
+
+  /* CUT THE DOORS. Done from sim.js rather than here, because which berths a
+   * port has is a question generate.js answers and this module has no
+   * business asking it twice. Marks a corridor along the berth's own normal
+   * as room rather than wall, from well outside the doors to the berth and a
+   * little past it.
+   *
+   * The corridor radius is the mouth radius the bay tables already use, so a
+   * door cut here is the same size as a door drawn anywhere else. It is
+   * generous at a big station — the cut is in station radii and the ship is
+   * not — which can let a hull clip a doorframe it should have hit. Better
+   * that than a door too narrow to fly through at the small end, where the
+   * ship is largest relative to the station. */
+  function carveThroat(sol, from, dir, length, radius) {
+    if (!sol || !sol.grid) return;
+    var N = sol.n, g = sol.grid;
+    var steps = Math.max(2, Math.ceil(length * Math.max(sol.inv[0], sol.inv[1], sol.inv[2]) * 2));
+    var rc = [Math.ceil(radius * sol.inv[0]), Math.ceil(radius * sol.inv[1]),
+              Math.ceil(radius * sol.inv[2])];
+    for (var s = 0; s <= steps; s++) {
+      var d = (s / steps) * length;
+      var px = from[0] + dir[0] * d, py = from[1] + dir[1] * d, pz = from[2] + dir[2] * d;
+      var cx = Math.floor((px - sol.lo[0]) * sol.inv[0]);
+      var cy = Math.floor((py - sol.lo[1]) * sol.inv[1]);
+      var cz = Math.floor((pz - sol.lo[2]) * sol.inv[2]);
+      for (var dz = -rc[2]; dz <= rc[2]; dz++) {
+        for (var dy = -rc[1]; dy <= rc[1]; dy++) {
+          for (var dx = -rc[0]; dx <= rc[0]; dx++) {
+            var x = cx + dx, y = cy + dy, z = cz + dz;
+            if (x < 0 || y < 0 || z < 0 || x >= N || y >= N || z >= N) continue;
+            g[(z * N + y) * N + x] = SOLID_IN;
+          }
+        }
+      }
+    }
+    sol.carved = true;
+  }
+
+  /* What is at this point, in the model's own normalised frame?
+   * 0 nothing known, 1 wall, 2 open space outside, 3 a room. */
+  function solidityAt(sol, x, y, z) {
+    if (!sol) return SOLID_OUT;
+    var N = sol.n;
+    var gx = Math.floor((x - sol.lo[0]) * sol.inv[0]);
+    var gy = Math.floor((y - sol.lo[1]) * sol.inv[1]);
+    var gz = Math.floor((z - sol.lo[2]) * sol.inv[2]);
+    if (gx < 0 || gy < 0 || gz < 0 || gx >= N || gy >= N || gz >= N) return SOLID_OUT;
+    return sol.grid[(gz * N + gy) * N + gx];
+  }
+
   /* IS THE EYE ACTUALLY IN THAT ROOM?
    *
    * Being berthed at a station is not the same as being in its hangar. The
@@ -4901,6 +5096,12 @@
     drawStationInterior: drawStationInterior,
     interiorBounds: interiorBounds,
     insideInterior: insideInterior,
+    portSolidity: portSolidity,
+    carveThroat: carveThroat,
+    solidityAt: solidityAt,
+    SOLID_WALL: SOLID_WALL,
+    SOLID_OUT: SOLID_OUT,
+    SOLID_IN: SOLID_IN,
     box: box, tube: tube, rimRing: rimRing, mergeMesh: merge,
     makeStarfield: makeStarfield,
     drawStarfield: drawStarfield,

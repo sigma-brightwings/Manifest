@@ -493,6 +493,87 @@ console.log('--- the way in, at every modelled station ---');
               (holdMin * (station.radius || 1) * 1000).toFixed(0) + ' m here)');
 })();
 
+/* ---- a station is a solid object ---------------------------------------
+ * Astra: "no collision detection enabled on the interiors or exteriors of
+ * stations." Render.portSolidity voxelises a model once into wall / open
+ * space / room, and Sim carves the berth throats through it.
+ *
+ * THE FIRST THING PINNED HERE IS THE CACHE, which sounds like plumbing and
+ * is not: the first version stored `null` before building and never stored
+ * the result, so it answered correctly exactly once per role and null for
+ * the rest of the session. Every downstream symptom of that — the sky back
+ * inside the hull, a ship through a wall — looks like the feature not
+ * existing rather than like a cache bug, which is the worst way for it to
+ * fail. */
+console.log('--- a station is a solid object ---');
+(function () {
+  var sys = Gen.generateSystem('solid-sweep');
+  var station = (sys.ports || []).filter(function (p) { return !p.surface; })[0];
+  check('there is a station to be solid', !!station);
+  if (!station) return;
+
+  var sameTwice = 0, hasRooms = 0, hasWalls = 0, n = 0;
+  MODELS.forEach(function (modelId) {
+    Render.assignPort('orbital', modelId);
+    var a = Render.portSolidity(modelId);
+    var b = Render.portSolidity(modelId);
+    n++;
+    if (a && a === b) sameTwice++;
+    if (!a) return;
+    var wall = 0, room = 0;
+    for (var i = 0; i < a.grid.length; i++) {
+      if (a.grid[i] === Render.SOLID_WALL) wall++;
+      else if (a.grid[i] === Render.SOLID_IN) room++;
+    }
+    if (wall > 0) hasWalls++;
+    if (room > 0) hasRooms++;
+  });
+  check('asking a model for its solidity twice gives the same grid twice',
+        sameTwice === n, sameTwice + ' of ' + n);
+  check('every station model has walls in it', hasWalls === n, hasWalls + ' of ' + n);
+  check('and a room the outside cannot reach', hasRooms === n, hasRooms + ' of ' + n);
+
+  /* AND THE DOOR IS OPEN. A berth a ship cannot reach is worse than no
+   * collision at all: the arrival would fly it into a wall of the station
+   * it was cleared into. Every berth, at every model — the whole rail from
+   * the handover point to the stand has to be room rather than wall. */
+  var blocked = 0, checkedPts = 0;
+  MODELS.forEach(function (modelId) {
+    Render.assignPort('orbital', modelId);
+    var ship = { cls: 'courier', dryMass: 80, pos: { x: 0, y: 0, z: 0 },
+                 vel: { x: 0, y: 0, z: 0 } };
+    if (!Sim.beginArrival(ship, station, sys, 0)) return;
+    var b = ship.arrival.berth, total = Sim.arrivalTotal(station);
+    for (var k = 0; k <= 30; k++) {
+      var pose = Sim.arrivalPose(station, sys, 0, b, total * k / 30);
+      if (!pose) continue;
+      checkedPts++;
+      if (Sim.stationSolidAt(station, pose.pos, sys, 0) === Render.SOLID_WALL) {
+        blocked++;
+        if (blocked < 3) {
+          console.log('  FAIL  ' + modelId + ' flies its own arrival into a wall at ' +
+                      (100 * k / 30).toFixed(0) + '% of the way in');
+        }
+      }
+    }
+  });
+  check('no station flies its own arrival into a wall', blocked === 0,
+        blocked + ' of ' + checkedPts + ' points');
+
+  /* AND THE HULL IS STILL SOLID somewhere a ship has no business being.
+   * Without this the carve could widen until nothing was solid and every
+   * check above would still pass. */
+  Render.assignPort('orbital', MODELS[0]);
+  var sol = Render.portSolidity(MODELS[0]);
+  var solid = 0;
+  if (sol) {
+    for (var q = 0; q < sol.grid.length; q++) if (sol.grid[q] === Render.SOLID_WALL) solid++;
+  }
+  check('and cutting the doors did not dissolve the hull',
+        solid > sol.grid.length * 0.02,
+        (100 * solid / sol.grid.length).toFixed(1) + '% of the grid is wall');
+})();
+
 Render.assignPort('orbital', null);   // leave the library as we found it
 
 console.log('');
