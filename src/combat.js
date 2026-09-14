@@ -2790,14 +2790,44 @@
     return ((G.wanted || {})[faction] || 0) >= WANTED_HUNT;
   }
 
-  function dockRefused(G, port) {
+  /* WHY a port will not open, in words, or null when it will.
+   *
+   * dockRefused answers yes or no, which is all the docking check itself
+   * needs and is nowhere near enough for anything the player reads. The
+   * HAIL path has explained itself since it was written — "a refusal the
+   * player cannot read the reason for is indistinguishable from a bug",
+   * a few hundred lines down — and the APPROACH path did not. So a barred
+   * station looked exactly like an auto-dock that could not fly: the
+   * autopilot flew the whole approach, sat in the envelope, and nothing
+   * happened. Astra hit precisely that and reported it as a bug, which is
+   * the correct thing to call it.
+   *
+   * One function, and every reader of a refusal goes through it. */
+  function dockRefusal(G, port) {
+    if (!port) return null;
     /* Under an order to leave, nothing here opens for you. Not a separate
      * punishment so much as the same one: "and then you leave" is not a
      * request if you can still dock, refuel and carry on trading. Dumping
      * or selling the waste lifts it immediately — see expelledHere. */
-    if (G.expelled && G.here && expelledHere(G, G.here)) return true;
-    return port && port.faction && wantedHere(G, port.faction);
+    if (G.expelled && G.here && expelledHere(G, G.here)) {
+      return { why: 'expelled', short: 'ORDERED OUT',
+               text: 'you are under an order to leave this system — sell or dump ' +
+                     'the tailings and every door here opens again' };
+    }
+    if (port.faction && wantedHere(G, port.faction)) {
+      var fug = G.fugitive && G.fugitive.faction === port.faction;
+      return fug
+        ? { why: 'fugitive', short: 'FUGITIVE',
+            text: 'they have you down as a fugitive — that is what arriving ' +
+                  'unannounced costs. Nothing of theirs will open.' }
+        : { why: 'wanted', short: 'WANTED',
+            text: 'your bounty with them is past what they will overlook — ' +
+                  'pay it off somewhere that will still take you' };
+    }
+    return null;
   }
+
+  function dockRefused(G, port) { return !!dockRefusal(G, port); }
 
   /* Paying a bounty off costs more than the bounty — fines, lawyers, and
    * the port's cut — and can only be done somewhere that will still let you
@@ -4630,7 +4660,7 @@
     liftTrader: liftTrader,
     crime: crime, witnessNear: witnessNear,
     bountyTotal: bountyTotal, wantedHere: wantedHere,
-    dockRefused: dockRefused, payBounty: payBounty,
+    dockRefused: dockRefused, dockRefusal: dockRefusal, payBounty: payBounty,
     demandFrom: demandFrom,
     repairCost: repairCost, repair: repair, deadPanelCount: deadPanelCount,
     buyOutfit: buyOutfit, buyHull: buyHull,

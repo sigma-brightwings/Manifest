@@ -2415,6 +2415,17 @@
     var nav = navTargetState();
     var st = nav && nav.kind === 'body' && nav.obj.kind === 'station' ? nav.obj : G.dockTarget;
     if (!st) { say('Lock a station first — [ ] cycles the nav list', 4); return; }
+    /* A PORT THAT WILL NOT OPEN IS NOT AN APPROACH PROBLEM, and flying the
+     * approach anyway is how a barred station reads as a broken autopilot:
+     * it cruises the leg, creeps into the envelope, and then simply sits
+     * there while the docking check refuses it once every six seconds.
+     * Refuse up front, in words — house rule 5. */
+    var barred = Combat.dockRefusal(G, st);
+    if (barred) {
+      say(st.name + ' will not take you: ' + barred.text, 9);
+      HOOKS.sound('warn');
+      return;
+    }
     G.dockTarget = st;
     /* No range limit any more. It used to refuse past 300,000 km, which
      * made auto-dock a parking assistant: fine once you were already
@@ -2531,6 +2542,15 @@
 
     var ss = autoTargetState(ad);
     if (!ss) { cancelAutodock('lost the contact'); return null; }
+    /* And if it becomes barred DURING the approach — a bounty can grow
+     * while you fly, and customs can order you out of a system you are
+     * already crossing. Checked here rather than only at engagement
+     * because the autopilot is the thing that would otherwise keep flying
+     * an approach that can never complete. */
+    if (ad.mode === 'dock') {
+      var barred2 = Combat.dockRefusal(G, st);
+      if (barred2) { cancelAutodock('refused — ' + barred2.text); return null; }
+    }
     var rel = V.sub(ss.pos, G.ship.pos);
     var range = V.len(rel);
     var vrel = V.sub(G.ship.vel, ss.vel);
@@ -4025,10 +4045,16 @@
            * that will not open. Surface pads stay usable — nobody can
            * stop you landing on dirt — which quietly makes them the
            * smuggler's route home. */
-          if (Combat.dockRefused(G, G.dockTarget)) {
+          var denial = Combat.dockRefusal(G, G.dockTarget);
+          if (denial) {
             if (performance.now() > (G.dockDeniedUntil || 0)) {
               G.dockDeniedUntil = performance.now() + 6000;
-              say(G.dockTarget.name + ': "Docking DENIED. Settle your bounty elsewhere."', 6);
+              /* SAY WHICH REFUSAL IT IS. The old line named a bounty
+               * whatever the reason, so a pilot ordered out over a hold
+               * full of tailings was told to settle a bounty they did not
+               * have — which is worse than saying nothing, because it
+               * sends them off to fix the wrong thing. */
+              say(G.dockTarget.name + ': "Docking DENIED." — ' + denial.text, 9);
               HOOKS.sound('warn');
             }
           } else {
@@ -7356,9 +7382,15 @@
      * "you have not asked yet" rather than red: arriving uncleared is a
      * fine, not a wall, and the colour should not claim otherwise. */
     if (G.dockTarget && !G.ship.docked) {
+      /* THREE STATES, and the third one is the whole point. A port that is
+       * barred to you will not open however politely you ask, and showing
+       * "NOT REQUESTED" in amber told the player to go and ask — which is
+       * the one thing that cannot help. Red, and it says which bar it is. */
+      var bar = Combat.dockRefusal(G, G.dockTarget);
       var ok = Combat.isCleared(G, G.dockTarget);
-      row('CLEARANCE', ok ? 'GRANTED' : 'NOT REQUESTED',
-          ok ? '#7dffb0' : '#ffb86b');
+      row('CLEARANCE', bar ? 'REFUSED · ' + bar.short
+                     : ok ? 'GRANTED' : 'NOT REQUESTED',
+          bar ? '#ff5a5a' : ok ? '#7dffb0' : '#ffb86b');
     }
     if (G.ship.missiles > 0) row('missiles', G.ship.missiles + '  (B fires)');
     /* FUGITIVE outranks the bounty line and sits above it. A bounty is a
@@ -9367,11 +9399,17 @@
     ctx.fillStyle = ds.inRange && ds.slowEnough ? '#7dffb0' : '#7dfaff';
     ctx.fillText('DOCKING: ' + G.dockTarget.name, px + 12, py + 20);
     ctx.restore();
+    /* The last row is the envelope you are flying to hit — unless the
+     * doors are shut to you, in which case hitting it achieves nothing and
+     * that is the fact worth the line. A perfect approach into a port that
+     * will not open is the exact situation that reads as a bug. */
+    var shut = Combat.dockRefusal(G, G.dockTarget);
     rows(ctx, px + 12, py + 40, [
       ['range', fmtDist(ds.range), ds.inRange ? '#7dffb0' : '#cfe0ff'],
       ['closing', fmtSpeed(ds.closingSpeed) + (ds.closingSpeed > 0 ? ' (approach)' : ' (away)')],
       ['rel. speed', fmtSpeed(ds.relSpeed), ds.slowEnough ? '#7dffb0' : '#ffb86b'],
-      ['capture at', '≤' + fmtDist(G.dockTarget.dockCaptureRadius) + ', ≤' + fmtSpeed(G.dockTarget.dockMaxSpeed)]
+      shut ? ['DOORS SHUT', shut.short + ' — will not open', '#ff5a5a']
+           : ['capture at', '≤' + fmtDist(G.dockTarget.dockCaptureRadius) + ', ≤' + fmtSpeed(G.dockTarget.dockMaxSpeed)]
     ], '#7e93b3', '#cfe0ff', 226);
   }
 
@@ -9628,9 +9666,16 @@
     ];
   }
 
+  /* THE SEED IS ON THIS LINE, and it is not decoration. It is the one
+   * thing that makes a report reproducible — "it happened at Anchor Yard"
+   * is a story, "seed kawartha, Anchor Yard" is a test case — and until
+   * now it was visible only on the title screen, which you have to quit a
+   * career to see. One keystroke (Esc) now shows it, alongside where and
+   * when you are. */
   function currentCareerLine() {
     if (!G.ship) return 'no career loaded';
-    return G.sys.name + '  ·  ' + fmtCredits(G.ship.credits) + '  ·  ' + fmtEpoch(G.t);
+    return 'seed "' + G.seed + '"  ·  ' + G.sys.name +
+           '  ·  ' + fmtCredits(G.ship.credits) + '  ·  ' + fmtEpoch(G.t);
   }
 
   /* ---- slots ------------------------------------------------------------ */

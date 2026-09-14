@@ -161,6 +161,9 @@ require('../src/main.js');
 var W = global.window;
 var G = W.Game;
 var V = W.V, Sim = W.Sim, Galaxy = W.Galaxy, Eco = W.Economy;
+/* Combat, because two sections now assert on what a port will and will not
+ * open for, and reaching through W every time made those lines unreadable. */
+var Combat = W.Combat;
 
 check('the game booted', !!G && !!G.sys && !!G.ship, G ? 'no system' : 'no Game');
 check('a galaxy was built around the seed', !!G.galaxy && G.galaxy.stars.length > 1);
@@ -3558,6 +3561,19 @@ console.log('--- auto-dock ---');
         'docked=' + G.ship.docked + ' after ' + guard + ' frames, from ' + fmtKm(startRange));
   check('and it flew there rather than teleporting', guard > 20, guard + ' frames');
 
+  /* THAT DOCK WAS UNANNOUNCED, and it cost what an unannounced arrival
+   * costs: the port logged the ship FUGITIVE, and a fugitive's ports do not
+   * open. Worth asserting rather than quietly undoing — it is the exact
+   * chain that made a real career unfinishable, and auto-dock now refuses
+   * to fly an approach into a door that will not open, so leaving it set
+   * would make the re-engage below fail for a reason that has nothing to
+   * do with what it is testing. */
+  check('arriving uncleared logs you fugitive with that port',
+        !!Combat.dockRefusal(G, port));
+  G.fugitive = null;
+  G.wanted = {};
+  check('and with that settled the port opens again', !Combat.dockRefusal(G, port));
+
   // A hand on the controls always wins.
   if (G.ship.docked) Sim.undockShip(G.ship, G.sys, G.t, 0.003);
   G.ship.docked = null;
@@ -3684,6 +3700,153 @@ console.log('--- match orbit and follow ---');
 })();
 
 function fmtKm(k) { return k > 1000 ? (k / 1000).toFixed(1) + ' Mm' : k.toFixed(1) + ' km'; }
+
+/* ---- a port that will not open says so ---------------------------------
+ * The failure this pins is not a wrong number, it is a silence. A barred
+ * station used to let auto-dock fly the whole approach, sit in the capture
+ * envelope, and do nothing except mutter about a bounty once every six
+ * seconds - and it named a bounty whichever bar it actually was. From the
+ * seat that is indistinguishable from an autopilot that cannot fly, which
+ * is exactly how it was reported.
+ *
+ * So: the refusal carries a reason (house rule 5), auto-dock refuses to
+ * start rather than flying an errand it cannot finish, and the clearance
+ * readout says REFUSED rather than the actively misleading NOT REQUESTED. */
+console.log('--- a barred port ---');
+(function () {
+  newFlying('kawartha');
+  frames(2);
+  var keydown = listeners.keydown[0];
+  function press(k) { keydown({ key: k, shiftKey: false, preventDefault: function () {} }); }
+
+  var port = G.sys.ports.filter(function (p) {
+    return !p.surface && p.faction;
+  })[0];
+  check('there is an orbital port with a faction to be barred by', !!port);
+  if (!port) return;
+
+  var fac = port.faction.id || port.faction;
+  G.fugitive = null;
+  G.expelled = null;
+  check('and it is open to begin with', !Combat.dockRefusal(G, port));
+
+  /* Logged FUGITIVE with whoever holds it - one unannounced arrival does
+   * this, which is the case the player is most likely to meet. */
+  G.fugitive = { faction: fac, amount: 400, port: port.name, sinceT: G.t };
+
+  var bar = Combat.dockRefusal(G, port);
+  check('now it refuses', !!bar);
+  check('and the refusal knows which bar it is', bar && bar.why === 'fugitive', bar && bar.why);
+  check('and says so in words rather than a flag',
+        !!(bar && bar.text && bar.text.length > 20));
+  check('with a short form for a readout', !!(bar && bar.short));
+
+  var ps = Sim.bodyState(port, G.sys, G.t);
+  G.ship.docked = null; G.dockTarget = null; G.autodock = null; G.cruise = null;
+  G.ship.pos = V.addScaled(ps.pos, { x: 1, y: 0.3, z: 0.2 }, 300);
+  G.ship.vel = V.clone(ps.vel);
+  Sim.refreshShip(G.ship);
+  G.navTarget = { kind: 'body', id: port.id };
+  frames(1);
+
+  var mark = drawn.texts.length;
+  press('t');                       // clamp assigned - you may still fly there
+  press('t');                       // and this is where it should say no
+  check('auto-dock refuses to engage against a barred port', !G.autodock);
+  frames(2);
+  var said = drawn.texts.slice(mark).join(' | ');
+  check('and it explains why on screen', said.indexOf('fugitive') >= 0, said.slice(-260));
+
+  /* Barred MID-FLIGHT is the other half: a bounty can grow while you are
+   * already on the approach, and the autopilot has to notice.
+   *
+   * ONE press, not two. The clamp is already assigned from the refused
+   * attempt above, so the first T is the engage — a second would read as
+   * "cancel". */
+  G.fugitive = null;
+  press('t');
+  check('with the bar lifted it engages again', !!G.autodock);
+  G.fugitive = { faction: fac, amount: 400, port: port.name, sinceT: G.t };
+  frames(3);
+  check('and it gives up once the doors shut mid-approach', !G.autodock);
+
+  G.fugitive = null;
+  G.autodock = null;
+  G.dockTarget = null;
+})();
+
+/* ---- loading a career is not arriving at a port -----------------------
+ * The bug this pins made loading your own save a crime, and it was
+ * reported from a real career as "the autopilot cannot reach the station".
+ *
+ * main.js detects a dock as the EDGE from not-docked to docked, which is
+ * right: there are two places a ship can dock and only one of them is a
+ * call site. But a restore parks the ship straight onto the clamps with
+ * wasDocked freshly cleared, so the next frame saw that edge and ran the
+ * whole arrival - contracts settled again, and Combat.arriveAtPort booked
+ * the player for arriving UNANNOUNCED at a port they had been sitting in
+ * since before they saved. That is a fine and a FUGITIVE flag, and a
+ * fugitive's ports do not open: every door in the system shut, and the
+ * mission that was open became impossible to finish.
+ *
+ * Save.restore now sets wasDocked to match the ship it just put down. */
+console.log('--- loading a docked career ---');
+(function () {
+  newFlying('kawartha');
+  frames(2);
+  var port = G.sys.ports.filter(function (p) { return !p.surface; })[0];
+  Sim.dockShip(G.ship, port, G.sys, G.t);
+  frames(2);
+
+  /* Settle everything the first dock cost, so anything found after the
+   * load was put there BY the load. */
+  G.wanted = {};
+  G.fugitive = null;
+  G.expelled = null;
+  G.ship.cleared = {};
+  var snap = W.Save.snapshot(G);
+  check('the save knows the ship was on the clamps', !!snap.ship.docked);
+
+  /* THE REAL SEQUENCE, and it is the sequence that matters: loading
+   * rebuilds the world from the slot's own seed FIRST (newGame, which
+   * clears wasDocked and leaves the ship flying) and only then drops the
+   * snapshot into it. Restoring on top of an already-docked ship would
+   * never have shown the bug, because the edge would not be there to
+   * cross. */
+  newFlying('kawartha');
+  frames(2);
+  check('and the fresh career is flying, not docked', !G.ship.docked && !G.wasDocked);
+  W.Save.restore(G, snap, {});
+  check('the restored career is back on the clamps', !!G.ship.docked);
+  check('and the load did not look like an arrival, before a frame runs',
+        !!G.wasDocked);
+  frames(3);
+  check('no fine for arriving somewhere you never left',
+        Object.keys(G.wanted || {}).length === 0, JSON.stringify(G.wanted));
+  check('and you are not logged fugitive for loading a save',
+        !G.fugitive, JSON.stringify(G.fugitive));
+  check('so the port is still open to you', !Combat.dockRefusal(G, port));
+})();
+
+/* The seed belongs somewhere you can reach without abandoning the career:
+ * it is the difference between a bug report that is a story and one that
+ * is a test case. */
+console.log('--- the seed is readable in flight ---');
+(function () {
+  newFlying('kawartha');
+  frames(2);
+  G.menu = null; G.title = null; G.market = null; G.showHelp = false;
+  frames(1);
+  var keydown = listeners.keydown[0];
+  keydown({ key: 'Escape', shiftKey: false, preventDefault: function () {} });
+  var mark = drawn.texts.length;
+  frames(2);
+  var said = drawn.texts.slice(mark).join(' | ');
+  check('the pause menu names the seed', said.indexOf('seed "kawartha"') >= 0,
+        said.slice(0, 240));
+  keydown({ key: 'Escape', shiftKey: false, preventDefault: function () {} });
+  frames(1);
+})();
 
 /* ---- damage you can see from the seat ---------------------------------
  * Hull loss used to be a number on a page. A hit that reaches the hull can

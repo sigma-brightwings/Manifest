@@ -374,6 +374,28 @@
     } else {
       s.docked = null;
     }
+
+    /* PICKING A CAREER UP IS NOT AN ARRIVAL, and the line below is the
+     * whole of the fix for a bug that made loading your own save a crime.
+     *
+     * main.js detects a dock as the EDGE from not-docked to docked — which
+     * is the right way to catch it, because there are two places a ship can
+     * dock and only one of them is a call site. But newGame clears
+     * wasDocked and restore then parks the ship on the clamps, so the very
+     * next frame saw that edge and ran the arrival: contracts settled a
+     * second time, the clamps banged, and — the part that actually broke a
+     * career — Combat.arriveAtPort booked the player for arriving
+     * UNANNOUNCED at a port they had been sitting in since before they
+     * saved. That is a fine and a FUGITIVE flag, and a fugitive's ports do
+     * not open, so loading a save could leave a mission impossible to
+     * finish and every door in the system shut. Reported from a real
+     * career, where it read — correctly — as the autopilot being broken.
+     *
+     * Sitting here rather than at the two call sites on purpose: restore is
+     * the one function that puts a career back where it was, so it is the
+     * one place that knows the ship did not fly here. The same guard is
+     * why wasteCustoms only charges on arrival. */
+    G.wasDocked = !!s.docked;
     return true;
   }
 
