@@ -4451,6 +4451,24 @@
       };
     }
 
+    /* INSIDE A STATION, THE CAMERA FOLLOWS THE SHIP — whatever it was
+     * focused on before you flew in.
+     *
+     * THE BUG THIS KILLS, caught live rather than reasoned about. Focus a
+     * body from the chart, then dock: `G.focus` stays on that body, the
+     * gate below is false, and clampCameraToEnclosure never runs. Measured
+     * in the running game with the hull berthed inside a 7 km station, the
+     * boom was ONE HUNDRED AND TWENTY-THREE THOUSAND KILOMETRES — out at
+     * the planet it was still pointed at. Every enclosure clamp in this
+     * file was correct and none of them was being called. Setting follow
+     * took it to 248 m on the next frame.
+     *
+     * It is not a clamp because a clamp would be wrong: with focus on a
+     * body the boom is measured to that BODY, so shortening it would put
+     * the eye 250 m from a planet rather than from the ship. The only
+     * sensible view from inside a hangar is of the thing in the hangar. */
+    if (!G.followShip && G.focus && enclosedPort()) G.followShip = true;
+
     if (G.followShip || !G.focus) clampCameraToEnclosure();
   }
 

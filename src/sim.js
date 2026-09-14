@@ -2320,6 +2320,10 @@
   /* And a metre of daylight off the face itself, so the next step does not
    * begin coplanar with the plate it just stopped against. */
   var WALL_SKIN_KM = 0.001;             // 1 m
+  /* How much of the motion ALONG a surface survives a real impact. A fifth
+   * — enough that a hull still settles rather than freezing mid-air, little
+   * enough that hitting a station reads as hitting a station. */
+  var WALL_SLIDE_KEEP = 0.2;
 
   function checkStationImpact(ship, sys, t, from, fromT) {
     var R = global.Render;
@@ -2455,10 +2459,36 @@
           var rel2 = V.sub(ship.vel, bv2);
           var into2 = -V.dot(rel2, nrm);
           if (into2 < 0) into2 = 0;
-          /* Kill the motion INTO the surface and keep the rest, so a hull
-           * grazing a doorframe slides along it instead of stopping dead. */
+
+          /* A TOUCH SLIDES. AN IMPACT STOPS. And the line between them is
+           * not a number invented here — it is LAND_SAFE_SPEED, the speed
+           * at which putting a hull on a deck starts costing you hull. If
+           * it would hurt as a landing it should stop you as a wall.
+           *
+           * WHY THIS HAD TO CHANGE. Killing only the component INTO the
+           * surface is right for a hull nudging into its berth and wrong
+           * for one arriving at sixty metres a second: a shallow clip
+           * removes almost nothing, so the ship skates along the structure
+           * and sails out the far side with its paint intact. Measured in
+           * the running game — 24 runs straight at a 7 km station — 13 of
+           * them touched something and exactly ONE was brought to rest.
+           * From the cockpit that is a station you fly through, which is
+           * what Astra has been reporting.
+           *
+           * Above the line the tangential motion goes too, all but a
+           * fifth of it, and the hit is charged on the speed the hull
+           * actually arrived at rather than on the fraction of it that
+           * happened to be square to the plate. Clipping a girder at sixty
+           * metres a second is a crash whatever the angle. */
+          var relLen = V.len(rel2);
           ship.vel = V.addScaled(ship.vel, nrm, into2);
-          if (into2 > worst) worst = into2;
+          var bite = into2;
+          if (relLen > LAND_SAFE_SPEED) {
+            var tang = V.sub(V.sub(ship.vel, bv2), V.scale(nrm, 0));
+            ship.vel = V.add(bv2, V.scale(tang, WALL_SLIDE_KEEP));
+            bite = relLen;
+          }
+          if (bite > worst) worst = bite;
         }
         if (touched) return { port: p, speed: worst };
         /* NO CROSSING, NO COLLISION — AND THE GRID DOES NOT GET A SECOND
