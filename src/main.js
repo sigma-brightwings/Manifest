@@ -8151,12 +8151,6 @@
 
   /* The full-screen mode bodies live in screens.js. */
 
-  /* How big a station has to read on screen before its interior is worth
-   * drawing. Deliberately large: below this the mouth is a few pixels and
-   * the room behind it is invisible, so the only thing several thousand
-   * extra faces buy is frame time. Tuned by eye — see next.md. */
-  var STATION_INTERIOR_PX = 40;
-
   function drawBody(ctx, cam, item, starScreen) {
     var b = item.body, sp = item.sp, rpx = item.rpx;
 
@@ -8185,22 +8179,35 @@
             Render.drawPortPart(ctx, cam, stationFrame(b), b.radius, sun,
                                 model, 'spin', b.color);
           }
-          /* THE INSIDE OF AN ORBITAL STATION. Held to a far higher
-           * threshold than anything else here, and for two reasons rather
-           * than one: a room you cannot see into is pure cost, and these
-           * are the heaviest meshes in the library — a modelled interior
-           * runs to several thousand faces against a shell's couple of
-           * hundred, which on the Latitude is worth more than the whole
-           * rest of the frame's drawing.
+          /* THE INSIDE OF AN ORBITAL STATION, and the gate is a PREDICATE
+           * rather than a size. That distinction was learned the hard way:
+           * the first version drew the interior whenever the station read
+           * bigger than forty pixels, and from anywhere outside the hull
+           * the result was a screenful of grey slabs with the station
+           * nowhere to be seen.
            *
-           * Drawn on the SHELL'S OWN FRAME (see drawStationInterior): with
-           * no model declaring a spin bucket every station turns as one
-           * piece, and a room that held still inside a hull that did not
-           * would shear straight through its own walls.
+           * The cause is not the mesh, it is compositing. The shell and the
+           * interior are two separate paintMesh calls, and paintMesh sorts
+           * far-to-near WITHIN one mesh only — so every interior face lands
+           * on top of every shell face regardless of which is actually
+           * nearer. There is no depth buffer arbitrating between them.
+           * Drawing a room that is inside a hull, from outside that hull,
+           * is therefore not a thing this renderer can be asked to do.
            *
-           * Surface ports are excluded because their interior is the bay
-           * mesh, which is already the model being drawn. */
-          if (!b.surface && rpx > STATION_INTERIOR_PX) {
+           * From INSIDE it composites correctly and for free: the shell is
+           * behind you, the interior is what is in front, and painting the
+           * interior last is exactly right. So the condition is simply
+           * whether this station is the place you are in — the same
+           * predicate the world-suppression and the camera clamp ask, so
+           * the three cannot drift apart.
+           *
+           * Until enclosedPort() learns about orbital stations (it answers
+           * for surface ports today) this draws for nothing, which is the
+           * correct amount to draw. It lights up on its own the moment that
+           * function is widened; no threshold to retune, nothing to
+           * remember. Surface ports are excluded because their interior IS
+           * the bay mesh, already drawn as the model. */
+          if (!b.surface && enclosedPort() === b) {
             Render.drawStationInterior(ctx, cam, frame, b.radius, sun,
                                        model, b.color);
           }
