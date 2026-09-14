@@ -1,6 +1,6 @@
 # next.md — where this picks up
 
-Written end of the 2026-09-14 session. Everything below is on disk and
+Written end of the 2026-09-14 session (second pass, after L4). Everything below is on disk and
 committed; nothing here is uncommitted work at risk.
 
 ## Committed this session
@@ -12,9 +12,12 @@ committed; nothing here is uncommitted work at risk.
   measured.
 - `606225e` — **berthed inside a station**: the world goes away, and the
   room is measured. This is L3.
+- `eb4f12d` — next.md for the scale correction and L3.
+- `f6573d6` — **a station draws you in, and it calls you first.** L4, plus
+  auto-clearance on approach.
 
-Tests after all four: lint clean; physics 227, render 685, cockpit 159,
-nodes 55, ships 23, berths 21, galaxy 39, combat 329, arcs 18. economy still
+Tests at the end: lint clean; physics 241, render 696, cockpit 159, nodes
+55, ships 23, berths 24, galaxy 39, combat 342, arcs 18. economy still
 has its one pre-existing failure (17 manufacture-above-development
 violations) — present on a clean tree, touches none of this, fix it
 separately or leave it.
@@ -114,30 +117,104 @@ ring-l, cradle-s, cylinder-s, cradle-m.
 - `berthIsInInterior()` in main.js gates the interior on the *berth*, not
   just the eye. See the find above for why it is currently always shut.
 
-## L4 — the watchable transit (the actual ask)
+## L4 — done (`f6573d6`)
 
-Widen `beginArrival` (sim.js) so orbital stations run arrival legs like
-surface ports do, instead of the current one-frame dock — physics.test.js
-currently pins the refusal ("an orbital station refuses to run an arrival,
-with no shaft to run"), so that test changes with it. The legs carry the
-ship through the mouth, down the hall, to the berth; `Sim.arrivalPose`
-drives which leg you are on and `enclosedPort()` flips the world to interior
-mid-sequence. Surface ports already do all of this. Reuse, not new
-machinery.
+**A station draws you in, stern-first, and the doors mean something.**
 
-The models' `gates` / `innerGates` anchors are the apertures those legs
-should be threaded through, and `pockets` are where the door leaves stow —
-so a modelled station can eventually animate its own doors instead of
-wearing the procedural leaves.
+- `beginArrival` no longer refuses orbital ports. The only thing holding the
+  rail to the ground was `arrivalPose` asking for a ground frame;
+  `Sim.portBasis` answers for both kinds — the same one-word move that
+  widened `berthState` and the camera clamp.
+- `ORBITAL_LEGS`, five of them: **lineup** (holding off, doors shut) →
+  **open** (outer doors run back, hull holds at the threshold) → **enter**
+  (drawn in through the throat; the sky goes away here) → **settle** (onto
+  the stand, doors close behind) → **admit** (inner gate opens). The last
+  leg moves nothing. It exists so the sequence ends by showing you what you
+  have arrived inside of rather than on a shut door.
+- **The route is the art's.** `Gen.berthApertures(port, i)` measures each
+  berth's outer doors and inner gate off the model, along that berth's own
+  `normal`. Matched **geometrically, not by node name** — a ring mirrors its
+  patterns, so two alcoves on opposite sides of the hub both answer to
+  `berthSM0`, and a string match would fly a ship in through the far side.
+  Measured across the library the doors sit 0.17–0.23 station radii outboard
+  of the throat floor; that number is printed by `berths.test.js` every run
+  and typed nowhere.
+- **No modelled berths → the hall.** City ports have no throat, so they get
+  the hatch route: in on the hub axis and across to a stand. Same leg table,
+  different waypoints. `physics.test.js` pins that one (it does not load
+  ports.js); `berths.test.js` pins the modelled one.
+- **The hull never turns.** A berthed ship faces the way it leaves, and the
+  way it leaves is the way it came in — so a station draws you in
+  stern-first, the way a truck backs onto a loading dock. No rotation to
+  animate, no blend at the end, and the pose the rail hands `dockShip` is
+  the pose it started with. Pinned as an invariant.
 
-**Open question L4 has to answer:** where does an arrival leg END, given
-that the berths are alcoves on the outside rather than rooms inside? The
-`normal` on each berth anchor is the honest input — it is the one thing a
-bounding box cannot tell you, it was measured across all four patterns, and
-it is already read by `berthOffset`.
+### The camera, which was wrong three separate ways
+A boom collapsed onto the hull is thirteen seconds of grey plating filling
+the screen and **nothing throws** — so these are correctness bugs, not
+polish.
 
-Deferred, noted, not blocking: the force field renders as an opaque lit
-slab. Revisit when L4 actually flies through one.
+1. `clampCameraToHangar` read the berth from `dockOffset`, which `dockShip`
+   writes — and `dockShip` does not run until the rail *ends*. The whole
+   arrival clamped to berth 0 of a station the ship was being carried into
+   berth 2 of. `currentBerth()` asks the arrival first.
+2. The slab tests have nothing to give when the hull is not in the room yet
+   (out at the hatch, or a hundred metres outboard in a throat) **and**
+   nothing to give when the eye is pitched into a deck a hull's standoff
+   below it. One rule covers both now: *when the direction the camera is
+   pointing has no room in it, stand back by half the narrowest way through
+   the room instead.* No threshold of its own; it resolves back into the
+   slab tests the moment they have something to say.
+3. The shaft's own `descend` branch computed a limit in **pad radii** and
+   assigned it as **kilometres** — half a kilometre of boom at a pad a
+   hundred metres across, so the eye sat outside the shaft for the entire
+   descent looking at the outside of a tube it was meant to be inside.
+   Pre-existing; fixed here because it is the same shot.
+
+## The port calls you (`f6573d6`)
+
+Astra's change, and it closes the trap that started this whole thread.
+Clearance was three keystrokes with the answer "yes" almost every time, and
+forgetting it once cost a fine, a standing hit and a FUGITIVE flag — which
+shut every door in the system, including the one an open mission needed.
+
+A port with room now hails a ship **closing inside 10 km** and clears it.
+
+- **Inverted, not removed.** It still refuses — wanted here, hostile, full —
+  and when the answer would be no it says **nothing**. A wanted pilot is not
+  nagged by every marker they drift past, and the port going quiet is itself
+  the signal. Hailing still works and is now how you find out *why*.
+- **Launch is untouched**, deliberately. Asking to leave is the half with a
+  real decision in it.
+- **10 km** because the docking envelope is `max(1.2 km, 4 radii)` — 0.8 to
+  4.5 km at the sizes the generator makes — so clearance arrives with the
+  final leg still ahead of it rather than at the moment it stops mattering.
+- **Closing**, because a ship that just launched is not arriving. Without it
+  the port clears you straight back in over the top of whatever it said
+  about leaving.
+- **Twice a second**, because asking where a body is costs a Kepler solve —
+  the most expensive call in the file.
+- `Combat.clearanceRefusal` is the judgement, split out so `requestClearance`
+  and `autoClearance` cannot drift. Same shape as `dockRefusal`.
+
+That sweep shipped with the bug this kind of stamp always has: `G.t` resets
+on a new game or a load while `clearanceSweptAt` rides along on `G`, so a
+stamp from the last career sat in the future and the sweep **never ran again
+for the rest of the session**, silently. Guarded the way `stepArrival`
+already guards its clock.
+
+## Parked
+
+- **Point-and-click interiors, Wing Commander style.** Astra's idea, on the
+  back burner by her call. Worth recording because it fits the finding
+  above better than anything else does: the models' `interior` buckets are
+  *concourses*, not places ships park — which is exactly the room a bar, a
+  mission board, a shipyard counter would be in. The geometry is already in
+  `src/ports.js` and already drawable (`Render.drawStationInterior`), and
+  `berthIsInInterior()` is the gate that would stop being always-shut.
+- The force field renders as an opaque lit slab. The `enter` leg now flies
+  through one, so this is visible — next time someone is looking at a
+  cylinder or cradle port up close.
 
 ---
 
@@ -206,6 +283,14 @@ panel (DOORS SHUT).
 - MEASURE BEFORE CHOOSING A THRESHOLD. Every number in the bay tables is now
   derived from the worst hull in the fleet at the smallest port the
   generator makes, and `berths.test.js` prints the margins every run.
+- A TIME STAMP ON `G` OUTLIVES `G.t`. Starting a new game or loading a save
+  resets the career clock while any `G.somethingAt` you parked rides along —
+  so the stamp sits in the future and the throttle it guards never fires
+  again, silently, for the rest of the session. Guard with `since >= 0 &&
+  since < interval`, the way `stepArrival` already does.
+- A VALUE IN PAD RADII IS NOT A VALUE IN KILOMETRES. The bay tables are all
+  in radii and `G.cam.dist` is in km; the shaft's camera clamp mixed them
+  and was out by a factor of the radius for as long as it has existed.
 - A STUB PORT RESOLVES TO A REAL MODEL. `{radius: 1, kind: 'station'}` looks
   inert and is not: `portModelFor` will match it to something and hand back
   that model's anchors. Twice now.
