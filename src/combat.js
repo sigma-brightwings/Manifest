@@ -3565,11 +3565,19 @@
    * one line several times over. The spread scales with the hull, cube root
    * because mass goes as volume — a Mule's guns sit wider than a Dart's.
    *
-   * The LENGTH does not scale, and that is deliberate rather than lazy:
-   * render.js draws every hull at one SHIP_LEN, so stretching the muzzles to
-   * match a Mule's tonnage would hang them off a hull that is not there.
-   * When the renderer draws hulls at their real sizes, HULL_LEN is the one
-   * number that has to follow it. */
+   * The LENGTH does not scale with tonnage, and that is deliberate rather
+   * than lazy: render.js draws every hull at one SHIP_LEN, so stretching the
+   * muzzles to match a Mule's tonnage would hang them off a hull that is not
+   * there.
+   *
+   * IT DOES FOLLOW THE RENDERER, though, which it did not use to. This was a
+   * second copy of SHIP_LEN written out as a number with a comment pointing
+   * at the first one — the exact duplicate-constant trap CLAUDE.md warns
+   * about, and a live one: change the drawn hull length and every beam in
+   * the game would leave from a point on a ship that is no longer there.
+   * Read through `global.Render` at call time rather than bound at load,
+   * because combat.js loads before render.js does (index.html's order), the
+   * same reach generate.js makes for the port library. */
   /* These four were MEASURED by looking at it, not chosen on paper, and the
    * first set was wrong in a way only the seat could show. A muzzle 1.6 m
    * off the axis and 5.5 m ahead subtends 16 degrees from the pilot's eye —
@@ -3582,7 +3590,10 @@
    * a gun on a small ship actually looks like it is. The guns are still far
    * enough apart to read as separate weapons converging, which is the whole
    * reason they are offset at all. */
-  var HULL_LEN = 0.010;        // km — render.js SHIP_LEN, 10 m nose to tail
+  function hullLen() {
+    var R = global.Render;
+    return (R && R.SHIP_LEN) || 0.010;
+  }
   var MUZZLE_FWD = 0.85;       // of hull length, ahead of the origin: the nose
   var MUZZLE_DOWN = 0.06;      // and slightly under the axis, where guns hang
   var MUZZLE_SPREAD = 0.10;    // half-span of the innermost pair
@@ -3631,9 +3642,10 @@
     var girth = Math.min(1.5, Math.pow(((h && h.dryMass) || 42) / 42, 1 / 3));
     var side = (n % 2) ? -1 : 1;              // starboard first, then port
     var rank = 1 + Math.floor(n / 2) * 0.7;   // stepping outboard in pairs
-    return { r: side * HULL_LEN * MUZZLE_SPREAD * girth * rank,
-             u: -HULL_LEN * MUZZLE_DOWN,
-             f: HULL_LEN * MUZZLE_FWD };
+    var len = hullLen();
+    return { r: side * len * MUZZLE_SPREAD * girth * rank,
+             u: -len * MUZZLE_DOWN,
+             f: len * MUZZLE_FWD };
   }
 
   function muzzleWorld(ship, mz) {
@@ -3846,7 +3858,7 @@
      * point down the nose. Same offset treatment as the hardpoints, and for
      * the same reason: from the seat, a beam leaving the ship's origin
      * leaves from behind your own head. */
-    var turMz = { r: 0, u: HULL_LEN * 0.12, f: HULL_LEN * 0.18 };
+    var turMz = { r: 0, u: hullLen() * 0.12, f: hullLen() * 0.18 };
     (G.beams = G.beams || []).push({
       from: muzzleWorld(s, turMz), muzzle: turMz, fromShip: true,
       to: V.clone(best.live.pos), target: best.live,
@@ -4652,7 +4664,7 @@
     fireGun: fireGun, fireGroup: fireGroup, fireMissile: fireMissile,
     groupOf: groupOf, setGroup: setGroup, toggleGroup: toggleGroup,
     gunsInGroup: gunsInGroup,
-    muzzleOf: muzzleOf, muzzleWorld: muzzleWorld, HULL_LEN: HULL_LEN,
+    muzzleOf: muzzleOf, muzzleWorld: muzzleWorld, hullLen: hullLen,
     manifestFor: manifestFor, holdOf: holdOf, purseOf: purseOf,
     npcShield: npcShield, splitDamage: splitDamage, hullSize: hullSize,
     NPC_SHIELD: NPC_SHIELD, MAX_IMPACTS: MAX_IMPACTS,

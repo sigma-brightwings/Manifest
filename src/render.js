@@ -237,7 +237,25 @@
    * transforming to world space is just pos + right*x + up*y + fwd*z, using
    * whatever basis the ship's current attitude gives us. No mesh loader, no
    * engine: this is what "hand-rolled" buys us for a nine-triangle ship. */
-  var SHIP_LEN = 0.010;   // km — the player's hull, 10 m nose to tail
+  /* THE ONE LENGTH EVERY HULL IS DRAWN AT, and now the one number the rest
+   * of the game's scale is measured against.
+   *
+   * It was 10 m, and 10 m was wrong by arithmetic rather than by taste. A
+   * Mule Freighter carries 160 t of cargo on 80 t of hull; at ten metres its
+   * bounding box holds about 71 cubic metres, which puts it at 4,100 kg per
+   * cubic metre laden — denser than concrete, four times water. The Talon
+   * came out at 2,700. Nothing that flies is built like that.
+   *
+   * 25 m puts the whole catalogue near 200 kg/m3, which is where real
+   * vehicles sit: a 747 at maximum take-off is about 250, the ISS about 30.
+   * The fleet was measured hull by hull rather than scaled by feel — the
+   * four purchasable hulls want 24, 17, 23 and 27 metres to land there.
+   *
+   * Everything on a hull is a FRACTION of this (muzzles, gear, the cockpit
+   * interior, the exhaust), so they all follow it and the angles a pilot
+   * sees from the seat are unchanged. combat.js used to keep its own copy of
+   * this number; it now asks. */
+  var SHIP_LEN = 0.025;   // km — every hull, 25 m nose to tail
 
   /* ======================================================================
    * MESHES
