@@ -217,19 +217,52 @@
    * this ordered them differently, berth 3 here and berth 3 there would be
    * two different alcoves and a ship would be measured against one and
    * parked in the other. */
-  function berthBoxes(port) {
+  /* A model's berths IN ONE ORDER, and everything that indexes them goes
+   * through here. The shared sort is the whole point: berthOffset places
+   * the hull, berthBoxes measures whether it fits and berthRoom clamps the
+   * camera inside it — three readers of "berth 3", and if any two of them
+   * ordered the list differently they would be talking about different
+   * alcoves. (generate.js's berthOffset carries the matching sort across
+   * the module boundary; berths.test.js pins that the two agree.) */
+  function sortedBerths(port) {
     var Gen = global.Gen;
     var mb = Gen && Gen.modelledBerths && Gen.modelledBerths(port);
     if (!mb || !mb.length) return null;
-    var r = (port && port.radius) || 1;
     return mb.slice().sort(function (a, b) {
       return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
-    }).map(function (b) {
+    });
+  }
+
+  function berthBoxes(port) {
+    var sorted = sortedBerths(port);
+    if (!sorted) return null;
+    var r = (port && port.radius) || 1;
+    return sorted.map(function (b) {
       if (!b.min || !b.max) return null;        // a berth with no extent
       return [(b.max[0] - b.min[0]) * r,
               (b.max[1] - b.min[1]) * r,
               (b.max[2] - b.min[2]) * r];
     });
+  }
+
+  /* THE ROOM A BERTHED SHIP IS ACTUALLY IN, in the port's own normalised
+   * units, or null when the port has no model to ask.
+   *
+   * The camera clamp used to measure against bayGeometry's chamber for
+   * everything, which is right for a shed built from the constant table and
+   * wrong for a modelled station: the ring parks you in an alcove out on
+   * the rim at 0.65 radii while the chamber table describes a hall at the
+   * hub. Clamping to the hall would have hauled the eye across the station
+   * and through several walls to get there. The alcove IS the room. */
+  function berthRoom(port, i) {
+    var sorted = sortedBerths(port);
+    if (!sorted) return null;
+    var k = ((i % sorted.length) + sorted.length) % sorted.length;
+    var b = sorted[k];
+    if (!b || !b.min || !b.max) return null;
+    return { x0: b.min[0], x1: b.max[0],
+             y0: b.min[1], y1: b.max[1],
+             z0: b.min[2], z1: b.max[2] };
   }
 
   /* What this ship needs a berth to be. Read off the model it wears, via
@@ -3539,6 +3572,7 @@
     berthState: berthState,
     assignBerth: assignBerth,
     hullBox: hullBox, berthBoxes: berthBoxes, boxFits: boxFits,
+    berthRoom: berthRoom,
     padCapture: padCapture,
     landingDamage: landingDamage,
     smootherstep: smootherstep,

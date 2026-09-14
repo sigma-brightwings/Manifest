@@ -3784,6 +3784,142 @@ console.log('--- a barred port ---');
   G.dockTarget = null;
 })();
 
+/* ---- a station berth is a room you are inside -------------------------
+ * Berthing at an orbital station used to leave you outdoors: the solar
+ * system was drawn straight through the hull you were sitting in - orbit
+ * lines, planet markers and the altitude ladder painted over solid plate.
+ * enclosedPort answered only for surface ports, so nothing downstream knew
+ * you were indoors.
+ *
+ * Three things follow from widening it, and all three are worth pinning
+ * because two of them fail silently: the camera has to be held inside the
+ * ALCOVE the ship is actually parked in rather than a hall at the hub, and
+ * the modelled interior must NOT be drawn from an alcove that is nowhere
+ * near it - that one reads as a screenful of grey slabs. */
+console.log('--- berthed inside a station ---');
+(function () {
+  var Render = W.Render, Gen = W.Gen;
+  newFlying('kawartha');
+  frames(2);
+  var port = G.sys.ports.filter(function (p) { return !p.surface; })[0];
+  check('there is an orbital station to berth in', !!port);
+  if (!port) return;
+  var role = Render.portModelFor(port);
+
+  /* THE ROOM IS THE BERTH when the art declares one. A modelled station's
+   * alcove, not the chamber table - the ring's rim berths sit at 0.65 radii
+   * while the hall table describes something at the hub. Earlier blocks in
+   * this file swap the port library for fixtures and back, so whether a
+   * model is loaded right here is not this section's business; the berth
+   * assertions run when there is one and the camera assertions run either
+   * way, because the clamp has to work for a bare station too. */
+  var room = Sim.berthRoom(port, 0);
+  if (room) {
+    var g = Gen.bayGeometry(port);
+    check('and it is NOT the shared chamber table',
+          Math.abs(room.x1 - g.chamberX) > 1e-6 ||
+          Math.abs(room.y1 - g.chamberY) > 1e-6,
+          JSON.stringify(room) + ' vs chamber ' + g.chamberX + '/' + g.chamberY);
+    check('with real extent in all three axes',
+          room.x1 > room.x0 && room.y1 > room.y0 && room.z1 > room.z0,
+          JSON.stringify(room));
+  }
+  /* Same index means the same alcove to every reader of it. */
+  var a = Sim.berthRoom(port, 2), b2 = Sim.berthRoom(port, 2);
+  check('asking twice gives the same alcove, or none at all',
+        (!a && !b2) || (!!a && !!b2 && a.x0 === b2.x0 && a.z1 === b2.z1));
+
+  /* THE CAMERA. Berthed, the boom has to come in to fit the room - and it
+   * must NOT collapse onto the hull, which is what a clearance margin
+   * bigger than the room it is clearing would do. */
+  Sim.dockShip(G.ship, port, G.sys, G.t);
+  /* The clamp only runs while the camera is following the SHIP - with the
+   * focus parked on some other body it is a chart, not a window, and an
+   * earlier section leaves one set. */
+  G.focus = null;
+  G.followShip = true;
+  G.viewMode = 'orbit';
+  G.cam.dist = 500;                       // km, absurdly far for a berth
+  frames(3);
+  check('the boom is pulled in to fit the berth', G.cam.dist < 500,
+        'dist ' + G.cam.dist.toFixed(4) + ' km');
+  check('but not welded to the hull', G.cam.dist > 0.006 * 1.0001,
+        'dist ' + G.cam.dist.toFixed(4) + ' km');
+  check('and it renders from in there without error',
+        errorsSince(drawn.texts.length - 1).length === 0);
+
+  /* THE INTERIOR is the hall at the hub, and from a rim alcove you are not
+   * in it. Drawing it anyway is the slab bug: paintMesh sorts within one
+   * mesh, so a hall you are not standing in lands on top of the wall a few
+   * metres from your face. */
+  var lib = Render.libPort(role);
+  check('the interior gate answers without a model rather than throwing',
+        Render.insideInterior({ eye: { x: 0, y: 0, z: 0 } },
+                              { pos: { x: 0, y: 0, z: 0 },
+                                right: { x: 1, y: 0, z: 0 },
+                                up: { x: 0, y: 1, z: 0 },
+                                fwd: { x: 0, y: 0, z: 1 } }, 1, 'no-such-role') === false);
+  if (lib && lib.interior) {
+    var far = { eye: { x: 1e9, y: 1e9, z: 1e9 } };
+    var frame = { pos: { x: 0, y: 0, z: 0 },
+                  right: { x: 1, y: 0, z: 0 },
+                  up: { x: 0, y: 1, z: 0 },
+                  fwd: { x: 0, y: 0, z: 1 } };
+    check('an eye nowhere near the hall is not inside it',
+          Render.insideInterior(far, frame, 1, role) === false);
+    var atHub = { eye: { x: 0, y: 0, z: 0 } };
+    check('and an eye at the hub is', Render.insideInterior(atHub, frame, 1, role) === true);
+    check('a missing camera answers no rather than throwing',
+          Render.insideInterior(null, frame, 1, role) === false);
+  }
+
+  /* AND THE MODELS THAT DECLARE NO INTERIOR AT ALL. Three of the fifteen
+   * orbital models are like this, and for them drawStationInterior falls
+   * back to the procedural hall — so the gate has to fall back to the SAME
+   * mesh's bounds. Answering null here would have meant the room was drawn
+   * by one half of the pair and gated to death by the other: never visible
+   * at a city port, for the life of the game, with nothing to see in the
+   * logs. */
+  (function () {
+    /* ports.js is not loaded in this suite - it is 15 MB of generated art
+     * and the shipping page loads it separately - so the bare model is a
+     * fixture, the same way the import section above builds its fixtures.
+     * What is being pinned is the FALLBACK, and a fixture with no interior
+     * bucket is exactly as bare as a city port. */
+    var had = W.PortLib;
+    W.PortLib = { 'bare-station': { kind: 'orbital', v: [[0, 0, 0]], f: [], pal: [], ci: [] } };
+    Render.reloadPorts();
+    var bare = 'bare-station';
+    var bb = Render.interiorBounds(bare);
+    check('a station model with no interior still has a room to be inside',
+          !!bb, bare);
+    if (!bb) { W.PortLib = had; Render.reloadPorts(); return; }
+    var frame2 = { pos: { x: 0, y: 0, z: 0 },
+                   right: { x: 1, y: 0, z: 0 },
+                   up: { x: 0, y: 1, z: 0 },
+                   fwd: { x: 0, y: 0, z: 1 } };
+    var mid = { eye: { x: (bb.lo[0] + bb.hi[0]) / 2,
+                       y: (bb.lo[1] + bb.hi[1]) / 2,
+                       z: (bb.lo[2] + bb.hi[2]) / 2 } };
+    check('and standing in the middle of it reads as inside',
+          Render.insideInterior(mid, frame2, 1, bare) === true,
+          JSON.stringify(mid.eye));
+    /* The room is the procedural hall, so it has to be the hall's size and
+     * not the shed's — the two tables are a factor of two apart and the
+     * mesh used to be built from whichever one a stub port resolved to. */
+    var g2 = Gen.stationBay({ radius: 1 });
+    check('and that room is the hall, at the hall\'s size',
+          bb.hi[0] <= g2.chamberX * 1.10 && bb.hi[0] >= g2.chamberX * 0.90,
+          'x extends to ' + bb.hi[0].toFixed(3) + ', chamberX ' + g2.chamberX);
+    W.PortLib = had;
+    Render.reloadPorts();
+  })();
+
+  Sim.undockShip(G.ship, G.sys, G.t, 0.003);
+  G.ship.docked = null;
+  G.dockTarget = null;
+})();
+
 /* ---- loading a career is not arriving at a port -----------------------
  * The bug this pins made loading your own save a crime, and it was
  * reported from a real career as "the autopilot cannot reach the station".

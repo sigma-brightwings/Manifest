@@ -4359,9 +4359,57 @@
     return Infinity;
   }
 
+  /* Keep the eye inside the room the ship is parked in.
+   *
+   * PORTBASIS, NOT GROUNDBASIS, and that one word is most of what made this
+   * work for orbital stations: the arithmetic below was always general — a
+   * box is a box — and the only thing holding it to the ground was asking
+   * for a ground frame. portBasis answers for both kinds.
+   *
+   * AND THE ROOM IS THE BERTH when the model declares one. Measuring a
+   * modelled station against bayGeometry's chamber would have clamped the
+   * eye to a hall at the hub while the ship sat in an alcove out on the rim
+   * at 0.65 radii — hauling the camera across the station and through
+   * several walls to get there. Sim.berthRoom hands back the alcove itself.
+   * A shed built from the constant table has no declared berths and keeps
+   * the chamber, which is the right room for it. */
+  /* IS THE ROOM YOU ARE PARKED IN THE ROOM THE MODEL CALLS ITS INTERIOR?
+   *
+   * insideInterior asks about the EYE, against an axis-aligned box, and a
+   * box round a room shaped like a spine is most of the station. Berthed in
+   * an alcove out on the rim, the camera can sit inside that box while the
+   * ship is nowhere near the hall — and then the hall paints over the
+   * alcove wall a few metres from your face, which is the slab bug wearing
+   * a smaller hat.
+   *
+   * The berth answers it exactly. If the model declares where this ship is
+   * parked and that place is not inside the interior volume, the interior
+   * is a different room and is not drawn.
+   *
+   * Measured across the library today, that is EVERY berth at EVERY orbital
+   * model: the art's interior buckets are concourses elsewhere in the hull
+   * and its berth anchors are alcoves on the outside, so no station in the
+   * game presently parks you in its own interior. This is therefore a gate
+   * that is currently always shut, and it is written anyway — the models
+   * are edited independently of this file, and the day one of them puts a
+   * berth in its hall the room lights up with nothing to change here. A
+   * station with no declared berths keeps the constant table's chamber,
+   * which IS the hall, so those are unaffected. */
+  function berthIsInInterior(port, role) {
+    if (!Render.interiorBounds || !Sim.berthRoom) return true;
+    var berth = (G.ship.dockOffset && G.ship.dockOffset.berth) || 0;
+    var room = Sim.berthRoom(port, berth);
+    if (!room) return true;                 // no modelled berth: the chamber IS the hall
+    var bb = Render.interiorBounds(role);
+    if (!bb) return false;
+    return room.x0 >= bb.lo[0] && room.x1 <= bb.hi[0] &&
+           room.y0 >= bb.lo[1] && room.y1 <= bb.hi[1] &&
+           room.z0 >= bb.lo[2] && room.z1 <= bb.hi[2];
+  }
+
   function clampCameraToHangar(port) {
-    if (!Gen || !Gen.bayGeometry || !Sim.groundBasis) return;
-    var basis = Sim.groundBasis(port, G.sys, G.t);
+    if (!Gen || !Gen.bayGeometry || !Sim.portBasis) return;
+    var basis = Sim.portBasis(port, G.sys, G.t);
     if (!basis) return;
     var g = Gen.bayGeometry(port);
     var r = port.radius || 1;
@@ -4378,23 +4426,70 @@
     var dz = V.dot(dir, basis.up) / r;                  // per km of boom
     var de = V.dot(dir, basis.east) / r, dn = V.dot(dir, basis.north) / r;
 
-    var limit = G.cam.dist;
-    var floor = g.floorZ + HANGAR_MARGIN;
-    var ceil = g.ceilZ - HANGAR_MARGIN;
-    if (dz < -1e-12) limit = Math.min(limit, (z0 - floor) / -dz);
-    else if (dz > 1e-12) limit = Math.min(limit, (ceil - z0) / dz);
+    var berth = (G.ship.dockOffset && G.ship.dockOffset.berth) || 0;
+    var room = Sim.berthRoom ? Sim.berthRoom(port, berth) : null;
+    var box = room
+      ? room
+      : { x0: -g.chamberX, x1: g.chamberX,
+          y0: -g.chamberY, y1: g.chamberY,
+          z0: g.floorZ,    z1: g.ceilZ };
 
-    /* Sideways: the shed is a box, so the sideways limit is a slab test on
-     * each of its two axes and the nearer of the two wins. */
-    limit = Math.min(limit, slabLimit(e0, de, g.chamberX - HANGAR_MARGIN));
-    limit = Math.min(limit, slabLimit(n0, dn, g.chamberY - HANGAR_MARGIN));
+    /* THE MARGIN HAS TO FIT THE ROOM. HANGAR_MARGIN is two per cent of a
+     * PAD radius, which is a couple of metres in a shed and thirteen in a
+     * station measured in its own radii — half the height of a berth. A
+     * clearance bigger than the room it is clearing collapses the box and
+     * welds the camera to the hull, so it is capped against the smallest
+     * dimension there is. */
+    var span = Math.min(box.x1 - box.x0, box.y1 - box.y0, box.z1 - box.z0);
+    var pad = Math.min(HANGAR_MARGIN, Math.max(0, span) * 0.15);
+    /* AND IT MUST NEVER EVICT THE SHIP. A hull parks a standoff off the
+     * floor and a hull's width off the wall, and in a tight room those gaps
+     * are smaller than the clearance — so a fixed margin can shrink the box
+     * past the very point it is meant to contain. Every limit then comes
+     * out negative and the boom collapses onto the hull, which is the one
+     * failure this function exists to prevent. Half of the ship's own
+     * clearance is the most that can ever be taken. */
+    pad = Math.min(pad, halfGap(e0, box.x0, box.x1),
+                        halfGap(n0, box.y0, box.y1),
+                        halfGap(z0, box.z0, box.z1));
+    if (!(pad > 0)) pad = 0;
+
+    /* One slab test per axis, nearest wins. `rayLimit` takes the real
+     * bounds rather than a half-extent because a modelled alcove is not
+     * centred on anything — it is a box cut where the art put it. */
+    var limit = G.cam.dist;
+    limit = Math.min(limit, rayLimit(e0, de, box.x0 + pad, box.x1 - pad));
+    limit = Math.min(limit, rayLimit(n0, dn, box.y0 + pad, box.y1 - pad));
+    limit = Math.min(limit, rayLimit(z0, dz, box.z0 + pad, box.z1 - pad));
 
     if (limit < G.cam.dist) G.cam.dist = Math.max(MIN_CAM_DIST, limit);
   }
 
-  function berthedPort() {
+  /* Half the room a point has to the nearer face of a slab, never below
+   * zero — a point already outside gets no margin rather than a negative
+   * one. */
+  function halfGap(p, lo, hi) {
+    return Math.max(0, Math.min(p - lo, hi - p)) * 0.5;
+  }
+
+  /* How far a ray from p0 along d may run before it leaves [lo, hi]. */
+  function rayLimit(p0, d, lo, hi) {
+    if (d > 1e-12) return (hi - p0) / d;
+    if (d < -1e-12) return (lo - p0) / d;
+    return Infinity;
+  }
+
+  /* Whatever you are berthed in, of either kind. */
+  function dockedPort() {
     if (!G.ship || !G.ship.docked || !G.sys) return null;
-    var port = G.sys.byId[G.ship.docked];
+    return G.sys.byId[G.ship.docked] || null;
+  }
+
+  /* SURFACE ONLY, and deliberately still so: its one caller is the shaft
+   * cut, which punches a hole in a planet's own sphere. A station has no
+   * planet to punch. */
+  function berthedPort() {
+    var port = dockedPort();
     return (port && port.surface) ? port : null;
   }
 
@@ -4411,15 +4506,25 @@
    * answers, only two things are drawn: the port itself, and what is inside
    * it with you.
    *
-   * SURFACE PORTS ONLY, and that is not an oversight. Docking at an orbital
-   * station is a clamp on the OUTSIDE of it — you are hanging off a ring in
-   * open space and you should see the sky, because it is there. When the
-   * orbital stations grow the interiors their design already describes —
-   * bays you fly into, a hall you are carried to — they will want this too,
-   * and the way in is to widen this function rather than to teach every
-   * caller a second rule. */
+   * ORBITAL STATIONS TOO, NOW — this is the widening the note here used to
+   * promise, and the promise was the right shape: one function grew a
+   * branch and every caller inherited it without learning a second rule.
+   *
+   * What changed is what a station berth IS. It was a clamp on the outside
+   * of a ring, and you should see the sky from one, because it is there.
+   * The shipped models park you in an alcove with sliding doors at the
+   * outboard end and an inner gate at the other — a room. Leaving them
+   * outdoors meant the solar system was drawn straight through the hull you
+   * were sitting inside: orbit lines, planet markers and the altitude
+   * ladder painted over solid plate, which is what it looked like from the
+   * seat and is how it was reported.
+   *
+   * The arrival branch below stays surface-only because only surface ports
+   * run arrivals today. When beginArrival learns about stations, the leg
+   * that seals the doors is what should flip this, exactly as the shaft
+   * doors do now. */
   function enclosedPort() {
-    var berthed = berthedPort();
+    var berthed = dockedPort();
     if (berthed) return berthed;
     /* MID-ARRIVAL the answer changes partway through, and that transition
      * is the best thing this sequence does. On the apron you are outside:
@@ -8208,13 +8313,16 @@
            * predicate the world-suppression and the camera clamp ask, so
            * the three cannot drift apart.
            *
-           * Until enclosedPort() learns about orbital stations (it answers
-           * for surface ports today) this draws for nothing, which is the
-           * correct amount to draw. It lights up on its own the moment that
-           * function is widened; no threshold to retune, nothing to
-           * remember. Surface ports are excluded because their interior IS
-           * the bay mesh, already drawn as the model. */
-          if (!b.surface && enclosedPort() === b) {
+           * `insideInterior` is the second half of the same idea. Being
+           * DOCKED at a station is not the same as being inside its hall:
+           * the approach, the hatch and the first stretch of throat are all
+           * docked-and-outside, and painting the room from out there is the
+           * grey-slab bug again in a smaller window. So the model's own
+           * interior bounds are asked whether the camera is actually in
+           * them. Surface ports are excluded because their interior IS the
+           * bay mesh, already drawn as the model. */
+          if (!b.surface && enclosedPort() === b && berthIsInInterior(b, model) &&
+              Render.insideInterior(cam, frame, b.radius, model)) {
             Render.drawStationInterior(ctx, cam, frame, b.radius, sun,
                                        model, b.color);
           }

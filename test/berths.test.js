@@ -227,7 +227,8 @@ console.log('--- the shed on the ground ---');
   console.log('  worst case hull: ' + m(worst.w) + ' wide, ' + m(worst.h) +
               ' tall, ' + m(worst.l) + ' long');
 
-  var tight = { hatch: Infinity, head: Infinity, pitch: Infinity, depth: Infinity };
+  var tight = { hatch: Infinity, head: Infinity, pitch: Infinity,
+                depth: Infinity, ends: Infinity };
   sizes.forEach(function (r) {
     var port = { id: 'pad-' + r, surface: true, radius: r, shaftDepth: r * 0.9 };
     var g = Gen.bayGeometry(port);
@@ -249,6 +250,13 @@ console.log('--- the shed on the ground ---');
      * half a hull each way, or it is parked through the concrete. */
     var toWall = (g.chamberY - Math.abs(g.berthY)) * r;
     tight.depth = Math.min(tight.depth, toWall / (worst.l / 2));
+    /* AND THE SAME QUESTION ALONG THE WALL, which the first version of
+     * this section forgot to ask - so a berth spread that put hulls outside
+     * the chamber in x sailed through while the y check passed. The end
+     * berth plus half a hull has to be inside the end wall. */
+    var endGap = (g.chamberX - Math.abs(xs[xs.length - 1])) * r;
+    tight.ends = Math.min(tight.ends === undefined ? Infinity : tight.ends,
+                          endGap / (worst.w / 2));
   });
 
   check('the hatch passes the widest hull in the fleet', tight.hatch >= 1,
@@ -259,9 +267,132 @@ console.log('--- the shed on the ground ---');
         tight.pitch.toFixed(2) + 'x');
   check('and a parked hull stays inside the chamber', tight.depth >= 1,
         tight.depth.toFixed(2) + 'x');
+  check('including the ones at the ends of the wall', tight.ends >= 1,
+        tight.ends.toFixed(2) + 'x');
   console.log('  tightest: hatch ' + tight.hatch.toFixed(1) + 'x  headroom ' +
               tight.head.toFixed(1) + 'x  berth pitch ' + tight.pitch.toFixed(1) +
-              'x  berth depth ' + tight.depth.toFixed(1) + 'x');
+              'x  depth ' + tight.depth.toFixed(1) + 'x  ends ' +
+              tight.ends.toFixed(1) + 'x');
+})();
+
+/* ---- and the hall itself, not just the alcoves in it -------------------
+ * The sweep at the top measures BERTH BOXES — alcoves an artist placed,
+ * read back out of the port library. That is only half of what a station
+ * has to get right. The room those alcoves sit in comes from the constant
+ * table in Gen.stationBay, and it is live for every station in the game:
+ * the library's orbital models declare a berth COUNT and nothing else, so
+ * the hatch a ship flies through, the roof over it, the floor it lands on
+ * and the walls it must not be parked through are all still the table's.
+ * Nothing measured them, and they were the tightest room in the game by a
+ * wide margin — a 25 m hull 12 m from the wall of a 170 m hall, with the
+ * camera clamp then asked to find somewhere to stand in what was left.
+ *
+ * So the hall gets the same questions the shed gets, at the radii the
+ * generator actually produces, against the worst hull on each axis. */
+console.log('--- the hall the alcoves sit in ---');
+(function () {
+  var worst = { w: 0, h: 0, l: 0 };
+  CLASSES.forEach(function (k) {
+    var sp = Render.hullSpan(k);
+    if (sp.w > worst.w) worst.w = sp.w;
+    if (sp.h > worst.h) worst.h = sp.h;
+    if (sp.l > worst.l) worst.l = sp.l;
+  });
+
+  var tight = { hatch: Infinity, head: Infinity, pitch: Infinity,
+                depth: Infinity, ends: Infinity };
+  var corner = 0;
+  RADII.forEach(function (r) {
+    /* Through bayGeometry, with a model assigned, because that is the
+     * object the game hands to the doors, the mesh and the camera clamp.
+     * If a model ever does start declaring its own chamber, this keeps
+     * measuring whatever the station ends up with rather than the table. */
+    Render.assignPort('orbital', MODELS[0]);
+    var g = Gen.bayGeometry(fakePort('hall-' + r, r));
+    tight.hatch = Math.min(tight.hatch, (2 * g.mouthR * r) / worst.w);
+    tight.head = Math.min(tight.head, ((g.ceilZ - g.floorZ) * r) / worst.h);
+
+    /* The berth spread is the fallback's, laid out the way berthOffset lays
+     * it out. A station whose model carries berth anchors uses those
+     * instead — the sweep at the top of this file is what measures THOSE —
+     * but one whose model carries none lands here, and the room has to hold
+     * them either way. */
+    var xs = [];
+    for (var b = 0; b < g.berths; b++) xs.push(Gen.tableBerthOffset(fakePort('hall-' + r, r), b).x);
+    xs = xs.filter(function (v, i, a) { return a.indexOf(v) === i; })
+           .sort(function (a2, b2) { return a2 - b2; });
+    for (var i = 1; i < xs.length; i++) {
+      tight.pitch = Math.min(tight.pitch, ((xs[i] - xs[i - 1]) * r) / worst.w);
+    }
+    tight.depth = Math.min(tight.depth,
+                           ((g.chamberY - Math.abs(g.berthY)) * r) / (worst.l / 2));
+    tight.ends = Math.min(tight.ends,
+                          ((g.chamberX - Math.abs(xs[xs.length - 1])) * r) / (worst.w / 2));
+    corner = Math.sqrt(g.chamberX * g.chamberX + g.chamberY * g.chamberY);
+  });
+
+  check('the hatch passes the widest hull in the fleet', tight.hatch >= 1,
+        tight.hatch.toFixed(2) + 'x');
+  check('there is headroom over the tallest', tight.head >= 1,
+        tight.head.toFixed(2) + 'x');
+  check('neighbouring berths do not overlap', tight.pitch >= 1,
+        tight.pitch.toFixed(2) + 'x');
+  check('and a parked hull stays inside the hall', tight.depth >= 1,
+        tight.depth.toFixed(2) + 'x');
+  check('including the ones at the ends of the wall', tight.ends >= 1,
+        tight.ends.toFixed(2) + 'x');
+  console.log('  tightest: hatch ' + tight.hatch.toFixed(1) + 'x  headroom ' +
+              tight.head.toFixed(1) + 'x  berth pitch ' + tight.pitch.toFixed(1) +
+              'x  depth ' + tight.depth.toFixed(1) + 'x  ends ' +
+              tight.ends.toFixed(1) + 'x');
+
+  /* AND THE CHEAP CONTAINMENT PROOF the table's comment promises: the hall
+   * has to be inside the hub drawn around it. Both numbers are in station
+   * radii, so this is a straight comparison and it costs nothing — which is
+   * the point, because the alternative is noticing from a screenshot that
+   * the hangar sticks out through the outside of its own station. */
+  check('the hall fits inside the hub drawn around it', corner <= 0.36,
+        'far corner ' + corner.toFixed(3) + ' vs hub radius 0.360');
+})();
+
+/* ---- is the hall the room you are actually in? ------------------------
+ * main.js draws a station's modelled interior only when the berth the ship
+ * is parked in lies INSIDE that interior's volume, because an axis-aligned
+ * box round a spine-shaped room is most of the station and the eye can sit
+ * in it while the ship is out on the rim. What that predicate answers is a
+ * property of the ART, not of the code, so this measures it and says so.
+ *
+ * As the library ships today the answer is no, everywhere: the interior
+ * buckets are concourses and the berth anchors are alcoves on the outside.
+ * That is not asserted — an artist is free to put a berth in a hall and the
+ * room should light up without anyone editing a test. What IS asserted is
+ * that the question can be ASKED of every model, because a gate that
+ * silently cannot be evaluated is a room that is silently never drawn. */
+console.log('--- is a berth ever inside its station\'s own interior? ---');
+(function () {
+  var askable = 0, inside = 0, total = 0;
+  MODELS.forEach(function (modelId) {
+    Render.assignPort('orbital', modelId);
+    var port = fakePort('gate-' + modelId, 1.9);
+    var bb = Render.interiorBounds(modelId);
+    var boxes = Sim.berthBoxes(port);
+    if (!boxes || !boxes.length) return;
+    for (var i = 0; i < boxes.length; i++) {
+      var room = Sim.berthRoom(port, i);
+      total++;
+      if (!room || !bb) continue;
+      askable++;
+      if (room.x0 >= bb.lo[0] && room.x1 <= bb.hi[0] &&
+          room.y0 >= bb.lo[1] && room.y1 <= bb.hi[1] &&
+          room.z0 >= bb.lo[2] && room.z1 <= bb.hi[2]) inside++;
+    }
+  });
+  check('the gate can be evaluated for every modelled berth there is',
+        total > 0 && askable === total, askable + ' of ' + total + ' answerable');
+  console.log('  ' + inside + ' of ' + total + ' modelled berths sit inside their ' +
+              'station\'s own interior volume' +
+              (inside === 0 ? ' — so the modelled hall is never drawn from a berth today'
+                            : ''));
 })();
 
 Render.assignPort('orbital', null);   // leave the library as we found it

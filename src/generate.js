@@ -1089,7 +1089,14 @@
    * through the concrete. */
   var BAY_MOUTH_R = 0.20;        // half-width of the square mouth
   var BAY_THROAT_R = 0.16;       // and at the bottom of the duct
-  var BAY_CHAMBER_X = 0.50;      // the shed, inside faces, half-extents
+  /* 0.62 rather than the 0.50 this table first shipped with, and the extra
+   * is not slack — it is the arithmetic. Three hulls 25 m wide need 75 m of
+   * wall plus half a hull of clearance at each end, so 100 m of wall is the
+   * MINIMUM a three-berth row can use, which is exactly 0.50 at the
+   * smallest pad the generator makes. Sitting on the minimum means every
+   * margin is 1.0x and the first hull to gain a metre is parked through the
+   * end wall. 0.62 buys the row about a quarter more room than it needs. */
+  var BAY_CHAMBER_X = 0.62;      // the shed, inside faces, half-extents
   var BAY_CHAMBER_Y = 0.42;
   var BAY_HEADROOM = 0.20;       // floor to ceiling
   var BAY_BERTH_Y = 0.26;        // berths line the two long walls
@@ -1240,21 +1247,32 @@
    * `depth` would need two different axes. That is a bigger change than a
    * table and it is not this one.
    *
-   * SCALE. These are station radii, and a station radius is 0.6–3.2 km, so
-   * they are roughly an eighth of what L1 guessed — which had described a
-   * hall wider than the station containing it and, at the top of the range,
-   * a six-kilometre room for a forty-metre ship. The surface bay learned
-   * this same lesson once already (see the pad-radius note above). As sized
-   * here the hall fits INSIDE the procedural hub — radius 0.22, half-length
-   * 0.26 — which is the cheapest possible proof that it is not too big. */
-  var SBAY_MOUTH_Z  = 0.26;      // the hatch, on the hub face
-  var SBAY_MOUTH_R  = 0.048;     // half-width of the square hatch
-  var SBAY_THROAT_R = 0.044;     // it barely necks down — a doorway, not a duct
-  var SBAY_DEPTH = 0.20;         // hatch to deck: the distance flown inside
-  var SBAY_HEADROOM = 0.12;      // deck to roof
-  var SBAY_CHAMBER_X = 0.115;    // the hall, inside faces, half-extents
-  var SBAY_CHAMBER_Y = 0.085;
-  var SBAY_BERTH_Y = 0.068;      // berths line the long walls
+   * SCALE, and it has now been wrong in both directions. These are station
+   * radii, and a station radius is 0.21–1.12 km. L1 guessed a hall wider
+   * than the station containing it — a six-kilometre room for a forty-metre
+   * ship. The correction over-shot: an eighth of that put a hull 0.017
+   * radii from the wall in a room 0.17 across, twelve metres of clearance
+   * at the smallest station, which is half a hull, with nothing left for
+   * the camera to stand in. So these are no longer guessed at all. The
+   * fleet's worst hull is 25 m on its longest axis and the smallest station
+   * is 211 m of radius, and berths.test.js measures the five clearances
+   * that decide whether a ship gets in and fits once it is there — hatch,
+   * headroom, berth pitch, berth depth, end walls — against exactly those
+   * numbers, at the radii the generator actually produces. The table below
+   * is what makes the tightest of them pass with room to spare.
+   *
+   * The hall still fits INSIDE the procedural hub — radius 0.36, half-length
+   * 0.50, and the chamber's far corner is at 0.328 — which remains the
+   * cheapest possible proof that it is not too big. Change one and check
+   * the other; render.js builds that hub. */
+  var SBAY_MOUTH_Z  = 0.40;      // the hatch, on the hub face
+  var SBAY_MOUTH_R  = 0.090;     // half-width of the square hatch
+  var SBAY_THROAT_R = 0.085;     // it barely necks down — a doorway, not a duct
+  var SBAY_DEPTH = 0.30;         // hatch to deck: the distance flown inside
+  var SBAY_HEADROOM = 0.14;      // deck to roof
+  var SBAY_CHAMBER_X = 0.26;     // the hall, inside faces, half-extents
+  var SBAY_CHAMBER_Y = 0.20;
+  var SBAY_BERTH_Y = 0.12;       // berths line the long walls
   var SBAY_STANDOFF = 0.012;
   var SBAY_BERTHS = 6;
 
@@ -1293,7 +1311,25 @@
    * Berth 0 is the large one and is given the extra elbow room; the rest
    * are evenly spaced round what is left. Deterministic, so a ship parked
    * in berth 3 is in berth 3 again after a save and a reload. */
-  var BERTH_X = [-0.95, 0, 0.95];
+  /* Where the three berths on a wall sit, AS A FRACTION OF THE CHAMBER'S
+   * OWN HALF-LENGTH rather than as a distance.
+   *
+   * It used to be a constant in pad radii, ±0.95, written against a shed
+   * whose chamber was 1.30 — so the berths sat at 73% of the way out and
+   * everything was fine until the chamber moved. Then it was that constant
+   * scaled by chamberX/BAY_CHAMBER_X, which is the same bug wearing a
+   * disguise: it reads the ratio between one chamber and ANOTHER constant,
+   * so the day BAY_CHAMBER_X itself changed, station berths jumped to
+   * 0.2185 inside a 0.115 hall and surface berths to 0.95 inside a 0.50
+   * shed — ships parked outside the room they are supposedly in, and a
+   * camera clamp that collapsed onto the hull because the box it was given
+   * did not contain the ship.
+   *
+   * A fraction cannot drift. (0.73 of the old 1.30 was 0.949, which is
+   * where the original constant put them; 0.70 is that same shape, trimmed
+   * so the end berths clear the end wall by half a hull with room over —
+   * berths.test.js reports both margins every run.) */
+  var BERTH_FX = [-0.70, 0, 0.70];
 
   function berthOffset(port, i) {
     var g = bayGeometry(port);
@@ -1370,15 +1406,32 @@
       };
     }
 
-    var side = k < BERTH_X.length ? 1 : -1;         // which long wall
-    /* Spread ACROSS THE CHAMBER, not at a constant offset. BERTH_X is in
-     * pad radii and was written against the shed's own 1.30 half-width; a
-     * station hall is an eighth of that, so the constant put every
-     * unmodelled station's berths several hall-widths outside their own
-     * walls. Expressed as a fraction of the chamber it is the same number
-     * for a shed — 1.30 over 1.30 is one — and the right one everywhere
-     * else. */
-    var x = BERTH_X[k % BERTH_X.length] * (g.chamberX / BAY_CHAMBER_X);
+    return tableBerthOffset(port, i);
+  }
+
+  /* THE CONSTANT TABLE'S OWN ANSWER, with no model consulted.
+   *
+   * Split out of berthOffset because two callers need the table rather than
+   * whatever model the port happens to wear. render.js builds the
+   * procedural hall mesh from it — that mesh is only ever drawn for a
+   * station whose model declares no interior, and those are exactly the
+   * stations that declare no berths either, so the table is what a ship
+   * there is actually parked against. It used to ask berthOffset with a
+   * stub port, which quietly picked up the berth anchors of an unrelated
+   * model and drew this room's alcoves at x=-0.65 in a room 0.26 wide —
+   * outside its own walls, on the wrong side of the deck.
+   *
+   * berths.test.js is the other caller, and for the same reason: it is
+   * measuring the room, not the alcoves an artist placed in some other one. */
+  function tableBerthOffset(port, i) {
+    var g = bayGeometry(port);
+    var n = Math.max(1, g.berths);
+    var k = ((i % n) + n) % n;
+    var side = k < BERTH_FX.length ? 1 : -1;       // which long wall
+    /* Spread ACROSS THE CHAMBER. See BERTH_FX: a fraction of the room the
+     * berth is in is the only form of this that survives the room being
+     * resized, and the room has been resized twice. */
+    var x = BERTH_FX[k % BERTH_FX.length] * g.chamberX;
     return {
       x: x,
       y: side * g.berthY,
@@ -2811,6 +2864,7 @@
     shaftBay: shaftBay,
     stationBay: stationBay,
     berthOffset: berthOffset,
+    tableBerthOffset: tableBerthOffset,
     modelledBerths: modelledBerths,
     controlFor: controlFor, CONTROL_RANGE: CONTROL_RANGE,
     BERTH_COUNT: BERTH_COUNT,

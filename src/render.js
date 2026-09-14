@@ -623,6 +623,7 @@
     PORT_CACHE = {};
     POOL_CACHE = null;
     STATION_MESHES = null;
+    INTERIOR_BOUNDS = {};
   }
 
   /* ---- which model a port wears, and it is ONE rule ----------------------
@@ -1709,11 +1710,15 @@
   function stationMeshes() {
     if (STATION_MESHES) return STATION_MESHES;
 
-    // Ordinary orbital port: a wheel.
+    /* Ordinary orbital port: a wheel. The hub is sized to CONTAIN the hall
+     * that Gen.stationBay describes — chamber corner at 0.328, hatch face at
+     * 0.40 — because a hangar poking out through the outside of its own
+     * station is the one scale error you can see from a screenshot. If that
+     * table grows, this grows with it. */
     var orbital = emptyMesh();
     merge(orbital, rimRing(12, 0.82, 0.16, 0.16), 0, 0, 0);
     merge(orbital, spokes(4, 0.12, 0.70, 0.045), 0, 0, 0);
-    merge(orbital, tube(8, 0.22, 0.22, 0.26, true), 0, 0, 0);
+    merge(orbital, tube(8, 0.36, 0.36, 0.50, true), 0, 0, 0);
 
     // Highport: bigger, double-ringed, with docking arms along the axis.
     var highport = emptyMesh();
@@ -1987,8 +1992,12 @@
        * every other consumer reads — so a bay drawn here is a bay a ship is
        * actually parked in. */
       for (var bi = 0; bi < g.berths; bi++) {
-        var off = Gen3 && Gen3.berthOffset
-          ? Gen3.berthOffset({ radius: 1, kind: 'station' }, bi) : null;
+        /* tableBerthOffset, NOT berthOffset: this mesh is the fallback for a
+         * station whose model declares no interior, and berthOffset would
+         * answer from whichever model the stub port resolved to — which put
+         * this room's alcoves at x = -0.65 in a room 0.26 wide. */
+        var off = Gen3 && Gen3.tableBerthOffset
+          ? Gen3.tableBerthOffset({ radius: 1, kind: 'station' }, bi) : null;
         if (!off) continue;
         var big = off.large;
         var bw = big ? 0.020 : 0.013;      // along the wall
@@ -2726,6 +2735,67 @@
    * inside would rotate around it. When a model finally does separate its
    * ring, the hub (and this) stays on the still frame automatically,
    * because that is what the caller already passes for the shell. */
+  /* The bounding box of a model's interior bucket, in its own normalised
+   * units, cached per role. Cheap to compute once and the answer never
+   * changes while the game is running. */
+  var INTERIOR_BOUNDS = {};
+  function meshBounds(mesh) {
+    if (!mesh || !mesh.v || !mesh.v.length) return null;
+    var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (var i = 0; i < mesh.v.length; i++) {
+      for (var a = 0; a < 3; a++) {
+        var x = mesh.v[i][a];
+        if (x < lo[a]) lo[a] = x;
+        if (x > hi[a]) hi[a] = x;
+      }
+    }
+    return { lo: lo, hi: hi };
+  }
+  function interiorBounds(role) {
+    if (INTERIOR_BOUNDS[role] !== undefined) return INTERIOR_BOUNDS[role];
+    var lib = libPort(role);
+    /* WHICHEVER MESH drawStationInterior WILL ACTUALLY DRAW — the model's
+     * own interior when it has one, the procedural hall when it does not.
+     * Three of the fifteen orbital models (the city ports) carry no
+     * interior bucket, and measuring only the modelled ones would have
+     * answered "you are not inside" at every one of them forever: the room
+     * would be drawn by the fallback and gated by a box that did not exist.
+     * The two have to come from the same place or they drift. */
+    var out = meshBounds(lib && lib.interior) || meshBounds(stationMeshes().hall);
+    INTERIOR_BOUNDS[role] = out;
+    return out;
+  }
+
+  /* IS THE EYE ACTUALLY IN THAT ROOM?
+   *
+   * Being berthed at a station is not the same as being in its hangar. The
+   * ring parks four of its five ships in alcoves out on the rim while the
+   * `interior` bucket is the hall at the hub — and painting a hall you are
+   * not standing in is the slab bug all over again, because paintMesh sorts
+   * within one mesh and the interior would land on top of the alcove wall a
+   * few metres from your face. So the room has to contain the eye.
+   *
+   * Generous by a tenth of the room, because a camera pressed against the
+   * inside of a doorway should not make the room it is looking into blink
+   * out. */
+  function insideInterior(cam, frame, radiusKm, role) {
+    var b = interiorBounds(role);
+    if (!b || !cam || !cam.eye || !frame || !(radiusKm > 0)) return false;
+    var rx = cam.eye.x - frame.pos.x,
+        ry = cam.eye.y - frame.pos.y,
+        rz = cam.eye.z - frame.pos.z;
+    var local = [
+      (rx * frame.right.x + ry * frame.right.y + rz * frame.right.z) / radiusKm,
+      (rx * frame.up.x + ry * frame.up.y + rz * frame.up.z) / radiusKm,
+      (rx * frame.fwd.x + ry * frame.fwd.y + rz * frame.fwd.z) / radiusKm
+    ];
+    for (var a = 0; a < 3; a++) {
+      var slack = (b.hi[a] - b.lo[a]) * 0.10;
+      if (local[a] < b.lo[a] - slack || local[a] > b.hi[a] + slack) return false;
+    }
+    return true;
+  }
+
   function drawStationInterior(ctx, cam, frame, radiusKm, sunDir, role, tint) {
     if (drawPortPart(ctx, cam, frame, radiusKm, sunDir, role, 'interior', tint)) return true;
     var mesh = stationMeshes().hall;
@@ -4829,6 +4899,8 @@
     drawPortPart: drawPortPart, portSpins: portSpins,
     stationMeshes: stationMeshes,
     drawStationInterior: drawStationInterior,
+    interiorBounds: interiorBounds,
+    insideInterior: insideInterior,
     box: box, tube: tube, rimRing: rimRing, mergeMesh: merge,
     makeStarfield: makeStarfield,
     drawStarfield: drawStarfield,
