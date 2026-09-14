@@ -477,6 +477,10 @@
     'uniform vec3 uSunDir;',
     'uniform vec3 uFwd;',
     'uniform float uNear, uInvLogRange;',
+    /* 0 outdoors, 1 indoors. Set per queued mesh, so a station's own hull
+     * shades one way seen from space and another from a berth inside it,
+     * on the same frame. */
+    'uniform float uIndoors;',
     /* Whole-mesh opacity, multiplied into the per-face alpha. 1.0 is the
      * default and the opaque path short-circuits on it, so a hull costs one
      * float compare and nothing else. */
@@ -551,7 +555,35 @@
     /* The same two constants paintMesh uses, so a hull looks like itself
      * whichever renderer drew it: 1.15 flat for self-lit faces, and
      * 0.26 + 0.70*NdotL for everything else. */
-    '  vec3 c = vEmis > 0.5 ? vCol * 1.15 : vCol * (0.26 + 0.70 * lam);',
+    /* INDOORS THERE IS NO SUN, and that is the whole of this branch.
+     *
+     * Astra, from a berth: "the interior is just as grey as the exterior
+     * and you cannot tell that you're flying into a thing instead of a
+     * solid shape", and later "we have to solve this problem of the walls
+     * clipping through themselves". Both are the same thing, and it is not
+     * clipping: inside a station you are looking at enormous flat-shaded
+     * triangles, every one of them turned to face you and lit by the SUN.
+     * The inside of a hangar was being shaded exactly like the outside of
+     * the station, so of course the two look identical.
+     *
+     * The obvious fixes are both dead, and the art says why. Culling what
+     * should not be visible — by rays or by winding — needs the geometry to
+     * have a consistent front, and measured from any viewpoint at all,
+     * inside or out, these meshes are 50/50 front to back. They are open
+     * plates bolted together with no promise of winding (36,698 of spine-s
+     * edges belong to one triangle, 9,113 to two), so anything winding-
+     * based deletes half a station at random.
+     *
+     * So: no cull, no rays, no normals to trust. Indoors the sun term is
+     * replaced by a lamp at the eye, on abs(N·V) so winding cannot matter,
+     * over a lower ambient. Surfaces fall off with angle — which is what
+     * gives a flat plate its shape — the room reads dark, and the 864
+     * self-lit faces the interior bucket already carries become the light
+     * in it. */
+    '  float lamp = abs(dot(n, toCam));',
+    '  vec3 lit = vCol * (0.26 + 0.70 * lam);',
+    '  vec3 dim = vCol * (0.10 + 0.55 * lamp);',
+    '  vec3 c = vEmis > 0.5 ? vCol * 1.15 : mix(lit, dim, uIndoors);',
 
     /* Shock heating, on the faces actually meeting the air.
      *
@@ -755,7 +787,8 @@
       meshUni = uniforms(gl, meshProg, ['uModelRel', 'uRot', 'uScale',
                                         'uRight', 'uUp', 'uFwd', 'uFlen',
                                         'uCenterPx', 'uViewportPx', 'uSunDir',
-                                        'uNear', 'uInvLogRange', 'uGlow', 'uWind',
+                                        'uNear', 'uInvLogRange', 'uIndoors',
+                                        'uGlow', 'uWind',
                                         'uAlpha']);
     } catch (e) {
       if (global.console) console.error(e.message);
@@ -964,6 +997,15 @@
 
   /* Queue one hull. `frame` is the renderer's own {pos, right, up, fwd} —
    * the same object paintMesh takes — and `scale` its length in km. */
+  /* WHETHER THE EYE IS INDOORS, for everything queued until it is cleared.
+   * A flag rather than an argument on queueMesh because the callers that
+   * matter — every drawPortPart, every door leaf, the interior — would all
+   * have to pass it through identically, and one that forgot would light a
+   * wall by the sun in a room with no sun in it. main.js sets it around the
+   * station it is inside and clears it after. */
+  var indoorsFlag = 0;
+  GL.setIndoors = function (on) { indoorsFlag = on ? 1 : 0; };
+
   GL.queueMesh = function (cam, frame, mesh, scale, sunDir, glow, wind, alpha) {
     if (!gl || !meshProg || !mesh || !mesh.f || !mesh.f.length) return false;
     /* The double-precision subtraction that keeps this usable. Everything
@@ -980,7 +1022,13 @@
                      /* Undefined means opaque, not zero. A caller that has
                       * never heard of alpha must not get an invisible hull. */
                      alpha: (typeof alpha === 'number' && alpha >= 0 && alpha < 1)
-                            ? alpha : 1 });
+                            ? alpha : 1,
+                     /* Set by GL.setIndoors for the frames the eye spends
+                      * inside something. Per-mesh rather than per-frame
+                      * because a station's hull and the ship parked in it
+                      * are both queued on the same frame and only one of
+                      * them is being looked at from within. */
+                     indoors: indoorsFlag });
     return true;
   };
 
@@ -1289,6 +1337,7 @@
       gl.uniform1f(meshUni.uGlow, m.glow);
       gl.uniform3f(meshUni.uWind, m.wind.x, m.wind.y, m.wind.z);
       gl.uniform1f(meshUni.uAlpha, m.alpha);
+      gl.uniform1f(meshUni.uIndoors, m.indoors);
       /* Column-major, and the columns are the frame's own axes — so a
        * local +x lands along `right`, +y along `up`, +z along `fwd`,
        * matching localToWorld() in render.js exactly. */

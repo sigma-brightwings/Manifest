@@ -2130,6 +2130,26 @@
       var r = p.radius || 1;
       /* Cheap reject on the station before asking it anything expensive. */
       if (V.dist(bodyPosition(p, sys, t), ship.pos) > r * 2) continue;
+      /* CLEARED, OR THE CLAMPS DO NOT CLOSE.
+       *
+       * Astra: "create a subsystem to ensure you aren't docked again unless
+       * you leave and then come back or re-request landing permission."
+       * There already is one. Clearance is granted on approach and SPENT
+       * the moment you arrive, so a ship that has just launched holds none
+       * — and the catch simply does not fire. Come back and the ten
+       * kilometre sweep grants you another, or hail and ask; both re-arm
+       * it, which is exactly the two ways out she described.
+       *
+       * It reads `ship.cleared` rather than calling Combat.isCleared
+       * because that wants the whole game object and this has a ship. It is
+       * the same flag, in the same place, keyed the same way.
+       *
+       * This does make an orbital berth a HARD gate where the soft one
+       * fines you — but only for the three cases that were already being
+       * refused out loud: wanted here, hostile, or full. A pilot who is
+       * none of those is cleared automatically before they are within four
+       * kilometres of the thing. */
+      if (!(ship.cleared && ship.cleared[p.id])) continue;
       /* THE BERTH YOU ARE ACTUALLY IN, not the one you were assigned.
        *
        * The first version caught only assignBerth's answer, which is the
@@ -2252,7 +2272,12 @@
          * along a doorframe should slide, not stop dead. */
         ship.vel = V.addScaled(ship.vel, esc.normal, into);
       } else {
-        ship.vel = V.clone(bv);
+        /* NOWHERE TO PUSH IT. Deliberately nothing: matching the station's
+         * velocity here pinned the hull in place and re-ran every frame,
+         * which is a ship that cannot be flown out of the wall it is stuck
+         * in. Being buried with no way out is already a bug state; freezing
+         * the ship in it is the worst available answer to one. */
+        return null;
       }
       return { port: p, speed: into };
     }

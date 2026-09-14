@@ -743,11 +743,16 @@ console.log('--- landing in a berth ---');
   var sys = Gen.generateSystem('landing-sweep');
   var landed = 0, hurt = 0, belly = 0, checkedL = 0;
   (sys.ports || []).filter(function (p) { return !p.surface; }).forEach(function (port) {
+    /* CLEARED, because a berth does not close its clamps on a ship that
+     * has not been given the bay. That is the subsystem that stops a
+     * launched ship being picked straight back up, and it means every
+     * landing test has to say out loud that it has permission. */
     function shipAt(pos, vel, gear) {
       var sh = { cls: 'courier', dryMass: 80, hullHp: 100, gear: !!gear,
                  pos: V.clone(pos), vel: V.clone(vel),
                  fwd: { x: 1, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 },
-                 right: { x: 0, y: -1, z: 0 } };
+                 right: { x: 0, y: -1, z: 0 }, cleared: {} };
+      sh.cleared[port.id] = true;
       return sh;
     }
     var bs = Sim.berthState(port, sys, 0, 0);
@@ -782,6 +787,51 @@ console.log('--- landing in a berth ---');
         hurt + ' of ' + checkedL);
   check('and the gear being up costs more than the same speed with it down',
         belly === checkedL, belly + ' of ' + checkedL);
+
+  /* ---- AND LAUNCHING GETS YOU OUT --------------------------------------
+   * The first version of the catch had no permission in it, so undocking —
+   * which sets the hull down two metres a second off the clamps and leaves
+   * it exactly where it was berthed — was followed immediately by being
+   * docked again. From the seat that is not a docking bug, it is DEAD
+   * THRUSTERS: you press the key, nothing moves, and nothing says why.
+   *
+   * Astra's rule: not docked again unless you leave and come back, or ask
+   * again. Clearance is spent on arrival, so a launched ship holds none and
+   * the catch does not fire; coming back inside ten kilometres re-grants
+   * it, and so does hailing. This pins both ends of that. */
+  var stuck = 0, rearmed = 0, checkedU = 0;
+  (sys.ports || []).filter(function (p) { return !p.surface; }).forEach(function (port) {
+    var bs0 = Sim.berthState(port, sys, 0, 0);
+    if (!bs0) return;
+    checkedU++;
+    var sh = { cls: 'courier', dryMass: 80, hullHp: 100, gear: true,
+               pos: V.clone(bs0.pos), vel: V.clone(bs0.vel),
+               fwd: { x: 1, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 },
+               right: { x: 0, y: -1, z: 0 }, cleared: {} };
+    sh.cleared[port.id] = true;
+    Sim.checkImpact(sh, sys, 0, true);
+    if (sh.docked !== port.id) return;              // covered above
+    /* Arriving SPENDS the clearance, the way Combat.arriveAtPort does. */
+    delete sh.cleared[port.id];
+    Sim.undockShip(sh, sys, 0, 0.002);
+    /* Several frames of it, because once-is-luck: the catch runs every
+     * frame and the hull has barely moved in any of them. */
+    for (var k = 0; k < 8; k++) Sim.checkImpact(sh, sys, 0, true);
+    if (sh.docked) {
+      stuck++;
+      console.log('  FAIL  ' + Render.portModelFor(port) + ' picks a launched ship straight back up');
+    }
+    /* AND ASKING AGAIN LETS YOU BACK IN, without having gone anywhere —
+     * which is the second of the two ways out, and the one a pilot who
+     * launched by mistake would reach for. */
+    sh.cleared[port.id] = true;
+    Sim.checkImpact(sh, sys, 0, true);
+    if (sh.docked === port.id) rearmed++;
+  });
+  check('launching gets you out and keeps you out', stuck === 0,
+        stuck + ' of ' + checkedU + ' re-docked');
+  check('and asking for clearance again lets you back in', rearmed === checkedU,
+        rearmed + ' of ' + checkedU);
 
   /* AND THE WALL. A hull put inside station geometry has to be pushed back
    * OUT of it — not merely reported, or the next frame finds it there

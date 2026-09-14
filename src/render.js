@@ -2160,6 +2160,14 @@
    * before shading, which makes winding irrelevant, and the triangles are
    * painted far to near. That costs a little overdraw on thirty triangles
    * and removes an entire category of bug from hand-built geometry. */
+  /* See gl.js setIndoors: whether the eye is inside something, for the
+   * meshes queued while it is set. */
+  var INDOORS = false;
+  function setIndoors(on) {
+    INDOORS = !!on;
+    if (global.GLWorld && global.GLWorld.setIndoors) global.GLWorld.setIndoors(!!on);
+  }
+
   function paintMesh(ctx, cam, frame, mesh, scale, sunDir, tint, edge) {
     var world = [], i;
     for (i = 0; i < mesh.v.length; i++) {
@@ -2182,7 +2190,13 @@
         depth: (pa.depth + pb.depth + pc.depth) / 3,
         color: mat.color || tint,
         alpha: mat.alpha,
-        shade: mat.lit ? 1.15 : 0.26 + 0.70 * Math.max(0, V.dot(normal, sunDir))
+        /* Indoors the sun term becomes a lamp at the eye — see the same
+         * branch in gl.js, which owns the reasoning. Kept in step here so a
+         * machine with no WebGL sees the same room rather than a differently
+         * lit one. */
+        shade: mat.lit ? 1.15
+             : INDOORS ? 0.10 + 0.55 * Math.abs(V.dot(normal, toCam))
+             : 0.26 + 0.70 * Math.max(0, V.dot(normal, sunDir))
       });
     }
     tris.sort(function (p, q) { return q.depth - p.depth; }); // far first
@@ -5328,6 +5342,7 @@
     drawStationInterior: drawStationInterior,
     interiorBounds: interiorBounds,
     insideInterior: insideInterior,
+    setIndoors: setIndoors,
     portSolidity: portSolidity,
     portDoors: portDoors,
     carveThroat: carveThroat,

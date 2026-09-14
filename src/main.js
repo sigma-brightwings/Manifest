@@ -3428,6 +3428,30 @@
     }
   }
 
+  /* IN THE CHART, A STATION YOU ARE INSIDE OF GOES AWAY.
+   *
+   * The map is a diagram of where things are, and a hull you happen to be
+   * parked in is not a thing the diagram is about: wheel the system view in
+   * while docked and the station's near panels fill the screen with the
+   * orbit rings drawn straight through them. It still gets its marker and
+   * its label, because where the station IS remains exactly the sort of
+   * thing a chart should say — it is the geometry that is in the way.
+   *
+   * ASKED OF THE ROOMS, NOT THE BOUNDING SPHERE, and the first attempt at
+   * this used the sphere and was wrong twice over. A station's radius is a
+   * ball around a wheel: the camera can sit well inside it while floating
+   * in clear space outside the hull, where the model looks fine and
+   * deleting it is just baffling — and the same ball is what the general
+   * "a world you are inside is not drawn" rule uses, which is why putting
+   * the condition there did nothing at all for stations. They return from
+   * the top of drawBody long before that line. Sim.insideStation asks the
+   * model whether this point is in a ROOM of it, which is the actual
+   * question. */
+  function chartHides(b, cam) {
+    if (!mapMode() || !cam || !cam.eye || !Sim.insideStation) return false;
+    return Sim.insideStation(cam.eye, G.sys, G.t) === b;
+  }
+
   /* WHICH WAY IS UP, FOR THE INSTRUMENT.
    *
    * In flight it is the planet below you, and it always was. Berthed in a
@@ -3455,6 +3479,46 @@
       }
     }
     return lv.up;
+  }
+
+  /* SITTING IN A BAY THAT WILL NOT TAKE YOU.
+   *
+   * A berth only closes its clamps on a cleared ship, which is what stops a
+   * launched one being picked straight back up. The cost of that rule is a
+   * silence: fly in, put the hull down perfectly, and nothing happens for
+   * no stated reason — the same shape as the shut door and the unreachable
+   * station, and those cost a real evening each.
+   *
+   * So the port says so. Combat.dockRefusal already knows WHY a door will
+   * not open — wanted here, hostile, full — and it is the same judgement
+   * the auto-clearance sweep makes when it decides to stay quiet. On a real
+   * -time cooldown, because a hull parked in a bay is in this state for as
+   * long as it likes and a per-frame line would bury the channel. */
+  var BERTH_NAG_MS = 8000;
+
+  function nagUncleared() {
+    if (!G.sys || !G.ship || G.ship.docked || G.ship.arrival) return;
+    if (!Sim.berthState || !Combat.isCleared) return;
+    if (performance.now() < (G.berthNagUntil || 0)) return;
+    var ports = G.sys.ports || [];
+    for (var i = 0; i < ports.length; i++) {
+      var p = ports[i];
+      if (!p || p.surface || !p.docking || Combat.isCleared(G, p)) continue;
+      if (V.dist(G.ship.pos, Sim.bodyPosition(p, G.sys, G.t)) > (p.radius || 1) * 2) continue;
+      var n = Math.max(1, Gen.bayGeometry(p).berths), near = false;
+      for (var b = 0; b < n && !near; b++) {
+        var bs = Sim.berthState(p, G.sys, G.t, b);
+        if (bs && V.dist(bs.pos, G.ship.pos) < 0.05) near = true;
+      }
+      if (!near) continue;
+      G.berthNagUntil = performance.now() + BERTH_NAG_MS;
+      var why = Combat.dockRefusal ? Combat.dockRefusal(G, p) : null;
+      say(p.name + ': ' + (why
+            ? '"The clamps stay open." — ' + why.text
+            : '"You are in a bay you have not been given. Request clearance — F4."'), 7);
+      HOOKS.sound('warn');
+      return;
+    }
   }
 
   /* Landing gear.
@@ -4120,6 +4184,7 @@
       }
 
       offerClearanceNearby();
+      nagUncleared();
 
       // Are we close enough and slow enough to latch onto the docking
       // target? Checked every physics tick, not just on approach — a
@@ -4462,39 +4527,37 @@
    * several walls to get there. Sim.berthRoom hands back the alcove itself.
    * A shed built from the constant table has no declared berths and keeps
    * the chamber, which is the right room for it. */
-  /* IS THE ROOM YOU ARE PARKED IN THE ROOM THE MODEL CALLS ITS INTERIOR?
+  /* THE INTERIOR IS DRAWN WHENEVER YOU ARE INSIDE THE STATION, and both
+   * gates that used to stand in front of it are gone. Recording why,
+   * because they were each written for a real reason and both reasons have
+   * since stopped being true.
    *
-   * insideInterior asks about the EYE, against an axis-aligned box, and a
-   * box round a room shaped like a spine is most of the station. Berthed in
-   * an alcove out on the rim, the camera can sit inside that box while the
-   * ship is nowhere near the hall — and then the hall paints over the
-   * alcove wall a few metres from your face, which is the slab bug wearing
-   * a smaller hat.
+   * `berthIsInInterior` asked whether the berth you are parked in lies
+   * inside the model's own `interior` bucket. Measured, that is 0 of 48
+   * berths across the whole library — the art puts berths in THROATS cut
+   * through the hull and its interior bucket is the concourse those
+   * throats lead to — so the gate was permanently shut and a 9,500-face
+   * hangar with 864 self-lit surfaces has never once been drawn. What
+   * Astra has been looking at from a berth is the BACK of the outer hull:
+   * open panels, drawn double-sided with their normals flipped toward the
+   * camera, which is exactly how you get a flat grey plate.
    *
-   * The berth answers it exactly. If the model declares where this ship is
-   * parked and that place is not inside the interior volume, the interior
-   * is a different room and is not drawn.
+   * `insideInterior` asked whether the eye was within the bucket's bounding
+   * box. Same objection, one level down: you are in the corridor that leads
+   * to the room, which is not in the box.
    *
-   * Measured across the library today, that is EVERY berth at EVERY orbital
-   * model: the art's interior buckets are concourses elsewhere in the hull
-   * and its berth anchors are alcoves on the outside, so no station in the
-   * game presently parks you in its own interior. This is therefore a gate
-   * that is currently always shut, and it is written anyway — the models
-   * are edited independently of this file, and the day one of them puts a
-   * berth in its hall the room lights up with nothing to change here. A
-   * station with no declared berths keeps the constant table's chamber,
-   * which IS the hall, so those are unaffected. */
-  function berthIsInInterior(port, role) {
-    if (!Render.interiorBounds || !Sim.berthRoom) return true;
-    var berth = (G.ship.dockOffset && G.ship.dockOffset.berth) || 0;
-    var room = Sim.berthRoom(port, berth);
-    if (!room) return true;                 // no modelled berth: the chamber IS the hall
-    var bb = Render.interiorBounds(role);
-    if (!bb) return false;
-    return room.x0 >= bb.lo[0] && room.x1 <= bb.hi[0] &&
-           room.y0 >= bb.lo[1] && room.y1 <= bb.hi[1] &&
-           room.z0 >= bb.lo[2] && room.z1 <= bb.hi[2];
-  }
+   * AND THE SLAB RISK THEY GUARDED IS GONE. Both were written when the
+   * station and the ship were composited by paintMesh, which sorts
+   * far-to-near WITHIN one mesh and has no depth buffer between two — so a
+   * room drawn while you were outside it landed on top of everything. Both
+   * meshes go through GLWorld.queueMesh now, which has a real depth buffer
+   * and resolves them for nothing. The predicate that survives is the
+   * honest one: are you inside this station. Sim.insideStation answers it
+   * off the model's own geometry.
+   *
+   * If the slabs ever come back it will be on a machine with no WebGL,
+   * where the 2D painter is doing the compositing again — and the fix then
+   * is to sort the two meshes against each other, not to hide the room. */
 
   function clampCameraToHangar(port) {
     if (!Gen || !Gen.bayGeometry || !Sim.portBasis) return;
@@ -4575,6 +4638,38 @@
       limit = Math.max(MIN_CAM_DIST, (narrow * 0.5 - HANGAR_MARGIN) * r);
     }
     if (limit < G.cam.dist) G.cam.dist = Math.max(MIN_CAM_DIST, limit);
+  }
+
+  /* YOU CANNOT STAND FURTHER FROM YOUR SHIP THAN THE CORRIDOR IS WIDE.
+   *
+   * A berth at a station is not a room, it is a THROAT — a passage cut
+   * through the hull, as wide as the door and no wider, with solid
+   * structure on every side. clampCameraToHangar measures the berth's
+   * BOX and can legitimately conclude that a hundred-metre boom fits;
+   * a hundred metres from the ship is then a hundred metres into the
+   * metal, and the screen fills edge to edge with the inside of a wall.
+   * Astra called it walls clipping through themselves. It is the camera
+   * buried in them.
+   *
+   * THE GRID CANNOT ARBITRATE THIS, which is worth writing down because it
+   * is the obvious thing to reach for and it is wrong. The occupancy grid
+   * has the throat CARVED through it — that carve is what lets a ship fly
+   * in through a shut door at all — so along the one axis that matters it
+   * reports open space where there is geometry. It is a map of where a
+   * ship may fly, not of where the metal is.
+   *
+   * So the bay's own mouth is the measure. It is the width of the hole the
+   * hull came through, it is in the same table every other bay dimension
+   * comes from, and standing further out than that is by definition
+   * standing in the wall around it. */
+  var THROAT_CAM_FRAC = 0.6;        // of the mouth's half-width
+
+  function clampCameraToThroat(port) {
+    if (!Gen || !Gen.bayGeometry || !G.cam) return;
+    var g = Gen.bayGeometry(port);
+    if (!g || !(g.mouthR > 0)) return;
+    var lim = g.mouthR * (port.radius || 1) * THROAT_CAM_FRAC;
+    if (lim > MIN_CAM_DIST && lim < G.cam.dist) G.cam.dist = lim;
   }
 
   /* Half the room a point has to the nearer face of a slab, never below
@@ -4734,7 +4829,22 @@
                                        (port.radius || 1)));
         return;
       }
+      /* AND THE BOOM MUST NOT END UP INSIDE THE WALL, which no box test can
+       * promise. clampCameraToHangar measures the ROOM the ship is parked
+       * in, and inside a station the ship is parked in a THROAT — a
+       * corridor cut through the hull, sixty metres across, with solid
+       * structure on every side of it. A hundred-metre boom clamped to a
+       * box that says it fits is still a hundred metres into the metal, and
+       * what you get is a screen filled edge to edge with the inside of a
+       * wall. Astra called it walls clipping through themselves; it is the
+       * camera buried in them.
+       *
+       * The grid already knows where the metal is, so ask it: walk the boom
+       * out from the hull and stop at the last point that is not wall. It
+       * costs a handful of array lookups, it needs no box to be correct,
+       * and it cannot be fooled by a room whose shape is not a box. */
       clampCameraToHangar(port);
+      clampCameraToThroat(port);
       return;
     }
     var host = G.lastMassiveBody ||
@@ -8427,7 +8537,7 @@
        * tells you at a glance whether you are approaching a farm, a
        * refinery or a shipyard. */
       var labelCol = b.underground ? '#a9d6ff' : b.surface ? '#ffd9a8' : '#9ff0dc';
-      if (rpx > 3.5) {
+      if (rpx > 3.5 && !chartHides(b, cam)) {
         var model = stationModelFor(b);
         /* A MODELLED STATION MAY TURN ONLY PART OF ITSELF. If the art
          * declared a `stationSpin` ring, the shell is drawn on a frame that
@@ -8446,6 +8556,12 @@
         var frame = stationFrame(b, true);
         if (frame) {
           var sun = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), item.pos));
+          /* NO SUN IN HERE. Set around THIS station's own meshes and cleared
+           * after, so the hull you are parked inside is lit as a room while
+           * everything else on the same frame — the next station along, your
+           * own hull, a ship passing outside — keeps its daylight. */
+          var indoors = (enclosedPort() === b);
+          if (indoors) Render.setIndoors(true);
           Render.drawStationModel(ctx, cam, frame, b.radius, sun, model, b.color,
                                   stationDoors(b));
           if (turns) {
@@ -8482,11 +8598,11 @@
            * interior bounds are asked whether the camera is actually in
            * them. Surface ports are excluded because their interior IS the
            * bay mesh, already drawn as the model. */
-          if (!b.surface && enclosedPort() === b && berthIsInInterior(b, model) &&
-              Render.insideInterior(cam, frame, b.radius, model)) {
+          if (indoors) {
             Render.drawStationInterior(ctx, cam, frame, b.radius, sun,
                                        model, b.color);
           }
+          if (indoors) Render.setIndoors(false);
           /* The town, the boards and the pad lighting. Held to a higher
            * threshold than the pad itself: the dressing is detail, and
            * detail smaller than a few pixels is cost without information. */
