@@ -2094,6 +2094,171 @@
     return null;
   }
 
+  /* ---- LANDING IN A BERTH ----------------------------------------------
+   *
+   * Astra: "make stations consider you docked if you are gear down, moving
+   * slowly and colliding with your berth's floor." Which turns docking from
+   * a capture radius into a piece of FLYING — the same thing a pad already
+   * is, and for the same reason.
+   *
+   * So this is padCapture's twin, deliberately, down to what it does NOT
+   * check. A pad no longer refuses a fast or gear-up approach: you always
+   * touch down, and how hard you hit and whether the gear was down is
+   * REPORTED so the caller can charge you for it. Refusing would mean
+   * bouncing off your own berth with no explanation, which is the failure
+   * that model was written to avoid. A clean seat is free; a smack costs
+   * hull; a belly landing costs three times as much.
+   *
+   * IN METRES, NOT IN RADII. Every other measurement around a port scales
+   * with the port, and this one must not: the thing being caught is a
+   * hull, and a hull is the same size at a two-hundred-metre station and a
+   * one-kilometre one. Forty metres is a hull and a half — close enough
+   * that you are unambiguously in the bay, loose enough to be flyable by
+   * hand without instruments made for it.
+   *
+   * YOUR berth, not any berth. assignBerth is deterministic per ship and
+   * port, so it is the same alcove traffic control cleared you into and the
+   * same one the arrival rail would have carried you to. */
+  var BERTH_CAPTURE_KM = 0.04;
+
+  function berthCapture(ship, sys, t) {
+    var Gen2 = global.Gen;
+    var ports = sys.ports || [];
+    for (var i = 0; i < ports.length; i++) {
+      var p = ports[i];
+      if (!p || p.surface || !p.docking) continue;
+      var r = p.radius || 1;
+      /* Cheap reject on the station before asking it anything expensive. */
+      if (V.dist(bodyPosition(p, sys, t), ship.pos) > r * 2) continue;
+      /* THE BERTH YOU ARE ACTUALLY IN, not the one you were assigned.
+       *
+       * The first version caught only assignBerth's answer, which is the
+       * alcove traffic control cleared you into — defensible, and wrong to
+       * fly. Put the hull down perfectly in the bay next door and nothing
+       * happened, silently, which is the same trap as a door that never
+       * opens. Worse, docking would then have moved you to the assigned
+       * berth anyway, so a clean landing ended in a teleport.
+       *
+       * So: the nearest berth that FITS this hull. Fit still matters —
+       * parking a freighter in a shuttle's alcove is not a landing, it is
+       * a collision, and the wall test above will have said so. */
+      var berth = -1, bs = null, bd = BERTH_CAPTURE_KM;
+      var count = Math.max(1, (Gen2 && Gen2.bayGeometry) ? Gen2.bayGeometry(p).berths : 1);
+      var boxes = berthBoxes(p);
+      var need = hullBox(ship);
+      for (var bi = 0; bi < count; bi++) {
+        if (boxes && boxes[bi] && !boxFits(need, boxes[bi])) continue;
+        var cand = berthState(p, sys, t, bi);
+        if (!cand) continue;
+        var cd = V.dist(cand.pos, ship.pos);
+        if (cd > bd) continue;
+        bd = cd; berth = bi; bs = cand;
+      }
+      if (!bs) continue;
+      /* Speed relative to the STATION, which is itself in orbit at some
+       * kilometres a second. Holding still against the stars a few metres
+       * off a berth is not holding still against the berth. */
+      return { port: p, berth: berth, speed: V.dist(ship.vel, bs.vel),
+               gearDown: !!ship.gear };
+    }
+    return null;
+  }
+
+  /* ---- AND THE REST OF THE STATION IS SOLID ------------------------------
+   *
+   * "No collision detection enabled on the interiors or exteriors of
+   * stations", and her call on it: solid hull, open door. Sim.stationSolidAt
+   * answers wall / doorway / room / open space off the voxel grid, so this
+   * is only the response.
+   *
+   * WHICH IS A STOP, NOT A CRASH. A station is a structure you are flying
+   * INSIDE; clipping a doorframe on the way into a bay should cost you paint
+   * and momentum, not the ship. So the hull takes landingDamage on the speed
+   * it arrived at — the same curve a pad charges, so a gentle graze is free
+   * and a fast one is not — and the ship is pushed back out of the wall with
+   * its inbound motion killed.
+   *
+   * PUSHED OUT ALONG THE WAY OUT, found by asking the grid. A voxel has no
+   * surface normal, but the directions that are NOT wall point away from
+   * one, and their sum is a good enough normal for a hull that should not
+   * have been there in the first place. Sampling a cell out rather than a
+   * neighbour cell matters: at a big station a cell is forty metres, and
+   * nudging by less than that leaves the hull still inside the wall and
+   * colliding again on the next frame, which reads as being stuck. */
+  var WALL_PUSH_CELLS = 1.35;
+
+  function stationEscape(port, pos, sys, t) {
+    var R = global.Render;
+    var sol = stationSolidity(port);
+    var basis = portBasis(port, sys, t);
+    if (!sol || !basis || !R) return null;
+    var r = port.radius || 1;
+    var rel = V.sub(pos, basis.entrance.pos);
+    var lx = V.dot(rel, basis.east) / r,
+        ly = V.dot(rel, basis.north) / r,
+        lz = V.dot(rel, basis.up) / r;
+    var cell = [1 / sol.inv[0], 1 / sol.inv[1], 1 / sol.inv[2]];
+    var dirs = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+    /* REACH FURTHER UNTIL SOMETHING IS NOT WALL. One cell out finds the
+     * face you clipped; deep inside a thick structure — which is where a
+     * hull ends up if it was put there rather than flown there — every
+     * neighbour is wall too, and giving up leaves the ship buried and
+     * colliding again on every frame forever. A cylinder's end cap is
+     * exactly that thick. */
+    for (var reach = WALL_PUSH_CELLS; reach <= 12; reach *= 2) {
+      var n = { x: 0, y: 0, z: 0 }, found = 0;
+      for (var i = 0; i < dirs.length; i++) {
+        var d = dirs[i];
+        var at = R.solidityAt(sol, lx + d[0] * cell[0] * reach,
+                                   ly + d[1] * cell[1] * reach,
+                                   lz + d[2] * cell[2] * reach);
+        if (at === R.SOLID_WALL) continue;
+        found++;
+        /* Model axes onto world: x is east, y is north, z is up. */
+        n = V.add(n, V.scale(basis.east, d[0]));
+        n = V.add(n, V.scale(basis.north, d[1]));
+        n = V.add(n, V.scale(basis.up, d[2]));
+      }
+      if (found && V.len(n) > 1e-9) {
+        return { normal: V.norm(n),
+                 step: Math.max(cell[0], cell[1], cell[2]) * reach * r * 1.1 };
+      }
+    }
+    return null;                       // nowhere in this model is not wall
+  }
+
+  /* Did the hull just put itself through a station wall? Returns the port
+   * it hit, having moved the ship out of it, or null. */
+  function checkStationImpact(ship, sys, t) {
+    var R = global.Render;
+    if (!R || !R.SOLID_WALL) return null;
+    var ports = sys.ports || [];
+    for (var i = 0; i < ports.length; i++) {
+      var p = ports[i];
+      if (!p || p.surface || !p.docking) continue;
+      var r = p.radius || 1;
+      if (V.dist(bodyPosition(p, sys, t), ship.pos) > r * 2) continue;
+      if (stationSolidAt(p, ship.pos, sys, t) !== R.SOLID_WALL) continue;
+
+      var esc = stationEscape(p, ship.pos, sys, t);
+      var bv = bodyVelocity(p, sys, t);
+      var rel = V.sub(ship.vel, bv);
+      var into = esc ? -V.dot(rel, esc.normal) : V.len(rel);
+      if (into < 0) into = 0;
+
+      if (esc) {
+        ship.pos = V.addScaled(ship.pos, esc.normal, esc.step);
+        /* Kill the motion INTO the wall and keep the rest: a hull sliding
+         * along a doorframe should slide, not stop dead. */
+        ship.vel = V.addScaled(ship.vel, esc.normal, into);
+      } else {
+        ship.vel = V.clone(bv);
+      }
+      return { port: p, speed: into };
+    }
+    return null;
+  }
+
   /* Is the ship inside a starport's shaft or hangar on this body?
    *
    * The volume is the union of two boxes in the port's own ground frame:
@@ -2139,10 +2304,67 @@
    * landing pad would end the prediction with a phantom dock rather than
    * telling the player what they wanted to know. */
   function checkImpact(ship, sys, t, allowDock) {
+    /* THE STATION'S OWN HULL — and ONLY on the authoritative pass.
+     *
+     * The honest version of this would run for predicted ghosts too, since
+     * a trajectory drawn straight through a station is a lie. It is gated
+     * anyway, and the reason is the machine this game is for: the predictor
+     * is where the frame time goes, it runs this hundreds of times per
+     * frame at times that defeat the body-position cache, and the cheap
+     * reject here is a distance to every station in the system — which is a
+     * Kepler solve apiece. Paying that on every ghost step to make a line
+     * on a chart slightly more truthful is the wrong trade on a Latitude.
+     *
+     * So: a real hull collides; a drawn prediction does not. If the chart
+     * ever needs to know, the place to fix it is a cheaper broad phase, not
+     * this line. */
+    var wall = allowDock ? checkStationImpact(ship, sys, t) : null;
+    if (wall) {
+      var wdmg = landingDamage(wall.speed, !!ship.gear);
+      if (wdmg > 0) {
+        ship.hullHp -= wdmg;
+        ship.lastLandingHit = { dmg: wdmg, speed: wall.speed,
+                                gearDown: !!ship.gear, t: t, wall: true };
+        if (ship.hullHp <= 0) {
+          ship.hullHp = 0;
+          ship.crashed = true;
+          ship.crashedOn = wall.port;
+          return wall.port;
+        }
+      }
+    }
+
     /* Pads first, and independently of the ground. Coming to rest over a
      * starport is a landing; it should not have to become a collision with
      * the planet before anyone notices. */
     if (allowDock) {
+      /* AND A BERTH IS A PAD IN ORBIT. Same shape, same consequences: you
+       * touch down when you are in the bay, and how hard you hit and
+       * whether the gear was down is what it costs. This is the manual way
+       * in — it needs no clamp assigned, no autopilot and no capture
+       * envelope, which is the whole point of it. The arrival rail still
+       * exists for anyone who assigns a dock target and lets it fly. */
+      var bcap = berthCapture(ship, sys, t);
+      if (bcap) {
+        var bdmg = landingDamage(bcap.speed, bcap.gearDown);
+        if (bdmg > 0) {
+          ship.hullHp -= bdmg;
+          ship.lastLandingHit = { dmg: bdmg, speed: bcap.speed,
+                                  gearDown: bcap.gearDown, t: t };
+          if (ship.hullHp <= 0) {
+            ship.hullHp = 0;
+            ship.crashed = true;
+            ship.crashedOn = bcap.port;
+            return bcap.port;
+          }
+        }
+        dockShip(ship, bcap.port, sys, t, bcap.berth);
+        ship.landed = false;
+        ship.crashed = false;
+        ship.landedOn = null;
+        return bcap.port;
+      }
+
       var cap = padCapture(ship, sys, t);
       if (cap) {
         var pad = cap.pad;
@@ -2244,7 +2466,7 @@
   /* Latch the ship to the target. Captures the current offset in the
    * station's orbital frame so the relative position is preserved as the
    * station moves. */
-  function dockShip(ship, target, sys, t) {
+  function dockShip(ship, target, sys, t, wantBerth) {
     var ts = bodyState(target, sys, t);
     /* Docking instantly ENDS any arrival, and this is the one place that
      * can be guaranteed to run for all of them: the rail's own last act is
@@ -2310,7 +2532,13 @@
      * off its side is the right answer there; it is only wrong when there
      * is a deck to stand on. */
     ship.docked = target.id;
-    var oBerth = assignBerth(ship, target);
+    /* THE BERTH, IF THE CALLER KNOWS ONE. A ship that has just landed in a
+     * bay is already in a bay, and re-deriving the answer from assignBerth
+     * would pick it up and put it in a different one — a clean landing
+     * ending in a teleport. Everything that does not know keeps the old
+     * behaviour by passing nothing. */
+    var oBerth = (typeof wantBerth === 'number' && wantBerth >= 0)
+      ? wantBerth : assignBerth(ship, target);
     var obs = berthState(target, sys, t, oBerth);
     var basis = orbitalBasis(ts.pos, ts.vel);
     var rel = V.sub(ship.pos, ts.pos);
@@ -3853,6 +4081,8 @@
     portBasis: portBasis,
     insideShaft: insideShaft,
     berthState: berthState,
+    berthCapture: berthCapture,
+    checkStationImpact: checkStationImpact,
     stationSolidity: stationSolidity,
     stationSolidAt: stationSolidAt,
     insideStation: insideStation,

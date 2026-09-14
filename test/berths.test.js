@@ -729,6 +729,103 @@ console.log('--- outdoors until you are through the door ---');
         early + ' were indoors at the handover');
 })();
 
+/* ---- you can land in a berth, and you cannot fly through the wall -------
+ * Astra: "we need collision so that I can land the ship inside the station.
+ * Make that work, and make stations consider you docked if you are gear
+ * down, moving slowly and colliding with your berth's floor."
+ *
+ * Which is a pad, in orbit. So this pins it the way a pad behaves: touching
+ * down is position, the COST is speed and gear, and nothing is ever
+ * silently refused — bouncing off your own berth with no explanation is the
+ * failure padCapture was written to avoid. */
+console.log('--- landing in a berth ---');
+(function () {
+  var sys = Gen.generateSystem('landing-sweep');
+  var landed = 0, hurt = 0, belly = 0, checkedL = 0;
+  (sys.ports || []).filter(function (p) { return !p.surface; }).forEach(function (port) {
+    function shipAt(pos, vel, gear) {
+      var sh = { cls: 'courier', dryMass: 80, hullHp: 100, gear: !!gear,
+                 pos: V.clone(pos), vel: V.clone(vel),
+                 fwd: { x: 1, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 },
+                 right: { x: 0, y: -1, z: 0 } };
+      return sh;
+    }
+    var bs = Sim.berthState(port, sys, 0, 0);
+    if (!bs) return;
+    checkedL++;
+
+    /* A CLEAN SEAT: in the berth, matched to it, gear down. Docked, free. */
+    var a = shipAt(bs.pos, bs.vel, true);
+    Sim.checkImpact(a, sys, 0, true);
+    if (a.docked === port.id && a.hullHp === 100) landed++;
+    else console.log('  FAIL  ' + Render.portModelFor(port) +
+                     ' refused a clean landing (docked=' + a.docked +
+                     ' hull=' + a.hullHp + ')');
+
+    /* THE SAME ARRIVAL, FAST. Still docked — you are not bounced — but it
+     * costs hull, which is the whole of the FE2 model this copies. */
+    var b = shipAt(bs.pos, V.addScaled(bs.vel, { x: 1, y: 0, z: 0 }, 0.06), true);
+    Sim.checkImpact(b, sys, 0, true);
+    if (b.docked === port.id && b.hullHp < 100) hurt++;
+
+    /* AND GEAR UP, which is landing on the hull and costs three times. */
+    var c = shipAt(bs.pos, V.addScaled(bs.vel, { x: 1, y: 0, z: 0 }, 0.04), false);
+    var d = shipAt(bs.pos, V.addScaled(bs.vel, { x: 1, y: 0, z: 0 }, 0.04), true);
+    Sim.checkImpact(c, sys, 0, true);
+    Sim.checkImpact(d, sys, 0, true);
+    if (c.hullHp < d.hullHp) belly++;
+  });
+  check('there are berths to land in', checkedL > 0, checkedL + ' stations');
+  check('a clean seat in your own berth docks you, free', landed === checkedL,
+        landed + ' of ' + checkedL);
+  check('arriving fast still docks you, and costs hull', hurt === checkedL,
+        hurt + ' of ' + checkedL);
+  check('and the gear being up costs more than the same speed with it down',
+        belly === checkedL, belly + ' of ' + checkedL);
+
+  /* AND THE WALL. A hull put inside station geometry has to be pushed back
+   * OUT of it — not merely reported, or the next frame finds it there
+   * again and the ship reads as stuck inside a wall. */
+  var stopped = 0, stillIn = 0, checkedW = 0;
+  (sys.ports || []).filter(function (p) { return !p.surface; }).forEach(function (port) {
+    var sol = Sim.stationSolidity(port);
+    var basis = Sim.portBasis(port, sys, 0);
+    if (!sol || !basis) return;
+    /* Find a cell the grid calls wall, and put a ship in the middle of it. */
+    var N = sol.n, wallPt = null;
+    for (var gz = 0; gz < N && !wallPt; gz += 3) {
+      for (var gy = 0; gy < N && !wallPt; gy += 3) {
+        for (var gx = 0; gx < N && !wallPt; gx += 3) {
+          if (sol.grid[(gz * N + gy) * N + gx] !== Render.SOLID_WALL) continue;
+          wallPt = [sol.lo[0] + (gx + 0.5) / sol.inv[0],
+                    sol.lo[1] + (gy + 0.5) / sol.inv[1],
+                    sol.lo[2] + (gz + 0.5) / sol.inv[2]];
+        }
+      }
+    }
+    if (!wallPt) return;
+    checkedW++;
+    var r = port.radius || 1;
+    var pos = V.addScaled(basis.entrance.pos, basis.east, wallPt[0] * r);
+    pos = V.addScaled(pos, basis.north, wallPt[1] * r);
+    pos = V.addScaled(pos, basis.up, wallPt[2] * r);
+    var sh = { cls: 'courier', dryMass: 80, hullHp: 100, gear: false,
+               pos: pos, vel: V.clone(Sim.bodyState(port, sys, 0).vel),
+               fwd: { x: 1, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 },
+               right: { x: 0, y: -1, z: 0 } };
+    var hit = Sim.checkStationImpact(sh, sys, 0);
+    if (hit && hit.port === port) stopped++;
+    if (Sim.stationSolidAt(port, sh.pos, sys, 0) === Render.SOLID_WALL) {
+      stillIn++;
+      console.log('  FAIL  ' + Render.portModelFor(port) + ' leaves a hull inside its wall');
+    }
+  });
+  check('a hull inside station geometry is a collision', stopped === checkedW,
+        stopped + ' of ' + checkedW);
+  check('and it is put back outside rather than left there', stillIn === 0,
+        stillIn + ' still buried');
+})();
+
 Render.assignPort('orbital', null);   // leave the library as we found it
 
 console.log('');

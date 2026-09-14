@@ -1327,6 +1327,23 @@ console.log('--- wreckage ---');
    * index against a literal. */
   var sysD = G.sys;
   sysD.canisters = [];
+  /* FLYING, NOT PARKED. A berth is a pad in orbit now: sit inside one and
+   * the station takes you, gear down and stationary being the cleanest
+   * possible arrival. This block had inherited a ship sitting in its own
+   * berth at Waypoint Dock from an earlier section, so the four frames
+   * below docked it and the scoop stopped — a fixture reading as a scoop
+   * bug. Put it out in open space, which is where you scavenge anyway. */
+  (function () {
+    var far = (sysD.ports || []).filter(function (p) { return !p.surface; })[0];
+    if (!far) return;
+    var fs = Sim.bodyState(far, G.sys, G.t);
+    G.ship.docked = null;
+    G.ship.arrival = null;
+    G.dockTarget = null;
+    G.ship.pos = V.addScaled(fs.pos, { x: 1, y: 0, z: 0 }, 40);   // km clear
+    G.ship.vel = V.clone(fs.vel);
+    Sim.refreshShip(G.ship);
+  })();
   var made = Sim.spawnDebris(sysD, 'render-probe', V.clone(G.ship.pos),
                              V.clone(G.ship.vel), 0.08, G.t,
                              [{ cid: 'alloys', tonnes: 9 }]);
