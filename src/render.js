@@ -2784,13 +2784,27 @@
       owner[i] = best;
     }
 
+    /* CARRY THE COLOURS ACROSS, and this cost a station its paint.
+     *
+     * `decompress` expands the library's palette-index pair into `c` — one
+     * colour STRING per face — and drops `ci`/`pal` on the floor. The first
+     * version of this split partitioned `ci` and `pal`, which on a
+     * decompressed mesh are both undefined, so every face of every station
+     * came out with no material at all and paintMesh fell back to the
+     * caller's tint: a near-white station colour over the whole hull.
+     *
+     * Which is exactly what Astra saw — "the textures I put with the models
+     * aren't applied? what about all the greebles and the caution stripes?"
+     * The stripes were never lost. This model paints 4,440 of its faces
+     * caution yellow and they were all being painted station-white. */
     var ex = extrasByName(role);
     var leaves = [], hullF = [], hullC = [];
-    for (j = 0; j < boxes.length; j++) leaves.push({ f: [], ci: [] });
+    for (j = 0; j < boxes.length; j++) leaves.push({ f: [], c: [] });
     for (i = 0; i < shell.f.length; i++) {
       var o = owner[i];
-      if (o < 0) { hullF.push(shell.f[i]); hullC.push(shell.ci ? shell.ci[i] : 0); }
-      else { leaves[o].f.push(shell.f[i]); leaves[o].ci.push(shell.ci ? shell.ci[i] : 0); }
+      var col = shell.c ? shell.c[i] : null;
+      if (o < 0) { hullF.push(shell.f[i]); hullC.push(col); }
+      else { leaves[o].f.push(shell.f[i]); leaves[o].c.push(col); }
     }
 
     var out = [];
@@ -2839,14 +2853,14 @@
 
       out.push({
         node: box.node,
-        mesh: { v: shell.v, f: leaves[j].f, ci: leaves[j].ci, pal: shell.pal },
+        mesh: { v: shell.v, f: leaves[j].f, c: leaves[j].c },
         axis: axis, travel: travel, field: field, berthMid: berth ? berth.mid : null
       });
     }
 
     if (!out.length) return null;
     PORT_DOORS[role] = {
-      hull: { v: shell.v, f: hullF, ci: hullC, pal: shell.pal },
+      hull: { v: shell.v, f: hullF, c: hullC },
       leaves: out
     };
     return PORT_DOORS[role];

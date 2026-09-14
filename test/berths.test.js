@@ -610,6 +610,26 @@ console.log('--- and the doors are doors ---');
     var d = Render.portDoors(modelId);
     checkedM++;
     if (!d) { noDoors.push(modelId); return; }
+    /* THE PAINT SURVIVED, and this one shipped broken for an hour. The
+     * library stores palette indices; `decompress` expands them into one
+     * colour string per face and drops the indices. The split partitioned
+     * the indices — undefined on a decompressed mesh — so every face came
+     * out with no material and paintMesh fell back to the caller's tint.
+     * A whole station in flat white, with 4,440 faces of caution yellow
+     * painted over. Nothing else here would have noticed. */
+    var uncoloured = (d.hull.c || []).filter(function (x) { return !x; }).length;
+    if (d.hull.c.length !== d.hull.f.length || uncoloured) {
+      bad++;
+      console.log('  FAIL  ' + modelId + ' hull lost its paint: ' + uncoloured +
+                  ' of ' + d.hull.f.length + ' faces have no colour');
+    }
+    d.leaves.forEach(function (lf) {
+      if (lf.mesh.c && lf.mesh.c.length === lf.mesh.f.length &&
+          !lf.mesh.c.filter(function (x) { return !x; }).length) return;
+      bad++;
+      console.log('  FAIL  ' + modelId + ' leaf ' + lf.node + ' lost its paint');
+    });
+
     /* THE HULL SURVIVED. A split that swallowed the station into its own
      * doors would leave nothing to draw and nothing to hit, and every
      * other check here would still pass. */

@@ -8562,8 +8562,15 @@
      * deleted itself the moment the camera crossed a sphere that is not
      * its hull. Being inside a station is the case it most needs drawing
      * for. */
-    if (cam.eye && !b.surface && b.kind !== 'station' &&
-        V.dist(cam.eye, item.pos) < b.radius) return;
+    /* IN THE CHART, EVERYTHING you are inside goes away again. The map is
+     * a diagram of where things are, and a hull you happen to be parked in
+     * is not a thing the diagram is about — wheel the system view all the
+     * way in while docked and the station's near panels fill the screen
+     * with the orbits drawn straight through them. Astra's first shot of a
+     * new career is exactly that. In FLIGHT the station is the room you are
+     * standing in and is the whole point; in the chart it is in the way. */
+    if (cam.eye && V.dist(cam.eye, item.pos) < b.radius &&
+        (mapMode() || (!b.surface && b.kind !== 'station'))) return;
 
     if (rpx < 2.4) {
       // Sub-pixel body: draw a marker ring so it is still findable, and a
