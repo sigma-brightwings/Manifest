@@ -395,6 +395,104 @@ console.log('--- is a berth ever inside its station\'s own interior? ---');
                             : ''));
 })();
 
+/* ---- the way in, at every modelled station ----------------------------
+ * The arrival rail for a station is a straight line along the berth's own
+ * normal: hold off the outer doors, through the throat, onto the stand.
+ * NONE of those distances are written down anywhere — they are measured off
+ * the model by Gen.berthApertures every time — which is the right way round
+ * and also the way a silent failure gets in. An aperture matched to the
+ * wrong berth sends a ship in through the far side of the station, and it
+ * would look like a bug in the camera rather than in a lookup.
+ *
+ * physics.test.js pins the HALL route, which is the fallback for a station
+ * with no modelled berths. This is the other one, and it needs both
+ * libraries loaded, which is this suite. */
+console.log('--- the way in, at every modelled station ---');
+(function () {
+  var sys = Gen.generateSystem('arrival-sweep');
+  var station = (sys.ports || []).filter(function (p) { return !p.surface; })[0];
+  check('there is a station to fly into', !!station);
+  if (!station) return;
+  var t0 = 0;
+
+  var bad = 0, checkedB = 0, straight = 0;
+  var throatMin = Infinity, throatMax = 0, holdMin = Infinity;
+  MODELS.forEach(function (modelId) {
+    Render.assignPort('orbital', modelId);
+    var n = (Gen.modelledBerths(station) || []).length;
+    for (var i = 0; i < n; i++) {
+      var ap = Gen.berthApertures(station, i);
+      checkedB++;
+      if (!ap || !ap.normal || typeof ap.gate !== 'number') {
+        bad++;
+        console.log('  FAIL  ' + modelId + ' berth ' + i + ' has no way in');
+        continue;
+      }
+      /* The outer doors are OUTBOARD and the inner gate is INBOARD. Get
+       * these the wrong way round and a ship flies out through the back of
+       * the station into open space, which is the failure this pair of
+       * signs exists to prevent. */
+      if (!(ap.gate > 0) || (ap.inner !== null && !(ap.inner < 0))) {
+        bad++;
+        console.log('  FAIL  ' + modelId + ' berth ' + i + ' gate ' + ap.gate +
+                    ' inner ' + ap.inner);
+        continue;
+      }
+      var ship = { cls: 'courier', dryMass: 80, pos: { x: 0, y: 0, z: 0 },
+                   vel: { x: 0, y: 0, z: 0 } };
+      if (!Sim.beginArrival(ship, station, sys, t0)) {
+        bad++;
+        console.log('  FAIL  ' + modelId + ' refuses to run an arrival');
+        continue;
+      }
+      var b = ship.arrival.berth;
+      var total = Sim.arrivalTotal(station);
+      var p0 = Sim.arrivalPose(station, sys, t0, b, 0);
+      var pEnd = Sim.arrivalPose(station, sys, t0, b, total - 0.001);
+      if (!p0 || !pEnd) { bad++; continue; }
+      var r = station.radius || 1;
+      holdMin = Math.min(holdMin, V.dist(p0.pos, pEnd.pos) / r);
+      var th = Math.abs(ap.gate);
+      throatMin = Math.min(throatMin, th);
+      throatMax = Math.max(throatMax, th);
+
+      /* A STRAIGHT LINE, and it has to be: the hull is being drawn along a
+       * throat cut through a hull, so any sideways wander is a wall. Every
+       * sample has to lie on the segment from where the rail starts to
+       * where it ends. */
+      var axis = V.sub(pEnd.pos, p0.pos);
+      var len = V.len(axis);
+      var off = 0;
+      if (len > 1e-9) {
+        var u = V.scale(axis, 1 / len);
+        for (var k = 0; k <= 40; k++) {
+          var q = Sim.arrivalPose(station, sys, t0, b, total * k / 40);
+          if (!q) continue;
+          var rel = V.sub(q.pos, p0.pos);
+          var along = V.dot(rel, u);
+          off = Math.max(off, V.len(V.sub(rel, V.scale(u, along))));
+        }
+      }
+      if (off > r * 0.001) {
+        straight++;
+        console.log('  FAIL  ' + modelId + ' berth ' + i + ' wanders ' +
+                    (off / r).toFixed(4) + ' radii off its own axis');
+      }
+    }
+  });
+
+  check('every modelled berth declares a way in, doors outboard and gate inboard',
+        bad === 0, bad + ' bad of ' + checkedB);
+  check('and the rail down a throat is a straight line', straight === 0,
+        straight + ' wandering');
+  console.log('  outer doors sit ' + throatMin.toFixed(3) + '-' +
+              throatMax.toFixed(3) + ' station radii outboard of the throat ' +
+              'floor, measured off the art');
+  console.log('  shortest run from handover to the stand: ' +
+              holdMin.toFixed(2) + ' station radii (' +
+              (holdMin * (station.radius || 1) * 1000).toFixed(0) + ' m here)');
+})();
+
 Render.assignPort('orbital', null);   // leave the library as we found it
 
 console.log('');

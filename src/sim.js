@@ -2433,9 +2433,71 @@
    * rather than hardcoding an index. */
   var ARRIVAL_ENCLOSED_FROM = 2;
 
-  function arrivalTotal() {
+  /* ---- and the same show in orbit ---------------------------------------
+   *
+   * A station has no shaft and no lift, so the legs above do not describe
+   * it — but the SHAPE is the same and so is every piece of machinery
+   * underneath: waypoints in the port's own mouth-relative frame, eased
+   * per leg, gates posed as numbers, one flag saying when the sky stops.
+   * Only the table and the waypoints differ.
+   *
+   * THE ROUTE IS THE ART'S. Every orbital model declares, per berth, a
+   * throat floor with a `normal`, a set of outer doors outboard of it and
+   * an inner gate inboard (see Gen.berthApertures). So the arrival is a
+   * straight line along that normal: hold off the doors, they run back,
+   * you are drawn in through the throat, they close behind you, and the
+   * inner gate opens onto the concourse. Nothing here decides where a
+   * station's door is — it is measured off the model every time.
+   *
+   * A station whose model declares no berths (the city ports) has no
+   * throat to be drawn down, and gets the hall instead: in through the
+   * hatch on the hub axis and across to a stand. Same table, different
+   * waypoints, which is the whole point of keeping the two apart. */
+  var ORBITAL_LEGS = [
+    /* Lined up on the berth, station-keeping, doors shut in front of you. */
+    { id: 'lineup', dur: 3.0, apron: 1, inner: 1, lift: 1, bay: 1 },
+    /* The outer doors run back. The hull holds at the threshold — it does
+     * not move into a hole that is not open yet, which is the same
+     * mechanical interlock the surface apron has. */
+    { id: 'open', dur: 2.5, apron: 0, inner: 1, lift: 1, bay: 0 },
+    /* Drawn in through the throat. Past the door plane the station is
+     * over you and the sky is gone. */
+    { id: 'enter', dur: 5.0, apron: 0, inner: 1, lift: 1, bay: 0 },
+    /* Onto the stand, and the outer doors close behind. */
+    { id: 'settle', dur: 3.0, apron: 1, inner: 1, lift: 1, bay: 0 },
+    /* The inner gate opens. Nothing moves; this leg exists so the last
+     * thing the arrival does is show you what you have arrived INSIDE of,
+     * down the corridor, rather than ending on a shut door. */
+    { id: 'admit', dur: 2.5, apron: 1, inner: 0, lift: 1, bay: 0 }
+  ];
+
+  /* `enter` is the leg that crosses the door plane. */
+  var ORBITAL_ENCLOSED_FROM = 2;
+
+  /* How far outside the doors the rail picks you up, in station radii.
+   * About 95 m at the smallest station and 500 m at the largest — far
+   * enough that the handover is an approach rather than a jump cut, close
+   * enough to be well inside the docking envelope, which is four radii. */
+  var ORBITAL_HOLD_LEAD = 0.45;
+
+  /* WHICH TABLE. Decided here and nowhere else, for the same reason
+   * bayGeometry decides which geometry table applies: a caller that
+   * answered this question itself would be the second opinion that puts
+   * the doors on one schedule and the hull on another. */
+  function legsFor(port) {
+    return (port && !port.surface) ? ORBITAL_LEGS : ARRIVAL_LEGS;
+  }
+
+  function enclosedFrom(port) {
+    return (port && !port.surface) ? ORBITAL_ENCLOSED_FROM : ARRIVAL_ENCLOSED_FROM;
+  }
+
+  /* Defaults to the surface table when asked without a port, because that
+   * is what it has always answered and three callers rely on it. */
+  function arrivalTotal(port) {
+    var L = legsFor(port);
     var s = 0;
-    for (var i = 0; i < ARRIVAL_LEGS.length; i++) s += ARRIVAL_LEGS[i].dur;
+    for (var i = 0; i < L.length; i++) s += L[i].dur;
     return s;
   }
 
@@ -2455,6 +2517,7 @@
   function arrivalPath(port, berth) {
     var Gen = global.Gen;
     if (!Gen || !Gen.bayGeometry || !Gen.berthOffset) return null;
+    if (port && !port.surface) return orbitalPath(port, berth);
     var g = Gen.bayGeometry(port);
     var off = Gen.berthOffset(port, berth || 0);
     var stand = g.floorZ + g.lift + g.standoff;
@@ -2474,20 +2537,64 @@
     ];
   }
 
+  /* The station's, in the same frame and the same five slots.
+   *
+   * THE MODELLED ROUTE is a straight line along the berth's own normal:
+   * hold, the door plane, the door plane again while the leaves run back,
+   * the throat floor, the throat floor again while the inner gate opens.
+   * The waypoints repeat because two of the five legs are things happening
+   * TO the hull rather than moves by it — the same reason the surface
+   * table's last leg goes nowhere.
+   *
+   * THE HALL is the fallback, for a station whose model declares no berths
+   * at all. There is no throat to be drawn along, so the route is the one
+   * the hatch describes: hold off the hub face, then in and across to a
+   * stand in a single move. Gen.stationBay owns that geometry and this
+   * reads it rather than repeating any of it. */
+  function orbitalPath(port, berth) {
+    var Gen = global.Gen;
+    var g = Gen.bayGeometry(port);
+    var off = Gen.berthOffset(port, berth || 0);
+    var z = off.z + g.lift;
+    var ap = Gen.berthApertures ? Gen.berthApertures(port, berth || 0) : null;
+
+    if (ap && ap.normal && typeof ap.gate === 'number') {
+      var n = ap.normal;
+      var at = function (d) {
+        return { x: off.x + n[0] * d, y: off.y + n[1] * d, z: z + n[2] * d };
+      };
+      return [at(ap.gate + ORBITAL_HOLD_LEAD), at(ap.gate), at(ap.gate),
+              at(0), at(0)];
+    }
+
+    /* No modelled berth: in through the hatch. */
+    if (!(g.mouthZ > 0)) return null;
+    var mouth = { x: 0, y: 0, z: g.mouthZ };
+    var lead = { x: 0, y: 0, z: g.mouthZ + ORBITAL_HOLD_LEAD };
+    var stand = { x: off.x, y: off.y, z: z };
+    return [lead, mouth, mouth, stand, stand];
+  }
+
   /* Where the hull is, and which way it is pointing, `el` seconds in.
    * Pure: same port, same berth, same elapsed gives the same pose, which
    * is what lets the renderer ask for it without owning any state. */
   function arrivalPose(port, sys, t, berth, el) {
-    var basis = groundBasis(port, sys, t);
+    /* portBasis, not groundBasis, and that one word is the whole of what
+     * lets this run in orbit — the arithmetic below was always general,
+     * because the waypoints are in the port's own frame and a frame is a
+     * frame. Same move that widened berthState and the camera clamp. */
+    var basis = portBasis(port, sys, t);
     var path = arrivalPath(port, berth);
     if (!basis || !path) return null;
     var Gen = global.Gen;
+    var orbital = !!(port && !port.surface);
+    var LEGS = legsFor(port);
 
     var leg = 0, acc = 0;
-    while (leg < ARRIVAL_LEGS.length - 1 && el >= acc + ARRIVAL_LEGS[leg].dur) {
-      acc += ARRIVAL_LEGS[leg].dur; leg++;
+    while (leg < LEGS.length - 1 && el >= acc + LEGS[leg].dur) {
+      acc += LEGS[leg].dur; leg++;
     }
-    var L = ARRIVAL_LEGS[leg];
+    var L = LEGS[leg];
     var u = ease(L.dur > 0 ? (el - acc) / L.dur : 1);
 
     var a = path[leg], b = path[Math.min(leg + 1, path.length - 1)];
@@ -2508,12 +2615,25 @@
      * which is the pose `dockShip` will set when the rail ends. */
     var dx = b.x - a.x, dy = b.y - a.y;
     var fwd;
-    if (Math.abs(dx) + Math.abs(dy) > 1e-6) {
+    if (orbital) {
+      /* NOSE OUT THE WHOLE WAY, and it is not a compromise — it is what
+       * the art asks for. A berthed hull faces the way it leaves (see
+       * berthFacing, which reads the berth's own normal), and the way it
+       * leaves is the way it came in. So a ship is drawn into a station
+       * stern-first, the way a truck backs onto a loading dock, and never
+       * turns at all: no rotation to animate, no blend at the end, and the
+       * pose the rail hands to dockShip is the pose it started with.
+       *
+       * The surface branch below has to turn because a shed's traverser
+       * carries a hull across a room and then onto a stand at right angles
+       * to it. A station has no room to cross. */
+      fwd = berthFacing(basis, Gen.berthOffset(port, berth || 0));
+    } else if (Math.abs(dx) + Math.abs(dy) > 1e-6) {
       fwd = V.norm(V.addScaled(V.scale(basis.east, dx), basis.north, dy));
     } else {
       fwd = V.clone(basis.north);          // straight down the shaft: keep facing
     }
-    if (leg === ARRIVAL_LEGS.length - 1) {
+    if (!orbital && leg === LEGS.length - 1) {
       /* Blend to the pose dockShip will set when the rail ends, and read it
        * the same way dockShip does — through berthFacing — so the hull is
        * not turned to one heading by the animation and snapped to another
@@ -2530,15 +2650,15 @@
       pos: pos, vel: V.clone(basis.entrance.vel),
       fwd: fwd, up: V.norm(V.cross(right, fwd)), right: right,
       leg: leg, legId: L.id, u: u,
-      enclosed: leg >= ARRIVAL_ENCLOSED_FROM,
+      enclosed: leg >= enclosedFrom(port),
       /* The mechanism poses, 0 open and 1 sealed, matching the model's own
        * setApronDoors/setInnerGate/setLift/setBayGates. Interpolated within
        * the leg so a door is caught half open rather than popping. */
       gates: {
-        apron: mixGate(L.apron, ARRIVAL_LEGS[Math.max(0, leg - 1)].apron, u),
-        inner: mixGate(L.inner, ARRIVAL_LEGS[Math.max(0, leg - 1)].inner, u),
+        apron: mixGate(L.apron, LEGS[Math.max(0, leg - 1)].apron, u),
+        inner: mixGate(L.inner, LEGS[Math.max(0, leg - 1)].inner, u),
         lift: L.id === 'descend' ? u : L.lift,
-        bay: mixGate(L.bay, ARRIVAL_LEGS[Math.max(0, leg - 1)].bay, u)
+        bay: mixGate(L.bay, LEGS[Math.max(0, leg - 1)].bay, u)
       }
     };
   }
@@ -2555,15 +2675,22 @@
     return !!(ship && ship.arrival);
   }
 
-  /* Opt in. Returns false when this port cannot be arrived at slowly — an
-   * orbital clamp has no shaft and no traverser — and the caller then does
-   * what it has always done and docks instantly. */
+  /* Opt in. Returns false when this port cannot be arrived at slowly, and
+   * the caller then does what it has always done and docks instantly.
+   *
+   * It used to refuse every orbital station outright — "no shaft, no
+   * traverser" — which was true of the SHAFT legs and not of the idea. A
+   * station is refused now only when it genuinely has no route in: no
+   * modelled berth to be drawn down and no hatch either, or a berth whose
+   * normal lies along the frame's own up, which leaves no way to build an
+   * attitude from it. Both come back as a null path or a null pose, so the
+   * refusal is something measured rather than a class of port. */
   function beginArrival(ship, port, sys, t) {
-    if (!ship || !port || !port.surface) return false;
+    if (!ship || !port) return false;
     if (!arrivalPath(port, 0)) return false;
     var berth = assignBerth(ship, port);
     if (!arrivalPose(port, sys, t, berth, 0)) return false;
-    ship.arrival = { port: port.id, berth: berth, at: t, dur: arrivalTotal() };
+    ship.arrival = { port: port.id, berth: berth, at: t, dur: arrivalTotal(port) };
     ship.thrust = V.zero();
     ship.throttle = 0;
     ship.angRate = { pitch: 0, yaw: 0, roll: 0 };
@@ -3533,6 +3660,9 @@
     arrivalPath: arrivalPath, arrivalTotal: arrivalTotal,
     ARRIVAL_LEGS: ARRIVAL_LEGS,
     ARRIVAL_ENCLOSED_FROM: ARRIVAL_ENCLOSED_FROM,
+    ORBITAL_LEGS: ORBITAL_LEGS,
+    ORBITAL_ENCLOSED_FROM: ORBITAL_ENCLOSED_FROM,
+    legsFor: legsFor,
     undockShip: undockShip,
     GEAR_DRAG_FACTOR: GEAR_DRAG_FACTOR,
     airDensity: airDensity,

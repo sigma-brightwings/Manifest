@@ -1401,13 +1401,97 @@ section('the arrival rail');
         V.dot(run.fwd, sameT.fwd) > 0.999,
         'dot ' + V.dot(run.fwd, sameT.fwd).toFixed(5));
 
-  /* An orbital clamp has no shaft to be carried down. It must refuse, so
-   * the caller falls back to the snap that has always happened. */
+  /* ---- AND IN ORBIT -----------------------------------------------------
+   * This block used to pin the opposite claim — "an orbital station refuses
+   * to run an arrival, with no shaft to run" — which was true of the SHAFT
+   * legs and never of the idea. A station runs its own five, and the only
+   * thing that made the old refusal necessary was arrivalPose asking for a
+   * ground frame.
+   *
+   * This suite does not load ports.js, so the station here wears no model
+   * and takes the HALL route: in through the hatch on the hub axis. That is
+   * deliberately the case pinned here, because it is the fallback nobody
+   * looks at. The modelled route — down a throat the art declares — is
+   * measured in berths.test.js, which is the suite that loads both
+   * libraries. */
   var station = (sys.ports || []).filter(function (p) { return !p.surface; })[0];
   if (station) {
     var os = freshShip();
-    check('an orbital station refuses to run an arrival, with no shaft to run',
-          Sim.beginArrival(os, station, sys, t0) === false);
+    check('an orbital station runs an arrival now',
+          Sim.beginArrival(os, station, sys, t0) === true);
+    check('and is not docked while it is being carried',
+          !os.docked && Sim.arrivalActive(os));
+
+    var sTotal = Sim.arrivalTotal(station);
+    check('a station arrival is timed off the station table, not the shaft one',
+          sTotal !== Sim.arrivalTotal(), sTotal + ' s vs ' + Sim.arrivalTotal() + ' s');
+
+    var sBerth = os.arrival.berth;
+    var sPrev = null, sWorst = 0, sLegs = {};
+    for (var si = 0; si <= 400; si++) {
+      var sEl = sTotal * si / 400;
+      var sp = Sim.arrivalPose(station, sys, t0, sBerth, sEl);
+      if (!sp) { check('station pose resolves at el=' + sEl.toFixed(2), false); break; }
+      sLegs[sp.legId] = true;
+      if (sPrev) sWorst = Math.max(sWorst, V.dist(sp.pos, sPrev));
+      sPrev = sp.pos;
+    }
+    var sr = station.radius || 1;
+    check('the station rail has no gap in it', sWorst < sr * 0.05,
+          'worst step ' + (sWorst / sr).toFixed(5) + ' station radii');
+    check('and every leg of it is reached',
+          Object.keys(sLegs).length === Sim.ORBITAL_LEGS.length,
+          Object.keys(sLegs).join(' '));
+
+    /* THE HANDOVER. The rail has to end exactly where dockShip would have
+     * put the ship, or the last frame of the arrival is a jump cut into the
+     * berth — which is the one moment the whole sequence is for. */
+    var sEnd = Sim.arrivalPose(station, sys, t0, sBerth, sTotal - 0.001);
+    var sSnap = freshShip();
+    Sim.dockShip(sSnap, station, sys, t0);
+    check('a station arrival ends at the pose dockShip sets',
+          V.dist(sEnd.pos, sSnap.pos) < sr * 0.02,
+          (V.dist(sEnd.pos, sSnap.pos) / sr).toFixed(5) + ' station radii apart');
+    check('facing the same way, too', V.dot(sEnd.fwd, sSnap.fwd) > 0.999,
+          'dot ' + V.dot(sEnd.fwd, sSnap.fwd).toFixed(5));
+
+    /* AND IT NEVER TURNS. A berthed hull faces the way it leaves, and the
+     * way it leaves is the way it came in, so a station draws a ship in
+     * stern-first and the nose never moves. If this ever fails, something
+     * has started animating a rotation that dockShip will then snap back. */
+    var sSpin = 0;
+    for (var sj = 0; sj <= 60; sj++) {
+      var sq = Sim.arrivalPose(station, sys, t0, sBerth, sTotal * sj / 60);
+      if (sq) sSpin = Math.max(sSpin, 1 - V.dot(sq.fwd, sEnd.fwd));
+    }
+    check('and the hull never turns on the way in', sSpin < 1e-6,
+          'worst 1-dot ' + sSpin.toExponential(2));
+
+    /* THE SKY GOES AWAY WHEN SOMETHING CLOSES OVER YOU, not when a flag
+     * flips on arrival. Outside the doors it is there; past the door plane
+     * it is not. */
+    var sOut = Sim.arrivalPose(station, sys, t0, sBerth, 1.0);
+    var sIn = Sim.arrivalPose(station, sys, t0, sBerth, sTotal - 0.01);
+    check('lined up outside, the station is not yet an enclosure',
+          sOut.enclosed === false, sOut.legId);
+    check('on the stand, it is', sIn.enclosed === true, sIn.legId);
+
+    /* THE DOORS, in the order a pilot would watch them: shut in front of
+     * you, open to let you in, shut behind you, and then the inner gate
+     * opens on the concourse — which is the last thing the arrival does,
+     * so it does not end on a blank wall. */
+    check('the outer doors are shut while you hold off',
+          sOut.gates.apron > 0.99, sOut.gates.apron.toFixed(3));
+    var sThrough = Sim.arrivalPose(station, sys, t0, sBerth, 3.0 + 2.5 + 2.5);
+    check('open by the time you are through them',
+          sThrough.gates.apron < 0.01 && sThrough.legId === 'enter',
+          sThrough.legId + ' apron ' + sThrough.gates.apron.toFixed(3));
+    check('and shut again behind you', sIn.gates.apron > 0.99,
+          sIn.gates.apron.toFixed(3));
+    check('the inner gate stays shut until you are parked',
+          sThrough.gates.inner > 0.99, sThrough.gates.inner.toFixed(3));
+    check('and the arrival ends with it open', sIn.gates.inner < 0.01,
+          sIn.gates.inner.toFixed(3));
   }
 
   /* A port that stops existing under a running arrival — a system change —

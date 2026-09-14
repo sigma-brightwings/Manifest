@@ -3372,6 +3372,62 @@
     return res;
   }
 
+  /* ---- the port calls you ------------------------------------------------
+   *
+   * Ten kilometres out, a port with room hails an approaching ship and
+   * clears it. Combat.autoClearance owns the judgement and the wording and
+   * says nothing at all when the answer would be no; this owns only WHEN to
+   * ask, which is a question about proximity.
+   *
+   * TEN KILOMETRES, and the number is chosen against the one it has to sit
+   * outside of. The docking envelope is max(1.2 km, four station radii) —
+   * between 0.8 and 4.5 km at the sizes the generator makes — so at ten you
+   * are still on approach with the whole final leg ahead of you. Clearance
+   * that arrived inside the envelope would be a formality announced at the
+   * moment it stopped mattering.
+   *
+   * NOT EVERY FRAME. The sweep asks each port where it is, and where a body
+   * is costs a Kepler solve — the single most expensive call in this file.
+   * Twice a second is finer than the situation can change: at ten km, even
+   * a fast approach spends seconds inside the range, and clearance is a
+   * radio call rather than a hit test. */
+  var AUTO_CLEARANCE_RANGE = 10;          // km
+  var AUTO_CLEARANCE_EVERY = 0.5;         // seconds of sim time between sweeps
+
+  function offerClearanceNearby() {
+    if (!G.sys || !G.ship || G.ship.docked || !Combat.autoClearance) return;
+    /* AND THE CLOCK CAN GO BACKWARDS. G.t is the career's clock, and
+     * starting a new game or loading a save resets it while this stamp
+     * rides along on G — so a stamp from thirty-two thousand seconds into
+     * the last career sits in the future forever and the sweep never runs
+     * again for the rest of the session. Silently: no error, just a port
+     * that stops calling. Same guard stepArrival keeps for the same
+     * reason. */
+    var since = G.t - (G.clearanceSweptAt === undefined ? -1e9 : G.clearanceSweptAt);
+    if (since >= 0 && since < AUTO_CLEARANCE_EVERY) return;
+    G.clearanceSweptAt = G.t;
+
+    var ports = G.sys.ports || [];
+    for (var i = 0; i < ports.length; i++) {
+      var p = ports[i];
+      if (!p || !p.docking) continue;
+      if (Combat.isCleared(G, p)) continue;
+      var st = Sim.dockingStatus(G.ship, p, G.sys, G.t);
+      if (st.range > AUTO_CLEARANCE_RANGE) continue;
+      /* ON APPROACH, which is what the range is standing in for. Without
+       * this a ship that has just launched — a kilometre out, uncleared
+       * again because arriving spent the last one — is hailed and cleared
+       * straight back in, over the top of whatever the port said about
+       * leaving. Closing is the difference between arriving and leaving,
+       * and it is already computed. */
+      if (!(st.closingSpeed > 0)) continue;
+      /* The same berth count the ships themselves are flying to — closed
+       * form off the traffic timetable, so a port that says it is full is
+       * not making it up. */
+      Combat.autoClearance(G, p, HOOKS, Sim.berthStatus(p, G.sys, G.t, G.ship));
+    }
+  }
+
   /* Landing gear.
    *
    * Refused while docked or landed for the obvious reason: the gear is
@@ -4034,6 +4090,8 @@
         }
       }
 
+      offerClearanceNearby();
+
       // Are we close enough and slow enough to latch onto the docking
       // target? Checked every physics tick, not just on approach — a
       // sloppy final few metres is exactly when this matters most.
@@ -4063,7 +4121,9 @@
              * for anything with no bay geometry, and in both cases this
              * falls back to the snap that has always happened. */
             if (Sim.beginArrival(G.ship, G.dockTarget, G.sys, G.t)) {
-              say(G.dockTarget.name + ': "Cleared to the pad. Hold for the lift."', 5);
+              say(G.dockTarget.name + ': ' + (G.dockTarget.surface
+                    ? '"Cleared to the pad. Hold for the lift."'
+                    : '"Cleared in. Hold station, we have you."'), 5);
             } else {
               Sim.dockShip(G.ship, G.dockTarget, G.sys, G.t);
               say('Docked with ' + G.dockTarget.name, 5);
@@ -4426,8 +4486,7 @@
     var dz = V.dot(dir, basis.up) / r;                  // per km of boom
     var de = V.dot(dir, basis.east) / r, dn = V.dot(dir, basis.north) / r;
 
-    var berth = (G.ship.dockOffset && G.ship.dockOffset.berth) || 0;
-    var room = Sim.berthRoom ? Sim.berthRoom(port, berth) : null;
+    var room = Sim.berthRoom ? Sim.berthRoom(port, currentBerth()) : null;
     var box = room
       ? room
       : { x0: -g.chamberX, x1: g.chamberX,
@@ -4462,6 +4521,30 @@
     limit = Math.min(limit, rayLimit(n0, dn, box.y0 + pad, box.y1 - pad));
     limit = Math.min(limit, rayLimit(z0, dz, box.z0 + pad, box.z1 - pad));
 
+    /* WHEN THE SLABS GIVE NOTHING, STAND BACK INSTEAD OF STANDING ON IT.
+     *
+     * The tests above answer "how far can the boom run THIS WAY before it
+     * leaves the room", and there are two ordinary situations where the
+     * honest answer is nothing at all: mid-arrival, when the hull is still
+     * out at the hatch or a hundred metres outboard in a throat and every
+     * limit comes out negative; and parked, with the eye pitched into a
+     * deck a hull's standoff below it, where the real clearance is ten
+     * metres. Both then collapse to MIN_CAM_DIST — the boom welded to the
+     * hull, grey plating filling the screen, nothing thrown — and the
+     * second of those is the whole of the shot this sequence exists for.
+     *
+     * So when the direction the camera is pointing has no room in it, the
+     * limit becomes half the narrowest way through the room instead. Not a
+     * slab test: a radius, centred on the hull, conservative from any
+     * direction, and the same answer the shaft's `descend` leg has always
+     * given for the same reason. It needs no threshold of its own —
+     * "smaller than the smallest boom there is" is the condition — and it
+     * resolves back into the slab tests the moment they have anything to
+     * say. */
+    if (limit < MIN_CAM_DIST) {
+      var narrow = Math.min(box.x1 - box.x0, box.y1 - box.y0, box.z1 - box.z0);
+      limit = Math.max(MIN_CAM_DIST, (narrow * 0.5 - HANGAR_MARGIN) * r);
+    }
     if (limit < G.cam.dist) G.cam.dist = Math.max(MIN_CAM_DIST, limit);
   }
 
@@ -4470,6 +4553,22 @@
    * one. */
   function halfGap(p, lo, hi) {
     return Math.max(0, Math.min(p - lo, hi - p)) * 0.5;
+  }
+
+  /* WHICH BERTH THE SHIP IS IN, or on its way into.
+   *
+   * `dockOffset` is written by dockShip, which does not run until the rail
+   * ENDS — so for the whole of an arrival it is either absent or still
+   * describing the last port. Reading it alone clamped the camera to berth
+   * 0 of a station the ship was being carried into berth 2 of: a box a
+   * hundred metres away, every slab test negative, and the boom welded to
+   * the hull for the last two legs. Which is, again, the one shot the whole
+   * sequence exists for. The arrival knows its own berth; ask it first. */
+  function currentBerth() {
+    if (G.ship && G.ship.arrival && typeof G.ship.arrival.berth === 'number') {
+      return G.ship.arrival.berth;
+    }
+    return (G.ship && G.ship.dockOffset && G.ship.dockOffset.berth) || 0;
   }
 
   /* How far a ray from p0 along d may run before it leaves [lo, hi]. */
@@ -4535,8 +4634,12 @@
      * which leg that is, so the renderer and the sim cannot disagree
      * about whether you are indoors. */
     if (G.arrivalPose && G.arrivalPose.enclosed && G.ship && G.ship.arrival) {
-      var p = G.sys.byId[G.ship.arrival.port];
-      if (p && p.surface) return p;
+      /* Either kind. In a shed it is the leaves sealing over the car; at a
+       * station it is the hull crossing the door plane on the `enter` leg,
+       * with the outer doors standing open behind it. Sim.arrivalPose knows
+       * which leg that is for the port it was asked about, so this does not
+       * have to. */
+      return G.sys.byId[G.ship.arrival.port] || null;
     }
     return null;
   }
@@ -4568,10 +4671,20 @@
        * buy a little more room and is worth doing if it ever looks tight. */
       var ap = G.arrivalPose;
       if (ap && ap.legId === 'descend') {
+        /* IN PAD RADII, THEN CONVERTED. `clear` and HANGAR_MARGIN are both
+         * measured in pad radii, the way every other number in the bay
+         * tables is, and G.cam.dist is in kilometres — so the difference
+         * has to be multiplied by the radius before it can be a boom
+         * length. Without that the limit came out around half a kilometre
+         * at a pad a hundred metres across, which is not a clamp at all:
+         * the eye sat outside the shaft for the whole descent, looking at
+         * the outside of a tube it was supposed to be inside. */
         var clear = (port.incline && port.incline.clear &&
                      port.incline.clear.perp / (port.radius || 1)) || 1.0;
         G.cam.dist = Math.max(MIN_CAM_DIST,
-                              Math.min(G.cam.dist, clear * 0.5 - HANGAR_MARGIN));
+                              Math.min(G.cam.dist,
+                                       (clear * 0.5 - HANGAR_MARGIN) *
+                                       (port.radius || 1)));
         return;
       }
       clampCameraToHangar(port);

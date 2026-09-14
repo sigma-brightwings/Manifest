@@ -3570,18 +3570,26 @@ console.log('--- auto-dock ---');
         'docked=' + G.ship.docked + ' after ' + guard + ' frames, from ' + fmtKm(startRange));
   check('and it flew there rather than teleporting', guard > 20, guard + ' frames');
 
-  /* THAT DOCK WAS UNANNOUNCED, and it cost what an unannounced arrival
-   * costs: the port logged the ship FUGITIVE, and a fugitive's ports do not
-   * open. Worth asserting rather than quietly undoing — it is the exact
-   * chain that made a real career unfinishable, and auto-dock now refuses
-   * to fly an approach into a door that will not open, so leaving it set
-   * would make the re-engage below fail for a reason that has nothing to
-   * do with what it is testing. */
-  check('arriving uncleared logs you fugitive with that port',
-        !!Combat.dockRefusal(G, port));
+  /* THAT DOCK USED TO BE UNANNOUNCED, and this block used to assert the
+   * price of it: the port logged the ship FUGITIVE, and a fugitive's ports
+   * do not open. That was the exact chain that made a real career
+   * unfinishable — an approach flown perfectly into a fine, a standing hit
+   * and every door in the system shut.
+   *
+   * The port hails you now. Ten kilometres out it looked at its berths and
+   * its warrant list, found nothing wrong, and cleared the ship without
+   * being asked, so the arrival settled that clearance instead of booking
+   * an offence. Which is the whole point of the change, and pinning it HERE
+   * is what says the two halves are actually wired to each other: the sweep
+   * in main.js and the price in combat.js, met by a ship that flew the
+   * approach on autopilot and touched nothing. */
+  check('flying an approach no longer makes you a fugitive',
+        !Combat.dockRefusal(G, port),
+        Combat.dockRefusal(G, port) ? Combat.dockRefusal(G, port).short : '');
+  check('and the clearance it was given was spent on arriving, not left lying around',
+        !Combat.isCleared(G, port));
   G.fugitive = null;
   G.wanted = {};
-  check('and with that settled the port opens again', !Combat.dockRefusal(G, port));
 
   // A hand on the controls always wins.
   if (G.ship.docked) Sim.undockShip(G.ship, G.sys, G.t, 0.003);
@@ -3914,6 +3922,152 @@ console.log('--- berthed inside a station ---');
     W.PortLib = had;
     Render.reloadPorts();
   })();
+
+  Sim.undockShip(G.ship, G.sys, G.t, 0.003);
+  G.ship.docked = null;
+  G.dockTarget = null;
+})();
+
+/* ---- the port calls you ------------------------------------------------
+ * Ten kilometres out, a port with room hails an approaching ship and clears
+ * it. Combat owns the judgement and combat.test.js pins it; what THIS pins
+ * is the sweep — that it happens at all, at the right range, off nothing
+ * but proximity and a closing velocity.
+ *
+ * Worth its own section because the bug it closes cost a real career. The
+ * clearance ritual was three keystrokes with the answer yes almost every
+ * time, and forgetting it once was a fine, a standing hit and a FUGITIVE
+ * flag, which shut every door in the system including the one an open
+ * mission needed. */
+console.log('--- the port calls you ---');
+(function () {
+  newFlying('kawartha');
+  frames(2);
+  var port = G.sys.ports.filter(function (p) { return !p.surface && p.docking; })[0];
+  check('there is a port to approach', !!port);
+  if (!port) return;
+
+  /* FAR OUT FIRST, so the range is doing work rather than the test finding
+   * a ship that happened to already be next to something. */
+  G.ship.cleared = {};
+  G.wanted = {};
+  G.fugitive = null;
+  var here = Sim.bodyPosition(port, G.sys, G.t);
+  var away = V.addScaled(here, { x: 1, y: 0, z: 0 }, 200);      // 200 km off
+  G.ship.pos = away;
+  G.ship.vel = V.clone(Sim.bodyState(port, G.sys, G.t).vel);
+  G.ship.docked = null;
+  G.dockTarget = null;
+  frames(60);
+  check('two hundred kilometres out, nobody calls', !Combat.isCleared(G, port));
+
+  /* NOW ON APPROACH. Placed inside the range and given a closing velocity,
+   * because the sweep asks for both — a ship drifting away from a port it
+   * just left is not arriving at it. */
+  here = Sim.bodyPosition(port, G.sys, G.t);
+  G.ship.pos = V.addScaled(here, { x: 1, y: 0, z: 0 }, 6);       // 6 km off
+  G.ship.vel = V.addScaled(Sim.bodyState(port, G.sys, G.t).vel,
+                           { x: -1, y: 0, z: 0 }, 0.05);         // closing
+  frames(60);
+  check('six kilometres out and closing, the port clears you unasked',
+        Combat.isCleared(G, port));
+
+  /* AND THE OTHER DIRECTION. A ship on its way out is not hailed, which is
+   * what keeps a launch from being talked over by an arrival clearance. */
+  G.ship.cleared = {};
+  G.ship.vel = V.addScaled(Sim.bodyState(port, G.sys, G.t).vel,
+                           { x: 1, y: 0, z: 0 }, 0.05);          // opening
+  frames(60);
+  check('but a ship on its way OUT is left alone', !Combat.isCleared(G, port));
+
+  /* AND A WANTED SHIP GETS NOTHING, silently — the refusal is Combat's and
+   * this only checks that the sweep respects it rather than clearing
+   * everyone in range. */
+  G.ship.cleared = {};
+  G.wanted = {}; G.wanted[port.faction || 'civil'] = 5000;
+  G.ship.vel = V.addScaled(Sim.bodyState(port, G.sys, G.t).vel,
+                           { x: -1, y: 0, z: 0 }, 0.05);
+  frames(60);
+  check('and a wanted ship is not cleared however close it gets',
+        !Combat.isCleared(G, port));
+  G.wanted = {};
+})();
+
+/* ---- carried into a station -------------------------------------------
+ * The orbital arrival is the one sequence in the game whose entire purpose
+ * is to be WATCHED, which makes the camera a correctness question rather
+ * than a nicety: a boom collapsed onto the hull is thirteen seconds of grey
+ * plating filling the screen, and nothing throws.
+ *
+ * It collapsed for a reason worth a test of its own. clampCameraToHangar
+ * read the berth from `dockOffset`, which dockShip writes — and dockShip
+ * does not run until the rail ENDS. So for the whole arrival it clamped to
+ * berth 0 of a station the ship was being carried into berth 2 of: a box a
+ * hundred metres away, every slab test negative, the boom at MIN_CAM_DIST
+ * from the moment the doors closed.
+ *
+ * ports.js is not loaded in this suite, so this is the hall route. The
+ * clamp is the same code either way; it is the berth INDEX that was wrong,
+ * and an unmodelled station has six of them to pick the wrong one from. */
+console.log('--- carried into a station ---');
+(function () {
+  newFlying('kawartha');
+  frames(2);
+  var port = G.sys.ports.filter(function (p) { return !p.surface; })[0];
+  check('there is a station to be carried into', !!port);
+  if (!port) return;
+
+  G.focus = null;
+  G.followShip = true;
+  G.viewMode = 'orbit';
+  G.cam.dist = 2;                          // km, a normal flying boom
+  /* PITCHED INTO THE DECK, deliberately, because that is the hard case.
+   * Looking down, the nearest surface is the floor a hull's standoff below
+   * the ship — ten metres — so the slab test in that direction has nothing
+   * to give and the boom used to collapse onto the hull and stay there.
+   * Pointing the camera somewhere comfortable would have made this section
+   * pass without exercising anything. */
+  G.cam.pitch = -0.9;
+  G.cam.yaw = 0.7;
+  var began = Sim.beginArrival(G.ship, port, G.sys, G.t);
+  check('the station accepts an arrival', began === true);
+  if (!began) return;
+
+  /* The berth it was actually assigned, which is the thing the clamp has to
+   * agree with. If this is 0 the test still runs but proves less, so say so
+   * rather than letting a silent zero make it look green. */
+  var berth = G.ship.arrival.berth;
+  console.log('  assigned berth ' + berth + ' of ' +
+              W.Gen.bayGeometry(port).berths +
+              (berth === 0 ? '  (berth 0 — this run cannot catch the index bug)' : ''));
+
+  var legs = {}, worstDist = Infinity, welded = 0, sawSky = 0, sawInside = 0;
+  /* `frame()` at its default 16 ms, because that is what this harness's
+   * clock is in — and the arrival is timed in sim seconds that come from
+   * that clock. Passing 0.05 here, meaning "fifty milliseconds", advances
+   * it by fifty MICROseconds and the rail never leaves its first leg. */
+  var guard = 0;
+  while (Sim.arrivalActive(G.ship) && guard++ < 4000) {
+    frame();
+    var ap = G.arrivalPose;
+    if (!ap) break;
+    legs[ap.legId] = true;
+    if (ap.enclosed) sawInside++; else sawSky++;
+    if (G.cam.dist < worstDist) worstDist = G.cam.dist;
+    if (G.cam.dist <= 0.006 * 1.0001) { welded++;
+      if (welded < 3) console.log('   WELD leg ' + ap.legId + ' view ' + G.viewMode +
+        ' follow ' + G.followShip + ' focus ' + (G.focus ? G.focus.id : 'null') +
+        ' encl ' + ap.enclosed + ' docked ' + G.ship.docked + ' pitch ' + G.cam.pitch.toFixed(2)); }
+  }
+  check('the arrival runs to completion and docks', !!G.ship.docked,
+        'after ' + guard + ' frames');
+  check('and it goes through every leg on the way',
+        Object.keys(legs).length === Sim.ORBITAL_LEGS.length,
+        Object.keys(legs).join(' '));
+  check('there is a stretch outside and a stretch inside',
+        sawSky > 0 && sawInside > 0, sawSky + ' out / ' + sawInside + ' in');
+  check('and the boom is never welded to the hull', welded === 0,
+        welded + ' frames at MIN_CAM_DIST, closest ' + worstDist.toFixed(4) + ' km');
 
   Sim.undockShip(G.ship, G.sys, G.t, 0.003);
   G.ship.docked = null;

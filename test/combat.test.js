@@ -1828,6 +1828,83 @@ section('--- docking clearance ---');
         (G8.wanted[fled.faction] || 0) > 0,
         G8.wanted[fled.faction] + ' cr outstanding');
 
+  /* ---- THE PORT CALLS YOU -----------------------------------------------
+   * Clearance was three keystrokes with the answer "yes" almost every time,
+   * and forgetting it once cost a fine, a standing hit and a FUGITIVE flag
+   * — which shut every door in the system, including the one an open
+   * mission needed. So a port with room now hails an approaching ship.
+   *
+   * The half that matters is the SILENCE. A refusal must not be announced,
+   * or a wanted pilot is nagged by every marker they drift past, and the
+   * port going quiet becomes the signal that something is wrong. So these
+   * check what was SAID as well as what was granted. */
+  (function () {
+    var heard;
+    var LOUD = { say: function (m) { heard.push(m); }, sound: function () {} };
+
+    var Ga = makeG();
+    var pa = portIn(Ga);
+    heard = [];
+    var auto = Combat.autoClearance(Ga, pa, LOUD, { full: false });
+    check('a port with room clears an approaching ship without being asked',
+          !!auto && auto.granted && Combat.isCleared(Ga, pa));
+    check('and it hails you rather than clearing you in silence',
+          heard.length === 1 && /cleared in/i.test(heard[0]), heard.join(' | '));
+    check('the grant is marked as the port\'s own, not an answer to a hail',
+          auto.auto === true);
+
+    /* Once cleared it stops talking. A port repeating itself twice a second
+     * for the whole approach would bury every other message. */
+    heard = [];
+    check('a ship already cleared is not hailed again',
+          Combat.autoClearance(Ga, pa, LOUD, { full: false }) === null);
+    check('and nothing is said', heard.length === 0, heard.join(' | '));
+
+    /* And it settles the arrival, which is the entire point: this is the
+     * trap it exists to close. Checked last because arriving SPENDS the
+     * clearance, and a spent clearance is an uncleared ship again. */
+    check('so arriving costs nothing', Combat.arriveAtPort(Ga, pa, LOUD) === null);
+    check('and the clearance is spent like any other',
+          !Combat.isCleared(Ga, pa));
+
+    var Gb = makeG();
+    var pb = portIn(Gb);
+    Gb.wanted = {}; Gb.wanted[pb.faction] = 5000;     // over WANTED_HUNT
+    heard = [];
+    check('a wanted pilot is not cleared on approach',
+          Combat.autoClearance(Gb, pb, LOUD, { full: false }) === null &&
+          !Combat.isCleared(Gb, pb));
+    check('and the port does not say why unless hailed', heard.length === 0,
+          heard.join(' | '));
+
+    var Gc2 = makeG();
+    var pc2 = portIn(Gc2);
+    heard = [];
+    check('a full port is not cleared on approach',
+          Combat.autoClearance(Gc2, pc2, LOUD,
+                               { full: true, capacity: 4, occupied: 4, waitFor: 120 }) === null &&
+          !Combat.isCleared(Gc2, pc2));
+    check('and says nothing about it either', heard.length === 0, heard.join(' | '));
+
+    /* HAILING STILL WORKS, and it is now the way you find out WHY. The
+     * refusal wording is the same one it always was, because it is the same
+     * function underneath. */
+    var asked = Combat.requestClearance(Gc2, pc2, LOUD,
+                                        { full: true, capacity: 4, occupied: 4, waitFor: 120 });
+    check('hailing a full port still explains itself',
+          !asked.granted && asked.reason === 'full' && /berths occupied/i.test(asked.text),
+          asked.text);
+
+    /* AND LAUNCH IS UNTOUCHED. Asking to leave is the half with a decision
+     * in it; nothing here automates it. */
+    var Gd = makeG();
+    var pd = portIn(Gd);
+    Combat.autoClearance(Gd, pd, LOUD, { full: false });
+    check('being cleared IN does not clear you to launch',
+          typeof Combat.requestLaunch === 'function' &&
+          !(Gd.ship.launchCleared && Gd.ship.launchCleared[pd.id]));
+  })();
+
   // Refusals: a bounty, and a faction that hates you.
   var G4 = makeG();
   var p4 = portIn(G4);

@@ -1145,6 +1145,89 @@
     return (b && b.length) ? b : null;
   }
 
+  /* THE ORDER, and it is the only one. glTF node order is whatever the
+   * authoring tool wrote, so berth `k` would mean a different alcove after
+   * a re-export; sorting by position pins it. Every consumer that indexes a
+   * model's berths goes through here — berthOffset, berthApertures, and
+   * Sim.berthBoxes/berthRoom via their own call to the same comparator —
+   * because two orderings is exactly the disagreement that measures a ship
+   * against one bay and parks it in another. */
+  function sortModelBerths(mb) {
+    return mb.slice().sort(function (a, b) {
+      return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
+    });
+  }
+
+  /* Any other anchor bucket the model declares, or null. */
+  function modelledAnchors(port, bucket) {
+    var R = global.Render;
+    if (!R || !R.libPort || !R.portModelFor || !port) return null;
+    var got = R.libPort(R.portModelFor(port));
+    var b = got && got.anchors && got.anchors[bucket];
+    return (b && b.length) ? b : null;
+  }
+
+  /* WHERE THIS BERTH'S DOORS ARE, measured rather than assumed.
+   *
+   * A modelled berth carries a `normal` — the one thing a bounding box
+   * cannot tell you — and the model's `gates` and `innerGates` buckets sit
+   * on that same axis: the outer doors a ship comes in through, and the
+   * inner gate that opens onto the concourse behind. Across the four
+   * patterns the outer doors stand 0.17–0.23 station radii outboard of the
+   * throat floor and the inner gate about the same inboard, but those are
+   * observations, not constants — a station is free to be built otherwise,
+   * and the arrival should follow the art rather than a number typed here.
+   *
+   * MATCHED GEOMETRICALLY, NOT BY NAME. The node names do carry a shared
+   * prefix (berthSM0ThroatFloor / berthSM0SlidingDoorL2 / berthSM0InnerGate)
+   * and it is tempting, but a ring mirrors its patterns: two different
+   * alcoves on opposite sides of the hub answer to `berthSM0`, and matching
+   * on the string alone would send a ship in through the far side's doors.
+   * So an aperture belongs to this berth when it lies closest to the LINE
+   * the berth opens along, and on the correct side of it.
+   *
+   * Returns { normal, gate, inner } with `gate` a positive distance
+   * outboard and `inner` a negative one inboard; either can be null when
+   * the model declares no such aperture. Null overall when there is no
+   * modelled berth, or it carries no normal to measure along. */
+  function berthApertures(port, i) {
+    var mb = modelledBerths(port);
+    if (!mb) return null;
+    var sorted = sortModelBerths(mb);
+    var k = ((i % sorted.length) + sorted.length) % sorted.length;
+    var b = sorted[k];
+    if (!b || !b.normal || !b.mid) return null;
+    var n = b.normal, m = b.mid;
+
+    /* Closest to the berth's own axis wins; among equals, the nearest one
+     * along it. Distance along the normal is signed, so `side` is what
+     * separates the way in from the way further in. */
+    function pick(list, side) {
+      if (!list) return null;
+      var best = null;
+      for (var j = 0; j < list.length; j++) {
+        var a = list[j];
+        if (!a || !a.mid) continue;
+        var dx = a.mid[0] - m[0], dy = a.mid[1] - m[1], dz = a.mid[2] - m[2];
+        var d = dx * n[0] + dy * n[1] + dz * n[2];
+        if (side > 0 ? !(d > 1e-4) : !(d < -1e-4)) continue;
+        var px = dx - d * n[0], py = dy - d * n[1], pz = dz - d * n[2];
+        var miss = Math.sqrt(px * px + py * py + pz * pz);
+        if (!best || miss < best.miss - 1e-6 ||
+            (Math.abs(miss - best.miss) <= 1e-6 && Math.abs(d) < Math.abs(best.d))) {
+          best = { miss: miss, d: d };
+        }
+      }
+      return best ? best.d : null;
+    }
+
+    return {
+      normal: n.slice(),
+      gate: pick(modelledAnchors(port, 'gates'), 1),
+      inner: pick(modelledAnchors(port, 'innerGates'), -1)
+    };
+  }
+
   /* Is this port a HALL IN ORBIT rather than a shaft in the ground? Asked in
    * one place, for the reason portModelFor is one place: sim.js, main.js and
    * render.js all ask bayGeometry where a bay is, and a station that
@@ -1354,9 +1437,7 @@
      * the middle of its own bay. */
     var mb = modelledBerths(port);
     if (mb && mb.length) {
-      var sorted = mb.slice().sort(function (a, b) {
-        return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
-      });
+      var sorted = sortModelBerths(mb);
       var kk = ((i % sorted.length) + sorted.length) % sorted.length;
       var bx = sorted[kk];
       /* An anchor is {min,max,mid} as the converter writes it — but `mid`
@@ -2866,6 +2947,7 @@
     berthOffset: berthOffset,
     tableBerthOffset: tableBerthOffset,
     modelledBerths: modelledBerths,
+    berthApertures: berthApertures,
     controlFor: controlFor, CONTROL_RANGE: CONTROL_RANGE,
     BERTH_COUNT: BERTH_COUNT,
     UNDERGROUND_DEPTH: UNDERGROUND_DEPTH,

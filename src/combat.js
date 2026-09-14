@@ -3105,44 +3105,106 @@
     return (s / 3600).toFixed(1) + ' hr';
   }
 
-  function requestClearance(G, port, hooks, berths) {
-    var k = portKey(port);
-    if (!k) return { granted: false, reason: 'nobody', text: 'No one to hail.' };
-
-    var name = port.name || 'Port control';
-    var fac = port.faction || 'civil';
-    var res;
+  /* WHY THIS PORT WOULD SAY NO, or null when it would say yes.
+   *
+   * Split out of requestClearance because two callers now need the same
+   * judgement and only one of them is allowed to speak: the port calls YOU
+   * on approach (autoClearance) and must stay silent when the answer is a
+   * refusal, or every wanted pilot in the game would be nagged by every
+   * marker they drifted past. Same shape as dockRefusal, one line above the
+   * yes/no, for the same reason — a port that answers one way in words and
+   * another in fact is the disagreement both of these exist to prevent. */
+  function clearanceRefusal(G, port, berths) {
+    var name = (port && port.name) || 'Port control';
+    var fac = (port && port.faction) || 'civil';
 
     if (wantedHere(G, fac)) {
       /* The same bounty that already closed the station doors. It now
        * closes the ground ones too, which is the point of the change —
        * and is exactly why wilderness landing had to stay open. */
-      res = { granted: false, reason: 'wanted',
-              text: name + ': "You are wanted here. Clearance DENIED."' };
-    } else if (((G.standing || {})[fac] || 0) <= HOSTILE_STANDING) {
-      res = { granted: false, reason: 'hostile',
-              text: name + ': "We know who you are. Clearance DENIED."' };
-    } else if (berths && berths.full) {
+      return { granted: false, reason: 'wanted',
+               text: name + ': "You are wanted here. Clearance DENIED."' };
+    }
+    if (((G.standing || {})[fac] || 0) <= HOSTILE_STANDING) {
+      return { granted: false, reason: 'hostile',
+               text: name + ': "We know who you are. Clearance DENIED."' };
+    }
+    if (berths && berths.full) {
       /* Not a refusal of YOU — a refusal of the moment, and it says so and
          says how long. A hold with no number attached is indistinguishable
          from being turned away. */
       var jumps = queueJumpsOf(G, fac);
-      res = { granted: false, reason: 'full', wait: berths.waitFor,
-              queue: berths.occupied, capacity: berths.capacity,
-              text: name + ': "All ' + berths.capacity + ' berths occupied. Hold at the marker — ' +
-                    fmtWait(berths.waitFor) + ' to the next departure."' };
+      var res = { granted: false, reason: 'full', wait: berths.waitFor,
+                  queue: berths.occupied, capacity: berths.capacity,
+                  text: name + ': "All ' + berths.capacity + ' berths occupied. Hold at the marker — ' +
+                        fmtWait(berths.waitFor) + ' to the next departure."' };
       if (jumps >= FREE_JUMPS) {
         res.text += ' [' + jumps + ' unauthorised arrivals on your record here]';
       }
-    } else {
-      G.ship.cleared = G.ship.cleared || {};
-      G.ship.cleared[k] = true;
+      return res;
+    }
+    return null;
+  }
+
+  function grantClearance(G, port) {
+    var k = portKey(port);
+    if (!k || !G.ship) return false;
+    G.ship.cleared = G.ship.cleared || {};
+    G.ship.cleared[k] = true;
+    return true;
+  }
+
+  function requestClearance(G, port, hooks, berths) {
+    var k = portKey(port);
+    if (!k) return { granted: false, reason: 'nobody', text: 'No one to hail.' };
+
+    var name = port.name || 'Port control';
+    var res = clearanceRefusal(G, port, berths);
+    if (!res) {
+      grantClearance(G, port);
       res = { granted: true, reason: null,
               text: name + ': "Clearance granted. Pad is yours."' };
     }
 
     if (hooks && hooks.say) hooks.say(res.text, 6);
     if (hooks && hooks.sound) hooks.sound(res.granted ? 'click' : 'warn');
+    return res;
+  }
+
+  /* THE PORT CALLS YOU.
+   *
+   * Clearance was always the same three keystrokes in the same order —
+   * open comms, pick the port, ask — and the answer was yes almost every
+   * time. What the ritual actually produced was not tension but a trap:
+   * forget it once and you arrive unannounced, which is a fine, a standing
+   * hit and a FUGITIVE flag, and a fugitive's doors do not open. A player
+   * could lose an evening's work to a step that a real controller would
+   * have initiated themselves.
+   *
+   * So a port with room hails an approaching ship and clears it. The
+   * mechanic is not removed — it is inverted. It still refuses, and the
+   * refusals are the interesting half: wanted here, hostile, or full. When
+   * the answer would be no, this says NOTHING and returns null, leaving the
+   * player to hail and hear why. Being ignored by a port is itself the
+   * signal that something is wrong, and it costs no message line.
+   *
+   * LAUNCH IS UNCHANGED, deliberately. Asking to leave is the half with a
+   * real decision in it — it is where a hold full of something is a
+   * problem, and where a port can keep you sitting on the clamps. Nothing
+   * about that is busywork, so nothing about it is automated.
+   *
+   * Returns the grant when it made one, null otherwise. */
+  function autoClearance(G, port, hooks, berths) {
+    if (!G || !G.ship || !port) return null;
+    if (isCleared(G, port)) return null;
+    if (clearanceRefusal(G, port, berths)) return null;
+    if (!grantClearance(G, port)) return null;
+    var name = port.name || 'Port control';
+    var res = { granted: true, reason: null, auto: true,
+                text: name + ': "We have you on approach. Cleared in — ' +
+                      (port.surface ? 'pad' : 'berth') + ' is yours."' };
+    if (hooks && hooks.say) hooks.say(res.text, 6);
+    if (hooks && hooks.sound) hooks.sound('click');
     return res;
   }
 
@@ -4643,6 +4705,8 @@
     dumping: dumping,
     isCleared: isCleared,
     requestClearance: requestClearance,
+    clearanceRefusal: clearanceRefusal,
+    autoClearance: autoClearance,
     queueJumpsOf: queueJumpsOf,
     FREE_JUMPS: FREE_JUMPS,
     arriveAtPort: arriveAtPort,
