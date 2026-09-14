@@ -1482,7 +1482,19 @@ section('the arrival rail');
      * so it does not end on a blank wall. */
     check('the outer doors are shut while you hold off',
           sOut.gates.apron > 0.99, sOut.gates.apron.toFixed(3));
-    var sThrough = Sim.arrivalPose(station, sys, t0, sBerth, 3.0 + 2.5 + 2.5);
+    /* MIDWAY THROUGH THE `enter` LEG, FOUND RATHER THAN TYPED. This used to
+     * read 3.0 + 2.5 + 2.5 — the leg table added up by hand. Leg durations
+     * are no longer constants: a station five times the size of another has
+     * five times the distance to cover, so sim.js now derives the two legs
+     * that TRAVEL from how far they travel. The sum went stale the moment
+     * it did, and the test failed on timing rather than on doors, which is
+     * the failure telling you the wrong thing. So ask where the leg is. */
+    var sThrough = null;
+    for (var sk = 0; sk <= 400; sk++) {
+      var sp = Sim.arrivalPose(station, sys, t0, sBerth, sTotal * sk / 400);
+      if (sp && sp.legId === 'enter') { sThrough = sp; break; }
+    }
+    check('the arrival has a leg that goes through the doors', !!sThrough);
     check('open by the time you are through them',
           sThrough.gates.apron < 0.01 && sThrough.legId === 'enter',
           sThrough.legId + ' apron ' + sThrough.gates.apron.toFixed(3));
@@ -1502,6 +1514,67 @@ section('the arrival rail');
   Sim.stepArrival(orphan, sys, t0 + 1);
   check('an arrival whose port vanished is abandoned, not ridden',
         !orphan.arrival && !orphan.docked);
+})();
+
+/* ---- the arrival is an arrival, not a launch --------------------------
+ *
+ * WHAT THIS GUARDS. The arrival's waypoints are in STATION RADII, so every
+ * distance the sequence covers scales with the station — but the clock it
+ * covers them on used to be a fixed table of leg durations. Raising
+ * STATION_SCALE from 0.35 to 3.5 therefore multiplied the speed by ten
+ * without a single test noticing: the run-in leg crossed five kilometres in
+ * three seconds, peaking at 761 m/s, and the suite stayed green because
+ * nothing measured how fast the hull was moving.
+ *
+ * sim.js now derives the two travelling legs from the distance they travel,
+ * and caps the hold point in kilometres. This is the check that says so —
+ * and it is written against SPEED rather than against the leg table, so it
+ * still means something the next time those durations change.
+ *
+ * THE CEILING IS MEASURED. Across 25 systems the worst peak is 305 m/s, at
+ * the largest station in the galaxy; the calmest is 121. 450 sits half
+ * again above anything the generator actually produces and well under the
+ * 761 that was wrong, so it catches a regression of that size without
+ * failing on ordinary variation. */
+(function () {
+  console.log('--- the arrival is an arrival ---');
+  var peak = 0, peakWho = '', slowest = Infinity, checked = 0;
+  var longest = 0, shortest = Infinity;
+  for (var i = 0; i < 12; i++) {
+    var sys = Gen.generateSystem('arrival-speed-' + i);
+    var ports = sys.ports.filter(function (p) { return !p.surface; });
+    for (var pi = 0; pi < ports.length; pi++) {
+      var p = ports[pi];
+      var total = Sim.arrivalTotal(p);
+      if (!(total > 0)) continue;
+      checked++;
+      if (total > longest) longest = total;
+      if (total < shortest) shortest = total;
+      var prev = null, mx = 0, N = 200, step = total / N;
+      for (var k = 0; k <= N; k++) {
+        var q = Sim.arrivalPose(p, sys, 0, 0, total * k / N);
+        if (!q) { prev = null; continue; }
+        if (prev) {
+          var v = V.dist(q.pos, prev) * 1000 / step;
+          if (v > mx) mx = v;
+        }
+        prev = q.pos;
+      }
+      if (mx > peak) { peak = mx; peakWho = p.name + ' r=' + (p.radius * 1000).toFixed(0) + ' m'; }
+      if (mx < slowest) slowest = mx;
+    }
+  }
+  check('there are stations to fly into', checked > 0, checked + ' ports');
+  check('no arrival exceeds 450 m/s at any station size', peak < 450,
+        'peak ' + peak.toFixed(0) + ' m/s at ' + peakWho);
+  /* AND IT DOES NOT BECOME A COMMUTE. The same derivation that stops the
+   * sequence being a launch would, uncapped, open the largest station with
+   * a two-minute cutscene. */
+  check('and none of them takes longer than a minute', longest < 60,
+        shortest.toFixed(1) + 's to ' + longest.toFixed(1) + 's');
+  console.log('  peak ' + peak.toFixed(0) + ' m/s, calmest station peaks at ' +
+              slowest.toFixed(0) + ' m/s; arrivals run ' +
+              shortest.toFixed(1) + '-' + longest.toFixed(1) + ' s');
 })();
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

@@ -3391,7 +3391,22 @@
    * Twice a second is finer than the situation can change: at ten km, even
    * a fast approach spends seconds inside the range, and clearance is a
    * radio call rather than a hit test. */
-  var AUTO_CLEARANCE_RANGE = 10;          // km
+  /* TEN KILOMETRES, OR FOUR STATION RADII, WHICHEVER IS FURTHER.
+   *
+   * Ten was an absolute, written when the largest station in the galaxy was
+   * a kilometre across. At STATION_SCALE 3.5 they run to 22 km across, so a
+   * flat ten-kilometre hail fires from INSIDE the hull of any station
+   * bigger than that — the port clearing a ship that is already in its own
+   * throat, which is not a radio call, it is an echo.
+   *
+   * Four radii is the same shape dockingStatus already uses for `inRange`,
+   * so the range a port hails at and the range it will capture at scale
+   * together instead of drifting apart the next time the stations change
+   * size. The ten stays as a floor so a small station still calls out from
+   * a sensible distance rather than from its own doorstep. */
+  function autoClearanceRange(port) {
+    return Math.max(10, (port.radius || 0) * 4);
+  }
   var AUTO_CLEARANCE_EVERY = 0.5;         // seconds of sim time between sweeps
 
   function offerClearanceNearby() {
@@ -3413,7 +3428,7 @@
       if (!p || !p.docking) continue;
       if (Combat.isCleared(G, p)) continue;
       var st = Sim.dockingStatus(G.ship, p, G.sys, G.t);
-      if (st.range > AUTO_CLEARANCE_RANGE) continue;
+      if (st.range > autoClearanceRange(p)) continue;
       /* ON APPROACH, which is what the range is standing in for. Without
        * this a ship that has just launched — a kilometre out, uncleared
        * again because arriving spent the last one — is hailed and cleared

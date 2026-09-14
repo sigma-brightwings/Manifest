@@ -399,7 +399,7 @@
       /* From well outside the doors, in past the berth to the inner gate.
        * The lead matters: a corridor that starts AT the door plane leaves a
        * ship on final approach outside the cut and therefore inside a wall. */
-      var lead = ap.gate + ORBITAL_HOLD_LEAD + 0.2;
+      var lead = ap.gate + holdLead(port) + 0.2;
       var deep = (typeof ap.inner === 'number') ? Math.abs(ap.inner) : 0.2;
       R.carveThroat(sol,
                     [off.x + ap.normal[0] * lead,
@@ -410,8 +410,8 @@
       cut++;
     }
     if (!cut && g.mouthZ > 0) {
-      R.carveThroat(sol, [0, 0, g.mouthZ + ORBITAL_HOLD_LEAD + 0.2], [0, 0, -1],
-                    ORBITAL_HOLD_LEAD + 0.2 + (g.mouthZ - g.floorZ), g.mouthR);
+      R.carveThroat(sol, [0, 0, g.mouthZ + holdLead(port) + 0.2], [0, 0, -1],
+                    holdLead(port) + 0.2 + (g.mouthZ - g.floorZ), g.mouthR);
     }
     sol.carved = true;
     return sol;
@@ -2880,6 +2880,33 @@
   /* `enter` is the leg that crosses the door plane. */
   var ORBITAL_ENCLOSED_FROM = 2;
 
+  /* WHERE THE ARRIVAL STARTS, and why it stopped being a plain constant.
+   *
+   * ORBITAL_HOLD_LEAD is in station radii, which was right when every
+   * station was about a kilometre across. At STATION_SCALE 3.5 the largest
+   * are 11 km in radius, so 0.45 radii put the hold point FIVE KILOMETRES
+   * off the doors — and the run-in leg, clamped to twelve seconds, crossed
+   * it at a peak of 761 m/s. A hull does not approach a berth at Mach two.
+   *
+   * The hold point is a station-keeping position a few hundred metres off
+   * the doors; that is a real distance, and it should read the same at
+   * every station rather than growing with the hull behind it. So the
+   * fraction is capped in kilometres. Small stations are unaffected — at
+   * 2.1 km radius the cap is looser than the fraction — and the largest
+   * hold at 1.5 km instead of 5.
+   *
+   * BOTH CALLERS GO THROUGH HERE, and that is the point. The other one
+   * carves the approach corridor through the occupancy grid, and a corridor
+   * carved shorter than the hold point leaves a ship on final approach
+   * outside the cut and therefore inside a wall — which the note over that
+   * carve has warned about since it was written. One function, one answer. */
+  var HOLD_LEAD_MAX = 1.5;        // km
+
+  function holdLead(port) {
+    var r = (port && port.radius) || 1;
+    return Math.min(ORBITAL_HOLD_LEAD, HOLD_LEAD_MAX / r);
+  }
+
   /* How far outside the doors the rail picks you up, in station radii.
    * About 95 m at the smallest station and 500 m at the largest — far
    * enough that the handover is an approach rather than a jump cut, close
@@ -2890,8 +2917,71 @@
    * bayGeometry decides which geometry table applies: a caller that
    * answered this question itself would be the second opinion that puts
    * the doors on one schedule and the hull on another. */
+  /* HOW LONG EACH LEG TAKES, WHICH IS NOT A CONSTANT ONCE STATIONS DIFFER
+   * IN SIZE BY A FACTOR OF FIVE.
+   *
+   * The waypoints are in station radii, so raising STATION_SCALE to 3.5
+   * multiplied every distance the arrival covers without touching the clock
+   * it covers them on. Measured straight after that change: the run-in leg
+   * crossed 4.5 km in three seconds at the largest station — fifteen
+   * hundred metres a second, threading a hangar. The whole arrival averaged
+   * 125-394 m/s where it used to average 8-45.
+   *
+   * So the two legs that TRAVEL get their duration from the distance they
+   * have to cover, at a speed that reads right, and the ones that do not —
+   * the doors running back, the hull settling, the inner gate opening — keep
+   * the times they had. Those are ceremony, and ceremony does not take
+   * longer because the building is bigger.
+   *
+   * THE CLAMPS ARE WHAT MAKE IT A GAME RATHER THAN A COMMUTE. Without a
+   * ceiling the largest station would open with a hundred-second cutscene;
+   * without a floor the smallest would snap. Inside the clamps the speed is
+   * honest, and at the ceiling it rises — which is the right way round,
+   * because a ship closing on a structure twenty-two kilometres across
+   * SHOULD be moving.
+   *
+   * Cached per port: arrivalPose asks for this every frame of the sequence,
+   * and orbitalPath costs a berth lookup and a bay solve. */
+  var RUN_IN_SPEED = 0.10;        // km/s, the leg from the hold to the gate
+  var THREAD_SPEED = 0.04;        // km/s, the leg from the gate to the stand
+  var RUN_IN_DUR = [3.0, 12.0];   // seconds, floor and ceiling
+  var THREAD_DUR = [5.0, 20.0];
+  var LEGS_CACHE = {};
+
+  function scaledLegs(port) {
+    var path = orbitalPath(port, 0);
+    if (!path || path.length < 5) return ORBITAL_LEGS;
+    var r = port.radius || 1;
+    var span = function (a, b) {
+      var dx = path[b].x - path[a].x, dy = path[b].y - path[a].y,
+          dz = path[b].z - path[a].z;
+      return Math.sqrt(dx * dx + dy * dy + dz * dz) * r;
+    };
+    var fit = function (km, speed, lim) {
+      return Math.max(lim[0], Math.min(lim[1], km / speed));
+    };
+    var out = [];
+    for (var i = 0; i < ORBITAL_LEGS.length; i++) {
+      var L = ORBITAL_LEGS[i], dur = L.dur;
+      if (L.id === 'lineup') dur = fit(span(0, 1), RUN_IN_SPEED, RUN_IN_DUR);
+      else if (L.id === 'enter') dur = fit(span(2, 3), THREAD_SPEED, THREAD_DUR);
+      if (dur === L.dur) { out.push(L); continue; }
+      /* A COPY, never a mutation of the table — ORBITAL_LEGS is shared by
+       * every station in the galaxy, and editing it in place would give the
+       * last port asked the timings of every other one. */
+      out.push({ id: L.id, dur: dur, apron: L.apron, inner: L.inner,
+                 lift: L.lift, bay: L.bay });
+    }
+    return out;
+  }
+
   function legsFor(port) {
-    return (port && !port.surface) ? ORBITAL_LEGS : ARRIVAL_LEGS;
+    if (!port || port.surface) return ARRIVAL_LEGS;
+    var key = port.id;
+    if (key === undefined || key === null) return scaledLegs(port);
+    if (LEGS_CACHE[key]) return LEGS_CACHE[key];
+    LEGS_CACHE[key] = scaledLegs(port);
+    return LEGS_CACHE[key];
   }
 
   function enclosedFrom(port) {
@@ -2969,14 +3059,14 @@
       var at = function (d) {
         return { x: off.x + n[0] * d, y: off.y + n[1] * d, z: z + n[2] * d };
       };
-      return [at(ap.gate + ORBITAL_HOLD_LEAD), at(ap.gate), at(ap.gate),
+      return [at(ap.gate + holdLead(port)), at(ap.gate), at(ap.gate),
               at(0), at(0)];
     }
 
     /* No modelled berth: in through the hatch. */
     if (!(g.mouthZ > 0)) return null;
     var mouth = { x: 0, y: 0, z: g.mouthZ };
-    var lead = { x: 0, y: 0, z: g.mouthZ + ORBITAL_HOLD_LEAD };
+    var lead = { x: 0, y: 0, z: g.mouthZ + holdLead(port) };
     var stand = { x: off.x, y: off.y, z: z };
     return [lead, mouth, mouth, stand, stand];
   }

@@ -1005,13 +1005,30 @@
    * "every station works with every ship" means in a number. Shrink this
    * past what the test reports and the smallest hull stops fitting the
    * smallest bay at the smallest station. */
-  /* 0.35 is where the measurement put it, not where it looked nice. At 0.25
-   * the sweep reported the tightest pairing in the game at 1.2x — a 22 m
-   * traffic shuttle into a 26 m bay, two metres of air a side, which is a
-   * needle rather than an approach. 0.35 takes that to about 1.7x and
-   * leaves the player's own courier at nearly 2.7x, which is a bay you fly
-   * into. Run test/berths.test.js after touching this; it prints the figure. */
-  var STATION_SCALE = 0.35;
+  /* 3.5, and the old reasoning was measuring the wrong thing.
+   *
+   * 0.35 came from the berth sweep, which compares a hull against the berth
+   * ANCHOR BOX and reported a comfortable 1.7-2.7x. But a berth anchor is
+   * not a room — it is a volume hung over the alcove, and on every station
+   * in the library it extends down through the deck into the structure
+   * below (see Render.berthDeck). Measured against the art instead, by
+   * casting from the deck a hull actually rests on, the clear space above
+   * it is 0.010-0.061 station radii. At 0.35 that is 2.1 m of headroom in
+   * the worst berth of the smallest station, for a hull 8.6 m tall and 25 m
+   * long: the ship was parked through the ceiling and the camera had
+   * nowhere to stand but inside the plating. The grey bay.
+   *
+   * 3.5 is Astra's call between three costed options, and it buys a ~38 m
+   * boom — a short chase shot — in most berths, tight in the worst. Radii
+   * run 2.1-11 km, which is a station you see from a long way out.
+   *
+   * WHAT THIS DRAGS WITH IT, because a tenfold change in the size of every
+   * station is not a local edit: anything written as an absolute distance
+   * near a station is now measured against something ten times bigger.
+   * Grep for the ones that matter before trusting this — the clearance hail
+   * radius and the arrival legs both are. Run test/berths.test.js, which
+   * prints the fit, and physics.test.js, which flies the arrival. */
+  var STATION_SCALE = 3.5;
 
   /* The smallest a docking envelope may get, in km. Generous by real-world
    * standards on purpose — this is a game, and fumbling the last fifty
