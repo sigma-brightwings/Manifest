@@ -468,7 +468,7 @@
       var stEcc = strng.range(0, 0.004);
       if (aStation * (1 - stEcc) < host.radius * 1.08) aStation = host.radius * 1.12;
 
-      var stRadius = strng.range(0.6, 3.2); // km across
+      var stRadius = strng.range(0.6, 3.2) * STATION_SCALE;   // km
       host.children.push({
         id: 'b' + (id++),
         name: strng.pick(STATION_PRE) + ' ' + strng.pick(STATION_SUF),
@@ -481,7 +481,12 @@
         // Generous by real-world standards on purpose — this is a game, and
         // fumbling the last 50 m of a manual approach because the capture
         // envelope was modeled on the ISS's is not the difficulty we want.
-        dockCaptureRadius: stRadius * 4,
+        /* FLOORED, and the floor is the point. The envelope is four station
+         * radii because that was generous when a station was kilometres
+         * across; scaling it down with the hull would have made docking a
+         * needle-threading exercise as a side effect of a drawing change,
+         * which is not a difficulty anyone chose. See DOCK_CAPTURE_MIN. */
+        dockCaptureRadius: Math.max(DOCK_CAPTURE_MIN, stRadius * 4),
         dockMaxSpeed: 0.006,   // 6 m/s relative
         orbit: {
           parent: host.id, a: aStation, e: stEcc,
@@ -974,6 +979,47 @@
    * to tell from the comms list alone that this one is a hole in the
    * ground, before the shaft ever comes into view. */
   var UNDER_SUF = ['Vault', 'Deep', 'Hold', 'Undercroft', 'Bunker', 'Depths'];
+
+  /* ---- HOW BIG A STATION IS DRAWN ------------------------------------
+   *
+   * A station's radius used to be rng.range(0.6, 3.2) km and nothing
+   * checked it against anything. That number is where the station models'
+   * whole sense of scale went to die: `Claude outputs/station.js` sized
+   * every berth aperture off the fleet's real bounding boxes with 0.6 m of
+   * clearance, the converter then normalised the model to radius 1, and
+   * this multiplied it by a kilometre figure with no relation to a ship.
+   * The result was a docking bay 590 m long for a hull you could park in a
+   * garage — and inside one, nothing but a grey field, because the far wall
+   * was half a kilometre away. Exactly the lesson the surface pads already
+   * learned (see the pad-radius note below).
+   *
+   * So the range stays and gets a scale factor, which is the one number
+   * that decides how a station reads against the fleet. ONE rng draw either
+   * way, deliberately: changing the bounds would have shifted every
+   * downstream draw in the substream and quietly rebuilt the galaxy
+   * (doctrine 2).
+   *
+   * HOW LOW IT CAN GO IS MEASURED, NOT CHOSEN. test/berths.test.js prints
+   * the tightest hull-in-a-bay pairing anywhere in the game every run; this
+   * factor is set so that figure stays comfortably above 1, which is what
+   * "every station works with every ship" means in a number. Shrink this
+   * past what the test reports and the smallest hull stops fitting the
+   * smallest bay at the smallest station. */
+  /* 0.35 is where the measurement put it, not where it looked nice. At 0.25
+   * the sweep reported the tightest pairing in the game at 1.2x — a 22 m
+   * traffic shuttle into a 26 m bay, two metres of air a side, which is a
+   * needle rather than an approach. 0.35 takes that to about 1.7x and
+   * leaves the player's own courier at nearly 2.7x, which is a bay you fly
+   * into. Run test/berths.test.js after touching this; it prints the figure. */
+  var STATION_SCALE = 0.35;
+
+  /* The smallest a docking envelope may get, in km. Generous by real-world
+   * standards on purpose — this is a game, and fumbling the last fifty
+   * metres of a manual approach because the envelope was modelled on the
+   * ISS's is not the difficulty we want (the note on dockMaxSpeed has said
+   * so since stations were first generated). It is a floor rather than a
+   * fixed size so a genuinely big station still gets a big envelope. */
+  var DOCK_CAPTURE_MIN = 1.2;
 
   /* Shaft depth and width, in pad radii. Fixed rather than randomised so
    * every underground bay shares one mesh (see Render.stationMeshes) —
@@ -2243,7 +2289,7 @@
 
     var stEcc = rng.range(0, 0.004);
     if (aStation * (1 - stEcc) < host.radius * 1.08) aStation = host.radius * 1.12;
-    var stRadius = rng.range(0.6, 3.2);
+    var stRadius = rng.range(0.6, 3.2) * STATION_SCALE;
 
     return {
       id: null,   // caller assigns, so ids stay dense and in creation order
@@ -2253,7 +2299,7 @@
       radius: stRadius,
       color: '#f2f7ff',
       docking: true,
-      dockCaptureRadius: stRadius * 4,
+      dockCaptureRadius: Math.max(DOCK_CAPTURE_MIN, stRadius * 4),
       dockMaxSpeed: 0.006,
       orbit: {
         parent: host.id, a: aStation, e: stEcc,

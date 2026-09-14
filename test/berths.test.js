@@ -54,11 +54,25 @@ console.log('  ' + CLASSES.length + ' classes, ' + MODELS.length + ' station mod
 console.log('  largest hull: ' + biggest.k + '  ' +
             m(biggest.s.w) + ' W x ' + m(biggest.s.h) + ' H x ' + m(biggest.s.l) + ' L');
 
-/* A station's radius is drawn from rng.range(0.6, 3.2) km, so the sweep has
- * to include the SMALLEST one the generator can make — the tightest bay in
- * the game is the smallest model at the smallest radius, and testing only a
- * typical station would miss it entirely. */
-var RADII = [0.6, 1.9, 3.2];
+/* THE RADII THE GENERATOR ACTUALLY PRODUCES, sampled rather than written
+ * down. The tightest bay in the game is the smallest model at the smallest
+ * station, so a sweep that tested only a typical one would miss the case
+ * that matters — and a sweep with the range hard-coded would go quietly
+ * stale the first time anyone changed STATION_SCALE, which is exactly the
+ * number this suite exists to keep honest. So it asks the generator. */
+var RADII = (function () {
+  var seen = [];
+  for (var i = 0; i < 40; i++) {
+    Gen.generateSystem('berth-sweep-' + i).ports.forEach(function (p) {
+      if (!p.surface) seen.push(p.radius);
+    });
+  }
+  seen.sort(function (a, b) { return a - b; });
+  return [seen[0], seen[Math.floor(seen.length / 2)], seen[seen.length - 1]];
+})();
+console.log('  station radii in play: ' + RADII.map(function (r) {
+  return (r * 1000).toFixed(0) + ' m';
+}).join('  ·  ') + '   (smallest / median / largest of ' + '40 systems)');
 
 function fakePort(id, radius) {
   return { id: id, kind: 'station', type: 'station', surface: false,

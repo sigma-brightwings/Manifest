@@ -1365,11 +1365,12 @@
    * without it ballooning at the flat faces.
    *
    * HOW FAR OUT IS A REAL NUMBER. The hull is normalised to length one and
-   * drawn at SHIP_LEN, ten metres nose to tail. A medium drive bell in these
+   * drawn at SHIP_LEN. A medium drive bell in these
    * models runs 0.07 to 0.10 in radius — the merc's booms are tube(6, 0.07,
    * ...) and the tanker's ring 0.16 — so a bell's width is around 0.14 and
-   * the standoff is a shade under that. On a ten-metre courier that is about
-   * 1.2 m of clear air between plating and field, which is close enough to
+   * the standoff is a shade under that. That is about 5% of the hull's
+   * length of clear air between plating and field — a shade over a metre on
+   * the courier as drawn today — which is close enough to
    * read as a skin rather than a balloon and far enough to be visibly not
    * touching. It scales with the hull, so a 240 m naval cutter carries a
    * proportionally identical field rather than the same absolute gap.
