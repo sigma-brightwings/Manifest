@@ -533,10 +533,27 @@ console.log('--- a station is a solid object ---');
   check('every station model has walls in it', hasWalls === n, hasWalls + ' of ' + n);
   check('and a room the outside cannot reach', hasRooms === n, hasRooms + ' of ' + n);
 
-  /* AND THE DOOR IS OPEN. A berth a ship cannot reach is worse than no
-   * collision at all: the arrival would fly it into a wall of the station
-   * it was cleared into. Every berth, at every model — the whole rail from
-   * the handover point to the stand has to be room rather than wall. */
+  /* AND THE DOOR IS OPEN — which is a check on the CARVE, not on the art,
+   * and saying so matters because the two look identical from here.
+   *
+   * The carve follows the same line the rail flies, so of course the rail
+   * comes out clear; what this catches is the carve and the rail drifting
+   * apart, which they would the moment either the leg table or
+   * berthApertures changed. That is worth pinning and it is not a claim
+   * that the route is clear of the model's own geometry.
+   *
+   * MEASURED AGAINST THE RAW ART, before any carve, the route is NOT clear:
+   * at a cradle 26 of 31 sample points along the rail are inside mesh, and
+   * at cylinder-m 17 of 31. That is not the rail being wrong — it is the
+   * DOORS. A station's blast doors, sliding leaves and force field are all
+   * geometry in the shell, they are solid to a voxeliser, and nothing in
+   * the game opens them: Sim.arrivalPose poses `gates.apron` from shut to
+   * open across the legs and no modelled station reads it. So a ship is
+   * flown through a door that is drawn closed, which is exactly what Astra
+   * reported as being pulled in through the wall.
+   *
+   * The carve is therefore load-bearing rather than a convenience: it is
+   * the only thing that currently says a doorway is a doorway. */
   var blocked = 0, checkedPts = 0;
   MODELS.forEach(function (modelId) {
     Render.assignPort('orbital', modelId);
