@@ -1074,33 +1074,71 @@
     return (b && b.length) ? b : null;
   }
 
-  function bayGeometry(port) {
+  /* Is this port a HALL IN ORBIT rather than a shaft in the ground? Asked in
+   * one place, for the reason portModelFor is one place: sim.js, main.js and
+   * render.js all ask bayGeometry where a bay is, and a station that
+   * answered from the shaft table in one of them and the hall table in
+   * another is the disagreement that parks a hull inside a wall. */
+  function orbitalPort(port) {
+    return !!(port && !port.surface &&
+              (port.kind === 'station' || port.type === 'station'));
+  }
+
+  /* The shaft table, lifted out so the two default tables sit side by side
+   * and neither can quietly become the other's fallback. */
+  function shaftBay(port) {
     var r = port.radius || 1;
     var depth = (port.shaftDepth || 0) / r;
-    var m = modelledBay(port) || {};
-    var num = function (a, b) { return typeof a === 'number' ? a : b; };
-    var floorZ = num(m.floorZ, -depth);
     return {
       depth: depth,
-      mouthR: num(m.mouthR, BAY_MOUTH_R),
-      throatR: num(m.throatR, BAY_THROAT_R),
-      chamberX: num(m.chamberX, BAY_CHAMBER_X),
-      chamberY: num(m.chamberY, BAY_CHAMBER_Y),
+      mouthZ: 0,                     // a shaft's mouth IS the frame origin
+      mouthR: BAY_MOUTH_R, throatR: BAY_THROAT_R,
+      chamberX: BAY_CHAMBER_X, chamberY: BAY_CHAMBER_Y,
+      floorZ: -depth, headroom: BAY_HEADROOM,
+      berthY: BAY_BERTH_Y, standoff: BAY_STANDOFF,
+      berths: BERTH_COUNT, lift: BAY_LIFT, station: false
+    };
+  }
+
+  function bayGeometry(port) {
+    var m = modelledBay(port) || {};
+    var num = function (a, b) { return typeof a === 'number' ? a : b; };
+    /* WHICH DEFAULT TABLE — decided here, never by the caller. A MODELLED
+     * bay still wins field by field on top of whichever table applies, so
+     * this changes what an UNMODELLED station falls back to and nothing
+     * else. Before it, every orbital station fell back to the surface
+     * shed's numbers, which put its berths the better part of a station
+     * radius outside its own hull — the "ship parked in open space a few
+     * hundred metres off a station it is supposedly inside" that the
+     * comment on berthState already complains about. */
+    var d = orbitalPort(port) ? stationBay(port) : shaftBay(port);
+    var floorZ = num(m.floorZ, d.floorZ);
+    return {
+      depth: d.depth,
+      /* Where along z the way IN is. Zero for a shaft, whose frame is
+       * anchored at its own mouth; the hub face for a station, whose frame
+       * is anchored at the middle of the thing. */
+      mouthZ: d.mouthZ,
+      station: d.station,
+      mouthR: num(m.mouthR, d.mouthR),
+      throatR: num(m.throatR, d.throatR),
+      chamberX: num(m.chamberX, d.chamberX),
+      chamberY: num(m.chamberY, d.chamberY),
       floorZ: floorZ,                       // top face of the hangar floor
       /* HEADROOM IS A HEIGHT, NOT A CEILING. A model gives an absolute
        * ceilZ; the constant gives a height above the floor. Reading the
        * model's ceiling as if it were a height would put the roof under the
        * floor of any deep bay, so the two are combined here rather than
        * being allowed to look interchangeable. */
-      ceilZ: num(m.ceilZ, floorZ + BAY_HEADROOM),
-      berthY: num(m.berthY, BAY_BERTH_Y),
-      standoff: num(m.standoff, BAY_STANDOFF),
-      berths: num(m.berths, BERTH_COUNT),
+      ceilZ: num(m.ceilZ, floorZ + d.headroom),
+      berthY: num(m.berthY, d.berthY),
+      standoff: num(m.standoff, d.standoff),
+      berths: num(m.berths, d.berths),
       /* How far the whole model stands proud of the ground. It exists so
        * the apron does not z-fight the planet's own surface, and the sim
        * has to add it too or the ship parks a few tens of metres under
        * the floor it is supposed to be standing on. */
-      lift: num(m.lift, BAY_LIFT)
+      lift: num(m.lift, d.lift)
     };
   }
 
@@ -1118,13 +1156,41 @@
    *
    * Still square, per Astra's note: a station is welded plate too, and only
    * the ring itself is a thing that turns. */
-  var SBAY_MOUTH_R  = 0.62;      // half-width of the square mouth on the hub face
-  var SBAY_THROAT_R = 0.58;      // the mouth barely necks down — it is a doorway, not a duct
-  var SBAY_CHAMBER_X = 1.55;     // the hall, inside faces, half-extents — wider than a shed
-  var SBAY_CHAMBER_Y = 1.05;
-  var SBAY_DEPTH = 1.7;          // how far IN along the hub the hall runs (a hall, not a well)
-  var SBAY_HEADROOM = 0.9;       // floor to ceiling — a hall you fly a ship down, so tall
-  var SBAY_BERTH_Y = 0.85;       // berths line the long walls
+  /* WHAT z MEANS HERE, because L1 left it ambiguous and the mesh could not
+   * be built until it was settled.
+   *
+   * z is the HUB AXIS, and +z is OUT OF THE HATCH — exactly as z is local
+   * vertical and +z is out of the ground for a shaft. That is the whole
+   * reason one shape of object can serve both: `floorZ`/`ceilZ` are still
+   * the deck and the roof, `depth` is still mouth-to-deck, and the camera
+   * clamp and the berth arithmetic still read them without branching.
+   *
+   * So the hall is entered along −z through a hatch on the hub face, runs
+   * `depth` inward, and its DECK IS THE FAR END WALL. In a hub there is no
+   * gravity to argue with: "down" is simply further in, which is also the
+   * direction a ship is carried, and a hull standing on the deck has its
+   * nose pointing back the way it came — which is the way it leaves.
+   *
+   * A true long hall, with the deck along one side and berths down its
+   * length, cannot be described by this key set at all: floorZ/ceilZ and
+   * `depth` would need two different axes. That is a bigger change than a
+   * table and it is not this one.
+   *
+   * SCALE. These are station radii, and a station radius is 0.6–3.2 km, so
+   * they are roughly an eighth of what L1 guessed — which had described a
+   * hall wider than the station containing it and, at the top of the range,
+   * a six-kilometre room for a forty-metre ship. The surface bay learned
+   * this same lesson once already (see the pad-radius note above). As sized
+   * here the hall fits INSIDE the procedural hub — radius 0.22, half-length
+   * 0.26 — which is the cheapest possible proof that it is not too big. */
+  var SBAY_MOUTH_Z  = 0.26;      // the hatch, on the hub face
+  var SBAY_MOUTH_R  = 0.048;     // half-width of the square hatch
+  var SBAY_THROAT_R = 0.044;     // it barely necks down — a doorway, not a duct
+  var SBAY_DEPTH = 0.20;         // hatch to deck: the distance flown inside
+  var SBAY_HEADROOM = 0.12;      // deck to roof
+  var SBAY_CHAMBER_X = 0.115;    // the hall, inside faces, half-extents
+  var SBAY_CHAMBER_Y = 0.085;
+  var SBAY_BERTH_Y = 0.068;      // berths line the long walls
   var SBAY_STANDOFF = 0.012;
   var SBAY_BERTHS = 6;
 
@@ -1134,15 +1200,22 @@
    * for now every procedural station shares this one table, which is the
    * same discipline the surface bay started from. */
   function stationBay(station) {
-    var r = station.radius || 1;
-    var floorZ = -SBAY_HEADROOM * 0.5;   // hall centred on the hub axis line
+    /* The deck, `depth` in from the hatch. Everything is symmetric about the
+     * hub axis in x and y, so the hall is still centred on the axis line —
+     * it is only along z that it sits where it does. */
+    var floorZ = SBAY_MOUTH_Z - SBAY_DEPTH;
     return {
       depth: SBAY_DEPTH,
+      mouthZ: SBAY_MOUTH_Z,
       mouthR: SBAY_MOUTH_R,
       throatR: SBAY_THROAT_R,
       chamberX: SBAY_CHAMBER_X,
       chamberY: SBAY_CHAMBER_Y,
       floorZ: floorZ,
+      /* Both, and deliberately: bayGeometry composes a ceiling out of
+       * `headroom` field by field, and a caller reaching for stationBay
+       * directly — the mesh builder does — wants the finished object. */
+      headroom: SBAY_HEADROOM,
       ceilZ: floorZ + SBAY_HEADROOM,
       berthY: SBAY_BERTH_Y,
       standoff: SBAY_STANDOFF,
@@ -1234,7 +1307,14 @@
     }
 
     var side = k < BERTH_X.length ? 1 : -1;         // which long wall
-    var x = BERTH_X[k % BERTH_X.length];
+    /* Spread ACROSS THE CHAMBER, not at a constant offset. BERTH_X is in
+     * pad radii and was written against the shed's own 1.30 half-width; a
+     * station hall is an eighth of that, so the constant put every
+     * unmodelled station's berths several hall-widths outside their own
+     * walls. Expressed as a fraction of the chamber it is the same number
+     * for a shed — 1.30 over 1.30 is one — and the right one everywhere
+     * else. */
+    var x = BERTH_X[k % BERTH_X.length] * (g.chamberX / BAY_CHAMBER_X);
     return {
       x: x,
       y: side * g.berthY,

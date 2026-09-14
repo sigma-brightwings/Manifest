@@ -1857,6 +1857,102 @@
       return m;
     }
 
+    /* ---- the inside of an orbital station ---------------------------------
+     *
+     * The sibling of bayMesh, and built from the sibling table: where a
+     * starport is a shaft cut DOWN into rock, a station is a hall cut IN
+     * along the hub axis. Gen.stationBay hands back the same shape of
+     * object bayGeometry does with z meaning the hub axis instead of local
+     * vertical (its own comment says so at length), which is exactly what
+     * lets this reuse the shed's shape without a second set of numbers:
+     * a square hatch, a short duct, a room, berths down the two long walls.
+     *
+     * ONE MESH FOR EVERY STATION, normalised to radius 1, for the reason
+     * `underground` is one mesh: the table is in station radii, so a big
+     * ring gets a big hall out of the same geometry scaled.
+     *
+     * It is the FALLBACK. Every station in the shipped library carries its
+     * own modelled `interior` bucket, and drawStationInterior prefers it —
+     * this is what an unmodelled station, or a build with no ports.js at
+     * all, has instead. Same arrangement as the procedural shells above,
+     * and for the same reason. */
+    function hallMesh() {
+      var Gen3 = global.Gen;
+      var g = Gen3 && Gen3.stationBay
+        ? Gen3.stationBay({ radius: 1 })
+        : { depth: 0.20, mouthZ: 0.26, mouthR: 0.048, throatR: 0.044,
+            chamberX: 0.115, chamberY: 0.085, floorZ: 0.06, ceilZ: 0.18,
+            berthY: 0.068, standoff: 0.012, berths: 6, lift: 0 };
+      var m = emptyMesh();
+      var i;
+      var hx = g.chamberX, hy = g.chamberY;
+      var midZ = (g.floorZ + g.ceilZ) / 2, halfH = (g.ceilZ - g.floorZ) / 2;
+
+      /* THE HATCH, on the hub face: four beams framing a square hole. The
+       * hole is left open rather than plated over — it is the way in, and
+       * the doors that close it are the model's own or none. */
+      var cr = g.mouthR + 0.012;
+      for (i = 0; i < 4; i++) {
+        var sgn = i < 2 ? 1 : -1;
+        if (i % 2 === 0) merge(m, box(cr, 0.012, 0.008), 0, sgn * cr, g.mouthZ);
+        else merge(m, box(0.012, cr, 0.008), sgn * cr, 0, g.mouthZ);
+      }
+
+      /* THE DUCT between the hatch and the roof of the room. Short on
+       * purpose: this is a doorway in a hull, not a descent. */
+      var duct = (g.mouthR + g.throatR) / 2;
+      var dLen = Math.max(0.001, g.mouthZ - g.ceilZ);
+      for (i = 0; i < 4; i++) {
+        var ds = i < 2 ? 1 : -1;
+        if (i % 2 === 0) merge(m, box(duct, 0.004, dLen / 2), 0, ds * duct, g.ceilZ + dLen / 2);
+        else merge(m, box(0.004, duct, dLen / 2), ds * duct, 0, g.ceilZ + dLen / 2);
+      }
+
+      /* THE ROOM. Deck, four walls, and a roof of four panels around the
+       * opening — not one lid, for the reason the shed's is not one lid:
+       * standing on the deck you would be looking at a ceiling where the
+       * way out should be. */
+      merge(m, box(hx, hy, 0.005), 0, 0, g.floorZ - 0.005);             // deck
+      merge(m, box(hx, 0.004, halfH), 0, hy, midZ);                     // walls
+      merge(m, box(hx, 0.004, halfH), 0, -hy, midZ);
+      merge(m, box(0.004, hy, halfH), hx, 0, midZ);
+      merge(m, box(0.004, hy, halfH), -hx, 0, midZ);
+      var op = g.throatR;
+      merge(m, box(hx, (hy - op) / 2, 0.003), 0, (hy + op) / 2, g.ceilZ);
+      merge(m, box(hx, (hy - op) / 2, 0.003), 0, -(hy + op) / 2, g.ceilZ);
+      merge(m, box((hx - op) / 2, op, 0.003), (hx + op) / 2, 0, g.ceilZ);
+      merge(m, box((hx - op) / 2, op, 0.003), -(hx + op) / 2, 0, g.ceilZ);
+
+      /* THE BERTHS, off the two long walls, read from the same berthOffset
+       * every other consumer reads — so a bay drawn here is a bay a ship is
+       * actually parked in. */
+      for (var bi = 0; bi < g.berths; bi++) {
+        var off = Gen3 && Gen3.berthOffset
+          ? Gen3.berthOffset({ radius: 1, kind: 'station' }, bi) : null;
+        if (!off) continue;
+        var big = off.large;
+        var bw = big ? 0.020 : 0.013;      // along the wall
+        var bd = big ? 0.018 : 0.012;      // into it
+        var side = off.y > 0 ? 1 : -1;
+        var wallY = side * hy;
+        merge(m, box(bw, bd, halfH * 0.55),
+              off.x, wallY + side * bd, g.floorZ + halfH * 0.55);
+        merge(m, box(bw * 0.8, bd * 0.8, 0.002), off.x, off.y, g.floorZ + 0.002);
+        merge(m, box(bw * 0.55, 0.0015, 0.0015), off.x, wallY, g.floorZ + 0.03, 1,
+              big ? '!#ffb45c' : '!#dff0ff');
+      }
+
+      /* LAMPS, and a station lights its own hall: there is no daylight up
+       * the shaft here the way there is in a surface bay. */
+      for (i = -3; i <= 3; i++) {
+        merge(m, box(0.008, 0.002, 0.0012), i * hx * 0.28, hy * 0.55, g.ceilZ - 0.006,
+              1, '!#bcd8ff');
+        merge(m, box(0.008, 0.002, 0.0012), i * hx * 0.28, -hy * 0.55, g.ceilZ - 0.006,
+              1, '!#bcd8ff');
+      }
+      return m;
+    }
+
     /* ---- the shaft doors -------------------------------------------------
      *
      * Two leaves that slide apart along the bay's local x. They INTERMESH:
@@ -1893,6 +1989,7 @@
     var G = global.Gen || {};
     var underground = bayMesh(G.UNDERGROUND_DEPTH || 4.0);
     var bay = bayMesh(G.SHALLOW_DEPTH || 0.9);
+    var hall = hallMesh();
 
     /* The approach lamps, as their own tiny mesh so the colour can answer
      * to something. Six boxes, twelve triangles each — cheap enough to
@@ -1924,7 +2021,7 @@
       orbital: orbital, highport: highport, refinery: refinery,
       shipyard: shipyard, agri: agri, mining: mining,
       reprocessing: reprocessing, surface: surface,
-      bay: bay, underground: underground
+      bay: bay, underground: underground, hall: hall
     };
 
     /* Imported models take over any role they are supplied for; the
@@ -2538,6 +2635,33 @@
   function drawPortPart(ctx, cam, frame, radiusKm, sunDir, role, part, tint) {
     var lib = libPort(role);
     var mesh = lib && lib[part];
+    if (!mesh || !mesh.f.length) return false;
+    if (gpuWorld() && global.GLWorld.queueMesh(cam, frame, mesh, radiusKm, sunDir)) return true;
+    paintMesh(ctx, cam, frame, mesh, radiusKm, sunDir, tint, 'rgba(12,20,30,0.6)');
+    return true;
+  }
+
+  /* THE INSIDE OF AN ORBITAL STATION, which is the one part of a port you
+   * can only see by being in it.
+   *
+   * The modelled interior FIRST. Every station in the shipped library
+   * carries an `interior` bucket — hangar, berths, sliding doors, lit
+   * fixtures — which libPort has been decompressing and caching since
+   * imported ports arrived and which nothing has ever drawn. That is the
+   * same class of bug PORT-MODELS.md records against the spin bucket:
+   * converted, stored, and silently never rendered. Drawing it is most of
+   * what this function is for; the procedural hall is what a station with
+   * no model gets instead.
+   *
+   * SAME FRAME AS THE SHELL, and that is not an oversight. A model that
+   * declares no `spin` bucket turns as one piece, and its interior is part
+   * of that piece — put the room on a still frame and the hull it is
+   * inside would rotate around it. When a model finally does separate its
+   * ring, the hub (and this) stays on the still frame automatically,
+   * because that is what the caller already passes for the shell. */
+  function drawStationInterior(ctx, cam, frame, radiusKm, sunDir, role, tint) {
+    if (drawPortPart(ctx, cam, frame, radiusKm, sunDir, role, 'interior', tint)) return true;
+    var mesh = stationMeshes().hall;
     if (!mesh || !mesh.f.length) return false;
     if (gpuWorld() && global.GLWorld.queueMesh(cam, frame, mesh, radiusKm, sunDir)) return true;
     paintMesh(ctx, cam, frame, mesh, radiusKm, sunDir, tint, 'rgba(12,20,30,0.6)');
@@ -4633,6 +4757,7 @@
     PORT_PATTERNS: PORT_PATTERNS, PORT_SIZE_CUTS: PORT_SIZE_CUTS,
     drawPortPart: drawPortPart, portSpins: portSpins,
     stationMeshes: stationMeshes,
+    drawStationInterior: drawStationInterior,
     box: box, tube: tube, rimRing: rimRing, mergeMesh: merge,
     makeStarfield: makeStarfield,
     drawStarfield: drawStarfield,

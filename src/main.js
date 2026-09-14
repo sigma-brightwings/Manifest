@@ -8119,6 +8119,12 @@
 
   /* The full-screen mode bodies live in screens.js. */
 
+  /* How big a station has to read on screen before its interior is worth
+   * drawing. Deliberately large: below this the mouth is a few pixels and
+   * the room behind it is invisible, so the only thing several thousand
+   * extra faces buy is frame time. Tuned by eye — see next.md. */
+  var STATION_INTERIOR_PX = 40;
+
   function drawBody(ctx, cam, item, starScreen) {
     var b = item.body, sp = item.sp, rpx = item.rpx;
 
@@ -8146,6 +8152,25 @@
           if (turns) {
             Render.drawPortPart(ctx, cam, stationFrame(b), b.radius, sun,
                                 model, 'spin', b.color);
+          }
+          /* THE INSIDE OF AN ORBITAL STATION. Held to a far higher
+           * threshold than anything else here, and for two reasons rather
+           * than one: a room you cannot see into is pure cost, and these
+           * are the heaviest meshes in the library — a modelled interior
+           * runs to several thousand faces against a shell's couple of
+           * hundred, which on the Latitude is worth more than the whole
+           * rest of the frame's drawing.
+           *
+           * Drawn on the SHELL'S OWN FRAME (see drawStationInterior): with
+           * no model declaring a spin bucket every station turns as one
+           * piece, and a room that held still inside a hull that did not
+           * would shear straight through its own walls.
+           *
+           * Surface ports are excluded because their interior is the bay
+           * mesh, which is already the model being drawn. */
+          if (!b.surface && rpx > STATION_INTERIOR_PX) {
+            Render.drawStationInterior(ctx, cam, frame, b.radius, sun,
+                                       model, b.color);
           }
           /* The town, the boards and the pad lighting. Held to a higher
            * threshold than the pad itself: the dressing is detail, and
