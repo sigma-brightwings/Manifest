@@ -475,7 +475,15 @@
        * every port in the system for a grid it will never use. */
       var r = p.radius || 1;
       if (V.dist(pos, bodyPosition(p, sys, t)) > r * 1.8) continue;
-      if (stationSolidAt(p, pos, sys, t) === R.SOLID_IN) return p;
+      /* A ROOM, OR A DOORWAY. Both are inside the hull, and the doorway
+       * half matters: a cut throat is made of cells that were METAL before
+       * the doors were opened, so it never became a room and a ship halfway
+       * through one would otherwise have the sky handed back to it in the
+       * middle of the wall. What is NOT inside is the corridor's lead-in,
+       * which was open space before the carve and still is — which is how
+       * holding off the doors stays outdoors. */
+      var at = stationSolidAt(p, pos, sys, t);
+      if (at === R.SOLID_IN || at === R.SOLID_DOOR) return p;
     }
     return null;
   }

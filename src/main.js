@@ -8446,7 +8446,8 @@
         var frame = stationFrame(b, true);
         if (frame) {
           var sun = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), item.pos));
-          Render.drawStationModel(ctx, cam, frame, b.radius, sun, model, b.color);
+          Render.drawStationModel(ctx, cam, frame, b.radius, sun, model, b.color,
+                                  stationDoors(b));
           if (turns) {
             Render.drawPortPart(ctx, cam, stationFrame(b), b.radius, sun,
                                 model, 'spin', b.color);
@@ -8544,13 +8545,25 @@
       return;
     }
 
-    /* A world you are INSIDE is not drawn at all — see the matching
+    /* A WORLD you are INSIDE is not drawn at all — see the matching
      * discard in the GL planet shader. Underground in a starport the eye
      * is a few hundred metres below the surface, and a sphere shaded from
      * inside is a grey slab across the whole screen with the hangar,
      * the ship and the shaft all hidden behind it. What you should see
-     * down there is the room you are in and daylight up the shaft. */
-    if (cam.eye && V.dist(cam.eye, item.pos) < b.radius) return;
+     * down there is the room you are in and daylight up the shaft.
+     *
+     * A STATION IS NOT A WORLD, and that exemption is the whole reason
+     * this line grew a condition. A station's radius is a bounding sphere
+     * around a wheel, not the surface of a solid body — so flying into one
+     * puts the eye inside it by this test while the thing you are looking
+     * AT is its walls. Until stations were enterable the two never came up
+     * together; the first arrival flown at a cradle came out as empty
+     * space with a ship and some stars in it, because the station had
+     * deleted itself the moment the camera crossed a sphere that is not
+     * its hull. Being inside a station is the case it most needs drawing
+     * for. */
+    if (cam.eye && !b.surface && b.kind !== 'station' &&
+        V.dist(cam.eye, item.pos) < b.radius) return;
 
     if (rpx < 2.4) {
       // Sub-pixel body: draw a marker ring so it is still findable, and a
@@ -8629,6 +8642,39 @@
    * saves nor needs to: a door caught halfway when you quit is a door that
    * should be wherever your clearance says it is when you come back. */
   var DOOR_SECONDS = 12;
+
+  /* HOW FAR THIS STATION'S DOORS ARE OPEN, AND WHOSE.
+   *
+   * The leaves were always in the model and the arrival has always posed
+   * them; what was missing was anybody reading it. Mid-arrival the leg says
+   * — `gates.apron` runs 1 sealed to 0 open, so the leaves run back before
+   * the hull moves into the hole and shut again behind it, which is the
+   * mechanical interlock the surface apron already has.
+   *
+   * Otherwise it is the same soft gate every other door in the game uses:
+   * Combat.doorsOpen, eased on the WALL CLOCK by doorPhase, so the travel
+   * does not ride the time warp.
+   *
+   * ONLY YOUR BERTH. A station does not open all eleven of its doors
+   * because one courier arrived, and the leaf knows which berth anchor it
+   * belongs to — so the berth's own mid is what is passed, and every leaf
+   * that does not sit at it stays shut. */
+  function stationDoors(port) {
+    if (!port || port.surface) return null;
+    var berth = currentBerth();
+    var ap = Gen.berthApertures ? Gen.berthApertures(port, berth) : null;
+    var open;
+    if (G.arrivalPose && G.ship.arrival && G.ship.arrival.port === port.id) {
+      open = 1 - G.arrivalPose.gates.apron;
+      berth = G.ship.arrival.berth;
+      ap = Gen.berthApertures ? Gen.berthApertures(port, berth) : ap;
+    } else if (dockedPort() === port || G.dockTarget === port) {
+      open = doorPhase(port);
+    } else {
+      open = 0;
+    }
+    return { open: open, berth: berth, berthMid: ap && ap.mid };
+  }
 
   function doorPhase(port) {
     var want = Combat.doorsOpen(G, port) ? 1 : 0;

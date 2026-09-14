@@ -620,11 +620,13 @@
    * which is the whole point of being able to swap models without a
    * restart. Same role assignHull plays for ships. */
   var SOLIDITY = {};
+  var PORT_DOORS = {};
   function reloadPorts() {
     PORT_CACHE = {};
     POOL_CACHE = null;
     STATION_MESHES = null;
     INTERIOR_BOUNDS = {};
+    PORT_DOORS = {};
     /* The occupancy grids are voxelised from those meshes, so swapping the
      * library while the game runs has to drop them too — otherwise the new
      * models are drawn and the old ones are what you collide with. */
@@ -2698,8 +2700,216 @@
     paintMesh(ctx, cam, frame, mesh, radiusKm, sunDir, DRESS_WALL);
   }
 
-  function drawStationModel(ctx, cam, frame, radiusKm, sunDir, model, tint) {
+  /* ---- THE DOORS ARE PART OF THE HULL, AND THEY OPEN ---------------------
+   *
+   * Astra, of the Y-shaped station: "landing pulls you in through the wall
+   * not into a docking bay." Measured against the raw art she is exactly
+   * right — 26 of 31 points along a cradle's arrival rail are inside mesh —
+   * and the mesh in question is the DOOR. Blast doors, sliding leaves and a
+   * force field are all geometry in the shell, all shut, and nothing in the
+   * game has ever opened them: Sim.arrivalPose has been posing `gates.apron`
+   * from sealed to open across all five legs and no modelled station read
+   * it.
+   *
+   * THE MODELS WERE BUILT FOR THIS. Every leaf ships its own travel —
+   * `{"name":"berthLBlastDoorL","data":{"door":{"openX":-5.825,
+   * "closedX":-1.915}}}` — and every berth names its own airlock and its
+   * interlock rule. What was lost is only the SEPARATION: the converter
+   * merged the leaves into one shell, so there was nothing left to move.
+   *
+   * They can be separated again without touching the converter, because the
+   * `gates` anchors carry a bounding box per door node. A shell triangle
+   * inside one of those boxes is part of that leaf. Boxes do overlap — two
+   * leaves of a telescoping pair lap over each other when shut, which is
+   * what a door does — so a contested triangle goes to the nearer centre,
+   * and both leaves of a pair travel the same way regardless.
+   *
+   * THE TRAVEL IS MEASURED, NOT READ. openX/closedX are in the model's
+   * ORIGINAL units and the anchors are normalised, with no reliable factor
+   * between them — a door's local X is not the model's. So the distance
+   * comes from the geometry instead: a leaf slides away from its berth's
+   * centreline until its inner edge reaches that centreline, which is
+   * exactly "until the opening is clear", and it needs no unit conversion
+   * at all.
+   *
+   * A FORCE FIELD DOES NOT SLIDE. `fieldGate` leaves are a flat panel
+   * across the mouth; they are simply not drawn once the gate is open,
+   * which is also the honest answer to the note about the field rendering
+   * as an opaque lit slab. */
+  function extrasByName(role) {
+    var raw = global.PortLib && global.PortLib[role];
+    var out = {};
+    var ex = raw && raw.extras;
+    if (ex) for (var i = 0; i < ex.length; i++) if (ex[i] && ex[i].name) out[ex[i].name] = ex[i].data || {};
+    return out;
+  }
+
+  function portDoors(role) {
+    if (PORT_DOORS[role] !== undefined) return PORT_DOORS[role];
+    PORT_DOORS[role] = null;
+    var lib = libPort(role);
+    var shell = lib && lib.shell;
+    var raw = global.PortLib && global.PortLib[role];
+    var A = raw && raw.anchors;
+    var gates = A && A.gates, berths = A && A.berths;
+    if (!shell || !shell.f || !shell.f.length || !gates || !gates.length) return null;
+
+    var boxes = [];
+    for (var gi = 0; gi < gates.length; gi++) {
+      var g = gates[gi];
+      if (!g || !g.min || !g.max || !g.mid) continue;
+      boxes.push(g);
+    }
+    if (!boxes.length) return null;
+
+    /* Each triangle to the box that contains it; ties to the nearer centre. */
+    var owner = new Int16Array(shell.f.length);
+    for (var i = 0; i < owner.length; i++) owner[i] = -1;
+    for (i = 0; i < shell.f.length; i++) {
+      var t = shell.f[i];
+      var a = shell.v[t[0]], b = shell.v[t[1]], c = shell.v[t[2]];
+      if (!a || !b || !c) continue;
+      var px = (a[0] + b[0] + c[0]) / 3,
+          py = (a[1] + b[1] + c[1]) / 3,
+          pz = (a[2] + b[2] + c[2]) / 3;
+      var best = -1, bestD = Infinity;
+      for (var j = 0; j < boxes.length; j++) {
+        var bx = boxes[j];
+        if (px < bx.min[0] || px > bx.max[0] || py < bx.min[1] || py > bx.max[1] ||
+            pz < bx.min[2] || pz > bx.max[2]) continue;
+        var dx = px - bx.mid[0], dy = py - bx.mid[1], dz = pz - bx.mid[2];
+        var d = dx * dx + dy * dy + dz * dz;
+        if (d < bestD) { bestD = d; best = j; }
+      }
+      owner[i] = best;
+    }
+
+    var ex = extrasByName(role);
+    var leaves = [], hullF = [], hullC = [];
+    for (j = 0; j < boxes.length; j++) leaves.push({ f: [], ci: [] });
+    for (i = 0; i < shell.f.length; i++) {
+      var o = owner[i];
+      if (o < 0) { hullF.push(shell.f[i]); hullC.push(shell.ci ? shell.ci[i] : 0); }
+      else { leaves[o].f.push(shell.f[i]); leaves[o].ci.push(shell.ci ? shell.ci[i] : 0); }
+    }
+
+    var out = [];
+    for (j = 0; j < boxes.length; j++) {
+      if (!leaves[j].f.length) continue;
+      var box = boxes[j];
+      var data = ex[box.node] || {};
+      var field = !!data.fieldGate;
+
+      /* WHICH BERTH THIS LEAF BELONGS TO, and therefore what it opens away
+       * from: the nearest berth anchor. Named matching would be wrong here
+       * for the same reason it is wrong in berthApertures — a ring mirrors
+       * its patterns and two alcoves answer to the same prefix. */
+      var berth = null, bd = Infinity;
+      if (berths) {
+        for (var bi = 0; bi < berths.length; bi++) {
+          var bb2 = berths[bi];
+          if (!bb2 || !bb2.mid) continue;
+          var ddx = bb2.mid[0] - box.mid[0], ddy = bb2.mid[1] - box.mid[1],
+              ddz = bb2.mid[2] - box.mid[2];
+          var dd = ddx * ddx + ddy * ddy + ddz * ddz;
+          if (dd < bd) { bd = dd; berth = bb2; }
+        }
+      }
+
+      var axis = [0, 0, 0], travel = 0;
+      if (!field && berth) {
+        /* The two axes across the opening are the ones the berth does not
+         * open along. The leaf slides along whichever of them it is offset
+         * on, away from the berth's centreline, until its inner edge
+         * reaches that line. */
+        var n = berth.normal || [0, 0, 0];
+        var pick = -1, best2 = 0;
+        for (var ax = 0; ax < 3; ax++) {
+          if (Math.abs(n[ax]) > 0.5) continue;          // that is the way IN
+          var off = box.mid[ax] - berth.mid[ax];
+          if (Math.abs(off) > best2) { best2 = Math.abs(off); pick = ax; }
+        }
+        if (pick >= 0 && best2 > 1e-4) {
+          var sign = (box.mid[pick] - berth.mid[pick]) > 0 ? 1 : -1;
+          var inner = sign > 0 ? box.min[pick] : box.max[pick];
+          travel = Math.abs(inner - berth.mid[pick]);
+          axis[pick] = sign;
+        }
+      }
+
+      out.push({
+        node: box.node,
+        mesh: { v: shell.v, f: leaves[j].f, ci: leaves[j].ci, pal: shell.pal },
+        axis: axis, travel: travel, field: field, berthMid: berth ? berth.mid : null
+      });
+    }
+
+    if (!out.length) return null;
+    PORT_DOORS[role] = {
+      hull: { v: shell.v, f: hullF, ci: hullC, pal: shell.pal },
+      leaves: out
+    };
+    return PORT_DOORS[role];
+  }
+
+  /* Move a frame by a model-space offset. The frame maps model x/y/z onto
+   * right/up/fwd (see main.js stationFrame), so this is the same "translate
+   * the frame, not the geometry" the shaft doors already use — one mesh,
+   * any open fraction, no state baked in. */
+  function shiftFrame(frame, mx, my, mz, km) {
+    return {
+      pos: { x: frame.pos.x + (frame.right.x * mx + frame.up.x * my + frame.fwd.x * mz) * km,
+             y: frame.pos.y + (frame.right.y * mx + frame.up.y * my + frame.fwd.y * mz) * km,
+             z: frame.pos.z + (frame.right.z * mx + frame.up.z * my + frame.fwd.z * mz) * km },
+      fwd: frame.fwd, right: frame.right, up: frame.up
+    };
+  }
+
+  function drawStationModel(ctx, cam, frame, radiusKm, sunDir, model, tint, doors) {
+    /* WITH THE DOORS SEPARATED when this model has any: the hull without
+     * them, then each leaf at its own offset. `doors` is { open, berth }
+     * — how far, and whose. Only the berth you are cleared into moves,
+     * which is both cheaper and truer than a station opening every door it
+     * has because one ship arrived. */
+    var d = portDoors(model);
+    if (d) {
+      var open = doors && doors.open > 0 ? Math.min(1, doors.open) : 0;
+      var mine = doors && typeof doors.berth === 'number' ? doors.berth : null;
+      paintPart(ctx, cam, frame, d.hull, radiusKm, sunDir, tint);
+      for (var i = 0; i < d.leaves.length; i++) {
+        var lf = d.leaves[i];
+        var f = open;
+        if (mine !== null && lf.berthMid) {
+          /* Whose door. Compared by POSITION rather than by index, because
+           * the leaf knows which berth anchor it sits at and the caller
+           * knows which berth it was given — and the only thing those two
+           * share is where that berth is. */
+          var want = doors.berthMid;
+          if (want) {
+            var dx = lf.berthMid[0] - want[0], dy = lf.berthMid[1] - want[1],
+                dz = lf.berthMid[2] - want[2];
+            if (dx * dx + dy * dy + dz * dz > 1e-6) f = 0;
+          }
+        }
+        if (lf.field) {
+          /* A field is not a door leaf. It is there or it is not. */
+          if (f < 0.5) paintPart(ctx, cam, frame, lf.mesh, radiusKm, sunDir, tint);
+          continue;
+        }
+        var s = lf.travel * f;
+        var fr = s > 1e-9
+          ? shiftFrame(frame, lf.axis[0] * s, lf.axis[1] * s, lf.axis[2] * s, radiusKm)
+          : frame;
+        paintPart(ctx, cam, fr, lf.mesh, radiusKm, sunDir, tint);
+      }
+      return;
+    }
     var mesh = stationMeshes()[model] || stationMeshes().orbital;
+    paintPart(ctx, cam, frame, mesh, radiusKm, sunDir, tint);
+  }
+
+  function paintPart(ctx, cam, frame, mesh, radiusKm, sunDir, tint) {
+    if (!mesh || !mesh.f || !mesh.f.length) return;
     if (gpuWorld() && global.GLWorld.queueMesh(cam, frame, mesh, radiusKm, sunDir)) return;
     paintMesh(ctx, cam, frame, mesh, radiusKm, sunDir, tint, 'rgba(12,20,30,0.6)');
   }
@@ -2805,7 +3015,7 @@
    * big one. The doors are what a coarse cell would lose, and the doors are
    * carved explicitly, so the resolution never has to find them. */
   var SOLID_N = 48;
-  var SOLID_EMPTY = 0, SOLID_WALL = 1, SOLID_OUT = 2, SOLID_IN = 3;
+  var SOLID_EMPTY = 0, SOLID_WALL = 1, SOLID_OUT = 2, SOLID_IN = 3, SOLID_DOOR = 4;
 
   function meshInto(grid, mesh, lo, inv) {
     if (!mesh || !mesh.v || !mesh.f) return;
@@ -2941,7 +3151,15 @@
           for (var dx = -rc[0]; dx <= rc[0]; dx++) {
             var x = cx + dx, y = cy + dy, z = cz + dz;
             if (x < 0 || y < 0 || z < 0 || x >= N || y >= N || z >= N) continue;
-            g[(z * N + y) * N + x] = SOLID_IN;
+            /* ONLY METAL IS REMOVED. A carve that wrote "room" along its
+             * whole length invented rooms in open space: the corridor leads
+             * in from well outside the hull, so a ship holding off the doors
+             * came out as ENCLOSED and the sky went away while it was still
+             * in the open. Cutting a doorway takes away the door — it does
+             * not move the outside indoors, and it does not fill in the
+             * hangar the corridor ends in either. */
+            var at = (z * N + y) * N + x;
+            if (g[at] === SOLID_WALL) g[at] = SOLID_DOOR;
           }
         }
       }
@@ -5097,11 +5315,13 @@
     interiorBounds: interiorBounds,
     insideInterior: insideInterior,
     portSolidity: portSolidity,
+    portDoors: portDoors,
     carveThroat: carveThroat,
     solidityAt: solidityAt,
     SOLID_WALL: SOLID_WALL,
     SOLID_OUT: SOLID_OUT,
     SOLID_IN: SOLID_IN,
+    SOLID_DOOR: SOLID_DOOR,
     box: box, tube: tube, rimRing: rimRing, mergeMesh: merge,
     makeStarfield: makeStarfield,
     drawStarfield: drawStarfield,

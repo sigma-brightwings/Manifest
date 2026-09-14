@@ -591,6 +591,124 @@ console.log('--- a station is a solid object ---');
         (100 * solid / sol.grid.length).toFixed(1) + '% of the grid is wall');
 })();
 
+/* ---- and the doors are doors ------------------------------------------
+ * The models ship a full airlock: every leaf carries its own travel and
+ * every berth names its outerGate, its innerGate and an interlock rule.
+ * What was lost was the SEPARATION — the converter merged the leaves into
+ * one shell, so there was nothing left to move, and a ship was flown
+ * through a door drawn shut.
+ *
+ * Render.portDoors splits them back out by the gates anchors' own boxes.
+ * What is pinned here is that the split is real on both sides: leaves that
+ * are actually leaves, a hull that is still a hull, and a travel that
+ * genuinely clears the opening rather than nudging the leaf a metre. */
+console.log('--- and the doors are doors ---');
+(function () {
+  var bad = 0, checkedM = 0, noDoors = [];
+  var minTravel = Infinity, maxTravel = 0, fields = 0, movers = 0;
+  MODELS.forEach(function (modelId) {
+    var d = Render.portDoors(modelId);
+    checkedM++;
+    if (!d) { noDoors.push(modelId); return; }
+    /* THE HULL SURVIVED. A split that swallowed the station into its own
+     * doors would leave nothing to draw and nothing to hit, and every
+     * other check here would still pass. */
+    if (!(d.hull.f.length > d.leaves.reduce(function (n, l) { return n + l.mesh.f.length; }, 0))) {
+      bad++;
+      console.log('  FAIL  ' + modelId + ' is more door than station');
+    }
+    d.leaves.forEach(function (lf) {
+      if (lf.field) { fields++; return; }
+      if (!(lf.travel > 0)) { bad++; console.log('  FAIL  ' + modelId + ' leaf ' + lf.node + ' does not move'); return; }
+      movers++;
+      minTravel = Math.min(minTravel, lf.travel);
+      maxTravel = Math.max(maxTravel, lf.travel);
+      /* A UNIT AXIS, one component, no diagonals. A leaf that slid along
+       * two axes at once would be a leaf leaving its own track. */
+      var nz = lf.axis.filter(function (v) { return v !== 0; });
+      if (nz.length !== 1 || Math.abs(nz[0]) !== 1) {
+        bad++;
+        console.log('  FAIL  ' + modelId + ' leaf ' + lf.node + ' slides along ' + lf.axis);
+      }
+    });
+  });
+  check('every orbital model with gates gives up its doors', bad === 0,
+        bad + ' bad of ' + checkedM + ' models');
+  check('and each one has exactly the field panels it declared',
+        fields > 0, fields + ' force fields');
+  console.log('  ' + movers + ' sliding leaves, travel ' + minTravel.toFixed(3) +
+              '-' + maxTravel.toFixed(3) + ' station radii' +
+              (noDoors.length ? '   (no gates: ' + noDoors.join(' ') + ')' : ''));
+
+  /* AND OPEN WIDE ENOUGH FOR THE FLEET. A door that opens by less than the
+   * hull is a door that does not open. Measured at the SMALLEST station the
+   * generator makes, where a ship is largest against the station. */
+  var worstW = 0;
+  CLASSES.forEach(function (k) {
+    var sp = Render.hullSpan(k);
+    if (sp.w > worstW) worstW = sp.w;
+  });
+  var smallest = RADII[0];
+  check('the leaves clear the widest hull in the fleet, at the smallest station',
+        minTravel * 2 * smallest >= worstW,
+        (minTravel * 2 * smallest * 1000).toFixed(0) + ' m of opening for a ' +
+        (worstW * 1000).toFixed(0) + ' m hull');
+})();
+
+/* ---- outdoors until you are through the door ---------------------------
+ * The carve is what makes a doorway passable, and the first version of it
+ * wrote "room" along the corridor's whole length — including the lead-in,
+ * which starts well outside the hull. A ship holding off the doors was
+ * therefore ENCLOSED, and the sky went away while it was still in the open.
+ *
+ * Cutting a doorway takes away the door. It does not move the outside
+ * indoors. So this walks a whole arrival and asks where the change
+ * happens: it has to be exactly once, and it has to be after the hold. */
+console.log('--- outdoors until you are through the door ---');
+(function () {
+  var sys = Gen.generateSystem('doorway-sweep');
+  var bad = 0, never = 0, early = 0, checkedS = 0;
+  (sys.ports || []).filter(function (p) { return !p.surface; }).forEach(function (port) {
+    var ship = { cls: 'courier', dryMass: 80, pos: { x: 0, y: 0, z: 0 },
+                 vel: { x: 0, y: 0, z: 0 } };
+    if (!Sim.beginArrival(ship, port, sys, 0)) return;
+    checkedS++;
+    var b = ship.arrival.berth, total = Sim.arrivalTotal(port);
+    var flips = 0, was = null, firstIn = -1;
+    for (var k = 0; k <= 40; k++) {
+      var pose = Sim.arrivalPose(port, sys, 0, b, total * k / 40);
+      if (!pose) continue;
+      var now = !!Sim.insideStation(pose.pos, sys, 0);
+      if (was !== null && now !== was) flips++;
+      if (now && firstIn < 0) firstIn = k;
+      was = now;
+    }
+    /* ONCE. Outdoors, then indoors, and never back — a second flip is the
+     * sky strobing at a ship being carried through a wall. */
+    if (flips !== 1) { bad++; console.log('  FAIL  ' + Render.portModelFor(port) +
+                                          ' crosses the threshold ' + flips + ' times'); }
+    if (firstIn < 0) never++;
+    /* AND NOT AT THE HANDOVER. The rail is picked up well outside the
+     * doors; if that first point already reads as indoors the carve has
+     * leaked back out into open space again. */
+    if (firstIn === 0) early++;
+    /* Docked is unambiguous and is the state the whole thing is for. */
+    var parked = { cls: 'courier', dryMass: 80, pos: { x: 0, y: 0, z: 0 },
+                   vel: { x: 0, y: 0, z: 0 } };
+    Sim.dockShip(parked, port, sys, 0);
+    if (!Sim.insideStation(parked.pos, sys, 0)) {
+      bad++;
+      console.log('  FAIL  ' + Render.portModelFor(port) + ' is not inside itself when docked');
+    }
+  });
+  check('there are arrivals to walk', checkedS > 0, checkedS + ' stations');
+  check('an arrival crosses from outdoors to indoors exactly once', bad === 0,
+        bad + ' wrong of ' + checkedS);
+  check('and it gets indoors at all', never === 0, never + ' never did');
+  check('but not before it has reached the doors', early === 0,
+        early + ' were indoors at the handover');
+})();
+
 Render.assignPort('orbital', null);   // leave the library as we found it
 
 console.log('');

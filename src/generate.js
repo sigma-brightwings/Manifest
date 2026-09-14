@@ -1222,6 +1222,12 @@
     }
 
     return {
+      /* `mid` rides along because it is the only thing a DOOR and a BERTH
+       * can be matched on: render.js splits the leaves out of the shell and
+       * remembers which berth anchor each one sits at, and the caller knows
+       * which berth index it was given. Neither can turn one into the other
+       * without this. */
+      mid: m.slice(),
       normal: n.slice(),
       gate: pick(modelledAnchors(port, 'gates'), 1),
       inner: pick(modelledAnchors(port, 'innerGates'), -1)
