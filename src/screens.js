@@ -29,7 +29,7 @@
       scopeBody, rows, panel, bodyDotColor, setMouseAim,
       fmtDist, fmtSpeed, fmtTime, fmtEpoch, fmtCredits, fmtLy, clipText,
       drawSystemPage, drawChartPage, drawOrbitPage, drawTargetPage,
-      drawAutoPage, drawNodePage, drawShipPage, drawGunsPage,
+      drawAutoPage, drawNodePage, drawShipPage, drawGunsPage, dash,
       RADAR_RANGE, MFD_W, MFD_H, MFD_INK, MFD_DIM, MFD_HOT, MFD_EDGE;
 
   function bind(api) {
@@ -51,6 +51,7 @@
     drawOrbitPage = api.pages.orbit; drawTargetPage = api.pages.target;
     drawAutoPage = api.pages.auto; drawNodePage = api.pages.node;
     drawShipPage = api.pages.ship; drawGunsPage = api.pages.guns;
+    dash = api.dash;
     RADAR_RANGE = api.RADAR_RANGE;
     MFD_W = api.MFD_W; MFD_H = api.MFD_H;
     MFD_INK = api.MFD_INK; MFD_DIM = api.MFD_DIM;
@@ -850,12 +851,165 @@
    * jettison controls sit beside cargo and NOWHERE ELSE: fitted equipment
    * is on the same screen and deliberately has no button, because "eject"
    * is a thing you do to freight, not to your own drive. */
+  /* ---- F5 / PANELS: which page sits on which mount ----------------------
+   *
+   * WHY THIS EXISTS. The panels used to be reassigned by clicking them in
+   * the cockpit, and Astra's objection is the right one: it is too easy.
+   * The hit box is the bounding box of a projected quad, so at any oblique
+   * angle it covers canopy that is not the panel, and an instrument you fly
+   * by changes under a stray click.
+   *
+   * LAID OUT AS THE CONSOLE IS, not as a list. `Render.MFD_MOUNTS` carries
+   * each screen's bearing, so the arrangement here is read off the same
+   * numbers that place them in the world rather than typed twice: the three
+   * forward screens sit in their real angular order across the top, and the
+   * two on the rear bulkhead sit below, behind the seat.
+   *
+   * POINTERS, NOT THE WORDS "LEFT" AND "RIGHT". Astra's standing note, and
+   * it is doubly right here: the screen at bearing -145 degrees is on your
+   * left while you face forward and on your RIGHT the moment you turn round
+   * to read it, so a word would be wrong half the time and an arrow never
+   * is. */
+  function mountArc() {
+    var m = (Render && Render.MFD_MOUNTS) || [];
+    var fwd = [], aft = [];
+    for (var i = 0; i < m.length; i++) {
+      /* Forward of the beam or behind it — the mount's own bearing decides,
+       * so a console that grows a sixth screen lands in the right half
+       * without this function learning its name. */
+      (Math.abs(m[i].bearing) < Math.PI / 2 ? fwd : aft).push(m[i]);
+    }
+    var byBearing = function (a, b) { return a.bearing - b.bearing; };
+    return { fwd: fwd.sort(byBearing), aft: aft.sort(byBearing) };
+  }
+
+  function drawPanelsTab(ctx, pad, top, w, bottom) {
+    if (!dash) return;
+    var arc = mountArc();
+    if (!G.panelPick || !dash.pageFor(G.panelPick)) G.panelPick = 'centre';
+
+    var listW = Math.min(190, Math.max(150, w * 0.2));
+    var bayW = w - pad * 2 - listW - 16;
+    var bayX = pad, bayY = top, bayH = bottom - top - pad;
+
+    /* --- the console, in plan --- */
+    var tileW = Math.min(150, (bayW - 24) / Math.max(1, arc.fwd.length) - 10);
+    var tileH = 54;
+
+    function seat(cx, cy) {
+      ctx.strokeStyle = 'rgba(125,255,207,0.30)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(cx, cy, 13, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = 'rgba(125,255,207,0.45)';
+      ctx.font = '9px ui-monospace, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('▲', cx, cy - 19);          // nose points up the page
+      ctx.fillText('▼', cx, cy + 27);
+      ctx.textAlign = 'left';
+    }
+
+    function mountTile(m, x, y) {
+      var page = dash.pageFor(m.id);
+      var on = G.panelPick === m.id;
+      var dead = !!(G.deadPanels && G.deadPanels[m.id]);
+      ctx.fillStyle = on ? '#12414f' : '#081419';
+      ctx.fillRect(x, y, tileW, tileH);
+      ctx.strokeStyle = dead ? '#7a4a4a' : MFD_EDGE;
+      ctx.lineWidth = on ? 2 : 1;
+      ctx.strokeRect(x + 1, y + 1, tileW - 2, tileH - 2);
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      /* A BROKEN SCREEN STILL SHOWS WHAT IS ASSIGNED TO IT. Reading only
+       * "PANEL OUT" hides the setting behind the damage, so you could not
+       * decide what a screen will show before paying to fix it. The page
+       * stays, dimmed, and the damage is called out on the line below. */
+      ctx.fillStyle = dead ? '#6d5252' : (on ? '#b4f0ff' : MFD_INK);
+      ctx.fillText(page.title, x + tileW / 2, y + 24);
+      ctx.font = '9px ui-monospace, monospace';
+      ctx.fillStyle = dead ? '#c07a7a' : '#5d6f78';
+      /* The bearing, which is the honest name for where this screen is. */
+      ctx.fillText(dead ? 'PANEL OUT'
+                   : Math.round(m.bearing * 180 / Math.PI) + '°',
+                   x + tileW / 2, y + 41);
+      ctx.textAlign = 'left';
+      hot(x, y, tileW, tileH, (function (id) {
+        return function () { G.panelPick = id; };
+      })(m.id), 'select this mount');
+    }
+
+    var cx = bayX + bayW / 2;
+    /* The console block sits in the middle of the bay rather than hanging
+     * off the top of it: this tab is a picture of a cockpit, and a cockpit
+     * pinned to the ceiling of a tall window reads as a list that has lost
+     * its footing. The height is known up front — two rows, the seat and
+     * the caption — so it can simply be centred. */
+    var blockH = tileH * 2 + 46 + 42 + 28;
+    var rowFwdY = bayY + Math.max(10, (bayH - blockH) / 2);
+    var totalW = arc.fwd.length * tileW + (arc.fwd.length - 1) * 10;
+    var fx = cx - totalW / 2;
+    for (var i = 0; i < arc.fwd.length; i++) {
+      /* Nudged down by bearing so the arc reads as an arc rather than a row:
+       * the outboard screens sit further from the eye and lower on the page. */
+      var lift = Math.abs(arc.fwd[i].bearing) / (Math.PI / 6) * 12;
+      mountTile(arc.fwd[i], fx + i * (tileW + 10), rowFwdY + lift);
+    }
+
+    var seatY = rowFwdY + tileH + 46;
+    seat(cx, seatY);
+
+    var rowAftY = seatY + 42;
+    /* AFT IS MIRRORED, because you turn round to read it. The mount at the
+     * most negative bearing is off your left shoulder, and once you are
+     * facing it, it is on your right — so the aft row runs the other way
+     * and the tiles land where your eyes will find them. */
+    var aft = arc.aft.slice().reverse();
+    var totalA = aft.length * tileW + (aft.length - 1) * 10;
+    var ax = cx - totalA / 2;
+    for (var j = 0; j < aft.length; j++) mountTile(aft[j], ax + j * (tileW + 10), rowAftY);
+
+    ctx.font = '9px ui-monospace, monospace';
+    ctx.fillStyle = '#5d6f78';
+    ctx.textAlign = 'center';
+    ctx.fillText('rear bulkhead — turn round to read these', cx, rowAftY + tileH + 16);
+    ctx.textAlign = 'left';
+
+    /* --- the pages you can put on it --- */
+    var lx = bayX + bayW + 16, ly = top;
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText(String(G.panelPick).replace('-', ' ').toUpperCase(), lx, ly + 12);
+    ly += 22;
+    var cur = dash.pageFor(G.panelPick);
+    var rowH = 20;
+    for (var k = 0; k < dash.pages.length; k++) {
+      var pg = dash.pages[k];
+      var sel = pg.id === cur.id;
+      if (ly + rowH > bottom - pad) break;
+      ctx.fillStyle = sel ? '#12414f' : 'rgba(8,20,25,0.7)';
+      ctx.fillRect(lx, ly, listW, rowH - 2);
+      ctx.strokeStyle = sel ? MFD_EDGE : 'rgba(74,151,176,0.35)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(lx + 0.5, ly + 0.5, listW - 1, rowH - 3);
+      ctx.font = '11px ui-monospace, monospace';
+      ctx.fillStyle = sel ? '#b4f0ff' : MFD_INK;
+      ctx.fillText(pg.title, lx + 8, ly + 14);
+      hot(lx, ly, listW, rowH - 2, (function (pid) {
+        return function () { dash.set(G.panelPick, pid); };
+      })(pg.id), 'show this page here');
+      ly += rowH;
+    }
+  }
+
   function drawShipScreen(ctx, w, bottom) {
-    if (G.shipTab !== 'guns') G.shipTab = 'status';
+    if (G.shipTab !== 'guns' && G.shipTab !== 'panels') G.shipTab = 'status';
     var guns = G.shipTab === 'guns';
+    var panels = G.shipTab === 'panels';
     var top = modeFrame(ctx, w, bottom,
-                        guns ? 'SHIP — GUNS' : 'SHIP STATUS & INVENTORY',
-                        guns ? 'Tab status   ·   space fires A   ·   shift+space fires B'
+                        guns ? 'SHIP — GUNS'
+                        : panels ? 'SHIP — CONSOLE PANELS'
+                        : 'SHIP STATUS & INVENTORY',
+                        guns ? 'Tab panels   ·   space fires A   ·   shift+space fires B'
+                        : panels ? 'Tab status   ·   pick a mount, then pick a page'
                              : (G.ship.docked ? 'Tab guns   ·   F4 trade   ·   ↑↓ select   ·   Del jettison'
                                               : 'Tab guns   ·   ↑↓ select   ·   Del jettison   ·   Shift+Del all'));
 
@@ -866,7 +1020,8 @@
     var pad = 14;
     var tabH = 22, tabW = 150, tabY = top + 4;
     var tabs = [ { id: 'status', label: 'STATUS & INVENTORY', wide: true },
-                 { id: 'guns',   label: 'GUNS' } ];
+                 { id: 'guns',   label: 'GUNS' },
+                 { id: 'panels', label: 'PANELS' } ];
     var tx = pad;
     for (var ti = 0; ti < tabs.length; ti++) {
       var tw = tabs[ti].wide ? tabW : 90;
@@ -887,6 +1042,7 @@
     }
     top = tabY + tabH + 6;   // content starts below the tab strip
 
+    if (panels) { drawPanelsTab(ctx, pad, top, w, bottom); return; }
     if (guns) {
       /* The guns board, hosted in a tile the same way the ship page is on
        * the status tab — it draws into its own flat 460x178 MFD space and

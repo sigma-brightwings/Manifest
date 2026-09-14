@@ -1321,7 +1321,9 @@
        * to them unchanged. */
       if (e.key === 'Tab' && !G.hyper && !G.market && modeId() === 'ship') {
         e.preventDefault();
-        G.shipTab = (G.shipTab === 'guns') ? 'status' : 'guns';
+        var st = ['status', 'guns', 'panels'];
+        var si = st.indexOf(G.shipTab);
+        G.shipTab = st[(si < 0 ? 0 : si + 1) % st.length];
         return;
       }
 
@@ -1394,6 +1396,24 @@
           else G.warpIndex = Math.min(WARPS.length - 1, G.warpIndex + 1);
           break;
         case 'p': G.paused = !G.paused; break;
+        /* K CYCLES THE COCKPIT CHROME — band, console, bare canopy.
+         *
+         * The note on `cockpitChrome` has said "cycled by K" since the mode
+         * was built, and `drawStowedHint` has been telling the player "K for
+         * the band" on screen. Neither was true: the only writer was the
+         * options menu. So the one control that reaches the MFD console —
+         * the whole reason the console exists — could only be found by
+         * opening Esc and scrolling, and a player who pressed the key the
+         * game told them to press concluded the console was gone. Astra
+         * did, which is how this was found.
+         *
+         * Not gated on the cockpit view: pressing it in the exterior view
+         * sets what you will be looking at when you get back in, which is
+         * what every other display toggle here does. */
+        case 'k':
+          G.cockpitChrome = ((G.cockpitChrome || 0) + 1) % 3;
+          G.showCockpitFrame = G.cockpitChrome !== 2;
+          break;
         /* V stays. It is the one display toggle that is genuinely a FLYING
          * decision — you flick the prediction on to see where a burn puts
          * you and off again to see the sky — so it earns its key in a way
@@ -6986,7 +7006,9 @@
     ctx.textAlign = 'center';
     /* Above the footer line, not through it — the footer already owns
      * barY - 8, and two strings sharing a baseline is how you get a smear. */
-    ctx.fillText('instruments on the console  ·  K for the band  ·  click a panel to change its page',
+    ctx.fillText(G.cockpitChrome === 2
+      ? 'canopy only  ·  K for the instrument band'
+      : 'instruments on the console  ·  K for the band  ·  F5 → PANELS to reassign',
                  w / 2, barY - 24);
     ctx.textAlign = 'left';
     ctx.restore();
@@ -7311,12 +7333,23 @@
     return DASH_PAGE_BY_ID[G.dashPages[id]] || DASH_PAGE_BY_ID.blank;
   }
 
-  function cycleDashPage(id, dir) {
-    var cur = dashPageFor(id);
-    var i = DASH_PAGES.indexOf(cur);
-    var next = DASH_PAGES[(i + (dir || 1) + DASH_PAGES.length) % DASH_PAGES.length];
-    G.dashPages[id] = next.id;
-    say(id.replace('-', ' ') + ' panel  →  ' + next.title, 2);
+  /* ASSIGNED, NOT CYCLED, AND NOT FROM THE COCKPIT.
+   *
+   * Astra: "Clicking on the panels should do nothing now. This is because
+   * it's too easy to change your MFDs right now." She is right — the click
+   * target was the bounding box of a projected quad, which at any oblique
+   * angle covers a good deal of canopy that is not the panel, so reaching
+   * for something else in the cockpit reassigned an instrument. A screen
+   * you fly by should not be one stray click from becoming a different
+   * screen.
+   *
+   * So the assignment lives on the PANELS tab of F5, laid out in the shape
+   * the console actually has, and the cockpit itself is read-only. */
+  function setDashPage(id, pageId) {
+    dashPageFor(id);                       // ensures G.dashPages exists
+    if (!DASH_PAGE_BY_ID[pageId]) return false;
+    G.dashPages[id] = pageId;
+    return true;
   }
 
   /* Click targets for the panels, held until drawConsole rebuilds the
@@ -7370,16 +7403,10 @@
       var p = mfds[i];
       var page = dashPageFor(p.id);
 
-      /* Click it to change what it shows. The hotspot is the bounding box
-       * of the projected quad rather than the quad itself: a couple of
-       * pixels of slop at the corners of a panel you are looking at from an
-       * angle, against a click test that stays four numbers. */
-      if (!hyper) {
-        var bb = Render.polyBounds(p.quad);
-        panelHots.push({ x: bb.minX, y: bb.minY, w: bb.w, h: bb.h,
-                         hint: 'click to change this panel',
-                         fn: (function (id) { return function () { cycleDashPage(id, 1); }; })(p.id) });
-      }
+      /* NO CLICK TARGET. The panels are read-only in the cockpit now —
+       * see setDashPage for why, and F5 → PANELS for where it moved to.
+       * `panelHots` stays as the list drawConsole replays, because the
+       * console still has to clear it; it is simply always empty. */
 
       /* mfdBegin hands back the context the readout should be drawn into,
        * which is NOT always the one passed in. On the GPU path it is an
@@ -11049,6 +11076,10 @@
        * thing the world layer is captioning. One source, so the panel and
        * the label can never disagree about what the scanner can see. */
       wakesNow: wakesNow, bestWakeRead: bestWakeRead, wakeReadLine: wakeReadLine,
+      /* The console's page assignment, handed over whole: the list of pages
+       * there are, what each mount is showing, and the one way to change
+       * it. The PANELS tab is the only writer. */
+      dash: { pages: DASH_PAGES, pageFor: dashPageFor, set: setDashPage },
       doJump: doJump, complyWithDemand: complyWithDemand,
       /* The comms panel's buttons and its keyboard have to be the SAME
        * actions, or they drift apart and one of them starts lying. */

@@ -572,22 +572,15 @@ console.log('--- dashboard panels ---');
   check('and the frame still had no errors in it', errorsSince(mark).length === 0,
         errorsSince(mark)[0]);
 
-  /* Clicking a panel changes what it shows. The click targets are the
-   * bounding boxes of the projected quads, replayed into the hotspot list
-   * after the console rebuilds it — a rebuild that used to throw them away,
-   * which is a bug you cannot see in a screenshot. */
+  /* THE PANELS ARE READ-ONLY IN THE COCKPIT, and this used to assert the
+   * opposite. Astra: "Clicking on the panels should do nothing now. This is
+   * because it's too easy to change your MFDs right now." The old target
+   * was the bounding box of a projected quad, so at any oblique angle it
+   * covered canopy that was not the panel and an instrument changed under a
+   * stray reach. Assignment moved to F5 → PANELS. */
   var panelHots = G.hotspots.filter(function (s) { return s.hint === 'click to change this panel'; });
-  check('every visible panel is clickable', panelHots.length === 3, panelHots.length + ' targets');
-  var before = G.dashPages.centre;
-  var pages = {};
-  for (var n = 0; n < 12 && panelHots.length; n++) {
-    panelHots.forEach(function (s) { s.fn(); });
-    pages[G.dashPages.centre] = true;
-  }
-  check('clicking walks a panel through the pages',
-        Object.keys(pages).length > 4, Object.keys(pages).join(','));
-  check('and comes back round to where it started', !!pages[before]);
-  G.dashPages.centre = before;
+  check('a panel in the cockpit is not a button', panelHots.length === 0,
+        panelHots.length + ' targets');
 
   /* The aft view is a page like any other, so it must survive being put on
    * a panel you are looking straight at — and it must actually draw the
@@ -612,11 +605,52 @@ console.log('--- dashboard panels ---');
   var rearMark = drawn.texts.length;
   frame();
   var rearHots = G.hotspots.filter(function (s) { return s.hint === 'click to change this panel'; });
-  check('the bulkhead panels are clickable once you turn round', rearHots.length >= 1,
+  check('and the bulkhead pair are not buttons either', rearHots.length === 0,
         rearHots.length + ' targets');
   check('and looking behind you renders cleanly', errorsSince(rearMark).length === 0,
         errorsSince(rearMark)[0]);
   G.look.yaw = 0;
+  frame();
+
+  /* ---- F5 → PANELS is where the assignment lives now -------------------
+   *
+   * The layout is read off Render.MFD_MOUNTS rather than typed out here, so
+   * a console that grows a screen grows a tile; what this pins is that
+   * EVERY mount is reachable and that picking a page actually assigns it —
+   * the two halves that make the tab a replacement rather than a picture. */
+  G.panel = 4; G.shipTab = 'panels'; G.panelPick = 'centre';
+  var panelsMark = drawn.texts.length;
+  frame();
+  check('the PANELS tab renders without error', errorsSince(panelsMark).length === 0,
+        errorsSince(panelsMark)[0]);
+
+  var mountHots = G.hotspots.filter(function (s) { return s.hint === 'select this mount'; });
+  check('every console mount has a tile on it',
+        mountHots.length === W.Render.MFD_MOUNTS.length,
+        mountHots.length + ' of ' + W.Render.MFD_MOUNTS.length);
+
+  var pageHots = G.hotspots.filter(function (s) { return s.hint === 'show this page here'; });
+  check('and the pages are offered as a list', pageHots.length > 4,
+        pageHots.length + ' pages');
+
+  /* Pick a different mount, then a page, and the assignment lands on THAT
+   * mount — the bug this guards is a picker that always writes to one. */
+  var wasCentre = G.dashPages.centre;
+  mountHots[mountHots.length - 1].fn();
+  var picked = G.panelPick;
+  check('picking a tile selects that mount', picked !== 'centre', String(picked));
+  frame();
+  var pages2 = G.hotspots.filter(function (s) { return s.hint === 'show this page here'; });
+  var target = null;
+  for (var pi = 0; pi < pages2.length; pi++) {
+    pages2[pi].fn();
+    if (G.dashPages[picked] !== undefined) { target = G.dashPages[picked]; break; }
+  }
+  check('and choosing a page assigns it to the mount you picked',
+        !!target && G.dashPages.centre === wasCentre,
+        picked + ' → ' + target + ', centre still ' + G.dashPages.centre);
+
+  G.shipTab = 'status'; G.panel = 0;
   frame();
 })();
 
@@ -647,6 +681,37 @@ console.log('--- every screen, in both views ---');
   check('the number row does the same thing', G.panel === 8, String(G.panel));
   keydown({ key: 'Escape', shiftKey: false, preventDefault: function () {} });
   check('Escape comes back to the cockpit from anywhere', G.panel === 0, String(G.panel));
+
+  /* K CYCLES THE COCKPIT CHROME, and this is here because it did not.
+   *
+   * `cockpitChrome`'s own comment said "cycled by K" and drawStowedHint put
+   * "K for the band" on the screen, but the only writer was the options
+   * menu — the key was never wired. The MFD console is the whole reason
+   * that mode exists, and the one control that reaches it did nothing, so a
+   * player who pressed the key the game told them to press concluded the
+   * console had been removed. Astra did.
+   *
+   * A hint that names a key is a promise; this is the test that keeps it. */
+  var chrome0 = G.cockpitChrome || 0;
+  var seen = [];
+  for (var ck = 0; ck < 3; ck++) {
+    keydown({ key: 'k', shiftKey: false, preventDefault: function () {} });
+    seen.push(G.cockpitChrome);
+  }
+  check('K cycles the cockpit chrome', seen.length === 3 &&
+        seen[0] !== chrome0 && seen[2] === chrome0 &&
+        seen[0] !== seen[1] && seen[1] !== seen[2],
+        'from ' + chrome0 + ' -> ' + seen.join(' -> '));
+  check('and the bare canopy does not claim to have a frame',
+        (function () {
+          G.cockpitChrome = 2;
+          keydown({ key: 'k', shiftKey: false, preventDefault: function () {} });
+          var wrapped = G.showCockpitFrame;
+          G.cockpitChrome = 2; G.showCockpitFrame = false;
+          return wrapped === true;
+        })());
+  G.cockpitChrome = chrome0;
+  G.showCockpitFrame = chrome0 !== 2;
   keydown({ key: 'F3', shiftKey: false, preventDefault: function () {} });
   keydown({ key: 'F1', shiftKey: false, preventDefault: function () {} });
   check('and so does F1', G.panel === 0, String(G.panel));
