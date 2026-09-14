@@ -149,24 +149,10 @@
    * THE SPIN, and which half of the model it belongs to. A model that
    * declares a `spin` bucket is drawn as a still shell with a turning ring
    * on top, and the bays are part of the SHELL: you dock to the hub, which
-   * is precisely why the hub does not turn. A model with no spin bucket
-   * turns as one piece and its bays turn with it. So `still` is not a
-   * preference, it is read off the model, and berths follow the geometry
-   * they are cut into. */
-  function stationSpins(port) {
-    var R = global.Render;
-    if (!R || !R.libPort || !R.portModelFor || !port) return false;
-    /* Cached on the port. This is asked twice per station per frame by the
-     * renderer and again by every berth lookup, and the answer is a property
-     * of which model the port wears — which does not change while the game
-     * is running. Same treatment sys._ships and sys._loot get. */
-    if (port._spins === undefined) {
-      var got = R.libPort(R.portModelFor(port));
-      port._spins = !!(got && got.spin);
-    }
-    return port._spins;
-  }
-
+   * is precisely why the hub does not turn. Anything else holds still — see
+   * the note on `frozen` below for why that default was inverted, and where
+   * the question "does this model have a ring" now lives (Render.portSpins,
+   * one copy, asked by the renderer that needs it). */
   function stationBasis(port, sys, t, still) {
     var host = port && port.parentBody;
     if (!host) return null;
@@ -181,7 +167,23 @@
     /* One turn every couple of minutes, slower for bigger rings — as it
      * must be, or the rim runs at an absurd speed. */
     var rate = 0.06 / Math.max(0.4, port.radius || 1);
-    var frozen = (still === undefined) ? stationSpins(port) : !!still;
+    /* STILL BY DEFAULT, and that is the opposite of what it used to be.
+     *
+     * The old default spun anything whose model declared no `stationSpin`
+     * bucket — which is every model in the shipped library, so every
+     * station in the game turned as one piece, docking throats and all.
+     * That is precisely the case PORT-MODELS.md warns against: "a hub that
+     * rotates with its own ring is not something a pilot can aim an
+     * approach at." It is also the wrong read for the art, which is towers,
+     * spines and cradles with flat decks and gantries rather than
+     * centrifuges.
+     *
+     * So spin is opt-in now: a model turns only the geometry it puts in
+     * `stationSpin`, and the renderer asks for that pass explicitly with
+     * still=false. Everything else holds still, which is what the arrival
+     * sequence needs to have something to aim at. Adding a real ring to a
+     * model later is then purely additive. */
+    var frozen = (still === undefined) ? true : !!still;
     var ang = frozen ? 0 : t * rate;
     return {
       up: normal,
@@ -203,15 +205,107 @@
    * its parking every time you look away is a starport you cannot learn.
    * Berth 0 is the large bay and is reserved for hulls that need it; the
    * rest take a small or a medium interchangeably. */
-  function assignBerth(ship, port) {
-    var Gen = global.Gen;
-    var n = (Gen && Gen.BERTH_COUNT) || 6;
-    var big = (ship && ship.dryMass || 0) > 260;   // t; freighters and up
-    if (big || n < 2) return 0;
-    var k = String(port && port.id || 'x');
+  function portHash(port) {
+    var k = String((port && port.id) || 'x');
     var h = 0;
     for (var i = 0; i < k.length; i++) h = (h * 31 + k.charCodeAt(i)) >>> 0;
-    return 1 + (h % (n - 1));
+    return h;
+  }
+
+  /* A modelled port's berths as BOXES IN KILOMETRES, indexed exactly as
+   * Gen.berthOffset indexes them. The shared sort is the whole point: if
+   * this ordered them differently, berth 3 here and berth 3 there would be
+   * two different alcoves and a ship would be measured against one and
+   * parked in the other. */
+  function berthBoxes(port) {
+    var Gen = global.Gen;
+    var mb = Gen && Gen.modelledBerths && Gen.modelledBerths(port);
+    if (!mb || !mb.length) return null;
+    var r = (port && port.radius) || 1;
+    return mb.slice().sort(function (a, b) {
+      return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
+    }).map(function (b) {
+      if (!b.min || !b.max) return null;        // a berth with no extent
+      return [(b.max[0] - b.min[0]) * r,
+              (b.max[1] - b.min[1]) * r,
+              (b.max[2] - b.min[2]) * r];
+    });
+  }
+
+  /* What this ship needs a berth to be. Read off the model it wears, via
+   * the one function that knows which model that is. */
+  function hullBox(ship) {
+    var R = global.Render;
+    var kind = (ship && (ship.meshKind || ship.cls)) || 'courier';
+    var sp = R && R.hullSpan ? R.hullSpan(kind) : null;
+    return sp ? [sp.w, sp.h, sp.l] : [0.005, 0.005, 0.010];
+  }
+
+  /* Does this hull go in this alcove? Both boxes are sorted longest-first
+   * before comparing, which allows the hull to lie along whichever of the
+   * berth's axes is the long one — berths in the library open along +x,
+   * -x and -y, and requiring a particular correspondence would condemn a
+   * bay for being modelled sideways. */
+  function boxFits(need, box) {
+    if (!box) return false;
+    var a = need.slice().sort(function (x, y) { return y - x; });
+    var b = box.slice().sort(function (x, y) { return y - x; });
+    return a[0] <= b[0] && a[1] <= b[1] && a[2] <= b[2];
+  }
+
+  function boxVol(box) { return box ? box[0] * box[1] * box[2] : 0; }
+
+  /* Which berth a ship gets, and where a port has a model it is decided by
+   * MEASUREMENT rather than by a table.
+   *
+   * The old rule was "dryMass over 260 tonnes takes berth 0, everything
+   * else takes a hash", and both halves were wrong once real station art
+   * arrived. Mass is not size. And berth 0 is not the large bay: berthOffset
+   * sorts a model's berths across the shed and marks the BIGGEST `large`,
+   * which is index 2 on the ring, 3 on the spine and 1 on the cradle — so
+   * every heavy hull was being sent to a rim alcove.
+   *
+   * It never showed, because the stations are drawn far larger than the
+   * fleet they were modelled around: the smallest berth in the library is
+   * about twenty-five times the length of the biggest hull, so nothing
+   * could fail to fit and nothing checked. Both halves of that are fixed
+   * here — the fit is measured, and ships.test.js now sweeps the whole
+   * fleet against every station model, so a hull added later cannot quietly
+   * stop fitting somewhere.
+   *
+   * An UNMODELLED port has no boxes to measure and keeps the old rule,
+   * which is the right answer for a shed built from a constant table. */
+  function assignBerth(ship, port) {
+    var Gen = global.Gen;
+    var boxes = berthBoxes(port);
+    if (!boxes || !boxes.length) {
+      var n0 = (Gen && Gen.BERTH_COUNT) || 6;
+      var big = (ship && ship.dryMass || 0) > 260;   // t; freighters and up
+      if (big || n0 < 2) return 0;
+      return 1 + (portHash(port) % (n0 - 1));
+    }
+
+    var need = hullBox(ship);
+    var fits = [], i;
+    for (i = 0; i < boxes.length; i++) if (boxFits(need, boxes[i])) fits.push(i);
+
+    /* NOTHING FITS is still an answer. A hull wedged into the largest bay
+     * the port has is a wrong thing you can see and report; a ship with no
+     * berth at all is a throw from inside the docking code. The test is
+     * what turns the first into a build failure. */
+    if (!fits.length) {
+      var best = 0;
+      for (i = 1; i < boxes.length; i++) if (boxVol(boxes[i]) > boxVol(boxes[best])) best = i;
+      return best;
+    }
+
+    /* The SMALLEST bay that takes it, so a courier does not park in the
+     * heavy berth and leave a freighter circling. Ties broken by the port's
+     * own hash, so the choice is still stable across a save and a reload. */
+    fits.sort(function (a, b) { return boxVol(boxes[a]) - boxVol(boxes[b]) || a - b; });
+    var floor = boxVol(boxes[fits[0]]) * 1.05;
+    var band = fits.filter(function (j) { return boxVol(boxes[j]) <= floor; });
+    return band[portHash(port) % band.length];
   }
 
   /* WHICH WAY A BERTHED HULL POINTS, in world space, and there is one of
@@ -3444,6 +3538,7 @@
     insideShaft: insideShaft,
     berthState: berthState,
     assignBerth: assignBerth,
+    hullBox: hullBox, berthBoxes: berthBoxes, boxFits: boxFits,
     padCapture: padCapture,
     landingDamage: landingDamage,
     smootherstep: smootherstep,

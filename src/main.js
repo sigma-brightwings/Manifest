@@ -8171,7 +8171,14 @@
          * Anything without that bucket, procedural ports included, spins as
          * one piece exactly as it always did. */
         var turns = Render.portSpins(model);
-        var frame = stationFrame(b, turns);
+        /* THE SHELL ALWAYS HOLDS STILL. It used to be drawn on the turning
+         * frame whenever the model declared no spin bucket, which is every
+         * model in the library — so the docking throats swung round with
+         * the hull and there was nothing fixed to aim an approach at. Spin
+         * is opt-in now, and `turns` says only whether there is a ring to
+         * draw on top; Sim.stationBasis defaults to frozen to match, so the
+         * berths and the drawing cannot disagree about where a bay is. */
+        var frame = stationFrame(b, true);
         if (frame) {
           var sun = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), item.pos));
           Render.drawStationModel(ctx, cam, frame, b.radius, sun, model, b.color);

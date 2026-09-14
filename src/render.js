@@ -894,6 +894,25 @@
    * beams would leave a ship that is not the one on screen. */
   function shipMuzzles() { return hullMuzzles('courier'); }
 
+  /* HOW BIG THIS CLASS ACTUALLY IS, in kilometres — the bounding box of the
+   * model it wears, not a number in a table beside it.
+   *
+   * Same key and same fallback as hullMuzzles, and for the same reason: a
+   * berth sized against one model while the ship wears another parks a hull
+   * through a wall. `span` is what the converter has always measured and
+   * nothing has ever read; it is the model's extent in the normalised frame
+   * every hull is drawn in, so SHIP_LEN converts it straight to km.
+   *
+   * The fallback is a courier-ish box rather than zero, because "we do not
+   * know how big it is" must not read as "it fits anywhere". */
+  function hullSpan(kind) {
+    var id = HULL_ASSIGN[kind] || HULL_ASSIGN.courier;
+    var m = global.HullLib && global.HullLib[id];
+    var sp = m && m.span;
+    if (!sp) return { w: SHIP_LEN * 0.5, h: SHIP_LEN * 0.5, l: SHIP_LEN };
+    return { w: sp[0] * SHIP_LEN, h: sp[1] * SHIP_LEN, l: sp[2] * SHIP_LEN };
+  }
+
   /* ---- and where a tracer APPEARS to come from, from the seat ------------
    * The real chin guns are 5 m ahead of the origin and 81 cm under it, which
    * from an eye 8 cm forward subtends nine degrees below the boresight. That
@@ -4749,6 +4768,7 @@
     gearPhase: gearPhase, gearBounds: gearBounds, gearTravelOf: gearTravelOf,
     hullIds: hullIds, assignHull: assignHull,
     HULL_ASSIGN: HULL_ASSIGN,
+    hullSpan: hullSpan,
     libPort: libPort, portIds: portIds, reloadPorts: reloadPorts,
     portModelFor: portModelFor, STATION_MODELS: STATION_MODELS,
     portRole: portRole, assignPort: assignPort, PORT_ASSIGN: PORT_ASSIGN,
