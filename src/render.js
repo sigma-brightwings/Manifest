@@ -3186,6 +3186,248 @@
     return bestD < reach * 0.25 ? best : -1;
   }
 
+  /* ---- THE BERTH, AT THE SIZE OF THE SHIP -------------------------------
+   *
+   * Astra, parked at Waypoint Dock: "where's the doors? it's just a square
+   * box room with no decorations."
+   *
+   * Nothing was missing. The berth anchor there measured 2.16 km by 1.20
+   * km by 0.91 km around a twenty-five metre hull, so the nearest wall was
+   * three hundred metres away and the outer doors were a kilometre off and
+   * five hundred metres below the canopy. A room reads as a box when every
+   * edge of it is too far away to resolve — and halving the station (see
+   * STATION_SCALE, now 2.1) only halves that.
+   *
+   * The rest of the gap closes at the OTHER end. This is deck furniture
+   * measured off the hull rather than off the station: a marked pad the
+   * ship actually sits on, four floodlight masts, clamp blocks, a berth
+   * number. It is the only geometry in a station bay whose size does not
+   * change when STATION_SCALE does, which is exactly why it works — it is
+   * the ruler the eye needs to read the rest of the room.
+   *
+   * And the art's own fittings come with it. Every station model carries
+   * `lamps`, `navLights` and `signs` anchors — twenty-nine, fourteen and
+   * five on spine-s — and nothing in the game has ever drawn one of them.
+   * Same class of find as the interior buckets. They are drawn here, lit,
+   * the ones belonging to this berth.
+   *
+   * Built in the model's own frame so it rides with the station for free,
+   * and cached per (role, berth, radius) because the pad is a fixed number
+   * of METRES and therefore a different number of model units at every
+   * station wearing the same model. */
+  var DRESS = {};
+  var DRESS_KEYS = [];
+  var DRESS_MAX = 24;
+
+  function pushBox(mesh, o, f, r, u, a, b, c, ha, hb, hc, colour) {
+    var base = mesh.v.length;
+    for (var i = 0; i < 8; i++) {
+      var sa = (i & 1) ? ha : -ha, sb = (i & 2) ? hb : -hb, sc = (i & 4) ? hc : -hc;
+      mesh.v.push([
+        o[0] + f[0] * (a + sa) + r[0] * (b + sb) + u[0] * (c + sc),
+        o[1] + f[1] * (a + sa) + r[1] * (b + sb) + u[1] * (c + sc),
+        o[2] + f[2] * (a + sa) + r[2] * (b + sb) + u[2] * (c + sc)
+      ]);
+    }
+    /* Corners are indexed by bit: 1 = +a, 2 = +b, 4 = +c. Written out
+     * rather than generated so a wrong face is a wrong line rather than a
+     * wrong loop. Winding is not load-bearing — both renderers turn the
+     * normal to face the camera — so these are listed for readability. */
+    var quads = [[0,1,3,2],[4,6,7,5],[0,4,5,1],[2,3,7,6],[0,2,6,4],[1,5,7,3]];
+    for (var q = 0; q < quads.length; q++) {
+      var Q = quads[q];
+      mesh.f.push([base + Q[0], base + Q[1], base + Q[2]]);
+      mesh.c.push(colour);
+      mesh.f.push([base + Q[0], base + Q[2], base + Q[3]]);
+      mesh.c.push(colour);
+    }
+  }
+
+  function berthDressing(role, berth, radiusKm) {
+    if (!(radiusKm > 0)) return null;
+    var key = role + '#' + berth + '#' + radiusKm.toFixed(4);
+    if (DRESS[key] !== undefined) return DRESS[key];
+
+    var lib = libPort(role);
+    var mb = lib && lib.anchors && lib.anchors.berths;
+    if (!mb || !mb.length) { DRESS[key] = null; return null; }
+    /* The same sort generate.js uses. A pad laid at berth 3 and a ship
+     * parked in berth 5 is the grey bay again, only lit. */
+    var sorted = mb.slice().sort(function (a, b) {
+      return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
+    });
+    var k = ((berth % sorted.length) + sorted.length) % sorted.length;
+    var bx = sorted[k];
+    if (!bx || !bx.mid) { DRESS[key] = null; return null; }
+    var deck = berthDeck(role, k);
+    if (deck === null || deck === undefined) deck = bx.min ? bx.min[2] : bx.mid[2];
+
+    /* Metres, into the model's normalised units. Everything below is in
+     * SHIP LENGTHS, which is the whole point of the exercise. */
+    var M2U = 1 / radiusKm;
+    var L = SHIP_LEN * M2U;                       // one hull length
+    var o = [bx.mid[0], bx.mid[1], deck];
+    var f = bx.normal ? [bx.normal[0], bx.normal[1], bx.normal[2]] : [1, 0, 0];
+    var fl = Math.sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]) || 1;
+    f = [f[0] / fl, f[1] / fl, f[2] / fl];
+    var u = [0, 0, 1];
+    /* r = f x u, normalised. If the berth opens straight up — no model in
+     * the library does, but a hand-made one could — fall back to model x. */
+    var r = [f[1] * u[2] - f[2] * u[1], f[2] * u[0] - f[0] * u[2], f[0] * u[1] - f[1] * u[0]];
+    var rl = Math.sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+    r = rl > 1e-9 ? [r[0] / rl, r[1] / rl, r[2] / rl] : [1, 0, 0];
+
+    var m = { v: [], f: [], c: [] };
+    /* LIT, WITHOUT A LIGHTING SYSTEM, and that is what the '!' is doing on
+     * colours this dark.
+     *
+     * Indoors the shader replaces the sun with a lamp at the eye: a
+     * surface reads 0.10 + 0.55*|N.V|, so anything seen at a glancing
+     * angle falls to a tenth. The pilot's eye sits six metres above this
+     * deck, which means the deck is ALWAYS glancing, which is why an
+     * undressed bay read as a black box however much geometry was in it.
+     *
+     * An emissive face is flat 1.15 instead — no angle term at all. That
+     * is exactly what a surface under a floodlight looks like, so the
+     * stand's own plating is emissive at a DARK colour rather than plain
+     * at a light one: 1.15 x #4a4f58 is a lit deck, not a glowing one.
+     * Nothing in the engine had to change for it, which is the argument
+     * for doing it this way rather than adding real lamps. The masts
+     * themselves stay plain, so they shade with angle and read as objects
+     * standing on the floor rather than as decals painted on it. */
+    var PLATE = '!#4a4f58', KERB = '!#5a6070', MARK = '!#c9b44a',
+        DARK = '!#23262c', POST = '#5d6673', HEAD = '!#ffe6a8',
+        SIGN = '!#7ed3ff', CLAMP = '!#6e7683';
+
+    var padA = 2.2 * L, padB = 1.4 * L, padT = 0.012 * L;   // 30 cm of plate
+    /* The pad sits ON the deck, not in it: half its thickness up, plus a
+     * skin, or it z-fights the plate it is bolted to at every distance. */
+    var padC = padT + 0.004 * L;
+    pushBox(m, o, f, r, u, 0, 0, padC, padA, padB, padT, PLATE);
+
+    /* A KERB ROUND ALL FOUR SIDES. One rectangle the eye can find is worth
+     * more than any amount of surface detail: it is what turns "floor" into
+     * "the stand I am parked on", and it is the only edge in the bay near
+     * enough to resolve. */
+    var barC = padT * 2 + 0.006 * L;
+    var kerbH = 0.05 * L, kerbW = 0.05 * L;
+    pushBox(m, o, f, r, u,  padA, 0, barC + kerbH, kerbW, padB, kerbH, KERB);
+    pushBox(m, o, f, r, u, -padA, 0, barC + kerbH, kerbW, padB, kerbH, KERB);
+    pushBox(m, o, f, r, u, 0,  padB, barC + kerbH, padA, kerbW, kerbH, KERB);
+    pushBox(m, o, f, r, u, 0, -padB, barC + kerbH, padA, kerbW, kerbH, KERB);
+
+    /* Hazard bars along the kerbs, which is what tells you which way round
+     * the stand is before you can read anything on it. */
+    for (var s = -1; s <= 1; s += 2) {
+      for (var j = 0; j < 9; j++) {
+        pushBox(m, o, f, r, u,
+                (j - 4) * (padA / 4.6), s * padB, barC + kerbH * 2.02,
+                padA / 11, kerbW, kerbH * 0.35, j % 2 ? DARK : MARK);
+      }
+    }
+    /* Two short bars across the head of the stand rather than a centreline
+     * down it: from an eye six metres up, a stripe running away under the
+     * hull is fifty metres of yellow wedge filling the canopy, which was
+     * the first version and looked like a runway painted on the camera. */
+    for (var jb = -1; jb <= 1; jb += 2) {
+      pushBox(m, o, f, r, u, jb * padA * 0.62, 0, barC, padA * 0.06, padB * 0.5,
+              padT * 0.35, MARK);
+    }
+
+    /* Clamp blocks under the hull, one at each quarter. Small: they are a
+     * detail at the foot of the ship, not furniture to look at. */
+    for (var ca = -1; ca <= 1; ca += 2) {
+      for (var cb = -1; cb <= 1; cb += 2) {
+        pushBox(m, o, f, r, u, ca * 0.50 * L, cb * 0.40 * L, barC + 0.022 * L,
+                0.07 * L, 0.04 * L, 0.022 * L, CLAMP);
+      }
+    }
+
+    /* FOUR MASTS, outside the kerb, with lit heads. They give the bay a
+     * vertical scale — the one thing a floor cannot — and they are the
+     * reason the far wall now has something in front of it to be far
+     * behind. */
+    var mastH = 0.8 * L;
+    for (var ma = -1; ma <= 1; ma += 2) {
+      for (var mb2 = -1; mb2 <= 1; mb2 += 2) {
+        var aa = ma * (padA + 0.12 * L), bb = mb2 * (padB + 0.12 * L);
+        pushBox(m, o, f, r, u, aa, bb, mastH * 0.5 + barC,
+                0.028 * L, 0.028 * L, mastH * 0.5, POST);
+        pushBox(m, o, f, r, u, aa, bb, mastH + barC,
+                0.075 * L, 0.075 * L, 0.04 * L, HEAD);
+      }
+    }
+
+    /* The berth number, on a board at the head of the stand facing the way
+     * a ship comes in. It reads as "there is a system here that knows which
+     * berth this is", which is most of what dressing is for. */
+    var sgA = -(padA + 0.45 * L);
+    pushBox(m, o, f, r, u, sgA, 0, 0.35 * L + barC, 0.025 * L, 0.025 * L, 0.35 * L, POST);
+    pushBox(m, o, f, r, u, sgA, 0, 0.75 * L + barC, 0.02 * L, 0.30 * L, 0.13 * L, SIGN);
+    for (var dgt = 0; dgt <= berth % 5; dgt++) {
+      pushBox(m, o, f, r, u, sgA - 0.03 * L, (dgt - (berth % 5) / 2) * 0.09 * L,
+              0.75 * L + barC, 0.012 * L, 0.022 * L, 0.075 * L, DARK);
+    }
+
+    /* AND THE ART'S OWN FITTINGS. Approach lamps and nav lights sit at
+     * every berth in every model and have never been drawn. Taken by
+     * PROXIMITY rather than by node name, for the reason berthApertures
+     * gives: a ring mirrors its patterns, so two fittings on opposite
+     * sides of the hub answer to the same name. */
+    var reach = 0.9;                       // of the berth's own longest side
+    var span = bx.min && bx.max
+      ? Math.max(bx.max[0] - bx.min[0], bx.max[1] - bx.min[1], bx.max[2] - bx.min[2])
+      : 0.2;
+    var near = span * reach;
+    ['lamps', 'navLights'].forEach(function (kind) {
+      var list = (lib.anchors && lib.anchors[kind]) || [];
+      for (var i = 0; i < list.length; i++) {
+        var a = list[i];
+        if (!a || !a.mid) continue;
+        var dx = a.mid[0] - bx.mid[0], dy = a.mid[1] - bx.mid[1], dz = a.mid[2] - bx.mid[2];
+        if (dx * dx + dy * dy + dz * dz > near * near) continue;
+        /* The anchor's own size, floored so a fitting the converter wrote
+         * as a three-metre box is still visible from a stand two hundred
+         * metres away. It is a light: being a little large is how a light
+         * reads at all. */
+        var h = [0.02, 0.02, 0.02];
+        if (a.min && a.max) {
+          for (var q2 = 0; q2 < 3; q2++) {
+            h[q2] = Math.max((a.max[q2] - a.min[q2]) * 0.5, 0.06 * L);
+          }
+        }
+        var base2 = m.v.length;
+        for (var c8 = 0; c8 < 8; c8++) {
+          m.v.push([a.mid[0] + ((c8 & 1) ? h[0] : -h[0]),
+                    a.mid[1] + ((c8 & 2) ? h[1] : -h[1]),
+                    a.mid[2] + ((c8 & 4) ? h[2] : -h[2])]);
+        }
+        var qq = [[0,1,3,2],[4,6,7,5],[0,4,5,1],[2,3,7,6],[0,2,6,4],[1,5,7,3]];
+        var col = kind === 'lamps' ? '!#ffd36b' : '!#7dffb0';
+        for (var q3 = 0; q3 < qq.length; q3++) {
+          m.f.push([base2 + qq[q3][0], base2 + qq[q3][1], base2 + qq[q3][2]]); m.c.push(col);
+          m.f.push([base2 + qq[q3][0], base2 + qq[q3][2], base2 + qq[q3][3]]); m.c.push(col);
+        }
+      }
+    });
+
+    /* The stand's own footprint, in model units, recorded rather than
+     * re-derived. The mesh also carries the station's approach lamps,
+     * which sit where the art put them and therefore scale with the
+     * station — so the mesh's bounding box is not the stand's size, and
+     * anything asking that question (berths.test.js does) needs this. */
+    m.padHalfA = padA;
+    m.padHalfB = padB;
+
+    DRESS[key] = m;
+    DRESS_KEYS.push(key);
+    /* A station's radius is a float off an rng, so this key is effectively
+     * unique per station. Bounded rather than unbounded: a career visits
+     * more ports than a cache should hold meshes for. */
+    while (DRESS_KEYS.length > DRESS_MAX) delete DRESS[DRESS_KEYS.shift()];
+    return m;
+  }
+
   function drawStationModel(ctx, cam, frame, radiusKm, sunDir, model, tint, doors, section) {
     /* WITH THE DOORS SEPARATED when this model has any: the hull without
      * them, then each leaf at its own offset. `doors` is { open, berth }
@@ -3217,6 +3459,14 @@
           paintPart(ctx, cam, frame, sec.structure.hull, radiusKm, sunDir, tint);
         }
         paintPart(ctx, cam, frame, sec.sections[section].hull, radiusKm, sunDir, tint);
+        /* AND THE STAND ITSELF, when the caller named a berth. Drawn with
+         * the compartment rather than with the hull because that is what it
+         * belongs to: shut the blast door on this section and its deck
+         * furniture goes with it. */
+        if (mine !== null) {
+          paintPart(ctx, cam, frame, berthDressing(model, mine, radiusKm),
+                    radiusKm, sunDir, tint);
+        }
       } else {
         paintPart(ctx, cam, frame, d.hull, radiusKm, sunDir, tint);
       }
@@ -3494,11 +3744,26 @@
      * a point buried in the plating answers about the plating. */
     var deck = berthDeck(role, k);
     if (deck === null) deck = b.min ? b.min[2] : b.mid[2];
-    var g = global.Gen && global.Gen.bayGeometry
-      ? global.Gen.bayGeometry({ role: role, kind: 'station', radius: 1 })
-      : null;
-    var stand = (g && typeof g.standoff === 'number') ? g.standoff : 0.012;
-    var o = [b.mid[0], b.mid[1], deck + stand];
+    /* A NOMINAL LIFT, and it has to be nominal.
+     *
+     * This used to ask Gen.bayGeometry with a stub port pinned at radius 1
+     * — the third time a stub port has quietly stood in for a real one in
+     * this file. It was harmless while `standoff` was a pure fraction of
+     * the radius, because then the answer did not depend on the radius at
+     * all. It is not harmless now: the real clearance is an absolute six
+     * metres measured off the tallest hull in the fleet (see
+     * cappedStandoff), so it is a DIFFERENT fraction at every station
+     * wearing this model, and a table cached per role cannot hold it.
+     *
+     * It does not need to. This table is the camera's reach, not the
+     * ship's placement: it asks how much room there is around the stand,
+     * and the difference between six metres and eighty off the deck is
+     * nothing against a throat nine hundred metres tall. So the lift is a
+     * fixed fraction stated here, the table stays cacheable per role, and
+     * berths.test.js's buried threshold — which was measured against this
+     * exact number — keeps meaning what it measured. */
+    var BOOM_LIFT = 0.012;
+    var o = [b.mid[0], b.mid[1], deck + BOOM_LIFT];
 
     var T = boomTris(lib, o);
     var d = new Float32Array(BOOM_YAW * BOOM_PITCH);
@@ -6197,6 +6462,7 @@
     drawHoloTarget: drawHoloTarget,
     drawHullModel: drawHullModel,
     drawStationModel: drawStationModel,
+    berthDressing: berthDressing,
     drawPortDressing: drawPortDressing,
     drawPortLamps: drawPortLamps,
     drawPortDoors: drawPortDoors,

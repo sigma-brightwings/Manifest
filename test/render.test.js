@@ -2063,8 +2063,30 @@ console.log('--- imported ports ---');
   check('leaving a usable headroom rather than a roof under the floor',
         g1.ceilZ > g1.floorZ, g1.floorZ + ' -> ' + g1.ceilZ);
   check('and anything the model did not declare still falls back',
-        g1.throatR === tbl.throatR && g1.standoff === tbl.standoff,
-        g1.throatR + ' / ' + g1.standoff);
+        g1.throatR === tbl.throatR, String(g1.throatR));
+
+  /* STANDOFF IS THE EXCEPTION, and deliberately. Every other field in the
+   * table is a proportion of the port; gear-to-floor clearance is not —
+   * it is a distance between a hull and a deck, and the same fraction that
+   * is 1.2 m at a small pad was 80 m at a station. bayGeometry now caps it
+   * at half the tallest hull in the fleet plus a metre for the gear, so
+   * the number that comes out is an absolute clearance divided by the
+   * radius rather than a shape. Checked against the fleet rather than
+   * against a literal, so a re-exported hull moves this on its own. */
+  var tallest = 0;
+  Object.keys(R.HULL_ASSIGN).forEach(function (k) {
+    var sp = R.hullSpan(k); if (sp && sp.h > tallest) tallest = sp.h;
+  });
+  check('the fleet has a tallest hull to measure the clearance from', tallest > 0);
+  check('and the parked clearance is that, not a fraction of the port',
+        Math.abs(g1.standoff * 2 - (tallest * 0.5 + 0.001)) < 1e-9,
+        (g1.standoff * 2 * 1000).toFixed(2) + ' m at a 2 km port');
+  /* Still capped by the old fraction, so a port small enough that this
+   * would be a large share of its own bay keeps the answer it had. */
+  var gSmall = Gen.bayGeometry({ radius: 0.1, shaftDepth: 0.09, surface: true });
+  check('a small pad keeps the proportional clearance it always had',
+        gSmall.standoff === tbl.standoff,
+        (gSmall.standoff * 0.1 * 1000).toFixed(2) + ' m at a 100 m pad');
 
   /* A MODEL THAT TURNS PART OF ITSELF. The procedural stations spin by
    * rotating the whole frame, which is right for a wheel drawn as one

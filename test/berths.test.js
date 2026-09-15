@@ -1178,6 +1178,69 @@ console.log('--- landing in a berth ---');
         back.inner.toFixed(2));
 })();
 
+console.log('--- the stand under the ship ---');
+(function () {
+  /* THE ONE THING IN A BAY THAT DOES NOT SCALE WITH THE STATION, and that
+   * is the whole of why it works. Astra, parked: "it's just a square box
+   * room with no decorations." Nothing was missing — the berth anchor
+   * measured 2.16 km around a 25 m hull, so every edge in the room was too
+   * far off to resolve. Halving the station halves that and no more; the
+   * rest closes by putting something the size of the SHIP on the floor.
+   *
+   * So the invariant is physical, not proportional: the same stand, in
+   * metres, at any station wearing the model. */
+  var role = MODELS[0];
+  var small = Render.berthDressing(role, 0, 1.3);
+  var large = Render.berthDressing(role, 0, 6.7);
+  check('the stand builds at a small station', !!(small && small.f.length > 50),
+        small && small.f.length + ' faces');
+  check('and at a large one', !!(large && large.f.length > 50));
+  if (!small || !large) return;
+
+  /* The STAND's footprint, not the mesh's bounding box: the mesh also
+   * carries the station's own approach lamps, which sit where the art put
+   * them and therefore do scale with the station. */
+  var sKm = small.padHalfA * 2 * 1.3, lKm = large.padHalfA * 2 * 6.7;
+  console.log('  the stand is ' + (sKm * 1000).toFixed(0) + ' m across at a 1.3 km station and ' +
+              (lKm * 1000).toFixed(0) + ' m at a 6.7 km one');
+  check('the stand is the same size in metres at both',
+        Math.abs(sKm - lKm) / Math.max(sKm, lKm) < 0.02,
+        (sKm * 1000).toFixed(1) + ' m vs ' + (lKm * 1000).toFixed(1) + ' m');
+  /* And that size is a few hulls, not a few hundred metres of apron. */
+  check('and it is a few ship lengths across, which is the point',
+        sKm > Render.SHIP_LEN * 2 && sKm < Render.SHIP_LEN * 10,
+        (sKm / Render.SHIP_LEN).toFixed(1) + ' hull lengths');
+
+  /* LIT WITHOUT A LIGHTING SYSTEM. Indoors every surface reads
+   * 0.10 + 0.55*|N.V| and the deck is always glancing from a cockpit six
+   * metres above it, so a plain-coloured stand is a black stand. The
+   * plating is emissive at a dark colour instead — flat 1.15, which is
+   * what a floodlit surface looks like — and if that ever gets reverted to
+   * plain the bay goes black again with nothing else failing. */
+  var emissive = 0;
+  for (var c = 0; c < small.c.length; c++) if (small.c[c][0] === '!') emissive++;
+  check('most of the stand is self-lit, or the bay is black again',
+        emissive > small.c.length * 0.6,
+        emissive + ' of ' + small.c.length + ' faces');
+
+  /* THE ART'S OWN FITTINGS, which had never been drawn. */
+  var lib = Render.libPort(role);
+  var fittings = ((lib.anchors && lib.anchors.lamps) || []).length +
+                 ((lib.anchors && lib.anchors.navLights) || []).length;
+  console.log('  ' + role + ' declares ' + fittings +
+              ' lamp and nav-light anchors the game had never drawn');
+  check('the model declares fittings to draw', fittings > 0);
+
+  /* Cached per (role, berth, radius) — a station radius is a float off an
+   * rng, so the key is effectively unique per station and the cache has to
+   * be bounded or a long career holds a mesh for every port it visited. */
+  check('and it is cached rather than rebuilt',
+        Render.berthDressing(role, 0, 1.3) === small);
+  for (var n = 0; n < 40; n++) Render.berthDressing(role, 0, 2 + n * 0.01);
+  check('the cache is bounded — a career visits more ports than it can hold',
+        Render.berthDressing(role, 0, 1.3) !== small);
+})();
+
 console.log('--- leaving a berth ---');
 (function () {
   /* THE TWO BUGS THAT WERE HIDING EACH OTHER.

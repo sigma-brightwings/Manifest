@@ -1018,9 +1018,22 @@
    * long: the ship was parked through the ceiling and the camera had
    * nowhere to stand but inside the plating. The grey bay.
    *
-   * 3.5 is Astra's call between three costed options, and it buys a ~38 m
-   * boom — a short chase shot — in most berths, tight in the worst. Radii
-   * run 2.1-11 km, which is a station you see from a long way out.
+   * 2.1 is where it settled, and it took two passes to get there. 0.35 was
+   * the measured floor — the tightest hull/bay pairing in the whole cross
+   * product at 1.7x — and the stations read as models rather than places.
+   * 3.5 was Astra's call between three costed options and fixed that from
+   * the OUTSIDE, which is where she was looking when she chose it. From
+   * the inside it overshot: the berth anchor at Waypoint Dock measured
+   * 2.16 km x 1.20 km x 0.91 km around a 25 m ship, and her read of it was
+   * "it's just a square box room with no decorations" — which it was, in
+   * the sense that a cathedral is a box. Nothing was missing; the nearest
+   * wall was three hundred metres away.
+   *
+   * 2.1 is six times the measured floor rather than ten, again her call.
+   * Radii run 1.3-6.7 km and the same berth comes down to about 1.3 km,
+   * which is still enormous and is meant to be — the rest of that gap is
+   * closed by dressing the bay at the size of the SHIP rather than by
+   * shrinking the station any further.
    *
    * WHAT THIS DRAGS WITH IT, because a tenfold change in the size of every
    * station is not a local edit: anything written as an absolute distance
@@ -1028,7 +1041,7 @@
    * Grep for the ones that matter before trusting this — the clearance hail
    * radius and the arrival legs both are. Run test/berths.test.js, which
    * prints the fit, and physics.test.js, which flies the arrival. */
-  var STATION_SCALE = 3.5;
+  var STATION_SCALE = 2.1;
 
   /* The smallest a docking envelope may get, in km. Generous by real-world
    * standards on purpose — this is a game, and fumbling the last fifty
@@ -1277,6 +1290,51 @@
     };
   }
 
+  /* HOW FAR OFF THE DECK A PARKED HULL SITS, and the reason it cannot stay
+   * a fraction.
+   *
+   * `standoff` is 0.012 of a port radius, which is 1.2 m at the smallest
+   * pad and 2.9 m at the largest — a gear-to-floor clearance, exactly as
+   * its name says, for a bay measured in hundreds of metres. Stations are
+   * measured in kilometres, and the same fraction put the hull 80 m above
+   * its own deck at Waypoint Dock: a ship visibly hanging in mid-air in
+   * the middle of a hangar, which is the complaint that produced berthState
+   * in the first place, returning by the back door.
+   *
+   * A CONSTANT SCALED BY ANOTHER CONSTANT IS A BUG WEARING A DISGUISE —
+   * next.md has that written down as a trap this project keeps hitting,
+   * and this is another instance of it. So the clearance becomes what it
+   * always meant: an absolute distance, measured off the fleet rather than
+   * chosen. berthOffset places the hull's ORIGIN, which sits at the middle
+   * of the model, so the hull needs half its own height plus somewhere to
+   * put the gear. Taken from the TALLEST ship in the fleet, because a berth
+   * has to work for any of them — the same rule every other number in the
+   * bay tables follows.
+   *
+   * Still capped by the fraction, so a pad small enough that this would be
+   * a large share of its own bay keeps the old answer and nothing about the
+   * ground ports moves. */
+  var GEAR_CLEAR_KM = 0.001;              // a metre under the gear
+  var FLEET_HALF_H = null;
+  function fleetHalfHeight() {
+    if (FLEET_HALF_H !== null) return FLEET_HALF_H;
+    var R = global.Render;
+    FLEET_HALF_H = 0.005;                 // 5 m, if there is no hull library to ask
+    if (R && R.hullSpan && R.HULL_ASSIGN) {
+      var tallest = 0;
+      Object.keys(R.HULL_ASSIGN).forEach(function (k) {
+        var sp = R.hullSpan(k);
+        if (sp && sp.h > tallest) tallest = sp.h;
+      });
+      if (tallest > 0) FLEET_HALF_H = tallest * 0.5;
+    }
+    return FLEET_HALF_H;
+  }
+  function cappedStandoff(port, frac) {
+    var r = port.radius || 1;
+    return Math.min(frac, (fleetHalfHeight() + GEAR_CLEAR_KM) / r);
+  }
+
   function bayGeometry(port) {
     var m = modelledBay(port) || {};
     var num = function (a, b) { return typeof a === 'number' ? a : b; };
@@ -1309,7 +1367,7 @@
        * being allowed to look interchangeable. */
       ceilZ: num(m.ceilZ, floorZ + d.headroom),
       berthY: num(m.berthY, d.berthY),
-      standoff: num(m.standoff, d.standoff),
+      standoff: cappedStandoff(port, num(m.standoff, d.standoff)),
       berths: num(m.berths, d.berths),
       /* How far the whole model stands proud of the ground. It exists so
        * the apron does not z-fight the planet's own surface, and the sim
