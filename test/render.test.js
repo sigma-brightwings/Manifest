@@ -2694,6 +2694,205 @@ console.log('--- glass ---');
         /a < 0\.999 && a < bayer8/.test(glsrc) && /discard/.test(glsrc));
 })();
 
+console.log('--- the near plane belongs to the hardware ---');
+(function () {
+  /* WHAT THIS IS GUARDING.
+   *
+   * Both vertex shaders used to answer "this vertex is behind the eye" by
+   * moving it to NDC (2,2) and returning. That is not clipping: the
+   * triangle still rasterizes, now with a made-up third corner, so a wall
+   * the eye is standing inside paints as a huge flat wedge with a hard
+   * straight edge across the canopy — the thing Astra reported four times
+   * as a camera bug — and a console panel a foot from the pilot's face
+   * skews out of its housing the moment you turn your head.
+   *
+   * The fix hands the rasterizer honest clip coordinates and lets IT cut
+   * the triangle, which is the only stage that can make new vertices. This
+   * checks both halves of that: the shader text no longer parks anything,
+   * and the arithmetic it replaced the divide with is the same arithmetic.
+   * There is no WebGL under node, so the text is read as text — the same
+   * bargain the dither check above makes. */
+  var glsrc2 = require('fs').readFileSync(
+    require('path').join(__dirname, '..', 'src', 'gl.js'), 'utf8');
+  /* The GLSL only, with the JS block comments around it stripped out.
+     Without that strip this reads the prose as if it were code — and the
+     note on VERT_MESH QUOTES the line it replaced, which is exactly the
+     line these checks are looking for. It caught itself the first time it
+     ran. */
+  function shader(name) {
+    var a = glsrc2.indexOf('var ' + name + ' = [');
+    if (a < 0) return '';
+    var b = glsrc2.indexOf("].join('\\n')", a);
+    if (b < 0) return '';
+    return glsrc2.slice(a, b).replace(/\/\*[\s\S]*?\*\//g, '');
+  }
+  var mesh = shader('VERT_MESH'), panel = shader('VERT_PANEL');
+  check('both vertex shaders are there to read', mesh.length > 200 && panel.length > 200,
+        mesh.length + ' / ' + panel.length);
+
+  /* The park-off-screen hack, gone from both. The stars shader keeps its
+   * own — a point is a single vertex with nothing to interpolate against,
+   * so moving it off screen IS the correct answer there. */
+  check('the mesh shader no longer parks a behind-eye vertex off screen',
+        mesh.indexOf('vec4(2.0, 2.0') < 0);
+  check('nor does the panel shader',
+        panel.indexOf('vec4(2.0, 2.0') < 0);
+  check('and the stars shader still does, because a point has no triangle',
+        shader('VERT_STARS').indexOf('vec4(2.0, 2.0') >= 0);
+
+  /* The near plane itself. z = depth - 2*uNear against w = depth makes
+   * GL's own z >= -w test read exactly "depth >= uNear". */
+  var zw = /gl_Position = vec4\(clipXY, depth - 2\.0 \* uNear, depth\)/;
+  check('the mesh shader clips at uNear and nowhere else', zw.test(mesh));
+  check('so does the panel shader', zw.test(panel));
+  check('the mesh vertex stage declares the uNear it now needs',
+        /uniform float uNear/.test(mesh));
+  check('and so does the panel vertex stage',
+        /uniform float uNear/.test(panel));
+  /* No divide left in either — the whole point is that the clip
+   * coordinates stay finite for a vertex at or behind the eye. */
+  check('neither vertex shader divides by depth any more',
+        mesh.indexOf('uFlen / depth') < 0 && panel.indexOf('uFlen / depth') < 0);
+
+  /* THE ARITHMETIC IS THE SAME ARITHMETIC. Expanding ndc*depth by hand
+   * cancels the 1/depth; in front of the eye the new expression has to
+   * agree with the old one to the last bit that matters, or every hull in
+   * the game moves. Both written out here from the shader text's own
+   * shape rather than imported, because there is nothing to import. */
+  var W = 1024, H = 768, flen = 613.2, cx = W / 2, cy = H / 2;
+  function oldClip(R, U, d) {
+    var k = flen / d;
+    var px = cx + R * k, py = cy - U * k;
+    return { x: (px / W * 2 - 1) * d, y: (1 - py / H * 2) * d, w: d };
+  }
+  function newClip(R, U, d) {
+    var c2x = cx * 2 / W, c2y = cy * 2 / H;
+    return { x: (c2x - 1) * d + R * (2 * flen) / W,
+             y: (1 - c2y) * d + U * (2 * flen) / H, w: d };
+  }
+  var worst = 0;
+  for (var R = -400; R <= 400; R += 37) {
+    for (var U = -400; U <= 400; U += 41) {
+      for (var d = 0.0002; d < 4000; d *= 3.7) {
+        var o = oldClip(R, U, d), n = newClip(R, U, d);
+        /* Relative to w, because clip coordinates are only ever read
+         * after the divide by it. */
+        worst = Math.max(worst, Math.abs(o.x - n.x) / d, Math.abs(o.y - n.y) / d);
+      }
+    }
+  }
+  /* In NDC, where 1 unit is half the viewport. The residual is float64
+   * cancellation in the OLD form — it computes (px/W*2 - 1) as a number
+   * just over 1 minus 1 — and the new form is the better-conditioned of
+   * the two, not the worse. At half a 1024-pixel viewport this bound is
+   * well under a millionth of a pixel. */
+  check('in front of the eye the new clip coords are the old ones',
+        worst < 1e-8, 'worst ndc error ' + worst);
+
+  /* And the cut lands where it says it does. GL clips an edge where
+   * z + w changes sign; along a segment running from in front of the eye
+   * to behind it, that crossing has to be at depth == uNear. */
+  var near = 1e-4;
+  function zPlusW(d) { return (d - 2 * near) + d; }
+  var d0 = 3.0, d1 = -2.0;
+  var tCross = zPlusW(d0) / (zPlusW(d0) - zPlusW(d1));
+  var dCross = d0 + (d1 - d0) * tCross;
+  check('a segment crossing the eye is cut at the near plane',
+        Math.abs(dCross - near) < 1e-15, 'cut at ' + dCross);
+  check('and a vertex just inside the near plane survives', zPlusW(near * 1.001) > 0);
+  check('while one just outside it does not', zPlusW(near * 0.999) < 0);
+})();
+
+console.log('--- and the 2D painter cuts the same wall ---');
+(function () {
+  /* The other renderer, same wall. paintMesh used to project the three
+   * corners and drop the face the moment one came back null, which is what
+   * Camera.project does for a point behind the eye — so berthed inside a
+   * station, where most of the room straddles the eye, the 2D path lost
+   * most of the room. A hole is a quieter failure than the GPU path's
+   * smear and it is the same failure: the near plane was nobody's job.
+   *
+   * Its own recording context, because the shared stub deliberately keeps
+   * no path points (see the note on `fill`) and this test is entirely
+   * about which points reached the path. */
+  var pts = [], fills = 0;
+  var rec = {
+    globalAlpha: 1, save: function () {}, restore: function () {},
+    beginPath: function () {}, closePath: function () {},
+    moveTo: function (x, y) { pts.push({ x: x, y: y }); },
+    lineTo: function (x, y) { pts.push({ x: x, y: y }); },
+    fill: function () { fills++; }, stroke: function () {}
+  };
+  function reset() { pts = []; fills = 0; rec.globalAlpha = 1; }
+
+  var R = W.Render;
+  var cam = new R.Camera();
+  cam.eye = { x: 0, y: 0, z: 0 };
+  cam.f = { x: 0, y: 0, z: 1 }; cam.r = { x: 1, y: 0, z: 0 };
+  cam.u = { x: 0, y: 1, z: 0 };
+  cam.near = 1e-4; cam.flen = 600;
+  cam.cx = 400; cam.cy = 300; cam.w = 800; cam.h = 600;
+  var frame = { pos: { x: 0, y: 0, z: 0 }, fwd: { x: 0, y: 0, z: 1 },
+                up: { x: 0, y: 1, z: 0 }, right: { x: 1, y: 0, z: 0 } };
+  var sun = { x: 0, y: 0, z: 1 };
+
+  /* A floor slab running from two km ahead to two km behind the eye — the
+   * shape of every deck you are parked on. */
+  var straddle = {
+    v: [[-1, -0.5, 2], [1, -0.5, 2], [1, -0.5, -2], [-1, -0.5, -2]],
+    f: [[0, 1, 2], [0, 2, 3]],
+    c: ['#8993a1', '#8993a1']
+  };
+  reset();
+  R.paintMesh(rec, cam, frame, straddle, 1, sun, '#8993a1');
+  check('a face straddling the eye still reaches the canvas', fills === 2,
+        fills + ' fills');
+  check('and every point it put there is a real coordinate',
+        pts.length >= 6 && pts.every(function (q) {
+          return isFinite(q.x) && isFinite(q.y);
+        }), pts.length + ' points');
+  /* The give-away of the old sign flip: a corner behind the eye projects
+   * to the mirror image of where it belongs, hundreds of screens away. */
+  check('none of them is off in the flipped half of the projection',
+        pts.every(function (q) {
+          return Math.abs(q.x) <= 2e4 && Math.abs(q.y) <= 2e4;
+        }));
+
+  /* AND NOTHING CHANGES FOR ORDINARY GEOMETRY. A face wholly in front of
+   * the eye survives the clip untouched, three corners in and three out —
+   * which is the whole of what the old path could do, still done. */
+  var ahead = {
+    v: [[-1, -0.5, 4], [1, -0.5, 4], [0, 1, 4]],
+    f: [[0, 1, 2]], c: ['#8993a1']
+  };
+  reset();
+  R.paintMesh(rec, cam, frame, ahead, 1, sun, '#8993a1');
+  check('a face wholly in front of the eye is drawn as a triangle',
+        fills === 1 && pts.length === 3, fills + ' fills, ' + pts.length + ' points');
+  var expect = [
+    { x: 400 - 150, y: 300 + 75 }, { x: 400 + 150, y: 300 + 75 },
+    { x: 400, y: 300 - 150 }
+  ];
+  var off = 0;
+  for (var i = 0; i < expect.length && i < pts.length; i++) {
+    off = Math.max(off, Math.abs(pts[i].x - expect[i].x),
+                        Math.abs(pts[i].y - expect[i].y));
+  }
+  check('at exactly the pixels the projection has always put it at',
+        off < 1e-9, 'worst ' + off + ' px');
+
+  /* Wholly behind, and it is gone. Clipping is not a licence to draw what
+   * is at your back. */
+  var behind = {
+    v: [[-1, -0.5, -4], [1, -0.5, -4], [0, 1, -4]],
+    f: [[0, 1, 2]], c: ['#8993a1']
+  };
+  reset();
+  R.paintMesh(rec, cam, frame, behind, 1, sun, '#8993a1');
+  check('a face wholly behind the eye is still dropped',
+        fills === 0 && pts.length === 0, fills + ' fills');
+})();
+
 console.log('--- underground bays ---');
 (function () {
   newFlying('kawartha');

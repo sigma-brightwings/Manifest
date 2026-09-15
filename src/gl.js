@@ -449,23 +449,59 @@
     'uniform vec3 uRight, uUp, uFwd;',
     'uniform float uFlen;',
     'uniform vec2 uCenterPx, uViewportPx;',
+    /* Shared with the fragment stage — one uniform, one upload. */
+    'uniform float uNear;',
     'out vec3 vNrm; out vec3 vCol; out float vEmis; out vec3 vRel;',
     'out float vAlpha;',
     'void main() {',
     '  vec3 rel = uModelRel + uRot * (aPos * uScale);',
     '  vNrm = uRot * aNrm; vCol = aCol; vEmis = aEmis; vRel = rel;',
     '  vAlpha = aAlpha;',
+    /* ---- THE NEAR PLANE, AND WHY THE HARDWARE HAS TO OWN IT ------------
+     *
+     * This used to read:
+     *
+     *     if (depth <= 1e-7) { gl_Position = vec4(2.0, 2.0, 0.0, 1.0); return; }
+     *
+     * which is not clipping. It moves ONE VERTEX off screen and leaves the
+     * triangle it belongs to be rasterized anyway, from its two surviving
+     * corners to a made-up third — so a wall the eye is standing inside
+     * comes out as an enormous flat wedge of colour with a hard straight
+     * edge across the canopy. Astra, berthed, four times: "we still have a
+     * camera bug". It was never the camera. Measured from her seat at
+     * Waypoint Dock: every cream slab filling the glass was a `!#f2e3a7`
+     * light panel whose own projection put all three corners 3,000 pixels
+     * BELOW the screen — the picture could not be explained by the
+     * geometry, because the picture was not being drawn from the geometry.
+     * The same hack is why the MFDs skewed when you turned your head: a
+     * console panel a foot from your face straddles the eye plane the
+     * moment you look past it.
+     *
+     * A vertex shader cannot clip — clipping makes new vertices, and only
+     * the fixed-function stage between the two shaders can do that. It
+     * will do it for free, against -w <= z <= w, if we hand it clip
+     * coordinates that are honest for points behind the eye. So:
+     *
+     *   - x and y are written WITHOUT the divide. Expanding ndc*depth by
+     *     hand cancels the 1/depth, leaving a linear function of `rel`
+     *     that is exactly the old value wherever the old value existed and
+     *     is still finite where it did not. Nothing about the on-screen
+     *     picture changes; the arithmetic is the same arithmetic.
+     *   - z = depth - 2*uNear, w = depth. Then z >= -w is depth >= uNear:
+     *     a real near plane at 10 cm, cut by the rasterizer, with the new
+     *     corner vertices it needs. z <= w is always true, so there is
+     *     still no far plane, which was the good half of the old comment.
+     *
+     * w = depth as before, so the varyings still interpolate with the
+     * perspective divide, and depth is still written per fragment, so z
+     * here is a clip test and nothing else. */
     '  float depth = dot(rel, uFwd);',
-    '  if (depth <= 1e-7) { gl_Position = vec4(2.0, 2.0, 0.0, 1.0); return; }',
-    '  float k = uFlen / depth;',
-    '  vec2 px = uCenterPx + vec2(dot(rel, uRight), -dot(rel, uUp)) * k;',
-    '  vec2 ndc = vec2(px.x / uViewportPx.x * 2.0 - 1.0,',
-    '                  1.0 - px.y / uViewportPx.y * 2.0);',
-    /* w = depth gives perspective-correct interpolation of the varyings.
-     * z is parked at 0 because depth is written per fragment below; that
-     * also means nothing is ever clipped by a near or far plane, which is
-     * the other thing that goes wrong at these scales. */
-    '  gl_Position = vec4(ndc * depth, 0.0, depth);',
+    '  vec2 c2 = uCenterPx * 2.0 / uViewportPx;',
+    '  vec2 axis = vec2(dot(rel, uRight), dot(rel, uUp));',
+    '  vec2 span = axis * (2.0 * uFlen) / uViewportPx;',
+    '  vec2 clipXY = vec2((c2.x - 1.0) * depth + span.x,',
+    '                     (1.0 - c2.y) * depth + span.y);',
+    '  gl_Position = vec4(clipXY, depth - 2.0 * uNear, depth);',
     '}'
   ].join('\n');
 
@@ -656,22 +692,28 @@
     'uniform vec3 uRight, uUp, uFwd;',
     'uniform float uFlen;',
     'uniform vec2 uCenterPx, uViewportPx;',
+    /* Shared with the fragment stage — one uniform, one upload. */
+    'uniform float uNear;',
     'out vec2 vUV;',
     'out float vDepth;',
     'void main() {',
     '  vUV = aUV;',
     '  float depth = dot(aPos, uFwd);',
     '  vDepth = depth;',
-    /* Behind the eye: park it off-screen rather than letting it wrap round
-     * through the projection, exactly as the mesh pass does. */
-    '  if (depth <= 1e-7) { gl_Position = vec4(2.0, 2.0, 0.0, 1.0); return; }',
-    '  float k = uFlen / depth;',
-    '  vec2 px = uCenterPx + vec2(dot(aPos, uRight), -dot(aPos, uUp)) * k;',
-    '  vec2 ndc = vec2(px.x / uViewportPx.x * 2.0 - 1.0,',
-    '                  1.0 - px.y / uViewportPx.y * 2.0);',
-    /* w = depth. This one line is the entire fix: it is what makes vUV
-     * interpolate with the perspective divide instead of linearly. */
-    '  gl_Position = vec4(ndc * depth, 0.0, depth);',
+    /* Clipped by the hardware against a real near plane, exactly as the
+     * mesh pass is and for the same reason — see the long note on
+     * VERT_MESH. A console panel sits a foot from the pilot's face, so it
+     * is the FIRST thing to straddle the eye plane when you turn your
+     * head, and parking one corner off screen is what made the readout
+     * slide out of its housing. */
+    '  vec2 c2 = uCenterPx * 2.0 / uViewportPx;',
+    '  vec2 axis = vec2(dot(aPos, uRight), dot(aPos, uUp));',
+    '  vec2 span = axis * (2.0 * uFlen) / uViewportPx;',
+    '  vec2 clipXY = vec2((c2.x - 1.0) * depth + span.x,',
+    '                     (1.0 - c2.y) * depth + span.y);',
+    /* w = depth still: it is what makes vUV interpolate with the
+     * perspective divide instead of linearly. */
+    '  gl_Position = vec4(clipXY, depth - 2.0 * uNear, depth);',
     '}'
   ].join('\n');
 

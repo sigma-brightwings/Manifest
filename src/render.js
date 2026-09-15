@@ -2182,12 +2182,37 @@
       var normal = V.norm(V.cross(V.sub(b, a), V.sub(c, a)));
       var toCam = V.norm(V.sub(cam.eye, a));
       if (V.dot(normal, toCam) < 0) normal = V.scale(normal, -1);
-      var pa = cam.project(a), pb = cam.project(b), pc = cam.project(c);
-      if (!pa || !pb || !pc) continue;
+      /* CLIPPED, NOT CULLED, and that is a change of kind rather than of
+       * degree. This used to project the three corners and `continue` the
+       * moment one of them came back null — which is what cam.project does
+       * for a point behind the eye — so a wall the eye was standing inside
+       * lost whole triangles and the room grew holes you could see the
+       * rock through. Berthed inside a station, that is most of the room.
+       *
+       * clipProject already owns the near plane for the cockpit interior,
+       * for exactly this reason and with exactly this failure behind it;
+       * a face is a polygon and it takes one. Its survivors can be four
+       * points rather than three, so the fill below walks a list.
+       *
+       * The GPU path reaches the same place by a different road — it
+       * hands the rasterizer honest clip coordinates and lets the
+       * hardware cut the triangle (see VERT_MESH in gl.js) — because that
+       * is the only stage over there that can make a new vertex. Same
+       * room either way, which is the standing rule for this pair. */
+      var poly = clipProject(cam, [a, b, c]);
+      if (!poly) continue;
+      /* Sorted on the face's own depth, taken in camera space before the
+       * clip rather than off the clipped corners: the clip can push a
+       * corner up to the near plane, and sorting on THAT would float a
+       * wall the eye is inside to the front of a mesh it is behind. */
+      var da = V.dot(V.sub(a, cam.eye), cam.f),
+          db = V.dot(V.sub(b, cam.eye), cam.f),
+          dc = V.dot(V.sub(c, cam.eye), cam.f);
       var mat = faceMaterial((mesh.c && mesh.c[i]) || null);
       tris.push({
-        pa: pa, pb: pb, pc: pc,
-        depth: (pa.depth + pb.depth + pc.depth) / 3,
+        poly: poly,
+        depth: (Math.max(da, NEAR_CLIP) + Math.max(db, NEAR_CLIP)
+              + Math.max(dc, NEAR_CLIP)) / 3,
         color: mat.color || tint,
         alpha: mat.alpha,
         /* Indoors the sun term becomes a lamp at the eye — see the same
@@ -2224,9 +2249,8 @@
       if (tr.alpha !== alpha) { alpha = tr.alpha; ctx.globalAlpha = alpha; }
       ctx.fillStyle = shadeTint(tr.color, tr.shade);
       ctx.beginPath();
-      ctx.moveTo(tr.pa.x, tr.pa.y);
-      ctx.lineTo(tr.pb.x, tr.pb.y);
-      ctx.lineTo(tr.pc.x, tr.pc.y);
+      ctx.moveTo(tr.poly[0].x, tr.poly[0].y);
+      for (var q = 1; q < tr.poly.length; q++) ctx.lineTo(tr.poly[q].x, tr.poly[q].y);
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
