@@ -3181,7 +3181,17 @@
       var sec = (typeof section === 'number' && section >= 0)
         ? portSections(model) : null;
       if (sec && sec.sections[section]) {
-        paintPart(ctx, cam, frame, sec.structure.hull, radiusKm, sunDir, tint);
+        /* THE BLAST DOOR DECIDES WHAT ELSE YOU SEE. Your own compartment
+         * always; the rest of the station only once the inner gate is off
+         * its seat. That is the whole of Astra's design — a shut door is an
+         * opaque wall, and the concourse behind it is not drawn, not
+         * because of a bounding box but because there is a door in the way.
+         * It is also why the arrival's last leg means something: the gate
+         * runs back and the station appears down the corridor. */
+        var innerOpen = doors && doors.inner > 0.05;
+        if (innerOpen) {
+          paintPart(ctx, cam, frame, sec.structure.hull, radiusKm, sunDir, tint);
+        }
         paintPart(ctx, cam, frame, sec.sections[section].hull, radiusKm, sunDir, tint);
       } else {
         paintPart(ctx, cam, frame, d.hull, radiusKm, sunDir, tint);
@@ -3347,6 +3357,9 @@
   function boomTris(lib, o) {
     var out = [], keys = ['shell', 'interior', 'spin'];
     for (var k = 0; k < keys.length; k++) {
+      /* The boom takes the shell WHOLE, doors included at their modelled
+       * place. A camera should stand back from a doorway whether the leaf
+       * is in it or not — the room is the room. */
       var m = lib[keys[k]];
       if (!m || !m.f) continue;
       for (var i = 0; i < m.f.length; i++) {
@@ -3621,10 +3634,16 @@
     var lib = libPort(role);
     if (!lib) return null;
 
+    /* THE HULL WITHOUT ITS DOOR LEAVES. They used to be in here, baked at
+     * their CLOSED position, which made a shut door solid by accident and
+     * an open one solid on purpose — you could not fly through a door that
+     * had run all the way back into its pocket. Leaves are tested
+     * separately, at wherever they actually are this frame; see leafHit. */
+    var d0 = portDoors(role);
     var tri = [], keys = ['shell', 'interior', 'spin'];
     var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     for (var k = 0; k < keys.length; k++) {
-      var m = lib[keys[k]];
+      var m = (keys[k] === 'shell' && d0) ? d0.hull : lib[keys[k]];
       if (!m || !m.v || !m.f) continue;
       for (var i = 0; i < m.f.length; i++) {
         var f = m.f[i];
@@ -3673,12 +3692,132 @@
     return TRIDEX[role];
   }
 
+  /* ---- a door is solid where it actually is ------------------------------
+   *
+   * A blast door is the one part of a station that MOVES, so it is the one
+   * part the baked triangle index cannot answer for. Each leaf slides along
+   * its own axis by `travel * open`; testing the segment against a leaf is
+   * therefore the same as testing the segment SHIFTED THE OTHER WAY against
+   * the leaf where it is modelled. One subtraction, no rebuilt geometry,
+   * and it costs nothing when the doors are shut because that is offset
+   * zero.
+   *
+   * Only the leaves that could be in the way are tested: a station carries
+   * 28 of them and a ship is near at most a couple. */
+  /* Segment against one triangle, both-sided, returning the same
+   * { t, normal } shape portSegmentHit does so a caller can compare hits
+   * from the index and from a moving leaf without caring which is which.
+   * `t` is the fraction along a->b, so it is directly comparable. */
+  function segTri(a, b, p0, p1, p2) {
+    if (!p0 || !p1 || !p2) return null;
+    var dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+    var e1x = p1[0] - p0[0], e1y = p1[1] - p0[1], e1z = p1[2] - p0[2];
+    var e2x = p2[0] - p0[0], e2y = p2[1] - p0[1], e2z = p2[2] - p0[2];
+    var hx = dy * e2z - dz * e2y,
+        hy = dz * e2x - dx * e2z,
+        hz = dx * e2y - dy * e2x;
+    var det = e1x * hx + e1y * hy + e1z * hz;
+    if (det > -1e-12 && det < 1e-12) return null;
+    var f = 1 / det;
+    var sx = a[0] - p0[0], sy = a[1] - p0[1], sz = a[2] - p0[2];
+    var u = (sx * hx + sy * hy + sz * hz) * f;
+    if (u < -1e-6 || u > 1 + 1e-6) return null;
+    var qx = sy * e1z - sz * e1y,
+        qy = sz * e1x - sx * e1z,
+        qz = sx * e1y - sy * e1x;
+    var v = (dx * qx + dy * qy + dz * qz) * f;
+    if (v < -1e-6 || u + v > 1 + 1e-6) return null;
+    var t = (e2x * qx + e2y * qy + e2z * qz) * f;
+    if (t < 0 || t > 1) return null;
+    var nx = e1y * e2z - e1z * e2y,
+        ny = e1z * e2x - e1x * e2z,
+        nz = e1x * e2y - e1y * e2x;
+    var nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+    nx /= nl; ny /= nl; nz /= nl;
+    if (nx * dx + ny * dy + nz * dz > 0) { nx = -nx; ny = -ny; nz = -nz; }
+    return { t: t, normal: [nx, ny, nz] };
+  }
+
+  var LEAF_BOUNDS = {};
+
+  function leafBounds(role) {
+    if (LEAF_BOUNDS[role] !== undefined) return LEAF_BOUNDS[role];
+    LEAF_BOUNDS[role] = null;
+    var d = portDoors(role);
+    if (!d) return null;
+    var out = [];
+    for (var i = 0; i < d.leaves.length; i++) {
+      var lf = d.leaves[i], m = lf.mesh;
+      var lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
+      for (var f = 0; f < m.f.length; f++) {
+        var face = m.f[f];
+        for (var v = 0; v < face.length; v++) {
+          var p = m.v[face[v]];
+          if (!p) continue;
+          for (var a = 0; a < 3; a++) {
+            if (p[a] < lo[a]) lo[a] = p[a];
+            if (p[a] > hi[a]) hi[a] = p[a];
+          }
+        }
+      }
+      out.push({ lo: lo, hi: hi });
+    }
+    LEAF_BOUNDS[role] = out;
+    return out;
+  }
+
+  /* `doors` is the same { open, berthMid } shape the renderer takes, so the
+   * thing you collide with and the thing you see are driven by one value. */
+  function leafHit(role, a, b, doors) {
+    var d = portDoors(role), bounds = leafBounds(role);
+    if (!d || !bounds) return null;
+    var open = (doors && doors.open > 0) ? Math.min(1, doors.open) : 0;
+    var want = doors && doors.berthMid;
+    var best = null;
+    for (var i = 0; i < d.leaves.length; i++) {
+      var lf = d.leaves[i];
+      /* Only the berth that was given clearance moves; every other leaf in
+       * the station is shut, which is the same rule drawStationModel uses. */
+      var f = open;
+      if (want && lf.berthMid) {
+        var dx = lf.berthMid[0] - want[0], dy = lf.berthMid[1] - want[1],
+            dz = lf.berthMid[2] - want[2];
+        if (dx * dx + dy * dy + dz * dz > 1e-6) f = 0;
+      }
+      /* A force field is there or it is not — and when it is not, it is not
+       * anything you can hit. */
+      if (lf.field && f >= 0.5) continue;
+      var ox = lf.axis[0] * lf.travel * f,
+          oy = lf.axis[1] * lf.travel * f,
+          oz = lf.axis[2] * lf.travel * f;
+      var a2 = [a[0] - ox, a[1] - oy, a[2] - oz];
+      var b2 = [b[0] - ox, b[1] - oy, b[2] - oz];
+      var bd = bounds[i];
+      /* Cheap reject against the leaf's own box before any triangle work. */
+      var miss = false;
+      for (var ax = 0; ax < 3; ax++) {
+        if (Math.min(a2[ax], b2[ax]) > bd.hi[ax] ||
+            Math.max(a2[ax], b2[ax]) < bd.lo[ax]) { miss = true; break; }
+      }
+      if (miss) continue;
+      var m = lf.mesh;
+      for (var fi = 0; fi < m.f.length; fi++) {
+        var face = m.f[fi];
+        for (var j = 1; j + 1 < face.length; j++) {
+          var h = segTri(a2, b2, m.v[face[0]], m.v[face[j]], m.v[face[j + 1]]);
+          if (h && (!best || h.t < best.t)) best = h;
+        }
+      }
+    }
+    return best;
+  }
+
   /* Moller-Trumbore, BOTH-SIDED — see the note above on watertightness. `a`
    * and `b` are in the model's normalised frame. Returns null, or
    * { t, normal } with t in [0,1] along the segment and the normal turned
    * to face back along it, which is the direction anything pushed out of
    * this surface has to go. */
-  function portSegmentHit(role, a, b) {
+  function portSegmentHit(role, a, b, doors) {
     var ix = portTriangles(role);
     if (!ix) return null;
     var N = ix.n, lo = ix.lo, inv = ix.inv, tri = ix.tri, bins = ix.bins;
@@ -3742,7 +3881,13 @@
         }
       }
     }
-    return bn ? { t: best, normal: bn } : null;
+    var hull = bn ? { t: best, normal: bn } : null;
+    /* AND THE DOORS, which the index cannot hold because they move. Nearest
+     * of the two wins, so a leaf sliding shut in front of you stops you
+     * before the wall behind it does. */
+    var leaf = leafHit(role, a, b, doors);
+    if (leaf && (!hull || leaf.t < hull.t)) return leaf;
+    return hull;
   }
 
   var SOLID_N = 48;
@@ -6067,6 +6212,7 @@
     setIndoors: setIndoors,
     portSolidity: portSolidity,
     portSections: portSections,
+    leafHit: leafHit,
     sectionAt: sectionAt,
     portTriangles: portTriangles,
     portSegmentHit: portSegmentHit,

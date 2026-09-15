@@ -8959,17 +8959,30 @@
     if (!port || port.surface) return null;
     var berth = currentBerth();
     var ap = Gen.berthApertures ? Gen.berthApertures(port, berth) : null;
-    var open;
+
+    /* THE ARRIVAL RAIL STILL DRIVES ITS OWN DOORS, and it must: the
+     * sequence is choreographed against the legs, so the leaves are where
+     * that choreography says while it is running. */
     if (G.arrivalPose && G.ship.arrival && G.ship.arrival.port === port.id) {
-      open = 1 - G.arrivalPose.gates.apron;
       berth = G.ship.arrival.berth;
       ap = Gen.berthApertures ? Gen.berthApertures(port, berth) : ap;
-    } else if (dockedPort() === port || G.dockTarget === port) {
-      open = doorPhase(port);
-    } else {
-      open = 0;
+      return { open: 1 - G.arrivalPose.gates.apron,
+               inner: 1 - G.arrivalPose.gates.inner,
+               berth: berth, berthMid: ap && ap.mid };
     }
-    return { open: open, berth: berth, berthMid: ap && ap.mid };
+
+    /* EVERYWHERE ELSE, ONE AUTHORITY. Sim.stationDoorState runs the airlock
+     * — both gates, and the interlock between them — and the collision test
+     * reads exactly the same call. That is the point of it being there
+     * rather than here: you cannot fly through a door you can see is shut,
+     * because the thing that draws it and the thing that stops you are the
+     * same number. */
+    if (Sim.stationDoorState) {
+      var st = Sim.stationDoorState(port, G.sys, G.t, G.ship,
+                                    G.ship.cleared && G.ship.cleared[port.id]);
+      if (st) return st;
+    }
+    return { open: 0, inner: 0, berth: berth, berthMid: ap && ap.mid };
   }
 
   function doorPhase(port) {

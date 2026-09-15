@@ -2253,6 +2253,102 @@
 
   /* Did the hull just put itself through a station wall? Returns the port
    * it hit, having moved the ship out of it, or null. */
+  /* ---- the airlock ------------------------------------------------------
+   *
+   * ASTRA'S DESIGN, AND THE ART SPECIFIES IT. Every berth in these models
+   * carries an `extras` entry like
+   *
+   *     airlock: { outerGate: "slidingDoors", innerGate: "InnerGate",
+   *                controlsLockedUntil: "outerGateOpen",
+   *                outerCyclesOnlyWhenOccupied: true }
+   *
+   * so a compartment is not a hole in a wall, it is a chamber with a door
+   * at each end. This is the state of those doors, and it is deliberately
+   * the ONE place that answers: the renderer draws what it says, the
+   * collision test makes solid what it says, and the two therefore cannot
+   * disagree about whether you can fly through something you can see
+   * through.
+   *
+   * THE INTERLOCK IS MUTUAL EXCLUSION, which is what a blast door is for
+   * and is stricter than the single `controlsLockedUntil` field spells out.
+   * Both ends open at once is not an airlock, it is a corridor: the outer
+   * doors cannot begin to open while the inner gate is off its seat, and
+   * the inner gate cannot begin to open while the outer doors are off
+   * theirs. That one rule is what makes "cycle the lock" a thing you do
+   * rather than a thing that happens.
+   *
+   * Advanced on read, off sim time, the way the surface ports' doorPhase
+   * already is — no new update hook, and a port nobody is near costs
+   * nothing because nobody asks. */
+  var AIRLOCK_SECONDS = 2.5;        // end to end, either gate
+  var GATE_SEATED = 0.02;           // closed enough to let the other one move
+
+  function airlockState(port, berth, t, wantOuter, wantInner) {
+    if (!port) return { outer: 0, inner: 0 };
+    var all = port._air || (port._air = {});
+    var k = String(berth);
+    var st = all[k];
+    if (!st) { st = all[k] = { outer: 0, inner: 0, t: t }; }
+
+    /* A CLOCK THAT CAN GO BACKWARDS is a career reload, not a paradox —
+     * same guard the clearance sweep keeps for the same reason. */
+    var dt = t - st.t;
+    if (!(dt >= 0)) dt = 0;
+    if (dt > 5) dt = 5;
+    st.t = t;
+    var step = dt / AIRLOCK_SECONDS;
+
+    /* The interlock, applied to the TARGETS rather than to the motion, so a
+     * gate that is already moving is never frozen half-open. */
+    var oTarget = wantOuter ? 1 : 0, iTarget = wantInner ? 1 : 0;
+    /* FROM REST, THE OUTER GOES FIRST. Testing only "is the other one off
+     * its seat" is not an interlock: with both gates shut and both asked
+     * for, both pass that test on the same frame and the chamber opens at
+     * each end at once. Measured, that is exactly what happened — twenty of
+     * forty steps with both ends open. Something has to break the tie, and
+     * outer-first is the honest one: you arrive from outside. */
+    if (oTarget > 0 && iTarget > 0) iTarget = 0;
+    if (oTarget > 0 && st.inner > GATE_SEATED) oTarget = 0;
+    if (iTarget > 0 && st.outer > GATE_SEATED) iTarget = 0;
+
+    if (st.outer < oTarget) st.outer = Math.min(oTarget, st.outer + step);
+    else if (st.outer > oTarget) st.outer = Math.max(oTarget, st.outer - step);
+    if (st.inner < iTarget) st.inner = Math.min(iTarget, st.inner + step);
+    else if (st.inner > iTarget) st.inner = Math.max(iTarget, st.inner - step);
+    return st;
+  }
+
+  /* What the doors of THIS port are doing, in the shape the renderer and
+   * the collision test both take. Null for a port with no berth in play,
+   * which is every station you are not at. */
+  function stationDoorState(port, sys, t, ship, cleared) {
+    if (!port || port.surface) return null;
+    var Gen2 = global.Gen;
+    if (!Gen2 || !Gen2.berthApertures) return null;
+    var s = ship;
+    var berth = null, arriving = false;
+
+    if (s && s.arrival && s.arrival.port === port.id) {
+      berth = s.arrival.berth; arriving = true;
+    } else if (s && s.docked === port.id) {
+      berth = (typeof s.dockBerth === 'number') ? s.dockBerth : 0;
+    } else if (cleared) {
+      berth = (typeof cleared === 'number') ? cleared : 0;
+    }
+    if (berth === null) return null;
+
+    /* THE OUTER DOORS ANSWER TO THE APPROACH, the inner to being parked.
+     * `outerCyclesOnlyWhenOccupied` in the art is why the second clause is
+     * about this ship rather than about the station: a berth with nobody in
+     * it and nobody coming keeps its doors shut. */
+    var wantOuter = arriving || (s && s.docked !== port.id && !!cleared);
+    var wantInner = !!(s && s.docked === port.id);
+    var st = airlockState(port, berth, t, wantOuter, wantInner);
+    var ap = Gen2.berthApertures(port, berth);
+    return { open: st.outer, inner: st.inner, berth: berth,
+             berthMid: ap && ap.mid };
+  }
+
   /* HOW FAR BACK OFF A SURFACE A STOPPED HULL IS PLACED, as a fraction of
    * the step that hit it, plus an absolute floor. Purely so the next frame
    * does not start exactly on the face and re-collide against the same
@@ -2261,8 +2357,8 @@
    * segments offset by `rad` square to the direction of travel. `rad` is in
    * the same normalised units as the points. Returns the same shape
    * portSegmentHit does, so the caller resolves against it unchanged. */
-  function bundleHit(R, role, a, b, rad) {
-    var best = R.portSegmentHit(role, a, b);
+  function bundleHit(R, role, a, b, rad, doors) {
+    var best = R.portSegmentHit(role, a, b, doors);
     if (!(rad > 0)) return best;
     var dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
     var L = Math.sqrt(dx * dx + dy * dy + dz * dz);
@@ -2281,7 +2377,7 @@
       var o = offs[i];
       var h = R.portSegmentHit(role,
         [a[0] + o[0] * rad, a[1] + o[1] * rad, a[2] + o[2] * rad],
-        [b[0] + o[0] * rad, b[1] + o[1] * rad, b[2] + o[2] * rad]);
+        [b[0] + o[0] * rad, b[1] + o[1] * rad, b[2] + o[2] * rad], doors);
       if (h && (!best || h.t < best.t)) best = h;
     }
     return best;
@@ -2302,7 +2398,7 @@
     var step = Math.max(sp.w, sp.h, sp.l) / r;
     if (!(step > 0)) return null;
     var dirs = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
-    var best = null, bestT = -1;
+    var ranked = [];
     for (var i = 0; i < dirs.length; i++) {
       var d = dirs[i];
       var to = [at[0] + d[0] * step, at[1] + d[1] * step, at[2] + d[2] * step];
@@ -2310,10 +2406,35 @@
       /* One clear direction and the hull is not buried — it is beside the
        * station, not inside it. */
       if (!h) return null;
-      if (h.t > bestT) { bestT = h.t; best = d; }
+      ranked.push({ d: d, t: h.t });
     }
-    /* Out along the roomiest axis, far enough to be past what it found. */
-    return [best[0], best[1], best[2], step * (bestT + 0.25)];
+    /* ROOMIEST FIRST, BUT NOT ROOMIEST ONLY. Taking the single best axis and
+     * accepting wherever it landed left a hull in cradle-l still boxed in:
+     * the most room in one direction is not the same as a way out. So the
+     * candidates are tried in order and the first that actually reaches
+     * open air wins. */
+    ranked.sort(function (a, b) { return b.t - a.t; });
+    var best = null, bestT = -1;
+    for (var r2 = 0; r2 < ranked.length; r2++) {
+      var cd = ranked[r2].d, dist = step * (ranked[r2].t + 1.0);
+      var landed = [at[0] + cd[0] * dist, at[1] + cd[1] * dist, at[2] + cd[2] * dist];
+      var stuck = 0;
+      for (var q = 0; q < dirs.length; q++) {
+        var dq = dirs[q];
+        if (R.portSegmentHit(role, landed,
+              [landed[0] + dq[0] * step, landed[1] + dq[1] * step,
+               landed[2] + dq[2] * step])) stuck++;
+      }
+      if (stuck < dirs.length) { best = cd; bestT = ranked[r2].t; break; }
+    }
+    /* Nowhere is clear within a hull's length — take the roomiest and let
+     * the next frame try again from somewhere slightly better. */
+    if (!best) { best = ranked[0].d; bestT = ranked[0].t; }
+    /* Out along the roomiest axis, far enough to be past what it found —
+     * and then a hull's length again on top, because "just past the
+     * surface" leaves the nose of a 25 m ship still inside it. The margin
+     * was a quarter of a hull and cradle-l could stay stuck through it. */
+    return [best[0], best[1], best[2], step * (bestT + 1.0)];
   }
 
   var WALL_BACKOFF_KM = 0.002;          // 2 m
@@ -2405,6 +2526,10 @@
          *
          * Five queries rather than one, at about two microseconds each, and
          * only for a ship already within two radii of a station. */
+        /* WHERE THE DOORS ARE THIS INSTANT, so a shut blast door stops the
+         * hull and an open one does not. Same call the renderer makes. */
+        var doorNow = stationDoorState(p, sys, t, ship,
+                                       ship.cleared && ship.cleared[p.id]);
         var hb = (R.hullSpan && ship.cls) ? R.hullSpan(ship.cls) : null;
         var rad = hb ? Math.max(hb.w, hb.h) * 0.5 / r : 0;
         var worst = 0, touched = false;
@@ -2431,7 +2556,7 @@
         var b1 = toModel(basis, ship.pos);
         for (var pass = 0; b0 && pass < 4; pass++) {
           b1 = toModel(basis, ship.pos);
-          var sweep = bundleHit(R, role, b0, b1, rad);
+          var sweep = bundleHit(R, role, b0, b1, rad, doorNow);
           if (!sweep) break;
           touched = true;
 
@@ -4491,6 +4616,8 @@
     insideShaft: insideShaft,
     berthState: berthState,
     berthCapture: berthCapture,
+    airlockState: airlockState,
+    stationDoorState: stationDoorState,
     checkStationImpact: checkStationImpact,
     stationSolidity: stationSolidity,
     stationSolidAt: stationSolidAt,

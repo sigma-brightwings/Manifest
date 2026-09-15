@@ -1090,6 +1090,94 @@ console.log('--- landing in a berth ---');
         Render.portSections(MODELS[0]));
 })();
 
+/* ---- the blast doors are real -------------------------------------------
+ *
+ * Astra's call: sections, and make the doors matter. The art has specified
+ * the mechanism all along — every berth carries an airlock with an outer
+ * set of sliding doors, an inner gate, and an interlock — and these are the
+ * three things that make it true rather than decorative.
+ *
+ * ONE AUTHORITY is the load-bearing claim. The renderer draws what
+ * Sim.stationDoorState says and the collision test makes solid what
+ * Sim.stationDoorState says, so a door you can see is shut is a door you
+ * cannot fly through. Two sources for that would drift within a week. */
+(function () {
+  console.log('--- the blast doors ---');
+
+  /* ONE: a shut leaf is solid where it is, and an open one is not. The
+   * collision index cannot hold this because the leaf MOVES — it is baked
+   * at the closed position — so it is tested separately at its live
+   * offset. */
+  var solidShut = 0, clearOpen = 0, tried = 0;
+  MODELS.forEach(function (id) {
+    var d = Render.portDoors(id);
+    var lib = Render.libPort(id);
+    var mb = lib && lib.anchors && lib.anchors.berths;
+    if (!d || !mb) return;
+    var sorted = mb.slice().sort(function (a, b) {
+      return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
+    });
+    var b = sorted[0];
+    var mine = d.leaves.filter(function (l) {
+      return l.berthMid && Math.abs(l.berthMid[0] - b.mid[0]) < 1e-6 &&
+             Math.abs(l.berthMid[1] - b.mid[1]) < 1e-6 && !l.field && l.travel > 0;
+    });
+    if (!mine.length) return;
+    var lf = mine[0], m = lf.mesh;
+    var lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
+    m.f.forEach(function (f) {
+      f.forEach(function (vi) {
+        var p = m.v[vi];
+        if (!p) return;
+        for (var a = 0; a < 3; a++) {
+          if (p[a] < lo[a]) lo[a] = p[a];
+          if (p[a] > hi[a]) hi[a] = p[a];
+        }
+      });
+    });
+    var c = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
+    var n = b.normal || [1, 0, 0];
+    var A = [c[0] + n[0] * 0.04, c[1] + n[1] * 0.04, c[2] + n[2] * 0.04];
+    var B = [c[0] - n[0] * 0.04, c[1] - n[1] * 0.04, c[2] - n[2] * 0.04];
+    tried++;
+    if (Render.leafHit(id, A, B, { open: 0, berthMid: b.mid })) solidShut++;
+    if (!Render.leafHit(id, A, B, { open: 1, berthMid: b.mid })) clearOpen++;
+  });
+  check('a shut blast door is solid', tried > 0 && solidShut === tried,
+        solidShut + ' of ' + tried);
+  check('and an open one is a hole', clearOpen === tried, clearOpen + ' of ' + tried);
+
+  /* TWO: the interlock. Both ends open at once is not an airlock, it is a
+   * corridor — so neither gate may begin to move while the other is off its
+   * seat, whatever is asked of it. */
+  var port = { id: 'lock-test', radius: 5, kind: 'station', surface: false, docking: true };
+  var t = 0, both = 0, steps = 0;
+  var st = Sim.airlockState(port, 0, t, true, false);       // open the outer
+  for (var k = 0; k < 40; k++) {
+    t += 0.25;
+    /* Ask for BOTH the whole way, which is the demand the interlock exists
+     * to refuse. */
+    st = Sim.airlockState(port, 0, t, true, true);
+    steps++;
+    if (st.outer > 0.05 && st.inner > 0.05) both++;
+  }
+  check('the outer gate opens when asked', st.outer > 0.9, st.outer.toFixed(2));
+  check('and the inner stays seated while it is open', st.inner < 0.05,
+        st.inner.toFixed(2));
+  check('the two are never open together', both === 0,
+        both + ' of ' + steps + ' steps');
+
+  /* And it cycles: shut the outer, and only then does the inner run back. */
+  for (var j = 0; j < 40; j++) { t += 0.25; st = Sim.airlockState(port, 0, t, false, true); }
+  check('shutting the outer lets the inner open', st.inner > 0.9 && st.outer < 0.05,
+        'outer ' + st.outer.toFixed(2) + ', inner ' + st.inner.toFixed(2));
+
+  /* THREE: a clock that runs backwards is a career reload, not a paradox. */
+  var back = Sim.airlockState(port, 0, t - 500, false, true);
+  check('and a rewound clock does not throw the gates', back.inner > 0.9,
+        back.inner.toFixed(2));
+})();
+
 Render.assignPort('orbital', null);   // leave the library as we found it
 
 console.log('');
