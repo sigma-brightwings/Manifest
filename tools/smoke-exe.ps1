@@ -17,15 +17,42 @@ if (-not $exe) { Write-Output 'no portable exe in dist/ — run npm run dist:win
 Write-Output ('launching: {0}  ({1:N1} MB)' -f $exe.Name, ($exe.Length / 1MB))
 $exe = $exe.FullName
 
+# The process is named after build.productName. It was 'Procedural Space
+# Game' up to 0.3.0-beta and is 'Manifest' after it; both are accepted so
+# this still reports honestly against an older artifact.
+$names = 'Manifest', 'Procedural Space Game'
+
 Start-Process -FilePath $exe
-Start-Sleep -Seconds 20
-$procs = @(Get-Process -Name 'Procedural Space Game' -ErrorAction SilentlyContinue)
-Write-Output ('processes alive after 20s: {0}' -f $procs.Count)
+
+# WAITED FOR, NOT SLEPT THROUGH. This used to sleep a flat twenty seconds
+# and then look once, which was fine while the artifact sat on a local
+# disk. It does not: a portable build unpacks 83 MB of itself into %TEMP%
+# before Electron so much as starts, and read off the X: share that takes
+# longer than the window. The test reported FAIL on a build that was
+# running perfectly well twenty-two seconds later — a false alarm on the
+# last gate before a release, which is the worst place to have one.
+#
+# So: poll until the processes appear, then hold for a few seconds and
+# check they are STILL there. Both halves matter. Appearing is not the
+# same as surviving — a crash on boot puts processes on the list for a
+# moment on its way out — and a fixed sleep tests neither.
+$deadline = (Get-Date).AddSeconds(90)
+$procs = @()
+while ((Get-Date) -lt $deadline) {
+  $procs = @(Get-Process -Name $names -ErrorAction SilentlyContinue)
+  if ($procs.Count -ge 3) { break }
+  Start-Sleep -Seconds 2
+}
+if ($procs.Count -ge 3) {
+  Start-Sleep -Seconds 8
+  $procs = @(Get-Process -Name $names -ErrorAction SilentlyContinue)
+}
+Write-Output ('processes alive: {0}' -f $procs.Count)
 
 if ($procs.Count -ge 3) {
-  Write-Output 'PASS — main, renderer and GPU processes are up'
+  Write-Output 'PASS — main, renderer and GPU processes are up and stayed up'
 } else {
-  Write-Output 'FAIL — the app did not stay running'
+  Write-Output 'FAIL — the app did not come up, or did not stay running'
 }
 foreach ($p in $procs) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
 Write-Output 'closed'

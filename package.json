@@ -7,8 +7,8 @@
   "license": "UNLICENSED",
   "author": "Astra",
   "_comment_desktopName": "Read by electron-builder, not by npm: it becomes the Linux .desktop filename and the window's WM_CLASS, which is what lets a desktop environment link the running window to its launcher icon.",
-  "_comment_naming": "THE COMMENTS LIVE UP HERE, NOT IN \"build\". npm ignores unknown top-level keys; electron-builder SCHEMA-VALIDATES its own block and refuses to run on one it does not recognise, which is a failed release rather than a warning. Learned the hard way on 0.3.0-beta. And on the names themselves: build.artifactName stays ProceduralSpaceGame even though this file's productName says Manifest, because build.productName also says Procedural Space Game and that is the name the installed app, its Start Menu entry and its process all carry — renaming only the FILE ships a Manifest-named download containing an app called something else. Renaming the pair is a separate decision with a migration in it (see desktopName above) and it is Astra's to make.",
-  "desktopName": "procedural-space-game.desktop",
+  "_comment_naming": "THE COMMENTS LIVE UP HERE, NOT IN \"build\". npm ignores unknown top-level keys; electron-builder SCHEMA-VALIDATES its own block and refuses to run on one it does not recognise, which is a failed release rather than a warning. Learned the hard way on 0.3.0-beta. The game is Manifest everywhere now — productName, build.productName, appId, the artifacts and the desktop entry — and the one thing that rename moves is where Electron keeps userData, which is derived from productName and is where the saves live. electron/main.js carries them across; see the note there before touching either name again.",
+  "desktopName": "manifest.desktop",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
@@ -25,10 +25,10 @@
     "electron-builder": "^26.0.0"
   },
   "build": {
-    "appId": "com.kawartha.proceduralspacegame",
-    "productName": "Procedural Space Game",
+    "appId": "com.kawartha.manifest",
+    "productName": "Manifest",
     "copyright": "Copyright © 2026",
-    "artifactName": "ProceduralSpaceGame-${version}-${os}-${arch}.${ext}",
+    "artifactName": "Manifest-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -48,14 +48,14 @@
       ]
     },
     "portable": {
-      "artifactName": "ProceduralSpaceGame-${version}-portable.exe"
+      "artifactName": "Manifest-${version}-portable.exe"
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "artifactName": "ProceduralSpaceGame-Setup-${version}.exe"
+      "artifactName": "Manifest-Setup-${version}.exe"
     },
     "linux": {
       "target": [

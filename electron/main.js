@@ -22,8 +22,52 @@
 'use strict';
 
 const { app, BrowserWindow, Menu, protocol, net, shell } = require('electron');
+const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+
+/* ---- THE RENAME CARRIES THE SAVES ------------------------------------
+ *
+ * The game was "Procedural Space Game" through 0.3.0-beta and is Manifest
+ * from here on. The `game://` origin is unchanged, which is what the note
+ * above says a save depends on — and it is only half of what a save
+ * depends on. The other half is WHERE that origin's storage sits on disk,
+ * and Electron derives that from productName: %APPDATA%\Procedural Space
+ * Game yesterday, %APPDATA%\Manifest today. Rename the app and every
+ * career quietly becomes a fresh start, with nothing broken and nothing
+ * thrown.
+ *
+ * So: once, on the first run under the new name, if there is no storage
+ * here yet and there is some under the old name, bring it across.
+ *
+ * COPIED, NOT MOVED, and that is the whole of the risk management. A copy
+ * that fails half way leaves the original where it was; a move that fails
+ * half way is a lost career. It also means an older build still finds its
+ * own saves, which is what makes rolling back to 0.3.0-beta harmless.
+ * The cost is one duplicated folder on one machine, once.
+ *
+ * Before app.whenReady() on purpose: the session that owns this storage is
+ * built during startup, and a directory moved under a running session is
+ * a directory the session is no longer looking at. */
+const PREVIOUS_APP_NAME = 'Procedural Space Game';
+
+function carrySavesAcrossTheRename() {
+  try {
+    const here = app.getPath('userData');
+    if (fs.existsSync(here)) return;                 // moved already, or new install
+    const before = path.join(path.dirname(here), PREVIOUS_APP_NAME);
+    if (!fs.existsSync(before)) return;              // nothing to carry
+    fs.cpSync(before, here, { recursive: true });
+    console.log('carried saves across the rename: ' + before + ' -> ' + here);
+  } catch (e) {
+    /* A failed migration is a career that looks new, which is bad. A
+     * migration that throws is a game that will not start at all, which is
+     * worse — and the original is still sitting there either way. */
+    console.error('could not carry saves across the rename: ' + e.message);
+  }
+}
+
+carrySavesAcrossTheRename();
 
 /* The game's own root: index.html and src/ sit one level above this file,
  * both in development and inside the packaged app, so one expression covers
@@ -82,7 +126,7 @@ function createWindow() {
      * frame lands. */
     backgroundColor: '#04060c',
     show: false,
-    title: 'Procedural Space Game',
+    title: 'Manifest',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
