@@ -2326,12 +2326,18 @@
     var Gen2 = global.Gen;
     if (!Gen2 || !Gen2.berthApertures) return null;
     var s = ship;
-    var berth = null, arriving = false;
+    var berth = null, arriving = false, leaving = false;
 
     if (s && s.arrival && s.arrival.port === port.id) {
       berth = s.arrival.berth; arriving = true;
     } else if (s && s.docked === port.id) {
       berth = (typeof s.dockBerth === 'number') ? s.dockBerth : 0;
+    } else if (s && s.departed && s.departed.port === port.id &&
+               insideStation(s.pos, sys, t) === port) {
+      /* On the way out, and still in the passage. See undockShip: this is
+       * the half of "business at this berth" that is not arriving, and the
+       * position test is what makes it expire on its own. */
+      berth = s.departed.berth || 0; leaving = true;
     } else if (cleared) {
       berth = (typeof cleared === 'number') ? cleared : 0;
     }
@@ -2341,7 +2347,7 @@
      * `outerCyclesOnlyWhenOccupied` in the art is why the second clause is
      * about this ship rather than about the station: a berth with nobody in
      * it and nobody coming keeps its doors shut. */
-    var wantOuter = arriving || (s && s.docked !== port.id && !!cleared);
+    var wantOuter = arriving || leaving || (s && s.docked !== port.id && !!cleared);
     var wantInner = !!(s && s.docked === port.id);
     var st = airlockState(port, berth, t, wantOuter, wantInner);
     var ap = Gen2.berthApertures(port, berth);
@@ -2919,6 +2925,8 @@
      * `arrival` would have stepArrival dragging the hull back onto the rail
      * on the next frame, one frame after dockShip parked it. */
     if (ship) ship.arrival = null;
+    /* Docked is the end of any departure, whatever the geometry says. */
+    if (ship) ship.departed = null;
 
     /* A pad is not an orbital clamp. There is no orbital frame to express
      * an offset in — the thing is bolted to a planet — so the ship simply
@@ -3642,6 +3650,50 @@
     var ts = bodyState(target, sys, t);
     var away;
 
+    /* LEAVING SPENDS THE DOCKING CLEARANCE, and this line is the one that
+     * makes berthCapture's premise true instead of merely intended.
+     *
+     * That catch refuses to close the clamps on a ship holding no
+     * clearance, and its note says a ship which has just launched holds
+     * none because arriving spent it. Arriving usually does — but not on
+     * the first frame of a new career, which grants the flag and parks the
+     * hull on top of it, and not on a save restored while docked, which
+     * deliberately suppresses the arrival so that loading a game is not an
+     * offence. Either way the flag outlives the visit, and then U releases
+     * the clamps and the very next frame closes them again: Astra, one
+     * minute after the near-plane fix, "Can't undock, it re-docks me
+     * immediately."
+     *
+     * Spending it HERE cannot be got round, because there is exactly one
+     * way out of a berth and this is it. It is also the honest reading of
+     * the permission: you were cleared to come in, you came in, you have
+     * now left. Getting back in is the two ways it always was — close on
+     * the port again and be hailed, or ask on F4. */
+    if (ship.cleared && target) delete ship.cleared[target.id];
+
+    /* AND THE DOORS HAVE TO KNOW YOU ARE LEAVING.
+     *
+     * Spending the clearance on the way out closes the recapture, and on
+     * its own it also closes the OUTER DOORS on the ship it just let go:
+     * stationDoorState ran them off `cleared`, which is a fact about
+     * arriving. A ship that undocked then flew the length of its own
+     * throat and stopped dead against a shut door -- measured at 30 m/s,
+     * thirty-five seconds out, parked at 6.758 km inside a 6.97 km hull.
+     * The two bugs had been hiding each other: the stale flag that
+     * re-docked her was also what held the doors open.
+     *
+     * A berth's outer doors answer to a ship with business at that berth,
+     * and that is arriving OR leaving. `departed` is the second half, and
+     * it expires by GEOMETRY rather than by a timer or a tidy-up pass:
+     * stationDoorState only honours it while the hull is still inside the
+     * hull, so the doors shut behind you the moment you are out, and a
+     * flag nobody clears cannot go stale. */
+    if (target && !target.surface) {
+      ship.departed = { port: target.id,
+                        berth: (ship.dockOffset && typeof ship.dockOffset.berth === 'number')
+                                 ? ship.dockOffset.berth : 0 };
+    }
+
     if (target.surface) {
       /* Leaving the ground is straight up, and the pad gives you nothing —
        * you climb on the drive alone. This is the moment the whole
@@ -3680,6 +3732,18 @@
       return target;
     }
 
+    /* OUT OF THE MIDDLE, and it was worth checking rather than assuming.
+     *
+     * The way out of a throat is the way you came in, which is the berth
+     * anchor's own normal -- the axis stationSolidity carved the corridor
+     * along and the arrival rail flew down. Radial from the hub is a
+     * different vector in principle, so this was rewritten to take the
+     * normal and then measured: across the whole library the worst berth
+     * normal sits at cos 0.998 of radial, under four degrees. Radial was
+     * never what was wrong here, so it stays, and berths.test.js prints
+     * that spread every run — the day a re-export puts a berth on the side
+     * of a hull rather than the end of a spoke, the number moves and this
+     * comment is what says what to do about it. */
     away = V.norm(V.sub(ship.pos, ts.pos));
     if (V.len(away) < 1e-9) away = V.scale(ship.fwd, -1);
     // ... and if the nose was degenerate too, pick any direction rather

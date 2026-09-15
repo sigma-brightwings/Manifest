@@ -1178,6 +1178,124 @@ console.log('--- landing in a berth ---');
         back.inner.toFixed(2));
 })();
 
+console.log('--- leaving a berth ---');
+(function () {
+  /* THE TWO BUGS THAT WERE HIDING EACH OTHER.
+   *
+   * berthCapture refuses to close the clamps on a ship holding no
+   * clearance, and its note argues that a ship which has just launched
+   * holds none because arriving spent it. Arriving usually does -- but not
+   * on the first frame of a new career, which grants the flag and parks the
+   * hull on top of it, and not on a save restored while docked, which
+   * suppresses the arrival deliberately so that loading a game is not an
+   * offence. Either way the flag outlived the visit, U released the clamps
+   * and the next frame closed them again.
+   *
+   * And the flag was ALSO what held the outer doors open, so fixing only
+   * the first half traps the ship in its own throat instead. Both halves
+   * are checked here, in that order, because that is the order they bite
+   * in. */
+  var sys = Gen.generateSystem('undock-sweep');
+  var station = (sys.ports || []).filter(function (p) { return !p.surface; })[0];
+  check('the sweep seed has an orbital station to leave', !!station,
+        station && station.name);
+  if (!station) return;
+
+  Render.assignPort('orbital', MODELS[0]);
+  var ship = { cls: 'courier', dryMass: 80, pos: { x: 0, y: 0, z: 0 },
+               vel: { x: 0, y: 0, z: 0 }, thrust: V.zero(),
+               fwd: { x: 1, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 },
+               right: { x: 0, y: -1, z: 0 }, cleared: {} };
+  Sim.refreshShip(ship);
+  ship.cleared[station.id] = true;           // the state that bit: cleared AND docked
+  Sim.dockShip(ship, station, sys, 0);
+  check('the fixture ship is berthed in a modelled alcove',
+        ship.docked === station.id && !!(ship.dockOffset && ship.dockOffset.station));
+  check('and it is holding the clearance that used to survive the visit',
+        !!ship.cleared[station.id]);
+  check('so the catch would take it — which is the bug, stated',
+        !!Sim.berthCapture(ship, sys, 0));
+
+  var ts = Sim.bodyState(station, sys, 0);
+  var before = V.clone(ship.pos);
+  Sim.undockShip(ship, sys, 0, 0.003);
+  check('undocking lets go', ship.docked === null);
+  check('and leaving spends the docking clearance',
+        !ship.cleared[station.id]);
+  check('so nothing can close the clamps again on the way out',
+        !Sim.berthCapture(ship, sys, 0));
+
+  /* WHICH WAY THE PUSH GOES, measured rather than argued. The way out of
+   * a throat is the berth anchor's own normal — the axis the corridor was
+   * carved along and the arrival flew down — and radial from the hub is a
+   * different vector in principle. In this library it is not: the worst
+   * berth normal anywhere sits under four degrees off radial, which is
+   * why undockShip still pushes radially. The spread is printed rather
+   * than asserted, so a re-export that puts a berth on the side of a hull
+   * shows up here as a number that moved. */
+  var worst = 1, worstId = null;
+  MODELS.forEach(function (modelId) {
+    Render.assignPort('orbital', modelId);
+    var g = Gen.bayGeometry(station);
+    for (var bi = 0; bi < Math.max(1, g.berths); bi++) {
+      var a2 = Gen.berthApertures(station, bi);
+      var o2 = Gen.berthOffset(station, bi);
+      if (!a2 || !a2.normal || !o2) continue;
+      var rl = Math.sqrt(o2.x * o2.x + o2.y * o2.y + o2.z * o2.z);
+      if (!(rl > 1e-9)) continue;
+      var c = (a2.normal[0] * o2.x + a2.normal[1] * o2.y + a2.normal[2] * o2.z) / rl;
+      if (c < worst) { worst = c; worstId = modelId + ' berth ' + bi; }
+    }
+  });
+  Render.assignPort('orbital', MODELS[0]);
+  console.log('  the least radial berth normal in the library: cos ' +
+              worst.toFixed(3) + '  (' + worstId + ')');
+  check('every berth opens roughly out of the hub, which is what the ' +
+        'radial push assumes', worst > 0.9, 'worst cos ' + worst.toFixed(4));
+  check('and the burn is a push, not a placement — same point, new velocity',
+        V.dist(before, ship.pos) < 1e-9 && V.len(V.sub(ship.vel, ts.vel)) > 1e-6);
+
+  /* THE DOORS. Still inside, on the way out: they run back. This is the
+   * half that a clearance-only rule gets wrong, and the flag expires by
+   * geometry — once the hull is out of the hull it stops counting. */
+  check('the departure is marked against the port it left',
+        !!(ship.departed && ship.departed.port === station.id));
+  check('and the ship is still inside the hull it is leaving',
+        Sim.insideStation(ship.pos, sys, 0) === station);
+  /* THE STATION IS IN ORBIT. Advancing the clock without carrying the hull
+   * along with it leaves the ship hundreds of kilometres behind a station
+   * moving at twenty-odd kilometres a second — outside, by the time the
+   * doors have finished a two-and-a-half second cycle, and the test then
+   * measures the expiry rather than the opening. Held in the berth's own
+   * frame instead, which is what being parked in one means. */
+  var rel0 = V.sub(ship.pos, ts.pos);
+  var t2 = 0, dst = null;
+  for (var k = 0; k < 40; k++) {
+    t2 += 0.25;
+    var tsK = Sim.bodyState(station, sys, t2);
+    ship.pos = V.add(tsK.pos, rel0);
+    dst = Sim.stationDoorState(station, sys, t2, ship, false);
+  }
+  check('the outer doors open for a ship that is leaving',
+        !!dst && dst.open > 0.9, dst && dst.open.toFixed(2));
+  check('and the inner gate shuts behind it',
+        !!dst && dst.inner < 0.05, dst && dst.inner.toFixed(2));
+
+  /* OUT, and the flag stops mattering without anyone clearing it. Moved
+   * far enough off that no room of the model contains the point. */
+  var far = V.addScaled(ts.pos, V.norm(V.sub(ship.pos, ts.pos)), station.radius * 4);
+  var ghost = { cls: ship.cls, pos: far, vel: V.clone(ship.vel),
+                docked: null, departed: ship.departed, cleared: {} };
+  check('the hull is outside once it is well clear',
+        Sim.insideStation(ghost.pos, sys, 0) !== station);
+  check('and then the doors stop answering to a stale departure',
+        Sim.stationDoorState(station, sys, 0, ghost, false) === null);
+
+  /* And docking again ends it outright, whatever the geometry says. */
+  Sim.dockShip(ship, station, sys, 0);
+  check('docking clears the departure', !ship.departed);
+})();
+
 Render.assignPort('orbital', null);   // leave the library as we found it
 
 console.log('');

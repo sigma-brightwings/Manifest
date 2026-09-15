@@ -3443,6 +3443,7 @@
     G.clearanceSweptAt = G.t;
 
     var ports = G.sys.ports || [];
+    var inside = Sim.insideStation ? Sim.insideStation(G.ship.pos, G.sys, G.t) : null;
     for (var i = 0; i < ports.length; i++) {
       var p = ports[i];
       if (!p || !p.docking) continue;
@@ -3456,6 +3457,21 @@
        * leaving. Closing is the difference between arriving and leaving,
        * and it is already computed. */
       if (!(st.closingSpeed > 0)) continue;
+      /* AND A PORT DOES NOT CLEAR A SHIP THAT IS ALREADY INSIDE IT.
+       *
+       * Closing is the difference between arriving and leaving for a ship
+       * in open space. It is not, for a ship still in the bay: backing out
+       * of a throat is a manoeuvre, and a manoeuvre has moments where the
+       * range to the station's CENTRE is briefly shrinking. Cleared again
+       * on one of those frames, the catch closes the clamps and the player
+       * is back in the berth they were leaving — which is the same bug as
+       * a stale clearance flag, one step further along, and the reason
+       * spending the flag on the way out is not on its own enough.
+       *
+       * Sim.insideStation asks the model whether the hull is in a room or
+       * a doorway of that port, which is the actual question. Asked once
+       * for the ship rather than once per port. */
+      if (inside === p) continue;
       /* The same berth count the ships themselves are flying to — closed
        * form off the traffic timetable, so a port that says it is full is
        * not making it up. */
