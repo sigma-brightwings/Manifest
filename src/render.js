@@ -25,6 +25,41 @@
     this.near = 1e-4;
   }
 
+  /* THE NEAREST AIM THAT KEEPS THE EYE OFF THE FLOOR.
+   *
+   * An orbit camera puts its eye at target + d*dist with
+   * d = (cos p cos y, cos p sin y, sin p). Its height above a floor whose
+   * normal is `up`, measured from a target sitting `above` over that floor
+   * and in the same units, is
+   *
+   *     above + dist * dot(d, up)
+   *
+   * and dot(d, up) = a cos p + b sin p for a = up.x cos y + up.y sin y,
+   * b = up.z — which is R cos(p - phi), R = hypot(a, b), phi = atan2(b, a).
+   * So the pitches that clear the floor are a single arc centred on phi,
+   * the direction that climbs fastest, and clamping is moving to its
+   * nearer edge. Closed form: no search, no threshold, and it lets go
+   * entirely the moment the geometry allows it.
+   *
+   * Returns the pitch unchanged when it already clears. `above` must be at
+   * least `margin` — the caller owns that, because "the target is itself
+   * under the floor" is a different question with a different answer. */
+  function pitchAboveFloor(yaw, pitch, dist, up, above, margin) {
+    if (!(dist > 0) || !up) return pitch;
+    var a = up.x * Math.cos(yaw) + up.y * Math.sin(yaw);
+    var b = up.z;
+    var R = Math.sqrt(a * a + b * b);
+    if (!(R > 1e-9)) return pitch;
+    var phi = Math.atan2(b, a);
+    var need = (margin - above) / (dist * R);
+    var half = Math.acos(Math.max(-1, Math.min(1, need)));
+    var off = pitch - phi;
+    while (off > Math.PI) off -= 2 * Math.PI;
+    while (off < -Math.PI) off += 2 * Math.PI;
+    if (Math.abs(off) <= half) return pitch;
+    return phi + (off > 0 ? half : -half);
+  }
+
   Camera.prototype.build = function (w, h) {
     var cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
     var cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
@@ -6439,6 +6474,7 @@
     dashPoint: dashPoint,
     aperturePath: aperturePath,
     apertureSet: apertureSet,
+    pitchAboveFloor: pitchAboveFloor,
     clipProject: clipProject,
     localPoly: localPoly,
     canopyPoly: canopyPoly,

@@ -4915,6 +4915,56 @@
     return null;
   }
 
+  /* THE DECK IS THE FLOOR OF THE SHOT, and the boom length cannot defend
+   * it.
+   *
+   * Astra, in the exterior view at a berth: "we're under the deck." The
+   * eye was up to twenty-five metres below the plating, looking at the
+   * underside of it, on twelve of thirty-six sampled angles.
+   *
+   * Two things had to be true at once for that to show up. berthRoom used
+   * to hand back the anchor box, whose floor is a hundred metres inside
+   * the plating — fixed there. And the hull used to float eighty metres up
+   * on a standoff that scaled with the station, so a short boom pitched
+   * down spent its length in open air; parked properly on the deck it is
+   * six metres up and ANY downward pitch is through the floor on the first
+   * metre of boom.
+   *
+   * Which is why this is a clamp on the AIM rather than on the length.
+   * Shortening the boom to keep the eye up is the failure clampCameraToHangar
+   * already has a whole paragraph about — the camera welded to the hull,
+   * plating filling the screen — and it is the wrong trade anyway: you
+   * cannot get underneath a ship that is sitting on a floor, so the honest
+   * answer is that the camera stops at deck level and keeps its distance.
+   *
+   * The arc itself is Render.pitchAboveFloor, which is pure geometry and
+   * is tested as such — this end only has to know where the floor is and
+   * how much air to keep under the eye. */
+  var DECK_MARGIN_KM = 0.002;             // two metres of air under the eye
+
+  function keepCameraAboveDeck(port) {
+    if (!Sim.portBasis || !Sim.berthRoom || !Gen || !Gen.bayGeometry) return;
+    if (!(G.cam.dist > 0)) return;
+    var basis = Sim.portBasis(port, G.sys, G.t);
+    var room = Sim.berthRoom(port, currentBerth());
+    if (!basis || !room) return;
+    var r = port.radius || 1;
+    var g = Gen.bayGeometry(port);
+    var rel = V.sub(G.cam.target, basis.entrance.pos);
+    var above = V.dot(rel, basis.up) / r - g.lift - room.z0;
+    /* Not standing on this deck — mid-arrival, or out in the throat with
+     * the floor somewhere else entirely. Nothing to defend. */
+    if (!(above > 0)) return;
+
+    /* Never more clearance than the hull itself has, or a ship parked
+     * close to its deck would have the camera pinned above its own roof.
+     * `above` is in port radii and the boom is in km, so both go to km
+     * before they meet — the units mistake this file has made twice. */
+    var margin = Math.min(above * 0.5, DECK_MARGIN_KM / r);
+    G.cam.pitch = Render.pitchAboveFloor(G.cam.yaw, G.cam.pitch, G.cam.dist,
+                                         basis.up, above * r, margin * r);
+  }
+
   function clampCameraToEnclosure() {
     if (G.viewMode === 'cockpit') return;   // the eye is the pilot's, not a boom
     /* The clamp follows the ENCLOSURE, not the docked flag. Half way down
@@ -4974,6 +5024,7 @@
        * and it cannot be fooled by a room whose shape is not a box. */
       clampCameraToHangar(port);
       clampCameraToThroat(port);
+      keepCameraAboveDeck(port);
       return;
     }
     var host = G.lastMassiveBody ||

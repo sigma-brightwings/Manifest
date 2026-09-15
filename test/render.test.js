@@ -4180,6 +4180,7 @@ console.log('--- berthed inside a station ---');
   check('and it renders from in there without error',
         errorsSince(drawn.texts.length - 1).length === 0);
 
+
   /* THE INTERIOR is the hall at the hub, and from a rim alcove you are not
    * in it. Drawing it anyway is the slab bug: paintMesh sorts within one
    * mesh, so a hall you are not standing in lands on top of the wall a few

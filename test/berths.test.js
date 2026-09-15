@@ -1178,6 +1178,59 @@ console.log('--- landing in a berth ---');
         back.inner.toFixed(2));
 })();
 
+console.log('--- the floor of the room is the deck ---');
+(function () {
+  /* Astra, in the exterior view at a berth: "we're under the deck."
+   *
+   * berthRoom handed the camera clamp the ANCHOR BOX, and the artist hung
+   * these boxes with their top at the deck and let them extend down
+   * through it — the same authoring convention that put every ship in the
+   * game under the floor until berthDeck was written. As a room that says
+   * there is most of a kilometre of headroom BELOW the hull and almost
+   * none above, so the boom pitched down went through the plating.
+   *
+   * It had always said that. What changed is that the hull used to float
+   * eighty metres up on a standoff that scaled with the station, so a short
+   * boom spent its length in open air; parked properly it is six metres up
+   * and any downward pitch is through the floor immediately.
+   *
+   * Swept across the library, because this is a fact about the ART and one
+   * model re-exported the other way round would put it back. */
+  var wrongFloor = 0, sunk = 0, noHead = 0, checked = 0;
+  var worstSunk = Infinity, worstWho = '';
+  MODELS.forEach(function (modelId) {
+    Render.assignPort('orbital', modelId);
+    var port = fakePort('room-' + modelId, 1.9);
+    var g = Gen.bayGeometry(port);
+    var n = Math.max(1, g.berths);
+    for (var i = 0; i < n; i++) {
+      var room = Sim.berthRoom(port, i);
+      var deck = Render.berthDeck(modelId, i);
+      if (!room || deck === null || deck === undefined) continue;
+      checked++;
+      /* The floor the camera is given and the plate the ship is stood on
+       * are the same number, or the two disagree about where down is. */
+      if (Math.abs(room.z0 - deck) > 1e-9) wrongFloor++;
+      /* And the park point is above it, by the standoff and nothing else. */
+      var off = Gen.berthOffset(port, i);
+      var gap = off.z - room.z0;
+      if (gap < worstSunk) { worstSunk = gap; worstWho = modelId + ' berth ' + i; }
+      if (gap <= 0) sunk++;
+      if (!(room.z1 > room.z0)) noHead++;
+    }
+  });
+  Render.assignPort('orbital', null);
+  check('every modelled berth has a room to measure', checked > 0, checked + ' berths');
+  check('the room\'s floor is the deck the ship is stood on, everywhere',
+        wrongFloor === 0, wrongFloor + ' of ' + checked + ' disagree');
+  check('the parked hull is above that floor, never in it',
+        sunk === 0, sunk + ' of ' + checked + ' sunk');
+  check('and the room has headroom above the deck rather than below it',
+        noHead === 0, noHead + ' of ' + checked + ' inverted');
+  console.log('  the hull clears its deck by ' + (worstSunk * 1.9 * 1000).toFixed(1) +
+              ' m at the tightest berth in the library (' + worstWho + ')');
+})();
+
 console.log('--- the stand under the ship ---');
 (function () {
   /* THE ONE THING IN A BAY THAT DOES NOT SCALE WITH THE STATION, and that

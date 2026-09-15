@@ -353,6 +353,86 @@ console.log('--- the guns are in front of the pilot ---');
         camF.project(ship.pos) === null);
 })();
 
+console.log('--- the eye never goes under the floor ---');
+(function () {
+  /* Astra, in the exterior view at a berth: "we're under the deck."
+   *
+   * Two things had to be true at once for that to surface. berthRoom used
+   * to hand the camera clamp the anchor box, whose floor is a hundred
+   * metres inside the plating (fixed in sim.js, swept in berths.test.js);
+   * and the hull floated eighty metres up on a standoff that scaled with
+   * the station, so a short boom pitched down spent its length in open
+   * air. Park the ship properly on its deck, six metres up, and ANY
+   * downward pitch is through the floor on the first metre of boom.
+   *
+   * The fix is a clamp on the AIM rather than on the length, because
+   * shortening the boom to keep the eye up is the failure the hangar clamp
+   * already exists to prevent — the camera welded to the hull, plating
+   * filling the screen. Render.pitchAboveFloor is that clamp, and it is
+   * pure geometry, so it is swept here rather than sampled at one angle in
+   * a running game: a clamp on an angle is exactly the kind of thing that
+   * works dead ahead and fails at three o'clock.
+   *
+   * `up` is the BAY's, not the world's — a station's model +z is its orbit
+   * normal — so the sweep runs several of them, including the two that
+   * break a naive implementation: straight world up, where phi is a right
+   * angle, and one lying in the yaw plane, where it is zero. */
+  var UPS = [
+    { x: 0, y: 0, z: 1 },                      // world up: phi = +90 degrees
+    { x: 1, y: 0, z: 0 },                      // in the yaw plane: phi = 0
+    { x: 0, y: 1, z: 0 },
+    V.norm({ x: 0.3, y: -0.6, z: 0.74 }),
+    V.norm({ x: -0.8, y: 0.1, z: -0.59 })      // a bay hanging upside down
+  ];
+  var above = 0.0064, margin = 0.002;          // km: six metres up, two of air
+  var sampled = 0, under = 0, moved = 0, needless = 0, worst = Infinity;
+  UPS.forEach(function (up) {
+    for (var dist = 0.004; dist < 2; dist *= 3.1) {
+      for (var yaw = 0; yaw < 6.28; yaw += 0.41) {
+        for (var pitch = -1.55; pitch < 1.56; pitch += 0.13) {
+          sampled++;
+          var out = Render.pitchAboveFloor(yaw, pitch, dist, up, above, margin);
+          var cp = Math.cos(out), sp = Math.sin(out);
+          var d = { x: cp * Math.cos(yaw), y: cp * Math.sin(yaw), z: sp };
+          var h = above + dist * V.dot(d, up);
+          if (h < worst) worst = h;
+          /* A hair of slack for the float: the clamp lands the eye exactly
+           * on the margin, which is where equality lives. */
+          if (h < margin - 1e-9) under++;
+
+          /* And it only moves when it has to. A camera that quietly
+           * re-aims itself on an angle that was already fine is a camera
+           * fighting the player's hand. */
+          var cp0 = Math.cos(pitch), sp0 = Math.sin(pitch);
+          var d0 = { x: cp0 * Math.cos(yaw), y: cp0 * Math.sin(yaw), z: sp0 };
+          var h0 = above + dist * V.dot(d0, up);
+          if (out !== pitch) moved++;
+          if (h0 >= margin && out !== pitch) needless++;
+        }
+      }
+    }
+  });
+  console.log('  ' + sampled + ' aims across five floor normals; ' + moved +
+              ' needed moving, lowest eye ' + (worst * 1000).toFixed(2) + ' m');
+  check('no aim leaves the eye under the floor', under === 0,
+        under + ' of ' + sampled);
+  check('and an aim that already cleared is left alone', needless === 0,
+        needless + ' moved for nothing');
+  check('the sweep actually exercised the clamp', moved > sampled * 0.05,
+        moved + ' of ' + sampled + ' clamped');
+
+  /* A boom short enough that even straight down clears the floor is not
+   * clamped at all, which is the degenerate case the acos bound has to
+   * get right rather than special-case. */
+  var tiny = Render.pitchAboveFloor(0.9, -1.5, 0.0005, { x: 0, y: 0, z: 1 },
+                                    above, margin);
+  check('a boom shorter than the clearance is never re-aimed', tiny === -1.5,
+        String(tiny));
+  /* And a zero-length boom cannot be, either — there is no eye to move. */
+  check('nor is a boom of no length', Render.pitchAboveFloor(1, -1, 0,
+        { x: 0, y: 0, z: 1 }, above, margin) === -1);
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

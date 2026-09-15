@@ -254,15 +254,47 @@
    * the rim at 0.65 radii while the chamber table describes a hall at the
    * hub. Clamping to the hall would have hauled the eye across the station
    * and through several walls to get there. The alcove IS the room. */
+  /* THE FLOOR AND THE CEILING ARE NOT THE BOX'S, and that is the same
+   * lesson berthDeck already learned the hard way.
+   *
+   * The artist hung these anchors with their TOP at the deck and let them
+   * extend DOWN through it, so `min[2]` is a hundred-odd metres inside the
+   * plating and `max[2]` is barely above it. Handed to the camera clamp as
+   * a room, that says there is most of a kilometre of headroom BELOW the
+   * ship and none above — so the boom, pitched down, dropped straight
+   * through the deck and the exterior view came up looking at the
+   * underside of the plating. Astra: "we're under the deck."
+   *
+   * It was always saying that. What changed is that there is now something
+   * down there to see: the hull used to float eighty metres up on a
+   * standoff that scaled with the station, so the same boom spent its
+   * length in open air, and the bay it ended up in was an unlit box either
+   * way. Park the ship on the deck and dress the deck, and the bug has a
+   * picture.
+   *
+   * So the floor is the MEASURED deck — the same plate berthDeck casts for
+   * and the same one berthOffset stands the ship on, so the camera and the
+   * hull cannot disagree about where the ground is — and the ceiling is a
+   * bay's headroom above it rather than whatever the box happened to
+   * reach. x and y are the box's own; those the artist did mean. */
   function berthRoom(port, i) {
     var sorted = sortedBerths(port);
     if (!sorted) return null;
     var k = ((i % sorted.length) + sorted.length) % sorted.length;
     var b = sorted[k];
     if (!b || !b.min || !b.max) return null;
+    var R = global.Render, Gen = global.Gen;
+    var deck = (R && R.berthDeck && R.portModelFor)
+      ? R.berthDeck(R.portModelFor(port), k) : null;
+    if (deck === null || deck === undefined) deck = b.min[2];
+    /* The headroom the bay tables already carry, in the same units. A
+     * modelled bay overrides it field by field, so this is the art's
+     * answer wherever the art has one. */
+    var g = (Gen && Gen.bayGeometry) ? Gen.bayGeometry(port) : null;
+    var head = (g && g.ceilZ > g.floorZ) ? (g.ceilZ - g.floorZ) : (b.max[2] - b.min[2]);
     return { x0: b.min[0], x1: b.max[0],
              y0: b.min[1], y1: b.max[1],
-             z0: b.min[2], z1: b.max[2] };
+             z0: deck, z1: deck + head };
   }
 
   /* What this ship needs a berth to be. Read off the model it wears, via
