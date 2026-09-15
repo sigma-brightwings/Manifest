@@ -5,8 +5,17 @@
 # is the cheapest check that covers the rest: launch the artifact, wait, and
 # see whether it is still alive with a renderer and a GPU process beside it.
 # A crash on boot exits within a second or two and leaves nothing standing.
-$exe = Join-Path (Split-Path -Parent $PSScriptRoot) 'dist\ProceduralSpaceGame-0.1.0-portable.exe'
-if (-not (Test-Path $exe)) { Write-Output 'no portable exe in dist/ — run npm run dist:win'; exit 1 }
+# The version is NOT written here. It was, as 0.1.0, and a smoke test that
+# quietly stops finding its artifact the first time anyone bumps the version
+# is a smoke test that passes by testing nothing — it exits 1 with a message
+# that reads like the build failed. Newest portable in dist/, whatever it is
+# called, and the name is printed so you can see which one was launched.
+$dist = Join-Path (Split-Path -Parent $PSScriptRoot) 'dist'
+$exe = Get-ChildItem $dist -Filter '*portable*.exe' -ErrorAction SilentlyContinue |
+       Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if (-not $exe) { Write-Output 'no portable exe in dist/ — run npm run dist:win'; exit 1 }
+Write-Output ('launching: {0}  ({1:N1} MB)' -f $exe.Name, ($exe.Length / 1MB))
+$exe = $exe.FullName
 
 Start-Process -FilePath $exe
 Start-Sleep -Seconds 20
