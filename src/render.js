@@ -3651,9 +3651,28 @@
       (rx * frame.up.x + ry * frame.up.y + rz * frame.up.z) / radiusKm,
       (rx * frame.fwd.x + ry * frame.fwd.y + rz * frame.fwd.z) / radiusKm
     ];
+    /* AN INSET, NOT A SLACK — and the sign of this number is the whole
+     * grey-slab bug.
+     *
+     * It used to grow the box by 10 per cent, on the reasoning that a
+     * bounding box is approximate and being generous errs kindly. It does
+     * not. The `interior` bucket is a CONCOURSE running down the spine of
+     * the station, and its bounding box already reaches across the alcoves
+     * on either side of it; growing that box further swallows the berths
+     * whole. Measured in the running game, berthed: the eye sat at x
+     * -0.247 against a hall spanning -0.219 to 0.219, i.e. OUTSIDE the
+     * room — and the 10 per cent let it in by 0.017. The hall was then
+     * painted last, over the deck, over the bay, over the ship.
+     *
+     * berths.test.js has been printing the fact all along: "0 of 48
+     * modelled berths sit inside their station's own interior volume." A
+     * berth is not in the hall. So the test is now strict about its edges
+     * and pulls IN slightly, which costs a little of the concourse at the
+     * very moment you enter it and never paints it over a room you are
+     * actually in. Wrong-and-invisible beats wrong-and-covering-everything. */
     for (var a = 0; a < 3; a++) {
-      var slack = (b.hi[a] - b.lo[a]) * 0.10;
-      if (local[a] < b.lo[a] - slack || local[a] > b.hi[a] + slack) return false;
+      var inset = (b.hi[a] - b.lo[a]) * 0.05;
+      if (local[a] < b.lo[a] + inset || local[a] > b.hi[a] - inset) return false;
     }
     return true;
   }

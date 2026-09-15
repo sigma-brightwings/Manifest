@@ -5227,8 +5227,36 @@
         ? Sim.portEntrance(body, G.sys, G.t).pos
         : Sim.bodyPosition(body, G.sys, G.t);
       var sp = cam.project(pos);
-      if (!sp) continue;
-      items.push({ body: body, pos: pos, sp: sp, rpx: body.radius * sp.scale });
+
+      /* A BODY YOU ARE INSIDE IS NOT CULLED ON ITS CENTRE POINT.
+       *
+       * THE BUG THIS KILLS, and it is the one that has been underneath
+       * every "camera glitch" report in this project. `cam.project` returns
+       * null for a point behind the eye, and this dropped the whole body
+       * when it did. That is correct for anything smaller than its own
+       * distance — and completely wrong for a station you are berthed
+       * inside. Measured in the running game, docked at Waypoint Dock: the
+       * hull sits 3.5 km from a centre with a 7 km radius, that centre is
+       * behind the camera, and SEVEN KILOMETRES OF STRUCTURE vanished on a
+       * single point test. What you get is a berth in open black space, or
+       * — from an angle where some other body survives the same test — its
+       * flat grey side filling the screen with nothing in front of it.
+       *
+       * The test a large near body needs is against its RADIUS, not its
+       * centre: if the camera is inside the bounding sphere, the body is
+       * around you and is drawn, whatever its middle does in the
+       * projection. */
+      var near = V.dist(pos, cam.target);
+      var enclosing = near < (body.radius || 0);
+      if (!sp && !enclosing) continue;
+      /* Behind the eye and enclosing: there is no screen point for the
+       * centre, and nothing in the model path wants one — the mesh is
+       * drawn from its own frame. Depth keeps the sort honest; the zero
+       * scale is what tells the label and the marker to stay away, since
+       * both are about a thing you are looking AT rather than standing in. */
+      if (!sp) sp = { x: 0, y: 0, depth: near, scale: 0, behindEye: true };
+      items.push({ body: body, pos: pos, sp: sp, rpx: body.radius * sp.scale,
+                   enclosing: enclosing });
     }
     items.sort(function (p, q) { return q.sp.depth - p.sp.depth; });
 
@@ -8633,7 +8661,11 @@
        * tells you at a glance whether you are approaching a farm, a
        * refinery or a shipyard. */
       var labelCol = b.underground ? '#a9d6ff' : b.surface ? '#ffd9a8' : '#9ff0dc';
-      if (rpx > 3.5 && !chartHides(b, cam)) {
+      /* `item.enclosing` passes the size gate on its own: a station whose
+       * centre is behind the eye has no meaningful projected radius, and it
+       * is the largest thing on the screen precisely because you are in
+       * it. */
+      if ((rpx > 3.5 || item.enclosing) && !chartHides(b, cam)) {
         var model = stationModelFor(b);
         /* A MODELLED STATION MAY TURN ONLY PART OF ITSELF. If the art
          * declared a `stationSpin` ring, the shell is drawn on a frame that
@@ -8694,7 +8726,23 @@
            * interior bounds are asked whether the camera is actually in
            * them. Surface ports are excluded because their interior IS the
            * bay mesh, already drawn as the model. */
-          if (indoors) {
+          /* AND THE SECOND HALF IS ACTUALLY ASKED, which it had stopped
+           * being. The paragraph above describes `insideInterior` as part
+           * of this gate; the call had been dropped and only the comment
+           * survived, so the hall was painted from anywhere in the station.
+           *
+           * That is the whole of the grey slab. The interior bucket is a
+           * CONCOURSE, and berths.test.js has been printing the proof for
+           * weeks: "0 of 48 modelled berths sit inside their station's own
+           * interior volume". So from a berth the renderer was painting a
+           * room you are not in, last, over the room you are — over the
+           * deck, over the bay, over your own hull. Suppress it and the
+           * berth shot is correct; leave it and the screen is a grey wall.
+           *
+           * Surface ports are excluded because their interior IS the bay
+           * mesh, already drawn as the model. */
+          if (indoors && (b.surface ||
+                          Render.insideInterior(cam, frame, b.radius, model))) {
             Render.drawStationInterior(ctx, cam, frame, b.radius, sun,
                                        model, b.color);
           }
@@ -8725,7 +8773,8 @@
           if (b.surface && rpx > 5) {
             Render.drawPortDoors(ctx, cam, frame, b, b.radius, sun, doorPhase(b));
           }
-          queueLabel(sp, b.name, labelCol, rpx + 8, 4 + rpx);
+          /* No nameplate on the room you are standing in. */
+          if (!sp.behindEye) queueLabel(sp, b.name, labelCol, rpx + 8, 4 + rpx);
           return;
         }
       }
