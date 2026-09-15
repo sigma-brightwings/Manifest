@@ -2817,6 +2817,75 @@
     return out;
   }
 
+  /* How many faces the aperture cut removed, per role. Read by
+   * berths.test.js: a cut that quietly stops finding anything is a
+   * sealed station that still passes every other check. */
+  var CUT_COUNT = {};
+  var OPEN_BUCKET = {};
+  var APERTURE_SLAB = 0.08;          // port radii either side of the leaf plane
+
+  /* Is this point inside one of the doorways? Component-wise rather than
+   * through a constructed basis: the berth normals in this library are
+   * axis-aligned, and a cross product would only be a second way to get
+   * the same number wrong. */
+  function inAperture(apertures, x, y, z) {
+    for (var i = 0; i < apertures.length; i++) {
+      var apr = apertures[i], n = apr.normal;
+      var along = (x - apr.mid[0]) * n[0] + (y - apr.mid[1]) * n[1] + (z - apr.mid[2]) * n[2];
+      if (Math.abs(along - apr.along) > APERTURE_SLAB) continue;
+      var c = [x, y, z], out = false;
+      for (var k = 0; k < 3 && !out; k++) {
+        if (apr.half[k] === null) continue;
+        if (Math.abs(c[k] - apr.mid[k]) > apr.half[k]) out = true;
+      }
+      if (!out) return true;
+    }
+    return false;
+  }
+
+  /* THE SHELL IS NOT THE ONLY THING IN THE WAY.
+   *
+   * Cutting the doorway out of the hull opened the ordinary berths and
+   * left the cradle, the cylinder and every large berth exactly as sealed
+   * as before — and the prism had nothing left in it. The blocker was the
+   * INTERIOR bucket, which portTriangles puts into the same collision
+   * index and which has its own walls across the same opening. A hole has
+   * to be a hole in every bucket that claims that space, or it is a hole
+   * in one of three lists.
+   *
+   * The shell goes through portDoors instead, because there the door
+   * leaves have to be lifted out BEFORE the cut — they live inside the
+   * opening by definition, and cutting first would delete the doors along
+   * with the wall. */
+  function openBucket(role, key) {
+    var ck = role + '#' + key;
+    if (OPEN_BUCKET[ck] !== undefined) return OPEN_BUCKET[ck];
+    var lib = libPort(role);
+    var mesh = lib && lib[key];
+    var d = portDoors(role);
+    var apertures = d && d.apertures;
+    OPEN_BUCKET[ck] = mesh || null;
+    if (!mesh || !mesh.f || !mesh.f.length || !apertures || !apertures.length) {
+      return OPEN_BUCKET[ck];
+    }
+    var f = [], c = [], cut = 0;
+    for (var i = 0; i < mesh.f.length; i++) {
+      var face = mesh.f[i], x = 0, y = 0, z = 0;
+      for (var k = 0; k < face.length; k++) {
+        var v = mesh.v[face[k]]; x += v[0]; y += v[1]; z += v[2];
+      }
+      if (inAperture(apertures, x / face.length, y / face.length, z / face.length)) {
+        cut++; continue;
+      }
+      f.push(face);
+      if (mesh.c) c.push(mesh.c[i]);
+    }
+    if (!cut) return OPEN_BUCKET[ck];
+    CUT_COUNT[role] = (CUT_COUNT[role] || 0) + cut;
+    OPEN_BUCKET[ck] = { v: mesh.v, f: f, c: mesh.c ? c : mesh.c };
+    return OPEN_BUCKET[ck];
+  }
+
   function portDoors(role) {
     if (PORT_DOORS[role] !== undefined) return PORT_DOORS[role];
     PORT_DOORS[role] = null;
@@ -2932,9 +3001,127 @@
     }
 
     if (!out.length) return null;
+    /* ---- AND THE DOORWAY IS A HOLE ------------------------------------
+     *
+     * Astra, parked: "How about the transfer halls between the bay and the
+     * doors to the outside? Currently it's 4 walls and no doors."
+     *
+     * She was describing something real and it was not a rendering bug.
+     * Measured from the stand at Waypoint Dock: 81 rays fired out across
+     * the whole cross-section of the berth, not one of them reaches open
+     * space — every single one stops at about 700 m, and opening the doors
+     * changes nothing because what they hit is not a door. 495 faces of
+     * HULL sit across the opening. Swept over the library it is universal:
+     * 48 of 48 modelled berths cannot see their own doorway from where the
+     * ship parks.
+     *
+     * The aperture was never cut. The leaves slide, and the VOXEL GRID is
+     * carved so the simulation believes there is a corridor — see
+     * stationSolidity, whose note already says the carve "is the only
+     * thing that currently says a doorway is a doorway" — but the wall
+     * itself has no hole in it. A working door mechanism mounted on the
+     * inside of a sealed box. It is also why a ship flown out of a berth
+     * stops dead a few hundred metres short of the doors, which had been
+     * blamed on the doors being shut.
+     *
+     * So cut it here, at the one place every consumer already reads
+     * through: portSections takes d.hull, portTriangles takes d.hull, and
+     * the renderer and the collision both come through those. Cut it in
+     * the art and this code does nothing; cut it here and the art does not
+     * have to be reopened, which is the trade Astra asked for.
+     *
+     * THE OPENING IS THE ART'S OWN, not a number chosen here. `travel` is
+     * already the distance from a leaf's inner edge to the berth's
+     * centreline — that is what makes a leaf close — so twice it IS the
+     * clear width, and the leaves' own z extent is the clear height. The
+     * depth of the slab is the only fitted number: the wall measured 288 m
+     * inboard of the leaf plane and 102 m outboard, so ±0.08 radii covers
+     * it with room, and the cross-section limits keep the cut inside the
+     * opening however deep it reaches. Surround, jambs and the rest of the
+     * bulkhead are outside that cross-section and survive untouched. */
+    var apertures = [];
+    if (berths) {
+      for (var ab = 0; ab < berths.length; ab++) {
+        var bth = berths[ab];
+        if (!bth || !bth.mid || !bth.normal) continue;
+        var nrm = bth.normal;
+        /* BOTH AXES ACROSS THE OPENING, not "sideways and full height".
+         * The first version assumed a leaf always slides horizontally and
+         * took the whole z extent as clear, which opened the ordinary
+         * berths and left every large one and every cradle and cylinder
+         * sealed — those doors part vertically. Each perpendicular axis
+         * gets the same rule: a leaf that slides on it gives the clear
+         * half-extent as its own `travel`, and an axis nothing slides on
+         * takes the leaves' own reach. */
+        var half = [0, 0, 0], reach = [0, 0, 0], slid = [false, false, false];
+        var alongSum = 0, mine = 0;
+        for (var li = 0; li < out.length; li++) {
+          var lf2 = out[li];
+          if (lf2.field || !lf2.berthMid) continue;
+          if (lf2.berthMid[0] !== bth.mid[0] || lf2.berthMid[1] !== bth.mid[1] ||
+              lf2.berthMid[2] !== bth.mid[2]) continue;
+          mine++;
+          for (var sx = 0; sx < 3; sx++) {
+            if (lf2.axis[sx] && lf2.travel > 0) {
+              slid[sx] = true;
+              if (lf2.travel > half[sx]) half[sx] = lf2.travel;
+            }
+          }
+          var seen = {};
+          for (var fi = 0; fi < lf2.mesh.f.length; fi++) {
+            for (var ki = 0; ki < lf2.mesh.f[fi].length; ki++) seen[lf2.mesh.f[fi][ki]] = 1;
+          }
+          var aSum = 0, aN = 0;
+          for (var vk in seen) {
+            var vv = shell.v[vk];
+            for (var rx = 0; rx < 3; rx++) {
+              var off3 = Math.abs(vv[rx] - bth.mid[rx]);
+              if (off3 > reach[rx]) reach[rx] = off3;
+            }
+            aSum += (vv[0] - bth.mid[0]) * nrm[0] + (vv[1] - bth.mid[1]) * nrm[1] +
+                    (vv[2] - bth.mid[2]) * nrm[2];
+            aN++;
+          }
+          if (aN) alongSum += aSum / aN;
+        }
+        if (!mine) continue;
+        var perp = [], ok = true;
+        for (var px = 0; px < 3; px++) {
+          if (Math.abs(nrm[px]) > 0.5) { perp.push(null); continue; }   // the way in
+          var h3 = slid[px] ? half[px] : reach[px];
+          if (!(h3 > 0)) ok = false;
+          perp.push(h3);
+        }
+        if (!ok) continue;
+        apertures.push({
+          mid: bth.mid.slice(), normal: nrm.slice(),
+          along: alongSum / mine,
+          half: perp
+        });
+      }
+    }
+
+    if (apertures.length) {
+      var keepF = [], keepC = [], cut = 0;
+      for (var hf = 0; hf < hullF.length; hf++) {
+        var face = hullF[hf];
+        var cx = 0, cy = 0, cz = 0;
+        for (var cfi = 0; cfi < face.length; cfi++) {
+          var cv = shell.v[face[cfi]]; cx += cv[0]; cy += cv[1]; cz += cv[2];
+        }
+        cx /= face.length; cy /= face.length; cz /= face.length;
+        if (inAperture(apertures, cx, cy, cz)) { cut++; continue; }
+        keepF.push(face);
+        keepC.push(hullC[hf]);
+      }
+      if (cut) { hullF = keepF; hullC = keepC; }
+      CUT_COUNT[role] = cut;
+    }
+
     PORT_DOORS[role] = {
       hull: { v: shell.v, f: hullF, c: hullC },
-      leaves: out
+      leaves: out,
+      apertures: apertures
     };
     return PORT_DOORS[role];
   }
@@ -3967,7 +4154,7 @@
     var tri = [], keys = ['shell', 'interior', 'spin'];
     var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     for (var k = 0; k < keys.length; k++) {
-      var m = (keys[k] === 'shell' && d0) ? d0.hull : lib[keys[k]];
+      var m = (keys[k] === 'shell' && d0) ? d0.hull : openBucket(role, keys[k]);
       if (!m || !m.v || !m.f) continue;
       for (var i = 0; i < m.f.length; i++) {
         var f = m.f[i];
@@ -6546,6 +6733,8 @@
     berthBoom: berthBoom,
     boomLimit: boomLimit,
     portDoors: portDoors,
+    openBucket: openBucket,
+    apertureCutCount: function (role) { portDoors(role); return CUT_COUNT[role] || 0; },
     carveThroat: carveThroat,
     solidityAt: solidityAt,
     SOLID_WALL: SOLID_WALL,

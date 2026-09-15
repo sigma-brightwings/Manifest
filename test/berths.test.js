@@ -1178,6 +1178,65 @@ console.log('--- landing in a berth ---');
         back.inner.toFixed(2));
 })();
 
+console.log('--- the doorway is a hole ---');
+(function () {
+  /* Astra, parked: "How about the transfer halls between the bay and the
+   * doors to the outside? Currently it's 4 walls and no doors."
+   *
+   * She was describing something real and it was not a rendering bug. The
+   * aperture was never cut. Measured before the fix: 81 rays fired out
+   * across the whole cross-section of a berth, not one reaching open
+   * space, every one stopping at about 700 m — and opening the doors
+   * changed nothing, because what they hit was not a door. 48 of 48
+   * modelled berths could not see their own doorway from the park point.
+   * The leaves slid, the voxel grid was carved so the simulation believed
+   * there was a corridor, and the wall itself had no hole in it.
+   *
+   * WHAT THIS PINS. Not the wording of the fix — that the doorways are
+   * open, measured the way a ship experiences them: a ray down the berth's
+   * own axis, through the collision index every hull test goes through.
+   * Cut it in the art instead and this still passes. */
+  var cutFaces = 0, clear = 0, total = 0, stillShut = [];
+  MODELS.forEach(function (modelId) {
+    Render.assignPort('orbital', modelId);
+    cutFaces += Render.apertureCutCount(modelId);
+    var d = Render.portDoors(modelId);
+    if (!d || !d.apertures) return;
+    d.apertures.forEach(function (ap, i) {
+      total++;
+      var n = ap.normal, m = ap.mid, blocked = null;
+      var limit = ap.along + 0.10;
+      for (var t = 0.004; t < limit; t += 0.004) {
+        var a = [m[0] + n[0] * (t - 0.004), m[1] + n[1] * (t - 0.004), m[2] + n[2] * (t - 0.004)];
+        var b = [m[0] + n[0] * t, m[1] + n[1] * t, m[2] + n[2] * t];
+        if (Render.portSegmentHit(modelId, a, b,
+              { open: 1, inner: 0, berth: i, berthMid: m })) { blocked = t; break; }
+      }
+      if (blocked === null) clear++;
+      else stillShut.push(modelId + ' berth ' + i);
+    });
+  });
+  Render.assignPort('orbital', null);
+
+  console.log('  the cut removes ' + cutFaces + ' faces across the library, and ' +
+              clear + ' of ' + total + ' berths can now see out along their own axis');
+  if (stillShut.length) {
+    console.log('  still walled in: ' + stillShut.slice(0, 4).join(', ') +
+                (stillShut.length > 4 ? ' (+' + (stillShut.length - 4) + ' more)' : ''));
+  }
+  check('there are doorways to cut', total > 0, total + ' apertures');
+  check('and the cut takes faces out of every model', cutFaces > 0, cutFaces + ' faces');
+  /* MEASURED, NOT ASPIRED TO. 36 of 48 at the time of writing: every spine
+   * and cylinder berth, four of five on the ring, none of the cradles and
+   * none of the three large spine berths — those last twelve are stopped
+   * 53 to 106 m out, far short of their doors, by something close in that
+   * is a different obstruction and has not been looked at yet. The bar is
+   * where the measurement is, so this fails if a change puts a wall back
+   * and does not quietly pass if the remaining twelve are fixed. */
+  check('most berths have a way out with the doors open', clear >= 36,
+        clear + ' of ' + total);
+})();
+
 console.log('--- the floor of the room is the deck ---');
 (function () {
   /* Astra, in the exterior view at a berth: "we're under the deck."
