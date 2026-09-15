@@ -4835,6 +4835,30 @@
    * run arrivals today. When beginArrival learns about stations, the leg
    * that seals the doors is what should flip this, exactly as the shaft
    * doors do now. */
+  /* WHICH COMPARTMENT OF THIS STATION THE SHIP IS IN, or null.
+   *
+   * Berthed, the answer is simply the berth — sections are built from the
+   * berths in the same canonical order, so the index IS the section and no
+   * search is needed or wanted. Flying inside, the ship's own position is
+   * asked instead, which is how the throat comes back as "no compartment"
+   * and gets you the whole hull while you are still in it. */
+  function shipSection(port) {
+    if (!Render.sectionAt || !Sim.portBasis) return null;
+    var model = Render.portModelFor(port);
+    if (G.ship.docked === port.id) {
+      var b = currentBerth();
+      return (typeof b === 'number' && b >= 0) ? b : null;
+    }
+    var basis = Sim.portBasis(port, G.sys, G.t);
+    if (!basis) return null;
+    var r = port.radius || 1;
+    var rel = V.sub(G.ship.pos, basis.entrance.pos);
+    var sec = Render.sectionAt(model, [V.dot(rel, basis.east) / r,
+                                       V.dot(rel, basis.north) / r,
+                                       V.dot(rel, basis.up) / r]);
+    return sec >= 0 ? sec : null;
+  }
+
   function enclosedPort() {
     var berthed = dockedPort();
     if (berthed) return berthed;
@@ -8690,8 +8714,12 @@
            * own hull, a ship passing outside — keeps its daylight. */
           var indoors = (enclosedPort() === b);
           if (indoors) Render.setIndoors(true);
+          /* ONE COMPARTMENT WHEN YOU ARE IN ONE. Astra's design: every
+           * section has a blast door, so the renderer only ever draws the
+           * section around the ship. From outside, `null` — the whole hull
+           * is what a station looks like. */
           Render.drawStationModel(ctx, cam, frame, b.radius, sun, model, b.color,
-                                  stationDoors(b));
+                                  stationDoors(b), indoors ? shipSection(b) : null);
           if (turns) {
             Render.drawPortPart(ctx, cam, stationFrame(b), b.radius, sun,
                                 model, 'spin', b.color);

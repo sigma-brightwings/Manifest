@@ -1020,6 +1020,76 @@ console.log('--- landing in a berth ---');
         !isFinite(Render.boomLimit('no-such-station', 0, [1, 0, 0])));
 })();
 
+/* ---- a station is a set of compartments ---------------------------------
+ *
+ * Astra's design, and the art already declares it: every section has a
+ * blast door, so the renderer only has to draw the one around the ship.
+ * What this pins is the decomposition those doors hang off.
+ *
+ * THE TRAP IT GUARDS is naming. A ring MIRRORS its patterns, so two alcoves
+ * on opposite sides of the hub are both called berthSM0 — grouping by node
+ * name alone gave ring-s two sections where it has five. Sections are
+ * therefore geometric, keyed on the berth INDEX in the same canonical order
+ * generate.js sorts by, and this checks the two halves of that: every berth
+ * lands in its own section, and open space lands in none. */
+(function () {
+  console.log('--- the station in compartments ---');
+  var checked = 0, own = 0, leaked = 0, faces = [];
+  MODELS.forEach(function (id) {
+    var S = Render.portSections(id);
+    var lib = Render.libPort(id);
+    var mb = lib && lib.anchors && lib.anchors.berths;
+    if (!S || !mb) return;
+    var sorted = mb.slice().sort(function (a, b) {
+      return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
+    });
+    check('every berth of ' + id + ' has a section',
+          S.n === sorted.length, S.n + ' vs ' + sorted.length);
+    for (var k = 0; k < sorted.length; k++) {
+      checked++;
+      if (Render.sectionAt(id, sorted[k].mid) === k) own++;
+    }
+    /* A corner of the bounding cube is not in anybody's compartment. */
+    if (Render.sectionAt(id, [0.95, 0.95, 0.95]) >= 0) leaked++;
+
+    var whole = 0, one = 0;
+    ['hull', 'interior'].forEach(function (b) {
+      if (S.structure[b]) whole += S.structure[b].f.length;
+      S.sections.forEach(function (s) { if (s[b]) whole += s[b].f.length; });
+    });
+    ['hull', 'interior'].forEach(function (b) {
+      if (S.structure[b]) one += S.structure[b].f.length;
+      if (S.sections[0] && S.sections[0][b]) one += S.sections[0][b].f.length;
+    });
+    /* A single-compartment station is the whole station, correctly — a
+     * cylinder has one bay and nothing to divide. Only models that HAVE
+     * divisions can be asked whether dividing them paid. */
+    if (S.n > 1) faces.push({ id: id, whole: whole, one: one });
+  });
+
+  check('every berth is in its own compartment', own === checked,
+        own + ' of ' + checked);
+  check('and open space is in none of them', leaked === 0, leaked + ' leaked');
+
+  /* The point of the exercise: one room costs a fraction of the station. */
+  var worst = 0, worstId = '';
+  faces.forEach(function (f) {
+    var frac = f.one / f.whole;
+    if (frac > worst) { worst = frac; worstId = f.id; }
+  });
+  check('one compartment is a fraction of a divided station',
+        faces.length > 0 && worst < 0.75,
+        faces.length + ' divided models, worst ' + worstId + ' draws ' +
+        (worst * 100).toFixed(0) + '% of its faces');
+  console.log('  one compartment costs ' +
+              (100 * faces.reduce(function (a, f) { return a + f.one / f.whole; }, 0) /
+               Math.max(1, faces.length)).toFixed(0) + '% of the station, on average');
+
+  /* Built once and cached — it is a second of work across the library. */
+  check('the decomposition is cached', Render.portSections(MODELS[0]) ===
+        Render.portSections(MODELS[0]));
+})();
+
 Render.assignPort('orbital', null);   // leave the library as we found it
 
 console.log('');

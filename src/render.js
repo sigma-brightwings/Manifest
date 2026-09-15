@@ -2893,7 +2893,276 @@
     };
   }
 
-  function drawStationModel(ctx, cam, frame, radiusKm, sunDir, model, tint, doors) {
+  /* ---- a station is a set of compartments -------------------------------
+   *
+   * ASTRA'S DESIGN, AND THE ART ALREADY DECLARES IT: "each section of the
+   * station is meant to have a blast door so it only has to draw one
+   * section around the ship at a time." Every anchor in these models
+   * carries a node name prefixed by its berth — berthSM0L, berthL,
+   * berthSM2R — and `extras` gives each of those an airlock: an outer set
+   * of sliding doors, an inner gate, and an interlock between them.
+   *
+   * HOW A SOLID FINDS ITS SECTION. Three steps, and the order matters.
+   *
+   * 1. The mesh is split into CONNECTED SOLIDS, welded by position. These
+   *    models are closed (see portTriangles) and built from separate
+   *    pieces: spine-s is 1,536 of them. A solid is the smallest thing that
+   *    can sensibly belong to one room, and splitting by anything coarser —
+   *    a bounding box, say — puts the same triangle in three rooms at once.
+   *    Measured: boxes put 36% of spine-s in more than one section.
+   *
+   * 2. Each solid takes the section whose anchors it OVERLAPS most. That
+   *    catches the deck, the door houses, the pockets, the gate frames.
+   *
+   * 3. Whatever overlaps nothing joins its NEAREST section if it is within
+   *    reach of it, and is station structure otherwise. This is what picks
+   *    up the walls: they bound a compartment without touching any anchor.
+   *    SECTION_REACH is measured rather than chosen — sweeping it, spine-s
+   *    falls 27,808 -> 12,708 -> 6,928 -> 6,700 triangles at 0.6, 1.0 and
+   *    1.6 berth-diagonals, so 1.0 is the knee and anything past it buys
+   *    almost nothing while swallowing more of the station.
+   *
+   * SECTIONS ARE GEOMETRIC, NOT NAMED, and that is not pedantry: a ring
+   * MIRRORS its patterns, so two alcoves on opposite sides of the hub are
+   * both called berthSM0. Grouping by name alone gave ring-s two sections
+   * where it has five. So the berths are taken in the same canonical order
+   * generate.js sorts by, each anchor joins the nearest berth whose name it
+   * prefixes, and identity is the berth INDEX. */
+  var SECTION_REACH = 1.0;          // berth diagonals
+  var SECTIONS = {};
+
+  function portSections(role) {
+    if (SECTIONS[role] !== undefined) return SECTIONS[role];
+    SECTIONS[role] = null;
+    var lib = libPort(role);
+    var raw = global.PortLib && global.PortLib[role];
+    var A = raw && raw.anchors;
+    var mb = A && A.berths;
+    if (!lib || !mb || !mb.length) return null;
+    /* The hull WITHOUT its door leaves when this model has doors: the
+     * leaves already move on their own and must not be drawn twice. */
+    var d = portDoors(role);
+    var hull = d ? d.hull : lib.shell;
+    var inner = lib.interior;
+    if (!hull || !hull.f) return null;
+
+    var berths = mb.slice().sort(function (a, b) {
+      return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
+    });
+    var prefix = berths.map(function (b) {
+      return String(b.node || '').replace(/ThroatFloor$/, '');
+    });
+    var d2 = function (a, b) {
+      var x = a[0] - b[0], y = a[1] - b[1], z = a[2] - b[2];
+      return x * x + y * y + z * z;
+    };
+
+    /* Every anchor joins a berth: longest name prefix, nearest of those. */
+    var owned = [];
+    for (var s0 = 0; s0 < berths.length; s0++) owned.push([]);
+    Object.keys(A).forEach(function (bk) {
+      for (var i = 0; i < A[bk].length; i++) {
+        var a = A[bk][i];
+        if (!a.min || !a.max || !a.mid) continue;
+        var best = -1, bestLen = -1, bestD = Infinity;
+        for (var j = 0; j < berths.length; j++) {
+          if (String(a.node || '').indexOf(prefix[j]) !== 0) continue;
+          var dd = d2(a.mid, berths[j].mid);
+          if (prefix[j].length > bestLen ||
+              (prefix[j].length === bestLen && dd < bestD)) {
+            bestLen = prefix[j].length; bestD = dd; best = j;
+          }
+        }
+        if (best >= 0) owned[best].push(a);
+      }
+    });
+
+    /* Connected solids across the hull and the interior together. Indices
+     * are kept per bucket so the result can be rebuilt as drawable meshes
+     * sharing the original vertex arrays. */
+    /* A COUNTER, NOT Object.keys().length. The obvious spelling of "next
+     * free id" walks the whole map on every vertex, which is quadratic and
+     * took ten and a half seconds to section one station. */
+    var idOf = {}, idNext = 0, WELD = 1e-5;
+    var kf = function (p) {
+      return Math.round(p[0] / WELD) + '|' + Math.round(p[1] / WELD) + '|' +
+             Math.round(p[2] / WELD);
+    };
+    var par = {};
+    function find(x) {
+      while (par[x] !== undefined && par[x] !== x) x = par[x] = par[par[x]];
+      return par[x] === undefined ? (par[x] = x) : x;
+    }
+    function uni(a, b) { a = find(a); b = find(b); if (a !== b) par[a] = b; }
+
+    var buckets = [{ key: 'hull', mesh: hull }, { key: 'interior', mesh: inner }];
+    var faceKey = [];                 // per bucket: a weld id per face
+    for (var bi = 0; bi < buckets.length; bi++) {
+      var m = buckets[bi].mesh, keys = [];
+      if (m && m.f) {
+        for (var fi = 0; fi < m.f.length; fi++) {
+          var f = m.f[fi], first = -1, prev = -1;
+          for (var vi = 0; vi < f.length; vi++) {
+            var pt = m.v[f[vi]];
+            if (!pt) continue;
+            var kk0 = kf(pt), id = idOf[kk0];
+            if (id === undefined) id = idOf[kk0] = idNext++;
+            if (first < 0) first = id; else uni(prev, id);
+            prev = id;
+          }
+          keys.push(first);
+        }
+      }
+      faceKey.push(keys);
+    }
+
+    /* Per solid: a bounding box, so it can be matched against the anchors. */
+    var comp = {};
+    for (var b2 = 0; b2 < buckets.length; b2++) {
+      var m2 = buckets[b2].mesh;
+      if (!m2 || !m2.f) continue;
+      for (var f2 = 0; f2 < m2.f.length; f2++) {
+        var g = faceKey[b2][f2];
+        if (g === undefined || g < 0) continue;
+        g = find(g);
+        var c = comp[g] || (comp[g] = { lo: [1e9, 1e9, 1e9], hi: [-1e9, -1e9, -1e9] });
+        var face = m2.f[f2];
+        for (var q = 0; q < face.length; q++) {
+          var p2 = m2.v[face[q]];
+          if (!p2) continue;
+          for (var ax = 0; ax < 3; ax++) {
+            if (p2[ax] < c.lo[ax]) c.lo[ax] = p2[ax];
+            if (p2[ax] > c.hi[ax]) c.hi[ax] = p2[ax];
+          }
+        }
+      }
+    }
+
+    function overlap(c, a) {
+      var v = 1;
+      for (var i = 0; i < 3; i++) {
+        var lo = Math.max(c.lo[i], a.min[i]), hi = Math.min(c.hi[i], a.max[i]);
+        if (hi <= lo) return 0;
+        v *= (hi - lo);
+      }
+      return v;
+    }
+    Object.keys(comp).forEach(function (g) {
+      var c = comp[g], best = -1, bv = 0;
+      for (var i = 0; i < owned.length; i++) {
+        var v = 0;
+        for (var k = 0; k < owned[i].length; k++) v += overlap(c, owned[i][k]);
+        if (v > bv) { bv = v; best = i; }
+      }
+      if (best < 0) {
+        var cm = [(c.lo[0] + c.hi[0]) / 2, (c.lo[1] + c.hi[1]) / 2,
+                  (c.lo[2] + c.hi[2]) / 2];
+        var nb = -1, nd = Infinity;
+        for (var j = 0; j < berths.length; j++) {
+          var dd = d2(cm, berths[j].mid);
+          if (dd < nd) { nd = dd; nb = j; }
+        }
+        if (nb >= 0) {
+          var reach = 0;
+          for (var a3 = 0; a3 < 3; a3++) {
+            var e3 = berths[nb].max[a3] - berths[nb].min[a3];
+            reach += e3 * e3;
+          }
+          if (nd < reach * SECTION_REACH * SECTION_REACH) best = nb;
+        }
+      }
+      c.sec = best;
+    });
+
+    /* Rebuild as drawable meshes, sharing the original vertex arrays. */
+    function blank(m) { return m ? { v: m.v, f: [], c: m.c ? [] : null } : null; }
+    var out = [], structure = { hull: blank(hull), interior: blank(inner) };
+    for (var s2 = 0; s2 < berths.length; s2++) {
+      out.push({ hull: blank(hull), interior: blank(inner), mid: berths[s2].mid.slice() });
+    }
+    for (var b3 = 0; b3 < buckets.length; b3++) {
+      var m3 = buckets[b3].mesh, kk = buckets[b3].key;
+      if (!m3 || !m3.f) continue;
+      for (var f3 = 0; f3 < m3.f.length; f3++) {
+        var g3 = faceKey[b3][f3];
+        var sec = (g3 === undefined || g3 < 0) ? -1 : comp[find(g3)].sec;
+        var dst = sec < 0 ? structure[kk] : out[sec][kk];
+        if (!dst) continue;
+        dst.f.push(m3.f[f3]);
+        if (dst.c && m3.c) dst.c.push(m3.c[f3]);
+      }
+    }
+    /* Each section's own extent, so a point can be asked which compartment
+     * it is in without walking the faces again. Taken from the geometry the
+     * section ended up with rather than from the berth anchor, because the
+     * anchor is a box hung over the alcove and the walls are the room. */
+    for (var s3 = 0; s3 < out.length; s3++) {
+      var lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9], any = false;
+      ['hull', 'interior'].forEach(function (kx) {
+        var mm = out[s3][kx];
+        if (!mm || !mm.f) return;
+        for (var ff = 0; ff < mm.f.length; ff++) {
+          var fc = mm.f[ff];
+          for (var vv = 0; vv < fc.length; vv++) {
+            var pp = mm.v[fc[vv]];
+            if (!pp) continue;
+            any = true;
+            for (var aa = 0; aa < 3; aa++) {
+              if (pp[aa] < lo[aa]) lo[aa] = pp[aa];
+              if (pp[aa] > hi[aa]) hi[aa] = pp[aa];
+            }
+          }
+        }
+      });
+      out[s3].lo = any ? lo : null;
+      out[s3].hi = any ? hi : null;
+    }
+
+    SECTIONS[role] = { n: berths.length, sections: out, structure: structure };
+    return SECTIONS[role];
+  }
+
+  /* WHICH COMPARTMENT IS THIS POINT IN, in the model's own normalised
+   * frame. Returns a section index, or -1 for the throat, the open hub and
+   * everywhere else that is not a room.
+   *
+   * Smallest-containing-section wins. On a spine the compartments nest
+   * inside the station's own extent and a "first box that contains it"
+   * answer would hand back whichever one happened to be built first; the
+   * smallest is the innermost, which is the room you are actually in. */
+  function sectionAt(role, p) {
+    var S = portSections(role);
+    if (!S || !p) return -1;
+    /* NEAREST BERTH WITHIN REACH — the same rule that put the walls in a
+     * section in the first place, so a point and the geometry around it
+     * cannot disagree about which room they are in.
+     *
+     * NOT a containment test against the section's bounds, which is what
+     * this was first and which got two of spine-s's seven berths wrong. A
+     * compartment is not a box: the boxes of neighbouring alcoves overlap,
+     * and "smallest box containing the point" then hands back next door.
+     * Boxes have now been the wrong tool for this three times in one day. */
+    var best = -1, bestD = Infinity;
+    for (var i = 0; i < S.sections.length; i++) {
+      var s = S.sections[i];
+      if (!s.mid) continue;
+      var dx = p[0] - s.mid[0], dy = p[1] - s.mid[1], dz = p[2] - s.mid[2];
+      var dd = dx * dx + dy * dy + dz * dz;
+      if (dd < bestD) { bestD = dd; best = i; }
+    }
+    if (best < 0) return -1;
+    /* Out of reach of every berth is the throat, the hub or open space. */
+    var b = S.sections[best];
+    if (!b.lo) return -1;
+    var reach = 0;
+    for (var a = 0; a < 3; a++) {
+      var e = b.hi[a] - b.lo[a];
+      reach += e * e;
+    }
+    return bestD < reach * 0.25 ? best : -1;
+  }
+
+  function drawStationModel(ctx, cam, frame, radiusKm, sunDir, model, tint, doors, section) {
     /* WITH THE DOORS SEPARATED when this model has any: the hull without
      * them, then each leaf at its own offset. `doors` is { open, berth }
      * — how far, and whose. Only the berth you are cleared into moves,
@@ -2903,7 +3172,20 @@
     if (d) {
       var open = doors && doors.open > 0 ? Math.min(1, doors.open) : 0;
       var mine = doors && typeof doors.berth === 'number' ? doors.berth : null;
-      paintPart(ctx, cam, frame, d.hull, radiusKm, sunDir, tint);
+      /* ONE COMPARTMENT AT A TIME when the caller names one. Astra's design:
+       * the blast doors mean the renderer only ever has to draw the section
+       * around the ship. Measured on spine-s, that is 27,808 faces down to
+       * about 6,900 — and, more to the point, the room you are in stops
+       * competing with six rooms you are not. `section` is null from
+       * outside, where the whole hull is the point of the thing. */
+      var sec = (typeof section === 'number' && section >= 0)
+        ? portSections(model) : null;
+      if (sec && sec.sections[section]) {
+        paintPart(ctx, cam, frame, sec.structure.hull, radiusKm, sunDir, tint);
+        paintPart(ctx, cam, frame, sec.sections[section].hull, radiusKm, sunDir, tint);
+      } else {
+        paintPart(ctx, cam, frame, d.hull, radiusKm, sunDir, tint);
+      }
       for (var i = 0; i < d.leaves.length; i++) {
         var lf = d.leaves[i];
         var f = open;
@@ -5784,6 +6066,8 @@
     insideInterior: insideInterior,
     setIndoors: setIndoors,
     portSolidity: portSolidity,
+    portSections: portSections,
+    sectionAt: sectionAt,
     portTriangles: portTriangles,
     portSegmentHit: portSegmentHit,
     berthDeck: berthDeck,
