@@ -151,6 +151,12 @@ require('../src/galaxy.js');
 require('../src/sim.js');
 require('../src/combat.js');
 require('../src/missions.js');
+/* The campaign layer. It was missing here for as long as it has existed,
+ * which is why the yard could hold a reward nobody could collect and no
+ * render test noticed: screens.js guards every Arcs call with a
+ * `global.Arcs &&`, so its absence read as "no campaigns running" rather
+ * than as a harness that had never loaded the module. */
+require('../src/arcs.js');
 require('../src/sound.js');
 require('../src/save.js');
 require('../src/hulls.js');
@@ -1036,7 +1042,17 @@ console.log('--- the yard, the board, and a fight on screen ---');
 (function () {
   var mark = drawn.texts.length;
   var mousedown = listeners.mousedown[0];
-  var port = G.sys.ports[0];
+  /* A PORT WITH MORE THAN ONE HULL ON THE FLOOR. Stock varies now: every
+   * port sells ships, but which classes are standing there depends on the
+   * dock and the two-day window, and ports[0] is whatever the generator
+   * put first. Asserting that a yard sells starships while docked at a
+   * pad that happens to have only the hull you are already flying was a
+   * fixture accident, not a feature. */
+  var port = G.sys.ports.filter(function (p) {
+    return Combat.hullsAt(p, G.t).filter(function (id) {
+      return id !== G.ship.hullId;
+    }).length >= 2;
+  })[0] || G.sys.ports[0];
 
   // Dock, with an empty hold, and open the ship screen: the yard is there.
   G.ship.cargo = {};
@@ -1061,6 +1077,61 @@ console.log('--- the yard, the board, and a fight on screen ---');
     }));
   });
   check('it sells weapons and hulls', yardBtns.length >= 3, yardBtns.length + ' buttons');
+
+  /* TWO CLICKS TO SPEND A HUNDRED THOUSAND CREDITS. Selecting a hull and
+   * buying it used to be the same gesture in the same place, which is the
+   * exact shape of mistake a showroom should not allow. The row selects;
+   * a separate BUY button on the card, beside the ship you are looking at,
+   * is the one that takes the money. */
+  G.yardTab = 'hulls';
+  frames(2);
+  var hullRows = G.hotspots.filter(function (h) {
+    return h.hint && /\[[SML]\]/.test(h.hint);
+  });
+  check('the hull list is a list of ships', hullRows.length >= 2,
+        hullRows.length + ' rows');
+  if (hullRows.length) {
+    var wasHull = G.ship.hullId, wasCredits = G.ship.credits = 500000;
+    mousedown({ clientX: hullRows[0].x + 4, clientY: hullRows[0].y + 4 });
+    frames(2);
+    check('clicking a hull row selects rather than buys',
+          G.ship.hullId === wasHull && G.ship.credits === wasCredits,
+          G.ship.hullId + ' / ' + G.ship.credits);
+    var buy = G.hotspots.filter(function (h) {
+      /* Not the BUY TAB, which is also spelled BUY. The card's button
+       * carries the price, and that is what distinguishes them. */
+      return h.hint && /^(BUY|TRADE DOWN)\s+\u2014/.test(h.hint);
+    })[0];
+    check('and the card carries its own BUY button', !!buy,
+          JSON.stringify(G.hotspots.map(function (h) { return h.hint; }).slice(0, 12)));
+    if (buy) {
+      mousedown({ clientX: buy.x + 4, clientY: buy.y + 4 });
+      frames(2);
+      /* The selection moves on afterwards — the list drops the hull you are
+       * now flying — so the thing to check is that the ship changed, not
+       * that the cursor stayed. */
+      check('which is the click that changes the ship',
+            G.ship.hullId !== wasHull && G.ship.credits < wasCredits,
+            G.ship.hullId + ' / ' + G.ship.credits);
+    }
+  }
+
+  /* AND THE SHELF THE CAMPAIGN LEFT SOMETHING ON. A held reward that the
+   * yard has never heard of is the bug this row exists for. */
+  G.owed = ['transponder'];
+  G.yardTab = 'fit';
+  frames(2);
+  var collect = G.hotspots.filter(function (h) {
+    return h.hint && /^COLLECT\b/.test(h.hint);
+  })[0];
+  check('a held reward can be collected at the yard', !!collect);
+  if (collect) {
+    mousedown({ clientX: collect.x + 4, clientY: collect.y + 4 });
+    frames(2);
+    check('and collecting it clears the debt', (G.owed || []).length === 0,
+          JSON.stringify(G.owed));
+  }
+  G.owed = [];
 
   /* Buying happens on BUY, so be on it before clicking the rack. */
   G.yardTab = 'buy';

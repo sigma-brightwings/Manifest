@@ -3019,7 +3019,25 @@
    * same shader with the glow at zero, which costs one branch that is
    * never taken. */
   function drawShipModel(ctx, cam, ship, sunDir, tint) {
-    var mesh = shipMeshes().courier;
+    /* ---- YOU FLY THE SHIP YOU BOUGHT --------------------------------------
+     * Astra: "make it so that in flight your ship is the one you are
+     * flying, and that it loads THAT model instead of the courier."
+     *
+     * It drew the courier hull whatever was in the hangar, which was
+     * defensible while the yard sold four rows of numbers and became
+     * indefensible the moment the showroom started turning a Mule in front
+     * of you: the one place your ship looked like your ship was the place
+     * you were deciding whether to buy it.
+     *
+     * The mapping already existed and was being used by the showroom —
+     * every hull names a mesh KIND and HULL_ASSIGN turns a kind into a
+     * library model — so this is one lookup rather than a new table, and
+     * hullPreviewMesh falls back to the procedural courier for anything
+     * the library does not carry. The library hulls are normalised to unit
+     * length exactly as the procedural one is, so SHIP_LEN still scales
+     * them and nothing about the size of you on screen changes except
+     * which silhouette it is. */
+    var mesh = hullPreviewMesh((ship && ship.hullId) || 'talon');
     if (!(gpuWorld() && global.GLWorld.queueMesh(cam, ship, mesh, SHIP_LEN, sunDir,
                                                  ship.reentryGlow || 0, ship.windDir))) {
       paintMesh(ctx, cam, ship, mesh, SHIP_LEN, sunDir, tint);

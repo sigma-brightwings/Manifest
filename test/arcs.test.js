@@ -411,5 +411,47 @@ section('--- a transponder that can fail ---');
         String(shelf.length) + ' rows');
 })();
 
+section('--- a reward the ship had no room for ---');
+(function () {
+  /* THE BUG THIS IS ABOUT. grantReward held the fitting when no slot was
+   * free and said "it is waiting for you at the yard" — and G.owed was
+   * then read by nothing at all. A player who finished five chapters with
+   * a full ship was told they had earned something and could never
+   * collect it, which is worse than losing it outright: the game had
+   * promised. */
+  var ship = {};
+  Combat.initShip(ship); Sim.refreshShip(ship);
+  var G = { ship: ship, owed: ['transponder'] };
+
+  /* Fill every internal slot, so the collection genuinely cannot happen
+   * yet — the refusal is the first half of the feature. */
+  var keys = Combat.slotKeys(ship).filter(function (k) {
+    return Combat.slotType(k) === 'internal';
+  });
+  keys.forEach(function (k) { ship.fit[k] = 'cargoexpander'; });
+  Combat.syncLegacy(ship);
+
+  check('the debt is visible to the yard', Arcs.owedAt(G).length === 1,
+        JSON.stringify(Arcs.owedAt(G)));
+  var no = Arcs.claimOwed(G, 'transponder');
+  check('a full ship cannot collect it yet', !no.ok, JSON.stringify(no));
+  check('and nothing was consumed by the attempt', Arcs.owedAt(G).length === 1,
+        JSON.stringify(Arcs.owedAt(G)));
+  check('asking for something nobody is holding is a refusal, not a gift',
+        !Arcs.claimOwed(G, 'shield2').ok);
+
+  /* Make room, come back, collect. */
+  delete ship.fit[keys[0]];
+  Combat.syncLegacy(ship);
+  var yes = Arcs.claimOwed(G, 'transponder');
+  check('with a slot free the yard hands it over', yes.ok, JSON.stringify(yes));
+  check('and it is actually on the ship',
+        Combat.transponderKind(ship) === 'issued',
+        String(Combat.transponderKind(ship)));
+  check('the shelf is empty afterwards', Arcs.owedAt(G).length === 0,
+        JSON.stringify(Arcs.owedAt(G)));
+  check('and it cannot be collected twice', !Arcs.claimOwed(G, 'transponder').ok);
+})();
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);

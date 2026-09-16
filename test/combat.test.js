@@ -2832,5 +2832,78 @@ section('--- the two flagships, counted ---');
         synd >= navy * 0.5 && synd <= navy, synd + ' against ' + navy);
 })();
 
+console.log('--- what is on the floor at a shipyard ---');
+(function () {
+  /* THE SHAPE OF THE RULE, said once here so a later tuning pass has to
+   * argue with a test rather than with a memory: every port sells ships,
+   * a large hull never lands, and development buys you the middle
+   * classes. */
+  var galaxy = Galaxy.build('kawartha');
+  var tot = 0, surf = 0, orb = 0, noS = 0, surfL = 0, empty = 0;
+  var bandM = [0, 0, 0], bandL = [0, 0, 0], bandN = [0, 0, 0];
+  for (var i = 0; i < 200 && i < galaxy.stars.length; i++) {
+    var star = galaxy.stars[i];
+    var sys = Gen.generateSystem(star.seed, {
+      faction: galaxy.factionById[star.factionId], allFactions: galaxy.factions
+    });
+    for (var j = 0; j < sys.ports.length; j++) {
+      var port = sys.ports[j];
+      if (!port.market) continue;
+      tot++;
+      var pad = !!(port.surface || port.underground);
+      if (pad) surf++; else orb++;
+      var dev = (typeof port.market.dev === 'number') ? port.market.dev : 0.25;
+      var bi = dev < 0.33 ? 0 : dev < 0.66 ? 1 : 2;
+      bandN[bi]++;
+      var list = Combat.hullsAt(port, 0);
+      var sizes = list.map(function (id) { return Combat.HULLS[id].size || 'M'; });
+      if (sizes.indexOf('S') < 0) noS++;
+      if (sizes.indexOf('L') >= 0) { if (pad) surfL++; bandL[bi]++; }
+      if (sizes.indexOf('M') >= 0) bandM[bi]++;
+      if (!list.length) empty++;
+    }
+  }
+  check('every port with a market has a floor', empty === 0, empty + ' bare');
+  check('a small hull is for sale everywhere, pads included', noS === 0, noS + ' without');
+  check('and no large hull is ever parked on a pad', surfL === 0, surfL + ' landed');
+  check('large hulls exist, in orbit', bandL[0] + bandL[1] + bandL[2] > 0);
+
+  /* MONOTONIC IN DEVELOPMENT, which is the thing Astra asked for: not
+   * "sometimes bigger", but reliably likelier the better the system. */
+  var mLow = bandM[0] / bandN[0], mHigh = bandM[2] / bandN[2];
+  var lLow = bandL[0] / bandN[0], lHigh = bandL[2] / bandN[2];
+  check('medium hulls get likelier with development',
+        mHigh > mLow * 1.3, (mLow * 100).toFixed(0) + '% -> ' + (mHigh * 100).toFixed(0) + '%');
+  check('and large hulls much more so',
+        lHigh > lLow * 2, (lLow * 100).toFixed(0) + '% -> ' + (lHigh * 100).toFixed(0) + '%');
+  /* Not a shop that always has everything: a floor you can walk away from
+   * empty-handed is what makes the one that doesn't feel like a find. */
+  check('a developed dock is still not a catalogue', lHigh < 0.75,
+        (lHigh * 100).toFixed(0) + '% carry one');
+  console.log('  ' + tot + ' ports (' + surf + ' pads, ' + orb + ' orbital) — M ' +
+              (mLow * 100).toFixed(0) + '/' + (mHigh * 100).toFixed(0) + '%, L ' +
+              (lLow * 100).toFixed(0) + '/' + (lHigh * 100).toFixed(0) + '% low/high dev');
+
+  /* The floor turns over on its own clock and not on the player's. */
+  var pick = null;
+  for (var k = 0; k < galaxy.stars.length && !pick; k++) {
+    var st = galaxy.stars[k];
+    var sy = Gen.generateSystem(st.seed, {
+      faction: galaxy.factionById[st.factionId], allFactions: galaxy.factions
+    });
+    pick = sy.ports.filter(function (p) { return p.market && !p.surface && !p.underground; })[0];
+  }
+  if (pick) {
+    var a = Combat.hullsAt(pick, 1000).join(',');
+    var b = Combat.hullsAt(pick, 1000 + Combat.HULL_WINDOW / 4).join(',');
+    var c = Combat.hullsAt(pick, 1000 + Combat.HULL_WINDOW * 3).join(',');
+    check('the same dock an hour later has the same ships', a === b, a + ' vs ' + b);
+    /* Not a guarantee that it CHANGED — two windows can roll the same way
+     * — only that the window is being read at all. */
+    check('and the window is what decides it',
+          Combat.HULL_WINDOW > 0 && typeof c === 'string');
+  }
+})();
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);

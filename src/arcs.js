@@ -607,8 +607,37 @@
     }
   }
 
+  /* AND THE COUNTER IT IS HELD AT. `G.owed` was written by grantReward and
+   * read by nobody: a player who finished a five-chapter campaign with a
+   * full ship was told the fitting was "waiting for you at the yard" and
+   * then could never collect it, which is worse than losing it outright —
+   * the game had promised. This is the collection. It lives here rather
+   * than in combat.js because the debt is the arc's, not the ship's.
+   *
+   * Nothing expires and nothing is consumed on a failed attempt: sell the
+   * shield generator, come back, and it is still on the shelf. */
+  function owedAt(G) {
+    return ((G && G.owed) || []).slice();
+  }
+
+  function claimOwed(G, id) {
+    var C = global.Combat;
+    var list = (G && G.owed) || [];
+    var i = list.indexOf(id);
+    if (i < 0) return { ok: false, why: 'nothing of that name is held for you' };
+    if (!C || !C.canFit) return { ok: false, why: 'no fitter on duty' };
+    var slot = C.canFit(G.ship, id);
+    if (!slot || !slot.ok) return { ok: false, why: (slot && slot.why) || 'no slot free' };
+    G.ship.fit[slot.key] = id;
+    if (C.syncLegacy) C.syncLegacy(G.ship);
+    list.splice(i, 1);
+    return { ok: true, slot: slot.key };
+  }
+
   var Arcs = {
     POWER_ARCS: POWER_ARCS,
+    owedAt: owedAt,
+    claimOwed: claimOwed,
     POINT_OF_NO_RETURN: POINT_OF_NO_RETURN,
     powerBoardAt: powerBoardAt,
     powerAt: powerAt,

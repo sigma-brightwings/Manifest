@@ -751,7 +751,7 @@
    * on. That ceiling is itself derived from the Talon's laden mass, so it
    * came down 5.8% with everything else — see generate.js. */
   var HULLS = {
-    talon: { id: 'talon', name: 'Talon Courier', price: 32000, mesh: 'courier',
+    talon: { id: 'talon', size: 'S', name: 'Talon Courier', price: 32000, mesh: 'courier',
              dryMass: 42, thrustKN: 1800, thrusterCap: 16, fuelCap: 37,
              cargoCap: 64, hullMax: 100,
              slots: { hardpoint: 2, utility: 2, internal: 3 },
@@ -777,7 +777,7 @@
                'on armour early and never looked back. Ideal for a first ' +
                'career: light freight, courier work, and learning which ' +
                'of your mistakes are expensive.' },
-    dart:  { id: 'dart', name: 'Dart Interceptor', price: 61000, mesh: 'police',
+    dart:  { id: 'dart', size: 'M', name: 'Dart Interceptor', price: 61000, mesh: 'police',
              dryMass: 30, thrustKN: 2200, thrusterCap: 13, fuelCap: 27,
              cargoCap: 22, hullMax: 80,
              /* THE RULE, checked by the hull-budget test: a reactor must
@@ -806,7 +806,7 @@
                'does not forgive a hard landing. Ideal for people who ' +
                'need to be somewhere before somebody else is: couriers ' +
                'on a deadline, and anybody whose plan depends on leaving.' },
-    kestrel: { id: 'kestrel', name: 'Kestrel Multirole', price: 120000, mesh: 'merc',
+    kestrel: { id: 'kestrel', size: 'L', name: 'Kestrel Multirole', price: 120000, mesh: 'merc',
              dryMass: 60, thrustKN: 2700, thrusterCap: 19, fuelCap: 45,
              cargoCap: 96, hullMax: 130,
              slots: { hardpoint: 3, utility: 2, internal: 4 },
@@ -822,7 +822,7 @@
                'fastest, the roomiest or the cheapest thing on this list ' +
                'and it is the only one that is never badly wrong. Ideal ' +
                'for a pilot who takes whatever is on the board.' },
-    mule:  { id: 'mule', name: 'Mule Freighter', price: 78000, mesh: 'freighter',
+    mule:  { id: 'mule', size: 'M', name: 'Mule Freighter', price: 78000, mesh: 'freighter',
              dryMass: 80, thrustKN: 3700, thrusterCap: 21, fuelCap: 48,
              cargoCap: 160, hullMax: 160,
              slots: { hardpoint: 2, utility: 3, internal: 5 },
@@ -5214,6 +5214,80 @@
    * Returns every catalogue item with a verdict, INCLUDING the ones you
    * cannot have, because "requires WARM standing with Halden Combine"
    * reads as a goal and a missing row reads as a bug. */
+  /* ---- which hulls this dock actually has on the floor --------------------
+   * Astra: "Stations which sell ships are orbital stations, and the higher
+   * the technology level in system, the higher the chance of M and L size
+   * hulls being available."
+   *
+   * TWO RULES, AND THEY ARE DIFFERENT IN KIND. The first is absolute: you
+   * do not build, hold or hand over a starship on a planet's surface or in
+   * a hole in a moon, so a surface port and an underground bay have no hull
+   * list at all. That is geography, and it is the same reasoning that put
+   * the fuel chain where it is.
+   *
+   * The second is a chance rather than a threshold, which is what Astra
+   * asked for and is the better mechanic anyway: a well-developed port is
+   * LIKELY to have a large hull on the floor, not guaranteed to. So finding
+   * the ship you want is a reason to fly somewhere rather than a lookup,
+   * and a modest port occasionally surprises you.
+   *
+   * DETERMINISTIC PER PORT AND WINDOW. Hashed rather than rolled, on the
+   * same two-day window the mission board uses, so the floor does not
+   * reshuffle itself while you are standing on it and a hull you flew four
+   * jumps to buy is still there when you arrive. Small is always available
+   * anywhere that sells at all — a yard with nothing on it is a yard that
+   * wastes the trip. */
+  var HULL_WINDOW = 2 * 86400;
+  var HULL_ODDS = { S: 1.00, M: 0.35, L: 0.05 };
+  var HULL_ODDS_PER_DEV = { S: 0.00, M: 0.55, L: 0.60 };
+
+  /* WHERE A LARGE HULL CAN CHANGE HANDS. Not "where ships are sold" — every
+   * port with a market sells ships, including a surface pad, which is where
+   * most pilots buy their first one. What a pad cannot do is hand over a
+   * Kestrel: a large hull is built in orbit, never lands, and has no way to
+   * reach a strip on a planet's surface or a bay cut into rock. So the
+   * gating is by SIZE at the port, not by the port wholesale. */
+  function sellsHulls(port) {
+    return !!(port && port.market);
+  }
+
+  function landsLarge(port) {
+    return !!(port && !port.surface && !port.underground);
+  }
+
+  function hullChance(size, dev) {
+    var base = HULL_ODDS[size];
+    if (base === undefined) base = 0.35;
+    var per = HULL_ODDS_PER_DEV[size] || 0;
+    return Math.max(0, Math.min(1, base + per * (dev || 0)));
+  }
+
+  /* Stock turns over on a two-day clock and is a pure function of port,
+   * hull and window — so a dock you flew back to an hour later has the same
+   * ships on the floor, and one you come back to next week does not. */
+  function hullOnFloor(port, hullId, t) {
+    if (!sellsHulls(port)) return false;
+    var h = HULLS[hullId];
+    if (!h) return false;
+    var size = h.size || 'M';
+    if (size === 'S') return true;             // a small hull is always for sale
+    if (size === 'L' && !landsLarge(port)) return false;
+    var R = global.RNG;
+    if (!R || !R.hashString) return true;
+    var win = Math.floor((t || 0) / HULL_WINDOW);
+    var dev = (port.market && typeof port.market.dev === 'number') ? port.market.dev : 0.25;
+    var v = (R.hashString('hull|' + port.id + '|' + hullId + '|' + win) % 1000) / 1000;
+    return v < hullChance(size, dev);
+  }
+
+  /* Everything this dock has today, in catalogue order. */
+  function hullsAt(port, t) {
+    var out = [];
+    for (var id in HULLS) if (hullOnFloor(port, id, t)) out.push(id);
+    out.sort(function (a, b) { return HULLS[a].price - HULLS[b].price; });
+    return out;
+  }
+
   /* Is this dock a warship? `fleet` is set by Economy.siteFleetCarrier when
    * it converts a port into the navy's own, and the role name follows it —
    * asked in one place so nothing downstream has to know which of the two
@@ -5614,6 +5688,9 @@
     liftTrader: liftTrader,
     crime: crime, witnessNear: witnessNear,
     bountyTotal: bountyTotal, wantedHere: wantedHere, fleetPort: fleetPort,
+    sellsHulls: sellsHulls,
+    landsLarge: landsLarge, hullOnFloor: hullOnFloor, hullsAt: hullsAt,
+    hullChance: hullChance, HULL_WINDOW: HULL_WINDOW,
     transponderKind: transponderKind, forgedPasses: forgedPasses,
     transponderPasses: transponderPasses, FORGED_PASS: FORGED_PASS,
     capitalShadow: capitalShadow, CAPITAL_WATCH: CAPITAL_WATCH,

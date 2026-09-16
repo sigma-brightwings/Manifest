@@ -1527,10 +1527,32 @@
           }, briberyShort);
     }
 
+    /* WHAT THE CAMPAIGN STILL OWES YOU. A reward that could not be fitted
+     * when it was earned is held rather than lost (arcs.js grantReward),
+     * and until now there was nowhere to collect it — the game said "it is
+     * waiting for you at the yard" and the yard had never heard of it.
+     * Above the tabs, because it is not for sale and not a fitting choice;
+     * it is a thing of yours somebody is holding. */
+    var held = global.Arcs && Arcs.owedAt ? Arcs.owedAt(G) : [];
+    for (var hi = 0; hi < held.length; hi++) {
+      (function (id) {
+        var item = Combat.EQUIPMENT[id] || { name: id };
+        var fits = Combat.canFit(s, id);
+        row('COLLECT ' + item.name.toUpperCase(),
+            fits && fits.ok ? 'held for you — no charge'
+                            : 'held for you — ' + ((fits && fits.why) || 'no room'),
+            function () {
+              var r = Arcs.claimOwed(G, id);
+              say(r.ok ? item.name + ' fitted — it was always yours'
+                       : 'Still held: ' + r.why, 5);
+            }, !(fits && fits.ok), { hot: !!(fits && fits.ok) });
+      })(held[hi]);
+    }
+
     var cardH = 0;
     if (G.yardTab === 'fit') drawYardFit(ctx, x, w, row, s);
     else if (G.yardTab === 'buy') drawYardBuy(ctx, x, w, row, s, port);
-    else cardH = drawYardHulls(ctx, x, w, row, s) || 0;
+    else cardH = drawYardHulls(ctx, x, w, row, s, port) || 0;
 
     /* ---- the window ---- */
     var bh = 21, gap = 4;
@@ -1756,46 +1778,55 @@
    * only says how much room to keep for it. */
   var HULL_CARD_H = 132;
 
-  function drawYardHulls(ctx, x, w, row, s) {
-    var order = ['talon', 'dart', 'kestrel', 'mule'];
-    /* Default the selection to something that is actually for sale, and
-     * re-default it if the player buys the one they were looking at. */
-    if (!G.yardHull || G.yardHull === s.hullId) {
-      G.yardHull = order.filter(function (id) { return id !== s.hullId; })[0];
+  function drawYardHulls(ctx, x, w, row, s, port) {
+    /* WHAT IS ACTUALLY ON THE FLOOR, which is not the catalogue. Every port
+     * sells ships — a surface pad is where most pilots buy their first —
+     * but a large hull is built in orbit and never lands, so a pad or an
+     * underground bay carries S and M only, and the medium classes are
+     * likelier the more developed the dock. See Combat.hullsAt. */
+    var order = Combat.hullsAt(port, G.t).filter(function (id) { return id !== s.hullId; });
+    if (!order.length) {
+      row('NO HULLS ON THE FLOOR TODAY',
+          Combat.landsLarge(port)
+            ? 'a better developed dock carries the larger classes'
+            : 'nothing above medium ever lands here',
+          function () {}, true);
+      return 0;
     }
+    if (order.indexOf(G.yardHull) < 0) G.yardHull = order[0];
     for (var i = 0; i < order.length; i++) {
       var hull = Combat.HULLS[order[i]];
-      if (hull.id === s.hullId) continue;
       var delta = hull.price - Math.round(Combat.HULLS[s.hullId || 'talon'].price * 0.7);
-      var picked = G.yardHull === hull.id;
-      if (!picked) {
-        row(hull.name.toUpperCase() + ' — ' + delta + ' cr',
-            hull.cargoCap + 't hold · ' + hull.hullMax + ' hull · ' + hull.blurb,
-            (function (hid) { return function () { G.yardHull = hid; }; })(hull.id),
-            false);
-        continue;
-      }
-      row('BUY ' + hull.name.toUpperCase() + ' — ' + delta + ' cr',
-          hull.cargoCap + 't hold · ' + hull.hullMax + ' hull · ' +
-          hull.powerMW.toFixed(1) + ' MW · ' + hull.blurb,
-          (function (hid, nm) {
-            return function () {
-              var r = Combat.buyHull(G, hid);
-              if (!r.ok) { say('No deal: ' + r.why, 5); return; }
-              /* Name the standard gear the hull came with, when it is gear
-               * the pilot did not already have. A scoop that silently
-               * appears is indistinguishable from a bug, and a scoop that
-               * silently does NOT appear is the bug that took piracy out
-               * for everyone who had ever died. */
-              var extra = (r.standard || []).map(function (id) {
-                return (Combat.EQUIPMENT[id] || {}).name || id;
-              });
-              say('Welcome aboard your ' + nm +
-                  (extra.length ? ' — fitted as standard: ' + extra.join(', ') : ''), 5);
-            };
-          })(hull.id, hull.name), false, { hot: true });
+      row(hull.name.toUpperCase() + '  [' + (hull.size || 'M') + ']  —  ' + delta + ' cr',
+          hull.cargoCap + 't hold · ' + hull.hullMax + ' hull · ' + hull.blurb,
+          (function (hid) { return function () { G.yardHull = hid; }; })(hull.id),
+          false, { hot: G.yardHull === hull.id });
     }
     return HULL_CARD_H;
+  }
+
+  /* THE BUY BUTTON IS ITS OWN BUTTON. Astra: "Have a separate Buy button."
+   * The first version made the selected ROW read BUY, which meant the
+   * click that chose a ship and the click that spent a hundred thousand
+   * credits were the same gesture in the same place — the exact shape of
+   * mistake the two-step was supposed to prevent. It lives on the card
+   * beside the ship instead, where you are looking at the thing you are
+   * about to buy. */
+  function buyTheSelectedHull() {
+    var hull = Combat.HULLS[G.yardHull];
+    if (!hull) return;
+    var r = Combat.buyHull(G, hull.id);
+    if (!r.ok) { say('No deal: ' + r.why, 5); return; }
+    /* Name the standard gear the hull came with, when it is gear the pilot
+     * did not already have. A scoop that silently appears is
+     * indistinguishable from a bug, and a scoop that silently does NOT
+     * appear is the bug that took piracy out for everyone who had ever
+     * died. */
+    var extra = (r.standard || []).map(function (id) {
+      return (Combat.EQUIPMENT[id] || {}).name || id;
+    });
+    say('Welcome aboard your ' + hull.name +
+        (extra.length ? ' \u2014 fitted as standard: ' + extra.join(', ') : ''), 5);
   }
 
   /* The ship itself, turning, with what the spec sheet cannot say beside
@@ -1841,10 +1872,36 @@
     ctx.font = 'bold 10px ui-monospace, monospace';
     ctx.fillStyle = MFD_INK;
     var lines = wrapText(hull.about || hull.blurb || '', Math.floor(tw / 6.2));
-    for (var li = 0; li < lines.length && y + 44 + li * 12 < y + h - 8; li++) {
+    /* The prose stops short of the buy button rather than running under it.
+     * A sentence with a button sitting on its last line reads as a rendering
+     * fault, and this is the one panel where the player is about to spend
+     * everything they have. */
+    for (var li = 0; li < lines.length && y + 44 + li * 12 < y + h - 32; li++) {
       ctx.fillText(lines[li], tx, y + 44 + li * 12);
     }
     ctx.restore();
+
+    /* THE BUY BUTTON, on the card, beside the ship. Its label carries the
+     * number, because "BUY" on its own is how you find out what a hull cost
+     * by looking at your credits afterwards. Trade-in is already in it — the
+     * same arithmetic buyHull does, said out loud. */
+    var here = Combat.HULLS[(G.ship && G.ship.hullId) || 'talon'];
+    var cost = hull.price - Math.round((here ? here.price : 0) * 0.7);
+    var short = (G.ship.credits || 0) < cost;
+    var bw = Math.min(190, tw), bx = tx, by = y + h - 28;
+    btn(ctx, bx, by, bw, 20,
+        (cost >= 0 ? 'BUY  —  ' + cost + ' cr'
+                   : 'TRADE DOWN  —  +' + (-cost) + ' cr'),
+        buyTheSelectedHull,
+        { font: 11, disabled: short, hot: !short });
+    if (short) {
+      ctx.save();
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillStyle = '#ffb86b';
+      ctx.fillText('short ' + (cost - (G.ship.credits || 0)) + ' cr',
+                   bx + bw + 8, by + 14);
+      ctx.restore();
+    }
   }
 
   /* Everything bolted to the hull. Read off the ship rather than a list, so
