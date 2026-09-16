@@ -6,7 +6,7 @@
       Sim = global.Sim, Render = global.Render, RNG = global.RNG,
       Eco = global.Economy, Galaxy = global.Galaxy,
       Combat = global.Combat, Missions = global.Missions,
-      Slip = global.Slipspace;
+      Slip = global.Slipspace, Logo = global.Logo;
   var DEG = Math.PI / 180;
   var AU = Gen.AU;
 
@@ -263,6 +263,11 @@
    * #kawartha still drops you into precisely the system it always did, with
    * everywhere else arranged around it. */
   function newGame(seed) {
+    /* A new career means you are IN the career. Boot puts the title card up
+     * after this returns, which is the one caller that wants it — every
+     * other way in here is somebody who has already chosen. */
+    G.title = null;
+    G.menu = null;
     G.seed = seed;
     G.galaxy = Galaxy.build(seed);
     G.systemCache = {};
@@ -11506,6 +11511,7 @@
   function handleTitleKey(e) {
     e.preventDefault();
     var t = G.title;
+    skipTitleFade();                 // and the key still does its job
     if (t.edit) { handleEditKey(t.edit, e, function () { t.edit = null; }); return; }
     var k = e.key.toLowerCase();
     t.note = null;
@@ -11566,10 +11572,18 @@
     ctx.fillStyle = dim ? '#6d86a4' : (selected ? '#eaf4ff' : '#bcd2ea');
     ctx.fillText(label, x + 12, y + 2);
     if (value !== null && value !== undefined && value !== '') {
+      /* THE HINT STOPS WHERE THE LABEL STARTS. It is right-aligned, and a
+       * long one ran straight back under the label — "Resume career"
+       * printed on top of its own seed-and-credits line, which was the
+       * first thing on the title card and looked like a rendering fault.
+       * Clipped to the room actually left after the label and a gap. */
+      var labW = ctx.measureText(label).width;
+      var room = rw - 24 - labW - 18;
       ctx.textAlign = 'right';
       ctx.font = 'bold 13px ui-monospace, monospace';
       ctx.fillStyle = dim ? '#5f7790' : (selected ? '#ffe6a8' : '#8fb4d6');
-      ctx.fillText(String(value), x + rw - 12, y + 2);
+      ctx.fillText(clipText(String(value), Math.max(0, Math.floor(room / 7.81))),
+                   x + rw - 12, y + 2);
       ctx.textAlign = 'left';
     }
     ctx.restore();
@@ -11699,31 +11713,176 @@
     ctx.restore();
   }
 
+  /* ---- the title card ----------------------------------------------------
+   *
+   * Astra's design, and the one screen in the game that is allowed to be a
+   * picture rather than an instrument. The rose is drawn faint and large
+   * behind everything, the wordmark sits over it at full strength, and the
+   * tagline sits under that; the menu is below the lockup rather than on
+   * top of it.
+   *
+   * It fades in, in that order, and then it STAYS. Nothing here times out
+   * and nothing dims when you move the selection — you can sit on this
+   * screen, and the whole point of a title card is that somebody does.
+   */
+  var TITLE_BG = '#232973';          // the card's navy
+  var TITLE_ROSE_ALPHA = 0.46;       // "big faint rose behind everything", added not mixed
+  var TITLE_FADE = {                 // seconds: [start, length]
+    rose: [0.15, 1.5],
+    mark: [0.55, 1.2],
+    line: [1.35, 0.9],
+    menu: [0.85, 0.55]
+  };
+
+  function fadeAt(born, key) {
+    var f = TITLE_FADE[key];
+    var age = (performance.now() - born) / 1000;
+    if (age <= f[0]) return 0;
+    var u = Math.min(1, (age - f[0]) / f[1]);
+    return u * u * (3 - 2 * u);      // smoothstep, so nothing pops in
+  }
+
+  /* Touch anything and the card is simply there. The fade is for the
+   * person who has just launched the game, not for the person who has
+   * quit to the menu to load a save and knows exactly where it is. */
+  function skipTitleFade() {
+    if (G.title) G.title.born = performance.now() - 9000;
+  }
+
+  /* A FIXED STARFIELD, not the galaxy's. It is drawn from a constant seed
+   * so the title card looks the same every time it is opened — this is a
+   * printed thing, and a printed thing does not reshuffle itself. Built
+   * once and kept: five hundred stars is nothing to draw and a great deal
+   * to keep re-rolling. */
+  var titleStars = null;
+  function titleStarfield(w, h) {
+    if (titleStars && titleStars.w === w && titleStars.h === h) return titleStars.list;
+    var rng = new RNG('manifest-title-card');
+    var list = [];
+    for (var i = 0; i < 520; i++) {
+      list.push({
+        x: rng.next() * w, y: rng.next() * h,
+        r: 0.4 + rng.next() * rng.next() * 1.8,
+        a: 0.12 + rng.next() * 0.5,
+        /* Each one breathes on its own clock, slowly. A field that all
+         * pulses together is a field that is obviously a loop. */
+        ph: rng.next() * Math.PI * 2,
+        sp: 0.25 + rng.next() * 0.6
+      });
+    }
+    titleStars = { w: w, h: h, list: list };
+    return list;
+  }
+
   function drawTitleScreen(ctx, w, h) {
     var t = G.title;
+    /* Lazily, so every door into this screen gets the fade without having
+     * to remember to set it — and there are four of them. */
+    if (!t.born) t.born = performance.now();
     var items = titleItems();
-    /* Opaque, not a dim: this is meant to read as having LEFT the game
-     * rather than as another panel floating over the cockpit. */
+
     ctx.save();
-    ctx.fillStyle = '#04060c';
+    ctx.fillStyle = TITLE_BG;
     ctx.fillRect(0, 0, w, h);
+    var stars = titleStarfield(w, h);
+    var now = performance.now() / 1000;
+    for (var si = 0; si < stars.length; si++) {
+      var st = stars[si];
+      ctx.globalAlpha = st.a * (0.62 + 0.38 * Math.sin(now * st.sp + st.ph));
+      ctx.fillStyle = '#dbe6ff';
+      ctx.beginPath();
+      ctx.arc(st.x, st.y, st.r, 0, K.TAU);
+      ctx.fill();
+    }
     ctx.restore();
     G.hotspots = [];
 
-    var ph = 150 + items.length * 32;
-    var px = (w - MENU_W) / 2, py = (h - ph) / 2;
-    panel(ctx, px, py, MENU_W, ph, true);
+    /* ---- layout ----
+     * The menu is placed first, from the bottom, because it is the part
+     * with a hard minimum size; the lockup takes whatever is left, which
+     * is how this stays sane on a short window. */
+    var panelH = 74 + items.length * 32;
+    var px = (w - MENU_W) / 2;
+    var py = Math.min(h * 0.615, h - panelH - 26);
+    var lockH = Math.max(120, py - 26);
 
+    var roseR = Math.min(w * 0.275, lockH * 0.50);
+    var cx = w / 2, roseCy = 14 + lockH * 0.50;
+    var markW = Math.min(w * 0.60, roseR * 2.55);
+    var markH = markW / Logo.MARK_ASPECT;
+
+    var aRose = fadeAt(t.born, 'rose');
+    var aMark = fadeAt(t.born, 'mark');
+    var aLine = fadeAt(t.born, 'line');
+    var aMenu = fadeAt(t.born, 'menu');
+
+    if (aRose > 0) Logo.drawRose(ctx, cx, roseCy, roseR, TITLE_ROSE_ALPHA * aRose, true);
+
+    if (aMark > 0) {
+      ctx.save();
+      ctx.globalAlpha = aMark;
+      /* Three passes over one path. The shadow is what lifts the letters
+       * off the rose behind them — white on pale grey is the one place
+       * this lockup could go soft, and it is the reason the card's own
+       * version was hard to read. */
+      Logo.markPath(ctx, cx, roseCy, markW);
+      ctx.save();
+      ctx.shadowColor = 'rgba(6,9,40,0.85)';
+      ctx.shadowBlur = Math.max(6, markH * 0.13);
+      ctx.shadowOffsetY = Math.max(2, markH * 0.035);
+      ctx.fillStyle = Logo.INK.letter;
+      ctx.fill('evenodd');
+      ctx.restore();
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = Math.max(1.5, markH * 0.040);
+      ctx.strokeStyle = Logo.INK.halo;
+      ctx.stroke();
+      ctx.fillStyle = Logo.INK.letter;
+      ctx.fill('evenodd');
+      ctx.restore();
+    }
+
+    if (aLine > 0) {
+      ctx.save();
+      ctx.globalAlpha = aLine;
+      var lineSize = Math.max(12, Math.min(20, Math.round(markW * 0.030)));
+      ctx.font = 'bold ' + lineSize + 'px ui-monospace, monospace';
+      ctx.fillStyle = Logo.INK.gold;
+      ctx.textAlign = 'center';
+      /* Letter-spaced by hand rather than with the `letterSpacing`
+       * property, which not every canvas has. A tagline under a script
+       * logotype wants air; the same words set solid read as a caption. */
+      var lineY = roseCy + markH * 0.62 + lineSize * 2.0;
+      /* Both lines carry the same shadow the wordmark does, because both
+       * of them cross the rose's south point and gold on tan is no
+       * contrast at all. */
+      ctx.shadowColor = 'rgba(6,9,40,0.9)';
+      ctx.shadowBlur = 6;
+      ctx.shadowOffsetY = 1;
+      spacedText(ctx, 'Your own Manifest destiny awaits.', cx, lineY, lineSize * 0.14);
+      /* WHICH UNIVERSE, under the tagline rather than inside the menu.
+       * It was a caption on the old panel and it collided with the first
+       * row's own hint, which already names the seed — out here it reads
+       * as part of the card, which is what it is. */
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(200,218,250,0.74)';
+      spacedText(ctx, 'seed "' + G.seed + '"  ·  ' + G.galaxy.stars.length + ' stars',
+                 cx, lineY + lineSize * 1.9, 0.9);
+      ctx.textAlign = 'left';
+      ctx.restore();
+    }
+
+    /* THE MENU IS NEVER GATED BY THE FADE. It is drawn every frame, at
+     * whatever opacity the fade has reached — including none — so its rows
+     * are registered as hotspots and its keys work from the first frame.
+     * An entrance animation that you have to sit through before the game
+     * will take an instruction is not an entrance, it is a wait; and the
+     * first key you press finishes the fade anyway (see skipTitleFade). */
     ctx.save();
-    ctx.font = 'bold 21px ui-monospace, monospace';
-    ctx.fillStyle = '#ffe6a8';
-    ctx.fillText('PROCEDURAL SPACE GAME', px + 24, py + 40);
-    ctx.font = 'bold 12px ui-monospace, monospace';
-    ctx.fillStyle = '#7fd6c0';
-    ctx.fillText('seed "' + G.seed + '"  —  ' + G.galaxy.stars.length + ' stars', px + 24, py + 60);
-    ctx.restore();
+    ctx.globalAlpha = aMenu;
+    panel(ctx, px, py, MENU_W, panelH, true);
 
-    var box = { x: px, y: py, w: MENU_W, h: ph, top: py + 96 };
+    var box = { x: px, y: py, w: MENU_W, h: panelH, top: py + 30 };
     for (var i = 0; i < items.length; i++) {
       (function (i) {
         menuRow(ctx, box, i, box.top + i * 32, items[i].label, items[i].hint, i === t.sel,
@@ -11733,10 +11892,29 @@
     ctx.save();
     ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(160,185,220,0.55)';
-    ctx.fillText('arrows move  ·  Enter chooses  ·  Esc resumes', px + 30, py + ph - 20);
+    ctx.fillText('arrows move  ·  Enter chooses  ·  Esc resumes', px + 30, py + panelH - 18);
     ctx.restore();
     if (t.note) drawMenuNote(ctx, box, t.note);
     if (t.edit) drawEditField(ctx, box, t.edit);
+    ctx.restore();
+  }
+
+  /* Draw a string with extra space between the letters, centred or left by
+   * the context's own textAlign. Measured per character, so it is right in
+   * a proportional font as well as a monospace one. */
+  function spacedText(ctx, str, x, y, gap) {
+    var total = 0, i;
+    for (i = 0; i < str.length; i++) total += ctx.measureText(str[i]).width + gap;
+    total -= gap;
+    var cursor = ctx.textAlign === 'center' ? x - total / 2
+               : ctx.textAlign === 'right' ? x - total : x;
+    var was = ctx.textAlign;
+    ctx.textAlign = 'left';
+    for (i = 0; i < str.length; i++) {
+      ctx.fillText(str[i], cursor, y);
+      cursor += ctx.measureText(str[i]).width + gap;
+    }
+    ctx.textAlign = was;
   }
 
   function drawHelp(ctx, w, h) {
@@ -12098,16 +12276,17 @@
      * universe regenerated identically from the seed a moment ago; the save
      * carries only what the player did to it. Starting over is Esc, quit to
      * the main menu, New career — no longer a letter key. */
+    var restored = null;
     if (global.Save) {
       var saved = global.Save.load(seed);
       if (saved) {
         try {
           global.Save.restore(G, saved, { enterSystem: enterSystem });
-          say('Career restored — ' + fmtCredits(G.ship.credits) + ', ' +
-              fmtEpoch(G.t) + '.', 6);
+          restored = 'Career restored — ' + fmtCredits(G.ship.credits) + ', ' +
+                     fmtEpoch(G.t) + '.';
         } catch (err) {
           console.error('save restore failed', err);
-          say('Save was unreadable — starting fresh', 5);
+          restored = 'That save was unreadable — starting fresh.';
         }
       }
       window.addEventListener('beforeunload', function () {
@@ -12129,6 +12308,14 @@
       var sd = decodeURIComponent((location.hash || '').replace(/^#/, ''));
       if (sd && sd !== G.seed) newGame(sd);
     });
+
+    /* AND IT OPENS ON THE TITLE CARD. The world is built and the career is
+     * restored first, so Resume is a real offer and the card can say which
+     * galaxy is behind it — then the card goes up and nothing moves until
+     * somebody chooses. A game with a title screen you only ever reach by
+     * quitting is a game whose title you never see. Resume is the first
+     * row and it is already selected, so getting in is one key. */
+    G.title = { sel: 0, edit: null, note: restored };
 
     var last = performance.now();
     (function frame(now) {

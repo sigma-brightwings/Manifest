@@ -32,7 +32,7 @@ var path = require('path');
 /* The names each src file publishes onto `global`. */
 var MODULES = ['V', 'RNG', 'Kepler', 'Economy', 'Gen', 'Galaxy', 'Sim',
                'Combat', 'Missions', 'Arcs', 'Sound', 'Save', 'Hulls',
-               'Render', 'GLWorld', 'Screens', 'Slipspace', 'Game'];
+               'Render', 'GLWorld', 'Screens', 'Slipspace', 'Logo', 'Game'];
 
 var srcDir = path.resolve(__dirname, '..', 'src');
 var files = fs.readdirSync(srcDir).filter(function (f) { return /\.js$/.test(f); });

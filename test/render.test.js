@@ -152,6 +152,8 @@ require('../src/missions.js');
 require('../src/arcs.js');
 require('../src/sound.js');
 require('../src/save.js');
+/* The title card's artwork — the wordmark outline and the compass rose. */
+require('../src/logo.js');
 require('../src/hulls.js');
 require('../src/render.js');
 require('../src/screens.js');
@@ -6034,8 +6036,14 @@ console.log('--- quit to the main menu ---');
 
   var mark = drawn.texts.length;
   frames(2);
+  /* THE TITLE IS A DRAWING NOW, not a string — "Manifest" is a Bezier
+   * outline in logo.js, so there is no text to look for. The seed caption
+   * under it is the thing this screen still says in words, and it is a
+   * better witness anyway: it proves the screen knows which galaxy it is
+   * about to hand you. */
   check('the title screen draws',
-        drawn.texts.slice(mark).indexOf('PROCEDURAL SPACE GAME') >= 0);
+        drawn.texts.slice(mark).some(function (s) { return /^seed "/.test(s); }),
+        JSON.stringify(drawn.texts.slice(mark).slice(0, 6)));
   check('and draws cleanly', errorsSince(mark).length === 0, errorsSince(mark)[0]);
 
   var tBefore = G.t;
@@ -6064,6 +6072,63 @@ console.log('--- quit to the main menu ---');
   frames(2);
   check('the main menu offers a way out of the game',
         drawn.texts.slice(qMark).indexOf('Quit') >= 0);
+
+  /* ---- the title card fades in, and never gates the menu ----------------
+   *
+   * The card is the one screen in the game that is allowed to be a
+   * picture, and the fade is the whole of what makes it one. What must
+   * NOT happen is the fade turning into a wait: the menu is drawn from
+   * the first frame at whatever opacity it has reached, and its rows are
+   * live the whole time, so a player who quit to the menu to load a save
+   * can do it before the rose has finished arriving.
+   *
+   * The tagline is the witness, because spacedText draws it a letter at a
+   * time and the stub records every one — so "is the tagline up yet" is a
+   * question about this frame's text and not about a call count, which on
+   * this screen is dominated by the world still being drawn underneath.
+   */
+  function taglineUp(mark) {
+    var txt = drawn.texts.slice(mark);
+    for (var i = 0; i + 3 < txt.length; i++) {
+      if (txt[i] === 'Y' && txt[i + 1] === 'o' && txt[i + 2] === 'u' &&
+          txt[i + 3] === 'r') return true;
+    }
+    return false;
+  }
+  (function () {
+    G.title = { sel: 0, edit: null, note: null };
+    var fMark = drawn.texts.length;
+    frames(1);
+    check('the card opens before its own artwork does', !taglineUp(fMark));
+    check('but the menu is already on it',
+          drawn.texts.slice(fMark).indexOf('Quit') >= 0,
+          JSON.stringify(drawn.texts.slice(fMark)));
+    check('and its rows are already clickable', G.hotspots.length >= 4,
+          G.hotspots.length + ' hotspots');
+
+    /* Three seconds of wall clock — the harness's performance.now() IS the
+     * frame clock, so stepping frames is stepping the fade. */
+    frames(2, 1600);
+    fMark = drawn.texts.length;
+    frames(1);
+    check('and three seconds later the whole card is there', taglineUp(fMark));
+
+    /* A KEY FINISHES IT. Somebody who knows where they are going should
+     * not have to watch this twice. */
+    G.title = { sel: 0, edit: null, note: null };
+    frames(1);
+    fMark = drawn.texts.length;
+    frames(1);
+    check('a fresh card starts faded again', !taglineUp(fMark));
+    listeners.keydown[0]({ key: 'ArrowDown', shiftKey: false,
+                           preventDefault: function () {} });
+    fMark = drawn.texts.length;
+    frames(1);
+    check('a keypress skips straight to the finished card', taglineUp(fMark));
+    check('and the keypress still moved the selection', G.title.sel === 1,
+          String(G.title.sel));
+    G.title.sel = 0;
+  })();
 
   /* In a browser it must refuse in words. window.close() only works on a
    * window a script opened, so in a tab the call does nothing whatsoever —
