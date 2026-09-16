@@ -555,12 +555,42 @@
     return false;
   }
 
+  /* WHO ELSE CAN LICENSE A PLANT, and it is the obvious other answer.
+   *
+   * Astra: "Milfuel is manufactured at Navy/Syndicate reprocessing
+   * plants." The navy half was already here and the Syndicate half was
+   * missing, which left a hole in the fiction the rest of this file had
+   * already argued for: the Syndicate's whole racket IS the waste — they
+   * ban radioactive cargo in the systems they hold and dump their own in
+   * everyone else's back garden — so a hold is the one other place with
+   * both the feedstock and nobody to answer to.
+   *
+   * It could not happen by accident, either. No naval garrison ever spawns
+   * in a hold (the `sys.pirateHeld` gate in buildPatrols) and a passing
+   * cutter licenses nothing, so before this line a hold bred no slugs at
+   * all — the single most lawless place in the galaxy was the one place
+   * you could not buy military fuel.
+   *
+   * NO RNG DRAW, like everything else in this pass: it reads a flag
+   * generate.js has already set. That is what keeps the licence additive
+   * to every pre-existing seed. */
+  function syndicatePresent(sys) {
+    return !!(sys && sys.pirateHeld);
+  }
+
+  function licensor(sys) {
+    if (navyPresent(sys)) return 'navy';
+    if (syndicatePresent(sys)) return 'syndicate';
+    return null;
+  }
+
   function licensedFor(port) {
     return !!(port && port.market && port.market.role === 'reprocessing');
   }
 
   function licenseMilitaryFuel(sys) {
-    if (!navyPresent(sys)) return;
+    var who = licensor(sys);
+    if (!who) return;
     var ports = (sys && sys.ports) || [];
     var i, made = 0;
 
@@ -587,6 +617,12 @@
        * risk-free 3.5x run. The uptake share also varies per plant, so
        * two licensed plants are worth different amounts to fly to. */
       var uptake = 0.45 + ((h >>> 10) % 1000) / 1000 * 0.35;   // 45-80%
+      /* A SYNDICATE PLANT KEEPS LESS BACK. The navy's share is a contract;
+       * the Syndicate's is a cut, and a cut is smaller than a requisition —
+       * they are selling, which is the point of holding the plant. Ten
+       * points off the uptake, so a hold is the better place to buy and
+       * the worst place to be caught leaving with it. */
+      if (who === 'syndicate') uptake = Math.max(0.2, uptake - 0.10);
       addRow(mkt, 'milfuel', prod, prod * uptake);
       made++;
     }
@@ -1049,6 +1085,8 @@
     wasteSinks: wasteSinks,
     licenseMilitaryFuel: licenseMilitaryFuel,
     navyPresent: navyPresent,
+    syndicatePresent: syndicatePresent,
+    milfuelLicensor: licensor,
     MILFUEL_ID: 'milfuel'
   };
 

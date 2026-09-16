@@ -751,6 +751,73 @@ console.log('--- radioactive waste runs backwards, on purpose ---');
   check('the disposal run is profitable', marginOk > 0, marginOk + ' profitable systems');
 })();
 
+console.log('--- military fuel comes from a licence, not from development ---');
+(function () {
+  /* WHAT REPLACES THE DEVELOPMENT RULE FOR MILFUEL, and it is stricter.
+   * Anywhere it is BRED has to be a reprocessing plant, and the system has
+   * to be licensed — a naval garrison, or a Syndicate hold. Anywhere it is
+   * BURNED has to be a yard or a highport, which is where naval hulls are
+   * serviced. A world's development has nothing to do with either. */
+  var bredWrongRole = 0, bredUnlicensed = 0, burntWrongRole = 0;
+  var navySys = 0, syndSys = 0, breeders = 0, systems = 0, devs = [];
+  function sweep(sd, opts) {
+    var sys = Gen.generateSystem(sd, opts);
+    systems++;
+    var who = Eco.milfuelLicensor(sys);
+    if (who === 'navy') navySys++;
+    if (who === 'syndicate') syndSys++;
+    var bred = false;
+    (sys.ports || []).forEach(function (p) {
+      var row = p.market.rows.milfuel;
+      if (!row) return;
+      var role = p.market.role;
+      if (row.prod > 0 && row.cons > 0 && role === 'reprocessing') {
+        bred = true;
+        if (!who) bredUnlicensed++;
+        devs.push(p.market.dev);
+        return;
+      }
+      if (row.prod > 0 && role === 'reprocessing') {
+        bred = true;
+        if (!who) bredUnlicensed++;
+        devs.push(p.market.dev);
+      } else if (row.prod > 0) {
+        /* A yard blends its own slugs, so a little production there is
+         * expected; anywhere else producing it is not. */
+        if (role !== 'shipyard' && role !== 'highport') bredWrongRole++;
+        else if (!who) bredUnlicensed++;
+      }
+      if (row.cons > 0 && role !== 'reprocessing' &&
+          role !== 'shipyard' && role !== 'highport') burntWrongRole++;
+    });
+    if (bred) breeders++;
+  }
+  seeds(90).forEach(function (sd) { sweep(sd, undefined); });
+  var OUTLAW = { faction: { id: 'outlaw', outlaw: true, name: 'Test Syndicate' } };
+  for (var h = 0; h < 30; h++) sweep('hold-' + h, OUTLAW);
+
+  devs.sort(function (a, b) { return a - b; });
+  console.log('  ' + breeders + ' of ' + systems + ' systems breed it (' + navySys +
+              ' naval, ' + syndSys + ' syndicate); the plants that do run development ' +
+              (devs.length ? devs[0].toFixed(2) + ' to ' + devs[devs.length - 1].toFixed(2) : 'n/a'));
+  check('military fuel is only ever bred at a reprocessing plant',
+        bredWrongRole === 0, bredWrongRole + ' elsewhere');
+  check('and only in a system that licenses it', bredUnlicensed === 0,
+        bredUnlicensed + ' unlicensed');
+  check('and only burned where naval hulls are serviced', burntWrongRole === 0,
+        burntWrongRole + ' elsewhere');
+  check('the navy licenses some systems', navySys > 0, navySys + ' systems');
+  /* THE HALF THAT WAS MISSING. No naval garrison ever spawns in a hold, so
+   * before the Syndicate was added as a licensor the most lawless place in
+   * the galaxy was the one place you could not buy military fuel. */
+  check('and so does the Syndicate, in the holds', syndSys > 0, syndSys + ' systems');
+  /* The point of the exclusion above: these plants really are undeveloped,
+   * so the development rule would have to be lied to in order to pass. */
+  check('the plants that breed it really are below the industry threshold',
+        devs.length > 0 && devs[0] < 0.52,
+        devs.length ? 'lowest ' + devs[0].toFixed(3) : 'none');
+})();
+
 console.log('--- higher-tech worlds make higher-tech goods and more mess ---');
 (function () {
   var lowTierOnly = 0, highTechAtLowDev = 0, wasteCorrelation = [];
@@ -759,6 +826,18 @@ console.log('--- higher-tech worlds make higher-tech goods and more mess ---');
     sys.ports.forEach(function (p) {
       var dev = p.market.dev;
       var makesTier3 = p.market.order.some(function (c) {
+        /* LICENSED OUTPUT IS NOT MANUFACTURE, and this exclusion is the
+         * whole of the 17 violations this check reported for eight days.
+         * Every one of them was milfuel, at development 0.124 to 0.508 —
+         * one commodity, never a spread. It is not made by industry: it is
+         * bred out of waste at a reprocessing plant that has been LICENSED,
+         * by the navy or by the Syndicate, and a licence is a thing you are
+         * given rather than a thing you develop into. Astra's call:
+         * "Milfuel is manufactured at Navy/Syndicate reprocessing plants."
+         *
+         * The rule is not weakened by taking it out — the licence has its
+         * own check below, and that one is stricter than this one was. */
+        if (Eco.BY_ID[c].milfuel) return false;
         return Eco.BY_ID[c].tier >= 3 && p.market.rows[c].prod > 0;
       });
       // Nothing below the industry threshold may manufacture tier-3 goods.
