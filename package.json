@@ -5,10 +5,10 @@
   "description": "Gravity, clockwork, cockpit and cargo.",
   "private": true,
   "license": "UNLICENSED",
-  "author": "Astra",
+  "author": "Astra <astrabrightwing@pm.me>",
   "_comment_desktopName": "Read by electron-builder, not by npm: it becomes the Linux .desktop filename and the window's WM_CLASS, which is what lets a desktop environment link the running window to its launcher icon.",
   "_comment_naming": "THE COMMENTS LIVE UP HERE, NOT IN \"build\". npm ignores unknown top-level keys; electron-builder SCHEMA-VALIDATES its own block and refuses to run on one it does not recognise, which is a failed release rather than a warning. Learned the hard way on 0.3.0-beta. The game is Manifest everywhere now — productName, build.productName, appId, the artifacts and the desktop entry — and the one thing that rename moves is where Electron keeps userData, which is derived from productName and is where the saves live. electron/main.js carries them across; see the note there before touching either name again.",
-  "_comment_maintainer": "build.linux.maintainer exists because fpm refuses to build a .deb without one, and what it looks for first is the top-level `author` field with an address in it. It goes in the packaging block instead of in `author`, so npm, the README and everything else keep seeing a bare name. The address is the GitHub noreply alias already on every commit in this repo, so the .deb publishes nothing the git history does not. (And it is a real electron-builder key, unlike a comment: see the note above about what that block does to anything it does not recognise.)",
+  "_comment_maintainer": "fpm refuses to build a .deb without a package maintainer, and what electron-builder looks for is `author` with an address in it. Astra's, given for the purpose. build.linux.maintainer repeats it rather than leaning on the fallback, so the .deb keeps naming a maintainer even if `author` is ever shortened back to a bare name. (It is a real electron-builder key, unlike a comment: see the note above about what that block does to anything it does not recognise.)",
   "desktopName": "manifest.desktop",
   "main": "electron/main.js",
   "scripts": {
@@ -64,7 +64,7 @@
       ],
       "category": "Game",
       "synopsis": "Gravity, clockwork, cockpit and cargo.",
-      "maintainer": "Astra <321100687+sigma-brightwings@users.noreply.github.com>"
+      "maintainer": "Astra <astrabrightwing@pm.me>"
     }
   }
 }
