@@ -621,6 +621,131 @@ console.log('--- traffic arrives at ports, not near them ---');
  * port's own radial — so a dock with nine ships alongside drew one ship
  * nine times in the same place. That is a bug the eye reports as "empty".
  */
+console.log('--- the fleet ---');
+(function () {
+  /* Astra: "There are ships for the capital class. The navy runs the
+   * carrier, and then there are those carrier shipstations, they're
+   * basically floating cities."
+   *
+   * Three claims, all checkable: capitals exist and are rarer than cutters,
+   * carriers are sited where the fleet already is, and a carrier is a PORT
+   * — you can dock at a floating city. */
+  var caps = 0, cutters = 0, carriers = 0, systems = 0;
+  var carrierNoGarrison = 0, carrierNotDockable = 0, wrongFlag = 0;
+  seeds(60).forEach(function (sd) {
+    var sys = Gen.generateSystem(sd);
+    systems++;
+    var garrison = null;
+    (sys.patrols || []).forEach(function (p) {
+      if (p.kind === 'capital') caps++;
+      if (p.kind === 'navy' && !p.passing) { cutters++; garrison = garrison || p; }
+    });
+    (sys.ports || []).forEach(function (p) {
+      if (!p.market || p.market.role !== 'carrier') return;
+      carriers++;
+      /* A carrier is the fleet being here, so there has to be a fleet
+       * here — the siting reads buildPatrols' answer rather than inventing
+       * a second rule that could disagree with it. */
+      if (!garrison) carrierNoGarrison++;
+      else if (p.faction !== garrison.faction) wrongFlag++;
+      /* AND IT IS A PLACE. A floating city you cannot dock at is a model. */
+      if (!p.docking || !p.market) carrierNotDockable++;
+    });
+  });
+  console.log('  ' + systems + ' systems: ' + cutters + ' cutters, ' + caps +
+              ' capitals, ' + carriers + ' fleet carriers');
+  check('the navy fields capitals somewhere', caps > 0, caps + ' found');
+  check('and they are rarer than the cutters', caps < cutters,
+        caps + ' vs ' + cutters);
+  check('carriers exist', carriers > 0, carriers + ' found');
+  check('and every one of them has a fleet to belong to',
+        carrierNoGarrison === 0, carrierNoGarrison + ' orphaned');
+  check('flying the same flag as that fleet', wrongFlag === 0,
+        wrongFlag + ' mismatched');
+  check('and every one is a port you can dock at',
+        carrierNotDockable === 0, carrierNotDockable + ' undockable');
+
+  /* THE HULLS ARE ASSIGNED, which is the half that was actually missing:
+   * capital-* sat in the library with nothing flying it, and the bulk
+   * carrier was briefly wearing the navy's hull. */
+  /* render.js hangs itself on the global the same way the other modules
+   * do, so requiring it here is enough to read the hull table off it. */
+  var R = global.Render || require('../src/render.js');
+  check('the capital class flies a capital', /^capital-/.test(R.HULL_ASSIGN.capital),
+        R.HULL_ASSIGN.capital);
+  check('the carrier flies a carrier', /^carrier-/.test(R.HULL_ASSIGN.carrier),
+        R.HULL_ASSIGN.carrier);
+  check('and the merchant heavy is not wearing a warship',
+        !/^carrier-/.test(R.HULL_ASSIGN.bulk), R.HULL_ASSIGN.bulk);
+})();
+
+console.log('--- what the traffic is saying ---');
+(function () {
+  /* Astra, owed since the flight-controls rework: "every ship has an ID;
+   * show ID, message and destination for traffic within 0.75 AU."
+   *
+   * The lines are a pure function of the timetable and the clock, like
+   * everything else about traffic — so they are testable the way the
+   * timetable is, and the property that matters most is that nothing is
+   * stored: tune in after skipping six months and the channel says what
+   * those ships would have been saying then. */
+  var sys = Gen.generateSystem('kawartha');
+  var AU = 1.495978707e8;
+  var here = Sim.bodyPosition(sys.ports[0], sys, 0);
+  var lines = Sim.chatterNear(sys, 0, here, 0.75 * AU);
+
+  check('there is traffic to listen to', lines.length > 0, lines.length + ' in range');
+  var missing = lines.filter(function (L) {
+    return !L.id || !L.text || !L.dest;
+  });
+  check('every line has an ID, a message and a destination', missing.length === 0,
+        missing.length + ' incomplete');
+  check('and they come nearest first', lines.every(function (L, i) {
+    return i === 0 || lines[i - 1].range <= L.range;
+  }));
+
+  /* RANGE IS THE TRANSMITTER. A ship past it is not on the channel, which
+   * is the difference between a comms panel and an omniscient one. */
+  var far = Sim.chatterNear(sys, 0, here, 1000);
+  check('and a ship out of range is not on the channel',
+        far.length < lines.length, far.length + ' vs ' + lines.length);
+
+  /* SAME CLOCK, SAME WORDS. Not a cosmetic property: the panel redraws
+   * sixty times a second, and text that re-rolled per frame would be
+   * unreadable rather than atmospheric. */
+  var again = Sim.chatterNear(sys, 0, here, 0.75 * AU);
+  check('the same moment gives the same words',
+        JSON.stringify(again.map(function (L) { return L.id + L.text; })) ===
+        JSON.stringify(lines.map(function (L) { return L.id + L.text; })));
+  var later = Sim.chatterNear(sys, Sim.SAY_WINDOW * 3, here, 0.75 * AU);
+  var changed = 0;
+  later.forEach(function (L) {
+    var was = lines.filter(function (P) { return P.id === L.id; })[0];
+    if (was && was.text !== L.text) changed++;
+  });
+  check('and a while later they are saying something else', changed > 0,
+        changed + ' of ' + later.length + ' changed');
+
+  /* WHAT IT IS FOR. A hauler announcing drums is telling the player there
+   * is waste here worth being paid to take away — the channel is a survey
+   * of the system conducted by the people flying it. Sampled across systems
+   * because one system need not have a waste run in it. */
+  var sawCargo = false, sawPort = false;
+  seeds(12).forEach(function (sd) {
+    var s2 = Gen.generateSystem(sd);
+    if (!s2.ports.length) return;
+    var at = Sim.bodyPosition(s2.ports[0], s2, 0);
+    for (var k = 0; k < 6; k++) {
+      Sim.chatterNear(s2, k * Sim.SAY_WINDOW, at, 0.75 * AU).forEach(function (L) {
+        if (/\bt of\b|drums/.test(L.text)) sawCargo = true;
+        if (/final into|clear of/.test(L.text)) sawPort = true;
+      });
+    }
+  });
+  check('ships say what they are carrying', sawCargo);
+  check('and call the ports they are working', sawPort);
+})();
+
 console.log('--- the apron ---');
 (function () {
   var nearLarge = 0, nearSmall = 0, portSamples = 0;
@@ -913,11 +1038,18 @@ console.log('--- military fuel comes from a licence, not from development ---');
         /* A yard blends its own slugs, so a little production there is
          * expected; a milfuel factory does nothing else; anywhere else
          * producing it is not. */
-        if (role !== 'shipyard' && role !== 'highport' && role !== 'milfuel') bredWrongRole++;
+        /* AND A FLEET CARRIER. It is a warship with a city on it: it burns
+         * the stuff, and a yard aboard one blends its own the same way a
+         * yard ashore does. The carrier role is assigned by converting a
+         * port AFTER the licence has run, so whatever milfuel rows that
+         * port had it keeps — which is correct rather than incidental. */
+        if (role !== 'shipyard' && role !== 'highport' && role !== 'milfuel' &&
+            role !== 'carrier') bredWrongRole++;
         else if (!who) bredUnlicensed++;
       }
       if (row.cons > 0 && role !== 'reprocessing' && role !== 'milfuel' &&
-          role !== 'shipyard' && role !== 'highport') burntWrongRole++;
+          role !== 'shipyard' && role !== 'highport' &&
+          role !== 'carrier') burntWrongRole++;
     });
     if (bred) breeders++;
   }

@@ -308,7 +308,17 @@
      * hold, a Syndicate) puts there. licenseMilitaryFuel promotes one port
      * per licensed system, downstream of every rng draw, so adding this row
      * changes no seed's generation by itself. */
-    { id: 'milfuel',      name: 'Milfuel factory',   bias: [], milfuelPlant: true }
+    { id: 'milfuel',      name: 'Milfuel factory',   bias: [], milfuelPlant: true },
+    /* A FLEET CARRIER, PARKED. Astra: "the navy runs the carrier, and then
+     * there are those carrier shipstations, they're basically floating
+     * cities." So this is a port whose building is a warship: it trades
+     * like a highport because a city aboard a hull still eats and still
+     * buys, and it is sited by the fleet rather than by the economy —
+     * see siteFleetCarrier, which runs where a naval garrison already
+     * exists and nowhere else. Never picked by pickRole, same as the
+     * milfuel factory and for the same reason. */
+    { id: 'carrier',      name: 'Fleet carrier',
+      bias: ['medical', 'computers', 'alloys'], fleet: true }
   ];
 
   var ROLE_BY_ID = {};
@@ -743,6 +753,54 @@
     if (!best) return null;
     best.market.role = 'milfuel';
     best.market.roleName = 'Milfuel factory';
+    return best;
+  }
+
+  /* ---- where the fleet parks --------------------------------------------
+   * A carrier goes where the navy already is. buildPatrols decides that —
+   * a garrison needs development, order and a coin — so this reads the
+   * answer rather than inventing a second rule that could disagree with
+   * it: if there is a naval patrol based here, the fleet has a reason to
+   * keep a carrier here too.
+   *
+   * It converts a port rather than adding a body, which is the same move
+   * the milfuel factory makes and for the same reasons: no new rng draw, no
+   * change to any seed's generation, and the carrier inherits a market,
+   * berths and a docking envelope that already work. What changes is what
+   * it IS — the role, the name, and the hull the renderer draws.
+   *
+   * The best-developed port, because a floating city attaches itself to the
+   * busiest place in the system rather than to the quietest.
+   */
+  function siteFleetCarrier(sys) {
+    if (!sys || !sys.patrols) return null;
+    var garrison = null;
+    for (var i = 0; i < sys.patrols.length; i++) {
+      var pt = sys.patrols[i];
+      if (pt.kind === 'navy' && !pt.passing) { garrison = pt; break; }
+    }
+    if (!garrison) return null;
+
+    var ports = sys.ports || [];
+    var best = null;
+    for (i = 0; i < ports.length; i++) {
+      var p = ports[i], m = p.market;
+      if (!m || p.surface || p.underground) continue;
+      if (m.role === 'milfuel' || m.role === 'reprocessing') continue;
+      if (p.faction !== garrison.faction) continue;
+      if (!best || m.dev > best.market.dev) best = p;
+    }
+    if (!best) return null;
+
+    best.market.role = 'carrier';
+    best.market.roleName = 'Fleet carrier';
+    /* IT TAKES THE FLEET'S NAME. A carrier is a ship and ships have names —
+     * and the readout saying "FNS Something" where it used to say "Halden
+     * Dock" is the whole difference between a port with a new hull and a
+     * warship somebody has been living on. */
+    best.fleetName = garrison.name;
+    best.name = garrison.name;
+    best.fleet = true;
     return best;
   }
 
@@ -1286,6 +1344,7 @@
     navyPresent: navyPresent,
     syndicatePresent: syndicatePresent,
     milfuelLicensor: licensor,
+    siteFleetCarrier: siteFleetCarrier,
     /* The chain, exported so the tests can assert the ladder rather than
      * restating the numbers in it — a test that quotes 6,370 fails the day
      * somebody legitimately retunes the margin, which is the opposite of

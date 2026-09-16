@@ -7689,6 +7689,7 @@
     { id: 'auto',    title: 'AUTO',    draw: function (ctx) { drawAutoPage(ctx); } },
     { id: 'node',    title: 'NODE',    draw: function (ctx) { drawNodePage(ctx); } },
     { id: 'system',  title: 'SYSTEM',  draw: function (ctx) { drawSystemPage(ctx); } },
+    { id: 'chatter', title: 'CHATTER', draw: function (ctx) { drawChatterPage(ctx); } },
     { id: 'blank',   title: 'OFF',     draw: null }
   ];
   var DASH_PAGE_BY_ID = {};
@@ -7700,7 +7701,9 @@
        * you are on, and the thing you are aimed at, with the housekeeping
        * pages behind you where they belong. */
       G.dashPages = { left: 'scope', centre: 'orbit', right: 'target',
-                      'rear-left': 'aft', 'rear-right': 'ship' };
+                      'rear-left': 'aft', 'rear-right': 'ship',
+                      /* The overhead's default is the reason it exists. */
+                      overhead: 'chatter' };
     }
     return DASH_PAGE_BY_ID[G.dashPages[id]] || DASH_PAGE_BY_ID.blank;
   }
@@ -8425,6 +8428,86 @@
       ctx.font = '9px ui-monospace, monospace';
       ctx.fillText((top + 1) + '-' + Math.min(list.length, top + rows) + ' of ' + list.length,
                    10, MFD_BODY_BOTTOM - 2);
+    }
+  }
+
+  /* --- CHATTER: what everyone in range is saying --------------------------
+   * Astra: "every ship has an ID; show ID, message and destination for
+   * traffic within 0.75 AU, on a monitor up and to the right at the
+   * player's 3 o'clock, angled 45 degrees facing down."
+   *
+   * Three columns because she named three, and in that order: who is
+   * talking, what they said, where they are going. The range is the
+   * transmitter's 0.75 AU, which is the same number the radar and the
+   * comms screen already quote — one distance for "who can hear me",
+   * spelled once in RADAR_RANGE.
+   *
+   * WHAT IT IS FOR, beyond atmosphere. A hauler announcing drums is
+   * telling you there is waste in this system worth being paid to take
+   * away; a heavy calling the marker is telling you the apron is busy; a
+   * ship on final tells you which port is live right now. The channel is a
+   * survey of the system's economy conducted by the people flying it, and
+   * it costs nothing to listen.
+   *
+   * Sim owns the lines — they are a pure function of the timetable and the
+   * clock like everything else about traffic, so this page only draws what
+   * it is handed and never invents a word of it. */
+  function drawChatterPage(ctx) {
+    mfdShell(ctx, 'CHATTER', '0.75 AU   ·   open channel   ·   nearest first');
+    var lines = Sim.chatterNear
+      ? Sim.chatterNear(G.sys, G.t, G.ship.pos, RADAR_RANGE) : [];
+
+    if (!lines.length) {
+      ctx.font = '11px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('CHANNEL QUIET', 12, MFD_BODY_TOP + 20);
+      ctx.font = '9px ui-monospace, monospace';
+      ctx.fillText('nothing within 0.75 AU is transmitting.', 12, MFD_BODY_TOP + 36);
+      return;
+    }
+
+    /* Columns measured off the panel rather than typed as offsets: the same
+     * page is drawn at 460 px on a mount and at whatever the F3 page is,
+     * and a fixed column that fits one does not fit the other. */
+    var idW = 62, destW = 118;
+    var msgX = 12 + idW, msgRight = MFD_W - 10 - destW;
+    /* SEVEN, not nine. The body runs 26 to 152 and the count line sits at
+     * the bottom of it, so nine rows put the last transmission four pixels
+     * under the "of 94 in range" line and the two drew through each other —
+     * invisible at dashboard size, obvious the moment the panel was looked
+     * at straight on. */
+    var rows = 7, rowH = 14;
+
+    ctx.font = '9px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText('ID', 12, MFD_BODY_TOP + 8);
+    ctx.fillText('TRANSMISSION', msgX, MFD_BODY_TOP + 8);
+    ctx.textAlign = 'right';
+    ctx.fillText('BOUND FOR', MFD_W - 10, MFD_BODY_TOP + 8);
+    ctx.textAlign = 'left';
+
+    var chW = 6.0;                                   // 11px monospace, near enough
+    for (var i = 0; i < rows && i < lines.length; i++) {
+      var L = lines[i];
+      var y = MFD_BODY_TOP + 22 + i * rowH;
+      if (y > MFD_BODY_BOTTOM - 2) break;
+      ctx.font = '11px ui-monospace, monospace';
+      /* The ID in the ship's own colour, so the line you are reading and
+       * the dot on the radar are the same ship without a lookup. */
+      ctx.fillStyle = L.phase === 'moored' ? MFD_DIM : '#9fd4ff';
+      ctx.fillText(L.id, 12, y);
+      ctx.fillStyle = MFD_INK;
+      ctx.fillText(clipText(L.text, Math.max(8, Math.floor((msgRight - msgX) / chW))), msgX, y);
+      ctx.fillStyle = MFD_DIM;
+      ctx.textAlign = 'right';
+      ctx.fillText(clipText(L.dest, Math.floor(destW / chW)), MFD_W - 10, y);
+      ctx.textAlign = 'left';
+    }
+
+    if (lines.length > rows) {
+      ctx.fillStyle = MFD_DIM;
+      ctx.font = '9px ui-monospace, monospace';
+      ctx.fillText(rows + ' of ' + lines.length + ' in range', 12, MFD_BODY_BOTTOM - 4);
     }
   }
 

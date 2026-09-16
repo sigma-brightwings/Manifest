@@ -610,6 +610,10 @@
      * thing decided. Consumes no rng draws — see Economy.licenseMilitaryFuel
      * — so it is purely additive to every seed that predates it. */
     Eco.licenseMilitaryFuel(sys);
+    /* And where the fleet keeps a garrison, it keeps a carrier — read off
+     * the patrols buildPatrols just laid down rather than re-deciding it.
+     * No rng, same as the licence above. */
+    Eco.siteFleetCarrier(sys);
     buildContraband(sys, base);
     buildPortDressing(sys, base);
     return sys;
@@ -2232,6 +2236,16 @@
      * separate piece of work, and a navy that merely EXISTS in the sky of
      * well-governed systems is worth having on its own. */
     navy:   { size: 0.240, color: '#b8c6d8', accel: 0.0060, label: 'naval cutter' },
+    /* THE ONE YOU RUN FROM. The cutter above is what gets dispatched after
+     * you; this is what does not have to be dispatched, because it is
+     * already where it intends to be. Twice the cutter's size and a third
+     * of its acceleration: a capital does not chase anything, and the
+     * reason that is not a weakness is that it does not need to.
+     *
+     * Astra: "There are ships for the capital class." There are — capital-l
+     * has been in the library since the September drop with nothing flying
+     * it, which is a hull nobody ever sees. */
+    capital: { size: 0.520, color: '#c4d2e4', accel: 0.0022, label: 'capital ship' },
     /* A rescue tender. Unarmed on purpose — its protection is that
      * shooting one is an unusually serious crime, not that it can fight
      * back. Present now so the hull is in the sky before the mechanic
@@ -2359,6 +2373,42 @@
         className: PATROL_CLASSES.navy.label, color: fac.color,
         size: PATROL_CLASSES.navy.size, accel: PATROL_CLASSES.navy.accel,
         rail: { type: 'route', route: patrolRoute('n' + (id - 1), '', nspec, NA, NB, sys, rng) }
+      });
+    });
+
+    /* A CAPITAL, where a faction has something worth parking one over.
+     * Strictly rarer than the cutter and deliberately gated on the same
+     * numbers being BETTER rather than on a separate rule: a capital is the
+     * navy saying this system matters, so it wants the systems a garrison
+     * already qualifies for, at the top of that range, and then a coin on
+     * top. Across sixty seeds that puts one in a handful of systems and
+     * none at all in most. */
+    (sys.factions || []).forEach(function (fac) {
+      if (fac.outlaw || sys.pirateHeld) return;
+      var mineC = ports.filter(function (p) { return p.faction === fac.id; });
+      if (mineC.length < 2) return;
+      var devC = sys.development === undefined ? 0.5 : sys.development;
+      var crimeC = sys.crimeScore === undefined ? 40 : sys.crimeScore;
+      /* MEASURED, not guessed, the same way the cutter's gate was. At
+       * 0.68/35 a sixty-system sweep produced exactly zero capitals, which
+       * is not "rare", it is "absent" — the same failure the cutter's first
+       * 0.62 threshold had. 0.60/45 puts one over a handful of the
+       * best-run systems and none at all in most. */
+      if (devC < 0.60 || crimeC > 45) return;
+      if (!rng.chance(0.35)) return;
+      var CA = mineC[rng.int(0, mineC.length - 1)];
+      var CB = mineC.filter(function (p) { return p !== CA; })[0];
+      if (!CB) return;
+      var cspec = { cls: 'capital', accel: PATROL_CLASSES.capital.accel,
+                    size: PATROL_CLASSES.capital.size,
+                    color: PATROL_CLASSES.capital.color,
+                    label: PATROL_CLASSES.capital.label };
+      sys.patrols.push({
+        id: 'n' + (id++), kind: 'capital', faction: fac.id,
+        name: 'FNS ' + rng.pick(NAVY_NAMES),
+        className: PATROL_CLASSES.capital.label, color: fac.color,
+        size: PATROL_CLASSES.capital.size, accel: PATROL_CLASSES.capital.accel,
+        rail: { type: 'route', route: patrolRoute('n' + (id - 1), '', cspec, CA, CB, sys, rng) }
       });
     });
 

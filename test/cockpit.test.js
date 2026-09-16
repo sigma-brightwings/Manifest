@@ -62,7 +62,16 @@ console.log('--- looking forward ---');
   /* Dashboard panels: on screen, below the window, big enough to read. Only
    * the three on the forward arc — the two on the rear bulkhead are behind
    * the eye when you are facing front, which is the entire point of them. */
-  Render.MFD_MOUNTS.filter(function (m) { return m.id.indexOf('rear') !== 0; }).forEach(function (slot) {
+  /* THE FORWARD ARC ONLY, and the filter is by BEARING rather than by name.
+   * The two on the rear bulkhead are behind the eye when you face front,
+   * which is the entire point of them — and the overhead at the pilot's
+   * 3 o'clock is off the beam, so projecting it into a forward-facing
+   * frustum gives a polygon smeared along the clip plane and every
+   * measurement taken from it is noise. A panel you turn your head to read
+   * is checked with the head turned, below. */
+  Render.MFD_MOUNTS.filter(function (m) {
+    return Math.abs(m.bearing) < 60 * DEG;
+  }).forEach(function (slot) {
     var q = Render.clipProject(cam, Render.localPoly(ship, Render.mfdCorners(slot)));
     check(tag + ' ' + slot.id + ': panel projects', !!q);
     if (!q) return;
@@ -82,6 +91,51 @@ console.log('--- looking forward ---');
           'top ' + top.toFixed(0) + ' of ' + h);
     check(tag + ' ' + slot.id + ': panel does not swallow the window',
           bot - top < h * 0.42, ((bot - top) / h * 100).toFixed(0) + '% of the view');
+  });
+});
+
+/* ---- the screens you turn your head to ---------------------------------
+ * Astra asked for the comms channel "on a monitor up and to the right at
+ * the player's 3 o'clock, angled 45 degrees facing down", and a panel at
+ * the beam cannot be judged from a forward-facing camera: it projects
+ * smeared along the edge of the frustum and every number taken off it is
+ * noise. So it is checked the way it is used — with the head turned to it,
+ * which the neck can actually do.
+ *
+ * Two things have to be true of it and neither is obvious: it has to be
+ * READABLE when you look at it (the whole point of a 460-pixel page is
+ * that it is a page, not a smear), and it has to be ABOVE the boresight,
+ * because "up and to the right" is half the instruction and an overhead
+ * that has sagged to eye level is in the way of the view instead. */
+console.log('--- the screens you turn your head to ---');
+[[1920, 1080], [1280, 800], [900, 1600]].forEach(function (dim) {
+  var w = dim[0], h = dim[1], tag = w + 'x' + h;
+  Render.MFD_MOUNTS.filter(function (m) {
+    return Math.abs(m.bearing) > 60 * DEG && Math.abs(m.bearing) < 120 * DEG;
+  }).forEach(function (slot) {
+    /* Head turned to the mount's own bearing and LEVEL. Turning the head up
+     * as well was the first version of this and it made the elevation check
+     * meaningless: look up twenty-four degrees at a screen eighteen degrees
+     * up and it is below the middle of the view, which says nothing about
+     * where the screen is. Level, and then "above the boresight" means what
+     * the words mean. */
+    var cam = new Render.Camera();
+    cam.buildCockpit(ship, w, h, { yaw: slot.bearing, pitch: 0 });
+    var q = Render.clipProject(cam, Render.localPoly(ship, Render.mfdCorners(slot)));
+    check(tag + ' ' + slot.id + ': projects when you look at it', !!q);
+    if (!q) return;
+    var area = Math.abs(polyArea(q));
+    var top = Math.min.apply(null, q.map(function (p) { return p.y; }));
+    var bot = Math.max.apply(null, q.map(function (p) { return p.y; }));
+    check(tag + ' ' + slot.id + ': is a page rather than a smear',
+          area > 4000 && (bot - top) < h * 0.8,
+          'area ' + area.toFixed(0) + 'px2, ' + ((bot - top) / h * 100).toFixed(0) + '% tall');
+    check(tag + ' ' + slot.id + ': is on the screen', top > -h && bot < h * 2,
+          top.toFixed(0) + '..' + bot.toFixed(0));
+    if (slot.y > 0.1) {
+      check(tag + ' ' + slot.id + ': hangs above the boresight', (top + bot) / 2 < h / 2,
+            'centre ' + ((top + bot) / 2).toFixed(0) + ' of ' + h);
+    }
   });
 });
 

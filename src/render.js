@@ -524,11 +524,19 @@
     /* A pirate wants speed more than it wants a gun platform. */
     pirate: 'runner-m',
     liner: 'liner-m',
-    /* The carrier family was listed below as waiting for a role; the bulk
-     * class is that role. It reads as a merchant heavy rather than as a
-     * warship at this size, and it is the biggest civilian silhouette in
-     * the library — which is the whole point of the class. */
-    bulk: 'carrier-l',
+    /* THE BULK CARRIER IS A FREIGHTER, NOT A WARSHIP. This briefly flew as
+     * carrier-l, which was wrong by a day: Astra — "the navy runs the
+     * carrier, and then there are those carrier shipstations, they're
+     * basically floating cities." So the carrier family belongs to the
+     * fleet, and the merchant heavy gets the hull whose name says what it
+     * is. h2_freighter is the biggest civilian silhouette left. */
+    bulk: 'h2_freighter-l',
+    /* THE TWO THE NAVY RUNS. The cutter above is what gets dispatched; this
+     * is what does not have to be. A capital is the thing you run from, and
+     * a carrier is a place — see the `carrier` PORT role in economy.js,
+     * which is a fleet carrier parked in orbit with a city aboard it. */
+    capital: 'capital-l',
+    carrier: 'carrier-l',
     /* Was 'capital-m', which was wrong in a way that mattered: a navy that
      * only fields capital hulls cannot be DISPATCHED, and dispatched
      * hunters are what the notoriety work needs. The capital is now free
@@ -690,7 +698,13 @@
   var STATION_MODELS = {
     orbital: 'orbital', highport: 'highport', refinery: 'refinery',
     shipyard: 'shipyard', agri: 'agri', mining: 'mining',
-    reprocessing: 'reprocessing', milfuel: 'milfuel'
+    reprocessing: 'reprocessing', milfuel: 'milfuel',
+    /* A fleet carrier is not architecture, it is a SHIP that stopped — so
+     * the mesh under this key is the carrier hull out of the SHIP library,
+     * folded in by stationMeshes, with a procedural carrier as the
+     * fallback. The key is the role's own name like every other row; what
+     * is unusual is only where the art comes from. */
+    carrier: 'carrier'
   };
 
   /* What KIND of port this is, before any model is chosen. Three answers,
@@ -889,6 +903,16 @@
   function portModelFor(station) {
     var role = portRole(station);
     var size = portSizeFor(station, role);
+
+    /* A FLEET CARRIER IS NOT IN THE POOL, and this is the one role that has
+     * to say so. The pool exists because a refinery and a farm can share a
+     * hull without anybody minding — they are all buildings. A carrier is a
+     * warship the navy parked, and letting it draw `cradle-l` out of the
+     * station pool (which is exactly what happened the first time) puts a
+     * civilian shed where the fleet is supposed to be. Its art comes from
+     * the SHIP library, folded into the mesh table by stationMeshes, so the
+     * answer here is simply its own name. */
+    if (role === 'carrier') return role;
 
     /* An explicit assignment wins, and is still size-aware: assign a role a
      * list of STEMS and each port gets the right size of the one it drew. */
@@ -1823,6 +1847,35 @@
     });
     merge(reprocessing, tube(6, 0.16, 0.16, 0.20, true), 0, 0, 0.75);
 
+    /* FLEET CARRIER: a ship that stopped, and a city that grew on it.
+     * Astra: "the navy runs the carrier, and then there are those carrier
+     * shipstations, they're basically floating cities."
+     *
+     * So the silhouette is a hull rather than a structure — long, flat, and
+     * far bigger than anything else in the sky — with an island up one side
+     * and a lit flight deck running the length of it. The lights are
+     * emissive because a deck is lit whichever way it happens to be facing,
+     * which is the same trick the bay floors use.
+     *
+     * THIS IS THE FALLBACK. stationMeshes prefers the imported carrier hull
+     * out of the SHIP library when the art is present — the one role whose
+     * model comes from the other library, because a carrier is not
+     * architecture. */
+    var carrier = emptyMesh();
+    merge(carrier, box(0.86, 0.26, 0.15), 0, 0, 0);                 // hull
+    merge(carrier, box(0.90, 0.30, 0.02), 0, 0, 0.16);              // flight deck
+    merge(carrier, box(0.86, 0.02, 0.006), 0, 0, 0.181, undefined, '!#c8d8e8');
+    merge(carrier, box(0.10, 0.12, 0.16), 0.30, 0.20, 0.24);        // island
+    merge(carrier, tube(6, 0.02, 0.02, 0.16, true), 0.30, 0.20, 0.48);
+    [-0.5, -0.1, 0.3].forEach(function (x) {
+      merge(carrier, box(0.05, 0.30, 0.07), x, 0, -0.19);           // hangar sponsons
+    });
+    merge(carrier, tube(8, 0.10, 0.07, 0.12, true), -0.90, 0, 0);   // drives
+    merge(carrier, tube(8, 0.06, 0.05, 0.06, true), -1.00, 0, 0, undefined, '!#7ea8ff');
+    [0.20, -0.20].forEach(function (y) {
+      merge(carrier, box(0.42, 0.015, 0.012), 0.05, y, 0.175, undefined, '!#ffd36b');
+    });
+
     /* MILFUEL FACTORY: a press, not a plant. Astra asked for these as a
      * station type of their own, and the silhouette says what the economy
      * says — fissiles go in, slugs come out. A heavy shielded core with a
@@ -2175,7 +2228,8 @@
     STATION_MESHES = {
       orbital: orbital, highport: highport, refinery: refinery,
       shipyard: shipyard, agri: agri, mining: mining,
-      reprocessing: reprocessing, milfuel: milfuel, surface: surface,
+      reprocessing: reprocessing, milfuel: milfuel, carrier: carrier,
+      surface: surface,
       bay: bay, underground: underground, hall: hall
     };
 
@@ -2189,6 +2243,31 @@
     for (var pi = 0; pi < ids.length; pi++) {
       var got = libPort(ids[pi]);
       if (got && got.shell && got.shell.f.length) STATION_MESHES[ids[pi]] = got.shell;
+    }
+
+    /* AND ONE ROLE TAKES ITS ART FROM THE SHIP LIBRARY. A fleet carrier is
+     * a hull that stopped moving, so the model that should draw it is the
+     * carrier in HullLib rather than anything in the port library — which
+     * has no carrier in it and never will, because it is a library of
+     * buildings. Falls through to the procedural hull above when the ship
+     * art is absent, exactly as every other role falls through. */
+    var carrierHull = libHull(HULL_ASSIGN.carrier || 'carrier-l');
+    if (carrierHull && carrierHull.f && carrierHull.f.length) {
+      /* LAID DOWN, because the two libraries disagree about which way is
+       * along. A ship is modelled nose along +z and a station is modelled
+       * with +z UP out of its own deck, so folding the hull in unrotated
+       * stood a nine-hundred-metre carrier on its tail like a monument.
+       * One rotation about x — (x, y, z) -> (x, z, -y) — puts the keel in
+       * the station's own plane and the flight deck facing up out of it.
+       *
+       * The vertices are copied rather than rotated in place: libHull
+       * caches that mesh and the ship drawing it wants its own axes back. */
+      var laid = { v: [], f: carrierHull.f, c: carrierHull.c };
+      for (var vi = 0; vi < carrierHull.v.length; vi++) {
+        var q = carrierHull.v[vi];
+        laid.v.push([q[0], q[2], -q[1]]);
+      }
+      STATION_MESHES.carrier = laid;
     }
     return STATION_MESHES;
   }
@@ -5820,7 +5899,26 @@
      * teaches you not to look. These are upright and face the seat, so
      * turning round reads them the right way up. */
     { id: 'rear-left',  bearing: -145 * Math.PI / 180, r: 0.62, y: -0.02, lean: -0.14, hw: 0.30, hh: 0.116, w: 460, h: 178 },
-    { id: 'rear-right', bearing: 145 * Math.PI / 180,  r: 0.62, y: -0.02, lean: -0.14, hw: 0.30, hh: 0.116, w: 460, h: 178 }
+    { id: 'rear-right', bearing: 145 * Math.PI / 180,  r: 0.62, y: -0.02, lean: -0.14, hw: 0.30, hh: 0.116, w: 460, h: 178 },
+    /* THE OVERHEAD, at the pilot's 3 o'clock and angled down at them.
+     * Astra specified it to the degree — "a monitor up and to the right at
+     * the player's 3 o'clock, angled 45 degrees facing down" — and it is
+     * the one mount that is neither dash nor bulkhead: it hangs above the
+     * shoulder, which is where a channel you monitor rather than fly by
+     * belongs.
+     *
+     * 88 degrees rather than 90, and that is not fussiness about the
+     * bearing: the PANELS tab splits forward screens from aft ones on
+     * `abs(bearing) < PI/2`, and a mount sitting exactly on the beam falls
+     * through to the back row and draws itself behind the seat in the
+     * layout. Two degrees inside the line puts it where the eye expects
+     * without the layout code needing to learn about a third case.
+     *
+     * The negative lean is the "facing down" half: everything on the dash
+     * leans its top AWAY from the pilot because it sits below the eye, and
+     * this one leans the other way because it does not. */
+    { id: 'overhead', bearing: 88 * Math.PI / 180, r: 1.05, y: 0.34,
+      lean: -45 * Math.PI / 180, hw: 0.22, hh: 0.086, w: 460, h: 178 }
   ];
 
   /* Corners of a mounted panel, in cockpit metres, as

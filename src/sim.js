@@ -1977,6 +1977,115 @@
            ('000' + (h % 10000)).slice(-4);
   }
 
+  /* ---- WHAT THE TRAFFIC IS SAYING ----------------------------------------
+   * Astra's ask, from the same conversation that reworked the flight
+   * controls: "every ship has an ID; show ID, message and destination for
+   * traffic within 0.75 AU."
+   *
+   * The ID already existed — regCode above has been stamping one on every
+   * route since the radar needed something to call them. What was missing
+   * was the message, and the rule for it is the same rule everything else
+   * about traffic follows: it is a PURE FUNCTION OF THE TIMETABLE AND THE
+   * CLOCK. Nothing is stored, nothing is queued, nothing drifts, and a
+   * channel you tune into after skipping six months of game time says what
+   * that ship would have been saying at that moment.
+   *
+   * WHAT A SHIP SAYS IS WHAT IT IS DOING, first and foremost: the phase it
+   * is in, where it is going, and what is in the hold. That makes the panel
+   * a genuine instrument rather than a flavour generator — a hauler
+   * announcing drums is telling you there is waste in this system to be
+   * paid for taking away, and a heavy calling the marker is telling you the
+   * apron is busy.
+   *
+   * The variety on top is bucketed rather than continuous: the line changes
+   * every SAY_WINDOW seconds rather than every frame, because a panel whose
+   * text flickers is a panel nobody reads. Same window for everybody, so
+   * the whole channel turns over together the way a real one does.
+   */
+  var SAY_WINDOW = 900;                  // s of sim time before a ship speaks again
+
+  var SAY_CRUISE = [
+    'steady on the transfer', 'running quiet', 'nothing to report',
+    'burn complete, coasting', 'holding the line'
+  ];
+  var SAY_MOORED = [
+    'on the clamps', 'unloading', 'turning her round', 'crew ashore',
+    'waiting on the gang'
+  ];
+  var SAY_HEAVY = [
+    'holding at the marker', 'lighters working us', 'we are not moving for anybody',
+    'wide load, give us room'
+  ];
+
+  function chatterFor(st, sys, t) {
+    if (!st || !st.route) return null;
+    var dst = st.to, src = st.from;
+    var h = global.RNG
+      ? global.RNG.hashString('say|' + st.route.id + '|' + Math.floor(t / SAY_WINDOW))
+      : 0;
+    function pick(list) { return list[h % list.length]; }
+
+    var carrying = null;
+    var man = st.manifest || [];
+    for (var i = 0; i < man.length; i++) {
+      var q = man[i].qty || man[i].tonnes || 0;
+      if (q > 0) {
+        var com = global.Economy && global.Economy.BY_ID[man[i].cid];
+        carrying = { cid: man[i].cid, qty: q, name: com ? com.name.toLowerCase() : man[i].cid };
+        break;
+      }
+    }
+
+    var text;
+    if (st.phase === 'descent') {
+      text = 'on final into ' + (dst ? dst.name : 'the port');
+    } else if (st.phase === 'liftoff') {
+      text = 'clear of ' + (src ? src.name : 'the pad') + ', climbing';
+    } else if (st.phase === 'moored') {
+      /* A ship at anchor and a ship in a berth are doing different things,
+       * and the heavies are the ones you can see from a long way off. */
+      text = st.route.outboard ? pick(SAY_HEAVY) : pick(SAY_MOORED);
+      if (carrying && !st.route.outboard && (h >>> 3) % 2) {
+        text = 'discharging ' + Math.round(carrying.qty) + ' t of ' + carrying.name;
+      }
+    } else if (carrying && (h >>> 5) % 3 === 0) {
+      /* WASTE ANNOUNCES ITSELF. It is the one cargo with a rule attached —
+       * a system that bans it fines you on arrival — so a hauler saying so
+       * out loud is doing the player a favour rather than making noise. */
+      text = carrying.cid === 'waste'
+        ? 'drums aboard, keep your distance'
+        : Math.round(carrying.qty) + ' t of ' + carrying.name + ' for ' +
+          (dst ? dst.name : 'onward');
+    } else {
+      text = pick(SAY_CRUISE);
+    }
+
+    return {
+      id: st.reg, name: st.name, cls: st.className || st.cls,
+      text: text,
+      dest: dst ? dst.name : '—',
+      phase: st.phase,
+      pos: st.pos
+    };
+  }
+
+  /* Everything in transmitter range, nearest first, as lines a panel can
+   * print. Range is the caller's because the panel and the radar quote the
+   * same number and it belongs to the ship's transmitter, not to here. */
+  function chatterNear(sys, t, pos, maxRange) {
+    var list = trafficAll(sys, t), out = [];
+    for (var i = 0; i < list.length; i++) {
+      var d = V.dist(list[i].pos, pos);
+      if (d > maxRange) continue;
+      var line = chatterFor(list[i], sys, t);
+      if (!line) continue;
+      line.range = d;
+      out.push(line);
+    }
+    out.sort(function (a, b) { return a.range - b.range; });
+    return out;
+  }
+
   function finishTraffic(route, pos, vel, fwd, upRef, phase, u, src, dst, outbound) {
     var right = V.cross(fwd, upRef);
     if (V.len(right) < 1e-9) right = anyPerpendicular(fwd);
@@ -4792,6 +4901,7 @@
     berthOccupants: berthOccupants,
     needsLargeBerth: needsLargeBerth,
     nearestTraffic: nearestTraffic,
+    chatterFor: chatterFor, chatterNear: chatterNear, SAY_WINDOW: SAY_WINDOW,
     bodyStateAt: bodyStateAt,
     patrolState: patrolState,
     shipsAll: shipsAll,
