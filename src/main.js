@@ -10424,6 +10424,13 @@
    * numbers — a spread, like any real market. The rightmost column is the
    * one that turns this from a list into a decision: how full the port's
    * warehouse is, which is what is setting the price. */
+  /* The two colours the market screen judges a price in. Green is the
+   * screen's existing "this is good news" green, so the market does not
+   * introduce a second one; red is the supply bar's red, for the same
+   * reason. Named because they are used in four places in one function and
+   * a fifth hex would be a fifth opinion about what red is. */
+  var MARK_GOOD = '#7dffb0', MARK_BAD = '#ff7a7a';
+
   function drawMarket(ctx, w, h) {
     var m = G.market;
     var port = m.port;
@@ -10461,6 +10468,15 @@
     ctx.font = '10px ui-monospace, monospace';
     ctx.fillStyle = '#7e93b3';
     ctx.fillText('COMMODITY', px + 44, hy);
+    /* What the colours mean, once, where the columns they describe are —
+     * a screen that paints half its rows and never says why is a screen
+     * the player has to be told about out of band. */
+    var legendX = px + 44 + ctx.measureText('COMMODITY').width + 52;
+    ctx.save();
+    ctx.font = '9px ui-monospace, monospace';
+    ctx.fillStyle = MARK_GOOD;
+    ctx.fillText('worth doing here', legendX, hy);
+    ctx.restore();
     ctx.textAlign = 'right';
     ctx.fillText('BUY', px + 330, hy);
     ctx.fillText('SELL', px + 420, hy);
@@ -10490,7 +10506,14 @@
       ctx.save();
       ctx.font = '11px ui-monospace, monospace';
       var isWaste = r.id === 'waste';
-      ctx.fillStyle = isWaste ? '#ffb86b' : (held > 0 ? '#e6f0ff' : '#a9bcd6');
+      /* WHETHER THIS ROW IS WORTH ACTING ON, against the commodity's base
+       * price rather than against this port's own idea of itself. The
+       * thresholds and the reasoning live in Eco.priceMark. */
+      var mk = Eco.priceMark(r);
+      ctx.fillStyle = isWaste ? '#ffb86b'
+                    : mk.row > 0 ? MARK_GOOD
+                    : mk.row < 0 ? MARK_BAD
+                    : (held > 0 ? '#e6f0ff' : '#a9bcd6');
       ctx.fillText(r.name, px + 44, y);
       if (isWaste) {
         ctx.fillStyle = 'rgba(255,184,107,0.65)';
@@ -10501,11 +10524,19 @@
       }
 
       ctx.textAlign = 'right';
+      /* A CHEAP ASK IS GREEN AND A DEAR BID IS GREEN, which is the same
+       * rule stated twice — green is the column saying "do it here".
+       * Waste keeps its own signs: a negative ask credits you and a
+       * negative bid charges you, and those already read correctly. */
       ctx.fillStyle = r.buy === null ? '#4c5c72'
-                    : r.buy < 0 ? '#7dffb0' : '#cfe0ff';
+                    : r.buy < 0 ? '#7dffb0'
+                    : mk.buy > 0 ? MARK_GOOD
+                    : mk.buy < 0 ? MARK_BAD : '#cfe0ff';
       ctx.fillText(r.buy === null ? '—' : fmtCredits(r.buy), px + 330, y);
       ctx.fillStyle = r.sell === null ? '#4c5c72'
-                    : r.sell < 0 ? '#ffb86b' : '#7dffb0';
+                    : r.sell < 0 ? '#ffb86b'
+                    : mk.sell > 0 ? MARK_GOOD
+                    : mk.sell < 0 ? MARK_BAD : '#cfe0ff';
       ctx.fillText(r.sell === null ? '—' : fmtCredits(r.sell), px + 420, y);
       ctx.fillStyle = held > 0 ? '#ffe6a8' : '#4c5c72';
       ctx.fillText(held > 0 ? held.toFixed(0) + ' t' : '—', px + 510, y);

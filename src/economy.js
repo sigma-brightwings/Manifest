@@ -1120,6 +1120,62 @@
   }
 
   /* Everything this port will talk to you about, in a stable display order. */
+  /* ---- is this a price worth acting on? ---------------------------------
+   * Astra: "prices that are good compared to the local average have the
+   * commodity and its price highlighted in green... prices that are high
+   * compared to the local average... in red."
+   *
+   * THE YARDSTICK IS THE COMMODITY'S BASE PRICE, which is the one number
+   * in the economy that means the same thing at every port in the galaxy.
+   * That makes green read as "cheap ANYWHERE", not "cheap for around
+   * here" — a signal you can carry between systems rather than one that
+   * resets every time you dock.
+   *
+   * THE THRESHOLDS ARE MEASURED, NOT CHOSEN. Straight against base, a
+   * ten-per-cent band paints 73% of asks green, because a port only sells
+   * what it MAKES and a producer's ask is cheap by construction: across
+   * sixty systems the median ask is 0.64x base and the median bid 0.88x.
+   * A colour that fires three times in four is decoration. So the
+   * cut-offs are that same sample's quartiles — the cheapest and dearest
+   * quarter of what a thing costs anywhere — which is what makes a green
+   * row mean "this is in the best 25% you will see".
+   *
+   *   ask   0.50x base or under = worth buying, 0.92x or over = dear
+   *   bid   1.62x base or over  = worth selling, 0.54x or under = poor
+   *
+   * GREEN MEANS ACT, not "low number". Astra's call, and it is the right
+   * one: the two columns are read for opposite purposes, so a dear BID is
+   * the best thing on the screen and colouring it red for being a big
+   * number would be a chart, not an instrument.
+   *
+   * Waste is left alone. Its prices run backwards on purpose — negative
+   * is money toward you — and the market screen already says so in its
+   * own colour. */
+  var MARK_BUY_GOOD = 0.50, MARK_BUY_BAD = 0.92;
+  var MARK_SELL_GOOD = 1.62, MARK_SELL_BAD = 0.54;
+
+  function priceMark(row) {
+    var out = { buy: 0, sell: 0, row: 0 };
+    if (!row) return out;
+    var com = BY_ID[row.id];
+    if (!com || com.waste || !(com.base > 0)) return out;
+    if (row.buy !== null && isFinite(row.buy) && row.buy > 0) {
+      var b = row.buy / com.base;
+      out.buy = b <= MARK_BUY_GOOD ? 1 : b >= MARK_BUY_BAD ? -1 : 0;
+    }
+    if (row.sell !== null && isFinite(row.sell) && row.sell > 0) {
+      var s = row.sell / com.base;
+      out.sell = s >= MARK_SELL_GOOD ? 1 : s <= MARK_SELL_BAD ? -1 : 0;
+    }
+    /* THE ROW TAKES THE BEST NEWS ON IT. A thing can be a good buy and a
+     * poor sell at the same port — that is what "cheap here" IS — and the
+     * commodity's own name should tell you there is something to do here
+     * rather than average the two into nothing. */
+    out.row = (out.buy > 0 || out.sell > 0) ? 1
+            : (out.buy < 0 || out.sell < 0) ? -1 : 0;
+    return out;
+  }
+
   function priceList(port, t) {
     var out = [];
     for (var i = 0; i < port.market.order.length; i++) {
@@ -1333,6 +1389,9 @@
     stock: stock,
     price: price,
     priceList: priceList,
+    priceMark: priceMark,
+    MARK_BUY_GOOD: MARK_BUY_GOOD, MARK_BUY_BAD: MARK_BUY_BAD,
+    MARK_SELL_GOOD: MARK_SELL_GOOD, MARK_SELL_BAD: MARK_SELL_BAD,
     applyTrade: applyTrade,
     goLive: goLive,
     goDormant: goDormant,

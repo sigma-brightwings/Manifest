@@ -1343,6 +1343,82 @@ console.log('--- the stand under the ship ---');
               ' lamp and nav-light anchors the game had never drawn');
   check('the model declares fittings to draw', fittings > 0);
 
+  /* THE STAND STANDS ON THE FLOOR IT IS BOLTED TO.
+   *
+   * Astra, parked at Waypoint Dock: "the landing pad is still inside the
+   * floor." `deck` is where a ray cast down the alcove first meets
+   * STRUCTURE, and the bay's visible floor is the plating over it — so a
+   * stand drawn at the cast depth is a rectangle sunk in the deck with a
+   * ship floating above the hole.
+   *
+   * Measured off the pad plate itself (the first box the builder pushes,
+   * so vertices 0-7) rather than off the recorded lift, or this would be
+   * the code agreeing with itself. Revert the lift and the underside sits
+   * a centimetre off the cast, which is what this catches. */
+  var padUnder = Infinity;
+  for (var pv = 0; pv < 8; pv++) padUnder = Math.min(padUnder, small.v[pv][2]);
+  var hullH = Render.hullSpan('courier').h * 1000;            // m
+  var standUp = (padUnder - small.deckZ) * 1.3 * 1000;        // model units -> m
+  console.log('  the stand stands ' + standUp.toFixed(2) + ' m off the cast deck, ' +
+              (standUp / hullH).toFixed(2) + ' of a ' + hullH.toFixed(1) + ' m hull height');
+  check('the stand is lifted clear of the structure it was cast against',
+        standUp > hullH * 0.5,
+        standUp.toFixed(2) + ' m of a ' + hullH.toFixed(1) + ' m hull');
+  check('and it is lifted by about two thirds of a hull, not by an arbitrary number',
+        Math.abs(standUp / hullH - 0.66) < 0.05,
+        (standUp / hullH).toFixed(3) + ' hull heights');
+  /* The lift is a number of METRES, like everything else on the stand, so
+   * it must not change when the station does. */
+  var lgUnder = Infinity;
+  for (var pv2 = 0; pv2 < 8; pv2++) lgUnder = Math.min(lgUnder, large.v[pv2][2]);
+  var lgUp = (lgUnder - large.deckZ) * 6.7 * 1000;
+  check('and it is the same lift in metres at a station five times the size',
+        Math.abs(standUp - lgUp) / Math.max(standUp, lgUp) < 0.02,
+        standUp.toFixed(2) + ' m vs ' + lgUp.toFixed(2) + ' m');
+
+  /* THE STAND IS A RULER, NOT A FLAG.
+   *
+   * Astra, parked in a bay at a violet dock: "the screencaps you show me
+   * have yellow caution stripes on the floor: all I'm seeing is purple
+   * stuff." The faction accent was repainting the deck furniture along
+   * with the hull — hazard gold #c9b44a straight to #824ac9 — so the one
+   * high-contrast edge in the room came out the same hue as the room.
+   *
+   * Checked by accenting and comparing, because the failure was silent:
+   * every face still drew, in the wrong colour. */
+  var MARK_GOLD = '#c9b44a';
+  function goldFaces(mesh) {
+    var n = 0;
+    for (var i = 0; i < mesh.c.length; i++) {
+      if (mesh.c[i].toLowerCase().indexOf(MARK_GOLD) >= 0) n++;
+    }
+    return n;
+  }
+  var bare = goldFaces(small);
+  check('the stand is striped in hazard gold to begin with', bare > 0, bare + ' faces');
+  ['#8a5cc4', '#c0392b', '#2e86c1'].forEach(function (flag) {
+    Render.setAccent(flag);
+    var painted = Render.accented(small);
+    check('the stripes survive a ' + flag + ' dock',
+          goldFaces(painted) === bare,
+          goldFaces(painted) + ' of ' + bare + ' left');
+    Render.setAccent(null);
+  });
+  /* And the station around it still takes the colour, or this fix has
+   * traded one silent failure for another. */
+  Render.setAccent('#8a5cc4');
+  var hull = Render.libPort(role);
+  var shell = hull && hull.shell;
+  if (shell && shell.c && shell.c.length) {
+    var swapped = 0;
+    for (var hc = 0; hc < shell.c.length; hc++) {
+      if (Render.accentSwap(shell.c[hc], '#8a5cc4')) swapped++;
+    }
+    check('while the station itself still wears the flag', swapped > shell.c.length * 0.2,
+          swapped + ' of ' + shell.c.length + ' hull faces');
+  }
+  Render.setAccent(null);
+
   /* Cached per (role, berth, radius) — a station radius is a float off an
    * rng, so the key is effectively unique per station and the cache has to
    * be bounded or a long career holds a mesh for every port it visited. */

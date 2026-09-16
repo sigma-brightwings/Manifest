@@ -1541,6 +1541,83 @@ console.log('\n--- what a port looks like up close ---');
         prof[0.35].nHab + ' vs ' + prof[2.5].nHab);
 })();
 
+console.log('--- the price worth flying for ---');
+(function () {
+  /* A COLOUR THAT FIRES THREE TIMES IN FOUR IS DECORATION.
+   *
+   * That is the whole reason priceMark's cut-offs are quartiles of a
+   * measured sample rather than a band around base: a port only sells what
+   * it MAKES, so a producer's ask is cheap by construction, and the naive
+   * "10% under base is a bargain" rule paints most of the screen green.
+   *
+   * So the test is about the RATE, not about one row. Green has to be
+   * roughly a quarter of what you see, or it has stopped being news. */
+  var good = { buy: 0, sell: 0 }, bad = { buy: 0, sell: 0 };
+  var nBuy = 0, nSell = 0, rowsGood = 0, rowsBad = 0, rows = 0;
+  var bestBuy = null, bestSell = null;
+  seeds(40).forEach(function (sd) {
+    var sys = Gen.generateSystem(sd);
+    sys.ports.forEach(function (p) {
+      if (!p.market) return;
+      Eco.priceList(p, 10 * DAY).forEach(function (r) {
+        var com = Eco.BY_ID[r.id];
+        if (!com || com.waste || !(com.base > 0)) return;
+        var mk = Eco.priceMark(r);
+        rows++;
+        if (mk.row > 0) rowsGood++; else if (mk.row < 0) rowsBad++;
+        if (r.buy !== null && isFinite(r.buy) && r.buy > 0) {
+          nBuy++;
+          if (mk.buy > 0) { good.buy++; if (!bestBuy || r.buy / com.base < bestBuy) bestBuy = r.buy / com.base; }
+          if (mk.buy < 0) bad.buy++;
+        }
+        if (r.sell !== null && isFinite(r.sell) && r.sell > 0) {
+          nSell++;
+          if (mk.sell > 0) { good.sell++; if (!bestSell || r.sell / com.base > bestSell) bestSell = r.sell / com.base; }
+          if (mk.sell < 0) bad.sell++;
+        }
+      });
+    });
+  });
+  console.log('  across ' + rows + ' rows: ' + (100 * good.buy / nBuy).toFixed(1) +
+              '% of asks are worth buying, ' + (100 * good.sell / nSell).toFixed(1) +
+              '% of bids worth selling into');
+  console.log('  the best ask seen is ' + bestBuy.toFixed(2) +
+              'x base and the best bid ' + bestSell.toFixed(2) + 'x');
+  check('a green ask is roughly the cheapest quarter, not most of the screen',
+        good.buy / nBuy > 0.08 && good.buy / nBuy < 0.40,
+        (100 * good.buy / nBuy).toFixed(1) + '% of ' + nBuy);
+  check('and a green bid likewise',
+        good.sell / nSell > 0.15 && good.sell / nSell < 0.45,
+        (100 * good.sell / nSell).toFixed(1) + '% of ' + nSell);
+  check('red fires on a real minority too, at both ends',
+        bad.buy / nBuy > 0.10 && bad.buy / nBuy < 0.50 &&
+        bad.sell / nSell > 0.10 && bad.sell / nSell < 0.50,
+        (100 * bad.buy / nBuy).toFixed(1) + '% / ' + (100 * bad.sell / nSell).toFixed(1) + '%');
+  check('most of the screen is left uncoloured, which is what makes a colour mean something',
+        (rowsGood + rowsBad) / rows < 0.85 && rowsGood / rows > 0.10,
+        rowsGood + ' good, ' + rowsBad + ' bad, of ' + rows);
+
+  /* GREEN MEANS ACT, and the two columns therefore run OPPOSITE ways. A
+   * test that only checked "cheap is green" would pass with the sell
+   * column colouring by size, which is the version Astra ruled out. */
+  var base = Eco.BY_ID.grain.base;
+  var cheap = { id: 'grain', buy: base * 0.40, sell: base * 0.38 };
+  var dear  = { id: 'grain', buy: base * 1.30, sell: base * 1.90 };
+  check('a cheap ask is green and the poor bid beside it is red',
+        Eco.priceMark(cheap).buy === 1 && Eco.priceMark(cheap).sell === -1);
+  check('a dear bid is GREEN, because green is the column saying do it here',
+        Eco.priceMark(dear).sell === 1 && Eco.priceMark(dear).buy === -1);
+  check('and the commodity itself takes the best news on the row',
+        Eco.priceMark(cheap).row === 1 && Eco.priceMark(dear).row === 1);
+
+  /* Waste runs backwards on purpose and has its own colour already. */
+  var w = Eco.priceList(Gen.generateSystem('seed-3').ports.filter(function (p) {
+    return p.market && p.market.rows && p.market.rows.waste;
+  })[0] || { market: { order: [], rows: {} } }, 10 * DAY)
+    .filter(function (r) { return r.id === 'waste'; })[0];
+  if (w) check('waste is left to its own signs', Eco.priceMark(w).row === 0);
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

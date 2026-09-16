@@ -2649,6 +2649,29 @@
    * has no gold in it costs one scan ever and then nothing. */
   function accented(mesh) {
     if (!accentColor || !mesh || !mesh.c || !ACCENT_CACHE) return mesh;
+    /* SOME GEOMETRY IS NOT LIVERY.
+     *
+     * Astra, parked in a bay: "the screencaps you show me have yellow
+     * caution stripes on the floor: all I'm seeing is purple stuff."
+     * Measured against a violet power, every colour on the stand swaps —
+     * the deck plate, the kerbs, the clamps, and the hazard gold at
+     * #c9b44a straight to #824ac9. The stand came out the same hue as the
+     * room it stands in, which is precisely the thing it exists not to be.
+     *
+     * The accent rule is right about the STATION: trim and plating in the
+     * owner's colours is how you tell whose dock you are closing on from a
+     * kilometre out. It is wrong about DECK FURNITURE, and the distinction
+     * is the one this file already draws elsewhere — the stand is the only
+     * geometry in a bay whose size is measured in metres off the hull
+     * rather than in station radii. It is a ruler, not a flag. Hazard
+     * markings are yellow in every navy for the same reason, and a bay
+     * whose one high-contrast edge has been repainted to match the wall
+     * behind it is the grey box room again, in colour.
+     *
+     * So the opt-out is per MESH rather than per colour, because no colour
+     * rule can separate the stand's gold from the hull's: they are the
+     * same gold on purpose. What differs is what the object IS. */
+    if (mesh.noAccent) return mesh;
     var byColor = ACCENT_CACHE.get(mesh);
     if (!byColor) { byColor = {}; ACCENT_CACHE.set(mesh, byColor); }
     var hit = byColor[accentColor];
@@ -2668,6 +2691,8 @@
      * than the original. */
     if (mesh.padHalfA !== undefined) out.padHalfA = mesh.padHalfA;
     if (mesh.padHalfB !== undefined) out.padHalfB = mesh.padHalfB;
+    if (mesh.padLift !== undefined) out.padLift = mesh.padLift;
+    if (mesh.deckZ !== undefined) out.deckZ = mesh.deckZ;
     byColor[accentColor] = out;
     return out;
   }
@@ -3833,7 +3858,27 @@
      * SHIP LENGTHS, which is the whole point of the exercise. */
     var M2U = 1 / radiusKm;
     var L = SHIP_LEN * M2U;                       // one hull length
-    var o = [bx.mid[0], bx.mid[1], deck];
+
+    /* THE STAND SITS ON THE FLOOR, NOT IN IT.
+     *
+     * `deck` is where a ray cast straight down the alcove first hits
+     * structure, which is the top of the STRUCTURE — and the bay's visible
+     * floor is the plating laid over it. Drawing the stand at the cast
+     * depth therefore buried it: from the seat the pad read as a rectangle
+     * sunk in the deck with a ship floating over the hole, which is the
+     * clipping Astra photographed at Waypoint Dock.
+     *
+     * The lift is measured off the HULL rather than off the station, like
+     * every other number in this function, and for the same reason: the
+     * stand is the ruler the eye reads the room with, so it has to be
+     * sized in the one object whose size the player already knows. Two
+     * thirds of a hull height is where the plating lands relative to the
+     * structure under it. Written as the span times the fraction rather
+     * than as a number, because a constant scaled by another constant is a
+     * bug wearing a disguise. */
+    var STAND_LIFT = 0.66;                        // of one hull height
+    var lift = STAND_LIFT * hullSpan('courier').h * M2U;
+    var o = [bx.mid[0], bx.mid[1], deck + lift];
     var f = bx.normal ? [bx.normal[0], bx.normal[1], bx.normal[2]] : [1, 0, 0];
     var fl = Math.sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]) || 1;
     f = [f[0] / fl, f[1] / fl, f[2] / fl];
@@ -3985,6 +4030,14 @@
      * anything asking that question (berths.test.js does) needs this. */
     m.padHalfA = padA;
     m.padHalfB = padB;
+    /* How far the stand was lifted off the cast deck, and what it was lifted
+     * from — recorded so the suite can check the stand is standing on the
+     * floor rather than re-deriving the cast and agreeing with itself. */
+    m.padLift = lift;
+    m.deckZ = deck;
+    /* Not livery — see accented(). The stand keeps its floodlit grey and
+     * its yellow hazard bars at a dock of any colour. */
+    m.noAccent = true;
 
     DRESS[key] = m;
     DRESS_KEYS.push(key);
