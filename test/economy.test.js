@@ -15,6 +15,7 @@ var RNG = require('../src/rng.js');
 var Eco = require('../src/economy.js');
 var Gen = require('../src/generate.js');
 var Sim = require('../src/sim.js');
+var Combat = require('../src/combat.js');
 
 var pass = 0, fail = 0;
 function check(name, cond, detail) {
@@ -1197,8 +1198,23 @@ console.log('--- the chain pays, at every step ---');
   check('no port hands a civilian a warehouse of military fuel',
         max(shelves) <= Eco.BY_ID.milfuel.shelfMax + 1e-9,
         max(shelves).toFixed(1) + ' t against a cap of ' + Eco.BY_ID.milfuel.shelfMax);
+  /* THE BAR MOVED WITH THE CHAIN, and it is worth saying why rather than
+   * quietly widening it. The slug's base went from 1.30x its feed to
+   * 2.20x, because 1.30 was the margin a factory would have had if it
+   * could buy at base — it cannot, and every factory in the galaxy was
+   * losing 2,748 credits on every slug it made. Correcting that raises
+   * what a civilian buyer pays as well as what a factory charges, so the
+   * player's leg scaled with it: the median full run went from 42,479 to
+   * 71,888.
+   *
+   * The guard is still the guard. It is written against the hull
+   * catalogue rather than a round number, so a best-case run buys the
+   * Kestrel's worth of trading and not the ship — and if hull prices ever
+   * move, this moves with them instead of going quietly stale. */
+  var topHull = Combat.HULLS.kestrel.price;
   check('and the best single run is a payday, not a hull',
-        max(runs) > 20000 && max(runs) < 120000, max(runs).toFixed(0) + ' cr');
+        max(runs) > 20000 && max(runs) < topHull * 1.05,
+        max(runs).toFixed(0) + ' cr against a ' + topHull + ' cr hull');
 
   /* The shelf rule is general, not a milfuel special case buried in a
    * branch: anything without shelfDays keeps the old behaviour, which is
@@ -1641,6 +1657,74 @@ console.log('--- the price worth flying for ---');
   })[0] || { market: { order: [], rows: {} } }, 10 * DAY)
     .filter(function (r) { return r.id === 'waste'; })[0];
   if (w) check('waste is left to its own signs', Eco.priceMark(w).row === 0);
+})();
+
+console.log('--- a factory that does not lose money ---');
+(function () {
+  /* Astra: "make the factories more profitable, but also easier on the
+   * player?" Those read as opposite asks and are not.
+   *
+   * The factory's margin was written at BASE prices and then spent at
+   * MARKET ones. A factory is a desperate importer of the one thing it
+   * cannot run without and an exporter of the thing it makes, so it pays
+   * 1.79x base for feed and sells at 0.95x — five tonnes in at 8,770 and
+   * one slug out at 6,052. Every factory in the galaxy lost 2,748 credits
+   * on every slug it made, and a hundred per cent of them did, which is
+   * not a tuning problem but a number that was never true.
+   *
+   * Correcting it raises what a civilian buyer pays as well as what the
+   * factory charges, which is why one change answers both halves of the
+   * ask: the median slug leg went from 4,919 to 7,123 cr/t. */
+  var margins = [], feedMul = [], slugMul = [], n = 0;
+  seeds(200).forEach(function (sd) {
+    var sys = Gen.generateSystem(sd);
+    sys.ports.forEach(function (p) {
+      if (!p.market || p.market.role !== 'milfuel') return;
+      var list = Eco.priceList(p, 10 * DAY);
+      var feed = null, slug = null;
+      list.forEach(function (r) {
+        if (r.id === 'fissile') feed = r;
+        else if (r.id === 'milfuel') slug = r;
+      });
+      if (!feed || !slug || feed.sell === null || slug.buy === null) return;
+      n++;
+      /* What the factory itself books: it pays the player `sell` for every
+       * tonne of feed and takes `buy` for the slug they became. The ratio
+       * is the chain's own, so this cannot drift from the recipe. */
+      var cost = feed.sell * Eco.FISSILE_PER_MILFUEL;
+      margins.push(slug.buy - cost);
+      feedMul.push(feed.sell / Eco.BY_ID.fissile.base);
+      slugMul.push(slug.buy / Eco.BY_ID.milfuel.base);
+    });
+  });
+  function med(a) {
+    a = a.slice().sort(function (x, y) { return x - y; });
+    return a.length ? a[Math.floor(a.length / 2)] : 0;
+  }
+  var under = margins.filter(function (m) { return m < 0; }).length;
+  console.log('  ' + n + ' factories: feed at ' + med(feedMul).toFixed(2) +
+              'x base, slug at ' + med(slugMul).toFixed(2) + 'x, median margin ' +
+              med(margins).toFixed(0) + ' cr a slug');
+  check('there are factories to measure', n > 20, String(n));
+  check('not one factory in two hundred systems loses money on a slug',
+        under === 0, under + ' of ' + n + ' under water');
+  check('and the median one clears a real margin rather than a rounding error',
+        med(margins) > Eco.BY_ID.milfuel.base * 0.08,
+        med(margins).toFixed(0) + ' cr on a ' + Eco.BY_ID.milfuel.base + ' cr slug');
+
+  /* THE RECIPE STILL GOVERNS THE PRICE. The whole point of writing the
+   * slug's base as arithmetic was that the ratio and the price can never
+   * drift apart, and raising the margin must not have quietly broken that. */
+  check('the slug is still priced as what it takes to make',
+        Eco.BY_ID.milfuel.base ===
+          Math.round(Eco.BY_ID.fissile.base * Eco.FISSILE_PER_MILFUEL * Eco.ENRICH_MARGIN),
+        String(Eco.BY_ID.milfuel.base));
+  /* And the ladder still climbs, which is the thing Astra called for when
+   * she rejected the first version of this chain. */
+  check('and each link is still worth more than the one before it',
+        Eco.BY_ID.milfuel.base > Eco.BY_ID.fissile.base * Eco.FISSILE_PER_MILFUEL,
+        Eco.BY_ID.milfuel.base + ' against ' +
+        (Eco.BY_ID.fissile.base * Eco.FISSILE_PER_MILFUEL));
 })();
 
 console.log('--- what the local runs are carrying ---');

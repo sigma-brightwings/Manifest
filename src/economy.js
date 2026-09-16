@@ -96,7 +96,37 @@
   var WASTE_PER_FISSILE = 2;       // t of waste per tonne of reclaimed fissile
   var FISSILE_PER_MILFUEL = 5;     // t of fissiles per slug, at a factory
   var FISSILE_BASE = 980;          // cr/t, what you dig up
-  var ENRICH_MARGIN = 1.30;        // and what the enriching is worth on top
+  /* WHAT THE ENRICHING IS WORTH ON TOP, and it had to go up a long way.
+   *
+   * Astra: "make the factories more profitable, but also easier on the
+   * player?" Those read as opposite asks and are not, because the factory's
+   * problem was never its margin — it was that the margin was written at
+   * BASE prices and then spent at MARKET ones. Measured across two hundred
+   * systems: a factory pays 1.79x base for its feed (it is a desperate
+   * importer of the one thing it cannot run without) and sells its product
+   * at 0.95x (it is an exporter of it). Five tonnes of feed cost 8,770 and
+   * the slug they became fetched 6,052. EVERY factory in the galaxy lost
+   * 2,748 credits on every slug it made — a hundred per cent of them, not
+   * most.
+   *
+   * 1.30 was never a margin, then. It was the margin a factory would have
+   * had if it could buy at base, which nobody can.
+   *
+   * 2.20 is the number that survives contact with the market, and it is
+   * measured rather than chosen: it is the first value at which NO factory
+   * in two hundred systems loses money — 2.10 still left one in eight
+   * under water, which is a rule with exceptions rather than a rule. At
+   * 2.20 the median factory clears 1,339 credits a slug, about fifteen per
+   * cent on its feed, and the worst-placed one in the galaxy clears 377.
+   *
+   * AND IT IS THE SAME LEVER FOR THE PLAYER, which is why both halves of
+   * the ask are one change. Raising the slug's base raises what the factory
+   * charges AND what a civilian buyer pays, so the run scales with it —
+   * the player's leg pays more in absolute terms while the arithmetic
+   * linking ratio to price stays exactly where it was. Nothing about the
+   * chain's shape moved; the one number in it that was never true got
+   * corrected. */
+  var ENRICH_MARGIN = 2.20;
 
   var COMMODITIES = [
     { id: 'water',    name: 'Water',            tier: 0, base: 18,   cat: 'raw' },
