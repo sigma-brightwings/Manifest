@@ -1,7 +1,7 @@
 {
   "name": "manifest",
   "productName": "Manifest",
-  "version": "0.4.0-beta",
+  "version": "0.4.1-beta",
   "description": "Gravity, clockwork, cockpit and cargo.",
   "private": true,
   "license": "UNLICENSED",
