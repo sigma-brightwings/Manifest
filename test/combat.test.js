@@ -2027,6 +2027,50 @@ section('--- docking clearance ---');
 })();
 
 /* ---- the control cabinet, and breaking into it ------------------------- */
+console.log('\n--- freight you are carrying for somebody else ---');
+(function () {
+  /* accept() hands you the contract's cargo for nothing, which is the right
+   * feel for a haul and left a hole you could drive a freighter through:
+   * sell it at the next port and keep the whole value for a fee of a few
+   * hundred credits. Twelve tonnes of AI cores is 50,400 cr of freight
+   * against an 829 cr fee, and repricing the fuel chain would have made
+   * that the best trade in the game. */
+  var G = makeG();
+  G.ship.cargo = {};
+  G.missions = [];
+  var offer = { id: 'h1', type: 'haul', cid: 'aicores', tonnes: 10,
+                fromName: 'Somewhere', toPortId: 'b99', toName: 'Elsewhere',
+                faction: 'testfac', pay: 800, deadline: 1e9, text: 'ten of cores' };
+  var res = Missions.accept(G, offer, HOOKS);
+  check('the contract hands over the freight', res.ok && G.ship.cargo.aicores === 10,
+        JSON.stringify(G.ship.cargo));
+  check('and none of it is yours to sell',
+        Missions.sellableTonnes(G, 'aicores', 10) === 0,
+        String(Missions.sellableTonnes(G, 'aicores', 10)));
+  check('the refusal can name the contract holding it',
+        !!Missions.bondHolder(G, 'aicores') &&
+        Missions.bondHolder(G, 'aicores').toName === 'Elsewhere');
+
+  /* YOUR OWN CARGO OF THE SAME THING IS STILL YOURS. The hold is a bag of
+   * tonnages rather than a list of crates, so the only honest question is
+   * how much of this commodity is spoken for — and the answer has to leave
+   * the rest alone. */
+  G.ship.cargo.aicores = 14;
+  check('cargo of your own on top of it still sells',
+        Missions.sellableTonnes(G, 'aicores', 14) === 4,
+        String(Missions.sellableTonnes(G, 'aicores', 14)));
+
+  /* AND DELIVERING RELEASES IT, which is the other half: a rule that
+   * outlived the contract would leave the hold permanently poisoned. */
+  G.missions = [];
+  check('a finished contract frees the hold again',
+        Missions.sellableTonnes(G, 'aicores', 14) === 14);
+
+  /* Anything with no contract against it is untouched. */
+  check('and ordinary cargo was never bonded',
+        Missions.sellableTonnes(G, 'grain', 6) === 6);
+})();
+
 console.log('\n--- two racks, and which one is on the trigger ---');
 (function () {
   /* Astra: N racks off the MISSILES table, both firable, selectable in the

@@ -404,8 +404,24 @@
         // HAUL: real freight to a real port, priced by tonnage and haste.
         var dst = rng.pick(others);
         var goods = Object.keys(port.market.rows).filter(function (cid) {
+          /* AND NOT MILITARY FUEL. A haul contract HANDS you the freight —
+           * accept() adds it to the hold for nothing — so a milfuel haul
+           * was a licensed plant giving a stranger tonnes of naval materiel
+           * on the word of a mission board, and then a police scan booking
+           * that stranger for carrying it. Two wrongs in one offer, and
+           * both of them are what the licence exists to prevent.
+           *
+           * It is also the offer the chain's new prices would have turned
+           * into a cheat code: eighteen tonnes of slug is over a hundred
+           * thousand credits of cargo against a fee of about a thousand.
+           *
+           * A LICENSED haul — offered only to somebody the navy already
+           * trusts with it — is a good contract and a later one. The
+           * blocker is that the board is generated per port and window
+           * rather than per career, so "what you are cleared for" is not
+           * in scope here yet. */
           return cid !== 'waste' && cid !== Eco.FUEL_ID && !Eco.BY_ID[cid].contraband &&
-                 port.market.rows[cid].exporter;
+                 !Eco.BY_ID[cid].milfuel && port.market.rows[cid].exporter;
         });
         if (!goods.length) goods = ['grain'];
         var cid = rng.pick(goods);
@@ -474,6 +490,54 @@
     var list = G.missions || [];
     for (var i = 0; i < list.length; i++) if (list[i].id === offerId) return true;
     return (G.doneMissions || {})[offerId];
+  }
+
+  /* ---- freight you are carrying FOR somebody ----------------------------
+   * accept() puts the contract's cargo in your hold for nothing, which is
+   * the right feel — a haul is freight handed over at the dock, not a thing
+   * you buy — and it left a hole you could drive a freighter through: sell
+   * it at the next port and walk away with the whole value of the cargo for
+   * a fee of a few hundred credits. Measured on the board as it stands:
+   * twelve tonnes of AI cores is 50,400 credits of freight against an 829
+   * credit fee, and seven offers in seven hundred were in that bracket.
+   *
+   * It was a hole before the fuel chain was repriced and it would have been
+   * the best trade in the game after, which is what makes it this change's
+   * business rather than somebody else's.
+   *
+   * So contract freight is BONDED: it counts against your hold and it is
+   * not yours to sell. Deliberately not the same as "cannot be got rid of"
+   * — you can still jettison it, and jettisoning somebody's freight is a
+   * breach you chose, with the contract failing the way any undelivered
+   * contract fails. What is closed is selling it and keeping the money,
+   * which is not a choice, it is an accounting mistake.
+   *
+   * Counted rather than flagged per tonne: the hold is a bag of tonnages,
+   * not a list of crates, so "how much of this commodity is spoken for" is
+   * the only question that can honestly be asked of it.
+   */
+  function bondedTonnes(G, cid) {
+    var list = (G && G.missions) || [];
+    var n = 0;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].cid === cid) n += list[i].tonnes || 0;
+    }
+    return n;
+  }
+
+  /* How much of what you are holding you may actually sell. */
+  function sellableTonnes(G, cid, held) {
+    return Math.max(0, (held || 0) - bondedTonnes(G, cid));
+  }
+
+  /* And which contract is holding it, for a refusal that teaches the rule
+   * rather than one that reads as a broken button. */
+  function bondHolder(G, cid) {
+    var list = (G && G.missions) || [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].cid === cid) return list[i];
+    }
+    return null;
   }
 
   function accept(G, offer, hooks) {
@@ -586,6 +650,8 @@
     completeAtDock: completeAtDock, update: update,
     standing: standing, bumpStanding: bumpStanding, standingLabel: standingLabel,
     alreadyHave: alreadyHave,
+    bondedTonnes: bondedTonnes, sellableTonnes: sellableTonnes,
+    bondHolder: bondHolder,
     TEXT_MAX: TEXT_MAX, describe: describe, finish: finish
   };
 

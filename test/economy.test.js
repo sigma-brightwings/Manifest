@@ -963,6 +963,121 @@ console.log('--- military fuel comes from a licence, not from development ---');
         licensedStillReclaiming === 0, licensedStillReclaiming + ' doing both');
 })();
 
+console.log('--- the chain pays, at every step ---');
+(function () {
+  /* Astra: "fix the ratio so that it is profitable to buy up the
+   * radioactive waste and process it into fissiles and then into milfuel
+   * slugs."
+   *
+   * The chain shipped with a hole in its last step: five tonnes of fissile
+   * feed were 4,900 cr and the slug they made was 1,250, so every link
+   * gained value except the one at the end, which threw three quarters of
+   * it away. This is the section that stops that coming back.
+   */
+  var W = Eco.BY_ID.waste, F = Eco.BY_ID.fissile, M = Eco.BY_ID.milfuel;
+
+  /* THE PRICE IS THE RATIO. Asserted as arithmetic rather than against a
+   * number, because a test that quoted 6,370 would fail the day somebody
+   * legitimately retunes the margin — and would not have caught the actual
+   * bug, which was the two drifting apart. */
+  check('a slug is priced off the feed it takes',
+        M.base === Math.round(F.base * Eco.FISSILE_PER_MILFUEL * Eco.ENRICH_MARGIN),
+        M.base + ' vs ' + F.base + ' x ' + Eco.FISSILE_PER_MILFUEL +
+        ' x ' + Eco.ENRICH_MARGIN);
+
+  /* THE LADDER CLIMBS. Ten tonnes of drums are worth less than nothing;
+   * the five tonnes of fissiles they reclaim into are worth 4,900; the slug
+   * those make is worth more than the fissiles were. Each rung strictly
+   * above the last, which is what "a supply chain" means. */
+  var rung1 = Eco.WASTE_PER_MILFUEL * W.base;                  // negative, by design
+  var rung2 = (Eco.WASTE_PER_MILFUEL / Eco.WASTE_PER_FISSILE) * F.base;
+  var rung3 = M.base;
+  console.log('  ' + Eco.WASTE_PER_MILFUEL + ' t waste ' + rung1 + ' cr  ->  ' +
+              (Eco.WASTE_PER_MILFUEL / Eco.WASTE_PER_FISSILE) + ' t fissiles ' +
+              rung2 + ' cr  ->  1 t milfuel ' + rung3 + ' cr');
+  check('the drums are worth less than nothing', rung1 < 0, String(rung1));
+  check('reclaiming them into fissiles adds value', rung2 > rung1, rung1 + ' -> ' + rung2);
+  check('and enriching those into a slug adds more', rung3 > rung2, rung2 + ' -> ' + rung3);
+  check('with a real margin on the last step, not a rounding error',
+        rung3 > rung2 * 1.2, (rung3 / rung2).toFixed(2) + 'x');
+
+  /* AND THE PLAYER'S WALK OF IT PAYS, which is the claim that actually
+   * reaches the game: the base prices above are what a tonne is WORTH, and
+   * these are what somebody flying the route is handed. Measured across
+   * forty systems rather than asserted. */
+  var wasteNet = [], fisLeg = [], milLeg = [], shelves = [], runs = [];
+  function num(x) { return typeof x === 'number' && isFinite(x); }
+  seeds(40).forEach(function (sd) {
+    var sys = Gen.generateSystem(sd);
+    var loadW = null, dumpW = null, buyF = null, sellF = null, buyM = null, sellM = null;
+    var buyMStock = 0;
+    sys.ports.forEach(function (p) {
+      var row = p.market.rows;
+      var w = Eco.price(p, 'waste', 0), f = Eco.price(p, 'fissile', 0),
+          m = Eco.price(p, 'milfuel', 0);
+      if (w && num(w.buy) && !w.sink && (loadW === null || w.buy < loadW)) loadW = w.buy;
+      if (w && num(w.sell) && w.sink && (dumpW === null || w.sell > dumpW)) dumpW = w.sell;
+      if (f && num(f.buy) && row.fissile && row.fissile.exporter &&
+          (buyF === null || f.buy < buyF)) buyF = f.buy;
+      if (f && num(f.sell) && row.fissile && row.fissile.importer &&
+          (sellF === null || f.sell > sellF)) sellF = f.sell;
+      if (m && num(m.buy) && row.milfuel && row.milfuel.prod > 0 &&
+          (buyM === null || m.buy < buyM)) {
+        buyM = m.buy; buyMStock = Eco.stock(p, 'milfuel', 0);
+      }
+      if (m && num(m.sell) && row.milfuel && row.milfuel.cons > row.milfuel.prod &&
+          (sellM === null || m.sell > sellM)) sellM = m.sell;
+    });
+    if (loadW !== null && dumpW !== null) wasteNet.push(-loadW + dumpW);
+    if (buyF !== null && sellF !== null) fisLeg.push(sellF - buyF);
+    if (buyM !== null && sellM !== null) {
+      milLeg.push(sellM - buyM);
+      shelves.push(buyMStock);
+      runs.push((sellM - buyM) * Math.min(64, Math.max(0, buyMStock)));
+    }
+  });
+  function med(a) {
+    a = a.filter(num).sort(function (x, y) { return x - y; });
+    return a.length ? a[Math.floor(a.length / 2)] : 0;
+  }
+  function max(a) {
+    a = a.filter(num).sort(function (x, y) { return x - y; });
+    return a.length ? a[a.length - 1] : 0;
+  }
+  console.log('  per tonne, median: waste run ' + med(wasteNet).toFixed(0) +
+              ' cr, fissile leg ' + med(fisLeg).toFixed(0) +
+              ' cr, slug leg ' + med(milLeg).toFixed(0) + ' cr');
+  check('taking the drums away pays', med(wasteNet) > 0, med(wasteNet).toFixed(0) + ' cr/t');
+  check('carrying the fissiles to a factory pays more',
+        med(fisLeg) > med(wasteNet), med(fisLeg).toFixed(0) + ' cr/t');
+  check('and carrying the slugs pays most of all',
+        med(milLeg) > med(fisLeg), med(milLeg).toFixed(0) + ' cr/t');
+
+  /* WHAT KEEPS AN EXPENSIVE SLUG FROM BEING A CHEAT CODE is the shelf, not
+   * the price. With the generic shelf floor in place the biggest licensed
+   * plant in a sweep sat on 161 t — one 340,000 credit run, against a
+   * Kestrel at 120,000. The ceiling is the fix, and this is the guard on
+   * it: buy out every slug a port has, sell them at the best price in the
+   * system, and the trip must not be worth a hull. */
+  console.log('  the shelf holds ' + med(shelves).toFixed(0) + ' t (max ' +
+              max(shelves).toFixed(0) + '), and a full run clears ' +
+              med(runs).toFixed(0) + ' cr (max ' + max(runs).toFixed(0) + ')');
+  check('no port hands a civilian a warehouse of military fuel',
+        max(shelves) <= Eco.BY_ID.milfuel.shelfMax + 1e-9,
+        max(shelves).toFixed(1) + ' t against a cap of ' + Eco.BY_ID.milfuel.shelfMax);
+  check('and the best single run is a payday, not a hull',
+        max(runs) > 20000 && max(runs) < 120000, max(runs).toFixed(0) + ' cr');
+
+  /* The shelf rule is general, not a milfuel special case buried in a
+   * branch: anything without shelfDays keeps the old behaviour, which is
+   * what stops this from having quietly re-tuned every other commodity. */
+  check('an ordinary good keeps the shelf it always had',
+        Eco.shelfCapFor('grain', 10) === null);
+  check('and a scarce one is bounded by its own rule',
+        Eco.shelfCapFor('milfuel', 10) === Math.min(Eco.BY_ID.milfuel.shelfMax, 80),
+        String(Eco.shelfCapFor('milfuel', 10)));
+})();
+
 console.log('--- higher-tech worlds make higher-tech goods and more mess ---');
 (function () {
   var lowTierOnly = 0, highTechAtLowDev = 0, wasteCorrelation = [];

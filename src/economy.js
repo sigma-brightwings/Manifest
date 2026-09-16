@@ -50,6 +50,54 @@
    * a future low-density cargo (hydrogen, say, or passengers) has somewhere
    * to say so.
    */
+  /* ---- THE FUEL CHAIN, AND THE PRICES IT DICTATES -----------------------
+   * Astra's rule, in her words: "10 units of [waste] can be reprocessed
+   * into 1 milfuel or 5 fissiles... 5 fissiles are needed to make 1 milfuel
+   * at every milfuel factory."
+   *
+   * Two routes to a slug, meeting in the middle:
+   *
+   *     10 t waste    --(unlicensed plant)-->  5 t fissiles
+   *     10 t waste    --(LICENSED plant)---->  1 t milfuel
+   *      5 t fissiles --(milfuel factory)---->  1 t milfuel
+   *
+   * so the two routes agree on the arithmetic and the licence is the only
+   * thing deciding which line a plant runs.
+   *
+   * THE PRICES ARE DERIVED FROM THE RATIO RATHER THAN TYPED BESIDE IT, and
+   * that is the fix for the hole this chain shipped with. A slug used to be
+   * 1,250 cr against 4,900 cr of feed, so every step of the chain except
+   * the last one gained value and the last one threw three quarters of it
+   * away. The defence at the time was that nothing simulates a port's
+   * profit, so the loss reached nobody — which is true and beside the
+   * point. Astra: "fix the ratio so that it is profitable to buy up the
+   * radioactive waste and process it into fissiles and then into milfuel
+   * slugs." A supply chain that loses money at its last step is not a
+   * supply chain, whether or not anybody is charged for it.
+   *
+   * So a slug is priced as what it takes to make: five tonnes of fissile
+   * feed plus the work of enriching them. The margin is the work.
+   *
+   * Writing it as arithmetic rather than as a number is the part that keeps
+   * it true. Change FISSILE_PER_MILFUEL to four and the price follows;
+   * change what a fissile is worth and it follows. There is no version of
+   * this file where the ratio and the price disagree, which is exactly the
+   * state it was in an hour ago.
+   *
+   * THE ENRICHED TONNE IS WORTH MANY TIMES THE FEED TONNE, and that is not
+   * a game-balance choice — it is what enrichment IS. Four tonnes of the
+   * five come out as something nobody wants; the fifth leaves as the thing
+   * a warship's drive will burn. What balances it is not the price, it is
+   * the SHELF: see milfuelShelf below, and the licence gate in combat.js
+   * that makes carrying one an offence for anybody the navy has not
+   * cleared. Scarce and restricted, not cheap.
+   */
+  var WASTE_PER_MILFUEL = 10;      // t of waste per slug, at a licensed plant
+  var WASTE_PER_FISSILE = 2;       // t of waste per tonne of reclaimed fissile
+  var FISSILE_PER_MILFUEL = 5;     // t of fissiles per slug, at a factory
+  var FISSILE_BASE = 980;          // cr/t, what you dig up
+  var ENRICH_MARGIN = 1.30;        // and what the enriching is worth on top
+
   var COMMODITIES = [
     { id: 'water',    name: 'Water',            tier: 0, base: 18,   cat: 'raw' },
     { id: 'grain',    name: 'Grain',            tier: 0, base: 64,   cat: 'agri' },
@@ -60,7 +108,7 @@
     { id: 'ores',     name: 'Metal ores',       tier: 1, base: 82,   cat: 'raw' },
     { id: 'rare',     name: 'Rare metals',      tier: 1, base: 640,  cat: 'raw' },
     { id: 'hydrogen', name: 'Hydrogen fuel',    tier: 1, base: 55,   cat: 'raw', fuel: true },
-    { id: 'fissile',  name: 'Fissiles',         tier: 1, base: 980,  cat: 'raw' },
+    { id: 'fissile',  name: 'Fissiles',         tier: 1, base: FISSILE_BASE, cat: 'raw' },
 
     { id: 'chemicals',name: 'Chemicals',        tier: 2, base: 210,  cat: 'industrial' },
     { id: 'alloys',   name: 'Structural alloys',tier: 2, base: 265,  cat: 'industrial' },
@@ -98,20 +146,29 @@
      * Reprocessing plants have always been where waste GOES. A plant sitting
      * close enough to a naval yard to be licensed for it breeds the stuff
      * back up into slugs a military slipspace drive will burn — the drive
-     * everyone calls a Chernobyl. So the same cargo that a developed world
-     * pays 310 cr/t to be rid of comes out the far end of the same building
-     * at 1,250, and the difference is a licence and a navy next door.
+     * everyone calls a Chernobyl. So the same cargo a developed world pays
+     * 310 cr/t to be rid of comes out the far end of the same building as
+     * the most valuable thing in the hold, and the difference is a licence
+     * and a navy next door.
+     *
+     * PRICED OFF THE CHAIN, not typed in: five tonnes of fissile feed plus
+     * the enriching. See THE FUEL CHAIN above for why it is arithmetic
+     * rather than a number.
      *
      * Tier 3 because it is a manufactured product of a real industry, not a
-     * raw fissile: `fissile` at 980 is what you dig up, this is what a
-     * licensed plant makes out of what everyone else threw away. */
+     * raw fissile: `fissile` is what you dig up, this is what a licensed
+     * plant makes out of what everyone else threw away. */
     /* NOT flagged `contraband`, and that is the point: this is a legal
      * commodity, bred at licensed plants and sold openly. It becomes an
      * offence only in the hold of somebody the navy has not licensed to
      * carry it — see contrabandSeverity in combat.js, which reads the same
-     * standing gate the Chernobyl drive itself is sold behind. */
-    { id: 'milfuel',  name: 'Military drive fuel', tier: 3, base: 1250, cat: 'special',
-      milfuel: true, severity: 3 }
+     * standing gate the Chernobyl drive itself is sold behind. And that
+     * gate is what makes the price above safe to state honestly: the best
+     * paying cargo in the game is one you are arrested for carrying until
+     * the navy likes you. */
+    { id: 'milfuel',  name: 'Military drive fuel', tier: 3,
+      base: Math.round(FISSILE_BASE * FISSILE_PER_MILFUEL * ENRICH_MARGIN),
+      cat: 'special', milfuel: true, severity: 3, shelfDays: 8, shelfMax: 24 }
   ];
 
   var BY_ID = {};
@@ -254,36 +311,44 @@
     { id: 'milfuel',      name: 'Milfuel factory',   bias: [], milfuelPlant: true }
   ];
 
-  /* ---- THE FUEL CHAIN, IN ONE PLACE ------------------------------------
-   * Astra's rule, stated in her words: "10 units of [waste] can be
-   * reprocessed into 1 milfuel or 5 fissiles... 5 fissiles are needed to
-   * make 1 milfuel at every milfuel factory."
-   *
-   * So there are two ways to a slug and they meet in the middle:
-   *
-   *     10 t waste  --(unlicensed plant)-->  5 t fissiles
-   *     10 t waste  --(LICENSED plant)---->  1 t milfuel
-   *      5 t fissiles --(milfuel factory)->  1 t milfuel
-   *
-   * Which makes the two routes agree on the arithmetic, and makes the
-   * licence the only thing that decides which one a given plant runs.
-   *
-   * THE PRICES DO NOT AGREE WITH THE ARITHMETIC and that is a deliberate
-   * open question rather than an oversight: five fissiles are 4,900 cr and
-   * a slug is 1,250, so a factory "destroys" value on paper. Nothing in
-   * this game simulates a port's profit — `local` is driven by the ratio of
-   * production to consumption and nothing else — so what the ratio actually
-   * buys the player is the two things they can act on: a factory is a
-   * hungry fissile IMPORTER that pays up, and the only civilian-reachable
-   * milfuel EXPORTER that is not a waste plant. If the paper loss ever
-   * wants closing, the lever is milfuel's base price, not this ratio. */
-  var WASTE_PER_MILFUEL = 10;      // t of waste per slug, at a licensed plant
-  var WASTE_PER_FISSILE = 2;       // t of waste per tonne of reclaimed fissile
-  var FISSILE_PER_MILFUEL = 5;     // t of fissiles per slug, at a factory
   var ROLE_BY_ID = {};
   for (var ri = 0; ri < PORT_ROLES.length; ri++) ROLE_BY_ID[PORT_ROLES[ri].id] = PORT_ROLES[ri];
 
   function clamp(x, lo, hi) { return x < lo ? lo : x > hi ? hi : x; }
+
+  /* ---- how much of a thing a port keeps on the shelf ---------------------
+   * Everything ordinary holds a week or two of throughput plus a floor,
+   * because a port with nothing on the shelf is a port you cannot trade
+   * with and the floor is what stops a tiny outpost from being one.
+   *
+   * MILFUEL IS NOT ORDINARY. It is made under licence at a rate measured in
+   * tonnes per DAY and most of it is spoken for before it is pressed, so a
+   * shelf of "a hundred tonnes plus" was the generic floor quietly handing
+   * out a warehouse of the most valuable cargo in the game. Measured with
+   * the floor in place: 86 t on the shelf and 327,000 credits of profit in
+   * one run, against a Kestrel at 120,000 — one trip buying the second-best
+   * hull in the game.
+   *
+   * `shelfDays` says how many days of its own output a port keeps where a
+   * buyer can reach it, with no floor under it. That is the lever that
+   * makes an expensive slug safe to price honestly: the price says what the
+   * thing is worth and the shelf says how much of it exists, which is the
+   * right way round. A fat wallet cannot buy what is not there.
+   */
+  function shelfCapFor(cid, throughput) {
+    var com = BY_ID[cid];
+    if (com && com.shelfDays) {
+      var days = Math.max(2, Math.round(throughput * com.shelfDays));
+      /* AND A CEILING ON TOP OF THE RATE, because the rate alone still let
+       * the biggest licensed plant in a forty-system sweep sit on 161 t —
+       * one 340,000 credit run, which is three Kestrels. What a plant will
+       * hand a civilian is not a function of how much it makes; past a
+       * point the answer is simply "the rest is spoken for". */
+      return com.shelfMax ? Math.min(days, com.shelfMax) : days;
+    }
+    return null;                     // ordinary: the caller's own rule applies
+  }
+
 
   /* ---- the settlement chain --------------------------------------------
    * Drake's equation, with the biology thrown away.
@@ -543,7 +608,10 @@
     for (var k = 0; k < ids.length; k++) {
       var row = rows[ids[k]];
       var throughput = Math.max(row.prod, row.cons, flow * 0.05);
-      row.cap = Math.round(throughput * rng.range(5, 14) + 120);
+      /* The draw happens either way, so a commodity with its own shelf rule
+       * does not shift every later number in this port's stream. */
+      var span = rng.range(5, 14);
+      row.cap = shelfCapFor(ids[k], throughput) || Math.round(throughput * span + 120);
 
       var net = row.prod - row.cons;
       /* Structural price factor. A place that makes more than it uses sells
@@ -717,9 +785,12 @@
        * a supplier under contract, and what reaches the market is the
        * surplus. Without this the plant reads as a pure exporter, which
        * drives `local` to its floor, prices the fuel at half base at every
-       * plant in the galaxy, and turns a 1,250 cr/t cargo into a flat
-       * risk-free 3.5x run. The uptake share also varies per plant, so
-       * two licensed plants are worth different amounts to fly to. */
+       * plant in the galaxy, and turns the most valuable cargo in the game
+       * into a flat risk-free 3.5x run. The uptake share also varies per
+       * plant, so two licensed plants are worth different amounts to fly
+       * to — and it works with the shelf cap rather than instead of it: the
+       * uptake decides how much is made for sale, the shelf decides how
+       * much of it is standing there when you arrive. */
       var uptake = 0.45 + ((h >>> 10) % 1000) / 1000 * 0.35;   // 45-80%
       /* A SYNDICATE PLANT KEEPS LESS BACK. The navy's share is a contract;
        * the Syndicate's is a cut, and a cut is smaller than a requisition —
@@ -787,7 +858,7 @@
     row.prod += prod; row.cons += cons;
 
     var throughput = Math.max(row.prod, row.cons, 0.5);
-    row.cap = Math.round(throughput * 9 + 120);
+    row.cap = shelfCapFor(cid, throughput) || Math.round(throughput * 9 + 120);
     var net = row.prod - row.cons;
     var ratio = net / Math.max(row.prod + row.cons, 1e-6);
     row.local = clamp(1 - ratio * 0.34, 0.6, 1.5);
@@ -1215,6 +1286,15 @@
     navyPresent: navyPresent,
     syndicatePresent: syndicatePresent,
     milfuelLicensor: licensor,
+    /* The chain, exported so the tests can assert the ladder rather than
+     * restating the numbers in it — a test that quotes 6,370 fails the day
+     * somebody legitimately retunes the margin, which is the opposite of
+     * what it is for. */
+    WASTE_PER_MILFUEL: WASTE_PER_MILFUEL,
+    WASTE_PER_FISSILE: WASTE_PER_FISSILE,
+    FISSILE_PER_MILFUEL: FISSILE_PER_MILFUEL,
+    ENRICH_MARGIN: ENRICH_MARGIN,
+    shelfCapFor: shelfCapFor,
     MILFUEL_ID: 'milfuel'
   };
 

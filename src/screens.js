@@ -1309,6 +1309,21 @@
       ctx.fillStyle = it.cid === 'waste' ? '#ffb86b' : (on ? MFD_HOT : MFD_INK);
       ctx.fillText(clipText(it.name, 26), rx + 16, yy + 18);
 
+      /* FREIGHT SAYS SO IN THE MANIFEST. Contract cargo is not yours to
+       * sell, and the trade screen refuses it by name — but a refusal you
+       * only meet by pressing the button is a rule the player learns at the
+       * worst moment. This is where they are already looking. */
+      var bonded = global.Missions
+        ? global.Missions.bondedTonnes(G, it.cid) : 0;
+      if (bonded > 0) {
+        ctx.save();
+        ctx.font = '9px ui-monospace, monospace';
+        ctx.fillStyle = '#7fd6c0';
+        ctx.fillText(Math.min(bonded, it.tonnes).toFixed(0) + ' t under contract',
+                     rx + 16, yy + 27);
+        ctx.restore();
+      }
+
       ctx.fillStyle = MFD_DIM;
       ctx.textAlign = 'right';
       ctx.fillText(it.tonnes.toFixed(it.tonnes < 1 ? 2 : 0) + ' t', colTon, yy + 18);

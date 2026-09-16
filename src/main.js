@@ -3244,7 +3244,20 @@
       logTrade((cost < 0 ? 'Collected ' : 'Bought ') + tonnes + 't ' + row.name +
                '  ' + fmtCredits(-cost));
     } else {
-      var qty = Math.min(-tonnes, heldTonnes(cid));
+      /* NOT THE FREIGHT. Contract cargo rides in the same hold and is not
+       * yours to sell — see Missions.bondedTonnes for why that is a rule
+       * rather than an inconvenience. Refused by NAME, because a seller
+       * staring at eighteen tonnes in the manifest and a button that does
+       * nothing has been told nothing. */
+      var free = Missions.sellableTonnes(G, cid, heldTonnes(cid));
+      var qty = Math.min(-tonnes, free);
+      if (qty <= 0 && heldTonnes(cid) > free) {
+        var bond = Missions.bondHolder(G, cid);
+        say((bond ? bond.tonnes + 't of ' + row.name.toLowerCase() + ' is freight for ' +
+                    (bond.toName || 'a contract') + ' — not yours to sell'
+                  : 'That cargo is under contract'), 5);
+        return;
+      }
       if (qty <= 0) { say('Nothing to sell', 2); return; }
       if (row.sell === null) {
         say(port.name + ' will not take ' + row.name + (row.id === 'waste'
