@@ -39,7 +39,13 @@
     thrustKN: 1800,
     thrusterIsp: 450000,   // seconds — a torch, and it has to be
     thrusterFuel: 12, thrusterCap: 12,
-    fuel: 28, fuelCap: 28,
+    /* Matched to the Talon in combat.js, which is the same ship: a third
+     * more tank, for the reason written out there. MAX_SURFACE_G below is
+     * derived from this laden mass, so raising it lowers the heaviest world
+     * that may carry a surface port by 5.8% — a real change to where ports
+     * go, and part of the same epoch bump the galaxy's new size already
+     * forces. */
+    fuel: 37, fuelCap: 37,
     cargoCap: 64,
     credits: 3200
   };

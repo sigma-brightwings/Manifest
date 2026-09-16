@@ -3870,7 +3870,25 @@ console.log('--- auto-dock ---');
   var keydown = listeners.keydown[0];
   function press(k) { keydown({ key: k, shiftKey: false, preventDefault: function () {} }); }
 
-  var port = G.sys.ports.filter(function (p) { return !p.surface; })[0];
+  /* A PORT WITH ROOM IN IT, chosen rather than assumed.
+   *
+   * What this section is about is an approach flown clean being met with a
+   * clearance instead of a citation, and a port only hails a ship it can
+   * actually take. Taking whichever orbital port sorted first meant the
+   * section tested that on some timetables and the congestion rule on
+   * others — which is how it came to read as a renderer failure the day
+   * the fuel tanks grew: a heavier hull moved a surface port off the
+   * qualifying list, which moved the traffic, which left the first port in
+   * the array with all five of its small berths full at the minute this
+   * runs. The berth pool a shuttle competes for is the one to ask about,
+   * which is what passing G.ship does. */
+  var orbital = G.sys.ports.filter(function (p) { return !p.surface && p.docking; });
+  var port = orbital.filter(function (p) {
+    return !Sim.berthStatus(p, G.sys, G.t, G.ship).full;
+  })[0] || orbital[0];
+  check('there is an orbital port with a berth free to fly to', !!port &&
+        !Sim.berthStatus(port, G.sys, G.t, G.ship).full,
+        port && port.name);
   var ps = Sim.bodyState(port, G.sys, G.t);
 
   // Sit a few hundred km off, drifting, and hand it over.
@@ -4310,9 +4328,16 @@ console.log('--- the port calls you ---');
 (function () {
   newFlying('kawartha');
   frames(2);
-  var port = G.sys.ports.filter(function (p) { return !p.surface && p.docking; })[0];
+  /* WITH ROOM IN IT — same reason as auto-dock's, above. A full port is
+   * silent by design, so pinning the sweep at one pins nothing. */
+  var orbital = G.sys.ports.filter(function (p) { return !p.surface && p.docking; });
+  var port = orbital.filter(function (p) {
+    return !Sim.berthStatus(p, G.sys, G.t, G.ship).full;
+  })[0] || orbital[0];
   check('there is a port to approach', !!port);
   if (!port) return;
+  check('and it has a berth free, so silence would mean something',
+        !Sim.berthStatus(port, G.sys, G.t, G.ship).full, port.name);
 
   /* FAR OUT FIRST, so the range is doing work rather than the test finding
    * a ship that happened to already be next to something. */

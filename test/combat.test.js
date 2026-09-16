@@ -1895,6 +1895,47 @@ section('--- docking clearance ---');
           !asked.granted && asked.reason === 'full' && /berths occupied/i.test(asked.text),
           asked.text);
 
+    /* A BERTH THE PORT PROMISED IS NOT A BERTH YOU STOLE.
+     *
+     * The two offences used to stack, and the stacking was the bug: the
+     * port clears a ship on approach (it has room), the timetable fills
+     * the last small berth during the flight in, and the arrival books a
+     * queue jump against a pilot who did exactly as they were told —
+     * plus, because arriving into a full port with clearance ALSO left
+     * the clearance unspent in the old ordering, the uncleared citation
+     * on top of it.
+     *
+     * A brand-new career found it. newGame grants clearance for the berth
+     * it puts you in; on a seed whose home port happened to be busy at
+     * t=0 the first line a player ever read was being logged for taking
+     * someone's berth, printed over the line telling them which key
+     * launches.
+     *
+     * Both halves are pinned, because only the pair says what the rule
+     * is: cleared costs nothing, uncleared at the same full port still
+     * books the jump. */
+    var Ge = makeG();
+    var pe = portIn(Ge);
+    var FULL = { full: true, capacity: 6, occupied: 6, waitFor: 300 };
+    Combat.requestClearance(Ge, pe, LOUD);              // granted: asked before the rush
+    check('cleared before the rush', Combat.isCleared(Ge, pe));
+    var arrE = Combat.arriveAtPort(Ge, pe, LOUD, FULL);
+    check('arriving cleared into a port that filled up costs nothing',
+          arrE === null, JSON.stringify(arrE));
+    check('and no queue jump is on the record',
+          !(Ge.queueJumps && Ge.queueJumps[pe.faction]),
+          JSON.stringify(Ge.queueJumps));
+    check('and the clearance was still spent on arriving',
+          !Combat.isCleared(Ge, pe));
+
+    var Gf = makeG();
+    var pf = portIn(Gf);
+    var arrF = Combat.arriveAtPort(Gf, pf, LOUD, FULL);
+    check('but barging into a full port uncleared is still cutting the line',
+          !!(arrF && arrF.queueJump), JSON.stringify(arrF));
+    check('and is still an unannounced arrival on top of it',
+          !!(arrF && arrF.fugitive));
+
     /* AND LAUNCH IS UNTOUCHED. Asking to leave is the half with a decision
      * in it; nothing here automates it. */
     var Gd = makeG();

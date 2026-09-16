@@ -287,6 +287,67 @@ console.log('--- a whole galaxy generates without complaint ---');
               ' patrols, ' + habitable + ' habitable worlds');
 })();
 
+console.log('--- every hull can reach every star ---');
+(function () {
+  /* THE NUMBER THAT DECIDES WHETHER A SYSTEM EXISTS FOR YOU.
+   *
+   * Not how far a ship can go — whether it can go at all. A star whose
+   * NEAREST neighbour is further than your laden range is a star you cannot
+   * reach by any route, however patient you are, because every path into it
+   * ends with that hop. Nothing checked it, and it had been false the whole
+   * time: on the old 150-star cluster a laden Mule was cut off from ten
+   * stars and a laden Kestrel from one. It looked like a galaxy-size
+   * question and it was a tankage question.
+   *
+   * Laden, deliberately. A ship with an empty hold can reach anything; the
+   * promise worth keeping is that you can get there with the cargo that
+   * paid for the trip. */
+  var Combat = require('../src/combat.js');
+  var HULLS = Combat.HULLS;
+  var FUEL_PER_LY_PER_TONNE = 0.016;      // galaxy.js's own constant
+
+  var g = Galaxy.build('kawartha');
+  var worst = 0, worstStar = null;
+  for (var i = 0; i < g.stars.length; i++) {
+    var best = Infinity;
+    for (var j = 0; j < g.stars.length; j++) {
+      if (i === j) continue;
+      var d = Galaxy.distance3(g.stars[i], g.stars[j]);
+      if (d < best) best = d;
+    }
+    if (best > worst) { worst = best; worstStar = g.stars[i]; }
+  }
+  console.log('  ' + g.stars.length + ' stars in ' + g.radius + ' ly; the loneliest is ' +
+              worst.toFixed(2) + ' ly from its nearest neighbour');
+
+  var stranded = [], tightest = Infinity, tightestWho = '';
+  Object.keys(HULLS).forEach(function (k) {
+    var h = HULLS[k];
+    var laden = h.dryMass + h.fuelCap + (h.thrusterCap || 0) + (h.cargoCap || 0);
+    var range = h.fuelCap / (FUEL_PER_LY_PER_TONNE * laden);
+    var margin = range / worst;
+    if (margin < tightest) { tightest = margin; tightestWho = k; }
+    if (range < worst) stranded.push(k + ' (' + range.toFixed(1) + ' ly)');
+  });
+  console.log('  tightest hull is the ' + tightestWho + ', with ' +
+              ((tightest - 1) * 100).toFixed(0) + '% in hand');
+  check('no hull is stranded from a star it can see', stranded.length === 0,
+        stranded.join(', '));
+  /* AND THE MARGIN IS THIN ON PURPOSE. A fleet with twice the range it
+   * needs has no reason to care about mass, which is the question the fuel
+   * model exists to ask. If this ever climbs past about half again, the
+   * tanks have drifted away from the map. */
+  check('and the tightest margin is a margin, not a cushion',
+        tightest > 1.0 && tightest < 1.6,
+        tightestWho + ' at ' + tightest.toFixed(2) + 'x');
+
+  /* The two numbers move together or the density does not hold, and the
+   * density is what keeps a hop the same length of hop. */
+  var density = g.stars.length / (Math.PI * g.radius * g.radius);
+  check('the cluster keeps the density it was tuned at',
+        Math.abs(density - 0.027) < 0.004, density.toFixed(4) + ' stars/ly^2');
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

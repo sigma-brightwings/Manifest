@@ -545,15 +545,38 @@
    * clears the strongest gravity any port was built on — so no purchase can
    * strand you on a pad you could land on. The Talon is the ship the game
    * starts you in, priced so the trade-in maths has a base. */
+  /* EVERY TANK IS A THIRD BIGGER THAN IT WAS, and the reason is a
+   * measurement rather than a feeling.
+   *
+   * A hull's reach is its tank over its LADEN mass, and the number that
+   * matters is not how far you can go but whether you can go at all: a
+   * star whose nearest neighbour is further than your range is a star you
+   * cannot reach by any route. Measured on the old galaxy, a laden Mule
+   * could not reach TEN of them and a laden Kestrel could not reach one.
+   * That was never the galaxy's fault; it was the tank's, and it had been
+   * true the whole time.
+   *
+   * 28/20/34/36 -> 37/27/45/48, which puts laden range at 14.9 / 19.0 /
+   * 13.1 / 9.9 ly against a worst forced hop of 9.00 in the new cluster
+   * (see DEFAULT_STARS). Everything is reachable, with the thinnest margin
+   * on the heaviest ship, which is where a margin belongs.
+   *
+   * AND THE LIFTOFF RULE STILL HOLDS, which is the thing this could have
+   * broken quietly. Nine tonnes more tank is nine tonnes more laden mass,
+   * so every hull's thrust-to-weight falls: 12.33 -> 11.61 on the Talon,
+   * 12.67 -> 12.17 on the Mule. All four still clear MAX_SURFACE_G with
+   * its 1.15 margin, so no purchase strands you on a pad you could land
+   * on. That ceiling is itself derived from the Talon's laden mass, so it
+   * came down 5.8% with everything else — see generate.js. */
   var HULLS = {
     talon: { id: 'talon', name: 'Talon Courier', price: 32000, mesh: 'courier',
-             dryMass: 42, thrustKN: 1800, thrusterCap: 12, fuelCap: 28,
+             dryMass: 42, thrustKN: 1800, thrusterCap: 12, fuelCap: 37,
              cargoCap: 64, hullMax: 100,
              slots: { hardpoint: 2, utility: 2, internal: 3 },
              powerMW: 9.0, fitMass: 14,
              blurb: 'the ship you started with, and honestly not bad' },
     dart:  { id: 'dart', name: 'Dart Interceptor', price: 61000, mesh: 'police',
-             dryMass: 30, thrustKN: 2200, thrusterCap: 10, fuelCap: 20,
+             dryMass: 30, thrustKN: 2200, thrusterCap: 10, fuelCap: 27,
              cargoCap: 22, hullMax: 80,
              /* THE RULE, checked by the hull-budget test: a reactor must
               * run every core system the hull has room for AND still
@@ -571,13 +594,13 @@
              powerMW: 7.0, fitMass: 9,
              blurb: 'outruns everything; carries nothing' },
     kestrel: { id: 'kestrel', name: 'Kestrel Multirole', price: 120000, mesh: 'merc',
-             dryMass: 60, thrustKN: 2700, thrusterCap: 14, fuelCap: 34,
+             dryMass: 60, thrustKN: 2700, thrusterCap: 14, fuelCap: 45,
              cargoCap: 96, hullMax: 130,
              slots: { hardpoint: 3, utility: 2, internal: 4 },
              powerMW: 14.0, fitMass: 22,
              blurb: 'the compromise, made well' },
     mule:  { id: 'mule', name: 'Mule Freighter', price: 78000, mesh: 'freighter',
-             dryMass: 80, thrustKN: 3700, thrusterCap: 16, fuelCap: 36,
+             dryMass: 80, thrustKN: 3700, thrusterCap: 16, fuelCap: 48,
              cargoCap: 160, hullMax: 160,
              slots: { hardpoint: 2, utility: 3, internal: 5 },
              powerMW: 18.0, fitMass: 30,
@@ -3224,7 +3247,25 @@
        uncleared, which is both. Booked on the port being FULL at the moment
        the clamps close, because that is the fact that harmed anyone. */
     var jumped = null;
-    if (berths && berths.full) {
+    /* UNLESS THE PORT SAID YES. Clearance is the port allocating a berth to
+     * this ship, and the sweep never grants one while the port is full — so
+     * a cleared ship arriving into a full port is a ship whose berth was
+     * promised and then taken by the timetable between the hail and the
+     * clamps. Charging for that is the port billing you for its own
+     * overbooking, and it stacked: the fine below fires for the same
+     * arrival, so one busy afternoon cost a citation AND a standing hit.
+     *
+     * It is not a loophole either way round. Clearance is spent on arrival,
+     * so it cannot be hoarded against a rush, and it cannot be obtained
+     * during one. Barging in without it at a full port is still both
+     * offences, which is the case the queue is actually about.
+     *
+     * Found by a brand-new career: the opening berth is granted clearance a
+     * few lines into newGame, and when the home port's timetable happened
+     * to have all five small berths full at t=0 the first message a player
+     * ever saw was being logged for taking someone's berth — over the top
+     * of the line telling them which key launches. */
+    if (berths && berths.full && !isCleared(G, port)) {
       jumped = bookQueueJump(G, fac0);
       if (hooks && hooks.say) {
         var pname = port.name || 'Port control';

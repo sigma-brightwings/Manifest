@@ -30,8 +30,29 @@
   var Slip = global.Slipspace || require('./slipspace.js');
 
   var LY = 1;                    // the galaxy works in light years throughout
-  var DEFAULT_STARS = 150;
-  var CLUSTER_RADIUS = 42;       // ly
+  /* A THIRD BIGGER, AND THE RADIUS GOES WITH IT.
+   *
+   * Astra's rule for this project: when something is too small, add a third
+   * and that is usually the right call. It was, and the reason it worked is
+   * that it was applied to TWO numbers at once — this and the fuel tanks.
+   *
+   * The count and the radius move together so the density does not: 150/42
+   * and 200/48.5 are both 0.027 stars per square light year, which is what
+   * keeps a jump the same length of hop it always was. Growing the count
+   * alone would have packed the cluster; growing the radius alone would
+   * have stranded everyone.
+   *
+   * WHAT IT ACTUALLY BOUGHT, measured on seed kawartha: the longest hop
+   * anyone can be FORCED to make — the loneliest star's distance to its
+   * nearest neighbour, which is the number that decides whether a system is
+   * reachable at all — falls from 11.85 ly to 9.00. More stars in a bigger
+   * disc is not a longer walk; it is a shorter one, because the gaps fill
+   * in faster than the edge moves out. A laden Mule could not reach ten
+   * stars before this and can reach all of them after it. The span does
+   * grow, 83 ly to 110, so crossing the whole cluster is a longer trip —
+   * that part is the point. */
+  var DEFAULT_STARS = 200;
+  var CLUSTER_RADIUS = 48.5;     // ly
   var CLUSTER_THICKNESS = 7;     // ly, half-height — a squashed disc, not a ball
   var MIN_SEPARATION = 1.1;      // ly; two stars closer than this are one star
 
