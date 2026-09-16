@@ -1261,7 +1261,13 @@
     ctx.font = 'bold 12px ui-monospace, monospace';
     ctx.fillStyle = '#b4f0ff';
     var cargo = Sim.cargoMass(s);
-    ctx.fillText('CARGO HOLD   ' + cargo.toFixed(0) + ' / ' + s.cargoCap + ' t', rx + 10, top + pad + 18);
+    /* The people ride in the same header as the tonnage, because they are
+     * the same decision: the berths are hold you gave up. */
+    var seatsN = Combat.seatsOf(s);
+    ctx.fillText('CARGO HOLD   ' + cargo.toFixed(0) + ' / ' + s.cargoCap + ' t' +
+                 (seatsN > 0 ? '    BERTHS  ' + Combat.passengersAboard(s) +
+                               ' / ' + seatsN : ''),
+                 rx + 10, top + pad + 18);
     ctx.restore();
 
     var held = heldCargo();
@@ -1761,10 +1767,19 @@
       { name: 'Reaction mass tank', value: s.thrusterCap + ' t' },
       { name: 'Slipspace drive', value: fmtLy(Galaxy.maxRange(s)) + ' laden' },
       { name: 'Jump fuel tank', value: s.fuelCap + ' t' },
-      { name: 'Cargo hold', value: s.cargoCap + ' t' },
+      { name: 'Cargo hold', value: s.cargoCap + ' t' +
+          (Combat.seatsOf(s) > 0 ? '  (hab units took the rest)' : '') },
       { name: 'Scanner', value: fmtDist(RADAR_RANGE) },
       { name: 'Autopilot', value: 'dock / cruise' }
     ];
+
+    /* Only when there are any. A hull with no habitation unit has no berths
+     * in the same sense it has no guns — the row would be a zero telling
+     * you nothing. */
+    if (Combat.seatsOf(s) > 0) {
+      out.push({ name: 'Berths', value: Combat.passengersAboard(s) + ' / ' +
+                                        Combat.seatsOf(s) + ' aboard' });
+    }
 
     /* Read off the SLOTS, not off a list of things somebody remembered to
      * update. A reactor or a heat shield shows up here the day it is
@@ -1788,6 +1803,7 @@
       else if (it.kind === 'shield') val = Math.round(s.shieldHp) + ' / ' + it.cap;
       else if (it.kind === 'heatshield') val = it.shed + ' units/s';
       else if (it.kind === 'reactor') val = '+' + it.powerBonus.toFixed(1) + ' MW';
+      else if (it.kind === 'hab') val = it.seats + ' berths · −' + it.hold + ' t hold';
       else val = it.power.toFixed(1) + ' MW';
       out.push({ name: it.name, value: val, uncertified: !!it.grey });
     }
@@ -2140,15 +2156,37 @@
       }
       ctx.save();
       ctx.font = '12px ui-monospace, monospace';
-      ctx.fillStyle = off.campaign ? '#ffe07a'
+      /* A PASSAGE YOU CANNOT TAKE IS STILL WORTH SEEING. The board is
+       * generated per port and window rather than per career, so it cannot
+       * ask what is fitted to your hull — and that turns out to be the
+       * right behaviour rather than a limitation: passage work you have no
+       * berths for is exactly what makes a habitation unit worth buying.
+       * It is dimmed and it says why, which this file has always preferred
+       * to a row that will not explain itself. */
+      var noPass = off.type === 'passage' && Missions.passageRefusal
+        ? Missions.passageRefusal(G, off) : null;
+      /* A LICENSED HAUL IS THE SAME IDEA ONE STEP FURTHER. The navy posts
+       * it at its own carrier whether or not you are cleared, and the row
+       * says which it is — an offer you can see and not take is what makes
+       * standing with a flag worth having. */
+      if (!noPass && Missions.licenceRefusal) {
+        noPass = Missions.licenceRefusal(G, off);
+      }
+      ctx.fillStyle = noPass ? '#6a7d92'
+                    : off.campaign ? '#ffe07a'
+                    : off.type === 'passage' ? '#c7b4ff'
                     : off.type === 'courier' ? '#b4f0ff'
                     : off.type === 'disposal' ? '#ffb86b' : MFD_INK;
       ctx.fillText((off.campaign ? '★ ' : '') +
                    clipText(off.text, Math.floor((rw - 130) / 7)), rx + 16, oy + 14);
       ctx.font = '10px ui-monospace, monospace';
       ctx.fillStyle = MFD_DIM;
+      if (noPass) ctx.fillStyle = '#ffb86b';
       ctx.fillText(clipText('pays ' + fmtCredits(off.pay) + '   ·   due ' +
-                            fmtTime(off.deadline - G.t) + '   ·   ' + off.tonnes + 't of hold',
+                            fmtTime(off.deadline - G.t) + '   ·   ' +
+                            (noPass ? noPass
+                               : off.type === 'passage' ? (off.souls + ' berths')
+                               : off.tonnes + 't of hold'),
                             Math.floor((rw - 130) / 5.6)), rx + 16, oy + 28);
       ctx.restore();
       btn(ctx, rx + rw - 96, oy + 6, 80, 28, 'ACCEPT',

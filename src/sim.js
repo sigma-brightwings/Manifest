@@ -2036,8 +2036,17 @@
       }
     }
 
+    /* A LINER SAYS WHO IS ABOARD, not what. People are a count on the route
+     * rather than a commodity — see fillLinerSeats — and this is where the
+     * distinction becomes something the player can hear: a hull announcing
+     * four hundred aboard is a different object on the scope from one
+     * announcing four hundred tonnes, and it should be. */
+    var souls = st.route.souls || 0;
+
     var text;
-    if (st.phase === 'descent') {
+    if (souls > 0 && st.phase !== 'moored' && (h >>> 5) % 2 === 0) {
+      text = souls + ' aboard for ' + (dst ? dst.name : 'onward');
+    } else if (st.phase === 'descent') {
       text = 'on final into ' + (dst ? dst.name : 'the port');
     } else if (st.phase === 'liftoff') {
       text = 'clear of ' + (src ? src.name : 'the pad') + ', climbing';
@@ -2045,7 +2054,8 @@
       /* A ship at anchor and a ship in a berth are doing different things,
        * and the heavies are the ones you can see from a long way off. */
       text = st.route.outboard ? pick(SAY_HEAVY) : pick(SAY_MOORED);
-      if (carrying && !st.route.outboard && (h >>> 3) % 2) {
+      if (souls > 0) text = 'disembarking ' + souls;
+      else if (carrying && !st.route.outboard && (h >>> 3) % 2) {
         text = 'discharging ' + Math.round(carrying.qty) + ' t of ' + carrying.name;
       }
     } else if (carrying && (h >>> 5) % 3 === 0) {
@@ -2062,7 +2072,7 @@
 
     return {
       id: st.reg, name: st.name, cls: st.className || st.cls,
-      text: text,
+      text: text, souls: souls,
       dest: dst ? dst.name : '—',
       phase: st.phase,
       pos: st.pos

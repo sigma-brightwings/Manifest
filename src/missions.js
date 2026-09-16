@@ -31,7 +31,7 @@
   var WINDOW = 2 * 86400;          // seconds per board refresh
   var HAUL_DEADLINE = 3 * 86400;
   var COURIER_DEADLINE = 10 * 86400;
-  var STANDING_WIN = { haul: 3, courier: 5, disposal: 4 };
+  var STANDING_WIN = { haul: 3, courier: 5, disposal: 4, passage: 4 };
   var STANDING_LOSS = 7;
   var FINE_FRACTION = 0.5;
 
@@ -474,6 +474,14 @@
       }
     }
 
+    /* PASSAGE, appended in its own pass with its own stream. Deliberately
+     * not a fourth branch of the roll above: adding one there would
+     * re-deal every board at every port in every seed, and a board is
+     * something a player reads and comes back to. Its own rng, run last,
+     * is the same discipline the feeders and the heavies are built with. */
+    passageOffers(port, sys, galaxy, here, t, offers, ctxs);
+    navyOffers(port, sys, t, offers, ctxs);
+
     /* Every offer gets its headline generated and capped and its long form
      * written, in one place — so a mission type added later cannot ship
      * without both, and nobody has to remember to call this per branch
@@ -484,6 +492,200 @@
     // Whatever the player has already taken or finished this window is gone.
     var taken = {};
     return offers.filter(function (o) { return !taken[o.id]; });
+  }
+
+  /* ---- passage -----------------------------------------------------------
+   * Astra: "passengers as a mission type? Habitation Units that trade cargo
+   * space for ability to move people?"
+   *
+   * A passage contract is a haul whose freight can be disappointed, and
+   * every difference from a haul comes out of that one fact:
+   *
+   *   - it needs BERTHS rather than hold, so a ship that has not given up
+   *     part of its hold to a habitation unit cannot take one at all;
+   *   - people are picky about who is flying: they will not board a
+   *     captain the local flag wants, and they leave if they find out what
+   *     is in the hold;
+   *   - and they can be hurt. Taking fire with passengers aboard is a
+   *     different act from taking fire alone, and the contract knows it.
+   *
+   * THE OFFERS ARE SHOWN WHETHER OR NOT YOU CAN TAKE THEM. The board is
+   * generated per port and window rather than per career — that is the same
+   * constraint that still blocks a licensed haul — but here it is an
+   * advantage rather than a limitation: seeing passage work you have no
+   * berths for is exactly what makes a habitation unit worth buying, and
+   * the accept path refuses in words, which this file has always preferred
+   * to a row that will not say what is wrong. */
+  var PASSAGE_DEADLINE = 4 * 86400;
+  var PASSAGE_PER_SOUL_LOCAL = [340, 760];
+  var PASSAGE_PER_SOUL_STAR = [1500, 2900];
+  var PASSAGE_WHO = ['contract crew', 'a survey team', 'a family', 'pilgrims',
+                     'a relief rotation', 'students', 'a medical team',
+                     'off-shift miners', 'a trade delegation', 'refugees'];
+
+  function passageOffers(port, sys, galaxy, here, t, offers, ctxs) {
+    var win = windowIndex(t);
+    var rng = new RNG('passage|' + port.id + '|' + win + '|' + sys.seed);
+    /* People go where people are. A port on a settled world is somewhere
+     * anyone might be leaving FROM; everywhere else it is a place you go
+     * TO for work, which is why the roster below leans on the destination
+     * rather than on the origin. */
+    var others = (sys.ports || []).filter(function (p) { return p !== port && p.market; });
+    var n = rng.int(0, 2);
+    for (var i = 0; i < n; i++) {
+      var id = 'p|' + port.id + '|' + win + '|' + i;
+      var far = galaxy && rng.chance(0.35);
+      var who = rng.pick(PASSAGE_WHO);
+
+      if (far) {
+        var near = galaxy.stars.filter(function (st) {
+          if (st === here) return false;
+          var d = global.Galaxy.distance3(here, st);
+          return d > 0 && d < 9;
+        });
+        if (!near.length) continue;
+        var star = rng.pick(near);
+        var soulsF = rng.int(1, 4);
+        var perF = Math.round(rng.range(PASSAGE_PER_SOUL_STAR[0], PASSAGE_PER_SOUL_STAR[1]));
+        offers.push({
+          id: id, type: 'passage', cid: null, tonnes: 0, souls: soulsF,
+          from: port.id, fromName: port.name,
+          toStarId: star.id, toName: star.name + ' system',
+          faction: port.faction || null,
+          pay: soulsF * perF,
+          deadline: t - (t % WINDOW) + COURIER_DEADLINE,
+          core: soulsF + ' aboard — ' + who + ' bound for the ' + star.name + ' system'
+        });
+        ctxs.push({ fromPort: port, sys: sys, here: here, toStar: star });
+        continue;
+      }
+
+      if (!others.length) continue;
+      var dst = rng.pick(others);
+      var souls = rng.int(2, 6);
+      var per = Math.round(rng.range(PASSAGE_PER_SOUL_LOCAL[0], PASSAGE_PER_SOUL_LOCAL[1]));
+      offers.push({
+        id: id, type: 'passage', cid: null, tonnes: 0, souls: souls,
+        from: port.id, fromName: port.name,
+        toPortId: dst.id, toName: dst.name,
+        faction: port.faction || null,
+        pay: souls * per,
+        deadline: t - (t % WINDOW) + PASSAGE_DEADLINE,
+        core: souls + ' aboard — ' + who + ' for ' + dst.name
+      });
+      ctxs.push({ fromPort: port, toPort: dst, sys: sys });
+    }
+  }
+
+  /* ---- the navy's own board ----------------------------------------------
+   * Astra: "The navy runs the carrier, and then there are those carrier
+   * shipstations, they're basically floating cities." A fleet carrier has
+   * been a place you can dock and trade since the day it was sited, and a
+   * place with nothing to do at it is a place you visit once.
+   *
+   * THE LICENSED HAUL LIVES HERE, and this is what unblocks it. The
+   * objection was never about the contract, it was about the board: offers
+   * are generated per port and window rather than per career, so "what you
+   * are cleared for" could not be asked at the point the board is built.
+   * A carrier answers that by moving the question rather than solving it —
+   * the offer is posted, and the CLEARANCE is checked when you sign, in
+   * words, the same way a passage checks berths. Somebody who cannot take
+   * it sees what they would be taking if the navy trusted them, which is a
+   * better use of the constraint than hiding the row.
+   *
+   * And it is the one haul in the game that hands you naval materiel, so
+   * it is also the one that pays like it. */
+  function navyOffers(port, sys, t, offers, ctxs) {
+    var Combat = global.Combat, Eco = global.Economy;
+    if (!Combat || !Combat.fleetPort || !Combat.fleetPort(port)) return;
+    var win = windowIndex(t);
+    var rng = new RNG('navy|' + port.id + '|' + win + '|' + sys.seed);
+    var others = (sys.ports || []).filter(function (p) { return p !== port && p.market; });
+    if (!others.length) return;
+
+    /* A fuel movement between naval facilities. The destination is any
+     * port of the carrier's own flag where there is one — the navy does
+     * not ship slugs to somebody else's dock — and otherwise anywhere in
+     * the system, because a carrier that cannot move its own fuel is not
+     * much of a carrier. */
+    var mine = others.filter(function (p) { return p.faction === port.faction; });
+    var dst = rng.pick(mine.length ? mine : others);
+    var tonnes = rng.int(3, 9);
+    var per = (Eco && Eco.BY_ID.milfuel) ? Eco.BY_ID.milfuel.base : 6370;
+    offers.push({
+      id: 'n|' + port.id + '|' + win + '|0', type: 'haul', cid: 'milfuel',
+      tonnes: tonnes, licensed: true,
+      from: port.id, fromName: port.name,
+      toPortId: dst.id, toName: dst.name,
+      faction: port.faction || null,
+      /* Priced as a share of what is in the hold rather than per tonne off
+       * a table: this is the only contract that hands over cargo worth more
+       * than a hull, and a flat fee beside that would read as a joke. */
+      pay: Math.round(tonnes * per * rng.range(0.10, 0.17)),
+      deadline: t - (t % WINDOW) + HAUL_DEADLINE,
+      core: tonnes + 't military fuel to ' + dst.name + ' (licensed)'
+    });
+    ctxs.push({ fromPort: port, toPort: dst, sys: sys });
+
+    /* And a rotation. A carrier is a city that turns over. */
+    if (rng.chance(0.6)) {
+      var souls = rng.int(2, 6);
+      offers.push({
+        id: 'n|' + port.id + '|' + win + '|1', type: 'passage', cid: null,
+        tonnes: 0, souls: souls, licensed: false,
+        from: port.id, fromName: port.name,
+        toPortId: dst.id, toName: dst.name,
+        faction: port.faction || null,
+        pay: souls * Math.round(rng.range(600, 1150)),
+        deadline: t - (t % WINDOW) + PASSAGE_DEADLINE,
+        core: souls + ' aboard — a crew rotation for ' + dst.name
+      });
+      ctxs.push({ fromPort: port, toPort: dst, sys: sys });
+    }
+  }
+
+  /* What stops you signing a licensed haul, in words. The gate is the same
+   * standing the contraband table reads, so the contract and the customs
+   * officer cannot disagree about whether you are allowed the cargo. */
+  function licenceRefusal(G, offer) {
+    var Combat = global.Combat;
+    if (!offer.licensed || !Combat) return null;
+    var need = Combat.MILFUEL_LICENCE_STANDING;
+    var have = standing(G, offer.faction);
+    if (have >= need) return null;
+    return 'the navy licenses this to ' + need + '+ standing — you are at ' +
+           Math.round(have);
+  }
+
+  /* Will these people get on this ship? Two refusals, and both of them are
+   * about the captain rather than the hull.
+   *
+   * Nobody boards a ship the local flag is hunting, because the thing that
+   * happens to a wanted ship happens to everybody aboard it. And nobody
+   * boards one with contraband in the hold by that same flag's law — they
+   * are not judging you, they are declining to be in the room when it is
+   * found. Both read the SAME tables the law reads, so a passenger cannot
+   * disagree with the customs officer who would do the searching. */
+  function passageRefusal(G, offer) {
+    var Combat = global.Combat;
+    if (!Combat) return null;
+    var seats = Combat.seatsFree(G.ship);
+    if (Combat.seatsOf(G.ship) <= 0) {
+      return 'no berths — a habitation unit trades hold for people';
+    }
+    if (offer.souls > seats) {
+      return 'needs ' + offer.souls + ' berths, you have ' + seats + ' free';
+    }
+    var fac = offer.faction;
+    if (fac && Combat.wantedHere && Combat.wantedHere(G, fac)) {
+      return 'they will not board a ship ' + fac + ' is hunting';
+    }
+    var dirty = fac && Combat.contrabandAboardFor
+      ? Combat.contrabandAboardFor(G, fac) : null;
+    if (dirty) {
+      return 'they saw the manifest — nobody boards over ' + dirty.name.toLowerCase();
+    }
+    return null;
   }
 
   function alreadyHave(G, offerId) {
@@ -543,14 +745,28 @@
   function accept(G, offer, hooks) {
     var Sim = global.Sim;
     if (alreadyHave(G, offer.id)) return { ok: false, why: 'already taken' };
-    var free = G.ship.cargoCap - Sim.cargoMass(G.ship);
-    if (offer.tonnes > free) {
-      return { ok: false, why: 'need ' + offer.tonnes + 't of hold space' };
+
+    /* PEOPLE, NOT TONNES. Everything about the refusal is in one function
+     * so the board's greyed row and the button that says no give the same
+     * reason in the same words. */
+    var unlicensed = licenceRefusal(G, offer);
+    if (unlicensed) return { ok: false, why: unlicensed };
+
+    if (offer.type === 'passage') {
+      var no = passageRefusal(G, offer);
+      if (no) return { ok: false, why: no };
+      G.ship.passengers = (G.ship.passengers || 0) + offer.souls;
+    } else {
+      var free = G.ship.cargoCap - Sim.cargoMass(G.ship);
+      if (offer.tonnes > free) {
+        return { ok: false, why: 'need ' + offer.tonnes + 't of hold space' };
+      }
+      G.ship.cargo[offer.cid] = (G.ship.cargo[offer.cid] || 0) + offer.tonnes;
     }
-    G.ship.cargo[offer.cid] = (G.ship.cargo[offer.cid] || 0) + offer.tonnes;
     Sim.refreshShip(G.ship);
     (G.missions = G.missions || []).push({
       id: offer.id, type: offer.type, cid: offer.cid, tonnes: offer.tonnes,
+      souls: offer.souls || 0,
       fromName: offer.fromName, toPortId: offer.toPortId || null,
       toStarId: offer.toStarId || null, toName: offer.toName,
       faction: offer.faction, pay: offer.pay, deadline: offer.deadline,
@@ -575,14 +791,80 @@
   /* Called every dock. Completion needs the destination AND the freight —
    * a courier who sold the parcel arrives with nothing to hand over and the
    * contract just sits there until the deadline does its work. */
+  /* THEY GET OFF WHERE THEY FIND OUT, not where you were taking them.
+   *
+   * passageRefusal keeps contraband off the ship at the door, which covers
+   * the honest case and none of the interesting one: load the stuff after
+   * they are aboard and the check has already happened. So it is asked
+   * again at every dock, because a dock is the first place somebody who
+   * has changed their mind can act on it. The contract is void, there is no
+   * fee, and the flag whose people you did this to remembers.
+   *
+   * Every dock rather than only the destination, and that asymmetry is the
+   * point: a stop on the way is exactly where you would pick up the cargo
+   * you did not want them to see. */
+  function passengersWalkOff(G, port, hooks) {
+    var Combat = global.Combat;
+    if (!Combat || !Combat.contrabandAboardFor) return;
+    if (!(G.ship.passengers > 0)) return;
+    var list = G.missions || [];
+    for (var i = list.length - 1; i >= 0; i--) {
+      var m = list[i];
+      if (m.type !== 'passage') continue;
+      var dirty = m.faction ? Combat.contrabandAboardFor(G, m.faction) : null;
+      if (!dirty) continue;
+      G.ship.passengers = Math.max(0, (G.ship.passengers || 0) - (m.souls || 0));
+      bumpStanding(G, m.faction, -STANDING_LOSS);
+      (G.doneMissions = G.doneMissions || {})[m.id] = true;
+      list.splice(i, 1);
+      if (hooks && hooks.say) {
+        hooks.say('Your passengers have walked off at ' + port.name +
+                  ' — they found the ' + dirty.name.toLowerCase() + '. No fee.', 8);
+      }
+      if (hooks && hooks.sound) hooks.sound('warn');
+    }
+    if (global.Sim) global.Sim.refreshShip(G.ship);
+  }
+
   function completeAtDock(G, port, sys, t, hooks) {
     var Sim = global.Sim;
+    passengersWalkOff(G, port, hooks);
     var list = G.missions || [];
     for (var i = list.length - 1; i >= 0; i--) {
       var m = list[i];
       var here = (m.toPortId && m.toPortId === port.id) ||
                  (m.toStarId && G.here && m.toStarId === G.here.id);
       if (!here) continue;
+
+      /* A passage settles on people rather than on freight, and it can
+       * settle badly: somebody who spent the trip locked in a hold with
+       * contraband gets off here and is not paying for the privilege. */
+      if (m.type === 'passage') {
+        var aboard = Math.min(m.souls || 0, G.ship.passengers || 0);
+        G.ship.passengers = Math.max(0, (G.ship.passengers || 0) - aboard);
+        Sim.refreshShip(G.ship);
+        (G.doneMissions = G.doneMissions || {})[m.id] = true;
+        list.splice(i, 1);
+        if (aboard < (m.souls || 0)) {
+          /* Somebody did not arrive. There is no partial payment for that
+           * and there should not be. */
+          bumpStanding(G, m.faction, -STANDING_LOSS * 2);
+          if (hooks && hooks.say) {
+            hooks.say('PASSAGE FAILED — ' + ((m.souls || 0) - aboard) +
+                      ' of ' + m.souls + ' did not arrive. No fee.', 8);
+          }
+          if (hooks && hooks.sound) hooks.sound('warn');
+          continue;
+        }
+        var cut = passageCut(G, m);
+        G.ship.credits += cut.pay;
+        bumpStanding(G, m.faction, cut.standing);
+        if (hooks && hooks.say) hooks.say(cut.text, 6);
+        if (hooks && hooks.sound) hooks.sound(cut.pay > 0 ? 'pay' : 'warn');
+        if (m.campaign && global.Arcs) global.Arcs.onStepComplete(G, m, port, sys, t, hooks);
+        continue;
+      }
+
       var held = G.ship.cargo[m.cid] || 0;
       if (held + 1e-9 < m.tonnes) {
         if (hooks && hooks.say) {
@@ -607,11 +889,63 @@
     }
   }
 
+  /* WHAT THE TRIP WAS LIKE, in credits. The fee is the fee; what varies is
+   * how much of it these people are willing to hand over having arrived.
+   *
+   * Astra picked the three things passengers react to, and two of them land
+   * here. Being shot at is recorded while it happens (Combat marks the
+   * contract), because the hull damage is long repaired by the time anyone
+   * is paying; arriving late is read off the clock. The third — who they
+   * are travelling with — is checked at the door in passageRefusal, which
+   * is the only place it can be checked honestly, since by the time they
+   * are aboard the decision is already made. */
+  var ROUGH_TRIP_CUT = 0.45;      // of the fee, for a trip spent under fire
+  var LATE_CUT = 0.40;
+
+  function passageCut(G, m) {
+    var pay = m.pay, why = [], standing = STANDING_WIN.passage || 4;
+    if (m.rough) {
+      pay = Math.round(pay * (1 - ROUGH_TRIP_CUT));
+      standing -= 3;
+      why.push('they were shot at');
+    }
+    if (G.t !== undefined && m.deadline && G.t > m.deadline) {
+      pay = Math.round(pay * (1 - LATE_CUT));
+      standing -= 2;
+      why.push('you were late');
+    }
+    var text = why.length
+      ? 'Passage ends — ' + pay + ' cr (' + why.join(', ') + ')'
+      : 'Passage ends — ' + pay + ' cr, and they say so';
+    return { pay: pay, standing: standing, text: text };
+  }
+
   function update(G, t, hooks) {
     var list = G.missions || [];
     for (var i = list.length - 1; i >= 0; i--) {
       var m = list[i];
       if (t <= m.deadline) continue;
+      /* A LATE PASSAGE IS NOT A LATE PARCEL. Astra chose lateness as one of
+       * the three things passengers react to, and the reaction is that they
+       * are still aboard being late WITH you — so the contract does not
+       * expire out from under them the way a haul's does. It stays live and
+       * pays less (see passageCut); what expires here is only the patience
+       * of anyone who has now been in your galley for twice as long as they
+       * agreed to, which costs standing on a clock. */
+      if (m.type === 'passage') {
+        if (t <= m.deadline + PASSAGE_DEADLINE) continue;
+        G.ship.passengers = Math.max(0, (G.ship.passengers || 0) - (m.souls || 0));
+        bumpStanding(G, m.faction, -STANDING_LOSS * 2);
+        (G.doneMissions = G.doneMissions || {})[m.id] = true;
+        list.splice(i, 1);
+        if (hooks && hooks.say) {
+          hooks.say('PASSAGE ABANDONED: ' + m.souls +
+                    ' gave up waiting and got off wherever you last stopped.', 8);
+        }
+        if (hooks && hooks.sound) hooks.sound('warn');
+        if (global.Sim) global.Sim.refreshShip(G.ship);
+        continue;
+      }
       var fine = Math.round(m.pay * FINE_FRACTION);
       G.ship.credits = Math.max(0, G.ship.credits - fine);
       bumpStanding(G, m.faction, -STANDING_LOSS);
@@ -629,6 +963,21 @@
    * One number per faction, clamped, moved by outcomes and by crime (the
    * combat module calls bumpStanding too). It is reputation, not law — the
    * law is the bounty ledger next door. */
+  /* Mark every live passage as a rough trip. Called by Combat the moment
+   * the player's hull takes a hit with people aboard — recorded then rather
+   * than inferred later, because by the time anybody is paying the hull is
+   * long since repaired and there is nothing left to read. */
+  function passengersUnderFire(G) {
+    var list = G.missions || [];
+    var any = false;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].type !== 'passage' || list[i].rough) continue;
+      list[i].rough = true;
+      any = true;
+    }
+    return any;
+  }
+
   function standing(G, fac) { return (G.standing || {})[fac] || 0; }
 
   function bumpStanding(G, fac, delta) {
@@ -647,6 +996,9 @@
   var Missions = {
     WINDOW: WINDOW,
     boardAt: boardAt, accept: accept,
+    passageRefusal: passageRefusal, passageCut: passageCut,
+    licenceRefusal: licenceRefusal,
+    passengersUnderFire: passengersUnderFire, passengersWalkOff: passengersWalkOff,
     completeAtDock: completeAtDock, update: update,
     standing: standing, bumpStanding: bumpStanding, standingLabel: standingLabel,
     alreadyHave: alreadyHave,

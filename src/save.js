@@ -225,6 +225,11 @@
         })(),
         missileSeq: s.missileSeq,
         cargo: s.cargo, credits: s.credits,
+        /* WHO IS IN THE BACK. Seats are derived from the fitting and come
+         * back on their own; people are not, so they are written. A save
+         * that dropped them would land the ship with live passage
+         * contracts and nobody aboard to deliver. */
+        passengers: s.passengers || 0,
         /* A career saved MID-ARRIVAL comes back parked. During the lift
          * ride `docked` is still null and the ship's recorded position is
          * half way down a shaft — restoring that literally would put the
@@ -355,6 +360,7 @@
     if (d.racks) s.racks = d.racks;
     s.missileSeq = d.missileSeq;
     s.cargo = d.cargo || {}; s.credits = d.credits;
+    s.passengers = d.passengers || 0;
     s.hullId = d.hullId; s.hullHp = d.hullHp;
     s.gun = d.gun; s.turret = d.turret; s.shield = d.shield;
     s.heatshield = d.heatshield || null;

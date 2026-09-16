@@ -350,6 +350,32 @@
                   minDev: 0.70, minStanding: 40, minCrime: 0, grey: false,
                   pitch: 'Answers the challenge nobody civilian is supposed to hear. Where it lets you go is not a reward.' },
 
+    /* ---- the habitation unit ---------------------------------------------
+     * Astra: "Habitation Units that trade cargo space for ability to move
+     * people?"
+     *
+     * That is the whole design in one sentence and it is the right one,
+     * because it makes carrying people a DECISION about the hull rather
+     * than a second kind of freight. A tonne of grain needs a hold; four
+     * people need air, water, somewhere to sleep and somewhere to be sick,
+     * and the eight tonnes of hold this eats is that plumbing. Cargo you
+     * can always take. Passengers you have to have built for.
+     *
+     * NO HAB, NO PASSAGE — Astra's call, and it is what gives the fitting
+     * teeth: without one the passage contracts do not merely fail, they
+     * are not offered, because a board does not advertise berths to a ship
+     * that has none. It is the first fitting in the catalogue that changes
+     * what WORK you are shown rather than what you can survive.
+     *
+     * Not unique. Internal slots are the scarce thing (2-5 by hull), so a
+     * mule can be a small liner if its owner is willing to give up half a
+     * hold for it, and that trade is the interesting part. */
+    habunit: { id: 'habunit', name: 'Habitation unit', slot: 'internal',
+               kind: 'hab', price: 14500, power: 0.9, mass: 4,
+               seats: 4, hold: 8,
+               minDev: 0.30, minStanding: -100, minCrime: 0, grey: false,
+               pitch: 'Four berths, a galley and a scrubber. Eight tonnes of hold becomes four people who expect to arrive.' },
+
     heatshield: { id: 'heatshield', name: 'Ablative heat shield', slot: 'internal',
                   kind: 'heatshield', price: 3600, power: 0.8, mass: 3,
                   unique: true, shed: 130,
@@ -997,8 +1023,40 @@
       return { ok: false, key: key, why: 'needs ' + (item.mass || 0).toFixed(1) +
                ' t, only ' + freeM.toFixed(1) + ' free' };
     }
+    /* A HAB UNIT IS BUILT INTO THE HOLD, so it cannot be fitted around
+     * cargo that is already in there. Refused with the number rather than
+     * silently overfilling the hull, which is what writing cargoCap below
+     * a full hold would do. */
+    if ((item.hold || 0) > 0) {
+      var hold = global.Sim ? global.Sim.cargoMass(ship) : 0;
+      var capAfter = (hullOf(ship) || { cargoCap: 0 }).cargoCap - (item.hold || 0) -
+                     habHoldCost(ship, key);
+      if (hold > capAfter + 1e-9) {
+        return { ok: false, key: key, why: 'the hold is too full — needs ' +
+                 Math.ceil(hold - capAfter) + ' t off first' };
+      }
+    }
     return { ok: true, key: key };
   }
+
+  /* Hold given up to hab units ALREADY fitted, ignoring the slot being
+   * filled — the same "judge the swap, not the pair" rule the power and
+   * mass budgets above use. */
+  function habHoldCost(ship, exceptKey) {
+    var have = fittedList(ship), n = 0;
+    for (var i = 0; i < have.length; i++) {
+      if (have[i].key === exceptKey) continue;
+      n += have[i].item.hold || 0;
+    }
+    return n;
+  }
+
+  /* How many people this hull can carry, and how many are aboard. Read off
+   * the fitting rather than stored, so there is no way to be carrying
+   * passengers you have nowhere to put. */
+  function seatsOf(ship) { return (ship && ship.seats) || 0; }
+  function passengersAboard(ship) { return (ship && ship.passengers) || 0; }
+  function seatsFree(ship) { return Math.max(0, seatsOf(ship) - passengersAboard(ship)); }
 
   function firstFreeSlot(ship, type) {
     var map = fitMap(ship), keys = slotKeys(ship);
@@ -1064,6 +1122,30 @@
 
     ship.heatshield = heatshield;
     ship.heatShed = heatshield ? MODULES.heatshield.shed : 0;
+
+    /* ---- and what the hab units did to the hold --------------------------
+     * Derived here rather than tracked, for the reason every other derived
+     * number in this file is: there is no way to be carrying passengers
+     * without the berths to put them in, because both numbers are read off
+     * the same fitted list every time anything changes.
+     *
+     * cargoCap is written from the HULL each time rather than decremented,
+     * or pulling a hab unit would leave the hold eight tonnes short
+     * forever and every save that ever carried one would drift. */
+    var seats = 0, holdCost = 0;
+    for (var hb = 0; hb < list.length; hb++) {
+      var hit = list[hb].item;
+      if (hit.kind !== 'hab') continue;
+      seats += hit.seats || 0;
+      holdCost += hit.hold || 0;
+    }
+    var hullNow = hullOf(ship);
+    ship.seats = seats;
+    if (hullNow) ship.cargoCap = Math.max(0, hullNow.cargoCap - holdCost);
+    /* Anybody aboard a ship that no longer has a berth for them is put off
+     * at the next dock, not vaporised — but the count cannot exceed the
+     * berths, or the manifest starts lying. */
+    if (ship.passengers && seats <= 0) ship.passengers = 0;
 
     if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(ship);
     return ship;
@@ -2296,6 +2378,17 @@
        * cockpit is the cockpit's business, not combat's — this only says
        * how hard it was hit and lets the ship you are sitting in react. */
       if (hooks && hooks.hullHit) hooks.hullHit(dmg);
+      /* AND THE PEOPLE IN THE BACK FELT THAT. Recorded the moment it
+       * happens rather than worked out at the far end, because by the time
+       * anybody is paying the hull has been repaired and there is nothing
+       * left to read off it. One line here is the whole of "passengers
+       * react to being shot at" — the contract carries the mark, and
+       * Missions.passageCut turns it into a number at the door. */
+      if ((s.passengers || 0) > 0 && global.Missions &&
+          global.Missions.passengersUnderFire &&
+          global.Missions.passengersUnderFire(G) && hooks && hooks.say) {
+        hooks.say('Your passengers are screaming.', 5);
+      }
       if (s.hullHp <= 25 && !G.hullWarned) {
         G.hullWarned = true;
         if (hooks && hooks.say) hooks.say('HULL CRITICAL — ' + Math.max(0, Math.round(s.hullHp)) + ' points left', 5);
@@ -4937,6 +5030,16 @@
    * Returns every catalogue item with a verdict, INCLUDING the ones you
    * cannot have, because "requires WARM standing with Halden Combine"
    * reads as a goal and a missing row reads as a bug. */
+  /* Is this dock a warship? `fleet` is set by Economy.siteFleetCarrier when
+   * it converts a port into the navy's own, and the role name follows it —
+   * asked in one place so nothing downstream has to know which of the two
+   * fields is the truth. */
+  function fleetPort(port) {
+    if (!port) return false;
+    if (port.fleet) return true;
+    return !!(port.market && port.market.role === 'carrier');
+  }
+
   function stockAt(G, port) {
     var out = [];
     if (!port) return out;
@@ -5000,7 +5103,19 @@
         if (corrupt < (it.minCorrupt || 0)) continue;  // not stocked at all here
         if (crime < (it.minCrime || 0)) continue;
       } else {
-        if (dev < (it.minDev || 0)) continue;          // this port is too small
+        /* A FLEET CARRIER IS NOT A SMALL PORT, whatever its development
+         * reading says. Astra: "those carrier shipstations, they're
+         * basically floating cities." The number generate.js writes there
+         * is about the civilian economy that grew around the hull, and a
+         * warship's own stores have nothing to do with it — a carrier
+         * moored off a mining head still has the armoury it sailed with.
+         *
+         * So the development gate is waived and the STANDING gate is not,
+         * which is the same trade the rest of this function runs on stated
+         * the other way round: the best kit in the game is somewhere the
+         * navy keeps it, and the navy sells to people it already trusts.
+         * Additive — nothing stops being available anywhere it was. */
+        if (!fleetPort(port) && dev < (it.minDev || 0)) continue;
         var armed = it.kind === 'gun' || it.kind === 'turret';
         if (hot && armed) {
           verdict = 'they will not arm someone they want';
@@ -5227,6 +5342,7 @@
     batchFactor: batchFactor,
     wasteCustoms: wasteCustoms, expelledHere: expelledHere,
     WASTE_FINE: WASTE_FINE,
+    seatsOf: seatsOf, passengersAboard: passengersAboard, seatsFree: seatsFree,
     hushQuote: hushQuote, hushWitness: hushWitness,
     HUSH_FROM_STANDING: HUSH_FROM_STANDING,
     HUSH_MIN_CORRUPTION: HUSH_MIN_CORRUPTION,
@@ -5309,7 +5425,8 @@
     damageNpc: damageNpc, damagePlayer: damagePlayer, killNpc: killNpc,
     liftTrader: liftTrader,
     crime: crime, witnessNear: witnessNear,
-    bountyTotal: bountyTotal, wantedHere: wantedHere,
+    bountyTotal: bountyTotal, wantedHere: wantedHere, fleetPort: fleetPort,
+    contrabandAboardFor: contrabandAboardFor,
     dockRefused: dockRefused, dockRefusal: dockRefusal, payBounty: payBounty,
     demandFrom: demandFrom,
     repairCost: repairCost, repair: repair, deadPanelCount: deadPanelCount,

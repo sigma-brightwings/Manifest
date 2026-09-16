@@ -2901,6 +2901,11 @@
     fillLocalHolds(sys, tr, ports);
     buildFeeders(sys, tr, ports);
     buildHeavies(sys, tr, ports);
+    /* LAST, so it sees the heavies too. A liner lying off a station with
+     * four hundred people aboard is the same object as one under way with
+     * four hundred people aboard, and the pass that fills them has no
+     * reason to know which list a route came from. */
+    fillLinerSeats(sys, tr);
   }
 
   /* ---- what the local runs are carrying ----------------------------------
@@ -3010,6 +3015,36 @@
 
   function negated(manifest) {
     return manifest.map(function (m) { return { cid: m.cid, qty: -m.qty }; });
+  }
+
+  /* ---- who is on the liner ------------------------------------------------
+   * A liner has been in the traffic model since the classifier learned the
+   * word, and it has never carried a single person: classifyRoute picks the
+   * hull because the run is light and touches a settled world, and then the
+   * ship flies whatever freight the manifest said. The silhouette was
+   * right and the fiction underneath it was a freighter.
+   *
+   * So a liner gets SOULS as well as a manifest — people are not a
+   * commodity and must never become one, because a commodity has a price,
+   * a shelf and a market row, and the moment passengers have those the
+   * player can buy them. They are a count on the route, read by the comms
+   * channel and by anything that scans a hold, and they touch no price
+   * anywhere.
+   *
+   * Its own fork, after the schedule: the hull, the timetable and every
+   * existing seed's traffic are bit-for-bit what they were. */
+  var SOULS_PER_SIZE = 1400;      // a liner's size is its hull in the model
+
+  function fillLinerSeats(sys, tr) {
+    var lr = tr.fork('liner');
+    var routes = sys.traffic || [];
+    for (var i = 0; i < routes.length; i++) {
+      var r = routes[i];
+      if (r.cls !== 'liner' || r.souls) continue;
+      /* Scaled off the hull that is actually drawn, so a big liner is
+       * visibly a big liner rather than a number nobody can check. */
+      r.souls = Math.max(12, Math.round(r.size * SOULS_PER_SIZE * lr.range(0.6, 1.4)));
+    }
   }
 
   /* ---- heavies -----------------------------------------------------------

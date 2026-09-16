@@ -2503,5 +2503,225 @@ console.log('\n--- the control cabinet ---');
         String(Combat.breakerRating(makeG().ship)));
 })();
 
+section('--- people in the back ---');
+(function () {
+  /* Astra: "Habitation Units that trade cargo space for ability to move
+   * people?" — and, asked whether a bare hull could take a passenger or
+   * two: no. The hab unit is the gate, which is what makes it a decision
+   * about the ship rather than a bonus on top of one. */
+  var G = makeG();
+  var s = G.ship;
+  var hullCap = Combat.HULLS[s.hullId].cargoCap;
+  check('a bare hull has no berths at all', Combat.seatsOf(s) === 0);
+  check('and its hold is the hull\'s', s.cargoCap === hullCap);
+
+  var fit = Combat.canFit(s, 'habunit');
+  check('a habitation unit fits an internal slot', fit.ok, fit.why);
+  s.fit[fit.key] = 'habunit';
+  Combat.syncLegacy(s);
+  var hab = Combat.MODULES.habunit;
+  check('it buys berths', Combat.seatsOf(s) === hab.seats,
+        String(Combat.seatsOf(s)));
+  check('and it pays for them out of the hold',
+        s.cargoCap === hullCap - hab.hold,
+        s.cargoCap + ' of ' + hullCap);
+
+  /* DERIVED, NOT DECREMENTED. The hold is written from the hull every time
+   * the fitting changes, so pulling the unit gives the tonnage back — the
+   * decrementing version leaks eight tonnes per fit-and-sell and every
+   * save that ever carried one drifts. */
+  delete s.fit[fit.key];
+  Combat.syncLegacy(s);
+  check('pulling it gives the hold back exactly', s.cargoCap === hullCap,
+        s.cargoCap + ' of ' + hullCap);
+  check('and takes the berths with it', Combat.seatsOf(s) === 0);
+
+  /* It is built INTO the hold, so it cannot be fitted around cargo that is
+   * already in there — and the refusal says how much has to come off. */
+  s.fit[fit.key] = 'habunit'; Combat.syncLegacy(s);
+  delete s.fit[fit.key]; Combat.syncLegacy(s);
+  s.cargo = { grain: hullCap - 2 };
+  Sim.refreshShip(s);
+  var tight = Combat.canFit(s, 'habunit');
+  check('it will not fit around a full hold', !tight.ok, JSON.stringify(tight));
+  check('and the refusal says how much has to come off',
+        !!tight.why && /t off first/.test(tight.why), tight.why);
+  s.cargo = {}; Sim.refreshShip(s);
+})();
+
+section('--- passage ---');
+(function () {
+  var G = makeG();
+  var s = G.ship;
+  s.credits = 20000;
+  var fit = Combat.canFit(s, 'habunit');
+  s.fit[fit.key] = 'habunit';
+  Combat.syncLegacy(s);
+
+  var offer = { id: 'pass-test', type: 'passage', souls: 3, tonnes: 0, cid: null,
+                fromName: 'A', toPortId: 'nowhere', toName: 'B',
+                faction: 'liftfac', pay: 2400, deadline: G.t + 4 * 86400,
+                text: '3 aboard' };
+
+  /* NO HAB, NO PASSAGE, and the refusal names the fitting rather than
+   * saying no — a row that will not explain itself is a bug. */
+  var bare = makeG();
+  var why = Missions.passageRefusal(bare, offer);
+  check('a ship with no berths is refused, in words', !!why && /habitation/.test(why), why);
+
+  /* WHO YOU ARE TRAVELLING WITH. Both refusals read the same tables the
+   * law reads, so a passenger cannot disagree with the customs officer who
+   * would do the searching. */
+  G.wanted.liftfac = Combat.WANTED_HUNT + 100;
+  check('nobody boards a ship the local flag is hunting',
+        /hunting/.test(Missions.passageRefusal(G, offer) || ''));
+  G.wanted = {};
+  check('with that cleared they will board', !Missions.passageRefusal(G, offer),
+        Missions.passageRefusal(G, offer));
+
+  var res = Missions.accept(G, offer, HOOKS);
+  check('signing a passage puts people aboard rather than tonnes',
+        res.ok && s.passengers === 3 && Sim.cargoMass(s) === 0,
+        JSON.stringify({ ok: res.ok, p: s.passengers, hold: Sim.cargoMass(s) }));
+  check('and the berths it used are no longer free',
+        Combat.seatsFree(s) === Combat.seatsOf(s) - 3, String(Combat.seatsFree(s)));
+
+  /* BEING SHOT AT. Recorded while it happens, because by the time anybody
+   * is paying the hull is repaired and there is nothing left to read. */
+  var clean = Missions.passageCut(G, G.missions[0]);
+  Combat.damagePlayer(G, 12, HOOKS, 'kinetic', null);
+  check('taking a hit with people aboard marks the contract',
+        G.missions[0].rough === true);
+  var rough = Missions.passageCut(G, G.missions[0]);
+  check('and a rough trip pays less than a quiet one',
+        rough.pay < clean.pay, rough.pay + ' vs ' + clean.pay);
+  check('and costs standing on top of it', rough.standing < clean.standing);
+
+  /* ARRIVING LATE. A late passage is not a late parcel: the people are
+   * still aboard being late WITH you, so the contract does not expire out
+   * from under them — it pays less. */
+  var was = G.t;
+  G.t = G.missions[0].deadline + 10;
+  var late = Missions.passageCut(G, G.missions[0]);
+  check('late pays less again', late.pay < rough.pay, late.pay + ' vs ' + rough.pay);
+  Missions.update(G, G.t, HOOKS);
+  check('and the contract is still live rather than torn up',
+        (G.missions || []).length === 1);
+  /* Until patience runs out, at which point they get off wherever you are. */
+  Missions.update(G, G.missions[0].deadline + 5 * 86400, HOOKS);
+  check('past that they give up and get off', (G.missions || []).length === 0 &&
+        s.passengers === 0, JSON.stringify({ n: (G.missions || []).length, p: s.passengers }));
+  G.t = was;
+})();
+
+section('--- they find out what is in the hold ---');
+(function () {
+  /* The door check covers the honest case and none of the interesting one:
+   * load the stuff AFTER they are aboard and the check has already
+   * happened. So it is asked again at every dock, because a dock is the
+   * first place somebody who has changed their mind can act on it. */
+  var G = makeG();
+  var s = G.ship;
+  s.credits = 20000;
+  var fit = Combat.canFit(s, 'habunit');
+  s.fit[fit.key] = 'habunit';
+  Combat.syncLegacy(s);
+  var offer = { id: 'pass-dirty', type: 'passage', souls: 2, tonnes: 0, cid: null,
+                fromName: 'A', toPortId: 'elsewhere', toName: 'B',
+                faction: 'cleanfac', pay: 1800, deadline: G.t + 4 * 86400,
+                text: '2 aboard' };
+  Missions.accept(G, offer, HOOKS);
+  check('they are aboard to begin with', s.passengers === 2);
+
+  var dirty = null;
+  for (var cid in Eco.BY_ID) {
+    if (Eco.BY_ID[cid].contraband) { dirty = cid; break; }
+  }
+  check('the law has something it calls contraband', !!dirty, String(dirty));
+  s.cargo[dirty] = 3;
+  Sim.refreshShip(s);
+  Missions.completeAtDock(G, { id: 'somewhere-else', name: 'Waypoint' },
+                          G.sys, G.t, HOOKS);
+  check('they walk off at the next dock, wherever it is',
+        s.passengers === 0 && (G.missions || []).length === 0,
+        JSON.stringify({ p: s.passengers, n: (G.missions || []).length }));
+  check('and it costs standing with the flag whose people they were',
+        Missions.standing(G, 'cleanfac') < 0,
+        String(Missions.standing(G, 'cleanfac')));
+})();
+
+section('--- the liners carry people ---');
+(function () {
+  /* A liner has been in the traffic model since the classifier learned the
+   * word and has never carried a person: the hull was picked because the
+   * run was light and touched a settled world, and then it flew freight.
+   * People are a COUNT on the route rather than a commodity, because a
+   * commodity has a price and a shelf and the player could buy them. */
+  var liners = 0, withPeople = 0, priced = 0;
+  for (var i = 0; i < 20; i++) {
+    var sys = Gen.generateSystem('seed-' + i);
+    (sys.traffic || []).forEach(function (r) {
+      if (r.cls !== 'liner') return;
+      liners++;
+      if (r.souls > 0) withPeople++;
+    });
+  }
+  check('there are liners in the sky', liners > 20, String(liners));
+  check('and every one of them has somebody aboard', withPeople === liners,
+        withPeople + ' of ' + liners);
+  check('people never became a commodity',
+        !Eco.BY_ID.passengers && !Eco.BY_ID.souls);
+})();
+
+section('--- the navy runs the carrier ---');
+(function () {
+  /* Astra: "The navy runs the carrier, and then there are those carrier
+   * shipstations, they're basically floating cities." They have been
+   * dockable since the day they were sited and there has been nothing to
+   * do at one. */
+  var found = null, sysWith = null;
+  for (var i = 0; i < 30 && !found; i++) {
+    var sys = Gen.generateSystem('seed-' + i);
+    for (var p = 0; p < sys.ports.length; p++) {
+      if (Combat.fleetPort(sys.ports[p])) { found = sys.ports[p]; sysWith = sys; break; }
+    }
+  }
+  check('the fleet has carriers to dock at', !!found, found && found.name);
+  if (!found) return;
+
+  var G = makeG();
+  G.sys = sysWith;
+  var board = Missions.boardAt(found, sysWith, null, null, 0);
+  var licensed = board.filter(function (o) { return o.licensed; });
+  check('a carrier posts work nowhere else does', licensed.length > 0,
+        licensed.length + ' licensed of ' + board.length);
+
+  /* THE CLEARANCE IS CHECKED WHEN YOU SIGN, not when the board is built —
+   * which is the move that unblocks this contract at all. The board is
+   * generated per port and window and cannot ask what standing you have;
+   * the signature can. */
+  var lic = licensed[0];
+  var why = Missions.licenceRefusal(G, lic);
+  check('an unlicensed captain is refused, with the number',
+        !!why && /standing/.test(why), why);
+  var res = Missions.accept(G, lic, HOOKS);
+  check('and the signature refuses too, in the same words',
+        !res.ok && res.why === why, JSON.stringify(res));
+
+  Missions.bumpStanding(G, lic.faction, Combat.MILFUEL_LICENCE_STANDING + 5);
+  check('with the navy behind you it signs',
+        !Missions.licenceRefusal(G, lic),
+        String(Missions.licenceRefusal(G, lic)));
+
+  /* It is the one haul that hands over naval materiel, so it is the one
+   * that pays like it rather than off the ordinary per-tonne table. */
+  check('and it pays like what is in the hold',
+        lic.pay > lic.tonnes * 400, lic.pay + ' cr for ' + lic.tonnes + ' t');
+
+  /* A carrier's stores are not the local economy's. */
+  var shelf = Combat.stockAt(G, found);
+  check('a carrier stocks a real catalogue', shelf.length > 8, String(shelf.length));
+})();
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);
