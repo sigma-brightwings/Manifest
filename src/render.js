@@ -524,6 +524,11 @@
     /* A pirate wants speed more than it wants a gun platform. */
     pirate: 'runner-m',
     liner: 'liner-m',
+    /* The carrier family was listed below as waiting for a role; the bulk
+     * class is that role. It reads as a merchant heavy rather than as a
+     * warship at this size, and it is the biggest civilian silhouette in
+     * the library — which is the whole point of the class. */
+    bulk: 'carrier-l',
     /* Was 'capital-m', which was wrong in a way that mattered: a navy that
      * only fields capital hulls cannot be DISPATCHED, and dispatched
      * hunters are what the notoriety work needs. The capital is now free

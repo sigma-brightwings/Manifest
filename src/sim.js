@@ -1303,17 +1303,58 @@
     return { pos: V.add(parent.pos, rel.pos), vel: V.add(parent.vel, rel.vel) };
   }
 
-  /* Where a ship parks when it is alongside a port rather than inside it —
-   * straight "up" from the port, along the port's own radial. Returned as a
-   * world vector so the cruise arc can blend into it at both ends. */
-  function parkOffset(port, sys, t, parentFallback) {
+  /* Where a ship parks when it is alongside a port rather than inside it.
+   *
+   * It used to be straight "up" from the port along its own radial, the
+   * same direction for every ship — so a port with nine ships alongside
+   * drew nine ships at one point, and a busy dock looked exactly like an
+   * empty one. That is most of why Astra's "there are not enough big ships
+   * floating near space ports" was true even at ports that had them: the
+   * others were inside the first.
+   *
+   * Each ROUTE gets its own spot on the apron, hashed from its id, so the
+   * spot is stable across a save, a reload and a time warp — the same
+   * doctrine every other placement in this game follows. The direction is
+   * tilted off the radial rather than added to it, which keeps the ship on
+   * the same sphere the old offset put it on and therefore still inside the
+   * envelope it would dock in.
+   *
+   * ONE function for the parking spot, deliberately: the cruise arc blends
+   * into this vector at both ends and dockPose puts the moored ship at it,
+   * so two versions of "alongside" would be a jump at every arrival. The
+   * first attempt at the spread had exactly that bug — the moored pose
+   * moved and the arc still aimed at the old point.
+   *
+   * The lateral basis comes from the port's own orbit (radial crossed with
+   * its velocity about its host) rather than from anyPerpendicular, which
+   * swaps reference axis at |z| = 0.9 and would teleport the parking spot
+   * of anything in a steep enough orbit as it crossed that line. */
+  function parkOffset(port, sys, t, parentFallback, route) {
     var host = port.parentBody || parentFallback;
     var ps = bodyStateAt(port, sys, t);
     var hs = bodyStateAt(host, sys, t);
     var radial = V.norm(V.sub(ps.pos, hs.pos));
     if (V.len(radial) < 1e-9) radial = { x: 0, y: 0, z: 1 };
     var park = (port.dockCaptureRadius || port.radius * 4) * 0.85;
-    return { dir: radial, vec: V.scale(radial, park) };
+    var dir = radial;
+
+    if (route && route.id && !port.surface && !port.underground) {
+      var along = V.sub(ps.vel, hs.vel);
+      var east = V.cross(radial, along);
+      if (V.len(east) < 1e-9) east = anyPerpendicular(radial);
+      east = V.norm(east);
+      var north = V.norm(V.cross(east, radial));
+      var h = portHash({ id: String(route.id) + '@' + port.id });
+      var ang = ((h % 4096) / 4096) * Math.PI * 2;
+      /* How far off the radial. Never zero — two ships that both drew a
+       * small spread would be on top of each other again — and never past
+       * about 50 degrees, which keeps the apron on the side of the station
+       * a ship would actually approach from. */
+      var spread = 0.30 + ((h >>> 12) % 1000) / 1000 * 0.85;
+      dir = V.norm(V.addScaled(V.addScaled(radial, east, Math.cos(ang) * spread),
+                               north, Math.sin(ang) * spread));
+    }
+    return { dir: dir, vec: V.scale(dir, park) };
   }
 
   /* A single leg's geometry, frozen.
@@ -1355,8 +1396,8 @@
       key: key, sh: sh, dh: dh, rs: rs, rd: rd, ang: ang, axis: axis,
       chord: V.sub(d, s),
       vs: V.sub(sState.vel, pDep.vel), vd: V.sub(dState.vel, pArr.vel),
-      srcPark: parkOffset(src, sys, tDep, parent),
-      dstPark: parkOffset(dst, sys, tArr, parent)
+      srcPark: parkOffset(src, sys, tDep, parent, route),
+      dstPark: parkOffset(dst, sys, tArr, parent, route)
     };
     return route._leg;
   }
@@ -1371,7 +1412,7 @@
    *
    * Still a pure function of t — the pose is derived from the port, not
    * integrated — so nothing here breaks the rails. */
-  function dockPose(dst, sys, t, parent) {
+  function dockPose(dst, sys, t, parent, route) {
     var host = dst.parentBody || parent;
     var hs = bodyState(host, sys, t);
     var ds = bodyState(dst, sys, t);
@@ -1398,13 +1439,24 @@
     }
     /* An orbital station: alongside, not inside. A freighter drawn exactly
      * on top of the port's own marker just looks like the marker got
-     * brighter. */
-    var park = (dst.dockCaptureRadius || dst.radius * 4) * 0.85;
+     * brighter.
+     *
+     * AND EACH SHIP GETS ITS OWN SPOT ON THE APRON. Every moored ship used
+     * to be parked at the identical point — one standoff along the local
+     * up — so a port with nine ships alongside drew one ship nine times in
+     * the same place. That is most of why Astra's "there are not enough big
+     * ships floating near space ports" was true even where there were:
+     * eight of them were inside the ninth.
+     *
+     * The spot is hashed from the route id, so it is stable across a save,
+     * a reload and a time warp — the same doctrine every other placement in
+     * this game follows. Ring radius and height vary with the same hash, so
+     * the apron reads as ships holding station rather than as a wheel of
+     * them at one radius. */
     var along = V.sub(ds.vel, hs.vel);
-    return {
-      pos: V.addScaled(ds.pos, up, park), vel: ds.vel, up: up,
-      fwd: V.len(along) > 1e-9 ? V.norm(along) : up
-    };
+    var fwd = V.len(along) > 1e-9 ? V.norm(along) : up;
+    var spot = parkOffset(dst, sys, t, parent, route);
+    return { pos: V.add(ds.pos, spot.vec), vel: ds.vel, up: up, fwd: fwd };
   }
 
   /* The last of an approach and the first of a departure are flown as a
@@ -1436,7 +1488,7 @@
     var src = outbound ? A : B, dst = outbound ? B : A;
 
     if (moored) {
-      var pose = dockPose(dst, sys, t, parent);
+      var pose = dockPose(dst, sys, t, parent, route);
       var moor = finishTraffic(route, pose.pos, pose.vel, pose.fwd, pose.up,
                                'moored', u, src, dst, outbound);
       moor.throttle = 0;              // parked; drives cold
@@ -2003,6 +2055,12 @@
     for (var i = 0; i < sys.traffic.length; i++) {
       var route = sys.traffic[i];
       if (route.from !== port.id && route.to !== port.id) continue;
+      /* A SHIP AT ANCHOR IS NOT IN THE SHED. Heavies lie off the station
+       * with lighters working them rather than taking a bay — which is what
+       * the art shows, and the only version of them that does not make
+       * every large berth in the galaxy permanently occupied the day they
+       * were added. */
+      if (route.outboard) continue;
       var st = trafficState(route, sys, t);
       if (!st || st.phase !== 'moored') continue;
       if (!st.to || st.to.id !== port.id) continue;

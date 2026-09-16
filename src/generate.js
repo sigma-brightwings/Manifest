@@ -2660,7 +2660,17 @@
      * fast for its size because passengers will not sit through a
      * freighter's fortnight, and it is the brightest thing in the sky —
      * the model carries hundreds of self-lit windows. */
-    liner:     { size: 0.145, color: '#cfe4ff', accel: 0.0021, label: 'liner' }
+    liner:     { size: 0.145, color: '#cfe4ff', accel: 0.0021, label: 'liner' },
+    /* THE BIGGEST THING AT A DOCK, and the only class in this table that
+     * exists for how it LOOKS rather than for what it carries. Astra:
+     * "there are not enough big ships floating near space ports." A bulk
+     * carrier lies off the station on station-keeping for days at a time,
+     * which is the silhouette that makes a port read as a port rather than
+     * as a lit box with couriers around it.
+     *
+     * Slow even for its size: nothing this big is in a hurry, and a long
+     * cruise is a long time spent visible on the apron at either end. */
+    bulk:      { size: 0.230, color: '#b9c0cc', accel: 0.0008, label: 'bulk carrier' }
   };
 
   var LINE_NAMES = ['Ardent', 'Coldwater', 'Fenwick', 'Halcyon', 'Ironwake', 'Juno',
@@ -2839,6 +2849,79 @@
     }
 
     buildFeeders(sys, tr, ports);
+    buildHeavies(sys, tr, ports);
+  }
+
+  /* ---- heavies -----------------------------------------------------------
+   * Astra: "there are not enough big ships floating near space ports."
+   *
+   * Measured before changing anything, across 12 systems and 3,000
+   * port-samples: 0.39 large ships within 60 km of a port at any moment
+   * against 3.84 small ones. The scheduled routes are ranked by trade
+   * score and the feeders are all shuttles, so the fleet came out ten to
+   * one in favour of things you can barely see.
+   *
+   * Same three properties the feeders have, for the same reasons: their own
+   * fork AFTER everything else so no existing route in any existing seed
+   * moves; no manifests, because a heavy that moved cargo would change
+   * every price in the game and this is a traffic change; and layovers
+   * measured in DAYS rather than hours, which is what puts them alongside
+   * a station when you happen to fly past.
+   *
+   * THEY DO NOT TAKE A BERTH. `outboard` says so, and Sim.berthOccupants
+   * honours it. A bulk carrier at anchor is not in the shed - it is lying
+   * off the station with lighters working it, which is both what the art
+   * shows and the only version of this that does not quietly make every
+   * large bay in the galaxy permanently occupied. The docking queue the
+   * player competes in is exactly as it was.
+   */
+  var HEAVY_CLASSES = ['bulk', 'freighter', 'tanker', 'liner'];
+  var HEAVIES_PER_PORT = 3;
+
+  function buildHeavies(sys, tr, ports) {
+    var hr = tr.fork('heavy');
+    if (ports.length < 2) return;
+    var n = 0;
+    for (var i = 0; i < ports.length; i++) {
+      var A = ports[i];
+      /* A heavy goes where a heavy would go: the biggest dock it can reach
+       * that is not this one. Ports are not ranked here beyond "somewhere
+       * else in the system", because the point is the silhouette on the
+       * apron rather than a trade nobody can see. */
+      for (var k = 0; k < HEAVIES_PER_PORT; k++) {
+        var B = ports[(i + 1 + hr.int(0, ports.length - 2)) % ports.length];
+        if (B === A) continue;
+        var parent = commonParent(A, B, sys);
+        var ra = radiusAbout(A, parent, sys), rb = radiusAbout(B, parent, sys);
+        var dist = (A.parentBody === B.parentBody)
+          ? Math.max(Math.abs(ra - rb), (ra + rb) * 0.45)
+          : Math.sqrt(ra * ra + rb * rb);
+        var cls = hr.pick(HEAVY_CLASSES);
+        var spec = SHIP_CLASSES[cls];
+        var cruise = 2 * Math.sqrt(dist / spec.accel);
+        cruise = Math.max(900, Math.min(cruise, 90 * 86400));
+        /* Long enough to be there when you arrive. A day and a half at the
+         * short end; five days at the long end, which for the biggest hulls
+         * is a realistic turnaround and, more to the point, means a port
+         * you saw a carrier at yesterday probably still has it. */
+        var layover = hr.range(1.5, 5.0) * 86400;
+        var period = 2 * (cruise + layover);
+        sys.traffic.push({
+          id: 'h' + n, name: hr.pick(LINE_NAMES) + ' ' + hr.pick(HULL_NAMES),
+          cls: cls, className: spec.label,
+          size: spec.size * hr.range(0.85, 1.25),
+          color: spec.color,
+          from: A.id, to: B.id, parentId: parent.id,
+          local: A.parentBody === B.parentBody,
+          heavy: true, outboard: true,
+          cruise: cruise, layover: layover, period: period,
+          t0: hr.range(0, period),
+          out: [], back: [],
+          distance: dist
+        });
+        n++;
+      }
+    }
   }
 
   /* ---- feeders -----------------------------------------------------------

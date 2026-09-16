@@ -605,6 +605,97 @@ console.log('--- traffic arrives at ports, not near them ---');
         'worst dot ' + worstDot.toFixed(3) + '   ' + worstWhy);
 })();
 
+/* ---- the apron ---------------------------------------------------------
+ * Astra: "there are not enough big ships floating near space ports."
+ *
+ * Two separate faults behind one sentence, and this pins both of them.
+ *
+ * The first is that there genuinely were not many: measured across 12
+ * systems and 3,000 port-samples before the change, 0.39 large ships within
+ * 60 km of a port at any moment against 3.84 small ones. The scheduled
+ * routes are ranked by trade score and every feeder is a shuttle, so the
+ * fleet came out ten to one in favour of things you can barely see.
+ *
+ * The second is that the ones that WERE there could not be seen anyway.
+ * Every moored ship parked at the identical point — one standoff along the
+ * port's own radial — so a dock with nine ships alongside drew one ship
+ * nine times in the same place. That is a bug the eye reports as "empty".
+ */
+console.log('--- the apron ---');
+(function () {
+  var nearLarge = 0, nearSmall = 0, portSamples = 0;
+  var pairs = 0, closest = Infinity, closestWhy = '';
+  var outsideEnvelope = 0, heavyInBerth = 0, heaviesSeen = 0;
+
+  for (var s = 0; s < 8; s++) {
+    var sys = Gen.generateSystem('apron-' + s);
+    for (var k = 0; k < 12; k++) {
+      var t = k * 51000;
+      var list = Sim.trafficAll(sys, t);
+      sys.ports.forEach(function (p) {
+        var pp = Sim.bodyPosition(p, sys, t);
+        portSamples++;
+        list.forEach(function (sh) {
+          if (V.dist(sh.pos, pp) < 60) {
+            if ((sh.route.size || 0) >= 0.10) nearLarge++; else nearSmall++;
+          }
+        });
+        if (p.surface || p.underground) return;
+
+        var moored = list.filter(function (sh) {
+          return sh.phase === 'moored' && sh.to && sh.to.id === p.id;
+        });
+        moored.forEach(function (sh) {
+          if (sh.route.heavy) heaviesSeen++;
+          /* Alongside still means alongside: the spread tilts the parking
+           * direction off the radial rather than adding to it, so the ship
+           * stays on the sphere the old offset put it on. */
+          if (V.dist(sh.pos, pp) > (p.dockCaptureRadius || p.radius * 4)) outsideEnvelope++;
+        });
+        for (var i = 0; i < moored.length; i++) {
+          for (var j = i + 1; j < moored.length; j++) {
+            var d = V.dist(moored[i].pos, moored[j].pos);
+            pairs++;
+            if (d < closest) {
+              closest = d;
+              closestWhy = moored[i].route.id + ' / ' + moored[j].route.id +
+                           ' at ' + p.name;
+            }
+          }
+        }
+
+        /* AND A HEAVY IS NOT IN THE SHED. The berth count the player
+         * competes for must not include ships that never asked for a bay —
+         * otherwise adding them would have made every large berth in the
+         * galaxy permanently occupied. */
+        var occ = Sim.berthStatus(p, sys, t, { dryMass: 400 }).occupants;
+        for (var q = 0; q < occ.length; q++) if (occ[q].route.outboard) heavyInBerth++;
+      });
+    }
+  }
+
+  console.log('  ' + (nearLarge / portSamples).toFixed(2) + ' large and ' +
+              (nearSmall / portSamples).toFixed(2) +
+              ' small ships within 60 km of a port, at any moment');
+  console.log('  ' + pairs + ' moored pairs; the closest two are ' +
+              closest.toFixed(3) + ' km apart (' + closestWhy + ')');
+
+  /* The floor is set well under the 1.30 measured, because this is a guard
+   * against the fleet going back to couriers-only rather than a restatement
+   * of today's number — which will move every time the traffic is tuned. */
+  check('there are big ships at ports to look at',
+        nearLarge / portSamples > 0.9, (nearLarge / portSamples).toFixed(2) + ' per port');
+  check('and the little ones did not go away',
+        nearSmall / portSamples > 2, (nearSmall / portSamples).toFixed(2) + ' per port');
+  check('two ships moored at one port are in two different places',
+        pairs > 100 && closest > 0.08, closest.toFixed(4) + ' km apart: ' + closestWhy);
+  check('and all of them are still inside the envelope they docked in',
+        outsideEnvelope === 0, outsideEnvelope + ' adrift');
+  check('there are heavies moored to check', heaviesSeen > 0, heaviesSeen + ' sightings');
+  check('a ship at anchor does not hold a berth', heavyInBerth === 0,
+        heavyInBerth + ' in bays');
+})();
+
 console.log('--- market: analytic vs stepped ---');
 (function () {
   var sys = Gen.generateSystem('kawartha');
