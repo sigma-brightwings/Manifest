@@ -1226,14 +1226,18 @@ console.log('--- the doorway is a hole ---');
   }
   check('there are doorways to cut', total > 0, total + ' apertures');
   check('and the cut takes faces out of every model', cutFaces > 0, cutFaces + ' faces');
-  /* MEASURED, NOT ASPIRED TO. 36 of 48 at the time of writing: every spine
-   * and cylinder berth, four of five on the ring, none of the cradles and
-   * none of the three large spine berths — those last twelve are stopped
-   * 53 to 106 m out, far short of their doors, by something close in that
-   * is a different obstruction and has not been looked at yet. The bar is
-   * where the measurement is, so this fails if a change puts a wall back
-   * and does not quietly pass if the remaining twelve are fixed. */
-  check('most berths have a way out with the doors open', clear >= 36,
+  /* ALL OF THEM, NOW, and the last twelve were a different bug wearing the
+   * same symptom. The cut asks whether a face's CENTRE is in the doorway,
+   * which is right for a wall tessellated finer than the opening and wrong
+   * for a slab: every cradle berth and the one spine berth facing along -y
+   * was sealed by a single enormous interior face lying across the alcove
+   * a quarter of the way to the door, every vertex of it outside the
+   * opening's cross-section and its centre nowhere near the hole. Thirty-six
+   * faces in the whole library, and they stopped twelve berths completely.
+   *
+   * The bar is the measurement, so a change that puts a wall back fails
+   * here rather than being discovered from the cockpit. */
+  check('every berth has a way out with the doors open', clear === total,
         clear + ' of ' + total);
 })();
 
@@ -1427,6 +1431,127 @@ console.log('--- the stand under the ship ---');
   for (var n = 0; n < 40; n++) Render.berthDressing(role, 0, 2 + n * 0.01);
   check('the cache is bounded — a career visits more ports than it can hold',
         Render.berthDressing(role, 0, 1.3) !== small);
+})();
+
+console.log('--- BAY 4 ---');
+(function () {
+  /* Astra: "add the number for each berth on the doors for that berth. The
+   * number should be high right and low left it says BAY, with each berth
+   * having its number on it."
+   *
+   * ON THE LEAVES, which is the harder of the two places and the one she
+   * asked for: lettering welded to a door travels with it, so a legend
+   * across a pair of leaves parts down the middle when they open. */
+  var LEGEND = '!#7ed3ff', NUMERAL = '!#ffe6a8';
+  var lettered = 0, models = 0;
+  MODELS.forEach(function (id) {
+    Render.assignPort('orbital', id);
+    var d = Render.portDoors(id);
+    if (!d) return;
+    models++;
+    var word = 0, num = 0;
+    d.leaves.forEach(function (lf) {
+      if (!lf.mesh || !lf.mesh.c) return;
+      lf.mesh.c.forEach(function (c) {
+        if (c === LEGEND) word++;
+        else if (c === NUMERAL) num++;
+      });
+    });
+    if (word > 0 && num > 0) lettered++;
+  });
+  Render.assignPort('orbital', null);
+  check('every model with doors has its bays lettered', lettered === models,
+        lettered + ' of ' + models);
+
+  /* The glyphs are boxes, so a numeral costs faces — and the count is what
+   * proves they are NUMERALS rather than the tally of dashes the stand
+   * board used to carry, which said "four" by drawing four of something. */
+  Render.assignPort('orbital', MODELS[0]);
+  var d0 = Render.portDoors(MODELS[0]);
+  var onLeaves = 0;
+  d0.leaves.forEach(function (lf) {
+    if (!lf.mesh || !lf.mesh.c) return;
+    lf.mesh.c.forEach(function (c) { if (c === LEGEND || c === NUMERAL) onLeaves++; });
+  });
+  check('the legend is on the leaves rather than the hull', onLeaves > 0,
+        onLeaves + ' faces');
+  /* And NOT on the hull, which is the half that matters: lettering left on
+   * the bulkhead stays behind when the door slides away. Compared against
+   * the raw library rather than against zero, because the art's own
+   * signage happens to use one of these colours already — asserting zero
+   * would have been asserting something about the model. */
+  var raw = Render.libPort(MODELS[0]).shell;
+  function count(list) {
+    var n = 0;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] === LEGEND || list[i] === NUMERAL) n++;
+    }
+    return n;
+  }
+  check('and not left behind on the bulkhead when the door opens',
+        count(d0.hull.c) <= count(raw.c),
+        count(d0.hull.c) + ' on the hull against ' + count(raw.c) + ' in the art');
+  Render.assignPort('orbital', null);
+})();
+
+console.log('--- the bay is somewhere people work ---');
+(function () {
+  /* Astra: "we need more colored things, concourses, elevator shafts,
+   * etc... put some advertisement signs on the inside of the berth, which
+   * scroll through ads for different things."
+   *
+   * The stand fixed the SCALE of the room. What it did not fix is that the
+   * room reads as empty — nothing in it implies anybody is on the other
+   * side of the wall. */
+  var role = MODELS[0];
+  var dress = Render.berthDressing(role, 0, 1.3);
+  check('the bay has furniture in it', !!dress && dress.f.length > 200,
+        dress && String(dress.f.length));
+  if (!dress) return;
+
+  var colours = {};
+  dress.c.forEach(function (c) { colours[c] = (colours[c] || 0) + 1; });
+  check('lit windows look into somewhere', colours['!#9fd8ff'] > 0,
+        String(colours['!#9fd8ff']));
+  check('and some of them are dark, which is what makes the lit ones read',
+        colours['!#1b222b'] > 0, String(colours['!#1b222b']));
+  check('there are lift shafts with cars in them',
+        colours['!#2b3a4a'] > 0 && colours['!#ffd36b'] > 0);
+
+  /* THE BOARDS TURN OVER. A hoarding that never changes is scenery. */
+  check('the bay has hoardings', dress.adBoards && dress.adBoards.length > 0,
+        dress.adBoards && String(dress.adBoards.length));
+  var a0 = Render.berthAds(role, 0, 1.3, 0);
+  var a1 = Render.berthAds(role, 0, 1.3, 1);
+  check('and something is playing on them', !!a0 && a0.f.length > 0,
+        a0 && String(a0.f.length));
+  check('which is not the same thing a slot later', !!a1 && a1 !== a0,
+        a1 ? 'different mesh' : 'none');
+  /* Cached per slot, and bounded — a career docks at more berths than a
+   * cache should hold meshes for. */
+  check('a slot is cached rather than rebuilt',
+        Render.berthAds(role, 0, 1.3, 0) === a0);
+  for (var n = 0; n < 40; n++) Render.berthAds(role, 0, 1.3, 100 + n);
+  check('and the cache is bounded', Render.berthAds(role, 0, 1.3, 0) !== a0);
+
+  /* Two berths in the same station are not running the same campaign. */
+  var b0 = Render.berthAds(role, 0, 1.3, 5);
+  var b1 = Render.berthAds(role, 1, 1.3, 5);
+  check('two bays are not showing the same board',
+        !!b0 && !!b1 && b0.f.length !== b1.f.length,
+        b0 && b1 ? (b0.f.length + ' vs ' + b1.f.length) : 'missing');
+
+  /* WALL CLOCK, not sim time — a hoarding is a light on a timer in the
+   * world, and feeding it the simulation would race the ads during a warp. */
+  check('the slot advances on seconds', Render.adSlot(Render.AD_SECONDS * 3 + 1) === 3,
+        String(Render.adSlot(Render.AD_SECONDS * 3 + 1)));
+
+  /* The furniture is not livery either, for the same reason the stand is
+   * not: a bay lit in the owner's hue is a bay with no contrast in it. */
+  Render.setAccent('#8a5cc4');
+  check('and none of it is repainted by the flag',
+        Render.accented(dress) === dress);
+  Render.setAccent(null);
 })();
 
 console.log('--- leaving a berth ---');

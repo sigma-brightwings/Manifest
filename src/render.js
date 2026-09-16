@@ -2693,6 +2693,8 @@
     if (mesh.padHalfB !== undefined) out.padHalfB = mesh.padHalfB;
     if (mesh.padLift !== undefined) out.padLift = mesh.padLift;
     if (mesh.deckZ !== undefined) out.deckZ = mesh.deckZ;
+    if (mesh.adBoards !== undefined) out.adBoards = mesh.adBoards;
+    if (mesh.adFrame !== undefined) out.adFrame = mesh.adFrame;
     byColor[accentColor] = out;
     return out;
   }
@@ -3193,6 +3195,7 @@
   var CUT_COUNT = {};
   var OPEN_BUCKET = {};
   var APERTURE_SLAB = 0.08;          // port radii either side of the leaf plane
+  var SHELL_CUT_INSET = 0.88;        // of the clear opening — see corridorBox
 
   /* Is this point inside one of the doorways? Component-wise rather than
    * through a constructed basis: the berth normals in this library are
@@ -3209,6 +3212,126 @@
         if (Math.abs(c[k] - apr.mid[k]) > apr.half[k]) out = true;
       }
       if (!out) return true;
+    }
+    return false;
+  }
+
+  /* ---- and a hole has to be a hole for a TRIANGLE, not for its centre ----
+   *
+   * The cut above asks whether a face's CENTRE is in the doorway, which is
+   * the right question for a wall tessellated finer than the opening and
+   * the wrong one for a slab. Measured: twelve of the forty-eight modelled
+   * berths — all three cradles and the one spine berth that faces along
+   * -y — were still sealed after the doorway was cut, and the blocker was
+   * not the doorway at all. It was a single enormous interior face in
+   * plating grey lying across the alcove twenty-five to fifty-five metres
+   * out, a QUARTER of the way to the door, with every one of its vertices
+   * outside the opening's cross-section. Its centre was nowhere near the
+   * hole, so the centre test kept it; the ship flew into it anyway.
+   *
+   * That is the same class of bug as the original "the aperture was never
+   * cut", one level down, and it needed the honest test rather than a
+   * bigger slab: does this TRIANGLE touch the corridor. Separating-axis,
+   * thirteen axes, against a box that runs from the parked hull's nose out
+   * to the door plane — so a face is removed when a ship would hit it on
+   * the way out and not otherwise. Across the whole library it removes 36
+   * more faces of 53,820 and opens the last twelve berths. Thirty-six
+   * faces is the measure of how little was actually wrong and how
+   * completely it stopped you.
+   *
+   * The corridor is an axis-aligned box because every berth normal in this
+   * library is axis-aligned — the same assumption inAperture already
+   * states, and a constructed basis would only be a second way to get the
+   * same number wrong. */
+  /* TWO DEPTHS, AND THE DIFFERENCE MATTERS.
+   *
+   * For the INTERIOR the box runs the whole way — from the parked hull out
+   * to the door — because that bucket is fittings and partitions and
+   * anything of it standing in the bay is standing in the ship's way. It
+   * costs nine faces on a cradle and three on a spine, which is the whole
+   * of the twelve-berth bug.
+   *
+   * For the SHELL it is the door slab only. The shell is also what the bay
+   * is MADE of: its floor, its side walls and its ceiling all sit inside
+   * that same cross-section, and a full-depth cut there deleted five
+   * thousand faces a model and took the room away to open the door. The
+   * berth would have been flyable and no longer a place. */
+  function corridorBox(ap, full) {
+    var n = ap.normal, C = [0, 0, 0], H = [0, 0, 0];
+    for (var k = 0; k < 3; k++) {
+      if (Math.abs(n[k]) > 0.5) {
+        if (full) {
+          var L = ap.along + APERTURE_SLAB;
+          C[k] = ap.mid[k] + n[k] * L / 2;
+          H[k] = L / 2;
+        } else {
+          C[k] = ap.mid[k] + n[k] * ap.along;
+          H[k] = APERTURE_SLAB;
+        }
+      } else {
+        C[k] = ap.mid[k];
+        H[k] = ap.half[k] || 0;
+        /* A SHADE INSIDE THE CLEAR OPENING on the shell, and measured
+         * rather than picked: at the full width the triangle test also
+         * takes every jamb face that leans into the doorway and the cut
+         * runs to 24,500 faces; at 0.88 it is 15,200 and all forty-eight
+         * berths are still open. The difference is the door FRAME, which
+         * is not in anybody's way — the opening is hundreds of metres and
+         * the ship is twenty-five. */
+        if (!full) H[k] *= SHELL_CUT_INSET;
+      }
+    }
+    return { C: C, H: H };
+  }
+
+  function corridorBoxes(apertures, full) {
+    var out = [];
+    for (var i = 0; i < apertures.length; i++) out.push(corridorBox(apertures[i], full));
+    return out;
+  }
+
+  /* Triangle against an axis-aligned box, by separating axis. Nine
+   * edge-cross-axis tests, three box axes, one triangle normal. */
+  function triBox(a, b, c, C, H) {
+    var v0 = [a[0] - C[0], a[1] - C[1], a[2] - C[2]];
+    var v1 = [b[0] - C[0], b[1] - C[1], b[2] - C[2]];
+    var v2 = [c[0] - C[0], c[1] - C[1], c[2] - C[2]];
+    var e = [[v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]],
+             [v2[0] - v1[0], v2[1] - v1[1], v2[2] - v1[2]],
+             [v0[0] - v2[0], v0[1] - v2[1], v0[2] - v2[2]]];
+    for (var i = 0; i < 3; i++) {
+      for (var j = 0; j < 3; j++) {
+        var ax = [0, 0, 0]; ax[j] = 1;
+        var A = [ax[1] * e[i][2] - ax[2] * e[i][1],
+                 ax[2] * e[i][0] - ax[0] * e[i][2],
+                 ax[0] * e[i][1] - ax[1] * e[i][0]];
+        var p0 = A[0] * v0[0] + A[1] * v0[1] + A[2] * v0[2];
+        var p1 = A[0] * v1[0] + A[1] * v1[1] + A[2] * v1[2];
+        var p2 = A[0] * v2[0] + A[1] * v2[1] + A[2] * v2[2];
+        var r = H[0] * Math.abs(A[0]) + H[1] * Math.abs(A[1]) + H[2] * Math.abs(A[2]);
+        if (Math.min(p0, p1, p2) > r || Math.max(p0, p1, p2) < -r) return false;
+      }
+    }
+    for (var k = 0; k < 3; k++) {
+      if (Math.min(v0[k], v1[k], v2[k]) > H[k]) return false;
+      if (Math.max(v0[k], v1[k], v2[k]) < -H[k]) return false;
+    }
+    var nrm = [e[0][1] * e[1][2] - e[0][2] * e[1][1],
+               e[0][2] * e[1][0] - e[0][0] * e[1][2],
+               e[0][0] * e[1][1] - e[0][1] * e[1][0]];
+    var dd = nrm[0] * v0[0] + nrm[1] * v0[1] + nrm[2] * v0[2];
+    var rr = H[0] * Math.abs(nrm[0]) + H[1] * Math.abs(nrm[1]) + H[2] * Math.abs(nrm[2]);
+    return Math.abs(dd) <= rr;
+  }
+
+  /* Does any triangle of this face cross any of the corridors? */
+  function inCorridor(boxes, verts, face) {
+    for (var j = 1; j + 1 < face.length; j++) {
+      var a = verts[face[0]], b = verts[face[j]], c = verts[face[j + 1]];
+      if (!a || !b || !c) continue;
+      for (var i = 0; i < boxes.length; i++) {
+        if (triBox(a, b, c, boxes[i].C, boxes[i].H)) return true;
+      }
     }
     return false;
   }
@@ -3239,12 +3362,14 @@
       return OPEN_BUCKET[ck];
     }
     var f = [], c = [], cut = 0;
+    var cboxes = corridorBoxes(apertures, true);
     for (var i = 0; i < mesh.f.length; i++) {
       var face = mesh.f[i], x = 0, y = 0, z = 0;
       for (var k = 0; k < face.length; k++) {
         var v = mesh.v[face[k]]; x += v[0]; y += v[1]; z += v[2];
       }
-      if (inAperture(apertures, x / face.length, y / face.length, z / face.length)) {
+      if (inAperture(apertures, x / face.length, y / face.length, z / face.length) ||
+          inCorridor(cboxes, mesh.v, face)) {
         cut++; continue;
       }
       f.push(face);
@@ -3366,6 +3491,9 @@
       out.push({
         node: box.node,
         mesh: { v: shell.v, f: leaves[j].f, c: leaves[j].c },
+        /* Kept for the bay lettering below, which has to know which leaf a
+         * given corner of the doorway belongs to. */
+        box: box,
         axis: axis, travel: travel, field: field, berthMid: berth ? berth.mid : null
       });
     }
@@ -3473,6 +3601,7 @@
 
     if (apertures.length) {
       var keepF = [], keepC = [], cut = 0;
+      var shellBoxes = corridorBoxes(apertures, false);
       for (var hf = 0; hf < hullF.length; hf++) {
         var face = hullF[hf];
         var cx = 0, cy = 0, cz = 0;
@@ -3480,7 +3609,8 @@
           var cv = shell.v[face[cfi]]; cx += cv[0]; cy += cv[1]; cz += cv[2];
         }
         cx /= face.length; cy /= face.length; cz /= face.length;
-        if (inAperture(apertures, cx, cy, cz)) { cut++; continue; }
+        if (inAperture(apertures, cx, cy, cz) ||
+            inCorridor(shellBoxes, shell.v, face)) { cut++; continue; }
         keepF.push(face);
         keepC.push(hullC[hf]);
       }
@@ -3488,12 +3618,140 @@
       CUT_COUNT[role] = cut;
     }
 
+    letterTheBays(shell, out, apertures, berths);
+
     PORT_DOORS[role] = {
       hull: { v: shell.v, f: hullF, c: hullC },
       leaves: out,
       apertures: apertures
     };
     return PORT_DOORS[role];
+  }
+
+  /* ---- BAY 4 -------------------------------------------------------------
+   * Astra: "add the number for each berth on the doors for that berth. The
+   * number should be high right and low left it says BAY, with each berth
+   * having its number on it."
+   *
+   * ON THE LEAVES, not on the bulkhead beside them, which is the harder of
+   * the two and the one she asked for. A leaf is a slab of the shell lifted
+   * out before the doorway was cut, and it is drawn at wherever it has slid
+   * to this frame — so lettering welded to the leaf travels with the door
+   * and a legend painted across a pair of them parts down the middle when
+   * they open, which is exactly what a painted door does.
+   *
+   * Each piece of the legend is given to the leaf whose CLOSED footprint
+   * contains it, so a doorway that parts sideways gets BAY on one leaf and
+   * the number on the other, and one that parts vertically gets them on the
+   * halves they actually sit in. A piece over no leaf is dropped rather
+   * than floated in the opening.
+   *
+   * Sized off the DOORWAY rather than off the hull, unlike the deck
+   * furniture: a bay number is part of the station's art and should be the
+   * same fraction of its own door at every station wearing this model. The
+   * numerals come out around a fifth of the door's height, which is what
+   * you can read on approach.
+   *
+   * The berth is numbered from ONE. Bays are, and the stand's own board
+   * says the same number — the two would otherwise be arguing about what
+   * this berth is called. */
+  var BAY_LEGEND = '!#7ed3ff';       // the word
+  var BAY_NUMERAL = '!#ffe6a8';      // the number
+
+  function letterTheBays(shell, leaves, apertures, berths) {
+    if (!apertures || !apertures.length || !leaves || !leaves.length) return;
+    /* The same sort everything else reads berths in, so the number on the
+     * door is the number the dressing, the boom table and generate.js all
+     * agree this berth is. */
+    var sorted = berths.slice().sort(function (a, b) {
+      return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
+    });
+
+    for (var ai = 0; ai < apertures.length; ai++) {
+      var ap = apertures[ai], n = ap.normal;
+      if (Math.abs(n[2]) > 0.5) continue;        // a floor hatch has no wall to write on
+      var idx = -1;
+      for (var bi = 0; bi < sorted.length; bi++) {
+        var bm = sorted[bi].mid;
+        if (bm[0] === ap.mid[0] && bm[1] === ap.mid[1] && bm[2] === ap.mid[2]) { idx = bi; break; }
+      }
+      if (idx < 0) continue;
+
+      var u = [0, 0, 1];
+      var r = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]];
+      var rl = Math.sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+      if (!(rl > 1e-9)) continue;
+      r = [r[0] / rl, r[1] / rl, r[2] / rl];
+
+      /* Every leaf of THIS berth, measured in the doorway's own frame. */
+      var mine = [];
+      for (var li = 0; li < leaves.length; li++) {
+        var lf = leaves[li];
+        if (lf.field || !lf.box || !lf.box.min || !lf.box.max || !lf.berthMid) continue;
+        if (lf.berthMid[0] !== ap.mid[0] || lf.berthMid[1] !== ap.mid[1] ||
+            lf.berthMid[2] !== ap.mid[2]) continue;
+        var bm2 = [(lf.box.min[0] + lf.box.max[0]) / 2,
+                   (lf.box.min[1] + lf.box.max[1]) / 2,
+                   (lf.box.min[2] + lf.box.max[2]) / 2];
+        var dv = [bm2[0] - ap.mid[0], bm2[1] - ap.mid[1], bm2[2] - ap.mid[2]];
+        mine.push({
+          leaf: lf,
+          a: dv[0] * n[0] + dv[1] * n[1] + dv[2] * n[2],
+          r: dv[0] * r[0] + dv[1] * r[1] + dv[2] * r[2],
+          u: dv[2],
+          /* Half-extents of the leaf itself along r and u, which is what
+           * bounds the lettering: a legend has to fit on the door it is
+           * painted on, not on the opening the door covers. */
+          hr: Math.abs(n[0]) > 0.5
+            ? (lf.box.max[1] - lf.box.min[1]) / 2 : (lf.box.max[0] - lf.box.min[0]) / 2,
+          hu: (lf.box.max[2] - lf.box.min[2]) / 2
+        });
+      }
+      if (!mine.length) continue;
+
+      /* THE INNER LAYER ONLY. A doorway that carries a blast door behind an
+       * outer one has two leaves in the same place; the legend belongs on
+       * the one you are looking at from the bay. */
+      var near = mine[0].a;
+      for (var mi = 1; mi < mine.length; mi++) if (Math.abs(mine[mi].a) < Math.abs(near)) near = mine[mi].a;
+      var face = mine.filter(function (m) { return Math.abs(m.a - near) < 0.02; });
+      if (!face.length) face = mine;
+
+      /* Low left, and high right — Astra's layout. With a door that parts
+       * down the middle those are two different leaves, so the legend
+       * splits when the doors open, which is what a painted door does. */
+      var left = face[0], right = face[0];
+      for (var fi = 1; fi < face.length; fi++) {
+        if (face[fi].r < left.r) left = face[fi];
+        if (face[fi].r > right.r) right = face[fi];
+      }
+
+      var halfU = ap.half[2] || left.hu;
+      var num = String(idx + 1);
+      var cellN = Math.min(halfU * 0.09, right.hu * 0.28);
+      var cellW = Math.min(halfU * 0.05, left.hu * 0.16);
+      if (!(cellN > 0) || !(cellW > 0)) continue;
+
+      /* Written on the leaf's own face, a skin proud of it so it does not
+       * z-fight the door it is painted on. */
+      writeOnLeaf(left, n, r, u, ap, 'BAY', cellW, BAY_LEGEND, -1, -1);
+      writeOnLeaf(right, n, r, u, ap, num, cellN, BAY_NUMERAL, 1, 1);
+    }
+  }
+
+  /* One legend on one leaf, pinned to a corner of it. `sr`/`su` are -1 for
+   * the low/left edge and +1 for the high/right one. */
+  function writeOnLeaf(m, n, r, u, ap, text, cell, colour, sr, su) {
+    if (!m || !(cell > 0)) return;
+    var w = glyphWidth(text, cell), h = GLYPH_H * cell;
+    var inset = 0.14;
+    var b = sr < 0 ? m.r - m.hr * (1 - inset)
+                   : m.r + m.hr * (1 - inset) - w;
+    var c = su < 0 ? m.u - m.hu * (1 - inset)
+                   : m.u + m.hu * (1 - inset) - h;
+    /* Proud of the leaf's own face, on the side the bay is. */
+    var depth = m.a - Math.sign(m.a || 1) * (cell * 0.5);
+    pushText(m.leaf.mesh, ap.mid, n, r, u, depth, b, c, text, cell, colour);
   }
 
   /* Move a frame by a model-space offset. The frame maps model x/y/z onto
@@ -3835,6 +4093,66 @@
     }
   }
 
+  /* ---- letters, out of boxes ---------------------------------------------
+   * A bay needs a NUMBER on it and the renderer had no way to write one.
+   * The stand's own board has been carrying a tally of little dashes since
+   * it was built — berth 3 drew four marks — which is a count rather than
+   * a name, and nobody reads a tally at two hundred metres.
+   *
+   * So: a 3x5 block font, one box per lit pixel, in the same pushBox the
+   * rest of the deck furniture is made of. Three columns is the narrowest
+   * grid that still gives every digit its own unmistakable shape, and the
+   * only letters this file will ever need are B, A and Y.
+   *
+   * Bit 0 is the top-left pixel and bits run along each row, so a glyph
+   * reads in source the way it reads on the wall. */
+  var GLYPHS = {
+    '0': '111101101101111', '1': '010110010010111', '2': '111001111100111',
+    '3': '111001111001111', '4': '101101111001001', '5': '111100111001111',
+    '6': '111100111101111', '7': '111001001001001', '8': '111101111101111',
+    '9': '111101111001111',
+    'A': '111101111101101', 'B': '110101110101110', 'C': '111100100100111',
+    'D': '110101101101110', 'E': '111100110100111', 'F': '111100110100100',
+    'G': '111100101101111', 'H': '101101111101101', 'I': '111010010010111',
+    'J': '001001001101111', 'K': '101101110101101', 'L': '100100100100111',
+    'M': '101111111101101', 'N': '101111111111101', 'O': '111101101101111',
+    'P': '111101111100100', 'Q': '111101101111011', 'R': '111101110101101',
+    'S': '111100111001111', 'T': '111010010010010', 'U': '101101101101111',
+    'V': '101101101101010', 'W': '101101111111101', 'X': '101101010101101',
+    'Y': '101101010010010', 'Z': '111001010100111',
+    '-': '000000111000000', '.': '000000000000010', '!': '010010010000010',
+    ' ': '000000000000000'
+  };
+  var GLYPH_W = 3, GLYPH_H = 5;
+
+  /* Write `text` in the (f, r, u) frame with its LOWER-LEFT corner at
+   * (a, b, c). `cell` is one pixel, in the same units as the offsets.
+   * Returns the width written, so a caller can centre or right-align by
+   * measuring first. */
+  function glyphWidth(text, cell) {
+    return text.length ? (text.length * (GLYPH_W + 1) - 1) * cell : 0;
+  }
+
+  function pushText(mesh, o, f, r, u, a, b, c, text, cell, colour) {
+    var h = cell * 0.5;
+    for (var i = 0; i < text.length; i++) {
+      var bits = GLYPHS[text.charAt(i)];
+      if (!bits) continue;
+      var bx = b + i * (GLYPH_W + 1) * cell;
+      for (var row = 0; row < GLYPH_H; row++) {
+        for (var col = 0; col < GLYPH_W; col++) {
+          if (bits.charAt(row * GLYPH_W + col) !== '1') continue;
+          /* Row 0 is the TOP of the glyph, so it lands highest. */
+          pushBox(mesh, o, f, r, u,
+                  a,
+                  bx + col * cell + h,
+                  c + (GLYPH_H - 1 - row) * cell + h,
+                  cell * 0.18, h, h, colour);
+        }
+      }
+    }
+  }
+
   function berthDressing(role, berth, radiusKm) {
     if (!(radiusKm > 0)) return null;
     var key = role + '#' + berth + '#' + radiusKm.toFixed(4);
@@ -3888,6 +4206,11 @@
     var r = [f[1] * u[2] - f[2] * u[1], f[2] * u[0] - f[0] * u[2], f[0] * u[1] - f[1] * u[0]];
     var rl = Math.sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
     r = rl > 1e-9 ? [r[0] / rl, r[1] / rl, r[2] / rl] : [1, 0, 0];
+
+    /* The dressing origin sits ON the stand, so the deck is here; the berth
+     * box's own centre is `lift` plus the cast depth below it, which is
+     * what the room's furniture is measured from. */
+    var deckRel = 0;
 
     var m = { v: [], f: [], c: [] };
     /* LIT, WITHOUT A LIGHTING SYSTEM, and that is what the '!' is doing on
@@ -3972,13 +4295,113 @@
 
     /* The berth number, on a board at the head of the stand facing the way
      * a ship comes in. It reads as "there is a system here that knows which
-     * berth this is", which is most of what dressing is for. */
+     * berth this is", which is most of what dressing is for.
+     *
+     * It says the NUMBER now rather than a tally of dashes. The tally was
+     * honest about the count and useless as a name — you cannot read four
+     * marks as "bay four" at two hundred metres, and the bay signs on the
+     * bulkhead (below) say it in numerals, so the two would have disagreed
+     * about what this berth is called. */
+    var bayNo = String(berth + 1);
     var sgA = -(padA + 0.45 * L);
     pushBox(m, o, f, r, u, sgA, 0, 0.35 * L + barC, 0.025 * L, 0.025 * L, 0.35 * L, POST);
     pushBox(m, o, f, r, u, sgA, 0, 0.75 * L + barC, 0.02 * L, 0.30 * L, 0.13 * L, SIGN);
-    for (var dgt = 0; dgt <= berth % 5; dgt++) {
-      pushBox(m, o, f, r, u, sgA - 0.03 * L, (dgt - (berth % 5) / 2) * 0.09 * L,
-              0.75 * L + barC, 0.012 * L, 0.022 * L, 0.075 * L, DARK);
+    var boardCell = 0.035 * L;
+    pushText(m, o, f, r, u, sgA - 0.03 * L,
+             -glyphWidth(bayNo, boardCell) / 2,
+             0.75 * L + barC - GLYPH_H * boardCell / 2,
+             bayNo, boardCell, DARK);
+
+    /* ---- the bay is somewhere people work ---------------------------------
+     * Astra: "we need more colored things, concourses, elevator shafts,
+     * etc..."
+     *
+     * The stand fixed the SCALE of the room — it gave the eye something
+     * hull-sized to read the distances against. What it did not fix is that
+     * the room reads as empty: a floodlit floor in a grey box, with nothing
+     * in it that implies anybody is on the other side of the wall.
+     *
+     * So: a concourse gallery along the back of the bay with lit windows
+     * in it, and a lift shaft at each end of that gallery with its car
+     * lights banded up it. Both are emissive at real colours rather than
+     * plain at bright ones, for the same reason the deck plating is — the
+     * indoor shader reads 0.10 + 0.55*|N.V| and a window seen at a glancing
+     * angle would otherwise be a dark rectangle in a dark wall.
+     *
+     * Sized off the BERTH BOX rather than off the hull: this is the room,
+     * and the room is as big as the art made it. The stand stays the ruler;
+     * these are what the ruler is measuring. */
+    var boxR = 0, boxU = 0, boxA = 0;
+    if (bx.min && bx.max) {
+      var exX = (bx.max[0] - bx.min[0]) / 2, exY = (bx.max[1] - bx.min[1]) / 2;
+      boxU = (bx.max[2] - bx.min[2]) / 2;
+      boxR = Math.abs(f[0]) > 0.5 ? exY : exX;
+      boxA = Math.abs(f[0]) > 0.5 ? exX : exY;
+    }
+    if (boxR > 0 && boxU > 0 && boxA > 0) {
+      var back = -boxA * 0.94;                      // the wall behind the stand
+      var gallH = Math.min(boxU * 0.22, 1.1 * L);
+      var gallC = deckRel + gallH * 0.5 + 0.9 * L;  // above head height off the deck
+      var GLASS = '!#9fd8ff', FRAME = '!#39414c', SHAFT = '!#2b3agg';
+      SHAFT = '!#2b3a4a';
+      var CAR = '!#ffd36b';
+
+      /* The gallery: a recessed band with a lit face, and windows punched
+       * along it. The band is dark and the windows are not, which is what
+       * makes it read as looking INTO somewhere. */
+      pushBox(m, o, f, r, u, back, 0, gallC, 0.10 * L, boxR * 0.72, gallH * 0.5, FRAME);
+      var winN = 9, winW = (boxR * 1.30) / (winN * 2.1);
+      for (var wi = 0; wi < winN; wi++) {
+        var wb = (wi - (winN - 1) / 2) * (boxR * 1.30 / winN);
+        /* Not every window is lit. A row of identical bright rectangles
+         * reads as a texture; a row with three dark ones reads as a
+         * building with people in it who are not all in tonight. */
+        var litW = ((berth * 7 + wi * 5) % 4) !== 0;
+        pushBox(m, o, f, r, u, back + 0.06 * L, wb, gallC,
+                0.035 * L, winW, gallH * 0.30, litW ? GLASS : '!#1b222b');
+      }
+
+      /* Two lift shafts, one at each end of the gallery, running from the
+       * deck to the roof of the bay. The car is a lit band at a height that
+       * differs per shaft and per berth, so no two bays look stamped from
+       * the same sheet. */
+      for (var sh = -1; sh <= 1; sh += 2) {
+        var sb = sh * boxR * 0.80;
+        var shaftTop = deckRel + boxU * 1.35;
+        var shaftMid = (deckRel + shaftTop) / 2;
+        pushBox(m, o, f, r, u, back + 0.02 * L, sb, shaftMid,
+                0.09 * L, 0.34 * L, (shaftTop - deckRel) / 2, SHAFT);
+        /* Guide lights up the shaft. */
+        var rungs = 7;
+        for (var rg = 0; rg < rungs; rg++) {
+          pushBox(m, o, f, r, u, back + 0.08 * L, sb,
+                  deckRel + (rg + 0.5) * (shaftTop - deckRel) / rungs,
+                  0.03 * L, 0.30 * L, 0.035 * L, '!#4c6b86');
+        }
+        var carAt = ((berth * 3 + (sh > 0 ? 2 : 5)) % rungs + 0.5) / rungs;
+        pushBox(m, o, f, r, u, back + 0.09 * L, sb,
+                deckRel + carAt * (shaftTop - deckRel),
+                0.03 * L, 0.30 * L, 0.11 * L, CAR);
+      }
+
+      /* And the boards the ads play on — the FRAMES only. What is on them
+       * changes, so it is built separately and drawn on top; see berthAds.
+       * The positions are recorded on the mesh rather than recomputed
+       * there, because two functions deriving the same rectangle from the
+       * same box is two chances to put the poster next to the hoarding. */
+      var boardHW = boxR * 0.30, boardHH = Math.min(boxU * 0.16, 0.8 * L);
+      var boardC = gallC + gallH * 0.5 + boardHH + 1.1 * L;
+      var boards = [];
+      for (var sd = -1; sd <= 1; sd += 2) {
+        boards.push({ a: back + 0.07 * L, b: sd * boxR * 0.44, c: boardC,
+                      hw: boardHW, hh: boardHH });
+      }
+      for (var adi = 0; adi < boards.length; adi++) {
+        pushBox(m, o, f, r, u, boards[adi].a, boards[adi].b, boards[adi].c,
+                0.05 * L, boards[adi].hw + 0.06 * L, boards[adi].hh + 0.06 * L, FRAME);
+      }
+      m.adBoards = boards;
+      m.adFrame = { o: o, f: f, r: r, u: u, L: L };
     }
 
     /* AND THE ART'S OWN FITTINGS. Approach lamps and nav lights sit at
@@ -4048,6 +4471,75 @@
     return m;
   }
 
+  /* ---- what is playing in the bay ----------------------------------------
+   * Astra: "put some advertisement signs on the inside of the berth, which
+   * scroll through ads for different things."
+   *
+   * A hoarding that never changes is scenery; one that turns over is a
+   * place. So the boards are built once with the rest of the furniture and
+   * their CONTENT is a separate little mesh, cached per slot, swapped on a
+   * timer — a slideshow rather than a scroll, and deliberately: text
+   * sliding across a board a hundred metres away at the frame rate is an
+   * unreadable smear, and the thing a player actually does with a hoarding
+   * is glance at it twice.
+   *
+   * The copy is the game's own economy talking to itself: the things
+   * advertised are things you can buy, fly, or be fined for, so the boards
+   * are worth reading once even though nothing clicks. Which berth sees
+   * which line is hashed off the berth, so two bays in the same station are
+   * not running the same campaign.
+   *
+   * Wall clock, not sim time. A hoarding is a light on a timer in the
+   * world; feeding it the simulation would make the ads race during a time
+   * warp, which is the same mistake the approach lamps do not make. */
+  var ADS = [
+    'LODESTAR LINES', 'BERTHS THAT FIT', 'HALDEN ALLOYS', 'FLY RESTED',
+    'SLIPSPACE CHARTS', 'DECLARE YOUR HOLD', 'TORCH REBUILDS', 'CLEAN WATER',
+    'FENWICK GRAIN', 'HULL WORK WHILE YOU WAIT', 'SEE A MEDIC', 'ORE FUTURES',
+    'REACTOR SERVICE', 'NO LOOSE CARGO', 'WARM BUNKS AFT', 'MIND THE DOORS'
+  ];
+  var AD_SECONDS = 7;
+  var AD_INK = '!#ffd36b', AD_INK2 = '!#7ed3ff';
+  var ADSET = {};
+  var ADSET_KEYS = [];
+  var ADSET_MAX = 24;
+
+  /* Which line is on which board right now. One place, so the mesh that is
+   * built and the mesh that is cached are keyed by the same answer. */
+  function adSlot(nowSeconds) {
+    return Math.floor((nowSeconds || 0) / AD_SECONDS);
+  }
+
+  function berthAds(role, berth, radiusKm, slot) {
+    var dress = berthDressing(role, berth, radiusKm);
+    if (!dress || !dress.adBoards || !dress.adFrame) return null;
+    var key = role + '#' + berth + '#' + radiusKm.toFixed(4) + '#' + slot;
+    if (ADSET[key] !== undefined) return ADSET[key];
+
+    var fr = dress.adFrame, boards = dress.adBoards;
+    var m = { v: [], f: [], c: [], noAccent: true };
+    for (var i = 0; i < boards.length; i++) {
+      var bd = boards[i];
+      var pick = ADS[(((berth * 5 + i * 3 + slot) % ADS.length) + ADS.length) % ADS.length];
+      /* Sized to FIT the board rather than to a fixed height: the boards
+       * are a fraction of a berth box and the berth boxes differ by a
+       * factor of three across the library, so a fixed cell would overrun
+       * the small ones and swim in the large. */
+      var cell = Math.min(bd.hh * 2 / (GLYPH_H + 1),
+                          bd.hw * 1.85 / Math.max(1, pick.length * (GLYPH_W + 1)));
+      if (!(cell > 0)) continue;
+      var w = glyphWidth(pick, cell), h = GLYPH_H * cell;
+      pushText(m, fr.o, fr.f, fr.r, fr.u,
+               bd.a + 0.03 * fr.L, bd.b - w / 2, bd.c - h / 2,
+               pick, cell, (i % 2) ? AD_INK2 : AD_INK);
+    }
+    if (!m.f.length) { ADSET[key] = null; return null; }
+    ADSET[key] = m;
+    ADSET_KEYS.push(key);
+    while (ADSET_KEYS.length > ADSET_MAX) delete ADSET[ADSET_KEYS.shift()];
+    return m;
+  }
+
   function drawStationModel(ctx, cam, frame, radiusKm, sunDir, model, tint, doors, section) {
     /* WITH THE DOORS SEPARATED when this model has any: the hull without
      * them, then each leaf at its own offset. `doors` is { open, berth }
@@ -4085,6 +4577,10 @@
          * furniture goes with it. */
         if (mine !== null) {
           paintPart(ctx, cam, frame, berthDressing(model, mine, radiusKm),
+                    radiusKm, sunDir, tint);
+          /* And whatever is on the hoardings this minute. */
+          var nowS = (typeof performance !== 'undefined' ? performance.now() : 0) / 1000;
+          paintPart(ctx, cam, frame, berthAds(model, mine, radiusKm, adSlot(nowS)),
                     radiusKm, sunDir, tint);
         }
       } else {
@@ -7104,7 +7600,8 @@
     drawHoloTarget: drawHoloTarget,
     drawHullModel: drawHullModel,
     drawStationModel: drawStationModel,
-    berthDressing: berthDressing,
+    berthDressing: berthDressing, berthAds: berthAds, adSlot: adSlot,
+    ADS: ADS, AD_SECONDS: AD_SECONDS,
     drawPortDressing: drawPortDressing,
     drawPortLamps: drawPortLamps,
     drawPortDoors: drawPortDoors,
