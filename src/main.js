@@ -5187,11 +5187,32 @@
      * the floor somewhere else entirely. Nothing to defend. */
     if (!(above > 0)) return;
 
-    /* Never more clearance than the hull itself has, or a ship parked
-     * close to its deck would have the camera pinned above its own roof.
-     * `above` is in port radii and the boom is in km, so both go to km
-     * before they meet — the units mistake this file has made twice. */
-    var margin = Math.min(above * 0.5, DECK_MARGIN_KM / r);
+    /* ---- AND NOT ALONG IT EITHER -----------------------------------------
+     * Two metres of air was enough to keep the eye out of the deck and not
+     * enough to stop it GRAZING: at any real boom length the camera sat
+     * level with the plating, the floor filled half the screen edge-on and
+     * the ship you are looking at was a silhouette in the gap. Astra has
+     * had that on the known-issues list since the berths were opened, and
+     * it got worse rather than better when the stand came up out of the
+     * floor — a lit deck you are looking along is more distracting than a
+     * dark one.
+     *
+     * The old cap is what caused it. Clearance was a fraction of the HULL
+     * — half of the six metres a parked ship sits above its deck, so three
+     * metres however far out the boom was — which is a rule about the ship
+     * rather than about the picture. Tie it to the BOOM instead and the
+     * geometry does the right thing on its own: the clamp becomes a
+     * minimum DOWNWARD ANGLE rather than a height, so up close you still
+     * get a side view of the hull and from further out you get the
+     * three-quarter view that shows the bay.
+     *
+     * Nine degrees, which is the shallowest angle at which the deck reads
+     * as a floor with things standing on it rather than as a line across
+     * the middle of the screen. The absolute two metres stays as the floor
+     * under it, for a boom short enough that nine degrees is less than
+     * that. */
+    var DECK_RISE = 0.156;                  // sin 9 degrees
+    var margin = Math.max(DECK_MARGIN_KM / r, G.cam.dist * DECK_RISE / r);
     G.cam.pitch = Render.pitchAboveFloor(G.cam.yaw, G.cam.pitch, G.cam.dist,
                                          basis.up, above * r, margin * r);
   }

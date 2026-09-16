@@ -2588,6 +2588,37 @@
    * uniformly harder, it has a place in it you do not do business. That is
    * geography, which is what this game does with everything else. */
   var CAPITAL_WATCH = WITNESS_RANGE * 4;
+  var SHADOW_DISCOUNT = 0.55;      // of the going rate, under a flagship
+  var SHADOW_STICK = 0.22;         // and this much likelier to stay bought
+
+  /* ---- AND THE OTHER SIDE'S FLAGSHIP ------------------------------------
+   * Astra: "anything you do for the military power in the region, also do
+   * for Syndicate, since they're basically the alternative."
+   *
+   * The same object with the law reversed, which is a better description
+   * of what the two powers are than any amount of prose about them. Inside
+   * a naval capital's watch a crime cannot be bought off at any price;
+   * inside a Syndicate flagship's shadow ANYTHING can — the corruption
+   * floor that normally decides whether a bargain is even enforceable does
+   * not apply, because the thing that enforces it is sitting right there.
+   *
+   * The two are not symmetric in precedence, and they should not be: where
+   * both are present the warship wins. A flagship can buy a witness; it
+   * cannot buy a naval log, and the fact that it is standing nearby does
+   * not change what is written in one. */
+  function capitalShadow(sys, t, scene) {
+    var Sim = global.Sim;
+    var patrols = (sys && sys.patrols) || [];
+    for (var i = 0; i < patrols.length; i++) {
+      var sp = patrols[i];
+      if (sp.kind !== 'capital' || !sp.outlaw || sp.dead) continue;
+      var st = sp.live || (Sim && Sim.patrolState ? Sim.patrolState(sp, sys, t) : null);
+      var pos = st && st.pos;
+      if (!pos) continue;
+      if (V.dist(pos, scene) < CAPITAL_WATCH) return sp;
+    }
+    return null;
+  }
 
   function capitalWatching(sys, t, scene, victim) {
     var Sim = global.Sim;
@@ -2595,6 +2626,8 @@
     for (var i = 0; i < patrols.length; i++) {
       var sp = patrols[i];
       if (sp.kind !== 'capital' || sp.dead) continue;
+      /* A Syndicate flagship keeps no log anybody will read. */
+      if (sp.outlaw) continue;
       if (victim && (sp === victim || sp.id === victim.id)) continue;
       var st = sp.live || (Sim && Sim.patrolState ? Sim.patrolState(sp, sys, t) : null);
       var pos = st && st.pos;
@@ -2824,8 +2857,27 @@
      * a threat is not a bargain, and that argument stops at a hull with a
      * flag on it. There is no standing that makes a duty officer on a
      * capital ship your problem to solve. */
+    /* IN THE FLAGSHIP'S SHADOW, EVERYTHING IS FOR SALE. The corruption
+     * floor is a question about whether a bargain can be ENFORCED, and a
+     * Syndicate capital standing over the scene is the answer to it — so
+     * the floor lifts, the price comes down because the seller is
+     * negotiating with somebody else's gun behind them, and the odds of it
+     * staying bought go up for the same reason.
+     *
+     * Applied BEFORE the warship clause below, deliberately: a flagship can
+     * buy a witness and it cannot buy a naval log, and standing nearby does
+     * not change what is written in one. */
+    if (!target.intimidate && capitalShadow(sys, t, scene)) {
+      target.shadowed = true;
+      target.possible = true;
+      target.reason = null;
+      target.price = Math.max(50, Math.round(target.price * SHADOW_DISCOUNT));
+      target.stick = Math.min(0.97, target.stick + SHADOW_STICK);
+    }
+
     if (target.pending && target.pending.sealed) {
       target.sealed = true;
+      target.shadowed = false;
       target.intimidate = false;
       target.possible = false;
       target.price = 0;
@@ -4921,6 +4973,30 @@
     return worst;
   }
 
+  /* A FLAGSHIP DOES NOT CHALLENGE YOU, IT ASSESSES YOU — which is the same
+   * conversation from the other side of the law, and it answers the same
+   * question a warship does: where do I stand with this hull. What it
+   * offers instead of a warning is the mechanical fact that is worth
+   * knowing from inside its shadow, and which nothing else in the game
+   * will tell you: while it is here, a witness has a price. */
+  function hailShadow(G, sys, t, contact, hooks) {
+    function talk(msg, secs) { if (hooks && hooks.say) hooks.say(msg, secs || 6); }
+    var name = contact.name || 'the flagship';
+    var standing = (G.standing || {}).outlaw || 0;
+    var hot = bountyTotal(G) > 0;
+
+    if (standing >= INTIMIDATE_STANDING) {
+      talk(name + ': "We know you. Anything you do out here, we did not see."', 7);
+      return { shadow: 'made', standing: standing };
+    }
+    if (hot) {
+      talk(name + ': "Somebody wants you. Out here that is a reference."', 7);
+      return { shadow: 'wanted', standing: standing };
+    }
+    talk(name + ': "You are inside our arrangement. Witnesses here are for sale."', 7);
+    return { shadow: 'notice', standing: standing };
+  }
+
   function hailShip(G, sys, t, contact, intent, hooks) {
     function talk(msg, secs) { if (hooks && hooks.say) hooks.say(msg, secs || 5); }
     if (!contact) return null;
@@ -4943,7 +5019,8 @@
      * the comms channel does: every word of it is a fact the law is about
      * to act on. */
     if (contact.cls === 'capital' || contact.kind === 'capital') {
-      return hailChallenge(G, sys, t, contact, hooks);
+      return contact.outlaw ? hailShadow(G, sys, t, contact, hooks)
+                            : hailChallenge(G, sys, t, contact, hooks);
     }
 
     if (intent === 'directions') return hailDirections(G, sys, t, contact, hooks);
@@ -5426,6 +5503,7 @@
     liftTrader: liftTrader,
     crime: crime, witnessNear: witnessNear,
     bountyTotal: bountyTotal, wantedHere: wantedHere, fleetPort: fleetPort,
+    capitalShadow: capitalShadow, CAPITAL_WATCH: CAPITAL_WATCH,
     contrabandAboardFor: contrabandAboardFor,
     dockRefused: dockRefused, dockRefusal: dockRefusal, payBounty: payBounty,
     demandFrom: demandFrom,

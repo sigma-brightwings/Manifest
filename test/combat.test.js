@@ -2723,5 +2723,114 @@ section('--- the navy runs the carrier ---');
   check('a carrier stocks a real catalogue', shelf.length > 8, String(shelf.length));
 })();
 
+section('--- and the other side has a flagship ---');
+(function () {
+  /* Astra: "anything you do for the military power in the region, also do
+   * for Syndicate, since they're basically the alternative."
+   *
+   * The same object with the law reversed, which says more about what the
+   * two powers are than any amount of prose. Inside a naval capital's
+   * watch a crime cannot be bought off at any price; inside a Syndicate
+   * flagship's shadow anything can — the corruption floor that decides
+   * whether a bargain is even enforceable lifts, because the thing that
+   * would enforce it is sitting right there. */
+  var G = makeG(true);                       // deep space, nobody else about
+  var near = V.addScaled(V.clone(G.ship.pos), { x: 1, y: 0, z: 0 },
+                         Combat.WITNESS_RANGE * 2);
+  G.sys.patrols = [{ id: 'flag', kind: 'capital', outlaw: true, faction: 'outlaw',
+                     name: 'The Grudge', cls: 'capital', live: { pos: near } }];
+  var v = fakeVictim(G, { range: 5, faction: 'somefac' });
+  Combat.crime(G.sys, G, G.t, 'assault', v, HOOKS);
+
+  /* A flagship keeps no log anybody will read, so it is not a witness — it
+   * is the reason the witness will deal. */
+  check('a flagship does not witness anything itself',
+        !G.pendingReport || G.pendingReport.by !== 'The Grudge',
+        JSON.stringify(G.pendingReport || null));
+
+  var q = Combat.hushQuote(G.sys, G, G.t);
+  check('but in its shadow the bargain is on', !!q && q.possible === true,
+        JSON.stringify(q && { possible: q.possible, shadowed: q.shadowed }));
+  check('and it says so', !!q && q.shadowed === true);
+
+  /* The measurement that matters: the same crime in the same clean system
+   * with the flagship somewhere else cannot be bought at all. Without this
+   * the check above passes for the wrong reason. */
+  var GB = makeG(true);
+  var vb = fakeVictim(GB, { range: 5, faction: 'somefac' });
+  Combat.crime(GB.sys, GB, GB.t, 'assault', vb, HOOKS);
+  var qb = Combat.hushQuote(GB.sys, GB, GB.t);
+  var cleanSystem = !!qb && qb.possible === false;
+  if (cleanSystem) {
+    check('with no flagship in reach the same act is unbuyable', true);
+  } else {
+    check('the shadow beats the quote it would otherwise get',
+          !!qb && q.price < qb.price, q.price + ' vs ' + (qb && qb.price));
+  }
+
+  /* AND THE WARSHIP STILL WINS. A flagship can buy a witness; it cannot
+   * buy a naval log, and standing nearby does not change what is in one. */
+  var GC = makeG(true);
+  GC.sys.patrols = [
+    { id: 'flag2', kind: 'capital', outlaw: true, faction: 'outlaw',
+      name: 'The Harrow', cls: 'capital', live: { pos: near } },
+    { id: 'cap2', kind: 'capital', faction: 'navyfac', name: 'FNS Adamant',
+      cls: 'capital', live: { pos: near } }
+  ];
+  var vc = fakeVictim(GC, { range: 5, faction: 'somefac' });
+  Combat.crime(GC.sys, GC, GC.t, 'assault', vc, HOOKS);
+  GC.standing.outlaw = 95;
+  var qc = Combat.hushQuote(GC.sys, GC, GC.t);
+  check('a warship watching beats a flagship standing over it',
+        !!qc && qc.possible === false && qc.sealed === true && !qc.shadowed,
+        JSON.stringify(qc && { possible: qc.possible, sealed: qc.sealed,
+                               shadowed: qc.shadowed }));
+
+  /* IT ANSWERS IN ITS OWN REGISTER, which is the same conversation from
+   * the other side of the law: where do I stand with this hull. */
+  var GD = makeG(true);
+  var said = [];
+  var HK = { say: function (m) { said.push(m); } };
+  var flag = { id: 'f3', kind: 'capital', cls: 'capital', outlaw: true,
+               name: 'The Bonepick', faction: 'outlaw',
+               pos: V.clone(GD.ship.pos), route: null, manifest: [] };
+  var ans = Combat.hailShip(GD, GD.sys, GD.t, flag, 'buy', HK);
+  check('a flagship does not challenge you, it assesses you',
+        !!ans && ans.shadow === 'notice', JSON.stringify(ans));
+  check('and it tells you the thing worth knowing from inside its shadow',
+        /for sale/.test(said[said.length - 1] || ''), said[said.length - 1]);
+  GD.standing.outlaw = 95;
+  var ans2 = Combat.hailShip(GD, GD.sys, GD.t, flag, 'directions', HK);
+  check('somebody it knows gets a different answer', !!ans2 && ans2.shadow === 'made',
+        JSON.stringify(ans2));
+  /* And it is NOT the naval challenge — that turns hostile when you are
+   * wanted, and this hull does not care. */
+  check('it never turns on you for being wanted',
+        flag.hostileToPlayer !== true);
+})();
+
+section('--- the two flagships, counted ---');
+(function () {
+  /* Gated on the mirror of the navy's numbers rather than on a new rule: a
+   * flagship goes where its power is strongest. For the Syndicate that is
+   * somewhere lawless and worth standing over. */
+  var navy = 0, synd = 0;
+  for (var i = 0; i < 60; i++) {
+    var sys = Gen.generateSystem('seed-' + i);
+    (sys.patrols || []).forEach(function (p) {
+      if (p.kind !== 'capital') return;
+      if (p.outlaw) synd++; else navy++;
+    });
+  }
+  console.log('  across sixty systems: ' + navy + ' naval capitals, ' +
+              synd + ' Syndicate flagships');
+  check('both powers have a flagship in the sky', navy > 0 && synd > 0,
+        navy + ' / ' + synd);
+  /* Close enough to parity that meeting one is not a curiosity, and still
+   * the rarer of the two, because the places it can stand ARE rarer. */
+  check('and neither is a curiosity beside the other',
+        synd >= navy * 0.5 && synd <= navy, synd + ' against ' + navy);
+})();
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);

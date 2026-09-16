@@ -485,6 +485,56 @@ console.log('--- the eye never goes under the floor ---');
   /* And a zero-length boom cannot be, either — there is no eye to move. */
   check('nor is a boom of no length', Render.pitchAboveFloor(1, -1, 0,
         { x: 0, y: 0, z: 1 }, above, margin) === -1);
+
+  /* ---- AND NOT ALONG THE FLOOR EITHER ----------------------------------
+   * Two metres of air kept the eye out of the deck and did nothing about
+   * it GRAZING: at any real boom length the camera sat level with the
+   * plating, the floor filled half the screen edge-on and the ship was a
+   * silhouette in the gap. That has been on the known-issues list since
+   * the berths were opened and it got worse when the stand came up out of
+   * the floor, because a lit deck you are looking along is more
+   * distracting than a dark one.
+   *
+   * The cause was a clearance measured off the HULL — half of the six
+   * metres a parked ship sits above its deck, so three metres however far
+   * out the boom was, which is a rule about the ship rather than about
+   * the picture. Tied to the BOOM instead, the same clamp becomes a
+   * minimum downward ANGLE: a side view up close, a three-quarter view
+   * from further out. */
+  var RISE = 0.156;                          // sin 9 degrees, as main.js uses
+  var worldUp = { x: 0, y: 0, z: 1 };
+  var elevations = [];
+  [0.02, 0.05, 0.1, 0.3, 1.0].forEach(function (dist) {
+    var mrg = Math.max(0.002, dist * RISE);
+    var out = Render.pitchAboveFloor(0.4, -1.4, dist, worldUp, above, mrg);
+    var eye = above + dist * Math.sin(out);
+    elevations.push({ dist: dist, pitch: out, eye: eye, margin: mrg });
+    check('at a ' + (dist * 1000) + ' m boom the eye clears the deck',
+          eye >= mrg - 1e-9, (eye * 1000).toFixed(1) + ' m of ' +
+          (mrg * 1000).toFixed(1) + ' m');
+  });
+  console.log('  looking hard down: ' + elevations.map(function (e) {
+    return (e.dist * 1000) + 'm -> ' + (e.pitch * 180 / Math.PI).toFixed(1) + ' deg';
+  }).join(', '));
+
+  /* THE POINT OF THE CHANGE, and the thing the old rule got wrong: past a
+   * boom of about fifty metres you are looking DOWN at the ship rather
+   * than along the deck at it. Under the fixed three-metre clearance every
+   * one of these came out level or below. */
+  var far = elevations.filter(function (e) { return e.dist >= 0.1; });
+  check('from a long boom the camera is above the ship looking down',
+        far.every(function (e) { return e.pitch > 0.05; }),
+        far.map(function (e) { return (e.pitch * 180 / Math.PI).toFixed(1); }).join(' '));
+  /* And up close it is still a side view, because you cannot get under a
+   * hull that is sitting on a floor and pretending otherwise would put the
+   * camera above its own roof at arm's length. */
+  check('but up close it still looks at the hull from the side',
+        elevations[0].pitch < 0,
+        (elevations[0].pitch * 180 / Math.PI).toFixed(1) + ' deg');
+  /* The rise has to beat the old fixed clearance, or nothing changed. */
+  check('and the clearance grows with the boom rather than sitting at three metres',
+        elevations[3].margin > 0.003 * 4,
+        (elevations[3].margin * 1000).toFixed(1) + ' m at a 300 m boom');
 })();
 
 console.log('');

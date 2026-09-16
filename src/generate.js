@@ -2260,6 +2260,9 @@
   var POLICE_NAMES = ['Vigil', 'Sentinel', 'Warden', 'Picket', 'Marshal', 'Bastion',
                       'Cordon', 'Lictor'];
   var MERC_NAMES = ['Hired', 'Contract', 'Retainer', 'Bondsman', 'Freelance'];
+  /* The Syndicate paints its hulls the way it paints its docks. */
+  var SYNDICATE_HULL = '#c4322a';
+
   var PIRATE_NAMES = ['Blackwake', 'Cutter', 'Grudge', 'Salt', 'Bonepick', 'Harrow',
                       'Vulture', 'Scrag', 'Tallow', 'Wraith'];
 
@@ -2411,6 +2414,57 @@
         rail: { type: 'route', route: patrolRoute('n' + (id - 1), '', cspec, CA, CB, sys, rng) }
       });
     });
+
+    /* ---- AND THE OTHER SIDE HAS ONE TOO ----------------------------------
+     * Astra: "anything you do for the military power in the region, also do
+     * for Syndicate, since they're basically the alternative."
+     *
+     * She is right that it is the same object, and the interesting part is
+     * that it is the same object with the LAW REVERSED. A naval capital
+     * makes the volume around it a place where a crime cannot be bought
+     * off at any price; a Syndicate flagship makes the volume around it a
+     * place where anything can. Two hulls, one mechanic, opposite signs —
+     * which is a better description of what the two powers are than any
+     * amount of prose about them.
+     *
+     * Gated on the mirror of the navy's numbers rather than on a new rule,
+     * for the same reason the navy's were gated on a garrison being BETTER:
+     * a flagship goes where its power is strongest. For the Syndicate that
+     * is somewhere lawless and worth having — high crime, and enough of an
+     * economy to be worth standing over. Pirate-held systems always qualify
+     * because that is what a pirate hold IS.
+     *
+     * Its own fork so no existing seed's naval patrols move. */
+    (function () {
+      var sr = rng.fork ? rng.fork('syndicate') : rng;
+      var devS = sys.development === undefined ? 0.5 : sys.development;
+      var crimeS = sys.crimeScore === undefined ? 40 : sys.crimeScore;
+      if (!sys.pirateHeld && (crimeS < 58 || devS < 0.28)) return;
+      /* MEASURED like the navy's was. Eleven systems in sixty clear the
+       * gate; at 0.40 that produced four flagships against the navy's
+       * eight, which reads as the Syndicate being half the power rather
+       * than as it operating in half the places. 0.65 puts seven in the
+       * sky — close enough to parity that meeting one is not a curiosity,
+       * and still the rarer of the two hulls, because the places it can
+       * stand ARE rarer. */
+      if (!sr.chance(0.65)) return;
+      var anyPorts = ports.slice();
+      if (anyPorts.length < 2) return;
+      var SA = anyPorts[sr.int(0, anyPorts.length - 1)];
+      var SB = anyPorts.filter(function (p) { return p !== SA; })[0];
+      if (!SB) return;
+      var sspec = { cls: 'capital', accel: PATROL_CLASSES.capital.accel,
+                    size: PATROL_CLASSES.capital.size,
+                    color: SYNDICATE_HULL, label: 'flagship' };
+      sys.patrols.push({
+        id: 's' + (id++), kind: 'capital', faction: 'outlaw', outlaw: true,
+        name: 'The ' + sr.pick(PIRATE_NAMES),
+        className: 'flagship', color: SYNDICATE_HULL,
+        size: PATROL_CLASSES.capital.size * 0.92,
+        accel: PATROL_CLASSES.capital.accel,
+        rail: { type: 'route', route: patrolRoute('s' + (id - 1), '', sspec, SA, SB, sys, sr) }
+      });
+    })();
 
     /* A cutter PASSING THROUGH a hold.
      *
