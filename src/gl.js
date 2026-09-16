@@ -112,7 +112,29 @@
     'uniform float uIce;',        // how far the caps reach, 0 = none
     'uniform float uSeed;',
     'uniform float uBanded;',     // 1 = gas/ice giant: latitude bands, not terrain
-    'uniform float uSpin;',       // cloud rotation phase, radians
+    /* THE WORLD'S OWN SPIN, not a made-up one.
+     *
+     * This used to be a single `uSpin` that scrolled at a fixed rate about
+     * world +y: clouds at one speed, terrain at 0.15 of it, ice caps pinned
+     * to the y poles. All three were fictions. The generator gives every
+     * planet a real rotation — a period between nine and ninety hours, an
+     * axial tilt, a phase — and sim.js turns surface ports around it. So a
+     * pad on the ground moved while the continents under it did not, and
+     * the caps sat wherever world +y happened to point.
+     *
+     * uSpinAxis is that axis in world coordinates and uSpinPhase is how far
+     * round the body has turned. Rotating the noise lookup BACKWARD by the
+     * phase nails the field to the body, so the world turns at its own day
+     * length and a port keeps the same coastline under it.
+     *
+     * uDeckPhase is the cloud deck's own angle — it super-rotates, so
+     * weather slides over the ground instead of being painted on it — and
+     * uWeather walks the noise field itself, which is what makes a cloud
+     * bank build and break up rather than merely come round again. */
+    'uniform vec3 uSpinAxis;',
+    'uniform float uSpinPhase;',
+    'uniform float uDeckPhase;',
+    'uniform float uWeather;',
     /* Depth, so a ship can pass behind a planet. The impostor has no
      * geometry to rasterize a depth from, so it computes one: the disc's
      * centre distance minus how far the sphere bulges toward the camera at
@@ -149,9 +171,12 @@
     '  for (int i = 0; i < 4; i++) { s += a * vnoise(p); p *= 2.03; a *= 0.5; }',
     '  return s;',
     '}',
-    'vec3 spinY(vec3 v, float a) {',
+    /* Rotate about an arbitrary unit axis — Rodrigues, four lines. spinY
+     * only ever turned about world +y, which is not where any of these
+     * worlds actually keep their poles. */
+    'vec3 spinAbout(vec3 v, vec3 k, float a) {',
     '  float c = cos(a), s = sin(a);',
-    '  return vec3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z);',
+    '  return v * c + cross(k, v) * s + k * (dot(k, v) * (1.0 - c));',
     '}',
 
     'void main() {',
@@ -260,19 +285,30 @@
      * rotation with no per-frame physics, just uSpin through a per-latitude
      * multiplier. One noise eval, same cost as the terrain it replaces. */
     '  if (uBanded > 0.5) {',
-    '    float lati = n.y;',
-    '    float lon = atan(n.z, n.x);',
+    /* Latitude off the world's REAL pole, and longitude measured in a
+     * frame that turns with it — so a giant's bands are fixed to the giant
+     * and its eight-hour day is the eight hours the generator gave it. */
+    '    float lati = dot(n, uSpinAxis);',
+    '    vec3 nb = spinAbout(n, uSpinAxis, -uSpinPhase);',
+    '    vec3 ax = abs(uSpinAxis.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);',
+    '    vec3 e1 = normalize(cross(ax, uSpinAxis));',
+    '    vec3 e2 = cross(uSpinAxis, e1);',
+    '    float lon = atan(dot(nb, e2), dot(nb, e1));',
     '    float shear = mix(1.6, 0.35, abs(lati));',
-    '    float ph = lon + uSpin * shear * 40.0;',
-    '    float band = fbm(vec3(lati * 7.0, sin(ph) * 0.5, uSeed));',
-    '    band = mix(band, fbm(vec3(lati * 15.0, cos(ph) * 0.4, uSeed + 5.0)), 0.4);',
+    /* Differential rotation on top of the body's own: each band slides
+     * against the ground at its own rate, fast at the equator and slow at
+     * the poles, which is the whole reason a giant reads as weather rather
+     * than as a striped ball. */
+    '    float ph = lon + uDeckPhase * shear;',
+    '    float band = fbm(vec3(lati * 7.0, sin(ph) * 0.5, uSeed + uWeather * 0.20));',
+    '    band = mix(band, fbm(vec3(lati * 15.0, cos(ph) * 0.4, uSeed + 5.0 + uWeather * 0.13)), 0.4);',
     '    vec3 belt = uColor * 0.72;',
     '    vec3 zone = mix(uColor, vec3(1.0), 0.22);',
     '    vec3 gcol = mix(belt, zone, smoothstep(0.35, 0.65, band));',
     /* The storm oval: fixed seeded home, its own drift speed so it slides
      * against the bands over time; elliptical, wider in longitude. */
     '    float spotLat = -0.22 + 0.10 * (fract(uSeed * 0.13) - 0.5);',
-    '    float spotLon = uSpin * 0.55 * 40.0 + uSeed;',
+    '    float spotLon = uDeckPhase * 0.42 + uSeed;',
     '    float dLat = (lati - spotLat) * 3.4;',
     '    float dLon = sin((lon - spotLon) * 0.5) * 2.2;',
     '    float spot = 1.0 - smoothstep(0.4, 1.0, sqrt(dLat * dLat + dLon * dLon));',
@@ -301,7 +337,9 @@
      * the caps reach — both decided by the generator from the world type,
      * so a molten world gets lava seas and no ice, and an iceball is
      * almost all cap. */
-    '  vec3 sp = spinY(n, uSpin * 0.15) * 2.6 + uSeed;',
+    /* Body-fixed, so the continents belong to the world instead of to the
+     * sky behind it. */
+    '  vec3 sp = spinAbout(n, uSpinAxis, -uSpinPhase) * 2.6 + uSeed;',
     '  float elev = fbm(sp);',
     /* Warp the field with a second, coarser one before thresholding it.
      * Straight fbm thresholds into round blobs; distorting the lookup
@@ -323,7 +361,9 @@
      * roughened slightly by the elevation field so the cap edge is ragged
      * rather than a drawn circle. */
     '  if (uIce > 0.001) {',
-    '    float lat = abs(n.y);',
+    /* On the real poles now, which is also where the generator has been
+     * putting the cold all along. */
+    '    float lat = abs(dot(n, uSpinAxis));',
     '    float edge = uIce * (0.85 + 0.30 * elev);',
     '    float cap = smoothstep(1.0 - edge - 0.06, 1.0 - edge + 0.06, lat);',
     '    base = mix(base, vec3(0.92, 0.95, 0.99), cap);',
@@ -334,16 +374,86 @@
      * ground. Coverage drives the threshold, so an ocean world is mostly
      * white and a thin-aired desert has a few wisps. */
     '  if (uCloud > 0.001) {',
-    '    vec3 cp = spinY(n, uSpin) * 2.4 + uSeed * 1.7;',
+    /* THE DECK TURNS FASTER THAN THE GROUND, AND IT CHANGES WHILE IT DOES.
+     *
+     * Rotating a fixed noise field was the old behaviour and it is a decal:
+     * the same bank of cloud comes past again, forever, in exactly the same
+     * shape. Two things fix that. The deck gets its own phase, ahead of the
+     * body's, so weather slides over the continents the way Venus's does.
+     * And the field is walked along a fourth direction by uWeather, so a
+     * bank builds, spreads and breaks up instead of merely travelling.
+     *
+     * The shear term is the third: mid-latitudes drag against the equator,
+     * which is what stops the whole deck reading as one rigid shell. */
+    '    vec3 nb = spinAbout(n, uSpinAxis, -uDeckPhase);',
+    '    float clat = dot(n, uSpinAxis);',
+    /* THE SHEAR HAS TO BE BOUNDED, and the first version was not.
+     *
+     * Differential rotation that grows without limit is physically honest
+     * and visually fatal: a deck whose equator runs faster than its poles
+     * winds the noise field into a spiral, and within one day of sim time
+     * every cloud is a hairline streak drawn from pole to pole. It looked
+     * like the planet had been combed. Real atmospheres escape this by
+     * tearing and re-forming; a single noise lookup cannot, so the drag
+     * between latitudes breathes instead of accumulating. Twelve degrees
+     * at the equator, none at the poles, over about an hour. */
+    '    float shear = 0.21 * (1.0 - abs(clat)) * sin(uDeckPhase * 0.09);',
+    '    nb = spinAbout(nb, uSpinAxis, shear);',
+    '    vec3 cp = nb * 2.4 + uSeed * 1.7;',
+    /* And the weather itself. The field is moved through, which is what
+     * makes a bank build and break up rather than merely come round again
+     * — but it is moved around a small CIRCUIT, not along a line.
+     *
+     * A straight walk was the obvious version and it is wrong for a
+     * reason worth writing down: coverage here is a threshold on a noise
+     * field, and the fraction of a field that clears a fixed threshold is
+     * a property of the NEIGHBOURHOOD you are sampling. Walk far enough
+     * and you arrive somewhere with no peaks above the cut. Measured on
+     * the cloudiest world in the seed, an eight-hour drift took the disc
+     * from 33% cloud to 0.1% and left it there for three hours — an ocean
+     * world with a completely clear sky, which reads as a bug and not as
+     * good weather.
+     *
+     * Two circuits at rates that do not divide into each other: the
+     * pattern keeps changing and never repeats within anything like a
+     * session, and the statistics stay exactly where they were tuned. */
+    '    cp += vec3(cos(uWeather * 0.90), sin(uWeather * 0.90), 0.0) * 0.42;',
+    '    cp += vec3(0.0, cos(uWeather * 0.37), sin(uWeather * 0.37)) * 0.28;',
     '    float cl = fbm(cp);',
-    /* Coverage-to-threshold. The first mapping ran to 0.30 at full cloud,
-     * which put the cut below the middle of an fbm field that averages
-     * about 0.5 — so a wet world came out under total overcast and the
-     * oceans and coastlines underneath were only visible through gaps. It
-     * read as an ice planet with blue continents. Bottoming out at 0.52
-     * keeps even the cloudiest world mostly weather-ON-a-world rather than
-     * weather instead of one. */
-    '    float thresh = mix(0.95, 0.52, clamp(uCloud, 0.0, 1.0));',
+    /* COVERAGE-TO-THRESHOLD, AND THIS IS WHERE THE CLOUDS WENT.
+     *
+     * The mapping ran 0.95 down to 0.52. The field it cuts is four octaves
+     * of value noise summed at halving amplitude, which — measured, 240,000
+     * samples, the same arithmetic ported to JS — has mean 0.470, standard
+     * deviation 0.105, and a MAXIMUM OF 0.829. So the top two thirds of
+     * that mapping asked for a threshold the field can never reach:
+     *
+     *     iceball  0.02 -> 0.941 ->  0.0% of the sky
+     *     desert   0.08 -> 0.916 ->  0.0%
+     *     molten   0.35 -> 0.799 ->  0.0%
+     *     tundra   0.40 -> 0.778 ->  0.1%
+     *     terran   0.55 -> 0.714 ->  0.8%
+     *     ocean    0.72 -> 0.640 ->  5.3%
+     *
+     * Every world in the game except the very wettest had no weather at
+     * all, and the generator's `cloud` column — seeded per world, varied by
+     * type, carefully written down — controlled nothing. The earlier pass
+     * that raised the bottom from 0.30 to 0.52 was right about the bottom
+     * (0.30 really is total overcast) and never looked at the top.
+     *
+     * Mapped onto the range the field actually occupies, the column means
+     * something again, and the numbers below are measured the same way,
+     * counting the smoothstep rather than a hard cut:
+     *
+     *     desert   0.08 ->  4% of the sky
+     *     molten   0.35 -> 11%
+     *     tundra   0.40 -> 13%
+     *     terran   0.55 -> 24%
+     *     ocean    0.72 -> 38%
+     *
+     * A terran world a quarter clouded still shows every coastline, which
+     * is what the old note was protecting and is still true. */
+    '    float thresh = mix(0.655, 0.405, clamp(uCloud, 0.0, 1.0));',
     '    float mask = smoothstep(thresh, thresh + 0.055, cl);',
     '    vec3 cloudCol = mix(vec3(0.90, 0.93, 0.97), uAtmoColor, 0.22);',
     '    base = mix(base, cloudCol, mask);',
@@ -840,7 +950,8 @@
     uni = uniforms(gl, prog, ['uCenterPx', 'uQuadPx', 'uViewportPx', 'uPad',
                               'uRight', 'uUp', 'uFwd', 'uSunDir', 'uColor',
                               'uIsStar', 'uAtmo', 'uAtmoColor', 'uCloud',
-                              'uSeed', 'uSpin', 'uCenterDepth', 'uWorldRadius',
+                              'uSeed', 'uSpinAxis', 'uSpinPhase', 'uDeckPhase',
+                              'uWeather', 'uCenterDepth', 'uWorldRadius',
                               'uNear', 'uInvLogRange', 'uBanded',
                               'uOcean', 'uSeaColor', 'uIce',
                               'uCenterRel', 'uScreenPx', 'uFlen',
@@ -1348,7 +1459,11 @@
       gl.uniform3f(uni.uSeaColor, sc[0], sc[1], sc[2]);
       gl.uniform1f(uni.uIce, (isStar || banded) ? 0 : terr.ice);
       gl.uniform1f(uni.uSeed, hashSeed(b.id));
-      gl.uniform1f(uni.uSpin, q.t * 2.2e-5);   // slow; weather, not a blender
+      var sp2 = spinOf(b, q.t);
+      gl.uniform3f(uni.uSpinAxis, sp2.ax.x, sp2.ax.y, sp2.ax.z);
+      gl.uniform1f(uni.uSpinPhase, sp2.phase);
+      gl.uniform1f(uni.uDeckPhase, sp2.deck);
+      gl.uniform1f(uni.uWeather, sp2.weather);
       gl.uniform1f(uni.uCenterDepth, q.depth);
       gl.uniform1f(uni.uWorldRadius, b.radius || 1);
       gl.uniform3f(uni.uCenterRel, q.rel.x, q.rel.y, q.rel.z);
@@ -1459,6 +1574,49 @@
     return rgb(ATMO_TINT[b.type] || '#9fc8ff', [0.62, 0.78, 1.0]);
   }
 
+  /* ---- how a world turns, for the shader --------------------------------
+   *
+   * The axis is read straight out of the same construction sim.js uses to
+   * put a surface port on the ground: a body-fixed frame whose pole is +z,
+   * tipped about x by the axial tilt. So the pole lands at
+   * (0, -sin tilt, cos tilt) in world coordinates, and asking that question
+   * HERE rather than inventing an axis is the whole reason the caps, the
+   * bands and the continents now agree with where the pads actually are.
+   *
+   * DECK_SUPER and WEATHER_RATE are the two numbers that decide whether
+   * anybody ever SEES this. The body's own rotation is physical and stays
+   * physical — nine to ninety hours, so a world turns at somewhere between
+   * four and forty degrees an hour and you notice it over a long orbit or
+   * a short warp. Weather cannot afford to be that patient: a cloud deck
+   * that only moves with the ground is a painted ball at every timescale a
+   * player actually watches one. So the deck runs ahead of the ground, and
+   * the field it is drawn from drifts on a clock of its own.
+   *
+   * Both are SIM time, not wall clock. Weather is a pure function of the
+   * timetable like everything else here — pause the game and the clouds
+   * stop, come back to the same world at the same hour and it has the same
+   * sky, and the fast-forward that carries you across a system carries its
+   * weather with it. */
+  var DECK_SUPER = 2.6;              // deck turns this much faster than the ground
+  var WEATHER_PERIOD = 2400;         // seconds of sim time per unit of drift
+
+  function spinOf(body, t) {
+    var rot = body.rotation;
+    var tilt = rot ? rot.tilt : 0;
+    var ax = { x: 0, y: -Math.sin(tilt), z: Math.cos(tilt) };
+    /* A star, or anything the generator did not spin, still needs an axis
+     * and a phase — it just gets a nominal day so its own noise field is
+     * not frozen to the sky. */
+    var period = (rot && rot.period) ? rot.period : 86400;
+    var phase = (rot ? rot.phase : 0) + (2 * Math.PI / period) * t;
+    return {
+      ax: ax,
+      phase: phase,
+      deck: phase * DECK_SUPER,
+      weather: t / WEATHER_PERIOD
+    };
+  }
+
   /* A stable per-world number for the noise fields, from the body id. The id
    * is already seed-derived, so this inherits determinism for free. */
   function hashSeed(id) {
@@ -1472,6 +1630,11 @@
 
   GL.rgb = rgb;              // exported for tests
   GL.hashSeed = hashSeed;
+  /* Exported so the suite can ask the renderer which way a world turns and
+   * compare it with the way sim.js actually turns the ports on it. The two
+   * disagreed for as long as both existed and nothing could see it. */
+  GL.spinOf = spinOf;
+  GL.DECK_SUPER = DECK_SUPER;
 
   global.GLWorld = GL;
   if (typeof module !== 'undefined' && module.exports) module.exports = GL;

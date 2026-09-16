@@ -13,6 +13,11 @@ var Eco = require('../src/economy.js');
 var Gen = require('../src/generate.js');
 var Galaxy = require('../src/galaxy.js');
 var Sim = require('../src/sim.js');
+/* The GPU world layer. It loads fine without a WebGL context — everything
+ * that touches `gl` is inside a function — and what this file wants from it
+ * is the one piece of geometry it shares with sim.js. */
+global.window = global;
+var GL = require('../src/gl.js');
 
 var pass = 0, fail = 0;
 function check(n, c, d) { if (c) pass++; else { fail++; console.log('  FAIL  ' + n + (d ? '   ' + d : '')); } }
@@ -525,6 +530,76 @@ console.log('--- the systems you are not allowed into ---');
         !Galaxy.jumpPlan(g, g.home, g.stars.filter(function (s) {
           return !s.restricted && s.id !== g.home.id;
         })[0], bare).barred);
+})();
+
+console.log('--- the renderer turns a world the way the world turns ---');
+(function () {
+  /* THE TWO HALVES OF A SPINNING PLANET HAD NEVER BEEN INTRODUCED.
+   *
+   * sim.js turns surface ports around a real axis at a real period — nine
+   * to ninety hours, tilted, phased, all seeded by the generator. gl.js
+   * drew the planet spinning about world +y at a made-up rate, put the ice
+   * caps on the y poles, and scrolled the clouds on a third clock. So the
+   * continents did not belong to the world: a pad rotated out from under
+   * its own coastline, and the caps sat wherever +y happened to point.
+   *
+   * The check is geometric and exact. A port at the north pole sits, by
+   * construction, one radius along the spin axis — whatever the tilt, at
+   * every time. If the renderer's axis is the same axis, that offset and
+   * the renderer's axis point the same way to within rounding. */
+  var seeds = ['kawartha', 'elsewhere', 'seed-7', 'holton', 'a-fourth'];
+  var worlds = 0, worstDot = 1, worstPhase = 0, spun = 0;
+  seeds.forEach(function (sd) {
+    var sys = Gen.generateSystem(sd);
+    sys.bodies.forEach(function (b) {
+      if (!b.rotation) return;
+      worlds++;
+      [0, 3600, 91234, 5e5].forEach(function (t) {
+        var pole = Sim.surfaceOffset(b, { lat: Math.PI / 2, lon: 0, elevation: 0 }, t);
+        var len = Math.sqrt(pole.pos.x * pole.pos.x + pole.pos.y * pole.pos.y +
+                            pole.pos.z * pole.pos.z);
+        var ax = GL.spinOf(b, t).ax;
+        var dot = (pole.pos.x * ax.x + pole.pos.y * ax.y + pole.pos.z * ax.z) / len;
+        if (dot < worstDot) worstDot = dot;
+      });
+
+      /* AND AT THE RIGHT RATE. One full turn of the renderer's phase must
+       * be one full rotation of the body, or a world with a nine-hour day
+       * renders one with some other day. */
+      var per = Math.abs(b.rotation.period);
+      var a = GL.spinOf(b, 0).phase, c = GL.spinOf(b, per).phase;
+      var err = Math.abs(Math.abs(c - a) - 2 * Math.PI);
+      if (err > worstPhase) worstPhase = err;
+      /* A real day, not a stopped one. */
+      if (GL.spinOf(b, 1000).phase !== GL.spinOf(b, 0).phase) spun++;
+    });
+  });
+  check('there are worlds with a rotation to check', worlds > 40, worlds + ' worlds');
+  check('the pole the renderer spins about is the pole the ports turn around',
+        worstDot > 0.999999, 'worst alignment ' + worstDot.toFixed(9));
+  check('and one renderer turn is one day of the body\'s own',
+        worstPhase < 1e-9, 'worst phase error ' + worstPhase.toExponential(2));
+  check('every one of them actually turns', spun === worlds, spun + ' of ' + worlds);
+
+  /* THE DECK RUNS AHEAD OF THE GROUND, which is the whole of why weather
+   * slides across a world instead of being painted on it. */
+  var any = null;
+  for (var i = 0; i < Gen.generateSystem('kawartha').bodies.length && !any; i++) {
+    var bb = Gen.generateSystem('kawartha').bodies[i];
+    if (bb.rotation) any = bb;
+  }
+  if (any) {
+    var s0 = GL.spinOf(any, 0), s1 = GL.spinOf(any, 10000);
+    var ground = s1.phase - s0.phase, deck = s1.deck - s0.deck;
+    check('the cloud deck super-rotates', Math.abs(deck) > Math.abs(ground) * 1.5,
+          (deck / ground).toFixed(2) + 'x the ground');
+    /* WEATHER IS ON THE SIM CLOCK, not the wall clock. Same world, same
+     * hour, same sky — pause the game and the clouds stop, and the warp
+     * that carries you across a system carries its weather with it. */
+    check('and the weather field is a function of the time, not of the frame',
+          GL.spinOf(any, 4242).weather === GL.spinOf(any, 4242).weather &&
+          GL.spinOf(any, 4242).weather !== GL.spinOf(any, 4243).weather);
+  }
 })();
 
 console.log('');
