@@ -1604,11 +1604,36 @@ console.log('--- the price worth flying for ---');
   var cheap = { id: 'grain', buy: base * 0.40, sell: base * 0.38 };
   var dear  = { id: 'grain', buy: base * 1.30, sell: base * 1.90 };
   check('a cheap ask is green and the poor bid beside it is red',
-        Eco.priceMark(cheap).buy === 1 && Eco.priceMark(cheap).sell === -1);
+        Eco.priceMark(cheap).buy > 0 && Eco.priceMark(cheap).sell < 0);
   check('a dear bid is GREEN, because green is the column saying do it here',
-        Eco.priceMark(dear).sell === 1 && Eco.priceMark(dear).buy === -1);
+        Eco.priceMark(dear).sell > 0 && Eco.priceMark(dear).buy < 0);
   check('and the commodity itself takes the best news on the row',
-        Eco.priceMark(cheap).row === 1 && Eco.priceMark(dear).row === 1);
+        Eco.priceMark(cheap).row > 0 && Eco.priceMark(dear).row > 0);
+
+  /* MORE GREEN THE BETTER THE DEAL. Astra's ask, and the reason the
+   * cut-offs are the START of a ramp rather than a switch: a row that only
+   * just cleared the quartile and a row in the best five per cent of
+   * prices in the galaxy should not look the same. */
+  function askAt(x) { return Eco.priceMark({ id: 'grain', buy: base * x, sell: null }).buy; }
+  function bidAt(x) { return Eco.priceMark({ id: 'grain', buy: null, sell: base * x }).sell; }
+  check('an ask just past the threshold is barely green',
+        askAt(0.499) > 0 && askAt(0.499) < 0.1, askAt(0.499).toFixed(3));
+  check('and a far better one is fully green',
+        askAt(0.43) > 0.99, askAt(0.43).toFixed(3));
+  check('the ramp is monotonic in between',
+        askAt(0.49) < askAt(0.47) && askAt(0.47) < askAt(0.45),
+        [askAt(0.49), askAt(0.47), askAt(0.45)].map(function (v) { return v.toFixed(2); }).join(' < '));
+  check('a bid ramps the same way, upward',
+        bidAt(1.63) < bidAt(1.72) && bidAt(1.72) < bidAt(1.80) && bidAt(1.9) > 0.99,
+        [bidAt(1.63), bidAt(1.72), bidAt(1.80)].map(function (v) { return v.toFixed(2); }).join(' < '));
+  check('and nothing ever exceeds full strength',
+        askAt(0.01) <= 1 && bidAt(40) <= 1 &&
+        Eco.priceMark({ id: 'grain', buy: base * 40, sell: null }).buy >= -1);
+  /* Strength is a number, and a switch would pass every check above it
+   * except this one: the whole point is that the middle of the ramp is
+   * neither nothing nor everything. */
+  check('the middle of the ramp is genuinely in the middle',
+        askAt(0.47) > 0.3 && askAt(0.47) < 0.7, askAt(0.47).toFixed(3));
 
   /* Waste runs backwards on purpose and has its own colour already. */
   var w = Eco.priceList(Gen.generateSystem('seed-3').ports.filter(function (p) {
@@ -1616,6 +1641,82 @@ console.log('--- the price worth flying for ---');
   })[0] || { market: { order: [], rows: {} } }, 10 * DAY)
     .filter(function (r) { return r.id === 'waste'; })[0];
   if (w) check('waste is left to its own signs', Eco.priceMark(w).row === 0);
+})();
+
+console.log('--- what the local runs are carrying ---');
+(function () {
+  /* Astra, twice over: local traffic carries nothing, and once the comms
+   * channel existed you could HEAR it — a shuttle announcing an empty hold
+   * between two docks over the same world. */
+  var localTot = 0, localEmpty = 0;
+  var feeders = 0, feedersLoaded = 0;
+  var netFeed = 0, feedEntries = 0;
+  var heavies = 0, heaviesLoaded = 0;
+  var shareOk = 0, shareChecked = 0;
+  seeds(40).forEach(function (sd) {
+    var sys = Gen.generateSystem(sd);
+    var byId = {};
+    sys.ports.forEach(function (p) {
+      byId[p.id] = p;
+      (p.market.inbound || []).forEach(function (d) {
+        if (d.via === 'feed') { netFeed += d.qty; feedEntries++; }
+      });
+    });
+    var sched = {};
+    (sys.traffic || []).forEach(function (r) {
+      var q = 0;
+      (r.out || []).forEach(function (m) { q += m.qty; });
+      (r.back || []).forEach(function (m) { q += m.qty; });
+      if (r.outboard) { heavies++; if (q > 0) heaviesLoaded++; return; }
+      if (r.feeder) {
+        feeders++;
+        if (q > 0) feedersLoaded++;
+        var key = [r.from, r.to].sort().join('|');
+        if (sched[key] > 0 && q > 0) {
+          shareChecked++;
+          /* A twelfth of the scheduled run, jittered by at most 30%. */
+          if (q < sched[key] * 0.5) shareOk++;
+        }
+        return;
+      }
+      if (!r.local) return;
+      localTot++;
+      if (q < 1) localEmpty++;
+      sched[[r.from, r.to].sort().join('|')] = q;
+    });
+  });
+
+  console.log('  scheduled local runs flying empty: ' +
+              (100 * localEmpty / localTot).toFixed(1) + '% of ' + localTot);
+  console.log('  feeders with something aboard: ' +
+              (100 * feedersLoaded / feeders).toFixed(1) + '% of ' + feeders);
+  check('a scheduled local run carries something',
+        localEmpty / localTot < 0.03,
+        localEmpty + ' empty of ' + localTot);
+  check('and so does a feeder, which is the traffic you actually watch',
+        feedersLoaded / feeders > 0.9,
+        feedersLoaded + ' of ' + feeders);
+
+  /* THE WHOLE REASON THIS WAS SAFE TO DO. A local leg moves goods that are
+   * passing through: they arrive at one dock and LEAVE the other, so every
+   * tonne registered has a matching tonne removed and the system's total
+   * supply is what it always was. Without the departure half this is a
+   * supply increase in every system in the galaxy at once, which is what
+   * deferred the feature twice. */
+  check('every tonne a feeder lands is a tonne that left the other dock',
+        Math.abs(netFeed) < 1e-6,
+        netFeed.toFixed(6) + ' t net across ' + feedEntries + ' entries');
+
+  /* And the feeder's own hold is a SHARE of that registered run rather
+   * than a second helping of it — the same commerce, counted once. */
+  check('a feeder carries a fraction of the run it is flying, not a copy of it',
+        shareChecked > 20 && shareOk === shareChecked,
+        shareOk + ' of ' + shareChecked);
+
+  /* Heavies are still empty on purpose: they lie off the station and they
+   * are a silhouette, not a trade. */
+  check('a heavy still carries nothing, which is what it is for',
+        heaviesLoaded === 0, heaviesLoaded + ' of ' + heavies + ' loaded');
 })();
 
 console.log('');

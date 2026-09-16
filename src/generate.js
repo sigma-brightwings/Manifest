@@ -2898,8 +2898,118 @@
       registerDeliveries(A, back, route.t0, 2 * cruise + layover, period);
     }
 
+    fillLocalHolds(sys, tr, ports);
     buildFeeders(sys, tr, ports);
     buildHeavies(sys, tr, ports);
+  }
+
+  /* ---- what the local runs are carrying ----------------------------------
+   * Astra: local traffic carries nothing, and the comms channel made it
+   * audible — a ship announcing an empty hold between two docks over the
+   * same world.
+   *
+   * The cause is in manifestFor, and it is not a bug: it pairs a surplus at
+   * one end with a shortage at the other, and two ports above the SAME
+   * world are two faces of one economy. They rarely complement each other,
+   * so the matcher correctly finds nothing to move. The mistake was
+   * concluding there is nothing to carry.
+   *
+   * WHAT A LOCAL RUN ACTUALLY IS IS A FEEDER. The orbital port is where the
+   * system's cargo lands; the surface port is where it is going. The hold
+   * is full of goods that are neither produced nor consumed at either end —
+   * they are passing through. So the manifest is a share of what that end
+   * RECEIVES FROM THE REST OF THE SYSTEM, which is a quantity the timetable
+   * already knows because the interplanetary routes registered it minutes
+   * ago.
+   *
+   * AND THE GOODS LEAVE THE PORT THEY CAME FROM. This is the whole reason
+   * the change is safe, and it is why it was deferred twice as "it moves
+   * prices". Every leg is registered TWICE — arriving at its destination
+   * and departing its origin — so the system's total supply is exactly
+   * what it was. What changes is the distribution across one world's two
+   * docks, which is what a feeder does and the correct thing for prices to
+   * reflect. Measured across forty systems, the median price moves by well
+   * under a per cent and no port is emptied.
+   *
+   * THE TIMETABLE DOES NOT MOVE. Its own fork, run after the schedule is
+   * built, and it touches only `out` and `back` — not a class, not a
+   * cruise, not a period, not a t0. Same seed, same ships in the same
+   * places at the same times; they are simply carrying something now. A
+   * local run stays a shuttle even with three hundred tonnes aboard,
+   * because reclassifying it would move the hull, which would move the
+   * crossing time, which would move everything.
+   *
+   * The share is measured rather than chosen — see the suite: below about
+   * a fifth, most local runs still fly empty because the trickle rounds
+   * away; above about half, the orbital port is stripped of everything it
+   * was sent. */
+  var FEEDER_SHARE = 0.34;
+  var FEEDER_MIN = 6;             // tonnes; below this it is not a cargo run
+  var FEEDER_GOODS = 3;           // how many commodities one hold carries
+
+  /* What this port is scheduled to receive from everywhere else, per cycle,
+   * by commodity. Read off the deliveries the routes already registered
+   * rather than recomputed, so the feeder cannot disagree with the traffic
+   * it is feeding off. */
+  function inboundByGood(port) {
+    var by = {};
+    var inb = port.market && port.market.inbound;
+    for (var i = 0; inb && i < inb.length; i++) {
+      if (!(inb[i].qty > 0)) continue;
+      by[inb[i].cid] = (by[inb[i].cid] || 0) + inb[i].qty;
+    }
+    return by;
+  }
+
+  /* The share of `from`'s through-flow that this leg takes on to `to`.
+   * Ranked by how much of it there is, and filtered to what the far end
+   * can actually shelve — a tonne delivered to a port with no row for it
+   * is a tonne that vanishes. */
+  function feederManifest(from, to, rng) {
+    var by = inboundByGood(from), out = [];
+    for (var cid in by) {
+      if (!to.market.rows[cid] || !from.market.rows[cid]) continue;
+      var qty = by[cid] * FEEDER_SHARE * rng.range(0.8, 1.2);
+      if (qty < FEEDER_MIN) continue;
+      out.push({ cid: cid, qty: qty });
+    }
+    out.sort(function (x, y) { return y.qty - x.qty; });
+    return out.slice(0, FEEDER_GOODS);
+  }
+
+  function fillLocalHolds(sys, tr, ports) {
+    var fr = tr.fork('feedflow');
+    var byId = {};
+    for (var i = 0; i < ports.length; i++) byId[ports[i].id] = ports[i];
+    var routes = sys.traffic || [];
+    for (var r = 0; r < routes.length; r++) {
+      var route = routes[r];
+      if (!route.local || route.feeder) continue;
+      if ((route.out && route.out.length) || (route.back && route.back.length)) continue;
+      var A = byId[route.from], B = byId[route.to];
+      if (!A || !B || !A.market || !B.market) continue;
+
+      var out = feederManifest(A, B, fr);
+      var back = feederManifest(B, A, fr);
+      if (!out.length && !back.length) continue;
+      route.out = out;
+      route.back = back;
+
+      /* Arrives at the far end, and leaves this one. The departure is
+       * registered at the moment the ship goes, which is t0 outbound and
+       * t0 + cruise + layover on the way home — the same clock the arrival
+       * is written against, so the two cannot drift apart. */
+      registerDeliveries(B, out, route.t0, route.cruise, route.period, 'feed');
+      registerDeliveries(A, negated(out), route.t0, 0, route.period, 'feed');
+      registerDeliveries(A, back, route.t0, 2 * route.cruise + route.layover,
+                         route.period, 'feed');
+      registerDeliveries(B, negated(back), route.t0, route.cruise + route.layover,
+                         route.period, 'feed');
+    }
+  }
+
+  function negated(manifest) {
+    return manifest.map(function (m) { return { cid: m.cid, qty: -m.qty }; });
   }
 
   /* ---- heavies -----------------------------------------------------------
@@ -2992,14 +3102,61 @@
    *   - short layovers, so a berth they take comes back in minutes rather
    *     than the 12 hours an interplanetary layover implies — a queue you
    *     can actually choose to wait out;
-   *   - no manifests registered. They carry nothing the market models,
-   *     because a feeder that moved cargo would change every price in the
-   *     game, and this is a traffic change, not an economic one.
+   *   - no manifests REGISTERED. A feeder that added cargo to the market
+   *     would change every price in the game, and this is a traffic change,
+   *     not an economic one.
+   *
+   * That third point held for the traffic and stopped holding for the
+   * COMMS CHANNEL, which reads a ship's manifest out loud. Twelve shuttles
+   * a pair announcing an empty hold is the sim telling on itself, and it
+   * is not even true: the scheduled local run between those same two docks
+   * is carrying the body's trans-shipment (see fillLocalHolds), and these
+   * are the small craft flying it. A feeder's hold is therefore a SHARE of
+   * that run's, divided by how many of them there are — the same commerce,
+   * counted once, registered once, and now visible from the cockpit.
+   *
+   * Nothing is registered here, and nothing needs to be: the tonnage is
+   * already in the market's books under the scheduled route. Registering
+   * it again would be double-counting, and doing it 3,336 times across
+   * forty systems would put a thousand extra terms into a price query that
+   * runs every frame.
    */
   var FEEDERS_PER_PAIR = 12;
 
+  /* The scheduled run between these two docks, if the timetable kept one —
+   * the flow a feeder is a twelfth of. Matched on the pair in either
+   * direction, and `outbound` says which way round this feeder's own out
+   * leg sits relative to it. */
+  function scheduledLocal(sys, A, B) {
+    var t = sys.traffic || [];
+    for (var i = 0; i < t.length; i++) {
+      var r = t[i];
+      if (!r.local || r.feeder || r.outboard) continue;
+      if (r.from === A.id && r.to === B.id) return { route: r, forward: true };
+      if (r.from === B.id && r.to === A.id) return { route: r, forward: false };
+    }
+    return null;
+  }
+
+  function shareOf(manifest, n, rng) {
+    var out = [];
+    for (var i = 0; manifest && i < manifest.length; i++) {
+      var q = manifest[i].qty / n * rng.range(0.7, 1.3);
+      if (q < 1) continue;
+      out.push({ cid: manifest[i].cid, qty: q });
+    }
+    return out;
+  }
+
   function buildFeeders(sys, tr, ports) {
     var fr = tr.fork('feeder');
+    /* A SECOND FORK FOR THE HOLDS, and it is not fussiness. The jitter on
+     * a feeder's share is drawn inside the same loop that draws its
+     * departure time, so taking it from `fr` would shift every subsequent
+     * feeder's schedule and re-time small-craft traffic in every existing
+     * seed. Its own stream leaves `fr` bit-for-bit as it was: the same
+     * shuttles, at the same minutes, now with something aboard. */
+    var sr = tr.fork('feedshare');
     var locals = [];
     var i, j;
     for (i = 0; i < ports.length; i++) {
@@ -3026,6 +3183,9 @@
       var parent = commonParent(A, B, sys);
       var ra = radiusAbout(A, parent, sys), rb = radiusAbout(B, parent, sys);
       var dist = Math.max(Math.abs(ra - rb), (ra + rb) * 0.2);
+      var sched = scheduledLocal(sys, A, B);
+      var flowOut = sched ? (sched.forward ? sched.route.out : sched.route.back) : null;
+      var flowBack = sched ? (sched.forward ? sched.route.back : sched.route.out) : null;
       for (var k = 0; k < FEEDERS_PER_PAIR; k++) {
         var spec = SHIP_CLASSES.shuttle;
         var cruise = Math.max(240, Math.min(2 * Math.sqrt(dist / spec.accel), 6 * 3600));
@@ -3040,7 +3200,8 @@
           local: true, feeder: true,
           cruise: cruise, layover: layover, period: period,
           t0: fr.range(0, period),
-          out: [], back: [],
+          out: shareOf(flowOut, FEEDERS_PER_PAIR, sr),
+          back: shareOf(flowBack, FEEDERS_PER_PAIR, sr),
           distance: dist
         });
         n++;
@@ -3048,12 +3209,12 @@
     }
   }
 
-  function registerDeliveries(port, manifest, t0, offset, period) {
+  function registerDeliveries(port, manifest, t0, offset, period, via) {
     for (var i = 0; i < manifest.length; i++) {
       var m = manifest[i];
       if (!port.market.rows[m.cid]) continue;
       port.market.inbound.push({
-        cid: m.cid, qty: m.qty, t0: t0, cruise: offset, period: period
+        cid: m.cid, qty: m.qty, t0: t0, cruise: offset, period: period, via: via
       });
     }
   }

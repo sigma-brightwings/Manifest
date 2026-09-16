@@ -10431,6 +10431,33 @@
    * a fifth hex would be a fifth opinion about what red is. */
   var MARK_GOOD = '#7dffb0', MARK_BAD = '#ff7a7a';
 
+  /* HOW GREEN, not whether. Astra: "make it more green the better the deal
+   * is, and less green if it's marginal." Eco.priceMark hands back a signed
+   * strength rather than a verdict, and the row is mixed that far toward
+   * the colour — so a bargain in the best five per cent of prices in the
+   * galaxy arrives at full green and a row that only just cleared the
+   * quartile is barely tinted.
+   *
+   * The mix starts at 0.38 rather than at 0, because a strength of nearly
+   * zero mixed by nearly zero is the uncoloured row again: the bottom of
+   * the ramp has to be visible or the threshold does no work. What varies
+   * across the rest is how loud it is. */
+  var MARK_FLOOR = 0.38;
+
+  function mixHex(from, to, f) {
+    var a = parseInt(from.slice(1), 16), b = parseInt(to.slice(1), 16);
+    var r = Math.round(((a >> 16) & 255) + (((b >> 16) & 255) - ((a >> 16) & 255)) * f);
+    var g = Math.round(((a >> 8) & 255) + (((b >> 8) & 255) - ((a >> 8) & 255)) * f);
+    var c = Math.round((a & 255) + ((b & 255) - (a & 255)) * f);
+    return '#' + ((1 << 24) + (r << 16) + (g << 8) + c).toString(16).slice(1);
+  }
+
+  function markColour(neutral, strength) {
+    if (!strength) return neutral;
+    return mixHex(neutral, strength > 0 ? MARK_GOOD : MARK_BAD,
+                  MARK_FLOOR + (1 - MARK_FLOOR) * Math.min(1, Math.abs(strength)));
+  }
+
   function drawMarket(ctx, w, h) {
     var m = G.market;
     var port = m.port;
@@ -10511,9 +10538,7 @@
        * thresholds and the reasoning live in Eco.priceMark. */
       var mk = Eco.priceMark(r);
       ctx.fillStyle = isWaste ? '#ffb86b'
-                    : mk.row > 0 ? MARK_GOOD
-                    : mk.row < 0 ? MARK_BAD
-                    : (held > 0 ? '#e6f0ff' : '#a9bcd6');
+                    : markColour(held > 0 ? '#e6f0ff' : '#a9bcd6', mk.row);
       ctx.fillText(r.name, px + 44, y);
       if (isWaste) {
         ctx.fillStyle = 'rgba(255,184,107,0.65)';
@@ -10530,13 +10555,11 @@
        * negative bid charges you, and those already read correctly. */
       ctx.fillStyle = r.buy === null ? '#4c5c72'
                     : r.buy < 0 ? '#7dffb0'
-                    : mk.buy > 0 ? MARK_GOOD
-                    : mk.buy < 0 ? MARK_BAD : '#cfe0ff';
+                    : markColour('#cfe0ff', mk.buy);
       ctx.fillText(r.buy === null ? '—' : fmtCredits(r.buy), px + 330, y);
       ctx.fillStyle = r.sell === null ? '#4c5c72'
                     : r.sell < 0 ? '#ffb86b'
-                    : mk.sell > 0 ? MARK_GOOD
-                    : mk.sell < 0 ? MARK_BAD : '#cfe0ff';
+                    : markColour('#cfe0ff', mk.sell);
       ctx.fillText(r.sell === null ? '—' : fmtCredits(r.sell), px + 420, y);
       ctx.fillStyle = held > 0 ? '#ffe6a8' : '#4c5c72';
       ctx.fillText(held > 0 ? held.toFixed(0) + ' t' : '—', px + 510, y);

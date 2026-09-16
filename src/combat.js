@@ -2430,6 +2430,9 @@
           kind: kind, fac: victim.faction || 'civil',
           at: t + WITNESS_CALL_DELAY,
           by: witness.name || 'a witness',
+          /* A warship's log is not a thing anybody sells. See
+           * capitalWatching for why this is the whole of the feature. */
+          sealed: witness.kind === 'capital',
           victimName: victim.name || null
         };
         /* Quote the price in the warning itself. The window is eight
@@ -2438,6 +2441,7 @@
         if (hooks && hooks.say) {
           var q0 = hushQuote(sys, G, t);
           var offer = !q0 ? ''
+            : !q0.possible && q0.sealed ? '  —  ' + q0.reason
             : q0.intimidate ? '  —  Shift+H to have a word (free; they will remember it)'
             : !q0.possible  ? '  —  ' + q0.reason
             : '  —  Shift+H: ' + Math.round(q0.price) + ' cr, ~' +
@@ -2462,8 +2466,58 @@
     }
   }
 
+  /* ---- what a capital ship is FOR ----------------------------------------
+   * Astra: "there are ships for the capital class." They fly, and until now
+   * that was all they did — a hull twice a cutter's size that never affected
+   * anything, which is set dressing with a fuel bill.
+   *
+   * A capital does NOT chase. That was the design and it is the right one:
+   * a third of a cutter's acceleration means it could never catch anybody,
+   * and building a pursuit it always loses would make it look foolish
+   * rather than dangerous. So what it does is POSITIONAL — it makes the
+   * volume around it a different place to be.
+   *
+   * Two effects, both of them on the existing law rather than a new system:
+   *
+   *   IT SEES FURTHER. A warship keeps a watch, so the radius within which
+   *   an act is witnessed is four times the ordinary one. Not because its
+   *   sensors are magic — because somebody aboard is being paid to look,
+   *   which is exactly the thing an ordinary trader on a schedule is not.
+   *
+   *   AND ITS WATCH IS NOT FOR SALE. The whole hush mechanic rests on the
+   *   witness having something to lose and a reason to deal; a duty officer
+   *   on a capital ship has neither, and the Syndicate's promise of
+   *   consequences does not reach a warship's log. So a crime seen from a
+   *   capital is SEALED: it cannot be paid off and it cannot be leaned on,
+   *   whatever your standing.
+   *
+   * The consequence is the point: a system with a capital in it is not
+   * uniformly harder, it has a place in it you do not do business. That is
+   * geography, which is what this game does with everything else. */
+  var CAPITAL_WATCH = WITNESS_RANGE * 4;
+
+  function capitalWatching(sys, t, scene, victim) {
+    var Sim = global.Sim;
+    var patrols = (sys && sys.patrols) || [];
+    for (var i = 0; i < patrols.length; i++) {
+      var sp = patrols[i];
+      if (sp.kind !== 'capital' || sp.dead) continue;
+      if (victim && (sp === victim || sp.id === victim.id)) continue;
+      var st = sp.live || (Sim && Sim.patrolState ? Sim.patrolState(sp, sys, t) : null);
+      var pos = st && st.pos;
+      if (!pos) continue;
+      if (V.dist(pos, scene) < CAPITAL_WATCH) return sp;
+    }
+    return null;
+  }
+
   function witnessNear(sys, t, scene, victim, G) {
     var Sim = global.Sim;
+    /* THE WARSHIP FIRST, and not merely as one candidate among many: if a
+     * capital is inside its watch radius it IS the witness, because which
+     * witness it is decides whether the report can be bought. */
+    var cap = capitalWatching(sys, t, scene, victim);
+    if (cap) return cap;
     var ships = Sim.shipsAll(sys, t);
     for (var i = 0; i < ships.length; i++) {
       var s = ships[i];
@@ -2671,6 +2725,20 @@
     target.possible = target.intimidate || corrupt >= HUSH_MIN_CORRUPTION;
     target.reason = target.possible ? null
       : 'nobody here will take it — too little corruption to enforce a bargain';
+    /* AND A WARSHIP'S WATCH IS NOT FOR SALE, whoever you are. This is
+     * deliberately the LAST word rather than one term among several: the
+     * intimidation path bypasses the corruption floor on the argument that
+     * a threat is not a bargain, and that argument stops at a hull with a
+     * flag on it. There is no standing that makes a duty officer on a
+     * capital ship your problem to solve. */
+    if (target.pending && target.pending.sealed) {
+      target.sealed = true;
+      target.intimidate = false;
+      target.possible = false;
+      target.price = 0;
+      target.stick = 0;
+      target.reason = 'a warship saw it — that log is not for sale';
+    }
     return target;
   }
 
@@ -4713,6 +4781,53 @@
 
   /* The one entry point, so the comms screen never has to know which of
    * these is a transaction and which is conversation. */
+  /* What a warship says when you call it. Three answers, in the order the
+   * law would apply them: wanted, carrying, or neither. */
+  function hailChallenge(G, sys, t, contact, hooks) {
+    function talk(msg, secs) { if (hooks && hooks.say) hooks.say(msg, secs || 6); }
+    var fac = contact.faction || null;
+    var name = contact.name || 'the warship';
+
+    if (fac && wantedHere(G, fac)) {
+      talk(name + ': "We have your registration. Cut thrust and hold station."', 7);
+      /* It does not chase — it does not have to. What it does is stop
+       * pretending it has not seen you, which is what turns its watch from
+       * a number in a file into something happening now. */
+      contact.hostileToPlayer = true;
+      contact.mode = 'attack';
+      return { challenge: 'wanted', faction: fac };
+    }
+
+    var dirty = fac ? contrabandAboardFor(G, fac) : null;
+    if (dirty) {
+      talk(name + ': "You are inside our watch carrying ' + dirty.name.toLowerCase() +
+           '. We are not customs. They are."', 7);
+      return { challenge: 'contraband', cid: dirty.cid, faction: fac };
+    }
+
+    talk(name + ': "' + name + ', station keeping. You are logged. Keep it civil."', 6);
+    return { challenge: 'clear', faction: fac };
+  }
+
+  /* The worst thing in the hold by this flag's own law, or null. Reads the
+   * same severity table the customs search does, so a capital cannot
+   * disagree with the port that would fine you. */
+  function contrabandAboardFor(G, fac) {
+    var Eco = global.Economy;
+    var cargo = (G.ship && G.ship.cargo) || {};
+    var worst = null;
+    for (var cid in cargo) {
+      if (!(cargo[cid] > 0)) continue;
+      var sev = contrabandSeverity(G, cid, fac);
+      if (!(sev > 0)) continue;
+      if (!worst || sev > worst.severity) {
+        worst = { cid: cid, severity: sev,
+                  name: (Eco && Eco.BY_ID[cid] && Eco.BY_ID[cid].name) || cid };
+      }
+    }
+    return worst;
+  }
+
   function hailShip(G, sys, t, contact, intent, hooks) {
     function talk(msg, secs) { if (hooks && hooks.say) hooks.say(msg, secs || 5); }
     if (!contact) return null;
@@ -4724,6 +4839,20 @@
     if (refusal) { talk(refusal, 5); return null; }
 
     var s = G.ship;
+
+    /* A CAPITAL ANSWERS IN A DIFFERENT REGISTER, and refusing the ordinary
+     * three is most of the point. A warship is not a trader with spare
+     * cargo, it is not a taxi with spare fuel, and it does not hand out
+     * charts — but it will tell you exactly where you stand with it, which
+     * is the one thing worth knowing from inside its watch.
+     *
+     * It reads as an instrument rather than as flavour for the same reason
+     * the comms channel does: every word of it is a fact the law is about
+     * to act on. */
+    if (contact.cls === 'capital' || contact.kind === 'capital') {
+      return hailChallenge(G, sys, t, contact, hooks);
+    }
+
     if (intent === 'directions') return hailDirections(G, sys, t, contact, hooks);
 
     if (intent === 'assist') {

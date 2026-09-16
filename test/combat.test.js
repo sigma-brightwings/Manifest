@@ -770,6 +770,71 @@ section('--- the witness doctrine ---');
   check('and lands once the witness gets on the radio', G3.wanted.seenfac > 0,
         String(G3.wanted.seenfac));
 
+  /* A CAPITAL SHIP IS A WITNESS YOU CANNOT BUY.
+   *
+   * Astra: "there are ships for the capital class." A hull that flies and
+   * affects nothing is set dressing, and a capital cannot be made to
+   * affect anything by chasing — a third of a cutter's acceleration means
+   * it loses every pursuit it starts. So its effect is positional, and it
+   * lands on the law rather than on a new system: it sees four times as
+   * far as an ordinary witness, and its log is not for sale at any
+   * standing. */
+  var GC = makeG(true);                       // deep space: no other witnesses
+  var farOff = V.addScaled(V.clone(GC.ship.pos), { x: 1, y: 0, z: 0 },
+                           Combat.WITNESS_RANGE * 2);
+  GC.sys.patrols = [{ id: 'cap-test', kind: 'capital', faction: 'navyfac',
+                      name: 'FNS Test', cls: 'capital', live: { pos: farOff } }];
+  var vc = fakeVictim(GC, { range: 5, faction: 'watchedfac' });
+  Combat.crime(GC.sys, GC, GC.t, 'assault', vc, HOOKS);
+  check('a capital witnesses an act well past ordinary witness range',
+        !!GC.pendingReport && GC.pendingReport.by === 'FNS Test',
+        JSON.stringify(GC.pendingReport || null));
+  check('and the report it files is sealed',
+        !!(GC.pendingReport && GC.pendingReport.sealed));
+  /* The hush mechanic's own escape hatch is standing, and this is where
+   * that hatch stops working: intimidation bypasses the corruption floor
+   * on the argument that a threat is not a bargain, and that argument does
+   * not reach a duty officer with a flag over him. */
+  GC.standing.outlaw = 95;
+  var qc = Combat.hushQuote(GC.sys, GC, GC.t);
+  check('a warship\'s log cannot be bought', !!qc && qc.possible === false,
+        JSON.stringify(qc && { possible: qc.possible, price: qc.price }));
+  check('nor leaned on, at any standing', !!qc && qc.intimidate === false);
+  check('and the refusal says why, rather than reading as a bug',
+        !!qc && /warship/.test(qc.reason || ''), qc && qc.reason);
+  /* Same crime, same standing, with the warship out of sight: buying
+   * silence has to still work, or this test is passing for the wrong
+   * reason. */
+  var GD = makeG(true);
+  GD.standing.outlaw = 95;
+  var vd = fakeVictim(GD, { range: 5, faction: 'watchedfac' });
+  Combat.crime(GD.sys, GD, GD.t, 'assault', vd, HOOKS);
+  var qd = Combat.hushQuote(GD.sys, GD, GD.t);
+  check('with no warship watching, the same act is still buyable',
+        !!qd && qd.possible === true, JSON.stringify(qd && { possible: qd.possible }));
+
+  /* AND IT ANSWERS IN ITS OWN REGISTER. Three intents that all return the
+   * same challenge would be the fiction refusing what the interface
+   * offered; screens.js narrows the rows, and combat refuses them here. */
+  var GE = makeG(true);
+  GE.ship.credits = 100000;
+  var cap = { id: 'cap2', kind: 'capital', cls: 'capital', name: 'FNS Resolve',
+              faction: 'navyfac', pos: V.clone(GE.ship.pos),
+              route: null, manifest: [] };
+  var said = [];
+  var HK = { say: function (m) { said.push(m); } };
+  var ans = Combat.hailShip(GE, GE.sys, GE.t, cap, 'buy', HK);
+  check('a warship does not sell you its stores when asked to trade',
+        !!ans && ans.challenge === 'clear', JSON.stringify(ans));
+  check('and it tells you where you stand instead',
+        said.length > 0 && /station keeping/.test(said[said.length - 1]),
+        said[said.length - 1]);
+  GE.wanted = {}; GE.wanted.navyfac = Combat.WANTED_HUNT + 500;
+  var ans2 = Combat.hailShip(GE, GE.sys, GE.t, cap, 'directions', HK);
+  check('a wanted ship hailing a warship gets the answer it earned',
+        !!ans2 && ans2.challenge === 'wanted' && cap.hostileToPlayer === true,
+        JSON.stringify(ans2));
+
   // Pirates are fair game, always.
   var G4 = makeG();
   var v4 = fakeVictim(G4, { kind: 'pirate', cls: 'pirate', range: 5, faction: 'outlaw' });

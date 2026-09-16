@@ -1151,8 +1151,36 @@
    * Waste is left alone. Its prices run backwards on purpose — negative
    * is money toward you — and the market screen already says so in its
    * own colour. */
-  var MARK_BUY_GOOD = 0.50, MARK_BUY_BAD = 0.92;
-  var MARK_SELL_GOOD = 1.62, MARK_SELL_BAD = 0.54;
+  /* THE CUT-OFF IS WHERE THE COLOUR STARTS, NOT WHERE IT ARRIVES.
+   *
+   * Astra: "make it more green the better the deal is, and less green if
+   * it's marginal." So each direction is a RAMP rather than a switch, and
+   * both ends of it are measured percentiles of the same sixty-system
+   * sample: the colour begins at the quartile — the point where a price
+   * stops being ordinary — and reaches full strength at the twentieth of
+   * prices beyond it. Full green therefore means "this is in the best five
+   * per cent you will ever see", which is a claim worth making loudly, and
+   * a row that only just qualifies says so by being barely tinted.
+   *
+   *   ask   begins 0.50x base, full at 0.44x   |  dear begins 0.92x, full at 2.06x
+   *   bid   begins 1.62x base, full at 1.81x   |  poor begins 0.54x, full at 0.42x
+   *
+   * The dear ramp is wide and the cheap ramp narrow because the
+   * distribution IS: asks bunch under base and trail a long way above it.
+   * Matching the ramps to each other would have been tidier and would have
+   * made the wrong half of the screen shout. */
+  var MARK_BUY_GOOD = 0.50, MARK_BUY_FULL = 0.44;
+  var MARK_BUY_BAD = 0.92, MARK_BUY_WORST = 2.06;
+  var MARK_SELL_GOOD = 1.62, MARK_SELL_FULL = 1.81;
+  var MARK_SELL_BAD = 0.54, MARK_SELL_WORST = 0.42;
+
+  /* Strength in 0..1 for a value that has passed `from` on its way to
+   * `to`, either direction. Zero at the threshold, one at full. */
+  function ramp(x, from, to) {
+    var span = to - from;
+    if (!span) return 1;
+    return clamp((x - from) / span, 0, 1);
+  }
 
   function priceMark(row) {
     var out = { buy: 0, sell: 0, row: 0 };
@@ -1161,18 +1189,21 @@
     if (!com || com.waste || !(com.base > 0)) return out;
     if (row.buy !== null && isFinite(row.buy) && row.buy > 0) {
       var b = row.buy / com.base;
-      out.buy = b <= MARK_BUY_GOOD ? 1 : b >= MARK_BUY_BAD ? -1 : 0;
+      out.buy = b <= MARK_BUY_GOOD ? ramp(b, MARK_BUY_GOOD, MARK_BUY_FULL)
+              : b >= MARK_BUY_BAD ? -ramp(b, MARK_BUY_BAD, MARK_BUY_WORST) : 0;
     }
     if (row.sell !== null && isFinite(row.sell) && row.sell > 0) {
-      var s = row.sell / com.base;
-      out.sell = s >= MARK_SELL_GOOD ? 1 : s <= MARK_SELL_BAD ? -1 : 0;
+      var sv = row.sell / com.base;
+      out.sell = sv >= MARK_SELL_GOOD ? ramp(sv, MARK_SELL_GOOD, MARK_SELL_FULL)
+               : sv <= MARK_SELL_BAD ? -ramp(sv, MARK_SELL_BAD, MARK_SELL_WORST) : 0;
     }
-    /* THE ROW TAKES THE BEST NEWS ON IT. A thing can be a good buy and a
-     * poor sell at the same port — that is what "cheap here" IS — and the
-     * commodity's own name should tell you there is something to do here
-     * rather than average the two into nothing. */
-    out.row = (out.buy > 0 || out.sell > 0) ? 1
-            : (out.buy < 0 || out.sell < 0) ? -1 : 0;
+    /* THE ROW TAKES THE BEST NEWS ON IT, and takes its strength too. A
+     * thing can be a good buy and a poor sell at the same port — that is
+     * what "cheap here" IS — and the commodity's own name should tell you
+     * there is something to do here rather than average the two into
+     * nothing. */
+    var best = Math.max(out.buy, out.sell);
+    out.row = best > 0 ? best : Math.min(out.buy, out.sell);
     return out;
   }
 

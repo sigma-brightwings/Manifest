@@ -868,19 +868,35 @@
           say(c.name + (c.hostile ? ' does not answer.' : ' acknowledges.'), 4);
         }
       });
+      /* A WARSHIP IS NOT A SHOP. A capital answers one way whatever you
+       * ask it, so offering three rows that all say the same thing would
+       * be the interface promising something the fiction refuses. One row
+       * instead, named for what it actually is. */
+      var isCapital = !!(c.obj && (c.obj.cls === 'capital' || c.obj.kind === 'capital'));
+      if (isCapital) {
+        opts.push({
+          label: 'Answer the watch',
+          enabled: inRange,
+          note: !inRange ? 'out of transmitter range'
+              : 'they will tell you where you stand',
+          fn: function () { Combat.hailShip(G, G.sys, G.t, c.obj, 'hail', hooksFor()); }
+        });
+      }
       opts.push({
         label: 'Ask for directions',
-        enabled: inRange,
+        enabled: inRange && !isCapital,
         note: !inRange ? 'out of transmitter range'
+            : isCapital ? 'they are not here to help you navigate'
             : (c.obj.route && c.obj.route._told) ? 'they have told you what they know'
             : 'what they passed on the way in',
         fn: function () { Combat.hailShip(G, G.sys, G.t, c.obj, 'directions', hooksFor()); }
       });
       opts.push({
         label: 'Buy from their hold',
-        enabled: inRange && !!(deal && deal.buy) && G.ship.credits >= (deal && deal.buy
+        enabled: inRange && !isCapital && !!(deal && deal.buy) && G.ship.credits >= (deal && deal.buy
           ? deal.buy.each * deal.buy.qty : 0),
         note: !inRange ? 'out of transmitter range'
+            : isCapital ? 'a warship does not sell its stores'
             : !(deal && deal.buy) ? 'nothing aboard you could carry'
             : deal.buy.qty + ' t ' + deal.buy.name.toLowerCase() + ' — ' +
               (deal.buy.each * deal.buy.qty) + ' cr',
@@ -888,16 +904,19 @@
       });
       opts.push({
         label: 'Sell them cargo',
-        enabled: inRange && !!(deal && deal.sell),
+        enabled: inRange && !isCapital && !!(deal && deal.sell),
         note: !inRange ? 'out of transmitter range'
+            : isCapital ? 'a warship does not buy'
             : !(deal && deal.sell) ? 'nothing you have is worth their hold'
             : deal.sell.qty + ' t ' + deal.sell.name.toLowerCase() + ' — ' +
               (deal.sell.each * deal.sell.qty) + ' cr',
         fn: function () { Combat.hailShip(G, G.sys, G.t, c.obj, 'sell', hooksFor()); }
       });
       opts.push({
-        label: 'Request assistance', enabled: inRange && !!aid && G.ship.credits >= aid.cost,
+        label: 'Request assistance',
+        enabled: inRange && !isCapital && !!aid && G.ship.credits >= aid.cost,
         note: !inRange ? 'out of transmitter range'
+            : isCapital ? 'they are not a tender'
             : !aid ? 'your tank is not their problem'
             : aid.tonnes + ' t of hydrogen — ' + aid.cost + ' cr' +
               (G.ship.credits < aid.cost ? ' (you are short)' : ''),
