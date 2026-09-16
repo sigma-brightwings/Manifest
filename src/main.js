@@ -9310,7 +9310,17 @@
            * plating at the modeller's own saturation. The second argument
            * switches the skin rather than the hue: black hull, red trim.
            * See accentSwap. */
-          Render.setAccent(owner && owner.color, owner && owner.outlaw);
+          /* THREE LIVERIES, and the third is the one that makes the other
+           * two legible. Astra: "add the Navy and Syndicate to each."
+           *
+           * A fleet carrier wears the fleet's paint — pale hull, deep trim
+           * — and a Syndicate dock wears black and red, and everything
+           * else wears the ordinary wash. So a dock on approach is one of
+           * three obviously different objects before you can read a word
+           * on it, which is what a livery is for. */
+          var skin = (owner && owner.outlaw) ? 'outlaw'
+                   : (Combat.fleetPort && Combat.fleetPort(b)) ? 'fleet' : null;
+          Render.setAccent(owner && owner.color, skin);
           /* ONE COMPARTMENT WHEN YOU ARE IN ONE. Astra's design: every
            * section has a blast door, so the renderer only ever draws the
            * section around the ship. From outside, `null` — the whole hull

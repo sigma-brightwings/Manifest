@@ -2581,18 +2581,53 @@
   var OUTLAW_PLATE_SAT = 0.22;
   var OUTLAW_TRIM_SAT = 0.85;
   var OUTLAW_TRIM_LO = 0.34, OUTLAW_TRIM_HI = 0.56;
-  var accentOutlaw = false;
 
-  function setAccent(c, outlaw) {
+  /* ---- AND THE FLEET GETS ONE TOO ---------------------------------------
+   * Astra, of the Syndicate livery: "add the Navy and Syndicate to each."
+   *
+   * Three liveries rather than two, and the third is the one that makes the
+   * other two legible. A galaxy where Syndicate docks are unmistakable and
+   * everything else is the same wash has only told you about one kind of
+   * place; with a fleet livery as well, a dock on approach is one of three
+   * obviously different objects before you can read a word on it.
+   *
+   * IT IS THE SYNDICATE'S SKIN PHOTOGRAPHED IN NEGATIVE, and deliberately.
+   * The Syndicate crushes its plating to black and turns its trim all the
+   * way UP: bright on dark, paint that shouts off a hull that has gone
+   * quiet. The fleet does the exact opposite — it bleaches its plating
+   * toward white and drives its trim DOWN into a deep, saturated band, so
+   * the livery reads as dark on pale. Same two levers, opposite directions,
+   * and the result is that the two powers cannot be confused at any
+   * distance or in any light, which is the whole requirement.
+   *
+   * The trim still takes the OWNER's hue rather than a fixed navy blue.
+   * Twelve powers each have a fleet, and "whose dock is this" is a question
+   * the chart already answers in colour — the livery says a warship keeps
+   * this place, and the hue says whose warship. */
+  var FLEET_PLATE_LIGHT = 0.30;      // of the modeller's own lightness
+  var FLEET_PLATE_FLOOR = 0.60;
+  var FLEET_PLATE_SAT = 0.10;
+  var FLEET_TRIM_SAT = 0.72;
+  var FLEET_TRIM_LO = 0.16, FLEET_TRIM_HI = 0.32;
+
+  var accentSkin = null;             // null | 'outlaw' | 'fleet'
+
+  function setAccent(c, skin) {
     accentColor = (typeof c === 'string' && c.charAt(0) === '#' && c.length === 7)
       ? c.toLowerCase() : null;
-    accentOutlaw = !!outlaw && !!accentColor;
+    /* `true` still means the Syndicate. The second argument was a boolean
+     * for exactly one release and callers outside this file said what they
+     * meant rather than which skin, so both spellings are honoured rather
+     * than leaving a caller silently painting the wrong flag. */
+    var want = (skin === true) ? 'outlaw' : skin;
+    accentSkin = (accentColor && (want === 'outlaw' || want === 'fleet')) ? want : null;
   }
 
-  /* The cache is keyed on the SKIN, not on the colour, or a Syndicate dock
-   * and an Unaligned one sharing a hex would share a mesh. */
+  /* The cache is keyed on the SKIN, not on the colour, or a Syndicate dock,
+   * a fleet carrier and an ordinary dock of the same power would share a
+   * mesh. */
   function accentKey() {
-    return accentOutlaw ? accentColor + '!' : accentColor;
+    return accentSkin ? accentColor + '#' + accentSkin : accentColor;
   }
 
   function rgbOf(hex) {
@@ -2656,13 +2691,40 @@
 
   /* Is this face colour the trim, and what does it become? Returns null for
    * everything it does not touch, which is almost everything. */
-  function accentSwap(col, to, outlaw) {
+  function accentSwap(col, to, skin) {
     if (typeof col !== 'string' || !col) return null;
     var pre = '';
     if (col.charAt(0) === '!') { pre = '!'; col = col.slice(1); }
     if (col.charAt(0) !== '#' || col.length !== 7) return null;   // glass, names
     var hsl = toHsl(col);
-    if (outlaw) {
+    if (skin === true) skin = 'outlaw';
+
+    if (skin === 'fleet') {
+      var wantF = toHsl(to);
+      if (hsl[1] <= WASH_MAX_SAT && hsl[2] >= WASH_MIN_LIGHT && hsl[2] <= WASH_MAX_LIGHT) {
+        /* Plating bleached toward white, with the modeller's three tones
+         * keeping their order — the same linear compression the Syndicate
+         * skin uses, run up instead of down. A fleet hull is painted to be
+         * SEEN, which is the opposite of what a Syndicate hull is for.
+         *
+         * Emissive plating is left alone here too: the floodlit deck is
+         * emissive plating, and bleaching it would blow the inside of every
+         * naval hangar out to a white sheet. */
+        if (pre === '!') return null;
+        return fromHsl(wantF[0], FLEET_PLATE_SAT,
+                       FLEET_PLATE_FLOOR + hsl[2] * FLEET_PLATE_LIGHT);
+      }
+      if (hsl[0] < ACCENT_HUE_LO || hsl[0] > ACCENT_HUE_HI) return null;
+      if (hsl[1] < ACCENT_MIN_SAT || hsl[2] > ACCENT_MAX_LIGHT) return null;
+      /* Trim driven DOWN into a deep saturated band, so it reads as dark on
+       * pale. Held inside the band for the mirror of the Syndicate's
+       * reason: a stripe the modeller painted bright would otherwise come
+       * out pale on a pale hull and vanish. */
+      return pre + fromHsl(wantF[0], Math.max(hsl[1], FLEET_TRIM_SAT),
+                           Math.max(FLEET_TRIM_LO, Math.min(FLEET_TRIM_HI, hsl[2])));
+    }
+
+    if (skin === 'outlaw') {
       var want0 = toHsl(to);
       if (hsl[1] <= WASH_MAX_SAT && hsl[2] >= WASH_MIN_LIGHT && hsl[2] <= WASH_MAX_LIGHT) {
         /* Plating to black. The order of the modeller's tones survives
@@ -2743,7 +2805,7 @@
 
     var c = new Array(mesh.c.length), touched = 0;
     for (var i = 0; i < mesh.c.length; i++) {
-      var swap = accentSwap(mesh.c[i], accentColor, accentOutlaw);
+      var swap = accentSwap(mesh.c[i], accentColor, accentSkin);
       if (swap) { c[i] = swap; touched++; } else c[i] = mesh.c[i];
     }
     if (!touched) { byColor[accentKey()] = mesh; return mesh; }

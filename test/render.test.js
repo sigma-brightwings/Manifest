@@ -3113,6 +3113,86 @@ console.log('--- faction accents ---');
         light(crook.c[1]) < light(plain.c[1]) - 0.15,
         crook.c[1] + ' vs ' + plain.c[1]);
   R.setAccent(null);
+
+  /* ---- AND THE FLEET GETS ONE TOO --------------------------------------
+   * Astra: "add the Navy and Syndicate to each." Three liveries rather
+   * than two, and the third is what makes the other two legible — a galaxy
+   * where only Syndicate docks are unmistakable has told you about one
+   * kind of place.
+   *
+   * The fleet skin is the Syndicate's photographed in negative: same two
+   * levers, opposite directions. Plating bleached toward white instead of
+   * crushed to black, trim driven DOWN into a deep band instead of turned
+   * up. These checks pin that opposition rather than either skin's
+   * numbers, because the requirement is that the two cannot be confused. */
+  var NAVYBLUE = '#6fa8dc';
+  ['#8993a1', '#5d6673', '#3c434e'].forEach(function (plate) {
+    var fleetPlate = R.accentSwap(plate, NAVYBLUE, 'fleet');
+    var crookPlate = R.accentSwap(plate, NAVYBLUE, 'outlaw');
+    check('fleet plating ' + plate + ' is bleached toward white',
+          !!fleetPlate && light(fleetPlate) > 0.60,
+          fleetPlate + ' at L=' + (fleetPlate ? light(fleetPlate).toFixed(3) : '?'));
+    check('and it is the opposite end of the range from the Syndicate\'s',
+          !!fleetPlate && !!crookPlate && light(fleetPlate) - light(crookPlate) > 0.45,
+          fleetPlate + ' against ' + crookPlate);
+  });
+  var fleetTones = ['#8993a1', '#5d6673', '#3c434e'].map(function (p3) {
+    return light(R.accentSwap(p3, NAVYBLUE, 'fleet'));
+  });
+  check('the panel breaks survive being bleached, as they do being blacked out',
+        fleetTones[0] > fleetTones[1] && fleetTones[1] > fleetTones[2],
+        fleetTones.map(function (d) { return d.toFixed(3); }).join(' > '));
+
+  ['#d7be3d', '#d5c14b'].forEach(function (gold) {
+    var fleetTrim = R.accentSwap(gold, NAVYBLUE, 'fleet');
+    check('fleet trim ' + gold + ' takes the owner\'s hue',
+          !!fleetTrim && Math.abs(hue(fleetTrim) - hue(NAVYBLUE)) < 8, fleetTrim);
+    /* DARK ON PALE, which is the mirror of the Syndicate's bright on dark.
+     * The contrast is the feature in both cases; only its sign differs. */
+    check('and it is far darker than the hull it sits on',
+          !!fleetTrim &&
+          light(fleetTrim) < light(R.accentSwap('#8993a1', NAVYBLUE, 'fleet')) - 0.25,
+          fleetTrim + ' on ' + R.accentSwap('#8993a1', NAVYBLUE, 'fleet'));
+  });
+
+  /* A fleet hull is painted to be SEEN and a Syndicate hull is not, so the
+   * two treatments of the same gold must land on opposite sides of their
+   * own plating. */
+  var fGold = light(R.accentSwap('#d7be3d', NAVYBLUE, 'fleet'));
+  var fHull = light(R.accentSwap('#8993a1', NAVYBLUE, 'fleet'));
+  var oGold = light(R.accentSwap('#d7be3d', RED, 'outlaw'));
+  var oHull = light(R.accentSwap('#8993a1', RED, 'outlaw'));
+  check('the fleet paints dark on pale and the Syndicate bright on dark',
+        fGold < fHull && oGold > oHull,
+        'fleet ' + fGold.toFixed(2) + '<' + fHull.toFixed(2) +
+        ', syndicate ' + oGold.toFixed(2) + '>' + oHull.toFixed(2));
+
+  /* The floodlit deck is emissive plating in both skins, and bleaching it
+   * would blow the inside of every naval hangar out to a white sheet — the
+   * same clause that stops the Syndicate turning a lit hangar unlit. */
+  check('a lit deck is left alone by the fleet skin too',
+        R.accentSwap('!#4a4f58', NAVYBLUE, 'fleet') === null);
+
+  /* THREE CACHES, NOT TWO. A carrier, a Syndicate dock and an ordinary
+   * dock of the same power must not share a mesh. */
+  R.setAccent(NAVYBLUE, null);
+  var ordinary = R.accented(mesh);
+  R.setAccent(NAVYBLUE, 'fleet');
+  var carrier = R.accented(mesh);
+  R.setAccent(NAVYBLUE, 'outlaw');
+  var crooked = R.accented(mesh);
+  check('all three liveries are different objects',
+        ordinary !== carrier && carrier !== crooked && ordinary !== crooked);
+  check('and the fleet copy is the pale one',
+        light(carrier.c[1]) > light(ordinary.c[1]) &&
+        light(ordinary.c[1]) > light(crooked.c[1]),
+        [carrier.c[1], ordinary.c[1], crooked.c[1]].join(' > '));
+  /* The boolean spelling was the API for exactly one release, and a caller
+   * outside this file said what it meant rather than which skin. */
+  R.setAccent(RED, true);
+  check('the old boolean spelling still means the Syndicate',
+        light(R.accented(mesh).c[1]) < 0.2, R.accented(mesh).c[1]);
+  R.setAccent(null);
 })();
 
 console.log('--- glass ---');
