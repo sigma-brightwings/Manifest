@@ -4430,6 +4430,237 @@
     spec.mode = 'breakoff';
   }
 
+  /* ---- talking to a ship that is not a threat ----------------------------
+   * Astra: "This might require the ability to hail other ships to ask for
+   * directions, assistance or to trade?"
+   *
+   * It did, and the reason is the map. Once the chart is something you
+   * assemble by flying, the other ships in the system are the only other
+   * people who have BEEN anywhere - and asking them is both the obvious
+   * thing a pilot would do and the cheapest chart in the game.
+   *
+   * Three intents, deliberately three rather than a dialogue tree: the tree
+   * is the next piece of work and this is the shape it grows into. Each one
+   * is a transaction with a price the player can see before pressing, which
+   * is the same contract the port options already keep.
+   *
+   * A HOSTILE SHIP ANSWERS NONE OF THEM. Not as a rule written here - the
+   * comms screen greys them out - but the guard is repeated at the bottom
+   * of the stack anyway, because "the UI will not offer it" is not the same
+   * statement as "it cannot happen".
+   */
+  var HAIL_RANGE_KM = 120;          // the transmitter, not the radar
+  var ASSIST_FUEL_MAX = 8;          // t of hydrogen a passing ship will spare
+  var ASSIST_MARKUP = 2.4;          // what a rescue costs out in the black
+  var TRADE_MARKUP = 1.35;          // buying off a hull that is not a shop
+  var TRADE_DISCOUNT = 0.82;        // and selling to one
+
+  function hailRefusal(G, contact) {
+    if (!contact || !contact.pos) return 'No channel open.';
+    if (contact.hostile) return null;            // handled by the caller's wording
+    var range = V.dist(contact.pos, G.ship.pos);
+    if (range > HAIL_RANGE_KM) {
+      return 'Out of transmitter range — close to under ' + HAIL_RANGE_KM + ' km.';
+    }
+    return null;
+  }
+
+  /* What this ship would sell you, and what it would take off your hands.
+   * Read off the manifest it is actually flying, so a hauler full of
+   * tailings offers tailings and a tanker offers hydrogen - the answer is
+   * the cargo the timetable says is aboard, not a shop window. */
+  function hailTrade(G, contact) {
+    var Eco = global.Economy;
+    if (!Eco) return null;
+    var s = G.ship;
+    var man = (contact.route && contact.manifest) || [];
+    var hold = global.Sim ? global.Sim.cargoMass(s) : 0;
+    var room = Math.max(0, (s.cargoCap || 0) - hold);
+
+    var buy = null, i;
+    for (i = 0; i < man.length; i++) {
+      var cid = man[i].cid, qty = man[i].qty || man[i].tonnes || 0;
+      var com = Eco.BY_ID[cid];
+      if (!com || qty <= 0 || com.base <= 0) continue;      // nobody sells you waste
+      var take = Math.min(6, Math.floor(qty), Math.floor(room));
+      if (take < 1) continue;
+      buy = { cid: cid, name: com.name, qty: take,
+              each: Math.round(com.base * TRADE_MARKUP) };
+      break;
+    }
+
+    /* And what they would take. A ship buys what its DESTINATION is short
+     * of, which is the same question the manifest generator answers - so
+     * this is not a second economy, it is the same one asked from the other
+     * end. */
+    var sell = null;
+    var dst = contact.to;
+    if (dst && dst.market) {
+      var best = 0;
+      for (var cid2 in (s.cargo || {})) {
+        var have = s.cargo[cid2];
+        var row = dst.market.rows[cid2];
+        var com2 = Eco.BY_ID[cid2];
+        if (!have || !row || !com2 || com2.base <= 0) continue;
+        if (!row.importer) continue;
+        var val = com2.base * Math.min(have, 8);
+        if (val > best) {
+          best = val;
+          sell = { cid: cid2, name: com2.name, qty: Math.min(have, 8),
+                   each: Math.round(com2.base * TRADE_DISCOUNT) };
+        }
+      }
+    }
+    return { buy: buy, sell: sell };
+  }
+
+  /* Whether this ship can spare fuel, and what it wants for it. Gated on
+   * the player actually being in trouble: a ship will not act as a floating
+   * pump for somebody who simply did not want to fly to a port. */
+  function hailAssist(G, contact) {
+    var Eco = global.Economy;
+    var s = G.ship;
+    var cap = s.fuelCap || 1;
+    if (s.fuel > cap * 0.3) return null;
+    var want = Math.min(ASSIST_FUEL_MAX, Math.max(1, Math.round(cap * 0.5 - s.fuel)));
+    if (want < 1) return null;
+    var base = (Eco && Eco.BY_ID.hydrogen) ? Eco.BY_ID.hydrogen.base : 55;
+    return { tonnes: want, each: Math.round(base * ASSIST_MARKUP),
+             cost: Math.round(base * ASSIST_MARKUP) * want };
+  }
+
+  /* DIRECTIONS, and this is the one that matters. A ship that has flown
+   * somewhere knows what is there, and what it knows is exactly the kind of
+   * knowing the chart trades in: whose flag flies over a system. So asking
+   * is a free sheet for one system - and once asked, that ship has told you
+   * what it knows, which is what `_told` records. The charts you buy at a
+   * port are for everything else.
+   *
+   * It also names the nearest port it would recommend for what you are
+   * carrying, because that is the other thing you would actually ask. */
+  function hailDirections(G, sys, t, contact, hooks) {
+    var said = [];
+    var route = contact.route;
+    var Galaxy = global.Galaxy;
+
+    if (contact.to && contact.to.name) {
+      said.push('running ' +
+        ((contact.manifest && contact.manifest.length)
+          ? (global.Economy && global.Economy.BY_ID[contact.manifest[0].cid]
+              ? global.Economy.BY_ID[contact.manifest[0].cid].name.toLowerCase()
+              : 'freight')
+          : 'empty') +
+        ' into ' + contact.to.name);
+    }
+
+    /* The sheet. One uncharted system within this ship's own reach, nearest
+     * first, so the answer is somewhere you could actually go next. */
+    var charted = null;
+    if (Galaxy && G.galaxy && G.here && route && !route._told) {
+      var best = null, bestD = Infinity;
+      for (var i = 0; i < G.galaxy.stars.length; i++) {
+        var st = G.galaxy.stars[i];
+        if (st.id === G.here.id || (G.charted && G.charted[st.id])) continue;
+        var d = Galaxy.distance3(st, G.here);
+        if (d < bestD) { bestD = d; best = st; }
+      }
+      if (best) {
+        route._told = true;
+        G.charted = G.charted || {};
+        G.charted[best.id] = true;
+        charted = best;
+      }
+    }
+
+    var text = contact.name + ': "' + (said.length ? said.join(', ') : 'nothing much') + '.';
+    if (charted) {
+      var fac = G.galaxy.factionById[charted.factionId];
+      text += ' Came through ' + charted.name +
+              (fac ? ' — that is ' + fac.name + ' space' : '') + '.';
+    } else if (route && route._told) {
+      text += ' Told you everything I know.';
+    }
+    text += '"';
+    if (hooks && hooks.say) hooks.say(text, 7);
+    return { charted: charted };
+  }
+
+  /* The one entry point, so the comms screen never has to know which of
+   * these is a transaction and which is conversation. */
+  function hailShip(G, sys, t, contact, intent, hooks) {
+    function talk(msg, secs) { if (hooks && hooks.say) hooks.say(msg, secs || 5); }
+    if (!contact) return null;
+    if (contact.hostile) {
+      talk(contact.name + ' does not answer.', 4);
+      return null;
+    }
+    var refusal = hailRefusal(G, contact);
+    if (refusal) { talk(refusal, 5); return null; }
+
+    var s = G.ship;
+    if (intent === 'directions') return hailDirections(G, sys, t, contact, hooks);
+
+    if (intent === 'assist') {
+      var offer = hailAssist(G, contact);
+      if (!offer) {
+        talk(contact.name + ': "You have fuel. We are not diverting."', 5);
+        return null;
+      }
+      if (s.credits < offer.cost) {
+        talk(contact.name + ': "' + offer.tonnes + ' t for ' + offer.cost +
+             ' cr. You have not got it."', 6);
+        return null;
+      }
+      s.credits -= offer.cost;
+      s.fuel = Math.min(s.fuelCap || s.fuel + offer.tonnes, s.fuel + offer.tonnes);
+      if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(s);
+      talk(contact.name + ' pumps ' + offer.tonnes + ' t across for ' + offer.cost +
+           ' cr. "Do not make a habit of it."', 6);
+      return { fuel: offer.tonnes, cost: offer.cost };
+    }
+
+    if (intent === 'buy' || intent === 'sell') {
+      var deal = hailTrade(G, contact);
+      if (!deal) return null;
+      if (intent === 'buy') {
+        var b = deal.buy;
+        if (!b) { talk(contact.name + ': "Nothing aboard you could carry."', 5); return null; }
+        var cost = b.each * b.qty;
+        if (s.credits < cost) {
+          talk(contact.name + ': "' + b.qty + ' t of ' + b.name.toLowerCase() +
+               ', ' + cost + ' cr. Come back with the money."', 6);
+          return null;
+        }
+        s.credits -= cost;
+        s.cargo = s.cargo || {};
+        s.cargo[b.cid] = (s.cargo[b.cid] || 0) + b.qty;
+        /* And it leaves their hold, so the same ship cannot be milked: the
+         * manifest is what the timetable says is aboard, and this is a hole
+         * in it. */
+        for (var m = 0; m < (contact.manifest || []).length; m++) {
+          if (contact.manifest[m].cid === b.cid) {
+            contact.manifest[m].qty = Math.max(0, (contact.manifest[m].qty || 0) - b.qty);
+          }
+        }
+        if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(s);
+        talk(contact.name + ' transfers ' + b.qty + ' t of ' + b.name.toLowerCase() +
+             ' for ' + cost + ' cr.', 6);
+        return { bought: b.cid, qty: b.qty, cost: cost };
+      }
+      var sl = deal.sell;
+      if (!sl) { talk(contact.name + ': "Nothing you have is worth our hold."', 5); return null; }
+      var paid = sl.each * sl.qty;
+      s.cargo[sl.cid] = Math.max(0, (s.cargo[sl.cid] || 0) - sl.qty);
+      if (!s.cargo[sl.cid]) delete s.cargo[sl.cid];
+      s.credits += paid;
+      if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(s);
+      talk(contact.name + ' takes ' + sl.qty + ' t of ' + sl.name.toLowerCase() +
+           ' for ' + paid + ' cr.', 6);
+      return { sold: sl.cid, qty: sl.qty, paid: paid };
+    }
+    return null;
+  }
+
   /* ---- what a port will sell you -----------------------------------------
    * Two axes, and they pull against each other. Both are already generated
    * — no new scale to keep in sync with anything.
@@ -4783,6 +5014,8 @@
     clearanceRefusal: clearanceRefusal,
     autoClearance: autoClearance,
     hasTransponder: hasTransponder,
+    hailShip: hailShip, hailTrade: hailTrade, hailAssist: hailAssist,
+    HAIL_RANGE_KM: HAIL_RANGE_KM,
     queueJumpsOf: queueJumpsOf,
     FREE_JUMPS: FREE_JUMPS,
     arriveAtPort: arriveAtPort,

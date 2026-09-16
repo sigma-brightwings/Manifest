@@ -2027,6 +2027,109 @@ section('--- docking clearance ---');
 })();
 
 /* ---- the control cabinet, and breaking into it ------------------------- */
+console.log('\n--- hailing a ship that is not shooting at you ---');
+(function () {
+  /* Astra: "the ability to hail other ships to ask for directions,
+   * assistance or to trade." The interesting one is directions, because
+   * once the chart is something you assemble by flying, the other ships in
+   * the system are the only people who have BEEN anywhere. */
+  var G = makeG();
+  G.galaxy = Galaxy.build('kawartha');
+  G.here = G.galaxy.home;
+  G.charted = {}; G.charted[G.here.id] = true;
+  var heard = [];
+  var LOUD = { say: function (m) { heard.push(m); }, sound: function () {} };
+
+  /* A traffic contact, shaped as Sim.trafficState hands one over. */
+  var dst = G.sys.ports.filter(function (p) { return !!p.market; })[0];
+  function contact(opts) {
+    opts = opts || {};
+    return {
+      name: opts.name || 'Redsail Wain', hostile: !!opts.hostile,
+      pos: V.addScaled(G.ship.pos, { x: 1, y: 0, z: 0 }, opts.range === undefined ? 20 : opts.range),
+      route: opts.route || { id: 'r-test' },
+      to: opts.to === undefined ? dst : opts.to,
+      manifest: opts.manifest || [{ cid: 'ores', qty: 40 }]
+    };
+  }
+
+  /* ---- directions, which are also a free sheet ---- */
+  var c = contact();
+  var before = Object.keys(G.charted).length;
+  Combat.hailShip(G, G.sys, 0, c, 'directions', LOUD);
+  check('a passing ship answers', heard.length > 0, heard[0]);
+  check('and charts a system you had not been to',
+        Object.keys(G.charted).length === before + 1,
+        before + ' -> ' + Object.keys(G.charted).length);
+  /* ONCE. A ship knows what it knows; asking twice does not make it know
+   * more, and without this the nearest freighter is an infinite chart. */
+  heard = [];
+  Combat.hailShip(G, G.sys, 0, c, 'directions', LOUD);
+  check('but only once — a ship knows what it knows',
+        Object.keys(G.charted).length === before + 1);
+  check('and says so rather than repeating itself',
+        /everything I know/.test(heard.join(' ')), heard.join(' | '));
+
+  /* ---- range, which is the transmitter rather than the radar ---- */
+  heard = [];
+  var far = contact({ range: Combat.HAIL_RANGE_KM + 50 });
+  Combat.hailShip(G, G.sys, 0, far, 'directions', LOUD);
+  check('a ship out of transmitter range cannot be asked anything',
+        /range/i.test(heard.join(' ')), heard.join(' | '));
+
+  /* ---- and a hostile answers nothing ---- */
+  heard = [];
+  Combat.hailShip(G, G.sys, 0, contact({ hostile: true }), 'directions', LOUD);
+  check('somebody shooting at you does not give directions',
+        /does not answer/.test(heard.join(' ')), heard.join(' | '));
+
+  /* ---- buying off a hull that is not a shop ---- */
+  var G2 = makeG();
+  G2.galaxy = G.galaxy; G2.here = G.here; G2.charted = { s0: true };
+  G2.ship.credits = 20000;
+  var c2 = contact();
+  var quote = Combat.hailTrade(G2, c2);
+  check('a loaded ship has something to sell', !!(quote && quote.buy), JSON.stringify(quote));
+  var cash0 = G2.ship.credits;
+  var res = Combat.hailShip(G2, G2.sys, 0, c2, 'buy', LOUD);
+  check('and it arrives in your hold', !!res && G2.ship.cargo[res.bought] === res.qty,
+        JSON.stringify(res));
+  check('paid for at the quoted price',
+        !!res && cash0 - G2.ship.credits === res.cost,
+        cash0 + ' -> ' + G2.ship.credits);
+  /* AND IT LEAVES THEIRS. Otherwise the same freighter is an infinite
+   * warehouse, which is the trade version of the infinite chart above. */
+  check('and it leaves their hold', c2.manifest[0].qty === 40 - res.qty,
+        String(c2.manifest[0].qty));
+
+  /* ---- assistance, which is gated on actually being in trouble ---- */
+  var G3 = makeG();
+  G3.ship.credits = 20000;
+  G3.ship.fuel = G3.ship.fuelCap;
+  check('a ship with a full tank is told to fly on',
+        Combat.hailAssist(G3, contact()) === null);
+  G3.ship.fuel = G3.ship.fuelCap * 0.1;
+  var aid = Combat.hailAssist(G3, contact());
+  check('a nearly dry one gets an offer', !!aid && aid.tonnes > 0 && aid.cost > 0,
+        JSON.stringify(aid));
+  heard = [];
+  var fuel0 = G3.ship.fuel, cred0 = G3.ship.credits;
+  Combat.hailShip(G3, G3.sys, 0, contact(), 'assist', LOUD);
+  check('and the fuel actually arrives', G3.ship.fuel > fuel0,
+        fuel0.toFixed(2) + ' -> ' + G3.ship.fuel.toFixed(2));
+  check('and it is not free', G3.ship.credits < cred0,
+        cred0 + ' -> ' + G3.ship.credits);
+  /* A RESCUE COSTS MORE THAN A PUMP. Out in the black is exactly where a
+   * price should hurt, or the stranding the fuel model creates is not a
+   * failure state at all. */
+  check('and it costs more than a port would charge',
+        aid.each > Eco.BY_ID.hydrogen.base * 1.5,
+        aid.each + ' cr/t against a base of ' + Eco.BY_ID.hydrogen.base);
+  check('but never more fuel than the tank can hold',
+        G3.ship.fuel <= G3.ship.fuelCap + 1e-9,
+        G3.ship.fuel.toFixed(2) + ' / ' + G3.ship.fuelCap);
+})();
+
 console.log('\n--- the control cabinet ---');
 (function () {
   var G = makeG();
