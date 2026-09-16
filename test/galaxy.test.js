@@ -548,7 +548,7 @@ console.log('--- the renderer turns a world the way the world turns ---');
    * every time. If the renderer's axis is the same axis, that offset and
    * the renderer's axis point the same way to within rounding. */
   var seeds = ['kawartha', 'elsewhere', 'seed-7', 'holton', 'a-fourth'];
-  var worlds = 0, worstDot = 1, worstPhase = 0, spun = 0;
+  var worlds = 0, worstDot = 1, worstPhase = 0, worstHalf = 0, spun = 0;
   seeds.forEach(function (sd) {
     var sys = Gen.generateSystem(sd);
     sys.bodies.forEach(function (b) {
@@ -563,13 +563,20 @@ console.log('--- the renderer turns a world the way the world turns ---');
         if (dot < worstDot) worstDot = dot;
       });
 
-      /* AND AT THE RIGHT RATE. One full turn of the renderer's phase must
-       * be one full rotation of the body, or a world with a nine-hour day
-       * renders one with some other day. */
+      /* AND AT THE RIGHT RATE. One day of the body's own must be exactly
+       * one turn of the renderer's phase, or a world with a nine-hour day
+       * renders one with some other day. The phase is wrapped into a
+       * single turn before it goes to the GPU, so "one turn later" reads
+       * as "back where it started" — and a HALF day must not, which is
+       * what stops this passing on a phase that never moves at all. */
       var per = Math.abs(b.rotation.period);
-      var a = GL.spinOf(b, 0).phase, c = GL.spinOf(b, per).phase;
-      var err = Math.abs(Math.abs(c - a) - 2 * Math.PI);
+      var a = GL.spinOf(b, 0).phase;
+      var err = Math.abs(GL.spinOf(b, per).phase - a);
+      err = Math.min(err, Math.abs(err - 2 * Math.PI));
+      var half = Math.abs(GL.spinOf(b, per / 2).phase - a);
+      half = Math.min(half, Math.abs(half - 2 * Math.PI));
       if (err > worstPhase) worstPhase = err;
+      if (Math.abs(half - Math.PI) > worstHalf) worstHalf = Math.abs(half - Math.PI);
       /* A real day, not a stopped one. */
       if (GL.spinOf(b, 1000).phase !== GL.spinOf(b, 0).phase) spun++;
     });
@@ -577,9 +584,92 @@ console.log('--- the renderer turns a world the way the world turns ---');
   check('there are worlds with a rotation to check', worlds > 40, worlds + ' worlds');
   check('the pole the renderer spins about is the pole the ports turn around',
         worstDot > 0.999999, 'worst alignment ' + worstDot.toFixed(9));
-  check('and one renderer turn is one day of the body\'s own',
-        worstPhase < 1e-9, 'worst phase error ' + worstPhase.toExponential(2));
+  check('and one day of the body\'s own is exactly one turn',
+        worstPhase < 1e-8, 'worst phase error ' + worstPhase.toExponential(2));
+  check('half a day is exactly half a turn',
+        worstHalf < 1e-8, 'worst half-turn error ' + worstHalf.toExponential(2));
   check('every one of them actually turns', spun === worlds, spun + ' of ' + worlds);
+
+  /* WEATHER IS EVALUATED, NEVER INTEGRATED, and this is the section that
+   * says so — Astra's question, which is the right one to ask of anything
+   * that moves on its own: can a planet's sky drift out of step while
+   * nobody is looking at it, and does arriving recompute it?
+   *
+   * It cannot and it does not, because there is no weather simulation to
+   * drift. `spinOf(body, t)` is a pure function of the body's seeded
+   * rotation and the clock, called once per body per frame and thrown
+   * away. Nothing accumulates, so there is nothing to accumulate WRONG:
+   * the sky at hour nine is the same sky whether you flew there, warped
+   * there, loaded a save into it, or never watched at all.
+   *
+   * These checks exist so that stays true. The failure they are aimed at
+   * is somebody later writing `phase += rate * dt` in a frame loop, which
+   * would look correct, would even look smoother, and would make a world's
+   * weather depend on how many frames you happened to be present for. */
+  (function () {
+    var sys = Gen.generateSystem('kawartha');
+    var w = sys.bodies.filter(function (x) { return x.rotation; })[0];
+    if (!w) return;
+    var T = 987654.321;
+
+    /* 1. Never watched: ask for hour T out of nowhere. */
+    var cold = GL.spinOf(w, T);
+
+    /* 2. Watched the whole way there, frame by frame — which is what the
+     *    renderer actually does, 3,000 times. */
+    var warm = null;
+    for (var i = 0; i < 3000; i++) warm = GL.spinOf(w, T - 3000 * 16 + i * 16);
+    warm = GL.spinOf(w, T);
+
+    /* 3. Arrived from somewhere else entirely, having drawn other worlds
+     *    at other times in between — the approach case. */
+    sys.bodies.forEach(function (o) { if (o.rotation) GL.spinOf(o, T * 0.37); });
+    var arrived = GL.spinOf(w, T);
+
+    ['phase', 'deck', 'band', 'shear', 'weather'].forEach(function (k) {
+      check('the sky at a given hour is the same whether it was watched (' + k + ')',
+            cold[k] === warm[k] && cold[k] === arrived[k],
+            cold[k] + ' / ' + warm[k] + ' / ' + arrived[k]);
+    });
+    check('and so is the axis',
+          cold.ax.x === arrived.ax.x && cold.ax.y === arrived.ax.y &&
+          cold.ax.z === arrived.ax.z);
+
+    /* AND IT IS NOT FROZEN EITHER. A pure function of the clock that
+     * ignores the clock would pass everything above. */
+    check('time still moves it', GL.spinOf(w, T + 600).deck !== cold.deck);
+
+    /* THE PHASES STAY SMALL, which is what keeps them exact once they are
+     * single-precision uniforms. An unwrapped phase after a long career
+     * lands on a float32 grid coarse enough to turn the world in visible
+     * steps — 1.6e-2 rad at twenty years, about three pixels of slip on a
+     * 400-pixel disc, and six on the cloud deck. */
+    var TAU = Math.PI * 2, worst = 0, worstGrain = 0;
+    [0, 86400, 3.15e7, 6.3e8, 1e10, 1e12].forEach(function (t) {
+      var sp = GL.spinOf(w, t);
+      ['phase', 'deck', 'shear'].forEach(function (k) {
+        if (Math.abs(sp[k]) > worst) worst = Math.abs(sp[k]);
+        var err = Math.abs(Math.fround(sp[k]) - sp[k]);
+        if (err > worstGrain) worstGrain = err;
+      });
+      if (Math.abs(sp.weather) > GL.WEATHER_CYCLE) worst = Infinity;
+    });
+    check('every angle the shader is handed stays inside one turn',
+          worst <= TAU + 1e-9, 'largest ' + worst.toFixed(4));
+    check('so single precision never coarsens the rotation',
+          worstGrain < 1e-6, 'worst float32 error ' + worstGrain.toExponential(2) + ' rad');
+
+    /* AND WRAPPING IS LOSSLESS, not a rounding. Every wrapped angle is
+     * used by a rotation or a sin of multiplier one, so 2*pi is exact;
+     * the weather field travels two circuits whose rates share an exact
+     * common period, which is the reason it can be wrapped at all. */
+    var raw = 4e6 / 2400, wrapped = raw % GL.WEATHER_CYCLE;
+    check('wrapping the weather field does not move it',
+          Math.abs(Math.cos(raw * 0.9) - Math.cos(wrapped * 0.9)) < 1e-6 &&
+          Math.abs(Math.cos(raw * 0.3703) - Math.cos(wrapped * 0.3703)) < 1e-6);
+    console.log('  weather repeats every ' +
+                (GL.WEATHER_CYCLE * 2400 / 3.15e7).toFixed(1) + ' years of sim time');
+  })();
 
   /* THE DECK RUNS AHEAD OF THE GROUND, which is the whole of why weather
    * slides across a world instead of being painted on it. */

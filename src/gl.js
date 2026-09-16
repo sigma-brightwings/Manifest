@@ -134,6 +134,8 @@
     'uniform vec3 uSpinAxis;',
     'uniform float uSpinPhase;',
     'uniform float uDeckPhase;',
+    'uniform float uBandPhase;',
+    'uniform float uShearPhase;',
     'uniform float uWeather;',
     /* Depth, so a ship can pass behind a planet. The impostor has no
      * geometry to rasterize a depth from, so it computes one: the disc's
@@ -299,7 +301,7 @@
      * against the ground at its own rate, fast at the equator and slow at
      * the poles, which is the whole reason a giant reads as weather rather
      * than as a striped ball. */
-    '    float ph = lon + uDeckPhase * shear;',
+    '    float ph = lon + uBandPhase * shear;',
     '    float band = fbm(vec3(lati * 7.0, sin(ph) * 0.5, uSeed + uWeather * 0.20));',
     '    band = mix(band, fbm(vec3(lati * 15.0, cos(ph) * 0.4, uSeed + 5.0 + uWeather * 0.13)), 0.4);',
     '    vec3 belt = uColor * 0.72;',
@@ -308,7 +310,7 @@
     /* The storm oval: fixed seeded home, its own drift speed so it slides
      * against the bands over time; elliptical, wider in longitude. */
     '    float spotLat = -0.22 + 0.10 * (fract(uSeed * 0.13) - 0.5);',
-    '    float spotLon = uDeckPhase * 0.42 + uSeed;',
+    '    float spotLon = uBandPhase * 0.42 + uSeed;',
     '    float dLat = (lati - spotLat) * 3.4;',
     '    float dLon = sin((lon - spotLon) * 0.5) * 2.2;',
     '    float spot = 1.0 - smoothstep(0.4, 1.0, sqrt(dLat * dLat + dLon * dLon));',
@@ -397,7 +399,7 @@
      * tearing and re-forming; a single noise lookup cannot, so the drag
      * between latitudes breathes instead of accumulating. Twelve degrees
      * at the equator, none at the poles, over about an hour. */
-    '    float shear = 0.21 * (1.0 - abs(clat)) * sin(uDeckPhase * 0.09);',
+    '    float shear = 0.21 * (1.0 - abs(clat)) * sin(uShearPhase);',
     '    nb = spinAbout(nb, uSpinAxis, shear);',
     '    vec3 cp = nb * 2.4 + uSeed * 1.7;',
     /* And the weather itself. The field is moved through, which is what
@@ -417,8 +419,8 @@
      * Two circuits at rates that do not divide into each other: the
      * pattern keeps changing and never repeats within anything like a
      * session, and the statistics stay exactly where they were tuned. */
-    '    cp += vec3(cos(uWeather * 0.90), sin(uWeather * 0.90), 0.0) * 0.42;',
-    '    cp += vec3(0.0, cos(uWeather * 0.37), sin(uWeather * 0.37)) * 0.28;',
+    '    cp += vec3(cos(uWeather * 0.9000), sin(uWeather * 0.9000), 0.0) * 0.42;',
+    '    cp += vec3(0.0, cos(uWeather * 0.3703), sin(uWeather * 0.3703)) * 0.28;',
     '    float cl = fbm(cp);',
     /* COVERAGE-TO-THRESHOLD, AND THIS IS WHERE THE CLOUDS WENT.
      *
@@ -951,6 +953,7 @@
                               'uRight', 'uUp', 'uFwd', 'uSunDir', 'uColor',
                               'uIsStar', 'uAtmo', 'uAtmoColor', 'uCloud',
                               'uSeed', 'uSpinAxis', 'uSpinPhase', 'uDeckPhase',
+                              'uBandPhase', 'uShearPhase',
                               'uWeather', 'uCenterDepth', 'uWorldRadius',
                               'uNear', 'uInvLogRange', 'uBanded',
                               'uOcean', 'uSeaColor', 'uIce',
@@ -1463,6 +1466,8 @@
       gl.uniform3f(uni.uSpinAxis, sp2.ax.x, sp2.ax.y, sp2.ax.z);
       gl.uniform1f(uni.uSpinPhase, sp2.phase);
       gl.uniform1f(uni.uDeckPhase, sp2.deck);
+      gl.uniform1f(uni.uBandPhase, sp2.band);
+      gl.uniform1f(uni.uShearPhase, sp2.shear);
       gl.uniform1f(uni.uWeather, sp2.weather);
       gl.uniform1f(uni.uCenterDepth, q.depth);
       gl.uniform1f(uni.uWorldRadius, b.radius || 1);
@@ -1599,21 +1604,68 @@
    * weather with it. */
   var DECK_SUPER = 2.6;              // deck turns this much faster than the ground
   var WEATHER_PERIOD = 2400;         // seconds of sim time per unit of drift
+  var SHEAR_RATE = 0.09;             // how fast the latitude drag breathes
+  /* The two circuits the weather field travels. Rationally related, as any
+   * two finite decimals are, so the pattern DOES come round again — after
+   * 2*pi*10000 units, which is 4.8 years of sim time. That is the point of
+   * choosing them this way rather than pretending otherwise: an exactly
+   * periodic weather field can be wrapped exactly, which is what keeps it
+   * inside single precision forever (see below). */
+  var W1 = 0.9000, W2 = 0.3703;
+  var WEATHER_CYCLE = 2 * Math.PI * 10000;
 
+  var TAU = 2 * Math.PI;
+  function wrap(a, m) { a = a % m; return a < 0 ? a + m : a; }
+
+  /* WHY THESE ARE WRAPPED, AND WHY ONE OF THEM IS NOT.
+   *
+   * Every number here goes to the GPU as a uniform1f — single precision —
+   * and every one of them grows without bound with the clock. A phase of
+   * a hundred thousand radians lands on a float32 grid whose spacing is
+   * 0.016 rad, and the world then turns in steps instead of turning:
+   *
+   *     career     spin (rad)   grain (rad)   slip on a 400 px disc
+   *     1 month    5.4e2        6.1e-5        0.0 px
+   *     1 year     6.6e3        4.9e-4        0.1 px
+   *     5 years    3.4e4        3.9e-3        0.8 px
+   *     20 years   1.3e5        1.6e-2        3.1 px   (deck: 6.3 px)
+   *
+   * Sub-pixel for a normal career and visible judder for a long one — and
+   * nothing about it would look like a clock problem, which is how it
+   * would have survived. Every angle below that is consumed by a rotation
+   * or by a sin of multiplier one is periodic in 2*pi, so wrapping it in
+   * double precision here is exact and the shader never sees a large
+   * number again. `weather` wraps at its own exact common period.
+   *
+   * `band` is the exception and cannot be fixed this way. The gas giants
+   * scroll each latitude at its OWN multiple of this phase — that is what
+   * differential rotation is — and there is no single period you can wrap
+   * a continuously varying multiplier by without the bands jumping when
+   * it wraps. So it stays unwrapped, and the grain lands on the one
+   * surface in the game where a pixel of slip on a low-contrast stripe is
+   * the least visible thing there is. */
   function spinOf(body, t) {
     var rot = body.rotation;
     var tilt = rot ? rot.tilt : 0;
+    /* The axis, read out of the same construction sim.js uses to put a pad
+     * on the ground: a body-fixed frame whose pole is +z, tipped about x by
+     * the tilt. Asking that question HERE rather than inventing an axis is
+     * the whole reason the caps, the bands, the continents and the pads
+     * now agree. */
     var ax = { x: 0, y: -Math.sin(tilt), z: Math.cos(tilt) };
     /* A star, or anything the generator did not spin, still needs an axis
      * and a phase — it just gets a nominal day so its own noise field is
      * not frozen to the sky. */
     var period = (rot && rot.period) ? rot.period : 86400;
-    var phase = (rot ? rot.phase : 0) + (2 * Math.PI / period) * t;
+    var phase = (rot ? rot.phase : 0) + (TAU / period) * t;
+    var deck = phase * DECK_SUPER;
     return {
       ax: ax,
-      phase: phase,
-      deck: phase * DECK_SUPER,
-      weather: t / WEATHER_PERIOD
+      phase: wrap(phase, TAU),
+      deck: wrap(deck, TAU),
+      band: deck,                          // giants only; see above
+      shear: wrap(deck * SHEAR_RATE, TAU),
+      weather: wrap(t / WEATHER_PERIOD, WEATHER_CYCLE)
     };
   }
 
@@ -1635,6 +1687,7 @@
    * disagreed for as long as both existed and nothing could see it. */
   GL.spinOf = spinOf;
   GL.DECK_SUPER = DECK_SUPER;
+  GL.WEATHER_CYCLE = WEATHER_CYCLE;
 
   global.GLWorld = GL;
   if (typeof module !== 'undefined' && module.exports) module.exports = GL;
