@@ -3002,12 +3002,28 @@ console.log('--- faction accents ---');
         typeof R.setAccent === 'function');
   if (typeof R.accentSwap !== 'function') return;
 
-  /* THE TWO GOLDS the shipped models trim themselves with. */
+  /* ---- THE TWO GOLDS, AND WHY THE ORDINARY WASH NOW LEAVES THEM --------
+   * Astra, twice, with a screenshot the second time: "yellow caution
+   * stripes are still coming through as purple."
+   *
+   * The first fix exempted the stand this file builds and it was not
+   * enough — the striping she was looking at is the ART'S OWN. Measured:
+   * cradle-l carries 1,716 faces of #d7be3d and 468 of #d5c14b, and the
+   * same two golds are BOTH the hazard markings and the trim. No colour
+   * rule separates them, because they are one colour doing two jobs.
+   *
+   * So the ordinary wash gives the gold up. Its job is "whose dock is
+   * this", and the plating — ninety-five per cent of what you can see —
+   * already answers it; the trim was measured at 0.71% of exterior area
+   * when it landed and was never carrying the recognition. The two SKINS
+   * keep it, because identifying a Syndicate dock or a carrier against
+   * eleven other powers is a harder job that needs every face it can get. */
   ['#d7be3d', '#d5c14b'].forEach(function (gold) {
-    var got = R.accentSwap(gold, RED);
-    check('gold trim ' + gold + ' takes the faction hue', !!got && Math.abs(hue(got) - hue(RED)) < 6, got);
-    check('and keeps its own lightness', !!got && Math.abs(light(got) - light(gold)) < 0.02,
-          got + ' vs ' + gold);
+    check('an ordinary power leaves the hazard gold alone',
+          R.accentSwap(gold, RED) === null, String(R.accentSwap(gold, RED)));
+    var crook = R.accentSwap(gold, RED, 'outlaw');
+    check('but a Syndicate dock still repaints ' + gold,
+          !!crook && Math.abs(hue(crook) - hue(RED)) < 8, crook);
   });
 
   /* THE PLATING, which is 95% of what you can see and is already a cool
@@ -3021,6 +3037,18 @@ console.log('--- faction accents ---');
           got + ' vs ' + plate);
   });
 
+  /* AND THE WHOLE POINT, stated as the thing Astra was looking at: the
+   * hazard striping in a bay of an ordinary power's station comes out the
+   * colour hazard striping is. Reverting the wash's exemption turns every
+   * one of these purple, which is exactly the screenshot. */
+  ['#d7be3d', '#d5c14b'].forEach(function (gold) {
+    ['#8a5cc4', '#ff7a6b', '#6fa8dc', '#7ed36b'].forEach(function (flag) {
+      check('hazard gold survives a ' + flag + ' dock',
+            R.accentSwap(gold, flag) === null,
+            String(R.accentSwap(gold, flag)));
+    });
+  });
+
   /* THE REFUSALS. */
   check('the lit deck colour is left alone', R.accentSwap('#f2e3a7', RED) === null);
   check('and so is an emissive one', R.accentSwap('!#f2e3a7', RED) === null);
@@ -3030,8 +3058,9 @@ console.log('--- faction accents ---');
         R.accentSwap('!#c35733', RED) === null);
   check('and neither is the shadow black', R.accentSwap('#16171a', RED) === null);
 
-  /* EMISSIVE STAYS EMISSIVE. A lit sign in faction colours is still lit. */
-  var lit = R.accentSwap('!#7a5a1e', RED);
+  /* EMISSIVE STAYS EMISSIVE. A lit sign in faction colours is still lit —
+   * asked of a skin now, since the ordinary wash no longer touches trim. */
+  var lit = R.accentSwap('!#7a5a1e', RED, 'outlaw');
   check('an emissive trim face keeps its exclamation mark',
         !!lit && lit.charAt(0) === '!', lit);
 
@@ -3045,8 +3074,11 @@ console.log('--- faction accents ---');
   var out = R.accented(mesh);
   check('with one set the copy is a different object', out !== mesh);
   check('but shares the vertices and the faces', out.v === mesh.v && out.f === mesh.f);
+  /* The plating is what an ordinary power's wash repaints; the gold in
+   * this mesh is left exactly as the modeller painted it. */
   check('and the colours are the accented ones',
-        out.c !== mesh.c && Math.abs(hue(out.c[0]) - hue(RED)) < 6, out.c.join(' '));
+        out.c !== mesh.c && out.c[0] === mesh.c[0] &&
+        Math.abs(hue(out.c[1]) - hue(RED)) < 6, out.c.join(' '));
   check('asking twice gives the same copy back', R.accented(mesh) === out);
   var untouched = { v: mesh.v, f: mesh.f, c: ['~h#1c2620', '!#46df6a'] };
   check('a mesh with nothing to repaint is memoised as itself',
@@ -3193,6 +3225,61 @@ console.log('--- faction accents ---');
   check('the old boolean spelling still means the Syndicate',
         light(R.accented(mesh).c[1]) < 0.2, R.accented(mesh).c[1]);
   R.setAccent(null);
+})();
+
+console.log('--- the showroom ---');
+(function () {
+  var R = W.Render, C = W.Combat;
+  /* Astra: "when buying ships, the selected ship model should be displayed
+   * and it should rotate. Next to the image, a paragraph about the ship,
+   * who makes it and what it's ideal for." */
+  var order = ['talon', 'dart', 'kestrel', 'mule'];
+  var seen = {};
+  order.forEach(function (id) {
+    var m = R.hullPreviewMesh(id);
+    check('the yard has a model for the ' + id, !!(m && m.f && m.f.length),
+          m && m.f ? m.f.length + ' faces' : 'none');
+    if (m) seen[m.f.length] = (seen[m.f.length] || 0) + 1;
+  });
+  /* FOUR DIFFERENT SHIPS. The player's hulls each name a mesh KIND already
+   * and HULL_ASSIGN turns a kind into a library model, so the showroom can
+   * show four genuinely different silhouettes without a new table — and if
+   * that ever collapses to one model, the yard is selling a picture of
+   * something else. */
+  check('and they are four different ships rather than one drawn four times',
+        Object.keys(seen).length === 4, Object.keys(seen).join(' '));
+
+  order.forEach(function (id) {
+    var h = C.HULLS[id];
+    check('the ' + id + ' says who builds it', !!h.maker && h.maker.length > 3, h.maker);
+    /* A paragraph rather than a tagline, and one that says something the
+     * stat line does not — the row above it already carries hold, hull and
+     * reactor. */
+    check('and has a paragraph rather than a tagline',
+          !!h.about && h.about.length > 250, h.about ? h.about.length + ' chars' : 'none');
+    check('which is not just the blurb again', h.about !== h.blurb);
+  });
+
+  /* IT TURNS ON THE WALL CLOCK, not on sim time: a showroom model turns
+   * while the game is paused, because it is a display and not a
+   * simulation. Drawn into a clipped panel, so a long freighter cannot
+   * spill over the text beside it. */
+  var calls = 0;
+  var fake = makeCtx();
+  if (fake) {
+    var clipped = 0;
+    var realClip = fake.clip;
+    fake.clip = function () { clipped++; if (realClip) realClip.apply(fake, arguments); };
+    var ok = R.drawHullPortrait(fake, 10, 10, 160, 110, 'mule', 1.2, '#b9c6d8');
+    calls++;
+    check('the portrait draws', ok === true, String(ok));
+    check('and it clips to its own panel', clipped > 0, String(clipped));
+    check('a panel too small to draw in is refused rather than drawn wrong',
+          R.drawHullPortrait(fake, 0, 0, 4, 4, 'mule', 0) === false);
+  } else {
+    check('the portrait entry point exists',
+          typeof R.drawHullPortrait === 'function');
+  }
 })();
 
 console.log('--- glass ---');

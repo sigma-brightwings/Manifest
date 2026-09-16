@@ -2753,6 +2753,32 @@
        * and this is a paint job. */
       return pre + fromHsl(toHsl(to)[0], Math.max(hsl[1], WASH_FLOOR_SAT), hsl[2]);
     }
+    /* ---- AND THE ORDINARY WASH LEAVES THE GOLD ALONE ----------------------
+     * Astra, twice, with a screenshot the second time: "yellow caution
+     * stripes are still coming through as purple."
+     *
+     * The first fix exempted the STAND — deck furniture this file builds —
+     * and it was not enough, because the hazard striping she is looking at
+     * is the ART'S OWN. Measured: cradle-l carries 1,716 faces of #d7be3d
+     * and 468 of #d5c14b, and the same two golds are BOTH the hazard
+     * markings and the trim. There is no colour rule that separates them,
+     * because they are one colour used for two jobs.
+     *
+     * So the question stops being which faces and becomes which JOB the
+     * ordinary wash is doing. Its job is "whose dock is this", and the
+     * plating already answers that: it is ninety-five per cent of what you
+     * can see and the wash turns all of it. The trim swap was measured at
+     * 0.71% of exterior area when it landed — it was never carrying the
+     * recognition, and the price of it is the one colour in a bay that is
+     * supposed to mean HAZARD rather than FLAG.
+     *
+     * The two SKINS still repaint it, and that is not an inconsistency. A
+     * Syndicate dock and a fleet carrier have to be identifiable at a
+     * kilometre against eleven other powers, which is a different and much
+     * harder job than "this one is Mirul's"; they need every face they can
+     * get, and red-on-black is what Astra asked for by name. An ordinary
+     * power does not need it and was paying for it in yellow. */
+    if (!skin) return null;
     if (hsl[0] < ACCENT_HUE_LO || hsl[0] > ACCENT_HUE_HI) return null;
     if (hsl[1] < ACCENT_MIN_SAT || hsl[2] > ACCENT_MAX_LIGHT) return null;
     /* HUE FROM THE FACTION, SATURATION AND LIGHTNESS FROM THE FACE. The
@@ -6777,6 +6803,95 @@
    * raked glass; a blunt one wants it upright. Measured from the model
    * rather than chosen, which is the whole of "make the rake match the
    * hull" — and memoised, because it walks every vertex. */
+  /* ---- the ship on the showroom floor ------------------------------------
+   * Astra: "when buying ships, the selected ship model should be displayed
+   * and it should rotate."
+   *
+   * WHICH MESH. The player's four hulls each name a mesh KIND already —
+   * courier, police, merc, freighter — and HULL_ASSIGN turns a kind into a
+   * library model. So a Talon is a courier-m, a Dart is a police-m, a
+   * Kestrel is an enforcer-l and a Mule is a freighter-l, and the yard can
+   * show four genuinely different ships without a single new table.
+   *
+   * That is also worth saying out loud because of what it exposes: in
+   * FLIGHT the player is drawn as the courier hull whatever they bought
+   * (see drawShipModel). The showroom is currently the only place in the
+   * game where your Mule looks like a Mule. Fixing the flight view is its
+   * own job and a bigger one; this at least stops the yard selling you a
+   * silhouette it does not have.
+   *
+   * THE PANEL IS ITS OWN LITTLE WORLD. A camera built against the panel's
+   * width and height projects to a viewport of that size with the origin at
+   * its centre, so translating the context to the panel's corner puts the
+   * ship exactly where it belongs, and clipping keeps a long hull from
+   * spilling over the text beside it. The mesh is drawn at unit length
+   * around the origin, so "how far back to stand" is a function of the
+   * model's own extent rather than a number per hull. */
+  function hullPreviewMesh(hullId) {
+    var h = global.Combat && global.Combat.HULLS && global.Combat.HULLS[hullId];
+    var kind = (h && h.mesh) || 'courier';
+    return libHull(HULL_ASSIGN[kind] || HULL_ASSIGN.courier) || shipMeshes().courier;
+  }
+
+  /* Half the model's largest extent, so a long freighter stands further off
+   * than a courier and both fill the same fraction of the frame. */
+  function meshReach(mesh) {
+    if (!mesh || !mesh.v || !mesh.v.length) return 0.5;
+    var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (var i = 0; i < mesh.v.length; i++) {
+      for (var a = 0; a < 3; a++) {
+        var v = mesh.v[i][a];
+        if (v < lo[a]) lo[a] = v;
+        if (v > hi[a]) hi[a] = v;
+      }
+    }
+    var span = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
+    return span > 1e-6 ? span * 0.5 : 0.5;
+  }
+
+  var PORTRAIT_FILL = 2.35;          // how far back to stand, in model reaches
+
+  function drawHullPortrait(ctx, x, y, w, h, hullId, spin, tint) {
+    if (!(w > 8) || !(h > 8)) return false;
+    var mesh = hullPreviewMesh(hullId);
+    if (!mesh || !mesh.f || !mesh.f.length) return false;
+
+    var cam = new Camera();
+    cam.target = V.zero();
+    cam.yaw = spin || 0;
+    /* Looking slightly DOWN on it, which is how anybody photographs a ship
+     * they are trying to sell: a level shot of a hull whose interesting
+     * shape is its planform reads as a line. */
+    cam.pitch = 0.30;
+    cam.dist = meshReach(mesh) * PORTRAIT_FILL;
+    cam.near = cam.dist * 1e-3;
+    cam.build(w, h);
+
+    /* A key light from over the viewer's shoulder, turning with the model
+     * rather than fixed in the world — a showroom light, not a sun. The
+     * hull would otherwise swing through its own shadow twice a turn and
+     * spend half the rotation unreadable. */
+    var sunDir = V.norm({ x: Math.cos(cam.yaw + 0.9), y: Math.sin(cam.yaw + 0.9), z: 0.55 });
+    var frame = {
+      pos: V.zero(),
+      right: { x: 1, y: 0, z: 0 },
+      up: { x: 0, y: 0, z: 1 },
+      /* The model's +z is its nose and the world's +y is what the camera
+       * looks along at yaw 0, so the hull faces across the frame rather
+       * than at the viewer. A ship photographed nose-on is a circle. */
+      fwd: { x: 0, y: 1, z: 0 }
+    };
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+    ctx.translate(x, y);
+    paintMesh(ctx, cam, frame, mesh, 1, sunDir, tint || '#b9c6d8');
+    ctx.restore();
+    return true;
+  }
+
   function hullFineness(hullId) {
     if (FINENESS_CACHE[hullId] !== undefined) return FINENESS_CACHE[hullId];
     var out = null;
@@ -7746,6 +7861,7 @@
     boltPath: boltPath,
     DRIVE_SPEC: DRIVE_SPEC,
     paintMesh: paintMesh,
+    drawHullPortrait: drawHullPortrait, hullPreviewMesh: hullPreviewMesh,
     faceMaterial: faceMaterial,
     shipMeshes: shipMeshes,
     libHull: libHull,

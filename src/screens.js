@@ -96,11 +96,11 @@
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(0, 30.5); ctx.lineTo(w, 30.5); ctx.stroke();
 
-    ctx.font = 'bold 14px ui-monospace, monospace';
+    ctx.font = 'bold 15px ui-monospace, monospace';
     ctx.fillStyle = '#b4f0ff';
     ctx.fillText(title, 16, 20);
 
-    ctx.font = '11px ui-monospace, monospace';
+    ctx.font = 'bold 12px ui-monospace, monospace';
     ctx.fillStyle = '#5d8fa4';
     ctx.textAlign = 'right';
     ctx.fillText(hint || 'Esc or F1 returns to the cockpit', w - 16, 20);
@@ -110,7 +110,7 @@
      * goes here because a mode owns the whole screen down to the icon bar,
      * and anything written at the bottom lands inside whatever the mode
      * drew there. */
-    ctx.font = '10px ui-monospace, monospace';
+    ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(160,185,220,0.5)';
     ctx.fillText('H help   ·   Esc back to the cockpit', 16, 44);
     ctx.textAlign = 'right';
@@ -192,17 +192,17 @@
     ctx.lineWidth = 1.5;
     ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 
-    ctx.font = '10px ui-monospace, monospace';
+    ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = '#7fd6c0';
     ctx.fillText(EDIT.label, x + 8, y + 13);
 
-    ctx.font = '13px ui-monospace, monospace';
+    ctx.font = 'bold 14px ui-monospace, monospace';
     ctx.fillStyle = '#ffffff';
     var shown = EDIT.value;
     var caret = (Math.floor(Date.now() / 450) % 2) ? '_' : ' ';
-    ctx.fillText(clipText(shown, Math.floor((w - 20) / 7.8)) + caret, x + 8, y + 31);
+    ctx.fillText(clipText(shown, Math.floor((w - 20) / 8.58)) + caret, x + 8, y + 31);
 
-    ctx.font = '9px ui-monospace, monospace';
+    ctx.font = 'bold 10px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(160,185,220,0.6)';
     ctx.textAlign = 'right';
     ctx.fillText(EDIT.hint || 'Enter accepts  ·  Esc cancels', x + w - 8, y + 31);
@@ -279,7 +279,7 @@
   /* Section heading inside a mode screen. */
   function modeHead(ctx, x, y, text, color) {
     ctx.save();
-    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.font = 'bold 12px ui-monospace, monospace';
     ctx.fillStyle = color || '#5d8fa4';
     ctx.fillText(text.toUpperCase(), x, y);
     ctx.restore();
@@ -312,7 +312,7 @@
     ctx.strokeRect(lx + 2, ly + 2, colW - 4, rowH - 4);
     ctx.fillStyle = '#12414f';
     ctx.fillRect(lx + 4, ly + 4, colW - 8, 19);
-    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.fillStyle = '#b4f0ff';
     ctx.fillText('BODIES', lx + 10, ly + 18);
     ctx.restore();
@@ -320,7 +320,7 @@
     var list = G.sys.bodies;
     var lines = Math.floor((rowH - 36) / 14);
     ctx.save();
-    ctx.font = '11px ui-monospace, monospace';
+    ctx.font = 'bold 12px ui-monospace, monospace';
     for (var i = 0; i < Math.min(list.length, lines); i++) {
       var b = list[i], yy = ly + 38 + i * 14;
       ctx.fillStyle = bodyDotColor(b.kind);
@@ -342,7 +342,7 @@
     }
     if (list.length > lines) {
       ctx.fillStyle = MFD_DIM;
-      ctx.font = '9px ui-monospace, monospace';
+      ctx.font = 'bold 10px ui-monospace, monospace';
       ctx.fillText('+' + (list.length - lines) + ' more', lx + 10, ly + rowH - 10);
     }
     ctx.restore();
@@ -368,7 +368,7 @@
     ctx.strokeRect(pad + 2, top + pad + 2, listW - 4, colH - 4);
     ctx.fillStyle = '#12414f';
     ctx.fillRect(pad + 4, top + pad + 4, listW - 8, 19);
-    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.fillStyle = '#b4f0ff';
     ctx.fillText('CONTACTS', pad + 10, top + pad + 18);
     ctx.restore();
@@ -385,7 +385,7 @@
     if (sel >= 0) first = Math.max(0, Math.min(list.length - avail, sel - Math.floor(avail / 2)));
 
     ctx.save();
-    ctx.font = '12px ui-monospace, monospace';
+    ctx.font = 'bold 13px ui-monospace, monospace';
     for (var r = 0; r < avail; r++) {
       var idx = first + r;
       if (idx >= list.length) break;
@@ -429,10 +429,10 @@
     ctx.strokeRect(sx + 2, top + pad + 2, sw - 4, colH - 4);
     ctx.fillStyle = '#12414f';
     ctx.fillRect(sx + 4, top + pad + 4, sw - 8, 19);
-    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.fillStyle = '#b4f0ff';
     ctx.fillText('SCOPE', sx + 10, top + pad + 18);
-    ctx.font = '10px ui-monospace, monospace';
+    ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = '#7fd6c0';
     ctx.textAlign = 'right';
     ctx.fillText('0.75 AU  ·  nose up  ·  stalks show height', sx + sw - 10, top + pad + 18);
@@ -509,7 +509,7 @@
     ctx.strokeRect(x + 2, y + 2, w - 4, h - 4);
     ctx.fillStyle = '#12414f';
     ctx.fillRect(x + 4, y + 4, w - 8, 19);
-    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.fillStyle = '#b4f0ff';
     var scrolled = Math.max(0, G.msgScroll || 0);
     ctx.fillText('TRAFFIC LOG' + (log.length ? '   ' + log.length + ' held' : ''), x + 10, y + 18);
@@ -521,7 +521,7 @@
 
     if (!log.length) {
       ctx.save();
-      ctx.font = '12px ui-monospace, monospace';
+      ctx.font = 'bold 13px ui-monospace, monospace';
       ctx.fillStyle = MFD_DIM;
       ctx.fillText('CHANNEL QUIET', x + 14, y + 46);
       ctx.restore();
@@ -535,7 +535,7 @@
     var end = Math.max(1, log.length - scrolled);
     var start = Math.max(0, end - rows);
     ctx.save();
-    ctx.font = '11px ui-monospace, monospace';
+    ctx.font = 'bold 12px ui-monospace, monospace';
     for (var i = start; i < end; i++) {
       var e = log[i], yy = y + 34 + (i - start) * rowH;
       var age = (G.t || 0) - (e.at || 0);
@@ -545,7 +545,7 @@
          glance you can see how far back you are reading. */
       ctx.fillStyle = (i === log.length - 1) ? '#d8f4ff' : 'rgba(190,215,235,0.8)';
       var txt = e.text + (e.n > 1 ? '  \u00d7' + e.n : '');
-      ctx.fillText(clipText(txt, Math.max(10, Math.floor((w - 96) / 6.6))), x + 66, yy);
+      ctx.fillText(clipText(txt, Math.max(10, Math.floor((w - 96) / 7.26))), x + 66, yy);
     }
     ctx.restore();
   }
@@ -577,17 +577,17 @@
     ctx.strokeRect(pad + 2, top + pad + 2, listW - 4, colH - 4);
     ctx.fillStyle = '#12414f';
     ctx.fillRect(pad + 4, top + pad + 4, listW - 8, 19);
-    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.fillStyle = '#b4f0ff';
     ctx.fillText('CHANNELS IN RANGE', pad + 10, top + pad + 18);
     ctx.restore();
 
     if (!contacts.length) {
       ctx.save();
-      ctx.font = '12px ui-monospace, monospace';
+      ctx.font = 'bold 13px ui-monospace, monospace';
       ctx.fillStyle = MFD_DIM;
       ctx.fillText('NOTHING IN RANGE', pad + 14, top + pad + 48);
-      ctx.font = '10px ui-monospace, monospace';
+      ctx.font = 'bold 11px ui-monospace, monospace';
       ctx.fillText('the transmitter is good for 0.75 AU.', pad + 14, top + pad + 68);
       ctx.restore();
     }
@@ -596,7 +596,7 @@
     var first = Math.max(0, Math.min(Math.max(0, contacts.length - avail),
                                      G.commsSel - Math.floor(avail / 2)));
     ctx.save();
-    ctx.font = '12px ui-monospace, monospace';
+    ctx.font = 'bold 13px ui-monospace, monospace';
     for (var r = 0; r < avail; r++) {
       var idx = first + r;
       if (idx >= contacts.length) break;
@@ -657,7 +657,7 @@
     ctx.strokeRect(rx + 2, top + pad + 2, rw - 4, chanH - 4);
     ctx.fillStyle = '#12414f';
     ctx.fillRect(rx + 4, top + pad + 4, rw - 8, 19);
-    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.fillStyle = '#b4f0ff';
     ctx.fillText(sel ? 'CHANNEL — ' + clipText(sel.name, 30) : 'CHANNEL', rx + 10, top + pad + 18);
     ctx.restore();
@@ -666,10 +666,10 @@
 
     var y = top + pad + 46;
     ctx.save();
-    ctx.font = '15px ui-monospace, monospace';
+    ctx.font = 'bold 16px ui-monospace, monospace';
     ctx.fillStyle = sel.color;
     ctx.fillText(sel.name, rx + 16, y);
-    ctx.font = '11px ui-monospace, monospace';
+    ctx.font = 'bold 12px ui-monospace, monospace';
     ctx.fillStyle = MFD_DIM;
     ctx.fillText(sel.who +
                  (sel.obj && sel.obj.reg ? '   ·   reg ' + sel.obj.reg : '') +
@@ -683,7 +683,7 @@
           { disabled: !opts[i].enabled });
       if (opts[i].note) {
         ctx.save();
-        ctx.font = '10px ui-monospace, monospace';
+        ctx.font = 'bold 11px ui-monospace, monospace';
         ctx.fillStyle = 'rgba(160,185,220,0.6)';
         ctx.fillText(opts[i].note, rx + 24 + bw, by + i * (bh + 8) + 19);
         ctx.restore();
@@ -691,7 +691,7 @@
     }
 
     ctx.save();
-    ctx.font = '10px ui-monospace, monospace';
+    ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(160,185,220,0.55)';
     ctx.fillText('Traffic control answers immediately; ships answer when they feel like it.',
                  rx + 16, top + pad + chanH - 14);
@@ -999,7 +999,7 @@
       ctx.lineWidth = 1;
       ctx.beginPath(); ctx.arc(cx, cy, 13, 0, Math.PI * 2); ctx.stroke();
       ctx.fillStyle = 'rgba(125,255,207,0.45)';
-      ctx.font = '9px ui-monospace, monospace';
+      ctx.font = 'bold 10px ui-monospace, monospace';
       ctx.textAlign = 'center';
       ctx.fillText('▲', cx, cy - 19);          // nose points up the page
       ctx.fillText('▼', cx, cy + 27);
@@ -1016,14 +1016,14 @@
       ctx.lineWidth = on ? 2 : 1;
       ctx.strokeRect(x + 1, y + 1, tileW - 2, tileH - 2);
       ctx.textAlign = 'center';
-      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.font = 'bold 13px ui-monospace, monospace';
       /* A BROKEN SCREEN STILL SHOWS WHAT IS ASSIGNED TO IT. Reading only
        * "PANEL OUT" hides the setting behind the damage, so you could not
        * decide what a screen will show before paying to fix it. The page
        * stays, dimmed, and the damage is called out on the line below. */
       ctx.fillStyle = dead ? '#6d5252' : (on ? '#b4f0ff' : MFD_INK);
       ctx.fillText(page.title, x + tileW / 2, y + 24);
-      ctx.font = '9px ui-monospace, monospace';
+      ctx.font = 'bold 10px ui-monospace, monospace';
       ctx.fillStyle = dead ? '#c07a7a' : '#5d6f78';
       /* The bearing, which is the honest name for where this screen is. */
       ctx.fillText(dead ? 'PANEL OUT'
@@ -1048,7 +1048,7 @@
     for (var i = 0; i < arc.fwd.length; i++) {
       /* Nudged down by bearing so the arc reads as an arc rather than a row:
        * the outboard screens sit further from the eye and lower on the page. */
-      var lift = Math.abs(arc.fwd[i].bearing) / (Math.PI / 6) * 12;
+      var lift = Math.abs(arc.fwd[i].bearing) / (Math.PI / 6.6) * 12;
       mountTile(arc.fwd[i], fx + i * (tileW + 10), rowFwdY + lift);
     }
 
@@ -1065,7 +1065,7 @@
     var ax = cx - totalA / 2;
     for (var j = 0; j < aft.length; j++) mountTile(aft[j], ax + j * (tileW + 10), rowAftY);
 
-    ctx.font = '9px ui-monospace, monospace';
+    ctx.font = 'bold 10px ui-monospace, monospace';
     ctx.fillStyle = '#5d6f78';
     ctx.textAlign = 'center';
     ctx.fillText('rear bulkhead — turn round to read these', cx, rowAftY + tileH + 16);
@@ -1073,7 +1073,7 @@
 
     /* --- the pages you can put on it --- */
     var lx = bayX + bayW + 16, ly = top;
-    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.font = 'bold 12px ui-monospace, monospace';
     ctx.fillStyle = '#b4f0ff';
     ctx.fillText(String(G.panelPick).replace('-', ' ').toUpperCase(), lx, ly + 12);
     ly += 22;
@@ -1088,7 +1088,7 @@
       ctx.strokeStyle = sel ? MFD_EDGE : 'rgba(74,151,176,0.35)';
       ctx.lineWidth = 1;
       ctx.strokeRect(lx + 0.5, ly + 0.5, listW - 1, rowH - 3);
-      ctx.font = '11px ui-monospace, monospace';
+      ctx.font = 'bold 12px ui-monospace, monospace';
       ctx.fillStyle = sel ? '#b4f0ff' : MFD_INK;
       ctx.fillText(pg.title, lx + 8, ly + 14);
       hot(lx, ly, listW, rowH - 2, (function (pid) {
@@ -1128,7 +1128,7 @@
       ctx.fillRect(tx, tabY, tw, tabH);
       ctx.strokeStyle = MFD_EDGE; ctx.lineWidth = on ? 2 : 1;
       ctx.strokeRect(tx + 1, tabY + 1, tw - 2, tabH - 2);
-      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.font = 'bold 12px ui-monospace, monospace';
       ctx.fillStyle = on ? '#b4f0ff' : '#5d6f78';
       ctx.textAlign = 'center';
       ctx.fillText(tabs[ti].label, tx + tw / 2, tabY + 15);
@@ -1170,14 +1170,14 @@
     ctx.strokeRect(pad + 2, eqY + 2, leftW - 4, eqH - 4);
     ctx.fillStyle = '#12414f';
     ctx.fillRect(pad + 4, eqY + 4, leftW - 8, 19);
-    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.fillStyle = '#b4f0ff';
     ctx.fillText('FITTED EQUIPMENT', pad + 10, eqY + 18);
     ctx.restore();
 
     var fitted = fittedEquipment();
     ctx.save();
-    ctx.font = '11px ui-monospace, monospace';
+    ctx.font = 'bold 12px ui-monospace, monospace';
     /* Both halves of the row clipped to the panel they are actually in. The
      * old fixed 26 and 30 characters assumed a wide window: on a narrow one
      * they add up to far more than the panel holds, so the name and the
@@ -1185,8 +1185,8 @@
      * laser" over "62 dmg · GROUP A". Split the lane instead, and let a
      * small window clip harder on its own. */
     var lane = Math.max(60, leftW - 24);
-    var nameCap = Math.max(8, Math.floor(lane * 0.44 / 6.7));
-    var valCap = Math.max(6, Math.floor(lane * 0.52 / 6.7));
+    var nameCap = Math.max(8, Math.floor(lane * 0.44 / 7.37));
+    var valCap = Math.max(6, Math.floor(lane * 0.52 / 7.37));
     for (var f = 0; f < fitted.length; f++) {
       var yy = eqY + 40 + f * 15;
       if (yy > eqY + eqH - 22) break;
@@ -1199,8 +1199,19 @@
       ctx.fillText(clipText(row.name, nameCap), pad + 12, yy);
       ctx.fillStyle = row.uncertified ? '#ffb86b' : (idRow ? '#ffffff' : MFD_DIM);
       ctx.textAlign = 'right';
-      ctx.fillText(clipText(row.value + (row.uncertified ? '  UNCERTIFIED' : ''), valCap),
-                   pad + leftW - 12, yy);
+      /* THE REGISTRATION ROW YIELDS ITS RIGHT-HAND END TO THE BUTTON, and
+       * until now only its HOTSPOT did. The value stayed right-aligned to
+       * the panel edge and the REROLL REG button was drawn over the top of
+       * it, so the one row on this page whose whole job is to show you a
+       * callsign was the one row you could not read. Astra found it from
+       * the seat. The text stops where the button starts, and it is clipped
+       * to the shorter lane rather than merely moved, or a long value would
+       * run back under it from the other side. */
+      var yieldsToBtn = idRow && f === 2 && s.docked;
+      var valRight = yieldsToBtn ? pad + leftW - 100 : pad + leftW - 12;
+      var cap = yieldsToBtn ? Math.max(6, valCap - 14) : valCap;
+      ctx.fillText(clipText(row.value + (row.uncertified ? '  UNCERTIFIED' : ''), cap),
+                   valRight, yy);
       ctx.textAlign = 'left';
       if (idRow) {
         /* The registration row yields its right-hand end to the reroll
@@ -1223,7 +1234,7 @@
       }
     }
     ctx.fillStyle = 'rgba(160,185,220,0.5)';
-    ctx.font = '10px ui-monospace, monospace';
+    ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillText(s.docked ? 'click a gun to change its fire group  ·  fittings sell in the yard'
                           : 'click a gun to change its fire group  ·  top rows rename',
                  pad + 12, eqY + eqH - 10);
@@ -1234,7 +1245,7 @@
      * offers is the ordinary one. */
     if (s.docked) {
       btn(ctx, pad + leftW - 92, eqY + 40 + 2 * 15 - 12, 78, 14,
-          'REROLL REG', rerollReg, { font: 9 });
+          'REROLL REG', rerollReg, { font: 10 });
     }
 
     /* And the field itself, over the top of everything, because while it is
@@ -1258,7 +1269,7 @@
     ctx.strokeRect(rx + 2, top + pad + 2, rw - 4, holdH - 4);
     ctx.fillStyle = '#12414f';
     ctx.fillRect(rx + 4, top + pad + 4, rw - 8, 19);
-    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.fillStyle = '#b4f0ff';
     var cargo = Sim.cargoMass(s);
     /* The people ride in the same header as the tonnage, because they are
@@ -1275,10 +1286,10 @@
 
     if (!held.length) {
       ctx.save();
-      ctx.font = '13px ui-monospace, monospace';
+      ctx.font = 'bold 14px ui-monospace, monospace';
       ctx.fillStyle = MFD_DIM;
       ctx.fillText('HOLD EMPTY', rx + 16, top + pad + 56);
-      ctx.font = '11px ui-monospace, monospace';
+      ctx.font = 'bold 12px ui-monospace, monospace';
       ctx.fillText(s.cargoCap + ' tonnes available. Dock, then trade on F4.',
                    rx + 16, top + pad + 78);
       ctx.restore();
@@ -1301,7 +1312,7 @@
     var colVal = btnX1 - 16;
 
     ctx.save();
-    ctx.font = '10px ui-monospace, monospace';
+    ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = MFD_DIM;
     ctx.fillText('COMMODITY', rx + 16, hy);
     ctx.textAlign = 'right';
@@ -1315,7 +1326,7 @@
       var yy = hy + 12 + i * rowH;
       if (yy + rowH > top + pad + holdH - 8) {
         ctx.save();
-        ctx.font = '10px ui-monospace, monospace';
+        ctx.font = 'bold 11px ui-monospace, monospace';
         ctx.fillStyle = MFD_DIM;
         ctx.fillText('+' + (held.length - i) + ' more — sell some to see the rest',
                      rx + 16, top + pad + holdH - 12);
@@ -1330,7 +1341,7 @@
         ctx.fillStyle = 'rgba(255,211,107,0.14)';
         ctx.fillRect(rx + 8, yy, rw - 16, rowH - 4);
       }
-      ctx.font = '12px ui-monospace, monospace';
+      ctx.font = 'bold 13px ui-monospace, monospace';
       ctx.fillStyle = it.cid === 'waste' ? '#ffb86b' : (on ? MFD_HOT : MFD_INK);
       ctx.fillText(clipText(it.name, 26), rx + 16, yy + 18);
 
@@ -1342,7 +1353,7 @@
         ? global.Missions.bondedTonnes(G, it.cid) : 0;
       if (bonded > 0) {
         ctx.save();
-        ctx.font = '9px ui-monospace, monospace';
+        ctx.font = 'bold 10px ui-monospace, monospace';
         ctx.fillStyle = '#7fd6c0';
         ctx.fillText(Math.min(bonded, it.tonnes).toFixed(0) + ' t under contract',
                      rx + 16, yy + 27);
@@ -1375,16 +1386,16 @@
       btn(ctx, btnX1, yy + 2, btnW, rowH - 8, 'EJECT 1t',
           (function (item, n) {
             return function () { G.invSel = n; jettison(item.cid, 1); };
-          })(it, i), { hot: true, font: 10 });
+          })(it, i), { hot: true, font: 11 });
       btn(ctx, btnX2, yy + 2, btnW, rowH - 8, 'EJECT ALL',
           (function (item, n) {
             return function () { G.invSel = n; jettison(item.cid, Infinity); };
-          })(it, i), { hot: true, font: 10 });
+          })(it, i), { hot: true, font: 11 });
     }
 
     if (port && total) {
       ctx.save();
-      ctx.font = '12px ui-monospace, monospace';
+      ctx.font = 'bold 13px ui-monospace, monospace';
       ctx.fillStyle = MFD_HOT;
       ctx.textAlign = 'right';
       ctx.fillText('hold worth ' + fmtCredits(total) + ' here', rx + rw - 16,
@@ -1411,7 +1422,7 @@
     ctx.strokeRect(x + 2, y + 2, w - 4, h - 4);
     ctx.fillStyle = '#12414f';
     ctx.fillRect(x + 4, y + 4, w - 8, 19);
-    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.fillStyle = '#b4f0ff';
     /* Named for what this place actually IS. The trade console has always
      * announced the port's role; the yard said "SHIPYARD & OUTFITTING"
@@ -1420,8 +1431,8 @@
      * the truth about it — same principle as the starport dressing. */
     var roleName = (port.market && port.market.roleName) || 'Port';
     ctx.fillText(clipText(roleName.toUpperCase() + '  ·  OUTFITTING',
-                          Math.floor((w - 130) / 7.1)), x + 10, y + 18);
-    ctx.font = '10px ui-monospace, monospace';
+                          Math.floor((w - 130) / 7.81)), x + 10, y + 18);
+    ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = '#7fd6c0';
     ctx.textAlign = 'right';
     ctx.fillText(fmtCredits(s.credits), x + w - 10, y + 18);
@@ -1434,7 +1445,7 @@
     var sum = Combat.fitSummary(s);
     var barY = y + 26;
     ctx.save();
-    ctx.font = '10px ui-monospace, monospace';
+    ctx.font = 'bold 11px ui-monospace, monospace';
     var pTight = sum.powerFree < 1.0, mTight = sum.massFree < 1.5;
     ctx.fillStyle = pTight ? '#ffb86b' : '#7fd6c0';
     ctx.fillText('POWER ' + sum.powerUsed.toFixed(1) + ' / ' + sum.powerCap.toFixed(1) + ' MW',
@@ -1454,7 +1465,7 @@
     for (var ti = 0; ti < tabs.length; ti++) {
       btn(ctx, x + w - 12 - (tabs.length - ti) * 66, barY, 62, 15, tabs[ti][1],
           (function (id) { return function () { G.yardTab = id; }; })(tabs[ti][0]),
-          { font: 9, hot: G.yardTab === tabs[ti][0] });
+          { font: 10, hot: G.yardTab === tabs[ti][0] });
     }
 
     /* Rows are BUILT first and DRAWN second. The old version drew straight
@@ -1516,14 +1527,20 @@
           }, briberyShort);
     }
 
+    var cardH = 0;
     if (G.yardTab === 'fit') drawYardFit(ctx, x, w, row, s);
     else if (G.yardTab === 'buy') drawYardBuy(ctx, x, w, row, s, port);
-    else drawYardHulls(ctx, x, w, row, s);
+    else cardH = drawYardHulls(ctx, x, w, row, s) || 0;
 
     /* ---- the window ---- */
     var bh = 21, gap = 4;
     var listY = barY + 22;
-    var listH = (y + h - 6) - listY;
+    /* The showroom card takes the bottom of the panel, and the list gets
+     * what is left — so the rows scroll rather than the ship being pushed
+     * off the end of a window that was sized before anybody knew it was
+     * there. */
+    var listH = (y + h - 6) - listY - cardH;
+    if (cardH && listH < 40) { cardH = Math.max(0, cardH + listH - 40); listH = 40; }
     var perPage = Math.max(1, Math.floor((listH + gap) / (bh + gap)));
     var maxScroll = Math.max(0, rows.length - perPage);
 
@@ -1542,9 +1559,11 @@
       var ry = listY + ri * (bh + gap);
       btn(ctx, x + 12, ry, rowW, bh,
           clipText(r.sub ? r.label + '   ·   ' + r.sub : r.label,
-                   Math.floor(rowW / 6.4)),
-          r.fn, { disabled: r.disabled, font: 10, hot: r.hot });
+                   Math.floor(rowW / 7.04)),
+          r.fn, { disabled: r.disabled, font: 11, hot: r.hot });
     }
+
+    if (cardH) drawHullCard(ctx, x, listY + listH + 4, w, cardH - 4);
 
     if (maxScroll > 0) {
       drawScrollbar(ctx, x + 12 + rowW + 5, listY, sbW, listH,
@@ -1560,7 +1579,7 @@
        * this row belongs to the tab buttons. */
       if (352 < w - 210) {
         ctx.save();
-        ctx.font = '9px ui-monospace, monospace';
+        ctx.font = 'bold 10px ui-monospace, monospace';
         ctx.fillStyle = 'rgba(160,185,220,0.55)';
         ctx.fillText((G.yardScroll + 1) + '-' +
                      Math.min(rows.length, G.yardScroll + perPage) +
@@ -1721,13 +1740,42 @@
   }
 
   /* --- HULLS -------------------------------------------------------------- */
+  /* ---- the showroom ------------------------------------------------------
+   * Astra: "when buying ships, the selected ship model should be displayed
+   * and it should rotate. Next to the image, a paragraph about the ship,
+   * who makes it and what it's ideal for."
+   *
+   * So the hull list stops being a list of prices and becomes a list you
+   * BROWSE: the first click selects and shows you the ship, the second
+   * buys it. That two-step is the point rather than an inconvenience —
+   * every other row in this yard is a purchase you can make by accident,
+   * and a hull is the one thing in the game that costs more than
+   * everything else you own put together.
+   *
+   * The card is drawn by drawYard, which owns the panel's geometry; this
+   * only says how much room to keep for it. */
+  var HULL_CARD_H = 132;
+
   function drawYardHulls(ctx, x, w, row, s) {
     var order = ['talon', 'dart', 'kestrel', 'mule'];
+    /* Default the selection to something that is actually for sale, and
+     * re-default it if the player buys the one they were looking at. */
+    if (!G.yardHull || G.yardHull === s.hullId) {
+      G.yardHull = order.filter(function (id) { return id !== s.hullId; })[0];
+    }
     for (var i = 0; i < order.length; i++) {
       var hull = Combat.HULLS[order[i]];
       if (hull.id === s.hullId) continue;
       var delta = hull.price - Math.round(Combat.HULLS[s.hullId || 'talon'].price * 0.7);
-      row(hull.name.toUpperCase() + ' — ' + delta + ' cr',
+      var picked = G.yardHull === hull.id;
+      if (!picked) {
+        row(hull.name.toUpperCase() + ' — ' + delta + ' cr',
+            hull.cargoCap + 't hold · ' + hull.hullMax + ' hull · ' + hull.blurb,
+            (function (hid) { return function () { G.yardHull = hid; }; })(hull.id),
+            false);
+        continue;
+      }
+      row('BUY ' + hull.name.toUpperCase() + ' — ' + delta + ' cr',
           hull.cargoCap + 't hold · ' + hull.hullMax + ' hull · ' +
           hull.powerMW.toFixed(1) + ' MW · ' + hull.blurb,
           (function (hid, nm) {
@@ -1745,8 +1793,58 @@
               say('Welcome aboard your ' + nm +
                   (extra.length ? ' — fitted as standard: ' + extra.join(', ') : ''), 5);
             };
-          })(hull.id, hull.name), false);
+          })(hull.id, hull.name), false, { hot: true });
     }
+    return HULL_CARD_H;
+  }
+
+  /* The ship itself, turning, with what the spec sheet cannot say beside
+   * it. Wall clock rather than sim time: a showroom model turns while the
+   * game is paused, because it is a display and not a simulation. */
+  var SHOWROOM_TURN = 14;            // seconds for a full revolution
+
+  function drawHullCard(ctx, x, y, w, h) {
+    var hull = Combat.HULLS[G.yardHull];
+    if (!hull) return;
+    ctx.save();
+    ctx.fillStyle = 'rgba(6,16,22,0.92)';
+    ctx.fillRect(x + 10, y, w - 20, h - 4);
+    ctx.strokeStyle = 'rgba(74,151,176,0.35)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 10.5, y + 0.5, w - 21, h - 5);
+    ctx.restore();
+
+    var picW = Math.min(190, Math.max(110, Math.round(w * 0.34)));
+    var now = (typeof performance !== 'undefined' ? performance.now() : 0) / 1000;
+    var spin = (now / SHOWROOM_TURN) * Math.PI * 2;
+    var drew = Render.drawHullPortrait
+      ? Render.drawHullPortrait(ctx, x + 14, y + 4, picW, h - 12, hull.id, spin)
+      : false;
+    if (!drew) {
+      ctx.save();
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('no model', x + 22, y + h / 2);
+      ctx.restore();
+    }
+
+    var tx = x + 14 + picW + 12;
+    var tw = (x + w - 14) - tx;
+    ctx.save();
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText(clipText(hull.name, Math.floor(tw / 7.7)), tx, y + 16);
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    ctx.fillText(clipText(hull.maker || '', Math.floor(tw / 6.6)), tx, y + 29);
+
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = MFD_INK;
+    var lines = wrapText(hull.about || hull.blurb || '', Math.floor(tw / 6.2));
+    for (var li = 0; li < lines.length && y + 44 + li * 12 < y + h - 8; li++) {
+      ctx.fillText(lines[li], tx, y + 44 + li * 12);
+    }
+    ctx.restore();
   }
 
   /* Everything bolted to the hull. Read off the ship rather than a list, so
@@ -1960,7 +2058,7 @@
     ctx.strokeRect(pad + 2, top + pad + 2, leftW - 4, colH - 4);
     ctx.fillStyle = '#12414f';
     ctx.fillRect(pad + 4, top + pad + 4, leftW - 8, 19);
-    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.fillStyle = '#b4f0ff';
     ctx.fillText('ACTIVE CONTRACTS', pad + 10, top + pad + 18);
     ctx.restore();
@@ -1974,7 +2072,7 @@
     var y = top + pad + 44;
     if (!list.length) {
       ctx.save();
-      ctx.font = '12px ui-monospace, monospace';
+      ctx.font = 'bold 13px ui-monospace, monospace';
       ctx.fillStyle = MFD_DIM;
       ctx.fillText('none — the board is on the right, when docked', pad + 14, y);
       ctx.restore();
@@ -1986,7 +2084,7 @@
       if (m.campaign && !sawCampaignHdr) {
         sawCampaignHdr = true;
         ctx.save();
-        ctx.font = 'bold 10px ui-monospace, monospace';
+        ctx.font = 'bold 11px ui-monospace, monospace';
         ctx.fillStyle = '#8a7a3a';
         ctx.fillText('FACTION CAMPAIGNS', pad + 14, y);
         ctx.restore();
@@ -1994,7 +2092,7 @@
       } else if (!m.campaign && !sawContractHdr && sawCampaignHdr) {
         sawContractHdr = true;
         ctx.save();
-        ctx.font = 'bold 10px ui-monospace, monospace';
+        ctx.font = 'bold 11px ui-monospace, monospace';
         ctx.fillStyle = '#5d8fa4';
         ctx.fillText('CONTRACTS', pad + 14, y);
         ctx.restore();
@@ -2003,13 +2101,13 @@
       var leftT = m.deadline - G.t;
       var held = G.ship.cargo[m.cid] || 0;
       var short = held + 1e-9 < m.tonnes;
-      var headCols = Math.max(20, Math.floor((leftW - 120) / 7));
-      var subCols = Math.max(24, Math.floor((leftW - 40) / 5.6));
+      var headCols = Math.max(20, Math.floor((leftW - 120) / 7.7));
+      var subCols = Math.max(24, Math.floor((leftW - 40) / 6.16));
       ctx.save();
-      ctx.font = '12px ui-monospace, monospace';
+      ctx.font = 'bold 13px ui-monospace, monospace';
       ctx.fillStyle = m.campaign ? '#ffe07a' : MFD_INK;
       ctx.fillText((m.campaign ? '★ ' : '') + clipText(m.text, headCols), pad + 14, y);
-      ctx.font = '10px ui-monospace, monospace';
+      ctx.font = 'bold 11px ui-monospace, monospace';
       ctx.fillStyle = leftT < 86400 ? '#ffb86b' : MFD_DIM;
       ctx.fillText('pays ' + fmtCredits(m.pay) + '   ·   due in ' + fmtTime(Math.max(0, leftT)) +
                    (short ? '   ·   FREIGHT MISSING (' + held.toFixed(0) + '/' + m.tonnes + 't)' : ''),
@@ -2034,19 +2132,19 @@
         btn(ctx, pad + leftW - 96, y - 13, 80, 26, openC ? 'HIDE' : 'DETAILS',
             (function (id) {
               return function () { G.missionDesc = (G.missionDesc === id) ? null : id; };
-            })(m.id), { font: 9 });
+            })(m.id), { font: 10 });
       }
       y += 46;
 
       if (openC && m.desc) {
-        var dlines = wrapText(m.desc, Math.max(20, Math.floor((leftW - 44) / 5.9)));
+        var dlines = wrapText(m.desc, Math.max(20, Math.floor((leftW - 44) / 6.49)));
         ctx.save();
         ctx.fillStyle = 'rgba(8,20,28,0.9)';
         ctx.fillRect(pad + 14, y - 12, leftW - 30, dlines.length * 13 + 12);
         ctx.strokeStyle = 'rgba(74,151,176,0.35)';
         ctx.lineWidth = 1;
         ctx.strokeRect(pad + 14.5, y - 11.5, leftW - 31, dlines.length * 13 + 11);
-        ctx.font = '10px ui-monospace, monospace';
+        ctx.font = 'bold 11px ui-monospace, monospace';
         ctx.fillStyle = '#9fc4d4';
         for (var dl = 0; dl < dlines.length; dl++) {
           ctx.fillText(dlines[dl], pad + 22, y + 2 + dl * 13);
@@ -2061,7 +2159,7 @@
      * different ledgers and both belong on this screen. */
     var sy = top + pad + colH * 0.62 + 10;
     ctx.save();
-    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.font = 'bold 12px ui-monospace, monospace';
     ctx.fillStyle = '#5d8fa4';
     ctx.fillText('STANDING', pad + 14, sy);
     ctx.restore();
@@ -2072,7 +2170,7 @@
       var st = Missions.standing(G, facs[f].id);
       var owed = (G.wanted || {})[facs[f].id] || 0;
       ctx.save();
-      ctx.font = '11px ui-monospace, monospace';
+      ctx.font = 'bold 12px ui-monospace, monospace';
       ctx.fillStyle = facs[f].color || MFD_INK;
       ctx.fillText(clipText(facs[f].name, 26), pad + 14, yy);
       ctx.fillStyle = st < -9 ? '#ff8a76' : st > 9 ? '#7dffb0' : MFD_DIM;
@@ -2102,7 +2200,7 @@
     ctx.strokeRect(rx + 2, top + pad + 2, rw - 4, colH - 4);
     ctx.fillStyle = '#12414f';
     ctx.fillRect(rx + 4, top + pad + 4, rw - 8, 19);
-    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.fillStyle = '#b4f0ff';
     ctx.fillText(docked ? 'MISSION BOARD — ' + clipText(docked.name, 26) : 'MISSION BOARD',
                  rx + 10, top + pad + 18);
@@ -2110,10 +2208,10 @@
 
     if (!docked) {
       ctx.save();
-      ctx.font = '12px ui-monospace, monospace';
+      ctx.font = 'bold 13px ui-monospace, monospace';
       ctx.fillStyle = MFD_DIM;
       ctx.fillText('NOT DOCKED', rx + 16, top + pad + 48);
-      ctx.font = '10px ui-monospace, monospace';
+      ctx.font = 'bold 11px ui-monospace, monospace';
       ctx.fillText('every port keeps a board; T docks with a locked station.', rx + 16, top + pad + 66);
       ctx.restore();
       return;
@@ -2131,7 +2229,7 @@
       .sort(function (a, b) { return (b.campaign ? 1 : 0) - (a.campaign ? 1 : 0); });
     if (!offers.length) {
       ctx.save();
-      ctx.font = '12px ui-monospace, monospace';
+      ctx.font = 'bold 13px ui-monospace, monospace';
       ctx.fillStyle = MFD_DIM;
       ctx.fillText('Board is bare — check back in a day or two', rx + 16, top + pad + 48);
       ctx.restore();
@@ -2146,7 +2244,7 @@
       if (off.campaign && !sawCampaignBoardHdr) {
         sawCampaignBoardHdr = true;
         ctx.save();
-        ctx.font = 'bold 10px ui-monospace, monospace';
+        ctx.font = 'bold 11px ui-monospace, monospace';
         ctx.fillStyle = '#8a7a3a';
         ctx.fillText('★ FACTION CAMPAIGN', rx + 16, oy);
         ctx.restore();
@@ -2154,14 +2252,14 @@
       } else if (!off.campaign && !sawContractBoardHdr && sawCampaignBoardHdr) {
         sawContractBoardHdr = true;
         ctx.save();
-        ctx.font = 'bold 10px ui-monospace, monospace';
+        ctx.font = 'bold 11px ui-monospace, monospace';
         ctx.fillStyle = '#5d8fa4';
         ctx.fillText('CONTRACTS', rx + 16, oy);
         ctx.restore();
         oy += 16;
       }
       ctx.save();
-      ctx.font = '12px ui-monospace, monospace';
+      ctx.font = 'bold 13px ui-monospace, monospace';
       /* A PASSAGE YOU CANNOT TAKE IS STILL WORTH SEEING. The board is
        * generated per port and window rather than per career, so it cannot
        * ask what is fitted to your hull — and that turns out to be the
@@ -2184,8 +2282,8 @@
                     : off.type === 'courier' ? '#b4f0ff'
                     : off.type === 'disposal' ? '#ffb86b' : MFD_INK;
       ctx.fillText((off.campaign ? '★ ' : '') +
-                   clipText(off.text, Math.floor((rw - 130) / 7)), rx + 16, oy + 14);
-      ctx.font = '10px ui-monospace, monospace';
+                   clipText(off.text, Math.floor((rw - 130) / 7.7)), rx + 16, oy + 14);
+      ctx.font = 'bold 11px ui-monospace, monospace';
       ctx.fillStyle = MFD_DIM;
       if (noPass) ctx.fillStyle = '#ffb86b';
       ctx.fillText(clipText('pays ' + fmtCredits(off.pay) + '   ·   due ' +
@@ -2193,7 +2291,7 @@
                             (noPass ? noPass
                                : off.type === 'passage' ? (off.souls + ' berths')
                                : off.tonnes + 't of hold'),
-                            Math.floor((rw - 130) / 5.6)), rx + 16, oy + 28);
+                            Math.floor((rw - 130) / 6.16)), rx + 16, oy + 28);
       ctx.restore();
       btn(ctx, rx + rw - 96, oy + 6, 80, 28, 'ACCEPT',
           (function (offer) {
@@ -2201,7 +2299,7 @@
               var res = Missions.accept(G, offer, hooksFor());
               if (!res.ok) say('Cannot sign: ' + res.why, 4);
             };
-          })(off), { bold: true, font: 10 });
+          })(off), { bold: true, font: 11 });
 
       /* The long form, behind a button. The board stays scannable and the
        * detail is one click away for the job you are actually considering
@@ -2211,19 +2309,19 @@
         btn(ctx, rx + rw - 178, oy + 6, 76, 28, openHere ? 'HIDE' : 'DETAILS',
             (function (id) {
               return function () { G.missionDesc = (G.missionDesc === id) ? null : id; };
-            })(off.id), { font: 9 });
+            })(off.id), { font: 10 });
       }
       oy += 48;
 
       if (openHere && off.desc) {
-        var lines = wrapText(off.desc, Math.floor((rw - 44) / 5.9));
+        var lines = wrapText(off.desc, Math.floor((rw - 44) / 6.49));
         ctx.save();
         ctx.fillStyle = 'rgba(8,20,28,0.9)';
         ctx.fillRect(rx + 16, oy - 6, rw - 32, lines.length * 13 + 12);
         ctx.strokeStyle = 'rgba(74,151,176,0.35)';
         ctx.lineWidth = 1;
         ctx.strokeRect(rx + 16.5, oy - 5.5, rw - 33, lines.length * 13 + 11);
-        ctx.font = '10px ui-monospace, monospace';
+        ctx.font = 'bold 11px ui-monospace, monospace';
         ctx.fillStyle = '#9fc4d4';
         for (var ln = 0; ln < lines.length; ln++) {
           ctx.fillText(lines[ln], rx + 24, oy + 8 + ln * 13);
@@ -2265,10 +2363,10 @@
 
     if (!course) {
       ctx.save();
-      ctx.font = '15px ui-monospace, monospace';
+      ctx.font = 'bold 16px ui-monospace, monospace';
       ctx.fillStyle = MFD_DIM;
       ctx.fillText('NO COURSE LAID IN', px + 30, py + 50);
-      ctx.font = '11px ui-monospace, monospace';
+      ctx.font = 'bold 12px ui-monospace, monospace';
       ctx.fillStyle = 'rgba(160,185,220,0.7)';
       ctx.fillText('Open the chart, pick a star, press Enter. Then come back here.',
                    px + 30, py + 76);
@@ -2279,13 +2377,13 @@
     }
 
     ctx.save();
-    ctx.font = '11px ui-monospace, monospace';
+    ctx.font = 'bold 12px ui-monospace, monospace';
     ctx.fillStyle = MFD_DIM;
     ctx.fillText('DESTINATION', px + 30, py + 34);
-    ctx.font = '26px ui-monospace, monospace';
+    ctx.font = 'bold 27px ui-monospace, monospace';
     ctx.fillStyle = course.to.color;
     ctx.fillText(course.to.name, px + 30, py + 68);
-    ctx.font = '12px ui-monospace, monospace';
+    ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.fillStyle = MFD_DIM;
     ctx.fillText('class ' + course.to.cls + '   ·   ' + course.to.temp + ' K   ·   ' +
                  (G.visited[course.to.id] ? 'surveyed' : 'unsurveyed'), px + 30, py + 90);
@@ -2305,7 +2403,7 @@
     var by = py + 126 + 6 * 20 + 24;
     if (!course.possible) {
       ctx.save();
-      ctx.font = '12px ui-monospace, monospace';
+      ctx.font = 'bold 13px ui-monospace, monospace';
       ctx.fillStyle = '#ff7a7a';
       /* A CHECKPOINT IS NOT A SHORTFALL. Telling a pilot with a full tank
        * that they are short by 0.00 tonnes is how a barred course reads as
@@ -2324,9 +2422,9 @@
       btn(ctx, px + 30, by, 240, 40, 'ENGAGE SLIPSPACE DRIVE', function () {
         selectPanel(0);
         doJump(course);
-      }, { bold: true, font: 12 });
+      }, { bold: true, font: 13 });
       ctx.save();
-      ctx.font = '10px ui-monospace, monospace';
+      ctx.font = 'bold 11px ui-monospace, monospace';
       ctx.fillStyle = 'rgba(160,185,220,0.6)';
       ctx.fillText('Seven seconds in the tunnel; ' + fmtTime(course.seconds) +
                    ' of everyone else\'s time.', px + 286, by + 24);
@@ -2372,13 +2470,13 @@
       ctx.strokeStyle = modes[i].on ? '#b4f0ff' : 'rgba(74,151,176,0.4)';
       ctx.lineWidth = modes[i].on ? 1.6 : 1;
       ctx.strokeRect(mx + 0.5, my + 0.5, half - 1, 175);
-      ctx.font = 'bold 15px ui-monospace, monospace';
+      ctx.font = 'bold 16px ui-monospace, monospace';
       ctx.fillStyle = modes[i].on ? '#ffffff' : '#78a6b8';
       ctx.fillText(modes[i].title, mx + 16, my + 28);
-      ctx.font = '11px ui-monospace, monospace';
+      ctx.font = 'bold 12px ui-monospace, monospace';
       ctx.fillStyle = modes[i].on ? '#7fd6c0' : '#4f7d90';
       ctx.fillText(modes[i].sub, mx + 16, my + 46);
-      ctx.font = '11px ui-monospace, monospace';
+      ctx.font = 'bold 12px ui-monospace, monospace';
       ctx.fillStyle = modes[i].on ? '#cfe0ff' : 'rgba(160,185,220,0.55)';
       for (var b = 0; b < modes[i].body.length; b++) {
         ctx.fillText(modes[i].body[b], mx + 16, my + 74 + b * 18);
@@ -2392,20 +2490,20 @@
 
     var sy = py + 236;
     ctx.save();
-    ctx.font = '11px ui-monospace, monospace';
+    ctx.font = 'bold 12px ui-monospace, monospace';
     ctx.fillStyle = MFD_DIM;
     ctx.fillText('SENSITIVITY', px + 30, sy);
-    ctx.font = '15px ui-monospace, monospace';
+    ctx.font = 'bold 16px ui-monospace, monospace';
     ctx.fillStyle = MFD_INK;
     ctx.fillText(G.aimSens.toFixed(2) + '×', px + 150, sy + 2);
     ctx.restore();
     btn(ctx, px + 220, sy - 16, 34, 24, '−',
-        function () { G.aimSens = Math.max(0.25, G.aimSens - 0.25); }, { font: 13 });
+        function () { G.aimSens = Math.max(0.25, G.aimSens - 0.25); }, { font: 14 });
     btn(ctx, px + 260, sy - 16, 34, 24, '+',
-        function () { G.aimSens = Math.min(3, G.aimSens + 0.25); }, { font: 13 });
+        function () { G.aimSens = Math.min(3, G.aimSens + 0.25); }, { font: 14 });
 
     ctx.save();
-    ctx.font = '11px ui-monospace, monospace';
+    ctx.font = 'bold 12px ui-monospace, monospace';
     ctx.fillStyle = MFD_DIM;
     ctx.fillText('ATTITUDE KEYS', px + 30, sy + 44);
     ctx.restore();
@@ -2484,11 +2582,11 @@
      * actually measures rather than the width I assumed: "Structural
      * alloys" ran straight into the tonnage at 12px because 8.4 px/char is
      * not 7.2. Derived, so a narrower panel clips harder on its own. */
-    var nameChars = Math.max(6, Math.floor((cTon - cName - 34) / 8.4));
+    var nameChars = Math.max(6, Math.floor((cTon - cName - 34) / 9.24));
 
     var hy = top + pad + 46;
     ctx.save();
-    ctx.font = '10px ui-monospace, monospace';
+    ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = MFD_DIM;
     ctx.fillText('COMMODITY', cName, hy);
     ctx.fillText('STATUS', cStat, hy);
@@ -2504,17 +2602,17 @@
     var rowH = 32, total = 0, contraT = 0, y = hy + 10;
     if (!held.length) {
       ctx.save();
-      ctx.font = '13px ui-monospace, monospace';
+      ctx.font = 'bold 14px ui-monospace, monospace';
       ctx.fillStyle = MFD_DIM;
       ctx.fillText('HOLD EMPTY', pad + 16, y + 20);
-      ctx.font = '11px ui-monospace, monospace';
+      ctx.font = 'bold 12px ui-monospace, monospace';
       ctx.fillText(s.cargoCap + ' tonnes available.', pad + 16, y + 40);
       ctx.restore();
     }
     for (var i = 0; i < held.length; i++) {
       if (y + rowH > top + pad + colH - 10) {
         ctx.save();
-        ctx.font = '10px ui-monospace, monospace';
+        ctx.font = 'bold 11px ui-monospace, monospace';
         ctx.fillStyle = MFD_DIM;
         ctx.fillText('+' + (held.length - i) + ' more', pad + 16,
                      top + pad + colH - 14);
@@ -2544,20 +2642,20 @@
       if (worth !== null && !illegal) total += worth;
 
       ctx.save();
-      ctx.font = '12px ui-monospace, monospace';
+      ctx.font = 'bold 13px ui-monospace, monospace';
       ctx.fillStyle = it.cid === 'waste' ? '#ffb86b' : MFD_INK;
       ctx.fillText(clipText(it.name, nameChars), cName, y + 15);
-      ctx.font = '10px ui-monospace, monospace';
+      ctx.font = 'bold 11px ui-monospace, monospace';
       ctx.fillStyle = ink;
       ctx.fillText(status, cStat, y + 15);
       ctx.textAlign = 'right';
-      ctx.font = '12px ui-monospace, monospace';
+      ctx.font = 'bold 13px ui-monospace, monospace';
       ctx.fillStyle = MFD_INK;
       ctx.fillText(it.tonnes.toFixed(it.tonnes < 1 ? 2 : 0) + ' t', cTon, y + 15);
-      ctx.font = '11px ui-monospace, monospace';
+      ctx.font = 'bold 12px ui-monospace, monospace';
       ctx.fillText(worth !== null ? fmtCredits(worth) : '—', cVal, y + 15);
       if (where) {
-        ctx.font = '9px ui-monospace, monospace';
+        ctx.font = 'bold 10px ui-monospace, monospace';
         ctx.fillStyle = MFD_DIM;
         ctx.fillText(clipText(where, 20), cVal, y + 26);
       }
@@ -2575,12 +2673,12 @@
     var cy2 = top + pad + 46;
     if (!list.length) {
       ctx.save();
-      ctx.font = '11px ui-monospace, monospace';
+      ctx.font = 'bold 12px ui-monospace, monospace';
       ctx.fillStyle = MFD_DIM;
       /* Clipped to the panel it is drawn in, in characters, because this
        * panel is whatever the window leaves it and the sentence is not. */
       ctx.fillText(clipText('No contracts signed. Everything aboard is yours.',
-                            Math.max(8, Math.floor((rw - 32) / 6.1))),
+                            Math.max(8, Math.floor((rw - 32) / 6.71))),
                    rx + 16, cy2 + 6);
       ctx.restore();
     }
@@ -2590,11 +2688,11 @@
       var left = m.deadline - G.t;
       var late = left <= 0;
       ctx.save();
-      ctx.font = '11px ui-monospace, monospace';
+      ctx.font = 'bold 12px ui-monospace, monospace';
       ctx.fillStyle = late ? '#ff8a76' : MFD_INK;
       ctx.fillText(clipText((m.tonnes || 0) + ' t ' + (m.cid || '—'), 26),
                    rx + 16, cy2 + 6);
-      ctx.font = '10px ui-monospace, monospace';
+      ctx.font = 'bold 11px ui-monospace, monospace';
       ctx.fillStyle = MFD_DIM;
       var dst = m.to && G.sys.byId[m.to] ? G.sys.byId[m.to].name : (m.toName || '—');
       ctx.fillText(clipText('to ' + dst, 30), rx + 16, cy2 + 20);
@@ -2620,7 +2718,7 @@
     ];
     if (contraT > 0) lines.push(['Contraband aboard', contraT.toFixed(0) + ' t']);
     ctx.save();
-    ctx.font = '11px ui-monospace, monospace';
+    ctx.font = 'bold 12px ui-monospace, monospace';
     for (var L = 0; L < lines.length; L++) {
       var ly = sy2 + 46 + L * 18;
       if (ly > sy2 + sh - 8) break;
@@ -2646,7 +2744,7 @@
     ctx.strokeRect(x + 2, y + 2, w - 4, h - 4);
     ctx.fillStyle = '#12414f';
     ctx.fillRect(x + 4, y + 4, w - 8, 19);
-    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.fillStyle = '#b4f0ff';
     ctx.fillText(title, x + 10, y + 18);
     ctx.restore();
@@ -2663,7 +2761,7 @@
     tile(ctx, pad * 2 + colW, top + pad, colW, h, drawOrbitPage);
 
     ctx.save();
-    ctx.font = '11px ui-monospace, monospace';
+    ctx.font = 'bold 12px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(160,185,220,0.6)';
     ctx.fillText('The node is drawn on the world, not on this screen — F1 to watch it.',
                  pad + 4, top + pad * 2 + h + 16);
@@ -2965,7 +3063,7 @@
     if (dw > 140) {
       var seenFacs = chartedFactions();
       ctx.save();
-      ctx.font = '11px ui-monospace, monospace';
+      ctx.font = 'bold 12px ui-monospace, monospace';
       ctx.fillStyle = '#7e93b3';
       ctx.fillText('TERRITORY', dx, py + 30);
       if (!seenFacs.length) {
@@ -2983,10 +3081,10 @@
     }
 
     ctx.save();
-    ctx.font = '14px ui-monospace, monospace';
+    ctx.font = 'bold 15px ui-monospace, monospace';
     ctx.fillStyle = '#ffe6a8';
     ctx.fillText('SLIPSPACE CHART', px + 24, py + 30);
-    ctx.font = '11px ui-monospace, monospace';
+    ctx.font = 'bold 12px ui-monospace, monospace';
     ctx.fillStyle = '#7fd6c0';
     ctx.fillText(G.galaxy.stars.length + ' stars   ·   here: ' + G.here.name +
                  '   ·   range ' + fmtLy(Galaxy.maxRange(G.ship)) +
@@ -3095,11 +3193,11 @@
         ctx.strokeStyle = plan.possible ? '#7dffb0' : '#ff7a7a';
         ctx.lineWidth = 1.6;
         ctx.strokeRect(sp.x - r - 6, y - r - 6, (r + 6) * 2, (r + 6) * 2);
-        ctx.font = '11px ui-monospace, monospace';
+        ctx.font = 'bold 12px ui-monospace, monospace';
         ctx.fillStyle = plan.possible ? '#7dffb0' : '#ff7a7a';
         ctx.fillText(s.name, sp.x + r + 10, y + 3);
       } else if (isHere) {
-        ctx.font = '11px ui-monospace, monospace';
+        ctx.font = 'bold 12px ui-monospace, monospace';
         ctx.fillStyle = '#ffe6a8';
         ctx.fillText(s.name, sp.x + r + 10, y + 3);
       }
@@ -3114,10 +3212,10 @@
       var legendBottom = py + 48 + Math.max(0, chartedFactions().length - 1) * 16 + 14;
       var dyy = Math.max(py + 70, legendBottom + 16);
       ctx.save();
-      ctx.font = '15px ui-monospace, monospace';
+      ctx.font = 'bold 16px ui-monospace, monospace';
       ctx.fillStyle = plan.to.color;
       ctx.fillText(plan.to.name, dx, dyy);
-      ctx.font = '11px ui-monospace, monospace';
+      ctx.font = 'bold 12px ui-monospace, monospace';
       ctx.fillStyle = '#7e93b3';
       ctx.fillText('class ' + plan.to.cls + '   ·   ' + plan.to.temp + ' K   ·   ' +
                    plan.to.luminosity.toFixed(2) + ' L☉', dx, dyy + 18);
@@ -3139,7 +3237,7 @@
 
       var iy = dyy + 150;
       ctx.save();
-      ctx.font = '11px ui-monospace, monospace';
+      ctx.font = 'bold 12px ui-monospace, monospace';
       if (plan.barred) {
         ctx.fillStyle = '#ff7a7a';
         ctx.fillText('RESTRICTED — ' + plan.restricted.label.toUpperCase(), dx, iy);
@@ -3162,7 +3260,7 @@
        * nothing else. Everything inside is unknown until somebody goes. */
       var sy = dyy + 196;
       ctx.save();
-      ctx.font = '11px ui-monospace, monospace';
+      ctx.font = 'bold 12px ui-monospace, monospace';
       if (G.visited[plan.to.id]) {
         var known = G.systemCache[plan.to.id];
         ctx.fillStyle = '#7fd6c0';
@@ -3212,9 +3310,9 @@
         if (known.systemNote) {
           var noteY = sy + 20 + infoRows.length * 15 + 14;
           ctx.save();
-          ctx.font = '10px ui-monospace, monospace';
+          ctx.font = 'bold 11px ui-monospace, monospace';
           ctx.fillStyle = 'rgba(200,220,245,0.7)';
-          var noteCols = Math.max(20, Math.floor(dw / 5.9));
+          var noteCols = Math.max(20, Math.floor(dw / 6.49));
           wrapText(known.systemNote, noteCols).forEach(function (ln) {
             ctx.fillText(ln, dx, noteY);
             noteY += 13;
@@ -3245,7 +3343,7 @@
         }) : [];
 
         ctx.save();
-        ctx.font = '10px ui-monospace, monospace';
+        ctx.font = 'bold 11px ui-monospace, monospace';
         ctx.fillStyle = 'rgba(160,185,220,0.6)';
         ctx.fillText('remote spectroscopy — composition only, nothing on the ground', dx, sy + 16);
         ctx.restore();
@@ -3259,9 +3357,9 @@
          * so it can honestly be said before a visit reveals who runs it. */
         if (preview && preview.systemNote) {
           ctx.save();
-          ctx.font = '10px ui-monospace, monospace';
+          ctx.font = 'bold 11px ui-monospace, monospace';
           ctx.fillStyle = 'rgba(200,220,245,0.7)';
-          var sysCols = Math.max(20, Math.floor(dw / 5.9));
+          var sysCols = Math.max(20, Math.floor(dw / 6.49));
           wrapText(preview.systemNote, sysCols).forEach(function (ln) {
             ctx.fillText(ln, dx, noteBaseY);
             noteBaseY += 13;
@@ -3286,9 +3384,9 @@
          * the screen. */
         var habitables = pPlanets.filter(function (b) { return b.habitable; }).slice(0, 2);
         var fy = noteBaseY + scanRows.length * 15 + 16;
-        var cols = Math.max(20, Math.floor(dw / 5.9));
+        var cols = Math.max(20, Math.floor(dw / 6.49));
         ctx.save();
-        ctx.font = '10px ui-monospace, monospace';
+        ctx.font = 'bold 11px ui-monospace, monospace';
         habitables.forEach(function (b) {
           ctx.fillStyle = '#7fd6c0';
           ctx.fillText(b.name.toUpperCase(), dx, fy);
@@ -3306,7 +3404,7 @@
     }
 
     ctx.save();
-    ctx.font = '10px ui-monospace, monospace';
+    ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(160,185,220,0.7)';
     ctx.fillText('↑↓ or click a star   ·   PgUp/PgDn ten   ·   Home nearest   ·   ' +
                  'Enter lays in the course   ·   F8 engages      ' +

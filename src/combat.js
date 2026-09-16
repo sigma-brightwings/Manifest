@@ -758,7 +758,25 @@
              /* Two racks: a courier can carry a crate of each and choose. */
              rackSlots: 2,
              powerMW: 9.0, fitMass: 14,
-             blurb: 'the ship you started with, and honestly not bad' },
+             blurb: 'the ship you started with, and honestly not bad',
+             /* ---- what the yard says about it -------------------------
+              * Astra: "a paragraph about the ship, who makes it and what
+              * it's ideal for."
+              *
+              * Written per hull rather than generated, and written to say
+              * something the stat line does not. A row already tells you
+              * the hold, the hull and the reactor; this is for the things
+              * a spec sheet cannot hold — who built it, why it is shaped
+              * like that, and what kind of career it suits. */
+             maker: 'Ardwick Yards, Coldwater',
+             about: 'Ardwick has built the Talon for thirty years and has ' +
+               'changed almost nothing, which tells you most of what you ' +
+               'need to know. It is cheap, it is honest, and there is ' +
+               'nothing on it a dockside mechanic has not seen. The hold ' +
+               'is larger than the hull suggests because Ardwick gave up ' +
+               'on armour early and never looked back. Ideal for a first ' +
+               'career: light freight, courier work, and learning which ' +
+               'of your mistakes are expensive.' },
     dart:  { id: 'dart', name: 'Dart Interceptor', price: 61000, mesh: 'police',
              dryMass: 30, thrustKN: 2200, thrusterCap: 13, fuelCap: 27,
              cargoCap: 22, hullMax: 80,
@@ -779,7 +797,15 @@
               * that would be a second crate is why it turns like that. */
              rackSlots: 1,
              powerMW: 7.0, fitMass: 9,
-             blurb: 'outruns everything; carries nothing' },
+             blurb: 'outruns everything; carries nothing',
+             maker: 'Kepner Dynamics',
+             about: 'A police interceptor with the badge taken off. Kepner ' +
+               'sells the civilian pattern at a loss and makes it back on ' +
+               'the fleet contracts, which is why nothing else this fast ' +
+               'is this cheap. The hold is an afterthought and the frame ' +
+               'does not forgive a hard landing. Ideal for people who ' +
+               'need to be somewhere before somebody else is: couriers ' +
+               'on a deadline, and anybody whose plan depends on leaving.' },
     kestrel: { id: 'kestrel', name: 'Kestrel Multirole', price: 120000, mesh: 'merc',
              dryMass: 60, thrustKN: 2700, thrusterCap: 19, fuelCap: 45,
              cargoCap: 96, hullMax: 130,
@@ -787,7 +813,15 @@
              /* Two, same as the courier — the extra tonnage went to guns. */
              rackSlots: 2,
              powerMW: 14.0, fitMass: 22,
-             blurb: 'the compromise, made well' },
+             blurb: 'the compromise, made well',
+             maker: 'Sable & Roan',
+             about: 'The hull mercenary outfits buy when they cannot ' +
+               'predict the work. Sable & Roan build to survive a bad ' +
+               'afternoon rather than to win a race, and it shows in the ' +
+               'reactor margin and the hardpoint count. It is not the ' +
+               'fastest, the roomiest or the cheapest thing on this list ' +
+               'and it is the only one that is never badly wrong. Ideal ' +
+               'for a pilot who takes whatever is on the board.' },
     mule:  { id: 'mule', name: 'Mule Freighter', price: 78000, mesh: 'freighter',
              dryMass: 80, thrustKN: 3700, thrusterCap: 21, fuelCap: 48,
              cargoCap: 160, hullMax: 160,
@@ -795,7 +829,15 @@
              /* Three, because a hauler's answer to everything is volume. */
              rackSlots: 3,
              powerMW: 18.0, fitMass: 30,
-             blurb: 'slow, vast, and worth robbing' }
+             blurb: 'slow, vast, and worth robbing',
+             maker: 'Drayton Heavy',
+             about: 'Drayton do not pretend the Mule is a ship so much as ' +
+               'a warehouse with a drive bolted to it, and they are right. ' +
+               'It is slow to start, slow to stop and enormous inside, and ' +
+               'the ten fitting slots mean it can be made into almost ' +
+               'anything given money and patience. Ideal for bulk trade, ' +
+               'passenger work with the berths in, and being the reason ' +
+               'pirates get out of bed.' }
   };
 
   /* ---- slots, power and mass --------------------------------------------
