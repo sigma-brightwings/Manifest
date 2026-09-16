@@ -2613,6 +2613,114 @@
     return mag > G.ship.maxAccel ? V.scale(cmd, G.ship.maxAccel / mag) : cmd;
   }
 
+  /* How much air to leave under the keel while crossing a world, and how
+   * fast each leg of a planetary approach is allowed to be flown. The
+   * clearance is a fraction of the world rather than a fixed number of
+   * kilometres: what counts as "well clear" of a 400 km moon is not what
+   * counts as well clear of an Earth. */
+  var GROUND_CLEAR_FRAC = 0.05;
+  var GROUND_CLEAR_MIN = 8;          // km, for the small rocks
+  var GROUND_TRANSIT_V = 6;          // km/s crossing at altitude
+  var GROUND_CLIMB_V = 2;            // km/s going up
+  var GROUND_DESCEND_V = 1.5;        // km/s coming down, before the flare
+
+  /* The flight plan for a port that sits on a world. Returns null for
+   * anything in open space, which is every station — those keep the
+   * approach they have always had.
+   *
+   * Three legs, chosen by where the ship is rather than by a state machine,
+   * so an approach interrupted and re-engaged picks up wherever it is
+   * rather than restarting:
+   *
+   *   CLIMB    — below the clearance altitude and not already overhead.
+   *              Straight up the local vertical. Nothing else is safe from
+   *              down here.
+   *   TRANSIT  — at altitude, somewhere else on the world. Aim at the
+   *              point halfway round to the pad, AT ALTITUDE. Re-derived
+   *              every frame, so it is an arc rather than a chord and the
+   *              ship never cuts the corner through the rock.
+   *   DESCEND  — overhead. Straight down at the mouth, slowly.
+   *
+   * refVel is what the desired velocity is measured against. On a world
+   * that is the pad's own velocity — it is bolted to something that both
+   * orbits and SPINS, and a descent flown against the planet's centre
+   * instead would drift sideways at the speed of the surface. */
+  function groundPlan(st, ss, ad) {
+    if (!st || !st.parentBody) return null;
+    if (!st.surface && !st.underground) return null;
+    var host = st.parentBody;
+    var hostPos = Sim.bodyPosition(host, G.sys, G.t);
+    var mouth = st.underground ? Sim.portEntrance(st, G.sys, G.t) : ss;
+
+    var up = V.sub(mouth.pos, hostPos);
+    var upLen = V.len(up);
+    if (!(upLen > 1e-9)) return null;
+    up = V.scale(up, 1 / upLen);
+
+    var clear = Math.max(host.radius * GROUND_CLEAR_FRAC, GROUND_CLEAR_MIN);
+    var shipRel = V.sub(G.ship.pos, hostPos);
+    var shipR = V.len(shipRel);
+    if (!(shipR > 1e-9)) return null;
+    var shipUp = V.scale(shipRel, 1 / shipR);
+
+    /* How far off the pad's own vertical the ship is, measured across
+     * rather than along: this is the question "am I over it", and a range
+     * cannot answer it — a ship 30 km up and a ship 30 km sideways are the
+     * same distance from the pad and only one of them may descend. */
+    var along = V.dot(shipRel, up);
+    var across = V.len(V.sub(shipRel, V.scale(up, along)));
+
+    if (across < clear * 0.30 && along > 0) {
+      return { phase: 'descend', aim: mouth.pos, refVel: mouth.vel,
+               cap: GROUND_DESCEND_V, flare: true };
+    }
+    if (shipR < host.radius + clear * 0.9) {
+      return { phase: 'climb', refVel: mouth.vel, cap: GROUND_CLIMB_V,
+               aim: V.addScaled(hostPos, shipUp, host.radius + clear * 1.25) };
+    }
+    /* Round the world at altitude — and this is where the obvious version
+     * is wrong. "Aim halfway round" puts the waypoint ninety degrees away
+     * when the pad is on the far side, and the ship flies the CHORD to it:
+     * two points ninety degrees apart on a sphere of radius r are joined
+     * by a line that passes r·cos45° from the centre, which for a ship a
+     * hundred kilometres up is inside the planet. That is the antipodal
+     * crash, and it is the same mistake as the original bug wearing a
+     * waypoint.
+     *
+     * So the step is as large as the chord can be and still clear the
+     * ground: two points separated by α are joined by a line that comes
+     * within r·cos(α/2) of the centre, so α ≤ 2·acos((R+clear)/r). Take
+     * nine tenths of that and re-derive it every frame — the ship walks
+     * round the world in secants, each one entirely above the rock, and
+     * the step grows as it climbs.
+     *
+     * Radius is whichever is higher of the ship's own altitude and the
+     * clearance, so a ship that came in high stays high rather than being
+     * told to dive to the floor and then cross. */
+    var r = Math.max(shipR, host.radius + clear);
+    var toGo = Math.acos(Math.max(-1, Math.min(1, V.dot(shipUp, up))));
+    var maxStep = 2 * Math.acos(Math.min(0.99, (host.radius + clear) / r));
+    var step = Math.min(toGo, maxStep * 0.9);
+
+    /* The direction to lean in: the component of the pad's vertical that is
+     * across the ship's own, which is undefined at the poles of this little
+     * geometry — directly overhead (handled above) and exactly antipodal. */
+    var tang = V.sub(up, V.scale(shipUp, V.dot(up, shipUp)));
+    if (V.len(tang) < 1e-9) tang = anyAcross(shipUp);
+    tang = V.norm(tang);
+    var mid = V.add(V.scale(shipUp, Math.cos(step)), V.scale(tang, Math.sin(step)));
+    return { phase: 'transit', aim: V.addScaled(hostPos, V.norm(mid), r),
+             refVel: mouth.vel, cap: GROUND_TRANSIT_V };
+  }
+
+  /* Any unit vector perpendicular to this one. Only ever needed for the
+   * exactly-antipodal case above, which is measure-zero and happens the
+   * first time somebody tests it deliberately. */
+  function anyAcross(v) {
+    var pick = Math.abs(v.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+    return V.norm(V.cross(v, pick));
+  }
+
   /* Returns the commanded acceleration, or null when it is done. */
   function advanceAutodock(dtSim) {
     var ad = G.autodock;
@@ -2705,15 +2813,31 @@
     var standoff = st.dockCaptureRadius * (ad.phase === 'close' ? 2.6 : 0.35);
     ad.phase = range < st.dockCaptureRadius * 4 ? 'berth' : 'close';
 
-    /* An underground bay is not "off to one side" of anything — it is
-     * straight down a shaft, and there is exactly one direction that leads
-     * into it without threading a needle. So CLOSE flies to a point over
-     * the mouth first, on the shaft's own axis, rather than the generic
-     * "offset toward wherever you already are" standoff below; by the time
-     * BERTH takes over the ship is already lined up and the ordinary logic
-     * carries it the rest of the way down. */
+    /* ---- A PORT ON A WORLD IS NOT A RENDEZVOUS --------------------------
+     *
+     * Everything above this point is written for a station hanging in
+     * space, where the straight line between you and it is empty. A pad —
+     * or the mouth of a shaft — is bolted to several hundred kilometres of
+     * rock, and the straight line to it goes through the rock whenever the
+     * pad is not already on your side of the world.
+     *
+     * Which is exactly what the autopilot did. Flown at a surface port
+     * from 900 km it aimed at the pad, wound the throttle up, crossed the
+     * horizon at three and a quarter kilometres a second and hit the
+     * ground 521 km short — "landed", not docked, and the autopilot still
+     * sitting there in CLOSE with nothing left to fly. From the cockpit
+     * that reads as a pilot that will not commit: it swings at the world,
+     * bounces off it, and goes round again.
+     *
+     * So a world gets a flight plan rather than an aim point. Climb to a
+     * safe altitude if you are under it, cross at that altitude on an arc
+     * rather than through the chord, and only descend once you are
+     * actually over the thing. Each leg is still flown by the same
+     * guidance law below; all this decides is where to point it and how
+     * fast it may go. */
+    var ground = groundPlan(st, ss, ad);
     var shaftAxis = null, shaftMouth = null;
-    if (st.underground && st.parentBody) {
+    if (!ground && st.underground && st.parentBody) {
       shaftMouth = Sim.portEntrance(st, G.sys, G.t);
       var hostPos = Sim.bodyPosition(st.parentBody, G.sys, G.t);
       shaftAxis = V.norm(V.sub(shaftMouth.pos, hostPos));
@@ -2736,11 +2860,24 @@
              : range > 2.0e3 ? 3        // 100x  -> ~1.6 s
              : range > st.dockCaptureRadius * 3 ? 2   // 25x -> ~0.4 s
              : 1;                       // 5x, for the last few km
+    /* Not near a world, whatever the range says. Eight seconds of
+     * simulation per frame is fine in empty space and is a mountain
+     * arriving between two corrections when you are twenty kilometres over
+     * one — the guidance law only gets a vote once a frame. */
+    if (ground) {
+      want = Math.min(want, 2);
+      /* And down to real-ish time for the last stretch of the descent,
+       * where a frame's worth of simulation is measured against the
+       * envelope rather than against the sky. */
+      if (ground.phase === 'descend' &&
+          V.dist(G.ship.pos, ground.aim) < (st.dockCaptureRadius || 1.2) * 20) want = 1;
+    }
     G.warpIndex = Math.min(want, WARPS.length - 1);
 
-    var aim = (shaftAxis && ad.phase === 'close')
-      ? V.addScaled(shaftMouth.pos, shaftAxis, standoff)
-      : V.addScaled(ss.pos, V.norm(V.scale(rel, -1)), standoff);
+    var aim = ground ? ground.aim
+            : (shaftAxis && ad.phase === 'close')
+              ? V.addScaled(shaftMouth.pos, shaftAxis, standoff)
+              : V.addScaled(ss.pos, V.norm(V.scale(rel, -1)), standoff);
     var toAim = V.sub(aim, G.ship.pos);
     var dAim = V.len(toAim);
 
@@ -2748,15 +2885,46 @@
      * whole guidance law: go as fast as braking distance allows, and null
      * the sideways drift. */
     var brake = G.ship.maxAccel * 0.55;
-    var vWant = Math.min(ad.phase === 'berth' ? 0.9 : 45,
-                         Math.sqrt(2 * brake * Math.max(0, dAim)));
+    var speedCap = ground ? ground.cap : (ad.phase === 'berth' ? 0.9 : 45);
+    var vWant;
+    if (ground && ground.flare) {
+      /* THE DESCENT BRAKES TO A CRAWL AT THE ENVELOPE, not to a stop at
+       * the ground. Braking to zero at the pad means the whole fall is
+       * flown at the speed the last metre allows — 167 km at fifty metres
+       * a second, which is forty minutes of watching an altimeter and the
+       * reason the first version of this simply never arrived.
+       *
+       * Half the braking authority, because this is the leg where being
+       * wrong costs the hull, and a terminal speed the pad will actually
+       * catch rather than zero. */
+      var stop = (st.dockCaptureRadius || 1.2) * 0.5;
+      var vTerm = (st.dockMaxSpeed || 0.02) * 0.6;
+      vWant = Math.min(speedCap,
+                       vTerm + Math.sqrt(2 * brake * 0.5 * Math.max(0, dAim - stop)));
+    } else {
+      vWant = Math.min(speedCap, Math.sqrt(2 * brake * Math.max(0, dAim)));
+    }
     var dirAim = dAim > 1e-9 ? V.scale(toAim, 1 / dAim) : V.zero();
-    var desired = V.addScaled(ss.vel, dirAim, vWant);
+    var desired = V.addScaled(ground ? ground.refVel : ss.vel, dirAim, vWant);
     var err = V.sub(desired, G.ship.vel);
 
-    var cmd = V.scale(err, 0.5);
+    var cmd = V.scale(err, ground ? 0.9 : 0.5);
+    /* HOLD THE SHIP UP WHILE IT DOES THAT. Over a world the guidance law
+     * is chasing a velocity that gravity is pulling it off every second,
+     * and a proportional term alone answers that with a permanent sag —
+     * the ship descends faster than it meant to and arrives at the pad
+     * carrying it. Cancelling the local pull explicitly leaves the error
+     * term doing only the job it is good at. */
+    if (ground) cmd = V.sub(cmd, Sim.acceleration(G.ship.pos, G.sys, G.t));
     var mag = V.len(cmd);
     if (mag > G.ship.maxAccel) cmd = V.scale(cmd, G.ship.maxAccel / mag);
+
+    /* GEAR DOWN BEFORE THE PAD, not after it has refused you. A pad will
+     * not catch a ship with the gear up (Sim raises gearBalked and the
+     * cockpit nags), and an autopilot that flies a perfect approach into
+     * that refusal is the same bug as one that never arrives. */
+    if (ground && ground.phase === 'descend' && !G.ship.gear) G.ship.gear = true;
+    if (ground) ad.phase = ground.phase;
 
     // Point the nose where we are pushing; it is what a pilot would do.
     if (V.len(cmd) > 1e-9) {
@@ -7792,6 +7960,26 @@
     ctx.fillText('a yard can replace the glass', 12, 40);
   }
 
+  /* The scanline pattern: one pixel of phosphor every three, built once
+   * and handed to every screen. Null on a canvas implementation without
+   * createPattern — the headless stub, mainly — and the caller falls back
+   * to the loop it replaced. */
+  var SCANLINE_PATTERN;
+  function scanlinePattern(mc) {
+    if (SCANLINE_PATTERN !== undefined) return SCANLINE_PATTERN;
+    SCANLINE_PATTERN = null;
+    try {
+      var cv = document.createElement('canvas');
+      cv.width = 1; cv.height = 3;
+      var c2 = cv.getContext('2d');
+      if (!c2) return SCANLINE_PATTERN;
+      c2.fillStyle = '#7dffcf';
+      c2.fillRect(0, 0, 1, 1);
+      SCANLINE_PATTERN = mc.createPattern(cv, 'repeat') || null;
+    } catch (e) { SCANLINE_PATTERN = null; }
+    return SCANLINE_PATTERN;
+  }
+
   function drawDashPanels(ctx, mfds, hyper) {
     panelHots.length = 0;
     if (!mfds || !mfds.length) return;
@@ -7810,6 +7998,14 @@
        * mfdEnd as a textured quad in the world; on the 2D path it is `ctx`
        * with the old clip and affine applied. Everything below draws in
        * panel pixel space either way and does not need to know which. */
+      /* THE SCREEN IS NOT REDRAWN EVERY FRAME. See Render.mfdDue: a
+       * readout that changes a dozen times a second was being repainted
+       * and re-uploaded sixty, which is the whole of why first person was
+       * the slow view. When it is not due, the picture it already has goes
+       * back to the GPU unchanged — reused rather than skipped, because a
+       * skipped panel is a black hole in the console. */
+      if (!Render.mfdDue(p) && Render.mfdReuse(p)) continue;
+
       var mc = Render.mfdBegin(ctx, p);
       if (!mc) continue;
 
@@ -7834,11 +8030,19 @@
       }
 
       /* A phosphor wash and scanlines, inside the panel's own space so they
-       * lie on the glass of the screen and foreshorten with it. */
+       * lie on the glass of the screen and foreshorten with it.
+       *
+       * ONE FILL, NOT SIXTY. This was a fillRect per three pixels of panel
+       * height, each one an additive blend, per panel, per frame — around
+       * three hundred blended operations a frame to draw a pattern that
+       * has never changed. A repeating pattern says the same thing in a
+       * single fill, and is built once. */
+      var lines = scanlinePattern(mc);
       mc.globalCompositeOperation = 'lighter';
       mc.globalAlpha = 0.05;
-      mc.fillStyle = '#7dffcf';
-      for (var y = 0; y < p.h; y += 3) mc.fillRect(2, y, p.w - 4, 1);
+      mc.fillStyle = lines || '#7dffcf';
+      if (lines) mc.fillRect(2, 0, p.w - 4, p.h);
+      else for (var y = 0; y < p.h; y += 3) mc.fillRect(2, y, p.w - 4, 1);
       mc.globalAlpha = 1;
       mc.globalCompositeOperation = 'source-over';
 

@@ -34,6 +34,18 @@
    * launch: you would sit on the pad burning reaction mass forever. 1.15
    * says a fully laden ship must be able to climb at about 1.6 m/s^2 off
    * the worst pad in the galaxy. */
+  /* THIS THRUST IS A FLOOR, NOT THE TALON'S. It was the Talon's once, and
+   * the hulls have since been given half as much again — but MAX_SURFACE_G
+   * below is derived from it, and MAX_SURFACE_G decides which worlds may
+   * carry a surface port at all. Raising it would move ports across every
+   * seed in the galaxy, which is the one thing this project does not do.
+   *
+   * Frozen is also the SAFE direction. The number asks "is there a ship
+   * that can leave this pad?", so a real ship that is stronger than the
+   * reference only means a few heavy worlds go without a port they could
+   * in fact support. A reference stronger than the real ship would strand
+   * someone on a rock, and that is the drift worth fearing — there is a
+   * test in ships.test.js that every hull, fully laden, clears it. */
   var SHIP_SPEC = {
     dryMass: 42,           // tonnes
     thrustKN: 1800,
@@ -2223,11 +2235,21 @@
    * interdiction mechanic rests on a full hold being slower than a pirate
    * and an empty one being faster, so these move whenever the ship's
    * thrust does — and there is a test that fails if they stop straddling
-   * it. Interceptors are faster than anything, which is the point of them. */
+   * it. Interceptors are faster than anything, which is the point of them.
+   *
+   * THE TEST WAS POINTING AT THE WRONG SHIP. It measured a bare
+   * Sim.circularOrbit hull, which carries SHIP_SPEC's thrust — the
+   * generator's lift reference, deliberately frozen (see SHIP_SPEC) — and
+   * not the Talon the player actually flies. So the hulls could get half
+   * as fast again and the guard would sit there passing. It measures a
+   * real Talon now, and these five numbers moved by the same 1.5 the
+   * hulls did so that the straddle survives it. The capital is the one
+   * that did not: it does not chase anything, which is the whole of what
+   * makes it frightening. */
   var PATROL_CLASSES = {
-    police: { size: 0.055, color: '#8fd0ff', accel: 0.0210, label: 'interceptor' },
-    merc:   { size: 0.070, color: '#d8b0ff', accel: 0.0190, label: 'mercenary' },
-    pirate: { size: 0.062, color: '#ff8a76', accel: 0.0170, label: 'pirate' },
+    police: { size: 0.055, color: '#8fd0ff', accel: 0.0315, label: 'interceptor' },
+    merc:   { size: 0.070, color: '#d8b0ff', accel: 0.0285, label: 'mercenary' },
+    pirate: { size: 0.062, color: '#ff8a76', accel: 0.0255, label: 'pirate' },
     /* A faction's own warship. Slow — it does not chase, it ARRIVES, and
      * anything that wants to run from one can. What makes it frightening is
      * that it is enormous and it does not negotiate, not that it is quick.
@@ -2235,7 +2257,7 @@
      * For now it only patrols: hunting the player on notoriety is a
      * separate piece of work, and a navy that merely EXISTS in the sky of
      * well-governed systems is worth having on its own. */
-    navy:   { size: 0.240, color: '#b8c6d8', accel: 0.0060, label: 'naval cutter' },
+    navy:   { size: 0.240, color: '#b8c6d8', accel: 0.0090, label: 'naval cutter' },
     /* THE ONE YOU RUN FROM. The cutter above is what gets dispatched after
      * you; this is what does not have to be dispatched, because it is
      * already where it intends to be. Twice the cutter's size and a third
@@ -2251,7 +2273,7 @@
      * back. Present now so the hull is in the sky before the mechanic
      * that calls one exists; being able to SEE the service is half of
      * knowing you can use it. */
-    tender: { size: 0.095, color: '#ffd36b', accel: 0.0125, label: 'rescue tender' }
+    tender: { size: 0.095, color: '#ffd36b', accel: 0.0188, label: 'rescue tender' }
   };
   var NAVY_NAMES = ['Resolute', 'Intransigent', 'Adamant', 'Sovereign', 'Implacable',
                     'Vigilant', 'Unyielding', 'Redoubt'];

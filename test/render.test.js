@@ -107,34 +107,27 @@ global.prompt = function () { return 'kawartha'; };
  * preferences are reachable headless — without it save.js correctly degrades
  * to "no save system" and the menu tests would pass by testing nothing.
  *
- * It is installed around those sections rather than for the whole file, on
- * purpose. Leaving it on globally changes what the rest of the suite is
- * running against: every dock starts actually serialising a career, and with
- * it switched on the slipspace-corridor section below fails (the charge
- * phase never advances, and drawing deep space reads `.mu` off undefined).
- * That looks like a real interaction between the save system and the
- * corridor and it is worth chasing — but it is not this file's job to change
- * the conditions the existing tests were written under while chasing it. */
+ * IT IS ON FOR THE WHOLE FILE, which is the condition a browser actually
+ * runs under. It used to be installed only around the menu sections,
+ * because switching it on globally broke the slipspace-corridor section
+ * two thousand lines below: the charge phase never advanced and drawing
+ * deep space read `.mu` off undefined. That was a real interaction between
+ * the save system and the corridor, and it no longer reproduces — the
+ * corridor's 32 checks pass with storage live, phase and all.
+ *
+ * So the workaround is gone rather than parameterised. A harness that runs
+ * under conditions the game never sees is a harness that will miss the
+ * next one of these, and the corridor check below ("the corridor is
+ * flying") is now the thing standing guard over it. */
 var fakeStore = {};
-var realStorage = global.localStorage;
-/* PSG_STORAGE=1 pins storage on for the WHOLE file, which is the condition a
- * browser actually runs under. It exists so the interaction above can be
- * reproduced on demand instead of by hand-editing this file, and so the day
- * it is fixed there is a one-word way to prove it. */
-var STORAGE_ALWAYS = process.env.PSG_STORAGE === '1';
-function withStorage(on) {
-  if (on || STORAGE_ALWAYS) {
-    global.localStorage = {
-      getItem: function (k) { return fakeStore[k] === undefined ? null : fakeStore[k]; },
-      setItem: function (k, v) { fakeStore[k] = String(v); },
-      removeItem: function (k) { delete fakeStore[k]; }
-    };
-  } else {
-    global.localStorage = realStorage;
-  }
-}
-
-if (STORAGE_ALWAYS) withStorage(true);
+global.localStorage = {
+  getItem: function (k) { return fakeStore[k] === undefined ? null : fakeStore[k]; },
+  setItem: function (k, v) { fakeStore[k] = String(v); },
+  removeItem: function (k) { delete fakeStore[k]; }
+};
+/* Kept as a no-op so the call sites below still read as "this section is
+ * about the save system". Nothing can turn storage off any more. */
+function withStorage() {}
 
 /* Load in the same order index.html does. */
 require('../src/vec3.js');
@@ -4739,6 +4732,95 @@ console.log('--- auto-dock ---');
   frames(2);
   check('any manual burn hands control back', !G.autodock);
   G.keys.w = false;
+})();
+
+/* THE AUTOPILOT AND THE GROUND. Every port above hangs in space, where the
+ * straight line to it is empty. A pad is bolted to several hundred
+ * kilometres of rock, and the straight line to one goes THROUGH the rock
+ * whenever it is not already on your side of the world — which the
+ * autopilot did, at three and a quarter kilometres a second, landing 521 km
+ * short of a port it was still flying an approach to.
+ *
+ * The far side is the case that catches it, so that is the case this flies.
+ */
+console.log('--- an approach to a port on a world ---');
+(function () {
+  newFlying('kawartha');
+  frames(2);
+  var keydown = listeners.keydown[0];
+  function press(k) { keydown({ key: k, shiftKey: false, preventDefault: function () {} }); }
+
+  var pad = G.sys.ports.filter(function (p) {
+    return (p.surface || p.underground) && p.parentBody && p.docking;
+  })[0];
+  check('the system has a port on a world to fly to', !!pad, pad && pad.name);
+  if (!pad) return;
+  var host = pad.parentBody;
+
+  /* Placed from the WORLD's centre, not from the pad: a start position
+   * measured from the pad is meaningless on a big planet — 900 km from a
+   * pad on a 3,700 km world, in some arbitrary direction, is underground. */
+  var hostPos = Sim.bodyPosition(host, G.sys, G.t);
+  var ps = Sim.bodyState(pad, G.sys, G.t);
+  var padUp = V.norm(V.sub(ps.pos, hostPos));
+  G.ship.docked = null; G.ship.landed = false;
+  G.cruise = null; G.autodock = null; G.dockTarget = null;
+  G.ship.pos = V.addScaled(hostPos, V.scale(padUp, -1), host.radius * 1.3);
+  G.ship.vel = V.clone(ps.vel);
+  Sim.refreshShip(G.ship);
+  G.navTarget = { kind: 'body', id: pad.id };
+  frames(1);
+
+  var mark = drawn.texts.length;
+  press('t'); press('t');
+  check('auto-dock engages on a port on a world', !!G.autodock);
+
+  /* Altitude is watched every frame, not sampled: flying through a planet
+   * takes a few hundred frames and a sampled trace can miss it entirely. */
+  var guard = 0, lowest = Infinity, overheadYet = false;
+  while (!G.ship.docked && !G.ship.landed && G.autodock && guard++ < 25000) {
+    frame();
+    var hp = Sim.bodyPosition(host, G.sys, G.t);
+    var rel = V.sub(G.ship.pos, hp);
+    var alt = V.len(rel) - host.radius;
+    /* Only until it is actually over the pad — the last leg of a shaft
+     * approach goes below the surface on purpose, which is what a shaft
+     * is. */
+    var up = V.norm(V.sub(Sim.bodyPosition(pad, G.sys, G.t), hp));
+    var along = V.dot(rel, up);
+    var across = V.len(V.sub(rel, V.scale(up, along)));
+    /* ON THE PAD'S SIDE of the world as well as on its axis — the start
+     * position is the ANTIPODE, which is also on the axis, and without the
+     * sign this flag went true on the first frame and the altitude watch
+     * below never recorded anything at all. */
+    if (along > 0 && across < host.radius * 0.05) overheadYet = true;
+    if (!overheadYet && alt < lowest) lowest = alt;
+  }
+  check('it renders the whole approach without error',
+        errorsSince(mark).length === 0, errorsSince(mark)[0]);
+  check('it reaches the pad from the far side of the world',
+        G.ship.docked === pad.id,
+        'docked=' + G.ship.docked + ' landed=' + G.ship.landed +
+        ' after ' + guard + ' frames');
+  /* THE CHECK THAT WOULD HAVE CAUGHT IT. Not "did it arrive" — a crash
+   * arrives too, and reports itself as landed on the way. */
+  /* A MARGIN, NOT "above zero". A ship that flew into the ground reports
+   * an altitude of about nought on the frame it stopped, so a bare
+   * lowest > 0 is passed by the crash it is supposed to catch. The
+   * approach is supposed to stay CLEAR of the world, and clear is a
+   * fraction of the world. */
+  check('and never flies through the planet to get there',
+        lowest > host.radius * 0.004,
+        'lowest ' + lowest.toFixed(1) + ' km above a ' + host.radius.toFixed(0) + ' km world');
+  /* The gear is the other half of arriving: a pad will not catch a ship
+   * with it up, and an autopilot that flies a perfect approach into that
+   * refusal has not arrived either. */
+  check('with the gear down, which a pad requires', !!G.ship.gear);
+
+  if (G.ship.docked) Sim.undockShip(G.ship, G.sys, G.t, 0.003);
+  G.ship.docked = null; G.dockTarget = null; G.autodock = null;
+  G.ship.gear = false;
+  G.fugitive = null; G.wanted = {};
 })();
 
 /* ---- the other two autopilots -----------------------------------------

@@ -7653,6 +7653,68 @@
     return s;
   }
 
+  /* HOW OFTEN A SCREEN IS ACTUALLY REPAINTED.
+   *
+   * Every cockpit frame used to clear three to five offscreen canvases,
+   * redraw a full instrument page into each, and hand every one of them to
+   * the GPU as a fresh texture — sixty times a second, for readouts that
+   * change a dozen times a second at their liveliest and are, by design,
+   * too foreshortened to read anyway (the flat band along the bottom is
+   * where the numbers live). That was the whole of why first person was
+   * the slow view: nothing else in the game repaints a canvas and uploads
+   * it per frame, and it happens in no other view.
+   *
+   * Twelve hertz, staggered per screen so they do not all fall due on the
+   * same frame. The panels are the thing being throttled, not the frame —
+   * the world, the glass, the ladder and the band all still run at full
+   * rate, so the ship does not feel any slower to fly. A screen is at
+   * worst 83 ms stale, which is under the reaction time of the pilot
+   * reading it.
+   *
+   * MFD_HZ = 0 disables the throttle entirely, which is the one-line way
+   * to prove that the throttle is what a measurement is measuring. */
+  var MFD_HZ = 12;
+  var MFD_CLOCKS = {};
+
+  function mfdNow(nowMs) {
+    if (typeof nowMs === 'number') return nowMs;
+    if (typeof performance !== 'undefined' && performance.now) return performance.now();
+    return Date.now();
+  }
+
+  /* Should this panel's readout be redrawn this frame? False means the
+   * caller should hand the previous picture straight back to the GPU with
+   * mfdReuse rather than skipping the panel, which would blank it. */
+  function mfdDue(panel, nowMs) {
+    if (!panel || !MFD_HZ) return true;
+    /* The 2D path draws into the frame's own context, so there is no
+     * previous picture to reuse: it has to be redrawn or it is not there. */
+    if (!mfdGpu(panel)) return true;
+    var s = MFD_SURFACES[panel.id];
+    if (!s || s.canvas.width !== panel.w || s.canvas.height !== panel.h) return true;
+    var now = mfdNow(nowMs), period = 1000 / MFD_HZ;
+    var last = MFD_CLOCKS[panel.id];
+    if (last === undefined) {
+      /* Spread the first due time across the period by the panel's own
+       * name, so five screens installed on the same frame do not then
+       * refresh together forever after. */
+      var spread = RNG ? (RNG.hashString('mfd|' + panel.id) % 1000) / 1000 : 0;
+      MFD_CLOCKS[panel.id] = now - spread * period;
+      return true;
+    }
+    if (now - last >= period) { MFD_CLOCKS[panel.id] = now; return true; }
+    return false;
+  }
+
+  /* Re-queue the picture this screen already has. */
+  function mfdReuse(panel) {
+    if (!panel) return false;
+    var s = MFD_SURFACES[panel.id];
+    if (!s || !mfdGpu(panel) || !panel.cam) return false;
+    global.GLWorld.queuePanel(panel.cam, panel.world, s.canvas, 1, false);
+    return true;
+  }
+
   /* Can this panel go through the GPU as a real quad in the world? */
   function mfdGpu(panel) {
     return !!(panel && panel.world && global.GLWorld &&
@@ -7847,7 +7909,7 @@
     drawCockpitInterior: drawCockpitInterior,
     drawGlass: drawGlass,
     polyBounds: polyBounds,
-    mfdBegin: mfdBegin,
+    mfdBegin: mfdBegin, mfdDue: mfdDue, mfdReuse: mfdReuse,
     mfdEnd: mfdEnd,
     glassBegin: glassBegin,
     glassEnd: glassEnd,

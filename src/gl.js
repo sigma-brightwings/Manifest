@@ -795,7 +795,7 @@
   var starProg = null, starUni = null, starVao = null, starCount = 0;
   var meshProg = null, meshUni = null, meshQueue = [], meshSeq = 0;
   var panelProg = null, panelUni = null, panelVao = null, panelBuf = null;
-  var panelQueue = [], panelTex = [];
+  var panelQueue = [], panelSlots = [];
 
   /* The logarithmic depth range. NEAR is ten centimetres, because the
    * cockpit view sits about a metre from its own console; FAR is far past
@@ -1140,7 +1140,7 @@
    * The eye subtraction happens HERE, in JavaScript doubles, for the same
    * reason queueMesh does it: a panel a metre away and a star ten billion
    * km away cannot both be expressed in a float. */
-  GL.queuePanel = function (cam, corners, source, alpha) {
+  GL.queuePanel = function (cam, corners, source, alpha, dirty) {
     if (!gl || !panelProg || !corners || corners.length !== 4 || !source) {
       return false;
     }
@@ -1151,27 +1151,39 @@
                  z: corners[i].z - cam.eye.z });
     }
     panelQueue.push({ rel: rel, src: source, cam: cam,
-                      alpha: (typeof alpha === 'number') ? alpha : 1 });
+                      alpha: (typeof alpha === 'number') ? alpha : 1,
+                      dirty: dirty !== false });
     return true;
   };
 
-  /* One GL texture per queue slot, reused across frames. The MFD content
-   * changes every frame, so the upload is unavoidable; allocating a new
-   * texture for it would not be. */
-  function panelTexture(i) {
-    if (!panelTex[i]) {
-      var t = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, t);
-      /* CLAMP and LINEAR, no mips. A readout is viewed at roughly its own
-       * size and wrapping would drag the far edge of the screen onto the
-       * near one, which is the sort of artefact that reads as corruption. */
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      panelTex[i] = t;
+  /* ONE TEXTURE PER SOURCE CANVAS, not per queue slot.
+   *
+   * Per-slot was wrong in a way that only cost pixels when the queue
+   * changed shape: slot 2 is the right-hand screen on a frame with three
+   * panels and the rear-left screen on a frame with five, so a panel could
+   * be drawn holding the last frame's picture of a different panel. Keyed
+   * on the canvas it came from, a screen owns its texture for as long as
+   * that canvas exists.
+   *
+   * It is also what makes skipping an upload possible at all — see the
+   * `dirty` flag below. A texture that might belong to a different panel
+   * next frame has to be rewritten every frame by definition. */
+  function panelSlot(src) {
+    for (var i = 0; i < panelSlots.length; i++) {
+      if (panelSlots[i].src === src) return panelSlots[i];
     }
-    return panelTex[i];
+    var t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    /* CLAMP and LINEAR, no mips. A readout is viewed at roughly its own
+     * size and wrapping would drag the far edge of the screen onto the
+     * near one, which is the sort of artefact that reads as corruption. */
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    var slot = { src: src, tex: t, w: 0, h: 0 };
+    panelSlots.push(slot);
+    return slot;
   }
 
   function drawPanels() {
@@ -1216,10 +1228,27 @@
       }
       gl.bindBuffer(gl.ARRAY_BUFFER, panelBuf);
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, verts);
-      gl.bindTexture(gl.TEXTURE_2D, panelTexture(i));
-      try {
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, p.src);
-      } catch (e) { continue; }      // a zero-sized canvas, mid-resize
+      var slot = panelSlot(p.src);
+      var sw = p.src.width | 0, sh = p.src.height | 0;
+      if (!sw || !sh) continue;                 // a zero-sized canvas, mid-resize
+      gl.bindTexture(gl.TEXTURE_2D, slot.tex);
+      /* ALLOCATE ONCE, THEN WRITE INTO IT, and only when the readout was
+       * actually repainted. texImage2D reallocates the texture's storage
+       * every call; five of those a frame, of a 460x178 canvas each, is
+       * about a megabyte and a half of CPU-to-GPU traffic sixty times a
+       * second for a screen whose content changes a dozen times a second
+       * at most. This is the cockpit-only cost that made first person the
+       * slow view on an integrated GPU. */
+      if (slot.w !== sw || slot.h !== sh) {
+        try {
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, p.src);
+        } catch (e) { continue; }
+        slot.w = sw; slot.h = sh;
+      } else if (p.dirty) {
+        try {
+          gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, p.src);
+        } catch (e) { continue; }
+      }
       gl.uniform1f(panelUni.uAlpha, p.alpha);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
     }

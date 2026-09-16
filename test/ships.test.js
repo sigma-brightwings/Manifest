@@ -12,6 +12,7 @@ var V = require('../src/vec3.js');
 var Eco = require('../src/economy.js');
 var Gen = require('../src/generate.js');
 var Sim = require('../src/sim.js');
+var Combat = require('../src/combat.js');
 
 var pass = 0, fail = 0;
 function check(n, c, d) { if (c) pass++; else { fail++; console.log('  FAIL  ' + n + (d ? '   ' + d : '')); } }
@@ -153,6 +154,22 @@ console.log('--- a laden ship cannot outrun a pirate; an empty one can ---');
   var pirateAccel = Gen.PATROL_CLASSES.pirate.accel;
   var planet = sys.bodies.filter(function (b) { return b.kind === 'planet'; })[1];
   var empty = Sim.circularOrbit(planet, sys, 0, planet.radius * 0.5, 0, 0);
+  /* A REAL TALON, not the bare hull circularOrbit hands back.
+   *
+   * That hull carries SHIP_SPEC's thrust — the generator's lift reference,
+   * which is deliberately frozen at the value the galaxy's surface ports
+   * were placed against and is no longer what any ship flies. So this
+   * whole section was measuring a ship that does not exist: the hulls were
+   * given half as much thrust again and all three checks below sat there
+   * passing. Ask combat.js for the numbers and the guard points at the
+   * ship the player is actually in. */
+  var talon = Combat.HULLS.talon;
+  empty.dryMass = talon.dryMass;
+  empty.thrustKN = talon.thrustKN;
+  empty.cargoCap = talon.cargoCap;
+  empty.fuelCap = talon.fuelCap; empty.fuel = talon.fuelCap;
+  empty.thrusterCap = talon.thrusterCap; empty.thrusterFuel = talon.thrusterCap;
+  Sim.refreshShip(empty);
   /* This is the counter-play to being held up, and it is entirely a
    * consequence of the mass model rather than a rule anywhere. It is also
    * fragile: anything that changes the ship's dry mass, its thrust or its
@@ -170,6 +187,25 @@ console.log('--- a laden ship cannot outrun a pirate; an empty one can ---');
   check('a half-full hold is roughly a match for one',
         Math.abs(empty.maxAccel - pirateAccel) / pirateAccel < 0.25,
         (empty.maxAccel * 1000).toFixed(2) + ' vs ' + (pirateAccel * 1000).toFixed(2) + ' m/s2');
+  console.log('  laden ' + (empty.maxAccel * 1000).toFixed(1) +
+              ' m/s2 against a pirate at ' + (pirateAccel * 1000).toFixed(1));
+
+  /* AND EVERY HULL CAN STILL LEAVE THE WORST PAD IN THE GALAXY. The
+   * generator decides where a surface port may exist from a frozen
+   * reference thrust (SHIP_SPEC), not from the hulls — which is safe only
+   * for as long as every real hull is stronger than the reference. A hull
+   * lighter on thrust than that would be a ship that can land somewhere it
+   * can never leave, and the player would find that out at the bottom of a
+   * gravity well. */
+  var worst = Gen.MAX_SURFACE_G;
+  check('the galaxy has a worst pad at all', worst > 0, String(worst));
+  Object.keys(Combat.HULLS).forEach(function (id) {
+    var h = Combat.HULLS[id];
+    var laden = h.dryMass + h.fuelCap + h.thrusterCap + h.cargoCap;
+    var g = h.thrustKN / laden;
+    check('a laden ' + id + ' can lift off the heaviest world with a port',
+          g > worst, g.toFixed(2) + ' vs ' + worst.toFixed(2) + ' m/s2');
+  });
 })();
 
 console.log('');

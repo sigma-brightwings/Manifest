@@ -537,6 +537,97 @@ console.log('--- the eye never goes under the floor ---');
         (elevations[3].margin * 1000).toFixed(1) + ' m at a 300 m boom');
 })();
 
+console.log('--- the screens do not repaint every frame ---');
+(function () {
+  /* THE COCKPIT-ONLY COST. Three to five instrument screens, each a full
+   * offscreen canvas repainted and uploaded to the GPU as a texture, once
+   * per frame — in the only view that has them. That is why first person
+   * was the slow view in the standalone build and nowhere else.
+   *
+   * This stands up just enough of a canvas and a GPU for render.js to
+   * take its GPU path, and then counts. */
+  var uploads = 0, reuses = 0;
+  function fakeCanvas(w, h) {
+    return {
+      width: w, height: h,
+      getContext: function () {
+        return { save: function () {}, restore: function () {},
+                 setTransform: function () {}, fillRect: function () {},
+                 globalCompositeOperation: '', globalAlpha: 1, fillStyle: '' };
+      }
+    };
+  }
+  var hadDoc = global.document, hadGl = global.GLWorld, hadPerf = global.performance;
+  global.document = { createElement: function () { return fakeCanvas(0, 0); } };
+  global.GLWorld = {
+    available: true, panels: true,
+    queuePanel: function (cam, world, src, alpha, dirty) {
+      if (dirty === false) reuses++; else uploads++;
+      return true;
+    }
+  };
+  var t = 0;
+  global.performance = { now: function () { return t; } };
+
+  function panel(id) {
+    return { id: id, w: 460, h: 178, world: [{}, {}, {}, {}], cam: {},
+             quad: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 40 }, { x: 0, y: 40 }] };
+  }
+  var ids = ['left', 'centre', 'right', 'rear-left', 'rear-right'];
+
+  /* One frame of the old behaviour, to create the surfaces. */
+  ids.forEach(function (id) {
+    var p = panel(id);
+    var mc = Render.mfdBegin(null, p);
+    check('screen ' + id + ' takes the GPU path', !!mc);
+    if (mc) Render.mfdEnd(mc, p);
+  });
+  check('every screen was uploaded on its first frame', uploads === ids.length,
+        uploads + ' of ' + ids.length);
+
+  /* Now a second of flight at sixty frames a second. */
+  uploads = 0; reuses = 0;
+  var repaints = 0;
+  for (var f = 0; f < 60; f++) {
+    t += 1000 / 60;
+    ids.forEach(function (id) {
+      var p = panel(id);
+      if (!Render.mfdDue(p) && Render.mfdReuse(p)) return;
+      repaints++;
+      var mc = Render.mfdBegin(null, p);
+      if (mc) Render.mfdEnd(mc, p);
+    });
+  }
+  var perScreen = repaints / ids.length;
+  console.log('  ' + ids.length + ' screens, 60 frames: ' + repaints +
+              ' repaints (' + perScreen.toFixed(1) + ' each), ' +
+              uploads + ' uploads, ' + reuses + ' reused');
+  /* Twelve hertz, give or take where the stagger lands. The number that
+   * matters is that it is nowhere near sixty. */
+  check('a screen repaints about twelve times a second, not sixty',
+        perScreen >= 10 && perScreen <= 14, perScreen.toFixed(1) + ' per screen');
+  check('and every frame still puts every screen on the glass',
+        uploads + reuses === 60 * ids.length, (uploads + reuses) + ' of ' + (60 * ids.length));
+  check('so four frames in five cost nothing but a draw call',
+        reuses > uploads * 3, reuses + ' reused against ' + uploads + ' uploaded');
+
+  /* THE THROTTLE IS NOT A SKIP. A panel that is not due must still be
+   * handed to the GPU — the failure mode of getting this wrong is a black
+   * hole in the console, not a stale readout. */
+  var stale = panel('centre');
+  check('a screen that is not due is reused rather than dropped',
+        Render.mfdDue(stale) || Render.mfdReuse(stale));
+
+  /* AND THE 2D PATH IS UNTHROTTLED, because there is nothing to reuse: it
+   * draws into the frame's own context, so a frame it sits out is a frame
+   * the screen is not on. */
+  global.GLWorld = { available: false };
+  var flat = panel('left');
+  check('without a GPU every frame redraws', Render.mfdDue(flat));
+
+  global.document = hadDoc; global.GLWorld = hadGl; global.performance = hadPerf;
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
