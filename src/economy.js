@@ -245,8 +245,41 @@
     { id: 'shipyard',     name: 'Shipyard',       bias: ['alloys', 'robotics'] },
     { id: 'agri',         name: 'Agricultural co-op', bias: ['grain', 'livestock', 'fish'] },
     { id: 'mining',       name: 'Mining head',    bias: ['ores', 'rare', 'fissile'] },
-    { id: 'reprocessing', name: 'Reprocessing plant', bias: [], wasteSink: true }
+    { id: 'reprocessing', name: 'Reprocessing plant', bias: [], wasteSink: true },
+    /* NEVER PICKED BY pickRole, and that is deliberate. A milfuel factory is
+     * not something a world grows into; it is something a navy (or, in a
+     * hold, a Syndicate) puts there. licenseMilitaryFuel promotes one port
+     * per licensed system, downstream of every rng draw, so adding this row
+     * changes no seed's generation by itself. */
+    { id: 'milfuel',      name: 'Milfuel factory',   bias: [], milfuelPlant: true }
   ];
+
+  /* ---- THE FUEL CHAIN, IN ONE PLACE ------------------------------------
+   * Astra's rule, stated in her words: "10 units of [waste] can be
+   * reprocessed into 1 milfuel or 5 fissiles... 5 fissiles are needed to
+   * make 1 milfuel at every milfuel factory."
+   *
+   * So there are two ways to a slug and they meet in the middle:
+   *
+   *     10 t waste  --(unlicensed plant)-->  5 t fissiles
+   *     10 t waste  --(LICENSED plant)---->  1 t milfuel
+   *      5 t fissiles --(milfuel factory)->  1 t milfuel
+   *
+   * Which makes the two routes agree on the arithmetic, and makes the
+   * licence the only thing that decides which one a given plant runs.
+   *
+   * THE PRICES DO NOT AGREE WITH THE ARITHMETIC and that is a deliberate
+   * open question rather than an oversight: five fissiles are 4,900 cr and
+   * a slug is 1,250, so a factory "destroys" value on paper. Nothing in
+   * this game simulates a port's profit — `local` is driven by the ratio of
+   * production to consumption and nothing else — so what the ratio actually
+   * buys the player is the two things they can act on: a factory is a
+   * hungry fissile IMPORTER that pays up, and the only civilian-reachable
+   * milfuel EXPORTER that is not a waste plant. If the paper loss ever
+   * wants closing, the lever is milfuel's base price, not this ratio. */
+  var WASTE_PER_MILFUEL = 10;      // t of waste per slug, at a licensed plant
+  var WASTE_PER_FISSILE = 2;       // t of waste per tonne of reclaimed fissile
+  var FISSILE_PER_MILFUEL = 5;     // t of fissiles per slug, at a factory
   var ROLE_BY_ID = {};
   for (var ri = 0; ri < PORT_ROLES.length; ri++) ROLE_BY_ID[PORT_ROLES[ri].id] = PORT_ROLES[ri];
 
@@ -476,11 +509,32 @@
      * subsistence outpost makes almost none, a fully industrialised world
      * makes an embarrassing amount of it, and that asymmetry is what makes
      * the disposal run worth flying. */
-    var wasteRow = ensure('waste');
+    var wasteRow = ensure('waste'), reclaimed = 0;
     wasteRow.prod += flow * dev * dev * rng.range(0.12, 0.34);
     wasteRow.sink = !!role.wasteSink;
     if (role.wasteSink) {
-      wasteRow.cons += flow * rng.range(1.2, 3.0);   // capacity to absorb it
+      var intake = flow * rng.range(1.2, 3.0);       // capacity to absorb it
+      wasteRow.cons += intake;
+      /* AND IT COMES OUT AGAIN AS SOMETHING. A plant that only ever ate
+       * waste was a hole in the ground with a fee attached — the one
+       * industry in the game with an input and no product. Reclaimed
+       * fissiles are what a reprocessing plant is FOR, at Astra's ratio of
+       * ten tonnes in to five out, which also gives the waste run a return
+       * leg: you are paid to bring the drums and you can fill the hold
+       * again before you leave.
+       *
+       * A LICENCE SPENDS THIS INTAKE INSTEAD. licenseMilitaryFuel takes the
+       * same tonnage back out of here and turns it into slugs, so a plant
+       * runs one line or the other rather than both. It has to be written
+       * in that direction rather than this one: the licence depends on a
+       * naval garrison, which is not decided until long after the market
+       * is built. */
+      ensure('fissile').prod += intake / WASTE_PER_FISSILE;
+      /* Written down as well as added, because the licence has to be able
+       * to take back exactly this line and nothing else: a plant on a
+       * molten world produces fissiles NATIVELY too, and erasing that
+       * along with the reclaim would delete a mine to grant a licence. */
+      reclaimed = intake / WASTE_PER_FISSILE;
     }
 
     /* Turn flows into stock: capacity is a few days of throughput, floored
@@ -514,6 +568,14 @@
         return (BY_ID[a].tier - BY_ID[b].tier) || (BY_ID[a].base - BY_ID[b].base);
       }),
       dev: dev, pop: pop, role: roleId, roleName: role.name,
+      /* THE FUEL CHAIN'S OWN BOOKKEEPING, kept beside the rows rather than
+       * inferred back out of them. `reclaim` is the tonnage of fissiles
+       * this port makes out of waste (0 everywhere but a plant), `slugs`
+       * what it presses of milfuel, `feed` the fissiles that costs it. The
+       * licence pass moves numbers between these three and the rows have to
+       * agree with them afterwards, which is exactly the sort of arithmetic
+       * that goes quietly wrong when each reader recomputes it. */
+      reclaim: reclaimed, slugs: 0, feed: 0,
       inbound: [],       // filled in once traffic routes exist
       ledger: {},        // player-caused perturbation, decays
       live: null,        // stepped near-field state, or null when dormant
@@ -588,6 +650,34 @@
     return !!(port && port.market && port.market.role === 'reprocessing');
   }
 
+  /* ---- siting a milfuel factory ----------------------------------------
+   * Astra: "Add milfuel factories as a space station type."
+   *
+   * One per licensed system at most, and only where there is a port with
+   * nothing better to do — the generic `orbital` role, which is the one
+   * this generator hands out when a world suggested nothing in particular.
+   * Promoting a refinery or a farm would delete an industry to add one; a
+   * plain orbital port is the empty slot the galaxy already has.
+   *
+   * No rng. The port is chosen by a stable rule (best-developed generic
+   * port, ties broken by id) so the same seed puts the factory in the same
+   * place forever, and a system with no spare port simply has no factory —
+   * which is what keeps them rare enough to be worth flying to. */
+  function siteMilfuelFactory(sys) {
+    var ports = (sys && sys.ports) || [];
+    var best = null;
+    for (var i = 0; i < ports.length; i++) {
+      var p = ports[i], m = p.market;
+      if (!m || m.role !== 'orbital') continue;
+      if (!best || m.dev > best.market.dev ||
+          (m.dev === best.market.dev && String(p.id) < String(best.id))) best = p;
+    }
+    if (!best) return null;
+    best.market.role = 'milfuel';
+    best.market.roleName = 'Milfuel factory';
+    return best;
+  }
+
   function licenseMilitaryFuel(sys) {
     var who = licensor(sys);
     if (!who) return;
@@ -602,12 +692,26 @@
       if (!waste) continue;
 
       /* Yield is off the plant's own intake, not off its size: what a
-       * licensed plant can breed is limited by what it is handed. The
-       * hash gives a stable per-plant efficiency so two plants of the same
-       * capacity are not interchangeable. */
+       * licensed plant can breed is limited by what it is handed. Ten
+       * tonnes of drums to the slug, which is Astra's ratio and now the
+       * only one in the file — the old 10-24% hashed efficiency band was a
+       * number nobody could state, and stating it is worth more than the
+       * variety was.
+       *
+       * The intake is SPENT, not doubled. buildPortMarket already turned
+       * this plant's whole intake into reclaimed fissiles; the licence
+       * takes that line back out at the ratio it was added, so the fuel
+       * chain's two routes stay mutually exclusive and a licensed plant
+       * stops being a fissile exporter. */
       var h = RNG.hashString('licence|' + (sys.seed || '?') + '|' + port.id);
-      var yieldFrac = 0.10 + (h % 1000) / 1000 * 0.14;      // 10-24%
-      var prod = Math.max(0.4, (waste.cons || 0) * yieldFrac);
+      var intake = waste.cons || 0;
+      var prod = Math.max(0.4, intake / WASTE_PER_MILFUEL);
+      var fisRow = mkt.rows.fissile;
+      if (fisRow && mkt.reclaim) {
+        fisRow.prod = Math.max(0, fisRow.prod - mkt.reclaim);
+      }
+      mkt.reclaim = 0;
+      mkt.slugs = prod;
       /* THE NAVY TAKES MOST OF IT, and that is the point rather than a
        * balancing fudge. A licensed plant is not an open wholesaler; it is
        * a supplier under contract, and what reaches the market is the
@@ -626,6 +730,30 @@
       addRow(mkt, 'milfuel', prod, prod * uptake);
       made++;
     }
+    /* AND THE OTHER FEEDSTOCK. A factory does not wait for drums: it is
+     * handed fissiles and presses slugs out of them, five tonnes to one,
+     * which is the same arithmetic the waste route arrives at by way of a
+     * reprocessing plant. Sized off the port's own scale rather than off an
+     * intake, because unlike a plant it is not limited by what turns up —
+     * it is limited by what the navy sends it.
+     *
+     * The uptake rule applies here too and for the same reason: most of
+     * what it presses is spoken for before it is pressed. */
+    var factory = siteMilfuelFactory(sys);
+    if (factory) {
+      var fm = factory.market;
+      var hf = RNG.hashString('factory|' + (sys.seed || '?') + '|' + factory.id);
+      var scale = 8 + (fm.pop || 0) * 0.06;
+      var slugs = Math.max(0.6, scale * (0.05 + (hf % 1000) / 1000 * 0.07));
+      var take = 0.45 + ((hf >>> 10) % 1000) / 1000 * 0.35;
+      if (who === 'syndicate') take = Math.max(0.2, take - 0.10);
+      addRow(fm, 'milfuel', slugs, slugs * take);
+      addRow(fm, 'fissile', 0, slugs * FISSILE_PER_MILFUEL);
+      fm.slugs = slugs;
+      fm.feed = slugs * FISSILE_PER_MILFUEL;
+      made++;
+    }
+
     if (!made) return;
 
     /* Somebody has to burn it. Naval hulls do, and they are serviced at

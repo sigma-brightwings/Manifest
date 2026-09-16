@@ -685,7 +685,7 @@
   var STATION_MODELS = {
     orbital: 'orbital', highport: 'highport', refinery: 'refinery',
     shipyard: 'shipyard', agri: 'agri', mining: 'mining',
-    reprocessing: 'reprocessing'
+    reprocessing: 'reprocessing', milfuel: 'milfuel'
   };
 
   /* What KIND of port this is, before any model is chosen. Three answers,
@@ -1818,6 +1818,38 @@
     });
     merge(reprocessing, tube(6, 0.16, 0.16, 0.20, true), 0, 0, 0.75);
 
+    /* MILFUEL FACTORY: a press, not a plant. Astra asked for these as a
+     * station type of their own, and the silhouette says what the economy
+     * says — fissiles go in, slugs come out. A heavy shielded core with a
+     * cask carousel around it (four of them, because the casks are what a
+     * factory is FOR and one would read as an antenna), a press gantry down
+     * one side, and a hazard band you can see before you can see anything
+     * else.
+     *
+     * The band is emissive rather than lit, which is the trick this file
+     * uses everywhere for a light source it does not want to model: a flat
+     * 1.15 multiplier at a dark amber reads as a floodlit stripe from any
+     * angle and costs nothing.
+     *
+     * Deliberately taller than it is wide, so it does not read as another
+     * reprocessing drum at approach range — they are next-door industries
+     * and the whole point of the role is that you can tell which one you
+     * are flying to. */
+    var milfuel = emptyMesh();
+    merge(milfuel, tube(8, 0.34, 0.34, 0.74, true), 0, 0, 0);          // core
+    merge(milfuel, rimRing(8, 0.40, 0.05, 0.05), 0, 0, 0.30, undefined, '!#7a5a1e');
+    merge(milfuel, rimRing(8, 0.40, 0.05, 0.05), 0, 0, -0.30, undefined, '!#7a5a1e');
+    [0, 1, 2, 3].forEach(function (i) {
+      var a = (i / 4) * K.TAU + 0.78;
+      merge(milfuel, tube(6, 0.12, 0.12, 0.30, true),
+            Math.cos(a) * 0.56, Math.sin(a) * 0.56, -0.16);           // casks
+      merge(milfuel, box(0.05, 0.05, 0.04),
+            Math.cos(a) * 0.56, Math.sin(a) * 0.56, 0.18);            // cask cap
+    });
+    merge(milfuel, box(0.10, 0.44, 0.08), 0.46, 0, 0.52);             // press gantry
+    merge(milfuel, box(0.09, 0.09, 0.22), 0.46, 0, 0.74);             // ram
+    merge(milfuel, tube(6, 0.14, 0.14, 0.18, true), 0, 0, 0.88);      // stack
+
     /* Surface starport: a pad, a control tower and a hab dome. Built flat
      * in xy and stood up by the caller, because on the ground "up" is a
      * direction the world decides, not the station. */
@@ -2138,7 +2170,7 @@
     STATION_MESHES = {
       orbital: orbital, highport: highport, refinery: refinery,
       shipyard: shipyard, agri: agri, mining: mining,
-      reprocessing: reprocessing, surface: surface,
+      reprocessing: reprocessing, milfuel: milfuel, surface: surface,
       bay: bay, underground: underground, hall: hall
     };
 

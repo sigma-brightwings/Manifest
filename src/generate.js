@@ -2614,6 +2614,26 @@
       row.cap = Math.max(row.cap, 900);
       worst.market.role = 'reprocessing';
       worst.market.roleName = 'Reprocessing plant';
+      /* AND IT RECLAIMS LIKE ANY OTHER PLANT. A port promoted here used to
+       * be a reprocessing plant in name and a hole in the ground in fact:
+       * it took the drums and produced nothing, because the reclaim line is
+       * derived in buildPortMarket and this promotion happens afterwards.
+       * Twelve of the plants in a 120-system sweep were this one. */
+      var fis = worst.market.rows.fissile;
+      if (!fis) {
+        fis = worst.market.rows.fissile =
+          { id: 'fissile', prod: 0, cons: 0, cap: 0, local: 1,
+            value: Eco.BY_ID.fissile.base };
+        worst.market.order.push('fissile');
+        worst.market.order.sort(function (a, b) {
+          return (Eco.BY_ID[a].tier - Eco.BY_ID[b].tier) ||
+                 (Eco.BY_ID[a].base - Eco.BY_ID[b].base);
+        });
+      }
+      var gain = row.cons / 2;                 // Eco.WASTE_PER_FISSILE
+      fis.prod += gain;
+      fis.cap = Math.max(fis.cap, Math.round(gain * 8 + 120));
+      worst.market.reclaim = (worst.market.reclaim || 0) + gain;
     }
   }
 

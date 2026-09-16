@@ -760,6 +760,14 @@ console.log('--- military fuel comes from a licence, not from development ---');
    * serviced. A world's development has nothing to do with either. */
   var bredWrongRole = 0, bredUnlicensed = 0, burntWrongRole = 0;
   var navySys = 0, syndSys = 0, breeders = 0, systems = 0, devs = [];
+  /* THE CHAIN, counted as it goes past. Astra's ratios are 10 waste to 5
+   * fissiles, 10 waste to 1 slug, 5 fissiles to 1 slug, and the interesting
+   * claim is not any one of them but that a plant runs ONE line: a licensed
+   * plant breeds slugs and stops reclaiming fissiles, an unlicensed one
+   * does the opposite. */
+  var factories = 0, factoriesUnlicensed = 0, factoryRatioBad = 0;
+  var reclaimers = 0, licensedStillReclaiming = 0, reclaimRatioBad = 0;
+  var slugRatioBad = 0;
   function sweep(sd, opts) {
     var sys = Gen.generateSystem(sd, opts);
     systems++;
@@ -768,9 +776,38 @@ console.log('--- military fuel comes from a licence, not from development ---');
     if (who === 'syndicate') syndSys++;
     var bred = false;
     (sys.ports || []).forEach(function (p) {
-      var row = p.market.rows.milfuel;
-      if (!row) return;
       var role = p.market.role;
+      var waste = p.market.rows.waste, fis = p.market.rows.fissile;
+      var row = p.market.rows.milfuel;
+
+      if (role === 'reprocessing' && waste && waste.cons > 0) {
+        if (row && row.prod > 0) {
+          /* Licensed: the intake went into slugs at ten to one, and the
+           * reclaim line it used to feed is closed. Native fissile mining
+           * on the same rock is none of the licence's business, which is
+           * why this asks the plant's own reclaim figure rather than the
+           * market row. */
+          if (Math.abs(row.prod - waste.cons / 10) > 1e-6 && row.prod > 0.4001) slugRatioBad++;
+          if (p.market.reclaim > 0) licensedStillReclaiming++;
+        } else {
+          reclaimers++;
+          if (Math.abs((p.market.reclaim || 0) - waste.cons / 2) > 1e-6) reclaimRatioBad++;
+          if (!fis || fis.prod < p.market.reclaim - 1e-6) reclaimRatioBad++;
+        }
+      }
+
+      if (role === 'milfuel') {
+        factories++;
+        if (!who) factoriesUnlicensed++;
+        /* Five tonnes of fissiles for every tonne of slug it presses. The
+         * port may consume a little fissile on its own account, so the
+         * claim is about the factory's line, not the whole row. */
+        if (!row || !fis || Math.abs(p.market.feed - p.market.slugs * 5) > 1e-6 ||
+            Math.abs(p.market.slugs - row.prod) > 1e-6 ||
+            fis.cons < p.market.feed - 1e-6) factoryRatioBad++;
+      }
+
+      if (!row) return;
       if (row.prod > 0 && row.cons > 0 && role === 'reprocessing') {
         bred = true;
         if (!who) bredUnlicensed++;
@@ -783,11 +820,12 @@ console.log('--- military fuel comes from a licence, not from development ---');
         devs.push(p.market.dev);
       } else if (row.prod > 0) {
         /* A yard blends its own slugs, so a little production there is
-         * expected; anywhere else producing it is not. */
-        if (role !== 'shipyard' && role !== 'highport') bredWrongRole++;
+         * expected; a milfuel factory does nothing else; anywhere else
+         * producing it is not. */
+        if (role !== 'shipyard' && role !== 'highport' && role !== 'milfuel') bredWrongRole++;
         else if (!who) bredUnlicensed++;
       }
-      if (row.cons > 0 && role !== 'reprocessing' &&
+      if (row.cons > 0 && role !== 'reprocessing' && role !== 'milfuel' &&
           role !== 'shipyard' && role !== 'highport') burntWrongRole++;
     });
     if (bred) breeders++;
@@ -800,7 +838,7 @@ console.log('--- military fuel comes from a licence, not from development ---');
   console.log('  ' + breeders + ' of ' + systems + ' systems breed it (' + navySys +
               ' naval, ' + syndSys + ' syndicate); the plants that do run development ' +
               (devs.length ? devs[0].toFixed(2) + ' to ' + devs[devs.length - 1].toFixed(2) : 'n/a'));
-  check('military fuel is only ever bred at a reprocessing plant',
+  check('military fuel is only ever bred at a plant or a factory',
         bredWrongRole === 0, bredWrongRole + ' elsewhere');
   check('and only in a system that licenses it', bredUnlicensed === 0,
         bredUnlicensed + ' unlicensed');
@@ -816,6 +854,22 @@ console.log('--- military fuel comes from a licence, not from development ---');
   check('the plants that breed it really are below the industry threshold',
         devs.length > 0 && devs[0] < 0.52,
         devs.length ? 'lowest ' + devs[0].toFixed(3) : 'none');
+
+  /* ---- and the chain the slugs come down ------------------------------- */
+  console.log('  ' + factories + ' milfuel factories, ' + reclaimers +
+              ' plants reclaiming fissiles');
+  check('licensed systems get a milfuel factory', factories > 0, factories + ' built');
+  check('and only licensed systems do', factoriesUnlicensed === 0,
+        factoriesUnlicensed + ' unlicensed');
+  check('a factory eats five tonnes of fissiles for every tonne it presses',
+        factoryRatioBad === 0, factoryRatioBad + ' off-ratio');
+  check('an unlicensed plant reclaims fissiles from what it is handed',
+        reclaimers > 0 && reclaimRatioBad === 0,
+        reclaimers + ' reclaimers, ' + reclaimRatioBad + ' off-ratio');
+  check('ten tonnes of drums to the slug at a licensed one',
+        slugRatioBad === 0, slugRatioBad + ' off-ratio');
+  check('and a licensed plant runs one line, not both',
+        licensedStillReclaiming === 0, licensedStillReclaiming + ' doing both');
 })();
 
 console.log('--- higher-tech worlds make higher-tech goods and more mess ---');

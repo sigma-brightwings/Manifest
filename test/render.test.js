@@ -1984,6 +1984,26 @@ console.log('--- imported ports ---');
         !!bare.orbital && !!bare.highport && !!bare.refinery && !!bare.shipyard &&
         !!bare.surface && !!bare.bay && !!bare.underground);
 
+  /* EVERY ECONOMIC ROLE RESOLVES TO A REAL MODEL, asked of the role table
+   * rather than of a list written out here — which is the only version of
+   * this check that survives somebody adding a role. Adding one to
+   * Economy.PORT_ROLES and forgetting the mesh gives a station that silently
+   * wears the generic orbital hull, and "silently wears something else" is
+   * the failure this project keeps paying for. The milfuel factory is the
+   * role that prompted it. */
+  var Eco = W.Economy || global.Economy;
+  var roleGaps = [];
+  (Eco.PORT_ROLES || []).forEach(function (role) {
+    var model = R.STATION_MODELS[role.id];
+    if (!model || !bare[model] || !bare[model].f.length) roleGaps.push(role.id);
+    /* And the role a PORT reports has to be the same one, which is the
+     * half that actually reaches the screen. */
+    var got = R.portModelFor({ id: 'role-' + role.id, market: { role: role.id } });
+    if (got !== model) roleGaps.push(role.id + ' (' + got + ')');
+  });
+  check('every economic role has a station model of its own',
+        roleGaps.length === 0, roleGaps.join(', '));
+
   /* And a bay with no model gets the shared constant table, unchanged. */
   var fakePort = { radius: 2, shaftDepth: 1.8, surface: true };
   var g0 = Gen.bayGeometry(fakePort);
