@@ -2550,9 +2550,49 @@
    * setIndoors has, and for exactly the same reason: every paint path a
    * station goes through would otherwise have to carry the argument, and
    * the one that forgot would be a dock in the wrong colours. */
-  function setAccent(c) {
+  /* ---- AND THE SYNDICATE GETS A REPAINT, NOT A TINT ----------------------
+   * Astra: "create a copy of each station type and add red and black trim
+   * to it... these will be Syndicate controlled ports. It will be very easy
+   * to tell if it's Syndicate."
+   *
+   * The accent wash above was generalised deliberately — every power's dock
+   * wears that power's colour — and it is the right rule for the twelve
+   * legitimate flags, where the point is that a dock belongs to somebody.
+   * It is the wrong rule for the Syndicate, where the point is that you
+   * KNOW. A hue rotation at the modeller's own tenth-saturation reads as
+   * "faintly warm plating" from a kilometre out, which is exactly what
+   * Astra is saying it must not be.
+   *
+   * So the outlaw skin is a second mapping rather than a stronger
+   * coefficient, and the two halves pull opposite ways, which is what makes
+   * it legible: the PLATING IS CRUSHED TO BLACK — the modeller's three
+   * tones keep their order and their relative depth, but the whole range is
+   * compressed into the bottom fifth, so the hull stops being a light
+   * surface at all. And the TRIM IS TURNED UP — full saturation, held in
+   * the band where red reads as red rather than as maroon or pink. Black
+   * hull, red stripes, and nothing else in the game looks like it.
+   *
+   * It is a repaint and not a new model, and that is the honest version of
+   * "a copy of each station type": the geometry of a Syndicate dock is the
+   * same geometry, because the Syndicate took the dock rather than building
+   * one. What changed is who painted it. */
+  var OUTLAW_PLATE_LIGHT = 0.18;     // of the modeller's own lightness
+  var OUTLAW_PLATE_FLOOR = 0.055;
+  var OUTLAW_PLATE_SAT = 0.22;
+  var OUTLAW_TRIM_SAT = 0.85;
+  var OUTLAW_TRIM_LO = 0.34, OUTLAW_TRIM_HI = 0.56;
+  var accentOutlaw = false;
+
+  function setAccent(c, outlaw) {
     accentColor = (typeof c === 'string' && c.charAt(0) === '#' && c.length === 7)
       ? c.toLowerCase() : null;
+    accentOutlaw = !!outlaw && !!accentColor;
+  }
+
+  /* The cache is keyed on the SKIN, not on the colour, or a Syndicate dock
+   * and an Unaligned one sharing a hex would share a mesh. */
+  function accentKey() {
+    return accentOutlaw ? accentColor + '!' : accentColor;
   }
 
   function rgbOf(hex) {
@@ -2616,12 +2656,36 @@
 
   /* Is this face colour the trim, and what does it become? Returns null for
    * everything it does not touch, which is almost everything. */
-  function accentSwap(col, to) {
+  function accentSwap(col, to, outlaw) {
     if (typeof col !== 'string' || !col) return null;
     var pre = '';
     if (col.charAt(0) === '!') { pre = '!'; col = col.slice(1); }
     if (col.charAt(0) !== '#' || col.length !== 7) return null;   // glass, names
     var hsl = toHsl(col);
+    if (outlaw) {
+      var want0 = toHsl(to);
+      if (hsl[1] <= WASH_MAX_SAT && hsl[2] >= WASH_MIN_LIGHT && hsl[2] <= WASH_MAX_LIGHT) {
+        /* Plating to black. The order of the modeller's tones survives
+         * because the compression is linear in their own lightness — the
+         * panel breaks are still there, they are simply all dark now.
+         *
+         * EMISSIVE PLATING IS LEFT ALONE, and that clause is doing real
+         * work: the bay's floodlit deck is emissive plating, and crushing
+         * it would turn a lit hangar into an unlit one. The Syndicate
+         * paints its hull, not its lamps. */
+        if (pre === '!') return null;
+        return fromHsl(want0[0], OUTLAW_PLATE_SAT,
+                       OUTLAW_PLATE_FLOOR + hsl[2] * OUTLAW_PLATE_LIGHT);
+      }
+      if (hsl[0] < ACCENT_HUE_LO || hsl[0] > ACCENT_HUE_HI) return null;
+      if (hsl[1] < ACCENT_MIN_SAT || hsl[2] > ACCENT_MAX_LIGHT) return null;
+      /* Trim turned all the way up, and held inside the band where red
+       * still reads as red — a stripe the modeller shaded very dark would
+       * otherwise come out maroon against a black hull and disappear,
+       * which is the one outcome this whole skin exists to prevent. */
+      return pre + fromHsl(want0[0], Math.max(hsl[1], OUTLAW_TRIM_SAT),
+                           Math.max(OUTLAW_TRIM_LO, Math.min(OUTLAW_TRIM_HI, hsl[2])));
+    }
     if (hsl[1] <= WASH_MAX_SAT && hsl[2] >= WASH_MIN_LIGHT && hsl[2] <= WASH_MAX_LIGHT) {
       /* Plating. Emissive plating stays emissive — a lit panel is a lamp,
        * and this is a paint job. */
@@ -2674,15 +2738,15 @@
     if (mesh.noAccent) return mesh;
     var byColor = ACCENT_CACHE.get(mesh);
     if (!byColor) { byColor = {}; ACCENT_CACHE.set(mesh, byColor); }
-    var hit = byColor[accentColor];
+    var hit = byColor[accentKey()];
     if (hit) return hit;
 
     var c = new Array(mesh.c.length), touched = 0;
     for (var i = 0; i < mesh.c.length; i++) {
-      var swap = accentSwap(mesh.c[i], accentColor);
+      var swap = accentSwap(mesh.c[i], accentColor, accentOutlaw);
       if (swap) { c[i] = swap; touched++; } else c[i] = mesh.c[i];
     }
-    if (!touched) { byColor[accentColor] = mesh; return mesh; }
+    if (!touched) { byColor[accentKey()] = mesh; return mesh; }
 
     var out = { v: mesh.v, f: mesh.f, c: c };
     /* Anything else the mesh carries is geometry, and geometry is shared —
@@ -2695,7 +2759,7 @@
     if (mesh.deckZ !== undefined) out.deckZ = mesh.deckZ;
     if (mesh.adBoards !== undefined) out.adBoards = mesh.adBoards;
     if (mesh.adFrame !== undefined) out.adFrame = mesh.adFrame;
-    byColor[accentColor] = out;
+    byColor[accentKey()] = out;
     return out;
   }
 

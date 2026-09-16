@@ -3053,6 +3053,66 @@ console.log('--- faction accents ---');
         R.accented(untouched) === untouched);
   R.setAccent(null);
   check('and clearing the accent puts it back', R.accented(mesh) === mesh);
+
+  /* ---- AND THE SYNDICATE GETS A REPAINT, NOT A TINT --------------------
+   * Astra: "create a copy of each station type and add red and black trim
+   * to it... It will be very easy to tell if it's Syndicate."
+   *
+   * The wash above is the right rule for twelve legitimate flags, where
+   * the point is that a dock BELONGS to somebody. It is the wrong rule
+   * here, where the point is that you know from a kilometre out. So the
+   * outlaw skin is a second mapping whose two halves pull opposite ways,
+   * and that opposition is what these checks pin. */
+  ['#8993a1', '#5d6673', '#3c434e'].forEach(function (plate) {
+    var got = R.accentSwap(plate, RED, true);
+    /* The bar is where the measurement is: the modeller's brightest
+     * plating, #8993a1 at L=0.59, comes out at 0.16 and the darkest at
+     * 0.13 — the whole range compressed into the bottom fifth. */
+    check('Syndicate plating ' + plate + ' is crushed to black',
+          !!got && light(got) < 0.18, got + ' at L=' + (got ? light(got).toFixed(3) : '?'));
+    check('and it is much darker than the legitimate wash of the same face',
+          !!got && light(got) < light(R.accentSwap(plate, RED)) - 0.15,
+          got + ' vs ' + R.accentSwap(plate, RED));
+  });
+  /* The modeller's three tones keep their ORDER. A skin that flattened
+   * them would take the panel breaks out of the hull along with the
+   * brightness, and a black box is as unreadable as a grey one. */
+  var dark = ['#8993a1', '#5d6673', '#3c434e'].map(function (p2) {
+    return light(R.accentSwap(p2, RED, true));
+  });
+  check('the panel breaks survive being blacked out',
+        dark[0] > dark[1] && dark[1] > dark[2], dark.map(function (d) {
+          return d.toFixed(3); }).join(' > '));
+
+  ['#d7be3d', '#d5c14b'].forEach(function (gold) {
+    var got = R.accentSwap(gold, RED, true);
+    check('Syndicate trim ' + gold + ' is turned all the way up',
+          !!got && Math.abs(hue(got) - hue(RED)) < 8 && light(got) > 0.30, got);
+    /* THE CONTRAST IS THE FEATURE. Red on black or it has not worked. */
+    check('and it is far brighter than the hull it sits on',
+          !!got && light(got) > light(R.accentSwap('#8993a1', RED, true)) + 0.18,
+          got + ' on ' + R.accentSwap('#8993a1', RED, true));
+  });
+
+  /* THE SYNDICATE PAINTS ITS HULL, NOT ITS LAMPS. The bay's floodlit deck
+   * is emissive plating, and crushing it would turn a lit hangar into an
+   * unlit one — which is the failure this clause exists to prevent, and it
+   * would have looked like a rendering bug rather than a paint job. */
+  check('an emissive plate is left alone by the outlaw skin',
+        R.accentSwap('!#4a4f58', RED, true) === null);
+  check('and so is the lit deck cream', R.accentSwap('!#f2e3a7', RED, true) === null);
+
+  /* The cache is keyed on the SKIN, not on the colour, or a Syndicate dock
+   * and an Unaligned one sharing a hex would share a mesh. */
+  R.setAccent(RED, false);
+  var plain = R.accented(mesh);
+  R.setAccent(RED, true);
+  var crook = R.accented(mesh);
+  check('a Syndicate dock does not get the legitimate copy', crook !== plain);
+  check('and its hull really is the darker one',
+        light(crook.c[1]) < light(plain.c[1]) - 0.15,
+        crook.c[1] + ' vs ' + plain.c[1]);
+  R.setAccent(null);
 })();
 
 console.log('--- glass ---');

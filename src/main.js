@@ -9282,7 +9282,14 @@
            * one that forgets paint a dock in the wrong flag. */
           var owner = (b.faction && G.sys.factionById)
             ? G.sys.factionById[b.faction] : null;
-          Render.setAccent(owner && owner.color);
+          /* AND WHETHER IT IS THEIRS. Astra: "these will be Syndicate
+           * controlled ports. It will be very easy to tell if it's
+           * Syndicate." The colour alone cannot say that — the accent wash
+           * is the same rule for every flag and comes out as faintly warm
+           * plating at the modeller's own saturation. The second argument
+           * switches the skin rather than the hue: black hull, red trim.
+           * See accentSwap. */
+          Render.setAccent(owner && owner.color, owner && owner.outlaw);
           /* ONE COMPARTMENT WHEN YOU ARE IN ONE. Astra's design: every
            * section has a blast door, so the renderer only ever draws the
            * section around the ship. From outside, `null` — the whole hull
