@@ -132,6 +132,10 @@
      * placement or naming was relying on — additive, not a rewrite, same
      * discipline as ports and underground bays. */
     var factions = assignFactions(rootSeed, stars);
+    /* Its own substream again, run last and reading only what is already
+     * decided, so adding restricted space moved no star and changed no
+     * flag in any seed that predates it. */
+    assignRestricted(rootSeed, stars, factions);
 
     var galaxy = {
       seed: rootSeed, stars: stars, radius: radius,
@@ -474,6 +478,100 @@
     return !!(f && f.wasteBan);
   }
 
+  /* ---- the systems you are not allowed into ------------------------------
+   * Astra: "There should be restricted systems which are only able to be
+   * visited by ships which are carrying a special transponder. Penal
+   * colonies and manufacturing hubs for warships would qualify."
+   *
+   * Both kinds are the same rule and deliberately different places, because
+   * what a power puts behind a checkpoint says what it is worried about:
+   *
+   *   A PENAL COLONY goes as far from its capital as the flag reaches. You
+   *   do not build a prison in the middle of your own core, and the whole
+   *   point of one is that getting out of it is a journey.
+   *
+   *   A WARSHIP YARD goes as deep INSIDE as the flag reaches. It is the
+   *   thing a power least wants reached, so it sits behind everything else
+   *   it has, in the system it holds hardest.
+   *
+   * One of each per major power, which keeps them rare — a handful of
+   * systems in two hundred — and keeps them meaningful: every restricted
+   * system belongs to somebody, so being turned away from one tells you
+   * whose door you were at.
+   *
+   * No capital is ever restricted. A power's own seat has to be somewhere
+   * a trader can go, or the flag means nothing to anyone who is not
+   * already inside it.
+   *
+   * Pockets are skipped entirely. A syndicate hold is not restricted space,
+   * it is lawless space — those are opposite problems and the game already
+   * has the second one. */
+  var HOME_CLEAR_LY = 14;          // no checkpoints in the first few hops
+
+  function assignRestricted(rootSeed, stars, factions) {
+    var rr = new RNG('galaxy-restricted|' + rootSeed);
+    var byFac = {};
+    var i;
+    for (i = 0; i < stars.length; i++) {
+      stars[i].restricted = null;
+      var fid = stars[i].factionId;
+      if (!fid) continue;
+      (byFac[fid] = byFac[fid] || []).push(stars[i]);
+    }
+
+    for (var f = 0; f < factions.length; f++) {
+      var fac = factions[f];
+      if (fac.outlaw || fac.minor) continue;
+      var owned = byFac[fac.id] || [];
+      if (owned.length < 4) continue;                 // too small to hide anything in
+      var capital = null;
+      for (i = 0; i < stars.length; i++) if (stars[i].id === fac.capitalId) capital = stars[i];
+      if (!capital) continue;
+
+      /* AND NEVER ON THE DOORSTEP. The first galaxy built with this had
+       * kawartha's nearest neighbour - 4 ly out, the obvious first jump of
+       * a brand-new career - turned into a penal colony, so the opening
+       * move of the game was a door that will not open and a fitting you
+       * cannot afford. Rare and remote is the whole idea; rare and in the
+       * way is a wall across the tutorial. */
+      var ranked = owned.filter(function (st) {
+        return st.id !== fac.capitalId &&
+               distance3(st, stars[0]) > HOME_CLEAR_LY;
+      }).sort(function (a, b) {
+        return distance3(b, capital) - distance3(a, capital);
+      });
+      if (!ranked.length) continue;
+
+      /* The furthest few, and the nearest few, drawn from rather than taken
+       * flat — so two galaxies from different seeds do not put the prison
+       * on the same rung of the same ladder every time. */
+      var band = Math.max(1, Math.min(3, Math.floor(ranked.length / 6)));
+      var penal = ranked[rr.int(0, band - 1)];
+      penal.restricted = { kind: 'penal', label: 'Penal colony', faction: fac.id };
+
+      var inner = ranked.slice(ranked.length - band);
+      var yard = inner[rr.int(0, inner.length - 1)];
+      if (yard && yard !== penal) {
+        yard.restricted = { kind: 'yard', label: 'Warship yard', faction: fac.id };
+      }
+    }
+  }
+
+  /* Is this star behind a checkpoint, and does this ship answer it? Two
+   * questions, one function, because the chart asks the first to draw the
+   * marker and the jump planner asks the second to refuse the course — and
+   * a version of each in two files is a bar that says one thing and does
+   * another. */
+  function restrictionOf(star) {
+    return (star && star.restricted) || null;
+  }
+
+  function barredFrom(star, ship) {
+    if (!restrictionOf(star)) return false;
+    var C = global.Combat;
+    return !(C && C.hasTransponder && C.hasTransponder(ship));
+  }
+
   /* ---- how firmly a power holds a star ----------------------------------
    * Astra, of the chart: "The color should be more saturated the more
    * control that faction has in each system."
@@ -662,6 +760,13 @@
     var slugs = (ship.cargo && ship.cargo.milfuel) || 0;
     var enoughFuel = hot ? burn.fuel <= slugs : fuel <= ship.fuel;
     var banned = wasteBanned(galaxy, toStar);
+    /* A CHECKPOINT IS NOT A SHORTFALL, and it is quoted separately for that
+     * reason: `shortfall` is a number of tonnes you can go and fetch, and
+     * this is a door. Both make `possible` false, and the chart says which
+     * one it is rather than telling a pilot with a full tank that they are
+     * short by zero. */
+    var bar = restrictionOf(toStar);
+    var barred = bar && barredFrom(toStar, ship);
     return {
       from: fromStar, to: toStar, distance: d,
       fuel: hot ? 0 : fuel, seconds: jumpSeconds(d, ship),
@@ -680,7 +785,13 @@
       wasteAboard: ((ship.cargo && ship.cargo.waste) || 0) + burn.waste,
       arrivesDirty: banned &&
         (((ship.cargo && ship.cargo.waste) || 0) + burn.waste) > 0,
-      possible: enoughFuel && toStar !== fromStar,
+      /* What is behind the checkpoint, whether or not you can pass it: a
+       * pilot who knows a prison is there and cannot get in is in a
+       * different position from one who does not know why the course will
+       * not lay in. */
+      restricted: bar,
+      barred: !!barred,
+      possible: enoughFuel && !barred && toStar !== fromStar,
       shortfall: hot ? Math.max(0, burn.fuel - slugs)
                      : Math.max(0, fuel - ship.fuel)
     };
@@ -701,6 +812,8 @@
     jumpPlan: jumpPlan,
     wasteBanned: wasteBanned,
     control: control,
+    restrictionOf: restrictionOf,
+    barredFrom: barredFrom,
     chartOffer: chartOffer,
     CHART_RADIUS_LY: CHART_RADIUS_LY,
     PIRATE_HOLDS: PIRATE_HOLDS,

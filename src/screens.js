@@ -2144,8 +2144,17 @@
       ctx.save();
       ctx.font = '12px ui-monospace, monospace';
       ctx.fillStyle = '#ff7a7a';
-      ctx.fillText('SHORT BY ' + course.shortfall.toFixed(2) + ' t — refuel, or lighten the hold',
-                   px + 30, by + 20);
+      /* A CHECKPOINT IS NOT A SHORTFALL. Telling a pilot with a full tank
+       * that they are short by 0.00 tonnes is how a barred course reads as
+       * a broken fuel gauge — so the two refusals say different things, and
+       * the door says what is behind it. */
+      if (course.barred) {
+        ctx.fillText('RESTRICTED SPACE — ' + course.restricted.label.toLowerCase() +
+                     '; no transponder aboard', px + 30, by + 20);
+      } else {
+        ctx.fillText('SHORT BY ' + course.shortfall.toFixed(2) + ' t — refuel, or lighten the hold',
+                     px + 30, by + 20);
+      }
       ctx.restore();
       btn(ctx, px + 30, by + 36, 240, 38, 'CANNOT ENGAGE', function () {}, { disabled: true, bold: true });
     } else {
@@ -2883,6 +2892,27 @@
         ctx.lineWidth = 1;
         ctx.beginPath(); ctx.arc(sp.x, y, r + 3, 0, K.TAU); ctx.stroke();
       }
+      /* A CHECKPOINT, ONCE YOU HOLD THE SHEET FOR IT. Knowing a system is
+       * restricted is chart data — it is the sort of thing printed on the
+       * sheet in red, not something you have to fly there to discover — so
+       * it shows for a charted star whether or not you have been. Drawn as
+       * a bracket rather than a ring, because a ring is already the
+       * surveyed marker and two rings on one dot say nothing. */
+      if (G.charted[s.id] && s.restricted) {
+        ctx.strokeStyle = '#ff9a6b';
+        ctx.lineWidth = 1.4;
+        var br = r + 6;
+        ctx.beginPath();
+        ctx.moveTo(sp.x - br, y - br + 3); ctx.lineTo(sp.x - br, y - br);
+        ctx.lineTo(sp.x - br + 3, y - br);
+        ctx.moveTo(sp.x + br - 3, y - br); ctx.lineTo(sp.x + br, y - br);
+        ctx.lineTo(sp.x + br, y - br + 3);
+        ctx.moveTo(sp.x - br, y + br - 3); ctx.lineTo(sp.x - br, y + br);
+        ctx.lineTo(sp.x - br + 3, y + br);
+        ctx.moveTo(sp.x + br - 3, y + br); ctx.lineTo(sp.x + br, y + br);
+        ctx.lineTo(sp.x + br, y + br - 3);
+        ctx.stroke();
+      }
       if (isHere) {
         ctx.strokeStyle = '#ffe6a8'; ctx.lineWidth = 1.4;
         ctx.beginPath(); ctx.arc(sp.x, y, r + 5, 0, K.TAU); ctx.stroke();
@@ -2947,7 +2977,12 @@
       var iy = dyy + 150;
       ctx.save();
       ctx.font = '11px ui-monospace, monospace';
-      if (!plan.possible) {
+      if (plan.barred) {
+        ctx.fillStyle = '#ff7a7a';
+        ctx.fillText('RESTRICTED — ' + plan.restricted.label.toUpperCase(), dx, iy);
+        ctx.fillStyle = 'rgba(200,220,245,0.7)';
+        ctx.fillText('the checkpoint wants a transponder you are not carrying', dx, iy + 16);
+      } else if (!plan.possible) {
         ctx.fillStyle = '#ff7a7a';
         ctx.fillText('SHORT BY ' + plan.shortfall.toFixed(2) + ' t — refuel, or sell cargo',
                      dx, iy);
@@ -3000,6 +3035,10 @@
         if (known.pirateHeld) {
           infoRows.push(['territory', 'SYNDICATE HELD — waste banned on arrival']);
         }
+        if (plan.to.restricted) {
+          infoRows.push(['access', plan.to.restricted.label.toUpperCase() +
+            ' — transponder required']);
+        }
         rows(ctx, dx, sy + 20, infoRows, '#7e93b3', '#cfe0ff', dw);
 
         /* A fact about the SYSTEM as a whole, not any one world in it — see
@@ -3022,6 +3061,13 @@
       } else {
         ctx.fillStyle = '#7e93b3';
         ctx.fillText('UNSURVEYED', dx, sy);
+        if (plan.to.restricted && G.charted[plan.to.id]) {
+          /* On the sheet in red, which is where a checkpoint belongs: you
+           * do not have to fly to a prison to learn that it is one. */
+          ctx.fillStyle = '#ff9a6b';
+          ctx.fillText('  ·  ' + plan.to.restricted.label.toUpperCase(),
+                       dx + ctx.measureText('UNSURVEYED').width, sy);
+        }
         ctx.restore();
 
         /* Nothing on the ground, but plenty in the light: a transit gives

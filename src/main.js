@@ -762,6 +762,16 @@
   }
 
   function doJump(plan) {
+    /* TWO WAYS TO BE REFUSED, and they had one message between them. A
+     * pilot barred at a checkpoint with a full tank was told they were
+     * short of propellant, which sends them off to buy fuel they already
+     * have — the same class of mistake as the old docking refusal that
+     * named a bounty whatever the reason. */
+    if (plan && plan.barred) {
+      say(plan.to.name + ' is restricted space — ' + plan.restricted.label.toLowerCase() +
+          '. The checkpoint wants a transponder you are not carrying.', 7);
+      return;
+    }
     if (!plan || !plan.possible) {
       say('Not enough propellant — that jump needs ' + plan.fuel.toFixed(1) + ' t', 4);
       return;

@@ -437,6 +437,96 @@ console.log('--- how firmly a power holds a star, and what you know of it ---');
   }
 })();
 
+console.log('--- the systems you are not allowed into ---');
+(function () {
+  var g = Galaxy.build('kawartha');
+  var restricted = g.stars.filter(function (s) { return s.restricted; });
+  var kinds = {};
+  restricted.forEach(function (s) { kinds[s.restricted.kind] = (kinds[s.restricted.kind] || 0) + 1; });
+  console.log('  ' + restricted.length + ' of ' + g.stars.length + ' systems restricted (' +
+              (kinds.penal || 0) + ' penal, ' + (kinds.yard || 0) + ' yards)');
+
+  check('there are restricted systems', restricted.length > 0);
+  check('and they are rare', restricted.length < g.stars.length * 0.08,
+        restricted.length + ' of ' + g.stars.length);
+  check('both kinds exist', kinds.penal > 0 && kinds.yard > 0,
+        JSON.stringify(kinds));
+
+  /* NEVER A CAPITAL, and never in a pocket. A power's own seat has to be
+   * somewhere a trader can go; a syndicate hold is lawless rather than
+   * restricted, which is the opposite problem. */
+  var capitals = {};
+  (g.factions || []).forEach(function (f) { capitals[f.capitalId] = f; });
+  check('no capital is behind a checkpoint',
+        restricted.every(function (s) { return !capitals[s.id]; }));
+  check('and no pocket is', restricted.every(function (s) {
+    var f = g.factionById[s.factionId];
+    return f && !f.outlaw && !f.minor;
+  }));
+
+  /* NOT ON THE DOORSTEP. The first galaxy built with this turned kawartha's
+   * nearest neighbour - the obvious first jump of a new career - into a
+   * penal colony, so the opening move of the game was a door that will not
+   * open and a fitting you cannot afford. */
+  var nearest = Infinity;
+  restricted.forEach(function (s) {
+    nearest = Math.min(nearest, Galaxy.distance3(s, g.home));
+  });
+  check('none of them is on the home doorstep', nearest > 12,
+        'nearest is ' + nearest.toFixed(1) + ' ly out');
+
+  /* WHERE EACH KIND SITS, which is the whole characterisation: a prison
+   * goes as far from the flag's capital as the flag reaches, a warship yard
+   * as deep inside it as the flag reaches. Compared as means so one odd
+   * placement does not carry the claim. */
+  function meanDist(kind) {
+    var list = restricted.filter(function (s) { return s.restricted.kind === kind; });
+    if (!list.length) return 0;
+    return list.reduce(function (t, s) {
+      var f = g.factionById[s.restricted.faction];
+      return t + Galaxy.distance3(s, g.byId[f.capitalId]);
+    }, 0) / list.length;
+  }
+  var penalD = meanDist('penal'), yardD = meanDist('yard');
+  console.log('  a prison sits ' + penalD.toFixed(1) + ' ly from its capital, a yard ' +
+              yardD.toFixed(1));
+  check('a prison is put where getting out of it is a journey', penalD > yardD * 2,
+        penalD.toFixed(1) + ' vs ' + yardD.toFixed(1));
+  /* And the shading agrees with the siting, which is a cross-check on both:
+   * a yard is in the system its owner holds hardest. */
+  function meanCtl(kind) {
+    var list = restricted.filter(function (s) { return s.restricted.kind === kind; });
+    return list.reduce(function (t, s) { return t + Galaxy.control(g, s); }, 0) / list.length;
+  }
+  check('and a yard sits behind everything its owner has',
+        meanCtl('yard') > meanCtl('penal') + 0.3,
+        meanCtl('yard').toFixed(2) + ' vs ' + meanCtl('penal').toFixed(2));
+
+  /* ---- and the door itself ---- */
+  var bare = { dryMass: 100, fuel: 500, fuelCap: 500, cargo: {}, fit: {} };
+  var fitted = { dryMass: 100, fuel: 500, fuelCap: 500, cargo: {},
+                 fit: { internal1: 'transponder' } };
+  var target = restricted[0];
+  var plan = Galaxy.jumpPlan(g, g.home, target, bare);
+  check('a course into restricted space will not lay in',
+        plan.barred === true && plan.possible === false, JSON.stringify({
+          barred: plan.barred, possible: plan.possible }));
+  /* AND IT SAYS WHICH REFUSAL IT IS. A checkpoint is not a shortfall, and
+   * telling a pilot with a full tank they are short by nothing is how a
+   * barred course reads as a broken fuel gauge. */
+  check('and it is a door rather than an empty tank',
+        plan.shortfall === 0 && !!plan.restricted,
+        plan.shortfall + ' t short');
+
+  var ok = Galaxy.jumpPlan(g, g.home, target, fitted);
+  check('a transponder opens it', ok.barred === false && !!ok.restricted,
+        JSON.stringify({ barred: ok.barred }));
+  check('but only for the systems that need one',
+        !Galaxy.jumpPlan(g, g.home, g.stars.filter(function (s) {
+          return !s.restricted && s.id !== g.home.id;
+        })[0], bare).barred);
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

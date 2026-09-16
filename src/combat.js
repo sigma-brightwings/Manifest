@@ -325,6 +325,31 @@
      * ablate. Radiation, when it arrives, does not belong here at all — it
      * acts on crew and electronics rather than on hull temperature, and
      * wants shielding mass rather than a radiator. */
+    /* ---- the transponder ------------------------------------------------
+     * Astra: "There should be restricted systems which are only able to be
+     * visited by ships which are carrying a special transponder. Penal
+     * colonies and manufacturing hubs for warships would qualify."
+     *
+     * So this is not equipment in the sense the rest of this table is. It
+     * does nothing to the ship at all — no gun, no field, no heat — and
+     * everything to where the ship is ALLOWED. It sits in the catalogue
+     * anyway, because the catalogue is where mass, power, price, a slot and
+     * a standing gate already live, and the alternative was a bespoke flag
+     * with its own shop, its own save and its own refusal.
+     *
+     * Barely any mass or draw, which is the joke: the most restrictive
+     * object in the game is a box that answers a question. What gates it is
+     * the standing, at the same 40 the Chernobyl drive wants — the navy
+     * issues this to people it trusts with the address of a prison.
+     *
+     * NOT SOLD GREY. A forged transponder is a good idea for later and a
+     * different item: it should be able to fail, and this one cannot. */
+    transponder: { id: 'transponder', name: 'Restricted-space transponder',
+                  slot: 'internal', kind: 'transponder', price: 24000,
+                  power: 0.2, mass: 1, unique: true,
+                  minDev: 0.70, minStanding: 40, minCrime: 0, grey: false,
+                  pitch: 'Answers the challenge nobody civilian is supposed to hear. Where it lets you go is not a reward.' },
+
     heatshield: { id: 'heatshield', name: 'Ablative heat shield', slot: 'internal',
                   kind: 'heatshield', price: 3600, power: 0.8, mass: 3,
                   unique: true, shed: 130,
@@ -1002,6 +1027,15 @@
     var fit = (ship && ship.fit) || {};
     for (var k in fit) if (fit[k] === id) return true;
     return false;
+  }
+
+  /* Does this ship answer the challenge? Asked by the jump planner before
+   * you commit and by the chart so it can say why a course is barred — one
+   * function, so the warning and the refusal cannot disagree about what is
+   * fitted. Reads the slots rather than a flag: there is no way to be
+   * carrying one except by having bought and fitted it. */
+  function hasTransponder(ship) {
+    return hasFitted(ship, 'transponder');
   }
 
   /* Strip a ship back to that list. The hull must already be set: slot keys
@@ -4748,6 +4782,7 @@
     requestClearance: requestClearance,
     clearanceRefusal: clearanceRefusal,
     autoClearance: autoClearance,
+    hasTransponder: hasTransponder,
     queueJumpsOf: queueJumpsOf,
     FREE_JUMPS: FREE_JUMPS,
     arriveAtPort: arriveAtPort,
