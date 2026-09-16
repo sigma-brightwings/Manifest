@@ -8781,6 +8781,20 @@
            * own hull, a ship passing outside — keeps its daylight. */
           var indoors = (enclosedPort() === b);
           if (indoors) Render.setIndoors(true);
+          /* WHOSE DOCK THIS IS, in paint. Astra asked for red accents on
+           * Syndicate stations "like the syndicate ships do"; the rule is
+           * written for every power instead, so a dock wears the same
+           * colour its territory is drawn in on the chart. Render decides
+           * WHICH faces are trim — a colour rule, not a list of hexes — and
+           * this only says whose colours to use.
+           *
+           * Set and cleared around this station's meshes exactly as
+           * setIndoors is, and for the same reason: the alternative is
+           * threading an argument through six paint paths and having the
+           * one that forgets paint a dock in the wrong flag. */
+          var owner = (b.faction && G.sys.factionById)
+            ? G.sys.factionById[b.faction] : null;
+          Render.setAccent(owner && owner.color);
           /* ONE COMPARTMENT WHEN YOU ARE IN ONE. Astra's design: every
            * section has a blast door, so the renderer only ever draws the
            * section around the ship. From outside, `null` — the whole hull
@@ -8842,6 +8856,7 @@
                                        model, b.color);
           }
           if (indoors) Render.setIndoors(false);
+          Render.setAccent(null);
           /* The town, the boards and the pad lighting. Held to a higher
            * threshold than the pad itself: the dressing is detail, and
            * detail smaller than a few pixels is cost without information. */

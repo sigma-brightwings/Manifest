@@ -2583,6 +2583,92 @@ console.log('--- the cockpit kit ---');
         dart.rake > mule.rake, dart.rake + ' vs ' + mule.rake);
 })();
 
+/* ---- faction accents ---------------------------------------------------
+ * Astra: "the Syndicate stations should have red accents on them, like the
+ * syndicate ships do." Written as a colour rule rather than a list of
+ * hexes, so what has to be pinned is the RULE — which faces it claims and,
+ * more importantly, which it refuses.
+ *
+ * The refusals are the half that would break the game: repaint the lit
+ * deck colour and every Syndicate hangar turns red; repaint glass and the
+ * canopies go with it. Both were live possibilities — the cream is the
+ * same hue family as the gold trim it sits next to. */
+console.log('--- faction accents ---');
+(function () {
+  var R = W.Render;
+  var RED = '#ff7a6b';                       // the Syndicate's colour
+  function hue(hex) {
+    var n = parseInt(hex.replace('!', '').slice(1), 16);
+    var r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+    var mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    if (d < 1e-9) return -1;
+    var h = mx === r ? 60 * (((g - b) / d) % 6)
+          : mx === g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4);
+    return h < 0 ? h + 360 : h;
+  }
+  function light(hex) {
+    var n = parseInt(hex.replace('!', '').slice(1), 16);
+    var r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+    return (Math.max(r, g, b) + Math.min(r, g, b)) / 2;
+  }
+
+  check('the accent rule is exported', typeof R.accentSwap === 'function' &&
+        typeof R.setAccent === 'function');
+  if (typeof R.accentSwap !== 'function') return;
+
+  /* THE TWO GOLDS the shipped models trim themselves with. */
+  ['#d7be3d', '#d5c14b'].forEach(function (gold) {
+    var got = R.accentSwap(gold, RED);
+    check('gold trim ' + gold + ' takes the faction hue', !!got && Math.abs(hue(got) - hue(RED)) < 6, got);
+    check('and keeps its own lightness', !!got && Math.abs(light(got) - light(gold)) < 0.02,
+          got + ' vs ' + gold);
+  });
+
+  /* THE PLATING, which is 95% of what you can see and is already a cool
+   * blue-grey rather than a neutral — so the wash turns a hue that was
+   * always there rather than inventing one. */
+  ['#8993a1', '#5d6673', '#3c434e'].forEach(function (plate) {
+    var got = R.accentSwap(plate, RED);
+    check('plating ' + plate + ' washes to the faction hue',
+          !!got && Math.abs(hue(got) - hue(RED)) < 6, got);
+    check('and stays the same brightness', !!got && Math.abs(light(got) - light(plate)) < 0.02,
+          got + ' vs ' + plate);
+  });
+
+  /* THE REFUSALS. */
+  check('the lit deck colour is left alone', R.accentSwap('#f2e3a7', RED) === null);
+  check('and so is an emissive one', R.accentSwap('!#f2e3a7', RED) === null);
+  check('glass is not paint', R.accentSwap('~h#1c2620', RED) === null);
+  check('a green running light keeps its meaning', R.accentSwap('!#46df6a', RED) === null);
+  check('a red hazard panel is not washed to something else',
+        R.accentSwap('!#c35733', RED) === null);
+  check('and neither is the shadow black', R.accentSwap('#16171a', RED) === null);
+
+  /* EMISSIVE STAYS EMISSIVE. A lit sign in faction colours is still lit. */
+  var lit = R.accentSwap('!#7a5a1e', RED);
+  check('an emissive trim face keeps its exclamation mark',
+        !!lit && lit.charAt(0) === '!', lit);
+
+  /* AND THE MESH COPY SHARES ITS GEOMETRY, which is what makes the cache
+   * cheap enough to keep one per faction per model. */
+  var mesh = { v: [[0,0,0],[1,0,0],[0,1,0]], f: [[0,1,2],[0,1,2]],
+               c: ['#d7be3d', '#8993a1'] };
+  R.setAccent(null);
+  check('with no accent set a mesh is handed back untouched', R.accented(mesh) === mesh);
+  R.setAccent(RED);
+  var out = R.accented(mesh);
+  check('with one set the copy is a different object', out !== mesh);
+  check('but shares the vertices and the faces', out.v === mesh.v && out.f === mesh.f);
+  check('and the colours are the accented ones',
+        out.c !== mesh.c && Math.abs(hue(out.c[0]) - hue(RED)) < 6, out.c.join(' '));
+  check('asking twice gives the same copy back', R.accented(mesh) === out);
+  var untouched = { v: mesh.v, f: mesh.f, c: ['~h#1c2620', '!#46df6a'] };
+  check('a mesh with nothing to repaint is memoised as itself',
+        R.accented(untouched) === untouched);
+  R.setAccent(null);
+  check('and clearing the accent puts it back', R.accented(mesh) === mesh);
+})();
+
 console.log('--- glass ---');
 (function () {
   var R = W.Render;

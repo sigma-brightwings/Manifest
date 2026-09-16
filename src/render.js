@@ -2359,6 +2359,166 @@
     return { color: raw, lit: false, alpha: 1 };
   }
 
+  /* ---- FACTION ACCENTS ON A STATION --------------------------------------
+   *
+   * Astra: "the Syndicate stations should have red accents on them, like the
+   * syndicate ships do." Generalised to every power rather than special-
+   * cased to the Syndicate, because the same question is about to be asked
+   * of the chart: if a border is drawn in a faction's colour, the docks
+   * inside it should be wearing it too.
+   *
+   * WHAT GETS REPAINTED IS FOUND BY COLOUR, NOT BY NAME. Every station in
+   * the library — imported and procedural — trims itself in the same two
+   * golds (#d7be3d and #d5c14b, 51 faces of the shipped models between
+   * them), and a rule that listed those two hexes would be wrong the day a
+   * modeller picks a third. So a face is trim if it is gold-ish: hue in the
+   * amber band, saturated enough to be a decision rather than a dirty
+   * grey, and dark enough not to be a light source.
+   *
+   * THAT LAST CLAUSE IS LOAD-BEARING. #f2e3a7 is the cream the bay floors
+   * are floodlit with — same hue family, 24 faces, and repainting it would
+   * turn the inside of every Syndicate hangar red. Lightness is what tells
+   * a painted stripe from a lit surface, so the cut is on lightness.
+   *
+   * The swap keeps the face's own LIGHTNESS and takes the faction's hue and
+   * saturation, so a trim that was shaded dark stays dark and the model
+   * keeps whatever depth the modeller painted into it. Emissive faces keep
+   * their '!' — a lit sign in faction colours is still a lit sign — and
+   * glass is left alone entirely, because a red window is a different
+   * decision from a red stripe and nobody asked for one. */
+  var ACCENT_HUE_LO = 35, ACCENT_HUE_HI = 62;
+  var ACCENT_MIN_SAT = 0.45;
+  var ACCENT_MAX_LIGHT = 0.62;
+
+  var accentColor = null;
+  var ACCENT_CACHE = (typeof Map === 'function') ? new Map() : null;
+
+  /* Set around one station's meshes and cleared after — exactly the shape
+   * setIndoors has, and for exactly the same reason: every paint path a
+   * station goes through would otherwise have to carry the argument, and
+   * the one that forgot would be a dock in the wrong colours. */
+  function setAccent(c) {
+    accentColor = (typeof c === 'string' && c.charAt(0) === '#' && c.length === 7)
+      ? c.toLowerCase() : null;
+  }
+
+  function rgbOf(hex) {
+    var n = parseInt(hex.slice(1), 16);
+    return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+  }
+
+  function toHsl(hex) {
+    var c = rgbOf(hex), r = c[0], g = c[1], b = c[2];
+    var mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    var l = (mx + mn) / 2, h = 0, sat = 0;
+    if (d > 1e-9) {
+      sat = d / (1 - Math.abs(2 * l - 1));
+      if (mx === r) h = 60 * (((g - b) / d) % 6);
+      else if (mx === g) h = 60 * ((b - r) / d + 2);
+      else h = 60 * ((r - g) / d + 4);
+      if (h < 0) h += 360;
+    }
+    return [h, sat, l];
+  }
+
+  function fromHsl(h, sat, l) {
+    var c = (1 - Math.abs(2 * l - 1)) * sat;
+    var x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+    var m = l - c / 2, r = 0, g = 0, b = 0;
+    if (h < 60) { r = c; g = x; }
+    else if (h < 120) { r = x; g = c; }
+    else if (h < 180) { g = c; b = x; }
+    else if (h < 240) { g = x; b = c; }
+    else if (h < 300) { r = x; b = c; }
+    else { r = c; b = x; }
+    function hx(v) {
+      var n = Math.max(0, Math.min(255, Math.round((v + m) * 255))).toString(16);
+      return n.length < 2 ? '0' + n : n;
+    }
+    return '#' + hx(r) + hx(g) + hx(b);
+  }
+
+  /* AND A WASH OVER THE PLATING, because the trim alone does not read.
+   *
+   * Measured on spine-s before deciding: the two golds are 0.71% of the
+   * exterior area. Swapping them is correct and nearly invisible from a
+   * kilometre out, which fails the thing Astra actually asked for — being
+   * able to tell whose dock you are approaching.
+   *
+   * The plating is 95% of it and it is not grey, it is a cool blue-grey:
+   * #8993a1, #5d6673 and #3c434e all sit around hue 215 at about a tenth
+   * saturation. So the art ALREADY has a livery hue; it is simply the same
+   * one everywhere. Turning that hue to the owner's and leaving the
+   * saturation where the modeller put it repaints the station in the
+   * faction's colour without repainting the modelling — the shading, the
+   * panel breaks and the contrast between the three tones all survive,
+   * because none of them was ever about hue.
+   *
+   * Bounded hard on both ends: a near-black is left alone (it is a shadow
+   * gap, and hue is meaningless down there) and anything already saturated
+   * is left alone (that is paint, and paint is the trim rule's business). */
+  var WASH_MAX_SAT = 0.22;
+  var WASH_MIN_LIGHT = 0.12, WASH_MAX_LIGHT = 0.80;
+  var WASH_FLOOR_SAT = 0.20;
+
+  /* Is this face colour the trim, and what does it become? Returns null for
+   * everything it does not touch, which is almost everything. */
+  function accentSwap(col, to) {
+    if (typeof col !== 'string' || !col) return null;
+    var pre = '';
+    if (col.charAt(0) === '!') { pre = '!'; col = col.slice(1); }
+    if (col.charAt(0) !== '#' || col.length !== 7) return null;   // glass, names
+    var hsl = toHsl(col);
+    if (hsl[1] <= WASH_MAX_SAT && hsl[2] >= WASH_MIN_LIGHT && hsl[2] <= WASH_MAX_LIGHT) {
+      /* Plating. Emissive plating stays emissive — a lit panel is a lamp,
+       * and this is a paint job. */
+      return pre + fromHsl(toHsl(to)[0], Math.max(hsl[1], WASH_FLOOR_SAT), hsl[2]);
+    }
+    if (hsl[0] < ACCENT_HUE_LO || hsl[0] > ACCENT_HUE_HI) return null;
+    if (hsl[1] < ACCENT_MIN_SAT || hsl[2] > ACCENT_MAX_LIGHT) return null;
+    /* HUE FROM THE FACTION, SATURATION AND LIGHTNESS FROM THE FACE. The
+     * first version took the faction's saturation too and came out as
+     * pillarbox red on a hull the modeller had painted in muted gold — a
+     * stripe that looked like a bug rather than like livery. Rotating the
+     * hue alone keeps whatever restraint the art had and still reads as
+     * unmistakably that power's colour. */
+    var want = toHsl(to);
+    return pre + fromHsl(want[0], hsl[1], hsl[2]);
+  }
+
+  /* An accented COPY of a mesh, sharing its vertices. Cached per mesh per
+   * colour: the station meshes are themselves cached per role and the door
+   * leaves per model, so the number of copies is bounded by roles times
+   * powers rather than by anything that grows with play. Sharing `v` is
+   * what makes that cheap — only the colour array is new.
+   *
+   * A mesh with no trim in it is memoised as itself, so a station whose art
+   * has no gold in it costs one scan ever and then nothing. */
+  function accented(mesh) {
+    if (!accentColor || !mesh || !mesh.c || !ACCENT_CACHE) return mesh;
+    var byColor = ACCENT_CACHE.get(mesh);
+    if (!byColor) { byColor = {}; ACCENT_CACHE.set(mesh, byColor); }
+    var hit = byColor[accentColor];
+    if (hit) return hit;
+
+    var c = new Array(mesh.c.length), touched = 0;
+    for (var i = 0; i < mesh.c.length; i++) {
+      var swap = accentSwap(mesh.c[i], accentColor);
+      if (swap) { c[i] = swap; touched++; } else c[i] = mesh.c[i];
+    }
+    if (!touched) { byColor[accentColor] = mesh; return mesh; }
+
+    var out = { v: mesh.v, f: mesh.f, c: c };
+    /* Anything else the mesh carries is geometry, and geometry is shared —
+     * copy the fields the rest of the file reads off a station mesh rather
+     * than dropping them and making the accented copy subtly less useful
+     * than the original. */
+    if (mesh.padHalfA !== undefined) out.padHalfA = mesh.padHalfA;
+    if (mesh.padHalfB !== undefined) out.padHalfB = mesh.padHalfB;
+    byColor[accentColor] = out;
+    return out;
+  }
+
   /* Shade a hull colour by a lighting factor. Accepts the '#rrggbb' the
    * generator hands out, and falls back to a neutral grey hull. */
   function shadeTint(tint, shade) {
@@ -3758,6 +3918,7 @@
 
   function paintPart(ctx, cam, frame, mesh, radiusKm, sunDir, tint) {
     if (!mesh || !mesh.f || !mesh.f.length) return;
+    mesh = accented(mesh);
     if (gpuWorld() && global.GLWorld.queueMesh(cam, frame, mesh, radiusKm, sunDir)) return;
     paintMesh(ctx, cam, frame, mesh, radiusKm, sunDir, tint, 'rgba(12,20,30,0.6)');
   }
@@ -3775,6 +3936,7 @@
     var lib = libPort(role);
     var mesh = lib && lib[part];
     if (!mesh || !mesh.f.length) return false;
+    mesh = accented(mesh);
     if (gpuWorld() && global.GLWorld.queueMesh(cam, frame, mesh, radiusKm, sunDir)) return true;
     paintMesh(ctx, cam, frame, mesh, radiusKm, sunDir, tint, 'rgba(12,20,30,0.6)');
     return true;
@@ -4649,7 +4811,7 @@
 
   function drawStationInterior(ctx, cam, frame, radiusKm, sunDir, role, tint) {
     if (drawPortPart(ctx, cam, frame, radiusKm, sunDir, role, 'interior', tint)) return true;
-    var mesh = stationMeshes().hall;
+    var mesh = accented(stationMeshes().hall);
     if (!mesh || !mesh.f.length) return false;
     if (gpuWorld() && global.GLWorld.queueMesh(cam, frame, mesh, radiusKm, sunDir)) return true;
     paintMesh(ctx, cam, frame, mesh, radiusKm, sunDir, tint, 'rgba(12,20,30,0.6)');
@@ -6755,6 +6917,7 @@
     interiorBounds: interiorBounds,
     insideInterior: insideInterior,
     setIndoors: setIndoors,
+    setAccent: setAccent, accented: accented, accentSwap: accentSwap,
     portSolidity: portSolidity,
     portSections: portSections,
     leafHit: leafHit,
