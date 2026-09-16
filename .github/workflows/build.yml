@@ -33,11 +33,19 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      # v5, not v4. The v4 actions are built against Node 20, which the
+      # runners deprecated in September 2025 and now force onto Node 24 —
+      # every run carries an annotation saying so, which is noise on top of
+      # a real failure and reads like the cause of it.
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          # 24, matching the machine the game is actually developed on.
+          # This is the version the SUITES run under; it has nothing to do
+          # with the Node the actions themselves are built against, which
+          # is the thing the deprecation annotation is about.
+          node-version: 24
           cache: npm
 
       - run: npm ci
@@ -50,7 +58,7 @@ jobs:
 
       - run: npx electron-builder ${{ matrix.targets }} --publish never
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.artifact }}
           path: |
@@ -67,7 +75,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: artifacts
       - uses: softprops/action-gh-release@v2
