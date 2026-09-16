@@ -210,5 +210,206 @@ section('--- the save file remembers the chain ---');
         snap.campaigns.gf0.step === 1);
 })();
 
+section('--- the two powers, and the choice between them ---');
+(function () {
+  /* Astra: "The Navy campaign should have a fairly in-depth story", and
+   * "anything you do for the military power in the region, also do for
+   * Syndicate, since they're basically the alternative."
+   *
+   * Everything above this line is a faction-neutral SHAPE cast against
+   * whatever is at the port. These two are AUTHORED, and the tests below
+   * are about the things authorship buys that generation cannot: the same
+   * five chapters in the same order every time, with the same words. */
+  var navy = Arcs.POWER_ARCS.navy, syn = Arcs.POWER_ARCS.syndicate;
+  check('both powers have a chain', !!navy && !!syn);
+  check('and the navy\'s is in depth rather than a three-step shape',
+        navy.steps.length >= 5, navy.steps.length + ' chapters');
+  check('the Syndicate gets the same depth, not a stub',
+        syn.steps.length === navy.steps.length,
+        syn.steps.length + ' against ' + navy.steps.length);
+  check('every chapter is written rather than generated',
+        navy.steps.concat(syn.steps).every(function (st) {
+          return st.title && st.text && st.text.length > 60;
+        }));
+  check('and the two chains end in different things',
+        navy.reward.id !== syn.reward.id,
+        navy.reward.id + ' / ' + syn.reward.id);
+
+  /* THE POINT OF NO RETURN. Not a difficulty gate and not a morality
+   * meter: the two powers simply stop being able to use somebody the
+   * other one has. */
+  var G = { ship: { credits: 0, cargo: {}, fit: {} }, standing: {}, missions: [],
+            powers: {}, t: 0 };
+  Combat.initShip(G.ship); Sim.refreshShip(G.ship);
+  check('with no allegiance both doors are open',
+        !Arcs.powerBarred(G, 'navy') && !Arcs.powerBarred(G, 'syndicate'));
+  G.allegiance = 'navy';
+  check('taking one shuts the other', Arcs.powerBarred(G, 'syndicate'));
+  check('and leaves your own open', !Arcs.powerBarred(G, 'navy'));
+
+  /* The warning lands a chapter EARLY, because a point of no return the
+   * player did not see coming is a bug rather than a decision. The chapter
+   * before the fork is the one that says so. */
+  check('the fork is far enough in to have earned it',
+        Arcs.POINT_OF_NO_RETURN >= 2 && Arcs.POINT_OF_NO_RETURN < navy.steps.length - 1,
+        'chapter ' + (Arcs.POINT_OF_NO_RETURN + 1) + ' of ' + navy.steps.length);
+})();
+
+section('--- running the navy chain end to end ---');
+(function () {
+  /* The data being right is not the same as the chain working. This runs
+   * it: find a real carrier in a real galaxy, take chapter zero off its
+   * board, and deliver every chapter to the end. */
+  var galaxy = Galaxy.build('kawartha');
+  var found = null;
+  for (var i = 0; i < galaxy.stars.length && !found; i++) {
+    var star = galaxy.stars[i];
+    var sys = systemForStar(galaxy, star);
+    for (var p = 0; p < sys.ports.length; p++) {
+      if (Combat.fleetPort(sys.ports[p])) {
+        found = { star: star, sys: sys, port: sys.ports[p] };
+        break;
+      }
+    }
+  }
+  check('the galaxy has a carrier to start the chain at', !!found,
+        found && found.port.name);
+  if (!found) return;
+
+  var G = makeDockedG(found.sys, found.port, galaxy, found.star);
+  G.powers = {};
+  var fac = found.port.faction;
+  Missions.bumpStanding(G, fac, 40);
+
+  var board = Arcs.powerBoardAt(G, found.port, found.sys, galaxy, found.star, G.t);
+  check('the carrier posts chapter one', board.length === 1,
+        board.length + ' offers');
+  if (!board.length) return;
+  check('and it is named rather than generated',
+        /Powder Chain/.test(board[0].text), board[0].text);
+
+  var res = Missions.accept(G, board[0], HOOKS);
+  check('it signs', res.ok, res.why);
+
+  var state = { G: G, galaxy: galaxy };
+  var chapters = 1, guard = 0;
+  var arc = Arcs.POWER_ARCS.navy;
+  while (G.missions.length && guard++ < 12) {
+    var m = G.missions[0];
+    if (!m.power) break;
+    /* The chain hands you the next chapter's freight at the dock, so the
+     * only thing a delivery needs is to arrive. */
+    deliver(state, m, 3600);
+    if (G.missions.length && G.missions[0].power && G.missions[0].step > m.step) chapters++;
+    else break;
+  }
+  console.log('  ran ' + chapters + ' of ' + arc.steps.length +
+              ' chapters; allegiance ' + (G.allegiance || 'none'));
+  check('the chain ran past the fork rather than stalling at it',
+        chapters > Arcs.POINT_OF_NO_RETURN,
+        chapters + ' chapters');
+  check('and taking the third chapter picked a side',
+        G.allegiance === 'navy', String(G.allegiance));
+  check('which closed the other one', !!G.powers.syndicate &&
+        G.powers.syndicate.status === 'barred',
+        JSON.stringify(G.powers.syndicate || null));
+  check('the Syndicate will not post its hook to somebody on a fleet roll',
+        Arcs.powerBoardAt(G, found.port, found.sys, galaxy, found.star, G.t)
+          .every(function (o) { return o.power !== 'syndicate'; }));
+
+  /* AND IT RAN TO THE END, which is the thing an authored chain has to do
+   * that a generated one does not. A shape that cannot be cast at this
+   * port can be picked up at the next port of the same flag; a story that
+   * stops at chapter three leaves the player holding a plot. */
+  check('the chain reached its last chapter', chapters === arc.steps.length,
+        chapters + ' of ' + arc.steps.length);
+  check('and it is recorded as finished rather than abandoned',
+        !!G.powers.navy && G.powers.navy.status === 'completed',
+        JSON.stringify(G.powers.navy || null));
+
+  /* THE REWARD IS A FITTING RATHER THAN A NUMBER, which is the point of
+   * running it: standing can be earned by anybody with a hold and a
+   * decade, and this cannot be bought at all. */
+  var fitted = Combat.transponderKind(G.ship);
+  check('the navy issues the transponder it does not sell',
+        fitted === 'issued' || (G.owed || []).indexOf('transponder') >= 0,
+        String(fitted) + ' / owed ' + JSON.stringify(G.owed || []));
+  if (fitted === 'issued') {
+    check('and it passes everywhere, unlike the forgery',
+          Combat.transponderPasses(G.ship, { id: 'anywhere-at-all' }));
+  }
+})();
+
+section('--- a transponder that can fail ---');
+(function () {
+  /* The issued transponder has carried a note since it landed: "a forged
+   * transponder is a good idea for later and a different item: it should
+   * be able to fail, and this one cannot." It is the Syndicate chain's
+   * reward the way the issued one is the navy's. */
+  var ship = {};
+  Combat.initShip(ship); Sim.refreshShip(ship);
+  check('a bare ship answers no challenge', !Combat.hasTransponder(ship));
+  check('and has no papers of either kind', Combat.transponderKind(ship) === null);
+
+  var slot = Combat.canFit(ship, 'forgedtransponder');
+  check('the forgery fits an internal slot', slot.ok, slot.why);
+  ship.fit[slot.key] = 'forgedtransponder';
+  Combat.syncLegacy(ship);
+  check('it answers the challenge at all', Combat.hasTransponder(ship));
+  check('and it knows what it is', Combat.transponderKind(ship) === 'forged');
+
+  /* YOU CANNOT CARRY BOTH. They are the same box with different paperwork
+   * and the game should not let you hedge. */
+  var both = Combat.canFit(ship, 'transponder');
+  check('the issued one will not fit beside it', !both.ok, JSON.stringify(both));
+
+  /* IT FAILS BY PLACE, NOT BY DICE. A roll at the moment of jumping is a
+   * jump that sometimes kills you for no reason you could have known;
+   * hashed off the star and the registration it is a fact about a place,
+   * which is what lets the chart warn you before you commit. */
+  ship.reg = 'AB-1234';
+  var stars = [];
+  for (var i = 0; i < 400; i++) stars.push({ id: 'star-' + i });
+  var passed = stars.filter(function (st) { return Combat.forgedPasses(st, ship); }).length;
+  console.log('  a forgery passes at ' + passed + ' of ' + stars.length + ' stars');
+  check('a forgery works in most places and not all of them',
+        passed > stars.length * 0.5 && passed < stars.length * 0.85,
+        passed + ' of ' + stars.length);
+  check('and the same star gives the same answer every time',
+        stars.every(function (st) {
+          return Combat.forgedPasses(st, ship) === Combat.forgedPasses(st, ship);
+        }));
+  /* A different ship's papers are a different forgery. */
+  var other = { reg: 'ZK-9911' };
+  var differ = stars.filter(function (st) {
+    return Combat.forgedPasses(st, ship) !== Combat.forgedPasses(st, other);
+  }).length;
+  check('somebody else\'s forgery fails somewhere else', differ > 20,
+        differ + ' stars disagree');
+
+  /* AND THE ISSUED ONE NEVER FAILS, which is what the navy's chain is
+   * actually paying you in. */
+  var clean = {};
+  Combat.initShip(clean); Sim.refreshShip(clean);
+  var s2 = Combat.canFit(clean, 'transponder');
+  clean.fit[s2.key] = 'transponder';
+  Combat.syncLegacy(clean);
+  clean.reg = 'AB-1234';
+  check('an issued transponder passes everywhere',
+        stars.every(function (st) { return Combat.transponderPasses(clean, st); }));
+  check('and the forgery does not', !stars.every(function (st) {
+        return Combat.transponderPasses(ship, st); }));
+
+  /* NOBODY SELLS IT. The whole of what it is worth is that it cannot be
+   * bought, so it must not appear on a shelf with a reason attached —
+   * that would advertise the Syndicate's chain to somebody who has not
+   * run it. */
+  var G2 = { ship: clean, standing: {}, wanted: {}, sys: { crimeScore: 90, corruption: 90 } };
+  var shelf = Combat.stockAt(G2, { faction: 'outlaw', market: { dev: 1 } });
+  check('and it is on no shelf anywhere',
+        shelf.every(function (row) { return row.item.id !== 'forgedtransponder'; }),
+        String(shelf.length) + ' rows');
+})();
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);

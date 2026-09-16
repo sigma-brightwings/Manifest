@@ -127,6 +127,8 @@
    * chain's shape moved; the one number in it that was never true got
    * corrected. */
   var ENRICH_MARGIN = 2.20;
+  var FEED_ID = 'fissile';
+  var FEED_LOCAL_MAX = 1.18;   // a factory's feed is contracted, not panicked
 
   var COMMODITIES = [
     { id: 'water',    name: 'Water',            tier: 0, base: 18,   cat: 'raw' },
@@ -745,7 +747,19 @@
    * generate.js has already set. That is what keeps the licence additive
    * to every pre-existing seed. */
   function syndicatePresent(sys) {
-    return !!(sys && sys.pirateHeld);
+    if (sys && sys.pirateHeld) return true;
+    /* AND WHEREVER THEIR FLAGSHIP IS STANDING. The navy's half of this
+     * test has always read the patrol list — a based cutter licenses, a
+     * cutter merely crossing does not — and the Syndicate's half read a
+     * flag on the system instead, because when it was written the
+     * Syndicate had no hulls of its own to look for. It has one now, and a
+     * flagship is a great deal more of a presence than a garrison cutter.
+     * Reading it here is the mirror the navy test already was. */
+    var pat = (sys && sys.patrols) || [];
+    for (var i = 0; i < pat.length; i++) {
+      if (pat[i].outlaw && pat[i].kind === 'capital') return true;
+    }
+    return false;
   }
 
   function licensor(sys) {
@@ -779,6 +793,34 @@
       if (!m || m.role !== 'orbital') continue;
       if (!best || m.dev > best.market.dev ||
           (m.dev === best.market.dev && String(p.id) < String(best.id))) best = p;
+    }
+    /* ---- AND A FALLBACK, because rarity was costing the wrong thing ------
+     * Astra: "loosen the licensing requirements."
+     *
+     * Measured: 32 factories across two hundred systems, one per six, and
+     * the run to reach one is long enough that the chain reads as a thing
+     * you do occasionally rather than a trade you can work. The gate was
+     * three conditions deep — a licensor in system, a reprocessing plant
+     * for it to license, AND a spare generic port to convert — and the
+     * third was doing most of the excluding while meaning the least.
+     *
+     * The original rule refused to promote a refinery or a mining head on
+     * the grounds that it would delete an industry to add one. That is a
+     * good argument against taking an AGRI world or a shipyard, and a poor
+     * one here: a refinery and a mining head are the two industries in the
+     * game already handling ore and heavy processing, and pressing slugs is
+     * what a place like that does with a licence. They are not deleted, they
+     * are promoted — which is what the word factory means.
+     *
+     * Still no rng, and still the same stable rule, so a seed that had a
+     * factory has the same factory in the same place. */
+    if (!best) {
+      for (var j = 0; j < ports.length; j++) {
+        var q = ports[j], mq = q.market;
+        if (!mq || (mq.role !== 'refinery' && mq.role !== 'mining')) continue;
+        if (!best || mq.dev > best.market.dev ||
+            (mq.dev === best.market.dev && String(q.id) < String(best.id))) best = q;
+      }
     }
     if (!best) return null;
     best.market.role = 'milfuel';
@@ -908,6 +950,30 @@
       if (who === 'syndicate') take = Math.max(0.2, take - 0.10);
       addRow(fm, 'milfuel', slugs, slugs * take);
       addRow(fm, 'fissile', 0, slugs * FISSILE_PER_MILFUEL);
+      /* ---- AND IT BUYS ITS FEED ON A CONTRACT ----------------------------
+       * A factory that pays spot prices for the one input it cannot run
+       * without is not a factory, it is a speculator — and that is what the
+       * market model made of it, because a port that imports something and
+       * consumes all of it reads as desperate and prices accordingly.
+       *
+       * Loosening the licensing made it visible rather than causing it.
+       * Promoting refineries and mining heads took the galaxy from
+       * thirty-two factories to fifty-six, and five of the new ones lost
+       * money on every slug while the rest cleared fifteen per cent — which
+       * is not a tuning problem, it is the wrong price mechanism for this
+       * one row.
+       *
+       * So the feed row's STRUCTURAL multiplier is capped and its scarcity
+       * term is left alone: a factory that has run its stock down still
+       * pays more, day to day, but the floor under it is a contract rather
+       * than a panic. Every factory in the galaxy is solvent afterwards
+       * rather than most of them.
+       *
+       * It costs the player a little at this leg and buys back something
+       * worth more — the fissile run pays about the same wherever you take
+       * it, so it can be planned instead of gambled on. */
+      var feed = fm.rows[FEED_ID];
+      if (feed && feed.local > FEED_LOCAL_MAX) feed.local = FEED_LOCAL_MAX;
       fm.slugs = slugs;
       fm.feed = slugs * FISSILE_PER_MILFUEL;
       made++;

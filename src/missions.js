@@ -775,6 +775,12 @@
        * still say what it said when you signed it. */
       desc: offer.desc || null,
       campaign: offer.campaign || false, factionId: offer.factionId,
+      /* WHICH KIND OF CAMPAIGN. A generated faction arc and an authored
+       * power chain both ride the `campaign` flag, and only this field
+       * tells arcs.js which of the two settled — drop it here and the
+       * chain delivers chapter one and then simply stops, which is what
+       * happened. */
+      power: offer.power || null,
       arcId: offer.arcId, step: offer.step
     });
     /* A campaign hook (chapter zero of a faction's chain) also opens the

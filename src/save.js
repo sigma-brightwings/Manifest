@@ -289,6 +289,14 @@
        * is the correct answer for a pilot who never bribed anyone. */
       corruptionShift: G.corruptionShift || {},
       missions: G.missions || [],
+      /* THE TWO AUTHORED CHAINS AND THE CHOICE BETWEEN THEM. `allegiance`
+       * is set exactly once, when a third chapter is taken, and nothing
+       * clears it — so it is the one field in this file that a save must
+       * never lose, or a career that shut a door would find it open again.
+       * `owed` is a reward that could not be fitted when it was earned. */
+      powers: G.powers || {},
+      allegiance: G.allegiance || null,
+      owed: G.owed || [],
       doneMissions: G.doneMissions || {},
       campaigns: G.campaigns || {},
       ledger: G.ledgerLog || []
@@ -402,6 +410,9 @@
     G.corruptionShift = (data.corruptionShift && typeof data.corruptionShift === 'object')
       ? data.corruptionShift : {};
     G.missions = data.missions || [];
+    G.powers = data.powers || {};
+    G.allegiance = data.allegiance || null;
+    G.owed = data.owed || [];
     G.doneMissions = data.doneMissions || {};
     G.campaigns = data.campaigns || {};
     G.ledgerLog = data.ledger || [];

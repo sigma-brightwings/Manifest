@@ -2121,6 +2121,12 @@
 
     var offers = Missions.boardAt(docked, G.sys, G.galaxy, G.here, G.t)
       .concat(Arcs ? Arcs.campaignBoardAt(G, docked, G.sys, G.galaxy, G.here, G.t) : [])
+      /* The two authored chains, ahead of everything else on the board:
+       * they are the only offers here that are a STORY rather than a job,
+       * and a chapter that scrolled off the bottom behind four hauls would
+       * be a story nobody found. */
+      .concat(Arcs && Arcs.powerBoardAt
+        ? Arcs.powerBoardAt(G, docked, G.sys, G.galaxy, G.here, G.t) : [])
       .filter(function (o) { return !Missions.alreadyHave(G, o.id); })
       .sort(function (a, b) { return (b.campaign ? 1 : 0) - (a.campaign ? 1 : 0); });
     if (!offers.length) {

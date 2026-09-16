@@ -216,6 +216,10 @@
    * Either casts the next chapter right there at the port you just landed
    * at, or — on the last step — pays out the chain's real reward. */
   function onStepComplete(G, m, port, sys, t, hooks) {
+    /* An authored power chain is read from a script rather than cast from
+     * a template, so it settles down its own path. Same entry point,
+     * because missions.js should not have to know there are two kinds. */
+    if (m.power) return onPowerStepComplete(G, m, port, sys, t, hooks);
     var progress = (G.campaigns = G.campaigns || {})[m.factionId];
     if (!progress) return;
     var tpl = ARC_BY_ID[m.arcId];
@@ -278,6 +282,15 @@
    * deadline. The chain breaks rather than silently vanishing — it can be
    * picked back up, from the top, once the cooldown passes. */
   function onStepFailed(G, m, t, hooks) {
+    if (m.power) {
+      var pp = (G.powers = G.powers || {})[m.power];
+      if (pp) { pp.status = 'failed'; pp.cooldownUntil = t + FAIL_COOLDOWN; }
+      if (hooks && hooks.say) {
+        hooks.say('You have dropped ' + (POWER_ARCS[m.power] || {}).name +
+                  '. They will let you start again, eventually.', 7);
+      }
+      return;
+    }
     var progress = (G.campaigns = G.campaigns || {})[m.factionId];
     if (!progress) return;
     progress.status = 'failed';
@@ -290,7 +303,317 @@
     }
   }
 
+  /* ======================================================================
+   * THE TWO POWERS, AND THE CHOICE BETWEEN THEM
+   * ======================================================================
+   *
+   * Astra: "The Navy campaign should have a fairly in-depth story", and
+   * "anything you do for the military power in the region, also do for
+   * Syndicate, since they're basically the alternative."
+   *
+   * Everything above this line is a faction-neutral SHAPE — three steps
+   * cast against whatever is at the port, with the flavour decided by the
+   * seed. That is the right machinery for twelve powers whose difference
+   * is which flag they fly, and the wrong machinery for these two, whose
+   * difference is what they think a person is for.
+   *
+   * So these are AUTHORED. Five chapters each, written rather than cast,
+   * with their own progress record, their own gate, and their own reward.
+   * The objectives underneath them are still real contracts cast by
+   * castStep against real ports — the story is the frame, not a substitute
+   * for the work — but the order, the words and the consequences are
+   * fixed, because a story that is different every time is not a story.
+   *
+   * THE TWO ARE THE SAME CHAIN SEEN FROM OPPOSITE ENDS, deliberately.
+   * Both are about the same leak: military fuel is going somewhere it
+   * should not, and both chains are the story of who finds out. The navy
+   * is trying to close it. The Syndicate is the reason it is open. The
+   * player is the one carrying the boxes either way, which is the whole
+   * argument this game makes about trade.
+   *
+   * AND AT CHAPTER THREE YOU CHOOSE. Taking the third chapter of either
+   * chain puts your name on something — a fleet roll or a slate — and the
+   * other chain closes for good. Not a difficulty gate and not a morality
+   * meter: the two powers simply stop being able to use somebody the other
+   * one has. The warning is given when chapter two is handed over, in
+   * words, because a point of no return the player did not see coming is a
+   * bug rather than a decision. */
+  var POINT_OF_NO_RETURN = 2;        // chapter index, zero-based
+  var POWER_STANDING_WIN = 8;        // per chapter, on top of the ordinary gain
+
+  var POWER_ARCS = {
+    navy: {
+      id: 'powder-chain', power: 'navy', name: 'The Powder Chain',
+      /* Not a high bar. The navy's problem in this story is that it needs
+       * somebody who is not already inside it. */
+      gate: 15,
+      hook: 'A quartermaster has been watching your manifests',
+      reward: { id: 'transponder', credits: 24000, standing: 30 },
+      rewardText: 'A restricted-space transponder, issued rather than sold — ' +
+                  'the navy does not sell these, and now it does not have to.',
+      steps: [
+        { type: 'haul', payMul: 1.0,
+          title: 'Manifest and Muster',
+          text: 'Ordinary freight on an ordinary schedule. Nobody is testing ' +
+                'your flying — they are testing whether the tonnage you land ' +
+                'is the tonnage you lifted.' },
+        { type: 'courier', payMul: 1.4,
+          title: 'The Quiet Berth',
+          text: 'A sealed case to the next system, hand to hand, no copy in ' +
+                'the log. The quartermaster mentions, not quite in passing, ' +
+                'that a licensed plant has been returning less than it takes ' +
+                'in for eleven months.' },
+        { type: 'haul', payMul: 1.9, licensed: true,
+          title: 'Books and Bodies',
+          text: 'Naval materiel, in your hold, under your name. Signing for ' +
+                'it puts you on a fleet roll — and a roll is a list other ' +
+                'people can read.' },
+        { type: 'disposal', payMul: 2.2,
+          title: 'The Skimmer',
+          text: 'The shortfall was not an accounting error. Somebody has been ' +
+                'pressing slugs off the books and selling them to people who ' +
+                'do not ask for paperwork. You are moving what is left of the ' +
+                'evidence before it is tidied away.' },
+        { type: 'courier', payMul: 2.8,
+          title: 'Powder and Paper',
+          text: 'Carry the case to a yard that builds warships and will not ' +
+                'be embarrassed by what is in it. After this you can go where ' +
+                'the navy goes.' }
+      ]
+    },
+    syndicate: {
+      id: 'long-arrangement', power: 'syndicate', name: 'The Long Arrangement',
+      gate: 10,
+      hook: 'Somebody wants a favour done and will not say by whom',
+      reward: { id: 'forgedtransponder', credits: 30000, standing: 25 },
+      rewardText: 'A transponder that answers the challenge. It is not yours ' +
+                  'and it was not issued, which is the whole of what is wrong ' +
+                  'with it.',
+      steps: [
+        { type: 'haul', payMul: 1.1,
+          title: 'A Favour, Not a Job',
+          text: 'Carry this, do not open it, do not ask. It pays like freight ' +
+                'and it is not freight, and everybody involved knows both ' +
+                'halves of that sentence.' },
+        { type: 'smuggle', payMul: 1.5,
+          title: 'Weight and Measure',
+          text: 'Now you know what the favour was. The arrangement has been ' +
+                'running for eleven months and the only new thing in it is ' +
+                'you.' },
+        { type: 'smuggle', payMul: 2.0, hot: true,
+          title: 'The Name on the Slate',
+          text: 'A consignment the navy is already looking for. Taking it ' +
+                'writes your name on a slate that does not get wiped — and ' +
+                'the people who keep that slate look after their own.' },
+        { type: 'haul', payMul: 2.3,
+          title: 'The Quiet Man',
+          text: 'Somebody inside has been talking to a quartermaster. You are ' +
+                'not being asked to do anything to him. You are being asked ' +
+                'to move him, quickly, and not to look at the manifest.' },
+        { type: 'courier', payMul: 2.9,
+          title: 'A Door That Opens',
+          text: 'One run to a system nobody is supposed to be able to reach, ' +
+                'and the arrangement makes you a way in.' }
+      ]
+    }
+  };
+
+  /* Which power's chain, if any, this dock can offer. The navy's is the
+   * fleet's own board — a carrier, which is the one place in the game that
+   * already refuses to be an ordinary port. The Syndicate's is anywhere
+   * their own flag flies or anywhere corrupt enough that the difference
+   * has stopped mattering. */
+  function powerAt(G, port, sys) {
+    var C = global.Combat;
+    if (C && C.fleetPort && C.fleetPort(port)) return 'navy';
+    if (port && port.faction === 'outlaw') return 'syndicate';
+    if (C && C.systemCorruption && sys) {
+      if (C.systemCorruption(G, sys) >= 62) return 'syndicate';
+    }
+    return null;
+  }
+
+  /* WHOSE GOOD BOOKS, and it has to be asked of the PORT rather than of the
+   * word "navy". There is no navy faction in this galaxy — there are twelve
+   * powers, each with its own fleet and its own ledger, and a carrier
+   * belongs to one of them. Reading a literal 'navy' standing found zero
+   * every time and the chain never offered itself once, which is the kind
+   * of bug that looks like a design decision from the outside. */
+  function powerStanding(G, power, port) {
+    var M = global.Missions;
+    if (!M) return 0;
+    return M.standing(G, powerFaction(power, port));
+  }
+
+  /* The faction a chapter is booked against — the navy's chain pays and
+   * costs standing with the local flag, the Syndicate's with the outlaws,
+   * because those are the two ledgers the rest of the game already keeps. */
+  function powerFaction(power, port) {
+    return power === 'syndicate' ? 'outlaw' : (port && port.faction) || 'navy';
+  }
+
+  /* Has the player already shut this door by walking through the other
+   * one? `allegiance` is set exactly once, when a third chapter is taken,
+   * and nothing clears it. */
+  function powerBarred(G, power) {
+    return !!(G && G.allegiance && G.allegiance !== power);
+  }
+
+  function powerBoardAt(G, port, sys, galaxy, here, t) {
+    var power = powerAt(G, port, sys);
+    if (!power) return [];
+    var arc = POWER_ARCS[power];
+    if (!arc || powerBarred(G, power)) return [];
+    if (powerStanding(G, power, port) < arc.gate) return [];
+
+    G.powers = G.powers || {};
+    var progress = G.powers[power];
+    if (progress && (progress.status === 'active' || progress.status === 'completed')) return [];
+    if (progress && progress.cooldownUntil && t < progress.cooldownUntil) return [];
+
+    var win = windowIndex(t);
+    var rng = new RNG('power|' + arc.id + '|' + port.id + '|' + win);
+    var step = arc.steps[0];
+    var offer = castStep(step.type, port, sys, galaxy, here, rng, t);
+    if (!offer) return [];
+
+    return [dress(powerEntry(arc, 0, offer, port, t), port, sys, here, offer.toStar)];
+  }
+
+  function powerEntry(arc, idx, offer, port, t) {
+    var step = arc.steps[idx];
+    return {
+      id: 'pw|' + arc.id + '|' + idx + '|' + windowIndex(t),
+      type: offer.type, cid: offer.cid, tonnes: offer.tonnes,
+      fromName: offer.fromName, toPortId: offer.toPortId || null,
+      toStarId: offer.toStarId || null, toName: offer.toName,
+      faction: powerFaction(arc.power, port),
+      pay: Math.round(basePay(offer) * step.payMul),
+      deadline: deadlineFor(offer, t),
+      text: arc.name + ' — ' + step.title + ': ' + offer.text,
+      desc: step.text,
+      campaign: true, power: arc.power, arcId: arc.id, factionId: powerFaction(arc.power, port),
+      step: idx
+    };
+  }
+
+  /* The chain's own completion path. Same shape as onStepComplete above and
+   * deliberately a separate function: the generic one casts its next
+   * chapter from a template the seed chose, and this one is reading a
+   * script. */
+  function onPowerStepComplete(G, m, port, sys, t, hooks) {
+    var arc = null;
+    for (var k in POWER_ARCS) if (POWER_ARCS[k].id === m.arcId) arc = POWER_ARCS[k];
+    if (!arc) return;
+    var progress = (G.powers = G.powers || {})[arc.power] ||
+                   (G.powers[arc.power] = { arcId: arc.id, step: m.step, status: 'active' });
+
+    if (global.Missions) {
+      global.Missions.bumpStanding(G, powerFaction(arc.power, port), POWER_STANDING_WIN);
+    }
+
+    var nextIdx = m.step + 1;
+    if (nextIdx >= arc.steps.length) {
+      progress.status = 'completed';
+      progress.step = m.step;
+      G.ship.credits += arc.reward.credits;
+      if (global.Missions) {
+        global.Missions.bumpStanding(G, powerFaction(arc.power, port), arc.reward.standing);
+      }
+      grantReward(G, arc, hooks);
+      if (hooks && hooks.sound) hooks.sound('pay');
+      return;
+    }
+
+    /* THE POINT OF NO RETURN, and it is the ACT of taking the chapter
+     * rather than delivering it — you are choosing when you sign, not when
+     * you arrive. Nothing clears it afterwards. */
+    if (nextIdx === POINT_OF_NO_RETURN && !G.allegiance) {
+      G.allegiance = arc.power;
+      var other = arc.power === 'navy' ? POWER_ARCS.syndicate : POWER_ARCS.navy;
+      G.powers[other.power] = { arcId: other.id, step: 0, status: 'barred' };
+      if (hooks && hooks.say) {
+        hooks.say(arc.power === 'navy'
+          ? 'You are on a fleet roll now. The other arrangement is closed to you.'
+          : 'Your name is on the slate. The navy will not be asking again.', 8);
+      }
+      if (hooks && hooks.sound) hooks.sound('warn');
+    }
+
+    var win = windowIndex(t);
+    var rng = new RNG('power|' + arc.id + '|' + nextIdx + '|' + win + '|' + port.id);
+    var offer = castStep(arc.steps[nextIdx].type, port, sys, G.galaxy, G.here, rng, t);
+    /* AN AUTHORED CHAIN MUST NOT STALL. The generic arcs above can afford
+     * to — they are a shape, and a shape that cannot be cast here can be
+     * picked up at the next port of the same flag. A story cannot: it
+     * stops at chapter three and the player is left holding a plot.
+     *
+     * Measured, which is why this is here at all: running the navy chain
+     * end to end in kawartha died at 'The Skimmer' because the carrier's
+     * system had no reprocessing plant to cast a disposal against. So the
+     * flavour degrades and the chapter still happens — the words are the
+     * story, and the cargo is only ever what the words are carried in. */
+    if (!offer) offer = castStep('haul', port, sys, G.galaxy, G.here, rng, t);
+    if (!offer) { progress.status = 'stalled'; return; }
+
+    var Sim = global.Sim;
+    var free = Sim ? G.ship.cargoCap - Sim.cargoMass(G.ship) : offer.tonnes;
+    if (Sim && offer.cid && free >= offer.tonnes) {
+      G.ship.cargo[offer.cid] = (G.ship.cargo[offer.cid] || 0) + offer.tonnes;
+      Sim.refreshShip(G.ship);
+    }
+    var entry = dress(powerEntry(arc, nextIdx, offer, port, t), port, sys, G.here, offer.toStar);
+    (G.missions = G.missions || []).push(entry);
+    progress.step = nextIdx;
+    progress.status = 'active';
+
+    if (hooks && hooks.say) {
+      /* THE WARNING, one chapter early. A point of no return the player did
+       * not see coming is a bug rather than a decision. */
+      if (nextIdx === POINT_OF_NO_RETURN - 1) {
+        hooks.say(arc.steps[nextIdx].title + ' — and the one after it decides ' +
+                  'which side of this you are on.', 8);
+      } else {
+        hooks.say(arc.name + ' — ' + arc.steps[nextIdx].title, 6);
+      }
+    }
+    if (hooks && hooks.sound) hooks.sound('click');
+  }
+
+  /* The chain's real reward is a FITTING rather than a number, which is the
+   * point of running it: standing can be earned by anybody with a hold and
+   * a decade, and this cannot be bought at all. If there is no internal
+   * slot free it is held for you rather than lost — a reward that
+   * evaporates because your ship was full is a reward nobody trusts. */
+  function grantReward(G, arc, hooks) {
+    var C = global.Combat;
+    var id = arc.reward.id;
+    var done = false;
+    if (C && C.canFit) {
+      var slot = C.canFit(G.ship, id);
+      if (slot && slot.ok) {
+        G.ship.fit[slot.key] = id;
+        if (C.syncLegacy) C.syncLegacy(G.ship);
+        done = true;
+      }
+    }
+    if (!done) {
+      G.owed = G.owed || [];
+      if (G.owed.indexOf(id) < 0) G.owed.push(id);
+    }
+    if (hooks && hooks.say) {
+      hooks.say(arc.name + ' ends. ' + arc.rewardText +
+                (done ? '' : ' It is waiting for you at the yard — no slot free.'), 9);
+    }
+  }
+
   var Arcs = {
+    POWER_ARCS: POWER_ARCS,
+    POINT_OF_NO_RETURN: POINT_OF_NO_RETURN,
+    powerBoardAt: powerBoardAt,
+    powerAt: powerAt,
+    powerBarred: powerBarred,
+    onPowerStepComplete: onPowerStepComplete,
     ARC_TEMPLATES: ARC_TEMPLATES,
     ARC_BY_ID: ARC_BY_ID,
     arcForFaction: arcForFaction,

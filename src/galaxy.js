@@ -569,6 +569,13 @@
   function barredFrom(star, ship) {
     if (!restrictionOf(star)) return false;
     var C = global.Combat;
+    /* AND WHETHER THE PAPERWORK PASSES HERE, which is not the same question
+     * as whether you are carrying any. A forged transponder answers the
+     * challenge at most stars and not at all of them, and which is which is
+     * a fact about the star rather than a roll — so this can be asked by
+     * the chart before you commit and by the jump planner at the moment you
+     * do, and the two cannot disagree. */
+    if (C && C.transponderPasses) return !C.transponderPasses(ship, star);
     return !(C && C.hasTransponder && C.hasTransponder(ship));
   }
 

@@ -346,7 +346,7 @@
      * different item: it should be able to fail, and this one cannot. */
     transponder: { id: 'transponder', name: 'Restricted-space transponder',
                   slot: 'internal', kind: 'transponder', price: 24000,
-                  power: 0.2, mass: 1, unique: true,
+                  power: 0.2, mass: 1, unique: true, uniqueGroup: 'transponder',
                   minDev: 0.70, minStanding: 40, minCrime: 0, grey: false,
                   pitch: 'Answers the challenge nobody civilian is supposed to hear. Where it lets you go is not a reward.' },
 
@@ -375,6 +375,32 @@
                seats: 4, hold: 8,
                minDev: 0.30, minStanding: -100, minCrime: 0, grey: false,
                pitch: 'Four berths, a galley and a scrubber. Eight tonnes of hold becomes four people who expect to arrive.' },
+
+    /* ---- and the one nobody sells ----------------------------------------
+     * The issued transponder above has always had a note on it: "a forged
+     * transponder is a good idea for later and a different item: it should
+     * be able to fail, and this one cannot." This is that item, and it is
+     * the Syndicate chain's reward the way the issued one is the navy's.
+     *
+     * UNLISTED. It is not stocked anywhere at any price, because the whole
+     * of what it is worth is that you cannot buy it. `unlisted` keeps it
+     * out of every shelf rather than relying on a development gate nobody
+     * could reach.
+     *
+     * AND IT FAILS DETERMINISTICALLY, which is the design decision here. A
+     * dice roll at the moment of jumping would be a jump that sometimes
+     * kills you for no reason you could have known; hashing the answer off
+     * the STAR and the ship's registration makes it a fact about a place
+     * instead. Your papers are good at Coldwater and they are not good at
+     * Ardent, they are consistently not good at Ardent, and you can be told
+     * so before you commit. That turns a gamble into a piece of geography,
+     * which is what this game does with everything else. */
+    forgedtransponder: { id: 'forgedtransponder', name: 'Forged transponder',
+                  slot: 'internal', kind: 'transponder', price: 0,
+                  power: 0.2, mass: 1, unique: true, forged: true, unlisted: true,
+                  uniqueGroup: 'transponder',
+                  minDev: 0, minStanding: -100, minCrime: 0, grey: false,
+                  pitch: 'Answers the challenge in somebody else\'s name. Not every challenger is satisfied.' },
 
     heatshield: { id: 'heatshield', name: 'Ablative heat shield', slot: 'internal',
                   kind: 'heatshield', price: 3600, power: 0.8, mass: 3,
@@ -1231,7 +1257,46 @@
    * fitted. Reads the slots rather than a flag: there is no way to be
    * carrying one except by having bought and fitted it. */
   function hasTransponder(ship) {
-    return hasFitted(ship, 'transponder');
+    return hasFitted(ship, 'transponder') || hasFitted(ship, 'forgedtransponder');
+  }
+
+  /* WHICH one, because the difference is the whole of the Syndicate's
+   * reward. Null when there is none. */
+  function transponderKind(ship) {
+    if (hasFitted(ship, 'transponder')) return 'issued';
+    if (hasFitted(ship, 'forgedtransponder')) return 'forged';
+    return null;
+  }
+
+  /* Will a forgery pass AT THIS STAR? Hashed off the star and the ship's
+   * own registration, so it is a fact about a place rather than a dice
+   * roll at the moment of jumping — the same answer every time you ask,
+   * which is what lets the chart warn you before you commit.
+   *
+   * Two thirds, measured against nothing because there is nothing to
+   * measure: it is the rate at which a forgery has to fail to be a
+   * different object from the issued one and still be worth carrying. A
+   * paper that worked nine times in ten would be the issued transponder
+   * with extra words; one that worked half the time would be a coin. */
+  var FORGED_PASS = 0.67;
+
+  function forgedPasses(star, ship) {
+    if (!star) return true;
+    var R = global.RNG;
+    if (!R || !R.hashString) return true;
+    var reg = (ship && (ship.reg || ship.registration)) || 'unregistered';
+    var h = R.hashString('forged|' + (star.id || star.name || '?') + '|' + reg);
+    return (h % 1000) / 1000 < FORGED_PASS;
+  }
+
+  /* Does this ship's paperwork actually answer the challenge at this star?
+   * One function, asked by the jump planner and by the chart, so the
+   * warning and the refusal cannot disagree. */
+  function transponderPasses(ship, star) {
+    var kind = transponderKind(ship);
+    if (!kind) return false;
+    if (kind === 'issued') return true;
+    return forgedPasses(star, ship);
   }
 
   /* Strip a ship back to that list. The hull must already be set: slot keys
@@ -5159,6 +5224,10 @@
 
     for (var id in EQUIPMENT) {
       var it = EQUIPMENT[id];
+      /* Some things are not for sale anywhere at any price — see the
+       * forged transponder. A shelf that listed it with a reason would be
+       * advertising the Syndicate's chain to somebody who has not run it. */
+      if (it.unlisted) continue;
       var verdict = null;
 
       if (it.syndicate) {
@@ -5503,6 +5572,8 @@
     liftTrader: liftTrader,
     crime: crime, witnessNear: witnessNear,
     bountyTotal: bountyTotal, wantedHere: wantedHere, fleetPort: fleetPort,
+    transponderKind: transponderKind, forgedPasses: forgedPasses,
+    transponderPasses: transponderPasses, FORGED_PASS: FORGED_PASS,
     capitalShadow: capitalShadow, CAPITAL_WATCH: CAPITAL_WATCH,
     contrabandAboardFor: contrabandAboardFor,
     dockRefused: dockRefused, dockRefusal: dockRefusal, payBounty: payBounty,
