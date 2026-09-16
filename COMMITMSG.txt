@@ -1,0 +1,55 @@
+the Syndicate licenses plants too, and the suite is green for the first time in eight days
+
+Astra: "Milfuel is manufactured at Navy/Syndicate reprocessing plants."
+
+Half of that was already true and the other half was a hole in the fiction
+this file had already argued for. The Syndicate's whole racket IS the
+waste -- they ban radioactive cargo in the systems they hold and dump
+their own in everyone else's back garden -- so a hold is the one other
+place with both the feedstock and nobody to answer to. And it could not
+happen by accident: no naval garrison ever spawns in a hold (the
+`sys.pirateHeld` gate in buildPatrols) and a passing cutter licenses
+nothing, so before this the single most lawless place in the galaxy was
+the one place you could not buy military fuel.
+
+`licensor(sys)` answers navy, syndicate or nobody, and reads a flag
+generate.js has already set -- NO RNG DRAW, the same discipline the rest
+of this pass keeps, which is what makes the licence additive to every
+pre-existing seed.
+
+A syndicate plant keeps ten points less back than a naval one. The navy's
+share is a contract; the Syndicate's is a cut, and a cut is smaller than a
+requisition, because they are selling -- which is the point of holding the
+plant. So a hold is the better place to buy it and the worst place to be
+caught leaving with it.
+
+WORTH A LOOK BEFORE THIS IS SETTLED: it roughly triples how much of the
+galaxy breeds the stuff. The doc's figure was 16 of 150 systems, all with
+a naval garrison; holds are about 18% of the galaxy and every one of them
+has a plant, so it lands near a third of systems rather than a ninth. The
+margin argument still holds -- the navy contract is what stops it being a
+risk-free 3.5x run -- but availability is a separate lever and this pulled
+it. economy.test.js prints the count every run so the number is visible
+rather than inferred.
+
+AND THE SUITE IS GREEN. economy.test.js has failed on every tagged build
+since v0.1.0-alpha5 on 2026-09-07 -- "no world manufactures above its
+development level, 17 violations" -- which short-circuits `npm test`, so
+the four suites after it never ran, the package step never ran, and the
+release job never ran. Every release this repo has made was made by hand
+past a gate that was red the whole time.
+
+The violations had a shape nobody had looked at: all eighteen were
+milfuel, at development 0.124 to 0.508. One commodity, never a spread.
+Licensed output is not manufacture -- a licence is a thing you are given,
+not a thing you develop into -- so the development rule now excludes it,
+and a STRICTER rule takes its place: military fuel is only ever bred at a
+reprocessing plant, only in a system that licenses it, and only burned
+where naval hulls are serviced. Six new checks; the Syndicate one fails on
+the old code.
+
+lint clean; physics 245, render 728, cockpit 164, economy 134, nodes 55,
+ships 23, berths 105, galaxy 39, combat 342, arcs 18. Nothing red.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01DLMzUVPsSGGwcBp8L9fdg8

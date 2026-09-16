@@ -1,0 +1,928 @@
+lint-globals: clean — every cross-module name is aliased or qualified
+
+Kepler equation solver
+  ok   M = E - e*sin(E) satisfied for e up to 0.99   worst residual 9.99e-13 at e=0.2
+  ok   circular case returns E = M
+
+Circular orbit (analytic invariants)
+  ok   radius constant   spread 5.98e-16
+  ok   speed constant
+  ok   speed equals sqrt(mu/a)   29.788300 km/s
+  ok   1 AU period is ~365.25 days   365.22 days
+
+Elliptical orbit (conservation laws)
+  ok   specific angular momentum conserved   6.33e-16
+  ok   specific orbital energy conserved   4.28e-15
+  ok   periapsis = a(1-e)
+  ok   apoapsis  = a(1+e)
+  ok   orbit closes after one period   0.00e+0 km
+  ok   no drift after 10,000 orbits   3.06e-4 km
+
+Osculating element recovery (state -> elements)
+  ok   semi-major axis recovered   8.78e-15
+  ok   eccentricity recovered   1.44e-15
+  ok   inclination recovered   9.77e-15
+  ok   ascending node recovered   8.88e-16
+  ok   argument of periapsis recovered   6.93e-14
+
+Ship integrator (RK4) cross-checked against analytic orbit
+  ok   position after one orbit matches analytic solution   error 0.003602 km over 942 million km travelled
+  ok   specific energy drift < 1e-10 over one orbit   6.22e-14
+  ok   energy still bounded after 20 orbits   3.62e-9
+
+Seeded world generation
+  ok   same seed -> byte-identical system
+  ok   different seed -> different system
+  ok   generation unaffected by simulation
+  ok   system has a star
+  ok   system has planets
+  ok   system has moons
+  ok   system has stations
+
+Generated systems obey physical constraints (200 seeds)
+  ok   no crossing planetary orbits   0 found
+  ok   all eccentricities in [0,1)   0 found
+  ok   no orbit passes through its parent   0 found
+  ok   moons and stations inside parent Hill sphere   0 found
+  ok   stations orbit above the surface   0 found
+
+N-body gravity field
+  ok   surface gravity dominated by the planet underneath   9.767e-3 vs 9.786e-3 km/s^2
+  ok   inverse-square falloff at distance   ratio 4.0000 (expected 4)
+  ok   dominant body identified correctly
+
+Deorbit, impact and landing
+  ok   retrograde burn puts periapsis below the surface   periapsis -6673 km
+  ok   impact detected
+  ok   impact is on the planet we deorbited over
+  ok   ship placed on the surface, not inside it   r = 9334.283 vs radius 9334.283
+  ok   impact speed below surface escape velocity   1.102 km/s vs v_esc 16.220
+  ok   slow descent counts as a landing, not a crash   contact at 17.9 m/s, surface gravity 14.09 m/s^2
+  ok   free-fall impact speed matches sqrt(2*g*h) in vacuum   338.0 m/s vs predicted 335.8 m/s
+  ok   and air slows the same drop down   276.9 m/s through air
+
+Escape trajectories
+  ok   1.40x circular stays captured
+  ok   1.45x circular escapes
+  ok   escaping orbit reports eccentricity > 1   e = 1.102
+  ok   escaping orbit still has a real periapsis   18669 km
+
+Ship attitude (orientation independent of velocity)
+  ok   basis starts orthonormal
+  ok   default facing is prograde
+  ok   pitch command tilts the nose toward the ship's own up
+  ok   positive yaw rate turns the nose toward the ship's own left
+  ok   roll command tilts the top of the ship toward its own right
+  ok   basis stays orthogonal through 3000 frames of mixed tumbling   1.77e-16
+  ok   basis vectors stay unit length through the same tumble   4.44e-16
+  ok   rotation decays to a stop once input is released   released at 0.2797 rad/s, now 3.01e-5
+
+Spawn facing uses the RELATIVE prograde frame
+  ok   seed 0: facing is perpendicular to local vertical (circular orbit)   dot=-0.0000
+  ok   seed 0: dominant body at spawn is the host planet
+  ok   seed 1: facing is perpendicular to local vertical (circular orbit)   dot=0.0000
+  ok   seed 1: dominant body at spawn is the host planet
+  ok   seed 2: facing is perpendicular to local vertical (circular orbit)   dot=0.0000
+  ok   seed 2: dominant body at spawn is the host planet
+  ok   seed 3: facing is perpendicular to local vertical (circular orbit)   dot=-0.0000
+  ok   seed 3: dominant body at spawn is the host planet
+  ok   seed 4: facing is perpendicular to local vertical (circular orbit)   dot=0.0000
+  ok   seed 4: dominant body at spawn is the host planet
+  ok   seed 5: facing is perpendicular to local vertical (circular orbit)   dot=-0.0000
+  ok   seed 5: dominant body at spawn is the host planet
+  ok   seed 6: facing is perpendicular to local vertical (circular orbit)   dot=-0.0000
+  ok   seed 6: dominant body at spawn is the host planet
+  ok   seed 7: facing is perpendicular to local vertical (circular orbit)   dot=0.0000
+  ok   seed 7: dominant body at spawn is the host planet
+  ok   seed 8: facing is perpendicular to local vertical (circular orbit)   dot=0.0000
+  ok   seed 8: dominant body at spawn is the host planet
+  ok   seed 9: facing is perpendicular to local vertical (circular orbit)   dot=0.0000
+  ok   seed 9: dominant body at spawn is the host planet
+  ok   seed 10: facing is perpendicular to local vertical (circular orbit)   dot=-0.0000
+  ok   seed 10: dominant body at spawn is the host planet
+  ok   seed 11: facing is perpendicular to local vertical (circular orbit)   dot=0.0000
+  ok   seed 11: dominant body at spawn is the host planet
+
+Attitude ladder: pitch and roll relative to local vertical
+  ok   level, unrolled: pitch = 0   0.000000
+  ok   level, unrolled: roll = 0   0.000000
+  ok   nose 30° above local horizontal reads pitch = 30°   30.0000
+  ok   pure pitch change carries no roll   0.0000
+  ok   nose 20° below local horizontal reads pitch = -20°
+  ok   40° roll about the nose reads pitch = 0 (roll does not leak into pitch)   0.0000
+  ok   40° roll about the nose reads roll = 40°   40.0000
+  ok   nose pointed exactly along local vertical is reported as degenerate
+  ok   degenerate case still reports the correct pole
+
+Docking
+  ok   capture envelope comes from the station's own generated fields
+  ok   far and fast ship is out of range
+  ok   far and fast ship is not slow enough either
+  ok   near, slow ship is in range   3.131 km
+  ok   near, slow ship is slow enough   2.400e-3 km/s
+  ok   dockShip records the target
+  ok   docking zeroes commanded thrust and spin
+  ok   docked ship keeps a constant distance from the station as it orbits   spread 3.92e-9 over 40 steps
+  ok   docked ship rides along at zero relative velocity
+  ok   undockShip clears the docked flag
+  ok   undockShip reports the station it left
+  ok   undocking imparts outward separation speed
+  ok   undocking does not teleport the ship
+
+Undocking actually lets go
+  ok   immediately after undocking, the ship is still inside the capture envelope   this is WHY a caller must drop its dock target on undock, not re-poll it
+  ok   coasting on the undock separation velocity eventually clears the envelope   after 1 s
+
+Radar/compass: relative-to-ship-frame projection
+  ok   dead ahead: azimuth = 0   0.000000
+  ok   dead ahead: elevation = 0
+  ok   dead ahead: range = distance
+  ok   dead right: azimuth = +90°
+  ok   directly behind: azimuth = ±180°
+  ok   dead left: azimuth = -90°
+  ok   ahead and above: elevation = +45°   45.000
+  ok   ahead and above: azimuth stays 0 (elevation does not leak into azimuth)
+  ok   ahead and below: elevation = -45°
+  ok   coincident point: range = 0, no NaNs
+  ok   bearings are body-frame: "ahead" tracks the nose, not world +X
+
+--- elements you can hand back to state() ---
+  ok   circular equatorial: the orbit closes   e = 0.0000
+  ok   circular equatorial: position survives the round trip   0.000 km of 150000000
+  ok   circular equatorial: velocity survives it too   0.000000 km/s of 29.749
+  ok   circular equatorial: and it advances along the orbit
+  ok   circular inclined: the orbit closes   e = 0.0000
+  ok   circular inclined: position survives the round trip   0.000 km of 120000000
+  ok   circular inclined: velocity survives it too   0.000000 km/s of 33.260
+  ok   circular inclined: and it advances along the orbit
+  ok   eccentric inclined: the orbit closes   e = 0.4500
+  ok   eccentric inclined: position survives the round trip   0.000 km of 95393920
+  ok   eccentric inclined: velocity survives it too   0.000000 km/s of 44.920
+  ok   eccentric inclined: and it advances along the orbit
+  ok   retrograde: the orbit closes   e = 0.2000
+  ok   retrograde: position survives the round trip   1.668 km of 111915146
+  ok   retrograde: velocity survives it too   0.000000 km/s of 37.727
+  ok   retrograde: and it advances along the orbit
+
+--- prediction, in slices ---
+  ok   a sliced job finishes   13 slices
+  ok   and it really was sliced, not run out in one go   13 slices
+  ok   the sliced path has the same number of points   201 vs 201
+  ok   and every point is identical to the one-shot answer   0.00e+0 km apart at worst
+  ok   the reference body survives the split
+  ok   so does the horizon
+  ok   an impact is still found
+  ok   the sliced job hits the same body
+  ok   at the same moment   3096.0000000000027 vs 3096.0000000000027
+  ok   and stopped there rather than running to the end   44 of 200
+
+--- jettisoned cargo is an object, not a deletion ---
+  ok   the drop produces a canister
+  ok   it remembers what it is and how much
+  ok   it is pushed clear of the ship   0.0120 km/s of separation
+  ok   and pushed backwards, not forwards
+  ok   it survives being simulated
+  ok   it moved, on gravity alone
+  ok   and it is still on the orbit it was dropped into   Mirven I e=0.0027
+  ok   nor teleported across the system   14935 -> 14860
+  ok   out of range it goes onto a rail
+  ok   and it keeps orbiting while nobody is looking   14926 km from Mirven I
+  ok   rather than standing still in absolute space   571396 km
+  ok   coming back wakes it again
+  ok   it eventually expires
+  ok   a canister that hits the ground is gone, not buried
+
+--- a destroyed ship comes apart ---
+  ok   a wreck throws a handful of shards   13 shards
+  ok   and they are in the canister list, not a second one
+  ok   the same wreck throws the same pieces the same way
+  ok   and a different ship does not
+  ok   every shard goes its own way rather than stacking   13 of 13
+  ok   and they are not all the same mesh   7 shapes
+  ok   each shard flies away from where the ship was
+  ok   and inherits the velocity it had
+  ok   some of the wreck is worth taking   1 salvageable
+  ok   but most of it is scrap you fly through
+  ok   and the salvage is a fraction of the hold, not a copy of it   3.6 t of 12
+  ok   shards are simulated while you are watching
+  ok   and they move
+  ok   without ever being put on a rail
+  ok   a shard dropped from rest falls toward the planet   14001.4 -> 11114.6 km
+  ok   leaving the area throws the wreckage away
+  ok   wreckage is still there half a life in
+  ok   and gone after ninety seconds
+  ok   which is far shorter than a canister lives
+  ok   the debris field is capped however many ships die   96 of 96
+  ok   and the cap never eats somebody's cargo
+
+--- atmospheres ---
+  ok   some worlds have air   4 of 24
+  ok   and rocky worlds do not   rocky,rocky
+  ok   the same seed grows the same atmosphere
+  ok   density falls by 1/e over one scale height
+  ok   density is finite below the surface, not infinite
+  ok   there is nothing left above the ceiling
+  ok   an airless world has no air at any altitude
+
+--- drag and aerobraking ---
+  ok   there is no air to feel out there
+  ok   and an orbit up there holds its shape   a 10014.7 -> 10014.4 km
+  ok   the skim altitude really is inside the air   rho 2.45e-4 kg/m3 at 136 km
+  ok   an orbit inside the atmosphere decays   a 9470.4 -> 9353.9 km
+  ok   and it is still flying, not buried
+  ok   the laden ship really is heavier   142 t vs 82 t
+  ok   a heavier ship has the same frontal area
+  ok   the heavier ship holds its orbit longer, being harder to push   laden a 9403.05 km vs empty 9353.90 km
+
+--- re-entry heat ---
+  ok   vacuum does not heat anything
+  ok   deeper is hotter   4200.12 vs 340.89
+  ok   halving entry speed cuts heating about eightfold   ratio 8.00
+  ok   the test sits in the band the shield decides   flux 36.4 units/s
+  ok   an unshielded hull cooks there   447.0 hull lost
+  ok   and a shielded one rides it out   0.0 hull lost, heat 0.0
+  ok   the glow is normalised for the renderer
+  ok   and a ship out of the air sheds its heat
+
+--- landing gear ---
+  ok   the gear starts up
+  ok   gear down is more to push through the air   10.87 -> 14.57 m2
+  ok   and raising it gives the area back
+  ok   a gentle touchdown on the gear is a landing   at 28.2 m/s
+  ok   the same arrival on the hull is a wreck   at 28.2 m/s
+  ok   a pad catches a ship with the gear down
+  ok   a gentle gear-down landing takes no hull damage
+  ok   and it catches a gear-up ship too, no longer refusing it
+  ok   a fast touchdown costs hull
+  ok   a belly landing hurts more than the same hit with gear down
+  ok   and a gentle touch is free either way
+
+the arrival rail
+  ok   the seeded system has a surface port to arrive at   Ashford Undercroft
+  ok   dockShip is still instant, and is still the only thing save needs
+  ok   an arrival starts at a surface port
+  ok   and the ship is NOT docked while it is being carried
+  ok   the path is continuous — no leg boundary teleports the hull   worst step 0.1569 pad radii
+  ok   and every leg is actually visited   approach,pad,descend,traverse,berth
+  ok   the hull starts above the apron   0.952
+  ok   and ends below it, in the hangar   -3.936
+  ok   on the apron you are still outside — the sky is real   approach
+  ok   once the car is running you are indoors   berth
+  ok   the apron doors are open while the hull is on the pad   0.000
+  ok   and sealed again by the bottom of the shaft   1.000
+  ok   the rail ends docked
+  ok   in the same berth it was carried to   2
+  ok   and at the pose dockShip sets, so the last frame does not jump   0.00000 pad radii apart
+  ok   facing the same way, too   dot 1.00000
+  ok   an orbital station runs an arrival now
+  ok   and is not docked while it is being carried
+  ok   a station arrival is timed off the station table, not the shaft one   40 s vs 18.5 s
+  ok   the station rail has no gap in it   worst step 0.00448 station radii
+  ok   and every leg of it is reached   lineup open enter settle admit
+  ok   a station arrival ends at the pose dockShip sets   0.00000 station radii apart
+  ok   facing the same way, too   dot 1.00000
+  ok   and the hull never turns on the way in   worst 1-dot 0.00e+0
+  ok   lined up outside, the station is not yet an enclosure   lineup
+  ok   on the stand, it is   admit
+  ok   the outer doors are shut while you hold off   1.000
+  ok   the arrival has a leg that goes through the doors
+  ok   open by the time you are through them   enter apron 0.000
+  ok   and shut again behind you   1.000
+  ok   the inner gate stays shut until you are parked   1.000
+  ok   and the arrival ends with it open   0.000
+  ok   an arrival whose port vanished is abandoned, not ridden
+--- the arrival is an arrival ---
+  ok   there are stations to fly into   67 ports
+  ok   no arrival exceeds 450 m/s at any station size   peak 305 m/s at Aubade Post r=5658 m
+  ok   and none of them takes longer than a minute   26.2s to 40.0s
+  peak 305 m/s, calmest station peaks at 101 m/s; arrivals run 26.2-40.0 s
+
+245 passed, 0 failed
+--- a new career starts on a pad ---
+--- exterior view ---
+--- cockpit ---
+--- dashboard panels ---
+--- every screen, in both views ---
+--- F1 flips the camera, F2 is the orbit map ---
+--- the hull library ---
+--- the hold, and throwing things out of it ---
+--- the yard, the board, and a fight on screen ---
+--- bolt span ---
+--- wreckage ---
+--- the spent heat sink ---
+--- the guns panel ---
+--- the landing gear ---
+--- shields ---
+--- imported ports ---
+--- docked, the dock is all there is ---
+--- the cockpit kit ---
+--- glass ---
+--- the near plane belongs to the hardware ---
+--- and the 2D painter cuts the same wall ---
+--- underground bays ---
+--- mouse aim ---
+--- navigation lock ---
+--- dialogs ---
+--- states ---
+--- an encounter, drawn ---
+--- a jump, end to end ---
+--- the tunnel, drawn ---
+--- the slipspace corridor ---
+--- slipspace wakes ---
+--- the cruise drive ---
+--- auto-dock ---
+--- match orbit and follow ---
+--- a barred port ---
+--- berthed inside a station ---
+--- leaving a station, still inside it ---
+--- the port calls you ---
+--- carried into a station ---
+  assigned berth 1 of 6
+--- loading a docked career ---
+--- the seed is readable in flight ---
+--- damage in the cockpit ---
+--- manoeuvre nodes ---
+--- zoom ---
+--- the pause menu ---
+--- options ---
+--- quit to the main menu ---
+--- input does not throw ---
+--- sound ---
+
+728 passed, 0 failed
+--- looking forward ---
+--- the landing window ---
+--- the head turns, the ship does not ---
+--- geometry survives being looked away from ---
+--- near-plane clipping ---
+--- glass ---
+--- the near plane sits inside the console ---
+--- the guns are in front of the pilot ---
+--- the eye never goes under the floor ---
+  11520 aims across five floor normals; 4302 needed moving, lowest eye 2.00 m
+
+164 passed, 0 failed
+
+the orbital basis a node is expressed in
+  ok   orbitalBasisAt and the docking helper are different functions
+  ok   only the node one works out which body you are orbiting
+  ok   prograde, radial and normal are unit vectors
+  ok   the three axes are mutually perpendicular on a circular orbit
+  ok   radial points away from the body, not toward it
+  ok   normal is r x v, so the set is right-handed
+  ok   prograde is the relative velocity direction, not the absolute one
+  ok   radial is the relative position direction
+
+what a node costs (Tsiolkovsky, independently)
+  ok   propellant matches the rocket equation   0.007432 t vs 0.007432 t
+  ok   burn time is propellant over mass flow   18.2214 s
+  ok   ignition leads the node by exactly half the burn
+  ok   a zero-delta-v node costs nothing and takes no time
+  ok   a plan larger than the tank is marked infeasible   29.88 t needed, 12 t aboard
+  ok   and a plan within it is not
+  ok   the same plan costs a laden ship more propellant and more time   18.22 s empty vs 32.44 s full
+
+the resulting orbit (vis-viva and Hohmann)
+  ok   the burn is applied at the radius the coast actually reaches   r = 5940.010
+  ok   the delta-v magnitude is the vector the player asked for
+  ok   semi-major axis after the burn matches vis-viva   6517.531 vs 6517.531 km
+  ok   apoapsis after the burn matches vis-viva   7095.052 vs 7095.052 km
+  ok   periapsis is left where the burn happened   5940.010 km
+  ok   the orbit before the burn is still the circle we started on   e = 1.42e-11
+  ok   the first Hohmann burn raises apoapsis to the target radius   17820.0 vs 17820.0 km
+  ok   the coast arrives at apoapsis, as the transfer time says it should   17820.0 km
+  ok   the second Hohmann burn circularises to within a rounding error   e = 3.03e-10, a = 17820.0
+  ok   a retrograde burn lowers periapsis and leaves apoapsis alone   peri 5181.7 km
+  ok   a normal burn changes inclination   0.00° -> 2.98°
+  ok   and raises speed only by the vector sum, since it is perpendicular   5.772826 vs 5.772826
+  ok   a large enough burn produces an open orbit   e = 3.000
+
+a node is evaluated where and when it is
+  ok   prograde at the node is not prograde now   they differ by 180.0°
+  ok   and the delta-v vector follows the node, not the ship
+  ok   the plan is computed at the coasted position, half an orbit away   11967.7 km vs apoapsis 11967.7 km
+  ok   a thruster held down does not leak into the plan   0.00e+0 km apart
+
+finding the apsides to snap a node to
+  ok   the period agrees with the osculating elements
+  ok   starting at periapsis, the next one is a full period away   16297.83 s of 16297.83
+  ok   and apoapsis is half a period away   8148.91 s
+  ok   coasting to the reported apoapsis time arrives at apoapsis   16044.99 km vs 16044.99 km
+  ok   from an arbitrary point, the reported periapsis time is periapsis too   5940.01 km vs 5940.01 km
+  ok   a circular orbit reports itself as having no meaningful apsis   e = 2.14e-16
+  ok   an open orbit reports no apsides at all
+
+coasting to the node
+  ok   a full period of coasting returns to the starting point   0.000002 km after 6474 s
+  ok   coasting to now is a no-op
+  ok   and coasting to the past does not run backwards
+  ok   sampling thins the path to about what was asked for   49 points
+  ok   the last sampled point is the arrival state, in the body frame
+  ok   an unreachable node truncates rather than hanging
+
+in a real system, where the two-body answer is only nearly right
+  ok   a plan can be made inside a populated system
+  ok   the node picks the planet as its dominant body, not the star   Mirven II
+  ok   the burn raises the orbit
+  ok   the path comes back in the reference frame it was asked for
+  ok   and those points are orbit-sized, not orbit-of-the-planet-sized   furthest point 6040 km
+  ok   the post-burn trajectory is predicted from the post-burn state
+  ok   it starts where the node is
+  ok   the integrated post-burn path agrees with the conic apoapsis   integrated 6718 km vs conic 6718 km
+  ok   a null node plans nothing rather than throwing
+  ok   and a node with no delta-v leaves the orbit alone
+
+55 passed, 0 failed
+--- factions ---
+  across 120 systems: {"police":601,"tender":111,"merc":124,"pirate":308,"navy":27}
+--- patrols on rails ---
+  (385 patrols checked)
+--- waking and sleeping ---
+--- an empty hold is a demand for cash, not a free pass ---
+--- a laden ship cannot outrun a pirate; an empty one can ---
+
+23 passed, 0 failed
+--- what there is to fit ---
+  12 classes, 12 station models
+  largest hull: tanker  20.0 m W x 10.8 m H x 25.0 m L
+  station radii in play: 1266 m  ·  4022 m  ·  6708 m   (smallest / median / largest of 40 systems)
+--- every hull fits somewhere, at every station, at every size ---
+  tightest pairing anywhere: shuttle at spine-l r=1.2660741723049431 km — the bay is 9.9x the hull on its tightest axis
+--- the berth a ship is ACTUALLY given is one that fits ---
+--- the same ship comes back to the same berth ---
+--- both halves index a model's berths the same way ---
+--- the shed on the ground ---
+  pad radii in play: 100 m  ·  168 m  ·  240 m
+  worst case hull: 25.0 m wide, 10.8 m tall, 25.0 m long
+  tightest: hatch 1.6x  headroom 1.9x  berth pitch 1.7x  depth 1.3x  ends 1.5x
+--- the hall the alcoves sit in ---
+  tightest: hatch 9.1x  headroom 16.4x  berth pitch 9.2x  depth 8.1x  ends 7.9x
+--- is a berth ever inside its station's own interior? ---
+  0 of 48 modelled berths sit inside their station's own interior volume — so the modelled hall is never drawn from a berth today
+--- the way in, at every modelled station ---
+  outer doors sit 0.170-0.229 station radii outboard of the throat floor, measured off the art
+  shortest run from handover to the stand: 0.45 station radii (2412 m here)
+--- a station is a solid object ---
+--- and the doors are doors ---
+  168 sliding leaves, travel 0.087-0.133 station radii
+--- outdoors until you are through the door ---
+--- landing in a berth ---
+--- the station in compartments ---
+  one compartment costs 28% of the station, on average
+--- the blast doors ---
+--- the floor of the room is the deck ---
+  the hull clears its deck by 6.4 m at the tightest berth in the library (spine-l berth 0)
+--- the stand under the ship ---
+  the stand is 110 m across at a 1.3 km station and 110 m at a 6.7 km one
+  cradle-l declares 19 lamp and nav-light anchors the game had never drawn
+--- leaving a berth ---
+  the least radial berth normal in the library: cos 0.999  (cradle-l berth 0)
+
+102 passed, 0 failed
+--- the cluster ---
+--- jump economics ---
+--- every port sells fuel, so nowhere is a trap ---
+--- the clock moves, and the market moves with it ---
+--- galactic territory ---
+--- a whole galaxy generates without complaint ---
+  sampled 30 systems: 401 ports, 282 patrols, 34 habitable worlds
+
+39 passed, 0 failed
+
+--- the catalogue is not allowed to strand you ---
+  ok   Talon Courier can lift off every port that exists   10.72 vs limit 10.72
+  ok   Dart Interceptor can lift off every port that exists   23.33 vs limit 10.72
+  ok   Kestrel Multirole can lift off every port that exists   11.51 vs limit 10.72
+  ok   Mule Freighter can lift off every port that exists   11.02 vs limit 10.72
+
+--- fitting out ---
+  ok   you start with a pulse laser and a whole hull
+  ok   and it is actually in a hardpoint, not just a field   {"hardpoint0":"phpulse","utility0":"cargoscoop"}
+  ok   buying the legacy beam id fits the Class 2 intermittent it maps to
+  ok   a purchase you cannot afford does not happen
+  ok   the shield arrives charged
+  ok   the missile rack has a size   8
+
+--- no hull is locked out of a weapon ---
+  ok   there is a cheapest gun to reason about   Photon pulse laser at 1.8 MW
+  ok   Dart Interceptor can still arm itself fully fitted   core draw 2.8 of 7 MW
+  ok   Talon Courier can still arm itself fully fitted   core draw 5.4 of 9 MW
+  ok   Kestrel Multirole can still arm itself fully fitted   core draw 5.4 of 14 MW
+  ok   Mule Freighter can still arm itself fully fitted   core draw 5.4 of 18 MW
+
+--- merchantmen shoot back, shuttles do not ---
+  ok   a freighter counts as armed
+  ok   a tanker counts as armed
+  ok   a shuttle does not
+  ok   a trader gun is feeble next to a warship gun   2 dmg vs 5
+  ok   but a merchantman calls for help in half the time   5s vs 10s
+  ok   a hit freighter defends itself
+  ok   but does not turn into a hunter
+  ok   a shuttle has nothing to defend itself with
+  ok   a tender is unarmed too
+  ok   and killing one costs more than killing a patrol cutter   14000 vs 6000
+
+--- slots, power and mass ---
+  ok   a Talon has seven slots in three flavours   hardpoint0,hardpoint1,utility0,utility1,internal0,internal1,internal2
+  ok   the starting fit draws its listed power   1.8 / 9
+  ok   a Class 3 beam will not fit a Talon at any price   needs 13.0 MW, only 7.2 free
+  ok   and it says why, in words   needs 13.0 MW, only 7.2 free
+  ok   a Kestrel cannot run a Class 3 beam alongside its starter gun
+  ok   but can carry one on a bare hull
+  ok   and then has no power left for a shield — the glass cannon is arithmetic   13 / 14  needs 2.0 MW, only 1.0 free
+  ok   replacing a gun is costed against the slot it empties
+  ok   a second shield generator is refused rather than silently useless   Shield generator is already fitted
+  ok   and only one reactor of any tier   Auxiliary reactor Mk I is already fitted — sell it first
+  ok   the glass cannon has no room for a scoop
+  ok   a bare Kestrel cannot add a shield to a Class 3 beam
+  ok   a Mk II reactor fits and raises the ceiling   19 MW
+  ok   which is exactly what the shield needed
+  ok   and now MASS is what stops the next thing, not power   22t / 22t, 15 / 19 MW
+  ok   removing a reactor lowers the ceiling again
+  ok   selling a fitting refunds part of list and clears the slot   405
+
+--- the legacy mirror stays in step ---
+  ok   fitting a shield sets the old field and charges it
+  ok   removing it clears the old field and the charge
+  ok   the heat shield still reports its shed rate the old way
+
+--- migrating a career that predates slots ---
+  ok   the old beam becomes the Class 2 intermittent   {"hardpoint0":"piint","utility0":"turret","internal0":"shield","utility1":"cargoscoop"}
+  ok   the turret lands in a utility slot
+  ok   the shield survives the move
+  ok   nothing was silently confiscated, and the scoop was issued   {"hardpoint0":"piint","utility0":"turret","internal0":"shield","utility1":"cargoscoop"}
+  ok   migrating twice is a no-op
+
+--- scanners ---
+  ok   with no scanner there is no reading
+  ok   a hull scanner reads a fraction   1
+  ok   and deliberately not the numbers
+  ok   scanning assigned the hull it was always going to have   80
+  ok   a hurt ship reads hurt   0.75
+  ok   the two scanners will not both fit   Hull scanner is already fitted — sell it first
+  ok   the combat scanner reads the numbers   60 / 80
+  ok   and reports the shield as well   0 / 20
+
+--- heat sinks ---
+  ok   no launcher, no sinks
+  ok   the launcher fits a utility slot
+  ok   an empty rack still will not arm
+  ok   the rack fills to its size and stops   3
+  ok   arming works
+  ok   and banks stored heat up to its limit   30
+  ok   a charge was spent
+  ok   a live sink takes its share and lets the rest through   35 units reached the hull
+  ok   it ejects when its time is up
+  ok   and leaves a hot object where you were   {"pos":{"x":-9146123.774069862,"y":-34107838.70371836,"z":10
+  ok   heat goes straight to the hull once it is gone
+  ok   the launcher will not re-arm inside its cooldown
+  ok   but will once it has cycled
+  ok   a sink that fills up ejects early, before its timer   held 220
+  ok   and it never holds more than its capacity
+
+--- the yard has something to say ---
+  ok   every catalogue item has a sales pitch
+  ok   consumables have one too
+
+--- what a port will sell you ---
+  ok   a frontier port does not stock the heavy classes   8 lines
+  ok   but it will sell you a Class 1
+  ok   a developed port stocks Class 3
+  ok   but will not sell it to a stranger   needs ALLIED standing with Gorysh Charter
+  ok   and says what would change that   needs ALLIED standing with Gorysh Charter
+  ok   a friend can buy it
+  ok   a wanted pilot is not sold guns   they will not arm someone they want
+  ok   nor a turret
+  ok   but can still buy a reactor — it is not a weapon
+
+--- buying hulls ---
+  ok   the trade-in maths is honest   55600 vs 55600
+  ok   the new hull is whole and fitted numbers moved over
+  ok   a hull too small for your cargo is refused, not stranded   hold too small for your cargo — sell some first
+
+--- shooting things ---
+  ok   a gun fired down the throat connects   49 / 55
+  ok   an unarmed trader runs rather than fights
+  ok   and the beam was drawn
+  ok   a gun fired at empty sky hits empty sky
+  ok   an armed ship shot at turns and fights
+
+--- fire groups ---
+  ok   a fresh ship puts everything on the primary trigger
+  ok   an empty group fires nothing
+  ok   and says why, rather than doing nothing quietly   Fire group B is empty — assign a gun to it in the yard (F5)
+  ok   moving a gun moves it out of the other group
+  ok   both guns in a group fire on the same trigger pull   2 of 2
+  ok   and each drew its own beam
+  ok   a second pull inside the cooldown fires nothing
+  ok   and it fires again once the cooldown has run
+  ok   a gun keeps its trigger across a hull change   {"hardpoint0":"b"}
+
+--- beams heat your own hull ---
+  ok   a shot puts its own waste heat into the hull   1.440 vs 1.440
+  ok   and held down it costs its catalogue rate per second   11.5 /s vs catalogue 12 /s
+  ok   a live sink takes its cut of weapon heat too   hull 0.504, sink 0.936
+
+--- a hold is a function of the ship that carries it ---
+  ok   the same ship in the same system carries the same hold   [{"cid":"alloys","tonnes":5}]
+  ok   a different ship does not   [{"cid":"water","tonnes":7}]
+  ok   and the same id in another system carries something else   [{"cid":"ores","tonnes":7}]
+  ok   the hold is real cargo, in real tonnes
+  ok   reading a hold stores it on the ship
+  ok   and a stored hold wins over the hash
+  ok   and it is something that actually flies in this system   water
+  ok   robbing a pirate and killing it agree about the hold
+
+--- the witness doctrine ---
+  ok   no witness, no immediate bounty
+  ok   but the victim starts its distress clock   delay 5s for a trader
+  ok   a victim destroyed before transmitting never reports
+  ok   and no report ever arrives
+  ok   a surviving victim gets its call out   300
+  ok   a witnessed crime is pending, not yet filed   {"kind":"assault","fac":"seenfac","at":8,"by":"Overwater Tender","victimName":"Test Prey"}
+  ok   and lands once the witness gets on the radio   300
+  ok   there is no law for outlaws
+
+--- the law, once it knows ---
+  ok   a wanted ship is refused the dock
+  ok   other factions still take your money
+  ok   you cannot pay a bounty you cannot afford
+  ok   paying off costs more than the bounty and clears it
+  ok   police with a warrant engage on sight
+
+--- missiles ---
+  ok   a missile without a ship lock refuses to fire
+  ok   with a lock it leaves the rail
+  ok   the seeker arrives inside a minute   46 half-second steps
+  ok   and forty-two points of it arrive with it   13 hull left
+
+--- a kill leaves things behind ---
+  ok   the manifest spills as canisters
+  ok   the wreck flashes
+  ok   and the ship is gone from the sky
+  ok   the hull comes apart into wreckage   16 shards
+  ok   and it is drawable — a mesh, a size and a spin
+  ok   the wreck accounts for part of the hold, not more than it   9.0 t of 30
+  ok   a ship robbed first still breaks up
+  ok   but there is nothing left on it to salvage
+
+--- piracy, from the demanding end ---
+  ok   an unarmed demand is ignored
+  ok   an armed demand shakes cargo loose
+  ok   no witnesses: only the distress clock ticks
+  ok   a qty-shaped manifest shakes loose too
+  ok   a credit demand is wired over
+  ok   demanding from the law starts a fight
+  ok   too far away to threaten anyone
+  ok   the first credit demand pays out   545
+  ok   and asking again gets nothing — the safe is empty, not refilled   545 vs 545
+  ok   a hold empties in a handful of demands rather than never   5 pulls
+  ok   and what is left of it is nothing at all   []
+  ok   an emptied hold stays empty when read again
+  ok   a torn-out lane hauler is carrying something   [{"cid":"rare","tonnes":23}]
+  ok   but an ordinary empty trader is still empty
+  ok   a bulk hauler carries several times a packet   19 t vs 169 t
+  ok   a pirate with no tonnage keeps the hold it always had   [{"cid":"alloys","tonnes":5}]
+
+--- the slipspace modules are things you can buy ---
+  ok   all eight are in the catalogue
+  ok   and every one is an internal fitting with a mass and a draw
+  ok   priced from slipspace.js, so there is one price table and not two
+  ok   an anchor can simply be bought
+  ok   and the corridor reads it off the fit map   I
+  ok   a Talon is a class I hull, so a class I anchor actually works
+  ok   a second anchor is refused, with a reason   Harmonic Transit Anchor I is already fitted — sell it first
+  ok   but a baffle is a different module and goes in beside it
+  ok   an oversized anchor is allowed onto a small hull
+  ok   and it eats nearly the whole reactor doing it   0.2 MW free
+  ok   so the cheapest gun will not light — refused, in words   needs 1.8 MW, only 0.2 free
+  ok   the old bespoke field is still honoured
+  ok   and a ship with neither has neither
+  ok   an anchor rides along in the save via the fit map   {"hardpoint0":"phpulse","utility0":"cargoscoop","internal0":"anchorI","internal1":"baffleI"}
+  ok   every catalogue item is stocked SOMEWHERE across five seeds     (of 231 ports)
+  ok   and the anchors are rare rather than everywhere   53 of 231 ports
+
+--- NPCs have shields, and the delivery model finally means something ---
+  ok   with no shield up, a pulse goes straight to the hull at its hull rate   {"shield":0,"hull":24,"through":true}
+  ok   a beam strips a full shield far faster than a pulse   12 vs 30
+  ok   and neither reaches the hull through a full one
+  ok   a shot that breaks through spends only what the shield took   {"shield":5,"hull":13.999999999999996,"through":true}
+  ok   and it is a real breakthrough, flagged as one
+  ok   a beam wastes almost nothing on a nearly-dead shield   {"shield":1,"hull":13.533333333333331,"through":true}
+  ok   switching groups mid-fight beats either gun alone   switch 14  beam 22  pulse 19
+  ok   and beats them by enough to be worth the second hardpoint   14 vs 19
+  ok   warships and money are shielded   90 40 30
+  ok   working hulls are not
+  ok   a rescue tender is — unarmed, and built to survive somebody else's fight   25
+  ok   a pirate's is feeble rather than absent   20
+  ok   and an unknown hull flies bare rather than throwing
+  ok   hullSize falls back to m with no model library loaded
+  ok   a medium shuttle has nowhere to put a generator
+  ok   and an escape pod never does
+  ok   the victim starts shielded   30
+  ok   a hit drains the shield first   24 / 70
+  ok   once the shield is gone the hull takes it
+  ok   a hit is recorded for the renderer
+  ok   as a unit direction toward whatever hit it   {"x":-0.7323477457708194,"y":-0.6800372078832692,"z":-0.03487370296837278}
+  ok   and it says the shield took this one   {"dir":{"x":-0.7323477457708194,"y":-0.6800372078832692,"z":-0.03487370296837278},"at":0.27051420000000004,"shield":3,"hull":0,"soaked":true,"through":false}
+  ok   a missile can still do damage without a direction or a delivery
+  ok   and its impact simply has no direction
+  ok   the impact list is capped rather than growing all fight   4 of 4
+  ok   the navy took it on the shield   72
+  ok   and does not recover a point while it is still being shot at   72
+  ok   but refills once things go quiet   73.2
+  ok   and never past full   90 / 90
+  ok   a shot that delivers nothing divides nothing by nothing   {"shield":0,"hull":0,"through":false}
+  ok   and leaves the ship exactly as it was, not NaN   90 / 260
+  ok   with no flare recorded for a hit that did not happen
+  ok   a freighter still takes it straight on the plating   40.6 of 55
+
+--- taking hits ---
+  ok   the shield eats damage first
+  ok   overflow reaches the hull
+  ok   zero hull is the end of the hull
+  ok   the respawn hull is a stock Talon with the starter gun
+  ok   a respawned ship still has its cargo scoop
+  ok   and the starter gun
+  ok   and nothing it had paid for   {"hardpoint0":"phpulse","utility0":"cargoscoop"}
+
+--- and the two ways to get a ship agree ---
+  ok   a new ship and a respawned one carry the same thing   hardpoint0=phpulse,utility0=cargoscoop   vs   hardpoint0=phpulse,utility0=cargoscoop
+  ok   and both of them can pick cargo up
+  ok   the scoop can be sold   still aboard
+  ok   and selling it sticks rather than being undone on load
+  ok   a hull can be bought
+  ok   and it arrives with a scoop fitted as standard
+  ok   and the yard is told to say so rather than leaving it to be found   ["cargoscoop"]
+  ok   a pilot who kept theirs is not issued a second   1 scoops, standard=[]
+  ok   and nothing they owned was displaced to make room   2 -> 2
+
+--- contracts ---
+  ok   the board is a pure function of its window
+  ok   it offers real work   4 offers
+  ok   there is freight to haul
+  ok   signing loads the freight aboard
+  ok   and the contract is on the list
+  ok   the same offer cannot be signed twice
+  ok   delivery pays on the spot
+  ok   the freight left with the contract
+  ok   and the faction warms to you
+  ok   a blown deadline fails on its own
+  ok   the fine came out   5000 -> 4618
+  ok   and the faction remembers
+  ok   arriving without the freight completes nothing
+
+--- the board says what it is, and what it is for ---
+  ok   the board offers work   3 offers
+  ok   every headline fits the cap   62 / 240
+  ok   and in practice stays far under it   62
+  ok   every offer carries a long form   0 without
+  ok   the long form names the real destination and the real fee   0 disagreed with their own offer
+  ok   a board reads the same when you come back to it
+  ok   a signed contract still explains itself
+
+--- contraband and the scan ---
+  ok   the catalogue lists narcotics and arms as contraband
+  ok   a lucky roll waves you through
+  ok   a clean hold is searched and cleared
+  ok   clearance costs nothing
+  ok   a dirty hold is caught
+  ok   and this one would not take a bribe   {"searched":true,"contraband":true,"fine":1800,"seized":["10t Narcotics"],"severity":1}
+  ok   the contraband is seized, the legal freight is not
+  ok   the fine matches the tonnage and the severity   1800
+  ok   and the faction likes you less for it
+  ok   arms are a worse crime than narcotics, and naval fuel worse again   1800 < 4500 < 9000
+  ok   and ten tonnes of naval fuel still costs less than dumping waste in a hold   9000 vs 10000
+  ok   naval fuel is contraband to a pilot with no standing
+  ok   and perfectly legal to one the navy has cleared
+  ok   narcotics are illegal to everybody, standing or not
+  ok   and grain never is
+  ok   the most permissive world still has a search floor
+  ok   no haul contract ever moves contraband
+
+--- the save file ---
+  ok   the save writes
+  ok   and reads back
+  ok   a save for another seed is not this one
+  ok   time, money, hold and warrants all survive the round trip
+  ok   position survives to the metre
+  ok   N really deletes it
+
+--- dumping reactor waste ---
+  ok   a witnessed dump in a strict system is reported   {"witnessed":true,"reported":true,"fine":2080,"faction":"testfac"}
+  ok   the fine scales with tonnage   2080 cr for 4t
+  ok   a witness that is itself an authority takes the bounty   {"testfac":2080}
+  ok   a bystander reports it to the system authority   f0 vs holder f0
+  ok   dumping is worse per tonne than disposing, even at best odds   100 cr/t dumped vs 120 cr/t hauled
+  ok   an unwitnessed dump costs nothing
+  ok   a lawless system reports it only rarely   71/400 reported
+  ok   jettisoning legal cargo is not a crime
+
+--- docking clearance ---
+  ok   a port exists to hail
+  ok   you start uncleared
+  ok   a clean pilot is granted clearance
+  ok   and the port says so in words   Waypoint Dock: "Clearance granted. Pad is yours."
+  ok   arriving cleared is free
+  ok   and the clearance is spent, not permanent
+  ok   arriving uncleared costs a flat 500   {"fine":500,"faction":"f0","fugitive":true,"queueJump":null}
+  ok   and the bounty lands on the port owner
+  ok   the faction thinks less of you
+  ok   and it makes you a fugitive
+  ok   which the faction acts on immediately, bounty threshold or not   owed 500 vs hunt threshold 800
+  ok   so their ports shut too
+  ok   a lawless port charges the same flat citation   500 cr vs 500 cr
+  ok   paying it off clears the status   600 cr
+  ok   and reopens the door
+  ok   and you cannot pay what you have not got
+  ok   running for it ends the pursuit
+  ok   but the citation is still on the books   500 cr outstanding
+  ok   a port with room clears an approaching ship without being asked
+  ok   and it hails you rather than clearing you in silence   Waypoint Dock: "We have you on approach. Cleared in — berth is yours."
+  ok   the grant is marked as the port's own, not an answer to a hail
+  ok   a ship already cleared is not hailed again
+  ok   and nothing is said
+  ok   so arriving costs nothing
+  ok   and the clearance is spent like any other
+  ok   a wanted pilot is not cleared on approach
+  ok   and the port does not say why unless hailed
+  ok   a full port is not cleared on approach
+  ok   and says nothing about it either
+  ok   hailing a full port still explains itself   Waypoint Dock: "All 4 berths occupied. Hold at the marker — 2 min to the next departure."
+  ok   being cleared IN does not clear you to launch
+  ok   a wanted pilot is refused
+  ok   and stays uncleared
+  ok   so is one the faction is hostile to
+  ok   you are not cleared to launch by default
+  ok   a clean pilot is cleared to launch
+  ok   and it is spent on the way out, not permanent
+  ok   being cleared to dock does not clear you to leave
+  ok   a wanted pilot is not let out
+  ok   a ground port exists to hail
+  ok   the doors start shut
+  ok   clearance to dock opens them
+  ok   and they shut behind you once you are down
+  ok   clearance to launch opens them again
+  ok   and they shut behind you on the way out
+  ok   an orbital dock has no shaft doors to open
+  ok   cleared before the jump
+  ok   and not after it
+
+--- the control cabinet ---
+  ok   a ground port exists to break into
+  ok   it has a control cabinet
+  ok   the same port regenerates   Ashford Undercroft
+  ok   and its lock is the same lock — difficulty is derived   0.450281 vs 0.450281
+  ok   and it stands in the same place
+  ok   the difficulty is never certain at either end   0.4502810235032813
+  ok   an orbital dock has no cabinet
+  ok   and refuses with a reason rather than throwing   nothing
+  ok   breaking into a door already open for you is refused   cleared
+  ok   out of range is refused, and says so   range
+  ok   the doors start shut
+  ok   a breach opens them
+  ok   and reads as breached here
+  ok   a breach is not a launch clearance
+  ok   nor is it docking clearance
+  ok   and it does not survive the jump
+  ok   the ship can be put beside the cabinet
+  ok   and is then in range
+  ok   a hopeless lock does fail   1 tries
+  ok   and it trips the alarm
+  ok   booking a bounty with the cabinet OWNER   0 -> 350
+  ok   which the same port then refuses to open for
+  ok   a locked panel refuses until it reopens   cooldown
+  ok   but out of range is the answer when both are true
+  ok   a bare attempt is worth the documented figure   0.3
+
+342 passed, 0 failed
+
+--- which story a faction runs is fixed by the seed ---
+  ok   every faction resolves to one of the authored arcs
+  ok   rebuilding the same galaxy assigns the same arc to the same faction
+  ok   a different galaxy is not guaranteed the same story roster   (a coincidence across every faction is possible but not expected)
+
+--- the hook: chapter zero on the board ---
+  ok   somewhere in the galaxy, a faction hooks you
+  ok   the hook is tagged as chapter zero of the faction's own arc
+  ok   it reads like a real contract, not a placeholder
+  ok   the hook signs exactly like an ordinary contract
+  ok   accepting it opens a tracked chain
+  ok   the same port will not hook you twice while the chain is live
+  ok   delivering chapter zero moved your standing with them
+  ok   the chain either casts its next chapter or stalls without crashing   status=active step=1
+
+--- the last chapter pays out and closes the loop ---
+  ok   the completion bonus actually lands   9000 vs 9000
+  ok   standing jumps by the whole-chain bonus, not just a chapter bonus
+  ok   the chain marks itself finished and starts a cooldown
+  ok   a finished chain will not re-hook until the cooldown passes
+
+--- a broken chain breaks cleanly ---
+  ok   a blown campaign deadline is fined and dropped like any contract
+  ok   and the chain itself records the break
+
+--- the save file remembers the chain ---
+  ok   the snapshot carries the campaign progress record
+
+18 passed, 0 failed

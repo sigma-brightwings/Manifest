@@ -1,0 +1,52 @@
+--- a new career starts on a pad ---
+--- exterior view ---
+--- cockpit ---
+--- dashboard panels ---
+--- every screen, in both views ---
+--- F1 flips the camera, F2 is the orbit map ---
+--- the hull library ---
+--- the hold, and throwing things out of it ---
+--- the yard, the board, and a fight on screen ---
+--- bolt span ---
+--- wreckage ---
+--- the spent heat sink ---
+--- the guns panel ---
+--- the landing gear ---
+--- shields ---
+--- imported ports ---
+--- docked, the dock is all there is ---
+--- the cockpit kit ---
+--- glass ---
+--- the near plane belongs to the hardware ---
+--- and the 2D painter cuts the same wall ---
+--- underground bays ---
+--- mouse aim ---
+--- navigation lock ---
+--- dialogs ---
+--- states ---
+--- an encounter, drawn ---
+--- a jump, end to end ---
+--- the tunnel, drawn ---
+--- the slipspace corridor ---
+--- slipspace wakes ---
+--- the cruise drive ---
+--- auto-dock ---
+--- match orbit and follow ---
+--- a barred port ---
+--- berthed inside a station ---
+--- leaving a station, still inside it ---
+--- the port calls you ---
+--- carried into a station ---
+  assigned berth 1 of 6
+--- loading a docked career ---
+--- the seed is readable in flight ---
+--- damage in the cockpit ---
+--- manoeuvre nodes ---
+--- zoom ---
+--- the pause menu ---
+--- options ---
+--- quit to the main menu ---
+--- input does not throw ---
+--- sound ---
+
+725 passed, 0 failed
