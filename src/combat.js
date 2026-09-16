@@ -700,7 +700,7 @@
    * came down 5.8% with everything else — see generate.js. */
   var HULLS = {
     talon: { id: 'talon', name: 'Talon Courier', price: 32000, mesh: 'courier',
-             dryMass: 42, thrustKN: 1800, thrusterCap: 12, fuelCap: 37,
+             dryMass: 42, thrustKN: 1800, thrusterCap: 16, fuelCap: 37,
              cargoCap: 64, hullMax: 100,
              slots: { hardpoint: 2, utility: 2, internal: 3 },
              /* Two racks: a courier can carry a crate of each and choose. */
@@ -708,7 +708,7 @@
              powerMW: 9.0, fitMass: 14,
              blurb: 'the ship you started with, and honestly not bad' },
     dart:  { id: 'dart', name: 'Dart Interceptor', price: 61000, mesh: 'police',
-             dryMass: 30, thrustKN: 2200, thrusterCap: 10, fuelCap: 27,
+             dryMass: 30, thrustKN: 2200, thrusterCap: 13, fuelCap: 27,
              cargoCap: 22, hullMax: 80,
              /* THE RULE, checked by the hull-budget test: a reactor must
               * run every core system the hull has room for AND still
@@ -729,7 +729,7 @@
              powerMW: 7.0, fitMass: 9,
              blurb: 'outruns everything; carries nothing' },
     kestrel: { id: 'kestrel', name: 'Kestrel Multirole', price: 120000, mesh: 'merc',
-             dryMass: 60, thrustKN: 2700, thrusterCap: 14, fuelCap: 45,
+             dryMass: 60, thrustKN: 2700, thrusterCap: 19, fuelCap: 45,
              cargoCap: 96, hullMax: 130,
              slots: { hardpoint: 3, utility: 2, internal: 4 },
              /* Two, same as the courier — the extra tonnage went to guns. */
@@ -737,7 +737,7 @@
              powerMW: 14.0, fitMass: 22,
              blurb: 'the compromise, made well' },
     mule:  { id: 'mule', name: 'Mule Freighter', price: 78000, mesh: 'freighter',
-             dryMass: 80, thrustKN: 3700, thrusterCap: 16, fuelCap: 48,
+             dryMass: 80, thrustKN: 3700, thrusterCap: 21, fuelCap: 48,
              cargoCap: 160, hullMax: 160,
              slots: { hardpoint: 2, utility: 3, internal: 5 },
              /* Three, because a hauler's answer to everything is volume. */

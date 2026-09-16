@@ -44,6 +44,13 @@
      * pointing at something implies it should. */
     flightMode: 'ship',
     assist: true,
+    /* The second assist, and deliberately a second one rather than a mode
+     * of the first: they answer different questions. `assist` nulls drift
+     * against a LOCK so a berth stops sliding sideways; `vector` makes the
+     * ship fly where its nose points, which is a way of flying rather than
+     * a way of docking. See vectorAssist. */
+    vector: false,
+    hoverAlt: null,
     focus: null,          // body we are looking at, or null for the ship
     followShip: true,
     cam: new Render.Camera(),
@@ -1581,7 +1588,22 @@
           }
           break;
         case '[': cycleNavTarget(-1); break;
-        case ']': cycleNavTarget(1); break;
+        /* SHIFT+] IS THE VECTOR ASSIST, and it is on punctuation for the
+         * same reason flight assist is: every letter key was already spoken
+         * for before either of them existed. The shifted glyph is listed
+         * beside the plain one because that is what `e.key` actually
+         * delivers — the same idiom '/' and '?' use two hundred lines up. */
+        case ']': case '}':
+          if (e.shiftKey) {
+            G.vector = !G.vector;
+            G.hoverAlt = null;
+            say(G.vector
+                  ? 'VECTOR assist ON — thrust vectors to put your momentum on the nose'
+                  : 'VECTOR assist OFF — full Newtonian', 5);
+          } else {
+            cycleNavTarget(1);
+          }
+          break;
         case 'l':
           if (e.shiftKey) { startAutoMode('follow'); break; }
           clearNavTarget();
@@ -3942,6 +3964,148 @@
     return null;
   }
 
+  /* ---- VECTOR ASSIST -----------------------------------------------------
+   * Astra: "a flight assist mode, which auto-vectors thrust so your ship's
+   * momentum will be in the direction the nose is pointing as viewed from
+   * the cockpit... it would auto-hover in atmo."
+   *
+   * Two behaviours, one mode, because they are the same sentence asked of
+   * two different places. In vacuum, "momentum on the nose" means killing
+   * whatever part of your velocity is not along the nose, so the velocity
+   * vector swings round to follow where you are looking. In air, the same
+   * instruction means a helicopter: hold the height you are at and stop
+   * sliding over the ground, because that is what a hovering thing does.
+   *
+   * WHAT IT MEASURES VELOCITY AGAINST is the whole design, and the file
+   * already carries the scar from getting this wrong once — see
+   * assistRefVelocity, which needs a lock precisely because "drift relative
+   * to the planet you are orbiting" is seven kilometres a second of
+   * perfectly good orbital velocity. This mode answers it differently: the
+   * reference is WHERE YOU ARE. Inside an atmosphere it is the air, which
+   * moves with its world. Outside one it is the body whose gravity
+   * dominates, which is the same body the speed readout already quotes you
+   * against — so the number the pilot is looking at and the number the
+   * computer is nulling are the same number.
+   *
+   * AND IT WILL SPEND THE TANK TO DO IT. Astra's call, asked directly and
+   * answered "full authority": point the nose ninety degrees off prograde
+   * in low orbit and this will genuinely try to turn five kilometres a
+   * second of momentum, and the reaction mass gauge will fall off a cliff
+   * while it tries. That is the honest behaviour for a mode whose whole
+   * promise is that your momentum goes where you point, and it is why the
+   * SHIP page now reads out local gravity beside your engine's own
+   * acceleration: the two numbers that say whether what you are about to
+   * ask for is possible.
+   *
+   * It cannot strand you, and that is deliberate rather than lucky.
+   * Manoeuvring burns the THRUSTER tank; the jump tank is never touched by
+   * it (see Sim.advanceShip). The worst this mode can do is leave you
+   * coasting with cold thrusters, which is a problem you can still fly out
+   * of by docking anywhere and refilling.
+   */
+  var VECTOR_AUTHORITY = 1.0;        // all of it, by request
+  var HOVER_GAIN = 0.35;             // s^-1, on altitude error
+  var HOVER_DAMP = 1.4;              // and on the rate, which keeps it from bouncing
+  var HOVER_STICK = 0.02;            // km/s of vertical input that counts as "flying it"
+
+  /* The frame this mode flies in. Returns null when there is nothing to
+   * hold station against at all, which out between the stars is the honest
+   * answer — there is no such thing as sideways out there. */
+  function vectorFrame() {
+    var atmo = Sim.atmosphereContext
+      ? Sim.atmosphereContext(G.ship.pos, G.sys, G.t) : null;
+    if (atmo && atmo.body) {
+      return { body: atmo.body, pos: atmo.pos, vel: atmo.vel, air: true };
+    }
+    var dom = Sim.dominantBody(G.ship.pos, G.sys, G.t);
+    if (!dom) return null;
+    return {
+      body: dom, pos: Sim.bodyPosition(dom, G.sys, G.t),
+      vel: Sim.bodyVelocity(dom, G.sys, G.t), air: false
+    };
+  }
+
+  /* Is this mode doing anything right now, and what would it call itself?
+   * Read by the HUD, which is the difference between a pilot who trusts it
+   * and one who thinks it is broken — the same lesson the ASSIST row's
+   * standby state taught. */
+  function vectorState() {
+    if (!G.vector) return 'OFF';
+    if (G.ship.docked) return 'docked';
+    if (G.ship.landed) return 'landed';
+    if (G.flightMode !== 'ship') return 'ship frame only';
+    if (G.autodock || G.nodeBurn) return 'autopilot flying';
+    var fr = vectorFrame();
+    if (!fr) return 'no reference';
+    return fr.air ? 'HOVER' : 'VECTOR';
+  }
+
+  /* The thrust this mode wants, in km/s^2, or null. `manual` is what the
+   * pilot is already spending, so the mode only ever offers what is left. */
+  function vectorAssist(manualAcc, dtA) {
+    var st = vectorState();
+    if (st !== 'VECTOR' && st !== 'HOVER') return null;
+    var s = G.ship;
+    var fr = vectorFrame();
+    var manual = V.len(manualAcc);
+    var budget = Math.max(0, s.maxAccel * VECTOR_AUTHORITY - manual);
+    if (budget <= 0) return null;
+
+    var rel = V.sub(s.vel, fr.vel);
+    var want;
+
+    if (fr.air) {
+      /* HOVER. Hold the height, stop the slide.
+       *
+       * Altitude is held rather than merely damped because that is what the
+       * word means: let go of everything over a landing pad and the ship
+       * should still be there a minute later. The held height follows the
+       * pilot whenever they are on the vertical thrusters, so R and F still
+       * fly it up and down and it parks wherever they stop. */
+      var up = V.norm(V.sub(s.pos, fr.pos));
+      var alt = V.dist(s.pos, fr.pos) - fr.body.radius;
+      var climbing = Math.abs(V.dot(manualAcc, up)) > HOVER_STICK * 0.5;
+      if (G.hoverAlt === null || climbing) G.hoverAlt = alt;
+
+      /* Cancel gravity first — everything below is a correction on top of
+       * simply not falling. */
+      var g = Sim.acceleration(s.pos, G.sys, G.t);
+      want = V.scale(g, -1);
+
+      var vUp = V.dot(rel, up);
+      var err = G.hoverAlt - alt;
+      want = V.addScaled(want, up, err * HOVER_GAIN - vUp * HOVER_DAMP);
+
+      /* And the ground track, unless the pilot is flying somewhere. Killing
+       * horizontal drift while they are asking for horizontal thrust would
+       * be the computer arguing with the hand on the stick. */
+      var horiz = V.addScaled(rel, up, -vUp);
+      var manHoriz = V.len(V.addScaled(manualAcc, up, -V.dot(manualAcc, up)));
+      if (manHoriz < HOVER_STICK * 0.1) {
+        want = V.addScaled(want, horiz, -HOVER_DAMP);
+      }
+    } else {
+      /* VECTOR. Whatever part of the velocity is not along the nose is what
+       * stands between the ship and flying where it is pointed, so that is
+       * what gets spent on. The along-nose component is left alone: this is
+       * an assist, not a brake, and the throttle still decides how fast. */
+      var along = V.dot(rel, s.fwd);
+      var lateral = V.addScaled(rel, s.fwd, -along);
+      var lat = V.len(lateral);
+      if (lat < 1e-7) return null;
+      /* Asking for the whole correction in one step and then clipping it to
+       * the budget is what makes this converge rather than overshoot: near
+       * the end the correction is smaller than the budget and the mode
+       * simply finishes the job in that frame. */
+      want = V.scale(lateral, -1 / Math.max(dtA, 1e-3));
+    }
+
+    var mag = V.len(want);
+    if (mag < 1e-9) return null;
+    if (mag > budget) want = V.scale(want, budget / mag);
+    return want;
+  }
+
   function applyControls(dtReal) {
     var fr = orbitalFrame();
     var acc = V.zero();
@@ -3996,7 +4160,7 @@
      * Skipped entirely while an autopilot is flying: those already null
      * their own relative velocity, and two controllers pushing at the same
      * target is how you get a ship that hunts instead of arriving. */
-    if (G.flightMode === 'ship' && G.assist &&
+    if (G.flightMode === 'ship' && G.assist && !G.vector &&
         !G.ship.docked && !G.ship.landed && !G.autodock && !G.nodeBurn) {
       var rv = assistRefVelocity();
       if (rv) {
@@ -4013,6 +4177,20 @@
             active.assist = 1;
           }
         }
+      }
+    }
+
+    /* VECTOR ASSIST, after everything else and instead of the docking one.
+     * Both are thrust, and two controllers pushing at the same ship is how
+     * you get one that hunts rather than arrives — the same rule that keeps
+     * assist out of the autopilots' way. When this mode is flying, it is
+     * the one flying. */
+    if (G.vector) {
+      var dtV = Math.max(G.lastDtSim || dtReal || 0.016, 1e-3);
+      var vcmd = vectorAssist(acc, dtV);
+      if (vcmd) {
+        acc = V.add(acc, vcmd);
+        active.assist = 1;
       }
     }
 
@@ -8017,10 +8195,21 @@
         var live = !!assistRefVelocity();
         var lock = G.dockTarget || navTargetState();
         row('ASSIST', !G.assist ? 'OFF'
+                    : G.vector ? 'stood down'
                     : live ? 'ACTIVE'
                     : lock ? 'standby >' + ASSIST_RANGE + ' km'
                     : 'no lock',
-            !G.assist ? '#7e93b3' : live ? '#7dffb0' : '#ffb86b');
+            !G.assist ? '#7e93b3' : (live && !G.vector) ? '#7dffb0' : '#ffb86b');
+      }
+      /* THE SECOND ASSIST GETS ITS OWN ROW, and the same three-state
+       * honesty the first one taught: it says HOVER or VECTOR when it is
+       * actually flying, and says what is stopping it when it is not.
+       * Shown only when it is switched on, because a row reading OFF
+       * forever is a row nobody reads. */
+      if (G.vector) {
+        var vst = vectorState();
+        var flying = vst === 'VECTOR' || vst === 'HOVER';
+        row('VECTOR', vst, flying ? '#7dffb0' : '#ffb86b');
       }
     }
 
@@ -8408,10 +8597,30 @@
      * writes past MFD_BODY_BOTTOM draws its last row straight through it —
      * invisible at dashboard size, obvious the moment a screen showed the
      * page at full scale. */
-    mfdRow(ctx, y + 108, 'mass / accel',
+    /* WHAT YOU ARE FIGHTING, on the same line as what you have to fight it
+     * with. Astra asked for local gravity and the engine's own acceleration
+     * when the vector assist went in, and putting them side by side is the
+     * point of both: thrust against gravity is the one comparison that says
+     * whether you can hover here, whether you will lift off again, and
+     * whether asking the assist to turn your momentum is a request the
+     * engine can fill. Green while the engine wins, amber when it does not.
+     *
+     * ONE ROW RATHER THAN TWO, and not for tidiness: MFD_BODY_BOTTOM is 152
+     * and the soft-key strip starts at 154, so a sixth row on this page
+     * draws straight through it — invisible at dashboard size and obvious
+     * the moment somebody opens the page full screen. The file has that
+     * warning written on the row above; this is it being obeyed.
+     *
+     * Gravity is quoted for the body actually pulling on you, which is the
+     * same body the STATUS speed is measured against — so the two readouts
+     * cannot disagree about where you are. */
+    var gHere = V.len(Sim.acceleration(s.pos, G.sys, G.t)) * 1000;  // km/s² -> m/s²
+    var thrustNow = s.maxAccel * 1000;
+    mfdRow(ctx, y + 108, 'mass · thrust · gravity',
            Sim.shipMass(s).toFixed(0) + ' t   ·   ' +
-           (s.maxAccel * 1000).toFixed(2) + ' m/s²',
-           s.fuelOut ? '#ff7a7a' : MFD_INK);
+           thrustNow.toFixed(2) + '   ·   ' + gHere.toFixed(2) + ' m/s²',
+           s.fuelOut ? '#ff7a7a'
+                     : gHere > thrustNow ? '#ffb86b' : MFD_INK);
   }
 
   /* --- GUNS: which hardpoint is on which trigger -------------------------
@@ -10734,6 +10943,10 @@
       { kind: 'toggle', label: 'Flight assist', key: 'Shift+/',
         get: function () { return G.assist; },
         set: function (v) { G.assist = v; } },
+      { kind: 'toggle', label: 'Vector assist (momentum follows the nose)',
+        key: 'Shift+]',
+        get: function () { return G.vector; },
+        set: function (v) { G.vector = v; G.hoverAlt = null; } },
       { kind: 'choice', label: 'Control frame', key: '/',
         options: ['Ship — nose and strafe', 'Orbital — prograde and radial'],
         get: function () { return G.flightMode === 'orbital' ? 1 : 0; },
@@ -10806,7 +11019,7 @@
       showOrbits: !!G.showOrbits, showPrediction: !!G.showPrediction,
       showGrid: !!G.showGrid, showTraffic: !!G.showTraffic,
       cockpitChrome: G.cockpitChrome || 0,
-      assist: !!G.assist, flightMode: G.flightMode,
+      assist: !!G.assist, vector: !!G.vector, flightMode: G.flightMode,
       mouseAim: !!G.mouseAim, aimSens: G.aimSens,
       cockpitFov: G.cockpitFov
     });
@@ -10826,6 +11039,7 @@
         G.showCockpitFrame = G.cockpitChrome !== 2;
       }
       if (typeof p.assist === 'boolean') G.assist = p.assist;
+      if (typeof p.vector === 'boolean') G.vector = p.vector;
       if (p.flightMode === 'ship' || p.flightMode === 'orbital') G.flightMode = p.flightMode;
       if (typeof p.mouseAim === 'boolean') G.mouseAim = p.mouseAim;
       if (typeof p.aimSens === 'number') G.aimSens = Math.max(0.25, Math.min(3, p.aimSens));
@@ -11237,6 +11451,14 @@
       ['', 'It needs a lock: against a planet it would fight your orbit'],
       ['', 'and it only wakes inside 150 km — it is a docking aid, not a'],
       ['', 'way to fly a transfer. Beyond that it says "standby"'],
+      ['Shift + ]', 'vector assist on/off'],
+      ['', 'the other one: it puts your MOMENTUM on the nose, so the ship'],
+      ['', 'flies where it points. No lock needed — it works against the'],
+      ['', 'body you are at, or against the air when you are in one.'],
+      ['', 'In atmosphere it becomes a hover: it holds your height and'],
+      ['', 'stops you sliding over the ground, so let go and it parks.'],
+      ['', 'It will spend the WHOLE thruster tank turning a big vector,'],
+      ['', 'so watch thrust against gravity on the SHIP page.'],
       ['arrows / Q E', 'pitch and yaw  ·  roll'],
       ['hold Shift', 'fine thrust, 8% — use it for the last few metres'],
       ['', ''],
@@ -11561,6 +11783,10 @@
    * Save.restore already takes, so this is not a new entry point into the
    * world — it is the existing one, named. */
   G.enterSystem = enterSystem;
+  /* Exposed for the suite: the readout says VECTOR or HOVER or why not, and
+   * a test that cannot ask the same question the HUD asks would be testing
+   * its own copy of the rule. */
+  G.vectorState = vectorState;
   /* One hand-cranked frame. The browser parks requestAnimationFrame the
    * moment the tab is hidden, which is correct for players and useless for
    * a script trying to playtest through a hidden pane — this is the crank

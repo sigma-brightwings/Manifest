@@ -2613,6 +2613,175 @@ console.log('--- the cockpit kit ---');
  * is the kind of leak that only shows up after an hour of play, which is
  * the hour nobody tests by hand.
  */
+/* ---- the vector assist -------------------------------------------------
+ * Astra: "a flight assist mode, which auto-vectors thrust so your ship's
+ * momentum will be in the direction the nose is pointing as viewed from the
+ * cockpit... it would auto-hover in atmo."
+ *
+ * Two behaviours, one mode, so this flies both of them rather than asking
+ * the functions what they would have done: in vacuum the velocity vector
+ * has to actually END UP on the nose, and in air the ship has to still be
+ * at the same height a while later.
+ */
+console.log('--- the vector assist ---');
+(function () {
+  newFlying('kawartha');
+  frames(3);
+  G.vector = false;
+
+  /* THE KEY IS THE FEATURE. Shift+] and nothing else — plain ] still
+   * cycles the nav target, which is what it did before this existed. */
+  var keydown = listeners.keydown[0];
+  function press(k, shift) {
+    keydown({ key: k, shiftKey: !!shift, preventDefault: function () {} });
+  }
+  press('}', true);
+  check('Shift+] turns it on', G.vector === true);
+  press('}', true);
+  check('and off again', G.vector === false);
+  var navBefore = G.navTarget;
+  press(']', false);
+  check('while plain ] still cycles the lock, as it always did',
+        G.navTarget !== navBefore || navBefore === null);
+
+  /* ---- VACUUM: the momentum goes where the nose goes ---- */
+  G.vector = true;
+  G.assist = false;
+  G.flightMode = 'ship';
+  G.ship.docked = null; G.ship.landed = false;
+  G.autodock = null; G.nodeBurn = null;
+
+  var host = null;
+  for (var i = 0; i < G.sys.bodies.length; i++) {
+    if (G.sys.bodies[i].kind === 'planet') { host = G.sys.bodies[i]; break; }
+  }
+  check('there is a world to fly at', !!host);
+
+  /* A ship in orbit with a drift across its nose — the manoeuvring case
+   * the mode exists for. Measured as the LATERAL component rather than as
+   * the angle between velocity and nose, and that distinction is the test
+   * teaching itself something: killing lateral velocity does not rotate the
+   * vector, it shortens it, so a ship whose entire velocity is across the
+   * nose holds 90 degrees the whole way down to a standstill. The angle
+   * only closes once there is something along the nose to close it with.
+   * What the mode actually promises is that the part of your momentum which
+   * is NOT going where you point goes away, and that is what this measures. */
+  var orb = Sim.circularOrbit(host, G.sys, G.t, host.radius * 0.8, 0.1, 0.4);
+  G.ship.pos = orb.pos; G.ship.vel = orb.vel;
+  G.ship.up = orb.up; G.ship.right = orb.right;
+  G.ship.fwd = orb.fwd;
+  var hs = Sim.bodyState(host, G.sys, G.t);
+  /* Nose along the orbit, then a drift shoved across it — 40 m/s, which is
+   * a berth approach gone sideways rather than a transfer. */
+  G.ship.vel = V.addScaled(G.ship.vel, orb.up, 0.04);
+  Sim.refreshShip(G.ship);
+  G.ship.thrusterFuel = G.ship.thrusterCap;
+
+  function lateralSpeed() {
+    var st = Sim.bodyState(host, G.sys, G.t);
+    var rel = V.sub(G.ship.vel, st.vel);
+    return V.len(V.addScaled(rel, G.ship.fwd, -V.dot(rel, G.ship.fwd)));
+  }
+  var before = lateralSpeed();
+  var fuel0 = G.ship.thrusterFuel;
+  var mark = drawn.texts.length;
+  frames(300);
+  var after = lateralSpeed();
+  console.log('  drift across the nose ' + (before * 1000).toFixed(1) + ' m/s -> ' +
+              (after * 1000).toFixed(1) + ' m/s, ' +
+              (fuel0 - G.ship.thrusterFuel).toFixed(3) + ' t of reaction mass');
+  check('it kills the part of your momentum that is not going where you point',
+        after < before * 0.25,
+        (before * 1000).toFixed(1) + ' -> ' + (after * 1000).toFixed(1) + ' m/s');
+  check('and it renders while doing it', errorsSince(mark).length === 0,
+        errorsSince(mark)[0]);
+  /* AND IT PAYS FOR IT OUT OF THE RIGHT TANK. Manoeuvring spends reaction
+   * mass; the jump tank is never touched by it, which is what stops this
+   * mode from stranding anybody between stars however hard they fly it. */
+  check('out of the thruster tank', G.ship.thrusterFuel < fuel0,
+        fuel0.toFixed(3) + ' -> ' + G.ship.thrusterFuel.toFixed(3) + ' t');
+  check('and never out of the jump tank', G.ship.fuel === G.ship.fuelCap,
+        G.ship.fuel + ' / ' + G.ship.fuelCap);
+
+  /* THE STATE THE HUD READS, asked of the same function the HUD asks —
+   * a test with its own copy of the rule would pass while the readout
+   * lied. */
+  check('and it calls itself VECTOR out here', G.vectorState() === 'VECTOR',
+        G.vectorState());
+
+  /* ---- IT STANDS DOWN when it is not the one flying ---- */
+  G.flightMode = 'orbital';
+  check('it keeps out of the orbital frame, where the keys mean prograde',
+        G.vectorState() === 'ship frame only', G.vectorState());
+  G.flightMode = 'ship';
+  G.autodock = { mode: 'dock', phase: 'approach' };
+  check('and out of an autopilot\'s way', G.vectorState() === 'autopilot flying',
+        G.vectorState());
+  G.autodock = null;
+
+  var world = null;
+  for (i = 0; i < G.sys.bodies.length; i++) {
+    var b = G.sys.bodies[i];
+    if (b.atmosphere && (b.kind === 'planet' || b.kind === 'moon')) { world = b; break; }
+  }
+
+  /* ---- AIR: it hovers ---- */
+  check('the system has air somewhere', !!world, world && world.name);
+  if (world) {
+    var ws = Sim.bodyState(world, G.sys, G.t);
+    var up = V.norm(V.sub(G.ship.pos, ws.pos));
+    if (!(V.len(up) > 0)) up = { x: 0, y: 0, z: 1 };
+    var alt0 = world.atmosphere.scaleHeight * 0.6;
+    G.ship.pos = V.addScaled(ws.pos, up, world.radius + alt0);
+    /* Dropped, not placed: falling is the state hover has to rescue you
+     * from, and starting at rest would let a do-nothing implementation
+     * pass. */
+    G.ship.vel = V.addScaled(ws.vel, up, -0.05);
+    G.ship.landed = false; G.ship.docked = null;
+    G.ship.thrusterFuel = G.ship.thrusterCap;
+    Sim.refreshShip(G.ship);
+    G.hoverAlt = null;
+    G.keys = {};
+
+    function altNow() {
+      var st = Sim.bodyState(world, G.sys, G.t);
+      return V.dist(G.ship.pos, st.pos) - world.radius;
+    }
+    var altA = altNow();
+    mark = drawn.texts.length;
+    check('and in air it calls itself HOVER', G.vectorState() === 'HOVER',
+          G.vectorState());
+    frames(600);
+    var altB = altNow();
+    var st2 = Sim.bodyState(world, G.sys, G.t);
+    var relAir = V.sub(G.ship.vel, st2.vel);
+    var upNow = V.norm(V.sub(G.ship.pos, st2.pos));
+    var vUp = V.dot(relAir, upNow);
+    var horiz = V.len(V.addScaled(relAir, upNow, -vUp));
+    console.log('  hover: ' + altA.toFixed(2) + ' km -> ' + altB.toFixed(2) +
+                ' km, vertical ' + (vUp * 1000).toFixed(1) + ' m/s, ground drift ' +
+                (horiz * 1000).toFixed(1) + ' m/s');
+    /* Thresholds set against what it actually does rather than against a
+     * round number: dropped at 50 m/s it arrests to a couple of m/s and
+     * gives up about 240 m doing it, so these sit a little outside that.
+     * A limit of "within 3 km" would have passed on a ship still falling. */
+    check('a dropped ship stops falling', Math.abs(vUp) < 0.01,
+          (vUp * 1000).toFixed(1) + ' m/s');
+    check('and it costs less than half a kilometre of height to do it',
+          Math.abs(altB - altA) < 0.5,
+          altA.toFixed(2) + ' -> ' + altB.toFixed(2) + ' km');
+    check('and it stops sliding over the ground', horiz < 0.05,
+          (horiz * 1000).toFixed(1) + ' m/s');
+    check('and the frame that drew it threw nothing',
+          errorsSince(mark).length === 0, errorsSince(mark)[0]);
+
+  }
+
+  G.vector = false;
+  G.assist = true;
+  G.keys = {};
+})();
+
 console.log('--- contrails ---');
 (function () {
   newFlying('kawartha');
@@ -5394,9 +5563,14 @@ console.log('--- options ---');
     /* renderScale joined the list when it came off the backtick and became
      * an Options row — a setting the cursor can reach has to be a setting
      * this fingerprint can see, or the row reads as doing nothing. */
+    /* G.vector joined it the same way renderScale did: the vector assist
+     * is a row the cursor can reach, so it has to be a setting this
+     * fingerprint can see or the row reads as doing nothing. The test
+     * caught it the hour the row was added, which is the whole point of
+     * writing it this way round. */
     return JSON.stringify([G.soundVolume, G.soundMuted, G.showOrbits,
                            G.showPrediction, G.showGrid, G.showTraffic,
-                           G.cockpitChrome, G.assist, G.flightMode,
+                           G.cockpitChrome, G.assist, G.vector, G.flightMode,
                            G.mouseAim, G.aimSens, G.showHelp, G.renderScale]);
   }
   function openOptions() {

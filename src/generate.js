@@ -38,7 +38,7 @@
     dryMass: 42,           // tonnes
     thrustKN: 1800,
     thrusterIsp: 450000,   // seconds — a torch, and it has to be
-    thrusterFuel: 12, thrusterCap: 12,
+    thrusterFuel: 16, thrusterCap: 16,
     /* Matched to the Talon in combat.js, which is the same ship: a third
      * more tank, for the reason written out there. MAX_SURFACE_G below is
      * derived from this laden mass, so raising it lowers the heaviest world
