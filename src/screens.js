@@ -787,6 +787,41 @@
           say(c.obj.name + ' trades as a ' + (c.obj.market ? c.obj.market.roleName : 'port'), 5);
         }
       });
+      /* THE LOCAL SHEET. Astra: "The data for neighboring systems should be
+       * purchaseable from starports and planetside ports as well."
+       *
+       * What is on sale is the smaller of the two kinds of knowing — whose
+       * flag flies over the systems around this one, not what is in them.
+       * You still have to go to find that out, which is the point of the
+       * chart being a chart rather than a survey.
+       *
+       * Sold from the deck rather than over the radio: a sheet is a thing
+       * somebody hands you. The row still SHOWS at range, greyed, so the
+       * shape of the conversation is the same wherever you are — the same
+       * rule the launch-permission row follows. */
+      var sheet = Galaxy.chartOffer(G.galaxy, G.here, G.charted, Galaxy.CHART_RADIUS_LY);
+      opts.push({
+        label: 'Buy slipspace charts',
+        enabled: docked && sheet.stars.length > 0 && G.ship.credits >= sheet.cost,
+        note: !docked ? 'sold on the deck'
+            : !sheet.stars.length ? 'you already have every sheet they hold'
+            : sheet.cost + ' cr for ' + sheet.stars.length + ' system' +
+              (sheet.stars.length === 1 ? '' : 's') + ' within ' +
+              Galaxy.CHART_RADIUS_LY + ' ly' +
+              (G.ship.credits < sheet.cost ? '  — short by ' +
+                (sheet.cost - G.ship.credits) + ' cr' : ''),
+        fn: function () {
+          var offer = Galaxy.chartOffer(G.galaxy, G.here, G.charted, Galaxy.CHART_RADIUS_LY);
+          if (!offer.stars.length || G.ship.credits < offer.cost) return;
+          G.ship.credits -= offer.cost;
+          for (var ci = 0; ci < offer.stars.length; ci++) {
+            G.charted[offer.stars[ci].id] = true;
+          }
+          say(c.obj.name + ': "Sheets transferred — ' + offer.stars.length +
+              ' systems out to ' + Galaxy.CHART_RADIUS_LY + ' light years. ' +
+              offer.cost + ' credits."', 6);
+        }
+      });
       opts.push({ label: 'Mission board', enabled: true,
                   note: 'F7', fn: function () { selectPanel(6); } });
     } else if (G.piracyMenu === c.name) {
@@ -2495,6 +2530,240 @@
    * The map is centred on the CLUSTER, not on you, so its shape stays put
    * as you travel and you can build a mental picture of where things are.
    * The reachable circle moves with you instead. */
+  /* ---- TERRITORY, AS A MAP RATHER THAN A GLOW ----------------------------
+   *
+   * Astra: "I want you to better define the edges of faction space, where
+   * we demarcate it by filling in the space within the borders with the
+   * faction colors. The color should be more saturated the more control
+   * that faction has in each system. Borders are demarcated with dotted
+   * lines, bold, and of the faction's color."
+   *
+   * What this replaces was a soft radial glow around each capital, which
+   * has two things wrong with it: a circle is not a border, and it was
+   * drawn for every power in the galaxy whether or not the player had ever
+   * heard of them — a chart that knows more than the pilot does.
+   *
+   * SO IT IS BUILT FROM WHAT YOU HAVE CHARTED, and only that. Every cell of
+   * a coarse grid over the plot takes the flag of the nearest charted star,
+   * out to a maximum reach, so space you know nothing about stays black and
+   * the map genuinely is something you assemble by flying. The first sheet
+   * you buy visibly grows the territory around you, which is the whole
+   * point of charts being purchasable.
+   *
+   * Two-dimensional on purpose. The plot draws height as a stem under each
+   * star and classifies in the plane, because a region is a thing you read
+   * with your eye and your eye is looking at the plane.
+   *
+   * CACHED, because the field is thousands of nearest-star searches and it
+   * changes only when you chart something new or the window resizes. The
+   * key is exactly the set of inputs: how much you know, and how big the
+   * plot is.
+   */
+  function factionRgb(hex) {
+    var n = parseInt(String(hex || '#888888').slice(1), 16);
+    return ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255);
+  }
+
+  var TERRITORY_CELL = 8;          // px; the grain of the fill
+  var TERRITORY_REACH_LY = 6.5;    // how far a charted star's flag carries
+  var TERRITORY_MIN_ALPHA = 0.10;  // a barely-held system is still visible
+  var TERRITORY_MAX_ALPHA = 0.38;  // and a capital is never a solid block
+  var terrCache = null;
+
+  function chartedStars() {
+    var out = [];
+    var stars = (G.galaxy && G.galaxy.stars) || [];
+    for (var i = 0; i < stars.length; i++) {
+      if (G.charted && G.charted[stars[i].id] && stars[i].factionId) out.push(stars[i]);
+    }
+    return out;
+  }
+
+  /* The powers whose space you have actually charted, in galaxy order. */
+  function chartedFactions() {
+    var seen = {}, out = [];
+    var stars = chartedStars();
+    for (var i = 0; i < stars.length; i++) seen[stars[i].factionId] = true;
+    (G.galaxy.factions || []).forEach(function (f) { if (seen[f.id]) out.push(f); });
+    return out;
+  }
+
+  function territoryField(plotSize, cx, cy, scale) {
+    var stars = chartedStars();
+    var key = stars.length + '|' + plotSize + '|' + Math.round(scale * 1000) +
+              '|' + (G.seed || '');
+    if (terrCache && terrCache.key === key) return terrCache;
+
+    var n = Math.max(2, Math.ceil(plotSize / TERRITORY_CELL));
+    var x0 = cx - plotSize / 2, y0 = cy - plotSize / 2;
+    var reachPx = TERRITORY_REACH_LY * scale;
+    var owner = new Array(n * n), ctl = new Array(n * n);
+    var gx = [], gy = [], i;
+    /* Star positions in PLOT space once, rather than per cell. The stem is
+     * deliberately not applied: a star's dot is drawn lifted by its height
+     * but its territory belongs where it is on the floor of the plot, and
+     * lifting the region too would slide every border off its own stars. */
+    for (i = 0; i < stars.length; i++) {
+      gx.push(cx + stars[i].x * scale);
+      gy.push(cy - stars[i].y * scale);
+    }
+
+    for (var r = 0; r < n; r++) {
+      var py2 = y0 + (r + 0.5) * TERRITORY_CELL;
+      for (var c = 0; c < n; c++) {
+        var px2 = x0 + (c + 0.5) * TERRITORY_CELL;
+        var best = -1, bestD = reachPx * reachPx;
+        for (i = 0; i < stars.length; i++) {
+          var ddx = px2 - gx[i], ddy = py2 - gy[i];
+          var d2 = ddx * ddx + ddy * ddy;
+          if (d2 < bestD) { bestD = d2; best = i; }
+        }
+        var k = r * n + c;
+        if (best < 0) { owner[k] = null; ctl[k] = 0; continue; }
+        owner[k] = stars[best].factionId;
+        /* Control of the SYSTEM, faded toward the edge of that star's
+         * reach — so a lone charted system reads as a claim that runs out
+         * rather than as a hard-edged tile, and a cluster of them reads as
+         * one region. */
+        var fade = 1 - Math.sqrt(bestD) / reachPx;
+        ctl[k] = Galaxy.control(G.galaxy, stars[best]) * (0.45 + 0.55 * fade);
+      }
+    }
+    terrCache = { key: key, n: n, x0: x0, y0: y0, owner: owner, ctl: ctl };
+    return terrCache;
+  }
+
+  /* PAINTED ONCE, THEN BLITTED. Measured: drawing the fill and the borders
+   * live cost 4,900 fillRects and one border sweep per power every frame,
+   * and took a fully-charted galaxy from 77 fps to 15. The field was
+   * already cached; the PICTURE of it now is too, on an offscreen surface
+   * keyed the same way, so a frame costs one drawImage and the whole thing
+   * is rebuilt only when you chart something new or the window resizes.
+   *
+   * Falls back to drawing straight onto the chart when there is no document
+   * to make a canvas from — the headless test harness, which cares that the
+   * right things are drawn rather than how fast. */
+  var terrSurface = null;
+
+  function territorySurface(w, h) {
+    if (typeof document === 'undefined' || !document.createElement) return null;
+    if (!terrSurface || terrSurface.canvas.width !== w || terrSurface.canvas.height !== h) {
+      var cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      var c2 = cv.getContext ? cv.getContext('2d') : null;
+      if (!c2) return null;
+      terrSurface = { canvas: cv, ctx: c2, key: null };
+    }
+    return terrSurface;
+  }
+
+  function drawTerritory(ctx, px, py, plotSize, cx, cy, scale) {
+    if (!G.galaxy || !G.charted) return;
+    var f = territoryField(plotSize, cx, cy, scale);
+    var side = f.n * TERRITORY_CELL;
+    var surf = territorySurface(Math.ceil(side), Math.ceil(side));
+    if (surf) {
+      if (surf.key !== f.key) {
+        surf.ctx.clearRect(0, 0, surf.canvas.width, surf.canvas.height);
+        paintTerritory(surf.ctx, f, -f.x0, -f.y0);
+        surf.key = f.key;
+      }
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(f.x0, f.y0, side, side);
+      ctx.clip();
+      ctx.drawImage(surf.canvas, f.x0, f.y0);
+      ctx.restore();
+      return;
+    }
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(f.x0, f.y0, side, side);
+    ctx.clip();
+    paintTerritory(ctx, f, 0, 0);
+    ctx.restore();
+  }
+
+  /* The fill and the borders, in plot coordinates offset by (ox, oy) — zero
+   * when painting straight onto the chart, and minus the field's origin
+   * when painting into the offscreen surface. */
+  function paintTerritory(ctx, f, ox, oy) {
+    var n = f.n, cell = TERRITORY_CELL;
+    var byId = G.galaxy.factionById || {};
+    var r, c, k;
+
+    /* THE FILL. One pass, no gradients: a flat wash per cell whose alpha is
+     * the control reading. Cells of the same colour abut exactly, so a
+     * region reads as one shape rather than as tiles. */
+    for (r = 0; r < n; r++) {
+      for (c = 0; c < n; c++) {
+        k = r * n + c;
+        var fid = f.owner[k];
+        if (!fid) continue;
+        var fac = byId[fid];
+        if (!fac) continue;
+        var a = TERRITORY_MIN_ALPHA +
+                (TERRITORY_MAX_ALPHA - TERRITORY_MIN_ALPHA) * Math.max(0, Math.min(1, f.ctl[k]));
+        ctx.fillStyle = 'rgba(' + factionRgb(fac.color) + ',' + a.toFixed(3) + ')';
+        /* SNAPPED TO WHOLE PIXELS, and tiled edge to edge rather than with
+         * an overlap. Two translucent cells that overlap by half a pixel
+         * double their alpha along the seam, which drew a faint grid across
+         * every region — the fill looked like graph paper. Rounding both
+         * edges and taking the difference makes neighbouring cells share an
+         * edge exactly. */
+        var xa = Math.round(ox + f.x0 + c * cell), xb = Math.round(ox + f.x0 + (c + 1) * cell);
+        var ya = Math.round(oy + f.y0 + r * cell), yb = Math.round(oy + f.y0 + (r + 1) * cell);
+        ctx.fillRect(xa, ya, xb - xa, yb - ya);
+      }
+    }
+
+    /* THE BORDERS. Bold and dotted, in the faction's own colour, drawn one
+     * faction at a time so each side of a shared border gets its own line.
+     * Each line is inset half a cell toward the side that owns it, which is
+     * what keeps two abutting powers from stroking the same pixels twice
+     * and cancelling into one muddy dash — and it reads, correctly, as two
+     * powers each marking their own edge.
+     *
+     * The edge against UNCHARTED space is drawn too, and it is the most
+     * informative line on the map: it is the edge of what you know, in the
+     * colour of whoever you would be flying away from. */
+    var inset = 2.5;
+    (G.galaxy.factions || []).forEach(function (fac) {
+      var path = null;
+      function seg(ax, ay, bx, by) {
+        if (!path) { ctx.beginPath(); path = true; }
+        ctx.moveTo(ax, ay); ctx.lineTo(bx, by);
+      }
+      for (var r2 = 0; r2 < n; r2++) {
+        for (var c2 = 0; c2 < n; c2++) {
+          var kk = r2 * n + c2;
+          if (f.owner[kk] !== fac.id) continue;
+          var X = ox + f.x0 + c2 * cell, Y = oy + f.y0 + r2 * cell;
+          if (c2 === 0 || f.owner[kk - 1] !== fac.id) {
+            seg(X + inset, Y, X + inset, Y + cell);
+          }
+          if (c2 === n - 1 || f.owner[kk + 1] !== fac.id) {
+            seg(X + cell - inset, Y, X + cell - inset, Y + cell);
+          }
+          if (r2 === 0 || f.owner[kk - n] !== fac.id) {
+            seg(X, Y + inset, X + cell, Y + inset);
+          }
+          if (r2 === n - 1 || f.owner[kk + n] !== fac.id) {
+            seg(X, Y + cell - inset, X + cell, Y + cell - inset);
+          }
+        }
+      }
+      if (!path) return;
+      ctx.strokeStyle = fac.color;
+      ctx.lineWidth = 2.2;
+      ctx.globalAlpha = 0.85;
+      ctx.setLineDash([5, 4]);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.setLineDash([]);
+    });
+  }
+
   function drawStarMap(ctx, w, h) {
     var m = G.starMap;
     m.list = jumpCandidates();
@@ -2513,47 +2782,25 @@
       return { x: cx + s.x * scale, y: cy - s.y * scale, stem: s.z * scale };
     }
 
-    function factionRgb(hex) {
-      var n = parseInt(hex.slice(1), 16);
-      return ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255);
-    }
-
     var dx = px + plotSize + 56, dw = pw - plotSize - 86;
 
-    /* Territory. A soft faction-coloured glow centred on each capital,
-     * radius set by how far that faction's OWN stars actually spread from
-     * it — a compact home cluster reads as a tight blob, a sprawling one as
-     * a wide one, and nothing here is a stored border: every frame just
-     * asks "how far do this faction's stars reach" and draws that. Drawn
-     * first, so rings, stems and dots all sit on top of it. */
-    (G.galaxy.factions || []).forEach(function (fac) {
-      var capital = G.galaxy.byId[fac.capitalId];
-      var owned = G.galaxy.stars.filter(function (s) { return s.factionId === fac.id; });
-      if (!capital || !owned.length) return;
-      var spread = owned.reduce(function (s, st) {
-        return s + Galaxy.distance3(st, capital);
-      }, 0) / owned.length;
-      var cap = toScreen(capital);
-      var cy2 = cap.y - cap.stem;
-      var blobR = Math.max(34, spread * scale * 1.6);
-      var rgb = factionRgb(fac.color);
-      ctx.save();
-      var grad = ctx.createRadialGradient(cap.x, cy2, 0, cap.x, cy2, blobR);
-      grad.addColorStop(0, 'rgba(' + rgb + ',0.20)');
-      grad.addColorStop(1, 'rgba(' + rgb + ',0)');
-      ctx.fillStyle = grad;
-      ctx.beginPath(); ctx.arc(cap.x, cy2, blobR, 0, K.TAU); ctx.fill();
-      ctx.restore();
-    });
+    drawTerritory(ctx, px, py, plotSize, cx, cy, scale);
 
-    // Legend — always shown, independent of whatever destination happens
-    // to be selected, since territory is a fact about the map, not the plan.
+    /* Legend — the powers you have actually met, in the order the chart
+     * shows them. A power whose space you have never charted is not on it:
+     * a legend entry for a colour that appears nowhere on the map is a
+     * spoiler with a swatch next to it. */
     if (dw > 140) {
+      var seenFacs = chartedFactions();
       ctx.save();
       ctx.font = '11px ui-monospace, monospace';
       ctx.fillStyle = '#7e93b3';
       ctx.fillText('TERRITORY', dx, py + 30);
-      (G.galaxy.factions || []).forEach(function (fac, fi) {
+      if (!seenFacs.length) {
+        ctx.fillStyle = 'rgba(160,185,220,0.6)';
+        ctx.fillText('nothing charted yet', dx, py + 48);
+      }
+      seenFacs.forEach(function (fac, fi) {
         var fy = py + 48 + fi * 16;
         ctx.fillStyle = fac.color;
         ctx.fillRect(dx, fy - 8, 10, 10);
@@ -2671,7 +2918,7 @@
       // The legend sits in this same right-hand column above this block;
       // push the destination readout below it instead of guessing a fixed
       // offset that would only be right for one particular faction count.
-      var legendBottom = py + 48 + Math.max(0, (G.galaxy.factions || []).length - 1) * 16 + 14;
+      var legendBottom = py + 48 + Math.max(0, chartedFactions().length - 1) * 16 + 14;
       var dyy = Math.max(py + 70, legendBottom + 16);
       ctx.save();
       ctx.font = '15px ui-monospace, monospace';

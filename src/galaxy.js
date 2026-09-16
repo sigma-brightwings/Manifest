@@ -474,6 +474,116 @@
     return !!(f && f.wasteBan);
   }
 
+  /* ---- how firmly a power holds a star ----------------------------------
+   * Astra, of the chart: "The color should be more saturated the more
+   * control that faction has in each system."
+   *
+   * Control is not stored anywhere, because it is not a decision anybody
+   * made — it is a reading of the assignment that already happened, and
+   * deriving it keeps it honest: a border that moves moves the shading with
+   * it. Two terms, both of which already exist implicitly in the greedy
+   * Voronoi above:
+   *
+   *   REACH   how deep inside this power's own sprawl the star sits,
+   *           measured against that power's mean distance from its own
+   *           capital rather than against a fixed number of light years. A
+   *           tight three-system pocket is therefore fully in control of
+   *           its three systems, and a sprawling major is thin at its edge.
+   *
+   *   MARGIN  how much nearer this capital is than the next power's. Two
+   *           capitals equidistant is the definition of a contested star,
+   *           and it is exactly the case where the greedy pass had to make
+   *           a choice it could have made the other way.
+   *
+   * A hold is its own case and deliberately reads high: nobody is
+   * contesting a pirate hold from a capital, and the thing that makes it
+   * dangerous is precisely that the Syndicate's writ runs unopposed there.
+   *
+   * Cached on the star. The galaxy is immutable once built and this is a
+   * pure function of it, so the first frame of the chart pays for it once. */
+  function factionSpread(galaxy, fac) {
+    if (fac._spread !== undefined) return fac._spread;
+    var capital = galaxy.byId[fac.capitalId];
+    var owned = galaxy.stars.filter(function (s) { return s.factionId === fac.id; });
+    var sum = 0;
+    for (var i = 0; i < owned.length; i++) sum += distance3(owned[i], capital);
+    fac._spread = owned.length ? Math.max(1, sum / owned.length) : 1;
+    return fac._spread;
+  }
+
+  function control(galaxy, star) {
+    if (!galaxy || !star) return 0;
+    if (star._control !== undefined) return star._control;
+    var fac = galaxy.factionById[star.factionId];
+    if (!fac) { star._control = 0; return 0; }
+    var capital = galaxy.byId[fac.capitalId];
+    if (!capital) { star._control = 0.5; return 0.5; }
+
+    var d1 = distance3(star, capital);
+    var reach = 1 - d1 / (factionSpread(galaxy, fac) * 2);
+    if (reach < 0) reach = 0; else if (reach > 1) reach = 1;
+
+    var d2 = Infinity;
+    for (var i = 0; i < galaxy.factions.length; i++) {
+      var other = galaxy.factions[i];
+      if (other.id === fac.id) continue;
+      var oc = galaxy.byId[other.capitalId];
+      if (!oc) continue;
+      var d = distance3(star, oc);
+      if (d < d2) d2 = d;
+    }
+    var margin = (d2 === Infinity) ? 1 : (d2 - d1) / Math.max(1e-6, d2 + d1) * 2.2;
+    if (margin < 0) margin = 0; else if (margin > 1) margin = 1;
+
+    var ctl = 0.18 + 0.44 * reach + 0.38 * margin;
+    if (fac.outlaw) ctl = Math.max(ctl, 0.78);     // unopposed, which is the problem
+    if (star.id === fac.capitalId) ctl = 1;
+    star._control = ctl > 1 ? 1 : ctl;
+    return star._control;
+  }
+
+  /* ---- what you know, and what it costs to find out ----------------------
+   * Astra: "The map is meant to pull its faction data when you jump into a
+   * new system, so you are building the map yourself with every new system
+   * you enter. The data for neighboring systems should be purchaseable from
+   * starports and planetside ports as well."
+   *
+   * So there are two kinds of knowing and they are deliberately different
+   * sizes. VISITING a system surveys it — who lives there, what they run,
+   * what the ports deal in — and that has always been G.visited. CHARTING
+   * one is the smaller fact: whose flag flies over it, which is what the
+   * territory on the chart is drawn from. You chart a system by arriving in
+   * it, and you can buy the charting of the systems AROUND a port without
+   * ever going to them.
+   *
+   * The radius is in light years around the port's own star rather than a
+   * count of systems, because that is the thing a chart seller actually
+   * has: the local sheet. The price is per star and rises with the radius
+   * asked for, so the far corners of a big purchase cost more than the
+   * neighbours do — and stars you already know are free, which means
+   * buying the same sheet twice is not possible rather than merely unwise.
+   */
+  var CHART_RADIUS_LY = 8;
+  var CHART_BASE_COST = 85;             // cr per star at the port's own doorstep
+  var CHART_PER_LY = 26;                // and this much more per light year out
+
+  function chartOffer(galaxy, here, known, radiusLy) {
+    var r = radiusLy || CHART_RADIUS_LY;
+    var out = { stars: [], cost: 0, radius: r };
+    if (!galaxy || !here) return out;
+    for (var i = 0; i < galaxy.stars.length; i++) {
+      var s = galaxy.stars[i];
+      if (s.id === here.id) continue;
+      if (known && known[s.id]) continue;
+      var d = distance3(s, here);
+      if (d > r) continue;
+      out.stars.push(s);
+      out.cost += CHART_BASE_COST + CHART_PER_LY * d;
+    }
+    out.cost = Math.round(out.cost);
+    return out;
+  }
+
   /* ---- jumps ----------------------------------------------------------- */
 
   function shipAllUpMass(ship) {
@@ -590,6 +700,9 @@
     reachable: reachable,
     jumpPlan: jumpPlan,
     wasteBanned: wasteBanned,
+    control: control,
+    chartOffer: chartOffer,
+    CHART_RADIUS_LY: CHART_RADIUS_LY,
     PIRATE_HOLDS: PIRATE_HOLDS,
     PIRATE_SHARE: PIRATE_SHARE,
     MINOR_POWERS: MINOR_POWERS,

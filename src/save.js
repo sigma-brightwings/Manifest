@@ -192,6 +192,11 @@
       t: G.t,
       here: G.here ? G.here.id : null,
       visited: Object.keys(G.visited || {}),
+      /* Charted is a superset of visited in practice and a different fact
+       * in principle: whose flag flies over a star, which can be bought at
+       * a port without going there. Saved separately so a bought chart
+       * survives a reload — it was paid for. */
+      charted: Object.keys(G.charted || {}),
       ship: {
         pos: s.pos, vel: s.vel, fwd: s.fwd, up: s.up, right: s.right,
         fuel: s.fuel, thrusterFuel: s.thrusterFuel,
@@ -308,6 +313,13 @@
     G.t = data.t;
 
     for (var i = 0; i < (data.visited || []).length; i++) G.visited[data.visited[i]] = true;
+    /* An old save has no charted list, and everywhere it had BEEN is
+     * charted by definition — so the fallback is the visited list rather
+     * than an empty chart, which would take territory away from a career
+     * that predates the distinction. */
+    G.charted = G.charted || {};
+    var chartedList = data.charted || data.visited || [];
+    for (var ci = 0; ci < chartedList.length; ci++) G.charted[chartedList[ci]] = true;
 
     if (data.here && data.here !== G.here.id) {
       var star = null;

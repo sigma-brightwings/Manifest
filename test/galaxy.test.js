@@ -348,6 +348,95 @@ console.log('--- every hull can reach every star ---');
         Math.abs(density - 0.027) < 0.004, density.toFixed(4) + ' stars/ly^2');
 })();
 
+console.log('--- how firmly a power holds a star, and what you know of it ---');
+(function () {
+  var g = Galaxy.build('kawartha');
+
+  /* CONTROL IS DERIVED, NOT STORED. What the chart shades by is a reading
+   * of the assignment that already happened - so a border that moves moves
+   * the shading with it, and nothing can drift out of step. */
+  var vals = g.stars.map(function (s) { return Galaxy.control(g, s); });
+  var sorted = vals.slice().sort(function (a, b) { return a - b; });
+  console.log('  control across ' + vals.length + ' stars: ' +
+              sorted[0].toFixed(2) + ' / ' +
+              sorted[Math.floor(sorted.length / 2)].toFixed(2) + ' / ' +
+              sorted[sorted.length - 1].toFixed(2));
+
+  check('every star reads somewhere between nothing and everything',
+        sorted[0] >= 0 && sorted[sorted.length - 1] <= 1);
+  /* A FLAT READING WOULD BE USELESS. If every system came out the same
+   * the shading says nothing, which is the failure mode worth guarding:
+   * the spread is the feature, not the numbers. */
+  check('and the readings actually spread out',
+        sorted[sorted.length - 1] - sorted[0] > 0.4,
+        'spread ' + (sorted[sorted.length - 1] - sorted[0]).toFixed(2));
+
+  var capitalsFull = true;
+  (g.factions || []).forEach(function (f) {
+    var cap = g.byId[f.capitalId];
+    if (cap && Galaxy.control(g, cap) < 0.999) capitalsFull = false;
+  });
+  check('a capital is held absolutely', capitalsFull);
+
+  /* THE EDGE IS THINNER THAN THE MIDDLE, which is the whole claim the fill
+   * makes visually. Compared as means rather than star by star, because one
+   * star near a neighbour capital proves nothing. */
+  var major = (g.factions || []).filter(function (f) { return !f.outlaw && !f.minor; })[0];
+  if (major) {
+    var owned = g.stars.filter(function (s) { return s.factionId === major.id; });
+    var cap = g.byId[major.capitalId];
+    owned.sort(function (a, b) {
+      return Galaxy.distance3(a, cap) - Galaxy.distance3(b, cap);
+    });
+    function mean(list) {
+      return list.reduce(function (t, s) { return t + Galaxy.control(g, s); }, 0) / list.length;
+    }
+    var third = Math.max(1, Math.floor(owned.length / 3));
+    var core = mean(owned.slice(0, third)), rim = mean(owned.slice(owned.length - third));
+    console.log('  ' + major.name + ': core ' + core.toFixed(2) + ', rim ' + rim.toFixed(2));
+    check('a power holds its core harder than its rim', core > rim + 0.1,
+          core.toFixed(2) + ' vs ' + rim.toFixed(2));
+  }
+
+  /* ---- and the chart you build by flying ---- */
+  var here = g.home;
+  var known = {};
+  known[here.id] = true;
+  var offer = Galaxy.chartOffer(g, here, known, Galaxy.CHART_RADIUS_LY);
+  console.log('  a sheet at ' + here.name + ': ' + offer.stars.length +
+              ' systems for ' + offer.cost + ' cr');
+  check('a port has neighbours to sell you', offer.stars.length > 0);
+  check('none of them is the system you are standing in',
+        offer.stars.every(function (s) { return s.id !== here.id; }));
+  check('and none is further than the sheet claims',
+        offer.stars.every(function (s) {
+          return Galaxy.distance3(s, here) <= Galaxy.CHART_RADIUS_LY + 1e-9;
+        }));
+  check('the sheet costs something', offer.cost > 0);
+
+  /* PAYING TWICE IS NOT POSSIBLE, rather than merely unwise: what you have
+   * already charted is not in the offer, so the same sheet is free the
+   * second time and the row goes dead. */
+  offer.stars.forEach(function (s) { known[s.id] = true; });
+  var again = Galaxy.chartOffer(g, here, known, Galaxy.CHART_RADIUS_LY);
+  check('buying the same sheet twice buys nothing',
+        again.stars.length === 0 && again.cost === 0,
+        again.stars.length + ' stars, ' + again.cost + ' cr');
+
+  /* A WIDER SHEET COSTS MORE PER STAR, because the far corners of it are
+   * further away - which is what makes the local sheet the one you can
+   * afford early. */
+  var near = Galaxy.chartOffer(g, here, {}, 6);
+  var far = Galaxy.chartOffer(g, here, {}, 14);
+  if (near.stars.length && far.stars.length) {
+    check('a wider sheet costs more, and more per system',
+          far.cost > near.cost &&
+          far.cost / far.stars.length > near.cost / near.stars.length,
+          (near.cost / near.stars.length).toFixed(0) + ' vs ' +
+          (far.cost / far.stars.length).toFixed(0) + ' cr/system');
+  }
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

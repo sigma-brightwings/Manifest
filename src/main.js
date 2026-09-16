@@ -260,6 +260,9 @@
     G.galaxy = Galaxy.build(seed);
     G.systemCache = {};
     G.visited = {};
+    /* Whose flag flies where, as far as you know. Separate from `visited`
+     * because it is a weaker claim that can be bought — see enterSystem. */
+    G.charted = {};
     G.ship = null;
     G.t = 0;
     G.starMap = null;
@@ -311,6 +314,18 @@
     opts = opts || {};
     G.here = star;
     G.visited[star.id] = true;
+    /* AND THE CHART LEARNS WHOSE IT IS. Astra: "the map is meant to pull
+     * its faction data when you jump into a new system, so you are building
+     * the map yourself with every new system you enter."
+     *
+     * Two kinds of knowing, deliberately different sizes. Visiting SURVEYS
+     * a system — who lives there, what the ports deal in, how dangerous it
+     * is — which is what G.visited has always gated. Charting is the
+     * smaller fact: whose flag flies over it, which is all the territory on
+     * the chart is drawn from. Arriving gives you both; a chart bought at a
+     * port gives you only the second, for systems you have never seen. */
+    G.charted = G.charted || {};
+    G.charted[star.id] = true;
     G.sys = systemFor(star);
     /* Clearances belong to the system you got them in. Nobody in the next
      * one has heard of you, which is also what stops a granted clearance

@@ -2593,6 +2593,71 @@ console.log('--- the cockpit kit ---');
  * deck colour and every Syndicate hangar turns red; repaint glass and the
  * canopies go with it. Both were live possibilities — the cream is the
  * same hue family as the gold trim it sits next to. */
+/* ---- the chart you build by flying -------------------------------------
+ * Astra: "The map is meant to pull its faction data when you jump into a
+ * new system, so you are building the map yourself with every new system
+ * you enter. The data for neighboring systems should be purchaseable from
+ * starports and planetside ports as well."
+ *
+ * Two claims worth pinning and one bug worth never having again. The
+ * claims: arriving charts a system, and a chart bought at a port charts
+ * the systems around it. The bug: a chart that draws territory the player
+ * has never heard of, which is what the old glow did for every power in
+ * the galaxy from the first frame of a new career. */
+console.log('--- the chart you build by flying ---');
+(function () {
+  G.newGame('kawartha');
+  frames(2);
+
+  check('a new career has charted exactly where it started',
+        Object.keys(G.charted).length === 1 && !!G.charted[G.here.id],
+        Object.keys(G.charted).join(', '));
+
+  /* THE CHART DRAWS WITHOUT ERROR AT EVERY LEVEL OF IGNORANCE, which is the
+   * thing a grid-and-nearest-star fill can quietly fail at: one charted
+   * star, none of a given power's, all of them. */
+  var mark = drawn.texts.length;
+  G.viewMode = 'orbit';
+  G.panel = 5;
+  frames(3);
+  check('the chart renders knowing almost nothing', errorsSince(mark).length === 0,
+        errorsSince(mark)[0]);
+
+  var sheet = W.Galaxy.chartOffer(G.galaxy, G.here, G.charted, W.Galaxy.CHART_RADIUS_LY);
+  check('there is a sheet on sale here', sheet.stars.length > 0);
+  var before = Object.keys(G.charted).length;
+  sheet.stars.forEach(function (st) { G.charted[st.id] = true; });
+  mark = drawn.texts.length;
+  frames(3);
+  check('buying the local sheet charts every system in it',
+        Object.keys(G.charted).length === before + sheet.stars.length);
+  check('and the chart still renders', errorsSince(mark).length === 0,
+        errorsSince(mark)[0]);
+
+  G.galaxy.stars.forEach(function (st) { G.charted[st.id] = true; });
+  mark = drawn.texts.length;
+  frames(3);
+  check('and it renders with the whole galaxy charted',
+        errorsSince(mark).length === 0, errorsSince(mark)[0]);
+
+  /* AND A CAREER THAT HAS BEEN SOMEWHERE HAS CHARTED IT. Arrival is the
+   * other half of the rule and the half nobody would think to test,
+   * because it is one line in enterSystem — which is exactly the sort of
+   * line that gets lost in a refactor. */
+  var far = G.galaxy.stars.filter(function (st) { return !G.visited[st.id]; })[0];
+  G.charted = {};
+  G.charted[G.here.id] = true;
+  W.Game.enterSystem ? W.Game.enterSystem(far, {}) : null;
+  if (W.Game.enterSystem) {
+    check('arriving somewhere charts it', !!G.charted[far.id], far.name);
+    check('and surveys it too', !!G.visited[far.id]);
+  }
+
+  G.panel = 0;
+  G.viewMode = 'cockpit';
+  frames(2);
+})();
+
 console.log('--- faction accents ---');
 (function () {
   var R = W.Render;
@@ -4623,6 +4688,27 @@ console.log('--- loading a docked career ---');
   check('and you are not logged fugitive for loading a save',
         !G.fugitive, JSON.stringify(G.fugitive));
   check('so the port is still open to you', !Combat.dockRefusal(G, port));
+
+  /* AND THE CHARTS SURVIVE, because they were paid for. Charted is a
+   * superset of visited in practice and a different fact in principle, so
+   * it is saved separately — and an old save with no charted list falls
+   * back to its visited list rather than to an empty chart, which would
+   * take territory away from a career that predates the distinction. */
+  var bought = G.galaxy.stars.filter(function (st) { return !G.charted[st.id]; })[0];
+  if (bought) {
+    G.charted[bought.id] = true;
+    var snap2 = W.Save.snapshot(G);
+    newFlying('kawartha');
+    W.Save.restore(G, snap2, {});
+    check('a bought chart survives a save and a load', !!G.charted[bought.id],
+          bought.name);
+  }
+  var old = { seed: G.seed, t: G.t, here: G.here.id,
+              visited: [G.here.id], ship: W.Save.snapshot(G).ship };
+  newFlying('kawartha');
+  W.Save.restore(G, old, {});
+  check('and a save from before charts existed still knows where it has been',
+        !!G.charted[G.here.id]);
 })();
 
 /* The seed belongs somewhere you can reach without abandoning the career:
