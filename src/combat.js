@@ -491,6 +491,111 @@
                       'no guarantee it leaves the rail.' }
   };
 
+  /* ---- RACKS, PLURAL ------------------------------------------------------
+   * Astra: N racks off the MISSILES table, both firable, selectable in the
+   * yard.
+   *
+   * What was here before was one counter and one type id, which meant the
+   * choice between a certified Hawk and a crate of bootlegs was made at the
+   * shop and could not be revisited in flight: to carry both you had to sell
+   * one. The interesting decision - "this one is worth a Hawk, that one is
+   * worth a bootleg" - had nowhere to happen.
+   *
+   * So a ship now carries up to `rackSlots` racks, one per TYPE, each with
+   * its own count and its own batch quality, and one of them is armed. The
+   * one-type-per-rack rule survives intact and for the same reason: a mixed
+   * rack makes the cook-off unreadable, and "is this crate the bad one" is
+   * the question the batch hash exists to let the player answer.
+   *
+   * THE OLD FIELDS ARE KEPT AS A VIEW, exactly as ship.gun and ship.shield
+   * are kept in step with the slots. `ship.missiles` is the armed rack's
+   * count and `ship.missileId` is which rack is armed, so fireMissile, the
+   * HUD, the threat check in demandFrom and every save that predates this
+   * all keep working without knowing racks exist. The racks are the truth;
+   * those two are the old spelling of it.
+   */
+  var DEFAULT_RACK_SLOTS = 2;
+
+  function rackSlots(ship) {
+    var h = hullOf(ship);
+    return (h && h.rackSlots) || DEFAULT_RACK_SLOTS;
+  }
+
+  /* Migrating read. A save from before racks carries one counter and one
+   * type, which is exactly one rack - so it becomes one, in place, the
+   * first time anything asks. Nothing has to run at load time. */
+  function racksOf(ship) {
+    if (!ship) return {};
+    if (!ship.racks) {
+      ship.racks = {};
+      if (ship.missiles > 0) {
+        /* AND THE ARMED ID IS PART OF THE MIGRATION. A pre-racks ship could
+         * carry rounds with no type recorded — the old code defaulted to
+         * Hawk at every read — so the rack is created as Hawk and the ship
+         * is ARMED with it here. Without that the trigger points at a rack
+         * id of `undefined`, the round never leaves a rail, and the counter
+         * silently never moves. */
+        var mid = ship.missileId || 'hawk';
+        ship.missileId = mid;
+        ship.racks[mid] = {
+          id: mid,
+          n: ship.missiles,
+          batch: ship.missileBatch === undefined ? null : ship.missileBatch
+        };
+      }
+    }
+    if (!ship.missileId) {
+      var first = null;
+      for (var k in ship.racks) if (ship.racks[k] && ship.racks[k].n > 0) { first = k; break; }
+      if (first) ship.missileId = first;
+    }
+    return ship.racks;
+  }
+
+  function rackList(ship) {
+    var racks = racksOf(ship), out = [];
+    for (var k in racks) if (racks[k] && racks[k].n > 0) out.push(racks[k]);
+    out.sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });
+    return out;
+  }
+
+  /* Push the armed rack into the three legacy fields. Called after every
+   * change to a rack, which is the same contract syncLegacy keeps. */
+  function syncRacks(ship) {
+    var racks = racksOf(ship);
+    var armed = racks[ship.missileId];
+    if (!armed || armed.n <= 0) {
+      /* The armed rack ran dry. Arm whatever else is aboard rather than
+       * leaving the trigger pointed at an empty rail - a player who has
+       * bootlegs left should not have to visit a menu to fire them. */
+      var list = rackList(ship);
+      armed = list[0] || null;
+      ship.missileId = armed ? armed.id : (ship.missileId || 'hawk');
+    }
+    ship.missiles = armed ? armed.n : 0;
+    ship.missileBatch = armed ? armed.batch : null;
+    return ship;
+  }
+
+  /* Arm a rack by type. Returns what is now armed, or null if that rack is
+   * not aboard - the caller says so; this does not talk. */
+  function armRack(ship, id) {
+    var racks = racksOf(ship);
+    if (!racks[id] || racks[id].n <= 0) return null;
+    ship.missileId = id;
+    syncRacks(ship);
+    return racks[id];
+  }
+
+  /* The next rack with rounds in it, for the key that cycles them. */
+  function nextRack(ship) {
+    var list = rackList(ship);
+    if (list.length < 2) return null;
+    var at = 0;
+    for (var i = 0; i < list.length; i++) if (list[i].id === ship.missileId) at = i;
+    return armRack(ship, list[(at + 1) % list.length].id);
+  }
+
   /* ---- ordnance that cooks off ------------------------------------------
    * A flat "5% chance to lose 40 hull on launch" is a slot machine: the
    * player cannot fly differently in response, so it is a tax with a die
@@ -598,6 +703,8 @@
              dryMass: 42, thrustKN: 1800, thrusterCap: 12, fuelCap: 37,
              cargoCap: 64, hullMax: 100,
              slots: { hardpoint: 2, utility: 2, internal: 3 },
+             /* Two racks: a courier can carry a crate of each and choose. */
+             rackSlots: 2,
              powerMW: 9.0, fitMass: 14,
              blurb: 'the ship you started with, and honestly not bad' },
     dart:  { id: 'dart', name: 'Dart Interceptor', price: 61000, mesh: 'police',
@@ -616,18 +723,25 @@
               * the lockout is unreachable. 7.0 stands. The test is the
               * point: the rule is now enforced rather than believed. */
              slots: { hardpoint: 2, utility: 1, internal: 2 },
+             /* ONE. An interceptor is a gun platform with a seat; the space
+              * that would be a second crate is why it turns like that. */
+             rackSlots: 1,
              powerMW: 7.0, fitMass: 9,
              blurb: 'outruns everything; carries nothing' },
     kestrel: { id: 'kestrel', name: 'Kestrel Multirole', price: 120000, mesh: 'merc',
              dryMass: 60, thrustKN: 2700, thrusterCap: 14, fuelCap: 45,
              cargoCap: 96, hullMax: 130,
              slots: { hardpoint: 3, utility: 2, internal: 4 },
+             /* Two, same as the courier — the extra tonnage went to guns. */
+             rackSlots: 2,
              powerMW: 14.0, fitMass: 22,
              blurb: 'the compromise, made well' },
     mule:  { id: 'mule', name: 'Mule Freighter', price: 78000, mesh: 'freighter',
              dryMass: 80, thrustKN: 3700, thrusterCap: 16, fuelCap: 48,
              cargoCap: 160, hullMax: 160,
              slots: { hardpoint: 2, utility: 3, internal: 5 },
+             /* Three, because a hauler's answer to everything is volume. */
+             rackSlots: 3,
              powerMW: 18.0, fitMass: 30,
              blurb: 'slow, vast, and worth robbing' }
   };
@@ -4053,7 +4167,9 @@
     if (m.grey) {
       var pHang = hangChanceFor(s.heat || 0) * batchFactor(s);
       if (Math.random() < pHang) {
-        s.missiles--;
+        var hr = racksOf(s)[s.missileId];
+        if (hr) hr.n = Math.max(0, hr.n - 1);
+        syncRacks(s);
         G.hungSeeker = { until: t + HANG_WINDOW, rack: s.missiles, kind: m.id };
         if (hooks && hooks.say) {
           hooks.say('SEEKER HUNG — BACKSPACE TO JETTISON RACK (' +
@@ -4064,7 +4180,11 @@
       }
     }
 
-    s.missiles--;
+    /* Off the RACK, and the legacy counter follows it rather than the other
+     * way round. */
+    var rack = racksOf(s)[s.missileId];
+    if (rack) rack.n = Math.max(0, rack.n - 1);
+    syncRacks(s);
     (sys.missiles = sys.missiles || []).push({
       pos: V.addScaled(s.pos, s.fwd, 0.06),
       vel: V.addScaled(s.vel, s.fwd, m.speed0),
@@ -4082,7 +4202,13 @@
   function jettisonRack(G, hooks) {
     if (!G.hungSeeker) return false;
     var lost = G.ship.missiles;
-    G.ship.missiles = 0;
+    /* THE ARMED RACK GOES, not the whole magazine. With one rack those were
+     * the same sentence; with two they are not, and dumping a clean crate
+     * of Hawks because a bootleg hung on the rail beside it would be the
+     * game punishing the wrong decision. */
+    var racks = racksOf(G.ship);
+    if (racks[G.ship.missileId]) delete racks[G.ship.missileId];
+    syncRacks(G.ship);
     G.hungSeeker = null;
     if (hooks && hooks.say) {
       hooks.say('Rack away — ' + lost + ' round' + (lost === 1 ? '' : 's') +
@@ -4828,8 +4954,12 @@
        * hash exists to let the player answer, and it has no answer if the
        * rack is two crates at once. Refused with a reason, per the rule
        * canFit already follows. */
-      ok = !!item && s.missiles < item.rack &&
-           (s.missiles === 0 || (s.missileId || 'hawk') === id);
+      /* ROOM IN THIS TYPE'S RACK, or a free rack to start one in. The old
+       * rule was "one type per ship"; the rule now is one type per rack,
+       * with the hull deciding how many racks there are. */
+      var racksB = racksOf(s), existing = racksB[id];
+      ok = !!item && (existing ? existing.n < item.rack
+                               : rackList(s).length < rackSlots(s));
     }
     else if (kind === 'sink') {
       /* Charges need the launcher, the way seekers would need a rack if
@@ -4842,23 +4972,27 @@
 
     if (kind === 'missile') {
       s.credits -= item.price;
+      var racks2 = racksOf(s), r2 = racks2[item.id];
       /* A NEW CRATE GETS A NEW QUALITY, and the quality belongs to the
        * crate rather than to the round — buying the first of a batch is
        * what fixes it, and topping the same rack up does not re-roll it.
        * Hashed off the port and a per-career purchase counter, so the same
        * career buying at the same counter twice gets two different crates,
        * and reloading a save does not shop for a better one. */
-      if (s.missiles === 0) {
-        s.missileId = item.id;
+      if (!r2) {
+        var batch = null;
         if (item.grey) {
           s.missileSeq = (s.missileSeq || 0) + 1;
           var bh = RNG.hashString('batch|' + (G.ship.docked || '?') + '|' + s.missileSeq);
-          s.missileBatch = (bh % 1000) / 1000;
-        } else {
-          s.missileBatch = null;
+          batch = (bh % 1000) / 1000;
         }
+        r2 = racks2[item.id] = { id: item.id, n: 0, batch: batch };
+        /* A rack you just started is the one you meant to use, unless
+         * something else is already armed and loaded. */
+        if (!s.missiles) s.missileId = item.id;
       }
-      s.missiles++;
+      r2.n++;
+      syncRacks(s);
       return item.price;
     }
     if (kind === 'sink') { s.credits -= item.price; s.sinks++; return item.price; }
@@ -5015,6 +5149,8 @@
     autoClearance: autoClearance,
     hasTransponder: hasTransponder,
     hailShip: hailShip, hailTrade: hailTrade, hailAssist: hailAssist,
+    rackList: rackList, rackSlots: rackSlots, armRack: armRack,
+    nextRack: nextRack, syncRacks: syncRacks,
     HAIL_RANGE_KM: HAIL_RANGE_KM,
     queueJumpsOf: queueJumpsOf,
     FREE_JUMPS: FREE_JUMPS,

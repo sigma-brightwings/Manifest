@@ -1593,15 +1593,51 @@
 
     /* Consumables first — they are counters, not fittings, so they sit
      * above the catalogue rather than in it. */
-    var hawk = Combat.MISSILES.hawk;
-    var mFull = s.missiles >= hawk.rack;
-    row('HAWK SEEKER — ' + hawk.price + ' cr',
-        'aboard ' + s.missiles + ' / ' + hawk.rack +
-        (mFull ? '  ·  rack full' : '  “' + hawk.pitch + '”'),
-        function () {
-          var r = Combat.buyOutfit(G, 'missile', 'hawk');
-          say(r > 0 ? 'Missile racked — ' + s.missiles + ' aboard' : 'Not enough credits', 4);
-        }, mFull);
+    /* EVERY SEEKER THE TABLE HAS, one row each, because the ship carries a
+     * rack per type now rather than one rack per ship. A row says what is in
+     * that rack and, when the rack does not exist yet, whether there is a
+     * free rail to start it on — which is the thing the old single-line
+     * "aboard 4 / 8" could not say at all.
+     *
+     * Grey ordnance is still gated by what the port will sell: bootlegs
+     * appear in `stock` below at a corrupt enough port, and a row here for
+     * something nobody within a hundred light years sells would be a shop
+     * window into a place you cannot reach. So the loop draws the certified
+     * ones and leaves the grey to the catalogue. */
+    var racksNow = Combat.rackList(s), rackCap = Combat.rackSlots(s);
+    function rackOf(id) {
+      for (var i = 0; i < racksNow.length; i++) if (racksNow[i].id === id) return racksNow[i];
+      return null;
+    }
+    for (var mk in Combat.MISSILES) {
+      (function (m) {
+        if (m.grey) return;
+        var have = rackOf(m.id);
+        var full = have ? have.n >= m.rack : racksNow.length >= rackCap;
+        var armed = s.missileId === m.id && s.missiles > 0;
+        row(m.name.toUpperCase() + ' — ' + m.price + ' cr',
+            (have ? 'aboard ' + have.n + ' / ' + m.rack + (armed ? '  ·  ARMED' : '')
+                  : 'no rack — ' + (racksNow.length < rackCap
+                      ? (rackCap - racksNow.length) + ' free of ' + rackCap
+                      : 'all ' + rackCap + ' racks in use')) +
+            (full && have ? '  ·  rack full' : '  “' + m.pitch + '”'),
+            function () {
+              var r = Combat.buyOutfit(G, 'missile', m.id);
+              say(r > 0 ? m.name + ' racked — ' + s.missiles + ' armed'
+                        : 'Not enough credits, or no rack free', 4);
+            }, full);
+        /* And the rack you are carrying can be ARMED from here, which is
+         * the whole point of carrying two: the choice between a certified
+         * round and a cheap one is made at the trigger, not at the till. */
+        if (have && !armed) {
+          row('  arm ' + m.name.toLowerCase(), have.n + ' aboard',
+              function () {
+                Combat.armRack(s, m.id);
+                say(m.name + ' armed — ' + s.missiles + ' aboard', 4);
+              }, false);
+        }
+      })(Combat.MISSILES[mk]);
+    }
 
     var rack = Combat.sinkRackSize(s);
     if (rack) {
@@ -1721,9 +1757,14 @@
       else val = it.power.toFixed(1) + ' MW';
       out.push({ name: it.name, value: val, uncertified: !!it.grey });
     }
-    if (s.missiles > 0) {
-      out.push({ name: 'Hawk seekers', value: s.missiles + ' / ' + Combat.MISSILES.hawk.rack });
-    }
+    /* Every rack, not just the armed one. The old line named Hawks whatever
+     * was actually aboard, which was true right up until the ship could
+     * carry two kinds at once. */
+    Combat.rackList(s).forEach(function (r) {
+      var m = Combat.MISSILES[r.id];
+      out.push({ name: (m ? m.name : r.id) + (s.missileId === r.id ? ' (armed)' : ''),
+                 value: r.n + ' / ' + (m ? m.rack : '?') });
+    });
     var rack = Combat.sinkRackSize(s);
     if (rack) out.push({ name: 'Heat sinks', value: s.sinks + ' / ' + rack });
     return out;

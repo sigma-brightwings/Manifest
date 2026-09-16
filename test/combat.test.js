@@ -2027,6 +2027,111 @@ section('--- docking clearance ---');
 })();
 
 /* ---- the control cabinet, and breaking into it ------------------------- */
+console.log('\n--- two racks, and which one is on the trigger ---');
+(function () {
+  /* Astra: N racks off the MISSILES table, both firable, selectable in the
+   * yard. What was here before was one counter and one type id, so the
+   * choice between a certified Hawk and a crate of bootlegs was made at the
+   * shop and could not be revisited in flight - to carry both you had to
+   * sell one, and the interesting decision had nowhere to happen. */
+  var G = makeG();
+  var s = G.ship;
+  s.credits = 100000;
+  check('the hull says how many racks it has', Combat.rackSlots(s) >= 1,
+        String(Combat.rackSlots(s)));
+
+  Combat.buyOutfit(G, 'missile', 'hawk');
+  Combat.buyOutfit(G, 'missile', 'hawk');
+  check('buying starts a rack', Combat.rackList(s).length === 1 && s.missiles === 2,
+        JSON.stringify(Combat.rackList(s)));
+  check('and arms it', s.missileId === 'hawk');
+
+  /* A SECOND TYPE IS A SECOND RACK, which is the whole change: the old rule
+   * refused this outright. */
+  Combat.buyOutfit(G, 'missile', 'bootleg');
+  var racks = Combat.rackList(s);
+  check('a second type starts a second rack', racks.length === 2,
+        racks.map(function (r) { return r.id + ':' + r.n; }).join(' '));
+  check('and the first rack is untouched', racks.filter(function (r) {
+    return r.id === 'hawk'; })[0].n === 2);
+  check('the armed one is still the first', s.missileId === 'hawk' && s.missiles === 2);
+
+  /* A GREY CRATE HAS ITS OWN QUALITY, per rack rather than per ship, or
+   * "is this crate the bad one" has no answer once you carry two. */
+  var boot = racks.filter(function (r) { return r.id === 'bootleg'; })[0];
+  check('a bootleg rack carries a batch of its own',
+        typeof boot.batch === 'number', String(boot.batch));
+  check('and the certified one does not',
+        racks.filter(function (r) { return r.id === 'hawk'; })[0].batch === null);
+
+  /* ARMING, which is what makes both firable. */
+  Combat.armRack(s, 'bootleg');
+  check('arming the other rack moves the trigger',
+        s.missileId === 'bootleg' && s.missiles === boot.n,
+        s.missileId + ' ' + s.missiles);
+  check('and the batch follows it', s.missileBatch === boot.batch);
+  var cycled = Combat.nextRack(s);
+  check('and the cycle key comes back round', !!cycled && s.missileId === 'hawk',
+        s.missileId);
+
+  /* FIRING COMES OFF THE ARMED RACK, and nowhere else. */
+  var victim = fakeVictim(G, { range: 6 });
+  G.navTarget = { kind: 'ship', id: victim.id };
+  var hawkBefore = Combat.rackList(s).filter(function (r) { return r.id === 'hawk'; })[0].n;
+  var bootBefore = Combat.rackList(s).filter(function (r) { return r.id === 'bootleg'; })[0].n;
+  Combat.fireMissile(G.sys, G, G.t, HOOKS);
+  var hawkAfter = (Combat.rackList(s).filter(function (r) { return r.id === 'hawk'; })[0] || { n: 0 }).n;
+  var bootAfter = Combat.rackList(s).filter(function (r) { return r.id === 'bootleg'; })[0].n;
+  check('a shot comes off the armed rack', hawkAfter === hawkBefore - 1,
+        hawkBefore + ' -> ' + hawkAfter);
+  check('and not off the other one', bootAfter === bootBefore,
+        bootBefore + ' -> ' + bootAfter);
+
+  /* AN EMPTY RACK HANDS THE TRIGGER OVER rather than leaving it pointed at
+   * an empty rail - a player with bootlegs left should not have to open a
+   * menu to fire them. */
+  while (s.missileId === 'hawk' && s.missiles > 0) {
+    Combat.fireMissile(G.sys, G, G.t, HOOKS);
+  }
+  check('an empty rack hands the trigger to the next one',
+        s.missileId === 'bootleg' && s.missiles > 0,
+        s.missileId + ' ' + s.missiles);
+
+  /* JETTISON TAKES THE ARMED RACK, not the magazine. With one rack those
+   * were the same sentence; with two, dumping a clean crate of Hawks
+   * because a bootleg hung on the rail beside it would punish the wrong
+   * decision. */
+  var G2 = makeG();
+  G2.ship.credits = 100000;
+  Combat.buyOutfit(G2, 'missile', 'hawk');
+  Combat.buyOutfit(G2, 'missile', 'bootleg');
+  Combat.armRack(G2.ship, 'bootleg');
+  G2.hungSeeker = { until: 99, rack: G2.ship.missiles, kind: 'bootleg' };
+  Combat.jettisonRack(G2, HOOKS);
+  var left = Combat.rackList(G2.ship);
+  check('jettison dumps the armed rack only',
+        left.length === 1 && left[0].id === 'hawk', JSON.stringify(left));
+
+  /* AND THE RACK LIMIT IS THE HULL'S. */
+  var G3 = makeG();
+  G3.ship.credits = 100000;
+  G3.ship.hull = 'dart';
+  Combat.setHull ? Combat.setHull(G3.ship, 'dart') : (G3.ship.hullId = 'dart');
+  if (Combat.rackSlots(G3.ship) === 1) {
+    Combat.buyOutfit(G3, 'missile', 'hawk');
+    var refused = Combat.buyOutfit(G3, 'missile', 'bootleg');
+    check('a hull with one rack cannot start a second', refused === null,
+          String(refused));
+  }
+
+  /* A SAVE FROM BEFORE RACKS is one rack, built from the counter it kept.
+   * Nothing runs at load time to do this; the first read does it. */
+  var old = { missiles: 5, missileId: 'hawk', missileBatch: null, fit: {} };
+  Combat.syncRacks(old);
+  check('an old save becomes one rack', Combat.rackList(old).length === 1 &&
+        Combat.rackList(old)[0].n === 5, JSON.stringify(Combat.rackList(old)));
+})();
+
 console.log('\n--- hailing a ship that is not shooting at you ---');
 (function () {
   /* Astra: "the ability to hail other ships to ask for directions,

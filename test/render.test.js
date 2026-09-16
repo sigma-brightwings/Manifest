@@ -2604,6 +2604,158 @@ console.log('--- the cockpit kit ---');
  * the systems around it. The bug: a chart that draws territory the player
  * has never heard of, which is what the old glow did for every power in
  * the galaxy from the first frame of a new career. */
+/* ---- contrails ---------------------------------------------------------
+ * Astra: "missiles/contrails and ship contrails in atmo."
+ *
+ * Two sources and one store, so this pins both ends of it: that a missile
+ * lays smoke wherever it is, that a hull lays a contrail only in air, and
+ * that neither of them grows without bound — an unbounded store of points
+ * is the kind of leak that only shows up after an hour of play, which is
+ * the hour nobody tests by hand.
+ */
+console.log('--- contrails ---');
+(function () {
+  newFlying('kawartha');
+  frames(3);
+
+  /* NOTHING IN VACUUM, from the ship. The vacuum case is the one that would
+   * look like a bug rather than a missing feature: a freighter trailing
+   * smoke between planets. */
+  var store = G.contrails;
+  var shipTrail = store && store.by && store.by.player;
+  check('a ship in vacuum lays no contrail', !shipTrail || !shipTrail.pts.length,
+        shipTrail ? shipTrail.pts.length + ' points' : 'none');
+
+  /* A MISSILE DOES, because a motor is burning whatever is around it. */
+  G.ship.credits = 100000;
+  Combat.buyOutfit(G, 'missile', 'hawk');
+  Combat.buyOutfit(G, 'missile', 'hawk');
+  var ships = Sim.shipsAll(G.sys, G.t);
+  ships.sort(function (a, b) {
+    return V.dist(a.pos, G.ship.pos) - V.dist(b.pos, G.ship.pos);
+  });
+  var tgt = ships[0];
+  check('there is traffic to shoot at', !!tgt);
+  if (tgt) {
+    G.ship.pos = V.addScaled(tgt.pos, { x: 1, y: 0.2, z: 0.3 }, 9);
+    G.ship.vel = V.clone(tgt.vel);
+    Sim.refreshShip(G.ship);
+    G.navTarget = { kind: 'ship', id: tgt.id };
+    var mark = drawn.texts.length;
+    /* A CLEAN STORE FIRST. Earlier sections of this suite fire missiles of
+     * their own, and their smoke is still aging out — so without this the
+     * check reads whichever trail happens to sort first and the answer has
+     * nothing to do with the round fired here. */
+    G.contrails = null;
+    Combat.fireMissile(G.sys, G, G.t, { say: function () {}, sound: function () {} });
+    check('the round is away', (G.sys.missiles || []).length === 1);
+    frames(120);
+    var keys = Object.keys(G.contrails.by).filter(function (k) { return k.charAt(0) === 'm'; });
+    var pts = keys.length ? G.contrails.by[keys[0]].pts.length : 0;
+    check('a missile lays smoke behind it', pts > 1, pts + ' points');
+    check('and the frame that drew it threw nothing',
+          errorsSince(mark).length === 0, errorsSince(mark)[0]);
+
+    /* BOUNDED. Both by the number of points in a trail and by how long a
+     * point lives, which is what stops a long fight from turning the store
+     * into a memory leak with a nice look. */
+    var before = G.contrails.by[keys[0]].pts.length;
+    frames(600);
+    var after = G.contrails.by[keys[0]] ? G.contrails.by[keys[0]].pts.length : 0;
+    check('and the trail does not grow without bound', after <= 42,
+          before + ' -> ' + after);
+  }
+
+  /* ---- AND THE PAINTER ITSELF -----------------------------------------
+   * Asked directly, with a camera whose projection is arithmetic anyone
+   * can check, because the two things that make a contrail read — it
+   * WIDENS and it FADES toward the tail — are exactly the two that would
+   * still "work" while being drawn the wrong way round. A trail that got
+   * brighter and thinner as it aged would still be a trail, and nothing
+   * else in this suite would notice. */
+  (function () {
+    var quads = [];
+    var fakeCam = {
+      project: function (p) {
+        return { x: 400 + p.x * 10, y: 300 + p.y * 10, depth: 10, scale: 1 };
+      }
+    };
+    var recCtx = {
+      _fill: null,
+      save: function () {}, restore: function () {},
+      beginPath: function () { this._pts = []; },
+      closePath: function () {},
+      moveTo: function (x, y) { this._pts.push([x, y]); },
+      lineTo: function (x, y) { this._pts.push([x, y]); },
+      fill: function () { quads.push({ style: this.fillStyle, pts: this._pts.slice() }); }
+    };
+    /* Oldest first, newest last — the order the store pushes them in, so
+     * the head of the trail is the END of the array. Getting this backwards
+     * in the test would have asserted the opposite of the feature. */
+    var pts = [];
+    for (var i = 0; i < 10; i++) pts.push({ p: { x: i, y: 0, z: 0 }, t: 1 + i });
+    W.Render.drawContrail(recCtx, fakeCam, pts, 10, { life: 10, width: 1, spread: 4, alpha: 0.6 });
+    check('the painter emits one quad per segment', quads.length === 9, quads.length + ' quads');
+    function alphaOf(q) { return parseFloat(String(q.style).split(',')[3]); }
+    function widthOf(q) {
+      /* The quad is laid out as two points down one side and two back up
+       * the other, so the first and last corner straddle the same segment
+       * end — half their separation is the half-width there. */
+      return Math.abs(q.pts[0][1] - q.pts[3][1]) / 2;
+    }
+    if (quads.length === 9) {
+      check('and it fades toward the tail', alphaOf(quads[0]) < alphaOf(quads[8]),
+            'tail ' + alphaOf(quads[0]) + ' -> head ' + alphaOf(quads[8]));
+      check('and widens toward it', widthOf(quads[0]) > widthOf(quads[8]),
+            'tail ' + widthOf(quads[0]).toFixed(2) + ' -> head ' +
+            widthOf(quads[8]).toFixed(2));
+      check('with nothing fully opaque', alphaOf(quads[8]) < 0.7,
+            String(alphaOf(quads[8])));
+    }
+    /* A point past its life is not drawn at all, rather than drawn at zero
+     * alpha — the segment is skipped, which is what keeps a long-dead trail
+     * from costing anything. */
+    quads.length = 0;
+    var old = [{ p: { x: 0, y: 0, z: 0 }, t: -100 }, { p: { x: 1, y: 0, z: 0 }, t: -99 }];
+    W.Render.drawContrail(recCtx, fakeCam, old, 10, { life: 5 });
+    check('and a trail older than its life paints nothing', quads.length === 0,
+          quads.length + ' quads');
+  })();
+
+  /* IN AIR, THE SHIP DOES. Put it low and slow over a world with an
+   * atmosphere — slow on purpose, because a hypersonic entry is a different
+   * test and the integrator spends its whole budget on one. */
+  var world = null;
+  for (var i = 0; i < G.sys.bodies.length; i++) {
+    var b = G.sys.bodies[i];
+    if (b.atmosphere && (b.kind === 'planet' || b.kind === 'moon')) { world = b; break; }
+  }
+  check('the system has air somewhere', !!world, world && world.name);
+  if (world) {
+    var st = Sim.bodyState(world, G.sys, G.t);
+    var alt = world.atmosphere.scaleHeight * 0.8;
+    var up = V.norm(V.sub(G.ship.pos, st.pos));
+    if (!(V.len(up) > 0)) up = { x: 1, y: 0, z: 0 };
+    G.ship.docked = null; G.ship.landed = false;
+    G.ship.pos = V.addScaled(st.pos, up, world.radius + alt);
+    /* Moving through the AIR, not through space: the body's own velocity
+     * plus a sensible airspeed. Anything else charges the ship for the
+     * planet's orbital motion, which is the same mistake the drag model
+     * documents having made. */
+    var side = V.norm(V.cross(up, { x: 0, y: 0, z: 1 }));
+    G.ship.vel = V.addScaled(st.vel, side, 0.35);
+    Sim.refreshShip(G.ship);
+    G.contrails = null;
+    var mark2 = drawn.texts.length;
+    frames(60);
+    var tr = G.contrails && G.contrails.by && G.contrails.by.player;
+    check('a ship in air lays one', !!tr && tr.pts.length > 1,
+          tr ? tr.pts.length + ' points' : 'none');
+    check('and drawing it throws nothing', errorsSince(mark2).length === 0,
+          errorsSince(mark2)[0]);
+  }
+})();
+
 console.log('--- the chart you build by flying ---');
 (function () {
   G.newGame('kawartha');

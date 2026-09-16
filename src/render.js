@@ -2364,6 +2364,75 @@
     return { color: raw, lit: false, alpha: 1 };
   }
 
+  /* ---- CONTRAILS ---------------------------------------------------------
+   * Astra asked for missile contrails and "ship contrails in atmo", and the
+   * two are the same drawing with different numbers, so there is one of it.
+   *
+   * A contrail is a list of world points with the time each was laid, drawn
+   * as a ribbon that WIDENS and FADES toward the tail: the physical thing
+   * is a line of condensation spreading and thinning behind the hull, and
+   * both of those read as the same shape on screen. Drawn in screen space
+   * off projected points rather than as geometry, for the same reason the
+   * tracers are: it is a two-dimensional effect that happens to be in a
+   * three-dimensional place, and a mesh for it would be a mesh that always
+   * faces the camera.
+   *
+   * PUFFY RATHER THAN SMOOTH. A trail of even width reads as a wire. The
+   * wobble is a deterministic function of the point's own index, not a
+   * random draw per frame — a trail that shimmered would be worse than a
+   * wire, and this way the same puff is the same puff every frame it is
+   * alive for.
+   *
+   * The caller owns the points. This only knows how to paint them, which is
+   * what lets one function serve a missile's motor smoke and a freighter's
+   * wake through a stratosphere.
+   */
+  function drawContrail(ctx, cam, pts, now, opts) {
+    if (!pts || pts.length < 2 || !cam) return;
+    opts = opts || {};
+    var life = opts.life || 8;
+    var w0 = opts.width === undefined ? 0.7 : opts.width;   // px at unit scale
+    var spread = opts.spread === undefined ? 3.2 : opts.spread;
+    var alpha = opts.alpha === undefined ? 0.5 : opts.alpha;
+    var col = opts.color || '255,255,255';
+
+    var proj = [], i;
+    for (i = 0; i < pts.length; i++) {
+      var sp = cam.project(pts[i].p);
+      if (!sp) { proj.push(null); continue; }
+      var age = (now - pts[i].t) / life;
+      if (age < 0) age = 0;
+      if (age > 1) { proj.push(null); continue; }
+      /* Width grows with age (it is spreading) and with distance in the
+       * usual projected way; the wobble is the puff. */
+      var wob = 0.75 + 0.5 * Math.abs(Math.sin(i * 2.399963));
+      var w = (w0 + spread * age) * wob * (sp.scale ? Math.min(6, Math.max(0.35, sp.scale)) : 1);
+      proj.push({ x: sp.x, y: sp.y, w: w, a: (1 - age) * (1 - age) * alpha });
+    }
+
+    /* One quad per segment, rather than one polygon for the whole ribbon:
+     * a trail can pass behind the camera in the middle and come back, and a
+     * single polygon across that gap paints a triangle across the sky. */
+    ctx.save();
+    for (i = 1; i < proj.length; i++) {
+      var a = proj[i - 1], b = proj[i];
+      if (!a || !b) continue;
+      var dx = b.x - a.x, dy = b.y - a.y;
+      var L = Math.sqrt(dx * dx + dy * dy);
+      if (!(L > 0.01) || L > 4000) continue;
+      var nx = -dy / L, ny = dx / L;
+      ctx.fillStyle = 'rgba(' + col + ',' + ((a.a + b.a) * 0.5).toFixed(3) + ')';
+      ctx.beginPath();
+      ctx.moveTo(a.x + nx * a.w, a.y + ny * a.w);
+      ctx.lineTo(b.x + nx * b.w, b.y + ny * b.w);
+      ctx.lineTo(b.x - nx * b.w, b.y - ny * b.w);
+      ctx.lineTo(a.x - nx * a.w, a.y - ny * a.w);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   /* ---- FACTION ACCENTS ON A STATION --------------------------------------
    *
    * Astra: "the Syndicate stations should have red accents on them, like the
@@ -6923,6 +6992,7 @@
     insideInterior: insideInterior,
     setIndoors: setIndoors,
     setAccent: setAccent, accented: accented, accentSwap: accentSwap,
+    drawContrail: drawContrail,
     portSolidity: portSolidity,
     portSections: portSections,
     leafHit: leafHit,

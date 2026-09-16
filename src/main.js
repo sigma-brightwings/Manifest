@@ -1531,6 +1531,19 @@
          * do. */
         case 'b':
           if (G.ship.landed) respawnShip();
+          /* SHIFT CYCLES THE RACK, because a ship can carry two kinds of
+           * seeker now and the choice between a certified round and a cheap
+           * one belongs at the trigger rather than at the till. Same key as
+           * firing: it is the same decision, one modifier apart, and a
+           * separate letter for "which missile" would be a key nobody ever
+           * learns. */
+          else if (e.shiftKey) {
+            var nowRack = Combat.nextRack(G.ship);
+            if (!nowRack) say(G.ship.missiles > 0 ? 'Only one rack aboard'
+                                                  : 'No missiles aboard', 3);
+            else say((Combat.MISSILES[nowRack.id] || {}).name + ' armed — ' +
+                     nowRack.n + ' aboard', 4);
+          }
           else Combat.fireMissile(G.sys, G, G.t, HOOKS);
           break;
         case 'enter':
@@ -4414,6 +4427,8 @@
      * steers on it next frame — one frame of lag nobody can perceive. */
     Combat.update(G.sys, G, G.t, G.lastDtSim || 0, HOOKS);
 
+    stepContrails();
+
     /* The legs, moving. Outside the paused/docked guard below on purpose:
      * a berthed ship still has to READ as standing on its gear, and the
      * first frame after a load is where that gets decided. */
@@ -6666,6 +6681,10 @@
       ctx.restore();
     }
 
+    /* Contrails UNDER the missiles and the explosions, so a warhead going
+     * off is in front of its own smoke. */
+    drawContrails(ctx, cam);
+
     var ms = G.sys.missiles;
     if (ms && ms.length) {
       ctx.save();
@@ -8762,6 +8781,145 @@
     ctx.arc(cx + Math.cos(nu) * r * scale, cy - Math.sin(nu) * r * scale, 2.8, 0, K.TAU);
     ctx.fill();
     ctx.restore();
+  }
+
+  /* ---- CONTRAILS, LAID DOWN ----------------------------------------------
+   * Astra: "missiles/contrails and ship contrails in atmo."
+   *
+   * Two sources, one store. A missile smokes because its motor is burning,
+   * which it does wherever it is; a ship smokes because it is dragging a
+   * hull through AIR, which it only does inside an atmosphere. So the rule
+   * for a ship is the atmosphere check the flight model already runs, and
+   * the rule for a missile is simply that it exists.
+   *
+   * LAID IN WORLD SPACE AND LEFT THERE. A contrail is a thing that happened
+   * at a place, not a thing attached to a ship — which is what makes it
+   * read as being left behind rather than towed. It also means a trail
+   * outlives the missile that laid it, and it should: the smoke is still
+   * there after the warhead is not.
+   *
+   * ONE POINT EVERY CONTRAIL_STEP SECONDS OF SIM TIME, not per frame. Per
+   * frame would make the trail's density a function of the player's frame
+   * rate, and at 16x warp it would be a solid tube. Sim time also means a
+   * paused game lays nothing, which is correct.
+   *
+   * Bounded twice: by age, and by a hard cap on how many trails are kept at
+   * once, oldest evicted first. An unbounded store of points is the kind of
+   * leak that only shows up after an hour of play.
+   */
+  var CONTRAIL_STEP = 0.35;          // s of sim time between points
+  var CONTRAIL_LIFE = 9;             // s before a point has blown away
+  var MISSILE_TRAIL_LIFE = 4.5;
+  var CONTRAIL_MAX_PTS = 42;
+  var CONTRAIL_MAX_TRAILS = 24;
+  var CONTRAIL_MIN_SPEED = 0.06;     // km/s through the air before one forms
+
+  function trailStore() {
+    if (!G.contrails) G.contrails = { by: {}, order: [] };
+    return G.contrails;
+  }
+
+  function layPoint(key, pos, life) {
+    var store = trailStore();
+    var tr = store.by[key];
+    if (!tr) {
+      tr = store.by[key] = { pts: [], last: -1e9, life: life };
+      store.order.push(key);
+      while (store.order.length > CONTRAIL_MAX_TRAILS) {
+        delete store.by[store.order.shift()];
+      }
+    }
+    tr.life = life;
+    if (G.t - tr.last < CONTRAIL_STEP) return tr;
+    tr.last = G.t;
+    tr.pts.push({ p: V.clone(pos), t: G.t });
+    if (tr.pts.length > CONTRAIL_MAX_PTS) tr.pts.shift();
+    return tr;
+  }
+
+  /* Is this point in air, moving through it fast enough to condense one?
+   * Returns the thickness factor, or 0 for nothing — so the same call
+   * answers "should there be a trail" and "how heavy is it". */
+  function airTrailStrength(pos, vel) {
+    if (!Sim.atmosphereContext) return 0;
+    var atmo = Sim.atmosphereContext(pos, G.sys, G.t);
+    if (!atmo || !atmo.body || !atmo.body.atmosphere) return 0;
+    var alt = V.dist(pos, atmo.pos) - atmo.body.radius;
+    var rho = Sim.airDensity(atmo.body, alt);
+    if (!(rho > 0.02)) return 0;                  // the top of the air is thin
+    var through = V.len(V.sub(vel, atmo.vel));
+    if (through < CONTRAIL_MIN_SPEED) return 0;
+    return Math.max(0, Math.min(1, rho * 0.9)) * Math.min(1, through / 0.9);
+  }
+
+  function stepContrails() {
+    if (G.paused || !G.sys) return;
+    var store = trailStore();
+    var i;
+
+    /* The player, and every ship the encounter system has lifted — the
+     * ones that are actually flying rather than riding a timetable. Rail
+     * traffic is deliberately left out: it is drawn from a closed-form
+     * position that can jump when a leg is recomputed, and a trail behind
+     * something that teleports is a line across the sky. */
+    var flyers = [];
+    if (!G.ship.docked && !G.ship.landed) {
+      flyers.push({ key: 'player', pos: G.ship.pos, vel: G.ship.vel });
+    }
+    var live = (G.encounter && G.encounter.active) || [];
+    for (i = 0; i < live.length; i++) {
+      var sp = live[i];
+      var lp = sp.live || sp;
+      if (!lp || !lp.pos || !lp.vel) continue;
+      flyers.push({ key: 'e' + (sp.id || i), pos: lp.pos, vel: lp.vel });
+    }
+    for (i = 0; i < flyers.length; i++) {
+      var f = flyers[i];
+      var strength = airTrailStrength(f.pos, f.vel);
+      if (strength <= 0) continue;
+      var tr = layPoint(f.key, f.pos, CONTRAIL_LIFE);
+      tr.air = strength;
+    }
+
+    /* Missiles. Their own key so a trail survives the round that laid it,
+     * which is the whole reason the store is keyed rather than hung off
+     * the object. */
+    var ms = G.sys.missiles || [];
+    for (i = 0; i < ms.length; i++) {
+      var m = ms[i];
+      if (!m.trailKey) m.trailKey = 'm' + (m.born || 0) + '|' + i + '|' + Math.round((m.dies || 0) * 100);
+      layPoint(m.trailKey, m.pos, MISSILE_TRAIL_LIFE);
+    }
+
+    /* Ageing out. A trail whose last point is older than its life is gone
+     * entirely — dropping the whole trail rather than shifting points one
+     * at a time, because the points are already in order and the common
+     * case is that the thing that laid it has stopped. */
+    for (i = store.order.length - 1; i >= 0; i--) {
+      var key = store.order[i], t2 = store.by[key];
+      if (!t2) { store.order.splice(i, 1); continue; }
+      while (t2.pts.length && G.t - t2.pts[0].t > t2.life) t2.pts.shift();
+      if (!t2.pts.length) { delete store.by[key]; store.order.splice(i, 1); }
+    }
+  }
+
+  function drawContrails(ctx, cam) {
+    var store = G.contrails;
+    if (!store || !store.order.length) return;
+    for (var i = 0; i < store.order.length; i++) {
+      var tr = store.by[store.order[i]];
+      if (!tr || tr.pts.length < 2) continue;
+      var missile = store.order[i].charAt(0) === 'm';
+      Render.drawContrail(ctx, cam, tr.pts, G.t, {
+        life: tr.life,
+        /* A motor smokes heavier than a wingtip, and a hull in thick air
+         * heavier than one scraping the top of it. */
+        width: missile ? 0.9 : 0.6 + 1.2 * (tr.air || 0.3),
+        spread: missile ? 4.0 : 3.0,
+        alpha: missile ? 0.45 : 0.30 + 0.35 * (tr.air || 0.3),
+        color: missile ? '235,230,225' : '255,255,255'
+      });
+    }
   }
 
   /* The full-screen mode bodies live in screens.js. */

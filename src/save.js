@@ -209,6 +209,20 @@
          * older career comes back with an undefined type, which fireMissile
          * reads as a Hawk — exactly what it was carrying. */
         missileId: s.missileId, missileBatch: s.missileBatch,
+        /* The racks themselves, copied rather than referenced so a later
+         * shot cannot edit a snapshot that has already been taken. The two
+         * fields above are the ARMED rack's view of this and are written
+         * anyway, so a save made now still loads in a build that predates
+         * racks — the old fields say what is on the trigger, which is what
+         * that build would have read. */
+        racks: (function () {
+          var out = {}, src = s.racks || {};
+          for (var rk in src) {
+            if (!src[rk] || !(src[rk].n > 0)) continue;
+            out[rk] = { id: src[rk].id || rk, n: src[rk].n, batch: src[rk].batch };
+          }
+          return out;
+        })(),
         missileSeq: s.missileSeq,
         cargo: s.cargo, credits: s.credits,
         /* A career saved MID-ARRIVAL comes back parked. During the lift
@@ -334,6 +348,11 @@
     s.fuel = d.fuel; s.thrusterFuel = d.thrusterFuel;
     s.milArmed = d.milArmed;
     s.missileId = d.missileId; s.missileBatch = d.missileBatch;
+    /* A save from before racks has none, and Combat.racksOf builds the one
+     * rack its counter describes the first time anything asks — so the
+     * absence is handled by leaving the field alone rather than by writing
+     * an empty object over it, which would throw away the rounds. */
+    if (d.racks) s.racks = d.racks;
     s.missileSeq = d.missileSeq;
     s.cargo = d.cargo || {}; s.credits = d.credits;
     s.hullId = d.hullId; s.hullHp = d.hullHp;
