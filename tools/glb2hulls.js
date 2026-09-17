@@ -388,6 +388,24 @@ var PORT_SPIN_RE = /stationSpin/i;
  * the game wants them. */
 var PORT_OMIT_RE = /^groundSaddle|^standLeg|^standShoe|^cradleArc/i;
 
+/* REFERENCE VOLUMES: measured, never painted.
+ *
+ * A bay's `…Throat` is a solid block spanning the whole aperture. The lab
+ * builds it deliberately — STATIONS.md measures hull fit and the approach
+ * corridor against its dimensions — and hides it, because a visible one is
+ * a dark slab where the corridor should be.
+ *
+ * Hiding it used to mean losing it: GLTFExporter skips invisible nodes by
+ * default, so it never reached the file and every station converted with no
+ * bay dimensions. The exporter now emits it (see three-d-stage.js) and this
+ * is the other half of that bargain — the volume arrives, is measured, and
+ * is kept out of the drawn mesh here, where deciding what to paint belongs.
+ *
+ * Separate from PORT_OMIT_RE because the two mean opposite things. A stand
+ * leg is dropped entirely: it is furniture that does not belong in orbit,
+ * and nothing wants its bounds. This is dropped from the PICTURE only. */
+var PORT_REFERENCE_RE = /Throat$/i;
+
 /* ---- one model ---------------------------------------------------------- */
 function convert(file) {
   var g = parseGlb(fs.readFileSync(file));
@@ -710,9 +728,27 @@ function convertPort(file) {
   var merged = {};
   function mergeKey(kind, name, parentIdx) {
     if (kind !== 'berths') return null;
-    if (!/Throat(?:Floor|Roof|WallL|WallR|Back)$/i.test(name)) return null;
+    /* Both the reference volume and its panels, so a bay that ships both
+     * is ONE berth. Without the bare `Throat$` arm here, a model exported
+     * with its reference volumes intact reports every bay twice — the box
+     * once and its lining once — which is the failure that arrives the
+     * moment onlyVisible:false starts working. */
+    if (!/Throat(?:Floor|Roof|WallL|WallR|Back)?$/i.test(name)) return null;
+    /* A node with NO parent merges with nothing. The station builder puts a
+     * bay's volume and its lining inside a group, so they share a parent
+     * and belong together; a flat model — the synthetic fixtures, or any
+     * bay authored by hand — hangs several complete `…Throat` volumes off
+     * the scene root, where they share the non-parent -1 and are three
+     * different bays. Keying on that would have reported the orbital
+     * fixture's two S/M berths and one heavy as a single berth spanning
+     * the station. */
+    if (!(parentIdx >= 0)) return null;
     return 'berth|' + parentIdx;
   }
+
+  /* Is this node the bay's own reference volume, as opposed to the plates
+   * that line it? The distinction decides which measurement wins below. */
+  function isReference(name) { return /Throat$/i.test(name); }
   function grow(b, p) {
     for (var a = 0; a < 3; a++) {
       if (p[a] < b.min[a]) b.min[a] = p[a];
@@ -746,7 +782,12 @@ function convertPort(file) {
     /* Inherited, like every other classification here: a named parent takes
      * its unnamed children with it, which is how a stand leg made of six
      * unnamed pieces goes away as one leg. */
-    var omit = inOmit || PORT_OMIT_RE.test(name);
+    /* A reference volume is omitted from the picture but NOT inherited as
+     * omitted — it has no children today, and if one ever grows some they
+     * are geometry until they say otherwise. PORT_OMIT_RE keeps inheriting,
+     * because a stand leg's six unnamed pieces go away with the leg. */
+    var omit = inOmit || PORT_OMIT_RE.test(name) || PORT_REFERENCE_RE.test(name);
+    var inOmitNext = inOmit || PORT_OMIT_RE.test(name);
     var interior = inInterior || PORT_INTERIOR_RE.test(name);
     var spin = inSpin || PORT_SPIN_RE.test(name);
 
@@ -782,9 +823,38 @@ function convertPort(file) {
          * one box per node — four door leaves ARE four leaves — so
          * mergeKey returns null for them and the old behaviour stands. */
         var mk = mergeKey(k, name, parentIdx);
-        if (mk && merged[mk]) { mine = merged[mk]; continue; }
+        if (mk && merged[mk]) {
+          var have = merged[mk];
+          /* THE REFERENCE VOLUME WINS, and it is not merely a tie-break.
+           *
+           * The panels LINE the throat, so their union is the aperture plus
+           * a wall thickness all round — a bay measured that way reads
+           * bigger than the hole a hull has to fly through, and this number
+           * decides whether a hull fits. Erring large is the dangerous
+           * direction: it says yes to a ship that would hit the jamb.
+           *
+           * So when the true volume turns up, it replaces whatever the
+           * panels had accumulated and locks the box; panels seen
+           * afterwards are measured into a scratch box and discarded. When
+           * no reference volume is present — every model exported before
+           * the exporter was fixed — the panel union stands, which is what
+           * the bays are measured from today. */
+          if (isReference(name) && !have.authoritative) {
+            have.min = [Infinity, Infinity, Infinity];
+            have.max = [-Infinity, -Infinity, -Infinity];
+            have.mat = world;
+            have.node = name;
+            have.authoritative = true;
+            mine = have;
+          } else if (have.authoritative && !isReference(name)) {
+            mine = box();                    // measured nowhere, deliberately
+          } else {
+            mine = have;
+          }
+          continue;
+        }
         var b = box();
-        if (mk) merged[mk] = b;
+        if (mk) { merged[mk] = b; b.authoritative = isReference(name); }
         /* THE NODE'S OWN ORIENTATION, kept alongside its bounds.
          *
          * A bounding box has no direction, and for a berth the direction is
@@ -805,7 +875,13 @@ function convertPort(file) {
       }
     }
 
-    if (node.mesh !== undefined && !omit) {
+    /* MEASURED EVEN WHEN NOT DRAWN, and the two used to be the same
+     * decision. `omit` skipped the whole block, so a node excluded from the
+     * mesh contributed nothing to its anchor either — which is fine for a
+     * stand leg and wrong for a reference volume, whose entire purpose is
+     * to be measured and never painted. Now the vertices are always walked
+     * and only the pushing is conditional. */
+    if (node.mesh !== undefined) {
       var mesh = j.meshes[node.mesh];
       var into = interior ? inr : (spin ? spn : ext);
       for (var p = 0; p < mesh.primitives.length; p++) {
@@ -815,9 +891,10 @@ function convertPort(file) {
         var base = into.v.length;
         for (var i = 0; i < pos.length; i++) {
           var w = toGame(matApply(world, pos[i]));
-          into.v.push(w);
+          if (!omit) into.v.push(w);
           if (mine) grow(mine, w);
         }
+        if (omit) continue;                 // measured, deliberately unpainted
         var col = materialColour(g, prim.material);
         var idx = prim.indices !== undefined
           ? accessorData(g, prim.indices)
@@ -829,7 +906,7 @@ function convertPort(file) {
       }
     }
     for (var ch = 0; ch < (node.children || []).length; ch++) {
-      walk(node.children[ch], world, interior, spin, mine, omit, nodeIdx);
+      walk(node.children[ch], world, interior, spin, mine, inOmitNext, nodeIdx);
     }
   }
 

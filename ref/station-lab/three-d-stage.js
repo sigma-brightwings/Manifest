@@ -421,8 +421,24 @@
       const mod = await import('three/addons/exporters/GLTFExporter.js');
       this._nameParts();
       const base = this._basename;
+      /* onlyVisible: false, and it is load-bearing.
+       *
+       * three's default is true, so anything with .visible = false never
+       * reaches the file. The station models use exactly one invisible
+       * node and it is the most important one in the bay: `…Throat`, the
+       * reference volume the fit and route checks measure a hull envelope
+       * against. It is hidden because a visible one is a dark slab filling
+       * the aperture — so the design was correct and the export quietly
+       * threw the answer away, and every station converted with no bay
+       * dimensions at all.
+       *
+       * Reference volumes are omitted from the DRAWN mesh downstream
+       * instead, by name, in tools/glb2hulls.js. That is the right place
+       * for it: the exporter's job is to emit what was built, and deciding
+       * what to paint is the converter's. */
       const buf = await new mod.GLTFExporter().parseAsync(this._object, {
         binary: true,
+        onlyVisible: false,
       });
       download(
         new Blob([buf], { type: 'model/gltf-binary' }),
