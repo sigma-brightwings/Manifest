@@ -144,6 +144,8 @@ require('../src/galaxy.js');
 require('../src/sim.js');
 require('../src/combat.js');
 /* The ships you own and are not flying. */
+/* The people aboard. */
+require('../src/crew.js');
 require('../src/fleet.js');
 require('../src/missions.js');
 /* The campaign layer. It was missing here for as long as it has existed,

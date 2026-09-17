@@ -7,7 +7,8 @@
       Eco = global.Economy, Galaxy = global.Galaxy,
       Combat = global.Combat, Missions = global.Missions,
       Slip = global.Slipspace, Logo = global.Logo,
-      Weather = global.Weather, Fleet = global.Fleet;
+      Weather = global.Weather, Fleet = global.Fleet,
+      Crew = global.Crew;
   var DEG = Math.PI / 180;
   var AU = Gen.AU;
 

@@ -19,7 +19,7 @@
   var V = global.V, K = global.Kepler, Sim = global.Sim,
       Render = global.Render, Eco = global.Economy, Galaxy = global.Galaxy,
       Combat = global.Combat, Missions = global.Missions, Arcs = global.Arcs,
-      Gen = global.Gen, Fleet = global.Fleet;
+      Gen = global.Gen, Fleet = global.Fleet, Crew = global.Crew;
 
   /* Wired by main.js at boot. Unpacked to bare names so the moved code is
    * byte-for-byte the code that was tested in its old home. */
@@ -1464,7 +1464,8 @@
     /* FLEET is a tab rather than a screen because it is a thing you do at
      * a yard: it is where you look at what you own, sell one, or — once
      * orders exist — tell one where to go. */
-    var tabs = [['fit', 'FITTING'], ['buy', 'BUY'], ['hull', 'HULLS'], ['fleet', 'FLEET']];
+    var tabs = [['fit', 'FITTING'], ['buy', 'BUY'], ['hull', 'HULLS'],
+                ['crew', 'CREW'], ['fleet', 'FLEET']];
     for (var ti = 0; ti < tabs.length; ti++) {
       btn(ctx, x + w - 12 - (tabs.length - ti) * 66, barY, 62, 15, tabs[ti][1],
           (function (id) { return function () { G.yardTab = id; }; })(tabs[ti][0]),
@@ -1555,6 +1556,7 @@
     var cardH = 0;
     if (G.yardTab === 'fit') drawYardFit(ctx, x, w, row, s);
     else if (G.yardTab === 'buy') drawYardBuy(ctx, x, w, row, s, port);
+    else if (G.yardTab === 'crew') drawYardCrew(ctx, x, w, row, s, port);
     else if (G.yardTab === 'fleet') drawYardFleet(ctx, x, w, row, s, port);
     else cardH = drawYardHulls(ctx, x, w, row, s, port) || 0;
 
@@ -1613,6 +1615,81 @@
         ctx.restore();
       }
     }
+  }
+
+  /* --- CREW: the people aboard, and what they are for --------------------
+   *
+   * Two lists in one: who is on this deck, and who is in the hall looking
+   * for a berth. The hall is a pure function of the port and the week, so
+   * walking out and back in does not re-roll it — a crew hall you can
+   * reshuffle is a crew hall nobody believes.
+   *
+   * The turret line comes FIRST and is the reason the tab exists. It says
+   * what is happening to the mount right now and, when the answer is
+   * "nothing", exactly whose absence is causing it.
+   */
+  function drawYardCrew(ctx, x, w, row, s, port) {
+    if (!Crew) return 0;
+    var man = Crew.turretCrewing(s);
+
+    if (man.turret) {
+      var head = man.mode === 'manned' ? 'TURRET MANNED'
+               : man.mode === 'slaved' ? 'TURRET SLAVED — half traverse, two thirds rate'
+               : man.mode === 'pilot'  ? 'TURRET WORKED FROM THE SEAT'
+               : 'TURRET COLD — nobody on it';
+      row(head, man.why, function () {}, true,
+          { hot: man.mode === 'manned' || man.mode === 'pilot' });
+    } else if (Crew.needsCrew(s)) {
+      row('NO TURRET FITTED', 'a hull this size wants one, and somebody on it',
+          function () {}, true);
+    }
+
+    var mine = Crew.aboard(s);
+    var wages = 0;
+    for (var i = 0; i < mine.length; i++) wages += Crew.dailyWage(mine[i]);
+    row('ABOARD  ·  ' + mine.length + (mine.length === 1 ? ' hand' : ' hands') +
+        (wages ? '  ·  ' + wages + ' cr/day' : ''),
+        mine.length ? 'click a name to pay them off' : 'nobody but you',
+        function () {}, true);
+
+    for (var j = 0; j < mine.length; j++) {
+      (function (p) {
+        row('  ' + p.name, Crew.ROLES[p.role].name + ', ' + Crew.ratingWord(p.rating) +
+            '  ·  ' + Crew.dailyWage(p) + ' cr/day',
+            function () {
+              s.crew = Crew.aboard(s).filter(function (q) { return q.id !== p.id; });
+              say(p.name + ' takes their kit and goes.', 5);
+            });
+      })(mine[j]);
+    }
+
+    /* And the hall. Anyone already signed on is not in it. */
+    var hall = Crew.forHire(port, G.t).filter(function (p) {
+      for (var k = 0; k < mine.length; k++) if (mine[k].id === p.id) return false;
+      return true;
+    });
+    row('LOOKING FOR A BERTH AT ' + (port.name || 'this port').toUpperCase(),
+        hall.length ? 'signing fee up front, then a wage while they are aboard'
+                    : 'nobody today — try another port, or come back in a day or two',
+        function () {}, true);
+
+    for (var m = 0; m < hall.length; m++) {
+      (function (p) {
+        var fee = Crew.signingFee(p);
+        var poor = s.credits < fee;
+        row('  ' + p.name + '  —  ' + fee + ' cr',
+            Crew.ROLES[p.role].name + ', ' + Crew.ratingWord(p.rating) + '  ·  ' +
+            Crew.dailyWage(p) + ' cr/day  ·  ' + Crew.ROLES[p.role].what,
+            function () {
+              if (s.credits < fee) { say('You cannot cover the signing fee', 4); return; }
+              s.credits -= fee;
+              (s.crew = Crew.aboard(s).slice()).push(p);
+              say(p.name + ' signs on — ' + Crew.ROLES[p.role].name.toLowerCase() +
+                  ', ' + Crew.ratingWord(p.rating) + '.', 6);
+            }, poor);
+      })(hall[m]);
+    }
+    return 0;
   }
 
   /* --- FLEET: the ships you own and are not sitting in --------------------
@@ -1885,6 +1962,18 @@
     });
     say('Welcome aboard your ' + hull.name +
         (extra.length ? ' \u2014 fitted as standard: ' + extra.join(', ') : ''), 5);
+
+    /* AND SAY IT NOW, not when the shooting starts. A hull this size wants
+     * hands on the turret, and a pilot who trades up and discovers in a
+     * fight that their gun has gone quiet has been ambushed by a rule
+     * rather than taught one. */
+    if (Crew) {
+      var man = Crew.turretCrewing(G.ship);
+      if (man.turret && man.mode === 'unmanned') {
+        say('She is too big to fly and shoot at once — the turret needs a gunner, ' +
+            'or a good engineer to slave it. CREW.', 9);
+      }
+    }
   }
 
   /* The ship itself, turning, with what the spec sheet cannot say beside

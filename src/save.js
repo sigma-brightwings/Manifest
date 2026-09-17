@@ -209,6 +209,12 @@
          * older career comes back with an undefined type, which fireMissile
          * reads as a Hawk — exactly what it was carrying. */
         missileId: s.missileId, missileBatch: s.missileBatch,
+        /* THE PEOPLE ABOARD. Additive: a career from before crew loads
+         * with nobody on the deck, which is what it had — and on a hull
+         * that needs a gunner, that is a turret that will not fire until
+         * one is hired, which is the rule working rather than the save
+         * being wrong. */
+        crew: (s.crew || []).slice(),
         /* The racks themselves, copied rather than referenced so a later
          * shot cannot edit a snapshot that has already been taken. The two
          * fields above are the ARMED rack's view of this and are written
@@ -365,6 +371,7 @@
     s.pos = d.pos; s.vel = d.vel; s.fwd = d.fwd; s.up = d.up; s.right = d.right;
     s.fuel = d.fuel; s.thrusterFuel = d.thrusterFuel;
     s.milArmed = d.milArmed;
+    s.crew = (d.crew || []).slice();
     s.missileId = d.missileId; s.missileBatch = d.missileBatch;
     /* A save from before racks has none, and Combat.racksOf builds the one
      * rack its counter describes the first time anything asks — so the

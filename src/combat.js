@@ -4407,10 +4407,32 @@
   /* The turret. Buyable disinterest: it picks the nearest thing that is
    * actively hostile and keeps hitting it, all round, no aiming, which is
    * exactly what you paid 5,600 credits not to have to do. */
+  /* How long the mount takes to come round, at full crewing. A turret that
+   * snapped instantly onto anything had no traverse to halve, which made
+   * "traverse is half as fast" a number with nowhere to go — so the mount
+   * has a real slew now, and switching targets costs the angle between
+   * them. Slow enough that being short-handed hurts, fast enough that a
+   * properly crewed turret still feels like buyable disinterest. */
+  var TURRET_SLEW = 2.4;            // radians per second, fully manned
+
   function updateTurret(sys, G, t, hooks) {
     var s = G.ship;
     if (!s.turret || s.docked || s.landed) return;
     var tur = TURRETS[s.turret];
+
+    /* WHO IS ON IT. On a small hull, you are — one seat with everything in
+     * reach is what a single-seat ship IS. On anything bigger the mount
+     * wants a gunner, and a good engineer can slave it to the ship's
+     * targeting system instead at half the traverse and two thirds the
+     * rate. Nobody at all and it does not fire: a weapon that needs hands
+     * is a weapon that needs hands. */
+    var man = global.Crew ? global.Crew.turretCrewing(s)
+                          : { traverse: 1, rate: 1, mode: 'pilot' };
+    if (!(man.rate > 0)) {
+      G.turretIdle = man;           // so the ship screen can say why
+      return;
+    }
+    G.turretIdle = null;
     if (t < (G.turretCoolUntil || 0)) return;
     var now = (typeof performance !== 'undefined' ? performance.now() : 0) / 1000;
 
@@ -4423,7 +4445,32 @@
       if (d < bestD) { best = sp; bestD = d; }
     }
     if (!best) return;
-    G.turretCoolUntil = t + tur.cooldown;
+
+    /* THE SLEW. Coming onto a target the mount is already pointing at is
+     * free; coming round to something behind you costs the angle at
+     * whatever rate this crew can turn the handles. Stored as a bearing
+     * rather than as an id so a target that dies mid-swing does not reset
+     * the mount to zero — the barrel is where the barrel is. */
+    var aim = V.norm(V.sub(best.live.pos, s.pos));
+    var was = G.turretAim;
+    if (was) {
+      var dotA = Math.max(-1, Math.min(1, V.dot(was, aim)));
+      var swing = Math.acos(dotA);
+      if (swing > 0.02) {
+        var need = swing / (TURRET_SLEW * man.traverse);
+        if (t < (G.turretOnTargetAt || 0)) return;
+        /* Not yet round: book the arrival and spend the time. */
+        if (!G.turretSwingTo || V.dot(G.turretSwingTo, aim) < 0.999) {
+          G.turretSwingTo = aim;
+          G.turretOnTargetAt = t + need;
+          return;
+        }
+      }
+    }
+    G.turretAim = aim;
+    G.turretSwingTo = null;
+    G.turretOnTargetAt = 0;
+    G.turretCoolUntil = t + tur.cooldown / man.rate;
     /* The turret sits on the spine, above the axis and further back than the
      * fixed guns — it traverses, so it wants to see all round rather than to
      * point down the nose. Same offset treatment as the hardpoints, and for
@@ -5628,6 +5675,7 @@
   }
 
   var Combat = {
+    TURRET_SLEW: TURRET_SLEW,
     npcHeat: npcHeat, addNpcHeat: addNpcHeat, NPC_SHED: NPC_SHED,
     pirateRack: pirateRack, updateNpcHeat: updateNpcHeat,
     jettisonRack: jettisonRack, hangChanceFor: hangChanceFor,
