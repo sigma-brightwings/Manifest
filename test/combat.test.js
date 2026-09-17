@@ -247,6 +247,65 @@ section('--- a mayday names what it wants ---');
   }
 })();
 
+section('--- two rescue services, from two different homes ---');
+(function () {
+  var Gen = require(path.join(SRC, 'generate.js'));
+  var caps = 0, tenders = 0, inherited = 0, tugs = 0, tugSystems = 0, N = 24;
+  var orphanTender = 0, capNoTender = 0;
+
+  for (var i = 0; i < N; i++) {
+    var sys = Gen.generateSystem('rescue-' + i);
+    var p = sys.patrols || [];
+    var c = p.filter(function (x) { return x.kind === 'capital'; });
+    var d = p.filter(function (x) { return x.kind === 'tender'; });
+    var g = p.filter(function (x) { return x.kind === 'tug'; });
+    caps += c.length; tenders += d.length; tugs += g.length;
+    if (g.length) tugSystems++;
+    if (c.length && !d.length) capNoTender++;
+
+    for (var j = 0; j < d.length; j++) {
+      var parent = p.filter(function (y) { return y.id === d[j].parentShip; })[0];
+      if (!parent) { orphanTender++; continue; }
+      if (parent.sizeLetter === d[j].sizeLetter) inherited++;
+    }
+    /* A tug belongs to a berth. If one exists, its home port must too. */
+    for (var k = 0; k < g.length; k++) {
+      if (g[k].homePort && !sys.byId[g[k].homePort]) orphanTender++;
+    }
+  }
+
+  check('every capital launches a tender', capNoTender === 0 && tenders === caps,
+        caps + ' capitals, ' + tenders + ' tenders');
+  check('and no tender flies without the ship that launched it',
+        orphanTender === 0, String(orphanTender));
+  check('a tender is sized to its capital, not to its class',
+        tenders > 0 && inherited === tenders,
+        inherited + ' of ' + tenders);
+  check('tugs exist, and not everywhere', tugs > 0 && tugSystems < N,
+        tugs + ' tugs across ' + tugSystems + ' of ' + N + ' systems');
+
+  /* The capital's size letter is per SHIP. Everywhere else in the game a
+   * size is a fact about a class — this is the one exception and it has to
+   * actually vary, or the rule it exists for says nothing. */
+  var letters = {};
+  for (var q = 0; q < 60; q++) {
+    var sq = Gen.generateSystem('letters-' + q);
+    (sq.patrols || []).forEach(function (x) {
+      if (x.kind === 'capital') letters[x.sizeLetter] = (letters[x.sizeLetter] || 0) + 1;
+    });
+  }
+  check('capitals come in more than one size',
+        Object.keys(letters).length > 1, JSON.stringify(letters));
+
+  /* Both rescue craft answer a rescue call; neither answers a gunfight. */
+  check('a tug is a rescue, not a gun',
+        Combat.eligibleResponder({ kind: 'tug' }, Combat.HELP_TENDER) &&
+        !Combat.eligibleResponder({ kind: 'tug' }, Combat.HELP_SECURITY));
+  check('so is a tender',
+        Combat.eligibleResponder({ kind: 'tender' }, Combat.HELP_TENDER) &&
+        !Combat.eligibleResponder({ kind: 'tender' }, Combat.HELP_SECURITY));
+})();
+
 section('--- answering somebody else (dormant until Phase 9) ---');
 (function () {
   /* Nothing in this build can attack an NPC — damageNpc has no caller but

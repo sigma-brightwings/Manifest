@@ -542,8 +542,33 @@
      * hunters are what the notoriety work needs. The capital is now free
      * for what it is actually for — the thing you run from. */
     navy: 'navy-m',
-    tender: 'tender-m'
+    tender: 'tender-m',
+    /* The port tug. `hauler` also flies a tug hull and that is a real
+     * tension worth naming rather than quietly resolving: a waste hauler
+     * crossing a system is not "only ever found around spaceports and
+     * shipyards". Left alone deliberately — reassigning the waste class is
+     * a separate decision about a separate ship, and churning it here to
+     * tidy up a comment would be the wrong reason. */
+    tug: 'tug-s'
   };
+
+  /* A ship may carry its OWN size letter, and when it does it wins.
+   *
+   * Everywhere else a size is a fact about a class — `HULL_ASSIGN` names
+   * one hull per class and `Combat.hullSize` reads the letter off it. A
+   * capital's tender breaks that on purpose: the tender is sized to the
+   * warship that launched it, so two tenders in the same galaxy are
+   * different hulls for a reason that belongs to neither of them.
+   *
+   * Written as a general override rather than a tender special case, since
+   * the moment one ship's size is a fact about another there will be a
+   * second. */
+  function hullIdForSpec(spec) {
+    var base = HULL_ASSIGN[spec && (spec.cls || spec.kind)] || null;
+    if (!base || !spec || !spec.sizeLetter) return base;
+    var swapped = base.replace(/-(s|m|l)$/, '-' + spec.sizeLetter);
+    return (global.HullLib && global.HullLib[swapped]) ? swapped : base;
+  }
 
   /* ---- the 2026-09-11 drop, and what it left unassigned -----------------
    * Five families arrived with no class to fly as, and a hull nothing
@@ -3004,7 +3029,22 @@
   }
 
   function drawHullModel(ctx, cam, frame, lengthKm, sunDir, tint, kind, ship) {
-    var mesh = shipMeshes()[kind] || shipMeshes().courier;
+    /* Almost every ship wears its class's hull, which `shipMeshes()` has
+     * memoised once. A ship carrying its OWN size letter is the exception
+     * and gets looked up directly — `frame` is the live state, which
+     * `decorate` copies the spec's fields onto, so a capital's tender
+     * arrives here already knowing which hull it should be wearing.
+     *
+     * Deliberately not routed through SHIP_MESHES: that cache is keyed by
+     * class, and writing a per-ship hull into it would make whichever
+     * tender drew first decide what every other tender looks like. */
+    var mesh = null;
+    var letter = (frame && frame.sizeLetter) || (ship && ship.sizeLetter);
+    if (letter) {
+      var swapped = hullIdForSpec({ cls: kind, sizeLetter: letter });
+      if (swapped) mesh = libHull(swapped);
+    }
+    mesh = mesh || shipMeshes()[kind] || shipMeshes().courier;
     if (!(gpuWorld() && global.GLWorld.queueMesh(cam, frame, mesh, lengthKm, sunDir))) {
       paintMesh(ctx, cam, frame, mesh, lengthKm, sunDir, tint);
     }

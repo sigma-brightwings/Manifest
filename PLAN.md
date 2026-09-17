@@ -2731,6 +2731,38 @@ with the victim's flag and makes the rescued ship a witness *for* you —
 spending the reputation and witness systems rather than inventing a
 currency.
 
+**Who answers a tender call — two services, two homes. BUILT.**
+
+| | **Port tug** | **Rescue tender** |
+|---|---|---|
+| Home | a shipyard, highport or fleet carrier | a capital ship |
+| Range | a short hop to the next port along | wherever its parent flies |
+| Size | one class | **inherited from its capital (s/m/l)** |
+| Names | `TUG_NAMES` — *Bollard*, *Capstan* | `TENDER_NAMES` — *Samaritan*, *Lifeline* |
+
+`eligibleResponder` accepts either for `HELP_TENDER`, so the call does not
+know or care which one comes; the difference is entirely in where they are
+when you make it. When neither exists the refusal says which is missing —
+*"No tug at any port here, and no capital to launch a tender"* — because a
+pilot who is told nobody is coming should be able to work out why.
+
+The capital's size letter is **hashed off the ship's id**, not drawn. The
+first version called `rng.next()` on the shared patrol stream and
+`economy.test.js` failed on an unrelated assertion within the minute:
+capitals went from rarer than cutters to more common, because one extra
+draw moved every draw after it and changed which systems got capitals at
+all. The tug and tender loops each have their own `fork()` for the same
+reason — the number of draws they make varies per system, which is the
+worst possible thing to put in a shared stream. Doctrine 2, demonstrated.
+
+**Measured, not guessed.** Tugs at ordinary `orbital` ports gave 218 across
+forty systems — 5.45 per system of patrol that has to be woken and steered.
+Restricted to working ports: **2.9 per system, in 33 of 40**.
+
+**Still missing: the tow.** The tender *arrives* and holds station. There
+is nothing for it to do when it gets there — no fuel transfer, no hull
+patch, no tow to the nearest port, and no bill. That is Phase 18.
+
 ---
 
 ## Phase 13 — comms chatter (the remaining four lines)

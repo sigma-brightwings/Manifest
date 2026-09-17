@@ -1758,9 +1758,16 @@
     return (d / 1e6).toFixed(1) + ' million km';
   }
 
+  /* Rescue comes from two places and the player does not have to know the
+   * org chart. A TUG belongs to a berth and never leaves it; a TENDER
+   * belongs to a capital ship and goes where the capital goes. Asking for
+   * help finds whichever exists, which is what makes "is anyone coming?"
+   * a question about what is actually in this sky.
+   *
+   * Security is unchanged: cutters and warships, never a rescue craft. */
   function eligibleResponder(spec, want) {
     if (!spec || spec.dead) return false;
-    if (want === HELP_TENDER) return spec.kind === 'tender';
+    if (want === HELP_TENDER) return spec.kind === 'tender' || spec.kind === 'tug';
     return spec.kind === 'police' || spec.kind === 'navy';
   }
 
@@ -1780,8 +1787,12 @@
     }
 
     if (!best) {
+      /* Say WHY nobody is coming, not just that nobody is. The two rescue
+       * services have different homes, so their absence means two
+       * different things about where you are, and a pilot who learns that
+       * has learned something about the map. */
       var none = call.want === HELP_TENDER
-        ? 'No tender is working this system. Nobody is coming.'
+        ? 'No tug at any port here, and no capital to launch a tender. Nobody is coming.'
         : 'No patrol is flying here. Nobody is coming.';
       return { responder: null, text: none };
     }

@@ -70,6 +70,47 @@ full design and the phases still outstanding.
   *for* you, spending systems that already exist rather than inventing a
   currency.
 
+- **Two rescue services, from two different homes.** A mayday for a tender
+  used to be answered by one kind of ship that existed for no stated reason.
+  There are now two, and where each one lives is the whole of the mechanic:
+
+  A **port tug** never leaves home. It works a short hop between its own
+  berth and the next port along, and it only exists at a **shipyard, a
+  highport or a fleet carrier** — places where ships are actually worked on,
+  not merely stopped at. Squat orange hull, harbour-tug names with no
+  romance about the job: *Bollard*, *Capstan*, *Hawser*.
+
+  A **rescue tender** is launched by a capital ship and rides its parent's
+  own orbit, which is how two vessels keep company without an AI that flies
+  formation. **The capital's size sets the tender's size** — a big warship
+  launches a big tender — so a size letter is, for the first time in this
+  game, a fact about a *particular ship* rather than about its class.
+  The Syndicate flagship carries one too. That is not generosity: a salvage
+  crew that reaches a stranded hull first is in a very strong negotiating
+  position.
+
+  The consequence is a map you can read. Help near a port is a question
+  about **what kind** of port; help in the deep is a question about whether
+  a capital flies there. And it makes a warship's presence cut both ways —
+  the same hull that sees four times as far and cannot be bribed is also the
+  reason anyone comes for you out there.
+
+  **A measurement and a doctrine violation, both caught by the suite.**
+  The first cut let tugs spawn at ordinary orbital ports — the commonest
+  role in the game — which put 218 of them across forty systems, five and a
+  half per system, every one a patrol to wake and steer. Restricting them to
+  working ports gives 2.9 per system across 33 of 40.
+
+  And the capital's size letter was first drawn with `rng.next()` **from the
+  shared patrol stream**. `economy.test.js` failed inside a minute on an
+  assertion about something else entirely — capitals had become *more*
+  common than cutters — because one extra draw shifted every subsequent draw
+  in `buildPatrols` and changed which systems got capitals at all. Every
+  seed in the galaxy had quietly become a different place. The letter is
+  hashed off the ship's own id now, and the tug and tender loops draw from
+  their own forked substreams. Doctrine 2 exists for precisely this, and the
+  test that caught it was not testing for it.
+
 - **A GUNS page on the dashboard.** Which hardpoint answers which trigger
   used to be visible only on the F5 FIT page, and F5 is the wrong place to
   find it out, because you cannot open the yard while somebody is shooting

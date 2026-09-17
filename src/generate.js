@@ -2273,12 +2273,40 @@
      * back. Present now so the hull is in the sky before the mechanic
      * that calls one exists; being able to SEE the service is half of
      * knowing you can use it. */
-    tender: { size: 0.095, color: '#ffd36b', accel: 0.0188, label: 'rescue tender' }
+    tender: { size: 0.095, color: '#ffd36b', accel: 0.0188, label: 'rescue tender' },
+    /* A port tug. Slower than a tender and it does not need to be quick:
+     * it is never going anywhere except the far side of its own berth. */
+    tug:    { size: 0.070, color: '#ffc46b', accel: 0.0120, label: 'port tug' }
   };
   var NAVY_NAMES = ['Resolute', 'Intransigent', 'Adamant', 'Sovereign', 'Implacable',
                     'Vigilant', 'Unyielding', 'Redoubt'];
   var TENDER_NAMES = ['Samaritan', 'Good Turn', 'Lifeline', 'Standby', 'Helping Hand',
                       'Second Wind', 'Fair Wind', 'Salvor'];
+  /* Tugs are named the way harbour tugs are: short, blunt, and no romance
+   * whatsoever about the job. */
+  var TUG_NAMES = ['Bollard', 'Capstan', 'Hawser', 'Chock', 'Stanchion',
+                   'Fender', 'Cleat', 'Warp'];
+
+  /* A capital's own size letter, seeded per ship. Everywhere else in this
+   * game a size letter is a fact about a CLASS — `hullSize()` reads it off
+   * `HULL_ASSIGN`, so every capital is the same hull. This is the first
+   * place a size belongs to a particular vessel, because it has to: the
+   * tender a capital launches is sized to the ship that launched it, and
+   * "all capitals are L" would make that rule say nothing.
+   *
+   * HASHED OFF THE SHIP'S ID, NOT DRAWN FROM THE PATROL STREAM. The first
+   * version called `rng.next()` and the economy suite caught it within the
+   * minute: one extra draw shifted every subsequent draw in `buildPatrols`,
+   * which changed WHICH SYSTEMS GET CAPITALS AT ALL — capitals went from
+   * rarer than cutters to more common than them, and every seed in the
+   * galaxy quietly became a different place. Exactly the failure doctrine 2
+   * exists to prevent. Hashing an id that is already deterministic costs
+   * nothing and consumes nothing. */
+  function capitalSizeLetter(id, seed) {
+    var h = global.RNG ? global.RNG.hashString('capsize|' + seed + '|' + id) : 0;
+    var r = (h % 1000) / 1000;
+    return r < 0.3 ? 's' : r < 0.75 ? 'm' : 'l';
+  }
   var POLICE_NAMES = ['Vigil', 'Sentinel', 'Warden', 'Picket', 'Marshal', 'Bastion',
                       'Cordon', 'Lictor'];
   var MERC_NAMES = ['Hired', 'Contract', 'Retainer', 'Bondsman', 'Freelance'];
@@ -2428,11 +2456,18 @@
                     size: PATROL_CLASSES.capital.size,
                     color: PATROL_CLASSES.capital.color,
                     label: PATROL_CLASSES.capital.label };
+      var capId = 'n' + (id++);
+      var capLetter = capitalSizeLetter(capId, (sys && sys.seed) || '');
       sys.patrols.push({
-        id: 'n' + (id++), kind: 'capital', faction: fac.id,
+        id: capId, kind: 'capital', faction: fac.id,
         name: 'FNS ' + rng.pick(NAVY_NAMES),
         className: PATROL_CLASSES.capital.label, color: fac.color,
-        size: PATROL_CLASSES.capital.size, accel: PATROL_CLASSES.capital.accel,
+        /* Drawn scale follows the letter, so a ship that launches a big
+         * tender looks like one. */
+        size: PATROL_CLASSES.capital.size * (capLetter === 'l' ? 1.3
+                                           : capLetter === 's' ? 0.75 : 1),
+        accel: PATROL_CLASSES.capital.accel,
+        sizeLetter: capLetter,
         rail: { type: 'route', route: patrolRoute('n' + (id - 1), '', cspec, CA, CB, sys, rng) }
       });
     });
@@ -2478,12 +2513,21 @@
       var sspec = { cls: 'capital', accel: PATROL_CLASSES.capital.accel,
                     size: PATROL_CLASSES.capital.size,
                     color: SYNDICATE_HULL, label: 'flagship' };
+      /* The Syndicate's flagship carries a tender too, and it will come
+       * for you. That is not generosity — a salvage crew that reaches a
+       * stranded hull first is in an extremely good negotiating position,
+       * and the only thing the two services have in common is that
+       * somebody arrives. */
+      var synId = 's' + (id++);
+      var synLetter = capitalSizeLetter(synId, (sys && sys.seed) || '');
       sys.patrols.push({
-        id: 's' + (id++), kind: 'capital', faction: 'outlaw', outlaw: true,
+        id: synId, kind: 'capital', faction: 'outlaw', outlaw: true,
         name: 'The ' + sr.pick(PIRATE_NAMES),
         className: 'flagship', color: SYNDICATE_HULL,
-        size: PATROL_CLASSES.capital.size * 0.92,
+        size: PATROL_CLASSES.capital.size * 0.92 *
+              (synLetter === 'l' ? 1.3 : synLetter === 's' ? 0.75 : 1),
         accel: PATROL_CLASSES.capital.accel,
+        sizeLetter: synLetter,
         rail: { type: 'route', route: patrolRoute('s' + (id - 1), '', sspec, SA, SB, sys, sr) }
       });
     })();
@@ -2521,30 +2565,124 @@
       }
     }
 
-    /* Rescue tenders. One per system that has enough traffic to justify
-     * the standing cost of keeping a crew waiting — which is what
-     * development measures. They run a short local loop rather than a
-     * long haul, because a tender that is halfway across the system when
-     * you call is not a rescue service. */
+    /* ---- the two rescue services, and why they are two --------------------
+     * Astra: "The Tug is only ever found around space ports and shipyards,
+     * but the rescue tender, that's launched from the local Capital class
+     * ship." Two craft doing one job from two different places, and the
+     * difference between them is the whole geography of being rescued:
+     *
+     *   A PORT TUG belongs to a berth. It works the volume around a
+     *   spaceport or a shipyard and it does not leave — so near a port you
+     *   can always be recovered, and that is one more thing a port is FOR.
+     *
+     *   A CAPITAL'S TENDER belongs to a warship, and the warship is in a
+     *   handful of systems. Where a capital flies, help reaches the deep;
+     *   where none does, running dry away from a port is on you.
+     *
+     * The consequence is the reason to do it this way. A capital already
+     * made the volume around it WORSE — it sees four times as far and its
+     * witness cannot be bought. Now it also makes that volume survivable.
+     * The same hull carries both signs, which is a better thing for a
+     * warship to be than a threat with no upside.
+     *
+     * Note there is no `dev` gate on either any more. Whether anyone comes
+     * for you is now a question about what is actually in the sky, which
+     * is a fact the player can see and fly toward, rather than a number
+     * about the system they cannot. */
+
+    /* Port tugs: one per spaceport or shipyard, on a short hop between its
+     * own berth and the nearest other port. They are never far from home
+     * because home is the point. */
     (function () {
-      if (ports.length < 2) return;
-      var dev = sys.development === undefined ? 0.5 : sys.development;
-      if (dev < 0.35) return;
-      var TA = ports[rng.int(0, ports.length - 1)];
-      var TB = ports.filter(function (p) { return p !== TA; })[0];
-      if (!TB) return;
-      var tspec = { cls: 'tender', accel: PATROL_CLASSES.tender.accel,
-                    size: PATROL_CLASSES.tender.size,
-                    color: PATROL_CLASSES.tender.color,
-                    label: PATROL_CLASSES.tender.label };
-      sys.patrols.push({
-        id: 'n' + (id++), kind: 'tender', faction: TA.faction || null,
-        name: rng.pick(TENDER_NAMES),
-        className: PATROL_CLASSES.tender.label,
-        color: PATROL_CLASSES.tender.color,
-        size: PATROL_CLASSES.tender.size, accel: PATROL_CLASSES.tender.accel,
-        rail: { type: 'route', route: patrolRoute('n' + (id - 1), '', tspec, TA, TB, sys, rng) }
-      });
+      /* MEASURED. The first cut included `orbital`, which is the commonest
+       * role in the game, and produced 218 tugs across forty systems —
+       * five and a half per system, every one of them a patrol that has to
+       * be woken and steered near the player. That is not a service, it is
+       * clutter with a frame cost.
+       *
+       * A tug belongs where ships are actually worked on: a shipyard, a
+       * highport, a fleet carrier. An ordinary orbital port is a place
+       * ships stop, not a place they are repaired. */
+      var PORT_TUG_ROLES = { highport: 1, shipyard: 1, carrier: 1 };
+      /* DOCTRINE 2, and this block is exactly why the doctrine exists. The
+       * tug's name, its number and its route were first drawn from the
+       * shared patrol `rng` — a variable number of draws, once per
+       * qualifying port, BEFORE the tender loop below. Every capital,
+       * cutter and trader downstream of it moved. Its own substream costs
+       * one allocation and makes the tugs invisible to everything else. */
+      var trng = rng.fork('port-tugs');
+      for (var pt = 0; pt < ports.length; pt++) {
+        var host = ports[pt];
+        var role = host.market && host.market.role;
+        if (!PORT_TUG_ROLES[role]) continue;
+        var near = null, nearD = Infinity;
+        for (var q = 0; q < ports.length; q++) {
+          if (ports[q] === host) continue;
+          var dq = Math.abs(radiusAbout(ports[q], sys.root, sys) -
+                            radiusAbout(host, sys.root, sys));
+          if (dq < nearD) { nearD = dq; near = ports[q]; }
+        }
+        if (!near) continue;
+        var gspec = { cls: 'tug', accel: PATROL_CLASSES.tug.accel,
+                      size: PATROL_CLASSES.tug.size,
+                      color: PATROL_CLASSES.tug.color,
+                      label: PATROL_CLASSES.tug.label };
+        sys.patrols.push({
+          id: 'n' + (id++), kind: 'tug', faction: host.faction || null,
+          name: trng.pick(TUG_NAMES) + ' ' + trng.int(1, 12),
+          className: PATROL_CLASSES.tug.label,
+          color: PATROL_CLASSES.tug.color,
+          size: PATROL_CLASSES.tug.size, accel: PATROL_CLASSES.tug.accel,
+          homePort: host.id,
+          rail: { type: 'route', route: patrolRoute('n' + (id - 1), '', gspec, host, near, sys, trng) }
+        });
+      }
+    })();
+
+    /* A tender for every capital already in the sky, flying beside its
+     * parent. `carriesTender` was stamped on the capital as it was built;
+     * this runs after every capital exists, faction and Syndicate alike,
+     * so neither had to know about the other.
+     *
+     * SIZE IS INHERITED. A capital's own seeded size letter picks the
+     * tender's hull, which is the whole of Astra's rule — a big warship
+     * launches a big tender — and it is the first place in this game where
+     * one ship's size is a fact about another. */
+    (function () {
+      var caps = sys.patrols.filter(function (p) { return p.kind === 'capital'; });
+      /* Own substream, for the same reason the tugs have one: the number of
+       * draws here is the number of capitals, which varies by system. */
+      var drng = rng.fork('capital-tenders');
+      for (var ci = 0; ci < caps.length; ci++) {
+        var cap = caps[ci];
+        var dspec = { cls: 'tender', accel: PATROL_CLASSES.tender.accel,
+                      size: PATROL_CLASSES.tender.size,
+                      color: PATROL_CLASSES.tender.color,
+                      label: PATROL_CLASSES.tender.label };
+        /* It rides its parent's own route: a tender is not stationed
+         * anywhere, it is stationed ON something, and copying the rail is
+         * how two ships keep company without an AI that flies formation. */
+        var route = patrolRoute('n' + id, '', dspec,
+                                sys.byId[cap.rail.route.from],
+                                sys.byId[cap.rail.route.to], sys, drng,
+                                cap.rail.route.t0);
+        route.cruise = cap.rail.route.cruise;
+        route.layover = cap.rail.route.layover;
+        route.period = cap.rail.route.period;
+        sys.patrols.push({
+          id: 'n' + (id++), kind: 'tender',
+          faction: cap.faction, outlaw: !!cap.outlaw,
+          name: drng.pick(TENDER_NAMES),
+          className: PATROL_CLASSES.tender.label,
+          color: PATROL_CLASSES.tender.color,
+          size: PATROL_CLASSES.tender.size * (cap.sizeLetter === 'l' ? 1.25
+                                            : cap.sizeLetter === 's' ? 0.8 : 1),
+          accel: PATROL_CLASSES.tender.accel,
+          sizeLetter: cap.sizeLetter || 'm',
+          parentShip: cap.id,
+          rail: { type: 'route', route: route }
+        });
+      }
     })();
 
     /* Escorts shadow a real freight run — same endpoints, same schedule,

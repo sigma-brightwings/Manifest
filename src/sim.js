@@ -1649,6 +1649,13 @@
      * every ship state has one and the renderer never has to work out which
      * sort of thing it is holding. */
     st.cls = spec.kind;
+    /* A ship that carries its own size letter rather than its class's.
+     * Only a capital and the tender it launches do this today — the tender
+     * is sized to the warship that launched it — but the renderer reads it
+     * off the live state, so it has to survive the copy or a capital's big
+     * tender arrives on screen wearing the middle hull like everyone
+     * else. */
+    if (spec.sizeLetter) st.sizeLetter = spec.sizeLetter;
     return st;
   }
 
