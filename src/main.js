@@ -5579,8 +5579,9 @@
   var _starPos = null;      // this frame's star position, for GL lighting
 
   function draw() {
-    var w = canvas.width / (window.devicePixelRatio || 1);
-    var h = canvas.height / (window.devicePixelRatio || 1);
+    var ps = pixelScale();
+    var w = canvas.width / ps;
+    var h = canvas.height / ps;
     var cam = G.cam;
     if (G.viewMode === 'cockpit') {
       cam.cockpitFov = cockpitFov();
@@ -5589,7 +5590,7 @@
     }
     else cam.build(w, h);
 
-    ctx.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
+    ctx.setTransform(ps, 0, 0, ps, 0, 0);
     /* With the GL layer live the sky is ITS clear colour, and this canvas
      * has to be genuinely transparent or it would paint over the world it is
      * supposed to be an overlay on. Without GL, nothing has changed and the
@@ -6494,6 +6495,118 @@
    * is pinned to the edge of the view on the correct side. That is the case
    * that matters most: being shot from an angle you are not looking at is
    * exactly when you need to be told where to look. */
+  /* ---- weather on the glass ----------------------------------------------
+   *
+   * The cheap half of being inside the weather rather than above it, and
+   * cheap is the requirement rather than an excuse: this draws in the one
+   * view that just had its frame cost cut, so it is a wash, a flash and
+   * some sixty short lines — about two hundred context calls against the
+   * cockpit's six thousand seven hundred. No particle system, no state,
+   * nothing that accumulates.
+   *
+   * It reads the same field the planet is painted with, so the bank you
+   * descended through is the bank that is raining on you.
+   *
+   * INSIDE THE GLASS CLIP, called from between glassBegin and glassEnd —
+   * rain on the canopy has to be cut off by the canopy, or it falls
+   * cheerfully across the instrument panel and the inside of the hull. */
+  var RAIN_LINES = 110;         // at full downpour; fewer as it eases off
+  var RAIN_BUCKET = 0.10;       // seconds of sim time per frame of rain
+
+  function drawCanopyWeather(ctx, cam, w, h) {
+    if (!Weather || !Weather.aloft) return;
+    var wx = Weather.aloft(G.ship, G.sys, G.t);
+    if (!wx) return;
+
+    /* THE LIGHT GOES FIRST. Under a deck the sun is behind several
+     * kilometres of water and the world outside loses its contrast, which
+     * is most of what makes being under weather feel different from being
+     * above it. One fill. */
+    if (wx.gloom > 0.02) {
+      ctx.save();
+      ctx.globalAlpha = Math.min(0.66, wx.gloom * 0.78);
+      /* Neutral and dark. The first wash was a blue-grey and, laid over a
+       * world whose own air is tinted, came out teal — the view from under
+       * an overcast looked like the view from under water. */
+      ctx.fillStyle = wx.storm > 0.3 ? '#0f1116' : '#1c1f26';
+      ctx.fillRect(0, 0, w, h);
+      ctx.restore();
+    }
+
+    /* IN the cloud, not under it: the window fills with grey and you fly
+     * on instruments, which is the entire reason a cloud deck is a place
+     * and not a texture. */
+    if (wx.inCloud > 0.05) {
+      ctx.save();
+      ctx.globalAlpha = Math.min(0.94, wx.inCloud * 1.05);
+      ctx.fillStyle = '#9aa6b8';
+      ctx.fillRect(0, 0, w, h);
+      ctx.restore();
+    }
+
+    /* AND THE LIGHTNING, from underneath. The same bucket and phase the
+     * shader flashes on, so a storm that is firing when seen from orbit is
+     * firing when you are inside it — one sky, two viewpoints. */
+    var sp = global.GLWorld && global.GLWorld.spinOf
+           ? global.GLWorld.spinOf(wx.body, G.t) : null;
+    if (sp && wx.storm > 0.10) {
+      var fire = sp.salt[0];
+      if (fire > 0.55) {
+        var env = Math.exp(-sp.stormPhase * 6.5) +
+                  0.7 * Math.exp(-Math.abs(sp.stormPhase - 0.22) * 18);
+        var lit = Math.min(0.8, env * wx.storm * (0.45 + 0.55 * sp.salt[1]));
+        if (lit > 0.01) {
+          ctx.save();
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.globalAlpha = lit;
+          ctx.fillStyle = '#c8d6ff';
+          ctx.fillRect(0, 0, w, h);
+          ctx.restore();
+        }
+      }
+    }
+
+    if (wx.rain < 0.04) return;
+
+    /* THE STREAKS. Positions are hashed off the frame's own bucket rather
+     * than integrated, so they need no array and no update step, and a
+     * paused game has still rain. The slant is airspeed: rain falls past a
+     * hovering ship and arrives almost flat at five hundred metres a
+     * second, which is the one cue that tells you how fast you are going
+     * when there is nothing outside but grey. */
+    /* Even light rain has to be SEEN. Streak count runs from a third of
+     * the full complement at the first drop, because twenty lines over a
+     * nine-hundred-pixel canopy is a window that needs washing rather than
+     * a window with rain on it. */
+    var n = Math.round(RAIN_LINES * (0.34 + 0.66 * Math.min(1, wx.rain)));
+    if (n < 1) return;
+    var rel = G.ship.vel && wx.body ? V.len(V.sub(G.ship.vel,
+                Sim.bodyState(wx.body, G.sys, G.t).vel)) : 0;
+    var slant = Math.min(0.92, rel / 1.2);          // 0 = straight down
+    var len = 26 + 90 * slant;
+    var bucket = Math.floor(G.t / RAIN_BUCKET);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(214,230,255,' + (0.34 + 0.44 * wx.rain).toFixed(3) + ')';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (var i = 0; i < n; i++) {
+      var hx = hashUnit(i * 2.17 + bucket * 0.911);
+      var hy = hashUnit(i * 5.31 + bucket * 1.373);
+      var x = hx * (w + 200) - 100, y = hy * (h + 200) - 100;
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - len * slant, y + len * (1 - slant * 0.55));
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /* A number in [0,1) from a number. Only ever used for decoration, so it
+   * wants to be fast and spread out rather than good. */
+  function hashUnit(x) {
+    var s = Math.sin(x * 127.1 + 311.7) * 43758.5453;
+    return s - Math.floor(s);
+  }
+
   function drawCanopyShieldFlare(ctx, cam, w, h) {
     var s = G.ship;
     var cap = s.shield ? Combat.MODULES.shield.cap : 0;
@@ -7236,6 +7349,7 @@
      * flares a metre outside the canopy, so you see it through the glass and
      * it should be cut off by the frame exactly as the sky is. */
     drawCanopyShieldFlare(ctx, cam, w, h);
+    drawCanopyWeather(ctx, cam, w, h);
     Render.glassEnd(ctx);
 
     if (shell) {
@@ -11346,7 +11460,7 @@
        * setting changed — and it caught this the first time as row 8. */
       { kind: 'choice', label: 'Render scale', key: '',
         options: RENDER_SCALES.map(function (s) {
-          return Math.round(s * 100) + '%' + (s === 1 ? ' — native' : '');
+          return Math.round(s * 100) + '%' + (s === 1 ? ' — native' : ' — softer, faster');
         }),
         get: function () {
           var i = RENDER_SCALES.indexOf(G.renderScale);
@@ -12234,18 +12348,38 @@
     resize();
     var pct = Math.round(v * 100);
     say('Render scale ' + pct + '%' +
-        (v === 1 ? ' — native' : ' — world upscaled, instruments sharp'), 3);
+        (v === 1 ? ' — native' : ' — everything upscaled, instruments included'), 3);
+  }
+
+  /* HOW MANY REAL PIXELS A CSS PIXEL IS WORTH, in one place.
+   *
+   * Render scale used to move the GL layer and leave the 2D layer at full
+   * device resolution, deliberately, so the instruments stayed sharp. The
+   * cost of that was that the setting had nothing to give in the ONE view
+   * where the 2D layer covers most of the screen: in the cockpit the
+   * shell, the interior and the glass are all 2D, and on a fullscreen
+   * 1080p display at 125% Windows scaling that is a 2400x1350 backing
+   * store being filled every frame.
+   *
+   * Astra: "frames are more important." So the scale now moves both, and
+   * the instruments soften with everything else — which is the honest
+   * shape for a control called Render scale, and at 75% on this hardware
+   * is not a trade most people would notice while flying.
+   *
+   * Used by draw() as well, which must divide by the same number it
+   * multiplied by or the whole frame is drawn at the wrong size. */
+  function pixelScale() {
+    return (window.devicePixelRatio || 1) * (G.renderScale || 1);
   }
 
   function resize() {
-    var dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.floor(window.innerWidth * dpr);
-    canvas.height = Math.floor(window.innerHeight * dpr);
+    var ps = pixelScale();
+    canvas.width = Math.floor(window.innerWidth * ps);
+    canvas.height = Math.floor(window.innerHeight * ps);
     canvas.style.width = window.innerWidth + 'px';
     canvas.style.height = window.innerHeight + 'px';
     if (global.GLWorld && global.GLWorld.available) {
-      global.GLWorld.resize(window.innerWidth, window.innerHeight,
-                            dpr * (G.renderScale || 1));
+      global.GLWorld.resize(window.innerWidth, window.innerHeight, ps);
     }
   }
 

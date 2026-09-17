@@ -164,6 +164,76 @@ console.log('--- what a port says about its own sky ---');
         W.describe(a));
 })();
 
+console.log('--- flying into it ---');
+(function () {
+  /* The deck is a PLACE: above it you look down on the top, inside it the
+   * window fills, below it the rain falls on you. Getting the third of
+   * those backwards is what the first version did — it faded the weather
+   * out as you descended, so five kilometres up under a solid overcast
+   * reported rain 0.03 and gloom 0.04: a sunny afternoon beneath a black
+   * sky. */
+  var sys = null, body = null;
+  ['kawartha', 'elsewhere', 'holton', 'seed-9', 'mirven'].forEach(function (sd) {
+    if (body) return;
+    var s2 = Gen.generateSystem(sd);
+    var b2 = s2.bodies.filter(function (x) {
+      return x.kind === 'planet' && x.atmosphere && x.atmosphere.cloud > 0.5; })[0];
+    if (b2) { sys = s2; body = b2; }
+  });
+  check('there is a cloudy world to fly into', !!body, body && body.name);
+  if (!body) return;
+
+  var air = body.atmosphere, t = 4000;
+  var st = Sim.bodyState(body, sys, t);
+  /* Stand over the thickest cloud we can find, so the readings are about
+   * the deck and not about a gap in it. */
+  var best = null;
+  for (var i = 0; i < 500; i++) {
+    var th = i * 0.61, ph = Math.acos(1 - 2 * ((i * 0.37) % 1));
+    var d = { x: Math.sin(ph) * Math.cos(th), y: Math.sin(ph) * Math.sin(th), z: Math.cos(ph) };
+    var probe = { pos: { x: st.pos.x + d.x * (body.radius + air.top * 0.18),
+                         y: st.pos.y + d.y * (body.radius + air.top * 0.18),
+                         z: st.pos.z + d.z * (body.radius + air.top * 0.18) } };
+    var r0 = W.aloft(probe, sys, t);
+    if (r0 && (!best || r0.cloud > best.c)) best = { d: d, c: r0.cloud };
+  }
+  check('and somewhere thick to fly into', best && best.c > 0.6,
+        best ? best.c.toFixed(2) : 'none');
+  if (!best) return;
+
+  function at(alt) {
+    return W.aloft({ pos: { x: st.pos.x + best.d.x * (body.radius + alt),
+                            y: st.pos.y + best.d.y * (body.radius + alt),
+                            z: st.pos.z + best.d.z * (body.radius + alt) } }, sys, t);
+  }
+  var lo = air.top * W.DECK_LO, hi = air.top * W.DECK_HI;
+  var above = at(hi * 2.6), inside = at((lo + hi) / 2), under = at(lo * 0.4), ground = at(0.2);
+  console.log('  deck ' + lo.toFixed(0) + '-' + hi.toFixed(0) + ' km   ' +
+              'above rain ' + above.rain.toFixed(2) + '  in ' + inside.inCloud.toFixed(2) +
+              '  under ' + under.rain.toFixed(2) + '  ground ' + ground.rain.toFixed(2));
+
+  check('above the deck there is no weather on you', above.rain < 0.02 && above.gloom < 0.02,
+        'rain ' + above.rain.toFixed(3) + ' gloom ' + above.gloom.toFixed(3));
+  check('inside it the window fills', inside.inCloud > 0.5, inside.inCloud.toFixed(2));
+  check('under it, it is raining', under.rain > 0.2, under.rain.toFixed(2));
+  /* THE ONE THE FIRST VERSION FAILED. Descending must not clear the sky. */
+  check('and it is still raining at the ground', ground.rain >= under.rain * 0.95,
+        under.rain.toFixed(3) + ' at ' + (lo * 0.4).toFixed(1) + ' km -> ' +
+        ground.rain.toFixed(3) + ' at 0.2 km');
+  check('and still dark under it', ground.gloom > 0.2, ground.gloom.toFixed(2));
+  check('you are not in cloud once you are under it', under.inCloud < 0.1,
+        under.inCloud.toFixed(2));
+
+  /* Pure, like the rest. */
+  var a1 = at(lo * 0.5), a2 = at(lo * 0.5);
+  check('and the sky you fly into is a fact about the hour',
+        a1.rain === a2.rain && a1.gloom === a2.gloom);
+
+  /* Out in space there is no weather to be in, and asking must not throw. */
+  check('there is no weather in orbit',
+        W.aloft({ pos: { x: st.pos.x + 1e6, y: st.pos.y, z: st.pos.z } }, sys, t) === null);
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

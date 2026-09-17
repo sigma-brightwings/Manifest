@@ -210,6 +210,69 @@
     return sky + '  ·  ' + w + v;
   }
 
+  /* ---- and what it is like where the SHIP is -----------------------------
+   *
+   * The deck is not at the ground and it is not at the top of the air. It
+   * sits in a band a few scale heights up, which is what makes flying down
+   * through it a thing that happens at a particular moment rather than a
+   * fade you are always halfway through. Below the band you are under the
+   * weather and it can rain on you; inside it you are in cloud; above it
+   * you are looking down at the top of it, which is what you see from
+   * orbit.
+   *
+   * Fractions of `top` rather than of the radius, because `top` is already
+   * twelve scale heights — so a thick world's deck is high and a thin
+   * one's is low without a second table to keep in step. */
+  var DECK_LO = 0.10, DECK_HI = 0.26;
+
+  function aloft(ship, sys, t) {
+    var Sim = global.Sim, GL = global.GLWorld;
+    if (!ship || !Sim || !Sim.atmosphereContext || !GL || !GL.spinOf) return null;
+    var atmo = Sim.atmosphereContext(ship.pos, sys, t);
+    if (!atmo) return null;
+    var body = atmo.body, air = body.atmosphere;
+    if (!air || !(air.cloud > 0)) return null;
+
+    var dx = ship.pos.x - atmo.pos.x, dy = ship.pos.y - atmo.pos.y,
+        dz = ship.pos.z - atmo.pos.z;
+    var r = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (!(r > 1e-9)) return null;
+    var alt = r - body.radius;
+    var n = { x: dx / r, y: dy / r, z: dz / r };
+
+    var here = sample(n, GL.spinOf(body, t), hashSeed(body.id), air.cloud);
+    var lo = air.top * DECK_LO, hi = air.top * DECK_HI;
+
+    /* UNDER THE DECK IS UNDER THE DECK, all the way to the ground.
+     *
+     * The first version faded this out as you descended, on some notion of
+     * the weather thinning — which is precisely backwards and was obvious
+     * the moment it was flown: five kilometres up under a solid overcast
+     * reported rain 0.03 and gloom 0.04, a sunny afternoon beneath a sky
+     * that was black. What thins is the cloud ABOVE you, so the only fade
+     * is at the top: full below the deck, gone a little way above it. */
+    var below = 1 - smoothstep(hi, hi * 1.4, alt);
+
+    /* And in the murk, which is its own state: the window fills and you
+     * fly on instruments. Ramped over the outer fifth of the band, or
+     * entering a cloud is a frame rather than a moment. */
+    var edge = (hi - lo) * 0.22;
+    var inside = smoothstep(lo - edge, lo + edge, alt) *
+                 (1 - smoothstep(hi - edge, hi + edge, alt));
+
+    return {
+      body: body, alt: alt, deckLo: lo, deckHi: hi,
+      cloud: here.cloud, storm: here.storm,
+      inCloud: here.cloud * inside,
+      /* Rain falls out of the bottom of the deck, and only from cloud
+       * thick enough to be raining out of. */
+      rain: Math.max(0, here.cloud - 0.25) / 0.75 *
+            (0.35 + 0.65 * here.storm) * below,
+      /* How much of the daylight the deck is keeping off you. */
+      gloom: here.cloud * (0.55 + 0.45 * here.storm) * below
+    };
+  }
+
   /* Does this port have weather worth mentioning at all? An orbital clamp
    * is not in anybody's air. */
   function hasWeather(port) {
@@ -219,7 +282,8 @@
 
   var Weather = {
     K: K, fbm: fbm, hashSeed: hashSeed, sample: sample, lookup: lookup,
-    report: report, describe: describe, hasWeather: hasWeather
+    report: report, describe: describe, hasWeather: hasWeather,
+    aloft: aloft, DECK_LO: DECK_LO, DECK_HI: DECK_HI
   };
 
   global.Weather = Weather;

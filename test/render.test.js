@@ -6023,6 +6023,39 @@ console.log('--- options ---');
   press('Escape');
 })();
 
+/* RENDER SCALE MOVES BOTH LAYERS NOW. It used to shrink the GL world and
+ * leave the 2D layer at full device resolution so the instruments stayed
+ * sharp — which meant the control had nothing to give in the one view
+ * where the 2D layer covers most of the screen. Astra: "frames are more
+ * important." The check is that the backing store actually shrinks,
+ * because that is the only thing that makes a frame cheaper. */
+console.log('--- render scale ---');
+(function () {
+  var was = G.renderScale;
+  function sizeAt(s) {
+    G.renderScale = s;
+    listeners.resize.forEach(function (fn) { fn(); });
+    return canvasStub.width;
+  }
+  var full = sizeAt(1);
+  var half = sizeAt(0.5);
+  var three = sizeAt(0.75);
+  check('the 2D backing store is full size at native', full === 1600, String(full));
+  check('and half the width at 50%', half === 800, String(half));
+  check('and three quarters at 75%', three === 1200, String(three));
+  /* The frame must still be DRAWN in CSS pixels, or every layout number in
+   * the game would move when the setting did. */
+  G.renderScale = 0.5;
+  listeners.resize.forEach(function (fn) { fn(); });
+  var mark = drawn.texts.length;
+  frames(2);
+  check('and the frame still renders cleanly at a reduced scale',
+        errorsSince(mark).length === 0, errorsSince(mark)[0]);
+  G.renderScale = was;
+  listeners.resize.forEach(function (fn) { fn(); });
+  frames(1);
+})();
+
 console.log('--- quit to the main menu ---');
 (function () {
   var keydown = listeners.keydown[0];
