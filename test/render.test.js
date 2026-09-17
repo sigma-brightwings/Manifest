@@ -1164,6 +1164,26 @@ console.log('--- the yard, the board, and a fight on screen ---');
             drawn.texts.slice(fMark2).some(function (t) {
               return /cr\/week/.test(t); }),
             JSON.stringify(drawn.texts.slice(fMark2).slice(0, 8)));
+      /* AND THE DEBT FOLLOWS HER THROUGH THE SALE. Without this, unpaid
+       * berthing was free money: run the arrears up, sell her at full
+       * resale, and the debt went into the bin with the record. */
+      var sellMe = (G.fleet || [])[(G.fleet || []).length - 1];
+      if (sellMe) {
+        sellMe.arrears = 4000;
+        var sellWorth = W.Fleet.resale(sellMe);
+        G.ship.credits = 0;
+        var sellRow = G.hotspots.filter(function (h) {
+          return h.hint && h.hint.indexOf('ON THIS CLAMP') >= 0;
+        })[0];
+        check('her row is clickable where she stands', !!sellRow);
+        if (sellRow) {
+          mousedown({ clientX: sellRow.x + 4, clientY: sellRow.y + 4 });
+          frames(2);
+          check('selling her pays the harbour first',
+                G.ship.credits === sellWorth - 4000,
+                G.ship.credits + ' vs ' + (sellWorth - 4000));
+        }
+      }
       G.yardTab = 'hulls';
       frames(2);
     }

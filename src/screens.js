@@ -1741,9 +1741,18 @@
                     ' — you have to be standing beside a ship to sell her', 6);
                 return;
               }
+              /* THE DEBT COMES OUT OF THE SALE. Without this, unpaid
+               * berthing was free money: run the arrears up for a year,
+               * sell her at full resale, and the debt went into the bin
+               * with the record. The harbour is paid first, as it is when
+               * it forecloses, and for the same reason. */
+              var owed = rec.arrears || 0;
+              var net = Math.max(0, worth - owed);
               Fleet.remove(G, rec.id);
-              s.credits += worth;
-              say('Sold the ' + rec.name + ' where she stood — ' + worth + ' cr', 6);
+              s.credits += net;
+              say('Sold the ' + rec.name + ' where she stood — ' + worth + ' cr' +
+                  (owed > 0 ? ', less ' + owed + ' cr owed on the clamp  ·  ' +
+                              net + ' cr to you' : ''), 6);
             },
             false, { hot: hereNow });
       })(mine[i]);
