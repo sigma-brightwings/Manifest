@@ -5519,11 +5519,16 @@
   /* Buying a hull. Trade-in at 70% of list, everything portable moves
    * across, and the deal is refused rather than allowed to strand cargo:
    * sell down to the new hold first. */
-  function buyHull(G, hullId) {
+  /* `keep` buys the new hull WITHOUT trading the old one in: you pay the
+   * sticker price and the ship you arrived in stays on the clamp as yours.
+   * That is the only way a fleet ever comes into existence, and it is the
+   * same transaction either way — the difference is one term in the price
+   * and whether fleet.js gets a row. */
+  function buyHull(G, hullId, keep) {
     var s = G.ship;
     var to = HULLS[hullId], from = HULLS[s.hullId || 'talon'];
     if (!to || to.id === s.hullId) return { ok: false, why: 'already flying one' };
-    var cost = to.price - Math.round(from.price * 0.7);
+    var cost = keep ? to.price : to.price - Math.round(from.price * 0.7);
     if (cost > 0 && s.credits < cost) return { ok: false, why: 'need ' + cost + ' cr' };
     if (global.Sim.cargoMass(s) > to.cargoCap) {
       return { ok: false, why: 'hold too small for your cargo — sell some first' };
@@ -5533,8 +5538,26 @@
      * sale simply not happening, because the player does not find out until
      * the next fight. Same shape as the cargo refusal above: sell it down
      * yourself, deliberately, first. */
-    var moved = replanFit(s, to);
+    /* KEEPING HER MEANS KEEPING HER GEAR. A trade-in moves the fit across
+     * because the old hull is being taken away; a ship you are keeping is
+     * still a ship, and stripping it on the way out would be the yard
+     * quietly helping itself. So the new hull gets the standard kit and
+     * nothing else, and the old one keeps what was bolted to it. */
+    var moved = keep ? { ok: true, fit: {}, moved: {} } : replanFit(s, to);
     if (!moved.ok) return { ok: false, why: moved.why };
+    var parked = null;
+    if (keep) {
+      /* A ship you are keeping has to be SOMEWHERE, and the only place a
+       * ship can be left is a clamp you are standing on. `G.here` is the
+       * star, not the port — the port is what the ship is docked to. */
+      if (!global.Fleet) return { ok: false, why: 'no harbour master here' };
+      var berth = s.docked && G.sys && G.sys.byId ? G.sys.byId[s.docked] : null;
+      if (!berth) return { ok: false, why: 'you have to be docked to leave a ship' };
+      parked = global.Fleet.park(G, s, berth.id, s.shipName);
+      parked.portName = berth.name;
+      parked.star = G.here ? G.here.id : null;
+      parked.starName = G.here ? G.here.name : null;
+    }
     s.credits -= cost;             // negative cost = they pay you the difference
     /* THE HULL'S BIRTH MARK. Stamped when the ship is bought and never
      * touched again — it is what the cockpit's flair is seeded from, so the
@@ -5565,10 +5588,17 @@
      * fills a gap rather than competing for a slot with something the
      * player actually chose, and reported back so the yard can say it
      * happened instead of leaving it to be discovered mid-robbery. */
+    /* The new hull arrives empty when the old one is being kept — her
+     * cargo went with her, and so did her papers. */
+    if (keep) {
+      s.cargo = {};
+      s.reg = null;
+      s.shipName = null;
+    }
     var fitted = addHullStandard(s);
     syncLegacy(s);
     global.Sim.refreshShip(s);
-    return { ok: true, cost: cost, standard: fitted };
+    return { ok: true, cost: cost, standard: fitted, parked: parked };
   }
 
   /* ---- death ------------------------------------------------------------ */

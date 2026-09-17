@@ -297,6 +297,11 @@
       powers: G.powers || {},
       allegiance: G.allegiance || null,
       owed: G.owed || [],
+      /* THE SHIPS YOU OWN AND ARE NOT SITTING IN. Additive: a career that
+       * predates the fleet loads with an empty one, which is exactly what
+       * it had. Stored whole because a parked ship IS its record — there
+       * is no live object to reconstruct it from. */
+      fleet: G.fleet || [],
       doneMissions: G.doneMissions || {},
       campaigns: G.campaigns || {},
       ledger: G.ledgerLog || []
@@ -413,6 +418,7 @@
     G.powers = data.powers || {};
     G.allegiance = data.allegiance || null;
     G.owed = data.owed || [];
+    G.fleet = data.fleet || [];
     G.doneMissions = data.doneMissions || {};
     G.campaigns = data.campaigns || {};
     G.ledgerLog = data.ledger || [];

@@ -19,7 +19,7 @@
   var V = global.V, K = global.Kepler, Sim = global.Sim,
       Render = global.Render, Eco = global.Economy, Galaxy = global.Galaxy,
       Combat = global.Combat, Missions = global.Missions, Arcs = global.Arcs,
-      Gen = global.Gen;
+      Gen = global.Gen, Fleet = global.Fleet;
 
   /* Wired by main.js at boot. Unpacked to bare names so the moved code is
    * byte-for-byte the code that was tested in its old home. */
@@ -1461,7 +1461,10 @@
      * on one another run off the bottom of any window that also has to show
      * a cargo hold above them. */
     if (!G.yardTab) G.yardTab = 'fit';
-    var tabs = [['fit', 'FITTING'], ['buy', 'BUY'], ['hull', 'HULLS']];
+    /* FLEET is a tab rather than a screen because it is a thing you do at
+     * a yard: it is where you look at what you own, sell one, or — once
+     * orders exist — tell one where to go. */
+    var tabs = [['fit', 'FITTING'], ['buy', 'BUY'], ['hull', 'HULLS'], ['fleet', 'FLEET']];
     for (var ti = 0; ti < tabs.length; ti++) {
       btn(ctx, x + w - 12 - (tabs.length - ti) * 66, barY, 62, 15, tabs[ti][1],
           (function (id) { return function () { G.yardTab = id; }; })(tabs[ti][0]),
@@ -1552,6 +1555,7 @@
     var cardH = 0;
     if (G.yardTab === 'fit') drawYardFit(ctx, x, w, row, s);
     else if (G.yardTab === 'buy') drawYardBuy(ctx, x, w, row, s, port);
+    else if (G.yardTab === 'fleet') drawYardFleet(ctx, x, w, row, s, port);
     else cardH = drawYardHulls(ctx, x, w, row, s, port) || 0;
 
     /* ---- the window ---- */
@@ -1609,6 +1613,56 @@
         ctx.restore();
       }
     }
+  }
+
+  /* --- FLEET: the ships you own and are not sitting in --------------------
+   *
+   * A list, deliberately. Everything a fleet eventually DOES — orders,
+   * crew, swapping seats — hangs off knowing which ships there are and
+   * where, and that is a thing worth being able to see before it is a
+   * thing worth being able to do. Selling is here because a hull you
+   * cannot get rid of is a hull the yard tricked you into.
+   */
+  function drawYardFleet(ctx, x, w, row, s, port) {
+    var mine = Fleet ? Fleet.list(G) : [];
+    var hull = Combat.HULLS[s.hullId || 'talon'];
+
+    /* The ship under your hands, first and unmistakable — a list of your
+     * ships that leaves out the one you are in reads as a bug every time. */
+    row('UNDER YOUR HANDS  ·  ' + (s.shipName || (hull ? hull.name : 'your ship')),
+        (hull ? hull.name : '') + '  ·  here  ·  ' +
+        Math.round(Sim.cargoMass(s)) + ' / ' + s.cargoCap + ' t',
+        function () {}, true);
+
+    if (!mine.length) {
+      row('YOU OWN NO OTHER SHIP', 'buy a hull with KEEP HER and the old one stays yours',
+          function () {}, true);
+      return 0;
+    }
+
+    for (var i = 0; i < mine.length; i++) {
+      (function (rec) {
+        var hereNow = rec.port === s.docked;
+        var worth = Fleet.resale(rec);
+        row(rec.name.toUpperCase() + (hereNow ? '  ·  ON THIS CLAMP' : ''),
+            Fleet.describe(rec, G.sys) + '  ·  worth ' + worth + ' cr',
+            function () {
+              /* Selling is only possible where she is, which is the same
+               * rule as every other transaction in this game: you cannot
+               * trade a hold from the far side of the galaxy either. */
+              if (!hereNow) {
+                say(rec.name + ' is at ' + (rec.portName || 'another port') +
+                    ' — you have to be standing beside a ship to sell her', 6);
+                return;
+              }
+              Fleet.remove(G, rec.id);
+              s.credits += worth;
+              say('Sold the ' + rec.name + ' where she stood — ' + worth + ' cr', 6);
+            },
+            false, { hot: hereNow });
+      })(mine[i]);
+    }
+    return 0;
   }
 
   /* --- FITTING: what is bolted on, and what it costs you ------------------ */
@@ -1812,11 +1866,15 @@
    * mistake the two-step was supposed to prevent. It lives on the card
    * beside the ship instead, where you are looking at the thing you are
    * about to buy. */
-  function buyTheSelectedHull() {
+  function buyTheSelectedHull(keep) {
     var hull = Combat.HULLS[G.yardHull];
     if (!hull) return;
-    var r = Combat.buyHull(G, hull.id);
+    var r = Combat.buyHull(G, hull.id, keep);
     if (!r.ok) { say('No deal: ' + r.why, 5); return; }
+    if (r.parked) {
+      say('The ' + r.parked.name + ' stays on the clamp — she is still yours. ' +
+          'F5, FLEET.', 8);
+    }
     /* Name the standard gear the hull came with, when it is gear the pilot
      * did not already have. A scoop that silently appears is
      * indistinguishable from a bug, and a scoop that silently does NOT
@@ -1887,21 +1945,41 @@
      * same arithmetic buyHull does, said out loud. */
     var here = Combat.HULLS[(G.ship && G.ship.hullId) || 'talon'];
     var cost = hull.price - Math.round((here ? here.price : 0) * 0.7);
-    var short = (G.ship.credits || 0) < cost;
-    var bw = Math.min(190, tw), bx = tx, by = y + h - 28;
-    btn(ctx, bx, by, bw, 20,
-        (cost >= 0 ? 'BUY  —  ' + cost + ' cr'
+    var full = hull.price;
+    var creds = G.ship.credits || 0;
+    var short = creds < cost;
+    /* TWO WAYS TO LEAVE WITH HER, and they are a different transaction
+     * rather than a different price. Trading in is what the yard has
+     * always done: the old hull goes, its gear comes across, and the
+     * difference is what you pay. Keeping her is the sticker price, the
+     * new hull leaves with standard kit only, and the old one stays on
+     * the clamp as yours — which is the only way anybody has ever come to
+     * own two ships, and therefore the only way there is ever anything to
+     * give an order to. */
+    var bw = Math.min(176, (tw - 10) / 2), by = y + h - 28;
+    btn(ctx, tx, by, bw, 20,
+        (cost >= 0 ? 'TRADE IN  —  ' + cost + ' cr'
                    : 'TRADE DOWN  —  +' + (-cost) + ' cr'),
-        buyTheSelectedHull,
+        function () { buyTheSelectedHull(false); },
         { font: 11, disabled: short, hot: !short });
+
+    var docked = !!(G.ship && G.ship.docked);
+    var shortKeep = creds < full;
+    btn(ctx, tx + bw + 10, by, bw, 20, 'KEEP HER  —  ' + full + ' cr',
+        function () { buyTheSelectedHull(true); },
+        { font: 11, disabled: shortKeep || !docked, hot: !shortKeep && docked });
+
+    ctx.save();
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = '#ffb86b';
     if (short) {
-      ctx.save();
-      ctx.font = 'bold 10px ui-monospace, monospace';
-      ctx.fillStyle = '#ffb86b';
-      ctx.fillText('short ' + (cost - (G.ship.credits || 0)) + ' cr',
-                   bx + bw + 8, by + 14);
-      ctx.restore();
+      ctx.fillText('short ' + (cost - creds) + ' cr', tx, by - 6);
+    } else if (!docked) {
+      ctx.fillText('dock to keep a second ship', tx + bw + 10, by - 6);
+    } else if (shortKeep) {
+      ctx.fillText('keeping her costs the full price', tx + bw + 10, by - 6);
     }
+    ctx.restore();
   }
 
   /* Everything bolted to the hull. Read off the ship rather than a list, so

@@ -7,7 +7,7 @@
       Eco = global.Economy, Galaxy = global.Galaxy,
       Combat = global.Combat, Missions = global.Missions,
       Slip = global.Slipspace, Logo = global.Logo,
-      Weather = global.Weather;
+      Weather = global.Weather, Fleet = global.Fleet;
   var DEG = Math.PI / 180;
   var AU = Gen.AU;
 
@@ -284,6 +284,8 @@
     G.standing = {};
     G.wanted = {};
     G.missions = [];
+    /* A new career owns one ship, and it is the one you are in. */
+    G.fleet = [];
     G.doneMissions = {};
     G.campaigns = {};
     G.beams = [];

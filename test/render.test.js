@@ -143,6 +143,8 @@ require('../src/generate.js');
 require('../src/galaxy.js');
 require('../src/sim.js');
 require('../src/combat.js');
+/* The ships you own and are not flying. */
+require('../src/fleet.js');
 require('../src/missions.js');
 /* The campaign layer. It was missing here for as long as it has existed,
  * which is why the yard could hold a reward nobody could collect and no
@@ -1095,23 +1097,64 @@ console.log('--- the yard, the board, and a fight on screen ---');
     check('clicking a hull row selects rather than buys',
           G.ship.hullId === wasHull && G.ship.credits === wasCredits,
           G.ship.hullId + ' / ' + G.ship.credits);
-    var buy = G.hotspots.filter(function (h) {
-      /* Not the BUY TAB, which is also spelled BUY. The card's button
-       * carries the price, and that is what distinguishes them. */
-      return h.hint && /^(BUY|TRADE DOWN)\s+\u2014/.test(h.hint);
-    })[0];
-    check('and the card carries its own BUY button', !!buy,
-          JSON.stringify(G.hotspots.map(function (h) { return h.hint; }).slice(0, 12)));
-    if (buy) {
-      mousedown({ clientX: buy.x + 4, clientY: buy.y + 4 });
-      frames(2);
-      /* The selection moves on afterwards — the list drops the hull you are
-       * now flying — so the thing to check is that the ship changed, not
-       * that the cursor stayed. */
-      check('which is the click that changes the ship',
-            G.ship.hullId !== wasHull && G.ship.credits < wasCredits,
-            G.ship.hullId + ' / ' + G.ship.credits);
+    /* TWO WAYS TO LEAVE WITH HER. Trading in is the old transaction; KEEP
+     * HER pays the sticker price and the ship you arrived in stays on the
+     * clamp as yours, which is the only way anybody comes to own two.
+     * Neither of them is the BUY TAB, which is also spelled BUY — the
+     * card's buttons carry a price and that is what tells them apart. */
+    function cardBtn(re) {
+      return G.hotspots.filter(function (h) { return h.hint && re.test(h.hint); })[0];
     }
+    var tradeIn = cardBtn(/^(TRADE IN|TRADE DOWN)\s+\u2014/);
+    var keepHer = cardBtn(/^KEEP HER\s+\u2014/);
+    check('the card carries a TRADE IN button', !!tradeIn,
+          JSON.stringify(G.hotspots.map(function (h) { return h.hint; }).slice(0, 14)));
+    check('and a KEEP HER button beside it', !!keepHer);
+
+    /* KEEP HER FIRST, because it is the one that has to leave something
+     * behind. */
+    if (keepHer) {
+      var fleetBefore = (G.fleet || []).length;
+      var oldHull = G.ship.hullId;
+      mousedown({ clientX: keepHer.x + 4, clientY: keepHer.y + 4 });
+      frames(2);
+      check('keeping her buys the new hull', G.ship.hullId !== oldHull,
+            oldHull + ' -> ' + G.ship.hullId);
+      check('and leaves the old one on the clamp, still yours',
+            (G.fleet || []).length === fleetBefore + 1,
+            fleetBefore + ' -> ' + (G.fleet || []).length);
+      var parked = (G.fleet || [])[(G.fleet || []).length - 1];
+      check('the parked ship remembers what she is and where she is',
+            parked && parked.hullId === oldHull && parked.port === G.ship.docked,
+            parked ? parked.hullId + ' at ' + parked.port : 'nothing parked');
+      /* And she shows up where a fleet is looked at. */
+      G.yardTab = 'fleet';
+      var fMark2 = drawn.texts.length;
+      frames(2);
+      check('and she is listed under FLEET',
+            drawn.texts.slice(fMark2).some(function (t) {
+              return /UNDER YOUR HANDS/.test(t); }) &&
+            drawn.texts.slice(fMark2).some(function (t) {
+              return /ON THIS CLAMP/.test(t); }),
+            JSON.stringify(drawn.texts.slice(fMark2).slice(0, 8)));
+      G.yardTab = 'hulls';
+      frames(2);
+    }
+
+    tradeIn = cardBtn(/^(TRADE IN|TRADE DOWN)\s+\u2014/);
+    if (tradeIn) {
+      var hull2 = G.ship.hullId, cr2 = G.ship.credits, fleet2 = (G.fleet || []).length;
+      mousedown({ clientX: tradeIn.x + 4, clientY: tradeIn.y + 4 });
+      frames(2);
+      check('trading in changes the ship', G.ship.hullId !== hull2,
+            hull2 + ' -> ' + G.ship.hullId);
+      /* THE DIFFERENCE BETWEEN THE TWO BUTTONS, in one line: a trade-in
+       * takes the old hull away. */
+      check('and does NOT leave anything on the clamp',
+            (G.fleet || []).length === fleet2,
+            fleet2 + ' -> ' + (G.fleet || []).length);
+    }
+    G.fleet = [];
   }
 
   /* AND THE SHELF THE CAMPAIGN LEFT SOMETHING ON. A held reward that the
