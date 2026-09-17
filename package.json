@@ -14,7 +14,7 @@
     "icon": "node tools/make-icon.js",
     "serve": "node tools/serve.js",
     "lint": "node tools/lint-globals.js",
-    "test": "node tools/lint-globals.js && node test/physics.test.js && node test/render.test.js && node test/cockpit.test.js && node test/economy.test.js && node test/nodes.test.js && node test/ships.test.js && node test/berths.test.js && node test/galaxy.test.js && node test/weather.test.js && node test/crew.test.js && node test/combat.test.js && node test/arcs.test.js",
+    "test": "node tools/lint-globals.js && node test/physics.test.js && node test/render.test.js && node test/cockpit.test.js && node test/economy.test.js && node test/nodes.test.js && node test/ships.test.js && node test/berths.test.js && node test/galaxy.test.js && node test/weather.test.js && node test/crew.test.js && node test/fleet.test.js && node test/combat.test.js && node test/arcs.test.js",
     "dist": "npm run icon && electron-builder --win --linux",
     "dist:win": "npm run icon && electron-builder --win",
     "dist:linux": "npm run icon && electron-builder --linux"

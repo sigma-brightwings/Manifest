@@ -1721,8 +1721,17 @@
       (function (rec) {
         var hereNow = rec.port === s.docked;
         var worth = Fleet.resale(rec);
+        /* What she costs you standing there. Shown per ship rather than as
+         * a total, because the decision the player is making on this row is
+         * whether to keep THIS hull. Arrears take the slot when there are
+         * any: a bill you are behind on is more urgent news than a bill you
+         * are not. */
+        var owed = rec.arrears || 0;
+        var upkeep = owed > 0
+          ? '  ·  ' + owed + ' cr OWED'
+          : '  ·  ' + Fleet.berthFee(rec) + ' cr/week';
         row(rec.name.toUpperCase() + (hereNow ? '  ·  ON THIS CLAMP' : ''),
-            Fleet.describe(rec, G.sys) + '  ·  worth ' + worth + ' cr',
+            Fleet.describe(rec, G.sys) + upkeep + '  ·  worth ' + worth + ' cr',
             function () {
               /* Selling is only possible where she is, which is the same
                * rule as every other transaction in this game: you cannot

@@ -1118,6 +1118,10 @@ console.log('--- the yard, the board, and a fight on screen ---');
     if (keepHer) {
       var fleetBefore = (G.fleet || []).length;
       var oldHull = G.ship.hullId;
+      /* SOMEBODY ABOARD, so the transfer has something to get wrong. The
+       * first version of Fleet.record wrote `crew: []` and quietly
+       * dismissed every hand on the deck the moment you kept her. */
+      G.ship.crew = [{ id: 'c|test', name: 'Test Hand', role: 'pilot', rating: 4 }];
       mousedown({ clientX: keepHer.x + 4, clientY: keepHer.y + 4 });
       frames(2);
       check('keeping her buys the new hull', G.ship.hullId !== oldHull,
@@ -1129,6 +1133,21 @@ console.log('--- the yard, the board, and a fight on screen ---');
       check('the parked ship remembers what she is and where she is',
             parked && parked.hullId === oldHull && parked.port === G.ship.docked,
             parked ? parked.hullId + ' at ' + parked.port : 'nothing parked');
+      /* THE PEOPLE STAY WITH THE HULL THEY SIGNED ON TO — and do not also
+       * stay on the new one, which would clone them and pay them twice. */
+      check('and she keeps the hand who was aboard her',
+            parked && parked.crew && parked.crew.length === 1 &&
+            parked.crew[0].id === 'c|test',
+            parked ? JSON.stringify(parked.crew) : 'nothing parked');
+      check('while the new hull leaves the yard with an empty deck',
+            (G.ship.crew || []).length === 0,
+            JSON.stringify(G.ship.crew));
+      /* Her clocks start the moment she goes on the clamp, so she is not
+       * handed a career's worth of back rent at the first desk. */
+      check('and her berth is paid up to now, not to the epoch',
+            parked && parked.berthTo === parked.wagesTo &&
+            G.t - parked.berthTo < 60,        // the frames since the sale
+            parked ? parked.berthTo + ' / ' + G.t : 'nothing parked');
       /* And she shows up where a fleet is looked at. */
       G.yardTab = 'fleet';
       var fMark2 = drawn.texts.length;
@@ -1138,6 +1157,12 @@ console.log('--- the yard, the board, and a fight on screen ---');
               return /UNDER YOUR HANDS/.test(t); }) &&
             drawn.texts.slice(fMark2).some(function (t) {
               return /ON THIS CLAMP/.test(t); }),
+            JSON.stringify(drawn.texts.slice(fMark2).slice(0, 8)));
+      /* And what she costs to leave there. A weekly charge the fleet page
+       * never mentions is a charge that arrives as a surprise. */
+      check('and the page says what the clamp costs',
+            drawn.texts.slice(fMark2).some(function (t) {
+              return /cr\/week/.test(t); }),
             JSON.stringify(drawn.texts.slice(fMark2).slice(0, 8)));
       G.yardTab = 'hulls';
       frames(2);

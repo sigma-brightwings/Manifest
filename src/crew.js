@@ -133,6 +133,28 @@
     return Math.round(WAGE_BASE * (0.6 + person.rating * 0.34));
   }
 
+  /* ---- the wage actually running ---------------------------------------
+   *
+   * A wage that is printed on a card and never taken is a decoration, and
+   * this file's whole argument is that a crew has to COST something. So the
+   * payroll runs on the clock, in whole days, and the remainder is carried
+   * rather than rounded away — a captain who docks twice in one afternoon
+   * pays for one afternoon, not two.
+   *
+   * `from` is the moment the roster was last paid up to and `paidTo` is the
+   * new one, which ADVANCES EVEN WHEN NOBODY IS ABOARD. Leaving it behind
+   * on an empty deck would mean the next hand signed on inherited a month
+   * of back pay they were not there for.
+   */
+  var WAGE_DAY = 86400;
+  function payrollDue(crew, from, to) {
+    var days = Math.floor(((to - from) || 0) / WAGE_DAY);
+    if (!(days > 0)) return { days: 0, cr: 0, paidTo: from };
+    var cr = 0, list = crew || [];
+    for (var i = 0; i < list.length; i++) cr += dailyWage(list[i]) * days;
+    return { days: days, cr: Math.round(cr), paidTo: from + days * WAGE_DAY };
+  }
+
   /* ---- what a ship needs -----------------------------------------------
    *
    * Derived from the hull and the fit rather than tabulated, which is this
@@ -201,6 +223,7 @@
     HALL_WINDOW: HALL_WINDOW,
     forHire: forHire, make: make, personName: personName,
     signingFee: signingFee, dailyWage: dailyWage,
+    WAGE_DAY: WAGE_DAY, payrollDue: payrollDue,
     needsCrew: needsCrew, aboard: aboard, best: best,
     turretCrewing: turretCrewing, canBeOrdered: canBeOrdered,
     describe: describe

@@ -215,6 +215,10 @@
          * one is hired, which is the rule working rather than the save
          * being wrong. */
         crew: (s.crew || []).slice(),
+        /* And what they are paid up to. Absent in an older career, which
+         * settleAccounts reads as "starts now" rather than as a decade of
+         * back pay. */
+        wagesTo: s.wagesTo,
         /* The racks themselves, copied rather than referenced so a later
          * shot cannot edit a snapshot that has already been taken. The two
          * fields above are the ARMED rack's view of this and are written
@@ -372,6 +376,7 @@
     s.fuel = d.fuel; s.thrusterFuel = d.thrusterFuel;
     s.milArmed = d.milArmed;
     s.crew = (d.crew || []).slice();
+    s.wagesTo = (d.wagesTo == null) ? G.t : d.wagesTo;
     s.missileId = d.missileId; s.missileBatch = d.missileBatch;
     /* A save from before racks has none, and Combat.racksOf builds the one
      * rack its counter describes the first time anything asks — so the

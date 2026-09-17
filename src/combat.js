@@ -5641,6 +5641,10 @@
       s.cargo = {};
       s.reg = null;
       s.shipName = null;
+      /* AND HER PEOPLE. The crew went into the fleet record with the hull
+       * they signed on to — see Fleet.record — so leaving them on the new
+       * ship as well would clone every hand aboard and pay them twice. */
+      s.crew = [];
     }
     var fitted = addHullStandard(s);
     syncLegacy(s);
@@ -5653,6 +5657,11 @@
    * of the hull. Credits, standing and warrants are part of you. */
   function stripForRespawn(ship) {
     ship.cargo = {};
+    /* AND THE PEOPLE. The hull is gone and they were in it. Leaving the
+     * roster standing would have you paying a gunner who went down with
+     * the ship, which is the payroll finding the bug for you — and a crew
+     * that survives every crash is a crew that never mattered. */
+    ship.crew = [];
     ship.shieldHp = 0;
     ship.heatShed = 0;
     ship.missiles = 0;

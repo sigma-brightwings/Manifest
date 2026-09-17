@@ -1184,6 +1184,10 @@
      * ever fly under this seed. The career keeps the code; hulls come and
      * go. */
     G.ship.reg = Sim.regCode(G.seed + '|player');
+    /* The payroll clock starts when the ship does, rather than at the
+     * epoch — a fresh career that docks on day three owes three days of
+     * wages to a deck that has been hers for three days. */
+    G.ship.wagesTo = atTime;
     Sim.refreshShip(G.ship);
     G.reported = false;
     G.dockTarget = null;
@@ -3484,6 +3488,21 @@
     say(text, 3);
   }
 
+  /* ---- the bill ----------------------------------------------------------
+   *
+   * Wages and berthing were both things the game PRINTED and never took.
+   * The arithmetic is Fleet.settle — it belongs with the harbour master and
+   * it is testable without a screen — and this is only the desk it happens
+   * at: docking, because that is the one place in this game where money has
+   * ever changed hands and the one moment a player is looking at their
+   * credits. */
+  function settleAccounts() {
+    if (!Fleet || !Fleet.settle) return [];
+    var lines = Fleet.settle(G, G.t);
+    for (var j = 0; j < lines.length; j++) logTrade(lines[j]);
+    return lines;
+  }
+
   /* Fuel is a commodity like any other: it is bought from the port's own
    * hydrogen stock at the port's own hydrogen price, which is why refuelling
    * at a gas-giant refinery is cheap and refuelling at a farming co-op is
@@ -4713,6 +4732,9 @@
          not a berth you stole. */
       if (arrivedAt) Combat.arriveAtPort(G, arrivedAt, HOOKS,
                                          Sim.berthStatus(arrivedAt, G.sys, G.t, G.ship));
+      /* And the desk takes what it is owed — wages and berthing, settled
+       * off their clocks. See settleAccounts. */
+      settleAccounts();
     }
     G.wasDocked = !!G.ship.docked;
 
