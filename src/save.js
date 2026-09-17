@@ -287,6 +287,24 @@
        * field and comes back with nobody talking, which is the correct
        * reading of "this career predates witnesses being buyable". */
       pendingReport: G.pendingReport || null,
+      /* Live distress calls. A mayday can easily outlive a session — the
+       * responder may be eighteen hours out — so a call that vanished on
+       * save would strand the pilot it was the answer to.
+       *
+       * `victim` is dropped on the way out: it is a live spec reference,
+       * and specs are rebuilt from their rails whenever t moves, so
+       * writing one would persist a ship that no longer exists. Only the
+       * dormant answer path reads it, and a reloaded call simply cannot be
+       * answered for standing — which is correct, because the thing you
+       * would have been rescuing is not there any more either. */
+      distress: (G.distress || []).map(function (c) {
+        return {
+          from: c.from, name: c.name, reg: c.reg, cls: c.cls,
+          faction: c.faction, kind: c.kind, mine: !!c.mine, want: c.want,
+          pos: c.pos, at: c.at, until: c.until,
+          answeredBy: c.answeredBy || null, etaAt: c.etaAt || null
+        };
+      }),
       /* An order to leave outlives a save — it is cleared by getting rid of
        * the cargo, not by quitting to the menu. */
       expelled: G.expelled || null,
@@ -423,6 +441,7 @@
     G.wanted = data.wanted || {};
     G.queueJumps = data.queueJumps || {};
     G.pendingReport = data.pendingReport || null;
+    G.distress = data.distress || [];
     G.expelled = data.expelled || null;
     G.corruptionShift = (data.corruptionShift && typeof data.corruptionShift === 'object')
       ? data.corruptionShift : {};

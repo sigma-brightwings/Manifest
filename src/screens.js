@@ -450,6 +450,33 @@
     var out = [];
     var i;
 
+    /* Live distress calls, above everything, at range 0 for the same
+     * reason the police channel is: a call is a transmission, not a place,
+     * and the moment you want it is the moment you should not be scrolling
+     * for it.
+     *
+     * These are read straight off `G.distress` rather than kept in step
+     * with it, so a line here cannot survive the call it describes. Phase
+     * 13's rule — every line must be true — is enforced by there being
+     * only one copy of the truth. */
+    var calls = (G.distress || []);
+    for (i = 0; i < calls.length; i++) {
+      var dc = calls[i];
+      var away = V.dist(dc.pos, G.ship.pos);
+      var what = dc.mine
+        ? 'YOUR MAYDAY — ' + Combat.maydayWord(dc.kind)
+        : Combat.offenceWord(dc.kind);
+      out.push({
+        kind: 'distress', obj: dc, call: dc,
+        name: (dc.mine ? 'MAYDAY  ' : 'DISTRESS  ') + dc.name +
+              (dc.reg ? '  ' + dc.reg : ''),
+        range: 0, sortAway: away,
+        who: what + '  ·  ' + (away < 1000 ? away.toFixed(0) + ' km'
+                                           : (away / 1000).toFixed(0) + 'k km'),
+        color: dc.mine ? '#ffd36b' : '#ff5a5a'
+      });
+    }
+
     /* Police channels, one per faction flying a flag here.
      *
      * Range 0 on purpose, so they sort to the top of a list that is
@@ -703,6 +730,62 @@
    * work and this is the shape it will grow into. */
   function commsOptions(c) {
     var opts = [];
+
+    /* A live call on the band. Your own gives you the state of the answer;
+     * somebody else's gives you the one action worth having. */
+    if (c.kind === 'distress') {
+      var call = c.call;
+      if (call.mine) {
+        var who = null, pats = (G.sys.patrols || []);
+        for (var pi = 0; pi < pats.length; pi++) {
+          if (pats[pi].id === call.answeredBy) { who = pats[pi]; break; }
+        }
+        opts.push({
+          label: who ? 'Answering: ' + who.name : 'Nobody is answering',
+          enabled: false,
+          note: who
+            ? (call.etaAt ? 'arrives in ' + fmtTime(Math.max(0, call.etaAt - G.t)) : 'inbound')
+            : 'no ' + (call.want === Combat.HELP_TENDER ? 'tender' : 'patrol') + ' in this system',
+          fn: function () {}
+        });
+        opts.push({
+          label: 'Stand down the call', enabled: true,
+          note: 'stops transmitting',
+          fn: function () {
+            Combat.releaseResponder(G.sys, call);
+            G.distress = (G.distress || []).filter(function (x) { return x !== call; });
+            say('Mayday cancelled.', 4);
+          }
+        });
+        return opts;
+      }
+      var reach = V.dist(G.ship.pos, call.pos);
+      var close = reach <= Combat.WITNESS_RANGE;
+      opts.push({
+        label: 'Answer the call', enabled: close && !call.answeredBy,
+        /* DORMANT: nothing in this build can attack an NPC, so no call but
+         * your own can currently appear here with an attacker to drive off.
+         * The button is real and so is what it does — see answerDistress. */
+        note: call.answeredBy ? 'already answered'
+            : close ? 'you are near enough to help'
+            : 'too far from the scene to be any use',
+        fn: function () {
+          var r = Combat.answerDistress(G.sys, G, G.t, call, hooksFor());
+          say(r.ok ? 'Answered — ' + call.name + ' will remember it'
+                   : 'Cannot answer: ' + r.why, 5);
+        }
+      });
+      opts.push({
+        label: 'Mark the scene', enabled: true,
+        note: fmtDist(reach) + ' away',
+        fn: function () {
+          G.navTarget = { kind: 'point', pos: call.pos, name: call.name + ' (distress)' };
+          say('Scene marked — ' + call.name + ', ' + fmtDist(reach) + ' out', 5);
+        }
+      });
+      return opts;
+    }
+
     if (c.kind === 'authority') {
       /* The police channel. Reporting a crime is a later piece of work;
        * these are the two you need when the trouble is your own. */
@@ -728,6 +811,39 @@
         label: 'Report a crime', enabled: false,
         note: 'channel not staffed for this yet',
         fn: function () {}
+      });
+
+      /* The mayday lives on the police channel because that is where a
+       * pilot in trouble looks, even when what they actually need is a
+       * tender. Two buttons rather than one, because "help" is not a
+       * single service and picking wrong should be possible: a tender
+       * brings fuel and a tow, security brings guns, and neither does the
+       * other's job.
+       *
+       * Both are enabled in flight whatever is wrong. Gating them on being
+       * out of fuel would mean the one time you could not call is the
+       * moment before it becomes an emergency. */
+      var flying = !G.ship.docked && !G.ship.landed;
+      var already = (G.distress || []).filter(function (x) { return x.mine; })[0];
+      opts.push({
+        label: 'MAYDAY — request a fuel tender',
+        enabled: flying,
+        note: already ? 'already transmitting' :
+              flying ? Combat.maydayWord(Combat.maydayReason(G)) : 'you are berthed',
+        fn: function () {
+          var r = Combat.mayday(G.sys, G, G.t, Combat.HELP_TENDER, hooksFor());
+          if (!r.ok) say('Cannot transmit: ' + r.why, 4);
+        }
+      });
+      opts.push({
+        label: 'MAYDAY — request security',
+        enabled: flying,
+        note: already ? 'already transmitting' :
+              flying ? 'guns, not fuel' : 'you are berthed',
+        fn: function () {
+          var r = Combat.mayday(G.sys, G, G.t, Combat.HELP_SECURITY, hooksFor());
+          if (!r.ok) say('Cannot transmit: ' + r.why, 4);
+        }
       });
       return opts;
     }

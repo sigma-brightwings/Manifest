@@ -2699,7 +2699,41 @@ It gives the existing systems something to push against:
 
 ---
 
-## Phase 13 — comms chatter
+## ⚠️ Phase 13 — comms chatter — DISTRESS CALLS BUILT
+
+*The distress line below is **built**: a call is now a real signal in
+`G.distress` with a name, a registration, a position and an offence, shown
+in the comms list, answerable, and with a responder dispatched to the
+scene. The player can transmit their own and choose **a fuel tender or
+security**. The other four chatter lines are unstarted.*
+
+**Two things worth carrying forward from building it.**
+
+**The word "distress" had been a lie for the whole life of the codebase.**
+`distressAt` existed, the timer expired, `report()` added a bounty, and
+nothing in the universe had heard anything — no line, no position, no
+responder. It was an accounting delay wearing the name of a scream. The
+fix was not the timer, which was fine; it was that nothing downstream of
+it existed.
+
+**Every scene is the player's position, and that is a fact about this
+build rather than a shortcut.** `steerNpc` could only ever aim at the
+player's ship, and `damageNpc` has no caller but the player's own guns —
+so no NPC can attack another NPC and no third-party victim exists. The
+responder is therefore steered to a stored POSITION (`respondPos`) even
+though that position is always near the player today, because a cutter
+flying to a robbery two moons away is precisely what Phase 9 will need and
+a shortcut here would have to be undone.
+
+**`answerDistress` is written, tested and dormant** for the same reason:
+there is nothing to rescue until pirates hunt traders. It credits standing
+with the victim's flag and makes the rescued ship a witness *for* you —
+spending the reputation and witness systems rather than inventing a
+currency.
+
+---
+
+## Phase 13 — comms chatter (the remaining four lines)
 
 The system should sound inhabited. Traffic already exists, is already
 deterministic, and already has names, registrations, factions and

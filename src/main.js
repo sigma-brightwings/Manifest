@@ -4873,7 +4873,15 @@
 
     if (G.ship.fuelOut && !G.fuelWarned) {
       G.fuelWarned = true;
-      say('Reaction mass exhausted — no thrust. Docking refills it free.', 7);
+      /* This line used to end "Docking refills it free", which was true and
+       * useless: it was said to somebody who has no thrust and therefore
+       * cannot dock. It named the one exit and then pointed at the door
+       * they could no longer reach. Now it points at the exit that exists
+       * from where they actually are. */
+      var callingAlready = (G.distress || []).some(function (c) { return c.mine; });
+      say('Reaction mass exhausted — no thrust.' +
+          (callingAlready ? '  Your mayday is transmitting.'
+                          : '  F4 COMMS: MAYDAY for a fuel tender.'), 8);
     }
     if (G.ship.thrusterFuel > 0.01) G.fuelWarned = false;
 

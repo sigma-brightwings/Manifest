@@ -1736,9 +1736,28 @@
                  : spec.kind === 'pirate' ? PIRATE_STANDOFF : POLICE_STANDOFF;
 
     var aim;
+    var matchVel = ship.vel;
     if (spec.mode === 'breakoff') {
       // Run for it: aim well past the player's far side.
       aim = V.addScaled(live.pos, V.norm(V.sub(live.pos, ship.pos)), SLEEP_RANGE);
+      matchVel = V.zero();
+    } else if (spec.mode === 'respond' && spec.respondPos) {
+      /* ANSWERING A CALL. Every other mode in this function steers relative
+       * to the player, which was true of everything an NPC had ever been
+       * asked to do — and is exactly the assumption that stops a cutter
+       * flying to a robbery happening somewhere else.
+       *
+       * A responder is given a POSITION. Today that position is always near
+       * the player, because the player is the only thing in this build that
+       * can be in trouble or cause it, so nothing about the behaviour looks
+       * different yet. What is different is that the aim point is no longer
+       * a synonym for `ship`, which is the whole of what a Phase 9 pirate
+       * holding up a freighter two moons away will need.
+       *
+       * Station-keeping velocity is zero rather than the player's: the
+       * scene is a place, and a place is not moving. */
+      aim = V.clone(spec.respondPos);
+      matchVel = V.zero();
     } else {
       // Hold station beside the player, on whatever bearing we came in from.
       var bearing = range > 1e-6 ? V.scale(toShip, -1 / range) : { x: 1, y: 0, z: 0 };
@@ -1746,7 +1765,7 @@
     }
 
     var offset = V.sub(aim, live.pos);
-    var vErr = V.sub(spec.mode === 'breakoff' ? V.zero() : ship.vel, live.vel);
+    var vErr = V.sub(matchVel, live.vel);
     var w = 0.010;                              // rad/s, closes in ~100 s
     var cmd = {
       x: offset.x * w * w + vErr.x * 2 * w,

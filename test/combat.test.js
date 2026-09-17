@@ -157,6 +157,123 @@ section('--- no hull is locked out of a weapon ---');
   }
 })();
 
+section('--- a distress call is a signal, not a bounty timer ---');
+(function () {
+  var G = makeG();
+  var victim = fakeVictim(G, { kind: 'trader', cls: 'freighter', range: 5,
+                               name: 'Coldwater Drover', faction: 'testfac' });
+
+  /* The squawk. Before this, the timer expired, a bounty appeared, and
+   * nothing in the universe had heard a thing. */
+  Combat.broadcastDistress(G.sys, G, 0, victim, 'assault', HOOKS);
+  var calls = Combat.distressList(G);
+  check('a squawk puts a call on the air', calls.length === 1);
+  check('and the call names the ship that is actually transmitting',
+        calls[0].name === 'Coldwater Drover' && calls[0].mine === false,
+        calls[0].name);
+  check('and says what is happening to it',
+        Combat.offenceWord('assault') === 'under attack' &&
+        Combat.offenceWord('demand') === 'being held up' &&
+        Combat.offenceWord('kill') === 'destroyed');
+
+  /* One transmitter, one call: a ship shot repeatedly does not flood the
+   * band with copies of itself. */
+  Combat.broadcastDistress(G.sys, G, 5, victim, 'kill', HOOKS);
+  check('a second hit updates the call rather than adding one',
+        Combat.distressList(G).length === 1 &&
+        Combat.distressList(G)[0].kind === 'kill');
+
+  check('a squawk is news and goes stale',
+        (function () { Combat.updateDistress(G.sys, G, 5 + Combat.DISTRESS_LIFE + 1, HOOKS);
+                       return Combat.distressList(G).length === 0; })());
+})();
+
+section('--- a mayday names what it wants ---');
+(function () {
+  var G = makeG();
+  G.ship.thrusterFuel = 0;
+
+  check('the emergency is read off the ship, not asked for',
+        Combat.maydayReason(G) === 'stranded',
+        Combat.maydayWord(Combat.maydayReason(G)));
+
+  var r = Combat.mayday(G.sys, G, 0, Combat.HELP_TENDER, HOOKS);
+  check('a tender call is transmitted', r.ok && !!r.call.mine);
+  check('and a tender is what answers it',
+        !r.responder || r.responder.kind === 'tender',
+        r.responder ? r.responder.kind : 'none in system');
+
+  /* The bug the arithmetic caught: a beacon that lapses before the
+   * responder can cross the system is the dead end wearing a rescue's
+   * clothes. */
+  if (r.responder) {
+    check('the beacon outlives the answer it summoned',
+          r.call.until > r.call.etaAt,
+          'until ' + Math.round(r.call.until) + 's vs eta ' + Math.round(r.call.etaAt) + 's');
+    check('and the responder is steered to the SCENE, not to the player',
+          r.responder.mode === 'respond' && !!r.responder.respondPos);
+  }
+
+  /* Services do not substitute for one another. */
+  var G2 = makeG();
+  var r2 = Combat.mayday(G2.sys, G2, 0, Combat.HELP_SECURITY, HOOKS);
+  check('a security call is answered by guns, never by a tender',
+        !r2.responder || r2.responder.kind === 'police' || r2.responder.kind === 'navy',
+        r2.responder ? r2.responder.kind : 'none in system');
+
+  check('eligibility is by service',
+        Combat.eligibleResponder({ kind: 'tender' }, Combat.HELP_TENDER) &&
+        !Combat.eligibleResponder({ kind: 'tender' }, Combat.HELP_SECURITY) &&
+        Combat.eligibleResponder({ kind: 'police' }, Combat.HELP_SECURITY) &&
+        !Combat.eligibleResponder({ kind: 'police' }, Combat.HELP_TENDER));
+
+  /* Silence has to be reported. A frontier with nobody in it is the case
+   * this most needs to get right. */
+  var G3 = makeG();
+  var bare = { patrols: [], bodies: G3.sys.bodies, byId: G3.sys.byId, seed: G3.sys.seed };
+  G3.sys = bare;
+  var r3 = Combat.mayday(bare, G3, 0, Combat.HELP_TENDER, HOOKS);
+  check('nobody coming is said out loud, not left silent',
+        r3.ok && !r3.responder && /nobody is coming/i.test(r3.text), r3.text);
+
+  /* Standing down releases the responder, or a cutter station-keeps over
+   * an empty patch of sky for the rest of the game. */
+  var G4 = makeG();
+  var r4 = Combat.mayday(G4.sys, G4, 0, Combat.HELP_TENDER, HOOKS);
+  if (r4.responder) {
+    Combat.releaseResponder(G4.sys, r4.call);
+    check('standing down hands the responder back its own life',
+          !r4.responder.respondPos && r4.responder.mode !== 'respond');
+  }
+})();
+
+section('--- answering somebody else (dormant until Phase 9) ---');
+(function () {
+  /* Nothing in this build can attack an NPC — damageNpc has no caller but
+   * the player's own guns — so no third-party victim exists to rescue.
+   * Tested directly so the reward path is not invented in a hurry the day
+   * pirates start hunting traders. */
+  var G = makeG();
+  var victim = fakeVictim(G, { kind: 'trader', cls: 'freighter', range: 5,
+                               name: 'Halcyon Packet', faction: 'testfac' });
+  var call = Combat.broadcastDistress(G.sys, G, 0, victim, 'assault', HOOKS);
+  G.standing.testfac = 0;
+
+  var far = Combat.answerDistress(G.sys, G, 0,
+    { name: 'x', pos: { x: 9e9, y: 0, z: 0 }, faction: 'testfac' }, HOOKS);
+  check('you cannot answer a call you are nowhere near', !far.ok, far.why);
+
+  var res = Combat.answerDistress(G.sys, G, 0, call, HOOKS);
+  check('answering credits standing with the victim\'s flag',
+        res.ok && G.standing.testfac === Combat.RESCUE_STANDING,
+        String(G.standing.testfac));
+  check('and the ship you saved will speak for you', !!victim.vouchesFor);
+  check('a call cannot be answered twice',
+        !Combat.answerDistress(G.sys, G, 0, call, HOOKS).ok);
+  check('and your own mayday is not something you answer',
+        !Combat.answerDistress(G.sys, G, 0, { mine: true }, HOOKS).ok);
+})();
+
 section('--- merchantmen shoot back, shuttles do not ---');
 (function () {
   check('a freighter counts as armed', Combat.isArmedNpc({ cls: 'freighter' }));

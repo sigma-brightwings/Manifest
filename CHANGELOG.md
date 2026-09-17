@@ -17,6 +17,59 @@ full design and the phases still outstanding.
 
 ### Added
 
+- **Distress calls are signals now, not a bounty timer.** `distressAt` has
+  existed since the law did, and the word had been a lie for the whole life
+  of the codebase: the timer expired, `report()` added a bounty, and
+  nothing in the universe had heard anything. No line, no position, no
+  responder, no way to answer one.
+
+  A call is an entry in `G.distress` carrying who is transmitting, their
+  registration, where they are, what is happening to them, and when the
+  transmission lapses. The comms list reads that list directly rather than
+  keeping a copy in step with it, so a line on the panel cannot outlive the
+  call it describes — Phase 13's rule (*every line must be true*) enforced
+  by there being one account of the truth.
+
+  **You can transmit your own, and choose what you are asking for.** A fuel
+  tender or security — two genuinely different services that do not
+  substitute for one another, so asking the wrong one is a real mistake the
+  game lets you make. The emergency itself is read off the ship rather than
+  chosen from a menu: out of reaction mass, hull critical, out of jump fuel.
+
+  **This closes a real dead end.** Running the reaction mass out used to
+  print *"Docking refills it free"* to a pilot with no thrust, naming the
+  one exit and pointing at a door they could no longer reach. It now points
+  at the exit that exists from where they are.
+
+  **Two things the arithmetic caught during the build:**
+
+  The first version gave every call a 90-second life. The nearest patrol
+  in the test system was **34.7 million km away — eighteen honest hours**
+  at a cutter's real acceleration — so the beacon would have lapsed while
+  the answer was still accelerating: the dead end again, wearing a rescue's
+  clothes. A mayday now transmits until the responder arrives; a squawk
+  about a fight still goes stale in ninety seconds, because news does.
+
+  And storing the rescue witness as `vouchesFor = t` was a trap, because
+  `t` is 0 at the start of a career: the first rescue you ever performed
+  would have read as no rescue at all everywhere downstream. It is an
+  object now.
+
+  **`steerNpc` learned to fly somewhere that is not the player.** Every
+  mode it had steered relative to the player's ship, which is exactly the
+  assumption that stops a cutter answering a robbery happening elsewhere.
+  Responders are given a position. Today that position is always near the
+  player — `damageNpc` has no caller but the player's own guns, so no NPC
+  can attack another NPC — but writing it as a place rather than a synonym
+  for `ship` is what Phase 9 will need, and a shortcut would have had to be
+  undone.
+
+  **Answering somebody else's call is built, tested and dormant** for that
+  same reason: there is no third-party victim to rescue yet. It credits
+  standing with the victim's flag and makes the rescued ship a witness
+  *for* you, spending systems that already exist rather than inventing a
+  currency.
+
 - **A GUNS page on the dashboard.** Which hardpoint answers which trigger
   used to be visible only on the F5 FIT page, and F5 is the wrong place to
   find it out, because you cannot open the yard while somebody is shooting

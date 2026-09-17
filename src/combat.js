@@ -1508,6 +1508,344 @@
     return civil ? DISTRESS_DELAY_CIVIL : DISTRESS_DELAY_ARMED;
   }
 
+  /* ---- a distress call is a SIGNAL, not a bounty timer -------------------
+   * `distressAt` has existed since the law did, and until now the word was
+   * a lie: the timer expired, `report()` added a bounty, and nothing in the
+   * universe had heard anything. No line on the comms, no position, no
+   * responder, no way to answer one. It was an accounting delay wearing the
+   * name of a scream.
+   *
+   * A call is now an entry in `G.distress`, and it carries what a real one
+   * would: who is transmitting, their registration, where they are, what is
+   * happening to them, and when the transmission lapses. Everything that
+   * reads it — the comms list, the message log, the responder dispatch —
+   * reads THAT, so there is one account of what is being broadcast and the
+   * panel cannot disagree with the world.
+   *
+   * Phase 13's rule governs every line of it: EVERY LINE MUST BE TRUE. A
+   * call names a ship that exists, at a position it is really at, about a
+   * thing that really happened to it.
+   *
+   * Two sources, and today they are asymmetric in a way worth writing down:
+   *
+   *   A VICTIM'S SQUAWK, when the clock started by `crime()` runs out. In
+   *   this build the player is the only thing that can attack anybody, so
+   *   in practice this is the sound of the law being told about YOU. That
+   *   is not a limitation of the feature — it is the sound the mechanic
+   *   should make from the attacker's side, and the window before it is the
+   *   hush window the whole witness economy is built in.
+   *
+   *   A MAYDAY of the player's own, which is the half that closes a real
+   *   dead end: out of reaction mass, `main.js` said "Docking refills it
+   *   free" to somebody who cannot dock. Now you can ask for help, and
+   *   choose what kind.
+   *
+   * What does NOT exist yet is a third party in trouble that you could fly
+   * to and rescue, because no NPC can attack another NPC — `damageNpc` has
+   * no caller but the player's own guns. `answerDistress` below is written
+   * and tested against a victim/attacker pair that nothing currently
+   * produces; it lights up the day Phase 9 lands, and it is deliberately
+   * not pretending to work before then. */
+
+  /* Two lifetimes, because the two kinds of call are different objects.
+   *
+   * A SQUAWK is news: somebody is being shot at over there. It is worth
+   * hearing for as long as the fight plausibly lasts and then it is stale,
+   * so ninety seconds.
+   *
+   * A MAYDAY is a request, and it has to outlive the answer or the whole
+   * feature is a lie. The first build used ninety seconds for both and the
+   * arithmetic caught it immediately: the nearest cutter was 34 million km
+   * away — eighteen honest hours at a patrol's real acceleration — and the
+   * beacon would have lapsed while it was still accelerating. A beacon
+   * transmits until somebody arrives or the batteries go; `until` is
+   * therefore stretched to cover the responder's own ETA. Being stranded a
+   * long way from help stays the punishment, and time compression is how
+   * you serve it. */
+  var DISTRESS_LIFE = 90;          // s — a squawk about a fight
+  var MAYDAY_LIFE = 3600;          // s — a request, floor of one hour
+  var MAYDAY_MARGIN = 600;         // s of grace past the quoted arrival
+  var DISTRESS_MAX = 8;            // never hoard more than this
+  /* Whose problem is it. A mayday says what it wants, because "help" is
+   * not one service: a tender brings fuel and a tow, security brings guns.
+   * Asking the wrong one is a real mistake and the game should let you. */
+  var HELP_TENDER = 'tender';
+  var HELP_SECURITY = 'security';
+
+  function distressList(G) {
+    if (!G.distress) G.distress = [];
+    return G.distress;
+  }
+
+  /* Position of whatever is transmitting, at the moment it transmits. A
+   * call is a recording, not a tracker — it says where the ship WAS, which
+   * is what a real distress beacon tells you and what makes arriving late
+   * a thing that can happen. */
+  function sceneOf(spec, G) {
+    if (spec && spec.live && spec.live.pos) return V.clone(spec.live.pos);
+    if (spec && spec.pos) return V.clone(spec.pos);
+    return V.clone(G.ship.pos);
+  }
+
+  function pushCall(G, call) {
+    var list = distressList(G);
+    /* One call per transmitter. A ship being shot repeatedly updates its
+     * own call rather than filling the band with duplicates of itself. */
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].from === call.from) {
+        call.answeredBy = list[i].answeredBy || null;
+        list[i] = call;
+        return call;
+      }
+    }
+    list.push(call);
+    while (list.length > DISTRESS_MAX) list.shift();
+    return call;
+  }
+
+  /* A victim's squawk reaching the air. Called where the timer fires, so
+   * silencing the victim first still silences the call — that doctrine is
+   * older than this feature and nothing here weakens it. */
+  function broadcastDistress(sys, G, t, spec, kind, hooks) {
+    var call = pushCall(G, {
+      from: spec.id || ('spec' + (spec.name || '?')),
+      name: spec.name || 'Unidentified',
+      reg: spec.reg || null,
+      cls: spec.className || spec.cls || 'ship',
+      faction: spec.faction || null,
+      kind: kind || 'assault',
+      mine: false,
+      want: HELP_SECURITY,          // a ship under attack wants guns
+      pos: sceneOf(spec, G),
+      at: t,
+      until: t + DISTRESS_LIFE,
+      answeredBy: null,
+      victim: spec                  // live reference; not saved, see save.js
+    });
+    if (hooks && hooks.say) {
+      hooks.say('MAYDAY — ' + call.name + (call.reg ? ' (' + call.reg + ')' : '') +
+                ' is transmitting: ' + offenceWord(kind), 6);
+    }
+    if (hooks && hooks.sound) hooks.sound('warn');
+    return call;
+  }
+
+  function offenceWord(kind) {
+    return kind === 'demand' ? 'being held up'
+         : kind === 'kill' || kind === 'killPolice' || kind === 'killNavy' ||
+           kind === 'killLiner' || kind === 'killTender' ? 'destroyed'
+         : 'under attack';
+  }
+
+  /* ---- the player's own call ---------------------------------------------
+   * `want` decides who is being asked, and the two are genuinely different
+   * services rather than a flavour string: a tender carries fuel and a tow
+   * and no guns, security carries guns and will not give you a litre of
+   * anything. Calling for the wrong one wastes the time it takes them to
+   * arrive, which is the correct punishment for not thinking. */
+  function mayday(sys, G, t, want, hooks) {
+    want = want === HELP_TENDER ? HELP_TENDER : HELP_SECURITY;
+    var s = G.ship;
+    if (s.docked || s.landed) {
+      return { ok: false, why: 'you are already berthed — walk to the desk' };
+    }
+    var call = pushCall(G, {
+      from: 'player',
+      name: s.shipName || 'this ship',
+      reg: s.reg || null,
+      cls: 'own ship',
+      faction: null,
+      kind: maydayReason(G),
+      mine: true,
+      want: want,
+      pos: V.clone(s.pos),
+      at: t,
+      until: t + MAYDAY_LIFE,
+      answeredBy: null,
+      victim: null
+    });
+    var res = dispatchResponder(sys, G, t, call, hooks);
+    /* Keep transmitting until they get here. Set AFTER the dispatch,
+     * because the ETA is what decides how long the beacon has to last. */
+    if (call.etaAt) call.until = Math.max(call.until, call.etaAt + MAYDAY_MARGIN);
+    if (hooks && hooks.say) {
+      hooks.say('MAYDAY transmitted — ' +
+                (want === HELP_TENDER ? 'requesting a fuel tender' :
+                                        'requesting security') +
+                '. ' + res.text, 7);
+    }
+    if (hooks && hooks.sound) hooks.sound(res.responder ? 'click' : 'warn');
+    return { ok: true, call: call, responder: res.responder, text: res.text };
+  }
+
+  /* What the player is actually in trouble with, read off the ship rather
+   * than asked for. A mayday that made you pick your own emergency from a
+   * menu would be a form, not a distress call. */
+  function maydayReason(G) {
+    var s = G.ship;
+    if (!(s.thrusterFuel > 0.001)) return 'stranded';
+    if (s.hullHp <= 25) return 'critical';
+    if (!(s.fuel > 0.001)) return 'nofuel';
+    return 'assistance';
+  }
+
+  function maydayWord(kind) {
+    return kind === 'stranded' ? 'out of reaction mass'
+         : kind === 'critical' ? 'hull critical'
+         : kind === 'nofuel'   ? 'out of jump fuel'
+         : 'requesting assistance';
+  }
+
+  /* ---- answering somebody else's ----------------------------------------
+   * DORMANT BY CONSTRUCTION. Nothing in this build can attack an NPC but
+   * the player, so no third-party victim exists to rescue. This is written
+   * against the pair Phase 9 will produce and tested directly, because the
+   * alternative — leaving it out — means the day pirates start hunting
+   * traders the reward path gets invented in a hurry.
+   *
+   * The reward deliberately spends systems that already exist: standing
+   * with the victim's flag, and the victim itself becomes a witness FOR
+   * you. A ship whose life you saved is exactly the witness the hush
+   * economy would otherwise have to be bribed into being. */
+  var RESCUE_STANDING = 8;
+
+  function answerDistress(sys, G, t, call, hooks) {
+    if (!call) return { ok: false, why: 'no such call' };
+    if (call.mine) return { ok: false, why: 'that is your own call' };
+    if (call.answeredBy) return { ok: false, why: 'already answered' };
+    var reach = V.dist(G.ship.pos, call.pos);
+    if (reach > WITNESS_RANGE) {
+      return { ok: false, why: 'too far from the scene to be any use' };
+    }
+    call.answeredBy = 'player';
+    if (call.faction && global.Missions) {
+      global.Missions.bumpStanding(G, call.faction, RESCUE_STANDING);
+    }
+    /* The rescued ship will speak for you. `vouches` is read by the
+     * witness code the same way `sealed` is — a fact about a specific act,
+     * not a permanent licence. */
+    /* An object, not the bare timestamp. `vouchesFor = t` looks tidier and
+     * is a trap: t is 0 at the start of a career, so the first rescue you
+     * ever perform would be read as no rescue at all by every `if
+     * (spec.vouchesFor)` downstream. The test caught it on the first run. */
+    if (call.victim) call.victim.vouchesFor = { at: t, faction: call.faction || null };
+    if (hooks && hooks.say) {
+      hooks.say(call.name + ': "We will not forget this."', 6);
+    }
+    return { ok: true, standing: RESCUE_STANDING, faction: call.faction };
+  }
+
+  /* ---- who comes ---------------------------------------------------------
+   * A call with nobody to hear it is the most important case to get right,
+   * because it is the one the frontier is made of. Asking for a tender in
+   * a system that has none must SAY SO — the refusal-carries-a-reason rule
+   * applies to a silence as much as to a button.
+   *
+   * Eligibility is by kind, and the two services do not substitute for one
+   * another: a cutter will not tow you and a tender will not shoot anybody.
+   * Whoever is picked is simply the nearest of the right sort. */
+  /* A quoted wait nobody can read is not a quote. Eighteen hours expressed
+   * as "1107 min" is arithmetic being shown its work at the reader. */
+  function fmtEta(s) {
+    if (s < 90) return Math.max(1, Math.round(s)) + ' s';
+    if (s < 5400) return Math.round(s / 60) + ' min';
+    var h = s / 3600;
+    return (h < 10 ? h.toFixed(1) : Math.round(h)) + ' h';
+  }
+  function fmtKm(d) {
+    if (d < 1000) return d.toFixed(0) + ' km';
+    if (d < 1e6) return (d / 1000).toFixed(0) + ' thousand km';
+    return (d / 1e6).toFixed(1) + ' million km';
+  }
+
+  function eligibleResponder(spec, want) {
+    if (!spec || spec.dead) return false;
+    if (want === HELP_TENDER) return spec.kind === 'tender';
+    return spec.kind === 'police' || spec.kind === 'navy';
+  }
+
+  function dispatchResponder(sys, G, t, call, hooks) {
+    var patrols = (sys && sys.patrols) || [];
+    var best = null, bestD = Infinity;
+    for (var i = 0; i < patrols.length; i++) {
+      var sp = patrols[i];
+      if (!eligibleResponder(sp, call.want)) continue;
+      /* A patrol already on its way to something else is not available;
+       * one responder per call, one call per responder. */
+      if (sp.respondTo && sp.respondTo !== call.from) continue;
+      var st = sp.live ? sp.live : (global.Sim.patrolState ? global.Sim.patrolState(sp, sys, t) : null);
+      if (!st || !st.pos) continue;
+      var d = V.dist(st.pos, call.pos);
+      if (d < bestD) { best = sp; bestD = d; }
+    }
+
+    if (!best) {
+      var none = call.want === HELP_TENDER
+        ? 'No tender is working this system. Nobody is coming.'
+        : 'No patrol is flying here. Nobody is coming.';
+      return { responder: null, text: none };
+    }
+
+    /* The responder is given the SCENE, not the player. Today those are the
+     * same point, because the player is the only thing that can be in
+     * trouble or cause it — but writing it as a position is what lets a
+     * Phase 9 pirate hold up a freighter on the far side of a moon and have
+     * the cutter go THERE. */
+    best.mode = 'respond';
+    best.modeSince = 0;
+    best.respondTo = call.from;
+    best.respondPos = V.clone(call.pos);
+    call.answeredBy = best.id;
+
+    /* Honest ETA off the responder's own acceleration: constant-accel to
+     * the midpoint, flip, decelerate — the same t = 2*sqrt(d/a) the
+     * timetable is built from, so the number quoted is the number flown. */
+    var eta = 2 * Math.sqrt(Math.max(0, bestD) / Math.max(1e-6, best.accel || 0.01));
+    call.etaAt = t + eta;
+    return {
+      responder: best,
+      text: best.name + ' is answering — ' + fmtKm(bestD) + ' out, ' +
+            fmtEta(eta) + '.' +
+            (eta > 3 * 3600 ? '  Settle in.' : '')
+    };
+  }
+
+  /* Hand a responder back to its own life. Its rail was never touched —
+   * `respondPos` and `mode` are the whole of the state — so letting go is
+   * deleting two fields and the patrol resumes its timetable. */
+  function releaseResponder(sys, call) {
+    var patrols = (sys && sys.patrols) || [];
+    for (var i = 0; i < patrols.length; i++) {
+      if (patrols[i].respondTo === call.from) {
+        patrols[i].respondTo = null;
+        patrols[i].respondPos = null;
+        if (patrols[i].mode === 'respond') patrols[i].mode = null;
+      }
+    }
+  }
+
+  /* Expiry, and nothing else. A call is a recording with a lifetime; it
+   * does not chase anybody and it does not tick. */
+  function updateDistress(sys, G, t, hooks) {
+    var list = G.distress;
+    if (!list || !list.length) return;
+    var keep = [];
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i];
+      if (t >= c.until) {
+        if (c.mine && !c.answeredBy && hooks && hooks.say) {
+          hooks.say('Your mayday has lapsed — nobody came.', 6);
+        }
+        /* Release whoever was answering it, or a cutter spends the rest of
+         * the game station-keeping over an empty patch of sky. */
+        releaseResponder(sys, c);
+        continue;
+      }
+      keep.push(c);
+    }
+    G.distress = keep;
+  }
+
   var ATTACK_STANDOFF = 6;       // km — where an attacker tries to sit
   var AIM_CONE = 0.035;          // rad — generous, ships are tens of metres
   var WITNESS_RANGE = 150000;    // km — "the same patch of space"
@@ -4777,6 +5115,8 @@
     updateNpcHeat(sys, G, t, dtSim, hooks);
     resolveHungSeeker(sys, G, t, hooks);
 
+    updateDistress(sys, G, t, hooks);
+
     /* A witness's call, if it was neither bought nor intimidated away. */
     if (G.pendingReport && t >= G.pendingReport.at) {
       report(G, G.pendingReport.kind, { faction: G.pendingReport.fac }, hooks,
@@ -4790,6 +5130,10 @@
       var sp = patrols[i];
       if (sp.dead) { patrols.splice(i, 1); sys._ships = null; continue; }
       if (sp.distressAt && t >= sp.distressAt) {
+        /* The call goes on the air and the bounty is filed, in that order
+         * and from one event. Before this, the second happened and the
+         * first was only ever a word in a comment. */
+        broadcastDistress(sys, G, t, sp, sp.distressKind || 'assault', hooks);
         report(G, sp.distressKind || 'assault', sp, hooks, 'distress call');
         sp.reported = sp.distressKind;
         sp.distressAt = null;
@@ -5729,6 +6073,15 @@
     DISTRESS_DELAY_ARMED: DISTRESS_DELAY_ARMED,
     DISTRESS_DELAY_CIVIL: DISTRESS_DELAY_CIVIL,
     isArmedNpc: isArmedNpc, distressDelayFor: distressDelayFor,
+    /* Distress: the call as a signal rather than an accounting delay. */
+    DISTRESS_LIFE: DISTRESS_LIFE, DISTRESS_MAX: DISTRESS_MAX,
+    HELP_TENDER: HELP_TENDER, HELP_SECURITY: HELP_SECURITY,
+    RESCUE_STANDING: RESCUE_STANDING,
+    distressList: distressList, broadcastDistress: broadcastDistress,
+    mayday: mayday, maydayReason: maydayReason, maydayWord: maydayWord,
+    offenceWord: offenceWord, answerDistress: answerDistress,
+    dispatchResponder: dispatchResponder, eligibleResponder: eligibleResponder,
+    releaseResponder: releaseResponder, updateDistress: updateDistress,
     WANTED_HUNT: WANTED_HUNT, BOUNTY: BOUNTY, ATTACK_STANDOFF: ATTACK_STANDOFF,
     SMUGGLING_FINE_PER_TONNE: SMUGGLING_FINE_PER_TONNE, SEARCH_FLOOR: SEARCH_FLOOR,
     CONTRABAND_SEVERITY: CONTRABAND_SEVERITY, STANDING_HIT: STANDING_HIT,
