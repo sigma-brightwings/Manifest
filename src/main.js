@@ -5613,6 +5613,16 @@
     if (glLive()) {
       ctx.clearRect(0, 0, w, h);
       global.GLWorld.begin(rock ? ROCK_CLEAR : null);
+      /* HOW MUCH LIGHTNING TO DRAW, decided by the clock rather than by
+       * the weather. A stroke lasts about a tenth of a second; at warp the
+       * frames are seconds or minutes apart, so sampling it would give
+       * uncorrelated noise — a strobe, which is wrong AND unpleasant to
+       * look at. Faded out, the shader draws the time-average instead,
+       * which is what you would actually see from a world going past at a
+       * thousand times: storms that glow rather than storms that blink. */
+      if (global.GLWorld.setFlashGain) {
+        global.GLWorld.setFlashGain(1 / (1 + WARPS[G.warpIndex] / 6));
+      }
       /* Cut the shaft mouth out of the world it is sunk into. Without this
        * the planet's own surface is drawn straight across the opening —
        * the sphere has no hole in it — so from outside you get a painted

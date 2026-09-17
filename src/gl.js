@@ -137,6 +137,31 @@
     'uniform float uBandPhase;',
     'uniform float uShearPhase;',
     'uniform float uWeather;',
+    /* STORMS. The cloud field on its own is uniform — thicker or thinner,
+     * but with nowhere in particular for anything to HAPPEN. A second,
+     * much coarser field picks out cells, and a cell is an address: it is
+     * where the tops are bright, where the base is dark, and where the
+     * lightning is.
+     *
+     * The flash needs no state and no particles. A cell is a cube of the
+     * coarse lookup; a bucket is a slice of time; hashing the two together
+     * decides whether that cell fires in that bucket, and the fraction
+     * through the bucket shapes the stroke. Pure function of place and
+     * time, like everything else here, so a storm you fly back to is the
+     * same storm.
+     *
+     * The bucket arrives as a SALT, not as a number. Feeding a bucket
+     * index straight into the hash was the obvious version and it does
+     * not survive single precision: the hash multiplies its input by
+     * 0.318 and takes the fraction, so by a few thousand buckets the
+     * input's own grid spacing swamps the fraction and every cell starts
+     * agreeing with its neighbours. Hashed in JS, where doubles are free,
+     * and handed over as three small numbers, it stays a hash forever.
+     * The phase comes separately for the same reason — it is the shape of
+     * the stroke and has to be exact. */
+    'uniform vec3 uStormSalt;',
+    'uniform float uStormPhase;',
+    'uniform float uFlashGain;',
     /* Depth, so a ship can pass behind a planet. The impostor has no
      * geometry to rasterize a depth from, so it computes one: the disc's
      * centre distance minus how far the sphere bulges toward the camera at
@@ -375,6 +400,9 @@
      * a threshold on noise, filled solid, and lit by the same sun term as the
      * ground. Coverage drives the threshold, so an ocean world is mostly
      * white and a thin-aired desert has a few wisps. */
+    /* What the storms put into this pixel on their own account, spent
+     * after the sun term below. */
+    '  float glow = 0.0;',
     '  if (uCloud > 0.001) {',
     /* THE DECK TURNS FASTER THAN THE GROUND, AND IT CHANGES WHILE IT DOES.
      *
@@ -458,10 +486,83 @@
     '    float thresh = mix(0.655, 0.405, clamp(uCloud, 0.0, 1.0));',
     '    float mask = smoothstep(thresh, thresh + 0.055, cl);',
     '    vec3 cloudCol = mix(vec3(0.90, 0.93, 0.97), uAtmoColor, 0.22);',
+
+    /* ---- where the weather is actually happening -------------------- */
+    /* A handful of cells per world: the upper tail of a field four times
+     * coarser than the cloud itself, and only where there is cloud to
+     * build in. A storm over clear air is not a storm. */
+    /* SCALE MEASURED, NOT CHOSEN. The first version looked up the storm
+     * field FOUR TIMES COARSER than the cloud, on the reasoning that a
+     * storm is a big thing — which gets it exactly backwards. The cloud
+     * lookup spans about five noise features across a whole sphere, so a
+     * quarter of that is one or two cells per WORLD, and the planet I
+     * measured had both of them on the far side: storms covered 0.9% of
+     * the visible disc and the lightning, which only fires inside a cell,
+     * never once fired at all.
+     *
+     * Storm cover on the visible disc, by lookup scale:
+     *     cp * 0.42   0.9%        cp * 2.5   12.8%
+     *     cp * 1.5    5.1%        cp * 3.5    8.2%
+     *                             cp * 5.0    5.5%
+     *
+     * It peaks in the middle because too fine a field stops clearing the
+     * threshold at all — cells smaller than the noise's own detail are
+     * cells that are never strong enough to be cells. */
+    '    vec3 sc = cp * 2.5;',
+    '    float storm = smoothstep(0.55, 0.70, fbm(sc)) * mask;',
+    /* Tops catch more light and the base loses it — the same cell read
+     * twice, which is what gives a bank depth instead of a flat lid. */
+    '    cloudCol = mix(cloudCol, vec3(1.0), storm * 0.35);',
+    '    cloudCol = mix(cloudCol, vec3(0.42, 0.45, 0.55),',
+    '                   storm * 0.55 * smoothstep(0.62, 0.30, cl));',
     '    base = mix(base, cloudCol, mask);',
+
+    /* ---- and the lightning ------------------------------------------- */
+    /* Held aside rather than added here. `base` is about to be multiplied
+     * by the sun term, and a flash is not lit by the sun — it IS a light.
+     * Added before the multiply it survived at 5% on the night side,
+     * which is the one side of a planet where lightning is the entire
+     * point, and the storms were invisible. */
+    '    if (storm > 0.03 && uFlashGain > 0.0) {',
+    /* The patch one stroke lights: about a twelfth of the world across,
+     * which is enormous for a thunderstorm and the smallest thing worth
+     * drawing from orbit. A physically-sized cell is a sub-pixel flash. */
+    '      vec3 cid = floor(sc * 2.0);',
+    '      float r = hash13(cid + uStormSalt * 37.0);',
+    /* About a fifth of the cells fire in any given bucket, and a second
+     * hash decides how hard — a sky where every flash is the same flash
+     * reads as a strobe rather than as a storm. */
+    '      float fire = step(0.52, r);',
+    '      float hard = 0.45 + 0.55 * hash13(cid * 1.7 + uStormSalt.zxy * 53.0);',
+    /* Two strokes: the leader, and the return a fifth of a bucket later.
+     * That second one is most of why it reads as lightning. */
+    '      float ph = uStormPhase;',
+    '      float env = exp(-ph * 6.5) + 0.7 * exp(-abs(ph - 0.22) * 18.0);',
+    /* SOFTEN THE CELL, or the cell is what you see. A stroke picked by
+     * hashing a cube of the lookup lights that cube — corners, faces and
+     * all — and from orbit the sky flashed in rectangles, which reads as a
+     * rendering fault rather than as weather. A bump that peaks at the
+     * cube's centre and falls to nothing at its faces leaves a soft ball
+     * of light with no edge to notice. */
+    '      vec3 fp = fract(sc * 2.0);',
+    '      vec3 b3 = smoothstep(0.0, 0.50, fp) * (1.0 - smoothstep(0.50, 1.0, fp));',
+    '      glow += fire * hard * env * storm * (b3.x * b3.y * b3.z) * 7.0 * uFlashGain;',
+    '    }',
+    /* AT TIME WARP THE FLASHES BECOME A GLOW. The stroke is a tenth of a
+     * second and the frames are seconds apart, so sampling it would give
+     * uncorrelated noise — a strobe, which is both wrong and unpleasant.
+     * What you would really see at a thousand times is the average, so
+     * that is what is drawn. */
+    '    glow += storm * 0.09 * (1.0 - uFlashGain);',
     '  }',
 
     '  vec3 col = base * (0.055 + 0.95 * lam);',
+    /* THE STORMS, LIT FROM INSIDE. Added after the sun, because that is
+     * what a light source is — and weighted toward the dark side, which
+     * is not artistic licence: a flash is lost in daylight and is the
+     * brightest thing on a night hemisphere, which is exactly how a world
+     * with weather looks from orbit. */
+    '  col += vec3(0.82, 0.88, 1.0) * glow * (0.22 + 1.30 * (1.0 - lam));',
 
     /* Haze toward the limb on the day side: the air you are looking through
      * gets thicker as the surface turns away, which is what makes a world
@@ -954,6 +1055,7 @@
                               'uIsStar', 'uAtmo', 'uAtmoColor', 'uCloud',
                               'uSeed', 'uSpinAxis', 'uSpinPhase', 'uDeckPhase',
                               'uBandPhase', 'uShearPhase',
+                              'uStormSalt', 'uStormPhase', 'uFlashGain',
                               'uWeather', 'uCenterDepth', 'uWorldRadius',
                               'uNear', 'uInvLogRange', 'uBanded',
                               'uOcean', 'uSeaColor', 'uIce',
@@ -1469,6 +1571,9 @@
       gl.uniform1f(uni.uBandPhase, sp2.band);
       gl.uniform1f(uni.uShearPhase, sp2.shear);
       gl.uniform1f(uni.uWeather, sp2.weather);
+      gl.uniform3f(uni.uStormSalt, sp2.salt[0], sp2.salt[1], sp2.salt[2]);
+      gl.uniform1f(uni.uStormPhase, sp2.stormPhase);
+      gl.uniform1f(uni.uFlashGain, flashGain);
       gl.uniform1f(uni.uCenterDepth, q.depth);
       gl.uniform1f(uni.uWorldRadius, b.radius || 1);
       gl.uniform3f(uni.uCenterRel, q.rel.x, q.rel.y, q.rel.z);
@@ -1613,6 +1718,22 @@
    * inside single precision forever (see below). */
   var W1 = 0.9000, W2 = 0.3703;
   var WEATHER_CYCLE = 2 * Math.PI * 10000;
+  /* How long a lightning bucket is. Short enough that a busy storm fires
+   * several times while you watch it, long enough that a single stroke is
+   * a stroke rather than a flicker. */
+  var STORM_BUCKET = 0.9;            // seconds of sim time
+
+  /* Three small numbers from one bucket index, done here because the
+   * shader's hash cannot take a large input and stay a hash. Integer
+   * arithmetic in doubles, so it is exact for any bucket a career will
+   * ever reach. */
+  function saltOf(n) {
+    var a = (n * 374761393 + 668265263) % 2147483647;
+    var b = (a * 1103515245 + 12345) % 2147483647;
+    var c = (b * 1664525 + 1013904223) % 2147483647;
+    return [Math.abs(a) / 2147483647, Math.abs(b) / 2147483647,
+            Math.abs(c) / 2147483647];
+  }
 
   var TAU = 2 * Math.PI;
   function wrap(a, m) { a = a % m; return a < 0 ? a + m : a; }
@@ -1665,9 +1786,24 @@
       deck: wrap(deck, TAU),
       band: deck,                          // giants only; see above
       shear: wrap(deck * SHEAR_RATE, TAU),
-      weather: wrap(t / WEATHER_PERIOD, WEATHER_CYCLE)
+      weather: wrap(t / WEATHER_PERIOD, WEATHER_CYCLE),
+      /* Split, not one growing number: the shader needs the whole part
+       * only to hash with, where losing a bit costs nothing but a
+       * different flash, and needs the fraction to be exact, because it
+       * is the shape of the stroke. */
+      salt: saltOf(Math.floor(t / STORM_BUCKET)),
+      stormPhase: wrap(t / STORM_BUCKET, 1)
     };
   }
+
+  /* HOW MUCH OF THE LIGHTNING TO DRAW, set once a frame by main.js from
+   * the time warp. At one times it is all of it; by a hundred times the
+   * strokes are further apart than the frames and what is left is the
+   * glow. See the cloud block for why. */
+  var flashGain = 1;
+  GL.setFlashGain = function (g) {
+    flashGain = Math.max(0, Math.min(1, g));
+  };
 
   /* A stable per-world number for the noise fields, from the body id. The id
    * is already seed-derived, so this inherits determinism for free. */
@@ -1688,6 +1824,7 @@
   GL.spinOf = spinOf;
   GL.DECK_SUPER = DECK_SUPER;
   GL.WEATHER_CYCLE = WEATHER_CYCLE;
+  GL.STORM_BUCKET = STORM_BUCKET;
 
   global.GLWorld = GL;
   if (typeof module !== 'undefined' && module.exports) module.exports = GL;

@@ -663,6 +663,49 @@ console.log('--- the renderer turns a world the way the world turns ---');
      * used by a rotation or a sin of multiplier one, so 2*pi is exact;
      * the weather field travels two circuits whose rates share an exact
      * common period, which is the reason it can be wrapped at all. */
+    /* THE LIGHTNING IS A FUNCTION OF THE CLOCK TOO, which is the only way
+     * a storm you fly back to can be the same storm. The bucket picks
+     * which cells fire and the phase shapes the stroke. */
+    var b1 = GL.spinOf(w, 5000), b2 = GL.spinOf(w, 5000);
+    check('a given instant gives a given sky, lightning included',
+          b1.salt[0] === b2.salt[0] && b1.stormPhase === b2.stormPhase);
+    check('the stroke phase runs through a bucket',
+          GL.spinOf(w, 5000).stormPhase !== GL.spinOf(w, 5000.3).stormPhase);
+    check('and a bucket later it is a different set of cells',
+          GL.spinOf(w, 5000).salt[0] !== GL.spinOf(w, 5000 + GL.STORM_BUCKET).salt[0]);
+
+    /* THE SALT IS A SALT. Feeding a growing bucket index straight to the
+     * shader's hash was the first version, and it does not survive single
+     * precision — the hash multiplies by 0.318 and takes the fraction, so
+     * past a few thousand buckets neighbouring cells start agreeing and
+     * the sky flashes in unison. Hashed here, in doubles, it has to stay
+     * spread out no matter how long the career. */
+    var lo = [1, 1, 1], hi = [0, 0, 0], seen = {}, dup = 0;
+    for (var bk = 0; bk < 4000; bk++) {
+      var sv = GL.spinOf(w, bk * GL.STORM_BUCKET + 1e7).salt;
+      for (var c = 0; c < 3; c++) {
+        if (sv[c] < lo[c]) lo[c] = sv[c];
+        if (sv[c] > hi[c]) hi[c] = sv[c];
+      }
+      var key = sv[0].toFixed(6);
+      if (seen[key]) dup++; else seen[key] = 1;
+    }
+    check('the storm salt still spans its range after four thousand buckets',
+          lo[0] < 0.05 && hi[0] > 0.95 && lo[2] < 0.05 && hi[2] > 0.95,
+          lo.map(function (x) { return x.toFixed(3); }).join(',') + ' .. ' +
+          hi.map(function (x) { return x.toFixed(3); }).join(','));
+    check('and does not collapse onto repeats', dup < 4, dup + ' collisions in 4000');
+
+    /* The stroke phase must stay exact in float32 or the lightning
+     * quantises into a stutter — it is a tenth of a bucket wide. */
+    var grain = 0;
+    for (var g = 0; g < 500; g++) {
+      var v = GL.spinOf(w, 1e9 + g * 0.017).stormPhase;
+      grain = Math.max(grain, Math.abs(Math.fround(v) - v));
+    }
+    check('the stroke phase survives single precision', grain < 1e-7,
+          'worst ' + grain.toExponential(2));
+
     var raw = 4e6 / 2400, wrapped = raw % GL.WEATHER_CYCLE;
     check('wrapping the weather field does not move it',
           Math.abs(Math.cos(raw * 0.9) - Math.cos(wrapped * 0.9)) < 1e-6 &&
