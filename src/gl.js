@@ -427,9 +427,9 @@
      * tearing and re-forming; a single noise lookup cannot, so the drag
      * between latitudes breathes instead of accumulating. Twelve degrees
      * at the equator, none at the poles, over about an hour. */
-    '    float shear = 0.21 * (1.0 - abs(clat)) * sin(uShearPhase);',
+    '    float shear = @SHEAR@ * (1.0 - abs(clat)) * sin(uShearPhase);',
     '    nb = spinAbout(nb, uSpinAxis, shear);',
-    '    vec3 cp = nb * 2.4 + uSeed * 1.7;',
+    '    vec3 cp = nb * @CLOUD_SCALE@ + uSeed * @SEED_SCALE@;',
     /* And the weather itself. The field is moved through, which is what
      * makes a bank build and break up rather than merely come round again
      * — but it is moved around a small CIRCUIT, not along a line.
@@ -447,8 +447,8 @@
      * Two circuits at rates that do not divide into each other: the
      * pattern keeps changing and never repeats within anything like a
      * session, and the statistics stay exactly where they were tuned. */
-    '    cp += vec3(cos(uWeather * 0.9000), sin(uWeather * 0.9000), 0.0) * 0.42;',
-    '    cp += vec3(0.0, cos(uWeather * 0.3703), sin(uWeather * 0.3703)) * 0.28;',
+    '    cp += vec3(cos(uWeather * @W1@), sin(uWeather * @W1@), 0.0) * @DRIFT1@;',
+    '    cp += vec3(0.0, cos(uWeather * @W2@), sin(uWeather * @W2@)) * @DRIFT2@;',
     '    float cl = fbm(cp);',
     /* COVERAGE-TO-THRESHOLD, AND THIS IS WHERE THE CLOUDS WENT.
      *
@@ -483,8 +483,8 @@
      *
      * A terran world a quarter clouded still shows every coastline, which
      * is what the old note was protecting and is still true. */
-    '    float thresh = mix(0.655, 0.405, clamp(uCloud, 0.0, 1.0));',
-    '    float mask = smoothstep(thresh, thresh + 0.055, cl);',
+    '    float thresh = mix(@THRESH_HI@, @THRESH_LO@, clamp(uCloud, 0.0, 1.0));',
+    '    float mask = smoothstep(thresh, thresh + @EDGE@, cl);',
     '    vec3 cloudCol = mix(vec3(0.90, 0.93, 0.97), uAtmoColor, 0.22);',
 
     /* ---- where the weather is actually happening -------------------- */
@@ -508,8 +508,8 @@
      * It peaks in the middle because too fine a field stops clearing the
      * threshold at all — cells smaller than the noise's own detail are
      * cells that are never strong enough to be cells. */
-    '    vec3 sc = cp * 2.5;',
-    '    float storm = smoothstep(0.55, 0.70, fbm(sc)) * mask;',
+    '    vec3 sc = cp * @STORM_SCALE@;',
+    '    float storm = smoothstep(@STORM_LO@, @STORM_HI@, fbm(sc)) * mask;',
     /* Tops catch more light and the base loses it — the same cell read
      * twice, which is what gives a bank depth instead of a flat lid. */
     '    cloudCol = mix(cloudCol, vec3(1.0), storm * 0.35);',
@@ -579,6 +579,32 @@
     '  frag = vec4(col, 1.0);',
     '}'
   ].join('\n');
+
+  /* ---- ONE COPY OF EVERY NUMBER -----------------------------------------
+   *
+   * The shader above is written with @TOKENS@ where a weather constant
+   * goes, and they are filled in from weather.js at load. That file
+   * evaluates the same field on the CPU so a port can tell you what its
+   * sky is doing, and the one duplication that would really have hurt is
+   * not the noise functions — those are obviously two languages doing the
+   * same arithmetic — it is a threshold nudged in one of them. Now a
+   * threshold cannot be nudged in one of them.
+   *
+   * The fallbacks are what gl.js uses when it is loaded on its own, which
+   * the hull viewer page does. */
+  FRAG_BODY = (function (src) {
+    var W = (global.Weather && global.Weather.K) || {};
+    var D = { CLOUD_SCALE: 2.4, SEED_SCALE: 1.7, THRESH_HI: 0.655,
+              THRESH_LO: 0.405, EDGE: 0.055, SHEAR: 0.21, STORM_SCALE: 2.5,
+              STORM_LO: 0.55, STORM_HI: 0.70, W1: 0.9, W2: 0.3703,
+              DRIFT1: 0.42, DRIFT2: 0.28 };
+    return src.replace(/@([A-Z0-9_]+)@/g, function (m, key) {
+      var v = (W[key] !== undefined) ? W[key] : D[key];
+      if (v === undefined) throw new Error('gl.js: no weather constant ' + key);
+      /* GLSL will not take an integer where a float belongs. */
+      return v.toFixed(5);
+    });
+  })(FRAG_BODY);
 
   /* The starfield has to live down here too, and that is not an
    * optimisation — it is a correctness fix. The 2D canvas is now strictly an
@@ -1808,6 +1834,13 @@
   /* A stable per-world number for the noise fields, from the body id. The id
    * is already seed-derived, so this inherits determinism for free. */
   function hashSeed(id) {
+    /* ONE COPY. weather.js evaluates the same field on the CPU so a port
+     * can say what its sky is doing, and a forecast seeded differently
+     * from the picture is a forecast about a different planet. The
+     * fallback is for gl.js loaded on its own, which the hull viewer
+     * does. */
+    var W = global.Weather;
+    if (W && W.hashSeed) return W.hashSeed(id);
     var h = 2166136261, s = String(id || '');
     for (var i = 0; i < s.length; i++) {
       h ^= s.charCodeAt(i);
@@ -1815,6 +1848,12 @@
     }
     return (h % 10000) / 97.0;
   }
+
+  /* The planet shader as it was actually built, tokens filled in. Exported
+   * so the suite can check that every weather constant in the picture came
+   * from weather.js — the drift that would matter is a threshold nudged in
+   * one of the two languages and not the other. */
+  GL.planetShaderSource = function () { return FRAG_BODY; };
 
   GL.rgb = rgb;              // exported for tests
   GL.hashSeed = hashSeed;

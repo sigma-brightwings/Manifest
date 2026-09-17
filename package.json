@@ -1,22 +1,20 @@
 {
   "name": "manifest",
   "productName": "Manifest",
-  "version": "1.0.0-beta",
+  "version": "0.1.0",
   "description": "Gravity, clockwork, cockpit and cargo.",
   "private": true,
   "license": "UNLICENSED",
-  "author": "Astra <astrabrightwing@pm.me>",
+  "author": "Astra",
   "_comment_desktopName": "Read by electron-builder, not by npm: it becomes the Linux .desktop filename and the window's WM_CLASS, which is what lets a desktop environment link the running window to its launcher icon.",
-  "_comment_naming": "THE COMMENTS LIVE UP HERE, NOT IN \"build\". npm ignores unknown top-level keys; electron-builder SCHEMA-VALIDATES its own block and refuses to run on one it does not recognise, which is a failed release rather than a warning. Learned the hard way on 0.3.0-beta. The game is Manifest everywhere now — productName, build.productName, appId, the artifacts and the desktop entry — and the one thing that rename moves is where Electron keeps userData, which is derived from productName and is where the saves live. electron/main.js carries them across; see the note there before touching either name again.",
-  "_comment_maintainer": "fpm refuses to build a .deb without a package maintainer, and what electron-builder looks for is `author` with an address in it. Astra's, given for the purpose. build.linux.maintainer repeats it rather than leaning on the fallback, so the .deb keeps naming a maintainer even if `author` is ever shortened back to a bare name. (It is a real electron-builder key, unlike a comment: see the note above about what that block does to anything it does not recognise.)",
-  "desktopName": "manifest.desktop",
+  "desktopName": "procedural-space-game.desktop",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
     "icon": "node tools/make-icon.js",
     "serve": "node tools/serve.js",
     "lint": "node tools/lint-globals.js",
-    "test": "node tools/lint-globals.js && node test/physics.test.js && node test/render.test.js && node test/cockpit.test.js && node test/economy.test.js && node test/nodes.test.js && node test/ships.test.js && node test/berths.test.js && node test/galaxy.test.js && node test/combat.test.js && node test/arcs.test.js",
+    "test": "node tools/lint-globals.js && node test/physics.test.js && node test/render.test.js && node test/cockpit.test.js && node test/economy.test.js && node test/nodes.test.js && node test/ships.test.js && node test/berths.test.js && node test/galaxy.test.js && node test/weather.test.js && node test/combat.test.js && node test/arcs.test.js",
     "dist": "npm run icon && electron-builder --win --linux",
     "dist:win": "npm run icon && electron-builder --win",
     "dist:linux": "npm run icon && electron-builder --linux"
@@ -26,10 +24,10 @@
     "electron-builder": "^26.0.0"
   },
   "build": {
-    "appId": "com.kawartha.manifest",
-    "productName": "Manifest",
+    "appId": "com.kawartha.proceduralspacegame",
+    "productName": "Procedural Space Game",
     "copyright": "Copyright © 2026",
-    "artifactName": "Manifest-${version}-${os}-${arch}.${ext}",
+    "artifactName": "ProceduralSpaceGame-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -49,22 +47,21 @@
       ]
     },
     "portable": {
-      "artifactName": "Manifest-${version}-portable.exe"
+      "artifactName": "ProceduralSpaceGame-${version}-portable.exe"
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "artifactName": "Manifest-Setup-${version}.exe"
+      "artifactName": "ProceduralSpaceGame-Setup-${version}.exe"
     },
     "linux": {
       "target": [
         { "target": "tar.gz", "arch": ["x64"] }
       ],
       "category": "Game",
-      "synopsis": "Gravity, clockwork, cockpit and cargo.",
-      "maintainer": "Astra <astrabrightwing@pm.me>"
+      "synopsis": "Gravity, clockwork, cockpit and cargo."
     }
   }
 }

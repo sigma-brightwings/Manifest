@@ -155,6 +155,9 @@ require('../src/save.js');
 /* The title card's artwork — the wordmark outline and the compass rose. */
 require('../src/logo.js');
 require('../src/hulls.js');
+/* The weather field. gl.js is not in this harness, but screens and the
+ * comms channel ask Weather what a port's sky is doing. */
+require('../src/weather.js');
 require('../src/render.js');
 require('../src/screens.js');
 require('../src/main.js');

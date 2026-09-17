@@ -62,6 +62,10 @@
      reads global.PortLib when its own library cache is first asked for. -->
 <script src="src/ports.js"></script>
 <script src="src/render.js"></script>
+<!-- The weather field, on the CPU. Before gl.js, which reads its own
+     shader constants out of it so the picture and the forecast cannot
+     drift apart. -->
+<script src="src/weather.js"></script>
 <script src="src/gl.js"></script>
 <script src="src/screens.js"></script>
 <script src="src/main.js"></script>

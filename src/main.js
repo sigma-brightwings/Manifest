@@ -6,7 +6,8 @@
       Sim = global.Sim, Render = global.Render, RNG = global.RNG,
       Eco = global.Economy, Galaxy = global.Galaxy,
       Combat = global.Combat, Missions = global.Missions,
-      Slip = global.Slipspace, Logo = global.Logo;
+      Slip = global.Slipspace, Logo = global.Logo,
+      Weather = global.Weather;
   var DEG = Math.PI / 180;
   var AU = Gen.AU;
 
@@ -4668,9 +4669,14 @@
              * for anything with no bay geometry, and in both cases this
              * falls back to the snap that has always happened. */
             if (Sim.beginArrival(G.ship, G.dockTarget, G.sys, G.t)) {
+              /* The port says what it is like down there as it clears you,
+               * which is the one moment a pilot actually wants to know. */
+              var cw = Weather && Weather.hasWeather(G.dockTarget)
+                     ? Weather.report(G.dockTarget, G.sys, G.t) : null;
               say(G.dockTarget.name + ': ' + (G.dockTarget.surface
                     ? '"Cleared to the pad. Hold for the lift."'
-                    : '"Cleared in. Hold station, we have you."'), 5);
+                    : '"Cleared in. Hold station, we have you."') +
+                  (cw && !cw.airless ? '   ' + Weather.describe(cw) : ''), 6);
             } else {
               Sim.dockShip(G.ship, G.dockTarget, G.sys, G.t);
               say('Docked with ' + G.dockTarget.name, 5);
@@ -10721,7 +10727,7 @@
     var list = marketRows();
     if (m.sel >= list.length) m.sel = Math.max(0, list.length - 1);
 
-    var pw = 720, ph = 120 + list.length * 18 + 66;
+    var pw = 720, ph = 136 + list.length * 18 + 66;
     ph = Math.min(ph, h - 40);
     var px = (w - pw) / 2, py = (h - ph) / 2;
     panel(ctx, px, py, pw, ph, true);
@@ -10732,23 +10738,45 @@
     ctx.fillText(port.name, px + 20, py + 30);
     ctx.font = 'bold 12px ui-monospace, monospace';
     ctx.fillStyle = '#7fd6c0';
-    ctx.fillText((port.underground ? 'Underground bay' : port.surface ? 'Surface starport' : port.market.roleName) +
-                 '  ·  ' + port.parentBody.name +
-                 '  ·  development ' + Math.round(port.market.dev * 100) + '%',
-                 px + 20, py + 48);
+    /* CLIPPED TO THE ROOM THE OTHER HALF LEAVES. This line is left-aligned
+     * and the hold-and-fuel line is right-aligned on the same baseline, and
+     * on a 720-wide panel with a long body name they met in the middle and
+     * printed over one another. Same fault the menu rows had: two strings
+     * sharing a row, neither of them asking how much of it was left. */
+    var subLine = (port.underground ? 'Underground bay'
+                   : port.surface ? 'Surface starport' : port.market.roleName) +
+                  '  ·  ' + port.parentBody.name +
+                  '  ·  development ' + Math.round(port.market.dev * 100) + '%';
+    var rightLine = 'hold ' + Sim.cargoMass(G.ship).toFixed(0) + '/' + G.ship.cargoCap +
+                    ' t  ·  fuel ' + G.ship.fuel.toFixed(1) + '/' + G.ship.fuelCap +
+                    ' t  ·  reach ' + fmtLy(Galaxy.maxRange(G.ship));
+    ctx.fillText(subLine, px + 20, py + 48);
+    /* WHAT THE SKY IS DOING, read off the same field the clouds are drawn
+     * from — so the overcast a trader complains about is the bank you
+     * flew down through. Orbital clamps are in nobody's air and say
+     * nothing; see Weather.hasWeather. */
+    var wx = Weather && Weather.hasWeather(port) ? Weather.report(port, G.sys, G.t) : null;
+    if (wx && !wx.airless) {
+      ctx.fillStyle = wx.storm > 0.45 ? '#ffb86b'
+                    : wx.storm > 0.12 ? '#ffe6a8' : '#8fb4d6';
+      /* Clipped to what the ship's own readout leaves. A quiet day is
+       * thirty characters and a bad one is seventy, and the row has to
+       * hold both without either of them printing over the other. */
+      var wRoom = (pw - 40) - ctx.measureText(rightLine).width - 26;
+      ctx.fillText(clipText(Weather.describe(wx),
+                            Math.max(6, Math.floor(wRoom / 7.22))),
+                   px + 20, py + 66);
+    }
     ctx.fillStyle = '#ffe6a8';
     ctx.textAlign = 'right';
     ctx.font = 'bold 14px ui-monospace, monospace';
     ctx.fillText(fmtCredits(G.ship.credits), px + pw - 20, py + 30);
     ctx.font = 'bold 12px ui-monospace, monospace';
     ctx.fillStyle = '#9fb6d4';
-    ctx.fillText('hold ' + Sim.cargoMass(G.ship).toFixed(0) + ' / ' + G.ship.cargoCap +
-                 ' t   ·   jump fuel ' + G.ship.fuel.toFixed(1) + ' / ' + G.ship.fuelCap +
-                 ' t   ·   reach ' + fmtLy(Galaxy.maxRange(G.ship)),
-                 px + pw - 20, py + 48);
+    ctx.fillText(rightLine, px + pw - 20, py + 66);
     ctx.textAlign = 'left';
 
-    var hy = py + 76;
+    var hy = py + 92;
     ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = '#7e93b3';
     ctx.fillText('COMMODITY', px + 44, hy);
