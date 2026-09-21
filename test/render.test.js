@@ -4784,7 +4784,19 @@ console.log('--- auto-dock ---');
   check('the second T engages auto-dock', !!G.autodock);
 
   var guard = 0, startRange = V.dist(G.ship.pos, ps.pos);
-  while (!G.ship.docked && G.autodock && guard++ < 12000) frame();
+  var railStep = 0, prevRel = null;
+  while (!G.ship.docked && G.autodock && guard++ < 12000) {
+    frame();
+    var psNow = Sim.bodyState(port, G.sys, G.t), relNow = V.sub(G.ship.pos, psNow.pos);
+    if (prevRel && G.ship.arrival) railStep = Math.max(railStep, V.dist(relNow, prevRel));
+    prevRel = relNow;
+  }
+  /* THE HAND-OVER TO THE ARRIVAL RAIL DOES NOT JUMP. The capture envelope
+   * is kilometres wide and the rail starts at a hold point a few hundred
+   * metres off the berth; the hull used to be put on it in one frame,
+   * three to eight km at a time. It is drawn in now. */
+  check('the port draws you onto its rail rather than jumping you there',
+        railStep < 0.05, (railStep * 1000).toFixed(0) + ' m in one frame');
   check('it renders without error', errorsSince(mark).length === 0, errorsSince(mark)[0]);
   check('auto-dock actually docks the ship', G.ship.docked === port.id,
         'docked=' + G.ship.docked + ' after ' + guard + ' frames, from ' + fmtKm(startRange));
@@ -5151,16 +5163,67 @@ console.log('--- match orbit and follow ---');
   press('t'); press('t');
   check('auto-dock engages from two million km out', !!G.autodock,
         'from ' + fmtKm(startFar));
-  var sawCruise = false;
+  var sawCruise = false, drop = null, swing = 0, prevFwd = null;
   for (i = 0; i < 30000 && G.autodock && !G.ship.docked; i++) {
+    var wasCruising = !!G.cruise;
     frame();
     if (G.cruise) sawCruise = true;
+    var fsNow = Sim.bodyState(far2, G.sys, G.t);
+    if (wasCruising && !G.cruise && !drop) {
+      var hostNow = Sim.bodyState(far2.parentBody, G.sys, G.t);
+      var radNow = V.norm(V.sub(fsNow.pos, hostNow.pos));
+      var vOrb = V.sub(fsNow.vel, hostNow.vel);
+      var ahead = V.norm(V.sub(vOrb, V.scale(radNow, V.dot(vOrb, radNow))));
+      var off = V.sub(G.ship.pos, fsNow.pos);
+      drop = { range: V.len(off), along: V.dot(off, ahead) / V.len(off),
+               vrel: V.dist(G.ship.vel, fsNow.vel) };
+    }
+    /* The nose, frame to frame, once the approach law has it. */
+    if (!G.cruise && !G.ship.arrival && prevFwd) {
+      swing = Math.max(swing, Math.acos(Math.max(-1, Math.min(1, V.dot(prevFwd, G.ship.fwd)))) * 180 / Math.PI);
+    }
+    prevFwd = V.clone(G.ship.fwd);
   }
   check('it used the cruise drive for the long leg', sawCruise);
+  /* AHEAD OF THE STATION, MOVING WITH IT. The bubble used to hand over
+   * 150,000 km out in a circular orbit pointed by an arbitrary cross
+   * product — kilometres a second off the station's velocity, and an
+   * hour of approach to kill it. */
+  check('cruise drops you close to the station', drop && drop.range < 200,
+        drop && drop.range.toFixed(1) + ' km');
+  check('ahead of it on its orbit', drop && drop.along > 0.8,
+        drop && 'cos ' + drop.along.toFixed(2));
+  check('moving with it', drop && drop.vrel < 0.01,
+        drop && (drop.vrel * 1000).toFixed(1) + ' m/s');
+  /* And the nose does not flip about on a command that is nearly zero. */
+  check('the nose turns at a rate, it does not flip', swing < 10, swing.toFixed(1) + ' deg in a frame');
   check('and it still docks at the end of it', G.ship.docked === far2.id,
         'docked=' + G.ship.docked + ' after ' + i + ' frames');
   check('the whole run renders without error', errorsSince(longMark).length === 0,
         errorsSince(longMark)[0]);
+
+  /* MID-RANGE IS CRUISED TOO. The drive used to be kept for beyond
+   * 300,000 km, so the commonest trip of all — parking orbit to the
+   * station, tens of thousands of km — was an hour of game time on
+   * thrust. With the hold-point hand-over there is no reason for that. */
+  newFlying('kawartha');
+  frames(2);
+  var home = G.sys.ports.filter(function (p) { return !p.surface && !p.underground && p.docking; })[0];
+  var midStart = V.dist(G.ship.pos, Sim.bodyPosition(home, G.sys, G.t));
+  G.fugitive = null; G.wanted = {};
+  G.navTarget = { kind: 'body', id: home.id };
+  G.cruise = null; G.autodock = null; G.dockTarget = null;
+  frames(1);
+  press('t'); press('t');
+  var midT0 = G.t, midCruise = false;
+  for (i = 0; i < 15000 && G.autodock && !G.ship.docked; i++) {
+    frame();
+    if (G.cruise) midCruise = true;
+  }
+  check('a mid-range approach cruises in', midCruise, fmtKm(midStart) + ' out');
+  check('and docks', G.ship.docked === home.id, 'docked=' + G.ship.docked + ' after ' + i + ' frames');
+  check('in minutes of game time, not an hour', G.t - midT0 < 900,
+        ((G.t - midT0) / 60).toFixed(1) + ' min');
 })();
 
 function fmtKm(k) { return k > 1000 ? (k / 1000).toFixed(1) + ' Mm' : k.toFixed(1) + ' km'; }
@@ -5544,7 +5607,8 @@ console.log('--- carried into a station ---');
    * that clock. Passing 0.05 here, meaning "fifty milliseconds", advances
    * it by fifty MICROseconds and the rail never leaves its first leg. */
   var guard = 0;
-  while (Sim.arrivalActive(G.ship) && guard++ < 4000) {
+  /* Room for the pull-in onto the rail as well as the rail itself. */
+  while (Sim.arrivalActive(G.ship) && guard++ < 8000) {
     frame();
     var ap = G.arrivalPose;
     if (!ap) break;

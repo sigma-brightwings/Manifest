@@ -2422,8 +2422,19 @@
     say('Cruise drive engaged — , and . set speed, Z to drop out', 5);
   }
 
-  function dropCruise(why) {
+  function dropCruise(why, handVel) {
     if (!G.cruise) return;
+    /* THE AUTOPILOT KNOWS BETTER THAN A GUESS. It drops out on purpose, at
+     * a point it chose, and the one velocity that is any use there is the
+     * station's own — see autoLeadPoint. Everything else still gets the
+     * circular orbit below. */
+    if (handVel) {
+      G.ship.vel = V.clone(handVel);
+      G.cruise = null;
+      G.ship.thrust = V.zero();
+      say('Cruise drive disengaged' + (why ? ' — ' + why : ''), 4);
+      return;
+    }
     /* Hand back a sane velocity. Coming out of cruise at rest next to a
      * planet would mean falling into it, so we leave in the circular orbit
      * we are standing in — which is where a drive like this would put you
@@ -2503,7 +2514,8 @@
      * cruise while still locked onto the place you were leaving — which is
      * the normal way anyone would use it. */
     var nav = navTargetState();
-    if (nav && nav.closing > 0 && nav.range < Math.max(400, c.speed * 2.5)) {
+    var autoOwnsDrop = G.autodock && G.autodock.mode === 'dock';
+    if (!autoOwnsDrop && nav && nav.closing > 0 && nav.range < Math.max(400, c.speed * 2.5)) {
       dropCruise('arrived at ' + nav.name);
       return;
     }
@@ -2550,7 +2562,8 @@
     };
     var range = V.dist(Sim.bodyPosition(st, G.sys, G.t), G.ship.pos);
     say('Auto-dock engaged: ' + st.name +
-        (range > AUTO_CRUISE_RANGE ? ' — cruising in first' : ''), 4);
+        (range > ((st.surface || st.underground) ? AUTO_CRUISE_RANGE : AUTO_CRUISE_MIN)
+          ? ' — cruising in first' : ''), 4);
   }
 
   /* Match orbit, and follow. Two things you constantly want and could only
@@ -2558,7 +2571,8 @@
    * that is moving. Both are the same guidance law auto-dock already uses
    * with a different aim point, which is why they are a handful of lines
    * rather than a subsystem. */
-  var AUTO_CRUISE_RANGE = 3e5;      // km — beyond this, cruise the leg
+  var AUTO_CRUISE_RANGE = 3e5;      // km — beyond this, cruise to a port on a world
+  var AUTO_CRUISE_MIN = 5e3;        // km — beyond this, cruise to an orbital port
   var MATCH_DONE = 0.0015;          // km/s — 1.5 m/s counts as matched
 
   function startAutoMode(mode) {
@@ -2606,35 +2620,139 @@
   /* Point the ship at whatever the autopilot is chasing, and drop out of
    * cruise once we are close enough for the approach law to take it. Used
    * only while the bubble is up. */
-  function steerAutoCruise() {
+  function steerAutoCruise(dtReal) {
     var ad = G.autodock;
     if (!ad || ad.mode !== 'dock') return;
     var ss = autoTargetState(ad);
     if (!ss) return;
-    var rel = V.sub(ss.pos, G.ship.pos);
-    var range = V.len(rel);
-    if (range < 1e-9) return;
+    var lead = autoLeadPoint(ad, ss);
     ad.phase = 'cruise';
-    var way = routeAround(G.ship.pos, ss.pos, null);
-    G.ship.fwd = way ? V.norm(V.sub(way.aim, G.ship.pos)) : V.scale(rel, 1 / range);
+
+    /* Round anything in the way — routeAround, the same walk the approach
+     * uses — and head for the hold point once the line is clear. */
+    var detour = routeAround(G.ship.pos, lead.pos, null);
+    var aimPos = detour ? detour.aim : lead.pos;
+    var aimVel = detour ? detour.refVel : (lead.vel || ss.vel);
+    var rel = V.sub(aimPos, G.ship.pos);
+    var range = V.len(rel);
+
+    /* FLY TO A MOVING POINT, NOT AT IT. The bubble moves the ship in the
+     * system's frame, and the hold point moves too — the station orbiting
+     * its planet, the planet orbiting its star, tens of km/s together. The
+     * speed used to be a fraction of the distance and nothing else, which
+     * is fine at a million km and hopeless for the last few hundred: at
+     * the drive's floor of 60 km/s the ship barely out-ran the station and
+     * took minutes to close forty kilometres. Ask instead for the aim
+     * point's own velocity plus a closing term, and the gap shrinks by the
+     * same fraction every second wherever it is going.
+     *
+     * The closing term is also what winds the drive up on the long leg and
+     * back down on the way in: a fifth of the distance per second. */
+    var want = V.add(aimVel, V.scale(rel, 0.2));
+    var wantLen = V.len(want);
+    /* The drive has a floor. Where the ask falls under it, keep the aim
+     * point's velocity and spend the rest CLOSING — the magnitude is
+     * forced, so the direction has to be the one that still gets there.
+     * Flooring the speed along the old direction did not: it pointed
+     * mostly along the station's own motion and the ship sat three
+     * hundred kilometres off it indefinitely. */
+    if (wantLen < CRUISE_MIN && range > 1e-9) {
+      var u = V.scale(rel, 1 / range);
+      var au = V.dot(aimVel, u), a2 = V.dot(aimVel, aimVel);
+      var k = -au + Math.sqrt(Math.max(0, au * au - a2 + CRUISE_MIN * CRUISE_MIN));
+      want = V.addScaled(aimVel, u, k);
+      wantLen = V.len(want);
+    }
+    if (!(wantLen > 1e-9)) return;
+    faceAlong(V.scale(want, 1 / wantLen));
+    G.cruise.speed = Math.max(CRUISE_MIN, Math.min(G.cruise.maxSpeed, wantLen));
+    /* Closing speed this frame, for the drop test: the floor can carry the
+     * ship several km a frame on a slow machine, and a hold point stepped
+     * over is a hold point circled. */
+    var closeStep = Math.max(0, V.dot(V.sub(want, aimVel), V.scale(rel, 1 / Math.max(range, 1e-9)))) *
+                    Math.max(0.016, dtReal || 0.016) * 1.5;
+
+    /* Drop out AT the hold point, moving with the station. This used to
+     * hand over 150,000 km out, in a circular orbit about whatever was
+     * nearest — a direction chosen by an arbitrary cross product, so the
+     * ship came out of the bubble two to nine km/s off the station's
+     * velocity and the approach law spent the next hour killing it. Cruise
+     * is kinematic; there is no speed to carry out of it, so there is no
+     * reason to stop short. */
+    if (!detour && range < Math.max(lead.dropRange, closeStep)) dropCruise('holding off ' + ss.name, lead.vel);
+  }
+
+  /* WHERE THE AUTOPILOT PARKS YOU: a little ahead of the station on its own
+   * orbit, moving with it. A ship there is in the same orbit as the
+   * station, so it stays put relative to it — the station neither runs
+   * away nor runs you down — and the last leg is a short, slow closing
+   * along the track, which is the approach a real rendezvous flies.
+   *
+   * "Ahead" is along the station's velocity relative to what it orbits,
+   * with the radial part taken out. Something with nothing to orbit (a
+   * ship lock, a station with no parent) gets its own position back. */
+  var AUTO_LEAD_MIN = 40;           // km ahead of the station, at least
+  function autoLeadPoint(ad, ss) {
+    var st = ad.target;
+    var capture = (st && st.dockCaptureRadius) || 10;
+    var lead = Math.max(AUTO_LEAD_MIN, capture * 3);
+    var out = { pos: ss.pos, vel: ss.vel, dropRange: Math.max(10, lead * 0.5), lead: 0 };
+    /* A port on a world keeps the old hand-over: well out, in a circular
+     * orbit, and groundPlan flies the descent. "Ahead on its orbit" means
+     * nothing for something bolted to the rock. */
+    if (st && (st.surface || st.underground)) {
+      out.vel = null; out.dropRange = AUTO_CRUISE_RANGE * 0.5;
+      return out;
+    }
+    var parent = st && st.parentBody;
+    if (!parent || (ad.lock && ad.lock.kind === 'ship')) return out;
+    var ps = Sim.bodyState(parent, G.sys, G.t);
+    var radial = V.sub(ss.pos, ps.pos), rl = V.len(radial);
+    if (!(rl > 1e-9)) return out;
+    radial = V.scale(radial, 1 / rl);
+    var v = V.sub(ss.vel, ps.vel);
+    var along = V.sub(v, V.scale(radial, V.dot(v, radial)));
+    if (!(V.len(along) > 1e-12)) return out;
+    out.pos = V.addScaled(ss.pos, V.norm(along), lead);
+    out.lead = lead;
+    return out;
+  }
+
+  /* Swing the nose toward a direction — instantly. The cruise leg wants
+   * that (the bubble goes where the nose points); the approach does not,
+   * and uses slewNose below. */
+  function faceAlong(dir) {
+    G.ship.fwd = dir;
     G.ship.right = V.norm(V.cross(G.ship.fwd, { x: 0, y: 0, z: 1 }));
     if (V.len(G.ship.right) < 1e-6) G.ship.right = V.norm(V.cross(G.ship.fwd, { x: 0, y: 1, z: 0 }));
     G.ship.up = V.cross(G.ship.right, G.ship.fwd);
+  }
 
-    /* Wind the drive up, which a pilot would do and the first version of
-     * this did not: cruise engages at 2,000 km/s and only the , and . keys
-     * ever moved it, so the autopilot crossed two million kilometres at the
-     * speed it spun up at — sixteen real minutes of watching a dot. Speed
-     * is asked for as a fraction of the distance left, so it winds itself
-     * back down on the way in instead of arriving flat out. */
-    G.cruise.speed = Math.max(G.cruise.speed,
-      Math.min(G.cruise.maxSpeed, Math.max(CRUISE_MIN, range * 0.2)));
-    if (G.cruise.speed > range * 0.35) G.cruise.speed = Math.max(CRUISE_MIN, range * 0.2);
-
-    /* Hand over well outside the approach: cruise covers ground far faster
-     * than the guidance law updates, and dropping out on top of the station
-     * would mean arriving with all of that speed still to kill. */
-    if (range < AUTO_CRUISE_RANGE * 0.5) dropCruise('arrived at ' + ss.name);
+  /* THE NOSE TURNS AT A RATE, and it does not chase a command that is
+   * nearly nothing. The approach used to point the nose straight down the
+   * commanded thrust every frame, and in the last few km that command is
+   * the residue of a converged loop: tiny, and pointing wherever the
+   * rounding put it. The nose flipped up to 180 degrees between two frames,
+   * and from the seat that is the station swinging round the canopy — an
+   * autopilot that looks like it is circling when the path is dead
+   * straight. So: face the thrust while there is real thrust, face the
+   * station when there is not, and never faster than NOSE_RATE. */
+  var NOSE_RATE = 1.2;              // rad per real second — about 70 deg/s
+  function slewNose(want, dtReal) {
+    var len = V.len(want);
+    if (!(len > 1e-12)) return;
+    want = V.scale(want, 1 / len);
+    var cur = G.ship.fwd;
+    var c = Math.max(-1, Math.min(1, V.dot(cur, want)));
+    var ang = Math.acos(c);
+    var maxStep = NOSE_RATE * Math.max(1e-3, dtReal || 0.016);
+    if (ang <= maxStep) { faceAlong(want); return; }
+    /* Rotate cur toward want by maxStep in the plane they share; exactly
+     * opposite has no such plane, so borrow the ship's own up. */
+    var axisPerp = V.sub(want, V.scale(cur, c));
+    if (V.len(axisPerp) < 1e-9) axisPerp = G.ship.up || anyAcross(cur);
+    axisPerp = V.norm(axisPerp);
+    faceAlong(V.norm(V.add(V.scale(cur, Math.cos(maxStep)), V.scale(axisPerp, Math.sin(maxStep)))));
   }
 
   /* No autopilot may ask for more than the engine has. Every mode below
@@ -2859,7 +2977,7 @@
   }
 
   /* Returns the commanded acceleration, or null when it is done. */
-  function advanceAutodock(dtSim) {
+  function advanceAutodock(dtSim, dtReal) {
     var ad = G.autodock;
     var st = ad.target;
     if (G.ship.docked) { G.autodock = null; return null; }
@@ -2920,17 +3038,26 @@
     }
 
     /* ---- the long leg, under cruise ------------------------------------
-     * Point at the station, spin the drive up and let cruise's own arrival
-     * logic drop us out near it. No thrust is commanded while the bubble is
-     * up, because inside it the ship is moved kinematically and thrust is
-     * not what is flying it. */
-    if (range > AUTO_CRUISE_RANGE || (G.cruise && range > AUTO_CRUISE_RANGE * 0.5)) {
+     * Point at the hold point ahead of the station, spin the drive up, and
+     * drop out there moving with it (steerAutoCruise). No thrust is
+     * commanded while the bubble is up, because inside it the ship is moved
+     * kinematically and thrust is not what is flying it. */
+    var leadPt = ad.mode === 'dock' ? autoLeadPoint(ad, ss) : null;
+    var dLead = leadPt ? V.dist(leadPt.pos, G.ship.pos) : range;
+    /* HOW FAR IS WORTH THE DRIVE. It used to be 300,000 km, because the
+     * drive used to hand you back kilometres a second off the station's
+     * velocity and the hand-over had to be far out to leave room to kill
+     * it. It now hands you back at the hold point moving with the station,
+     * so anything the approach law would fly at 500x is flown under cruise
+     * instead — a parking orbit's worth of separation went from an hour on
+     * thrust to seconds. A port on a world keeps the old hand-over and the
+     * old threshold: it drops out well clear, and a lower bar would engage
+     * the drive inside the range it drops out at. */
+    var cruiseFrom = (leadPt && leadPt.vel) ? AUTO_CRUISE_MIN : AUTO_CRUISE_RANGE;
+    if (dLead > cruiseFrom || (G.cruise && dLead > leadPt.dropRange)) {
       ad.phase = 'cruise';
-      var cruiseWay = routeAround(G.ship.pos, ss.pos, null);
-      G.ship.fwd = V.norm(cruiseWay ? V.sub(cruiseWay.aim, G.ship.pos) : rel);
-      G.ship.right = V.norm(V.cross(G.ship.fwd, { x: 0, y: 0, z: 1 }));
-      if (V.len(G.ship.right) < 1e-6) G.ship.right = V.norm(V.cross(G.ship.fwd, { x: 0, y: 1, z: 0 }));
-      G.ship.up = V.cross(G.ship.right, G.ship.fwd);
+      var cruiseWay = routeAround(G.ship.pos, leadPt.pos, null);
+      faceAlong(V.norm(cruiseWay ? V.sub(cruiseWay.aim, G.ship.pos) : V.sub(leadPt.pos, G.ship.pos)));
       if (!G.cruise) {
         /* One attempt per second or so, not per frame: if the drive will
          * not spin up (mass locked, dry tank) the approach simply carries
@@ -2942,7 +3069,7 @@
       }
       if (G.cruise) return V.zero();
     } else if (G.cruise) {
-      dropCruise('arrived at ' + ss.name);
+      dropCruise('holding off ' + ss.name, leadPt ? leadPt.vel : null);
     }
 
     if (range > 5e5 && !G.cruise && ad.phase !== 'cruise') {
@@ -3090,13 +3217,9 @@
     if (ground && ground.phase === 'descend' && !G.ship.gear) G.ship.gear = true;
     if (ground) ad.phase = ground.phase;
 
-    // Point the nose where we are pushing; it is what a pilot would do.
-    if (V.len(cmd) > 1e-9) {
-      G.ship.fwd = V.norm(cmd);
-      G.ship.right = V.norm(V.cross(G.ship.fwd, { x: 0, y: 0, z: 1 }));
-      if (V.len(G.ship.right) < 1e-6) G.ship.right = V.norm(V.cross(G.ship.fwd, { x: 0, y: 1, z: 0 }));
-      G.ship.up = V.cross(G.ship.right, G.ship.fwd);
-    }
+    // Point the nose where we are pushing while we are pushing; at the
+    // station otherwise. Rate-limited — see slewNose.
+    slewNose(V.len(cmd) > G.ship.maxAccel * 0.15 ? cmd : rel, dtReal);
     return cmd;
   }
 
@@ -4491,7 +4614,7 @@
       if (manual > 0) {
         cancelAutodock('handed back to you');
       } else {
-        var cmd = advanceAutodock(G.lastDtSim || 0.016);
+        var cmd = advanceAutodock(G.lastDtSim || 0.016, dtReal);
         if (cmd) acc = cmd;
       }
     }
@@ -4642,7 +4765,7 @@
        * returns before applyControls ever runs — so the autopilot gets its
        * one job here: keep the nose on the station, and call the drop-out.
        * Steering it from applyControls looked right and never executed. */
-      if (G.autodock) steerAutoCruise();
+      if (G.autodock) steerAutoCruise(dtReal);
       /* steerAutoCruise can drop us out of cruise on arrival, and the
        * kinematics must not then run against a bubble that is gone. */
       if (G.cruise) advanceCruise(dtReal);

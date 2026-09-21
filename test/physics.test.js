@@ -1377,9 +1377,12 @@ section('the arrival rail');
 
   /* And the rail ends where dockShip would have put it. If these two ever
    * disagree the hull visibly jumps on the last frame. */
-  var tEnd = t0 + total + 0.001;
+  /* The rail's own length, not the table's: an arrival that starts away
+   * from the rail's first pose is drawn onto it first (see beginArrival),
+   * and that pull-in is part of the ride. */
   var run = freshShip();
   Sim.beginArrival(run, port, sys, t0);
+  var tEnd = t0 + (run.arrival ? run.arrival.dur : total) + 0.001;
   Sim.stepArrival(run, sys, tEnd);
   check('the rail ends docked', run.docked === port.id && !run.arrival);
   check('in the same berth it was carried to',

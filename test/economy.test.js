@@ -320,7 +320,7 @@ console.log('--- landing on a pad, and getting off it again ---');
         'docked=' + ship.docked + ' arriving=' +
         (ship.arrival ? ship.arrival.port : 'no') +
         ' crashed=' + ship.crashed + ' landed=' + ship.landed);
-  if (ship.arrival) Sim.stepArrival(ship, sys, t + Sim.arrivalTotal() + 1);
+  if (ship.arrival) Sim.stepArrival(ship, sys, t + ship.arrival.dur + 1);
   check('and the rail leaves it berthed', ship.docked === pad.id,
         'docked=' + ship.docked);
   check('and it fills the thruster tank', ship.thrusterFuel === ship.thrusterCap);

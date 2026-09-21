@@ -3963,12 +3963,47 @@
    * normal lies along the frame's own up, which leaves no way to build an
    * attitude from it. Both come back as a null path or a null pose, so the
    * refusal is something measured rather than a class of port. */
+  var ARRIVAL_PULL_SPEED = 0.3;      // km/s, average, for the pull-in
+  var ARRIVAL_PULL_DUR = [2.0, 30.0]; // seconds, floor and ceiling
+  var ARRIVAL_PULL_MIN = 0.02;        // km — closer than this, no pull-in
+
+  function toPortFrame(basis, v) {
+    return { e: V.dot(v, basis.east), n: V.dot(v, basis.north), u: V.dot(v, basis.up) };
+  }
+  function fromPortFrame(basis, l) {
+    var w = V.scale(basis.east, l.e);
+    w = V.addScaled(w, basis.north, l.n);
+    return V.addScaled(w, basis.up, l.u);
+  }
+
   function beginArrival(ship, port, sys, t) {
     if (!ship || !port) return false;
     if (!arrivalPath(port, 0)) return false;
     var berth = assignBerth(ship, port);
-    if (!arrivalPose(port, sys, t, berth, 0)) return false;
-    ship.arrival = { port: port.id, berth: berth, at: t, dur: arrivalTotal(port) };
+    var pose0 = arrivalPose(port, sys, t, berth, 0);
+    if (!pose0) return false;
+
+    /* DRAWN IN, NOT TELEPORTED. The capture envelope is kilometres across
+     * — seven to twenty-five of them at an orbital station — and the rail
+     * starts at the hold point a few hundred metres off the berth. Put the
+     * hull on the rail's first pose and it jumps however far it happened
+     * to be inside the envelope, in one frame: three to eight km was the
+     * measured case. So the rail is preceded by a pull-in from wherever
+     * the ship actually is, in the port's own frame so it rides round
+     * with the station, and the rail proper starts where the pull ends. */
+    var basis = portBasis(port, sys, t);
+    var lead = 0, from = null, fromFwd = null;
+    if (basis) {
+      var off = V.sub(ship.pos, pose0.pos), dist = V.len(off);
+      if (dist > ARRIVAL_PULL_MIN) {
+        lead = Math.max(ARRIVAL_PULL_DUR[0], Math.min(ARRIVAL_PULL_DUR[1], dist / ARRIVAL_PULL_SPEED));
+        from = toPortFrame(basis, off);
+        fromFwd = toPortFrame(basis, ship.fwd || pose0.fwd);
+      }
+    }
+    ship.arrival = { port: port.id, berth: berth, at: t, lead: lead,
+                     from: from, fromFwd: fromFwd,
+                     dur: lead + arrivalTotal(port) };
     ship.thrust = V.zero();
     ship.throttle = 0;
     ship.angRate = { pitch: 0, yaw: 0, roll: 0 };
@@ -3992,8 +4027,28 @@
       dockShip(ship, port, sys, t);
       return null;
     }
-    var pose = arrivalPose(port, sys, t, ship.arrival.berth, el);
+    var lead = ship.arrival.lead || 0;
+    var pose = arrivalPose(port, sys, t, ship.arrival.berth, Math.max(0, el - lead));
     if (!pose) { ship.arrival = null; dockShip(ship, port, sys, t); return null; }
+    if (el < lead && ship.arrival.from) {
+      /* The pull-in: the rail's first pose, plus whatever of the starting
+       * offset is still left to close, eased at both ends. */
+      var basis = portBasis(port, sys, t);
+      if (basis) {
+        var k = 1 - ease(el / lead);
+        pose.pos = V.addScaled(pose.pos, fromPortFrame(basis, ship.arrival.from), k);
+        var f0 = fromPortFrame(basis, ship.arrival.fromFwd);
+        var f = V.add(V.scale(f0, k), V.scale(pose.fwd, 1 - k));
+        if (V.len(f) > 1e-6) {
+          f = V.norm(f);
+          var rt = V.cross(f, pose.up);
+          if (V.len(rt) > 1e-6) {
+            rt = V.norm(rt);
+            pose.fwd = f; pose.right = rt; pose.up = V.norm(V.cross(rt, f));
+          }
+        }
+      }
+    }
     ship.pos = pose.pos;
     ship.vel = pose.vel;
     ship.fwd = pose.fwd; ship.up = pose.up; ship.right = pose.right;
