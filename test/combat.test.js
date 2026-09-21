@@ -210,8 +210,16 @@ section('--- a mayday names what it wants ---');
     check('the beacon outlives the answer it summoned',
           r.call.until > r.call.etaAt,
           'until ' + Math.round(r.call.until) + 's vs eta ' + Math.round(r.call.etaAt) + 's');
-    check('and the responder is steered to the SCENE, not to the player',
-          r.responder.mode === 'respond' && !!r.responder.respondPos);
+    /* WAS: steered to the SCENE, not to the player. That held for a
+     * cutter answering a robbery and it is still how security is sent
+     * (below). A TENDER answering a STRANDED ship is the rescue now
+     * (Combat.startRescue): it flies a timestamped leg that chases the
+     * drifting hull, because a ship out of reaction mass is still falling
+     * round something and the scene it called from is empty sky by the
+     * time anybody arrives. */
+    check('and a tender for a stranded ship flies the rescue leg, aimed at the hull',
+          !!r.responder.rescue && !!G.rescue && G.rescue.responder === r.responder.id &&
+          V.dist(r.responder.rescue.target, G.ship.pos) < 1e-6);
   }
 
   /* Services do not substitute for one another. */
@@ -220,6 +228,10 @@ section('--- a mayday names what it wants ---');
   check('a security call is answered by guns, never by a tender',
         !r2.responder || r2.responder.kind === 'police' || r2.responder.kind === 'navy',
         r2.responder ? r2.responder.kind : 'none in system');
+  if (r2.responder) {
+    check('and security is steered to the SCENE, not to the player',
+          r2.responder.mode === 'respond' && !!r2.responder.respondPos);
+  }
 
   check('eligibility is by service',
         Combat.eligibleResponder({ kind: 'tender' }, Combat.HELP_TENDER) &&

@@ -330,6 +330,12 @@
        * it had. Stored whole because a parked ship IS its record — there
        * is no live object to reconstruct it from. */
       fleet: G.fleet || [],
+      /* THE TENDER ON ITS WAY, and whether one ever will be again. Both
+       * additive. The responder is named by id and re-attached on load
+       * (Combat.restoreRescue), so the ETA quoted before a reload is the
+       * ETA flown after it. */
+      rescue: G.rescue || null,
+      tenderKills: G.tenderKills || 0,
       doneMissions: G.doneMissions || {},
       campaigns: G.campaigns || {},
       ledger: G.ledgerLog || []
@@ -450,6 +456,8 @@
     G.allegiance = data.allegiance || null;
     G.owed = data.owed || [];
     G.fleet = data.fleet || [];
+    G.rescue = data.rescue || null;
+    G.tenderKills = data.tenderKills || 0;
     G.doneMissions = data.doneMissions || {};
     G.campaigns = data.campaigns || {};
     G.ledgerLog = data.ledger || [];

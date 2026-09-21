@@ -452,6 +452,45 @@
                   uniqueGroup: 'scanner',
                   minDev: 0.60, minStanding: 0, minCrime: 0, grey: false,
                   pitch: 'Hull and shields, in numbers. Knowing is most of winning.' },
+    /* THE THIRD RUNG. Astra: "a Combat Analyzer which shows shield, hull
+     * and weapons status for targeted ships. Using the thing isn't a
+     * hostile action, unless you fire upon them."
+     *
+     * The first two rungs already existed as the hull and combat scanners
+     * — a fraction, then the numbers. What neither could say is what the
+     * other ship would DO to you, and that is the one fact worth the most
+     * before a robbery or a fight: a shuttle carries nothing, a trader a
+     * gun that is meant to cost you time rather than win, a Syndicate
+     * patrol a beam nearly three times a cutter's. See npcArmament.
+     *
+     * LOOKING IS NOT SHOOTING, and that is not a rule written here — it is
+     * the absence of one. scanShip reads the spec and touches nothing that
+     * any ship reacts to; what makes a contact hostile is fire, a demand,
+     * or a bounty, none of which a scan is. The pitch says so out loud
+     * because a player who has just bought the priciest instrument on the
+     * board deserves to know it will not start anything. */
+    combatanalyser: { id: 'combatanalyser', name: 'Combat analyser', slot: 'utility',
+                      kind: 'scanner', scan: 3, price: 21000, power: 2.6, mass: 3,
+                      uniqueGroup: 'scanner',
+                      minDev: 0.70, minStanding: 10, minCrime: 0, grey: false,
+                      pitch: 'Hull, shields, and what they would point at you. Looking is not shooting.' },
+
+    /* ---- the trade analyser ---------------------------------------------
+     * Astra: "a trade analyzer component which we can buy. The purpose of
+     * it is to identify what in a system there are shortages of, and what
+     * there is an excess of."
+     *
+     * An instrument, not a database: it reads the same market model every
+     * port reads (Economy.systemAnalysis) and sorts it, so it cannot tell
+     * you anything a port would not — it can only tell you all of them at
+     * once, from orbit, which is the whole of what you are paying for. A
+     * utility slot, like the scanners, because it is a receiver listening
+     * to the system's markets and that is where the receivers go. */
+    tradescan: { id: 'tradescan', name: 'Trade analyser', slot: 'utility',
+                 kind: 'analyser', price: 7800, power: 0.9, mass: 1,
+                 unique: true,
+                 minDev: 0.45, minStanding: -100, minCrime: 0, grey: false,
+                 pitch: 'Every warehouse in the system, sorted by who is desperate.' },
 
     /* ---- the cargo scoop --------------------------------------------------
      * Picking cargo up used to be a property of having a hold, which made
@@ -1649,6 +1688,15 @@
     if (s.docked || s.landed) {
       return { ok: false, why: 'you are already berthed — walk to the desk' };
     }
+    /* A STRANDED SHIP ASKING FOR A TENDER is the rescue, by whichever door
+     * it is asked through — one machinery, so the manual call and the
+     * automatic one cannot quote different boats. */
+    if (want === HELP_TENDER && stranded(G)) {
+      if (G.rescue) return { ok: true, call: null, responder: null, text: G.rescue.text };
+      var rr = startRescue(sys, G, t, hooks);
+      if (!rr.ok && hooks && hooks.say) hooks.say('MAYDAY — ' + rr.why + '.', 7);
+      return { ok: rr.ok, why: rr.why, call: rr.call || null, responder: rr.responder || null, text: rr.text };
+    }
     var call = pushCall(G, {
       from: 'player',
       name: s.shipName || 'this ship',
@@ -1855,6 +1903,249 @@
       keep.push(c);
     }
     G.distress = keep;
+  }
+
+  /* ---- THE RESCUE TENDER ---------------------------------------------------
+   * The rule, from claude/rescue-tender.md: if the reaction-mass tank runs
+   * dry in flight, a tender comes to the player. Criminal status, warrants
+   * and standing do not matter. The only refusal is a career that has EVER
+   * killed a tender — `G.tenderKills`, saved, reset on a new game — because
+   * the one hull whose only defence is that everybody agrees not to shoot it
+   * does not fly toward the one pilot who did.
+   *
+   * WHY THIS EXISTS. The mayday above dispatched a responder and then left
+   * it on its timetable, where the live steering only ever reaches a ship
+   * inside WAKE_RANGE — three thousand kilometres. A tender answering from
+   * thirty million never arrived, and the save it was answering could not
+   * continue. That was the dead end unfinished.md called "a save that cannot
+   * continue", and it was the only one.
+   *
+   * HOW SHE FLIES. A timestamped rail (Sim.rescueRailState): a 90 s
+   * scramble, a flip-and-burn transit t = 2·sqrt(d/a) at the tender's own
+   * acceleration, aimed at where the stranded hull IS rather than where it
+   * was, ending RESCUE_HANDOFF short with velocity matched. There Combat
+   * lifts her into the live steering — the same closed-loop, gravity-aware
+   * substepped controller every woken NPC uses — with mode `rescue`, which
+   * holds a hose-length off the player and matches the drift. Six seconds
+   * alongside and the tanks are filled. Astra: "it needs to fill your jump
+   * fuel and reaction mass" — BOTH, because a ship that can move but cannot
+   * leave the system is the next dead end along.
+   *
+   * WHO COMES. The system's own tender or tug if it has one, nearest first
+   * (eligibleResponder, as before). A system with neither gets a temporary
+   * boat from the nearest docking port — a spec on a `port` rail, added to
+   * the patrol list for the job and removed when it is done or called off,
+   * so a frontier system is not a death sentence and does not permanently
+   * acquire a rescue service it never had.
+   *
+   * MONEY. A flat RESCUE_FEE call-out. A pilot who cannot pay it pays what
+   * they have and the crew waive the rest — being broke is not a reason to
+   * die in a stable orbit. The fee is said out loud so it lands in the
+   * ledger.
+   *
+   * SAVED. `G.rescue` carries the timestamps and the responder's id, and
+   * `restoreRescue` re-attaches them to the spec (or rebuilds the temporary
+   * boat) on the first frame after a load, so the ETA quoted before a
+   * reload is the ETA flown after it. */
+  var RESCUE_FEE = 500;
+  var RESCUE_SCRAMBLE = 90;        // s — crew aboard, drive spooled
+  var RESCUE_HOLD = 6;             // s alongside before the tanks are full
+  var RESCUE_CLOSE = 3.5;          // km — near enough to pass a hose
+  var RESCUE_MATCH = 0.05;         // km/s — and slow enough
+
+  function stranded(G) {
+    var s = G.ship;
+    return !s.docked && !s.landed && !(s.thrusterFuel > 0.001);
+  }
+
+  function findSpec(sys, id) {
+    var p = (sys && sys.patrols) || [];
+    for (var i = 0; i < p.length; i++) if (p[i].id === id) return p[i];
+    return null;
+  }
+
+  /* The temporary boat. Nearest docking port; the boat sits on the pad
+   * until it scrambles. Its id is stable per system so a reload rebuilds
+   * the same one rather than a second. */
+  function launchPortBoat(sys, G) {
+    var ports = (sys && sys.ports) || [], best = null, bestD = Infinity;
+    for (var i = 0; i < ports.length; i++) {
+      var st = global.Sim.bodyState(ports[i], sys, G.t);
+      var d = V.dist(st.pos, G.ship.pos);
+      if (d < bestD) { bestD = d; best = ports[i]; }
+    }
+    if (!best) return null;
+    var cls = (global.Gen && global.Gen.PATROL_CLASSES && global.Gen.PATROL_CLASSES.tender) ||
+              { size: 0.095, color: '#ffd36b', accel: 0.0188, label: 'rescue tender' };
+    var spec = {
+      id: 'rescue-boat|' + best.id, kind: 'tender', faction: best.faction || null,
+      name: best.name + ' boat', className: cls.label, color: cls.color,
+      size: cls.size, accel: cls.accel, temporary: true, homePort: best.id,
+      rail: { type: 'port', port: best.id }
+    };
+    (sys.patrols = sys.patrols || []).push(spec);
+    sys._ships = null;
+    return spec;
+  }
+
+  function nearestTender(sys, G, t) {
+    var patrols = (sys && sys.patrols) || [], best = null, bestD = Infinity;
+    for (var i = 0; i < patrols.length; i++) {
+      var sp = patrols[i];
+      if (!eligibleResponder(sp, HELP_TENDER) || sp.rescue || sp.temporary) continue;
+      var st = global.Sim.patrolState(sp, sys, t);
+      if (!st || !st.pos) continue;
+      var d = V.dist(st.pos, G.ship.pos);
+      if (d < bestD) { best = sp; bestD = d; }
+    }
+    return best;
+  }
+
+  function startRescue(sys, G, t, hooks) {
+    function talk(m, secs) { if (hooks && hooks.say) hooks.say(m, secs || 8); }
+    if (G.rescue) return { ok: false, why: 'a tender is already on its way' };
+    if ((G.tenderKills || 0) > 0) {
+      return { ok: false, why: 'no tender will answer this ship — you have killed one' };
+    }
+    if (!stranded(G)) return { ok: false, why: 'you have reaction mass; fly to a port' };
+
+    var spec = nearestTender(sys, G, t), temp = false;
+    if (!spec) { spec = launchPortBoat(sys, G); temp = true; }
+    if (!spec) return { ok: false, why: 'nothing in this system can reach you' };
+
+    var st = global.Sim.patrolState(spec, sys, t);
+    var d = st ? V.dist(st.pos, G.ship.pos) : 0;
+    var transit = 2 * Math.sqrt(Math.max(0, d - global.Sim.RESCUE_HANDOFF) /
+                                Math.max(1e-6, spec.accel || 0.01));
+    var eta = RESCUE_SCRAMBLE + transit;
+    G.rescue = { responder: spec.id, temp: temp, t0: t,
+                 scrambleUntil: t + RESCUE_SCRAMBLE, handoffAt: t + eta,
+                 fee: RESCUE_FEE, distance: d };
+    attachRescue(spec, G);
+
+    /* On the air, so the comms list shows the same call a manual mayday
+     * would, answered. */
+    var call = pushCall(G, {
+      from: 'player', name: G.ship.shipName || 'this ship', reg: G.ship.reg || null,
+      cls: 'own ship', faction: null, kind: 'stranded', mine: true, want: HELP_TENDER,
+      pos: V.clone(G.ship.pos), at: t, until: t + eta + MAYDAY_MARGIN,
+      answeredBy: spec.id, victim: null, etaAt: t + eta
+    });
+    var text = spec.name + ' is coming for you — ' + fmtKm(d) + ' out, about ' +
+               fmtEta(eta) + '.' + (temp ? '  Launched from ' + sys.byId[spec.homePort].name + '.' : '');
+    G.rescue.text = text;
+    talk('Reaction mass exhausted.  ' + text, 9);
+    if (hooks && hooks.sound) hooks.sound('click');
+    return { ok: true, responder: spec, eta: eta, text: text, call: call };
+  }
+
+  function attachRescue(spec, G) {
+    spec.rescue = { t0: G.rescue.t0, scrambleUntil: G.rescue.scrambleUntil,
+                    handoffAt: G.rescue.handoffAt, origin: null, originVel: null,
+                    target: V.clone(G.ship.pos), targetVel: V.clone(G.ship.vel) };
+    spec.respondTo = 'player';
+  }
+
+  /* After a load: the timestamps are in G.rescue, the spec is not. */
+  function restoreRescue(sys, G) {
+    if (!G.rescue) return null;
+    var spec = findSpec(sys, G.rescue.responder);
+    if (!spec && G.rescue.temp) spec = launchPortBoat(sys, G);
+    if (!spec) { G.rescue = null; return null; }
+    if (!spec.rescue) attachRescue(spec, G);
+    return spec;
+  }
+
+  function endRescue(sys, G, spec, why) {
+    if (spec) {
+      spec.rescue = null; spec.respondTo = null; spec.respondPos = null;
+      spec.live = null; spec.mode = null; spec.rescueHold = 0;
+      if (spec.temporary && sys && sys.patrols) {
+        var i = sys.patrols.indexOf(spec);
+        if (i >= 0) sys.patrols.splice(i, 1);
+        sys._ships = null;
+      }
+    }
+    var list = G.distress || [];
+    for (var j = list.length - 1; j >= 0; j--) if (list[j].mine) list.splice(j, 1);
+    G.rescue = null;
+    G.lastRescueEnd = why || null;
+  }
+
+  function updateRescue(sys, G, t, dtSim, hooks) {
+    function talk(m, secs) { if (hooks && hooks.say) hooks.say(m, secs || 6); }
+    var s = G.ship;
+
+    if (!G.rescue) {
+      if (!stranded(G)) { G.rescueRefused = false; return; }
+      if ((G.tenderKills || 0) > 0) {
+        if (!G.rescueRefused) {
+          G.rescueRefused = true;
+          talk('Reaction mass exhausted.  No tender will answer this ship — you killed one.', 9);
+        }
+        return;
+      }
+      startRescue(sys, G, t, hooks);
+      return;
+    }
+
+    var spec = findSpec(sys, G.rescue.responder) || restoreRescue(sys, G);
+    if (!spec) return;
+    if (!spec.rescue) attachRescue(spec, G);
+
+    /* CALLED OFF the moment you are no longer stranded — docked, landed,
+     * or somebody else pumped something across. */
+    if (!stranded(G)) {
+      talk(spec.name + ' stands down — you are under way.', 5);
+      endRescue(sys, G, spec, 'recovered');
+      return;
+    }
+    if (spec.dead) {
+      /* You shot the boat that came for you. There is no second one. */
+      endRescue(sys, G, null, 'killed');
+      return;
+    }
+
+    /* The leg chases the hull, not the scene. */
+    spec.rescue.target = V.clone(s.pos);
+    spec.rescue.targetVel = V.clone(s.vel);
+
+    /* HANDOFF: off the rail and into the live steering, exactly where the
+     * rail ends and with the velocity it ends at, so nothing jumps. */
+    if (!spec.live && t >= G.rescue.handoffAt) {
+      var end = global.Sim.patrolState(spec, sys, G.rescue.handoffAt);
+      if (end) {
+        global.Sim.wakeNpc(spec, end);
+        spec.mode = 'rescue';
+        spec.rescueHold = 0;
+        talk(spec.name + ' is on final — hold your attitude.', 6);
+      }
+    }
+
+    if (spec.live && spec.mode === 'rescue') {
+      var range = V.dist(spec.live.pos, s.pos);
+      var rel = V.dist(spec.live.vel, s.vel);
+      if (range < RESCUE_CLOSE && rel < RESCUE_MATCH) {
+        spec.rescueHold = (spec.rescueHold || 0) + dtSim;
+        if (spec.rescueHold >= RESCUE_HOLD) {
+          var fee = Math.min(RESCUE_FEE, Math.max(0, Math.floor(s.credits || 0)));
+          s.credits = (s.credits || 0) - fee;
+          s.thrusterFuel = s.thrusterCap;
+          s.fuel = s.fuelCap;
+          s.fuelOut = false;
+          if (global.Sim.refreshShip) global.Sim.refreshShip(s);
+          G.tenderRescues = (G.tenderRescues || 0) + 1;
+          var line = spec.name + ' — tanks filled, reaction mass and hydrogen  ·  ' +
+                     (fee >= RESCUE_FEE ? fee + ' cr call-out'
+                      : fee > 0 ? fee + ' cr, the rest waived' : 'no charge — they waived it');
+          if (hooks && hooks.ledger) hooks.ledger(line); else talk(line, 8);
+          if (hooks && hooks.sound) hooks.sound('pay');
+          endRescue(sys, G, spec, 'refuelled');
+        }
+      } else {
+        spec.rescueHold = 0;
+      }
+    }
   }
 
   var ATTACK_STANDOFF = 6;       // km — where an attacker tries to sit
@@ -2070,7 +2361,7 @@
    * at a ship cannot change what it turns out to be made of, it only
    * decides it sooner, which is the same trick npcHull has always played on
    * the first shot. */
-  function scanShip(ship, spec) {
+  function scanShip(ship, spec, sys) {
     var level = scanLevel(ship);
     if (!level || !spec) return null;
     npcHull(spec);
@@ -2089,7 +2380,57 @@
       out.shieldHp = spec.shieldHp || 0;
       out.shieldMax = spec.shieldMax || 0;
     }
+    if (level >= 3) out.arms = npcArmament(spec, sys, ship);
     return out;
+  }
+
+  /* What the other ship would point at you, read off the SAME tables the
+   * NPC gunnery loop fires from (npcFire: TRADER_GUN for anything civil,
+   * SYNDICATE_GUN for the mob's own police, NPC_GUN for the rest) and the
+   * same rack roll a pirate's crate cooks off from (pirateRack). One set
+   * of numbers with two readers, so the analyser cannot describe a gun
+   * the ship does not then fire. Passing `sys` settles the rack the way
+   * the first shot would; without it, an unsettled rack reads as unknown
+   * rather than as absent. */
+  function hasTradeAnalyser(ship) {
+    var list = fittedList(ship);
+    for (var i = 0; i < list.length; i++) if (list[i].item.kind === 'analyser') return true;
+    return false;
+  }
+
+  /* What YOUR fitted guns do per second, for the comparison. Damage over
+   * cooldown, summed over every gun in the fit — the same two numbers the
+   * NPC's line is built from, so the ratio compares like with like. */
+  function playerDps(ship) {
+    var list = fittedList(ship), dps = 0;
+    for (var i = 0; i < list.length; i++) {
+      var it = list[i].item;
+      if (it.kind === 'gun' && it.dmg > 0 && it.cooldown > 0) dps += it.dmg / it.cooldown;
+    }
+    return dps;
+  }
+
+  function npcArmament(spec, sys, ship) {
+    if (!isArmedNpc(spec)) return { armed: false, text: 'unarmed' };
+    var civil = spec.kind === 'trader' || spec.kind === 'trade' || spec.kind === 'fleet' ||
+                spec.defending || !spec.kind;
+    var elite = spec.kind === 'police' && spec.faction === 'outlaw';
+    var gun = civil ? TRADER_GUN : elite ? SYNDICATE_GUN : NPC_GUN;
+    var name = civil ? 'defensive gun' : elite ? 'muon beam' : 'patrol laser';
+    var rack;
+    if (sys) rack = !!pirateRack(sys, spec);
+    else rack = spec.rack === undefined ? null : !!spec.rack;
+    var dps = gun.dmg / gun.cooldown;
+    var mine = ship ? playerDps(ship) : undefined;
+    return {
+      armed: true, gun: name, dmg: gun.dmg, range: gun.range,
+      cooldown: gun.cooldown, dps: dps, rack: rack,
+      /* Theirs over yours. Undefined without a ship to compare against;
+       * Infinity when you carry nothing, which is the honest answer. */
+      vsYou: mine === undefined ? undefined : (mine > 0 ? dps / mine : Infinity),
+      text: name + '  ' + dps.toFixed(1) + '/s to ' + gun.range + ' km' +
+            (rack ? '  ·  bootleg rack' : rack === null ? '' : '')
+    };
   }
 
   function npcShield(spec) {
@@ -2806,6 +3147,9 @@
                  : spec.cls === 'liner' ? 'killLiner'
                  : 'kill';
       crime(sys, G, t, charge, spec, hooks);
+      /* AND NO TENDER EVER COMES AGAIN. Counted rather than flagged, saved
+       * with the career, reset only by a new one — see startRescue. */
+      if (charge === 'killTender') G.tenderKills = (G.tenderKills || 0) + 1;
     } else if (hooks && hooks.say) {
       hooks.say('Pirate destroyed — nobody will miss it', 4);
     }
@@ -5127,6 +5471,7 @@
     resolveHungSeeker(sys, G, t, hooks);
 
     updateDistress(sys, G, t, hooks);
+    updateRescue(sys, G, t, dtSim, hooks);
 
     /* A witness's call, if it was neither bought nor intimidated away. */
     if (G.pendingReport && t >= G.pendingReport.at) {
@@ -5368,13 +5713,28 @@
   function hailAssist(G, contact) {
     var Eco = global.Economy;
     var s = G.ship;
-    var cap = s.fuelCap || 1;
-    if (s.fuel > cap * 0.3) return null;
-    var want = Math.min(ASSIST_FUEL_MAX, Math.max(1, Math.round(cap * 0.5 - s.fuel)));
-    if (want < 1) return null;
+    /* BOTH TANKS, whichever is short. The first version filled hydrogen
+     * only — the jump tank — and said "you have fuel, we are not diverting"
+     * to a ship with a full jump tank and no reaction mass, which is the
+     * one that cannot move. Astra: "it needs to fill your jump fuel and
+     * reaction mass." A passing ship spares a little of each, at the black
+     * rate, up to ASSIST_FUEL_MAX of each. */
     var base = (Eco && Eco.BY_ID.hydrogen) ? Eco.BY_ID.hydrogen.base : 55;
-    return { tonnes: want, each: Math.round(base * ASSIST_MARKUP),
-             cost: Math.round(base * ASSIST_MARKUP) * want };
+    var each = Math.round(base * ASSIST_MARKUP);
+    var jumpCap = s.fuelCap || 1, thrCap = s.thrusterCap || 1;
+    var fuel = 0, thr = 0;
+    if (s.fuel <= jumpCap * 0.3) {
+      fuel = Math.min(ASSIST_FUEL_MAX, Math.max(1, Math.round(jumpCap * 0.5 - s.fuel)));
+    }
+    if ((s.thrusterFuel || 0) <= thrCap * 0.3) {
+      thr = Math.min(ASSIST_FUEL_MAX, Math.max(1, Math.round(thrCap * 0.5 - (s.thrusterFuel || 0))));
+    }
+    if (fuel < 1 && thr < 1) return null;
+    var tonnes = fuel + thr;
+    return { tonnes: tonnes, fuel: fuel, thruster: thr, each: each, cost: each * tonnes,
+             what: (thr ? thr + ' t reaction mass' : '') +
+                   (thr && fuel ? ' + ' : '') +
+                   (fuel ? fuel + ' t hydrogen' : '') };
   }
 
   /* DIRECTIONS, and this is the one that matters. A ship that has flown
@@ -5431,6 +5791,154 @@
     text += '"';
     if (hooks && hooks.say) hooks.say(text, 7);
     return { charted: charted };
+  }
+
+  /* ---- RUMOURS ------------------------------------------------------------
+   * Astra: "Rumors when hailing other ships, especially about trade deals?"
+   *
+   * A RUMOUR IS TRUE. That is the whole design, and it is the same rule the
+   * starport signs keep: nothing in this game says a thing about the world
+   * that the world does not then bear out. What a ship tells you is a FACT
+   * it is in a position to know — its own two ports' markets first, because
+   * those are the warehouses its crew have just walked through, and the
+   * wider system only when its own run has nothing worth passing on. The
+   * trade facts come from Economy.systemAnalysis, which is the trade
+   * analyser's own arithmetic, so a rumour is a free, partial, one-line
+   * reading off the instrument you could buy — and the non-trade ones read
+   * off the patrol list and the port roster, which is what the radar and
+   * the chart already show if you looked.
+   *
+   * PICKED, NOT ROLLED. Which fact a given ship passes on is hashed off the
+   * route and the day, the same way its chatter line is, so hailing twice
+   * does not shop for a better rumour and the same ship on the same day
+   * says the same thing. Once told, a ship has told you — `_rumourDay` is
+   * the same latch `_told` is for directions — and it has something new the
+   * next day, because the markets will have moved by then. */
+  var RUMOUR_DAY = 86400;
+
+  function rumourFacts(G, sys, t, contact) {
+    var Eco = global.Economy, facts = [];
+    var mine = {};
+    if (contact.from) mine[contact.from.id] = true;
+    if (contact.to) mine[contact.to.id] = true;
+
+    if (Eco && Eco.systemAnalysis) {
+      var a = Eco.systemAnalysis(sys, t), i;
+      /* Own ports first, and only the sharpest of each kind. */
+      for (i = 0; i < a.shortages.length; i++) {
+        var sh = a.shortages[i];
+        if (!mine[sh.port.id]) continue;
+        facts.push({ kind: 'shortage', weight: 3,
+                     text: sh.port.name + ' is down to nothing on ' + sh.name.toLowerCase() +
+                           ' — paying ' + Math.round(sh.bid) + ' a tonne' });
+        break;
+      }
+      for (i = 0; i < a.excesses.length; i++) {
+        var ex = a.excesses[i];
+        if (!mine[ex.port.id]) continue;
+        facts.push({ kind: 'excess', weight: 3,
+                     text: ex.waste
+                       ? ex.port.name + ' has drums stacked to the roof — they will pay you to take them'
+                       : ex.port.name + ' cannot give ' + ex.name.toLowerCase() + ' away — ' +
+                         Math.round(ex.ask) + ' a tonne' });
+        break;
+      }
+      /* Then the fattest run anywhere under this star. */
+      if (a.runs.length) {
+        var r = a.runs[0];
+        facts.push({ kind: 'run', weight: 2,
+                     text: 'buy ' + r.name.toLowerCase() + ' at ' + r.from.name + ', sell it at ' +
+                           r.to.name + ' — ' + Math.round(r.margin) + ' a tonne in it' });
+      }
+      /* And the sharpest shortage anywhere, if it was not theirs. */
+      if (a.shortages.length && !mine[a.shortages[0].port.id]) {
+        var s0 = a.shortages[0];
+        facts.push({ kind: 'shortage', weight: 1,
+                     text: 'heard ' + s0.port.name + ' is short of ' + s0.name.toLowerCase() });
+      }
+    }
+
+    /* WHAT THE NEIGHBOURS ARE SAYING. A crew that has been to the next star
+     * knows its markets as of now — but only stars whose systems already
+     * exist in G.systemCache, because a rumour that generated a star system
+     * to be true would be the most expensive sentence in the game. That is
+     * every system the player has visited this career, which is also the
+     * set a rumour about is worth hearing. Nearest charted neighbour with
+     * a system in the cache; its sharpest shortage. */
+    var Galaxy = global.Galaxy;
+    if (Eco && Eco.systemAnalysis && G.systemCache && G.galaxy && G.here && Galaxy) {
+      var near = null, nearD = Infinity;
+      for (var gs = 0; gs < G.galaxy.stars.length; gs++) {
+        var star = G.galaxy.stars[gs];
+        if (star.id === G.here.id || !G.systemCache[star.id]) continue;
+        var dd = Galaxy.distance3(star, G.here);
+        if (dd < nearD) { nearD = dd; near = star; }
+      }
+      if (near) {
+        var there = Eco.systemAnalysis(G.systemCache[near.id], t);
+        if (there.shortages.length) {
+          var ns = there.shortages[0];
+          facts.push({ kind: 'abroad', weight: 1, star: near,
+                       text: 'a crew in from ' + near.name + ' says ' + ns.port.name +
+                             ' there is short of ' + ns.name.toLowerCase() });
+        } else if (there.excesses.length) {
+          var ne = there.excesses[0];
+          facts.push({ kind: 'abroad', weight: 1, star: near,
+                       text: 'a crew in from ' + near.name + ' says ' + ne.port.name +
+                             ' there cannot shift its ' + (ne.waste ? 'drums' : ne.name.toLowerCase()) });
+        }
+      }
+    }
+
+    /* What is out there. Read off the same list the radar draws from. */
+    var patrols = (sys && sys.patrols) || [], pirates = 0, cutters = 0, nearBody = null;
+    for (var p = 0; p < patrols.length; p++) {
+      var sp = patrols[p];
+      if (sp.dead) continue;
+      if (sp.kind === 'pirate') {
+        pirates++;
+        if (!nearBody && sp.rail && sp.rail.parent && sys.byId[sp.rail.parent]) {
+          nearBody = sys.byId[sp.rail.parent];
+        }
+      } else if (sp.kind === 'police' || sp.kind === 'navy') cutters++;
+    }
+    if (pirates > 0) {
+      facts.push({ kind: 'pirates', weight: 2,
+                   text: pirates === 1 ? 'somebody is loitering' + (nearBody ? ' off ' + nearBody.name : '') +
+                                         ' who is not on any timetable — keep your distance'
+                                       : pirates + ' hulls working the lanes' +
+                                         (nearBody ? ' around ' + nearBody.name : '') +
+                                         ' that nobody dispatched' });
+    } else if (cutters > 0) {
+      facts.push({ kind: 'law', weight: 1,
+                   text: 'the law is thick here — ' + cutters + ' on patrol, nobody has been robbed in weeks' });
+    }
+    return facts;
+  }
+
+  function hailRumour(G, sys, t, contact, hooks) {
+    function talk(msg, secs) { if (hooks && hooks.say) hooks.say(msg, secs || 7); }
+    var route = contact.route;
+    var day = Math.floor(t / RUMOUR_DAY);
+    if (route && route._rumourDay === day) {
+      talk(contact.name + ': "That is all I have heard today."', 5);
+      return { rumour: null, told: true };
+    }
+    var facts = rumourFacts(G, sys, t, contact);
+    if (!facts.length) {
+      talk(contact.name + ': "Quiet system. Nothing worth repeating."', 5);
+      if (route) route._rumourDay = day;
+      return { rumour: null };
+    }
+    /* Weighted pick off one hash, so it is the same answer all day. */
+    var total = 0, i;
+    for (i = 0; i < facts.length; i++) total += facts[i].weight;
+    var h = RNG.hashString('rumour|' + ((route && route.id) || contact.name) + '|' + day);
+    var roll = (h % 1000) / 1000 * total, pick = facts[0];
+    for (i = 0; i < facts.length; i++) { roll -= facts[i].weight; if (roll <= 0) { pick = facts[i]; break; } }
+    if (route) route._rumourDay = day;
+    talk(contact.name + ': "' + pick.text.charAt(0).toUpperCase() + pick.text.slice(1) + '."', 8);
+    return { rumour: pick };
   }
 
   /* The one entry point, so the comms screen never has to know which of
@@ -5533,6 +6041,7 @@
     }
 
     if (intent === 'directions') return hailDirections(G, sys, t, contact, hooks);
+    if (intent === 'rumour') return hailRumour(G, sys, t, contact, hooks);
 
     if (intent === 'assist') {
       var offer = hailAssist(G, contact);
@@ -5546,11 +6055,15 @@
         return null;
       }
       s.credits -= offer.cost;
-      s.fuel = Math.min(s.fuelCap || s.fuel + offer.tonnes, s.fuel + offer.tonnes);
+      if (offer.fuel) s.fuel = Math.min(s.fuelCap || s.fuel + offer.fuel, s.fuel + offer.fuel);
+      if (offer.thruster) {
+        s.thrusterFuel = Math.min(s.thrusterCap || offer.thruster, (s.thrusterFuel || 0) + offer.thruster);
+        s.fuelOut = false;
+      }
       if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(s);
-      talk(contact.name + ' pumps ' + offer.tonnes + ' t across for ' + offer.cost +
+      talk(contact.name + ' pumps ' + offer.what + ' across for ' + offer.cost +
            ' cr. "Do not make a habit of it."', 6);
-      return { fuel: offer.tonnes, cost: offer.cost };
+      return { fuel: offer.fuel, thruster: offer.thruster, cost: offer.cost };
     }
 
     if (intent === 'buy' || intent === 'sell') {
@@ -6000,6 +6513,17 @@
        * they signed on to — see Fleet.record — so leaving them on the new
        * ship as well would clone every hand aboard and pay them twice. */
       s.crew = [];
+      /* AND WHOEVER WAS RIDING. The hold went with the hull and so did the
+       * berths, so every contract you were carrying is now HERS — the
+       * freight is in her record's cargo and the passengers in her berths.
+       * Marked so, or the bond would count tonnes against a hold that no
+       * longer has them and the desk would nag you for freight that is on
+       * the next clamp. Unload at the yard if you meant to keep it. */
+      s.passengers = 0;
+      if (parked) {
+        var ml = G.missions || [];
+        for (var mi = 0; mi < ml.length; mi++) if (ml[mi] && !ml[mi].carrier) ml[mi].carrier = parked.id;
+      }
     }
     var fitted = addHullStandard(s);
     syncLegacy(s);
@@ -6075,6 +6599,12 @@
     buyEquipment: buyEquipment, stockAt: stockAt,
     SINK: SINK, sinkRackSize: sinkRackSize, armSink: armSink,
     scanLevel: scanLevel, scanShip: scanShip, hasScoop: hasScoop,
+    npcArmament: npcArmament, hasTradeAnalyser: hasTradeAnalyser, playerDps: playerDps,
+    hailRumour: hailRumour, rumourFacts: rumourFacts, RUMOUR_DAY: RUMOUR_DAY,
+    startRescue: startRescue, updateRescue: updateRescue, restoreRescue: restoreRescue,
+    endRescue: endRescue, stranded: stranded, launchPortBoat: launchPortBoat,
+    RESCUE_FEE: RESCUE_FEE, RESCUE_SCRAMBLE: RESCUE_SCRAMBLE, RESCUE_HOLD: RESCUE_HOLD,
+    RESCUE_CLOSE: RESCUE_CLOSE,
     addHeat: addHeat, updateSink: updateSink,
     WITNESS_RANGE: WITNESS_RANGE, DISTRESS_DELAY: DISTRESS_DELAY,
     TRADER_GUN: TRADER_GUN, NPC_GUN: NPC_GUN, SYNDICATE_GUN: SYNDICATE_GUN,

@@ -1007,6 +1007,31 @@
             : 'what they passed on the way in',
         fn: function () { Combat.hailShip(G, G.sys, G.t, c.obj, 'directions', hooksFor()); }
       });
+      /* YOUR OWN SHIP. A contact flying one of your orders answers as
+       * yours: the pilot's report, not a stranger's three intents. */
+      var mineRec = (c.obj && c.obj.route && c.obj.route.kind === 'fleet' && Fleet)
+        ? Fleet.byId(G, c.obj.route.fleetId) : null;
+      if (mineRec) {
+        opts.push({
+          label: 'Raise the bridge',
+          enabled: inRange,
+          note: !inRange ? 'out of transmitter range' : 'she is yours — ask how she is doing',
+          fn: function () { say(Fleet.report(G, mineRec, G.t), 9); }
+        });
+      }
+      /* RUMOURS. What they have heard — a true fact about this system's
+       * markets or its lanes, one per ship per day. See Combat.hailRumour. */
+      var rumoured = !!(c.obj && c.obj.route &&
+                        c.obj.route._rumourDay === Math.floor(G.t / Combat.RUMOUR_DAY));
+      opts.push({
+        label: 'Ask around',
+        enabled: inRange && !isCapital && !rumoured,
+        note: !inRange ? 'out of transmitter range'
+            : isCapital ? 'a warship does not gossip'
+            : rumoured ? 'that is all they have heard today'
+            : 'what the crew have heard — markets, lanes',
+        fn: function () { Combat.hailShip(G, G.sys, G.t, c.obj, 'rumour', hooksFor()); }
+      });
       opts.push({
         label: 'Buy from their hold',
         enabled: inRange && !isCapital && !!(deal && deal.buy) && G.ship.credits >= (deal && deal.buy
@@ -1034,7 +1059,7 @@
         note: !inRange ? 'out of transmitter range'
             : isCapital ? 'they are not a tender'
             : !aid ? 'your tank is not their problem'
-            : aid.tonnes + ' t of hydrogen — ' + aid.cost + ' cr' +
+            : aid.what + ' — ' + aid.cost + ' cr' +
               (G.ship.credits < aid.cost ? ' (you are short)' : ''),
         fn: function () { Combat.hailShip(G, G.sys, G.t, c.obj, 'assist', hooksFor()); }
       });
@@ -1835,8 +1860,28 @@
 
     for (var i = 0; i < mine.length; i++) {
       (function (rec) {
-        var hereNow = rec.port === s.docked;
+        var hereNow = rec.port === s.docked && !rec.order;
         var worth = Fleet.resale(rec);
+
+        /* UNDER WAY. One row, no action: she is on the timetable and the
+         * order closes itself when the arithmetic says. The countdown is
+         * what makes it a ship rather than a line in a book. */
+        if (rec.order) {
+          row(rec.name.toUpperCase() + '  ·  UNDER WAY',
+              'for ' + rec.order.toName + '  ·  alongside in ' +
+              fmtLogAge(Fleet.eta(rec, G.t)) +
+              (rec.crew && rec.crew.length ? '  ·  ' + rec.crew.length + ' crew' : '') +
+              (function () {
+                var n = global.Missions && global.Missions.carriedBy
+                  ? global.Missions.carriedBy(G, rec.id).length : 0;
+                return n ? '  ·  ' + n + ' contract' + (n > 1 ? 's' : '') + ' aboard' : '';
+              })(),
+              function () {
+                say(rec.name + ' is ' + fmtLogAge(Fleet.eta(rec, G.t)) + ' out of ' +
+                    rec.order.toName + ' — you can hail her on the channel', 5);
+              }, true);
+          return;
+        }
         /* What she costs you standing there. Shown per ship rather than as
          * a total, because the decision the player is making on this row is
          * whether to keep THIS hull. Arrears take the slot when there are
@@ -1871,6 +1916,77 @@
                               net + ' cr to you' : ''), 6);
             },
             false, { hot: hereNow });
+
+        /* STANDING ORDERS. A row per port she could be sent to, under the
+         * ship it applies to, each carrying the crossing time — a
+         * destination without a number beside it is a guess. When she
+         * cannot be sent anywhere the reason takes the row instead, once,
+         * because a list of eight greyed ports that will not say why is
+         * eight copies of the same bug. */
+        var inThisSystem = !!(G.sys && G.sys.byId && G.sys.byId[rec.port]) &&
+                           !(rec.star && G.here && rec.star !== G.here.id);
+        if (!inThisSystem) return;
+
+        /* CONTRACTS ACROSS THE CLAMP. Astra: "load mission items onto NPC,
+         * player owned ships." One row per contract you hold, under the
+         * ship it would go to: LOAD moves the freight or the people into
+         * her, UNLOAD brings them back, and the refusal sits in the row's
+         * own words when neither is possible. Only when you are on the
+         * same clamp — you cannot pass a crate to a ship across the
+         * system any more than you can sell one to a market there. */
+        var M = global.Missions, portHere = G.sys.byId[s.docked];
+        if (M && M.loadRefusal && portHere && rec.port === portHere.id) {
+          var held = G.missions || [];
+          for (var mi = 0; mi < held.length; mi++) {
+            (function (m) {
+              var what = m.type === 'passage' ? m.souls + ' aboard' : m.tonnes + 't ' + m.cid;
+              if (m.carrier === rec.id) {
+                var noBack = M.unloadRefusal(G, rec, m, portHere);
+                row('   ⇐ UNLOAD ' + what.toUpperCase() + ' → ' + m.toName,
+                    noBack ? noBack : 'her contract  ·  ' + m.pay + ' cr on delivery',
+                    function () {
+                      var r = M.unloadFrom(G, rec, m, portHere, { say: say });
+                      if (!r.ok) say('Stays aboard her: ' + r.why, 5);
+                    }, !!noBack);
+              } else if (!m.carrier) {
+                var no = M.loadRefusal(G, rec, m, portHere);
+                row('   ⇒ LOAD ' + what.toUpperCase() + ' → ' + m.toName,
+                    no ? no : 'she delivers it, you get ' + m.pay + ' cr',
+                    function () {
+                      var r = M.loadOnto(G, rec, m, portHere, { say: say });
+                      if (!r.ok) say('Stays with you: ' + r.why, 5);
+                    }, !!no);
+              }
+            })(held[mi]);
+          }
+        }
+
+        var pilot = Fleet.pilotOf(rec);
+        var ports = (G.sys.ports || []).filter(function (p) { return p.id !== rec.port; });
+        var first = ports.length ? Fleet.canOrder(G, rec, G.sys, ports[0].id) : null;
+        if (!first || !first.ok) {
+          row('   cannot be ordered', first ? first.why : 'nowhere else to send her',
+              function () {}, true);
+          return;
+        }
+        for (var pi = 0; pi < ports.length; pi++) {
+          (function (dest) {
+            var q = Fleet.quote(G, rec, G.sys, dest.id);
+            if (!q.ok && !q.fuel) return;
+            /* A leg her tank cannot cover stays on the list, greyed, with
+             * both numbers — that is the refusal a captain can act on. */
+            row('   → SEND TO ' + dest.name.toUpperCase(),
+                !q.ok ? q.why
+                      : 'about ' + fmtLogAge(q.cruise) + ' under way  ·  ' + q.fuel.toFixed(1) +
+                        ' t reaction mass  ·  ' + pilot.name + ', ' + Crew.ratingWord(pilot.rating),
+                function () {
+                  var r = Fleet.order(G, rec, G.sys, dest.id, G.t);
+                  if (!r.ok) { say('She stays: ' + r.why, 5); return; }
+                  say(rec.name + ' has cast off for ' + dest.name + ' — ' +
+                      pilot.name + ' reckons ' + fmtLogAge(r.order.cruise), 7);
+                }, !q.ok);
+          })(ports[pi]);
+        }
       })(mine[i]);
     }
     return 0;

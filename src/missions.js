@@ -722,7 +722,10 @@
     var list = (G && G.missions) || [];
     var n = 0;
     for (var i = 0; i < list.length; i++) {
-      if (list[i] && list[i].cid === cid) n += list[i].tonnes || 0;
+      /* Freight aboard one of YOUR OTHER SHIPS is bonded there, not here —
+       * see loadOnto. Counting it against this hold would refuse you the
+       * sale of tonnes you never had. */
+      if (list[i] && list[i].cid === cid && !list[i].carrier) n += list[i].tonnes || 0;
     }
     return n;
   }
@@ -737,9 +740,179 @@
   function bondHolder(G, cid) {
     var list = (G && G.missions) || [];
     for (var i = 0; i < list.length; i++) {
-      if (list[i] && list[i].cid === cid) return list[i];
+      if (list[i] && list[i].cid === cid && !list[i].carrier) return list[i];
     }
     return null;
+  }
+
+  /* ---- a contract aboard a ship you are not in -------------------------
+   * Astra: "set it up so that I can load mission items onto NPC, player
+   * owned ships." A haul, a disposal run, a parcel or a passage goes across
+   * to a ship of yours on the same clamp, and from then on it is HER
+   * contract: the freight is in her hold and off your bond, the people are
+   * in her berths, and when a standing order puts her alongside the
+   * destination the harbour takes delivery and the fee lands wherever you
+   * are. That is what delegating a run is FOR — the alternative, where she
+   * sits at the far end holding the freight until you turn up to hand it
+   * over yourself, is a longer way of carrying it in your own hold.
+   *
+   * `carrier` is the record id, and it is the ONE field that says which
+   * ship a contract is riding on. Everything that reads a contract asks it:
+   * the bond above, the deadline below, the desk you dock at, and the
+   * arrival in Fleet.tick.
+   */
+  function carriedBy(G, recId) {
+    var list = (G && G.missions) || [], out = [];
+    for (var i = 0; i < list.length; i++) if (list[i] && list[i].carrier === recId) out.push(list[i]);
+    return out;
+  }
+
+  /* Could this contract go across to her, here, now? The refusals are in
+   * words because a greyed row that will not say why reads as a bug. The
+   * hold and berth arithmetic is the fleet's (Fleet.capacityOf) — the
+   * record has no live ship to read those off. */
+  function loadRefusal(G, rec, m, port) {
+    var Fleet = global.Fleet;
+    if (!Fleet || !rec || !m) return 'no such ship';
+    if (rec.order) return 'she is under way';
+    if (!port || rec.port !== port.id) return 'you have to be on the same clamp as her';
+    if (rec.star && G.here && rec.star !== G.here.id) return 'she is at another star';
+    if (m.carrier === rec.id) return 'already aboard her';
+    if (m.carrier) return 'aboard another of your ships';
+    /* A chapter of somebody's story wants the person it was written for.
+     * Arcs.onStepComplete casts the next chapter at the dock you are
+     * standing on, and a hired pilot is not the one they are talking to. */
+    if (m.campaign) return 'they want you to bring this yourself';
+    /* IN-SYSTEM ONLY, because that is the only order she can fly. A run
+     * whose destination is another star has no timetable she can join. */
+    if (!m.toPortId || (m.toStarId && G.here && m.toStarId !== G.here.id)) {
+      return 'that run leaves the system, and she cannot jump';
+    }
+    var cap = Fleet.capacityOf(rec);
+    if (m.type === 'passage') {
+      var seats = cap.seats - (rec.passengers || 0);
+      if (cap.seats <= 0) return 'she has no berths — a habitation unit trades hold for people';
+      if ((m.souls || 0) > seats) return 'needs ' + m.souls + ' berths, she has ' + seats + ' free';
+      if ((G.ship.passengers || 0) < (m.souls || 0)) return 'they are not aboard you to move';
+      /* THEY LOOK AT HER MANIFEST TOO. passageRefusal reads yours; a ship
+       * of yours with drums in the hold gets the same answer from the same
+       * severity table, or the rule would have a door in it the width of a
+       * second hull. */
+      var Combat = global.Combat;
+      if (Combat && Combat.contrabandSeverity && m.faction) {
+        for (var cc in (rec.cargo || {})) {
+          if (!(rec.cargo[cc] > 0)) continue;
+          if (Combat.contrabandSeverity(G, cc, m.faction) > 0) {
+            var Eco = global.Economy, nm = (Eco && Eco.BY_ID[cc] && Eco.BY_ID[cc].name) || cc;
+            return 'they saw her manifest — nobody boards over ' + nm.toLowerCase();
+          }
+        }
+      }
+    } else {
+      var free = cap.cargoCap - cap.holdUsed;
+      if ((m.tonnes || 0) > free) return 'needs ' + m.tonnes + 't of hold, she has ' + Math.floor(free) + 't';
+      if ((G.ship.cargo[m.cid] || 0) + 1e-9 < (m.tonnes || 0)) return 'the freight is not in your hold to move';
+    }
+    return null;
+  }
+
+  function loadOnto(G, rec, m, port, hooks) {
+    var why = loadRefusal(G, rec, m, port);
+    if (why) return { ok: false, why: why };
+    var Sim = global.Sim;
+    if (m.type === 'passage') {
+      G.ship.passengers = Math.max(0, (G.ship.passengers || 0) - (m.souls || 0));
+      rec.passengers = (rec.passengers || 0) + (m.souls || 0);
+    } else {
+      G.ship.cargo[m.cid] = (G.ship.cargo[m.cid] || 0) - m.tonnes;
+      if (G.ship.cargo[m.cid] <= 1e-9) delete G.ship.cargo[m.cid];
+      rec.cargo = rec.cargo || {};
+      rec.cargo[m.cid] = (rec.cargo[m.cid] || 0) + m.tonnes;
+    }
+    m.carrier = rec.id;
+    if (Sim) Sim.refreshShip(G.ship);
+    if (hooks && hooks.say) {
+      hooks.say((m.type === 'passage' ? m.souls + ' passengers' : m.tonnes + 't of ' + m.cid) +
+                ' across to the ' + rec.name + ' — her contract now', 5);
+    }
+    return { ok: true };
+  }
+
+  /* Back the other way. The same clamp rule, and your own hold has to have
+   * the room — which it may not, since you filled it after she took the
+   * freight. */
+  function unloadRefusal(G, rec, m, port) {
+    var Sim = global.Sim, Combat = global.Combat;
+    if (!rec || !m || m.carrier !== rec.id) return 'not aboard her';
+    if (rec.order) return 'she is under way';
+    if (!port || rec.port !== port.id) return 'you have to be on the same clamp as her';
+    if (m.type === 'passage') {
+      var seats = Combat ? Combat.seatsFree(G.ship) : 0;
+      if ((m.souls || 0) > seats) return 'needs ' + m.souls + ' berths, you have ' + seats + ' free';
+    } else {
+      var free = G.ship.cargoCap - (Sim ? Sim.cargoMass(G.ship) : 0);
+      if ((m.tonnes || 0) > free) return 'need ' + m.tonnes + 't of hold space';
+    }
+    return null;
+  }
+
+  function unloadFrom(G, rec, m, port, hooks) {
+    var why = unloadRefusal(G, rec, m, port);
+    if (why) return { ok: false, why: why };
+    if (m.type === 'passage') {
+      rec.passengers = Math.max(0, (rec.passengers || 0) - (m.souls || 0));
+      G.ship.passengers = (G.ship.passengers || 0) + (m.souls || 0);
+    } else {
+      rec.cargo[m.cid] = (rec.cargo[m.cid] || 0) - m.tonnes;
+      if (rec.cargo[m.cid] <= 1e-9) delete rec.cargo[m.cid];
+      G.ship.cargo[m.cid] = (G.ship.cargo[m.cid] || 0) + m.tonnes;
+    }
+    m.carrier = null;
+    if (global.Sim) global.Sim.refreshShip(G.ship);
+    if (hooks && hooks.say) hooks.say('Back aboard you — your contract again', 4);
+    return { ok: true };
+  }
+
+  /* THE HARBOUR TAKES DELIVERY. Called by Fleet.tick the instant a ship
+   * of yours is alongside; `port` is where she is. Settles every contract
+   * she is carrying for that port and returns the lines to be read out,
+   * because the desk it happens at may be three stars from the player.
+   *
+   * The same arithmetic completeAtDock uses — the fee, the standing, the
+   * late cut on a passage — with the one difference that nothing about
+   * the trip was being shot at: a ship on a timetable is not in the
+   * encounter system. */
+  function deliverByCarrier(G, rec, port, t) {
+    var lines = [], list = G.missions || [];
+    for (var i = list.length - 1; i >= 0; i--) {
+      var m = list[i];
+      if (!m || m.carrier !== rec.id) continue;
+      if (!m.toPortId || m.toPortId !== port.id) continue;
+      if (m.type === 'passage') {
+        rec.passengers = Math.max(0, (rec.passengers || 0) - (m.souls || 0));
+        var cut = passageCut({ t: t }, m);
+        G.ship.credits += cut.pay;
+        bumpStanding(G, m.faction, cut.standing);
+        lines.push(rec.name + ' at ' + port.name + ': ' + cut.text);
+      } else {
+        var held = (rec.cargo && rec.cargo[m.cid]) || 0;
+        if (held + 1e-9 < (m.tonnes || 0)) {
+          /* She arrived without it — jettisoned, or robbed on the way.
+           * The contract sits, as it would for you, until the deadline. */
+          lines.push(rec.name + ' is at ' + port.name + ' without the ' + m.cid +
+                     ' — the contract stands unmet');
+          continue;
+        }
+        rec.cargo[m.cid] = held - m.tonnes;
+        if (rec.cargo[m.cid] <= 1e-9) delete rec.cargo[m.cid];
+        G.ship.credits += m.pay;
+        bumpStanding(G, m.faction, STANDING_WIN[m.type] || 3);
+        lines.push(rec.name + ' delivered at ' + port.name + ' — ' + m.pay + ' cr');
+      }
+      (G.doneMissions = G.doneMissions || {})[m.id] = true;
+      list.splice(i, 1);
+    }
+    return lines;
   }
 
   function accept(G, offer, hooks) {
@@ -841,6 +1014,11 @@
       var here = (m.toPortId && m.toPortId === port.id) ||
                  (m.toStarId && G.here && m.toStarId === G.here.id);
       if (!here) continue;
+      /* HER CONTRACT, NOT YOURS. The freight is in another ship's hold and
+       * the harbour settles it when SHE is alongside (deliverByCarrier).
+       * Without this, docking here ahead of her nagged "contract needs Xt
+       * aboard" about tonnes you deliberately do not have. */
+      if (m.carrier) continue;
 
       /* A passage settles on people rather than on freight, and it can
        * settle badly: somebody who spent the trip locked in a hold with
@@ -940,7 +1118,10 @@
        * agreed to, which costs standing on a clock. */
       if (m.type === 'passage') {
         if (t <= m.deadline + PASSAGE_DEADLINE) continue;
-        G.ship.passengers = Math.max(0, (G.ship.passengers || 0) - (m.souls || 0));
+        /* They get off whichever ship they are on. */
+        var carrierRec = m.carrier && global.Fleet ? global.Fleet.byId(G, m.carrier) : null;
+        if (carrierRec) carrierRec.passengers = Math.max(0, (carrierRec.passengers || 0) - (m.souls || 0));
+        else G.ship.passengers = Math.max(0, (G.ship.passengers || 0) - (m.souls || 0));
         bumpStanding(G, m.faction, -STANDING_LOSS * 2);
         (G.doneMissions = G.doneMissions || {})[m.id] = true;
         list.splice(i, 1);
@@ -1010,6 +1191,9 @@
     alreadyHave: alreadyHave,
     bondedTonnes: bondedTonnes, sellableTonnes: sellableTonnes,
     bondHolder: bondHolder,
+    carriedBy: carriedBy, loadRefusal: loadRefusal, loadOnto: loadOnto,
+    unloadRefusal: unloadRefusal, unloadFrom: unloadFrom,
+    deliverByCarrier: deliverByCarrier,
     TEXT_MAX: TEXT_MAX, describe: describe, finish: finish
   };
 

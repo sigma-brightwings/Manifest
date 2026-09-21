@@ -1473,6 +1473,17 @@
     var cycleStart = route.t0 + cycle * period;
     var ph = t - cycleStart;
 
+    /* A LEG, NOT A LOOP. A ship of yours under a standing order (see
+     * Fleet.routeFor) flies the outbound half of an ordinary route and
+     * then stays: the phase is pinned inside the moored window at B rather
+     * than rolling on into the return crossing. Pinned to the middle of
+     * the layover, not its end, so it can never tip over into the return
+     * branch by a rounding error. Before t0 she is at A, not yet gone. */
+    if (route.oneWay) {
+      cycle = 0; cycleStart = route.t0;
+      ph = Math.max(0, Math.min(t - route.t0, cruise + lay * 0.5));
+    }
+
     var outbound, u, moored, tDep;
     if (ph < cruise) {
       outbound = true; moored = false; u = ph / cruise; tDep = cycleStart;
@@ -1611,9 +1622,35 @@
      * answer is nothing. */
     if (spec.rail.type === 'lifted') return null;
 
+    /* ON ITS WAY TO YOU. A responder answering a mayday used to sit on its
+     * timetable until the player happened to be within WAKE_RANGE of it —
+     * which, for a tender thirty million kilometres away, was never. The
+     * rescue rail below is the leg it flies instead, and it is still a
+     * rail: a pure function of the clock and of where the stranded ship is
+     * now. See Combat.startRescue for the timestamps. */
+    if (spec.rescue) {
+      var rs = rescueRailState(spec, sys, t);
+      if (rs) return rs;
+    }
+
+    return railState(spec, sys, t);
+  }
+
+  /* Where the responder's own timetable puts it — the ordinary rail,
+   * split out so the rescue leg can read its starting point off it. */
+  function railState(spec, sys, t) {
     var st;
     if (spec.rail.type === 'route') {
       st = trafficState(spec.rail.route, sys, t);
+    } else if (spec.rail.type === 'port') {
+      /* A boat that lives at a port, and is nowhere else: the temporary
+       * tender a system without one launches from its nearest dock. */
+      var home = sys.byId[spec.rail.port];
+      var pose = home ? dockPose(home, sys, t, home.parentBody || sys.root) : null;
+      if (!pose) return null;
+      st = finishTraffic({ id: spec.id, name: spec.name }, pose.pos, pose.vel,
+                         pose.fwd, pose.up, 'moored', 1, home, home, true);
+      st.throttle = 0;
     } else {
       var parent = sys.byId[spec.rail.parent];
       var ps = bodyState(parent, sys, t);
@@ -1629,6 +1666,78 @@
       // glow of a drive that is lit but not pushing.
       st.throttle = 0.12;
     }
+    decorate(st, spec);
+    return st;
+  }
+
+  /* ---- the rescue leg ------------------------------------------------------
+   * Three phases off four timestamps, all set once when the call is made:
+   *
+   *   SCRAMBLE   t0 .. scrambleUntil     she is still where her own rail
+   *                                      puts her — crew boarding, drive
+   *                                      spooling — and the leg's origin is
+   *                                      wherever that turns out to be at
+   *                                      the moment she casts off
+   *   TRANSIT    scrambleUntil .. handoffAt   a flip-and-burn toward the
+   *                                      STRANDED SHIP'S CURRENT POSITION,
+   *                                      re-read every frame, because a
+   *                                      ship out of reaction mass is still
+   *                                      falling round whatever it was
+   *                                      orbiting and a leg aimed at where
+   *                                      it was at t0 arrives at empty sky
+   *   HANDOFF    handoffAt                the leg ends RESCUE_HANDOFF short
+   *                                      of the target with velocity
+   *                                      matched, and Combat lifts her into
+   *                                      the live steering for the last
+   *                                      two thousand kilometres
+   *
+   * The transit is the traffic arc's straight-chord cousin: smootherstep
+   * on a chord, so she leaves at rest relative to her origin and arrives
+   * at rest relative to the target — which is what lets the handoff be a
+   * copy of two vectors rather than a discontinuity. Not a spiral, because
+   * there is no common parent to spiral about: a tender crossing from a
+   * capital's beat to a drifting hull is crossing open space. */
+  var RESCUE_HANDOFF = 2000;      // km short of the target where the rail ends
+
+  function rescueRailState(spec, sys, t) {
+    var r = spec.rescue;
+    if (!r || !r.target) return null;
+    if (t < r.scrambleUntil) {
+      var idle = railState(spec, sys, t);
+      if (idle) idle.rescuing = 'scramble';
+      return idle;
+    }
+    if (!r.origin) {
+      /* Cast off from wherever the timetable had her at that instant —
+       * frozen the first time anybody asks, the same way legGeometry pins
+       * a leg to its own departure. */
+      var at = railState(spec, sys, r.scrambleUntil);
+      if (!at) return null;
+      r.origin = V.clone(at.pos);
+      r.originVel = V.clone(at.vel);
+    }
+    var T = Math.max(1, r.handoffAt - r.scrambleUntil);
+    var u = Math.max(0, Math.min(1, (t - r.scrambleUntil) / T));
+    var e = smootherstep(u), ep = smootherstepPrime(u) / T;
+    /* The end of the leg is HANDOFF short of the target, on the line in. */
+    var chord = V.sub(r.target, r.origin);
+    var L = V.len(chord);
+    var dir = L > 1e-9 ? V.scale(chord, 1 / L) : { x: 1, y: 0, z: 0 };
+    var end = V.addScaled(r.target, dir, -Math.min(RESCUE_HANDOFF, L * 0.5));
+    var run = V.sub(end, r.origin);
+    var pos = V.addScaled(r.origin, run, e);
+    var vel = {
+      x: r.originVel.x + (r.targetVel.x - r.originVel.x) * e + run.x * ep,
+      y: r.originVel.y + (r.targetVel.y - r.originVel.y) * e + run.y * ep,
+      z: r.originVel.z + (r.targetVel.z - r.originVel.z) * e + run.z * ep
+    };
+    var heading = V.len(run) > 1e-9 ? V.norm(run) : dir;
+    var facing = u > 0.5 ? V.scale(heading, -1) : heading;     // turned over to brake
+    var st = finishTraffic({ id: spec.id, name: spec.name }, pos, vel, facing,
+                           V.norm(pos), 'cruise', u, null, null, true);
+    st.throttle = 1;
+    st.braking = u > 0.5;
+    st.rescuing = 'transit';
     decorate(st, spec);
     return st;
   }
@@ -1715,6 +1824,7 @@
   var CLOSE_RANGE = 250;        // km — warp is pinned to 1x inside this
   var PIRATE_STANDOFF = 18;     // km
   var POLICE_STANDOFF = 45;     // km
+  var RESCUE_STANDOFF = 1.5;    // km — a hose length, for the transfer
   var POLICE_DETERRENT = 30000; // km — a pirate will not work this close to the law
 
   function wakeNpc(spec, railState) {
@@ -1724,7 +1834,11 @@
       phase: 'live', progress: 0, from: railState.from, to: railState.to,
       route: railState.route, manifest: []
     };
-    spec.mode = spec.kind === 'pirate' ? 'intercept'
+    /* A responder on a rescue leg wakes INTO the rescue, not into the
+     * shadowing every other tender does — otherwise the handoff would turn
+     * an ambulance into a bystander two thousand kilometres out. */
+    spec.mode = spec.rescue ? 'rescue'
+              : spec.kind === 'pirate' ? 'intercept'
               : spec.kind === 'police' ? 'inspect' : 'shadow';
     spec.modeSince = 0;
     spec.hailed = false;
@@ -1740,6 +1854,7 @@
      * distance. 6 km against 12 km guns means a fight is a fight, not an
      * exchange of letters. */
     var standoff = spec.mode === 'attack' ? 6
+                 : spec.mode === 'rescue' ? RESCUE_STANDOFF
                  : spec.kind === 'pirate' ? PIRATE_STANDOFF : POLICE_STANDOFF;
 
     var aim;
@@ -1767,6 +1882,8 @@
       matchVel = V.zero();
     } else {
       // Hold station beside the player, on whatever bearing we came in from.
+      // A RESCUE holds a hose-length off and matches the drifting hull's
+      // velocity — the stranded ship is falling, and a place is not.
       var bearing = range > 1e-6 ? V.scale(toShip, -1 / range) : { x: 1, y: 0, z: 0 };
       aim = V.addScaled(ship.pos, bearing, standoff);
     }
@@ -1842,7 +1959,10 @@
       if (!state) continue;              // a lifted trader between sleep and reap
       var range = V.dist(state.pos, ship.pos);
 
-      if (!spec.live && !safe && range < WAKE_RANGE) { wakeNpc(spec, state); }
+      /* A responder on its rescue leg is lifted by Combat at the handoff,
+       * not by proximity: its rail passing within WAKE_RANGE of you halfway
+       * through a system crossing would otherwise wake it into shadowing. */
+      if (!spec.live && !safe && range < WAKE_RANGE && !spec.rescue) { wakeNpc(spec, state); }
 
       if (spec.live) {
         if (safe) { sleepNpc(spec); continue; }
@@ -4939,7 +5059,8 @@
     nearestTraffic: nearestTraffic,
     chatterFor: chatterFor, chatterNear: chatterNear, SAY_WINDOW: SAY_WINDOW,
     bodyStateAt: bodyStateAt,
-    patrolState: patrolState,
+    patrolState: patrolState, railState: railState, wakeNpc: wakeNpc,
+    RESCUE_HANDOFF: RESCUE_HANDOFF, RESCUE_STANDOFF: RESCUE_STANDOFF,
     shipsAll: shipsAll,
     nearestShip: nearestShip,
     updateEncounters: updateEncounters,

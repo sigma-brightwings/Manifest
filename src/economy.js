@@ -1428,6 +1428,117 @@
   /* Which ports here are worth flying a given cargo to? Used both to pick
    * NPC freighter routes at generation time and to fill the "best market"
    * line on the trade console. */
+  /* ---- what a system is short of, and what it has too much of ------------
+   * Astra: "a trade analyzer component which we can buy. The purpose of it
+   * is to identify what in a system there are shortages of, and what there
+   * is an excess of."
+   *
+   * NOTHING NEW IS INVENTED HERE. Every port already knows, through
+   * price(), whether it is a natural importer or exporter of a good and
+   * how full the warehouse is; this is that same answer asked of every
+   * port in the system at once and sorted. So the analyser cannot
+   * disagree with the market screen at any of the ports it names — it is
+   * the same arithmetic, read from orbit instead of from the counter.
+   *
+   * THE THRESHOLDS ARE MEASURED, NOT CHOSEN, and the first draft got them
+   * wrong in the way this project's CLAUDE.md warns about. A third full
+   * for a shortage and two thirds for an excess sounded right and flagged
+   * forty-eight shortages in an average system — because an importer's
+   * warehouse is LOW BY CONSTRUCTION (median fill 0.24 across thirty
+   * seeds) and an exporter's is high (median 0.76). A signal that fires on
+   * half the rows is the market screen again, unsorted. So the cut-offs
+   * are the acute quartiles of that same sample: a SHORTAGE is an importer
+   * in the emptiest quarter of importers (fill ≤ 0.16), an EXCESS an
+   * exporter in the fullest quarter of exporters (fill ≥ 0.83) — the same
+   * "best 25% you will see" rule priceMark uses for its colours.
+   *
+   * WASTE IS AN EXCESS AT A PRODUCER, and it says so in the same list —
+   * a plant that is paying to have drums taken away is exactly what a
+   * trader looking for an excess wants to hear about, and disposal is the
+   * one run in the game where the cargo pays you at the start.
+   *
+   * A RUN is a shortage and an excess of the same good under one star,
+   * quoted as the margin between the ask at one port and the bid at the
+   * other, so the list reads as things to DO rather than facts to know.
+   * Pure function of the system and the clock, like everything else the
+   * markets say. */
+  var SHORT_FILL = 0.16, GLUT_FILL = 0.83;
+
+  /* `opts.accel` (km/s², the caller's own `maxAccel`) turns a run from a
+   * margin into a RATE: the flip-and-burn time between the two ports is
+   * quoted with it, and runs sort by credits per hour of flying rather
+   * than by margin alone — a fat margin across the whole system and a
+   * thin one between two docks over one world are different jobs, and
+   * the analyser should know which pays your time. The distance is the
+   * same nominal-orbit arithmetic the traffic timetable is built from
+   * (Gen.commonParent / radiusAbout), so the hours it quotes are the hours
+   * a freighter on that run is scheduled for. Without `accel` the list is
+   * what it was: margin, sorted by margin. */
+  function systemAnalysis(sys, t, opts) {
+    var accel = opts && opts.accel > 0 ? opts.accel : 0;
+    var Gen = global.Gen;
+    var ports = (sys && sys.ports) || [];
+    var shortages = [], excesses = [], runs = [];
+    var bestAsk = {}, bestBid = {};
+    for (var i = 0; i < ports.length; i++) {
+      var port = ports[i], mkt = port.market;
+      if (!mkt || !mkt.order) continue;
+      for (var j = 0; j < mkt.order.length; j++) {
+        var cid = mkt.order[j], p = price(port, cid, t);
+        if (!p) continue;
+        var com = BY_ID[cid];
+        if (com.waste) {
+          if (!p.sink && p.fill >= GLUT_FILL) {
+            excesses.push({ cid: cid, name: com.name, port: port, fill: p.fill,
+                            ask: p.buy, waste: true });
+          }
+          continue;
+        }
+        if (p.importer && p.fill <= SHORT_FILL) {
+          shortages.push({ cid: cid, name: com.name, port: port, fill: p.fill,
+                           bid: p.sell, mark: p.sell / com.base });
+        }
+        if (p.exporter && p.tradeable && p.fill >= GLUT_FILL) {
+          excesses.push({ cid: cid, name: com.name, port: port, fill: p.fill,
+                          ask: p.buy, mark: p.buy / com.base });
+        }
+        if (p.tradeable && p.buy !== null && (!bestAsk[cid] || p.buy < bestAsk[cid].ask)) {
+          bestAsk[cid] = { port: port, ask: p.buy, fill: p.fill };
+        }
+        if (p.sell !== null && (!bestBid[cid] || p.sell > bestBid[cid].bid)) {
+          bestBid[cid] = { port: port, bid: p.sell, fill: p.fill };
+        }
+      }
+    }
+    for (var c in bestAsk) {
+      var a = bestAsk[c], b = bestBid[c];
+      if (!b || a.port === b.port) continue;
+      var margin = b.bid - a.ask;
+      if (margin <= 0) continue;
+      var run = { cid: c, name: BY_ID[c].name, from: a.port, ask: a.ask,
+                  to: b.port, bid: b.bid, margin: margin,
+                  ratio: a.ask > 0 ? b.bid / a.ask : 0 };
+      if (accel && Gen && Gen.commonParent && Gen.radiusAbout) {
+        var parent = Gen.commonParent(a.port, b.port, sys);
+        var local = a.port.parentBody === b.port.parentBody;
+        var ra = Gen.radiusAbout(a.port, parent, sys), rb = Gen.radiusAbout(b.port, parent, sys);
+        var dist = local ? Math.max(Math.abs(ra - rb), (ra + rb) * 0.45)
+                         : Math.sqrt(ra * ra + rb * rb);
+        run.distance = dist;
+        run.hours = Math.max(600, 2 * Math.sqrt(dist / accel)) / 3600;
+        run.perHour = margin / run.hours;
+      }
+      runs.push(run);
+    }
+    /* Emptiest shortage first, fullest excess first, fattest run first —
+     * fattest per hour when the caller told us how fast it flies. */
+    shortages.sort(function (x, y) { return x.fill - y.fill; });
+    excesses.sort(function (x, y) { return y.fill - x.fill; });
+    runs.sort(accel ? function (x, y) { return y.perHour - x.perHour; }
+                    : function (x, y) { return y.margin - x.margin; });
+    return { shortages: shortages, excesses: excesses, runs: runs };
+  }
+
   function bestBuyers(sys, cid, t, limit) {
     var out = [];
     var ports = sys.ports || [];
@@ -1525,6 +1636,7 @@
     stepLive: stepLive,
     update: update,
     bestBuyers: bestBuyers,
+    systemAnalysis: systemAnalysis, SHORT_FILL: SHORT_FILL, GLUT_FILL: GLUT_FILL,
     wasteSinks: wasteSinks,
     licenseMilitaryFuel: licenseMilitaryFuel,
     navyPresent: navyPresent,

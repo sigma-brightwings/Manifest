@@ -287,6 +287,9 @@
     G.missions = [];
     /* A new career owns one ship, and it is the one you are in. */
     G.fleet = [];
+    /* And has never shot an ambulance. */
+    G.tenderKills = 0;
+    G.rescue = null;
     G.doneMissions = {};
     G.campaigns = {};
     G.beams = [];
@@ -1229,6 +1232,8 @@
    * the game: talk, make noise, and end you. */
   var HOOKS = {
     say: say,
+    /* A line that is money as well as news — the tender's call-out fee. */
+    ledger: function (text) { logTrade(text); },
     sound: function (n) { if (global.Sound) global.Sound.fx(n); },
     destroyed: playerDestroyed,
     hullHit: hullHit
@@ -4895,6 +4900,17 @@
     }
     G.wasDocked = !!G.ship.docked;
 
+    /* THE SHIPS YOU ARE NOT IN, once a frame. An order is a timetable
+     * entry, so this is a handful of timestamp comparisons and it returns
+     * before allocating anything when nothing of yours is under way — see
+     * Fleet.tick. It runs whatever the player is doing, because a ship
+     * arriving while you are docked, warping or three stars away arrives
+     * at the same instant either way. */
+    if (Fleet && Fleet.tick) {
+      var arrived = Fleet.tick(G, G.sys, G.t);
+      for (var ai = 0; ai < arrived.length; ai++) logTrade(arrived[ai]);
+    }
+
     if (G.ship.docked) {
       G.dockStatus = null;
       G.trajectory = null;
@@ -5035,10 +5051,16 @@
        * cannot dock. It named the one exit and then pointed at the door
        * they could no longer reach. Now it points at the exit that exists
        * from where they actually are. */
-      var callingAlready = (G.distress || []).some(function (c) { return c.mine; });
-      say('Reaction mass exhausted — no thrust.' +
-          (callingAlready ? '  Your mayday is transmitting.'
-                          : '  F4 COMMS: MAYDAY for a fuel tender.'), 8);
+      /* A tender is dispatched by Combat.updateRescue the same frame, and
+       * its own line says who is coming and how long; this one only speaks
+       * when nobody is. */
+      if (!G.rescue) {
+        var callingAlready = (G.distress || []).some(function (c) { return c.mine; });
+        say('Reaction mass exhausted — no thrust.' +
+            (callingAlready ? '  Your mayday is transmitting.'
+             : (G.tenderKills || 0) > 0 ? '  No tender will answer this ship.'
+             : '  F4 COMMS: MAYDAY for a fuel tender.'), 8);
+      }
     }
     if (G.ship.thrusterFuel > 0.01) G.fuelWarned = false;
 
@@ -8287,6 +8309,7 @@
     { id: 'node',    title: 'NODE',    draw: function (ctx) { drawNodePage(ctx); } },
     { id: 'system',  title: 'SYSTEM',  draw: function (ctx) { drawSystemPage(ctx); } },
     { id: 'chatter', title: 'CHATTER', draw: function (ctx) { drawChatterPage(ctx); } },
+    { id: 'trade',   title: 'TRADE',   draw: function (ctx) { drawTradePage(ctx); } },
     { id: 'blank',   title: 'OFF',     draw: null }
   ];
   var DASH_PAGE_BY_ID = {};
@@ -9162,6 +9185,92 @@
     }
   }
 
+  /* --- TRADE: what this system is short of, and what it has too much of --
+   * Astra's trade analyser. The arithmetic is Economy.systemAnalysis; this
+   * is only the page. NOTHING WITHOUT THE FITTING — not a blank list, which
+   * would read as "this system has no shortages", a claim the instrument
+   * has no right to make when it is not aboard. */
+  function drawTradePage(ctx) {
+    var fitted = Combat.hasTradeAnalyser && Combat.hasTradeAnalyser(G.ship);
+    mfdShell(ctx, 'TRADE', fitted ? 'shortages   ·   excesses   ·   best run'
+                                  : 'no trade analyser fitted');
+    if (!fitted) {
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('NO ANALYSER', 12, MFD_BODY_TOP + 20);
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillText('a trade analyser reads every market in the system at once.', 12, MFD_BODY_TOP + 36);
+      ctx.fillText('the yard sells one where development is 0.45 or better.', 12, MFD_BODY_TOP + 50);
+      return;
+    }
+    /* Once a minute of sim time, not once a frame: it prices every row at
+     * every port, which is a few hundred price() calls, and the markets do
+     * not move inside a minute. */
+    var bucket = Math.floor(G.t / 60);
+    if (!G._tradeScan || G._tradeScan.sys !== G.sys || G._tradeScan.bucket !== bucket) {
+      G._tradeScan = { sys: G.sys, bucket: bucket,
+                       a: Eco.systemAnalysis(G.sys, G.t, { accel: G.ship.maxAccel }) };
+    }
+    var a = G._tradeScan.a;
+    var colW = Math.floor((MFD_W - 24) / 2), lx = 12, rx = 12 + colW + 6;
+    var chW = 6.0, rows = 5, rowH = 13;      // 48..100, run line at 136, body ends 152
+
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = '#ff9f7a';
+    ctx.fillText('SHORT OF  (' + a.shortages.length + ')', lx, MFD_BODY_TOP + 8);
+    ctx.fillStyle = '#7dffb0';
+    ctx.fillText('TOO MUCH  (' + a.excesses.length + ')', rx, MFD_BODY_TOP + 8);
+
+    var chars = Math.floor(colW / chW);
+    for (var i = 0; i < rows; i++) {
+      var yy = MFD_BODY_TOP + 22 + i * rowH;
+      var sh = a.shortages[i], ex = a.excesses[i];
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      if (sh) {
+        ctx.fillStyle = MFD_INK;
+        ctx.fillText(clipText(sh.name + '  ' + sh.port.name, chars - 6), lx, yy);
+        ctx.fillStyle = '#ff9f7a';
+        ctx.textAlign = 'right';
+        ctx.fillText(Math.round(sh.bid) + '', lx + colW, yy);
+        ctx.textAlign = 'left';
+      }
+      if (ex) {
+        ctx.fillStyle = MFD_INK;
+        ctx.fillText(clipText(ex.name + '  ' + ex.port.name, chars - 6), rx, yy);
+        ctx.fillStyle = '#7dffb0';
+        ctx.textAlign = 'right';
+        ctx.fillText(ex.waste ? 'pays' : Math.round(ex.ask) + '', rx + colW, yy);
+        ctx.textAlign = 'left';
+      }
+    }
+    if (!a.shortages.length && !a.excesses.length) {
+      ctx.fillStyle = MFD_DIM;
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillText('every warehouse in the system is about where it should be', lx, MFD_BODY_TOP + 22);
+    }
+
+    /* The one line worth acting on. */
+    var ry = MFD_BODY_TOP + 22 + rows * rowH + 10;
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText('BEST RUN  ·  per hour of flying', lx, ry);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    if (a.runs.length) {
+      var r = a.runs[0];
+      ctx.fillStyle = MFD_HOT;
+      ctx.fillText(clipText(r.name + ':  ' + r.from.name + '  →  ' + r.to.name, 44), lx, ry + 13);
+      ctx.fillStyle = '#7dffb0';
+      ctx.textAlign = 'right';
+      ctx.fillText('+' + Math.round(r.margin) + ' /t' +
+                   (r.hours ? '  ·  ' + (r.hours < 10 ? r.hours.toFixed(1) : Math.round(r.hours)) + ' h' : ''),
+                   MFD_W - 12, ry + 13);
+      ctx.textAlign = 'left';
+    } else {
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('nothing under this star pays to move', lx, ry + 13);
+    }
+  }
+
   /* --- SYSTEM: where you are --------------------------------------------- */
   function drawSystemPage(ctx) {
     mfdShell(ctx, 'SYSTEM', 'where you are');
@@ -9253,48 +9362,72 @@
     var navReg = nav.obj && nav.obj.reg ? '   ·   ' + nav.obj.reg : '';
     ctx.fillText(nav.type + navReg, 10, y + 13);
 
-    mfdRow(ctx, y + 32, 'range', fmtDist(nav.range));
-    mfdRow(ctx, y + 48, 'closing', fmtSpeed(nav.closing),
+    /* A SHIP HAS MORE TO SAY THAN A PLANET, and the page is the same
+     * height for both. At the 16 px pitch a ship's rows ran to y + 144 =
+     * 184 on a 178 px page — the combat scanner's shield row had been
+     * drawing into nothing since it shipped. So a ship packs its rows at
+     * 12 px and a body keeps the 16 it always had; eight rows of 13 px
+     * type at 12 px pitch is tight and legible, and it is the only way the
+     * analyser's arms line fits above MFD_BODY_BOTTOM. */
+    var gp = nav.kind === 'ship' ? 12 : 16;
+    mfdRow(ctx, y + 26 + gp * 0, 'range', fmtDist(nav.range));
+    mfdRow(ctx, y + 26 + gp * 1, 'closing', fmtSpeed(nav.closing),
            nav.closing > 0 ? '#7dffb0' : '#ff9f7a');
-    mfdRow(ctx, y + 64, 'rel. speed', fmtSpeed(nav.relSpeed));
-    mfdRow(ctx, y + 80, 'ETA', isFinite(nav.eta) ? fmtTime(nav.eta) : 'opening', MFD_DIM);
+    mfdRow(ctx, y + 26 + gp * 2, 'rel. speed', fmtSpeed(nav.relSpeed));
+    mfdRow(ctx, y + 26 + gp * 3, 'ETA', isFinite(nav.eta) ? fmtTime(nav.eta) : 'opening', MFD_DIM);
 
     if (nav.kind === 'body' && nav.obj.kind === 'station') {
       var mkt = nav.obj.market;
-      mfdRow(ctx, y + 96, 'port', mkt ? mkt.roleName : 'Station');
+      mfdRow(ctx, y + 90, 'port', mkt ? mkt.roleName : 'Station');
       var fac = G.sys.factionById && G.sys.factionById[nav.obj.faction];
-      mfdRow(ctx, y + 112, 'flag', fac ? clipText(fac.name, 18) : '—',
+      mfdRow(ctx, y + 106, 'flag', fac ? clipText(fac.name, 18) : '—',
              fac ? fac.color : MFD_DIM);
     } else if (nav.kind === 'ship') {
+      /* Continuing the 12 px pitch from above: flag 114, carrying 126,
+       * hull·shield 138, arms 150 — the last row sits two pixels inside
+       * MFD_BODY_BOTTOM. Hull and shield share a line so it does. */
+      var sy = y + 26 + gp * 4, pitch = gp;
       var fac2 = G.sys.factionById && G.sys.factionById[nav.obj.faction];
-      mfdRow(ctx, y + 96, 'flag', fac2 ? clipText(fac2.name, 18) : 'Unaligned',
+      mfdRow(ctx, sy, 'flag', fac2 ? clipText(fac2.name, 18) : 'Unaligned',
              fac2 ? fac2.color : '#ff8a76');
       var man = nav.obj.manifest || [];
-      mfdRow(ctx, y + 112, 'carrying', man.length
+      mfdRow(ctx, sy + pitch, 'carrying', man.length
         ? clipText(man.map(function (m) { return Eco.BY_ID[m.cid].name; }).join(', '), 18)
         : '—', MFD_DIM);
 
       /* What the scanner sees, if you bought one. Nothing at all without —
        * an empty row would say "this ship is undamaged", which is a
        * different and much more dangerous claim than "you cannot tell". */
-      var scan = Combat.scanShip(G.ship, nav.obj.spec || nav.obj);
+      var scan = Combat.scanShip(G.ship, nav.obj.spec || nav.obj, G.sys);
       if (scan) {
         var hullTxt = scan.level >= 2
           ? Math.round(scan.hullHp) + ' / ' + scan.hullMax
           : pctBar(scan.hullFrac);
-        mfdRow(ctx, y + 128, 'hull', hullTxt, hullInk(scan.hullFrac));
-        if (scan.shieldFrac !== undefined) {
-          var shTxt = scan.level >= 2
-            ? Math.round(scan.shieldHp) + ' / ' + scan.shieldMax
-            : pctBar(scan.shieldFrac);
-          mfdRow(ctx, y + 144, 'shield', shTxt, '#7fd6c0');
-        } else if (scan.level >= 2) {
-          mfdRow(ctx, y + 144, 'shield', 'none fitted', MFD_DIM);
+        var shTxt = scan.shieldFrac !== undefined
+          ? (scan.level >= 2 ? Math.round(scan.shieldHp) + ' / ' + scan.shieldMax
+                             : pctBar(scan.shieldFrac))
+          : (scan.level >= 2 ? 'none' : null);
+        mfdRow(ctx, sy + pitch * 2, 'hull' + (shTxt !== null ? '  ·  shield' : ''),
+               hullTxt + (shTxt !== null ? '   ·   ' + shTxt : ''), hullInk(scan.hullFrac));
+        /* THE ANALYSER'S LINE: what they would fire back with. Only at
+         * level 3 — the cheaper scanners cannot see a gun, and a blank
+         * would read as "unarmed", which is the claim that gets you shot. */
+        if (scan.arms) {
+          /* Coloured against YOUR guns: red if theirs would out-shoot
+           * yours, amber if it is close, green if you have the edge — the
+           * question the line exists to answer. See npcArmament.vsYou. */
+          var vs = scan.arms.vsYou;
+          var ink = !scan.arms.armed ? MFD_DIM
+                  : vs === undefined ? '#ffb86b'
+                  : vs > 1.25 ? '#ff8a76' : vs < 0.8 ? '#7dffb0' : '#ffb86b';
+          var tag = !scan.arms.armed || vs === undefined ? ''
+                  : vs > 1.25 ? '  out-guns you' : vs < 0.8 ? '  you out-gun them' : '  even';
+          mfdRow(ctx, sy + pitch * 3, 'arms', clipText(scan.arms.text + tag, 40), ink);
         }
       }
     } else {
-      mfdRow(ctx, y + 96, 'radius', fmtDist(nav.obj.radius));
-      mfdRow(ctx, y + 112, 'gravity',
+      mfdRow(ctx, y + 90, 'radius', fmtDist(nav.obj.radius));
+      mfdRow(ctx, y + 106, 'gravity',
         fmtSpeed(nav.obj.mu / (nav.obj.radius * nav.obj.radius)) + '²');
     }
   }
