@@ -1532,7 +1532,13 @@
   function shellMesh(kind) {
     var k = kind || 'courier';
     if (SHELL_MESHES[k]) return SHELL_MESHES[k];
-    var hull = shipMeshes()[k] || shipMeshes().courier;
+    /* 'hull:<id>' fits the field to the hull you are actually flying. The
+     * player's shell was fitted to the courier because drawShipModel used
+     * to draw the courier; it draws the bought hull now, and a Mule inside
+     * a courier-shaped bubble has its ends poking out through the field. */
+    var hull = k.indexOf('hull:') === 0
+      ? hullPreviewMesh(k.slice(5))
+      : (shipMeshes()[k] || shipMeshes().courier);
     var e = halfExtents(hull);
     var a = e[0] + SHIELD_STANDOFF, b = e[1] + SHIELD_STANDOFF,
         c = e[2] + SHIELD_STANDOFF;
@@ -1599,38 +1605,70 @@
   /* ---- what colour a shield is, and why it changes -----------------------
    * A shield that looks the same at full charge and at its last two points
    * is a shield you cannot read, and the number lives on a panel you are not
-   * looking at during a fight. So the field itself is the gauge: it runs
-   * from a cold blue-white when it is holding, through amber as it goes, to
-   * a hot red when it is nearly down.
-   *
-   * The direction is not arbitrary. Cool-to-hot is the same language every
-   * other overheating thing in this game uses — the hull temperature bar,
-   * the re-entry glow, the drive plume — so it needs no explanation the
-   * first time you see it: a field going red is a field working too hard.
+   * looking at during a fight. So the field itself is the gauge.
    *
    * Returns '#rrggbb'. `frac` is charge remaining, 1 down to 0. */
-  var SHIELD_STOPS = [
-    [0.00, 255, 92, 74],      // nearly down — hot, and unmistakable
-    [0.35, 255, 168, 74],     // going
-    [0.70, 120, 226, 255],    // holding
-    [1.00, 186, 244, 255]     // full — almost white
-  ];
+  /* ASTRA'S RAMP (2026-09-18): shimmering blue when the field is full,
+   * a DULL orange when it is empty, and every charge in between is the
+   * gradient between those two — not a ladder of hand-placed stops. It
+   * replaced a white → cyan → amber → hot-red run whose empty end shouted;
+   * an exhausted field should look spent, not alarmed.
+   *
+   * Mixed in OKLCh — lightness, chroma, hue — rather than RGB or plain
+   * OKLab. Blue and orange are near opposites, so a straight mix of either
+   * kind cancels to a mud-grey at half charge (measured: it did, on
+   * screen). Walking the HUE instead keeps the colour saturated all the
+   * way, and the short way round from blue to orange runs through violet
+   * and rose — so a half-spent field is a clearly-coloured midpoint, the
+   * lightness and chroma fall steadily toward the dull end, and every step
+   * is visibly a step. */
+  var SHIELD_FULL = [70, 165, 255];     // bright electric blue
+  var SHIELD_EMPTY = [168, 96, 42];     // dull, tired orange
+
+  function srgbToLin(c) {
+    c /= 255;
+    return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  }
+  function linToSrgb(c) {
+    c = c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
+    return Math.max(0, Math.min(255, Math.round(c * 255)));
+  }
+  function toOklch(rgb) {
+    var r = srgbToLin(rgb[0]), g = srgbToLin(rgb[1]), b = srgbToLin(rgb[2]);
+    var l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+    var m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+    var q = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+    var L = 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * q;
+    var A = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * q;
+    var B = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * q;
+    return [L, Math.hypot(A, B), Math.atan2(B, A)];
+  }
+  function fromOklch(c) {
+    var A = c[1] * Math.cos(c[2]), B = c[1] * Math.sin(c[2]);
+    var l = Math.pow(c[0] + 0.3963377774 * A + 0.2158037573 * B, 3);
+    var m = Math.pow(c[0] - 0.1055613458 * A - 0.0638541728 * B, 3);
+    var q = Math.pow(c[0] - 0.0894841775 * A - 1.2914855480 * B, 3);
+    return [linToSrgb(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * q),
+            linToSrgb(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * q),
+            linToSrgb(-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * q)];
+  }
+  var SHIELD_FULL_LCH = toOklch(SHIELD_FULL), SHIELD_EMPTY_LCH = toOklch(SHIELD_EMPTY);
+  /* The hue step, taken the short way round the circle. */
+  var SHIELD_DH = (function () {
+    var d = SHIELD_FULL_LCH[2] - SHIELD_EMPTY_LCH[2];
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    return d;
+  })();
 
   function shieldTint(frac) {
     var f = frac < 0 ? 0 : (frac > 1 ? 1 : frac);
-    var lo = SHIELD_STOPS[0], hi = SHIELD_STOPS[SHIELD_STOPS.length - 1], i;
-    for (i = 0; i < SHIELD_STOPS.length - 1; i++) {
-      if (f >= SHIELD_STOPS[i][0] && f <= SHIELD_STOPS[i + 1][0]) {
-        lo = SHIELD_STOPS[i]; hi = SHIELD_STOPS[i + 1];
-        break;
-      }
-    }
-    var span = hi[0] - lo[0];
-    var u = span > 1e-9 ? (f - lo[0]) / span : 0;
-    var r = Math.round(lo[1] + (hi[1] - lo[1]) * u);
-    var g = Math.round(lo[2] + (hi[2] - lo[2]) * u);
-    var b = Math.round(lo[3] + (hi[3] - lo[3]) * u);
-    return '#' + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
+    if (!(f >= 0)) f = 0;                       // NaN reads as empty, not as black
+    var e = SHIELD_EMPTY_LCH, u = SHIELD_FULL_LCH;
+    var c = fromOklch([e[0] + (u[0] - e[0]) * f,
+                       e[1] + (u[1] - e[1]) * f,
+                       e[2] + SHIELD_DH * f]);
+    return '#' + ((1 << 24) | (c[0] << 16) | (c[1] << 8) | c[2]).toString(16).slice(1);
   }
 
   /* ---- how bright a point on the shell is, this instant -------------------
@@ -1650,7 +1688,10 @@
    * acos per face per impact per frame would be the most expensive thing
    * here and it buys nothing, because the curve is arbitrary anyway.
    * `cosd` is 1 at the impact and -1 opposite it. */
-  var SHIELD_FLASH_LIFE = 0.55;   // s — a splash, not a light show
+  /* 0.9 s, up from 0.55. At 0.55 the shimmer had barely started before
+   * it was over, and a hit the field absorbed read as a blink you could
+   * miss — Astra's report was that it was not visibly there at all. */
+  var SHIELD_FLASH_LIFE = 0.9;    // s — long enough to see the shimmer
   var SHIELD_SPOT0 = 0.22;        // initial width, in units of (1 - cos)
 
   function shellFlare(cosd, age) {
@@ -1690,6 +1731,9 @@
                           impacts, tSec) {
     if (!(lit > 0.004)) return 0;
     var shell = shellMesh(kind);
+    var chg = charge > 1 ? 1 : (charge > 0 ? charge : 0);
+    var dull = 0.6 + 0.4 * chg;              // a spent field is a dimmer field
+    tSec = tSec || 0;
     var col = shieldTint(charge);
     var n = parseInt(col.slice(1), 16);
     var cr = (n >> 16) & 255, cg = (n >> 8) & 255, cb = n & 255;
@@ -1764,16 +1808,27 @@
         fl += L.power * shellFlare(fd[0] * L.x + fd[1] * L.y + fd[2] * L.z, L.age);
       }
 
-      var alpha = lit * (0.055 * fres + 0.50 * fl);
+      /* THE SHIMMER. Two travelling ripples across the face directions,
+       * at speeds that never line up, so the field crawls with light while
+       * it is taking the hit instead of flashing as one flat sheet. It is
+       * scaled by CHARGE: a full field shimmers hard, a spent one barely
+       * moves — the dullness at the orange end is motion as well as hue. */
+      var ripple = Math.sin(fd[0] * 11.0 + fd[1] * 7.0 - tSec * 9.3) *
+                   Math.sin(fd[2] * 9.0 - fd[1] * 5.0 + tSec * 6.1);
+      var shimmer = 1 + ripple * (0.15 + 0.55 * chg);
+
+      var alpha = lit * (0.055 * fres + 0.50 * fl * shimmer) * dull;
       if (alpha < 0.004) continue;
       if (alpha > 0.92) alpha = 0.92;
 
       /* The flare washes toward white as it peaks — energy arriving, rather
-       * than more of the same colour. */
+       * than more of the same colour. Only a healthy field does that; an
+       * empty one just glows its tired orange. */
       var wash = fl > 1 ? 1 : fl;
-      var r = Math.round(cr + (255 - cr) * wash * 0.7);
-      var g = Math.round(cg + (255 - cg) * wash * 0.7);
-      var bl = Math.round(cb + (255 - cb) * wash * 0.7);
+      wash *= 0.7 * chg;
+      var r = Math.round(cr + (255 - cr) * wash);
+      var g = Math.round(cg + (255 - cg) * wash);
+      var bl = Math.round(cb + (255 - cb) * wash);
 
       ctx.fillStyle = 'rgba(' + r + ',' + g + ',' + bl + ',' + alpha.toFixed(3) + ')';
       ctx.beginPath();
@@ -3182,16 +3237,159 @@
     pirate:    { tail: 0.46, width: 0.17, color: 'rgba(255,160,140,0.75)' }
   };
 
+  /* ---- where the engines actually are ------------------------------------
+   * THE PLUME USED TO COME FROM A POINT, not from an engine: one plume on
+   * the centreline, 0.44 hull-lengths back, sized from a table written for
+   * the procedural courier. The imported hulls have their bells elsewhere
+   * — the Talon carries two, either side of that centreline, and the
+   * plume's width straddled the gap between them — so the fire came out of
+   * the inboard SIDES of the engines instead of out of them (Astra,
+   * 2026-09-18: "the thrust sometimes comes out the side of the ship's
+   * engine").
+   *
+   * So the nozzles are read off the mesh: every vertex within a few
+   * hundredths of the rearmost point, bucketed on a fine grid, and each
+   * connected clump is an exit. Measured on the four player hulls: Talon
+   * two bells at x = ±0.063, Dart two at ±0.075, Kestrel two at ±0.057,
+   * Mule one wide flat stern. A ring inside a larger ring (a bell's inner
+   * lip) is the same nozzle, and slivers are trim, not engines. Cached on
+   * the mesh, so this is paid once per hull model, ever. */
+  var NOZZLE_DEPTH = 0.04, NOZZLE_CELL = 0.012;
+
+  function nozzlesOf(mesh) {
+    if (!mesh || !mesh.v || !mesh.v.length) return null;
+    if (mesh._nozzles !== undefined) return mesh._nozzles;
+    var zmin = Infinity, i;
+    for (i = 0; i < mesh.v.length; i++) if (mesh.v[i][2] < zmin) zmin = mesh.v[i][2];
+    var map = {}, keys = [];
+    for (i = 0; i < mesh.v.length; i++) {
+      var p = mesh.v[i];
+      if (p[2] > zmin + NOZZLE_DEPTH) continue;
+      var k = Math.round(p[0] / NOZZLE_CELL) + ',' + Math.round(p[1] / NOZZLE_CELL);
+      if (!map[k]) { map[k] = []; keys.push(k); }
+      map[k].push(p);
+    }
+    var seen = {}, clumps = [];
+    keys.forEach(function (k0) {
+      if (seen[k0]) return;
+      seen[k0] = 1;
+      var stack = [k0], n = 0, x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      while (stack.length) {
+        var c = stack.pop(), pts = map[c];
+        for (var j = 0; j < pts.length; j++) {
+          var q = pts[j]; n++;
+          if (q[0] < x0) x0 = q[0]; if (q[0] > x1) x1 = q[0];
+          if (q[1] < y0) y0 = q[1]; if (q[1] > y1) y1 = q[1];
+        }
+        var ij = c.split(',');
+        var ci = +ij[0], cj = +ij[1];
+        for (var dx = -1; dx <= 1; dx++) for (var dy = -1; dy <= 1; dy++) {
+          var nk = (ci + dx) + ',' + (cj + dy);
+          if (map[nk] && !seen[nk]) { seen[nk] = 1; stack.push(nk); }
+        }
+      }
+      clumps.push({ n: n, x0: x0, x1: x1, y0: y0, y1: y1 });
+    });
+    var most = 0;
+    clumps.forEach(function (c) { if (c.n > most) most = c.n; });
+    var out = [];
+    clumps.forEach(function (c) {
+      if (c.n < most * 0.15) return;
+      var cx = (c.x0 + c.x1) / 2, cy = (c.y0 + c.y1) / 2;
+      var inside = clumps.some(function (o) {
+        return o !== c && o.n > c.n && cx >= o.x0 && cx <= o.x1 && cy >= o.y0 && cy <= o.y1;
+      });
+      if (inside) return;
+      var w = c.x1 - c.x0, h = c.y1 - c.y0;
+      out.push({ x: cx, y: cy, z: zmin, r: Math.max(0.012, Math.min(w, h) / 2 * 0.85) });
+    });
+    mesh._nozzles = (out.length && out.length <= 6) ? out : null;
+    return mesh._nozzles;
+  }
+
+  /* The mesh a ship is drawn with — the same choice drawHullModel makes,
+   * so the plume and the hull can never disagree about which model it is. */
+  function meshForShip(frame, kind) {
+    var letter = frame && frame.sizeLetter;
+    if (letter) {
+      var swapped = hullIdForSpec({ cls: kind, sizeLetter: letter });
+      if (swapped) { var m = libHull(swapped); if (m) return m; }
+    }
+    return shipMeshes()[kind] || shipMeshes().courier;
+  }
+
   /* Fire a ship's drive. `frame` is the hull's own basis; `thrustDir` is
-   * the direction it is pushing, so the plume goes the other way. Passing
-   * null for thrustDir means "straight out the back", which is what an NPC
-   * on a rail is always doing. */
-  function drawShipExhaust(ctx, cam, frame, lengthKm, throttle, kind, thrustDir, phase) {
+   * the direction it is pushing (null = straight ahead, an NPC on a rail).
+   *
+   * THE MAIN DRIVE ONLY EVER FIRES OUT OF ITS BELLS, straight back along
+   * the hull. It used to be pointed opposite the full thrust vector, on the
+   * argument that translation and attitude are separate here — true, and
+   * it is why a sideways push is legal — but a bolted-on engine cannot
+   * swivel ninety degrees, and a plume leaving a bell sideways is exactly
+   * the thing that looks wrong. So thrust is split: the part along the
+   * nose lights the drive, and whatever is left over (sideways, or
+   * backwards) is shown as RCS puffs from the hull on the side it pushes
+   * away from — which is what a ship that translates without turning is
+   * actually doing. `mesh` is the model on screen; omitted, it is the
+   * class hull. */
+  function drawShipExhaust(ctx, cam, frame, lengthKm, throttle, kind, thrustDir, phase, mesh) {
     var spec = DRIVE_SPEC[kind] || DRIVE_SPEC.courier;
-    var out = thrustDir ? V.scale(V.norm(thrustDir), -1) : V.scale(frame.fwd, -1);
-    var tail = V.addScaled(frame.pos, frame.fwd, -spec.tail * lengthKm);
-    drawExhaust(ctx, cam, tail, out, lengthKm, lengthKm * spec.width,
-                throttle, spec.color, phase);
+    var aft = V.scale(frame.fwd, -1);
+    var main = throttle, lat = null, latAmt = 0, retro = 0;
+    if (thrustDir) {
+      var t = V.norm(thrustDir);
+      var along = V.dot(t, frame.fwd);
+      main = throttle * Math.max(0, along);
+      var side = V.sub(t, V.scale(frame.fwd, along));
+      var sl = V.len(side);
+      if (sl > 1e-6) { lat = V.scale(side, 1 / sl); latAmt = throttle * sl; }
+      if (along < 0) retro = throttle * -along;
+    }
+
+    var noz = nozzlesOf(mesh || meshForShip(frame, kind));
+    if (noz) {
+      for (var i = 0; i < noz.length; i++) {
+        var n = noz[i];
+        var origin = localToWorld(frame, n.x * lengthKm, n.y * lengthKm, n.z * lengthKm);
+        drawExhaust(ctx, cam, origin, aft, lengthKm, n.r * lengthKm,
+                    main, spec.color, phase + i * 0.23);
+      }
+    } else {
+      drawExhaust(ctx, cam, V.addScaled(frame.pos, frame.fwd, -spec.tail * lengthKm), aft,
+                  lengthKm, lengthKm * spec.width, main, spec.color, phase);
+    }
+
+    if (latAmt > 0.05 || retro > 0.05) {
+      var ext = halfExtents(mesh || meshForShip(frame, kind));
+      if (latAmt > 0.05) {
+        /* Out of the hull on the far side from the push, fore and aft of
+         * the middle, like a pair of thruster quads. The component along
+         * right and up picks the hull's width or height at that side. */
+        var out = V.scale(lat, -1);
+        var lr = V.dot(out, frame.right), lu = V.dot(out, frame.up);
+        var reach = Math.hypot(lr * ext[0], lu * ext[1]) || ext[0];
+        [0.28, -0.28].forEach(function (zf, k) {
+          var o = V.addScaled(V.addScaled(frame.pos, frame.fwd, zf * lengthKm), out, reach * lengthKm);
+          drawRcs(ctx, cam, o, out, lengthKm, latAmt, phase + k * 0.5);
+        });
+      }
+      if (retro > 0.05) {
+        var nose = V.addScaled(frame.pos, frame.fwd, ext[2] * lengthKm * 0.92);
+        [1, -1].forEach(function (sgn, k) {
+          var o = V.addScaled(nose, frame.right, sgn * ext[0] * 0.5 * lengthKm);
+          drawRcs(ctx, cam, o, frame.fwd, lengthKm, retro, phase + 0.3 + k * 0.5);
+        });
+      }
+    }
+  }
+
+  /* A reaction-control puff: short, narrow, cold white-blue — a jet of
+   * gas, not a torch, so it can never be mistaken for the main drive. */
+  function drawRcs(ctx, cam, origin, dir, lengthKm, amount, phase) {
+    var a = Math.min(1, amount);
+    var flick = 0.8 + 0.2 * Math.sin(phase * 41.3);
+    drawExhaust(ctx, cam, origin, dir, lengthKm * 0.022 * (0.6 + a) * flick,
+                lengthKm * 0.018, Math.min(1, 0.4 + a), 'rgba(225,240,255,0.7)', phase);
   }
 
   /* A station, oriented by whatever frame the caller hands us — its orbital
@@ -7921,6 +8119,133 @@
     ctx.restore();
   }
 
+  /* ---- RE-ENTRY PLASMA, around the ship ----------------------------------
+   * The hull shader already burns the windward faces (gl.js, uGlow), and
+   * that on its own did not read: a tint on a few triangles is invisible
+   * from any distance, missing entirely on the 2D fallback, and — since
+   * the heat lives on the faces meeting the air — mostly on the side of
+   * the ship facing away from a chase camera. What a re-entry LOOKS like
+   * is a sheath of gas around the ship and a wake of it streaming off the
+   * back, and that is what this draws.
+   *
+   * Screen space, additive, like the plumes and the shield: it is light,
+   * it has no surface. Three layers, all driven by the two numbers the
+   * flight model already publishes — ship.reentryGlow (0..1, from the
+   * Sutton-Graves flux) and ship.windDir (which way the ship is moving
+   * through the air):
+   *
+   *   SHEATH — a glow wrapped round the hull, pushed toward the bow.
+   *   BOW    — the hot, whiter cap where the shock stands off the nose.
+   *   WAKE   — a tapering tail streaming back along the flow, with
+   *            flickering streamers so it moves like gas, not a decal.
+   *
+   * The colour runs the same way the hull glow does — dull red at a
+   * touch, orange, whitening as it becomes dangerous — so the hull and
+   * its sheath always agree about how bad it is. */
+  function plasmaRGB(g, k) {
+    var t = Math.max(0, Math.min(1, g * (k || 1)));
+    var r = 255;
+    var gg = Math.round(48 + 170 * Math.pow(t, 1.3));
+    var b = Math.round(14 + 150 * Math.pow(t, 2.6));
+    return r + ',' + gg + ',' + b;
+  }
+
+  /* How much of the effect to show at all. The flux-derived glow starts
+   * tiny and the first hint of air should still be SEEN — a ship grazing
+   * the top of an atmosphere is exactly when a pilot wants telling — so the
+   * visibility ramps in fast and the heat then drives size and colour. */
+  function plasmaVis(g) { return Math.min(1, Math.max(0, (g - 0.02) / 0.16)); }
+
+  function drawReentryPlasma(ctx, cam, frame, lengthKm, glow, wind, tSec) {
+    if (!(glow > 0.02) || !wind) return false;
+    var c = cam.project(frame.pos);
+    if (!c) return false;
+    var vis = plasmaVis(glow);
+    var lenPx = lengthKm * c.scale;
+    var R = Math.max(7, lenPx * 0.55);
+    if (R > 2400) return false;                   // the eye is inside it
+    var bowW = cam.project(V.addScaled(frame.pos, wind, lengthKm * 0.5));
+    var tailW = cam.project(V.addScaled(frame.pos, wind, -lengthKm * (0.8 + 1.8 * glow)));
+    var flick = 0.86 + 0.09 * Math.sin(tSec * 31.7) + 0.05 * Math.sin(tSec * 13.3);
+    var col = plasmaRGB(glow), hot = plasmaRGB(glow, 1.7);
+    var bx = bowW ? bowW.x : c.x, by = bowW ? bowW.y : c.y;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+
+    /* WAKE: a comet tail of soft blobs shrinking back along the flow.
+     * Blobs, not a polygon: a filled wedge with hard sides read as a cone
+     * of light — a searchlight — where gas should fray at the edges. The
+     * wake stays orange even when the bow is white-hot; only the shock
+     * itself is that hot. */
+    var wake = plasmaRGB(glow * 0.6);
+    if (tailW) {
+      var dx = tailW.x - bx, dy = tailW.y - by;
+      var L = Math.hypot(dx, dy);
+      if (L > 1) {
+        var nx = -dy / L, ny = dx / L;
+        var w0 = R * (0.55 + 0.25 * glow);
+        var K = 9;
+        for (var k = 0; k < K; k++) {
+          var t = (k + 0.5) / K;
+          var wob = Math.sin(tSec * (9 + k * 1.7) + k * 1.9) * 0.08 * w0;
+          var px = bx + dx * t + nx * wob, py = by + dy * t + ny * wob;
+          var pr = w0 * (1.05 - 0.75 * t);
+          var pa = 0.34 * vis * flick * Math.pow(1 - t, 1.2);
+          var pg = ctx.createRadialGradient(px, py, 0, px, py, pr);
+          pg.addColorStop(0, 'rgba(' + wake + ',' + pa.toFixed(3) + ')');
+          pg.addColorStop(1, 'rgba(' + wake + ',0)');
+          ctx.fillStyle = pg;
+          ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
+        }
+
+        /* Streamers: a few thin ribbons peeling off the hull edges and
+         * curling as they go, each on its own flicker. One stroke style
+         * for the lot. */
+        var n = Math.round(2 + 5 * glow);
+        ctx.lineCap = 'round';
+        ctx.lineWidth = Math.max(1, R * 0.028);
+        ctx.strokeStyle = 'rgba(' + col + ',' + (0.30 * vis).toFixed(3) + ')';
+        ctx.beginPath();
+        for (var i = 0; i < n; i++) {
+          var side = n > 1 ? (i / (n - 1)) * 2 - 1 : 0;
+          var ph = tSec * (6 + i * 1.37) + i * 2.3;
+          var reach = 0.30 + 0.40 * (0.5 + 0.5 * Math.sin(ph * 0.61 + i));
+          var curl = (Math.sin(ph) * 0.35 + 0.25) * w0;
+          var sx0 = c.x + nx * w0 * side * 0.7, sy0 = c.y + ny * w0 * side * 0.7;
+          var ex = bx + dx * reach + nx * w0 * side * 0.3;
+          var ey = by + dy * reach + ny * w0 * side * 0.3;
+          ctx.moveTo(sx0, sy0);
+          ctx.quadraticCurveTo((sx0 + ex) / 2 + nx * curl * side, (sy0 + ey) / 2 + ny * curl * side, ex, ey);
+        }
+        ctx.stroke();
+      }
+    }
+
+    // SHEATH: wrapped round the hull, leaning toward the bow.
+    var sx = (c.x * 2 + bx) / 3, sy = (c.y * 2 + by) / 3;
+    var SR = R * (1.05 + 0.35 * glow);
+    var sg = ctx.createRadialGradient(sx, sy, SR * 0.2, sx, sy, SR);
+    sg.addColorStop(0, 'rgba(' + col + ',' + (0.42 * vis * flick).toFixed(3) + ')');
+    sg.addColorStop(0.65, 'rgba(' + col + ',' + (0.16 * vis * flick).toFixed(3) + ')');
+    sg.addColorStop(1, 'rgba(' + col + ',0)');
+    ctx.fillStyle = sg;
+    ctx.beginPath(); ctx.arc(sx, sy, SR, 0, Math.PI * 2); ctx.fill();
+
+    // BOW: the shock cap standing off the nose — the hottest thing here.
+    if (bowW) {
+      var BR = R * (0.35 + 0.30 * glow);
+      var bg = ctx.createRadialGradient(bx, by, 0, bx, by, BR);
+      bg.addColorStop(0, 'rgba(' + hot + ',' + Math.min(0.9, 0.9 * vis * flick).toFixed(3) + ')');
+      bg.addColorStop(0.45, 'rgba(' + col + ',' + (0.40 * vis).toFixed(3) + ')');
+      bg.addColorStop(1, 'rgba(' + col + ',0)');
+      ctx.fillStyle = bg;
+      ctx.beginPath(); ctx.arc(bx, by, BR, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+    return true;
+  }
+
   var Render = {
     Camera: Camera,
     M: M,
@@ -7973,7 +8298,7 @@
     APRON_R: APRON_R,
     portDressingMesh: portDressingMesh,
     drawExhaust: drawExhaust,
-    drawShipExhaust: drawShipExhaust,
+    drawShipExhaust: drawShipExhaust, nozzlesOf: nozzlesOf,
     drawWake: drawWake,
     WAKE_ARCS: WAKE_ARCS,
     WAKE_BOLTS: WAKE_BOLTS,
@@ -8045,6 +8370,7 @@
      * to account without a canvas. */
     shellMesh: shellMesh, drawShellField: drawShellField,
     shieldTint: shieldTint, shellFlare: shellFlare,
+    drawReentryPlasma: drawReentryPlasma, plasmaRGB: plasmaRGB, plasmaVis: plasmaVis,
     SHIELD_STANDOFF: SHIELD_STANDOFF, SHIELD_FLASH_LIFE: SHIELD_FLASH_LIFE,
     hullMuzzles: hullMuzzles, shipMuzzles: shipMuzzles,
     seatMuzzle: seatMuzzle,

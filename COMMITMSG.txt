@@ -1,55 +1,69 @@
-the Syndicate licenses plants too, and the suite is green for the first time in eight days
+An autopilot that goes round the world, fire where the air is, shields you can read, and a drive that comes out of its engines
 
-Astra: "Milfuel is manufactured at Navy/Syndicate reprocessing plants."
+THE AUTOPILOT STILL FLEW THROUGH PLANETS -- just not surface ones. 88e3504
+gave a port ON a world a flight plan; a port AROUND one was still aimed at
+down a straight line, and when the station is on the far side of its
+planet that line goes through the planet. Measured on kawartha, every
+orbital port, ship in a low orbit at 0, 90 and 180 degrees from the
+station: 0 and 90 docked every time, 180 put five of six into the ground
+inside two real seconds. `routeAround` now sits in front of every
+straight-line leg -- the approach, the cruise leg, follow -- and if the
+line cuts a world's keep-out (surface plus clearance, or the top of the
+air if that is higher) it climbs out, then walks round in secants aimed at
+the DESTINATION's height, two tangents per leg. 24 of 24 approaches dock,
+including from the pad, and none of them goes under the clearance.
 
-Half of that was already true and the other half was a hole in the fiction
-this file had already argued for. The Syndicate's whole racket IS the
-waste -- they ban radioactive cargo in the systems they hold and dump
-their own in everyone else's back garden -- so a hold is the one other
-place with both the feedstock and nobody to answer to. And it could not
-happen by accident: no naval garrison ever spawns in a hold (the
-`sys.pirateHeld` gate in buildPatrols) and a passing cutter licenses
-nothing, so before this the single most lawless place in the galaxy was
-the one place you could not buy military fuel.
+Three more found on the way:
+- Gravity was clipped with the steering. Cancelling the pull by adding it
+  to the command and clipping the SUM scaled the hold-up down exactly when
+  the engine was working hardest; on Mirven I (14 m/s2 against a Talon's
+  19) the ship sank hundreds of km every turn. `holdUpThenSteer` pays the
+  pull in full and steers with what is left.
+- Cruise dropped out INSIDE the air. The mass-lock drop-out fired about
+  110 km above bare rock, under the atmosphere top of Mirven I (170) and
+  IV (116), and dropCruise handed back a circular orbit in the upper air.
+  Clearance is measured to the keep-out now: drop-out at 440-580 km.
+- The node autopilot arms a plan that ends underground without a word.
+  It still flies it -- a deorbit is a manoeuvre -- but says so, and the
+  burn page shows the new periapsis in red.
 
-`licensor(sys)` answers navy, syndicate or nobody, and reads a flag
-generate.js has already set -- NO RNG DRAW, the same discipline the rest
-of this pass keeps, which is what makes the licence additive to every
-pre-existing seed.
+MANOEUVRE NODES LIVE ON THE F2 ORBIT MAP. \ on the flight keyboard was
+tried and was clumsy; the burn is planned against the orbit, so the keys
+belong on the screen that draws it. I / - = / ; ' / \ / Shift+I answer on
+F2 (and still on Shift+F2), the map carries the MANOEUVRE readout under
+the survey, and the cockpit shows one line saying a node is waiting on
+F2. The burn page is two columns now -- twelve lines in one column ran
+the orbit and the autopilot status down through the soft-key strip.
 
-A syndicate plant keeps ten points less back than a naval one. The navy's
-share is a contract; the Syndicate's is a cut, and a cut is smaller than a
-requisition, because they are selling -- which is the point of holding the
-plant. So a hold is the better place to buy it and the worst place to be
-caught leaving with it.
+RE-ENTRY PLASMA, around the ship. The hull shader's windward tint was
+invisible from any distance and absent in the cockpit. Exterior: a sheath,
+a white-hot bow cap and a comet-tail wake with curling streamers. Cockpit:
+the glass lights from where the air arrives and flame streams past it.
+Both driven only by ship.reentryGlow and ship.windDir, held orange over
+the tinted canopy so the ladder stays readable.
 
-WORTH A LOOK BEFORE THIS IS SETTLED: it roughly triples how much of the
-galaxy breeds the stuff. The doc's figure was 16 of 150 systems, all with
-a naval garrison; holds are about 18% of the galaxy and every one of them
-has a plant, so it lands near a third of systems rather than a ninth. The
-margin argument still holds -- the navy contract is what stops it being a
-risk-free 3.5x run -- but availability is a separate lever and this pulled
-it. economy.test.js prints the count every run so the number is visible
-rather than inferred.
+SHIELDS: blue when full, dull orange when empty, and the gradient between
+is walked in OKLCh -- a straight mix of two near-opposites is grey at half
+charge, measured on screen -- so it runs blue, violet, rose, orange. The
+hit shimmers (two travelling ripples, scaled by charge, so a spent field
+barely moves), lasts 0.9 s instead of 0.55, and the player's field is
+fitted to the hull being flown rather than the courier.
 
-AND THE SUITE IS GREEN. economy.test.js has failed on every tagged build
-since v0.1.0-alpha5 on 2026-09-07 -- "no world manufactures above its
-development level, 17 violations" -- which short-circuits `npm test`, so
-the four suites after it never ran, the package step never ran, and the
-release job never ran. Every release this repo has made was made by hand
-past a gate that was red the whole time.
+THE DRIVE COMES OUT OF THE ENGINES. The plume was one point on the
+centreline, sized for the procedural courier -- between the Talon's two
+bells, so it lit their inboard sides -- and it swung to follow the thrust
+vector, so a sideways or orbital-frame burn fired it out of a bell at
+ninety degrees. Nozzles are read off the mesh now (Talon, Dart, Kestrel
+two bells each at the measured x; Mule one wide stern), the main drive
+only ever fires straight aft on the along-nose part of the thrust, and
+the rest shows as RCS puffs from the hull.
 
-The violations had a shape nobody had looked at: all eighteen were
-milfuel, at development 0.124 to 0.508. One commodity, never a spread.
-Licensed output is not manufacture -- a licence is a thing you are given,
-not a thing you develop into -- so the development rule now excludes it,
-and a STRICTER rule takes its place: military fuel is only ever bred at a
-reprocessing plant, only in a system that licenses it, and only burned
-where naval hulls are serviced. Six new checks; the Syndicate one fails on
-the old code.
+Also: the storage/corridor hazard is closed in PLAN.md and NEXT-STEPS.md
+-- it does not reproduce at any commit on node 22 or node 26.
 
-lint clean; physics 245, render 728, cockpit 164, economy 134, nodes 55,
-ships 23, berths 105, galaxy 39, combat 342, arcs 18. Nothing red.
+render 925, cockpit 195, combat 473, physics 245, economy 199, slipspace
+145, berths 128, galaxy 87, arcs 59, nodes 55, fleet 41, crew 29, ships 28,
+weather 28. Nothing red.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01DLMzUVPsSGGwcBp8L9fdg8
+Claude-Session: https://claude.ai/code/session_0171d61uFf6cJa6gZ2Ga7BGq

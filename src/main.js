@@ -1673,6 +1673,11 @@
          * browser reports. */
         case '-': case '_': zoomBy(1.25, true); break;
         case '=': case '+': zoomBy(1 / 1.25, true); break;
+
+        /* THE NODE KEYS LIVE ON THE ORBIT MAP (F2), not here. Tried on the
+         * flight keyboard as \\ alone and found clumsy in play (Astra,
+         * 2026-09-18): the burn is planned against the orbit, so the keys
+         * belong on the screen that draws the orbit. See modeKey('system'). */
         /* Backspace is gone: F5 and F10 both carry EJECT buttons on every
          * cargo line, and waste is the one thing you jettison deliberately
          * rather than in a hurry. */
@@ -2276,6 +2281,7 @@
        * `-` and `=` mean the node's delta-v here and zoom out in flight,
        * which is not a collision: on this screen there is a burn in front of
        * you and nothing else those keys could sensibly be for. */
+      case 'system':
       case 'node':
         if (key === 'i') {
           if (e.shiftKey) clearNode();
@@ -2358,7 +2364,14 @@
     for (var i = 0; i < G.sys.gravBodies.length; i++) {
       var b = G.sys.gravBodies[i];
       var d = V.dist(Sim.bodyPosition(b, G.sys, G.t), G.ship.pos);
-      var clear = d - b.radius;
+      /* Clearance to the KEEP-OUT, not to the rock. The speed limit winds
+       * down against this and the mass-lock drop-out fires about a hundred
+       * kilometres above it — which measured against bare rock put the
+       * drop-out at ~110 km altitude, INSIDE the air of every world whose
+       * atmosphere tops out higher than that (Mirven I's reaches 170 km).
+       * dropCruise then handed back a circular orbit in the upper
+       * atmosphere, drag decayed it, and the ship went in. */
+      var clear = d - keepOutRadius(b);
       if (clear < bestClear) { bestClear = clear; best = b; }
       var r = d / b.radius;
       if (r < ratio) { ratio = r; worst = b; }
@@ -2597,7 +2610,8 @@
     var range = V.len(rel);
     if (range < 1e-9) return;
     ad.phase = 'cruise';
-    G.ship.fwd = V.scale(rel, 1 / range);
+    var way = routeAround(G.ship.pos, ss.pos, null);
+    G.ship.fwd = way ? V.norm(V.sub(way.aim, G.ship.pos)) : V.scale(rel, 1 / range);
     G.ship.right = V.norm(V.cross(G.ship.fwd, { x: 0, y: 0, z: 1 }));
     if (V.len(G.ship.right) < 1e-6) G.ship.right = V.norm(V.cross(G.ship.fwd, { x: 0, y: 1, z: 0 }));
     G.ship.up = V.cross(G.ship.right, G.ship.fwd);
@@ -2726,6 +2740,111 @@
              refVel: mouth.vel, cap: GROUND_TRANSIT_V };
   }
 
+  /* ---- NOTHING FLIES THROUGH A WORLD -----------------------------------
+   * groundPlan fixed this for ports ON a world. It stayed wrong for ports
+   * AROUND one: an orbital station is aimed at down a straight line, and
+   * when the station is on the far side of its planet that line goes
+   * through the planet. Measured 2026-09-18 on kawartha, every orbital port
+   * in the system, ship in a low orbit at 0, 90 and 180 degrees from the
+   * station: the first two docked every time, and 180 put five of six into
+   * the ground within two real seconds. The cruise leg and follow mode had
+   * the same straight line.
+   *
+   * So every straight-line leg asks this first. If the line from the ship
+   * to where it is going passes inside some world's keep-out sphere — the
+   * surface plus the same clearance groundPlan keeps, or the top of the
+   * air if that is higher, so a detour is not also a re-entry — it gets a
+   * waypoint instead: CLIMB straight up if the ship is already inside the
+   * sphere, otherwise walk round it in secants, the same geometry
+   * groundPlan's TRANSIT uses and for the same reason (aiming "at the
+   * side" of a world flies the chord, and the chord is inside it).
+   *
+   * The end of the line is exempt from its own world — a station orbiting
+   * inside the keep-out would otherwise make the sphere unreachable — by
+   * shrinking that world's sphere to just under the aim's own radius.
+   * `skip` is a world the caller is already handling (groundPlan's host). */
+  /* GRAVITY FIRST, STEERING WITH WHAT IS LEFT. Cancelling the local pull
+   * by adding it to the steering command and then clipping the SUM to the
+   * engine's limit scales the gravity term down along with everything
+   * else — so exactly when the autopilot is working hardest, it stops
+   * holding the ship up. On a heavy world (Mirven I pulls 14 m/s² against
+   * a Talon's 19) that was a ship that sank a few hundred kilometres every
+   * time it tried to turn. The pull is paid in full; the steering gets the
+   * largest share of it that still fits. */
+  function holdUpThenSteer(steer) {
+    var g = Sim.acceleration(G.ship.pos, G.sys, G.t);
+    var hold = V.scale(g, -1);
+    var A = G.ship.maxAccel;
+    var hh = V.dot(hold, hold);
+    if (hh >= A * A) return V.scale(hold, A / Math.sqrt(hh));   // it cannot even hover
+    var ee = V.dot(steer, steer);
+    if (ee < 1e-30) return hold;
+    var eh = V.dot(steer, hold);
+    // largest k in [0,1] with |hold + k·steer| <= A
+    var k = (-eh + Math.sqrt(eh * eh + ee * (A * A - hh))) / ee;
+    return V.addScaled(hold, steer, Math.max(0, Math.min(1, k)));
+  }
+
+  function keepOutRadius(b) {
+    var clear = Math.max(b.radius * GROUND_CLEAR_FRAC, GROUND_CLEAR_MIN);
+    if (b.atmosphere && b.atmosphere.top > clear) clear = b.atmosphere.top;
+    return b.radius + clear;
+  }
+
+  function routeAround(from, aim, skip) {
+    var seg = V.sub(aim, from);
+    var segLen2 = V.dot(seg, seg);
+    var worst = null, worstDepth = 0;
+    for (var i = 0; i < G.sys.gravBodies.length; i++) {
+      var b = G.sys.gravBodies[i];
+      if (b === skip) continue;
+      var bs = Sim.bodyState(b, G.sys, G.t);
+      var keep = Math.min(keepOutRadius(b), V.dist(aim, bs.pos) * 0.97);
+      var t = segLen2 > 1e-18 ? V.dot(V.sub(bs.pos, from), seg) / segLen2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      var miss = V.dist(V.addScaled(from, seg, t), bs.pos);
+      if (miss < keep && keep - miss > worstDepth) {
+        worstDepth = keep - miss;
+        worst = { body: b, pos: bs.pos, vel: bs.vel, keep: keep };
+      }
+    }
+    if (!worst) return null;
+
+    var c = worst.pos, keepR = worst.keep;
+    var shipRel = V.sub(from, c);
+    var shipR = V.len(shipRel);
+    if (!(shipR > 1e-9)) return null;
+    var shipUp = V.scale(shipRel, 1 / shipR);
+    if (shipR < keepR) {
+      return { phase: 'climb', body: worst.body, refVel: worst.vel,
+               aim: V.addScaled(c, shipUp, keepR * 1.15) };
+    }
+    /* The waypoint sits at the DESTINATION's height round the world, not
+     * at the ship's. Walking round at your own altitude hugs the keep-out
+     * the whole way (every secant dips to it) and crawls — measured, a
+     * quarter of an hour of real time to get round a big world. A station
+     * lives well above the rock, and a line from low down out to its
+     * height clears far more of the curve per leg: two tangents, one from
+     * each end, so the step is acos(keep/r1) + acos(keep/r2). */
+    var aimRel = V.sub(aim, c);
+    var aimUp = V.norm(aimRel);
+    /* Planned against a sphere a little larger than the hard keep-out, so
+     * the tangents have margin and the ship climbs away from the limit
+     * instead of skimming along it for the whole crossing. */
+    var soft = keepR * 1.08;
+    var r = Math.max(V.len(aimRel), soft * 1.02);
+    var r1 = Math.max(shipR, soft * 1.0001);
+    var toGo = Math.acos(Math.max(-1, Math.min(1, V.dot(shipUp, aimUp))));
+    var maxStep = Math.acos(Math.min(0.9999, soft / r1)) + Math.acos(Math.min(0.9999, soft / r));
+    var step = Math.min(toGo, maxStep * 0.9);
+    var tang = V.sub(aimUp, V.scale(shipUp, V.dot(aimUp, shipUp)));
+    if (V.len(tang) < 1e-9) tang = anyAcross(shipUp);
+    tang = V.norm(tang);
+    var mid = V.add(V.scale(shipUp, Math.cos(step)), V.scale(tang, Math.sin(step)));
+    return { phase: 'around', body: worst.body, refVel: worst.vel,
+             aim: V.addScaled(c, V.norm(mid), r) };
+  }
+
   /* Any unit vector perpendicular to this one. Only ever needed for the
    * exactly-antipodal case above, which is measure-zero and happens the
    * first time somebody tests it deliberately. */
@@ -2782,12 +2901,17 @@
       var stand = Math.max(2, (ss.obj.radius || 0.05) * 8);
       var out = range > 1e-9 ? V.scale(rel, -1 / range) : { x: 1, y: 0, z: 0 };
       var hold = V.addScaled(ss.pos, out, stand);
+      var holdWay = routeAround(G.ship.pos, hold, null);
+      if (holdWay) hold = holdWay.aim;
       var toHold = V.sub(hold, G.ship.pos);
       var dHold = V.len(toHold);
       var vHold = Math.min(2, Math.sqrt(2 * G.ship.maxAccel * 0.55 * Math.max(0, dHold)));
       var dirHold = dHold > 1e-9 ? V.scale(toHold, 1 / dHold) : V.zero();
       G.warpIndex = Math.min(dHold > 5e3 ? 3 : dHold > 100 ? 2 : 1, WARPS.length - 1);
-      return clipAccel(V.scale(V.sub(V.addScaled(ss.vel, dirHold, vHold), G.ship.vel), 0.5));
+      var holdCmd = V.scale(V.sub(V.addScaled(holdWay ? holdWay.refVel : ss.vel, dirHold, vHold),
+                                  G.ship.vel), 0.5);
+      if (holdWay) holdCmd = holdUpThenSteer(holdCmd);
+      return clipAccel(holdCmd);
     }
 
     /* ---- the long leg, under cruise ------------------------------------
@@ -2797,7 +2921,8 @@
      * not what is flying it. */
     if (range > AUTO_CRUISE_RANGE || (G.cruise && range > AUTO_CRUISE_RANGE * 0.5)) {
       ad.phase = 'cruise';
-      G.ship.fwd = V.norm(rel);
+      var cruiseWay = routeAround(G.ship.pos, ss.pos, null);
+      G.ship.fwd = V.norm(cruiseWay ? V.sub(cruiseWay.aim, G.ship.pos) : rel);
       G.ship.right = V.norm(V.cross(G.ship.fwd, { x: 0, y: 0, z: 1 }));
       if (V.len(G.ship.right) < 1e-6) G.ship.right = V.norm(V.cross(G.ship.fwd, { x: 0, y: 1, z: 0 }));
       G.ship.up = V.cross(G.ship.right, G.ship.fwd);
@@ -2891,6 +3016,19 @@
             : (shaftAxis && ad.phase === 'close')
               ? V.addScaled(shaftMouth.pos, shaftAxis, standoff)
               : V.addScaled(ss.pos, V.norm(V.scale(rel, -1)), standoff);
+    /* And whatever the aim, not through a world on the way to it. The
+     * ground plan owns its own host; anything else in the way — including
+     * a moon between you and a pad — is routed round. */
+    var finalAim = aim;
+    var detour = routeAround(G.ship.pos, aim, ground ? st.parentBody : null);
+    if (detour) {
+      aim = detour.aim;
+      ad.phase = detour.phase === 'climb' ? 'climb' : 'around';
+      /* Round a world, the clock comes down for the same reason it does
+       * over a pad: eight seconds of simulation between corrections is a
+       * mountain arriving unannounced. */
+      G.warpIndex = Math.min(G.warpIndex, 2);
+    }
     var toAim = V.sub(aim, G.ship.pos);
     var dAim = V.len(toAim);
 
@@ -2917,18 +3055,26 @@
     } else {
       vWant = Math.min(speedCap, Math.sqrt(2 * brake * Math.max(0, dAim)));
     }
+    /* A waypoint can be further off than the thing it is a way to. Speed
+     * is still owed to the real destination's braking distance, or the
+     * last leg starts inside it and overshoots. */
+    if (detour) {
+      vWant = Math.min(vWant, GROUND_TRANSIT_V * 2,
+        Math.sqrt(2 * brake * Math.max(0, V.dist(finalAim, G.ship.pos))) + GROUND_CLIMB_V);
+    }
     var dirAim = dAim > 1e-9 ? V.scale(toAim, 1 / dAim) : V.zero();
-    var desired = V.addScaled(ground ? ground.refVel : ss.vel, dirAim, vWant);
+    var desired = V.addScaled(detour ? detour.refVel : ground ? ground.refVel : ss.vel,
+                              dirAim, vWant);
     var err = V.sub(desired, G.ship.vel);
 
-    var cmd = V.scale(err, ground ? 0.9 : 0.5);
+    var cmd = V.scale(err, (ground || detour) ? 0.9 : 0.5);
     /* HOLD THE SHIP UP WHILE IT DOES THAT. Over a world the guidance law
      * is chasing a velocity that gravity is pulling it off every second,
      * and a proportional term alone answers that with a permanent sag —
      * the ship descends faster than it meant to and arrives at the pad
      * carrying it. Cancelling the local pull explicitly leaves the error
      * term doing only the job it is good at. */
-    if (ground) cmd = V.sub(cmd, Sim.acceleration(G.ship.pos, G.sys, G.t));
+    if (ground || detour) cmd = holdUpThenSteer(cmd);
     var mag = V.len(cmd);
     if (mag > G.ship.maxAccel) cmd = V.scale(cmd, G.ship.maxAccel / mag);
 
@@ -2979,7 +3125,7 @@
     return Math.max(1, period * frac);
   }
 
-  function placeNode() {
+  function placeNode(prompt) {
     if (G.ship.docked) { say('Nothing to plan from the clamps — undock first', 3); return; }
     if (G.ship.landed) { say('Nothing to plan from the ground', 3); return; }
     /* Default placement is the next apoapsis. Almost every burn worth
@@ -2995,7 +3141,7 @@
     G.node = Sim.makeNode(G.t + Math.max(5, lead), { pro: 0, nor: 0, rad: 0 });
     G.nodeAxis = 0;
     G.nodeStale = 0;
-    say('Node placed — I cycles axis, − and = set it, \\ flies it', 6);
+    say(prompt || 'Node placed — I cycles axis, − and = set it, \\ flies it', 6);
   }
 
   function clearNode(quiet) {
@@ -3158,6 +3304,17 @@
     }
     cancelAutodock(null);
     G.nodeBurn = { phase: 'align', remaining: plan.magnitude, dir: null, spent: 0 };
+    /* The autopilot flies the plan it is given, including one that ends in
+     * the ground — a deorbit is a real manoeuvre. But it says so, loudly,
+     * at the moment of arming, rather than letting the first sign be the
+     * impact klaxon a few minutes later. */
+    var after = plan.after;
+    if (after && isFinite(after.periAlt) && after.periAlt < 0) {
+      say('Node autopilot armed — WARNING: this burn puts periapsis ' +
+          fmtDist(-after.periAlt) + ' underground', 8);
+      HOOKS.sound('warn');
+      return;
+    }
     say('Node autopilot armed — burn in ' + fmtTime(Math.max(0, plan.countdown)), 5);
   }
 
@@ -6633,6 +6790,83 @@
     ctx.restore();
   }
 
+  /* ---- re-entry, from the seat --------------------------------------------
+   * You cannot see your own hull from in here, so the sheath drawn round it
+   * in the exterior view (Render.drawReentryPlasma) would be invisible in
+   * the view people actually fly in. From the seat, re-entry is the glass
+   * filling with light from the direction you are travelling and flame
+   * streaming PAST the canopy, outward from that point — so that is what
+   * this is: a glow centred where the air is coming from, and streaks
+   * running from it to the frame. Where the flow is not in view (flying
+   * tail-first, or sideways), the glow is pinned to the edge on the side it
+   * is coming from, the same rule the shield flare uses.
+   *
+   * Same bucketed hash as the rain, so it needs no state and a paused game
+   * has still flames. INSIDE the glass clip. */
+  function drawCanopyPlasma(ctx, cam, w, h) {
+    var g = G.ship.reentryGlow || 0, wind = G.ship.windDir;
+    if (!(g > 0.02) || !wind) return;
+    var vis = Render.plasmaVis(g);
+    var p = cam.projectDir(wind);
+    var x, y;
+    if (p && p.x > -w * 0.2 && p.x < w * 1.2 && p.y > -h * 0.2 && p.y < h * 1.2) {
+      x = p.x; y = p.y;
+    } else {
+      var sx = V.dot(wind, cam.r), sy = V.dot(wind, cam.u);
+      var m = Math.hypot(sx, sy);
+      if (!(m > 1e-6)) { sx = 0; sy = 1; m = 1; }
+      x = w / 2 + (sx / m) * w * 0.55;
+      y = h / 2 - (sy / m) * h * 0.55;
+    }
+    var tS = nowSeconds();
+    var flick = 0.86 + 0.09 * Math.sin(tS * 29.1) + 0.05 * Math.sin(tS * 12.7);
+    /* Held orange. The canopy glass is tinted, and anything near white
+     * added over it came out green; a pilot also has to read the ladder
+     * through this, so it lights the glass rather than blinding it. */
+    var col = Render.plasmaRGB(g * 0.55), hot = Render.plasmaRGB(g * 0.8);
+    var R = Math.max(w, h) * (0.35 + 0.40 * g);
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    // The glass fills with light from where the air is arriving.
+    var rg = ctx.createRadialGradient(x, y, 0, x, y, R);
+    rg.addColorStop(0, 'rgba(' + hot + ',' + Math.min(0.6, (0.30 + 0.30 * g) * vis * flick).toFixed(3) + ')');
+    rg.addColorStop(0.3, 'rgba(' + col + ',' + ((0.14 + 0.16 * g) * vis * flick).toFixed(3) + ')');
+    rg.addColorStop(1, 'rgba(' + col + ',0)');
+    ctx.fillStyle = rg;
+    ctx.fillRect(0, 0, w, h);
+
+    // And the whole cockpit is lit by it.
+    ctx.globalAlpha = Math.min(0.16, (0.05 + 0.11 * g) * vis);
+    ctx.fillStyle = 'rgb(' + col + ')';
+    ctx.fillRect(0, 0, w, h);
+    ctx.globalAlpha = 1;
+
+    /* Flame streaking past, outward from the stagnation point. Hashed off a
+     * time bucket like the rain: no state, and three strokes in all — one
+     * per brightness band — however many streaks there are. */
+    var n = Math.round(30 + 60 * g);
+    var bucket = Math.floor(tS * 30);
+    var reach = Math.hypot(w, h);
+    ctx.lineCap = 'round';
+    for (var band = 0; band < 3; band++) {
+      ctx.strokeStyle = 'rgba(' + (band === 0 ? hot : col) + ',' +
+        ((0.14 + 0.24 * g) * vis * (1 - band * 0.28)).toFixed(3) + ')';
+      ctx.lineWidth = (1.5 + 2.5 * g) * (1 - band * 0.3);
+      ctx.beginPath();
+      for (var i = band; i < n; i += 3) {
+        var ang = hashUnit(i * 3.71 + bucket * 0.137) * Math.PI * 2;
+        var r0 = reach * (0.04 + 0.40 * hashUnit(i * 1.93 + bucket * 0.571));
+        var len = reach * (0.05 + 0.20 * g) * (0.5 + hashUnit(i * 7.13 + bucket * 0.29));
+        var ca = Math.cos(ang), sa = Math.sin(ang);
+        ctx.moveTo(x + ca * r0, y + sa * r0);
+        ctx.lineTo(x + ca * (r0 + len), y + sa * (r0 + len));
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   /* A number in [0,1) from a number. Only ever used for decoration, so it
    * wants to be fast and spread out rather than good. */
   function hashUnit(x) {
@@ -7381,6 +7615,7 @@
     /* Last thing on the glass, and INSIDE the clip on purpose: the field
      * flares a metre outside the canopy, so you see it through the glass and
      * it should be cut off by the frame exactly as the sky is. */
+    drawCanopyPlasma(ctx, cam, w, h);
     drawCanopyShieldFlare(ctx, cam, w, h);
     drawCanopyWeather(ctx, cam, w, h);
     Render.glassEnd(ctx);
@@ -7674,7 +7909,7 @@
     ctx.fillStyle = '#5d8fa4';
     ctx.textAlign = 'right';
     ctx.fillText(clipText(
-      'drag to turn · wheel to zoom · Tab walks the bodies · C back to the ship · Esc to the cockpit',
+      'I node · \\ fly it · drag to turn · wheel to zoom · Tab walks the bodies · C back to the ship · Esc to the cockpit',
       Math.max(0, Math.floor(hintRoom / 6.16))), w - 14, 18);
     ctx.textAlign = 'left';
     ctx.restore();
@@ -7683,7 +7918,12 @@
     var infoW = Math.min(340, w * 0.32);
     ctx.save();
     ctx.globalAlpha = 0.88;
-    global.Screens.tile(ctx, 10, 34, infoW, global.Screens.tileHeight(infoW), drawSystemPage);
+    var infoH = global.Screens.tile(ctx, 10, 34, infoW, global.Screens.tileHeight(infoW), drawSystemPage);
+    /* THE MANOEUVRE PLANNER LIVES HERE (Astra, 2026-09-18). The node keys
+     * answer on this screen, so the readout that shows what they are doing
+     * sits under the survey: the keys when there is no node, the burn and
+     * what it does to the orbit when there is. */
+    global.Screens.tile(ctx, 10, 34 + infoH + 8, infoW, global.Screens.tileHeight(infoW), drawNodePage);
     ctx.restore();
 
     /* The bodies, right edge, each one a button: click to swing the camera
@@ -8718,7 +8958,9 @@
      * answer on the planner now. A readout on the dashboard telling you to
      * press I, while I does nothing where you are sitting, is the greyed-out
      * button problem with the label still lit. */
-    mfdShell(ctx, 'MANOEUVRE', 'Shift+F2 to plan');
+    mfdShell(ctx, 'MANOEUVRE', (modeId() === 'system' || modeId() === 'node')
+      ? 'I place/axis   − = adjust   ; \' snap   \\ fly   ⇧I clear'
+      : 'F2 orbit map to plan');
     var y = MFD_BODY_TOP + 14;
 
     if (!G.node) {
@@ -8731,50 +8973,66 @@
       ctx.fillText('; \'  snap to periapsis / apoapsis', 10, y + 68);
       ctx.fillText('\\    fly it   ·   shift-I clears', 10, y + 82);
       ctx.fillStyle = MFD_HOT;
-      ctx.fillText('hold LEFT ALT to drag the handles', 10, y + 104);
+      ctx.fillText('on the F2 orbit map  ·  LEFT ALT drags the handles', 10, y + 104);
       return;
     }
 
     var plan = G.nodePlan;
     if (!plan) { mfdRow(ctx, y, 'plan', 'computing…', MFD_DIM); return; }
 
+    /* TWO COLUMNS. The page is 126 px of body and this is twelve lines of
+     * readout; stacked in one column at 15 px it ran the orbit lines and
+     * the autopilot status down through the soft-key strip and off the
+     * panel — text printed over text (Astra's screenshot, 2026-09-18).
+     * Left: the burn you are asking for. Right: what it costs and what it
+     * does. The status line gets the bottom row to itself. */
     var sel = NODE_AXES[G.nodeAxis].id;
     var d = G.node.dv;
-    mfdRow(ctx, y, 'prograde', fmtSpeed(d.pro), sel === 'pro' ? MFD_HOT : MFD_INK);
-    mfdRow(ctx, y + 15, 'normal', fmtSpeed(d.nor), sel === 'nor' ? MFD_HOT : MFD_INK);
-    mfdRow(ctx, y + 30, 'radial', fmtSpeed(d.rad), sel === 'rad' ? MFD_HOT : MFD_INK);
-    mfdRow(ctx, y + 45, 'total Δv', fmtSpeed(plan.magnitude), '#ffb347');
-    mfdRow(ctx, y + 60, 'in', fmtTime(Math.max(0, plan.eta)),
-           sel === 'time' ? MFD_HOT : MFD_INK);
+    var ROW = 16, COL = MFD_W / 2;
+    function row2(col, i, label, value, color) {
+      var x0 = col ? COL + 6 : 10, x1 = col ? MFD_W - 10 : COL - 8;
+      var yy = y + i * ROW;
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.textAlign = 'left';
+      ctx.fillText(label, x0, yy);
+      ctx.fillStyle = color || MFD_INK;
+      ctx.textAlign = 'right';
+      ctx.fillText(value, x1, yy);
+      ctx.textAlign = 'left';
+    }
+    row2(0, 0, 'prograde', fmtSpeed(d.pro), sel === 'pro' ? MFD_HOT : MFD_INK);
+    row2(0, 1, 'normal', fmtSpeed(d.nor), sel === 'nor' ? MFD_HOT : MFD_INK);
+    row2(0, 2, 'radial', fmtSpeed(d.rad), sel === 'rad' ? MFD_HOT : MFD_INK);
+    row2(0, 3, 'in', fmtTime(Math.max(0, plan.eta)), sel === 'time' ? MFD_HOT : MFD_INK);
+    row2(0, 4, 'total Δv', fmtSpeed(plan.magnitude), '#ffb347');
 
-    /* Burn time and propellant, side by side with the delta-v, because the
-     * three are one decision. An infeasible plan is coloured, not hidden —
-     * you are allowed to draw a burn you cannot afford, you just cannot
-     * fly it. */
+    /* An infeasible plan is coloured, not hidden — you are allowed to draw
+     * a burn you cannot afford, you just cannot fly it. */
     var okColor = plan.burn.feasible ? '#7dffb0' : '#ff8a76';
-    mfdRow(ctx, y + 78, 'burn time', fmtTime(plan.burn.duration), okColor);
-    mfdRow(ctx, y + 93, 'propellant',
-           plan.burn.fuel.toFixed(3) + ' / ' + G.ship.thrusterFuel.toFixed(2) + ' t', okColor);
-    mfdRow(ctx, y + 108, 'ignition', 'T−' + fmtTime(Math.max(0, plan.countdown)), okColor);
+    row2(1, 0, 'burn', fmtTime(plan.burn.duration), okColor);
+    row2(1, 1, 'fuel', plan.burn.fuel.toFixed(2) + ' / ' + G.ship.thrusterFuel.toFixed(1) + ' t', okColor);
+    row2(1, 2, 'ignition', 'T−' + fmtTime(Math.max(0, plan.countdown)), okColor);
+    var periBad = plan.after.periAlt < 0;
+    row2(1, 3, 'peri', fmtDist(plan.after.periAlt), periBad ? '#ff8a76' : MFD_INK);
+    row2(1, 4, 'apo', isFinite(plan.after.apoAlt) ? fmtDist(plan.after.apoAlt) : 'ESCAPE', MFD_INK);
 
-    // What it does to the orbit — the answer the whole feature exists for.
     ctx.font = 'bold 11px ui-monospace, monospace';
-    ctx.fillStyle = MFD_DIM;
-    ctx.fillText('about ' + clipText(plan.body.name, 16), 10, y + 128);
-    ctx.fillStyle = MFD_INK;
-    ctx.fillText('peri ' + fmtDist(plan.before.periAlt) + '  →  '
-                 + fmtDist(plan.after.periAlt), 10, y + 141);
-    ctx.fillText('apo  ' + (isFinite(plan.before.apoAlt) ? fmtDist(plan.before.apoAlt) : 'escape')
-                 + '  →  '
-                 + (isFinite(plan.after.apoAlt) ? fmtDist(plan.after.apoAlt) : 'ESCAPE'),
-                 10, y + 154);
-
+    var statusY = MFD_BODY_BOTTOM - 4;
     if (G.nodeBurn) {
       ctx.fillStyle = '#ffd27a';
       ctx.fillText(G.nodeBurn.phase === 'align'
-        ? 'AUTOPILOT ARMED — holding attitude'
+        ? 'AUTOPILOT ARMED — holding attitude   ·   \\ stands down'
         : 'BURNING — ' + fmtSpeed(G.nodeBurn.remaining) + ' remaining',
-        10, MFD_BODY_BOTTOM - 2);
+        10, statusY);
+    } else if (periBad) {
+      ctx.fillStyle = '#ff8a76';
+      ctx.fillText('periapsis underground — this burn ends on ' + clipText(plan.body.name, 14), 10, statusY);
+    } else {
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('about ' + clipText(plan.body.name, 16) + '   ·   was peri ' +
+                   fmtDist(plan.before.periAlt) + ', apo ' +
+                   (isFinite(plan.before.apoAlt) ? fmtDist(plan.before.apoAlt) : 'escape'), 10, statusY);
     }
   }
 
@@ -10180,8 +10438,14 @@
     }
     /* Both outside the size branch, same reasoning as the traffic versions:
      * being zoomed out is not a reason to miss having been hit. Your own
-     * field goes on the courier hull, because drawShipModel hard-codes that
-     * mesh — a form-fitting shield has to fit the ship that is on screen. */
+     * field is fitted to the hull you bought ('hull:<id>'), because that is
+     * the model drawShipModel draws — a form-fitting shield has to fit the
+     * ship that is on screen. */
+    /* Re-entry: the sheath and wake, round the hull you can see. Outside
+     * the size branch too — a streak of fire across the sky is exactly how
+     * a ship reads from far away while it is coming in. */
+    Render.drawReentryPlasma(ctx, cam, G.ship, Render.SHIP_LEN,
+                             G.ship.reentryGlow || 0, G.ship.windDir, nowSeconds());
     playerShieldShell(ctx, cam);
     drawHullBlooms(ctx, cam, G.ship);
   }
@@ -10208,7 +10472,7 @@
     var nowS = nowSeconds();
     var live = liveImpacts(s, nowS);
     if (lenPx >= SHELL_MIN_PX) {
-      Render.drawShellField(ctx, cam, s, Render.SHIP_LEN, 'courier',
+      Render.drawShellField(ctx, cam, s, Render.SHIP_LEN, 'hull:' + (s.hullId || 'talon'),
                             s.shieldHp / cap, lit, live, nowS);
     } else {
       farShieldGlow(ctx, cam, s, s.shieldHp / cap, lit, live, lenPx, nowS);
@@ -10581,6 +10845,30 @@
       ctx.fillStyle = wc.blind ? '#ffb86b' : (wc.possible ? '#7dffb0' : '#ff8a76');
       ctx.textAlign = 'center';
       ctx.fillText(wcText, w / 2, 123);
+      ctx.textAlign = 'left';
+      ctx.restore();
+    }
+
+    /* --- a manoeuvre node: persistent, and it says where the keys are ------
+     * Astra, 2026-09-18: "it's not clear to the player that you have to hit
+     * SHIFT+F2". The keys are on the orbit map now, which has a slot on the
+     * bar; while a node exists this line says so from the cockpit. */
+    if (G.node && flying() && !G.hyper) {
+      var np = G.nodePlan;
+      var nbText = G.nodeBurn
+        ? 'NODE AUTOPILOT ' + (G.nodeBurn.phase === 'burn' ? 'BURNING' : 'ARMED') +
+          '   ·   any thrust key takes over'
+        : (!np || np.magnitude < 1e-9)
+          ? 'NODE PLACED   ·   F2 to shape the burn and fly it'
+          : 'NODE  ' + fmtSpeed(np.magnitude) + '   ·   F2, then \\ to fly it';
+      var nbY = G.wakeChase ? 138 : 106;
+      ctx.save();
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      var nbW = ctx.measureText(nbText).width;
+      panel(ctx, (w - nbW) / 2 - 14, nbY, nbW + 28, 26);
+      ctx.fillStyle = G.nodeBurn ? '#ffd36b' : '#7dfaff';
+      ctx.textAlign = 'center';
+      ctx.fillText(nbText, w / 2, nbY + 17);
       ctx.textAlign = 'left';
       ctx.restore();
     }
@@ -12253,7 +12541,7 @@
       ['', 'on the radar: amber cross is worth taking, grey dot is scrap'],
       ['', 'wreckage clears after about a minute and a half, or when you leave'],
       ['', ''],
-      ['MANOEUVRE NODES  (plan a burn, see the orbit, then fly it)', ''],
+      ['MANOEUVRE NODES  (on the F2 orbit map: plan a burn, see the orbit, fly it)', ''],
       ['I', 'place a node at the next apoapsis  ·  again cycles pro/nor/rad/time'],
       ['Shift + I', 'delete the node'],
       ['− / =', 'adjust the selected axis   (Shift fine, Ctrl coarse)'],
@@ -12300,7 +12588,7 @@
       ['', 'settings that were already there'],
       ['', 'the market is on F4, the channel for the port you are docked at'],
       ['', 'the star map is F6; a new career is Esc, quit to menu'],
-      ['', 'manoeuvre planning — place, nudge, snap, burn — is Shift+F2']
+      ['', 'manoeuvre nodes — place, nudge, snap, burn — are on the F2 orbit map']
     ];
     /* Two columns once the list outgrows the window, split at a section
      * break so a heading never ends up orphaned at the foot of a column.

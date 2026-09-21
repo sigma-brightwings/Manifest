@@ -4838,6 +4838,144 @@ console.log('--- auto-dock ---');
  *
  * The far side is the case that catches it, so that is the case this flies.
  */
+/* ---- the far side of the world ---------------------------------------------
+ * THE BUG ASTRA HIT (2026-09-18: "it's throwing us headlong into a
+ * planet"). Every approach above starts on the station's side of its world.
+ * Start on the OTHER side, in a low orbit, and the straight line to the
+ * station runs through the planet: measured, five of six orbital ports on
+ * kawartha put the ship into the ground inside two real seconds. The route
+ * goes round now. Altitude is watched every frame, against the keep-out. */
+console.log('--- auto-dock from the far side of the world ---');
+(function () {
+  newFlying('kawartha');
+  frames(2);
+  var keydown = listeners.keydown[0];
+  function press(k) { keydown({ key: k, shiftKey: false, preventDefault: function () {} }); }
+  var port = G.sys.ports.filter(function (p) {
+    return !p.surface && !p.underground && p.docking && p.parentBody &&
+           p.parentBody.kind === 'planet' && !Sim.berthStatus(p, G.sys, G.t, G.ship).full;
+  }).sort(function (a, b) { return a.orbit.a / a.parentBody.radius - b.orbit.a / b.parentBody.radius; })[0];
+  check('there is an orbital port round a planet to fly to', !!port);
+  if (!port) return;
+  var host = port.parentBody;
+  var hs = Sim.bodyState(host, G.sys, G.t), ps = Sim.bodyState(port, G.sys, G.t);
+  var away = V.norm(V.sub(hs.pos, ps.pos));             // antipode of the station
+  var r = host.radius * 1.15;
+  var tang = V.norm(V.cross({ x: 0, y: 0, z: 1 }, away));
+  G.ship.docked = null; G.cruise = null; G.autodock = null; G.dockTarget = null;
+  G.ship.pos = V.addScaled(hs.pos, away, r);
+  G.ship.vel = V.addScaled(hs.vel, tang, Math.sqrt(host.mu / r));
+  Sim.refreshShip(G.ship);
+  G.navTarget = { kind: 'body', id: port.id };
+  frames(1);
+  var seg = V.sub(ps.pos, G.ship.pos);
+  var tc = -V.dot(V.sub(G.ship.pos, hs.pos), seg) / V.dot(seg, seg);
+  var miss = V.dist(V.addScaled(G.ship.pos, seg, Math.max(0, Math.min(1, tc))), hs.pos);
+  check('the straight line to the station really does go through the world',
+        miss < host.radius, fmtKm(miss) + ' vs radius ' + fmtKm(host.radius));
+
+  var mark = drawn.texts.length;
+  press('t'); press('t');
+  check('auto-dock engages', !!G.autodock);
+  var guard = 0, lowest = Infinity, wentRound = false;
+  while (!G.ship.docked && !G.ship.crashed && G.autodock && guard++ < 16000) {
+    frame();
+    var alt = V.dist(G.ship.pos, Sim.bodyPosition(host, G.sys, G.t)) - host.radius;
+    if (alt < lowest) lowest = alt;
+    if (G.autodock && (G.autodock.phase === 'around' || G.autodock.phase === 'climb')) wentRound = true;
+  }
+  check('it renders throughout', errorsSince(mark).length === 0, errorsSince(mark)[0]);
+  check('it goes round the world rather than through it', wentRound);
+  check('and never below the clearance it promises',
+        lowest > Math.max(host.radius * 0.05, 8) * 0.9, 'lowest ' + fmtKm(lowest));
+  check('and docks', G.ship.docked === port.id,
+        'docked=' + G.ship.docked + ' crashed=' + !!G.ship.crashed + ' after ' + guard + ' frames');
+})();
+
+/* ---- re-entry plasma --------------------------------------------------------
+ * The sheath and wake round the hull in the exterior view, and the glow and
+ * streaming flame on the canopy from the seat. Driven entirely by what the
+ * flight model already publishes; asserted here for "draws, and draws
+ * nothing when cold" — how it LOOKS was set by looking. */
+/* ---- the drive comes out of the engines --------------------------------------
+ * Astra, 2026-09-18: "the ship's thrust sometimes comes out the side of the
+ * ship's engine". Two causes, both fixed: the plume came from one point on
+ * the centreline (between the Talon's two bells, so it lit their inboard
+ * sides), and it swung to follow the thrust vector (so a sideways or
+ * orbital-frame burn fired it out of the bell at ninety degrees). */
+console.log('--- the drive comes out of the engines ---');
+(function () {
+  var R = W.Render;
+  check('nozzles are read off the hull', typeof R.nozzlesOf === 'function');
+  var twin = { talon: 0.063, dart: 0.075, kestrel: 0.057 };
+  Object.keys(twin).forEach(function (id) {
+    var n = R.nozzlesOf(R.hullPreviewMesh(id));
+    check(id + ' has its two bells', !!n && n.length === 2, n ? n.length + ' found' : 'none');
+    if (!n || n.length !== 2) return;
+    var xs = n.map(function (q) { return q.x; }).sort(function (a, b) { return a - b; });
+    check(id + ' bells sit either side of the centreline, where the mesh has them',
+          Math.abs(xs[0] + twin[id]) < 0.01 && Math.abs(xs[1] - twin[id]) < 0.01,
+          xs.map(function (x) { return x.toFixed(3); }).join(', '));
+    check(id + ' bells are at the stern', n.every(function (q) { return q.z < -0.45; }));
+  });
+  var mule = R.nozzlesOf(R.hullPreviewMesh('mule'));
+  check('the Mule gets one wide stern exit', !!mule && mule.length === 1);
+
+  /* Any thrust direction at all draws without throwing — the sideways and
+   * backwards parts go to RCS puffs, never to the main drive. */
+  newFlying('kawartha');
+  frames(1);
+  var mark = drawn.texts.length, threw = null;
+  try {
+    [G.ship.fwd, G.ship.right, V.scale(G.ship.fwd, -1),
+     V.add(G.ship.up, G.ship.fwd)].forEach(function (d) {
+      R.drawShipExhaust(ctxStub, G.camera || { project: function () { return null; } },
+                        G.ship, R.SHIP_LEN, 1, 'courier', d, 0, R.hullPreviewMesh('talon'));
+    });
+  } catch (e) { threw = e; }
+  check('every thrust direction draws cleanly', !threw, threw && threw.message);
+})();
+
+console.log('--- re-entry plasma ---');
+(function () {
+  newFlying('kawartha');
+  frames(2);
+  var R = W.Render;
+  check('the plasma painter is exported', typeof R.drawReentryPlasma === 'function');
+  var cold = R.plasmaRGB(0.05).split(',').map(Number);
+  var hot = R.plasmaRGB(1).split(',').map(Number);
+  check('it whitens as it gets worse', hot[1] > cold[1] && hot[2] > cold[2],
+        cold.join(',') + ' -> ' + hot.join(','));
+
+  check('a cold ship draws no plasma',
+        R.drawReentryPlasma(ctxStub, null, G.ship, R.SHIP_LEN, 0, G.ship.fwd, 1) === false);
+
+  /* Drive it through the real frame loop in both views. updateHeating runs
+   * every live update and would set the glow back from the air — there is
+   * none up here — so it is wrapped for the duration to report a hot pass,
+   * and the painter is wrapped to count that it actually drew. */
+  var realHeat = Sim.updateHeating, realPaint = R.drawReentryPlasma, painted = 0;
+  Sim.updateHeating = function (ship) {
+    ship.reentryGlow = 0.85; ship.windDir = V.clone(ship.fwd); return 0;
+  };
+  R.drawReentryPlasma = function () {
+    var ok = realPaint.apply(null, arguments); if (ok) painted++; return ok;
+  };
+  ['orbit', 'cockpit'].forEach(function (mode) {
+    G.viewMode = mode;
+    var mark = drawn.texts.length, before = painted;
+    var threw = null;
+    try { frames(4); } catch (e) { threw = e; }
+    check('a hot ship renders cleanly in ' + mode + ' view',
+          !threw && errorsSince(mark).length === 0,
+          threw ? threw.message : errorsSince(mark)[0]);
+    if (mode === 'orbit') check('and the sheath is drawn round it', painted > before);
+  });
+  Sim.updateHeating = realHeat; R.drawReentryPlasma = realPaint;
+  G.ship.reentryGlow = 0; G.ship.windDir = null;
+  G.viewMode = 'orbit';
+})();
+
 console.log('--- an approach to a port on a world ---');
 (function () {
   newFlying('kawartha');
@@ -5790,6 +5928,45 @@ console.log('--- manoeuvre nodes ---');
 
   press('i', { shiftKey: true });
   check('shift-I clears the node', !G.node);
+
+  /* THE NODE KEYS ON THE ORBIT MAP (F2). Tried on the flight keyboard as
+   * \\ alone and found clumsy; they belong on the screen that draws the
+   * orbit (Astra, 2026-09-18). The planner keeps them too. */
+  G.ship = Sim.circularOrbit(planet, G.sys, G.t, 900);
+  Sim.refreshShip(G.ship);
+  G.panel = 0;
+  frames(2);
+  press('\\');
+  check('\\ does nothing from the cockpit', !G.node && !G.nodeBurn);
+  press('i');
+  check('nor does I', !G.node);
+  press('F2');
+  var mapPanel = G.panel;
+  check('F2 is the orbit map', mapPanel !== 0);
+  press('i');
+  check('I on the orbit map places a node', !!G.node && G.panel === mapPanel);
+  frames(2);
+  var pro0 = G.node.dv.pro;
+  press('=');
+  check('= on the orbit map adds delta-v to a node', G.node.dv.pro > pro0, pro0 + ' -> ' + G.node.dv.pro);
+  press('\\');
+  G.node.dv = { pro: 0.03, nor: 0, rad: 0 };
+  G.node.t = G.t + 5;
+  G.nodeStale = 0;
+  frames(2);
+  press('\\');
+  check('\\ on the orbit map flies it', !!G.nodeBurn && G.nodeBurn.phase === 'align');
+  press('\\');
+  check('and \\ again stands the autopilot down, keeping the node', !G.nodeBurn && !!G.node);
+  mark = drawn.texts.length;
+  G.panel = 0;
+  frames(1);
+  check('the cockpit says where the node keys are',
+        drawn.texts.slice(mark).some(function (t) { return t.indexOf('NODE ') === 0 && t.indexOf('F2') > 0; }));
+  press('F2');
+  press('i', { shiftKey: true });
+  G.panel = 0;
+  check('cleared again for the sections below', !G.node && !G.nodeBurn);
 })();
 
 /* The zoom used to have a floor of 1 km, set for a camera that spends most

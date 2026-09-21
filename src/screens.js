@@ -3111,7 +3111,7 @@
   /* --- Shift+F2: manoeuvre nodes ------------------------------------------ */
   function drawNodeScreen(ctx, w, bottom) {
     var top = modeFrame(ctx, w, bottom, 'MANOEUVRE PLANNING',
-                        'I place   ·   ± adjust   ·   \\ execute');
+                        'I place   ·   ± adjust   ·   \\ execute   ·   F1 back to flying');
     var pad = 14;
     var colW = (w - pad * 3) / 2;
     var h = Math.min(tileHeight(colW), bottom - top - pad * 2);

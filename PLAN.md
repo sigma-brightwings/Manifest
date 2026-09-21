@@ -4109,37 +4109,32 @@ reload or the old bundle will lie to you):
 - Kill one at 40 km and confirm the shards are cheap enough not to hitch.
 - Accumulate ~600 cr of fines and let a patrol find you.
 
-**Known hazard — narrowed, still open.** Live localStorage breaks the
-slipspace corridor section of `render.test.js` (not `slipspace.test.js`,
-which never loads `save.js` at all). Two recorded symptoms: the charge phase
-never advances, and drawing deep space reads `.mu` off undefined.
+**Closed 2026-09-18 — the storage/corridor hazard.** Live localStorage used
+to break the slipspace corridor section of `render.test.js`: the charge phase
+never advanced, and drawing deep space read `.mu` off undefined.
 
-What is now known, from reading:
-
-- **The second symptom is a real null-dereference and it is fixed.** The NAV
-  panel's "surface gravity" row read `dom.mu` where `dom` is a chain of
-  fallbacks ending in `G.sys.root`, in the branch that runs when the ship is
-  neither orbiting nor docked. It reads `—` when it does not know. Two
-  sibling cases were hardened at the same time: `dropCruise` tested
-  `dom.mu > 0` *after* already dereferencing `dom` twice, and
-  `orbitalFrame` now falls back to the root.
-- **The first symptom is NOT explained yet**, and one obvious theory is
-  wrong: the interstellar locale is deliberately an ordinary system holding
-  one star, precisely so `dominantBody` keeps answering (see
-  `Gen.interstellarSystem`), so "there is no dominant body out there" is
-  false. Do not spend time on it.
-- **The likeliest remaining mechanism is state leaking between runs.**
-  `boot()` calls `newGame(seed)` and then, if `Save.load(seed)` returns
-  anything, `Save.restore` — and with storage live every dock writes a
-  career. If the store is genuinely persistent under node (recent versions
-  ship a real Web Storage), a save from a *previous run* is present at boot,
-  which would make the failure depend on run history rather than on the
-  code. That would explain why it reads as nondeterministic and resisted
-  diagnosis. **Check first:** print `typeof localStorage` under plain node,
-  and whether `fakeStore` is the only thing `save.js` ever sees.
-
-Everything above is reading, not running — Desktop Commander was down. The
-fixes are unverified.
+- **Cause: a null-dereference, not the save system.** The NAV panel's
+  "surface gravity" row read `dom.mu` where `dom` could run off the end of its
+  fallback chain, and `dropCruise` dereferenced `dom` twice before testing
+  `dom.mu > 0`. The game loop catches per frame, so a throw in `update()`
+  re-fires every frame BEFORE the jump clock advances — that is the "charge
+  never advances" symptom. Both symptoms were one bug. Hardened (with
+  `orbitalFrame` falling back to the root) in the pass before 88e3504.
+- **Verified by running, on both machines.** Storage live for the whole file:
+  current tree 891/891 on node 22 (cloud) and node 26.8 (the Latitude);
+  88e3504's parent with `PSG_STORAGE=1` 862/862 on both; the first commit
+  (0a69f5c) patched to storage-always 396/396 on both. It does not reproduce
+  at any committed revision — the original failure lived in the uncommitted
+  tree of 2026-09-05.
+- **The "leak between runs" theory is ruled out.** Under node 26
+  `localStorage` is a getter/setter on globalThis that yields `undefined`
+  without `--localstorage-file`; assigning the stub replaces it cleanly, so
+  `fakeStore` is the only store `save.js` ever sees. Booting with a career
+  already in the store (the condition every returning browser player is in)
+  also passes 891/891.
+- The guard is the corridor block's own "the corridor is flying" check, which
+  now always runs with storage live. `withStorage()` is a no-op kept only as
+  a section marker.
 
 ---
 

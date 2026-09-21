@@ -102,9 +102,10 @@ says something else.
   for the player* — so it may be correct as-is. **This needs your call, not a
   fix.** If you want factories to book a profit, the lever is capping the
   local multiplier on a factory's feed row.
-- **The storage/corridor bug.** Turning localStorage on in the render suite
-  makes the slipspace corridor section fail, and it has never been diagnosed.
-  A test that only passes with a feature disabled is a test we do not trust.
+- ~~**The storage/corridor bug.**~~ **Closed 2026-09-18.** It was the
+  `dom.mu` null-dereference in the NAV panel / `dropCruise`, already hardened;
+  the render suite now runs with storage live throughout and passes on node 22
+  and node 26. See PLAN.md, "Closed 2026-09-18".
 - **A forged transponder.** The issued one cannot fail, which makes restricted
   space a binary you either have or do not. A forgery that can be detected is
   where the tension in restricted space actually lives.

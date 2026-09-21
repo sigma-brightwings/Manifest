@@ -18,7 +18,7 @@ reading, and the old 178-pixel instrument band was pretending you could do both.
 | | |
 |---|---|
 | `F1` | Main view — press again to flip cockpit / exterior chase camera |
-| `F2` | Orbit map — the boot view: system from outside, orbit lines on |
+| `F2` | Orbit map — the boot view: system from outside, orbit lines on. **Manoeuvre nodes are planned here:** `I` place / cycle axis, `−` `=` adjust (Shift fine, Ctrl coarse), `;` `'` snap to peri / apo, `\` fly it (again to stand down), `Shift+I` clear |
 | `F3` | Local navigation — contacts, lock, scope, autopilot |
 | `F4` | Comms |
 | `F5` | Ship status & inventory |
