@@ -60,6 +60,7 @@
    *     10 t waste    --(unlicensed plant)-->  5 t fissiles
    *     10 t waste    --(LICENSED plant)---->  1 t milfuel
    *      5 t fissiles --(milfuel factory)---->  1 t milfuel
+   *     10 t waste    --(milfuel factory)---->  1 t milfuel   (2026-09-25)
    *
    * so the two routes agree on the arithmetic and the licence is the only
    * thing deciding which line a plant runs.
@@ -129,6 +130,39 @@
   var ENRICH_MARGIN = 2.20;
   var FEED_ID = 'fissile';
   var FEED_LOCAL_MAX = 1.18;   // a factory's feed is contracted, not panicked
+
+  /* ---- PRICED BY WHAT A THING IS (2026-09-22) ----------------------------
+   * Astra: the farms' produce "should be priced according to their traits."
+   * So the two goods that came in with the farms do not carry a typed-in
+   * base. They carry TRAITS, and the base is the product of them: a floor
+   * for the kind of market the good trades in, times one factor per fact
+   * about it. Each factor is the reason a buyer pays more or less:
+   *
+   *   perishable  x1.45  it spoils: nobody stockpiles it, so every tonne on
+   *                      a shelf far from the farm is a tonne somebody flew
+   *                      there fast — the carrying is priced in
+   *   narcotic    x2.60  demand that does not fall when the price rises
+   *   cultivated  x0.80  grown under glass, not synthesised in a plant: the
+   *                      making is cheap, which is why the Syndicate farms it
+   *   luxury      x2.20  bought by people with money to spare
+   *   potency     xN     how much of the effect a tonne carries; 1 is street
+   *
+   * Checked against the table it joins: narcotics (a synthetic, not
+   * perishable) would come out 420 x 2.6 = 1,092 against its listed 980, so
+   * the ladder lands where the hand-typed prices already are. Gold buds come
+   * out dearer than lab narcotics — perishable and premium outweigh cheap to
+   * grow — and fruit sits between grain and aquaculture, because it is food
+   * that has to be moved quickly. */
+  var TRAIT_FLOOR = { agri: 60, luxury: 160, contraband: 420 };
+  var TRAIT_FACTOR = { perishable: 1.45, narcotic: 2.6, cultivated: 0.8, luxury: 2.2 };
+  function priceFromTraits(cat, traits) {
+    var p = TRAIT_FLOOR[cat] || 60;
+    for (var k in TRAIT_FACTOR) if (traits && traits[k]) p *= TRAIT_FACTOR[k];
+    if (traits && traits.potency) p *= traits.potency;
+    return Math.round(p / 5) * 5;
+  }
+  var FRUIT_TRAITS = { perishable: true };
+  var GOLDBUD_TRAITS = { perishable: true, narcotic: true, cultivated: true, potency: 1.0 };
 
   var COMMODITIES = [
     { id: 'water',    name: 'Water',            tier: 0, base: 18,   cat: 'raw' },
@@ -200,7 +234,15 @@
      * the navy likes you. */
     { id: 'milfuel',  name: 'Military drive fuel', tier: 3,
       base: Math.round(FISSILE_BASE * FISSILE_PER_MILFUEL * ENRICH_MARGIN),
-      cat: 'special', milfuel: true, severity: 3, shelfDays: 8, shelfMax: 24 }
+      cat: 'special', milfuel: true, severity: 3, shelfDays: 8, shelfMax: 24 },
+
+    /* Fruit, off the vines and the orchard rows under a civilian farm's
+     * domes — the same farms that make the wine. Appended LAST so no tier or
+     * id order anything else reads has moved, and it only ever enters a
+     * market through plantFarms, which draws no rng. Perishable, so the
+     * shelf is days deep rather than weeks: a farm cannot sit on a harvest. */
+    { id: 'fruit',    name: 'Fruit',            tier: 0, base: priceFromTraits('agri', FRUIT_TRAITS),
+      cat: 'agri', traits: FRUIT_TRAITS, shelfDays: 3, shelfMax: 90 }
   ];
 
   var BY_ID = {};
@@ -225,7 +267,16 @@
      * of them and is not on this ladder — it is a flat fine and an
      * expulsion, in wasteCustoms. */
     { id: 'narcotics', name: 'Narcotics',        tier: 2, base: 980,  cat: 'contraband', contraband: true, severity: 1 },
-    { id: 'arms',      name: 'Restricted arms',  tier: 2, base: 1450, cat: 'contraband', contraband: true, severity: 2 }
+    { id: 'arms',      name: 'Restricted arms',  tier: 2, base: 1450, cat: 'contraband', contraband: true, severity: 2 },
+    /* GOLD BUDS. Astra: the Syndicate farm "will be growing gold buds, which
+     * are a narcotic." Severity 1 because it is a vice, the same rung as
+     * narcotics — a search treats them alike. `grown` keeps it out of
+     * addBlackMarketRows' loop: it is not something any back room can make,
+     * it comes from a farm, and plantFarms is the only place it is stocked
+     * at source. Black markets BUY it, which is where the run goes. */
+    { id: 'goldbuds',  name: 'Gold buds',        tier: 2, base: priceFromTraits('contraband', GOLDBUD_TRAITS),
+      cat: 'contraband', contraband: true, severity: 1, grown: true, traits: GOLDBUD_TRAITS,
+      shelfDays: 5, shelfMax: 40 }
   ];
   var contrabandRegistered = false;
   function registerContraband() {
@@ -788,9 +839,15 @@
   function siteMilfuelFactory(sys) {
     var ports = (sys && sys.ports) || [];
     var best = null;
+    /* IN ORBIT ONLY (2026-09-25). The factory is a building now — the
+     * large navy refinery, a space station — so a port on the ground or
+     * under the ice cannot be one; it would have to wear a pad site and
+     * call itself a refinery. Twenty-odd factories across three galaxies
+     * were on the ground before this line. */
+    function inOrbit(p) { return !p.surface && !p.underground; }
     for (var i = 0; i < ports.length; i++) {
       var p = ports[i], m = p.market;
-      if (!m || m.role !== 'orbital') continue;
+      if (!m || m.role !== 'orbital' || !inOrbit(p)) continue;
       if (!best || m.dev > best.market.dev ||
           (m.dev === best.market.dev && String(p.id) < String(best.id))) best = p;
     }
@@ -817,7 +874,7 @@
     if (!best) {
       for (var j = 0; j < ports.length; j++) {
         var q = ports[j], mq = q.market;
-        if (!mq || (mq.role !== 'refinery' && mq.role !== 'mining')) continue;
+        if (!mq || (mq.role !== 'refinery' && mq.role !== 'mining') || !inOrbit(q)) continue;
         if (!best || mq.dev > best.market.dev ||
             (mq.dev === best.market.dev && String(q.id) < String(best.id))) best = q;
       }
@@ -948,8 +1005,32 @@
       var slugs = Math.max(0.6, scale * (0.05 + (hf % 1000) / 1000 * 0.07));
       var take = 0.45 + ((hf >>> 10) % 1000) / 1000 * 0.35;
       if (who === 'syndicate') take = Math.max(0.2, take - 0.10);
+      /* ---- AND IT TAKES DRUMS AS WELL AS ISOTOPES (2026-09-25) -----------
+       * Astra: "Milfuel production — they take in radioactive waste or
+       * isotopes and produce milfuel. This will be a Navy refinery
+       * structure, size L."
+       *
+       * So the factory runs BOTH lines of the chain at the top of this
+       * file side by side: fissiles at five to the slug, and raw waste at
+       * ten to the slug, the licensed plant's ratio — the factory IS a
+       * licensed plant, it just also skips the reclaim step. A port that
+       * takes waste is a waste sink like any reprocessing plant (you pay a
+       * fee to unload, see wastePrice), which also puts it on the disposal
+       * contracts' list of destinations: the drums you are paid to haul
+       * away can be the feed that makes the slugs you buy.
+       *
+       * Sized off the fissile line, a half to the whole of it again, so the
+       * waste line is real feed rather than a rounding error and the
+       * factory still reads first as an isotope buyer. Hashed, no draw. */
+      var hw = RNG.hashString('factorywaste|' + (sys.seed || '?') + '|' + factory.id);
+      var wasteSlugs = slugs * (0.5 + (hw % 1000) / 1000 * 0.5);
+      var wasteIn = wasteSlugs * WASTE_PER_MILFUEL;
+      var fromFissile = slugs;
+      slugs = fromFissile + wasteSlugs;
       addRow(fm, 'milfuel', slugs, slugs * take);
-      addRow(fm, 'fissile', 0, slugs * FISSILE_PER_MILFUEL);
+      addRow(fm, 'fissile', 0, fromFissile * FISSILE_PER_MILFUEL);
+      addRow(fm, 'waste', 0, wasteIn);
+      fm.rows.waste.sink = true;
       /* ---- AND IT BUYS ITS FEED ON A CONTRACT ----------------------------
        * A factory that pays spot prices for the one input it cannot run
        * without is not a factory, it is a speculator — and that is what the
@@ -975,7 +1056,10 @@
       var feed = fm.rows[FEED_ID];
       if (feed && feed.local > FEED_LOCAL_MAX) feed.local = FEED_LOCAL_MAX;
       fm.slugs = slugs;
-      fm.feed = slugs * FISSILE_PER_MILFUEL;
+      fm.feed = fromFissile * FISSILE_PER_MILFUEL;
+      /* The drums, booked beside the fissiles so the two lines can be
+       * checked against the slugs: feed/5 + wasteFeed/10 = slugs. */
+      fm.wasteFeed = wasteIn;
       made++;
     }
 
@@ -1045,6 +1129,10 @@
     registerContraband();
     var flow = 3 + rng.range(0, 7);
     for (var i = 0; i < CONTRABAND.length; i++) {
+      /* Grown goods come from farms, not back rooms — and skipping them here
+       * rather than drawing for them keeps every black market's stream
+       * exactly what it was before they existed. */
+      if (CONTRABAND[i].grown) continue;
       var cid = CONTRABAND[i].id;
       var isSource = rng.chance(0.5);
       var prod = isSource ? flow * rng.range(0.3, 1.0) : 0;
@@ -1066,6 +1154,169 @@
       return (BY_ID[a].tier - BY_ID[b].tier) || (BY_ID[a].base - BY_ID[b].base);
     });
     port.market.blackMarket = true;
+  }
+
+  /* ---- farms (2026-09-22) -------------------------------------------------
+   * Astra: "The Syndicate farm will be growing gold buds, which are a
+   * narcotic. The Civilian farm is growing grapes and produces fruit and
+   * wine."
+   *
+   * A CIVILIAN FARM is a port that already had a vineyard — vineyardAt has
+   * decided that since the wine went in, and it is a hash, so it cannot
+   * disagree with itself. It keeps its wine and now sells the fruit too.
+   *
+   * A SYNDICATE FARM is a planetside port on a world that can farm, in a
+   * system the Syndicate holds — or, more rarely, one corrupt enough that the
+   * mafia runs the place without holding it. Never a port that already grows
+   * grapes: a vineyard is somebody's, and the farm model shows one crop.
+   *
+   * WHY THIS RUNS LATE. Whether the Syndicate holds a system is decided in
+   * buildGovernment, after the markets exist. So this is a post-pass in the
+   * licence's mould: no rng, rows added through addRow, every quantity off a
+   * hash of the port. A seed's existing rows are untouched; farms are new
+   * rows and a stamped `port.crop` ('grape' | 'gold'), which is what
+   * Render.portModelFor reads to put the farm model on the ground. */
+  var GOLD_SHARE_HELD = 0.55;       // of farmable planetside ports in a hold
+  var GOLD_SHARE_CORRUPT = 0.15;    // ... in a corrupt system nobody holds
+  var GOLD_CORRUPTION = 60;
+  var FRUIT_BUYER_SHARE = 0.55;
+
+  function hash01(key) { return (RNG.hashString(key) % 1000) / 1000; }
+
+  function goldFarmAt(port, host, sys) {
+    if (!port || !port.surface || port.underground || !canFarm(host)) return false;
+    if (vineyardAt(port, host)) return false;
+    var share = (sys && sys.pirateHeld) ? GOLD_SHARE_HELD
+              : ((sys && sys.corruption >= GOLD_CORRUPTION) ? GOLD_SHARE_CORRUPT : 0);
+    if (!share) return false;
+    return hash01('goldbud|' + (host && host.id) + '|' + port.id) < share;
+  }
+
+  function plantFarms(sys) {
+    var ports = (sys && sys.ports) || [];
+    var i, p, m, u;
+    for (i = 0; i < ports.length; i++) {
+      p = ports[i]; m = p.market;
+      if (!m) continue;
+      var host = p.parentBody;
+      u = hash01('farmrate|' + p.id);
+      var flow = 8 + (m.pop || 0) * 0.06;
+      if (p.surface && !p.underground && vineyardAt(p, host)) {
+        p.crop = 'grape';
+        addRow(m, 'fruit', flow * (0.20 + u * 0.25), 0);
+      } else if (goldFarmAt(p, host, sys)) {
+        p.crop = 'gold';
+        /* Small next to a grain field: this is a crop grown under a dome by
+         * people who would rather nobody counted it. */
+        addRow(m, 'goldbuds', (4 + u * 8) * (0.6 + (m.dev || 0)), 0);
+        m.blackMarket = true;
+        m.goldFarm = true;
+      }
+    }
+    for (i = 0; i < ports.length; i++) {
+      p = ports[i]; m = p.market;
+      if (!m || p.crop) continue;
+      /* Every back room in the galaxy buys the buds — the whole point of
+       * growing them is that they travel. */
+      if (m.blackMarket) addRow(m, 'goldbuds', 0, 1.5 + hash01('budbuy|' + p.id) * 4);
+      /* Fruit sells where people eat well and nothing grows. */
+      if ((m.dev || 0) > 0.45 && hash01('fruitbuy|' + p.id) < FRUIT_BUYER_SHARE) {
+        var fl = 8 + (m.pop || 0) * 0.06;
+        addRow(m, 'fruit', 0, fl * m.dev * (0.04 + hash01('fruitdem|' + p.id) * 0.08));
+      }
+    }
+  }
+
+  /* ---- what the plants over a gas giant do (2026-09-24) -------------------
+   * Astra: "Navy refinery turns hydrogen and fissiles into milfuel,
+   * syndicate refinery does also. Skimmer just gets hydrogen. There should
+   * be more skimmers than refineries."
+   *
+   * Which plant a refinery-role port IS was stamped by generate.js
+   * (`port.plant`, a hash — see stampLiveries), and so was whose it is
+   * (`port.livery`). This pass makes the market say the same thing the
+   * building does. No rng, like every pass after buildGovernment.
+   *
+   *   skimmer            hydrogen, and only hydrogen: whatever chemistry
+   *                      the refinery role had given it is taken back out,
+   *                      and the scoop's rate goes up to match
+   *   civ refinery       unchanged: hydrogen and chemicals
+   *   navy/syn refinery  presses milfuel out of hydrogen and fissiles, on
+   *                      the factory's arithmetic (five tonnes of fissile
+   *                      to the slug) plus the hydrogen that carries it,
+   *                      and most of what it presses is spoken for */
+  var SKIMMER_H2_GAIN = 1.35;
+  var H2_PER_MILFUEL = 3;
+
+  function runGiantPlants(sys) {
+    var ports = (sys && sys.ports) || [];
+    var made = 0;
+    for (var i = 0; i < ports.length; i++) {
+      var p = ports[i], m = p.market;
+      if (!m || m.role !== 'refinery' || !p.plant) continue;
+      if (p.plant === 'skimmer') {
+        var chem = m.rows.chemicals;
+        if (chem && chem.prod > 0) {
+          /* The row stays (traffic built earlier may still name it); it just
+           * stops being made here, so a skimmer is a chemicals buyer or
+           * nothing. */
+          chem.prod = 0;
+          addRow(m, 'chemicals', 0, 0);
+        }
+        var h2 = m.rows[FUEL_ID];
+        if (h2) { h2.prod *= SKIMMER_H2_GAIN; addRow(m, FUEL_ID, 0, 0); }
+        continue;
+      }
+      if (p.livery !== 'navy' && p.livery !== 'syn') continue;
+      var hh = RNG.hashString('giantslug|' + (sys.seed || '?') + '|' + p.id);
+      var scale = 8 + (m.pop || 0) * 0.06;
+      var slugs = Math.max(0.6, scale * (0.05 + (hh % 1000) / 1000 * 0.07));
+      var take = 0.45 + ((hh >>> 10) % 1000) / 1000 * 0.35;
+      if (p.livery === 'syn') take = Math.max(0.2, take - 0.10);
+      /* AND DRUMS, like the factory (Astra, 2026-09-25: "radioactive waste
+       * can be reprocessed into isotopes and then milfuel"). The same two
+       * lines on the same arithmetic — five of fissile or ten of waste to
+       * the slug, the waste line a half to the whole of the fissile one,
+       * hashed — so a navy or Syndicate refinery over a giant is a milfuel
+       * works in every sense but the building's orbit, and a waste sink
+       * you can unload at. The hydrogen that carries the slug is spent on
+       * every slug, whichever feed made it. */
+      var hw2 = RNG.hashString('giantwaste|' + (sys.seed || '?') + '|' + p.id);
+      var fromFis = slugs;
+      var fromWaste = slugs * (0.5 + (hw2 % 1000) / 1000 * 0.5);
+      slugs = fromFis + fromWaste;
+      addRow(m, 'milfuel', slugs, slugs * take);
+      addRow(m, 'fissile', 0, fromFis * FISSILE_PER_MILFUEL);
+      addRow(m, 'waste', 0, fromWaste * WASTE_PER_MILFUEL);
+      m.rows.waste.sink = true;
+      addRow(m, FUEL_ID, 0, slugs * H2_PER_MILFUEL);
+      /* Its feed is contracted, not bought in a panic — the factory rule. */
+      var feed = m.rows[FEED_ID];
+      if (feed && feed.local > FEED_LOCAL_MAX) feed.local = FEED_LOCAL_MAX;
+      m.slugs = (m.slugs || 0) + slugs;
+      m.feed = (m.feed || 0) + fromFis * FISSILE_PER_MILFUEL;
+      m.wasteFeed = (m.wasteFeed || 0) + fromWaste * WASTE_PER_MILFUEL;
+      p.milfuelPlant = true;
+      /* The board was put up before this pass knew what the plant does
+       * (buildPortDressing runs earlier), so it is corrected here: signs
+       * tell the truth. Text only — the board's size and place were drawn
+       * already and do not change. */
+      var signs = p.dressing && p.dressing.signs;
+      for (var si = 0; signs && si < signs.length; si++) {
+        if (signs[si].kind === 'role') { signs[si].text = 'MILFUEL WORKS — WASTE & ISOTOPES ACCEPTED'; break; }
+      }
+      made++;
+    }
+    if (!made) return;
+    /* Somebody burns it: the same yards and highports licenseMilitaryFuel
+     * gives demand to, where it has not already. */
+    for (var j = 0; j < ports.length; j++) {
+      var q = ports[j], r2 = q.market && q.market.role;
+      if ((r2 !== 'shipyard' && r2 !== 'highport') || q.market.rows.milfuel) continue;
+      var hb = RNG.hashString('milburn|' + (sys.seed || '?') + '|' + q.id);
+      var burn = 0.8 + (hb % 1000) / 1000 * 2.2;
+      addRow(q.market, 'milfuel', burn * (((hb >>> 10) % 1000) / 1000 * 0.45), burn);
+    }
   }
 
   /* ---- analytic stock --------------------------------------------------
@@ -1619,6 +1870,8 @@
     INDUSTRY: INDUSTRY,
     CONTRABAND: CONTRABAND,
     addBlackMarketRows: addBlackMarketRows,
+    plantFarms: plantFarms, goldFarmAt: goldFarmAt, priceFromTraits: priceFromTraits,
+    runGiantPlants: runGiantPlants, H2_PER_MILFUEL: H2_PER_MILFUEL,
     developmentOf: developmentOf,
     populationOf: populationOf,
     buildPortMarket: buildPortMarket,

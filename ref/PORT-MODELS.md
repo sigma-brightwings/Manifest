@@ -339,6 +339,74 @@ cost nothing in the model and save a re-export later.
 
 ---
 
+## Doors, and bays that do not face out (the 2026-09-21 set)
+
+The cylinder, spine, cradle and hydrogen refinery added on 2026-09-21 speak a newer
+door dialect than the first stations. The converter reads both:
+
+| Node / extras | What the game takes |
+|---|---|
+| `leafGroup_<berth>_<L\|R>` | one door leaf; everything under it moves as one. **The berth number in the name is the berth it belongs to**. Leaves are no longer handed to the nearest bay, which gave cylinder leaves to the wrong door |
+| extras `doorLeaf.travel` | how far the leaf slides, in model units. Used as given: measuring the leaf's box ran lap doors short |
+| `LapPocket*`, `LapHouse*` | the slot a lap door slides into. Treated like a `pocket` |
+| `ForceField*` | a field rather than a leaf: it is there or it is not, and when it is down you cannot hit it |
+| `SlidingDoor[LR]n`, `BlastDoor[LR]` | the older names. Still read |
+
+A gate node inside a gate node is not a second door. Only the outermost one
+counts.
+
+**A leaf group that names something other than a berth is an internal
+door.** The cradle's `leafGroup_liftWell_<side>` is the gate to its cargo
+lift. It belongs to no berth, and its leaves slide apart from each other.
+Before this, it went to the nearest berth, tube L. That put tube L's doorway
+inside the station and left the tube's real mouth, an end cap on the tube
+cylinder, uncut.
+
+**Berths no longer have to point away from the hub.** Each berth's frame is
+its node's own axes: +Z out through the door, +Y up. The door slide, the cut
+aperture, the bay lettering and the undock push all follow that frame now.
+Before, they assumed an axis-aligned berth, which is why the cylinder's
+leaves did not move. The undock push goes out along the berth's normal
+rather than away from the centre. In the cylinder, "away from the centre" is
+a wall.
+
+**A model built lying down is stood up.** If every berth's up points the
+same way and it is not +Z (the cylinder came in with up = -Y), the converter
+turns the whole model by a right angle before measuring it. Otherwise parked
+hulls come out on their sides.
+
+**The way in is found, not assumed.** For each berth, `berthApertures` looks
+for a clear line out of the door, straight along the normal or tilted up to
+a limit. It records `entry`, `exit` and `reachable`. The cylinder's bays ring
+its bore, so the line out runs along the bore. The hold point, the voxel
+carve and the pull-in all use that line. **A berth with no clear line out is
+never assigned.** The refinery's S and M bays face inward, reached in the art
+through the heavy bay and a lift, so at present only the heavy bay takes
+ships.
+
+**The pull-in goes round.** A ship that starts on the far side of the station
+from its hold point is taken round the hull on a few secants, not in a
+straight line through it. berths.test sweeps every model's pull-in against
+the triangles. With a straight line, all 15 fail.
+
+Known tight spots, for the next pass on the art:
+
+- **cylinder-l**: neighbouring bays share leaf pockets, so two doors cannot
+  be open at once without a leaf sliding into its neighbour's opening.
+- **cylinder-l berth 2** (the lift-chute bay) clears by 0.003 radii. It is
+  refused at small stations.
+- The refinery's S and M bays are unused until there is a route through the
+  heavy bay.
+- The cradle's heavy bay (`berthL`) is a force field under a clamshell roof
+  that opens upward. Its S/M ships park in the two tubes, and `berthSM<n>`
+  in the hall have a clear line to outside, so the game sends ships
+  straight in rather than through the tube and lift the art describes.
+- `src/ports.js` is 30 MB with the new set (from 15.6 MB).
+
+The old cylinder, spine and cradle are kept in `ref/ports-retired`.
+
+---
+
 ## Things that will bite
 
 **Grep for a name before you invent one.** Three times now a new top-level
@@ -359,3 +427,237 @@ normals, skins and animations: the renderer computes its own lighting from
 one flat colour per face, taken from `baseColorFactor`. An `emissiveFactor`
 makes a face self-lit, which is the only honest way to paint a lit window or
 a live lamp.
+
+---
+
+## The 22-09 set: liveries, industry, farms, and geometry on demand
+
+Staged by `node tools/stage-2026-09-22.cjs [folder] [--apply]`, which files a
+drop under the ids below (browser `(1)` counters stripped, newest write wins)
+and keeps anything it replaces in `ref/ports-retired/2026-09-21`.
+
+**Id grammar: `<pattern>[-navy|-syn]-<s|m|l>`.** The livery suffix is what
+`Render.portModelFor` reads. A pattern with no suffix is the civilian one.
+
+| stem | from | used for |
+|---|---|---|
+| `cylinder` `ring` `cradle` | `*-station-*_2_variant` | ordinary orbital roles (civ only) |
+| `spine` | the 09-21 spine, kept | ordinary orbital roles (civ only) |
+| `cylinder-classic` `spine-classic` `ring-classic` `cradle-classic` | `*-subvariant_3` | ordinary orbital roles, all three liveries |
+| `yard` | `civ/navy/synd-yard-station` | shipyard |
+| `refinery`, `skimmer` | `civ/navy/synd-refinery/skimmer-station` | the refinery role, which is gas and ice giants |
+| `city-port` | `city-port-*-subvariant_3` | every other ground port |
+| `farm` | `syndicate-farm-*-subvariant_3` | a farm: plain = grapes, `-syn` = gold buds, `-navy` = grapes in navy space |
+| `comet` | `comet-*-subvariant_3` | buried bays, on ice (iceball, tundra) only |
+| `runway-refi` `runway-indu` `runway-pass` | *not yet made* | ground ports on ice worlds — see below |
+
+**Who wears which livery** is stamped on the port by `stampLiveries` in
+generate.js (no rng): `syn` where the Syndicate holds the system or the port
+flies its flag; `navy` where a naval garrison is based and the port is its
+faction's, and every carrier; `civ` otherwise. A farm's livery is its crop.
+A livery the art does not exist in falls back to the civilian building.
+
+**Runway hooks.** A ground port on an iceball gets `siteKind` `runway-refi`
+(the default: that is where the volatiles are harvested), `runway-indu`
+(shipyard, mining, reprocessing, milfuel) or `runway-pass` (highport). Until
+a file with that stem is in `ref/ports` it wears the city port. Name the
+exports `Runway-REFI-S.glb` etc. — the stage script maps them.
+
+**Held back** (`Render.PORT_HELD_BACK`): converted but never handed out, and
+skipped by berths.test with the reason printed. Take a line out when the art
+is re-exported and passes.
+
+- `spine-v2-*` — berths are toothed sliders with no throat panels; the converter finds none
+- `ring-*` (v2) — the far-side pull-in runs through the ring; hulls park 0.003 radii from plating
+- `yard-l`, `yard-syn-l` — every berth parks its hull 0.001–0.002 radii from plating (large civ/syn yards use the M model meanwhile)
+
+**Door stops.** The new stations' telescoping leaves (`SlidingDoorL1/L2`) carry
+`door: {openX, closedX}`; the converter takes `|openX - closedX|` as the
+leaf's travel, as it takes `doorLeaf.travel` for leaf groups.
+
+### ports.js is an index now
+
+`glb2hulls --ports` writes `src/ports.js` (~1.4 MB: kind, anchors, geom,
+extras for every model, each marked `lazy: true`) and one
+`src/ports/<id>.js` per model holding only the triangles (v f pal ci
+interior spin, ~131 MB in all). The simulation reads only the index, so
+berths are known the moment a system is generated.
+
+`Render.libPort(id)` fetches a model's geometry the first time it is asked:
+synchronously under node and wherever a page may do a synchronous read
+(http, the playtest server), otherwise with a `<script>` tag, after which
+`PortGeo.onload` → `Render.portGeometryArrived` drops every cache that
+remembered "no model". `enterSystem` calls `Render.prefetchPorts(sys)` so the
+reads happen during the jump tunnel. A test fixture library without `lazy`
+behaves exactly as before.
+
+## The 24-09 set: new stations, ground sites, routes through the art
+
+**Orbital.** The new `cylinder`/`spine`/`ring`/`cradle` designs are the only
+orbital stations handed out. The old `-classic` (subvariant_3) navy and
+Syndicate stations are NOT ports: they live in `ref/port-art/livery-templates`
+and `tools/skin-liveries.cjs` reads their swatches to dress the new designs as
+`<pattern>-navy-<sz>` and `<pattern>-syn-<sz>`. `PORT_HELD_BACK` is empty.
+
+**Ground sites** (`model_update/`, staged by `tools/stage-2026-09-22.cjs`):
+`pad-site`, `mountain-site`, `runway-site`, `pad-city-site`,
+`runway-city-site`, each s/m/l. They are the `bay` pool and replace
+`city-port` (retired to `ref/ports-retired/2026-09-24`). The ice-world
+`runway-refi/indu/pass` hooks stand in with `runway-site` /
+`runway-city-site` until their own art lands. The 09-21
+`hydrogen-refinery-station-*` in that folder is superseded and skipped.
+
+**S/M through the L bay** (`interiorRoutes` in glb2hulls). A voxel A* from
+each L berth to each S/M berth, doors open (OPENABLE_RE), with CARRIER volumes
+passable: nodes matching `CARRIER_RE` (transferLift/Main/Lock/Deck, dockLift*,
+hangarLift*, spokeTransfer*, ringLift, cargoHoist, sortHoist*, hoist, shaft,
+lift, incline, ramp), grouped by stem over their whole subtree, and swept
+along `extras.lift.travel` where a car declares it. Where the art has both
+decks but no open voxel joins them (the car parked at one landing, the shaft
+walled at the other) the route is joined by an ELEVATOR: the nearest pair of
+cells between what the L bay reaches and what the S/M bay reaches, preferring
+carrier volumes, capped at 0.8 half-spans. The report prints how many routes
+needed that ("joined by elevator across unconnected decks") — those are the
+places the art could open a shaft. Written on the S/M berth as `entry` (the L
+berth index) and `via` (corners); `berthRoute` reads it, the arrival walks it
+and undocking runs it backwards.
+
+**Ground entrances.** A node with `airlock.outerOpensOn: 'dockingClearance'`
+that is not a berth (`padSurfaceDoor`, `hangarDoor`, `portal`,
+`lHangarDoor`) is an ENTRANCE, written to `entrances` with its outward
+normal. Every berth gets `door` + `doorVia`: the route in from the
+entrance that fits it — S/M prefer the pad door and its 45-degree lift, L the
+hangar or portal. `Gen.berthDoorRoute` reads it; the surface rail becomes
+hold off the entrance → doors → down and across along the route (descend +
+traverse legs) → stand.
+
+**Leaving.** `Sim.undockShip(..., { transfer: true })` at a ground port runs
+the arrival backwards to the hold off the entrance and hands the ship over
+nose-up, climbing 4 m/s ("Request transfer to exit pad" on the comms panel,
+and U). A launched ship carries `departed` and `padCapture` ignores that pad
+until the hull has left its envelope or holds fresh clearance — the fix for
+being re-docked the instant a launch did not climb.
+
+**Fixes from the 24-09 test pass.**
+- Ring heavy bays (`…HatchLeafL0` finger hatches) and spine sliders (`berth…LeafL/R`, `door` extras) are now gates, so both have outer doors, a way in, and BAY lettering.
+- Yard garages (`berthLY…`) are roll-up doors: their gates are the slats (`…LeafLSlat0`), which render as there-or-not like a field. The garage berth box is moved in behind the slats, because the group box is the door frame standing outside them. Without the move the hull parked in the doorway and the garage had no way in.
+- `Render.berthDeck` keeps its centreline cast unless that finds less than 0.03 radii of headroom (a plate's underside or a header). Then it takes the median, over nine columns, of the candidate surface with the most room above it. This fixed ring hulls 0.009 radii inside the floor and cradle decks read off a header.
+- The converter's rasteriser sample cap and search radii scale with ROUTE_N, so the 256 grid has no pinholes.
+- `tools/merge-ports.cjs <dir>` folds a partial conversion into src/ports.js, so a few changed models do not cost a full hour-long run.
+
+## The 24-09 evening drop: the CURRENT stations
+
+Astra: "These are the CURRENT station models. Replace any previous versions
+of these files." Source `new_current_stations/` (41 files), staged by
+`node tools/stage-2026-09-22.cjs new_current_stations --apply`.
+
+- **Replaced (38 ids):** `cylinder` `spine` `ring` `cradle` (civ), `yard`
+  `refinery` (civ/navy/syn), `skimmer` (civ), `skimmer-navy-s/m`, and
+  `cylinder-navy` — the first orbital pattern to arrive AUTHORED in a livery
+  (`navy-cylinder-station-*`; the stage script now maps
+  `<civ|navy|synd>-<pattern>-station-*`).
+- **Retired** to `ref/ports-retired/2026-09-24-2/`. The stage script now
+  takes a fresh folder per run: the morning's retirements already sat in
+  `2026-09-24/` under the same ids, and keep-the-first-copy would have
+  dropped the morning versions on the floor.
+- **Re-skinned** by `node tools/skin-liveries.cjs --keep ref/ports-retired/2026-09-24-2`:
+  navy + syn `cradle` `ring` `spine`, and `cylinder-syn`, from the new civil
+  geometry. skin-liveries now leaves an authored livery alone (a liveried
+  file whose root has no `extras.skinnedFrom`), so `cylinder-navy` is the
+  art as drawn. `--keep` retires the old skins with the models.
+- **Two cylinders.** Every size came as `(1)` and `(2)`: identical structure,
+  docks and arms, different dressing (pallets/containers/tower vs a robot
+  arm and seam plates). Newest write wins, so `(2)`.
+- **Not in the drop, so left as they were:** `skimmer-navy-l` and
+  `skimmer-syn-*` (older skimmer design beside the new civ one), and all the
+  ground sites, farms and comets.
+
+**Converter changes this drop needed** (`tools/glb2hulls.js`):
+
+- `berthSMs0` is a bay — an SM bay drawn for a small hull only (`hullClass:
+  'S'` in its extras). `BERTH_GROUP_RE` now takes a lower-case size letter
+  after the class; before it, every new cylinder lost its S bays (cylinder-m
+  converted with 2 SM berths of the 4 it declares).
+- **Inner heavy bays.** An L bay whose extras say `exitVia: <another L bay>`
+  (the cylinder's `berthLArm`, the spine's `berthL1`: curtains with no door
+  onto space) is routed in through that bay like an S/M bay and is never
+  offered as an entry. `exitVia` is carried onto the berth anchor. Before it,
+  berths.test found "no way in" for the arm bay of every cylinder.
+
+**Converted** at ROUTE_N=256 in two partial runs merged with
+`tools/merge-ports.cjs` (59 models, then the 18 cylinders and spines again
+after the converter changes). Berth counts match the art's `docks` table on
+every model.
+
+**Still open after this drop** (berths.test 181/4, transfer.test 13/1):
+
+- **Civilian yard (`yard-s/m/l`) — "carriage halls".** Its S/M bays sit on
+  carriages that ride a track (`extras.carriage: {dir, travel, raised,
+  hatch, fromAbove}`) with an explicit `dockPath` and `exitVia`. The voxel
+  router cannot ride a carriage, so half the S/M bays have no route in
+  (yard-m 4 of 8, yard-s 2 of 4). The art also has no door leaves at all
+  (force-field curtains), so the yard carries no BAY lettering. Needs the
+  converter to follow the declared `dockPath` / carriage, or the art to add
+  a carrier volume.
+- **Ring (all liveries):** the new hatches carry no BAY lettering (9 models).
+- **spine-m (all liveries), upper bays 3 and 5:** the deck cast lands 0.001
+  radii above the berth box. spine-s/l sit exactly on the box top, so the
+  upper bays' deck is being read at the TOP of their frame on every spine —
+  needs a look in the game before the tolerance is touched.
+- **Compartments:** most of the new art's faces sit outside any berth's
+  compartment (station dressing), so drawing one compartment now costs 77%
+  of a station on average (was 43%); skimmer-s 97%. A frame-rate concern
+  inside stations, not a correctness one.
+- `skimmer-syn-*` is still the older skimmer design. (`skimmer-navy-l`
+  arrived separately the same evening, staged the same way and retired to
+  `ref/ports-retired/2026-09-24-3/`; it converts clean, 8 berths, 6 S/M
+  routed, and added no failures.)
+
+## 2026-09-25: carriages, hatches and roofs
+
+Three of the four items left open by the 24-09 evening drop, closed.
+
+- **Civil yard carriages.** The converter now reads each bay's own
+  `dockPath` (root frame) and `exitVia`. Where no clear voxel passage
+  exists, a bay that rides a CARRIAGE takes the art's route before the
+  elevator bridge: from the heavy bay's stand, the declared corners that
+  lie inboard of it, to the foot of the carriage, then up (or down) the
+  carriage to the stand. Written on the berth as `entry`/`via` like every
+  other route, plus `carriageRide: 1`. All 20 of the yards' S/M bays route
+  (yard-s 4, yard-m 8, yard-l 8); transfer.test 14/14. Other bays keep the
+  old order (voxel, bridge, then the declared route as a last resort), so
+  no other station's routes moved. `carriage.raised` is read but NOT
+  routed through: it lies on the run between dockPath[1] and dockPath[0].
+- **Hatches are lettered.** `letterTheBays` used to skip a door whose
+  normal is vertical. The new ring's only doors are its heavy bay's roof
+  hatch, so all nine rings went unlettered; a hatch is now painted like a
+  pad, on its frame's first axis.
+- **The spine's upper bays' floor.** `berthDeck` took the surface with the
+  most room above it, and on a station's crown the room above a lintel is
+  open space — so every spine's upper curtain bays had their deck on the
+  roof of the doorway. A surface in the lower three quarters of the box
+  with at least 60% of the box's height clear above it now wins; the ring
+  (whose boxes hang below the deck, all plate inside) has no such surface
+  and is decided by the old rule as before.
+
+**Still open:** the compartment split. `portSections` divides a station by
+connected solids, and the new art is largely one welded shell, so one
+compartment still costs 77% of a station on average (43% before the new
+art), skimmer-s 97%. berths.test 183/2 on those two checks only.
+
+### Compartments with the welded art (25-09)
+
+berths.test said one compartment was 77% of a station with the evening set
+in (43% before). It was measuring the wrong thing: it counted station
+structure in every room, but `drawStationModel` only paints structure while
+the inner gate is off its seat. Behind a shut gate it paints the room's hull
+alone, and that is **4.4% of a station on average** across 78 divided
+models (worst: yard-syn-s's big bay, 37%). With the gate open it is ~80%,
+the same order as the view from outside, and only for two arrival legs.
+
+Structure grew because the evening art is one welded shell and most of it
+is 3-5 bay diagonals from any bay (spine-m: 36,000 of 46,600 structure
+faces), i.e. the outer hull no room can see. Splitting big welded solids
+face by face was tried and moved nothing (4.4% -> 4.5%), so it was
+removed. The test now measures what is painted: sealed average < 10%,
+worst sealed room < 45%, and logs the open-gate figure.

@@ -346,6 +346,10 @@
     G.charted = G.charted || {};
     G.charted[star.id] = true;
     G.sys = systemFor(star);
+    /* Fetch the station art this system's ports wear now, while the jump
+     * tunnel is still on screen, rather than as each one comes into view.
+     * ports.js is an index since 2026-09-22; the triangles are per model. */
+    if (global.Render && Render.prefetchPorts) Render.prefetchPorts(G.sys);
     /* Clearances belong to the system you got them in. Nobody in the next
      * one has heard of you, which is also what stops a granted clearance
      * from quietly becoming permanent. */
@@ -823,6 +827,9 @@
 
     if (G.ship.docked) {
       Sim.undockShip(G.ship, G.sys, G.t, 0.003);
+      /* A small bay reached through a heavy one leaves on a rail
+       * (stepArrival, reverse). Not on a jump: the ship is going. */
+      G.ship.arrival = null;
       G.dockTarget = null;
       G.dockStatus = null;
     }
@@ -1698,6 +1705,10 @@
               HOOKS.sound('warn');
               break;
             }
+            /* A ground port lets you out the way you came in: the exit-pad
+             * transfer, which spends the launch clearance itself when the
+             * car reaches the surface (the doors stay open until then). */
+            if (leaving && leaving.surface) { exitTransfer(leaving); break; }
             if (leaving) Combat.spendLaunch(G);
           }
           if (G.ship.docked) {
@@ -3908,6 +3919,36 @@
               Sim.controlInRange(G.ship, port, G.sys, G.t));
   }
 
+  /* THE TRANSFER TO THE EXIT PAD (Astra, 24-09: "When requesting launch
+   * permission, there should be a 'request transfer to exit pad' which
+   * takes you back the way you came in").
+   *
+   * One request, two answers. At a ground port it asks for launch first if
+   * you do not hold it — the doors are the port's — and then runs the
+   * arrival backwards: off the stand, back along the traverser, up the
+   * cargo lift and out to the pad, where you are handed the stick nose-up
+   * and climbing. At an orbital berth it is an ordinary undock, which is
+   * already the way you came in (out through the heavy bay for a small
+   * berth reached through one). */
+  function exitTransfer(port) {
+    if (!port || G.ship.docked !== port.id) { say('Not docked here', 2); return false; }
+    if (port.surface && !Combat.launchCleared(G, port)) {
+      var r = Combat.requestLaunch(G, port, HOOKS);
+      if (!r || !r.granted) return false;
+    }
+    var left = Sim.undockShip(G.ship, G.sys, G.t, 0.003, { transfer: true });
+    G.dockTarget = null;
+    G.dockStatus = null;
+    HOOKS.sound('undock');
+    if (port.surface && G.ship.arrival) {
+      say(port.name + ': "Transfer to the exit pad. Stay on the car — you have the stick at the top."', 6);
+    } else {
+      if (port.surface) Combat.spendLaunch(G);
+      say('Undocked from ' + left.name + '  (T to re-target)', 4);
+    }
+    return true;
+  }
+
   function hailSelected(contact) {
     if (!contact) { say('Nobody selected', 2); return; }
     if (contact.kind === 'authority') { hailAuthority(contact.obj); return; }
@@ -4026,6 +4067,12 @@
        * a doorway of that port, which is the actual question. Asked once
        * for the ship rather than once per port. */
       if (inside === p) continue;
+      /* NOR A SHIP THAT HAS JUST LEFT ITS PAD AND NOT GONE ANYWHERE. A
+       * launch that does not climb falls back toward the pad, which is
+       * "closing" — and a clearance granted then was the other half of the
+       * re-dock Astra hit on 24-09. `departed` lasts until the hull has
+       * flown clear of the pad (Sim.padCapture drops it). */
+      if (G.ship.departed && G.ship.departed.surface && G.ship.departed.port === p.id) continue;
       /* The same berth count the ships themselves are flying to — closed
        * form off the traffic timetable, so a port that says it is full is
        * not making it up. */
@@ -6624,6 +6671,12 @@
       if (!sp) continue;
       if (sp.x < -60 || sp.x > cam.w + 60 || sp.y < -60 || sp.y > cam.h + 60) continue;
 
+      /* Which hull to draw. Usually the class, but a ship may name its own
+       * — a Syndicate enforcer is a police-kind patrol wearing an enforcer
+       * hull (see HULL_ASSIGN.enforcer) — and plume, hull and shield all
+       * read this one answer so they can never disagree. */
+      var hullKey = s.hullClass || s.cls;
+
       /* The drive first, so the hull sits in front of its own glare rather
        * than behind it. Also the reason a ship stays visible long after the
        * hull has shrunk to nothing: a plume is a streak, not a dot. */
@@ -6631,12 +6684,12 @@
       // does not pulse in unison like a string of fairy lights.
       Render.drawShipExhaust(ctx, cam, s, s.size,
                              s.throttle === undefined ? 1 : s.throttle,
-                             s.cls, null, performance.now() / 1000 + i * 0.37);
+                             hullKey, null, performance.now() / 1000 + i * 0.37);
 
       var lenPx = s.size * sp.scale;
       if (lenPx > 4) {
         var sunDir = V.norm(V.sub(sunPos, s.pos));
-        Render.drawHullModel(ctx, cam, s, s.size, sunDir, s.color, s.cls);
+        Render.drawHullModel(ctx, cam, s, s.size, sunDir, s.color, hullKey);
         // Port red, starboard green, in the ship's own frame — so which way
         // it is facing is readable without a label.
         if (lenPx > 14 && blink < 1) {
@@ -6769,7 +6822,7 @@
     var charge = spec.shieldHp / spec.shieldMax;
     var live = liveImpacts(spec, nowS);
     if (lenPx >= SHELL_MIN_PX) {
-      Render.drawShellField(ctx, cam, s, s.size, s.cls, charge, lit, live, nowS);
+      Render.drawShellField(ctx, cam, s, s.size, s.hullClass || s.cls, charge, lit, live, nowS);
     } else {
       farShieldGlow(ctx, cam, s, charge, lit, live, lenPx, nowS);
     }
@@ -10458,7 +10511,8 @@
      * sequence is choreographed against the legs, so the leaves are where
      * that choreography says while it is running. */
     if (G.arrivalPose && G.ship.arrival && G.ship.arrival.port === port.id) {
-      berth = G.ship.arrival.berth;
+      /* Through a heavy bay (2026-09-24): its doors are the ones that run. */
+      berth = (typeof G.ship.arrival.entry === 'number') ? G.ship.arrival.entry : G.ship.arrival.berth;
       ap = Gen.berthApertures ? Gen.berthApertures(port, berth) : ap;
       return { open: 1 - G.arrivalPose.gates.apron,
                inner: 1 - G.arrivalPose.gates.inner,
@@ -12999,6 +13053,7 @@
        * actions, or they drift apart and one of them starts lying. */
       hailAuthority: hailAuthority, payOutstanding: payOutstanding,
       hailSelected: hailSelected,
+      exitTransfer: exitTransfer,
       scopeBody: scopeBody, rows: rows, panel: panel,
       bodyDotColor: bodyDotColor, setMouseAim: setMouseAim,
       fmtDist: fmtDist, fmtSpeed: fmtSpeed, fmtTime: fmtTime,

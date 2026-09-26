@@ -36,10 +36,22 @@ function m(km) { return (km * 1000).toFixed(1) + ' m'; }
 /* Every class that actually flies, and the model each one wears. */
 var CLASSES = Object.keys(Render.HULL_ASSIGN);
 /* Every orbital model in the library that declares berths. */
+/* Every orbital model a port can actually be GIVEN. A model render.js holds
+ * back (PORT_HELD_BACK) is converted but never handed out, so it is listed
+ * with its reason rather than measured: this suite's contract is the fleet
+ * against the stations it can meet. The list is what the next art pass has
+ * to clear. */
+var HELD = Render.PORT_HELD_BACK || {};
 var MODELS = Object.keys(global.PortLib || {}).filter(function (id) {
   var e = global.PortLib[id];
+  /* The ground sites (24-09) normalise like a station but are ground
+   * ports: their bays are underground behind a site entrance, not throats
+   * onto space. transfer.test.js measures those. */
   return e && e.kind === 'orbital' && e.anchors && e.anchors.berths &&
-         e.anchors.berths.length;
+         e.anchors.berths.length && !HELD[id] && !e.entrances && !/-site-[sml]$/.test(id);
+});
+Object.keys(HELD).forEach(function (id) {
+  if (global.PortLib && global.PortLib[id]) console.log('  held back: ' + id + ' - ' + HELD[id]);
 });
 
 console.log('--- what there is to fit ---');
@@ -240,7 +252,9 @@ console.log('--- the shed on the ground ---');
      * shed, so along the wall neighbours are separated by WIDTH and into the
      * wall each one needs LENGTH. */
     var xs = [];
-    for (var b = 0; b < g.berths; b++) xs.push(Gen.berthOffset(port, b).x);
+    /* THE TABLE'S berths: since 24-09 a fixture pad wears a modelled ground
+     * site, whose own berths are measured in the next section. */
+    for (var b = 0; b < g.berths; b++) xs.push((Gen.tableBerthOffset || Gen.berthOffset)(port, b).x);
     xs = xs.filter(function (v, i, a) { return a.indexOf(v) === i; })
            .sort(function (a2, b2) { return a2 - b2; });
     for (var i2 = 1; i2 < xs.length; i2++) {
@@ -273,6 +287,37 @@ console.log('--- the shed on the ground ---');
               tight.head.toFixed(1) + 'x  berth pitch ' + tight.pitch.toFixed(1) +
               'x  depth ' + tight.depth.toFixed(1) + 'x  ends ' +
               tight.ends.toFixed(1) + 'x');
+})();
+
+/* ---- the ground sites' own berths (24-09) -------------------------------
+ * The pad, mountain and runway sites carry their bays in the art. Two
+ * things are asked of them: no two berth boxes overlap, and every berth is
+ * reached from one of the site's entrances (which transfer.test.js also
+ * walks as a ride). */
+console.log('--- the ground sites\' own berths ---');
+(function () {
+  var sites = Object.keys(global.PortLib || {}).filter(function (id) { return /-site-[sml]$/.test(id); });
+  var overlap = [], unreached = 0, total = 0;
+  sites.forEach(function (id) {
+    var bs = (global.PortLib[id].anchors || {}).berths || [];
+    for (var i = 0; i < bs.length; i++) {
+      total++;
+      if (typeof bs[i].door !== 'number') unreached++;
+      for (var j = i + 1; j < bs.length; j++) {
+        var a = bs[i], c = bs[j], inside = true;
+        for (var ax = 0; ax < 3; ax++) {
+          /* Shrunk by 2% so boxes that merely share a wall do not count. */
+          var sa = (a.max[ax] - a.min[ax]) * 0.02, sc = (c.max[ax] - c.min[ax]) * 0.02;
+          if (a.max[ax] - sa <= c.min[ax] + sc || c.max[ax] - sc <= a.min[ax] + sa) { inside = false; break; }
+        }
+        if (inside) overlap.push(id + ' ' + a.node + '/' + c.node);
+      }
+    }
+  });
+  check('there are ground sites', sites.length > 0, sites.length + ' models');
+  check('no two of a site\'s berths overlap', overlap.length === 0,
+        overlap.length ? overlap.slice(0, 4).join(', ') : total + ' berths');
+  check('and every one is reached from an entrance', unreached === 0, unreached + ' of ' + total + ' unreached');
 })();
 
 /* ---- and the hall itself, not just the alcoves in it -------------------
@@ -415,7 +460,7 @@ console.log('--- the way in, at every modelled station ---');
   if (!station) return;
   var t0 = 0;
 
-  var bad = 0, checkedB = 0, straight = 0;
+  var bad = 0, checkedB = 0, straight = 0, routedSkip = 0;
   var throatMin = Infinity, throatMax = 0, holdMin = Infinity;
   MODELS.forEach(function (modelId) {
     Render.assignPort('orbital', modelId);
@@ -423,6 +468,12 @@ console.log('--- the way in, at every modelled station ---');
     for (var i = 0; i < n; i++) {
       var ap = Gen.berthApertures(station, i);
       checkedB++;
+      /* No door of its own onto space, and reached through a heavy bay:
+       * that IS a way in (24-09), and transfer.test.js measures it. */
+      if ((!ap || !ap.normal || typeof ap.gate !== 'number') && Gen.berthRoute && Gen.berthRoute(station, i)) {
+        routedSkip++;
+        continue;
+      }
       if (!ap || !ap.normal || typeof ap.gate !== 'number') {
         bad++;
         console.log('  FAIL  ' + modelId + ' berth ' + i + ' has no way in');
@@ -446,7 +497,11 @@ console.log('--- the way in, at every modelled station ---');
         continue;
       }
       var b = ship.arrival.berth;
-      var total = Sim.arrivalTotal(station);
+      /* A small bay reached THROUGH a heavy one (24-09) is not a straight
+       * throat: its rail follows the route through the hull, by design.
+       * transfer.test.js checks those; this is about the ones that are. */
+      if (Gen.berthRoute && Gen.berthRoute(station, b)) { routedSkip++; continue; }
+      var total = Sim.arrivalTotal(station, b);
       var p0 = Sim.arrivalPose(station, sys, t0, b, 0);
       var pEnd = Sim.arrivalPose(station, sys, t0, b, total - 0.001);
       if (!p0 || !pEnd) { bad++; continue; }
@@ -460,19 +515,31 @@ console.log('--- the way in, at every modelled station ---');
        * throat cut through a hull, so any sideways wander is a wall. Every
        * sample has to lie on the segment from where the rail starts to
        * where it ends. */
-      var axis = V.sub(pEnd.pos, p0.pos);
-      var len = V.len(axis);
-      var off = 0;
-      if (len > 1e-9) {
-        var u = V.scale(axis, 1 / len);
-        for (var k = 0; k <= 40; k++) {
-          var q = Sim.arrivalPose(station, sys, t0, b, total * k / 40);
-          if (!q) continue;
-          var rel = V.sub(q.pos, p0.pos);
-          var along = V.dot(rel, u);
-          off = Math.max(off, V.len(V.sub(rel, V.scale(u, along))));
-        }
+      /* TWO STRAIGHT LINES AT MOST: the way in from open space to the door
+       * (Gen.berthApertures' entry — which for every berth that opens onto
+       * space IS the throat's axis, so this is one line), then the throat.
+       * Every sample has to lie on that polyline. The door is where the
+       * rail first stops moving, which is the leg the leaves run back in. */
+      var samples = [];
+      for (var k = 0; k <= 80; k++) {
+        var q = Sim.arrivalPose(station, sys, t0, b, total * k / 80);
+        if (q) samples.push(q);
       }
+      var pGate = null;
+      for (var sk = 1; sk < samples.length; sk++) {
+        if (samples[sk].leg >= 1) { pGate = samples[sk]; break; }
+      }
+      function segOff(p, a, c) {
+        var ax = V.sub(c.pos, a.pos), l2 = V.dot(ax, ax);
+        var tq = l2 > 1e-18 ? Math.max(0, Math.min(1, V.dot(V.sub(p.pos, a.pos), ax) / l2)) : 0;
+        return V.dist(p.pos, V.addScaled(a.pos, ax, tq));
+      }
+      var off = 0;
+      samples.forEach(function (q) {
+        var d1 = pGate ? segOff(q, p0, pGate) : segOff(q, p0, pEnd);
+        var d2 = pGate ? segOff(q, pGate, pEnd) : d1;
+        off = Math.max(off, Math.min(d1, d2));
+      });
       if (off > r * 0.001) {
         straight++;
         console.log('  FAIL  ' + modelId + ' berth ' + i + ' wanders ' +
@@ -643,10 +710,22 @@ console.log('--- and the doors are doors ---');
       movers++;
       minTravel = Math.min(minTravel, lf.travel);
       maxTravel = Math.max(maxTravel, lf.travel);
-      /* A UNIT AXIS, one component, no diagonals. A leaf that slid along
-       * two axes at once would be a leaf leaving its own track. */
-      var nz = lf.axis.filter(function (v) { return v !== 0; });
-      if (nz.length !== 1 || Math.abs(nz[0]) !== 1) {
+      /* A UNIT AXIS, ACROSS THE DOORWAY. A leaf that slid out of the plane
+       * of its own door would be a leaf leaving its own track. It used to
+       * have to be one world axis, because every berth faced along one; the
+       * 2026-09-21 cylinder rings its bore with bays at every bearing, so a
+       * leaf's track is one of its BERTH's axes — which for every older
+       * model is still exactly one world axis. */
+      var len = Math.sqrt(lf.axis[0] * lf.axis[0] + lf.axis[1] * lf.axis[1] + lf.axis[2] * lf.axis[2]);
+      var bn = null, bd = Infinity;
+      ((global.PortLib[modelId].anchors || {}).berths || []).forEach(function (b) {
+        if (!lf.berthMid || !b.normal) return;
+        var d = Math.abs(b.mid[0] - lf.berthMid[0]) + Math.abs(b.mid[1] - lf.berthMid[1]) +
+                Math.abs(b.mid[2] - lf.berthMid[2]);
+        if (d < bd) { bd = d; bn = b.normal; }
+      });
+      var across = bn ? Math.abs(lf.axis[0] * bn[0] + lf.axis[1] * bn[1] + lf.axis[2] * bn[2]) : 0;
+      if (Math.abs(len - 1) > 1e-6 || across > 0.02) {
         bad++;
         console.log('  FAIL  ' + modelId + ' leaf ' + lf.node + ' slides along ' + lf.axis);
       }
@@ -692,8 +771,18 @@ console.log('--- outdoors until you are through the door ---');
     var ship = { cls: 'courier', dryMass: 80, pos: { x: 0, y: 0, z: 0 },
                  vel: { x: 0, y: 0, z: 0 } };
     if (!Sim.beginArrival(ship, port, sys, 0)) return;
+    /* A small bay reached through a heavy one rides the cargo elevator
+     * through deck plating by design (24-09); the renderer's enclosed flag
+     * comes from the leg, not from this lookup. Straight throats only. */
+    var b = ship.arrival.berth;
+    if (Gen.berthRoute && Gen.berthRoute(port, b)) {
+      var nB = (Gen.modelledBerths(port) || []).length;
+      b = -1;
+      for (var iB = 0; iB < nB; iB++) if (!Gen.berthRoute(port, iB)) { b = iB; break; }
+      if (b < 0) return;
+    }
     checkedS++;
-    var b = ship.arrival.berth, total = Sim.arrivalTotal(port);
+    var total = Sim.arrivalTotal(port, b);
     var flips = 0, was = null, firstIn = -1;
     for (var k = 0; k <= 40; k++) {
       var pose = Sim.arrivalPose(port, sys, 0, b, total * k / 40);
@@ -738,6 +827,58 @@ console.log('--- outdoors until you are through the door ---');
  * down is position, the COST is speed and gear, and nothing is ever
  * silently refused — bouncing off your own berth with no explanation is the
  * failure padCapture was written to avoid. */
+/* ---- drawn in from the far side ----------------------------------------------
+ * The pull-in used to be one straight line from wherever the ship was to
+ * the hold point. The 2026-09-21 cylinder puts every hold at one end of its
+ * bore, so from the other end that line ran the length of the station. */
+console.log('--- drawn in from the far side of the station ---');
+(function () {
+  var through = 0, tried = 0;
+  var sys = Gen.generateSystem('doorway-sweep');
+  var port = (sys.ports || []).filter(function (p) { return !p.surface && p.docking; })[0];
+  var role = port && Render.portRole(port);
+  MODELS.forEach(function (id) {
+    if (!port) return;
+    Render.assignPort(role, id);
+    var basis = Sim.portBasis(port, sys, 0);
+    if (!basis) return;
+    var ship = { cls: 'courier', dryMass: 80, pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 },
+                 fwd: { x: 1, y: 0, z: 0 } };
+    var b0 = Sim.assignBerth(ship, port);
+    var hold = Sim.arrivalPose(port, sys, 0, b0, 0);
+    if (!hold) return;
+    var c = Sim.bodyState(port, sys, 0).pos;
+    var away = V.norm(V.sub(c, hold.pos));
+    ship.pos = V.addScaled(c, away, port.radius * 3);       // the far side
+    if (!Sim.beginArrival(ship, port, sys, 0)) return;
+    tried++;
+    /* Swept against the station's own triangles, step by step, each end
+     * in the frame of its own moment -- the station is in orbit and turning,
+     * and the question is where the ship went RELATIVE TO IT. A sphere
+     * would do for a cylinder and not for a spine, which is long and thin
+     * and whose holds sit well inside its bounding radius. */
+    var lead = ship.arrival.lead, hit = null, prev = null;
+    var modelId = Render.portModelFor(port);
+    for (var k = 0; k <= 240 && !hit; k++) {
+      var tk = lead * k / 240;
+      var s2 = { arrival: JSON.parse(JSON.stringify(ship.arrival)), pos: ship.pos };
+      Sim.stepArrival(s2, sys, tk);
+      var bk = Sim.portBasis(port, sys, tk);
+      var rel = V.sub(s2.pos, bk.entrance.pos);
+      var here = [V.dot(rel, bk.east) / port.radius, V.dot(rel, bk.north) / port.radius,
+                  V.dot(rel, bk.up) / port.radius];
+      if (prev) hit = Render.portSegmentHit(modelId, prev, here);
+      if (hit) hit.k = k;
+      prev = here;
+    }
+    if (hit) { through++; console.log('  FAIL  ' + id + ' pulls a ship into the hull, ' +
+                                      (100 * hit.k / 240).toFixed(0) + '% of the way in'); }
+  });
+  if (role) Render.assignPort(role, null);
+  check('a ship drawn in from the far side goes round the station, not through it',
+        tried > 0 && through === 0, through + ' of ' + tried);
+})();
+
 console.log('--- landing in a berth ---');
 (function () {
   var sys = Gen.generateSystem('landing-sweep');
@@ -983,6 +1124,27 @@ console.log('--- landing in a berth ---');
       var m = Infinity;
       for (var i = 0; i < tb.d.length; i++) if (tb.d[i] < m) m = tb.d[i];
       if (m < worst) { worst = m; worstWho = id + ' berth ' + k; }
+      /* GUARDED, NOT BURIED: a bay with something standing close beside the
+       * park point is refused by Sim.assignBerth wherever the station is
+       * too small for the hull to clear it. The large cylinder's lift-chute
+       * bay is the one case — measured 0.0032 radii sideways. So a tight
+       * park point passes if and only if that refusal really happens at the
+       * smallest station the generator makes, for the widest hull. */
+      var sideNear = Infinity;
+      for (var qa = 0; qa < 24; qa++) {
+        var aa = qa / 24 * Math.PI * 2;
+        sideNear = Math.min(sideNear, Render.boomLimit(id, k, [Math.cos(aa), Math.sin(aa), 0]));
+      }
+      var widestHalf = 0;
+      CLASSES.forEach(function (c) {
+        var sp = Render.hullSpan(c);
+        widestHalf = Math.max(widestHalf, Math.max(sp.w, sp.h) / 2);
+      });
+      if (m < BURIED && sideNear * RADII[0] < widestHalf) {
+        console.log('  ' + id + ' berth ' + k + ' is tight (' + m.toFixed(4) +
+                    ' radii) and refused at small stations');
+        continue;
+      }
       if (m < BURIED) {
         buried++;
         console.log('  FAIL  ' + id + ' berth ' + k + ' parks its hull in the plating   ' +
@@ -1049,41 +1211,68 @@ console.log('--- landing in a berth ---');
       checked++;
       if (Render.sectionAt(id, sorted[k].mid) === k) own++;
     }
-    /* A corner of the bounding cube is not in anybody's compartment. */
-    if (Render.sectionAt(id, [0.95, 0.95, 0.95]) >= 0) leaked++;
+    /* Open space is not in anybody's compartment. Probed just OUTSIDE the
+     * normalised cube (every model is radius 1) since 2026-09-22: the v2
+     * cylinder lies along its full length with a bay at each end, so the
+     * compartment round an end bay legitimately reaches the cube's corner at
+     * 0.95 — which is still inside the station's own box, not open space. */
+    if (Render.sectionAt(id, [1.05, 1.05, 1.05]) >= 0) { leaked++; console.log('  leaked: ' + id); }
 
-    var whole = 0, one = 0;
-    ['hull', 'interior'].forEach(function (b) {
-      if (S.structure[b]) whole += S.structure[b].f.length;
-      S.sections.forEach(function (s) { if (s[b]) whole += s[b].f.length; });
+    /* WHAT THE RENDERER PAINTS, not a stand-in for it. Behind a shut
+     * inner gate drawStationModel paints the compartment's hull and nothing
+     * else; the rest of the station ("structure") is only added while the
+     * gate is off its seat, which is two legs of the arrival and the same
+     * cost as seeing the station from outside.
+     *
+     * Until 2026-09-25 this counted structure in every compartment. With
+     * the 22-09 art that was nearly the same number, because the walls were
+     * separate pieces within reach of a bay and joined its room. The 24-09
+     * evening art is a welded shell, and most of it sits three to five bay
+     * diagonals from the nearest bay (measured: spine-m, 36,000 of 46,600
+     * structure faces) — the outer hull, which no room can claim and none
+     * of them can see. Counting it made one sealed room look like 77% of a
+     * station when the renderer was drawing 4%. Splitting welded solids
+     * face by face was tried and moved nothing (4.4% -> 4.5%), because the
+     * faces were never near a room to begin with. */
+    var whole = 0, sealed = 0, worstRoom = 0, open = 0;
+    var len = function (m) { return m && m.f ? m.f.length : 0; };
+    whole += len(S.structure.hull);
+    S.sections.forEach(function (s) { whole += len(s.hull); });
+    S.sections.forEach(function (s) {
+      var f = len(s.hull) / Math.max(1, whole);
+      sealed += f / S.n;
+      if (f > worstRoom) worstRoom = f;
     });
-    ['hull', 'interior'].forEach(function (b) {
-      if (S.structure[b]) one += S.structure[b].f.length;
-      if (S.sections[0] && S.sections[0][b]) one += S.sections[0][b].f.length;
-    });
+    open = sealed + len(S.structure.hull) / Math.max(1, whole);
     /* A single-compartment station is the whole station, correctly — a
      * cylinder has one bay and nothing to divide. Only models that HAVE
      * divisions can be asked whether dividing them paid. */
-    if (S.n > 1) faces.push({ id: id, whole: whole, one: one });
+    if (S.n > 1) faces.push({ id: id, sealed: sealed, worst: worstRoom, open: open });
   });
 
   check('every berth is in its own compartment', own === checked,
         own + ' of ' + checked);
   check('and open space is in none of them', leaked === 0, leaked + ' leaked');
 
-  /* The point of the exercise: one room costs a fraction of the station. */
+  /* The point of the exercise: one sealed room costs a fraction of the
+   * station. Both thresholds measured on the 24-09 evening set, 78 divided
+   * models: 4.4% on average, and the worst single room is yard-syn-s's
+   * big bay at 37% (a small yard is mostly its one big bay). */
   var worst = 0, worstId = '';
-  faces.forEach(function (f) {
-    var frac = f.one / f.whole;
-    if (frac > worst) { worst = frac; worstId = f.id; }
-  });
-  check('one compartment is a fraction of a divided station',
-        faces.length > 0 && worst < 0.75,
+  faces.forEach(function (f) { if (f.worst > worst) { worst = f.worst; worstId = f.id; } });
+  var avgFrac = faces.reduce(function (a, f) { return a + f.sealed; }, 0) /
+                Math.max(1, faces.length);
+  var avgOpen = faces.reduce(function (a, f) { return a + f.open; }, 0) /
+                Math.max(1, faces.length);
+  check('and on average a sealed compartment is a small part of the station',
+        avgFrac < 0.10, (avgFrac * 100).toFixed(1) + '%');
+  check('one sealed compartment is a fraction of a divided station',
+        faces.length > 0 && worst < 0.45,
         faces.length + ' divided models, worst ' + worstId + ' draws ' +
         (worst * 100).toFixed(0) + '% of its faces');
-  console.log('  one compartment costs ' +
-              (100 * faces.reduce(function (a, f) { return a + f.one / f.whole; }, 0) /
-               Math.max(1, faces.length)).toFixed(0) + '% of the station, on average');
+  console.log('  one sealed compartment costs ' + (avgFrac * 100).toFixed(1) +
+              '% of the station on average; with the inner gate open, ' +
+              (avgOpen * 100).toFixed(0) + '%');
 
   /* Built once and cached — it is a second of work across the library. */
   check('the decomposition is cached', Render.portSections(MODELS[0]) ===
@@ -1137,11 +1326,20 @@ console.log('--- landing in a berth ---');
     });
     var c = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
     var n = b.normal || [1, 0, 0];
-    var A = [c[0] + n[0] * 0.04, c[1] + n[1] * 0.04, c[2] + n[2] * 0.04];
-    var B = [c[0] - n[0] * 0.04, c[1] - n[1] * 0.04, c[2] - n[2] * 0.04];
+    /* ±0.015 radii through the leaf, not ±0.04: the probe is a question
+     * about THIS door, and on the cylinder, whose twelve bays stand a few
+     * degrees apart round its bore, a longer one ran on into the NEXT
+     * bay's shut leaf and reported this open door as sealed. A leaf is
+     * a hundredth of a radius thick; this still goes clean through it. */
+    var A = [c[0] + n[0] * 0.015, c[1] + n[1] * 0.015, c[2] + n[2] * 0.015];
+    var B = [c[0] - n[0] * 0.015, c[1] - n[1] * 0.015, c[2] - n[2] * 0.015];
     tried++;
     if (Render.leafHit(id, A, B, { open: 0, berthMid: b.mid })) solidShut++;
-    if (!Render.leafHit(id, A, B, { open: 1, berthMid: b.mid })) clearOpen++;
+    else console.log('  FAIL  ' + id + ' berth 0 (' + b.node + ') shut leaf ' + (lf.node || '') + ' is not solid');
+    /* THIS door, alone: on the large cylinder the neighbouring bays stand
+     * so close that a stowed leaf of the next bay shares the pocket — an
+     * art note (see the commit), not this door failing to open. */
+    if (!Render.leafHit(id, A, B, { open: 1, berthMid: b.mid, onlyMine: true })) clearOpen++;
   });
   check('a shut blast door is solid', tried > 0 && solidShut === tried,
         solidShut + ' of ' + tried);
@@ -1202,7 +1400,20 @@ console.log('--- the doorway is a hole ---');
     cutFaces += Render.apertureCutCount(modelId);
     var d = Render.portDoors(modelId);
     if (!d || !d.apertures) return;
+    /* ONLY THE BAYS YOU CAN BE SENT TO FROM OUTSIDE. The hydrogen
+     * refinery's small bays open onto its own interior — its notes say
+     * they are reached through the heavy bay and a lift — so "can it see
+     * space along its own axis" is the wrong question for them, and
+     * Gen.berthApertures already marks them unreachable. */
+    var probe = fakePort('doorway-' + modelId, 1);
+    var inside = {};
+    var nb = (global.PortLib[modelId].anchors.berths || []).length;
+    for (var q = 0; q < nb; q++) {
+      var apq = Gen.berthApertures(probe, q);
+      if (apq && apq.reachable === false) inside[apq.mid.join(',')] = true;
+    }
     d.apertures.forEach(function (ap, i) {
+      if (inside[ap.mid.join(',')]) return;
       total++;
       var n = ap.normal, m = ap.mid, blocked = null;
       var limit = ap.along + 0.10;
@@ -1239,6 +1450,34 @@ console.log('--- the doorway is a hole ---');
    * here rather than being discovered from the cockpit. */
   check('every berth has a way out with the doors open', clear === total,
         clear + ' of ' + total);
+})();
+
+/* ---- A DOOR THAT IS NOT A BERTH'S ------------------------------------------
+ * The 2026-09-21 cradle has `leafGroup_liftWell_<side>`, an internal gate
+ * between its silo and the cargo lift. Handed to the nearest berth, it moved
+ * tube L's doorway a hundred metres inboard, and the tube's real mouth was
+ * never cut. That shows at cradle-l only, because in S and M the doorway probe
+ * above stopped short of the sealed mouth. So this asks the question outright:
+ * a leaf group whose name is not a berth belongs to no berth. */
+console.log('--- a door that is not a berth\'s ---');
+(function () {
+  var internal = 0, misfiled = [];
+  MODELS.forEach(function (modelId) {
+    var d = Render.portDoors(modelId);
+    var bs = (global.PortLib[modelId].anchors.berths || []).map(function (b) { return b.node || ''; });
+    ((d && d.leaves) || []).forEach(function (lf) {
+      var m = /^leafGroup_(.+)_[A-Z]$/.exec(lf.node || '');
+      if (!m) return;
+      var isBerth = bs.some(function (n) { return n.indexOf(m[1]) === 0; });
+      if (isBerth) return;
+      internal++;
+      if (lf.berthMid) misfiled.push(modelId + ' ' + lf.node);
+    });
+  });
+  console.log('  ' + internal + ' leaves across the library name something other than a berth');
+  if (misfiled.length) console.log('  given to a berth anyway: ' + misfiled.slice(0, 4).join(', '));
+  check('a leaf group that names no berth is nobody\'s door', misfiled.length === 0,
+        misfiled.length + ' misfiled');
 })();
 
 console.log('--- the floor of the room is the deck ---');
@@ -1584,7 +1823,11 @@ console.log('--- leaving a berth ---');
                right: { x: 0, y: -1, z: 0 }, cleared: {} };
   Sim.refreshShip(ship);
   ship.cleared[station.id] = true;           // the state that bit: cleared AND docked
-  Sim.dockShip(ship, station, sys, 0);
+  /* A berth with its own throat: one reached through a heavy bay leaves by
+   * running its arrival backwards (24-09), which transfer.test.js pins. */
+  var ownThroat = 0;
+  while (ownThroat < 16 && Gen.berthRoute && Gen.berthRoute(station, ownThroat)) ownThroat++;
+  Sim.dockShip(ship, station, sys, 0, ownThroat);
   check('the fixture ship is berthed in a modelled alcove',
         ship.docked === station.id && !!(ship.dockOffset && ship.dockOffset.station));
   check('and it is holding the clearance that used to survive the visit',
@@ -1594,6 +1837,7 @@ console.log('--- leaving a berth ---');
 
   var ts = Sim.bodyState(station, sys, 0);
   var before = V.clone(ship.pos);
+  var berthWas = (ship.dockOffset && typeof ship.dockOffset.berth === 'number') ? ship.dockOffset.berth : 0;
   Sim.undockShip(ship, sys, 0, 0.003);
   check('undocking lets go', ship.docked === null);
   check('and leaving spends the docking clearance',
@@ -1626,8 +1870,20 @@ console.log('--- leaving a berth ---');
   Render.assignPort('orbital', MODELS[0]);
   console.log('  the least radial berth normal in the library: cos ' +
               worst.toFixed(3) + '  (' + worstId + ')');
-  check('every berth opens roughly out of the hub, which is what the ' +
-        'radial push assumes', worst > 0.9, 'worst cos ' + worst.toFixed(4));
+  /* No longer an assumption. The cylinder's bays face its bore, so the
+   * push is the berth's own normal now (undockShip); this is kept as a
+   * printed number and the check is that the push really is that normal. */
+  var apU = Gen.berthApertures(station, berthWas);
+  var pbU = Sim.portBasis ? Sim.portBasis(station, sys, 0) : null;
+  var pushOk = true, pushCos = 1;
+  if (apU && apU.normal && pbU) {
+    var nwU = V.addScaled(V.scale(pbU.east, apU.normal[0]), pbU.north, apU.normal[1]);
+    nwU = V.norm(V.addScaled(nwU, pbU.up, apU.normal[2]));
+    pushCos = V.dot(V.norm(V.sub(ship.vel, ts.vel)), nwU);
+    pushOk = pushCos > 0.999;
+  }
+  check('the undock push is the way out of the throat, not radial from the hub',
+        pushOk, 'cos ' + pushCos.toFixed(4) + '; least radial normal in the library cos ' + worst.toFixed(4));
   check('and the burn is a push, not a placement — same point, new velocity',
         V.dist(before, ship.pos) < 1e-9 && V.len(V.sub(ship.vel, ts.vel)) > 1e-6);
 

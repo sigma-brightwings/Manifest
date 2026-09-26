@@ -186,13 +186,60 @@
    *
    * ORDER MATTERS AND IT IS PEOPLE FIRST. A captain who cannot cover
    * everything pays the deck under his own feet, then the decks he left
-   * behind, then the harbour master. A crew that cannot be paid walks off
-   * where it stands; a clamp that goes unpaid runs up arrears, and when the
+   * behind, then the harbour master. A crew that is not paid keeps working
+   * for up to a week on credit (Astra, 2026-09-21: "crew will work for up
+   * to the end of one week, after that without payment, they're done") and
+   * walks off once the oldest unpaid day is more than a week old; a clamp
+   * that goes unpaid runs up arrears, and when the
    * arrears pass what the hull is worth the harbour master sells her
    * against the debt. That is the only rule here that can take a ship away,
    * and on a Talon it takes fifteen unpaid weeks to do it — which is a
    * dozen ledger lines of warning first.
    */
+  /* ---- a week's grace on the payroll --------------------------------------
+   *
+   * Pays as many whole days as the purse covers, OLDEST FIRST, and leaves
+   * the clock on the first day nobody was paid for. So the grace is
+   * measured from the right place: a captain who can cover four days of
+   * ten has bought four days, and the crew's week of patience starts from
+   * the end of what was actually paid, not from the last time he docked.
+   *
+   * Back pay is still owed while they wait — the clock does not move past
+   * an unpaid day — so a captain who comes good on day six pays all six.
+   * Past the week they go, and what they were owed goes with them: the
+   * clock restarts at `t`, so the next hand signed on does not inherit it.
+   *
+   * Settled at a desk like everything else here, so a crew whose week ran
+   * out in deep space is found gone at the next dock rather than stepping
+   * out of an airlock in transit. */
+  var WAGE_GRACE = 7 * 86400;
+
+  function payCrew(Crew, crew, from, t, credits) {
+    var DAY = Crew.WAGE_DAY;
+    var days = Math.floor(((t - from) || 0) / DAY);
+    if (!(days > 0)) return { cr: 0, days: 0, paidTo: from, unpaid: 0, gone: false };
+    var perDay = 0, list = crew || [];
+    for (var i = 0; i < list.length; i++) perDay += Crew.dailyWage(list[i]);
+    if (!(perDay > 0)) return { cr: 0, days: 0, paidTo: from + days * DAY, unpaid: 0, gone: false };
+    var can = Math.min(days, Math.floor(Math.max(0, credits) / perDay));
+    var paidTo = from + can * DAY;
+    /* Whole unpaid days, so "the end of one week" is the end of day seven:
+     * seven days on credit are worked, the eighth is not. */
+    var gone = (days - can) * DAY > WAGE_GRACE;
+    return {
+      cr: Math.round(perDay * can), days: can,
+      paidTo: gone ? t : paidTo,
+      unpaid: days - can,
+      gone: gone
+    };
+  }
+
+  function graceLeft(unpaidDays) {
+    var left = 7 - unpaidDays;
+    return left <= 0 ? 'their week is up — they walk at the next desk'
+         : left + (left === 1 ? ' day' : ' days') + ' before they walk';
+  }
+
   function settle(G, t) {
     var Crew = global.Crew;
     var s = G.ship, lines = [];
@@ -202,17 +249,19 @@
      * begins paid up rather than a decade in arrears. */
     if (s.wagesTo == null) s.wagesTo = t;
 
-    var mine = Crew.payrollDue(Crew.aboard(s), s.wagesTo, t);
+    var aboard = Crew.aboard(s);
+    var mine = payCrew(Crew, aboard, s.wagesTo, t, s.credits);
     s.wagesTo = mine.paidTo;
     if (mine.cr > 0) {
-      if (s.credits >= mine.cr) {
-        s.credits -= mine.cr;
-        lines.push('Wages ' + mine.cr + ' cr  ·  ' + mine.days + ' d, ' +
-                   Crew.aboard(s).length + ' aboard');
-      } else {
-        lines.push('COULD NOT MAKE PAYROLL — your crew take their kit and go');
-        s.crew = [];
-      }
+      s.credits -= mine.cr;
+      lines.push('Wages ' + mine.cr + ' cr  ·  ' + mine.days + ' d, ' +
+                 aboard.length + ' aboard');
+    }
+    if (mine.gone) {
+      lines.push('A WEEK WITHOUT PAY — your crew take their kit and go');
+      s.crew = [];
+    } else if (mine.unpaid > 0) {
+      lines.push('PAYROLL SHORT — ' + mine.unpaid + ' d unpaid, ' + graceLeft(mine.unpaid));
     }
 
     var fleet = list(G).slice();
@@ -221,16 +270,18 @@
       if (rec.wagesTo == null) rec.wagesTo = t;
       if (rec.berthTo == null) rec.berthTo = t;
 
-      var pay = Crew.payrollDue(rec.crew || [], rec.wagesTo, t);
+      var pay = payCrew(Crew, rec.crew || [], rec.wagesTo, t, s.credits);
       rec.wagesTo = pay.paidTo;
       if (pay.cr > 0) {
-        if (s.credits >= pay.cr) {
-          s.credits -= pay.cr;
-          lines.push('Wages ' + pay.cr + ' cr  ·  ' + rec.name);
-        } else {
-          lines.push(rec.name + "'s crew paid themselves off and left her");
-          rec.crew = [];
-        }
+        s.credits -= pay.cr;
+        lines.push('Wages ' + pay.cr + ' cr  ·  ' + rec.name);
+      }
+      if (pay.gone) {
+        lines.push(rec.name + "'s crew went a week unpaid and left her");
+        rec.crew = [];
+      } else if (pay.unpaid > 0) {
+        lines.push(rec.name + ' payroll short — ' + pay.unpaid + ' d unpaid, ' +
+                   graceLeft(pay.unpaid));
       }
 
       /* A ship under way is not on anybody's clamp. Her berth clock is

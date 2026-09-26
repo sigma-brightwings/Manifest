@@ -523,6 +523,26 @@
     merc: 'enforcer-l',
     /* A pirate wants speed more than it wants a gun platform. */
     pirate: 'runner-m',
+    /* THE SYNDICATE'S OWN, 2026-09-24. Astra: "give the syndicate all ships
+     * with the addition of enforcer-* and enforcer_heavy-*. Syndicate is
+     * mafia. Pirates are like their disposable muscle."
+     *
+     * These are HULL keys, not ship classes. Nothing flies as `enforcer`:
+     * a Syndicate enforcer is a `police`-kind patrol under the outlaw flag
+     * (the mob's enforcement wing, which already carries SYNDICATE_GUN) and
+     * it names this key as its `hullClass`. Keeping the kind means every
+     * rule written for a patrol — who answers a distress call, who spoils a
+     * robbery, who scans your hold for the waste the Syndicate bans — keeps
+     * applying without a second copy. The hull is the only thing that
+     * changes, so the hull is the only thing that is keyed differently.
+     *
+     * `merc` above also flies the enforcer family (L), and that is left
+     * alone on purpose: per the three-lights livery scheme the paint says
+     * nothing about who a ship answers to — light 3 does. Hired muscle and
+     * the mob's own muscle buying the same hull from the same yard is
+     * exactly what you would expect. */
+    enforcer: 'enforcer-m',
+    enforcer_heavy: 'enforcer_heavy-m',
     liner: 'liner-m',
     /* THE BULK CARRIER IS A FREIGHTER, NOT A WARSHIP. This briefly flew as
      * carrier-l, which was wrong by a day: Astra — "the navy runs the
@@ -579,9 +599,10 @@
    * DELIBERATELY UNASSIGNED, listed here so they read as waiting rather
    * than as missing:
    *
-   *   enforcer_heavy-*  the one the syndicate sends. There is no class yet
-   *       that means "the bad one"; the mafia/pirate split is agreed and
-   *       unbuilt, and this is the hull it will want.
+   *   enforcer_heavy-*  ASSIGNED 2026-09-24, as a hull key rather than a
+   *       class: the Syndicate's heavy (see HULL_ASSIGN.enforcer_heavy and
+   *       buildSyndicateHeavies in generate.js). Left listed here so the
+   *       history of why it waited stays next to the others still waiting.
    *   carrier-*         big and military, but the navy already fields a
    *       cutter and the capital is still the thing you run from. A third
    *       heavy hull needs a role before it needs an assignment.
@@ -631,6 +652,13 @@
         return { role: p.role, pivot: p.pivot, axis: p.axis, stow: p.stow, mesh: pm };
       });
     }
+    /* One entry per engineGlow node in the model, so a three-engine hull
+     * draws three plumes. nozzlesOf prefers these over its rear-face guess. */
+    if (src.engines && src.engines.length) {
+      mesh.engines = src.engines.map(function (e) {
+        return { x: e[0], y: e[1], z: e[2], r: e[3] };
+      });
+    }
     LIB_CACHE[id] = mesh;
     return mesh;
   }
@@ -668,13 +696,27 @@
     if (!lib || !role || !lib[role]) return null;
     if (PORT_CACHE[role]) return PORT_CACHE[role];
     var src = lib[role];
+    /* LAZY GEOMETRY (2026-09-22). ports.js is now an index: anchors, geom
+     * and extras for every model, and `lazy: true` until the triangles are
+     * fetched from src/ports/<id>.js. Asking for the model is what fetches
+     * it. In node and wherever a synchronous read is allowed the answer is
+     * immediate; otherwise this returns null — the procedural mesh draws —
+     * until PortGeo's onload fires portGeometryArrived below. */
+    if (src.lazy) {
+      if (!global.PortGeo || !global.PortGeo.load(role)) return null;
+      src = lib[role];
+    }
     var out = {
       kind: src.kind,
       shell: decompress(src),
       interior: src.interior ? decompress(src.interior) : null,
       spin: src.spin ? decompress(src.spin) : null,
       anchors: src.anchors || null,
-      geom: src.geom || null
+      geom: src.geom || null,
+      /* The ground sites' entrances and the cargo-elevator volumes
+       * (2026-09-24), carried through as the converter wrote them. */
+      entrances: src.entrances || null,
+      carriers: src.carriers || null
     };
     PORT_CACHE[role] = out;
     return out;
@@ -704,6 +746,41 @@
      * library while the game runs has to drop them too — otherwise the new
      * models are drawn and the old ones are what you collide with. */
     SOLIDITY = {};
+  }
+
+  /* ONE MODEL'S GEOMETRY ARRIVED LATE (the async path of PortGeo), so every
+   * cache that remembered "no model here" for it must forget. Keyed caches
+   * in this file spell their keys as the model id, or the id followed by a
+   * separator and a qualifier — so an id is matched exactly or up to a
+   * character that cannot be part of an id, and `ring-m` never clears
+   * `ring-classic-m`. The whole-library tables (the mesh table, the pools)
+   * are cheap to rebuild and are simply dropped. */
+  function portGeometryArrived(id) {
+    var own = function (key) {
+      if (key === id) return true;
+      if (key.indexOf(id) !== 0) return false;
+      return !/[a-z0-9-]/i.test(key.charAt(id.length));
+    };
+    [PORT_CACHE, SOLIDITY, PORT_DOORS, INTERIOR_BOUNDS, CUT_COUNT, OPEN_BUCKET,
+     SECTIONS, DRESS, ADSET, BOOM, DECK, TRIDEX, LEAF_BOUNDS, SHELL_MESHES].forEach(function (c) {
+      if (!c) return;
+      Object.keys(c).forEach(function (k) { if (own(k)) delete c[k]; });
+    });
+    STATION_MESHES = null;
+    if (global.Gen && global.Gen.forgetPortModel) global.Gen.forgetPortModel(id);
+  }
+  if (global.PortGeo && global.PortGeo.onload) global.PortGeo.onload(portGeometryArrived);
+
+  /* Fetch every model a system's ports will wear, up front. Called when a
+   * system is entered, so the reads happen while the jump tunnel is still
+   * on screen rather than as each station first comes into view. */
+  function prefetchPorts(sys) {
+    if (!global.PortGeo || !sys || !sys.ports) return 0;
+    var want = {};
+    sys.ports.forEach(function (p) { var id = portModelFor(p); if (id) want[id] = true; });
+    var ids = Object.keys(want).filter(function (id) { return global.PortLib && global.PortLib[id]; });
+    global.PortGeo.prefetch(ids);
+    return ids.length;
   }
 
   /* ---- which model a port wears, and it is ONE rule ----------------------
@@ -862,9 +939,132 @@
   var POOL_CACHE = null;
   var SIZE_SUFFIX = /-(s|m|l)$/i;
 
-  /* One of three, and only three things behave differently. */
+  /* One of three, and only three things behave differently. A farm and a
+   * runway port are both a building on the ground, so they size as a bay. */
   function portClass(role) {
-    return role === 'bay' ? 'bay' : (role === 'underground' ? 'underground' : 'orbital');
+    if (role === 'bay' || role === 'farm' || String(role).indexOf('runway-') === 0) return 'bay';
+    return role === 'underground' ? 'underground' : 'orbital';
+  }
+
+  /* ---- THE 22-09 SET: patterns per role, and three liveries ---------------
+   * Astra, 2026-09-22: skimmer stations and hydrogen refineries in orbit of
+   * the gas giants; farms on the ground; runway ports on ice worlds; and
+   * everything in civilian, navy and Syndicate dress.
+   *
+   * A table rather than a naming rule, the same as PORT_PATTERNS, because
+   * the art does not divide the way the prefixes do: a refinery role wants
+   * two kinds of building, the ordinary orbital roles want eight, and the
+   * shipyard wants the yards and nothing else. A stem is named by its
+   * CIVILIAN id; the livery is a suffix on it (`ring-classic-navy-m`).
+   *
+   * Only stems actually present in the library count, so a fixture library
+   * in a test, or a folder with half the art, falls straight through to the
+   * older rules below exactly as before. `spine-v2` is deliberately absent:
+   * its berths are a new door dialect the converter does not read yet, and
+   * a station you cannot berth at is not one to hand out. */
+  /* The new designs only. The -classic stations are not in the library any
+   * more (Astra, 24-09: "use the navy and syndicate pre-existing stations
+   * as a template for the skins, but don't use them in game as a place you
+   * land") — they live in ref/port-art/livery-templates, and
+   * tools/skin-liveries.cjs dresses these four in their navy and Syndicate
+   * colours as <pattern>-navy-* and <pattern>-syn-*. */
+  var ORBITAL_PATTERNS = ['cylinder', 'spine', 'ring', 'cradle'];
+  var ROLE_PATTERNS = {
+    orbital: ORBITAL_PATTERNS, highport: ORBITAL_PATTERNS, agri: ORBITAL_PATTERNS,
+    mining: ORBITAL_PATTERNS, reprocessing: ORBITAL_PATTERNS, milfuel: ORBITAL_PATTERNS,
+    refinery: ['refinery', 'skimmer'],
+    'plant-skimmer': ['skimmer'], 'plant-refinery': ['refinery'],
+    shipyard: ['yard'],
+    /* THE GROUND SITES (Astra, 24-09: "Pad and Mountain and Mountain pad
+     * and city are all ground stations ... the bays live underground").
+     * They replace the old city-port, which is retired. */
+    bay: ['pad-site', 'mountain-site', 'runway-site', 'pad-city-site', 'runway-city-site'],
+    farm: ['farm'],
+    /* The hooks for the runway ports being made now. Until a runway-*-<size>
+     * file is in ref/ports these match nothing and the city port stands in. */
+    'runway-refi': ['runway-refi'], 'runway-indu': ['runway-indu'], 'runway-pass': ['runway-pass'],
+    /* Comet outposts: a hangar cut into ice, so only where the rock is ice. */
+    underground: ['comet']
+  };
+  var LIVERY_SUFFIX = { civ: '', navy: '-navy', syn: '-syn' };
+  var ICY_HOSTS = { iceball: true, tundra: true };
+
+  /* MODELS IN THE LIBRARY THAT ARE NOT HANDED OUT, and why. Converted, so
+   * the viewer and the tests can see them, but no port wears one until the
+   * art is fixed: berths.test measures every model a port can be given, and
+   * these are the ones it caught on 2026-09-22. A size held back falls to
+   * the next size of the same building; a whole stem held back is simply
+   * not in the draw. Remove a line when its art is re-exported and passes. */
+  var PORT_HELD_BACK = {};
+
+  function stemPresent(stem) {
+    var lib = global.PortLib || {};
+    return ['', '-s', '-m', '-l'].some(function (z) {
+      return !!lib[stem + z] && !PORT_HELD_BACK[stem + z];
+    });
+  }
+
+  /* sizedModel, skipping what is held back. */
+  function usableModel(stem, size) {
+    var lib = global.PortLib || {};
+    var order = [size, 'm', 'l', 's'];
+    for (var i = 0; i < order.length; i++) {
+      var id = stem + '-' + order[i];
+      if (lib[id] && !PORT_HELD_BACK[id]) return id;
+    }
+    return (lib[stem] && !PORT_HELD_BACK[stem]) ? stem : null;
+  }
+
+  /* Which livery this port's building wears. The crop decides a farm's
+   * (gold buds are the Syndicate's, whoever holds the sky); everything else
+   * reads the livery generate.js stamped. */
+  function portLivery(station) {
+    if (station && station.crop === 'gold') return 'syn';
+    var l = station && station.livery;
+    if (station && station.crop === 'grape' && l === 'syn') return 'civ';
+    return LIVERY_SUFFIX[l] !== undefined ? l : 'civ';
+  }
+
+  /* What kind of site this is, for the table above — finer than portRole,
+   * which stays the three-way answer everything else keys on. */
+  function portSite(station, role) {
+    if (role === 'bay' && station && station.siteKind) return station.siteKind;
+    /* Over a giant the plant is stamped (generate.js stampLiveries), not
+     * hashed here: the economy reads the same answer, so a skimmer's market
+     * is hydrogen and its building is a skimmer. */
+    if (role === 'refinery' && station && station.plant) return 'plant-' + station.plant;
+    /* A milfuel factory promoted out of a giant's refinery is still that
+     * refinery — pressing slugs is what the navy and Syndicate ones do. */
+    var host = station && station.parentBody;
+    if (role === 'milfuel' && host && (host.type === 'gasGiant' || host.type === 'iceGiant')) return 'plant-refinery';
+    return role;
+  }
+
+  function patternModelFor(station, role, size, plain) {
+    var site = plain ? role : portSite(station, role);
+    var stems = ROLE_PATTERNS[site];
+    if (site === 'underground') {
+      var host = station && station.parentBody;
+      if (!host || !ICY_HOSTS[host.type]) stems = null;
+    }
+    var civ = (stems || []).filter(stemPresent);
+    /* The ice-world runway ports, until their own art is in: the ground
+     * runway sites are the same kind of building, so they stand in before
+     * the rest of the ground pool does. */
+    if (!civ.length && String(site).indexOf('runway-') === 0) {
+      civ = ['runway-site', 'runway-city-site'].filter(stemPresent);
+    }
+    if (!civ.length) {
+      /* A site whose art is not in yet (the runways) stands in with the
+       * ordinary ground port rather than the procedural one. */
+      if (site !== role) return patternModelFor(station, role, size, true);
+      return null;
+    }
+    var suf = LIVERY_SUFFIX[portLivery(station)];
+    var dressed = suf ? civ.filter(function (s) { return stemPresent(s + suf); }) : [];
+    var list = dressed.length ? dressed : civ;
+    var stem = pick(list, station, site) + (dressed.length ? suf : '');
+    return usableModel(stem, size) || stem;
   }
 
   function portSizeFor(station, role) {
@@ -939,6 +1139,23 @@
      * answer here is simply its own name. */
     if (role === 'carrier') return role;
 
+    /* THE MILFUEL FACTORY IS ONE BUILDING (Astra, 2026-09-25: "This will
+     * be a Navy refinery structure, size L."). Not pooled, not sized by
+     * population: every factory is the large navy refinery, because what
+     * the building says on approach — the navy presses its drive fuel here
+     * — is the information, and a factory that drew a cradle out of the
+     * pool said nothing. In a Syndicate hold, where the licence is theirs,
+     * the same structure in their colours; the navy's paint on a mob
+     * factory would be a lie the lights then have to correct.
+     *
+     * Only when the art is in the library, so a fixture library or a bare
+     * run falls through to the rules below exactly as before. */
+    if (role === 'milfuel') {
+      var mf = usableModel(portLivery(station) === 'syn' ? 'refinery-syn' : 'refinery-navy', 'l') ||
+               usableModel('refinery-navy', 'l');
+      if (mf) return mf;
+    }
+
     /* An explicit assignment wins, and is still size-aware: assign a role a
      * list of STEMS and each port gets the right size of the one it drew. */
     var list = PORT_ASSIGN[role];
@@ -946,6 +1163,11 @@
       var chosen = pick(list, station, role);
       return sizedModel(chosen, size) || chosen;
     }
+    /* The 22-09 pattern table, livery-aware. Null when none of its art is
+     * in the library, and then the older rules below decide as they did. */
+    var patterned = patternModelFor(station, role, size);
+    if (patterned) return patterned;
+
     /* A file named for the role pins that role, which is how one-model-per-
      * role stays the zero-configuration path even once pools exist. */
     var byRole = sizedModel(role, size);
@@ -2319,8 +2541,15 @@
      * Exactly the arrangement shipMeshes uses for hulls, and for the same
      * reason: a folder with three ports modelled and seven not should give
      * you three modelled ports, not a broken sky. */
+    /* ONLY MODELS WHOSE GEOMETRY IS ALREADY HERE. Folding every id in, as
+     * this used to, would now fetch all hundred-odd models on the first
+     * frame — the very load lazy geometry exists to avoid. A model that
+     * arrives later is folded in by portGeometryArrived, and until then
+     * drawStationModel asks for it by name, which is what fetches it. */
     var ids = portIds();
     for (var pi = 0; pi < ids.length; pi++) {
+      var rawP = global.PortLib[ids[pi]];
+      if (rawP && rawP.lazy) continue;
       var got = libPort(ids[pi]);
       if (got && got.shell && got.shell.f.length) STATION_MESHES[ids[pi]] = got.shell;
     }
@@ -3259,6 +3488,15 @@
   function nozzlesOf(mesh) {
     if (!mesh || !mesh.v || !mesh.v.length) return null;
     if (mesh._nozzles !== undefined) return mesh._nozzles;
+    /* A model that names its engines is taken at its word: one plume per
+     * engineGlow, wherever it sits (a runner's outboard pods are well
+     * forward of the stern, which the rear-face scan below never sees). */
+    if (mesh.engines && mesh.engines.length) {
+      mesh._nozzles = mesh.engines.map(function (e) {
+        return { x: e.x, y: e.y, z: e.z, r: Math.max(0.006, e.r) };
+      });
+      return mesh._nozzles;
+    }
     var zmin = Infinity, i;
     for (i = 0; i < mesh.v.length; i++) if (mesh.v[i][2] < zmin) zmin = mesh.v[i][2];
     var map = {}, keys = [];
@@ -3605,21 +3843,55 @@
   var APERTURE_SLAB = 0.08;          // port radii either side of the leaf plane
   var SHELL_CUT_INSET = 0.88;        // of the clear opening — see corridorBox
 
-  /* Is this point inside one of the doorways? Component-wise rather than
-   * through a constructed basis: the berth normals in this library are
-   * axis-aligned, and a cross product would only be a second way to get
-   * the same number wrong. */
+  /* ---- A BERTH'S OWN FRAME ------------------------------------------------
+   * The two axes across a doorway, for a berth facing `n`.
+   *
+   * This used to be implicit: every berth in the library faced along a
+   * world axis, so "across the opening" meant "the other two world axes"
+   * and everything here worked component-wise. The 2026-09-21 cylinder
+   * broke that — its bays ring the bore at every bearing, so twelve berths
+   * face twelve directions and none of them is an axis. Measured: all
+   * eighteen of its leaves reported "does not move", because the slide
+   * picked among world axes that were no longer across the door.
+   *
+   * CHOSEN SO AN AXIS-ALIGNED BERTH GETS WORLD AXES BACK EXACTLY. The first
+   * axis is the world axis least aligned with n, with n taken out of it;
+   * for n = ±x that is y untouched, and the second is n × e1 = ±z. So every
+   * berth the old component-wise code handled is handled here with the
+   * same numbers, and the new ones get a real frame. */
+  function berthBasis(n0) {
+    /* The stored normal is rounded to three places, so it is a shade off
+     * unit length; normalise it or e2 inherits the error. */
+    var nl = Math.sqrt(n0[0] * n0[0] + n0[1] * n0[1] + n0[2] * n0[2]) || 1;
+    var n = [n0[0] / nl, n0[1] / nl, n0[2] / nl];
+    var ax = [Math.abs(n[0]), Math.abs(n[1]), Math.abs(n[2])];
+    var k = ax[0] <= ax[1] ? (ax[0] <= ax[2] ? 0 : 2) : (ax[1] <= ax[2] ? 1 : 2);
+    var w = [0, 0, 0]; w[k] = 1;
+    var d = n[k];
+    var e1 = [w[0] - n[0] * d, w[1] - n[1] * d, w[2] - n[2] * d];
+    var l1 = Math.sqrt(e1[0] * e1[0] + e1[1] * e1[1] + e1[2] * e1[2]) || 1;
+    e1 = [e1[0] / l1, e1[1] / l1, e1[2] / l1];
+    var e2 = [n[1] * e1[2] - n[2] * e1[1], n[2] * e1[0] - n[0] * e1[2], n[0] * e1[1] - n[1] * e1[0]];
+    /* Tidy the exact zeros back to zero, so an axis-aligned frame compares
+     * equal to the world axis it is and prints without -0 noise. */
+    for (var i = 0; i < 3; i++) {
+      if (Math.abs(e1[i]) < 1e-12) e1[i] = 0;
+      if (Math.abs(e2[i]) < 1e-12) e2[i] = 0;
+    }
+    return [e1, e2];
+  }
+  function dot3(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+
+  /* Is this point inside one of the doorways? Measured in the berth's own
+   * frame, so a doorway at any bearing is a doorway. */
   function inAperture(apertures, x, y, z) {
     for (var i = 0; i < apertures.length; i++) {
       var apr = apertures[i], n = apr.normal;
-      var along = (x - apr.mid[0]) * n[0] + (y - apr.mid[1]) * n[1] + (z - apr.mid[2]) * n[2];
-      if (Math.abs(along - apr.along) > APERTURE_SLAB) continue;
-      var c = [x, y, z], out = false;
-      for (var k = 0; k < 3 && !out; k++) {
-        if (apr.half[k] === null) continue;
-        if (Math.abs(c[k] - apr.mid[k]) > apr.half[k]) out = true;
-      }
-      if (!out) return true;
+      var d = [x - apr.mid[0], y - apr.mid[1], z - apr.mid[2]];
+      if (Math.abs(dot3(d, n) - apr.along) > APERTURE_SLAB) continue;
+      var B = apr.basis, H = apr.hb;
+      if (Math.abs(dot3(d, B[0])) > H[0] || Math.abs(dot3(d, B[1])) > H[1]) continue;
+      return true;
     }
     return false;
   }
@@ -3664,32 +3936,28 @@
    * that same cross-section, and a full-depth cut there deleted five
    * thousand faces a model and took the room away to open the door. The
    * berth would have been flyable and no longer a place. */
+  /* An ORIENTED box now, in the berth's own frame (see berthBasis): H is
+   * the half-extent along e1, e2 and the normal, B those three axes. For
+   * an axis-aligned berth B is three world axes and this is the box it
+   * always was. */
   function corridorBox(ap, full) {
-    var n = ap.normal, C = [0, 0, 0], H = [0, 0, 0];
-    for (var k = 0; k < 3; k++) {
-      if (Math.abs(n[k]) > 0.5) {
-        if (full) {
-          var L = ap.along + APERTURE_SLAB;
-          C[k] = ap.mid[k] + n[k] * L / 2;
-          H[k] = L / 2;
-        } else {
-          C[k] = ap.mid[k] + n[k] * ap.along;
-          H[k] = APERTURE_SLAB;
-        }
-      } else {
-        C[k] = ap.mid[k];
-        H[k] = ap.half[k] || 0;
-        /* A SHADE INSIDE THE CLEAR OPENING on the shell, and measured
-         * rather than picked: at the full width the triangle test also
-         * takes every jamb face that leans into the doorway and the cut
-         * runs to 24,500 faces; at 0.88 it is 15,200 and all forty-eight
-         * berths are still open. The difference is the door FRAME, which
-         * is not in anybody's way — the opening is hundreds of metres and
-         * the ship is twenty-five. */
-        if (!full) H[k] *= SHELL_CUT_INSET;
-      }
+    var n = ap.normal, B = [ap.basis[0], ap.basis[1], n];
+    var depth, hn;
+    if (full) {
+      var L = ap.along + APERTURE_SLAB;
+      depth = L / 2; hn = L / 2;
+    } else {
+      depth = ap.along; hn = APERTURE_SLAB;
     }
-    return { C: C, H: H };
+    var C = [ap.mid[0] + n[0] * depth, ap.mid[1] + n[1] * depth, ap.mid[2] + n[2] * depth];
+    /* A SHADE INSIDE THE CLEAR OPENING on the shell, and measured rather
+     * than picked: at the full width the triangle test also takes every
+     * jamb face that leans into the doorway and the cut runs to 24,500
+     * faces; at 0.88 it is 15,200 and all forty-eight berths are still
+     * open. The difference is the door FRAME, which is not in anybody's
+     * way — the opening is hundreds of metres and the ship is twenty-five. */
+    var k = full ? 1 : SHELL_CUT_INSET;
+    return { C: C, H: [ap.hb[0] * k, ap.hb[1] * k, hn], B: B };
   }
 
   function corridorBoxes(apertures, full) {
@@ -3700,10 +3968,16 @@
 
   /* Triangle against an axis-aligned box, by separating axis. Nine
    * edge-cross-axis tests, three box axes, one triangle normal. */
-  function triBox(a, b, c, C, H) {
+  function triBox(a, b, c, C, H, B) {
     var v0 = [a[0] - C[0], a[1] - C[1], a[2] - C[2]];
     var v1 = [b[0] - C[0], b[1] - C[1], b[2] - C[2]];
     var v2 = [c[0] - C[0], c[1] - C[1], c[2] - C[2]];
+    /* Into the box's own frame, where it IS axis-aligned. */
+    if (B) {
+      v0 = [dot3(v0, B[0]), dot3(v0, B[1]), dot3(v0, B[2])];
+      v1 = [dot3(v1, B[0]), dot3(v1, B[1]), dot3(v1, B[2])];
+      v2 = [dot3(v2, B[0]), dot3(v2, B[1]), dot3(v2, B[2])];
+    }
     var e = [[v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]],
              [v2[0] - v1[0], v2[1] - v1[1], v2[2] - v1[2]],
              [v0[0] - v2[0], v0[1] - v2[1], v0[2] - v2[2]]];
@@ -3738,7 +4012,7 @@
       var a = verts[face[0]], b = verts[face[j]], c = verts[face[j + 1]];
       if (!a || !b || !c) continue;
       for (var i = 0; i < boxes.length; i++) {
-        if (triBox(a, b, c, boxes[i].C, boxes[i].H)) return true;
+        if (triBox(a, b, c, boxes[i].C, boxes[i].H, boxes[i].B)) return true;
       }
     }
     return false;
@@ -3857,16 +4131,48 @@
       if (!leaves[j].f.length) continue;
       var box = boxes[j];
       var data = ex[box.node] || {};
-      var field = !!data.fieldGate;
+      /* The older exports tag a field panel in its extras; the newer ones
+       * only name it, and tag the BERTH instead (`berthKind: 'field'`). The
+       * name is the one thing both agree on. */
+      /* A yard garage's slats roll up out of sight (24-09): nothing here
+       * animates a roll, so like a field a slat is there while the door is
+       * shut and gone once it opens, rather than sliding through the frame. */
+      var field = !!data.fieldGate || /ForceField$|Slat\d+$/i.test(box.node || '');
 
       /* WHICH BERTH THIS LEAF BELONGS TO, and therefore what it opens away
        * from: the nearest berth anchor. Named matching would be wrong here
        * for the same reason it is wrong in berthApertures — a ring mirrors
        * its patterns and two alcoves answer to the same prefix. */
       var berth = null, bd = Infinity;
-      if (berths) {
-        for (var bi = 0; bi < berths.length; bi++) {
-          var bb2 = berths[bi];
+      /* BY NAME FIRST, WHEN THE NAME IS A PROMISE. A leaf group is called
+       * `leafGroup_<berth>_<side>`, which names its berth outright — and it
+       * has to be used, because nearest-centre is wrong for the cylinder:
+       * its bays ring the bore a few degrees apart and an open leaf sits
+       * nearer the NEXT bay's centre than its own. Measured, 36 of its 60
+       * leaves were given to a neighbour and slid across that neighbour's
+       * doorway. The warning above about mirrored rings still stands, so
+       * the name only narrows the candidates; the nearest of those wins. */
+      var tagM = /^leafGroup_(.+)_[A-Z]$/.exec(box.node || '');
+      var named = null;
+      if (tagM && berths) {
+        named = berths.filter(function (b) {
+          return b && b.node && b.node.indexOf(tagM[1]) === 0 &&
+                 /^(Throat(Floor|Roof|WallL|WallR|Back)?)?$/.test(b.node.slice(tagM[1].length));
+        });
+        if (!named.length) named = null;
+      }
+      /* A NAME THAT IS NOT A BERTH'S is not a berth's door. The 2026-09-21
+       * cradle has `leafGroup_liftWell_<side>`, the gate between its silo
+       * and the lift that takes cargo down (dockSequence: "liftWell gate
+       * opens"). Given to the nearest berth, which was tube L, those two
+       * leaves put that tube's doorway a hundred metres inside the station
+       * and left the tube's real mouth shut. An internal door slides apart
+       * from its own partner instead; see `internal` below. */
+      var internal = !!(tagM && berths && !named);
+      var cands = internal ? null : (named || berths);
+      if (cands) {
+        for (var bi = 0; bi < cands.length; bi++) {
+          var bb2 = cands[bi];
           if (!bb2 || !bb2.mid) continue;
           var ddx = bb2.mid[0] - box.mid[0], ddy = bb2.mid[1] - box.mid[1],
               ddz = bb2.mid[2] - box.mid[2];
@@ -3876,23 +4182,61 @@
       }
 
       var axis = [0, 0, 0], travel = 0;
-      if (!field && berth) {
-        /* The two axes across the opening are the ones the berth does not
-         * open along. The leaf slides along whichever of them it is offset
-         * on, away from the berth's centreline, until its inner edge
-         * reaches that line. */
-        var n = berth.normal || [0, 0, 0];
-        var pick = -1, best2 = 0;
-        for (var ax = 0; ax < 3; ax++) {
-          if (Math.abs(n[ax]) > 0.5) continue;          // that is the way IN
-          var off = box.mid[ax] - berth.mid[ax];
-          if (Math.abs(off) > best2) { best2 = Math.abs(off); pick = ax; }
+      if (internal && !field) {
+        /* Away from the middle of the pair: the other leaves carrying the
+         * same tag. One leaf alone has nothing to part from and stays put. */
+        var pm = [0, 0, 0], pn = 0;
+        for (var pj = 0; pj < boxes.length; pj++) {
+          var tq = /^leafGroup_(.+)_[A-Z]$/.exec(boxes[pj].node || '');
+          if (tq && tq[1] === tagM[1] && boxes[pj].mid) {
+            pm[0] += boxes[pj].mid[0]; pm[1] += boxes[pj].mid[1]; pm[2] += boxes[pj].mid[2]; pn++;
+          }
         }
-        if (pick >= 0 && best2 > 1e-4) {
-          var sign = (box.mid[pick] - berth.mid[pick]) > 0 ? 1 : -1;
-          var inner = sign > 0 ? box.min[pick] : box.max[pick];
-          travel = Math.abs(inner - berth.mid[pick]);
-          axis[pick] = sign;
+        if (pn > 1) {
+          var ofs = [box.mid[0] - pm[0] / pn, box.mid[1] - pm[1] / pn, box.mid[2] - pm[2] / pn];
+          var ol = Math.sqrt(dot3(ofs, ofs));
+          if (ol > 1e-6) {
+            axis = [ofs[0] / ol, ofs[1] / ol, ofs[2] / ol];
+            travel = (typeof box.travel === 'number' && box.travel > 0) ? box.travel : ol;
+          }
+        }
+      }
+      if (!field && !internal && berth && berth.normal) {
+        /* The two axes across the opening are the berth's own (berthBasis).
+         * The leaf slides along whichever of them it is offset on, away
+         * from the berth's centreline, until its inner edge reaches that
+         * line — the inner edge being the leaf's nearest point to the line,
+         * measured over its own vertices so a leaf at a bearing measures
+         * the same as one on an axis. */
+        var bb = berthBasis(berth.normal);
+        var off0 = [box.mid[0] - berth.mid[0], box.mid[1] - berth.mid[1], box.mid[2] - berth.mid[2]];
+        var c0 = dot3(off0, bb[0]), c1 = dot3(off0, bb[1]);
+        var useE = Math.abs(c0) >= Math.abs(c1) ? 0 : 1;
+        var cOff = useE === 0 ? c0 : c1;
+        if (Math.abs(cOff) > 1e-4) {
+          var sgn = cOff > 0 ? 1 : -1;
+          var e = bb[useE];
+          axis = [e[0] * sgn, e[1] * sgn, e[2] * sgn];
+          var innerD = Infinity, lv = leaves[j].f;
+          for (var fq = 0; fq < lv.length; fq++) {
+            for (var fk = 0; fk < lv[fq].length; fk++) {
+              var pv = shell.v[lv[fq][fk]];
+              var dq = (pv[0] - berth.mid[0]) * axis[0] + (pv[1] - berth.mid[1]) * axis[1] +
+                       (pv[2] - berth.mid[2]) * axis[2];
+              if (dq < innerD) innerD = dq;
+            }
+          }
+          travel = isFinite(innerD) ? Math.abs(innerD) : 0;
+          /* THE ART'S OWN TRAVEL WINS when it declares one. The newer station
+           * builder writes each leaf's travel into its group (`doorLeaf`),
+           * and its lap doors do not sit where the measurement above
+           * assumes: stowed, a lapped leaf still overhangs the opening by
+           * its lap, so inner-edge-to-centreline reads short — measured,
+           * the cylinder's leaves moved 0.031 radii where the builder moves
+           * them 0.036, and an open door still covered a strip of doorway. */
+          if (typeof box.travel === 'number' && box.travel > 0) travel = box.travel;
+          /* Exact zeros stay zero: an axis-aligned slide is one component. */
+          for (var az = 0; az < 3; az++) if (Math.abs(axis[az]) < 1e-12) axis[az] = 0;
         }
       }
 
@@ -3959,7 +4303,8 @@
          * gets the same rule: a leaf that slides on it gives the clear
          * half-extent as its own `travel`, and an axis nothing slides on
          * takes the leaves' own reach. */
-        var half = [0, 0, 0], reach = [0, 0, 0], slid = [false, false, false];
+        var basis = berthBasis(nrm);
+        var half = [0, 0], reach = [0, 0], slid = [false, false];
         var alongSum = 0, mine = 0;
         for (var li = 0; li < out.length; li++) {
           var lf2 = out[li];
@@ -3967,8 +4312,8 @@
           if (lf2.berthMid[0] !== bth.mid[0] || lf2.berthMid[1] !== bth.mid[1] ||
               lf2.berthMid[2] !== bth.mid[2]) continue;
           mine++;
-          for (var sx = 0; sx < 3; sx++) {
-            if (lf2.axis[sx] && lf2.travel > 0) {
+          for (var sx = 0; sx < 2; sx++) {
+            if (lf2.travel > 0 && Math.abs(dot3(lf2.axis, basis[sx])) > 0.9) {
               slid[sx] = true;
               if (lf2.travel > half[sx]) half[sx] = lf2.travel;
             }
@@ -3980,29 +4325,38 @@
           var aSum = 0, aN = 0;
           for (var vk in seen) {
             var vv = shell.v[vk];
-            for (var rx = 0; rx < 3; rx++) {
-              var off3 = Math.abs(vv[rx] - bth.mid[rx]);
+            var dv3 = [vv[0] - bth.mid[0], vv[1] - bth.mid[1], vv[2] - bth.mid[2]];
+            for (var rx = 0; rx < 2; rx++) {
+              var off3 = Math.abs(dot3(dv3, basis[rx]));
               if (off3 > reach[rx]) reach[rx] = off3;
             }
-            aSum += (vv[0] - bth.mid[0]) * nrm[0] + (vv[1] - bth.mid[1]) * nrm[1] +
-                    (vv[2] - bth.mid[2]) * nrm[2];
+            aSum += dot3(dv3, nrm);
             aN++;
           }
           if (aN) alongSum += aSum / aN;
         }
         if (!mine) continue;
-        var perp = [], ok = true;
-        for (var px = 0; px < 3; px++) {
-          if (Math.abs(nrm[px]) > 0.5) { perp.push(null); continue; }   // the way in
+        var hb = [], ok = true;
+        for (var px = 0; px < 2; px++) {
           var h3 = slid[px] ? half[px] : reach[px];
           if (!(h3 > 0)) ok = false;
-          perp.push(h3);
+          hb.push(h3);
         }
         if (!ok) continue;
+        /* `half` is the old world-axis view of the same numbers, kept for
+         * the readers written against it (the bay lettering reads its z).
+         * Exact for an axis-aligned berth; for one at a bearing each world
+         * axis gets whichever frame axis lies along it, or null. */
+        var halfW = [null, null, null];
+        for (var wx = 0; wx < 3; wx++) {
+          if (Math.abs(nrm[wx]) > 0.5) continue;
+          for (var bx2 = 0; bx2 < 2; bx2++) if (Math.abs(basis[bx2][wx]) > 0.9) halfW[wx] = hb[bx2];
+        }
         apertures.push({
           mid: bth.mid.slice(), normal: nrm.slice(),
           along: alongSum / mine,
-          half: perp
+          basis: basis, hb: hb,
+          half: halfW
         });
       }
     }
@@ -4077,7 +4431,18 @@
 
     for (var ai = 0; ai < apertures.length; ai++) {
       var ap = apertures[ai], n = ap.normal;
-      if (Math.abs(n[2]) > 0.5) continue;        // a floor hatch has no wall to write on
+      /* A door at a BEARING — the cylinder's bays ring its bore, so most of
+       * them lean well off the horizontal — is still a wall, and its "up"
+       * is the station's own long axis, which berthBasis hands back as e1.
+       *
+       * AND A HATCH IS PAINTED LIKE A PAD (2026-09-25). This used to skip a
+       * true floor hatch — no wall to write on — which was harmless until
+       * the new ring: its only doors ARE the heavy bay's roof hatch (its
+       * small bays are curtains), so every ring in the library went
+       * unlettered. A hatch is read from above on the way down, the way a
+       * helipad is, so it takes the same treatment as a tilted door: its
+       * frame's own first axis is "up" on the paint. */
+      var tilted = Math.abs(n[2]) > 0.5;
       var idx = -1;
       for (var bi = 0; bi < sorted.length; bi++) {
         var bm = sorted[bi].mid;
@@ -4085,7 +4450,7 @@
       }
       if (idx < 0) continue;
 
-      var u = [0, 0, 1];
+      var u = tilted && ap.basis ? ap.basis[0] : [0, 0, 1];
       var r = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]];
       var rl = Math.sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
       if (!(rl > 1e-9)) continue;
@@ -4102,17 +4467,28 @@
                    (lf.box.min[1] + lf.box.max[1]) / 2,
                    (lf.box.min[2] + lf.box.max[2]) / 2];
         var dv = [bm2[0] - ap.mid[0], bm2[1] - ap.mid[1], bm2[2] - ap.mid[2]];
+        /* Half-extents of the leaf itself along r and u, which is what
+         * bounds the lettering: a legend has to fit on the door it is
+         * painted on, not on the opening the door covers. Taken off the
+         * leaf's own vertices, so a leaf at a bearing measures true. */
+        var rLo = Infinity, rHi = -Infinity, uLo = Infinity, uHi = -Infinity;
+        var lfF = lf.mesh.f, lfV = lf.mesh.v;
+        for (var qf = 0; qf < lfF.length; qf++) {
+          for (var qk = 0; qk < lfF[qf].length; qk++) {
+            var qv = lfV[lfF[qf][qk]];
+            var qr = qv[0] * r[0] + qv[1] * r[1] + qv[2] * r[2];
+            var qu = qv[0] * u[0] + qv[1] * u[1] + qv[2] * u[2];
+            if (qr < rLo) rLo = qr; if (qr > rHi) rHi = qr;
+            if (qu < uLo) uLo = qu; if (qu > uHi) uHi = qu;
+          }
+        }
         mine.push({
           leaf: lf,
           a: dv[0] * n[0] + dv[1] * n[1] + dv[2] * n[2],
           r: dv[0] * r[0] + dv[1] * r[1] + dv[2] * r[2],
-          u: dv[2],
-          /* Half-extents of the leaf itself along r and u, which is what
-           * bounds the lettering: a legend has to fit on the door it is
-           * painted on, not on the opening the door covers. */
-          hr: Math.abs(n[0]) > 0.5
-            ? (lf.box.max[1] - lf.box.min[1]) / 2 : (lf.box.max[0] - lf.box.min[0]) / 2,
-          hu: (lf.box.max[2] - lf.box.min[2]) / 2
+          u: dv[0] * u[0] + dv[1] * u[1] + dv[2] * u[2],
+          hr: isFinite(rLo) ? (rHi - rLo) / 2 : 0,
+          hu: isFinite(uLo) ? (uHi - uLo) / 2 : 0
         });
       }
       if (!mine.length) continue;
@@ -4134,7 +4510,7 @@
         if (face[fi].r > right.r) right = face[fi];
       }
 
-      var halfU = ap.half[2] || left.hu;
+      var halfU = (tilted ? ap.hb[0] : ap.half[2]) || left.hu;
       var num = String(idx + 1);
       var cellN = Math.min(halfU * 0.09, right.hu * 0.28);
       var cellW = Math.min(halfU * 0.05, left.hu * 0.16);
@@ -4367,7 +4743,8 @@
       if (!m3 || !m3.f) continue;
       for (var f3 = 0; f3 < m3.f.length; f3++) {
         var g3 = faceKey[b3][f3];
-        var sec = (g3 === undefined || g3 < 0) ? -1 : comp[find(g3)].sec;
+        var c3 = (g3 === undefined || g3 < 0) ? null : comp[find(g3)];
+        var sec = c3 ? c3.sec : -1;
         var dst = sec < 0 ? structure[kk] : out[sec][kk];
         if (!dst) continue;
         dst.f.push(m3.f[f3]);
@@ -5022,8 +5399,15 @@
       }
       return;
     }
-    var mesh = stationMeshes()[model] || stationMeshes().orbital;
-    paintPart(ctx, cam, frame, mesh, radiusKm, sunDir, tint);
+    var meshes = stationMeshes();
+    var mesh = meshes[model];
+    if (!mesh) {
+      /* Not folded in yet: ask for it (that fetches it), and draw what the
+       * library has meanwhile. */
+      var lp = libPort(model);
+      if (lp && lp.shell && lp.shell.f.length) mesh = meshes[model] = lp.shell;
+    }
+    paintPart(ctx, cam, frame, mesh || meshes.orbital, radiusKm, sunDir, tint);
   }
 
   function paintPart(ctx, cam, frame, mesh, radiusKm, sunDir, tint) {
@@ -5215,6 +5599,12 @@
    * to a number from nowhere. */
   var DECK = {};
 
+  /* Clear height, in port radii, below which a surface cannot be the floor
+   * a hull stands on: about 38 m at the smallest station, three and a half
+   * times the tallest hull (11 m), so a header or a plate's underside
+   * (0.009–0.013 measured) is never mistaken for it and a real bay is. */
+  var DECK_MIN_ROOM = 0.03;
+
   function berthDeck(role, i) {
     var lib = libPort(role);
     var mb = lib && lib.anchors && lib.anchors.berths;
@@ -5232,14 +5622,78 @@
     /* Start a hair under the box's own ceiling so the cast begins in the
      * open air of the alcove rather than on the lid of the box. */
     var o = [b.mid[0], b.mid[1], b.max[2] - 1e-4];
-    var T = boomTris(lib, o), best = Infinity;
-    for (var t = 0; t < T.length; t += 3) {
-      var h = boomHit(o, [0, 0, -1], T[t], T[t + 1], T[t + 2]);
-      if (h > 0 && h < best) best = h;
+    var T = boomTris(lib, o);
+    /* NINE CASTS, NOT ONE, and the MEDIAN of what they hit (24-09). The
+     * centreline alone fell through the hole a lift platform leaves in the
+     * ring's decks and read the plate under it as the floor, which parked
+     * every ring hull 0.009 radii inside the real one. A median ignores a
+     * hole in the middle and a ledge at the edge alike. */
+    /* AND THE FLOOR IS THE SURFACE WITH THE ROOM ABOVE IT. The art hangs
+     * its berth boxes both ways — the ring's with their top AT the deck (a
+     * cast from just under the top starts inside the floor plate and finds
+     * its underside), the cradle's with their top at the ceiling (the first
+     * thing under the top is a header 0.013 below it). So each column is
+     * cast down from several heights, every surface found is a candidate,
+     * and the candidate with the most clear height above it is the deck. */
+    var hx = (b.max[0] - b.min[0]) * 0.25, hy = (b.max[1] - b.min[1]) * 0.25;
+    /* A ROOF IS NOT A FLOOR (2026-09-25). "Most room above" counts open
+     * space as room, so a bay at the TOP of a station — the new spine's
+     * upper curtain bays, whose box is the doorway frame — scored its own
+     * lintel as the deck: nothing above a lintel on the station's crown
+     * but vacuum. Every spine parked those hulls on the roof of the door
+     * (spine-m by 0.001 radii outside its box, s and l exactly on the box
+     * top). So a surface in the LOWER part of the box with most of the
+     * box's height clear above it is the floor, and wins; only where the
+     * box has no such surface — the ring's, which hang below their deck,
+     * all plate inside — does the old most-room rule decide. */
+    var boxH = b.max[2] - b.min[2];
+    var hits = [];
+    var TOP = b.max[2] + 0.002, STEPS = 8;
+    function castZ(p, dz) {
+      var best = Infinity;
+      for (var t = 0; t < T.length; t += 3) {
+        var h = boomHit(p, [0, 0, dz], T[t], T[t + 1], T[t + 2]);
+        if (h > 0 && h < best) best = h;
+      }
+      return best;
     }
-    var z = isFinite(best) ? o[2] - best : null;
-    /* A deck outside the box it belongs to is not this berth's deck. */
+    for (var sx = -1; sx <= 1; sx++) {
+      for (var sy = -1; sy <= 1; sy++) {
+        var cx = o[0] + sx * hx, cy = o[1] + sy * hy;
+        var pick = null, room = -1, seen = {};
+        var floorPick = null, floorRoom = -1;
+        for (var st = 0; st <= STEPS; st++) {
+          var sz = TOP - (TOP - b.min[2]) * st / STEPS;
+          var dn = castZ([cx, cy, sz], -1);
+          if (!isFinite(dn)) continue;
+          var zc = sz - dn;
+          /* A deck outside the box it belongs to is not this berth's deck. */
+          if (zc < b.min[2] || zc > TOP) continue;
+          var kz = zc.toFixed(5);
+          if (seen[kz]) continue;
+          seen[kz] = true;
+          var up = castZ([cx, cy, zc + 1e-4], 1);
+          if (!isFinite(up)) up = 1;
+          if (up > room + 1e-6) { room = up; pick = zc; }
+          if (zc <= b.max[2] - boxH * 0.25 && up >= boxH * 0.6 && up > floorRoom + 1e-6) {
+            floorRoom = up; floorPick = zc;
+          }
+        }
+        if (floorPick !== null) pick = floorPick;
+        if (pick !== null) hits.push(pick);
+      }
+    }
+    hits.sort(function (p, q) { return p - q; });
+    var zRoom = hits.length ? hits[Math.floor(hits.length / 2)] : null;
+    /* THE ORIGINAL READING WINS WHERE IT WAS RIGHT: the first surface under
+     * the box's top along the centreline, as it has always been — unless
+     * there is no room above it for a hull (DECK_MIN_ROOM), which is the
+     * signature of having read the underside of a plate or a header. */
+    var first = castZ(o, -1);
+    var z = isFinite(first) ? o[2] - first : null;
     if (z === null || z < b.min[2] || z > b.max[2]) z = b.max[2];
+    var upOld = castZ([o[0], o[1], z + 1e-4], 1);
+    if (zRoom !== null && !(upOld >= DECK_MIN_ROOM)) z = zRoom;
     DECK[key] = z;
     return z;
   }
@@ -5597,7 +6051,14 @@
       if (want && lf.berthMid) {
         var dx = lf.berthMid[0] - want[0], dy = lf.berthMid[1] - want[1],
             dz = lf.berthMid[2] - want[2];
-        if (dx * dx + dy * dy + dz * dz > 1e-6) f = 0;
+        if (dx * dx + dy * dy + dz * dz > 1e-6) {
+          /* `onlyMine` asks about ONE door: the other berths' leaves are
+           * left out entirely. For a question like "is this doorway open",
+           * where a neighbour's stowed leaf standing beside it is not the
+           * answer being asked for. */
+          if (doors.onlyMine) continue;
+          f = 0;
+        }
       }
       /* A force field is there or it is not — and when it is not, it is not
        * anything you can hit. */
@@ -8317,6 +8778,8 @@
     libPort: libPort, portIds: portIds, reloadPorts: reloadPorts,
     portModelFor: portModelFor, STATION_MODELS: STATION_MODELS,
     portRole: portRole, assignPort: assignPort, PORT_ASSIGN: PORT_ASSIGN,
+    portLivery: portLivery, ROLE_PATTERNS: ROLE_PATTERNS, PORT_HELD_BACK: PORT_HELD_BACK,
+    prefetchPorts: prefetchPorts, portGeometryArrived: portGeometryArrived,
     poolFor: poolFor, PORT_POOL: PORT_POOL,
     portClass: portClass, portSizeFor: portSizeFor,
     PORT_PATTERNS: PORT_PATTERNS, PORT_SIZE_CUTS: PORT_SIZE_CUTS,
