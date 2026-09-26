@@ -171,9 +171,56 @@ console.log('--- and a bill nobody can pay ---');
   s.wagesTo = 0;
   var G = gameAt(30 * DAY, s, []);
   var lines = Fleet.settle(G, G.t);
-  check('a crew that cannot be paid leaves', s.crew.length === 0);
-  check('and says so', /PAYROLL/.test(lines.join(' ')), lines.join(' | '));
+  check('a crew a month unpaid has left', s.crew.length === 0);
+  check('and says so', /WEEK WITHOUT PAY/.test(lines.join(' ')), lines.join(' | '));
   check('nobody is charged into the red', s.credits >= 0, s.credits);
+
+  /* A WEEK'S GRACE (Astra, 2026-09-21): "crew will work for up to the end
+   * of one week, after that without payment, they're done." */
+  var gunner = person('gunner', 3), perDay = Crew.dailyWage(gunner);
+  var g = shipOf('talon', 0, [gunner]);
+  g.wagesTo = 0;
+  var Gg = gameAt(5 * DAY, g, []);
+  var gl = Fleet.settle(Gg, Gg.t).join(' | ');
+  check('five days unpaid, they are still aboard', g.crew.length === 1);
+  check('and the ledger says how long they will wait', /5 d unpaid/.test(gl) && /2 days/.test(gl), gl);
+  check('and the back pay is still owed — the clock did not move', g.wagesTo === 0, g.wagesTo);
+  Gg.t = 7 * DAY + 3600;
+  Fleet.settle(Gg, Gg.t);
+  check('through the end of day seven they are still working', g.crew.length === 1);
+  g.credits = perDay * 7;
+  Fleet.settle(Gg, Gg.t);
+  check('come good in the week and they are paid every day of it',
+        g.credits === 0 && g.wagesTo === 7 * DAY && g.crew.length === 1,
+        g.credits + ' cr left, paid to day ' + g.wagesTo / DAY);
+
+  var h = shipOf('talon', 0, [person('gunner', 3)]);
+  h.wagesTo = 0;
+  var Gh = gameAt(8 * DAY, h, []);
+  Fleet.settle(Gh, Gh.t);
+  check('day eight unpaid, they are done', h.crew.length === 0);
+  check('and what they were owed went with them', h.wagesTo === 8 * DAY, h.wagesTo);
+
+  /* Part-paid: the purse covers four days of ten. The four are bought, and
+   * the week of patience runs from the end of them — six unpaid, staying. */
+  var q = shipOf('talon', perDay * 4 + 5, [person('gunner', 3)]);
+  q.wagesTo = 0;
+  var Gq = gameAt(10 * DAY, q, []);
+  Fleet.settle(Gq, Gq.t);
+  check('a part-payment buys whole days, oldest first',
+        q.credits === 5 && q.wagesTo === 4 * DAY, q.credits + ' cr, paid to day ' + q.wagesTo / DAY);
+  check('and six days short is still inside the week', q.crew.length === 1);
+
+  /* The same rule for a crew on a ship you left behind. */
+  var r = parked('kestrel', 0, [person('pilot', 4)]);
+  var sr = shipOf('talon', 0, []);
+  sr.wagesTo = 0;
+  var Gr = gameAt(6 * DAY, sr, [r]);
+  Fleet.settle(Gr, Gr.t);
+  check('a parked crew waits out the week too', r.crew.length === 1);
+  Gr.t = 9 * DAY;
+  Fleet.settle(Gr, Gr.t);
+  check('and leaves her after it', r.crew.length === 0);
 
   /* Unpaid berthing is a debt before it is a seizure, and the debt is
    * visible on the record so the fleet page can show it. */

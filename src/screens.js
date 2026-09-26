@@ -25,7 +25,7 @@
    * byte-for-byte the code that was tested in its old home. */
   var G, say, selectPanel, hot, navList, navTargetState, navMark, jettison,
       heldCargo, openMarket, plottedCourse, jumpCandidates, doJump, complyWithDemand,
-      hailAuthority, payOutstanding, hailSelected,
+      hailAuthority, payOutstanding, hailSelected, exitTransfer,
       scopeBody, rows, panel, bodyDotColor, setMouseAim,
       fmtDist, fmtSpeed, fmtTime, fmtEpoch, fmtCredits, fmtLy, clipText,
       drawSystemPage, drawChartPage, drawOrbitPage, drawTargetPage,
@@ -42,6 +42,7 @@
     doJump = api.doJump; complyWithDemand = api.complyWithDemand;
     hailAuthority = api.hailAuthority; payOutstanding = api.payOutstanding;
     hailSelected = api.hailSelected;
+    exitTransfer = api.exitTransfer;
     scopeBody = api.scopeBody; rows = api.rows; panel = api.panel;
     bodyDotColor = api.bodyDotColor; setMouseAim = api.setMouseAim;
     fmtDist = api.fmtDist; fmtSpeed = api.fmtSpeed; fmtTime = api.fmtTime;
@@ -878,6 +879,18 @@
             : launchOk ? 'cleared — U to launch'
             : 'doors are shut',
         fn: function () { hailSelected(c); }
+      });
+      /* AND THE RIDE OUT (Astra, 24-09): back the way you came in — off the
+       * stand, up the cargo lift, out to the pad. At a ground port it asks
+       * for launch on the way if you have not; see main.js exitTransfer. */
+      opts.push({
+        label: 'Request transfer to exit pad',
+        enabled: docked,
+        note: !docked ? 'only from a berth'
+            : !c.obj.surface ? 'back out the way you came'
+            : launchOk ? 'cleared — ride up to the pad'
+            : 'asks for launch first',
+        fn: function () { if (exitTransfer) exitTransfer(c.obj); }
       });
       /* ONE ROW, TWO JOBS, because it is the same question asked from two
        * distances and the answer is a different KIND of thing each time.

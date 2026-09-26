@@ -1016,10 +1016,14 @@ console.log('--- military fuel comes from a licence, not from development ---');
       if (role === 'milfuel') {
         factories++;
         if (!who) factoriesUnlicensed++;
-        /* Five tonnes of fissiles for every tonne of slug it presses. The
-         * port may consume a little fissile on its own account, so the
-         * claim is about the factory's line, not the whole row. */
-        if (!row || !fis || Math.abs(p.market.feed - p.market.slugs * 5) > 1e-6 ||
+        /* Five tonnes of fissiles, or ten of waste, for every tonne of slug
+         * it presses (2026-09-25: the factory takes both). The port may
+         * consume a little of either on its own account, so the claim is
+         * about the factory's lines, not the whole rows. */
+        var wr = p.market.rows.waste, wf = p.market.wasteFeed || 0;
+        if (!row || !fis || !wr ||
+            Math.abs(p.market.feed / 5 + wf / 10 - p.market.slugs) > 1e-6 ||
+            !(wf > 0) || !wr.sink || wr.cons < wf - 1e-6 ||
             Math.abs(p.market.slugs - row.prod) > 1e-6 ||
             fis.cons < p.market.feed - 1e-6) factoryRatioBad++;
       }
@@ -1044,13 +1048,18 @@ console.log('--- military fuel comes from a licence, not from development ---');
          * yard ashore does. The carrier role is assigned by converting a
          * port AFTER the licence has run, so whatever milfuel rows that
          * port had it keeps — which is correct rather than incidental. */
+        /* AND A NAVY OR SYNDICATE REFINERY OVER A GIANT (Astra, 24-09: they
+         * "turn hydrogen and fissiles into milfuel"). Marked milfuelPlant
+         * by Economy.runGiantPlants; its uptake is its own contract, which
+         * is the `cons` the burn check below lets through. */
+        var giantPlant = role === 'refinery' && p.milfuelPlant;
         if (role !== 'shipyard' && role !== 'highport' && role !== 'milfuel' &&
-            role !== 'carrier') bredWrongRole++;
+            role !== 'carrier' && !giantPlant) bredWrongRole++;
         else if (!who) bredUnlicensed++;
       }
       if (row.cons > 0 && role !== 'reprocessing' && role !== 'milfuel' &&
           role !== 'shipyard' && role !== 'highport' &&
-          role !== 'carrier') burntWrongRole++;
+          role !== 'carrier' && !(role === 'refinery' && p.milfuelPlant)) burntWrongRole++;
     });
     if (bred) breeders++;
   }
@@ -1085,7 +1094,7 @@ console.log('--- military fuel comes from a licence, not from development ---');
   check('licensed systems get a milfuel factory', factories > 0, factories + ' built');
   check('and only licensed systems do', factoriesUnlicensed === 0,
         factoriesUnlicensed + ' unlicensed');
-  check('a factory eats five tonnes of fissiles for every tonne it presses',
+  check('a factory eats five tonnes of fissiles, or ten of waste, for every tonne it presses',
         factoryRatioBad === 0, factoryRatioBad + ' off-ratio');
   check('an unlicensed plant reclaims fissiles from what it is handed',
         reclaimers > 0 && reclaimRatioBad === 0,

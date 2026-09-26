@@ -37,7 +37,12 @@ jobs:
       # runners deprecated in September 2025 and now force onto Node 24 —
       # every run carries an annotation saying so, which is noise on top of
       # a real failure and reads like the cause of it.
+      # LFS since 2026-09-25: the station art (*.glb, src/ports/*.js) is
+      # ~425 MB and lives in Git LFS. Without this the checkout holds
+      # pointer files, and a build would ship stations that are text.
       - uses: actions/checkout@v5
+        with:
+          lfs: true
 
       - uses: actions/setup-node@v5
         with:

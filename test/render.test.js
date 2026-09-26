@@ -4931,7 +4931,10 @@ console.log('--- the drive comes out of the engines ---');
     check(id + ' bells are at the stern', n.every(function (q) { return q.z < -0.45; }));
   });
   var mule = R.nozzlesOf(R.hullPreviewMesh('mule'));
-  check('the Mule gets one wide stern exit', !!mule && mule.length === 1);
+  /* freighter-l: five engineGlows, which the old rear-face guess merged into
+   * one wide exit. */
+  check('the Mule fires all five of its engines', !!mule && mule.length === 5,
+        mule ? mule.length + ' found' : 'none');
 
   /* Any thrust direction at all draws without throwing — the sideways and
    * backwards parts go to RCS puffs, never to the main drive. */
@@ -4946,6 +4949,32 @@ console.log('--- the drive comes out of the engines ---');
     });
   } catch (e) { threw = e; }
   check('every thrust direction draws cleanly', !threw, threw && threw.message);
+
+  /* One plume per engine the model has: every imported hull names its
+   * engines (one engineGlow node each), and nozzlesOf must return exactly
+   * that many, at those places, including pods forward of the stern. */
+  var bad = [];
+  R.hullIds().forEach(function (id) {
+    var src = W.HullLib[id], m = R.libHull(id);
+    var want = (src.engines || []).length, got = R.nozzlesOf(m);
+    if (!want) { bad.push(id + ' has no engines'); return; }
+    if (!got || got.length !== want) { bad.push(id + ' ' + (got ? got.length : 0) + '/' + want); return; }
+    for (var k = 0; k < want; k++) {
+      var e = src.engines[k], n = got[k];
+      if (Math.abs(n.x - e[0]) > 1e-9 || Math.abs(n.y - e[1]) > 1e-9 || Math.abs(n.z - e[2]) > 1e-9) {
+        bad.push(id + ' engine ' + k + ' moved'); return;
+      }
+    }
+  });
+  check('every hull draws one plume per engine', !bad.length, bad.join('; '));
+  var counts = { 'capital-l': 7, 'bulk-l': 6, 'runner-l': 3, 'fighter-m': 3, 'courier-s': 1, 'courier-m': 2 };
+  Object.keys(counts).forEach(function (id) {
+    var n = R.nozzlesOf(R.libHull(id));
+    check(id + ' has ' + counts[id] + ' plumes', !!n && n.length === counts[id], n ? n.length + '' : 'none');
+  });
+  var pods = R.nozzlesOf(R.libHull('runner-l'));
+  check('the runner fires its forward outboard pods too',
+        !!pods && pods.some(function (q) { return q.z > -0.42; }));
 })();
 
 console.log('--- re-entry plasma ---');

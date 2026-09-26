@@ -352,16 +352,57 @@
 
     var need = hullBox(ship);
     var fits = [], i;
-    for (i = 0; i < boxes.length; i++) if (boxFits(need, boxes[i])) fits.push(i);
+    /* A bay you cannot fly to from outside is not on offer — the
+     * refinery's small bays are reached through its heavy bay and a lift,
+     * which this game does not carry a hull along yet. Only when a model
+     * declares NO reachable bay at all is the rule waived, so a station is
+     * never left with nowhere to put anybody. */
+    var reach = [], anyReach = false;
+    /* AND ROOM ROUND THE HULL WHERE IT PARKS. The fit check measures the
+     * bay's box; this measures what is actually standing in it. One bay of
+     * the large cylinder carries its lift chute through the alcove, and the
+     * park point sits 0.0032 station radii from it — about four metres at
+     * the smallest station, where the widest hull needs twelve. Measured
+     * off the same boom table the camera uses, so the two agree. */
+    var R0 = global.Render, role0 = (R0 && R0.portModelFor) ? R0.portModelFor(port) : null;
+    var halfW = Math.max(need[0], need[1]) / 2;
+    for (i = 0; i < boxes.length; i++) {
+      var apR = Gen && Gen.berthApertures ? Gen.berthApertures(port, i) : null;
+      /* A bay with a route in through a heavy bay is reachable whatever its
+       * own doors face (2026-09-24, see Gen.berthRoute). */
+      var viaR = Gen && Gen.berthRoute ? Gen.berthRoute(port, i) : null;
+      /* ...provided that heavy bay can itself be reached from outside. */
+      var apE = viaR && Gen.berthApertures ? Gen.berthApertures(port, viaR.entry) : null;
+      reach[i] = !apR || apR.reachable !== false || !!(viaR && (!apE || apE.reachable !== false));
+      if (reach[i] && role0 && R0.boomLimit) {
+        /* SIDEWAYS only — down is the deck, which the standoff already
+         * owns, and the table's lift under the hull is nominal. */
+        var near = Infinity;
+        for (var q = 0; q < 24; q++) {
+          var aq = q / 24 * Math.PI * 2;
+          var lim = R0.boomLimit(role0, i, [Math.cos(aq), Math.sin(aq), 0]);
+          if (lim < near) near = lim;
+        }
+        if (isFinite(near) && near * (port.radius || 1) < halfW) reach[i] = false;
+      }
+      if (reach[i]) anyReach = true;
+    }
+    for (i = 0; i < boxes.length; i++) {
+      if (anyReach && !reach[i]) continue;
+      if (boxFits(need, boxes[i])) fits.push(i);
+    }
 
     /* NOTHING FITS is still an answer. A hull wedged into the largest bay
      * the port has is a wrong thing you can see and report; a ship with no
      * berth at all is a throw from inside the docking code. The test is
      * what turns the first into a build failure. */
     if (!fits.length) {
-      var best = 0;
-      for (i = 1; i < boxes.length; i++) if (boxVol(boxes[i]) > boxVol(boxes[best])) best = i;
-      return best;
+      var best = -1;
+      for (i = 0; i < boxes.length; i++) {
+        if (anyReach && !reach[i]) continue;
+        if (best < 0 || boxVol(boxes[i]) > boxVol(boxes[best])) best = i;
+      }
+      return best < 0 ? 0 : best;
     }
 
     /* The SMALLEST bay that takes it, so a courier does not park in the
@@ -433,12 +474,28 @@
        * ship on final approach outside the cut and therefore inside a wall. */
       var lead = ap.gate + holdLead(port) + 0.2;
       var deep = (typeof ap.inner === 'number') ? Math.abs(ap.inner) : 0.2;
-      R.carveThroat(sol,
-                    [off.x + ap.normal[0] * lead,
-                     off.y + ap.normal[1] * lead,
-                     off.z + ap.normal[2] * lead],
-                    [-ap.normal[0], -ap.normal[1], -ap.normal[2]],
-                    lead + deep, g.mouthR);
+      var e0 = ap.entry;
+      var bent = e0 && (e0[0] * ap.normal[0] + e0[1] * ap.normal[1] + e0[2] * ap.normal[2]) < 0.999;
+      if (bent) {
+        /* A way in that is not the normal: carve the line from open space
+         * down to the door, then the throat itself — and never the straight
+         * lead along the normal, which for a bay across a bore would carve
+         * a corridor into the bay opposite. */
+        var gx = off.x + ap.normal[0] * ap.gate, gy = off.y + ap.normal[1] * ap.gate,
+            gz = off.z + ap.normal[2] * ap.gate;
+        var run = (ap.exit || 1) + holdLead(port) + 0.2;
+        R.carveThroat(sol, [gx + e0[0] * run, gy + e0[1] * run, gz + e0[2] * run],
+                      [-e0[0], -e0[1], -e0[2]], run, g.mouthR);
+        R.carveThroat(sol, [gx, gy, gz],
+                      [-ap.normal[0], -ap.normal[1], -ap.normal[2]], ap.gate + deep, g.mouthR);
+      } else {
+        R.carveThroat(sol,
+                      [off.x + ap.normal[0] * lead,
+                       off.y + ap.normal[1] * lead,
+                       off.z + ap.normal[2] * lead],
+                      [-ap.normal[0], -ap.normal[1], -ap.normal[2]],
+                      lead + deep, g.mouthR);
+      }
       cut++;
     }
     if (!cut && g.mouthZ > 0) {
@@ -1765,6 +1822,11 @@
      * tender arrives on screen wearing the middle hull like everyone
      * else. */
     if (spec.sizeLetter) st.sizeLetter = spec.sizeLetter;
+    /* And a ship that wears a hull other than its class's. `cls` stays the
+     * kind, because combat reads it (hull points, shields, heat shed) and a
+     * Syndicate enforcer is a police patrol in every rule that matters;
+     * `hullClass` is read by the renderer and nothing else. */
+    if (spec.hullClass) st.hullClass = spec.hullClass;
     return st;
   }
 
@@ -2435,7 +2497,26 @@
     for (var i = 0; i < pads.length; i++) {
       var pad = pads[i];
       var ps = bodyState(pad, sys, t);
-      if (V.dist(ps.pos, ship.pos) > pad.dockCaptureRadius) continue;
+      var dPad = V.dist(ps.pos, ship.pos);
+      /* NOT THE PAD YOU HAVE JUST LEFT. Astra, 24-09: "that bug where
+       * you're re-docked immediately after the ship doesn't launch." A
+       * launch hands the hull over inside this very envelope, a few m/s
+       * off the deck, and a pad catches anything inside its envelope — so
+       * unless the pilot was already on full thrust, the next frame put
+       * them straight back in the hangar. `departed` is the same flag the
+       * orbital doors use, and it expires the same way, by geometry: once
+       * the hull has been outside the envelope the pad is a pad again.
+       * Asking for landing clearance re-arms it at once, which is the
+       * other of the two ways back in the orbital berths already honour. */
+      /* "Left" means FLOWN AWAY, not a metre past the rim: the exit pad's
+       * hold is itself outside the envelope, and a hull that coasts up from
+       * there and sinks back has not gone anywhere. */
+      if (ship.departed && ship.departed.port === pad.id) {
+        var gone = Math.max(pad.dockCaptureRadius * 3, pad.radius || 0);
+        if (dPad > gone) { ship.departed = null; }
+        else if (!(ship.cleared && ship.cleared[pad.id])) continue;
+      }
+      if (dPad > pad.dockCaptureRadius) continue;
       /* Speed relative to the PAD, which is itself being carried round by
        * the world underneath it. Hovering motionless above a spinning
        * planet is not hovering over the pad. */
@@ -2684,7 +2765,9 @@
     var berth = null, arriving = false, leaving = false;
 
     if (s && s.arrival && s.arrival.port === port.id) {
-      berth = s.arrival.berth; arriving = true;
+      /* Through a heavy bay, the doors that open are the heavy bay's. */
+      berth = (typeof s.arrival.entry === 'number') ? s.arrival.entry : s.arrival.berth;
+      arriving = true;
     } else if (s && s.docked === port.id) {
       berth = (typeof s.dockBerth === 'number') ? s.dockBerth : 0;
     } else if (s && s.departed && s.departed.port === port.id &&
@@ -3290,7 +3373,8 @@
       ship.docked = target.id;
       /* Berthed, not parked on the roof. `height` survives as the fallback
        * for anything that has no bay geometry to place a berth in. */
-      ship.dockOffset = { surface: true, berth: assignBerth(ship, target),
+      ship.dockOffset = { surface: true,
+                          berth: (typeof wantBerth === 'number' && wantBerth >= 0) ? wantBerth : assignBerth(ship, target),
                           height: Math.max(0.006, target.radius * 0.05) };
       ship.thrust = V.zero();
       ship.throttle = 0;
@@ -3728,16 +3812,27 @@
   var THREAD_SPEED = 0.04;        // km/s, the leg from the gate to the stand
   var RUN_IN_DUR = [3.0, 12.0];   // seconds, floor and ceiling
   var THREAD_DUR = [5.0, 20.0];
+  /* A route on through the hull to a small bay is a journey, not a threshold:
+   * it gets a minute before the speed is allowed to rise. */
+  var THREAD_ROUTE_DUR = [8.0, 60.0];
   var LEGS_CACHE = {};
 
-  function scaledLegs(port) {
-    var path = orbitalPath(port, 0);
+  function scaledLegs(port, berth) {
+    var path = orbitalPath(port, berth || 0);
     if (!path || path.length < 5) return ORBITAL_LEGS;
     var r = port.radius || 1;
     var span = function (a, b) {
-      var dx = path[b].x - path[a].x, dy = path[b].y - path[a].y,
-          dz = path[b].z - path[a].z;
-      return Math.sqrt(dx * dx + dy * dy + dz * dz) * r;
+      /* The enter leg of a route through a heavy bay is its corners, not
+       * the chord from the L gate to a stand on the far side of the hull. */
+      var pts = (a === 2 && b === 3 && path.through)
+        ? [path[2]].concat(path.through, [path[3]]) : [path[a], path[b]];
+      var s = 0;
+      for (var q = 1; q < pts.length; q++) {
+        var dx = pts[q].x - pts[q - 1].x, dy = pts[q].y - pts[q - 1].y,
+            dz = pts[q].z - pts[q - 1].z;
+        s += Math.sqrt(dx * dx + dy * dy + dz * dz);
+      }
+      return s * r;
     };
     var fit = function (km, speed, lim) {
       return Math.max(lim[0], Math.min(lim[1], km / speed));
@@ -3746,7 +3841,7 @@
     for (var i = 0; i < ORBITAL_LEGS.length; i++) {
       var L = ORBITAL_LEGS[i], dur = L.dur;
       if (L.id === 'lineup') dur = fit(span(0, 1), RUN_IN_SPEED, RUN_IN_DUR);
-      else if (L.id === 'enter') dur = fit(span(2, 3), THREAD_SPEED, THREAD_DUR);
+      else if (L.id === 'enter') dur = fit(span(2, 3), THREAD_SPEED, path.through ? THREAD_ROUTE_DUR : THREAD_DUR);
       if (dur === L.dur) { out.push(L); continue; }
       /* A COPY, never a mutation of the table — ORBITAL_LEGS is shared by
        * every station in the galaxy, and editing it in place would give the
@@ -3757,12 +3852,18 @@
     return out;
   }
 
-  function legsFor(port) {
+  /* Per berth where a berth has its own route in; per port otherwise, which
+   * is what it always was (berth 0's path sets the timings). */
+  function legsFor(port, berth) {
     if (!port || port.surface) return ARRIVAL_LEGS;
+    var Gen = global.Gen;
+    var routed = berth && Gen && Gen.berthRoute && Gen.berthRoute(port, berth);
+    var b = routed ? berth : 0;
     var key = port.id;
-    if (key === undefined || key === null) return scaledLegs(port);
+    if (key === undefined || key === null) return scaledLegs(port, b);
+    key = key + '#' + b;
     if (LEGS_CACHE[key]) return LEGS_CACHE[key];
-    LEGS_CACHE[key] = scaledLegs(port);
+    LEGS_CACHE[key] = scaledLegs(port, b);
     return LEGS_CACHE[key];
   }
 
@@ -3772,8 +3873,8 @@
 
   /* Defaults to the surface table when asked without a port, because that
    * is what it has always answered and three callers rely on it. */
-  function arrivalTotal(port) {
-    var L = legsFor(port);
+  function arrivalTotal(port, berth) {
+    var L = legsFor(port, berth);
     var s = 0;
     for (var i = 0; i < L.length; i++) s += L[i].dur;
     return s;
@@ -3792,12 +3893,45 @@
    * it straight down. That is the whole of "some traversers are also
    * elevators": the leg is a line in three dimensions and the angle is
    * data, not a branch. */
+  /* How far off a ground site's entrance the rail holds, in the port's own
+   * units: outside the door, clear of its leaves, the same few hundred
+   * metres the procedural shed's approach sits above its apron. */
+  var SURFACE_HOLD_LEAD = 0.35;
+
   function arrivalPath(port, berth) {
     var Gen = global.Gen;
     if (!Gen || !Gen.bayGeometry || !Gen.berthOffset) return null;
     if (port && !port.surface) return orbitalPath(port, berth);
     var g = Gen.bayGeometry(port);
     var off = Gen.berthOffset(port, berth || 0);
+
+    /* THE GROUND SITE'S OWN WAY DOWN (2026-09-24), where the art has one.
+     * Astra: the ground stations' bays "live underground", reached by the
+     * site's own entrances — the surface pad door and its 45-degree cargo
+     * lift, the hangar door, a portal in a mountain face. glb2hulls found
+     * the route from the entrance to each berth (Gen.berthDoorRoute), so
+     * the rail is: held off the entrance, the doors open, then down and
+     * across by the route's corners (walked over the descend and traverse
+     * legs, see arrivalPose), and onto the stand. Same five slots and the
+     * same leg table as the procedural shed, so every reader is unchanged. */
+    var dr = Gen.berthDoorRoute ? Gen.berthDoorRoute(port, berth || 0) : null;
+    if (dr) {
+      var lz = g.lift || 0, n = dr.normal;
+      var E = { x: dr.mid[0], y: dr.mid[1], z: dr.mid[2] + lz };
+      var hold = { x: E.x + n[0] * SURFACE_HOLD_LEAD, y: E.y + n[1] * SURFACE_HOLD_LEAD,
+                   z: E.z + n[2] * SURFACE_HOLD_LEAD };
+      var standD = { x: off.x, y: off.y, z: off.z + g.lift + g.standoff };
+      var thruD = [E];
+      for (var di = 0; di < dr.via.length; di++) {
+        thruD.push({ x: dr.via[di][0], y: dr.via[di][1], z: dr.via[di][2] + lz });
+      }
+      thruD.push(standD);
+      var pD = [hold, E, E, standD, standD];
+      pD.through = thruD;
+      pD.door = dr.door;
+      return pD;
+    }
+
     var stand = g.floorZ + g.lift + g.standoff;
     var deck = g.lift + g.standoff;
     /* How far inboard the shaft foot sits. `incline` is the modelled
@@ -3836,13 +3970,48 @@
     var z = off.z + g.lift;
     var ap = Gen.berthApertures ? Gen.berthApertures(port, berth || 0) : null;
 
+    /* IN THROUGH THE HEAVY BAY (2026-09-24). Astra: an S/M ship "is able
+     * to path all the way through to the S or M bay from the L bay
+     * entrances". Where the art has that route (Gen.berthRoute), the hold,
+     * the doors and the run-in are the L berth's, and the `enter` leg does
+     * not stop at the L stand: it carries on along the route's corners to
+     * this berth's stand. Same five slots, so the leg table, the gates and
+     * every reader of the path are unchanged; the corners ride along as
+     * `through`, which arrivalPose walks when it is present. */
+    var route = Gen.berthRoute ? Gen.berthRoute(port, berth || 0) : null;
+    if (route) {
+      var outer = orbitalPath(port, route.entry);
+      if (outer && outer.length === 5) {
+        var stand = { x: off.x, y: off.y, z: z };
+        var thru = [outer[3]];
+        for (var vi = 0; vi < route.via.length; vi++) {
+          thru.push({ x: route.via[vi][0], y: route.via[vi][1], z: route.via[vi][2] });
+        }
+        var p5 = [outer[0], outer[1], outer[2], stand, stand];
+        p5.through = thru;
+        p5.entry = route.entry;
+        return p5;
+      }
+    }
+
     if (ap && ap.normal && typeof ap.gate === 'number') {
       var n = ap.normal;
       var at = function (d) {
         return { x: off.x + n[0] * d, y: off.y + n[1] * d, z: z + n[2] * d };
       };
-      return [at(ap.gate + holdLead(port)), at(ap.gate), at(ap.gate),
-              at(0), at(0)];
+      /* THE HOLD IS WHERE THE WAY IN MEETS OPEN SPACE (Gen.berthApertures'
+       * entry). Straight out along the normal for a berth that opens onto
+       * space — the numbers it always had — and out along the clear line
+       * for one that does not: the cylinder's bays face across its bore, so
+       * the hold is beyond the bore's mouth and the first leg runs down the
+       * bore to the door. */
+      var e = ap.entry;
+      var hold = at(ap.gate + holdLead(port));
+      if (e && (e[0] * n[0] + e[1] * n[1] + e[2] * n[2]) < 0.999) {
+        var g0 = at(ap.gate), dist = (ap.exit || 1) + holdLead(port);
+        hold = { x: g0.x + e[0] * dist, y: g0.y + e[1] * dist, z: g0.z + e[2] * dist };
+      }
+      return [hold, at(ap.gate), at(ap.gate), at(0), at(0)];
     }
 
     /* No modelled berth: in through the hatch. */
@@ -3866,7 +4035,7 @@
     if (!basis || !path) return null;
     var Gen = global.Gen;
     var orbital = !!(port && !port.surface);
-    var LEGS = legsFor(port);
+    var LEGS = legsFor(port, berth);
 
     var leg = 0, acc = 0;
     while (leg < LEGS.length - 1 && el >= acc + LEGS[leg].dur) {
@@ -3879,6 +4048,23 @@
     var loc = { x: a.x + (b.x - a.x) * u,
                 y: a.y + (b.y - a.y) * u,
                 z: a.z + (b.z - a.z) * u };
+    /* On through the hull, when the berth is reached by way of a heavy bay:
+     * the enter leg walks the route's corners, by length. */
+    var surfTan = null;
+    if (leg === 2 && path.through && orbital) {
+      var pl = [a].concat(path.through, [b]);
+      var got = alongRoute(pl.map(function (p) { return { e: p.x, n: p.y, u: p.z }; }), u);
+      loc = { x: got.e, y: got.n, z: got.u };
+    }
+    /* A ground site's route runs over TWO legs — down the lift (descend),
+     * then across to the bay (traverse) — split by length, half each. */
+    if ((leg === 2 || leg === 3) && path.through && !orbital) {
+      var plS = path.through.map(function (p) { return { e: p.x, n: p.y, u: p.z }; });
+      var uu = leg === 2 ? u * 0.5 : 0.5 + u * 0.5;
+      var gS = alongRoute(plS, uu), gN = alongRoute(plS, Math.min(1, uu + 0.02));
+      loc = { x: gS.e, y: gS.n, z: gS.u };
+      surfTan = { x: gN.e - gS.e, y: gN.n - gS.n };
+    }
 
     var r = port.radius || 1;
     var pos = V.addScaled(basis.entrance.pos, basis.up, loc.z * r);
@@ -3892,6 +4078,13 @@
      * the leg, and on the final leg it blends to the berth's own facing,
      * which is the pose `dockShip` will set when the rail ends. */
     var dx = b.x - a.x, dy = b.y - a.y;
+    /* Along a ground route the nose follows the route's own heading; on
+     * a straight drop down a shaft (no heading) it keeps the heading it
+     * will next have, toward the stand. */
+    if (surfTan) {
+      if (Math.abs(surfTan.x) + Math.abs(surfTan.y) > 1e-5) { dx = surfTan.x; dy = surfTan.y; }
+      else { dx = b.x - loc.x; dy = b.y - loc.y; }
+    }
     var fwd;
     if (orbital) {
       /* NOSE OUT THE WHOLE WAY, and it is not a compromise — it is what
@@ -3906,6 +4099,16 @@
        * carries a hull across a room and then onto a stand at right angles
        * to it. A station has no room to cross. */
       fwd = berthFacing(basis, Gen.berthOffset(port, berth || 0));
+      /* Through a heavy bay: nose out of the L bay while at its doors, then
+       * turned, over the run through the hull, to face out of the bay it is
+       * going to. The carrier turns it; nothing else in the rail does. */
+      if (typeof path.entry === 'number' && leg <= 2) {
+        var fE = berthFacing(basis, Gen.berthOffset(port, path.entry));
+        var k2 = leg < 2 ? 0 : u;
+        var mixed = V.add(V.scale(fE, 1 - k2), V.scale(fwd, k2));
+        if (V.len(mixed) < 1e-6) mixed = V.add(V.scale(fE, 1 - k2), V.scale(basis.up, 0.2));
+        fwd = V.norm(mixed);
+      }
     } else if (Math.abs(dx) + Math.abs(dy) > 1e-6) {
       fwd = V.norm(V.addScaled(V.scale(basis.east, dx), basis.north, dy));
     } else {
@@ -3917,10 +4120,22 @@
        * not turned to one heading by the animation and snapped to another
        * the instant it finishes. */
       var want = berthFacing(basis, Gen.berthOffset(port, berth || 0));
-      fwd = V.norm(V.add(V.scale(fwd, 1 - u), V.scale(want, u)));
+      var blend = V.add(V.scale(fwd, 1 - u), V.scale(want, u));
+      /* Turning half round through zero: take the side that is on the way. */
+      if (V.len(blend) < 1e-6) blend = V.add(blend, V.scale(V.cross(basis.up, fwd), 0.1));
+      fwd = V.len(blend) > 1e-9 ? V.norm(blend) : want;
     }
     var up = V.clone(basis.up);
     var right = V.cross(fwd, up);
+    /* A bay that opens straight up the frame's axis (a pad on a skimmer's
+     * back) has no level to fly by; take north as up instead of refusing. */
+    /* And a bay that opens along it with no heavy bay in between: the
+     * ring's and the cylinder's heavy bays (24-09), whose arrivals were
+     * refused outright for want of a level. */
+    if (V.len(right) < 1e-9 && (orbital || typeof path.entry === 'number')) {
+      up = V.clone(basis.north);
+      right = V.cross(fwd, up);
+    }
     if (V.len(right) < 1e-9) return null;
     right = V.norm(right);
 
@@ -3928,6 +4143,9 @@
       pos: pos, vel: V.clone(basis.entrance.vel),
       fwd: fwd, up: V.norm(V.cross(right, fwd)), right: right,
       leg: leg, legId: L.id, u: u,
+      /* The heavy bay this arrival comes in by, when it is not the berth's
+       * own doors — the doors to run are that bay's (see stationDoors). */
+      entry: typeof path.entry === 'number' ? path.entry : null,
       enclosed: leg >= enclosedFrom(port),
       /* The mechanism poses, 0 open and 1 sealed, matching the model's own
        * setApronDoors/setInnerGate/setLift/setBayGates. Interpolated within
@@ -3976,6 +4194,66 @@
     return V.addScaled(w, basis.up, l.u);
   }
 
+  /* The pull-in's path, in the port frame relative to the hold point: from
+   * `start` to the origin, never inside a sphere of the station's own
+   * radius about `centre`. Returns the corner list, start first. */
+  function pullRoute(start, centre, radius) {
+    function sub(a, b) { return { e: a.e - b.e, n: a.n - b.n, u: a.u - b.u }; }
+    function dotp(a, b) { return a.e * b.e + a.n * b.n + a.u * b.u; }
+    function len(a) { return Math.sqrt(dotp(a, a)); }
+    function sc(a, k) { return { e: a.e * k, n: a.n * k, u: a.u * k }; }
+    function add(a, b) { return { e: a.e + b.e, n: a.n + b.n, u: a.u + b.u }; }
+    var end = { e: 0, n: 0, u: 0 };
+    var holdR = len(sub(end, centre));
+    var keep = Math.min(radius * 1.1, holdR * 0.97);
+    function clear(a, b) {
+      var d = sub(b, a), l2 = dotp(d, d);
+      var tq = l2 > 1e-18 ? Math.max(0, Math.min(1, dotp(sub(centre, a), d) / l2)) : 0;
+      return len(sub(add(a, sc(d, tq)), centre)) >= keep;
+    }
+    var pts = [start], cur = start;
+    for (var it = 0; it < 8 && !clear(cur, end); it++) {
+      var rel = sub(cur, centre), r1 = len(rel);
+      if (!(r1 > 1e-9)) break;
+      var up1 = sc(rel, 1 / r1);
+      var rh = sub(end, centre), up2 = sc(rh, 1 / len(rh));
+      var r = Math.max(r1, keep * 1.05);
+      var toGo = Math.acos(Math.max(-1, Math.min(1, dotp(up1, up2))));
+      var step = Math.min(toGo, 0.9 * (Math.acos(Math.min(0.9999, keep / Math.max(r1, keep * 1.0001))) +
+                                      Math.acos(Math.min(0.9999, keep / r))));
+      var tang = sub(up2, sc(up1, dotp(up2, up1)));
+      if (len(tang) < 1e-9) {
+        tang = Math.abs(up1.u) < 0.9 ? { e: -up1.n, n: up1.e, u: 0 } : { e: 1, n: 0, u: 0 };
+      }
+      tang = sc(tang, 1 / len(tang));
+      var dir = add(sc(up1, Math.cos(step)), sc(tang, Math.sin(step)));
+      cur = add(centre, sc(dir, r));
+      pts.push(cur);
+    }
+    pts.push(end);
+    return pts.length > 2 ? pts : null;         // null: the straight line was clear
+  }
+
+  /* A point `u` (0..1) of the way along a corner list, by length. */
+  function alongRoute(pts, u) {
+    var L = [], tot = 0, i;
+    for (i = 1; i < pts.length; i++) {
+      var a = pts[i - 1], b = pts[i];
+      var l = Math.sqrt((b.e - a.e) * (b.e - a.e) + (b.n - a.n) * (b.n - a.n) + (b.u - a.u) * (b.u - a.u));
+      L.push(l); tot += l;
+    }
+    var want = Math.max(0, Math.min(1, u)) * tot;
+    for (i = 0; i < L.length; i++) {
+      if (want <= L[i] || i === L.length - 1) {
+        var f = L[i] > 1e-12 ? Math.min(1, want / L[i]) : 1;
+        var p0 = pts[i], p1 = pts[i + 1];
+        return { e: p0.e + (p1.e - p0.e) * f, n: p0.n + (p1.n - p0.n) * f, u: p0.u + (p1.u - p0.u) * f };
+      }
+      want -= L[i];
+    }
+    return pts[pts.length - 1];
+  }
+
   function beginArrival(ship, port, sys, t) {
     if (!ship || !port) return false;
     if (!arrivalPath(port, 0)) return false;
@@ -4001,9 +4279,25 @@
         fromFwd = toPortFrame(basis, ship.fwd || pose0.fwd);
       }
     }
+    /* AND ROUND THE STATION, NOT THROUGH IT. The pull-in was one straight
+     * line from wherever the ship was to the hold point, which is fine
+     * while the hold is on your side of the hull and a flight through the
+     * plating when it is not — and the 2026-09-21 cylinder puts every hold
+     * at one end of its bore, so from the other end the line ran the
+     * length of the station. So the pull-in is a path: straight when the
+     * straight line clears the station, otherwise a few secants round it
+     * (the same geometry the autopilot's routeAround walks planets with). */
+    var via = null;
+    if (from && !port.surface) {
+      var holdLoc = arrivalPath(port, berth)[0];
+      var rr = port.radius || 1;
+      via = pullRoute(from, { e: -holdLoc.x * rr, n: -holdLoc.y * rr, u: -holdLoc.z * rr }, rr);
+    }
+    var rt = (global.Gen && global.Gen.berthRoute) ? global.Gen.berthRoute(port, berth) : null;
     ship.arrival = { port: port.id, berth: berth, at: t, lead: lead,
-                     from: from, fromFwd: fromFwd,
-                     dur: lead + arrivalTotal(port) };
+                     from: from, fromFwd: fromFwd, via: via,
+                     entry: rt ? rt.entry : null,
+                     dur: lead + arrivalTotal(port, berth) };
     ship.thrust = V.zero();
     ship.throttle = 0;
     ship.angRate = { pitch: 0, yaw: 0, roll: 0 };
@@ -4022,9 +4316,64 @@
     var el = t - ship.arrival.at;
     if (!(el >= 0)) el = 0;                 // clock went backwards; start over
 
+    /* LEAVING THE WAY YOU CAME (2026-09-24). A small bay reached through a
+     * heavy one has no door of its own onto space, so undocking from it
+     * runs the arrival backwards: along the route, out through the heavy
+     * bay's doors, to its hold, and only then lets go. See undockShip. */
+    if (ship.arrival.reverse) {
+      var dur = ship.arrival.dur;
+      if (el >= dur) {
+        var endPose = arrivalPose(port, sys, t, ship.arrival.berth, 0);
+        var entry = ship.arrival.entry;
+        var fromBerth = ship.arrival.berth;
+        ship.arrival = null;
+        if (endPose) { ship.pos = endPose.pos; ship.vel = endPose.vel; }
+        if (port.surface) {
+          /* ON THE EXIT PAD (2026-09-24): the transfer has brought the hull
+           * back the way it came in — off the stand, along the traverser,
+           * up the lift and out through the doors — and hands it over held
+           * off the entrance, nose to the sky, climbing gently. The pad
+           * does not take it back: `departed` holds padCapture off until
+           * the ship has left the pad's envelope (see padCapture). */
+          var gb = groundBasis(port, sys, t) || portBasis(port, sys, t);
+          if (gb) {
+            ship.fwd = V.clone(gb.up);
+            ship.right = anyPerpendicular(ship.fwd);
+            ship.up = V.cross(ship.right, ship.fwd);
+            ship.vel = V.addScaled(ship.vel, gb.up, EXIT_PAD_CLIMB);
+          }
+          ship.departed = { port: port.id, berth: fromBerth || 0, surface: true };
+          ship.launchOk = null;               // spent: the doors close behind you
+          return null;
+        }
+        var pb = portBasis(port, sys, t);
+        var apE = (global.Gen && global.Gen.berthApertures && typeof entry === 'number')
+          ? global.Gen.berthApertures(port, entry) : null;
+        if (pb && apE && apE.normal) {
+          var nw = V.addScaled(V.scale(pb.east, apE.normal[0]), pb.north, apE.normal[1]);
+          nw = V.addScaled(nw, pb.up, apE.normal[2]);
+          if (V.len(nw) > 1e-9) ship.vel = V.addScaled(ship.vel, V.norm(nw), 0.003);
+        }
+        ship.departed = { port: port.id, berth: typeof entry === 'number' ? entry : 0 };
+        return null;
+      }
+      var poseR = arrivalPose(port, sys, t, ship.arrival.berth, Math.max(0, dur - el));
+      /* A pose that cannot be built this instant (a nose turning through
+       * dead ahead of the frame's up) is skipped, not the ride abandoned:
+       * abandoning it left the hull wherever it was, under the ground. */
+      if (!poseR) return null;
+      ship.pos = poseR.pos; ship.vel = poseR.vel;
+      ship.fwd = poseR.fwd; ship.up = poseR.up; ship.right = poseR.right;
+      return poseR;
+    }
+
     if (el >= ship.arrival.dur) {
+      /* Into the berth the rail carried it to, not whichever one
+       * assignBerth would pick now: the two agree when nothing changed
+       * mid-ride, and when something did, re-picking is a teleport. */
+      var railBerth = ship.arrival.berth;
       ship.arrival = null;
-      dockShip(ship, port, sys, t);
+      dockShip(ship, port, sys, t, typeof railBerth === 'number' ? railBerth : undefined);
       return null;
     }
     var lead = ship.arrival.lead || 0;
@@ -4036,7 +4385,10 @@
       var basis = portBasis(port, sys, t);
       if (basis) {
         var k = 1 - ease(el / lead);
-        pose.pos = V.addScaled(pose.pos, fromPortFrame(basis, ship.arrival.from), k);
+        var offL = ship.arrival.via ? alongRoute(ship.arrival.via, 1 - k)
+                                    : { e: ship.arrival.from.e * k, n: ship.arrival.from.n * k,
+                                        u: ship.arrival.from.u * k };
+        pose.pos = V.add(pose.pos, fromPortFrame(basis, offL));
         var f0 = fromPortFrame(basis, ship.arrival.fromFwd);
         var f = V.add(V.scale(f0, k), V.scale(pose.fwd, 1 - k));
         if (V.len(f) > 1e-6) {
@@ -4055,7 +4407,12 @@
     return pose;
   }
 
-  function undockShip(ship, sys, t, sepSpeed) {
+  /* km/s up, handed to a hull the exit-pad transfer has just released: a
+   * gentle climb, so a pilot who does nothing drifts up and clear of the
+   * pad rather than settling straight back onto it. */
+  var EXIT_PAD_CLIMB = 0.004;
+
+  function undockShip(ship, sys, t, sepSpeed, opts) {
     var target = sys.byId[ship.docked];
     var ts = bodyState(target, sys, t);
     var away;
@@ -4104,6 +4461,42 @@
                                  ? ship.dockOffset.berth : 0 };
     }
 
+    /* OUT THROUGH THE HEAVY BAY, for a small bay reached through one
+     * (2026-09-24): no push, which would drive the hull through the plating
+     * its own bay is walled in by. The rail runs the way in backwards and
+     * hands the ship over at the heavy bay's hold (stepArrival, reverse). */
+    var GenR = global.Gen;
+    var bR = (ship.dockOffset && typeof ship.dockOffset.berth === 'number') ? ship.dockOffset.berth : 0;
+    var rtR = (!target.surface && GenR && GenR.berthRoute) ? GenR.berthRoute(target, bR) : null;
+    if (rtR && arrivalPath(target, bR)) {
+      ship.docked = null;
+      ship.dockOffset = null;
+      ship.departed = { port: target.id, berth: rtR.entry };
+      ship.arrival = { port: target.id, berth: bR, at: t, lead: 0, reverse: true,
+                       entry: rtR.entry, dur: arrivalTotal(target, bR) };
+      ship.thrust = V.zero();
+      ship.throttle = 0;
+      return target;
+    }
+
+    /* THE TRANSFER TO THE EXIT PAD (Astra, 24-09: "a 'request transfer to
+     * exit pad' which takes you back the way you came in"). The arrival
+     * rail, run backwards: off the stand, back along the traverser, up the
+     * cargo lift and out through the doors to the hold off the entrance,
+     * where stepArrival hands the ship over pointed at the sky. Asked for
+     * explicitly (opts.transfer) so a caller that wants the old instant
+     * launch — a test, a save restore — still gets it. */
+    if (target.surface && opts && opts.transfer && arrivalPath(target, bR)) {
+      ship.docked = null;
+      ship.dockOffset = null;
+      ship.departed = { port: target.id, berth: bR, surface: true };
+      ship.arrival = { port: target.id, berth: bR, at: t, lead: 0, reverse: true,
+                       entry: null, dur: arrivalTotal(target, bR) };
+      ship.thrust = V.zero();
+      ship.throttle = 0;
+      return target;
+    }
+
     if (target.surface) {
       /* Leaving the ground is straight up, and the pad gives you nothing —
        * you climb on the drive alone. This is the moment the whole
@@ -4133,6 +4526,9 @@
       } else {
         ship.pos = V.addScaled(ship.pos, away, target.radius * 0.5);
       }
+      /* And the pad does not take you straight back (see padCapture). */
+      ship.departed = { port: target.id,
+                        berth: (ship.dockOffset && ship.dockOffset.berth) || 0, surface: true };
       ship.docked = null;
       ship.dockOffset = null;
       ship.vel = V.addScaled(ship.vel, away, sepSpeed || 0.002);
@@ -4155,6 +4551,23 @@
      * of a hull rather than the end of a spoke, the number moves and this
      * comment is what says what to do about it. */
     away = V.norm(V.sub(ship.pos, ts.pos));
+    /* ...AND THEN A RE-EXPORT DID PUT A BERTH ON THE SIDE OF A HULL, which
+     * is the day the note above said would come. The 2026-09-21 cylinder
+     * rings its bore with bays that face the AXIS: radial from the hub
+     * points straight back into the bay's own wall, and a ship pushed that
+     * way parked itself in the plating. So the push is the berth's own
+     * normal wherever the model declares one — the way out of the throat,
+     * which is what radial always stood in for — and radial only for a
+     * station with no modelled berth. */
+    var Gen1 = global.Gen;
+    var bIdx = (ship.dockOffset && typeof ship.dockOffset.berth === 'number') ? ship.dockOffset.berth : 0;
+    var ap1 = (Gen1 && Gen1.berthApertures && target) ? Gen1.berthApertures(target, bIdx) : null;
+    var pb1 = ap1 && ap1.normal ? portBasis(target, sys, t) : null;
+    if (pb1) {
+      var nw = V.addScaled(V.scale(pb1.east, ap1.normal[0]), pb1.north, ap1.normal[1]);
+      nw = V.addScaled(nw, pb1.up, ap1.normal[2]);
+      if (V.len(nw) > 1e-9) away = V.norm(nw);
+    }
     if (V.len(away) < 1e-9) away = V.scale(ship.fwd, -1);
     // ... and if the nose was degenerate too, pick any direction rather
     // than pushing off along a zero vector and going nowhere.

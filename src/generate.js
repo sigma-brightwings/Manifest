@@ -617,6 +617,10 @@
     buildFlavor(sys, base);
     buildTraffic(sys, base);
     buildPatrols(sys, base);
+    /* The Syndicate's heavies — after every patrol exists, so no id or draw
+     * in buildPatrols moves. Police-kind, so nothing below that looks for a
+     * naval garrison can mistake one for it. */
+    buildSyndicateHeavies(sys, base);
     /* Licensed reprocessing. AFTER the patrols, because the licence is
      * granted on a naval garrison being here and the garrison is the last
      * thing decided. Consumes no rng draws — see Economy.licenseMilitaryFuel
@@ -628,7 +632,84 @@
     Eco.siteFleetCarrier(sys);
     buildContraband(sys, base);
     buildPortDressing(sys, base);
+    /* Farms and liveries, 2026-09-22. Both read state everything above has
+     * already fixed — who holds the system, where the navy is based, which
+     * pads have vines — and neither draws a number, so both are additive to
+     * every seed. See Economy.plantFarms and stampLiveries below. */
+    if (Eco.plantFarms) Eco.plantFarms(sys);
+    stampLiveries(sys);
+    /* And the plants over the giants act on what they were just stamped as:
+     * skimmers scoop hydrogen, navy and Syndicate refineries press milfuel. */
+    if (Eco.runGiantPlants) Eco.runGiantPlants(sys);
     return sys;
+  }
+
+  /* ---- WHOSE BUILDING IS IT (2026-09-22) ---------------------------------
+   * The 22-09 art comes in three liveries of the same buildings — civilian,
+   * navy and Syndicate — and render.js picks by `port.livery`. Decided here
+   * rather than in render.js because it is a fact about the port, and the
+   * renderer is not where facts about ports are made.
+   *
+   *   syn   the Syndicate holds the system, or the port flies its flag
+   *   navy  a naval garrison is BASED here (a cutter passing through a
+   *         hold is not a base) and the port belongs to the garrison's
+   *         faction; plus any carrier, which is the navy by definition
+   *   civ   everything else
+   *
+   * `siteKind` is the other half: what sort of ground port the building on
+   * a planet is. A farm by its crop; on an ICE WORLD, where volatiles are
+   * harvested, a runway port by what the port does — REFI for harvesting,
+   * INDU for heavy industry, PASS for passengers. Those runway models are
+   * still being made (Astra, 22-09: "build the hooks ... we're going to be
+   * replacing it with the final versions"), and render.js falls back to the
+   * city port until a runway-refi-*, runway-indu-* or runway-pass-* file is
+   * in the library. No rng anywhere in this function. */
+  var RUNWAY_BY_ROLE = {
+    shipyard: 'indu', mining: 'indu', reprocessing: 'indu', milfuel: 'indu',
+    /* Only a highport is a passenger port. An ordinary port on an ice world
+     * is there for the ice, which is the point of the REFI default. */
+    highport: 'pass'
+  };
+  var SKIMMER_SHARE = 0.65;         // of the plants over a giant
+  function stampLiveries(sys) {
+    var ports = sys.ports || [];
+    var garrison = null;
+    for (var i = 0; i < (sys.patrols || []).length; i++) {
+      var pt = sys.patrols[i];
+      if (pt.kind === 'navy' && !pt.passing) { garrison = pt; break; }
+    }
+    for (var k = 0; k < ports.length; k++) {
+      var p = ports[k], role = p.market && p.market.role;
+      var liv = 'civ';
+      if (sys.pirateHeld || p.faction === 'outlaw') liv = 'syn';
+      else if (role === 'carrier') liv = 'navy';
+      /* A milfuel factory wears its LICENSOR's colours (2026-09-25): the
+       * building is the navy refinery, and it is the navy's unless the
+       * licence is the Syndicate's — which outside a hold means their
+       * flagship is standing over the system. Read, not decided: the
+       * licence was granted by Economy.licenseMilitaryFuel above. */
+      else if (role === 'milfuel') {
+        liv = (Eco.milfuelLicensor && Eco.milfuelLicensor(sys) === 'syndicate') ? 'syn' : 'navy';
+      }
+      else if (garrison && p.faction && p.faction === garrison.faction) liv = 'navy';
+      p.livery = liv;
+
+      /* SKIMMER OR REFINERY, over a giant. Astra, 24-09: "There should be
+       * more skimmers than refineries." A hash, so the same port is the same
+       * plant forever, and render.js and the economy read this one answer. */
+      p.plant = null;
+      if (role === 'refinery') {
+        var hp = (RNG.hashString('giantplant|' + p.id) % 1000) / 1000;
+        p.plant = hp < SKIMMER_SHARE ? 'skimmer' : 'refinery';
+      }
+
+      var site = null;
+      if (p.surface && !p.underground) {
+        if (p.crop) site = 'farm';
+        else if (p.parentBody && p.parentBody.type === 'iceball') site = 'runway-' + (RUNWAY_BY_ROLE[role] || 'refi');
+      }
+      p.siteKind = site;
+    }
   }
 
   /* --- interstellar space -------------------------------------------------
@@ -762,6 +843,11 @@
      * the single most useful thing to know about it from outside. */
     if (role && role.wasteSink) {
       out.push({ text: 'REPROCESSING — WASTE ACCEPTED', kind: 'role' });
+    } else if (role && role.milfuelPlant) {
+      /* A milfuel factory takes both feeds (2026-09-25) and the board says
+       * so — the drums you were paid to haul are welcome here. No draw, so
+       * the signs after it are the same boards they always were. */
+      out.push({ text: 'MILFUEL WORKS — WASTE & ISOTOPES ACCEPTED', kind: 'role' });
     } else {
       var exp = biggestExport(port);
       if (exp) out.push({ text: exp.toUpperCase() + ' — BULK RATES', kind: 'role' });
@@ -1210,6 +1296,51 @@
     });
   }
 
+  /* THE WAY IN THROUGH A HEAVY BAY (2026-09-24), or null.
+   *
+   * Astra: an S/M ship should be able to "path all the way through to the S
+   * or M bay from the L bay entrances". glb2hulls finds that route in the
+   * art where the art has one (interiorRoutes) and writes it on the S/M
+   * berth: `entry`, the L berth it comes in by, in the same sorted order as
+   * every other berth index, and `via`, the corners between the two stands
+   * in the model's normalised frame. This only reads it back. */
+  function berthRoute(port, i) {
+    var mb = modelledBerths(port);
+    if (!mb) return null;
+    var sorted = sortModelBerths(mb);
+    var k = ((i % sorted.length) + sorted.length) % sorted.length;
+    var b = sorted[k];
+    if (!b || typeof b.entry !== 'number' || !b.via || b.entry === k || !sorted[b.entry]) return null;
+    return { entry: b.entry, via: b.via, cls: b.cls || null };
+  }
+
+  /* THE WAY DOWN TO A GROUND SITE'S BERTH (2026-09-24), or null.
+   *
+   * Astra: the ground stations' "bays live underground". glb2hulls finds,
+   * for every berth of a model that declares entrances (a surface pad door
+   * with its 45-degree cargo lift, a hangar door, a portal in a mountain
+   * face), the route in from one of them, and writes it on the berth as
+   * `door` (the entrance's index in the model's `entrances`) and `doorVia`
+   * (the corners, in the model's normalised frame). This reads it back,
+   * with the entrance itself: where it is, and which way is outside. */
+  function berthDoorRoute(port, i) {
+    var mb = modelledBerths(port);
+    if (!mb) return null;
+    var sorted = sortModelBerths(mb);
+    var k = ((i % sorted.length) + sorted.length) % sorted.length;
+    var b = sorted[k];
+    if (!b || typeof b.door !== 'number' || !b.doorVia) return null;
+    var R = global.Render;
+    /* The index entry, not libPort: entrances are metadata, and reading
+     * them must not fetch a model's triangles. */
+    var id = (R && R.portModelFor) ? R.portModelFor(port) : null;
+    var lib = id && global.PortLib ? global.PortLib[id] : null;
+    var e = lib && lib.entrances && lib.entrances[b.door];
+    if (!e || !e.mid) return null;
+    return { door: b.door, node: e.node || null, mid: e.mid, normal: e.normal || [0, 0, 1],
+             via: b.doorVia, lift: !!b.doorLift };
+  }
+
   /* Any other anchor bucket the model declares, or null. */
   function modelledAnchors(port, bucket) {
     var R = global.Render;
@@ -1273,6 +1404,8 @@
       return best ? best.d : null;
     }
 
+    var gate = pick(modelledAnchors(port, 'gates'), 1);
+    var way = entryLine(port, k, m, n, gate);
     return {
       /* `mid` rides along because it is the only thing a DOOR and a BERTH
        * can be matched on: render.js splits the leaves out of the shell and
@@ -1281,9 +1414,105 @@
        * without this. */
       mid: m.slice(),
       normal: n.slice(),
-      gate: pick(modelledAnchors(port, 'gates'), 1),
-      inner: pick(modelledAnchors(port, 'innerGates'), -1)
+      gate: gate,
+      inner: pick(modelledAnchors(port, 'innerGates'), -1),
+      /* HOW YOU GET TO THE DOOR FROM OPEN SPACE — see entryLine. `entry`
+       * is the unit direction, in the model frame, from the door plane out
+       * to open space; `exit` is how far along it the hull ends. Straight
+       * out along the normal for every berth that opens onto space, which
+       * is every berth the library had before 2026-09-21. */
+      entry: way ? way.dir : null,
+      exit: way ? way.exit : null,
+      reachable: !!way
     };
+  }
+
+  /* ---- A DOOR YOU CAN FLY TO -----------------------------------------------
+   *
+   * Every berth used to open straight onto space: out along its normal was
+   * open sky. The 2026-09-21 art broke that twice over. The cylinder's bays
+   * ring its BORE, facing the axis, so straight out of a door is straight
+   * across the bore into the bay opposite. And the hydrogen refinery's small
+   * and medium bays face INWARD, into the station — its own notes say "S
+   * and M never dock from outside; they come up through the heavy bay and
+   * down the lift".
+   *
+   * So the way in is measured, not assumed: from the door plane, is there a
+   * straight line to open space that touches nothing? The normal first,
+   * because that is right for every station that already worked and keeps
+   * them exactly as they were; then the directions a bore or a slot could
+   * open along — the model's axes, and halfway between each and the normal.
+   * The clear one that leans furthest outward wins. A berth with no clear
+   * line at all is not a berth you can be sent to from outside, and
+   * `reachable` says so (Sim.assignBerth reads it).
+   *
+   * Measured against the art with THIS berth's doors open and every other
+   * door shut, which is the state a ship arriving at it actually meets.
+   * Cached per model and berth: the answer is a fact about the model, and a
+   * ray through twenty thousand triangles is not something to ask every
+   * frame. */
+  var ENTRY_CACHE = {};
+  var ENTRY_REACH = 2.4;             // model radii: from the door to well clear of any hull
+
+  function entryLine(port, k, m, n, gate) {
+    var R = global.Render;
+    var role = (R && R.portModelFor) ? R.portModelFor(port) : null;
+    if (!role || !R.portSegmentHit) return { dir: n.slice(), exit: 1 };
+    var key = role + '#' + k;
+    if (ENTRY_CACHE[key] !== undefined) return ENTRY_CACHE[key];
+    var g0 = (typeof gate === 'number') ? gate : 0;
+    var from = [m[0] + n[0] * g0, m[1] + n[1] * g0, m[2] + n[2] * g0];
+    var doors = { open: 1, berthMid: m };
+
+    function unit(v) {
+      var l = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+      return l > 1e-9 ? [v[0] / l, v[1] / l, v[2] / l] : null;
+    }
+    var cands = [n.slice()];
+    var axes = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+    /* Leaning further and further from the normal toward each axis: half
+     * way, then two, four and eight parts axis to one part normal. A bay
+     * on the wall of a long bore needs the steep ones — its way out runs
+     * almost along the bore, only just clear of the wall it sits in. */
+    [1, 2, 4, 8].forEach(function (w) {
+      axes.forEach(function (a) {
+        var h = unit([a[0] * w + n[0], a[1] * w + n[1], a[2] * w + n[2]]);
+        if (h) cands.push(h);
+      });
+    });
+    axes.forEach(function (a) { cands.push(a); });
+
+    var best = null;
+    for (var c = 0; c < cands.length; c++) {
+      var d = cands[c];
+      var out = d[0] * n[0] + d[1] * n[1] + d[2] * n[2];
+      if (!(out > 1e-3)) continue;              // never in through the back of the bay
+      /* Nudged a whisker off the door plane, so the leaves' own edges at
+       * the plane do not count as being in the way of leaving it. */
+      var a0 = [from[0] + d[0] * 0.01, from[1] + d[1] * 0.01, from[2] + d[2] * 0.01];
+      var b0 = [from[0] + d[0] * ENTRY_REACH, from[1] + d[1] * ENTRY_REACH,
+                from[2] + d[2] * ENTRY_REACH];
+      if (R.portSegmentHit(role, a0, b0, doors)) continue;
+      if (!best || out > best.out + 1e-9) best = { dir: d, out: out };
+      if (c === 0) break;                       // the normal is clear: nothing to improve on
+    }
+    var res = null;
+    if (best) {
+      /* Where the hull ends along it: the farthest point any model vertex
+       * projects to, which is where "out of the station" starts. */
+      var lib = R.libPort ? R.libPort(role) : null;
+      var far = 0, sv = lib && lib.shell && lib.shell.v;
+      if (sv) {
+        for (var q = 0; q < sv.length; q += 7) {
+          var dd = (sv[q][0] - from[0]) * best.dir[0] + (sv[q][1] - from[1]) * best.dir[1] +
+                   (sv[q][2] - from[2]) * best.dir[2];
+          if (dd > far) far = dd;
+        }
+      }
+      res = { dir: best.dir, exit: far };
+    }
+    ENTRY_CACHE[key] = res;
+    return res;
   }
 
   /* Is this port a HALL IN ORBIT rather than a shaft in the ground? Asked in
@@ -2310,6 +2539,40 @@
   var POLICE_NAMES = ['Vigil', 'Sentinel', 'Warden', 'Picket', 'Marshal', 'Bastion',
                       'Cordon', 'Lictor'];
   var MERC_NAMES = ['Hired', 'Contract', 'Retainer', 'Bondsman', 'Freelance'];
+
+  /* ---- THE SYNDICATE'S OWN MUSCLE (2026-09-24) ----------------------------
+   * Astra: "give the syndicate all ships with the addition of enforcer-*
+   * and enforcer_heavy-*. Syndicate is mafia. Pirates are like their
+   * disposable muscle."
+   *
+   * So the ladder, top to bottom, is: the FLAGSHIP (a capital, the one you
+   * cannot buy your way past), the HEAVY (enforcer_heavy — a standing
+   * presence in a hold, the mob's answer to a garrison cutter), the
+   * ENFORCER (enforcer — its beat cops, the enforcement wing that already
+   * carried SYNDICATE_GUN), and at the bottom the PIRATES, who were always
+   * flying the outlaw flag and are now understood as what they are: cheap,
+   * deniable, and expendable. Everything else a power flies — traders,
+   * tugs, tenders — the Syndicate already had, because a ship out of a
+   * Syndicate port flies the Syndicate's flag.
+   *
+   * Enforcers are named like the job, not like the law. */
+  var ENFORCER_NAMES = ['Collector', 'Fixer', 'Button', 'Associate', 'Earner',
+                        'Envoy', 'Arbiter', 'Courtesy'];
+  var HEAVY_NAMES = ['Consigliere', 'Underboss', 'Capo', 'Padrone', 'Principal',
+                     'Silent Partner', 'Last Word', 'Standing Offer'];
+
+  /* A size letter for one ship, hashed off its id — the same trick as
+   * capitalSizeLetter and for the same reason: a draw from the patrol
+   * stream would move every patrol after it. The enforcer families come in
+   * S, M and L and Astra asked for all of them, so the letter is per ship
+   * rather than per class; a hold's beat cops are a mix, the way a real
+   * crew is. `salt` keeps an enforcer and a heavy with the same id from
+   * being forced to agree. */
+  function hashedSizeLetter(salt, id, seed) {
+    var h = global.RNG ? global.RNG.hashString(salt + '|' + seed + '|' + id) : 0;
+    var r = (h % 1000) / 1000;
+    return r < 0.34 ? 's' : r < 0.72 ? 'm' : 'l';
+  }
   /* The Syndicate paints its hulls the way it paints its docks. */
   var SYNDICATE_HULL = '#c4322a';
 
@@ -2369,13 +2632,26 @@
         var spec = { cls: 'police', accel: PATROL_CLASSES.police.accel,
                      size: PATROL_CLASSES.police.size, color: fac.color,
                      label: PATROL_CLASSES.police.label };
-        sys.patrols.push({
-          id: 'n' + (id++), kind: 'police', faction: fac.id,
-          name: rng.pick(POLICE_NAMES) + ' ' + (rng.int(1, 40)),
-          className: 'interceptor', color: fac.color,
+        /* THE MOB'S OWN COPS fly the mob's own hull. Everything that makes
+         * this a police patrol — kind, route, speed, the draws below — is
+         * untouched; `hullClass` and a hashed size letter are the whole
+         * difference, and neither takes a draw. The name comes off a
+         * different list with the SAME single `pick`, so the stream after
+         * it is byte-identical to a build without this. */
+        var mob = !!fac.outlaw;
+        var pid = 'n' + (id++);
+        var cop = {
+          id: pid, kind: 'police', faction: fac.id,
+          name: rng.pick(mob ? ENFORCER_NAMES : POLICE_NAMES) + ' ' + (rng.int(1, 40)),
+          className: mob ? 'enforcer' : 'interceptor', color: fac.color,
           size: PATROL_CLASSES.police.size, accel: PATROL_CLASSES.police.accel,
-          rail: { type: 'route', route: patrolRoute('n' + (id - 1), '', spec, A, B, sys, rng) }
-        });
+          rail: { type: 'route', route: patrolRoute(pid, '', spec, A, B, sys, rng) }
+        };
+        if (mob) {
+          cop.hullClass = 'enforcer';
+          cop.sizeLetter = hashedSizeLetter('enforcer', pid, (sys && sys.seed) || '');
+        }
+        sys.patrols.push(cop);
       }
     });
 
@@ -2752,6 +3028,72 @@
             lan: rng.angle(), argp: rng.angle(), m0: rng.angle()
           }
         }
+      });
+    }
+  }
+
+  /* ---- THE HEAVY -----------------------------------------------------------
+   * The Syndicate's answer to a garrison cutter: a standing presence on a
+   * beat between two of the mob's own ports, in the systems it holds. The
+   * navy loop in buildPatrols skips outlaws on purpose ("the syndicate does
+   * not field a navy") and that stays true — this is not a navy, and it is
+   * deliberately NOT kind 'navy'. Several places read `kind === 'navy' &&
+   * !passing` as "a naval garrison is based here": the milfuel licence, the
+   * fleet carrier, the port's navy livery, verify.cjs's zero-garrisons-in-
+   * holds check. A heavy that tripped all of them would put a navy carrier
+   * in a Syndicate hold.
+   *
+   * So it is a POLICE-kind patrol — the top of the enforcement wing — and
+   * inherits everything that already makes the mob's cops what they are:
+   * SYNDICATE_GUN, answering distress, spoiling a robbery by being in the
+   * lane, scanning a hold for the waste the Syndicate bans. What it adds is
+   * size and weight: slower than a beat cop and twice the length, because
+   * a heavy does not chase you, it is simply where you were going.
+   *
+   * A SEPARATE PASS, run after buildPatrols, with its own substream and its
+   * own id prefix ('e'). Nothing already in the sky moves: not a draw, not
+   * a patrol id — and patrol ids matter, because capital and tender sizes
+   * are hashed off them. */
+  var HEAVY_SPEC = { size: 0.130, accel: 0.0200, label: 'heavy enforcer' };
+  /* MEASURED across six galaxies (216 holds), not guessed. Every hold has
+   * at least two Syndicate ports and the median has nine — holds are big,
+   * busy places — so a port-count gate alone would put a heavy in all of
+   * them, which is wallpaper. A 0.6 coin puts one in 58% of holds; a
+   * second only where the mob runs ten ports or more. That leaves the
+   * beat cops (about two per hold) clearly the commoner sight. */
+  var HEAVY_CHANCE = 0.6;
+  var HEAVY_TWO_AT = 10;            // own ports before a hold rates a second
+
+  function buildSyndicateHeavies(sys, base) {
+    if (!sys.pirateHeld) return;
+    var fac = (sys.factionById && sys.factionById.outlaw) || sys.outlaw;
+    if (!fac) return;
+    var mine = (sys.ports || []).filter(function (p) { return p.faction === 'outlaw'; });
+    if (mine.length < 2) return;
+    var hr = base.fork('syndicate-heavies');
+    if (!hr.chance(HEAVY_CHANCE)) return;
+    var n = mine.length >= HEAVY_TWO_AT ? 2 : 1;
+    var spec = { cls: 'police', accel: HEAVY_SPEC.accel, size: HEAVY_SPEC.size,
+                 color: fac.color, label: HEAVY_SPEC.label };
+    sys.patrols = sys.patrols || [];
+    for (var k = 0; k < n; k++) {
+      var A = mine[hr.int(0, mine.length - 1)];
+      var rest = mine.filter(function (p) { return p !== A; });
+      var B = rest[hr.int(0, rest.length - 1)];
+      var hid = 'e' + k;
+      var hl = hashedSizeLetter('heavy', hid, (sys && sys.seed) || '');
+      sys.patrols.push({
+        id: hid, kind: 'police', faction: 'outlaw', heavy: true,
+        name: 'The ' + hr.pick(HEAVY_NAMES),
+        className: HEAVY_SPEC.label, color: fac.color,
+        /* Drawn scale follows the letter, as a capital's does, so an L
+         * heavy reads as the bigger ship. The beat cops above do NOT scale:
+         * they predate this and their size is also their hit radius. */
+        size: HEAVY_SPEC.size * (hl === 'l' ? 1.25 : hl === 's' ? 0.8 : 1),
+        accel: HEAVY_SPEC.accel,
+        hullClass: 'enforcer_heavy',
+        sizeLetter: hl,
+        rail: { type: 'route', route: patrolRoute(hid, '', spec, A, B, sys, hr) }
       });
     }
   }
@@ -3608,6 +3950,15 @@
      * hangar drawn somewhere the ship does not actually stop. */
     SHALLOW_DEPTH: SHALLOW_DEPTH,
     bayGeometry: bayGeometry,
+    stampLiveries: stampLiveries,
+    /* A port model's geometry arrived after something here had already
+     * asked about its doors (PortGeo's async path). Forget what was
+     * worked out without it. */
+    forgetPortModel: function (id) {
+      Object.keys(ENTRY_CACHE).forEach(function (k) {
+        if (k.indexOf(id + '#') === 0) delete ENTRY_CACHE[k];
+      });
+    },
     /* The shed's own default table, exported so a test can pin the
      * BEHAVIOUR — an unmodelled bay falls back to the shared table — rather
      * than pinning the numbers in it, which are tuned and will move again. */
@@ -3617,6 +3968,8 @@
     tableBerthOffset: tableBerthOffset,
     modelledBerths: modelledBerths,
     berthApertures: berthApertures,
+    berthRoute: berthRoute,
+    berthDoorRoute: berthDoorRoute,
     controlFor: controlFor, CONTROL_RANGE: CONTROL_RANGE,
     BERTH_COUNT: BERTH_COUNT,
     UNDERGROUND_DEPTH: UNDERGROUND_DEPTH,
