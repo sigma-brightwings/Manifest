@@ -287,6 +287,9 @@
     G.missions = [];
     /* A new career owns one ship, and it is the one you are in. */
     G.fleet = [];
+    /* Owns no plants, and has changed no system. */
+    G.holdings = [];
+    G.uplift = {};
     /* And has never shot an ambulance. */
     G.tenderKills = 0;
     G.rescue = null;
@@ -887,7 +890,7 @@
         anchor: Slip.moduleEffective(G.ship, 'anchor')
                   ? Slip.fittedClass(G.ship, 'anchor') : null,
         t: G.t,
-        crimeFrom: G.sys.crimeScore || 0,
+        crimeFrom: (Combat.effectiveCrime ? Combat.effectiveCrime(G, G.sys) : G.sys.crimeScore) || 0,
         crimeTo: crimeGuess(plan.to),
         cargoValue: cargoValue(G.ship),
         contraband: hasContraband(G.ship)
@@ -929,7 +932,10 @@
    * which is also the honest answer, because you genuinely do not know. */
   function crimeGuess(star) {
     var cached = G.systemCache && G.systemCache[star.id];
-    if (cached && cached.crimeScore !== undefined) return cached.crimeScore;
+    if (cached && cached.crimeScore !== undefined) {
+      /* With whatever your plants there have done to it (holdings.js). */
+      return global.Holdings ? global.Holdings.crimeOf(G, cached, star.id) : cached.crimeScore;
+    }
     return 40;
   }
 
@@ -3795,6 +3801,10 @@
   function settleAccounts() {
     if (!Fleet || !Fleet.settle) return [];
     var lines = Fleet.settle(G, G.t);
+    /* And the plants: income in, and a week of drift on each system they
+     * are in. AFTER the bills, so a career short of money pays its crew
+     * out of what it had rather than out of what a plant is about to send. */
+    if (global.Holdings) lines = lines.concat(global.Holdings.settle(G, G.t));
     for (var j = 0; j < lines.length; j++) logTrade(lines[j]);
     return lines;
   }

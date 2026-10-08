@@ -3820,8 +3820,30 @@
   function effectiveCorruption(G, base, starId) {
     var id = starId || (G && G.here && G.here.id);
     var shift = decayedShift(G, id);
+    /* AND THE PLANTS YOU OWN THERE (holdings.js, 2026-10-07). The comment
+     * above says nothing makes a place cleaner; owning industry and running
+     * it clean is the first thing that does. A durable layer rather than a
+     * decaying one — it is a payroll and a security office, not a favour —
+     * and it can be negative, which the bribe layer never is. */
+    var H = global.Holdings;
+    if (H && H.shiftOf && id) shift += H.shiftOf(G, id).corr;
     if (!shift) return base;
     return Math.max(0, Math.min(100, Math.round(base + shift)));
+  }
+
+  /* Crime score and development, through the same door. holdings.js owns
+   * the arithmetic; these exist so every caller in this file asks one
+   * question and an absent Holdings (a test that never loaded it) answers
+   * with the generated number, exactly as before. */
+  function effectiveCrime(G, sys) {
+    var base = (sys && sys.crimeScore !== undefined) ? sys.crimeScore : 40;
+    var H = global.Holdings;
+    return (H && H.crimeOf && G && G.here) ? H.crimeOf(G, sys, G.here.id) : base;
+  }
+  function effectiveDev(G, port) {
+    var base = (port && port.market && typeof port.market.dev === 'number') ? port.market.dev : 0.25;
+    var H = global.Holdings;
+    return (H && H.devOf && G && G.here) ? H.devOf(G, port, G.here.id) : base;
   }
 
   /* Convenience wrapper for callers (screens.js) that have a system object
@@ -4044,7 +4066,7 @@
   function resolveScan(G, spec, hooks) {
     var Economy = global.Economy;
     var sys = G.sys, ship = G.ship;
-    var crime = (sys && sys.crimeScore !== undefined) ? sys.crimeScore : 40;
+    var crime = effectiveCrime(G, sys);
     var searchChance = Math.max(SEARCH_FLOOR, 1 - (crime / 100) * 0.85);
 
     if (Math.random() >= searchChance) {
@@ -4164,7 +4186,7 @@
       return { witnessed: false, reported: false };
     }
 
-    var crime = (sys && sys.crimeScore !== undefined) ? sys.crimeScore : 40;
+    var crime = effectiveCrime(G, sys);
     var reportChance = Math.max(REPORT_FLOOR, 1 - (crime / 100) * 0.85);
     var who = witness.name || 'a nearby ship';
 
@@ -6190,7 +6212,10 @@
     var R = global.RNG;
     if (!R || !R.hashString) return true;
     var win = Math.floor((t || 0) / HULL_WINDOW);
-    var dev = (port.market && typeof port.market.dev === 'number') ? port.market.dev : 0.25;
+    /* Effective development: a system your plants have built up stocks
+     * better hulls. Asked of the live game because this signature never
+     * carried G; only the dock you are at is ever asked. */
+    var dev = effectiveDev(global.Game, port);
     var v = (R.hashString('hull|' + port.id + '|' + hullId + '|' + win) % 1000) / 1000;
     return v < hullChance(size, dev);
   }
@@ -6216,10 +6241,9 @@
   function stockAt(G, port) {
     var out = [];
     if (!port) return out;
-    var dev = (port.market && typeof port.market.dev === 'number')
-      ? port.market.dev : 0.25;
+    var dev = effectiveDev(G, port);
     var sys = G.sys;
-    var crime = (sys && sys.crimeScore !== undefined) ? sys.crimeScore : 40;
+    var crime = effectiveCrime(G, sys);
     /* A GREY MARKET IS A MARKET, and that is why it reads corruption rather
      * than permissivity.
      *
@@ -6578,6 +6602,7 @@
     RISK_TONNES: RISK_TONNES,
     localTradeRate: localTradeRate,
     effectiveCorruption: effectiveCorruption, systemCorruption: systemCorruption,
+    effectiveCrime: effectiveCrime, effectiveDev: effectiveDev,
     bumpCorruption: bumpCorruption, decayedShift: decayedShift,
     bribeCost: bribeCost, bribePort: bribePort,
     corruptionLabel: corruptionLabel, violenceLabel: violenceLabel,

@@ -3943,6 +3943,10 @@
     FACTION_COLORS: FACTION_COLORS,
     makeName: makeName,
     buildGovernment: buildGovernment,
+    /* Exported for holdings.js, which recomputes a system's crime score
+     * from its EFFECTIVE corruption and violence. One formula, or cleaning
+     * a system up would move one number and not the other. */
+    permissivity: permissivity,
     GOVERNMENTS: GOVERNMENTS,
     GOVERNMENT_BY_ID: GOVERNMENT_BY_ID,
     /* Exported so render.js can build the shaft mesh to the SAME depth the

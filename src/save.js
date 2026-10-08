@@ -330,6 +330,11 @@
        * it had. Stored whole because a parked ship IS its record — there
        * is no live object to reconstruct it from. */
       fleet: G.fleet || [],
+      /* THE PLANTS YOU OWN, and what they have done to the systems they
+       * are in (holdings.js). Both additive: an older career loads owning
+       * nothing, and every system reads exactly its generated government. */
+      holdings: G.holdings || [],
+      uplift: G.uplift || {},
       /* THE TENDER ON ITS WAY, and whether one ever will be again. Both
        * additive. The responder is named by id and re-attached on load
        * (Combat.restoreRescue), so the ETA quoted before a reload is the
@@ -456,6 +461,8 @@
     G.allegiance = data.allegiance || null;
     G.owed = data.owed || [];
     G.fleet = data.fleet || [];
+    G.holdings = data.holdings || [];
+    G.uplift = (data.uplift && typeof data.uplift === 'object') ? data.uplift : {};
     G.rescue = data.rescue || null;
     G.tenderKills = data.tenderKills || 0;
     G.doneMissions = data.doneMissions || {};
