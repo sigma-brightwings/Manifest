@@ -94,6 +94,10 @@
     /* A developed port has more people looking for a berth, which is the
      * same reason it has more hulls on the floor. */
     var dev = (typeof port.market.dev === 'number') ? port.market.dev : 0.25;
+    /* Effective, so a system your plants have trained up has better hands
+     * in the hall (holdings.js). Only the dock you are at is ever asked. */
+    var C = global.Combat;
+    if (C && C.effectiveDev && global.Game) dev = C.effectiveDev(global.Game, port);
     var n = HALL_MIN + rng.int(0, Math.round((HALL_MAX - HALL_MIN) * (0.4 + dev)));
     var out = [];
     for (var i = 0; i < n; i++) {

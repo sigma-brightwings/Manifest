@@ -1618,12 +1618,28 @@
     /* FLEET is a tab rather than a screen because it is a thing you do at
      * a yard: it is where you look at what you own, sell one, or — once
      * orders exist — tell one where to go. */
+    /* INDUSTRY (2026-10-07): plants for sale and plants you own. A tab at
+     * the yard because the yard is where a port's books are kept, and
+     * because owning one is a thing you check on every time you dock. */
     var tabs = [['fit', 'FITTING'], ['buy', 'BUY'], ['hull', 'HULLS'],
-                ['crew', 'CREW'], ['fleet', 'FLEET']];
+                ['crew', 'CREW'], ['fleet', 'FLEET'], ['works', 'INDUSTRY']];
+    /* A SIXTH TAB DOES NOT FIT BESIDE THE BUDGET on a laptop-width window:
+     * the bar's text runs to about x + 360 and six tabs want 396 px of what
+     * is left. So when they would collide, the tabs take a row of their own
+     * under the bar and the list starts one row lower — rather than the
+     * tabs being drawn over SLOTS, or shrunk until INDUSTRY is unreadable. */
+    var tabStep = 66, tabsW = tabs.length * tabStep;
+    var tabRow = (w - 24 - tabsW) < 360;
+    var tabY = tabRow ? barY + 18 : barY;
+    /* And on its own row the tabs share the panel's width rather than
+     * assuming 66 px each — seen on a 744 px window, six of them ran off
+     * the left edge of the panel. Font steps down a size when they are
+     * that tight, so INDUSTRY still fits inside its own button. */
+    if (tabRow) tabStep = Math.min(66, Math.floor((w - 24) / tabs.length));
     for (var ti = 0; ti < tabs.length; ti++) {
-      btn(ctx, x + w - 12 - (tabs.length - ti) * 66, barY, 62, 15, tabs[ti][1],
+      btn(ctx, x + w - 12 - (tabs.length - ti) * tabStep, tabY, tabStep - 4, 15, tabs[ti][1],
           (function (id) { return function () { G.yardTab = id; }; })(tabs[ti][0]),
-          { font: 10, hot: G.yardTab === tabs[ti][0] });
+          { font: tabStep < 60 ? 9 : 10, hot: G.yardTab === tabs[ti][0] });
     }
 
     /* Rows are BUILT first and DRAWN second. The old version drew straight
@@ -1712,11 +1728,12 @@
     else if (G.yardTab === 'buy') drawYardBuy(ctx, x, w, row, s, port);
     else if (G.yardTab === 'crew') drawYardCrew(ctx, x, w, row, s, port);
     else if (G.yardTab === 'fleet') drawYardFleet(ctx, x, w, row, s, port);
+    else if (G.yardTab === 'works') drawYardIndustry(ctx, x, w, row, s, port);
     else cardH = drawYardHulls(ctx, x, w, row, s, port) || 0;
 
     /* ---- the window ---- */
     var bh = 21, gap = 4;
-    var listY = barY + 22;
+    var listY = barY + 22 + (tabRow ? 18 : 0);
     /* The showroom card takes the bottom of the panel, and the list gets
      * what is left — so the rows scroll rather than the ship being pushed
      * off the end of a window that was sized before anybody knew it was
@@ -1842,6 +1859,104 @@
                   ', ' + Crew.ratingWord(p.rating) + '.', 6);
             }, poor);
       })(hall[m]);
+    }
+    return 0;
+  }
+
+  /* --- INDUSTRY: plants for sale, and the plants you own ------------------
+   *
+   * Three blocks, in the order a player asks them. What is this system like
+   * (and what have you done to it); what is for sale here; what do you own
+   * and how is it run. Every refusal is a disabled row that says why, the
+   * same way the rest of the yard does it (doctrine 5). See holdings.js. */
+  function drawYardIndustry(ctx, x, w, row, s, port) {
+    var H = global.Holdings;
+    if (!H || !G.sys || !G.here) return 0;
+    var star = G.here.id, sys = G.sys;
+
+    var corr = H.corruptionOf(G, sys, star), crime = H.crimeOf(G, sys, star);
+    var dev = H.devOf(G, port, star), sh = H.shiftOf(G, star);
+    var moved = (sh.corr || sh.dev)
+      ? '  ·  your plants: corruption ' + (sh.corr > 0 ? '+' : '') + sh.corr.toFixed(1) +
+        ', development ' + (sh.dev >= 0 ? '+' : '') + Math.round(sh.dev * 100) + '%'
+      : '';
+    row((sys.government ? sys.government.name.toUpperCase() : 'THIS SYSTEM') +
+        '  ·  corruption ' + corr + ' (' + Combat.corruptionLabel(corr) + ')',
+        'crime ' + crime + '  ·  development ' + Math.round(dev * 100) + '% here' + moved,
+        function () {}, true);
+
+    /* For sale in this system. Bought only at the plant's own desk, so a
+     * plant elsewhere in the system is listed but the row says where to go. */
+    var sale = H.forSale(G, sys, star);
+    row('FOR SALE IN ' + (G.here.name || 'this system').toUpperCase() + '  ·  ' + sale.length,
+        sale.length ? 'distressed plants, sold by the liquidator at their own desk'
+                    : 'nothing here is struggling enough to sell',
+        function () {}, true);
+    for (var i = 0; i < sale.length; i++) {
+      (function (p, q) {
+        var here = s.docked === p.id, poor = s.credits < q.price;
+        /* What decides it goes first — price, health, and whether you can
+         * buy it from where you stand — because a narrow window clips the
+         * end of the row, and it clipped exactly those the first time. */
+        row((here ? (poor ? '  SHORT  ' : '  BUY  ') : '  ') + p.name + '  —  ' + q.price + ' cr  ·  ' +
+            Math.round(q.health * 100) + '%',
+            q.kind + (here ? (poor ? '  ·  short ' + Math.round(q.price - s.credits) + ' cr' : '')
+                           : '  ·  dock there to buy'),
+            function () {
+              var r = H.buy(G, sys, star, p);
+              say(r.ok ? p.name + ' is yours — ' + r.price + ' cr. It runs clean unless you say otherwise.'
+                       : 'No: ' + r.why, 6);
+            }, !here || poor, { hot: here && !poor });
+      })(sale[i].port, sale[i].quote);
+    }
+    /* And why THIS port is not on the list, when it is not — a plant whose
+     * books are sound should say so rather than simply being absent. */
+    var mineQ = H.quote(G, sys, star, port);
+    if (!mineQ.ok && !mineQ.mine) {
+      row('  ' + port.name, mineQ.why, function () {}, true);
+    }
+
+    /* Yours, wherever they are. */
+    var mine = H.list(G);
+    row('YOUR PLANTS  ·  ' + mine.length, mine.length
+        ? 'paid at the desk each week  ·  clean lifts the system, dirty pays more'
+        : 'none yet', function () {}, true);
+    for (var j = 0; j < mine.length; j++) {
+      (function (h) {
+        var health = H.healthOf(G, h);
+        row('  ' + (h.mode === 'dirty' ? 'DIRTY' : 'CLEAN') + '  ' + h.name + '  ·  ' +
+            H.weeklyIncome(G, h) + ' cr/wk  ·  ' + Math.round(health * 100) + '%',
+            h.sysName || '',
+            function () {}, true, { hot: h.mode === 'clean' });
+        var other = h.mode === 'dirty' ? 'clean' : 'dirty';
+        row('    RUN IT ' + other.toUpperCase(),
+            other === 'dirty' ? 'skim, launder, look away — pays more, and the system slides'
+                              : 'honest books — pays less, and the system climbs',
+            function () {
+              var r = H.setMode(G, h.id, other);
+              say(r.ok ? h.name + ' now runs ' + other : 'No: ' + r.why, 5);
+            });
+        for (var k in H.INVEST) {
+          (function (kind) {
+            var lvl = (h.invest && h.invest[kind]) || 0;
+            var spec = H.INVEST[kind];
+            if (lvl >= H.INVEST_MAX) {
+              row('    ' + spec.label.toUpperCase() + ' ' + lvl + '/' + H.INVEST_MAX, 'as far as it goes',
+                  function () {}, true);
+              return;
+            }
+            var cost = H.investCost(h, kind);
+            row('    ' + spec.label.toUpperCase() + ' ' + lvl + '/' + H.INVEST_MAX + '  —  ' + cost + ' cr',
+                kind === 'security' ? 'violence falls faster'
+                : kind === 'automation' ? 'development climbs faster, and it pays a little more'
+                : 'corruption falls faster, development a little',
+                function () {
+                  var r = H.invest(G, h.id, kind);
+                  say(r.ok ? spec.label + ' at ' + h.name + ' — ' + r.cost + ' cr' : 'No: ' + r.why, 5);
+                }, s.credits < cost);
+          })(k);
+        }
+      })(mine[j]);
     }
     return 0;
   }
