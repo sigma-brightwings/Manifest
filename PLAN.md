@@ -2759,9 +2759,9 @@ worst possible thing to put in a shared stream. Doctrine 2, demonstrated.
 forty systems — 5.45 per system of patrol that has to be woken and steered.
 Restricted to working ports: **2.9 per system, in 33 of 40**.
 
-**Still missing: the tow.** The tender *arrives* and holds station. There
-is nothing for it to do when it gets there — no fuel transfer, no hull
-patch, no tow to the nearest port, and no bill. That is Phase 18.
+**The tow, the bill and the lien are BUILT** — see Phase 18 below, which is
+where they are described. What remains unbuilt there is the interdiction
+mid-tow, the hull patch, and the frame/mark half of the phase.
 
 ---
 
@@ -3654,10 +3654,55 @@ Phase 18 is about what they do instead.
 
 ---
 
-## Phase 18 — the tow, the frame, and the mark
+## ⚠️ Phase 18 — the tow, the frame, and the mark — TOW BUILT
 
 Three things that turn out to be one thing: a service you can hire, an abuse
 of it, and what the galaxy does to you for the abuse.
+
+**The taxi tow below is built**, along with the two things it turned out to
+need: a rate that depends on who answers, and an answer to "what if the
+pilot cannot pay". The framing and the mark are untouched.
+
+### What the tow became
+
+Two services the player chooses between — a **transfer** that fills the
+tanks where you float, and a **tow** that hauls you to a port you pick.
+Agreed over COMMS while the boat is still inbound, because the quote has to
+be a fact about the call rather than something that moves after you accept
+it.
+
+**Three operators, three rates.** A port tug bills call-out plus crew hours
+plus mass. A faction navy tender is free and charges you in standing if you
+waste it. The Syndicate wants three times a harbour's rate plus a quarter
+of the hold, and reads your manifest before quoting.
+
+**PRICED ON HOURS, NOT KILOMETRES, and this is the measurement that decided
+the design.** Distance to the nearest boat, sampled from every port across
+forty seeds: median 43 Mkm, p90 694 Mkm, worst 4,779 Mkm, and ~0 at the
+first quartile because tugs live at ports. Linear pricing over that spread
+bills 95,574 cr at the worst even at 20 cr/Mkm, against a median full-hold
+sale of 4,898 — an unpayable debt, which is a soft game over wearing an
+invoice. Billing the tug's *hours* (the brachistochrone the rescue already
+flew) is sublinear by construction: 26.7 h median, 106.7 at p90, 280.1 at
+worst, which at 25 cr/h over a 500 cr call-out is 1,167 / 3,169 / 7,502 cr.
+
+**A pilot who cannot pay carries a lien** (Astra chose this over impound or
+taking cargo, for the story in it). Every sale gives up 20% until it clears
+and the yard will not fit or trade an encumbered hull — but cargo trade,
+fuel, repairs and consumables stay open, which is what keeps a bill from
+becoming a dead end. The cut is a percentage because a full hold grosses
+704 cr at p10 and 340,726 at the top; any flat figure is either invisible
+or confiscation. It reuses the instrument unpaid berthing already runs on.
+
+**The cable is a rail that hands off to `beginArrival`.** The tug brings you
+to the apron; the port's own arrival geometry draws you in. Carried like an
+arrival but compressed like a long burn, in its own main-loop branch —
+arrival legs are seconds and run at 1×, a tow is hours.
+
+**Still missing from the tow:** the interdiction mid-tow (the thing that
+makes a tow through bad space a decision — the player already keeps the
+seat, so the hook is there), a hull patch as a third service, and an
+interstellar tier.
 
 ### Taxi tow
 

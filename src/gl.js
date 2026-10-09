@@ -1051,10 +1051,18 @@
    * cost you weather, not the game. */
   GL.init = function (glCanvas) {
     canvas = glCanvas;
+    /* 'high-performance', not 'low-power'. On a laptop with an integrated
+     * and a discrete GPU this hint is what the browser reads to choose
+     * between them, and 'low-power' meant the discrete card was never
+     * picked even when it was there. Electron's own
+     * force_high_performance_gpu switch (electron/main.js) is the
+     * process-wide half of the same request; a context asking for
+     * low-power can undercut it, so the two have to agree. It is a hint,
+     * not a command: with one GPU it changes nothing. */
     try {
       gl = canvas.getContext('webgl2', {
         alpha: false, antialias: true, depth: true,
-        premultipliedAlpha: false, powerPreference: 'low-power'
+        premultipliedAlpha: false, powerPreference: 'high-performance'
       });
     } catch (e) { gl = null; }
     if (!gl) { GL.available = false; return false; }

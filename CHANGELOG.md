@@ -70,6 +70,81 @@ full design and the phases still outstanding.
   *for* you, spending systems that already exist rather than inventing a
   currency.
 
+- **The tow, the bill, and what happens when you cannot pay it.** The
+  tender arrived and filled your tanks for a flat 500 cr, and if you were
+  broke the crew waived it. Three things were wrong with that: there was
+  only one service, the price did not depend on who was doing the work, and
+  the waiver quietly made the whole fee optional — fly out broke, run dry,
+  get filled for nothing. A rescue you can farm is not a punishment.
+
+  **Two services, and you pick.** A transfer fills the tanks where you
+  float and leaves you exactly where your mistake left you. A tow hauls you
+  and your hull to a port you choose, and it is the only one of the two that
+  answers a dead hull or a decaying orbit. Agreed over COMMS while the boat
+  is still inbound, because the quote is a fact about the *call* — a crew
+  that named a price and then re-quoted once you picked somewhere far away
+  would be running the oldest trick there is.
+
+  **Who answers sets the rate.** A port tug is a business: call-out, crew
+  hours, and a rate on your all-up mass. A faction navy tender is free,
+  because a warship's boat exists to pull people out of the dark — but
+  waste one and it costs you standing, which is the right currency, since
+  what you spent was their goodwill. The Syndicate charges three times a
+  harbour's rate plus a quarter of what your hold is worth, and it reads
+  your manifest before it quotes. The quote is the threat.
+
+  **A rescue you cannot pay for becomes a lien on the hull.** Every sale
+  gives up 20% until it clears, and the yard will not fit or trade an
+  encumbered ship — with the reason said out loud, which is the rule
+  `canFit` has always followed. Cargo trade, fuel, repairs and consumables
+  stay open deliberately: the one activity that clears the debt is always
+  available, so a bill can never become a soft game over. Astra's reason for
+  choosing it over impound or confiscation was that it leaves room for a
+  story, and it does — you keep flying, you just fly for the harbour for a
+  while. It reuses the instrument unpaid berthing already runs on rather
+  than inventing a second kind of debt.
+
+  **Priced on crew hours, and the measurement is the whole design.**
+  Distance to the nearest boat across forty seeds, sampled from every port:
+  median 43 Mkm, p90 694 Mkm, worst 4,779 Mkm — and ~0 at the first
+  quartile, because tugs live *at* ports. A linear rate over a spread that
+  wide is unusable: at a mere 20 cr/Mkm the worst case bills 95,574 cr
+  against a median full-hold sale of 4,898 cr, which is a debt that can
+  never be cleared. So the bill is the tug's *hours*, using the same
+  brachistochrone the rescue already flew — sublinear by construction.
+  Measured at 26.7 crew hours median, 106.7 at p90, 280.1 at worst; at
+  25 cr/h over a 500 cr call-out that is 1,167 cr median, 3,169 at p90 and
+  7,502 for the worst tow in the galaxy. One to eight sales under the lien.
+  Felt every time, fatal never.
+
+  The lien's cut is a percentage for the same reason: a full hold grosses
+  704 cr at the tenth percentile and 340,726 cr at the top, and any flat
+  deduction across that is either beneath notice or confiscation.
+
+  **The cable is a rail that hands off to the arrival.** Nothing about being
+  dragged on a cable is interesting to integrate, and a 280-hour tow
+  integrated accurately is tens of millions of frames — so the hull is
+  placed where a tug flying a brachistochrone would have put it, on a
+  smoothstep so the cable comes taut instead of snapping, with `vel` set
+  from the same curve because the speed tape reads it. It ends by handing
+  the ship to `beginArrival`: the tug delivers you to the apron and the port
+  draws you in, through the geometry that already knows about gates and
+  berths. A tow that re-implemented docking would be a second copy of the
+  hardest code in the project.
+
+  Carried like an arrival but compressed like a long burn — its own branch
+  in the main loop, because an arrival's legs are seconds and are forced to
+  1×, whereas a tow is hours and would otherwise be a wait rather than a
+  journey. You keep the seat throughout, which is what will make being
+  interdicted mid-tow possible.
+
+  **Two bugs worth recording.** A tow deliberately does not refuel you, so
+  `stranded` stays true for the whole crossing — which had the rescue
+  calling a fresh boat every frame, forever, for the same emergency. And
+  `holdBase` reached for `global.Eco` when every other site in the file uses
+  `global.Economy`, so the Syndicate silently valued every hold at zero and
+  its whole menace evaporated; the test caught it on the first run.
+
 - **Two rescue services, from two different homes.** A mayday for a tender
   used to be answered by one kind of ship that existed for no stated reason.
   There are now two, and where each one lives is the whole of the mechanic:

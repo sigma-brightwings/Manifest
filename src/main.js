@@ -3774,12 +3774,23 @@
         say('Disposal fee exceeds your credits', 3);
         return;
       }
-      G.ship.credits += gain;
+      /* THE HARBOUR IS PAID OUT OF THE PROCEEDS. A lien takes its share of
+       * the gross before the money reaches you, which is the same rule
+       * unpaid berthing already follows when a hull is sold (screens.js).
+       * Only of a real sale: a disposal fee is money going out, and taking
+       * a cut of a negative number would be the harbour paying you to dump
+       * waste. */
+      var cut = gain > 0 ? Combat.lienTake(G, gain) : { taken: 0, cleared: false };
+      G.ship.credits += gain - cut.taken;
       G.ship.cargo[cid] = heldTonnes(cid) - qty;
       if (G.ship.cargo[cid] <= 1e-9) delete G.ship.cargo[cid];
       Eco.applyTrade(port, cid, -qty, G.t);
       logTrade((gain < 0 ? 'Disposed of ' : 'Sold ') + qty + 't ' + row.name +
-               '  ' + fmtCredits(gain));
+               '  ' + fmtCredits(gain - cut.taken) +
+               (cut.taken > 0 ? '  ·  ' + cut.taken + ' cr to ' + cut.who +
+                                (cut.cleared ? ' — LIEN CLEARED'
+                                             : ', ' + cut.left + ' cr still owed')
+                              : ''));
     }
     Sim.refreshShip(G.ship);
   }
@@ -4848,7 +4859,30 @@
     G.physicsLimited = false;
     G.impactWarning = null;
 
-    if (!G.paused && Sim.arrivalActive(G.ship)) {
+    if (!G.paused && Sim.towActive(G.ship)) {
+      /* ON THE CABLE. Carried like an arrival, but compressed like a long
+       * burn, and the difference is the whole reason this is its own
+       * branch: an arrival's legs are measured in seconds, so it is forced
+       * to 1x, whereas a tow is measured in HOURS — the median is 33 of
+       * them and the worst in the galaxy is 280. At 1x that is not a
+       * journey, it is a wait, and the player would alt-tab, which is the
+       * same as a cutscene except more annoying.
+       *
+       * So warp applies. Floored at TOW_MIN_WARP because the player should
+       * not be able to sit at 1x watching a cable for a day and a half, and
+       * clamped per frame so the whole tow cannot resolve inside a single
+       * frame at a million times — the bug that let weapon cooldowns fire
+       * sixty shots a second was exactly that. */
+      var towWarp = Math.max(Combat.TOW_MIN_WARP, warp);
+      G.lastDtSim = Math.min(towWarp * dtReal, (G.ship.tow.dur || 1) / 12);
+      G.t += G.lastDtSim;
+      var towStep = Sim.stepTow(G.ship, G.sys, G.t);
+      G.arrivalPose = null;
+      if (towStep && towStep.done) {
+        G.warpIndex = 0;
+        say('Cable off — ' + (G.sys.byId[towStep.port] || {}).name + ' has you.', 6);
+      }
+    } else if (!G.paused && Sim.arrivalActive(G.ship)) {
       /* BEING CARRIED. Not docked yet and not flying either, so neither of
        * the branches below is right: there is nothing to integrate, but the
        * hull is moving and the clock must advance at something a human can

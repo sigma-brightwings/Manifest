@@ -83,6 +83,15 @@ const START_SEED = 'kawartha';
  * the driver genuinely cannot. */
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
 
+/* Laptops with two GPUs (Intel integrated + discrete AMD) let Chromium pick,
+ * and it tends to pick the Intel chip to save power. The game is the one
+ * thing on this machine that wants the discrete card (RX 570, 4 GB VRAM), so
+ * ask for it. Like the switch above this is a request: Chromium and the
+ * driver can still decline, and Windows' own per-app setting (Settings >
+ * System > Display > Graphics) overrides it. Before app ready on purpose —
+ * the GPU process is launched during startup and reads switches then. */
+app.commandLine.appendSwitch('force_high_performance_gpu');
+
 /* Must run before app ready: this is what makes `game://` a real origin
  * (secure, same-origin, storage-bearing) rather than an opaque one. */
 protocol.registerSchemesAsPrivileged([{

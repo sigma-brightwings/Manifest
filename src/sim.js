@@ -4254,6 +4254,105 @@
     return pts[pts.length - 1];
   }
 
+  /* ---- the tow ------------------------------------------------------------
+   *
+   * A tug has you on a cable and is taking you somewhere. The player keeps
+   * the seat for it — this is the plan's "time-compressed like a long burn,
+   * not a cutscene", and it matters for a reason beyond taste: because you
+   * are still sitting there, you can be interdicted on the way, which is
+   * what makes a tow through bad space a decision instead of a fast-travel
+   * button.
+   *
+   * IT IS A RAIL, NOT AN INTEGRATION, and that is doctrine 3 rather than
+   * laziness. Nothing about being dragged on a cable is interesting to
+   * integrate: the tug's thrust is not the player's, the trajectory is the
+   * tug's problem, and a two-hundred-hour tow integrated at a step small
+   * enough to be accurate is tens of millions of frames. So the hull is
+   * placed, each frame, where a tug flying a brachistochrone would have put
+   * it — and `vel` is set from the same curve rather than left stale,
+   * because the HUD reads it and a speed tape frozen at zero while the
+   * stars move is a bug the player cannot unsee.
+   *
+   * IT ENDS BY HANDING OFF TO THE ARRIVAL RAIL. The tug delivers you to the
+   * apron and the port draws you in — `beginArrival` already does all of
+   * that, is already tested, and already knows about gates and berths and
+   * pulling a hull round a station rather than through it. A tow that
+   * re-implemented docking would be a second copy of the hardest geometry
+   * in the project. */
+  var TOW_EASE = 0.5;            // fraction of the trip spent accelerating
+
+  function beginTow(ship, port, sys, t, seconds) {
+    if (!ship || !port) return false;
+    var st = bodyState(port, sys, t);
+    if (!st || !st.pos) return false;
+    ship.tow = {
+      port: port.id, at: t, dur: Math.max(1, seconds || 1),
+      from: V.clone(ship.pos),
+      /* The destination MOVES — it is a port in orbit, not a point in
+       * absolute space. Stored as the body's id and re-read every frame;
+       * the launch position is the only thing frozen, because that one is
+       * genuinely historical. */
+      handedOff: false
+    };
+    ship.thrust = V.zero();
+    ship.throttle = 0;
+    ship.angRate = { pitch: 0, yaw: 0, roll: 0 };
+    return true;
+  }
+
+  function towActive(ship) { return !!(ship && ship.tow && !ship.tow.handedOff); }
+
+  /* Smoothstep, which is the cheapest curve that starts and ends at rest.
+   * A linear tow would snap to full speed in one frame and stop dead at the
+   * far end, and both ends of that are visible on the speed tape. */
+  function towEase(u) { return u * u * (3 - 2 * u); }
+
+  function stepTow(ship, sys, t) {
+    if (!ship || !ship.tow) return null;
+    var tow = ship.tow;
+    var port = sys.byId[tow.port];
+    /* The destination stopped existing — a system change under a running
+     * tow. Dropped rather than ridden to nowhere, same as the arrival. */
+    if (!port) { ship.tow = null; return null; }
+
+    var st = bodyState(port, sys, t);
+    if (!st || !st.pos) { ship.tow = null; return null; }
+
+    var u = Math.max(0, Math.min(1, (t - tow.at) / tow.dur));
+    var e = towEase(u);
+
+    /* HANDED OFF just short of the berth, so the arrival rail's own pull-in
+     * does the last few kilometres. Its `lead` leg exists for exactly this
+     * case: a hull that arrives somewhere inside the envelope rather than
+     * on the hold point. */
+    if (u >= 1) {
+      ship.pos = V.clone(st.pos);
+      ship.vel = V.clone(st.vel);
+      tow.handedOff = true;
+      if (!beginArrival(ship, port, sys, t)) {
+        /* No modelled approach at this port — dock directly rather than
+         * leave the hull parked on top of a station with no way in. */
+        dockShip(ship, port, sys, t);
+      }
+      ship.tow = null;
+      return { done: true, port: port.id };
+    }
+
+    var to = st.pos;
+    ship.pos = V.add(tow.from, V.scale(V.sub(to, tow.from), e));
+    /* Speed off the curve: d(ease)/du * (span/dur). Honest enough for a
+     * tape, and it reaches zero at both ends, which is the point. */
+    var span = V.len(V.sub(to, tow.from));
+    var dEdu = 6 * u * (1 - u);
+    var dir = span > 1e-9 ? V.norm(V.sub(to, tow.from)) : V.zero();
+    ship.vel = V.addScaled(st.vel, dir, span * dEdu / tow.dur);
+    return { done: false, port: port.id, progress: u };
+  }
+
+  function cancelTow(ship) {
+    if (ship && ship.tow) ship.tow = null;
+  }
+
   function beginArrival(ship, port, sys, t) {
     if (!ship || !port) return false;
     if (!arrivalPath(port, 0)) return false;
@@ -5459,6 +5558,8 @@
     controlState: controlState, controlInRange: controlInRange,
     beginArrival: beginArrival, stepArrival: stepArrival,
     arrivalActive: arrivalActive, arrivalPose: arrivalPose,
+    beginTow: beginTow, stepTow: stepTow, towActive: towActive,
+    cancelTow: cancelTow, TOW_EASE: TOW_EASE,
     arrivalPath: arrivalPath, arrivalTotal: arrivalTotal,
     ARRIVAL_LEGS: ARRIVAL_LEGS,
     ARRIVAL_ENCLOSED_FROM: ARRIVAL_ENCLOSED_FROM,
