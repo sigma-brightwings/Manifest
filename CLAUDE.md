@@ -104,6 +104,23 @@ and the renderer ~3 ms — when something feels slow, it is usually not the
 rendering. Anything added to the per-frame path should be costed against
 that budget explicitly.
 
+**A machine with a 4 GB discrete GPU is incoming (noted 2026-10-09), and
+it changes less than it sounds like it should.** The renderer is already
+the cheap end of the budget at ~3 ms; the predictor is ~25 ms of pure CPU
+JavaScript — Kepler solves and RK4 — and a graphics card does not touch
+it. So the new hardware buys headroom in the part that was never the
+problem. Two consequences:
+
+- The groundwork is already in: `src/gl.js` asks for
+  `powerPreference: 'high-performance'` and `electron/main.js` passes
+  `force_high_performance_gpu`. Both halves are needed — a context asking
+  for low power can undercut the process-wide switch, which is how the
+  discrete card went unused.
+- **Do not retune any threshold for it until it is measured on the new
+  machine.** Doctrine 6 applies with full force here: raising detail or
+  draw budgets against an imagined card is exactly how the 0.62
+  development gate happened. Profile first, then spend.
+
 ## Style
 
 The code explains *why*, not *what*. Comments carry the reasoning and, in

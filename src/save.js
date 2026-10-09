@@ -219,6 +219,17 @@
          * settleAccounts reads as "starts now" rather than as a decade of
          * back pay. */
         wagesTo: s.wagesTo,
+        /* WHAT IS OWED AGAINST THE HULL. Additive and absent in any career
+         * from before the lien existed, which loads as "nothing owed" — the
+         * right answer, and the reason this needs no version bump. */
+        lien: s.lien ? { cr: s.lien.cr, who: s.lien.who, at: s.lien.at } : null,
+        /* ON THE CABLE. Saved so a tow survives a reload rather than
+         * dropping the hull back into the dark with dry tanks and a paid
+         * bill — which would be the worst of every world. `from` is a
+         * position and the destination is an id, so nothing live is in it. */
+        tow: s.tow ? { port: s.tow.port, at: s.tow.at, dur: s.tow.dur,
+                       from: { x: s.tow.from.x, y: s.tow.from.y, z: s.tow.from.z },
+                       handedOff: !!s.tow.handedOff } : null,
         /* The racks themselves, copied rather than referenced so a later
          * shot cannot edit a snapshot that has already been taken. The two
          * fields above are the ARMED rack's view of this and are written
@@ -406,6 +417,12 @@
     s.milArmed = d.milArmed;
     s.crew = (d.crew || []).slice();
     s.wagesTo = (d.wagesTo == null) ? G.t : d.wagesTo;
+    s.lien = (d.lien && d.lien.cr > 0) ? { cr: d.lien.cr, who: d.lien.who || 'the harbour',
+                                           at: d.lien.at || 0 } : null;
+    s.tow = (d.tow && d.tow.port) ? { port: d.tow.port, at: d.tow.at || 0,
+                                      dur: d.tow.dur || 1,
+                                      from: d.tow.from || { x: 0, y: 0, z: 0 },
+                                      handedOff: !!d.tow.handedOff } : null;
     s.missileId = d.missileId; s.missileBatch = d.missileBatch;
     /* A save from before racks has none, and Combat.racksOf builds the one
      * rack its counter describes the first time anything asks — so the

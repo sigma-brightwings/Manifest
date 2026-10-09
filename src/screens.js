@@ -846,6 +846,47 @@
           if (!r.ok) say('Cannot transmit: ' + r.why, 4);
         }
       });
+
+      /* ---- the tow -------------------------------------------------------
+       * Only once somebody is actually coming, because a tow is a thing you
+       * agree with a crew rather than a button on the hull. One row per
+       * port, each carrying its own price and crossing time — a destination
+       * without a number beside it is a guess, which is the same rule the
+       * standing-orders list follows. */
+      if (G.rescue && !Sim.towActive(G.ship)) {
+        var towing = G.rescue.service === 'tow';
+        var picks = Combat.towOptions(G.sys, G, G.t);
+        if (!picks.length) {
+          opts.push({ label: 'TOW — no port in this system', enabled: false,
+                      note: 'they can only top you off out here', fn: function () {} });
+        }
+        for (var ti = 0; ti < picks.length && ti < 6; ti++) {
+          (function (p) {
+            var chosen = towing && G.rescue.dest === p.port;
+            opts.push({
+              label: (chosen ? '✓ TOW to ' : 'TOW to ') + p.name.toUpperCase() +
+                     ' — ' + (p.free ? 'no charge' : p.fee + ' cr'),
+              enabled: !p.barred,
+              note: p.barred ? p.barred
+                   : fmtDist(p.dist) + '  ·  ' + fmtTime(p.seconds) + ' on the cable' +
+                     (p.fee > G.ship.credits
+                        ? '  ·  short ' + (p.fee - G.ship.credits) + ' cr, the rest becomes a lien'
+                        : ''),
+              fn: function () {
+                var r = Combat.requestTow(G.sys, G, G.t, p.port, hooksFor());
+                if (!r.ok) say('No: ' + r.why, 5);
+              }
+            });
+          })(picks[ti]);
+        }
+        if (towing) {
+          opts.push({
+            label: 'TOW — cancel, just fill the tanks', enabled: true,
+            note: 'the hose instead of the cable',
+            fn: function () { Combat.cancelTow(G, hooksFor()); }
+          });
+        }
+      }
       return opts;
     }
     if (c.kind === 'station') {
@@ -2241,6 +2282,27 @@
           }, sFull);
     }
 
+    /* THE LIEN TAKES THE TOP OF THE SHELF. Every capital fitting below is
+     * about to refuse, and a page of greyed rows that will not say why is
+     * eight copies of the same bug — doctrine 5. The row is also the way
+     * out: a pilot who has come good can clear it here. */
+    var lienWhy = Combat.lienRefusal(G);
+    if (lienWhy) {
+      var owedNow = Combat.lienOwed(G);
+      var canClear = s.credits > 0;
+      row('LIEN — ' + owedNow + ' cr OUTSTANDING',
+          lienWhy + (canClear
+            ? '  ·  pay ' + Math.min(owedNow, Math.floor(s.credits)) + ' cr now'
+            : '  ·  you have nothing to pay it with'),
+          function () {
+            var r = Combat.payLien(G, null);
+            if (!r.ok) { say(r.why, 5); return; }
+            say(r.cleared
+              ? 'Lien cleared — ' + r.paid + ' cr to ' + r.who + '. The yard is open to you again.'
+              : 'Paid ' + r.paid + ' cr to ' + r.who + ' — ' + r.left + ' cr still owed', 6);
+          }, !canClear);
+    }
+
     for (var i = 0; i < stock.length; i++) {
       var entry = stock[i], it = entry.item;
       if (!entry.available) {
@@ -2250,7 +2312,8 @@
       var fitCheck = Combat.canFit(s, it.id);
       var afford = s.credits >= it.price;
       var sub;
-      if (!fitCheck.ok) sub = fitCheck.why;
+      if (lienWhy) sub = 'not while the lien stands — see above';
+      else if (!fitCheck.ok) sub = fitCheck.why;
       else if (!afford) sub = 'short ' + (it.price - s.credits) + ' cr';
       else if (it.kind === 'gun') sub = it.dmg + ' dmg · ' + it.range + ' km · ' +
                                        it.power.toFixed(1) + ' MW · ' + it.heat + ' heat/s';
@@ -2266,7 +2329,7 @@
               var r = Combat.buyEquipment(G, eq.id);
               say(r.ok ? eq.name + ' fitted' : 'No: ' + r.why, 5);
             };
-          })(it), !fitCheck.ok || !afford);
+          })(it), !fitCheck.ok || !afford || !!lienWhy);
     }
   }
 
@@ -3319,12 +3382,17 @@
       [port ? 'Worth here' : 'Best in system', fmtCredits(total)]
     ];
     if (contraT > 0) lines.push(['Contraband aboard', contraT.toFixed(0) + ' t']);
+    /* A LIEN IS NEWS. Every sale on this screen is about to be shaved by
+     * 20% and the player is entitled to know that before they wonder why
+     * the arithmetic is wrong. */
+    var owedLien = Combat.lienOwed(G);
+    if (owedLien > 0) lines.push(['LIEN', fmtCredits(owedLien) + ' owed']);
     ctx.save();
     ctx.font = 'bold 12px ui-monospace, monospace';
     for (var L = 0; L < lines.length; L++) {
       var ly = sy2 + 46 + L * 18;
       if (ly > sy2 + sh - 8) break;
-      var warn = lines[L][0] === 'Contraband aboard';
+      var warn = lines[L][0] === 'Contraband aboard' || lines[L][0] === 'LIEN';
       ctx.fillStyle = warn ? '#ff8a76' : MFD_DIM;
       ctx.fillText(lines[L][0], rx + 16, ly);
       ctx.textAlign = 'right';

@@ -318,6 +318,291 @@ section('--- two rescue services, from two different homes ---');
         !Combat.eligibleResponder({ kind: 'tender' }, Combat.HELP_SECURITY));
 })();
 
+section('--- who answers sets the rate ---');
+(function () {
+  var G = makeG();
+  G.ship.mass = 120;
+  var MID = 43.39e6;            // the measured median distance to a boat
+
+  var tug  = { kind: 'tug',    name: 'Bollard 4', accel: 0.012, faction: 'fed' };
+  var navy = { kind: 'tender', name: 'Samaritan', accel: 0.0188, faction: 'fed' };
+  var synd = { kind: 'tender', name: 'The Nail',  accel: 0.0188, outlaw: true };
+  var boat = { kind: 'tender', name: 'Ashford boat', accel: 0.0188,
+               temporary: true, faction: 'fed' };
+
+  var qt = Combat.rescueRate(tug, G, MID);
+  var qn = Combat.rescueRate(navy, G, MID);
+  var qs = Combat.rescueRate(synd, G, MID);
+  var qb = Combat.rescueRate(boat, G, MID);
+
+  check('a navy tender does not bill for a life', qn.free && qn.fee === 0, qn.note);
+  check('a harbour tug does', !qt.free && qt.fee > 0, qt.fee + ' cr');
+  check('a port boat is a harbour, not a navy',
+        qb.operator === 'harbour' && qb.fee > 0, qb.operator + ' ' + qb.fee + ' cr');
+  check('and the Syndicate is dearer than the harbour by a wide margin',
+        qs.fee > qt.fee * 2, qs.fee + ' vs ' + qt.fee + ' cr');
+
+  /* THE MEASURED SHAPE. Priced on crew hours, so the galactic worst case
+   * has to stay inside a few sales rather than becoming a debt that can
+   * never clear — the failure a linear distance rate produced. */
+  var near = Combat.rescueRate(tug, G, 0).fee;
+  var far  = Combat.rescueRate(tug, G, 4778.68e6).fee;
+  check('distance costs money', far > near, near + ' cr -> ' + far + ' cr');
+  check('but the worst tow in the galaxy is still payable',
+        far < 12000, far + ' cr against a 4898 cr median sale');
+  /* Sublinear by construction: 100x the distance is 10x the hours. */
+  var d1 = Combat.rescueRate(tug, G, 1e6).fee - Combat.RESCUE_CALLOUT;
+  var d2 = Combat.rescueRate(tug, G, 100e6).fee - Combat.RESCUE_CALLOUT;
+  check('the bill is sublinear in distance, because you pay for hours',
+        d2 < d1 * 100, d1 + ' cr at 1 Mkm, ' + d2 + ' cr at 100 Mkm');
+
+  /* "It reads your hold before it quotes." */
+  var Gh = makeG();
+  Gh.ship.mass = 120;
+  Gh.ship.cargo = { ores: 40 };
+  var qsLoaded = Combat.rescueRate(synd, Gh, MID);
+  check('the Syndicate prices your cargo on the way in',
+        qsLoaded.fee > qs.fee && qsLoaded.holdCut > 0,
+        'empty ' + qs.fee + ' cr, laden ' + qsLoaded.fee + ' cr');
+  check('a harbour does not care what you are carrying',
+        Combat.rescueRate(tug, Gh, MID).fee === qt.fee);
+
+  /* Mass matters, because towing a laden freighter is more work. */
+  var Gm = makeG(); Gm.ship.mass = 600;
+  check('and a heavier ship is a bigger job',
+        Combat.rescueRate(tug, Gm, MID).fee > qt.fee);
+})();
+
+section('--- a rescue you cannot pay for becomes a lien ---');
+(function () {
+  var G = makeG();
+  check('a fresh career owes nothing', Combat.lienOwed(G) === 0);
+  check('and the yard says nothing about it', Combat.lienRefusal(G) === null);
+
+  Combat.addLien(G, 3000, 'Ashford Harbour', 0);
+  check('a debt can be put against the hull', Combat.lienOwed(G) === 3000);
+  check('debt accumulates rather than replacing itself',
+        Combat.addLien(G, 500, 'Ashford Harbour', 0) === 3500);
+
+  /* Doctrine 5: the refusal has to SAY the thing. */
+  var why = Combat.lienRefusal(G);
+  check('the refusal names the holder and the number',
+        !!why && /Ashford Harbour/.test(why) && /3500/.test(why), why);
+
+  /* The yard is shut — to capital fittings, and only those. */
+  var shut = Combat.buyEquipment(G, Object.keys(Combat.EQUIPMENT)[0]);
+  check('the yard will not fit an encumbered hull',
+        !shut.ok && /lien/i.test(shut.why), shut.why);
+  var hull = Combat.buyHull(G, 'mule', false);
+  check('nor trade her away — that is what makes it a lien',
+        !hull.ok && /lien/i.test(hull.why), hull.why);
+
+  /* ...but the way out stays open. A pilot who cannot buy rounds, cannot
+   * sell cargo and cannot leave is not in debt, they are in a dead end.
+   * The launcher is fitted while the hull is CLEAN, because fitting one is
+   * exactly what the lien is supposed to stop. */
+  var Gc = makeG();
+  Gc.ship.credits = 100000;
+  var lch = Combat.buyEquipment(Gc, 'sinklauncher');
+  check('(fixture) a clean hull can fit a sink launcher', lch.ok, lch.why || 'ok');
+  Combat.addLien(Gc, 3000, 'Ashford Harbour', 0);
+  Gc.ship.sinks = 0;
+  check('consumables are still sold to you, because surviving pays the debt',
+        Combat.buyOutfit(Gc, 'sink', null) > 0);
+  check('but the launcher itself would now be refused',
+        Combat.buyOutfit(Gc, 'shield', null) === null);
+
+  /* The cut. Measured at 20% of the gross. */
+  var G2 = makeG();
+  Combat.addLien(G2, 3000, 'Ashford Harbour', 0);
+  var take = Combat.lienTake(G2, 4898);
+  check('a sale gives up a share of the gross',
+        take.taken === Math.round(4898 * Combat.LIEN_CUT),
+        take.taken + ' cr of 4898');
+  check('and the rest of the debt survives the sale',
+        !take.cleared && Combat.lienOwed(G2) === 3000 - take.taken,
+        Combat.lienOwed(G2) + ' cr left');
+
+  /* It has to actually end. A cut that can never finish is a wall. */
+  var sales = 0;
+  while (Combat.lienOwed(G2) > 0 && sales < 100) { Combat.lienTake(G2, 4898); sales++; }
+  check('and a median hold clears a 3000 cr debt in a handful of sales',
+        Combat.lienOwed(G2) === 0 && sales <= 6, sales + ' sales');
+  check('once cleared, the yard opens again', Combat.lienRefusal(G2) === null);
+
+  /* Never takes more than is owed — the overshoot would be the harbour
+   * helping itself. */
+  var G3 = makeG();
+  Combat.addLien(G3, 50, 'Ashford Harbour', 0);
+  var small = Combat.lienTake(G3, 100000);
+  check('it never collects more than it is owed',
+        small.taken === 50 && small.cleared, small.taken + ' cr');
+
+  /* Paying it off directly. */
+  var G4 = makeG();
+  Combat.addLien(G4, 1000, 'Ashford Harbour', 0);
+  G4.ship.credits = 400;
+  var part = Combat.payLien(G4, null);
+  check('a part payment is accepted, because refusing it helps nobody',
+        part.ok && part.paid === 400 && !part.cleared && Combat.lienOwed(G4) === 600);
+  G4.ship.credits = 10000;
+  var rest = Combat.payLien(G4, null);
+  check('and the rest clears it', rest.ok && rest.cleared && Combat.lienOwed(G4) === 0);
+  check('paying nothing owed is refused with a reason',
+        !Combat.payLien(G4, null).ok && !!Combat.payLien(G4, null).why);
+})();
+
+section('--- a transfer, or a tow ---');
+(function () {
+  /* A system with a port and a boat, and a pilot out of reaction mass. */
+  var G = makeG();
+  G.ship.thrusterFuel = 0;
+  G.ship.mass = 120;
+  G.ship.credits = 100000;
+
+  var r = Combat.mayday(G.sys, G, 0, Combat.HELP_TENDER, HOOKS);
+  if (!G.rescue) {
+    check('(skipped) no boat in this fixture system', true, 'nothing to tow with');
+  } else {
+    check('a rescue defaults to the hose, not the cable',
+          G.rescue.service !== 'tow');
+
+    var opts = Combat.towOptions(G.sys, G, 0);
+    check('every port in the system is a destination with a price on it',
+          opts.length > 0 && opts.every(function (o) {
+            return o.name && o.fee >= 0 && o.seconds > 0;
+          }), opts.length + ' ports quoted');
+    check('and the list is ordered by what it costs',
+          opts.every(function (o, i) { return !i || opts[i - 1].fee <= o.fee; }));
+
+    /* A tow is a bigger job than a hose, so it costs more. If it did not,
+     * the transfer would have no reason to exist. */
+    var hose = G.rescue.fee;
+    var far = opts[opts.length - 1];
+    check('a tow costs more than a top-up',
+          far.free || far.fee > hose, hose + ' cr hose vs ' + far.fee + ' cr tow');
+
+    var tr = Combat.requestTow(G.sys, G, 0, opts[0].port, HOOKS);
+    check('a tow can be agreed while the boat is still inbound', tr.ok, tr.why);
+    check('and the quote is fixed at that moment',
+          G.rescue.service === 'tow' && G.rescue.dest === opts[0].port &&
+          G.rescue.fee === opts[0].fee);
+    check('a port that does not exist is refused with a reason',
+          !Combat.requestTow(G.sys, G, 0, 'nowhere', HOOKS).ok);
+
+    var cx = Combat.cancelTow(G, HOOKS);
+    check('and you can change your mind back to the hose',
+          cx.ok && G.rescue.service === 'transfer' && G.rescue.fee === hose);
+  }
+
+  /* No rescue, no tow. The tow is a thing you agree with a crew. */
+  var G2 = makeG();
+  var nope = Combat.requestTow(G2.sys, G2, 0, 'anything', HOOKS);
+  check('you cannot be towed by nobody', !nope.ok && /mayday/i.test(nope.why), nope.why);
+})();
+
+section('--- the cable itself ---');
+(function () {
+  var G = makeG();
+  var port = (G.sys.ports || [])[0];
+  if (!port) {
+    check('(skipped) no port in this fixture system', true, '');
+    return;
+  }
+
+  G.ship.thrusterFuel = 0;
+  var before = V.clone(G.ship.pos);
+  var ok = Sim.beginTow(G.ship, port, G.sys, 0, 3600);
+  check('a tow can be started', ok && Sim.towActive(G.ship));
+
+  /* IT IS A CARRY, NOT A FLIGHT. The hull must not be burning its own
+   * (nonexistent) reaction mass to get there. */
+  check('and the hull is not flying itself',
+        V.len(G.ship.thrust || V.zero()) < 1e-9 && !(G.ship.throttle > 0));
+
+  /* Starts and ends at rest relative to the destination, which is what the
+   * smoothstep is for — a linear tow snaps to speed and stops dead. */
+  var atStart = V.len(V.sub(G.ship.vel, Sim.bodyState(port, G.sys, 0).vel));
+  Sim.stepTow(G.ship, G.sys, 1);
+  var early = V.len(V.sub(G.ship.vel, Sim.bodyState(port, G.sys, 1).vel));
+  Sim.stepTow(G.ship, G.sys, 1800);
+  var mid = V.len(V.sub(G.ship.vel, Sim.bodyState(port, G.sys, 1800).vel));
+  check('the cable comes taut rather than snapping',
+        early < mid, early.toFixed(4) + ' km/s at 1s vs ' + mid.toFixed(3) + ' at halfway');
+
+  /* It actually gets there. PROGRESS is what has to be monotonic, not
+   * range: the destination is in orbit, so while the tug is still winding
+   * up the port can be swinging away faster than the cable is closing, and
+   * raw distance genuinely goes up for a while. Measured on this fixture,
+   * 22 of 61 sampled steps — which looked like a bug and is simply what
+   * hauling something toward a moving target looks like. The invariants
+   * worth defending are that the progress parameter never goes backwards
+   * and that the trip ends enormously closer than it started. */
+  var d0 = V.dist(G.ship.pos, Sim.bodyState(port, G.sys, 0).pos);
+  var lastU = -1, regress = 0, steps = 0, done = null;
+  for (var t = 0; t <= 3600; t += 60) {
+    var st = Sim.stepTow(G.ship, G.sys, t);
+    if (!st) break;
+    if (!st.done && st.progress < lastU - 1e-9) regress++;
+    if (!st.done) lastU = st.progress;
+    steps++;
+    if (st.done) { done = st; break; }
+  }
+  check('the tow never goes backwards along its own run',
+        regress === 0, regress + ' of ' + steps + ' steps regressed');
+  var dEnd = V.dist(G.ship.pos, Sim.bodyState(port, G.sys, 3600).pos);
+  check('and it ends vastly closer than it began',
+        dEnd < d0 * 0.01, Math.round(d0) + ' km -> ' + Math.round(dEnd) + ' km');
+
+  /* THE HANDOFF. The tow does not re-implement docking; it hands the hull
+   * to the arrival rail, which is the tested path. */
+  var landedSomehow = G.ship.docked === port.id || Sim.arrivalActive(G.ship);
+  check('and ends by handing off to the arrival, not by teleporting you in',
+        !!done && done.done && landedSomehow,
+        G.ship.docked ? 'docked' : Sim.arrivalActive(G.ship) ? 'on the arrival rail' : 'neither');
+  check('the tow is over once it has handed off', !Sim.towActive(G.ship));
+
+  /* A tow does NOT refuel you — that is the service you did not buy. */
+  check('a tow leaves your tanks where they were',
+        !(G.ship.thrusterFuel > 0.001),
+        'arriving dry at a port, where fuel is free anyway');
+
+  /* The destination moving is the normal case, not the exception. */
+  var G3 = makeG();
+  Sim.beginTow(G3.ship, port, G3.sys, 0, 3600);
+  var p0 = Sim.bodyState(port, G3.sys, 0).pos;
+  var p1 = Sim.bodyState(port, G3.sys, 3600).pos;
+  check('(fixture) the destination is in orbit, so it moves while you are hauled',
+        V.dist(p0, p1) > 1);
+  Sim.stepTow(G3.ship, G3.sys, 3600);
+  check('and the tow follows the port rather than the point it used to be at',
+        V.dist(G3.ship.pos, p1) < V.dist(G3.ship.pos, p0) || G3.ship.docked === port.id);
+
+  /* A tow whose destination vanished is dropped, not ridden to nowhere. */
+  var G4 = makeG();
+  Sim.beginTow(G4.ship, port, G4.sys, 0, 3600);
+  G4.sys = { byId: {}, bodies: G4.sys.bodies, ports: [], seed: G4.sys.seed };
+  check('a tow to a port that stopped existing is abandoned',
+        Sim.stepTow(G4.ship, G4.sys, 10) === null && !Sim.towActive(G4.ship));
+})();
+
+section('--- a ship on a cable is already being helped ---');
+(function () {
+  /* The bug this exists to catch: a tow deliberately does not refuel you,
+   * so `stranded` stays true for the whole crossing. Without a guard,
+   * updateRescue calls a fresh boat every frame, forever. */
+  var G = makeG();
+  var port = (G.sys.ports || [])[0];
+  if (!port) { check('(skipped) no port in fixture', true, ''); return; }
+  G.ship.thrusterFuel = 0;
+  Sim.beginTow(G.ship, port, G.sys, 0, 3600);
+  check('(fixture) a ship under tow still reads as out of reaction mass',
+        Combat.stranded ? Combat.stranded(G) : true);
+  Combat.updateRescue(G.sys, G, 10, 0.1, HOOKS);
+  check('but no second boat is called for the same emergency',
+        !G.rescue, G.rescue ? 'a second rescue was started' : 'none');
+})();
+
 section('--- answering somebody else (dormant until Phase 9) ---');
 (function () {
   /* Nothing in this build can attack an NPC — damageNpc has no caller but

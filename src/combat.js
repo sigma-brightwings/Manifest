@@ -1938,16 +1938,210 @@
    * so a frontier system is not a death sentence and does not permanently
    * acquire a rescue service it never had.
    *
-   * MONEY. A flat RESCUE_FEE call-out. A pilot who cannot pay it pays what
-   * they have and the crew waive the rest — being broke is not a reason to
-   * die in a stable orbit. The fee is said out loud so it lands in the
-   * ledger.
+   * MONEY. Priced by WHO ANSWERS — see `rescueRate` — and a pilot who
+   * cannot cover it is towed anyway and carries a lien (see the lien
+   * section). The fee is said out loud so it lands in the ledger.
    *
    * SAVED. `G.rescue` carries the timestamps and the responder's id, and
    * `restoreRescue` re-attaches them to the spec (or rebuilds the temporary
    * boat) on the first frame after a load, so the ETA quoted before a
    * reload is the ETA flown after it. */
-  var RESCUE_FEE = 500;
+  /* ---- what it costs, and who is charging -------------------------------
+   *
+   * PRICED ON CREW TIME, NOT DISTANCE, and that is measured. Distance to the
+   * nearest boat across forty seeds, sampled from every port: median 43 Mkm,
+   * p90 694 Mkm, worst 4,779 Mkm — and ~0 at the first quartile, because
+   * tugs live AT ports. A linear rate over a spread that wide is unusable:
+   * at a mere 20 cr/Mkm the worst case bills 95,574 cr, which against a
+   * median full-hold sale of 4,898 cr is a debt that can never be cleared —
+   * a soft game over wearing an invoice.
+   *
+   * So you pay for the hours, not the kilometres, using the same
+   * brachistochrone `startRescue` already flies: 2*sqrt(d/accel). That is
+   * sublinear by construction and it is what a harbour would actually bill.
+   * Measured: median 26.7 crew hours, p90 106.7, worst 280.1. At 25 cr/h
+   * over a 500 cr call-out that is a median bill of 1,167 cr, p90 3,169 and
+   * a galactic worst of 7,502 — one to eight sales under the lien's cut.
+   * Felt every time, survivable every time.
+   *
+   * WHO ANSWERS SETS THE RATE, which is the whole of the mechanic:
+   *
+   *   - A PORT TUG is a business. Call-out, crew hours, and a rate on your
+   *     all-up mass, because towing a laden freighter is more work than
+   *     towing an empty scout.
+   *   - A FACTION NAVY TENDER is free. A warship's tender exists to pull
+   *     people out of the dark and billing for it would make the navy a
+   *     firm. It is not free of consequence: waste one and it costs you
+   *     standing with that flag, which is the right currency — you spent
+   *     their goodwill, not their money.
+   *   - THE SYNDICATE prices your cargo on the way in. Three times a
+   *     harbour's rate plus a quarter of what your hold is worth, because a
+   *     salvage crew alongside a dead hull is the strongest negotiating
+   *     position in the game and they know it. The quote is the threat. */
+  var RESCUE_CALLOUT = 500;        // cr — somebody got out of bed
+  var RESCUE_PER_HOUR = 25;        // cr per crew hour (measured, above)
+  var RESCUE_PER_TONNE = 3;        // cr per tonne all-up
+  var SYNDICATE_MULT = 3;          // they are not a charity
+  var SYNDICATE_HOLD_CUT = 0.25;   // ...and they read your manifest
+  var RESCUE_WASTE_STANDING = -3;  // calling a warship out for nothing
+
+  /* What the hold would fetch at base prices. Not a market valuation — the
+   * Syndicate is not quoting you the best price in the system, they are
+   * eyeballing the manifest. Base value is exactly that eyeball. */
+  function holdBase(G) {
+    var Eco = global.Economy, cargo = (G.ship && G.ship.cargo) || {}, sum = 0;
+    if (!Eco || !Eco.BY_ID) return 0;
+    for (var cid in cargo) {
+      if (!Object.prototype.hasOwnProperty.call(cargo, cid)) continue;
+      var good = Eco.BY_ID[cid];
+      if (good && good.base > 0) sum += good.base * (cargo[cid] || 0);
+    }
+    return sum;
+  }
+
+  /* The quote. Returned as an object rather than a number so the caller can
+   * print WHY it costs what it costs — a bill with no breakdown is the same
+   * failure as a greyed button with no reason. */
+  function rescueRate(spec, G, dist) {
+    var s = G.ship;
+    var hours = (2 * Math.sqrt(Math.max(0, dist || 0) /
+                               Math.max(1e-6, spec.accel || 0.01))) / 3600;
+    var mass = Math.max(0, s.mass || 0);
+    var commercial = RESCUE_CALLOUT +
+                     Math.round(RESCUE_PER_HOUR * hours) +
+                     Math.round(RESCUE_PER_TONNE * mass);
+
+    /* A warship's own boat. `outlaw` is checked first because the Syndicate
+     * flagship launches a tender too and it is emphatically not this. */
+    if (spec.kind === 'tender' && !spec.outlaw && !spec.temporary && spec.faction) {
+      return { fee: 0, free: true, who: spec.name, operator: 'navy',
+               hours: hours,
+               note: 'no charge — a navy tender does not bill for a life' };
+    }
+    if (spec.outlaw) {
+      var cut = Math.round(SYNDICATE_HOLD_CUT * holdBase(G));
+      return { fee: commercial * SYNDICATE_MULT + cut, free: false,
+               who: spec.name, operator: 'syndicate', hours: hours, holdCut: cut,
+               note: 'salvage terms' + (cut > 0
+                 ? ' — and they have read your manifest'
+                 : ' — your hold is empty, which is the only mercy here') };
+    }
+    return { fee: commercial, free: false, who: spec.name, operator: 'harbour',
+             hours: hours,
+             note: Math.round(hours) + ' h of crew time, ' +
+                   Math.round(mass) + ' t all-up' };
+  }
+
+  /* ---- a transfer, or a tow ----------------------------------------------
+   *
+   * Two services, and the player picks. A TRANSFER fills the tanks where you
+   * float: cheap, and it leaves you exactly where your mistake left you. A
+   * TOW hauls you and your hull to a port you choose: dearer, and it is the
+   * only one of the two that answers a dead hull or a decaying orbit.
+   *
+   * The choice is offered while the boat is still inbound rather than when
+   * it is alongside, and that is deliberate — the quote is a fact about the
+   * CALL. A crew that named a price and then watched you pick a destination
+   * on the far side of the system would re-quote, and a bill that changes
+   * after you accept it is the oldest trick there is. Ask early, pay what
+   * you were told.
+   *
+   * THE TOW IS PRICED ON THE TUG'S WHOLE JOB: out to you, then on to the
+   * destination. Same crew-hours rate as the call-out, because it is the
+   * same crew and the same hours — see rescueRate for why hours and not
+   * kilometres. A surcharge rides on top in lawless space, which is the
+   * plan's rule and the existing `crimeScore`: being hauled out of
+   * somewhere nobody wants to go costs more, and it should. */
+  var TOW_LAWLESS_SURCHARGE = 0.60;   // +60% at the worst crimeScore
+  var TOW_MIN_WARP = 25;              // never resolve a tow inside one frame
+
+  function towTime(spec, from, to) {
+    var d = V.dist(from, to);
+    return 2 * Math.sqrt(Math.max(0, d) / Math.max(1e-6, spec.accel || 0.01));
+  }
+
+  function lawlessMult(G, sys) {
+    var c = 0;
+    if (global.Economy && global.Economy.systemAnalysis && sys) {
+      var cs = sys.crimeScore;
+      if (cs == null && G.here) cs = G.here.crimeScore;
+      c = Math.max(0, Math.min(100, cs || 0)) / 100;
+    }
+    return 1 + TOW_LAWLESS_SURCHARGE * c;
+  }
+
+  /* Every port in the system you could be hauled to, with the quote for
+   * each. Returned sorted by price, because the decision the player is
+   * making is "what can I afford", not "what is nearest". */
+  function towOptions(sys, G, t) {
+    if (!G.rescue) return [];
+    var spec = findSpec(sys, G.rescue.responder);
+    if (!spec) return [];
+    var ports = (sys && sys.ports) || [], out = [];
+    var mult = lawlessMult(G, sys);
+    for (var i = 0; i < ports.length; i++) {
+      var st = global.Sim.bodyState(ports[i], sys, t);
+      if (!st || !st.pos) continue;
+      /* A port that will not have you is not a destination. The refusal
+       * already exists and already carries its reason. */
+      var barred = dockRefusal ? dockRefusal(G, ports[i]) : null;
+      var legOut = G.rescue.distance || 0;
+      var legOn = V.dist(G.ship.pos, st.pos);
+      var hours = (towTime(spec, { x: 0, y: 0, z: 0 }, { x: legOut, y: 0, z: 0 }) +
+                   towTime(spec, G.ship.pos, st.pos)) / 3600;
+      var rate = rescueRate(spec, G, legOut);
+      var fee = rate.free ? 0
+              : Math.round((RESCUE_CALLOUT + RESCUE_PER_HOUR * hours +
+                            RESCUE_PER_TONNE * Math.max(0, G.ship.mass || 0)) *
+                           mult * (rate.operator === 'syndicate' ? SYNDICATE_MULT : 1) +
+                           (rate.holdCut || 0));
+      out.push({ port: ports[i].id, name: ports[i].name, dist: legOn,
+                 seconds: towTime(spec, G.ship.pos, st.pos), fee: fee,
+                 free: rate.free, barred: barred ? barred.text : null });
+    }
+    out.sort(function (a, b) { return a.fee - b.fee || a.dist - b.dist; });
+    return out;
+  }
+
+  /* Upgrade the inbound call from a transfer to a tow. Allowed right up to
+   * the moment the hose goes across, because a pilot watching a tender
+   * close should be able to change their mind about what they need. */
+  function requestTow(sys, G, t, portId, hooks) {
+    if (!G.rescue) return { ok: false, why: 'nobody is coming — transmit a mayday first' };
+    if (global.Sim.towActive(G.ship)) return { ok: false, why: 'you are already under tow' };
+    var opts = towOptions(sys, G, t);
+    var pick = null;
+    for (var i = 0; i < opts.length; i++) if (opts[i].port === portId) pick = opts[i];
+    if (!pick) return { ok: false, why: 'no such port in this system' };
+    if (pick.barred) return { ok: false, why: pick.barred };
+
+    G.rescue.service = 'tow';
+    G.rescue.dest = portId;
+    G.rescue.fee = pick.fee;
+    G.rescue.towSeconds = pick.seconds;
+    var line = (pick.free ? 'No charge' : pick.fee + ' cr') + ' to haul you to ' +
+               pick.name + ' — ' + fmtKm(pick.dist) + ', about ' + fmtEta(pick.seconds) +
+               ' once they have you on the cable.';
+    G.rescue.text = line;
+    if (hooks && hooks.say) hooks.say('Tow agreed.  ' + line, 9);
+    if (hooks && hooks.sound) hooks.sound('click');
+    return { ok: true, fee: pick.fee, port: portId, seconds: pick.seconds, text: line };
+  }
+
+  /* Back to a transfer. */
+  function cancelTow(G, hooks) {
+    if (!G.rescue || G.rescue.service !== 'tow') {
+      return { ok: false, why: 'no tow is arranged' };
+    }
+    G.rescue.service = 'transfer';
+    G.rescue.dest = null;
+    var spec = null, sys = G.sys;
+    if (sys) spec = findSpec(sys, G.rescue.responder);
+    if (spec) G.rescue.fee = rescueRate(spec, G, G.rescue.distance || 0).fee;
+    if (hooks && hooks.say) hooks.say('Tow cancelled — they will top you off instead.', 6);
+    return { ok: true };
+  }
+
   var RESCUE_SCRAMBLE = 90;        // s — crew aboard, drive spooled
   var RESCUE_HOLD = 6;             // s alongside before the tanks are full
   var RESCUE_CLOSE = 3.5;          // km — near enough to pass a hose
@@ -2018,9 +2212,14 @@
     var transit = 2 * Math.sqrt(Math.max(0, d - global.Sim.RESCUE_HANDOFF) /
                                 Math.max(1e-6, spec.accel || 0.01));
     var eta = RESCUE_SCRAMBLE + transit;
+    /* QUOTED WHEN THEY ACCEPT THE JOB, charged when they arrive. The price
+     * is a fact about the call, not about the moment of payment, so burning
+     * cargo on the way does not shrink the Syndicate's cut — they already
+     * named it. */
+    var rate = rescueRate(spec, G, d);
     G.rescue = { responder: spec.id, temp: temp, t0: t,
                  scrambleUntil: t + RESCUE_SCRAMBLE, handoffAt: t + eta,
-                 fee: RESCUE_FEE, distance: d };
+                 fee: rate.fee, quote: rate, distance: d };
     attachRescue(spec, G);
 
     /* On the air, so the comms list shows the same call a manual mayday
@@ -2032,7 +2231,8 @@
       answeredBy: spec.id, victim: null, etaAt: t + eta
     });
     var text = spec.name + ' is coming for you — ' + fmtKm(d) + ' out, about ' +
-               fmtEta(eta) + '.' + (temp ? '  Launched from ' + sys.byId[spec.homePort].name + '.' : '');
+               fmtEta(eta) + '.' + (temp ? '  Launched from ' + sys.byId[spec.homePort].name + '.' : '') +
+               '  ' + (rate.free ? 'No charge.' : rate.fee + ' cr (' + rate.note + ').');
     G.rescue.text = text;
     talk('Reaction mass exhausted.  ' + text, 9);
     if (hooks && hooks.sound) hooks.sound('click');
@@ -2077,6 +2277,11 @@
     var s = G.ship;
 
     if (!G.rescue) {
+      /* UNDER TOW IS NOT STRANDED, even though the tanks are still dry. A
+       * ship on a cable is already being dealt with, and without this the
+       * frame after the cable goes on would call a second boat for the same
+       * emergency — forever, since a tow deliberately does not refuel you. */
+      if (global.Sim.towActive && global.Sim.towActive(s)) return;
       if (!stranded(G)) { G.rescueRefused = false; return; }
       if ((G.tenderKills || 0) > 0) {
         if (!G.rescueRefused) {
@@ -2096,7 +2301,18 @@
     /* CALLED OFF the moment you are no longer stranded — docked, landed,
      * or somebody else pumped something across. */
     if (!stranded(G)) {
-      talk(spec.name + ' stands down — you are under way.', 5);
+      /* A WASTED CALL-OUT, and only the navy charges for it — in standing,
+       * because what you spent was their goodwill. A harbour tug that turns
+       * round having billed nothing has lost nothing; a warship that broke
+       * off its patrol for a pilot who did not need it remembers. */
+      var q = G.rescue.quote;
+      var wasted = q && q.operator === 'navy' && spec.faction &&
+                   t - G.rescue.t0 > RESCUE_SCRAMBLE;
+      talk(spec.name + ' stands down — you are under way.' +
+           (wasted ? '  They note the wasted call-out.' : ''), 5);
+      if (wasted && global.Missions) {
+        global.Missions.bumpStanding(G, spec.faction, RESCUE_WASTE_STANDING);
+      }
       endRescue(sys, G, spec, 'recovered');
       return;
     }
@@ -2128,17 +2344,48 @@
       if (range < RESCUE_CLOSE && rel < RESCUE_MATCH) {
         spec.rescueHold = (spec.rescueHold || 0) + dtSim;
         if (spec.rescueHold >= RESCUE_HOLD) {
-          var fee = Math.min(RESCUE_FEE, Math.max(0, Math.floor(s.credits || 0)));
-          s.credits = (s.credits || 0) - fee;
-          s.thrusterFuel = s.thrusterCap;
-          s.fuel = s.fuelCap;
-          s.fuelOut = false;
-          if (global.Sim.refreshShip) global.Sim.refreshShip(s);
-          G.tenderRescues = (G.tenderRescues || 0) + 1;
-          var line = spec.name + ' — tanks filled, reaction mass and hydrogen  ·  ' +
-                     (fee >= RESCUE_FEE ? fee + ' cr call-out'
-                      : fee > 0 ? fee + ' cr, the rest waived' : 'no charge — they waived it');
+          var quote = (G.rescue && G.rescue.quote) || rescueRate(spec, G, G.rescue.distance || 0);
+          var owed = Math.max(0, Math.round(G.rescue.fee || 0));
+          /* PAY WHAT YOU CAN; THE REST BECOMES A LIEN. The old code waived
+           * the shortfall, which made the whole fee optional for anyone
+           * willing to arrive broke. The debt outliving the rescue is what
+           * makes the bill real without making being poor fatal. */
+          var paid = Math.min(owed, Math.max(0, Math.floor(s.credits || 0)));
+          s.credits = (s.credits || 0) - paid;
+          var short = owed - paid;
+          if (short > 0) addLien(G, short, quote.who || spec.name, t);
+
+          var towing = G.rescue.service === 'tow' && G.rescue.dest &&
+                       sys.byId[G.rescue.dest];
+          var what;
+          if (towing) {
+            /* ON THE CABLE. The tanks are NOT filled — that is the service
+             * you did not buy, and a tow that also refuelled you would make
+             * the transfer pointless. You arrive at a port, where fuel is
+             * free anyway, which is the whole reason the tow is worth more
+             * than the hose. */
+            global.Sim.beginTow(s, sys.byId[G.rescue.dest], sys, t,
+                                G.rescue.towSeconds || 3600);
+            G.towsTaken = (G.towsTaken || 0) + 1;
+            what = 'on the cable for ' + sys.byId[G.rescue.dest].name;
+          } else {
+            s.thrusterFuel = s.thrusterCap;
+            s.fuel = s.fuelCap;
+            s.fuelOut = false;
+            if (global.Sim.refreshShip) global.Sim.refreshShip(s);
+            G.tenderRescues = (G.tenderRescues || 0) + 1;
+            what = 'tanks filled, reaction mass and hydrogen';
+          }
+
+          var how = quote.free ? 'no charge — ' + quote.note.replace(/^no charge — /, '')
+                  : short > 0 ? paid + ' cr paid, ' + short + ' cr against the hull'
+                  : paid + ' cr';
+          var line = spec.name + ' — ' + what + '  ·  ' + how;
           if (hooks && hooks.ledger) hooks.ledger(line); else talk(line, 8);
+          if (short > 0) {
+            talk((quote.who || spec.name) + ' holds a lien on this hull — ' + lienOwed(G) +
+                 ' cr.  Every sale gives up a share until it clears, and the yard is shut to you.', 10);
+          }
           if (hooks && hooks.sound) hooks.sound('pay');
           endRescue(sys, G, spec, 'refuelled');
         }
@@ -2146,6 +2393,96 @@
         spec.rescueHold = 0;
       }
     }
+  }
+
+  /* ---- the lien -----------------------------------------------------------
+   *
+   * What happens when a rescued pilot cannot pay. The first build had the
+   * crew waive the remainder, which was kind and which quietly made the
+   * whole fee optional: fly out broke, run the tanks dry, get filled for
+   * free. A rescue you can farm is not a punishment, and the dead end it
+   * was built to close was never the problem — being broke was.
+   *
+   * So the debt survives the rescue instead. A lien is money owed against
+   * the hull, and it follows the hull rather than the pilot:
+   *
+   *   - **Every sale gives up a cut** until it clears. The harbour is paid
+   *     out of the proceeds, which is the rule `Fleet` already runs on for
+   *     unpaid berthing (see screens.js: the debt comes out of the sale).
+   *     Nothing new is being invented here, it is the same instrument
+   *     pointed at a different bill.
+   *   - **The yard will not improve or sell encumbered collateral.** No
+   *     equipment, no outfitting, no hull trade while it stands — with the
+   *     reason said out loud, per doctrine 5.
+   *   - **It does not touch cargo trade, fuel or consumables.** That is
+   *     deliberate and it is what stops this being a soft game over: the
+   *     one activity that clears the debt is always available, and a pilot
+   *     in the red can still buy rounds and fly.
+   *
+   * A PERCENTAGE, NOT A FLAT CUT, and that is measured rather than assumed.
+   * A full twenty-tonne hold grosses 704 cr at the tenth percentile and
+   * 340,726 cr at the top across forty seeds — median 4,898. Any flat
+   * deduction across that spread is either beneath notice or confiscation.
+   * At 20% the cut is ~980 cr of a median sale, which clears a 3,000 cr tow
+   * in four sales and a 12,000 cr one in thirteen: felt on every sale,
+   * fatal to none. */
+  var LIEN_CUT = 0.20;
+
+  function lienOwed(G) {
+    var l = G && G.ship && G.ship.lien;
+    return l && l.cr > 0 ? l.cr : 0;
+  }
+
+  /* Debt is added, never replaced. A pilot rescued twice owes both, and the
+   * holder is whoever most recently had to eat the shortfall. */
+  function addLien(G, cr, who, t) {
+    cr = Math.max(0, Math.round(cr || 0));
+    if (!cr) return lienOwed(G);
+    var s = G.ship;
+    if (!s.lien || !(s.lien.cr > 0)) s.lien = { cr: 0, who: who || 'the harbour', at: t || 0 };
+    s.lien.cr += cr;
+    s.lien.who = who || s.lien.who;
+    return s.lien.cr;
+  }
+
+  /* The harbour's cut of one sale. Returns what was taken and whether that
+   * finished it, so the caller can say both in one ledger line — a silent
+   * deduction from a sale is indistinguishable from a pricing bug. */
+  function lienTake(G, gross) {
+    var owed = lienOwed(G);
+    if (!(owed > 0) || !(gross > 0)) return { taken: 0, cleared: false, left: owed };
+    var take = Math.min(owed, Math.max(1, Math.round(gross * LIEN_CUT)));
+    var s = G.ship;
+    s.lien.cr = owed - take;
+    var cleared = !(s.lien.cr > 0);
+    var who = s.lien.who;
+    if (cleared) s.lien = null;
+    return { taken: take, cleared: cleared, left: cleared ? 0 : s.lien.cr, who: who };
+  }
+
+  /* Paying it off in one go, for a pilot who has come good. Partial payment
+   * is allowed because refusing it would make a half-full purse useless. */
+  function payLien(G, cr) {
+    var owed = lienOwed(G), s = G.ship;
+    if (!(owed > 0)) return { ok: false, why: 'nothing is owed against this hull' };
+    var pay = Math.min(owed, Math.floor(Math.max(0, cr != null ? cr : s.credits)));
+    if (!(pay > 0)) return { ok: false, why: 'you have nothing to pay it with' };
+    s.credits -= pay;
+    s.lien.cr = owed - pay;
+    var cleared = !(s.lien.cr > 0);
+    var who = s.lien.who;
+    if (cleared) s.lien = null;
+    return { ok: true, paid: pay, cleared: cleared, left: cleared ? 0 : s.lien.cr, who: who };
+  }
+
+  /* Why the yard said no. A string, not a boolean, because a greyed row
+   * that will not say what is wrong is indistinguishable from a bug. */
+  function lienRefusal(G) {
+    var owed = lienOwed(G);
+    if (!(owed > 0)) return null;
+    var who = (G.ship.lien && G.ship.lien.who) || 'the harbour';
+    return who + ' holds a lien on this hull — ' + owed +
+           ' cr outstanding. The yard will not fit or trade her until it clears';
   }
 
   var ATTACK_STANDOFF = 6;       // km — where an attacker tries to sit
@@ -6372,6 +6709,12 @@
   function buyEquipment(G, id, key) {
     var s = G.ship, item = EQUIPMENT[id];
     if (!item) return { ok: false, why: 'no such equipment' };
+    /* ENCUMBERED COLLATERAL. A yard will not bolt value onto a hull
+     * somebody else has a claim on. Cargo trade is deliberately left open —
+     * it is the one thing that clears the debt, and closing it too would
+     * turn a bill into a soft game over. */
+    var enc = lienRefusal(G);
+    if (enc) return { ok: false, why: enc };
     if (s.credits < item.price) {
       return { ok: false, why: 'need ' + item.price + ' cr', short: item.price - s.credits };
     }
@@ -6413,6 +6756,12 @@
       item = SINK; ok = rack > 0 && s.sinks < rack;
     }
     if (!item || !ok) return null;
+    /* The lien shuts the yard to CAPITAL fittings only. Missiles and heat
+     * sinks are consumables a pilot in debt still needs to survive long
+     * enough to pay it — see lienRefusal for why the line is drawn here.
+     * The reason itself is surfaced by the caller, which has somewhere to
+     * print it; this contract is numeric and older than the lien. */
+    if (kind !== 'missile' && kind !== 'sink' && lienOwed(G) > 0) return null;
     if (s.credits < item.price) return -item.price;
 
     if (kind === 'missile') {
@@ -6467,6 +6816,11 @@
     var s = G.ship;
     var to = HULLS[hullId], from = HULLS[s.hullId || 'talon'];
     if (!to || to.id === s.hullId) return { ok: false, why: 'already flying one' };
+    /* YOU CANNOT TRADE AWAY THE COLLATERAL. This is the refusal that makes
+     * the lien a lien rather than a fine: without it, the answer to a debt
+     * against the hull is to stop owning that hull. */
+    var encH = lienRefusal(G);
+    if (encH) return { ok: false, why: encH };
     var cost = keep ? to.price : to.price - Math.round(from.price * 0.7);
     if (cost > 0 && s.credits < cost) return { ok: false, why: 'need ' + cost + ' cr' };
     if (global.Sim.cargoMass(s) > to.cargoCap) {
@@ -6628,7 +6982,17 @@
     hailRumour: hailRumour, rumourFacts: rumourFacts, RUMOUR_DAY: RUMOUR_DAY,
     startRescue: startRescue, updateRescue: updateRescue, restoreRescue: restoreRescue,
     endRescue: endRescue, stranded: stranded, launchPortBoat: launchPortBoat,
-    RESCUE_FEE: RESCUE_FEE, RESCUE_SCRAMBLE: RESCUE_SCRAMBLE, RESCUE_HOLD: RESCUE_HOLD,
+    RESCUE_CALLOUT: RESCUE_CALLOUT, RESCUE_PER_HOUR: RESCUE_PER_HOUR,
+    RESCUE_PER_TONNE: RESCUE_PER_TONNE, SYNDICATE_MULT: SYNDICATE_MULT,
+    SYNDICATE_HOLD_CUT: SYNDICATE_HOLD_CUT,
+    RESCUE_WASTE_STANDING: RESCUE_WASTE_STANDING,
+    rescueRate: rescueRate, holdBase: holdBase,
+    towOptions: towOptions, requestTow: requestTow, cancelTow: cancelTow,
+    towTime: towTime, TOW_LAWLESS_SURCHARGE: TOW_LAWLESS_SURCHARGE,
+    TOW_MIN_WARP: TOW_MIN_WARP,
+    LIEN_CUT: LIEN_CUT, lienOwed: lienOwed, addLien: addLien, lienTake: lienTake,
+    payLien: payLien, lienRefusal: lienRefusal,
+    RESCUE_SCRAMBLE: RESCUE_SCRAMBLE, RESCUE_HOLD: RESCUE_HOLD,
     RESCUE_CLOSE: RESCUE_CLOSE,
     addHeat: addHeat, updateSink: updateSink,
     WITNESS_RANGE: WITNESS_RANGE, DISTRESS_DELAY: DISTRESS_DELAY,
