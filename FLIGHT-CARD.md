@@ -228,6 +228,15 @@ couriers to neighbouring stars, waste disposal runs. Deadlines are real —
 a blown one fines you and the faction remembers. Standing and warrants both
 live on this screen.
 
+**Trading with a ship (`F4` → pick a ship → `Trade…`).** Within 120 km.
+Their hold and yours on one board, with the port market's keys: ↑↓ pick a
+line, → buy, ← sell, Shift for ten, Home buys as much as you can, End sells
+all you may, Esc backs out. A lawful hull will not deal with you if its own
+flag wants you; outlaw hulls deal with anybody. Your standing with the flag
+moves the prices, and a deal earns standing by its size — up to four points
+a faction a day. Trading with a rival's hull in someone's space costs you
+with them, and the board tells you who before you press anything.
+
 **Piracy (`F4` → pick a ship → `Piracy…`).** Demand cargo or credits. Armed
 threats work on freighters; empty ones amuse them; trying it on the law starts
 a fight. The rules of getting caught are the whole game: a witness within

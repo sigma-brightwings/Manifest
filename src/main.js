@@ -284,6 +284,8 @@
     /* A new seed is a new career: no debts, no friends, no warrants. */
     G.standing = {};
     G.wanted = {};
+    G.shipTrade = null;
+    G.shipDeal = null;
     G.missions = [];
     /* A new career owns one ship, and it is the one you are in. */
     G.fleet = [];
@@ -2199,7 +2201,7 @@
       G.mapReturn = null;
     }
 
-    if (i !== was) { G.hotspots = []; G.piracyMenu = null; }
+    if (i !== was) { G.hotspots = []; G.piracyMenu = null; G.shipDeal = null; }
   }
 
   /* F1's second press. Cockpit and chase camera are the two ways to fly,
@@ -2228,6 +2230,11 @@
    * consumed the key; anything it does not want reaches the ship. */
   function modeKey(e) {
     var key = e.key.toLowerCase();
+    /* The trade board sits INSIDE the comms screen, so it gets the keys
+     * first — Escape included, which backs out to the channel rather than
+     * all the way to the cockpit. Two presses to leave is right here: the
+     * first one is "I'm done with this ship", not "I'm done with comms". */
+    if (G.shipDeal && modeId() === 'comms' && handleShipDealKey(e)) return true;
     if (key === 'escape') { selectPanel(0); return true; }
 
     switch (modeId()) {
@@ -2250,8 +2257,8 @@
 
       case 'comms': {
         var contacts = global.Screens.commsContacts();
-        if (key === 'arrowdown') { G.commsSel = Math.min(contacts.length - 1, G.commsSel + 1); G.piracyMenu = null; return true; }
-        if (key === 'arrowup') { G.commsSel = Math.max(0, G.commsSel - 1); G.piracyMenu = null; return true; }
+        if (key === 'arrowdown') { G.commsSel = Math.min(contacts.length - 1, G.commsSel + 1); G.piracyMenu = null; G.shipDeal = null; return true; }
+        if (key === 'arrowup') { G.commsSel = Math.max(0, G.commsSel - 1); G.piracyMenu = null; G.shipDeal = null; return true; }
         if (key === 'enter') { hailSelected(contacts[G.commsSel]); return true; }
         /* Y only means anything against a standing quote, so it shadows
          * nothing the player would otherwise want here. */
@@ -3793,6 +3800,65 @@
                               : ''));
     }
     Sim.refreshShip(G.ship);
+  }
+
+  /* ---- trading with a hailed ship -------------------------------------
+   * The keys are the port market's, on purpose: ↑↓ pick a line, → buys
+   * and ← sells, Shift for ten, Home for as much as you can and End for
+   * everything you may sell. A second trade screen with a second set of
+   * habits would be a thing the hand has to remember which room it is in.
+   * The deal itself is ShipTrade.deal — this is only the desk. */
+  /* By NAME, not by G.commsSel: the list re-sorts by range under you, and
+   * a key pressed between two frames must still trade with the ship the
+   * board is showing. See drawCommsScreen's pin for the same reason. */
+  function shipDealContact() {
+    if (!G.shipDeal || !global.Screens) return null;
+    var list = global.Screens.commsContacts();
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].obj && list[i].name === G.shipDeal.name) return list[i];
+    }
+    return null;
+  }
+
+  function handleShipDealKey(e) {
+    var key = e.key.toLowerCase();
+    var d = G.shipDeal;
+    if (key === 'escape') { G.shipDeal = null; return true; }
+    var c = shipDealContact();
+    var ST = global.ShipTrade;
+    if (!c || !ST) { G.shipDeal = null; return false; }
+    var rows = ST.board(G, G.sys, G.t, c.obj).rows;
+    if (key === 'arrowdown') { d.sel = Math.min(Math.max(0, rows.length - 1), d.sel + 1); return true; }
+    if (key === 'arrowup') { d.sel = Math.max(0, d.sel - 1); return true; }
+    var row = rows[d.sel];
+    var step = e.shiftKey ? 10 : 1;
+    var qty = key === 'arrowright' ? step
+            : key === 'arrowleft' ? -step
+            : key === 'home' ? ST.maxBuy(G, row)
+            : key === 'end' ? -Math.max(1, Math.floor(row ? row.yours : 0))
+            : null;
+    if (qty === null) return false;
+    if (!row) return true;
+    shipDealTrade(c, row, qty);
+    return true;
+  }
+
+  function shipDealTrade(c, row, qty) {
+    /* Home with nothing buyable, End with nothing sellable: ask for one
+     * tonne instead, so the refusal that comes back says WHICH limit it
+     * was — hold, credits, their stock, a contract — rather than the key
+     * silently doing nothing. */
+    if (qty === 0) qty = 1;
+    var res = global.ShipTrade.deal(G, G.sys, G.t, c.obj, row.cid, qty, { say: say });
+    if (res.ok) {
+      /* Into the same short ledger the port market writes, so the MANIFEST
+       * screen's recent trades include the ones made in vacuum. */
+      G.ledgerLog.unshift({ t: G.t,
+        text: (res.bought ? 'Bought ' : 'Sold ') + res.qty + 't ' + row.name +
+              (res.bought ? ' from ' : ' to ') + c.name + '  ' +
+              fmtCredits(res.bought ? -res.total : res.total) });
+      if (G.ledgerLog.length > 6) G.ledgerLog.length = 6;
+    }
   }
 
   function logTrade(text) {
@@ -13098,6 +13164,9 @@
       hailAuthority: hailAuthority, payOutstanding: payOutstanding,
       hailSelected: hailSelected,
       exitTransfer: exitTransfer,
+      /* The ship trade board's buttons go through the same function as its
+       * keys, for the same reason. */
+      shipDealTrade: shipDealTrade,
       scopeBody: scopeBody, rows: rows, panel: panel,
       bodyDotColor: bodyDotColor, setMouseAim: setMouseAim,
       fmtDist: fmtDist, fmtSpeed: fmtSpeed, fmtTime: fmtTime,

@@ -6004,8 +6004,7 @@
   var HAIL_RANGE_KM = 120;          // the transmitter, not the radar
   var ASSIST_FUEL_MAX = 8;          // t of hydrogen a passing ship will spare
   var ASSIST_MARKUP = 2.4;          // what a rescue costs out in the black
-  var TRADE_MARKUP = 1.35;          // buying off a hull that is not a shop
-  var TRADE_DISCOUNT = 0.82;        // and selling to one
+  /* The trade markups moved to shiptrade.js with the rest of the deal. */
 
   function hailRefusal(G, contact) {
     if (!contact || !contact.pos) return 'No channel open.';
@@ -6017,49 +6016,37 @@
     return null;
   }
 
-  /* What this ship would sell you, and what it would take off your hands.
-   * Read off the manifest it is actually flying, so a hauler full of
-   * tailings offers tailings and a tanker offers hydrogen - the answer is
-   * the cargo the timetable says is aboard, not a shop window. */
-  function hailTrade(G, contact) {
-    var Eco = global.Economy;
-    if (!Eco) return null;
-    var s = G.ship;
-    var man = (contact.route && contact.manifest) || [];
-    var hold = global.Sim ? global.Sim.cargoMass(s) : 0;
-    var room = Math.max(0, (s.cargoCap || 0) - hold);
-
-    var buy = null, i;
-    for (i = 0; i < man.length; i++) {
-      var cid = man[i].cid, qty = man[i].qty || man[i].tonnes || 0;
-      var com = Eco.BY_ID[cid];
-      if (!com || qty <= 0 || com.base <= 0) continue;      // nobody sells you waste
-      var take = Math.min(6, Math.floor(qty), Math.floor(room));
-      if (take < 1) continue;
-      buy = { cid: cid, name: com.name, qty: take,
-              each: Math.round(com.base * TRADE_MARKUP) };
-      break;
-    }
-
-    /* And what they would take. A ship buys what its DESTINATION is short
-     * of, which is the same question the manifest generator answers - so
-     * this is not a second economy, it is the same one asked from the other
-     * end. */
-    var sell = null;
-    var dst = contact.to;
-    if (dst && dst.market) {
-      var best = 0;
-      for (var cid2 in (s.cargo || {})) {
-        var have = s.cargo[cid2];
-        var row = dst.market.rows[cid2];
-        var com2 = Eco.BY_ID[cid2];
-        if (!have || !row || !com2 || com2.base <= 0) continue;
-        if (!row.importer) continue;
-        var val = com2.base * Math.min(have, 8);
-        if (val > best) {
-          best = val;
-          sell = { cid: cid2, name: com2.name, qty: Math.min(have, 8),
-                   each: Math.round(com2.base * TRADE_DISCOUNT) };
+  /* What this ship would sell you, and what it would take off your hands,
+   * as a single line each way — the quick offer.
+   *
+   * THIS IS NOW A VIEW OF ShipTrade.board, not a second price list. It
+   * used to compute its own prices off `com.base`, read the first line of
+   * the manifest, and — the real bug — subtract a purchase from the
+   * route's TEMPLATE manifest, so every later voyage of that line sailed
+   * light for the rest of the session. All of that lives in shiptrade.js
+   * now, with the record and standing gates Astra asked for; this keeps
+   * the old shape for the callers and tests that still ask for one line.
+   * Returns null when the hull will not trade at all, with the reason on
+   * `ShipTrade.refusal`. */
+  function hailTrade(G, contact, sys, t) {
+    var ST = global.ShipTrade;
+    if (!ST) return null;
+    sys = sys || G.sys;
+    t = t === undefined ? G.t : t;
+    var b = ST.board(G, sys, t, contact);
+    if (b.refusal) return null;
+    var buy = null, sell = null, best = 0;
+    for (var i = 0; i < b.rows.length; i++) {
+      var r = b.rows[i];
+      if (!buy && r.buyEach !== null) {
+        var take = Math.min(6, ST.maxBuy(G, r));
+        if (take >= 1) buy = { cid: r.cid, name: r.name, qty: take, each: r.buyEach };
+      }
+      if (r.sellEach !== null) {
+        var give = Math.min(8, Math.floor(r.yours), b.room);
+        if (give >= 1 && r.sellEach * give > best) {
+          best = r.sellEach * give;
+          sell = { cid: r.cid, name: r.name, qty: give, each: r.sellEach };
         }
       }
     }
@@ -6426,43 +6413,21 @@
     }
 
     if (intent === 'buy' || intent === 'sell') {
-      var deal = hailTrade(G, contact);
+      var why = global.ShipTrade ? global.ShipTrade.refusal(G, sys, contact) : 'No channel open.';
+      if (why) { talk(why, 6); return null; }
+      var deal = hailTrade(G, contact, sys, t);
       if (!deal) return null;
-      if (intent === 'buy') {
-        var b = deal.buy;
-        if (!b) { talk(contact.name + ': "Nothing aboard you could carry."', 5); return null; }
-        var cost = b.each * b.qty;
-        if (s.credits < cost) {
-          talk(contact.name + ': "' + b.qty + ' t of ' + b.name.toLowerCase() +
-               ', ' + cost + ' cr. Come back with the money."', 6);
-          return null;
-        }
-        s.credits -= cost;
-        s.cargo = s.cargo || {};
-        s.cargo[b.cid] = (s.cargo[b.cid] || 0) + b.qty;
-        /* And it leaves their hold, so the same ship cannot be milked: the
-         * manifest is what the timetable says is aboard, and this is a hole
-         * in it. */
-        for (var m = 0; m < (contact.manifest || []).length; m++) {
-          if (contact.manifest[m].cid === b.cid) {
-            contact.manifest[m].qty = Math.max(0, (contact.manifest[m].qty || 0) - b.qty);
-          }
-        }
-        if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(s);
-        talk(contact.name + ' transfers ' + b.qty + ' t of ' + b.name.toLowerCase() +
-             ' for ' + cost + ' cr.', 6);
-        return { bought: b.cid, qty: b.qty, cost: cost };
+      var line = intent === 'buy' ? deal.buy : deal.sell;
+      if (!line) {
+        talk(contact.name + (intent === 'buy' ? ': "Nothing aboard you could carry."'
+                                             : ': "Nothing you have is worth our hold."'), 5);
+        return null;
       }
-      var sl = deal.sell;
-      if (!sl) { talk(contact.name + ': "Nothing you have is worth our hold."', 5); return null; }
-      var paid = sl.each * sl.qty;
-      s.cargo[sl.cid] = Math.max(0, (s.cargo[sl.cid] || 0) - sl.qty);
-      if (!s.cargo[sl.cid]) delete s.cargo[sl.cid];
-      s.credits += paid;
-      if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(s);
-      talk(contact.name + ' takes ' + sl.qty + ' t of ' + sl.name.toLowerCase() +
-           ' for ' + paid + ' cr.', 6);
-      return { sold: sl.cid, qty: sl.qty, paid: paid };
+      var res = global.ShipTrade.deal(G, sys, t, contact, line.cid,
+                                      intent === 'buy' ? line.qty : -line.qty, hooks);
+      if (!res.ok) return null;
+      return intent === 'buy' ? { bought: res.cid, qty: res.qty, cost: res.total }
+                              : { sold: res.cid, qty: res.qty, paid: res.total };
     }
     return null;
   }

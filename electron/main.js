@@ -85,7 +85,7 @@ app.commandLine.appendSwitch('ignore-gpu-blocklist');
 
 /* Laptops with two GPUs (Intel integrated + discrete AMD) let Chromium pick,
  * and it tends to pick the Intel chip to save power. The game is the one
- * thing on this machine that wants the discrete card (RX 570, 4 GB VRAM), so
+ * thing on this machine that wants the discrete card (an RX 540, 4 GB VRAM, on the Latitude 5424), so
  * ask for it. Like the switch above this is a request: Chromium and the
  * driver can still decline, and Windows' own per-app setting (Settings >
  * System > Display > Graphics) overrides it. Before app ready on purpose —

@@ -154,6 +154,8 @@ require('../src/missions.js');
  * `global.Arcs &&`, so its absence read as "no campaigns running" rather
  * than as a harness that had never loaded the module. */
 require('../src/arcs.js');
+/* Trade with a hailed ship — the COMMS trade board draws from it. */
+require('../src/shiptrade.js');
 require('../src/sound.js');
 require('../src/save.js');
 /* The title card's artwork — the wordmark outline and the compass rose. */
@@ -1302,6 +1304,108 @@ console.log('--- the yard, the board, and a fight on screen ---');
       var never = G.hotspots.filter(function (s) { return s.hint === 'Never mind'; })[0];
       if (never) mousedown({ clientX: never.x + 2, clientY: never.y + 2 });
     }
+
+    /* THE TRADE BOARD, driven the way a player drives it: the Trade… row,
+     * then the market's own keys. The ship is pulled alongside first — the
+     * comms list reaches further than the transmitter does, so the nearest
+     * ship is not necessarily one you can talk to. */
+    /* A ship with something buyable aboard — four legs in ten run empty,
+     * and an empty one would let the buy and sell checks skip silently. */
+    var tc = contacts[shipIdx];
+    for (var tci = 0; tci < contacts.length; tci++) {
+      var cand = contacts[tci];
+      if (cand.kind !== 'ship' || cand.hostile || !cand.obj) continue;
+      var cb = W.ShipTrade.board(G, G.sys, G.t, cand.obj);
+      if (cb.rows.some(function (r) { return r.buyEach !== null; }) &&
+          !W.ShipTrade.flagOf(G, G.sys, cand.obj).outlaw) { tc = cand; break; }
+    }
+    G.ship.pos = V.addScaled(V.clone(tc.obj.pos), { x: 1, y: 0, z: 0 }, 5);
+    G.ship.vel = V.clone(tc.obj.vel || G.ship.vel);
+    G.ship.credits = 50000;
+    G.ship.cargo = {};
+    G.wanted = {};
+    /* Earlier blocks can leave the career a fugitive, which shuts every
+     * lawful hull of that flag — correctly. Set aside for the block and
+     * put back after, per the order-dependence warning in PLAN.md. */
+    var keptFugitive = G.fugitive;
+    G.fugitive = null;
+    G.shipTrade = null;
+    G.shipDeal = null;
+    W.Sim.refreshShip(G.ship);
+    frames(2);
+    /* Moving alongside re-sorts the list by range; find it again. */
+    var relist = W.Screens.commsContacts();
+    for (var rl = 0; rl < relist.length; rl++) if (relist[rl].name === tc.name) { G.commsSel = rl; break; }
+    frames(2);
+    var tmark = drawn.texts.length;
+    var tradeRow = G.hotspots.filter(function (s) { return s.hint === 'Trade\u2026'; })[0];
+    check('the channel offers a Trade… row', !!tradeRow,
+          'refusal: ' + W.ShipTrade.refusal(G, G.sys, W.Screens.commsContacts()[G.commsSel].obj) +
+          ' hints: ' + G.hotspots.map(function (h) { return h.hint; }).filter(Boolean).join(','));
+    if (tradeRow) {
+      mousedown({ clientX: tradeRow.x + 2, clientY: tradeRow.y + 2 });
+      frames(2);
+      check('it opens the board', !!G.shipDeal && G.shipDeal.name === tc.name);
+      check('with its column heads',
+            ['ABOARD', 'ASK cr', 'IN HOLD', 'PAY cr'].every(function (h) { return drawn.texts.indexOf(h) !== -1; }));
+      var kd = listeners.keydown[0];
+      var press = function (k, shift) {
+        kd({ key: k, shiftKey: !!shift, preventDefault: function () {} });
+        frames(1);
+      };
+      var bd = W.ShipTrade.board(G, G.sys, G.t, tc.obj);
+      var bi = -1;
+      for (var bx = 0; bx < bd.rows.length; bx++) if (bd.rows[bx].buyEach !== null) { bi = bx; break; }
+      if (bi >= 0) {
+        G.shipDeal.sel = 0;
+        for (var dn = 0; dn < bi; dn++) press('ArrowDown');
+        var cid = bd.rows[bi].cid;
+        var cr0 = G.ship.credits;
+        press('ArrowRight');
+        check('→ buys a tonne off their hold', (G.ship.cargo[cid] || 0) === 1 && G.ship.credits < cr0,
+              JSON.stringify(G.ship.cargo));
+        var back = W.ShipTrade.board(G, G.sys, G.t, tc.obj).rows
+          .filter(function (r) { return r.cid === cid; })[0];
+        press('ArrowLeft');
+        if (back && back.sellEach !== null) {
+          check('← sells it back', !(G.ship.cargo[cid] > 0), JSON.stringify(G.ship.cargo));
+        } else {
+          /* Its destination does not trade the good, so it will not buy it
+           * back — and has to SAY so, not just ignore the key. */
+          var lastMsg = (G.msgLog || [])[G.msgLog.length - 1];
+          check('← is refused in words when they have no buyer for it',
+                G.ship.cargo[cid] === 1 && !!lastMsg && /will not take/.test(lastMsg.text),
+                lastMsg && lastMsg.text);
+        }
+        check('and the trade reaches the ledger',
+              G.ledgerLog.length && /from |to /.test(G.ledgerLog[0].text), G.ledgerLog[0] && G.ledgerLog[0].text);
+      } else {
+        check('found a ship with something aboard to buy', false, 'none in this system at t');
+      }
+      /* Refused on the record: a lawful flag, wanted by it. */
+      var fl = W.ShipTrade.flagOf(G, G.sys, tc.obj);
+      if (fl.id && !fl.outlaw) {
+        G.wanted[fl.id] = W.Combat.WANTED_HUNT + 100;
+        frames(2);
+        check('a wanted pilot sees the refusal on the board, in words',
+              drawn.texts.some(function (t) { return /^Wanted by/.test(String(t)); }));
+        G.wanted = {};
+      }
+      press('Escape');
+      check('Esc backs out to the channel, not to the cockpit',
+            G.shipDeal === null && G.panel === 3, 'panel ' + G.panel);
+      /* And the board at the narrow window, where the pane is ~410 px. */
+      G.shipDeal = { name: tc.name, sel: 0 };
+      var oldW = W.innerWidth, oldH = W.innerHeight;
+      W.innerWidth = 764; W.innerHeight = 720;
+      frames(2);
+      W.innerWidth = oldW; W.innerHeight = oldH;
+      G.shipDeal = null;
+      frames(1);
+    }
+    check('the trade board draws and trades without an error',
+          errorsSince(tmark).length === 0, errorsSince(tmark)[0]);
+    G.fugitive = keptFugitive;
   }
 
   // Combat visuals paint without complaint.

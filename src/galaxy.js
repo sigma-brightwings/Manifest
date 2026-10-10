@@ -136,14 +136,71 @@
      * decided, so adding restricted space moved no star and changed no
      * flag in any seed that predates it. */
     assignRestricted(rootSeed, stars, factions);
+    /* And who resents whom. Last, out of its own stream, reading nothing
+     * but the roster — so it moved no border in any existing galaxy. */
+    var rivals = assignRivalries(rootSeed, factions);
 
     var galaxy = {
       seed: rootSeed, stars: stars, radius: radius,
-      byId: {}, home: stars[0], factions: factions, factionById: {}
+      byId: {}, home: stars[0], factions: factions, factionById: {},
+      rivals: rivals
     };
     for (var k = 0; k < stars.length; k++) galaxy.byId[stars[k].id] = stars[k];
     for (var fi = 0; fi < factions.length; fi++) galaxy.factionById[factions[fi].id] = factions[fi];
     return galaxy;
+  }
+
+  /* --- rivalries between the empires --------------------------------------
+   * Until ship-to-ship trade there was no such thing as an enemy: the
+   * majors were peers who never noticed one another. Trade is where that
+   * stops being true, because buying off a rival's hull in your space is
+   * the one act that makes the question come up. Astra chose it: "a seeded
+   * rivalry between the majors — trading with one's ships in the other's
+   * space costs you there".
+   *
+   * MAJORS ONLY. A minor power or a Syndicate hold operates INSIDE an
+   * empire (see `parentId`), so it inherits its empire's quarrels rather
+   * than keeping its own — the trade code walks a minor up to its parent
+   * before asking this table anything.
+   *
+   * Two majors are always rivals: with only two powers in the sky, two
+   * that did not care about each other would make the whole mechanic a
+   * coin that only ever lands on its edge. Three roll each pairing at even
+   * odds, and then nobody is left without at least one enemy — an empire
+   * that resents no one is the same dead branch from the other side.
+   *
+   * Stored symmetric, as `rivals[a][b] === rivals[b][a] === true`, so the
+   * one question anyone asks is a double lookup with no ordering to get
+   * wrong. */
+  function assignRivalries(rootSeed, factions) {
+    var rr = new RNG('galaxy-rivals|' + rootSeed);
+    var majors = factions.filter(function (f) { return !f.outlaw && !f.parentId; });
+    var rivals = {};
+    for (var i = 0; i < majors.length; i++) rivals[majors[i].id] = {};
+    function pair(a, b) { rivals[a.id][b.id] = true; rivals[b.id][a.id] = true; }
+
+    if (majors.length === 2) {
+      pair(majors[0], majors[1]);
+      return rivals;
+    }
+    for (var a = 0; a < majors.length; a++) {
+      for (var b = a + 1; b < majors.length; b++) {
+        if (rr.chance(0.5)) pair(majors[a], majors[b]);
+      }
+    }
+    for (var m = 0; m < majors.length; m++) {
+      if (Object.keys(rivals[majors[m].id]).length) continue;
+      var others = majors.filter(function (f) { return f !== majors[m]; });
+      if (others.length) pair(majors[m], others[rr.int(0, others.length - 1)]);
+    }
+    return rivals;
+  }
+
+  /* The question the rest of the game asks. Unknown ids, a null galaxy, a
+   * galaxy built before rivalries existed: all simply "no". */
+  function rivalsOf(galaxy, a, b) {
+    return !!(galaxy && galaxy.rivals && a && b && a !== b &&
+              galaxy.rivals[a] && galaxy.rivals[a][b]);
   }
 
   function makeStar(id, seed, x, y, z) {
@@ -822,6 +879,7 @@
     restrictionOf: restrictionOf,
     barredFrom: barredFrom,
     chartOffer: chartOffer,
+    rivalsOf: rivalsOf,
     CHART_RADIUS_LY: CHART_RADIUS_LY,
     PIRATE_HOLDS: PIRATE_HOLDS,
     PIRATE_SHARE: PIRATE_SHARE,

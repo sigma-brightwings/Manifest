@@ -25,7 +25,7 @@
    * byte-for-byte the code that was tested in its old home. */
   var G, say, selectPanel, hot, navList, navTargetState, navMark, jettison,
       heldCargo, openMarket, plottedCourse, jumpCandidates, doJump, complyWithDemand,
-      hailAuthority, payOutstanding, hailSelected, exitTransfer,
+      hailAuthority, payOutstanding, hailSelected, exitTransfer, shipDealTrade,
       scopeBody, rows, panel, bodyDotColor, setMouseAim,
       fmtDist, fmtSpeed, fmtTime, fmtEpoch, fmtCredits, fmtLy, clipText,
       drawSystemPage, drawChartPage, drawOrbitPage, drawTargetPage,
@@ -43,6 +43,7 @@
     hailAuthority = api.hailAuthority; payOutstanding = api.payOutstanding;
     hailSelected = api.hailSelected;
     exitTransfer = api.exitTransfer;
+    shipDealTrade = api.shipDealTrade;
     scopeBody = api.scopeBody; rows = api.rows; panel = api.panel;
     bodyDotColor = api.bodyDotColor; setMouseAim = api.setMouseAim;
     fmtDist = api.fmtDist; fmtSpeed = api.fmtSpeed; fmtTime = api.fmtTime;
@@ -595,6 +596,19 @@
     var listW = Math.min(460, w * 0.4);
     var colH = bottom - top - pad * 2;
     var contacts = commsContacts();
+    /* THE BOARD HOLDS ITS SHIP. The list is sorted by range and re-sorted
+     * every frame, and G.commsSel is an index into it — so the moment you
+     * pulled alongside to trade, or something else drifted past, the same
+     * index named a different ship and the board shut in your face (or
+     * worse, reopened on a stranger). While a deal is open the selection
+     * follows the ship by name; if it has left the list, the deal ends. */
+    if (G.shipDeal) {
+      var dealAt = -1;
+      for (var di = 0; di < contacts.length; di++) {
+        if (contacts[di].name === G.shipDeal.name && contacts[di].obj) { dealAt = di; break; }
+      }
+      if (dealAt >= 0) G.commsSel = dealAt; else G.shipDeal = null;
+    }
     if (G.commsSel >= contacts.length) G.commsSel = Math.max(0, contacts.length - 1);
 
     ctx.save();
@@ -673,7 +687,11 @@
        said to you and who said it belong on the same screen, and the comms
        screen already owns the scrolling idiom. */
     var rx = pad * 2 + listW, rw = w - rx - pad;
-    var logH = Math.max(120, Math.round(colH * 0.44));
+    /* While a trade board is open it borrows height from the log: a
+     * board is a table you scroll, the log is a record you glance at, and
+     * at 720 px the 44% split left room for six lines of a ship's hold. */
+    var logH = G.shipDeal ? Math.max(96, Math.round(colH * 0.26))
+                          : Math.max(120, Math.round(colH * 0.44));
     var chanH = colH - logH - 10;
     drawMessageLog(ctx, rx, top + pad + chanH + 10, rw, logH);
     var sel = contacts[G.commsSel];
@@ -704,6 +722,14 @@
                  '   ·   ' + fmtDist(sel.range) + ' out', rx + 16, y + 18);
     ctx.restore();
 
+    /* The trade board takes the channel pane over while it is open: the
+     * intents underneath are a menu, and you have picked from it. */
+    if (G.shipDeal && G.shipDeal.name === sel.name && sel.obj && global.ShipTrade) {
+      drawShipDeal(ctx, rx, y, rw, top + pad + chanH, sel);
+      return;
+    }
+    if (G.shipDeal) G.shipDeal = null;
+
     var opts = commsOptions(sel);
     var by = y + 44, bw = Math.min(300, rw - 32), bh = 30;
     for (var i = 0; i < opts.length; i++) {
@@ -723,6 +749,200 @@
     ctx.fillStyle = 'rgba(160,185,220,0.55)';
     ctx.fillText('Traffic control answers immediately; ships answer when they feel like it.',
                  rx + 16, top + pad + chanH - 14);
+    ctx.restore();
+  }
+
+  /* ---- the ship trade board ---------------------------------------------
+   * Every line in their hold and every line in yours, the port market's
+   * columns read from the other side of the counter: what is ABOARD and
+   * what they ASK for it, what is IN your HOLD and what they will PAY.
+   *
+   * Laid out in FRACTIONS of the pane, not pixels. The channel pane is
+   * whatever the channel list leaves, which runs from ~780 px at 1280 wide
+   * to ~410 at the narrow window — fixed columns would print the PAY
+   * column through the pane's right edge on the one and leave a canyon on
+   * the other. And the WHY of a refused line is not a column at all: it
+   * is the status line under the table, for the selected row, which has
+   * the whole width to say it in. */
+  function drawShipDeal(ctx, rx, y, rw, paneBottom, sel) {
+    var ST = global.ShipTrade;
+    var d = G.shipDeal;
+    var b = ST.board(G, G.sys, G.t, sel.obj);
+    var x0 = rx + 16, right = rx + rw - 16, W = right - x0;
+    var ly = y + 40;
+
+    ctx.save();
+    ctx.font = 'bold 12px ui-monospace, monospace';
+
+    /* Who you are dealing with and where you stand with them — the two
+     * numbers that set every price below — then the room each side has.
+     * WRAPPED at the separators, not clipped: at the narrow window the
+     * clipped version cut "prices 2% better" off the end, which is the
+     * one part of the line that explains the numbers underneath it. */
+    var chars = Math.max(20, Math.floor(W / 7.3));
+    var pct = Math.round(b.swing * 100);
+    var infoParts = b.flag ? [
+      'flag ' + b.flag.name + (b.flag.outlaw ? ' (outlaw)' : ''),
+      'standing ' + b.label + ' (' + (b.standing > 0 ? '+' : '') + Math.round(b.standing) + ')',
+      'prices ' + (pct === 0 ? 'list' : pct > 0 ? pct + '% better' : (-pct) + '% worse')
+    ] : [];
+    var roomParts = [
+      'their room ' + b.room + ' of ' + b.roomCap + ' t this trip',
+      'your hold free ' + Math.floor(Math.max(0, G.ship.cargoCap - global.Sim.cargoMass(G.ship))) + ' t',
+      fmtCredits(G.ship.credits)
+    ];
+    function wrapParts(parts) {
+      var lines = [], cur = '';
+      for (var pi = 0; pi < parts.length; pi++) {
+        var next = cur ? cur + '   \u00b7   ' + parts[pi] : parts[pi];
+        if (cur && next.length > chars) { lines.push(cur); cur = parts[pi]; }
+        else cur = next;
+      }
+      if (cur) lines.push(cur);
+      return lines;
+    }
+    ctx.fillStyle = MFD_DIM;
+    wrapParts(infoParts).forEach(function (ln) { ctx.fillText(clipText(ln, chars), x0, ly); ly += 16; });
+    ctx.fillStyle = '#9fb6d4';
+    wrapParts(roomParts).forEach(function (ln) { ctx.fillText(clipText(ln, chars), x0, ly); ly += 16; });
+    ly += 1;
+    var con = b.consequence;
+    if (con && con.loss) {
+      ctx.fillStyle = '#ffb86b';
+      ctx.fillText(clipText('costs you with ' + con.loss.name + ' \u2014 ' + con.loss.why,
+                            Math.floor(W / 7.3)), x0, ly);
+      ly += 17;
+    }
+
+    if (b.refusal) {
+      /* Word-wrapped, never clipped: the end of a refusal is where it says
+       * what would change the answer ("until it is settled"), and the
+       * first draft cut exactly that off at 1280 wide. */
+      ctx.font = 'bold 14px ui-monospace, monospace';
+      ctx.fillStyle = '#ff9a7a';
+      var per = Math.max(16, Math.floor(W / 8.4)), words = b.refusal.split(' '), line = '';
+      var ry0 = ly + 18;
+      for (var wi = 0; wi < words.length; wi++) {
+        var tryLine = line ? line + ' ' + words[wi] : words[wi];
+        if (line && tryLine.length > per) { ctx.fillText(line, x0, ry0); ry0 += 19; line = words[wi]; }
+        else line = tryLine;
+      }
+      if (line) { ctx.fillText(line, x0, ry0); }
+      ctx.restore();
+      btn(ctx, x0, ry0 + 18, Math.min(160, W), 28, 'Back', function () { G.shipDeal = null; });
+      return;
+    }
+
+    /* The table. */
+    /* Prices without the "cr": the column head says what they are, and
+     * at 410 px the suffix is what made "47 t" and "1,390 cr" print as one
+     * word. */
+    var cols = [0.44, 0.62, 0.80, 1.0];
+    function num(v) { return Math.round(v).toLocaleString('en-US'); }
+    var hy = ly + 10;
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7e93b3';
+    ctx.fillText('COMMODITY', x0 + 14, hy);
+    ctx.textAlign = 'right';
+    ctx.fillText('ABOARD', x0 + W * cols[0], hy);
+    ctx.fillText('ASK cr', x0 + W * cols[1], hy);
+    ctx.fillText('IN HOLD', x0 + W * cols[2], hy);
+    ctx.fillText('PAY cr', x0 + W * cols[3], hy);
+    ctx.textAlign = 'left';
+
+    var rows = b.rows, rowH = 17;
+    if (d.sel >= rows.length) d.sel = Math.max(0, rows.length - 1);
+    var tableTop = hy + 18;
+    var tableBottom = paneBottom - 82;
+    var fit = Math.max(1, Math.floor((tableBottom - tableTop) / rowH) + 1);
+    if (rows.length > fit) fit = Math.max(1, fit - 1);   // a line for the "more" cue
+    var first = Math.max(0, Math.min(rows.length - fit, d.sel - Math.floor(fit / 2)));
+    if (!rows.length) {
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('Their hold is empty and so is yours.', x0 + 14, tableTop);
+    }
+    var nameRoom = Math.max(4, Math.floor((W * cols[0] - 14 - 58) / 7.3));
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    for (var i = first; i < rows.length && i < first + fit; i++) {
+      var r = rows[i], ry = tableTop + (i - first) * rowH;
+      var on = i === d.sel;
+      if (on) {
+        ctx.fillStyle = 'rgba(125,250,255,0.10)';
+        ctx.fillRect(x0 - 4, ry - 12, W + 8, rowH);
+        ctx.fillStyle = '#7dfaff';
+        ctx.fillText('\u25b6', x0, ry);
+      }
+      ctx.fillStyle = on ? MFD_HOT : MFD_INK;
+      ctx.fillText(clipText(r.name, nameRoom), x0 + 14, ry);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = r.theirs > 0 ? '#a9bcd6' : '#4c5c72';
+      ctx.fillText(r.theirs > 0 ? r.theirs + ' t' : '\u2014', x0 + W * cols[0], ry);
+      ctx.fillStyle = r.buyEach !== null ? '#cfe0ff' : '#4c5c72';
+      ctx.fillText(r.buyEach !== null ? num(r.buyEach) : '\u2014', x0 + W * cols[1], ry);
+      ctx.fillStyle = r.held > 0 ? '#ffe6a8' : '#4c5c72';
+      ctx.fillText(r.held > 0 ? Math.floor(r.held) + ' t' : '\u2014', x0 + W * cols[2], ry);
+      ctx.fillStyle = r.sellEach !== null ? '#cfe0ff' : '#4c5c72';
+      ctx.fillText(r.sellEach !== null ? num(r.sellEach) : '\u2014', x0 + W * cols[3], ry);
+      ctx.textAlign = 'left';
+      hot(x0 - 4, ry - 12, W + 8, rowH, (function (n) {
+        return function () { G.shipDeal.sel = n; };
+      })(i));
+    }
+
+    /* More lines than fit: say so, at the end that is hiding them. A
+     * list that silently stops is read as the whole list. */
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(160,185,220,0.75)';
+    ctx.textAlign = 'right';
+    if (first > 0) ctx.fillText('\u25b2 ' + first + ' more', x0 + W, hy);
+    if (first + fit < rows.length) {
+      ctx.fillText('\u25bc ' + (rows.length - first - fit) + ' more',
+                   x0 + W, tableTop + fit * rowH - 4);
+    }
+    ctx.textAlign = 'left';
+
+    /* The selected line, in words: what each direction would do, or why
+     * it will not. */
+    var cur = rows[d.sel];
+    var sy = paneBottom - 60;
+    if (cur) {
+      var most = ST.maxBuy(G, cur);
+      var buyLine = cur.buyEach !== null
+        ? (most > 0 ? 'buy up to ' + most + ' t' : 'buy: no room or credits')
+        : 'buy: ' + (cur.buyWhy || 'not aboard');
+      var canSell = Math.min(Math.floor(cur.yours), b.room);
+      var sellLine = cur.sellEach !== null
+        ? (canSell > 0 ? 'sell up to ' + canSell + ' t' : 'sell: no room left this trip')
+        : 'sell: ' + (cur.held > 0 ? (cur.sellWhy || 'no') : 'none aboard');
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = '#d8f4ff';
+      ctx.fillText(clipText(buyLine + '   \u00b7   ' + sellLine, Math.floor(W / 7.3)), x0, sy);
+    }
+    ctx.restore();
+
+    /* Buttons for the pointer, labelled with the arrow key each one is —
+     * the same direction on screen as on the keyboard. */
+    var bw = Math.max(70, Math.min(130, Math.floor((W - 16) / 3))), bh = 26, by = paneBottom - 50;
+    btn(ctx, x0, by, bw, bh, '\u2192 Buy 1 t', function () {
+      if (cur) shipDealTrade(sel, cur, 1);
+    }, { disabled: !cur || cur.buyEach === null });
+    btn(ctx, x0 + bw + 8, by, bw, bh, '\u2190 Sell 1 t', function () {
+      if (cur) shipDealTrade(sel, cur, -1);
+    }, { disabled: !cur || cur.sellEach === null });
+    btn(ctx, x0 + 2 * (bw + 8), by, bw, bh, 'Esc  Back', function () { G.shipDeal = null; });
+
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(160,185,220,0.7)';
+    /* The long form where it fits, the short one where it does not — a
+     * key legend clipped to "Home bu…" teaches nothing. */
+    var legend = '\u2191\u2193 select  \u00b7  \u2192 buy  \u00b7  \u2190 sell  \u00b7  ' +
+                 'Shift \u00d710  \u00b7  Home buy max  \u00b7  End sell all';
+    if (legend.length > Math.floor(W / 6.7)) {
+      legend = '\u2191\u2193  \u2192 buy  \u2190 sell  Shift\u00d710  Home max  End all';
+    }
+    ctx.fillText(clipText(legend, Math.floor(W / 6.7)), x0, paneBottom - 12);
     ctx.restore();
   }
 
@@ -1030,7 +1250,6 @@
        * the notes come from the same two functions the transaction uses, so
        * the price shown and the price charged cannot drift apart. */
       var inRange = !c.hostile && c.range <= Combat.HAIL_RANGE_KM;
-      var deal = (!c.hostile && c.obj) ? Combat.hailTrade(G, c.obj) : null;
       var aid = (!c.hostile && c.obj) ? Combat.hailAssist(G, c.obj) : null;
       opts.push({
         label: 'Hail', enabled: true,
@@ -1086,26 +1305,22 @@
             : 'what the crew have heard — markets, lanes',
         fn: function () { Combat.hailShip(G, G.sys, G.t, c.obj, 'rumour', hooksFor()); }
       });
+      /* TRADE. One row where there were two, because there is a board
+       * behind it now: every line in their hold and every line in yours,
+       * priced. The note says the one thing worth knowing before you open
+       * it — and if they will not deal, why, in words. */
+      var tradeWhy = (c.obj && global.ShipTrade) ? global.ShipTrade.refusal(G, G.sys, c.obj) : 'no channel';
+      var tradeCon = (!tradeWhy && global.ShipTrade)
+        ? global.ShipTrade.board(G, G.sys, G.t, c.obj) : null;
       opts.push({
-        label: 'Buy from their hold',
-        enabled: inRange && !isCapital && !!(deal && deal.buy) && G.ship.credits >= (deal && deal.buy
-          ? deal.buy.each * deal.buy.qty : 0),
-        note: !inRange ? 'out of transmitter range'
-            : isCapital ? 'a warship does not sell its stores'
-            : !(deal && deal.buy) ? 'nothing aboard you could carry'
-            : deal.buy.qty + ' t ' + deal.buy.name.toLowerCase() + ' — ' +
-              (deal.buy.each * deal.buy.qty) + ' cr',
-        fn: function () { Combat.hailShip(G, G.sys, G.t, c.obj, 'buy', hooksFor()); }
-      });
-      opts.push({
-        label: 'Sell them cargo',
-        enabled: inRange && !isCapital && !!(deal && deal.sell),
-        note: !inRange ? 'out of transmitter range'
-            : isCapital ? 'a warship does not buy'
-            : !(deal && deal.sell) ? 'nothing you have is worth their hold'
-            : deal.sell.qty + ' t ' + deal.sell.name.toLowerCase() + ' — ' +
-              (deal.sell.each * deal.sell.qty) + ' cr',
-        fn: function () { Combat.hailShip(G, G.sys, G.t, c.obj, 'sell', hooksFor()); }
+        label: 'Trade\u2026',
+        enabled: !tradeWhy,
+        note: tradeWhy ? clipText(tradeWhy, 64)
+            : tradeCon && tradeCon.consequence.loss
+              ? 'dealing here costs you with ' + tradeCon.consequence.loss.name
+            : tradeCon ? tradeCon.flag.name + ' \u00b7 ' + tradeCon.label
+            : '',
+        fn: function () { G.shipDeal = { name: c.name, sel: 0 }; }
       });
       opts.push({
         label: 'Request assistance',
