@@ -1,0 +1,13287 @@
+/* main.js — game loop, camera, input, HUD. */
+(function (global) {
+  'use strict';
+
+  var V = global.V, K = global.Kepler, Gen = global.Gen,
+      Sim = global.Sim, Render = global.Render, RNG = global.RNG,
+      Eco = global.Economy, Galaxy = global.Galaxy,
+      Combat = global.Combat, Missions = global.Missions,
+      Slip = global.Slipspace, Logo = global.Logo,
+      Weather = global.Weather, Fleet = global.Fleet,
+      Crew = global.Crew;
+  var DEG = Math.PI / 180;
+  var AU = Gen.AU;
+
+  var WARPS = [1, 5, 25, 100, 500, 2500, 10000, 50000, 250000, 1000000];
+
+  /* The slowest time is allowed to run while the player is still asking for
+   * more. Nothing near a massive body drops below this any more: a powered
+   * approach inside a planet's well has a predicted impact ahead of it for
+   * most of its length, and cutting to real time for that made a
+   * twenty-hour burn something you had to sit through rather than fly.
+   *
+   * Five is deliberately small enough to stay controllable — you can still
+   * see and correct an attitude error at 5x — and large enough that a long
+   * transfer is minutes rather than an evening. The floor is dropped only
+   * when a collision is inside IMPACT_HANDS_ON, which is the single case
+   * where one-to-one time is genuinely what the player wants. */
+  var WARP_FLOOR = 5;
+  var WARP_FLOOR_INDEX = 1;          // WARPS.indexOf(WARP_FLOOR)
+  var IMPACT_HANDS_ON = 25;          // s — inside this, real time, no argument
+
+  var G = {
+    seed: 'kawartha',
+    galaxy: null,         // the cluster: positions and seeds, nothing more
+    here: null,           // the star we are currently inside
+    visited: {},          // star id -> true
+    systemCache: {},      // star id -> generated system (keeps player-caused state)
+    starMap: null,        // open slipspace chart, or null
+    sys: null,
+    ship: null,
+    t: 0,                 // absolute simulation time, seconds
+    warpIndex: 0,
+    paused: false,
+    /* 'ship' drives the nose, 'orbital' drives prograde/radial/normal.
+     * Ship is the default because it is the one that behaves the way
+     * pointing at something implies it should. */
+    flightMode: 'ship',
+    assist: true,
+    /* The second assist, and deliberately a second one rather than a mode
+     * of the first: they answer different questions. `assist` nulls drift
+     * against a LOCK so a berth stops sliding sideways; `vector` makes the
+     * ship fly where its nose points, which is a way of flying rather than
+     * a way of docking. See vectorAssist. */
+    vector: false,
+    hoverAlt: null,
+    focus: null,          // body we are looking at, or null for the ship
+    followShip: true,
+    cam: new Render.Camera(),
+    stars: null,
+    keys: {},
+    showOrbits: true,
+    showPrediction: true,
+    showGrid: true,
+    showHelp: false,
+    /* Resolution the world layer is drawn at, as a fraction of the screen.
+     * Set from storage at boot (see loadRenderScale) and cycled with ` —
+     * a property of this machine's GPU, so it is not part of a career. */
+    renderScale: 1,
+    viewMode: 'orbit',    // 'orbit' (exterior, mouse-orbited) or 'cockpit'
+    cockpitFov: 68 * DEG, // the canopy's field of view; zooming narrows it
+    /* The pause menu and the title screen. Both stop time while they are up
+     * — see update() — and neither is career state, so neither is saved. */
+    menu: null,
+    title: null,
+    soundVolume: 0.5,     // matches sound.js's own default, so boot is silent about it
+    soundMuted: false,
+    trajectory: null,
+    trajectoryStale: 0,
+    /* The prediction in progress, if any — see advancePrediction. Runtime
+     * only: it is a few frames of arithmetic, never saved. */
+    trajJob: null,
+    impactForecast: null,     // long-horizon scan result, kept alive independently
+    impactForecastStale: 0,   // of the per-frame safety scan (see update())
+    lastMassiveBody: null,    // compass target: last non-star body the ship was near/orbiting
+    dockTarget: null,     // a station body, or null
+    dockStatus: null,
+    physicsLimited: false,
+    warpCap: Infinity,
+    orbitPaths: {},
+    fps: 60,
+    message: null,
+    messageUntil: 0,
+
+    showTraffic: true,
+    /* Console screens shot out, by panel id. Damage, so it survives a save
+     * and costs money to undo — see Combat.repair. */
+    deadPanels: {},
+    hitAt: 0,                 // performance.now() of the last hull hit
+    showCockpitFrame: true,
+    /* Cockpit chrome, cycled by K:
+     *   0  the flat instrument band, over a cockpit you can see the top of
+     *   1  band stowed — the console's own three screens are the instruments
+     *   2  no interior at all, just the canopy and the band
+     * The band and the dashboard want the same 200-odd pixels at the bottom
+     * of the screen, and no window size gives both. So it is a choice, made
+     * on one key, rather than a compromise that serves neither. */
+    cockpitChrome: 0,
+    /* The pilot's head, not the ship. Yaw and pitch of the view inside the
+     * cockpit, entirely independent of where the nose is pointed. */
+    look: { yaw: 0, pitch: 0 },
+    navTarget: null,      // { kind: 'body'|'ship', id } — the locked target
+    navCursor: 0,         // position in the NAV list
+    panel: 0,             // which of the nine instrument pages is up
+    contact: null,        // nearest ship, for the contact readout
+    encounter: null,      // NPCs currently lifted off their rails
+    encounterWarned: false,
+    lastDtSim: 0,         // sim seconds advanced last frame; encounters run on it
+    hyper: null,          // the jump sequence, while one is playing
+    cruise: null,         // the cruise drive, while engaged
+    autodock: null,       // auto-dock guidance, while flying it
+    market: null,         // open trade console: { port, rows, sel } or null
+    marketQty: 1,         // how many tonnes a single buy/sell moves
+    ledgerLog: [],        // recent transactions, newest first
+
+    /* ---- manoeuvre nodes ----
+     * The node itself is four numbers (see Sim.makeNode). Everything else
+     * here is derived and cached, because re-deriving it is an integration
+     * from now to the node and that is far too expensive to do per frame. */
+    node: null,           // Sim.makeNode(...) — one at a time, by design
+    nodePlan: null,       // cached Sim.nodePlan result
+    nodeAfter: null,      // predicted trajectory from the post-burn state
+    nodeStale: 0,         // seconds until the plan is recomputed
+    nodeAxis: 0,          // which axis the keys are nudging: see NODE_AXES
+    nodeBurn: null,       // live burn state while the autopilot flies it
+    nodeHandles: null,    // screen-space handle positions, for hit-testing
+
+    /* Holding Left Alt takes the mouse away from the ship and hands it to
+     * the interface. Without it there is nowhere for a cursor to live: the
+     * mouse is already the head in the cockpit and the camera outside, and
+     * a drag handle you cannot reach without also yawing the ship is not a
+     * handle. */
+    cursor: { active: false, x: 0, y: 0, over: null },
+    nodeDrag: null,       // { axis, sign, startValue, startX, startY } mid-drag
+
+    /* ---- the screens ----
+     * Every clickable thing on any screen registers a rectangle here while
+     * it draws, and the mouse handler walks the list backwards. Drawing and
+     * hit-testing then cannot disagree about where a button is, because
+     * there is only one set of coordinates and the draw call produced it. */
+    hotspots: [],
+    invSel: 0,            // highlighted row in the inventory
+    commsSel: 0,          // highlighted contact in the comms directory
+    missionSel: 0,
+    mouseAim: false,      // F9: mouse steers the nose instead of the head
+    aimSens: 1.0,
+    /* Held mouse triggers, one per fire group, live only while mouse-aim is
+     * on. Combat.update reads these alongside the Space key each frame — a
+     * beam is a trigger you lean on, not a click. */
+    trigger: { a: false, b: false },
+    /* The mouse's contribution to the attitude command, in the same -1..1
+     * units the arrow keys produce. It decays rather than being consumed,
+     * so holding the mouse still mid-drag holds a rate instead of dropping
+     * to zero between move events. */
+    aimCmd: { pitch: 0, yaw: 0 }
+  };
+
+  /* The four things a node has, in the order the cycle key walks them.
+   * Prograde first because it is the one nearly every burn needs, and time
+   * last because it is the one you set once and then leave alone. */
+  var NODE_AXES = [
+    { id: 'pro', label: 'PROGRADE', short: 'PRO', color: '#8fe36a' },
+    { id: 'nor', label: 'NORMAL',   short: 'NOR', color: '#c98ff0' },
+    { id: 'rad', label: 'RADIAL',   short: 'RAD', color: '#6fb8ff' },
+    { id: 'time', label: 'TIME',    short: 'T',   color: '#ffd27a' }
+  ];
+
+  /* ---- formatting ----------------------------------------------------- */
+
+  function fmtDist(km) {
+    var a = Math.abs(km);
+    if (a < 1) return (km * 1000).toFixed(0) + ' m';
+    if (a < 1000) return km.toFixed(2) + ' km';
+    if (a < 1e6) return Math.round(km).toLocaleString('en-US') + ' km';
+    if (a < 0.02 * AU) return (km / 1e6).toFixed(3) + ' Mkm';
+    return (km / AU).toFixed(4) + ' AU';
+  }
+
+  function fmtSpeed(kms) {
+    if (Math.abs(kms) < 0.001) return (kms * 1e6).toFixed(0) + ' mm/s';
+    if (Math.abs(kms) < 1) return (kms * 1000).toFixed(1) + ' m/s';
+    return kms.toFixed(3) + ' km/s';
+  }
+
+  function fmtTime(s) {
+    if (!isFinite(s)) return '∞';
+    var a = Math.abs(s);
+    if (a < 90) return s.toFixed(1) + ' s';
+    if (a < 5400) return (s / 60).toFixed(1) + ' min';
+    if (a < 172800) return (s / 3600).toFixed(2) + ' h';
+    if (a < 3.15e7) return (s / 86400).toFixed(2) + ' d';
+    return (s / 3.1557e7).toFixed(3) + ' yr';
+  }
+
+  function fmtEpoch(s) {
+    var yr = Math.floor(s / 3.1557e7);
+    var rem = s - yr * 3.1557e7;
+    var d = Math.floor(rem / 86400);
+    rem -= d * 86400;
+    var h = Math.floor(rem / 3600);
+    var m = Math.floor((rem - h * 3600) / 60);
+    return 'Y' + yr + ' D' + d + ' ' + String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+  }
+
+  function fmtMass(kg) {
+    if (kg > 1e29) return (kg / Gen.M_SUN).toFixed(3) + ' M☉';
+    if (kg > 1e22) return (kg / Gen.M_EARTH).toFixed(3) + ' M⊕';
+    return kg.toExponential(2) + ' kg';
+  }
+
+  /* Everything that speaks to the player goes through say(), and until now
+   * that meant a line that appeared for three seconds and was then gone for
+   * good — so a docking refusal you looked away from was simply unrecoverable.
+   * The transient line stays, because in-flight you need to be told things
+   * without opening a screen; what is new is that it is also KEPT. The comms
+   * screen reads the log back, thirty deep. */
+  var MSG_LOG_MAX = 30;
+
+  function logMessage(text) {
+    if (!G.msgLog) G.msgLog = [];
+    var last = G.msgLog[G.msgLog.length - 1];
+    /* A message repeated is one entry with a count, not thirty identical
+       lines: traffic control refusing you once a second would otherwise
+       flush the whole log before you could read why. */
+    if (last && last.text === text) {
+      last.n = (last.n || 1) + 1;
+      last.at = G.t;
+      return;
+    }
+    G.msgLog.push({ text: text, at: G.t, n: 1 });
+    if (G.msgLog.length > MSG_LOG_MAX) G.msgLog.splice(0, G.msgLog.length - MSG_LOG_MAX);
+    /* Anchored to the newest unless the player has scrolled back, so reading
+       old traffic is not yanked out from under them by a new arrival. */
+    if (!G.msgScroll) G.msgScroll = 0; else G.msgScroll++;
+  }
+
+  function say(msg, seconds) {
+    G.message = msg;
+    G.messageUntil = performance.now() + (seconds || 3) * 1000;
+    logMessage(msg);
+  }
+
+  /* ---- setup ---------------------------------------------------------- */
+
+  /* Real seconds since the page loaded. Anything that blinks, flashes or
+   * pulses because it is a physical light — as opposed to something the
+   * simulation is doing — should be driven from here, so that time warp
+   * and pausing leave it alone. */
+  function nowSeconds() {
+    return (global.performance && global.performance.now
+            ? global.performance.now() : Date.now()) / 1000;
+  }
+
+  /* A new game is now a new GALAXY. The seed builds a cluster of a hundred
+   * and fifty stars, of which star zero carries the seed unchanged — so
+   * #kawartha still drops you into precisely the system it always did, with
+   * everywhere else arranged around it. */
+  function newGame(seed) {
+    /* A new career means you are IN the career. Boot puts the title card up
+     * after this returns, which is the one caller that wants it — every
+     * other way in here is somebody who has already chosen. */
+    G.title = null;
+    G.menu = null;
+    G.seed = seed;
+    G.galaxy = Galaxy.build(seed);
+    G.systemCache = {};
+    G.visited = {};
+    /* Whose flag flies where, as far as you know. Separate from `visited`
+     * because it is a weaker claim that can be bought — see enterSystem. */
+    G.charted = {};
+    G.ship = null;
+    G.t = 0;
+    G.starMap = null;
+    G.hyper = null;
+    /* A new seed is a new career: no debts, no friends, no warrants. */
+    G.standing = {};
+    G.wanted = {};
+    G.shipTrade = null;
+    G.shipDeal = null;
+    G.missions = [];
+    /* A new career owns one ship, and it is the one you are in. */
+    G.fleet = [];
+    /* Owns no plants, and has changed no system. */
+    G.holdings = [];
+    G.uplift = {};
+    /* And has never shot an ambulance. */
+    G.tenderKills = 0;
+    G.rescue = null;
+    G.doneMissions = {};
+    G.campaigns = {};
+    G.beams = [];
+    G.explosions = [];
+    G.hullWarned = false;
+    G.wasDocked = false;
+    enterSystem(G.galaxy.home, { fresh: true });
+
+    if (typeof location !== 'undefined' &&
+        decodeURIComponent((location.hash || '').replace(/^#/, '')) !== String(seed)) {
+      try { history.replaceState(null, '', '#' + encodeURIComponent(seed)); } catch (e) {}
+    }
+    say(G.sys.name + '  —  ' + G.galaxy.stars.length + ' stars within reach of seed "' + seed + '"', 6);
+    /* A pad is only a good opening if the way off it is obvious — and it has
+     * to be ONE line, because `say` holds a single message. Two calls here
+     * meant the first was overwritten before it was ever drawn, so the
+     * player was told which key launches and never told what they were
+     * sitting on. */
+    if (G.startedDocked) {
+      say('Docked at ' + G.startedDocked.name +
+          '  —  F4 to trade or ask to launch, F5 for the yard, then U', 12);
+      G.startedDocked = null;
+    }
+  }
+
+  /* Systems are cached by star, not regenerated. Generation is
+   * deterministic so a fresh build would be identical — but the market's
+   * player ledger and anything else the player has personally done to a
+   * system lives on the system object, and a trade route you disturbed
+   * should still be disturbed when you come back to it. */
+  function systemFor(star) {
+    if (!G.systemCache[star.id]) {
+      var fac = (G.galaxy && G.galaxy.factionById) ? G.galaxy.factionById[star.factionId] : null;
+      var opts = fac ? { faction: fac, allFactions: G.galaxy.factions } : undefined;
+      G.systemCache[star.id] = Gen.generateSystem(star.seed, opts);
+    }
+    return G.systemCache[star.id];
+  }
+
+  function enterSystem(star, opts) {
+    opts = opts || {};
+    G.here = star;
+    G.visited[star.id] = true;
+    /* AND THE CHART LEARNS WHOSE IT IS. Astra: "the map is meant to pull
+     * its faction data when you jump into a new system, so you are building
+     * the map yourself with every new system you enter."
+     *
+     * Two kinds of knowing, deliberately different sizes. Visiting SURVEYS
+     * a system — who lives there, what the ports deal in, how dangerous it
+     * is — which is what G.visited has always gated. Charting is the
+     * smaller fact: whose flag flies over it, which is all the territory on
+     * the chart is drawn from. Arriving gives you both; a chart bought at a
+     * port gives you only the second, for systems you have never seen. */
+    G.charted = G.charted || {};
+    G.charted[star.id] = true;
+    G.sys = systemFor(star);
+    /* Fetch the station art this system's ports wear now, while the jump
+     * tunnel is still on screen, rather than as each one comes into view.
+     * ports.js is an index since 2026-09-22; the triangles are per model. */
+    if (global.Render && Render.prefetchPorts) Render.prefetchPorts(G.sys);
+    /* Clearances belong to the system you got them in. Nobody in the next
+     * one has heard of you, which is also what stops a granted clearance
+     * from quietly becoming permanent. */
+    if (global.Combat) {
+      Combat.clearAllClearances(G);
+      /* Escaping the system ends the pursuit. The bounty stays on the
+       * books — this buys distance from people who care, not absolution. */
+      var fled = Combat.fleeSystem(G);
+      if (fled) {
+        say('You are clear of ' + fled.faction.toUpperCase() +
+            ' space. The citation follows you; their patrols do not.', 6);
+      }
+    }
+    G.wasDocked = false;
+
+    /* Customs, if this is Syndicate ground and you brought tailings with
+     * you. Only on ARRIVAL — booting a career or loading a save inside a
+     * hold must not re-levy a fine you already paid. */
+    if (opts.arrive && global.Combat) Combat.wasteCustoms(G, star, G.sys, HOOKS);
+
+    G.stars = Render.makeStarfield(star.seed, 1600);
+    /* Hand the sky to the GPU layer too. Same array, so the cruise-warp
+     * smear in 2D still has the stars it needs to streak. */
+    if (global.GLWorld && global.GLWorld.available) global.GLWorld.setStarfield(G.stars);
+    G.orbitPaths = {};
+    G.warpIndex = 0;
+    /* A node names a moment and an orbit in the system it was planned in.
+     * Neither survives arriving somewhere else, and a node object holding a
+     * body from the system you just left is exactly the kind of stale
+     * reference the nav lock was deliberately designed to avoid. */
+    G.node = null; G.nodePlan = null; G.nodeAfter = null;
+    G.nodeBurn = null; G.nodeHandles = null; G.nodeDrag = null;
+
+    // Cache the local-space shape of every orbit once; the shape never
+    // changes, only the parent it hangs off moves.
+    for (var i = 0; i < G.sys.bodies.length; i++) {
+      var b = G.sys.bodies[i];
+      if (b.orbit) G.orbitPaths[b.id] = K.samplePath(b.orbit, b.kind === 'planet' ? 192 : 96);
+    }
+
+    // Start in orbit above a world worth being above: prefer one with a
+    // station, then a habitable one, then just something in the middle.
+    var host = null, stationHost = null, habitable = null;
+    for (var j = 0; j < G.sys.bodies.length; j++) {
+      var body = G.sys.bodies[j];
+      if (body.kind === 'station' && !body.surface && !stationHost) stationHost = body.parentBody;
+      if (body.kind === 'planet' && body.habitable && !habitable) habitable = body;
+    }
+    host = stationHost || habitable ||
+           G.sys.bodies.filter(function (b) { return b.kind === 'planet'; })[1];
+
+    // Find that world's station, if it has one, and start just below its
+    // orbit — a lower orbit is a faster orbit, so you slowly catch up to it.
+    // That is the first lesson in orbital mechanics, delivered for free.
+    /* Arriving from slipspace, prefer the busiest world in the system —
+     * the jump is aimed at a gravity well and there is no reason to aim it
+     * at a quiet one. Starting a new game keeps the old rule. */
+    if (opts.arrive) {
+      var bestPort = null, bestDev = -1;
+      (G.sys.ports || []).forEach(function (p) {
+        if (p.market && p.market.dev > bestDev) { bestDev = p.market.dev; bestPort = p; }
+      });
+      if (bestPort) host = bestPort.parentBody;
+    }
+
+    var station = host.children.filter(function (c) { return c.kind === 'station'; })[0];
+    G.homeStation = station || null;
+    G.spawnHost = host;
+
+    if (opts.arrive && G.ship) {
+      /* Keep the ship and everything in it — the hull crossed the gap, and
+       * so did the cargo, the money and whatever fuel the jump did not eat.
+       * You emerge in a wide capture orbit rather than at rest in deep
+       * space, because being dropped stationary next to a star with a full
+       * hold and no plan is not an arrival, it is a problem. */
+      var keep = G.ship;
+      G.ship = Sim.circularOrbit(host, G.sys, G.t, host.radius * 5.5, 0.12, 1.1);
+      G.ship.credits = keep.credits;
+      G.ship.fuel = keep.fuel;
+      G.ship.thrusterFuel = keep.thrusterFuel;
+      G.ship.cargo = keep.cargo;
+      Sim.refreshShip(G.ship);
+      G.dockTarget = null;
+      G.dockStatus = null;
+      G.reported = false;
+    } else {
+      spawnShip(host, station, G.t);
+      /* A NEW CAREER STARTS ON A PAD, not in a parking orbit.
+       *
+       * It used to open in a circular orbit above the home world, which
+       * meant you began holding an orbit you had not established and did not
+       * understand, looking at your own hull from an exterior camera whose
+       * up is the world z axis and which therefore has no idea where the
+       * planet's down is.
+       *
+       * (This is NOT what "it spawns on its side" turned out to be. That was
+       * Sim.dockShip randomising roll through anyPerpendicular, which
+       * save.js's re-dock on load then applied to every restored career —
+       * see the note there. The spawn attitude itself measured exactly level
+       * across five seeds. Both are fixed; they were separate.)
+       *
+       * Docked is a better first frame in every way. You are stationary,
+       * nothing is decaying, the trade console and the yard are both
+       * available before you have risked anything, and LAUNCHING is the
+       * first thing you choose to do rather than the thing that has already
+       * happened to you. It also means the first orbit you fly is one you
+       * put yourself into, which is the lesson this game is actually about.
+       *
+       * Only on `fresh`, and only if the home world HAS somewhere to dock.
+       * A respawn after a crash still arrives in orbit — being handed back
+       * your ship on a pad would quietly undo the cost of having crashed. */
+      if (opts.fresh) {
+        /* A GROUND PORT FIRST, and a station only if the world has none.
+         *
+         * Not a preference about scenery — the two dock paths are not equally
+         * safe to drop a ship into. The surface branch of Sim.dockShip places
+         * the ship itself: it assigns a berth, positions the hull in the shed
+         * and sets a level attitude with the nose out toward the doors. The
+         * orbital branch captures the ship's CURRENT offset from the station,
+         * which is right for something that has just flown a rendezvous and
+         * wrong for us — spawnShip has just put the hull at 93% of the
+         * station's orbital radius, so latching there would leave the player
+         * "docked" a few hundred kilometres off the port.
+         *
+         * So the station case snaps the ship onto the clamps first, and the
+         * ground case needs nothing. */
+        var startPort = (G.sys.ports || []).filter(function (p) {
+          return p.surface && p.parentBody === host && p.market;
+        })[0] || station;
+        if (startPort) {
+          if (!startPort.surface) {
+            var ps = Sim.bodyState(startPort, G.sys, G.t);
+            G.ship.pos = V.clone(ps.pos);
+            G.ship.vel = V.clone(ps.vel);
+          }
+          /* ARRIVE CLEARED, and this one bit almost immediately.
+           *
+           * Being docked makes the arrival check fire, and an arrival with
+           * no clearance is an offence: the first frame of a brand-new
+           * career charged 500 credits and logged the player FUGITIVE at
+           * their own home port, for the crime of existing there. Worse, it
+           * cascaded — a fugitive is refused docking, so the auto-dock tests
+           * two thousand lines away started failing with "docked=null",
+           * which reads like a broken autopilot rather than a fine.
+           *
+           * Clearance is SPENT on arrival, so granting it here is not a
+           * favour, it is the correct bookkeeping for a ship that is already
+           * on the pad: it had permission, and using it consumed it. */
+          G.ship.cleared = G.ship.cleared || {};
+          G.ship.cleared[startPort.id] = true;
+          Sim.dockShip(G.ship, startPort, G.sys, G.t);
+          /* G.homeStation IS DELIBERATELY LEFT ALONE. It looks like the
+           * field for "the port you started at", and it is not: respawnShip
+           * passes it straight to spawnShip, which reads `station.orbit.a`
+           * to pick a parking altitude. A surface port has no `.orbit`, so
+           * pointing homeStation at one turns the next crash into a
+           * TypeError. It stays the orbital station, which is what every
+           * reader of it already assumes. */
+          G.spawnHost = host;
+          G.viewMode = 'cockpit';
+          G.dockTarget = null;
+          G.dockStatus = null;
+          /* NO LAUNCH CLEARANCE, deliberately. Both permissions are spent at
+           * the moment they are used, so a ship that is already on the pad
+           * has already spent its docking clearance — and asking for the
+           * way OUT is a far better first action than being handed it.
+           * It puts the player on the comms channel in the first minute,
+           * which is where half this game's content lives and which nothing
+           * else was ever going to teach them.
+           *
+           * It is only a good opening if it cannot read as being stuck, so
+           * newGame says the two keys out loud below. */
+          G.startedDocked = startPort;
+        }
+      }
+    }
+
+    G.focus = host;
+    G.followShip = false;
+    G.cam.target = V.clone(Sim.bodyPosition(host, G.sys, G.t));
+    G.cam.dist = (station ? station.orbit.a : host.radius * 3) * 3.2;
+    G.cam.yaw = 0.7; G.cam.pitch = 0.38;
+    G.trajectoryStale = 0;
+    G.trajJob = null;              // a job plotted in the old system means nothing here
+    G.impactForecast = null;
+    G.impactForecastStale = 0;
+    G.lastMassiveBody = host;
+    G.market = null;
+    G.contact = null;
+    /* A lock on something in the system you just left is not a lock, it is
+     * a stale id that happens to match a different body. Release it. */
+    G.navTarget = null;
+    /* And a wake chase ends when you arrive: either you are here because you
+     * followed it, in which case it is spent, or you went somewhere else, in
+     * which case it was abandoned. Either way the intercept arithmetic was
+     * computed from a departure point you are no longer standing on. */
+    G.wakeChase = null;
+    G._wakes = null;
+    G.autodock = null;
+    G.cruise = null;
+    G.ledgerLog = [];
+    G.fuelWarned = false;
+    G.encounter = null;
+    G.encounterWarned = false;
+    G.lastDtSim = 0;
+  }
+
+  /* ---- interstellar space ------------------------------------------------
+   * Arriving nowhere.
+   *
+   * `G.here` becomes a SYNTHETIC star sitting at the drop point rather than
+   * one of the galaxy's real ones. That one substitution buys everything:
+   * the chart's distances are measured from where you actually are, so the
+   * jump out is priced honestly (you are only a light year or so from the
+   * nearer star, and it is cheap); the wake code asks the timetable about a
+   * star id no lane mentions and correctly finds nothing; and enterSystem
+   * still takes a real star when you leave. Nothing else needed teaching.
+   *
+   * The other ship is planted as an ordinary patrol on an ordinary Kepler
+   * orbit about the distant sun. Its period out here is measured in millions
+   * of years, so it is stationary for every practical purpose — which is
+   * exactly what a ship dead in the water should be — and the existing
+   * wake/steer/sleep machinery handles it with no new code at all. The
+   * player is then placed relative to IT rather than the other way round,
+   * which avoids having to solve for orbital elements that land on a chosen
+   * point. */
+  var DROP_SEPARATION = 34;      // km between the two hulls on arrival
+
+  function enterInterstellar(drop, other, mine) {
+    var LY_KM = 9.4607304725808e12;
+    var here = {
+      id: 'drop:' + drop.from.id + '>' + drop.to.id + ':' +
+          drop.progress.toFixed(4),
+      seed: drop.nearer.seed,
+      name: 'deep space',
+      x: drop.x, y: drop.y, z: drop.z,
+      cls: drop.nearer.cls, color: drop.nearer.color,
+      temp: drop.nearer.temp, luminosity: drop.nearer.luminosity,
+      factionId: null,
+      interstellar: true,
+      nearer: drop.nearer
+    };
+
+    G.here = here;
+    G.sys = Gen.interstellarSystem(drop.nearer, {
+      name: 'deep space — ' + drop.from.name + ' to ' + drop.to.name
+    });
+    /* NOT cached by id. A drop point is a place you were, once; caching one
+     * would grow a dictionary of empty systems for the whole career and
+     * every one of them would be identical anyway. */
+
+    if (global.Combat) Combat.clearAllClearances(G);
+    G.wasDocked = false;
+    G.stars = Render.makeStarfield(drop.nearer.seed + ':deep', 1600);
+    if (global.GLWorld && global.GLWorld.available) global.GLWorld.setStarfield(G.stars);
+    G.orbitPaths = {};
+    G.warpIndex = 0;
+    G.node = null;
+
+    /* Where the star actually is, in kilometres. The drop is measured along
+     * the lane, so the range to the nearer star is the honest one. */
+    var standoff = Math.max(0.02, drop.nearerLy) * LY_KM;
+
+    var sun = G.sys.root;
+    var spec = plantDropContact(other, standoff, mine);
+    var npc = spec ? Sim.shipsAll(G.sys, G.t).filter(function (s) {
+      return s.spec === spec;
+    })[0] : null;
+
+    /* Place the ship beside whatever we dropped next to. Matching its
+     * velocity exactly, because the corridor collapsed around both of you at
+     * once — arriving with a relative velocity would be a different event. */
+    var basePos = npc ? npc.pos : { x: standoff, y: 0, z: 0 };
+    var baseVel = npc ? npc.vel : V.zero();
+    var side = V.norm(V.cross(V.norm(basePos), { x: 0, y: 0, z: 1 }));
+    if (!isFinite(side.x)) side = { x: 0, y: 1, z: 0 };
+
+    G.ship.pos = V.addScaled(basePos, side, DROP_SEPARATION);
+    G.ship.vel = V.clone(baseVel);
+    G.ship.thrust = V.zero();
+    G.ship.docked = null;
+    G.ship.landed = false;
+    /* Face the thing you just pulled out of slipspace, or the star if there
+     * is nothing to face — a ship that arrives pointing at nothing in an
+     * empty sky gives the player no orientation to start from.
+     *
+     * Built as a whole orthonormal basis rather than by setting fwd alone.
+     * Attitude here is fwd/up/right kept orthonormal every frame, and
+     * assigning one of the three leaves the other two pointing wherever they
+     * were before — which is how the ship once spawned at ninety degrees of
+     * roll and made the whole game look broken on load. */
+    var look = V.norm(npc ? V.sub(npc.pos, G.ship.pos) : V.scale(G.ship.pos, -1));
+    if (!isFinite(look.x) || V.len(look) < 1e-9) look = { x: 1, y: 0, z: 0 };
+    var refUp = { x: 0, y: 0, z: 1 };
+    var right = V.cross(look, refUp);
+    if (V.len(right) < 1e-6) right = V.cross(look, { x: 0, y: 1, z: 0 });
+    right = V.norm(right);
+    G.ship.fwd = look;
+    G.ship.right = right;
+    G.ship.up = V.norm(V.cross(right, look));
+    Sim.refreshShip(G.ship);
+
+    /* CLEARED, and this was a real bug the moment it was not.
+     *
+     * `homeStation` is an object plucked out of the system you were in. Out
+     * here it points into a system that is no longer G.sys, so the HUD's
+     * station pointer walked its parentBody chain looking for an orbit's mu
+     * and found undefined — every frame, forever. Nothing about deep space
+     * caused it; the arrival simply inherited a reference that had quietly
+     * stopped meaning anything.
+     *
+     * This is the same trap the nav lock was deliberately built to avoid by
+     * storing kind+id instead of an object, and it is why enterSystem has
+     * its own long list of resets. Any new way of arriving somewhere has to
+     * clear everything that names a place, not just the obvious ones. */
+    G.homeStation = null;
+    G.spawnHost = sun;
+    G.reported = false;
+    G.fuelWarned = false;
+
+    G.focus = sun;
+    G.followShip = true;
+    G.cam.target = V.clone(G.ship.pos);
+    G.cam.dist = 4.5;
+    G.trajectory = null;
+    G.trajectoryStale = 0;
+    G.trajJob = null;
+    G.impactForecast = null;
+    G.impactForecastStale = 0;
+    G.lastMassiveBody = sun;
+    G.market = null;
+    G.contact = null;
+    G.navTarget = npc ? { kind: 'ship', id: spec.id } : null;
+    G.dockTarget = null;
+    G.dockStatus = null;
+    G.autodock = null;
+    G.cruise = null;
+    G.ledgerLog = [];
+    G.encounter = null;
+    G.encounterWarned = false;
+    G.lastDtSim = 0;
+    G.starMap = null;
+    G.panel = 0;
+    G.wakeChase = null;
+    G._wakes = null;
+  }
+
+  /* The other hull, as a patrol spec on a real (if absurdly slow) orbit. */
+  function plantDropContact(other, standoff, mine) {
+    if (!other) return null;
+    var Pat = Gen.PATROL_CLASSES;
+    var kind = other.hostile ? 'pirate' : 'trader';
+    var art = other.hostile ? Pat.pirate : Gen.SHIP_CLASSES.freighter;
+
+    var spec = {
+      id: 'drop-' + (other.id || 'x').replace(/[^a-z0-9]/gi, ''),
+      kind: kind,
+      faction: other.hostile ? 'outlaw' : null,
+      name: other.name,
+      className: other.className,
+      color: other.color || art.color,
+      size: art.size,
+      accel: art.accel,
+      /* Carried through so the panels can say what you are looking at, and
+       * so a later robbery knows how big a hull it is dealing with. */
+      tonnes: other.tonnes,
+      hullClass: other.hullClass,
+      anchor: other.anchor,
+      tornOut: true,
+      interdictedByPlayer: !!mine,
+      rail: {
+        type: 'orbit',
+        parent: G.sys.root.id,
+        /* Circular, edge on, at the real standoff. The period at this radius
+         * runs to millions of years, so "orbiting" is a technicality — it is
+         * a way of being somewhere definite that the existing code already
+         * knows how to evaluate. */
+        el: { a: standoff, e: 0, inc: 0.02, lan: 0.4, argp: 0, m0: 0.2 }
+      }
+    };
+    G.sys.patrols.push(spec);
+    return spec;
+  }
+
+  /* ---- slipspace --------------------------------------------------------
+   * The jump itself is four lines of bookkeeping, and that is the payoff
+   * for having made a system a pure function of its seed: there is nothing
+   * to save, nothing to load, and nothing to keep consistent. Burn the
+   * propellant, advance the clock, and unfold the destination.
+   *
+   * Advancing the clock is the part that has teeth. Three days of transit
+   * means arriving to a market that has moved three days on — freighters
+   * have completed runs, warehouses have drained and refilled, and the
+   * shortage you set out to exploit may have been relieved by somebody
+   * who was closer. None of that needed writing; the economy was built as
+   * a function of time, so it simply answers the new time correctly. */
+  /* ---- the jump sequence ------------------------------------------------
+   * The transit itself is bookkeeping — burn the propellant, advance the
+   * clock, unfold the destination. But it is also the single most dramatic
+   * thing that happens in this game, and Frontier understood that a jump
+   * you cannot see is a jump that does not feel like one.
+   *
+   * So it plays out over about seven seconds of real time in three acts:
+   * the drive spins up, the tunnel opens, and you come out the other side.
+   * The system is swapped part-way through the tunnel, so you emerge into
+   * the new sky rather than watching it appear.
+   *
+   * The clock runs visibly forward across the whole sequence — days
+   * ticking past on the epoch readout — because the days are the point.
+   */
+  var HYPER_CHARGE = 1.5, HYPER_TUNNEL = 4.4, HYPER_EXIT = 1.3;
+  var HYPER_SWAP_AT = 0.52;          // fraction through the tunnel
+
+  /* Fitted is permanent; RUNNING is per-jump. A drive you could not shut
+   * down would make every course into Syndicate space a fine, which would
+   * turn a decision into a wall — the opposite of what banning the WASTE
+   * rather than the hardware was for. */
+  function toggleMilDrive() {
+    if (!Slip.militaryClass(G.ship)) {
+      say('No military drive fitted.', 3);
+      return;
+    }
+    G.ship.milArmed = !Slip.milRunning(G.ship);
+    if (G.ship.milArmed) {
+      var slugs = (G.ship.cargo && G.ship.cargo.milfuel) || 0;
+      say('Military drive ARMED — half transit, burns slugs, breeds waste.' +
+          (slugs > 0 ? '  ' + slugs.toFixed(1) + ' t of fuel aboard.'
+                     : '  NO FUEL ABOARD — it will not take hydrogen.'), 6);
+    } else {
+      say('Military drive shut down — running clean on hydrogen.', 4);
+    }
+    HOOKS.sound('click');
+  }
+
+  function doJump(plan) {
+    /* TWO WAYS TO BE REFUSED, and they had one message between them. A
+     * pilot barred at a checkpoint with a full tank was told they were
+     * short of propellant, which sends them off to buy fuel they already
+     * have — the same class of mistake as the old docking refusal that
+     * named a bounty whatever the reason. */
+    if (plan && plan.barred) {
+      say(plan.to.name + ' is restricted space — ' + plan.restricted.label.toLowerCase() +
+          '. The checkpoint wants a transponder you are not carrying.', 7);
+      return;
+    }
+    if (!plan || !plan.possible) {
+      say('Not enough propellant — that jump needs ' + plan.fuel.toFixed(1) + ' t', 4);
+      return;
+    }
+    if (G.ship.landed) { say('Cannot jump from a planetary surface', 3); return; }
+    if (G.hyper) return;
+
+    /* ARRIVING DIRTY. The Syndicate bans radioactive waste in the systems
+     * it holds, and a Chernobyl breeds the stuff into your hold on the way
+     * — so the offence is committed in the corridor and charged the moment
+     * you drop out of it, by which point there is nothing to be done.
+     *
+     * Hence a confirm, on the same two-press idiom as settling a bounty:
+     * the first press states the charge, the second accepts it. A ten
+     * thousand credit mistake should not be one keypress deep, and the way
+     * out of it — shut the drive down, or sell the waste first — is worth
+     * naming while there is still time to take it. */
+    if (plan.arrivesDirty && !(G.dirtyJump && G.dirtyJump.to === plan.to.id &&
+                               G.t <= G.dirtyJump.until)) {
+      G.dirtyJump = { to: plan.to.id, until: G.t + 30 };
+      say('SYNDICATE GROUND — ' + plan.to.name + ' bans tailings. You would arrive with ' +
+          plan.wasteAboard.toFixed(1) + ' t aboard: ' +
+          Combat.WASTE_FINE.toLocaleString() + ' cr and an order to leave.' +
+          (plan.military ? '  Shut the drive down or ' : '  ') +
+          'dump the waste first — or jump again to accept it.', 10);
+      HOOKS.sound('warn');
+      return;
+    }
+    G.dirtyJump = null;
+
+    if (G.ship.docked) {
+      Sim.undockShip(G.ship, G.sys, G.t, 0.003);
+      /* A small bay reached through a heavy one leaves on a rail
+       * (stepArrival, reverse). Not on a jump: the ship is going. */
+      G.ship.arrival = null;
+      G.dockTarget = null;
+      G.dockStatus = null;
+    }
+
+    /* Settle the system we are leaving before the clock moves: put every
+     * market back on its closed form at the CURRENT time, and put every
+     * NPC back on its rail. Skipping this would fold a stale live stock
+     * level into the ledger against a timestamp days in the future. */
+    if (Eco) Eco.update(G.sys, G.t, null, Sim.bodyPosition);
+    Sim.sleepAll(G.sys);
+    HOOKS.sound('jump');
+
+    /* Pay for the corridor. A Chernobyl takes nothing out of the hydrogen
+     * tank at all — it burns slugs out of the HOLD and puts waste back in
+     * the same place, which is why running hot costs cargo capacity twice
+     * over and why what you arrive carrying is evidence. */
+    if (plan.military) {
+      G.ship.cargo = G.ship.cargo || {};
+      G.ship.cargo.milfuel = Math.max(0, (G.ship.cargo.milfuel || 0) - plan.slugs);
+      if (G.ship.cargo.milfuel < 0.001) delete G.ship.cargo.milfuel;
+      G.ship.cargo.waste = (G.ship.cargo.waste || 0) + plan.waste;
+    } else {
+      G.ship.fuel = Math.max(0, G.ship.fuel - plan.fuel);
+    }
+    Sim.refreshShip(G.ship);
+    G.starMap = null;
+    G.market = null;
+    G.paused = false;
+    G.keys = {};
+    G.ship.thrust = V.zero();
+
+    G.hyper = {
+      plan: plan,
+      phase: 'charge',
+      elapsed: 0,
+      total: HYPER_CHARGE + HYPER_TUNNEL + HYPER_EXIT,
+      swapped: false,
+      wasNew: !G.visited[plan.to.id],
+      fromName: G.sys.name,
+      departT: G.t,
+      arriveT: G.t + plan.seconds,
+      clock: G.t,
+      time: 0, intensity: 0, flash: 0,
+      /* The corridor. Opened for every jump, but it only becomes something
+       * you FLY when the timetable says somebody else is in there — see
+       * openCorridor. A hop down an empty lane still plays the seven-second
+       * cutscene it always did, and that is deliberate: making every routine
+       * jump interactive would tax the thing players do most in order to
+       * decorate the thing they do rarely. */
+      corridor: Slip.openCorridor({
+        galaxy: G.galaxy,
+        from: G.here, to: plan.to,
+        distanceLy: plan.distance,
+        tonnes: Slip.allUpMass(G.ship),
+        anchor: Slip.moduleEffective(G.ship, 'anchor')
+                  ? Slip.fittedClass(G.ship, 'anchor') : null,
+        t: G.t,
+        crimeFrom: (Combat.effectiveCrime ? Combat.effectiveCrime(G, G.sys) : G.sys.crimeScore) || 0,
+        crimeTo: crimeGuess(plan.to),
+        cargoValue: cargoValue(G.ship),
+        contraband: hasContraband(G.ship)
+      })
+    };
+    if (G.hyper.corridor.live) {
+      say('Slipspace corridor — traffic on this lane   ·   , / . throttle   ·   SPACE lock', 5);
+    } else {
+      say('Slipspace drive charging — ' + plan.to.name, 2.5);
+    }
+  }
+
+  /* What the hold is worth, roughly, at catalogue value. Used only to decide
+   * whether anybody thinks you are worth crossing a corridor for — a precise
+   * figure would be false precision, since a pirate cannot read your manifest
+   * before they catch you either. */
+  function cargoValue(ship) {
+    var total = 0;
+    for (var cid in ship.cargo) {
+      var row = Eco && Eco.BY_ID ? Eco.BY_ID[cid] : null;
+      total += (ship.cargo[cid] || 0) * Math.abs(row ? row.base : 300);
+    }
+    return total;
+  }
+
+  function hasContraband(ship) {
+    for (var cid in ship.cargo) {
+      if ((ship.cargo[cid] || 0) <= 0) continue;
+      var row = Eco && Eco.BY_ID ? Eco.BY_ID[cid] : null;
+      if (row && row.contraband) return true;
+    }
+    return false;
+  }
+
+  /* How lawless is the place we are going? We have not been there, and we
+   * are not going to generate a whole system to find out — that would cost a
+   * full worldgen on every keystroke in the star chart. A visited system
+   * answers honestly from the cache; an unvisited one is treated as neutral,
+   * which is also the honest answer, because you genuinely do not know. */
+  function crimeGuess(star) {
+    var cached = G.systemCache && G.systemCache[star.id];
+    if (cached && cached.crimeScore !== undefined) {
+      /* With whatever your plants there have done to it (holdings.js). */
+      return global.Holdings ? global.Holdings.crimeOf(G, cached, star.id) : cached.crimeScore;
+    }
+    return 40;
+  }
+
+  /* One frame of the sequence. Returns true while it owns the game. */
+  function advanceHyper(dtReal) {
+    var hy = G.hyper;
+    hy.elapsed += dtReal;
+    hy.time += dtReal;
+
+    /* A LIVE corridor takes over the middle act. The charge and the exit are
+     * unchanged — they are the drive spinning up and settling down, and
+     * nothing about having company changes either. What changes is that the
+     * tunnel now lasts as long as the crossing takes rather than 4.4
+     * seconds, and you fly it.
+     *
+     * The system swap moves to the START OF THE EXIT here, rather than 52%
+     * of the way through the tunnel as it does for an ordinary jump. It has
+     * to: you can be torn out at any point in the corridor, and swapping
+     * early would mean already standing in the destination system at the
+     * moment you get dragged into deep space instead. */
+    if (hy.corridor && hy.corridor.live && hy.elapsed >= HYPER_CHARGE && !hy.corridorDone) {
+      return advanceCorridorPhase(dtReal);
+    }
+
+    var e = hy.elapsed;
+    if (e < HYPER_CHARGE) {
+      hy.phase = 'charge';
+      var c = e / HYPER_CHARGE;
+      // Spins up slowly then all at once, which is what spinning up is.
+      hy.intensity = c * c * 0.85;
+      hy.flash = c > 0.93 ? (c - 0.93) / 0.07 * 0.9 : 0;
+    } else if (e < HYPER_CHARGE + HYPER_TUNNEL) {
+      hy.phase = 'tunnel';
+      var u = (e - HYPER_CHARGE) / HYPER_TUNNEL;
+      hy.intensity = 1;
+      // Entry flash decaying, then the exit flash beginning to build.
+      hy.flash = u < 0.12 ? (1 - u / 0.12) * 0.9 : 0;
+
+      /* Swap systems mid-tunnel. Doing it at the far end would mean the
+       * exit flash clears onto the sky you just left for a frame; doing it
+       * here means you genuinely come out somewhere else. */
+      if (!hy.swapped && u >= HYPER_SWAP_AT) {
+        hy.swapped = true;
+        G.t = hy.arriveT;
+        enterSystem(hy.plan.to, { arrive: true });
+      }
+    } else {
+      hy.phase = 'exit';
+      var x = (e - HYPER_CHARGE - HYPER_TUNNEL) / HYPER_EXIT;
+      hy.intensity = 1 - x * x;
+      hy.flash = x < 0.30 ? (1 - x / 0.30) * 0.75 : 0;
+    }
+
+    /* The clock, running forward across the whole sequence. Eased so it
+     * gallops through the middle and settles at the end rather than
+     * ticking over linearly like a progress bar. */
+    var p = Math.min(1, e / hy.total);
+    hy.clock = hy.departT + (hy.arriveT - hy.departT) * Sim.smootherstep(p);
+
+    if (hy.elapsed >= hy.total) {
+      var plan = hy.plan, wasNew = hy.wasNew;
+      G.hyper = null;
+      if (!G.visited[plan.to.id]) enterSystem(plan.to, { arrive: true });
+      say((wasNew ? 'Arrived at ' + G.sys.name + ' — first visit' : 'Arrived at ' + G.sys.name) +
+          '   ·   ' + fmtTime(plan.seconds) + ' elapsed   ·   ' +
+          plan.fuel.toFixed(1) + ' t burned', 8);
+      return false;
+    }
+    return true;
+  }
+
+  /* ---- flying the corridor ----------------------------------------------
+   * The middle act, when there is somebody in there with you.
+   *
+   * Two controls and no more. The throttle is a LEVER, not a momentary key:
+   * , and . move it and it stays where you left it, because the whole skill
+   * of an interception is setting a speed that matches somebody else's and
+   * then leaving it alone. A momentary key would make holding station a
+   * matter of drumming your fingers.
+   *
+   * Space is the interdiction trigger, which is the same key that fires the
+   * guns in normal space. That is not laziness — in both cases it is the key
+   * that means "do the aggressive thing to the contact I am on", and one
+   * fewer binding to learn is worth more than a distinction nobody asked for.
+   */
+  var THROTTLE_RATE = 1.15;      // lever units per second while a key is held
+
+  function advanceCorridorPhase(dtReal) {
+    var hy = G.hyper, cor = hy.corridor;
+    hy.phase = 'tunnel';
+    hy.intensity = 1;
+    hy.flash = Math.max(0, hy.flash - dtReal * 3);
+
+    /* The lever. Clamped, and deliberately not self-centring. */
+    var want = cor.throttle;
+    if (G.keys['.']) want += THROTTLE_RATE * dtReal;
+    if (G.keys[',']) want -= THROTTLE_RATE * dtReal;
+    want = Math.max(-1, Math.min(1, want));
+
+    Slip.advanceCorridor(cor, dtReal, {
+      throttle: want,
+      lockHeld: !!G.keys[' ']
+    }, G.ship);
+
+    // The clock keeps running forward, which was always the point of a jump.
+    hy.clock = Slip.corridorClock(cor);
+    G.t = hy.clock;
+
+    for (var i = 0; i < cor.events.length; i++) {
+      var ev = cor.events[i];
+      if (ev.kind === 'contact') {
+        say('CONTACT — ' + ev.contact.name + '  ·  ' + ev.contact.className +
+            (ev.contact.hostile ? '  ·  HOSTILE' : ''), 4);
+        HOOKS.sound(ev.contact.hostile ? 'alarm' : 'blip');
+      } else if (ev.kind === 'huntWarn') {
+        say('INTERDICTION LOCK BUILDING — ' + ev.contact.name, 5);
+        HOOKS.sound('alarm');
+      } else if (ev.kind === 'tearFailed') {
+        say('Not enough reaction mass to tear them out — needs ' +
+            ev.need.toFixed(1) + ' t', 5);
+      }
+    }
+
+    if (cor.outcome === 'tore') {
+      hy.corridorDone = true;
+      dropOut(cor, cor.tornContact, true);
+      return false;
+    }
+    if (cor.outcome === 'torn') {
+      hy.corridorDone = true;
+      dropOut(cor, cor.tornBy, false);
+      return false;
+    }
+    if (cor.outcome === 'arrived') {
+      /* Hand back to the ordinary sequence for the exit flash, with the
+       * clock already where it should be. Rewinding `elapsed` to the top of
+       * the exit phase is what makes the last 1.3 seconds play normally. */
+      hy.corridorDone = true;
+      hy.elapsed = HYPER_CHARGE + HYPER_TUNNEL;
+      hy.arriveT = G.t;
+      hy.departT = G.t - cor.crossSeconds;
+      hy.swapped = true;
+      enterSystem(hy.plan.to, { arrive: true });
+    }
+    return true;
+  }
+
+  /* ---- torn out ----------------------------------------------------------
+   * Somewhere between two stars, with one other ship and nothing else.
+   *
+   * The locale is an ordinary system containing exactly one body — the
+   * nearer star, about a light year off — so nothing in the sim or the
+   * renderer needs a special case for "nowhere". See Gen.interstellarSystem.
+   *
+   * `mine` says whose doing this was: you tore them out, or they tore you.
+   * The difference is entirely in who is holding whom up afterwards; the
+   * physics of arriving is identical, which is as it should be. */
+  function dropOut(cor, other, mine) {
+    var drop = Slip.dropPoint(cor.from, cor.to, cor.progress);
+    var granted = Slip.grantReserve(G.ship, drop, Galaxy.FUEL_PER_LY_PER_TONNE);
+
+    G.hyper = null;
+    G.paused = false;
+    G.keys = {};
+
+    enterInterstellar(drop, other, mine);
+
+    if (mine) {
+      say('TORN OUT — ' + other.name + ' is dead in the water beside you', 9);
+      /* AND WHAT TO DO WITH IT. The chase, the lock and the drop-out were
+       * all built before there was anything to do at the end of them, and
+       * the arrival read as an empty room partly because nobody was told
+       * where the door was: the demand lives on the comms channel, three
+       * keys away, and a player who has never robbed anyone in-system has no
+       * reason to guess that. Said as a separate line from the alarm so it
+       * survives being skimmed.
+       *
+       * And it says what is TRUE about doing it here, which is not "nobody
+       * will know". There are no witnesses in deep space — witnessNear finds
+       * nothing, because there is nothing — but the victim still squawks its
+       * own distress call about ten seconds in, and that is what puts a
+       * bounty on you. So the line points at the real decision rather than
+       * promising a free crime the law will immediately disprove. */
+      say('F4 to hail them. No witnesses out here — but they can still call it in.', 9);
+    } else {
+      say('INTERDICTED — ' + other.name + ' has pulled you out of the corridor', 9);
+    }
+    if (granted > 0) {
+      /* Say it out loud. A reserve that silently appears on the gauge is
+       * indistinguishable from a bug, and a player who decides the fuel
+       * readout lies will stop believing every other instrument too. */
+      say('Emergency reserve tapped — ' + granted.toFixed(1) +
+          ' t, enough to reach ' + drop.nearer.name, 8);
+    }
+    HOOKS.sound('alarm');
+  }
+
+  /* Stars sorted by how far they are from here — the order the map lists
+   * them in, and the order the selection walks. */
+  function jumpCandidates() {
+    var here = G.here;
+    var out = [];
+    for (var i = 0; i < G.galaxy.stars.length; i++) {
+      var s = G.galaxy.stars[i];
+      if (s === here) continue;
+      out.push(Galaxy.jumpPlan(G.galaxy, here, s, G.ship));
+    }
+    out.sort(function (a, b) { return a.distance - b.distance; });
+    return out;
+  }
+
+  function openStarMap() {
+    if (G.ship.landed) { say('No slipspace drive alignment on the ground', 3); return; }
+    G.keys = {};
+    G.ship.thrust = V.zero();
+    selectPanel(5);
+  }
+
+  /* The plotted course: whichever star the chart is sitting on. The JUMP
+   * mode reads it, so plotting and engaging are two deliberate acts on two
+   * different screens rather than one keystroke on a list. */
+  function plottedCourse() {
+    if (!G.starMap || !G.starMap.list.length) return null;
+    return G.starMap.list[Math.min(G.starMap.sel, G.starMap.list.length - 1)];
+  }
+
+  function handleStarMapKey(e) {
+    var m = G.starMap;
+    if (!m) return false;
+    var key = e.key.toLowerCase();
+    m.list = jumpCandidates();
+    if (key === 'arrowdown') { m.sel = Math.min(m.list.length - 1, m.sel + 1); return true; }
+    if (key === 'arrowup') { m.sel = Math.max(0, m.sel - 1); return true; }
+    if (key === 'pagedown') { m.sel = Math.min(m.list.length - 1, m.sel + 10); return true; }
+    if (key === 'pageup') { m.sel = Math.max(0, m.sel - 10); return true; }
+    if (key === 'home') { m.sel = 0; return true; }
+    if (key === 'enter') { selectPanel(7); return true; }
+    return false;
+  }
+
+  /* Placed here rather than inline so a crash has somewhere to go back to:
+   * respawnShip() calls this again at the current sim time. */
+  function spawnShip(host, station, atTime, keepShip) {
+    var startAlt = station
+      ? (station.orbit.a * 0.93 - host.radius)
+      : host.radius * 0.55;
+    if (startAlt < host.radius * 0.06) startAlt = host.radius * 0.25;
+
+    var prev = keepShip ? G.ship : null;
+    G.ship = Sim.circularOrbit(host, G.sys, atTime, startAlt,
+                               station ? station.orbit.inc : 0.05, 0.6);
+    /* A respawn after a crash replaces the hull, not the career: credits
+     * survive, and so does the fuel bill. The cargo does not — it was in
+     * the hull. */
+    if (prev) {
+      G.ship.credits = prev.credits;
+      G.ship.fuel = Math.max(prev.fuel * 0.5, G.ship.fuelCap * 0.35);
+      G.ship.thrusterFuel = G.ship.thrusterCap;
+    }
+    Combat.initShip(G.ship);
+    /* Your own registration, painted on the hull of every ship you will
+     * ever fly under this seed. The career keeps the code; hulls come and
+     * go. */
+    G.ship.reg = Sim.regCode(G.seed + '|player');
+    /* The payroll clock starts when the ship does, rather than at the
+     * epoch — a fresh career that docks on day three owes three days of
+     * wages to a deck that has been hers for three days. */
+    G.ship.wagesTo = atTime;
+    Sim.refreshShip(G.ship);
+    G.reported = false;
+    G.dockTarget = null;
+    G.market = null;
+    G.viewMode = 'orbit';
+  }
+
+  /* Bring the ship back after a crash. There is no "undo" for a decayed
+   * orbit or a bad burn — you get a fresh start above the same world you
+   * spawned at, at the CURRENT simulation time, not a reload. */
+  function respawnShip() {
+    if (!G.ship.landed) { say('Not crashed — nothing to respawn from', 2); return; }
+    spawnShip(G.spawnHost, G.homeStation, G.t, true);
+    Combat.stripForRespawn(G.ship);
+    G.deadPanels = {};
+    say('Respawned above ' + G.spawnHost.name + ' — cargo lost, hull replaced', 5);
+  }
+
+  /* Hull at zero. Same deal as a crash — the hull and everything bolted to
+   * or stacked in it is gone; the pilot, the money, the reputation and the
+   * warrants all survive, because none of those were in the hull. */
+  function playerDestroyed() {
+    (G.explosions = G.explosions || []).push({
+      pos: V.clone(G.ship.pos), at: performance.now(), size: 2.5
+    });
+    HOOKS.sound('explosion');
+    spawnShip(G.spawnHost, G.homeStation, G.t, true);
+    Combat.stripForRespawn(G.ship);
+    G.hullWarned = false;
+    G.deadPanels = {};              // a new hull comes with working screens
+    G.navTarget = null;
+    G.autodock = null;
+    G.cruise = null;
+    say('SHIP DESTROYED — pod recovered above ' + G.spawnHost.name +
+        '. Cargo and fittings lost; credits and reputation intact.', 10);
+  }
+
+  /* Everything the combat and mission modules are allowed to do back to
+   * the game: talk, make noise, and end you. */
+  var HOOKS = {
+    say: say,
+    /* A line that is money as well as news — the tender's call-out fee. */
+    ledger: function (text) { logTrade(text); },
+    sound: function (n) { if (global.Sound) global.Sound.fx(n); },
+    destroyed: playerDestroyed,
+    hullHit: hullHit
+  };
+
+  /* ---- damage, from the inside -------------------------------------------
+   * Hull loss used to be a number on a page. It is now something that
+   * happens in the room you are sitting in: the lights flare, and a hit
+   * hard enough can take a console screen out until a yard replaces it.
+   *
+   * The screens are not decoration — losing the scope in a fight is losing
+   * the thing that tells you where your attacker is, and that is exactly
+   * the cost a hit should carry. Nothing is destroyed permanently; the yard
+   * charges for the glass along with the hull. */
+  var PANEL_IDS = ['left', 'centre', 'right', 'rear-left', 'rear-right'];
+
+  function hullHit(dmg) {
+    G.hitAt = (typeof performance !== 'undefined') ? performance.now() : 0;
+    if (!G.deadPanels) G.deadPanels = {};
+    /* A graze rattles the cabin; a real hit has about an even chance of
+     * taking a screen with it. Capped so that one unlucky salvo cannot
+     * blind you completely — the last living panel is never the one that
+     * goes. */
+    var live = PANEL_IDS.filter(function (id) { return !G.deadPanels[id]; });
+    if (live.length <= 1) return;
+    if (Math.random() > Math.min(0.5, dmg / 30)) return;
+    var id = live[(Math.random() * live.length) | 0];
+    G.deadPanels[id] = true;
+    say(id.replace('-', ' ').toUpperCase() + ' PANEL OUT — a yard can replace it', 5);
+    if (global.Sound) global.Sound.fx('hit');
+  }
+
+  /* ---- input ---------------------------------------------------------- */
+
+  var canvas, ctx, dragging = false, lastX = 0, lastY = 0;
+
+  /* Held mouse-trigger state, read by Combat.update every frame. Module
+   * scope rather than inside bindInput because everything that takes the
+   * mouse away — losing the window, dropping out of mouse-aim, opening a
+   * screen — has to be able to let go of the trigger, and a ship that goes
+   * on firing at nothing because the release never arrived is the worst
+   * possible version of this bug. */
+  function releaseTriggers() {
+    if (!G.trigger) return;
+    G.trigger.a = false; G.trigger.b = false;
+    /* Latches go too. Letting go because the window was lost or the mode
+     * changed is not a shot the player asked for. */
+    G.trigger.aLatch = false; G.trigger.bLatch = false;
+  }
+
+  /* Can a click be a trigger pull at all? Every case where a click means
+   * something else has to be excluded first, and each exclusion here is a
+   * bug that would otherwise be indistinguishable from the guns not
+   * working. View-independent: the guns do not stop existing because you
+   * pulled the camera outside to watch. */
+  function weaponsLive() {
+    return flying() && !menuOpen() && !G.cursor.active &&
+           !G.hyper && !G.ship.docked && !G.ship.landed;
+  }
+
+  /* Mouse 1 is a trigger only where it is not already the camera. In the
+   * exterior view, left-drag swings the view around the ship and that is
+   * what the view is FOR, so out there the primary group stays on Space and
+   * only the buttons nothing else wants — right, and the side button — do
+   * any shooting. Gating all three on the cockpit was the reason the mouse
+   * appeared to do nothing at all from outside. */
+  function mouseArmed() {
+    return weaponsLive() && G.viewMode === 'cockpit' && G.mouseAim;
+  }
+
+  /* Which button, treating "didn't say" as the main one. Synthetic events —
+   * the render suite's, and anything else that dispatches by hand — carry
+   * no `button`, and reading undefined as "not the left button" turned every
+   * one of them into a no-op. Nothing else in this file had ever looked at
+   * `button` before triggers arrived, so nothing was passing one. */
+  function mouseButton(e) { return (e && e.button) || 0; }
+
+  function bindInput() {
+    window.addEventListener('keydown', function (e) {
+      /* Space is the trigger, and left to itself a browser takes it as
+       * "scroll the page" — which for a full-viewport canvas means a
+       * gunfight that jiggles. */
+      if (e.key === 'Tab' || e.key === ' ' || e.key.indexOf('Arrow') === 0) e.preventDefault();
+      if (global.Sound) global.Sound.poke();
+
+      /* The instrument bar. Function keys first, digits as the fallback,
+       * because a browser that insists F1 means "help" should cost the
+       * player a page of instruments, not the whole control scheme. */
+      /* Left Alt is the cursor modifier, not a character. Swallow it before
+       * anything else looks at it: left to itself a browser takes Alt as
+       * "focus the menu bar", which pulls keyboard focus clean out of the
+       * canvas and leaves the ship deaf mid-burn. */
+      /* The two Alts are the two ways of taking the mouse off the stick, and
+       * they are symmetric on purpose: LEFT hands it to the interface, RIGHT
+       * hands it to your neck. Right Alt was already being swallowed here
+       * and thrown away, so the test for it predates the feature.
+       *
+       * Free-look exists because mouse-aim now steers with no button held —
+       * which is what freed the buttons to be triggers, and which left no
+       * way at all to look around. A modifier rather than a toggle, for the
+       * reason setCursorMode already gives: you reach for it, do one thing,
+       * and let go, so there is never a state to be surprised by while
+       * somebody is shooting at you. */
+      if (e.key === 'Alt') {
+        e.preventDefault();
+        if (e.location !== 2) setCursorMode(true);   // 2 = right Alt
+        else setFreeLook(true);
+        return;
+      }
+
+      /* The mode keys are answered before anything else can claim them, so
+       * there is always a way back to the cockpit from any screen. The one
+       * exception is the tunnel: you cannot press anything mid-jump. */
+      /* The menu and the title screen sit in front of everything, including
+       * the instrument keys: they stopped time, and a function key that
+       * changed the page underneath a modal would be changing something you
+       * cannot see. They are answered before the F-keys for that reason. */
+      if (G.title) { handleTitleKey(e); return; }
+      if (G.menu) { handleMenuKey(e); return; }
+
+      /* A text field takes the WHOLE keyboard, and it has to be asked here
+       * rather than down in modeKey: the function keys and the number row
+       * are claimed a few lines below, and a pilot named "Kat 7" would
+       * otherwise flip to MFD page 7 halfway through typing her own name. */
+      if (global.Screens && global.Screens.editing()) {
+        e.preventDefault();
+        global.Screens.editKey(e);
+        return;
+      }
+
+      /* Tab, on the F5 SHIP screen, flips between the STATUS & INVENTORY
+       * layout and the GUNS board — the guns page's only home now that it
+       * has left the deck MFD cycle. Handled here, above the mode dispatch,
+       * so it beats Tab's other meanings; everywhere else Tab falls through
+       * to them unchanged. */
+      if (e.key === 'Tab' && !G.hyper && !G.market && modeId() === 'ship') {
+        e.preventDefault();
+        var st = ['status', 'guns', 'panels'];
+        var si = st.indexOf(G.shipTab);
+        G.shipTab = st[(si < 0 ? 0 : si + 1) % st.length];
+        return;
+      }
+
+      var fk = /^F(10|[1-9])$/.exec(e.key);
+      if (fk) {
+        e.preventDefault();
+        if (!G.hyper && !G.market) {
+          var fkIdx = parseInt(fk[1], 10) - 1;
+          /* Shift+F2 is the manoeuvre planner, parked beside the orbit map
+           * it belongs with after F10 went to the manifest. Same shift-splits-
+           * a-key idea as G, T and / elsewhere in this file. */
+          if (fkIdx === 1 && e.shiftKey) selectPanel(modeIndex('node'));
+          /* F1 twice: already flying, so the second press flips between the
+           * cockpit and the exterior chase camera. One key, both ways of
+           * looking at your own ship. */
+          else if (fkIdx === 0 && flying()) toggleView();
+          else selectPanel(fkIdx);
+        }
+        return;
+      }
+      /* The number row mirrors the function keys. 0 is the tenth mode
+       * because it sits where a 10 key would if keyboards had one. */
+      if (!G.hyper && !G.market && /^[0-9]$/.test(e.key)) {
+        var numIdx = e.key === '0' ? 9 : parseInt(e.key, 10) - 1;
+        if (numIdx === 0 && flying()) toggleView();
+        else selectPanel(numIdx);
+        return;
+      }
+
+      /* While the trade console is up it takes every key. A market screen
+       * that let the arrow keys also pitch the ship would be a menu that
+       * silently flies you into a station. */
+      /* Nothing to fly while you are in the tunnel, and nothing to press.
+       * Frontier did not let you steer mid-jump either.
+       *
+       * UNLESS the corridor is live. Then there are exactly three keys — the
+       * two throttle keys and the interdiction trigger — and they have to be
+       * recorded as HELD state rather than handled here, because the throttle
+       * is a lever you push and the trigger is something you hold. Everything
+       * else stays dead: you still cannot steer, open a screen, or change
+       * your mind about where you are going. */
+      if (G.hyper) {
+        if (G.hyper.corridor && G.hyper.corridor.live &&
+            (e.key === ',' || e.key === '.' || e.key === ' ')) {
+          G.keys[e.key.toLowerCase()] = true;
+          e.preventDefault();
+        }
+        return;
+      }
+      if (G.market) { handleMarketKey(e); return; }
+      /* A full-screen mode gets first refusal on the keyboard: the arrow
+       * keys mean "walk this list" while a list is what you are looking at,
+       * and mean "point the nose" when it is not. Anything the mode does
+       * not want falls through to the flight controls, so the ship never
+       * stops answering the thrust keys just because you opened a screen. */
+      if (!flying() && modeKey(e)) return;
+
+      G.keys[e.key.toLowerCase()] = true;
+
+      switch (e.key.toLowerCase()) {
+        /* In cruise these set the drive's speed instead of the clock —
+         * there is no reason to accelerate time when you are already
+         * crossing a system in a couple of minutes. */
+        case ',':
+          if (G.cruise) G.cruise.speed = Math.max(CRUISE_MIN, G.cruise.speed / 1.6);
+          else G.warpIndex = Math.max(0, G.warpIndex - 1);
+          break;
+        case '.':
+          if (G.cruise) G.cruise.speed = Math.min(G.cruise.maxSpeed, G.cruise.speed * 1.6);
+          else G.warpIndex = Math.min(WARPS.length - 1, G.warpIndex + 1);
+          break;
+        case 'p': G.paused = !G.paused; break;
+        /* K CYCLES THE COCKPIT CHROME — band, console, bare canopy.
+         *
+         * The note on `cockpitChrome` has said "cycled by K" since the mode
+         * was built, and `drawStowedHint` has been telling the player "K for
+         * the band" on screen. Neither was true: the only writer was the
+         * options menu. So the one control that reaches the MFD console —
+         * the whole reason the console exists — could only be found by
+         * opening Esc and scrolling, and a player who pressed the key the
+         * game told them to press concluded the console was gone. Astra
+         * did, which is how this was found.
+         *
+         * Not gated on the cockpit view: pressing it in the exterior view
+         * sets what you will be looking at when you get back in, which is
+         * what every other display toggle here does. */
+        case 'k':
+          G.cockpitChrome = ((G.cockpitChrome || 0) + 1) % 3;
+          G.showCockpitFrame = G.cockpitChrome !== 2;
+          break;
+        /* V stays. It is the one display toggle that is genuinely a FLYING
+         * decision — you flick the prediction on to see where a burn puts
+         * you and off again to see the sky — so it earns its key in a way
+         * the others below did not. */
+        case 'v': G.showPrediction = !G.showPrediction; break;
+        /* THE DISPLAY TOGGLES ARE GONE FROM THE KEYBOARD. Orbit lines, the
+         * ecliptic grid, traffic, cockpit chrome and render scale were five
+         * letters spent on five checkboxes that were ALREADY in Options, key
+         * hint and all — so the keys were duplicates of settings, not
+         * shortcuts to anything you could not otherwise reach.
+         *
+         * The argument for cutting them is not tidiness. Every letter one of
+         * them held is a letter some action you actually perform in flight
+         * could not have, and the file has said "every letter was spoken
+         * for" at three separate bindings while five of them were sitting on
+         * preferences you set once and never touch again.
+         *
+         * Gear keeps its key and keeps the shift, for the reason it always
+         * had: unshifted G is one slip from the thrust keys, and dropping
+         * the gear at speed in an atmosphere is not a mistake to make with a
+         * little finger. It is no longer SHARING the key with the grid,
+         * which means the shift is now the only thing on it. */
+        case 'g':
+          if (e.shiftKey) toggleGear();
+          break;
+        /* H is the help overlay. SHIFT+H is having a word with whoever is
+         * about to transmit — a separate action on a shared key because
+         * there is nowhere else sensible for it to live, and because the
+         * two can never be wanted at the same moment: one is something you
+         * read at leisure, the other has eight seconds on it.
+         *
+         * The price is quoted in the warning the moment you are witnessed,
+         * not behind a second keypress, because the whole decision has to
+         * fit inside those eight seconds. */
+        case 'h':
+          if (e.shiftKey) { Combat.hushWitness(G.sys, G, G.t, HOOKS); break; }
+          G.showHelp = !G.showHelp;
+          break;
+        /* Escape means "out of this" everywhere, and it already meant it on
+         * every mode screen (modeKey sends you back to flight). In flight
+         * there was nothing left to back out to, which is exactly where a
+         * pause menu belongs. The help card counts as something to leave. */
+        case 'escape':
+          if (G.showHelp) { G.showHelp = false; break; }
+          openMenu();
+          break;
+        /* Context-sensitive rather than a second keybinding: while someone
+         * is holding you up, C is the only thing you would want it to mean,
+         * and the demand panel says so. Everywhere else it is the camera. */
+        case 'c':
+          if (G.encounter && G.encounter.demand) { complyWithDemand(); break; }
+          if (!G.followShip) { G.followShip = true; say('Camera tracking ship'); }
+          else if (G.focus) { G.followShip = false; say('Camera holding on ' + G.focus.name); }
+          else say('Nothing else focused — Tab picks a body first', 2);
+          break;
+        case 'tab': cycleFocus(e.shiftKey ? -1 : 1); break;
+        /* Every letter on the keyboard was already spoken for, which is
+         * why the flight-mode toggle lives on a punctuation key. Shift
+         * splits it: the mode itself, and the assist that rides on it. */
+        case '/': case '?':
+          if (e.shiftKey) {
+            G.assist = !G.assist;
+            say(G.assist ? 'Flight assist ON — drift nulled against your lock'
+                         : 'Flight assist OFF — full Newtonian', 4);
+          } else {
+            G.flightMode = (G.flightMode === 'ship') ? 'orbital' : 'ship';
+            say(G.flightMode === 'ship'
+                  ? 'SHIP frame — W drives the nose, A/D and R/F strafe'
+                  : 'ORBITAL frame — W prograde, A/D radial, R/F normal', 5);
+          }
+          break;
+        /* N IS GONE, and this one was not about saving a letter.
+         *
+         * It was a single unmodified keystroke — sitting between B and M,
+         * both of which you press in a fight — that opened a browser
+         * `prompt()`, cleared the save and started a new galaxy. No confirm,
+         * no undo, and the only career-ending control in the game reachable
+         * by one finger landing slightly wrong.
+         *
+         * The title screen already does it properly: Esc, Quit to main menu
+         * (which commits the autosave on the way out), New career, and a
+         * real seed field instead of a browser dialog. Two deliberate steps
+         * is the correct amount of friction for ending a career, and that is
+         * also the reason it has NOT been added to the pause menu — a row
+         * that discards your save does not belong one line under Resume. */
+        case 'x': killRotation(); break;
+        /* B was respawn from the start; missiles arrived later and wanted a
+         * key. It stays both, split by context: a crashed ship has no
+         * missiles worth speaking of, and a flying one has no respawning to
+         * do. */
+        case 'b':
+          if (G.ship.landed) respawnShip();
+          /* SHIFT CYCLES THE RACK, because a ship can carry two kinds of
+           * seeker now and the choice between a certified round and a cheap
+           * one belongs at the trigger rather than at the till. Same key as
+           * firing: it is the same decision, one modifier apart, and a
+           * separate letter for "which missile" would be a key nobody ever
+           * learns. */
+          else if (e.shiftKey) {
+            var nowRack = Combat.nextRack(G.ship);
+            if (!nowRack) say(G.ship.missiles > 0 ? 'Only one rack aboard'
+                                                  : 'No missiles aboard', 3);
+            else say((Combat.MISSILES[nowRack.id] || {}).name + ' armed — ' +
+                     nowRack.n + ' aboard', 4);
+          }
+          else Combat.fireMissile(G.sys, G, G.t, HOOKS);
+          break;
+        case 'enter':
+          toggleView();
+          break;
+        case 't':
+          /* Shift turns the docking key into the other two autopilots: the
+           * three of them are one idea — let the ship fly the boring part
+           * toward the thing you have locked — so they live on one key. */
+          if (e.shiftKey) { startAutoMode('match'); break; }
+          if (G.ship.docked) { say('Already docked — U to undock', 2); break; }
+          /* Prefer the navigation lock, falling back to the camera focus.
+           * Having to Tab the camera onto a station before you could dock
+           * with it conflated two unrelated things: where you are looking
+           * and where you are going. */
+          var dockCand = null;
+          var nav = navTargetState();
+          if (nav && nav.kind === 'body' && nav.obj.kind === 'station') dockCand = nav.obj;
+          else if (G.focus && G.focus.kind === 'station') dockCand = G.focus;
+          /* T is the whole docking control, and it is contextual because
+           * every letter that would have made a good second one is already
+           * a thruster. Assign the clamp first; press it again and the
+           * autopilot flies the approach.
+           *
+           * The obvious binding for auto-dock was A — which is also radial-
+           * in thrust, so engaging it registered a manual burn on the same
+           * keystroke and it cancelled itself before the next frame. */
+          if (G.autodock) { cancelAutodock('cancelled'); break; }
+          if (dockCand && G.dockTarget === dockCand) { startAutodock(); break; }
+          if (dockCand) {
+            G.dockTarget = dockCand;
+            say('Docking clamp assigned: ' + dockCand.name + '  —  T again to auto-dock', 4);
+          } else {
+            say('Lock a station first — [ ] cycles the nav list, then T', 3);
+          }
+          break;
+        case '[': cycleNavTarget(-1); break;
+        /* SHIFT+] IS THE VECTOR ASSIST, and it is on punctuation for the
+         * same reason flight assist is: every letter key was already spoken
+         * for before either of them existed. The shifted glyph is listed
+         * beside the plain one because that is what `e.key` actually
+         * delivers — the same idiom '/' and '?' use two hundred lines up. */
+        case ']': case '}':
+          if (e.shiftKey) {
+            G.vector = !G.vector;
+            G.hoverAlt = null;
+            say(G.vector
+                  ? 'VECTOR assist ON — thrust vectors to put your momentum on the nose'
+                  : 'VECTOR assist OFF — full Newtonian', 5);
+          } else {
+            cycleNavTarget(1);
+          }
+          break;
+        case 'l':
+          if (e.shiftKey) { startAutoMode('follow'); break; }
+          clearNavTarget();
+          break;
+        case 'home': recentreLook(); break;
+        /* M, K, Y and ` are gone. The market moved to the docked port's own
+         * comms channel — see the station options in screens.js, where the
+         * row reads "Request market data" at range and becomes "Market" on
+         * the deck. The other three were Options rows wearing keys.
+         *
+         * Unshifted J is gone too, and it was the plainest case of all: it
+         * opened the star map, which is F6. One key, one duplicate.
+         *
+         * SHIFT+J STAYS, and deliberately. Laying a course in off a wake is
+         * not a chart action that happens to need the scanner — it is a
+         * SCANNER action that happens to produce a course, and the moment
+         * you want it is the moment the read is good, which is in flight
+         * near where somebody dropped out. Sending the player to a screen to
+         * use a reading that decays while they are looking at the screen
+         * would be the wrong kind of tidy. The key now carries only the
+         * shifted meaning, the same shape as G. */
+        case 'j':
+          if (e.shiftKey) followWake();
+          break;
+        /* Z is cruise. SHIFT+Z arms or shuts down the military drive —
+         * next to it because they are the same question asked of the two
+         * drives, and because arming a Chernobyl is a thing you do while
+         * looking at a course, not while looking at an outfitter. */
+        case 'z':
+          if (e.shiftKey) { toggleMilDrive(); break; }
+          toggleCruise();
+          break;
+
+        /* THE MANOEUVRE NODE CLUSTER HAS MOVED TO ITS OWN SCREEN, Shift+F2,
+         * and lives in modeKey('node') now.
+         *
+         * The old comment here argued they were "deliberately a cluster on
+         * the right of the keyboard, well away from the thrust and attitude
+         * keys — planning and flying are different activities". That
+         * reasoning was right and it is exactly why they left: the planner
+         * has a whole screen of its own, and putting the controls for a
+         * different activity on the flying keyboard is the same mistake
+         * that comment was warning about, one step further out.
+         *
+         * Six keys recovered — I, ;, ', \\ outright, and the node branch off
+         * - and =. It does mean you open the planner to plan, which is a
+         * real change: you can no longer drop a node without leaving the
+         * cockpit. That is the trade that was made knowingly.
+         *
+         * ZOOM KEEPS - AND =. They were only ever the node's nudge WHILE a
+         * node existed; with the node branch gone they are simply zoom, in
+         * both the shifted and unshifted spellings because the two differ by
+         * keyboard layout and nobody pressing "minus" cares which one the
+         * browser reports. */
+        case '-': case '_': zoomBy(1.25, true); break;
+        case '=': case '+': zoomBy(1 / 1.25, true); break;
+
+        /* THE NODE KEYS LIVE ON THE ORBIT MAP (F2), not here. Tried on the
+         * flight keyboard as \\ alone and found clumsy in play (Astra,
+         * 2026-09-18): the burn is planned against the orbit, so the keys
+         * belong on the screen that draws the orbit. See modeKey('system'). */
+        /* Backspace is gone: F5 and F10 both carry EJECT buttons on every
+         * cargo line, and waste is the one thing you jettison deliberately
+         * rather than in a hurry. */
+        case 'u':
+          if (G.ship.docked) {
+            /* A surface port is a hangar behind closed doors now, so
+             * leaving one is something you are given rather than something
+             * you take. Orbital docks are open clamps and stay free to
+             * leave — nothing is holding you in. */
+            var leaving = G.sys.byId[G.ship.docked];
+            if (leaving && leaving.surface && !Combat.launchCleared(G, leaving)) {
+              say(leaving.name + ': "The doors are shut. Request launch on F4."', 5);
+              HOOKS.sound('warn');
+              break;
+            }
+            /* A ground port lets you out the way you came in: the exit-pad
+             * transfer, which spends the launch clearance itself when the
+             * car reaches the surface (the doors stay open until then). */
+            if (leaving && leaving.surface) { exitTransfer(leaving); break; }
+            if (leaving) Combat.spendLaunch(G);
+          }
+          if (G.ship.docked) {
+            // Fully let go: clear the nav target too, or the capture check
+            // in update() sees the ship still sitting inside the envelope
+            // one frame later (a few m/s of separation isn't far) and
+            // re-docks it before the player's thumb is off the key. Press
+            // T again to re-target if you actually want back in.
+            var left = Sim.undockShip(G.ship, G.sys, G.t, 0.003);
+            G.dockTarget = null;
+            G.dockStatus = null;
+            HOOKS.sound('undock');
+            say('Undocked from ' + left.name + '  (T to re-target)', 4);
+          } else {
+            say('Not docked', 2);
+          }
+          break;
+      }
+    });
+    window.addEventListener('keyup', function (e) {
+      /* Both, unconditionally. A keyup does not always report the location
+       * the keydown did — and a free-look that latches on because the
+       * release came back as the wrong Alt is a ship that has stopped
+       * answering the mouse for no visible reason. */
+      if (e.key === 'Alt') { setCursorMode(false); setFreeLook(false); return; }
+      G.keys[e.key.toLowerCase()] = false;
+    });
+    /* Alt-tabbing away releases the key somewhere we will never hear about
+     * it, and a cursor mode that latches on is a mouse that has stopped
+     * flying the ship for no visible reason. */
+    window.addEventListener('blur', function () {
+      setCursorMode(false); setFreeLook(false); G.keys = {};
+    });
+
+    /* ---- the mouse as a weapon -------------------------------------------
+     * The conflict, stated plainly: in the cockpit, left-drag already turns
+     * your head. Mouse 1 cannot both look and fire.
+     *
+     * The resolution is that mouse weapons are part of MOUSE-AIM MODE (F9).
+     * With it on, the mouse is a stick and does not need a held button to
+     * steer, so the buttons are free to be triggers: 1 fires group A, 2
+     * fires group B, and the middle button launches the selected missile —
+     * which is where missiles had to go once both main buttons became
+     * triggers. With mouse-aim off, nothing below changes: left-drag looks
+     * around exactly as it always did, and Space and B still shoot, because
+     * somebody flying on a trackpad still needs to fight.
+     *
+     * G.trigger is HELD state, read by Combat.update each frame, not a
+     * one-shot on the click: a beam is a trigger you lean on. */
+    canvas.addEventListener('mousedown', function (e) {
+      lastX = e.clientX; lastY = e.clientY;
+
+      /* Buttons first, always. The icon bar and every control on a mode
+       * screen live here, and a click that lands on one must never also
+       * swing the camera, turn the pilot's head, or fire the guns. */
+      if (global.Sound) global.Sound.poke();
+      var spot = overHot(e.clientX, e.clientY);
+      if (spot) { HOOKS.sound('click'); spot.fn(); return; }
+
+      if (G.cursor.active) {
+        cursorAt(e.clientX, e.clientY);
+        beginHandleDrag();
+        return;                       // never both grab a handle and pan
+      }
+
+      var btn = mouseButton(e);
+      if (weaponsLive()) {
+        /* The latch is what makes a TAP fire. Held state is read once per
+         * frame, so a press and release inside one frame — a quick click,
+         * or any synthetic event pair — would set the trigger and clear it
+         * again without a single frame ever seeing it, and the gun would
+         * silently not go off. The latch survives the release until the
+         * frame after it has been read, so a click is exactly one shot and
+         * a hold is sustained fire, which is what both gestures mean. */
+        if (btn === 0 && mouseArmed()) {
+          G.trigger.a = true; G.trigger.aLatch = true; return;
+        }
+        if (btn === 2) { G.trigger.b = true; G.trigger.bLatch = true; return; }
+        /* Missiles on the side button (mouse 4) and on the wheel click.
+         *
+         * Mouse 4 is the one you want: it is where a thumb already rests, it
+         * is not a button you press by accident, and clicking a scroll wheel
+         * hard enough to register tends to scroll at the same time. The wheel
+         * stays bound anyway because plenty of mice and every trackpad have
+         * no fourth button, and B works from the keyboard regardless — a
+         * binding nobody can reach is not a binding.
+         *
+         * Deliberately NOT a held trigger like the guns. A missile is a
+         * discrete thing you spend, and it needs a lock (fireMissile refuses
+         * without one and says so), so leaning on the button would just
+         * repeat the same refusal several times a second. */
+        if (btn === 3 || btn === 1) {
+          if (e.preventDefault) e.preventDefault();
+          Combat.fireMissile(G.sys, G, G.t, HOOKS);
+          return;
+        }
+      }
+
+      /* Nothing to drag on a full-screen mode: the world is not visible, so
+       * a drag would be turning a camera nobody can see. The orbit map is
+       * the exception — turning the world is what it is for. */
+      if (!flying() && !mapMode()) return;
+      /* A modal stopped the world; dragging the camera around behind it is
+       * not something the click was asking for. */
+      if (menuOpen()) return;
+      /* Only the left button pans. Before triggers existed every button
+       * landed here, so a right-click swung the camera and opened the
+       * browser menu on top of it. */
+      if (btn !== 0) return;
+      dragging = true;
+    });
+    window.addEventListener('mouseup', function (e) {
+      dragging = false;
+      /* Only the two buttons that ARE triggers release one. The `else` here
+       * used to catch the side button too, so launching a missile mid-burst
+       * cut your own guns. */
+      var up = mouseButton(e);
+      if (up === 2) G.trigger.b = false;
+      else if (up === 0) G.trigger.a = false;
+      if (G.nodeDrag) { G.nodeDrag = null; G.nodeStale = 0; }
+    });
+    /* Without this, mouse 2 opens the browser's context menu mid-fight —
+     * over the canvas only, so a right-click on anything else on the page
+     * still behaves like the web. */
+    canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    /* And without this, mouse 4 is the browser's Back button: launching a
+     * missile would navigate out of the game and lose the flight. Chrome
+     * raises that navigation off auxclick rather than off the mousedown we
+     * already swallowed, so both have to be caught — as does the wheel
+     * click, which is otherwise autoscroll. Canvas only, so the rest of the
+     * page still behaves like a page. */
+    canvas.addEventListener('auxclick', function (e) {
+      if (mouseButton(e) !== 0) e.preventDefault();
+    });
+    /* A held trigger and a lost window is a ship that goes on firing at
+     * nothing until you come back to it. Same reasoning as the keys reset
+     * below, and the same failure it prevents. */
+    window.addEventListener('blur', releaseTriggers);
+    window.addEventListener('mousemove', function (e) {
+      /* With the cursor out, the mouse belongs to the interface: it does not
+       * turn the pilot's head and it does not swing the camera. This is the
+       * whole point of the modifier — a drag handle you cannot reach without
+       * also yawing the ship is not a handle. */
+      if (G.cursor.active) {
+        cursorAt(e.clientX, e.clientY);
+        if (G.nodeDrag) dragHandleTo(e.clientX, e.clientY, e.shiftKey);
+        lastX = e.clientX; lastY = e.clientY;
+        return;
+      }
+      /* Mouse-aim is the one mode where the mouse steers with NO button
+       * held, and it has to be, now that the buttons are triggers: keeping
+       * the old drag requirement would have meant you could only turn the
+       * ship while firing it. Everywhere else a drag is still a drag. */
+      var aiming = mouseArmed() && !G.freeLook;
+      /* Free-look reaches the head with no button held too — the whole
+       * point is that it replaces the stick, not that it adds a drag. */
+      var looking = G.freeLook && G.viewMode === 'cockpit' && flying() &&
+                    !menuOpen() && !G.cursor.active;
+      if (!dragging && !aiming && !looking) return;
+      var dx = e.clientX - lastX, dy = e.clientY - lastY;
+      /* The same gesture means two, now three, different things depending
+       * on where you are sitting and which way you told F9 you wanted it.
+       * Outside, you are grabbing the scene and turning it around the ship.
+       * Inside, you are either turning your head — so the view follows the
+       * mouse rather than opposing it, which is what a head does — or you
+       * are flying, and the mouse is a stick. */
+      if (aiming) aimBy(dx, dy);
+      else if (G.viewMode === 'cockpit') lookBy(dx * 0.0042, -dy * 0.0042);
+      // (free-look lands in the branch above: cockpit, head, not the stick)
+      else {
+        G.cam.yaw -= dx * 0.006;
+        G.cam.pitch += dy * 0.006;
+        G.cam.pitch = wrapAngle(G.cam.pitch);
+      }
+      lastX = e.clientX; lastY = e.clientY;
+    });
+    /* The wheel zooms whichever view you are in — in the cockpit it used to
+     * move G.cam.dist, which the cockpit camera does not read, so the wheel
+     * was silently doing nothing at all in the seat. */
+    canvas.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      if (menuOpen()) return;
+      /* A list under the pointer gets the wheel first. Rolling the wheel
+       * over a shop and having the camera fly backwards out of the cockpit
+       * is the kind of thing that reads as the interface being broken. */
+      /* Reached through `global`, not as a bare name: under test `global` is
+       * a stand-in window object, so a bare `Screens` is not in scope even
+       * when `global.Screens` is set. */
+      if (global.Screens && global.Screens.wheelAt(e.clientX, e.clientY, e.deltaY)) return;
+      zoomBy(Math.pow(1.0016, e.deltaY));
+    }, { passive: false });
+
+    // Touch: one finger orbits, two fingers pinch to zoom.
+    var pinch = 0;
+    canvas.addEventListener('touchstart', function (e) {
+      if (e.touches.length === 1) { dragging = true; lastX = e.touches[0].clientX; lastY = e.touches[0].clientY; }
+      else if (e.touches.length === 2) {
+        pinch = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
+                           e.touches[0].clientY - e.touches[1].clientY);
+      }
+    }, { passive: false });
+    canvas.addEventListener('touchmove', function (e) {
+      e.preventDefault();
+      if (e.touches.length === 1 && dragging) {
+        var tdx = e.touches[0].clientX - lastX, tdy = e.touches[0].clientY - lastY;
+        if (G.viewMode === 'cockpit') lookBy(tdx * 0.005, -tdy * 0.005);
+        else {
+          G.cam.yaw -= tdx * 0.008;
+          G.cam.pitch += tdy * 0.008;
+          G.cam.pitch = wrapAngle(G.cam.pitch);
+        }
+        lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+      } else if (e.touches.length === 2) {
+        var d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
+                           e.touches[0].clientY - e.touches[1].clientY);
+        if (pinch > 0 && d > 0) zoomBy(pinch / d);
+        pinch = d;
+      }
+    }, { passive: false });
+    canvas.addEventListener('touchend', function () { dragging = false; pinch = 0; });
+  }
+
+  function focusList() {
+    var list = [{ ship: true, name: 'Ship' }];
+    for (var i = 0; i < G.sys.bodies.length; i++) list.push(G.sys.bodies[i]);
+    return list;
+  }
+
+  function cycleFocus(dir) {
+    var list = focusList();
+    var idx = 0;
+    if (G.followShip) idx = 0;
+    else for (var i = 0; i < list.length; i++) if (list[i] === G.focus) idx = i;
+    idx = (idx + dir + list.length) % list.length;
+    var pick = list[idx];
+    if (pick.ship) { G.followShip = true; G.focus = null; say('Tracking ship'); }
+    else {
+      G.followShip = false; G.focus = pick;
+      G.cam.dist = Math.max(pick.radius * 6, pick.kind === 'star' ? pick.radius * 40 : pick.radius * 8);
+      if (pick.children.length) {
+        var far = 0;
+        for (var j = 0; j < pick.children.length; j++)
+          far = Math.max(far, pick.children[j].orbit.a);
+        G.cam.dist = far * 3;
+      }
+      say(pick.name + '  —  ' + (pick.typeName || pick.kind));
+    }
+  }
+
+  function killRotation() {
+    // Cancel thrust immediately.
+    G.ship.thrust = V.zero();
+    say('Thrust cut');
+  }
+
+  /* ---- looking around ---------------------------------------------------
+   * You can turn all the way round — a full 180° to either shoulder — and a
+   * long way up and down. The old clamp stopped just short of the bulkhead
+   * on the grounds that there was nothing back there worth seeing, which
+   * was true right up until the rear panels went in. It is a swivel seat.
+   * Pitch is still short of straight up: there is a helmet and a headrest
+   * in the way and nothing above them. */
+  var LOOK_YAW_MAX = Math.PI, LOOK_PITCH_MAX = 1.15;
+
+  /* Fold an angle into (-pi, pi]. The exterior camera's pitch used to be
+   * clamped just short of straight up, so you could never get over the top
+   * of your own ship; now it simply keeps going, and this is only here to
+   * stop the number growing without bound while someone drags in circles. */
+  function wrapAngle(a) {
+    var TAU = Math.PI * 2;
+    a = a % TAU;
+    if (a > Math.PI) a -= TAU;
+    if (a <= -Math.PI) a += TAU;
+    return a;
+  }
+
+  function lookBy(dyaw, dpitch) {
+    if (G.viewMode !== 'cockpit') return;
+    G.look.yaw = Math.max(-LOOK_YAW_MAX, Math.min(LOOK_YAW_MAX, G.look.yaw + dyaw));
+    G.look.pitch = Math.max(-LOOK_PITCH_MAX, Math.min(LOOK_PITCH_MAX, G.look.pitch + dpitch));
+  }
+
+  /* Mouse as a stick. The delta becomes a command in the same -1..1 units
+   * the arrow keys hand to the attitude integrator, so both control paths
+   * meet at exactly one place and cannot disagree about what "pitch up"
+   * means. */
+  function aimBy(dx, dy) {
+    var k = 0.055 * G.aimSens;
+    G.aimCmd.yaw = Math.max(-1, Math.min(1, G.aimCmd.yaw - dx * k));
+    G.aimCmd.pitch = Math.max(-1, Math.min(1, G.aimCmd.pitch - dy * k));
+  }
+
+  /* Home is the one key that always gives you back a view you can fly with.
+   * It used to refuse outright outside the cockpit, which meant a chase
+   * camera lost at the wrong distance had no reset at all. */
+  function recentreLook() {
+    if (G.viewMode !== 'cockpit') {
+      G.cam.dist = CHASE_DIST;
+      say('Camera reset to chase distance', 1.5);
+      return;
+    }
+    G.look.yaw = 0; G.look.pitch = 0;
+    G.cockpitFov = COCKPIT_FOV;
+    say('View centred', 1.5);
+  }
+
+  /* ---- multi-function displays ------------------------------------------
+   * Three panels, each cycling through its own pages on its own key, the
+   * way Frontier's did. The point of pages rather than one crowded readout
+   * is that the thing you need while docking and the thing you need while
+   * picking a trade route are different things, and neither should be
+   * competing for the same square of dashboard. */
+  /* Modes, not panels. F1 is flying — the cockpit, the glass and the flight
+   * instruments, and nothing else competing for the screen. Every other key
+   * takes the whole display for one job, the way a real multi-function
+   * display does: you are either flying or you are reading, and the failure
+   * of the old band was pretending you could do both in 178 pixels.
+   *
+   * The number row mirrors the function keys throughout, because browsers
+   * have opinions about F1 and F5 and a control scheme should not depend on
+   * winning that argument. */
+  var MODES = [
+    { key: 'F1',  label: 'FLIGHT',   id: 'flight',     icon: 'cockpit' },
+    { key: 'F2',  label: 'ORBITS',   id: 'system',     icon: 'star' },
+    { key: 'F3',  label: 'NAV',      id: 'navigation', icon: 'nav' },
+    { key: 'F4',  label: 'COMMS',    id: 'comms',      icon: 'comms' },
+    { key: 'F5',  label: 'SHIP',     id: 'ship',       icon: 'hold' },
+    { key: 'F6',  label: 'GALAXY',   id: 'galaxy',     icon: 'galaxy' },
+    { key: 'F7',  label: 'MISSIONS', id: 'missions',   icon: 'missions' },
+    { key: 'F8',  label: 'JUMP',     id: 'jump',       icon: 'jump' },
+    { key: 'F9',  label: 'AIM',      id: 'aim',        icon: 'aim' },
+    { key: 'F10', label: 'MANIFEST', id: 'manifest',   icon: 'manifest' },
+    /* Off the bar and off the function keys, and it lost that slot on its
+     * merits: the burn controls — I to place, ± to adjust, \ to execute —
+     * were global keys that worked from the cockpit, so this screen was only
+     * their readout. The orbit data it printed reads off the MFDs now, and
+     * Shift+F2 keeps it next door to the orbit map, which is what you are
+     * looking at when you plan a burn anyway.
+     *
+     * THAT ARGUMENT HAS SINCE BEEN OVERTAKEN, and the note is left standing
+     * because the order matters: the keys followed the screen here later, in
+     * the pass that cut fifteen bindings off the flight controls. So this is
+     * now the planner AND its readout, and the sentence above describes why
+     * it was safe to move the screen first, not what is true today. */
+    { key: 'Shift+F2', label: 'NODES', id: 'node', icon: 'node', hidden: true }
+  ];
+  /* The ten that get a slot on the bar and a function key. Anything past
+   * them is reachable, but by its own binding. */
+  var BAR_MODES = 10;
+
+  function modeIndex(id) {
+    for (var mi = 0; mi < MODES.length; mi++) if (MODES[mi].id === id) return mi;
+    return 0;
+  }
+  /* The old name, kept pointing at the new table: the manoeuvre-node work
+   * reaches for PANELS and there is no reason to make it care. */
+  var PANELS = MODES;
+
+  function modeId() { return MODES[G.panel] ? MODES[G.panel].id : 'flight'; }
+  function flying() { return G.panel === 0; }
+  /* The orbit map is the one mode that still shows the world — it IS the
+   * world, seen from outside — so a handful of things that gate on
+   * flying() gate on this instead. */
+  function mapMode() { return modeId() === 'system'; }
+
+  /* Roughly the framing the game boots with: exterior, tracking the ship,
+   * pulled out far enough that the local orbits read as a diagram. */
+  var CHASE_DIST = 0.06;             // km — close enough to admire the hull
+
+  /* The zoom stops. MIN_CAM_DIST used to be 1.0 km, which is a hundred times
+   * further out than the chase camera parks — so the first notch of the
+   * wheel in the exterior view did not zoom in at all, it CLAMPED the camera
+   * a kilometre away from a ten-metre ship and left it there. The hull went
+   * to a nine-pixel speck, zooming in could not get back under the floor,
+   * and F1's reframe window (below) was too narrow to rescue it either. Six
+   * metres is just outside a 10 m hull: close enough to read a hull number,
+   * still outside the geometry. */
+  var MIN_CAM_DIST = 0.006;          // km
+  var MAX_CAM_DIST = 6e10;           // km
+
+  /* Cockpit zoom is a field of view, not a distance — there is no camera
+   * boom to shorten when the camera is your own eye. Narrowing the FOV is
+   * what a pair of binoculars does and what every other cue in the cockpit
+   * (canopy frame, console, ladder) is already built to follow, because all
+   * of them project through this same camera. */
+  var COCKPIT_FOV = 68 * DEG;
+  var FOV_MIN = 22 * DEG, FOV_MAX = 95 * DEG;
+
+  function cockpitFov() {
+    var f = G.cockpitFov;
+    return (typeof f === 'number' && isFinite(f) && f > 0) ? f : COCKPIT_FOV;
+  }
+
+  /* One zoom control for both views: `f` below 1 zooms in, above 1 zooms
+   * out, and which quantity that moves is the view's business rather than
+   * the caller's. Wheel, pinch and the +/- keys all come through here, so
+   * they cannot drift apart or clamp differently. */
+  function zoomBy(f, announce) {
+    if (!isFinite(f) || f <= 0) return;
+    if (G.viewMode === 'cockpit') {
+      G.cockpitFov = Math.max(FOV_MIN, Math.min(FOV_MAX, cockpitFov() * f));
+      if (announce) {
+        say(Math.abs(G.cockpitFov - COCKPIT_FOV) < 1e-6
+              ? 'Canopy zoom 1.0×  (' + (COCKPIT_FOV / DEG).toFixed(0) + '° field)'
+              : 'Canopy zoom ' + (COCKPIT_FOV / G.cockpitFov).toFixed(1) + '×  ('
+                + (G.cockpitFov / DEG).toFixed(0) + '° field)', 1.5);
+      }
+    } else {
+      G.cam.dist = Math.max(MIN_CAM_DIST, Math.min(MAX_CAM_DIST, G.cam.dist * f));
+      if (announce) say('Camera ' + fmtDist(G.cam.dist), 1.5);
+    }
+  }
+
+
+  function frameOrbitMap() {
+    G.viewMode = 'orbit';
+    G.followShip = true;
+    G.focus = null;
+    var dom = Sim.dominantBody(G.ship.pos, G.sys, G.t);
+    if (dom) {
+      G.cam.dist = Math.max(G.cam.dist, dom.radius * 8);
+      if (dom.kind !== 'star') G.cam.dist = Math.min(G.cam.dist, dom.radius * 40);
+    }
+  }
+
+  function selectPanel(i) {
+    if (i < 0 || i >= MODES.length) return;
+    var was = G.panel;
+    /* Walking away from the page abandons whatever was half-typed on it.
+     * A field still holding the keyboard on a screen nobody is looking at
+     * is how you get a ship that has stopped answering its controls. */
+    if (global.Screens && global.Screens.editing()) global.Screens.cancelEdit();
+    G.panel = i;
+    /* Two modes are really the same screen the rest of the game already
+     * had, so entering them opens it rather than drawing a second copy. */
+    if (MODES[i].id === 'galaxy' && !G.starMap) {
+      if (G.ship.landed) { G.panel = was; say('No slipspace alignment on the ground', 3); return; }
+      G.starMap = { sel: 0, list: jumpCandidates() };
+    }
+    if (MODES[i].id !== 'galaxy' && MODES[i].id !== 'jump') G.starMap = null;
+
+    /* Docked, F4 opens on the port you are standing in.
+     *
+     * It is the channel you want nine times in ten — clearance to launch, the
+     * ground panel, whatever the harbourmaster last said to you — and it was
+     * never the one selected. The list sorts by range, but the police
+     * frequencies are pinned at range 0 so they can be found in a hurry, and
+     * they therefore sit ahead of the port whose deck you are parked on. So
+     * arriving at the comms screen while docked meant scrolling past every
+     * flag in the system to reach the one you were inside.
+     *
+     * Only on ENTERING the screen (`was !== i`), never while you are on it —
+     * re-selecting under the arrow keys would make the list fight the hand
+     * using it. And it selects rather than hails: opening a channel is a
+     * decision with a price on it, and Enter is where that lives. */
+    if (MODES[i].id === 'comms' && was !== i && G.ship.docked &&
+        global.Screens && global.Screens.commsContacts) {
+      var here = global.Screens.commsContacts();
+      for (var ci = 0; ci < here.length; ci++) {
+        if (here[ci].kind === 'station' && here[ci].obj &&
+            here[ci].obj.id === G.ship.docked) {
+          G.commsSel = ci;
+          G.piracyMenu = null;
+          break;
+        }
+      }
+    }
+
+    /* The orbit map borrows the camera. What you were doing with it —
+     * cockpit or chase, whatever you were focused on, however far out —
+     * is put back exactly when you leave, because a map that scrambles
+     * your view on the way out is a map you stop opening. */
+    if (MODES[i].id === 'system' && was !== i) {
+      G.mapReturn = { viewMode: G.viewMode, followShip: G.followShip,
+                      focus: G.focus, dist: G.cam.dist };
+      frameOrbitMap();
+    } else if (MODES[was] && MODES[was].id === 'system' && i !== was && G.mapReturn) {
+      G.viewMode = G.mapReturn.viewMode;
+      G.followShip = G.mapReturn.followShip;
+      G.focus = G.mapReturn.focus;
+      G.cam.dist = G.mapReturn.dist;
+      G.mapReturn = null;
+    }
+
+    if (i !== was) { G.hotspots = []; G.piracyMenu = null; G.shipDeal = null; }
+  }
+
+  /* F1's second press. Cockpit and chase camera are the two ways to fly,
+   * and one key flips between them; coming out to the chase view parks the
+   * camera close enough that the hull is a ship, not a dot. */
+  function toggleView() {
+    G.viewMode = (G.viewMode === 'cockpit') ? 'orbit' : 'cockpit';
+    if (G.viewMode === 'cockpit') {
+      G.followShip = true; G.focus = null;
+      say('Cockpit view', 2);
+    } else {
+      G.followShip = true; G.focus = null;
+      /* The reframe window was 0.3×–40× of chase distance, which happened to
+       * contain the old 1 km zoom floor — so when the wheel stranded the
+       * camera out there, coming back out to the chase view left it stranded
+       * and the hull stayed a speck. A tighter window means F1 always gives
+       * you a ship-sized ship back; Home does the same without the toggle. */
+      if (G.cam.dist > CHASE_DIST * 8 || G.cam.dist < CHASE_DIST * 0.1) {
+        G.cam.dist = CHASE_DIST;
+      }
+      say('Exterior view', 2);
+    }
+  }
+
+  /* What the keyboard means while a screen is up. Returns true if the mode
+   * consumed the key; anything it does not want reaches the ship. */
+  function modeKey(e) {
+    var key = e.key.toLowerCase();
+    /* The trade board sits INSIDE the comms screen, so it gets the keys
+     * first — Escape included, which backs out to the channel rather than
+     * all the way to the cockpit. Two presses to leave is right here: the
+     * first one is "I'm done with this ship", not "I'm done with comms". */
+    if (G.shipDeal && modeId() === 'comms' && handleShipDealKey(e)) return true;
+    if (key === 'escape') { selectPanel(0); return true; }
+
+    switch (modeId()) {
+      case 'galaxy':
+        return handleStarMapKey(e);
+
+      case 'ship': {
+        var held = heldCargo();
+        if (key === 'arrowdown') { G.invSel = Math.min(held.length - 1, G.invSel + 1); return true; }
+        if (key === 'arrowup') { G.invSel = Math.max(0, G.invSel - 1); return true; }
+        /* Jettison is deliberately not on Enter. Enter is "yes" everywhere
+         * else in the interface and this is the one control that throws
+         * away something you paid for. */
+        if (key === 'backspace' || key === 'delete') {
+          if (held[G.invSel]) jettison(held[G.invSel].cid, e.shiftKey ? Infinity : 1);
+          return true;
+        }
+        return false;
+      }
+
+      case 'comms': {
+        var contacts = global.Screens.commsContacts();
+        if (key === 'arrowdown') { G.commsSel = Math.min(contacts.length - 1, G.commsSel + 1); G.piracyMenu = null; G.shipDeal = null; return true; }
+        if (key === 'arrowup') { G.commsSel = Math.max(0, G.commsSel - 1); G.piracyMenu = null; G.shipDeal = null; return true; }
+        if (key === 'enter') { hailSelected(contacts[G.commsSel]); return true; }
+        /* Y only means anything against a standing quote, so it shadows
+         * nothing the player would otherwise want here. */
+        if (key === 'y') { payOutstanding(); return true; }
+        /* H forces the ground panel of whichever port is selected. On the
+         * comms list because the cabinet answers on the comms channel and
+         * is addressed to whoever is adjacent to it — the model's own
+         * `channel: 'comms', addressedTo: 'adjacent'`. It shadows nothing:
+         * the list is driven by the arrows and Enter. */
+        if (key === 'h') { forceSelectedPanel(contacts[G.commsSel]); return true; }
+        /* The log scrolls on its own keys — the arrows already belong to the
+           channel list, and stealing them would make the two panes fight. */
+        if (key === '[') {
+          var depth = (G.msgLog || []).length;
+          G.msgScroll = Math.min(Math.max(0, depth - 1), (G.msgScroll || 0) + 1);
+          return true;
+        }
+        if (key === ']') { G.msgScroll = Math.max(0, (G.msgScroll || 0) - 1); return true; }
+        return false;
+      }
+
+      case 'missions':
+        if (key === 'arrowdown') { G.missionSel++; return true; }
+        if (key === 'arrowup') { G.missionSel = Math.max(0, G.missionSel - 1); return true; }
+        return false;
+
+      case 'jump':
+        if (key === 'enter') {
+          var course = plottedCourse();
+          if (!course) { say('No course plotted — F6 opens the chart', 3); return true; }
+          if (!course.possible) { say('Out of range on current fuel', 3); return true; }
+          selectPanel(0);
+          doJump(course);
+          return true;
+        }
+        return false;
+
+      case 'aim':
+        if (key === 'enter') { setMouseAim(!G.mouseAim); return true; }
+        if (key === '-' || key === '_') { G.aimSens = Math.max(0.25, G.aimSens - 0.25); return true; }
+        if (key === '=' || key === '+') { G.aimSens = Math.min(3, G.aimSens + 0.25); return true; }
+        return false;
+
+      /* The manoeuvre planner's own keyboard, which used to be six bindings
+       * on the flight controls. Same keys, same meanings, same cluster on
+       * the right of the board — they just only answer on the screen that
+       * draws what they are doing.
+       *
+       * `-` and `=` mean the node's delta-v here and zoom out in flight,
+       * which is not a collision: on this screen there is a burn in front of
+       * you and nothing else those keys could sensibly be for. */
+      case 'system':
+      case 'node':
+        if (key === 'i') {
+          if (e.shiftKey) clearNode();
+          else if (!G.node) placeNode();
+          else cycleNodeAxis(1);
+          return true;
+        }
+        if (key === '-' || key === '_') {
+          if (G.node) { adjustNode(-1, e.shiftKey, e.ctrlKey); return true; }
+          return false;
+        }
+        if (key === '=' || key === '+') {
+          if (G.node) { adjustNode(+1, e.shiftKey, e.ctrlKey); return true; }
+          return false;
+        }
+        if (key === ';' || key === ':') { snapNode('peri'); return true; }
+        if (key === "'" || key === '"') { snapNode('apo'); return true; }
+        if (key === '\\' || key === '|') { startNodeBurn(); return true; }
+        return false;
+    }
+    return false;
+  }
+
+  /* Hold right Alt and the mouse stops flying the ship and starts turning
+   * your head. Letting go puts the view back where it was looking, because
+   * a held free-look that leaves your head hanging off to port is a control
+   * you have to remember to undo — and the entire argument for a modifier
+   * over a toggle is that there is nothing to remember.
+   *
+   * The aim command is zeroed on the way IN, not just on the way out: the
+   * mouse has been feeding a decaying rate, and carrying that into a look
+   * would have the ship keep turning while you are only glancing sideways. */
+  function setFreeLook(on) {
+    on = !!on;
+    if (G.freeLook === on) return;
+    G.freeLook = on;
+    if (G.viewMode !== 'cockpit') return;
+    G.aimCmd.yaw = 0; G.aimCmd.pitch = 0;
+    if (!on) { G.look.yaw = 0; G.look.pitch = 0; }
+  }
+
+  function setMouseAim(on) {
+    G.mouseAim = !!on;
+    /* Dropping out of it must let go of the triggers, or the guns keep
+     * firing on a button the mode no longer reads. */
+    if (!G.mouseAim) releaseTriggers();
+    say(G.mouseAim ? 'Mouse aim ON — the mouse is the stick, 1 and 2 are the fire groups, middle launches'
+                   : 'Mouse aim off — drag turns your head, Space and B shoot', 4);
+  }
+
+  /* ---- the cruise drive -------------------------------------------------
+   * An honest orbital transfer between two planets takes months, and a
+   * constant-thrust one costs more reaction mass than any tank can hold.
+   * Both are true, and between them they would make interplanetary flight
+   * something you never actually do. So there is a third thing: a drive
+   * that warps the sky and crosses a system in minutes.
+   *
+   * It is openly contrived, like slipspace, and it is fenced accordingly:
+   *
+   *   - MASS LOCK. Your top speed is proportional to how far you are from
+   *     the nearest significant body. Deep space is fast; near a planet you
+   *     crawl. This is what stops it being a teleport, and it produces the
+   *     right shape of journey for free — you accelerate away, coast the
+   *     middle, and are slowed down by your destination as you arrive.
+   *   - IT COSTS. Reaction mass per distance covered, so crossing a system
+   *     is a real expense and route choice stays a decision.
+   *   - IT DROPS YOU IN ORBIT. Arriving at rest beside a planet would mean
+   *     falling straight into it, so dropping out hands you the local
+   *     circular velocity instead.
+   */
+  var CRUISE_MIN = 60;              // km/s
+  var CRUISE_MAX = 2.0e6;           // km/s — contrived, and admitted to
+  var CRUISE_LOCK_K = 0.55;         // speed limit per km of clearance
+  var CRUISE_BURN = 1.1e-8;         // tonnes of reaction mass per km flown
+  var CRUISE_CLEAR = 2.5;           // body radii you must be outside to engage
+
+  /* How fast may we go here, and what is holding us back? */
+  function cruiseLock() {
+    var best = null, bestClear = Infinity, worst = null, ratio = Infinity;
+    for (var i = 0; i < G.sys.gravBodies.length; i++) {
+      var b = G.sys.gravBodies[i];
+      var d = V.dist(Sim.bodyPosition(b, G.sys, G.t), G.ship.pos);
+      /* Clearance to the KEEP-OUT, not to the rock. The speed limit winds
+       * down against this and the mass-lock drop-out fires about a hundred
+       * kilometres above it — which measured against bare rock put the
+       * drop-out at ~110 km altitude, INSIDE the air of every world whose
+       * atmosphere tops out higher than that (Mirven I's reaches 170 km).
+       * dropCruise then handed back a circular orbit in the upper
+       * atmosphere, drag decayed it, and the ship went in. */
+      var clear = d - keepOutRadius(b);
+      if (clear < bestClear) { bestClear = clear; best = b; }
+      var r = d / b.radius;
+      if (r < ratio) { ratio = r; worst = b; }
+    }
+    var maxSpeed = Math.max(CRUISE_MIN,
+      Math.min(CRUISE_MAX, CRUISE_LOCK_K * Math.max(0, bestClear)));
+    return {
+      body: worst || best,
+      clearance: bestClear,
+      maxSpeed: maxSpeed,
+      can: ratio > CRUISE_CLEAR && !G.ship.docked && !G.ship.landed
+    };
+  }
+
+  /* `keepAuto` is passed by the autopilot, which spins the drive up itself
+   * on a long approach — without it, engaging cruise would cancel the very
+   * autopilot that asked for it. */
+  function toggleCruise(keepAuto) {
+    if (G.cruise) { dropCruise('disengaged'); return; }
+    if (G.hyper) return;
+    var lock = cruiseLock();
+    if (!lock.can) {
+      say(G.ship.docked ? 'Cruise drive will not spin up on the clamps'
+        : G.ship.landed ? 'Cruise drive will not spin up on the ground'
+        : 'Mass locked by ' + lock.body.name + ' — climb clear first', 4);
+      return;
+    }
+    if (G.ship.thrusterFuel < 0.5) { say('Not enough reaction mass to cruise', 3); return; }
+    if (!keepAuto) cancelAutodock(null);
+    /* A node is a plan against a trajectory, and cruise is not a
+     * trajectory — inside the bubble gravity does not apply and the ship is
+     * moved kinematically. Whatever was planned before engaging cannot
+     * survive it, so say so rather than leaving a stale line on the map. */
+    if (G.node) { clearNode(true); say('Cruise engaged — manoeuvre node dropped', 4); }
+    G.cruise = {
+      speed: Math.min(lock.maxSpeed, 2000),
+      maxSpeed: lock.maxSpeed,
+      lockBody: lock.body,
+      rate: CRUISE_BURN * 1e6,        // quoted per Mkm, which is readable
+      travelled: 0
+    };
+    G.warpIndex = 0;
+    say('Cruise drive engaged — , and . set speed, Z to drop out', 5);
+  }
+
+  function dropCruise(why, handVel) {
+    if (!G.cruise) return;
+    /* THE AUTOPILOT KNOWS BETTER THAN A GUESS. It drops out on purpose, at
+     * a point it chose, and the one velocity that is any use there is the
+     * station's own — see autoLeadPoint. Everything else still gets the
+     * circular orbit below. */
+    if (handVel) {
+      G.ship.vel = V.clone(handVel);
+      G.cruise = null;
+      G.ship.thrust = V.zero();
+      say('Cruise drive disengaged' + (why ? ' — ' + why : ''), 4);
+      return;
+    }
+    /* Hand back a sane velocity. Coming out of cruise at rest next to a
+     * planet would mean falling into it, so we leave in the circular orbit
+     * we are standing in — which is where a drive like this would put you
+     * and is the only arrival that is any use. */
+    var dom = Sim.dominantBody(G.ship.pos, G.sys, G.t);
+    /* GUARDED, because the guard that was here tested the wrong thing.
+     * `dom.mu > 0` reads mu off dom, so a null dom threw one line before
+     * the test that was meant to catch it — and `bodyState` dereferences
+     * `body.id` immediately, so it threw one line before that.
+     *
+     * dominantBody returns null for a system with no gravitating bodies.
+     * The interstellar locale deliberately keeps its one star so that stays
+     * unreachable today (see Gen.interstellarSystem, which exists precisely
+     * so nothing needs a branch for "nowhere"). But a locale that does not
+     * is one line of generation away, and disengaging the cruise drive
+     * should degrade to "your velocity is left alone", not to a crash. */
+    if (dom) {
+      var bs = Sim.bodyState(dom, G.sys, G.t);
+      var rel = V.sub(G.ship.pos, bs.pos);
+      var r = V.len(rel);
+      if (r > 1e-6 && dom.mu > 0) {
+        var up = V.scale(rel, 1 / r);
+        var ref = Math.abs(up.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 0, y: 1, z: 0 };
+        var along = V.norm(V.cross(ref, up));
+        G.ship.vel = V.addScaled(bs.vel, along, Math.sqrt(dom.mu / r));
+      }
+    }
+    G.cruise = null;
+    G.ship.thrust = V.zero();
+    say('Cruise drive disengaged' + (why ? ' — ' + why : ''), 4);
+  }
+
+  /* One frame of cruise. Kinematic on purpose: inside the bubble you are
+   * not on a trajectory, so gravity does not apply and the integrator is
+   * not consulted. */
+  function advanceCruise(dtReal) {
+    var c = G.cruise;
+    var lock = cruiseLock();
+    c.maxSpeed = lock.maxSpeed;
+    c.lockBody = lock.body;
+    if (c.speed > c.maxSpeed) c.speed = c.maxSpeed;
+    if (c.speed < CRUISE_MIN) c.speed = CRUISE_MIN;
+
+    /* Refuse to fly along a degenerate nose. Cheap insurance: anything that
+     * left the attitude basis in a bad state would otherwise show up as a
+     * cruise drive that runs, burns fuel and never goes anywhere. */
+    if (V.len(G.ship.fwd) < 1e-9) {
+      G.ship.fwd = V.len(G.ship.vel) > 1e-9 ? V.norm(G.ship.vel) : { x: 1, y: 0, z: 0 };
+      G.ship.right = V.norm(V.cross(G.ship.fwd, { x: 0, y: 0, z: 1 }));
+      if (V.len(G.ship.right) < 1e-6) G.ship.right = { x: 0, y: 1, z: 0 };
+      G.ship.up = V.cross(G.ship.right, G.ship.fwd);
+    }
+
+    var step = c.speed * dtReal;                 // km this frame
+    var burn = step * CRUISE_BURN;
+    if (burn >= G.ship.thrusterFuel) {
+      G.ship.thrusterFuel = 0;
+      Sim.refreshShip(G.ship);
+      dropCruise('out of reaction mass');
+      return;
+    }
+    G.ship.thrusterFuel -= burn;
+    c.travelled += step;
+    Sim.refreshShip(G.ship);
+
+    G.ship.pos = V.addScaled(G.ship.pos, G.ship.fwd, step);
+    G.ship.vel = V.scale(G.ship.fwd, c.speed);
+    G.t += dtReal;
+
+    /* Arrival. If the lock is squeezing us down to nothing we have run into
+     * something's gravity well, which is exactly how you are supposed to
+     * arrive — so drop out rather than grinding along at the floor speed. */
+    if (lock.clearance < 0) { dropCruise('collision avoidance'); return; }
+
+    /* Arrival, and it has to test that we are CLOSING. Dropping out simply
+     * because the target is nearby would strand you the moment you engaged
+     * cruise while still locked onto the place you were leaving — which is
+     * the normal way anyone would use it. */
+    var nav = navTargetState();
+    var autoOwnsDrop = G.autodock && G.autodock.mode === 'dock';
+    if (!autoOwnsDrop && nav && nav.closing > 0 && nav.range < Math.max(400, c.speed * 2.5)) {
+      dropCruise('arrived at ' + nav.name);
+      return;
+    }
+    if (c.maxSpeed <= CRUISE_MIN * 1.02) dropCruise('mass locked by ' + lock.body.name);
+  }
+
+  /* ---- auto-dock --------------------------------------------------------
+   * Not a teleport and not a cutscene: it commands thrust and attitude the
+   * same way you would, and the same physics moves the ship. Which means it
+   * can be watched, it can be interrupted, and if it is going to fail you
+   * can see it failing.
+   *
+   * Two phases. CLOSE flies to a standoff point off the station on a
+   * saturated proportional-derivative law; BERTH creeps in along the last
+   * few km slowly enough for the capture envelope to catch. The standoff
+   * exists so the approach never cuts through the station itself. */
+  function startAutodock() {
+    if (G.autodock) { cancelAutodock('cancelled'); return; }
+    if (G.ship.docked) { say('Already docked', 2); return; }
+    var nav = navTargetState();
+    var st = nav && nav.kind === 'body' && nav.obj.kind === 'station' ? nav.obj : G.dockTarget;
+    if (!st) { say('Lock a station first — [ ] cycles the nav list', 4); return; }
+    /* A PORT THAT WILL NOT OPEN IS NOT AN APPROACH PROBLEM, and flying the
+     * approach anyway is how a barred station reads as a broken autopilot:
+     * it cruises the leg, creeps into the envelope, and then simply sits
+     * there while the docking check refuses it once every six seconds.
+     * Refuse up front, in words — house rule 5. */
+    var barred = Combat.dockRefusal(G, st);
+    if (barred) {
+      say(st.name + ' will not take you: ' + barred.text, 9);
+      HOOKS.sound('warn');
+      return;
+    }
+    G.dockTarget = st;
+    /* No range limit any more. It used to refuse past 300,000 km, which
+     * made auto-dock a parking assistant: fine once you were already
+     * there, useless for the part of the journey that is actually tedious.
+     * It now uses the cruise drive for the long leg exactly as you would —
+     * point at the station, spin up, drop out on arrival — and only then
+     * flies the approach it always flew. The refusal became a phase. */
+    G.autodock = {
+      mode: 'dock', target: st, lock: { kind: 'body', id: st.id },
+      phase: 'close', elapsed: 0
+    };
+    var range = V.dist(Sim.bodyPosition(st, G.sys, G.t), G.ship.pos);
+    say('Auto-dock engaged: ' + st.name +
+        (range > ((st.surface || st.underground) ? AUTO_CRUISE_RANGE : AUTO_CRUISE_MIN)
+          ? ' — cruising in first' : ''), 4);
+  }
+
+  /* Match orbit, and follow. Two things you constantly want and could only
+   * do by hand: sit still relative to something, and stay with something
+   * that is moving. Both are the same guidance law auto-dock already uses
+   * with a different aim point, which is why they are a handful of lines
+   * rather than a subsystem. */
+  var AUTO_CRUISE_RANGE = 3e5;      // km — beyond this, cruise to a port on a world
+  var AUTO_CRUISE_MIN = 5e3;        // km — beyond this, cruise to an orbital port
+  var MATCH_DONE = 0.0015;          // km/s — 1.5 m/s counts as matched
+
+  function startAutoMode(mode) {
+    if (G.autodock && G.autodock.mode === mode) { cancelAutodock('cancelled'); return; }
+    if (G.ship.docked) { say('Undock first', 2); return; }
+    if (G.ship.landed) { say('On the ground', 2); return; }
+    var nav = navTargetState();
+    if (!nav) { say('Lock something first — [ ] cycles the nav list', 4); return; }
+    G.autodock = {
+      mode: mode,
+      target: nav.obj,
+      lock: { kind: nav.kind, id: nav.id !== undefined ? nav.id : nav.obj.id },
+      phase: mode === 'match' ? 'match' : 'follow',
+      elapsed: 0
+    };
+    say((mode === 'match' ? 'Matching orbit with ' : 'Following ') + nav.name, 4);
+  }
+
+  /* Where the thing we are chasing is, this instant, whether it is a world
+   * on rails or a ship being flown by somebody else. */
+  function autoTargetState(ad) {
+    if (ad.lock && ad.lock.kind === 'ship') {
+      var ships = Sim.shipsAll(G.sys, G.t);
+      for (var i = 0; i < ships.length; i++) {
+        if (ships[i].id === ad.lock.id) {
+          return { obj: ships[i], pos: ships[i].pos,
+                   vel: ships[i].vel || V.zero(), name: ships[i].name || 'contact' };
+        }
+      }
+      return null;                      // it jumped, docked, or was destroyed
+    }
+    var b = ad.lock ? G.sys.byId[ad.lock.id] : ad.target;
+    if (!b) return null;
+    var bs = Sim.bodyState(b, G.sys, G.t);
+    return { obj: b, pos: bs.pos, vel: bs.vel, name: b.name };
+  }
+
+  function cancelAutodock(why) {
+    if (!G.autodock) return;
+    G.autodock = null;
+    G.ship.thrust = V.zero();
+    if (why) say('Auto-dock ' + why, 3);
+  }
+
+  /* Point the ship at whatever the autopilot is chasing, and drop out of
+   * cruise once we are close enough for the approach law to take it. Used
+   * only while the bubble is up. */
+  function steerAutoCruise(dtReal) {
+    var ad = G.autodock;
+    if (!ad || ad.mode !== 'dock') return;
+    var ss = autoTargetState(ad);
+    if (!ss) return;
+    var lead = autoLeadPoint(ad, ss);
+    ad.phase = 'cruise';
+
+    /* Round anything in the way — routeAround, the same walk the approach
+     * uses — and head for the hold point once the line is clear. */
+    var detour = routeAround(G.ship.pos, lead.pos, null);
+    var aimPos = detour ? detour.aim : lead.pos;
+    var aimVel = detour ? detour.refVel : (lead.vel || ss.vel);
+    var rel = V.sub(aimPos, G.ship.pos);
+    var range = V.len(rel);
+
+    /* FLY TO A MOVING POINT, NOT AT IT. The bubble moves the ship in the
+     * system's frame, and the hold point moves too — the station orbiting
+     * its planet, the planet orbiting its star, tens of km/s together. The
+     * speed used to be a fraction of the distance and nothing else, which
+     * is fine at a million km and hopeless for the last few hundred: at
+     * the drive's floor of 60 km/s the ship barely out-ran the station and
+     * took minutes to close forty kilometres. Ask instead for the aim
+     * point's own velocity plus a closing term, and the gap shrinks by the
+     * same fraction every second wherever it is going.
+     *
+     * The closing term is also what winds the drive up on the long leg and
+     * back down on the way in: a fifth of the distance per second. */
+    var want = V.add(aimVel, V.scale(rel, 0.2));
+    var wantLen = V.len(want);
+    /* The drive has a floor. Where the ask falls under it, keep the aim
+     * point's velocity and spend the rest CLOSING — the magnitude is
+     * forced, so the direction has to be the one that still gets there.
+     * Flooring the speed along the old direction did not: it pointed
+     * mostly along the station's own motion and the ship sat three
+     * hundred kilometres off it indefinitely. */
+    if (wantLen < CRUISE_MIN && range > 1e-9) {
+      var u = V.scale(rel, 1 / range);
+      var au = V.dot(aimVel, u), a2 = V.dot(aimVel, aimVel);
+      var k = -au + Math.sqrt(Math.max(0, au * au - a2 + CRUISE_MIN * CRUISE_MIN));
+      want = V.addScaled(aimVel, u, k);
+      wantLen = V.len(want);
+    }
+    if (!(wantLen > 1e-9)) return;
+    faceAlong(V.scale(want, 1 / wantLen));
+    G.cruise.speed = Math.max(CRUISE_MIN, Math.min(G.cruise.maxSpeed, wantLen));
+    /* Closing speed this frame, for the drop test: the floor can carry the
+     * ship several km a frame on a slow machine, and a hold point stepped
+     * over is a hold point circled. */
+    var closeStep = Math.max(0, V.dot(V.sub(want, aimVel), V.scale(rel, 1 / Math.max(range, 1e-9)))) *
+                    Math.max(0.016, dtReal || 0.016) * 1.5;
+
+    /* Drop out AT the hold point, moving with the station. This used to
+     * hand over 150,000 km out, in a circular orbit about whatever was
+     * nearest — a direction chosen by an arbitrary cross product, so the
+     * ship came out of the bubble two to nine km/s off the station's
+     * velocity and the approach law spent the next hour killing it. Cruise
+     * is kinematic; there is no speed to carry out of it, so there is no
+     * reason to stop short. */
+    if (!detour && range < Math.max(lead.dropRange, closeStep)) dropCruise('holding off ' + ss.name, lead.vel);
+  }
+
+  /* WHERE THE AUTOPILOT PARKS YOU: a little ahead of the station on its own
+   * orbit, moving with it. A ship there is in the same orbit as the
+   * station, so it stays put relative to it — the station neither runs
+   * away nor runs you down — and the last leg is a short, slow closing
+   * along the track, which is the approach a real rendezvous flies.
+   *
+   * "Ahead" is along the station's velocity relative to what it orbits,
+   * with the radial part taken out. Something with nothing to orbit (a
+   * ship lock, a station with no parent) gets its own position back. */
+  var AUTO_LEAD_MIN = 40;           // km ahead of the station, at least
+  function autoLeadPoint(ad, ss) {
+    var st = ad.target;
+    var capture = (st && st.dockCaptureRadius) || 10;
+    var lead = Math.max(AUTO_LEAD_MIN, capture * 3);
+    var out = { pos: ss.pos, vel: ss.vel, dropRange: Math.max(10, lead * 0.5), lead: 0 };
+    /* A port on a world keeps the old hand-over: well out, in a circular
+     * orbit, and groundPlan flies the descent. "Ahead on its orbit" means
+     * nothing for something bolted to the rock. */
+    if (st && (st.surface || st.underground)) {
+      out.vel = null; out.dropRange = AUTO_CRUISE_RANGE * 0.5;
+      return out;
+    }
+    var parent = st && st.parentBody;
+    if (!parent || (ad.lock && ad.lock.kind === 'ship')) return out;
+    var ps = Sim.bodyState(parent, G.sys, G.t);
+    var radial = V.sub(ss.pos, ps.pos), rl = V.len(radial);
+    if (!(rl > 1e-9)) return out;
+    radial = V.scale(radial, 1 / rl);
+    var v = V.sub(ss.vel, ps.vel);
+    var along = V.sub(v, V.scale(radial, V.dot(v, radial)));
+    if (!(V.len(along) > 1e-12)) return out;
+    out.pos = V.addScaled(ss.pos, V.norm(along), lead);
+    out.lead = lead;
+    return out;
+  }
+
+  /* Swing the nose toward a direction — instantly. The cruise leg wants
+   * that (the bubble goes where the nose points); the approach does not,
+   * and uses slewNose below. */
+  function faceAlong(dir) {
+    G.ship.fwd = dir;
+    G.ship.right = V.norm(V.cross(G.ship.fwd, { x: 0, y: 0, z: 1 }));
+    if (V.len(G.ship.right) < 1e-6) G.ship.right = V.norm(V.cross(G.ship.fwd, { x: 0, y: 1, z: 0 }));
+    G.ship.up = V.cross(G.ship.right, G.ship.fwd);
+  }
+
+  /* THE NOSE TURNS AT A RATE, and it does not chase a command that is
+   * nearly nothing. The approach used to point the nose straight down the
+   * commanded thrust every frame, and in the last few km that command is
+   * the residue of a converged loop: tiny, and pointing wherever the
+   * rounding put it. The nose flipped up to 180 degrees between two frames,
+   * and from the seat that is the station swinging round the canopy — an
+   * autopilot that looks like it is circling when the path is dead
+   * straight. So: face the thrust while there is real thrust, face the
+   * station when there is not, and never faster than NOSE_RATE. */
+  var NOSE_RATE = 1.2;              // rad per real second — about 70 deg/s
+  function slewNose(want, dtReal) {
+    var len = V.len(want);
+    if (!(len > 1e-12)) return;
+    want = V.scale(want, 1 / len);
+    var cur = G.ship.fwd;
+    var c = Math.max(-1, Math.min(1, V.dot(cur, want)));
+    var ang = Math.acos(c);
+    var maxStep = NOSE_RATE * Math.max(1e-3, dtReal || 0.016);
+    if (ang <= maxStep) { faceAlong(want); return; }
+    /* Rotate cur toward want by maxStep in the plane they share; exactly
+     * opposite has no such plane, so borrow the ship's own up. */
+    var axisPerp = V.sub(want, V.scale(cur, c));
+    if (V.len(axisPerp) < 1e-9) axisPerp = G.ship.up || anyAcross(cur);
+    axisPerp = V.norm(axisPerp);
+    faceAlong(V.norm(V.add(V.scale(cur, Math.cos(maxStep)), V.scale(axisPerp, Math.sin(maxStep)))));
+  }
+
+  /* No autopilot may ask for more than the engine has. Every mode below
+   * ends in this, so none of them can quietly command a burn the ship
+   * cannot fly and then wonder why it never converges. */
+  function clipAccel(cmd) {
+    var mag = V.len(cmd);
+    return mag > G.ship.maxAccel ? V.scale(cmd, G.ship.maxAccel / mag) : cmd;
+  }
+
+  /* How much air to leave under the keel while crossing a world, and how
+   * fast each leg of a planetary approach is allowed to be flown. The
+   * clearance is a fraction of the world rather than a fixed number of
+   * kilometres: what counts as "well clear" of a 400 km moon is not what
+   * counts as well clear of an Earth. */
+  var GROUND_CLEAR_FRAC = 0.05;
+  var GROUND_CLEAR_MIN = 8;          // km, for the small rocks
+  var GROUND_TRANSIT_V = 6;          // km/s crossing at altitude
+  var GROUND_CLIMB_V = 2;            // km/s going up
+  var GROUND_DESCEND_V = 1.5;        // km/s coming down, before the flare
+
+  /* The flight plan for a port that sits on a world. Returns null for
+   * anything in open space, which is every station — those keep the
+   * approach they have always had.
+   *
+   * Three legs, chosen by where the ship is rather than by a state machine,
+   * so an approach interrupted and re-engaged picks up wherever it is
+   * rather than restarting:
+   *
+   *   CLIMB    — below the clearance altitude and not already overhead.
+   *              Straight up the local vertical. Nothing else is safe from
+   *              down here.
+   *   TRANSIT  — at altitude, somewhere else on the world. Aim at the
+   *              point halfway round to the pad, AT ALTITUDE. Re-derived
+   *              every frame, so it is an arc rather than a chord and the
+   *              ship never cuts the corner through the rock.
+   *   DESCEND  — overhead. Straight down at the mouth, slowly.
+   *
+   * refVel is what the desired velocity is measured against. On a world
+   * that is the pad's own velocity — it is bolted to something that both
+   * orbits and SPINS, and a descent flown against the planet's centre
+   * instead would drift sideways at the speed of the surface. */
+  function groundPlan(st, ss, ad) {
+    if (!st || !st.parentBody) return null;
+    if (!st.surface && !st.underground) return null;
+    var host = st.parentBody;
+    var hostPos = Sim.bodyPosition(host, G.sys, G.t);
+    var mouth = st.underground ? Sim.portEntrance(st, G.sys, G.t) : ss;
+
+    var up = V.sub(mouth.pos, hostPos);
+    var upLen = V.len(up);
+    if (!(upLen > 1e-9)) return null;
+    up = V.scale(up, 1 / upLen);
+
+    var clear = Math.max(host.radius * GROUND_CLEAR_FRAC, GROUND_CLEAR_MIN);
+    var shipRel = V.sub(G.ship.pos, hostPos);
+    var shipR = V.len(shipRel);
+    if (!(shipR > 1e-9)) return null;
+    var shipUp = V.scale(shipRel, 1 / shipR);
+
+    /* How far off the pad's own vertical the ship is, measured across
+     * rather than along: this is the question "am I over it", and a range
+     * cannot answer it — a ship 30 km up and a ship 30 km sideways are the
+     * same distance from the pad and only one of them may descend. */
+    var along = V.dot(shipRel, up);
+    var across = V.len(V.sub(shipRel, V.scale(up, along)));
+
+    if (across < clear * 0.30 && along > 0) {
+      return { phase: 'descend', aim: mouth.pos, refVel: mouth.vel,
+               cap: GROUND_DESCEND_V, flare: true };
+    }
+    if (shipR < host.radius + clear * 0.9) {
+      return { phase: 'climb', refVel: mouth.vel, cap: GROUND_CLIMB_V,
+               aim: V.addScaled(hostPos, shipUp, host.radius + clear * 1.25) };
+    }
+    /* Round the world at altitude — and this is where the obvious version
+     * is wrong. "Aim halfway round" puts the waypoint ninety degrees away
+     * when the pad is on the far side, and the ship flies the CHORD to it:
+     * two points ninety degrees apart on a sphere of radius r are joined
+     * by a line that passes r·cos45° from the centre, which for a ship a
+     * hundred kilometres up is inside the planet. That is the antipodal
+     * crash, and it is the same mistake as the original bug wearing a
+     * waypoint.
+     *
+     * So the step is as large as the chord can be and still clear the
+     * ground: two points separated by α are joined by a line that comes
+     * within r·cos(α/2) of the centre, so α ≤ 2·acos((R+clear)/r). Take
+     * nine tenths of that and re-derive it every frame — the ship walks
+     * round the world in secants, each one entirely above the rock, and
+     * the step grows as it climbs.
+     *
+     * Radius is whichever is higher of the ship's own altitude and the
+     * clearance, so a ship that came in high stays high rather than being
+     * told to dive to the floor and then cross. */
+    var r = Math.max(shipR, host.radius + clear);
+    var toGo = Math.acos(Math.max(-1, Math.min(1, V.dot(shipUp, up))));
+    var maxStep = 2 * Math.acos(Math.min(0.99, (host.radius + clear) / r));
+    var step = Math.min(toGo, maxStep * 0.9);
+
+    /* The direction to lean in: the component of the pad's vertical that is
+     * across the ship's own, which is undefined at the poles of this little
+     * geometry — directly overhead (handled above) and exactly antipodal. */
+    var tang = V.sub(up, V.scale(shipUp, V.dot(up, shipUp)));
+    if (V.len(tang) < 1e-9) tang = anyAcross(shipUp);
+    tang = V.norm(tang);
+    var mid = V.add(V.scale(shipUp, Math.cos(step)), V.scale(tang, Math.sin(step)));
+    return { phase: 'transit', aim: V.addScaled(hostPos, V.norm(mid), r),
+             refVel: mouth.vel, cap: GROUND_TRANSIT_V };
+  }
+
+  /* ---- NOTHING FLIES THROUGH A WORLD -----------------------------------
+   * groundPlan fixed this for ports ON a world. It stayed wrong for ports
+   * AROUND one: an orbital station is aimed at down a straight line, and
+   * when the station is on the far side of its planet that line goes
+   * through the planet. Measured 2026-09-18 on kawartha, every orbital port
+   * in the system, ship in a low orbit at 0, 90 and 180 degrees from the
+   * station: the first two docked every time, and 180 put five of six into
+   * the ground within two real seconds. The cruise leg and follow mode had
+   * the same straight line.
+   *
+   * So every straight-line leg asks this first. If the line from the ship
+   * to where it is going passes inside some world's keep-out sphere — the
+   * surface plus the same clearance groundPlan keeps, or the top of the
+   * air if that is higher, so a detour is not also a re-entry — it gets a
+   * waypoint instead: CLIMB straight up if the ship is already inside the
+   * sphere, otherwise walk round it in secants, the same geometry
+   * groundPlan's TRANSIT uses and for the same reason (aiming "at the
+   * side" of a world flies the chord, and the chord is inside it).
+   *
+   * The end of the line is exempt from its own world — a station orbiting
+   * inside the keep-out would otherwise make the sphere unreachable — by
+   * shrinking that world's sphere to just under the aim's own radius.
+   * `skip` is a world the caller is already handling (groundPlan's host). */
+  /* GRAVITY FIRST, STEERING WITH WHAT IS LEFT. Cancelling the local pull
+   * by adding it to the steering command and then clipping the SUM to the
+   * engine's limit scales the gravity term down along with everything
+   * else — so exactly when the autopilot is working hardest, it stops
+   * holding the ship up. On a heavy world (Mirven I pulls 14 m/s² against
+   * a Talon's 19) that was a ship that sank a few hundred kilometres every
+   * time it tried to turn. The pull is paid in full; the steering gets the
+   * largest share of it that still fits. */
+  function holdUpThenSteer(steer) {
+    var g = Sim.acceleration(G.ship.pos, G.sys, G.t);
+    var hold = V.scale(g, -1);
+    var A = G.ship.maxAccel;
+    var hh = V.dot(hold, hold);
+    if (hh >= A * A) return V.scale(hold, A / Math.sqrt(hh));   // it cannot even hover
+    var ee = V.dot(steer, steer);
+    if (ee < 1e-30) return hold;
+    var eh = V.dot(steer, hold);
+    // largest k in [0,1] with |hold + k·steer| <= A
+    var k = (-eh + Math.sqrt(eh * eh + ee * (A * A - hh))) / ee;
+    return V.addScaled(hold, steer, Math.max(0, Math.min(1, k)));
+  }
+
+  function keepOutRadius(b) {
+    var clear = Math.max(b.radius * GROUND_CLEAR_FRAC, GROUND_CLEAR_MIN);
+    if (b.atmosphere && b.atmosphere.top > clear) clear = b.atmosphere.top;
+    return b.radius + clear;
+  }
+
+  function routeAround(from, aim, skip) {
+    var seg = V.sub(aim, from);
+    var segLen2 = V.dot(seg, seg);
+    var worst = null, worstDepth = 0;
+    for (var i = 0; i < G.sys.gravBodies.length; i++) {
+      var b = G.sys.gravBodies[i];
+      if (b === skip) continue;
+      var bs = Sim.bodyState(b, G.sys, G.t);
+      var keep = Math.min(keepOutRadius(b), V.dist(aim, bs.pos) * 0.97);
+      var t = segLen2 > 1e-18 ? V.dot(V.sub(bs.pos, from), seg) / segLen2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      var miss = V.dist(V.addScaled(from, seg, t), bs.pos);
+      if (miss < keep && keep - miss > worstDepth) {
+        worstDepth = keep - miss;
+        worst = { body: b, pos: bs.pos, vel: bs.vel, keep: keep };
+      }
+    }
+    if (!worst) return null;
+
+    var c = worst.pos, keepR = worst.keep;
+    var shipRel = V.sub(from, c);
+    var shipR = V.len(shipRel);
+    if (!(shipR > 1e-9)) return null;
+    var shipUp = V.scale(shipRel, 1 / shipR);
+    if (shipR < keepR) {
+      return { phase: 'climb', body: worst.body, refVel: worst.vel,
+               aim: V.addScaled(c, shipUp, keepR * 1.15) };
+    }
+    /* The waypoint sits at the DESTINATION's height round the world, not
+     * at the ship's. Walking round at your own altitude hugs the keep-out
+     * the whole way (every secant dips to it) and crawls — measured, a
+     * quarter of an hour of real time to get round a big world. A station
+     * lives well above the rock, and a line from low down out to its
+     * height clears far more of the curve per leg: two tangents, one from
+     * each end, so the step is acos(keep/r1) + acos(keep/r2). */
+    var aimRel = V.sub(aim, c);
+    var aimUp = V.norm(aimRel);
+    /* Planned against a sphere a little larger than the hard keep-out, so
+     * the tangents have margin and the ship climbs away from the limit
+     * instead of skimming along it for the whole crossing. */
+    var soft = keepR * 1.08;
+    var r = Math.max(V.len(aimRel), soft * 1.02);
+    var r1 = Math.max(shipR, soft * 1.0001);
+    var toGo = Math.acos(Math.max(-1, Math.min(1, V.dot(shipUp, aimUp))));
+    var maxStep = Math.acos(Math.min(0.9999, soft / r1)) + Math.acos(Math.min(0.9999, soft / r));
+    var step = Math.min(toGo, maxStep * 0.9);
+    var tang = V.sub(aimUp, V.scale(shipUp, V.dot(aimUp, shipUp)));
+    if (V.len(tang) < 1e-9) tang = anyAcross(shipUp);
+    tang = V.norm(tang);
+    var mid = V.add(V.scale(shipUp, Math.cos(step)), V.scale(tang, Math.sin(step)));
+    return { phase: 'around', body: worst.body, refVel: worst.vel,
+             aim: V.addScaled(c, V.norm(mid), r) };
+  }
+
+  /* Any unit vector perpendicular to this one. Only ever needed for the
+   * exactly-antipodal case above, which is measure-zero and happens the
+   * first time somebody tests it deliberately. */
+  function anyAcross(v) {
+    var pick = Math.abs(v.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+    return V.norm(V.cross(v, pick));
+  }
+
+  /* Returns the commanded acceleration, or null when it is done. */
+  function advanceAutodock(dtSim, dtReal) {
+    var ad = G.autodock;
+    var st = ad.target;
+    if (G.ship.docked) { G.autodock = null; return null; }
+    ad.elapsed += dtSim;
+
+    var ss = autoTargetState(ad);
+    if (!ss) { cancelAutodock('lost the contact'); return null; }
+    /* And if it becomes barred DURING the approach — a bounty can grow
+     * while you fly, and customs can order you out of a system you are
+     * already crossing. Checked here rather than only at engagement
+     * because the autopilot is the thing that would otherwise keep flying
+     * an approach that can never complete. */
+    if (ad.mode === 'dock') {
+      var barred2 = Combat.dockRefusal(G, st);
+      if (barred2) { cancelAutodock('refused — ' + barred2.text); return null; }
+    }
+    var rel = V.sub(ss.pos, G.ship.pos);
+    var range = V.len(rel);
+    var vrel = V.sub(G.ship.vel, ss.vel);
+
+    /* ---- match orbit ---------------------------------------------------
+     * Null the relative velocity and stop. Not "fly to it" — just stop
+     * moving with respect to it, which is the manoeuvre that turns a
+     * flyby into a rendezvous and is miserable to fly by eye. */
+    if (ad.mode === 'match') {
+      var closing = V.len(vrel);
+      if (closing < MATCH_DONE) {
+        G.autodock = null;
+        say('Orbit matched with ' + ss.name + ' — ' +
+            fmtSpeed(closing) + ' relative', 5);
+        return V.zero();
+      }
+      G.warpIndex = Math.min(closing > 1 ? 3 : closing > 0.05 ? 2 : 1, WARPS.length - 1);
+      return clipAccel(V.scale(V.sub(ss.vel, G.ship.vel), 0.6));
+    }
+
+    /* ---- follow --------------------------------------------------------
+     * Hold station off something and stay there while it moves. The aim
+     * point is where you already are relative to it, pulled to a sensible
+     * standoff, so engaging it does not swing you round to some canonical
+     * side — it just stops you drifting. It never completes; it is a mode
+     * you fly in until you cancel it. */
+    if (ad.mode === 'follow') {
+      var stand = Math.max(2, (ss.obj.radius || 0.05) * 8);
+      var out = range > 1e-9 ? V.scale(rel, -1 / range) : { x: 1, y: 0, z: 0 };
+      var hold = V.addScaled(ss.pos, out, stand);
+      var holdWay = routeAround(G.ship.pos, hold, null);
+      if (holdWay) hold = holdWay.aim;
+      var toHold = V.sub(hold, G.ship.pos);
+      var dHold = V.len(toHold);
+      var vHold = Math.min(2, Math.sqrt(2 * G.ship.maxAccel * 0.55 * Math.max(0, dHold)));
+      var dirHold = dHold > 1e-9 ? V.scale(toHold, 1 / dHold) : V.zero();
+      G.warpIndex = Math.min(dHold > 5e3 ? 3 : dHold > 100 ? 2 : 1, WARPS.length - 1);
+      var holdCmd = V.scale(V.sub(V.addScaled(holdWay ? holdWay.refVel : ss.vel, dirHold, vHold),
+                                  G.ship.vel), 0.5);
+      if (holdWay) holdCmd = holdUpThenSteer(holdCmd);
+      return clipAccel(holdCmd);
+    }
+
+    /* ---- the long leg, under cruise ------------------------------------
+     * Point at the hold point ahead of the station, spin the drive up, and
+     * drop out there moving with it (steerAutoCruise). No thrust is
+     * commanded while the bubble is up, because inside it the ship is moved
+     * kinematically and thrust is not what is flying it. */
+    var leadPt = ad.mode === 'dock' ? autoLeadPoint(ad, ss) : null;
+    var dLead = leadPt ? V.dist(leadPt.pos, G.ship.pos) : range;
+    /* HOW FAR IS WORTH THE DRIVE. It used to be 300,000 km, because the
+     * drive used to hand you back kilometres a second off the station's
+     * velocity and the hand-over had to be far out to leave room to kill
+     * it. It now hands you back at the hold point moving with the station,
+     * so anything the approach law would fly at 500x is flown under cruise
+     * instead — a parking orbit's worth of separation went from an hour on
+     * thrust to seconds. A port on a world keeps the old hand-over and the
+     * old threshold: it drops out well clear, and a lower bar would engage
+     * the drive inside the range it drops out at. */
+    var cruiseFrom = (leadPt && leadPt.vel) ? AUTO_CRUISE_MIN : AUTO_CRUISE_RANGE;
+    if (dLead > cruiseFrom || (G.cruise && dLead > leadPt.dropRange)) {
+      ad.phase = 'cruise';
+      var cruiseWay = routeAround(G.ship.pos, leadPt.pos, null);
+      faceAlong(V.norm(cruiseWay ? V.sub(cruiseWay.aim, G.ship.pos) : V.sub(leadPt.pos, G.ship.pos)));
+      if (!G.cruise) {
+        /* One attempt per second or so, not per frame: if the drive will
+         * not spin up (mass locked, dry tank) the approach simply carries
+         * on under thrust, slowly, which still gets there. */
+        if (!ad.cruiseTry || ad.elapsed - ad.cruiseTry > 1) {
+          ad.cruiseTry = ad.elapsed;
+          if (cruiseLock().can && G.ship.thrusterFuel > 0.5) toggleCruise(true);
+        }
+      }
+      if (G.cruise) return V.zero();
+    } else if (G.cruise) {
+      dropCruise('holding off ' + ss.name, leadPt ? leadPt.vel : null);
+    }
+
+    if (range > 5e5 && !G.cruise && ad.phase !== 'cruise') {
+      cancelAutodock('lost the station'); return null;
+    }
+
+    /* Aim at a point off the station rather than at the station, until the
+     * last stretch. Flying straight at a docking port from three thousand
+     * kilometres means arriving with the whole structure between you and
+     * where you wanted to be. */
+    var standoff = st.dockCaptureRadius * (ad.phase === 'close' ? 2.6 : 0.35);
+    ad.phase = range < st.dockCaptureRadius * 4 ? 'berth' : 'close';
+
+    /* ---- A PORT ON A WORLD IS NOT A RENDEZVOUS --------------------------
+     *
+     * Everything above this point is written for a station hanging in
+     * space, where the straight line between you and it is empty. A pad —
+     * or the mouth of a shaft — is bolted to several hundred kilometres of
+     * rock, and the straight line to it goes through the rock whenever the
+     * pad is not already on your side of the world.
+     *
+     * Which is exactly what the autopilot did. Flown at a surface port
+     * from 900 km it aimed at the pad, wound the throttle up, crossed the
+     * horizon at three and a quarter kilometres a second and hit the
+     * ground 521 km short — "landed", not docked, and the autopilot still
+     * sitting there in CLOSE with nothing left to fly. From the cockpit
+     * that reads as a pilot that will not commit: it swings at the world,
+     * bounces off it, and goes round again.
+     *
+     * So a world gets a flight plan rather than an aim point. Climb to a
+     * safe altitude if you are under it, cross at that altitude on an arc
+     * rather than through the chord, and only descend once you are
+     * actually over the thing. Each leg is still flown by the same
+     * guidance law below; all this decides is where to point it and how
+     * fast it may go. */
+    var ground = groundPlan(st, ss, ad);
+    var shaftAxis = null, shaftMouth = null;
+    if (!ground && st.underground && st.parentBody) {
+      shaftMouth = Sim.portEntrance(st, G.sys, G.t);
+      var hostPos = Sim.bodyPosition(st.parentBody, G.sys, G.t);
+      shaftAxis = V.norm(V.sub(shaftMouth.pos, hostPos));
+    }
+
+    /* Drive the clock rather than merely capping it.
+     *
+     * The first version only clamped the warp down, which meant the
+     * autopilot flew the whole approach at one times real time: correct,
+     * convergent, and about ten minutes of watching a dot creep. A pilot
+     * handed a long approach would wind the clock up and then wind it back
+     * down for the delicate part, so that is what this does.
+     *
+     * The ceiling is set by the guidance loop, not by taste: the law
+     * updates once a frame, so a frame must stay short against the time it
+     * takes to brake from the current speed (v/a, of order a minute here).
+     * A few seconds of simulation per frame is comfortable; a few minutes
+     * would sail straight past the station between corrections. */
+    var want = range > 2.0e4 ? 4        // 500x  -> ~8 s per frame
+             : range > 2.0e3 ? 3        // 100x  -> ~1.6 s
+             : range > st.dockCaptureRadius * 3 ? 2   // 25x -> ~0.4 s
+             : 1;                       // 5x, for the last few km
+    /* Not near a world, whatever the range says. Eight seconds of
+     * simulation per frame is fine in empty space and is a mountain
+     * arriving between two corrections when you are twenty kilometres over
+     * one — the guidance law only gets a vote once a frame. */
+    if (ground) {
+      want = Math.min(want, 2);
+      /* And down to real-ish time for the last stretch of the descent,
+       * where a frame's worth of simulation is measured against the
+       * envelope rather than against the sky. */
+      if (ground.phase === 'descend' &&
+          V.dist(G.ship.pos, ground.aim) < (st.dockCaptureRadius || 1.2) * 20) want = 1;
+    }
+    G.warpIndex = Math.min(want, WARPS.length - 1);
+
+    var aim = ground ? ground.aim
+            : (shaftAxis && ad.phase === 'close')
+              ? V.addScaled(shaftMouth.pos, shaftAxis, standoff)
+              : V.addScaled(ss.pos, V.norm(V.scale(rel, -1)), standoff);
+    /* And whatever the aim, not through a world on the way to it. The
+     * ground plan owns its own host; anything else in the way — including
+     * a moon between you and a pad — is routed round. */
+    var finalAim = aim;
+    var detour = routeAround(G.ship.pos, aim, ground ? st.parentBody : null);
+    if (detour) {
+      aim = detour.aim;
+      ad.phase = detour.phase === 'climb' ? 'climb' : 'around';
+      /* Round a world, the clock comes down for the same reason it does
+       * over a pad: eight seconds of simulation between corrections is a
+       * mountain arriving unannounced. */
+      G.warpIndex = Math.min(G.warpIndex, 2);
+    }
+    var toAim = V.sub(aim, G.ship.pos);
+    var dAim = V.len(toAim);
+
+    /* Approach speed we can still stop from, with a margin. This is the
+     * whole guidance law: go as fast as braking distance allows, and null
+     * the sideways drift. */
+    var brake = G.ship.maxAccel * 0.55;
+    var speedCap = ground ? ground.cap : (ad.phase === 'berth' ? 0.9 : 45);
+    var vWant;
+    if (ground && ground.flare) {
+      /* THE DESCENT BRAKES TO A CRAWL AT THE ENVELOPE, not to a stop at
+       * the ground. Braking to zero at the pad means the whole fall is
+       * flown at the speed the last metre allows — 167 km at fifty metres
+       * a second, which is forty minutes of watching an altimeter and the
+       * reason the first version of this simply never arrived.
+       *
+       * Half the braking authority, because this is the leg where being
+       * wrong costs the hull, and a terminal speed the pad will actually
+       * catch rather than zero. */
+      var stop = (st.dockCaptureRadius || 1.2) * 0.5;
+      var vTerm = (st.dockMaxSpeed || 0.02) * 0.6;
+      vWant = Math.min(speedCap,
+                       vTerm + Math.sqrt(2 * brake * 0.5 * Math.max(0, dAim - stop)));
+    } else {
+      vWant = Math.min(speedCap, Math.sqrt(2 * brake * Math.max(0, dAim)));
+    }
+    /* A waypoint can be further off than the thing it is a way to. Speed
+     * is still owed to the real destination's braking distance, or the
+     * last leg starts inside it and overshoots. */
+    if (detour) {
+      vWant = Math.min(vWant, GROUND_TRANSIT_V * 2,
+        Math.sqrt(2 * brake * Math.max(0, V.dist(finalAim, G.ship.pos))) + GROUND_CLIMB_V);
+    }
+    var dirAim = dAim > 1e-9 ? V.scale(toAim, 1 / dAim) : V.zero();
+    var desired = V.addScaled(detour ? detour.refVel : ground ? ground.refVel : ss.vel,
+                              dirAim, vWant);
+    var err = V.sub(desired, G.ship.vel);
+
+    var cmd = V.scale(err, (ground || detour) ? 0.9 : 0.5);
+    /* HOLD THE SHIP UP WHILE IT DOES THAT. Over a world the guidance law
+     * is chasing a velocity that gravity is pulling it off every second,
+     * and a proportional term alone answers that with a permanent sag —
+     * the ship descends faster than it meant to and arrives at the pad
+     * carrying it. Cancelling the local pull explicitly leaves the error
+     * term doing only the job it is good at. */
+    if (ground || detour) cmd = holdUpThenSteer(cmd);
+    var mag = V.len(cmd);
+    if (mag > G.ship.maxAccel) cmd = V.scale(cmd, G.ship.maxAccel / mag);
+
+    /* GEAR DOWN BEFORE THE PAD, not after it has refused you. A pad will
+     * not catch a ship with the gear up (Sim raises gearBalked and the
+     * cockpit nags), and an autopilot that flies a perfect approach into
+     * that refusal is the same bug as one that never arrives. */
+    if (ground && ground.phase === 'descend' && !G.ship.gear) G.ship.gear = true;
+    if (ground) ad.phase = ground.phase;
+
+    // Point the nose where we are pushing while we are pushing; at the
+    // station otherwise. Rate-limited — see slewNose.
+    slewNose(V.len(cmd) > G.ship.maxAccel * 0.15 ? cmd : rel, dtReal);
+    return cmd;
+  }
+
+  /* ---- manoeuvre nodes --------------------------------------------------
+   * Plan a burn, see the orbit it gives you, then fly it. This is the
+   * difference between steering by feel and navigating.
+   *
+   * The node is planned as an impulse and flown as a real burn — see the
+   * long note in sim.js for why that split is the right one. What that
+   * means up here is that there are two numbers on the instrument the
+   * player has to reconcile: the delta-v the plan wants, and the minutes of
+   * engine time it costs. Both are shown, always.
+   */
+
+  /* Nudge steps, in km/s. Small enough that the fine step can trim a
+   * transfer, coarse enough that the normal step gets you across a
+   * planetary insertion without wearing out a key. */
+  var NODE_DV_STEP = 0.005;        // 5 m/s
+  var NODE_DV_FINE = 0.0005;       // 0.5 m/s
+  var NODE_DV_COARSE = 0.05;       // 50 m/s
+
+  function nodeTimeStep(fine, coarse) {
+    /* Time steps are a FRACTION OF THE ORBIT, not a fixed number of
+     * seconds. A node in a 90-minute low orbit and a node in a six-month
+     * heliocentric one are both dragged around their own orbit at the same
+     * feel, which a fixed step cannot do — 60 s is a big move in the first
+     * and invisible in the second. */
+    var ap = Sim.apsisTimes(G.ship, G.sys, G.t);
+    var period = (ap && isFinite(ap.period)) ? ap.period : 3600;
+    var frac = fine ? 0.002 : coarse ? 0.05 : 0.01;
+    return Math.max(1, period * frac);
+  }
+
+  function placeNode(prompt) {
+    if (G.ship.docked) { say('Nothing to plan from the clamps — undock first', 3); return; }
+    if (G.ship.landed) { say('Nothing to plan from the ground', 3); return; }
+    /* Default placement is the next apoapsis. Almost every burn worth
+     * planning happens at an apsis, and dropping the node at "somewhere
+     * ahead of you" would mean the player's first act is always to go
+     * hunting for one. On a circular orbit there is no apsis to find, so
+     * fall back to a quarter of an orbit ahead — far enough to see. */
+    var ap = Sim.apsisTimes(G.ship, G.sys, G.t);
+    var lead;
+    if (ap && !ap.circular) lead = ap.toApoapsis;
+    else if (ap) lead = ap.period * 0.25;
+    else lead = 600;
+    G.node = Sim.makeNode(G.t + Math.max(5, lead), { pro: 0, nor: 0, rad: 0 });
+    G.nodeAxis = 0;
+    G.nodeStale = 0;
+    say(prompt || 'Node placed — I cycles axis, − and = set it, \\ flies it', 6);
+  }
+
+  function clearNode(quiet) {
+    if (!G.node) { if (!quiet) say('No node to clear', 1.5); return; }
+    cancelNodeBurn(null);
+    G.node = null; G.nodePlan = null; G.nodeAfter = null;
+    G.nodeHandles = null; G.nodeDrag = null;
+    if (!quiet) say('Manoeuvre node cleared', 2);
+  }
+
+  function cycleNodeAxis(dir) {
+    G.nodeAxis = (G.nodeAxis + dir + NODE_AXES.length) % NODE_AXES.length;
+    say('Node axis: ' + NODE_AXES[G.nodeAxis].label, 1.8);
+  }
+
+  /* One nudge of whichever axis is selected. */
+  function adjustNode(sign, fine, coarse) {
+    if (!G.node) { placeNode(); return; }
+    var axis = NODE_AXES[G.nodeAxis];
+    if (axis.id === 'time') {
+      var dt = nodeTimeStep(fine, coarse) * sign;
+      /* A node cannot be in the past, and it cannot be so close that the
+       * burn would have to have started already. Clamp to a few seconds
+       * ahead rather than refusing the keystroke — refusing feels broken. */
+      G.node.t = Math.max(G.t + 2, G.node.t + dt);
+    } else {
+      var step = fine ? NODE_DV_FINE : coarse ? NODE_DV_COARSE : NODE_DV_STEP;
+      G.node.dv[axis.id] += step * sign;
+      if (Math.abs(G.node.dv[axis.id]) < 1e-9) G.node.dv[axis.id] = 0;
+    }
+    G.nodeStale = 0;
+  }
+
+  function snapNode(which) {
+    if (!G.node) { placeNode(); return; }
+    var ap = Sim.apsisTimes(G.ship, G.sys, G.t);
+    if (!ap) { say('No closed orbit to snap to', 2.5); return; }
+    if (ap.circular) { say('Orbit is circular — no apsis to snap to', 3); return; }
+    G.node.t = G.t + (which === 'peri' ? ap.toPeriapsis : ap.toApoapsis);
+    G.nodeStale = 0;
+    say('Node at next ' + (which === 'peri' ? 'periapsis' : 'apoapsis'), 2.5);
+  }
+
+  /* Recompute the plan and the resulting orbit. Expensive — it integrates
+   * from now to the node — so it runs on its own stale clock like the live
+   * prediction does, and any edit resets that clock to zero for an
+   * immediate redraw. */
+  function refreshNodePlan(dtReal) {
+    if (!G.node) { G.nodePlan = null; G.nodeAfter = null; return; }
+    G.nodeStale -= dtReal;
+    if (G.nodeStale > 0) return;
+    G.nodeStale = 0.3;
+
+    var ref = (G.trajectory && G.trajectory.reference)
+      || Sim.dominantBody(G.ship.pos, G.sys, G.t);
+    G.nodePlan = Sim.nodePlan(G.ship, G.sys, G.t, G.node,
+      { samples: 220, reference: ref, maxSteps: 4000 });
+    if (G.nodePlan && G.nodePlan.magnitude > 1e-9) {
+      G.nodeAfter = Sim.predictAfterNode(G.nodePlan, G.sys,
+        { maxPoints: 420, reference: ref });
+    } else {
+      G.nodeAfter = null;
+    }
+  }
+
+  /* ---- the cursor -------------------------------------------------------
+   * Left Alt swaps what the mouse is for. Held down, the mouse stops being
+   * the pilot's head (in the cockpit) or the camera gimbal (outside) and
+   * becomes a cursor that can grab things. Released, it goes straight back.
+   *
+   * A modifier rather than a mode toggle on purpose: you reach for it, do
+   * one thing, and let go, so there is never a state to be surprised by.
+   * Letting go mid-drag also ends the drag, which is the behaviour a hand
+   * expects from a key it is holding. */
+  function setCursorMode(on) {
+    if (G.cursor.active === on) return;
+    G.cursor.active = on;
+    /* Either direction: taking the mouse away for the interface has to let
+     * go of the triggers, and so does handing it back. */
+    releaseTriggers();
+    if (!on) {
+      G.nodeDrag = null;
+      G.cursor.over = null;
+      G.nodeStale = 0;
+      dragging = false;
+    }
+  }
+
+  function cursorAt(clientX, clientY) {
+    var r = canvas.getBoundingClientRect();
+    G.cursor.x = clientX - r.left;
+    G.cursor.y = clientY - r.top;
+    G.cursor.over = G.nodeDrag ? G.nodeDrag.handle : hitHandle(G.cursor.x, G.cursor.y);
+  }
+
+  /* Which handle, if any, is under a screen point. Handles are stashed by
+   * the renderer each frame (it is the only thing that knows where the
+   * camera put them), so this is a plain distance test. */
+  function hitHandle(x, y) {
+    var hs = G.nodeHandles;
+    if (!hs || !hs.length) return null;
+    var best = null, bestD = 14 * 14;    // 14 px grab radius
+    for (var i = 0; i < hs.length; i++) {
+      var dx = hs[i].x - x, dy = hs[i].y - y;
+      var d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = hs[i]; }
+    }
+    return best;
+  }
+
+  function beginHandleDrag() {
+    var h = G.cursor.over;
+    if (!h || !G.node) return;
+    G.nodeDrag = {
+      handle: h, axis: h.axis, sign: h.sign,
+      startValue: G.node.dv[h.axis],
+      startX: G.cursor.x, startY: G.cursor.y
+    };
+    G.nodeAxis = h.axisIndex;
+  }
+
+  /* Drag maths: project the mouse's travel onto the handle's own on-screen
+   * direction. Pulling the prograde handle outward adds prograde, pushing
+   * it back through the node takes it away and keeps going into retrograde
+   * — one handle covers both halves of the axis, which is why there is no
+   * separate retrograde handle to hunt for. */
+  function dragHandleTo(clientX, clientY, fine) {
+    var d = G.nodeDrag;
+    if (!d || !G.node) return;
+    var r = canvas.getBoundingClientRect();
+    var x = clientX - r.left, y = clientY - r.top;
+    var along = (x - d.startX) * d.handle.dirX + (y - d.startY) * d.handle.dirY;
+    var perKm = d.handle.kmsPerPx * (fine ? 0.1 : 1);
+    G.node.dv[d.axis] = d.startValue + along * perKm * d.sign;
+    if (Math.abs(G.node.dv[d.axis]) < 1e-9) G.node.dv[d.axis] = 0;
+    G.nodeStale = 0;
+  }
+
+  /* ---- flying the node --------------------------------------------------
+   * Same contract as auto-dock: it commands thrust and attitude, the same
+   * physics moves the ship, and touching a thruster takes it back.
+   *
+   * Two phases. ALIGN points the nose along the planned delta-v and waits
+   * for the clock. BURN holds that attitude and runs the engine until the
+   * delta-v is spent — counted by integrating what the engine actually
+   * delivered, not by running a stopwatch, so a burn interrupted by
+   * anything at all resumes with the right amount left rather than the
+   * amount the plan predicted at ignition. */
+  function startNodeBurn() {
+    if (!G.node) { say('No node to fly', 2); return; }
+    if (G.nodeBurn) { cancelNodeBurn('cancelled'); return; }
+    if (G.ship.docked) { say('Release the clamps first', 2.5); return; }
+    if (G.cruise) { say('Drop out of cruise first', 3); return; }
+    var plan = G.nodePlan;
+    if (!plan || plan.magnitude < 1e-9) { say('Node has no delta-v set', 3); return; }
+    if (!plan.burn.feasible) {
+      say('Not enough reaction mass: needs ' + plan.burn.fuel.toFixed(2) +
+          ' t, tank holds ' + G.ship.thrusterFuel.toFixed(2) + ' t', 6);
+      return;
+    }
+    cancelAutodock(null);
+    G.nodeBurn = { phase: 'align', remaining: plan.magnitude, dir: null, spent: 0 };
+    /* The autopilot flies the plan it is given, including one that ends in
+     * the ground — a deorbit is a real manoeuvre. But it says so, loudly,
+     * at the moment of arming, rather than letting the first sign be the
+     * impact klaxon a few minutes later. */
+    var after = plan.after;
+    if (after && isFinite(after.periAlt) && after.periAlt < 0) {
+      say('Node autopilot armed — WARNING: this burn puts periapsis ' +
+          fmtDist(-after.periAlt) + ' underground', 8);
+      HOOKS.sound('warn');
+      return;
+    }
+    say('Node autopilot armed — burn in ' + fmtTime(Math.max(0, plan.countdown)), 5);
+  }
+
+  function cancelNodeBurn(why) {
+    if (!G.nodeBurn) return;
+    G.nodeBurn = null;
+    G.ship.thrust = V.zero();
+    if (why) say('Node autopilot ' + why, 3);
+  }
+
+  /* Returns the commanded acceleration, or null when it has nothing to
+   * command this frame (still waiting for the clock, or finished). */
+  function advanceNodeBurn(dtSim) {
+    var nb = G.nodeBurn, plan = G.nodePlan;
+    if (!plan) return null;
+
+    /* The burn direction is FROZEN AT IGNITION. Recomputing it every frame
+     * from the live orbital frame would chase its own tail — the burn is
+     * changing the very velocity vector that defines "prograde", so a
+     * node asking for pure prograde would curve away from the plan it was
+     * checked against. A real spacecraft holds inertial attitude through a
+     * burn for the same reason. */
+    if (!nb.dir) {
+      nb.dir = plan.magnitude > 1e-12
+        ? V.scale(plan.dvVec, 1 / plan.magnitude) : null;
+      if (!nb.dir) { cancelNodeBurn('has no direction'); return null; }
+    }
+
+    // Point the nose along the burn, always — even while waiting, so the
+    // player can see the autopilot has the attitude before the clock runs.
+    G.ship.fwd = V.clone(nb.dir);
+    G.ship.right = V.norm(V.cross(G.ship.fwd, { x: 0, y: 0, z: 1 }));
+    if (V.len(G.ship.right) < 1e-6) {
+      G.ship.right = V.norm(V.cross(G.ship.fwd, { x: 0, y: 1, z: 0 }));
+    }
+    G.ship.up = V.cross(G.ship.right, G.ship.fwd);
+    G.ship.angRate = { pitch: 0, yaw: 0, roll: 0 };
+
+    var toIgnition = plan.ignition - G.t;
+    if (nb.phase === 'align') {
+      /* Hold the clock down as ignition approaches, or a single warped
+       * frame steps clean over the whole burn window. Coming down in
+       * stages rather than straight to 1x means the wait is not tedious. */
+      if (toIgnition < 120) G.warpIndex = Math.min(G.warpIndex, 2);
+      if (toIgnition < 20) G.warpIndex = 0;
+      if (toIgnition > 0) return null;
+      nb.phase = 'burn';
+      say('Ignition — ' + fmtSpeed(nb.remaining) + ' to burn', 4);
+    }
+
+    if (nb.phase === 'burn') {
+      G.warpIndex = 0;
+      if (nb.remaining <= 0) { finishNodeBurn(); return null; }
+      if (G.ship.thrusterFuel <= 0) { cancelNodeBurn('out of reaction mass'); return null; }
+
+      /* Throttle back over the last fraction of a second of burn so the
+       * final substep cannot overshoot the target delta-v. Without this a
+       * frame worth more delta-v than remains would sail straight past it
+       * and the node would never converge. */
+      var accel = G.ship.maxAccel;
+      var dt = Math.max(dtSim, 1e-6);
+      var throttle = Math.min(1, nb.remaining / (accel * dt));
+      var cmd = V.scale(nb.dir, accel * throttle);
+      // Count what the engine will actually deliver this step.
+      nb.remaining -= accel * throttle * dt;
+      nb.spent += accel * throttle * dt;
+      if (nb.remaining <= 1e-9) nb.remaining = 0;
+      return cmd;
+    }
+    return null;
+  }
+
+  function finishNodeBurn() {
+    var spent = G.nodeBurn ? G.nodeBurn.spent : 0;
+    G.nodeBurn = null;
+    G.ship.thrust = V.zero();
+    G.node = null; G.nodePlan = null; G.nodeAfter = null; G.nodeHandles = null;
+    var oe = Sim.oscElements(G.ship, G.sys, G.t);
+    say('Burn complete — ' + fmtSpeed(spent) + ' delivered'
+        + (oe ? '.  Periapsis ' + fmtDist(oe.periAlt) + ', apoapsis '
+                + (isFinite(oe.apoAlt) ? fmtDist(oe.apoAlt) : 'escape') : ''), 7);
+  }
+
+  /* ---- navigation targets -----------------------------------------------
+   * Everything in the system you might want to fly at, in one list, sorted
+   * by how far away it is. Bodies and ships together deliberately: from the
+   * cockpit "that freighter" and "that moon" are the same kind of question,
+   * and having two separate target systems for them would only mean
+   * learning two sets of keys. */
+  function navList() {
+    var out = [];
+    var i;
+    for (i = 0; i < G.sys.bodies.length; i++) {
+      var b = G.sys.bodies[i];
+      var bs = Sim.bodyState(b, G.sys, G.t);
+      out.push({
+        kind: 'body', id: b.id, obj: b, name: b.name,
+        type: b.typeName || b.kind, pos: bs.pos, vel: bs.vel,
+        color: bodyDotColor(b.kind),
+        range: V.dist(bs.pos, G.ship.pos)
+      });
+    }
+    if (G.showTraffic) {
+      var ships = Sim.shipsAll(G.sys, G.t);
+      for (i = 0; i < ships.length; i++) {
+        var s = ships[i];
+        out.push({
+          kind: 'ship', id: s.id, obj: s, name: s.name,
+          type: s.className, pos: s.pos, vel: s.vel,
+          color: s.color, hostile: s.hostile,
+          range: V.dist(s.pos, G.ship.pos)
+        });
+      }
+    }
+    out.sort(function (a, b) { return a.range - b.range; });
+    return out;
+  }
+
+  /* Resolve the stored lock to a live entry. Stored as a kind and an id
+   * rather than an object reference on purpose: traffic states are rebuilt
+   * every frame, and a held reference would quietly become a snapshot of
+   * where that ship was when you locked it. */
+  function navTargetState() {
+    if (!G.navTarget) return null;
+    var list = navList();
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].kind === G.navTarget.kind && list[i].id === G.navTarget.id) {
+        var e = list[i];
+        var rel = V.sub(e.pos, G.ship.pos);
+        var vrel = V.sub(e.vel, G.ship.vel);
+        e.closing = e.range > 1e-9 ? -V.dot(rel, vrel) / e.range : 0;
+        e.relSpeed = V.len(vrel);
+        e.eta = e.closing > 1e-6 ? e.range / e.closing : Infinity;
+        return e;
+      }
+    }
+    // The lock has gone — a docked freighter that departed, most likely.
+    G.navTarget = null;
+    return null;
+  }
+
+  function cycleNavTarget(dir) {
+    var list = navList();
+    if (!list.length) return;
+    var idx = -1;
+    if (G.navTarget) {
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].kind === G.navTarget.kind && list[i].id === G.navTarget.id) { idx = i; break; }
+      }
+    }
+    idx = (idx + dir + list.length) % list.length;
+    G.navCursor = idx;
+    G.navTarget = { kind: list[idx].kind, id: list[idx].id };
+    say('Locked: ' + list[idx].name + '   ' + fmtDist(list[idx].range), 2.5);
+  }
+
+  function clearNavTarget() {
+    if (!G.navTarget) { say('No navigation lock', 1.5); return; }
+    G.navTarget = null;
+    say('Navigation lock released', 2);
+  }
+
+  /* ---- trade ------------------------------------------------------------
+   * The console is deliberately not a modal pause. The near-field economy
+   * is stepping while you stand here, so a price you are staring at drifts,
+   * and at time warp it drifts fast — which is the whole reason the market
+   * was built as a simulation near the ship rather than a lookup table. */
+
+  function fmtCredits(c) {
+    var neg = c < 0;
+    var s = Math.abs(Math.round(c)).toLocaleString('en-US');
+    return (neg ? '−' : '') + s + ' cr';
+  }
+
+  function heldTonnes(cid) { return G.ship.cargo[cid] || 0; }
+
+  function openMarket() {
+    if (!G.ship.docked) {
+      say('Trade console needs a docking clamp — dock at a port first', 3);
+      return;
+    }
+    var port = G.sys.byId[G.ship.docked];
+    if (!port.market) { say('No registered market at ' + port.name, 3); return; }
+    /* Drop any keys the player was holding when they opened the console, or
+     * a thruster stays lit behind a menu that has stopped listening to it. */
+    G.keys = {};
+    G.ship.thrust = V.zero();
+    G.market = { port: port, sel: 0 };
+  }
+
+  function marketRows() {
+    if (!G.market) return [];
+    var list = Eco.priceList(G.market.port, G.t);
+    /* Anything the player is carrying stays on the list even where the port
+     * does not trade it, or a hold full of ore at a port that has never
+     * heard of ore would simply have nowhere to appear. */
+    for (var cid in G.ship.cargo) {
+      if (G.ship.cargo[cid] <= 0) continue;
+      var found = false;
+      for (var i = 0; i < list.length; i++) if (list[i].id === cid) { found = true; break; }
+      if (!found) {
+        list.push({ id: cid, name: Eco.BY_ID[cid].name, mid: 0, buy: null, sell: null,
+                    stock: 0, cap: 0, fill: 0, tradeable: false, accepts: false });
+      }
+    }
+    return list;
+  }
+
+  function handleMarketKey(e) {
+    var rows = marketRows();
+    var m = G.market;
+    var step = e.shiftKey ? 10 : 1;
+    var key = e.key.toLowerCase();
+
+    /* Escape, or M. The way IN is the port's own comms channel now, and M
+     * deliberately does not open this any more — but it still shuts it.
+     *
+     * That asymmetry was briefly removed on the argument that a key which
+     * can close a console it cannot open teaches a binding that half
+     * exists. The argument did not survive contact: the first question
+     * asked of the change was "so how do I close the market now?", from
+     * someone who had just watched it being built. Years of muscle memory
+     * reach for M, and a console that will not answer the key your hand
+     * already pressed is a worse failure than an untidy binding.
+     *
+     * So M stays as a way OUT. It is not a half-binding, it is a courtesy
+     * to the hand — and the one-way version is honest about which direction
+     * the design moved. */
+    if (key === 'escape' || key === 'm') { G.market = null; return; }
+    if (key === 'arrowdown') { m.sel = Math.min(rows.length - 1, m.sel + 1); return; }
+    if (key === 'arrowup') { m.sel = Math.max(0, m.sel - 1); return; }
+    if (key === 'f') { refuelFull(); return; }
+    if (key === 'u') {
+      var left = Sim.undockShip(G.ship, G.sys, G.t, 0.003);
+      G.dockTarget = null; G.dockStatus = null; G.market = null;
+      say('Undocked from ' + left.name, 4);
+      return;
+    }
+    var row = rows[m.sel];
+    if (!row) return;
+    if (key === 'arrowright') { trade(row, step); return; }
+    if (key === 'arrowleft') { trade(row, -step); return; }
+    if (key === 'home') { trade(row, maxBuyable(row)); return; }
+    if (key === 'end') { trade(row, -heldTonnes(row.id)); return; }
+  }
+
+  function holdFree() { return G.ship.cargoCap - Sim.cargoMass(G.ship); }
+
+  function maxBuyable(row) {
+    if (row.buy === null) return 0;
+    var byHold = Math.floor(holdFree());
+    var byStock = Math.floor(row.stock);
+    /* A negative buy price means the port is PAYING you to take it (waste),
+     * so credits are not a constraint — only the hold and the pile are. */
+    var byCredits = row.buy > 0 ? Math.floor(G.ship.credits / row.buy) : Infinity;
+    return Math.max(0, Math.min(byHold, byStock, byCredits));
+  }
+
+  /* Positive tonnes = the player buys and the port's stock falls.
+   * Negative = the player sells. Both go through Economy.applyTrade, which
+   * is what makes the price move under you when you shift real volume. */
+  function trade(row, tonnes) {
+    if (!tonnes) return;
+    var cid = row.id;
+    var port = G.market.port;
+
+    if (tonnes > 0) {
+      /* A refusal has to teach the rule, or the row just looks broken.
+       * A port sells what it produces and buys anything, so the honest
+       * answer names the port as a consumer and points somewhere else. */
+      if (row.buy === null) {
+        say(port.name + ' consumes ' + row.name.toLowerCase() +
+            ', it does not export it — they will buy yours', 4);
+        return;
+      }
+      var can = maxBuyable(row);
+      tonnes = Math.min(tonnes, can);
+      if (tonnes <= 0) {
+        say(holdFree() < 1 ? 'Hold full' :
+            row.stock < 1 ? 'None in stock' : 'Not enough credits', 2);
+        return;
+      }
+      var cost = tonnes * row.buy;
+      G.ship.credits -= cost;
+      G.ship.cargo[cid] = heldTonnes(cid) + tonnes;
+      Eco.applyTrade(port, cid, tonnes, G.t);
+      logTrade((cost < 0 ? 'Collected ' : 'Bought ') + tonnes + 't ' + row.name +
+               '  ' + fmtCredits(-cost));
+    } else {
+      /* NOT THE FREIGHT. Contract cargo rides in the same hold and is not
+       * yours to sell — see Missions.bondedTonnes for why that is a rule
+       * rather than an inconvenience. Refused by NAME, because a seller
+       * staring at eighteen tonnes in the manifest and a button that does
+       * nothing has been told nothing. */
+      var free = Missions.sellableTonnes(G, cid, heldTonnes(cid));
+      var qty = Math.min(-tonnes, free);
+      if (qty <= 0 && heldTonnes(cid) > free) {
+        var bond = Missions.bondHolder(G, cid);
+        say((bond ? bond.tonnes + 't of ' + row.name.toLowerCase() + ' is freight for ' +
+                    (bond.toName || 'a contract') + ' — not yours to sell'
+                  : 'That cargo is under contract'), 5);
+        return;
+      }
+      if (qty <= 0) { say('Nothing to sell', 2); return; }
+      if (row.sell === null) {
+        say(port.name + ' will not take ' + row.name + (row.id === 'waste'
+            ? ' — find a reprocessing plant' : ''), 3);
+        return;
+      }
+      var gain = qty * row.sell;
+      if (gain < 0 && G.ship.credits + gain < 0) {
+        say('Disposal fee exceeds your credits', 3);
+        return;
+      }
+      /* THE HARBOUR IS PAID OUT OF THE PROCEEDS. A lien takes its share of
+       * the gross before the money reaches you, which is the same rule
+       * unpaid berthing already follows when a hull is sold (screens.js).
+       * Only of a real sale: a disposal fee is money going out, and taking
+       * a cut of a negative number would be the harbour paying you to dump
+       * waste. */
+      var cut = gain > 0 ? Combat.lienTake(G, gain) : { taken: 0, cleared: false };
+      G.ship.credits += gain - cut.taken;
+      G.ship.cargo[cid] = heldTonnes(cid) - qty;
+      if (G.ship.cargo[cid] <= 1e-9) delete G.ship.cargo[cid];
+      Eco.applyTrade(port, cid, -qty, G.t);
+      logTrade((gain < 0 ? 'Disposed of ' : 'Sold ') + qty + 't ' + row.name +
+               '  ' + fmtCredits(gain - cut.taken) +
+               (cut.taken > 0 ? '  ·  ' + cut.taken + ' cr to ' + cut.who +
+                                (cut.cleared ? ' — LIEN CLEARED'
+                                             : ', ' + cut.left + ' cr still owed')
+                              : ''));
+    }
+    Sim.refreshShip(G.ship);
+  }
+
+  /* ---- trading with a hailed ship -------------------------------------
+   * The keys are the port market's, on purpose: ↑↓ pick a line, → buys
+   * and ← sells, Shift for ten, Home for as much as you can and End for
+   * everything you may sell. A second trade screen with a second set of
+   * habits would be a thing the hand has to remember which room it is in.
+   * The deal itself is ShipTrade.deal — this is only the desk. */
+  /* By NAME, not by G.commsSel: the list re-sorts by range under you, and
+   * a key pressed between two frames must still trade with the ship the
+   * board is showing. See drawCommsScreen's pin for the same reason. */
+  function shipDealContact() {
+    if (!G.shipDeal || !global.Screens) return null;
+    var list = global.Screens.commsContacts();
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].obj && list[i].name === G.shipDeal.name) return list[i];
+    }
+    return null;
+  }
+
+  function handleShipDealKey(e) {
+    var key = e.key.toLowerCase();
+    var d = G.shipDeal;
+    if (key === 'escape') { G.shipDeal = null; return true; }
+    var c = shipDealContact();
+    var ST = global.ShipTrade;
+    if (!c || !ST) { G.shipDeal = null; return false; }
+    var rows = ST.board(G, G.sys, G.t, c.obj).rows;
+    if (key === 'arrowdown') { d.sel = Math.min(Math.max(0, rows.length - 1), d.sel + 1); return true; }
+    if (key === 'arrowup') { d.sel = Math.max(0, d.sel - 1); return true; }
+    var row = rows[d.sel];
+    var step = e.shiftKey ? 10 : 1;
+    var qty = key === 'arrowright' ? step
+            : key === 'arrowleft' ? -step
+            : key === 'home' ? ST.maxBuy(G, row)
+            : key === 'end' ? -Math.max(1, Math.floor(row ? row.yours : 0))
+            : null;
+    if (qty === null) return false;
+    if (!row) return true;
+    shipDealTrade(c, row, qty);
+    return true;
+  }
+
+  function shipDealTrade(c, row, qty) {
+    /* Home with nothing buyable, End with nothing sellable: ask for one
+     * tonne instead, so the refusal that comes back says WHICH limit it
+     * was — hold, credits, their stock, a contract — rather than the key
+     * silently doing nothing. */
+    if (qty === 0) qty = 1;
+    var res = global.ShipTrade.deal(G, G.sys, G.t, c.obj, row.cid, qty, { say: say });
+    if (res.ok) {
+      /* Into the same short ledger the port market writes, so the MANIFEST
+       * screen's recent trades include the ones made in vacuum. */
+      G.ledgerLog.unshift({ t: G.t,
+        text: (res.bought ? 'Bought ' : 'Sold ') + res.qty + 't ' + row.name +
+              (res.bought ? ' from ' : ' to ') + c.name + '  ' +
+              fmtCredits(res.bought ? -res.total : res.total) });
+      if (G.ledgerLog.length > 6) G.ledgerLog.length = 6;
+    }
+  }
+
+  function logTrade(text) {
+    G.ledgerLog.unshift({ text: text, t: G.t });
+    if (G.ledgerLog.length > 6) G.ledgerLog.length = 6;
+    say(text, 3);
+  }
+
+  /* ---- the bill ----------------------------------------------------------
+   *
+   * Wages and berthing were both things the game PRINTED and never took.
+   * The arithmetic is Fleet.settle — it belongs with the harbour master and
+   * it is testable without a screen — and this is only the desk it happens
+   * at: docking, because that is the one place in this game where money has
+   * ever changed hands and the one moment a player is looking at their
+   * credits. */
+  function settleAccounts() {
+    if (!Fleet || !Fleet.settle) return [];
+    var lines = Fleet.settle(G, G.t);
+    /* And the plants: income in, and a week of drift on each system they
+     * are in. AFTER the bills, so a career short of money pays its crew
+     * out of what it had rather than out of what a plant is about to send. */
+    if (global.Holdings) lines = lines.concat(global.Holdings.settle(G, G.t));
+    for (var j = 0; j < lines.length; j++) logTrade(lines[j]);
+    return lines;
+  }
+
+  /* Fuel is a commodity like any other: it is bought from the port's own
+   * hydrogen stock at the port's own hydrogen price, which is why refuelling
+   * at a gas-giant refinery is cheap and refuelling at a farming co-op is
+   * not. Range is therefore a function of your route, not a global number. */
+  function refuelFull() {
+    var port = G.ship.docked ? G.sys.byId[G.ship.docked] : null;
+    if (!port || !port.market) { say('Not docked', 2); return; }
+    var p = Eco.price(port, Eco.FUEL_ID, G.t);
+    if (!p || p.buy === null) { say(port.name + ' sells no hydrogen', 3); return; }
+    var want = G.ship.fuelCap - G.ship.fuel;
+    if (want < 0.01) { say('Tank already full', 2); return; }
+    var afford = p.buy > 0 ? G.ship.credits / p.buy : Infinity;
+    var got = Math.min(want, p.stock, afford);
+    if (got < 0.01) {
+      say(p.stock < 0.01 ? 'No hydrogen in stock' : 'Not enough credits for fuel', 3);
+      return;
+    }
+    got = Math.round(got * 100) / 100;
+    G.ship.credits -= got * p.buy;
+    G.ship.fuel += got;
+    Eco.applyTrade(port, Eco.FUEL_ID, got, G.t);
+    Sim.refreshShip(G.ship);
+    logTrade('Jump fuel +' + got.toFixed(2) + 't  ' + fmtCredits(-got * p.buy));
+  }
+
+  /* Hand over what the pirate asked for. There is no combat in this pass,
+   * so the alternative is not "fight" — it is "outrun", and whether you can
+   * depends on how full your hold is. That is the whole point of the mass
+   * budget: a laden ship accelerates at half the rate an empty one does,
+   * and a pirate's is fixed. Being rich is what makes you catchable. */
+  function complyWithDemand() {
+    var spec = G.encounter && G.encounter.demand;
+    if (!spec) return;
+    var paid = Sim.payPirate(spec, G.ship, Eco);
+    say('Handed over ' + paid + ' — ' + spec.name + ' is breaking off', 6);
+    G.ledgerLog.unshift({ text: 'Robbed of ' + paid + ' by ' + spec.name, t: G.t });
+    if (G.ledgerLog.length > 6) G.ledgerLog.length = 6;
+  }
+
+  /* Dumping waste in space rather than paying to dispose of it properly.
+   * Allowed, because refusing would be a lie about what a ship can do. It
+   * is NOT free: the payout for waste lands when you LOAD it, not when you
+   * deliver it, so unlike every other jettison there is nothing left to
+   * forfeit — which is precisely why it has to be a crime instead. See
+   * Combat.dumping. */
+  /* Hail whoever is highlighted in the comms directory.
+   *
+   * Ports get asked for docking clearance, which is the only conversation
+   * that exists so far. Ships are in the list because they are people you
+   * can see, and being told there is nothing to say to them yet is a more
+   * honest answer than leaving the key silently dead. */
+  /* What the police channel owes you when you call it, and what it will
+   * take. Reporting a crime is a later piece of work; this is the half you
+   * need when the trouble is your own. */
+  function hailAuthority(fac) {
+    var owed = Math.round((G.wanted || {})[fac.id] || 0);
+    var fugitive = Combat.isFugitive(G, fac.id);
+    var standing = Math.round((G.standing || {})[fac.id] || 0);
+    var label = global.Missions ? Missions.standingLabel(standing) : '';
+
+    if (!owed && !fugitive) {
+      G.payOffer = null;
+      say(fac.name + ' Control: "No outstanding matters. Standing ' +
+          label + '." ', 6);
+      return;
+    }
+
+    /* Quoted, then confirmed. Spending a chunk of the player's money on a
+     * single keypress in a list they were scrolling is not something to do
+     * on one press, and the second key is also where the price gets to be
+     * stated plainly before it is taken. */
+    var cost = fugitive ? Math.round(owed * 1.2) : Math.round(owed * 1.6);
+    G.payOffer = { faction: fac.id, name: fac.name, cost: cost,
+                   fugitive: fugitive, until: G.t + 60 };
+    say(fac.name + ' Control: "' + (fugitive ? 'You are logged FUGITIVE. ' : '') +
+        owed + ' cr outstanding, ' + cost + ' cr to settle including costs. ' +
+        'Standing ' + label + '."   — Y to pay', 8);
+  }
+
+  function payOutstanding() {
+    var off = G.payOffer;
+    if (!off) { say('Nothing quoted — hail the police channel first', 3); return; }
+    if (G.t > off.until) { G.payOffer = null; say('That quote has expired', 3); return; }
+    var paid = off.fugitive ? Combat.payFugitive(G) : Combat.payBounty(G, off.faction);
+    if (paid < 0) {
+      say('Declined — ' + Math.abs(paid) + ' cr required, you have ' +
+          Math.round(G.ship.credits), 5);
+      HOOKS.sound('warn');
+      return;
+    }
+    G.payOffer = null;
+    say(off.name + ' Control: "Settled, ' + paid + ' cr. Fly safe."', 6);
+    HOOKS.sound('click');
+  }
+
+  /* Break into the selected port's control cabinet.
+   *
+   * A SEPARATE ACTION FROM HAILING, deliberately. Enter asks; H takes. Those
+   * are not two flavours of the same request and folding them onto one key
+   * would mean a mis-keyed hail could book you a bounty. */
+  function forceSelectedPanel(contact) {
+    if (!contact) { say('Nobody selected', 2); return; }
+    if (contact.kind !== 'station') {
+      say('Nothing there answers to a ground channel', 3);
+      return;
+    }
+    Combat.hackControl(G, contact.obj, HOOKS, G.t);
+  }
+
+  /* Does forcing this port's panel currently make sense? Used only to decide
+   * whether to MENTION it, which is the whole reason it exists as a
+   * predicate: a refusal that does not say what else you could do is the
+   * greyed-button problem in prose. */
+  function canForcePanel(port) {
+    if (!port || !port.surface) return false;
+    if (Combat.breachedHere(G, port) || Combat.isCleared(G, port)) return false;
+    return !!(Gen.controlFor && Gen.controlFor(port, G.sys) &&
+              Sim.controlInRange(G.ship, port, G.sys, G.t));
+  }
+
+  /* THE TRANSFER TO THE EXIT PAD (Astra, 24-09: "When requesting launch
+   * permission, there should be a 'request transfer to exit pad' which
+   * takes you back the way you came in").
+   *
+   * One request, two answers. At a ground port it asks for launch first if
+   * you do not hold it — the doors are the port's — and then runs the
+   * arrival backwards: off the stand, back along the traverser, up the
+   * cargo lift and out to the pad, where you are handed the stick nose-up
+   * and climbing. At an orbital berth it is an ordinary undock, which is
+   * already the way you came in (out through the heavy bay for a small
+   * berth reached through one). */
+  function exitTransfer(port) {
+    if (!port || G.ship.docked !== port.id) { say('Not docked here', 2); return false; }
+    if (port.surface && !Combat.launchCleared(G, port)) {
+      var r = Combat.requestLaunch(G, port, HOOKS);
+      if (!r || !r.granted) return false;
+    }
+    var left = Sim.undockShip(G.ship, G.sys, G.t, 0.003, { transfer: true });
+    G.dockTarget = null;
+    G.dockStatus = null;
+    HOOKS.sound('undock');
+    if (port.surface && G.ship.arrival) {
+      say(port.name + ': "Transfer to the exit pad. Stay on the car — you have the stick at the top."', 6);
+    } else {
+      if (port.surface) Combat.spendLaunch(G);
+      say('Undocked from ' + left.name + '  (T to re-target)', 4);
+    }
+    return true;
+  }
+
+  function hailSelected(contact) {
+    if (!contact) { say('Nobody selected', 2); return; }
+    if (contact.kind === 'authority') { hailAuthority(contact.obj); return; }
+    if (contact.kind !== 'station') {
+      say('No channel open to ' + contact.name, 3);
+      return;
+    }
+    var port = contact.obj;
+    /* Docked at this port, the only thing you can usefully ask for is a way
+     * out — so the same key asks the question that actually applies. */
+    if (G.ship.docked === port.id) {
+      if (Combat.launchCleared(G, port)) {
+        say(port.name + ': "You are cleared to launch. U when ready."', 4);
+        return;
+      }
+      Combat.requestLaunch(G, port, HOOKS);
+      return;
+    }
+    if (Combat.isCleared(G, port)) {
+      say(port.name + ': "You are already cleared. Come on in."', 4);
+      return;
+    }
+    /* Ask the port how full it is before asking it for a berth. The count is
+       closed-form off the traffic timetable, so it is the same answer the
+       ships themselves are flying to — the port is not making it up. */
+    var res = Combat.requestClearance(G, port, HOOKS,
+                                      Sim.berthStatus(port, G.sys, G.t, G.ship));
+    /* THE REFUSAL CARRIES THE OTHER OPTION. This is where the mechanic is
+     * discovered: a port that will not clear a wanted pilot is exactly the
+     * port that pilot needs, and being told "no" while parked next to an
+     * exposed cabinet should mention the cabinet. Only when it would
+     * actually work, so it is never advice you cannot take. */
+    if (res && !res.granted && canForcePanel(port)) {
+      say(port.name + ' control cabinet is in reach — H to force the panel', 7);
+    }
+    return res;
+  }
+
+  /* ---- the port calls you ------------------------------------------------
+   *
+   * Ten kilometres out, a port with room hails an approaching ship and
+   * clears it. Combat.autoClearance owns the judgement and the wording and
+   * says nothing at all when the answer would be no; this owns only WHEN to
+   * ask, which is a question about proximity.
+   *
+   * TEN KILOMETRES, and the number is chosen against the one it has to sit
+   * outside of. The docking envelope is max(1.2 km, four station radii) —
+   * between 0.8 and 4.5 km at the sizes the generator makes — so at ten you
+   * are still on approach with the whole final leg ahead of you. Clearance
+   * that arrived inside the envelope would be a formality announced at the
+   * moment it stopped mattering.
+   *
+   * NOT EVERY FRAME. The sweep asks each port where it is, and where a body
+   * is costs a Kepler solve — the single most expensive call in this file.
+   * Twice a second is finer than the situation can change: at ten km, even
+   * a fast approach spends seconds inside the range, and clearance is a
+   * radio call rather than a hit test. */
+  /* TEN KILOMETRES, OR FOUR STATION RADII, WHICHEVER IS FURTHER.
+   *
+   * Ten was an absolute, written when the largest station in the galaxy was
+   * a kilometre across. At STATION_SCALE 3.5 they run to 22 km across, so a
+   * flat ten-kilometre hail fires from INSIDE the hull of any station
+   * bigger than that — the port clearing a ship that is already in its own
+   * throat, which is not a radio call, it is an echo.
+   *
+   * Four radii is the same shape dockingStatus already uses for `inRange`,
+   * so the range a port hails at and the range it will capture at scale
+   * together instead of drifting apart the next time the stations change
+   * size. The ten stays as a floor so a small station still calls out from
+   * a sensible distance rather than from its own doorstep. */
+  function autoClearanceRange(port) {
+    return Math.max(10, (port.radius || 0) * 4);
+  }
+  var AUTO_CLEARANCE_EVERY = 0.5;         // seconds of sim time between sweeps
+
+  function offerClearanceNearby() {
+    if (!G.sys || !G.ship || G.ship.docked || !Combat.autoClearance) return;
+    /* AND THE CLOCK CAN GO BACKWARDS. G.t is the career's clock, and
+     * starting a new game or loading a save resets it while this stamp
+     * rides along on G — so a stamp from thirty-two thousand seconds into
+     * the last career sits in the future forever and the sweep never runs
+     * again for the rest of the session. Silently: no error, just a port
+     * that stops calling. Same guard stepArrival keeps for the same
+     * reason. */
+    var since = G.t - (G.clearanceSweptAt === undefined ? -1e9 : G.clearanceSweptAt);
+    if (since >= 0 && since < AUTO_CLEARANCE_EVERY) return;
+    G.clearanceSweptAt = G.t;
+
+    var ports = G.sys.ports || [];
+    var inside = Sim.insideStation ? Sim.insideStation(G.ship.pos, G.sys, G.t) : null;
+    for (var i = 0; i < ports.length; i++) {
+      var p = ports[i];
+      if (!p || !p.docking) continue;
+      if (Combat.isCleared(G, p)) continue;
+      var st = Sim.dockingStatus(G.ship, p, G.sys, G.t);
+      if (st.range > autoClearanceRange(p)) continue;
+      /* ON APPROACH, which is what the range is standing in for. Without
+       * this a ship that has just launched — a kilometre out, uncleared
+       * again because arriving spent the last one — is hailed and cleared
+       * straight back in, over the top of whatever the port said about
+       * leaving. Closing is the difference between arriving and leaving,
+       * and it is already computed. */
+      if (!(st.closingSpeed > 0)) continue;
+      /* AND A PORT DOES NOT CLEAR A SHIP THAT IS ALREADY INSIDE IT.
+       *
+       * Closing is the difference between arriving and leaving for a ship
+       * in open space. It is not, for a ship still in the bay: backing out
+       * of a throat is a manoeuvre, and a manoeuvre has moments where the
+       * range to the station's CENTRE is briefly shrinking. Cleared again
+       * on one of those frames, the catch closes the clamps and the player
+       * is back in the berth they were leaving — which is the same bug as
+       * a stale clearance flag, one step further along, and the reason
+       * spending the flag on the way out is not on its own enough.
+       *
+       * Sim.insideStation asks the model whether the hull is in a room or
+       * a doorway of that port, which is the actual question. Asked once
+       * for the ship rather than once per port. */
+      if (inside === p) continue;
+      /* NOR A SHIP THAT HAS JUST LEFT ITS PAD AND NOT GONE ANYWHERE. A
+       * launch that does not climb falls back toward the pad, which is
+       * "closing" — and a clearance granted then was the other half of the
+       * re-dock Astra hit on 24-09. `departed` lasts until the hull has
+       * flown clear of the pad (Sim.padCapture drops it). */
+      if (G.ship.departed && G.ship.departed.surface && G.ship.departed.port === p.id) continue;
+      /* The same berth count the ships themselves are flying to — closed
+       * form off the traffic timetable, so a port that says it is full is
+       * not making it up. */
+      Combat.autoClearance(G, p, HOOKS, Sim.berthStatus(p, G.sys, G.t, G.ship));
+    }
+  }
+
+  /* IN THE CHART, A STATION YOU ARE INSIDE OF GOES AWAY.
+   *
+   * The map is a diagram of where things are, and a hull you happen to be
+   * parked in is not a thing the diagram is about: wheel the system view in
+   * while docked and the station's near panels fill the screen with the
+   * orbit rings drawn straight through them. It still gets its marker and
+   * its label, because where the station IS remains exactly the sort of
+   * thing a chart should say — it is the geometry that is in the way.
+   *
+   * ASKED OF THE ROOMS, NOT THE BOUNDING SPHERE, and the first attempt at
+   * this used the sphere and was wrong twice over. A station's radius is a
+   * ball around a wheel: the camera can sit well inside it while floating
+   * in clear space outside the hull, where the model looks fine and
+   * deleting it is just baffling — and the same ball is what the general
+   * "a world you are inside is not drawn" rule uses, which is why putting
+   * the condition there did nothing at all for stations. They return from
+   * the top of drawBody long before that line. Sim.insideStation asks the
+   * model whether this point is in a ROOM of it, which is the actual
+   * question. */
+  function chartHides(b, cam) {
+    if (!mapMode() || !cam || !cam.eye || !Sim.insideStation) return false;
+    return Sim.insideStation(cam.eye, G.sys, G.t) === b;
+  }
+
+  /* WHICH WAY IS UP, FOR THE INSTRUMENT.
+   *
+   * In flight it is the planet below you, and it always was. Berthed in a
+   * modelled bay it is the DECK, and that is a change Astra called: a
+   * station's model +z is its orbit normal, so a ship parked square on a bay
+   * floor is genuinely banked relative to the world, and a ladder that
+   * insisted on saying so read as ninety degrees of roll on a ship that was
+   * sitting perfectly still on its clamps.
+   *
+   * The old fix was to roll the HULL until the instrument was happy, which
+   * cost the thing you can see for the sake of the thing you can read. This
+   * is the other way round, and it is the right way round: while you are
+   * standing on a deck, level means level with that deck. It reverts to the
+   * planet the instant you leave, with nothing to remember.
+   *
+   * Only for a MODELLED berth. Held off the side of a station with no bay
+   * there is no deck to be level with, and the planet is still the answer. */
+  function attitudeUp(lv) {
+    var port = dockedPort();
+    if (port && !port.surface && Sim.berthState && G.ship.dockOffset &&
+        G.ship.dockOffset.station) {
+      var bs = Sim.berthState(port, G.sys, G.t, currentBerth());
+      if (bs && bs.off && bs.off.modelled && bs.basis && bs.basis.up) {
+        return bs.basis.up;
+      }
+    }
+    return lv.up;
+  }
+
+  /* SITTING IN A BAY THAT WILL NOT TAKE YOU.
+   *
+   * A berth only closes its clamps on a cleared ship, which is what stops a
+   * launched one being picked straight back up. The cost of that rule is a
+   * silence: fly in, put the hull down perfectly, and nothing happens for
+   * no stated reason — the same shape as the shut door and the unreachable
+   * station, and those cost a real evening each.
+   *
+   * So the port says so. Combat.dockRefusal already knows WHY a door will
+   * not open — wanted here, hostile, full — and it is the same judgement
+   * the auto-clearance sweep makes when it decides to stay quiet. On a real
+   * -time cooldown, because a hull parked in a bay is in this state for as
+   * long as it likes and a per-frame line would bury the channel. */
+  var BERTH_NAG_MS = 8000;
+
+  function nagUncleared() {
+    if (!G.sys || !G.ship || G.ship.docked || G.ship.arrival) return;
+    if (!Sim.berthState || !Combat.isCleared) return;
+    if (performance.now() < (G.berthNagUntil || 0)) return;
+    var ports = G.sys.ports || [];
+    for (var i = 0; i < ports.length; i++) {
+      var p = ports[i];
+      if (!p || p.surface || !p.docking || Combat.isCleared(G, p)) continue;
+      if (V.dist(G.ship.pos, Sim.bodyPosition(p, G.sys, G.t)) > (p.radius || 1) * 2) continue;
+      var n = Math.max(1, Gen.bayGeometry(p).berths), near = false;
+      for (var b = 0; b < n && !near; b++) {
+        var bs = Sim.berthState(p, G.sys, G.t, b);
+        if (bs && V.dist(bs.pos, G.ship.pos) < 0.05) near = true;
+      }
+      if (!near) continue;
+      G.berthNagUntil = performance.now() + BERTH_NAG_MS;
+      var why = Combat.dockRefusal ? Combat.dockRefusal(G, p) : null;
+      say(p.name + ': ' + (why
+            ? '"The clamps stay open." — ' + why.text
+            : '"You are in a bay you have not been given. Request clearance — F4."'), 7);
+      HOOKS.sound('warn');
+      return;
+    }
+  }
+
+  /* Landing gear.
+   *
+   * Refused while docked or landed for the obvious reason: the gear is
+   * holding the ship up, and retracting it where it is bearing weight is
+   * not a thing a pilot gets to do by accident.
+   *
+   * Extending it costs drag (Sim.GEAR_DRAG_FACTOR) and is required both to
+   * be caught by a landing pad and to touch down on open ground without
+   * writing the ship off. There is no speed limit on the actuation itself —
+   * the atmosphere already punishes doing it early, and a hard interlock
+   * would only be a second thing to explain. */
+  function toggleGear() {
+    var s = G.ship;
+    if (s.docked || s.landed) {
+      say('Gear is bearing the ship — not while we are down', 3);
+      return;
+    }
+    s.gear = !s.gear;
+    Sim.refreshShip(s);            // the drag area changes with it
+    /* Both arms of the old ternary here were 'click', which reads as an
+     * intention that was never finished — there is no down/up pair in the
+     * FX table to choose between. One click until there is. */
+    if (global.Sound) global.Sound.fx('click');
+    say(s.gear ? 'Landing gear DOWN — locked' : 'Landing gear UP', 3);
+  }
+
+  function jettisonWaste() {
+    /* One key, two emergencies, and they cannot be confused: a hung seeker
+     * is a two-second window with an alarm on it, and if one is live then
+     * "get it off my ship" unambiguously means the rack. The waste is still
+     * there afterwards. */
+    if (G.hungSeeker) { Combat.jettisonRack(G, HOOKS); return; }
+    if (heldTonnes('waste') <= 0) { say('No waste aboard', 2); return; }
+    jettison('waste', Infinity);
+  }
+
+  /* The hold, as a list, newest-heaviest first and stable frame to frame so
+   * the selection does not move under the cursor. Fitted equipment is not
+   * in here and never will be: cargo is what you can throw out of the ship,
+   * and a drive you have bolted to the hull is not that. */
+  function heldCargo() {
+    var s = G.ship, out = [];
+    var ids = Object.keys(s.cargo);
+    for (var i = 0; i < ids.length; i++) {
+      if (s.cargo[ids[i]] <= 1e-9) continue;
+      var good = Eco.BY_ID[ids[i]];
+      out.push({ cid: ids[i], name: good ? good.name : ids[i],
+                 tonnes: s.cargo[ids[i]], good: good });
+    }
+    out.sort(function (a, b) {
+      return b.tonnes - a.tonnes || (a.cid < b.cid ? -1 : 1);
+    });
+    return out;
+  }
+
+  /* Throwing cargo out of the airlock. It is a real loss — nobody pays you
+   * for it and nobody hands it back — but it is instant and it works while
+   * you are being chased, which is the entire reason it exists: the mass
+   * budget says a full hold cannot outrun a pirate, and this is the lever
+   * that argument leaves you holding.
+   *
+   * The tonnage goes somewhere. A canister on your old trajectory is a
+   * scannable object, so anyone with a cargo scanner can see what you
+   * dumped and where, and pick it up if they are quick. */
+  function jettison(cid, tonnes) {
+    var have = heldTonnes(cid);
+    if (have <= 0) { say('None aboard', 2); return 0; }
+    var qty = Math.min(have, tonnes);
+    qty = Math.round(qty * 100) / 100;
+    if (qty <= 0) return 0;
+
+    G.ship.cargo[cid] = have - qty;
+    if (G.ship.cargo[cid] <= 1e-9) delete G.ship.cargo[cid];
+    Sim.refreshShip(G.ship);
+
+    /* Docked, it goes onto the pad rather than into orbit. Same loss, and
+     * no canister for anyone to find. */
+    var good = Eco.BY_ID[cid];
+    if (!G.ship.docked && !G.ship.landed && Sim.dropCanister) {
+      var can = Sim.dropCanister(G.sys, G.ship, cid, qty, G.t);
+      /* Waste leaves evidence. The canister is a scannable object that
+       * outlives the moment of dumping, and tagging it here — rather than
+       * inside dropCanister, which does not know whose airlock it came
+       * out of — is what lets anything later tell an accident from a
+       * crime. */
+      if (can && good && good.waste) { can.illegal = true; can.dumpedBy = 'player'; }
+      /* Not yours again until it has got clear. Tagged here rather than in
+       * dropCanister for the same reason the waste flag is: sim.js makes
+       * canisters for the airlock, for a dying ship's hold and for a
+       * freighter handing its cargo over, and only the first of those is a
+       * thing the player must not immediately re-swallow. See
+       * scoopCanisters. */
+      if (can) can.armed = false;
+    }
+
+    /* Dumping waste is a crime and resolves at the moment of the act, the
+     * same way a police scan does. Docked or landed it never reaches this:
+     * you cannot dump on a pad, the cargo just goes back into the port's
+     * hands. */
+    if (good && good.waste && !G.ship.docked && !G.ship.landed && Combat.dumping) {
+      Combat.dumping(G.sys, G, G.t, cid, qty, HOOKS);
+    } else {
+      say('Jettisoned ' + qty.toFixed(qty < 1 ? 2 : 0) + 't ' +
+          (good ? good.name : cid), 3);
+    }
+    if (G.invSel >= heldCargo().length) G.invSel = Math.max(0, heldCargo().length - 1);
+    return qty;
+  }
+
+  /* ---- keeping the predicted path affordable ---------------------------
+   * Profiled on the target laptop (i5-8350U/UHD 620), predictTrajectory was
+   * the single most expensive thing in the game: 12-25 ms a call against a
+   * 2.2 ms median frame, producing a metronomic stall every 16th frame — and
+   * applyControls drops the interval from 0.25 s to 0.08 s the moment you
+   * touch the throttle, so it was worst exactly while decelerating, which is
+   * where it was reported.
+   *
+   * Cost is (points x substeps), and substeps saturate at 8, so cost is very
+   * nearly linear in the point count. That is the knob. Rather than cutting
+   * the path short — a quarter of an ellipse is a worse instrument than a
+   * whole one drawn coarsely — the resolution adapts to hit a time budget,
+   * climbing back toward full detail whenever the path is cheap. */
+  var TRAJ_SEGMENTS = 240;     // ellipse resolution; smooth at any zoom
+  var TRAJ_INT_POINTS = 260;   // points when we do have to integrate
+  var TRAJ_INT_HORIZON = 6 * 3600;   // s — how far ahead integration looks
+
+  /* Which of the two to draw.
+   *
+   * Integration is the truthful answer and the expensive one. It earns its
+   * cost in exactly two situations: when the player is burning, because the
+   * osculating ellipse is a snapshot of an orbit that is actively being
+   * changed and would lie about where the ship is going; and when something
+   * is about to be hit, because an ellipse drawn straight through a planet
+   * is worse than no prediction at all.
+   *
+   * Everywhere else — which is most of the time, including all of cruise and
+   * all of orbit — the ship is on a conic and the closed form is both cheaper
+   * and smoother. Cheap enough that the 0.08 s recompute rate under thrust
+   * (see applyControls) stops mattering.
+   *
+   * Note the integrated branch looks only six hours ahead rather than a whole
+   * period. Under thrust the far end of a predicted orbit is fiction anyway —
+   * the burn will have changed it long before you get there — and it is the
+   * near field you are actually flying on. */
+  /* Does the current osculating orbit reach the ground of the body it is
+   * about? Closed form, from elements the HUD already computes. This is a
+   * guard on the ellipse branch, not a general impact test — it knows only
+   * about the dominant body, so it can say "this orbit definitely hits" but
+   * never "nothing can be hit" (a safe orbit about a planet can still meet a
+   * moon). Used only to force the truthful path where it is cheap to know we
+   * need one. */
+  var PERIAPSIS_MARGIN = 1.06;         // clear the surface by 6% of a radius
+
+  function orbitReachesGround() {
+    var oe = Sim.oscElements(G.ship, G.sys, G.t);
+    if (!oe || !oe.body) return true;                 // unknown: be truthful
+    if (!oe.closed || !isFinite(oe.period)) return true;
+    return oe.periapsis < oe.body.radius * PERIAPSIS_MARGIN;
+  }
+
+  /* How much of a frame the predictor is allowed. The measured cost of a
+   * full integration is 12-25 ms; at 3 ms a frame it lands complete inside
+   * a tenth of a second and never owns a frame. */
+  var TRAJ_FRAME_BUDGET = 3;
+  /* And how far out of date a job may get before it is worth starting
+   * again. At 1x this is never hit; at high warp the world moves under a
+   * job faster than it can finish, and a path plotted from where you were
+   * two seconds of simulation ago is a path drawn somewhere else. */
+  var TRAJ_MAX_LAG = 2;
+
+  /* One frame's worth of prediction.
+   *
+   * The cheap branch (a stable orbit, drawn as its own ellipse) is still
+   * computed outright, because it costs well under a millisecond. Only the
+   * integrated branch — burning, falling, in air — becomes a job, and the
+   * previous path stays on screen while the new one is being built, so the
+   * display never blinks. */
+  function advancePrediction(dtReal) {
+    if (!G.showPrediction || G.ship.landed || G.ship.docked) {
+      G.trajJob = null;
+      return;
+    }
+
+    if (G.trajJob) {
+      if (G.t - G.trajJob.t0 > TRAJ_MAX_LAG * Math.max(1, WARPS[G.warpIndex])) {
+        G.trajJob = null;                 // overtaken by the clock; start over
+      } else if (Sim.stepPrediction(G.trajJob, G.sys, TRAJ_FRAME_BUDGET)) {
+        G.trajectory = G.trajJob.result;
+        G.trajJob = null;
+        G.trajectoryStale = 0.25;
+      } else {
+        return;                           // still working; nothing else to do
+      }
+    }
+
+    G.trajectoryStale -= dtReal;
+    if (G.trajectoryStale > 0) return;
+
+    var ellipse = plotEllipsePath();
+    if (ellipse) {
+      G.trajectory = ellipse;
+      G.trajectoryStale = 0.25;
+      return;
+    }
+    G.trajJob = Sim.beginPrediction(G.ship, G.sys, G.t, {
+      maxPoints: TRAJ_INT_POINTS,
+      includeThrust: false,
+      horizon: TRAJ_INT_HORIZON
+    });
+  }
+
+  /* The closed-form branch on its own, or null when this is a case only
+   * integration can answer honestly. */
+  function plotEllipsePath() {
+    var burning = G.ship.thrust && V.len(G.ship.thrust) > 0;
+    var impactSoon = !!G.impactForecast;
+    /* Inside an atmosphere the ellipse is simply false: drag is bleeding
+     * energy every second, so the orbit is not a conic and the closed form
+     * would draw a path the ship will never fly. Integration is the only
+     * honest answer here, and it is also where the player most needs one. */
+    var inAir = !!Sim.atmosphereContext(G.ship.pos, G.sys, G.t);
+    if (burning || impactSoon || inAir || orbitReachesGround()) return null;
+    return Sim.ellipsePath(G.ship, G.sys, G.t, TRAJ_SEGMENTS);
+  }
+
+  /* ---- thrust in the orbital frame ------------------------------------ */
+  /* Prograde/radial/normal is the frame that actually matters in orbit, and
+   * every direction is shown on screen as an arrow pointing where the burn
+   * will push you. */
+  function orbitalFrame() {
+    /* Falls back to the root rather than returning null: every caller reads
+     * .prograde/.radial/.normal off this without checking, so handing back
+     * null would move the crash rather than remove it. The root is always a
+     * body, and in the one system where there is nothing else it is also
+     * the correct answer. */
+    var dom = Sim.dominantBody(G.ship.pos, G.sys, G.t) || G.sys.root;
+    var bs = Sim.bodyState(dom, G.sys, G.t);
+    var rel = V.sub(G.ship.pos, bs.pos);
+    var vrel = V.sub(G.ship.vel, bs.vel);
+    var prograde = V.norm(vrel);
+    var radial = V.norm(rel);
+    var normal = V.norm(V.cross(rel, vrel));
+    if (V.len(normal) < 1e-12) normal = { x: 0, y: 0, z: 1 };
+    return { body: dom, prograde: prograde, radial: radial, normal: normal, rel: rel, vrel: vrel };
+  }
+
+  /* Where the thrust keys push.
+   *
+   * SHIP frame is the default and the one that stops the game being
+   * confusing: W drives you along the nose, so pointing at something and
+   * holding W takes you toward it. That sounds obvious and was not what
+   * this did — thrust used to be applied in the ORBITAL frame, so W meant
+   * prograde regardless of where you were looking, and aiming at a station
+   * then burning sent you somewhere else entirely.
+   *
+   * ORBITAL frame is kept, not replaced. Prograde/radial/normal is the
+   * right vocabulary for a transfer burn and the manoeuvre-node system
+   * speaks it, so it stays available on the same keys under a mode toggle
+   * rather than being thrown away for the sake of one default. */
+  function shipFrameThrust(mag, active) {
+    var s = G.ship, acc = V.zero();
+    if (G.keys['w']) { acc = V.addScaled(acc, s.fwd, mag); active.fore = 1; }
+    if (G.keys['s']) { acc = V.addScaled(acc, s.fwd, -mag); active.aft = 1; }
+    if (G.keys['d']) { acc = V.addScaled(acc, s.right, mag); active.stbd = 1; }
+    if (G.keys['a']) { acc = V.addScaled(acc, s.right, -mag); active.port = 1; }
+    if (G.keys['r']) { acc = V.addScaled(acc, s.up, mag); active.up = 1; }
+    if (G.keys['f']) { acc = V.addScaled(acc, s.up, -mag); active.down = 1; }
+    return acc;
+  }
+
+  function orbitalFrameThrust(fr, mag, active) {
+    var acc = V.zero();
+    if (G.keys['w']) { acc = V.addScaled(acc, fr.prograde, mag); active.pro = 1; }
+    if (G.keys['s']) { acc = V.addScaled(acc, fr.prograde, -mag); active.ret = 1; }
+    if (G.keys['d']) { acc = V.addScaled(acc, fr.radial, mag); active.rout = 1; }
+    if (G.keys['a']) { acc = V.addScaled(acc, fr.radial, -mag); active.rin = 1; }
+    if (G.keys['r']) { acc = V.addScaled(acc, fr.normal, mag); active.nplus = 1; }
+    if (G.keys['f']) { acc = V.addScaled(acc, fr.normal, -mag); active.nminus = 1; }
+    return acc;
+  }
+
+  /* What the ship should hold station against, or null when there is
+   * nothing sensible. Flight assist is only meaningful RELATIVE TO
+   * SOMETHING, and picking the wrong something is what makes assists in
+   * orbital games unusable: cancel drift against the planet you are
+   * orbiting and the computer fights your seven kilometres a second of
+   * orbital velocity forever, emptying the tank to hold an attitude.
+   *
+   * Against a target it is exactly right — the station shares your orbit,
+   * so nulling drift relative to IT costs almost nothing and turns a
+   * docking approach into pointing and waiting. */
+  /* Returns the reference VELOCITY, not the object. The nav list holds
+   * bodies and live ships side by side and only the bodies can be asked
+   * for a velocity by id, so resolving to a vector here keeps both kinds
+   * working through one path. */
+  /* How close you have to be for the assist to take an interest, and how
+   * much of the engine it may ever spend.
+   *
+   * Both exist because the first version had neither and was unusable: with
+   * a dock locked thirty thousand kilometres away, the drift "relative to
+   * the target" is most of your orbital velocity, so the computer pinned
+   * the throttle at 100% and held it there, burning the tank to fly a
+   * transfer it had no business flying. Assist is a MANOEUVRING aid — it
+   * belongs in the last few hundred kilometres, and it should never be able
+   * to out-argue the pilot. */
+  var ASSIST_RANGE = 150;        // km
+  var ASSIST_AUTHORITY = 0.6;    // fraction of max thrust it may ever use
+
+  function assistRefVelocity() {
+    if (G.dockTarget) {
+      var p = Sim.bodyPosition(G.dockTarget, G.sys, G.t);
+      if (V.dist(p, G.ship.pos) > ASSIST_RANGE) return null;
+      return Sim.bodyVelocity(G.dockTarget, G.sys, G.t);
+    }
+    var nav = navTargetState();
+    if (nav && nav.vel && nav.range <= ASSIST_RANGE) return nav.vel;
+    return null;
+  }
+
+  /* ---- VECTOR ASSIST -----------------------------------------------------
+   * Astra: "a flight assist mode, which auto-vectors thrust so your ship's
+   * momentum will be in the direction the nose is pointing as viewed from
+   * the cockpit... it would auto-hover in atmo."
+   *
+   * Two behaviours, one mode, because they are the same sentence asked of
+   * two different places. In vacuum, "momentum on the nose" means killing
+   * whatever part of your velocity is not along the nose, so the velocity
+   * vector swings round to follow where you are looking. In air, the same
+   * instruction means a helicopter: hold the height you are at and stop
+   * sliding over the ground, because that is what a hovering thing does.
+   *
+   * WHAT IT MEASURES VELOCITY AGAINST is the whole design, and the file
+   * already carries the scar from getting this wrong once — see
+   * assistRefVelocity, which needs a lock precisely because "drift relative
+   * to the planet you are orbiting" is seven kilometres a second of
+   * perfectly good orbital velocity. This mode answers it differently: the
+   * reference is WHERE YOU ARE. Inside an atmosphere it is the air, which
+   * moves with its world. Outside one it is the body whose gravity
+   * dominates, which is the same body the speed readout already quotes you
+   * against — so the number the pilot is looking at and the number the
+   * computer is nulling are the same number.
+   *
+   * AND IT WILL SPEND THE TANK TO DO IT. Astra's call, asked directly and
+   * answered "full authority": point the nose ninety degrees off prograde
+   * in low orbit and this will genuinely try to turn five kilometres a
+   * second of momentum, and the reaction mass gauge will fall off a cliff
+   * while it tries. That is the honest behaviour for a mode whose whole
+   * promise is that your momentum goes where you point, and it is why the
+   * SHIP page now reads out local gravity beside your engine's own
+   * acceleration: the two numbers that say whether what you are about to
+   * ask for is possible.
+   *
+   * It cannot strand you, and that is deliberate rather than lucky.
+   * Manoeuvring burns the THRUSTER tank; the jump tank is never touched by
+   * it (see Sim.advanceShip). The worst this mode can do is leave you
+   * coasting with cold thrusters, which is a problem you can still fly out
+   * of by docking anywhere and refilling.
+   */
+  var VECTOR_AUTHORITY = 1.0;        // all of it, by request
+  var HOVER_GAIN = 0.35;             // s^-1, on altitude error
+  var HOVER_DAMP = 1.4;              // and on the rate, which keeps it from bouncing
+  var HOVER_STICK = 0.02;            // km/s of vertical input that counts as "flying it"
+
+  /* The frame this mode flies in. Returns null when there is nothing to
+   * hold station against at all, which out between the stars is the honest
+   * answer — there is no such thing as sideways out there. */
+  function vectorFrame() {
+    var atmo = Sim.atmosphereContext
+      ? Sim.atmosphereContext(G.ship.pos, G.sys, G.t) : null;
+    if (atmo && atmo.body) {
+      return { body: atmo.body, pos: atmo.pos, vel: atmo.vel, air: true };
+    }
+    var dom = Sim.dominantBody(G.ship.pos, G.sys, G.t);
+    if (!dom) return null;
+    return {
+      body: dom, pos: Sim.bodyPosition(dom, G.sys, G.t),
+      vel: Sim.bodyVelocity(dom, G.sys, G.t), air: false
+    };
+  }
+
+  /* Is this mode doing anything right now, and what would it call itself?
+   * Read by the HUD, which is the difference between a pilot who trusts it
+   * and one who thinks it is broken — the same lesson the ASSIST row's
+   * standby state taught. */
+  function vectorState() {
+    if (!G.vector) return 'OFF';
+    if (G.ship.docked) return 'docked';
+    if (G.ship.landed) return 'landed';
+    if (G.flightMode !== 'ship') return 'ship frame only';
+    if (G.autodock || G.nodeBurn) return 'autopilot flying';
+    var fr = vectorFrame();
+    if (!fr) return 'no reference';
+    return fr.air ? 'HOVER' : 'VECTOR';
+  }
+
+  /* The thrust this mode wants, in km/s^2, or null. `manual` is what the
+   * pilot is already spending, so the mode only ever offers what is left. */
+  function vectorAssist(manualAcc, dtA) {
+    var st = vectorState();
+    if (st !== 'VECTOR' && st !== 'HOVER') return null;
+    var s = G.ship;
+    var fr = vectorFrame();
+    var manual = V.len(manualAcc);
+    var budget = Math.max(0, s.maxAccel * VECTOR_AUTHORITY - manual);
+    if (budget <= 0) return null;
+
+    var rel = V.sub(s.vel, fr.vel);
+    var want;
+
+    if (fr.air) {
+      /* HOVER. Hold the height, stop the slide.
+       *
+       * Altitude is held rather than merely damped because that is what the
+       * word means: let go of everything over a landing pad and the ship
+       * should still be there a minute later. The held height follows the
+       * pilot whenever they are on the vertical thrusters, so R and F still
+       * fly it up and down and it parks wherever they stop. */
+      var up = V.norm(V.sub(s.pos, fr.pos));
+      var alt = V.dist(s.pos, fr.pos) - fr.body.radius;
+      var climbing = Math.abs(V.dot(manualAcc, up)) > HOVER_STICK * 0.5;
+      if (G.hoverAlt === null || climbing) G.hoverAlt = alt;
+
+      /* Cancel gravity first — everything below is a correction on top of
+       * simply not falling. */
+      var g = Sim.acceleration(s.pos, G.sys, G.t);
+      want = V.scale(g, -1);
+
+      var vUp = V.dot(rel, up);
+      var err = G.hoverAlt - alt;
+      want = V.addScaled(want, up, err * HOVER_GAIN - vUp * HOVER_DAMP);
+
+      /* And the ground track, unless the pilot is flying somewhere. Killing
+       * horizontal drift while they are asking for horizontal thrust would
+       * be the computer arguing with the hand on the stick. */
+      var horiz = V.addScaled(rel, up, -vUp);
+      var manHoriz = V.len(V.addScaled(manualAcc, up, -V.dot(manualAcc, up)));
+      if (manHoriz < HOVER_STICK * 0.1) {
+        want = V.addScaled(want, horiz, -HOVER_DAMP);
+      }
+    } else {
+      /* VECTOR. Whatever part of the velocity is not along the nose is what
+       * stands between the ship and flying where it is pointed, so that is
+       * what gets spent on. The along-nose component is left alone: this is
+       * an assist, not a brake, and the throttle still decides how fast. */
+      var along = V.dot(rel, s.fwd);
+      var lateral = V.addScaled(rel, s.fwd, -along);
+      var lat = V.len(lateral);
+      if (lat < 1e-7) return null;
+      /* Asking for the whole correction in one step and then clipping it to
+       * the budget is what makes this converge rather than overshoot: near
+       * the end the correction is smaller than the budget and the mode
+       * simply finishes the job in that frame. */
+      want = V.scale(lateral, -1 / Math.max(dtA, 1e-3));
+    }
+
+    var mag = V.len(want);
+    if (mag < 1e-9) return null;
+    if (mag > budget) want = V.scale(want, budget / mag);
+    return want;
+  }
+
+  function applyControls(dtReal) {
+    var fr = orbitalFrame();
+    var acc = V.zero();
+    var mag = G.ship.maxAccel * (G.keys['shift'] ? 0.08 : 1);
+    var active = {};
+
+    if (!G.ship.docked) {
+      acc = (G.flightMode === 'orbital')
+        ? orbitalFrameThrust(fr, mag, active)
+        : shipFrameThrust(mag, active);
+    }
+
+    /* Everything below distinguishes PILOT input from computer input, and
+     * `manual` is that line. Flight assist is applied further down, after
+     * the autopilots have decided whether a human is flying — the first
+     * version added it before, and since assist is thrust like any other,
+     * every autopilot instantly concluded the pilot had grabbed the
+     * controls and handed back. Auto-dock stopped docking entirely. */
+    var manual = V.len(acc);
+
+    /* Auto-dock flies the ship the same way you do — by commanding thrust —
+     * so it goes here, and any manual input on the burn keys takes it back.
+     * A pilot reaching for the controls should always win. */
+    if (G.autodock) {
+      if (manual > 0) {
+        cancelAutodock('handed back to you');
+      } else {
+        var cmd = advanceAutodock(G.lastDtSim || 0.016, dtReal);
+        if (cmd) acc = cmd;
+      }
+    }
+
+    /* The node autopilot sits alongside auto-dock and obeys the same rule:
+     * a hand on the thrust keys always wins. It runs on SIM seconds because
+     * that is what the engine is billed in — see advanceShip. */
+    if (G.nodeBurn) {
+      if (manual > 0) {
+        cancelNodeBurn('handed back to you');
+      } else {
+        var ncmd = advanceNodeBurn(G.lastDtSim || 0.016);
+        if (ncmd) acc = ncmd;
+      }
+    }
+
+    /* Flight assist, last: it spends whatever thrust the PILOT is not
+     * using to kill sideways drift relative to whatever is locked, leaving
+     * the along-nose component alone. Leaving the forward component
+     * untouched is what makes it an assist rather than a brake — the
+     * velocity vector swings round to follow the nose instead of the ship
+     * crabbing past a berth.
+     *
+     * Skipped entirely while an autopilot is flying: those already null
+     * their own relative velocity, and two controllers pushing at the same
+     * target is how you get a ship that hunts instead of arriving. */
+    if (G.flightMode === 'ship' && G.assist && !G.vector &&
+        !G.ship.docked && !G.ship.landed && !G.autodock && !G.nodeBurn) {
+      var rv = assistRefVelocity();
+      if (rv) {
+        var rel = V.sub(G.ship.vel, rv);
+        var along = V.dot(rel, G.ship.fwd);
+        var lateral = V.addScaled(rel, G.ship.fwd, -along);
+        var lat = V.len(lateral);
+        if (lat > 1e-7) {
+          var spare = Math.max(0, G.ship.maxAccel * ASSIST_AUTHORITY - manual);
+          var dtA = Math.max(G.lastDtSim || dtReal || 0.016, 1e-3);
+          var use = Math.min(spare, lat / dtA);
+          if (use > 0) {
+            acc = V.addScaled(acc, V.scale(lateral, 1 / lat), -use);
+            active.assist = 1;
+          }
+        }
+      }
+    }
+
+    /* VECTOR ASSIST, after everything else and instead of the docking one.
+     * Both are thrust, and two controllers pushing at the same ship is how
+     * you get one that hunts rather than arrives — the same rule that keeps
+     * assist out of the autopilots' way. When this mode is flying, it is
+     * the one flying. */
+    if (G.vector) {
+      var dtV = Math.max(G.lastDtSim || dtReal || 0.016, 1e-3);
+      var vcmd = vectorAssist(acc, dtV);
+      if (vcmd) {
+        acc = V.add(acc, vcmd);
+        active.assist = 1;
+      }
+    }
+
+    G.ship.thrust = acc;
+    G.ship.throttle = V.len(acc) / G.ship.maxAccel;
+    G.activeThrust = active;
+    G.frame = fr;
+    // Re-plot promptly while burning, but not every frame: the prediction is
+    // the most expensive thing we compute, and 12 Hz looks identical.
+    /* Re-plot promptly while burning. 0.08 s was the old number, chosen
+     * when a re-plot was one expensive frame and you wanted as few of them
+     * as you could stand; now that the work is spread out, a job takes
+     * about that long to finish on its own, so asking for one twice as
+     * often as it can be built just means integrating continuously. 0.18 s
+     * keeps the path visibly live under thrust and halves the standing
+     * cost. */
+    if (V.len(acc) > 0) G.trajectoryStale = Math.min(G.trajectoryStale, 0.18);
+
+    /* Attitude (facing) is controlled separately from translation, because a
+     * spacecraft can point anywhere regardless of where it's burning. It
+     * runs on real time rather than sim time so aiming stays responsive at
+     * any warp level — rotating the ship doesn't need to be "warped", only
+     * the orbit does. ArrowUp/Down pitch the nose, ArrowLeft/Right yaw it,
+     * Q/E roll. Sign convention: ArrowUp pitches the nose toward the
+     * ship's own "up", verified against the attitude ladder in testing. */
+    if (!G.ship.docked) {
+      // Verified empirically (test/physics.test.js, "attitude control sign
+      // conventions"): with this mapping, ArrowUp pitches the nose toward
+      // the ship's own up, ArrowRight yaws it toward the ship's own right,
+      // and E rolls the top of the ship toward the right (rolls right).
+      var rot = attitudeCommand();
+      Sim.integrateAttitude(G.ship, dtReal, rot);
+    }
+  }
+
+  /* The attitude stick: keys plus, if F9 says so, the mouse. One function,
+   * so cruise and normal flight cannot end up steering differently. */
+  function attitudeCommand() {
+    var rot = {
+      pitch: (G.keys['arrowup'] ? 1 : 0) - (G.keys['arrowdown'] ? 1 : 0),
+      yaw: (G.keys['arrowleft'] ? 1 : 0) - (G.keys['arrowright'] ? 1 : 0),
+      roll: (G.keys['e'] ? 1 : 0) - (G.keys['q'] ? 1 : 0)
+    };
+    if (G.mouseAim) {
+      rot.pitch = Math.max(-1, Math.min(1, rot.pitch + G.aimCmd.pitch));
+      rot.yaw = Math.max(-1, Math.min(1, rot.yaw + G.aimCmd.yaw));
+      G.aimCmd.pitch *= 0.86;
+      G.aimCmd.yaw *= 0.86;
+      if (Math.abs(G.aimCmd.pitch) < 1e-3) G.aimCmd.pitch = 0;
+      if (Math.abs(G.aimCmd.yaw) < 1e-3) G.aimCmd.yaw = 0;
+    }
+    return rot;
+  }
+
+  /* ---- update --------------------------------------------------------- */
+
+  /* How much warning does the player get before impact, in REAL seconds,
+   * at the current warp setting? Below this, a jump can eat the whole
+   * final approach between one rendered frame and the next — which is
+   * exactly what happened the first time this was left unhandled: a warp
+   * jump silently carried a decaying orbit straight into the star. */
+  var IMPACT_REACTION_SECONDS = 2.5;
+
+  function update(dtReal) {
+    /* The menu stops the world. Not G.paused — that is the player's own
+     * pause and has to still be however they left it when the menu closes —
+     * but a genuine early return, so nothing ages, no fuel burns and nobody
+     * closes on you while you are reading a slot list. The camera still
+     * tracks the ship so the view behind the overlay is not left pointing
+     * at where the ship used to be. */
+    if (G.menu || G.title) {
+      if (G.followShip && G.ship) G.cam.target = V.clone(G.ship.pos);
+      return;
+    }
+
+    /* In transit nothing else happens. No physics, no markets, no
+     * encounters — you are not anywhere for them to happen in. The camera
+     * still follows the ship so the cockpit stays put around you. */
+    if (G.hyper) {
+      advanceHyper(dtReal);
+      G.cam.target = V.clone(G.ship.pos);
+      return;
+    }
+
+    /* Cruise runs its own kinematics — you are not on a trajectory inside
+     * the bubble — but steering still works, so attitude is integrated
+     * before the drive moves you along the nose. */
+    if (G.cruise) {
+      if (!G.ship.docked) Sim.integrateAttitude(G.ship, dtReal, attitudeCommand());
+      /* Auto-dock's long leg is flown inside the bubble, and this branch
+       * returns before applyControls ever runs — so the autopilot gets its
+       * one job here: keep the nose on the station, and call the drop-out.
+       * Steering it from applyControls looked right and never executed. */
+      if (G.autodock) steerAutoCruise(dtReal);
+      /* steerAutoCruise can drop us out of cruise on arrival, and the
+       * kinematics must not then run against a bubble that is gone. */
+      if (G.cruise) advanceCruise(dtReal);
+      if (Eco) Eco.update(G.sys, G.t, G.ship.pos, Sim.bodyPosition);
+      G.cam.target = V.clone(G.ship.pos);
+      G.trajectory = null;
+      G.trajJob = null;
+      return;
+    }
+
+    applyControls(dtReal);
+
+    var warp = WARPS[G.warpIndex];
+    G.lastDtSim = 0;
+
+    /* Honest time warp: work out the largest simulation step we can take
+     * while still integrating the ship properly, and clamp to it rather than
+     * pretending. Close to a moon that means low warp; out in deep space you
+     * can skip years. */
+    var h = Sim.suggestedStep(G.ship, G.sys, G.t);
+    var maxDt = h * 3000;
+    G.warpCap = maxDt / Math.max(dtReal, 1e-3);
+    G.physicsLimited = false;
+    G.impactWarning = null;
+
+    if (!G.paused && Sim.towActive(G.ship)) {
+      /* ON THE CABLE. Carried like an arrival, but compressed like a long
+       * burn, and the difference is the whole reason this is its own
+       * branch: an arrival's legs are measured in seconds, so it is forced
+       * to 1x, whereas a tow is measured in HOURS — the median is 33 of
+       * them and the worst in the galaxy is 280. At 1x that is not a
+       * journey, it is a wait, and the player would alt-tab, which is the
+       * same as a cutscene except more annoying.
+       *
+       * So warp applies. Floored at TOW_MIN_WARP because the player should
+       * not be able to sit at 1x watching a cable for a day and a half, and
+       * clamped per frame so the whole tow cannot resolve inside a single
+       * frame at a million times — the bug that let weapon cooldowns fire
+       * sixty shots a second was exactly that. */
+      var towWarp = Math.max(Combat.TOW_MIN_WARP, warp);
+      G.lastDtSim = Math.min(towWarp * dtReal, (G.ship.tow.dur || 1) / 12);
+      G.t += G.lastDtSim;
+      var towStep = Sim.stepTow(G.ship, G.sys, G.t);
+      G.arrivalPose = null;
+      if (towStep && towStep.done) {
+        G.warpIndex = 0;
+        say('Cable off — ' + (G.sys.byId[towStep.port] || {}).name + ' has you.', 6);
+      }
+    } else if (!G.paused && Sim.arrivalActive(G.ship)) {
+      /* BEING CARRIED. Not docked yet and not flying either, so neither of
+       * the branches below is right: there is nothing to integrate, but the
+       * hull is moving and the clock must advance at something a human can
+       * watch. Warp is forced to 1x rather than merely capped — the legs
+       * are measured in sim seconds, and at 500x the entire arrival would
+       * resolve inside a single frame, which is exactly how the weapon
+       * cooldowns managed to fire sixty shots a second. */
+      G.lastDtSim = dtReal;
+      G.t += G.lastDtSim;
+      G.warpIndex = 0;
+      G.arrivalPose = Sim.stepArrival(G.ship, G.sys, G.t);
+    } else if (!G.paused && G.ship.docked) {
+      /* Docked: rigidly attached to the target, so there is nothing to
+       * integrate and nothing that can go wrong — time is free to run at
+       * full warp with no collision risk and no accuracy cap. */
+      G.lastDtSim = warp * dtReal;
+      G.t += G.lastDtSim;
+      G.arrivalPose = null;
+      Sim.updateDockedShip(G.ship, G.sys, G.t);
+    } else if (!G.paused && !G.ship.landed) {
+      var dtSim = warp * dtReal;
+      if (dtSim > maxDt) {
+        /* The integrator wants a smaller step than the player asked for.
+         * Clamp to what it can actually do — but never below the floor,
+         * because five times real time is only 0.08 s of simulation and
+         * sits comfortably inside the step budget even hard against a
+         * surface. In practice this branch almost never reaches the floor;
+         * it is here so that "physics limited" can never again mean
+         * "unplayable". */
+        dtSim = Math.max(maxDt, Math.min(dtSim, WARP_FLOOR * dtReal));
+        G.physicsLimited = true;
+      }
+      G.lastDtSim = dtSim;
+
+      /* Look for an impact inside this jump BEFORE taking it. Prefer the
+       * already-computed prediction (cheap, multi-body-accurate); if
+       * prediction display is off, fall back to a direct scan so the safety
+       * net still works with the green line hidden. */
+      var predictedHit = (G.trajectory && G.trajectory.impact) ? G.trajectory.impact : null;
+      var timeToImpact = predictedHit ? (predictedHit.t - G.t) : Infinity;
+      if (!G.showPrediction) {
+        var scan = Sim.scanForImpact(G.ship, G.sys, G.t, Math.max(dtSim, warp * IMPACT_REACTION_SECONDS));
+        if (scan) { timeToImpact = scan.inSeconds; predictedHit = scan; }
+      }
+
+      if (isFinite(timeToImpact)) {
+        var reactionWindow = Math.max(warp * IMPACT_REACTION_SECONDS, 4);
+        if (timeToImpact < reactionWindow) {
+          // Close enough that this warp setting would blow through it:
+          // never advance past just short of the impact in one jump, and
+          // drop warp so the player gets real reaction time back.
+          dtSim = Math.min(dtSim, Math.max(0, timeToImpact - 0.5));
+          /* Step DOWN toward the floor rather than falling to 1x.
+           *
+           * Slamming warp to 1x was technically safe and miserable to
+           * play: a long powered approach to a station in a planet's well
+           * has a predicted impact somewhere ahead of it almost the whole
+           * way, so the safety net fired over and over and left a
+           * twenty-hour burn to be sat through in real time.
+           *
+           * Descending one notch at a time keeps the reaction window
+           * growing every frame the danger persists, which is the actual
+           * point of the mechanism, while WARP_FLOOR keeps a burn from
+           * ever becoming unplayable. The floor is abandoned only when
+           * impact is genuinely seconds away, which is the one case where
+           * real time is what you want. */
+          if (timeToImpact < IMPACT_HANDS_ON) {
+            if (G.warpIndex > 0) {
+              G.warpIndex = 0;
+              say('IMPACT IMMINENT — ' + predictedHit.body.name + ' — warp 1×', 4);
+            }
+          } else if (WARPS[G.warpIndex] > WARP_FLOOR) {
+            G.warpIndex = Math.max(WARP_FLOOR_INDEX, G.warpIndex - 1);
+            if (WARPS[G.warpIndex] <= WARP_FLOOR) {
+              say('Collision course with ' + predictedHit.body.name +
+                  ' — warp held at ' + WARP_FLOOR + '×', 4);
+            }
+          }
+          G.impactWarning = { danger: true,
+            text: 'COLLISION COURSE — ' + predictedHit.body.name + ' in ' + fmtTime(Math.max(0, timeToImpact)) };
+        } else if (timeToImpact < 3.6e4) {
+          // Further out: no need to intervene yet, just keep it on the HUD.
+          G.impactWarning = { danger: false,
+            text: 'impact predicted: ' + predictedHit.body.name + ' in ' + fmtTime(timeToImpact) };
+        }
+      }
+
+      // The urgent scan above is deliberately narrow once warp is low — its
+      // window is tied to the CURRENT warp's reaction time, so it stays
+      // cheap every frame. That means right after it forces a safety
+      // warp-drop, its own window shrinks too and the informational
+      // "impact predicted in X" banner disappears — exactly when the player
+      // most wants to know how much runway they actually have. With
+      // prediction display off there is no G.trajectory to fall back on
+      // either, so keep a separate, much longer-horizon scan alive on its
+      // own slower clock purely to backfill that banner. It never touches
+      // dtSim or warp — only the urgent scan above is allowed to do that.
+      if (!G.showPrediction) {
+        G.impactForecastStale -= dtReal;
+        if (G.impactForecastStale <= 0) {
+          G.impactForecast = Sim.scanForImpact(G.ship, G.sys, G.t, 3.6e4, 3000);
+          /* This scan is the other 20 ms spike in the frame, for the same
+           * reason the predicted path was: it integrates ten hours ahead,
+           * and it did so twice a second regardless of whether anything
+           * could plausibly be hit.
+           *
+           * It still runs on every orbit — it must, because it is the only
+           * thing that sees a MOON in the way, which the osculating ellipse
+           * about the planet knows nothing about. But when the orbit clears
+           * its own primary's surface and the engine is off, nothing is
+           * developing quickly, and it can run at a quarter of the rate.
+           * Any burn resets it to the fast cadence through the same path
+           * that resets the trajectory. */
+          var relaxed = !(G.ship.thrust && V.len(G.ship.thrust) > 0) &&
+                        !G.impactForecast && !orbitReachesGround();
+          G.impactForecastStale = relaxed ? 2.0 : 0.5;
+        }
+        if (!G.impactWarning && G.impactForecast) {
+          var farOut = G.impactForecast.t - G.t;
+          if (farOut > 0 && farOut < 3.6e4) {
+            G.impactWarning = { danger: false,
+              text: 'impact predicted: ' + G.impactForecast.body.name + ' in ' + fmtTime(farOut) };
+          }
+        }
+      } else {
+        G.impactForecast = null;
+      }
+
+      var res = Sim.advanceShip(G.ship, G.sys, G.t, dtSim, 3000);
+      G.t = res.t;
+      if (G.ship.landed && !G.reported) {
+        G.reported = true;
+        say(G.ship.crashed
+          ? 'Impact with ' + G.ship.landedOn.name + ' at ' + fmtSpeed(G.ship.impactSpeed) + '   (B to respawn)'
+          : 'Touchdown on ' + G.ship.landedOn.name, 8);
+        G.warpIndex = 0;
+      }
+      if (!G.ship.landed) G.reported = false;
+
+      /* A pad inside its envelope declined to catch us because the gear was
+       * up. Sim raises the flag; saying why is this layer's job, and it has
+       * to be said — an approach that silently does nothing reads as a
+       * broken pad, and the player's next move is to fly it again. */
+      if (G.ship.gearBalked) {
+        G.ship.gearBalked = false;
+        if (!G.gearNagAt || G.t - G.gearNagAt > 8) {
+          G.gearNagAt = G.t;
+          say('Pad will not take you with the gear up — Shift+G', 5);
+          if (global.Sound) global.Sound.fx('warn');
+        }
+      }
+
+      offerClearanceNearby();
+      nagUncleared();
+
+      // Are we close enough and slow enough to latch onto the docking
+      // target? Checked every physics tick, not just on approach — a
+      // sloppy final few metres is exactly when this matters most.
+      if (G.dockTarget && !G.ship.landed) {
+        G.dockStatus = Sim.dockingStatus(G.ship, G.dockTarget, G.sys, G.t);
+        if (G.dockStatus.inRange && G.dockStatus.slowEnough) {
+          /* Traffic control has a warrant list. A wanted ship sitting in
+           * the envelope is not docked; it is loitering outside a door
+           * that will not open. Surface pads stay usable — nobody can
+           * stop you landing on dirt — which quietly makes them the
+           * smuggler's route home. */
+          var denial = Combat.dockRefusal(G, G.dockTarget);
+          if (denial) {
+            if (performance.now() > (G.dockDeniedUntil || 0)) {
+              G.dockDeniedUntil = performance.now() + 6000;
+              /* SAY WHICH REFUSAL IT IS. The old line named a bounty
+               * whatever the reason, so a pilot ordered out over a hold
+               * full of tailings was told to settle a bounty they did not
+               * have — which is worse than saying nothing, because it
+               * sends them off to fix the wrong thing. */
+              say(G.dockTarget.name + ': "Docking DENIED." — ' + denial.text, 9);
+              HOOKS.sound('warn');
+            }
+          } else {
+            /* SLOWLY, if the port has somewhere to carry you. beginArrival
+             * refuses for an orbital clamp — no shaft, no traverser — and
+             * for anything with no bay geometry, and in both cases this
+             * falls back to the snap that has always happened. */
+            if (Sim.beginArrival(G.ship, G.dockTarget, G.sys, G.t)) {
+              /* The port says what it is like down there as it clears you,
+               * which is the one moment a pilot actually wants to know. */
+              var cw = Weather && Weather.hasWeather(G.dockTarget)
+                     ? Weather.report(G.dockTarget, G.sys, G.t) : null;
+              say(G.dockTarget.name + ': ' + (G.dockTarget.surface
+                    ? '"Cleared to the pad. Hold for the lift."'
+                    : '"Cleared in. Hold station, we have you."') +
+                  (cw && !cw.airless ? '   ' + Weather.describe(cw) : ''), 6);
+            } else {
+              Sim.dockShip(G.ship, G.dockTarget, G.sys, G.t);
+              say('Docked with ' + G.dockTarget.name, 5);
+            }
+            G.warpIndex = 0;
+          }
+        }
+      }
+    }
+
+    /* Arriving at a port — orbital or on the ground — settles the
+     * clearance: spends it, or books the citation for turning up
+     * unannounced.
+     *
+     * Detected as a TRANSITION rather than hooked into the places that
+     * dock, because there are two of them: the explicit Sim.dockShip call
+     * above, and pad capture, which completes deep inside Sim.checkImpact
+     * where there is no call site to hook at all.
+     *
+     * Placed HERE, outside the whole if/else chain, and that position is
+     * the entire point. The first version sat inside the not-docked branch
+     * and ran BEFORE the dock call a few lines below it — so on the frame
+     * the ship docked the edge had not happened yet, and on every frame
+     * after, that branch was skipped because the ship was docked. It
+     * silently never fired: no fine, no clearance consumed. Out here it
+     * runs once a frame whatever the ship is doing. */
+    if (!G.wasDocked && G.ship.docked) {
+      var arrivedAt = G.sys.byId[G.ship.docked];
+      /* Occupancy is measured at the instant the clamps close, not when
+         clearance was asked for: a berth that emptied while you flew in is
+         not a berth you stole. */
+      if (arrivedAt) Combat.arriveAtPort(G, arrivedAt, HOOKS,
+                                         Sim.berthStatus(arrivedAt, G.sys, G.t, G.ship));
+      /* And the desk takes what it is owed — wages and berthing, settled
+       * off their clocks. See settleAccounts. */
+      settleAccounts();
+    }
+    G.wasDocked = !!G.ship.docked;
+
+    /* THE SHIPS YOU ARE NOT IN, once a frame. An order is a timetable
+     * entry, so this is a handful of timestamp comparisons and it returns
+     * before allocating anything when nothing of yours is under way — see
+     * Fleet.tick. It runs whatever the player is doing, because a ship
+     * arriving while you are docked, warping or three stars away arrives
+     * at the same instant either way. */
+    if (Fleet && Fleet.tick) {
+      var arrived = Fleet.tick(G, G.sys, G.t);
+      for (var ai = 0; ai < arrived.length; ai++) logTrade(arrived[ai]);
+    }
+
+    if (G.ship.docked) {
+      G.dockStatus = null;
+      G.trajectory = null;
+      G.trajJob = null;
+    } else if (G.dockTarget && !G.paused) {
+      G.dockStatus = Sim.dockingStatus(G.ship, G.dockTarget, G.sys, G.t);
+    }
+
+    // Compass target: the last non-star body the ship was gravitationally
+    // dominated by. Updated continuously while near a planet/moon/station,
+    // but deliberately left alone once you coast out into interplanetary
+    // space and the star's faint pull technically "wins" -- snapping the
+    // needle to the star the instant you leave orbit would make the
+    // compass useless for the one thing it is for: finding your way back
+    // to wherever you just came from.
+    var domNow = Sim.dominantBody(G.ship.pos, G.sys, G.t);
+    if (domNow && domNow.kind !== 'star') G.lastMassiveBody = domNow;
+    else if (!G.lastMassiveBody) G.lastMassiveBody = domNow;
+
+    advancePrediction(dtReal);
+
+    /* The node plan, on its own slower clock. It is the most expensive
+     * thing in the frame when it runs — a full integration from now out to
+     * the node — so it is throttled harder than the live prediction, and
+     * any edit sets nodeStale to zero for an immediate redraw.
+     *
+     * A node that has arrived and was never flown is dropped rather than
+     * left sitting in the past drawing a burn that can no longer happen. */
+    if (G.node && G.node.t < G.t - 1 && !G.nodeBurn) {
+      clearNode(true);
+      say('Node time passed — plan dropped', 4);
+    }
+    refreshNodePlan(dtReal);
+
+    /* Markets. Ports close to the ship step forward continuously; everything
+     * else stays on its closed form and costs nothing. Economy.update is
+     * what decides which is which, and it is safe to call every frame at
+     * any warp — see the note on MAX_LIVE_STEP in economy.js. */
+    if (Eco) Eco.update(G.sys, G.t, G.ship.pos, Sim.bodyPosition);
+
+    /* Encounters. Everything stays on its rail until it is close enough to
+     * matter; this is the call that lifts one off and steers it. It runs on
+     * SIM seconds, not real ones, so an intercept from 3000 km out resolves
+     * in seconds of your time while you are warping — and it hands back a
+     * warp cap, because the moment something is genuinely alongside you is
+     * the moment you need your own reaction time back. */
+    /* Anything anyone has thrown out of an airlock falls on the same physics
+     * as the ship that threw it, while it is close enough to matter. */
+    Sim.updateCanisters(G.sys, G.ship.pos, G.t, G.lastDtSim || 0);
+
+    /* Resolve the lock once a frame, here rather than as a side effect of
+     * drawing the target page. A lock on a freighter that has since docked
+     * has to release itself whether or not you happen to be looking at the
+     * screen that would have noticed — which is exactly what went wrong the
+     * moment the pages stopped all being drawn at once. */
+    navTargetState();
+
+    G.encounter = Sim.updateEncounters(G.sys, G.t, G.lastDtSim || 0, G.ship);
+
+    /* A police scan resolves itself the instant it happens — there is no
+     * player choice the way a pirate's demand has one, so it is handled
+     * here rather than waiting on a key press. */
+    if (G.encounter.scanNow) Combat.resolveScan(G, G.encounter.scanNow, HOOKS);
+
+    if (G.encounter.warpCap < Infinity) {
+      var maxIdx = 0;
+      for (var wi = 0; wi < WARPS.length; wi++) if (WARPS[wi] <= G.encounter.warpCap) maxIdx = wi;
+      if (G.warpIndex > maxIdx) {
+        G.warpIndex = maxIdx;
+        if (!G.encounterWarned) {
+          G.encounterWarned = true;
+          say(G.encounter.dangerClosest < 1000
+            ? 'Ship alongside — time warp held at ' + WARPS[maxIdx] + '×'
+            : 'Traffic closing — time warp limited', 4);
+        }
+      }
+    }
+    if (!G.encounter.active.length) G.encounterWarned = false;
+
+    /* Combat: weapons, damage, distress calls and the reaping of the dead.
+     * Runs after the encounter step so an NPC turned hostile this frame
+     * steers on it next frame — one frame of lag nobody can perceive. */
+    Combat.update(G.sys, G, G.t, G.lastDtSim || 0, HOOKS);
+
+    stepContrails();
+
+    /* The legs, moving. Outside the paused/docked guard below on purpose:
+     * a berthed ship still has to READ as standing on its gear, and the
+     * first frame after a load is where that gets decided. */
+    Sim.updateGear(G.ship, G.paused ? 0 : (G.lastDtSim || 0));
+
+    /* Re-entry heating, on the live ship only — the predictor's ghosts run
+     * the same integrator and must never bank heat of their own. */
+    if (!G.paused && !G.ship.docked && G.lastDtSim > 0) {
+      var cooked = Sim.updateHeating(G.ship, G.sys, G.t, G.lastDtSim);
+      if (G.ship.heat > Sim.HEAT_LIMIT * 0.55 && !G.heatWarned) {
+        G.heatWarned = true;
+        say('HULL TEMPERATURE RISING — shallow out or slow down', 5);
+        if (global.Sound) global.Sound.fx('warn');
+      } else if (G.ship.heat < Sim.HEAT_LIMIT * 0.25) {
+        G.heatWarned = false;
+      }
+      if (cooked > 0 && G.ship.hullHp <= 0) playerDestroyed();
+    }
+
+    /* Contracts age whether or not you are looking at them. */
+    Missions.update(G, G.t, HOOKS);
+
+    /* Scooping. Drift onto a canister slowly enough and it is yours — the
+     * other half of jettison, and the whole point of robbing a freighter
+     * of its cargo rather than its credits. */
+    scoopCanisters();
+
+    /* The dock is an event, not just a state: contracts settle, the ledger
+     * hits the disk, and the clamps make their noise, exactly once. */
+    if (G.ship.docked && !G.wasDocked) {
+      var dockedPort = G.sys.byId[G.ship.docked];
+      Missions.completeAtDock(G, dockedPort, G.sys, G.t, HOOKS);
+      HOOKS.sound('dock');
+      if (global.Save) global.Save.store(G);
+    }
+    G.wasDocked = !!G.ship.docked;
+
+    /* The drive's noise follows the throttle. */
+    if (global.Sound) {
+      global.Sound.thrust((G.ship.docked || G.ship.landed) ? 0 : (G.ship.throttle || 0));
+    }
+
+    /* Nearest other ship, for the cockpit's contact readout. Range-limited:
+     * a freighter four AU away is technically the nearest contact and
+     * practically not worth a line of the HUD. */
+    G.contact = Sim.nearestShip(G.sys, G.t, G.ship.pos, 0.35 * AU);
+
+    if (G.ship.fuelOut && !G.fuelWarned) {
+      G.fuelWarned = true;
+      /* This line used to end "Docking refills it free", which was true and
+       * useless: it was said to somebody who has no thrust and therefore
+       * cannot dock. It named the one exit and then pointed at the door
+       * they could no longer reach. Now it points at the exit that exists
+       * from where they actually are. */
+      /* A tender is dispatched by Combat.updateRescue the same frame, and
+       * its own line says who is coming and how long; this one only speaks
+       * when nobody is. */
+      if (!G.rescue) {
+        var callingAlready = (G.distress || []).some(function (c) { return c.mine; });
+        say('Reaction mass exhausted — no thrust.' +
+            (callingAlready ? '  Your mayday is transmitting.'
+             : (G.tenderKills || 0) > 0 ? '  No tender will answer this ship.'
+             : '  F4 COMMS: MAYDAY for a fuel tender.'), 8);
+      }
+    }
+    if (G.ship.thrusterFuel > 0.01) G.fuelWarned = false;
+
+    /* Camera follows its subject. Following the SHIP snaps instantly rather
+     * than easing in: the ship already moves smoothly frame to frame, so
+     * there is nothing to smooth, and a fixed easing rate applied to a body
+     * doing several km/s leaves a lag of hundreds of metres — invisible
+     * zoomed out to a whole system, but enough to lose the ship entirely
+     * once you are close enough to see its hull (docking, formation flying).
+     * Following a FOCUS BODY still eases in, because that case is exactly
+     * the opposite: a human just pressed Tab and a smooth pan reads better
+     * than a jump cut. */
+    /* Follow the ship whenever there is nothing else to follow. Entering
+     * the cockpit clears the focus body, so toggling tracking off after
+     * that used to leave the camera chasing null — a crash that only
+     * showed up once something actually pressed every key in order. */
+    if (G.followShip || !G.focus) {
+      G.cam.target = V.clone(G.ship.pos);
+    } else {
+      var want = Sim.bodyPosition(G.focus, G.sys, G.t);
+      var k = Math.min(1, dtReal * 8);
+      G.cam.target = {
+        x: G.cam.target.x + (want.x - G.cam.target.x) * k,
+        y: G.cam.target.y + (want.y - G.cam.target.y) * k,
+        z: G.cam.target.z + (want.z - G.cam.target.z) * k
+      };
+    }
+
+    /* INSIDE A STATION, THE CAMERA FOLLOWS THE SHIP — whatever it was
+     * focused on before you flew in.
+     *
+     * THE BUG THIS KILLS, caught live rather than reasoned about. Focus a
+     * body from the chart, then dock: `G.focus` stays on that body, the
+     * gate below is false, and clampCameraToEnclosure never runs. Measured
+     * in the running game with the hull berthed inside a 7 km station, the
+     * boom was ONE HUNDRED AND TWENTY-THREE THOUSAND KILOMETRES — out at
+     * the planet it was still pointed at. Every enclosure clamp in this
+     * file was correct and none of them was being called. Setting follow
+     * took it to 248 m on the next frame.
+     *
+     * It is not a clamp because a clamp would be wrong: with focus on a
+     * body the boom is measured to that BODY, so shortening it would put
+     * the eye 250 m from a planet rather than from the ship. The only
+     * sensible view from inside a hangar is of the thing in the hangar. */
+    if (!G.followShip && G.focus && enclosedPort()) G.followShip = true;
+
+    if (G.followShip || !G.focus) clampCameraToEnclosure();
+  }
+
+  /* ---- the exterior camera stays in the room the ship is in -------------
+   *
+   * Pull the boom back from a ship berthed underground and it goes through
+   * the wall — and what you get is not an outside view, it is the inside
+   * of a planet: nothing to see, or one piece of geometry a metre from the
+   * lens filling the screen. No amount of shading rescues that, because
+   * the camera is genuinely somewhere there is nothing to look at.
+   *
+   * Two clamps, in order of how specific they are:
+   *
+   *   1. Berthed in a hangar, the boom cannot be longer than the hangar.
+   *   2. Anywhere else, the eye cannot go below the ground the ship is
+   *      flying over — which also stops the camera sinking into a world
+   *      whenever you fly low, not just at ports.
+   *
+   * Arithmetic, not a swept collision test: the room is a drum of known
+   * size around a known point and the ground is a sphere of known radius,
+   * so both answers are one subtraction, and one rule that is always right
+   * is worth more here than a general query nothing else would use. */
+  /* The port whose shaft is worth cutting a hole in the ground for: the one
+   * you are berthed in, or failing that the nearest surface port close
+   * enough that its mouth is more than a couple of pixels across. Only ever
+   * one — you can only be at one port, and two mouths on screen at once are
+   * both far enough away that neither hole would be visible.
+   *
+   * SHAFT_MOUTH is the shaft's top radius in pad radii and has to match the
+   * bay mesh in render.js; it is read from there rather than repeated, for
+   * the same reason SHALLOW_DEPTH is shared with the generator — a hole cut
+   * to a different size than the hole that was modelled is a rim of ground
+   * hanging in mid air. */
+  var SHAFT_CUT_RANGE = 400;    // km
+
+  /* Rock, not sky. Dark enough to read as "no light gets here", warm
+   * enough not to be mistaken for empty space. */
+  var ROCK_CLEAR = [0.055, 0.048, 0.043];
+  var ROCK_CLEAR_CSS = '#0e0c0b';
+
+  /* The world the camera is inside, if it is inside one. Cheap: it is only
+   * ever the body the ship is closest to, and being underground at all
+   * means being at a port on that body. */
+  function undergroundHost(cam) {
+    if (!cam || !cam.eye || !G.ship || !G.sys) return null;
+    var host = G.lastMassiveBody || Sim.dominantBody(G.ship.pos, G.sys, G.t);
+    if (!host || !host.radius) return null;
+    var hc = Sim.bodyPosition(host, G.sys, G.t);
+    return V.dist(cam.eye, hc) < host.radius ? host : null;
+  }
+
+  function activeShaft() {
+    if (!G.ship || !G.sys) return null;
+    var port = berthedPort();
+    if (!port) {
+      var best = null, bestD = SHAFT_CUT_RANGE;
+      var list = G.sys.pads || [];
+      for (var i = 0; i < list.length; i++) {
+        var p = list[i];
+        if (!p.surface || !p.parentBody) continue;
+        var d = V.dist(Sim.portEntrance(p, G.sys, G.t).pos, G.ship.pos);
+        if (d < bestD) { bestD = d; best = p; }
+      }
+      port = best;
+    }
+    if (!port || !port.parentBody) return null;
+    return {
+      hostId: port.parentBody.id,
+      mouth: Sim.portEntrance(port, G.sys, G.t).pos,
+      /* A shade wider than the modelled mouth. The collar ring stands
+       * around the hole and hides the seam; cutting exactly to the shaft
+       * radius leaves a hairline of planet showing between the two. */
+      radius: port.radius * 0.58
+    };
+  }
+
+  var GROUND_CAM_LIFT = 1.02;   // keep the eye this far above the surface
+  var HANGAR_MARGIN = 0.02;     // pad radii of clearance off every surface
+
+  /* Shorten the boom until the eye is inside the hangar rather than inside
+   * its walls. The room is a cylinder of known size around a known axis —
+   * from the same table the mesh was built from — so this is three
+   * one-dimensional limits and a minimum, not a collision query.
+   *
+   * The floor is the tight one: a berthed ship stands about a dozen metres
+   * off it, so a camera swung underneath has almost nowhere to go and gets
+   * pulled right in. That is correct. There genuinely is no room down
+   * there, and a view from inside the concrete is not the alternative. */
+  /* How far a ray starting at `p0` and travelling `d` per unit can go
+   * before it leaves the slab |x| <= half. Infinity when it is travelling
+   * along the slab and will never leave it. */
+  function slabLimit(p0, d, half) {
+    if (d > 1e-12) return (half - p0) / d;
+    if (d < -1e-12) return (-half - p0) / d;
+    return Infinity;
+  }
+
+  /* Keep the eye inside the room the ship is parked in.
+   *
+   * PORTBASIS, NOT GROUNDBASIS, and that one word is most of what made this
+   * work for orbital stations: the arithmetic below was always general — a
+   * box is a box — and the only thing holding it to the ground was asking
+   * for a ground frame. portBasis answers for both kinds.
+   *
+   * AND THE ROOM IS THE BERTH when the model declares one. Measuring a
+   * modelled station against bayGeometry's chamber would have clamped the
+   * eye to a hall at the hub while the ship sat in an alcove out on the rim
+   * at 0.65 radii — hauling the camera across the station and through
+   * several walls to get there. Sim.berthRoom hands back the alcove itself.
+   * A shed built from the constant table has no declared berths and keeps
+   * the chamber, which is the right room for it. */
+  /* THE INTERIOR IS DRAWN WHENEVER YOU ARE INSIDE THE STATION, and both
+   * gates that used to stand in front of it are gone. Recording why,
+   * because they were each written for a real reason and both reasons have
+   * since stopped being true.
+   *
+   * `berthIsInInterior` asked whether the berth you are parked in lies
+   * inside the model's own `interior` bucket. Measured, that is 0 of 48
+   * berths across the whole library — the art puts berths in THROATS cut
+   * through the hull and its interior bucket is the concourse those
+   * throats lead to — so the gate was permanently shut and a 9,500-face
+   * hangar with 864 self-lit surfaces has never once been drawn. What
+   * Astra has been looking at from a berth is the BACK of the outer hull:
+   * open panels, drawn double-sided with their normals flipped toward the
+   * camera, which is exactly how you get a flat grey plate.
+   *
+   * `insideInterior` asked whether the eye was within the bucket's bounding
+   * box. Same objection, one level down: you are in the corridor that leads
+   * to the room, which is not in the box.
+   *
+   * AND THE SLAB RISK THEY GUARDED IS GONE. Both were written when the
+   * station and the ship were composited by paintMesh, which sorts
+   * far-to-near WITHIN one mesh and has no depth buffer between two — so a
+   * room drawn while you were outside it landed on top of everything. Both
+   * meshes go through GLWorld.queueMesh now, which has a real depth buffer
+   * and resolves them for nothing. The predicate that survives is the
+   * honest one: are you inside this station. Sim.insideStation answers it
+   * off the model's own geometry.
+   *
+   * If the slabs ever come back it will be on a machine with no WebGL,
+   * where the 2D painter is doing the compositing again — and the fix then
+   * is to sort the two meshes against each other, not to hide the room. */
+
+  function clampCameraToHangar(port) {
+    if (!Gen || !Gen.bayGeometry || !Sim.portBasis) return;
+    var basis = Sim.portBasis(port, G.sys, G.t);
+    if (!basis) return;
+    var g = Gen.bayGeometry(port);
+    var r = port.radius || 1;
+
+    var cp = Math.cos(G.cam.pitch), sp = Math.sin(G.cam.pitch);
+    var cyw = Math.cos(G.cam.yaw), syw = Math.sin(G.cam.yaw);
+    var dir = { x: cp * cyw, y: cp * syw, z: sp };      // target -> eye
+
+    // The ship's own place in the room, in pad radii off the mouth.
+    var rel = V.sub(G.cam.target, basis.entrance.pos);
+    var z0 = V.dot(rel, basis.up) / r - g.lift;
+    var e0 = V.dot(rel, basis.east) / r, n0 = V.dot(rel, basis.north) / r;
+
+    var dz = V.dot(dir, basis.up) / r;                  // per km of boom
+    var de = V.dot(dir, basis.east) / r, dn = V.dot(dir, basis.north) / r;
+
+    var room = Sim.berthRoom ? Sim.berthRoom(port, currentBerth()) : null;
+    var box = room
+      ? room
+      : { x0: -g.chamberX, x1: g.chamberX,
+          y0: -g.chamberY, y1: g.chamberY,
+          z0: g.floorZ,    z1: g.ceilZ };
+
+    /* THE MARGIN HAS TO FIT THE ROOM. HANGAR_MARGIN is two per cent of a
+     * PAD radius, which is a couple of metres in a shed and thirteen in a
+     * station measured in its own radii — half the height of a berth. A
+     * clearance bigger than the room it is clearing collapses the box and
+     * welds the camera to the hull, so it is capped against the smallest
+     * dimension there is. */
+    var span = Math.min(box.x1 - box.x0, box.y1 - box.y0, box.z1 - box.z0);
+    var pad = Math.min(HANGAR_MARGIN, Math.max(0, span) * 0.15);
+    /* AND IT MUST NEVER EVICT THE SHIP. A hull parks a standoff off the
+     * floor and a hull's width off the wall, and in a tight room those gaps
+     * are smaller than the clearance — so a fixed margin can shrink the box
+     * past the very point it is meant to contain. Every limit then comes
+     * out negative and the boom collapses onto the hull, which is the one
+     * failure this function exists to prevent. Half of the ship's own
+     * clearance is the most that can ever be taken. */
+    pad = Math.min(pad, halfGap(e0, box.x0, box.x1),
+                        halfGap(n0, box.y0, box.y1),
+                        halfGap(z0, box.z0, box.z1));
+    if (!(pad > 0)) pad = 0;
+
+    /* One slab test per axis, nearest wins. `rayLimit` takes the real
+     * bounds rather than a half-extent because a modelled alcove is not
+     * centred on anything — it is a box cut where the art put it. */
+    var limit = G.cam.dist;
+    limit = Math.min(limit, rayLimit(e0, de, box.x0 + pad, box.x1 - pad));
+    limit = Math.min(limit, rayLimit(n0, dn, box.y0 + pad, box.y1 - pad));
+    limit = Math.min(limit, rayLimit(z0, dz, box.z0 + pad, box.z1 - pad));
+
+    /* WHEN THE SLABS GIVE NOTHING, STAND BACK INSTEAD OF STANDING ON IT.
+     *
+     * The tests above answer "how far can the boom run THIS WAY before it
+     * leaves the room", and there are two ordinary situations where the
+     * honest answer is nothing at all: mid-arrival, when the hull is still
+     * out at the hatch or a hundred metres outboard in a throat and every
+     * limit comes out negative; and parked, with the eye pitched into a
+     * deck a hull's standoff below it, where the real clearance is ten
+     * metres. Both then collapse to MIN_CAM_DIST — the boom welded to the
+     * hull, grey plating filling the screen, nothing thrown — and the
+     * second of those is the whole of the shot this sequence exists for.
+     *
+     * So when the direction the camera is pointing has no room in it, the
+     * limit becomes half the narrowest way through the room instead. Not a
+     * slab test: a radius, centred on the hull, conservative from any
+     * direction, and the same answer the shaft's `descend` leg has always
+     * given for the same reason. It needs no threshold of its own —
+     * "smaller than the smallest boom there is" is the condition — and it
+     * resolves back into the slab tests the moment they have anything to
+     * say. */
+    if (limit < MIN_CAM_DIST) {
+      var narrow = Math.min(box.x1 - box.x0, box.y1 - box.y0, box.z1 - box.z0);
+      limit = Math.max(MIN_CAM_DIST, (narrow * 0.5 - HANGAR_MARGIN) * r);
+    }
+    if (limit < G.cam.dist) G.cam.dist = Math.max(MIN_CAM_DIST, limit);
+  }
+
+  /* YOU CANNOT STAND FURTHER FROM YOUR SHIP THAN THE CORRIDOR IS WIDE.
+   *
+   * A berth at a station is not a room, it is a THROAT — a passage cut
+   * through the hull, as wide as the door and no wider, with solid
+   * structure on every side. clampCameraToHangar measures the berth's
+   * BOX and can legitimately conclude that a hundred-metre boom fits;
+   * a hundred metres from the ship is then a hundred metres into the
+   * metal, and the screen fills edge to edge with the inside of a wall.
+   * Astra called it walls clipping through themselves. It is the camera
+   * buried in them.
+   *
+   * THE GRID CANNOT ARBITRATE THIS, which is worth writing down because it
+   * is the obvious thing to reach for and it is wrong. The occupancy grid
+   * has the throat CARVED through it — that carve is what lets a ship fly
+   * in through a shut door at all — so along the one axis that matters it
+   * reports open space where there is geometry. It is a map of where a
+   * ship may fly, not of where the metal is.
+   *
+   * So the bay's own mouth is the measure. It is the width of the hole the
+   * hull came through, it is in the same table every other bay dimension
+   * comes from, and standing further out than that is by definition
+   * standing in the wall around it. */
+  var THROAT_CAM_FRAC = 0.6;        // of the mouth's half-width
+
+  /* How much of the measured run to the wall the boom is allowed to use.
+   * The table is sampled every 22.5 degrees of yaw, so the direction asked
+   * for can sit up to eleven degrees off the nearest sample and the wall it
+   * finds can be nearer than any of them; the remainder is what pays for
+   * that. */
+  var BOOM_CAM_FRAC = 0.8;
+
+  function clampCameraToThroat(port) {
+    if (!G.cam) return;
+
+    /* THE ART FIRST, WHEN THERE IS ANY. Render.boomLimit is a cast against
+     * the station's own triangles from the berth a hull actually parks on —
+     * see the note over berthBoom in render.js for why neither the anchor
+     * box nor the occupancy grid can answer this. It is built once per
+     * berth and cached, so this is a table lookup. */
+    if (Render && Render.boomLimit && Render.portModelFor && Sim.portBasis) {
+      var basis = Sim.portBasis(port, G.sys, G.t);
+      if (basis) {
+        var cp = Math.cos(G.cam.pitch), sp = Math.sin(G.cam.pitch);
+        var cyw = Math.cos(G.cam.yaw), syw = Math.sin(G.cam.yaw);
+        var dir = { x: cp * cyw, y: cp * syw, z: sp };   // target -> eye
+        var d = Render.boomLimit(Render.portModelFor(port), currentBerth(),
+                                 [V.dot(dir, basis.east),
+                                  V.dot(dir, basis.north),
+                                  V.dot(dir, basis.up)]);
+        if (isFinite(d)) {
+          var run = d * (port.radius || 1) * BOOM_CAM_FRAC;
+          if (run < G.cam.dist) G.cam.dist = Math.max(MIN_CAM_DIST, run);
+          return;
+        }
+      }
+    }
+
+    /* NO MODEL, NO MEASUREMENT — fall back to the bay's own mouth. It is
+     * the width of the hole the hull came through, it is in the same table
+     * every other bay dimension comes from, and standing further out than
+     * that is by definition standing in the wall around it. */
+    if (!Gen || !Gen.bayGeometry) return;
+    var g = Gen.bayGeometry(port);
+    if (!g || !(g.mouthR > 0)) return;
+    var lim = g.mouthR * (port.radius || 1) * THROAT_CAM_FRAC;
+    if (lim > MIN_CAM_DIST && lim < G.cam.dist) G.cam.dist = lim;
+  }
+
+  /* Half the room a point has to the nearer face of a slab, never below
+   * zero — a point already outside gets no margin rather than a negative
+   * one. */
+  function halfGap(p, lo, hi) {
+    return Math.max(0, Math.min(p - lo, hi - p)) * 0.5;
+  }
+
+  /* WHICH BERTH THE SHIP IS IN, or on its way into.
+   *
+   * `dockOffset` is written by dockShip, which does not run until the rail
+   * ENDS — so for the whole of an arrival it is either absent or still
+   * describing the last port. Reading it alone clamped the camera to berth
+   * 0 of a station the ship was being carried into berth 2 of: a box a
+   * hundred metres away, every slab test negative, and the boom welded to
+   * the hull for the last two legs. Which is, again, the one shot the whole
+   * sequence exists for. The arrival knows its own berth; ask it first. */
+  function currentBerth() {
+    if (G.ship && G.ship.arrival && typeof G.ship.arrival.berth === 'number') {
+      return G.ship.arrival.berth;
+    }
+    return (G.ship && G.ship.dockOffset && G.ship.dockOffset.berth) || 0;
+  }
+
+  /* How far a ray from p0 along d may run before it leaves [lo, hi]. */
+  function rayLimit(p0, d, lo, hi) {
+    if (d > 1e-12) return (hi - p0) / d;
+    if (d < -1e-12) return (lo - p0) / d;
+    return Infinity;
+  }
+
+  /* Whatever you are berthed in, of either kind. */
+  function dockedPort() {
+    if (!G.ship || !G.ship.docked || !G.sys) return null;
+    return G.sys.byId[G.ship.docked] || null;
+  }
+
+  /* SURFACE ONLY, and deliberately still so: its one caller is the shaft
+   * cut, which punches a hole in a planet's own sphere. A station has no
+   * planet to punch. */
+  function berthedPort() {
+    var port = dockedPort();
+    return (port && port.surface) ? port : null;
+  }
+
+  /* ---- INSIDE A PORT, and therefore nowhere else ------------------------
+   * When the ship is berthed in a shed, the shed is the whole world. The
+   * camera clamp already keeps the eye between its walls and `buried`
+   * already takes the stars away — but that left the planets, the orbit
+   * lines, the ecliptic grid, the traffic and the sun's glare all still
+   * being drawn, so you looked past the end of the hangar and saw the solar
+   * system. Half-enclosed reads worse than not enclosed at all: it makes
+   * the walls look like a texture rather than a room.
+   *
+   * So this is the one predicate every world-drawing step asks, and when it
+   * answers, only two things are drawn: the port itself, and what is inside
+   * it with you.
+   *
+   * ORBITAL STATIONS TOO, NOW — this is the widening the note here used to
+   * promise, and the promise was the right shape: one function grew a
+   * branch and every caller inherited it without learning a second rule.
+   *
+   * What changed is what a station berth IS. It was a clamp on the outside
+   * of a ring, and you should see the sky from one, because it is there.
+   * The shipped models park you in an alcove with sliding doors at the
+   * outboard end and an inner gate at the other — a room. Leaving them
+   * outdoors meant the solar system was drawn straight through the hull you
+   * were sitting inside: orbit lines, planet markers and the altitude
+   * ladder painted over solid plate, which is what it looked like from the
+   * seat and is how it was reported.
+   *
+   * The arrival branch below stays surface-only because only surface ports
+   * run arrivals today. When beginArrival learns about stations, the leg
+   * that seals the doors is what should flip this, exactly as the shaft
+   * doors do now. */
+  /* WHICH COMPARTMENT OF THIS STATION THE SHIP IS IN, or null.
+   *
+   * Berthed, the answer is simply the berth — sections are built from the
+   * berths in the same canonical order, so the index IS the section and no
+   * search is needed or wanted. Flying inside, the ship's own position is
+   * asked instead, which is how the throat comes back as "no compartment"
+   * and gets you the whole hull while you are still in it. */
+  function shipSection(port) {
+    if (!Render.sectionAt || !Sim.portBasis) return null;
+    var model = Render.portModelFor(port);
+    if (G.ship.docked === port.id) {
+      var b = currentBerth();
+      return (typeof b === 'number' && b >= 0) ? b : null;
+    }
+    var basis = Sim.portBasis(port, G.sys, G.t);
+    if (!basis) return null;
+    var r = port.radius || 1;
+    var rel = V.sub(G.ship.pos, basis.entrance.pos);
+    var sec = Render.sectionAt(model, [V.dot(rel, basis.east) / r,
+                                       V.dot(rel, basis.north) / r,
+                                       V.dot(rel, basis.up) / r]);
+    return sec >= 0 ? sec : null;
+  }
+
+  function enclosedPort() {
+    var berthed = dockedPort();
+    if (berthed) return berthed;
+    /* MID-ARRIVAL the answer changes partway through, and that transition
+     * is the best thing this sequence does. On the apron you are outside:
+     * the sky is there, the planet is there, and the doors are opening
+     * under the hull. The moment the car starts down and the leaves seal
+     * over it, the world goes away — not because a flag flipped on arrival
+     * but because something closed above you. `Sim.arrivalPose` decides
+     * which leg that is, so the renderer and the sim cannot disagree
+     * about whether you are indoors. */
+    if (G.arrivalPose && G.arrivalPose.enclosed && G.ship && G.ship.arrival) {
+      /* Either kind. In a shed it is the leaves sealing over the car; at a
+       * station it is the hull crossing the door plane on the `enter` leg,
+       * with the outer doors standing open behind it. Sim.arrivalPose knows
+       * which leg that is for the port it was asked about, so this does not
+       * have to. */
+      return G.sys.byId[G.ship.arrival.port] || null;
+    }
+    /* AND THE CASE NEITHER OF THOSE COVERS: still in there, flying.
+     *
+     * Undocking drops you into the throat with the doors open and the sky
+     * back — the stars, the planets, the orbit lines, all painted straight
+     * through the station around you, which is what Astra photographed.
+     * Being DOCKED was never the question. The question is whether there is
+     * something over your head, and the only honest way to answer it is
+     * geometrically: Sim.insideStation asks the model whether this point is
+     * in a room of it. Surface ports have had `insideShaft` for exactly this
+     * since the shafts were built; this is its orbital twin.
+     *
+     * It also covers the half of an arrival and a departure that no flag
+     * describes, and it costs one grid lookup against a cheap distance
+     * reject. */
+    if (Sim.insideStation && !G.hyper) {
+      var within = Sim.insideStation(G.ship.pos, G.sys, G.t);
+      if (within) return within;
+    }
+    return null;
+  }
+
+  /* THE DECK IS THE FLOOR OF THE SHOT, and the boom length cannot defend
+   * it.
+   *
+   * Astra, in the exterior view at a berth: "we're under the deck." The
+   * eye was up to twenty-five metres below the plating, looking at the
+   * underside of it, on twelve of thirty-six sampled angles.
+   *
+   * Two things had to be true at once for that to show up. berthRoom used
+   * to hand back the anchor box, whose floor is a hundred metres inside
+   * the plating — fixed there. And the hull used to float eighty metres up
+   * on a standoff that scaled with the station, so a short boom pitched
+   * down spent its length in open air; parked properly on the deck it is
+   * six metres up and ANY downward pitch is through the floor on the first
+   * metre of boom.
+   *
+   * Which is why this is a clamp on the AIM rather than on the length.
+   * Shortening the boom to keep the eye up is the failure clampCameraToHangar
+   * already has a whole paragraph about — the camera welded to the hull,
+   * plating filling the screen — and it is the wrong trade anyway: you
+   * cannot get underneath a ship that is sitting on a floor, so the honest
+   * answer is that the camera stops at deck level and keeps its distance.
+   *
+   * The arc itself is Render.pitchAboveFloor, which is pure geometry and
+   * is tested as such — this end only has to know where the floor is and
+   * how much air to keep under the eye. */
+  var DECK_MARGIN_KM = 0.002;             // two metres of air under the eye
+
+  function keepCameraAboveDeck(port) {
+    if (!Sim.portBasis || !Sim.berthRoom || !Gen || !Gen.bayGeometry) return;
+    if (!(G.cam.dist > 0)) return;
+    var basis = Sim.portBasis(port, G.sys, G.t);
+    var room = Sim.berthRoom(port, currentBerth());
+    if (!basis || !room) return;
+    var r = port.radius || 1;
+    var g = Gen.bayGeometry(port);
+    var rel = V.sub(G.cam.target, basis.entrance.pos);
+    var above = V.dot(rel, basis.up) / r - g.lift - room.z0;
+    /* Not standing on this deck — mid-arrival, or out in the throat with
+     * the floor somewhere else entirely. Nothing to defend. */
+    if (!(above > 0)) return;
+
+    /* ---- AND NOT ALONG IT EITHER -----------------------------------------
+     * Two metres of air was enough to keep the eye out of the deck and not
+     * enough to stop it GRAZING: at any real boom length the camera sat
+     * level with the plating, the floor filled half the screen edge-on and
+     * the ship you are looking at was a silhouette in the gap. Astra has
+     * had that on the known-issues list since the berths were opened, and
+     * it got worse rather than better when the stand came up out of the
+     * floor — a lit deck you are looking along is more distracting than a
+     * dark one.
+     *
+     * The old cap is what caused it. Clearance was a fraction of the HULL
+     * — half of the six metres a parked ship sits above its deck, so three
+     * metres however far out the boom was — which is a rule about the ship
+     * rather than about the picture. Tie it to the BOOM instead and the
+     * geometry does the right thing on its own: the clamp becomes a
+     * minimum DOWNWARD ANGLE rather than a height, so up close you still
+     * get a side view of the hull and from further out you get the
+     * three-quarter view that shows the bay.
+     *
+     * Nine degrees, which is the shallowest angle at which the deck reads
+     * as a floor with things standing on it rather than as a line across
+     * the middle of the screen. The absolute two metres stays as the floor
+     * under it, for a boom short enough that nine degrees is less than
+     * that. */
+    var DECK_RISE = 0.156;                  // sin 9 degrees
+    var margin = Math.max(DECK_MARGIN_KM / r, G.cam.dist * DECK_RISE / r);
+    G.cam.pitch = Render.pitchAboveFloor(G.cam.yaw, G.cam.pitch, G.cam.dist,
+                                         basis.up, above * r, margin * r);
+  }
+
+  function clampCameraToEnclosure() {
+    if (G.viewMode === 'cockpit') return;   // the eye is the pilot's, not a boom
+    /* The clamp follows the ENCLOSURE, not the docked flag. Half way down
+     * the shaft the hull is inside a tube and the boom has to be shortened
+     * or the eye ends up in the rock; on the apron it is outside and must
+     * not be, or the camera would snap in the moment traffic control
+     * answered. Same predicate the world-suppression uses, so the two
+     * cannot drift apart. */
+    var port = enclosedPort();
+    if (port) {
+      /* IN THE SHAFT, THE SHAFT IS THE ROOM, and getting this wrong is
+       * silent and ugly. `clampCameraToHangar` measures against the
+       * hangar's floor and ceiling; half way down the incline the hull is
+       * well ABOVE that ceiling, so `(ceil - z0)` goes negative, the limit
+       * goes negative, and the boom collapses to MIN_CAM_DIST for the whole
+       * descent — six seconds of the camera welded to the hull during the
+       * one shot this sequence exists for.
+       *
+       * So while the car is running, the limit is the tube's own clear
+       * half-width. Deliberately a radial limit rather than a slab test in
+       * the inclined frame: it is conservative in every direction, it needs
+       * no second derivation of the incline's basis (house rule 6, and the
+       * shaft frame is exactly what got built wrong from a rotation last
+       * time), and the eye cannot leave the tube. A true slab test would
+       * buy a little more room and is worth doing if it ever looks tight. */
+      var ap = G.arrivalPose;
+      if (ap && ap.legId === 'descend') {
+        /* IN PAD RADII, THEN CONVERTED. `clear` and HANGAR_MARGIN are both
+         * measured in pad radii, the way every other number in the bay
+         * tables is, and G.cam.dist is in kilometres — so the difference
+         * has to be multiplied by the radius before it can be a boom
+         * length. Without that the limit came out around half a kilometre
+         * at a pad a hundred metres across, which is not a clamp at all:
+         * the eye sat outside the shaft for the whole descent, looking at
+         * the outside of a tube it was supposed to be inside. */
+        var clear = (port.incline && port.incline.clear &&
+                     port.incline.clear.perp / (port.radius || 1)) || 1.0;
+        G.cam.dist = Math.max(MIN_CAM_DIST,
+                              Math.min(G.cam.dist,
+                                       (clear * 0.5 - HANGAR_MARGIN) *
+                                       (port.radius || 1)));
+        return;
+      }
+      /* AND THE BOOM MUST NOT END UP INSIDE THE WALL, which no box test can
+       * promise. clampCameraToHangar measures the ROOM the ship is parked
+       * in, and inside a station the ship is parked in a THROAT — a
+       * corridor cut through the hull, sixty metres across, with solid
+       * structure on every side of it. A hundred-metre boom clamped to a
+       * box that says it fits is still a hundred metres into the metal, and
+       * what you get is a screen filled edge to edge with the inside of a
+       * wall. Astra called it walls clipping through themselves; it is the
+       * camera buried in them.
+       *
+       * The grid already knows where the metal is, so ask it: walk the boom
+       * out from the hull and stop at the last point that is not wall. It
+       * costs a handful of array lookups, it needs no box to be correct,
+       * and it cannot be fooled by a room whose shape is not a box. */
+      clampCameraToHangar(port);
+      clampCameraToThroat(port);
+      keepCameraAboveDeck(port);
+      return;
+    }
+    var host = G.lastMassiveBody ||
+               (G.ship ? Sim.dominantBody(G.ship.pos, G.sys, G.t) : null);
+    if (!host || !host.radius) return;
+    var hc = Sim.bodyPosition(host, G.sys, G.t);
+    var shipR = V.dist(G.ship.pos, hc);
+    if (shipR < host.radius) return;        // already inside; case 1 owns that
+    /* Where the eye would land at the current boom length. Rebuilt here
+     * rather than read off cam.eye because cam.build has not run yet this
+     * frame — reading the previous frame's eye makes the clamp lag by one
+     * frame, which is visible as a flicker at the moment you touch down. */
+    var cp = Math.cos(G.cam.pitch), sp = Math.sin(G.cam.pitch);
+    var cy = Math.cos(G.cam.yaw), sy = Math.sin(G.cam.yaw);
+    var dir = { x: cp * cy, y: cp * sy, z: sp };
+    var eye = V.addScaled(G.cam.target, dir, G.cam.dist);
+    var floor = host.radius * GROUND_CAM_LIFT;
+    if (V.dist(eye, hc) >= floor) return;
+    /* Solve for the boom length that puts the eye exactly on the floor
+     * sphere: |target + dir*s - hc| = floor, a quadratic in s with one
+     * positive root worth having. */
+    var rel = V.sub(G.cam.target, hc);
+    var b = V.dot(rel, dir);
+    var c = V.dot(rel, rel) - floor * floor;
+    var disc = b * b - c;
+    if (disc <= 0) return;                  // the boom never clears; leave it
+    var s = -b + Math.sqrt(disc);
+    if (s > MIN_CAM_DIST && s < G.cam.dist) G.cam.dist = s;
+  }
+
+  /* Collect any canister the ship drifts onto gently. The thresholds are
+   * deliberately tight — 80 metres and 20 m/s — because scooping is meant
+   * to be a piece of flying, not a vacuum cleaner. */
+  var SCOOP_RANGE = 0.08;      // km
+  var SCOOP_CLOSE = 0.02;      // km/s of relative velocity
+  var noScoopSaidAt = 0;       // wall clock, so the refusal is not per-frame
+
+  /* Without a scoop you can still fly into a crate; you simply cannot have
+   * it. Said on a real-time cooldown because a pilot with no scoop can sit
+   * inside a canister indefinitely and a per-frame refusal would bury
+   * everything else on the message channel. */
+  function sayNoScoop(c) {
+    var now = Date.now();
+    if (now - noScoopSaidAt < 12000) return;
+    noScoopSaidAt = now;
+    var good = Eco.BY_ID[c.cid];
+    say('No cargo scoop fitted — ' + (good ? good.name : c.cid) +
+        ' drifts past. Any yard sells one.', 5);
+  }
+
+  function scoopCanisters() {
+    if (G.ship.docked || G.ship.landed) return;
+    var cans = G.sys.canisters;
+    if (!cans || !cans.length) return;
+    var scoop = Combat.hasScoop(G.ship);
+    for (var i = cans.length - 1; i >= 0; i--) {
+      var c = cans[i];
+      /* Most wreckage is wreckage. A shard only goes aboard if something on
+       * it survived worth having — the rest is scrap you fly through, and
+       * quietly hoovering it up would turn a debris field into a chore. */
+      if (!c.cid || !(c.tonnes > 0)) continue;
+      var near = V.dist(c.pos, G.ship.pos) <= SCOOP_RANGE;
+
+      /* ARMING, and it is the whole reason jettison used to do nothing.
+       * A crate leaves the airlock 50 m behind you — comfortably inside the
+       * 80 m scoop envelope — so the ship inhaled it again on the very next
+       * frame and the hold came out unchanged. Anything you pushed out
+       * yourself is therefore inert until it has actually got clear of you.
+       *
+       * A DISTANCE test rather than a timer, on purpose: a timer measured in
+       * sim seconds evaporates under time compression and a timer measured
+       * in real seconds would let you sit still and wait it out. This one
+       * says the only thing that matters — the crate is not yours again
+       * until it has genuinely got away — and it resolves on its own in
+       * about seven seconds from the 12 m/s shove, or immediately if you
+       * are moving. Cargo somebody ELSE dumped has no `armed` field at all
+       * and is catchable at once, which is what makes robbing a freighter
+       * work. */
+      if (c.armed === false) {
+        if (!near) c.armed = true;
+        continue;
+      }
+
+      if (!near) continue;
+      if (V.dist(c.vel, G.ship.vel) > SCOOP_CLOSE) continue;
+      if (!scoop) { sayNoScoop(c); continue; }
+      var free = G.ship.cargoCap - Sim.cargoMass(G.ship);
+      if (free <= 0) { say('Hold full — canister left drifting', 3); return; }
+      var take = Math.min(c.tonnes, free);
+      /* Read the commodity BEFORE the shard is emptied — clearing `cid` is
+       * how an emptied shard stops being scoopable, and reading it
+       * afterwards named the haul `undefined`. */
+      var cid = c.cid;
+      G.ship.cargo[cid] = (G.ship.cargo[cid] || 0) + take;
+      Sim.refreshShip(G.ship);
+      c.tonnes -= take;
+      /* An emptied shard is still a piece of a ship, so it keeps drifting
+       * and keeps being drawn; an emptied crate was only ever its contents
+       * and goes. Clearing the cid is what stops it being scooped twice. */
+      if (c.tonnes <= 1e-9) {
+        if (c.kind === 'debris') { c.cid = null; c.tonnes = 0; c.name = 'Wreckage'; }
+        else cans.splice(i, 1);
+      }
+      var good = Eco.BY_ID[cid];
+      say((c.kind === 'debris' ? 'Salvaged ' : 'Scooped ') +
+          take.toFixed(take < 1 ? 2 : 0) + 't ' +
+          (good ? good.name : cid), 4);
+      HOOKS.sound('scoop');
+    }
+  }
+
+  /* ---- drawing -------------------------------------------------------- */
+
+  /* Is the GPU world layer actually running this frame? Checked rather than
+   * assumed at every branch point, because the 2D path has to stay a
+   * complete renderer in its own right — see boot(). */
+  function glLive() {
+    return !!(global.GLWorld && global.GLWorld.available);
+  }
+
+  var _starPos = null;      // this frame's star position, for GL lighting
+
+  function draw() {
+    var ps = pixelScale();
+    var w = canvas.width / ps;
+    var h = canvas.height / ps;
+    var cam = G.cam;
+    if (G.viewMode === 'cockpit') {
+      cam.cockpitFov = cockpitFov();
+      cam.buildCockpit(G.ship, w, h, G.look);
+      applyCockpitSway(cam);
+    }
+    else cam.build(w, h);
+
+    ctx.setTransform(ps, 0, 0, ps, 0, 0);
+    /* With the GL layer live the sky is ITS clear colour, and this canvas
+     * has to be genuinely transparent or it would paint over the world it is
+     * supposed to be an overlay on. Without GL, nothing has changed and the
+     *2D layer still owns the background. */
+    /* Are we inside a world? Underground the sky is not sky, it is the rock
+     * the room was cut out of — so the background stops being black with
+     * stars in it and becomes something you can believe is a wall. Without
+     * this you look past the end of the hangar and see the galaxy. */
+    var buried = undergroundHost(cam);
+    /* Berthed in a shed: the shed is the world. See enclosedPort.
+     *
+     * EXCEPT IN THE ORBIT MAP, which is a chart rather than a window. F2 is
+     * the player asking to see the system from outside itself; answering
+     * with the inside of a hangar because that is where the hull happens to
+     * be parked would be a blank screen and a bug report. The suppression
+     * below is about what you can SEE from where you are, and a chart is
+     * not a thing you see from anywhere. */
+    var inside = mapMode() ? null : enclosedPort();
+
+    /* Rock behind a shed as well as behind a burrow. `buried` is a
+     * geometric test — is the eye below the planet's radius — and a camera
+     * up at the mouth of a shallow bay can be berthed and still just above
+     * it, which would have shown one frame of empty space through the roof
+     * on the way in. */
+    var rock = buried || inside;
+
+    if (glLive()) {
+      ctx.clearRect(0, 0, w, h);
+      global.GLWorld.begin(rock ? ROCK_CLEAR : null);
+      /* HOW MUCH LIGHTNING TO DRAW, decided by the clock rather than by
+       * the weather. A stroke lasts about a tenth of a second; at warp the
+       * frames are seconds or minutes apart, so sampling it would give
+       * uncorrelated noise — a strobe, which is wrong AND unpleasant to
+       * look at. Faded out, the shader draws the time-average instead,
+       * which is what you would actually see from a world going past at a
+       * thousand times: storms that glow rather than storms that blink. */
+      if (global.GLWorld.setFlashGain) {
+        global.GLWorld.setFlashGain(1 / (1 + WARPS[G.warpIndex] / 6));
+      }
+      /* Cut the shaft mouth out of the world it is sunk into. Without this
+       * the planet's own surface is drawn straight across the opening —
+       * the sphere has no hole in it — so from outside you get a painted
+       * circle where a hole should be, and from just inside the collar you
+       * get ground where the sky should be. */
+      var shaft = activeShaft();
+      if (shaft) {
+        global.GLWorld.setSurfaceHole(shaft.hostId, shaft.mouth, shaft.radius);
+      }
+    } else {
+      ctx.fillStyle = rock ? ROCK_CLEAR_CSS : '#04060c';
+      ctx.fillRect(0, 0, w, h);
+    }
+
+    /* In transit the tunnel IS the world — but you are still sitting in
+     * your own cockpit looking out at it, which is the whole reason the
+     * frame is real geometry rather than a picture. So the hyperspace
+     * layer goes exactly where the starfield and the planets would, and
+     * everything after it runs unchanged. */
+    if (G.hyper) {
+      Render.drawHyperspace(ctx, w, h, G.hyper);
+      if (G.viewMode === 'cockpit') drawCockpitView(ctx, cam, w, h);
+      else drawShip(ctx, cam);
+      drawHUD(ctx, w, h);
+      if (G.hyper.corridor && G.hyper.corridor.live && G.hyper.phase === 'tunnel') {
+        drawCorridorHUD(ctx, w, h, G.hyper.corridor);
+      }
+      return;
+    }
+
+    /* A full-screen mode covers the world completely, so there is no point
+     * drawing the world first. The one exception is the orbit map (F2),
+     * which IS the world — the same view the game boots into — so it falls
+     * through and draws everything. */
+    if (!flying() && !mapMode()) {
+      G.gridStep = 0;
+      drawHUD(ctx, w, h);
+      drawCursor(ctx);
+      return;
+    }
+
+    /* The sky belongs to the world layer when there is one. Drawn in 2D it
+     * would sit ON TOP of every planet — the overlay canvas has no way to be
+     * behind anything — which put stars across the face of whatever world
+     * you were looking at. */
+    /* No stars underground. They are the one thing that cannot possibly be
+     * true down there, and they are exactly what made a berthed ship look
+     * like it was parked in orbit. */
+    if (!buried && !inside) {
+      if (glLive()) global.GLWorld.drawStars(cam);
+      else Render.drawStarfield(ctx, cam, G.stars);
+    }
+
+    /* Cruise smears the sky over the top of the real one. The system stays
+     * drawn underneath — you still need to see the planet you are aiming
+     * at — which is the difference between this and hyperspace. */
+    if (G.cruise) {
+      Render.drawCruiseWarp(ctx, cam, G.stars, G.ship.fwd,
+                            G.cruise.speed / Math.max(G.cruise.maxSpeed, 1), w, h);
+    }
+
+    var starPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
+    var starScreen = cam.project(starPos);
+    _starPos = starPos;
+
+    /* None of the system's furniture belongs in a hangar. The grid is a
+     * plane through the ecliptic, the orbit lines are hundreds of thousands
+     * of kilometres across, and both would be drawn straight through the
+     * wall you are parked against. */
+    G.gridStep = 0;
+    if (G.showGrid && !inside) {
+      G.gridStep = Render.drawEclipticGrid(ctx, cam, cam.target, cam.dist * 1.15);
+    }
+
+    /* Orbit paths. A moon's path is drawn around wherever its planet is at
+     * this instant, which is why the shape is cached in local space. Forced
+     * on in the orbit map, whatever the O toggle says — a map of orbits
+     * with the orbits hidden is a joke at the player's expense. */
+    if ((G.showOrbits || mapMode()) && !inside) {
+      for (var i = 0; i < G.sys.bodies.length; i++) {
+        var b = G.sys.bodies[i];
+        if (!b.orbit) continue;
+
+        /* Only draw orbits at a scale the current view can actually show.
+         * Zoomed in on a moon, the planet's 34-million-km orbit around the
+         * star is a near-straight line whipping past the camera — visual
+         * noise that reads as a rendering bug. Zoomed out to the whole
+         * system, a 20,000 km station orbit is sub-pixel clutter. */
+        var rel = b.orbit.a / cam.dist;
+        if (rel > 26 || rel < 0.0025) continue;
+        // Fade in and out at the edges of that window instead of popping.
+        var fade = Math.min(1, Math.min(rel / 0.012, (26 - rel) / 12));
+
+        var pts = G.orbitPaths[b.id];
+        var off = Sim.bodyPosition(G.sys.byId[b.orbit.parent], G.sys, G.t);
+        var col = b.kind === 'planet' ? '#4a6f9c'
+                : b.kind === 'moon' ? '#6b7f8f' : '#7fd6c0';
+        var alpha = (b.kind === 'planet' ? 0.55 : 0.4) * fade;
+        if (G.focus === b || (b.parentBody && G.focus === b.parentBody)) alpha = 0.85 * fade;
+        if (alpha < 0.03) continue;
+        Render.strokePath(ctx, cam, pts, col, 1, alpha, null, off);
+      }
+    }
+
+    /* Bodies, painted far to near so nearer ones overlap correctly. An
+     * underground bay's TRUE position is buried inside its world — used
+     * everywhere docking, distance and navigation care about — but for
+     * this list, which only decides what gets drawn where and in front of
+     * what, it stands in for its own entrance. Sorting and marker
+     * placement by the true (negative-elevation) point would put the bay
+     * nearer the camera than the planet's own near-side surface and paint
+     * it floating in space in front of the world instead of hidden inside
+     * it; the entrance is exactly the point that already sits correctly on
+     * the visible surface, same as any open pad. */
+    var items = [];
+    for (var j = 0; j < G.sys.bodies.length; j++) {
+      var body = G.sys.bodies[j];
+      /* Inside a shed, the only body worth drawing is the shed. Everything
+       * else — the world it is cut into most of all — would be painted
+       * across the room you are standing in, because an impostor sphere has
+       * no notion of being outside a wall.
+       *
+       * The port stays in the list rather than being drawn separately, so
+       * it keeps its labels, its lamps, its doors and its dressing without
+       * any of that machinery learning about this case. */
+      if (inside && body !== inside) continue;
+      var pos = body.underground
+        ? Sim.portEntrance(body, G.sys, G.t).pos
+        : Sim.bodyPosition(body, G.sys, G.t);
+      var sp = cam.project(pos);
+
+      /* A BODY YOU ARE INSIDE IS NOT CULLED ON ITS CENTRE POINT.
+       *
+       * THE BUG THIS KILLS, and it is the one that has been underneath
+       * every "camera glitch" report in this project. `cam.project` returns
+       * null for a point behind the eye, and this dropped the whole body
+       * when it did. That is correct for anything smaller than its own
+       * distance — and completely wrong for a station you are berthed
+       * inside. Measured in the running game, docked at Waypoint Dock: the
+       * hull sits 3.5 km from a centre with a 7 km radius, that centre is
+       * behind the camera, and SEVEN KILOMETRES OF STRUCTURE vanished on a
+       * single point test. What you get is a berth in open black space, or
+       * — from an angle where some other body survives the same test — its
+       * flat grey side filling the screen with nothing in front of it.
+       *
+       * The test a large near body needs is against its RADIUS, not its
+       * centre: if the camera is inside the bounding sphere, the body is
+       * around you and is drawn, whatever its middle does in the
+       * projection. */
+      var near = V.dist(pos, cam.target);
+      var enclosing = near < (body.radius || 0);
+      if (!sp && !enclosing) continue;
+      /* Behind the eye and enclosing: there is no screen point for the
+       * centre, and nothing in the model path wants one — the mesh is
+       * drawn from its own frame. Depth keeps the sort honest; the zero
+       * scale is what tells the label and the marker to stay away, since
+       * both are about a thing you are looking AT rather than standing in. */
+      if (!sp) sp = { x: 0, y: 0, depth: near, scale: 0, behindEye: true };
+      items.push({ body: body, pos: pos, sp: sp, rpx: body.radius * sp.scale,
+                   enclosing: enclosing });
+    }
+    items.sort(function (p, q) { return q.sp.depth - p.sp.depth; });
+
+    G.labelQueue = [];
+    for (var m = 0; m < items.length; m++) drawBody(ctx, cam, items[m], starScreen);
+    placeLabels(ctx, G.labelQueue, w, h);
+
+    /* Predicted trajectory — the whole point of the exercise. Not while
+     * berthed: a ship on the clamps has no trajectory worth predicting, and
+     * the path it last had is a line across the hangar wall. */
+    if (G.showPrediction && G.trajectory && !inside) {
+      // The prediction is stored relative to its reference body; anchor it to
+      // wherever that body is right now.
+      var tOff = Sim.bodyPosition(G.trajectory.reference, G.sys, G.t);
+      Render.strokePath(ctx, cam, G.trajectory.points, '#63e6a8', 1.6, 0.9, null, tOff);
+      if (G.trajectory.impact) {
+        var ip = cam.project(V.add(tOff, G.trajectory.impact.rel));
+        if (ip) {
+          ctx.strokeStyle = '#ff5a5a'; ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(ip.x - 7, ip.y - 7); ctx.lineTo(ip.x + 7, ip.y + 7);
+          ctx.moveTo(ip.x + 7, ip.y - 7); ctx.lineTo(ip.x - 7, ip.y + 7);
+          ctx.stroke();
+          ctx.fillStyle = '#ff8a8a';
+          ctx.font = 'bold 12px ui-monospace, monospace';
+          ctx.fillText('impact in ' + fmtTime(G.trajectory.impact.t - G.t), ip.x + 11, ip.y - 9);
+        }
+      }
+    }
+
+    drawNodeOverlay(ctx, cam);
+
+    /* Wakes BEFORE the traffic, so a freighter climbing out toward its own
+     * jump point is drawn in front of the cloud it is about to make rather
+     * than behind it. They are also on the traffic toggle, because that is
+     * exactly what they are — the timetable, seen after the fact. */
+    /* Neither belongs in a hangar. A wake hangs outside the last planet in
+     * the system, and the nearest freighter is thousands of kilometres up —
+     * both would be drawn through the roof. */
+    if (G.showTraffic && !inside) drawWakes(ctx, cam);
+
+    if (G.showTraffic && !inside) drawTraffic(ctx, cam);
+
+    /* Wreckage before the muzzle flashes, so a shard tumbling through a
+     * beam is lit by it rather than drawn over it. Not on the traffic
+     * toggle: Y hides the timetable, and what is left of a ship you shot is
+     * not the timetable. */
+    drawDebris(ctx, cam);
+
+    /* Weapons fire, missiles and explosions render regardless of the
+     * traffic toggle: Y hides the timetable, not the fight. */
+    drawCombatFx(ctx, cam);
+
+    if (G.viewMode === 'cockpit') drawCockpitView(ctx, cam, w, h);
+    else drawShip(ctx, cam);
+    drawHUD(ctx, w, h);
+    drawBurnBanner(ctx, w, h);
+    drawCursor(ctx);
+  }
+
+  /* The burn clock. Big, central, and only present while there is something
+   * to count down to — the two moments a pilot cannot afford to be reading
+   * a small number in a corner are the seconds before ignition and the
+   * seconds before cutoff. */
+  function drawBurnBanner(ctx, w, h) {
+    if (!G.nodeBurn || !G.nodePlan) return;
+    var nb = G.nodeBurn, plan = G.nodePlan;
+    var burning = nb.phase === 'burn';
+    var label = burning
+      ? 'BURNING   ' + fmtSpeed(nb.remaining) + ' remaining'
+      : 'IGNITION IN  ' + fmtTime(Math.max(0, plan.ignition - G.t));
+    ctx.save();
+    ctx.font = 'bold 16px ui-monospace, monospace';
+    var tw = ctx.measureText(label).width;
+    var x = (w - tw) / 2, y = 46;
+    ctx.fillStyle = 'rgba(8,12,18,0.72)';
+    ctx.fillRect(x - 14, y - 17, tw + 28, 25);
+    ctx.strokeStyle = burning ? '#ffb347' : '#ffd27a';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x - 14, y - 17, tw + 28, 25);
+    ctx.fillStyle = burning ? '#ffb347' : '#ffd27a';
+    ctx.fillText(label, x, y);
+
+    // A plain progress bar under it: fraction of the delta-v delivered.
+    if (burning && plan.magnitude > 0) {
+      var frac = Math.max(0, Math.min(1, nb.spent / plan.magnitude));
+      ctx.fillStyle = 'rgba(255,179,71,0.25)';
+      ctx.fillRect(x - 14, y + 10, tw + 28, 4);
+      ctx.fillStyle = '#ffb347';
+      ctx.fillRect(x - 14, y + 10, (tw + 28) * frac, 4);
+    }
+    ctx.restore();
+  }
+
+  /* The cursor only exists while Left Alt is held, and it is drawn as a
+   * reticle rather than an arrow so it reads as part of the instrument
+   * rather than the operating system's pointer sitting on top of it. */
+  function drawCursor(ctx) {
+    if (!G.cursor.active) return;
+    var x = G.cursor.x, y = G.cursor.y;
+    var hot = !!G.cursor.over;
+    ctx.save();
+    ctx.strokeStyle = hot ? '#ffd27a' : 'rgba(190,215,240,0.75)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(x, y, hot ? 9 : 6, 0, Math.PI * 2);
+    ctx.moveTo(x - 13, y); ctx.lineTo(x - 7, y);
+    ctx.moveTo(x + 7, y); ctx.lineTo(x + 13, y);
+    ctx.moveTo(x, y - 13); ctx.lineTo(x, y - 7);
+    ctx.moveTo(x, y + 7); ctx.lineTo(x, y + 13);
+    ctx.stroke();
+    if (hot) {
+      ctx.fillStyle = '#ffd27a';
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillText('drag ' + G.cursor.over.short, x + 15, y - 8);
+    }
+    ctx.restore();
+  }
+
+  /* ---- the node on the map ----------------------------------------------
+   * Three curves and a marker. The dim dashed one is the coast from here to
+   * the node — the part of the plan you do nothing for. The amber one is
+   * the orbit the burn buys, which is the whole reason the feature exists:
+   * it is the answer to "what happens if I do this", shown before doing it.
+   *
+   * Both are drawn in the same reference-body frame the live prediction
+   * uses, and anchored to wherever that body is NOW, or a plan around a
+   * planet would be drawn two million km from the planet. */
+  var NODE_COLOR = '#ffb347';
+  var NODE_COAST = 'rgba(255,179,71,0.34)';
+
+  function drawNodeOverlay(ctx, cam) {
+    G.nodeHandles = null;
+    var plan = G.nodePlan;
+    if (!plan || !plan.path || !plan.path.length) return;
+
+    var refNow = Sim.bodyPosition(plan.reference, G.sys, G.t);
+
+    // The coast to the node.
+    Render.strokePath(ctx, cam, plan.path, NODE_COAST, 1.3, 1, [5, 5], refNow);
+
+    // The orbit the burn puts us on.
+    if (G.nodeAfter && G.nodeAfter.points.length > 1) {
+      var aRef = Sim.bodyPosition(G.nodeAfter.reference, G.sys, G.t);
+      Render.strokePath(ctx, cam, G.nodeAfter.points, NODE_COLOR, 1.7, 0.95, null, aRef);
+    }
+
+    var nodeRel = plan.path[plan.path.length - 1];
+    var nodeWorld = V.add(refNow, nodeRel);
+    var sp = cam.project(nodeWorld);
+    if (!sp || !isFinite(sp.x) || Math.abs(sp.x) > 1e5 || Math.abs(sp.y) > 1e5) return;
+
+    /* Handle sensitivity is scaled to how fast you are actually going.
+     * A fixed metres-per-pixel is unusable at both ends: it is far too
+     * coarse for a docking trim and far too fine for a planetary
+     * injection, and those are both things this same handle has to do. */
+    var speed = V.len(plan.basis.vrel);
+    var kmsPerPx = Math.max(2e-4, speed * 6e-4);
+    var BASE_PX = 48;
+
+    var handles = [];
+    for (var i = 0; i < 3; i++) {
+      var axis = NODE_AXES[i];
+      var dir = axis.id === 'pro' ? plan.basis.prograde
+              : axis.id === 'nor' ? plan.basis.normal
+              : plan.basis.radial;
+      // A unit step along this axis, in screen pixels, near the node.
+      var probe = cam.project(V.addScaled(nodeWorld, dir, BASE_PX / sp.scale));
+      if (!probe) continue;
+      var sx = probe.x - sp.x, sy = probe.y - sp.y;
+      var slen = Math.hypot(sx, sy);
+      if (slen < 1e-6) continue;           // axis points at the camera
+      var dirX = sx / slen, dirY = sy / slen;
+
+      /* The handle is a slider, not a button: it sits BASE_PX out at zero
+       * and slides along its axis as the value changes, so its position is
+       * the readout. Push it back through the node and the value goes
+       * negative — which is why there is no separate retrograde handle. */
+      var offPx = BASE_PX + G.node.dv[axis.id] / kmsPerPx;
+      var hx = sp.x + dirX * offPx, hy = sp.y + dirY * offPx;
+      handles.push({
+        axis: axis.id, axisIndex: i, sign: 1, color: axis.color,
+        x: hx, y: hy, dirX: dirX, dirY: dirY, kmsPerPx: kmsPerPx,
+        value: G.node.dv[axis.id], short: axis.short
+      });
+
+      // The axis line, drawn from the node out past the handle.
+      ctx.save();
+      ctx.strokeStyle = axis.color;
+      ctx.globalAlpha = (G.nodeAxis === i) ? 0.85 : 0.4;
+      ctx.lineWidth = (G.nodeAxis === i) ? 1.8 : 1.1;
+      ctx.beginPath();
+      ctx.moveTo(sp.x, sp.y);
+      ctx.lineTo(hx, hy);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // The node itself: a ring with a cross, in the burn colour.
+    ctx.save();
+    ctx.strokeStyle = NODE_COLOR;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath(); ctx.arc(sp.x, sp.y, 7, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(sp.x - 11, sp.y); ctx.lineTo(sp.x - 4, sp.y);
+    ctx.moveTo(sp.x + 4, sp.y); ctx.lineTo(sp.x + 11, sp.y);
+    ctx.moveTo(sp.x, sp.y - 11); ctx.lineTo(sp.x, sp.y - 4);
+    ctx.moveTo(sp.x, sp.y + 4); ctx.lineTo(sp.x, sp.y + 11);
+    ctx.stroke();
+    ctx.restore();
+
+    // The handles, drawn after the node so they sit on top of it.
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    for (var j = 0; j < handles.length; j++) {
+      var hd = handles[j];
+      var hot = G.cursor.active &&
+                (G.nodeDrag ? G.nodeDrag.axis === hd.axis
+                            : (G.cursor.over && G.cursor.over.axis === hd.axis));
+      ctx.fillStyle = hd.color;
+      ctx.globalAlpha = hot ? 1 : 0.8;
+      ctx.beginPath();
+      ctx.arc(hd.x, hd.y, hot ? 6 : 4.2, 0, Math.PI * 2);
+      ctx.fill();
+      if (hot || Math.abs(hd.value) > 1e-9) {
+        ctx.globalAlpha = 1;
+        ctx.fillText(hd.short + ' ' + fmtSpeed(hd.value), hd.x + 9, hd.y + 3.5);
+      }
+    }
+    ctx.restore();
+
+    /* Only offer the handles to the mouse while the cursor is actually out.
+     * Otherwise a click meant to swing the camera past the node would grab
+     * a handle instead, which is the exact confusion the Alt modifier
+     * exists to prevent. */
+    G.nodeHandles = G.cursor.active ? handles : null;
+
+    // The label: delta-v, when, and how long the engine has to run for it.
+    var lines = [
+      fmtSpeed(plan.magnitude) + '  Δv',
+      'T−' + fmtTime(Math.max(0, plan.eta)),
+      'burn ' + fmtTime(plan.burn.duration)
+    ];
+    ctx.save();
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = plan.burn.feasible ? NODE_COLOR : '#ff7a6a';
+    for (var L = 0; L < lines.length; L++) {
+      ctx.fillText(lines[L], sp.x + 14, sp.y - 12 + L * 13);
+    }
+    ctx.restore();
+  }
+
+  /* The pilot is strapped into a seat, not welded to the hull. Under thrust
+   * their eye sits back a few centimetres, and the canopy frame — which IS
+   * welded to the hull — shifts against the stars by a dozen pixels. It is
+   * a tiny effect and it is the single cheapest thing that makes the
+   * cockpit read as a physical place rather than a picture frame. It only
+   * works because the frame is real 3D geometry projected from this eye
+   * point; a 2D overlay could not do it at all. */
+  function applyCockpitSway(cam) {
+    var mag = V.len(G.ship.thrust);
+    if (mag <= 0) return;
+    var throttle = Math.min(1, mag / Math.max(G.ship.maxAccel, 1e-12));
+    var now = performance.now() / 1000;
+    var eye = V.addScaled(cam.eye, V.norm(G.ship.thrust), -3.0e-5 * throttle);
+    var buzz = 5.0e-6 * throttle;
+    eye = V.addScaled(eye, cam.r, Math.sin(now * 31.0) * buzz);
+    eye = V.addScaled(eye, cam.u, Math.sin(now * 27.3) * buzz);
+    cam.eye = eye;
+  }
+
+  /* Other people's ships. Same hull model as the player's, scaled to the
+   * class flying the route, and the same scale rule every body in this
+   * system follows: real geometry when it would actually resolve, a marker
+   * below that. The blinking navigation lights are the only thing here that
+   * is purely decorative, and they are worth it — a moving light is what
+   * makes a distant speck read as a vessel rather than a star. */
+  /* ---- wakes -------------------------------------------------------------
+   * The red and blue clouds hanging in the outer system where ships have
+   * gone into slipspace and come out of it.
+   *
+   * There is no scan KEY. Your scanner is always running; the verb is
+   * flying closer, and the read gets better as you do. That is not a
+   * shortcut around a binding — it is the better mechanic, because it turns
+   * "read the wake" into a piece of flying rather than a keypress, and it
+   * makes the fidelity falloff something the player feels rather than
+   * something a menu tells them about.
+   *
+   * The wake list is a pure function of t, so it is recomputed rather than
+   * stored — but memoised on the frame's own timestamp, because draw() is
+   * not the only thing that wants it and walking the lane timetable several
+   * times a frame would be silly. */
+  function wakesNow() {
+    if (!Slip || !G.galaxy || !G.here || !G.sys || G.sys.interstellar) return [];
+    if (G._wakes && G._wakes.t === G.t) return G._wakes.list;
+    var list = [];
+    try {
+      list = Slip.wakesAt(G.galaxy, G.here, G.t);
+    } catch (e) { list = []; }
+    G._wakes = { t: G.t, list: list };
+    return list;
+  }
+
+  /* The best read available on anything in range right now, or null. Used by
+   * the HUD as well as the world layer, which is why it is separate. */
+  function bestWakeRead() {
+    var list = wakesNow();
+    if (!list.length) return null;
+    var sunPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
+    var radius = Slip.jumpRingRadius(G.sys);
+    var best = null;
+    for (var i = 0; i < list.length; i++) {
+      var pos = Slip.wakePosition(list[i], sunPos, radius);
+      var d = V.dist(pos, G.ship.pos);
+      var f = Slip.scanFidelity(list[i], d);
+      if (f > 0 && (!best || f > best.read.fidelity)) {
+        best = { wake: list[i], pos: pos, range: d, read: Slip.scanWake(list[i], d) };
+      }
+    }
+    return best;
+  }
+
+  function drawWakes(ctx, cam) {
+    var list = wakesNow();
+    if (!list.length) return;
+    var sunPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
+    var radius = Slip.jumpRingRadius(G.sys);
+    /* Size comes off the WAKE, and it is a function of the tonnage that tore
+     * it (Slip.wakeRadius) — a bulk hauler leaves a hole five times the one
+     * a packet leaves, so which mark is worth flying to is legible from
+     * across the system before you have scanned anything.
+     *
+     * It is a real physical size, not a fraction of the system. Scaling it
+     * to the jump ring was the first attempt and was wrong twice over: a
+     * wake at two percent of a ring is five and a half MILLION kilometres
+     * across — thirty times the scan range, so you would be reading a cloud
+     * you were nowhere near the edge of — and in a big system it rendered as
+     * a screen-filling wash of orange that washed the whole game out. */
+    var now = performance.now() / 1000;
+
+    for (var i = 0; i < list.length; i++) {
+      var w = list[i];
+      var pos = Slip.wakePosition(w, sunPos, radius);
+      var p = Render.drawWake(ctx, cam, pos, w, w.radius || 30000, now);
+      if (!p) continue;
+
+      /* Label it only once it is worth reading. A sky full of permanently
+       * captioned smudges would be noise; a caption appearing as you close
+       * on one is the instrument doing its job in front of you. */
+      var d = V.dist(pos, G.ship.pos);
+      var read = Slip.scanWake(w, d);
+      if (!read.inRange) continue;
+
+      /* On its own dark backing, and offset clear of the cloud.
+       *
+       * Without the backing this collided with the body labels — a wake sits
+       * out among the planets, and "DEPARTURE WAKE / Perdor · 72.9 min ago"
+       * landing on top of "Mirven" made both unreadable. The label dropper
+       * that handles colliding BODY labels does not know about this text, so
+       * the caption has to be able to survive being drawn over anything.
+       *
+       * Offset down-right of the cloud rather than centred on it, so the
+       * arcs stay visible next to the words describing them. */
+      ctx.save();
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      var head = (w.kind === 'departure' ? 'DEPARTURE WAKE' : 'ARRIVAL WAKE');
+      var body = wakeReadLine(read, w);
+      var lx = p.x + 16, ly = p.y + 14;
+      var bw = Math.max(ctx.measureText(head).width, ctx.measureText(body).width);
+      ctx.fillStyle = 'rgba(4,7,13,0.78)';
+      ctx.fillRect(lx - 5, ly - 12, bw + 10, 28);
+      ctx.fillStyle = w.kind === 'departure' ? '#ff9a86' : '#8fc4ff';
+      ctx.fillText(head, lx, ly);
+      ctx.fillStyle = 'rgba(170,198,235,0.9)';
+      ctx.fillText(body, lx, ly + 12);
+      ctx.restore();
+    }
+  }
+
+  /* ---- following a wake --------------------------------------------------
+   * The verb the whole scanning mechanic exists to serve. Reading a wake
+   * tells you where somebody went; this is what turns that into going after
+   * them, and it answers the only question that matters before you spend the
+   * fuel — can you actually beat them there?
+   *
+   * The answer degrades with the scan, on purpose. A full read knows their
+   * tonnage and can give you a real intercept point. A partial read knows
+   * only the hull class, so it estimates from a typical ship of that class
+   * and says that it is estimating. A faint read cannot say at all. That is
+   * what makes closing on a fresh wake worth the flying: not better prose,
+   * but the difference between a decision and a gamble.
+   *
+   * Shift+J, because J is the chart and this lays a course in on it. Every
+   * unshifted letter on the keyboard was already spoken for. */
+  function followWake() {
+    if (!Slip || !G.galaxy) return;
+    var best = bestWakeRead();
+    if (!best) { say('No slipspace wake within scanner range', 3); return; }
+
+    var read = best.read, wake = best.wake;
+    if (!read.destination) {
+      say('That trail is too thin to name a star — get closer, or find a fresher one', 4);
+      return;
+    }
+
+    /* Lay the course in the same way the chart does, so JUMP (F8) picks it
+     * up unchanged. Selecting by INDEX into the live candidate list rather
+     * than stashing a star object, because that list is rebuilt constantly
+     * and a held reference would go stale exactly the way nav locks used
+     * to. */
+    var list = jumpCandidates();
+    var sel = -1;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].to.id === read.destination.id) { sel = i; break; }
+    }
+    if (sel < 0) {
+      say('Their destination is not on the chart from here', 4);
+      return;
+    }
+    G.starMap = { sel: sel, list: list };
+    var plan = list[sel];
+
+    /* Can we catch them? Their tonnage first-hand if the scan got it, from
+     * the hull class if it only got that far, and otherwise not at all. */
+    var tonnes = read.tonnes ||
+                 (read.hullClass ? Slip.classTypicalTonnes(read.hullClass) : 0);
+    var estimated = !read.tonnes && !!read.hullClass;
+
+    var who = read.name || (read.className ? 'a ' + read.className : 'somebody');
+    var head = 'Course laid for ' + read.destinationName + ' — following ' + who;
+
+    if (!plan.possible) {
+      say(head + '. Not enough propellant for the jump: needs ' +
+          plan.fuel.toFixed(1) + ' t', 7);
+      G.wakeChase = null;
+      return;
+    }
+    if (!tonnes) {
+      say(head + '. Too faint to judge her speed — you are jumping blind', 7);
+      G.wakeChase = { starId: read.destination.id, name: who, blind: true };
+      return;
+    }
+
+    var chase = Slip.pursuit(plan.distance, tonnes, read.departedAt,
+                             Slip.allUpMass(G.ship), G.t, 1);
+    G.wakeChase = {
+      starId: read.destination.id,
+      starName: read.destinationName,
+      name: who,
+      blind: false,
+      estimated: estimated,
+      at: chase.at,
+      possible: chase.possible,
+      remaining: chase.remainingSeconds
+    };
+
+    if (!chase.possible) {
+      say(head + '. ' + (estimated ? 'On a class estimate, she' : 'She') +
+          ' lands before you could draw level — you would arrive behind her', 8);
+    } else {
+      say(head + '. Intercept at ' + (chase.at * 100).toFixed(0) +
+          '% of the corridor, ' + fmtTime(chase.remaining) +
+          ' of corridor left to hold her' +
+          (estimated ? '  (estimated from hull class)' : ''), 9);
+    }
+  }
+
+  /* One line describing what the scan actually resolved. Deliberately says
+   * what it CANNOT see as well as what it can — an instrument that silently
+   * omits the tonnage it failed to read is one the player will assume is
+   * broken the first time they need that number. */
+  function wakeReadLine(read, wake) {
+    if (!read.destination) return 'bearing only · too faint to name a star';
+    var bits = [read.destinationName];
+    if (read.timeKnown) {
+      var age = Math.max(0, wake.age);
+      bits.push(fmtTime(age) + ' ago');
+    } else {
+      bits.push('time unresolved');
+    }
+    if (read.className) bits.push(read.className);
+    if (read.tonnes) bits.push(Math.round(read.tonnes) + ' t' + (read.anchored ? ' · anchored' : ''));
+    else if (read.className) bits.push('tonnage uncertain');
+    if (wake.baffled) bits.push('baffled');
+    return bits.join('  ·  ');
+  }
+
+  function drawTraffic(ctx, cam) {
+    var list = Sim.shipsAll(G.sys, G.t);
+    if (!list.length) return;
+    var sunPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
+    var blink = (performance.now() / 1000) % 2;
+
+    for (var i = 0; i < list.length; i++) {
+      var s = list[i];
+      var sp = cam.project(s.pos);
+      if (!sp) continue;
+      if (sp.x < -60 || sp.x > cam.w + 60 || sp.y < -60 || sp.y > cam.h + 60) continue;
+
+      /* Which hull to draw. Usually the class, but a ship may name its own
+       * — a Syndicate enforcer is a police-kind patrol wearing an enforcer
+       * hull (see HULL_ASSIGN.enforcer) — and plume, hull and shield all
+       * read this one answer so they can never disagree. */
+      var hullKey = s.hullClass || s.cls;
+
+      /* The drive first, so the hull sits in front of its own glare rather
+       * than behind it. Also the reason a ship stays visible long after the
+       * hull has shrunk to nothing: a plume is a streak, not a dot. */
+      // Offset each drive's flicker by its index so a formation of ships
+      // does not pulse in unison like a string of fairy lights.
+      Render.drawShipExhaust(ctx, cam, s, s.size,
+                             s.throttle === undefined ? 1 : s.throttle,
+                             hullKey, null, performance.now() / 1000 + i * 0.37);
+
+      var lenPx = s.size * sp.scale;
+      if (lenPx > 4) {
+        var sunDir = V.norm(V.sub(sunPos, s.pos));
+        Render.drawHullModel(ctx, cam, s, s.size, sunDir, s.color, hullKey);
+        // Port red, starboard green, in the ship's own frame — so which way
+        // it is facing is readable without a label.
+        if (lenPx > 14 && blink < 1) {
+          var pl = cam.project(Render.localToWorld(s, -s.size * 0.55, 0, -s.size * 0.35));
+          var pr2 = cam.project(Render.localToWorld(s, s.size * 0.55, 0, -s.size * 0.35));
+          ctx.save();
+          if (pl) { ctx.fillStyle = '#ff6b6b'; ctx.fillRect(pl.x - 1, pl.y - 1, 2.4, 2.4); }
+          if (pr2) { ctx.fillStyle = '#7dffb0'; ctx.fillRect(pr2.x - 1, pr2.y - 1, 2.4, 2.4); }
+          ctx.restore();
+        }
+      } else {
+        ctx.save();
+        ctx.globalAlpha = 0.9;
+        ctx.strokeStyle = s.color;
+        ctx.lineWidth = 1;
+        var d = 3;
+        ctx.beginPath();
+        ctx.moveTo(sp.x, sp.y - d); ctx.lineTo(sp.x + d, sp.y);
+        ctx.lineTo(sp.x, sp.y + d); ctx.lineTo(sp.x - d, sp.y);
+        ctx.closePath(); ctx.stroke();
+        if (blink < 0.9) {
+          ctx.fillStyle = s.phase === 'moored' ? '#ffd479' : s.color;
+          ctx.fillRect(sp.x - 0.8, sp.y - 0.8, 1.8, 1.8);
+        }
+        ctx.restore();
+      }
+
+      /* The field goes on AFTER the hull, because it is in front of it — it
+       * stands a metre or so off the plating, and drawing it first would put
+       * the ship on top of its own shield. Outside the size branch, though:
+       * a ship too small for a model still has a shield worth seeing flare,
+       * and drawShipShield picks the cheap path for itself. */
+      drawShipShield(ctx, cam, s, lenPx);
+
+      /* Blooms likewise: at that distance the flash is the only thing
+       * telling you the shot landed at all. */
+      drawHullBlooms(ctx, cam, s);
+
+      /* A hostile gets a hard bracket regardless of how small it is. Losing
+       * track of the pirate because it was two pixels wide is not the kind
+       * of difficulty this game is after. */
+      if (s.hostile && s.spec && s.spec.live) {
+        ctx.save();
+        ctx.strokeStyle = '#ff6b5a';
+        ctx.lineWidth = 1.4;
+        ctx.globalAlpha = 0.6 + 0.4 * Math.sin(performance.now() / 180);
+        var b = Math.max(9, lenPx * 0.9);
+        ctx.strokeRect(sp.x - b, sp.y - b, b * 2, b * 2);
+        ctx.restore();
+      }
+
+      // Name only when it is genuinely nearby; otherwise the sky fills with
+      // labels for ships you cannot see.
+      if (lenPx > 2.2 || (s.spec && s.spec.live)) {
+        ctx.save();
+        ctx.font = 'bold 11px ui-monospace, monospace';
+        ctx.fillStyle = s.hostile ? 'rgba(255,150,130,0.9)' : 'rgba(190,215,240,0.75)';
+        var tag = s.name;
+        if (s.kind !== 'trade') tag += '  [' + s.className + ']';
+        ctx.fillText(tag, sp.x + 9, sp.y + 3);
+        ctx.restore();
+      }
+    }
+  }
+
+  /* ---- shields, and what a hit does to one ------------------------------
+   * HOW LONG A FIELD STAYS VISIBLE, and this is the answer to "faint only
+   * when charged and recently hit". A shell drawn all the time around every
+   * armed ship in the sky would cost the silhouette, which the mesh design
+   * says is the only information that survives at combat distances, and it
+   * would also tell you who has shields before you have earned the right to
+   * know. A shell drawn ONLY during the half-second flash would deny you the
+   * readout exactly when you need it, which is while somebody is shooting at
+   * you. So it lights on the first hit and stays lit through the fight,
+   * fading out a few seconds after the last one.
+   *
+   * Six seconds is not arbitrary: it is `MODULES.shield.regenDelay`, the
+   * quiet period a shield needs before it starts refilling. So the field is
+   * visible for exactly as long as it is still *under fire* by the shield's
+   * own definition, and it goes dark at the moment it starts recovering.
+   * One number, two meanings, no second thing to tune. */
+  var SHIELD_LINGER = 6;
+  var SHIELD_FADE = 1.6;          // s of that spent fading out
+
+  /* 0 when the field should not be drawn at all, up to 1 just after a hit. */
+  function shieldLit(spec, tSim) {
+    if (!spec || !(spec.shieldMax > 0) || !(spec.shieldHp > 0)) return 0;
+    var since = tSim - (spec.lastHitAt || -1e9);
+    if (!(since >= 0) || since > SHIELD_LINGER) return 0;
+    var left = SHIELD_LINGER - since;
+    return left >= SHIELD_FADE ? 1 : left / SHIELD_FADE;
+  }
+
+  /* IMPACT STAMPS ARE REAL SECONDS, not sim seconds — see the note on
+   * Combat.markImpact. A flash is for the player's eyes, so it runs on the
+   * player's clock, exactly as the beam fade already does, and handing one of
+   * these a sim time would make every flare vanish inside a frame under warp.
+   *
+   * The clock is `nowSeconds()` from the top of this file, whose own comment
+   * is this rule written down: "anything that blinks, flashes or pulses
+   * because it is a physical light... should be driven from here, so that
+   * time warp and pausing leave it alone." A second helper beside it would
+   * have been one more thing to pick the wrong one of. */
+  function liveImpacts(spec, nowS) {
+    var out = [], list = spec && spec.impacts;
+    if (!list) return out;
+    for (var i = 0; i < list.length; i++) {
+      if (nowS - list[i].at <= Render.SHIELD_FLASH_LIFE) out.push(list[i]);
+    }
+    return out;
+  }
+
+  /* Below this the shell is not worth walking. A form-fitting field on a
+   * twelve-pixel ship is a twelve-pixel blob whichever way you compute it,
+   * and the shell pass costs three transforms and three projections PER FACE
+   * — the one part of this feature with a real per-frame price, since an
+   * imported hull carries far more triangles than the procedural ones do.
+   * So there are two paths and the small one is a single gradient, which at
+   * that size is indistinguishable and costs one fill. */
+  var SHELL_MIN_PX = 16;
+
+  function drawShipShield(ctx, cam, s, lenPx) {
+    var spec = s.spec || s;
+    /* Two clocks, deliberately: the LINGER is a game-time quantity, because
+     * it is the shield's own regeneration delay, so it reads G.t. The FLARES
+     * are lights, so they read the wall clock. */
+    var lit = shieldLit(spec, G.t);
+    if (!(lit > 0)) return;
+    var nowS = nowSeconds();
+    var charge = spec.shieldHp / spec.shieldMax;
+    var live = liveImpacts(spec, nowS);
+    if (lenPx >= SHELL_MIN_PX) {
+      Render.drawShellField(ctx, cam, s, s.size, s.hullClass || s.cls, charge, lit, live, nowS);
+    } else {
+      farShieldGlow(ctx, cam, s, charge, lit, live, lenPx, nowS);
+    }
+  }
+
+  /* The distant form of a field: a soft disc the size of the ship's own
+   * shell, brightening when it is struck. It carries the same hue, so the
+   * "that one's shield is nearly down" read survives all the way out to the
+   * range where the ship itself is a marker dot. */
+  function farShieldGlow(ctx, cam, s, charge, lit, impacts, lenPx, nowS) {
+    var p = cam.project(s.pos);
+    if (!p) return;
+    var flare = 0;
+    for (var i = 0; i < impacts.length; i++) {
+      flare = Math.max(flare, Render.shellFlare(1, nowS - impacts[i].at));
+    }
+    var a = lit * (0.10 + 0.55 * flare);
+    if (!(a > 0.005)) return;
+    var col = Render.shieldTint(charge);
+    var n = parseInt(col.slice(1), 16);
+    var cr = (n >> 16) & 255, cg = (n >> 8) & 255, cb = n & 255;
+    var R = Math.max(4, lenPx * 0.85 * (1 + Render.SHIELD_STANDOFF * 2));
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    var g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, R);
+    g.addColorStop(0, 'rgba(' + cr + ',' + cg + ',' + cb + ',' + a.toFixed(3) + ')');
+    g.addColorStop(0.6, 'rgba(' + cr + ',' + cg + ',' + cb + ',' + (a * 0.45).toFixed(3) + ')');
+    g.addColorStop(1, 'rgba(' + cr + ',' + cg + ',' + cb + ',0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, R, 0, K.TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /* ---- your own shield, from the seat ------------------------------------
+   * THE PROBLEM THIS SOLVES. Everything above draws a shell around a HULL,
+   * and from the cockpit you cannot see your own hull — so the entire
+   * feature would have been invisible during ordinary play, visible only if
+   * you happened to be flying in the exterior view when somebody shot you.
+   * A soaked hit had no expression in here at all: hullHit already flares
+   * the cabin and can take a console screen out, but that only fires when
+   * damage reaches the plating. A shield doing its job was silent.
+   *
+   * So the flare comes to you. The field wraps the canopy a metre out, and a
+   * hit anywhere on it lights a wide soft patch of your view in the
+   * direction it came from — which makes it a WARNING as well as an effect,
+   * because the direction is where the shooter is.
+   *
+   * BEARING, NOT POSITION. cam.projectDir is the projection for things at
+   * effective infinity, and it is the right one here: the flare's screen
+   * place is a direction, not a point. Projecting an actual point on the
+   * shell would put it 1.2 m from the eye, where the perspective divide
+   * blows it up across the whole screen — the same trap the beam muzzles
+   * fell into.
+   *
+   * AND WHEN IT CAME FROM BEHIND, which projectDir cannot answer, the flare
+   * is pinned to the edge of the view on the correct side. That is the case
+   * that matters most: being shot from an angle you are not looking at is
+   * exactly when you need to be told where to look. */
+  /* ---- weather on the glass ----------------------------------------------
+   *
+   * The cheap half of being inside the weather rather than above it, and
+   * cheap is the requirement rather than an excuse: this draws in the one
+   * view that just had its frame cost cut, so it is a wash, a flash and
+   * some sixty short lines — about two hundred context calls against the
+   * cockpit's six thousand seven hundred. No particle system, no state,
+   * nothing that accumulates.
+   *
+   * It reads the same field the planet is painted with, so the bank you
+   * descended through is the bank that is raining on you.
+   *
+   * INSIDE THE GLASS CLIP, called from between glassBegin and glassEnd —
+   * rain on the canopy has to be cut off by the canopy, or it falls
+   * cheerfully across the instrument panel and the inside of the hull. */
+  var RAIN_LINES = 110;         // at full downpour; fewer as it eases off
+  var RAIN_BUCKET = 0.10;       // seconds of sim time per frame of rain
+
+  function drawCanopyWeather(ctx, cam, w, h) {
+    if (!Weather || !Weather.aloft) return;
+    var wx = Weather.aloft(G.ship, G.sys, G.t);
+    if (!wx) return;
+
+    /* THE LIGHT GOES FIRST. Under a deck the sun is behind several
+     * kilometres of water and the world outside loses its contrast, which
+     * is most of what makes being under weather feel different from being
+     * above it. One fill. */
+    if (wx.gloom > 0.02) {
+      ctx.save();
+      ctx.globalAlpha = Math.min(0.66, wx.gloom * 0.78);
+      /* Neutral and dark. The first wash was a blue-grey and, laid over a
+       * world whose own air is tinted, came out teal — the view from under
+       * an overcast looked like the view from under water. */
+      ctx.fillStyle = wx.storm > 0.3 ? '#0f1116' : '#1c1f26';
+      ctx.fillRect(0, 0, w, h);
+      ctx.restore();
+    }
+
+    /* IN the cloud, not under it: the window fills with grey and you fly
+     * on instruments, which is the entire reason a cloud deck is a place
+     * and not a texture. */
+    if (wx.inCloud > 0.05) {
+      ctx.save();
+      ctx.globalAlpha = Math.min(0.94, wx.inCloud * 1.05);
+      ctx.fillStyle = '#9aa6b8';
+      ctx.fillRect(0, 0, w, h);
+      ctx.restore();
+    }
+
+    /* AND THE LIGHTNING, from underneath. The same bucket and phase the
+     * shader flashes on, so a storm that is firing when seen from orbit is
+     * firing when you are inside it — one sky, two viewpoints. */
+    var sp = global.GLWorld && global.GLWorld.spinOf
+           ? global.GLWorld.spinOf(wx.body, G.t) : null;
+    if (sp && wx.storm > 0.10) {
+      var fire = sp.salt[0];
+      if (fire > 0.55) {
+        var env = Math.exp(-sp.stormPhase * 6.5) +
+                  0.7 * Math.exp(-Math.abs(sp.stormPhase - 0.22) * 18);
+        var lit = Math.min(0.8, env * wx.storm * (0.45 + 0.55 * sp.salt[1]));
+        if (lit > 0.01) {
+          ctx.save();
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.globalAlpha = lit;
+          ctx.fillStyle = '#c8d6ff';
+          ctx.fillRect(0, 0, w, h);
+          ctx.restore();
+        }
+      }
+    }
+
+    if (wx.rain < 0.04) return;
+
+    /* THE STREAKS. Positions are hashed off the frame's own bucket rather
+     * than integrated, so they need no array and no update step, and a
+     * paused game has still rain. The slant is airspeed: rain falls past a
+     * hovering ship and arrives almost flat at five hundred metres a
+     * second, which is the one cue that tells you how fast you are going
+     * when there is nothing outside but grey. */
+    /* Even light rain has to be SEEN. Streak count runs from a third of
+     * the full complement at the first drop, because twenty lines over a
+     * nine-hundred-pixel canopy is a window that needs washing rather than
+     * a window with rain on it. */
+    var n = Math.round(RAIN_LINES * (0.34 + 0.66 * Math.min(1, wx.rain)));
+    if (n < 1) return;
+    var rel = G.ship.vel && wx.body ? V.len(V.sub(G.ship.vel,
+                Sim.bodyState(wx.body, G.sys, G.t).vel)) : 0;
+    var slant = Math.min(0.92, rel / 1.2);          // 0 = straight down
+    var len = 26 + 90 * slant;
+    var bucket = Math.floor(G.t / RAIN_BUCKET);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(214,230,255,' + (0.34 + 0.44 * wx.rain).toFixed(3) + ')';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (var i = 0; i < n; i++) {
+      var hx = hashUnit(i * 2.17 + bucket * 0.911);
+      var hy = hashUnit(i * 5.31 + bucket * 1.373);
+      var x = hx * (w + 200) - 100, y = hy * (h + 200) - 100;
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - len * slant, y + len * (1 - slant * 0.55));
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /* ---- re-entry, from the seat --------------------------------------------
+   * You cannot see your own hull from in here, so the sheath drawn round it
+   * in the exterior view (Render.drawReentryPlasma) would be invisible in
+   * the view people actually fly in. From the seat, re-entry is the glass
+   * filling with light from the direction you are travelling and flame
+   * streaming PAST the canopy, outward from that point — so that is what
+   * this is: a glow centred where the air is coming from, and streaks
+   * running from it to the frame. Where the flow is not in view (flying
+   * tail-first, or sideways), the glow is pinned to the edge on the side it
+   * is coming from, the same rule the shield flare uses.
+   *
+   * Same bucketed hash as the rain, so it needs no state and a paused game
+   * has still flames. INSIDE the glass clip. */
+  function drawCanopyPlasma(ctx, cam, w, h) {
+    var g = G.ship.reentryGlow || 0, wind = G.ship.windDir;
+    if (!(g > 0.02) || !wind) return;
+    var vis = Render.plasmaVis(g);
+    var p = cam.projectDir(wind);
+    var x, y;
+    if (p && p.x > -w * 0.2 && p.x < w * 1.2 && p.y > -h * 0.2 && p.y < h * 1.2) {
+      x = p.x; y = p.y;
+    } else {
+      var sx = V.dot(wind, cam.r), sy = V.dot(wind, cam.u);
+      var m = Math.hypot(sx, sy);
+      if (!(m > 1e-6)) { sx = 0; sy = 1; m = 1; }
+      x = w / 2 + (sx / m) * w * 0.55;
+      y = h / 2 - (sy / m) * h * 0.55;
+    }
+    var tS = nowSeconds();
+    var flick = 0.86 + 0.09 * Math.sin(tS * 29.1) + 0.05 * Math.sin(tS * 12.7);
+    /* Held orange. The canopy glass is tinted, and anything near white
+     * added over it came out green; a pilot also has to read the ladder
+     * through this, so it lights the glass rather than blinding it. */
+    var col = Render.plasmaRGB(g * 0.55), hot = Render.plasmaRGB(g * 0.8);
+    var R = Math.max(w, h) * (0.35 + 0.40 * g);
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    // The glass fills with light from where the air is arriving.
+    var rg = ctx.createRadialGradient(x, y, 0, x, y, R);
+    rg.addColorStop(0, 'rgba(' + hot + ',' + Math.min(0.6, (0.30 + 0.30 * g) * vis * flick).toFixed(3) + ')');
+    rg.addColorStop(0.3, 'rgba(' + col + ',' + ((0.14 + 0.16 * g) * vis * flick).toFixed(3) + ')');
+    rg.addColorStop(1, 'rgba(' + col + ',0)');
+    ctx.fillStyle = rg;
+    ctx.fillRect(0, 0, w, h);
+
+    // And the whole cockpit is lit by it.
+    ctx.globalAlpha = Math.min(0.16, (0.05 + 0.11 * g) * vis);
+    ctx.fillStyle = 'rgb(' + col + ')';
+    ctx.fillRect(0, 0, w, h);
+    ctx.globalAlpha = 1;
+
+    /* Flame streaking past, outward from the stagnation point. Hashed off a
+     * time bucket like the rain: no state, and three strokes in all — one
+     * per brightness band — however many streaks there are. */
+    var n = Math.round(30 + 60 * g);
+    var bucket = Math.floor(tS * 30);
+    var reach = Math.hypot(w, h);
+    ctx.lineCap = 'round';
+    for (var band = 0; band < 3; band++) {
+      ctx.strokeStyle = 'rgba(' + (band === 0 ? hot : col) + ',' +
+        ((0.14 + 0.24 * g) * vis * (1 - band * 0.28)).toFixed(3) + ')';
+      ctx.lineWidth = (1.5 + 2.5 * g) * (1 - band * 0.3);
+      ctx.beginPath();
+      for (var i = band; i < n; i += 3) {
+        var ang = hashUnit(i * 3.71 + bucket * 0.137) * Math.PI * 2;
+        var r0 = reach * (0.04 + 0.40 * hashUnit(i * 1.93 + bucket * 0.571));
+        var len = reach * (0.05 + 0.20 * g) * (0.5 + hashUnit(i * 7.13 + bucket * 0.29));
+        var ca = Math.cos(ang), sa = Math.sin(ang);
+        ctx.moveTo(x + ca * r0, y + sa * r0);
+        ctx.lineTo(x + ca * (r0 + len), y + sa * (r0 + len));
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /* A number in [0,1) from a number. Only ever used for decoration, so it
+   * wants to be fast and spread out rather than good. */
+  function hashUnit(x) {
+    var s = Math.sin(x * 127.1 + 311.7) * 43758.5453;
+    return s - Math.floor(s);
+  }
+
+  function drawCanopyShieldFlare(ctx, cam, w, h) {
+    var s = G.ship;
+    var cap = s.shield ? Combat.MODULES.shield.cap : 0;
+    if (!(cap > 0)) return;
+    var list = s.impacts;
+    if (!list || !list.length) return;
+
+    var col = Render.shieldTint(Math.max(0, s.shieldHp) / cap);
+    var n = parseInt(col.slice(1), 16);
+    var cr = (n >> 16) & 255, cg = (n >> 8) & 255, cb = n & 255;
+    var R = Math.min(w, h) * 0.30;
+    var nowS = nowSeconds();
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (var i = 0; i < list.length; i++) {
+      var im = list[i];
+      if (!im.soaked) continue;               // the plating's business, not the field's
+      var age = nowS - im.at;
+      var amp = Render.shellFlare(1, age);    // 1 = dead centre of the flare
+      if (!(amp > 0.004)) continue;
+
+      var dir = im.dir;
+      var x, y;
+      var p = dir ? cam.projectDir(dir) : null;
+      if (p) {
+        x = p.x; y = p.y;
+      } else {
+        /* Behind, or nowhere in particular. Put it at the edge on the side
+         * it came from, using the bearing's own components in the camera's
+         * axes — and dead astern, which has no side, goes to the bottom,
+         * because that is where you would flinch. */
+        var sx = dir ? V.dot(dir, cam.r) : 0;
+        var sy = dir ? V.dot(dir, cam.u) : -1;
+        var m = Math.hypot(sx, sy);
+        if (!(m > 1e-6)) { sx = 0; sy = -1; m = 1; }
+        x = w / 2 + (sx / m) * w * 0.46;
+        y = h / 2 - (sy / m) * h * 0.46;
+      }
+
+      var a = Math.min(0.62, amp * 0.62);
+      var g = ctx.createRadialGradient(x, y, 0, x, y, R);
+      g.addColorStop(0, 'rgba(' + cr + ',' + cg + ',' + cb + ',' + a.toFixed(3) + ')');
+      g.addColorStop(0.45, 'rgba(' + cr + ',' + cg + ',' + cb + ',' +
+                     (a * 0.35).toFixed(3) + ')');
+      g.addColorStop(1, 'rgba(' + cr + ',' + cg + ',' + cb + ',0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(x, y, R, 0, K.TAU);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  /* ---- and what an unshielded hit looks like ----------------------------
+   * A bloom on the plating, and it is deliberately a different SHAPE from
+   * the shield flare rather than a different colour. The shield's flare
+   * spreads across a surface; this is a hot sphere sitting on one, because
+   * that is what a few megawatts arriving on a metre of hull actually makes.
+   *
+   * So which effect you are looking at tells you whether the shield is still
+   * holding, from any distance and without reading a number — which is the
+   * whole point of having two of them. A shot that punches through a failing
+   * shield produces both at once, and that is exactly what that moment is.
+   *
+   * Drawn in screen space as a radial gradient rather than as geometry: it
+   * is a glow, it has no surface, and the same argument the beams and the
+   * plumes already make applies. */
+  var BLOOM_LIFE = 0.45;
+
+  function drawHullBlooms(ctx, cam, s) {
+    var spec = s.spec || s;
+    var list = spec && spec.impacts;
+    if (!list || !list.length) return;
+    var nowS = nowSeconds();
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (var i = 0; i < list.length; i++) {
+      var im = list[i];
+      if (!im.through) continue;                  // the shield held; nothing here
+      var age = nowS - im.at;
+      if (!(age >= 0) || age > BLOOM_LIFE) continue;
+      var u = age / BLOOM_LIFE;
+
+      /* On the hull, on the side it came from. Half the ship's own length
+       * out from the centre puts it on the plating rather than inside. */
+      var at = s.pos;
+      if (im.dir) at = V.addScaled(s.pos, im.dir, s.size * 0.42);
+      var p = cam.project(at);
+      if (!p) continue;
+
+      /* Grows a little and fades a lot — an expanding shell of hot vapour
+       * coming off the plating, which is what the damage actually is. */
+      var rPx = Math.max(2.2, s.size * 0.35 * p.scale) * (0.45 + 1.15 * u);
+      var a = (1 - u) * (1 - u) * Math.min(1, 0.35 + im.hull / 30);
+      if (!(a > 0.004)) continue;
+
+      var g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rPx);
+      g.addColorStop(0, 'rgba(255,246,226,' + (a * 0.95).toFixed(3) + ')');
+      g.addColorStop(0.35, 'rgba(255,190,120,' + (a * 0.6).toFixed(3) + ')');
+      g.addColorStop(1, 'rgba(255,110,60,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, rPx, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  /* ---- wreckage, drawn ---------------------------------------------------
+   * Shards tumble, so each one needs an attitude every frame. It is built
+   * here rather than stored on the shard, for two reasons: an orthonormal
+   * basis is three vectors of state per fragment and there can be ninety-six
+   * of them, and a rotation is cheaper to evaluate than to keep correct —
+   * anything that STORES a basis has to re-orthonormalise it or it shears,
+   * which is a bug this project has already had once on the player's hull.
+   *
+   * So the spin is an axis, a rate and a phase, and the frame is a function
+   * of the clock. It is exact at any t, which is the same property the rails
+   * and the market both have and for the same reason.
+   *
+   * Rodrigues, written out. Two rotations of one fixed pair of axes about
+   * the shard's own spin axis — no matrices, no allocations beyond the frame
+   * itself, and it runs inside the per-frame budget the predictor has
+   * already spent most of. */
+  var shardFrame = { pos: null, right: null, up: null, fwd: null };
+
+  function spinFrame(c, tSec) {
+    var ang = c.phase + c.spinRate * tSec;
+    var k = c.spinAxis, ca = Math.cos(ang), sa = Math.sin(ang);
+    /* A seed axis that is never parallel to the spin axis, so the cross
+     * product below cannot collapse. */
+    var seed = Math.abs(k.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+    var a = V.norm(V.cross(k, seed));
+    var b = V.cross(k, a);                       // already unit: k ⟂ a, both unit
+    shardFrame.pos = c.pos;
+    shardFrame.fwd = { x: a.x * ca + b.x * sa, y: a.y * ca + b.y * sa,
+                       z: a.z * ca + b.z * sa };
+    shardFrame.up = k;
+    shardFrame.right = V.cross(shardFrame.up, shardFrame.fwd);
+    return shardFrame;
+  }
+
+  /* A spent sink's colour, from what it is still carrying. Blackbody in
+   * spirit rather than in physics: white-hot straight out of the launcher,
+   * through orange, to the dull iron of a block that has finished. One
+   * function so the hull, the bloom and the scope cannot disagree about how
+   * hot the same object looks. */
+  function sinkRGB(glow) {
+    var g = Math.max(0, Math.min(1, glow));
+    return [Math.round(140 + 115 * g),
+            Math.round(120 + 118 * Math.pow(g, 0.75)),
+            Math.round(110 + 130 * Math.pow(g, 2.6))];
+  }
+
+  function sinkTint(glow) {
+    var c = sinkRGB(glow);
+    return 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
+  }
+
+  function drawDebris(ctx, cam) {
+    var list = G.sys.canisters;
+    if (!list || !list.length) return;
+    var sunPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
+    var tSec = performance.now() / 1000;
+
+    ctx.save();
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i];
+      if (c.kind !== 'debris') continue;
+      var sp = cam.project(c.pos);
+      if (!sp) continue;
+      if (sp.x < -40 || sp.x > cam.w + 40 || sp.y < -40 || sp.y > cam.h + 40) continue;
+
+      /* Fading out over the last quarter of its life, so a field thins
+       * rather than blinking out a piece at a time. A spent heat sink runs
+       * longer than a shard does and carries its own `life`, so the
+       * denominator is the object's rather than the constant's — reading
+       * DEBRIS_LIFE for everything made the sink's first sixty seconds
+       * compute a `left` above 1, which is harmless, and its last thirty
+       * fade on the wrong curve, which is not. */
+      var left = (c.expires - G.t) / (c.life || Sim.DEBRIS_LIFE);
+      var fade = left > 0.25 ? 1 : Math.max(0, left / 0.25);
+      if (fade <= 0) continue;
+
+      /* A spent sink is the one piece of debris that is a LIGHT SOURCE, and
+       * that is the whole point of it: it is visible because it is hot, it
+       * dims as it cools, and what it looks like is what a scanner is
+       * reading. The colour walks white-hot → orange → dull iron off the
+       * closed-form heat, so the picture and the scope agree without either
+       * being told about the other. */
+      var glow = 0;
+      if (c.sink) {
+        glow = Math.max(0, Math.min(1, Sim.sinkHeatAt(c, G.t) / Combat.SINK.capacity));
+      }
+
+      var lenPx = c.lengthKm * sp.scale;
+      if (lenPx > 3) {
+        ctx.globalAlpha = fade;
+        Render.drawShardModel(ctx, cam, spinFrame(c, tSec), c.lengthKm,
+                              V.norm(V.sub(sunPos, c.pos)),
+                              c.sink ? sinkTint(glow)
+                                     : (c.cid ? '#c8b487' : '#8d949e'), c.shard);
+        ctx.globalAlpha = 1;
+        /* A soft additive bloom around a hot block. Additive so it reads as
+         * emitted rather than painted, and dropped once it is cold, because
+         * a cold sink is a grey brick and should look like one.
+         *
+         * TWO THINGS HERE WERE WRONG THE FIRST TIME and both were only
+         * visible by looking. A FLAT disc at alpha 0.5 under 'lighter' is
+         * not a glow, it is a white circle — additive blending saturates
+         * almost immediately, so the block inside it disappeared. And a
+         * radius of 1.7x the object's own screen length meant that flying
+         * within a hundred metres of one filled the canopy with a
+         * featureless white blob three times the size of the thing making
+         * it. So: a radial gradient that actually falls off, and a radius
+         * that stays a HALO — a little wider than the block, never a
+         * replacement for it. */
+        if (glow > 0.05) {
+          var rad = Math.max(2.5, lenPx * (0.42 + 0.30 * glow));
+          var rgb = sinkRGB(glow);
+          var grad = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, rad);
+          grad.addColorStop(0, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',1)');
+          grad.addColorStop(0.45, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.35)');
+          grad.addColorStop(1, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0)');
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.globalAlpha = fade * (0.18 + 0.32 * glow);
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(sp.x, sp.y, rad, 0, K.TAU);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+          ctx.globalCompositeOperation = 'source-over';
+        }
+      } else {
+        /* Too small for a model and too important to drop: a debris field
+         * you cannot see is a debris field you fly into. Salvage keeps its
+         * warmer colour all the way down, because at this size the colour is
+         * the only thing telling you which piece to go to. A hot sink keeps
+         * its glow down here too, and gets a pixel more, because at this
+         * range it is the brightest thing in the field. */
+        ctx.globalAlpha = fade * (c.sink ? Math.max(0.35, glow) : (c.cid ? 0.95 : 0.55));
+        ctx.fillStyle = c.sink ? sinkTint(glow) : (c.cid ? '#ffd36b' : '#7c848f');
+        var d = c.sink ? 2.2 : (c.cid ? 1.9 : 1.2);
+        ctx.fillRect(sp.x - d / 2, sp.y - d / 2, d, d);
+        ctx.globalAlpha = 1;
+      }
+    }
+    ctx.restore();
+  }
+
+  /* ---- weapons fire, drawn ---------------------------------------------
+   * Beams are two projected points and a bright line — a laser has no
+   * transit time worth animating at these ranges. Missiles are a dot and a
+   * plume. Explosions are an expanding pair of rings that live under a
+   * second, and what is left once they fade is the debris field drawDebris
+   * paints above — which is what those rings were standing in for. */
+  /* Shortest a beam is ever drawn, in pixels. Small enough that it never
+   * reads as a bar across a close-quarters fight, big enough to catch the
+   * eye at a zoom where the whole ship is two pixels. */
+  var MIN_BEAM_PX = 14;
+
+  /* How long a tracer takes to cross the weapon's whole envelope, in real
+   * seconds. Nothing in the simulation reads this: the shot has already hit
+   * or missed by the time the first pixel is drawn. It is slow purely so
+   * that firing LOOKS like firing — at true beam speed the whole event
+   * occupies less than one frame and the gun reads as broken, which is how
+   * this arrived as a bug report in the first place.
+   *
+   * It was 0.30 s while a bolt was a short slug, because a slug is only
+   * visible where it happens to be and had to dawdle to be seen at all.
+   * Render.boltSpan made the bolt a STREAK that elongates as it travels, and
+   * a streak says "a shot happened" along its whole length — so the head can
+   * cross faster without the event disappearing between frames, which is the
+   * other half of the "too chunky and too slow" report. */
+  var TRACER_CROSS = 0.20;
+
+  /* Hairline core, wide faint halo — the same fix the wake lightning needed
+   * and for the same reason. The old 7 px core was doing the glow AND the
+   * shape with one stroke, which is what read as chunky: a bright bar has no
+   * centre for the eye to find. Splitting them lets the core get thin enough
+   * to look hot while the halo carries the light. Under 'lighter' the two
+   * passes add, so the middle of the streak still burns out to white. */
+  var TRACER_HALO_W = 3.6;    // halo width, as a multiple of the core
+  var TRACER_HALO_A = 0.20;   // halo alpha, as a fraction of the core's
+
+  /* ---- and the bolt is an OBJECT, not a decal ----------------------------
+   * Reported twice, and the second report was the real one: the perspective
+   * was wrong. Two separate faults, both from drawing the tracer in screen
+   * space between two projected endpoints.
+   *
+   * 1. THE WIDTH WAS A PIXEL RAMP. It ran 2.4 px at the muzzle to 0.55 at the
+   *    far end, and the constant was frankly labelled "perspective, faked
+   *    cheaply". So every shot narrowed by the same 4.4x whatever its
+   *    geometry — a bolt fired down the boresight at something 20 km ahead
+   *    and a bolt crossing the canopy broadside tapered identically. Broadside
+   *    both ends are the same distance away and the thing should be a uniform
+   *    ribbon; down the boresight the far end should be far thinner than 4.4x.
+   *
+   * 2. THE TRAVEL WAS INTERPOLATED ON THE SCREEN. `a.x + dx * head` walks the
+   *    head at a constant rate in PIXELS, and a point moving at constant speed
+   *    down a receding ray does not do that — it should appear to slow sharply
+   *    as it goes away from you. Sliding at uniform screen speed is exactly
+   *    what makes a thing read as painted on the glass rather than flying
+   *    through the world, and it is what survived the first fix.
+   *
+   * Both die the same way: interpolate in WORLD space and project each
+   * sample, so the foreshortening and the width both fall out of the camera
+   * instead of being guessed at. A straight world segment still projects to a
+   * straight screen segment — perspective maps lines to lines — so the streak
+   * needs no bending; what it needs is its WIDTH sampled along its length,
+   * because that varies hyperbolically with depth.
+   *
+   * The sampling itself lives in `Render.boltRibbon`, with the rest of the
+   * drawing maths and for the same reason `boltSpan` does: it can be held to
+   * the camera there without a canvas, and "broadside is a constant-width
+   * ribbon, receding is not" is a claim a test can actually make.
+   *
+   * Kept here: the two widths for the tiny-on-screen fallback below, where
+   * there is no perspective left to get right and the whole event is a few
+   * pixels of tick mark. */
+  var TRACER_NEAR_W = 2.4;
+  var TRACER_FAR_W = 0.55;
+
+  /* A tapered, fading quad between two screen points. Canvas cannot vary a
+   * stroke's width along its length, so this is a filled polygon with a
+   * gradient — exactly the trick drawExhaust already uses on the torch
+   * plumes, and for the same reason: a tapered quad reads far better than
+   * any number of triangles, and a plume and a tracer are the same problem.
+   *
+   * Wide and bright at the muzzle, thin and faint at the far end, which is
+   * what gives the shot its direction without needing an arrowhead. */
+  function taperedTracer(ctx, ax, ay, bx, by, w0, w1, color, a0, a1) {
+    var dx = bx - ax, dy = by - ay, L = Math.hypot(dx, dy);
+    if (!(L > 0.5)) return;
+    var nx = -dy / L, ny = dx / L;
+    var g = ctx.createLinearGradient(ax, ay, bx, by);
+    g.addColorStop(0, hexToRgba(color, a0));
+    g.addColorStop(1, hexToRgba(color, a1));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(ax + nx * w0, ay + ny * w0);
+    ctx.lineTo(bx + nx * w1, by + ny * w1);
+    ctx.lineTo(bx - nx * w1, by - ny * w1);
+    ctx.lineTo(ax - nx * w0, ay - ny * w0);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  /* A tracer as two passes: a wide dim halo, then a hairline core on top.
+   * Every weapon variety goes through this rather than through taperedTracer
+   * directly, so none of them can drift back into being one fat bar. */
+  function glowTracer(ctx, ax, ay, bx, by, w0, w1, color, a0, a1) {
+    taperedTracer(ctx, ax, ay, bx, by,
+                  w0 * TRACER_HALO_W, w1 * TRACER_HALO_W, color,
+                  a0 * TRACER_HALO_A, a1 * TRACER_HALO_A);
+    taperedTracer(ctx, ax, ay, bx, by, w0, w1, color, a0, a1);
+  }
+
+  /* One pass of a streak, as a ribbon along the WORLD ray between two
+   * fractions of it. See the note by BOLT_R for why this is not done between
+   * two projected endpoints.
+   *
+   * Drawn as a single polygon rather than as a run of quads. Butting quads
+   * end to end under 'lighter' double-covers every seam and leaves a ladder
+   * of faint bright rungs down the middle of the bolt; one closed outline up
+   * one side and back down the other has no seams to brighten, and is one
+   * fill instead of four.
+   *
+   * Returns false if any sample is behind the camera, which is the caller's
+   * cue to fall back — a ray that straddles the eye has no honest ribbon. */
+  function worldTracerPass(ctx, cam, rib, col, a0, a1, wMul, aMul) {
+    var n = rib.length - 1, i;
+    var dx = rib[n].x - rib[0].x, dy = rib[n].y - rib[0].y;
+    var L = Math.hypot(dx, dy);
+    if (!(L > 0.4)) return;                      // nothing to draw, but valid
+    var nx = -dy / L, ny = dx / L;
+    var g = ctx.createLinearGradient(rib[0].x, rib[0].y, rib[n].x, rib[n].y);
+    g.addColorStop(0, hexToRgba(col, a0 * aMul));
+    g.addColorStop(1, hexToRgba(col, a1 * aMul));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(rib[0].x + nx * rib[0].w * wMul, rib[0].y + ny * rib[0].w * wMul);
+    for (i = 1; i <= n; i++) {
+      ctx.lineTo(rib[i].x + nx * rib[i].w * wMul, rib[i].y + ny * rib[i].w * wMul);
+    }
+    for (i = n; i >= 0; i--) {
+      ctx.lineTo(rib[i].x - nx * rib[i].w * wMul, rib[i].y - ny * rib[i].w * wMul);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  /* `wScale` carries both the miss dimming and the variety's own thickness —
+   * a beam is the fattest of the three because the load never stops arriving,
+   * a pulse the thinnest. It multiplies the PHYSICAL radius, before the floor
+   * and the cap, so at long range everything converges on the same hairline
+   * and the difference between the varieties is one you only see up close.
+   * That is the correct way round: at 20 km you are being told a shot
+   * happened, not which emitter fired it. */
+  function worldTracer(ctx, cam, origin, seg, f0, f1, col, a0, a1, wScale) {
+    var rib = Render.boltRibbon(cam, origin, seg, f0, f1, wScale);
+    if (!rib) return false;
+    worldTracerPass(ctx, cam, rib, col, a0, a1, TRACER_HALO_W, TRACER_HALO_A);
+    worldTracerPass(ctx, cam, rib, col, a0, a1, 1, 1);
+    return true;
+  }
+
+  /* The beam colours in the catalogue are '#rrggbb'; a gradient needs an
+   * alpha per stop, so they have to be unpacked. */
+  function hexToRgba(hex, a) {
+    var h = String(hex || '#ff6b5a').replace('#', '');
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    var n = parseInt(h, 16);
+    return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' +
+           (n & 255) + ',' + a.toFixed(3) + ')';
+  }
+
+  function drawCombatFx(ctx, cam) {
+    var i, a, b;
+    var nowS = performance.now() / 1000;
+
+    if (G.beams && G.beams.length) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (i = 0; i < G.beams.length; i++) {
+        var beam = G.beams[i];
+        /* The player's own beams carry a muzzle in the SHIP'S axes and are
+         * resolved here, against the attitude the ship has right now. Two
+         * bugs die on this line: the origin is no longer eight centimetres
+         * behind the pilot's eye, where projecting it divided by a depth of
+         * nothing and threw the beam sideways off the canopy; and it no
+         * longer stays where the ship WAS, which at 5.5 km/s left the beam
+         * half a kilometre astern before it faded. */
+        /* From the seat, the tracer comes from under the nose rather than
+         * from the true barrel: the real chin gun is only nine degrees below
+         * the boresight, above the canopy sill, so a line drawn from it
+         * starts in clear air attached to nothing. Render.seatMuzzle puts
+         * the apparent origin below the sill, where the hull would be hiding
+         * the barrel if the cockpit view drew a hull. Outside, the real
+         * emitters are used — out there you can see the guns. */
+        var mz = beam.muzzle;
+        if (beam.fromShip && mz && G.viewMode === 'cockpit') {
+          /* Just below the instrument deck — deckTop() is already this
+           * file's answer to "where the screen stops belonging to the
+           * world", so the tracer emerges from behind the panels rather
+           * than from a fixed angle that only suited one window. The 26 px
+           * is how far under the edge it starts, which is enough that the
+           * near end is genuinely hidden and not enough to waste travel. */
+          var drop = ((deckTop(cam.h) + 26) - cam.cy) / cam.flen;
+          mz = Render.seatMuzzle(beam.side || 1, drop);
+        }
+        var origin = (beam.fromShip && mz)
+          ? Render.localToWorld(G.ship, mz.r, mz.u, mz.f)
+          : beam.from;
+        /* And the far end has to be just as live, or the beam pivots about
+         * its muzzle as the ship moves and the view fills with a fan of
+         * stale rays — which is precisely what 25x warp made of it. Follow
+         * the target if there still is one, otherwise run out along the
+         * CURRENT nose; fall back to the frozen point for anything that
+         * never had either, which is every NPC's fire. */
+        var far = beam.to;
+        if (beam.target && beam.target.pos) far = beam.target.pos;
+        else if (beam.fromShip && beam.range) far = V.addScaled(origin, G.ship.fwd, beam.range);
+        a = cam.project(origin); b = cam.project(far);
+        if (!a || !b) continue;
+
+        /* A miss is drawn missing: skewed past the target rather than
+         * through it, so being hard to hit LOOKS like being hard to hit.
+         *
+         * THE SKEW MOVED INTO THE WORLD. It used to be added to the projected
+         * endpoint, which was fine while the streak was drawn between two
+         * screen points and is not fine now that the whole ray is walked in
+         * world space — a far end that exists only on the screen has no
+         * fractions along it to interpolate. So the offset is applied to the
+         * world point instead, in the camera's own axes and scaled by that
+         * point's depth, which reproduces exactly the same on-screen skew at
+         * any range or zoom while leaving a real ray to sample.
+         *
+         * The roll stays `Math.random`: whether a shot connects is an
+         * in-the-moment die roll, which the seed doctrine explicitly exempts,
+         * and it is memoised on the beam so it does not jitter frame to
+         * frame. */
+        if (beam.miss) {
+          if (beam.missX === undefined) {
+            beam.missX = (Math.random() - 0.5) * 60;
+            beam.missY = (Math.random() - 0.5) * 60;
+          }
+          var mk = b.depth / cam.flen;             // pixels -> km at that depth
+          far = V.addScaled(far, cam.r, beam.missX * mk);
+          far = V.addScaled(far, cam.u, -beam.missY * mk);   // screen y is down
+          b = cam.project(far) || b;
+        }
+        var ex = b.x, ey = b.y;
+        /* A 22 km beam with the camera 120,000 km out is a third of a pixel,
+         * so from the exterior view's default zoom the guns appeared not to
+         * fire at all — which is exactly how it was reported. A beam is a
+         * TRACER: its whole job is to say that a shot happened. So the drawn
+         * length is floored, along its own direction, and nothing else is
+         * touched — the aim, the range envelope, the falloff and the damage
+         * are all decided in combat.js and none of them can see this. */
+        var dx = ex - a.x, dy = ey - a.y, L = Math.hypot(dx, dy);
+        if (L > 1e-6 && L < MIN_BEAM_PX) {
+          ex = a.x + dx / L * MIN_BEAM_PX;
+          ey = a.y + dy / L * MIN_BEAM_PX;
+          dx = ex - a.x; dy = ey - a.y; L = MIN_BEAM_PX;
+        }
+
+        /* How far the tracer has got. Purely cosmetic — see TRACER_CROSS.
+         * A beam is drawn full length from the first frame because that is
+         * what "continuous" means; the other two travel. */
+        var age = nowS - (beam.born || nowS);
+        var span = Render.boltSpan(age, TRACER_CROSS);
+        var head = beam.variety === 'beam' ? 1 : Math.max(0.06, span.head);
+        /* And it fades out over the last third of its life rather than
+         * vanishing, so a burst trails off instead of blinking. */
+        var life = (beam.until - (beam.born || nowS)) || 0.42;
+        var fade = Math.max(0, Math.min(1, (1 - (age / life)) * 3));
+        if (fade <= 0) continue;
+
+        var dim = beam.miss ? 0.4 : 1;
+        var col = beam.color || '#ff6b5a';
+
+        /* THE RAY, in the world. Every fraction below is a fraction of THIS,
+         * not of the projected line, which is the whole correction. */
+        var seg = V.sub(far, origin);
+
+        /* Under the floor there is no perspective left to get right: the
+         * entire shot is a dozen pixels of tick mark whose only job is to say
+         * a gun went off, and the world ray it came from is shorter than one
+         * sample. So that case keeps the old screen-space draw, floor and
+         * all — this is the exterior-view fix from two builds ago and it must
+         * not be lost to a correction it has nothing to do with. */
+        var tiny = L <= MIN_BEAM_PX + 0.001;
+        var w0 = TRACER_NEAR_W * dim, w1 = TRACER_FAR_W * dim;
+        var hx = a.x + dx * head, hy = a.y + dy * head;
+
+        if (beam.variety === 'intermittent') {
+          /* A broken line: the delivery is bursts, so the tracer is too. The
+           * dashes are cut from the WORLD ray, so they crowd together toward
+           * the far end exactly as evenly spaced things do when they recede —
+           * which on the old screen-space parameterisation they never did. */
+          var DASH = 7, lit = 0.62, d, t0, t1;
+          for (d = 0; d < DASH; d++) {
+            t0 = (d / DASH) * head; t1 = ((d + lit) / DASH) * head;
+            if (tiny || !worldTracer(ctx, cam, origin, seg, t0, t1, col,
+                                     fade * (0.95 - 0.75 * t0),
+                                     fade * (0.95 - 0.75 * t1), dim)) {
+              glowTracer(ctx,
+                a.x + dx * t0, a.y + dy * t0, a.x + dx * t1, a.y + dy * t1,
+                w0 + (w1 - w0) * t0, w0 + (w1 - w0) * t1,
+                col, fade * (0.95 - 0.75 * t0), fade * (0.95 - 0.75 * t1));
+            }
+          }
+        } else if (beam.variety === 'beam') {
+          // Continuous, and the widest of the three: the load never stops.
+          if (tiny || !worldTracer(ctx, cam, origin, seg, 0, head, col,
+                                   fade * 0.95, fade * 0.12, dim * 1.25)) {
+            glowTracer(ctx, a.x, a.y, hx, hy, w0 * 1.25, w1, col,
+                       fade * 0.95, fade * 0.12);
+          }
+        } else {
+          /* A pulse is a packet of particles, and a packet debunches — so it
+           * is drawn as a streak that ELONGATES behind its head rather than
+           * as a fixed-length slug sliding along the run. Render.boltSpan
+           * carries the reasoning and the two numbers.
+           *
+           * Bright at the head and falling away down the tail, because that
+           * is which end the dense part of the bunch is at: the leaders have
+           * outrun the stragglers, so the light thins out behind them.
+           *
+           * Measured against the floored `head` rather than span.head, so the
+           * first-frame floor survives into the length test — otherwise a
+           * shot's opening frame computes a zero-length streak and draws
+           * nothing at all. */
+          if (head - span.tail > 1e-4) {
+            if (tiny || !worldTracer(ctx, cam, origin, seg, span.tail, head,
+                                     col, fade * 0.05, fade * 1.0, dim * 0.7)) {
+              glowTracer(ctx, a.x + dx * span.tail, a.y + dy * span.tail,
+                         hx, hy, w0 * 0.5, w0 * 0.9, col,
+                         fade * 0.05, fade * 1.0);
+            }
+          }
+        }
+      }
+      ctx.restore();
+    }
+
+    /* Contrails UNDER the missiles and the explosions, so a warhead going
+     * off is in front of its own smoke. */
+    drawContrails(ctx, cam);
+
+    var ms = G.sys.missiles;
+    if (ms && ms.length) {
+      ctx.save();
+      for (i = 0; i < ms.length; i++) {
+        var m = ms[i];
+        var mp = cam.project(m.pos);
+        if (!mp) continue;
+        var tail = cam.project(V.addScaled(m.pos, V.norm(m.vel), -0.4));
+        if (tail) {
+          var g = ctx.createLinearGradient(mp.x, mp.y, tail.x, tail.y);
+          g.addColorStop(0, 'rgba(255,220,150,0.9)');
+          g.addColorStop(1, 'rgba(255,120,40,0)');
+          ctx.strokeStyle = g;
+          ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.moveTo(mp.x, mp.y); ctx.lineTo(tail.x, tail.y); ctx.stroke();
+        }
+        ctx.fillStyle = '#ffe6a8';
+        ctx.fillRect(mp.x - 1.4, mp.y - 1.4, 2.8, 2.8);
+      }
+      ctx.restore();
+    }
+
+    if (G.explosions && G.explosions.length) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (i = 0; i < G.explosions.length; i++) {
+        var ex = G.explosions[i];
+        var ep = cam.project(ex.pos);
+        if (!ep) continue;
+        var age = (nowS * 1000 - ex.at) / 900;         // 0..1
+        if (age < 0 || age > 1) continue;
+        var r = Math.max(3, ex.size * ep.scale) * (0.3 + age * 1.6);
+        ctx.globalAlpha = (1 - age) * 0.9;
+        ctx.strokeStyle = '#ffd9a0';
+        ctx.lineWidth = 2.5 * (1 - age) + 0.5;
+        ctx.beginPath(); ctx.arc(ep.x, ep.y, r, 0, K.TAU); ctx.stroke();
+        ctx.strokeStyle = '#ff8a5a';
+        ctx.beginPath(); ctx.arc(ep.x, ep.y, r * 0.55, 0, K.TAU); ctx.stroke();
+        if (age < 0.35) {
+          ctx.fillStyle = '#ffffff';
+          ctx.globalAlpha = (0.35 - age) * 2.2;
+          ctx.beginPath(); ctx.arc(ep.x, ep.y, r * 0.3, 0, K.TAU); ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+  }
+
+  /* ---- cockpit ----------------------------------------------------------
+   * The interior is real geometry (render.js). This function is the
+   * division of labour the cockpit design is built on: flight-critical
+   * symbology is PROJECTED ON THE GLASS, clipped to the window and blended
+   * additively so it glows over the world; data-heavy readouts live on
+   * PHYSICAL PANELS set into the dashboard, drawn in perspective. That is
+   * the split Frontier used, and it is the right one — the ladder has to
+   * be out where you are looking, and the cargo manifest does not. */
+  /* Painter's order is the whole trick here, and it is worth naming:
+   *   hull  ->  glass  ->  HUD on the glass  ->  interior.
+   * The interior comes last because the dashboard is physically between the
+   * pilot and the canopy, so it should cut off the bottom of the attitude
+   * ladder rather than the ladder floating over the console. That mattered
+   * a little before; now that the head can turn, it matters constantly. */
+  function drawCockpitView(ctx, cam, w, h) {
+    var shell = G.showCockpitFrame ? Render.drawCockpitShell(ctx, cam, G.ship, w, h) : null;
+    var apertures = shell ? shell.apertures : null;
+    var aperture = shell ? shell.aperture : null;
+
+    if (shell) {
+      /* No star to glare off the canopy while you are between them — the
+       * tunnel does its own lighting. Nor under a roof: the sun is on the
+       * far side of several metres of hangar, and a lens flare through it
+       * was the last thing still insisting you were outdoors. */
+      if (G.hyper || enclosedPort()) {
+        Render.drawGlass(ctx, apertures, w, h, {});
+      } else {
+        var starPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
+        var starRel = V.sub(starPos, cam.eye);
+        Render.drawGlass(ctx, apertures, w, h, {
+          starScreen: cam.project(starPos),
+          starVisible: V.dot(V.norm(starRel), cam.f) > 0
+        });
+      }
+    }
+
+    var lv = Sim.localVertical(G.ship.pos, G.sys, G.t);
+    var fr = G.frame || orbitalFrame();
+    var centred = Math.abs(G.look.yaw) < 0.42 && Math.abs(G.look.pitch) < 0.42;
+
+    /* Nothing to be level with in the tunnel, and nowhere to be going that
+     * a flight-path marker could point at. The glass carries the drive
+     * readout instead — which is what those instruments are FOR, rather
+     * than a ladder pretending it still knows which way is up. */
+    if (G.hyper) {
+      Render.glassBegin(ctx, aperture);
+      drawTransitGlass(ctx, w, h);
+      Render.glassEnd(ctx);
+      if (shell) {
+        var hyperInner = Render.drawCockpitInterior(ctx, cam, G.ship, w, h);
+        drawDashPanels(ctx, hyperInner.mfds, true);
+        Render.drawProjectionWash(ctx, aperture, hyperInner.emitters, w, h,
+                                  Math.floor(performance.now() / 90));
+      }
+      return;
+    }
+
+    Render.glassBegin(ctx, aperture);
+    var angles = Render.drawAttitudeLadder(ctx, cam, G.ship, attitudeUp(lv), w, h);
+    Render.drawFlightPathMarker(ctx, cam, fr.prograde, w, h);
+    // The bank scale is a fixed instrument on the glass ahead of you, so it
+    // has no business being drawn once you have looked away from it.
+    if (centred) Render.drawBankScale(ctx, w, h, angles.rollDeg, h * 0.30);
+
+    // The navigation lock gets the strongest box on the glass.
+    var nav = navTargetState();
+    if (nav) {
+      Render.drawHoloTarget(ctx, cam, nav.pos, nav.name,
+        fmtDist(nav.range) + (isFinite(nav.eta) ? '  ETA ' + fmtTime(nav.eta) : ''),
+        nav.hostile ? '#ff6b5a' : '#ffd36b', w, h);
+    }
+    if (G.dockTarget && !G.ship.docked && (!nav || nav.obj !== G.dockTarget)) {
+      var tp = Sim.bodyPosition(G.dockTarget, G.sys, G.t);
+      Render.drawHoloTarget(ctx, cam, tp, G.dockTarget.name,
+        fmtDist(V.dist(tp, G.ship.pos)), '#7dffb0', w, h);
+    }
+    /* Anything awake gets boxed on the glass — a pirate in red, because
+     * that is the one contact you must never have to hunt for. */
+    if (G.encounter && G.encounter.active.length) {
+      G.encounter.active.forEach(function (spec) {
+        if (!spec.live) return;
+        Render.drawHoloTarget(ctx, cam, spec.live.pos, spec.name,
+          spec.className + ' · ' + fmtDist(V.dist(spec.live.pos, G.ship.pos)),
+          spec.kind === 'pirate' ? '#ff6b5a' : '#7dffb0', w, h);
+      });
+    }
+
+    if (centred) {
+      ctx.save();
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = '#6ef0c0';
+      ctx.textAlign = 'center';
+      ctx.fillText(angles.degenerate ? '' :
+        'PITCH ' + angles.pitchDeg.toFixed(1) + '°   ROLL ' + angles.rollDeg.toFixed(1) +
+        '°   REF ' + lv.body.name.toUpperCase(), w / 2, h / 2 + 40);
+      ctx.textAlign = 'left';
+      ctx.restore();
+    }
+    /* Last thing on the glass, and INSIDE the clip on purpose: the field
+     * flares a metre outside the canopy, so you see it through the glass and
+     * it should be cut off by the frame exactly as the sky is. */
+    drawCanopyPlasma(ctx, cam, w, h);
+    drawCanopyShieldFlare(ctx, cam, w, h);
+    drawCanopyWeather(ctx, cam, w, h);
+    Render.glassEnd(ctx);
+
+    if (shell) {
+      /* Interior last, because the console is physically between the pilot
+       * and the canopy — that is what makes the dash cut off the bottom of
+       * the ladder rather than the ladder floating over it. The three
+       * screens set into the dash are filled here: scope, orbit and target,
+       * the three things you look at while flying rather than while
+       * reading. The flat band along the bottom still carries everything,
+       * so nothing depends on being able to read a surface in perspective. */
+      var inner = Render.drawCockpitInterior(ctx, cam, G.ship, w, h);
+      drawDashPanels(ctx, inner.mfds, false);
+      Render.drawProjectionWash(ctx, aperture, inner.emitters, w, h,
+                                Math.floor(performance.now() / 90));
+    }
+
+    /* Taking a hit, from inside. Half a second of red across the whole
+     * cabin — the cockpit is the thing that got shot, so the flare belongs
+     * on the frame and the glass alike rather than on a HUD element. */
+    var sinceHit = (performance.now() - (G.hitAt || 0)) / 1000;
+    if (sinceHit >= 0 && sinceHit < 0.5) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.30 * (1 - sinceHit / 0.5);
+      var flare = ctx.createRadialGradient(w / 2, h * 0.55, Math.min(w, h) * 0.1,
+                                           w / 2, h * 0.55, Math.max(w, h) * 0.75);
+      flare.addColorStop(0, 'rgba(255,90,70,0.0)');
+      flare.addColorStop(1, 'rgba(255,70,50,1)');
+      ctx.fillStyle = flare;
+      ctx.fillRect(0, 0, w, h);
+      ctx.restore();
+    }
+
+    /* Say plainly which way you are facing when it is not forward. Without
+     * this, looking away and then getting distracted reads as the ship
+     * having mysteriously rotated. */
+    if (!centred) {
+      var yawDeg = Math.round(G.look.yaw / DEG), pitchDeg = Math.round(G.look.pitch / DEG);
+      ctx.save();
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = '#ffd36b';
+      ctx.textAlign = 'center';
+      var bits = [];
+      if (Math.abs(yawDeg) > 4) bits.push(Math.abs(yawDeg) + '° ' + (yawDeg > 0 ? 'RIGHT' : 'LEFT'));
+      if (Math.abs(pitchDeg) > 4) bits.push(Math.abs(pitchDeg) + '° ' + (pitchDeg > 0 ? 'UP' : 'DOWN'));
+      ctx.fillText('LOOKING ' + bits.join('  ') + '   ·   Home to centre', w / 2, 28);
+      ctx.textAlign = 'left';
+      ctx.restore();
+    }
+  }
+
+  /* What the canopy projector shows while you are in transit: the drive
+   * state, where you left, where you are going, and the date running
+   * forward. Deliberately sparse — the tunnel is the thing to look at. */
+  function drawTransitGlass(ctx, w, h) {
+    var hy = G.hyper;
+    var cx = w / 2, cy = h / 2;
+    var p = Math.min(1, hy.elapsed / hy.total);
+
+    ctx.save();
+    ctx.textAlign = 'center';
+
+    // A ring that closes as the drive charges and opens as you arrive.
+    var ringR = Math.min(w, h) * (hy.phase === 'charge'
+      ? 0.34 - 0.16 * (hy.elapsed / HYPER_CHARGE)
+      : 0.18 + 0.16 * Math.max(0, (hy.elapsed - HYPER_CHARGE - HYPER_TUNNEL) / HYPER_EXIT));
+    ctx.strokeStyle = 'rgba(150,230,255,0.55)';
+    ctx.lineWidth = 1.6;
+    ctx.setLineDash([6, 10]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(8, ringR), 0, K.TAU);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.font = 'bold 14px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText(hy.phase === 'charge' ? 'SLIPSPACE DRIVE — CHARGING'
+               : hy.phase === 'exit' ? 'EMERGENCE' : 'IN TRANSIT',
+                 cx, cy - Math.max(8, ringR) - 18);
+
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    ctx.fillText(hy.fromName + '   ➜   ' + hy.plan.to.name,
+                 cx, cy + Math.max(8, ringR) + 22);
+    ctx.fillStyle = '#ffd36b';
+    ctx.fillText(fmtEpoch(hy.clock), cx, cy + Math.max(8, ringR) + 38);
+    ctx.fillStyle = 'rgba(180,240,255,0.7)';
+    ctx.fillText(fmtLy(hy.plan.distance) + '   ·   ' + fmtTime(hy.plan.seconds) + ' of transit',
+                 cx, cy + Math.max(8, ringR) + 54);
+
+    // A plain progress bar, because a jump you cannot see the end of is
+    // just a long pause.
+    var bw = Math.min(360, w * 0.4), bx = cx - bw / 2, by = cy + Math.max(8, ringR) + 70;
+    ctx.strokeStyle = 'rgba(150,230,255,0.5)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, bw, 5);
+    ctx.fillStyle = 'rgba(180,240,255,0.85)';
+    ctx.fillRect(bx, by, bw * p, 5);
+
+    ctx.textAlign = 'left';
+    ctx.restore();
+  }
+
+  /* ---- dashboard panels -------------------------------------------------
+   * Each panel is drawn into a flat 260x176 pixel space which render.js maps
+   * onto the projected quad. Writing them in flat coordinates means the
+   * layout code has no idea it is being displayed in perspective, which is
+   * exactly how it should be. */
+  /* ---- MFD chrome -------------------------------------------------------
+   * Frontier First Encounters' panels had a look, and it came from four
+   * things rather than from detail: a hard rectangular bezel, a filled
+   * title bar in reverse video, tab markers showing which page of several
+   * you are on, and a soft-key strip along the bottom telling you what the
+   * keys do RIGHT NOW. That last one is the part modern UI usually drops
+   * and the part that made those cockpits usable without a manual.
+   *
+   * Everything below is drawn in a flat 260x176 pixel space that render.js
+   * maps onto the physical panel; this code has no idea it is being viewed
+   * in perspective, which is exactly how it should be. */
+  var MFD_W = 460, MFD_H = 178;
+  var MFD_BODY_TOP = 26, MFD_BODY_BOTTOM = 152;
+  var MFD_INK = '#d8f0c8', MFD_DIM = '#6aa8ba', MFD_HOT = '#ffd36b', MFD_EDGE = '#4a97b0';
+
+  function mfdShell(ctx, title, softkeys) {
+    ctx.fillStyle = '#040a0e';
+    ctx.fillRect(0, 0, MFD_W, MFD_H);
+    ctx.strokeStyle = MFD_EDGE;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(2, 2, MFD_W - 4, MFD_H - 4);
+
+    // Title bar, reverse video.
+    ctx.fillStyle = '#12414f';
+    ctx.fillRect(4, 4, MFD_W - 8, 19);
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText(title, 10, 18);
+
+    // Soft-key strip: what the keys do RIGHT NOW, which is the part of a
+    // Frontier cockpit that made it usable without a manual.
+    ctx.fillStyle = '#08161d';
+    ctx.fillRect(4, MFD_H - 24, MFD_W - 8, 20);
+    ctx.strokeStyle = 'rgba(74,151,176,0.5)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(4, MFD_H - 24, MFD_W - 8, 20);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    ctx.fillText(softkeys || '', 10, MFD_H - 10);
+  }
+
+  function mfdRow(ctx, y, label, value, color) {
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText(label, 10, y);
+    ctx.fillStyle = color || MFD_INK;
+    ctx.textAlign = 'right';
+    ctx.fillText(value, MFD_W - 10, y);
+    ctx.textAlign = 'left';
+  }
+
+  function mfdBar(ctx, y, frac, color) {
+    ctx.fillStyle = 'rgba(74,151,176,0.22)';
+    ctx.fillRect(10, y, MFD_W - 20, 7);
+    ctx.fillStyle = color;
+    ctx.fillRect(10, y, (MFD_W - 20) * Math.max(0, Math.min(1, frac)), 7);
+    ctx.strokeStyle = 'rgba(74,151,176,0.6)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(10, y, MFD_W - 20, 7);
+  }
+
+  function mfdLabelled(ctx, y, text, right, color) {
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText(text, 10, y);
+    if (right) {
+      ctx.fillStyle = color || MFD_INK;
+      ctx.textAlign = 'right';
+      ctx.fillText(right, MFD_W - 10, y);
+      ctx.textAlign = 'left';
+    }
+  }
+
+  function clipText(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+
+  /* One-letter type marks, so a nav list scans without reading words. */
+  function navMark(entry) {
+    if (entry.kind === 'ship') return entry.hostile ? '!' : '>';
+    switch (entry.obj.kind) {
+      case 'star': return '*';
+      case 'planet': return 'O';
+      case 'moon': return 'o';
+      case 'station': return '#';
+      default: return '·';
+    }
+  }
+
+  /* ---- the console ------------------------------------------------------
+   * Everything you read lives here now, drawn flat and square to the
+   * screen: a band across the bottom holding the flight controls on the
+   * left, the selected instrument page in the middle, a status column on
+   * the right, and the nine-slot key bar underneath.
+   *
+   * The pages themselves are unchanged from when they were mapped onto the
+   * dashboard in perspective — they always drew into their own flat pixel
+   * space and never knew how they were being displayed, which is exactly
+   * why moving them was a change of two lines rather than a rewrite. */
+  var CONSOLE_H = MFD_H, FBAR_H = 40;
+
+  /* Where the screen stops belonging to the world. In flight that is the
+   * top of the instrument band; on any other mode the mode owns everything
+   * down to the icon bar. Anything drawn over the top — warnings, messages,
+   * the footer — asks this rather than measuring from the bottom edge, which
+   * is how the footer hint once ended up painted through the key bar. */
+  function deckTop(h) { return h - FBAR_H - (bandShown() ? CONSOLE_H : 0); }
+
+  /* The flat band is drawn while flying — unless you have stowed it in the
+   * cockpit, in which case the console's own screens are the instruments
+   * and the band would be sitting on top of them. Everything that measures
+   * from the bottom of the world asks this rather than assuming, which is
+   * what keeps warnings, messages and the footer off the icon bar. */
+  function bandShown() {
+    return flying() && !(G.cockpitChrome === 1 && G.viewMode === 'cockpit');
+  }
+
+  /* ---- clickable things -------------------------------------------------
+   * A button is a rectangle plus a function, registered by whatever drew it,
+   * in the same coordinates it drew in. Nothing else can then disagree about
+   * where it is. The list is rebuilt from scratch every frame, so a control
+   * that stops being drawn stops being clickable in the same instant. */
+  function hot(x, y, w, h, fn, hint) {
+    G.hotspots.push({ x: x, y: y, w: w, h: h, fn: fn, hint: hint || null });
+    return { x: x, y: y, w: w, h: h };
+  }
+
+  function hitHot(x, y) {
+    for (var i = G.hotspots.length - 1; i >= 0; i--) {
+      var s = G.hotspots[i];
+      if (x >= s.x && x <= s.x + s.w && y >= s.y && y <= s.y + s.h) return s;
+    }
+    return null;
+  }
+
+  /* Was the mouse over a button when it went down? Used by the drag handler
+   * so clicking an icon does not also swing your head round. */
+  function overHot(clientX, clientY) {
+    var r = canvas.getBoundingClientRect();
+    return hitHot(clientX - r.left, clientY - r.top);
+  }
+
+  function drawConsole(ctx, w, h) {
+    G.hotspots = [];
+    /* The dashboard panels were drawn long before this — the cockpit is
+     * part of the world pass — and this is where the hotspot list gets
+     * rebuilt, so their click targets are replayed in here rather than
+     * registered where they were drawn and then thrown away. They go in
+     * FIRST so that anything the band draws on top of them wins the click,
+     * which is the same rule the screen has: whatever is in front. */
+    if (G.viewMode === 'cockpit' && flying()) {
+      for (var ph = 0; ph < panelHots.length; ph++) G.hotspots.push(panelHots[ph]);
+    }
+    var barY = h - FBAR_H;
+    if (bandShown()) drawFlightBand(ctx, w, h, barY);
+    else if (flying()) drawStowedHint(ctx, w, barY);
+    else if (mapMode()) drawOrbitMapChrome(ctx, w, barY);
+    else drawModeScreen(ctx, w, barY);
+    drawIconBar(ctx, w, barY);
+  }
+
+  /* ---- F2: the orbit map ------------------------------------------------
+   * The view the game boots into, on a key of its own: the world from
+   * outside, orbit lines forced on, drag to turn it, wheel to zoom, Tab to
+   * walk the camera through the bodies, C to come back to the ship. The
+   * chrome is deliberately thin — a survey strip and a clickable body list
+   * over translucent panels — because the map is the content. */
+  function drawOrbitMapChrome(ctx, w, bottom) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(4,8,14,0.82)';
+    ctx.fillRect(0, 0, w, 26);
+    ctx.strokeStyle = 'rgba(90,190,220,0.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, 26.5); ctx.lineTo(w, 26.5); ctx.stroke();
+    ctx.font = 'bold 14px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    var mapTitle = 'SYSTEM ORBITS — ' + G.sys.name;
+    ctx.fillText(mapTitle, 14, 18);
+    /* The hint only gets the space the title leaves it — at narrow widths
+     * the two were meeting in the middle. */
+    var hintRoom = w - 28 - ctx.measureText(mapTitle).width - 24;
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#5d8fa4';
+    ctx.textAlign = 'right';
+    ctx.fillText(clipText(
+      'I node · \\ fly it · drag to turn · wheel to zoom · Tab walks the bodies · C back to the ship · Esc to the cockpit',
+      Math.max(0, Math.floor(hintRoom / 6.16))), w - 14, 18);
+    ctx.textAlign = 'left';
+    ctx.restore();
+
+    /* The survey, top-left, translucent so the sky stays a sky. */
+    var infoW = Math.min(340, w * 0.32);
+    ctx.save();
+    ctx.globalAlpha = 0.88;
+    var infoH = global.Screens.tile(ctx, 10, 34, infoW, global.Screens.tileHeight(infoW), drawSystemPage);
+    /* THE MANOEUVRE PLANNER LIVES HERE (Astra, 2026-09-18). The node keys
+     * answer on this screen, so the readout that shows what they are doing
+     * sits under the survey: the keys when there is no node, the burn and
+     * what it does to the orbit when there is. */
+    global.Screens.tile(ctx, 10, 34 + infoH + 8, infoW, global.Screens.tileHeight(infoW), drawNodePage);
+    ctx.restore();
+
+    /* The bodies, right edge, each one a button: click to swing the camera
+     * there, click again to lock it as the nav target. */
+    var listW = Math.min(230, w * 0.24);
+    var lx = w - listW - 10, ly = 34;
+    var list = G.sys.bodies;
+    var maxRows = Math.floor((bottom - ly - 30) / 15);
+    ctx.save();
+    ctx.fillStyle = 'rgba(4,10,14,0.82)';
+    ctx.fillRect(lx, ly, listW, Math.min(list.length, maxRows) * 15 + 30);
+    ctx.strokeStyle = 'rgba(74,151,176,0.5)';
+    ctx.strokeRect(lx + 0.5, ly + 0.5, listW - 1, Math.min(list.length, maxRows) * 15 + 29);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#5d8fa4';
+    ctx.fillText('BODIES  ·  click to view, again to lock', lx + 8, ly + 15);
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    for (var i = 0; i < Math.min(list.length, maxRows); i++) {
+      var b = list[i], yy = ly + 30 + i * 15;
+      var focused = G.focus === b;
+      var locked = G.navTarget && G.navTarget.kind === 'body' && G.navTarget.id === b.id;
+      ctx.fillStyle = bodyDotColor(b.kind);
+      ctx.fillText(navMark({ kind: 'body', obj: b }), lx + 8, yy);
+      ctx.fillStyle = locked ? MFD_HOT : focused ? '#b4f0ff' : (b.habitable ? '#7dffb0' : MFD_INK);
+      ctx.fillText(clipText(b.name, 20), lx + 20, yy);
+      hot(lx + 4, yy - 11, listW - 8, 15, (function (body) {
+        return function () {
+          if (G.focus === body) {
+            G.navTarget = { kind: 'body', id: body.id };
+            say('Locked ' + body.name, 2);
+          } else {
+            G.followShip = false;
+            G.focus = body;
+            G.cam.dist = body.kind === 'star' ? body.radius * 40 : body.radius * 8;
+            say('Viewing ' + body.name + ' — click again to lock', 2);
+          }
+        };
+      })(b));
+    }
+    ctx.restore();
+  }
+
+  /* With the band stowed there is nothing along the bottom but the icon
+   * bar, so one line says why and how to get it back. */
+  function drawStowedHint(ctx, w, barY) {
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(125,255,207,0.55)';
+    ctx.textAlign = 'center';
+    /* Above the footer line, not through it — the footer already owns
+     * barY - 8, and two strings sharing a baseline is how you get a smear. */
+    ctx.fillText(G.cockpitChrome === 2
+      ? 'canopy only  ·  K for the instrument band'
+      : 'instruments on the console  ·  K for the band  ·  F5 → PANELS to reassign',
+                 w / 2, barY - 24);
+    ctx.textAlign = 'left';
+    ctx.restore();
+  }
+
+  /* ---- F1: flying -------------------------------------------------------
+   * The only mode that leaves the world visible, so it gets the smallest
+   * possible band: what you touch on the left, the scope in the middle
+   * where a scope belongs, and what the ship most needs to tell you on the
+   * right. Everything you have to READ has its own screen now. */
+  function drawFlightBand(ctx, w, h, barY) {
+    var y = barY - CONSOLE_H;
+
+    ctx.save();
+    var face = ctx.createLinearGradient(0, y, 0, h);
+    face.addColorStop(0, 'rgba(12,18,26,0.92)');
+    face.addColorStop(1, 'rgba(6,10,16,0.97)');
+    ctx.fillStyle = face;
+    ctx.fillRect(0, y, w, CONSOLE_H + FBAR_H);
+    ctx.strokeStyle = 'rgba(90,150,190,0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(w, y + 0.5); ctx.stroke();
+    ctx.restore();
+
+    var ctlW = Math.min(330, w * 0.34);
+    drawFlightControls(ctx, 10, y, ctlW, CONSOLE_H);
+
+    var statusW = Math.min(240, Math.max(180, w * 0.22));
+    var statusX = w - statusW - 10;
+    var scopeX = ctlW + 20;
+    var scopeW = statusX - scopeX - 12;
+
+    if (scopeW > 150) drawDeckScope(ctx, scopeX, y, scopeW, CONSOLE_H);
+    if (statusX > scopeX) drawStatusColumn(ctx, statusX, y, statusW, CONSOLE_H);
+  }
+
+  /* The scope, at whatever size the space allows. Frontier's fishbowl: a
+   * plan view seen at an angle with a vertical stalk to every contact, so
+   * the third dimension is drawn in explicitly instead of projected away.
+   *
+   * It takes its geometry as arguments rather than reading the screen size,
+   * because the next thing that wants to draw it is a physical surface in
+   * the cockpit and it should not have to care which it is. */
+  function drawDeckScope(ctx, x, y, w, h) {
+    ctx.save();
+    ctx.fillStyle = '#040a0e';
+    ctx.fillRect(x, y + 2, w, h - 4);
+    ctx.strokeStyle = MFD_EDGE;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 2, y + 4, w - 4, h - 8);
+    ctx.fillStyle = '#12414f';
+    ctx.fillRect(x + 4, y + 6, w - 8, 19);
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText('SCOPE', x + 10, y + 20);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    ctx.textAlign = 'right';
+    ctx.fillText('0.75 AU  ·  nose up', x + w - 10, y + 20);
+    ctx.textAlign = 'left';
+    ctx.restore();
+
+    scopeBody(ctx, x + w / 2, y + 26 + (h - 34) * 0.55,
+              Math.min((w - 40) / 2, 150), Math.min((h - 44) * 0.42, 46));
+  }
+
+  /* The ellipse and everything on it. Shared by the flight band and the
+   * navigation screen, which is why it takes a centre and two radii. */
+  function scopeBody(ctx, cx, cy, rx, ry) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(74,151,176,0.55)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, K.TAU); ctx.stroke();
+    ctx.strokeStyle = 'rgba(74,151,176,0.28)';
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx * 0.5, ry * 0.5, 0, 0, K.TAU); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx - rx, cy); ctx.lineTo(cx + rx, cy);
+    ctx.moveTo(cx, cy - ry); ctx.lineTo(cx, cy + ry);
+    ctx.stroke();
+    ctx.restore();
+
+    var stalk = ry * 0.85;
+
+    function blip(pos, color, shape, ring) {
+      var rel = Sim.relativeToShipFrame(G.ship, pos);
+      if (rel.range > RADAR_RANGE || rel.range < 1e-6) return;
+      var frac = Math.min(1, Math.hypot(rel.fwd, rel.right) / RADAR_RANGE);
+      var px = cx + Math.sin(rel.azimuth) * frac * rx;
+      var py = cy - Math.cos(rel.azimuth) * frac * ry;
+      var stem = Math.sin(rel.elevation) * stalk;
+      ctx.save();
+      ctx.strokeStyle = color; ctx.globalAlpha = 0.5; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, py - stem); ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = color; ctx.strokeStyle = color;
+      var ty = py - stem;
+      if (shape === 'hostile') {
+        ctx.lineWidth = 1.3;
+        ctx.beginPath();
+        ctx.moveTo(px, ty - 4); ctx.lineTo(px + 4, ty);
+        ctx.lineTo(px, ty + 4); ctx.lineTo(px - 4, ty);
+        ctx.closePath(); ctx.stroke();
+      } else if (shape === 'square') {
+        ctx.fillRect(px - 2, ty - 2, 4, 4);
+      } else if (shape === 'cross') {
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(px - 3, ty); ctx.lineTo(px + 3, ty);
+        ctx.moveTo(px, ty - 3); ctx.lineTo(px, ty + 3);
+        ctx.stroke();
+      } else {
+        ctx.beginPath(); ctx.arc(px, ty, 2.4, 0, K.TAU); ctx.fill();
+      }
+      if (ring) {
+        ctx.strokeStyle = MFD_HOT; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.arc(px, ty, 6.5, 0, K.TAU); ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    var lock = G.navTarget;
+    var i;
+    for (i = 0; i < G.sys.bodies.length; i++) {
+      var b = G.sys.bodies[i];
+      if (G.ship.docked && b.id === G.ship.docked) continue;
+      blip(Sim.bodyPosition(b, G.sys, G.t), bodyDotColor(b.kind),
+           b.kind === 'station' ? 'square' : 'dot',
+           lock && lock.kind === 'body' && lock.id === b.id);
+    }
+    var ships = Sim.shipsAll(G.sys, G.t);
+    for (i = 0; i < ships.length; i++) {
+      var sh = ships[i];
+      blip(sh.pos, sh.hostile ? '#ff8a76' : '#8fe36a',
+           sh.hostile ? 'hostile' : 'dot',
+           lock && lock.kind === 'ship' && lock.id === sh.id);
+    }
+    /* Jettisoned cargo reads as a cross: not a ship, not a rock, and worth
+     * a second look if it is not yours. */
+    var cans = Sim.canistersAll(G.sys);
+    for (i = 0; i < cans.length; i++) {
+      var cn = cans[i];
+      /* Wreckage is a dim dot and salvage is the same cross a crate gets —
+       * because what the radar is for is telling you which of the sixteen
+       * pieces of that freighter is worth flying to. Scrap still shows: a
+       * debris field you cannot see is a debris field you fly into.
+       *
+       * A SPENT HEAT SINK IS THE LOUDEST THING ON THE SCOPE while it is
+       * hot, and that is the point of it: it is a return that says where
+       * you were and when, and it must read that way on your own screen or
+       * the consequence never lands. It gets the same tint as the object
+       * itself and dims with it, so as it cools it quietly becomes another
+       * grey dot — which is exactly what it becomes. */
+      if (cn.sink) {
+        var sg = Math.max(0, Math.min(1, Sim.sinkHeatAt(cn, G.t) / Combat.SINK.capacity));
+        blip(cn.pos, sinkTint(sg), sg > 0.15 ? 'cross' : 'dot', false);
+      } else if (cn.kind === 'debris' && !cn.cid) blip(cn.pos, '#6b7480', 'dot', false);
+      else blip(cn.pos, '#ffd36b', 'cross', false);
+    }
+  }
+
+  /* ---- the three screens in the dashboard -------------------------------
+   * render.js hands back a projected quad per panel and a flat pixel space
+   * to draw it in; everything below draws in that flat space and has no
+   * idea it is being viewed at an angle.
+   *
+   * Five screens: three on the arc in front of you at ten, twelve and two,
+   * and two on the rear bulkhead for when you turn round. What each one
+   * shows is the pilot's business, not the game's — click a panel to walk
+   * it through the pages. The defaults are the set you fly with: where
+   * things are, the path you are on, and the thing you are aimed at, with
+   * the housekeeping behind you.
+   *
+   * None of this replaces the flat band along the bottom, which has not
+   * lost a row; K chooses which of the two owns the bottom of the screen,
+   * because they want the same pixels and no window size gives both. */
+  /* ---- the aft view -----------------------------------------------------
+   * A camera looking backwards, drawn into a panel. Not a second pass of
+   * the renderer: the world pass is half in the GL layer and rendering it
+   * twice a frame to fill a 460-pixel screen would cost more than the whole
+   * rest of the frame. This builds the picture from the same world data
+   * instead — the ship's own aft-facing camera basis, everything projected
+   * through it, bodies as discs and traffic as marks.
+   *
+   * What it is for is the thing behind you, so that is what it draws
+   * loudest: hostiles in red with a range, and a closing arrow.
+   */
+  var AFT_FOV = 82 * DEG;
+  var aftCam = null;
+
+  function drawAftView(ctx, w, h) {
+    mfdShell(ctx, 'AFT', 'looking astern   ·   ' + (AFT_FOV / DEG).toFixed(0) + '° field');
+    var top = MFD_BODY_TOP + 2, bot = MFD_H - 26;
+    var vw = w - 8, vh = bot - top;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(4, top, vw, vh);
+    ctx.clip();
+    ctx.fillStyle = '#02060a';
+    ctx.fillRect(4, top, vw, vh);
+
+    if (!aftCam) aftCam = new Render.Camera();
+    aftCam.cockpitFov = AFT_FOV;
+    aftCam.buildCockpit(G.ship, vw, vh, { yaw: Math.PI, pitch: 0 });
+    /* buildCockpit centres on (vw/2, vh/2); the panel's viewport starts at
+     * (4, top), so shift the principal point rather than translating the
+     * canvas — projections elsewhere in this frame must not move. */
+    aftCam.cx += 4; aftCam.cy += top;
+
+    /* Stars first, faint: they are what makes it read as a view out rather
+     * than a diagram, and they cost one projection each. */
+    var st = G.stars || [];
+    ctx.fillStyle = 'rgba(150,190,220,0.55)';
+    for (var s = 0; s < st.length; s += 3) {          // every third: it is a small screen
+      var sp = aftCam.projectDir(st[s].d);
+      if (sp) ctx.fillRect(sp.x, sp.y, 1, 1);
+    }
+
+    // Horizon-ish cross, so the picture has an orientation.
+    ctx.strokeStyle = 'rgba(90,190,180,0.28)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(4, top + vh / 2); ctx.lineTo(4 + vw, top + vh / 2);
+    ctx.moveTo(4 + vw / 2, top); ctx.lineTo(4 + vw / 2, top + vh);
+    ctx.stroke();
+
+    // Bodies, as discs where they resolve and marks where they do not.
+    var i, p;
+    for (i = 0; i < G.sys.bodies.length; i++) {
+      var b = G.sys.bodies[i];
+      var bp = b.underground ? Sim.portEntrance(b, G.sys, G.t).pos
+                             : Sim.bodyPosition(b, G.sys, G.t);
+      p = aftCam.project(bp);
+      if (!p) continue;
+      var rpx = b.radius * p.scale;
+      ctx.fillStyle = bodyDotColor(b.kind);
+      ctx.globalAlpha = b.kind === 'star' ? 1 : 0.85;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, Math.max(1.2, Math.min(rpx, vh)), 0, K.TAU);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      if (rpx > 3) {
+        ctx.font = 'bold 10px ui-monospace, monospace';
+        ctx.fillStyle = 'rgba(210,240,255,0.75)';
+        ctx.fillText(clipText(b.name, 14), p.x + Math.min(rpx, 40) + 4, p.y + 3);
+      }
+    }
+
+    /* Traffic. A ship astern is the entire reason this screen exists, so it
+     * gets a bracket, a name and a range — and a hostile one gets all of
+     * that in red whatever else is on screen. */
+    var ships = Sim.shipsAll(G.sys, G.t);
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    var closest = null, closestRange = Infinity;
+    for (i = 0; i < ships.length; i++) {
+      var sh = ships[i];
+      p = aftCam.project(sh.pos);
+      var rng = V.dist(sh.pos, G.ship.pos);
+      if (rng < closestRange) { closestRange = rng; closest = sh; }
+      if (!p) continue;
+      var col = sh.hostile ? '#ff6b5a' : '#8fe36a';
+      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.2;
+      ctx.strokeRect(p.x - 5, p.y - 5, 10, 10);
+      ctx.fillText(fmtDist(rng), p.x + 8, p.y + 3);
+    }
+
+    // Missiles under way astern: the one contact worth a shout.
+    var ms = (G.sys.missiles || []);
+    for (i = 0; i < ms.length; i++) {
+      p = aftCam.project(ms[i].pos);
+      if (!p) continue;
+      ctx.fillStyle = '#ffd36b';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 2.2, 0, K.TAU);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    /* The line under the picture is the summary you would want if you only
+     * glanced at it: what is back there and whether it is gaining. */
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    if (closest) {
+      var rel = V.sub(closest.vel || V.zero(), G.ship.vel);
+      var toward = V.dot(V.norm(V.sub(G.ship.pos, closest.pos)), rel);
+      ctx.fillStyle = closest.hostile ? '#ff8a76' : MFD_DIM;
+      ctx.fillText('nearest  ' + clipText(closest.name || 'contact', 16) + '   ' +
+                   fmtDist(closestRange) + (toward > 0 ? '   CLOSING' : ''),
+                   10, MFD_H - 28);
+    } else {
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('nothing astern', 10, MFD_H - 28);
+    }
+  }
+
+  /* What a panel can be set to. Every one of these already draws into the
+   * flat 460x178 page space, which is why a screen on the dashboard and a
+   * screen on the F3 page are the same code seen two ways. */
+  var DASH_PAGES = [
+    { id: 'scope',   title: 'SCOPE',   draw: function (ctx, w, h) { drawDeckScope(ctx, 0, 0, w, h); } },
+    { id: 'aft',     title: 'AFT',     draw: function (ctx, w, h) { drawAftView(ctx, w, h); } },
+    { id: 'orbit',   title: 'ORBIT',   draw: function (ctx) { drawOrbitPage(ctx); } },
+    { id: 'target',  title: 'TARGET',  draw: function (ctx) { drawTargetPage(ctx); } },
+    { id: 'nav',     title: 'NAV',     draw: function (ctx) { drawNavPage(ctx); } },
+    { id: 'ship',    title: 'SHIP',    draw: function (ctx) { drawShipPage(ctx); } },
+    { id: 'cargo',   title: 'CARGO',   draw: function (ctx) { drawCargoPage(ctx); } },
+    { id: 'auto',    title: 'AUTO',    draw: function (ctx) { drawAutoPage(ctx); } },
+    { id: 'node',    title: 'NODE',    draw: function (ctx) { drawNodePage(ctx); } },
+    { id: 'system',  title: 'SYSTEM',  draw: function (ctx) { drawSystemPage(ctx); } },
+    { id: 'chatter', title: 'CHATTER', draw: function (ctx) { drawChatterPage(ctx); } },
+    { id: 'trade',   title: 'TRADE',   draw: function (ctx) { drawTradePage(ctx); } },
+    { id: 'blank',   title: 'OFF',     draw: null }
+  ];
+  var DASH_PAGE_BY_ID = {};
+  DASH_PAGES.forEach(function (p) { DASH_PAGE_BY_ID[p.id] = p; });
+
+  function dashPageFor(id) {
+    if (!G.dashPages) {
+      /* The default set is the one you fly with: where things are, the path
+       * you are on, and the thing you are aimed at, with the housekeeping
+       * pages behind you where they belong. */
+      G.dashPages = { left: 'scope', centre: 'orbit', right: 'target',
+                      'rear-left': 'aft', 'rear-right': 'ship',
+                      /* The overhead's default is the reason it exists. */
+                      overhead: 'chatter' };
+    }
+    return DASH_PAGE_BY_ID[G.dashPages[id]] || DASH_PAGE_BY_ID.blank;
+  }
+
+  /* ASSIGNED, NOT CYCLED, AND NOT FROM THE COCKPIT.
+   *
+   * Astra: "Clicking on the panels should do nothing now. This is because
+   * it's too easy to change your MFDs right now." She is right — the click
+   * target was the bounding box of a projected quad, which at any oblique
+   * angle covers a good deal of canopy that is not the panel, so reaching
+   * for something else in the cockpit reassigned an instrument. A screen
+   * you fly by should not be one stray click from becoming a different
+   * screen.
+   *
+   * So the assignment lives on the PANELS tab of F5, laid out in the shape
+   * the console actually has, and the cockpit itself is read-only. */
+  function setDashPage(id, pageId) {
+    dashPageFor(id);                       // ensures G.dashPages exists
+    if (!DASH_PAGE_BY_ID[pageId]) return false;
+    G.dashPages[id] = pageId;
+    return true;
+  }
+
+  /* Click targets for the panels, held until drawConsole rebuilds the
+   * hotspot list. See the note there. */
+  var panelHots = [];
+
+  /* A screen that has been shot out. Dark, cracked, and still faintly
+   * powered — a black rectangle would read as a rendering bug, and the
+   * point is that you can see it is broken rather than missing. */
+  function drawDeadPanel(ctx, p) {
+    ctx.fillStyle = '#07090c';
+    ctx.fillRect(0, 0, p.w, p.h);
+    ctx.strokeStyle = 'rgba(120,150,190,0.35)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(2, 2, p.w - 4, p.h - 4);
+
+    /* Fracture lines, seeded off the panel id so a given screen keeps the
+     * same crack for as long as it is broken rather than shattering anew
+     * sixty times a second. */
+    var rng = new RNG('crack|' + p.id);
+    ctx.strokeStyle = 'rgba(150,190,225,0.30)';
+    ctx.lineWidth = 1;
+    var ox = p.w * rng.range(0.3, 0.7), oy = p.h * rng.range(0.3, 0.7);
+    for (var i = 0; i < 7; i++) {
+      var a = rng.angle(), len = rng.range(0.25, 0.9) * p.w * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(ox, oy);
+      ctx.lineTo(ox + Math.cos(a) * len, oy + Math.sin(a) * len * 0.6);
+      ctx.stroke();
+    }
+
+    // A dying backlight, so it reads as powered and broken, not merely off.
+    var flick = 0.06 + 0.05 * Math.abs(Math.sin(performance.now() / 380 + ox));
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = 'rgba(90,170,200,' + flick.toFixed(3) + ')';
+    ctx.fillRect(4, 4, p.w - 8, p.h - 8);
+    ctx.globalCompositeOperation = 'source-over';
+
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#ff8a76';
+    ctx.fillText('PANEL OUT', 12, 22);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText('a yard can replace the glass', 12, 40);
+  }
+
+  /* The scanline pattern: one pixel of phosphor every three, built once
+   * and handed to every screen. Null on a canvas implementation without
+   * createPattern — the headless stub, mainly — and the caller falls back
+   * to the loop it replaced. */
+  var SCANLINE_PATTERN;
+  function scanlinePattern(mc) {
+    if (SCANLINE_PATTERN !== undefined) return SCANLINE_PATTERN;
+    SCANLINE_PATTERN = null;
+    try {
+      var cv = document.createElement('canvas');
+      cv.width = 1; cv.height = 3;
+      var c2 = cv.getContext('2d');
+      if (!c2) return SCANLINE_PATTERN;
+      c2.fillStyle = '#7dffcf';
+      c2.fillRect(0, 0, 1, 1);
+      SCANLINE_PATTERN = mc.createPattern(cv, 'repeat') || null;
+    } catch (e) { SCANLINE_PATTERN = null; }
+    return SCANLINE_PATTERN;
+  }
+
+  function drawDashPanels(ctx, mfds, hyper) {
+    panelHots.length = 0;
+    if (!mfds || !mfds.length) return;
+    for (var i = 0; i < mfds.length; i++) {
+      var p = mfds[i];
+      var page = dashPageFor(p.id);
+
+      /* NO CLICK TARGET. The panels are read-only in the cockpit now —
+       * see setDashPage for why, and F5 → PANELS for where it moved to.
+       * `panelHots` stays as the list drawConsole replays, because the
+       * console still has to clear it; it is simply always empty. */
+
+      /* mfdBegin hands back the context the readout should be drawn into,
+       * which is NOT always the one passed in. On the GPU path it is an
+       * offscreen canvas at the panel's own pixel size, handed to gl.js at
+       * mfdEnd as a textured quad in the world; on the 2D path it is `ctx`
+       * with the old clip and affine applied. Everything below draws in
+       * panel pixel space either way and does not need to know which. */
+      /* THE SCREEN IS NOT REDRAWN EVERY FRAME. See Render.mfdDue: a
+       * readout that changes a dozen times a second was being repainted
+       * and re-uploaded sixty, which is the whole of why first person was
+       * the slow view. When it is not due, the picture it already has goes
+       * back to the GPU unchanged — reused rather than skipped, because a
+       * skipped panel is a black hole in the console. */
+      if (!Render.mfdDue(p) && Render.mfdReuse(p)) continue;
+
+      var mc = Render.mfdBegin(ctx, p);
+      if (!mc) continue;
+
+      mc.textAlign = 'left';
+      mc.textBaseline = 'alphabetic';
+      if (G.deadPanels && G.deadPanels[p.id]) {
+        drawDeadPanel(mc, p);
+        Render.mfdEnd(mc, p);
+        continue;
+      }
+      if (hyper) {
+        /* No system to be in, so the pages have nothing true to say and the
+         * screens say so rather than drawing a stale one. */
+        mfdShell(mc, page.title, 'no returns in the tunnel');
+        mc.font = 'bold 13px ui-monospace, monospace';
+        mc.fillStyle = MFD_DIM;
+        mc.fillText('HYPERSPACE', 10, MFD_BODY_TOP + 26);
+      } else if (page.draw) {
+        page.draw(mc, p.w, p.h);
+      } else {
+        mfdShell(mc, 'OFF', 'click to bring this panel up');
+      }
+
+      /* A phosphor wash and scanlines, inside the panel's own space so they
+       * lie on the glass of the screen and foreshorten with it.
+       *
+       * ONE FILL, NOT SIXTY. This was a fillRect per three pixels of panel
+       * height, each one an additive blend, per panel, per frame — around
+       * three hundred blended operations a frame to draw a pattern that
+       * has never changed. A repeating pattern says the same thing in a
+       * single fill, and is built once. */
+      var lines = scanlinePattern(mc);
+      mc.globalCompositeOperation = 'lighter';
+      mc.globalAlpha = 0.05;
+      mc.fillStyle = lines || '#7dffcf';
+      if (lines) mc.fillRect(2, 0, p.w - 4, p.h);
+      else for (var y = 0; y < p.h; y += 3) mc.fillRect(2, y, p.w - 4, 1);
+      mc.globalAlpha = 1;
+      mc.globalCompositeOperation = 'source-over';
+
+      Render.mfdEnd(mc, p);
+    }
+  }
+
+  /* tile/modeFrame/btn and the mode screens themselves live in screens.js,
+   * wired through Screens.bind at boot. */
+
+  function drawModeScreen(ctx, w, bottom) {
+    if (!global.Screens.draw(ctx, w, bottom, modeId())) selectPanel(0);
+  }
+
+  /* ---- the icon bar -----------------------------------------------------
+   * Ten slots, drawn rather than written: an icon says which screen at a
+   * glance, the key and the word underneath say which key gets you there.
+   * Every slot is clickable, because a bar of labelled buttons that you can
+   * only reach from the keyboard is a keyboard shortcut wearing a costume. */
+  function drawIconBar(ctx, w, y) {
+    /* Ten slots, not MODES.length: the manoeuvre planner lives past the end
+     * of the bar on its own binding, and an eleventh button would squeeze
+     * the other ten to say so. */
+    var n = BAR_MODES;
+    var slotW = Math.min(132, (w - 12) / n);
+    var x0 = (w - slotW * n) / 2;
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(5,10,16,0.97)';
+    ctx.fillRect(0, y, w, FBAR_H);
+    ctx.strokeStyle = 'rgba(90,150,190,0.3)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(w, y + 0.5); ctx.stroke();
+    ctx.restore();
+
+    for (var i = 0; i < n; i++) {
+      var x = x0 + i * slotW;
+      var on = i === G.panel;
+      var over = G.cursor.active && G.cursor.x >= x && G.cursor.x <= x + slotW &&
+                 G.cursor.y >= y && G.cursor.y <= y + FBAR_H;
+
+      ctx.save();
+      ctx.fillStyle = on ? '#12414f' : (over ? 'rgba(20,44,58,0.95)' : 'rgba(10,18,26,0.9)');
+      ctx.fillRect(x + 1, y + 3, slotW - 2, FBAR_H - 6);
+      ctx.strokeStyle = on ? '#b4f0ff' : 'rgba(74,151,176,0.45)';
+      ctx.lineWidth = on ? 1.4 : 1;
+      ctx.strokeRect(x + 1, y + 3, slotW - 2, FBAR_H - 6);
+
+      var ink = on ? '#b4f0ff' : (over ? '#cfeaf4' : '#78a6b8');
+      drawModeIcon(ctx, MODES[i].icon, x + 15, y + FBAR_H / 2, 9, ink);
+
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillStyle = on ? '#7fd6c0' : '#4f7d90';
+      ctx.fillText(MODES[i].key, x + 28, y + 17);
+      ctx.font = on ? 'bold 11px ui-monospace, monospace' : 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = on ? '#ffffff' : '#93b8c6';
+      ctx.fillText(MODES[i].label, x + 28, y + 30);
+      ctx.restore();
+
+      hot(x, y, slotW, FBAR_H, (function (idx) {
+        return function () { selectPanel(idx); };
+      })(i), MODES[i].label);
+    }
+  }
+
+  /* Line art, because a glyph font would be one more thing that has to load
+   * before the game can draw itself. Each icon is centred on (cx, cy) and
+   * fits inside a box of half-width r. */
+  function drawModeIcon(ctx, kind, cx, cy, r, color) {
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    switch (kind) {
+      case 'cockpit':                       // a canopy seen from inside
+        ctx.moveTo(cx - r, cy + r * 0.6);
+        ctx.quadraticCurveTo(cx, cy - r * 1.1, cx + r, cy + r * 0.6);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - r * 0.55); ctx.lineTo(cx, cy + r * 0.6);
+        ctx.stroke();
+        break;
+      case 'star':                          // a sun with rays
+        ctx.arc(cx, cy, r * 0.42, 0, K.TAU);
+        ctx.fill();
+        for (var a = 0; a < 8; a++) {
+          var th = a * K.TAU / 8;
+          ctx.beginPath();
+          ctx.moveTo(cx + Math.cos(th) * r * 0.62, cy + Math.sin(th) * r * 0.62);
+          ctx.lineTo(cx + Math.cos(th) * r, cy + Math.sin(th) * r);
+          ctx.stroke();
+        }
+        break;
+      case 'nav':                           // the scope ellipse
+        ctx.ellipse(cx, cy, r, r * 0.5, 0, 0, K.TAU);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(cx, cy); ctx.lineTo(cx, cy - r * 0.8);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(cx, cy - r * 0.8, 1.6, 0, K.TAU);
+        ctx.fill();
+        break;
+      case 'comms':                         // a dish
+        ctx.arc(cx, cy + r * 0.2, r * 0.85, Math.PI, K.TAU);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(cx, cy + r * 0.2); ctx.lineTo(cx + r * 0.6, cy - r * 0.9);
+        ctx.stroke();
+        break;
+      case 'hold':                          // a crate
+        ctx.rect(cx - r * 0.85, cy - r * 0.7, r * 1.7, r * 1.4);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(cx - r * 0.85, cy); ctx.lineTo(cx + r * 0.85, cy);
+        ctx.stroke();
+        break;
+      case 'manifest':                      // a clipboard with ruled lines
+        ctx.rect(cx - r * 0.7, cy - r * 0.9, r * 1.4, r * 1.8);
+        ctx.stroke();
+        ctx.beginPath();                    // the clip at the top
+        ctx.rect(cx - r * 0.26, cy - r * 1.06, r * 0.52, r * 0.28);
+        ctx.stroke();
+        for (var ml = 0; ml < 3; ml++) {
+          var my = cy - r * 0.3 + ml * r * 0.45;
+          ctx.beginPath();
+          ctx.moveTo(cx - r * 0.42, my); ctx.lineTo(cx + r * 0.42, my);
+          ctx.stroke();
+        }
+        break;
+      case 'galaxy':                        // scattered stars
+        ctx.arc(cx, cy, r * 0.95, 0, K.TAU);
+        ctx.stroke();
+        var pts = [[-0.4, -0.3], [0.35, -0.45], [0.15, 0.4], [-0.25, 0.35]];
+        for (var p = 0; p < pts.length; p++) {
+          ctx.beginPath();
+          ctx.arc(cx + pts[p][0] * r, cy + pts[p][1] * r, 1.3, 0, K.TAU);
+          ctx.fill();
+        }
+        break;
+      case 'missions':                      // a clipboard
+        ctx.rect(cx - r * 0.7, cy - r * 0.85, r * 1.4, r * 1.7);
+        ctx.stroke();
+        for (var ln = 0; ln < 3; ln++) {
+          ctx.beginPath();
+          ctx.moveTo(cx - r * 0.4, cy - r * 0.4 + ln * r * 0.45);
+          ctx.lineTo(cx + r * 0.4, cy - r * 0.4 + ln * r * 0.45);
+          ctx.stroke();
+        }
+        break;
+      case 'jump':                          // a bolt
+        ctx.moveTo(cx + r * 0.35, cy - r);
+        ctx.lineTo(cx - r * 0.45, cy + r * 0.1);
+        ctx.lineTo(cx + r * 0.05, cy + r * 0.1);
+        ctx.lineTo(cx - r * 0.35, cy + r);
+        ctx.lineTo(cx + r * 0.5, cy - r * 0.15);
+        ctx.lineTo(cx, cy - r * 0.15);
+        ctx.closePath();
+        ctx.stroke();
+        break;
+      case 'aim':                           // a reticle
+        ctx.arc(cx, cy, r * 0.6, 0, K.TAU);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(cx - r, cy); ctx.lineTo(cx - r * 0.3, cy);
+        ctx.moveTo(cx + r * 0.3, cy); ctx.lineTo(cx + r, cy);
+        ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy - r * 0.3);
+        ctx.moveTo(cx, cy + r * 0.3); ctx.lineTo(cx, cy + r);
+        ctx.stroke();
+        break;
+      case 'node':                          // an orbit with a burn mark
+        ctx.ellipse(cx, cy, r, r * 0.62, 0, 0, K.TAU);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(cx + r, cy, 2.2, 0, K.TAU);
+        ctx.fill();
+        break;
+      default:
+        ctx.rect(cx - r * 0.7, cy - r * 0.7, r * 1.4, r * 1.4);
+        ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /* Flight controls: the things you touch rather than read. Throttle, the
+   * six burn directions as arrows pointing where they push, and the two
+   * tanks. */
+  function drawFlightControls(ctx, x, y, w, h) {
+    var s = G.ship;
+    ctx.save();
+    ctx.fillStyle = '#040a0e';
+    ctx.fillRect(x, y + 2, w, h - 4);
+    ctx.strokeStyle = MFD_EDGE;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 2, y + 4, w - 4, h - 8);
+    ctx.fillStyle = '#12414f';
+    ctx.fillRect(x + 4, y + 6, w - 8, 19);
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText('FLIGHT', x + 10, y + 20);
+    ctx.restore();
+
+    // Burn rose. Arrows, never words: "prograde" is true from any angle
+    // and "left" is not.
+    var cx = x + 62, cy = y + 84, R = 40;
+    var a = G.activeThrust || {};
+    var dirs = [
+      { key: 'pro',    dx: 1,  dy: 0,  tag: 'PRO' },
+      { key: 'ret',    dx: -1, dy: 0,  tag: 'RET' },
+      { key: 'rout',   dx: 0,  dy: -1, tag: 'R+' },
+      { key: 'rin',    dx: 0,  dy: 1,  tag: 'R-' },
+      { key: 'nplus',  dx: 0.72, dy: -0.72, tag: 'N+' },
+      { key: 'nminus', dx: -0.72, dy: 0.72, tag: 'N-' }
+    ];
+    ctx.save();
+    ctx.strokeStyle = 'rgba(74,151,176,0.3)';
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, K.TAU); ctx.stroke();
+    for (var i = 0; i < dirs.length; i++) {
+      var d = dirs[i], on = !!a[d.key];
+      Render.drawArrow(ctx, cx + d.dx * 11, cy + d.dy * 11, d.dx, d.dy, R - 13,
+                       on ? '#7dfaff' : 'rgba(120,170,200,0.40)', on ? 2.4 : 1.2, on ? 8 : 6);
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillStyle = on ? '#7dfaff' : 'rgba(140,175,200,0.6)';
+      var tw = ctx.measureText(d.tag).width;
+      ctx.fillText(d.tag, cx + d.dx * (R + 12) - tw / 2, cy + d.dy * (R + 12) + 3.5);
+    }
+    ctx.restore();
+
+    // Throttle and the two tanks.
+    var bx = x + 120, bw = w - 132;
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText('throttle  ' + Math.round((s.throttle || 0) * 100) + '%', bx, y + 46);
+    bar(bx, y + 50, (s.throttle || 0), '#7dfaff');
+
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText('jump fuel  ' + s.fuel.toFixed(1) + ' t   ·   ' +
+                 fmtLy(Galaxy.maxRange(s)), bx, y + 76);
+    bar(bx, y + 80, s.fuel / s.fuelCap, s.fuel / s.fuelCap < 0.2 ? '#ff7a7a' : '#6ef0c0');
+
+    var endur = Sim.thrusterEndurance(s);
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText('thrusters  ' + s.thrusterFuel.toFixed(1) + ' t   ·   ' +
+                 fmtTime(endur) + ' burn', bx, y + 106);
+    bar(bx, y + 110, s.thrusterFuel / s.thrusterCap,
+        s.thrusterFuel / s.thrusterCap < 0.15 ? '#ff7a7a' : '#9fd4ff');
+
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText('hold  ' + Sim.cargoMass(s).toFixed(0) + ' / ' + s.cargoCap + ' t', bx, y + 136);
+    bar(bx, y + 140, Sim.cargoMass(s) / s.cargoCap, '#ffd36b');
+
+    /* Credits on the left, acceleration on the right — but only if the two
+     * will not meet in the middle. Narrow the window and they overlap into
+     * an unreadable smear, so the accel figure is the one that goes. */
+    ctx.fillStyle = MFD_HOT;
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    var money = fmtCredits(s.credits);
+    ctx.fillText(money, bx, y + 164);
+    var accel = (s.maxAccel * 1000).toFixed(2) + ' m/s²';
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    if (ctx.measureText(money).width * 1.1 + ctx.measureText(accel).width + 16 < bw) {
+      ctx.fillStyle = MFD_DIM;
+      ctx.textAlign = 'right';
+      ctx.fillText(accel, bx + bw, y + 164);
+      ctx.textAlign = 'left';
+    }
+    ctx.restore();
+
+    function bar(bxx, byy, frac, color) {
+      ctx.fillStyle = 'rgba(74,151,176,0.22)';
+      ctx.fillRect(bxx, byy, bw, 6);
+      ctx.fillStyle = color;
+      ctx.fillRect(bxx, byy, bw * Math.max(0, Math.min(1, frac)), 6);
+      ctx.strokeStyle = 'rgba(74,151,176,0.5)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bxx, byy, bw, 6);
+    }
+  }
+
+  /* The right-hand column: where you are, what is happening, and whatever
+   * the ship most needs to tell you right now. */
+  function drawStatusColumn(ctx, x, y, w, h) {
+    ctx.save();
+    ctx.fillStyle = '#040a0e';
+    ctx.fillRect(x, y + 2, w, h - 4);
+    ctx.strokeStyle = MFD_EDGE;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 2, y + 4, w - 4, h - 8);
+    ctx.fillStyle = '#12414f';
+    ctx.fillRect(x + 4, y + 6, w - 8, 19);
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText('STATUS', x + 10, y + 20);
+
+    var oe = (G.ship.landed || G.ship.docked) ? null : Sim.oscElements(G.ship, G.sys, G.t);
+    var line = 0;
+    function row(label, value, color) {
+      var yy = y + 44 + line * 15;
+      if (yy > y + h - 14) return;
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText(label, x + 10, yy);
+      ctx.fillStyle = color || MFD_INK;
+      ctx.textAlign = 'right';
+      ctx.fillText(value, x + w - 10, yy);
+      ctx.textAlign = 'left';
+      line++;
+    }
+
+    row('system', G.sys.name, MFD_HOT);
+    row('epoch', fmtEpoch(G.t));
+    row('warp', G.paused ? 'PAUSED' : WARPS[G.warpIndex] + '×',
+        G.paused || G.physicsLimited ? '#ffb86b' : null);
+
+    /* The warrant goes near the top, not at the bottom with the other
+     * fighting numbers. `row` silently drops anything past the bottom of
+     * the column, and the line that says police will shoot you on sight is
+     * the last one that should lose that race — it was losing it whenever
+     * you were locked on, shielded and carrying missiles, which is exactly
+     * the state a wanted pilot is in. */
+    var owedNow = Combat.bountyTotal(G);
+    if (owedNow > 0) row('WANTED', Math.round(owedNow) + ' cr', '#ff5a5a');
+    if (G.cruise) {
+      row('CRUISE', fmtSpeed(G.cruise.speed), '#b4f0ff');
+    } else if (G.ship.docked) {
+      var st = G.sys.byId[G.ship.docked];
+      row('docked', clipText(st.name, 16), '#7dffb0');
+    } else if (oe) {
+      row('re', oe.body.name);
+      row('altitude', fmtDist(oe.altitude));
+      row('speed', fmtSpeed(oe.relSpeed));
+    } else if (G.ship.landed) {
+      row('on', G.ship.landedOn ? G.ship.landedOn.name : '—',
+          G.ship.crashed ? '#ff7a7a' : null);
+    }
+    if (G.autodock) {
+      row(G.autodock.mode === 'match' ? 'MATCHING'
+        : G.autodock.mode === 'follow' ? 'FOLLOWING' : 'AUTODOCK',
+          G.autodock.phase.toUpperCase(), '#7dffb0');
+    }
+    var nav = navTargetState();
+    if (nav) row('target', clipText(nav.name, 16), MFD_HOT);
+
+    /* The fighting numbers. Hull always — it is the one that ends you —
+     * the rest only when they exist to report. */
+    var hullFrac = G.ship.hullHp / G.ship.hullMax;
+    row('hull', Math.max(0, Math.round(G.ship.hullHp)) + ' / ' + G.ship.hullMax,
+        hullFrac < 0.25 ? '#ff5a5a' : hullFrac < 0.6 ? '#ffb86b' : '#7dffb0');
+    if (G.ship.shield) {
+      row('shield', Math.round(G.ship.shieldHp) + ' / ' + Combat.MODULES.shield.cap,
+          G.ship.shieldHp > 5 ? '#7dfaff' : '#ffb86b');
+    }
+    /* Gear, but only when it is DOWN. An indicator that is always lit is
+     * wallpaper; one that appears only in the state you might have
+     * forgotten about is a reminder. Amber rather than green on purpose —
+     * gear down in flight is a configuration you are meant to notice and
+     * undo, not a healthy resting state. */
+    if (G.ship.gear && !G.ship.docked && !G.ship.landed) {
+      row('GEAR', 'DOWN', '#ffb86b');
+    }
+
+    /* Which way the thrust keys push, and whether anything is helping.
+     * Always shown while flying: getting this wrong is the difference
+     * between arriving and drifting past, and it is not visible anywhere
+     * else on the panel. */
+    if (!G.ship.docked && !G.ship.landed) {
+      var shipFrame = G.flightMode === 'ship';
+      row('FRAME', shipFrame ? 'SHIP' : 'ORBITAL', shipFrame ? '#7dffb0' : '#7dfaff');
+      if (shipFrame) {
+        /* Three states, not two: off, armed but out of range, and actually
+         * doing something. The middle one matters — an assist that says
+         * "ON" while sitting idle at long range teaches the player it is
+         * broken. */
+        var live = !!assistRefVelocity();
+        var lock = G.dockTarget || navTargetState();
+        row('ASSIST', !G.assist ? 'OFF'
+                    : G.vector ? 'stood down'
+                    : live ? 'ACTIVE'
+                    : lock ? 'standby >' + ASSIST_RANGE + ' km'
+                    : 'no lock',
+            !G.assist ? '#7e93b3' : (live && !G.vector) ? '#7dffb0' : '#ffb86b');
+      }
+      /* THE SECOND ASSIST GETS ITS OWN ROW, and the same three-state
+       * honesty the first one taught: it says HOVER or VECTOR when it is
+       * actually flying, and says what is stopping it when it is not.
+       * Shown only when it is switched on, because a row reading OFF
+       * forever is a row nobody reads. */
+      if (G.vector) {
+        var vst = vectorState();
+        var flying = vst === 'VECTOR' || vst === 'HOVER';
+        row('VECTOR', vst, flying ? '#7dffb0' : '#ffb86b');
+      }
+    }
+
+    /* Clearance, shown only while you actually have somewhere to dock —
+     * it is a fact about an approach, not a permanent readout. Amber for
+     * "you have not asked yet" rather than red: arriving uncleared is a
+     * fine, not a wall, and the colour should not claim otherwise. */
+    if (G.dockTarget && !G.ship.docked) {
+      /* THREE STATES, and the third one is the whole point. A port that is
+       * barred to you will not open however politely you ask, and showing
+       * "NOT REQUESTED" in amber told the player to go and ask — which is
+       * the one thing that cannot help. Red, and it says which bar it is. */
+      var bar = Combat.dockRefusal(G, G.dockTarget);
+      var ok = Combat.isCleared(G, G.dockTarget);
+      row('CLEARANCE', bar ? 'REFUSED · ' + bar.short
+                     : ok ? 'GRANTED' : 'NOT REQUESTED',
+          bar ? '#ff5a5a' : ok ? '#7dffb0' : '#ffb86b');
+    }
+    if (G.ship.missiles > 0) row('missiles', G.ship.missiles + '  (B fires)');
+    /* FUGITIVE outranks the bounty line and sits above it. A bounty is a
+     * number that is slowly getting worse; this is a thing happening to
+     * you right now, and it should read that way. */
+    if (G.fugitive) {
+      row('FUGITIVE', G.fugitive.faction.toUpperCase() + '  ' +
+          Math.round(G.fugitive.amount) + ' cr', '#ff5a5a');
+    }
+    ctx.restore();
+  }
+
+  /* --- AUTO: cruise and auto-dock ---------------------------------------- */
+  function drawAutoPage(ctx) {
+    mfdShell(ctx, 'AUTOPILOT', 'Z cruise    T clamp then T again to dock    any burn cancels');
+    var y = MFD_BODY_TOP + 16;
+    var nav = navTargetState();
+
+    if (G.cruise) {
+      mfdRow(ctx, y, 'mode', 'CRUISE ENGAGED', '#b4f0ff');
+      mfdRow(ctx, y + 16, 'speed', fmtSpeed(G.cruise.speed));
+      mfdRow(ctx, y + 32, 'limit', fmtSpeed(G.cruise.maxSpeed) + '  (mass lock)');
+      mfdRow(ctx, y + 48, 'burn rate', G.cruise.rate.toFixed(3) + ' t / Mkm');
+      mfdRow(ctx, y + 64, 'nearest', G.cruise.lockBody ? G.cruise.lockBody.name : '—');
+      mfdRow(ctx, y + 80, 'target', nav ? clipText(nav.name, 22) : 'none', MFD_HOT);
+      if (nav) mfdRow(ctx, y + 96, 'range', fmtDist(nav.range));
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText(', and . set speed   ·   Z disengages', 10, MFD_BODY_BOTTOM - 2);
+      return;
+    }
+
+    if (G.autodock) {
+      var adMode = G.autodock.mode === 'match' ? 'MATCH ORBIT'
+                 : G.autodock.mode === 'follow' ? 'FOLLOW' : 'AUTO-DOCK';
+      mfdRow(ctx, y, 'mode', adMode, '#7dffb0');
+      mfdRow(ctx, y + 16, 'phase', G.autodock.phase);
+      mfdRow(ctx, y + 32, G.autodock.mode === 'dock' ? 'station' : 'contact',
+             clipText(G.autodock.target.name || '—', 22), MFD_HOT);
+      /* Match and follow have no docking status to report — they are not
+       * going to a port — so they report the thing they are actually
+       * controlling: how fast the gap is changing. */
+      if (G.autodock.mode !== 'dock') {
+        var tgt = autoTargetState(G.autodock);
+        if (tgt) {
+          mfdRow(ctx, y + 48, 'range', fmtDist(V.dist(tgt.pos, G.ship.pos)));
+          mfdRow(ctx, y + 64, 'rel. speed', fmtSpeed(V.len(V.sub(G.ship.vel, tgt.vel))));
+        }
+        ctx.font = 'bold 11px ui-monospace, monospace';
+        ctx.fillStyle = MFD_DIM;
+        ctx.fillText('any manual burn hands it back', 10, MFD_BODY_BOTTOM - 2);
+        return;
+      }
+      var ds = G.dockStatus;
+      if (ds) {
+        mfdRow(ctx, y + 48, 'range', fmtDist(ds.range));
+        mfdRow(ctx, y + 64, 'closing', fmtSpeed(ds.closingSpeed));
+        mfdRow(ctx, y + 80, 'rel. speed', fmtSpeed(ds.relSpeed),
+               ds.slowEnough ? '#7dffb0' : '#ffb86b');
+      }
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('A or any manual control cancels', 10, MFD_BODY_BOTTOM - 2);
+      return;
+    }
+
+    mfdRow(ctx, y, 'mode', 'MANUAL', MFD_DIM);
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText('Z    engage cruise drive — crosses a', 10, y + 22);
+    ctx.fillText('     whole system in minutes', 10, y + 35);
+    ctx.fillText('T    clamp, then T again to dock', 10, y + 55);
+    ctx.fillText('     (it will cruise the long leg itself)', 10, y + 68);
+    ctx.fillText('Shift+T  match orbit    Shift+L  follow', 10, y + 85);
+    ctx.fillStyle = nav ? MFD_INK : '#ff8a76';
+    ctx.fillText(nav ? ('locked: ' + clipText(nav.name, 26))
+                     : 'no lock — [ ] to pick a destination', 10, y + 103);
+
+    var lock = cruiseLock();
+    ctx.fillStyle = lock.can ? '#7dffb0' : '#ffb86b';
+    ctx.fillText(lock.can ? 'cruise drive ready'
+                          : 'mass locked by ' + lock.body.name, 10, y + 119);
+  }
+
+  /* --- NODE: the manoeuvre plan -----------------------------------------
+   * The three delta-v components, the two orbits (before and after), and
+   * the cost. The last of those is the point: a plan that reads 4.2 km/s is
+   * not obviously impossible, but one that reads "11.4 t of 12 t" is, and
+   * the ship carries only so much reaction mass. */
+  function drawNodePage(ctx) {
+    /* The hint names the SCREEN, not the keys, because this page can also be
+     * pinned to a console panel in the cockpit — and the node keys only
+     * answer on the planner now. A readout on the dashboard telling you to
+     * press I, while I does nothing where you are sitting, is the greyed-out
+     * button problem with the label still lit. */
+    mfdShell(ctx, 'MANOEUVRE', (modeId() === 'system' || modeId() === 'node')
+      ? 'I place/axis   − = adjust   ; \' snap   \\ fly   ⇧I clear'
+      : 'F2 orbit map to plan');
+    var y = MFD_BODY_TOP + 14;
+
+    if (!G.node) {
+      mfdRow(ctx, y, 'plan', 'NONE', MFD_DIM);
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('I    place a node at the next apoapsis', 10, y + 26);
+      ctx.fillText('I    again cycles pro / nor / rad / time', 10, y + 40);
+      ctx.fillText('− =  adjust  (shift fine, ctrl coarse)', 10, y + 54);
+      ctx.fillText('; \'  snap to periapsis / apoapsis', 10, y + 68);
+      ctx.fillText('\\    fly it   ·   shift-I clears', 10, y + 82);
+      ctx.fillStyle = MFD_HOT;
+      ctx.fillText('on the F2 orbit map  ·  LEFT ALT drags the handles', 10, y + 104);
+      return;
+    }
+
+    var plan = G.nodePlan;
+    if (!plan) { mfdRow(ctx, y, 'plan', 'computing…', MFD_DIM); return; }
+
+    /* TWO COLUMNS. The page is 126 px of body and this is twelve lines of
+     * readout; stacked in one column at 15 px it ran the orbit lines and
+     * the autopilot status down through the soft-key strip and off the
+     * panel — text printed over text (Astra's screenshot, 2026-09-18).
+     * Left: the burn you are asking for. Right: what it costs and what it
+     * does. The status line gets the bottom row to itself. */
+    var sel = NODE_AXES[G.nodeAxis].id;
+    var d = G.node.dv;
+    var ROW = 16, COL = MFD_W / 2;
+    function row2(col, i, label, value, color) {
+      var x0 = col ? COL + 6 : 10, x1 = col ? MFD_W - 10 : COL - 8;
+      var yy = y + i * ROW;
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.textAlign = 'left';
+      ctx.fillText(label, x0, yy);
+      ctx.fillStyle = color || MFD_INK;
+      ctx.textAlign = 'right';
+      ctx.fillText(value, x1, yy);
+      ctx.textAlign = 'left';
+    }
+    row2(0, 0, 'prograde', fmtSpeed(d.pro), sel === 'pro' ? MFD_HOT : MFD_INK);
+    row2(0, 1, 'normal', fmtSpeed(d.nor), sel === 'nor' ? MFD_HOT : MFD_INK);
+    row2(0, 2, 'radial', fmtSpeed(d.rad), sel === 'rad' ? MFD_HOT : MFD_INK);
+    row2(0, 3, 'in', fmtTime(Math.max(0, plan.eta)), sel === 'time' ? MFD_HOT : MFD_INK);
+    row2(0, 4, 'total Δv', fmtSpeed(plan.magnitude), '#ffb347');
+
+    /* An infeasible plan is coloured, not hidden — you are allowed to draw
+     * a burn you cannot afford, you just cannot fly it. */
+    var okColor = plan.burn.feasible ? '#7dffb0' : '#ff8a76';
+    row2(1, 0, 'burn', fmtTime(plan.burn.duration), okColor);
+    row2(1, 1, 'fuel', plan.burn.fuel.toFixed(2) + ' / ' + G.ship.thrusterFuel.toFixed(1) + ' t', okColor);
+    row2(1, 2, 'ignition', 'T−' + fmtTime(Math.max(0, plan.countdown)), okColor);
+    var periBad = plan.after.periAlt < 0;
+    row2(1, 3, 'peri', fmtDist(plan.after.periAlt), periBad ? '#ff8a76' : MFD_INK);
+    row2(1, 4, 'apo', isFinite(plan.after.apoAlt) ? fmtDist(plan.after.apoAlt) : 'ESCAPE', MFD_INK);
+
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    var statusY = MFD_BODY_BOTTOM - 4;
+    if (G.nodeBurn) {
+      ctx.fillStyle = '#ffd27a';
+      ctx.fillText(G.nodeBurn.phase === 'align'
+        ? 'AUTOPILOT ARMED — holding attitude   ·   \\ stands down'
+        : 'BURNING — ' + fmtSpeed(G.nodeBurn.remaining) + ' remaining',
+        10, statusY);
+    } else if (periBad) {
+      ctx.fillStyle = '#ff8a76';
+      ctx.fillText('periapsis underground — this burn ends on ' + clipText(plan.body.name, 14), 10, statusY);
+    } else {
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('about ' + clipText(plan.body.name, 16) + '   ·   was peri ' +
+                   fmtDist(plan.before.periAlt) + ', apo ' +
+                   (isFinite(plan.before.apoAlt) ? fmtDist(plan.before.apoAlt) : 'escape'), 10, statusY);
+    }
+  }
+
+  /* --- NAV: the target list ---------------------------------------------
+   * Everything in the system, nearest first, with the lock highlighted.
+   * The list scrolls to keep the lock in view rather than making you hunt
+   * for where the cursor went. */
+  function drawNavPage(ctx) {
+    mfdShell(ctx, 'NAVIGATION', '[ ] cycle target    L release    T assign dock clamp');
+    var list = navList();
+    var rows = 8, rowH = 14;
+    var sel = -1;
+    if (G.navTarget) {
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].kind === G.navTarget.kind && list[i].id === G.navTarget.id) { sel = i; break; }
+      }
+    }
+    var top = 0;
+    if (sel >= 0) top = Math.max(0, Math.min(list.length - rows, sel - Math.floor(rows / 2)));
+
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    for (var r = 0; r < rows; r++) {
+      var idx = top + r;
+      if (idx >= list.length) break;
+      var e = list[idx];
+      var y = MFD_BODY_TOP + 12 + r * rowH;
+      if (idx === sel) {
+        ctx.fillStyle = 'rgba(255,211,107,0.20)';
+        ctx.fillRect(6, y - 10, MFD_W - 12, rowH);
+        ctx.fillStyle = MFD_HOT;
+        ctx.fillText('>', 8, y);
+      }
+      ctx.fillStyle = e.hostile ? '#ff8a76' : (idx === sel ? MFD_HOT : e.color);
+      ctx.fillText(navMark(e), 18, y);
+      ctx.fillStyle = idx === sel ? MFD_HOT : MFD_INK;
+      ctx.fillText(clipText(e.name, 20), 30, y);
+      ctx.fillStyle = idx === sel ? MFD_HOT : MFD_DIM;
+      ctx.textAlign = 'right';
+      ctx.fillText(fmtDist(e.range), MFD_W - 10, y);
+      ctx.textAlign = 'left';
+    }
+    if (list.length > rows) {
+      ctx.fillStyle = MFD_DIM;
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillText((top + 1) + '-' + Math.min(list.length, top + rows) + ' of ' + list.length,
+                   10, MFD_BODY_BOTTOM - 2);
+    }
+  }
+
+  /* --- CHATTER: what everyone in range is saying --------------------------
+   * Astra: "every ship has an ID; show ID, message and destination for
+   * traffic within 0.75 AU, on a monitor up and to the right at the
+   * player's 3 o'clock, angled 45 degrees facing down."
+   *
+   * Three columns because she named three, and in that order: who is
+   * talking, what they said, where they are going. The range is the
+   * transmitter's 0.75 AU, which is the same number the radar and the
+   * comms screen already quote — one distance for "who can hear me",
+   * spelled once in RADAR_RANGE.
+   *
+   * WHAT IT IS FOR, beyond atmosphere. A hauler announcing drums is
+   * telling you there is waste in this system worth being paid to take
+   * away; a heavy calling the marker is telling you the apron is busy; a
+   * ship on final tells you which port is live right now. The channel is a
+   * survey of the system's economy conducted by the people flying it, and
+   * it costs nothing to listen.
+   *
+   * Sim owns the lines — they are a pure function of the timetable and the
+   * clock like everything else about traffic, so this page only draws what
+   * it is handed and never invents a word of it. */
+  function drawChatterPage(ctx) {
+    mfdShell(ctx, 'CHATTER', '0.75 AU   ·   open channel   ·   nearest first');
+    var lines = Sim.chatterNear
+      ? Sim.chatterNear(G.sys, G.t, G.ship.pos, RADAR_RANGE) : [];
+
+    if (!lines.length) {
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('CHANNEL QUIET', 12, MFD_BODY_TOP + 20);
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillText('nothing within 0.75 AU is transmitting.', 12, MFD_BODY_TOP + 36);
+      return;
+    }
+
+    /* Columns measured off the panel rather than typed as offsets: the same
+     * page is drawn at 460 px on a mount and at whatever the F3 page is,
+     * and a fixed column that fits one does not fit the other. */
+    var idW = 62, destW = 118;
+    var msgX = 12 + idW, msgRight = MFD_W - 10 - destW;
+    /* SEVEN, not nine. The body runs 26 to 152 and the count line sits at
+     * the bottom of it, so nine rows put the last transmission four pixels
+     * under the "of 94 in range" line and the two drew through each other —
+     * invisible at dashboard size, obvious the moment the panel was looked
+     * at straight on. */
+    var rows = 7, rowH = 14;
+
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText('ID', 12, MFD_BODY_TOP + 8);
+    ctx.fillText('TRANSMISSION', msgX, MFD_BODY_TOP + 8);
+    ctx.textAlign = 'right';
+    ctx.fillText('BOUND FOR', MFD_W - 10, MFD_BODY_TOP + 8);
+    ctx.textAlign = 'left';
+
+    var chW = 6.0;                                   // 11px monospace, near enough
+    for (var i = 0; i < rows && i < lines.length; i++) {
+      var L = lines[i];
+      var y = MFD_BODY_TOP + 22 + i * rowH;
+      if (y > MFD_BODY_BOTTOM - 2) break;
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      /* The ID in the ship's own colour, so the line you are reading and
+       * the dot on the radar are the same ship without a lookup. */
+      ctx.fillStyle = L.phase === 'moored' ? MFD_DIM : '#9fd4ff';
+      ctx.fillText(L.id, 12, y);
+      ctx.fillStyle = MFD_INK;
+      ctx.fillText(clipText(L.text, Math.max(8, Math.floor((msgRight - msgX) / chW))), msgX, y);
+      ctx.fillStyle = MFD_DIM;
+      ctx.textAlign = 'right';
+      ctx.fillText(clipText(L.dest, Math.floor(destW / chW)), MFD_W - 10, y);
+      ctx.textAlign = 'left';
+    }
+
+    if (lines.length > rows) {
+      ctx.fillStyle = MFD_DIM;
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillText(rows + ' of ' + lines.length + ' in range', 12, MFD_BODY_BOTTOM - 4);
+    }
+  }
+
+  /* --- TRADE: what this system is short of, and what it has too much of --
+   * Astra's trade analyser. The arithmetic is Economy.systemAnalysis; this
+   * is only the page. NOTHING WITHOUT THE FITTING — not a blank list, which
+   * would read as "this system has no shortages", a claim the instrument
+   * has no right to make when it is not aboard. */
+  function drawTradePage(ctx) {
+    var fitted = Combat.hasTradeAnalyser && Combat.hasTradeAnalyser(G.ship);
+    mfdShell(ctx, 'TRADE', fitted ? 'shortages   ·   excesses   ·   best run'
+                                  : 'no trade analyser fitted');
+    if (!fitted) {
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('NO ANALYSER', 12, MFD_BODY_TOP + 20);
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillText('a trade analyser reads every market in the system at once.', 12, MFD_BODY_TOP + 36);
+      ctx.fillText('the yard sells one where development is 0.45 or better.', 12, MFD_BODY_TOP + 50);
+      return;
+    }
+    /* Once a minute of sim time, not once a frame: it prices every row at
+     * every port, which is a few hundred price() calls, and the markets do
+     * not move inside a minute. */
+    var bucket = Math.floor(G.t / 60);
+    if (!G._tradeScan || G._tradeScan.sys !== G.sys || G._tradeScan.bucket !== bucket) {
+      G._tradeScan = { sys: G.sys, bucket: bucket,
+                       a: Eco.systemAnalysis(G.sys, G.t, { accel: G.ship.maxAccel }) };
+    }
+    var a = G._tradeScan.a;
+    var colW = Math.floor((MFD_W - 24) / 2), lx = 12, rx = 12 + colW + 6;
+    var chW = 6.0, rows = 5, rowH = 13;      // 48..100, run line at 136, body ends 152
+
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = '#ff9f7a';
+    ctx.fillText('SHORT OF  (' + a.shortages.length + ')', lx, MFD_BODY_TOP + 8);
+    ctx.fillStyle = '#7dffb0';
+    ctx.fillText('TOO MUCH  (' + a.excesses.length + ')', rx, MFD_BODY_TOP + 8);
+
+    var chars = Math.floor(colW / chW);
+    for (var i = 0; i < rows; i++) {
+      var yy = MFD_BODY_TOP + 22 + i * rowH;
+      var sh = a.shortages[i], ex = a.excesses[i];
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      if (sh) {
+        ctx.fillStyle = MFD_INK;
+        ctx.fillText(clipText(sh.name + '  ' + sh.port.name, chars - 6), lx, yy);
+        ctx.fillStyle = '#ff9f7a';
+        ctx.textAlign = 'right';
+        ctx.fillText(Math.round(sh.bid) + '', lx + colW, yy);
+        ctx.textAlign = 'left';
+      }
+      if (ex) {
+        ctx.fillStyle = MFD_INK;
+        ctx.fillText(clipText(ex.name + '  ' + ex.port.name, chars - 6), rx, yy);
+        ctx.fillStyle = '#7dffb0';
+        ctx.textAlign = 'right';
+        ctx.fillText(ex.waste ? 'pays' : Math.round(ex.ask) + '', rx + colW, yy);
+        ctx.textAlign = 'left';
+      }
+    }
+    if (!a.shortages.length && !a.excesses.length) {
+      ctx.fillStyle = MFD_DIM;
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillText('every warehouse in the system is about where it should be', lx, MFD_BODY_TOP + 22);
+    }
+
+    /* The one line worth acting on. */
+    var ry = MFD_BODY_TOP + 22 + rows * rowH + 10;
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText('BEST RUN  ·  per hour of flying', lx, ry);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    if (a.runs.length) {
+      var r = a.runs[0];
+      ctx.fillStyle = MFD_HOT;
+      ctx.fillText(clipText(r.name + ':  ' + r.from.name + '  →  ' + r.to.name, 44), lx, ry + 13);
+      ctx.fillStyle = '#7dffb0';
+      ctx.textAlign = 'right';
+      ctx.fillText('+' + Math.round(r.margin) + ' /t' +
+                   (r.hours ? '  ·  ' + (r.hours < 10 ? r.hours.toFixed(1) : Math.round(r.hours)) + ' h' : ''),
+                   MFD_W - 12, ry + 13);
+      ctx.textAlign = 'left';
+    } else {
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('nothing under this star pays to move', lx, ry + 13);
+    }
+  }
+
+  /* --- SYSTEM: where you are --------------------------------------------- */
+  function drawSystemPage(ctx) {
+    mfdShell(ctx, 'SYSTEM', 'where you are');
+    var sys = G.sys;
+    var planets = sys.bodies.filter(function (b) { return b.kind === 'planet'; }).length;
+    var moons = sys.bodies.filter(function (b) { return b.kind === 'moon'; }).length;
+    var y = MFD_BODY_TOP + 14;
+    mfdRow(ctx, y, 'star', sys.name + ' (' + sys.root.type + ')', MFD_HOT);
+    mfdRow(ctx, y + 16, 'luminosity', sys.root.luminosity.toFixed(2) + ' L☉');
+    mfdRow(ctx, y + 32, 'worlds', planets + ' planets, ' + moons + ' moons');
+    mfdRow(ctx, y + 48, 'habitable', String(sys.bodies.filter(function (b) { return b.habitable; }).length));
+    mfdRow(ctx, y + 64, 'ports', String((sys.ports || []).length));
+    mfdRow(ctx, y + 80, 'traffic', (sys.traffic || []).length + ' runs, ' +
+                                   (sys.patrols || []).length + ' patrols');
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText('flags: ' + clipText((sys.factions || []).map(function (f) {
+      return f.name;
+    }).join(', ') || '—', 34), 10, y + 100);
+  }
+
+  /* --- CHART: where you could go ----------------------------------------- */
+  function drawChartPage(ctx) {
+    mfdShell(ctx, 'CHART', 'J opens the full slipspace chart');
+    var y = MFD_BODY_TOP + 14;
+    mfdRow(ctx, y, 'here', G.here.name, MFD_HOT);
+    mfdRow(ctx, y + 16, 'jump fuel', G.ship.fuel.toFixed(1) + ' / ' + G.ship.fuelCap + ' t');
+    mfdRow(ctx, y + 32, 'reach', fmtLy(Galaxy.maxRange(G.ship)));
+
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText('NEAREST REACHABLE', 10, y + 54);
+
+    var reach = Galaxy.reachable(G.galaxy, G.here, G.ship).slice(0, 4);
+    if (!reach.length) {
+      ctx.fillStyle = '#ff8a76';
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillText('nothing in range — refuel', 10, y + 72);
+      return;
+    }
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    for (var i = 0; i < reach.length; i++) {
+      var yy = y + 68 + i * 14;      // must finish above MFD_BODY_BOTTOM
+      var plan = Galaxy.jumpPlan(G.galaxy, G.here, reach[i].star, G.ship);
+      ctx.fillStyle = G.visited[reach[i].star.id] ? MFD_INK : MFD_DIM;
+      ctx.fillText(clipText(reach[i].star.name, 16), 10, yy);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText(fmtLy(plan.distance) + '  ' + plan.fuel.toFixed(1) + 't', MFD_W - 10, yy);
+      ctx.textAlign = 'left';
+    }
+  }
+
+  /* --- TARGET: everything about the lock --------------------------------- */
+  /* A relative reading, drawn as a bar rather than a percentage, because a
+   * bar is what an instrument that cannot count gives you — and reading
+   * "63%" off a scanner that is only rated to say "about two thirds" would
+   * be the cheap module quietly pretending to be the expensive one. */
+  function pctBar(frac) {
+    var n = Math.max(0, Math.min(8, Math.round(frac * 8)));
+    return new Array(n + 1).join('█') + new Array(8 - n + 1).join('·');
+  }
+
+  function hullInk(frac) {
+    return frac > 0.6 ? '#7dffb0' : frac > 0.25 ? '#ffd36b' : '#ff8a76';
+  }
+
+  function drawTargetPage(ctx) {
+    var nav = navTargetState();
+    mfdShell(ctx, 'TARGET', nav ? '[ ] cycle    L release    T clamp / auto-dock'
+                                : '[ ] to lock something');
+    if (!nav) {
+      ctx.font = 'bold 13px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('NO LOCK', 10, MFD_BODY_TOP + 24);
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillText('[ and ] step through everything', 10, MFD_BODY_TOP + 44);
+      ctx.fillText('in the system, nearest first.', 10, MFD_BODY_TOP + 58);
+      return;
+    }
+    var y = MFD_BODY_TOP + 14;
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = nav.hostile ? '#ff8a76' : MFD_HOT;
+    ctx.fillText(clipText(nav.name, 24), 10, y);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    /* The registration beside the class — the code you would quote to
+     * traffic control, or read off a wreck. */
+    var navReg = nav.obj && nav.obj.reg ? '   ·   ' + nav.obj.reg : '';
+    ctx.fillText(nav.type + navReg, 10, y + 13);
+
+    /* A SHIP HAS MORE TO SAY THAN A PLANET, and the page is the same
+     * height for both. At the 16 px pitch a ship's rows ran to y + 144 =
+     * 184 on a 178 px page — the combat scanner's shield row had been
+     * drawing into nothing since it shipped. So a ship packs its rows at
+     * 12 px and a body keeps the 16 it always had; eight rows of 13 px
+     * type at 12 px pitch is tight and legible, and it is the only way the
+     * analyser's arms line fits above MFD_BODY_BOTTOM. */
+    var gp = nav.kind === 'ship' ? 12 : 16;
+    mfdRow(ctx, y + 26 + gp * 0, 'range', fmtDist(nav.range));
+    mfdRow(ctx, y + 26 + gp * 1, 'closing', fmtSpeed(nav.closing),
+           nav.closing > 0 ? '#7dffb0' : '#ff9f7a');
+    mfdRow(ctx, y + 26 + gp * 2, 'rel. speed', fmtSpeed(nav.relSpeed));
+    mfdRow(ctx, y + 26 + gp * 3, 'ETA', isFinite(nav.eta) ? fmtTime(nav.eta) : 'opening', MFD_DIM);
+
+    if (nav.kind === 'body' && nav.obj.kind === 'station') {
+      var mkt = nav.obj.market;
+      mfdRow(ctx, y + 90, 'port', mkt ? mkt.roleName : 'Station');
+      var fac = G.sys.factionById && G.sys.factionById[nav.obj.faction];
+      mfdRow(ctx, y + 106, 'flag', fac ? clipText(fac.name, 18) : '—',
+             fac ? fac.color : MFD_DIM);
+    } else if (nav.kind === 'ship') {
+      /* Continuing the 12 px pitch from above: flag 114, carrying 126,
+       * hull·shield 138, arms 150 — the last row sits two pixels inside
+       * MFD_BODY_BOTTOM. Hull and shield share a line so it does. */
+      var sy = y + 26 + gp * 4, pitch = gp;
+      var fac2 = G.sys.factionById && G.sys.factionById[nav.obj.faction];
+      mfdRow(ctx, sy, 'flag', fac2 ? clipText(fac2.name, 18) : 'Unaligned',
+             fac2 ? fac2.color : '#ff8a76');
+      var man = nav.obj.manifest || [];
+      mfdRow(ctx, sy + pitch, 'carrying', man.length
+        ? clipText(man.map(function (m) { return Eco.BY_ID[m.cid].name; }).join(', '), 18)
+        : '—', MFD_DIM);
+
+      /* What the scanner sees, if you bought one. Nothing at all without —
+       * an empty row would say "this ship is undamaged", which is a
+       * different and much more dangerous claim than "you cannot tell". */
+      var scan = Combat.scanShip(G.ship, nav.obj.spec || nav.obj, G.sys);
+      if (scan) {
+        var hullTxt = scan.level >= 2
+          ? Math.round(scan.hullHp) + ' / ' + scan.hullMax
+          : pctBar(scan.hullFrac);
+        var shTxt = scan.shieldFrac !== undefined
+          ? (scan.level >= 2 ? Math.round(scan.shieldHp) + ' / ' + scan.shieldMax
+                             : pctBar(scan.shieldFrac))
+          : (scan.level >= 2 ? 'none' : null);
+        mfdRow(ctx, sy + pitch * 2, 'hull' + (shTxt !== null ? '  ·  shield' : ''),
+               hullTxt + (shTxt !== null ? '   ·   ' + shTxt : ''), hullInk(scan.hullFrac));
+        /* THE ANALYSER'S LINE: what they would fire back with. Only at
+         * level 3 — the cheaper scanners cannot see a gun, and a blank
+         * would read as "unarmed", which is the claim that gets you shot. */
+        if (scan.arms) {
+          /* Coloured against YOUR guns: red if theirs would out-shoot
+           * yours, amber if it is close, green if you have the edge — the
+           * question the line exists to answer. See npcArmament.vsYou. */
+          var vs = scan.arms.vsYou;
+          var ink = !scan.arms.armed ? MFD_DIM
+                  : vs === undefined ? '#ffb86b'
+                  : vs > 1.25 ? '#ff8a76' : vs < 0.8 ? '#7dffb0' : '#ffb86b';
+          var tag = !scan.arms.armed || vs === undefined ? ''
+                  : vs > 1.25 ? '  out-guns you' : vs < 0.8 ? '  you out-gun them' : '  even';
+          mfdRow(ctx, sy + pitch * 3, 'arms', clipText(scan.arms.text + tag, 40), ink);
+        }
+      }
+    } else {
+      mfdRow(ctx, y + 90, 'radius', fmtDist(nav.obj.radius));
+      mfdRow(ctx, y + 106, 'gravity',
+        fmtSpeed(nav.obj.mu / (nav.obj.radius * nav.obj.radius)) + '²');
+    }
+  }
+
+  /* --- SHIP: the two tanks, the hold, and the money ---------------------- */
+  function drawShipPage(ctx) {
+    mfdShell(ctx, 'SHIP', G.ship.docked ? 'F4 trade    F refuel    U undock'
+                                        : 'T dock    F6 chart    Z cruise');
+    var s = G.ship;
+    var cargo = Sim.cargoMass(s);
+    var y = MFD_BODY_TOP + 14;
+
+    mfdRow(ctx, y, 'credits', fmtCredits(s.credits), MFD_HOT);
+
+    mfdLabelled(ctx, y + 20, 'jump fuel  ' + s.fuel.toFixed(1) + ' / ' + s.fuelCap + ' t',
+                fmtLy(Galaxy.maxRange(s)), MFD_INK);
+    mfdBar(ctx, y + 25, s.fuel / s.fuelCap, s.fuel / s.fuelCap < 0.2 ? '#ff7a7a' : '#6ef0c0');
+
+    /* Reaction mass is shown as HOURS, not as a fraction. A tank that is
+     * good for nine hours of continuous burn is not a resource you ration
+     * by percentage — the only question you ever ask of it is whether you
+     * have enough left to finish what you are doing. */
+    var endur = Sim.thrusterEndurance(s);
+    mfdLabelled(ctx, y + 50, 'thrusters  ' + s.thrusterFuel.toFixed(1) + ' / ' + s.thrusterCap + ' t',
+                fmtTime(endur) + ' burn', endur < 1800 ? '#ffb86b' : MFD_INK);
+    mfdBar(ctx, y + 55, s.thrusterFuel / s.thrusterCap,
+           s.thrusterFuel / s.thrusterCap < 0.15 ? '#ff7a7a' : '#9fd4ff');
+
+    mfdLabelled(ctx, y + 80, 'hold  ' + cargo.toFixed(0) + ' / ' + s.cargoCap + ' t',
+                (s.cargoCap - cargo).toFixed(0) + ' t free', MFD_INK);
+    mfdBar(ctx, y + 85, cargo / s.cargoCap, '#ffd36b');
+
+    /* One line, not two. The soft-key strip starts at 154 and a page that
+     * writes past MFD_BODY_BOTTOM draws its last row straight through it —
+     * invisible at dashboard size, obvious the moment a screen showed the
+     * page at full scale. */
+    /* WHAT YOU ARE FIGHTING, on the same line as what you have to fight it
+     * with. Astra asked for local gravity and the engine's own acceleration
+     * when the vector assist went in, and putting them side by side is the
+     * point of both: thrust against gravity is the one comparison that says
+     * whether you can hover here, whether you will lift off again, and
+     * whether asking the assist to turn your momentum is a request the
+     * engine can fill. Green while the engine wins, amber when it does not.
+     *
+     * ONE ROW RATHER THAN TWO, and not for tidiness: MFD_BODY_BOTTOM is 152
+     * and the soft-key strip starts at 154, so a sixth row on this page
+     * draws straight through it — invisible at dashboard size and obvious
+     * the moment somebody opens the page full screen. The file has that
+     * warning written on the row above; this is it being obeyed.
+     *
+     * Gravity is quoted for the body actually pulling on you, which is the
+     * same body the STATUS speed is measured against — so the two readouts
+     * cannot disagree about where you are. */
+    var gHere = V.len(Sim.acceleration(s.pos, G.sys, G.t)) * 1000;  // km/s² -> m/s²
+    var thrustNow = s.maxAccel * 1000;
+    mfdRow(ctx, y + 108, 'mass · thrust · gravity',
+           Sim.shipMass(s).toFixed(0) + ' t   ·   ' +
+           thrustNow.toFixed(2) + '   ·   ' + gHere.toFixed(2) + ' m/s²',
+           s.fuelOut ? '#ff7a7a'
+                     : gHere > thrustNow ? '#ffb86b' : MFD_INK);
+  }
+
+  /* --- GUNS: which hardpoint is on which trigger -------------------------
+   * PLAN.md has owed this since fire groups were built: membership was
+   * visible only on the F5 FIT page, and F5 is the wrong place to find it
+   * out, because you cannot open the yard while somebody is shooting at you.
+   *
+   * It invents NO STATE, and that is the design. Membership is Combat's own
+   * `groups` map, readiness is the `G.gunCool` entry the trigger already
+   * writes, and which side of the hull a gun sits on is read off the muzzle
+   * the renderer draws the beam from. There is nothing here that can drift
+   * out of agreement with the ship, because there is nothing here that is
+   * stored twice.
+   *
+   * SIDES ARE POINTERS, not the words port and starboard. A glyph aimed the
+   * way the gun is reads at a glance; at 11px on a panel seen at an angle a
+   * four-letter word does not, and you would be reading it mid-fight.
+   *
+   * EMPTY HARDPOINTS GET A ROW. A hull with a hole in the rack is a fact
+   * about your ship worth knowing, and a list that silently omits it makes
+   * three hardpoints carrying two guns look like a two-hardpoint hull. */
+  var GUN_ROWS = 5;
+
+  function gunSideMark(ship, key) {
+    var mz = Combat.muzzleOf(ship, key);
+    if (!mz || Math.abs(mz.r) < 1e-6) return '▲';
+    return mz.r > 0 ? '▶' : '◀';
+  }
+
+  /* A group's header: how many guns, and whether any of them is mid-cycle.
+   * "FIRING" is derived from the cooldowns rather than from a flag anyone
+   * sets, so it is true exactly when the trigger is doing something. */
+  function gunGroupState(ship, group, cools, t) {
+    var guns = Combat.gunsInGroup(ship, group), busy = 0;
+    for (var i = 0; i < guns.length; i++) {
+      if (t < (cools[guns[i].key] || 0)) busy++;
+    }
+    return { n: guns.length, busy: busy };
+  }
+
+  function drawGunsPage(ctx) {
+    var s = G.ship;
+    var cools = G.gunCool || {};
+    var t = G.t;
+
+    /* The soft-key strip says what the triggers do RIGHT NOW, which for
+     * this page includes the one case where they do nothing: fireGroup
+     * refuses under time compression, so the strip says so rather than
+     * letting you pull a trigger and wonder. */
+    mfdShell(ctx, 'GUNS', G.warpIndex > 0
+      ? 'guns inhibited under time compression — , drops to 1x'
+      : 'space fires A   ·   shift+space fires B   ·   F5 reassigns');
+
+    /* Every hardpoint the hull has, fitted or not, in slot order — the same
+     * stable order muzzles are indexed against, so row three is the gun
+     * that fires from the third barrel. */
+    var byKey = {}, fitted = Combat.fittedList(s), i;
+    for (i = 0; i < fitted.length; i++) byKey[fitted[i].key] = fitted[i].item;
+    var keys = Combat.slotKeys(s), hp = [];
+    for (i = 0; i < keys.length; i++) {
+      if (Combat.slotType(keys[i]) === 'hardpoint') hp.push(keys[i]);
+    }
+
+    if (!hp.length) {
+      ctx.font = 'bold 13px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('NO HARDPOINTS', 10, MFD_BODY_TOP + 24);
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillText('this hull carries no guns', 10, MFD_BODY_TOP + 44);
+      return;
+    }
+
+    /* The two headers, side by side, each owning half the width. A group
+     * with nothing in it says so — group B is empty on every ship that has
+     * never been to the yard, and that is the single most useful thing this
+     * panel can tell a new pilot. */
+    var half = (MFD_W - 20) / 2;
+    var gs = ['a', 'b'], gi;
+    for (gi = 0; gi < 2; gi++) {
+      var st = gunGroupState(s, gs[gi], cools, t);
+      var x = 10 + gi * half;
+      var live = st.busy > 0;
+      ctx.fillStyle = live ? 'rgba(255,211,107,0.18)' : 'rgba(74,151,176,0.12)';
+      ctx.fillRect(x, MFD_BODY_TOP + 2, half - 6, 18);
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = st.n ? (live ? MFD_HOT : MFD_INK) : '#5d6f78';
+      ctx.fillText('GROUP ' + gs[gi].toUpperCase(), x + 6, MFD_BODY_TOP + 15);
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.textAlign = 'right';
+      ctx.fillStyle = live ? MFD_HOT : (st.n ? MFD_DIM : '#5d6f78');
+      ctx.fillText(live ? 'FIRING' : (st.n ? st.n + (st.n === 1 ? ' gun' : ' guns') : 'empty'),
+                   x + half - 12, MFD_BODY_TOP + 15);
+      ctx.textAlign = 'left';
+    }
+
+    /* One row per hardpoint: which way it points, what is in it, which
+     * trigger it answers to, and how far through its cycle it is. */
+    var shown = Math.min(hp.length, GUN_ROWS);
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    for (i = 0; i < shown; i++) {
+      var key = hp[i], item = byKey[key];
+      var y = MFD_BODY_TOP + 38 + i * 15;
+
+      ctx.fillStyle = '#5d6f78';
+      ctx.fillText(gunSideMark(s, key), 10, y);
+
+      if (!item) {
+        ctx.fillStyle = '#5d6f78';
+        ctx.fillText('— empty —', 28, y);
+        continue;
+      }
+
+      /* Something that is not a gun can sit in a hardpoint (the turret
+       * does). It is still worth a row — it is using the slot — but it has
+       * no group and no trigger, so it says what it is and stops. */
+      if (item.kind !== 'gun') {
+        ctx.fillStyle = MFD_DIM;
+        ctx.fillText(clipText(item.name, 26), 28, y);
+        ctx.textAlign = 'right';
+        ctx.fillText('not a gun', MFD_W - 10, y);
+        ctx.textAlign = 'left';
+        continue;
+      }
+
+      var g = Combat.groupOf(s, key);
+      var until = cools[key] || 0;
+      var cycling = t < until;
+      var frac = cycling && item.cooldown > 0
+        ? Math.max(0, Math.min(1, (until - t) / item.cooldown)) : 0;
+
+      ctx.fillStyle = cycling ? MFD_DIM : MFD_INK;
+      ctx.fillText(clipText(item.name, 24), 28, y);
+
+      /* The group letter, boxed, so the column scans as A/B rather than as
+       * two letters in a sentence. */
+      var bx = MFD_W - 150;
+      ctx.fillStyle = cycling ? 'rgba(255,211,107,0.28)' : 'rgba(110,240,192,0.20)';
+      ctx.fillRect(bx, y - 10, 15, 13);
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = cycling ? MFD_HOT : '#6ef0c0';
+      ctx.fillText(g.toUpperCase(), bx + 4, y);
+      ctx.font = 'bold 12px ui-monospace, monospace';
+
+      /* Cycle bar: FULL when ready, draining as it cools. A ready gun
+       * reading as a full bar is the same convention as every tank on the
+       * SHIP page, so it is read the same way without being learned. */
+      var barX = bx + 22, barW = MFD_W - 10 - barX;
+      ctx.fillStyle = 'rgba(74,151,176,0.22)';
+      ctx.fillRect(barX, y - 8, barW, 8);
+      ctx.fillStyle = cycling ? '#ffb86b' : '#6ef0c0';
+      ctx.fillRect(barX, y - 8, barW * (1 - frac), 8);
+      ctx.strokeStyle = 'rgba(74,151,176,0.6)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(barX, y - 8, barW, 8);
+    }
+
+    if (hp.length > shown) {
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('+' + (hp.length - shown) + ' more on F5', 28,
+                   MFD_BODY_TOP + 38 + shown * 15);
+    }
+
+    /* Hull heat under the rack, because the rack is what puts it there.
+     * Every shot spends heat × cooldown, so the gun list and this bar are
+     * two views of the same decision and belong on the same screen. The
+     * sink is the thing you reach for when it climbs, so its state is on
+     * the same line rather than a page away. */
+    var heat = s.heat || 0, lim = Sim.HEAT_LIMIT;
+    var hf = heat / lim;
+    var sink = G.sink && G.sink.live ? G.sink : null;
+    var sinkTxt;
+    if (sink) sinkTxt = 'SINK LIVE  ' + Math.round(sink.held) + '/' + Combat.SINK.capacity;
+    else if (t < (G.sinkCoolUntil || 0)) sinkTxt = 'sink cycling ' + Math.ceil(G.sinkCoolUntil - t) + 's';
+    else if (Combat.sinkRackSize(s)) sinkTxt = (s.sinks || 0) + ' sinks';
+    else sinkTxt = 'no sink rack';
+
+    mfdLabelled(ctx, MFD_BODY_BOTTOM - 11, 'hull heat  ' + Math.round(heat) + ' / ' + lim,
+                sinkTxt, sink ? MFD_HOT : MFD_DIM);
+    mfdBar(ctx, MFD_BODY_BOTTOM - 8, hf,
+           hf >= 1 ? '#ff7a7a' : (hf > 0.55 ? '#ffb86b' : '#6ef0c0'));
+  }
+
+  /* --- CARGO: the manifest, priced where you are ------------------------- */
+  function drawCargoPage(ctx) {
+    mfdShell(ctx, 'CARGO', G.ship.docked ? 'M to open the market'
+                                         : 'dock at a port to trade');
+    var s = G.ship;
+    var ids = Object.keys(s.cargo).filter(function (c) { return s.cargo[c] > 0; });
+    var port = s.docked ? G.sys.byId[s.docked] : null;
+    var y = MFD_BODY_TOP + 14;
+
+    if (!ids.length) {
+      ctx.font = 'bold 13px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('HOLD EMPTY', 10, y + 10);
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillText(s.cargoCap + ' tonnes available', 10, y + 30);
+      return;
+    }
+    ids.sort(function (a, b) { return s.cargo[b] - s.cargo[a]; });
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText(port ? 'VALUE HERE' : 'ABOARD', MFD_W - 74, y - 2);
+
+    var total = 0;
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    for (var i = 0; i < Math.min(ids.length, 7); i++) {
+      var cid = ids[i], yy = y + 14 + i * 15;
+      var tn = s.cargo[cid];
+      ctx.fillStyle = cid === 'waste' ? '#ffb86b' : MFD_INK;
+      ctx.fillText(clipText(Eco.BY_ID[cid].name, 18), 10, yy);
+      var worth = null;
+      if (port) {
+        var q = Eco.price(port, cid, G.t);
+        if (q && q.sell !== null) { worth = q.sell * tn; total += worth; }
+      }
+      ctx.textAlign = 'right';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText(tn.toFixed(0) + 't' + (worth !== null ? '  ' + fmtCredits(worth) : ''),
+                   MFD_W - 10, yy);
+      ctx.textAlign = 'left';
+    }
+    if (port && total) {
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = MFD_HOT;
+      ctx.textAlign = 'right';
+      ctx.fillText('total  ' + fmtCredits(total), MFD_W - 10, MFD_BODY_BOTTOM - 2);
+      ctx.textAlign = 'left';
+    }
+  }
+
+  /* --- SCANNER: the FFE fishbowl ----------------------------------------
+   * Frontier's scanner was not a flat radar circle, it was an ellipse seen
+   * at an angle with a vertical stalk to every blip — a plan view with the
+   * third dimension drawn in explicitly rather than projected away. It is
+   * still the clearest way anyone has found to show relative position in
+   * 3D on a 2D panel, so it is what this is. */
+  function drawScannerPage(ctx) {
+    mfdShell(ctx, 'SCANNER', '0.75 AU   ·   nose up   ·   stalks show height');
+    var cx = MFD_W / 2, cy = MFD_BODY_TOP + 58, rx = 96, ry = 40;
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(74,151,176,0.55)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, 0, 0, K.TAU); ctx.stroke();
+    ctx.strokeStyle = 'rgba(74,151,176,0.28)';
+    ctx.beginPath(); ctx.ellipse(cx, cy, rx * 0.5, ry * 0.5, 0, 0, K.TAU); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx - rx, cy); ctx.lineTo(cx + rx, cy);
+    ctx.moveTo(cx, cy - ry); ctx.lineTo(cx, cy + ry);
+    ctx.stroke();
+    ctx.restore();
+
+    function blip(pos, color, square, hostile) {
+      var rel = Sim.relativeToShipFrame(G.ship, pos);
+      if (rel.range > RADAR_RANGE || rel.range < 1e-6) return;
+      var frac = Math.min(1, Math.hypot(rel.fwd, rel.right) / RADAR_RANGE);
+      var px = cx + Math.sin(rel.azimuth) * frac * rx;
+      var py = cy - Math.cos(rel.azimuth) * frac * ry;
+      var stem = Math.sin(rel.elevation) * 34;
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.5;
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, py - stem); ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = color;
+      if (hostile) {
+        ctx.strokeStyle = '#ff6b5a'; ctx.lineWidth = 1.3;
+        ctx.beginPath();
+        ctx.moveTo(px, py - stem - 4); ctx.lineTo(px + 4, py - stem);
+        ctx.lineTo(px, py - stem + 4); ctx.lineTo(px - 4, py - stem);
+        ctx.closePath(); ctx.stroke();
+      } else if (square) {
+        ctx.fillRect(px - 2, py - stem - 2, 4, 4);
+      } else {
+        ctx.beginPath(); ctx.arc(px, py - stem, 2.4, 0, K.TAU); ctx.fill();
+      }
+      return { x: px, y: py - stem };
+    }
+
+    var i;
+    for (i = 0; i < G.sys.bodies.length; i++) {
+      var b = G.sys.bodies[i];
+      if (G.ship.docked && b.id === G.ship.docked) continue;
+      blip(Sim.bodyPosition(b, G.sys, G.t), bodyDotColor(b.kind), false, false);
+    }
+    var ships = Sim.shipsAll(G.sys, G.t);
+    for (i = 0; i < ships.length; i++) blip(ships[i].pos, ships[i].color, true, ships[i].hostile);
+
+    // Ring the lock so you can see where it is on the bowl.
+    var nav = navTargetState();
+    if (nav) {
+      var p = blip(nav.pos, MFD_HOT, nav.kind === 'ship', false);
+      if (p) {
+        ctx.strokeStyle = MFD_HOT; ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.arc(p.x, p.y, 7, 0, K.TAU); ctx.stroke();
+      }
+    }
+
+    // Own ship, at the centre of its own bowl.
+    ctx.fillStyle = MFD_INK;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 5); ctx.lineTo(cx - 3.5, cy + 4); ctx.lineTo(cx + 3.5, cy + 4);
+    ctx.closePath(); ctx.fill();
+
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText(ships.length + ' ships', 10, MFD_BODY_BOTTOM - 2);
+    if (nav) {
+      ctx.fillStyle = MFD_HOT;
+      ctx.textAlign = 'right';
+      ctx.fillText(clipText(nav.name, 16) + ' ' + fmtDist(nav.range), MFD_W - 10, MFD_BODY_BOTTOM - 2);
+      ctx.textAlign = 'left';
+    }
+  }
+
+  /* --- ORBIT: the ellipse you are actually on ---------------------------- */
+  function drawOrbitPage(ctx) {
+    mfdShell(ctx, 'ORBIT', 'the ellipse you are actually on');
+    var oe = (G.ship.landed || G.ship.docked) ? null : Sim.oscElements(G.ship, G.sys, G.t);
+    if (!oe) {
+      ctx.font = 'bold 13px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText(G.ship.docked ? 'DOCKED' : 'ON SURFACE', 10, MFD_BODY_TOP + 24);
+      return;
+    }
+    var y = MFD_BODY_TOP + 14;
+    mfdRow(ctx, y, 'about', oe.body.name, MFD_HOT);
+    mfdRow(ctx, y + 15, 'altitude', fmtDist(oe.altitude));
+    mfdRow(ctx, y + 30, 'apoapsis', oe.closed ? fmtDist(oe.apoAlt) : 'ESCAPING',
+           oe.closed ? MFD_INK : '#ffb86b');
+    mfdRow(ctx, y + 45, 'periapsis', fmtDist(oe.periAlt), oe.periAlt < 0 ? '#ff7a7a' : MFD_INK);
+    mfdRow(ctx, y + 60, 'ecc / inc', oe.e.toFixed(3) + ' / ' + (oe.inc / DEG).toFixed(1) + '°');
+    mfdRow(ctx, y + 75, 'period', oe.closed ? fmtTime(oe.period) : '—');
+
+    /* A sketch of the ellipse with the body at the focus and you on it.
+     * Numbers tell you the shape; the picture tells you at a glance whether
+     * you are about to graze the atmosphere. */
+    if (!oe.closed || !isFinite(oe.a)) return;
+    var cx = MFD_W / 2, cy = MFD_BODY_BOTTOM - 26;
+    var a = oe.a, e = Math.min(oe.e, 0.95);
+    var bAxis = a * Math.sqrt(1 - e * e);
+    var scale = Math.min(58 / a, 20 / Math.max(bAxis, 1e-9));
+
+    /* Drawn in the orbit's OWN plane, not projected from world space: the
+     * question this picture answers is "what shape am I on and where am I
+     * round it", and a foreshortened view of an inclined orbit answers that
+     * worse than a clean side-on one. Periapsis is to the right, so the
+     * ellipse centre sits a*e to the LEFT of the focus. */
+    ctx.save();
+    ctx.strokeStyle = 'rgba(120,240,190,0.7)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(cx - a * e * scale, cy, a * scale, bAxis * scale, 0, 0, K.TAU);
+    ctx.stroke();
+
+    // The body at the focus, to scale against its own orbit.
+    ctx.fillStyle = oe.body.color;
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(1.6, oe.body.radius * scale), 0, K.TAU);
+    ctx.fill();
+
+    /* Us, at our true anomaly. Recovered from the orbit equation rather
+     * than carried around: r = a(1-e^2)/(1+e cos v), and the sign comes
+     * from whether we are climbing or falling. */
+    var rel = V.sub(G.ship.pos, Sim.bodyPosition(oe.body, G.sys, G.t));
+    var vrel = V.sub(G.ship.vel, Sim.bodyVelocity(oe.body, G.sys, G.t));
+    var r = V.len(rel);
+    var nu;
+    if (e < 1e-6) {
+      nu = 0;
+    } else {
+      var cosNu = ((a * (1 - e * e) / r) - 1) / e;
+      nu = Math.acos(Math.max(-1, Math.min(1, cosNu)));
+      if (V.dot(rel, vrel) < 0) nu = -nu;   // falling toward periapsis
+    }
+    ctx.fillStyle = MFD_HOT;
+    ctx.beginPath();
+    ctx.arc(cx + Math.cos(nu) * r * scale, cy - Math.sin(nu) * r * scale, 2.8, 0, K.TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /* ---- CONTRAILS, LAID DOWN ----------------------------------------------
+   * Astra: "missiles/contrails and ship contrails in atmo."
+   *
+   * Two sources, one store. A missile smokes because its motor is burning,
+   * which it does wherever it is; a ship smokes because it is dragging a
+   * hull through AIR, which it only does inside an atmosphere. So the rule
+   * for a ship is the atmosphere check the flight model already runs, and
+   * the rule for a missile is simply that it exists.
+   *
+   * LAID IN WORLD SPACE AND LEFT THERE. A contrail is a thing that happened
+   * at a place, not a thing attached to a ship — which is what makes it
+   * read as being left behind rather than towed. It also means a trail
+   * outlives the missile that laid it, and it should: the smoke is still
+   * there after the warhead is not.
+   *
+   * ONE POINT EVERY CONTRAIL_STEP SECONDS OF SIM TIME, not per frame. Per
+   * frame would make the trail's density a function of the player's frame
+   * rate, and at 16x warp it would be a solid tube. Sim time also means a
+   * paused game lays nothing, which is correct.
+   *
+   * Bounded twice: by age, and by a hard cap on how many trails are kept at
+   * once, oldest evicted first. An unbounded store of points is the kind of
+   * leak that only shows up after an hour of play.
+   */
+  var CONTRAIL_STEP = 0.35;          // s of sim time between points
+  var CONTRAIL_LIFE = 9;             // s before a point has blown away
+  var MISSILE_TRAIL_LIFE = 4.5;
+  var CONTRAIL_MAX_PTS = 42;
+  var CONTRAIL_MAX_TRAILS = 24;
+  var CONTRAIL_MIN_SPEED = 0.06;     // km/s through the air before one forms
+
+  function trailStore() {
+    if (!G.contrails) G.contrails = { by: {}, order: [] };
+    return G.contrails;
+  }
+
+  function layPoint(key, pos, life) {
+    var store = trailStore();
+    var tr = store.by[key];
+    if (!tr) {
+      tr = store.by[key] = { pts: [], last: -1e9, life: life };
+      store.order.push(key);
+      while (store.order.length > CONTRAIL_MAX_TRAILS) {
+        delete store.by[store.order.shift()];
+      }
+    }
+    tr.life = life;
+    if (G.t - tr.last < CONTRAIL_STEP) return tr;
+    tr.last = G.t;
+    tr.pts.push({ p: V.clone(pos), t: G.t });
+    if (tr.pts.length > CONTRAIL_MAX_PTS) tr.pts.shift();
+    return tr;
+  }
+
+  /* Is this point in air, moving through it fast enough to condense one?
+   * Returns the thickness factor, or 0 for nothing — so the same call
+   * answers "should there be a trail" and "how heavy is it". */
+  function airTrailStrength(pos, vel) {
+    if (!Sim.atmosphereContext) return 0;
+    var atmo = Sim.atmosphereContext(pos, G.sys, G.t);
+    if (!atmo || !atmo.body || !atmo.body.atmosphere) return 0;
+    var alt = V.dist(pos, atmo.pos) - atmo.body.radius;
+    var rho = Sim.airDensity(atmo.body, alt);
+    if (!(rho > 0.02)) return 0;                  // the top of the air is thin
+    var through = V.len(V.sub(vel, atmo.vel));
+    if (through < CONTRAIL_MIN_SPEED) return 0;
+    return Math.max(0, Math.min(1, rho * 0.9)) * Math.min(1, through / 0.9);
+  }
+
+  function stepContrails() {
+    if (G.paused || !G.sys) return;
+    var store = trailStore();
+    var i;
+
+    /* The player, and every ship the encounter system has lifted — the
+     * ones that are actually flying rather than riding a timetable. Rail
+     * traffic is deliberately left out: it is drawn from a closed-form
+     * position that can jump when a leg is recomputed, and a trail behind
+     * something that teleports is a line across the sky. */
+    var flyers = [];
+    if (!G.ship.docked && !G.ship.landed) {
+      flyers.push({ key: 'player', pos: G.ship.pos, vel: G.ship.vel });
+    }
+    var live = (G.encounter && G.encounter.active) || [];
+    for (i = 0; i < live.length; i++) {
+      var sp = live[i];
+      var lp = sp.live || sp;
+      if (!lp || !lp.pos || !lp.vel) continue;
+      flyers.push({ key: 'e' + (sp.id || i), pos: lp.pos, vel: lp.vel });
+    }
+    for (i = 0; i < flyers.length; i++) {
+      var f = flyers[i];
+      var strength = airTrailStrength(f.pos, f.vel);
+      if (strength <= 0) continue;
+      var tr = layPoint(f.key, f.pos, CONTRAIL_LIFE);
+      tr.air = strength;
+    }
+
+    /* Missiles. Their own key so a trail survives the round that laid it,
+     * which is the whole reason the store is keyed rather than hung off
+     * the object. */
+    var ms = G.sys.missiles || [];
+    for (i = 0; i < ms.length; i++) {
+      var m = ms[i];
+      if (!m.trailKey) m.trailKey = 'm' + (m.born || 0) + '|' + i + '|' + Math.round((m.dies || 0) * 100);
+      layPoint(m.trailKey, m.pos, MISSILE_TRAIL_LIFE);
+    }
+
+    /* Ageing out. A trail whose last point is older than its life is gone
+     * entirely — dropping the whole trail rather than shifting points one
+     * at a time, because the points are already in order and the common
+     * case is that the thing that laid it has stopped. */
+    for (i = store.order.length - 1; i >= 0; i--) {
+      var key = store.order[i], t2 = store.by[key];
+      if (!t2) { store.order.splice(i, 1); continue; }
+      while (t2.pts.length && G.t - t2.pts[0].t > t2.life) t2.pts.shift();
+      if (!t2.pts.length) { delete store.by[key]; store.order.splice(i, 1); }
+    }
+  }
+
+  function drawContrails(ctx, cam) {
+    var store = G.contrails;
+    if (!store || !store.order.length) return;
+    for (var i = 0; i < store.order.length; i++) {
+      var tr = store.by[store.order[i]];
+      if (!tr || tr.pts.length < 2) continue;
+      var missile = store.order[i].charAt(0) === 'm';
+      Render.drawContrail(ctx, cam, tr.pts, G.t, {
+        life: tr.life,
+        /* A motor smokes heavier than a wingtip, and a hull in thick air
+         * heavier than one scraping the top of it. */
+        width: missile ? 0.9 : 0.6 + 1.2 * (tr.air || 0.3),
+        spread: missile ? 4.0 : 3.0,
+        alpha: missile ? 0.45 : 0.30 + 0.35 * (tr.air || 0.3),
+        color: missile ? '235,230,225' : '255,255,255'
+      });
+    }
+  }
+
+  /* The full-screen mode bodies live in screens.js. */
+
+  function drawBody(ctx, cam, item, starScreen) {
+    var b = item.body, sp = item.sp, rpx = item.rpx;
+
+    if (b.kind === 'station') {
+      /* Same scale rule as everything else: real geometry once it would
+       * actually resolve, a marker below that. A station is a couple of km
+       * across in a system six billion km wide, so the marker is what you
+       * see almost always — but the model is what you dock with, and what
+       * tells you at a glance whether you are approaching a farm, a
+       * refinery or a shipyard. */
+      var labelCol = b.underground ? '#a9d6ff' : b.surface ? '#ffd9a8' : '#9ff0dc';
+      /* `item.enclosing` passes the size gate on its own: a station whose
+       * centre is behind the eye has no meaningful projected radius, and it
+       * is the largest thing on the screen precisely because you are in
+       * it. */
+      if ((rpx > 3.5 || item.enclosing) && !chartHides(b, cam)) {
+        var model = stationModelFor(b);
+        /* A MODELLED STATION MAY TURN ONLY PART OF ITSELF. If the art
+         * declared a `stationSpin` ring, the shell is drawn on a frame that
+         * does not rotate and the ring on one that does — so a hub keeps
+         * still and stays something you can aim a docking approach at.
+         * Anything without that bucket, procedural ports included, spins as
+         * one piece exactly as it always did. */
+        var turns = Render.portSpins(model);
+        /* THE SHELL ALWAYS HOLDS STILL. It used to be drawn on the turning
+         * frame whenever the model declared no spin bucket, which is every
+         * model in the library — so the docking throats swung round with
+         * the hull and there was nothing fixed to aim an approach at. Spin
+         * is opt-in now, and `turns` says only whether there is a ring to
+         * draw on top; Sim.stationBasis defaults to frozen to match, so the
+         * berths and the drawing cannot disagree about where a bay is. */
+        var frame = stationFrame(b, true);
+        if (frame) {
+          var sun = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), item.pos));
+          /* NO SUN IN HERE. Set around THIS station's own meshes and cleared
+           * after, so the hull you are parked inside is lit as a room while
+           * everything else on the same frame — the next station along, your
+           * own hull, a ship passing outside — keeps its daylight. */
+          var indoors = (enclosedPort() === b);
+          if (indoors) Render.setIndoors(true);
+          /* WHOSE DOCK THIS IS, in paint. Astra asked for red accents on
+           * Syndicate stations "like the syndicate ships do"; the rule is
+           * written for every power instead, so a dock wears the same
+           * colour its territory is drawn in on the chart. Render decides
+           * WHICH faces are trim — a colour rule, not a list of hexes — and
+           * this only says whose colours to use.
+           *
+           * Set and cleared around this station's meshes exactly as
+           * setIndoors is, and for the same reason: the alternative is
+           * threading an argument through six paint paths and having the
+           * one that forgets paint a dock in the wrong flag. */
+          var owner = (b.faction && G.sys.factionById)
+            ? G.sys.factionById[b.faction] : null;
+          /* AND WHETHER IT IS THEIRS. Astra: "these will be Syndicate
+           * controlled ports. It will be very easy to tell if it's
+           * Syndicate." The colour alone cannot say that — the accent wash
+           * is the same rule for every flag and comes out as faintly warm
+           * plating at the modeller's own saturation. The second argument
+           * switches the skin rather than the hue: black hull, red trim.
+           * See accentSwap. */
+          /* THREE LIVERIES, and the third is the one that makes the other
+           * two legible. Astra: "add the Navy and Syndicate to each."
+           *
+           * A fleet carrier wears the fleet's paint — pale hull, deep trim
+           * — and a Syndicate dock wears black and red, and everything
+           * else wears the ordinary wash. So a dock on approach is one of
+           * three obviously different objects before you can read a word
+           * on it, which is what a livery is for. */
+          var skin = (owner && owner.outlaw) ? 'outlaw'
+                   : (Combat.fleetPort && Combat.fleetPort(b)) ? 'fleet' : null;
+          Render.setAccent(owner && owner.color, skin);
+          /* ONE COMPARTMENT WHEN YOU ARE IN ONE. Astra's design: every
+           * section has a blast door, so the renderer only ever draws the
+           * section around the ship. From outside, `null` — the whole hull
+           * is what a station looks like. */
+          Render.drawStationModel(ctx, cam, frame, b.radius, sun, model, b.color,
+                                  stationDoors(b), indoors ? shipSection(b) : null);
+          if (turns) {
+            Render.drawPortPart(ctx, cam, stationFrame(b), b.radius, sun,
+                                model, 'spin', b.color);
+          }
+          /* THE INSIDE OF AN ORBITAL STATION, and the gate is a PREDICATE
+           * rather than a size. That distinction was learned the hard way:
+           * the first version drew the interior whenever the station read
+           * bigger than forty pixels, and from anywhere outside the hull
+           * the result was a screenful of grey slabs with the station
+           * nowhere to be seen.
+           *
+           * The cause is not the mesh, it is compositing. The shell and the
+           * interior are two separate paintMesh calls, and paintMesh sorts
+           * far-to-near WITHIN one mesh only — so every interior face lands
+           * on top of every shell face regardless of which is actually
+           * nearer. There is no depth buffer arbitrating between them.
+           * Drawing a room that is inside a hull, from outside that hull,
+           * is therefore not a thing this renderer can be asked to do.
+           *
+           * From INSIDE it composites correctly and for free: the shell is
+           * behind you, the interior is what is in front, and painting the
+           * interior last is exactly right. So the condition is simply
+           * whether this station is the place you are in — the same
+           * predicate the world-suppression and the camera clamp ask, so
+           * the three cannot drift apart.
+           *
+           * `insideInterior` is the second half of the same idea. Being
+           * DOCKED at a station is not the same as being inside its hall:
+           * the approach, the hatch and the first stretch of throat are all
+           * docked-and-outside, and painting the room from out there is the
+           * grey-slab bug again in a smaller window. So the model's own
+           * interior bounds are asked whether the camera is actually in
+           * them. Surface ports are excluded because their interior IS the
+           * bay mesh, already drawn as the model. */
+          /* AND THE SECOND HALF IS ACTUALLY ASKED, which it had stopped
+           * being. The paragraph above describes `insideInterior` as part
+           * of this gate; the call had been dropped and only the comment
+           * survived, so the hall was painted from anywhere in the station.
+           *
+           * That is the whole of the grey slab. The interior bucket is a
+           * CONCOURSE, and berths.test.js has been printing the proof for
+           * weeks: "0 of 48 modelled berths sit inside their station's own
+           * interior volume". So from a berth the renderer was painting a
+           * room you are not in, last, over the room you are — over the
+           * deck, over the bay, over your own hull. Suppress it and the
+           * berth shot is correct; leave it and the screen is a grey wall.
+           *
+           * Surface ports are excluded because their interior IS the bay
+           * mesh, already drawn as the model. */
+          if (indoors && (b.surface ||
+                          Render.insideInterior(cam, frame, b.radius, model))) {
+            Render.drawStationInterior(ctx, cam, frame, b.radius, sun,
+                                       model, b.color);
+          }
+          if (indoors) Render.setIndoors(false);
+          Render.setAccent(null);
+          /* The town, the boards and the pad lighting. Held to a higher
+           * threshold than the pad itself: the dressing is detail, and
+           * detail smaller than a few pixels is cost without information. */
+          if (b.surface && rpx > 14) {
+            Render.drawPortDressing(ctx, cam, frame, b, b.radius, sun);
+          }
+          /* The lamps come in earlier than the rest of the dressing: a
+           * ring of lights is the first thing you can read about a port on
+           * approach, and whether it is red is the thing you most want to
+           * know before you have committed to the descent. */
+          if (b.surface && rpx > 5) {
+            /* Wall clock, not G.t: the lamps are a light bulb on a timer in
+             * the world, not something the simulation drives. Feeding sim
+             * time in means the blink rate rides the time warp and turns
+             * into a strobe blur the moment you speed up. */
+            Render.drawPortLamps(ctx, cam, frame, b, b.radius, sun,
+                                 Combat.isCleared(G, b), nowSeconds());
+          }
+          /* The doors, at whatever point of their travel they have reached.
+           * Drawn at the same threshold as the lamps: the lamps tell you
+           * the port has said yes, and the doors are that answer made
+           * physical — showing one without the other is a port that agrees
+           * to take you and stays sealed. */
+          if (b.surface && rpx > 5) {
+            Render.drawPortDoors(ctx, cam, frame, b, b.radius, sun, doorPhase(b));
+          }
+          /* No nameplate on the room you are standing in. */
+          if (!sp.behindEye) queueLabel(sp, b.name, labelCol, rpx + 8, 4 + rpx);
+          return;
+        }
+      }
+      ctx.save();
+      ctx.strokeStyle = b.underground ? '#7fb8ff' : b.surface ? '#ffb877' : '#7fd6c0';
+      ctx.fillStyle = b.underground ? '#cfe8ff' : b.surface ? '#ffe9cc' : '#d8fff4';
+      ctx.lineWidth = 1.2;
+      var s = Math.max(3.2, Math.min(9, rpx * 3));
+      ctx.beginPath();
+      if (b.surface) {
+        // A pad reads as a square on the ground, not as a diamond in space.
+        // An underground mouth is the same square with a dark centre, so
+        // even at marker size it doesn't read as just another open pad.
+        ctx.rect(sp.x - s * 0.8, sp.y - s * 0.8, s * 1.6, s * 1.6);
+      } else {
+        ctx.moveTo(sp.x, sp.y - s); ctx.lineTo(sp.x + s, sp.y);
+        ctx.lineTo(sp.x, sp.y + s); ctx.lineTo(sp.x - s, sp.y);
+        ctx.closePath();
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 0.5; ctx.fill();
+      if (b.underground) {
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = '#04070c';
+        ctx.beginPath(); ctx.arc(sp.x, sp.y, s * 0.4, 0, K.TAU); ctx.fill();
+      }
+      ctx.restore();
+      queueLabel(sp, b.name, labelCol, s + 6, 2 + Math.min(6, s));
+      return;
+    }
+
+    /* A WORLD you are INSIDE is not drawn at all — see the matching
+     * discard in the GL planet shader. Underground in a starport the eye
+     * is a few hundred metres below the surface, and a sphere shaded from
+     * inside is a grey slab across the whole screen with the hangar,
+     * the ship and the shaft all hidden behind it. What you should see
+     * down there is the room you are in and daylight up the shaft.
+     *
+     * A STATION IS NOT A WORLD, and that exemption is the whole reason
+     * this line grew a condition. A station's radius is a bounding sphere
+     * around a wheel, not the surface of a solid body — so flying into one
+     * puts the eye inside it by this test while the thing you are looking
+     * AT is its walls. Until stations were enterable the two never came up
+     * together; the first arrival flown at a cradle came out as empty
+     * space with a ship and some stars in it, because the station had
+     * deleted itself the moment the camera crossed a sphere that is not
+     * its hull. Being inside a station is the case it most needs drawing
+     * for. */
+    /* IN THE CHART, EVERYTHING you are inside goes away again. The map is
+     * a diagram of where things are, and a hull you happen to be parked in
+     * is not a thing the diagram is about — wheel the system view all the
+     * way in while docked and the station's near panels fill the screen
+     * with the orbits drawn straight through them. Astra's first shot of a
+     * new career is exactly that. In FLIGHT the station is the room you are
+     * standing in and is the whole point; in the chart it is in the way. */
+    if (cam.eye && V.dist(cam.eye, item.pos) < b.radius &&
+        (mapMode() || (!b.surface && b.kind !== 'station'))) return;
+
+    if (rpx < 2.4) {
+      // Sub-pixel body: draw a marker ring so it is still findable, and a
+      // dropline so you can see it sits above or below the ecliptic.
+      if (b.kind === 'star') {
+        // Never let the light source of the system degrade to a grey speck.
+        var sg = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, 14);
+        sg.addColorStop(0, 'rgba(255,240,200,0.85)');
+        sg.addColorStop(0.3, 'rgba(255,215,150,0.35)');
+        sg.addColorStop(1, 'rgba(255,200,120,0)');
+        ctx.fillStyle = sg;
+        ctx.beginPath(); ctx.arc(sp.x, sp.y, 14, 0, K.TAU); ctx.fill();
+        ctx.fillStyle = '#fff6e0';
+        ctx.beginPath(); ctx.arc(sp.x, sp.y, 2.4, 0, K.TAU); ctx.fill();
+        queueLabel(sp, b.name, '#ffe6a8', 10, 100);
+        return;
+      }
+      Render.drawDropline(ctx, cam, item.pos, '#3d5878', G.cam.target.z, G.cam.dist * 1.2);
+      ctx.save();
+      ctx.strokeStyle = b.color; ctx.globalAlpha = 0.85; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(sp.x, sp.y, 4.5, 0, K.TAU); ctx.stroke();
+      ctx.fillStyle = b.color; ctx.globalAlpha = 1;
+      ctx.beginPath(); ctx.arc(sp.x, sp.y, 1.6, 0, K.TAU); ctx.fill();
+      ctx.restore();
+      queueLabel(sp, b.name, '#9fb6d4', 8,
+                 (b.kind === 'planet' ? 6 : b.kind === 'star' ? 40 : 1));
+      return;
+    }
+
+    if (b.kind === 'star') {
+      // Corona.
+      var glow = ctx.createRadialGradient(sp.x, sp.y, rpx * 0.9, sp.x, sp.y, rpx * 5);
+      glow.addColorStop(0, 'rgba(255,220,150,0.45)');
+      glow.addColorStop(1, 'rgba(255,200,120,0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath(); ctx.arc(sp.x, sp.y, rpx * 5, 0, K.TAU); ctx.fill();
+    }
+
+    Render.drawDropline(ctx, cam, item.pos, '#3d5878', G.cam.target.z, G.cam.dist * 1.2);
+
+    /* The one place the world layer takes over from the 2D renderer. The
+     * body's screen position and radius were computed by the SAME camera
+     * call the rest of this function uses, so the GPU disc and the label
+     * pinned beside it cannot disagree. */
+    var drewOnGpu = false;
+    if (glLive() && _starPos) {
+      var toStar = V.sub(_starPos, item.pos);
+      var dlen = V.len(toStar);
+      /* A body sitting on top of the star has no meaningful sun direction;
+       * light it from the camera rather than dividing by zero. */
+      var sunDir = dlen > 1e-9 ? V.scale(toStar, 1 / dlen) : V.scale(cam.f, -1);
+      drewOnGpu = global.GLWorld.queueBody(b, sp, rpx, cam, sunDir, G.t, item.pos);
+    }
+    if (!drewOnGpu) Render.shadeBody(ctx, sp, rpx, b, starScreen);
+
+    if (b.habitable) {
+      ctx.save();
+      ctx.strokeStyle = '#7dffb0'; ctx.globalAlpha = 0.6; ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.arc(sp.x, sp.y, rpx + 5, 0, K.TAU); ctx.stroke();
+      ctx.restore();
+    }
+    queueLabel(sp, b.name, b.kind === 'star' ? '#ffe6a8' : '#c7d8ee', rpx + 6,
+               rpx + (b.kind === 'star' ? 60 : b.kind === 'planet' ? 12 : 0));
+  }
+
+  /* How far this port's doors have actually travelled, 0 shut to 1 open.
+   *
+   * Combat.doorsOpen says where they SHOULD be; this eases toward it so
+   * they slide rather than teleport. Real seconds, not sim time — a door
+   * takes as long to open at 10,000x warp as it does at 1x, because it is
+   * a machine in the world and not part of the orbit solution. Twelve
+   * seconds end to end: long enough to watch, short enough to wait for.
+   *
+   * The phase lives on the port object rather than in G, so it neither
+   * saves nor needs to: a door caught halfway when you quit is a door that
+   * should be wherever your clearance says it is when you come back. */
+  var DOOR_SECONDS = 12;
+
+  /* HOW FAR THIS STATION'S DOORS ARE OPEN, AND WHOSE.
+   *
+   * The leaves were always in the model and the arrival has always posed
+   * them; what was missing was anybody reading it. Mid-arrival the leg says
+   * — `gates.apron` runs 1 sealed to 0 open, so the leaves run back before
+   * the hull moves into the hole and shut again behind it, which is the
+   * mechanical interlock the surface apron already has.
+   *
+   * Otherwise it is the same soft gate every other door in the game uses:
+   * Combat.doorsOpen, eased on the WALL CLOCK by doorPhase, so the travel
+   * does not ride the time warp.
+   *
+   * ONLY YOUR BERTH. A station does not open all eleven of its doors
+   * because one courier arrived, and the leaf knows which berth anchor it
+   * belongs to — so the berth's own mid is what is passed, and every leaf
+   * that does not sit at it stays shut. */
+  function stationDoors(port) {
+    if (!port || port.surface) return null;
+    var berth = currentBerth();
+    var ap = Gen.berthApertures ? Gen.berthApertures(port, berth) : null;
+
+    /* THE ARRIVAL RAIL STILL DRIVES ITS OWN DOORS, and it must: the
+     * sequence is choreographed against the legs, so the leaves are where
+     * that choreography says while it is running. */
+    if (G.arrivalPose && G.ship.arrival && G.ship.arrival.port === port.id) {
+      /* Through a heavy bay (2026-09-24): its doors are the ones that run. */
+      berth = (typeof G.ship.arrival.entry === 'number') ? G.ship.arrival.entry : G.ship.arrival.berth;
+      ap = Gen.berthApertures ? Gen.berthApertures(port, berth) : ap;
+      return { open: 1 - G.arrivalPose.gates.apron,
+               inner: 1 - G.arrivalPose.gates.inner,
+               berth: berth, berthMid: ap && ap.mid };
+    }
+
+    /* EVERYWHERE ELSE, ONE AUTHORITY. Sim.stationDoorState runs the airlock
+     * — both gates, and the interlock between them — and the collision test
+     * reads exactly the same call. That is the point of it being there
+     * rather than here: you cannot fly through a door you can see is shut,
+     * because the thing that draws it and the thing that stops you are the
+     * same number. */
+    if (Sim.stationDoorState) {
+      var st = Sim.stationDoorState(port, G.sys, G.t, G.ship,
+                                    G.ship.cleared && G.ship.cleared[port.id]);
+      if (st) return st;
+    }
+    return { open: 0, inner: 0, berth: berth, berthMid: ap && ap.mid };
+  }
+
+  function doorPhase(port) {
+    var want = Combat.doorsOpen(G, port) ? 1 : 0;
+    var now = nowSeconds();
+    var st = port._door;
+    if (!st) { st = port._door = { at: want, t: now }; return want; }
+    var step = Math.min(1, Math.max(0, (now - st.t))) / DOOR_SECONDS;
+    st.t = now;
+    if (st.at < want) st.at = Math.min(want, st.at + step);
+    else if (st.at > want) st.at = Math.max(want, st.at - step);
+    return st.at;
+  }
+
+  /* Which model a port wears. The rule moved to Render.portModelFor, because
+   * it now decides which imported model's DIMENSIONS bayGeometry reads as
+   * well as which mesh gets drawn — and a copy of it here would eventually
+   * draw one shed while parking ships in the shape of another. This is the
+   * name the rest of this file already calls. */
+  function stationModelFor(station) {
+    return Render.portModelFor(station);
+  }
+
+  /* Stations carry no attitude in the simulation — nothing needs one, so
+   * nothing stores one. For drawing we derive a frame the same way docking
+   * does: from the station's own orbital basis, which is stable, needs no
+   * state, and is a pure function of t like everything else.
+   *
+   * Then it spins. A ring habitat that did not turn would be a ring
+   * habitat with no gravity in it, and the rotation is just an angle in t —
+   * so it costs nothing and stays exact across a warp jump. Surface ports
+   * do not spin: they are bolted down, and their frame comes from local
+   * vertical instead. */
+  /* Fraction of pad radius the whole bay model stands proud of the ground.
+   * Read from the shared bay table rather than kept here, because the
+   * simulation adds the same lift when it stands a ship in a berth — the
+   * two disagreeing by even a few tens of metres is a ship sunk into its
+   * own hangar floor. */
+  var PAD_GROUND_LIFT = (Gen && Gen.bayGeometry)
+    ? Gen.bayGeometry({ radius: 1, shaftDepth: 1 }).lift : 0.04;
+
+  /* `still` asks for the frame WITHOUT the spin applied.
+   *
+   * The procedural stations turn by rotating the whole frame, which is
+   * right for them: a wheel with a hub drawn as one mesh has to spin as one
+   * thing. An imported model can do better — it can declare which part
+   * turns, with a `stationSpin` node — and then the hub must NOT spin,
+   * because a hub that rotates with its own ring is a hub with no docking
+   * bay you can aim at. So a modelled station is drawn twice: shell on the
+   * still frame, ring on the turning one.
+   *
+   * Surface ports ignore the flag. They are bolted down and their frame
+   * comes from local vertical, so there is no spin to leave out. */
+  function stationFrame(station, still) {
+    /* An underground bay is hung from its ENTRANCE, not from where it truly
+     * is. The mesh already carries the drop down the shaft in its own
+     * geometry (see stationMeshes().underground); anchoring the frame at
+     * the true (buried) position would put the collar itself underground
+     * and, worse, would give the object a camera-space depth nearer than
+     * the planet's surface on the near side — which paints the whole bay
+     * floating in open space in front of the world instead of hidden
+     * inside it. Anchoring at the mouth is exactly what a normal surface
+     * pad already does (elevation 0), so this is that same math, just also
+     * used by a body whose true elevation is negative. */
+    /* EVERY surface port hangs from its mouth now, not just the deep ones.
+     * The berth is at the bottom of the shaft for all of them, so anchoring
+     * on the body's own position would bury the whole model — collar,
+     * apron and all — inside the planet, where the depth buffer duly hides
+     * it. That is exactly what happened the first time: shallow starports
+     * simply stopped being drawn. */
+    /* THE ORBITAL CASE FIRST, and it computes nothing of its own.
+     *
+     * This used to solve for the station's state and its host's up here and
+     * then hand off, and once the berth code needed the same frame that made
+     * it solve for both TWICE per station per frame — Kepler is the
+     * expensive call in this file and the render suite went from four
+     * minutes to more than seven. Everything the orbital branch needs comes
+     * back inside the basis, so it asks once. */
+    if (!station.parentBody) return null;
+    if (!station.surface) {
+      /* ONE DERIVATION, and it lives in sim.js.
+       *
+       * The spin, the axis and the handedness used to be written out here as
+       * well as being needed by the berth code, and two copies of "which way
+       * is this station facing" is exactly the disagreement that parks a
+       * ship inside a wall — the same failure portModelFor exists to prevent
+       * for which mesh gets drawn. Sim.stationBasis returns the frame in the
+       * same shape groundBasis does (up = model +z, east = +x, north = +y),
+       * so the renderer and the berths cannot drift apart.
+       *
+       * `still` is passed through because the caller knows something this
+       * does not: the shell and the turning ring are drawn as two passes of
+       * the same model, one frozen and one not. */
+      var sb = Sim.stationBasis(station, G.sys, G.t, !!still);
+      if (!sb) return null;
+      return { pos: sb.entrance.pos, fwd: sb.up, right: sb.east, up: sb.north };
+    }
+
+    var ss = Sim.portEntrance(station, G.sys, G.t);
+    var hs = Sim.bodyState(station.parentBody, G.sys, G.t);
+    var up = V.norm(V.sub(ss.pos, hs.pos));
+    if (V.len(up) < 1e-9) return null;
+
+    {
+      // Model is built flat in xy with +z up, so the pad's "forward" is the
+      // local vertical and the other two axes lie along the ground.
+      var east = V.norm(V.cross({ x: 0, y: 0, z: 1 }, up));
+      if (V.len(east) < 1e-6) east = V.norm(V.cross({ x: 0, y: 1, z: 0 }, up));
+      /* Stand the apron slightly PROUD of the ground.
+       *
+       * A pad's position is exactly the planet's radius, and the planet is
+       * drawn as an impostor sphere whose depth is computed from that same
+       * radius — so the two surfaces are coincident and the depth test
+       * decides between them pixel by pixel. The result is a starport half
+       * sunk into the floor, with the far side eaten. Lifting it by a few
+       * per cent of its own radius (tens of metres, not visible as height)
+       * separates them cleanly and costs nothing else. The dressing rides
+       * on this same frame, so the town comes up with it. */
+      var lifted = V.addScaled(ss.pos, up, station.radius * PAD_GROUND_LIFT);
+      return { pos: lifted, fwd: up, right: east, up: V.cross(east, up) };
+    }
+  }
+
+  function queueLabel(sp, text, color, offset, priority) {
+    G.labelQueue.push({ sp: sp, text: text, color: color, offset: offset, pri: priority });
+  }
+
+  /* Draw the important labels and drop the ones that would collide.
+   * Zoomed out, a dozen names land on the same few pixels; showing all of
+   * them is worse than showing the three that matter. Bigger and more
+   * significant bodies win. */
+  function placeLabels(ctx, queue, w, h) {
+    queue.sort(function (a, b) { return b.pri - a.pri; });
+    ctx.save();
+    ctx.font = 'bold 12px ui-monospace, SFMono-Regular, Menlo, monospace';
+    var taken = [];
+    for (var i = 0; i < queue.length; i++) {
+      var q = queue[i];
+      var x = q.sp.x + q.offset, y = q.sp.y + 3;
+      if (x < -40 || x > w + 40 || y < 0 || y > h) continue;
+      var tw = ctx.measureText(q.text).width;
+      var box = { x: x - 2, y: y - 10, w: tw + 4, h: 13 };
+      var clash = false;
+      for (var j = 0; j < taken.length; j++) {
+        var o = taken[j];
+        if (box.x < o.x + o.w && box.x + box.w > o.x &&
+            box.y < o.y + o.h && box.y + box.h > o.y) { clash = true; break; }
+      }
+      if (clash) continue;
+      taken.push(box);
+      ctx.fillStyle = q.color;
+      ctx.globalAlpha = 0.92;
+      ctx.fillText(q.text, x, y);
+    }
+    ctx.restore();
+  }
+
+  function label(ctx, sp, text, color, offset) {
+    ctx.save();
+    ctx.font = 'bold 12px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.9;
+    ctx.fillText(text, sp.x + offset, sp.y + 3);
+    ctx.restore();
+  }
+
+  function drawShip(ctx, cam) {
+    var sp = cam.project(G.ship.pos);
+    if (!sp) return;
+    var fr = G.frame || orbitalFrame();
+
+    /* Only draw the flight arrows when the ship's orbit is actually
+     * resolvable on screen. Zoomed out to the whole system they would be a
+     * fixed-length smear across a planet, pointing at nothing useful. */
+    var orbitPx = V.len(fr.rel) * sp.scale;
+    var showArrows = orbitPx > 9;
+
+    // Velocity and thrust as arrows in the 3D scene: you see which way the
+    // ship is actually going, and which way the burn is pushing it.
+    var pv = showArrows ? cam.project(V.addScaled(G.ship.pos, fr.prograde, cam.dist * 0.04)) : null;
+    if (pv) Render.drawArrow(ctx, sp.x, sp.y, pv.x - sp.x, pv.y - sp.y, 46, '#ffd36b', 1.7, 7);
+    if (showArrows && V.len(G.ship.thrust) > 0) {
+      var th = V.norm(G.ship.thrust);
+      var pt = cam.project(V.addScaled(G.ship.pos, th, cam.dist * 0.06));
+      if (pt) Render.drawArrow(ctx, sp.x, sp.y, pt.x - sp.x, pt.y - sp.y, 34, '#7dfaff', 2.2, 8);
+    }
+
+    /* Our own drive. The plume goes opposite the THRUST, not out of the
+     * tail — in this ship translation and attitude are separate systems, so
+     * burning prograde while pointing somewhere else is a normal thing to
+     * do, and the exhaust should show where the reaction mass is actually
+     * going rather than where the nose happens to be. */
+    if (V.len(G.ship.thrust) > 0) {
+      Render.drawShipExhaust(ctx, cam, G.ship, Render.SHIP_LEN,
+                             Math.min(1, V.len(G.ship.thrust) / Math.max(G.ship.maxAccel, 1e-12)),
+                             'courier', G.ship.thrust, performance.now() / 1000);
+    }
+
+    // Real hull once it would actually be visible as one; a marker dot
+    // below that reads better than a blob of sub-pixel triangles — the same
+    // scale rule every other body in this system follows.
+    var lenPx = Render.shipScreenLength(cam, G.ship);
+    if (lenPx > 4) {
+      var sunDir = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), G.ship.pos));
+      Render.drawShipModel(ctx, cam, G.ship, sunDir,
+        G.ship.crashed ? '#ff8a7a' : null);
+    } else {
+      ctx.save();
+      ctx.fillStyle = G.ship.crashed ? '#ff6b6b' : '#ffffff';
+      ctx.strokeStyle = '#8fb4ff';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(sp.x, sp.y, 3.4, 0, K.TAU); ctx.fill();
+      ctx.beginPath(); ctx.arc(sp.x, sp.y, 8, 0, K.TAU); ctx.stroke();
+      ctx.restore();
+    }
+    /* Both outside the size branch, same reasoning as the traffic versions:
+     * being zoomed out is not a reason to miss having been hit. Your own
+     * field is fitted to the hull you bought ('hull:<id>'), because that is
+     * the model drawShipModel draws — a form-fitting shield has to fit the
+     * ship that is on screen. */
+    /* Re-entry: the sheath and wake, round the hull you can see. Outside
+     * the size branch too — a streak of fire across the sky is exactly how
+     * a ship reads from far away while it is coming in. */
+    Render.drawReentryPlasma(ctx, cam, G.ship, Render.SHIP_LEN,
+                             G.ship.reentryGlow || 0, G.ship.windDir, nowSeconds());
+    playerShieldShell(ctx, cam);
+    drawHullBlooms(ctx, cam, G.ship);
+  }
+
+  /* Your own shell. The player's ship carries the same three fields every
+   * NPC does — shieldMax, shieldHp and impacts — because damagePlayer and
+   * damageNpc go through one splitDamage and one markImpact, so there is
+   * nothing here to keep in step with the other path. */
+  function playerShieldShell(ctx, cam) {
+    var s = G.ship;
+    var cap = s.shield ? Combat.MODULES.shield.cap : 0;
+    if (!(cap > 0) || !(s.shieldHp > 0)) return;
+    /* lastHitAt on the player is REAL milliseconds — damagePlayer has always
+     * written performance.now() there, because the regen tick compares it
+     * against a millisecond clock. The NPC path writes sim seconds. So the
+     * linger is computed here rather than through shieldLit, which would
+     * otherwise be handed two different units and quietly believe both. */
+    var sinceS = ((typeof performance !== 'undefined' ? performance.now() : 0)
+                  - (s.lastHitAt || -1e9)) / 1000;
+    if (!(sinceS >= 0) || sinceS > SHIELD_LINGER) return;
+    var leftS = SHIELD_LINGER - sinceS;
+    var lit = leftS >= SHIELD_FADE ? 1 : leftS / SHIELD_FADE;
+    var lenPx = Render.shipScreenLength(cam, s);
+    var nowS = nowSeconds();
+    var live = liveImpacts(s, nowS);
+    if (lenPx >= SHELL_MIN_PX) {
+      Render.drawShellField(ctx, cam, s, Render.SHIP_LEN, 'hull:' + (s.hullId || 'talon'),
+                            s.shieldHp / cap, lit, live, nowS);
+    } else {
+      farShieldGlow(ctx, cam, s, s.shieldHp / cap, lit, live, lenPx, nowS);
+    }
+  }
+
+  /* ---- HUD ------------------------------------------------------------ */
+
+  /* `solid` for anything you are meant to READ rather than glance at.
+   * The translucent panel is right for a HUD overlay sitting on the world,
+   * and wrong for a full-screen dialog: with the cockpit behind it, the
+   * attitude ladder and canopy struts show straight through a price table
+   * and turn a column of numbers into noise. */
+  /* ---- the corridor board ------------------------------------------------
+   * What a pilot needs while flying a corridor with somebody else in it, and
+   * nothing else. Four things, in the order they matter:
+   *
+   *   how far through the crossing you are, and where everyone else is on it
+   *   the throttle lever, because matching speed IS the skill
+   *   your lock on somebody
+   *   somebody's lock on you
+   *
+   * Positioned from the TOP, not the bottom. Everything drawn from the
+   * bottom edge in this game has to clear the console band and the F-key
+   * bar, and a panel that only ever appears during a jump would be the
+   * easiest thing in the world to forget to re-measure when those move. */
+  function drawCorridorHUD(ctx, w, h, cor) {
+    var board = Slip.corridorBoard(cor);
+    var PW = Math.min(430, w - 40);
+    var x = (w - PW) / 2, y = 54;
+    var rows = Math.min(4, board.length);
+    var PH = 108 + rows * 17 + (cor.huntedBy ? 26 : 0);
+
+    panel(ctx, x, y, PW, PH, true);
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+
+    /* --- the corridor itself, as a line you are somewhere along --------- */
+    ctx.fillStyle = '#8fb4ff';
+    ctx.fillText('SLIPSPACE CORRIDOR', x + 12, y + 18);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#6f8fbf';
+    ctx.fillText(cor.from.name + '  →  ' + cor.to.name, x + PW - 12, y + 18);
+    ctx.textAlign = 'left';
+
+    var tx = x + 12, tw = PW - 24, ty = y + 28;
+    ctx.strokeStyle = 'rgba(120,160,220,0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(tx, ty + 4); ctx.lineTo(tx + tw, ty + 4); ctx.stroke();
+
+    // Everyone else on the line first, so your own marker sits on top.
+    for (var i = 0; i < cor.contacts.length; i++) {
+      var c = cor.contacts[i];
+      var cp = Math.max(0, Math.min(1, c.progress));
+      ctx.fillStyle = c.hostile ? '#ff6b5a' : (c.color || '#d8c79a');
+      ctx.fillRect(tx + cp * tw - 1.5, ty, 3, 9);
+    }
+    var pp = Math.max(0, Math.min(1, cor.progress));
+    ctx.fillStyle = '#7dffb0';
+    ctx.beginPath();
+    ctx.moveTo(tx + pp * tw, ty - 3);
+    ctx.lineTo(tx + pp * tw + 4, ty + 4);
+    ctx.lineTo(tx + pp * tw, ty + 11);
+    ctx.lineTo(tx + pp * tw - 4, ty + 4);
+    ctx.closePath(); ctx.fill();
+
+    /* --- the throttle lever -------------------------------------------- */
+    var ly2 = y + 50;
+    ctx.fillStyle = '#6f8fbf';
+    ctx.fillText('THROTTLE', x + 12, ly2 + 4);
+    var lx = x + 74, lw = PW - 150;
+    ctx.strokeStyle = 'rgba(120,160,220,0.3)';
+    ctx.strokeRect(lx, ly2 - 6, lw, 10);
+    // Neutral is marked, because neutral is free and everything else is not.
+    var mid = lx + lw * (1 / 2);
+    ctx.strokeStyle = 'rgba(120,160,220,0.5)';
+    ctx.beginPath(); ctx.moveTo(mid, ly2 - 8); ctx.lineTo(mid, ly2 + 6); ctx.stroke();
+    var tv = (cor.throttle + 1) / 2;
+    ctx.fillStyle = cor.throttle > 0 ? '#ffd36b' : (cor.throttle < 0 ? '#7dfaff' : '#7dffb0');
+    ctx.fillRect(lx + tv * lw - 2, ly2 - 8, 4, 14);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#8fb4ff';
+    ctx.fillText((Slip.throttleScale(cor.throttle) * 100).toFixed(0) + '%',
+                 x + PW - 12, ly2 + 4);
+    ctx.textAlign = 'left';
+
+    /* --- who is out there ---------------------------------------------- */
+    var by = y + 70;
+    ctx.fillStyle = '#6f8fbf';
+    ctx.fillText(board.length ? 'CONTACTS' : 'NO CONTACTS IN RANGE', x + 12, by);
+    by += 14;
+    for (var b = 0; b < rows; b++) {
+      var it = board[b];
+      var c2 = it.contact;
+      ctx.fillStyle = c2.hostile ? '#ff8a76' : '#d8c79a';
+      ctx.fillText(c2.name.slice(0, 20), x + 12, by);
+      ctx.fillStyle = '#6f8fbf';
+      ctx.fillText(c2.className.slice(0, 14), x + 150, by);
+      ctx.textAlign = 'right';
+      /* Range in light years reads as nonsense at these scales, so it is
+       * quoted as a fraction of the corridor — which is the unit the pilot
+       * is actually flying in. */
+      ctx.fillStyle = it.inLockRange ? '#7dffb0' : '#8fb4ff';
+      ctx.fillText((it.range >= 0 ? '+' : '') +
+                   (it.range / Math.max(cor.distanceLy, 1e-9) * 100).toFixed(1) + '%',
+                   x + PW - 76, by);
+      ctx.fillStyle = it.holdable ? '#7dffb0' : '#ff8a76';
+      ctx.fillText(c2.hostile ? 'HOSTILE'
+                 : it.holdable ? (it.tearCost.toFixed(1) + ' t') : 'ANCHORED',
+                   x + PW - 12, by);
+      ctx.textAlign = 'left';
+      by += 17;
+    }
+
+    /* --- your lock ------------------------------------------------------ */
+    var ky = y + PH - (cor.huntedBy ? 40 : 18);
+    if (cor.cannotHold) {
+      ctx.fillStyle = '#ff8a76';
+      ctx.fillText('CANNOT HOLD — their anchor outmatches this hull', x + 12, ky);
+    } else if (cor.lockOn) {
+      ctx.fillStyle = '#ffd36b';
+      ctx.fillText('LOCK', x + 12, ky);
+      corridorBar(ctx, x + 46, ky - 7, PW - 120, 9, cor.lock, '#ffd36b');
+      ctx.textAlign = 'right';
+      ctx.fillText((cor.lock * 100).toFixed(0) + '%', x + PW - 12, ky);
+      ctx.textAlign = 'left';
+    } else {
+      ctx.fillStyle = '#4f6f9f';
+      ctx.fillText('SPACE holds an interdiction lock when alongside', x + 12, ky);
+    }
+
+    /* --- somebody's lock on you ----------------------------------------- */
+    if (cor.huntedBy) {
+      var hy2 = y + PH - 14;
+      if (cor.anchorRefusing) {
+        ctx.fillStyle = '#7dffb0';
+        ctx.fillText('ANCHOR HOLDING — they cannot complete a lock', x + 12, hy2);
+      } else {
+        ctx.fillStyle = '#ff6b5a';
+        ctx.fillText('THEIR LOCK', x + 12, hy2);
+        corridorBar(ctx, x + 76, hy2 - 7, PW - 150, 9, cor.huntLock, '#ff6b5a');
+        ctx.textAlign = 'right';
+        ctx.fillText(cor.anchorHolding
+          ? 'anchor ×' + cor.anchorFactor.toFixed(1)
+          : (cor.huntLock * 100).toFixed(0) + '%', x + PW - 12, hy2);
+        ctx.textAlign = 'left';
+      }
+    }
+    ctx.restore();
+  }
+
+  /* Named `corridorBar`, not `bar`. There is already a local `bar` nested
+   * inside another draw function in this file with a completely different
+   * signature, and a top-level one sharing its name is exactly the shadowing
+   * trap that once broke docking here — two functions, same name, later
+   * declaration silently wins, nothing warns. */
+  function corridorBar(ctx, x, y, w, h, v, color) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(120,160,220,0.3)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x, y, w, h);
+    ctx.fillStyle = color;
+    ctx.fillRect(x + 1, y + 1, Math.max(0, Math.min(1, v)) * (w - 2), h - 2);
+    ctx.restore();
+  }
+
+  function panel(ctx, x, y, w, h, solid) {
+    ctx.save();
+    ctx.fillStyle = solid ? 'rgba(5,9,16,0.975)' : 'rgba(8,14,24,0.78)';
+    ctx.strokeStyle = 'rgba(120,160,220,0.28)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    var r = 6;
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
+
+  function rows(ctx, x, y, list, labelColor, valueColor, width) {
+    ctx.save();
+    ctx.font = 'bold 12px ui-monospace, SFMono-Regular, Menlo, monospace';
+    for (var i = 0; i < list.length; i++) {
+      if (!list[i]) continue;
+      ctx.fillStyle = labelColor;
+      ctx.fillText(list[i][0], x, y + i * 15);
+      ctx.fillStyle = list[i][2] || valueColor;
+      ctx.textAlign = 'right';
+      ctx.fillText(list[i][1], x + width, y + i * 15);
+      ctx.textAlign = 'left';
+    }
+    ctx.restore();
+  }
+
+  function drawHUD(ctx, w, h) {
+    /* In the cockpit the instruments are physically in the cockpit — on the
+     * glass and in the dashboard panels — so the floating 2D panels stay
+     * out of the way entirely. Only things that are genuinely not part of
+     * the ship (warnings, messages, the help card, the trade console) are
+     * still drawn flat over the top. */
+    /* In transit the instruments have nothing to report. The cockpit
+     * already carries the drive readout on its glass; the exterior view
+     * gets the same information as a plain panel. */
+    if (G.hyper) {
+      if (G.viewMode !== 'cockpit') drawTransitPanel(ctx, w, h);
+      drawOverlays(ctx, w, h);
+      return;
+    }
+
+    /* One console, both views. The instruments belong to the ship, not to
+     * the camera, so they read the same whether you are sitting in the seat
+     * or watching from outside — and there is now exactly one place any
+     * number lives, instead of six floating panels competing for corners. */
+    drawConsole(ctx, w, h);
+    /* The off-screen pointer belongs to the world; with a mode up there is
+     * no world on screen for it to point into, and it lands on top of
+     * whatever the mode drew there. Warnings still get through, because a
+     * collision alarm you can miss by having a screen open is not an alarm. */
+    if (flying()) drawStationPointer(ctx, w, h);
+    drawOverlays(ctx, w, h);
+  }
+
+  /* Superseded by the console band; kept only so the old exterior layout is
+   * one call away if the flat console ever turns out to be a mistake. */
+  function drawLegacyHUD(ctx, w, h) {
+    var oe = (G.ship.landed || G.ship.docked) ? null : Sim.oscElements(G.ship, G.sys, G.t);
+    var dockedAt = G.ship.docked ? G.sys.byId[G.ship.docked] : null;
+    var dom = oe ? oe.body : (dockedAt || G.ship.landedOn || G.sys.root);
+
+    /* --- left: the system and the clock --- */
+    panel(ctx, 12, 12, 250, 178);
+    ctx.save();
+    ctx.font = 'bold 14px ui-monospace, monospace';
+    ctx.fillStyle = '#ffe6a8';
+    ctx.fillText(G.sys.name + ' (' + G.sys.root.type + ')', 24, 32);
+    ctx.restore();
+    rows(ctx, 24, 52, [
+      ['seed', '"' + G.seed + '"', '#9ff0dc'],
+      ['epoch', fmtEpoch(G.t)],
+      ['time warp', (G.paused ? 'PAUSED' : WARPS[G.warpIndex] + '×'),
+        G.paused ? '#ffb86b' : (G.physicsLimited ? '#ffb86b' : '#cfe0ff')],
+      ['worlds', String(G.sys.bodies.filter(function (b) { return b.kind === 'planet'; }).length) +
+        ' planets, ' + G.sys.bodies.filter(function (b) { return b.kind === 'moon'; }).length + ' moons'],
+      ['ports', String((G.sys.ports || []).length)],
+      ['factions', String((G.sys.factions || []).length)],
+      ['traffic', String((G.sys.traffic || []).length) + ' runs, ' +
+        String((G.sys.patrols || []).length) + ' patrols'],
+      ['jump range', fmtLy(Galaxy.maxRange(G.ship)) + '   (J)', '#7fd6c0'],
+      ['charted', Object.keys(G.visited).length + ' / ' + G.galaxy.stars.length + ' stars']
+    ], '#7e93b3', '#cfe0ff', 226);
+
+    if (G.physicsLimited) {
+      ctx.save();
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = '#ffb86b';
+      ctx.fillText('warp capped at ' + Math.round(G.warpCap) + '× by gravity', 24, 182);
+      ctx.restore();
+    }
+
+    /* --- right: flight data, quoted about whatever dominates --- */
+    var px = w - 262;
+    panel(ctx, px, 12, 250, oe ? 176 : 120);
+    ctx.save();
+    ctx.font = 'bold 14px ui-monospace, monospace';
+    ctx.fillStyle = '#cfe0ff';
+    ctx.fillText(dockedAt ? 'DOCKED' : G.ship.landed ? (G.ship.crashed ? 'WRECKED' : 'LANDED') : 'ORBIT', px + 12, 32);
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = '#7e93b3';
+    ctx.textAlign = 'right';
+    ctx.fillText('re: ' + dom.name, px + 238, 32);
+    ctx.textAlign = 'left';
+    ctx.restore();
+
+    if (oe) {
+      rows(ctx, px + 12, 52, [
+        ['altitude', fmtDist(oe.altitude)],
+        ['speed', fmtSpeed(oe.relSpeed)],
+        ['apoapsis', oe.closed ? fmtDist(oe.apoAlt) : 'escaping',
+          oe.closed ? '#cfe0ff' : '#ffb86b'],
+        ['periapsis', fmtDist(oe.periAlt),
+          oe.periAlt < 0 ? '#ff7a7a' : '#cfe0ff'],
+        ['eccentricity', oe.e.toFixed(4)],
+        ['inclination', (oe.inc / DEG).toFixed(2) + '°'],
+        ['period', oe.closed ? fmtTime(oe.period) : '—'],
+        ['gravity here', fmtSpeed(V.len(Sim.acceleration(G.ship.pos, G.sys, G.t))) + '²']
+      ], '#7e93b3', '#cfe0ff', 226);
+      if (oe.periAlt < 0 && oe.closed) {
+        ctx.save();
+        ctx.font = 'bold 11px ui-monospace, monospace';
+        ctx.fillStyle = '#ff7a7a';
+        ctx.fillText('periapsis is below the surface', px + 12, 180);
+        ctx.restore();
+      }
+    } else if (dockedAt) {
+      rows(ctx, px + 12, 52, [
+        ['station', dockedAt.name],
+        [dockedAt.underground ? 'under' : dockedAt.surface ? 'on' : 'orbiting', dockedAt.parentBody.name],
+        ['undock', 'press U']
+      ], '#7e93b3', '#7dfaff', 226);
+    } else {
+      rows(ctx, px + 12, 52, [
+        ['on', G.ship.landedOn ? G.ship.landedOn.name : '—'],
+        ['contact speed', fmtSpeed(G.ship.impactSpeed || 0),
+          G.ship.crashed ? '#ff7a7a' : '#7dffb0'],
+        /* An em dash rather than a number, because `dom` here is a chain of
+         * fallbacks ending in `G.sys.root` and every link in it can be
+         * absent — this is the branch that runs when the ship is neither in
+         * an orbit nor docked, which includes states nobody enumerated.
+         * A readout that says it does not know is a readout; a readout that
+         * throws takes the whole frame down and paints an error string over
+         * the cockpit. This is the exact shape of the reported
+         * "drawing deep space reads .mu off undefined". */
+        ['surface gravity', (dom && dom.mu > 0 && dom.radius > 0)
+          ? fmtSpeed(dom.mu / (dom.radius * dom.radius)) + '²' : '—']
+      ], '#7e93b3', '#cfe0ff', 226);
+    }
+
+    drawDockingPanel(ctx, w, h);
+    drawThrustRose(ctx, w, h);
+    drawStationPointer(ctx, w, h);
+    drawRadarCompass(ctx, w, h);
+    drawCargoPanel(ctx, w, h);
+    drawOverlays(ctx, w, h);
+  }
+
+  function drawOverlays(ctx, w, h) {
+    /* --- taking fire: the screen itself flinches --- */
+    var sinceHit = performance.now() - (G.ship.lastHitAt || -1e9);
+    if (sinceHit < 320) {
+      ctx.save();
+      var f = 1 - sinceHit / 320;
+      var vg = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.32,
+                                        w / 2, h / 2, Math.max(w, h) * 0.72);
+      vg.addColorStop(0, 'rgba(255,60,40,0)');
+      vg.addColorStop(1, 'rgba(255,60,40,' + (0.38 * f).toFixed(3) + ')');
+      ctx.fillStyle = vg;
+      ctx.fillRect(0, 0, w, h);
+      ctx.restore();
+    }
+
+    /* --- a wake chase: persistent, because it is a standing intention ---
+     * say() fades after nine seconds, and the whole point of laying in a
+     * course off a wake is that you then fly for a while before jumping. If
+     * the only record of who you are chasing and whether you can catch them
+     * disappeared while you were still climbing out of the gravity well, the
+     * player would have to re-scan the wake — which by then may have faded
+     * past the fidelity that told them in the first place. */
+    /* NOT during a jump. The corridor board occupies y 54 upward and this
+     * banner sits at 106, so the two would overlap — and inside the corridor
+     * the chase has stopped being an intention anyway: the contact list in
+     * front of you is the live version of the same information. Exactly the
+     * class of collision the tests are structurally blind to, which is why
+     * it is worth the extra clause rather than a look-and-see. */
+    if (G.wakeChase && flying() && !G.hyper) {
+      var wc = G.wakeChase;
+      var wcText = 'CHASING ' + wc.name +
+        (wc.starName ? '  →  ' + wc.starName : '') + '   ·   ' +
+        (wc.blind ? 'speed unknown'
+         : !wc.possible ? 'she lands first'
+         : 'intercept ' + (wc.at * 100).toFixed(0) + '%' +
+           (wc.estimated ? ' (est)' : ''));
+      ctx.save();
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      var wcW = ctx.measureText(wcText).width;
+      panel(ctx, (w - wcW) / 2 - 14, 106, wcW + 28, 26);
+      ctx.fillStyle = wc.blind ? '#ffb86b' : (wc.possible ? '#7dffb0' : '#ff8a76');
+      ctx.textAlign = 'center';
+      ctx.fillText(wcText, w / 2, 123);
+      ctx.textAlign = 'left';
+      ctx.restore();
+    }
+
+    /* --- a manoeuvre node: persistent, and it says where the keys are ------
+     * Astra, 2026-09-18: "it's not clear to the player that you have to hit
+     * SHIFT+F2". The keys are on the orbit map now, which has a slot on the
+     * bar; while a node exists this line says so from the cockpit. */
+    if (G.node && flying() && !G.hyper) {
+      var np = G.nodePlan;
+      var nbText = G.nodeBurn
+        ? 'NODE AUTOPILOT ' + (G.nodeBurn.phase === 'burn' ? 'BURNING' : 'ARMED') +
+          '   ·   any thrust key takes over'
+        : (!np || np.magnitude < 1e-9)
+          ? 'NODE PLACED   ·   F2 to shape the burn and fly it'
+          : 'NODE  ' + fmtSpeed(np.magnitude) + '   ·   F2, then \\ to fly it';
+      var nbY = G.wakeChase ? 138 : 106;
+      ctx.save();
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      var nbW = ctx.measureText(nbText).width;
+      panel(ctx, (w - nbW) / 2 - 14, nbY, nbW + 28, 26);
+      ctx.fillStyle = G.nodeBurn ? '#ffd36b' : '#7dfaff';
+      ctx.textAlign = 'center';
+      ctx.fillText(nbText, w / 2, nbY + 17);
+      ctx.textAlign = 'left';
+      ctx.restore();
+    }
+
+    /* --- collision warning: persistent, not on a timer like say() --- */
+    if (G.impactWarning) {
+      var iw = G.impactWarning;
+      ctx.save();
+      ctx.font = (iw.danger ? 'bold ' : '') + 'bold 14px ui-monospace, monospace';
+      var iwW = ctx.measureText(iw.text).width;
+      var flash = iw.danger ? (0.55 + 0.45 * Math.sin(performance.now() / 140)) : 1;
+      ctx.globalAlpha = 1;
+      panel(ctx, (w - iwW) / 2 - 16, 70, iwW + 32, 30);
+      ctx.globalAlpha = flash;
+      ctx.fillStyle = iw.danger ? '#ff5a5a' : '#ffb86b';
+      ctx.textAlign = 'center';
+      ctx.fillText(iw.text, w / 2, 90);
+      ctx.textAlign = 'left';
+      ctx.restore();
+    }
+
+    /* The contacts panel belongs to flying. On any full-screen mode it was
+     * painting straight over the middle of whatever you were reading — and
+     * it is not needed there, because the screens carry their own signals
+     * (the icon bar stays visible, and a demand still pins time warp). The
+     * one thing that must follow you into a menu is an actual hold-up, so
+     * an interdiction shows a one-line banner instead of the whole panel. */
+    if (flying()) {
+      drawEncounterPanel(ctx, w, h);
+    } else if (G.encounter && G.encounter.demand) {
+      ctx.save();
+      ctx.font = 'bold 13px ui-monospace, monospace';
+      ctx.fillStyle = '#ff7a6b';
+      ctx.textAlign = 'center';
+      ctx.fillText('INTERDICTION IN PROGRESS — F1', w / 2, 64);
+      ctx.textAlign = 'left';
+      ctx.restore();
+    }
+
+    /* Everything below here has to clear whatever the deck currently owns —
+     * the instrument band in flight, the whole screen on any other mode.
+     * Both of these used to be positioned from the bottom edge and both
+     * ended up drawn straight through the key bar. */
+    var top = deckTop(h);
+
+    /* --- transient message, sat just above the deck --- */
+    if (G.message && performance.now() < G.messageUntil) {
+      ctx.save();
+      ctx.font = 'bold 14px ui-monospace, monospace';
+      var tw = ctx.measureText(G.message).width;
+      panel(ctx, (w - tw) / 2 - 14, top - 66, tw + 28, 30, !flying());
+      ctx.fillStyle = '#e6f0ff';
+      ctx.fillText(G.message, (w - tw) / 2, top - 46);
+      ctx.restore();
+    }
+
+    /* --- footer hint ---
+     * Trimmed, too: the icon bar and the soft-key strips already say what
+     * most of these keys do, so this is down to the few that live nowhere
+     * else, plus the scale readout and the frame rate.
+     *
+     * On a full-screen mode there is no footer to put it in — the mode owns
+     * every pixel down to the bar, and writing over the bottom of whatever
+     * panel it drew there is how the last version of this went wrong. So it
+     * goes in the mode's own title bar instead. */
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(160,185,220,0.55)';
+    if (!flying()) {
+      /* modeFrame already drew the help and frame-rate line in its own
+       * title bar; there is nothing to add down here. */
+    } else {
+      /* Mouse aim no longer needs a held button — the buttons are the fire
+       * groups now — so the hint stopped being true the moment that
+       * changed. A control hint that describes the previous build is worse
+       * than none: it teaches the wrong gesture and then the player blames
+       * the ship. */
+      var hint = G.viewMode === 'cockpit'
+        ? 'H help   ·   ' + (G.freeLook ? 'FREE LOOK — release right Alt to fly'
+                             : G.mouseAim ? 'mouse aims · R-Alt looks · 1/2 fire · 4 launches'
+                                          : 'drag to look') +
+          '   ·   wheel / +- zoom   ·   Esc menu   ·   Enter exterior   ·   '
+        : 'H help   ·   drag to orbit   ·   wheel / +- zoom   ·   Esc menu   ·   Enter cockpit   ·   ';
+      ctx.fillText(hint +
+                   (G.gridStep ? 'grid ring ' + fmtDist(G.gridStep) + '   ·   ' : '') +
+                   Math.round(G.fps) + ' fps', 14, top - 8);
+    }
+    ctx.restore();
+
+    if (G.showHelp) drawHelp(ctx, w, h);
+    if (G.market) drawMarket(ctx, w, h);
+    /* Last of all, and in this order: the menu covers the market, and the
+     * title screen covers everything including the menu. Both clear the
+     * hotspot list as they draw, so nothing behind them can be clicked. */
+    if (G.menu) drawPauseMenu(ctx, w, h);
+    if (G.title) drawTitleScreen(ctx, w, h);
+  }
+
+  function fmtLy(d) { return d.toFixed(2) + ' ly'; }
+
+  /* The exterior view's version of the transit readout. */
+  function drawTransitPanel(ctx, w, h) {
+    var hy = G.hyper;
+    var pw = 420, ph = 132;
+    var px = (w - pw) / 2, py = 76;
+    panel(ctx, px, py, pw, ph);
+    ctx.save();
+    ctx.font = 'bold 15px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText(hy.phase === 'charge' ? 'SLIPSPACE DRIVE — CHARGING'
+               : hy.phase === 'exit' ? 'EMERGENCE' : 'IN TRANSIT', px + 20, py + 28);
+    ctx.restore();
+    rows(ctx, px + 20, py + 52, [
+      ['from', hy.fromName],
+      ['to', hy.plan.to.name + '  (' + hy.plan.to.cls + ')', '#ffd36b'],
+      ['distance', fmtLy(hy.plan.distance)],
+      ['date', fmtEpoch(hy.clock), '#ffd36b']
+    ], '#7e93b3', '#cfe0ff', pw - 40);
+
+    var p = Math.min(1, hy.elapsed / hy.total);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(150,230,255,0.5)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(px + 20, py + ph - 18, pw - 40, 5);
+    ctx.fillStyle = 'rgba(180,240,255,0.85)';
+    ctx.fillRect(px + 20, py + ph - 18, (pw - 40) * p, 5);
+    ctx.restore();
+  }
+
+  /* The star map itself now lives in screens.js and is reached through the
+   * galaxy screen. */
+
+  /* Who is awake and what they want. Shown in both views, because being
+   * interdicted is not a thing you should be able to miss by happening to
+   * be looking at the orbit display. */
+  function drawEncounterPanel(ctx, w, h) {
+    var enc = G.encounter;
+    if (!enc || !enc.active.length) return;
+
+    var demand = enc.demand;
+    var lines = enc.active.map(function (spec) {
+      var st = spec.live;
+      var rng = st ? V.dist(st.pos, G.ship.pos) : 0;
+      var what = spec.mode === 'attack' ? 'ATTACKING'
+        : spec.kind === 'trader' ? 'fleeing'
+        : spec.kind === 'pirate'
+        ? (spec.mode === 'breakoff' ? 'breaking off' : spec.mode === 'demand' ? 'HOLDING YOU UP' : 'closing')
+        : spec.kind === 'police' ? 'inspecting' : 'escorting';
+      return [spec.name + '  (' + spec.className + ')', fmtDist(rng) + '  ' + what,
+              spec.kind === 'pirate' ? '#ff8a7a' : '#7dffb0'];
+    });
+
+    var ph = 44 + lines.length * 15 + (demand ? 52 : 0);
+    var px = w / 2 - 190, py = 112;
+    panel(ctx, px, py, 380, ph);
+
+    ctx.save();
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = demand ? '#ff7a6b' : '#7dfaff';
+    ctx.fillText(demand ? 'INTERDICTION' : 'CONTACTS', px + 14, py + 24);
+    ctx.restore();
+    rows(ctx, px + 14, py + 44, lines, '#a9bcd6', '#cfe0ff', 352);
+
+    if (!demand) return;
+
+    var d = Sim.pirateDemand(demand, G.ship, Eco);
+    var dy = py + 44 + lines.length * 15 + 8;
+    ctx.save();
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#ffb86b';
+    var text = d.type === 'cargo'
+      ? demand.name + ' demands ' + d.tonnes + 't of ' + d.name
+      : demand.name + ' demands ' + fmtCredits(d.credits);
+    ctx.fillText(text, px + 14, dy + 12);
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(200,220,245,0.8)';
+    ctx.fillText('C to hand it over   ·   or outrun them  (' +
+                 (Sim.cargoMass(G.ship) > G.ship.cargoCap * 0.5
+                   ? 'you are heavy — they are faster' : 'you are light — you are faster') + ')',
+                 px + 14, dy + 30);
+    ctx.restore();
+  }
+
+  /* Cargo, fuel and money, in the exterior view. In the cockpit this same
+   * information is on the centre dashboard panel instead. */
+  function drawCargoPanel(ctx, w, h) {
+    var s = G.ship;
+    var cargo = Sim.cargoMass(s);
+    var ids = Object.keys(s.cargo).filter(function (c) { return s.cargo[c] > 0; });
+    var lines = Math.min(ids.length, 5);
+    var ph = 104 + lines * 15;
+    var px = 12, py = h - 152 - ph - 10;
+    panel(ctx, px, py, 312, ph);
+
+    ctx.save();
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#ffe6a8';
+    ctx.fillText(fmtCredits(s.credits), px + 12, py + 22);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7e93b3';
+    ctx.textAlign = 'right';
+    ctx.fillText('HOLD ' + cargo.toFixed(0) + '/' + s.cargoCap + ' t', px + 300, py + 22);
+    ctx.textAlign = 'left';
+    ctx.restore();
+
+    /* Jump fuel gets the bar, because it is the one that is a decision.
+     * The thruster tank gets a line, in hours rather than tonnes, because
+     * the only question anyone asks of it is whether there is enough left
+     * to finish the manoeuvre. */
+    ctx.save();
+    ctx.fillStyle = 'rgba(120,160,220,0.20)';
+    ctx.fillRect(px + 12, py + 32, 288, 8);
+    var frac = s.fuel / s.fuelCap;
+    ctx.fillStyle = frac < 0.2 ? '#ff7a7a' : '#7dfaff';
+    ctx.fillRect(px + 12, py + 32, 288 * Math.max(0, frac), 8);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#9fb6d4';
+    ctx.fillText('jump fuel ' + s.fuel.toFixed(1) + ' t   ·   reach ' +
+                 fmtLy(Galaxy.maxRange(s)) +
+                 '   ·   accel ' + (s.maxAccel * 1000).toFixed(2) + ' m/s²',
+                 px + 12, py + 54);
+    var endur = Sim.thrusterEndurance(s);
+    ctx.fillStyle = endur < 1800 ? '#ffb86b' : 'rgba(140,165,200,0.7)';
+    ctx.fillText('thrusters ' + s.thrusterFuel.toFixed(1) + ' t  (' + fmtTime(endur) +
+                 ' of burn, refilled free on docking)', px + 12, py + 68);
+    ctx.restore();
+
+    if (!ids.length) {
+      ctx.save();
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(140,165,200,0.6)';
+      ctx.fillText('hold empty  —  dock at a port and trade on its channel, F4', px + 12, py + 90);
+      ctx.restore();
+      return;
+    }
+    ids.sort(function (a, b) { return s.cargo[b] - s.cargo[a]; });
+    var rowsList = [];
+    for (var i = 0; i < lines; i++) {
+      rowsList.push([Eco.BY_ID[ids[i]].name, s.cargo[ids[i]].toFixed(0) + ' t',
+                     ids[i] === 'waste' ? '#ffb86b' : '#cfe0ff']);
+    }
+    rows(ctx, px + 12, py + 90, rowsList, '#7e93b3', '#cfe0ff', 288);
+  }
+
+  /* ---- the trade console -----------------------------------------------
+   * Deliberately a keyboard instrument rather than a mouse one: everything
+   * else in this game is flown from the keyboard, and a menu you have to
+   * reach for the mouse to use breaks the seat you are sitting in.
+   *
+   * The two columns that matter are BUY and SELL, and they are different
+   * numbers — a spread, like any real market. The rightmost column is the
+   * one that turns this from a list into a decision: how full the port's
+   * warehouse is, which is what is setting the price. */
+  /* The two colours the market screen judges a price in. Green is the
+   * screen's existing "this is good news" green, so the market does not
+   * introduce a second one; red is the supply bar's red, for the same
+   * reason. Named because they are used in four places in one function and
+   * a fifth hex would be a fifth opinion about what red is. */
+  var MARK_GOOD = '#7dffb0', MARK_BAD = '#ff7a7a';
+
+  /* HOW GREEN, not whether. Astra: "make it more green the better the deal
+   * is, and less green if it's marginal." Eco.priceMark hands back a signed
+   * strength rather than a verdict, and the row is mixed that far toward
+   * the colour — so a bargain in the best five per cent of prices in the
+   * galaxy arrives at full green and a row that only just cleared the
+   * quartile is barely tinted.
+   *
+   * The mix starts at 0.38 rather than at 0, because a strength of nearly
+   * zero mixed by nearly zero is the uncoloured row again: the bottom of
+   * the ramp has to be visible or the threshold does no work. What varies
+   * across the rest is how loud it is. */
+  var MARK_FLOOR = 0.38;
+
+  function mixHex(from, to, f) {
+    var a = parseInt(from.slice(1), 16), b = parseInt(to.slice(1), 16);
+    var r = Math.round(((a >> 16) & 255) + (((b >> 16) & 255) - ((a >> 16) & 255)) * f);
+    var g = Math.round(((a >> 8) & 255) + (((b >> 8) & 255) - ((a >> 8) & 255)) * f);
+    var c = Math.round((a & 255) + ((b & 255) - (a & 255)) * f);
+    return '#' + ((1 << 24) + (r << 16) + (g << 8) + c).toString(16).slice(1);
+  }
+
+  function markColour(neutral, strength) {
+    if (!strength) return neutral;
+    return mixHex(neutral, strength > 0 ? MARK_GOOD : MARK_BAD,
+                  MARK_FLOOR + (1 - MARK_FLOOR) * Math.min(1, Math.abs(strength)));
+  }
+
+  function drawMarket(ctx, w, h) {
+    var m = G.market;
+    var port = m.port;
+    var list = marketRows();
+    if (m.sel >= list.length) m.sel = Math.max(0, list.length - 1);
+
+    var pw = 720, ph = 136 + list.length * 18 + 66;
+    ph = Math.min(ph, h - 40);
+    var px = (w - pw) / 2, py = (h - ph) / 2;
+    panel(ctx, px, py, pw, ph, true);
+
+    ctx.save();
+    ctx.font = 'bold 15px ui-monospace, monospace';
+    ctx.fillStyle = '#ffe6a8';
+    ctx.fillText(port.name, px + 20, py + 30);
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    /* CLIPPED TO THE ROOM THE OTHER HALF LEAVES. This line is left-aligned
+     * and the hold-and-fuel line is right-aligned on the same baseline, and
+     * on a 720-wide panel with a long body name they met in the middle and
+     * printed over one another. Same fault the menu rows had: two strings
+     * sharing a row, neither of them asking how much of it was left. */
+    var subLine = (port.underground ? 'Underground bay'
+                   : port.surface ? 'Surface starport' : port.market.roleName) +
+                  '  ·  ' + port.parentBody.name +
+                  '  ·  development ' + Math.round(port.market.dev * 100) + '%';
+    var rightLine = 'hold ' + Sim.cargoMass(G.ship).toFixed(0) + '/' + G.ship.cargoCap +
+                    ' t  ·  fuel ' + G.ship.fuel.toFixed(1) + '/' + G.ship.fuelCap +
+                    ' t  ·  reach ' + fmtLy(Galaxy.maxRange(G.ship));
+    ctx.fillText(subLine, px + 20, py + 48);
+    /* WHAT THE SKY IS DOING, read off the same field the clouds are drawn
+     * from — so the overcast a trader complains about is the bank you
+     * flew down through. Orbital clamps are in nobody's air and say
+     * nothing; see Weather.hasWeather. */
+    var wx = Weather && Weather.hasWeather(port) ? Weather.report(port, G.sys, G.t) : null;
+    if (wx && !wx.airless) {
+      ctx.fillStyle = wx.storm > 0.45 ? '#ffb86b'
+                    : wx.storm > 0.12 ? '#ffe6a8' : '#8fb4d6';
+      /* Clipped to what the ship's own readout leaves. A quiet day is
+       * thirty characters and a bad one is seventy, and the row has to
+       * hold both without either of them printing over the other. */
+      var wRoom = (pw - 40) - ctx.measureText(rightLine).width - 26;
+      ctx.fillText(clipText(Weather.describe(wx),
+                            Math.max(6, Math.floor(wRoom / 7.22))),
+                   px + 20, py + 66);
+    }
+    ctx.fillStyle = '#ffe6a8';
+    ctx.textAlign = 'right';
+    ctx.font = 'bold 14px ui-monospace, monospace';
+    ctx.fillText(fmtCredits(G.ship.credits), px + pw - 20, py + 30);
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = '#9fb6d4';
+    ctx.fillText(rightLine, px + pw - 20, py + 66);
+    ctx.textAlign = 'left';
+
+    var hy = py + 92;
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7e93b3';
+    ctx.fillText('COMMODITY', px + 44, hy);
+    /* What the colours mean, once, where the columns they describe are —
+     * a screen that paints half its rows and never says why is a screen
+     * the player has to be told about out of band. */
+    var legendX = px + 44 + ctx.measureText('COMMODITY').width + 52;
+    ctx.save();
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = MARK_GOOD;
+    ctx.fillText('worth doing here', legendX, hy);
+    ctx.restore();
+    ctx.textAlign = 'right';
+    ctx.fillText('BUY', px + 330, hy);
+    ctx.fillText('SELL', px + 420, hy);
+    ctx.fillText('IN HOLD', px + 510, hy);
+    ctx.fillText('IN STOCK', px + 610, hy);
+    ctx.textAlign = 'left';
+    ctx.fillText('SUPPLY', px + 626, hy);
+    ctx.restore();
+
+    for (var i = 0; i < list.length; i++) {
+      var r = list[i];
+      var y = hy + 20 + i * 18;
+      if (y > py + ph - 60) break;
+      var sel = (i === m.sel);
+      var held = heldTonnes(r.id);
+
+      if (sel) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(125,250,255,0.10)';
+        ctx.fillRect(px + 14, y - 12, pw - 28, 17);
+        ctx.fillStyle = '#7dfaff';
+        ctx.font = 'bold 12px ui-monospace, monospace';
+        ctx.fillText('▶', px + 22, y);
+        ctx.restore();
+      }
+
+      ctx.save();
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      var isWaste = r.id === 'waste';
+      /* WHETHER THIS ROW IS WORTH ACTING ON, against the commodity's base
+       * price rather than against this port's own idea of itself. The
+       * thresholds and the reasoning live in Eco.priceMark. */
+      var mk = Eco.priceMark(r);
+      ctx.fillStyle = isWaste ? '#ffb86b'
+                    : markColour(held > 0 ? '#e6f0ff' : '#a9bcd6', mk.row);
+      ctx.fillText(r.name, px + 44, y);
+      if (isWaste) {
+        ctx.fillStyle = 'rgba(255,184,107,0.65)';
+        ctx.font = 'bold 10px ui-monospace, monospace';
+        ctx.fillText(r.sink ? '  (accepts for disposal)' : '  (pays you to haul it)',
+                     px + 44 + ctx.measureText(r.name).width + 34, y);
+        ctx.font = 'bold 12px ui-monospace, monospace';
+      }
+
+      ctx.textAlign = 'right';
+      /* A CHEAP ASK IS GREEN AND A DEAR BID IS GREEN, which is the same
+       * rule stated twice — green is the column saying "do it here".
+       * Waste keeps its own signs: a negative ask credits you and a
+       * negative bid charges you, and those already read correctly. */
+      ctx.fillStyle = r.buy === null ? '#4c5c72'
+                    : r.buy < 0 ? '#7dffb0'
+                    : markColour('#cfe0ff', mk.buy);
+      ctx.fillText(r.buy === null ? '—' : fmtCredits(r.buy), px + 330, y);
+      ctx.fillStyle = r.sell === null ? '#4c5c72'
+                    : r.sell < 0 ? '#ffb86b'
+                    : markColour('#cfe0ff', mk.sell);
+      ctx.fillText(r.sell === null ? '—' : fmtCredits(r.sell), px + 420, y);
+      ctx.fillStyle = held > 0 ? '#ffe6a8' : '#4c5c72';
+      ctx.fillText(held > 0 ? held.toFixed(0) + ' t' : '—', px + 510, y);
+      ctx.fillStyle = '#a9bcd6';
+      ctx.fillText(r.tradeable ? Math.round(r.stock) + ' t' : '—', px + 610, y);
+      ctx.textAlign = 'left';
+
+      // Supply bar: the actual cause of the price in the columns to its left.
+      if (r.tradeable && r.cap > 0) {
+        ctx.fillStyle = 'rgba(120,160,220,0.18)';
+        ctx.fillRect(px + 626, y - 8, 72, 7);
+        ctx.fillStyle = r.fill > 0.66 ? '#7dffb0' : r.fill > 0.3 ? '#ffd36b' : '#ff7a7a';
+        ctx.fillRect(px + 626, y - 8, 72 * r.fill, 7);
+      }
+      ctx.restore();
+    }
+
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(160,185,220,0.7)';
+    ctx.fillText('↑↓ select   ·   → buy 1t   ·   ← sell 1t   ·   hold Shift for 10t   ·   ' +
+                 'Home buy max   ·   End sell all   ·   F fill tank   ·   U undock   ·   Esc or M close',
+                 px + 20, py + ph - 34);
+    if (G.ledgerLog.length) {
+      ctx.fillStyle = '#7fd6c0';
+      ctx.fillText(G.ledgerLog[0].text, px + 20, py + ph - 16);
+    }
+    ctx.restore();
+  }
+
+  /* The thrust rose: six arrows, each pointing the way that burn pushes you.
+   * Arrows rather than words, and orbital-frame names rather than screen
+   * directions, because "prograde" is true from any camera angle. */
+  function drawThrustRose(ctx, w, h) {
+    var cx = 78, cy = h - 88, R = 40;
+    panel(ctx, 12, h - 152, 312, 128);
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(120,160,220,0.25)';
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, K.TAU); ctx.stroke();
+    ctx.restore();
+
+    var a = G.activeThrust || {};
+    var dirs = [
+      { key: 'pro',    dx: 1,  dy: 0,  tag: 'PRO', hint: 'W' },
+      { key: 'ret',    dx: -1, dy: 0,  tag: 'RET', hint: 'S' },
+      { key: 'rout',   dx: 0,  dy: -1, tag: 'R+',  hint: 'D' },
+      { key: 'rin',    dx: 0,  dy: 1,  tag: 'R-',  hint: 'A' },
+      { key: 'nplus',  dx: 0.72, dy: -0.72, tag: 'N+', hint: 'R' },
+      { key: 'nminus', dx: -0.72, dy: 0.72, tag: 'N-', hint: 'F' }
+    ];
+    for (var i = 0; i < dirs.length; i++) {
+      var d = dirs[i];
+      var on = !!a[d.key];
+      Render.drawArrow(ctx, cx + d.dx * 12, cy + d.dy * 12, d.dx, d.dy,
+                       R - 14, on ? '#7dfaff' : 'rgba(140,170,210,0.42)',
+                       on ? 2.4 : 1.3, on ? 8 : 6);
+      ctx.save();
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillStyle = on ? '#7dfaff' : 'rgba(150,175,210,0.6)';
+      var tw = ctx.measureText(d.tag).width;
+      ctx.fillText(d.tag, cx + d.dx * (R + 13) - tw / 2, cy + d.dy * (R + 13) + 3.5);
+      ctx.restore();
+    }
+
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7e93b3';
+    ctx.fillText('THRUST', cx - 20, h - 136);
+    ctx.restore();
+
+    // Throttle bar and drive numbers.
+    var bx = 152, by = h - 120;
+    rows(ctx, bx, by + 8, [
+      ['throttle', Math.round((G.ship.throttle || 0) * 100) + '%'],
+      ['accel', fmtSpeed(G.ship.maxAccel) + '²'],
+      ['fine', G.keys['shift'] ? 'on · 8%' : 'Shift']
+    ], '#7e93b3', '#cfe0ff', 148);
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(120,160,220,0.2)';
+    ctx.fillRect(bx, by + 58, 148, 6);
+    ctx.fillStyle = '#7dfaff';
+    ctx.fillRect(bx, by + 58, 148 * Math.min(1, G.ship.throttle || 0), 6);
+    ctx.restore();
+  }
+
+  /* Docking guidance: range, closing speed, and how those compare to the
+   * target's actual capture envelope — the numbers a manual approach is
+   * flown on. Shown under the main ORBIT panel whenever a target is set. */
+  function drawDockingPanel(ctx, w, h) {
+    if (!G.dockTarget || G.ship.docked || !G.dockStatus) return;
+    var ds = G.dockStatus;
+    var px = w - 262, py = 12 + (Sim.oscElements(G.ship, G.sys, G.t) ? 176 : 120) + 12;
+    panel(ctx, px, py, 250, 96);
+    ctx.save();
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = ds.inRange && ds.slowEnough ? '#7dffb0' : '#7dfaff';
+    ctx.fillText('DOCKING: ' + G.dockTarget.name, px + 12, py + 20);
+    ctx.restore();
+    /* The last row is the envelope you are flying to hit — unless the
+     * doors are shut to you, in which case hitting it achieves nothing and
+     * that is the fact worth the line. A perfect approach into a port that
+     * will not open is the exact situation that reads as a bug. */
+    var shut = Combat.dockRefusal(G, G.dockTarget);
+    rows(ctx, px + 12, py + 40, [
+      ['range', fmtDist(ds.range), ds.inRange ? '#7dffb0' : '#cfe0ff'],
+      ['closing', fmtSpeed(ds.closingSpeed) + (ds.closingSpeed > 0 ? ' (approach)' : ' (away)')],
+      ['rel. speed', fmtSpeed(ds.relSpeed), ds.slowEnough ? '#7dffb0' : '#ffb86b'],
+      shut ? ['DOORS SHUT', shut.short + ' — will not open', '#ff5a5a']
+           : ['capture at', '≤' + fmtDist(G.dockTarget.dockCaptureRadius) + ', ≤' + fmtSpeed(G.dockTarget.dockMaxSpeed)]
+    ], '#7e93b3', '#cfe0ff', 226);
+  }
+
+  var RADAR_RANGE = 0.75 * AU;
+
+  function bodyDotColor(kind) {
+    return kind === 'star' ? '#ffe6a8'
+         : kind === 'planet' ? '#7fb2ff'
+         : kind === 'moon' ? '#a9b7c6'
+         : kind === 'station' ? '#7dffb0'
+         : '#cfe0ff';
+  }
+
+  /* Radar + compass, both drawn in the ship's own body-frame axes (not the
+   * camera's) so they read the same in cockpit and orbit view, like a real
+   * aircraft's heading-up display. The radar plots everything within 0.75
+   * AU as a dot on a plan view (fwd = 12 o'clock, right = 3 o'clock), with
+   * a stem line above or below the dot showing whether the object sits
+   * above or below that plane. The compass is a separate, unlimited-range
+   * needle to whichever massive body the ship was last near/orbiting — it
+   * keeps pointing home long after that body has fallen outside the
+   * radar's own bubble. */
+  function drawRadarCompass(ctx, w, h) {
+    var cx = w - 124, cy = h - 140, R = 70;
+    panel(ctx, w - 236, h - 244, 224, 208);
+
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7e93b3';
+    ctx.fillText('RADAR · 0.75 AU · nose-relative', w - 224, h - 232);
+    ctx.restore();
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(120,160,220,0.30)';
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, K.TAU); ctx.stroke();
+    ctx.strokeStyle = 'rgba(120,160,220,0.16)';
+    ctx.beginPath(); ctx.arc(cx, cy, R * 0.5, 0, K.TAU); ctx.stroke();
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(160,190,230,0.7)';
+    // Tick labels sit just INSIDE the ring, not outside — the compass
+    // needle below needs the outer margin to itself, and the two would
+    // otherwise collide whenever the reference body happens to bear R/L/etc.
+    var ticks = [[0, 'FWD'], [Math.PI / 2, 'R'], [Math.PI, 'AFT'], [-Math.PI / 2, 'L']];
+    for (var ti = 0; ti < ticks.length; ti++) {
+      var tx = cx + Math.sin(ticks[ti][0]) * (R - 12);
+      var ty = cy - Math.cos(ticks[ti][0]) * (R - 12);
+      var tw = ctx.measureText(ticks[ti][1]).width;
+      ctx.fillText(ticks[ti][1], tx - tw / 2, ty + 3);
+    }
+    // Ship marker: always at center, nose "up" — this display is drawn in
+    // the ship's own frame, so the ship itself never moves on it.
+    ctx.fillStyle = '#cfe0ff';
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 6); ctx.lineTo(cx - 4, cy + 5); ctx.lineTo(cx + 4, cy + 5);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+
+    for (var i = 0; i < G.sys.bodies.length; i++) {
+      var b = G.sys.bodies[i];
+      if (G.ship.docked && b.id === G.ship.docked) continue; // nothing to say about the thing you're bolted to
+      var bpos = Sim.bodyPosition(b, G.sys, G.t);
+      var rel = Sim.relativeToShipFrame(G.ship, bpos);
+      if (rel.range > RADAR_RANGE || rel.range < 1e-6) continue;
+
+      var planarKm = Math.hypot(rel.fwd, rel.right);
+      var planarFrac = Math.min(1, planarKm / RADAR_RANGE);
+      var px = cx + Math.sin(rel.azimuth) * planarFrac * R;
+      var py = cy - Math.cos(rel.azimuth) * planarFrac * R;
+      var stem = Math.sin(rel.elevation) * R * 0.85; // + = above the plane, drawn upward
+      var col = bodyDotColor(b.kind);
+      var isRef = b === G.lastMassiveBody;
+
+      ctx.save();
+      ctx.strokeStyle = col; ctx.globalAlpha = 0.55; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px, py - stem); ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(px, py - stem, isRef ? 4 : 2.6, 0, K.TAU); ctx.fill();
+      if (isRef) {
+        ctx.strokeStyle = col; ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.arc(px, py - stem, 7, 0, K.TAU); ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Compass needle: unlimited range, always live, points to the last
+    // massive body the ship was locked to / orbiting.
+    if (G.lastMassiveBody) {
+      var homePos = Sim.bodyPosition(G.lastMassiveBody, G.sys, G.t);
+      var homeRel = Sim.relativeToShipFrame(G.ship, homePos);
+      if (homeRel.range > 1e-6) {
+        var nx = Math.sin(homeRel.azimuth), ny = -Math.cos(homeRel.azimuth);
+        Render.drawArrow(ctx, cx + nx * (R + 9), cy + ny * (R + 9), nx, ny, 15, '#ffd479', 2, 7);
+        ctx.save();
+        ctx.font = 'bold 11px ui-monospace, monospace';
+        ctx.fillStyle = '#ffd479';
+        var label = G.lastMassiveBody.name + '  ' + fmtDist(homeRel.range);
+        var lw = ctx.measureText(label).width;
+        ctx.fillText(label, cx - lw / 2, h - 16);
+        ctx.restore();
+      }
+    }
+  }
+
+  /* An arrow at the screen edge pointing to the home station whenever it is
+   * off screen, plus the range to it. Direction as a pointer, not a word. */
+  function drawStationPointer(ctx, w, h) {
+    if (!G.homeStation) return;
+    var pos = Sim.bodyPosition(G.homeStation, G.sys, G.t);
+    var sp = G.cam.project(pos);
+    var range = V.dist(pos, G.ship.pos);
+    /* The pointer lives in the part of the screen that shows the world, not
+     * the part that shows instruments. Measured against the full height it
+     * put the label inside the flight band, over the fuel gauges. */
+    var deck = deckTop(h);
+    var onScreen = sp && sp.x > 40 && sp.x < w - 40 && sp.y > 40 && sp.y < deck - 40;
+    if (onScreen) return;
+
+    // Point from screen centre toward the target in camera space.
+    var vec = V.sub(pos, G.cam.eye);
+    var sx = V.dot(vec, G.cam.r), sy = V.dot(vec, G.cam.u);
+    var l = Math.hypot(sx, sy) || 1;
+    var dx = sx / l, dy = -sy / l;
+    var cx = w / 2, cy = deck / 2, rad = Math.min(w, deck) * 0.34;
+
+    Render.drawArrow(ctx, cx + dx * rad, cy + dy * rad, dx, dy, 26, '#7fd6c0', 2, 9);
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#9ff0dc';
+    ctx.fillText(G.homeStation.name + '  ' + fmtDist(range),
+                 cx + dx * (rad + 34) - 40, cy + dy * (rad + 34) + 14);
+    ctx.restore();
+  }
+
+  /* ================= the pause menu, the slots and the options ===========
+   *
+   * Escape stops the world and puts a menu in front of it. Three things go
+   * through here — saving, loading, and settings — and they share one
+   * overlay because they share one property: none of them is a thing you do
+   * while flying, and all of them are things you should be able to find
+   * without knowing a key.
+   *
+   * The menu OWNS time while it is up: update() returns early, so nothing
+   * ages, no fuel burns and no pirate closes while you read a slot list.
+   * That is deliberately not the same as G.paused, which is the player's own
+   * pause and must still be theirs when the menu closes.
+   *
+   * It also owns the keyboard and the mouse: handleMenuKey takes every key
+   * before the flight controls see it, and the draw clears the hotspot list
+   * so the instrument bar behind the overlay cannot be clicked through.
+   */
+
+  function menuOpen() { return !!(G.menu || G.title); }
+
+  function openMenu() {
+    if (G.hyper) { say('Not mid-jump', 2); return; }
+    G.menu = { page: 'main', sel: 0, edit: null, note: null };
+    G.market = null;
+    HOOKS.sound('click');
+  }
+
+  function closeMenu() { G.menu = null; }
+
+  /* Quit does not close the window — there is no IPC to the shell to do it
+   * with, and a game that can only be left by killing it is worse than one
+   * that cannot be left at all. It goes back to a title screen instead,
+   * which is the piece the game did not have: somewhere to load a different
+   * career from, or start one on a new seed, without touching the URL. */
+  function quitToTitle() {
+    if (global.Save && G.ship && !G.ship.crashed) global.Save.store(G);
+    G.menu = null;
+    G.market = null;
+    G.title = { sel: 0, edit: null, note: 'Career committed to the autosave.' };
+  }
+
+  /* ---- and quitting for real ---------------------------------------------
+   * The comment on quitToTitle says quit "does not close the window — there
+   * is no IPC to the shell to do it with". That was true of the shell and
+   * never true of the platform: an Electron renderer calling window.close()
+   * closes its own BrowserWindow, and electron/main.js already quits the app
+   * when the last window goes. So this needs no preload and no IPC — which
+   * matters, because that file's stated reason for having neither is that
+   * handing the renderer Node would widen what a bug could reach, and this
+   * costs exactly nothing against it.
+   *
+   * A BROWSER WILL REFUSE, and has to say so rather than offering a dead
+   * button. window.close() only works on a window a script opened, so in an
+   * ordinary tab the call quietly does nothing at all — which is the failure
+   * mode this project keeps naming: indistinguishable from a bug. The
+   * refusal carries its reason, the way canFit's does.
+   *
+   * The desktop build is recognised by its ORIGIN. electron/main.js serves
+   * the game over `game://` precisely so it has a real one, and nothing else
+   * in the world does — a far more honest test than sniffing the user agent
+   * for the word Electron, which is a string anything may claim. */
+  function isDesktopShell() {
+    return typeof location !== 'undefined' && location.protocol === 'game:';
+  }
+
+  function quitGame() {
+    /* The autosave first, and in every case, including the one where the
+     * window then refuses to close. Someone who quits and finds themselves
+     * still looking at the title screen must not also have lost the hour.
+     * beforeunload commits too, but only if the close actually happens. */
+    if (global.Save && G.ship && !G.ship.crashed) global.Save.store(G);
+    storePrefs();
+
+    if (!isDesktopShell()) {
+      if (G.title) {
+        G.title.note = 'A browser will not let a page close its own tab — ' +
+                       'close it yourself. Your career is saved.';
+      }
+      return;
+    }
+    if (G.title) G.title.note = 'Closing…';
+    try {
+      if (typeof window !== 'undefined' && window.close) window.close();
+    } catch (e) {
+      if (G.title) G.title.note = 'The window refused to close.';
+    }
+  }
+
+  function menuItems() {
+    return [
+      { label: 'Resume', hint: 'back to the ship', run: closeMenu },
+      { label: 'Save game', hint: 'write a career to one of six slots',
+        run: function () { G.menu.page = 'save'; G.menu.sel = 0; } },
+      { label: 'Load game', hint: 'pick up a saved career',
+        run: function () { G.menu.page = 'load'; G.menu.sel = 0; } },
+      { label: 'Options', hint: 'sound, display, flight, keys',
+        run: function () { G.menu.page = 'options'; G.menu.sel = firstOption(); } },
+      { label: 'Quit to main menu', hint: 'commits the autosave first', run: quitToTitle }
+    ];
+  }
+
+  function titleItems() {
+    return [
+      { label: 'Resume career', hint: currentCareerLine(),
+        run: function () { G.title = null; } },
+      { label: 'Load game', hint: 'a slot from any galaxy',
+        run: function () { G.title = null; G.menu = { page: 'load', sel: 0, edit: null, note: null, fromTitle: true }; } },
+      { label: 'New career', hint: 'a seed is a universe',
+        run: beginSeedEntry },
+      { label: 'Options', hint: 'sound, display, flight, keys',
+        run: function () { G.title = null; G.menu = { page: 'options', sel: firstOption(), edit: null, note: null, fromTitle: true }; } },
+      /* Last, and set apart by its hint rather than by a separator: it is the
+       * only item here that does not come back. The hint tells the truth
+       * about which build you are in before you press it, so nobody clicks a
+       * button in a browser tab expecting the window to go away. */
+      { label: 'Quit',
+        hint: isDesktopShell() ? 'close the window — the autosave is committed first'
+                               : 'a browser tab cannot close itself',
+        run: quitGame }
+    ];
+  }
+
+  /* THE SEED IS ON THIS LINE, and it is not decoration. It is the one
+   * thing that makes a report reproducible — "it happened at Anchor Yard"
+   * is a story, "seed kawartha, Anchor Yard" is a test case — and until
+   * now it was visible only on the title screen, which you have to quit a
+   * career to see. One keystroke (Esc) now shows it, alongside where and
+   * when you are. */
+  function currentCareerLine() {
+    if (!G.ship) return 'no career loaded';
+    return 'seed "' + G.seed + '"  ·  ' + G.sys.name +
+           '  ·  ' + fmtCredits(G.ship.credits) + '  ·  ' + fmtEpoch(G.t);
+  }
+
+  /* ---- slots ------------------------------------------------------------ */
+
+  function slotList() {
+    return (global.Save && global.Save.slots) ? global.Save.slots() : [];
+  }
+
+  function slotLine(s) {
+    if (!s.used) return 'empty';
+    var m = s.meta || {};
+    return (m.system || '?') + '  ·  ' + fmtCredits(m.credits || 0) +
+           '  ·  ' + fmtEpoch(m.t || 0);
+  }
+
+  function slotWhen(s) {
+    if (!s.used || !s.meta || !s.meta.written) return '';
+    var d = new Date(s.meta.written);
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+           ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+
+  /* Saving asks for a name, because a list of six identical dates is not a
+   * list you can choose from. The default is where you are, which is the
+   * thing you would have typed anyway — Enter twice is the whole gesture. */
+  function beginSlotSave(n) {
+    if (!global.Save) { G.menu.note = 'No storage available in this browser.'; return; }
+    G.menu.edit = {
+      title: 'Name save ' + n,
+      value: global.Save.autoLabel(G),
+      max: 40,
+      commit: function (text) {
+        var ok = global.Save.writeSlot(n, G, text || global.Save.autoLabel(G));
+        G.menu.note = ok ? ('Saved to slot ' + n + '.')
+                         : ('Slot ' + n + ' could not be written — storage refused.');
+        if (ok) HOOKS.sound('click');
+      }
+    };
+  }
+
+  function loadSlot(n) {
+    var rec = global.Save && global.Save.readSlot(n);
+    if (!rec) { G.menu.note = 'That slot is empty.'; return; }
+    try {
+      /* A slot carries its own seed, and loading one is allowed to change
+       * which galaxy you are in — so the world is rebuilt from that seed
+       * first and the snapshot goes into the rebuilt world, exactly the
+       * order boot() uses. */
+      newGame(rec.data.seed);
+      global.Save.restore(G, rec.data, { enterSystem: enterSystem });
+      G.menu = null;
+      G.title = null;
+      G.panel = 0;
+      G.market = null;
+      say('Loaded "' + rec.label + '" — ' + fmtCredits(G.ship.credits) + ', ' +
+          fmtEpoch(G.t), 6);
+    } catch (err) {
+      console.error('slot load failed', err);
+      if (G.menu) G.menu.note = 'That save could not be read.';
+    }
+  }
+
+  function beginSeedEntry() {
+    G.title.edit = {
+      title: 'Seed for the new career',
+      value: G.seed,
+      max: 32,
+      commit: function (text) {
+        var seed = (text || '').trim() || G.seed;
+        if (global.Save) global.Save.clear(seed);   // NEW means new
+        newGame(seed);
+        G.title = null;
+        G.menu = null;
+        G.panel = 0;
+      }
+    };
+  }
+
+  /* ---- options ----------------------------------------------------------
+   * One table drives the drawing, the keyboard and the mouse, so a setting
+   * cannot appear on screen without being adjustable or be adjustable
+   * without appearing. Headings are rows too, and are skipped when the
+   * selection moves — that is what makes them free to add. */
+  function optionRows() {
+    return [
+      { kind: 'head', label: 'SOUND' },
+      { kind: 'range', label: 'Volume', key: '',
+        get: function () { return G.soundVolume; },
+        set: function (v) { G.soundVolume = clamp01(v); applyAudioPrefs(); },
+        step: 0.1,
+        show: function () { return Math.round(G.soundVolume * 100) + '%'; } },
+      { kind: 'toggle', label: 'Mute', key: '',
+        get: function () { return !!G.soundMuted; },
+        set: function (v) { G.soundMuted = !!v; applyAudioPrefs(); } },
+
+      /* The key hints are gone from four of these because the keys are gone.
+       * A hint naming a binding that no longer exists is worse than no hint:
+       * it sends the player to press something and quietly does nothing.
+       * Only V still has one, because V still has a key. */
+      { kind: 'head', label: 'DISPLAY' },
+      { kind: 'toggle', label: 'Orbit lines', key: '',
+        get: function () { return G.showOrbits; },
+        set: function (v) { G.showOrbits = v; } },
+      { kind: 'toggle', label: 'Trajectory prediction', key: 'V',
+        get: function () { return G.showPrediction; },
+        set: function (v) { G.showPrediction = v; } },
+      { kind: 'toggle', label: 'Ecliptic grid', key: '',
+        get: function () { return G.showGrid; },
+        set: function (v) { G.showGrid = v; } },
+      { kind: 'toggle', label: 'Traffic', key: '',
+        get: function () { return G.showTraffic; },
+        set: function (v) { G.showTraffic = v; } },
+      /* Render scale came here off the backtick, which was the least
+       * discoverable binding in the game — an unlabelled key next to Escape
+       * that quietly changed how sharp everything looked.
+       *
+       * A CHOICE, not an action: every other row in this list answers the
+       * arrow keys, and a row that only moves on Enter is a row the cursor
+       * walks over without appearing to do anything. The options suite
+       * checks exactly that — it drives Right down every row and asserts a
+       * setting changed — and it caught this the first time as row 8. */
+      { kind: 'choice', label: 'Render scale', key: '',
+        options: RENDER_SCALES.map(function (s) {
+          return Math.round(s * 100) + '%' + (s === 1 ? ' — native' : ' — softer, faster');
+        }),
+        get: function () {
+          var i = RENDER_SCALES.indexOf(G.renderScale);
+          return i < 0 ? RENDER_SCALES.indexOf(1) : i;
+        },
+        set: function (i) { setRenderScale(RENDER_SCALES[i]); } },
+      { kind: 'choice', label: 'Cockpit chrome', key: '',
+        options: ['Instrument band', 'Band stowed', 'Canopy only'],
+        get: function () { return G.cockpitChrome || 0; },
+        set: function (i) {
+          G.cockpitChrome = i;
+          G.showCockpitFrame = G.cockpitChrome !== 2;
+        } },
+
+      { kind: 'head', label: 'FLIGHT' },
+      { kind: 'toggle', label: 'Flight assist', key: 'Shift+/',
+        get: function () { return G.assist; },
+        set: function (v) { G.assist = v; } },
+      { kind: 'toggle', label: 'Vector assist (momentum follows the nose)',
+        key: 'Shift+]',
+        get: function () { return G.vector; },
+        set: function (v) { G.vector = v; G.hoverAlt = null; } },
+      { kind: 'choice', label: 'Control frame', key: '/',
+        options: ['Ship — nose and strafe', 'Orbital — prograde and radial'],
+        get: function () { return G.flightMode === 'orbital' ? 1 : 0; },
+        set: function (i) { G.flightMode = i ? 'orbital' : 'ship'; } },
+      { kind: 'toggle', label: 'Mouse aim', key: 'F9',
+        get: function () { return G.mouseAim; },
+        set: function (v) { G.mouseAim = !!v; } },
+      { kind: 'range', label: 'Aim sensitivity', key: '',
+        get: function () { return G.aimSens; },
+        set: function (v) { G.aimSens = Math.max(0.25, Math.min(3, v)); },
+        step: 0.25,
+        show: function () { return G.aimSens.toFixed(2) + '×'; } },
+
+      { kind: 'head', label: 'REFERENCE' },
+      { kind: 'action', label: 'Keybindings', key: 'H',
+        run: function () { G.showHelp = true; G.menu = null; } }
+    ];
+  }
+
+  function clamp01(v) { return Math.max(0, Math.min(1, v)); }
+
+  function firstOption() {
+    var rows = optionRows();
+    for (var i = 0; i < rows.length; i++) if (rows[i].kind !== 'head') return i;
+    return 0;
+  }
+
+  function moveOptionSel(dir) {
+    var rows = optionRows();
+    var i = G.menu.sel;
+    for (var guard = 0; guard < rows.length; guard++) {
+      i = (i + dir + rows.length) % rows.length;
+      if (rows[i].kind !== 'head') { G.menu.sel = i; return; }
+    }
+  }
+
+  /* Left/right on a row, and Enter as "the obvious direction" — right for a
+   * range, flip for a toggle, next for a choice.
+   *
+   * A toggle flips on left, right and Enter alike. It used to set absolutely
+   * — right meant on, left meant off — which is coherent on its own but not
+   * next to its neighbours: 'Control frame' is a two-option `choice`, drawn
+   * as one value in the same column as a toggle's ON/off, and it flips on
+   * either arrow because choices wrap. Two rows that look identical and
+   * answer the same key differently is the bug, whichever half you call
+   * correct. Toggles are two-option choices, so they wrap too. */
+  function nudgeOption(row, dir) {
+    if (!row) return;
+    if (row.kind === 'toggle') row.set(!row.get());
+    else if (row.kind === 'range') row.set(row.get() + (dir === 0 ? row.step : row.step * dir));
+    else if (row.kind === 'choice') {
+      var n = row.options.length;
+      row.set((row.get() + (dir === 0 ? 1 : dir) + n) % n);
+    } else if (row.kind === 'action' && (dir === 0 || dir > 0)) row.run();
+    storePrefs();
+  }
+
+  /* ---- preferences ------------------------------------------------------ */
+
+  function applyAudioPrefs() {
+    if (!global.Sound) return;
+    global.Sound.setVolume(G.soundMuted ? 0 : G.soundVolume);
+    global.Sound.mute(!!G.soundMuted);
+  }
+
+  function storePrefs() {
+    if (!global.Save || !global.Save.savePrefs) return;
+    global.Save.savePrefs({
+      soundVolume: G.soundVolume, soundMuted: !!G.soundMuted,
+      showOrbits: !!G.showOrbits, showPrediction: !!G.showPrediction,
+      showGrid: !!G.showGrid, showTraffic: !!G.showTraffic,
+      cockpitChrome: G.cockpitChrome || 0,
+      assist: !!G.assist, vector: !!G.vector, flightMode: G.flightMode,
+      mouseAim: !!G.mouseAim, aimSens: G.aimSens,
+      cockpitFov: G.cockpitFov
+    });
+  }
+
+  function applyPrefs() {
+    var p = (global.Save && global.Save.loadPrefs) ? global.Save.loadPrefs() : null;
+    if (p) {
+      if (typeof p.soundVolume === 'number') G.soundVolume = clamp01(p.soundVolume);
+      if (typeof p.soundMuted === 'boolean') G.soundMuted = p.soundMuted;
+      if (typeof p.showOrbits === 'boolean') G.showOrbits = p.showOrbits;
+      if (typeof p.showPrediction === 'boolean') G.showPrediction = p.showPrediction;
+      if (typeof p.showGrid === 'boolean') G.showGrid = p.showGrid;
+      if (typeof p.showTraffic === 'boolean') G.showTraffic = p.showTraffic;
+      if (typeof p.cockpitChrome === 'number') {
+        G.cockpitChrome = p.cockpitChrome % 3;
+        G.showCockpitFrame = G.cockpitChrome !== 2;
+      }
+      if (typeof p.assist === 'boolean') G.assist = p.assist;
+      if (typeof p.vector === 'boolean') G.vector = p.vector;
+      if (p.flightMode === 'ship' || p.flightMode === 'orbital') G.flightMode = p.flightMode;
+      if (typeof p.mouseAim === 'boolean') G.mouseAim = p.mouseAim;
+      if (typeof p.aimSens === 'number') G.aimSens = Math.max(0.25, Math.min(3, p.aimSens));
+      if (typeof p.cockpitFov === 'number' && p.cockpitFov > 0) {
+        G.cockpitFov = Math.max(FOV_MIN, Math.min(FOV_MAX, p.cockpitFov));
+      }
+    }
+    applyAudioPrefs();
+  }
+
+  /* ---- the keyboard ----------------------------------------------------- */
+
+  /* Text entry, shared by naming a slot and typing a seed. It is the only
+   * place in the game that wants characters rather than commands, so it sits
+   * in front of everything else while it is open. */
+  function handleEditKey(edit, e, cancel) {
+    var k = e.key;
+    if (k === 'Escape') { cancel(); return true; }
+    if (k === 'Enter') { var v = edit.value; cancel(); edit.commit(v); return true; }
+    if (k === 'Backspace') { edit.value = edit.value.slice(0, -1); return true; }
+    if (k.length === 1 && edit.value.length < edit.max) { edit.value += k; return true; }
+    return true;                       // swallow everything: this is a field
+  }
+
+  function handleMenuKey(e) {
+    e.preventDefault();
+    var m = G.menu;
+    if (m.edit) {
+      handleEditKey(m.edit, e, function () { m.edit = null; });
+      return;
+    }
+    var k = e.key.toLowerCase();
+    m.note = null;
+
+    if (k === 'escape') {
+      if (m.page === 'main') { closeMenu(); return; }
+      if (m.fromTitle) { G.menu = null; G.title = { sel: 0, edit: null, note: null }; return; }
+      m.page = 'main'; m.sel = 0; return;
+    }
+
+    if (m.page === 'options') {
+      var rows = optionRows();
+      if (k === 'arrowup') { moveOptionSel(-1); return; }
+      if (k === 'arrowdown') { moveOptionSel(1); return; }
+      if (k === 'arrowleft') { nudgeOption(rows[m.sel], -1); return; }
+      if (k === 'arrowright') { nudgeOption(rows[m.sel], 1); return; }
+      if (k === 'enter' || k === ' ') { nudgeOption(rows[m.sel], 0); return; }
+      return;
+    }
+
+    if (m.page === 'save' || m.page === 'load') {
+      var slots = slotList();
+      if (k === 'arrowup') { m.sel = (m.sel - 1 + slots.length) % slots.length; return; }
+      if (k === 'arrowdown') { m.sel = (m.sel + 1) % slots.length; return; }
+      if (k === 'enter') {
+        var n = slots[m.sel] ? slots[m.sel].n : 0;
+        if (!n) return;
+        if (m.page === 'save') beginSlotSave(n);
+        else loadSlot(n);
+        return;
+      }
+      /* Deleting a save is the one destructive thing on this screen, so it
+       * is on the destructive keys and nowhere near Enter. */
+      if ((k === 'delete' || k === 'backspace') && slots[m.sel] && slots[m.sel].used) {
+        global.Save.clearSlot(slots[m.sel].n);
+        m.note = 'Slot ' + slots[m.sel].n + ' cleared.';
+        return;
+      }
+      /* The digits pick a slot outright — six slots, six keys, no walking. */
+      if (/^[1-6]$/.test(k)) {
+        m.sel = parseInt(k, 10) - 1;
+        if (m.page === 'save') beginSlotSave(m.sel + 1); else loadSlot(m.sel + 1);
+        return;
+      }
+      return;
+    }
+
+    // main page
+    var items = menuItems();
+    if (k === 'arrowup') { m.sel = (m.sel - 1 + items.length) % items.length; return; }
+    if (k === 'arrowdown') { m.sel = (m.sel + 1) % items.length; return; }
+    if (k === 'enter' || k === ' ') { items[m.sel].run(); return; }
+  }
+
+  function handleTitleKey(e) {
+    e.preventDefault();
+    var t = G.title;
+    skipTitleFade();                 // and the key still does its job
+    if (t.edit) { handleEditKey(t.edit, e, function () { t.edit = null; }); return; }
+    var k = e.key.toLowerCase();
+    t.note = null;
+    var items = titleItems();
+    if (k === 'arrowup') { t.sel = (t.sel - 1 + items.length) % items.length; return; }
+    if (k === 'arrowdown') { t.sel = (t.sel + 1) % items.length; return; }
+    if (k === 'enter' || k === ' ') { items[t.sel].run(); return; }
+    /* Escape out of the title screen resumes: it is a menu, not a wall. */
+    if (k === 'escape') { G.title = null; return; }
+  }
+
+  /* ---- drawing ---------------------------------------------------------- */
+
+  var MENU_W = 520;
+
+  function menuShell(ctx, w, h, title, subtitle, rows) {
+    /* Everything behind the menu stops being clickable. Leaving the icon bar
+     * live under a modal is how you end up changing instrument page by
+     * clicking "Resume". */
+    G.hotspots = [];
+    ctx.save();
+    ctx.fillStyle = 'rgba(3,6,12,0.82)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+
+    var ph = Math.min(h - 60, 128 + rows * 30);
+    var px = (w - MENU_W) / 2, py = (h - ph) / 2;
+    panel(ctx, px, py, MENU_W, ph, true);
+
+    ctx.save();
+    ctx.font = 'bold 17px ui-monospace, monospace';
+    ctx.fillStyle = '#ffe6a8';
+    ctx.fillText(title, px + 24, py + 34);
+    if (subtitle) {
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = '#7fd6c0';
+      ctx.fillText(subtitle, px + 24, py + 54);
+    }
+    ctx.restore();
+    return { x: px, y: py, w: MENU_W, h: ph, top: py + 76 };
+  }
+
+  /* One row painter for every list on these screens, so the highlight, the
+   * click target and the hover all behave the same wherever you are. */
+  function menuRow(ctx, box, i, y, label, value, selected, onPick, dim) {
+    var x = box.x + 18, rw = box.w - 36;
+    if (selected) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(120,190,235,0.16)';
+      ctx.fillRect(x, y - 15, rw, 24);
+      ctx.strokeStyle = 'rgba(140,210,245,0.5)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y - 14.5, rw - 1, 23);
+      ctx.restore();
+    }
+    ctx.save();
+    ctx.font = 'bold 14px ui-monospace, monospace';
+    ctx.fillStyle = dim ? '#6d86a4' : (selected ? '#eaf4ff' : '#bcd2ea');
+    ctx.fillText(label, x + 12, y + 2);
+    if (value !== null && value !== undefined && value !== '') {
+      /* THE HINT STOPS WHERE THE LABEL STARTS. It is right-aligned, and a
+       * long one ran straight back under the label — "Resume career"
+       * printed on top of its own seed-and-credits line, which was the
+       * first thing on the title card and looked like a rendering fault.
+       * Clipped to the room actually left after the label and a gap. */
+      var labW = ctx.measureText(label).width;
+      var room = rw - 24 - labW - 18;
+      ctx.textAlign = 'right';
+      ctx.font = 'bold 13px ui-monospace, monospace';
+      ctx.fillStyle = dim ? '#5f7790' : (selected ? '#ffe6a8' : '#8fb4d6');
+      ctx.fillText(clipText(String(value), Math.max(0, Math.floor(room / 7.81))),
+                   x + rw - 12, y + 2);
+      ctx.textAlign = 'left';
+    }
+    ctx.restore();
+    if (onPick) hot(x, y - 15, rw, 24, onPick);
+  }
+
+  function drawEditField(ctx, box, edit) {
+    var x = box.x + 18, y = box.y + box.h - 62, rw = box.w - 36;
+    ctx.save();
+    ctx.fillStyle = 'rgba(10,18,28,0.95)';
+    ctx.fillRect(x, y, rw, 40);
+    ctx.strokeStyle = 'rgba(140,210,245,0.6)';
+    ctx.strokeRect(x + 0.5, y + 0.5, rw - 1, 39);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    ctx.fillText(edit.title + '   —   Enter to confirm, Esc to cancel', x + 10, y + 14);
+    ctx.font = 'bold 14px ui-monospace, monospace';
+    ctx.fillStyle = '#eaf4ff';
+    /* A caret that does not blink: this screen is drawn every frame whether
+     * anything changed or not, and a blinking one would be the only moving
+     * thing on a stopped world. */
+    ctx.fillText(edit.value + '_', x + 10, y + 31);
+    ctx.restore();
+  }
+
+  /* Above the key hint, not on top of it — the hint is always there and the
+   * note only sometimes, so the note is the one that has to move. */
+  function drawMenuNote(ctx, box, note) {
+    if (!note) return;
+    ctx.save();
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = '#ffd08a';
+    ctx.fillText(note, box.x + 30, box.y + box.h - 40);
+    ctx.restore();
+  }
+
+  function drawPauseMenu(ctx, w, h) {
+    var m = G.menu;
+    if (m.page === 'options') return drawOptionsPage(ctx, w, h);
+    if (m.page === 'save' || m.page === 'load') return drawSlotsPage(ctx, w, h);
+
+    var items = menuItems();
+    var box = menuShell(ctx, w, h, 'PAUSED', currentCareerLine(), items.length + 1);
+    for (var i = 0; i < items.length; i++) {
+      (function (i) {
+        menuRow(ctx, box, i, box.top + i * 30, items[i].label, items[i].hint, i === m.sel,
+                function () { m.sel = i; items[i].run(); });
+      })(i);
+    }
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(160,185,220,0.55)';
+    ctx.fillText('arrows move  ·  Enter chooses  ·  Esc resumes',
+                 box.x + 30, box.y + box.h - 20);
+    ctx.restore();
+  }
+
+  function drawSlotsPage(ctx, w, h) {
+    var m = G.menu;
+    var saving = m.page === 'save';
+    var slots = slotList();
+    var box = menuShell(ctx, w, h, saving ? 'SAVE GAME' : 'LOAD GAME',
+                        saving ? 'six slots, any galaxy — the autosave is separate and untouched'
+                               : 'a slot remembers its own seed, so loading can change galaxy',
+                        slots.length + 2);
+    for (var i = 0; i < slots.length; i++) {
+      (function (i) {
+        var s = slots[i];
+        var label = s.n + '.  ' + (s.used ? s.label : '—');
+        menuRow(ctx, box, i, box.top + i * 30, label,
+                s.used ? slotLine(s) : 'empty', i === m.sel,
+                function () {
+                  m.sel = i;
+                  if (saving) beginSlotSave(s.n); else loadSlot(s.n);
+                },
+                !s.used && !saving);
+      })(i);
+    }
+    /* The wall-clock date of the highlighted slot, which is what actually
+     * tells two similar careers apart — but only for the one you are on, so
+     * the list stays readable. */
+    var cur = slots[m.sel];
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(160,185,220,0.55)';
+    ctx.fillText((cur && cur.used ? 'written ' + slotWhen(cur) + '   ·   ' : '') +
+                 (saving ? '1-6 or Enter saves  ·  Del clears  ·  Esc back'
+                         : '1-6 or Enter loads  ·  Del clears  ·  Esc back'),
+                 box.x + 30, box.y + box.h - 20);
+    ctx.restore();
+    if (m.note) drawMenuNote(ctx, box, m.note);
+    if (m.edit) drawEditField(ctx, box, m.edit);
+  }
+
+  function drawOptionsPage(ctx, w, h) {
+    var m = G.menu;
+    var rows = optionRows();
+    var box = menuShell(ctx, w, h, 'OPTIONS',
+                        'settings follow you, not the career — they are not in the save',
+                        rows.length + 1);
+    for (var i = 0; i < rows.length; i++) {
+      var y = box.top + i * 26;
+      var r = rows[i];
+      if (r.kind === 'head') {
+        ctx.save();
+        ctx.font = 'bold 11px ui-monospace, monospace';
+        ctx.fillStyle = '#7fd6c0';
+        ctx.fillText(r.label, box.x + 30, y + 2);
+        ctx.restore();
+        continue;
+      }
+      (function (i, r, y) {
+        var val = r.kind === 'toggle' ? (r.get() ? 'ON' : 'off')
+                : r.kind === 'choice' ? r.options[r.get()]
+                : r.kind === 'range'  ? r.show()
+                : '›';
+        var label = r.label + (r.key ? '   [' + r.key + ']' : '');
+        menuRow(ctx, box, i, y, label, val, i === m.sel,
+                function () { m.sel = i; nudgeOption(r, 0); });
+      })(i, r, y);
+    }
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(160,185,220,0.55)';
+    ctx.fillText('up/down moves  ·  left/right adjusts  ·  Enter toggles  ·  Esc back',
+                 box.x + 30, box.y + box.h - 20);
+    ctx.restore();
+  }
+
+  /* ---- the title card ----------------------------------------------------
+   *
+   * Astra's design, and the one screen in the game that is allowed to be a
+   * picture rather than an instrument. The rose is drawn faint and large
+   * behind everything, the wordmark sits over it at full strength, and the
+   * tagline sits under that; the menu is below the lockup rather than on
+   * top of it.
+   *
+   * It fades in, in that order, and then it STAYS. Nothing here times out
+   * and nothing dims when you move the selection — you can sit on this
+   * screen, and the whole point of a title card is that somebody does.
+   */
+  var TITLE_BG = '#232973';          // the card's navy
+  var TITLE_ROSE_ALPHA = 0.46;       // "big faint rose behind everything", added not mixed
+  var TITLE_FADE = {                 // seconds: [start, length]
+    rose: [0.15, 1.5],
+    mark: [0.55, 1.2],
+    line: [1.35, 0.9],
+    menu: [0.85, 0.55]
+  };
+
+  function fadeAt(born, key) {
+    var f = TITLE_FADE[key];
+    var age = (performance.now() - born) / 1000;
+    if (age <= f[0]) return 0;
+    var u = Math.min(1, (age - f[0]) / f[1]);
+    return u * u * (3 - 2 * u);      // smoothstep, so nothing pops in
+  }
+
+  /* Touch anything and the card is simply there. The fade is for the
+   * person who has just launched the game, not for the person who has
+   * quit to the menu to load a save and knows exactly where it is. */
+  function skipTitleFade() {
+    if (G.title) G.title.born = performance.now() - 9000;
+  }
+
+  /* A FIXED STARFIELD, not the galaxy's. It is drawn from a constant seed
+   * so the title card looks the same every time it is opened — this is a
+   * printed thing, and a printed thing does not reshuffle itself. Built
+   * once and kept: five hundred stars is nothing to draw and a great deal
+   * to keep re-rolling. */
+  var titleStars = null;
+  function titleStarfield(w, h) {
+    if (titleStars && titleStars.w === w && titleStars.h === h) return titleStars.list;
+    var rng = new RNG('manifest-title-card');
+    var list = [];
+    for (var i = 0; i < 520; i++) {
+      list.push({
+        x: rng.next() * w, y: rng.next() * h,
+        r: 0.4 + rng.next() * rng.next() * 1.8,
+        a: 0.12 + rng.next() * 0.5,
+        /* Each one breathes on its own clock, slowly. A field that all
+         * pulses together is a field that is obviously a loop. */
+        ph: rng.next() * Math.PI * 2,
+        sp: 0.25 + rng.next() * 0.6
+      });
+    }
+    titleStars = { w: w, h: h, list: list };
+    return list;
+  }
+
+  function drawTitleScreen(ctx, w, h) {
+    var t = G.title;
+    /* Lazily, so every door into this screen gets the fade without having
+     * to remember to set it — and there are four of them. */
+    if (!t.born) t.born = performance.now();
+    var items = titleItems();
+
+    ctx.save();
+    ctx.fillStyle = TITLE_BG;
+    ctx.fillRect(0, 0, w, h);
+    var stars = titleStarfield(w, h);
+    var now = performance.now() / 1000;
+    for (var si = 0; si < stars.length; si++) {
+      var st = stars[si];
+      ctx.globalAlpha = st.a * (0.62 + 0.38 * Math.sin(now * st.sp + st.ph));
+      ctx.fillStyle = '#dbe6ff';
+      ctx.beginPath();
+      ctx.arc(st.x, st.y, st.r, 0, K.TAU);
+      ctx.fill();
+    }
+    ctx.restore();
+    G.hotspots = [];
+
+    /* ---- layout ----
+     * The menu is placed first, from the bottom, because it is the part
+     * with a hard minimum size; the lockup takes whatever is left, which
+     * is how this stays sane on a short window. */
+    var panelH = 74 + items.length * 32;
+    var px = (w - MENU_W) / 2;
+    var py = Math.min(h * 0.615, h - panelH - 26);
+    var lockH = Math.max(120, py - 26);
+
+    var roseR = Math.min(w * 0.275, lockH * 0.50);
+    var cx = w / 2, roseCy = 14 + lockH * 0.50;
+    var markW = Math.min(w * 0.60, roseR * 2.55);
+    var markH = markW / Logo.MARK_ASPECT;
+
+    var aRose = fadeAt(t.born, 'rose');
+    var aMark = fadeAt(t.born, 'mark');
+    var aLine = fadeAt(t.born, 'line');
+    var aMenu = fadeAt(t.born, 'menu');
+
+    if (aRose > 0) Logo.drawRose(ctx, cx, roseCy, roseR, TITLE_ROSE_ALPHA * aRose, true);
+
+    if (aMark > 0) {
+      ctx.save();
+      ctx.globalAlpha = aMark;
+      /* Three passes over one path. The shadow is what lifts the letters
+       * off the rose behind them — white on pale grey is the one place
+       * this lockup could go soft, and it is the reason the card's own
+       * version was hard to read. */
+      Logo.markPath(ctx, cx, roseCy, markW);
+      ctx.save();
+      ctx.shadowColor = 'rgba(6,9,40,0.85)';
+      ctx.shadowBlur = Math.max(6, markH * 0.13);
+      ctx.shadowOffsetY = Math.max(2, markH * 0.035);
+      ctx.fillStyle = Logo.INK.letter;
+      ctx.fill('evenodd');
+      ctx.restore();
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = Math.max(1.5, markH * 0.040);
+      ctx.strokeStyle = Logo.INK.halo;
+      ctx.stroke();
+      ctx.fillStyle = Logo.INK.letter;
+      ctx.fill('evenodd');
+      ctx.restore();
+    }
+
+    if (aLine > 0) {
+      ctx.save();
+      ctx.globalAlpha = aLine;
+      var lineSize = Math.max(12, Math.min(20, Math.round(markW * 0.030)));
+      ctx.font = 'bold ' + lineSize + 'px ui-monospace, monospace';
+      ctx.fillStyle = Logo.INK.gold;
+      ctx.textAlign = 'center';
+      /* Letter-spaced by hand rather than with the `letterSpacing`
+       * property, which not every canvas has. A tagline under a script
+       * logotype wants air; the same words set solid read as a caption. */
+      var lineY = roseCy + markH * 0.62 + lineSize * 2.0;
+      /* Both lines carry the same shadow the wordmark does, because both
+       * of them cross the rose's south point and gold on tan is no
+       * contrast at all. */
+      ctx.shadowColor = 'rgba(6,9,40,0.9)';
+      ctx.shadowBlur = 6;
+      ctx.shadowOffsetY = 1;
+      spacedText(ctx, 'Your own Manifest destiny awaits.', cx, lineY, lineSize * 0.14);
+      /* WHICH UNIVERSE, under the tagline rather than inside the menu.
+       * It was a caption on the old panel and it collided with the first
+       * row's own hint, which already names the seed — out here it reads
+       * as part of the card, which is what it is. */
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(200,218,250,0.74)';
+      spacedText(ctx, 'seed "' + G.seed + '"  ·  ' + G.galaxy.stars.length + ' stars',
+                 cx, lineY + lineSize * 1.9, 0.9);
+      ctx.textAlign = 'left';
+      ctx.restore();
+    }
+
+    /* THE MENU IS NEVER GATED BY THE FADE. It is drawn every frame, at
+     * whatever opacity the fade has reached — including none — so its rows
+     * are registered as hotspots and its keys work from the first frame.
+     * An entrance animation that you have to sit through before the game
+     * will take an instruction is not an entrance, it is a wait; and the
+     * first key you press finishes the fade anyway (see skipTitleFade). */
+    ctx.save();
+    ctx.globalAlpha = aMenu;
+    panel(ctx, px, py, MENU_W, panelH, true);
+
+    var box = { x: px, y: py, w: MENU_W, h: panelH, top: py + 30 };
+    for (var i = 0; i < items.length; i++) {
+      (function (i) {
+        menuRow(ctx, box, i, box.top + i * 32, items[i].label, items[i].hint, i === t.sel,
+                function () { t.sel = i; items[i].run(); });
+      })(i);
+    }
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(160,185,220,0.55)';
+    ctx.fillText('arrows move  ·  Enter chooses  ·  Esc resumes', px + 30, py + panelH - 18);
+    ctx.restore();
+    if (t.note) drawMenuNote(ctx, box, t.note);
+    if (t.edit) drawEditField(ctx, box, t.edit);
+    ctx.restore();
+  }
+
+  /* Draw a string with extra space between the letters, centred or left by
+   * the context's own textAlign. Measured per character, so it is right in
+   * a proportional font as well as a monospace one. */
+  function spacedText(ctx, str, x, y, gap) {
+    var total = 0, i;
+    for (i = 0; i < str.length; i++) total += ctx.measureText(str[i]).width + gap;
+    total -= gap;
+    var cursor = ctx.textAlign === 'center' ? x - total / 2
+               : ctx.textAlign === 'right' ? x - total : x;
+    var was = ctx.textAlign;
+    ctx.textAlign = 'left';
+    for (i = 0; i < str.length; i++) {
+      ctx.fillText(str[i], cursor, y);
+      cursor += ctx.measureText(str[i]).width + gap;
+    }
+    ctx.textAlign = was;
+  }
+
+  function drawHelp(ctx, w, h) {
+    var lines = [
+      ['GAME', ''],
+      ['Esc', 'pause menu — save, load, options, quit to the main menu'],
+      ['', 'and the main menu has Quit, which closes the window'],
+      ['P', 'pause the clock without leaving the cockpit'],
+      ['', ''],
+      ['VIEW', ''],
+      ['Enter', 'toggle cockpit view'],
+      ['drag (in the cockpit)', 'look around — your head, not the ship'],
+      ['Home', 'reset the view — centre your head, undo the zoom'],
+      ['drag (outside)', 'orbit the exterior camera'],
+      ['wheel / pinch', 'zoom — camera distance outside, canopy field of view in the seat'],
+      ['+ / -', 'the same zoom on the keyboard (nudges a manoeuvre node while one is up)'],
+      ['Tab / Shift+Tab', 'cycle camera focus through every body'],
+      ['C', 'track the ship'],
+      ['', ''],
+      ['SCREENS  (F1 flies; every other key takes the whole display)', ''],
+      ['F1', 'Main view — press again to flip cockpit / exterior chase camera'],
+      ['F2', 'Orbit map — the system from outside, orbit lines on, like at boot'],
+      ['F3', 'Local navigation — contacts, the lock, the scope, the autopilot'],
+      ['F4', 'Comms — everyone in range you could talk to'],
+      ['F5', 'Ship status and inventory — with a jettison control per cargo'],
+      ['F6', 'Galaxy map and course plotter'],
+      ['F7', 'Mission status'],
+      ['F8', 'Jump to hyperspace — engages the course F6 laid in'],
+      ['F9', 'Keyboard / mouse aim'],
+      ['F10', 'Manoeuvre planning'],
+      ['1…0', 'the same ten screens, for keyboards that argue about F-keys'],
+      ['Esc', 'back to the cockpit from any screen'],
+      ['click', 'the icon bar and everything on a screen is clickable'],
+      ['', ''],
+      ['NAVIGATION', ''],
+      ['[ and ]', 'step the lock through everything in the system'],
+      ['L', 'release the lock'],
+      ['T', 'assign the docking clamp to a locked station'],
+      ['J', 'slipspace chart'],
+      ['', ''],
+      ['SLIPSPACE WAKES  (red where a ship left, blue where one arrived)', ''],
+      ['', 'they hang outside the last planet, each on the bearing of'],
+      ['', 'wherever its ship was going — no scan key, the scanner reads'],
+      ['', 'whatever you fly close to, and reads it better the fresher it is'],
+      ['Shift+J', 'lay in a course after the wake the scanner can see,'],
+      ['', 'and say whether you could actually beat them there'],
+      ['', ''],
+      ['IN THE CORRIDOR  (only when there is traffic on the lane)', ''],
+      [', and .', 'throttle — a lever, not a tap. Match their speed to hold them'],
+      ['Space', 'hold an interdiction lock on whoever you are alongside'],
+      ['', ''],
+      ['FLIGHT  (burn directions are shown as arrows, lower left)', ''],
+      ['W / S', 'prograde / retrograde  —  raises or lowers the far side'],
+      ['D / A', 'radial out / in'],
+      ['R / F', 'normal + / −  —  changes inclination'],
+      ['Shift', 'hold for 8% fine thrust'],
+      ['X', 'cut thrust'],
+      ['', ''],
+      ['ATTITUDE  (where the nose points — independent of the burn above)', ''],
+      ['Arrow Up / Down', 'pitch'],
+      ['Arrow Left / Right', 'yaw'],
+      ['Q / E', 'roll'],
+      ['', ''],
+      ['COMBAT  (buy better at any shipyard — F5 while docked)', ''],
+      ['Space', 'fire group A down the nose  —  hold it'],
+      ['Shift+Space', 'fire group B  —  assign guns to it on F5, FIT'],
+      ['B', 'launch a missile at the locked ship  (respawns when crashed)'],
+      ['', 'with F9 mouse aim on: mouse 1 and 2 are the two groups,'],
+      ['', 'the middle button launches, and the nose follows the mouse'],
+      ['', 'a beam strips shields, a pulse opens hulls — carry both'],
+      ['', 'every shot heats your own hull; a bare one sheds 18/s'],
+      ['', 'the turret, once fitted, fires itself at hostiles'],
+      ['', 'shields soak hits and recharge when things go quiet'],
+      ['', 'hull repairs cost credits at the yard; at zero you lose'],
+      ['', 'the ship, the cargo and the fittings — never the career'],
+      ['', ''],
+      ['PIRACY  (F4, pick a ship, "Piracy…")', ''],
+      ['', 'demand cargo or credits; armed threats work, empty ones amuse'],
+      ['', 'a witness in range reports you at once. A victim takes ten'],
+      ['', 'seconds to raise the alarm — silence it first and no one knows'],
+      ['', 'wanted: police attack on sight and that faction refuses docking'],
+      ['', 'surface pads still take you; pay the bounty off elsewhere'],
+      ['', ''],
+      ['FLYING  (two frames, one set of keys)', ''],
+      ['/', 'switch between SHIP and ORBITAL frame'],
+      ['', 'SHIP:    W/S drive the nose, A/D strafe, R/F up and down'],
+      ['', 'ORBITAL: W/S prograde, A/D radial, R/F normal — for transfers'],
+      ['Shift + /', 'flight assist on/off'],
+      ['', 'assist spends spare thrust killing sideways drift relative to'],
+      ['', 'whatever you have LOCKED, so point at a berth and hold W.'],
+      ['', 'It needs a lock: against a planet it would fight your orbit'],
+      ['', 'and it only wakes inside 150 km — it is a docking aid, not a'],
+      ['', 'way to fly a transfer. Beyond that it says "standby"'],
+      ['Shift + ]', 'vector assist on/off'],
+      ['', 'the other one: it puts your MOMENTUM on the nose, so the ship'],
+      ['', 'flies where it points. No lock needed — it works against the'],
+      ['', 'body you are at, or against the air when you are in one.'],
+      ['', 'In atmosphere it becomes a hover: it holds your height and'],
+      ['', 'stops you sliding over the ground, so let go and it parks.'],
+      ['', 'It will spend the WHOLE thruster tank turning a big vector,'],
+      ['', 'so watch thrust against gravity on the SHIP page.'],
+      ['arrows / Q E', 'pitch and yaw  ·  roll'],
+      ['hold Shift', 'fine thrust, 8% — use it for the last few metres'],
+      ['', ''],
+      ['THE LAW  (F4 — police channels are marked * at the top of the list)', ''],
+      ['Enter', 'hail a police channel: what you owe, and your standing'],
+      ['Y', 'pay the quoted settlement — quoted first, never on one press'],
+      ['', 'a fugitive pays 1.2x; an ordinary bounty costs 1.6x in fees'],
+      ['', 'a quote lasts a minute, then hail again'],
+      ['', ''],
+      ['DOCKING', ''],
+      ['F4 then Enter', 'hail the selected port and ask for docking clearance'],
+      ['', 'every port expects to be asked — orbital docks and surface pads'],
+      ['', 'arriving unannounced is allowed, and is a fine: a strict system'],
+      ['', 'charges properly, a frontier one grumbles. Never quite free'],
+      ['', 'refused if you are wanted there, or the faction is hostile'],
+      ['', 'clearance lasts until you use it or leave the system'],
+      ['', 'open ground away from any pad needs no clearance at all —'],
+      ['', 'which is how a wanted pilot still gets down somewhere'],
+      ['U', 'undock'],
+      ['', 'docking also refills the thruster tank, free'],
+      ['', ''],
+      ['LANDING GEAR', ''],
+      ['Shift + G', 'raise / lower the gear'],
+      ['', 'a landing pad will not catch you with it up, and touching down'],
+      ['', 'on open ground without it writes the ship off at any speed'],
+      ['', 'down it costs a third again in drag — free in vacuum, not in air'],
+      ['', ''],
+      ['TRADE  (jump fuel is a commodity — reach depends where you buy it)', ''],
+      ['M', 'open the trade console while docked'],
+      ['↑ ↓ / ← →', 'select a commodity  ·  sell / buy one tonne'],
+      ['Shift + ← →', 'ten tonnes at a time'],
+      ['Home / End', 'buy as many as fit  /  sell the lot'],
+      ['F', 'fill the tank at the local hydrogen price'],
+      ['', ''],
+      ['THE HOLD  (F5)', ''],
+      ['↑ ↓', 'pick a cargo'],
+      ['Del', 'eject one tonne  ·  Shift+Del ejects the lot'],
+      ['Backspace', 'eject radioactive waste from anywhere (forfeits the fee)'],
+      ['', 'what you eject becomes a canister on your old trajectory —'],
+      ['', 'it falls, it can be scanned, and anyone quick can collect it'],
+      ['', 'it leaves 50 m astern and will not come back aboard until it'],
+      ['', 'has drifted clear, so ejecting cargo is a decision you keep'],
+      ['', 'fitted equipment is listed but has no eject control'],
+      ['', ''],
+      ['SALVAGE  (needs a cargo scoop fitted — any yard, 1,400 cr)', ''],
+      ['', 'a destroyed ship comes apart, and some of the pieces carry'],
+      ['', 'what was still in its hold. drift onto one gently — under'],
+      ['', '80 m and 20 m/s — and it goes aboard like any canister'],
+      ['', 'no scoop, no catching: dumped cargo just drifts past you'],
+      ['', 'on the radar: amber cross is worth taking, grey dot is scrap'],
+      ['', 'wreckage clears after about a minute and a half, or when you leave'],
+      ['', ''],
+      ['MANOEUVRE NODES  (on the F2 orbit map: plan a burn, see the orbit, fly it)', ''],
+      ['I', 'place a node at the next apoapsis  ·  again cycles pro/nor/rad/time'],
+      ['Shift + I', 'delete the node'],
+      ['− / =', 'adjust the selected axis   (Shift fine, Ctrl coarse)'],
+      [';  /  \'', 'snap the node to the next periapsis / apoapsis'],
+      ['\\', 'fly it — the autopilot aligns, waits, burns, and hands back'],
+      ['hold Left Alt', 'the mouse becomes a cursor: drag the coloured handles'],
+      ['', 'the burn is planned as an impulse and flown for real, so the'],
+      ['', 'engine lights at T minus half the burn time, not at the node'],
+      ['', ''],
+      ['SLIPSPACE', ''],
+      ['J or F6', 'open the star chart'],
+      ['↑ ↓ / Enter', 'pick a destination  /  lay in the course'],
+      ['F8', 'engage the drive on the course you laid in'],
+      ['', 'range comes out of the same tank — a full hold shortens your reach'],
+      ['', 'days pass in transit, and the markets move while you are gone'],
+      ['', ''],
+      ['OTHER SHIPS', ''],
+      ['freighters / shuttles', 'run scheduled cargo between ports'],
+      ['interceptors', 'faction police — pirates will not work near them'],
+      ['pirates', 'red diamond on radar; they interdict, they do not shoot'],
+      ['C', 'hand over what a pirate demands  (otherwise outrun them)'],
+      ['', 'a full hold halves your acceleration — being rich is what makes you catchable'],
+      ['', ''],
+      ['RADAR / COMPASS  (lower right — ship-nose-relative, not camera-relative)', ''],
+      ['radar dots', 'everything within 0.75 AU  —  stem shows above/below'],
+      ['yellow needle', 'bearing to the last massive body you were near/orbiting'],
+      ['', ''],
+      ['TIME', ''],
+      [', / .', 'time warp down / up'],
+      ['P', 'pause'],
+      ['', ''],
+      ['VIEW', ''],
+      ['V', 'predicted trajectory'],
+      ['Shift+T', 'match orbit with the lock (kill relative velocity)'],
+      ['Shift+L', 'follow the lock and hold station off it'],
+      ['F11', 'full screen (in the desktop build)'],
+      ['click a panel', 'change what that screen shows'],
+      ['B', 'respawn above your start world after a crash'],
+      ['H', 'close this'],
+      ['', ''],
+      ['NOT ON THE KEYBOARD ANY MORE', ''],
+      ['', 'orbit lines, ecliptic grid, traffic, cockpit chrome and render'],
+      ['', 'scale are all in Options (Esc) — they were keys duplicating'],
+      ['', 'settings that were already there'],
+      ['', 'the market is on F4, the channel for the port you are docked at'],
+      ['', 'the star map is F6; a new career is Esc, quit to menu'],
+      ['', 'manoeuvre nodes — place, nudge, snap, burn — are on the F2 orbit map']
+    ];
+    /* Two columns once the list outgrows the window, split at a section
+     * break so a heading never ends up orphaned at the foot of a column.
+     * The card has grown every time the game has, and a controls list you
+     * have to scroll is a controls list nobody reads. */
+    var lineH = 16, chrome = 60;
+    var perCol = lines.length;
+    var cols = 1;
+    if (lines.length * lineH + chrome > h - 40) {
+      cols = 2;
+      perCol = Math.ceil(lines.length / 2);
+      // Slide the break to the next blank separator so headings stay put.
+      while (perCol < lines.length - 1 && lines[perCol][0] !== '') perCol++;
+    }
+    var colW = 520;
+    var pw = colW * cols, ph = Math.min(h - 24, perCol * lineH + chrome);
+    var px = (w - pw) / 2, py = (h - ph) / 2;
+    panel(ctx, px, py, pw, ph, true);
+    ctx.save();
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#ffe6a8';
+    ctx.fillText('CONTROLS', px + 18, py + 26);
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    for (var i = 0; i < lines.length; i++) {
+      var col = Math.floor(i / perCol);
+      if (col >= cols) break;
+      var ox = px + col * colW;
+      var y = py + 48 + (i - col * perCol) * lineH;
+      if (y > py + ph - 8) continue;
+      if (!lines[i][1]) {
+        ctx.fillStyle = '#7fd6c0';
+        ctx.fillText(lines[i][0], ox + 18, y);
+      } else {
+        ctx.fillStyle = '#cfe0ff';
+        ctx.fillText(lines[i][0], ox + 18, y);
+        ctx.fillStyle = '#8fa6c4';
+        ctx.fillText(lines[i][1], ox + 180, y);
+      }
+    }
+    ctx.restore();
+  }
+
+  /* ---- boot ----------------------------------------------------------- */
+
+  /* Render scale applies to the world layer and to nothing else.
+   *
+   * The GL canvas is where the fragment cost lives — planets, atmospheres,
+   * the sky — and it is the layer that survives being drawn small and
+   * stretched, because it is all gradients. The 2D overlay is text: labels,
+   * instrument numerals, the readouts you are supposed to be able to read.
+   * Scaling that down would trade the thing the player looks at for frames
+   * on the thing they look past. So the two canvases are the same size on
+   * screen and different sizes in memory, which is what `GL.resize` taking
+   * its own dpr was always for.
+   *
+   * A device preference, not a career one: it belongs to this machine's
+   * GPU, so it is stored under its own key and survives N and a new seed.
+   */
+  var RENDER_SCALES = [1, 0.75, 0.5];
+  var SCALE_KEY = 'psg1|renderScale';
+
+  function loadRenderScale() {
+    try {
+      var v = parseFloat(localStorage.getItem(SCALE_KEY));
+      if (RENDER_SCALES.indexOf(v) >= 0) return v;
+    } catch (e) { /* storage can be absent or refuse */ }
+    return 1;
+  }
+
+  /* Set it outright. Options picks a value from the list rather than
+   * stepping through it, which is what an arrow key on a settings row
+   * should do — the old cycle-on-a-keypress shape came from the binding it
+   * used to live on, not from anything the setting wanted. */
+  function setRenderScale(v) {
+    if (RENDER_SCALES.indexOf(v) < 0) return;
+    G.renderScale = v;
+    try { localStorage.setItem(SCALE_KEY, String(v)); } catch (e) {}
+    resize();
+    var pct = Math.round(v * 100);
+    say('Render scale ' + pct + '%' +
+        (v === 1 ? ' — native' : ' — everything upscaled, instruments included'), 3);
+  }
+
+  /* HOW MANY REAL PIXELS A CSS PIXEL IS WORTH, in one place.
+   *
+   * Render scale used to move the GL layer and leave the 2D layer at full
+   * device resolution, deliberately, so the instruments stayed sharp. The
+   * cost of that was that the setting had nothing to give in the ONE view
+   * where the 2D layer covers most of the screen: in the cockpit the
+   * shell, the interior and the glass are all 2D, and on a fullscreen
+   * 1080p display at 125% Windows scaling that is a 2400x1350 backing
+   * store being filled every frame.
+   *
+   * Astra: "frames are more important." So the scale now moves both, and
+   * the instruments soften with everything else — which is the honest
+   * shape for a control called Render scale, and at 75% on this hardware
+   * is not a trade most people would notice while flying.
+   *
+   * Used by draw() as well, which must divide by the same number it
+   * multiplied by or the whole frame is drawn at the wrong size. */
+  function pixelScale() {
+    return (window.devicePixelRatio || 1) * (G.renderScale || 1);
+  }
+
+  function resize() {
+    var ps = pixelScale();
+    canvas.width = Math.floor(window.innerWidth * ps);
+    canvas.height = Math.floor(window.innerHeight * ps);
+    canvas.style.width = window.innerWidth + 'px';
+    canvas.style.height = window.innerHeight + 'px';
+    if (global.GLWorld && global.GLWorld.available) {
+      global.GLWorld.resize(window.innerWidth, window.innerHeight, ps);
+    }
+  }
+
+  function boot() {
+    canvas = document.getElementById('view');
+    ctx = canvas.getContext('2d');
+    /* The world layer. If WebGL2 is missing this stays false for the whole
+     * session and every draw path below falls back to the 2D renderer, which
+     * is still complete — an old driver should cost you weather, not the
+     * game. */
+    var glCanvas = document.getElementById('gl');
+    if (glCanvas && global.GLWorld) global.GLWorld.init(glCanvas);
+    G.renderScale = loadRenderScale();
+    resize();
+    window.addEventListener('resize', resize);
+    bindInput();
+
+    /* Hand the screens module everything it is allowed to touch. One call,
+     * one object, and the dependency points one way: screens.js never
+     * reaches back into this file. */
+    global.Screens.bind({
+      G: G,
+      say: say, selectPanel: selectPanel, hot: hot,
+      navList: navList, navTargetState: navTargetState, navMark: navMark,
+      jettison: jettison, heldCargo: heldCargo,
+      /* The trade console, handed over because the way IN to it is now the
+       * docked port's own comms channel rather than a letter key. */
+      openMarket: openMarket,
+      plottedCourse: plottedCourse, jumpCandidates: jumpCandidates,
+      /* The wake read, handed over so the SCANNER page can quote the same
+       * thing the world layer is captioning. One source, so the panel and
+       * the label can never disagree about what the scanner can see. */
+      wakesNow: wakesNow, bestWakeRead: bestWakeRead, wakeReadLine: wakeReadLine,
+      /* The console's page assignment, handed over whole: the list of pages
+       * there are, what each mount is showing, and the one way to change
+       * it. The PANELS tab is the only writer. */
+      dash: { pages: DASH_PAGES, pageFor: dashPageFor, set: setDashPage },
+      doJump: doJump, complyWithDemand: complyWithDemand,
+      /* The comms panel's buttons and its keyboard have to be the SAME
+       * actions, or they drift apart and one of them starts lying. */
+      hailAuthority: hailAuthority, payOutstanding: payOutstanding,
+      hailSelected: hailSelected,
+      exitTransfer: exitTransfer,
+      /* The ship trade board's buttons go through the same function as its
+       * keys, for the same reason. */
+      shipDealTrade: shipDealTrade,
+      scopeBody: scopeBody, rows: rows, panel: panel,
+      bodyDotColor: bodyDotColor, setMouseAim: setMouseAim,
+      fmtDist: fmtDist, fmtSpeed: fmtSpeed, fmtTime: fmtTime,
+      fmtEpoch: fmtEpoch, fmtCredits: fmtCredits, fmtLy: fmtLy,
+      clipText: clipText,
+      pages: {
+        system: drawSystemPage, chart: drawChartPage, orbit: drawOrbitPage,
+        target: drawTargetPage, auto: drawAutoPage, node: drawNodePage,
+        ship: drawShipPage, guns: drawGunsPage
+      },
+      RADAR_RANGE: RADAR_RANGE,
+      MFD_W: MFD_W, MFD_H: MFD_H,
+      MFD_INK: MFD_INK, MFD_DIM: MFD_DIM, MFD_HOT: MFD_HOT, MFD_EDGE: MFD_EDGE
+    });
+
+    /* Settings before the world: they are this machine's, not this career's,
+     * so they apply whichever seed boots and whether or not a save exists. */
+    applyPrefs();
+
+    var seed = decodeURIComponent((location.hash || '').replace(/^#/, '')) || 'kawartha';
+    newGame(seed);
+
+    /* If this seed has a career saved, pick it up where it left off. The
+     * universe regenerated identically from the seed a moment ago; the save
+     * carries only what the player did to it. Starting over is Esc, quit to
+     * the main menu, New career — no longer a letter key. */
+    var restored = null;
+    if (global.Save) {
+      var saved = global.Save.load(seed);
+      if (saved) {
+        try {
+          global.Save.restore(G, saved, { enterSystem: enterSystem });
+          restored = 'Career restored — ' + fmtCredits(G.ship.credits) + ', ' +
+                     fmtEpoch(G.t) + '.';
+        } catch (err) {
+          console.error('save restore failed', err);
+          restored = 'That save was unreadable — starting fresh.';
+        }
+      }
+      window.addEventListener('beforeunload', function () {
+        if (G.ship && !G.ship.crashed) global.Save.store(G);
+        /* Settings are written here rather than on every keystroke: the
+         * display toggles and the zoom live on keys you press constantly,
+         * and touching localStorage on each of them would be a disk write
+         * per wheel notch. The options page writes immediately because it
+         * is a place you leave, not a key you hold. */
+        storePrefs();
+      });
+    }
+
+    /* A seed in the URL is the natural way to share a system: paste
+     * ...index.html#kawartha and you get that exact universe. Changing the
+     * fragment on an already-loaded page does not reload it, so listen for
+     * the change and rebuild. */
+    window.addEventListener('hashchange', function () {
+      var sd = decodeURIComponent((location.hash || '').replace(/^#/, ''));
+      if (sd && sd !== G.seed) newGame(sd);
+    });
+
+    /* AND IT OPENS ON THE TITLE CARD. The world is built and the career is
+     * restored first, so Resume is a real offer and the card can say which
+     * galaxy is behind it — then the card goes up and nothing moves until
+     * somebody chooses. A game with a title screen you only ever reach by
+     * quitting is a game whose title you never see. Resume is the first
+     * row and it is already selected, so getting in is one key. */
+    G.title = { sel: 0, edit: null, note: restored };
+
+    var last = performance.now();
+    (function frame(now) {
+      var dt = Math.min((now - last) / 1000, 0.1);
+      last = now;
+      G.fps = G.fps * 0.9 + (1 / Math.max(dt, 1e-4)) * 0.1;
+      try {
+        update(dt);
+        draw();
+        /* Flush the world layer AFTER the whole frame has been walked, not
+         * partway through it. Ships and stations are queued well after the
+         * planets are, and draw() has several early returns — hyperspace,
+         * the full-screen modes — that would each have to remember to
+         * flush. Out here there is exactly one exit and it cannot be
+         * missed. Ordering within the frame does not matter: the GL canvas
+         * is composited by the DOM, not by draw order. */
+        if (glLive()) global.GLWorld.end();
+      } catch (err) {
+        console.error(err);
+        ctx.fillStyle = '#ff8080';
+        ctx.font = '13px monospace';
+        ctx.fillText('error: ' + err.message, 20, 200);
+      }
+      requestAnimationFrame(frame);
+    })(last);
+  }
+
+  G.newGame = newGame;
+  /* Exposed for the same reason newGame is: a headless playtest needs to be
+   * able to arrive somewhere without starting a career. It is also the hook
+   * Save.restore already takes, so this is not a new entry point into the
+   * world — it is the existing one, named. */
+  G.enterSystem = enterSystem;
+  /* Exposed for the suite: the readout says VECTOR or HOVER or why not, and
+   * a test that cannot ask the same question the HUD asks would be testing
+   * its own copy of the rule. */
+  G.vectorState = vectorState;
+  /* One hand-cranked frame. The browser parks requestAnimationFrame the
+   * moment the tab is hidden, which is correct for players and useless for
+   * a script trying to playtest through a hidden pane — this is the crank
+   * handle on the side of the engine. */
+  G.step = function (dt) { update(dt || 0.016); draw(); };
+  /* The same object combat and missions are handed. Exposed so a test — or
+   * a console — can put the ship through something the game would do to it
+   * rather than reaching in and setting the aftermath by hand. */
+  G.hooks = HOOKS;
+  global.Game = G;
+  if (typeof document !== 'undefined') {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+    else boot();
+  }
+})(typeof window !== 'undefined' ? window : globalThis);

@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Low-Poly Ship Fleet</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.184.0/build/three.module.js",
+    "three/addons/controls/OrbitControls.js": "https://unpkg.com/three@0.184.0/examples/jsm/controls/OrbitControls.js",
+    "three/addons/exporters/OBJExporter.js": "https://unpkg.com/three@0.184.0/examples/jsm/exporters/OBJExporter.js",
+    "three/addons/exporters/GLTFExporter.js": "https://unpkg.com/three@0.184.0/examples/jsm/exporters/GLTFExporter.js"
+  },
+  "integrity": {
+    "https://unpkg.com/three@0.184.0/build/three.module.js": "sha384-8FCZ1eVO6it4+pbec2aDtnTrwjWXZLJRC+MAGCIPDgsYnUrl/E0A2YlF8ioMKI/J",
+    "https://unpkg.com/three@0.184.0/build/three.core.js": "sha384-dw2ooPewaEIrAgl6oFDBmmBWCE9oW9LxRGcfwZ0hLvEprzo202wXl7vCYHRlSnOT",
+    "https://unpkg.com/three@0.184.0/examples/jsm/controls/OrbitControls.js": "sha384-4rziNxOBZKQ69i+w+f89KJ55TCYquwchVbByQwmaOeIOXdOU2PLDn3kOfXHwIJC9",
+    "https://unpkg.com/three@0.184.0/examples/jsm/exporters/OBJExporter.js": "sha384-nbwtoZENJD3Vq+ACK0CuGQdPMuDWHkamC2KJD70EV5nfg6jQjfppKOea07YJN+N3",
+    "https://unpkg.com/three@0.184.0/examples/jsm/exporters/GLTFExporter.js": "sha384-VofkvpG6HERhFCYbsUOHeNXBCqID2nfqkQqnVzE1jc/oPcz+qJ13ADdXH08hE+cQ"
+  }
+}
+</script>
+<style>
+  html, body { margin: 0; height: 100%; font-family: -apple-system, Helvetica, Arial, sans-serif; }
+  three-d-stage:not(:defined) { visibility: hidden; }
+  three-d-stage { width: 100vw; height: 100vh; display: block; }
+  #hud {
+    position: fixed; top: 16px; left: 16px; z-index: 10;
+    background: rgba(30,32,28,0.82); color: #e9e4da; padding: 10px 12px;
+    border-radius: 6px; display: flex; flex-direction: column; gap: 5px;
+    width: 236px;
+    /* The panel has grown row by row; constrain it against the viewport so it
+       scrolls internally instead of running over the stage's own control hint
+       at the bottom-left. 44px keeps that hint clear. */
+    bottom: 44px;
+    max-height: calc(100vh - 60px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  #hud .types { display: flex; flex-wrap: wrap; gap: 6px; }
+  #hud button {
+    font-size: 12px; padding: 4px 8px; border-radius: 4px; border: 1px solid #6b6f66;
+    background: #3a3d36; color: #e9e4da; cursor: pointer;
+  }
+  #hud button.active { background: #d6c24a; color: #262620; border-color: #d6c24a; }
+  #hud .sizes { display: flex; gap: 6px; border-top: 1px solid #565a50; padding-top: 7px; }
+  #hud .accents { display: flex; gap: 6px; border-top: 1px solid #565a50; padding-top: 7px; }
+  #hud .accents button { width: 18px; height: 18px; padding: 0; border-radius: 50%; border: 2px solid #6b6f66; }
+  #hud .accents button.active { border-color: #f2eee2; }
+  #hud .flight { border-top: 1px solid #565a50; padding-top: 7px; display: grid; gap: 4px; font-family: "Courier New", monospace; font-size: 11px; }
+  #hud .flight .row { display: flex; justify-content: space-between; gap: 12px; }
+  #hud .flight .val { color: #d6c24a; }
+  #hud .flight .hint { color: #c8cabf; font-size: 11px; font-family: -apple-system, Helvetica, sans-serif; }
+  #hud .bar { height: 5px; background: #2c2f29; border-radius: 3px; overflow: hidden; }
+  #hud .bar i { display: block; height: 100%; background: #d6c24a; width: 0%; }
+  #crosshair { position: fixed; inset: 0 0 0 276px; pointer-events: none; z-index: 5; display: grid; place-items: center; }
+  #crosshair svg { opacity: 0.75; }
+  #hud .exportRow { border-top: 1px solid #565a50; padding-top: 7px; }
+  #hud .exportRow button { width: 100%; font-size: 12px; }
+  #hud .id-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid #565a50; padding-top: 7px; }
+  #hud .id-value { font-family: "Courier New", monospace; font-size: 15px; letter-spacing: 1px; }
+  #hud .reroll { font-size: 12px; padding: 5px 8px; white-space: nowrap; }
+  #hud .comms { border-top: 1px solid #565a50; padding-top: 7px; display: grid; gap: 5px;
+    font-family: "Courier New", monospace; font-size: 11px; }
+  #hud .comms .row { display: flex; justify-content: space-between; gap: 12px; }
+  #hud .comms .val { color: #d6c24a; }
+  #hud .comms button { width: 100%; }
+  #hud .comms button:disabled { opacity: 0.5; cursor: default; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <div class="types" id="typeButtons"></div>
+  <div class="sizes" id="sizeButtons"></div>
+  <div class="types" id="stationButtons" style="border-top:1px solid #565a50; padding-top:7px;"></div>
+  <div class="accents" id="accentButtons"></div>
+  <div class="id-row">
+    <span class="id-value" id="idValue">SS-00000</span>
+    <button class="reroll" id="rerollBtn">Reroll</button>
+  </div>
+  <div class="flight">
+    <div class="row"><span>MODE</span><span class="val" id="modeVal">AUTOPILOT</span></div>
+    <div class="row"><span>THROTTLE</span><span class="val" id="thrVal">42%</span></div>
+    <div class="bar"><i id="thrBar"></i></div>
+    <div class="row"><span>TARGET</span><span class="val" id="tgtVal">none</span></div>
+    <div class="row"><span>GEAR</span><span class="val" id="gearVal">DOWN</span></div>
+    <div class="hint">F11 mode · ↑↓ throttle · T target · G gear</div>
+  </div>
+  <div class="comms" id="commsPanel">
+    <div class="row"><span>COMMS</span><span class="val" id="commsState">—</span></div>
+    <button id="doorsBtn">Request: Open Station Doors</button>
+  </div>
+  <div class="exportRow"><button id="exportAllBtn">Export all 3 sizes (GLB)</button></div>
+  <div class="exportRow"><button id="exportKitBtn">Export detail kit (GLB)</button></div>
+</div>
+<div id="crosshair"><svg width="72" height="72" viewBox="0 0 72 72" fill="none" stroke="#3a3d36" stroke-width="1.5"><circle cx="36" cy="36" r="13"/><path d="M36 6v14M36 52v14M6 36h14M52 36h14"/></svg></div>
+<three-d-stage name="ship" background="#e9e4da"></three-d-stage>
+<script src="three-d-stage.js"></script>
+<script type="module">
+  import { SHIP_TYPES, randomId, ACCENTS, setAccent, setThrust, setGearDeployed } from './ship.js';
+  import { STATION_TYPES, setStationDoors, berthDoorsOf } from './station.js';
+
+  const stage = document.querySelector('three-d-stage');
+  const typeButtons = document.getElementById('typeButtons');
+  const sizeButtons = document.getElementById('sizeButtons');
+  const accentButtons = document.getElementById('accentButtons');
+  const exportAllBtn = document.getElementById('exportAllBtn');
+  const idValue = document.getElementById('idValue');
+  const rerollBtn = document.getElementById('rerollBtn');
+
+  let currentType = 'trader';
+  let currentSize = 'M';
+  let currentAccent = 'mustard';
+  let manual = false;              // false = autopilot holds cruise thrust
+  let throttle = 0.42;             // 0..1
+  let targetId = null;
+  let gearDeployed = true;
+
+  const modeVal = document.getElementById('modeVal');
+  const thrVal = document.getElementById('thrVal');
+  const thrBar = document.getElementById('thrBar');
+  const tgtVal = document.getElementById('tgtVal');
+
+  function applyThrust() {
+    const apertureScale = setThrust(throttle);
+    const obj = stage._object;
+    if (obj) obj.traverse(n => { if (n.name === 'engineGlow') n.scale.set(apertureScale, 1, apertureScale); });
+    modeVal.textContent = manual ? 'MANUAL' : 'AUTOPILOT';
+    thrVal.textContent = Math.round(throttle * 100) + '%';
+    thrBar.style.width = (throttle * 100) + '%';
+  }
+
+  window.addEventListener('keydown', e => {
+    if (e.key === 'F11') {
+      e.preventDefault();
+      manual = !manual;
+      if (!manual) throttle = 0.42;   // autopilot resumes cruise
+      applyThrust();
+    } else if (manual && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();
+      throttle = Math.max(0, Math.min(1, throttle + (e.key === 'ArrowUp' ? 0.08 : -0.08)));
+      applyThrust();
+    } else if (e.key === 't' || e.key === 'T') {
+      // the ship under the crosshairs is the one on the stage
+      targetId = idValue.textContent;
+      tgtVal.textContent = targetId + ' · ' + SHIP_TYPES[currentType].label + ' ' + currentSize;
+    } else if (e.key === 'g' || e.key === 'G') {
+      gearDeployed = !gearDeployed;
+      const label = document.getElementById('gearVal');
+      if (stage._object) setGearDeployed(stage._object, gearDeployed);
+      label.textContent = gearDeployed ? 'EXTENDING' : 'RETRACTING';
+      clearTimeout(window.__gearLabelTimer);
+      window.__gearLabelTimer = setTimeout(() => { label.textContent = gearDeployed ? 'DOWN' : 'UP'; }, 2600);
+    }
+  });
+
+  Object.entries(SHIP_TYPES).forEach(([key, t]) => {
+    const btn = document.createElement('button');
+    btn.textContent = t.label;
+    btn.dataset.key = key;
+    btn.addEventListener('click', () => { currentType = key; currentStation = null; rebuild(); });
+    typeButtons.appendChild(btn);
+  });
+  ['S', 'M', 'L'].forEach(sz => {
+    const btn = document.createElement('button');
+    btn.textContent = sz;
+    btn.dataset.key = sz;
+    // S/M/L applies to whichever subject is selected — ship or station
+    btn.addEventListener('click', () => { currentSize = sz; rebuild(); });
+    sizeButtons.appendChild(btn);
+  });
+
+  /* Orbital stations are a separate subject from the fleet: selecting one
+     replaces the object on the stage, and picking any ship returns to ships. */
+  let currentStation = null;
+  function stationLabel(key) {
+    const t = STATION_TYPES[key];
+    const n = Math.floor(Math.random() * Math.pow(10, t.digits)).toString().padStart(t.digits, '0');
+    return t.prefix + n;
+  }
+  Object.entries(STATION_TYPES).forEach(([key, t]) => {
+    const btn = document.createElement('button');
+    btn.textContent = t.label;
+    btn.dataset.station = key;
+    btn.addEventListener('click', () => { currentStation = key; rebuild(); });
+    document.getElementById('stationButtons').appendChild(btn);
+  });
+
+  Object.entries(ACCENTS).forEach(([key, a]) => {
+    const btn = document.createElement('button');
+    btn.title = key;
+    btn.dataset.key = key;
+    btn.style.background = '#' + a.accent.toString(16).padStart(6, '0');
+    btn.addEventListener('click', () => { currentAccent = key; setAccent(key); rebuild(); });
+    accentButtons.appendChild(btn);
+  });
+
+  /* Detail-kit export: every decal, greeble, marking, lamp and small fitting
+     in the fleet, pulled out of the ships and laid on a labelled grid so the
+     set can be scattered around a star port later. Duplicates are collapsed
+     by geometry+material signature so the kit is a parts library, not 39
+     copies of the same panel. */
+  const kitBtn = document.getElementById('exportKitBtn');
+  const KIT_RE = /Greeble|Decal|iffLamp|iffPlinth|factionEmblem|HullWindow|Skylight|Lamp$|Lens|Strobe|Blister|Hatch|antenna|dockFlood|umbilical|pressurantBottle|bottleClamp|commWhip|commDipole|ventralMast|keelHatch|keelBlister|Duct|Rib\d/;
+  kitBtn.addEventListener('click', async () => {
+    const T = stage._THREE;
+    kitBtn.disabled = true; kitBtn.textContent = 'Collecting…';
+    const seen = new Map();
+    for (const key of Object.keys(SHIP_TYPES)) {
+      for (const sz of ['S', 'M', 'L']) {
+        const ship = SHIP_TYPES[key].build(sz, randomId(key));
+        ship.updateMatrixWorld(true);
+        ship.traverse(n => {
+          if (!n.isMesh || !KIT_RE.test(n.name)) return;
+          const g = n.geometry;
+          const sig = [n.name.replace(/\d+[LR]?$/, ''), n.material.name,
+            ...(g.attributes.position ? [g.attributes.position.count] : []),
+            ...(g.parameters ? Object.values(g.parameters).map(v => (+v).toFixed ? (+v).toFixed(3) : v) : [])].join('|');
+          if (seen.has(sig)) return;
+          const clone = new T.Mesh(g.clone(), n.material);
+          clone.name = n.name.replace(/[LR]$/, '');
+          clone.castShadow = clone.receiveShadow = true;
+          seen.set(sig, clone);
+        });
+      }
+    }
+    const kit = new T.Group(); kit.name = 'detailKit';
+    const parts = [...seen.values()];
+    // grid layout, sized from the largest part so nothing overlaps
+    let cell = 0.2;
+    parts.forEach(p => { p.geometry.computeBoundingBox();
+      const s = p.geometry.boundingBox.getSize(new T.Vector3());
+      cell = Math.max(cell, s.x, s.y, s.z); });
+    cell *= 1.35;
+    const cols = Math.ceil(Math.sqrt(parts.length));
+    parts.forEach((p, i) => {
+      const cx = (i % cols) - (cols - 1) / 2, cz = Math.floor(i / cols) - (cols - 1) / 2;
+      p.geometry.computeBoundingBox();
+      const bb = p.geometry.boundingBox, c = bb.getCenter(new T.Vector3());
+      p.position.set(cx * cell - c.x, -bb.min.y, cz * cell - c.z);
+      kit.add(p);
+    });
+    const prevName = stage.getAttribute('name');
+    stage.setObject(kit);
+    stage.setAttribute('name', 'detail-kit');
+    kitBtn.textContent = 'Exporting…';
+    await new Promise(r => setTimeout(r, 200));
+    await stage._runExport('glb');
+    stage.setAttribute('name', prevName);
+    kitBtn.disabled = false; kitBtn.textContent = 'Export detail kit (GLB)';
+    rebuild();
+  });
+
+  exportAllBtn.addEventListener('click', async () => {
+    const label = SHIP_TYPES[currentType].label.toLowerCase();
+    exportAllBtn.disabled = true;
+    exportAllBtn.textContent = 'Exporting…';
+    for (const sz of ['S', 'M', 'L']) {
+      stage.setObject(SHIP_TYPES[currentType].build(sz));
+      stage.setAttribute('name', label + '-' + sz.toLowerCase());
+      await new Promise(r => setTimeout(r, 120));
+      await stage._runExport('glb');
+    }
+    exportAllBtn.disabled = false;
+    exportAllBtn.textContent = 'Export all 3 sizes (GLB)';
+    rebuild();
+  });
+
+  function refreshButtons() {
+    document.getElementById('stationButtons').querySelectorAll('button')
+      .forEach(b => b.classList.toggle('active', b.dataset.station === currentStation));
+    typeButtons.querySelectorAll('button').forEach(b => b.classList.toggle('active', !currentStation && b.dataset.key === currentType));
+    sizeButtons.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.key === currentSize));
+    accentButtons.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.key === currentAccent));
+  }
+
+  function rebuild() {
+    refreshButtons();
+    if (currentStation) {
+      const label = stationLabel(currentStation);
+      const built = STATION_TYPES[currentStation].build(label, currentSize);
+      /* Show stations SEALED. Doors are modelled and exported stowed, so the
+         viewer poses them shut on load — a fresh build is always open. */
+      doorSubject = built;
+      doorT = doorTarget = 1; openUntil = 0;
+      setStationDoors(built, 1);
+      stage.setObject(built);
+      idValue.textContent = label;
+      stage.setAttribute('name', STATION_TYPES[currentStation].label.toLowerCase() + '-station-' + currentSize.toLowerCase());
+      if (targetId) { targetId = null; tgtVal.textContent = 'none'; }
+      return;
+    }
+    const nextId = randomId(currentType);
+    doorSubject = null;
+    stage.setObject(SHIP_TYPES[currentType].build(currentSize, nextId));
+    idValue.textContent = nextId;
+    stage.setAttribute('name', SHIP_TYPES[currentType].label.toLowerCase() + '-' + currentSize + '-ship');
+    applyThrust();
+    setGearDeployed(stage._object, gearDeployed);
+    if (targetId) { targetId = null; tgtVal.textContent = 'none'; }
+  }
+
+  function rerollId() {
+    idValue.textContent = randomId(currentType);
+  }
+
+  /* ---- COMMS: door requests ----
+   * Doors sit SEALED at rest, which is why a request exists at all. Opening is
+   * granted, held for a dwell, then the station closes them again on its own —
+   * so the player sees them shut behind the hull rather than staying open.
+   * The station itself owns both poses (userData.door); this only drives t. */
+  const commsState = document.getElementById('commsState');
+  const doorsBtn = document.getElementById('doorsBtn');
+  const DWELL = 6000, RATE = 1.4;          // ms held open, units of t per second
+  let doorT = 1, doorTarget = 1, openUntil = 0, doorSubject = null;
+
+  function commsAvailable() {
+    return !!(doorSubject && Object.keys(berthDoorsOf(doorSubject)).length);
+  }
+  function requestDoors() {
+    if (!commsAvailable()) return;
+    doorTarget = 0;
+    openUntil = performance.now() + DWELL;
+  }
+  doorsBtn.addEventListener('click', requestDoors);
+  window.addEventListener('keydown', e => { if (e.key === 'o' || e.key === 'O') requestDoors(); });
+
+  let lastT = performance.now();
+  (function driveDoors(now) {
+    const dt = Math.min(0.1, (now - lastT) / 1000); lastT = now;
+    if (doorTarget === 0 && now > openUntil) doorTarget = 1;
+    if (doorT !== doorTarget) {
+      const step = RATE * dt;
+      doorT = doorTarget > doorT ? Math.min(doorTarget, doorT + step) : Math.max(doorTarget, doorT - step);
+      if (doorSubject) setStationDoors(doorSubject, doorT);
+    }
+    if (!commsAvailable()) {
+      commsState.textContent = 'NO STATION';
+      doorsBtn.disabled = true;
+    } else {
+      doorsBtn.disabled = doorTarget === 0;
+      const secs = Math.max(0, Math.ceil((openUntil - now) / 1000));
+      commsState.textContent = doorT >= 0.999 ? 'DOORS SEALED'
+        : doorT <= 0.001 ? `OPEN \u00b7 CLOSING IN ${secs}s`
+        : doorTarget === 0 ? 'OPENING\u2026' : 'CLOSING\u2026';
+    }
+    requestAnimationFrame(driveDoors);
+  })(lastT);
+
+  rerollBtn.addEventListener('click', () => rebuild());
+  rebuild();
+</script>
+</body>
+</html>

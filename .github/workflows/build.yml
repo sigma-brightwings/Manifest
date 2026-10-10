@@ -1,0 +1,89 @@
+# Packaged builds, one runner per operating system.
+#
+# The Windows .exe and the Linux tar.gz can both be built on a Windows
+# machine; the AppImage and the .deb cannot, because they are built by
+# assembling a filesystem image that needs real symlinks and Unix
+# permissions. That is the only reason this file exists. Push a tag like
+# v0.1.0 and every artifact appears on a draft release together.
+#
+# Nothing here is signed. Windows SmartScreen will warn on first run and
+# recipients will need "More info -> Run anyway"; signing needs a code
+# signing certificate, which costs money and is a separate decision.
+
+name: build
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            targets: --win
+            artifact: windows
+          - os: ubuntu-latest
+            targets: --linux AppImage deb tar.gz
+            artifact: linux
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # v5, not v4. The v4 actions are built against Node 20, which the
+      # runners deprecated in September 2025 and now force onto Node 24 —
+      # every run carries an annotation saying so, which is noise on top of
+      # a real failure and reads like the cause of it.
+      # LFS since 2026-09-25: the station art (*.glb, src/ports/*.js) is
+      # ~425 MB and lives in Git LFS. Without this the checkout holds
+      # pointer files, and a build would ship stations that are text.
+      - uses: actions/checkout@v5
+        with:
+          lfs: true
+
+      - uses: actions/setup-node@v5
+        with:
+          # 24, matching the machine the game is actually developed on.
+          # This is the version the SUITES run under; it has nothing to do
+          # with the Node the actions themselves are built against, which
+          # is the thing the deprecation annotation is about.
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # The suites are the reason to trust a build nobody played before
+      # shipping it, so they gate the package rather than following it.
+      - run: npm test
+
+      - run: node tools/make-icon.js
+
+      - run: npx electron-builder ${{ matrix.targets }} --publish never
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/*.exe
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: artifacts/**/*

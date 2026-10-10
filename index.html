@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Manifest</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: #04060c; color: #cfe0ff;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  /* Two stacked canvases. #gl draws the world on the GPU; #view draws the
+     cockpit, the instruments and every label on top of it in 2D. #view is
+     the one that takes input, so it sits above and #gl never receives a
+     pointer event. */
+  #gl, #view { position: absolute; top: 0; left: 0; display: block; }
+  #gl { z-index: 0; pointer-events: none; }
+  #view { z-index: 1; touch-action: none; cursor: grab; background: transparent; }
+  #view:active { cursor: grabbing; }
+  #boot {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    background: #04060c; z-index: 10; text-align: center; line-height: 1.7;
+  }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<canvas id="view"></canvas>
+<div id="boot">
+  <div>
+    <div style="color:#ffe6a8">PROCEDURAL SPACE GAME</div>
+    <div style="font-size:12px;color:#7e93b3">gravity, clockwork, cockpit and cargo</div>
+    <div style="font-size:12px;color:#7e93b3;margin-top:12px">loading&hellip;</div>
+  </div>
+</div>
+
+<!-- Load order matters: each file uses the ones above it.
+     These are deliberately plain scripts, not ES modules, so the game runs
+     by double-clicking this file with no local web server. -->
+<script src="src/vec3.js"></script>
+<script src="src/rng.js"></script>
+<!-- slipspace.js needs nothing but rng, and galaxy.js needs IT — the lane
+     timetable and the mass-scaled transit time both have to exist before a
+     jump plan can quote a duration. -->
+<script src="src/slipspace.js"></script>
+<script src="src/kepler.js"></script>
+<script src="src/economy.js"></script>
+<script src="src/generate.js"></script>
+<script src="src/galaxy.js"></script>
+<script src="src/sim.js"></script>
+<script src="src/combat.js"></script>
+<!-- The ships you own and are not sitting in. After combat.js, which
+     owns the hulls it describes. -->
+<!-- The people aboard. Before fleet.js, which asks whether a parked
+     ship has anyone on it. -->
+<script src="src/crew.js"></script>
+<script src="src/fleet.js"></script>
+<!-- Industry you own, and what it does to a system. After combat.js, whose
+     effectiveCorruption reads it, and after fleet.js, beside which it
+     settles at the desk. -->
+<script src="src/holdings.js"></script>
+<script src="src/missions.js"></script>
+<script src="src/arcs.js"></script>
+<script src="src/shiptrade.js"></script>
+<script src="src/sound.js"></script>
+<script src="src/save.js"></script>
+<script src="src/logo.js"></script>
+<script src="src/hulls.js"></script>
+<!-- Generated from ref/ports by `node tools/glb2hulls.js ref/ports --ports`.
+     OPTIONAL by design: delete it and every port falls back to the
+     procedural mesh render.js builds. It must load BEFORE render.js, which
+     reads global.PortLib when its own library cache is first asked for. -->
+<script src="src/ports.js"></script>
+<script src="src/render.js"></script>
+<!-- The weather field, on the CPU. Before gl.js, which reads its own
+     shader constants out of it so the picture and the forecast cannot
+     drift apart. -->
+<script src="src/weather.js"></script>
+<script src="src/gl.js"></script>
+<script src="src/screens.js"></script>
+<script src="src/main.js"></script>
+<script>
+  // Hide the boot card once the first frame has been drawn.
+  requestAnimationFrame(function () {
+    requestAnimationFrame(function () {
+      var b = document.getElementById('boot');
+      if (b) b.remove();
+    });
+  });
+</script>
+</body>
+</html>
