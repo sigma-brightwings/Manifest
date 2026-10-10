@@ -93,7 +93,9 @@ function find(wantSpace, wantFlag) {
     var routes = G.sys.traffic || [];
     for (var r = 0; r < routes.length; r++) {
       var home = G.sys.byId[routes[r].from];
-      var flag = home && (galaxy.factionById[home.faction] || G.sys.factionById[home.faction]);
+      /* A runner's flag is on the route, ahead of its home port's. */
+      var flagId = routes[r].flag || (home && home.faction);
+      var flag = flagId && (galaxy.factionById[flagId] || G.sys.factionById[flagId]);
       if (!flag || !wantFlag(flag, spaceFac)) continue;
       for (var k = 0; k < 6; k++) {
         var t = routes[r].period * (k / 6);
@@ -367,30 +369,64 @@ if (law) {
 /* ---- rivals -------------------------------------------------------------- */
 
 section('rivals: the law against the Syndicate');
+/* SYNDICATE RUNNERS. Before generate.js grew buildRunners, ten galaxies
+ * and 2,000 systems put an outlaw-flagged trader in lawful space exactly
+ * zero times, so this half of the rule was dormant. Astra: "wake the
+ * dormant half, pirates are always trying to get more." Runners now work
+ * the black-market ports of lawful space — about 3% of lawful traffic. */
 var dirty = find(lawful, function (f) { return f.outlaw; });
-check('ordinary traffic flies no outlaw flag in lawful space (see below)', !dirty);
+check('the Syndicate runs ships in lawful space now', !!dirty);
 if (dirty) {
+  check('a runner is an ordinary route with the flag on it',
+        dirty.route.runner === true && dirty.route.flag === 'outlaw');
+  var A = dirty.G.sys.byId[dirty.route.from], B = dirty.G.sys.byId[dirty.route.to];
+  check('and it is there for the fence: one end has a black market',
+        !!((A && A.market && A.market.blackMarket) || (B && B.market && B.market.blackMarket)));
+  check('it flies the Syndicate flag, not its home port\'s',
+        ST.flagOf(dirty.G, dirty.G.sys, dirty.c).outlaw === true);
   var con = ST.consequence(dirty.G, dirty.G.sys, ST.flagOf(dirty.G, dirty.G.sys, dirty.c));
-  check('an outlaw hull in lawful space costs you with the owner',
+  check('trading with it costs you with whoever owns the space',
         con.loss && con.loss.id === dirty.star.factionId, JSON.stringify(con));
   check('and says so in words', con.loss && /outlaw hull/.test(con.loss.why));
+  /* A wanted pilot is still welcome — it is an outlaw hull. */
+  var home = dirty.G.sys.byId[dirty.route.from];
+  dirty.G.wanted[home.faction] = Combat.WANTED_HUNT * 4;
+  check('and it will deal with a pilot its home port wants',
+        ST.refusal(dirty.G, dirty.G.sys, dirty.c) === null,
+        ST.refusal(dirty.G, dirty.G.sys, dirty.c));
+  dirty.G.wanted = {};
 }
-/* MEASURED, 2026-10-10: across ten galaxies and 2,000 systems, ordinary
- * traffic NEVER puts an outlaw-flagged trader in lawful space — every
- * outlaw-flagged port is inside a hold. So this half of the rule is
- * dormant today (the other half, lawful hulls in a hold, is ~9,000 legs)
- * and wakes up the day anything outlaw trades outside a hold: pirate bands,
- * smugglers, a Syndicate runner on a lane. Pinned with a synthetic hull
- * so it is still correct when that day comes. */
-if (law) {
-  var lg = makeG(law.star);
-  var runner = { name: 'Quiet Runner', faction: 'outlaw', id: 'qr',
-                 pos: V.clone(lg.ship.pos), manifest: [] };
-  var con1 = ST.consequence(lg, lg.sys, ST.flagOf(lg, lg.sys, runner));
-  check('an outlaw hull in lawful space costs you with the owner',
-        con1.loss && con1.loss.id === law.star.factionId, JSON.stringify(con1));
-  check('and says so in words', con1.loss && /outlaw hull/.test(con1.loss.why));
-}
+
+/* The rate, measured — so a later edit cannot quietly turn the runners
+ * into a merchant marine (the first draft was one hull in six) or back
+ * into nobody. */
+(function () {
+  var legs = 0, run = 0, crooked = 0, crookedRun = 0, clean = 0, cleanRun = 0;
+  for (var si = 0; si < galaxy.stars.length; si++) {
+    var st = galaxy.stars[si];
+    var sf = galaxy.factionById[st.factionId];
+    if (sf.outlaw) continue;
+    var sy = systemFor(st);
+    var n = 0;
+    (sy.traffic || []).forEach(function (r) { legs++; if (r.runner) { run++; n++; } });
+    if (sy.crimeScore >= 60) { crooked++; if (n) crookedRun++; }
+    if (sy.crimeScore <= 25) { clean++; if (n) cleanRun++; }
+  }
+  var share = run / Math.max(1, legs);
+  check('runners are a few percent of lawful traffic, not a fleet',
+        share > 0.01 && share < 0.06, (share * 100).toFixed(2) + '%');
+  if (crooked && clean) {
+    check('and commoner in crooked systems than clean ones',
+          crookedRun / crooked >= cleanRun / clean,
+          crookedRun + '/' + crooked + ' vs ' + cleanRun + '/' + clean);
+  }
+  var heldRunner = galaxy.stars.some(function (st) {
+    return galaxy.factionById[st.factionId].outlaw &&
+           (systemFor(st).traffic || []).some(function (r) { return r.runner; });
+  });
+  check('a hold has no runners — its traffic already flies the flag', !heldRunner);
+})();
+
 var hold = find(outlawF, function (f) { return !f.outlaw; });
 if (hold) {
   var con2 = ST.consequence(hold.G, hold.G.sys, ST.flagOf(hold.G, hold.G.sys, hold.c));

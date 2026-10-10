@@ -3357,10 +3357,16 @@ outbound ship on F4 and offer to fly it to its port of call for a fee.
 - [x] **A proper screen**, in the comms channel pane, with the port
       market's keys. Looked at in a browser at 1280×720 and 764×867.
 
-**Measured, and worth knowing before tuning it:** across 2,000 systems
-ordinary traffic never puts an outlaw-flagged trader in lawful space — the
-"outlaw hull in lawful space" half of the rule is dormant (pinned by a
-synthetic test) until pirate bands or smugglers trade outside a hold.
+**Measured, and then acted on:** across 2,000 systems ordinary traffic
+never put an outlaw-flagged trader in lawful space, so the "outlaw hull in
+lawful space" half of the rule was dormant. Astra: "wake the dormant half,
+pirates are always trying to get more." `generate.js buildRunners` (own
+fork `syndicate-runners`, after the black markets) flags routes touching a
+black-market port as Syndicate runners at `0.03 + 0.12·crime/100` — about
+3% of lawful traffic, in 77% of lawful systems, median four per system.
+The first odds (`0.25 + 0.45·crime`) gave one hull in six and a median of
+21 per system; a test now holds the share between 1% and 6%. A runner is
+a relabel (`route.flag`), never new cargo, so no market moved.
 Lawful hulls in Syndicate holds: ~9,000 legs. Rival-empire hulls: ~8,700,
 about 4% of lawful traffic.
 

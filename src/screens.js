@@ -509,9 +509,14 @@
       var s = ships[i];
       var r2 = V.dist(s.pos, G.ship.pos);
       if (r2 > RADAR_RANGE) continue;
-      var f2 = G.sys.factionById && G.sys.factionById[s.faction];
+      /* A Syndicate runner answers to the Syndicate, whatever port it
+       * sails from — and its transponder says so, because the board you
+       * open next will, and the list should not be the one place that
+       * pretends otherwise. See generate.js buildRunners. */
+      var runner = !!(s.route && s.route.runner);
+      var f2 = G.sys.factionById && G.sys.factionById[runner ? s.route.flag : s.faction];
       out.push({ kind: 'ship', obj: s, name: s.name, range: r2,
-                 who: s.className || 'Ship',
+                 who: (s.className || 'Ship') + (runner ? '  \u00b7  Syndicate runner' : ''),
                  hostile: s.hostile,
                  color: s.hostile ? '#ff8a76' : (f2 ? f2.color : '#8fe36a') });
     }
