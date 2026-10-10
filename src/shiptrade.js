@@ -122,7 +122,9 @@
    * is based, not wherever it happens to be bound. */
   function flagOf(G, sys, contact) {
     if (!contact) return null;
-    var id = contact.faction || null;
+    /* A Syndicate runner (generate.js buildRunners) carries its real flag
+     * on the route, ahead of the home port it is pretending to sail for. */
+    var id = contact.faction || (contact.route && contact.route.flag) || null;
     if (!id && contact.route && contact.route.from && sys && sys.byId) {
       var home = sys.byId[contact.route.from];
       if (home) id = home.faction || null;

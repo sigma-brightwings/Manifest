@@ -46,11 +46,20 @@ full design and the phases still outstanding.
   arbitrage. A swept test holds every two-way line in a dozen systems to
   ask-above-bid.
 
-  Measured while building it: across 2,000 systems, ordinary traffic never
-  flies an outlaw flag in lawful space, so that half of the law/Syndicate
-  rule is dormant until something outlaw trades outside a hold. The other
-  half (lawful hulls in holds, ~9,000 legs) and the empire rivalry (~8,700)
-  fire in normal play.
+- **Syndicate runners work the black markets of lawful space.** Before
+  them, 2,000 sampled systems put an outlaw-flagged trader in lawful space
+  exactly zero times, so "dealing with an outlaw hull costs you with the
+  owner" could never happen. Astra: *"pirates are always trying to get
+  more."* Now a route touching a black-market port may fly the Syndicate's
+  flag instead of its home port's — odds rising with the system's crime
+  score — and the comms list marks it **Syndicate runner**. About 3% of
+  lawful traffic; at least one in 77% of lawful systems, median four. A
+  runner will deal with a pilot the local law wants, will buy your
+  contraband, and costs you standing with whoever owns the space.
+
+  It is a relabel, not new ships: the route keeps its manifest, timetable
+  and hull. Manifests are scheduled deliveries to port markets, so new
+  cargo would have moved prices in every existing seed.
 
 - **The game asks for the discrete GPU.** The WebGL layer requested the
   `low-power` adapter, which on a dual-GPU laptop like the Latitude 5424 is
@@ -882,6 +891,10 @@ full design and the phases still outstanding.
   room; they now pay off in a freighter's hold.
 
 ### Saves
+
+**Runners change only a flag.** An existing career's systems keep every
+port, route, manifest and price; some routes in lawful space now report the
+Syndicate as their flag. Nothing to migrate.
 
 **Ship-to-ship trade adds one field, `shipTrade`** — the per-voyage ledger
 and the day's standing tally. An older save has none and starts with an

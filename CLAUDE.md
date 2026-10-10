@@ -59,7 +59,7 @@ has already happened at least once.
 ## Testing
 
 ```
-npm test          # every suite (seventeen), plain node, no framework
+npm test          # every suite in package.json, plain node, no framework
 ```
 
 Suites print `ok` / `FAIL` and exit non-zero. **They are blind to layout** —

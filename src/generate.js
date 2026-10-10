@@ -631,6 +631,8 @@
      * No rng, same as the licence above. */
     Eco.siteFleetCarrier(sys);
     buildContraband(sys, base);
+    /* After the black markets, because that is what a runner comes for. */
+    buildRunners(sys, base);
     buildPortDressing(sys, base);
     /* Farms and liveries, 2026-09-22. Both read state everything above has
      * already fixed — who holds the system, where the navy is based, which
@@ -3121,6 +3123,60 @@
       if (!cr.chance(chance)) return;
       Eco.addBlackMarketRows(port, cr.fork('bm-' + port.id));
     });
+  }
+
+  /* --- Syndicate runners ---------------------------------------------------
+   * Hulls flying the Syndicate's flag OUTSIDE its holds, working the black
+   * markets of lawful space.
+   *
+   * Measured before this existed: across 2,000 systems, ordinary traffic put
+   * an outlaw-flagged trader in lawful space exactly zero times — every
+   * outlaw port is inside a hold, and a trader flies its home port's flag.
+   * So ship-to-ship trade's "dealing with an outlaw hull in their space
+   * costs you with the owner" was correct and dormant. Astra: "wake the
+   * dormant half, pirates are always trying to get more."
+   *
+   * WHERE THEY COME FROM is the black market, not a dice roll on every
+   * route. A runner is a route that touches a port with contraband rows —
+   * the fence is the reason a Syndicate hull is in lawful space at all — and
+   * the chance rises with the system's crime score the same way the black
+   * market's own chance did. So a clean system has no fence and no runners,
+   * and a crooked one has both, which is the honest shape.
+   *
+   * A RELABEL, NOT A NEW SHIP. The route keeps its manifest, timetable,
+   * name and hull: only `route.flag` is set, which ShipTrade.flagOf reads
+   * ahead of the home port's flag. Manifests are scheduled deliveries
+   * against the destination market, so inventing new cargo here would have
+   * moved prices in every seed that already has a career in it. A runner
+   * is an ordinary line whose owners are not who the port thinks they are.
+   *
+   * Own substream, and it runs after everything it reads, so no existing
+   * draw moves and no existing route changes anything but its flag. */
+  function buildRunners(sys, base) {
+    if (sys.pirateHeld) return;                 // a hold's own traffic already flies the flag
+    if (!sys.factionById || !sys.factionById.outlaw) return;
+    var rr = base.fork('syndicate-runners');
+    var crime = sys.crimeScore === undefined ? 40 : sys.crimeScore;
+    /* Measured, and the first numbers were wrong by five times. At
+     * 0.25 + 0.45·crime a black market is in 85% of lawful systems, routes
+     * touching one are over a third of all traffic, and the result was one
+     * hull in six in lawful space flying the Syndicate flag — median 21 per
+     * system. That is not a few ships trying to get more, it is a merchant
+     * marine. This puts them near 3% of lawful traffic: present in most
+     * crooked systems, rare in clean ones, worth noticing when you meet one. */
+    var chance = 0.03 + (crime / 100) * 0.12;   // ~3% at crime 0, ~15% at crime 100
+    var routes = sys.traffic || [];
+    for (var i = 0; i < routes.length; i++) {
+      var r = routes[i];
+      var A = sys.byId[r.from], B = sys.byId[r.to];
+      var fence = (A && A.market && A.market.blackMarket) || (B && B.market && B.market.blackMarket);
+      /* Drawn for every route, fence or not, so the stream's position does
+       * not depend on which ports happen to have black markets. */
+      var roll = rr.next();
+      if (!fence || roll >= chance) continue;
+      r.flag = 'outlaw';
+      r.runner = true;
+    }
   }
 
   function isStation(b) { return b.kind === 'station'; }
