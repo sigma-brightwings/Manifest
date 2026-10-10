@@ -19,6 +19,7 @@ var Galaxy = require(path.join(SRC, 'galaxy.js'));
 var Sim = require(path.join(SRC, 'sim.js'));
 var Combat = require(path.join(SRC, 'combat.js'));
 var Missions = require(path.join(SRC, 'missions.js'));
+var ShipTrade = require(path.join(SRC, 'shiptrade.js'));
 
 /* A fake localStorage, so the save round-trip runs headless. */
 var fakeStore = {};
@@ -2785,9 +2786,18 @@ console.log('\n--- hailing a ship that is not shooting at you ---');
         !!res && cash0 - G2.ship.credits === res.cost,
         cash0 + ' -> ' + G2.ship.credits);
   /* AND IT LEAVES THEIRS. Otherwise the same freighter is an infinite
-   * warehouse, which is the trade version of the infinite chart above. */
-  check('and it leaves their hold', c2.manifest[0].qty === 40 - res.qty,
-        String(c2.manifest[0].qty));
+   * warehouse, which is the trade version of the infinite chart above.
+   *
+   * Left their hold FOR THIS VOYAGE — the manifest itself is not touched.
+   * It used to be: the purchase came off `route.out`, the template every
+   * later sailing of the line reads, so buying six tonnes made the whole
+   * line sail six tonnes light for the rest of the session. The ledger in
+   * ShipTrade remembers per voyage instead. */
+  var left = ShipTrade.board(G2, G2.sys, 0, c2).rows.filter(function (r) { return r.cid === 'ores'; })[0];
+  check('and it leaves their hold', !!left && left.theirs === 40 - res.qty,
+        JSON.stringify(left));
+  check('without touching the manifest every later voyage reads',
+        c2.manifest[0].qty === 40, String(c2.manifest[0].qty));
 
   /* ---- assistance, which is gated on actually being in trouble ---- */
   var G3 = makeG();

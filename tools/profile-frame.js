@@ -162,6 +162,8 @@ require('../src/missions.js');
  * `global.Arcs &&`, so its absence read as "no campaigns running" rather
  * than as a harness that had never loaded the module. */
 require('../src/arcs.js');
+/* Trade with a hailed ship — the COMMS trade board draws from it. */
+require('../src/shiptrade.js');
 require('../src/sound.js');
 require('../src/save.js');
 require('../src/hulls.js');

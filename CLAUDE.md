@@ -59,7 +59,7 @@ has already happened at least once.
 ## Testing
 
 ```
-npm test          # nine suites, plain node, no framework
+npm test          # every suite (seventeen), plain node, no framework
 ```
 
 Suites print `ok` / `FAIL` and exit non-zero. **They are blind to layout** —
@@ -98,11 +98,28 @@ the previous build and let you conclude the wrong thing.
 
 ## Target hardware
 
-A rugged Latitude 5420 **is** the development machine, so profiling needs
-no extrapolation. The trajectory predictor already costs ~25 ms a frame
-and the renderer ~3 ms — when something feels slow, it is usually not the
-rendering. Anything added to the per-frame path should be costed against
-that budget explicitly.
+**Latitude 5424 Rugged ("Syndicate Crawler")**, from October 2026: Core
+i7-8650U (4C/8T), 32 GB RAM at 2400 MT/s, a **discrete AMD Radeon RX 540
+with 4 GB** alongside the Intel UHD 620, Windows 11. It is the development
+machine too, so profiling still needs no extrapolation.
+
+What changed from the old target, a Latitude 5420 Rugged (i5-8350U, 16 GB,
+UHD 620 only), is the discrete GPU — and the direction is to **move
+rendering onto it**, even where that means rebuilding things. Two
+consequences worth holding on to:
+
+- The GPU belongs to the renderer, but the CPU is still four mobile cores.
+  The trajectory predictor cost ~25 ms a frame against the renderer's ~3 ms
+  on the 5420; when something feels slow it is usually not the rendering,
+  and the 8650U is a faster chip, not a different class. Anything added to
+  the per-frame path should still be costed against that budget explicitly.
+- A dual-GPU laptop will happily run a browser or Electron window on the
+  **integrated** chip. Anything that measures GPU performance has to check
+  which adapter it actually got (WebGL's `WEBGL_debug_renderer_info`)
+  before trusting the number.
+
+The old 5420 survives as an honest floor-spec machine: integrated graphics
+only.
 
 **A machine with a 4 GB discrete GPU is incoming (noted 2026-10-09), and
 it changes less than it sounds like it should.** The renderer is already

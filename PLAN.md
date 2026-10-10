@@ -3336,20 +3336,46 @@ outbound ship on F4 and offer to fly it to its port of call for a fee.
 - You have to actually be there when they arrive, which means jumping the
   same lane and holding station
 
-**4. Ship-to-ship trade over COMMS.** Newer ask, not designed in detail.
-Offer to trade wares with a ship you have hailed, with availability and
-price gated on your criminal record and your standing with that ship's
-faction. Worth noting before building: **faction standing already
-exists** — `Missions.bumpStanding`, `Missions.standingLabel`, standing
-dented by smuggling fines, campaign chapters paying standing, and `Combat`
-tracking bounties per faction. Start-at-zero and rise-by-trading is close
-to what is already there; the rival-faction penalty is the part that is
-genuinely new.
+**4. ✅ Ship-to-ship trade over COMMS — DONE 2026-10-10.** `src/shiptrade.js`,
+`test/shiptrade.test.js` (70). Designed with Astra in four answers:
 
-- [ ] Confirm what `bumpStanding` already does before adding a second system
-- [ ] Decide whether trading in a faction's space raises standing
-      passively, or only missions do
-- [ ] Decide which mission types carry a rival penalty
+- [x] `bumpStanding` confirmed first: one number per faction, −100…100,
+      labels HOSTILE/cold/neutral/warm/ALLIED. No second system — trade
+      writes through it.
+- [x] **Standing rises with deal size**, not passively and not missions-only:
+      a point per `CR_PER_STANDING` (2,500 cr), fractions carried, capped at
+      `DAILY_CAP` (4) per faction per day each way. At the cap the carry is
+      dropped, or a huge deal would just pay tomorrow's standing too.
+- [x] **Rival penalty: both kinds.** Law ↔ Syndicate across each other's
+      space, and seeded empire rivalries (`Galaxy.rivalsOf`, own stream
+      `galaxy-rivals|seed`; two empires always rivals, three roll each pair
+      and nobody is left friendless). Minors inherit their empire's quarrels
+      through `parentId`. The two rules cannot both fire on one deal.
+- [x] **The record gates lawful hulls only** — wanted by, or a fugitive
+      from, the ship's own flag. Outlaws deal with anyone. Standing moves
+      price, never the door.
+- [x] **A proper screen**, in the comms channel pane, with the port
+      market's keys. Looked at in a browser at 1280×720 and 764×867.
+
+**Measured, and worth knowing before tuning it:** across 2,000 systems
+ordinary traffic never puts an outlaw-flagged trader in lawful space — the
+"outlaw hull in lawful space" half of the rule is dormant (pinned by a
+synthetic test) until pirate bands or smugglers trade outside a hold.
+Lawful hulls in Syndicate holds: ~9,000 legs. Rival-empire hulls: ~8,700,
+about 4% of lawful traffic.
+
+**Two bugs it found on the way.** Buying used to subtract from `route.out`,
+the template every later voyage reads — now a per-voyage ledger. And the
+first price model anchored a ship's ask to where it loaded and its bid to
+where it was going, which put the bid ABOVE the ask on exactly the goods a
+ship carries (423 to buy rare metals, 634 to sell them back). One anchor
+now — the destination — and a sweep of 2,486 two-way lines holds every ask
+above its bid.
+
+**Not done, and deliberately:** a ship's purchases do not reduce the
+delivery its destination market is expecting. The manifest is registered as
+a scheduled arrival in `economy.js`; a few tonnes bought in vacuum do not
+move a port's sawtooth enough to be worth a second ledger in the economy.
 
 **5. Flares/chaff as a consumable.** Seeker missiles **already exist** —
 `MISSILES.hawk` ("Hawk seeker", 420 cr, rack of 8), `Combat.fireMissile`,

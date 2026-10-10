@@ -1067,6 +1067,16 @@
     } catch (e) { gl = null; }
     if (!gl) { GL.available = false; return false; }
 
+    /* WHICH CHIP WE ACTUALLY GOT. A frame time measured on a dual-GPU
+     * laptop means nothing until you know which adapter produced it, and
+     * the hint above is a request, not a guarantee. Recorded once, never
+     * per frame. Null where the browser withholds it. */
+    GL.adapter = null;
+    try {
+      var dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      if (dbg) GL.adapter = String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL));
+    } catch (e) { GL.adapter = null; }
+
     try {
       prog = link(gl, VERT_BODY, FRAG_BODY, 'body');
       starProg = link(gl, VERT_STARS, FRAG_STARS, 'stars');

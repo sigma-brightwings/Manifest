@@ -17,6 +17,47 @@ full design and the phases still outstanding.
 
 ### Added
 
+- **Trading with a ship you have hailed is a proper market now.** `F4` →
+  pick a ship → `Trade…` opens a board in the channel pane: every line in
+  their hold and every line in yours, what they ask and what they pay, and
+  — for the selected line — what each direction would do or why it will
+  not. The keys are the port market's (↑↓, → buy, ← sell, Shift ×10, Home
+  buy max, End sell all); Esc backs out to the channel. It replaces the two
+  one-line buttons, which offered the first line of the manifest, six
+  tonnes at a time, at a flat markup, to anyone.
+
+  Who you are matters now, as Astra designed it:
+  - **The record gates lawful hulls only.** Wanted by a ship's own flag, or
+    a fugitive from it, and it will not open its hold to you — and says
+    why, and what would change it. Outlaw hulls deal with anybody.
+  - **Standing moves the price**, up to 12% either way, never the door.
+  - **Standing rises with the size of the deal** — a point per 2,500 cr,
+    fractions carried, at most four points a faction a day.
+  - **Rivals resent it.** Galaxies now carry seeded rivalries between the
+    empires (`Galaxy.rivalsOf`). Trading with a rival empire's hull in an
+    empire's space costs you with that empire; trading with a lawful hull
+    in a Syndicate hold costs you with the Syndicate, and an outlaw hull in
+    lawful space with the owner. The board says who will mind *before* you
+    trade.
+
+  Prices are anchored to what the good is worth at the ship's destination,
+  so at the best standing a ship still asks more and bids less than the
+  port it is bound for: a convenience and a way to buy friends, never an
+  arbitrage. A swept test holds every two-way line in a dozen systems to
+  ask-above-bid.
+
+  Measured while building it: across 2,000 systems, ordinary traffic never
+  flies an outlaw flag in lawful space, so that half of the law/Syndicate
+  rule is dormant until something outlaw trades outside a hold. The other
+  half (lawful hulls in holds, ~9,000 legs) and the empire rivalry (~8,700)
+  fire in normal play.
+
+- **The game asks for the discrete GPU.** The WebGL layer requested the
+  `low-power` adapter, which on a dual-GPU laptop like the Latitude 5424 is
+  an explicit request for the integrated chip. It asks for
+  `high-performance` now, Electron forces the same at process level, and
+  `GLWorld.adapter` records which chip actually answered.
+
 - **Distress calls are signals now, not a bounty timer.** `distressAt` has
   existed since the law did, and the word had been a lie for the whole life
   of the codebase: the timer expired, `report()` added a bounty, and
@@ -251,6 +292,14 @@ full design and the phases still outstanding.
   pilot cleared to own the drive is cleared to carry what it burns.
 
 ### Fixed
+
+- **Buying off a passing ship emptied the whole line, for the session.**
+  The purchase came off `route.out` — the template manifest every later
+  sailing of that line reads — so six tonnes bought once meant every
+  future voyage sailed six tonnes light, and a line bought dry ran empty
+  until the next reload. What a voyage has lost is now a per-voyage ledger
+  (`G.shipTrade`), forgotten when the voyage ends; the timetable stays a
+  pure function of the seed.
 
 - **Every ship in the game was flying with its landing gear down.** All
   fifty-two models were authored with the legs extended, and the converter
@@ -833,6 +882,11 @@ full design and the phases still outstanding.
   room; they now pay off in a freighter's hold.
 
 ### Saves
+
+**Ship-to-ship trade adds one field, `shipTrade`** — the per-voyage ledger
+and the day's standing tally. An older save has none and starts with an
+empty one. Rivalries are not saved at all: they are a pure function of the
+galaxy seed, so an existing career gets its galaxy's quarrels on load.
 
 **Existing careers load, with their gear.** The save version is
 deliberately *not* bumped: `readSlot` and `load` discard any payload whose

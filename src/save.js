@@ -354,6 +354,11 @@
       tenderKills: G.tenderKills || 0,
       doneMissions: G.doneMissions || {},
       campaigns: G.campaigns || {},
+      /* Ship-to-ship trade: what each voyage has already sold or bought
+       * (so a reload cannot refill a hold you emptied) and the day's
+       * standing tally (so a reload cannot reset the daily cap). Added
+       * field, absent in older saves — restore defaults it. */
+      shipTrade: G.shipTrade || null,
       ledger: G.ledgerLog || []
     };
   }
@@ -484,6 +489,7 @@
     G.tenderKills = data.tenderKills || 0;
     G.doneMissions = data.doneMissions || {};
     G.campaigns = data.campaigns || {};
+    G.shipTrade = data.shipTrade || null;
     G.ledgerLog = data.ledger || [];
 
     if (d.docked && G.sys.byId[d.docked]) {
