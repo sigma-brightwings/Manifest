@@ -160,6 +160,11 @@
      * The phase comes separately for the same reason — it is the shape of
      * the stroke and has to be exact. */
     'uniform vec3 uStormSalt;',
+    /* The slot before this one, so a stroke that started late in it can
+     * finish rather than being cut off at the boundary. */
+    'uniform vec3 uStormSaltPrev;',
+    /* Four slow co-prime rhythms: the storm's own waxing and waning. */
+    'uniform vec4 uStormSlow;',
     'uniform float uStormPhase;',
     'uniform float uFlashGain;',
     /* Depth, so a ship can pass behind a planet. The impostor has no
@@ -523,21 +528,57 @@
      * Added before the multiply it survived at 5% on the night side,
      * which is the one side of a planet where lightning is the entire
      * point, and the storms were invisible. */
+    /* THE PACE IS THE WHOLE POINT. Every stroke used to begin at the top of
+     * its 0.9 s slot, so the sky kept a perfect beat no matter how the cells
+     * were scattered — a strobe with a storm texture on it. Weather.js's
+     * `stormClock` carries the argument in full; what the shader does with
+     * it is three things: slide each stroke off the grid by a hashed
+     * offset, evaluate the PREVIOUS slot as well so a late stroke is not
+     * guillotined at the boundary, and modulate each cell's firing
+     * threshold with four slow co-prime rhythms so storms burst and then go
+     * quiet instead of ticking over at a flat rate. */
     '    if (storm > 0.03 && uFlashGain > 0.0) {',
     /* The patch one stroke lights: about a twelfth of the world across,
      * which is enormous for a thunderstorm and the smallest thing worth
      * drawing from orbit. A physically-sized cell is a sub-pixel flash. */
     '      vec3 cid = floor(sc * 2.0);',
-    '      float r = hash13(cid + uStormSalt * 37.0);',
-    /* About a fifth of the cells fire in any given bucket, and a second
-     * hash decides how hard — a sky where every flash is the same flash
-     * reads as a strobe rather than as a storm. */
-    '      float fire = step(0.52, r);',
-    '      float hard = 0.45 + 0.55 * hash13(cid * 1.7 + uStormSalt.zxy * 53.0);',
-    /* Two strokes: the leader, and the return a fifth of a bucket later.
-     * That second one is most of why it reads as lightning. */
-    '      float ph = uStormPhase;',
-    '      float env = exp(-ph * 6.5) + 0.7 * exp(-abs(ph - 0.22) * 18.0);',
+    /* A cell's own four phases, so neighbouring cells are busy and quiet at
+     * different times. Without these the whole planet would breathe
+     * together, which is a worse artefact than the beat it replaces. */
+    '      vec4 cph = vec4(hash13(cid * 1.3), hash13(cid * 2.1 + 7.0),',
+    '                      hash13(cid * 3.7 + 13.0), hash13(cid * 5.3 + 19.0)) * 6.2831853;',
+    '      float act = 0.25 * (sin(uStormSlow.x + cph.x) + sin(uStormSlow.y + cph.y)',
+    '                        + sin(uStormSlow.z + cph.z) + sin(uStormSlow.w + cph.w));',
+    '      act = 0.5 + 0.5 * act;',
+    /* In a lull almost nothing fires; at the peak of a spell about half the
+     * cells do. The distance between those two numbers is the clustering,
+     * and clustering a uniform draw is how the gaps come out roughly
+     * exponential without a Poisson process per cell per frame. */
+    '      float thr = mix(@FLASH_QUIET@, @FLASH_DUTY@, act);',
+    '      float lit = 0.0;',
+    /* Two slots: this one and the one before. A stroke that began late in
+     * the previous slot is still burning in this one. */
+    '      for (int k = 0; k < 2; k++) {',
+    '        vec3 sl = (k == 0) ? uStormSalt : uStormSaltPrev;',
+    '        float ph = uStormPhase + float(k);',
+    '        float r = hash13(cid + sl * 37.0);',
+    '        float fire = step(thr, r);',
+    /* Off the grid. This one line is most of the fix. */
+    '        float tt = ph - hash13(cid * 3.1 + sl.yzx * 29.0) * @FLASH_JITTER@;',
+    '        float hard = 0.45 + 0.55 * hash13(cid * 1.7 + sl.zxy * 53.0);',
+    /* A leader, a return, and sometimes a third, at hashed gaps rather than
+     * a fixed fifth of a slot. The flicker is most of what the eye reads as
+     * lightning rather than as a lamp being switched. */
+    '        float env = 0.0;',
+    '        if (tt > 0.0) {',
+    '          float g1 = 0.04 + 0.16 * hash13(cid * 4.3 + sl * 11.0);',
+    '          float g2 = g1 + 0.04 + 0.18 * hash13(cid * 6.1 + sl * 17.0);',
+    '          env = exp(-tt * 7.0) + 0.75 * exp(-abs(tt - g1) * 24.0);',
+    '          env += step(0.45, hash13(cid * 7.9 + sl * 23.0))',
+    '                 * 0.55 * exp(-abs(tt - g2) * 28.0);',
+    '        }',
+    '        lit = max(lit, fire * hard * env);',
+    '      }',
     /* SOFTEN THE CELL, or the cell is what you see. A stroke picked by
      * hashing a cube of the lookup lights that cube — corners, faces and
      * all — and from orbit the sky flashed in rectangles, which reads as a
@@ -546,7 +587,7 @@
      * of light with no edge to notice. */
     '      vec3 fp = fract(sc * 2.0);',
     '      vec3 b3 = smoothstep(0.0, 0.50, fp) * (1.0 - smoothstep(0.50, 1.0, fp));',
-    '      glow += fire * hard * env * storm * (b3.x * b3.y * b3.z) * 7.0 * uFlashGain;',
+    '      glow += lit * storm * (b3.x * b3.y * b3.z) * 7.0 * uFlashGain;',
     '    }',
     /* AT TIME WARP THE FLASHES BECOME A GLOW. The stroke is a tenth of a
      * second and the frames are seconds apart, so sampling it would give
@@ -597,7 +638,9 @@
     var D = { CLOUD_SCALE: 2.4, SEED_SCALE: 1.7, THRESH_HI: 0.655,
               THRESH_LO: 0.405, EDGE: 0.055, SHEAR: 0.21, STORM_SCALE: 2.5,
               STORM_LO: 0.55, STORM_HI: 0.70, W1: 0.9, W2: 0.3703,
-              DRIFT1: 0.42, DRIFT2: 0.28 };
+              DRIFT1: 0.42, DRIFT2: 0.28,
+              FLASH_BUCKET: 0.9, FLASH_DUTY: 0.52, FLASH_QUIET: 0.94,
+              FLASH_JITTER: 0.85 };
     return src.replace(/@([A-Z0-9_]+)@/g, function (m, key) {
       var v = (W[key] !== undefined) ? W[key] : D[key];
       if (v === undefined) throw new Error('gl.js: no weather constant ' + key);
@@ -1099,7 +1142,8 @@
                               'uIsStar', 'uAtmo', 'uAtmoColor', 'uCloud',
                               'uSeed', 'uSpinAxis', 'uSpinPhase', 'uDeckPhase',
                               'uBandPhase', 'uShearPhase',
-                              'uStormSalt', 'uStormPhase', 'uFlashGain',
+                              'uStormSalt', 'uStormSaltPrev', 'uStormSlow',
+                              'uStormPhase', 'uFlashGain',
                               'uWeather', 'uCenterDepth', 'uWorldRadius',
                               'uNear', 'uInvLogRange', 'uBanded',
                               'uOcean', 'uSeaColor', 'uIce',
@@ -1616,6 +1660,8 @@
       gl.uniform1f(uni.uShearPhase, sp2.shear);
       gl.uniform1f(uni.uWeather, sp2.weather);
       gl.uniform3f(uni.uStormSalt, sp2.salt[0], sp2.salt[1], sp2.salt[2]);
+      gl.uniform3f(uni.uStormSaltPrev, sp2.saltPrev[0], sp2.saltPrev[1], sp2.saltPrev[2]);
+      gl.uniform4f(uni.uStormSlow, sp2.slow[0], sp2.slow[1], sp2.slow[2], sp2.slow[3]);
       gl.uniform1f(uni.uStormPhase, sp2.stormPhase);
       gl.uniform1f(uni.uFlashGain, flashGain);
       gl.uniform1f(uni.uCenterDepth, q.depth);
@@ -1765,7 +1811,10 @@
   /* How long a lightning bucket is. Short enough that a busy storm fires
    * several times while you watch it, long enough that a single stroke is
    * a stroke rather than a flicker. */
-  var STORM_BUCKET = 0.9;            // seconds of sim time
+  /* One copy, like every other weather number — the fallback is for gl.js
+   * loaded without weather.js, which the hull viewer does. */
+  var STORM_BUCKET = ((global.Weather && global.Weather.K &&
+                       global.Weather.K.FLASH_BUCKET) || 0.9);
 
   /* Three small numbers from one bucket index, done here because the
    * shader's hash cannot take a large input and stay a hash. Integer
@@ -1812,6 +1861,8 @@
   function spinOf(body, t) {
     var rot = body.rotation;
     var tilt = rot ? rot.tilt : 0;
+    var W = global.Weather;
+    var clock = (W && W.stormClock) ? W.stormClock(t) : null;
     /* The axis, read out of the same construction sim.js uses to put a pad
      * on the ground: a body-fixed frame whose pole is +z, tipped about x by
      * the tilt. Asking that question HERE rather than inventing an axis is
@@ -1835,8 +1886,14 @@
        * only to hash with, where losing a bit costs nothing but a
        * different flash, and needs the fraction to be exact, because it
        * is the shape of the stroke. */
-      salt: saltOf(Math.floor(t / STORM_BUCKET)),
-      stormPhase: wrap(t / STORM_BUCKET, 1)
+      /* THE SCHEDULE LIVES IN WEATHER.JS, with every other weather number,
+       * so the suite can check the pace without a GPU and the two languages
+       * cannot drift. The fallback is for gl.js loaded on its own, which
+       * the hull viewer does — one slot, no rhythms, the old flat rate. */
+      salt: clock ? clock.salt : saltOf(Math.floor(t / STORM_BUCKET)),
+      saltPrev: clock ? clock.saltPrev : [0, 0, 0],
+      slow: clock ? clock.slow : [0, 0, 0, 0],
+      stormPhase: clock ? clock.phase : wrap(t / STORM_BUCKET, 1)
     };
   }
 

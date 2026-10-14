@@ -120,6 +120,47 @@ full design and the phases still outstanding.
   *for* you, spending systems that already exist rather than inventing a
   currency.
 
+- **Lightning keeps weather now, not time.** Astra: it should flash "at a
+  more random-looking pace", and "look more like a real storm".
+
+  What was wrong was a metronome. Time was cut into fixed 0.9 s slots and
+  every stroke began at the top of its slot, so however many cells fired and
+  however hard, the sky kept a perfect 0.9 s beat — a strobe with a storm
+  texture on it. Three changes, each of them something real lightning does:
+  strokes slide anywhere inside their slot; the previous slot is evaluated
+  too, so a late stroke finishes instead of being guillotined at the
+  boundary; and each cell's firing threshold is modulated by four slow
+  rhythms, so storms burst and then go quiet rather than ticking over. A
+  flash is also two or three strokes at hashed gaps instead of a fixed
+  fifth of a slot, which is most of what the eye reads as lightning rather
+  than as a lamp being switched.
+
+  **Measured, because "looks real" is a claim about numbers.** The gaps
+  between flashes in one cell now run 0.72 s at the tenth percentile, 2.3 s
+  median, 7.2 s at p90 and up to 31 s, with a coefficient of variation of
+  **1.01** — a metronome is 0 and a Poisson process is 1, and real
+  inter-flash intervals are very close to exponential. Gaps landing within
+  50 ms of a whole slot fell to 12.5% against 11% expected by chance, which
+  is the beat being gone rather than disguised.
+
+  **It repeats on purpose, and the number is written down.** The four
+  rhythms are 419, 557, 683 and 811 slots — 6 to 12 minutes, which is how
+  long a cell actually takes to wax and wane — and they are pairwise
+  co-prime, so they realign only after their product: 1.293e11 slots, about
+  **3,700 years of sim time**. Astra asked for a pattern that eventually
+  repeats and cannot be caught repeating.
+
+  The schedule lives in `weather.js` with every other weather number, so the
+  suite checks the pace without a GPU and the two languages cannot drift.
+
+  **And a latent bug found on the way.** The old salt multiplied the slot
+  index by 374761393 in a double while claiming to be exact "for any bucket
+  a career will ever reach". It left 2^53 after roughly eight months of sim
+  time and began dropping low bits — the storms would have gone quietly
+  periodic, which is the exact failure that function exists to prevent,
+  hiding inside the function. It is `Math.imul` now and exact for every slot
+  in the cycle.
+
 - **The tow, the bill, and what happens when you cannot pay it.** The
   tender arrived and filled your tanks for a flat 500 cr, and if you were
   broke the crew waived it. Three things were wrong with that: there was

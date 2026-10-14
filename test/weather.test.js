@@ -25,8 +25,16 @@ console.log('--- one copy of every number ---');
         (src.match(/@[A-Z0-9_]+@/g) || []).join(','));
   /* Every tunable weather.js owns has to be the number the picture uses.
    * Hand-edit one in the shader and the literal stops matching. */
+  /* Two of them are consumed as JAVASCRIPT rather than interpolated —
+   * gl.js reads FLASH_BUCKET to index the storm clock, and the clock's own
+   * arithmetic lives in weather.js. Exempted by name instead of by luck:
+   * FLASH_BUCKET is 0.9 and so is W1, so a string search finds it either
+   * way and would have gone on passing after the reason stopped being
+   * true. */
+  var JS_ONLY = { FLASH_BUCKET: 1 };
   var missing = [];
   Object.keys(W.K).forEach(function (k) {
+    if (JS_ONLY[k]) return;
     if (src.indexOf(W.K[k].toFixed(5)) < 0) missing.push(k + '=' + W.K[k]);
   });
   check('every weather constant in the picture came from weather.js',
@@ -232,6 +240,126 @@ console.log('--- flying into it ---');
   /* Out in space there is no weather to be in, and asking must not throw. */
   check('there is no weather in orbit',
         W.aloft({ pos: { x: st.pos.x + 1e6, y: st.pos.y, z: st.pos.z } }, sys, t) === null);
+})();
+
+console.log('--- the pace of a storm ---');
+(function () {
+  var K = W.K, TAU = Math.PI * 2;
+
+  /* Stateless and deterministic, like the rest of the file: the sky at a
+   * time is a fact about that time, so flying away and coming back finds
+   * the same storm mid-flash. */
+  check('the clock is a pure function of t',
+        JSON.stringify(W.stormClock(9999.25)) === JSON.stringify(W.stormClock(9999.25)));
+  var c0 = W.stormClock(0);
+  check('the phase is a proper fraction of a slot',
+        c0.phase >= 0 && c0.phase < 1);
+  check('and it sweeps the slot', Math.abs(W.stormClock(K.FLASH_BUCKET * 0.5).phase - 0.5) < 1e-9);
+
+  /* THE IMUL FIX. The old salt multiplied the slot index by 374761393 in a
+   * double and claimed to be exact for any career; it left 2^53 after about
+   * eight months of sim time and began dropping low bits, which would have
+   * shown up as the storms going quietly periodic. */
+  var far = W.stormClock(3600 * 24 * 365 * 40);
+  check('a slot forty years in still salts inside the unit interval',
+        far.salt.every(function (v) { return v >= 0 && v < 1; }),
+        far.salt.map(function (v) { return v.toFixed(4); }).join(', '));
+  check('and distinct slots get distinct salts out there',
+        JSON.stringify(far.salt) !==
+        JSON.stringify(W.stormClock(3600 * 24 * 365 * 40 + K.FLASH_BUCKET).salt));
+  check('the previous slot is the previous slot',
+        JSON.stringify(W.stormClock(1000).saltPrev) ===
+        JSON.stringify(W.stormClock(1000 - K.FLASH_BUCKET).salt));
+
+  /* The cycle is the product of the rhythms, which requires them to be
+   * pairwise co-prime — that is the only reason the product is also the
+   * least common multiple. */
+  function gcd(a, b) { return b ? gcd(b, a % b) : a; }
+  var coprime = true;
+  for (var i = 0; i < W.FLASH_RHYTHMS.length; i++) {
+    for (var j = i + 1; j < W.FLASH_RHYTHMS.length; j++) {
+      if (gcd(W.FLASH_RHYTHMS[i], W.FLASH_RHYTHMS[j]) !== 1) coprime = false;
+    }
+  }
+  check('the four rhythms are pairwise co-prime', coprime, W.FLASH_RHYTHMS.join(','));
+  var product = W.FLASH_RHYTHMS.reduce(function (a, b) { return a * b; }, 1);
+  check('so the cycle is their product', W.FLASH_CYCLE === product);
+  var years = W.FLASH_CYCLE * K.FLASH_BUCKET / (3600 * 24 * 365.25);
+  check('which is long enough that nobody will catch it repeating',
+        years > 1000, Math.round(years) + ' years of sim time');
+  check('and it is exact in doubles', W.FLASH_CYCLE < Math.pow(2, 53));
+
+  /* ---- and now the thing Astra actually asked for -------------------
+   * The old schedule fired every stroke at the top of its slot, so the
+   * sky kept a 0.9 s beat. These two checks are the beat being gone and
+   * the gaps looking like weather instead of like a clock. The shader's
+   * per-cell decision is reproduced here, which is what putting the clock
+   * in weather.js bought. */
+  function fract(x) { return x - Math.floor(x); }
+  function h13(x, y, z) {
+    x = fract(x * 0.3183099 + 0.71);
+    y = fract(y * 0.3183099 + 0.113);
+    z = fract(z * 0.3183099 + 0.419);
+    var d = x * (y + 19.19) + y * (z + 19.19) + z * (x + 19.19);
+    x += d; y += d; z += d;
+    return fract((x + y) * z);
+  }
+  function gapsOf(cid, seconds) {
+    var cph = [[1.3, 0], [2.1, 7], [3.7, 13], [5.3, 19]].map(function (m) {
+      return h13(cid[0] * m[0] + m[1], cid[1] * m[0] + m[1], cid[2] * m[0] + m[1]) * TAU;
+    });
+    var times = [], rising = false;
+    for (var t = 0; t < seconds; t += 0.02) {
+      var c = W.stormClock(t);
+      var act = 0.25 * (Math.sin(c.slow[0] + cph[0]) + Math.sin(c.slow[1] + cph[1]) +
+                        Math.sin(c.slow[2] + cph[2]) + Math.sin(c.slow[3] + cph[3]));
+      var thr = K.FLASH_QUIET + (K.FLASH_DUTY - K.FLASH_QUIET) * (0.5 + 0.5 * act);
+      var lit = 0;
+      for (var k = 0; k < 2; k++) {
+        var sl = k === 0 ? c.salt : c.saltPrev;
+        if (h13(cid[0] + sl[0] * 37, cid[1] + sl[1] * 37, cid[2] + sl[2] * 37) < thr) continue;
+        var tt = c.phase + k - h13(cid[0] * 3.1 + sl[1] * 29, cid[1] * 3.1 + sl[2] * 29,
+                                   cid[2] * 3.1 + sl[0] * 29) * K.FLASH_JITTER;
+        if (tt <= 0) continue;
+        var g1 = 0.04 + 0.16 * h13(cid[0] * 4.3 + sl[0] * 11, cid[1] * 4.3 + sl[1] * 11,
+                                   cid[2] * 4.3 + sl[2] * 11);
+        lit = Math.max(lit, Math.exp(-tt * 7) + 0.75 * Math.exp(-Math.abs(tt - g1) * 24));
+      }
+      if (!rising && lit > 0.25) { rising = true; times.push(t); }
+      else if (rising && lit < 0.15) rising = false;
+    }
+    var g = [];
+    for (var i2 = 1; i2 < times.length; i2++) g.push(times[i2] - times[i2 - 1]);
+    return g;
+  }
+
+  var gaps = [];
+  for (var cc = 0; cc < 4; cc++) {
+    gaps = gaps.concat(gapsOf([cc * 3 + 1, cc * 5 + 2, cc * 7 + 3], 900));
+  }
+  check('(fixture) the cells flash often enough to measure', gaps.length > 300,
+        gaps.length + ' gaps');
+
+  var mean = gaps.reduce(function (a, b) { return a + b; }, 0) / gaps.length;
+  var sd = Math.sqrt(gaps.reduce(function (a, b) {
+    return a + (b - mean) * (b - mean);
+  }, 0) / gaps.length);
+  var cv = sd / mean;
+  /* A metronome has cv 0; a Poisson process has cv 1, which is what real
+   * inter-flash intervals look like. Measured at 1.01 when this landed. */
+  check('the gaps are spread like a Poisson process, not like a clock',
+        cv > 0.7, 'cv ' + cv.toFixed(2) + ' (0 = metronome, 1 = exponential)');
+
+  /* THE BEAT IS GONE. If strokes still began at slot tops, every gap would
+   * be a whole number of slots and this would be ~100%. Chance is about
+   * 11% for a 50 ms window in a 0.9 s slot. */
+  var onGrid = gaps.filter(function (g2) {
+    var m = g2 % K.FLASH_BUCKET;
+    return m < 0.05 || m > K.FLASH_BUCKET - 0.05;
+  }).length;
+  var pctGrid = 100 * onGrid / gaps.length;
+  check('and the flashes no longer land on the slot grid',
+        pctGrid < 25, pctGrid.toFixed(1) + '% within 50 ms of a whole slot, 11% is chance');
 })();
 
 console.log('');
