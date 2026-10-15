@@ -10,7 +10,47 @@ before they update.
 
 ---
 
-## Unreleased — alpha 5 (in progress)
+## Unreleased
+
+Nothing yet. Next up: planetary survey and mining (see the project design
+notes, `mining-and-survey`).
+
+---
+
+## 1.1.0-beta "Abby" (2026-10-15)
+
+**Releases have names now** as well as numbers, the way Linux distributions
+do. They are pigeons from the rescue, in no fixed order. This one is named
+for Abby, a PMV survivor. The name is on the title screen, in the window
+title and in `src/release.js`; `test/release.test.js` keeps it and the
+number in step with `package.json`.
+
+This section was opened for alpha 5 and never closed for 1.0.0-beta
+(2026-09-16), so everything below, down to "Before this changelog", shipped
+in Abby. Since 1.0: crew and a fleet, weather you fly through, two rescue
+services with a bill and a hull lien, standing orders, analysers and
+rumours, ship-to-ship trade, industry you can buy into, milfuel works, the
+Syndicate's fleet and its runners, and the station cutaway and glow pass.
+
+### Fixed (release housekeeping)
+
+- **The game was being built as "Procedural Space Game" 0.1.0 again.** A
+  commit on 2026-09-16 restored an old `package.json` and undid the rename,
+  so every build after 1.0 carried the old name, and a build under the old
+  name looks for saves in the old folder. The Manifest name, appId, artifact
+  names, desktop entry and maintainer are back.
+- **The rescue test still expected a flat fee that was waived when you were
+  broke.** Since the tow-and-bill change the fee is quoted at dispatch and
+  any shortfall becomes a lien on the hull. The test now checks that.
+
+### Saves
+
+Careers carry over. The `game://` origin and the `%APPDATA%\Manifest`
+folder are unchanged, and `electron/main.js` still copies saves across from
+the old name if it finds them there instead.
+
+### Everything else since alpha 4
+
 
 Outfitting, weapons, and the law. See `PLAN.md` for the
 full design and the phases still outstanding.

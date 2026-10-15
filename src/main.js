@@ -12932,6 +12932,20 @@
     if (t.note) drawMenuNote(ctx, box, t.note);
     if (t.edit) drawEditField(ctx, box, t.edit);
     ctx.restore();
+
+    /* WHICH BUILD, in the corner and out of the way: the number and the
+     * release's name (see release.js). Faded in with the tagline, since
+     * it is part of the card rather than part of the menu. */
+    var Rel = global.Release;
+    if (Rel && aLine > 0) {
+      ctx.save();
+      ctx.globalAlpha = aLine;
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(200,218,250,0.55)';
+      ctx.textAlign = 'right';
+      ctx.fillText(Rel.version + '  \u00b7  \u201c' + Rel.name + '\u201d', w - 18, h - 16);
+      ctx.restore();
+    }
   }
 
   /* Draw a string with extra space between the letters, centred or left by
