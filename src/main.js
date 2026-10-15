@@ -5387,6 +5387,9 @@
      * sensible view from inside a hangar is of the thing in the hangar. */
     if (!G.followShip && G.focus && enclosedPort()) G.followShip = true;
 
+    /* Rebuilt every frame by the clamp below, so a cutaway can never
+     * outlive the conditions that made it. */
+    G.cutaway = null;
     if (G.followShip || !G.focus) clampCameraToEnclosure();
   }
 
@@ -5695,6 +5698,30 @@
    * hundred metres away, every slab test negative, and the boom welded to
    * the hull for the last two legs. Which is, again, the one shot the whole
    * sequence exists for. The arrival knows its own berth; ask it first. */
+  /* Which berth's approach lights run the rabbit at this station: the one
+   * you are cleared for, or none. Arriving, it is the arrival's own entry
+   * (a heavy bay you are routed through, when there is one); otherwise it
+   * is the berth Sim.assignBerth would give you, which is deterministic.
+   * Held for a second — assignBerth measures boxes, and nothing about the
+   * answer changes faster than a pilot can read the lamps. */
+  var chaseMemo = null;
+  function chaseBerthFor(port) {
+    if (!port || !Combat.isCleared(G, port)) return null;
+    var nowS = nowSeconds();
+    if (chaseMemo && chaseMemo.id === port.id && nowS - chaseMemo.at < 1) return chaseMemo.berth;
+    var berth = null;
+    var arr = G.ship && G.ship.arrival;
+    if (arr && arr.port === port.id) {
+      berth = typeof arr.entry === 'number' ? arr.entry : arr.berth;
+    } else if (Sim.assignBerth) {
+      berth = Sim.assignBerth(G.ship, port);
+      var via = Gen.berthRoute ? Gen.berthRoute(port, berth) : null;
+      if (via && typeof via.entry === 'number') berth = via.entry;
+    }
+    chaseMemo = { id: port.id, at: nowS, berth: typeof berth === 'number' ? berth : null };
+    return chaseMemo.berth;
+  }
+
   function currentBerth() {
     if (G.ship && G.ship.arrival && typeof G.ship.arrival.berth === 'number') {
       return G.ship.arrival.berth;
@@ -5888,6 +5915,48 @@
                                          basis.up, above * r, margin * r);
   }
 
+  /* HOW BIG THE HOLE IS. `room` is how far the boom could go before it
+   * met metal; `asked` is how far it actually is. The cone is a hull and a
+   * bit wide at the ship and widens toward the eye by half of the overrun,
+   * so the further back you stand the more station opens up — Astra's
+   * rule, and it also happens to be the one that keeps the hole a sensible
+   * size on screen: the extra width grows with distance, and so does
+   * everything else's shrinking.
+   *
+   * `outside` is whether the eye has left the station altogether (or is
+   * inside its metal, which for drawing purposes is the same thing): then
+   * the station is drawn as it looks from space — whole, sunlit, sky
+   * behind — with the hole in it, rather than as a room. Asked of the same
+   * grid enclosedPort uses, at the eye instead of the hull. */
+  var CUT_SHIP = 1.2;         // bubble round the ship, in hull lengths
+  var CUT_SPREAD = 0.5;       // extra radius at the eye per km of overrun
+  var CUT_RIM = 0.06;         // cut-face band, fraction of the local radius
+
+  function cutawayFor(port, room, asked) {
+    var cp = Math.cos(G.cam.pitch), sp = Math.sin(G.cam.pitch);
+    var cy = Math.cos(G.cam.yaw), sy = Math.sin(G.cam.yaw);
+    var eye = V.addScaled(G.cam.target, { x: cp * cy, y: cp * sy, z: sp }, asked);
+    var within = Sim.insideStation ? Sim.insideStation(eye, G.sys, G.t) : port;
+    var rShip = (Render.SHIP_LEN || 0.025) * CUT_SHIP;
+    return {
+      port: port,
+      room: room,
+      outside: within !== port,
+      rShip: rShip,
+      rEye: rShip + Math.max(0, asked - room) * CUT_SPREAD
+    };
+  }
+
+  /* The enclosure as the DRAWING sees it: the station the ship is in,
+   * unless the cutaway has taken the eye outside it, in which case nothing
+   * encloses the view and the sky comes back. Everything about the SHIP —
+   * the camera follow, the clamps themselves — keeps asking enclosedPort. */
+  function viewEnclosure() {
+    var p = enclosedPort();
+    if (p && G.cutaway && G.cutaway.port === p && G.cutaway.outside) return null;
+    return p;
+  }
+
   function clampCameraToEnclosure() {
     if (G.viewMode === 'cockpit') return;   // the eye is the pilot's, not a boom
     /* The clamp follows the ENCLOSURE, not the docked flag. Half way down
@@ -5945,8 +6014,27 @@
        * out from the hull and stop at the last point that is not wall. It
        * costs a handful of array lookups, it needs no box to be correct,
        * and it cannot be fooled by a room whose shape is not a box. */
+      /* PAST THE WALL, THE WALL OPENS — on the GPU, at a station.
+       *
+       * The two clamps above still measure the room, and on the 2D
+       * renderer they still win: it paints whole triangles and has nowhere
+       * to cut a hole. With the GL layer live, though, the boom goes where
+       * the player put it and the measurement becomes the size of the
+       * cutaway instead (see GL.setCutaway). Astra: "we can't zoom out more
+       * than like twice the distance of the ship" — that was these two
+       * clamps, rewriting G.cam.dist every frame, so every notch of the
+       * wheel past the wall was undone before it was drawn.
+       *
+       * Orbital stations only. A surface port's walls are a planet, drawn
+       * by a different shader that has its own (shaft-shaped) hole; cutting
+       * the bay mesh without the rock would open a window onto nothing. */
+      var asked = G.cam.dist;
       clampCameraToHangar(port);
       clampCameraToThroat(port);
+      if (!port.surface && glLive() && G.cam.dist < asked * 0.999) {
+        G.cutaway = cutawayFor(port, G.cam.dist, asked);
+        G.cam.dist = asked;
+      }
       keepCameraAboveDeck(port);
       return;
     }
@@ -6100,7 +6188,7 @@
      * be parked would be a blank screen and a bug report. The suppression
      * below is about what you can SEE from where you are, and a chart is
      * not a thing you see from anywhere. */
-    var inside = mapMode() ? null : enclosedPort();
+    var inside = mapMode() ? null : viewEnclosure();
 
     /* Rock behind a shed as well as behind a burrow. `buried` is a
      * geometric test — is the eye below the planet's radius — and a camera
@@ -10299,6 +10387,36 @@
 
   /* The full-screen mode bodies live in screens.js. */
 
+  /* ---- WHICH STATIONS GET DRESSED ---------------------------------------
+   *
+   * Astra: "we will only draw stations that are near to our ship, and just
+   * keep the rest in a more efficient state, tracking their items, docked
+   * ships, faction stuff, missions — it still exists, we just don't draw it
+   * unless the player is near it."
+   *
+   * The tracking half was already true and stays exactly as it is: a
+   * station's market is a closed form of t, its traffic and berths are a
+   * timetable, its standing and missions live in G — none of that has ever
+   * depended on being drawn. This is the drawing half, as three tiers:
+   *
+   *   far   — under a few pixels across: the marker. Decided by size, as
+   *           it always was (see the rpx gate below).
+   *   mid   — big enough to see, but not near the SHIP: the hull and
+   *           nothing else.
+   *   near  — within NEAR_STATION_KM of the ship (or NEAR_STATION_RADII
+   *           radii, for the largest docks): everything — lights,
+   *           dressing, the structures round it.
+   *
+   * MEASURED FROM THE SHIP, NOT THE CAMERA, on purpose: zooming the orbit
+   * map in on a dock across the system shows you its hull, and does not
+   * make the frame pay for a town you are nowhere near. */
+  var NEAR_STATION_KM = 300;
+  var NEAR_STATION_RADII = 60;
+  function stationTier(b, pos) {
+    var d = V.dist(pos, G.ship.pos);
+    return d <= Math.max(NEAR_STATION_KM, b.radius * NEAR_STATION_RADII) ? 'near' : 'mid';
+  }
+
   function drawBody(ctx, cam, item, starScreen) {
     var b = item.body, sp = item.sp, rpx = item.rpx;
 
@@ -10337,8 +10455,16 @@
            * after, so the hull you are parked inside is lit as a room while
            * everything else on the same frame — the next station along, your
            * own hull, a ship passing outside — keeps its daylight. */
-          var indoors = (enclosedPort() === b);
+          var indoors = (viewEnclosure() === b);
           if (indoors) Render.setIndoors(true);
+          /* And the keyhole, round this station's meshes only — see
+           * cutawayFor. Cleared after the outworks below. */
+          var cut = (G.cutaway && G.cutaway.port === b && Render.setCutaway)
+            ? G.cutaway : null;
+          if (cut) {
+            Render.setCutaway({ pos: G.ship.pos, rShip: cut.rShip,
+                                rEye: cut.rEye, rim: CUT_RIM });
+          }
           /* WHOSE DOCK THIS IS, in paint. Astra asked for red accents on
            * Syndicate stations "like the syndicate ships do"; the rule is
            * written for every power instead, so a dock wears the same
@@ -10432,10 +10558,26 @@
           }
           if (indoors) Render.setIndoors(false);
           Render.setAccent(null);
+          /* Beacons and approach strings on an orbital dock — see
+           * Render.drawStationLights. From outside only, and early: like
+           * the pad lamps, a station's lights are the first thing about it
+           * you can read on approach. */
+          var tier = stationTier(b, item.pos);
+          if (!b.surface && !indoors && rpx > 4 && tier === 'near' && Render.drawStationLights) {
+            Render.drawStationLights(ctx, cam, frame, b, model, b.radius, sun,
+                                     nowSeconds(), chaseBerthFor(b));
+          }
+          /* And the outworks round it — same tier, same reasoning. */
+          if (!b.surface && !indoors && rpx > 6 && tier === 'near' && Render.drawStationOutworks) {
+            Render.setAccent(owner && owner.color, skin);
+            Render.drawStationOutworks(ctx, cam, frame, b, model, b.radius, sun);
+            Render.setAccent(null);
+          }
+          if (cut) Render.setCutaway(null);
           /* The town, the boards and the pad lighting. Held to a higher
            * threshold than the pad itself: the dressing is detail, and
            * detail smaller than a few pixels is cost without information. */
-          if (b.surface && rpx > 14) {
+          if (b.surface && rpx > 14 && tier === 'near') {
             Render.drawPortDressing(ctx, cam, frame, b, b.radius, sun);
           }
           /* The lamps come in earlier than the rest of the dressing: a

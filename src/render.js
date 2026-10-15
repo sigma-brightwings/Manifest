@@ -2628,6 +2628,14 @@
     if (global.GLWorld && global.GLWorld.setIndoors) global.GLWorld.setIndoors(!!on);
   }
 
+  /* See gl.js setCutaway. The 2D painter cannot cut a hole in a wall —
+   * it has no per-pixel stage to do it in — which is why main.js only asks
+   * for a cutaway when the GPU layer is live and keeps the old boom clamp
+   * otherwise. */
+  function setCutaway(cut) {
+    if (global.GLWorld && global.GLWorld.setCutaway) global.GLWorld.setCutaway(cut || null);
+  }
+
   function paintMesh(ctx, cam, frame, mesh, scale, sunDir, tint, edge) {
     var world = [], i;
     for (i = 0; i < mesh.v.length; i++) {
@@ -3779,6 +3787,346 @@
 
     port._dressMesh = mesh;
     return mesh;
+  }
+
+  /* ---- STATION LIGHTS: beacons, and a way in you can see from far out ---
+   *
+   * An orbital dock had no dressing at all — no ground to put a town on —
+   * so from outside it was whatever lamps its modeller happened to light,
+   * which for most of the library is almost none: a grey block in the dark.
+   * This is the orbital counterpart of the pad lamps, and it is built for
+   * the glow pass (gl.js POST) to pick up: every lamp is a '!' face.
+   *
+   * TWO KINDS, both in the FE2/FFE register — small flat lit shapes, read
+   * by their pattern rather than by detail:
+   *
+   *   BEACONS at the extremities. White double-flash strobes at both ends of
+   *   the longest axis, a red and a green steady lamp at the ends of the
+   *   next one (so which way round a station is reads from a distance), and
+   *   a slow red anti-collision lamp on top.
+   *
+   *   APPROACH STRINGS, two rows of amber lamps per berth edging the clear
+   *   line in from open space — the same line Gen.berthApertures measures
+   *   for the arrival rail, so the lamps can never lead you into a wall the
+   *   rail would not. When you are cleared for a berth, a white "rabbit"
+   *   runs down YOUR berth's rows toward the door.
+   *
+   * COST, against Astra's "don't overstress the 4 GB": every piece is built
+   * once per MODEL (a lamp layout is a fact about the art, like the entry
+   * lines it reads) and blinking is choosing which prebuilt piece to queue
+   * this frame, never rebuilding. A station's whole kit is a few hundred
+   * triangles; a frame queues at most four of its pieces. */
+  var LIGHT_KITS = {};
+  var LAMP_BEACON = 0.016;          // station radii, half-size of a beacon box
+  var LAMP_STRING = 0.0075;         // ...and of an approach lamp
+  var STRING_STEP = 0.07;           // spacing along the approach
+  var STRING_HALF = 0.05;           // each row's offset from the centreline
+  var CHASE_PHASES = 4;
+
+  function lampBox(mesh, p, half, color) {
+    addBox(mesh, p, [half, 0, 0], [0, half, 0], [0, 0, half], color);
+  }
+
+  function stationLightKit(port, model) {
+    var kit = LIGHT_KITS[model];
+    if (kit) return kit;
+    var hull = stationMeshes()[model];
+    if (!hull) { var lp = libPort(model); hull = lp && lp.shell; }
+    if (!hull || !hull.v || !hull.v.length) return null;   // not loaded yet: ask again next frame
+
+    /* The extremities, measured off the hull itself. */
+    var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    var loV = [null, null, null], hiV = [null, null, null];
+    for (var i = 0; i < hull.v.length; i++) {
+      var v = hull.v[i];
+      for (var a = 0; a < 3; a++) {
+        if (v[a] < lo[a]) { lo[a] = v[a]; loV[a] = v; }
+        if (v[a] > hi[a]) { hi[a] = v[a]; hiV[a] = v; }
+      }
+    }
+    var span = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+    var axes = [0, 1, 2].sort(function (p, q) { return span[q] - span[p]; });
+    function proud(v, a, sign) {
+      var p = v.slice();
+      p[a] += sign * LAMP_BEACON * 1.5;     // stood just off the hull, never inside it
+      return p;
+    }
+    var strobe = emptyMesh(); strobe.c = [];
+    var steady = emptyMesh(); steady.c = [];
+    var topLamp = emptyMesh(); topLamp.c = [];
+    var long = axes[0], side = axes[1];
+    lampBox(strobe, proud(loV[long], long, -1), LAMP_BEACON, '!#fff6dc');
+    lampBox(strobe, proud(hiV[long], long, 1), LAMP_BEACON, '!#fff6dc');
+    lampBox(steady, proud(loV[side], side, -1), LAMP_BEACON, '!#ff3b30');
+    lampBox(steady, proud(hiV[side], side, 1), LAMP_BEACON, '!#38ff6a');
+    /* "Top" is the model's +z — the axis stations are stood up along. */
+    lampBox(topLamp, proud(hiV[2], 2, 1), LAMP_BEACON * 0.8, '!#ff2a1f');
+
+    /* The approach strings, per berth. */
+    var strings = emptyMesh(); strings.c = [];
+    var chase = [];
+    var Gen = global.Gen;
+    var berths = (Gen && Gen.modelledBerths) ? Gen.modelledBerths(port) : null;
+    var n = berths ? berths.length : 0;
+    for (var b = 0; b < n; b++) {
+      var ap = Gen.berthApertures(port, b);
+      chase[b] = null;
+      if (!ap || !ap.reachable || !ap.entry) continue;
+      var door = [ap.mid[0] + ap.normal[0] * (ap.gate || 0),
+                  ap.mid[1] + ap.normal[1] * (ap.gate || 0),
+                  ap.mid[2] + ap.normal[2] * (ap.gate || 0)];
+      var e = ap.entry;
+      /* Across the corridor: any axis not along it, made perpendicular. */
+      var ref = Math.abs(e[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+      var x = [e[1] * ref[2] - e[2] * ref[1], e[2] * ref[0] - e[0] * ref[2], e[0] * ref[1] - e[1] * ref[0]];
+      var xl = Math.sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]) || 1;
+      x = [x[0] / xl, x[1] / xl, x[2] / xl];
+      /* From just outside the doors to a little past where the hull ends —
+       * far enough out to be seen before you commit to the line. */
+      var reach = Math.min(1.6, Math.max(0.7, (ap.exit || 0.4) + 0.55));
+      var count = Math.max(4, Math.floor(reach / STRING_STEP));
+      var phases = [];
+      for (var ph = 0; ph < CHASE_PHASES; ph++) { phases[ph] = emptyMesh(); phases[ph].c = []; }
+      for (var j = 0; j < count; j++) {
+        var d = 0.06 + j * STRING_STEP;
+        for (var sgn = -1; sgn <= 1; sgn += 2) {
+          var p = [door[0] + e[0] * d + x[0] * STRING_HALF * sgn,
+                   door[1] + e[1] * d + x[1] * STRING_HALF * sgn,
+                   door[2] + e[2] * d + x[2] * STRING_HALF * sgn];
+          lampBox(strings, p, LAMP_STRING, '!#d98a2b');
+          lampBox(phases[j % CHASE_PHASES], p, LAMP_STRING * 1.25, '!#ffffff');
+        }
+      }
+      chase[b] = phases;
+    }
+    kit = LIGHT_KITS[model] = { strobe: strobe, steady: steady, top: topLamp,
+                                strings: strings, chase: chase };
+    return kit;
+  }
+
+  /* `t` is WALL CLOCK seconds, for the same reason as the pad lamps: a lamp
+   * on a timer is not something the simulation drives, and sim time would
+   * turn the flashing into a blur under time warp. `chaseBerth` is the berth
+   * you are cleared for at THIS station, or null. */
+  function drawStationLights(ctx, cam, frame, port, model, radiusKm, sunDir, t, chaseBerth) {
+    var kit = stationLightKit(port, model);
+    if (!kit) return;
+    var draw = function (m) {
+      if (!m || !m.f.length) return;
+      if (gpuWorld() && global.GLWorld.queueMesh(cam, frame, m, radiusKm, sunDir)) return;
+      paintMesh(ctx, cam, frame, m, radiusKm, sunDir, '#ffffff');
+    };
+    draw(kit.steady);
+    draw(kit.strings);
+    var s = t % 1.6;                                  // strobe: a double flash
+    if (s < 0.07 || (s > 0.2 && s < 0.27)) draw(kit.strobe);
+    if ((t % 1.3) < 0.55) draw(kit.top);              // anti-collision: slow
+    if (typeof chaseBerth === 'number' && kit.chase[chaseBerth]) {
+      /* The rabbit runs INWARD: lamp index grows outward, so the lit phase
+       * steps down as time goes on. Eight steps a second. */
+      var step = Math.floor(t * 8) % CHASE_PHASES;
+      draw(kit.chase[chaseBerth][(CHASE_PHASES - step) % CHASE_PHASES]);
+    }
+  }
+
+  /* ---- OUTWORKS: the structures round a dock --------------------------
+   *
+   * Astra: "the station right now looks nice, but we can have more — just
+   * other geometry." So a dock grows a few outbuildings: tank farms, cargo
+   * stacks, solar wings, comms masts, shipyard scaffolds, greenhouse rings,
+   * chosen by what the port DOES (a mining head stacks ore cans, a
+   * refinery keeps tanks, a yard has frames with work in them), each
+   * tethered back to the hull by a truss and carrying red obstruction
+   * lamps for the glow pass.
+   *
+   * A PURE FUNCTION OF THE PORT, decided here rather than in generate.js,
+   * for one reason: placement has to avoid every berth's way in, and the
+   * way in is measured off the model (Gen.berthApertures), which is loaded
+   * lazily and does not exist at generation time. So the layout is seeded
+   * from the port's own identity — same port, same outworks, every visit,
+   * every save — and needs no new save field and no generator change.
+   *
+   * KEPT OUT OF EVERY APPROACH. A candidate spot is thrown away if it sits
+   * within 40 degrees of any berth's entry line as seen from that berth's
+   * door, or too close to the door itself. The approach lamps run down
+   * those same lines, so nothing built here can stand in a corridor the
+   * lamps tell you to fly.
+   *
+   * Only for the NEAR tier (main.js stationTier): a dock across the system
+   * costs nothing for having a yard. Visual only — like the hulls, nothing
+   * here collides. */
+  var OUTWORK_MENU = {
+    mining:       ['stack', 'stack', 'stack', 'tanks', 'mast'],
+    reprocessing: ['tanks', 'tanks', 'tanks', 'mast', 'stack'],
+    milfuel:      ['tanks', 'tanks', 'tanks', 'mast'],
+    shipyard:     ['scaffold', 'scaffold', 'scaffold', 'stack', 'solar'],
+    agri:         ['green', 'green', 'green', 'solar'],
+    highport:     ['solar', 'solar', 'mast', 'mast', 'green'],
+    orbital:      ['solar', 'mast', 'stack', 'tanks']
+  };
+  var CAN_COLOURS = ['#c8642e', '#2f6ca8', '#8a8f96', '#b89b3a', '#5d7f4a', '#9a4646'];
+  var OUT_PLATE = '#8d949f', OUT_TRUSS = '#5b626d', OBSTRUCTION = '!#ff3326';
+
+  /* merge() with an orientation: each source vertex v lands at
+   * o + ax*v.x + ay*v.y + az*v.z. The outworks face outward from the hub,
+   * which no axis-aligned merge can say. */
+  function mergeAxes(dst, src, o, ax, ay, az, col) {
+    var base = dst.v.length, i;
+    for (i = 0; i < src.v.length; i++) {
+      var v = src.v[i];
+      dst.v.push([o[0] + ax[0] * v[0] + ay[0] * v[1] + az[0] * v[2],
+                  o[1] + ax[1] * v[0] + ay[1] * v[1] + az[1] * v[2],
+                  o[2] + ax[2] * v[0] + ay[2] * v[1] + az[2] * v[2]]);
+    }
+    if (!dst.c) { dst.c = []; while (dst.c.length < dst.f.length) dst.c.push(null); }
+    for (i = 0; i < src.f.length; i++) {
+      dst.f.push([src.f[i][0] + base, src.f[i][1] + base, src.f[i][2] + base]);
+      dst.c.push(src.c ? src.c[i] : (col || null));
+    }
+  }
+
+  function vlen(a) { return Math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]); }
+  function vnorm(a) { var l = vlen(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; }
+  function vcross(a, b) {
+    return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  }
+
+  /* One outwork, built in its own frame: +z points away from the hub. */
+  function outworkPart(kind, rng) {
+    var m = emptyMesh(); m.c = [];
+    var lamp = function (x, y, z) { lampBox(m, [x, y, z], 0.006, OBSTRUCTION); };
+    var i, j, k;
+    if (kind === 'tanks') {
+      var n = 3 + rng.int(0, 2), gap = 0.085;
+      var x0 = -(n - 1) * gap / 2;
+      merge(m, box((n - 1) * gap / 2 + 0.05, 0.012, 0.012), 0, 0, -0.07, 1, OUT_TRUSS);
+      for (i = 0; i < n; i++) {
+        merge(m, tube(10, 0.034, 0.034, 0.065, true), x0 + i * gap, 0, 0, 1,
+              rng.chance(0.3) ? '#9aa6b4' : '#c8bfae');
+      }
+      lamp(x0 - 0.05, 0, 0.07); lamp(-x0 + 0.05, 0, 0.07);
+    } else if (kind === 'stack') {
+      var nx = 3 + rng.int(0, 2), ny = 2 + rng.int(0, 1), nz = 2 + rng.int(0, 2), c = 0.026;
+      merge(m, box(nx * c + 0.01, ny * c + 0.01, 0.006), 0, 0, -0.006, 1, OUT_PLATE);
+      for (i = 0; i < nx; i++) for (j = 0; j < ny; j++) for (k = 0; k < nz; k++) {
+        if (k > 0 && rng.chance(0.18)) continue;              // gaps where cans have gone
+        merge(m, box(c * 0.92, c * 0.45, c * 0.42),
+              (i - (nx - 1) / 2) * c * 2, (j - (ny - 1) / 2) * c * 1.05, k * c * 0.9 + c * 0.45,
+              1, rng.pick(CAN_COLOURS));
+      }
+      lamp(nx * c + 0.01, ny * c, 0.01); lamp(-nx * c - 0.01, -ny * c, 0.01);
+    } else if (kind === 'solar') {
+      var span = 0.28 + rng.range(0, 0.12);
+      merge(m, box(span, 0.008, 0.008), 0, 0, 0, 1, OUT_TRUSS);
+      for (var sd = -1; sd <= 1; sd += 2) {
+        merge(m, box(span * 0.42, 0.075, 0.003), sd * span * 0.52, 0, 0, 1, '#1f3561');
+        merge(m, box(span * 0.43, 0.004, 0.004), sd * span * 0.52, 0.077, 0, 1, OUT_PLATE);
+        merge(m, box(span * 0.43, 0.004, 0.004), sd * span * 0.52, -0.077, 0, 1, OUT_PLATE);
+        lamp(sd * (span * 0.95 + 0.01), 0, 0.006);
+      }
+    } else if (kind === 'mast') {
+      var h = 0.18 + rng.range(0, 0.1);
+      merge(m, box(0.007, 0.007, h / 2), 0, 0, h / 2, 1, OUT_TRUSS);
+      merge(m, tube(12, 0.09, 0.012, 0.018, true), 0, 0, h * 0.72, 1, '#d9d6cf');
+      merge(m, box(0.035, 0.035, 0.01), 0, 0, 0.01, 1, OUT_PLATE);
+      lamp(0, 0, h + 0.008);
+    } else if (kind === 'scaffold') {
+      var hx = 0.1 + rng.range(0, 0.05), hy = 0.06, hz = 0.07, b = 0.0045;
+      for (var a = -1; a <= 1; a += 2) for (var bb = -1; bb <= 1; bb += 2) {
+        merge(m, box(hx, b, b), 0, a * hy, bb * hz, 1, '#b9a24c');
+        merge(m, box(b, hy, b), a * hx, 0, bb * hz, 1, '#b9a24c');
+        merge(m, box(b, b, hz), a * hx, bb * hy, 0, 1, '#b9a24c');
+      }
+      /* Work in the frame: a hull half built, plates missing. */
+      merge(m, box(hx * 0.62, hy * 0.45, hz * 0.4), -hx * 0.1, 0, 0, 1, '#6f7783');
+      merge(m, box(hx * 0.3, hy * 0.35, hz * 0.32), hx * 0.55, 0, 0, 1, '#7c8591');
+      lampBox(m, [hx, hy, hz], 0.006, '!#ffb347'); lampBox(m, [-hx, -hy, hz], 0.006, '!#ffb347');
+      lamp(hx, -hy, -hz); lamp(-hx, hy, -hz);
+    } else {                                   // 'green': a greenhouse ring
+      var R = 0.11 + rng.range(0, 0.04);
+      merge(m, rimRing(16, R, 0.022, 0.022), 0, 0, 0, 1, '~9#9fc9d8');
+      merge(m, rimRing(16, R, 0.016, 0.016), 0, 0, 0, 1, '!#7fd36b');
+      merge(m, spokes(4, 0.015, R, 0.006), 0, 0, 0, 1, OUT_TRUSS);
+      lamp(R + 0.03, 0, 0); lamp(-R - 0.03, 0, 0);
+    }
+    return m;
+  }
+
+  function stationOutworks(port, model) {
+    var key = model + '|' + port.id;
+    if (port._outworks && port._outworks.key === key) return port._outworks.mesh;
+    var hull = stationMeshes()[model];
+    if (!hull) { var lp = libPort(model); hull = lp && lp.shell; }
+    if (!hull || !hull.v || !hull.v.length) return null;   // not loaded yet
+    if (!RNG) return null;
+
+    var R = 0;
+    for (var i = 0; i < hull.v.length; i++) R = Math.max(R, vlen(hull.v[i]));
+
+    /* Every berth's way in, as (door, direction) pairs to keep clear of. */
+    var keepOut = [];
+    var Gen = global.Gen;
+    var nb = (Gen && Gen.modelledBerths && Gen.modelledBerths(port)) || [];
+    for (var b = 0; b < nb.length; b++) {
+      var ap = Gen.berthApertures(port, b);
+      if (!ap || !ap.mid) continue;
+      var dir = ap.entry || ap.normal;
+      keepOut.push({ door: [ap.mid[0] + ap.normal[0] * (ap.gate || 0),
+                            ap.mid[1] + ap.normal[1] * (ap.gate || 0),
+                            ap.mid[2] + ap.normal[2] * (ap.gate || 0)], dir: vnorm(dir) });
+    }
+    function clear(p) {
+      for (var k = 0; k < keepOut.length; k++) {
+        var ko = keepOut[k];
+        var d = [p[0] - ko.door[0], p[1] - ko.door[1], p[2] - ko.door[2]];
+        var dl = vlen(d);
+        if (dl < 0.45) return false;
+        if ((d[0] * ko.dir[0] + d[1] * ko.dir[1] + d[2] * ko.dir[2]) / dl > 0.766) return false;   // cos 40°
+      }
+      return true;
+    }
+
+    var rng = new RNG('outworks|' + port.name + '|' + port.id + '|' + model);
+    var role = (port.market && port.market.role) || 'orbital';
+    var menu = OUTWORK_MENU[role] || OUTWORK_MENU.orbital;
+    var want = 2 + rng.int(0, 2);
+    var mesh = emptyMesh(); mesh.c = [];
+    var placed = [];
+    for (var tries = 0; tries < 60 && placed.length < want; tries++) {
+      /* A direction on the sphere, then a distance just off the hull. */
+      var zz = rng.range(-0.8, 0.8), th = rng.range(0, Math.PI * 2), rr = Math.sqrt(1 - zz * zz);
+      var out = [rr * Math.cos(th), rr * Math.sin(th), zz];
+      var dist = R * rng.range(1.18, 1.55) + 0.12;
+      var p = [out[0] * dist, out[1] * dist, out[2] * dist];
+      if (!clear(p)) continue;
+      var crowded = false;
+      for (var q = 0; q < placed.length; q++) {
+        var dq = [p[0] - placed[q][0], p[1] - placed[q][1], p[2] - placed[q][2]];
+        if (vlen(dq) < 0.5) { crowded = true; break; }
+      }
+      if (crowded) continue;
+      placed.push(p);
+      var az = vnorm(out);
+      var ref = Math.abs(az[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+      var ax = vnorm(vcross(ref, az)), ay = vcross(az, ax);
+      mergeAxes(mesh, outworkPart(rng.pick(menu), rng), p, ax, ay, az);
+      /* The tether: a truss from the outwork back to just inside the
+       * hull's outer reach, so it reads as attached rather than parked. */
+      var tl = (dist - R * 0.92) / 2;
+      mergeAxes(mesh, box(0.006, 0.006, tl),
+                [out[0] * (dist - tl - 0.04), out[1] * (dist - tl - 0.04), out[2] * (dist - tl - 0.04)],
+                ax, ay, az, OUT_TRUSS);
+    }
+    port._outworks = { key: key, mesh: mesh };
+    return mesh;
+  }
+
+  function drawStationOutworks(ctx, cam, frame, port, model, radiusKm, sunDir) {
+    var mesh = stationOutworks(port, model);
+    if (!mesh || !mesh.f.length) return;
+    mesh = accented(mesh);
+    if (gpuWorld() && global.GLWorld.queueMesh(cam, frame, mesh, radiusKm, sunDir)) return;
+    paintMesh(ctx, cam, frame, mesh, radiusKm, sunDir, OUT_PLATE);
   }
 
   /* Drawn only for SURFACE ports: an orbital dock has no ground to build a
@@ -8750,6 +9098,8 @@
     berthDressing: berthDressing, berthAds: berthAds, adSlot: adSlot,
     ADS: ADS, AD_SECONDS: AD_SECONDS,
     drawPortDressing: drawPortDressing,
+    drawStationLights: drawStationLights,
+    drawStationOutworks: drawStationOutworks,
     drawPortLamps: drawPortLamps,
     drawPortDoors: drawPortDoors,
     /* How far a leaf slides, in PAD RADII, for anything that needs to
@@ -8789,6 +9139,7 @@
     interiorBounds: interiorBounds,
     insideInterior: insideInterior,
     setIndoors: setIndoors,
+    setCutaway: setCutaway,
     setAccent: setAccent, accented: accented, accentSwap: accentSwap,
     drawContrail: drawContrail,
     portSolidity: portSolidity,

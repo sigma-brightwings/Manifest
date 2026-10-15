@@ -766,6 +766,16 @@
      * decides where on the hull to put what physics already worked out. */
     'uniform float uGlow;',
     'uniform vec3 uWind;',
+    /* THE CUTAWAY: a keyhole from the eye to the ship. xyz is the ship,
+     * already relative to the eye, w is 1 when the cut is on. uCutR is
+     * (radius at the ship, radius at the eye, rim as a fraction of radius).
+     * See GL.setCutaway for why it is a cone and not a plane. */
+    'uniform vec4 uCut;',
+    'uniform vec3 uCutR;',
+    'uniform vec3 uCutRim;',
+    /* (widest the cut-face band may get in km, quiet zone as a fraction of
+     * the local radius, how much colour the quiet zone drains, 0..1). */
+    'uniform vec3 uCutBand;',
     'out vec4 frag;',
 
     /* ---- SCREEN-DOOR TRANSPARENCY, and why it is not alpha blending -----
@@ -816,8 +826,58 @@
     'void main() {',
     '  float a = vAlpha * uAlpha;',
     '  if (a < 0.999 && a < bayer8(ivec2(gl_FragCoord.xy))) discard;',
+    /* THE KEYHOLE. Everything inside a cone running from the eye to the
+     * ship goes, except a bubble round the ship itself — so the deck it
+     * stands on and the cradle holding it survive as a little island at
+     * the bottom of the hole. `t` is how far along the eye->ship axis this
+     * fragment sits; nothing at or beyond the ship (t >= 1) is cut, which
+     * keeps the far wall as the backdrop. Just outside the cone a thin
+     * band is painted flat in uCutRim: the cut face of a wall, the way a
+     * technical drawing hatches a section, so a wall that has been cut
+     * reads as cut and not as a wall that was never there. */
+    /* THE BAND IS CAPPED, AND THE METAL ROUND IT IS QUIETED (2026-10-11).
+     * Astra, looking at the hole from a berth: "cleaner and less busy
+     * without losing the whole cut-away-model thing". Two causes, both
+     * here. The band was a FRACTION of the local radius, so at the eye end
+     * of the cone — where the radius is largest — it was metres thick and
+     * swallowed every pipe and strut that crossed it whole: the ring read
+     * as a wreath of orange debris, not as a cut. Now it is that fraction
+     * or uCutBand.x km, whichever is thinner, so it stays a drawn edge.
+     * And the station's own interior, the many-coloured conduits, was
+     * shown at full saturation right up against the edge, competing with
+     * it. `near` is 1 at the cut face and falls to 0 over uCutBand.y of
+     * the local radius; inside it colour is drained toward a dimmed grey
+     * by uCutBand.z and lamp glow is turned off, so the cut is the loudest
+     * thing at the hole and the far wall keeps its colour as the backdrop. */
+    '  bool rim = false;',
+    '  float near = 0.0;',
+    '  if (uCut.w > 0.5) {',
+    '    float L2 = max(dot(uCut.xyz, uCut.xyz), 1e-12);',
+    '    float t = dot(vRel, uCut.xyz) / L2;',
+    '    if (t > 0.0 && t < 1.0 && distance(vRel, uCut.xyz) > uCutR.x) {',
+    '      float r = mix(uCutR.y, uCutR.x, t);',
+    '      float d = length(vRel - uCut.xyz * t);',
+    '      if (d < r) discard;',
+    '      float band = min(r * uCutR.z, uCutBand.x);',
+    '      rim = d < r + band;',
+    '      near = 1.0 - smoothstep(r + band, r + band + r * uCutBand.y, d);',
+    '    }',
+    '  }',
     '  float depth = dot(vRel, uFwd);',
-    '  gl_FragDepth = clamp(log2(max(uNear, depth) / uNear) * uInvLogRange, 0.0, 1.0);',
+    '  float fd = log2(max(uNear, depth) / uNear) * uInvLogRange;',
+    /* LIT FACES WIN TIES. Measured on the courier hull Astra flies: 66 of
+     * its 208 self-lit faces — nav lamps, window strips — lie exactly flush
+     * on a hull plate, at the same depth to the last bit, so as the camera
+     * moves the two take turns being drawn and the red and green lamps
+     * flicker. It always did; the glow pass made every swap a flash, which
+     * is how it was noticed ("flickering of the red or green surfaces as
+     * the ship moves"). A lamp is decoration laid ON a plate, never under
+     * one, so it is pulled toward the eye by ~20 steps of the depth buffer:
+     * in this log space that is a fixed fraction of distance — ~2 mm at
+     * 30 m, ~1 m at 15 km — enough to win a tie and nowhere near enough to
+     * show a lamp through a wall. */
+    '  if (vEmis > 0.5) fd -= 1.2e-6;',
+    '  gl_FragDepth = clamp(fd, 0.0, 1.0);',
     '  vec3 n = normalize(vNrm);',
     /* Winding-agnostic, exactly as the 2D renderer is and for the same
      * reason: every hull is several parts bolted together with no promise
@@ -859,6 +919,16 @@
     '  vec3 lit = vCol * (0.26 + 0.70 * lam);',
     '  vec3 dim = vCol * (0.10 + 0.55 * lamp);',
     '  vec3 c = vEmis > 0.5 ? vCol * 1.15 : mix(lit, dim, uIndoors);',
+    '  float glow = vEmis > 0.5 ? mix(1.0, 0.28, uIndoors) : 0.0;',
+    /* THE ROOM STEPS BACK WHILE YOU LOOK THROUGH IT (2026-10-11). With the
+     * keyhole open the subject is the cut and the ship at the bottom of
+     * it, and the hangar's neon strips — every one a full-strength lamp —
+     * were the next loudest thing on screen. Only indoors, only with the
+     * cut on, so a berth seen normally is lit exactly as it was. */
+    '  if (uCut.w > 0.5 && uIndoors > 0.5 && vEmis > 0.5) {',
+    '    c *= 0.75;',
+    '    glow *= 0.6;',
+    '  }',
 
     /* Shock heating, on the faces actually meeting the air.
      *
@@ -886,8 +956,26 @@
     '    float hot = clamp(uGlow * uGlow * front * 1.35, 0.0, 1.0);',
     '    vec3 plasma = mix(vec3(1.0, 0.34, 0.10), vec3(1.0, 0.94, 0.86), hot);',
     '    c += plasma * g * 1.15;',
+    '    glow += g;',
     '  }',
-    '  frag = vec4(c, 1.0);',
+    /* THE GLOW MASK RIDES IN ALPHA. The world is drawn into an offscreen
+     * buffer whose alpha nobody else needs (the canvas is opaque), so the
+     * one number the glow pass wants — how much of this pixel is its own
+     * light — costs no second render target and no second pass. See
+     * POST below. Indoors it is turned well down: the ceiling of a hangar
+     * is one great self-lit panel, and at full strength it would halo the
+     * whole room instead of the lamps in it. */
+    /* The quiet zone round the cut — see THE BAND IS CAPPED above. Luma,
+     * not an average, so a saturated red pipe and a grey plate of the same
+     * apparent brightness come out the same grey. */
+    '  if (near > 0.0) {',
+    '    float luma = dot(c, vec3(0.299, 0.587, 0.114));',
+    '    c = mix(c, vec3(luma) * 0.6, near * uCutBand.z);',
+    '    glow *= 1.0 - near;',
+    '  }',
+    /* Flat, unlit, no glow: a cut face is a colour, not a lamp. */
+    '  if (rim) { c = uCutRim; glow = 0.0; }',
+    '  frag = vec4(c, clamp(glow, 0.0, 1.0));',
     '}'
   ].join('\n');
 
@@ -979,6 +1067,113 @@
     '}'
   ].join('\n');
 
+  /* ---- POST: the glow, kept in the spirit of FE2 and FFE ---------------
+   *
+   * WHAT GLOWS is decided by the hulls, not by brightness. Every mesh writes
+   * into the alpha of the offscreen scene how much of each pixel is its OWN
+   * light — a window, a nav lamp, a light panel, re-entry plasma — and
+   * nothing else does. So a sunlit plate, however white, never blooms; a
+   * dim red strobe in shadow does. Thresholding on brightness, which is how
+   * bloom is usually done, would have haloed every lit hull and every
+   * planet limb, and washed the picture into a modern haze.
+   *
+   * WHAT IT LOOKS LIKE is Astra's brief: "glow, but still in the spirit of
+   * FE2 and FFE". Those games are crisp flat polygons, and a soft
+   * photographic bloom fights that look rather than adding to it. So:
+   *
+   *   - TIGHT. One blur level at half resolution, a short kernel — a halo
+   *     that hugs the light, not a wash across the screen. The usual wide
+   *     quarter-resolution layer was left out on purpose (and is cheaper
+   *     left out).
+   *   - STEPPED. The halo is quantised into a few flat bands before it is
+   *     added, so a lamp reads as a lit shape with a ring or two round it —
+   *     closer to FFE's flat light flares than to a gradient.
+   *   - THE POLYGONS STAY SHARP. The scene itself is never blurred; only
+   *     the halo is added on top.
+   *
+   * BUDGET, because the RX 540 is a 4 GB entry-level card and Astra asked
+   * not to overstress it: one multisampled scene buffer (which replaces the
+   * canvas's own antialiasing rather than adding to it), one resolved copy,
+   * two half-resolution halo buffers. About 75 MB at 1920×1080, and five
+   * cheap full-screen passes. If any of it cannot be created the layer
+   * draws straight to the canvas exactly as it always did. */
+  var VERT_POST = [
+    '#version 300 es',
+    'out vec2 vUV;',
+    /* One oversized triangle covers the screen; no vertex buffer at all. */
+    'void main() {',
+    '  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));',
+    '  vUV = p;',
+    '  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);',
+    '}'
+  ].join('\n');
+
+  /* Scene → half-resolution halo source: colour weighted by its own glow
+   * mask, four taps so a one-pixel strobe is not lost in the downsample. */
+  var FRAG_EXTRACT = [
+    '#version 300 es',
+    'precision mediump float;',
+    'in vec2 vUV;',
+    'uniform sampler2D uSrc;',
+    'uniform vec2 uTexel;',
+    'out vec4 frag;',
+    'vec3 tap(vec2 o) { vec4 c = texture(uSrc, vUV + o * uTexel); return c.rgb * c.a; }',
+    'void main() {',
+    '  vec3 s = tap(vec2(-0.5, -0.5)) + tap(vec2(0.5, -0.5))',
+    '         + tap(vec2(-0.5, 0.5)) + tap(vec2(0.5, 0.5));',
+    /* max, not just the mean, so a single lit pixel survives at full
+     * strength instead of being averaged to a quarter. */
+    '  vec3 m = max(max(tap(vec2(-0.5,-0.5)), tap(vec2(0.5,-0.5))),',
+    '               max(tap(vec2(-0.5, 0.5)), tap(vec2(0.5, 0.5))));',
+    '  frag = vec4(mix(s * 0.25, m, 0.5), 1.0);',
+    '}'
+  ].join('\n');
+
+  /* Separable blur, 9 taps folded into 5 bilinear fetches. Short on
+   * purpose — see TIGHT above. */
+  var FRAG_BLUR = [
+    '#version 300 es',
+    'precision mediump float;',
+    'in vec2 vUV;',
+    'uniform sampler2D uSrc;',
+    'uniform vec2 uStep;',
+    'out vec4 frag;',
+    'void main() {',
+    '  vec3 c = texture(uSrc, vUV).rgb * 0.2270;',
+    '  c += texture(uSrc, vUV + uStep * 1.3846).rgb * 0.3162;',
+    '  c += texture(uSrc, vUV - uStep * 1.3846).rgb * 0.3162;',
+    '  c += texture(uSrc, vUV + uStep * 3.2308).rgb * 0.0703;',
+    '  c += texture(uSrc, vUV - uStep * 3.2308).rgb * 0.0703;',
+    '  frag = vec4(c, 1.0);',
+    '}'
+  ].join('\n');
+
+  /* Scene + stepped halo, onto the canvas. */
+  var FRAG_COMPOSITE = [
+    '#version 300 es',
+    'precision mediump float;',
+    'in vec2 vUV;',
+    'uniform sampler2D uScene;',
+    'uniform sampler2D uHalo;',
+    'uniform float uGain;',
+    'uniform float uBands;',
+    'out vec4 frag;',
+    'void main() {',
+    '  vec3 base = texture(uScene, vUV).rgb;',
+    '  vec3 h = texture(uHalo, vUV).rgb * uGain;',
+    /* THE STEPS. Quantise the halo's strength, keep its hue. The floor
+     * after the scale is what makes rings rather than a ramp; the small
+     * bias keeps the faintest band from vanishing entirely. uBands 0 turns
+     * stepping off (a smooth halo), for comparison. */
+    '  if (uBands > 0.5) {',
+    '    float k = max(h.r, max(h.g, h.b));',
+    '    float q = floor(k * uBands + 0.35) / uBands;',
+    '    h = k > 1e-4 ? h * (q / k) : vec3(0.0);',
+    '  }',
+    '  frag = vec4(base + h, 1.0);',
+    '}'
+  ].join('\n');
+
   /* ---- plumbing --------------------------------------------------------- */
 
   function compile(gl, type, src, label) {
@@ -1030,6 +1225,10 @@
   /* ---- the layer -------------------------------------------------------- */
 
   var gl = null, canvas = null, prog = null, uni = null, quad = null, vao = null;
+  /* The glow pass's resources — see POST. `post` stays null when any of it
+   * failed, and then every frame goes straight to the canvas as before. */
+  var post = null;
+  var glowOn = true;
   var queue = [], vw = 0, vh = 0;
   var starProg = null, starUni = null, starVao = null, starCount = 0;
   var meshProg = null, meshUni = null, meshQueue = [], meshSeq = 0;
@@ -1061,7 +1260,11 @@
      * not a command: with one GPU it changes nothing. */
     try {
       gl = canvas.getContext('webgl2', {
-        alpha: false, antialias: true, depth: true,
+        /* antialias OFF on the canvas: the world is drawn into a
+         * multisampled offscreen buffer instead (see POST), and paying for
+         * both would double the memory for nothing. The one cost: if the
+         * offscreen buffer cannot be made, edges go unsmoothed. */
+        alpha: false, antialias: false, depth: true,
         premultipliedAlpha: false, powerPreference: 'high-performance'
       });
     } catch (e) { gl = null; }
@@ -1088,7 +1291,8 @@
                                         'uCenterPx', 'uViewportPx', 'uSunDir',
                                         'uNear', 'uInvLogRange', 'uIndoors',
                                         'uGlow', 'uWind',
-                                        'uAlpha']);
+                                        'uAlpha', 'uCut', 'uCutR', 'uCutRim',
+                                        'uCutBand']);
     } catch (e) {
       if (global.console) console.error(e.message);
       GL.available = false; gl = null; return false;
@@ -1152,6 +1356,23 @@
       panelProg = null;
     }
 
+    try {
+      post = {
+        extract: link(gl, VERT_POST, FRAG_EXTRACT, 'glow-extract'),
+        blur: link(gl, VERT_POST, FRAG_BLUR, 'glow-blur'),
+        composite: link(gl, VERT_POST, FRAG_COMPOSITE, 'glow-composite'),
+        vao: gl.createVertexArray(),
+        w: 0, h: 0
+      };
+      post.uExtract = uniforms(gl, post.extract, ['uSrc', 'uTexel']);
+      post.uBlur = uniforms(gl, post.blur, ['uSrc', 'uStep']);
+      post.uComposite = uniforms(gl, post.composite, ['uScene', 'uHalo', 'uGain', 'uBands']);
+      post.samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES) || 0);
+    } catch (e3) {
+      if (global.console) console.error(e3.message);
+      post = null;
+    }
+
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -1204,6 +1425,8 @@
     /* The backdrop, and nothing is ever behind it — so it neither tests
      * nor writes depth, and everything drawn afterwards simply covers it. */
     gl.disable(gl.DEPTH_TEST);
+    /* Stars never touch the glow mask (alpha) — see POST. */
+    gl.colorMask(true, true, true, false);
     gl.useProgram(starProg);
     gl.bindVertexArray(starVao);
     gl.uniform3f(starUni.uRight, cam.r.x, cam.r.y, cam.r.z);
@@ -1214,6 +1437,7 @@
     gl.uniform2f(starUni.uViewportPx, vw, vh);
     gl.drawArrays(gl.POINTS, 0, starCount);
     gl.bindVertexArray(null);
+    gl.colorMask(true, true, true, true);
   };
 
   /* Upload a hull once, expanded to flat triangles.
@@ -1308,6 +1532,38 @@
   var indoorsFlag = 0;
   GL.setIndoors = function (on) { indoorsFlag = on ? 1 : 0; };
 
+  /* THE CUTAWAY, for everything queued until it is cleared — the same
+   * set-and-clear shape as setIndoors, for the same reason.
+   *
+   * Astra: "a zoomout maybe creates a cutaway in the section containing
+   * the ship, and the perspective from how far back you are determines how
+   * much station gets cut away". So the boom is no longer stopped at the
+   * wall; the wall is opened instead. The shape is a CONE from the ship to
+   * the eye, narrow at the ship and widening toward the camera by however
+   * far the boom has gone past the wall — pull back further and more of
+   * the station opens. A cone rather than a slicing plane because a plane
+   * takes away the deck the ship is standing on whenever the camera looks
+   * down at it, and a cone only ever takes what is actually in the way.
+   *
+   * `cut` is { pos (world, km), rShip, rEye (km), rim (fraction), color
+   * [r,g,b] } or null. main.js sets it around the station the ship is in
+   * and clears it after, so the ship itself and everything outside that
+   * station are never cut. */
+  /* Safety orange, darkened: FE2's cutaway diagrams hatched a section in a
+   * flat warm colour, and it has to read against grey plating, black
+   * Syndicate hulls and pale fleet paint alike. */
+  var CUT_RIM = [0.78, 0.42, 0.12];
+  /* The band's ceiling, the quiet zone and how hard it drains — see THE
+   * BAND IS CAPPED in FRAG_MESH. Three metres is about an eighth of a hull
+   * length: a pen line at berth distance, not a sleeve over every pipe.
+   * Starting values chosen by eye on one screenshot, NOT measured across
+   * stations (doctrine 6) — if a port reads wrong, tune these first. */
+  var CUT_BAND_MAX = 0.003;   // km
+  var CUT_QUIET = 0.35;       // fraction of local cone radius
+  var CUT_DRAIN = 0.8;        // 0 keeps the colour, 1 is fully grey
+  var cutFlag = null;
+  GL.setCutaway = function (cut) { cutFlag = cut || null; };
+
   GL.queueMesh = function (cam, frame, mesh, scale, sunDir, glow, wind, alpha) {
     if (!gl || !meshProg || !mesh || !mesh.f || !mesh.f.length) return false;
     /* The double-precision subtraction that keeps this usable. Everything
@@ -1330,7 +1586,23 @@
                       * because a station's hull and the ship parked in it
                       * are both queued on the same frame and only one of
                       * them is being looked at from within. */
-                     indoors: indoorsFlag });
+                     indoors: indoorsFlag,
+                     /* Relative to the eye here, in doubles, for the same
+                      * reason `rel` is. */
+                     cut: cutFlag ? {
+                       x: cutFlag.pos.x - cam.eye.x,
+                       y: cutFlag.pos.y - cam.eye.y,
+                       z: cutFlag.pos.z - cam.eye.z,
+                       rShip: cutFlag.rShip, rEye: cutFlag.rEye,
+                       rim: cutFlag.rim || 0, color: cutFlag.color || CUT_RIM,
+                       /* typeof, not ||, so a caller can ask for 0. */
+                       bandMax: typeof cutFlag.bandMax === 'number'
+                                ? cutFlag.bandMax : CUT_BAND_MAX,
+                       quiet: typeof cutFlag.quiet === 'number'
+                              ? cutFlag.quiet : CUT_QUIET,
+                       drain: typeof cutFlag.drain === 'number'
+                              ? cutFlag.drain : CUT_DRAIN
+                     } : null });
     return true;
   };
 
@@ -1345,7 +1617,151 @@
     }
     gl.viewport(0, 0, pw, ph);
     vw = cssW; vh = cssH;      // uniforms speak CSS px, same as Camera does
+    if (post && (post.w !== pw || post.h !== ph)) allocatePost(pw, ph);
   };
+
+  /* (Re)build the offscreen targets for a canvas of pw × ph device pixels.
+   * Anything that fails drops the whole glow pass rather than half of it:
+   * a world drawn into a buffer nobody resolves is a black screen. */
+  function allocatePost(pw, ph) {
+    freePost();
+    try {
+      var hw = Math.max(1, pw >> 1), hh = Math.max(1, ph >> 1);
+      post.w = pw; post.h = ph; post.hw = hw; post.hh = hh;
+
+      post.msColor = gl.createRenderbuffer();
+      gl.bindRenderbuffer(gl.RENDERBUFFER, post.msColor);
+      gl.renderbufferStorageMultisample(gl.RENDERBUFFER, post.samples, gl.RGBA8, pw, ph);
+      post.msDepth = gl.createRenderbuffer();
+      gl.bindRenderbuffer(gl.RENDERBUFFER, post.msDepth);
+      gl.renderbufferStorageMultisample(gl.RENDERBUFFER, post.samples, gl.DEPTH_COMPONENT24, pw, ph);
+      post.msFbo = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, post.msFbo);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, post.msColor);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, post.msDepth);
+      checkFbo('scene');
+
+      post.scene = targetTexture(pw, ph);
+      post.halo = [targetTexture(hw, hh), targetTexture(hw, hh)];
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+    } catch (e) {
+      if (global.console) console.error('glow pass disabled: ' + e.message);
+      freePost();
+      post = null;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+  }
+
+  function targetTexture(w, h) {
+    var tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, w, h);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    var fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    checkFbo('target');
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    return { tex: tex, fbo: fbo, w: w, h: h };
+  }
+
+  function checkFbo(what) {
+    var st = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    if (st !== gl.FRAMEBUFFER_COMPLETE) throw new Error(what + ' framebuffer incomplete (' + st + ')');
+  }
+
+  function freePost() {
+    if (!post || !gl) return;
+    [post.scene, post.halo && post.halo[0], post.halo && post.halo[1]].forEach(function (t) {
+      if (t) { gl.deleteTexture(t.tex); gl.deleteFramebuffer(t.fbo); }
+    });
+    if (post.msFbo) gl.deleteFramebuffer(post.msFbo);
+    if (post.msColor) gl.deleteRenderbuffer(post.msColor);
+    if (post.msDepth) gl.deleteRenderbuffer(post.msDepth);
+    post.scene = post.halo = post.msFbo = post.msColor = post.msDepth = null;
+    post.w = post.h = 0;
+  }
+
+  /* Whether the frame goes through the offscreen buffer at all. It does
+   * whenever the buffer exists, glow or no glow, because that buffer is
+   * also where the antialiasing now lives. */
+  function postReady() { return !!(post && post.msFbo); }
+
+  function fullscreen(prog, target, w, h) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target);
+    gl.viewport(0, 0, w, h);
+    gl.useProgram(prog);
+    gl.bindVertexArray(post.vao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  /* Resolve the scene, build the halo, put both on the canvas. */
+  function finishPost() {
+    var pw = post.w, ph = post.h;
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.depthMask(true);
+    gl.colorMask(true, true, true, true);
+
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, post.msFbo);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, post.scene.fbo);
+    gl.blitFramebuffer(0, 0, pw, ph, 0, 0, pw, ph, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+
+    gl.activeTexture(gl.TEXTURE0);
+    if (glowOn) {
+      var a = post.halo[0], b = post.halo[1];
+      gl.useProgram(post.extract);
+      gl.uniform1i(post.uExtract.uSrc, 0);
+      gl.uniform2f(post.uExtract.uTexel, 1 / pw, 1 / ph);
+      gl.bindTexture(gl.TEXTURE_2D, post.scene.tex);
+      fullscreen(post.extract, a.fbo, a.w, a.h);
+
+      gl.useProgram(post.blur);
+      gl.uniform1i(post.uBlur.uSrc, 0);
+      gl.uniform2f(post.uBlur.uStep, GL.glowSpread / a.w, 0);
+      gl.bindTexture(gl.TEXTURE_2D, a.tex);
+      fullscreen(post.blur, b.fbo, b.w, b.h);
+      gl.useProgram(post.blur);
+      gl.uniform2f(post.uBlur.uStep, 0, GL.glowSpread / a.h);
+      gl.bindTexture(gl.TEXTURE_2D, b.tex);
+      fullscreen(post.blur, a.fbo, a.w, a.h);
+    }
+
+    gl.useProgram(post.composite);
+    gl.uniform1i(post.uComposite.uScene, 0);
+    gl.uniform1i(post.uComposite.uHalo, 1);
+    gl.uniform1f(post.uComposite.uGain, glowOn ? GL.glowGain : 0);
+    gl.uniform1f(post.uComposite.uBands, GL.glowBands);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, post.halo[0].tex);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, post.scene.tex);
+    fullscreen(post.composite, null, pw, ph);
+
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindVertexArray(null);
+    gl.viewport(0, 0, pw, ph);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  }
+
+  /* Tuning, set by looking (see the CHANGELOG entry for the numbers it
+   * started at and why they moved). Exposed so the options page and a
+   * playtest console can both reach them. */
+  GL.glowGain = 0.85;
+  GL.glowBands = 4;
+  GL.glowSpread = 1.0;
+  GL.setGlow = function (on) { glowOn = !!on; };
+  GL.glowEnabled = function () { return !!(glowOn && postReady()); };
 
   /* Clear to the same near-black the 2D layer used to paint, so the sky is
    * unchanged on any frame that queues nothing at all. */
@@ -1369,8 +1785,11 @@
     panelQueue.length = 0;
     hole = null;
     if (!gl) return;
-    if (bg) gl.clearColor(bg[0], bg[1], bg[2], 1);
-    else gl.clearColor(0x04 / 255, 0x06 / 255, 0x0c / 255, 1);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, postReady() ? post.msFbo : null);
+    /* Alpha cleared to ZERO, not one: in the offscreen buffer alpha is the
+     * glow mask, and empty sky does not glow. */
+    if (bg) gl.clearColor(bg[0], bg[1], bg[2], 0);
+    else gl.clearColor(0x04 / 255, 0x06 / 255, 0x0c / 255, 0);
     gl.clearDepth(1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   };
@@ -1458,7 +1877,10 @@
      * screen should not fight over the buffer. They are still depth-TESTED,
      * so a panel behind the hull is still hidden by it. */
     gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    /* Colour blends as before; ALPHA — the glow mask — is scaled down by
+     * the panel's own opacity, so a lamp behind an MFD stops haloing where
+     * the screen covers it. See POST. */
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE_MINUS_SRC_ALPHA);
     gl.depthMask(false);
 
     gl.useProgram(panelProg);
@@ -1526,10 +1948,15 @@
      * competing with it — and after the hull, so a panel is depth-tested
      * against the cockpit it is mounted in. */
     drawPanels();
+    if (postReady()) finishPost();
   };
 
   function drawBodies() {
+    /* Planets, atmospheres and stars blend over one another, and left alone
+     * that blending would write their alpha into the glow mask. A world
+     * is lit by the sun, not by itself, so it must not glow — see POST. */
     if (!queue.length) return;
+    gl.colorMask(true, true, true, false);
     /* Still sorted far to near even though there is now a depth buffer:
      * the atmosphere halo is blended, and blended fragments have to arrive
      * in order to composite correctly against each other. Depth sorts the
@@ -1638,6 +2065,7 @@
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
     gl.bindVertexArray(null);
+    gl.colorMask(true, true, true, true);
   }
 
   function drawMeshes() {
@@ -1678,6 +2106,14 @@
       gl.uniform3f(meshUni.uWind, m.wind.x, m.wind.y, m.wind.z);
       gl.uniform1f(meshUni.uAlpha, m.alpha);
       gl.uniform1f(meshUni.uIndoors, m.indoors);
+      if (m.cut) {
+        gl.uniform4f(meshUni.uCut, m.cut.x, m.cut.y, m.cut.z, 1);
+        gl.uniform3f(meshUni.uCutR, m.cut.rShip, m.cut.rEye, m.cut.rim);
+        gl.uniform3f(meshUni.uCutRim, m.cut.color[0], m.cut.color[1], m.cut.color[2]);
+        gl.uniform3f(meshUni.uCutBand, m.cut.bandMax, m.cut.quiet, m.cut.drain);
+      } else {
+        gl.uniform4f(meshUni.uCut, 0, 0, 0, 0);
+      }
       /* Column-major, and the columns are the frame's own axes — so a
        * local +x lands along `right`, +y along `up`, +z along `fwd`,
        * matching localToWorld() in render.js exactly. */
