@@ -3311,6 +3311,9 @@
         var n = V.norm(V.sub(ship.pos, bp));
         ship.pos = V.add(bp, V.scale(n, b.radius));
         ship.vel = V.clone(bv);
+        /* A clean landing is a place on the world, not a frozen frame:
+         * see landSpot / updateLandedShip. A crash stays a crash. */
+        ship.landedAt = ship.crashed ? null : landSpot(b, sys, t, ship.pos);
         return b;
       }
     }
@@ -3334,6 +3337,60 @@
     // a near-circular station orbit can't tilt the docked ship over time.
     prograde = V.norm(V.cross(normal, radial));
     return { radial: radial, prograde: prograde, normal: normal };
+  }
+
+  /* ---- ON THE GROUND, away from any port (2026-10-16) ---------------------
+   * Mining rung 2 needs it: "placing a drone means landing". Until now a
+   * gentle touchdown on open ground set `landed` and stopped the clock -
+   * the only way off was respawn. Now a clean landing holds the ship at a
+   * latitude and longitude on the world, riding its spin with the same
+   * arithmetic a surface port uses (surfaceOffset), with time running; and
+   * it can lift off again when its thrust beats the world's gravity - the
+   * liftoff rule, which is what makes a heavy world hard to claim. */
+  function landSpot(body, sys, t, pos) {
+    var hs = bodyState(body, sys, t);
+    var rel = V.sub(pos, hs.pos), r = V.len(rel);
+    var rot = body.rotation || { period: 86400, tilt: 0, phase: 0 };
+    var ct = Math.cos(rot.tilt), st = Math.sin(rot.tilt);
+    /* Undo the tilt about x, then the spin about the axis. */
+    var x = rel.x, y = rel.y * ct + rel.z * st, z = -rel.y * st + rel.z * ct;
+    var lat = Math.asin(Math.max(-1, Math.min(1, z / Math.max(r, 1e-9))));
+    var lonW = Math.atan2(y, x);
+    var w = K.TAU / rot.period;
+    var lon = (lonW - rot.phase - w * t) % K.TAU;
+    if (lon > Math.PI) lon -= K.TAU; else if (lon < -Math.PI) lon += K.TAU;
+    return { body: body.id, lat: lat, lon: lon, elevation: 0.004 };
+  }
+  function updateLandedShip(ship, sys, t) {
+    var at = ship.landedAt;
+    var body = at && sys.byId[at.body];
+    if (!body) return false;
+    var hs = bodyState(body, sys, t);
+    var off = surfaceOffset(body, at, t);
+    ship.pos = V.add(hs.pos, off.pos);
+    ship.vel = V.add(hs.vel, off.vel);
+    /* Sitting on its gear: up is the local vertical, the nose kept level. */
+    var up = V.norm(off.pos);
+    var fwd = V.sub(ship.fwd || anyPerpendicular(up), V.scale(up, V.dot(ship.fwd || up, up)));
+    if (V.len(fwd) < 1e-6) fwd = anyPerpendicular(up);
+    ship.fwd = V.norm(fwd); ship.up = up; ship.right = V.cross(ship.fwd, ship.up);
+    return true;
+  }
+  function surfaceG(body) {
+    return 6.6743e-20 * body.mass / (body.radius * body.radius);     // km/s^2
+  }
+  /* Up, if the drive can do it: { ok, accel, g } in km/s^2. */
+  function liftOff(ship, sys, t) {
+    var at = ship.landedAt, body = at && sys.byId[at.body];
+    if (!body) return { ok: false };
+    var g = surfaceG(body), accel = (ship.maxAccel || 0) * Math.max(0, ship.throttle || 0);
+    if (!(accel > g * 1.02)) return { ok: false, accel: accel, g: g, max: ship.maxAccel || 0 };
+    updateLandedShip(ship, sys, t);
+    var up = ship.up;
+    ship.pos = V.add(ship.pos, V.scale(up, 0.03));
+    ship.vel = V.add(ship.vel, V.scale(up, 0.004));
+    ship.landed = false; ship.landedOn = null; ship.landedAt = null;
+    return { ok: true, accel: accel, g: g };
   }
 
   /* Is the ship inside the target's capture envelope right now? Read-only —
@@ -5627,6 +5684,7 @@
     scanForImpact: scanForImpact,
     dockingStatus: dockingStatus,
     dockShip: dockShip,
+    landSpot: landSpot, updateLandedShip: updateLandedShip, liftOff: liftOff, surfaceG: surfaceG,
     updateDockedShip: updateDockedShip,
     controlState: controlState, controlInRange: controlInRange,
     beginArrival: beginArrival, stepArrival: stepArrival,

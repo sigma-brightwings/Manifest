@@ -1238,6 +1238,44 @@
               ' on file. ' + got.total + ' credits."', 6);
         }
       });
+      /* CLAIMS AND DRONES (mining rung 2). The claim is filed on the world
+       * your nav is locked to; with no lock, on the best-mapped world here
+       * you do not already hold. Renewal is the same line. */
+      var Cl = global.Claims;
+      if (Cl && Sv) {
+        var clBody = null;
+        if (G.navTarget && G.navTarget.kind === 'body') clBody = G.sys.byId[G.navTarget.id] || null;
+        if (!clBody || !Cl.claimable(G, G.sys, clBody, G.t).ok) {
+          var bestCov = -1;
+          G.sys.bodies.forEach(function (b) {
+            var ck = Cl.claimable(G, G.sys, b, G.t);
+            if (!ck.ok || ck.renew) return;
+            var rc = G.surveys[ck.key];
+            if (rc.cov > bestCov) { bestCov = rc.cov; clBody = b; }
+          });
+        }
+        var cl = clBody ? Cl.claimable(G, G.sys, clBody, G.t)
+                        : { ok: false, why: 'survey a quarter of a world here first' };
+        opts.push({
+          label: cl.renew ? 'Renew mining claim' : 'File mining claim',
+          enabled: cl.ok && G.ship.credits >= Cl.CLAIM_FEE,
+          note: !cl.ok ? cl.why
+              : clBody.name + ', one year - ' + Cl.CLAIM_FEE + ' cr' + (cl.renew ? ' (' + cl.why + ')' : ''),
+          fn: function () {
+            var got = Cl.fileClaim(G, G.sys, clBody, G.t);
+            if (got.ok) say('Mining Guild: claim on ' + clBody.name + (got.renewed ? ' renewed' : ' filed') +
+                            ' to day ' + Math.floor(got.claim.until / 86400) + '. Land there and set a drone down (N).', 7);
+          }
+        });
+        var nd = G.ship.drones || 0;
+        opts.push({
+          label: 'Buy mining drone',
+          enabled: nd < Cl.DRONE_MAX && G.ship.credits >= Cl.DRONE_PRICE,
+          note: nd >= Cl.DRONE_MAX ? 'racks full - ' + nd + ' aboard'
+              : Cl.DRONE_PRICE + ' cr - ' + nd + ' aboard, ' + Cl.HOPPER + ' t hopper',
+          fn: function () { if (Cl.buyDrone(G).ok) say('Drone racked. ' + G.ship.drones + ' aboard.', 4); }
+        });
+      }
       opts.push({ label: 'Mission board', enabled: true,
                   note: 'F7', fn: function () { selectPanel(6); } });
     } else if (G.piracyMenu === c.name) {

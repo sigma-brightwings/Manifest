@@ -1223,7 +1223,7 @@
    * orbit or a bad burn — you get a fresh start above the same world you
    * spawned at, at the CURRENT simulation time, not a reload. */
   function respawnShip() {
-    if (!G.ship.landed) { say('Not crashed — nothing to respawn from', 2); return; }
+    if (!G.ship.landed || !G.ship.crashed) { say('Not crashed — nothing to respawn from', 2); return; }
     spawnShip(G.spawnHost, G.homeStation, G.t, true);
     Combat.stripForRespawn(G.ship);
     G.deadPanels = {};
@@ -1576,7 +1576,10 @@
          * missiles worth speaking of, and a flying one has no respawning to
          * do. */
         case 'b':
-          if (G.ship.landed) respawnShip();
+          /* Only a CRASHED landing respawns: a clean one is a place you
+           * can lift off from (Sim.liftOff), and B must not throw it away. */
+          if (G.ship.landed && G.ship.crashed) respawnShip();
+          else if (G.ship.landed) say('On the ground — throttle up to lift off', 3);
           /* SHIFT CYCLES THE RACK, because a ship can carry two kinds of
            * seeker now and the choice between a certified round and a cheap
            * one belongs at the trigger rather than at the till. Same key as
@@ -1666,6 +1669,15 @@
          * shifted meaning, the same shape as G. */
         case 'j':
           if (e.shiftKey) followWake();
+          break;
+        /* N is the mining drone (rung 2), on the ground only: beside one of
+         * yours it empties the hopper into the hold, otherwise it sets one
+         * down on your claim. SHIFT+N picks a drone back up. */
+        case 'n':
+          if (!global.Claims) break;
+          var dr = e.shiftKey ? global.Claims.recover(G, G.sys, G.t) : global.Claims.act(G, G.sys, G.t);
+          say(dr.ok ? dr.text : 'Drone: ' + (dr.why || dr.text || 'nothing to do'), 5);
+          if (dr.ok && global.Save) global.Save.store(G);
           break;
         /* Z is cruise. SHIFT+Z arms or shuts down the military drive —
          * next to it because they are the same question asked of the two
@@ -4993,6 +5005,29 @@
       G.t += G.lastDtSim;
       G.arrivalPose = null;
       Sim.updateDockedShip(G.ship, G.sys, G.t);
+    } else if (!G.paused && G.ship.landed && !G.ship.crashed && G.ship.landedAt) {
+      /* ON THE GROUND, ON PURPOSE (2026-10-16). A clean touchdown on open
+       * ground is a place on the world now, riding its spin, with the clock
+       * running at any warp - and the way off is the throttle, if the drive
+       * beats the world's gravity (Sim.liftOff). */
+      G.lastDtSim = warp * dtReal;
+      G.t += G.lastDtSim;
+      G.arrivalPose = null;
+      Sim.updateLandedShip(G.ship, G.sys, G.t);
+      if ((G.ship.throttle || 0) > 0) {
+        var lo = Sim.liftOff(G.ship, G.sys, G.t);
+        if (lo.ok) {
+          G.warpIndex = 0;
+          say('Lift-off', 3);
+        } else if (lo.g && !G.liftWarned) {
+          G.liftWarned = true;
+          say(lo.max > lo.g
+            ? 'More throttle - ' + (lo.g * 1000).toFixed(1) + ' m/s² to beat here, ' + (lo.accel * 1000).toFixed(1) + ' at this setting'
+            : 'This drive cannot lift off here - ' + (lo.max * 1000).toFixed(1) + ' m/s² against ' + (lo.g * 1000).toFixed(1) + ' of gravity', 5);
+        }
+      } else {
+        G.liftWarned = false;
+      }
     } else if (!G.paused && !G.ship.landed) {
       var dtSim = warp * dtReal;
       if (dtSim > maxDt) {
@@ -5122,7 +5157,7 @@
         G.reported = true;
         say(G.ship.crashed
           ? 'Impact with ' + G.ship.landedOn.name + ' at ' + fmtSpeed(G.ship.impactSpeed) + '   (B to respawn)'
-          : 'Touchdown on ' + G.ship.landedOn.name, 8);
+          : 'Touchdown on ' + G.ship.landedOn.name + '  —  throttle up to lift off', 8);
         G.warpIndex = 0;
       }
       if (!G.ship.landed) G.reported = false;
@@ -5348,7 +5383,10 @@
 
     /* THE GROUND TRACK. With a survey instrument aboard, whatever world you
      * are in orbit about is being mapped under you (survey.js). */
-    if (global.Survey && !G.paused && G.lastDtSim > 0) {
+    /* Not from the ground: the instrument maps under an orbit, and a ship
+     * on its gear would otherwise read SURVEYING for as long as it sat. */
+    if (G.ship.landed) G._surveyNow = null;
+    else if (global.Survey && !G.paused && G.lastDtSim > 0) {
       var surveyMsgs = global.Survey.step(G, G.sys, G.t, G.lastDtSim);
       for (var smi = 0; smi < surveyMsgs.length; smi++) say(surveyMsgs[smi], 4);
     }
@@ -10047,14 +10085,40 @@
           }
         }
       }
+      /* Rung 2: your claim on it, and what your drones there have dug. */
+      var Cl = global.Claims;
+      if (Cl && key) {
+        var cy = MFD_BODY_TOP + 6 + Sv.LAT_BINS * 6 + 16;
+        var claim = Cl.claimFor(G, key, G.t);
+        ctx.font = 'bold 10px ui-monospace, monospace';
+        ctx.fillStyle = claim ? '#7dffb0' : MFD_DIM;
+        ctx.fillText(claim ? 'CLAIM  ' + Math.ceil((claim.until - G.t) / 86400) + ' days'
+                           : (G.claims && G.claims[key] ? 'CLAIM LAPSED' : 'no claim'), 318, cy);
+        /* Two lines below the claim, no more - the Guild line is under them.
+         * Drones working here first; a spare line says what is in the racks. */
+        var here2 = (G.drones || []).filter(function (d) { return d.key === key; }).slice(0, 2);
+        here2.forEach(function (d) {
+          cy += 12;
+          var h = Cl.hopper(G, d, G.t);
+          ctx.fillStyle = h.full ? MFD_HOT : MFD_INK;
+          ctx.fillText('DRONE ' + Math.floor(h.tonnes) + '/' + Cl.HOPPER + 't ' +
+                       (Sv.NAMES[d.cid] || d.cid).toLowerCase().split(' ')[0], 318, cy);
+        });
+        if (here2.length < 2 && G.ship.drones > 0) {
+          cy += 12;
+          ctx.fillStyle = MFD_DIM;
+          ctx.fillText(G.ship.drones + ' aboard - land, N', 318, cy);
+        }
+      }
     }
     /* What the Guild would pay for this system's mapping, at any desk. */
     var sale = Sv.saleable(G, G.sys, G.t), tot = 0;
     sale.forEach(function (s) { tot += s.price; });
     ctx.font = 'bold 10px ui-monospace, monospace';
     ctx.fillStyle = tot > 0 ? '#7dffb0' : MFD_DIM;
-    ctx.fillText(tot > 0 ? 'Mining Guild pays ' + tot + ' cr for ' + sale.length + ' unsold survey' +
-                           (sale.length === 1 ? '' : 's') + ' here — any desk'
+    /* Short enough to end left of the claim column above it. */
+    ctx.fillText(tot > 0 ? 'Guild pays ' + tot + ' cr, ' + sale.length + ' unsold survey' +
+                           (sale.length === 1 ? '' : 's') + ', any desk'
                          : 'nothing unsold in this system', 12, MFD_BODY_BOTTOM - 4);
   }
 

@@ -199,6 +199,9 @@
       charted: Object.keys(G.charted || {}),
       ship: {
         pos: s.pos, vel: s.vel, fwd: s.fwd, up: s.up, right: s.right,
+        /* Standing on open ground (rung 2): the spot on the world, which
+         * turns with it, not the position, which was only true at save. */
+        landedAt: (s.landed && !s.crashed && s.landedAt) ? s.landedAt : null,
         fuel: s.fuel, thrusterFuel: s.thrusterFuel,
         /* Whether the military drive is armed. Additive and undefined-safe:
          * Slipspace.milRunning treats anything but an explicit false as
@@ -245,7 +248,7 @@
           return out;
         })(),
         missileSeq: s.missileSeq,
-        cargo: s.cargo, credits: s.credits,
+        cargo: s.cargo, credits: s.credits, drones: s.drones || 0,
         /* WHO IS IN THE BACK. Seats are derived from the fitting and come
          * back on their own; people are not, so they are written. A save
          * that dropped them would land the ship with live passage
@@ -374,6 +377,11 @@
         return out;
       })(),
       extracted: G.extracted || {},
+      /* CLAIMS AND DRONES (mining rung 2). A drone is its timetable - where
+       * it sits, what it digs, when it was last emptied - so it saves as
+       * plain data and needs nothing re-run on load. */
+      claims: G.claims || {},
+      drones: G.drones || [],
       ledger: G.ledgerLog || []
     };
   }
@@ -451,6 +459,7 @@
     if (d.racks) s.racks = d.racks;
     s.missileSeq = d.missileSeq;
     s.cargo = d.cargo || {}; s.credits = d.credits;
+    s.drones = d.drones || 0;
     s.passengers = d.passengers || 0;
     s.hullId = d.hullId; s.hullHp = d.hullHp;
     if (d.meshKind) s.meshKind = d.meshKind;
@@ -508,12 +517,19 @@
     G.shipTrade = data.shipTrade || null;
     G.surveys = (data.surveys && typeof data.surveys === 'object') ? data.surveys : {};
     G.extracted = (data.extracted && typeof data.extracted === 'object') ? data.extracted : {};
+    G.claims = (data.claims && typeof data.claims === 'object') ? data.claims : {};
+    G.drones = Array.isArray(data.drones) ? data.drones : [];
     G.ledgerLog = data.ledger || [];
 
     if (d.docked && G.sys.byId[d.docked]) {
       Sim.dockShip(s, G.sys.byId[d.docked], G.sys, G.t);
     } else {
       s.docked = null;
+    }
+    if (!s.docked && d.landedAt && G.sys.byId[d.landedAt.body] && Sim.updateLandedShip) {
+      s.landed = true; s.crashed = false; s.landedOn = G.sys.byId[d.landedAt.body];
+      s.landedAt = d.landedAt;
+      Sim.updateLandedShip(s, G.sys, G.t);
     }
 
     /* PICKING A CAREER UP IS NOT AN ARRIVAL, and the line below is the
