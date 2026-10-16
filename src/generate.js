@@ -239,6 +239,37 @@
     return n.charAt(0).toUpperCase() + n.slice(1);
   }
 
+  /* A POWER'S NAME IS TWO SYLLABLES. Astra, 2026-10-14: "more simple names
+   * for the factions, two syllables for the name, two for the 'empire'."
+   *
+   * makeName can run to four ("Kaoraen"), so the factions get their own:
+   * one one-syllable piece from each list, and never a vowel meeting a
+   * vowel at the join, where two syllables run together into one ("Ka" +
+   * "ul" is "Kaul"). No ending is added.
+   *
+   * IT SPENDS EXACTLY THE DRAWS makeName DID. Every later pick on the same
+   * stream — the stem, the capital, whatever comes after — must land where
+   * it always landed, or renaming the powers would quietly reshape the
+   * galaxy behind them. So: one draw for each piece (the same `pick`, on a
+   * shorter list), one for the ending chance, and one more for the ending
+   * itself whenever that chance would have fired, thrown away. */
+  var FAC_A = ['ka', 've', 'thal', 'or', 'sy', 'mir', 'dra', 'no', 'zu', 'per',
+               'lin', 'gor', 'ta', 'ish', 'bel', 'cy', 'rho', 'un', 'sef', 'vor'];
+  var FAC_B_AFTER_VOWEL = ['ran', 'dor', 'ven', 'tar', 'lis', 'mek', 'dun', 'sar',
+                           'tos', 'rin', 'gal', 'zor', 'vel', 'thun', 'kar', 'nos',
+                           'rath', 'dis'];
+  var FAC_B_AFTER_CONS  = ['is', 'aq', 'eth', 'ul', 'ost', 'ex', 'olm', 'ysh',
+                           'ar', 'en', 'ok', 'os', 'un', 'ath', 'ir', 'ek',
+                           'or', 'ax'];
+  function isVowel(ch) { return 'aeiouy'.indexOf(ch) >= 0; }
+  function makeFactionName(rng) {
+    var a = rng.pick(FAC_A);
+    var b = rng.pick(isVowel(a.charAt(a.length - 1)) ? FAC_B_AFTER_VOWEL : FAC_B_AFTER_CONS);
+    if (rng.chance(0.3)) rng.pick(['a', 'is', 'or', 'ai', 'en']);   // spent, not used
+    var n = a + b;
+    return n.charAt(0).toUpperCase() + n.slice(1);
+  }
+
   // Radius in km from mass (kg) and density (kg/m^3).
   function radiusFromMass(massKg, density) {
     var volumeM3 = massKg / density;
@@ -607,6 +638,14 @@
     });
 
     buildRotations(sys, base);
+    /* Rings and belts (2026-10-15). Their own substreams, forked off the
+     * seed, so nothing generated before or after them moves — and after the
+     * rotations, because a ring lies in its planet's equator. Read at call
+     * time rather than at load, so a suite can turn them off with
+     * opts.noRings and prove the rest of the system is untouched. */
+    var Rg = global.Rings || (typeof require !== 'undefined' ? require('./rings.js') : null);
+    if (Rg && !opts.noRings) Rg.build(sys, base);
+    else sys.belts = [];
     buildFactions(sys, base, opts);
     buildEconomy(sys, base);
     buildGovernment(sys, base, opts);
@@ -1986,9 +2025,14 @@
    * Pirates are the exception that proves the shape: they get the reserved
    * 'outlaw' faction, which no port belongs to, so "whose side is that ship
    * on" already has an answer everywhere it is asked. */
-  var FACTION_STEM = ['Concord', 'Compact', 'Union', 'Directorate', 'Assembly',
-                      'Charter', 'League', 'Combine', 'Authority', 'Protectorate',
-                      'Commonwealth', 'Accord'];
+  /* Two syllables each (Astra, 2026-10-14) — the name is two, the title is
+   * two, and "Thalis Concord" says it in four. Directorate, Assembly,
+   * Authority, Protectorate and Commonwealth went for being long; League
+   * for being one. Twelve still, though the count does not matter to the
+   * stream: a pick is one draw whatever the list's length. */
+  var FACTION_STEM = ['Concord', 'Compact', 'Union', 'Empire', 'Mandate',
+                      'Charter', 'Order', 'Combine', 'Kingdom', 'Conclave',
+                      'Council', 'Accord'];
   var FACTION_COLORS = ['#7fb2ff', '#c9a2ff', '#7fd6c0', '#ffc46b', '#ff9fb0', '#9ad87f'];
 
   /* Names for the powers that are not majors (galaxy.js draws them).
@@ -2053,7 +2097,7 @@
       for (i = 0; i < n; i++) {
         list.push({
           id: 'f' + i,
-          name: makeName(fr) + ' ' + fr.pick(FACTION_STEM),
+          name: makeFactionName(fr) + ' ' + fr.pick(FACTION_STEM),
           color: FACTION_COLORS[i % FACTION_COLORS.length],
           outlaw: false
         });
@@ -3998,6 +4042,7 @@
     MINOR_STEM: MINOR_STEM,
     FACTION_COLORS: FACTION_COLORS,
     makeName: makeName,
+    makeFactionName: makeFactionName,
     buildGovernment: buildGovernment,
     /* Exported for holdings.js, which recomputes a system's crime score
      * from its EFFECTIVE corruption and violence. One formula, or cleaning

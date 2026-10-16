@@ -22,8 +22,12 @@ fs.mkdirSync(outdir, { recursive: true });
 /* PROBE_EXE=<packaged exe> drives a built artifact instead of the dev shell. */
 const packaged = process.env.PROBE_EXE;
 const exe = packaged || path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe');
+/* A scratch userData, fresh each run, so a probe never reads or autosaves
+ * over the career Astra is actually playing (electron/main.js honours it). */
+const scratch = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'manifest-probe-'));
 const child = spawn(exe, (packaged ? [] : ['.']).concat(['--remote-debugging-port=' + PORT]),
-                    { cwd: packaged ? path.dirname(packaged) : ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+                    { cwd: packaged ? path.dirname(packaged) : ROOT, stdio: ['ignore', 'pipe', 'pipe'],
+                      env: Object.assign({}, process.env, { MANIFEST_PROBE_USERDATA: scratch }) });
 child.stdout.on('data', d => process.stdout.write('[main] ' + d));
 child.stderr.on('data', d => { const s = String(d); if (!/DevTools listening|GPU|gpu_|Fontconfig/.test(s)) process.stdout.write('[main!] ' + s); });
 

@@ -95,6 +95,7 @@
     'uniform vec3 uCenterRel;',   // eye -> body centre, km, double-subtracted in JS
     'uniform vec3 uHoleRel;',     // eye -> a shaft mouth on this body, km
     'uniform float uHoleR;',      // its radius, km; 0 disables the cut
+    'uniform float uHaloPush;',   // km behind the centre the halo sits; a ring's outer radius
     'uniform vec2 uScreenPx;',    // the camera's principal point (cx, cy)
     'uniform float uFlen;',
     'uniform float uPad;',        // quad half-size measured in body radii (>1)
@@ -272,8 +273,14 @@
     '    float a = fall * uAtmo * (0.16 + 0.84 * lam);',
     /* The halo sits at the body's own distance rather than at the limb it
      * surrounds — near enough, and it keeps the glow from being punched
-     * through by anything at the same range. */
-    '    gl_FragDepth = encodeDepth(dot(oc, uFwd));',
+     * through by anything at the same range.
+     *
+     * A RINGED world pushes it back by the ring's outer radius. The halo
+     * reaches 1.22 radii and the ring starts at about 1.1, so a halo written
+     * at the centre's depth hid the far side of the ring just past the limb
+     * — a dark band between the disc and the ring behind it. Behind the
+     * back of the ring, nothing of the ring can fail against it. */
+    '    gl_FragDepth = encodeDepth(dot(oc, uFwd) + uHaloPush);',
     '    frag = vec4(uAtmoColor * a, a);',
     '    return;',
     '  }',
@@ -1022,6 +1029,127 @@
     '}'
   ].join('\n');
 
+  /* ---- RINGS: a giant's ring, as one flat quad in its equator ------------
+   *
+   * One quad per ring, 2*outer on a side, laid in the planet's equatorial
+   * plane. The shader decides what is actually there: the radius from the
+   * planet's centre, then the ring's optical depth at that radius by the
+   * SAME function rings.js uses (Rings.ringDensity) — same profile, same
+   * three octaves of ringlets, same gaps, same integer hash — so the ice a
+   * scan or a laser finds is the ice on the screen.
+   *
+   * Three pieces of light, each one cheap and each one a thing a real ring
+   * does:
+   *   - the lit face and the unlit face differ. From the sunward side you
+   *     see reflected light; from the other side only what scatters
+   *     through, which is dim and brightest where the ring is thin;
+   *   - the planet's shadow falls across the ring, tested per fragment as
+   *     a ray from the ring point toward the sun against the planet's
+   *     sphere — in planet-centred coordinates, so the numbers stay small;
+   *   - the slant of the view thickens it: optical depth tau seen at angle
+   *     mu is tau / mu, which is why a ring nearly edge-on reads as a thin
+   *     hard line rather than fading away.
+   *
+   * Drawn AFTER the meshes and with depth writes off: it is translucent,
+   * so it blends over whatever is behind it and is hidden by whatever is
+   * in front. One quad, a few dozen ALU per pixel — the RX 540 does not
+   * notice it, and a ring off screen or under a pixel is never queued. */
+  var VERT_RING = [
+    '#version 300 es',
+    'in vec2 aCorner;',
+    'uniform vec3 uCenterRel, uE1, uE2;',
+    'uniform float uOuter;',
+    'uniform vec3 uRight, uUp, uFwd;',
+    'uniform float uFlen;',
+    'uniform vec2 uCenterPx, uViewportPx;',
+    'uniform float uNear;',
+    'out vec2 vLocal; out vec3 vRel;',
+    'void main() {',
+    '  vLocal = aCorner;',
+    '  vec3 rel = uCenterRel + (uE1 * aCorner.x + uE2 * aCorner.y) * uOuter;',
+    '  vRel = rel;',
+    '  float depth = dot(rel, uFwd);',
+    '  vec2 c2 = uCenterPx * 2.0 / uViewportPx;',
+    '  vec2 axis = vec2(dot(rel, uRight), dot(rel, uUp));',
+    '  vec2 span = axis * (2.0 * uFlen) / uViewportPx;',
+    '  vec2 clipXY = vec2((c2.x - 1.0) * depth + span.x,',
+    '                     (1.0 - c2.y) * depth + span.y);',
+    '  gl_Position = vec4(clipXY, depth - 2.0 * uNear, depth);',
+    '}'
+  ].join('\n');
+
+  var FRAG_RING = [
+    '#version 300 es',
+    'precision highp float;',
+    'precision highp int;',
+    'in vec2 vLocal; in vec3 vRel;',
+    'uniform vec3 uE1, uE2, uN, uSunDir, uFwd, uColor;',
+    'uniform float uOuter, uInner, uOpacity, uPlanetR;',
+    'uniform int uSeed, uGapN;',
+    'uniform vec2 uGaps[8];',
+    'uniform float uNear, uInvLogRange;',
+    /* Where the sheet hands over to the rock (km from the eye): fully gone
+     * inside x, fully there beyond y. */
+    'uniform vec2 uFade;',
+    'out vec4 frag;',
+    /* Bit-identical to rings.js mix32/vhash — see the note there. */
+    'uint mix32(uint h) {',
+    '  h = (h ^ (h >> 16u)) * 0x7feb352du;',
+    '  h = (h ^ (h >> 15u)) * 0x846ca68bu;',
+    '  return h ^ (h >> 16u);',
+    '}',
+    'float vhash(int i, int s) {',
+    '  return float(mix32(uint(i) ^ (uint(s) * 0x27d4eb2du))) / 4294967296.0;',
+    '}',
+    'float vnoise(float x, int s) {',
+    '  float fi = floor(x); float f = x - fi; int i = int(fi);',
+    '  float u = f * f * (3.0 - 2.0 * f);',
+    '  return mix(vhash(i, s), vhash(i + 1, s), u);',
+    '}',
+    'void main() {',
+    '  float r = length(vLocal) * uOuter;',
+    '  if (r <= uInner || r >= uOuter) discard;',
+    '  float x = (r - uInner) / (uOuter - uInner);',
+    '  float d = smoothstep(0.0, 0.035, x) * (1.0 - smoothstep(0.955, 1.0, x));',
+    '  float n = 0.52 + 0.30 * vnoise(x * 23.0, uSeed) + 0.14 * vnoise(x * 97.0, uSeed + 101)',
+    '          + 0.10 * vnoise(x * 389.0, uSeed + 211);',
+    '  d *= uOpacity * min(1.15, n);',
+    '  for (int g = 0; g < 8; g++) {',
+    '    if (g >= uGapN) break;',
+    '    d *= smoothstep(uGaps[g].y * 0.55, uGaps[g].y, abs(x - uGaps[g].x));',
+    '  }',
+    '  d = clamp(d, 0.0, 0.999);',
+    '  if (d < 0.003) discard;',
+    '  float depth = dot(vRel, uFwd);',
+    '  gl_FragDepth = clamp(log2(max(uNear, depth) / uNear) * uInvLogRange, 0.0, 1.0);',
+    /* Seen through at a slant, tau / mu. */
+    '  vec3 view = normalize(vRel);',
+    '  float mu = max(0.03, abs(dot(view, uN)));',
+    '  float a = 1.0 - pow(1.0 - d, 1.0 / mu);',
+    /* UP CLOSE THE SHEET IS THE ROCK. From inside a ring every fragment
+     * is seen nearly edge-on, so tau / mu drives the sheet opaque and it
+     * paints straight over the chunks it stands for — measured, 160 rocks
+     * queued and none of them visible. Within the radius main.js draws
+     * real chunks in, the sheet steps aside for them. */
+    '  a *= smoothstep(uFade.x, uFade.y, length(vRel));',
+    '  if (a < 0.002) discard;',
+    /* Which face you are looking at. */
+    '  float sunN = dot(uSunDir, uN);',
+    '  float elev = abs(sunN);',
+    '  bool litFace = sunN * dot(-view, uN) > 0.0;',
+    '  float lum = litFace ? (0.30 + 0.75 * sqrt(elev))',
+    '                      : (0.06 + 0.55 * sqrt(elev) * (1.0 - d));',
+    /* The planet\'s shadow, in planet-centred km. */
+    '  vec3 P = (uE1 * vLocal.x + uE2 * vLocal.y) * uOuter;',
+    '  float tt = dot(-P, uSunDir);',
+    '  if (tt > 0.0) {',
+    '    float miss = length(-P - uSunDir * tt);',
+    '    lum *= mix(0.04, 1.0, smoothstep(uPlanetR * 0.985, uPlanetR * 1.02, miss));',
+    '  }',
+    '  frag = vec4(uColor * lum, a);',
+    '}'
+  ].join('\n');
+
   /* ---- plumbing --------------------------------------------------------- */
 
   function compile(gl, type, src, label) {
@@ -1078,6 +1206,7 @@
   var meshProg = null, meshUni = null, meshQueue = [], meshSeq = 0;
   var panelProg = null, panelUni = null, panelVao = null, panelBuf = null;
   var panelQueue = [], panelSlots = [];
+  var ringProg = null, ringUni = null, ringVao = null, ringQueue = [];
 
   /* The logarithmic depth range. NEAR is ten centimetres, because the
    * cockpit view sits about a metre from its own console; FAR is far past
@@ -1148,7 +1277,7 @@
                               'uNear', 'uInvLogRange', 'uBanded',
                               'uOcean', 'uSeaColor', 'uIce',
                               'uCenterRel', 'uScreenPx', 'uFlen',
-                              'uHoleRel', 'uHoleR']);
+                              'uHoleRel', 'uHoleR', 'uHaloPush']);
 
     quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
@@ -1196,11 +1325,34 @@
       panelProg = null;
     }
 
+    /* The ring pass. Like panels, allowed to fail on its own: a driver that
+     * will not build it costs you rings, not the world. */
+    try {
+      ringProg = link(gl, VERT_RING, FRAG_RING, 'ring');
+      ringUni = uniforms(gl, ringProg, ['uCenterRel', 'uE1', 'uE2', 'uN', 'uOuter',
+                                        'uInner', 'uOpacity', 'uPlanetR', 'uSeed',
+                                        'uGapN', 'uGaps', 'uColor', 'uSunDir',
+                                        'uRight', 'uUp', 'uFwd', 'uFlen',
+                                        'uCenterPx', 'uViewportPx',
+                                        'uNear', 'uInvLogRange', 'uFade']);
+      ringVao = gl.createVertexArray();
+      gl.bindVertexArray(ringVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+      var rloc = gl.getAttribLocation(ringProg, 'aCorner');
+      gl.enableVertexAttribArray(rloc);
+      gl.vertexAttribPointer(rloc, 2, gl.FLOAT, false, 0, 0);
+      gl.bindVertexArray(null);
+    } catch (e3) {
+      if (global.console) console.error(e3.message);
+      ringProg = null;
+    }
+
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     GL.available = true;
     GL.panels = !!panelProg;
+    GL.rings = !!ringProg;
     return true;
   };
 
@@ -1411,6 +1563,7 @@
     queue.length = 0;
     meshQueue.length = 0;
     panelQueue.length = 0;
+    ringQueue.length = 0;
     hole = null;
     if (!gl) return;
     if (bg) gl.clearColor(bg[0], bg[1], bg[2], 1);
@@ -1562,10 +1715,82 @@
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   }
 
+  /* Queue one planet's ring. `planet` carries `.ring` from rings.js and its
+   * own rotation, from which the plane is read; `worldPos` is its centre.
+   * The frame is passed in rather than recomputed so there is one source
+   * of truth for the plane (Rings.ringFrame) and gl.js keeps loading on its
+   * own. Returns false when there is nothing to draw. */
+  /* `fade` is [near, far] in km: inside near the sheet is not drawn, because
+   * the caller is drawing the chunks there instead. Omitted, no fade. */
+  GL.queueRing = function (planet, frame, worldPos, cam, sunDir, fade) {
+    if (!gl || !ringProg || !planet || !planet.ring || !frame || !worldPos) return false;
+    ringQueue.push({ planet: planet, frame: frame, cam: cam, sun: sunDir,
+                     fade: fade || [0, 0],
+                     rel: { x: worldPos.x - cam.eye.x, y: worldPos.y - cam.eye.y,
+                            z: worldPos.z - cam.eye.z } });
+    return true;
+  };
+
+  var gapBuf = new Float32Array(16);
+  function drawRings() {
+    if (!ringQueue.length || !ringProg) return;
+    /* Far to near, so two rings in one view composite in order. */
+    ringQueue.sort(function (a, b) {
+      return (b.rel.x * b.rel.x + b.rel.y * b.rel.y + b.rel.z * b.rel.z) -
+             (a.rel.x * a.rel.x + a.rel.y * a.rel.y + a.rel.z * a.rel.z);
+    });
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LESS);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    gl.useProgram(ringProg);
+    gl.bindVertexArray(ringVao);
+    var cam = ringQueue[0].cam;
+    gl.uniform2f(ringUni.uViewportPx, vw, vh);
+    gl.uniform2f(ringUni.uCenterPx, cam.cx, cam.cy);
+    gl.uniform1f(ringUni.uFlen, cam.flen);
+    gl.uniform3f(ringUni.uRight, cam.r.x, cam.r.y, cam.r.z);
+    gl.uniform3f(ringUni.uUp, cam.u.x, cam.u.y, cam.u.z);
+    gl.uniform3f(ringUni.uFwd, cam.f.x, cam.f.y, cam.f.z);
+    gl.uniform1f(ringUni.uNear, DEPTH_NEAR);
+    gl.uniform1f(ringUni.uInvLogRange, INV_LOG_RANGE);
+    for (var i = 0; i < ringQueue.length; i++) {
+      var q = ringQueue[i], p = q.planet, R = p.ring, f = q.frame;
+      var span = R.outer - R.inner;
+      gl.uniform3f(ringUni.uCenterRel, q.rel.x, q.rel.y, q.rel.z);
+      gl.uniform3f(ringUni.uE1, f.e1.x, f.e1.y, f.e1.z);
+      gl.uniform3f(ringUni.uE2, f.e2.x, f.e2.y, f.e2.z);
+      gl.uniform3f(ringUni.uN, f.n.x, f.n.y, f.n.z);
+      gl.uniform1f(ringUni.uOuter, R.outer);
+      gl.uniform1f(ringUni.uInner, R.inner);
+      gl.uniform1f(ringUni.uOpacity, R.opacity);
+      gl.uniform1f(ringUni.uPlanetR, p.radius);
+      gl.uniform1i(ringUni.uSeed, R.seed | 0);
+      var ng = Math.min(8, R.gaps.length);
+      for (var g = 0; g < 8; g++) {
+        gapBuf[g * 2] = g < ng ? (R.gaps[g].r - R.inner) / span : -9;
+        gapBuf[g * 2 + 1] = g < ng ? R.gaps[g].hw / span : 0;
+      }
+      gl.uniform1i(ringUni.uGapN, ng);
+      gl.uniform2fv(ringUni.uGaps, gapBuf);
+      var c = rgb(R.color);
+      gl.uniform3f(ringUni.uColor, c[0], c[1], c[2]);
+      gl.uniform3f(ringUni.uSunDir, q.sun.x, q.sun.y, q.sun.z);
+      gl.uniform2f(ringUni.uFade, q.fade[0], Math.max(q.fade[1], q.fade[0] + 1e-6));
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+    gl.bindVertexArray(null);
+    gl.depthMask(true);
+  }
+
   GL.end = function () {
     if (!gl) return;
     drawBodies();
     drawMeshes();
+    /* After the hulls, before the screens: translucent, so it blends over
+     * what is behind it and is hidden by what is in front. */
+    drawRings();
     /* Last, so the screens are lit over a finished world rather than
      * competing with it — and after the hull, so a panel is depth-tested
      * against the cockpit it is mounted in. */
@@ -1666,6 +1891,7 @@
       gl.uniform1f(uni.uFlashGain, flashGain);
       gl.uniform1f(uni.uCenterDepth, q.depth);
       gl.uniform1f(uni.uWorldRadius, b.radius || 1);
+      gl.uniform1f(uni.uHaloPush, (b.ring && ringProg) ? b.ring.outer : 0);
       gl.uniform3f(uni.uCenterRel, q.rel.x, q.rel.y, q.rel.z);
       /* The shaft mouth, if the port we are cutting a hole for is on THIS
        * body. Recomputed against this frame's eye rather than stored as a
@@ -1929,6 +2155,9 @@
    * from weather.js — the drift that would matter is a threshold nudged in
    * one of the two languages and not the other. */
   GL.planetShaderSource = function () { return FRAG_BODY; };
+  /* Same reason, for the ring: test/rings.test.js checks every constant in
+   * the ring's optical depth matches Rings.ringDensity, the CPU twin. */
+  GL.ringShaderSource = function () { return FRAG_RING; };
 
   GL.rgb = rgb;              // exported for tests
   GL.hashSeed = hashSeed;

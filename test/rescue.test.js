@@ -134,12 +134,22 @@ function runToRefuel(G, H, maxHours) {
   Combat.updateRescue(G.sys, G, G.t, 0.1, H);
   var spec = (G.sys.patrols || []).filter(function (p) { return p.id === G.rescue.responder; })[0];
   var wasTemp = spec.temporary;
+  /* The bill is QUOTED at the call now (crew time and mass, see
+   * rescueRate), not a flat RESCUE_FEE — read what this call was quoted
+   * rather than assuming a number. */
+  var fee = Math.max(0, Math.round(G.rescue.fee || 0));
+  var paid = Math.min(fee, 5000);
   var steps = runToRefuel(G, H, 6);
   check('the rescue completes', !G.rescue && G.lastRescueEnd === 'refuelled', G.lastRescueEnd + ' after ' + steps + ' steps');
   check('reaction mass is full', G.ship.thrusterFuel === G.ship.thrusterCap, G.ship.thrusterFuel);
   check('and so is the jump tank', G.ship.fuel === G.ship.fuelCap, G.ship.fuel);
-  check('the flat fee came out', G.ship.credits === 5000 - Combat.RESCUE_FEE, G.ship.credits);
-  check('and went in the ledger', H.lines.some(function (l) { return /^LEDGER/.test(l) && /500 cr/.test(l); }), H.lines.join(' | '));
+  check('the quoted fee came out, as much of it as you had', G.ship.credits === 5000 - paid,
+        G.ship.credits + ' of 5000, quoted ' + fee);
+  check('and went in the ledger', H.lines.some(function (l) {
+    return /^LEDGER/.test(l) && new RegExp('\\b' + paid + ' cr').test(l);
+  }), H.lines.join(' | '));
+  check('anything you could not cover is a lien, not a gift',
+        Combat.lienOwed(G) === fee - paid, Combat.lienOwed(G) + ' owed against ' + (fee - paid));
   check('the beacon is off the air', !(G.distress || []).length);
   check('she stood down', !spec.rescue && !spec.live && !spec.mode);
   if (wasTemp) check('a temporary boat is gone once the job is done', G.sys.patrols.indexOf(spec) < 0);
@@ -152,9 +162,17 @@ function runToRefuel(G, H, maxHours) {
   /* A BROKE PILOT IS STILL REFUELLED. */
   var G2 = strandedG('kawartha', 120), H2 = saidBy();
   Combat.updateRescue(G2.sys, G2, G2.t, 0.1, H2);
+  var fee2 = Math.max(0, Math.round(G2.rescue.fee || 0));
   runToRefuel(G2, H2, 6);
   check('with nothing, you pay what you have', !G2.rescue && G2.ship.credits === 0 && G2.ship.thrusterFuel === G2.ship.thrusterCap);
-  check('and the rest is waived, out loud', H2.lines.some(function (l) { return /waived/.test(l); }), H2.lines.join(' | '));
+  /* NOT WAIVED any more (b8860bb): the shortfall outlives the rescue as a
+   * lien on the hull, and the pilot is told so rather than finding out at
+   * the yard. */
+  check('and the rest goes against the hull, out loud',
+        Combat.lienOwed(G2) === fee2 - 120 &&
+        H2.lines.some(function (l) { return /against the hull/.test(l); }) &&
+        H2.lines.some(function (l) { return /holds a lien/.test(l); }),
+        Combat.lienOwed(G2) + ' owed of ' + (fee2 - 120) + ' | ' + H2.lines.join(' | '));
 
   /* A SYSTEM WITH NO TENDER OF ITS OWN. Strip them and a port boat comes. */
   var G3 = strandedG('kawartha', 5000), H3 = saidBy();

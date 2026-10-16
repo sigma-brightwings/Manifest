@@ -8032,6 +8032,12 @@
       ctx.beginPath(); ctx.arc(sp.x, sp.y, 1.4, 0, K.TAU); ctx.fill();
     }
 
+    /* Greebles and accent light, BEFORE the screens: every screen stands in
+     * front of the slab behind it, so it must also be painted after what is
+     * bolted to that slab. */
+    drawAccentStrips(ctx, cam, ship, spec);
+    drawGreebles(ctx, cam, ship, spec, w, h);
+
     var mfds = [], emitters = [];
     for (i = 0; i < MFD_MOUNTS.length; i++) {
       var mt = MFD_MOUNTS[i];
@@ -8084,11 +8090,10 @@
       emitters.push({ x: b.cx, y: b.cy });
     }
 
-    /* Side-console switch blocks. These exist for one reason: turning your
-     * head used to find two flat grey slabs, and now it finds something with
-     * a light on it. */
-    sideConsoleDetail(ctx, cam, ship, false);
-    sideConsoleDetail(ctx, cam, ship, true);
+    /* Side-console switch blocks used to be drawn here (sideConsoleDetail):
+     * three flat blocks a console, so turning your head found something with
+     * a light on it. The greebles above cover the whole console now, so
+     * those placeholders are retired rather than drawn under them. */
 
     return { mfds: mfds, emitters: emitters };
   }
@@ -8102,6 +8107,13 @@
     var hullHurt = ship.hullMax ? ship.hull < ship.hullMax * 0.999 : false;
     var shieldUp = ship.shieldCap ? ship.shield > ship.shieldCap * 0.05 : false;
     var OFF = '#151d26';
+    /* MASTER CAUTION took the first spare bay (2026-10-15). It was a greeble
+     * on the dash first, and measured from the seat that put it off the
+     * bottom-left of the screen — a caution light you cannot see is not one.
+     * The lamp row is where the eye already goes. It flashes on the wall
+     * clock whenever any lamp to its left is amber or red. */
+    var cautionNow = !!ship.fuelOut || thrFrac < 0.15 || fuelFrac < 0.2 || hullHurt;
+    var tNow = (global.performance && global.performance.now) ? global.performance.now() / 1000 : 0;
     var lamps = [
       ship.docked || ship.landed ? '#7dffb0' : OFF,          // clamped
       ship.docked ? '#7dffb0' : OFF,                          // umbilical
@@ -8109,7 +8121,8 @@
       fuelFrac < 0.2 ? '#ffb86b' : OFF,                       // jump fuel
       hullHurt ? '#ff6b5a' : OFF,                             // hull
       shieldUp ? '#8fd8ff' : OFF,                             // shields
-      OFF, OFF                                                // spare bays
+      cautionNow && (tNow * 1.5) % 1 < 0.55 ? '#ffb347' : OFF, // master caution
+      OFF                                                     // spare bay
     ];
     for (var i = 0; i < lamps.length; i++) {
       var s0 = 0.055 + i * 0.114;
@@ -8159,6 +8172,464 @@
         quadPoint(q, bk.u + bk.du, bk.v + bk.dv), quadPoint(q, bk.u, bk.v + bk.dv)]));
       if (poly) fillPoly(ctx, poly, bk.fill, bk.line);
     }
+  }
+
+  /* ---- GREEBLES: the cockpit as a place that is switched on (2026-10-15) ---
+   *
+   * Astra: "can we add some greebles that light up and some other shit to
+   * the interior of the cockpit". The room was a handful of flat dark slabs
+   * with eight lamps on them, and a per-hull cockpit that only changed the
+   * glass — so a Dart and a Mule were the same empty room with different
+   * windows.
+   *
+   * WHAT THIS IS. A kit of small mounted things — switch banks, back-lit
+   * button grids, LED bars, vents, little readouts, plates with seams and
+   * screws — laid out once per ship and drawn as flat quads on the surfaces
+   * that already exist. Three rules:
+   *
+   *   1. LIGHT MEANS SOMETHING WHERE IT CAN. The LED bars that can be bound
+   *      to the ship ARE bound: throttle, jump fuel, reaction mass, hull,
+   *      shields. Master caution flashes when a lamp on the dash would. The
+   *      rest blink and chase on their own clocks, because a real panel has
+   *      plenty of lights nobody is watching.
+   *   2. EACH HULL HAS A CHARACTER, from the same table cockpitSpec reads:
+   *      a Dart is sparse and military, red and amber; a Mule is dense and
+   *      utilitarian, green and amber. Layout is seeded off cockpitSeed —
+   *      bornId, not the registration — so the panel you learned is the
+   *      panel you keep, and two Mules are not wired identically.
+   *   3. NO BLUR. The glow under a lit block is ONE additive gradient per
+   *      block, not a shadow per LED. shadowBlur on this canvas is what cost
+   *      the cockpit half its frame rate (see GLASS_GLOW above); this must
+   *      not be the next thing that does.
+   *
+   * Machines run on the WALL CLOCK, like the doors: a status light blinks
+   * at the same rate at 10,000x warp as at 1x. */
+
+  var GREEBLE_HULLS = {
+    /* pal: LED colours, the first most common. metal: the plate colour.
+     * density: share of free panel space that gets a block. */
+    dart:    { pal: ['#ff5a4a', '#ffb347', '#ffd27a', '#7dffb0'], accent: '#ff7a52',
+               metal: '#1b2029', density: 0.62, guards: true },
+    talon:   { pal: ['#7dffb0', '#8fd8ff', '#ffd27a', '#ff6b5a'], accent: '#7fe6c8',
+               metal: '#18202b', density: 0.80 },
+    kestrel: { pal: ['#8fd8ff', '#e8eef7', '#ffb347', '#7dffb0'], accent: '#9fc4ff',
+               metal: '#19212d', density: 0.86 },
+    mule:    { pal: ['#7dffb0', '#ffb347', '#ffd27a', '#8fd8ff'], accent: '#b8e07a',
+               metal: '#1c2229', density: 0.96 }
+  };
+
+  /* Free space on each surface, in that surface's own (u, v), chosen to stay
+   * clear of what is already mounted: the rear screens and the hatch panel
+   * on the bulkhead, the floor-window slot and the lamp row on the dash. */
+  /* The side consoles are given over whole: their three old flat blocks
+   * (sideConsoleDetail) were the placeholder this replaces, and leaving them
+   * in made half of every console a blank slab beside the new fittings. */
+  var GREEBLE_REGIONS = [
+    { surf: 'sideL', rects: [[0.05, 0.08, 0.95, 0.92]] },
+    { surf: 'sideR', rects: [[0.05, 0.08, 0.95, 0.92]] },
+    { surf: 'overhead', rects: [[0.06, 0.10, 0.94, 0.90]] },
+    { surf: 'bulkhead', rects: [[0.03, 0.05, 0.97, 0.24], [0.03, 0.72, 0.97, 0.95],
+                                [0.02, 0.30, 0.17, 0.68], [0.83, 0.30, 0.98, 0.68]] },
+    { surf: 'dash', rects: [[0.03, 0.46, 0.36, 0.95], [0.64, 0.46, 0.97, 0.95]] }
+  ];
+
+  /* A surface as a function of (u, v), so a block can be laid out once in
+   * flat coordinates and land on whichever slab it was given. Exactly ON
+   * the slab: the interior is painted in order on the 2D canvas, so a block
+   * drawn after its surface is in front of it with no depth to fight. */
+  function greebleSurface(name) {
+    var q;
+    if (name === 'dash') return function (u, v) { return dashPoint(u, v); };
+    if (name === 'sideL') q = INTERIOR[0].pts;
+    else if (name === 'sideR') { q = INTERIOR[1].pts; q = [q[0], q[3], q[2], q[1]]; }
+    else if (name === 'overhead') q = INTERIOR[2].pts;
+    else q = INTERIOR[3].pts;
+    return function (u, v) { return quadPoint(q, u, v); };
+  }
+
+  /* Split a free rect into blocks, the way panel space gets carved up on a
+   * real console: cut along the long side, keep cutting until a piece is
+   * about the size of one fitting.
+   *
+   * IN METRES, not in (u, v). The first version cut in surface units, and
+   * the surfaces are wildly different sizes — the overhead is 1.7 m across,
+   * a console strip a fraction of that — so the same rule made fiddly
+   * fittings on one slab and 30 cm LED pips on another. Seen in play.
+   * `lu`/`lv` are the surface's size in metres along u and v. */
+  var BLOCK_MAX_W = 0.30, BLOCK_MAX_H = 0.22;     // m
+  function splitRect(r, rng, out, depth, lu, lv) {
+    var du = (r[2] - r[0]) * lu, dv = (r[3] - r[1]) * lv;
+    if (depth > 7 || (du < BLOCK_MAX_W && dv < BLOCK_MAX_H)) { out.push(r); return; }
+    var k = rng.range(0.35, 0.65);
+    if (du / BLOCK_MAX_W >= dv / BLOCK_MAX_H) {
+      var um = r[0] + (r[2] - r[0]) * k;
+      splitRect([r[0], r[1], um, r[3]], rng, out, depth + 1, lu, lv);
+      splitRect([um, r[1], r[2], r[3]], rng, out, depth + 1, lu, lv);
+    } else {
+      var vm = r[1] + (r[3] - r[1]) * k;
+      splitRect([r[0], r[1], r[2], vm], rng, out, depth + 1, lu, lv);
+      splitRect([r[0], vm, r[2], r[3]], rng, out, depth + 1, lu, lv);
+    }
+  }
+
+  function dist3(a, b) {
+    return Math.sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) +
+                     (a[2] - b[2]) * (a[2] - b[2]));
+  }
+
+  var BIND_SOURCES = ['throttle', 'fuel', 'mass', 'hull', 'shield'];
+
+  /* The layout: a flat list of quads, each with how to colour it. Built once
+   * per cockpit key and cached on the spec, so the per-frame cost is
+   * projecting and filling, nothing else. */
+  function greebleLayout(ship, spec) {
+    if (spec._greebles) return spec._greebles;
+    var style = GREEBLE_HULLS[ship.hullId] || GREEBLE_HULLS.talon;
+    var rng = new RNG(spec.key + '|greebles');
+    var items = [], blocks = [], binds = 0, caution = false;
+
+    function pal() {
+      var p = style.pal, x = rng.range(0, 1);
+      return x < 0.55 ? p[0] : x < 0.75 ? p[1] : x < 0.9 ? p[2] : p[3];
+    }
+
+    for (var g = 0; g < GREEBLE_REGIONS.length; g++) {
+      var reg = GREEBLE_REGIONS[g], at = greebleSurface(reg.surf);
+      /* The slab's size in metres, averaged across its two opposite edges. */
+      var lu = (dist3(at(0, 0), at(1, 0)) + dist3(at(0, 1), at(1, 1))) / 2;
+      var lv = (dist3(at(0, 0), at(0, 1)) + dist3(at(1, 0), at(1, 1))) / 2;
+      var pieces = [];
+      for (var r = 0; r < reg.rects.length; r++) splitRect(reg.rects[r], rng, pieces, 0, lu, lv);
+      for (var p = 0; p < pieces.length; p++) {
+        var pc = pieces[p];
+        /* Inset by a centimetre, so neighbouring blocks have a seam. */
+        var iu = 0.010 / lu, iv = 0.010 / lv;
+        var b = [pc[0] + iu, pc[1] + iv, pc[2] - iu, pc[3] - iv];
+        var bw = b[2] - b[0], bh = b[3] - b[1];
+        /* And the same block in metres, which is what every count below is
+         * decided in. */
+        var mw = bw * lu, mh = bh * lv;
+        if (mw < 0.04 || mh < 0.03) continue;
+        /* `rad` is the block's half-diagonal in metres — what the per-frame
+         * cull tests against, so a block wholly off screen costs one point
+         * projected, not every quad in it. */
+        var cen = at((b[0] + b[2]) / 2, (b[1] + b[3]) / 2);
+        var block = { lit: [], items: [], centre: cen,
+                      rad: Math.max(dist3(cen, at(b[0], b[1])), dist3(cen, at(b[2], b[3])),
+                                    dist3(cen, at(b[2], b[1])), dist3(cen, at(b[0], b[3]))),
+                      colour: style.accent };
+        blocks.push(block);
+
+        /* In block-local (a, b) in [0,1]^2. */
+        var quad = function (a0, b0, a1, b1) {
+          return [at(b[0] + bw * a0, b[1] + bh * b0), at(b[0] + bw * a1, b[1] + bh * b0),
+                  at(b[0] + bw * a1, b[1] + bh * b1), at(b[0] + bw * a0, b[1] + bh * b1)];
+        };
+        /* Layer 0 is the block's own back plate; everything bolted to it is
+         * layer 1. The draw batches by colour within a layer, so this is
+         * what keeps a back plate from being painted over its own LEDs. */
+        var add = function (it, layer) {
+          it.layer = layer || 1;
+          items.push(it); block.items.push(it);
+          if (it.led) block.lit.push(it);
+        };
+
+        if (rng.range(0, 1) > style.density) {
+          /* Bare plate: a seam and four screws. Texture, not light. */
+          add({ pts: quad(0, 0, 1, 1), fill: style.metal, line: 'rgba(120,150,190,0.16)' }, 0);
+          /* Screws a centimetre across, wherever the plate's corners are. */
+          var su = 0.006 / mw, sv = 0.006 / mh, mu = 0.018 / mw, mv = 0.018 / mh;
+          var sc = [[mu, mv], [1 - mu, mv], [1 - mu, 1 - mv], [mu, 1 - mv]];
+          for (var s = 0; s < 4; s++) {
+            add({ pts: quad(sc[s][0] - su, sc[s][1] - sv, sc[s][0] + su, sc[s][1] + sv),
+                  fill: '#3a4656' });
+          }
+          continue;
+        }
+
+        add({ pts: quad(0, 0, 1, 1), fill: '#0b1016', line: 'rgba(130,160,200,0.24)' }, 0);
+        var aspect = mw / mh;
+        var pick = rng.range(0, 1);
+        var kind = aspect > 2.2 ? (pick < 0.55 ? 'ledbar' : pick < 0.8 ? 'readout' : 'vent')
+                 : aspect < 0.6 ? (pick < 0.6 ? 'switches' : 'vent')
+                 : (pick < 0.40 ? 'switches' : pick < 0.72 ? 'buttons' : pick < 0.86 ? 'readout' : 'ledbar');
+        /* The first big-enough block on the dash repeats master caution —
+         * the lamp itself is in lampRow, where it can be seen; this is the
+         * one by your knee, for when you are looking down at the desk. */
+        if (!caution && reg.surf === 'dash' && mw > 0.08) { kind = 'caution'; caution = true; }
+        block.kind = kind;
+
+        if (kind === 'switches') {
+          /* Rows of toggles on a 5.5 x 7 cm pitch: a 1.6 x 2.6 cm lever with
+           * a 1.2 x 0.8 cm LED under it. Sized in metres, then turned into
+           * fractions of this block — the first version sized them as
+           * fractions and grew 7 cm tiles on a tall block. */
+          var n = Math.max(2, Math.min(10, Math.floor(mw / 0.055)));
+          var rowsS = Math.max(1, Math.min(3, Math.floor(mh / 0.07)));
+          var fw = 1 / n, fh = 1 / rowsS;
+          var lw = Math.min(0.8 * fw, 0.016 / mw) / 2, lh = Math.min(0.45 * fh, 0.026 / mh);
+          var ew = Math.min(0.8 * fw, 0.012 / mw) / 2, eh = Math.min(0.2 * fh, 0.008 / mh);
+          for (var rs = 0; rs < rowsS; rs++) {
+            for (var i = 0; i < n; i++) {
+              var xc = (i + 0.5) * fw, yt = rs * fh + fh * 0.18;
+              add({ pts: quad(xc - lw, yt, xc + lw, yt + lh), fill: '#2b3542', line: 'rgba(0,0,0,0.6)' });
+              if (style.guards && rng.chance(0.25)) {
+                add({ pts: quad(xc - lw * 1.6, yt - fh * 0.06, xc + lw * 1.6, yt), fill: '#7a2a24' });
+              }
+              var ly = yt + lh + fh * 0.12;
+              add({ pts: quad(xc - ew, ly, xc + ew, ly + eh), led: true, on: pal(),
+                    mode: rng.chance(0.55) ? 'steady' : rng.chance(0.5) ? 'blink' : 'off',
+                    period: rng.range(0.8, 3.2), phase: rng.range(0, 10), duty: rng.range(0.3, 0.7) });
+            }
+          }
+        } else if (kind === 'buttons') {
+          /* About 4 cm a button, which is the size a gloved finger wants. */
+          var cols = Math.max(2, Math.min(7, Math.round(mw / 0.042)));
+          var rows = Math.max(1, Math.min(5, Math.round(mh / 0.042)));
+          var bcol = pal();
+          for (var by = 0; by < rows; by++) {
+            for (var bx = 0; bx < cols; bx++) {
+              add({ pts: quad((bx + 0.15) / cols, (by + 0.15) / rows, (bx + 0.85) / cols, (by + 0.85) / rows),
+                    led: true, on: rng.chance(0.2) ? pal() : bcol, dim: 0.22,
+                    mode: rng.chance(0.3) ? 'steady' : rng.chance(0.15) ? 'blink' : 'dim',
+                    period: rng.range(1.5, 4), phase: rng.range(0, 10), duty: 0.5 });
+            }
+          }
+        } else if (kind === 'ledbar' || kind === 'readout') {
+          var lines = kind === 'readout' ? Math.max(2, Math.min(5, Math.round(mh / 0.035))) : 1;
+          for (var ln = 0; ln < lines; ln++) {
+            var pips = Math.max(6, Math.min(20, Math.round(mw / 0.035)));
+            /* Bind it to the ship if there is anything left to bind. */
+            var bind = (kind === 'ledbar' && binds < BIND_SOURCES.length) ? BIND_SOURCES[binds++] : null;
+            var lc = bind ? null : pal();
+            var y0 = (ln + 0.25) / lines, y1 = (ln + 0.75) / lines;
+            for (var k = 0; k < pips; k++) {
+              add({ pts: quad((k + 0.12) / pips, y0, (k + 0.88) / pips, y1), led: true,
+                    on: lc, bind: bind, index: k, count: pips,
+                    mode: bind ? 'level' : (kind === 'readout' ? 'activity' : (rng.chance(0.5) ? 'chase' : 'activity')),
+                    period: rng.range(0.12, 0.4), phase: rng.range(0, 10) });
+            }
+          }
+        } else if (kind === 'vent') {
+          var slits = Math.max(3, Math.min(12, Math.round((aspect > 1 ? mh : mw) / 0.018)));
+          for (var v = 0; v < slits; v++) {
+            var t0 = (v + 0.25) / slits, t1 = (v + 0.6) / slits;
+            add({ pts: aspect > 1 ? quad(0.08, t0, 0.92, t1) : quad(t0, 0.08, t1, 0.92), fill: '#05080c' });
+          }
+        } else if (kind === 'caution') {
+          add({ pts: quad(0.18, 0.2, 0.82, 0.8), led: true, on: '#ffb347', mode: 'caution', dim: 0.10 });
+        }
+      }
+    }
+    spec._greebles = { items: items, blocks: blocks, style: style };
+    return spec._greebles;
+  }
+
+  /* What the bound bars read, 0..1. */
+  function greebleReadings(ship) {
+    function frac(a, b) { return (b > 0) ? Math.max(0, Math.min(1, a / b)) : 0; }
+    var thr = ship.throttle;
+    if (!(thr >= 0)) {
+      var t = ship.thrust || {};
+      thr = Math.min(1, Math.sqrt((t.x || 0) * (t.x || 0) + (t.y || 0) * (t.y || 0) + (t.z || 0) * (t.z || 0)));
+    }
+    var fuel = frac(ship.fuel, ship.fuelCap), mass = frac(ship.thrusterFuel, ship.thrusterCap);
+    var hull = frac(ship.hull, ship.hullMax), shield = frac(ship.shield, ship.shieldCap);
+    return {
+      throttle: thr || 0, fuel: fuel, mass: mass, hull: hull, shield: shield,
+      /* The same conditions that light the dash lamps amber or red. */
+      caution: !!ship.fuelOut || mass < 0.15 || fuel < 0.2 ||
+               (ship.hullMax ? ship.hull < ship.hullMax * 0.999 : false)
+    };
+  }
+
+  function hexA(hex, a) {
+    var n = parseInt(String(hex).slice(1), 16);
+    return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+  }
+  function gHash(a, b) { var x = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return x - Math.floor(x); }
+
+  /* Colour of one LED this frame, or null for dark. */
+  function ledColour(it, now, read) {
+    var on = it.on, t = now + (it.phase || 0);
+    switch (it.mode) {
+      case 'steady': return on;
+      case 'off': return null;
+      case 'dim': return hexA(on, it.dim || 0.2);
+      case 'blink': return ((t / it.period) % 1) < it.duty ? on : hexA(on, it.dim || 0.08);
+      case 'chase': {
+        var head = Math.floor(t / it.period) % it.count;
+        var d = (it.index - head + it.count) % it.count;
+        return d < 2 ? on : hexA(on, 0.07);
+      }
+      case 'activity':
+        return gHash(it.index + it.phase * 13, Math.floor(t / it.period)) < 0.45 ? on : hexA(on, 0.06);
+      case 'level': {
+        var f = read[it.bind] || 0;
+        var lit = it.index < Math.round(f * it.count);
+        /* Throttle reads cyan; the rest go green, amber, red as they fall. */
+        var c = it.bind === 'throttle' ? '#8fd8ff'
+              : f > 0.5 ? '#7dffb0' : f > 0.2 ? '#ffb347' : '#ff5a4a';
+        return lit ? c : hexA(c, 0.07);
+      }
+      case 'caution':
+        return (read.caution && (now * 1.5) % 1 < 0.55) ? on : hexA(on, it.dim);
+    }
+    return on;
+  }
+
+  /* The off-state colour of a lamp face. A dark LED is still a bit of
+   * coloured plastic, not a hole. */
+  var LED_OFF = '#141b24';
+
+  /* THE COST, measured before this was written the way it is. Drawn the
+   * obvious way — every quad through localPoly and clipProject and its own
+   * fill — a Mule's ~1,100 pieces cost 1.8–4.6 ms a frame on the i5, and
+   * took a whole frame to 10 ms looking behind the seat. Three things fix it:
+   *
+   *   - CULL BY BLOCK. One projected point and a radius decides whether a
+   *     whole fitting is on screen. Most of the room never is.
+   *   - PROJECT BY HAND. The ship-to-camera transform is one 3x3 and an
+   *     offset per frame; a corner is nine multiply-adds and no objects.
+   *     Anything straddling the eye plane falls back to clipProject.
+   *   - ONE FILL PER COLOUR. Quads are gathered by colour into one path
+   *     each, two layers deep (back plates, then what is on them), so a
+   *     frame costs a few dozen fills however many LEDs are lit. */
+  function drawGreebles(ctx, cam, ship, spec, w, h) {
+    var lay = greebleLayout(ship, spec);
+    var now = (global.performance && global.performance.now) ? global.performance.now() / 1000 : 0;
+    var read = greebleReadings(ship);
+
+    /* The frame's transform, metres in ship axes -> camera space in km. */
+    var ex = ship.pos.x - cam.eye.x, ey = ship.pos.y - cam.eye.y, ez = ship.pos.z - cam.eye.z;
+    var oR = ex * cam.r.x + ey * cam.r.y + ez * cam.r.z;
+    var oU = ex * cam.u.x + ey * cam.u.y + ez * cam.u.z;
+    var oD = ex * cam.f.x + ey * cam.f.y + ez * cam.f.z;
+    function ax(v) {
+      return [(v.x * cam.r.x + v.y * cam.r.y + v.z * cam.r.z) * M,
+              (v.x * cam.u.x + v.y * cam.u.y + v.z * cam.u.z) * M,
+              (v.x * cam.f.x + v.y * cam.f.y + v.z * cam.f.z) * M];
+    }
+    var X = ax(ship.right), Y = ax(ship.up), Z = ax(ship.fwd);
+    var flen = cam.flen, cx = cam.cx, cy = cam.cy;
+    var W = w || cx * 2, H = h || cy * 2;
+
+    function project(pts) {
+      var out = [];
+      for (var k = 0; k < pts.length; k++) {
+        var p = pts[k];
+        var d = oD + X[2] * p[0] + Y[2] * p[1] + Z[2] * p[2];
+        if (d <= NEAR_CLIP) return clipProject(cam, localPoly(ship, pts));
+        var r = oR + X[0] * p[0] + Y[0] * p[1] + Z[0] * p[2];
+        var u = oU + X[1] * p[0] + Y[1] * p[1] + Z[1] * p[2];
+        out.push({ x: cx + r * flen / d, y: cy - u * flen / d });
+      }
+      return out;
+    }
+
+    var fills = [{}, {}], strokes = {}, visible = [];
+    for (var i = 0; i < lay.blocks.length; i++) {
+      var bk = lay.blocks[i], c0 = bk.centre;
+      var bd = oD + X[2] * c0[0] + Y[2] * c0[1] + Z[2] * c0[2];
+      var br = bk.rad * M;
+      if (bd < -br) continue;                                  // behind the eye
+      if (bd > br) {
+        var sx = cx + (oR + X[0] * c0[0] + Y[0] * c0[1] + Z[0] * c0[2]) * flen / bd;
+        var sy = cy - (oU + X[1] * c0[0] + Y[1] * c0[1] + Z[1] * c0[2]) * flen / bd;
+        var rp = br * flen / bd;
+        if (sx + rp < 0 || sx - rp > W || sy + rp < 0 || sy - rp > H) continue;
+        bk._sx = sx; bk._sy = sy; bk._rp = rp;
+      } else {
+        bk._sx = null;
+      }
+      visible.push(bk);
+      for (var j = 0; j < bk.items.length; j++) {
+        var it = bk.items[j];
+        var poly = project(it.pts);
+        if (!poly) { it._lit = null; continue; }
+        var fill = it.fill;
+        if (it.led) { it._lit = ledColour(it, now, read); fill = it._lit || LED_OFF; }
+        var layer = fills[it.layer === 0 ? 0 : 1];
+        (layer[fill] = layer[fill] || []).push(poly);
+        if (it.line) (strokes[it.line] = strokes[it.line] || []).push(poly);
+      }
+    }
+
+    ctx.save();
+    var col, list, q;
+    /* Back plates, their seams, then everything mounted on them. */
+    for (col in fills[0]) {
+      list = fills[0][col]; ctx.beginPath();
+      for (q = 0; q < list.length; q++) tracePath(ctx, list[q]);
+      ctx.fillStyle = col; ctx.fill();
+    }
+    ctx.lineWidth = 1;
+    for (col in strokes) {
+      list = strokes[col]; ctx.beginPath();
+      for (q = 0; q < list.length; q++) tracePath(ctx, list[q]);
+      ctx.strokeStyle = col; ctx.stroke();
+    }
+    for (col in fills[1]) {
+      list = fills[1][col]; ctx.beginPath();
+      for (q = 0; q < list.length; q++) tracePath(ctx, list[q]);
+      ctx.fillStyle = col; ctx.fill();
+    }
+
+    /* The spill: one additive gradient per VISIBLE block, scaled by how much
+     * of it is lit this frame. */
+    ctx.globalCompositeOperation = 'lighter';
+    for (i = 0; i < visible.length; i++) {
+      var vb = visible[i];
+      if (!vb.lit.length || vb._sx === null) continue;
+      var litN = 0, colour = null;
+      for (var l = 0; l < vb.lit.length; l++) {
+        var cl = vb.lit[l]._lit;
+        if (cl && cl.charAt(0) === '#') { litN++; colour = colour || cl; }
+      }
+      if (!litN) continue;
+      var rad = Math.max(14, Math.min(160, vb._rp * 1.5));
+      var a = Math.min(0.16, 0.04 + 0.12 * litN / vb.lit.length);
+      var gr = ctx.createRadialGradient(vb._sx, vb._sy, 0, vb._sx, vb._sy, rad);
+      gr.addColorStop(0, hexA(colour, a));
+      gr.addColorStop(1, hexA(colour, 0));
+      ctx.fillStyle = gr;
+      ctx.fillRect(vb._sx - rad, vb._sy - rad, rad * 2, rad * 2);
+    }
+    ctx.restore();
+  }
+
+  /* An accent strip along the fold of the glare shield, in the hull's own
+   * colour, split around the floor-window slot. The one bit of the new
+   * lighting you can see looking straight ahead. */
+  function drawAccentStrips(ctx, cam, ship, spec) {
+    var style = GREEBLE_HULLS[ship.hullId] || GREEBLE_HULLS.talon;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
+    var spans = [[0.02, SLOT_S0 - 0.01], [SLOT_S1 + 0.01, 0.98]];
+    for (var s = 0; s < spans.length; s++) {
+      var a = projLocal(cam, ship, dashPoint(spans[s][0], 0.045));
+      var b = projLocal(cam, ship, dashPoint(spans[s][1], 0.045));
+      if (!a || !b) continue;
+      ctx.strokeStyle = hexA(style.accent, 0.18);
+      ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      ctx.strokeStyle = hexA(style.accent, 0.75);
+      ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    }
+    /* And down the edges of the floor window, so the slot is a lit opening
+     * rather than a gap. */
+    for (var e = 0; e < 2; e++) {
+      var s0 = e ? SLOT_S1 : SLOT_S0;
+      var p0 = projLocal(cam, ship, dashPoint(s0, 0.08));
+      var p1 = projLocal(cam, ship, dashPoint(s0, 0.95));
+      if (!p0 || !p1) continue;
+      ctx.strokeStyle = hexA(style.accent, 0.5);
+      ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
+    }
+    ctx.restore();
   }
 
   /* Kept for callers that just want the lot in one go, in the right order
@@ -8493,6 +8964,17 @@
   /* Everything drawn between these two is on the canopy glass: clipped to
    * the window, tinted, and additively blended so it glows through whatever
    * is behind it instead of sitting on top like a decal. */
+  /* THE GLOW IS THE EXPENSIVE PART OF THE GLASS. shadowBlur is recorded in
+   * microseconds and rasterised later on the GPU, once per stroke — and with
+   * the horizon in view the attitude ladder is a dozen long strokes across
+   * the whole canopy. Measured 2026-10-15 on the Intel UHD 620: 31.6 fps
+   * level, 56.4 with the blur off, and 60 looking straight down (where the
+   * ladder folds away, which is why that view never showed it). A discrete
+   * card pays a fraction of that, so the main.js option decides, and Auto
+   * keeps the glow wherever the adapter is not integrated graphics. */
+  var GLASS_GLOW = true;
+  function setGlassGlow(on) { GLASS_GLOW = !!on; }
+
   function glassBegin(ctx, aperture) {
     ctx.save();
     if (aperture) {
@@ -8501,8 +8983,10 @@
       ctx.clip();
     }
     ctx.globalCompositeOperation = 'lighter';
-    ctx.shadowColor = 'rgba(120,255,205,0.55)';
-    ctx.shadowBlur = 6;
+    if (GLASS_GLOW) {
+      ctx.shadowColor = 'rgba(120,255,205,0.55)';
+      ctx.shadowBlur = 6;
+    }
   }
 
   function glassEnd(ctx) { ctx.restore(); }
@@ -8541,8 +9025,10 @@
     var p = cam.project(worldPos);
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 5;
+    if (GLASS_GLOW) {
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 5;
+    }
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
     ctx.lineWidth = 1.3;
@@ -8738,6 +9224,10 @@
     mfdBegin: mfdBegin, mfdDue: mfdDue, mfdReuse: mfdReuse,
     mfdEnd: mfdEnd,
     glassBegin: glassBegin,
+    setGlassGlow: setGlassGlow,
+    greebleLayout: greebleLayout,
+    greebleReadings: greebleReadings,
+    GREEBLE_HULLS: GREEBLE_HULLS,
     glassEnd: glassEnd,
     drawProjectionWash: drawProjectionWash,
     drawHyperspace: drawHyperspace,

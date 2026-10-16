@@ -346,6 +346,12 @@
     } else if (offer.type === 'smuggle') {
       out.push(who + ' at ' + offer.fromName + ' has ' + offer.tonnes + ' tonnes of ' +
                goods + ' that never went onto a manifest, bound for ' + where + '.');
+    } else if (offer.type === 'passage') {
+      /* People, not freight: a passage has souls, no tonnes and no cid, so
+       * the haul sentence below would read "0 tonnes of null". */
+      out.push(who + ' at ' + offer.fromName + ' needs passage for ' +
+               offer.souls + (offer.souls === 1 ? ' person' : ' people') +
+               ' to ' + where + '.');
     } else {
       out.push(who + ' at ' + offer.fromName + ' has ' + offer.tonnes + ' tonnes of ' +
                goods + ' bound for ' + where + ' and no hull to put it in.');

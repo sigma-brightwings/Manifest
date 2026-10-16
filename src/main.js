@@ -105,6 +105,7 @@
      * of the screen, and no window size gives both. So it is a choice, made
      * on one key, rather than a compromise that serves neither. */
     cockpitChrome: 0,
+    glassGlow: 0,         // 0 auto (off on integrated graphics), 1 on, 2 off
     /* The pilot's head, not the ship. Yaw and pitch of the view inside the
      * cockpit, entirely independent of where the nose is pointed. */
     look: { yaw: 0, pitch: 0 },
@@ -2559,6 +2560,7 @@
   function startAutodock() {
     if (G.autodock) { cancelAutodock('cancelled'); return; }
     if (G.ship.docked) { say('Already docked', 2); return; }
+    if (refuseInsideStation()) return;
     var nav = navTargetState();
     var st = nav && nav.kind === 'body' && nav.obj.kind === 'station' ? nav.obj : G.dockTarget;
     if (!st) { say('Lock a station first — [ ] cycles the nav list', 4); return; }
@@ -2590,6 +2592,23 @@
           ? ' — cruising in first' : ''), 4);
   }
 
+  /* NOT FROM INSIDE A STATION. The autopilot's guidance law points the
+   * nose at its aim point and burns; it knows nothing about the throat the
+   * hull is still sitting in, and the cruise leg spins up the drive the
+   * same way. Engaged in the corridor after a bare U it flew Claude's
+   * hull into Coldwater's wall at 62 m/s (2026-10-15, seed "heartbeat").
+   * Refuse in words instead (house rule 5) and say what to do. The test
+   * is Sim.insideStation, the same "room or doorway" question the renderer
+   * asks: the hold off the doors, where the exit transfer hands you over,
+   * reads as outside, so a proper departure is never refused. */
+  function refuseInsideStation() {
+    var encl = Sim.insideStation(G.ship.pos, G.sys, G.t);
+    if (!encl) return false;
+    say('Still inside ' + encl.name + ' — clear the doors before handing over to the autopilot', 5);
+    HOOKS.sound('warn');
+    return true;
+  }
+
   /* Match orbit, and follow. Two things you constantly want and could only
    * do by hand: sit still relative to something, and stay with something
    * that is moving. Both are the same guidance law auto-dock already uses
@@ -2603,6 +2622,7 @@
     if (G.autodock && G.autodock.mode === mode) { cancelAutodock('cancelled'); return; }
     if (G.ship.docked) { say('Undock first', 2); return; }
     if (G.ship.landed) { say('On the ground', 2); return; }
+    if (refuseInsideStation()) return;
     var nav = navTargetState();
     if (!nav) { say('Lock something first — [ ] cycles the nav list', 4); return; }
     G.autodock = {
@@ -5079,6 +5099,20 @@
 
       var res = Sim.advanceShip(G.ship, G.sys, G.t, dtSim, 3000);
       G.t = res.t;
+      /* A STRUCTURE CRASH IS A LOSS TOO. A station wall, a berth or a pad
+       * taken hard enough sets `crashed` WITHOUT `landed` (there is no
+       * surface to sit on), and the report below only reads `landed` — so
+       * a hull at zero flew on with "0 / 100" in red, the integrator
+       * frozen and the cruise drive still happy to carry the wreck.
+       * Claude, playing seed "heartbeat", 2026-10-15: autodock engaged
+       * inside Coldwater's throat after a bare U, 149 damage off the wall
+       * at 62 m/s, and nothing happened. The sim comments always said
+       * main.js runs this loss the way a hull-zero in combat does; this
+       * is the line that makes that true. */
+      if (G.ship.crashed && !G.ship.landed) {
+        playerDestroyed();
+        return;
+      }
       if (G.ship.landed && !G.reported) {
         G.reported = true;
         say(G.ship.crashed
@@ -6273,6 +6307,40 @@
        * projection. */
       var near = V.dist(pos, cam.target);
       var enclosing = near < (body.radius || 0);
+      /* ...AND A WORLD YOU ARE STANDING OVER IS NOT CULLED ON IT EITHER.
+       *
+       * The same centre-point test, the other way up. Seventy-five km over
+       * Mirven II b (r = 413 km) with the nose level, the moon's centre is
+       * 488 km away and BELOW the camera plane, so cam.project returns null
+       * and the moon was dropped — while it should fill the bottom half of
+       * the screen. On a big world you are rarely close enough for the
+       * centre to swing behind you; on a small moon you always are, so
+       * every undercroft sat in open black space with no ground around its
+       * shaft. Astra, 2026-10-15: "planet surfaces don't seem to render if
+       * undercrofts are meant to be planetside."
+       *
+       * The right test is whether ANY of the sphere is in front of the eye:
+       * the centre's depth along the view axis is greater than minus its
+       * radius. When it is, the GL shader already does the rest — it traces
+       * a ray per pixel and floors its quad to cover the screen from
+       * wherever the centre lands — so all it needs is to be asked. The
+       * centre is parked on the principal point with the true sphere's
+       * angular size (huge, which is correct: it is under you), and
+       * behindEye keeps the label, the ring and the dropline away, since
+       * there is no honest screen point to pin them to. Worlds only; the
+       * 2D fallback has no ray tracer to make this right, so it skips. */
+      if (!sp && !enclosing && body.kind !== 'station' && !body.surface &&
+          glLive() && cam.eye && cam.f) {
+        var rel = V.sub(pos, cam.eye);
+        var along = V.dot(rel, cam.f);
+        var dEye = V.len(rel);
+        if (along > -(body.radius || 0) && dEye < (body.radius || 0) * 4) {
+          var ang = Math.asin(Math.min(1, (body.radius || 0) / Math.max(dEye, 1e-9)));
+          sp = { x: cam.cx, y: cam.cy, depth: Math.max(along, 1e-6),
+                 scale: Math.tan(ang) * cam.flen / Math.max(body.radius, 1e-9),
+                 behindEye: true };
+        }
+      }
       if (!sp && !enclosing) continue;
       /* Behind the eye and enclosing: there is no screen point for the
        * centre, and nothing in the model path wants one — the mesh is
@@ -6287,6 +6355,9 @@
 
     G.labelQueue = [];
     for (var m = 0; m < items.length; m++) drawBody(ctx, cam, items[m], starScreen);
+    G.rocksDrawn = 0;
+    drawRingsAndRock(ctx, cam, inside, buried);
+    if (G.showOrbits || mapMode()) drawBeltChart(ctx, cam, inside);
     placeLabels(ctx, G.labelQueue, w, h);
 
     /* Predicted trajectory — the whole point of the exercise. Not while
@@ -6340,6 +6411,171 @@
     drawHUD(ctx, w, h);
     drawBurnBanner(ctx, w, h);
     drawCursor(ctx);
+  }
+
+  /* ---- rings, belts and the rock in them (2026-10-15) ----------------------
+   *
+   * Separate from drawBody on purpose. A ring is twice its planet's width and
+   * you can be inside it with the planet behind you, culled — the case the
+   * long note in drawSystem spends a page on for stations. So rings are
+   * queued from their own loop, on their own test: big enough on screen to
+   * matter, or the eye is among them.
+   *
+   * The rock is closed-form (rings.js) and found around the SHIP, not the
+   * camera, so pulling the camera out does not move the field. Capped, and
+   * nearest first, for the RX 540: a few hundred eighty-face rocks is a few
+   * hundred small draw calls, and the cap is what keeps a dense field from
+   * costing more than the station it is next to. */
+  var ROCK_CAP = 160;              // meshes per frame, rings and fields together
+  var RING_ROCK_RADIUS = 3.0;      // km around the ship that ring chunks are found in
+  var FIELD_LOOK = 3000;           // km: fields whose rock is worth asking about
+  var ROCK_DETAIL_PX = 50;         // screen radius past which a rock gets its close-up mesh
+
+  function rockBasis(rock, t) {
+    /* A slow tumble about a hashed axis. Periods of one to fifteen minutes —
+     * enough to read as a loose rock, never enough to look like a top. */
+    var u = rock.spin;
+    var ax = V.norm({ x: Math.sin(u * 37.1), y: Math.cos(u * 53.7), z: Math.sin(u * 91.3) + 0.2 });
+    var ang = u * K.TAU + t * (0.0007 + 0.0098 * ((u * 7.13) % 1));
+    ang = ang % K.TAU;
+    var ref = Math.abs(ax.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+    var r0 = V.norm(V.cross(ref, ax)), u0 = V.cross(ax, r0);
+    return {
+      right: V.rotateAroundAxis(r0, ax, ang),
+      up: V.rotateAroundAxis(u0, ax, ang),
+      fwd: ax
+    };
+  }
+
+  function drawRingsAndRock(ctx, cam, inside, buried) {
+    var Rg = global.Rings;
+    if (!Rg || !G.sys || inside || buried || !glLive()) return;
+    var GLW = global.GLWorld;
+    var starPos = _starPos || { x: 0, y: 0, z: 0 };
+
+    /* The rings themselves. */
+    if (GLW.queueRing) {
+      for (var i = 0; i < G.sys.bodies.length; i++) {
+        var b = G.sys.bodies[i];
+        if (!b.ring) continue;
+        var bs = Sim.bodyState(b, G.sys, G.t);
+        var dEye = cam.eye ? V.dist(cam.eye, bs.pos) : Infinity;
+        var sp = cam.project(bs.pos);
+        var px = sp ? b.ring.outer * sp.scale : 0;
+        if (px < 1.2 && dEye > b.ring.outer * 1.5) continue;
+        var toStar = V.sub(starPos, bs.pos);
+        var sl = V.len(toStar);
+        /* The sheet steps aside where the chunks are drawn — only in
+         * flight, since the chart draws no chunks to replace it. */
+        GLW.queueRing(b, Rg.ringFrame(b), bs.pos, cam,
+                      sl > 1e-9 ? V.scale(toStar, 1 / sl) : V.scale(cam.f, -1),
+                      mapMode() ? null : [RING_ROCK_RADIUS * 0.5, RING_ROCK_RADIUS * 2.2]);
+      }
+    }
+
+    /* The rock, only in flight: the chart is a diagram, not a view. */
+    if (mapMode() || !G.ship || !GLW.queueMesh) return;
+    var ship = G.ship.pos;
+    var rocks = [];
+    for (var j = 0; j < G.sys.bodies.length; j++) {
+      var p = G.sys.bodies[j];
+      if (!p.ring) continue;
+      var ps = Sim.bodyState(p, G.sys, G.t);
+      if (V.dist(ship, ps.pos) > p.ring.outer + RING_ROCK_RADIUS + 50) continue;
+      var ch = Rg.ringChunksNear(p, ps, ship, RING_ROCK_RADIUS, G.t, ROCK_CAP);
+      var sunR = V.norm(V.sub(starPos, ps.pos));
+      for (var c = 0; c < ch.length; c++) {
+        var ck = ch[c];
+        ck.kind = (Rg.mix32(ck.shape * 977 + Math.floor(ck.spin * 1e6)) / 4294967296) < p.ring.ice
+                  ? 'ice' : 'stone';
+        ck.sun = sunR;
+        ck.dist = Math.sqrt(ck.d2);
+        rocks.push(ck);
+      }
+    }
+    var near = Rg.fieldsNear(G.sys, ship, G.t, FIELD_LOOK);
+    for (var f = 0; f < near.length && f < 3; f++) {
+      var fd = near[f].field, cen = near[f].center, hf = Rg.hillFrame(cen);
+      var sunF = V.norm(V.sub(starPos, cen.pos));
+      for (var m = 0; m < fd.count; m++) {
+        var rk = Rg.fieldMember(fd, m, G.sys, G.t, cen, hf);
+        rk.dist = V.dist(rk.pos, ship);
+        /* Worth a draw call if it is at least about a pixel across. */
+        if (rk.size * cam.flen / Math.max(rk.dist, 1e-6) < 0.7 && rk.dist > 30) continue;
+        rk.kind = Rg.memberKind(fd, rk);
+        rk.sun = sunF;
+        rocks.push(rk);
+      }
+    }
+    if (!rocks.length) return;
+    rocks.sort(function (a, b2) { return a.dist - b2.dist; });
+    var n = Math.min(ROCK_CAP, rocks.length);
+    for (var k = 0; k < n; k++) {
+      var r = rocks[k];
+      var basis = rockBasis(r, G.t);
+      /* The close-up mesh once a rock is more than ~50 px across. */
+      var onScreen = r.size * cam.flen / Math.max(r.dist, 1e-6);
+      GLW.queueMesh(cam, { pos: r.pos, right: basis.right, up: basis.up, fwd: basis.fwd },
+                    Rg.rockMesh(r.shape, r.kind, onScreen > ROCK_DETAIL_PX ? 2 : 1), r.size, r.sun);
+    }
+    G.rocksDrawn = n;
+  }
+
+  /* Belts and fields on the chart. A belt is a band, so it is drawn as its
+   * two edges on the same zoom window the orbits use; a field is a place, so
+   * it gets a marker and a name once the view is close enough to tell it
+   * from the belt it sits in. Trojan clouds have no band to draw — they are
+   * two clumps on a giant's orbit — so they are only their fields. */
+  function beltCircle(belt, r) {
+    var key = '_path' + Math.round(r);
+    if (belt[key]) return belt[key];
+    var pts = [];
+    for (var i = 0; i <= 160; i++) {
+      var a = i / 160 * K.TAU;
+      pts.push({ x: r * Math.cos(a), y: r * Math.sin(a), z: 0 });
+    }
+    return (belt[key] = pts);
+  }
+
+  function drawBeltChart(ctx, cam, inside) {
+    var Rg = global.Rings;
+    if (!Rg || inside || !G.sys || !G.sys.belts || !G.sys.belts.length) return;
+    var star = _starPos || { x: 0, y: 0, z: 0 };
+    for (var i = 0; i < G.sys.belts.length; i++) {
+      var bl = G.sys.belts[i];
+      if (bl.kind === 'belt') {
+        var rel = bl.outer / cam.dist;
+        if (rel <= 26 && rel >= 0.004) {
+          var fade = Math.min(1, Math.min(rel / 0.02, (26 - rel) / 12));
+          Render.strokePath(ctx, cam, beltCircle(bl, bl.inner), '#8a7a5c', 1, 0.35 * fade, [2, 5], star);
+          Render.strokePath(ctx, cam, beltCircle(bl, bl.outer), '#8a7a5c', 1, 0.35 * fade, [2, 5], star);
+          Render.strokePath(ctx, cam, beltCircle(bl, (bl.inner + bl.outer) / 2), '#8a7a5c',
+                            Math.max(1, Math.min(14, (bl.outer - bl.inner) / cam.dist * 400)),
+                            0.07 * fade, null, star);
+          var lp = cam.project({ x: star.x + (bl.inner + bl.outer) / 2, y: star.y, z: star.z });
+          if (lp) queueLabel(lp, bl.name, '#b8a27a', 6, 3);
+        }
+      }
+      for (var f = 0; f < bl.fields.length; f++) {
+        var fd = bl.fields[f];
+        var frel = fd.orbit.a / cam.dist;
+        if (frel > 30 || frel < 0.0015) continue;
+        var c = Rg.fieldCenter(fd, G.sys, G.t);
+        var sp = cam.project(c.pos);
+        if (!sp) continue;
+        /* Three grains rather than a ring, so a field never reads as a
+         * planet or a station on the chart. */
+        var s = Math.max(2, Math.min(9, fd.radius * sp.scale));
+        ctx.save();
+        ctx.fillStyle = '#c8b088';
+        ctx.globalAlpha = 0.85;
+        ctx.fillRect(sp.x - s * 0.7, sp.y - s * 0.3, 2, 2);
+        ctx.fillRect(sp.x + s * 0.4, sp.y - s * 0.6, 2, 2);
+        ctx.fillRect(sp.x - s * 0.1, sp.y + s * 0.5, 2, 2);
+        ctx.restore();
+        if (frel > 0.01) queueLabel(sp, fd.name, '#c8b088', s + 6, 1);
+      }
+    }
   }
 
   /* The burn clock. Big, central, and only present while there is something
@@ -10555,7 +10791,9 @@
       ctx.beginPath(); ctx.arc(sp.x, sp.y, rpx * 5, 0, K.TAU); ctx.fill();
     }
 
-    Render.drawDropline(ctx, cam, item.pos, '#3d5878', G.cam.target.z, G.cam.dist * 1.2);
+    if (!sp.behindEye) {
+      Render.drawDropline(ctx, cam, item.pos, '#3d5878', G.cam.target.z, G.cam.dist * 1.2);
+    }
 
     /* The one place the world layer takes over from the 2D renderer. The
      * body's screen position and radius were computed by the SAME camera
@@ -10570,7 +10808,12 @@
       var sunDir = dlen > 1e-9 ? V.scale(toStar, 1 / dlen) : V.scale(cam.f, -1);
       drewOnGpu = global.GLWorld.queueBody(b, sp, rpx, cam, sunDir, G.t, item.pos);
     }
-    if (!drewOnGpu) Render.shadeBody(ctx, sp, rpx, b, starScreen);
+    if (!drewOnGpu && !sp.behindEye) Render.shadeBody(ctx, sp, rpx, b, starScreen);
+    /* A world drawn from over its horizon has no honest screen point: the
+     * centre was parked on the principal point only so the GPU would trace
+     * it (see the cull in drawSystem). A ring and a nameplate pinned
+     * there would float in the middle of the view. */
+    if (sp.behindEye) return;
 
     if (b.habitable) {
       ctx.save();
@@ -12215,6 +12458,10 @@
           G.cockpitChrome = i;
           G.showCockpitFrame = G.cockpitChrome !== 2;
         } },
+      { kind: 'choice', label: 'Glass glow', key: '',
+        options: ['Auto — ' + (integratedGpu() ? 'off on this chip' : 'on'), 'On', 'Off — faster'],
+        get: function () { return G.glassGlow || 0; },
+        set: function (i) { G.glassGlow = i; applyGlassGlow(); } },
 
       { kind: 'head', label: 'FLIGHT' },
       { kind: 'toggle', label: 'Flight assist', key: 'Shift+/',
@@ -12244,6 +12491,21 @@
   }
 
   function clamp01(v) { return Math.max(0, Math.min(1, v)); }
+
+  /* Integrated graphics, by the adapter string the GPU layer recorded. Null
+   * (withheld, or no WebGL) counts as not integrated: the glow is the look,
+   * and it should only be taken away on evidence. */
+  function integratedGpu() {
+    var a = global.GLWorld && global.GLWorld.adapter;
+    return !!a && /intel|uhd graphics|iris|hd graphics/i.test(a) && !/arc\b/i.test(a);
+  }
+
+  /* See the note on GLASS_GLOW in render.js for what this costs. */
+  function applyGlassGlow() {
+    if (!Render.setGlassGlow) return;
+    var g = G.glassGlow || 0;
+    Render.setGlassGlow(g === 1 || (g === 0 && !integratedGpu()));
+  }
 
   function firstOption() {
     var rows = optionRows();
@@ -12296,6 +12558,7 @@
       showOrbits: !!G.showOrbits, showPrediction: !!G.showPrediction,
       showGrid: !!G.showGrid, showTraffic: !!G.showTraffic,
       cockpitChrome: G.cockpitChrome || 0,
+      glassGlow: G.glassGlow || 0,
       assist: !!G.assist, vector: !!G.vector, flightMode: G.flightMode,
       mouseAim: !!G.mouseAim, aimSens: G.aimSens,
       cockpitFov: G.cockpitFov
@@ -12323,8 +12586,10 @@
       if (typeof p.cockpitFov === 'number' && p.cockpitFov > 0) {
         G.cockpitFov = Math.max(FOV_MIN, Math.min(FOV_MAX, p.cockpitFov));
       }
+      if (typeof p.glassGlow === 'number') G.glassGlow = ((p.glassGlow | 0) % 3 + 3) % 3;
     }
     applyAudioPrefs();
+    applyGlassGlow();
   }
 
   /* ---- the keyboard ----------------------------------------------------- */
