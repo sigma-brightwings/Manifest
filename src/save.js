@@ -361,6 +361,19 @@
        * standing tally (so a reload cannot reset the daily cap). Added
        * field, absent in older saves — restore defaults it. */
       shipTrade: G.shipTrade || null,
+      /* SURVEYS (mining rung 1): what you have mapped, where and when, as
+       * packed cell strings - the unpacked cache (_cells) stays behind.
+       * Additive: an older career loads having mapped nothing. */
+      surveys: (function () {
+        var out = {}, s = G.surveys || {};
+        Object.keys(s).forEach(function (k) {
+          var r = s[k], c = {};
+          Object.keys(r).forEach(function (f) { if (f.charAt(0) !== '_') c[f] = r[f]; });
+          out[k] = c;
+        });
+        return out;
+      })(),
+      extracted: G.extracted || {},
       ledger: G.ledgerLog || []
     };
   }
@@ -493,6 +506,8 @@
     G.doneMissions = data.doneMissions || {};
     G.campaigns = data.campaigns || {};
     G.shipTrade = data.shipTrade || null;
+    G.surveys = (data.surveys && typeof data.surveys === 'object') ? data.surveys : {};
+    G.extracted = (data.extracted && typeof data.extracted === 'object') ? data.extracted : {};
     G.ledgerLog = data.ledger || [];
 
     if (d.docked && G.sys.byId[d.docked]) {

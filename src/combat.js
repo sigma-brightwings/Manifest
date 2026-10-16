@@ -496,6 +496,24 @@
                  minDev: 0.45, minStanding: -100, minCrime: 0, grey: false,
                  pitch: 'Every warehouse in the system, sorted by who is desperate.' },
 
+    /* ---- survey instruments (mining rung 1, 2026-10-16) -------------------
+     * Astra: "scan planet for minerals and mining". What separates the two is
+     * the same thing that separates the hull and combat scanners: PRECISION.
+     * The cheap one says whether a deposit is poor or rich; the array says
+     * how many megatonnes, and the Mining Guild pays more for a survey taken
+     * with one. Both map the same swath - coverage is your orbit's work, not
+     * the instrument's. A utility slot, like every other receiver. */
+    surveyscan: { id: 'surveyscan', name: 'Survey scanner', slot: 'utility',
+                  kind: 'survey', survey: 1, price: 6400, power: 0.8, mass: 1,
+                  uniqueGroup: 'survey',
+                  minDev: 0.25, minStanding: -100, minCrime: 0, grey: false,
+                  pitch: 'Maps what is under the ground you fly over. Poor or rich, not how much.' },
+    deepsurvey: { id: 'deepsurvey', name: 'Deep survey array', slot: 'utility',
+                  kind: 'survey', survey: 2, price: 23500, power: 2.0, mass: 3,
+                  uniqueGroup: 'survey',
+                  minDev: 0.55, minStanding: 0, minCrime: 0, grey: false,
+                  pitch: 'The tonnage, not the adjective. The Guild pays for numbers.' },
+
     /* ---- the cargo scoop --------------------------------------------------
      * Picking cargo up used to be a property of having a hold, which made
      * jettison reversible and therefore meaningless — you threw a crate out
@@ -2689,6 +2707,16 @@
     for (var i = 0; i < list.length; i++) {
       var it = list[i].item;
       if (it.kind === 'scanner' && (it.scan || 0) > best) best = it.scan;
+    }
+    return best;
+  }
+
+  /* 0 no survey instrument, 1 the scanner, 2 the deep array (survey.js). */
+  function surveyLevel(ship) {
+    var list = fittedList(ship), best = 0;
+    for (var i = 0; i < list.length; i++) {
+      var it = list[i].item;
+      if (it.kind === 'survey' && (it.survey || 0) > best) best = it.survey;
     }
     return best;
   }
@@ -6947,7 +6975,7 @@
     syncLegacy: syncLegacy, migrateFit: migrateFit, replanFit: replanFit,
     buyEquipment: buyEquipment, stockAt: stockAt,
     SINK: SINK, sinkRackSize: sinkRackSize, armSink: armSink,
-    scanLevel: scanLevel, scanShip: scanShip, hasScoop: hasScoop,
+    scanLevel: scanLevel, scanShip: scanShip, hasScoop: hasScoop, surveyLevel: surveyLevel,
     npcArmament: npcArmament, hasTradeAnalyser: hasTradeAnalyser, playerDps: playerDps,
     hailRumour: hailRumour, rumourFacts: rumourFacts, RUMOUR_DAY: RUMOUR_DAY,
     startRescue: startRescue, updateRescue: updateRescue, restoreRescue: restoreRescue,

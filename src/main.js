@@ -5346,6 +5346,13 @@
     /* Contracts age whether or not you are looking at them. */
     Missions.update(G, G.t, HOOKS);
 
+    /* THE GROUND TRACK. With a survey instrument aboard, whatever world you
+     * are in orbit about is being mapped under you (survey.js). */
+    if (global.Survey && !G.paused && G.lastDtSim > 0) {
+      var surveyMsgs = global.Survey.step(G, G.sys, G.t, G.lastDtSim);
+      for (var smi = 0; smi < surveyMsgs.length; smi++) say(surveyMsgs[smi], 4);
+    }
+
     /* Scooping. Drift onto a canister slowly enough and it is yours — the
      * other half of jettison, and the whole point of robbing a freighter
      * of its cargo rather than its credits. */
@@ -9085,6 +9092,7 @@
     { id: 'system',  title: 'SYSTEM',  draw: function (ctx) { drawSystemPage(ctx); } },
     { id: 'chatter', title: 'CHATTER', draw: function (ctx) { drawChatterPage(ctx); } },
     { id: 'trade',   title: 'TRADE',   draw: function (ctx) { drawTradePage(ctx); } },
+    { id: 'survey',  title: 'SURVEY',  draw: function (ctx) { drawSurveyPage(ctx); } },
     { id: 'blank',   title: 'OFF',     draw: null }
   ];
   var DASH_PAGE_BY_ID = {};
@@ -9958,6 +9966,96 @@
       ctx.font = 'bold 10px ui-monospace, monospace';
       ctx.fillText(rows + ' of ' + lines.length + ' in range', 12, MFD_BODY_BOTTOM - 4);
     }
+  }
+
+  /* --- SURVEY: what is under the ground, and how much of it you know -----
+   * Mining rung 1 (survey.js). The world shown is the one you have locked,
+   * else the one you are in orbit about. NOTHING WITHOUT THE INSTRUMENT,
+   * for the trade page's reason: a blank list would read as "nothing
+   * here", which no instrument aboard has said. */
+  function drawSurveyPage(ctx) {
+    var Sv = global.Survey;
+    var lvl = Sv ? Sv.level(G.ship) : 0;
+    mfdShell(ctx, 'SURVEY', lvl ? (lvl >= 2 ? 'deep array  ·  tonnage' : 'scanner  ·  grades only')
+                                : 'no survey instrument fitted');
+    if (!lvl) {
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('NO INSTRUMENT', 12, MFD_BODY_TOP + 20);
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillText('a survey scanner maps what is under the ground you orbit.', 12, MFD_BODY_TOP + 36);
+      ctx.fillText('yards sell one where development is 0.25 or better.', 12, MFD_BODY_TOP + 50);
+      return;
+    }
+    var here = (G.here && G.here.id) || 'sys';
+    var key = null;
+    if (G.navTarget && G.navTarget.kind === 'body') {
+      var nb = G.sys.byId[G.navTarget.id];
+      if (nb && (nb.kind === 'planet' || nb.kind === 'moon')) key = here + ':' + nb.id;
+    }
+    key = key || G._surveyNow;
+    var rec = key && G.surveys ? G.surveys[key] : null;
+    var tgt = key ? Sv.targetFor(G.sys, { key: key }) : null;
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    if (!tgt) {
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('lock a world, or orbit within ' + Sv.RANGE_R + ' radii of one.', 12, MFD_BODY_TOP + 20);
+      ctx.fillText('a polar orbit maps all of it; an equatorial one, a band.', 12, MFD_BODY_TOP + 36);
+    } else {
+      var cov = rec ? rec.cov : 0;
+      ctx.fillStyle = MFD_INK;
+      ctx.fillText(clipText((tgt.name || '?').toUpperCase(), 26), 12, MFD_BODY_TOP + 14);
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillStyle = G._surveyNow === key ? MFD_HOT : MFD_DIM;
+      ctx.fillText((G._surveyNow === key ? 'SURVEYING  ' : '') + Math.round(cov * 100) + '% mapped' +
+                   (rec && rec.t !== null ? '  ·  as of ' + fmtEpoch(rec.t) : '  ·  never surveyed'), 12, MFD_BODY_TOP + 28);
+      var rows = Sv.remaining(G, key, Sv.deposits(tgt, G.sys));
+      var y = MFD_BODY_TOP + 46;
+      if (cov < 0.1) {
+        ctx.fillStyle = MFD_DIM;
+        ctx.fillText('not enough of it mapped to say what is there.', 12, y);
+      } else {
+        rows.slice(0, 5).forEach(function (r) {
+          ctx.font = 'bold 11px ui-monospace, monospace';
+          ctx.fillStyle = MFD_INK;
+          ctx.fillText(r.name, 12, y);
+          /* The bar is the grade; the word or the number is the instrument. */
+          ctx.fillStyle = 'rgba(74,151,176,0.22)';
+          ctx.fillRect(110, y - 8, 80, 7);
+          ctx.fillStyle = r.grade >= 0.55 ? '#7dffb0' : r.grade >= 0.3 ? MFD_HOT : '#ff9f7a';
+          ctx.fillRect(110, y - 8, 80 * Math.min(1, r.grade), 7);
+          ctx.fillStyle = MFD_INK;
+          ctx.fillText(lvl >= 2 ? Sv.fmtTonnes(r.tonnes) : Sv.gradeWord(r.grade), 198, y);
+          y += 14;
+        });
+        if (cov < 0.9) {
+          ctx.font = 'bold 10px ui-monospace, monospace';
+          ctx.fillStyle = MFD_DIM;
+          ctx.fillText('estimate - ' + Math.round(cov * 100) + '% of the ground seen', 12, y + 2);
+        }
+      }
+      /* The ground you have seen: latitude up, longitude across. */
+      if (rec && rec.kind === 'world') {
+        var cells = Sv.cellsOf(rec), mx = 318, my = MFD_BODY_TOP + 6, cw = 5, chh = 6;
+        ctx.strokeStyle = 'rgba(74,151,176,0.5)';
+        ctx.strokeRect(mx - 1, my - 1, Sv.LON_BINS * cw + 2, Sv.LAT_BINS * chh + 2);
+        for (var la = 0; la < Sv.LAT_BINS; la++) {
+          for (var lo = 0; lo < Sv.LON_BINS; lo++) {
+            if (!cells[la * Sv.LON_BINS + lo]) continue;
+            ctx.fillStyle = 'rgba(125,255,176,0.7)';
+            ctx.fillRect(mx + lo * cw, my + (Sv.LAT_BINS - 1 - la) * chh, cw - 1, chh - 1);
+          }
+        }
+      }
+    }
+    /* What the Guild would pay for this system's mapping, at any desk. */
+    var sale = Sv.saleable(G, G.sys, G.t), tot = 0;
+    sale.forEach(function (s) { tot += s.price; });
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = tot > 0 ? '#7dffb0' : MFD_DIM;
+    ctx.fillText(tot > 0 ? 'Mining Guild pays ' + tot + ' cr for ' + sale.length + ' unsold survey' +
+                           (sale.length === 1 ? '' : 's') + ' here — any desk'
+                         : 'nothing unsold in this system', 12, MFD_BODY_BOTTOM - 4);
   }
 
   /* --- TRADE: what this system is short of, and what it has too much of --

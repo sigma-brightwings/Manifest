@@ -1217,6 +1217,27 @@
               offer.cost + ' credits."', 6);
         }
       });
+      /* THE MINING GUILD BUYS SURVEYS (mining rung 1). At any desk, for
+       * what you have mapped in this system that it has not already paid
+       * for - priced on what is there, how much you saw, the instrument,
+       * and how old the reading is. Sold on the deck, like the charts. */
+      var Sv = global.Survey;
+      var sv = Sv ? Sv.saleable(G, G.sys, G.t) : [];
+      var svTotal = 0;
+      sv.forEach(function (s) { svTotal += s.price; });
+      opts.push({
+        label: 'Sell survey data',
+        enabled: docked && svTotal > 0,
+        note: !docked ? 'sold on the deck'
+            : !sv.length ? 'nothing mapped here the Guild has not paid for'
+            : 'Mining Guild: ' + svTotal + ' cr for ' + sv.length + ' survey' + (sv.length === 1 ? '' : 's'),
+        fn: function () {
+          var got = Sv.sell(G, G.sys, G.t);
+          if (!got.total) return;
+          say(c.obj.name + ' Guild office: "' + got.count + ' survey' + (got.count === 1 ? '' : 's') +
+              ' on file. ' + got.total + ' credits."', 6);
+        }
+      });
       opts.push({ label: 'Mission board', enabled: true,
                   note: 'F7', fn: function () { selectPanel(6); } });
     } else if (G.piracyMenu === c.name) {
