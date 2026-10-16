@@ -260,6 +260,8 @@
          * Additive, and old saves have no `arrival` to consult. */
         docked: s.docked || (s.arrival ? s.arrival.port : null),
         hullId: s.hullId, hullHp: s.hullHp,
+        /* Additive: the outside a hull is wearing, when it is not its own. */
+        meshKind: s.meshKind || null,
         /* The four legacy fields are still written, and deliberately so:
          * they are what an older build would read if a save travelled
          * backwards, and they cost four strings. `fit` is the truth. */
@@ -438,6 +440,7 @@
     s.cargo = d.cargo || {}; s.credits = d.credits;
     s.passengers = d.passengers || 0;
     s.hullId = d.hullId; s.hullHp = d.hullHp;
+    if (d.meshKind) s.meshKind = d.meshKind;
     s.gun = d.gun; s.turret = d.turret; s.shield = d.shield;
     s.heatshield = d.heatshield || null;
     s.shieldHp = d.shieldHp || 0; s.missiles = d.missiles || 0;

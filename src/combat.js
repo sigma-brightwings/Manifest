@@ -102,8 +102,12 @@
    * this same constant under its older name) and their own quartermaster
    * will sell you what their own enforcement wing carries. One threshold,
    * because it is one fact about you — the Syndicate has decided you are
-   * inside rather than a customer — not two coincidentally equal ones. */
-  var SYNDICATE_TRUST = 70;
+   * inside rather than a customer — not two coincidentally equal ones.
+   *
+   * 70 -> 50, 2026-10-11, Astra: the perks should open at 50. Seventy
+   * sat behind most of a career of Syndicate work; fifty is "they know
+   * your name", which is when a mob starts treating you as one of theirs. */
+  var SYNDICATE_TRUST = 50;
 
   function laser(id, name, particle, variety, price, power, mass, dmg, cooldown,
                  range, heat, color, avail, pitch) {
@@ -6829,6 +6833,7 @@
     s.bornId = to.id + '@' + (G.here ? G.here.id : 'void') + '#' +
                Math.round((G.t || 0) / 3600);
     s.hullId = to.id;
+    s.meshKind = null;             // a new hull wears its own outside
     s.dryMass = to.dryMass;
     s.thrustKN = to.thrustKN;
     s.thrusterCap = to.thrusterCap;

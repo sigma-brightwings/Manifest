@@ -96,6 +96,10 @@
     'uniform vec3 uHoleRel;',     // eye -> a shaft mouth on this body, km
     'uniform float uHoleR;',      // its radius, km; 0 disables the cut
     'uniform float uHaloPush;',   // km behind the centre the halo sits; a ring's outer radius
+    /* The ground-port section box — see GL.setGroundCut. */
+    'uniform vec4 uBoxO;',        // eye -> ship, km; w = 1 when on
+    'uniform vec3 uBoxA, uBoxB, uBoxU;',
+    'uniform vec4 uBoxD;',        // along min, along max, half width, floor
     'uniform vec2 uScreenPx;',    // the camera's principal point (cx, cy)
     'uniform float uFlen;',
     'uniform float uPad;',        // quad half-size measured in body radii (>1)
@@ -304,6 +308,13 @@
      * would be on screen at once they are both far enough away that the
      * mouth is sub-pixel anyway. */
     '  if (uHoleR > 0.0 && distance(hit, uHoleRel) < uHoleR) discard;',
+    /* And the section, when the camera has been pulled up out of a ground
+     * port: the street over the hangar is not there. */
+    '  if (uBoxO.w > 0.5) {',
+    '    vec3 bq = hit - uBoxO.xyz;',
+    '    float ba = dot(bq, uBoxA), bb = dot(bq, uBoxB), bz = dot(bq, uBoxU);',
+    '    if (ba > uBoxD.x && ba < uBoxD.y && abs(bb) < uBoxD.z && bz > uBoxD.w) discard;',
+    '  }',
     '  gl_FragDepth = encodeDepth(dot(hit, uFwd));',
     '  vec3 n = normalize(hit - oc);',
     '  float ndl = dot(n, uSunDir);',
@@ -823,9 +834,12 @@
     'uniform vec4 uCut;',
     'uniform vec3 uCutR;',
     'uniform vec3 uCutRim;',
-    /* (widest the cut-face band may get in km, quiet zone as a fraction of
-     * the local radius, how much colour the quiet zone drains, 0..1). */
-    'uniform vec3 uCutBand;',
+    /* Which way is up at the berth: the deck under the ship is kept, the
+     * walls round it are not. Zero means "keep the whole bubble". */
+    'uniform vec3 uCutUp;',
+    'uniform vec4 uBoxO;',
+    'uniform vec3 uBoxA, uBoxB, uBoxU;',
+    'uniform vec4 uBoxD;',
     'out vec4 frag;',
 
     /* ---- SCREEN-DOOR TRANSPARENCY, and why it is not alpha blending -----
@@ -885,32 +899,29 @@
      * band is painted flat in uCutRim: the cut face of a wall, the way a
      * technical drawing hatches a section, so a wall that has been cut
      * reads as cut and not as a wall that was never there. */
-    /* THE BAND IS CAPPED, AND THE METAL ROUND IT IS QUIETED (2026-10-11).
-     * Astra, looking at the hole from a berth: "cleaner and less busy
-     * without losing the whole cut-away-model thing". Two causes, both
-     * here. The band was a FRACTION of the local radius, so at the eye end
-     * of the cone — where the radius is largest — it was metres thick and
-     * swallowed every pipe and strut that crossed it whole: the ring read
-     * as a wreath of orange debris, not as a cut. Now it is that fraction
-     * or uCutBand.x km, whichever is thinner, so it stays a drawn edge.
-     * And the station's own interior, the many-coloured conduits, was
-     * shown at full saturation right up against the edge, competing with
-     * it. `near` is 1 at the cut face and falls to 0 over uCutBand.y of
-     * the local radius; inside it colour is drained toward a dimmed grey
-     * by uCutBand.z and lamp glow is turned off, so the cut is the loudest
-     * thing at the hole and the far wall keeps its colour as the backdrop. */
-    '  bool rim = false;',
-    '  float near = 0.0;',
+    /* THE BUBBLE IS A FLOOR, NOT A SPHERE. Keeping everything within a
+     * hull-and-a-bit of the ship left the walls round it standing as a
+     * block beside the hull — it read as something parked next to you
+     * rather than the deck you are parked on. So inside the bubble only
+     * what is at or below the deck survives. */
+    '  if (uBoxO.w > 0.5) {',
+    '    vec3 bq = vRel - uBoxO.xyz;',
+    '    float ba = dot(bq, uBoxA), bb = dot(bq, uBoxB), bz = dot(bq, uBoxU);',
+    '    if (ba > uBoxD.x && ba < uBoxD.y && abs(bb) < uBoxD.z && bz > uBoxD.w) discard;',
+    '  }',
+    '  float rimU = -1.0;',
+    '  vec3 cutW = vec3(0.0);',
     '  if (uCut.w > 0.5) {',
     '    float L2 = max(dot(uCut.xyz, uCut.xyz), 1e-12);',
     '    float t = dot(vRel, uCut.xyz) / L2;',
-    '    if (t > 0.0 && t < 1.0 && distance(vRel, uCut.xyz) > uCutR.x) {',
+    '    vec3 q = vRel - uCut.xyz;',
+    '    bool deck = length(q) < uCutR.x && dot(q, uCutUp) < uCutR.x * 0.15;',
+    '    if (t > 0.0 && t < 1.0 && !deck) {',
     '      float r = mix(uCutR.y, uCutR.x, t);',
-    '      float d = length(vRel - uCut.xyz * t);',
+    '      vec3 off = vRel - uCut.xyz * t;',
+    '      float d = length(off);',
     '      if (d < r) discard;',
-    '      float band = min(r * uCutR.z, uCutBand.x);',
-    '      rim = d < r + band;',
-    '      near = 1.0 - smoothstep(r + band, r + band + r * uCutBand.y, d);',
+    '      if (d < r * (1.0 + uCutR.z)) { rimU = (d - r) / (r * uCutR.z); cutW = off / max(d, 1e-9); }',
     '    }',
     '  }',
     '  float depth = dot(vRel, uFwd);',
@@ -970,15 +981,6 @@
     '  vec3 dim = vCol * (0.10 + 0.55 * lamp);',
     '  vec3 c = vEmis > 0.5 ? vCol * 1.15 : mix(lit, dim, uIndoors);',
     '  float glow = vEmis > 0.5 ? mix(1.0, 0.28, uIndoors) : 0.0;',
-    /* THE ROOM STEPS BACK WHILE YOU LOOK THROUGH IT (2026-10-11). With the
-     * keyhole open the subject is the cut and the ship at the bottom of
-     * it, and the hangar's neon strips — every one a full-strength lamp —
-     * were the next loudest thing on screen. Only indoors, only with the
-     * cut on, so a berth seen normally is lit exactly as it was. */
-    '  if (uCut.w > 0.5 && uIndoors > 0.5 && vEmis > 0.5) {',
-    '    c *= 0.75;',
-    '    glow *= 0.6;',
-    '  }',
 
     /* Shock heating, on the faces actually meeting the air.
      *
@@ -1015,16 +1017,20 @@
      * POST below. Indoors it is turned well down: the ceiling of a hangar
      * is one great self-lit panel, and at full strength it would halo the
      * whole room instead of the lamps in it. */
-    /* The quiet zone round the cut — see THE BAND IS CAPPED above. Luma,
-     * not an average, so a saturated red pipe and a grey plate of the same
-     * apparent brightness come out the same grey. */
-    '  if (near > 0.0) {',
-    '    float luma = dot(c, vec3(0.299, 0.587, 0.114));',
-    '    c = mix(c, vec3(luma) * 0.6, near * uCutBand.z);',
-    '    glow *= 1.0 - near;',
+    /* THE CUT FACE. The inner third is still hot from the beam — self-lit
+     * and fed to the glow pass — and the rest is scorched plate, so the
+     * edge reads as burnt through rather than painted on. Two flat bands,
+     * no gradient: FE2 did its effects in a handful of colours.
+     *
+     * NOT WHERE THE CUT RUNS ALONG A SURFACE. A floor lying along the
+     * line of sight is cut in two long slivers either side of the hole,
+     * and a band on those reads as runway markings converging on the
+     * ship. A wall the cut goes THROUGH has its normal across the cone's
+     * radial direction; one the cut runs ALONG has it lined up with it. */
+    '  if (rimU >= 0.0 && abs(dot(n, cutW)) < 0.8) {',
+    '    if (rimU < 0.35) { c = uCutRim; glow = max(glow, 0.85); }',
+    '    else { c = vec3(0.16, 0.11, 0.085); glow = 0.0; }',
     '  }',
-    /* Flat, unlit, no glow: a cut face is a colour, not a lamp. */
-    '  if (rim) { c = uCutRim; glow = 0.0; }',
     '  frag = vec4(c, clamp(glow, 0.0, 1.0));',
     '}'
   ].join('\n');
@@ -1463,8 +1469,8 @@
                                         'uCenterPx', 'uViewportPx', 'uSunDir',
                                         'uNear', 'uInvLogRange', 'uIndoors',
                                         'uGlow', 'uWind',
-                                        'uAlpha', 'uCut', 'uCutR', 'uCutRim',
-                                        'uCutBand']);
+                                        'uAlpha', 'uCut', 'uCutR', 'uCutRim', 'uCutUp',
+                                        'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD']);
     } catch (e) {
       if (global.console) console.error(e.message);
       GL.available = false; gl = null; return false;
@@ -1481,7 +1487,8 @@
                               'uNear', 'uInvLogRange', 'uBanded',
                               'uOcean', 'uSeaColor', 'uIce',
                               'uCenterRel', 'uScreenPx', 'uFlen',
-                              'uHoleRel', 'uHoleR', 'uHaloPush']);
+                              'uHoleRel', 'uHoleR', 'uHaloPush',
+                              'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD']);
 
     quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
@@ -1700,9 +1707,11 @@
     }
 
     var vaoM = gl.createVertexArray();
+    var bufs = [];
     gl.bindVertexArray(vaoM);
     function attr(data, name, n) {
       var b = gl.createBuffer();
+      bufs.push(b);
       gl.bindBuffer(gl.ARRAY_BUFFER, b);
       gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
       var l = gl.getAttribLocation(meshProg, name);
@@ -1713,9 +1722,22 @@
     attr(alp, 'aAlpha', 1);
     gl.bindVertexArray(null);
 
-    mesh._gl = { vao: vaoM, count: tris * 3, id: ++meshSeq };
+    mesh._gl = { vao: vaoM, count: tris * 3, id: ++meshSeq, bufs: bufs };
     return mesh._gl;
   }
+
+  /* GIVE A MESH'S VIDEO MEMORY BACK. Every other mesh in the game is built
+   * once and lives for the session, so nothing ever needed this. The cut
+   * greebles are rebuilt whenever the camera moves far enough to move the
+   * cut, and each rebuild is a fresh object — without this, every notch of
+   * the wheel would leave five buffers behind on the card for good. */
+  GL.releaseMesh = function (mesh) {
+    if (!gl || !mesh || !mesh._gl) return;
+    var g = mesh._gl;
+    for (var i = 0; g.bufs && i < g.bufs.length; i++) gl.deleteBuffer(g.bufs[i]);
+    gl.deleteVertexArray(g.vao);
+    mesh._gl = null;
+  };
 
   /* Queue one hull. `frame` is the renderer's own {pos, right, up, fwd} —
    * the same object paintMesh takes — and `scale` its length in km. */
@@ -1742,21 +1764,12 @@
    * down at it, and a cone only ever takes what is actually in the way.
    *
    * `cut` is { pos (world, km), rShip, rEye (km), rim (fraction), color
-   * [r,g,b] } or null. main.js sets it around the station the ship is in
+   * [r,g,b], up (unit, the deck's normal) } or null. main.js sets it around the station the ship is in
    * and clears it after, so the ship itself and everything outside that
    * station are never cut. */
-  /* Safety orange, darkened: FE2's cutaway diagrams hatched a section in a
-   * flat warm colour, and it has to read against grey plating, black
-   * Syndicate hulls and pale fleet paint alike. */
-  var CUT_RIM = [0.78, 0.42, 0.12];
-  /* The band's ceiling, the quiet zone and how hard it drains — see THE
-   * BAND IS CAPPED in FRAG_MESH. Three metres is about an eighth of a hull
-   * length: a pen line at berth distance, not a sleeve over every pipe.
-   * Starting values chosen by eye on one screenshot, NOT measured across
-   * stations (doctrine 6) — if a port reads wrong, tune these first. */
-  var CUT_BAND_MAX = 0.003;   // km
-  var CUT_QUIET = 0.35;       // fraction of local cone radius
-  var CUT_DRAIN = 0.8;        // 0 keeps the colour, 1 is fully grey
+  /* The hot lip of the cut: beam orange, bright enough that the glow pass
+   * picks it up. The scorched band behind it is fixed in the shader. */
+  var CUT_RIM = [1.0, 0.48, 0.12];
   var cutFlag = null;
   GL.setCutaway = function (cut) { cutFlag = cut || null; };
 
@@ -1785,19 +1798,14 @@
                      indoors: indoorsFlag,
                      /* Relative to the eye here, in doubles, for the same
                       * reason `rel` is. */
-                     cut: cutFlag ? {
+                     box: (cutFlag && cutFlag.box) ? cutFlag.box : null,
+                     cut: (cutFlag && !cutFlag.box) ? {
                        x: cutFlag.pos.x - cam.eye.x,
                        y: cutFlag.pos.y - cam.eye.y,
                        z: cutFlag.pos.z - cam.eye.z,
                        rShip: cutFlag.rShip, rEye: cutFlag.rEye,
                        rim: cutFlag.rim || 0, color: cutFlag.color || CUT_RIM,
-                       /* typeof, not ||, so a caller can ask for 0. */
-                       bandMax: typeof cutFlag.bandMax === 'number'
-                                ? cutFlag.bandMax : CUT_BAND_MAX,
-                       quiet: typeof cutFlag.quiet === 'number'
-                              ? cutFlag.quiet : CUT_QUIET,
-                       drain: typeof cutFlag.drain === 'number'
-                              ? cutFlag.drain : CUT_DRAIN
+                       up: cutFlag.up || ZERO3
                      } : null });
     return true;
   };
@@ -1966,6 +1974,29 @@
    * relevant stops punching a hole in the planet on the very next frame
    * rather than leaving one behind. */
   var hole = null;
+
+  /* THE GROUND-PORT SECTION. A box in the port's own frame: everything
+   * inside it above the hangar floor is not drawn — the street, the town,
+   * the hangar's roof and near walls, and the planet's own surface — so a
+   * camera pulled up out of the bay looks down into it the way a cutaway
+   * drawing of a building does. `box` is { origin (world km, the ship),
+   * a, b, u (unit axes: along the cut toward the camera, across it, up),
+   * aMin, aMax, bHalf, zMin (km, from the origin) }. Set per frame like the
+   * hole, for the planet; meshes take it per queued mesh through
+   * setCutaway({ box }) like every other cut. */
+  var groundCut = null;
+  GL.setGroundCut = function (bodyId, box) {
+    groundCut = (bodyId && box) ? { bodyId: bodyId, box: box } : null;
+  };
+  function uploadBox(uni, bx, cam) {
+    gl.uniform4f(uni.uBoxO, bx.origin.x - cam.eye.x, bx.origin.y - cam.eye.y,
+                 bx.origin.z - cam.eye.z, 1);
+    gl.uniform3f(uni.uBoxA, bx.a.x, bx.a.y, bx.a.z);
+    gl.uniform3f(uni.uBoxB, bx.b.x, bx.b.y, bx.b.z);
+    gl.uniform3f(uni.uBoxU, bx.u.x, bx.u.y, bx.u.z);
+    gl.uniform4f(uni.uBoxD, bx.aMin, bx.aMax, bx.bHalf, bx.zMin);
+  }
+
   GL.setSurfaceHole = function (bodyId, worldPos, radiusKm) {
     hole = (bodyId && worldPos && radiusKm > 0)
       ? { bodyId: bodyId, pos: worldPos, radius: radiusKm } : null;
@@ -1981,6 +2012,7 @@
     panelQueue.length = 0;
     ringQueue.length = 0;
     hole = null;
+    groundCut = null;
     if (!gl) return;
     gl.bindFramebuffer(gl.FRAMEBUFFER, postReady() ? post.msFbo : null);
     /* Alpha cleared to ZERO, not one: in the offscreen buffer alpha is the
@@ -2335,6 +2367,11 @@
       } else {
         gl.uniform1f(uni.uHoleR, 0);
       }
+      if (groundCut && groundCut.bodyId === b.id) {
+        uploadBox(uni, groundCut.box, cam);
+      } else {
+        gl.uniform4f(uni.uBoxO, 0, 0, 0, 0);
+      }
       gl.uniform2f(uni.uScreenPx, cam.cx, cam.cy);
       gl.uniform1f(uni.uFlen, cam.flen);
 
@@ -2382,11 +2419,13 @@
       gl.uniform3f(meshUni.uWind, m.wind.x, m.wind.y, m.wind.z);
       gl.uniform1f(meshUni.uAlpha, m.alpha);
       gl.uniform1f(meshUni.uIndoors, m.indoors);
+      if (m.box) uploadBox(meshUni, m.box, cam);
+      else gl.uniform4f(meshUni.uBoxO, 0, 0, 0, 0);
       if (m.cut) {
         gl.uniform4f(meshUni.uCut, m.cut.x, m.cut.y, m.cut.z, 1);
         gl.uniform3f(meshUni.uCutR, m.cut.rShip, m.cut.rEye, m.cut.rim);
         gl.uniform3f(meshUni.uCutRim, m.cut.color[0], m.cut.color[1], m.cut.color[2]);
-        gl.uniform3f(meshUni.uCutBand, m.cut.bandMax, m.cut.quiet, m.cut.drain);
+        gl.uniform3f(meshUni.uCutUp, m.cut.up.x, m.cut.up.y, m.cut.up.z);
       } else {
         gl.uniform4f(meshUni.uCut, 0, 0, 0, 0);
       }

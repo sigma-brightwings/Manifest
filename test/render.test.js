@@ -6424,7 +6424,10 @@ console.log('--- options ---');
                            /* And G.glassGlow, the same way again (2026-10-15):
                             * this test flagged the row as row 10 before the
                             * fingerprint knew it existed. */
-                           G.glassGlow]);
+                           G.glassGlow,
+                           /* And G.cutawayStyle, from the 11 Oct test copy,
+                            * when the two lines were merged: row 9. */
+                           G.cutawayStyle]);
   }
   function openOptions() {
     if (G.menu && G.menu.page === 'options') return;

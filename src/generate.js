@@ -1846,11 +1846,24 @@
       for (var vi = 1; vi < sorted.length; vi++) {
         if (vol(sorted[vi]) > vol(sorted[biggest])) biggest = vi;
       }
+      /* AND ON THE STAND, NOT IN IT. The deck is the cast structure; the
+       * stand Render.berthDressing builds sits a lift above that, and the
+       * hull was parked off the cast deck as if the stand were not there —
+       * Astra, at Waypoint Dock: "make the ship sit just a bit higher on
+       * the launch pad, so it isn't embedded in it". Measured: the stand's
+       * plate came out ~5.7 m above the deck and the tallest hull's keel
+       * 1 m above it. So the stand's own height is added here, from the
+       * one function that builds it. Only where there is a stand to stand
+       * on — a modelled ORBITAL berth with a renderer (the stand is drawn
+       * by drawStationModel, which ground ports do not go through); headless
+       * callers keep the old number. */
+      var stand = (R2 && R2.standTopKm && !port.surface && deck !== null && deck !== undefined)
+        ? R2.standTopKm() / (port.radius || 1) : 0;
       return {
         x: bx.mid[0],
         y: bx.mid[1],
         /* Floor of the bay, not its middle. */
-        z: floorZ + g.standoff,
+        z: floorZ + g.standoff + stand,
         /* WHICH WAY THE BAY OPENS, from the throat's own orientation.
          *
          * The converter reduces each berth's node transform to a unit

@@ -92,6 +92,11 @@
     messageUntil: 0,
 
     showTraffic: true,
+    /* How the camera gets past a station wall: 0 burns a hole and furnishes
+     * its edge (greebles), 1 burns a clean hole, 2 stops the boom at the
+     * wall as it always used to. A setting, not career state — see
+     * storePrefs. */
+    cutawayStyle: 0,
     /* Console screens shot out, by panel id. Damage, so it survives a save
      * and costs money to undo — see Combat.repair. */
     deadPanels: {},
@@ -5909,10 +5914,19 @@
     if (!Sim.portBasis || !Sim.berthRoom || !Gen || !Gen.bayGeometry) return;
     if (!(G.cam.dist > 0)) return;
     var basis = Sim.portBasis(port, G.sys, G.t);
-    var room = Sim.berthRoom(port, currentBerth());
+    var g = Gen.bayGeometry(port);
+    /* A PROCEDURAL BAY HAS A FLOOR TOO. berthRoom answers only for modelled
+     * berths, and this used to return on null — which left every procedural
+     * ground port with no floor under the camera at all. That never showed
+     * while the boom was held inside the hangar; with the street section
+     * the boom goes where it is put, the camera's pitch is in the system's
+     * frame rather than the planet's, and half the angles put the eye in
+     * the rock under the deck looking up at a trench floating in the sky.
+     * The table's own floor is the floor. */
+    var room = Sim.berthRoom(port, currentBerth()) ||
+               (g ? { z0: g.floorZ } : null);
     if (!basis || !room) return;
     var r = port.radius || 1;
-    var g = Gen.bayGeometry(port);
     var rel = V.sub(G.cam.target, basis.entrance.pos);
     var above = V.dot(rel, basis.up) / r - g.lift - room.z0;
     /* Not standing on this deck — mid-arrival, or out in the throat with
@@ -5949,21 +5963,33 @@
                                          basis.up, above * r, margin * r);
   }
 
-  /* HOW BIG THE HOLE IS. `room` is how far the boom could go before it
-   * met metal; `asked` is how far it actually is. The cone is a hull and a
-   * bit wide at the ship and widens toward the eye by half of the overrun,
-   * so the further back you stand the more station opens up — Astra's
-   * rule, and it also happens to be the one that keeps the hole a sensible
-   * size on screen: the extra width grows with distance, and so does
-   * everything else's shrinking.
+  /* HOW BIG THE HOLE IS. A cone with its narrow end round the ship and
+   * its wide end at the eye: CUT_SHIP of clearing at the ship, then CUT_CONE
+   * of spread per km back toward the camera. `room` — how far the boom
+   * could have gone before it met metal — no longer sets the size; it only
+   * says whether there is a wall to cut at all. (The first version widened
+   * the cone with the overrun past the wall, so it was nearly a tube right
+   * up to the moment it was not; Astra asked for a cone.)
    *
    * `outside` is whether the eye has left the station altogether (or is
    * inside its metal, which for drawing purposes is the same thing): then
    * the station is drawn as it looks from space — whole, sunlit, sky
    * behind — with the hole in it, rather than as a room. Asked of the same
    * grid enclosedPort uses, at the eye instead of the hull. */
-  var CUT_SHIP = 1.2;         // bubble round the ship, in hull lengths
-  var CUT_SPREAD = 0.5;       // extra radius at the eye per km of overrun
+  /* Astra, at the RX 540 with the camera in her hands: "it should be a
+   * cone leading away from your ship of cutaway, and it should leave room
+   * around the ship for about two ship-volumes". So the opening at the ship
+   * is a hull length in radius — two hulls across, the ship in the middle
+   * of its own clearing — and from there the cut is a true cone with a
+   * fixed spread, widening steadily the further it runs from the ship.
+   * Pulling the camera back no longer changes the SHAPE of the cut, only
+   * how much of it you are standing at the wide end of. */
+  var CUT_SHIP = 1.0;         // radius of the clearing at the ship, in hull lengths
+  /* Twenty degrees either side of the line to the ship: wide enough that
+   * the hole frames the ship with the station's insides visible round it,
+   * narrow enough that the cut edge stays on screen rather than running
+   * off past the corners. Untuned against anything but Astra's eye. */
+  var CUT_CONE = Math.tan(20 * Math.PI / 180);   // half-angle of the cone
   var CUT_RIM = 0.06;         // cut-face band, fraction of the local radius
 
   function cutawayFor(port, room, asked) {
@@ -5977,17 +6003,113 @@
       room: room,
       outside: within !== port,
       rShip: rShip,
-      rEye: rShip + Math.max(0, asked - room) * CUT_SPREAD
+      rEye: rShip + asked * CUT_CONE
+    };
+  }
+
+  /* ---- THE GROUND-PORT SECTION ------------------------------------------
+   *
+   * A square cut, straight down from the street to the hangar floor, the
+   * way an architect's cutaway drawing shows a building: the part of the
+   * town, the road and the hangar roof between you and the ship is simply
+   * not there, and the faces of the cut show what the street is made of.
+   * Astra chose square and following the camera.
+   *
+   * SQUARE TO THE HANGAR, not to the camera. The box turns in quarter
+   * turns, to whichever of the hangar's own four sides faces the camera
+   * best, so its walls stay parallel to the room's and the section reads
+   * as a drawing rather than as a slot gouged at an angle. It is wide
+   * enough to hold the eye wherever the camera has been swung within that
+   * quarter, so you never look out from inside solid ground.
+   *
+   * WHAT IS KEPT. The hangar floor and anything at it (the ship stands a
+   * couple of metres up, and so does the line where the cut starts), and
+   * a strip of the room behind the ship — the back of the hangar, still
+   * roofed, is what tells you it is a room and not a pit. The walls of the
+   * cut are drawn by Render.drawGroundSection in layers: road, paving,
+   * slab, services, fill, rock.
+   *
+   * Everything is in the port's own frame and its own units (pad radii,
+   * model z — `rel z / r - lift`), the same ones clampCameraToHangar and
+   * Sim.berthRoom use, so the cut and the room cannot disagree. */
+  var GCUT_BACK = 0.3;          // of the room's half-depth, kept behind the ship
+  var GCUT_SIDE = 0.7;          // of the room's half-width, the least the cut takes
+  var GCUT_FLOOR_M = 2;         // metres above the deck where the cut begins
+
+  function groundCutFor(port, asked) {
+    if (!Gen || !Gen.bayGeometry || !Sim.portBasis) return null;
+    var basis = Sim.portBasis(port, G.sys, G.t);
+    if (!basis) return null;
+    var g = Gen.bayGeometry(port);
+    var r = port.radius || 1;
+    var room = (Sim.berthRoom && Sim.berthRoom(port, currentBerth())) ||
+      { x0: -g.chamberX, x1: g.chamberX, y0: -g.chamberY, y1: g.chamberY,
+        z0: g.floorZ, z1: g.ceilZ };
+    function model(p) {
+      var rel = V.sub(p, basis.entrance.pos);
+      return [V.dot(rel, basis.east) / r, V.dot(rel, basis.north) / r,
+              V.dot(rel, basis.up) / r - (g.lift || 0)];
+    }
+    var cp = Math.cos(G.cam.pitch), sp = Math.sin(G.cam.pitch);
+    var cy = Math.cos(G.cam.yaw), sy = Math.sin(G.cam.yaw);
+    var eyeW = V.addScaled(G.cam.target, { x: cp * cy, y: cp * sy, z: sp }, asked);
+    var S = model(G.cam.target), E = model(eyeW);
+    var de = E[0] - S[0], dn = E[1] - S[1];
+    /* Which side of the room faces the camera: axis 0 (east) or 1 (north),
+     * and which way along it. */
+    var ax = Math.abs(de) >= Math.abs(dn) ? 0 : 1;
+    var sg = (ax === 0 ? de : dn) >= 0 ? 1 : -1;
+    var bx = 1 - ax;
+    var lo = [room.x0, room.y0], hi = [room.x1, room.y1];
+    var halfA = (hi[ax] - lo[ax]) * 0.5, halfB = (hi[bx] - lo[bx]) * 0.5;
+    /* Room limits along the cut, measured from the ship, toward the camera
+     * positive. */
+    var rA0 = sg > 0 ? lo[ax] - S[ax] : S[ax] - hi[ax];
+    var rA1 = sg > 0 ? hi[ax] - S[ax] : S[ax] - lo[ax];
+    var rB0 = lo[bx] - S[bx], rB1 = hi[bx] - S[bx];
+    var eyeA = sg * (E[ax] - S[ax]), eyeB = E[bx] - S[bx];
+    var hull = (Render.SHIP_LEN || 0.025) / r;
+    var margin = Math.max(hull, halfB * 0.1);
+    var aMin = -Math.max(GCUT_BACK * halfA, hull * 0.8);
+    var aMax = Math.max(rA1 + margin, eyeA + margin);
+    var bHalf = Math.max(GCUT_SIDE * halfB, Math.abs(eyeB) + margin, hull * 1.2);
+    var zMin = (room.z0 - S[2]) + GCUT_FLOOR_M * 0.001 / r;
+    var unit = function (i) {
+      return i === 0 ? basis.east : basis.north;
+    };
+    var A = V.scale(unit(ax), sg), B = unit(bx);
+    return {
+      port: port,
+      surface: true,
+      outside: true,
+      /* What the shader cuts with, in km. */
+      box: { origin: V.clone(G.cam.target), a: A, b: B, u: basis.up,
+             aMin: aMin * r, aMax: aMax * r, bHalf: bHalf * r, zMin: zMin * r },
+      /* What the section walls are built from, in model units. */
+      section: { ship: S, ax: ax, sg: sg, aMin: aMin, aMax: aMax, bHalf: bHalf,
+                 floor: room.z0, ceil: room.z1, ground: -(g.lift || 0),
+                 rA0: rA0, rA1: rA1, rB0: rB0, rB1: rB1, lift: g.lift || 0,
+                 r: r, entrance: basis.entrance.pos,
+                 east: basis.east, north: basis.north, up: basis.up }
     };
   }
 
   /* The enclosure as the DRAWING sees it: the station the ship is in,
-   * unless the cutaway has taken the eye outside it, in which case nothing
-   * encloses the view and the sky comes back. Everything about the SHIP —
-   * the camera follow, the clamps themselves — keeps asking enclosedPort. */
+   * unless the camera has been pulled back through its wall — then nothing
+   * encloses the VIEW. Everything about the SHIP — the camera follow, the
+   * clamps themselves — keeps asking enclosedPort.
+   *
+   * ANY CUTAWAY, NOT ONLY ONE FROM OUTSIDE. The first version kept the
+   * room view whenever the eye was still in some other compartment of the
+   * hull: one section drawn, lit as a room, rock behind it. Astra: "it
+   * should render the exterior of the station, then put the hole in the
+   * hull that you're looking through". So past the wall it is always the
+   * station as seen from space — whole, sunlit, sky behind — with the cone
+   * cut through it, and the room view is only for a camera actually in the
+   * room with the ship. */
   function viewEnclosure() {
     var p = enclosedPort();
-    if (p && G.cutaway && G.cutaway.port === p && G.cutaway.outside) return null;
+    if (p && G.cutaway && G.cutaway.port === p) return null;
     return p;
   }
 
@@ -6065,9 +6187,26 @@
       var asked = G.cam.dist;
       clampCameraToHangar(port);
       clampCameraToThroat(port);
-      if (!port.surface && glLive() && G.cam.dist < asked * 0.999) {
-        G.cutaway = cutawayFor(port, G.cam.dist, asked);
+      /* AND AT A GROUND PORT, A SECTION RATHER THAN A BURN. Astra: "on
+       * ground ports, make it more of a cutaway through the street level
+       * than a laser cutting the station open". Only once BERTHED: on the
+       * way down the shaft the camera is in a moving tube and the clamp
+       * above is the right answer. See groundCutFor. */
+      var canCut = glLive() && G.cutawayStyle !== 2 && G.cam.dist < asked * 0.999 &&
+                   (!port.surface || (G.ship.docked === port.id && !G.arrivalPose));
+      if (canCut) {
+        var roomDist = G.cam.dist;
+        /* The boom back to where it was asked for FIRST, and the deck
+         * clamp on that — the cut is built round wherever the eye finally
+         * is, so it has to be built last. Built from the eye before the
+         * pitch was settled, the section could leave the eye in the rock
+         * beside it. */
         G.cam.dist = asked;
+        keepCameraAboveDeck(port);
+        G.cutaway = port.surface ? groundCutFor(port, asked)
+                                 : cutawayFor(port, roomDist, asked);
+        if (!G.cutaway) G.cam.dist = roomDist;
+        return;
       }
       keepCameraAboveDeck(port);
       return;
@@ -6214,6 +6353,10 @@
      * stars in it and becomes something you can believe is a wall. Without
      * this you look past the end of the hangar and see the galaxy. */
     var buried = undergroundHost(cam);
+    /* Pulled up out of a ground port through its section, the eye can sit
+     * below street level and still be in the open — in the cut, not in the
+     * rock — so the sky stays sky. */
+    if (G.cutaway && G.cutaway.surface && !mapMode()) buried = null;
     /* Berthed in a shed: the shed is the world. See enclosedPort.
      *
      * EXCEPT IN THE ORBIT MAP, which is a chart rather than a window. F2 is
@@ -6252,6 +6395,10 @@
       var shaft = activeShaft();
       if (shaft) {
         global.GLWorld.setSurfaceHole(shaft.hostId, shaft.mouth, shaft.radius);
+      }
+      if (G.cutaway && G.cutaway.surface && global.GLWorld.setGroundCut &&
+          G.cutaway.port.parentBody) {
+        global.GLWorld.setGroundCut(G.cutaway.port.parentBody.id, G.cutaway.box);
       }
     } else {
       ctx.fillStyle = rock ? ROCK_CLEAR_CSS : '#04060c';
@@ -6393,8 +6540,18 @@
        * centre: if the camera is inside the bounding sphere, the body is
        * around you and is drawn, whatever its middle does in the
        * projection. */
+      /* AND A STATION'S RADIUS IS NOT ITS REACH. `radius` is the size the
+       * station is scaled by, and the art runs well past it: the cradle's
+       * berths hang off the ends of its arms, and docked at Waypoint Dock
+       * the hull sat 4.36 km from the centre of a 4.18 km station — outside
+       * the sphere, so with the centre behind the camera the whole station
+       * was culled and the ship sat on nothing. That is "I cannot see the
+       * platform my ship sits on". 1.8 radii is the reach Sim.insideStation
+       * already allows for the same art, and the eye is asked as well as the
+       * ship, because the cutaway can stand the camera anywhere in the hull. */
+      var reach = (body.radius || 0) * ((body.docking && !body.surface) ? 1.8 : 1);
       var near = V.dist(pos, cam.target);
-      var enclosing = near < (body.radius || 0);
+      var enclosing = near < reach || V.dist(pos, cam.eye) < reach;
       /* ...AND A WORLD YOU ARE STANDING OVER IS NOT CULLED ON IT EITHER.
        *
        * The same centre-point test, the other way up. Seventy-five km over
@@ -10695,11 +10852,16 @@
           if (indoors) Render.setIndoors(true);
           /* And the keyhole, round this station's meshes only — see
            * cutawayFor. Cleared after the outworks below. */
-          var cut = (G.cutaway && G.cutaway.port === b && Render.setCutaway)
-            ? G.cutaway : null;
+          var cut = (G.cutaway && G.cutaway.port === b && Render.setCutaway &&
+                     !G.cutaway.surface) ? G.cutaway : null;
+          var gcut = (G.cutaway && G.cutaway.port === b && Render.setCutaway &&
+                      G.cutaway.surface) ? G.cutaway : null;
+          if (gcut) Render.setCutaway({ box: gcut.box });
           if (cut) {
+            var cutBasis = Sim.portBasis ? Sim.portBasis(b, G.sys, G.t) : null;
             Render.setCutaway({ pos: G.ship.pos, rShip: cut.rShip,
-                                rEye: cut.rEye, rim: CUT_RIM });
+                                rEye: cut.rEye, rim: CUT_RIM,
+                                up: cutBasis ? cutBasis.up : null });
           }
           /* WHOSE DOCK THIS IS, in paint. Astra asked for red accents on
            * Syndicate stations "like the syndicate ships do"; the rule is
@@ -10809,7 +10971,23 @@
             Render.drawStationOutworks(ctx, cam, frame, b, model, b.radius, sun);
             Render.setAccent(null);
           }
-          if (cut) Render.setCutaway(null);
+          /* And the small craft that work round it — Render.drawStationTraffic.
+           * Sim time, not wall clock: they are on rails through the world,
+           * and a warp should carry them round with everything else. */
+          if (!b.surface && !indoors && rpx > 6 && tier === 'near' && Render.drawStationTraffic) {
+            Render.drawStationTraffic(ctx, cam, frame, b, model, b.radius, sun, G.t);
+          }
+          if (cut) {
+            Render.setCutaway(null);
+            /* The edge furniture, drawn AFTER the cut is cleared: it stands
+             * on the cone's surface, and cut by it, half of every cable
+             * would go. */
+            if (G.cutawayStyle === 0 && Render.drawCutGreebles) {
+              Render.drawCutGreebles(ctx, cam, frame, model, b.radius, sun,
+                                     { pos: G.ship.pos, eye: cam.eye,
+                                       rShip: cut.rShip, rEye: cut.rEye });
+            }
+          }
           /* The town, the boards and the pad lighting. Held to a higher
            * threshold than the pad itself: the dressing is detail, and
            * detail smaller than a few pixels is cost without information. */
@@ -10835,6 +11013,15 @@
            * to take you and stays sealed. */
           if (b.surface && rpx > 5) {
             Render.drawPortDoors(ctx, cam, frame, b, b.radius, sun, doorPhase(b));
+          }
+          /* The section's own walls, drawn after the cut is lifted — they
+           * stand exactly on its faces, and cut by it they would not be
+           * there at all. */
+          if (gcut) {
+            Render.setCutaway(null);
+            if (Render.drawGroundSection) {
+              Render.drawGroundSection(ctx, cam, gcut.section, sun);
+            }
           }
           /* No nameplate on the room you are standing in. */
           if (!sp.behindEye) queueLabel(sp, b.name, labelCol, rpx + 8, 4 + rpx);
@@ -12593,6 +12780,14 @@
           return i < 0 ? RENDER_SCALES.indexOf(1) : i;
         },
         set: function (i) { setRenderScale(RENDER_SCALES[i]); } },
+      /* Astra asked for the cutaway to be toggleable. Three ways rather
+       * than on/off because there are two separate things to want off:
+       * the furnished edge (more triangles, and a rebuild while zooming),
+       * and the hole itself. */
+      { kind: 'choice', label: 'Station cutaway', key: '',
+        options: ['Laser cut — cables and frame', 'Clean cut', 'Off — camera stops at the wall'],
+        get: function () { return G.cutawayStyle || 0; },
+        set: function (i) { G.cutawayStyle = i; } },
       { kind: 'choice', label: 'Cockpit chrome', key: '',
         options: ['Instrument band', 'Band stowed', 'Canopy only'],
         get: function () { return G.cockpitChrome || 0; },
@@ -12701,6 +12896,7 @@
       showGrid: !!G.showGrid, showTraffic: !!G.showTraffic,
       cockpitChrome: G.cockpitChrome || 0,
       glassGlow: G.glassGlow || 0,
+      cutawayStyle: G.cutawayStyle || 0,
       assist: !!G.assist, vector: !!G.vector, flightMode: G.flightMode,
       mouseAim: !!G.mouseAim, aimSens: G.aimSens,
       cockpitFov: G.cockpitFov
@@ -12720,6 +12916,7 @@
         G.cockpitChrome = p.cockpitChrome % 3;
         G.showCockpitFrame = G.cockpitChrome !== 2;
       }
+      if (typeof p.cutawayStyle === 'number') G.cutawayStyle = ((p.cutawayStyle % 3) + 3) % 3;
       if (typeof p.assist === 'boolean') G.assist = p.assist;
       if (typeof p.vector === 'boolean') G.vector = p.vector;
       if (p.flightMode === 'ship' || p.flightMode === 'orbital') G.flightMode = p.flightMode;
@@ -13197,20 +13394,6 @@
     if (t.note) drawMenuNote(ctx, box, t.note);
     if (t.edit) drawEditField(ctx, box, t.edit);
     ctx.restore();
-
-    /* WHICH BUILD, in the corner and out of the way: the number and the
-     * release's name (see release.js). Faded in with the tagline, since
-     * it is part of the card rather than part of the menu. */
-    var Rel = global.Release;
-    if (Rel && aLine > 0) {
-      ctx.save();
-      ctx.globalAlpha = aLine;
-      ctx.font = 'bold 11px ui-monospace, monospace';
-      ctx.fillStyle = 'rgba(200,218,250,0.55)';
-      ctx.textAlign = 'right';
-      ctx.fillText(Rel.version + '  \u00b7  \u201c' + Rel.name + '\u201d', w - 18, h - 16);
-      ctx.restore();
-    }
   }
 
   /* Draw a string with extra space between the letters, centred or left by
