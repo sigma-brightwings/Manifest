@@ -5443,7 +5443,7 @@
   /* Wreckage the cap is allowed to throw away. A spent heat sink is on the
    * debris path for its physics but is not litter, so it does not count
    * toward the cap and is never the piece the cap deletes. */
-  function isCullable(c) { return c.kind === 'debris' && !c.sink; }
+  function isCullable(c) { return c.kind === 'debris' && !c.sink && !c.ore; }
 
   /* Everything about a wreck is a pure function of the ship that made it, so
    * a replayed kill throws the same pieces the same way. Math.random() here

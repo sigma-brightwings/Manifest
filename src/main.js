@@ -1579,7 +1579,7 @@
           /* Only a CRASHED landing respawns: a clean one is a place you
            * can lift off from (Sim.liftOff), and B must not throw it away. */
           if (G.ship.landed && G.ship.crashed) respawnShip();
-          else if (G.ship.landed) say('On the ground — throttle up to lift off', 3);
+          else if (G.ship.landed) say('On the ground — R to lift off', 3);
           /* SHIFT CYCLES THE RACK, because a ship can carry two kinds of
            * seeker now and the choice between a certified round and a cheap
            * one belongs at the trigger rather than at the till. Same key as
@@ -5014,7 +5014,10 @@
       G.t += G.lastDtSim;
       G.arrivalPose = null;
       Sim.updateLandedShip(G.ship, G.sys, G.t);
-      if ((G.ship.throttle || 0) > 0) {
+      /* R lifts off - thrust up, the same key that means up in the air.
+       * F pushes into the ground and does nothing; the other keys would
+       * drag the hull along the dirt, so they do nothing either. */
+      if (G.keys['r'] && (G.ship.throttle || 0) > 0) {
         var lo = Sim.liftOff(G.ship, G.sys, G.t);
         if (lo.ok) {
           G.warpIndex = 0;
@@ -5022,7 +5025,7 @@
         } else if (lo.g && !G.liftWarned) {
           G.liftWarned = true;
           say(lo.max > lo.g
-            ? 'More throttle - ' + (lo.g * 1000).toFixed(1) + ' m/s² to beat here, ' + (lo.accel * 1000).toFixed(1) + ' at this setting'
+            ? 'Full thrust (drop Shift) - ' + (lo.g * 1000).toFixed(1) + ' m/s² to beat here, ' + (lo.accel * 1000).toFixed(1) + ' at this setting'
             : 'This drive cannot lift off here - ' + (lo.max * 1000).toFixed(1) + ' m/s² against ' + (lo.g * 1000).toFixed(1) + ' of gravity', 5);
         }
       } else {
@@ -5157,7 +5160,7 @@
         G.reported = true;
         say(G.ship.crashed
           ? 'Impact with ' + G.ship.landedOn.name + ' at ' + fmtSpeed(G.ship.impactSpeed) + '   (B to respawn)'
-          : 'Touchdown on ' + G.ship.landedOn.name + '  —  throttle up to lift off', 8);
+          : 'Touchdown on ' + G.ship.landedOn.name + '  —  R to lift off', 8);
         G.warpIndex = 0;
       }
       if (!G.ship.landed) G.reported = false;
@@ -5395,6 +5398,30 @@
      * other half of jettison, and the whole point of robbing a freighter
      * of its cargo rather than its credits. */
     scoopCanisters();
+
+    /* SKIMMING (mining rung 3). In a giant's air with the intake fitted,
+     * hydrogen comes aboard as fast as density x speed allows. Reported in
+     * whole tonnes and on the state changes, not every frame. */
+    if (global.Mining && !G.paused && G.lastDtSim > 0) {
+      var wasSkim = !!G.skimming;
+      global.Mining.skimStep(G, G.sys, G.t, G.lastDtSim, Combat.hasSkimmer(G.ship));
+      var sk = G.skimming;
+      if (sk && !wasSkim) {
+        say(sk.poor ? 'Skimmer: ' + sk.body.name + ' is too poor in hydrogen to be worth the intake'
+                    : 'Skimmer open - ' + sk.body.name, 4);
+        G.skimShown = Math.floor(G.skimTotal || 0);
+      } else if (sk && sk.full && !G.skimFullSaid) {
+        G.skimFullSaid = true;
+        say('Skimmer: hold full', 4);
+      } else if (sk && !sk.full && !sk.poor && Math.floor(G.skimTotal || 0) >= (G.skimShown || 0) + 5) {
+        G.skimShown = Math.floor(G.skimTotal || 0);
+        say('Skimming ' + sk.body.name + ' - ' + (sk.rate * 60).toFixed(1) + ' t/min, ' +
+            Math.round(sk.frac * 100) + '% hydrogen, ' + Math.round(G.ship.cargo.hydrogen || 0) + ' t aboard', 3);
+      } else if (!sk && wasSkim) {
+        G.skimFullSaid = false;
+        say('Skimmer closed', 2);
+      }
+    }
 
     /* The dock is an event, not just a state: contracts settle, the ledger
      * hits the disk, and the clamps make their noise, exactly once. */
@@ -6362,11 +6389,12 @@
        * and keeps being drawn; an emptied crate was only ever its contents
        * and goes. Clearing the cid is what stops it being scooped twice. */
       if (c.tonnes <= 1e-9) {
-        if (c.kind === 'debris') { c.cid = null; c.tonnes = 0; c.name = 'Wreckage'; }
+        if (c.ore) cans.splice(i, 1);          // an ore chunk was only its ore
+        else if (c.kind === 'debris') { c.cid = null; c.tonnes = 0; c.name = 'Wreckage'; }
         else cans.splice(i, 1);
       }
       var good = Eco.BY_ID[cid];
-      say((c.kind === 'debris' ? 'Salvaged ' : 'Scooped ') +
+      say((c.kind === 'debris' && !c.ore ? 'Salvaged ' : 'Scooped ') +
           take.toFixed(take < 1 ? 2 : 0) + 't ' +
           (good ? good.name : cid), 4);
       HOOKS.sound('scoop');
@@ -7900,6 +7928,16 @@
       var left = (c.expires - G.t) / (c.life || Sim.DEBRIS_LIFE);
       var fade = left > 0.25 ? 1 : Math.max(0, left / 0.25);
       if (fade <= 0) continue;
+
+      /* AN ORE CHUNK IS A SMALL ROCK (mining.js), drawn with the rock meshes
+       * the belts use, in the colour of what it was cut from. Falls back to
+       * the shard picture where there is no GPU world. */
+      if (c.ore) {
+        var Rg2 = global.Rings, GLW2 = global.GLWorld;
+        if (Rg2 && GLW2 && GLW2.queueMesh && glLive() &&
+            GLW2.queueMesh(cam, spinFrame(c, tSec), Rg2.rockMesh(c.shape || 0, c.rockKind || 'stone', 1),
+                           c.lengthKm, V.norm(V.sub(sunPos, c.pos)))) continue;
+      }
 
       /* A spent sink is the one piece of debris that is a LIGHT SOURCE, and
        * that is the whole point of it: it is visible because it is hot, it
@@ -12093,6 +12131,26 @@
      * Both of these used to be positioned from the bottom edge and both
      * ended up drawn straight through the key bar. */
     var top = deckTop(h);
+
+    /* --- the mining laser's cut, while it is on a rock (mining rung 3) ---
+     * Its own line above the message, so a chunk coming free can still be
+     * read while the beam goes straight on into the next one. */
+    var cp = G.cutProgress;
+    if (cp && flying() && G.t - cp.t < 0.4 && G.t >= cp.t) {
+      ctx.save();
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      var cLabel = 'CUTTING ' + (cp.rock.kind || 'rock').toUpperCase() + ' ROCK';
+      var cw2 = Math.max(220, ctx.measureText(cLabel).width + 120);
+      var cx2 = (w - cw2) / 2, cy2 = top - 104;
+      panel(ctx, cx2, cy2, cw2, 28, false);
+      ctx.fillStyle = '#ffd27a';
+      ctx.fillText(cLabel, cx2 + 12, cy2 + 18);
+      ctx.fillStyle = 'rgba(255,210,122,0.22)';
+      ctx.fillRect(cx2 + cw2 - 100, cy2 + 9, 86, 10);
+      ctx.fillStyle = '#ffd27a';
+      ctx.fillRect(cx2 + cw2 - 100, cy2 + 9, 86 * Math.min(1, cp.frac), 10);
+      ctx.restore();
+    }
 
     /* --- transient message, sat just above the deck --- */
     if (G.message && performance.now() < G.messageUntil) {

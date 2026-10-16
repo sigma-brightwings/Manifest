@@ -173,6 +173,18 @@
     mupulse: laser('mupulse', 'Muon pulse accelerator', 'muon', 'pulse',
                    14000, 9.0, 7.0, 24, 0.40, 34, 11, '#6bd5ff', [0.70, 10],
                    'Reach without apology. Bring a reactor and a firm opinion.'),
+    /* THE MINING LASER (mining rung 3, mining.js). A photon beam tuned to
+     * heat a few square metres of rock until a chunk spalls off, not to
+     * hurt anything that moves: one point a cycle against a hull, three
+     * kilometres of reach. Hold it on a rock and a chunk comes free about
+     * every eleven seconds; the scoop does the rest. */
+    mininglaser: (function () {
+      var g = laser('mininglaser', 'Mining laser', 'photon', 'beam',
+                    4800, 2.6, 2.5, 1, 0.12, 3, 8, '#ffd27a', [0.15, -100],
+                    'Cuts rock, not ships. Hold it steady and bring a scoop.');
+      g.mining = true;
+      return g;
+    })(),
     muint:   laser('muint', 'Muon intermittent accelerator', 'muon', 'intermittent',
                    24000, 11.0, 8.0, 62, 1.00, 40, 18, '#5ab8ff', [0.70, 25],
                    'Sixty-two points, once a second, from further than they can answer.'),
@@ -513,6 +525,16 @@
                   uniqueGroup: 'survey',
                   minDev: 0.55, minStanding: 0, minCrime: 0, grey: false,
                   pitch: 'The tonnage, not the adjective. The Guild pays for numbers.' },
+
+    /* GAS SKIMMER INTAKE (mining rung 3). Takes hydrogen out of a giant's
+     * air as you fly through it - a charged capture field about forty
+     * metres across, so the flow is density x speed x 1,500 m^2. It does
+     * nothing about the heat; that is what the heat shield is for. */
+    skimmer: { id: 'skimmer', name: 'Gas skimmer intake', slot: 'utility',
+               kind: 'skimmer', price: 7800, power: 1.5, mass: 2,
+               unique: true,
+               minDev: 0.2, minStanding: -100, minCrime: 0, grey: false,
+               pitch: 'Fly it through the top of a giant and the hold fills. Fly it lower and so does the coroner.' },
 
     /* ---- the cargo scoop --------------------------------------------------
      * Picking cargo up used to be a property of having a hold, which made
@@ -2695,6 +2717,13 @@
     var list = fittedList(ship);
     for (var i = 0; i < list.length; i++) {
       if (list[i].item.kind === 'scoop') return true;
+    }
+    return false;
+  }
+  function hasSkimmer(ship) {
+    var list = fittedList(ship);
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].item.kind === 'skimmer') return true;
     }
     return false;
   }
@@ -5333,6 +5362,15 @@
       }
     }
 
+    /* A MINING LASER STOPS ON ROCK (mining.js). Whatever rock is nearer
+     * than the ship it would have hit takes the shot instead, and the beam
+     * is drawn to the face being cut. */
+    var rockEnd = null;
+    if (gun.mining && global.Mining) {
+      var mc = global.Mining.cut(sys, G, t, gun, hitDist, hooks);
+      if (mc) { rockEnd = mc.end; hit = null; }
+    }
+
     /* BOTH ENDS ARE LIVE, and that is not a refinement — it is the whole
      * correctness condition. Tracking the muzzle while leaving the far end
      * frozen where it was fired makes every beam still on screen stretch
@@ -5357,8 +5395,8 @@
      * as a broken gun, not because the shot is slow. */
     (G.beams = G.beams || []).push({
       from: muzzleWorld(s, mz), muzzle: mz, fromShip: true,
-      to: hit ? V.clone(hit.pos) : beamEnd,
-      target: hit || null, range: gun.range,
+      to: hit ? V.clone(hit.pos) : (rockEnd || beamEnd),
+      target: hit || (rockEnd ? { pos: rockEnd, rock: true } : null), range: gun.range,
       variety: gun.variety || 'pulse', side: mz.r < 0 ? -1 : 1,
       color: gun.color, born: now, until: now + 0.42
     });
@@ -6975,7 +7013,7 @@
     syncLegacy: syncLegacy, migrateFit: migrateFit, replanFit: replanFit,
     buyEquipment: buyEquipment, stockAt: stockAt,
     SINK: SINK, sinkRackSize: sinkRackSize, armSink: armSink,
-    scanLevel: scanLevel, scanShip: scanShip, hasScoop: hasScoop, surveyLevel: surveyLevel,
+    scanLevel: scanLevel, scanShip: scanShip, hasScoop: hasScoop, hasSkimmer: hasSkimmer, surveyLevel: surveyLevel,
     npcArmament: npcArmament, hasTradeAnalyser: hasTradeAnalyser, playerDps: playerDps,
     hailRumour: hailRumour, rumourFacts: rumourFacts, RUMOUR_DAY: RUMOUR_DAY,
     startRescue: startRescue, updateRescue: updateRescue, restoreRescue: restoreRescue,
