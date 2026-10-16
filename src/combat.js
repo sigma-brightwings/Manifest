@@ -623,8 +623,88 @@
                dmg: 28, accel: 0.065, life: 38, fuse: 0.11, speed0: 0.13,
                grey: true, minCorrupt: 60, uncertified: true,
                pitch: 'Sold by the crate, no questions, no paperwork and ' +
-                      'no guarantee it leaves the rail.' }
+                      'no guarantee it leaves the rail.' },
+
+    /* ROCK TORPEDOES (mining.js). A small nuclear charge on a dumb motor:
+     * no seeker, no lock, 200 m/s down the nose, and 6-14 chunks off
+     * whatever rock it meets. Only two people sell them. The Mining Guild,
+     * at its halls (mining-head ports), with a serial it logs - half back
+     * for one you destroyed for safety. The Syndicate, anywhere it is the
+     * landlord or the law can be bought, with no serial and no refund, and
+     * contraband everywhere you carry it. Either kind aboard on the way IN
+     * to a station is an offence: they go out to the belt, never home. */
+    rocktorp: { id: 'rocktorp', name: 'Guild rock torpedo', price: 2500, rack: 4,
+                torpedo: true, guildOnly: true,
+                pitch: 'Serial-numbered. Take it out, set it off, bring back the log - not the torpedo.' },
+    syndtorp: { id: 'syndtorp', name: 'Unregistered rock charge', price: 1600, rack: 4,
+                torpedo: true, grey: true, minCorrupt: 60, contraband: true,
+                pitch: 'Same yield, no serial. Nobody refunds what nobody logged.' }
   };
+
+  /* Who sells which torpedo here, if anyone. */
+  function torpedoSoldAt(G, port, m) {
+    if (!port || !m || !m.torpedo) return false;
+    if (m.guildOnly) return !!(port.market && (port.market.role || port.market.roleId) === 'mining');
+    var sys = G.sys;
+    if ((port.faction || '') === 'outlaw') return true;
+    var crime = effectiveCrime(G, sys);
+    var corrupt = effectiveCorruption(G, (sys && sys.corruption !== undefined) ? sys.corruption : crime);
+    return corrupt >= (m.minCorrupt || 0);
+  }
+
+  /* Torpedoes aboard, by kind. */
+  function torpedoesAboard(ship) {
+    var racks = racksOf(ship), out = { guild: 0, synd: 0, total: 0 };
+    for (var k in racks) {
+      var m = MISSILES[k];
+      if (!m || !m.torpedo || !(racks[k].n > 0)) continue;
+      if (m.grey) out.synd += racks[k].n; else out.guild += racks[k].n;
+      out.total += racks[k].n;
+    }
+    return out;
+  }
+
+  /* Is the ship heading IN to a station? Closing on the nearest port and
+   * within a day's coast of it. Guild torpedoes are legal going out. */
+  function inboundToPort(G, t) {
+    var Mn = global.Mining, s = G.ship;
+    if (!Mn || !G.sys) return false;
+    if (s.docked) return true;
+    var np = Mn.nearestPort(G.sys, s.pos, t);
+    if (!np) return false;
+    var rel = V.sub(s.pos, np.pos), d = V.len(rel);
+    var closing = d > 1e-9 ? -V.dot(rel, V.sub(s.vel, np.vel)) / d : 0;
+    return np.dist < 20000 && closing > 0.02;
+  }
+
+  /* The search, for torpedoes: Syndicate charges always, Guild ones on the
+   * way in. Seized, and fined about their price again each. Returns what
+   * was found, or null. */
+  var TORP_FINE = 2600;
+  function torpedoSearch(G, fac, t, hooks, who) {
+    var s = G.ship, tor = torpedoesAboard(s);
+    if (!tor.total) return null;
+    var inbound = inboundToPort(G, t);
+    var seize = tor.synd + (inbound ? tor.guild : 0);
+    if (!seize) return null;
+    var racks = racksOf(s);
+    ['syndtorp', 'rocktorp'].forEach(function (k) {
+      if (!racks[k]) return;
+      if (k === 'syndtorp' || inbound) delete racks[k];
+    });
+    syncRacks(s);
+    var fine = seize * TORP_FINE;
+    G.wanted = G.wanted || {};
+    G.wanted[fac] = (G.wanted[fac] || 0) + fine;
+    if (global.Missions) global.Missions.bumpStanding(G, fac, STANDING_HIT[2] || -8);
+    if (hooks && hooks.say) {
+      hooks.say((who || 'Customs') + ': ' + seize + ' rock torpedo' + (seize === 1 ? '' : 'es') +
+                ' aboard' + (tor.synd ? ', unregistered' : ', inbound to a station') +
+                ' - seized, fined ' + fine + ' cr', 8);
+    }
+    if (hooks && hooks.sound) hooks.sound('warn');
+    return { seized: seize, fine: fine };
+  }
 
   /* ---- RACKS, PLURAL ------------------------------------------------------
    * Astra: N racks off the MISSILES table, both firable, selectable in the
@@ -2542,7 +2622,7 @@
    * is that everyone agrees not to. */
   var BOUNTY = { demand: 400, assault: 300, kill: 2800, killPolice: 6000,
                  killNavy: 12000, killLiner: 9000, killTender: 14000,
-                 smuggling: 0 };
+                 smuggling: 0, sabotage: 30000 };
   var SMUGGLING_FINE_PER_TONNE = 180;   // cr/t, on top of losing the cargo itself
   var SEARCH_FLOOR = 0.12;   // even the most permissive system still checks sometimes
 
@@ -3697,6 +3777,50 @@
    * enough to the SCENE to hear the victim shouting, the report is
    * immediate. Otherwise the victim starts a transmission timer; update()
    * files the report when it expires, and killNpc cancels it. */
+  /* A BLAST (mining.js, the rock torpedo): everything inside `radius` of
+   * `pos` takes damage falling linearly to nothing at the edge. NPCs go
+   * through damageNpc, so the law sees it exactly as it sees a shot; the
+   * pilot takes hull, heat, and a shove away from the flash. */
+  function blastAt(sys, G, t, pos, radius, dmg, hooks) {
+    var Sim = global.Sim, hit = 0;
+    var ships = Sim.shipsAll(sys, t);
+    for (var i = 0; i < ships.length; i++) {
+      var sh = ships[i];
+      if (sh.route && sh.route.suppressed) continue;
+      var d = V.dist(sh.pos, pos);
+      if (d >= radius) continue;
+      var spec = sh.spec || liftTrader(sys, sh, t);
+      if (spec) { damageNpc(sys, G, spec, dmg * (1 - d / radius), t, hooks, null, pos); hit++; }
+    }
+    var s = G.ship;
+    if (s && !s.docked && !s.landed) {
+      var dp = V.dist(s.pos, pos);
+      if (dp < radius) {
+        var k = 1 - dp / radius;
+        damagePlayer(G, dmg * k, hooks, null, pos);
+        addHeat(G, 60 * k);
+        var away = dp > 1e-9 ? V.scale(V.sub(s.pos, pos), 1 / dp) : s.fwd;
+        s.vel = V.addScaled(s.vel, away, 0.008 * k);
+        if (hooks && hooks.say) hooks.say('CAUGHT IN THE BLAST - ' + Math.round(dmg * k) + ' hull', 5);
+      }
+    }
+    return hit;
+  }
+
+  /* A station hit by a torpedo knows what happened and who: no witness
+   * roll, no window to buy silence - the victim is the witness and it is
+   * a station. A heavy bounty with its owners and their standing gone. */
+  function reportSabotage(sys, G, t, port, hooks) {
+    var fac = port.faction || 'civil';
+    G.wanted = G.wanted || {};
+    G.wanted[fac] = (G.wanted[fac] || 0) + BOUNTY.sabotage;
+    if (global.Missions) global.Missions.bumpStanding(G, fac, -40);
+    if (hooks && hooks.say) {
+      hooks.say('SABOTAGE - ' + port.name + ' logs the strike: bounty ' + BOUNTY.sabotage + ' cr', 8);
+    }
+    if (hooks && hooks.sound) hooks.sound('warn');
+  }
+
   function crime(sys, G, t, kind, victim, hooks) {
     if (!victim || victim.kind === 'pirate') return;    // no law for outlaws
     if (victim.reported === kind) return;               // one report per act
@@ -4409,6 +4533,13 @@
    * One function, and every reader of a refusal goes through it. */
   function dockRefusal(G, port) {
     if (!port) return null;
+    /* A station a torpedo has holed is not taking ships until it is fixed. */
+    var sab = global.Mining && global.Mining.sabotaged(G, port, G.t);
+    if (sab) {
+      return { why: 'sabotaged', short: 'DAMAGED',
+               text: 'berths shut after a torpedo strike - ' +
+                     Math.ceil((sab.until - G.t) / 86400) + ' days to repair' };
+    }
     /* Under an order to leave, nothing here opens for you. Not a separate
      * punishment so much as the same one: "and then you leave" is not a
      * request if you can still dock, refuel and carry on trading. Dumping
@@ -4473,6 +4604,9 @@
     }
 
     var scanFac = spec.faction || 'civil';
+    /* Rock torpedoes first, by their own rule (torpedoSearch): Syndicate
+     * charges always, Guild ones only heading in to a station. */
+    torpedoSearch(G, scanFac, G.t, hooks, spec.name);
     var found = [];
     for (var cid in ship.cargo) {
       if (!(ship.cargo[cid] > 1e-9)) continue;
@@ -5629,6 +5763,20 @@
       if (hooks && hooks.say) hooks.say(s.missiles > 0 ? 'Not now' : 'No missiles aboard', 2);
       return;
     }
+    /* A ROCK TORPEDO needs no lock: it goes where the nose points. */
+    var armedM = MISSILES[s.missileId];
+    if (armedM && armedM.torpedo && global.Mining) {
+      if (G.warpIndex > 0) {
+        if (hooks && hooks.say) hooks.say('Not under time compression', 3);
+        return;
+      }
+      var tr = racksOf(s)[s.missileId];
+      if (tr) tr.n = Math.max(0, tr.n - 1);
+      syncRacks(s);
+      global.Mining.launchTorpedo(sys, G, t, armedM, hooks);
+      if (hooks && hooks.sound) hooks.sound('missile');
+      return;
+    }
     var target = null;
     if (G.navTarget && G.navTarget.kind === 'ship') {
       var patrols = sys.patrols || [];
@@ -5743,6 +5891,7 @@
     var keep = [];
     for (var i = 0; i < list.length; i++) {
       var ms = list[i];
+      if (ms.torp) { keep.push(ms); continue; }               // mining.js flies these
       var tgt = ms.target;
       if (t >= ms.dies || tgt.dead || !tgt.live) continue;    // fuel out, or nothing left to chase
 
@@ -5894,6 +6043,7 @@
     updateSink(G, t, hooks, sys);
     updateTurret(sys, G, t, hooks);
     updateMissiles(sys, G, t, dtSim, hooks);
+    if (global.Mining) global.Mining.updateTorpedoes(sys, G, t, dtSim, hooks);
     updateNpcFire(sys, G, t, dtSim, hooks);
 
     updateNpcHeat(sys, G, t, dtSim, hooks);
@@ -7091,6 +7241,9 @@
     npcShield: npcShield, splitDamage: splitDamage, hullSize: hullSize,
     NPC_SHIELD: NPC_SHIELD, MAX_IMPACTS: MAX_IMPACTS,
     damageNpc: damageNpc, damagePlayer: damagePlayer, killNpc: killNpc,
+    blastAt: blastAt, reportSabotage: reportSabotage, torpedoSoldAt: torpedoSoldAt,
+    torpedoesAboard: torpedoesAboard, torpedoSearch: torpedoSearch, inboundToPort: inboundToPort,
+    TORP_FINE: TORP_FINE,
     liftTrader: liftTrader,
     crime: crime, witnessNear: witnessNear,
     bountyTotal: bountyTotal, wantedHere: wantedHere, fleetPort: fleetPort,

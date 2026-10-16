@@ -382,6 +382,11 @@
        * plain data and needs nothing re-run on load. */
       claims: G.claims || {},
       drones: G.drones || [],
+      /* RUNG 3: rocks a torpedo shattered stay gone, the Guild's refund log
+       * stays owed, and a holed station stays shut until its date. */
+      shattered: G.shattered || {},
+      torpRefund: G.torpRefund || 0,
+      sabotage: G.sabotage || {},
       ledger: G.ledgerLog || []
     };
   }
@@ -519,6 +524,9 @@
     G.extracted = (data.extracted && typeof data.extracted === 'object') ? data.extracted : {};
     G.claims = (data.claims && typeof data.claims === 'object') ? data.claims : {};
     G.drones = Array.isArray(data.drones) ? data.drones : [];
+    G.shattered = (data.shattered && typeof data.shattered === 'object') ? data.shattered : {};
+    G.torpRefund = data.torpRefund || 0;
+    G.sabotage = (data.sabotage && typeof data.sabotage === 'object') ? data.sabotage : {};
     G.ledgerLog = data.ledger || [];
 
     if (d.docked && G.sys.byId[d.docked]) {

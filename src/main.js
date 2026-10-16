@@ -5429,6 +5429,11 @@
       G.dockEdge = false;
       var dockedPort = G.ship.docked && G.sys.byId[G.ship.docked];
       if (dockedPort) Missions.completeAtDock(G, dockedPort, G.sys, G.t, HOOKS);
+      /* A ROCK TORPEDO DOES NOT COME HOME. Docking with one aboard is the
+       * one search with no roll: the berth scans what comes into it. */
+      if (dockedPort && Combat.torpedoSearch) {
+        Combat.torpedoSearch(G, dockedPort.faction || 'civil', G.t, HOOKS, dockedPort.name + ' berth scan');
+      }
       HOOKS.sound('dock');
       if (global.Save) global.Save.store(G);
     }
@@ -6812,6 +6817,7 @@
       var sunR = V.norm(V.sub(starPos, ps.pos));
       for (var c = 0; c < ch.length; c++) {
         var ck = ch[c];
+        if (G.shattered && G.shattered[ck.id]) continue;
         ck.kind = (Rg.mix32(ck.shape * 977 + Math.floor(ck.spin * 1e6)) / 4294967296) < p.ring.ice
                   ? 'ice' : 'stone';
         ck.sun = sunR;
@@ -6825,6 +6831,7 @@
       var sunF = V.norm(V.sub(starPos, cen.pos));
       for (var m = 0; m < fd.count; m++) {
         var rk = Rg.fieldMember(fd, m, G.sys, G.t, cen, hf);
+        if (G.shattered && G.shattered[rk.id]) continue;      // a torpedo took it
         rk.dist = V.dist(rk.pos, ship);
         /* Worth a draw call if it is at least about a pixel across. */
         if (rk.size * cam.flen / Math.max(rk.dist, 1e-6) < 0.7 && rk.dist > 30) continue;

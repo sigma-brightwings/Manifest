@@ -1276,6 +1276,21 @@
           fn: function () { if (Cl.buyDrone(G).ok) say('Drone racked. ' + G.ship.drones + ' aboard.', 4); }
         });
       }
+      /* THE GUILD'S TORPEDO LOG (mining rung 3): half back on every serial
+       * that went off for safety rather than for profit. Any desk - the
+       * Guild has one in every port. */
+      var Mn = global.Mining;
+      if (Mn && (G.torpRefund || 0) > 0) {
+        opts.push({
+          label: 'Guild torpedo refund',
+          enabled: docked,
+          note: !docked ? 'paid on the deck' : Math.round(G.torpRefund) + ' cr owed on safed torpedoes',
+          fn: function () {
+            var got = Mn.claimRefund(G);
+            if (got) say('Mining Guild: torpedo log checked - ' + got + ' cr refunded.', 5);
+          }
+        });
+      }
       opts.push({ label: 'Mission board', enabled: true,
                   note: 'F7', fn: function () { selectPanel(6); } });
     } else if (G.piracyMenu === c.name) {
@@ -2521,7 +2536,10 @@
     }
     for (var mk in Combat.MISSILES) {
       (function (m) {
-        if (m.grey) return;
+        /* Rock torpedoes are on the shelf only where somebody sells them:
+         * a Guild hall, or the Syndicate's side of the counter. */
+        if (m.torpedo) { if (!Combat.torpedoSoldAt(G, port, m)) return; }
+        else if (m.grey) return;
         var have = rackOf(m.id);
         var full = have ? have.n >= m.rack : racksNow.length >= rackCap;
         var armed = s.missileId === m.id && s.missiles > 0;

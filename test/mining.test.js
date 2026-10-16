@@ -189,5 +189,139 @@ if (gasG) {
   check('a gas giant\'s cannot, for long', fluxGas > shield, gasG.b.name + ': ' + fluxGas.toFixed(0) + ' > ' + shield);
 }
 
+console.log('--- rock torpedoes ---');
+var TG = Combat.MISSILES.rocktorp, TS = Combat.MISSILES.syndtorp;
+check('two torpedoes: the Guild\'s and the Syndicate\'s', TG && TG.torpedo && TS && TS.torpedo && TS.grey && !TG.grey,
+      TG.price + ' / ' + TS.price + ' cr');
+var minePort = null, otherPort = null, tsys = null;
+systems.some(function (sy2) {
+  (sy2.ports || []).forEach(function (p) {
+    var role = p.market && (p.market.role || p.market.roleId);
+    if (role === 'mining' && !minePort) { minePort = p; tsys = sy2; }
+  });
+  return !!minePort;
+});
+(tsys.ports || []).forEach(function (p) { if (p !== minePort && !otherPort && (p.market && p.market.role) !== 'mining') otherPort = p; });
+var Gs = { sys: tsys, standing: {} };
+check('the Guild sells them at its halls', Combat.torpedoSoldAt(Gs, minePort, TG), minePort.name);
+check('and nowhere else', !otherPort || !Combat.torpedoSoldAt(Gs, otherPort, TG));
+check('the Syndicate sells where it is the landlord', Combat.torpedoSoldAt(Gs, { faction: 'outlaw', market: {} }, TS));
+
+/* A rock, a ship 1.5 km off its face, the nose on it. */
+function torpRig(rockPick) {
+  var Gt = { here: { id: 'test' }, t: t0, extracted: {}, sys: bsys, warpIndex: 0, explosions: [] };
+  var sp = Sim.makeShip(V.addScaled(rockPick.pos, dir, -(rockPick.size + 1.5)), rockPick.vel);
+  Sim.refreshShip(sp);
+  sp.fwd = dir; sp.up = V.norm(V.cross(dir, { x: 0, y: 0, z: 1 })); sp.right = V.cross(sp.fwd, sp.up);
+  sp.credits = 50000;
+  Combat.initShip(sp);
+  sp.racks = { rocktorp: { id: 'rocktorp', n: 2, batch: null } };
+  sp.missileId = 'rocktorp';
+  Combat.syncRacks(sp);
+  Gt.ship = sp;
+  return Gt;
+}
+bsys.canisters = []; bsys.missiles = [];
+var Gt = torpRig(rock);
+var said2 = [];
+var hk = { say: function (m) { said2.push(m); }, sound: function () {} };
+Combat.fireMissile(bsys, Gt, t0, hk);
+check('fired without a lock', (bsys.missiles || []).filter(function (m) { return m.torp; }).length === 1 &&
+      Gt.ship.missiles === 1, said2[0]);
+var tt = t0, boomAt = null;
+for (var st = 0; st < 400 && !boomAt; st++) {
+  Mn.updateTorpedoes(bsys, Gt, tt, 0.1, hk);
+  tt += 0.1;
+  if (!(bsys.missiles || []).some(function (m) { return m.torp; })) boomAt = tt;
+}
+var ore = bsys.canisters.filter(function (c) { return c.ore; });
+check('it flies dumb and slow and goes off on the rock', !!boomAt && Math.abs((boomAt - t0) - 1.5 / Mn.TORP_SPEED) < 1.0,
+      boomAt && ((boomAt - t0).toFixed(1) + ' s for 1.5 km'));
+check('6 to 14 chunks thrown', ore.length >= 6 && ore.length <= 14, ore.length + ' chunks, ' + Gt.lastTorpedo.tonnes.toFixed(1) + ' t');
+var sp0 = ore.map(function (c) { return V.dist(c.vel, rock.vel) * 1000; });
+check('thrown hard - 10 to 40 m/s, a field to chase', Math.min.apply(null, sp0) >= 9.9 && Math.max.apply(null, sp0) <= 40.1,
+      Math.min.apply(null, sp0).toFixed(0) + '-' + Math.max.apply(null, sp0).toFixed(0) + ' m/s');
+check('the pilot 1.5 km back is outside the blast', Gt.ship.hullHp === Gt.ship.hullMax);
+check('a chunk is a chunk the laser could have cut', ore.every(function (c) { return c.kind === 'debris' && c.life === Mn.CHUNK_LIFE; }));
+
+/* The refund: a safed torpedo (fired at nothing) earns half back; one that
+ * paid for itself does not. */
+function bareTorp(price, guild) { return { torp: true, id: 'tq' + price + guild, guild: guild, price: price, from: { x: 0, y: 0, z: 0 } }; }
+var Gr2 = { here: { id: 'test' }, extracted: {}, ship: Gt.ship, sys: bsys, explosions: [] };
+Mn.detonate(bsys, Gr2, t0, bareTorp(2500, true), { at: V.add(rock.pos, { x: 5000, y: 0, z: 0 }), spent: true }, hk);
+check('a safed Guild torpedo: half back', Gr2.torpRefund === 1250);
+Mn.detonate(bsys, Gr2, t0, bareTorp(1600, false), { at: V.add(rock.pos, { x: 5000, y: 0, z: 0 }), spent: true }, hk);
+check('a safed Syndicate one: nothing', Gr2.torpRefund === 1250);
+var richRock = { id: 'rich1', kind: 'metal', size: 0.2, pos: rock.pos, vel: rock.vel, key: 'k',
+                 source: { kind: 'belt', id: 'rb', name: 'RB', ice: 0.05, metal: 0.8, fields: [1] } };
+Mn.detonate(bsys, Gr2, t0, bareTorp(2500, true), { at: rock.pos, rock: richRock, normal: dir }, hk);
+check('one that paid for itself: nothing back', Gr2.lastTorpedo.value >= 2500 && Gr2.torpRefund === 1250,
+      Gr2.lastTorpedo.value + ' cr of ore');
+var cr0 = Gt.ship.credits;
+check('the desk pays the log out once', Mn.claimRefund(Gr2) === 1250 && Gt.ship.credits === cr0 + 1250 && Mn.claimRefund(Gr2) === 0);
+
+/* Small rocks do not survive it. */
+var pebble = null;
+for (var pm = 0; pm < bfield.count && !pebble; pm++) {
+  var pr2 = Rg.fieldMember(bfield, pm, bsys, t0, cen, hf);
+  if (pr2.size < Mn.TORP_SHATTER) pebble = pr2;
+}
+if (pebble) {
+  pebble.kind = Rg.memberKind(bfield, pebble); pebble.key = 'test:' + bbelt.id; pebble.source = bbelt;
+  var Gp = { here: { id: 'test' }, extracted: {}, ship: Gt.ship, sys: bsys, explosions: [] };
+  Mn.detonate(bsys, Gp, t0, bareTorp(2500, true), { at: pebble.pos, rock: pebble, normal: dir }, hk);
+  var still = Mn.rocksNear(Gp, bsys, pebble.pos, t0, 0.01).filter(function (r) { return r.id === pebble.id; });
+  check('a rock under 30 m is gone, and stays gone', Gp.shattered[pebble.id] && !still.length,
+        (pebble.size * 1000).toFixed(0) + ' m');
+}
+
+/* Close enough to the flash, it hurts. */
+var Gh = { here: { id: 'test' }, extracted: {}, sys: bsys, explosions: [] };
+Gh.ship = Sim.makeShip(V.add(rock.pos, { x: 0.3, y: 0, z: 0 }), rock.vel); Sim.refreshShip(Gh.ship);
+Combat.initShip(Gh.ship);
+var hp0 = Gh.ship.hullHp;
+Combat.blastAt(bsys, Gh, t0, rock.pos, Mn.TORP_BLAST, 140, hk);
+check('300 m from the flash: hull, heat and a shove', Gh.ship.hullHp < hp0 && V.dist(Gh.ship.vel, rock.vel) > 0.004,
+      (hp0 - Gh.ship.hullHp).toFixed(0) + ' hull');
+
+console.log('--- out, never in ---');
+var port = tsys.ports[0];
+var ps2 = Sim.bodyState(port, tsys, t0);
+function shipNearPort(towards) {
+  var Gc = { here: { id: 'test' }, sys: tsys, t: t0, wanted: {}, standing: {} };
+  var off = { x: 1500, y: 0, z: 0 };
+  Gc.ship = Sim.makeShip(V.add(ps2.pos, off), V.add(ps2.vel, { x: towards ? -1 : 1, y: 0, z: 0 }));
+  Sim.refreshShip(Gc.ship);
+  return Gc;
+}
+var Go = shipNearPort(false);
+Go.ship.racks = { rocktorp: { id: 'rocktorp', n: 3, batch: null } }; Go.ship.missileId = 'rocktorp'; Combat.syncRacks(Go.ship);
+check('Guild torpedoes outbound: clear', Combat.torpedoSearch(Go, 'civil', t0, hk, 'Patrol') === null && Go.ship.missiles === 3);
+var Gi = shipNearPort(true);
+Gi.ship.racks = { rocktorp: { id: 'rocktorp', n: 3, batch: null } }; Gi.ship.missileId = 'rocktorp'; Combat.syncRacks(Gi.ship);
+var ri = Combat.torpedoSearch(Gi, 'civil', t0, hk, 'Patrol');
+check('inbound to a station: seized and fined', ri && ri.seized === 3 && Gi.ship.missiles === 0 && Gi.wanted.civil === 3 * Combat.TORP_FINE,
+      ri && ri.fine + ' cr');
+var Gx = shipNearPort(false);
+Gx.ship.racks = { syndtorp: { id: 'syndtorp', n: 2, batch: null } }; Gx.ship.missileId = 'syndtorp'; Combat.syncRacks(Gx.ship);
+var rx = Combat.torpedoSearch(Gx, 'civil', t0, hk, 'Patrol');
+check('an unregistered charge is seized going either way', rx && rx.seized === 2);
+var Gk = shipNearPort(false);
+Gk.ship.docked = port.id;
+Gk.ship.racks = { rocktorp: { id: 'rocktorp', n: 1, batch: null } }; Gk.ship.missileId = 'rocktorp'; Combat.syncRacks(Gk.ship);
+check('docked with one is bringing it home', !!Combat.torpedoSearch(Gk, 'civil', t0, hk, 'Berth'));
+
+console.log('--- sabotage ---');
+var Gb = { here: { id: 'test' }, sys: tsys, t: t0, wanted: {}, standing: {}, extracted: {}, explosions: [] };
+Gb.ship = Sim.makeShip(V.add(ps2.pos, { x: 40, y: 0, z: 0 }), ps2.vel); Sim.refreshShip(Gb.ship);
+Mn.detonate(tsys, Gb, t0, bareTorp(2500, true), { at: V.add(ps2.pos, { x: 0.5, y: 0, z: 0 }), port: port }, hk);
+var fac = port.faction || 'civil';
+var ref = Combat.dockRefusal(Gb, port);
+check('a torpedo on a station shuts its berths', ref && ref.why === 'sabotaged', ref && ref.text);
+check('and the owners post a bounty', Gb.wanted[fac] >= 30000, Gb.wanted[fac] + ' cr with ' + fac);
+check('no refund for a torpedo set off on a station', !Gb.torpRefund);
+Gb.t = t0 + (Mn.SABOTAGE_DAYS + 1) * 86400;
+check('repaired in ' + Mn.SABOTAGE_DAYS + ' days', !Combat.dockRefusal(Gb, port) || Combat.dockRefusal(Gb, port).why !== 'sabotaged');
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

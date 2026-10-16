@@ -58,6 +58,7 @@
         for (var m = 0; m < fd.count; m++) {
           var rk = R.fieldMember(fd, m, sys, t, c, hf);
           if (V.dist(rk.pos, point) > range + rk.size) continue;
+          if (G.shattered && G.shattered[rk.id]) continue;
           rk.kind = R.memberKind(fd, rk);
           rk.key = here + ':' + belt.id;
           rk.source = belt;
@@ -70,6 +71,7 @@
       var ps = S.bodyState(p, sys, t);
       if (V.dist(point, ps.pos) > p.ring.outer + range) return;
       R.ringChunksNear(p, ps, point, range, t, 400).forEach(function (ck) {
+        if (G.shattered && G.shattered[ck.id]) return;
         ck.kind = (R.mix32(ck.shape * 977 + Math.floor(ck.spin * 1e6)) / 4294967296) < p.ring.ice
                   ? 'ice' : 'stone';
         ck.key = here + ':' + p.id + ':ring';
@@ -247,10 +249,245 @@
     return tonnes;
   }
 
+  /* ---- rock torpedoes ------------------------------------------------------
+   * Astra, 2026-10-16: "small nuclear bombs, dumb slow missile, breaks 6-14
+   * chunks off an asteroid, and is only available thru the mining guild and
+   * syndicate." Then: it is also a way to sabotage a station if you can get
+   * close enough; you take one OUT to the belt and never bring one back
+   * (scanned inbound with one aboard is an offence); and the Guild refunds
+   * half of one you destroyed for safety - not one that paid for itself.
+   *
+   * DUMB. It leaves the rail at TORP_SPEED down the nose and coasts under
+   * the dominant body's gravity like a shard does; no seeker, no lock. It
+   * arms TORP_ARM from where it was fired, and goes off on the first rock,
+   * ship or station it comes near - or at the end of its life, which is how
+   * you safe one: fire it at nothing.
+   *
+   * Its path each frame is a SEGMENT tested against the rocks round it, so
+   * a frame long enough to carry it past a boulder still finds the boulder.
+   */
+  var TORP_SPEED = 0.2;          // km/s off the rail
+  var TORP_LIFE = 300;           // s - 60 km of flight, then it blows itself up
+  var TORP_ARM = 0.5;            // km from launch before it will go off
+  var TORP_SHIP_FUSE = 0.15;     // km - a hull this close sets it off
+  var TORP_STATION_FUSE = 2.0;   // km - a station is a big thing to fly into
+  var TORP_BLAST = 1.0;          // km - ships inside this are hurt
+  var TORP_BLAST_DMG = 140;      // hull at the centre, falling to 0 at the edge
+  var TORP_SHATTER = 0.03;       // km - a rock this small is gone entirely
+  var TORP_CLEAR_OF_PORT = 50;   // km - the Guild logs a discharge this far out
+  var SABOTAGE_DAYS = 20;        // per torpedo, a station's berths stay shut
+
+  function launchTorpedo(sys, G, t, m, hooks) {
+    var S = Sim(), s = G.ship;
+    var dom = S ? S.dominantBody(s.pos, sys, t) : null;
+    var tp = {
+      torp: true, kind: m.id, guild: !m.grey, price: m.price,
+      id: 'torp' + (sys.canisterSeq = (sys.canisterSeq || 0) + 1) + ':' + Math.round(t),
+      pos: V.addScaled(s.pos, s.fwd, 0.06),
+      vel: V.addScaled(s.vel, s.fwd, TORP_SPEED),
+      from: V.clone(s.pos), born: t, dies: t + TORP_LIFE,
+      domId: dom ? dom.id : null
+    };
+    (sys.missiles = sys.missiles || []).push(tp);
+    if (hooks && hooks.say) hooks.say(m.name + ' away - arms at ' + Math.round(TORP_ARM * 1000) + ' m', 3);
+    return tp;
+  }
+
+  function gravityAt(sys, body, pos, t) {
+    var S = Sim();
+    if (!body || !(body.mu > 0) || !S) return { x: 0, y: 0, z: 0 };
+    var bp = S.bodyPosition(body, sys, t);
+    var d = V.sub(bp, pos), r2 = V.dot(d, d);
+    if (r2 < 1e-9) return { x: 0, y: 0, z: 0 };
+    return V.scale(d, body.mu / (r2 * Math.sqrt(r2)));
+  }
+
+  /* Does a point moving at va from a come within r of one moving at vb from
+   * b, at any moment in the next dt? Closest approach of the relative path. */
+  function passesWithin(a, va, b, vb, dt, r) {
+    var rel = V.sub(a, b), rv = V.sub(va, vb);
+    var vv = V.dot(rv, rv);
+    var s = vv > 1e-18 ? Math.max(0, Math.min(dt, -V.dot(rel, rv) / vv)) : 0;
+    return V.len(V.addScaled(rel, rv, s)) < r;
+  }
+
+  function nearestPort(sys, pos, t) {
+    var S = Sim(), best = null, bd = Infinity;
+    (sys.ports || []).forEach(function (p) {
+      var st = S.bodyState(p, sys, t);
+      var d = V.dist(st.pos, pos);
+      if (d < bd) { bd = d; best = { port: p, pos: st.pos, vel: st.vel, dist: d }; }
+    });
+    return best;
+  }
+
+  /* One frame of every torpedo in flight. Torpedoes ride in sys.missiles so
+   * the renderer draws them with the seekers; Combat.updateMissiles leaves
+   * them to this. */
+  function updateTorpedoes(sys, G, t, dt, hooks) {
+    var list = sys.missiles;
+    if (!list || !list.length || !(dt > 0)) return;
+    var keep = [];
+    for (var i = 0; i < list.length; i++) {
+      var tp = list[i];
+      if (!tp.torp) { keep.push(tp); continue; }
+      var body = tp.domId && sys.byId ? sys.byId[tp.domId] : null;
+      var p0 = tp.pos;
+      /* EVERYTHING IN THE TARGET'S FRAME. Out here a rock, a ship and the
+       * torpedo are all doing some thirteen kilometres a second round the
+       * star; what decides a hit is how the torpedo moves RELATIVE to each,
+       * over this frame, with both read at the same instant. */
+      var armed = t >= tp.born + TORP_ARM / TORP_SPEED;
+      var boom = null;
+      if (armed) {
+        /* Rock first: the nearest face down the relative path. */
+        var reach = TORP_SPEED * 2 * dt + 0.5;   // relative to the field it crawls
+        var rocks = rocksNear(G, sys, p0, t, reach);
+        var bestT = Infinity;
+        for (var r = 0; r < rocks.length; r++) {
+          var rk = rocks[r];
+          var d = V.scale(V.sub(tp.vel, rk.vel), dt), len = V.len(d);
+          if (len < 1e-12) continue;
+          var h = rayRock([rk], p0, V.scale(d, 1 / len), len + 0.001);
+          if (h && h.dist < bestT) { bestT = h.dist; boom = { at: h.at, rock: rk, normal: h.normal }; }
+        }
+        /* A ship or a station in the way sets it off just the same. */
+        if (!boom) {
+          var ships = Sim().shipsAll(sys, t);
+          for (var k = 0; k < ships.length && !boom; k++) {
+            if (passesWithin(p0, tp.vel, ships[k].pos, ships[k].vel, dt, TORP_SHIP_FUSE)) boom = { at: p0, ship: ships[k] };
+          }
+          if (!boom && !G.ship.docked && passesWithin(p0, tp.vel, G.ship.pos, G.ship.vel, dt, TORP_SHIP_FUSE)) {
+            boom = { at: p0, player: true };
+          }
+          var np = nearestPort(sys, p0, t);
+          if (!boom && np && passesWithin(p0, tp.vel, np.pos, np.vel, dt, TORP_STATION_FUSE)) boom = { at: p0, port: np.port };
+        }
+      }
+      tp.vel = V.add(tp.vel, V.scale(gravityAt(sys, body, p0, t), dt));
+      var p1 = V.add(p0, V.scale(tp.vel, dt));
+      if (!boom && t + dt >= tp.dies) boom = { at: p1, spent: true };
+      if (boom) { detonate(sys, G, t, tp, boom, hooks); continue; }
+      tp.pos = p1;
+      keep.push(tp);
+    }
+    sys.missiles = keep;
+  }
+
+  /* The bang, and everything it does. */
+  function detonate(sys, G, t, tp, boom, hooks) {
+    var Cb = global.Combat, Eco = global.Economy;
+    (G.explosions = G.explosions || []).push({
+      pos: V.clone(boom.at), size: 3.5,
+      at: (typeof performance !== 'undefined' ? performance.now() : 0)
+    });
+    if (hooks && hooks.sound) hooks.sound('explosion');
+    var value = 0, tonnes = 0, chunks = 0, notes = [];
+
+    if (boom.rock) {
+      var rock = boom.rock;
+      var n = 6 + Math.floor(hash01(tp.id + ':n') * 9);           // 6 .. 14
+      G.cutCount = G.cutCount || {};
+      for (var c = 0; c < n; c++) {
+        var k = G.cutCount[rock.id] || 0;
+        G.cutCount[rock.id] = k + 1;
+        var ch = chunkOf(G, rock, k);
+        /* Thrown, not peeled: a hemisphere off the blast face, 10-40 m/s. */
+        var tag = tp.id + ':c' + c;
+        var off = V.norm({ x: hash01(tag + 'x') - 0.5, y: hash01(tag + 'y') - 0.5, z: hash01(tag + 'z') - 0.5 });
+        if (V.dot(off, boom.normal) < 0) off = V.scale(off, -1);
+        var nrm = V.norm(V.add(boom.normal, off));
+        var shard = spawnChunk(sys, { rock: rock, at: boom.at, normal: nrm }, ch, t + c * 1e-3);
+        shard.vel = V.addScaled(rock.vel, nrm, 0.010 + 0.030 * hash01(tag + 'v'));
+        if (ch.cid) {
+          G.extracted = G.extracted || {};
+          var ex = G.extracted[rock.key] = G.extracted[rock.key] || {};
+          ex[ch.cid] = (ex[ch.cid] || 0) + ch.tonnes;
+          tonnes += ch.tonnes;
+          value += ch.tonnes * ((Eco && Eco.BY_ID[ch.cid] && Eco.BY_ID[ch.cid].base) || 0);
+        }
+        chunks++;
+      }
+      if (rock.size < TORP_SHATTER) {
+        G.shattered = G.shattered || {};
+        G.shattered[rock.id] = t;
+        notes.push('the rock is gone');
+      }
+    }
+
+    /* The blast reaches whatever is near, the pilot who fired it included. */
+    if (Cb && Cb.blastAt) Cb.blastAt(sys, G, t, boom.at, TORP_BLAST, TORP_BLAST_DMG, hooks);
+
+    /* A STATION is sabotage: its berths shut for weeks, and its owners
+     * know exactly what came through their window. */
+    var np = nearestPort(sys, boom.at, t);
+    if (np && np.dist < TORP_STATION_FUSE * 1.5) {
+      sabotage(sys, G, t, np.port, hooks);
+      notes.push(np.port.name + ' damaged');
+    }
+
+    /* The Guild's log: a serial going off clear of every station. Half back
+     * if it did not pay for itself - which is what safing one means. */
+    if (tp.guild && (!np || np.dist > TORP_CLEAR_OF_PORT)) {
+      if (value < tp.price) {
+        var back = Math.round(tp.price / 2);
+        G.torpRefund = (G.torpRefund || 0) + back;
+        notes.push(back + ' cr refundable at any Guild desk');
+      } else {
+        notes.push('no refund - it paid for itself');
+      }
+    }
+    G.lastTorpedo = { chunks: chunks, tonnes: tonnes, value: Math.round(value), at: t };
+    if (hooks && hooks.say) {
+      var head = boom.rock ? 'Torpedo on rock - ' + chunks + ' chunks thrown, ' + tonnes.toFixed(1) + ' t worth having'
+               : boom.port ? 'Torpedo on ' + boom.port.name
+               : boom.spent ? 'Torpedo spent - self-destructed'
+               : 'Torpedo detonated';
+      hooks.say(head + (notes.length ? ' - ' + notes.join(', ') : ''), 7);
+    }
+  }
+
+  /* Station damage, closed form: shut until a date that each further hit
+   * pushes out, owned by whoever did it. */
+  function sabotage(sys, G, t, port, hooks) {
+    G.sabotage = G.sabotage || {};
+    var key = ((G.here && G.here.id) || 'sys') + ':' + port.id;
+    var prev = G.sabotage[key];
+    var from = prev && prev.until > t ? prev.until : t;
+    G.sabotage[key] = { until: Math.min(from + SABOTAGE_DAYS * DAY, t + 90 * DAY), port: port.id,
+                        name: port.name, faction: port.faction || 'civil', t: t };
+    var Cb = global.Combat;
+    if (Cb && Cb.reportSabotage) Cb.reportSabotage(sys, G, t, port, hooks);
+  }
+
+  function sabotaged(G, port, t) {
+    if (!G || !G.sabotage || !port) return null;
+    var s = G.sabotage[((G.here && G.here.id) || 'sys') + ':' + port.id];
+    return s && t < s.until ? s : null;
+  }
+
+  /* The Guild desk pays out what the log owes. */
+  function claimRefund(G) {
+    var owed = Math.round(G.torpRefund || 0);
+    if (!owed) return 0;
+    G.ship.credits += owed;
+    G.torpRefund = 0;
+    return owed;
+  }
+
+  /* Shattered rocks stay gone: filtered out of what the laser and the
+   * torpedo can find. (The renderer filters the same set.) */
+  function isShattered(G, id) { return !!(G && G.shattered && G.shattered[id]); }
+
   var Mining = {
     CUT_PER_CHUNK: CUT_PER_CHUNK, CHUNK_LIFE: CHUNK_LIFE, SKIM_AREA: SKIM_AREA, SKIM_MIN_GRADE: SKIM_MIN_GRADE,
+    TORP_SPEED: TORP_SPEED, TORP_LIFE: TORP_LIFE, TORP_ARM: TORP_ARM, TORP_BLAST: TORP_BLAST,
+    TORP_SHATTER: TORP_SHATTER, SABOTAGE_DAYS: SABOTAGE_DAYS, TORP_CLEAR_OF_PORT: TORP_CLEAR_OF_PORT,
     rocksNear: rocksNear, rayRock: rayRock, chunkOf: chunkOf, cut: cut, spawnChunk: spawnChunk,
-    skimStep: skimStep, isGiant: isGiant
+    skimStep: skimStep, isGiant: isGiant,
+    launchTorpedo: launchTorpedo, updateTorpedoes: updateTorpedoes, detonate: detonate,
+    sabotage: sabotage, sabotaged: sabotaged, claimRefund: claimRefund, isShattered: isShattered,
+    nearestPort: nearestPort
   };
   global.Mining = Mining;
   if (typeof module !== 'undefined' && module.exports) module.exports = Mining;
