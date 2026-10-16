@@ -248,7 +248,7 @@
     for (var f = 0; f < count; f++) {
       factions.push({
         id: 'gf' + f,
-        name: Gen.makeName(fr) + ' ' + fr.pick(Gen.FACTION_STEM),
+        name: Gen.makeFactionName(fr) + ' ' + fr.pick(Gen.FACTION_STEM),
         color: Gen.FACTION_COLORS[f % Gen.FACTION_COLORS.length],
         capitalId: capitals[f].id,
         outlaw: false,
@@ -458,7 +458,10 @@
     seedPocket(remoteThird, pirateSeeds, PIRATE_HOLDS);
     var pirate = {
       id: 'outlaw',
-      name: Gen.makeName(pr) + ' ' + pr.pick(Gen.PIRATE_STEM),
+      /* Two-syllable name like the empires (Astra, 2026-10-14); the title
+       * keeps its length, because "Syndicate" says what kind of power this
+       * is. makeFactionName spends the same draws, so nothing after moves. */
+      name: Gen.makeFactionName(pr) + ' ' + pr.pick(Gen.PIRATE_STEM),
       color: '#ff7a6b',
       outlaw: true,
       /* Pirates ban radioactive waste in their own space and dump it in
@@ -504,7 +507,7 @@
     for (i = 0; i < minorSeeds.length; i++) {
       var mf = {
         id: 'gm' + i,
-        name: Gen.makeName(pr) + ' ' + pr.pick(Gen.MINOR_STEM),
+        name: Gen.makeFactionName(pr) + ' ' + pr.pick(Gen.MINOR_STEM),
         color: Gen.FACTION_COLORS[(capitals.length + i) % Gen.FACTION_COLORS.length],
         capitalId: minorSeeds[i].id,
         outlaw: false,

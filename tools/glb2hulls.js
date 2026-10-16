@@ -390,7 +390,26 @@ var PORT_MULTI = {
  * line that carries them there. A deliberately separate structure in the
  * design — `checkConnectivity` allows it as a second component — so it is
  * its own bucket here rather than part of the shell. */
-var PORT_INTERIOR_RE = /^hall|^transfer(Main|Lift)|Conveyor|^liguide|^liftGuide|^portInterior/i;
+/* THE CAR IS NOT THE SHAFT, and conflating them made every cargo-elevator
+ * pad in the game invisible (Astra, 2026-10-13: "the cargo elevator pads are
+ * all invisible").
+ *
+ * `^transfer(Main|Lift)` was written for the transfer LINE — and for a
+ * cradle that is exactly right: `transferMain` is a bed, fifty-two rollers,
+ * rails and a hundred and fifty caution stripes, all of it inside the
+ * pressurised hull and none of it visible from outside. But at the eight pad
+ * sites the only `transferLift*` geometry is `transferLiftCarPad`,
+ * `transferLiftCarHangar` and `transferLiftCarHangarSkirt` — the CAR, the
+ * platform a hull parks on, which rides up to the open sky and is the single
+ * most important thing to be able to see when you are standing on it. The
+ * pattern was not hiding an interior; it was hiding the floor.
+ *
+ * So the car is spared by name and everything else under `transferLift`
+ * stays interior — which matters, because `transferLiftCrewShaftWall*` is a
+ * crew access shaft and genuinely belongs inside. Checked across all 96
+ * models before narrowing it: `transferLift*` resolves to the car in eight
+ * of them and to that crew shaft in two, and to nothing else anywhere. */
+var PORT_INTERIOR_RE = /^hall|^transferMain|^transferLift(?!Car)|Conveyor|^liguide|^liftGuide|^portInterior/i;
 
 var PORT_SPIN_RE = /stationSpin/i;
 

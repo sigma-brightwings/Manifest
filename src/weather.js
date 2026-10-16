@@ -37,7 +37,14 @@
     STORM_LO: 0.55,          // a cell starts here ...
     STORM_HI: 0.70,          // ... and is fully one here
     W1: 0.9000, W2: 0.3703,  // the two circuits the field travels
-    DRIFT1: 0.42, DRIFT2: 0.28
+    DRIFT1: 0.42, DRIFT2: 0.28,
+    /* ---- lightning, scheduled rather than ticking ----------------------
+     * See `stormClock` below for the whole argument. These four are the
+     * shape of a flash; the clock is the shape of the storm. */
+    FLASH_BUCKET: 0.9,       // s — one slot of the schedule
+    FLASH_DUTY: 0.52,        // slot threshold at the peak of an active spell
+    FLASH_QUIET: 0.94,       // ... and in a lull. The gap is the clustering.
+    FLASH_JITTER: 0.85       // of a slot, how far a stroke may slide off grid
   };
 
   /* ---- the same noise, in the other language ---------------------------
@@ -280,10 +287,105 @@
               (port.surface || port.underground));
   }
 
+  /* ---- the storm clock ---------------------------------------------------
+   *
+   * Astra, 2026-10-14: lightning should flash "at a more random-looking
+   * pace", on "a long enough pattern that isn't gonna be made out to repeat,
+   * but one which eventually does repeat", and it should "look more like a
+   * real storm".
+   *
+   * WHAT WAS WRONG WAS THE METRONOME. Time was cut into fixed 0.9 s slots
+   * and every stroke began at the top of its slot, so however many cells
+   * fired and however hard, the sky kept a perfect 0.9 s beat. That reads as
+   * a strobe with a storm texture on it. Three things fix it, and all three
+   * are things real lightning does:
+   *
+   *   1. STROKES SLIDE OFF THE GRID. A per-cell, per-slot offset moves the
+   *      leader anywhere in its slot, so the beat disappears. A stroke that
+   *      starts late has to be allowed to finish after its slot ends, which
+   *      is why the shader evaluates the PREVIOUS slot as well as the
+   *      current one and takes whichever is brighter — without that, every
+   *      late stroke is cut off mid-flash at the boundary, which is the
+   *      metronome again wearing a different hat.
+   *
+   *   2. STORMS BURST AND THEN GO QUIET. A cell's firing threshold is
+   *      modulated by four slow rhythms, so it has active spells and lulls
+   *      instead of a flat rate. Real inter-flash intervals are roughly
+   *      exponential — lots of short gaps, occasional long silences — and
+   *      clustering a uniform draw is the cheap way to get that shape
+   *      without computing a Poisson process per cell per frame.
+   *
+   *   3. A FLASH IS SEVERAL STROKES. A leader, a return, and sometimes a
+   *      third, at hashed gaps rather than a fixed 0.22. The flicker is most
+   *      of what the eye reads as lightning rather than as a lamp.
+   *
+   * AND IT REPEATS, EXACTLY, ON PURPOSE. The four rhythms have periods of
+   * 419, 557, 683 and 811 slots — co-prime, so they only realign after
+   * their product. That is 1.293e11 slots, and at 0.9 s a slot the whole
+   * sky repeats after about 3,700 years of sim time. Astra asked for a
+   * pattern that eventually repeats and cannot be caught repeating; this is
+   * that, with the number written down instead of hoped for.
+   *
+   * The periods are minutes, not seconds — 6 to 12 of them — because that
+   * is how long a cell actually takes to wax and wane. Picked as primes in
+   * that band rather than for their size.
+   *
+   * Nothing here holds state, like everything else in this file: the sky at
+   * time t is a function of t, so flying away and coming back finds the same
+   * storm mid-flash rather than a fresh one. */
+  var FLASH_RHYTHMS = [419, 557, 683, 811];     // slots; co-prime on purpose
+  var FLASH_CYCLE = FLASH_RHYTHMS.reduce(function (a, b) { return a * b; }, 1);
+
+  /* Three small numbers from one slot index.
+   *
+   * MATH.IMUL, NOT A PRODUCT IN A DOUBLE. The previous version multiplied
+   * the slot index by 374761393 and claimed to be exact "for any bucket a
+   * career will ever reach". It was not: 0.9 s slots reach 2^53 / 374761393
+   * at about eight months of sim time, after which the salt quietly starts
+   * losing low bits and the storms go subtly periodic — the exact failure
+   * this function exists to prevent, hiding inside the function. imul keeps
+   * every step in int32, so it is exact for every slot in the cycle above
+   * no matter how long anybody flies. */
+  function salt32(n, k) {
+    /* n can exceed 2^31, so it is split rather than coerced. Both halves
+     * are integers below 65536 and exact. */
+    var lo = n % 65536, hi = Math.floor(n / 65536) % 65536;
+    var h = Math.imul(lo ^ Math.imul(k, 0x9e3779b1), 0x85ebca6b);
+    h ^= Math.imul(hi + k, 0xc2b2ae35);
+    h ^= h >>> 15; h = Math.imul(h, 0x2545f491); h ^= h >>> 13;
+    return ((h >>> 0) % 1000003) / 1000003;
+  }
+
+  function saltOf(n) { return [salt32(n, 1), salt32(n, 2), salt32(n, 3)]; }
+
+  /* Everything the picture needs to draw this instant's lightning. gl.js
+   * hands the lot straight to uniforms; the suite checks it without a GPU. */
+  function stormClock(t) {
+    var exact = t / K.FLASH_BUCKET;
+    var slot = Math.floor(exact);
+    var n = ((slot % FLASH_CYCLE) + FLASH_CYCLE) % FLASH_CYCLE;
+    var back = ((n - 1) % FLASH_CYCLE + FLASH_CYCLE) % FLASH_CYCLE;
+    var slow = [];
+    for (var i = 0; i < FLASH_RHYTHMS.length; i++) {
+      /* Off the REDUCED index, so the rhythms wrap with the cycle and the
+       * repeat is exact rather than approximate. */
+      slow.push(TAU * (n % FLASH_RHYTHMS[i]) / FLASH_RHYTHMS[i]);
+    }
+    return {
+      slot: slot, n: n,
+      salt: saltOf(n),
+      saltPrev: saltOf(back),
+      phase: exact - slot,          // 0..1, and exact: it shapes the stroke
+      slow: slow
+    };
+  }
+
   var Weather = {
     K: K, fbm: fbm, hashSeed: hashSeed, sample: sample, lookup: lookup,
     report: report, describe: describe, hasWeather: hasWeather,
-    aloft: aloft, DECK_LO: DECK_LO, DECK_HI: DECK_HI
+    aloft: aloft, DECK_LO: DECK_LO, DECK_HI: DECK_HI,
+    stormClock: stormClock, saltOf: saltOf,
+    FLASH_RHYTHMS: FLASH_RHYTHMS, FLASH_CYCLE: FLASH_CYCLE
   };
 
   global.Weather = Weather;

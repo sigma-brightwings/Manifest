@@ -67,7 +67,14 @@ function carrySavesAcrossTheRename() {
   }
 }
 
-carrySavesAcrossTheRename();
+/* PROBES NEVER TOUCH A REAL CAREER. tools/electron-probe.cjs sets this to a
+ * scratch folder, so a probe's autosave lands there and not in %APPDATA%.
+ * Before the migration on purpose: a probe has no saves to carry. */
+if (process.env.MANIFEST_PROBE_USERDATA) {
+  app.setPath('userData', process.env.MANIFEST_PROBE_USERDATA);
+} else {
+  carrySavesAcrossTheRename();
+}
 
 /* The game's own root: index.html and src/ sit one level above this file,
  * both in development and inside the packaged app, so one expression covers
@@ -174,9 +181,51 @@ function createWindow() {
     if (!url.startsWith('game://')) event.preventDefault();
   });
 
+  /* WHEN THE WINDOW DIES, SAY WHY. 2026-10-15: auto-dock at Ashford
+   * Undercroft, a solid grey screen, and the app closed — with nothing
+   * left behind but a burst of LiveKernelEvent 141 (GPU timeout) in the
+   * Windows event log. A grey window that vanishes is Chromium losing its
+   * GPU process, and Electron exits once that has happened too often;
+   * none of it reached the game, so the game could not report it. These
+   * lines put the reason in a file you can read afterwards. */
+  watchForCrashes(win);
+
   win.loadURL('game://psg/index.html#' + encodeURIComponent(START_SEED));
   return win;
 }
+
+function crashLog(line) {
+  try {
+    fs.appendFileSync(path.join(app.getPath('userData'), 'crash.log'),
+                      new Date().toISOString() + '  ' + line + '\n');
+  } catch (e) { /* a log that cannot be written must never take the game with it */ }
+}
+
+function watchForCrashes(win) {
+  win.webContents.on('render-process-gone', (event, details) => {
+    crashLog('renderer gone: ' + details.reason + ' (exit ' + details.exitCode + ')');
+  });
+  win.webContents.on('unresponsive', () => crashLog('window unresponsive'));
+  win.webContents.on('responsive', () => crashLog('window responsive again'));
+  /* The game's own console errors, which otherwise die with the window. */
+  win.webContents.on('console-message', (event, level, message, line, sourceId) => {
+    /* Newer Electron puts these on the event (level as 'error'); older
+     * builds pass them positionally (level as 3). Read either. */
+    const lv = event && event.level !== undefined ? event.level : level;
+    if (lv === 'error' || lv === 3) {
+      const msg = event && event.message !== undefined ? event.message : message;
+      const src = event && event.sourceId !== undefined ? event.sourceId : sourceId;
+      const ln = event && event.lineNumber !== undefined ? event.lineNumber : line;
+      crashLog('console error: ' + msg + '  @ ' + src + ':' + ln);
+    }
+  });
+}
+
+/* The GPU process is not the window's, so it is watched from the app. */
+app.on('child-process-gone', (event, details) => {
+  crashLog(details.type + ' process gone: ' + details.reason +
+           ' (exit ' + details.exitCode + ')' + (details.name ? ' ' + details.name : ''));
+});
 
 app.whenReady().then(() => {
   serveGameScheme();

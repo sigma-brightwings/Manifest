@@ -6420,7 +6420,11 @@ console.log('--- options ---');
     return JSON.stringify([G.soundVolume, G.soundMuted, G.showOrbits,
                            G.showPrediction, G.showGrid, G.showTraffic,
                            G.cockpitChrome, G.assist, G.vector, G.flightMode,
-                           G.mouseAim, G.aimSens, G.showHelp, G.renderScale]);
+                           G.mouseAim, G.aimSens, G.showHelp, G.renderScale,
+                           /* And G.glassGlow, the same way again (2026-10-15):
+                            * this test flagged the row as row 10 before the
+                            * fingerprint knew it existed. */
+                           G.glassGlow]);
   }
   function openOptions() {
     if (G.menu && G.menu.page === 'options') return;

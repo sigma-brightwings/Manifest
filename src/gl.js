@@ -95,6 +95,7 @@
     'uniform vec3 uCenterRel;',   // eye -> body centre, km, double-subtracted in JS
     'uniform vec3 uHoleRel;',     // eye -> a shaft mouth on this body, km
     'uniform float uHoleR;',      // its radius, km; 0 disables the cut
+    'uniform float uHaloPush;',   // km behind the centre the halo sits; a ring's outer radius
     'uniform vec2 uScreenPx;',    // the camera's principal point (cx, cy)
     'uniform float uFlen;',
     'uniform float uPad;',        // quad half-size measured in body radii (>1)
@@ -160,6 +161,11 @@
      * The phase comes separately for the same reason — it is the shape of
      * the stroke and has to be exact. */
     'uniform vec3 uStormSalt;',
+    /* The slot before this one, so a stroke that started late in it can
+     * finish rather than being cut off at the boundary. */
+    'uniform vec3 uStormSaltPrev;',
+    /* Four slow co-prime rhythms: the storm's own waxing and waning. */
+    'uniform vec4 uStormSlow;',
     'uniform float uStormPhase;',
     'uniform float uFlashGain;',
     /* Depth, so a ship can pass behind a planet. The impostor has no
@@ -267,8 +273,14 @@
     '    float a = fall * uAtmo * (0.16 + 0.84 * lam);',
     /* The halo sits at the body's own distance rather than at the limb it
      * surrounds — near enough, and it keeps the glow from being punched
-     * through by anything at the same range. */
-    '    gl_FragDepth = encodeDepth(dot(oc, uFwd));',
+     * through by anything at the same range.
+     *
+     * A RINGED world pushes it back by the ring's outer radius. The halo
+     * reaches 1.22 radii and the ring starts at about 1.1, so a halo written
+     * at the centre's depth hid the far side of the ring just past the limb
+     * — a dark band between the disc and the ring behind it. Behind the
+     * back of the ring, nothing of the ring can fail against it. */
+    '    gl_FragDepth = encodeDepth(dot(oc, uFwd) + uHaloPush);',
     '    frag = vec4(uAtmoColor * a, a);',
     '    return;',
     '  }',
@@ -523,21 +535,57 @@
      * Added before the multiply it survived at 5% on the night side,
      * which is the one side of a planet where lightning is the entire
      * point, and the storms were invisible. */
+    /* THE PACE IS THE WHOLE POINT. Every stroke used to begin at the top of
+     * its 0.9 s slot, so the sky kept a perfect beat no matter how the cells
+     * were scattered — a strobe with a storm texture on it. Weather.js's
+     * `stormClock` carries the argument in full; what the shader does with
+     * it is three things: slide each stroke off the grid by a hashed
+     * offset, evaluate the PREVIOUS slot as well so a late stroke is not
+     * guillotined at the boundary, and modulate each cell's firing
+     * threshold with four slow co-prime rhythms so storms burst and then go
+     * quiet instead of ticking over at a flat rate. */
     '    if (storm > 0.03 && uFlashGain > 0.0) {',
     /* The patch one stroke lights: about a twelfth of the world across,
      * which is enormous for a thunderstorm and the smallest thing worth
      * drawing from orbit. A physically-sized cell is a sub-pixel flash. */
     '      vec3 cid = floor(sc * 2.0);',
-    '      float r = hash13(cid + uStormSalt * 37.0);',
-    /* About a fifth of the cells fire in any given bucket, and a second
-     * hash decides how hard — a sky where every flash is the same flash
-     * reads as a strobe rather than as a storm. */
-    '      float fire = step(0.52, r);',
-    '      float hard = 0.45 + 0.55 * hash13(cid * 1.7 + uStormSalt.zxy * 53.0);',
-    /* Two strokes: the leader, and the return a fifth of a bucket later.
-     * That second one is most of why it reads as lightning. */
-    '      float ph = uStormPhase;',
-    '      float env = exp(-ph * 6.5) + 0.7 * exp(-abs(ph - 0.22) * 18.0);',
+    /* A cell's own four phases, so neighbouring cells are busy and quiet at
+     * different times. Without these the whole planet would breathe
+     * together, which is a worse artefact than the beat it replaces. */
+    '      vec4 cph = vec4(hash13(cid * 1.3), hash13(cid * 2.1 + 7.0),',
+    '                      hash13(cid * 3.7 + 13.0), hash13(cid * 5.3 + 19.0)) * 6.2831853;',
+    '      float act = 0.25 * (sin(uStormSlow.x + cph.x) + sin(uStormSlow.y + cph.y)',
+    '                        + sin(uStormSlow.z + cph.z) + sin(uStormSlow.w + cph.w));',
+    '      act = 0.5 + 0.5 * act;',
+    /* In a lull almost nothing fires; at the peak of a spell about half the
+     * cells do. The distance between those two numbers is the clustering,
+     * and clustering a uniform draw is how the gaps come out roughly
+     * exponential without a Poisson process per cell per frame. */
+    '      float thr = mix(@FLASH_QUIET@, @FLASH_DUTY@, act);',
+    '      float lit = 0.0;',
+    /* Two slots: this one and the one before. A stroke that began late in
+     * the previous slot is still burning in this one. */
+    '      for (int k = 0; k < 2; k++) {',
+    '        vec3 sl = (k == 0) ? uStormSalt : uStormSaltPrev;',
+    '        float ph = uStormPhase + float(k);',
+    '        float r = hash13(cid + sl * 37.0);',
+    '        float fire = step(thr, r);',
+    /* Off the grid. This one line is most of the fix. */
+    '        float tt = ph - hash13(cid * 3.1 + sl.yzx * 29.0) * @FLASH_JITTER@;',
+    '        float hard = 0.45 + 0.55 * hash13(cid * 1.7 + sl.zxy * 53.0);',
+    /* A leader, a return, and sometimes a third, at hashed gaps rather than
+     * a fixed fifth of a slot. The flicker is most of what the eye reads as
+     * lightning rather than as a lamp being switched. */
+    '        float env = 0.0;',
+    '        if (tt > 0.0) {',
+    '          float g1 = 0.04 + 0.16 * hash13(cid * 4.3 + sl * 11.0);',
+    '          float g2 = g1 + 0.04 + 0.18 * hash13(cid * 6.1 + sl * 17.0);',
+    '          env = exp(-tt * 7.0) + 0.75 * exp(-abs(tt - g1) * 24.0);',
+    '          env += step(0.45, hash13(cid * 7.9 + sl * 23.0))',
+    '                 * 0.55 * exp(-abs(tt - g2) * 28.0);',
+    '        }',
+    '        lit = max(lit, fire * hard * env);',
+    '      }',
     /* SOFTEN THE CELL, or the cell is what you see. A stroke picked by
      * hashing a cube of the lookup lights that cube — corners, faces and
      * all — and from orbit the sky flashed in rectangles, which reads as a
@@ -546,7 +594,7 @@
      * of light with no edge to notice. */
     '      vec3 fp = fract(sc * 2.0);',
     '      vec3 b3 = smoothstep(0.0, 0.50, fp) * (1.0 - smoothstep(0.50, 1.0, fp));',
-    '      glow += fire * hard * env * storm * (b3.x * b3.y * b3.z) * 7.0 * uFlashGain;',
+    '      glow += lit * storm * (b3.x * b3.y * b3.z) * 7.0 * uFlashGain;',
     '    }',
     /* AT TIME WARP THE FLASHES BECOME A GLOW. The stroke is a tenth of a
      * second and the frames are seconds apart, so sampling it would give
@@ -597,7 +645,9 @@
     var D = { CLOUD_SCALE: 2.4, SEED_SCALE: 1.7, THRESH_HI: 0.655,
               THRESH_LO: 0.405, EDGE: 0.055, SHEAR: 0.21, STORM_SCALE: 2.5,
               STORM_LO: 0.55, STORM_HI: 0.70, W1: 0.9, W2: 0.3703,
-              DRIFT1: 0.42, DRIFT2: 0.28 };
+              DRIFT1: 0.42, DRIFT2: 0.28,
+              FLASH_BUCKET: 0.9, FLASH_DUTY: 0.52, FLASH_QUIET: 0.94,
+              FLASH_JITTER: 0.85 };
     return src.replace(/@([A-Z0-9_]+)@/g, function (m, key) {
       var v = (W[key] !== undefined) ? W[key] : D[key];
       if (v === undefined) throw new Error('gl.js: no weather constant ' + key);
@@ -1174,6 +1224,127 @@
     '}'
   ].join('\n');
 
+  /* ---- RINGS: a giant's ring, as one flat quad in its equator ------------
+   *
+   * One quad per ring, 2*outer on a side, laid in the planet's equatorial
+   * plane. The shader decides what is actually there: the radius from the
+   * planet's centre, then the ring's optical depth at that radius by the
+   * SAME function rings.js uses (Rings.ringDensity) — same profile, same
+   * three octaves of ringlets, same gaps, same integer hash — so the ice a
+   * scan or a laser finds is the ice on the screen.
+   *
+   * Three pieces of light, each one cheap and each one a thing a real ring
+   * does:
+   *   - the lit face and the unlit face differ. From the sunward side you
+   *     see reflected light; from the other side only what scatters
+   *     through, which is dim and brightest where the ring is thin;
+   *   - the planet's shadow falls across the ring, tested per fragment as
+   *     a ray from the ring point toward the sun against the planet's
+   *     sphere — in planet-centred coordinates, so the numbers stay small;
+   *   - the slant of the view thickens it: optical depth tau seen at angle
+   *     mu is tau / mu, which is why a ring nearly edge-on reads as a thin
+   *     hard line rather than fading away.
+   *
+   * Drawn AFTER the meshes and with depth writes off: it is translucent,
+   * so it blends over whatever is behind it and is hidden by whatever is
+   * in front. One quad, a few dozen ALU per pixel — the RX 540 does not
+   * notice it, and a ring off screen or under a pixel is never queued. */
+  var VERT_RING = [
+    '#version 300 es',
+    'in vec2 aCorner;',
+    'uniform vec3 uCenterRel, uE1, uE2;',
+    'uniform float uOuter;',
+    'uniform vec3 uRight, uUp, uFwd;',
+    'uniform float uFlen;',
+    'uniform vec2 uCenterPx, uViewportPx;',
+    'uniform float uNear;',
+    'out vec2 vLocal; out vec3 vRel;',
+    'void main() {',
+    '  vLocal = aCorner;',
+    '  vec3 rel = uCenterRel + (uE1 * aCorner.x + uE2 * aCorner.y) * uOuter;',
+    '  vRel = rel;',
+    '  float depth = dot(rel, uFwd);',
+    '  vec2 c2 = uCenterPx * 2.0 / uViewportPx;',
+    '  vec2 axis = vec2(dot(rel, uRight), dot(rel, uUp));',
+    '  vec2 span = axis * (2.0 * uFlen) / uViewportPx;',
+    '  vec2 clipXY = vec2((c2.x - 1.0) * depth + span.x,',
+    '                     (1.0 - c2.y) * depth + span.y);',
+    '  gl_Position = vec4(clipXY, depth - 2.0 * uNear, depth);',
+    '}'
+  ].join('\n');
+
+  var FRAG_RING = [
+    '#version 300 es',
+    'precision highp float;',
+    'precision highp int;',
+    'in vec2 vLocal; in vec3 vRel;',
+    'uniform vec3 uE1, uE2, uN, uSunDir, uFwd, uColor;',
+    'uniform float uOuter, uInner, uOpacity, uPlanetR;',
+    'uniform int uSeed, uGapN;',
+    'uniform vec2 uGaps[8];',
+    'uniform float uNear, uInvLogRange;',
+    /* Where the sheet hands over to the rock (km from the eye): fully gone
+     * inside x, fully there beyond y. */
+    'uniform vec2 uFade;',
+    'out vec4 frag;',
+    /* Bit-identical to rings.js mix32/vhash — see the note there. */
+    'uint mix32(uint h) {',
+    '  h = (h ^ (h >> 16u)) * 0x7feb352du;',
+    '  h = (h ^ (h >> 15u)) * 0x846ca68bu;',
+    '  return h ^ (h >> 16u);',
+    '}',
+    'float vhash(int i, int s) {',
+    '  return float(mix32(uint(i) ^ (uint(s) * 0x27d4eb2du))) / 4294967296.0;',
+    '}',
+    'float vnoise(float x, int s) {',
+    '  float fi = floor(x); float f = x - fi; int i = int(fi);',
+    '  float u = f * f * (3.0 - 2.0 * f);',
+    '  return mix(vhash(i, s), vhash(i + 1, s), u);',
+    '}',
+    'void main() {',
+    '  float r = length(vLocal) * uOuter;',
+    '  if (r <= uInner || r >= uOuter) discard;',
+    '  float x = (r - uInner) / (uOuter - uInner);',
+    '  float d = smoothstep(0.0, 0.035, x) * (1.0 - smoothstep(0.955, 1.0, x));',
+    '  float n = 0.52 + 0.30 * vnoise(x * 23.0, uSeed) + 0.14 * vnoise(x * 97.0, uSeed + 101)',
+    '          + 0.10 * vnoise(x * 389.0, uSeed + 211);',
+    '  d *= uOpacity * min(1.15, n);',
+    '  for (int g = 0; g < 8; g++) {',
+    '    if (g >= uGapN) break;',
+    '    d *= smoothstep(uGaps[g].y * 0.55, uGaps[g].y, abs(x - uGaps[g].x));',
+    '  }',
+    '  d = clamp(d, 0.0, 0.999);',
+    '  if (d < 0.003) discard;',
+    '  float depth = dot(vRel, uFwd);',
+    '  gl_FragDepth = clamp(log2(max(uNear, depth) / uNear) * uInvLogRange, 0.0, 1.0);',
+    /* Seen through at a slant, tau / mu. */
+    '  vec3 view = normalize(vRel);',
+    '  float mu = max(0.03, abs(dot(view, uN)));',
+    '  float a = 1.0 - pow(1.0 - d, 1.0 / mu);',
+    /* UP CLOSE THE SHEET IS THE ROCK. From inside a ring every fragment
+     * is seen nearly edge-on, so tau / mu drives the sheet opaque and it
+     * paints straight over the chunks it stands for — measured, 160 rocks
+     * queued and none of them visible. Within the radius main.js draws
+     * real chunks in, the sheet steps aside for them. */
+    '  a *= smoothstep(uFade.x, uFade.y, length(vRel));',
+    '  if (a < 0.002) discard;',
+    /* Which face you are looking at. */
+    '  float sunN = dot(uSunDir, uN);',
+    '  float elev = abs(sunN);',
+    '  bool litFace = sunN * dot(-view, uN) > 0.0;',
+    '  float lum = litFace ? (0.30 + 0.75 * sqrt(elev))',
+    '                      : (0.06 + 0.55 * sqrt(elev) * (1.0 - d));',
+    /* The planet\'s shadow, in planet-centred km. */
+    '  vec3 P = (uE1 * vLocal.x + uE2 * vLocal.y) * uOuter;',
+    '  float tt = dot(-P, uSunDir);',
+    '  if (tt > 0.0) {',
+    '    float miss = length(-P - uSunDir * tt);',
+    '    lum *= mix(0.04, 1.0, smoothstep(uPlanetR * 0.985, uPlanetR * 1.02, miss));',
+    '  }',
+    '  frag = vec4(uColor * lum, a);',
+    '}'
+  ].join('\n');
+
   /* ---- plumbing --------------------------------------------------------- */
 
   function compile(gl, type, src, label) {
@@ -1234,6 +1405,7 @@
   var meshProg = null, meshUni = null, meshQueue = [], meshSeq = 0;
   var panelProg = null, panelUni = null, panelVao = null, panelBuf = null;
   var panelQueue = [], panelSlots = [];
+  var ringProg = null, ringUni = null, ringVao = null, ringQueue = [];
 
   /* The logarithmic depth range. NEAR is ten centimetres, because the
    * cockpit view sits about a metre from its own console; FAR is far past
@@ -1303,12 +1475,13 @@
                               'uIsStar', 'uAtmo', 'uAtmoColor', 'uCloud',
                               'uSeed', 'uSpinAxis', 'uSpinPhase', 'uDeckPhase',
                               'uBandPhase', 'uShearPhase',
-                              'uStormSalt', 'uStormPhase', 'uFlashGain',
+                              'uStormSalt', 'uStormSaltPrev', 'uStormSlow',
+                              'uStormPhase', 'uFlashGain',
                               'uWeather', 'uCenterDepth', 'uWorldRadius',
                               'uNear', 'uInvLogRange', 'uBanded',
                               'uOcean', 'uSeaColor', 'uIce',
                               'uCenterRel', 'uScreenPx', 'uFlen',
-                              'uHoleRel', 'uHoleR']);
+                              'uHoleRel', 'uHoleR', 'uHaloPush']);
 
     quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
@@ -1373,11 +1546,34 @@
       post = null;
     }
 
+    /* The ring pass. Like panels, allowed to fail on its own: a driver that
+     * will not build it costs you rings, not the world. */
+    try {
+      ringProg = link(gl, VERT_RING, FRAG_RING, 'ring');
+      ringUni = uniforms(gl, ringProg, ['uCenterRel', 'uE1', 'uE2', 'uN', 'uOuter',
+                                        'uInner', 'uOpacity', 'uPlanetR', 'uSeed',
+                                        'uGapN', 'uGaps', 'uColor', 'uSunDir',
+                                        'uRight', 'uUp', 'uFwd', 'uFlen',
+                                        'uCenterPx', 'uViewportPx',
+                                        'uNear', 'uInvLogRange', 'uFade']);
+      ringVao = gl.createVertexArray();
+      gl.bindVertexArray(ringVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+      var rloc = gl.getAttribLocation(ringProg, 'aCorner');
+      gl.enableVertexAttribArray(rloc);
+      gl.vertexAttribPointer(rloc, 2, gl.FLOAT, false, 0, 0);
+      gl.bindVertexArray(null);
+    } catch (e3) {
+      if (global.console) console.error(e3.message);
+      ringProg = null;
+    }
+
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     GL.available = true;
     GL.panels = !!panelProg;
+    GL.rings = !!ringProg;
     return true;
   };
 
@@ -1783,6 +1979,7 @@
     queue.length = 0;
     meshQueue.length = 0;
     panelQueue.length = 0;
+    ringQueue.length = 0;
     hole = null;
     if (!gl) return;
     gl.bindFramebuffer(gl.FRAMEBUFFER, postReady() ? post.msFbo : null);
@@ -1940,10 +2137,86 @@
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   }
 
+  /* Queue one planet's ring. `planet` carries `.ring` from rings.js and its
+   * own rotation, from which the plane is read; `worldPos` is its centre.
+   * The frame is passed in rather than recomputed so there is one source
+   * of truth for the plane (Rings.ringFrame) and gl.js keeps loading on its
+   * own. Returns false when there is nothing to draw. */
+  /* `fade` is [near, far] in km: inside near the sheet is not drawn, because
+   * the caller is drawing the chunks there instead. Omitted, no fade. */
+  GL.queueRing = function (planet, frame, worldPos, cam, sunDir, fade) {
+    if (!gl || !ringProg || !planet || !planet.ring || !frame || !worldPos) return false;
+    ringQueue.push({ planet: planet, frame: frame, cam: cam, sun: sunDir,
+                     fade: fade || [0, 0],
+                     rel: { x: worldPos.x - cam.eye.x, y: worldPos.y - cam.eye.y,
+                            z: worldPos.z - cam.eye.z } });
+    return true;
+  };
+
+  var gapBuf = new Float32Array(16);
+  function drawRings() {
+    if (!ringQueue.length || !ringProg) return;
+    /* Far to near, so two rings in one view composite in order. */
+    ringQueue.sort(function (a, b) {
+      return (b.rel.x * b.rel.x + b.rel.y * b.rel.y + b.rel.z * b.rel.z) -
+             (a.rel.x * a.rel.x + a.rel.y * a.rel.y + a.rel.z * a.rel.z);
+    });
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LESS);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    /* Rings are lit by the sun like the planet they circle, so - as in
+     * drawBodies - their blended alpha must stay out of the glow mask. */
+    gl.colorMask(true, true, true, false);
+    gl.useProgram(ringProg);
+    gl.bindVertexArray(ringVao);
+    var cam = ringQueue[0].cam;
+    gl.uniform2f(ringUni.uViewportPx, vw, vh);
+    gl.uniform2f(ringUni.uCenterPx, cam.cx, cam.cy);
+    gl.uniform1f(ringUni.uFlen, cam.flen);
+    gl.uniform3f(ringUni.uRight, cam.r.x, cam.r.y, cam.r.z);
+    gl.uniform3f(ringUni.uUp, cam.u.x, cam.u.y, cam.u.z);
+    gl.uniform3f(ringUni.uFwd, cam.f.x, cam.f.y, cam.f.z);
+    gl.uniform1f(ringUni.uNear, DEPTH_NEAR);
+    gl.uniform1f(ringUni.uInvLogRange, INV_LOG_RANGE);
+    for (var i = 0; i < ringQueue.length; i++) {
+      var q = ringQueue[i], p = q.planet, R = p.ring, f = q.frame;
+      var span = R.outer - R.inner;
+      gl.uniform3f(ringUni.uCenterRel, q.rel.x, q.rel.y, q.rel.z);
+      gl.uniform3f(ringUni.uE1, f.e1.x, f.e1.y, f.e1.z);
+      gl.uniform3f(ringUni.uE2, f.e2.x, f.e2.y, f.e2.z);
+      gl.uniform3f(ringUni.uN, f.n.x, f.n.y, f.n.z);
+      gl.uniform1f(ringUni.uOuter, R.outer);
+      gl.uniform1f(ringUni.uInner, R.inner);
+      gl.uniform1f(ringUni.uOpacity, R.opacity);
+      gl.uniform1f(ringUni.uPlanetR, p.radius);
+      gl.uniform1i(ringUni.uSeed, R.seed | 0);
+      var ng = Math.min(8, R.gaps.length);
+      for (var g = 0; g < 8; g++) {
+        gapBuf[g * 2] = g < ng ? (R.gaps[g].r - R.inner) / span : -9;
+        gapBuf[g * 2 + 1] = g < ng ? R.gaps[g].hw / span : 0;
+      }
+      gl.uniform1i(ringUni.uGapN, ng);
+      gl.uniform2fv(ringUni.uGaps, gapBuf);
+      var c = rgb(R.color);
+      gl.uniform3f(ringUni.uColor, c[0], c[1], c[2]);
+      gl.uniform3f(ringUni.uSunDir, q.sun.x, q.sun.y, q.sun.z);
+      gl.uniform2f(ringUni.uFade, q.fade[0], Math.max(q.fade[1], q.fade[0] + 1e-6));
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+    gl.bindVertexArray(null);
+    gl.depthMask(true);
+    gl.colorMask(true, true, true, true);
+  }
+
   GL.end = function () {
     if (!gl) return;
     drawBodies();
     drawMeshes();
+    /* After the hulls, before the screens: translucent, so it blends over
+     * what is behind it and is hidden by what is in front. */
+    drawRings();
     /* Last, so the screens are lit over a finished world rather than
      * competing with it — and after the hull, so a panel is depth-tested
      * against the cockpit it is mounted in. */
@@ -2043,10 +2316,13 @@
       gl.uniform1f(uni.uShearPhase, sp2.shear);
       gl.uniform1f(uni.uWeather, sp2.weather);
       gl.uniform3f(uni.uStormSalt, sp2.salt[0], sp2.salt[1], sp2.salt[2]);
+      gl.uniform3f(uni.uStormSaltPrev, sp2.saltPrev[0], sp2.saltPrev[1], sp2.saltPrev[2]);
+      gl.uniform4f(uni.uStormSlow, sp2.slow[0], sp2.slow[1], sp2.slow[2], sp2.slow[3]);
       gl.uniform1f(uni.uStormPhase, sp2.stormPhase);
       gl.uniform1f(uni.uFlashGain, flashGain);
       gl.uniform1f(uni.uCenterDepth, q.depth);
       gl.uniform1f(uni.uWorldRadius, b.radius || 1);
+      gl.uniform1f(uni.uHaloPush, (b.ring && ringProg) ? b.ring.outer : 0);
       gl.uniform3f(uni.uCenterRel, q.rel.x, q.rel.y, q.rel.z);
       /* The shaft mouth, if the port we are cutting a hole for is on THIS
        * body. Recomputed against this frame's eye rather than stored as a
@@ -2201,7 +2477,10 @@
   /* How long a lightning bucket is. Short enough that a busy storm fires
    * several times while you watch it, long enough that a single stroke is
    * a stroke rather than a flicker. */
-  var STORM_BUCKET = 0.9;            // seconds of sim time
+  /* One copy, like every other weather number — the fallback is for gl.js
+   * loaded without weather.js, which the hull viewer does. */
+  var STORM_BUCKET = ((global.Weather && global.Weather.K &&
+                       global.Weather.K.FLASH_BUCKET) || 0.9);
 
   /* Three small numbers from one bucket index, done here because the
    * shader's hash cannot take a large input and stay a hash. Integer
@@ -2248,6 +2527,8 @@
   function spinOf(body, t) {
     var rot = body.rotation;
     var tilt = rot ? rot.tilt : 0;
+    var W = global.Weather;
+    var clock = (W && W.stormClock) ? W.stormClock(t) : null;
     /* The axis, read out of the same construction sim.js uses to put a pad
      * on the ground: a body-fixed frame whose pole is +z, tipped about x by
      * the tilt. Asking that question HERE rather than inventing an axis is
@@ -2271,8 +2552,14 @@
        * only to hash with, where losing a bit costs nothing but a
        * different flash, and needs the fraction to be exact, because it
        * is the shape of the stroke. */
-      salt: saltOf(Math.floor(t / STORM_BUCKET)),
-      stormPhase: wrap(t / STORM_BUCKET, 1)
+      /* THE SCHEDULE LIVES IN WEATHER.JS, with every other weather number,
+       * so the suite can check the pace without a GPU and the two languages
+       * cannot drift. The fallback is for gl.js loaded on its own, which
+       * the hull viewer does — one slot, no rhythms, the old flat rate. */
+      salt: clock ? clock.salt : saltOf(Math.floor(t / STORM_BUCKET)),
+      saltPrev: clock ? clock.saltPrev : [0, 0, 0],
+      slow: clock ? clock.slow : [0, 0, 0, 0],
+      stormPhase: clock ? clock.phase : wrap(t / STORM_BUCKET, 1)
     };
   }
 
@@ -2308,6 +2595,9 @@
    * from weather.js — the drift that would matter is a threshold nudged in
    * one of the two languages and not the other. */
   GL.planetShaderSource = function () { return FRAG_BODY; };
+  /* Same reason, for the ring: test/rings.test.js checks every constant in
+   * the ring's optical depth matches Rings.ringDensity, the CPU twin. */
+  GL.ringShaderSource = function () { return FRAG_RING; };
 
   GL.rgb = rgb;              // exported for tests
   GL.hashSeed = hashSeed;
