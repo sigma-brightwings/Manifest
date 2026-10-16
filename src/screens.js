@@ -1470,6 +1470,190 @@
     return { fwd: fwd.sort(byBearing), aft: aft.sort(byBearing) };
   }
 
+  /* ---- ORDNANCE: the rock torpedo launch panel ---------------------------
+   * Astra: "for something like that, the player should have to use an
+   * internal panel, uncover the launch switch, then launch it." A nuclear
+   * charge is not on the trigger. You point the nose, come here, read what
+   * the nose is on, choose the charge, lift the guard (C, or click it), and
+   * press LAUNCH (Enter, or click). The guard drops after every launch and
+   * whenever you leave this tab - one charge per lift, deliberately. */
+  var NOSE_LOOK = 12;     // km down the nose the panel reads rock from
+  function noseReading() {
+    var Mn = global.Mining, s = G.ship;
+    if (!Mn || !G.sys || s.docked || s.landed) return null;
+    var fwd = V.norm(s.fwd);
+    var rocks = Mn.rocksNear(G, G.sys, V.addScaled(s.pos, fwd, NOSE_LOOK / 2), G.t, NOSE_LOOK / 2 + 1);
+    var best = null;
+    rocks.forEach(function (r) {
+      var rel = V.sub(r.pos, s.pos), along = V.dot(rel, fwd);
+      if (along <= 0) return;
+      var off = V.len(V.addScaled(rel, fwd, -along));
+      if (off > r.size) return;                        // the path misses it
+      if (!best || along < best.along) best = { rock: r, along: along };
+    });
+    var np = Mn.nearestPort(G.sys, s.pos, G.t);
+    return { rock: best, port: np };
+  }
+
+  function drawOrdnanceTab(ctx, pad, top, w, bottom) {
+    var s = G.ship, Mn = global.Mining;
+    var MS = Combat.MISSILES;
+    var racks = Combat.racksOf ? Combat.racksOf(s) : (s.racks || {});
+    var kinds = ['rocktorp', 'syndtorp'].filter(function (k) { return racks[k] && racks[k].n > 0; });
+    if (!G.torpPick || kinds.indexOf(G.torpPick) < 0) G.torpPick = kinds[0] || null;
+
+    var x = pad, y = top + 6, pw = Math.min(w - pad * 2, 900), ph = bottom - top - pad - 6;
+    ctx.save();
+    ctx.fillStyle = '#05090c';
+    ctx.fillRect(x, y, pw, ph);
+    ctx.strokeStyle = MFD_EDGE; ctx.lineWidth = 2;
+    ctx.strokeRect(x + 2, y + 2, pw - 4, ph - 4);
+
+    /* Left: what is in the racks, and which charge is loaded. */
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText('ROCK CHARGE RACKS', x + 16, y + 26);
+    var ry = y + 50;
+    if (!kinds.length) {
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('No rock torpedoes aboard.', x + 16, ry);
+      ctx.fillText('The Mining Guild sells them at its halls;', x + 16, ry + 18);
+      ctx.fillText('the Syndicate sells them where it is the landlord.', x + 16, ry + 36);
+    }
+    kinds.forEach(function (k) {
+      var on = G.torpPick === k, m = MS[k];
+      ctx.fillStyle = on ? '#12414f' : '#081419';
+      ctx.fillRect(x + 14, ry - 16, 330, 26);
+      ctx.strokeStyle = on ? '#7dffcf' : MFD_EDGE; ctx.lineWidth = on ? 2 : 1;
+      ctx.strokeRect(x + 15, ry - 15, 328, 24);
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = on ? '#ffffff' : MFD_INK;
+      ctx.fillText((on ? 'LOADED  ' : '        ') + m.name.toUpperCase() + '  x' + racks[k].n, x + 22, ry + 2);
+      hot(x + 14, ry - 16, 330, 26, function () { G.torpPick = k; G.torpCover = false; }, 'pick');
+      ry += 34;
+    });
+    ry += 8;
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    [ 'Dumb charge: 200 m/s down the nose, no seeker.',
+      'Arms 500 m out. Self-destructs after 5 minutes.',
+      'Blast 1 km - keep clear. Near a station it is sabotage.',
+      'Never carry one home: a berth scan seizes it.' ].forEach(function (l) {
+      ctx.fillText(l, x + 16, ry); ry += 15;
+    });
+    if ((G.torpRefund || 0) > 0) {
+      ctx.fillStyle = '#7dffb0';
+      ctx.fillText('Guild refund owed: ' + Math.round(G.torpRefund) + ' cr, any desk', x + 16, ry + 6);
+    }
+
+    /* Middle: what the nose is on, read before you commit. */
+    var mx = x + 370;
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText('NOSE', mx, y + 26);
+    var nr = noseReading();
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    var ny = y + 50;
+    if (!nr) {
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText(s.docked ? 'In a berth.' : s.landed ? 'On the ground.' : 'No reading.', mx, ny);
+    } else {
+      if (nr.rock) {
+        var rk = nr.rock.rock;
+        ctx.fillStyle = '#ffd27a';
+        ctx.fillText('ON ROCK - ' + (rk.kind || 'rock').toUpperCase() + ', ' + Math.round(rk.size * 1000) + ' m', mx, ny);
+        ctx.fillStyle = MFD_INK;
+        ctx.fillText(nr.rock.along.toFixed(2) + ' km  -  ' + Math.round(nr.rock.along / Mn.TORP_SPEED) + ' s to impact', mx, ny + 18);
+        if (rk.size < Mn.TORP_SHATTER) { ctx.fillStyle = MFD_DIM; ctx.fillText('small enough to shatter', mx, ny + 36); }
+        if (nr.rock.along < Mn.TORP_ARM) {
+          ctx.fillStyle = '#ff9f7a';
+          ctx.fillText('INSIDE ARMING RANGE - it will pass', mx, ny + 54);
+        } else if (nr.rock.along < Mn.TORP_BLAST * 1.2) {
+          ctx.fillStyle = '#ff9f7a';
+          ctx.fillText('YOU ARE INSIDE THE BLAST - back off', mx, ny + 54);
+        }
+      } else {
+        ctx.fillStyle = MFD_DIM;
+        ctx.fillText('No rock within ' + NOSE_LOOK + ' km down the nose.', mx, ny);
+        ctx.fillText('A launch now is a safing shot.', mx, ny + 18);
+      }
+      if (nr.port) {
+        var near = nr.port.dist < Mn.TORP_CLEAR_OF_PORT;
+        ctx.fillStyle = near ? '#ff6b5a' : MFD_DIM;
+        var pd = nr.port.dist;
+        var pdTxt = pd < 1000 ? pd.toFixed(1) + ' km' : pd < 1e6 ? Math.round(pd) + ' km'
+                  : (pd / 1.495978707e8).toFixed(2) + ' AU';
+        ctx.fillText(near ? 'STATION CLOSE' : 'nearest station', mx, ny + 84);
+        ctx.fillText(clipText(nr.port.port.name, 24) + '  ' + pdTxt, mx, ny + 102);
+      }
+    }
+
+    /* Right: the guarded switch. */
+    var gx = x + pw - 230, gy = y + 40, gw2 = 190, gh2 = 150;
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText('LAUNCH', gx, y + 26);
+    var live = !!G.torpPick && !s.docked && !s.landed;
+    /* The button underneath. */
+    ctx.fillStyle = '#1a0606';
+    ctx.fillRect(gx, gy, gw2, gh2);
+    ctx.strokeStyle = '#6b2a24'; ctx.lineWidth = 2;
+    ctx.strokeRect(gx + 1, gy + 1, gw2 - 2, gh2 - 2);
+    var bx = gx + gw2 / 2, by = gy + gh2 / 2 + 8;
+    ctx.beginPath(); ctx.arc(bx, by, 44, 0, Math.PI * 2);
+    ctx.fillStyle = G.torpCover && live ? '#e0392b' : '#5a1d18';
+    ctx.fill();
+    ctx.strokeStyle = '#2a0c0a'; ctx.lineWidth = 4; ctx.stroke();
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = G.torpCover && live ? '#fff2ee' : '#a26a64';
+    ctx.fillText('LAUNCH', bx, by + 5);
+    if (G.torpCover) {
+      /* The cover, flipped up above the housing. */
+      ctx.fillStyle = 'rgba(255,200,40,0.85)';
+      ctx.fillRect(gx, gy - 34, gw2, 26);
+      ctx.save();
+      ctx.beginPath(); ctx.rect(gx, gy - 34, gw2, 26); ctx.clip();
+      ctx.fillStyle = '#111';
+      for (var st = -26; st < gw2; st += 18) {
+        ctx.beginPath();
+        ctx.moveTo(gx + st, gy - 8); ctx.lineTo(gx + st + 9, gy - 8);
+        ctx.lineTo(gx + st + 35, gy - 34); ctx.lineTo(gx + st + 26, gy - 34);
+        ctx.closePath(); ctx.fill();
+      }
+      ctx.restore();
+      ctx.fillStyle = '#ffd27a';
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillText('GUARD UP - C to close', bx, gy + gh2 + 18);
+      if (live) hot(gx, gy, gw2, gh2, function () {
+        Combat.launchTorpedo(G.sys, G, G.t, G.torpPick, hooksFor());
+      }, 'launch');
+    } else {
+      /* The cover, down over the button: striped, and in the way. */
+      ctx.fillStyle = 'rgba(255,200,40,0.9)';
+      ctx.fillRect(gx + 6, gy + 6, gw2 - 12, gh2 - 12);
+      ctx.save();
+      ctx.beginPath(); ctx.rect(gx + 6, gy + 6, gw2 - 12, gh2 - 12); ctx.clip();
+      ctx.fillStyle = '#111';
+      for (var s2 = -gh2; s2 < gw2; s2 += 22) {
+        ctx.beginPath();
+        ctx.moveTo(gx + s2, gy + gh2); ctx.lineTo(gx + s2 + 11, gy + gh2);
+        ctx.lineTo(gx + s2 + 11 + gh2, gy); ctx.lineTo(gx + s2 + gh2, gy);
+        ctx.closePath(); ctx.fill();
+      }
+      ctx.restore();
+      ctx.fillStyle = 'rgba(5,9,12,0.85)';
+      ctx.fillRect(gx + 30, gy + gh2 / 2 - 14, gw2 - 60, 26);
+      ctx.fillStyle = live ? '#ffd27a' : '#8a7a50';
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillText(live ? 'LIFT GUARD (C)' : (G.torpPick ? 'NOT HERE' : 'EMPTY'), bx, gy + gh2 / 2 + 4);
+      if (live) hot(gx, gy, gw2, gh2, function () { G.torpCover = true; say('Launch guard up', 2); }, 'guard');
+    }
+    ctx.textAlign = 'left';
+    ctx.restore();
+  }
+
   function drawPanelsTab(ctx, pad, top, w, bottom) {
     if (!dash) return;
     var arc = mountArc();
@@ -1588,15 +1772,20 @@
   }
 
   function drawShipScreen(ctx, w, bottom) {
-    if (G.shipTab !== 'guns' && G.shipTab !== 'panels') G.shipTab = 'status';
+    if (G.shipTab !== 'guns' && G.shipTab !== 'panels' && G.shipTab !== 'ordnance') G.shipTab = 'status';
     var guns = G.shipTab === 'guns';
     var panels = G.shipTab === 'panels';
+    var ordnance = G.shipTab === 'ordnance';
+    /* The launch guard drops whenever you are not looking at it. */
+    if (!ordnance) G.torpCover = false;
     var top = modeFrame(ctx, w, bottom,
                         guns ? 'SHIP — GUNS'
                         : panels ? 'SHIP — CONSOLE PANELS'
+                        : ordnance ? 'SHIP — ORDNANCE'
                         : 'SHIP STATUS & INVENTORY',
                         guns ? 'Tab panels   ·   space fires A   ·   shift+space fires B'
-                        : panels ? 'Tab status   ·   pick a mount, then pick a page'
+                        : ordnance ? 'Tab status   ·   ↑↓ charge   ·   C guard   ·   Enter launch'
+                        : panels ? 'Tab ordnance   ·   pick a mount, then pick a page'
                              : (G.ship.docked ? 'Tab guns   ·   F4 trade   ·   ↑↓ select   ·   Del jettison'
                                               : 'Tab guns   ·   ↑↓ select   ·   Del jettison   ·   Shift+Del all'));
 
@@ -1608,7 +1797,8 @@
     var tabH = 22, tabW = 150, tabY = top + 4;
     var tabs = [ { id: 'status', label: 'STATUS & INVENTORY', wide: true },
                  { id: 'guns',   label: 'GUNS' },
-                 { id: 'panels', label: 'PANELS' } ];
+                 { id: 'panels', label: 'PANELS' },
+                 { id: 'ordnance', label: 'ORDNANCE' } ];
     var tx = pad;
     for (var ti = 0; ti < tabs.length; ti++) {
       var tw = tabs[ti].wide ? tabW : 90;
@@ -1630,6 +1820,7 @@
     top = tabY + tabH + 6;   // content starts below the tab strip
 
     if (panels) { drawPanelsTab(ctx, pad, top, w, bottom); return; }
+    if (ordnance) { drawOrdnanceTab(ctx, pad, top, w, bottom); return; }
     if (guns) {
       /* The guns board, hosted in a tile the same way the ship page is on
        * the status tab — it draws into its own flat 460x178 MFD space and

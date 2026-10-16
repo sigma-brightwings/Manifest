@@ -779,11 +779,22 @@
   function syncRacks(ship) {
     var racks = racksOf(ship);
     var armed = racks[ship.missileId];
+    /* Rock torpedoes are never what the missile trigger is armed with -
+     * they go from the ordnance panel - so a seeker rack, if there is one,
+     * takes the trigger instead. */
+    if (armed && MISSILES[armed.id] && MISSILES[armed.id].torpedo) {
+      var seekers = rackList(ship).filter(function (r) { return !(MISSILES[r.id] && MISSILES[r.id].torpedo); });
+      if (seekers.length) armed = null;
+    }
     if (!armed || armed.n <= 0) {
       /* The armed rack ran dry. Arm whatever else is aboard rather than
        * leaving the trigger pointed at an empty rail - a player who has
        * bootlegs left should not have to visit a menu to fire them. */
-      var list = rackList(ship);
+      var list = rackList(ship).sort(function (a, b) {
+        var ta = MISSILES[a.id] && MISSILES[a.id].torpedo ? 1 : 0;
+        var tb = MISSILES[b.id] && MISSILES[b.id].torpedo ? 1 : 0;
+        return ta - tb;                                   // seekers first
+      });
       armed = list[0] || null;
       ship.missileId = armed ? armed.id : (ship.missileId || 'hawk');
     }
@@ -5763,18 +5774,12 @@
       if (hooks && hooks.say) hooks.say(s.missiles > 0 ? 'Not now' : 'No missiles aboard', 2);
       return;
     }
-    /* A ROCK TORPEDO needs no lock: it goes where the nose points. */
+    /* A ROCK TORPEDO IS NOT ON THE TRIGGER. Astra: "the player should have
+     * to use an internal panel, uncover the launch switch, then launch it."
+     * So the missile key refuses it and says where the switch is. */
     var armedM = MISSILES[s.missileId];
-    if (armedM && armedM.torpedo && global.Mining) {
-      if (G.warpIndex > 0) {
-        if (hooks && hooks.say) hooks.say('Not under time compression', 3);
-        return;
-      }
-      var tr = racksOf(s)[s.missileId];
-      if (tr) tr.n = Math.max(0, tr.n - 1);
-      syncRacks(s);
-      global.Mining.launchTorpedo(sys, G, t, armedM, hooks);
-      if (hooks && hooks.sound) hooks.sound('missile');
+    if (armedM && armedM.torpedo) {
+      if (hooks && hooks.say) hooks.say('Rock torpedoes launch from the ordnance panel - F5, ORDNANCE tab', 4);
       return;
     }
     var target = null;
@@ -5831,6 +5836,29 @@
     /* Launching at someone is assault the moment the seeker goes hot. */
     crime(sys, G, t, 'assault', target, hooks);
     if (hooks && hooks.sound) hooks.sound('missile');
+  }
+
+  /* THE ORDNANCE PANEL'S LAUNCH SWITCH, and the only way a rock torpedo
+   * leaves the ship. The cover has to be up (G.torpCover, lifted on the
+   * panel) and it drops again the moment one goes: one charge per lift.
+   * Returns { ok, why }. */
+  function launchTorpedo(sys, G, t, id, hooks) {
+    var s = G.ship, m = MISSILES[id];
+    function no(why) { if (hooks && hooks.say) hooks.say(why, 4); return { ok: false, why: why }; }
+    if (!m || !m.torpedo) return no('Nothing loaded');
+    if (!G.torpCover) return no('Lift the switch cover first');
+    if (s.docked || s.landed) return no('Not from a berth or the ground');
+    if (G.warpIndex > 0) return no('Not under time compression');
+    if (!global.Mining) return no('No launcher');
+    var rk = racksOf(s)[id];
+    if (!rk || !(rk.n > 0)) return no('No ' + m.name.toLowerCase() + ' aboard');
+    rk.n -= 1;
+    if (rk.n <= 0) delete racksOf(s)[id];
+    syncRacks(s);
+    G.torpCover = false;
+    var tp = global.Mining.launchTorpedo(sys, G, t, m, hooks);
+    if (hooks && hooks.sound) hooks.sound('missile');
+    return { ok: true, torpedo: tp };
   }
 
   /* Dump the rack. Certain, total, and free of consequences beyond the
@@ -7242,6 +7270,7 @@
     NPC_SHIELD: NPC_SHIELD, MAX_IMPACTS: MAX_IMPACTS,
     damageNpc: damageNpc, damagePlayer: damagePlayer, killNpc: killNpc,
     blastAt: blastAt, reportSabotage: reportSabotage, torpedoSoldAt: torpedoSoldAt,
+    launchTorpedo: launchTorpedo,
     torpedoesAboard: torpedoesAboard, torpedoSearch: torpedoSearch, inboundToPort: inboundToPort,
     TORP_FINE: TORP_FINE,
     liftTrader: liftTrader,

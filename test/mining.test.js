@@ -226,8 +226,14 @@ var Gt = torpRig(rock);
 var said2 = [];
 var hk = { say: function (m) { said2.push(m); }, sound: function () {} };
 Combat.fireMissile(bsys, Gt, t0, hk);
-check('fired without a lock', (bsys.missiles || []).filter(function (m) { return m.torp; }).length === 1 &&
-      Gt.ship.missiles === 1, said2[0]);
+check('the missile key will not launch one', !(bsys.missiles || []).length && /ordnance panel/.test(said2[0] || ''), said2[0]);
+var noGuard = Combat.launchTorpedo(bsys, Gt, t0, 'rocktorp', hk);
+check('nor will the panel with the guard down', !noGuard.ok && !(bsys.missiles || []).length, noGuard.why);
+Gt.torpCover = true;
+var lt = Combat.launchTorpedo(bsys, Gt, t0, 'rocktorp', hk);
+check('guard up, LAUNCH: away without a lock', lt.ok && (bsys.missiles || []).filter(function (m) { return m.torp; }).length === 1 &&
+      Gt.ship.racks.rocktorp.n === 1);
+check('and the guard drops after it - one per lift', !Gt.torpCover && !Combat.launchTorpedo(bsys, Gt, t0, 'rocktorp', hk).ok);
 var tt = t0, boomAt = null;
 for (var st = 0; st < 400 && !boomAt; st++) {
   Mn.updateTorpedoes(bsys, Gt, tt, 0.1, hk);

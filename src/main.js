@@ -1392,10 +1392,40 @@
        * to them unchanged. */
       if (e.key === 'Tab' && !G.hyper && !G.market && modeId() === 'ship') {
         e.preventDefault();
-        var st = ['status', 'guns', 'panels'];
+        var st = ['status', 'guns', 'panels', 'ordnance'];
         var si = st.indexOf(G.shipTab);
         G.shipTab = st[(si < 0 ? 0 : si + 1) % st.length];
         return;
+      }
+
+      /* THE ORDNANCE PANEL'S KEYS (rock torpedoes): C lifts or drops the
+       * launch guard, Enter launches with it up, up/down picks the charge.
+       * Only on that tab - nowhere else does C or Enter touch a torpedo. */
+      if (modeId() === 'ship' && G.shipTab === 'ordnance' && !G.hyper && !G.market) {
+        var kl = e.key.toLowerCase();
+        if (kl === 'c') {
+          e.preventDefault();
+          if (G.ship.docked || G.ship.landed) { say('Not from a berth or the ground', 3); return; }
+          G.torpCover = !G.torpCover;
+          say(G.torpCover ? 'Launch guard up' : 'Launch guard down', 2);
+          return;
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          Combat.launchTorpedo(G.sys, G, G.t, G.torpPick, HOOKS);
+          return;
+        }
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          e.preventDefault();
+          var tk = ['rocktorp', 'syndtorp'].filter(function (k) {
+            return G.ship.racks && G.ship.racks[k] && G.ship.racks[k].n > 0;
+          });
+          if (tk.length > 1) {
+            G.torpPick = tk[(tk.indexOf(G.torpPick) + 1) % tk.length];
+            G.torpCover = false;
+          }
+          return;
+        }
       }
 
       var fk = /^F(10|[1-9])$/.exec(e.key);
