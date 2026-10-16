@@ -3838,9 +3838,11 @@
       return Math.max(lim[0], Math.min(lim[1], km / speed));
     };
     var out = [];
+    var phases = routePhases(path, r);
     for (var i = 0; i < ORBITAL_LEGS.length; i++) {
       var L = ORBITAL_LEGS[i], dur = L.dur;
       if (L.id === 'lineup') dur = fit(span(0, 1), RUN_IN_SPEED, RUN_IN_DUR);
+      else if (L.id === 'enter' && phases) dur = phases.total;
       else if (L.id === 'enter') dur = fit(span(2, 3), THREAD_SPEED, path.through ? THREAD_ROUTE_DUR : THREAD_DUR);
       if (dur === L.dur) { out.push(L); continue; }
       /* A COPY, never a mutation of the table — ORBITAL_LEGS is shared by
@@ -3850,6 +3852,64 @@
                  lift: L.lift, bay: L.bay });
     }
     return out;
+  }
+
+  /* THE RIDE (2026-10-16). Astra: "the ship should wait for elevators to
+   * traverse their paths before continuing. The most efficient path is not
+   * the one we want to see here."
+   *
+   * A route that takes a lift is walked in three phases rather than one
+   * glide: DRIVE to the car (on the corners, to rest on it), RIDE - settle,
+   * the car runs its whole shaft with the hull on it, settle - and DRIVE
+   * off to the stand. Each phase starts and ends at rest. Returns null for
+   * a route with no ride, which keeps its old single glide.
+   *
+   * The car's own speed is a lift's, not a hull's: the run is timed to
+   * take RIDE_DUR seconds clamped, because a two-kilometre shaft at
+   * hull-threading speed would be a minute and a half of nothing. */
+  var RIDE_SPEED = 0.08;           // km/s
+  var RIDE_DUR = [6.0, 24.0];      // s, the run itself
+  var RIDE_SETTLE = 2.0;           // s at each end: latch, then release
+  var DRIVE_DUR = [2.0, 30.0];     // s, each drive phase
+  function routePhases(path, r) {
+    if (!path || !path.through || !(path.rideAt >= 1)) return null;
+    var pl = [path[2]].concat(path.through, [path[3]]);
+    var k = path.rideAt;
+    if (k + 1 >= pl.length) return null;
+    function len(i0, i1) {
+      var s = 0;
+      for (var q = i0 + 1; q <= i1; q++) {
+        var dx = pl[q].x - pl[q - 1].x, dy = pl[q].y - pl[q - 1].y, dz = pl[q].z - pl[q - 1].z;
+        s += Math.sqrt(dx * dx + dy * dy + dz * dz);
+      }
+      return s * r;
+    }
+    function clamp(x, lim) { return Math.max(lim[0], Math.min(lim[1], x)); }
+    var d1 = clamp(len(0, k) / THREAD_SPEED, DRIVE_DUR);
+    var run = clamp(len(k, k + 1) / RIDE_SPEED, RIDE_DUR);
+    var d2 = clamp(len(k + 1, pl.length - 1) / THREAD_SPEED, DRIVE_DUR);
+    return { pl: pl, k: k, d1: d1, run: run, d2: d2,
+             total: d1 + RIDE_SETTLE + run + RIDE_SETTLE + d2 };
+  }
+
+  /* Where along the walked polyline the hull is, `t` seconds into the
+   * enter leg of a riding route. */
+  function ridePoint(ph, t) {
+    var pl = ph.pl, k = ph.k;
+    function walk(i0, i1, u) {
+      var sub = pl.slice(i0, i1 + 1).map(function (p) { return { e: p.x, n: p.y, u: p.z }; });
+      var g = alongRoute(sub, u);
+      return { x: g.e, y: g.n, z: g.u };
+    }
+    if (t < ph.d1) return { loc: walk(0, k, ease(t / ph.d1)), phase: 'drive' };
+    t -= ph.d1;
+    if (t < RIDE_SETTLE) return { loc: pl[k], phase: 'board' };
+    t -= RIDE_SETTLE;
+    if (t < ph.run) return { loc: walk(k, k + 1, ease(t / ph.run)), phase: 'ride' };
+    t -= ph.run;
+    if (t < RIDE_SETTLE) return { loc: pl[k + 1], phase: 'alight' };
+    t -= RIDE_SETTLE;
+    return { loc: walk(k + 1, pl.length - 1, ease(Math.min(1, t / ph.d2))), phase: 'drive' };
   }
 
   /* Per berth where a berth has its own route in; per port otherwise, which
@@ -3990,6 +4050,11 @@
         var p5 = [outer[0], outer[1], outer[2], stand, stand];
         p5.through = thru;
         p5.entry = route.entry;
+        /* THE RIDE, where the route takes a lift (see routePhases): its
+         * boarding corner as an index into the walked polyline
+         * [path[2]].concat(through, [stand]) - through[0] is the L stand,
+         * so via index i sits at polyline index i + 2. */
+        p5.rideAt = (route.ride && typeof route.ride[0] === 'number') ? route.ride[0] + 2 : -1;
         return p5;
       }
     }
@@ -4050,8 +4115,13 @@
                 z: a.z + (b.z - a.z) * u };
     /* On through the hull, when the berth is reached by way of a heavy bay:
      * the enter leg walks the route's corners, by length. */
-    var surfTan = null;
-    if (leg === 2 && path.through && orbital) {
+    var surfTan = null, ridePhase = null;
+    var phs = (leg === 2 && orbital) ? routePhases(path, port.radius || 1) : null;
+    if (phs) {
+      /* Stop on the car, let it run, get off: see routePhases. */
+      var rp = ridePoint(phs, Math.max(0, el - acc));
+      loc = rp.loc; ridePhase = rp.phase;
+    } else if (leg === 2 && path.through && orbital) {
       var pl = [a].concat(path.through, [b]);
       var got = alongRoute(pl.map(function (p) { return { e: p.x, n: p.y, u: p.z }; }), u);
       loc = { x: got.e, y: got.n, z: got.u };
@@ -4143,6 +4213,9 @@
       pos: pos, vel: V.clone(basis.entrance.vel),
       fwd: fwd, up: V.norm(V.cross(right, fwd)), right: right,
       leg: leg, legId: L.id, u: u,
+      /* 'drive' | 'board' | 'ride' | 'alight' on a route that takes a
+       * lift; null otherwise. */
+      ride: ridePhase,
       /* The heavy bay this arrival comes in by, when it is not the berth's
        * own doors — the doors to run are that bay's (see stationDoors). */
       entry: typeof path.entry === 'number' ? path.entry : null,

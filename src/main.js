@@ -5216,6 +5216,14 @@
       /* And the desk takes what it is owed — wages and berthing, settled
        * off their clocks. See settleAccounts. */
       settleAccounts();
+      /* ...and the contracts settle further down this frame (see "The dock
+       * is an event"). That block used to detect the edge for itself off
+       * this same G.wasDocked — which this block has just set, so it never
+       * saw a dock again and no contract settled on arrival. Astra,
+       * 2026-10-16: "when landing at a space port with a job accepted, that
+       * job should resolve itself and alert the player". One edge, one
+       * flag, handed on. */
+      G.dockEdge = true;
     }
     G.wasDocked = !!G.ship.docked;
 
@@ -5345,13 +5353,13 @@
 
     /* The dock is an event, not just a state: contracts settle, the ledger
      * hits the disk, and the clamps make their noise, exactly once. */
-    if (G.ship.docked && !G.wasDocked) {
-      var dockedPort = G.sys.byId[G.ship.docked];
-      Missions.completeAtDock(G, dockedPort, G.sys, G.t, HOOKS);
+    if (G.dockEdge) {
+      G.dockEdge = false;
+      var dockedPort = G.ship.docked && G.sys.byId[G.ship.docked];
+      if (dockedPort) Missions.completeAtDock(G, dockedPort, G.sys, G.t, HOOKS);
       HOOKS.sound('dock');
       if (global.Save) global.Save.store(G);
     }
-    G.wasDocked = !!G.ship.docked;
 
     /* The drive's noise follows the throttle. */
     if (global.Sound) {
@@ -10898,6 +10906,24 @@
            * section has a blast door, so the renderer only ever draws the
            * section around the ship. From outside, `null` — the whole hull
            * is what a station looks like. */
+          /* WHO IS ON A CAR. The lifts are drawn under whatever is riding
+           * them (Render.drawMovers) - the player's hull, keel a fifth of
+           * a length below its centre, which is roughly where every hull in
+           * the library sits on its gear. */
+          if (Render.setMoverRiders) {
+            var riders = G.ship ? [{ pos: G.ship.pos, keelKm: (Render.SHIP_LEN || 0.025) * 0.2 }] : [];
+            /* And the traffic: a freighter riding the lift down to its bay
+             * gets a floor under it too. Asked once per frame, and only
+             * here, where a station is close enough to be a model. */
+            if (G.ridersAt !== G.t) { G.ridersAt = G.t; G.ridersAll = Sim.shipsAll(G.sys, G.t) || []; }
+            for (var rdi = 0; rdi < G.ridersAll.length; rdi++) {
+              var rs = G.ridersAll[rdi];
+              if (rs && rs.pos && V.dist(rs.pos, frame.pos) < b.radius * 1.5) {
+                riders.push({ pos: rs.pos, keelKm: (rs.size || 0.02) * 0.2 });
+              }
+            }
+            Render.setMoverRiders(riders);
+          }
           Render.drawStationModel(ctx, cam, frame, b.radius, sun, model, b.color,
                                   stationDoors(b), indoors ? shipSection(b) : null);
           if (turns) {

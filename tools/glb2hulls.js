@@ -456,7 +456,28 @@ var BERTH_GROUP_RE = /^berth(?:L|SM)[sml]?(?:Y|[A-Z][a-z]+)?\d*$/;
 /* Carriers, keyed by stem: `liftGuide0` and `liftRackBrace3` are both the
  * lift, `shaftWallL` the shaft, `dockLift1Guide2` dock lift 1. */
 var CARRIER_RE = /^(transferLift|transferMain|transferLock|transferDeck|dockLift\d+|hangarLift\d+|spokeTransfer\d+|ringLift|ringHoist|ringFeed|cargoHoist|sortHoist\d*|hoist|shaft|lift|incline|ramp)/i;
-var OPENABLE_RE = /(?:SlidingDoor|BlastDoor|Leaf|Slat|Tooth|InnerGate|ForceField|Hatch|InnerSeal)[LR]?\d*$|^leafGroup_|Lift(?:Car|Platform)\d*$|^hoistCar|^liftPlatform|ThroatBack$/i;
+/* TWO KINDS OF MOVING PART, and they used to share this one pattern.
+ *
+ * Astra, 2026-10-16: "Openables are one thing, then there are moving
+ * surfaces-with-collision." A door OPENS: it gets out of the way, and a
+ * route passes through the hole it leaves. A lift car MOVES: it is a floor,
+ * and a route RIDES it. Lumped together, a car was just more empty air to
+ * the route-finder, so routes cut straight through shafts and the walls
+ * round them, and nothing ever drew the car under the hull riding it.
+ *
+ * OPENABLE_RE is the doors. A MOVER is any node whose extras declare how it
+ * moves - `lift` (the comet platform, the ground sites' cars), `motion`
+ * (the ring lift, the skimmer's sort lift, the spine's hub lift, the
+ * cylinder's bore cars) or `rampCar` (the cradle hoist) - see moverStops.
+ * MOVER_NAME_RE catches the cars that ride with a declared one but carry no
+ * extras of their own (a car's skirt). Both are left out of the route grid
+ * like a door, because the car's own swept volume is the way through. */
+var OPENABLE_RE = /(?:SlidingDoor|BlastDoor|Leaf|Slat|Tooth|InnerGate|ForceField|Hatch|InnerSeal)[LR]?\d*$|^leafGroup_|ThroatBack$/i;
+var MOVER_NAME_RE = /Lift(?:Car|Platform)\w*$|^hoistCar|^liftPlatform/i;
+/* THE INCLINED BORES the ramp cars run in. Astra, 2026-10-16: "clip those
+ * elevator shafts, the 45 degree ones, so that the top of the shaft
+ * doesn't protrude from the wall? It looks sloppy." See clipBores. */
+var BORE_RE = /^hoistBore[A-Z]$|^armBore[A-Z]$|^spineHoist[A-Z]$|^cargoHoist$/;
 
 /* ---- the way through a station, from a heavy bay to a small one ---------
  * Astra, 2026-09-24: "make sure that when we land at the station, the ship
@@ -554,16 +575,54 @@ function interiorRoutes(buckets, berths, carried, doors) {
    * the car carries the ship through it — and it costs no more than open
    * passage, so a route takes the lift rather than squeezing round it. */
   var carry = new Uint8Array(NNN);
+  /* A LIFT IS RIDDEN, NOT FLOWN DOWN (Astra, 2026-10-16: "the ship should
+   * wait for elevators to traverse their paths before continuing. The most
+   * efficient path is not the one we want to see here."). A mover's run is
+   * therefore CLOSED to ordinary passage - the route may stand at either
+   * stop, where the car waits, but not fly the shaft between them - and a
+   * deck change happens only as an explicit ride from one stop to the
+   * other (rideRoute below). */
+  var rides = (carried || []).filter(function (c) { return c.a && c.b; });
+  var rideBlock = rides.length ? new Uint8Array(NNN) : null;
+  rides.forEach(function (c) {
+    var L = Math.sqrt(Math.pow(c.b[0] - c.a[0], 2) + Math.pow(c.b[1] - c.a[1], 2) + Math.pow(c.b[2] - c.a[2], 2));
+    var stopZone = L > 1e-9 ? Math.min(0.45, (c.hz * 2 + cell * 2) / L) : 0.5;
+    var a = cellOf(c.min), b = cellOf(c.max);
+    for (var z = Math.max(0, Math.min(a[2], b[2]) - 1); z <= Math.min(N - 1, Math.max(a[2], b[2]) + 1); z++)
+      for (var y = Math.max(0, Math.min(a[1], b[1]) - 1); y <= Math.min(N - 1, Math.max(a[1], b[1]) + 1); y++)
+        for (var x = Math.max(0, Math.min(a[0], b[0]) - 1); x <= Math.min(N - 1, Math.max(a[0], b[0]) + 1); x++) {
+          var p = centreOf(x, y, z);
+          if (!(segDist(p, c.a, c.b) <= c.r + cell)) continue;
+          var t = segT(p, c.a, c.b);
+          if (t > stopZone && t < 1 - stopZone) rideBlock[idx(x, y, z)] = 1;
+        }
+  });
   (carried || []).forEach(function (c) {
+    if (c.a && c.b) return;            // a ride, handled above
     var a = cellOf(c.min), b = cellOf(c.max);
     for (var z = Math.max(0, Math.min(a[2], b[2]) - 1); z <= Math.min(N - 1, Math.max(a[2], b[2]) + 1); z++)
       for (var y = Math.max(0, Math.min(a[1], b[1]) - 1); y <= Math.min(N - 1, Math.max(a[1], b[1]) + 1); y++)
         for (var x = Math.max(0, Math.min(a[0], b[0]) - 1); x <= Math.min(N - 1, Math.max(a[0], b[0]) + 1); x++) {
           var cq = idx(x, y, z);
+          /* A MOVER'S RIDE is a capsule, not its box: within the car's
+           * half-width (plus half a cell) of the line its centre runs on. */
+          if (c.a && c.b && !(segDist(centreOf(x, y, z), c.a, c.b) <= c.r + cell * 0.5)) continue;
           if (!out[cq]) { carry[cq] = 1; if (dist[cq] < 2) dist[cq] = 2; }
         }
   });
-  function passable(q) { return (!open[q] || carry[q]) && !out[q]; }
+  function centreOf(x, y, z) { return [lo + (x + 0.5) * cell, lo + (y + 0.5) * cell, lo + (z + 0.5) * cell]; }
+  function segDist(p, a, b) {
+    var ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], ap = [p[0] - a[0], p[1] - a[1], p[2] - a[2]];
+    var L2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+    var t = L2 > 1e-12 ? Math.max(0, Math.min(1, (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / L2)) : 0;
+    var dx = ap[0] - ab[0] * t, dy = ap[1] - ab[1] * t, dz = ap[2] - ab[2] * t;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz);
+  }
+  function segT(p, a, b) {
+    var ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], L2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+    return L2 > 1e-12 ? ((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1] + (p[2] - a[2]) * ab[2]) / L2 : 0;
+  }
+  function passable(q) { return (!open[q] || carry[q]) && !out[q] && !(rideBlock && rideBlock[q]); }
   function cellOf(pt) {
     return [Math.floor((pt[0] - lo) * inv), Math.floor((pt[1] - lo) * inv), Math.floor((pt[2] - lo) * inv)];
   }
@@ -674,7 +733,7 @@ function interiorRoutes(buckets, berths, carried, doors) {
   }
 
   var heavy = [], small = [];
-  var found = 0, bridged = 0, reachL = null, distL = null, srcL = null, reachCache = {};
+  var found = 0, bridged = 0, rodeLift = 0, reachL = null, distL = null, srcL = null, reachCache = {};
   var r3 = function (x) { return Math.round(x * 1000) / 1000; };
   var r3p = function (p) { return [r3(p[0]), r3(p[1]), r3(p[2])]; };
 
@@ -783,6 +842,26 @@ function interiorRoutes(buckets, berths, carried, doors) {
     if (routeDeclared(k)) { found++; declared++; }
   });
   if (bridged) console.log('    ' + bridged + ' S/M route(s) joined by elevator across unconnected decks');
+  /* A route found some other way - the art's own dockPath, chiefly - that
+   * nonetheless runs along a car's line IS a ride: mark the leg, so the
+   * arrival stops on the car and lets it run rather than gliding down. */
+  berths.forEach(function (b) {
+    if (!b.via || b.ride || typeof b.entry !== 'number') return;
+    var pts = [berths[b.entry].mid].concat(b.via);
+    for (var i = 0; i + 1 < pts.length && !b.ride; i++) {
+      var p = pts[i], q = pts[i + 1];
+      var L = Math.sqrt(Math.pow(q[0] - p[0], 2) + Math.pow(q[1] - p[1], 2) + Math.pow(q[2] - p[2], 2));
+      rides.forEach(function (c) {
+        if (b.ride) return;
+        var run = Math.sqrt(Math.pow(c.b[0] - c.a[0], 2) + Math.pow(c.b[1] - c.a[1], 2) + Math.pow(c.b[2] - c.a[2], 2));
+        var tol = c.r + (c.hz || 0) + 3 * cell;
+        if (L > 0.3 * run && segDist(p, c.a, c.b) <= tol && segDist(q, c.a, c.b) <= tol && i >= 1) {
+          b.ride = [i - 1, i]; b.rideNode = c.key; rodeLift++;
+        }
+      });
+    }
+  });
+  if (rodeLift) console.log('    ' + rodeLift + ' S/M route(s) RIDE a lift car stop to stop');
   if (declared) console.log('    ' + declared + ' route(s) taken from the art\'s own dockPath (carriage or unreachable deck)');
   berths.forEach(function (b) { delete b.declared; delete b.carriage; });
   return found;
@@ -857,6 +936,24 @@ function interiorRoutes(buckets, berths, carried, doors) {
                   ' cells, closest ' + nearest.toFixed(3) + ' radii to the bay; goal out=' + out[gq]);
     }
     var pts;
+    /* NO WAY ON FOOT: RIDE A LIFT. Drive to the car at one stop, ride it
+     * the whole run to the other, drive on to the stand. */
+    /* And even WITH a way on foot, when the bay is on another deck from the
+     * heavy bay and a lift joins them: the art put the lift there for that,
+     * and a hull dropping a kilometre and a half down an open void beside
+     * the car is exactly what Astra did not want to see. */
+    var deckChange = best && Math.abs(berths[k].mid[2] - berths[best.from].mid[2]) > 0.03;
+    if ((!best || deckChange) && rides.length) {
+      var rr = rideRoute(gq);
+      if (rr) {
+        berths[k].entry = rr.from;
+        berths[k].via = rr.pts.slice(1, -1).map(function (p) { return [r3(p[0]), r3(p[1]), r3(p[2])]; });
+        berths[k].ride = [rr.boardVia, rr.boardVia + 1];   // indices into via
+        berths[k].rideNode = rr.node;
+        rodeLift++;
+        return true;
+      }
+    }
     if (best) pts = pull(best.cells);
     else if (!allowBridge) return false;
     else {
@@ -888,6 +985,48 @@ function interiorRoutes(buckets, berths, carried, doors) {
     berths[k].entry = best.from;
     berths[k].via = pts.slice(1, -1).map(function (p) { return [r3(p[0]), r3(p[1]), r3(p[2])]; });
     return true;
+  }
+
+  /* The best ride to a goal: for each car, board at one stop and alight at
+   * the other, either way round, from whichever heavy bay is cheapest. The
+   * stop points are the car's centre at the stop raised by its half-height
+   * and a hull's clearance - where a hull stands on it. Returns the full
+   * point list (heavy stand ... goal) and the index of the alighting point. */
+  function rideRoute(gq) {
+    var bestR = null;
+    rides.forEach(function (c) {
+      var lift = (c.hz || 0) + 2 * cell;
+      var A = [c.a[0], c.a[1], c.a[2] + lift], B = [c.b[0], c.b[1], c.b[2] + lift];
+      var qa = nearestPassable(A), qb = nearestPassable(B);
+      if (qa < 0 || qb < 0) return;
+      [[A, qa, B, qb], [B, qb, A, qa]].forEach(function (o) {
+        var tail = astar(o[3], gq);
+        if (!tail) return;
+        heavy.forEach(function (h0) {
+          var sq = nearestPassable(berths[h0].mid);
+          if (sq < 0) return;
+          var head = astar(sq, o[1]);
+          if (!head) return;
+          var L = Math.sqrt(Math.pow(o[2][0] - o[0][0], 2) + Math.pow(o[2][1] - o[0][1], 2) + Math.pow(o[2][2] - o[0][2], 2));
+          var cost = head.cost + tail.cost + L * inv;
+          if (bestR && bestR.cost <= cost) return;
+          var p1 = pull(head.cells), p2 = pull(tail.cells);
+          /* Board exactly on the car and alight exactly off it: the pulled
+           * corners end at cell centres near the stops, the ride is the
+           * stop-to-stop line itself. */
+          var headP = p1.length > 1 ? p1.slice(0, -1) : [p1[0]];
+          var tailP = p2.length > 1 ? p2.slice(1) : [p2[0]];
+          var pts = headP.concat([o[0], o[2]], tailP);
+          /* pts[headP.length] boards, pts[headP.length + 1] alights; via is
+           * pts without its first and last, so subtract one. */
+          bestR = { cost: cost, pts: pts, boardVia: headP.length - 1, from: h0, node: c.key };
+        });
+      });
+    });
+    if (!bestR) return null;
+    /* `board` counted in pts, where pts[0] is the heavy stand; via drops
+     * that first point, so in via the boarding corner is board - 1. */
+    return bestR;
   }
 
   /* Everything the heavy bays reach, once; and for a goal, the closest
@@ -1314,12 +1453,261 @@ function standUp(berths) {
                  : function (p) { return [p[2], p[1], -p[0]]; };
 }
 
+/* ---- CLIP THE INCLINED BORES AT THE WALL (2026-10-16) --------------------
+ * Astra: "clip those elevator shafts, the 45 degree ones, so that the top
+ * of the shaft doesn't protrude from the wall? It looks sloppy."
+ *
+ * The builders lay a bore down as a straight run and stop it at a length,
+ * not at the hull, so on the cradle the hoist's rack and walls run on out
+ * through the lower block's side and hang in space. A face test would not
+ * do: a bore wall is one long panel, inside at one end and outside at the
+ * other. So each bore is CUT, on the wall's own plane:
+ *
+ *   1. the hull WITHOUT the bores is voxelised;
+ *   2. walking out along the bore's centreline, the first point that can
+ *      see open space down two or more axes is where it has left the hull
+ *      (one is not enough - a bay mouth opens one way);
+ *   3. the escape axis most along the bore is the wall's normal, and the
+ *      wall's own faces nearby give its exact plane;
+ *   4. every face of that bore is clipped to the inside of the plane.
+ *
+ * Orbital stations only; a ground site's incline is meant to reach the
+ * surface. A bore that never leaves the hull is left exactly as it was. */
+var CLIP_N = 128;
+function clipBores(buckets, bores, file) {
+  var N = CLIP_N, lo = -1.06, cell = 2.12 / N, inv = 1 / cell;
+  var solid = new Uint8Array(N * N * N);
+  function idx(x, y, z) { return (z * N + y) * N + x; }
+  function cellOf(p) { return [Math.floor((p[0] - lo) * inv), Math.floor((p[1] - lo) * inv), Math.floor((p[2] - lo) * inv)]; }
+  function inGrid(c) { return c[0] >= 0 && c[1] >= 0 && c[2] >= 0 && c[0] < N && c[1] < N && c[2] < N; }
+  buckets.forEach(function (bk) {
+    for (var fi = 0; fi < bk.f.length; fi++) {
+      if (bk.bo[fi] >= 0) continue;
+      var a = bk.v[bk.f[fi][0]], b = bk.v[bk.f[fi][1]], c = bk.v[bk.f[fi][2]];
+      if (!a || !b || !c) continue;
+      var e = 0;
+      for (var k = 0; k < 3; k++) e = Math.max(e, Math.abs(b[k] - a[k]), Math.abs(c[k] - a[k]), Math.abs(c[k] - b[k]));
+      var n = Math.min(400, Math.max(1, Math.ceil(e * inv * 2)));
+      for (var i = 0; i <= n; i++) for (var jj = 0; i + jj <= n; jj++) {
+        var u = i / n, w = jj / n;
+        var q = cellOf([a[0] + (b[0] - a[0]) * u + (c[0] - a[0]) * w, a[1] + (b[1] - a[1]) * u + (c[1] - a[1]) * w,
+                        a[2] + (b[2] - a[2]) * u + (c[2] - a[2]) * w]);
+        if (inGrid(q)) solid[idx(q[0], q[1], q[2])] = 1;
+      }
+    }
+  });
+  var DIRS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+  function escapeDirs(p) {
+    var c0 = cellOf(p), outd = [];
+    if (!inGrid(c0)) return DIRS.slice();
+    DIRS.forEach(function (d) {
+      var c = [c0[0] + d[0], c0[1] + d[1], c0[2] + d[2]];
+      while (inGrid(c)) {
+        if (solid[idx(c[0], c[1], c[2])]) return;
+        c[0] += d[0]; c[1] += d[1]; c[2] += d[2];
+      }
+      outd.push(d);
+    });
+    return outd;
+  }
+  function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+  var clippedTotal = 0;
+  bores.forEach(function (bore, bi) {
+    var pts = [];
+    buckets.forEach(function (bk) {
+      for (var fi = 0; fi < bk.f.length; fi++) if (bk.bo[fi] === bi) bk.f[fi].forEach(function (vi) { pts.push(bk.v[vi]); });
+    });
+    if (pts.length < 9) return;
+    var cen = [0, 0, 0];
+    pts.forEach(function (p) { cen[0] += p[0]; cen[1] += p[1]; cen[2] += p[2]; });
+    cen = [cen[0] / pts.length, cen[1] / pts.length, cen[2] / pts.length];
+    /* The bore's long axis: power iteration on the covariance. */
+    var C = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    pts.forEach(function (p) {
+      var d = [p[0] - cen[0], p[1] - cen[1], p[2] - cen[2]];
+      for (var r = 0; r < 3; r++) for (var s = 0; s < 3; s++) C[r][s] += d[r] * d[s];
+    });
+    var ax = [0.577, 0.577, 0.577];
+    for (var it = 0; it < 40; it++) {
+      var nx = [dot(C[0], ax), dot(C[1], ax), dot(C[2], ax)];
+      var l = Math.sqrt(dot(nx, nx)) || 1;
+      ax = [nx[0] / l, nx[1] / l, nx[2] / l];
+    }
+    var sMin = Infinity, sMax = -Infinity, rad = 0;
+    pts.forEach(function (p) {
+      var d = [p[0] - cen[0], p[1] - cen[1], p[2] - cen[2]], s = dot(d, ax);
+      sMin = Math.min(sMin, s); sMax = Math.max(sMax, s);
+      var lat = [d[0] - ax[0] * s, d[1] - ax[1] * s, d[2] - ax[2] * s];
+      rad = Math.max(rad, Math.sqrt(dot(lat, lat)));
+    });
+    [1, -1].forEach(function (sg) {
+      var end = sg > 0 ? sMax : -sMin, exitS = null;
+      for (var s = 0; s <= end; s += cell * 0.5) {
+        var p = [cen[0] + ax[0] * sg * s, cen[1] + ax[1] * sg * s, cen[2] + ax[2] * sg * s];
+        if (escapeDirs(p).length >= 2) { exitS = s; break; }
+      }
+      if (exitS === null) return;
+      var dirA = [ax[0] * sg, ax[1] * sg, ax[2] * sg];
+      var pe = [cen[0] + dirA[0] * (exitS + cell), cen[1] + dirA[1] * (exitS + cell), cen[2] + dirA[2] * (exitS + cell)];
+      var esc = escapeDirs(pe), n = null, best = 0.2;
+      esc.forEach(function (d) { var k = dot(d, dirA); if (k > best) { best = k; n = d; } });
+      if (!n) return;
+      /* The wall: back along -n from the escape point to the first solid
+       * cell, then the exact plane from the hull's own faces facing n. */
+      var c = cellOf(pe), steps = 0;
+      while (inGrid(c) && !solid[idx(c[0], c[1], c[2])] && steps++ < N) { c[0] -= n[0]; c[1] -= n[1]; c[2] -= n[2]; }
+      if (!inGrid(c) || !solid[idx(c[0], c[1], c[2])]) return;
+      var cc = [lo + (c[0] + 0.5) * cell, lo + (c[1] + 0.5) * cell, lo + (c[2] + 0.5) * cell];
+      var d0 = dot(cc, n) + cell * 0.5, d = -Infinity;
+      buckets.forEach(function (bk) {
+        for (var fi = 0; fi < bk.f.length; fi++) {
+          if (bk.bo[fi] >= 0) continue;
+          var a = bk.v[bk.f[fi][0]], b = bk.v[bk.f[fi][1]], q = bk.v[bk.f[fi][2]];
+          var e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [q[0] - a[0], q[1] - a[1], q[2] - a[2]];
+          var nn = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+          var nl = Math.sqrt(dot(nn, nn));
+          if (nl < 1e-12 || Math.abs(dot(nn, n)) / nl < 0.95) continue;
+          var mid = [(a[0] + b[0] + q[0]) / 3, (a[1] + b[1] + q[1]) / 3, (a[2] + b[2] + q[2]) / 3];
+          var off = dot(mid, n);
+          if (off < d0 - 3 * cell || off > d0 + cell) continue;
+          var lat = [mid[0] - pe[0], mid[1] - pe[1], mid[2] - pe[2]], along = dot(lat, n);
+          lat = [lat[0] - n[0] * along, lat[1] - n[1] * along, lat[2] - n[2] * along];
+          if (Math.sqrt(dot(lat, lat)) > rad * 4 + 2 * cell) continue;
+          if (off > d) d = off;
+        }
+      });
+      if (!isFinite(d)) d = d0;
+      clippedTotal += clipBucketFaces(buckets, bi, n, d);
+      console.log('    clipped ' + bore.node + ' at its wall (' + (n[0] ? (n[0] > 0 ? '+x' : '-x') : n[1] ? (n[1] > 0 ? '+y' : '-y') : (n[2] > 0 ? '+z' : '-z')) +
+                  ' ' + d.toFixed(3) + ')');
+    });
+  });
+  return clippedTotal;
+}
+/* ---- FLUSH PANELS, LIFTED (2026-10-16) -----------------------------------
+ * The rest of the flicker after the five-place fix is in the art itself: a
+ * panel, a stripe or a plate laid EXACTLY on a wall, facing the same way.
+ * Two faces in one plane z-fight however fine the depth buffer is. So
+ * where two faces of different colour share a plane, face the same way and
+ * genuinely overlap, the smaller - the panel, not the wall - is lifted off
+ * along its normal by LIFT_EPS (8 cm on a 4 km station), on its own copy of
+ * its vertices so its neighbours stay where they are. Measured on cradle-s
+ * at five places: 955 such pairs; ring-s 191. */
+var LIFT_EPS = 2e-5;
+function liftCoplanar(buckets) {
+  var lifted = 0;
+  function r5(x) { return Math.round(x * 100000) / 100000; }
+  buckets.forEach(function (bk) {
+    var T = [];
+    for (var fi = 0; fi < bk.f.length; fi++) {
+      var a = bk.v[bk.f[fi][0]], b = bk.v[bk.f[fi][1]], c = bk.v[bk.f[fi][2]];
+      if (!a || !b || !c) continue;
+      var e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+      var n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+      var l = Math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+      if (l < 1e-14) continue;
+      n = [n[0] / l, n[1] / l, n[2] / l];
+      var off = n[0] * a[0] + n[1] * a[1] + n[2] * a[2];
+      /* Same-facing only: the key keeps the normal's sign. */
+      var key = Math.round(n[0] * 500) + ',' + Math.round(n[1] * 500) + ',' + Math.round(n[2] * 500) + '|' + Math.round(off * 50000);
+      var ax = Math.abs(n[0]) >= Math.abs(n[1]) && Math.abs(n[0]) >= Math.abs(n[2]) ? 0 : (Math.abs(n[1]) >= Math.abs(n[2]) ? 1 : 2);
+      var o1 = ax === 0 ? 1 : 0, o2 = ax === 2 ? 1 : 2;
+      var P = [[a[o1], a[o2]], [b[o1], b[o2]], [c[o1], c[o2]]];
+      T.push({ fi: fi, key: key, n: n, area: l / 2, col: bk.c[fi], P: P,
+               bb: [Math.min(P[0][0], P[1][0], P[2][0]), Math.min(P[0][1], P[1][1], P[2][1]),
+                    Math.max(P[0][0], P[1][0], P[2][0]), Math.max(P[0][1], P[1][1], P[2][1])] });
+    }
+    var groups = {};
+    T.forEach(function (t) { (groups[t.key] = groups[t.key] || []).push(t); });
+    var lift = {};
+    Object.keys(groups).forEach(function (k) {
+      var g = groups[k];
+      if (g.length < 2 || g.length > 6000) return;
+      for (var i = 0; i < g.length; i++) for (var j = i + 1; j < g.length; j++) {
+        var p = g[i], q = g[j];
+        if (p.col === q.col) continue;
+        if (p.bb[2] <= q.bb[0] || q.bb[2] <= p.bb[0] || p.bb[3] <= q.bb[1] || q.bb[3] <= p.bb[1]) continue;
+        if (!(triHit(p.P, q.P) || triHit(q.P, p.P))) continue;
+        var small = p.area <= q.area ? p : q;
+        lift[small.fi] = small.n;
+      }
+    });
+    Object.keys(lift).forEach(function (fs) {
+      var fi = +fs, n = lift[fs], base = bk.v.length;
+      bk.f[fi].forEach(function (vi) {
+        var v = bk.v[vi];
+        bk.v.push([r5(v[0] + n[0] * LIFT_EPS), r5(v[1] + n[1] * LIFT_EPS), r5(v[2] + n[2] * LIFT_EPS)]);
+      });
+      bk.f[fi] = [base, base + 1, base + 2];
+      lifted++;
+    });
+  });
+  return lifted;
+}
+/* Does an interior point of P (its centre, or a point most of the way to a
+ * corner) lie strictly inside Q? Neighbours sharing an edge do not count. */
+function triHit(P, Q) {
+  var c = [(P[0][0] + P[1][0] + P[2][0]) / 3, (P[0][1] + P[1][1] + P[2][1]) / 3];
+  var pts = [c, [c[0] + (P[0][0] - c[0]) * 0.7, c[1] + (P[0][1] - c[1]) * 0.7],
+             [c[0] + (P[1][0] - c[0]) * 0.7, c[1] + (P[1][1] - c[1]) * 0.7],
+             [c[0] + (P[2][0] - c[0]) * 0.7, c[1] + (P[2][1] - c[1]) * 0.7]];
+  var a = Q[0], b = Q[1], d0 = Q[2];
+  var den = (b[1] - d0[1]) * (a[0] - d0[0]) + (d0[0] - b[0]) * (a[1] - d0[1]);
+  if (Math.abs(den) < 1e-16) return false;
+  for (var k = 0; k < pts.length; k++) {
+    var p = pts[k];
+    var l1 = ((b[1] - d0[1]) * (p[0] - d0[0]) + (d0[0] - b[0]) * (p[1] - d0[1])) / den;
+    var l2 = ((d0[1] - a[1]) * (p[0] - d0[0]) + (a[0] - d0[0]) * (p[1] - d0[1])) / den;
+    if (l1 > 0.02 && l2 > 0.02 && 1 - l1 - l2 > 0.02) return true;
+  }
+  return false;
+}
+/* Keep the part of bore `bi`'s faces with n.p <= d; split the ones that
+ * straddle the plane. Returns how many faces changed. */
+function clipBucketFaces(buckets, bi, n, d) {
+  var changed = 0, eps = 1e-7;
+  function r3(x) { return Math.round(x * 100000) / 100000; }   // vertex precision: five places
+  buckets.forEach(function (bk) {
+    var F = [], Cc = [], O = [], B = [];
+    for (var fi = 0; fi < bk.f.length; fi++) {
+      var f = bk.f[fi];
+      if (bk.bo[fi] !== bi) { F.push(f); Cc.push(bk.c[fi]); O.push(bk.o[fi]); B.push(bk.bo[fi]); continue; }
+      var P = f.map(function (vi) { return bk.v[vi]; });
+      var s = P.map(function (p) { return p[0] * n[0] + p[1] * n[1] + p[2] * n[2] - d; });
+      if (s[0] <= eps && s[1] <= eps && s[2] <= eps) { F.push(f); Cc.push(bk.c[fi]); O.push(bk.o[fi]); B.push(bi); continue; }
+      changed++;
+      if (s[0] > -eps && s[1] > -eps && s[2] > -eps) continue;     // wholly outside: gone
+      /* Sutherland-Hodgman against one plane: a triangle becomes a
+       * triangle or a quad, fanned back into triangles. */
+      var poly = [];
+      for (var k = 0; k < 3; k++) {
+        var a = P[k], b = P[(k + 1) % 3], sa = s[k], sb = s[(k + 1) % 3];
+        if (sa <= eps) poly.push(a);
+        if ((sa < -eps && sb > eps) || (sa > eps && sb < -eps)) {
+          var t = sa / (sa - sb);
+          poly.push([r3(a[0] + (b[0] - a[0]) * t), r3(a[1] + (b[1] - a[1]) * t), r3(a[2] + (b[2] - a[2]) * t)]);
+        }
+      }
+      if (poly.length < 3) continue;
+      var base = bk.v.length;
+      poly.forEach(function (p) { bk.v.push(p); });
+      for (var q = 1; q + 1 < poly.length; q++) {
+        F.push([base, base + q, base + q + 1]); Cc.push(bk.c[fi]); O.push(bk.o[fi]); B.push(bi);
+      }
+    }
+    bk.f = F; bk.c = Cc; bk.o = O; bk.bo = B;
+  });
+  return changed;
+}
+
 function convertPort(file) {
   var g = parseGlb(fs.readFileSync(file));
   var j = g.json;
-  var ext = { v: [], f: [], c: [], o: [] };     // the shell
-  var inr = { v: [], f: [], c: [], o: [] };     // only visible from inside
-  var spn = { v: [], f: [], c: [], o: [] };     // turns about +z
+  var ext = { v: [], f: [], c: [], o: [], bo: [] };     // the shell
+  var inr = { v: [], f: [], c: [], o: [], bo: [] };     // only visible from inside
+  var spn = { v: [], f: [], c: [], o: [], bo: [] };     // turns about +z
+  /* Which inclined bore a face belongs to (-1: none) - see clipBores. */
+  var bores = [];
   var single = {}, multi = {}, extras = [], groups = [], carriers = {};
   /* ENTRANCES: the outer doors a port opens to traffic control's say-so
    * (`airlock.outerOpensOn: 'dockingClearance'`). An orbital berth is its
@@ -1327,6 +1715,9 @@ function convertPort(file) {
    * way in is a surface pad door, a hangar door or a portal in a mountain
    * face (Astra, 24-09). Keyed by node name, grown over the door's subtree. */
   var entrances = {}, sweeps = [];
+  /* MOVERS (2026-10-16): one box per declared car, grown over its subtree,
+   * with where it can go (see moverStops). */
+  var movers = [];
   /* The scene root's own transform. A bay's declared `dockPath` is written
    * in the root's LOCAL frame (the station as designed, before the builder
    * grounded it), so it needs the root's matrix and nothing else — measured
@@ -1408,17 +1799,40 @@ function convertPort(file) {
    * the axis names. glTF front (+Z) therefore becomes the bay's -Y. */
   function toGame(p) { return [p[0], -p[2], p[1]]; }
 
-  function walk(nodeIdx, parentMat, inInterior, inSpin, anchors, inOmit, parentIdx, inGate, inOpen, inCarry, inEntr) {
+  function walk(nodeIdx, parentMat, inInterior, inSpin, anchors, inOmit, parentIdx, inGate, inOpen, inCarry, inEntr, inMover, inBore) {
     var node = j.nodes[nodeIdx];
     var local = node.matrix ? node.matrix.slice()
                             : matFromTRS(node.translation, node.rotation, node.scale);
     var world = matMul(parentMat, local);
     var name = node.name || '';
     if (parentIdx === -1 && !rootMat) rootMat = world;
+    /* A bore: named as one, and never the car inside it (the car is a
+     * mover, drawn on its own and clipped by its stops). */
+    var boreHere = (inBore === undefined || inBore === null) ? -1 : inBore;
+    if (boreHere < 0 && BORE_RE.test(name)) { boreHere = bores.length; bores.push({ node: name }); }
+    /* A MOVER starts here when this node declares motion; its unnamed parts
+     * ride with it. Never the scene root: the cradle's root carries a
+     * `lift` block describing the whole station's hoist, and a station is
+     * not a car. */
+    var mvHere = inMover || null;
+    var mxx = node.extras;
+    if (!mvHere && parentIdx !== -1 && mxx && typeof mxx === 'object' &&
+        ((mxx.lift && typeof mxx.lift === 'object') || (mxx.motion && typeof mxx.motion === 'object') ||
+         mxx.rampCar === true)) {
+      mvHere = box();
+      mvHere.node = name;
+      mvHere.nodeIdx = nodeIdx;
+      mvHere.parentIdx = parentIdx;
+      mvHere.local = local;
+      mvHere.parentMat = parentMat;
+      mvHere.extras = mxx;
+      movers.push(mvHere);
+    }
     /* Anything that opens: leaves, gates, fields, hatches. Drawn like any
      * other geometry, but left out of the voxel grid the interior routes
-     * are found in — a route runs through doors with the doors open. */
-    var openHere = inOpen || OPENABLE_RE.test(name);
+     * are found in — a route runs through doors with the doors open. A
+     * mover is left out too: its swept volume is added back as the ride. */
+    var openHere = inOpen || OPENABLE_RE.test(name) || !!mvHere || MOVER_NAME_RE.test(name);
     /* A CARRIER: a lift, a hoist, a conveyor, a shaft. Its whole volume is
      * somewhere a hull can be taken, decks and all — a lift car IS the hole
      * in the floor (Astra, 24-09: "angled cargo elevators to move the S and
@@ -1457,7 +1871,11 @@ function convertPort(file) {
      * because a stand leg's six unnamed pieces go away with the leg. */
     var omit = inOmit || PORT_OMIT_RE.test(name) || PORT_REFERENCE_RE.test(name);
     var inOmitNext = inOmit || PORT_OMIT_RE.test(name);
-    var interior = inInterior || PORT_INTERIOR_RE.test(name);
+    /* A car is never "interior": it is the floor a ship stands on, and it
+     * has to be drawn wherever that ship can be seen from - which, with the
+     * cutaway, is from outside too. Same lesson as the lift-car fix of
+     * 2026-10-13, now by declaration rather than by name. */
+    var interior = !mvHere && (inInterior || PORT_INTERIOR_RE.test(name));
     var spin = inSpin || PORT_SPIN_RE.test(name);
 
     /* glTF `extras` is where three.js's GLTFExporter puts userData, and
@@ -1623,6 +2041,7 @@ function convertPort(file) {
           if (mine) grow(mine, w);
           if (ckey) grow(carriers[ckey], w);
           if (ekey) grow(entrances[ekey], w);
+          if (mvHere && !omit) grow(mvHere, w);
         }
         if (omit) continue;                 // measured, deliberately unpainted
         var col = materialColour(g, prim.material);
@@ -1633,18 +2052,122 @@ function convertPort(file) {
           into.f.push([base + idx[t], base + idx[t + 1], base + idx[t + 2]]);
           into.c.push(col);
           into.o.push(openHere ? 1 : 0);
+          into.bo.push(mvHere ? -1 : boreHere);
         }
       }
     }
     for (var ch = 0; ch < (node.children || []).length; ch++) {
       walk(node.children[ch], world, interior, spin, mine, inOmitNext, nodeIdx,
-           inGate || gateHere, openHere, ckey, ekey);
+           inGate || gateHere, openHere, ckey, ekey, mvHere, boreHere);
     }
   }
 
   var scene = j.scenes[j.scene || 0];
   for (var r = 0; r < scene.nodes.length; r++) {
     walk(scene.nodes[r], matIdentity(), false, false, null, false, -1);
+  }
+  movers.forEach(function (mv) { mv.stops = moverStops(mv); });
+  movers = movers.filter(function (mv) { return isFinite(mv.min[0]); });
+
+  /* WHERE A CAR CAN GO: its stops, as displacements from where the art left
+   * it, in game axes and model units. Read from the declaration, in the
+   * dialect each builder wrote:
+   *   lift.travel {x,y,z}           ground sites: one run, parent frame
+   *   lift.idleY/deckY/surfaceY     the comet platform: stops on parent y
+   *   motion {axis:'y', from, to}   ring, skimmer sort lift, spine hub lift
+   *   motion {axis:'ramp', from,to} bore cars: along the bore
+   *   rampCar (no motion)           the cradle hoist: the whole bore
+   * A ramp's direction is the parent's declared `ramp` (a -> b) where there
+   * is one, else the bore's own long axis, measured in the bore's frame -
+   * the bore is modelled straight and then turned, so its local box is
+   * tight where its world box is a useless 45-degree square. */
+  function moverStops(mv) {
+    var ex = mv.extras || {}, L = ex.lift, M = ex.motion;
+    var cur = [mv.local[12], mv.local[13], mv.local[14]];
+    var a0 = toGame(matApply(mv.parentMat, cur));
+    function at(localPt) {
+      var p = toGame(matApply(mv.parentMat, localPt));
+      return [p[0] - a0[0], p[1] - a0[1], p[2] - a0[2]];
+    }
+    var out = [[0, 0, 0]];
+    if (L && L.travel && typeof L.travel === 'object') {
+      out.push(at([cur[0] + (+L.travel.x || 0), cur[1] + (+L.travel.y || 0), cur[2] + (+L.travel.z || 0)]));
+      return out;
+    }
+    if (L && typeof L.idleY === 'number') {
+      ['idleY', 'deckY', 'surfaceY', 'raisedY', 'loweredY'].forEach(function (k) {
+        if (typeof L[k] === 'number') out.push(at([cur[0], L[k], cur[2]]));
+      });
+      return out;
+    }
+    if (M && M.axis === 'y' && typeof M.from === 'number' && typeof M.to === 'number') {
+      out.push(at([cur[0], M.from, cur[2]]), at([cur[0], M.to, cur[2]]));
+      return out;
+    }
+    /* Ramps: the bore's direction and extent in the PARENT's frame. */
+    var bore = boreAxis(mv.parentIdx);
+    if (!bore) return out;
+    var s0 = (cur[0] - bore.c[0]) * bore.d[0] + (cur[1] - bore.c[1]) * bore.d[1] + (cur[2] - bore.c[2]) * bore.d[2];
+    function along(s) {
+      return at([cur[0] + bore.d[0] * (s - s0), cur[1] + bore.d[1] * (s - s0), cur[2] + bore.d[2] * (s - s0)]);
+    }
+    /* A declared ramp run is trusted when it is a real fraction of the
+     * bore. The skimmer's hoist car says -1.9 -> 1.7 in a 26-unit bore -
+     * a number in some other unit, or the car's own wobble - and taken at
+     * its word the car would move 14 metres up a 360-metre ramp. */
+    if (M && M.axis === 'ramp' && typeof M.from === 'number' && typeof M.to === 'number' &&
+        Math.abs(M.to - M.from) >= 0.25 * 2 * bore.half) {
+      out.push(along(M.from), along(M.to));
+      return out;
+    }
+    /* rampCar alone: end to end of the bore, less the car's own length. */
+    var carHalf = 0;
+    var cb = localBox(mv.nodeIdx, mv.local);
+    if (cb) carHalf = Math.abs((cb.max[0] - cb.min[0]) * bore.d[0]) / 2 +
+                      Math.abs((cb.max[1] - cb.min[1]) * bore.d[1]) / 2 +
+                      Math.abs((cb.max[2] - cb.min[2]) * bore.d[2]) / 2;
+    var reach = Math.max(0, bore.half - carHalf);
+    out.push(along(-reach), along(reach));
+    return out;
+  }
+  /* The bore a ramp car runs in: the parent's declared ramp, else the long
+   * axis of the parent's geometry measured in the parent's own frame. */
+  function boreAxis(pIdx) {
+    var p = j.nodes[pIdx];
+    if (!p) return null;
+    var rp = p.extras && p.extras.ramp;
+    if (rp && Array.isArray(rp.a) && Array.isArray(rp.b)) {
+      var dx = rp.b[0] - rp.a[0], dy = rp.b[1] - rp.a[1], dz = rp.b[2] - rp.a[2];
+      var l = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (l > 1e-9) return { d: [dx / l, dy / l, dz / l], half: l / 2,
+                             c: [(rp.a[0] + rp.b[0]) / 2, (rp.a[1] + rp.b[1]) / 2, (rp.a[2] + rp.b[2]) / 2] };
+    }
+    var b = localBox(pIdx, matIdentity());
+    if (!b) return null;
+    var sz = [b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]];
+    var ax = sz.indexOf(Math.max(sz[0], sz[1], sz[2]));
+    var d = [0, 0, 0]; d[ax] = 1;
+    return { d: d, half: sz[ax] / 2,
+             c: [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2] };
+  }
+  /* A subtree's bounds in the frame `base` maps it into (identity: the
+   * node's own frame; the node's local matrix: its parent's). */
+  function localBox(idx, base) {
+    var bb = box(), any = false;
+    (function lw(i, m) {
+      var n = j.nodes[i];
+      if (n.mesh !== undefined) {
+        j.meshes[n.mesh].primitives.forEach(function (pr) {
+          if (pr.mode !== undefined && pr.mode !== 4) return;
+          accessorData(g, pr.attributes.POSITION).forEach(function (q) { grow(bb, matApply(m, q)); any = true; });
+        });
+      }
+      (n.children || []).forEach(function (c) {
+        var cn = j.nodes[c];
+        lw(c, matMul(m, cn.matrix ? cn.matrix.slice() : matFromTRS(cn.translation, cn.rotation, cn.scale)));
+      });
+    })(idx, base);
+    return any ? bb : null;
   }
   sweeps.forEach(function (s) {
     var b = carriers[s.key];
@@ -1721,6 +2244,12 @@ function convertPort(file) {
     for (var mk2 in multi) multi[mk2].forEach(fixBox);
     for (var ck2 in carriers) fixBox(carriers[ck2]);
     for (var ek2 in entrances) fixBox(entrances[ek2]);
+    /* A stop is a displacement, and fix is a pure rotation, so it turns
+     * the same way a point does. */
+    movers.forEach(function (mv) {
+      fixBox(mv);
+      mv.stops = (mv.stops || []).map(function (s) { return fix(s); });
+    });
   }
 
   var all = ext.v.concat(inr.v, spn.v);
@@ -1757,9 +2286,25 @@ function convertPort(file) {
             r3((p[1] - origin[1]) * scale),
             r3((p[2] - origin[2]) * scale)];
   }
+  /* VERTICES AT FIVE PLACES, NOT THREE (2026-10-16). Astra: "internal
+   * surfaces in stations appear to flicker. Are they wafer thin, maybe?"
+   * They were made so here. Three places of a unit radius is a 4-metre
+   * grid on a 4 km station: a caution stripe raised a few centimetres off
+   * its deck, a lit panel proud of its wall, the two faces of a thin
+   * bulkhead - all snapped into one plane, and two surfaces in one plane
+   * z-fight. Measured on cradle-s: 13,766 differently-coloured coplanar
+   * overlapping pairs. Five places is 4 cm on the same station. Anchors
+   * keep three: they are boxes, and nothing about them is that fine. */
+  var r5 = function (x) { return Math.round(x * 100000) / 100000; };
+  function placeV(p) {
+    return [r5((p[0] - origin[0]) * scale), r5((p[1] - origin[1]) * scale), r5((p[2] - origin[2]) * scale)];
+  }
   [ext, inr, spn].forEach(function (bucket) {
-    for (var i = 0; i < bucket.v.length; i++) bucket.v[i] = place(bucket.v[i]);
+    for (var i = 0; i < bucket.v.length; i++) bucket.v[i] = placeV(bucket.v[i]);
   });
+  if (kind === 'orbital' && bores.length) clipBores([ext, inr], bores, file);
+  var lifted = liftCoplanar([ext, inr, spn]);
+  if (lifted) console.log('    lifted ' + lifted + ' flush panel face(s) off the surface beneath');
 
   function placedBox(b) {
     if (!b || !isFinite(b.min[0])) return null;
@@ -1890,7 +2435,52 @@ function convertPort(file) {
   }).filter(Boolean).sort(function (p, q) {
     return p.mid[0] - q.mid[0] || p.mid[1] - q.mid[1] || p.mid[2] - q.mid[2];
   });
-  if (kind === 'orbital' && anchors.berths) routed = interiorRoutes([ext, inr], anchors.berths, carried, doorList);
+  /* THE MOVERS, placed: the car's box, the line it runs on (a unit axis in
+   * the normalised frame) and how far along it, either way, it can go from
+   * where the art left it. Every stop the art declares lies on one line -
+   * a lift is a lift - so two numbers say it all. A car with nowhere to go
+   * (no stops beyond its own) is still a mover: drawn, never interior. */
+  var moverOut = movers.map(function (mv) {
+    var pb = placedBox(mv);
+    if (!pb) return null;
+    pb.node = mv.node;
+    var st = (mv.stops || [[0, 0, 0]]).map(function (s) { return [s[0] * scale, s[1] * scale, s[2] * scale]; });
+    var far = null, fd = 0;
+    st.forEach(function (s) { var d = Math.sqrt(s[0] * s[0] + s[1] * s[1] + s[2] * s[2]); if (d > fd) { fd = d; far = s; } });
+    if (far && fd > 1e-4) {
+      var ax = [far[0] / fd, far[1] / fd, far[2] / fd];
+      var lo2 = 0, hi2 = 0;
+      st.forEach(function (s) { var p = s[0] * ax[0] + s[1] * ax[1] + s[2] * ax[2]; lo2 = Math.min(lo2, p); hi2 = Math.max(hi2, p); });
+      pb.axis = [r3(ax[0]), r3(ax[1]), r3(ax[2])];
+      pb.range = [r3(lo2), r3(hi2)];
+    }
+    if (mv.extras && mv.extras.lift && Array.isArray(mv.extras.lift.servesSizes)) pb.serves = mv.extras.lift.servesSizes.slice();
+    return pb;
+  }).filter(Boolean);
+  if (moverOut.length) out.movers = moverOut;
+
+  /* WHAT A ROUTE MAY RIDE. Where the model declares movers, the ride is
+   * each car's own path - a capsule round the line its centre runs on -
+   * and nothing else. The old carriers were whole named groups (`shaft`,
+   * `hoist`, `lift`) taken as axis-aligned boxes, walls and all, and for a
+   * 45-degree bore that box is a square the size of the bore's run: the
+   * route-finder treated everything inside it as open and cut straight
+   * through the hull. Models with no declared movers keep the carriers,
+   * so nothing that routed before stops routing for want of a car. */
+  var rides = moverOut.filter(function (m) { return m.axis && m.range[1] - m.range[0] > 1e-3; }).map(function (m) {
+    var a = [m.mid[0] + m.axis[0] * m.range[0], m.mid[1] + m.axis[1] * m.range[0], m.mid[2] + m.axis[2] * m.range[0]];
+    var b = [m.mid[0] + m.axis[0] * m.range[1], m.mid[1] + m.axis[1] * m.range[1], m.mid[2] + m.axis[2] * m.range[1]];
+    var hx = (m.max[0] - m.min[0]) / 2, hy = (m.max[1] - m.min[1]) / 2, hz = (m.max[2] - m.min[2]) / 2;
+    /* Radius: the car's half-size across the run, so the ride is as wide
+     * as the floor that carries it and no wider. */
+    var ax = m.axis, across = Math.sqrt(Math.max(0,
+      hx * hx * (1 - ax[0] * ax[0]) + hy * hy * (1 - ax[1] * ax[1]) + hz * hz * (1 - ax[2] * ax[2])) / 2);
+    return { key: 'mover:' + m.node, a: a, b: b, r: Math.max(across, 0.004), hz: hz,
+             min: [Math.min(a[0], b[0]) - across, Math.min(a[1], b[1]) - across, Math.min(a[2], b[2]) - across],
+             max: [Math.max(a[0], b[0]) + across, Math.max(a[1], b[1]) + across, Math.max(a[2], b[2]) + across] };
+  });
+  var routeCarried = rides.length ? rides : carried;
+  if (kind === 'orbital' && anchors.berths) routed = interiorRoutes([ext, inr], anchors.berths, routeCarried, doorList);
   /* The art's declared routes are working data for the router, not index. */
   (anchors.berths || []).forEach(function (b) { delete b.declared; delete b.carriage; });
   if (carried.length) out.carriers = carried.map(function (c) { return { min: c.min, max: c.max, key: c.key }; });

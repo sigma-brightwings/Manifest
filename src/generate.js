@@ -1352,7 +1352,10 @@
     var k = ((i % sorted.length) + sorted.length) % sorted.length;
     var b = sorted[k];
     if (!b || typeof b.entry !== 'number' || !b.via || b.entry === k || !sorted[b.entry]) return null;
-    return { entry: b.entry, via: b.via, cls: b.cls || null };
+    /* `ride`: [i, j], the via corners where the hull boards a lift car and
+     * where it gets off, when the route rides one (glb2hulls, 2026-10-16).
+     * The arrival stops on the car and lets it run - see arrivalPose. */
+    return { entry: b.entry, via: b.via, cls: b.cls || null, ride: b.ride || null };
   }
 
   /* THE WAY DOWN TO A GROUND SITE'S BERTH (2026-09-24), or null.

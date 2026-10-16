@@ -706,9 +706,17 @@
       if (!global.PortGeo || !global.PortGeo.load(role)) return null;
       src = lib[role];
     }
+    var whole = decompress(src);
+    var split = splitMovers(whole, src.movers);
     var out = {
       kind: src.kind,
-      shell: decompress(src),
+      /* The hull WITHOUT its cars: every drawing path reads `shell`, so the
+       * cars are drawn once, by drawMovers, where their riders are. */
+      shell: split ? split.shell : whole,
+      /* ...and WITH them, for collision, which still sees each car where
+       * the art left it. */
+      solidShell: whole,
+      movers: split ? split.movers : null,
       interior: src.interior ? decompress(src.interior) : null,
       spin: src.spin ? decompress(src.spin) : null,
       anchors: src.anchors || null,
@@ -720,6 +728,110 @@
     };
     PORT_CACHE[role] = out;
     return out;
+  }
+
+  /* ---- MOVERS: the floors that carry a hull (2026-10-16) -----------------
+   *
+   * Astra: "the elevator pads are invisible inside the stations", and "we
+   * need to give the two things different classifications. Openables are
+   * one thing, then there are moving surfaces-with-collision."
+   *
+   * The converter now exports each declared car (glb2hulls: movers) with
+   * its box, the unit axis it runs on and how far along it each way it can
+   * go from where the art left it. The car's triangles are lifted out of
+   * the hull here, by box, the way door leaves are, and drawn by drawMovers
+   * at the pose that puts the car under whatever is riding it.
+   *
+   * Without this a small hull rode a lift whose car stayed parked at the
+   * top: the route went down the shaft, the floor did not, and the ship sank
+   * through an empty shaft with nothing under it - an "invisible pad". */
+  function splitMovers(shell, movers) {
+    if (!shell || !shell.f || !shell.f.length || !movers || !movers.length) return null;
+    var boxes = [];
+    for (var m = 0; m < movers.length; m++) {
+      var b = movers[m];
+      if (!b || !b.min || !b.max) continue;
+      var e = [(b.max[0] - b.min[0]) * 0.02 + 1e-4, (b.max[1] - b.min[1]) * 0.02 + 1e-4,
+               (b.max[2] - b.min[2]) * 0.02 + 1e-4];
+      boxes.push({ src: b, lo: [b.min[0] - e[0], b.min[1] - e[1], b.min[2] - e[2]],
+                   hi: [b.max[0] + e[0], b.max[1] + e[1], b.max[2] + e[2]], f: [], c: [] });
+    }
+    if (!boxes.length) return null;
+    var hullF = [], hullC = [], taken = 0;
+    for (var i = 0; i < shell.f.length; i++) {
+      var t = shell.f[i], a = shell.v[t[0]], bb = shell.v[t[1]], c = shell.v[t[2]];
+      var col = shell.c ? shell.c[i] : null, own = null;
+      if (a && bb && c) {
+        var px = (a[0] + bb[0] + c[0]) / 3, py = (a[1] + bb[1] + c[1]) / 3, pz = (a[2] + bb[2] + c[2]) / 3;
+        for (var k = 0; k < boxes.length && !own; k++) {
+          var x = boxes[k];
+          if (px >= x.lo[0] && px <= x.hi[0] && py >= x.lo[1] && py <= x.hi[1] &&
+              pz >= x.lo[2] && pz <= x.hi[2]) own = x;
+        }
+      }
+      if (own) { own.f.push(t); own.c.push(col); taken++; }
+      else { hullF.push(t); hullC.push(col); }
+    }
+    if (!taken) return null;
+    var out = [];
+    for (k = 0; k < boxes.length; k++) {
+      var s = boxes[k].src;
+      if (!boxes[k].f.length) continue;
+      out.push({ node: s.node, min: s.min, max: s.max, mid: s.mid, axis: s.axis || null,
+                 range: s.range || [0, 0], serves: s.serves || null,
+                 mesh: { v: shell.v, f: boxes[k].f, c: shell.c ? boxes[k].c : null } });
+    }
+    return { shell: { v: shell.v, f: hullF, c: shell.c ? hullC : shell.c }, movers: out };
+  }
+
+  /* Who is riding. main.js hands over the world positions of the hulls
+   * that might be on a car this frame (the player's, at least), each with
+   * how far its keel sits below its centre, in km. */
+  var MOVER_RIDERS = [];
+  function setMoverRiders(list) { MOVER_RIDERS = list || []; }
+
+  /* Where along its run a car should be: under the first rider found inside
+   * its ride, else where the art left it. In model units along `axis`. */
+  function moverPose(mv, frame, radiusKm) {
+    if (!mv.axis || !(mv.range[1] - mv.range[0] > 1e-6)) return 0;
+    var ax = mv.axis, mid = mv.mid;
+    var hx = (mv.max[0] - mv.min[0]) / 2, hy = (mv.max[1] - mv.min[1]) / 2, hz = (mv.max[2] - mv.min[2]) / 2;
+    var halfAlong = Math.abs(ax[0]) * hx + Math.abs(ax[1]) * hy + Math.abs(ax[2]) * hz;
+    var reach = Math.max(hx, hy, hz) * 1.6;
+    for (var i = 0; i < MOVER_RIDERS.length; i++) {
+      var r = MOVER_RIDERS[i];
+      if (!r || !r.pos) continue;
+      var dx = r.pos.x - frame.pos.x, dy = r.pos.y - frame.pos.y, dz = r.pos.z - frame.pos.z;
+      var p = [(dx * frame.right.x + dy * frame.right.y + dz * frame.right.z) / radiusKm,
+               (dx * frame.up.x + dy * frame.up.y + dz * frame.up.z) / radiusKm,
+               (dx * frame.fwd.x + dy * frame.fwd.y + dz * frame.fwd.z) / radiusKm];
+      var q = [p[0] - mid[0], p[1] - mid[1], p[2] - mid[2]];
+      var along = q[0] * ax[0] + q[1] * ax[1] + q[2] * ax[2];
+      var lat = [q[0] - ax[0] * along, q[1] - ax[1] * along, q[2] - ax[2] * along];
+      var latD = Math.sqrt(lat[0] * lat[0] + lat[1] * lat[1] + lat[2] * lat[2]);
+      if (along < mv.range[0] - halfAlong - reach || along > mv.range[1] + halfAlong + reach) continue;
+      if (latD > reach) continue;
+      /* The car's TOP under the keel. Model +z is up in every port frame,
+       * and a car keeps level, so on anything steeper than a gentle ramp
+       * the pose is solved on z; on the flat it follows along the run. */
+      var keel = (r.keelKm || 0) / radiusKm, s;
+      if (Math.abs(ax[2]) > 0.3) s = (p[2] - keel - mv.max[2]) / ax[2];
+      else s = along;
+      return Math.max(mv.range[0], Math.min(mv.range[1], s));
+    }
+    return 0;
+  }
+
+  function drawMovers(ctx, cam, frame, radiusKm, sunDir, model, tint) {
+    var lib = libPort(model);
+    var list = lib && lib.movers;
+    if (!list || !list.length) return;
+    for (var i = 0; i < list.length; i++) {
+      var mv = list[i];
+      var s = moverPose(mv, frame, radiusKm);
+      var fr = (s && mv.axis) ? shiftFrame(frame, mv.axis[0] * s, mv.axis[1] * s, mv.axis[2] * s, radiusKm) : frame;
+      paintPart(ctx, cam, fr, mv.mesh, radiusKm, sunDir, tint);
+    }
   }
 
   function portIds() {
@@ -6269,6 +6381,10 @@
   }
 
   function drawStationModel(ctx, cam, frame, radiusKm, sunDir, model, tint, doors, section) {
+    /* The cars first, whichever way the hull is drawn below: they are not
+     * part of any compartment's hull, and a floor that vanished with its
+     * section door would be the same invisible pad again. */
+    drawMovers(ctx, cam, frame, radiusKm, sunDir, model, tint);
     /* WITH THE DOORS SEPARATED when this model has any: the hull without
      * them, then each leaf at its own offset. `doors` is { open, berth }
      * — how far, and whose. Only the berth you are cleared into moves,
@@ -7160,7 +7276,9 @@
      * asked and null forever afterwards — which reads exactly like the
      * feature not working, because it is not. */
     SOLIDITY[role] = null;
-    var shell = lib && lib.shell;
+    /* The whole hull, cars included at their rest poses: lifting the cars
+     * out for drawing must not open holes in what a hull collides with. */
+    var shell = lib && (lib.solidShell || lib.shell);
     if (!shell || !shell.v || !shell.v.length || !shell.f || !shell.f.length) return null;
 
     var N = SOLID_N, i, j, a;
@@ -10240,6 +10358,7 @@
     portRole: portRole, assignPort: assignPort, PORT_ASSIGN: PORT_ASSIGN,
     portLivery: portLivery, ROLE_PATTERNS: ROLE_PATTERNS, PORT_HELD_BACK: PORT_HELD_BACK,
     prefetchPorts: prefetchPorts, portGeometryArrived: portGeometryArrived,
+    setMoverRiders: setMoverRiders, moverPose: moverPose, splitMovers: splitMovers,
     poolFor: poolFor, PORT_POOL: PORT_POOL,
     portClass: portClass, portSizeFor: portSizeFor,
     PORT_PATTERNS: PORT_PATTERNS, PORT_SIZE_CUTS: PORT_SIZE_CUTS,
