@@ -441,6 +441,7 @@
     if (hooks && hooks.say) {
       var head = boom.rock ? 'Torpedo on rock - ' + chunks + ' chunks thrown, ' + tonnes.toFixed(1) + ' t worth having'
                : boom.port ? 'Torpedo on ' + boom.port.name
+               : boom.commanded ? 'Torpedo detonated on command'
                : boom.spent ? 'Torpedo spent - self-destructed'
                : 'Torpedo detonated';
       hooks.say(head + (notes.length ? ' - ' + notes.join(', ') : ''), 7);
@@ -475,6 +476,93 @@
     return owed;
   }
 
+  /* ---- after launch: the command link --------------------------------------
+   * Astra: "we also need a way to disarm active torps." A torpedo in flight
+   * listens to the ship that fired it, out to TORP_LINK. Two commands, both
+   * from the ordnance panel:
+   *
+   *   DISARM - the charge is safed and the motor dies. It coasts on as an
+   *     inert canister on ordinary physics (a day before it is lost), and a
+   *     scoop with rack room takes it back into the rack. Aboard again it is
+   *     a torpedo aboard - the same customs rules apply.
+   *   DETONATE - it goes off where it is, now. Clear of every station and
+   *     short of anything worth the charge, that is a safing shot, and the
+   *     Guild's half refund applies like any other. */
+  var TORP_LINK = 200;            // km - the command link's reach
+
+  function torpedoesInFlight(sys) {
+    return (sys && sys.missiles || []).filter(function (m) { return m.torp; });
+  }
+
+  function linked(G, tp) {
+    return V.dist(G.ship.pos, tp.pos) <= TORP_LINK;
+  }
+
+  function takeFromFlight(sys, id) {
+    var list = sys.missiles || [], tp = null;
+    for (var i = 0; i < list.length; i++) if (list[i].torp && list[i].id === id) { tp = list[i]; break; }
+    if (tp) sys.missiles = list.filter(function (m) { return m !== tp; });
+    return tp;
+  }
+
+  function disarmTorpedo(sys, G, t, id, hooks) {
+    var tp = torpedoesInFlight(sys).filter(function (m) { return m.id === id; })[0];
+    if (!tp) return { ok: false, why: 'no such torpedo in flight' };
+    if (!linked(G, tp)) {
+      if (hooks && hooks.say) hooks.say('Torpedo out of command range (' + TORP_LINK + ' km)', 4);
+      return { ok: false, why: 'out of range' };
+    }
+    takeFromFlight(sys, id);
+    var S = Sim();
+    if (!sys.canisters) sys.canisters = [];
+    var can = {
+      kind: 'canister', torpInert: true, torpKind: tp.kind,
+      id: 'inert' + (sys.canisterSeq = (sys.canisterSeq || 0) + 1),
+      name: 'Disarmed torpedo',
+      pos: V.clone(tp.pos), vel: V.clone(tp.vel),
+      born: t, expires: t + ((S && S.CANISTER_LIFE) || 86400),
+      spin: 0.2, radius: 0.003,
+      armed: false                  // not caught again until it has got clear of you
+    };
+    sys.canisters.push(can);
+    if (hooks && hooks.say) hooks.say('Torpedo disarmed - inert, drifting. Match speed and scoop it to re-rack.', 5);
+    if (hooks && hooks.sound) hooks.sound('click');
+    return { ok: true, canister: can };
+  }
+
+  function detonateTorpedo(sys, G, t, id, hooks) {
+    var tp = torpedoesInFlight(sys).filter(function (m) { return m.id === id; })[0];
+    if (!tp) return { ok: false, why: 'no such torpedo in flight' };
+    if (!linked(G, tp)) {
+      if (hooks && hooks.say) hooks.say('Torpedo out of command range (' + TORP_LINK + ' km)', 4);
+      return { ok: false, why: 'out of range' };
+    }
+    takeFromFlight(sys, id);
+    detonate(sys, G, t, tp, { at: V.clone(tp.pos), spent: true, commanded: true }, hooks);
+    return { ok: true };
+  }
+
+  /* The scoop's half of disarming: an inert torpedo back into its rack, if
+   * there is room in it. Returns true when it went aboard. */
+  function recoverInert(G, c, hooks) {
+    var Cb = global.Combat, s = G.ship;
+    if (!c || !c.torpInert || !Cb) return false;
+    var m = Cb.MISSILES[c.torpKind];
+    if (!m) return false;
+    s.racks = s.racks || {};
+    var rk = s.racks[c.torpKind];
+    var racksUsed = Object.keys(s.racks).filter(function (k) { return s.racks[k] && s.racks[k].n > 0; }).length;
+    if (rk ? rk.n >= m.rack : racksUsed >= Cb.rackSlots(s)) {
+      if (hooks && hooks.say) hooks.say('No rack room for the torpedo - left drifting', 3);
+      return false;
+    }
+    if (!rk) rk = s.racks[c.torpKind] = { id: c.torpKind, n: 0, batch: null };
+    rk.n += 1;
+    Cb.syncRacks(s);
+    if (hooks && hooks.say) hooks.say(m.name + ' recovered - back in the rack (' + rk.n + ')', 4);
+    return true;
+  }
+
   /* Shattered rocks stay gone: filtered out of what the laser and the
    * torpedo can find. (The renderer filters the same set.) */
   function isShattered(G, id) { return !!(G && G.shattered && G.shattered[id]); }
@@ -487,7 +575,9 @@
     skimStep: skimStep, isGiant: isGiant,
     launchTorpedo: launchTorpedo, updateTorpedoes: updateTorpedoes, detonate: detonate,
     sabotage: sabotage, sabotaged: sabotaged, claimRefund: claimRefund, isShattered: isShattered,
-    nearestPort: nearestPort
+    nearestPort: nearestPort,
+    TORP_LINK: TORP_LINK, torpedoesInFlight: torpedoesInFlight,
+    disarmTorpedo: disarmTorpedo, detonateTorpedo: detonateTorpedo, recoverInert: recoverInert
   };
   global.Mining = Mining;
   if (typeof module !== 'undefined' && module.exports) module.exports = Mining;

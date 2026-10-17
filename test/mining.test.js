@@ -290,6 +290,34 @@ Combat.blastAt(bsys, Gh, t0, rock.pos, Mn.TORP_BLAST, 140, hk);
 check('300 m from the flash: hull, heat and a shove', Gh.ship.hullHp < hp0 && V.dist(Gh.ship.vel, rock.vel) > 0.004,
       (hp0 - Gh.ship.hullHp).toFixed(0) + ' hull');
 
+console.log('--- the command link ---');
+var Gd2 = torpRig(rock);
+bsys.missiles = []; bsys.canisters = [];
+Gd2.torpCover = true; Combat.launchTorpedo(bsys, Gd2, t0, 'rocktorp', hk);
+var inFl = Mn.torpedoesInFlight(bsys);
+check('one torpedo in flight, listed', inFl.length === 1);
+Mn.updateTorpedoes(bsys, Gd2, t0, 1, hk);
+var dis = Mn.disarmTorpedo(bsys, Gd2, t0 + 1, inFl[0].id, hk);
+check('DISARM takes it out of flight', dis.ok && !Mn.torpedoesInFlight(bsys).length);
+var inert = bsys.canisters.filter(function (c) { return c.torpInert; });
+check('and leaves it drifting inert', inert.length === 1 && inert[0].torpKind === 'rocktorp');
+var hold0b = Gd2.ship.racks.rocktorp.n;
+for (var st2 = 0; st2 < 200; st2++) Mn.updateTorpedoes(bsys, Gd2, t0 + 1 + st2 * 0.1, 0.1, hk);
+check('a disarmed torpedo never goes off', !bsys.canisters.some(function (c) { return c.ore; }) && Gd2.lastTorpedo === undefined);
+check('the scoop puts it back in the rack', Mn.recoverInert(Gd2, inert[0], hk) && Gd2.ship.racks.rocktorp.n === hold0b + 1);
+Gd2.torpCover = true; Combat.launchTorpedo(bsys, Gd2, t0 + 30, 'rocktorp', hk);
+var second = Mn.torpedoesInFlight(bsys)[0];
+var ref0 = Gd2.torpRefund || 0;
+var det = Mn.detonateTorpedo(bsys, Gd2, t0 + 31, second.id, hk);
+check('DETONATE blows it where it is', det.ok && !Mn.torpedoesInFlight(bsys).length && Gd2.lastTorpedo && Gd2.lastTorpedo.chunks === 0);
+check('a commanded safing earns the Guild refund', (Gd2.torpRefund || 0) === ref0 + 1250);
+Gd2.torpCover = true; Combat.launchTorpedo(bsys, Gd2, t0 + 40, 'rocktorp', hk);
+var far = Mn.torpedoesInFlight(bsys)[0];
+far.pos = V.add(Gd2.ship.pos, { x: Mn.TORP_LINK + 50, y: 0, z: 0 });
+check('out past the command link it will not answer', !Mn.disarmTorpedo(bsys, Gd2, t0 + 41, far.id, hk).ok &&
+      !Mn.detonateTorpedo(bsys, Gd2, t0 + 41, far.id, hk).ok && Mn.torpedoesInFlight(bsys).length === 1);
+bsys.missiles = [];
+
 console.log('--- out, never in ---');
 var port = tsys.ports[0];
 var ps2 = Sim.bodyState(port, tsys, t0);

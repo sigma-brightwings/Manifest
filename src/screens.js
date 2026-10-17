@@ -1589,6 +1589,49 @@
       }
     }
 
+    /* Under the nose: what is already out there, and the command link to
+     * it. DISARM safes one (it drifts on inert, scoop it back); DETONATE
+     * blows it where it is. Out of link range the buttons go dead. */
+    var fl = Mn ? Mn.torpedoesInFlight(G.sys) : [];
+    var fy = y + 190;
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText('IN FLIGHT', mx, fy);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    if (!fl.length) {
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('nothing out', mx, fy + 20);
+    } else {
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('D disarms, X detonates the newest', mx, fy + 18);
+    }
+    fl.slice(-6).reverse().forEach(function (tp, i) {
+      var ly = fy + 40 + i * 36;
+      var d = V.dist(G.ship.pos, tp.pos);
+      var inLink = d <= Mn.TORP_LINK;
+      var armedNow = G.t >= tp.born + Mn.TORP_ARM / Mn.TORP_SPEED;
+      var left = Math.max(0, tp.dies - G.t);
+      /* Still inside its own blast radius of you: detonating it now hurts. */
+      var tooClose = d < Mn.TORP_BLAST * 1.1;
+      ctx.fillStyle = !inLink ? MFD_DIM : tooClose ? '#ff6b5a' : MFD_INK;
+      if (tooClose && inLink) ctx.fillText('inside the blast - detonating hurts you', mx, ly + 14);
+      ctx.fillStyle = !inLink ? MFD_DIM : tooClose ? '#ff6b5a' : MFD_INK;
+      ctx.fillText((tp.guild ? 'GUILD ' : 'UNREG ') + (d < 100 ? d.toFixed(1) : Math.round(d)) + ' km  ' +
+                   (armedNow ? 'ARMED' : 'arming') + '  ' + Math.floor(left / 60) + ':' +
+                   ('0' + Math.floor(left % 60)).slice(-2), mx, ly);
+      function btn(bx0, label, colour, fn) {
+        ctx.fillStyle = inLink ? colour : '#1a2226';
+        ctx.fillRect(bx0, ly - 13, 78, 20);
+        ctx.fillStyle = inLink ? '#05090c' : '#4a5a60';
+        ctx.textAlign = 'center';
+        ctx.fillText(label, bx0 + 39, ly + 1);
+        ctx.textAlign = 'left';
+        if (inLink) hot(bx0, ly - 13, 78, 20, fn, label.toLowerCase());
+      }
+      btn(mx + 200, 'DISARM', '#7dffcf', function () { Mn.disarmTorpedo(G.sys, G, G.t, tp.id, hooksFor()); });
+      btn(mx + 284, 'DETONATE', '#ff9f7a', function () { Mn.detonateTorpedo(G.sys, G, G.t, tp.id, hooksFor()); });
+    });
+
     /* Right: the guarded switch. */
     var gx = x + pw - 230, gy = y + 40, gw2 = 190, gh2 = 150;
     ctx.font = 'bold 13px ui-monospace, monospace';
@@ -1784,7 +1827,7 @@
                         : ordnance ? 'SHIP — ORDNANCE'
                         : 'SHIP STATUS & INVENTORY',
                         guns ? 'Tab panels   ·   space fires A   ·   shift+space fires B'
-                        : ordnance ? 'Tab status   ·   ↑↓ charge   ·   C guard   ·   Enter launch'
+                        : ordnance ? 'Tab status   ·   ↑↓ charge   ·   C guard   ·   Enter launch   ·   D disarm   ·   X detonate'
                         : panels ? 'Tab ordnance   ·   pick a mount, then pick a page'
                              : (G.ship.docked ? 'Tab guns   ·   F4 trade   ·   ↑↓ select   ·   Del jettison'
                                               : 'Tab guns   ·   ↑↓ select   ·   Del jettison   ·   Shift+Del all'));

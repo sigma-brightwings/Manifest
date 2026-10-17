@@ -1415,6 +1415,17 @@
           Combat.launchTorpedo(G.sys, G, G.t, G.torpPick, HOOKS);
           return;
         }
+        /* The command link: D disarms, X detonates, the newest torpedo
+         * still out there. */
+        if ((kl === 'd' || kl === 'x') && global.Mining) {
+          e.preventDefault();
+          var fl = global.Mining.torpedoesInFlight(G.sys);
+          if (!fl.length) { say('No torpedo in flight', 2); return; }
+          var newest = fl[fl.length - 1];
+          if (kl === 'd') global.Mining.disarmTorpedo(G.sys, G, G.t, newest.id, HOOKS);
+          else global.Mining.detonateTorpedo(G.sys, G, G.t, newest.id, HOOKS);
+          return;
+        }
         if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
           e.preventDefault();
           var tk = ['rocktorp', 'syndtorp'].filter(function (k) {
@@ -6370,7 +6381,7 @@
     if (now - noScoopSaidAt < 12000) return;
     noScoopSaidAt = now;
     var good = Eco.BY_ID[c.cid];
-    say('No cargo scoop fitted — ' + (good ? good.name : c.cid) +
+    say('No cargo scoop fitted — ' + (c.torpInert ? 'the disarmed torpedo' : good ? good.name : c.cid) +
         ' drifts past. Any yard sells one.', 5);
   }
 
@@ -6384,7 +6395,9 @@
       /* Most wreckage is wreckage. A shard only goes aboard if something on
        * it survived worth having — the rest is scrap you fly through, and
        * quietly hoovering it up would turn a debris field into a chore. */
-      if (!c.cid || !(c.tonnes > 0)) continue;
+      /* A disarmed torpedo is not cargo: it goes back into its rack. */
+      var inertTorp = !!c.torpInert;
+      if (!inertTorp && (!c.cid || !(c.tonnes > 0))) continue;
       var near = V.dist(c.pos, G.ship.pos) <= SCOOP_RANGE;
 
       /* ARMING, and it is the whole reason jettison used to do nothing.
@@ -6410,6 +6423,15 @@
       if (!near) continue;
       if (V.dist(c.vel, G.ship.vel) > SCOOP_CLOSE) continue;
       if (!scoop) { sayNoScoop(c); continue; }
+      if (inertTorp) {
+        if (global.Mining && global.Mining.recoverInert(G, c, HOOKS)) {
+          cans.splice(i, 1);
+          HOOKS.sound('scoop');
+        } else {
+          c.armed = false;              // say it once, then wait until you come back
+        }
+        continue;
+      }
       var free = G.ship.cargoCap - Sim.cargoMass(G.ship);
       if (free <= 0) { say('Hold full — canister left drifting', 3); return; }
       var take = Math.min(c.tonnes, free);
