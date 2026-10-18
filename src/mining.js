@@ -40,6 +40,23 @@
   var SKIM_AREA = 1500;          // m^2 - the intake's charged capture field
   var SKIM_MIN_GRADE = 0.3;      // a giant this poor in hydrogen is not worth the dive
 
+  /* ---- pieces and wear (2026-10-18) ---------------------------------------
+   * Astra: the beam "can go continuously before 2t of mined material is
+   * ejected from the asteroid. This should not only deplete the store of
+   * minerals but it should also remove real pieces from that asteroid, one
+   * by one, over time." Decided with her: REAL MASS, VISIBLE CRATERS. A rock
+   * weighs what its size and material say; every piece cut comes off that
+   * mass, and is carved out of the rock's mesh where the beam was. A 5 m
+   * ice chunk (~470 t) is gone in a long session; a 20 m stone one carries
+   * scars for years. Every tonne still books into G.extracted too, so the
+   * survey's store depletes exactly as before. */
+  var PIECE_T = 2;                       // t, one piece off the beam
+  var BEAM_T_PER_UNIT = 0.03;            // t of stone per unit of beam work: ~0.25 t/s
+  var HARDNESS = { ice: 1.5, stone: 1, metal: 0.6 };   // how fast it cuts
+  var DENSITY = { ice: 0.92, stone: 2.7, metal: 5.0 };  // t per cubic metre
+  var ROCK_FILL = 0.62;                  // the potato's volume against its bounding sphere
+  var CRATER_MAX = 24;                   // craters kept per rock; nearer ones merge
+
   /* ---- what rock is near ------------------------------------------------- */
 
   /* Every rock within `range` of `point`: belt-field members and ring
@@ -58,10 +75,11 @@
         for (var m = 0; m < fd.count; m++) {
           var rk = R.fieldMember(fd, m, sys, t, c, hf);
           if (V.dist(rk.pos, point) > range + rk.size) continue;
-          if (G.shattered && G.shattered[rk.id]) continue;
+          if (isGone(G, rk)) continue;
           rk.kind = R.memberKind(fd, rk);
           rk.key = here + ':' + belt.id;
           rk.source = belt;
+          worn(G, rk);
           out.push(rk);
         }
       });
@@ -71,11 +89,12 @@
       var ps = S.bodyState(p, sys, t);
       if (V.dist(point, ps.pos) > p.ring.outer + range) return;
       R.ringChunksNear(p, ps, point, range, t, 400).forEach(function (ck) {
-        if (G.shattered && G.shattered[ck.id]) return;
+        if (isGone(G, ck)) return;
         ck.kind = (R.mix32(ck.shape * 977 + Math.floor(ck.spin * 1e6)) / 4294967296) < p.ring.ice
                   ? 'ice' : 'stone';
         ck.key = here + ':' + p.id + ':ring';
         ck.source = { kind: 'ring', planet: p, name: p.name + ' ring' };
+        worn(G, ck);
         out.push(ck);
       });
     });
@@ -116,7 +135,7 @@
 
   /* The k-th chunk cut from a rock: a pure function of the rock, the count,
    * and the deposits as they stand. { cid|null, tonnes }. */
-  function chunkOf(G, rock, k) {
+  function chunkOf(G, rock, k, pieceT) {
     var S = Sv();
     var rows = S ? S.remaining(G, rock.key, S.deposits(rock.source, null)) : [];
     var lean = LEAN[rock.kind] || LEAN.stone;
@@ -130,13 +149,16 @@
       rich = Math.max(rich, r.grade * Math.min(1, lean[r.cid] || 0.2));
     });
     var tag = rock.id + ':cut:' + k;
-    var size = 1.5 + 3.5 * hash01(tag + ':t');
+    var size = pieceT || (1.5 + 3.5 * hash01(tag + ':t'));
     /* Slag first: the poorer the ground, the more of what you cut is rock. */
     if (!tot || hash01(tag + ':slag') > 0.25 + 0.75 * Math.min(1, rich)) {
       return { cid: null, tonnes: Math.round(size * 10) / 10 };
     }
     var u = hash01(tag + ':cid') * tot, pick = w[w.length - 1].cid;
     for (var i = 0; i < w.length; i++) { u -= w[i].x; if (u <= 0) { pick = w[i].cid; break; } }
+    /* A piece of known mass is that much ROCK; what is worth the hold is
+     * the share of it that is ore, half to all of it with richness. */
+    if (pieceT) return { cid: pick, tonnes: Math.round(pieceT * (0.5 + 0.5 * Math.min(1, rich)) * 10) / 10 };
     return { cid: pick, tonnes: Math.round(size * (0.6 + 0.6 * rich) * 10) / 10 };
   }
 
@@ -151,33 +173,187 @@
     var rocks = rocksNear(G, sys, V.addScaled(s.pos, s.fwd, range / 2), t, range / 2 + ROCK_LOOK);
     var hit = rayRock(rocks, s.pos, V.norm(s.fwd), range);
     if (!hit) return null;
+    var rock = hit.rock;
     var cutting = G.cutting;
-    if (!cutting || cutting.id !== hit.rock.id) {
-      cutting = G.cutting = { id: hit.rock.id, work: 0, k: 0, shown: 0 };
+    if (!cutting || cutting.id !== rock.id) {
+      cutting = G.cutting = { id: rock.id, tonnes: 0, shown: 0 };
     }
-    G.cutting.at = t;
-    cutting.work += gun.dmg || 1;
-    var frac = Math.min(1, cutting.work / CUT_PER_CHUNK);
-    G.cutProgress = { frac: frac, rock: hit.rock, t: t };
-    if (cutting.work >= CUT_PER_CHUNK) {
-      cutting.work -= CUT_PER_CHUNK;
-      var ch = chunkOf(G, hit.rock, (G.cutCount = G.cutCount || {})[hit.rock.id] || 0);
-      G.cutCount[hit.rock.id] = (G.cutCount[hit.rock.id] || 0) + 1;
-      var shard = spawnChunk(sys, hit, ch, t);
-      if (ch.cid) {
-        G.extracted = G.extracted || {};
-        var ex = G.extracted[hit.rock.key] = G.extracted[hit.rock.key] || {};
-        ex[ch.cid] = (ex[ch.cid] || 0) + ch.tonnes;
-      }
-      var name = ch.cid ? ((Sv() && Sv().NAMES[ch.cid]) || ch.cid).toLowerCase() : null;
-      if (hooks && hooks.say) {
-        hooks.say(ch.cid ? 'Chunk free - ' + ch.tonnes.toFixed(1) + ' t of ' + name + ', scoop it'
-                         : 'Chunk free - slag, nothing in it worth the hold', 3);
-      }
-      if (hooks && hooks.sound) hooks.sound('scoop');
-      return { end: hit.at, rock: hit.rock, chunk: ch, shard: shard };
+    cutting.at = t;
+    /* THE BEAM CUTS CONTINUOUSLY and the rock gives a piece every 2 t; the
+     * CANNON (gun.pulseTonnes) knocks off what one pulse is worth. Ice cuts
+     * fastest and metal slowest, by HARDNESS. */
+    var piece = gun.piece || PIECE_T;
+    var perShot = gun.pulseTonnes ? gun.pulseTonnes : (gun.dmg || 1) * BEAM_T_PER_UNIT;
+    cutting.tonnes = (cutting.tonnes || 0) + perShot * (HARDNESS[rock.kind] || 1);
+    var left = rockMassLeft(G, rock);
+    if (left < piece) piece = Math.max(0.1, left);          // the last of it
+    G.cutProgress = { frac: Math.min(1, cutting.tonnes / piece), rock: rock, t: t,
+                      tonnes: cutting.tonnes, piece: piece };
+    if (cutting.tonnes < piece - 1e-9) return { end: hit.at, rock: rock, chunk: null };
+    cutting.tonnes -= piece;
+    G.cutCount = G.cutCount || {};
+    var ck = rockKey(G, rock);
+    var ch = chunkOf(G, rock, G.cutCount[ck] || 0, piece);
+    G.cutCount[ck] = (G.cutCount[ck] || 0) + 1;
+    var shard = spawnChunk(sys, hit, ch, t);
+    if (ch.cid) {
+      G.extracted = G.extracted || {};
+      var ex = G.extracted[rock.key] = G.extracted[rock.key] || {};
+      ex[ch.cid] = (ex[ch.cid] || 0) + ch.tonnes;
     }
-    return { end: hit.at, rock: hit.rock, chunk: null };
+    /* AND THE ROCK IS THAT MUCH LESS. */
+    var gone = carve(G, rock, hit.normal, t, piece);
+    if (gone) G.cutting = null;
+    var name = ch.cid ? ((Sv() && Sv().NAMES[ch.cid]) || ch.cid).toLowerCase() : null;
+    if (hooks && hooks.say) {
+      hooks.say((gone ? 'The last of it - the rock is gone. ' : '') +
+                (ch.cid ? 'Piece free - ' + ch.tonnes.toFixed(1) + ' t of ' + name + ', scoop it'
+                        : 'Piece free - slag, nothing in it worth the hold'), 3);
+    }
+    if (hooks && hooks.sound) hooks.sound('scoop');
+    return { end: hit.at, rock: rock, chunk: ch, shard: shard, gone: gone };
+  }
+
+  /* ---- what is left of a rock --------------------------------------------- */
+
+  /* Rock state is keyed by SYSTEM and rock id. Ring-rock ids are built from
+   * planet ids ('b7:r12:40') and those repeat at every star, so a bare id
+   * shattered in one system was also hiding its namesake in every other -
+   * a bug found 2026-10-18 while adding wear. Bare keys from older saves are
+   * still honoured, so nothing a torpedo already took comes back. */
+  function rockKey(G, rock) {
+    return ((G && G.here && G.here.id) || 'sys') + '|' + (rock && rock.id !== undefined ? rock.id : rock);
+  }
+  function isGone(G, rock) {
+    var s = G && G.shattered;
+    if (!s) return false;
+    var id = rock && rock.id !== undefined ? rock.id : rock;
+    return !!(s[rockKey(G, rock)] || s[id]);
+  }
+
+  /* What a rock weighed before anyone cut it: its material's density times
+   * the potato's volume (ROCK_FILL of its bounding sphere). size is km. */
+  function rockMass0(rock) {
+    var r = (rock.size0 || rock.size) * 1000;
+    return (DENSITY[rock.kind] || DENSITY.stone) * ROCK_FILL * (4 / 3) * Math.PI * r * r * r;
+  }
+  function wearOf(G, rock) { return G && G.rockWear ? G.rockWear[rockKey(G, rock)] : null; }
+  function rockMassLeft(G, rock) {
+    var w = wearOf(G, rock);
+    return rockMass0(rock) - (w ? w.m : 0);
+  }
+  /* Uniform shrink by the mass that is gone - cube root, mass goes as
+   * volume. The craters show WHERE it went; this keeps a small rock that has
+   * lost half of itself from being drawn at its old size. */
+  function wearScale(G, rock) {
+    var w = wearOf(G, rock);
+    if (!w || !(w.m > 0)) return 1;
+    return Math.cbrt(Math.max(0.02, 1 - w.m / rockMass0(rock)));
+  }
+  /* Give a rock its worn size (size0 keeps the original for the mass). */
+  function worn(G, rock) {
+    if (rock.size0 === undefined) rock.size0 = rock.size;
+    var k = wearScale(G, rock);
+    rock.size = rock.size0 * k;
+    rock.wear = k < 1 || !!wearOf(G, rock);
+    return rock;
+  }
+
+  /* A crater is [x, y, z, volume m^3] in the rock's OWN frame (Rings.
+   * rockBasis at the moment of the cut), so it turns with the rock. Its
+   * mouth and depth come from its volume as a bowl: radius a with
+   * (pi/4) a^3 = V, depth a/2, both against the rock's radius. */
+  function craterShape(c, Rm) {
+    var a = Math.cbrt(4 * c[3] / Math.PI);
+    return { alpha: Math.min(1.2, a / Rm), depth: Math.min(0.5 * a, 0.55 * Rm) / Rm };
+  }
+
+  /* Take `tonnes` off a rock where a beam (or a blast) met it. Returns true
+   * when that was the last of it. */
+  function carve(G, rock, worldNormal, t, tonnes) {
+    var R = Rg();
+    G.rockWear = G.rockWear || {};
+    var key = rockKey(G, rock);
+    var w = G.rockWear[key] || (G.rockWear[key] = { m: 0, c: [], v: 0 });
+    var Rm = (rock.size0 || rock.size) * 1000;
+    if (R && R.rockBasis && worldNormal) {
+      var b = R.rockBasis(rock, t);
+      var d = [V.dot(worldNormal, b.right), V.dot(worldNormal, b.up), V.dot(worldNormal, b.fwd)];
+      var dl = Math.hypot(d[0], d[1], d[2]) || 1;
+      d = [d[0] / dl, d[1] / dl, d[2] / dl];
+      var vol = tonnes / (DENSITY[rock.kind] || DENSITY.stone);
+      /* Inside an existing crater's mouth: deepen and widen that one. */
+      var into = null;
+      for (var i = 0; i < w.c.length; i++) {
+        var c = w.c[i], sh = craterShape(c, Rm);
+        if (c[0] * d[0] + c[1] * d[1] + c[2] * d[2] > Math.cos(Math.max(0.02, sh.alpha * 0.8))) { into = c; break; }
+      }
+      if (into) into[3] += vol;
+      else w.c.push([+d[0].toFixed(4), +d[1].toFixed(4), +d[2].toFixed(4), vol]);
+      /* Too many: the smallest folds into its nearest neighbour. */
+      while (w.c.length > CRATER_MAX) {
+        var si = 0;
+        for (var j = 1; j < w.c.length; j++) if (w.c[j][3] < w.c[si][3]) si = j;
+        var sm = w.c.splice(si, 1)[0], best = 0, bd = -2;
+        for (var k = 0; k < w.c.length; k++) {
+          var dd = w.c[k][0] * sm[0] + w.c[k][1] * sm[1] + w.c[k][2] * sm[2];
+          if (dd > bd) { bd = dd; best = k; }
+        }
+        w.c[best][3] += sm[3];
+      }
+    }
+    w.m += tonnes;
+    w.v++;
+    if (rockMass0(rock) - w.m < PIECE_T * 0.25) {
+      G.shattered = G.shattered || {};
+      G.shattered[key] = t;
+      return true;
+    }
+    return false;
+  }
+
+  /* The rock's own mesh, carved. The close-up shape with every crater
+   * pressed in (a bowl: deepest at the centre, nothing at the rim) and the
+   * cut faces a fresh, paler colour - new rock that has not seen the sun.
+   * Built per rock, only for rocks that have been cut, and rebuilt only when
+   * another piece comes off; the old one's video memory is handed back. */
+  var WORN = {};
+  function wornMesh(G, rock) {
+    var R = Rg();
+    var w = wearOf(G, rock);
+    if (!R || !w) return null;
+    var key = rockKey(G, rock);
+    var have = WORN[key];
+    if (have && have.v === w.v && have.kind === rock.kind) return have.mesh;
+    var base = R.rockMesh(rock.shape, rock.kind, 2);
+    var Rm = (rock.size0 || rock.size) * 1000;
+    var shapes = w.c.map(function (c) { return craterShape(c, Rm); });
+    var carved = [];
+    var v = base.v.map(function (p, vi) {
+      var l = Math.hypot(p[0], p[1], p[2]) || 1;
+      var nx = p[0] / l, ny = p[1] / l, nz = p[2] / l, f = 1;
+      for (var i = 0; i < w.c.length; i++) {
+        var c = w.c[i], sh = shapes[i];
+        var ca = Math.max(-1, Math.min(1, nx * c[0] + ny * c[1] + nz * c[2]));
+        var th = Math.acos(ca);
+        if (th >= sh.alpha) continue;
+        var x = th / sh.alpha;
+        f = Math.min(f, 1 - sh.depth * (1 - x * x));
+      }
+      if (f < 0.999) carved[vi] = true;
+      return [p[0] * f, p[1] * f, p[2] * f];
+    });
+    var col = base.c.map(function (cc, fi) {
+      var fc = base.f[fi];
+      if (!(carved[fc[0]] || carved[fc[1]] || carved[fc[2]])) return cc;
+      var n = parseInt(cc.slice(1), 16);
+      function ch(x) { var s = Math.min(255, Math.round(x * 1.22 + 14)).toString(16); return s.length < 2 ? '0' + s : s; }
+      return '#' + ch((n >> 16) & 255) + ch((n >> 8) & 255) + ch(n & 255);
+    });
+    var mesh = { v: v, f: base.f, c: col };
+    if (have && have.mesh && global.GLWorld && global.GLWorld.releaseMesh) global.GLWorld.releaseMesh(have.mesh);
+    WORN[key] = { v: w.v, kind: rock.kind, mesh: mesh };
+    return mesh;
   }
 
   /* The chunk comes off the face you were cutting and drifts clear of it,
@@ -388,10 +564,15 @@
       var rock = boom.rock;
       var n = 6 + Math.floor(hash01(tp.id + ':n') * 9);           // 6 .. 14
       G.cutCount = G.cutCount || {};
+      var rkey = rockKey(G, rock), thrown = 0;
       for (var c = 0; c < n; c++) {
-        var k = G.cutCount[rock.id] || 0;
-        G.cutCount[rock.id] = k + 1;
-        var ch = chunkOf(G, rock, k);
+        var k = G.cutCount[rkey] || 0;
+        G.cutCount[rkey] = k + 1;
+        /* Each chunk is a piece of known mass, 1.5-5 t of rock, and the rock
+         * is that much less (carve, below) - the same rule as the beam. */
+        var pieceT = Math.round((1.5 + 3.5 * hash01(rock.id + ':cut:' + k + ':t')) * 10) / 10;
+        thrown += pieceT;
+        var ch = chunkOf(G, rock, k, pieceT);
         /* Thrown, not peeled: a hemisphere off the blast face, 10-40 m/s. */
         var tag = tp.id + ':c' + c;
         var off = V.norm({ x: hash01(tag + 'x') - 0.5, y: hash01(tag + 'y') - 0.5, z: hash01(tag + 'z') - 0.5 });
@@ -408,9 +589,10 @@
         }
         chunks++;
       }
-      if (rock.size < TORP_SHATTER) {
+      var blownOut = carve(G, rock, boom.normal, t, Math.min(thrown, rockMassLeft(G, rock)));
+      if (blownOut || rock.size < TORP_SHATTER) {
         G.shattered = G.shattered || {};
-        G.shattered[rock.id] = t;
+        G.shattered[rockKey(G, rock)] = t;
         notes.push('the rock is gone');
       }
     }
@@ -565,7 +747,7 @@
 
   /* Shattered rocks stay gone: filtered out of what the laser and the
    * torpedo can find. (The renderer filters the same set.) */
-  function isShattered(G, id) { return !!(G && G.shattered && G.shattered[id]); }
+  function isShattered(G, id) { return isGone(G, id); }
 
   var Mining = {
     CUT_PER_CHUNK: CUT_PER_CHUNK, CHUNK_LIFE: CHUNK_LIFE, SKIM_AREA: SKIM_AREA, SKIM_MIN_GRADE: SKIM_MIN_GRADE,
@@ -575,6 +757,10 @@
     skimStep: skimStep, isGiant: isGiant,
     launchTorpedo: launchTorpedo, updateTorpedoes: updateTorpedoes, detonate: detonate,
     sabotage: sabotage, sabotaged: sabotaged, claimRefund: claimRefund, isShattered: isShattered,
+    /* pieces and wear (2026-10-18) */
+    PIECE_T: PIECE_T, DENSITY: DENSITY, HARDNESS: HARDNESS, BEAM_T_PER_UNIT: BEAM_T_PER_UNIT,
+    isGone: isGone, rockKey: rockKey, rockMass0: rockMass0, rockMassLeft: rockMassLeft,
+    wearScale: wearScale, worn: worn, carve: carve, wornMesh: wornMesh, craterShape: craterShape,
     nearestPort: nearestPort,
     TORP_LINK: TORP_LINK, torpedoesInFlight: torpedoesInFlight,
     disarmTorpedo: disarmTorpedo, detonateTorpedo: detonateTorpedo, recoverInert: recoverInert

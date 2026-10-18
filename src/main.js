@@ -6818,21 +6818,10 @@
   var FIELD_LOOK = 3000;           // km: fields whose rock is worth asking about
   var ROCK_DETAIL_PX = 50;         // screen radius past which a rock gets its close-up mesh
 
-  function rockBasis(rock, t) {
-    /* A slow tumble about a hashed axis. Periods of one to fifteen minutes —
-     * enough to read as a loose rock, never enough to look like a top. */
-    var u = rock.spin;
-    var ax = V.norm({ x: Math.sin(u * 37.1), y: Math.cos(u * 53.7), z: Math.sin(u * 91.3) + 0.2 });
-    var ang = u * K.TAU + t * (0.0007 + 0.0098 * ((u * 7.13) % 1));
-    ang = ang % K.TAU;
-    var ref = Math.abs(ax.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
-    var r0 = V.norm(V.cross(ref, ax)), u0 = V.cross(ax, r0);
-    return {
-      right: V.rotateAroundAxis(r0, ax, ang),
-      up: V.rotateAroundAxis(u0, ax, ang),
-      fwd: ax
-    };
-  }
+  /* A rock's tumble lives in rings.js now (Rings.rockBasis), because the
+   * mining beam carves craters in the rock's own frame and must agree with
+   * the picture to the last radian. */
+  function rockBasis(rock, t) { return global.Rings.rockBasis(rock, t); }
 
   function drawRingsAndRock(ctx, cam, inside, buried) {
     var Rg = global.Rings;
@@ -6873,7 +6862,7 @@
       var sunR = V.norm(V.sub(starPos, ps.pos));
       for (var c = 0; c < ch.length; c++) {
         var ck = ch[c];
-        if (G.shattered && G.shattered[ck.id]) continue;
+        if (global.Mining && global.Mining.isGone(G, ck)) continue;
         ck.kind = (Rg.mix32(ck.shape * 977 + Math.floor(ck.spin * 1e6)) / 4294967296) < p.ring.ice
                   ? 'ice' : 'stone';
         ck.sun = sunR;
@@ -6887,7 +6876,7 @@
       var sunF = V.norm(V.sub(starPos, cen.pos));
       for (var m = 0; m < fd.count; m++) {
         var rk = Rg.fieldMember(fd, m, G.sys, G.t, cen, hf);
-        if (G.shattered && G.shattered[rk.id]) continue;      // a torpedo took it
+        if (global.Mining && global.Mining.isGone(G, rk)) continue;      // a torpedo or a beam took it
         rk.dist = V.dist(rk.pos, ship);
         /* Worth a draw call if it is at least about a pixel across. */
         if (rk.size * cam.flen / Math.max(rk.dist, 1e-6) < 0.7 && rk.dist > 30) continue;
@@ -6899,13 +6888,21 @@
     if (!rocks.length) return;
     rocks.sort(function (a, b2) { return a.dist - b2.dist; });
     var n = Math.min(ROCK_CAP, rocks.length);
+    var Mn = global.Mining;
     for (var k = 0; k < n; k++) {
       var r = rocks[k];
       var basis = rockBasis(r, G.t);
+      /* A ROCK THAT HAS BEEN CUT is drawn at what is left of it, with its
+       * craters carved where the beam was (Mining.wornMesh; 2026-10-18). */
+      var mesh = null;
+      if (Mn && Mn.wornMesh && G.rockWear) {
+        Mn.worn(G, r);
+        if (r.wear) mesh = Mn.wornMesh(G, r);
+      }
       /* The close-up mesh once a rock is more than ~50 px across. */
       var onScreen = r.size * cam.flen / Math.max(r.dist, 1e-6);
       GLW.queueMesh(cam, { pos: r.pos, right: basis.right, up: basis.up, fwd: basis.fwd },
-                    Rg.rockMesh(r.shape, r.kind, onScreen > ROCK_DETAIL_PX ? 2 : 1), r.size, r.sun);
+                    mesh || Rg.rockMesh(r.shape, r.kind, onScreen > ROCK_DETAIL_PX ? 2 : 1), r.size, r.sun);
     }
     G.rocksDrawn = n;
   }
@@ -8472,6 +8469,12 @@
    * ladder rather than the ladder floating over the console. That mattered
    * a little before; now that the head can turn, it matters constantly. */
   function drawCockpitView(ctx, cam, w, h) {
+    /* The cannon's capacitor bank on the console reads this (render.js
+     * drawCapacitorBank): fitted or not, and how hot, 0..1. */
+    var cgC = Combat.cannonGlow ? Combat.cannonGlow(G, G.t) : [];
+    var hotC = 0;
+    for (var ci = 0; ci < cgC.length; ci++) hotC = Math.max(hotC, cgC[ci].k);
+    G.ship.capGlow = cgC.length ? { fitted: cgC.length, k: hotC } : null;
     var shell = G.showCockpitFrame ? Render.drawCockpitShell(ctx, cam, G.ship, w, h) : null;
     var apertures = shell ? shell.apertures : null;
     var aperture = shell ? shell.aperture : null;
@@ -11721,6 +11724,7 @@
       var sunDir = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), G.ship.pos));
       Render.drawShipModel(ctx, cam, G.ship, sunDir,
         G.ship.crashed ? '#ff8a7a' : null);
+      drawCannonMountGlow(ctx, cam, lenPx);
     } else {
       ctx.save();
       ctx.fillStyle = G.ship.crashed ? '#ff6b6b' : '#ffffff';
@@ -11742,6 +11746,32 @@
                              G.ship.reentryGlow || 0, G.ship.windDir, nowSeconds());
     playerShieldShell(ctx, cam);
     drawHullBlooms(ctx, cam, G.ship);
+  }
+
+  /* THE CANNON'S MOUNT, glowing red through its cooldown and fading back
+   * (2026-10-18, Astra). Drawn at the gun's own muzzle on the hull, sized
+   * off the ship on screen, hot orange-red the instant it fires and a dull
+   * red as it cools. */
+  function drawCannonMountGlow(ctx, cam, lenPx) {
+    var cg = Combat.cannonGlow ? Combat.cannonGlow(G, G.t) : [];
+    if (!cg.length) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (var i = 0; i < cg.length; i++) {
+      var k = cg[i].k;
+      if (!(k > 0.01)) continue;
+      var p = cam.project(cg[i].muzzle);
+      if (!p) continue;
+      var r = Math.max(3, lenPx * (0.05 + 0.07 * k));
+      var g = Math.round(40 + 110 * k);
+      var gr = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+      gr.addColorStop(0, 'rgba(255,' + g + ',40,' + (0.85 * k).toFixed(3) + ')');
+      gr.addColorStop(0.4, 'rgba(230,40,20,' + (0.45 * k).toFixed(3) + ')');
+      gr.addColorStop(1, 'rgba(180,20,10,0)');
+      ctx.fillStyle = gr;
+      ctx.fillRect(p.x - r, p.y - r, r * 2, r * 2);
+    }
+    ctx.restore();
   }
 
   /* Your own shell. The player's ship carries the same three fields every
@@ -12215,7 +12245,8 @@
     if (cp && flying() && G.t - cp.t < 0.4 && G.t >= cp.t) {
       ctx.save();
       ctx.font = 'bold 12px ui-monospace, monospace';
-      var cLabel = 'CUTTING ' + (cp.rock.kind || 'rock').toUpperCase() + ' ROCK';
+      var cLabel = 'CUTTING ' + (cp.rock.kind || 'rock').toUpperCase() + ' ROCK' +
+                   (cp.piece ? '  ' + Math.min(cp.tonnes, cp.piece).toFixed(1) + ' / ' + cp.piece.toFixed(1) + ' t' : '');
       var cw2 = Math.max(220, ctx.measureText(cLabel).width + 120);
       var cx2 = (w - cw2) / 2, cy2 = top - 104;
       panel(ctx, cx2, cy2, cw2, 28, false);
@@ -12225,6 +12256,27 @@
       ctx.fillRect(cx2 + cw2 - 100, cy2 + 9, 86, 10);
       ctx.fillStyle = '#ffd27a';
       ctx.fillRect(cx2 + cw2 - 100, cy2 + 9, 86 * Math.min(1, cp.frac), 10);
+      ctx.restore();
+    }
+
+    /* --- the mining laser cannon's capacitors (2026-10-18) ---
+     * A red bar draining over the three seconds, beside the crosshair, for
+     * as long as any cannon is still hot. The same number the hull mount
+     * and the cockpit bank glow by (Combat.cannonGlow). */
+    var cg = Combat.cannonGlow ? Combat.cannonGlow(G, G.t) : [];
+    var hot = 0;
+    for (var gi = 0; gi < cg.length; gi++) hot = Math.max(hot, cg[gi].k);
+    if (hot > 0 && flying()) {
+      ctx.save();
+      var bw2 = 120, bx2 = w / 2 - bw2 / 2, by2 = h / 2 + 44;
+      ctx.fillStyle = 'rgba(255,70,50,0.18)';
+      ctx.fillRect(bx2, by2, bw2, 5);
+      ctx.fillStyle = 'rgba(255,' + Math.round(60 + 90 * (1 - hot)) + ',50,' + (0.45 + 0.5 * hot).toFixed(2) + ')';
+      ctx.fillRect(bx2, by2, bw2 * hot, 5);
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(255,120,100,' + (0.5 + 0.5 * hot).toFixed(2) + ')';
+      ctx.fillText('CAPACITORS ' + (hot * (cg[0].cooldown || 3)).toFixed(1) + ' s', w / 2, by2 + 17);
       ctx.restore();
     }
 

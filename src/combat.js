@@ -176,13 +176,36 @@
     /* THE MINING LASER (mining rung 3, mining.js). A photon beam tuned to
      * heat a few square metres of rock until a chunk spalls off, not to
      * hurt anything that moves: one point a cycle against a hull, three
-     * kilometres of reach. Hold it on a rock and a chunk comes free about
-     * every eleven seconds; the scoop does the rest. */
+     * kilometres of reach. Hold it on a rock and it cuts continuously; every
+     * 2 t cut comes off as a piece (about eight seconds on stone, faster on
+     * ice, slower on metal - mining.js PIECE_T, HARDNESS), carved out of the
+     * rock where the beam was. The scoop does the rest. */
     mininglaser: (function () {
       var g = laser('mininglaser', 'Mining laser', 'photon', 'beam',
                     4800, 2.6, 2.5, 1, 0.12, 3, 8, '#ffd27a', [0.15, -100],
                     'Cuts rock, not ships. Hold it steady and bring a scoop.');
       g.mining = true;
+      return g;
+    })(),
+    /* THE MINING LASER CANNON (2026-10-18). Astra: "works like the pulse
+     * laser except it gets fully absorbed by shields, and it has a 3 second
+     * cooldown where the mount and capacitors for it glow red, then fade."
+     * Each pulse knocks a piece off the face (pulseTonnes, harder rock
+     * gives less), at five kilometres where the beam reaches three. Against
+     * a ship: a shield soaks the whole shot (`shieldAbsorbs`, splitDamage)
+     * and nothing reaches the hull; a ship with no shield up takes it like
+     * a pulse. A tool that is a weapon only against the defenceless. The
+     * glow is `cooldownGlow`: read off G.gunCool by the hull, the cockpit
+     * capacitor bank and the HUD bar. */
+    miningcannon: (function () {
+      var g = laser('miningcannon', 'Mining laser cannon', 'photon', 'pulse',
+                    6200, 3.2, 3.0, 12, 3.0, 5, 10, '#ff6a3a', [0.15, -100],
+                    'Knocks a piece off the face from five kilometres. Give the capacitors their three seconds.');
+      g.mining = true;
+      g.pulseTonnes = 0.75;
+      g.piece = 0.75;
+      g.shieldAbsorbs = true;
+      g.cooldownGlow = true;
       return g;
     })(),
     muint:   laser('muint', 'Muon intermittent accelerator', 'muon', 'intermittent',
@@ -3180,6 +3203,12 @@
     if (!(shieldHp > 0) || !(vs > 0)) {
       return { shield: 0, hull: dmg * vh, through: true };
     }
+    /* FULLY ABSORBED BY SHIELDS (the mining laser cannon): a shield that is
+     * up takes the shot and NOTHING goes through to the hull, even when this
+     * shot is the one that empties it. */
+    if (d.shieldAbsorbs) {
+      return { shield: Math.min(shieldHp, dmg * vs), hull: 0, through: false };
+    }
     var offered = dmg * vs;
     var soaked = Math.min(shieldHp, offered);
     var spent = soaked / offered;                 // share of the shot used up
@@ -5477,6 +5506,26 @@
              f: len * MUZZLE_FWD };
   }
 
+  /* THE CANNON'S CAPACITORS (2026-10-18). For every fitted gun that glows
+   * through its cooldown (the mining laser cannon), how hot it still is:
+   * 1 the instant it fires, fading to 0 when it is ready again - read off
+   * the same G.gunCool the trigger obeys, so the glow cannot disagree with
+   * whether the gun will fire. One answer for the hull mount, the cockpit
+   * capacitor bank and the HUD bar. */
+  function cannonGlow(G, t) {
+    var out = [];
+    if (!G || !G.ship) return out;
+    var list = fittedList(G.ship), cools = G.gunCool || {};
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i];
+      if (!e.item.cooldownGlow) continue;
+      var k = ((cools[e.key] || 0) - t) / (e.item.cooldown || 1);
+      out.push({ key: e.key, k: Math.max(0, Math.min(1, k)), cooldown: e.item.cooldown,
+                 muzzle: muzzleWorld(G.ship, muzzleOf(G.ship, e.key)) });
+    }
+    return out;
+  }
+
   function muzzleWorld(ship, mz) {
     var p = V.clone(ship.pos);
     p = V.addScaled(p, ship.right, mz.r);
@@ -7264,7 +7313,7 @@
     fireGun: fireGun, fireGroup: fireGroup, fireMissile: fireMissile,
     groupOf: groupOf, setGroup: setGroup, toggleGroup: toggleGroup,
     gunsInGroup: gunsInGroup,
-    muzzleOf: muzzleOf, muzzleWorld: muzzleWorld, hullLen: hullLen,
+    muzzleOf: muzzleOf, muzzleWorld: muzzleWorld, hullLen: hullLen, cannonGlow: cannonGlow,
     manifestFor: manifestFor, holdOf: holdOf, purseOf: purseOf,
     npcShield: npcShield, splitDamage: splitDamage, hullSize: hullSize,
     NPC_SHIELD: NPC_SHIELD, MAX_IMPACTS: MAX_IMPACTS,

@@ -708,7 +708,28 @@
     buildBelts(sys, base);
   }
 
+  /* HOW A ROCK IS TURNED at time t: a slow tumble about a hashed axis, with
+   * periods of one to fifteen minutes - enough to read as a loose rock,
+   * never enough to look like a top. Here rather than in main.js (where it
+   * started) because the mining beam needs the same answer: a crater has to
+   * be carved where the beam hit in the ROCK's own frame, or it would stay
+   * pointing at the ship while the rock turned under it. */
+  function rockBasis(rock, t) {
+    var u = rock.spin;
+    var ax = V.norm({ x: Math.sin(u * 37.1), y: Math.cos(u * 53.7), z: Math.sin(u * 91.3) + 0.2 });
+    var ang = u * TAU + t * (0.0007 + 0.0098 * ((u * 7.13) % 1));
+    ang = ang % TAU;
+    var ref = Math.abs(ax.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+    var r0 = V.norm(V.cross(ref, ax)), u0 = V.cross(ax, r0);
+    return {
+      right: V.rotateAroundAxis(r0, ax, ang),
+      up: V.rotateAroundAxis(u0, ax, ang),
+      fwd: ax
+    };
+  }
+
   var Rings = {
+    rockBasis: rockBasis,
     AU: AU,
     CHUNK_DR: CHUNK_DR,
     CHUNK_S: CHUNK_S,

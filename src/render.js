@@ -9107,6 +9107,7 @@
      * bolted to that slab. */
     drawAccentStrips(ctx, cam, ship, spec);
     drawGreebles(ctx, cam, ship, spec, w, h);
+    drawCapacitorBank(ctx, cam, ship);
 
     var mfds = [], emitters = [];
     for (i = 0; i < MFD_MOUNTS.length; i++) {
@@ -9698,6 +9699,57 @@
       ctx.strokeStyle = hexA(style.accent, 0.5);
       ctx.lineWidth = 1.2;
       ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /* THE MINING LASER CANNON'S CAPACITOR BANK (2026-10-18, Astra: "the
+   * mount and capacitors for it glow red, then fade"). Three cans bolted to
+   * the right of the dash, out by the knee, only when a cannon is fitted
+   * (ship.capGlow, set by main.js from Combat.cannonGlow). Cold they are
+   * dark metal; the instant the cannon fires they go orange-red and cool
+   * through a dull red to nothing over its three seconds, with the glow
+   * spilling onto the panel round them. */
+  var CAP_BANK = { s0: 0.855, s1: 0.965, t0: 0.50, t1: 0.66 };
+  function drawCapacitorBank(ctx, cam, ship) {
+    var cg = ship && ship.capGlow;
+    if (!cg || !cg.fitted) return;
+    var k = Math.max(0, Math.min(1, cg.k || 0));
+    var cans = 3, ds = (CAP_BANK.s1 - CAP_BANK.s0) / cans;
+    ctx.save();
+    var centres = [];
+    for (var i = 0; i < cans; i++) {
+      var s0 = CAP_BANK.s0 + ds * (i + 0.14), s1 = CAP_BANK.s0 + ds * (i + 0.86);
+      var pts = [dashPoint(s0, CAP_BANK.t0), dashPoint(s1, CAP_BANK.t0),
+                 dashPoint(s1, CAP_BANK.t1), dashPoint(s0, CAP_BANK.t1)];
+      var poly = clipProject(cam, localPoly(ship, pts));
+      if (!poly || poly.length < 3) continue;
+      /* The can, then its band of heat, then a strap across it. */
+      ctx.fillStyle = '#262c33';
+      ctx.beginPath(); tracePath(ctx, poly); ctx.fill();
+      if (k > 0.01) {
+        ctx.fillStyle = 'rgba(255,' + Math.round(40 + 120 * k) + ',' + Math.round(20 + 30 * k) + ',' +
+                        (0.25 + 0.7 * k).toFixed(3) + ')';
+        ctx.beginPath(); tracePath(ctx, poly); ctx.fill();
+      }
+      ctx.strokeStyle = 'rgba(140,160,190,0.35)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); tracePath(ctx, poly); ctx.stroke();
+      var cx = 0, cy = 0;
+      for (var p = 0; p < poly.length; p++) { cx += poly[p].x; cy += poly[p].y; }
+      centres.push({ x: cx / poly.length, y: cy / poly.length,
+                     r: Math.abs(poly[1].x - poly[0].x) + Math.abs(poly[2].y - poly[1].y) });
+    }
+    if (k > 0.01) {
+      ctx.globalCompositeOperation = 'lighter';
+      for (var c = 0; c < centres.length; c++) {
+        var ce = centres[c], rad = Math.max(10, ce.r * 1.3);
+        var gr = ctx.createRadialGradient(ce.x, ce.y, 0, ce.x, ce.y, rad);
+        gr.addColorStop(0, 'rgba(255,70,40,' + (0.35 * k).toFixed(3) + ')');
+        gr.addColorStop(1, 'rgba(255,40,20,0)');
+        ctx.fillStyle = gr;
+        ctx.fillRect(ce.x - rad, ce.y - rad, rad * 2, rad * 2);
+      }
     }
     ctx.restore();
   }

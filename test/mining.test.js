@@ -94,7 +94,9 @@ while (shots < 200 && !freed) {
   if (res && res.shard) freed = res;
 }
 check('held on the rock, a chunk comes free', !!freed, shots + ' cycles = ' + (shots * gun.cooldown).toFixed(1) + ' s');
-check('after the work the catalogue says', shots === Math.ceil(Mn.CUT_PER_CHUNK / gun.dmg));
+check('after 2 t of rock is cut, by the rock\'s hardness',
+      shots === Math.ceil(Mn.PIECE_T / (gun.dmg * Mn.BEAM_T_PER_UNIT * Mn.HARDNESS[hit.rock.kind]) - 1e-9),
+      shots + ' cycles on ' + hit.rock.kind);
 var sh = freed.shard;
 check('at the face it was cut from', V.dist(sh.pos, hit.at) < 0.01);
 var drift = V.dist(sh.vel, rock.vel) * 1000;
@@ -277,7 +279,7 @@ if (pebble) {
   var Gp = { here: { id: 'test' }, extracted: {}, ship: Gt.ship, sys: bsys, explosions: [] };
   Mn.detonate(bsys, Gp, t0, bareTorp(2500, true), { at: pebble.pos, rock: pebble, normal: dir }, hk);
   var still = Mn.rocksNear(Gp, bsys, pebble.pos, t0, 0.01).filter(function (r) { return r.id === pebble.id; });
-  check('a rock under 30 m is gone, and stays gone', Gp.shattered[pebble.id] && !still.length,
+  check('a rock under 30 m is gone, and stays gone', Mn.isGone(Gp, pebble) && !still.length,
         (pebble.size * 1000).toFixed(0) + ' m');
 }
 
@@ -356,6 +358,135 @@ check('and the owners post a bounty', Gb.wanted[fac] >= 30000, Gb.wanted[fac] + 
 check('no refund for a torpedo set off on a station', !Gb.torpRefund);
 Gb.t = t0 + (Mn.SABOTAGE_DAYS + 1) * 86400;
 check('repaired in ' + Mn.SABOTAGE_DAYS + ' days', !Combat.dockRefusal(Gb, port) || Combat.dockRefusal(Gb, port).why !== 'sabotaged');
+
+/* ---- PIECES, WEAR AND THE CANNON (2026-10-18) -----------------------------
+ * Astra: the beam runs continuously and ejects a piece every 2 t; that
+ * depletes the store AND takes real pieces off the rock. Decided: real
+ * mass, visible craters. And a mining laser cannon: a pulse, 3 s cooldown,
+ * fully absorbed by shields, glowing red as it cools. */
+console.log('--- pieces off a rock, by its real mass ---');
+(function () {
+  var Gw = { here: { id: 'test' }, extracted: {}, ship: ship, sys: bsys };
+  var r0 = { id: rock.id, kind: hit.rock.kind, size: rock.size, shape: rock.shape, spin: rock.spin,
+             pos: rock.pos, vel: rock.vel, key: rock.key, source: rock.source };
+  var m0 = Mn.rockMass0(r0), rad = r0.size * 1000;
+  check('a rock weighs its density times its volume',
+        Math.abs(m0 - Mn.DENSITY[r0.kind] * 0.62 * 4 / 3 * Math.PI * rad * rad * rad) < 1e-6,
+        Math.round(m0) + ' t of ' + r0.kind + ', ' + rad.toFixed(0) + ' m');
+  bsys.canisters = [];
+  var n = 0, got = null;
+  while (n < 400 && !got) { var rr = Mn.cut(bsys, Gw, t0, gun, Infinity, hooks); n++; if (rr && rr.shard) got = rr; }
+  check('the beam frees a piece of exactly 2 t of rock', !!got && Math.abs(Mn.rockMassLeft(Gw, r0) - (m0 - 2)) < 1e-6,
+        got && (m0 - Mn.rockMassLeft(Gw, r0)).toFixed(2) + ' t gone');
+  var wr = Gw.rockWear[Mn.rockKey(Gw, r0)];
+  check('and leaves a crater where it was cut', wr && wr.c.length === 1 &&
+        Math.abs(Math.hypot(wr.c[0][0], wr.c[0][1], wr.c[0][2]) - 1) < 1e-3);
+  /* The crater is in the ROCK's frame: turned back into the world at the
+   * moment of the cut, it points where the beam met the face. */
+  var b = Rg.rockBasis(r0, t0), c = wr.c[0];
+  var wdir = V.norm(V.add(V.add(V.scale(b.right, c[0]), V.scale(b.up, c[1])), V.scale(b.fwd, c[2])));
+  check('in the rock\'s own frame, so it turns with the rock', V.dot(wdir, hit.normal) > 0.999, V.dot(wdir, hit.normal).toFixed(5));
+  if (got.chunk.cid) check('a piece of ore is half to all ore by richness', got.chunk.tonnes >= 1 && got.chunk.tonnes <= 2, got.chunk.tonnes + ' t');
+  /* A second piece at the same spot deepens that crater, not a new one. */
+  got = null; n = 0;
+  while (n < 400 && !got) { var r2 = Mn.cut(bsys, Gw, t0, gun, Infinity, hooks); n++; if (r2 && r2.shard) got = r2; }
+  check('cutting the same face deepens the same crater', wr.c.length === 1 && wr.m === 4, wr.c.length + ' craters, ' + wr.m + ' t');
+
+  /* Harder rock, slower beam. */
+  var per = function (kind) { return Math.ceil(Mn.PIECE_T / (gun.dmg * Mn.BEAM_T_PER_UNIT * Mn.HARDNESS[kind]) - 1e-9); };
+  check('ice cuts faster than stone, stone than metal', per('ice') < per('stone') && per('stone') < per('metal'),
+        (per('ice') * gun.cooldown).toFixed(1) + ' / ' + (per('stone') * gun.cooldown).toFixed(1) + ' / ' +
+        (per('metal') * gun.cooldown).toFixed(1) + ' s a piece');
+
+  /* A small rock carved to nothing, piece by piece. */
+  var Gs = { here: { id: 'test' } };
+  var pb = { id: 'pebble-x', kind: 'ice', size: 0.004, shape: 2, spin: 0.37 };
+  var pm0 = Mn.rockMass0(pb), pieces = 0, gone = false, lastK = 1, shrinking = true;
+  while (!gone && pieces < 1000) {
+    var nn = V.norm({ x: Math.sin(pieces * 1.7), y: Math.cos(pieces * 2.3), z: Math.sin(pieces * 0.9) + 0.1 });
+    gone = Mn.carve(Gs, pb, nn, 1000 + pieces, Math.min(2, Mn.rockMassLeft(Gs, pb)));
+    pieces++;
+    var k = Mn.wearScale(Gs, pb);
+    if (k > lastK + 1e-12) shrinking = false;
+    lastK = k;
+  }
+  check('a 4 m ice rock (' + Math.round(pm0) + ' t) is gone after its mass in pieces',
+        gone && Math.abs(pieces - Math.ceil(pm0 / 2)) <= 1 && Mn.isGone(Gs, pb), pieces + ' pieces');
+  check('shrinking the whole way', shrinking);
+  check('craters merge rather than pile up', Gs.rockWear[Mn.rockKey(Gs, pb)].c.length <= 24);
+
+  /* The carved mesh. */
+  var Gm = { here: { id: 'test' } };
+  var big = { id: 'big-x', kind: 'stone', size: 0.006, shape: 3, spin: 0.61 };
+  var released = 0;
+  global.GLWorld = { releaseMesh: function () { released++; } };
+  var nrm = { x: 1, y: 0, z: 0 };
+  for (var q = 0; q < 6; q++) Mn.carve(Gm, big, nrm, 50, 2);
+  var mesh = Mn.wornMesh(Gm, big), base = Rg.rockMesh(big.shape, big.kind, 2);
+  var cw = Gm.rockWear[Mn.rockKey(Gm, big)].c[0];
+  var inner = -1, bestDot = -2, far = -1, worstDot = 2;
+  for (var vi = 0; vi < base.v.length; vi++) {
+    var p = base.v[vi], l = Math.hypot(p[0], p[1], p[2]);
+    var d = (p[0] * cw[0] + p[1] * cw[1] + p[2] * cw[2]) / l;
+    if (d > bestDot) { bestDot = d; inner = vi; }
+    if (d < worstDot) { worstDot = d; far = vi; }
+  }
+  var len = function (p) { return Math.hypot(p[0], p[1], p[2]); };
+  check('the mesh is pressed in at the crater', len(mesh.v[inner]) < len(base.v[inner]) * 0.99,
+        (len(mesh.v[inner]) / len(base.v[inner])).toFixed(3));
+  check('and untouched on the far side', Math.abs(len(mesh.v[far]) - len(base.v[far])) < 1e-12);
+  check('cut faces are fresh rock, a paler colour', mesh.c.some(function (cc, i) { return cc !== base.c[i]; }));
+  check('the same mesh until another piece comes off', Mn.wornMesh(Gm, big) === mesh);
+  Mn.carve(Gm, big, nrm, 60, 2);
+  var mesh2 = Mn.wornMesh(Gm, big);
+  check('then rebuilt, and the old one\'s video memory handed back', mesh2 !== mesh && released === 1);
+  delete global.GLWorld;
+
+  /* Rock state belongs to its system. */
+  var Gk = { here: { id: 'star-a' } }, rk = { id: 'b7:r12:40' };
+  Gk.shattered = {}; Gk.shattered[Mn.rockKey(Gk, rk)] = 1;
+  check('a rock gone here is gone here', Mn.isGone(Gk, rk));
+  Gk.here = { id: 'star-b' };
+  check('but its namesake at another star is still there', !Mn.isGone(Gk, rk));
+  Gk.shattered = { 'b7:r12:40': 1 };
+  check('an old save\'s bare key still counts everywhere', Mn.isGone(Gk, rk));
+
+  var saved = JSON.parse(JSON.stringify(Gs.rockWear));
+  check('wear survives the save as plain data', JSON.stringify(saved) === JSON.stringify(Gs.rockWear));
+})();
+
+console.log('--- the mining laser cannon ---');
+(function () {
+  var cn = Combat.GUNS.miningcannon;
+  check('it is in the catalogue: a pulse, 3 s between shots', cn && cn.mining && cn.variety === 'pulse' && cn.cooldown === 3);
+  var Gc = { here: { id: 'test' }, extracted: {}, ship: ship, sys: bsys };
+  bsys.canisters = [];
+  var shots = 0, freed = null;
+  while (shots < 10 && !freed) { var r = Mn.cut(bsys, Gc, t0, cn, Infinity, hooks); shots++; if (r && r.shard) freed = r; }
+  var want = Math.ceil(cn.piece / (cn.pulseTonnes * Mn.HARDNESS[hit.rock.kind]) - 1e-9);
+  check('each pulse knocks off what a pulse is worth', !!freed && shots === want, shots + ' pulse(s) on ' + hit.rock.kind);
+  var sp = Combat.splitDamage(50, 12, cn);
+  check('a shield up takes the whole shot', sp.hull === 0 && sp.shield > 0, JSON.stringify(sp));
+  var last = Combat.splitDamage(2, 12, cn);
+  check('even the shot that empties it: nothing goes through', last.hull === 0 && last.shield === 2);
+  var bare = Combat.splitDamage(0, 12, cn);
+  check('a bare hull takes it like a pulse', Math.abs(bare.hull - 12 * cn.vsHull) < 1e-9, bare.hull.toFixed(1));
+  var phot = Combat.splitDamage(2, 12, Combat.GUNS.phpulse);
+  check('(an ordinary pulse still breaks through)', phot.hull > 0);
+
+  /* The glow, off the same cooldown the trigger obeys. */
+  var sh = Sim.makeShip(ship.pos, ship.vel); Sim.refreshShip(sh); Combat.initShip(sh);
+  var hk = Combat.slotKeys(sh).filter(function (k) { return Combat.slotType(k) === 'hardpoint'; })[0];
+  sh.fit = sh.fit || {}; sh.fit[hk] = 'miningcannon';
+  var Gg = { ship: sh, gunCool: {} };
+  Gg.gunCool[hk] = 100 + cn.cooldown;
+  var at = function (tt) { return Combat.cannonGlow(Gg, tt)[0].k; };
+  check('red hot the instant it fires', Math.abs(at(100) - 1) < 1e-9);
+  check('half way through, half the glow', Math.abs(at(101.5) - 0.5) < 1e-9);
+  check('cold when it can fire again', at(103) === 0 && at(110) === 0);
+  check('and nothing glows without a cannon fitted', Combat.cannonGlow({ ship: (function () {
+    var s2 = Sim.makeShip(ship.pos, ship.vel); Sim.refreshShip(s2); Combat.initShip(s2); return s2; })(), gunCool: {} }, 0).length === 0);
+})();
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

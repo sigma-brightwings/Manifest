@@ -385,6 +385,9 @@
       /* RUNG 3: rocks a torpedo shattered stay gone, the Guild's refund log
        * stays owed, and a holed station stays shut until its date. */
       shattered: G.shattered || {},
+      /* What the beam has taken out of each rock (2026-10-18): tonnes gone
+       * and the craters, in the rock's own frame. Additive. */
+      rockWear: G.rockWear || {},
       torpRefund: G.torpRefund || 0,
       sabotage: G.sabotage || {},
       ledger: G.ledgerLog || []
@@ -525,6 +528,7 @@
     G.claims = (data.claims && typeof data.claims === 'object') ? data.claims : {};
     G.drones = Array.isArray(data.drones) ? data.drones : [];
     G.shattered = (data.shattered && typeof data.shattered === 'object') ? data.shattered : {};
+    G.rockWear = (data.rockWear && typeof data.rockWear === 'object') ? data.rockWear : {};
     G.torpRefund = data.torpRefund || 0;
     G.sabotage = (data.sabotage && typeof data.sabotage === 'object') ? data.sabotage : {};
     G.ledgerLog = data.ledger || [];

@@ -119,6 +119,25 @@ Astra has seen it working.
     land is what keeps a drone below active work. That job goes to an
     outpost on your claim in rung 5.
 
+- **2026-10-18: the mining beam takes real pieces off a rock.** The mining
+  laser cuts continuously, and every 2 t it cuts comes off as a piece to
+  scoop: about 5 s on ice, 8 s on stone, 13 s on metal. Rocks weigh what
+  their size and material say (a 5 m ice chunk is about 470 t), every
+  piece comes off that mass, and it is carved out of the rock where the
+  beam was: a crater in the rock's own surface that turns with it,
+  deepening while you hold the beam on one face, with fresh paler rock
+  showing in the cut. A rock shrinks as it loses mass and is gone when it
+  runs out. Small ring chunks can be cut away in a session; big rocks scar.
+  Torpedoes take their chunks off the same mass. The CUTTING bar shows
+  tonnes toward the next piece. Saved.
+- **2026-10-18: the mining laser cannon** (6,200 cr, hardpoint). A pulse
+  that knocks a piece off the face every shot, from 5 km, with 3 s between
+  shots. Against ships it is fully absorbed by a shield that is up, even by
+  the shot that empties it; a bare hull takes it like a pulse laser. While
+  it cools, its mount on the hull glows red, three capacitors on the
+  cockpit dash glow and fade, and a CAPACITORS bar under the crosshair
+  counts down.
+
 ### Changed
 
 - **2026-10-16: the attitude ladder and bank scale are drawn sharp** under
@@ -167,6 +186,11 @@ Astra has seen it working.
     Mirven II a was the test orbit, not the scanner: that moon's Hill
     sphere is only about 2.2 radii, so small moons close to big planets
     can only be mapped on close passes, not orbited.
+
+- **2026-10-18: a rock shattered at one star also vanished at others.**
+  Rock state was kept by rock id alone, and ring-rock ids repeat from
+  system to system. It is kept per system now; older saves' entries still
+  count, so nothing a torpedo took comes back.
 
 ### Saves
 
