@@ -130,6 +130,26 @@ Astra has seen it working.
   runs out. Small ring chunks can be cut away in a session; big rocks scar.
   Torpedoes take their chunks off the same mass. The CUTTING bar shows
   tonnes toward the next piece. Saved.
+- **2026-10-18: resource wars, stage 1 (the model and the map).** The
+  empires now go to war over ore. Each system has a workable reserve of
+  cheap ore that its industry draws down on the clock (the surveyed
+  tonnage is the whole crust and is unchanged); scarcity is felt within a
+  game year. An empire's chaos is the share of its systems where the law
+  has been bought or the Syndicate holds, and scarcity pushes more of them
+  over the line. When scarcity times chaos gets high enough, the empire
+  declares on a rival's richest reachable border system; the war runs two
+  to six months, the stronger and less chaotic side usually wins, and a
+  win moves the system to the winner. First wars come in years two to
+  three, from the empire with the most chaos, on all three test seeds.
+  Corruption you leave behind counts, but it fades in weeks, so only
+  crime kept up moves a war. It is all seed and clock: the same seed and
+  the same player give the same wars. Seen on the galaxy map: contested
+  systems carry a red cross, taken ones a ring in the new owner's colour,
+  the destination readout says who is attacking or who took it, and a
+  news line under the chart header gives the fronts, the last war, or how
+  much of their cheap ore the empires have worked. Fixed on the same
+  page: a long atmosphere description no longer runs over the planet
+  names in the destination's world list.
 - **2026-10-18: a fence in every system.** About one system in six had
   no back room outside a Guild hall, so stolen goods meant a jump. Each of
   those now has one, at its least developed market that is not the

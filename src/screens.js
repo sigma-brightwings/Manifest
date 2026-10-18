@@ -4428,6 +4428,16 @@
       ctx.restore();
     }
 
+    /* RESOURCE WARS (wars.js, 2026-10-18): the fronts now, and the stars
+     * that have changed hands. Public news, but marked only on stars you
+     * hold the sheet for, like the checkpoint brackets below. */
+    var Wr = global.Wars, warNow = {}, takenBy = {}, warList = [], warHist = null;
+    if (Wr && G.galaxy.rivals) {
+      warList = Wr.warsAt(G.galaxy, G, G.t);
+      warList.forEach(function (wv) { warNow[wv.star] = wv; });
+      warHist = Wr.history(G.galaxy, G, G.t);
+      warHist.wars.forEach(function (wv) { if (wv.won && wv.t1 <= G.t) takenBy[wv.star] = wv; });
+    }
     for (var i = 0; i < G.galaxy.stars.length; i++) {
       var s = G.galaxy.stars[i];
       var sp = toScreen(s);
@@ -4474,6 +4484,19 @@
         ctx.lineTo(sp.x + br, y + br - 3);
         ctx.stroke();
       }
+      if (G.charted[s.id] && takenBy[s.id]) {
+        var nf = G.galaxy.factionById[takenBy[s.id].att];
+        ctx.strokeStyle = (nf && nf.color) || '#ffffff'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(sp.x, y, r + 4, 0, K.TAU); ctx.stroke();
+      }
+      if (G.charted[s.id] && warNow[s.id]) {
+        var wr = r + 6;
+        ctx.strokeStyle = '#ff5a4a'; ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(sp.x - wr, y - wr); ctx.lineTo(sp.x + wr, y + wr);
+        ctx.moveTo(sp.x + wr, y - wr); ctx.lineTo(sp.x - wr, y + wr);
+        ctx.stroke();
+      }
       if (isHere) {
         ctx.strokeStyle = '#ffe6a8'; ctx.lineWidth = 1.4;
         ctx.beginPath(); ctx.arc(sp.x, y, r + 5, 0, K.TAU); ctx.stroke();
@@ -4504,6 +4527,35 @@
       ctx.restore();
     }
 
+    /* --- the news: the fronts, or the last war, or the reserves --- */
+    if (Wr && warHist) {
+      var fn2 = function (id) { var f = G.galaxy.factionById[id]; return f ? f.name : id; };
+      var news;
+      if (warList.length) {
+        news = 'WAR: ' + warList.slice(0, 2).map(function (wv) {
+          return fn2(wv.att) + ' against ' + fn2(wv.def) + ' for ' + wv.starName;
+        }).join('   ·   ') + (warList.length > 2 ? '   ·   +' + (warList.length - 2) + ' more' : '');
+      } else {
+        var past = warHist.wars.filter(function (wv) { return wv.t1 <= G.t; });
+        var lw = past[past.length - 1];
+        if (lw) news = 'LAST WAR: ' + fn2(lw.att) + ' ' + (lw.won ? 'took ' : 'failed to take ') + lw.starName +
+                       ' from ' + fn2(lw.def) + ', ' + fmtEpoch(lw.t1);
+        else {
+          var stN = Wr.stateAt(G.galaxy, G, G.t), sc = 0, nE = 0;
+          Object.keys(stN).forEach(function (e) { sc += stN[e].scarcity; nE++; });
+          news = 'AT PEACE   ·   the empires have worked ' + Math.round(100 * sc / Math.max(1, nE)) +
+                 '% of their cheap ore';
+        }
+      }
+      ctx.save();
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = warList.length ? '#ff7a6a' : '#9fb4d0';
+      /* Under the chart's own header line: the right column's length
+       * depends on the system described, the bottom belongs to the keys. */
+      ctx.fillText(clipText(news, Math.floor((plotSize + 20) / 7.3)), px + 24, py + 66);
+      ctx.restore();
+    }
+
     /* --- the destination, in words --- */
     if (plan && dw > 180) {
       // The legend sits in this same right-hand column above this block;
@@ -4519,6 +4571,14 @@
       ctx.fillStyle = '#7e93b3';
       ctx.fillText('class ' + plan.to.cls + '   ·   ' + plan.to.temp + ' K   ·   ' +
                    plan.to.luminosity.toFixed(2) + ' L☉', dx, dyy + 18);
+      /* The war over it, or who took it. */
+      var fname = function (id) { var f = G.galaxy.factionById[id]; return f ? f.name : id; };
+      var wv2 = warNow[plan.to.id], tk = takenBy[plan.to.id];
+      if (wv2 || tk) {
+        ctx.fillStyle = wv2 ? '#ff7a6a' : '#ffd27a';
+        ctx.fillText(wv2 ? 'CONTESTED - ' + clipText(fname(wv2.att), 18) + ' attacking'
+                         : 'TAKEN by ' + clipText(fname(tk.att), 22) + ', ' + fmtEpoch(tk.t1), dx, dyy + 34);
+      }
       ctx.restore();
 
       rows(ctx, dx, dyy + 46, [
@@ -4673,8 +4733,13 @@
             ' in transit']
         ];
         pPlanets.forEach(function (b, idx) {
+          /* Clipped to what fits beside the label: right-aligned, a long
+           * composition used to run back over the world's name. The HZ
+           * marker is kept whole - it is the part that matters. */
+          var compCols = Math.max(16, Math.floor((dw - 100) / 7.3));
           scanRows.push([(idx + 1) + '. ' + b.typeName,
-            (b.composition || '—') + (b.habitable ? '  ·  in the HZ' : '')]);
+            clipText(b.composition || '—', compCols - (b.habitable ? 13 : 0)) +
+            (b.habitable ? '  ·  in the HZ' : '')]);
         });
         rows(ctx, dx, noteBaseY, scanRows, '#7e93b3', '#cfe0ff', dw);
 
