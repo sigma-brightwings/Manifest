@@ -249,6 +249,7 @@
         })(),
         missileSeq: s.missileSeq,
         cargo: s.cargo, credits: s.credits, drones: s.drones || 0,
+        hot: s.hot || {}, hotDrones: s.hotDrones || 0,
         /* WHO IS IN THE BACK. Seats are derived from the fitting and come
          * back on their own; people are not, so they are written. A save
          * that dropped them would land the ship with live passage
@@ -382,6 +383,10 @@
        * plain data and needs nothing re-run on load. */
       claims: G.claims || {},
       drones: G.drones || [],
+      /* Other prospectors' drones are derived from the seed; only what
+       * YOU did to them is written, and the thefts not yet reported. */
+      npcDrones: G.npcDrones || {},
+      thefts: G.thefts || [],
       /* RUNG 3: rocks a torpedo shattered stay gone, the Guild's refund log
        * stays owed, and a holed station stays shut until its date. */
       shattered: G.shattered || {},
@@ -468,6 +473,8 @@
     s.missileSeq = d.missileSeq;
     s.cargo = d.cargo || {}; s.credits = d.credits;
     s.drones = d.drones || 0;
+    s.hot = (d.hot && typeof d.hot === 'object') ? d.hot : {};
+    s.hotDrones = d.hotDrones || 0;
     s.passengers = d.passengers || 0;
     s.hullId = d.hullId; s.hullHp = d.hullHp;
     if (d.meshKind) s.meshKind = d.meshKind;
@@ -527,6 +534,8 @@
     G.extracted = (data.extracted && typeof data.extracted === 'object') ? data.extracted : {};
     G.claims = (data.claims && typeof data.claims === 'object') ? data.claims : {};
     G.drones = Array.isArray(data.drones) ? data.drones : [];
+    G.npcDrones = (data.npcDrones && typeof data.npcDrones === 'object') ? data.npcDrones : {};
+    G.thefts = Array.isArray(data.thefts) ? data.thefts : [];
     G.shattered = (data.shattered && typeof data.shattered === 'object') ? data.shattered : {};
     G.rockWear = (data.rockWear && typeof data.rockWear === 'object') ? data.rockWear : {};
     G.torpRefund = data.torpRefund || 0;

@@ -142,6 +142,9 @@
     if (!world) return { ok: false, why: 'land on your claim first' };
     var near = dronesNear(G, sys, t);
     if (near.length) return collect(G, sys, t, near[0]);
+    /* Somebody else's, beside you: that is theft, and N does it. */
+    var theirs = npcNear(G, sys, t);
+    if (theirs.length) return steal(G, sys, t, theirs[0]);
     return deploy(G, sys, t, world);
   }
 
@@ -167,6 +170,8 @@
               cid: best.cid, grade: best.grade, t0: t, baseT: t, base: 0, stripRate: stripRate(sys) };
     G.drones.push(d);
     G.ship.drones -= 1;
+    /* A stolen drone set down on your own claim is yours now. */
+    if (G.ship.hotDrones > 0) G.ship.hotDrones -= 1;
     return { ok: true, drone: d, text: 'Drone down on ' + world.name + ' - digging ' + best.name.toLowerCase() +
              ' (' + Sv().gradeWord(best.grade).toLowerCase() + ')' };
   }
@@ -197,7 +202,11 @@
    * hopper with it if there is room. */
   function recover(G, sys, t) {
     var near = dronesNear(G, sys, t);
-    if (!near.length) return { ok: false, why: 'no drone of yours here' };
+    if (!near.length) {
+      var theirs = npcNear(G, sys, t);
+      if (theirs.length) return pry(G, sys, t, theirs[0]);
+      return { ok: false, why: 'no drone here' };
+    }
     var d = near[0];
     var got = collect(G, sys, t, d);
     if (d.base >= 1) return { ok: false, why: 'empty the hopper first - ' + Math.floor(d.base) + ' t still in it' };
@@ -215,13 +224,223 @@
     return { ok: true };
   }
 
+
+  /* ==== OTHER PROSPECTORS (2026-10-18) ===================================
+   * Astra: "we should be able to steal from other pilots' mining drones."
+   * Answers: take the HOPPER or the DRONE ITSELF; stolen ore is HOT - a
+   * scan finds it, Guild halls refuse it, a fence buys it - and the owner
+   * reports the theft when they next come round to empty the drone.
+   *
+   * Their drones are the player's drones with someone else's name on them:
+   * timetable records, nothing ticks. They are DERIVED, not generated:
+   * hashed off the star's id and each world's id, read lazily and cached
+   * per star, so nothing in generate.js changes and no seed fingerprint
+   * moves. An owner empties each drone every PERIOD days at a hashed phase;
+   * what is in the hopper is the dig since the later of that service and
+   * the last time YOU emptied it (G.npcDrones[id] = { baseT, base, gone }).
+   */
+  var NPC_OWNERS_A = ['Ibarra', 'Halloran', 'Okonkwo', 'Lindqvist', 'Castellan', 'Sato', 'Petrov',
+                      'Vashti', 'Brandt', 'Mbeki', 'Quist', 'Delacroix', 'Ferro', 'Amundsen'];
+  var NPC_OWNERS_B = ['Ore Co.', 'Prospecting', '& Daughters', 'Mineral Rights', 'Diggings',
+                      'Claim & Survey', 'Extraction', 'Brothers'];
+  var NPC_PERIOD_MIN = 18, NPC_PERIOD_SPAN = 34;   // days between an owner's visits
+  var THEFT_BOUNTY = 900;                          // cr, plus a share of what was taken
+  var THEFT_VALUE_SHARE = 0.5;
+  var FENCE_ORE = 0.6, FENCE_ORE_SYND = 0.85;      // of the market's sell price
+  var FENCE_DRONE = 0.4, FENCE_DRONE_SYND = 0.55;  // of DRONE_PRICE
+
+  var npcCache = {};
+  function poss(name) { return /s$/.test(name) ? name + "'" : name + "'s"; }
+  function starOf(G) { return (G.here && G.here.id) || 'sys'; }
+
+  function npcDrones(G, sys) {
+    var star = starOf(G);
+    if (npcCache[star] && npcCache[star].sys === sys) return npcCache[star].list;
+    var list = [], S = Sv();
+    var ports = (sys && sys.ports) || [];
+    if (S && S.deposits && ports.length) {
+      (sys.bodies || []).forEach(function (b) {
+        if (b.kind !== 'planet' && b.kind !== 'moon') return;
+        var rows;
+        try { rows = S.deposits(b, sys) || []; } catch (e) { rows = []; }
+        rows = rows.filter(function (r) { return r.cid !== 'hydrogen' && r.grade > 0; });
+        if (!rows.length) return;
+        rows.sort(function (a, c) { return c.grade - a.grade; });
+        var h = function (s) { return S.hash01(star + ':pros:' + b.id + ':' + s); };
+        var chance = (0.04 + 0.18 * Math.min(1, rows[0].grade)) * (b.habitable ? 0.5 : 1);
+        if (h('claim') >= chance) return;
+        var owner = NPC_OWNERS_A[Math.floor(h('a') * NPC_OWNERS_A.length)] + ' ' +
+                    NPC_OWNERS_B[Math.floor(h('b') * NPC_OWNERS_B.length)];
+        var home = ports[Math.floor(h('port') * ports.length)];
+        var fac = (home && home.faction) || 'civil';
+        var n = 1 + Math.floor(h('n') * 3);
+        for (var k = 0; k < n; k++) {
+          var pick = rows[(rows.length > 1 && h('pick' + k) < 0.35) ? 1 : 0];
+          list.push({
+            id: 'npc-' + star + '-' + b.id + '-' + k, npc: true, owner: owner, fac: fac,
+            home: home ? home.name : null,
+            key: star + ':' + b.id, star: star, body: b.id, name: b.name,
+            /* Radians, like every ground point (Sim.surfaceOffset): within 60 deg of the equator. */
+            at: { lat: (h('lat' + k) - 0.5) * 2.0944, lon: (h('lon' + k) - 0.5) * 2 * Math.PI, elevation: 0 },
+            cid: pick.cid, grade: pick.grade,
+            period: (NPC_PERIOD_MIN + h('per' + k) * NPC_PERIOD_SPAN) * DAY,
+            phase: h('ph' + k)
+          });
+        }
+      });
+    }
+    npcCache[star] = { sys: sys, list: list };
+    return list;
+  }
+  function npcState(G, d) { return (G.npcDrones && G.npcDrones[d.id]) || null; }
+  function npcLive(G, d, t) { var s = npcState(G, d); return !(s && s.gone !== undefined && s.gone <= t); }
+  /* The owner's last visit at or before t. */
+  function npcLastService(d, t) {
+    var off = d.phase * d.period;
+    return Math.floor((t - off) / d.period) * d.period + off;
+  }
+  function npcNextService(d, t) { return npcLastService(d, t) + d.period; }
+  function npcHopper(G, d, t) {
+    var rate = DRONE_RATE * d.grade / DAY;
+    var svc = npcLastService(d, t), st = npcState(G, d), level;
+    if (st && st.baseT > svc) level = (st.base || 0) + rate * (t - st.baseT);
+    else level = rate * (t - svc);
+    return { tonnes: Math.max(0, Math.min(HOPPER, level)), cid: d.cid, full: level >= HOPPER };
+  }
+  function npcOn(G, sys, key, t) {
+    return npcDrones(G, sys).filter(function (d) { return d.key === key && npcLive(G, d, t); });
+  }
+  /* The ground point, riding the world's spin like a pad. */
+  function groundPos(sys, d, t) {
+    var b = sys.byId[d.body], Sim = global.Sim, V = global.V;
+    if (!b || !Sim) return null;
+    return V.add(Sim.bodyState(b, sys, t).pos, Sim.surfaceOffset(b, d.at, t).pos);
+  }
+  function npcNear(G, sys, t) {
+    var s = G.ship, V = global.V, out = [];
+    npcDrones(G, sys).forEach(function (d) {
+      if (!npcLive(G, d, t)) return;
+      var p = groundPos(sys, d, t);
+      if (p && V.dist(p, s.pos) <= NEAR_KM) out.push(d);
+    });
+    return out;
+  }
+
+  /* ---- hot goods --------------------------------------------------------- */
+  function hotOf(G, cid) {
+    var s = G.ship, h = s && s.hot;
+    if (!h || !(h[cid] > 0)) return 0;
+    var held = (s.cargo && s.cargo[cid]) || 0;
+    if (h[cid] > held) { h[cid] = held; if (!(held > 0)) delete h[cid]; }
+    return h[cid] || 0;
+  }
+  function addHot(G, cid, t) {
+    G.ship.hot = G.ship.hot || {};
+    G.ship.hot[cid] = (G.ship.hot[cid] || 0) + t;
+  }
+  /* Selling: take the hot tonnes off the tag as they go. */
+  function spendHot(G, cid, t) {
+    var h = hotOf(G, cid);
+    if (h > 0) { G.ship.hot[cid] = Math.max(0, h - t); if (!G.ship.hot[cid]) delete G.ship.hot[cid]; }
+  }
+  /* Who will take it: a back room that is not a Guild hall. */
+  function isFence(port) {
+    var m = port && port.market;
+    return !!(m && m.blackMarket && (m.role || m.roleId) !== 'mining');
+  }
+  function fenceOreMult(sys) { return sys && sys.pirateHeld ? FENCE_ORE_SYND : FENCE_ORE; }
+  function fenceDronePrice(sys) {
+    return Math.round(DRONE_PRICE * (sys && sys.pirateHeld ? FENCE_DRONE_SYND : FENCE_DRONE));
+  }
+
+  function logTheft(G, sys, d, t, what, value) {
+    G.thefts = G.thefts || [];
+    var S = Sv();
+    var lag = (0.3 + (S ? S.hash01(d.id + ':rep:' + Math.round(t)) : 0.5) * 1.7) * DAY;
+    G.thefts.push({ id: d.id, owner: d.owner, fac: d.fac, star: d.star, world: d.name, what: what,
+                    t: t, value: Math.round(value), reportAt: npcNextService(d, t) + lag, reported: false });
+  }
+  /* The owner comes round, finds it, and calls it in. Lazy, like the rest. */
+  function tickThefts(G, t, hooks) {
+    var list = G.thefts;
+    if (!list || !list.length) return 0;
+    var n = 0;
+    for (var i = 0; i < list.length; i++) {
+      var f = list[i];
+      if (f.reported || t < f.reportAt) continue;
+      f.reported = true; n++;
+      var b = THEFT_BOUNTY + Math.round(f.value * THEFT_VALUE_SHARE);
+      G.wanted = G.wanted || {};
+      G.wanted[f.fac] = (G.wanted[f.fac] || 0) + b;
+      if (hooks && hooks.say) {
+        hooks.say(f.owner + ' found their ' + (f.what === 'drone' ? 'drone gone' : 'hopper empty') +
+                  ' on ' + f.world + ' - THEFT REPORTED, bounty now ' + Math.round(G.wanted[f.fac]) + ' cr', 7);
+      }
+      if (hooks && hooks.sound) hooks.sound('warn');
+    }
+    /* Keep the last few reported ones for the record; drop the rest. */
+    if (list.length > 40) G.thefts = list.filter(function (f) { return !f.reported; }).concat(
+      list.filter(function (f) { return f.reported; }).slice(-20));
+    return n;
+  }
+
+  /* N beside someone else's drone: empty its hopper into your hold. */
+  function steal(G, sys, t, d) {
+    var h = npcHopper(G, d, t);
+    var Sim = global.Sim;
+    var room = G.ship.cargoCap - (Sim ? Sim.cargoMass(G.ship) : 0);
+    var take = Math.max(0, Math.min(Math.floor(h.tonnes), Math.floor(room)));
+    var name = (Sv() && Sv().NAMES[d.cid]) || d.cid;
+    if (take <= 0) {
+      return { ok: false, why: room < 1 ? 'no room in the hold' : poss(d.owner) + ' hopper is empty' };
+    }
+    G.ship.cargo[d.cid] = (G.ship.cargo[d.cid] || 0) + take;
+    addHot(G, d.cid, take);
+    if (Sim) Sim.refreshShip(G.ship);
+    G.npcDrones = G.npcDrones || {};
+    var st = G.npcDrones[d.id] = G.npcDrones[d.id] || {};
+    st.base = Math.max(0, h.tonnes - take); st.baseT = t;
+    var Eco = global.Economy, base = (Eco && Eco.BY_ID[d.cid]) ? Eco.BY_ID[d.cid].base : 50;
+    logTheft(G, sys, d, t, 'hopper', take * base);
+    return { ok: true, taken: take, text: take + ' t of ' + name.toLowerCase() + ' out of ' + poss(d.owner) +
+             " drone - HOT: a fence will take it, the Guild will not" };
+  }
+  /* SHIFT+N beside it: pry the drone loose. Hopper first, same as yours. */
+  function pry(G, sys, t, d) {
+    var h = npcHopper(G, d, t);
+    if (h.tonnes >= 1) return { ok: false, why: 'empty its hopper first (N) - ' + Math.floor(h.tonnes) + ' t in it' };
+    if ((G.ship.drones || 0) >= DRONE_MAX) return { ok: false, why: 'racks full - ' + DRONE_MAX + ' aboard' };
+    G.npcDrones = G.npcDrones || {};
+    var st = G.npcDrones[d.id] = G.npcDrones[d.id] || {};
+    st.gone = t;
+    G.ship.drones = (G.ship.drones || 0) + 1;
+    G.ship.hotDrones = (G.ship.hotDrones || 0) + 1;
+    logTheft(G, sys, d, t, 'drone', DRONE_PRICE);
+    return { ok: true, text: poss(d.owner) + " drone pried loose and racked - HOT until it is set down or fenced" };
+  }
+  /* A fence buys a stolen drone. */
+  function fenceDrone(G, sys, port) {
+    if (!isFence(port)) return { ok: false, why: 'no fence here' };
+    if (!(G.ship.hotDrones > 0)) return { ok: false, why: 'no stolen drone aboard' };
+    var p = fenceDronePrice(sys);
+    G.ship.hotDrones -= 1; G.ship.drones = Math.max(0, (G.ship.drones || 0) - 1);
+    G.ship.credits += p;
+    return { ok: true, paid: p };
+  }
+
   var Claims = {
     CLAIM_FEE: CLAIM_FEE, CLAIM_DAYS: CLAIM_DAYS, CLAIM_MIN_COV: CLAIM_MIN_COV,
     DRONE_PRICE: DRONE_PRICE, DRONE_MAX: DRONE_MAX, DRONE_RATE: DRONE_RATE, HOPPER: HOPPER, NEAR_KM: NEAR_KM,
     claimFor: claimFor, claimable: claimable, fileClaim: fileClaim,
     stripRate: stripRate, lastStripBefore: lastStripBefore, hopper: hopper,
     dronesNear: dronesNear, landedWorld: landedWorld,
-    act: act, deploy: deploy, collect: collect, recover: recover, buyDrone: buyDrone, keyOf: keyOf
+    act: act, deploy: deploy, collect: collect, recover: recover, buyDrone: buyDrone, keyOf: keyOf,
+    npcDrones: npcDrones, npcOn: npcOn, npcNear: npcNear, npcHopper: npcHopper, npcLive: npcLive,
+    npcLastService: npcLastService, npcNextService: npcNextService, groundPos: groundPos,
+    steal: steal, pry: pry, fenceDrone: fenceDrone, tickThefts: tickThefts,
+    hotOf: hotOf, addHot: addHot, spendHot: spendHot, isFence: isFence,
+    fenceOreMult: fenceOreMult, fenceDronePrice: fenceDronePrice,
+    THEFT_BOUNTY: THEFT_BOUNTY, FENCE_ORE: FENCE_ORE, FENCE_ORE_SYND: FENCE_ORE_SYND
   };
   global.Claims = Claims;
   if (typeof module !== 'undefined' && module.exports) module.exports = Claims;

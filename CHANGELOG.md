@@ -130,6 +130,28 @@ Astra has seen it working.
   runs out. Small ring chunks can be cut away in a session; big rocks scar.
   Torpedoes take their chunks off the same mass. The CUTTING bar shows
   tonnes toward the next piece. Saved.
+- **2026-10-18: other prospectors, and stealing from them.** Other
+  outfits now have claims and drones on about one world in eight, in
+  nearly every system with a port: Ibarra Ore Co., Halloran & Daughters
+  and so on, one to three drones a claim. They are worked out from the
+  seed, so they are the same every time and no existing world, port or
+  fingerprint changed. Each owner comes round to empty their drones every
+  few weeks. Lock a world and get within a few radii: their drones are
+  marked on the ground in orange (yours in green), with an arrow to the
+  nearest when it is off screen, and the SURVEY page names who has claimed
+  it. Land beside one: **N** empties its hopper into your hold and
+  **SHIFT+N** pries the drone itself loose into your racks (empty it
+  first). What you take is **hot**: a customs scan seizes the hot tonnes
+  and any stolen drone and fines you (a corrupt inspector can still be
+  paid off; an outlaw one does not care), Guild halls and ordinary
+  markets will not buy it, and a fence (a black market that is not a
+  Guild hall) pays 60% of the price, 85% in a Syndicate hold. A fence
+  also buys a stolen drone (3,800 cr; 5,225 cr in a Syndicate hold), or
+  set it down on your own claim and it is yours. Lawful traders will not
+  take hot ore ship to ship; Syndicate hulls will. The owner reports the
+  theft when they next come round, a few days to weeks later, wherever
+  you are by then: a bounty of 900 cr plus half of what you took, with
+  their flag. Saved.
 - **2026-10-18: laser ships in rings.** A fleet ship with a pilot and a
   mining laser (or the cannon) can be put to work in a ring from the Fleet
   tab, beside the skimming rows: out to the ring, cut and scoop until the

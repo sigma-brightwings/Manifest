@@ -4652,7 +4652,14 @@
       if (!(ship.cargo[cid] > 1e-9)) continue;
       var sev = contrabandSeverity(G, cid, scanFac);
       if (sev > 0) found.push({ cid: cid, sev: sev });
+      /* Stolen ore (claims.js): only the hot tonnes, and not to an
+       * outlaw inspector, who is the one buying it. */
+      else if (scanFac !== 'outlaw' && global.Claims && global.Claims.hotOf(G, cid) >= 1) {
+        found.push({ cid: cid, sev: 1, hot: global.Claims.hotOf(G, cid) });
+      }
     }
+    var hotDrones = (scanFac !== 'outlaw' && ship.hotDrones > 0) ? ship.hotDrones : 0;
+    if (hotDrones) found.push({ cid: null, sev: 1, drones: hotDrones });
     if (!found.length) {
       if (hooks && hooks.say) hooks.say(spec.name + ' scans your hold — nothing flagged, cleared', 5);
       if (hooks && hooks.sound) hooks.sound('click');
@@ -4671,7 +4678,7 @@
     var bribeChance = Math.max(0, Math.min(0.75, (corrupt - HUSH_MIN_CORRUPTION) / 100));
     if (bribeChance > 0 && Math.random() < bribeChance) {
       var wouldBeFine = 0;
-      found.forEach(function (f) { wouldBeFine += fineFor(ship.cargo[f.cid], f.sev); });
+      found.forEach(function (f) { wouldBeFine += fineFor(f.drones ? f.drones * 5 : f.hot || ship.cargo[f.cid], f.sev); });
       var ask = Math.max(50, Math.round(wouldBeFine * 0.55));
       if (ship.credits >= ask) {
         ship.credits -= ask;
@@ -4688,11 +4695,21 @@
 
     var fine = 0, seized = [], worst = 0;
     found.forEach(function (f) {
-      var qty = ship.cargo[f.cid];
+      if (f.drones) {
+        fine += fineFor(f.drones * 5, f.sev);
+        if (f.sev > worst) worst = f.sev;
+        seized.push(f.drones + ' stolen drone' + (f.drones === 1 ? '' : 's'));
+        ship.drones = Math.max(0, (ship.drones || 0) - f.drones); ship.hotDrones = 0;
+        return;
+      }
+      var qty = f.hot || ship.cargo[f.cid];
       fine += fineFor(qty, f.sev);
       if (f.sev > worst) worst = f.sev;
-      seized.push(qty.toFixed(0) + 't ' + Economy.BY_ID[f.cid].name);
-      delete ship.cargo[f.cid];
+      seized.push(qty.toFixed(0) + 't ' + (f.hot ? 'stolen ' : '') + Economy.BY_ID[f.cid].name);
+      if (f.hot) {
+        ship.cargo[f.cid] -= qty; if (ship.cargo[f.cid] <= 1e-9) delete ship.cargo[f.cid];
+        if (ship.hot) delete ship.hot[f.cid];
+      } else delete ship.cargo[f.cid];
     });
     if (global.Sim) global.Sim.refreshShip(ship);
     fine = Math.round(fine);

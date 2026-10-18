@@ -1275,6 +1275,19 @@
               : Cl.DRONE_PRICE + ' cr - ' + nd + ' aboard, ' + Cl.HOPPER + ' t hopper',
           fn: function () { if (Cl.buyDrone(G).ok) say('Drone racked. ' + G.ship.drones + ' aboard.', 4); }
         });
+        /* A stolen drone, to the back room - only where there is one. */
+        if ((G.ship.hotDrones || 0) > 0 && Cl.isFence && Cl.isFence(c.obj)) {
+          var fdp = Cl.fenceDronePrice(G.sys);
+          opts.push({
+            label: 'Fence a stolen drone',
+            enabled: docked,
+            note: !docked ? 'in the back room, on the deck' : fdp + ' cr, no questions - ' + G.ship.hotDrones + ' aboard',
+            fn: function () {
+              var got = Cl.fenceDrone(G, G.sys, c.obj);
+              if (got.ok) say('The fence counts out ' + got.paid + ' cr and the drone goes through a side door.', 5);
+            }
+          });
+        }
       }
       /* THE GUILD'S TORPEDO LOG (mining rung 3): half back on every serial
        * that went off for safety rather than for profit. Any desk - the

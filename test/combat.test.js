@@ -2063,6 +2063,33 @@ section('--- the board says what it is, and what it is for ---');
   }
 })();
 
+section('--- stolen ore and the scan (prospectors, 2026-10-18) ---');
+(function () {
+  require('../src/claims.js');
+  var realRandom = Math.random;
+  var G = makeG();
+  G.sys.crimeScore = 40;
+  var cop = fakeVictim(G, { kind: 'police', cls: 'police', faction: 'lawfac' });
+  G.ship.cargo = { ores: 12 }; G.ship.hot = { ores: 5 }; G.ship.drones = 2; G.ship.hotDrones = 1;
+  /* Searched (first roll), and an inspector who will not be bought (second). */
+  var rolls = 0;
+  Math.random = function () { return rolls++ === 0 ? 0.01 : 0.99; };
+  var r = Combat.resolveScan(G, cop, HOOKS);
+  Math.random = realRandom;
+  check('a scan finds the hot tonnes and only those', r.contraband && G.ship.cargo.ores === 7 && !(G.ship.hot.ores > 0),
+        (r.seized || []).join(', '));
+  check('and the stolen drone, not yours', G.ship.drones === 1 && G.ship.hotDrones === 0);
+  check('and fines you for it', G.wanted.lawfac > 0, Math.round(G.wanted.lawfac) + ' cr');
+  var G2 = makeG();
+  G2.sys.crimeScore = 40;
+  var pir = fakeVictim(G2, { kind: 'police', cls: 'police', faction: 'outlaw' });
+  G2.ship.cargo = { ores: 12 }; G2.ship.hot = { ores: 12 };
+  Math.random = function () { return 0.01; };
+  var r2 = Combat.resolveScan(G2, pir, HOOKS);
+  Math.random = realRandom;
+  check('an outlaw inspector does not care whose ore it was', !r2.contraband && G2.ship.cargo.ores === 12);
+})();
+
 section('--- contraband and the scan ---');
 (function () {
   check('the catalogue lists narcotics and arms as contraband',

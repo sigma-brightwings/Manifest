@@ -3844,6 +3844,21 @@
        * staring at eighteen tonnes in the manifest and a button that does
        * nothing has been told nothing. */
       var free = Missions.sellableTonnes(G, cid, heldTonnes(cid));
+      /* HOT ORE (other prospectors' drones, 2026-10-18): only a fence
+       * takes it, and at a fence's price. Everywhere else it is held
+       * back from the sale like freight, and the refusal says why. */
+      var Clm = global.Claims;
+      var hotN = Clm ? Math.min(free, Clm.hotOf(G, cid)) : 0;
+      var fenceHere = hotN > 0 && Clm.isFence(port);
+      if (hotN > 0 && !fenceHere) {
+        free -= hotN;
+        if (free < 1 && -tonnes > 0) {
+          say(Math.floor(hotN) + 't of ' + row.name.toLowerCase() + ' is hot - ' +
+              ((port.market && (port.market.role || port.market.roleId) === 'mining')
+                ? 'the Guild has the assay logs. ' : '') + 'Find a fence.', 5);
+          return;
+        }
+      }
       var qty = Math.min(-tonnes, free);
       if (qty <= 0 && heldTonnes(cid) > free) {
         var bond = Missions.bondHolder(G, cid);
@@ -3858,7 +3873,9 @@
             ? ' — find a reprocessing plant' : ''), 3);
         return;
       }
-      var gain = qty * row.sell;
+      var hotSold = fenceHere ? Math.min(qty, hotN) : 0;
+      var gain = (qty - hotSold) * row.sell +
+                 (hotSold > 0 && row.sell > 0 ? Math.round(hotSold * row.sell * Clm.fenceOreMult(G.sys)) : hotSold * row.sell);
       if (gain < 0 && G.ship.credits + gain < 0) {
         say('Disposal fee exceeds your credits', 3);
         return;
@@ -3871,10 +3888,11 @@
        * waste. */
       var cut = gain > 0 ? Combat.lienTake(G, gain) : { taken: 0, cleared: false };
       G.ship.credits += gain - cut.taken;
+      if (hotSold > 0) Clm.spendHot(G, cid, hotSold);
       G.ship.cargo[cid] = heldTonnes(cid) - qty;
       if (G.ship.cargo[cid] <= 1e-9) delete G.ship.cargo[cid];
       Eco.applyTrade(port, cid, -qty, G.t);
-      logTrade((gain < 0 ? 'Disposed of ' : 'Sold ') + qty + 't ' + row.name +
+      logTrade((gain < 0 ? 'Disposed of ' : hotSold > 0 ? 'Fenced ' : 'Sold ') + qty + 't ' + row.name +
                '  ' + fmtCredits(gain - cut.taken) +
                (cut.taken > 0 ? '  ·  ' + cut.taken + ' cr to ' + cut.who +
                                 (cut.cleared ? ' — LIEN CLEARED'
@@ -5320,6 +5338,9 @@
       var arrived = Fleet.tick(G, G.sys, G.t);
       for (var ai = 0; ai < arrived.length; ai++) logTrade(arrived[ai]);
     }
+    /* Thefts from other prospectors' drones are reported when the owner
+     * next comes round - on the clock, wherever you are. */
+    if (global.Claims && G.thefts && G.thefts.length) global.Claims.tickThefts(G, G.t, HOOKS);
 
     if (G.ship.docked) {
       G.dockStatus = null;
@@ -10216,6 +10237,14 @@
           ctx.fillStyle = MFD_DIM;
           ctx.fillText(G.ship.drones + ' aboard - land, N', 318, cy);
         }
+        /* Other prospectors on the Guild's register for this world. */
+        var theirs = Cl.npcOn ? Cl.npcOn(G, G.sys, key, G.t) : [];
+        if (theirs.length && cy < MFD_BODY_TOP + 6 + Sv.LAT_BINS * 6 + 16 + 24) {
+          cy += 12;
+          ctx.fillStyle = '#ffb86b';
+          ctx.fillText(theirs[0].owner.split(' ')[0].toUpperCase() + ': ' + theirs.length + ' drone' +
+                       (theirs.length === 1 ? '' : 's'), 318, cy);
+        }
       }
     }
     /* What the Guild would pay for this system's mapping, at any desk. */
@@ -12020,6 +12049,7 @@
      * whatever the mode drew there. Warnings still get through, because a
      * collision alarm you can miss by having a screen open is not an alarm. */
     if (flying()) drawStationPointer(ctx, w, h);
+    if (flying() || G.ship.landed) drawDronePointers(ctx, w, h);
     drawOverlays(ctx, w, h);
   }
 
@@ -12863,6 +12893,64 @@
 
   /* An arrow at the screen edge pointing to the home station whenever it is
    * off screen, plus the range to it. Direction as a pointer, not a word. */
+  /* DRONES ON THE LOCKED WORLD - yours and other prospectors' - marked
+   * where they sit once you are within a few radii, with an arrow to the
+   * nearest when it is off screen (Astra: directions as arrows). Theirs
+   * are on the Guild's public register, so anyone can find them. */
+  function drawDronePointers(ctx, w, h) {
+    var Cl = global.Claims;
+    if (!Cl || !G.navTarget || G.navTarget.kind !== 'body') return;
+    var b = G.sys.byId[G.navTarget.id];
+    if (!b || (b.kind !== 'planet' && b.kind !== 'moon')) return;
+    var bpos = Sim.bodyPosition(b, G.sys, G.t);
+    if (V.dist(bpos, G.ship.pos) > b.radius * 4) return;
+    var key = ((G.here && G.here.id) || 'sys') + ':' + b.id;
+    var list = [];
+    (G.drones || []).forEach(function (d) { if (d.key === key) list.push({ d: d, mine: true }); });
+    Cl.npcOn(G, G.sys, key, G.t).forEach(function (d) { list.push({ d: d, mine: false }); });
+    if (!list.length) return;
+    var deck = deckTop(h), best = null;
+    ctx.save();
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    list.forEach(function (e) {
+      var p = Cl.groundPos(G.sys, e.d, G.t);
+      if (!p) return;
+      var range = V.dist(p, G.ship.pos);
+      /* The far side of the world is not marked through the rock. */
+      var up = V.sub(p, bpos), toShip = V.sub(G.ship.pos, p);
+      var facing = V.dot(up, toShip) > 0;
+      var sp = G.cam.project(p);
+      var col = e.mine ? '#7dffb0' : '#ffb86b';
+      var label = (e.mine ? 'YOUR DRONE' : e.d.owner.toUpperCase()) + '  ' + fmtDist(range);
+      if (facing && sp && !sp.behindEye && sp.x > 20 && sp.x < w - 20 && sp.y > 20 && sp.y < deck - 20) {
+        ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(sp.x, sp.y - 6); ctx.lineTo(sp.x + 6, sp.y);
+        ctx.lineTo(sp.x, sp.y + 6); ctx.lineTo(sp.x - 6, sp.y); ctx.closePath(); ctx.stroke();
+        ctx.fillStyle = col; ctx.fillText(label, sp.x + 9, sp.y + 3);
+        if (range <= Cl.NEAR_KM) ctx.fillText(e.mine ? 'N empty  ·  SHIFT+N pick up'
+                                                   : 'N take the hopper  ·  SHIFT+N take the drone', sp.x + 9, sp.y + 15);
+        best = best || 'shown';
+      } else if (best !== 'shown' && (!best || range < best.range)) {
+        best = { p: p, range: range, label: label, col: col, mine: e.mine };
+      }
+    });
+    if (best && best !== 'shown') {
+      var vec = V.sub(best.p, G.cam.eye);
+      var sx = V.dot(vec, G.cam.r), sy = V.dot(vec, G.cam.u);
+      var l = Math.hypot(sx, sy) || 1, dx = sx / l, dy = -sy / l;
+      var cx = w / 2, cy = deck / 2, rad = Math.min(w, deck) * 0.28;
+      Render.drawArrow(ctx, cx + dx * rad, cy + dy * rad, dx, dy, 22, best.col, 2, 8);
+      ctx.fillStyle = best.col;
+      ctx.fillText(best.label, cx + dx * (rad + 30) - 40, cy + dy * (rad + 30) + 12);
+      /* In reach (it is under you once you have landed on it): the keys. */
+      if (best.range <= Cl.NEAR_KM) {
+        ctx.fillText(best.mine ? 'N empty  ·  SHIFT+N pick up' : 'N take the hopper  ·  SHIFT+N take the drone',
+                     cx + dx * (rad + 30) - 40, cy + dy * (rad + 30) + 24);
+      }
+    }
+    ctx.restore();
+  }
+
   function drawStationPointer(ctx, w, h) {
     if (!G.homeStation) return;
     var pos = Sim.bodyPosition(G.homeStation, G.sys, G.t);
