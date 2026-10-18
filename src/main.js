@@ -3855,7 +3855,8 @@
         if (free < 1 && -tonnes > 0) {
           say(Math.floor(hotN) + 't of ' + row.name.toLowerCase() + ' is hot - ' +
               ((port.market && (port.market.role || port.market.roleId) === 'mining')
-                ? 'the Guild has the assay logs. ' : '') + 'Find a fence.', 5);
+                ? 'the Guild has the assay logs. ' : '') +
+              (Clm.fenceIn(G.sys) ? 'The back room at ' + Clm.fenceIn(G.sys).name + ' will take it.' : 'Find a fence.'), 6);
           return;
         }
       }

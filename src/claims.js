@@ -348,6 +348,13 @@
     var m = port && port.market;
     return !!(m && m.blackMarket && (m.role || m.roleId) !== 'mining');
   }
+  /* Where it goes: every system has one (generate.js, a fence in every
+   * system). Named, because a back room is not on any board. */
+  function fenceIn(sys) {
+    var ps = (sys && sys.ports) || [];
+    for (var i = 0; i < ps.length; i++) if (isFence(ps[i])) return ps[i];
+    return null;
+  }
   function fenceOreMult(sys) { return sys && sys.pirateHeld ? FENCE_ORE_SYND : FENCE_ORE; }
   function fenceDronePrice(sys) {
     return Math.round(DRONE_PRICE * (sys && sys.pirateHeld ? FENCE_DRONE_SYND : FENCE_DRONE));
@@ -402,8 +409,10 @@
     st.base = Math.max(0, h.tonnes - take); st.baseT = t;
     var Eco = global.Economy, base = (Eco && Eco.BY_ID[d.cid]) ? Eco.BY_ID[d.cid].base : 50;
     logTheft(G, sys, d, t, 'hopper', take * base);
+    var fz = fenceIn(sys);
     return { ok: true, taken: take, text: take + ' t of ' + name.toLowerCase() + ' out of ' + poss(d.owner) +
-             " drone - HOT: a fence will take it, the Guild will not" };
+             ' drone - HOT: ' + (fz ? 'the back room at ' + fz.name + ' will take it' : 'a fence will take it') +
+             ', the Guild will not' };
   }
   /* SHIFT+N beside it: pry the drone loose. Hopper first, same as yours. */
   function pry(G, sys, t, d) {
@@ -439,7 +448,7 @@
     npcLastService: npcLastService, npcNextService: npcNextService, groundPos: groundPos,
     steal: steal, pry: pry, fenceDrone: fenceDrone, tickThefts: tickThefts,
     hotOf: hotOf, addHot: addHot, spendHot: spendHot, isFence: isFence,
-    fenceOreMult: fenceOreMult, fenceDronePrice: fenceDronePrice,
+    fenceOreMult: fenceOreMult, fenceIn: fenceIn, fenceDronePrice: fenceDronePrice,
     THEFT_BOUNTY: THEFT_BOUNTY, FENCE_ORE: FENCE_ORE, FENCE_ORE_SYND: FENCE_ORE_SYND
   };
   global.Claims = Claims;

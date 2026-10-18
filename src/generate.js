@@ -3183,6 +3183,27 @@
       if (!cr.chance(chance)) return;
       Eco.addBlackMarketRows(port, cr.fork('bm-' + port.id));
     });
+    /* A FENCE IN EVERY SYSTEM. Astra, 2026-10-18: "there should be a
+     * syndicate-friendly port in every system so that you don't have to
+     * jump to another star system far away just to sell your stolen
+     * shit. Although jumping to a syndicate-only system gets you a
+     * higher price." Measured first: about one system in six with ports
+     * had no back room outside a Guild hall. Those get one at the port
+     * least worth watching - the lowest-development market that is not
+     * the Guild's - on its own fork, so every back room above and every
+     * other port is exactly what it was. The Syndicate-hold premium is
+     * the fence's price (claims.js FENCE_*_SYND), not another port. */
+    var open = (sys.ports || []).filter(function (p) {
+      return p.market && (p.market.role || p.market.roleId) !== 'mining';
+    });
+    if (open.length && !open.some(function (p) { return p.market.blackMarket; })) {
+      open.sort(function (a, b) {
+        return ((a.market.dev || 0) - (b.market.dev || 0)) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+      });
+      var fr = base.fork('fence-every');
+      Eco.addBlackMarketRows(open[0], fr.fork('bm-' + open[0].id));
+      open[0].market.fence = true;     // placed for the stolen-goods trade, not by crime
+    }
   }
 
   /* --- Syndicate runners ---------------------------------------------------

@@ -38,6 +38,22 @@ function optsFor(st) {
 }
 function sysOf(i) { return Gen.generateSystem(gal.stars[i].seed, optsFor(gal.stars[i])); }
 
+console.log('--- a fence in every system ---');
+var noFence = 0, withPorts = 0, placed = 0, extra = 0;
+for (var fi = 0; fi < Math.min(120, gal.stars.length); fi++) {
+  var fs = sysOf(fi);
+  if (!(fs.ports || []).length) continue;
+  withPorts++;
+  if (!Cl.fenceIn(fs)) noFence++;
+  var placedHere = fs.ports.filter(function (p) { return p.market && p.market.fence; });
+  placed += placedHere.length;
+  /* Placed only where crime had not already put a back room. */
+  if (placedHere.length && fs.ports.some(function (p) { return p.market && p.market.blackMarket && !p.market.fence &&
+      (p.market.role || p.market.roleId) !== 'mining'; })) extra++;
+}
+check('every system with ports has a fence', noFence === 0, withPorts + ' systems, ' + placed + ' fences placed');
+check('placed only where there was none', extra === 0 && placed > 0 && placed <= withPorts * 0.3);
+
 console.log('--- census ---');
 var N = Math.min(60, gal.stars.length), withAny = 0, total = 0, worlds = 0, claimed = 0, pick = null;
 for (var i = 0; i < N; i++) {

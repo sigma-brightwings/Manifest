@@ -130,6 +130,13 @@ Astra has seen it working.
   runs out. Small ring chunks can be cut away in a session; big rocks scar.
   Torpedoes take their chunks off the same mass. The CUTTING bar shows
   tonnes toward the next piece. Saved.
+- **2026-10-18: a fence in every system.** About one system in six had
+  no back room outside a Guild hall, so stolen goods meant a jump. Each of
+  those now has one, at its least developed market that is not the
+  Guild's; every other port, and every back room that was already there,
+  is unchanged, and so are the seed fingerprints. A Syndicate hold still
+  pays more (85% against 60%). Holding hot goods, the refusal at a market
+  and the message when you take them name the back room in this system.
 - **2026-10-18: other prospectors, and stealing from them.** Other
   outfits now have claims and drones on about one world in eight, in
   nearly every system with a port: Ibarra Ore Co., Halloran & Daughters
