@@ -249,6 +249,10 @@
      * begins paid up rather than a decade in arrears. */
     if (s.wagesTo == null) s.wagesTo = t;
 
+    /* What your working ships have earned comes in BEFORE the wages go
+     * out, wherever they are working: the same order a desk would use. */
+    lines = lines.concat(bookAllWork(G, t));
+
     var aboard = Crew.aboard(s);
     var mine = payCrew(Crew, aboard, s.wagesTo, t, s.credits);
     s.wagesTo = mine.paidTo;
@@ -287,6 +291,10 @@
       /* A ship under way is not on anybody's clamp. Her berth clock is
        * restarted by tick() when she arrives — see the arrival rule. */
       if (rec.order) continue;
+      /* A working ship is in and out of her port on the timetable; the
+       * turnaround is part of the job, not storage. Her berth clock
+       * restarts from the arrival that ends the work. */
+      if (rec.work) continue;
 
       var berth = berthDue(rec, t);
       rec.berthTo = berth.berthTo;
@@ -418,6 +426,7 @@
   function canOrder(G, rec, sys, destId) {
     if (!rec) return { ok: false, why: 'no such ship' };
     if (rec.order) return { ok: false, why: 'she is already under way' };
+    if (rec.work) return { ok: false, why: 'she is working ' + rec.work.siteName + ' - recall her first' };
     if (!pilotOf(rec)) return { ok: false, why: 'nobody aboard can helm her' };
     if (rec.star && G && G.here && rec.star !== G.here.id) {
       return { ok: false, why: 'she is at ' + (rec.starName || 'another star') };
@@ -484,6 +493,16 @@
     var ra = Gen.radiusAbout(A, parent, sys), rb = Gen.radiusAbout(B, parent, sys);
     var dist = local ? Math.max(Math.abs(ra - rb), (ra + rb) * 0.45)
                      : Math.sqrt(ra * ra + rb * rb);
+    var lt = legTimes(rec, dist);
+    return { from: A.id, to: B.id, toName: B.name, parentId: parent.id,
+             local: local, distance: dist, accel: lt.accel, cruise: lt.cruise,
+             fuel: lt.fuel, burning: lt.burning };
+  }
+
+  /* The crossing and its burn for a distance, at this pilot's throttle.
+   * Shared by an ordinary leg and a work order's leg to a giant, so the
+   * two can never quote different arithmetic for the same distance. */
+  function legTimes(rec, dist) {
     var C = global.Combat;
     var hull = C && C.HULLS ? C.HULLS[rec.hullId] : null;
     var full = ((hull ? hull.thrustKN : 2000) / massOf(rec)) / 1000;   // km/s² at the stop
@@ -492,9 +511,7 @@
     cruise = Math.max(600, Math.min(cruise, 90 * 86400));
     var burning = Math.min(cruise, 2 * ORDER_BURN_LEG);
     var fuel = burnRate(rec) * throttle * burning;
-    return { from: A.id, to: B.id, toName: B.name, parentId: parent.id,
-             local: local, distance: dist, accel: accel, cruise: cruise,
-             fuel: fuel, burning: burning };
+    return { accel: accel, cruise: cruise, fuel: fuel, burning: burning };
   }
 
   /* Quote without committing — the fleet page prints the crossing time
@@ -529,8 +546,255 @@
 
   /* Seconds until she is alongside, or 0 if she is not under way. */
   function eta(rec, t) {
-    if (!rec || !rec.order) return 0;
+    if (!rec) return 0;
+    if (rec.work) return Math.max(0, workNextArrival(rec.work, t) - t);
+    if (!rec.order) return 0;
     return Math.max(0, rec.order.t0 + rec.order.cruise - t);
+  }
+
+  /* ---- work orders (mining rung 4, 2026-10-17) ----------------------------
+   *
+   * Astra: "that way we can actually have our own hydrogen mining ships."
+   * Decided: SKIMMING first; a work order LOOPS until recalled; she works
+   * out of the port she is clamped at and either SELLS there or KEEPS the
+   * load aboard (one trip, for stockpiling toward a station of your own).
+   * Drone collection by your ships was considered and left for rung 5: the
+   * landing trip is the one cost that keeps a drone below active work.
+   *
+   * A WORK ORDER IS AN ORDINARY TRAFFIC LOOP. trafficState already flies
+   * A -> B -> A with a layover at each end; here A is her port and B is the
+   * giant, the layover at the giant is the skim and the layover at the port
+   * is the turnaround. So she is drawn, heard and timed by the same code as
+   * every freighter, and where she is at any instant is closed-form.
+   *
+   * AND SO IS WHAT SHE HAS EARNED. Cycle k arrives home at
+   *   t0 + k*period + 2*cruise + lay,
+   * so "how many loads has she sold" is a floor, and each load is sold at
+   * the price of ITS OWN arrival instant, through Economy.applyTrade like
+   * any sale of yours - your own skimmers push the hydrogen price down at
+   * the port they feed, and the market forgets it on the usual half-life.
+   * Booking is lazy (when you are in her system, or at a desk), and lazy is
+   * exact, because nothing about cycle k depends on when it is booked.
+   *
+   * THE BRAKE IS TIME, NOT MONEY. Wages are 40-96 cr a day; a hold of
+   * hydrogen is ~3.5k. Without a brake a Talon skimmer paid for itself in
+   * four game days and a fleet at warp was the passive-income trap the
+   * balance rule exists to stop. A pilot skims the safe way: one shallow
+   * pass an orbit, a few minutes in the air in every few hours, so her
+   * rate is a few percent of what you take diving in yourself (~0.16 t/s
+   * shielded on an ice giant). Filling a hold then takes HOURS, and those
+   * hours are where the pilot's rating, the heat shield and the kind of
+   * giant show - a first draft at 0.10 t/s filled every hold inside the
+   * turnaround, so none of the three made any difference. Plus a turnaround
+   * in port. One ship earns a few thousand a game day: far above a drone,
+   * far below flying it yourself. */
+  var WORK_TURNAROUND = 8 * 3600;           // s, the least either layover can be
+  var SKIM_RATE = { iceGiant: 0.005, gasGiant: 0.002 };  // t/s, a good pilot, shielded
+  var SKIM_NO_SHIELD = 0.35;                // shallower, thinner air, slower
+  var SKIM_MIN_FREE = 5;                    // t of hold worth going out for
+  var SKIM_DEPTH_FRAC = 0.75;               // of the grade, at a pilot's safe depth
+  var WORK_BOOK_MAX = 4000;                 // cycles booked in one call, a guard
+
+  function fitted(rec, kind) {
+    var C = global.Combat;
+    for (var k in (rec.fit || {})) {
+      var it = C && C.EQUIPMENT ? C.EQUIPMENT[rec.fit[k]] : null;
+      if (it && it.kind === kind) return true;
+    }
+    return false;
+  }
+  function isGiant(b) { return !!b && (b.type === 'gasGiant' || b.type === 'iceGiant'); }
+  function skimSites(sys) {
+    return ((sys && sys.bodies) || []).filter(isGiant);
+  }
+  function hydrogenGrade(giant, sys) {
+    var Sv = global.Survey;
+    if (!Sv || !Sv.deposits) return 0.6;
+    var r = Sv.deposits(giant, sys).filter(function (x) { return x.cid === 'hydrogen'; })[0];
+    return r ? r.grade : 0;
+  }
+  function minGrade() {
+    var M = global.Mining;
+    return M && M.SKIM_MIN_GRADE !== undefined ? M.SKIM_MIN_GRADE : 0.3;
+  }
+
+  /* The leg from her port to the giant's upper air. A port in orbit round
+   * the giant (or one of its moons) has the giant as the common parent, and
+   * the far end is the top of the air, not the centre. */
+  function planSkimLeg(rec, sys, giant) {
+    var Gen = global.Gen;
+    var A = sys.byId[rec.port];
+    var parent = Gen.commonParent(A, giant, sys);
+    var local = parent === giant;
+    var ra = Gen.radiusAbout(A, parent, sys);
+    var rb = local ? giant.radius * 1.015 : Gen.radiusAbout(giant, parent, sys);
+    var dist = local ? Math.max(Math.abs(ra - rb), (ra + rb) * 0.2)
+                     : Math.sqrt(ra * ra + rb * rb);
+    var lt = legTimes(rec, dist);
+    return { parentId: parent.id, local: local, distance: dist,
+             accel: lt.accel, cruise: lt.cruise, fuel: lt.fuel };
+  }
+
+  /* Can she work this giant, and what would one cycle look like. Refusals
+   * in words, like every other row on the fleet page. */
+  function planWork(G, rec, sys, giantId, mode) {
+    if (!rec) return { ok: false, why: 'no such ship' };
+    if (rec.work) return { ok: false, why: 'she is already working ' + rec.work.siteName };
+    if (rec.order) return { ok: false, why: 'she is already under way' };
+    var p = pilotOf(rec);
+    if (!p) return { ok: false, why: 'nobody aboard can helm her' };
+    if (rec.star && G && G.here && rec.star !== G.here.id) {
+      return { ok: false, why: 'she is at ' + (rec.starName || 'another star') };
+    }
+    if (!sys || !sys.byId || !sys.byId[rec.port]) return { ok: false, why: 'her clamp is not in this system' };
+    var giant = sys.byId[giantId];
+    if (!isGiant(giant)) return { ok: false, why: 'nothing to skim there' };
+    if (!fitted(rec, 'skimmer')) return { ok: false, why: 'she has no gas skimmer fitted' };
+    if (rec.arrears > 0) {
+      return { ok: false, why: 'the harbour will not release her - ' + rec.arrears + ' cr owed' };
+    }
+    var grade = hydrogenGrade(giant, sys);
+    if (grade < minGrade()) {
+      return { ok: false, why: giant.name + ' is too poor in hydrogen (grade ' + grade.toFixed(2) + ')' };
+    }
+    var cap = capacityOf(rec);
+    var free = Math.floor(cap.cargoCap - cap.holdUsed);
+    if (free < SKIM_MIN_FREE) return { ok: false, why: 'her hold is full - ' + free + ' t free' };
+    var leg = planSkimLeg(rec, sys, giant);
+    var C = global.Combat;
+    var hull = C && C.HULLS ? C.HULLS[rec.hullId] : null;
+    var tankCap = (hull && hull.thrusterCap) || rec.thrusterCap || 16;
+    if (2 * leg.fuel > tankCap + 1e-9) {
+      return { ok: false, why: 'the round trip needs ' + (2 * leg.fuel).toFixed(1) +
+                               ' t of reaction mass, her tanks hold ' + tankCap + ' t' };
+    }
+    var shield = fitted(rec, 'heatshield');
+    var rate = (SKIM_RATE[giant.type] || 0.05) * (0.6 + 0.1 * p.rating) * (shield ? 1 : SKIM_NO_SHIELD) *
+               grade * SKIM_DEPTH_FRAC;
+    var dwell = free / rate;
+    var lay = Math.max(WORK_TURNAROUND, dwell);
+    var period = 2 * (leg.cruise + lay);
+    return { ok: true, kind: 'skim', site: giant.id, siteName: giant.name,
+             port: rec.port, portName: sys.byId[rec.port].name,
+             mode: mode === 'keep' ? 'keep' : 'sell', tonnes: free, grade: grade,
+             shield: shield, rate: rate,
+             parentId: leg.parentId, local: leg.local, distance: leg.distance,
+             cruise: leg.cruise, lay: lay, period: period, fuelLeg: leg.fuel };
+  }
+
+  function startWork(G, rec, sys, giantId, mode, t) {
+    var w = planWork(G, rec, sys, giantId, mode);
+    if (!w.ok) return w;
+    delete w.ok;
+    w.t0 = t;
+    w.booked = 0;
+    rec.work = w;
+    /* Reaction mass is free alongside, the same rule as your own ship on
+     * docking - and she refills every time she is home. */
+    var C = global.Combat;
+    var hull = C && C.HULLS ? C.HULLS[rec.hullId] : null;
+    rec.thrusterFuel = (hull && hull.thrusterCap) || rec.thrusterFuel;
+    delete ROUTES[rec.id];
+    syncRoutes(G, sys);
+    return { ok: true, work: w };
+  }
+
+  function workArrival(w, k) { return w.t0 + k * w.period + 2 * w.cruise + w.lay; }
+  function workDone(w, t) {
+    var a0 = workArrival(w, 0);
+    return t < a0 ? 0 : Math.floor((t - a0) / w.period) + 1;
+  }
+  /* The next instant she is home: the end of the cycle she is in. */
+  function workNextArrival(w, t) {
+    var k = Math.max(0, Math.floor((t - w.t0) / w.period));
+    var a = workArrival(w, k);
+    return a >= t ? a : workArrival(w, k + 1);
+  }
+  /* Which cycle's last arrival ends the work if she is recalled now: the
+   * cycle she is in, and if she is already home in it, that one. */
+  function workCycleAt(w, t) { return Math.max(0, Math.floor((t - w.t0) / w.period)); }
+
+  /* Recall: she finishes the cycle she is on and stays home. A ship home
+   * between loads stops at once. */
+  function recall(G, rec, t) {
+    if (!rec || !rec.work) return { ok: false, why: 'she is not working' };
+    rec.work.stopAfter = workCycleAt(rec.work, t);
+    return { ok: true, at: workArrival(rec.work, rec.work.stopAfter) };
+  }
+
+  /* Book every load she has brought home by t, against this system's
+   * market. Returns lines. Ends the work when a recall or a lost pilot says
+   * so, leaving her on the clamp at her port from the last arrival. */
+  function bookWork(G, rec, sys, t) {
+    var w = rec.work, lines = [];
+    if (!w || !sys || !sys.byId) return lines;
+    var port = sys.byId[w.port];
+    if (!port) return lines;
+    if (!pilotOf(rec) && w.stopAfter === undefined) {
+      w.stopAfter = workCycleAt(w, t);
+      lines.push(rec.name + ' has nobody at the helm - she comes home after this run');
+    }
+    var done = workDone(w, t);
+    var last = w.stopAfter === undefined ? done - 1 : Math.min(done - 1, w.stopAfter);
+    if (w.mode === 'keep') last = Math.min(last, 0);
+    var Eco = global.Economy, H = Eco ? Eco.FUEL_ID : 'hydrogen';
+    var sold = 0, cr = 0, n = 0;
+    for (var k = w.booked; k <= last && n < WORK_BOOK_MAX; k++, n++) {
+      var tA = workArrival(w, k);
+      if (w.mode === 'keep') {
+        rec.cargo = rec.cargo || {};
+        rec.cargo[H] = (rec.cargo[H] || 0) + w.tonnes;
+      } else if (Eco && port.market) {
+        var p = Eco.price(port, H, tA);
+        var each = p && p.sell !== null ? p.sell : 0;
+        cr += Math.round(w.tonnes * each);
+        Eco.applyTrade(port, H, -w.tonnes, tA);
+        sold += w.tonnes;
+      }
+      G.extracted = G.extracted || {};
+      var exKey = (rec.star || (G.here && G.here.id) || 'sys') + ':' + w.site;
+      var ex = G.extracted[exKey] = G.extracted[exKey] || {};
+      ex[H] = (ex[H] || 0) + w.tonnes;
+      w.booked = k + 1;
+    }
+    if (cr > 0 && G.ship) {
+      G.ship.credits += cr;
+      lines.push(rec.name + ' sold ' + Math.round(sold) + ' t of hydrogen at ' + w.portName +
+                 ' - ' + cr + ' cr' + (n > 1 ? ' (' + n + ' loads)' : ''));
+    } else if (w.mode === 'keep' && n > 0) {
+      lines.push(rec.name + ' is home at ' + w.portName + ' with ' + w.tonnes + ' t of hydrogen aboard');
+    }
+    var end = w.mode === 'keep' ? 0 : w.stopAfter;
+    if (end !== undefined && w.booked > end) {
+      rec.port = w.port;
+      rec.portName = w.portName;
+      rec.berthTo = workArrival(w, end);
+      rec.work = null;
+      delete ROUTES[rec.id];
+      if (w.mode !== 'keep') lines.push(rec.name + ' has stood down at ' + w.portName);
+    }
+    return lines;
+  }
+
+  /* Book every working ship in every system, at a desk. A ship in a system
+   * you are not in needs that system's market; `Fleet.systemFor` (set by
+   * main.js to its cached systemFor) supplies it, and the cache is the same
+   * one the game keeps, so the dent her sales leave in that market is there
+   * when you arrive. */
+  function bookAllWork(G, t) {
+    var lines = [], mine = list(G);
+    for (var i = 0; i < mine.length; i++) {
+      var rec = mine[i];
+      if (!rec.work) continue;
+      var sys = null;
+      if (!rec.star || (G.here && rec.star === G.here.id)) sys = G.sys;
+      else if (Fleet.systemFor && G.galaxy && G.galaxy.stars) {
+        var star = G.galaxy.stars.filter(function (s) { return s.id === rec.star; })[0];
+        if (star) sys = Fleet.systemFor(star);
+      }
+      if (sys) lines = lines.concat(bookWork(G, rec, sys, t));
+    }
+    return lines;
   }
 
   /* The route object trafficState flies. Built once per order and held
@@ -541,17 +805,58 @@
   var ROUTES = {};
   var ORDER_SIZE = { S: 0.045, M: 0.08, L: 0.12 };
 
+  /* What identifies the route she is flying, so syncRoutes can tell "the
+   * same one" from "a new one" for an order and a work loop alike. */
+  function sigOf(rec) {
+    if (rec.work) return 'w|' + rec.work.t0 + '|' + rec.work.site;
+    if (rec.order) return 'o|' + rec.order.t0 + '|' + rec.order.to;
+    return null;
+  }
+
+  /* A WORK LOOP'S ROUTE: an ordinary two-ended loop, port -> giant -> port,
+   * with the skim as the layover at the giant. NOT oneWay - she comes back,
+   * and back again, which is exactly what trafficState already does for
+   * every freighter. `skimSite` tells the sim the far end is the top of the
+   * air rather than an apron (see Sim.parkOffset). */
+  function workRouteFor(rec) {
+    var w = rec.work, sig = sigOf(rec);
+    var cached = ROUTES[rec.id];
+    if (cached && cached.sig === sig) return cached;
+    var C = global.Combat;
+    var hull = C && C.HULLS ? C.HULLS[rec.hullId] : null;
+    var Eco = global.Economy, H = Eco ? Eco.FUEL_ID : 'hydrogen';
+    var route = {
+      id: 'fleet|' + rec.id, sig: sig,
+      name: rec.name, reg: rec.reg || null,
+      kind: 'fleet', owned: true, fleetId: rec.id, working: w.kind,
+      cls: (hull && hull.mesh) || 'courier',
+      className: hull ? hull.name : rec.hullId,
+      sizeLetter: hull && hull.size ? hull.size.toLowerCase() : 's',
+      size: ORDER_SIZE[hull ? hull.size : 'S'] || ORDER_SIZE.S,
+      color: '#ffd27f',
+      from: w.port, to: w.site, parentId: w.parentId, local: !!w.local,
+      cruise: w.cruise, layover: w.lay, period: w.period,
+      t0: w.t0,
+      out: [], back: [{ cid: H, qty: w.tonnes }],
+      souls: 0, distance: w.distance,
+      skimSite: w.site
+    };
+    ROUTES[rec.id] = route;
+    return route;
+  }
+
   function routeFor(rec) {
+    if (rec.work) return workRouteFor(rec);
     var o = rec.order;
     if (!o) return null;
     var cached = ROUTES[rec.id];
-    if (cached && cached.t0 === o.t0 && cached.to === o.to) return cached;
+    if (cached && cached.sig === sigOf(rec)) return cached;
     var C = global.Combat;
     var hull = C && C.HULLS ? C.HULLS[rec.hullId] : null;
     var out = [];
     for (var k in (rec.cargo || {})) if (rec.cargo[k] > 0) out.push({ cid: k, qty: rec.cargo[k] });
     var route = {
-      id: 'fleet|' + rec.id,
+      id: 'fleet|' + rec.id, sig: sigOf(rec),
       name: rec.name,
       reg: rec.reg || null,
       /* `fleet` is what marks her as yours to everything downstream, and
@@ -586,25 +891,26 @@
   function syncRoutes(G, sys) {
     if (!sys || !sys.traffic) return;
     var mine = list(G), i, any = false;
-    for (i = 0; i < mine.length; i++) if (mine[i].order) { any = true; break; }
+    for (i = 0; i < mine.length; i++) if (mine[i].order || mine[i].work) { any = true; break; }
     if (!any && !sys._fleetLive) return;
 
     var want = {};
     for (i = 0; i < mine.length; i++) {
       var rec = mine[i];
-      if (!rec.order) continue;
+      if (!rec.order && !rec.work) continue;
       /* Port ids are per system — 'b7' names a different dock at every
        * star — so a record has to be from THIS star before its ids mean
        * anything here. */
       if (rec.star && G.here && rec.star !== G.here.id) continue;
-      if (!sys.byId[rec.order.from] || !sys.byId[rec.order.to]) continue;
+      var ends = rec.work ? [rec.work.port, rec.work.site] : [rec.order.from, rec.order.to];
+      if (!sys.byId[ends[0]] || !sys.byId[ends[1]]) continue;
       want['fleet|' + rec.id] = rec;
     }
     for (i = sys.traffic.length - 1; i >= 0; i--) {
       var r = sys.traffic[i];
       if (r.kind !== 'fleet') continue;
       var w = want[r.id];
-      if (w && r.t0 === w.order.t0 && r.to === w.order.to) delete want[r.id];
+      if (w && r.sig === sigOf(w)) delete want[r.id];
       else sys.traffic.splice(i, 1);
     }
     var live = false;
@@ -648,6 +954,15 @@
         for (var g = 0; g < got.length; g++) lines.push(got[g]);
       }
     }
+    /* WORK LOOPS in this system book their loads as they come home. A
+     * floor and a compare when nothing is due, so it is cheap per frame. */
+    for (var wi = 0; wi < mine.length; wi++) {
+      var wr = mine[wi];
+      if (!wr.work) continue;
+      if (wr.star && G.here && wr.star !== G.here.id) continue;
+      var bl = bookWork(G, wr, sys, t);
+      for (var b = 0; b < bl.length; b++) lines.push(bl[b]);
+    }
     syncRoutes(G, sys);
     return lines;
   }
@@ -661,7 +976,11 @@
     var M = global.Missions, Eco = global.Economy;
     var who = p ? p.name : 'nobody at the helm';
     var parts = [];
-    if (rec.order) {
+    if (rec.work) {
+      parts.push(workPhase(rec.work, t) + '  ·  ' + rec.work.booked + ' load' +
+                 (rec.work.booked === 1 ? '' : 's') + ' home so far' +
+                 (rec.work.stopAfter !== undefined ? '  ·  standing down after this run' : ''));
+    } else if (rec.order) {
       parts.push('for ' + rec.order.toName + ', alongside in ' + fmtEta(eta(rec, t)));
     } else {
       parts.push('on the clamp at ' + (rec.portName || 'her berth'));
@@ -679,6 +998,16 @@
     if (carried.length) parts.push(carried.length + ' contract' + (carried.length > 1 ? 's' : '') + ' under bond');
     parts.push('reaction mass ' + Math.round(rec.thrusterFuel || 0) + ' t');
     return rec.name + ' (' + who + '): "' + parts.join('  ·  ') + '."';
+  }
+
+  /* Where in the loop she is, in words: out, skimming, back, or home. */
+  function workPhase(w, t) {
+    var ph = (t - w.t0) - workCycleAt(w, t) * w.period;
+    if (ph < w.cruise) return 'outbound to ' + w.siteName + ', there in ' + fmtEta(w.cruise - ph);
+    if (ph < w.cruise + w.lay) return 'skimming ' + w.siteName + ', ' + fmtEta(w.cruise + w.lay - ph) + ' more';
+    if (ph < 2 * w.cruise + w.lay) return 'inbound to ' + w.portName + ' with ' + w.tonnes +
+                                           ' t, alongside in ' + fmtEta(2 * w.cruise + w.lay - ph);
+    return 'turning round at ' + w.portName + ', out again in ' + fmtEta(w.period - ph);
   }
 
   function fmtEta(s) {
@@ -700,6 +1029,7 @@
     var where = rec.portName || 'somewhere';
     if (sys && sys.byId && sys.byId[rec.port]) where = sys.byId[rec.port].name;
     if (rec.order) where = 'under way → ' + rec.order.toName;
+    if (rec.work) where = 'skimming ' + rec.work.siteName + ' for ' + rec.work.portName;
     if (rec.starName) where += ', ' + rec.starName;
     var tons = 0;
     for (var k in (rec.cargo || {})) tons += rec.cargo[k];
@@ -721,6 +1051,12 @@
     routeFor: routeFor, syncRoutes: syncRoutes, tick: tick,
     orderAccel: orderAccel, massOf: massOf, pilotOf: pilotOf,
     capacityOf: capacityOf, report: report,
+    /* work orders (mining rung 4) */
+    planWork: planWork, startWork: startWork, recall: recall, bookWork: bookWork,
+    bookAllWork: bookAllWork, workArrival: workArrival, workDone: workDone,
+    workPhase: workPhase, skimSites: skimSites, legTimes: legTimes,
+    WORK_TURNAROUND: WORK_TURNAROUND, SKIM_RATE: SKIM_RATE,
+    systemFor: null,
     ORDER_PARK: ORDER_PARK, ORDER_BURN_LEG: ORDER_BURN_LEG, burnRate: burnRate,
     ORDER_THROTTLE_BASE: ORDER_THROTTLE_BASE,
     ORDER_THROTTLE_PER_RATING: ORDER_THROTTLE_PER_RATING

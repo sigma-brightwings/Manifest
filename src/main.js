@@ -339,6 +339,10 @@
     }
     return G.systemCache[star.id];
   }
+  /* Your ships working in other systems book their sales against that
+   * system's market at a desk (Fleet.bookAllWork) - through this cache, so
+   * the dent they leave is still there when you arrive. */
+  if (typeof Fleet !== 'undefined') Fleet.systemFor = systemFor;
 
   function enterSystem(star, opts) {
     opts = opts || {};

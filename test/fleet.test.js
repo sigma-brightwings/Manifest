@@ -588,6 +588,210 @@ console.log('--- standing orders: a timetable entry, not an agent ---');
   Fleet.tick(Gr, sys, orr.arriveAt);
 })();
 
+/* ---- WORK ORDERS: mining rung 4, 2026-10-17 ------------------------------
+ * Your own skimmers. Decided with Astra: a work order loops until recalled,
+ * she works out of the port she is clamped at, and sells there or keeps the
+ * load aboard for one run. Everything below is the clock and the market. */
+console.log('--- work orders: your own skimmers ---');
+(function () {
+  var Gen = require('../src/generate.js');
+  var Sim = require('../src/sim.js');
+  require('../src/survey.js');
+  var Sv = global.Survey;
+  var V3 = require('../src/vec3.js');
+  var H = Eco.FUEL_ID;
+  function grade(g, s) {
+    var r = Sv.deposits(g, s).filter(function (x) { return x.cid === 'hydrogen'; })[0];
+    return r ? r.grade : 0;
+  }
+  /* A system with a rich giant AND a port in orbit round it (so the leg is
+   * local, parent = the giant), plus a port somewhere else. */
+  function findSys(salt) {
+    for (var k = 0; k < 60; k++) {
+      var s = Gen.generateSystem('skim-' + salt + '-' + k);
+      var giants = s.bodies.filter(function (b) { return (b.type === 'iceGiant' || b.type === 'gasGiant') && grade(b, s) >= 0.4; });
+      for (var g = 0; g < giants.length; g++) {
+        var local = (s.ports || []).filter(function (p) { return Gen.commonParent(p, giants[g], s) === giants[g]; })[0];
+        var far = (s.ports || []).filter(function (p) { return Gen.commonParent(p, giants[g], s) !== giants[g]; })[0];
+        if (local && far) return { sys: s, giant: giants[g], local: local, far: far, seed: 'skim-' + salt + '-' + k };
+      }
+    }
+    return null;
+  }
+  var F = findSys('a');
+  check('found a system with a rich giant, a port round it and one elsewhere', !!F, F && F.seed);
+  if (!F) return;
+  var sys = F.sys, giant = F.giant, here = { id: 'star-s', name: 'Skim' };
+
+  function skimmer(port, crew, opts) {
+    opts = opts || {};
+    var s = shipOf('talon', 0, crew);
+    s.thrusterFuel = 16;
+    var rec = Fleet.record(s, port.id, opts.name || 'Gatherer');
+    rec.fit = {};
+    if (!opts.noSkimmer) rec.fit.u0 = 'skimmer';
+    if (opts.shield) rec.fit.i0 = 'heatshield';
+    rec.cargo = opts.cargo || {};
+    rec.berthTo = rec.wagesTo = 0;
+    rec.portName = port.name; rec.star = here.id; rec.starName = here.name;
+    return rec;
+  }
+  function game(t, fleet, s) {
+    var G = gameAt(t, shipOf('talon', 0, []), fleet);
+    G.here = here; G.sys = s || sys;
+    return G;
+  }
+
+  /* REFUSALS, in words. */
+  var bare = skimmer(F.local, [person('pilot', 3)], { noSkimmer: true });
+  var Gb = game(0, [bare]);
+  check('no skimmer, no work', /no gas skimmer/.test(Fleet.planWork(Gb, bare, sys, giant.id, 'sell').why));
+  var nobody = skimmer(F.local, [person('gunner', 3)]);
+  check('nobody to helm her, no work', /helm/.test(Fleet.planWork(game(0, [nobody]), nobody, sys, giant.id, 'sell').why));
+  check('a port is not a giant', /nothing to skim/.test(Fleet.planWork(Gb, bare, sys, F.far.id, 'sell').why));
+  var full = skimmer(F.local, [person('pilot', 3)], { cargo: { grain: 62 } });
+  check('a full hold stays home', /hold is full/.test(Fleet.planWork(game(0, [full]), full, sys, giant.id, 'sell').why));
+
+  /* THE PLAN. */
+  var rec = skimmer(F.local, [person('pilot', 3)], { shield: true });
+  var G = game(1000, [rec]);
+  var pl = Fleet.planWork(G, rec, sys, giant.id, 'sell');
+  check('a skimmer with a pilot can work the giant', pl.ok, pl.why);
+  check('a run is a full hold', pl.tonnes === Combat.HULLS.talon.cargoCap, pl.tonnes);
+  check('the turnaround is the least a layover can be', pl.lay >= Fleet.WORK_TURNAROUND);
+  check('a run is out, skim, back, turn round', Math.abs(pl.period - 2 * (pl.cruise + pl.lay)) < 1e-6);
+  check('the leg round its own giant is local', pl.local === true && pl.parentId === giant.id);
+
+  /* WHAT THE PILOT, THE SHIELD AND THE GIANT BUY. Each must show, or the
+   * knob does nothing (the first draft's rates filled every hold inside
+   * the turnaround). */
+  var green = skimmer(F.local, [person('pilot', 1)], { shield: true });
+  var noSh = skimmer(F.local, [person('pilot', 3)]);
+  var pg = Fleet.planWork(game(0, [green]), green, sys, giant.id, 'sell');
+  var pn = Fleet.planWork(game(0, [noSh]), noSh, sys, giant.id, 'sell');
+  check('a green pilot is slower in the air', pg.lay > pl.lay, Math.round(pg.lay / 3600) + ' h vs ' + Math.round(pl.lay / 3600) + ' h');
+  check('no heat shield is slower in the air', pn.lay > pl.lay, Math.round(pn.lay / 3600) + ' h vs ' + Math.round(pl.lay / 3600) + ' h');
+
+  /* ON THE TIMETABLE, as an ordinary loop. */
+  var r = Fleet.startWork(G, rec, sys, giant.id, 'sell', G.t);
+  check('the work is taken', r.ok && rec.work && rec.work.site === giant.id);
+  check('her tanks are topped up alongside', rec.thrusterFuel === Combat.HULLS.talon.thrusterCap);
+  check('an ordinary order is refused while she works', /working/.test(Fleet.canOrder(G, rec, sys, F.far.id).why));
+  var mine = sys.traffic.filter(function (x) { return x.kind === 'fleet'; });
+  check('she is on the traffic list once, as a loop', mine.length === 1 && !mine[0].oneWay && mine[0].skimSite === giant.id);
+  var route = mine[0], w = rec.work;
+  var inAir = Sim.trafficState(route, sys, w.t0 + w.cruise + w.lay * 0.5);
+  var gp = Sim.bodyState(giant, sys, w.t0 + w.cruise + w.lay * 0.5).pos;
+  var alt = V3.dist(inAir.pos, gp) / giant.radius;
+  check('mid-skim she is in the top of the air, not on an apron', inAir.phase === 'moored' && alt > 1.0 && alt < 1.03,
+        inAir.phase + ' at ' + alt.toFixed(4) + ' R');
+  var inside = 0;
+  for (var i = 0; i <= 200; i++) {
+    var tt = w.t0 + w.period * i / 200;
+    var st = Sim.trafficState(route, sys, tt);
+    if (V3.dist(st.pos, Sim.bodyState(giant, sys, tt).pos) < giant.radius * 0.999) inside++;
+  }
+  check('she never flies through the giant', inside === 0, inside + ' of 201 samples inside');
+  var home = Sim.trafficState(route, sys, w.t0 + w.period - 60);
+  check('between runs she is home at her port', home.phase === 'moored' && home.to.id === F.local.id, home.phase);
+
+  /* WHAT SHE EARNS: each load at its own arrival's price, into the market. */
+  var a0 = Fleet.workArrival(w, 0);
+  check('nothing is sold before the first load is home', Fleet.bookWork(G, rec, sys, a0 - 1).length === 0 && G.ship.credits === 0);
+  var p0 = Eco.price(F.local, H, a0).sell;
+  Fleet.tick(G, sys, a0 + 1);
+  check('the first load is sold at its arrival price', G.ship.credits === Math.round(pl.tonnes * p0) && w.booked === 1,
+        G.ship.credits + ' vs ' + Math.round(pl.tonnes * p0));
+  var c1 = G.ship.credits;
+  Fleet.tick(G, sys, a0 + 2);
+  check('and booking again sells nothing twice', G.ship.credits === c1);
+  var pAfter = Eco.price(F.local, H, a0 + 2).sell;
+  check('her own sale pushes the hydrogen price down', pAfter < p0, p0.toFixed(1) + ' -> ' + pAfter.toFixed(1));
+
+  /* LAZY IS EXACT. Thirty days booked in one go, against thirty booked a
+   * day at a time, in two fresh copies of the same system. */
+  function run30(stepwise) {
+    var s2 = Gen.generateSystem(F.seed);
+    var lp = s2.byId[F.local.id];
+    var rr = skimmer(lp, [person('pilot', 3)], { shield: true });
+    var Gx = game(0, [rr], s2);
+    Fleet.startWork(Gx, rr, s2, giant.id, 'sell', 0);
+    if (stepwise) for (var d = 1; d <= 30; d++) Fleet.tick(Gx, s2, d * DAY);
+    else Fleet.tick(Gx, s2, 30 * DAY);
+    return { cr: Gx.ship.credits, loads: rr.work.booked };
+  }
+  var once = run30(false), daily = run30(true);
+  check('a month booked at once is a month booked daily', once.cr === daily.cr && once.loads === daily.loads,
+        once.cr + ' / ' + daily.cr + ', ' + once.loads + ' loads');
+  var perDay = once.cr / 30;
+  console.log('  measured: a steady pilot, shielded Talon, local giant: ' + Math.round(perDay) + ' cr/day, ' +
+              once.loads + ' loads in 30 days');
+  check('she earns far more than a drone (~200 cr/day)', perDay > 1000, Math.round(perDay));
+  check('and well under an active run (a milfuel run clears 30-72k)', perDay < 6000, Math.round(perDay));
+
+  /* RECALL: she finishes the run she is on and stands down at home. */
+  var s3 = Gen.generateSystem(F.seed), lp3 = s3.byId[F.local.id];
+  var rc = skimmer(lp3, [person('pilot', 3)], { shield: true });
+  var Gr = game(0, [rc], s3);
+  Fleet.startWork(Gr, rc, s3, giant.id, 'sell', 0);
+  var wr = rc.work, midRun = wr.period * 2.3;
+  var rcl = Fleet.recall(Gr, rc, midRun);
+  check('recall ends at the end of the run she is on', rcl.ok && rcl.at === Fleet.workArrival(wr, 2));
+  Fleet.tick(Gr, s3, rcl.at + 10);
+  check('then she is on the clamp at home', !rc.work && rc.port === lp3.id && rc.berthTo === rcl.at);
+  var crR = Gr.ship.credits;
+  Fleet.tick(Gr, s3, rcl.at + 30 * DAY);
+  check('and earns nothing more', Gr.ship.credits === crR);
+  check('three loads were sold', crR > 0 && s3.traffic.filter(function (x) { return x.kind === 'fleet'; }).length === 0);
+
+  /* KEEP ABOARD: one run, the load comes home in her hold. */
+  var s4 = Gen.generateSystem(F.seed), lp4 = s4.byId[F.local.id];
+  var kp = skimmer(lp4, [person('pilot', 3)], { shield: true });
+  var Gk = game(0, [kp], s4);
+  Fleet.startWork(Gk, kp, s4, giant.id, 'keep', 0);
+  var ka = Fleet.workArrival(kp.work, 0), kt = kp.work.tonnes;
+  Fleet.tick(Gk, s4, ka + 5);
+  check('keep aboard brings the load home in her hold', !kp.work && kp.cargo[H] === kt && Gk.ship.credits === 0,
+        JSON.stringify(kp.cargo));
+
+  /* NOBODY AT THE HELM: the crew walked (unpaid), so she comes home after
+   * the run she is on, and stops. */
+  var s5 = Gen.generateSystem(F.seed), lp5 = s5.byId[F.local.id];
+  var lo = skimmer(lp5, [person('pilot', 3)], { shield: true });
+  var Gl = game(0, [lo], s5);
+  Fleet.startWork(Gl, lo, s5, giant.id, 'sell', 0);
+  lo.crew = [];
+  var wl = lo.work;
+  var lines = Fleet.tick(Gl, s5, wl.period * 1.5);
+  check('a ship whose pilot walked finishes the run she is on', !!lo.work && /nobody at the helm/.test(lines.join(' ')),
+        lines.join(' | '));
+  var lines2 = Fleet.tick(Gl, s5, Fleet.workArrival(wl, 1) + 1);
+  check('then comes home and stops', !lo.work && lo.port === lp5.id && /stood down/.test(lines2.join(' ')),
+        lines2.join(' | '));
+
+  /* SAVED WHOLE, flown the same. */
+  var s6 = Gen.generateSystem(F.seed), lp6 = s6.byId[F.local.id];
+  var sv = skimmer(lp6, [person('pilot', 3)], { shield: true, name: 'Saver' });
+  var Gs = game(0, [sv], s6);
+  Fleet.startWork(Gs, sv, s6, giant.id, 'sell', 0);
+  var back = JSON.parse(JSON.stringify(sv));
+  check('a work order survives the save as plain data',
+        JSON.stringify(back.work) === JSON.stringify(sv.work) &&
+        Fleet.workArrival(back.work, 7) === Fleet.workArrival(sv.work, 7) &&
+        Fleet.workPhase(back.work, sv.work.period * 3.7) === Fleet.workPhase(sv.work, sv.work.period * 3.7));
+
+  /* THE LEG TO A GIANT ELSEWHERE is interplanetary, and still never
+   * through the giant. */
+  var fr = skimmer(sys.byId[F.far.id], [person('pilot', 4)], { shield: true, name: 'Far Reach' });
+  var Gf = game(0, [fr]);
+  var pf = Fleet.planWork(Gf, fr, sys, giant.id, 'sell');
+  if (pf.ok) {
+    check('a giant across the system is not local', !pf.local && pf.cruise > pl.cruise);
+  } else {
+    check('a giant across the system is refused only for reaction mass', /reaction mass/.test(pf.why), pf.why);
+  }
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

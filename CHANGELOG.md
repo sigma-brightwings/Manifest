@@ -98,6 +98,27 @@ Astra has seen it working.
   A disarmed torpedo becomes an inert canister you can scoop back into
   the rack; the panel warns in red when you are inside the blast.
 
+- **2026-10-17: mining, rung 4: your own skimmers.** A ship in your fleet
+  with a pilot and a Gas skimmer can be put to work on a giant from the
+  Fleet tab (F5, docked): she flies out, skims, comes home to the port she
+  is clamped at and sells the load there, and goes back out, until you
+  recall her. Or **keep aboard**: one run, and the hydrogen comes home in
+  her hold (for stockpiling toward a station of your own).
+  - She skims the safe way, a pass an orbit, so a run takes hours: a better
+    pilot, a heat shield and an ice giant rather than a gas giant all make
+    it shorter. About 1,500–2,500 cr a game day for one ship at a giant her
+    port orbits; a giant across the system is honestly not worth it, and
+    the row says so.
+  - Every load is sold at the price on the day she brings it in, and her
+    sales push that port's hydrogen price down like yours do.
+  - Recall finishes the run she is on. A pilot who walks over unpaid wages
+    brings her home first. Her tanks refill free alongside, as yours do.
+  - She is real traffic: drawn in the giant's upper air while she skims,
+    on the scope and the channel, and hailable.
+  - Drone collection by your own ships was left out on purpose: having to
+    land is what keeps a drone below active work. That job goes to an
+    outpost on your claim in rung 5.
+
 ### Changed
 
 - **2026-10-16: the attitude ladder and bank scale are drawn sharp** under

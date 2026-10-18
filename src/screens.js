@@ -2563,6 +2563,27 @@
         /* UNDER WAY. One row, no action: she is on the timetable and the
          * order closes itself when the arithmetic says. The countdown is
          * what makes it a ship rather than a line in a book. */
+        /* WORKING (mining rung 4). One row that says where in the loop she
+         * is, and clicking it recalls her: she finishes the run she is on
+         * and stands down at her port. A second click does nothing new -
+         * the row says she is already standing down. */
+        if (rec.work) {
+          var wk = rec.work;
+          row(rec.name.toUpperCase() + '  ·  WORKING ' + wk.siteName.toUpperCase(),
+              Fleet.workPhase(wk, G.t) + '  ·  ' + wk.booked + ' load' + (wk.booked === 1 ? '' : 's') +
+              ' home' + (wk.stopAfter !== undefined ? '  ·  STANDING DOWN after this run'
+                                                    : '  ·  click to recall'),
+              function () {
+                if (wk.stopAfter !== undefined) {
+                  say(rec.name + ' is already standing down after this run', 4);
+                  return;
+                }
+                var r = Fleet.recall(G, rec, G.t);
+                if (r.ok) say(rec.name + ' will stand down at ' + wk.portName + ' in ' +
+                              fmtLogAge(Math.max(0, r.at - G.t)), 6);
+              }, wk.stopAfter !== undefined);
+          return;
+        }
         if (rec.order) {
           row(rec.name.toUpperCase() + '  ·  UNDER WAY',
               'for ' + rec.order.toName + '  ·  alongside in ' +
@@ -2655,6 +2676,61 @@
                     }, !!no);
               }
             })(held[mi]);
+          }
+        }
+
+        /* WORK ORDERS (mining rung 4). One pair of rows per giant in the
+         * system - SELL at her port, or KEEP the load aboard for one run -
+         * each with what a load is and what it fetches today. When every
+         * giant refuses for the same reason (no skimmer fitted, no pilot)
+         * that reason takes one row instead of a list of identical greys. */
+        var giants = Fleet.skimSites(G.sys);
+        if (giants.length) {
+          var plans = giants.map(function (gb) { return { g: gb, p: Fleet.planWork(G, rec, G.sys, gb.id, 'sell') }; });
+          /* Best-paying first: in a system with five giants the one worth
+           * working is usually the one her port orbits, and it should not
+           * sit fifth in a list of ten rows. Refusals sink to the bottom. */
+          plans.sort(function (a, b) {
+            if (a.p.ok !== b.p.ok) return a.p.ok ? -1 : 1;
+            return a.p.ok ? (a.p.period - b.p.period) : 0;
+          });
+          var okPlans = plans.filter(function (x) { return x.p.ok; });
+          var whys = {};
+          plans.forEach(function (x) { if (!x.p.ok) whys[x.p.why] = true; });
+          var homePort = G.sys.byId[rec.port];
+          if (!okPlans.length && Object.keys(whys).length === 1) {
+            row('   cannot skim', Object.keys(whys)[0], function () {}, true);
+          } else {
+            plans.forEach(function (x) {
+              if (!x.p.ok) {
+                row('   ⇄ SKIM ' + x.g.name.toUpperCase(), x.p.why, function () {}, true);
+                return;
+              }
+              var pl = x.p;
+              var EcoW = global.Economy;
+              var bid = EcoW ? EcoW.price(homePort, EcoW.FUEL_ID, G.t) : null;
+              var load = Math.round(pl.tonnes * (bid && bid.sell !== null ? bid.sell : 0));
+              var perDay = Math.round(load * 86400 / pl.period);
+              row('   ⇄ SKIM ' + x.g.name.toUpperCase() + ' → SELL AT ' + pl.portName.toUpperCase(),
+                  pl.tonnes + ' t a run, ~' + load + ' cr at today\'s price  ·  a run every ' +
+                  fmtLogAge(pl.period) + ' (~' + perDay + ' cr/day)' +
+                  (pl.shield ? '' : '  ·  no heat shield: slow'),
+                  function () {
+                    var r = Fleet.startWork(G, rec, G.sys, x.g.id, 'sell', G.t);
+                    if (!r.ok) { say('She stays: ' + r.why, 5); return; }
+                    say(rec.name + ' is away to skim ' + x.g.name + ' for ' + pl.portName +
+                        ' - first load home in ' + fmtLogAge(Fleet.workArrival(r.work, 0) - G.t), 7);
+                  }, false);
+              row('   ⇄ SKIM ' + x.g.name.toUpperCase() + ' → KEEP ABOARD',
+                  'one run, ' + pl.tonnes + ' t of hydrogen back in her hold  ·  home in ' +
+                  fmtLogAge(2 * pl.cruise + pl.lay),
+                  function () {
+                    var r = Fleet.startWork(G, rec, G.sys, x.g.id, 'keep', G.t);
+                    if (!r.ok) { say('She stays: ' + r.why, 5); return; }
+                    say(rec.name + ' is away to skim ' + x.g.name + ' - home with the load in ' +
+                        fmtLogAge(Fleet.workArrival(r.work, 0) - G.t), 7);
+                  }, false);
+            });
           }
         }
 

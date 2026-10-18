@@ -1395,6 +1395,25 @@
     var park = (port.dockCaptureRadius || port.radius * 4) * 0.85;
     var dir = radial;
 
+    /* A SKIMMER'S FAR END IS THE TOP OF THE AIR (mining rung 4: your own
+     * ships working a giant under a work order, Fleet.workRouteFor). Not an
+     * apron at four radii: just inside the top of the atmosphere, on the
+     * day side, spread round the limb by the same route hash so two of
+     * your skimmers on one giant are not drawn as one. */
+    if (route && route.skimSite && route.skimSite === port.id) {
+      var sun = V.scale(radial, -1);
+      var al2 = V.sub(ps.vel, hs.vel);
+      var e2 = V.cross(sun, al2);
+      if (V.len(e2) < 1e-9) e2 = anyPerpendicular(sun);
+      e2 = V.norm(e2);
+      var n2 = V.norm(V.cross(e2, sun));
+      var h2 = portHash({ id: String(route.id) + '@skim@' + port.id });
+      var a2 = ((h2 % 4096) / 4096) * Math.PI * 2;
+      var sp2 = 0.25 + ((h2 >>> 12) % 1000) / 1000 * 0.9;
+      var d2 = V.norm(V.addScaled(V.addScaled(sun, e2, Math.cos(a2) * sp2), n2, Math.sin(a2) * sp2));
+      return { dir: d2, vec: V.scale(d2, port.radius * 1.015) };
+    }
+
     if (route && route.id && !port.surface && !port.underground) {
       var along = V.sub(ps.vel, hs.vel);
       var east = V.cross(radial, along);
@@ -1438,6 +1457,15 @@
     var sState = bodyStateAt(src, sys, tDep), dState = bodyStateAt(dst, sys, tArr);
     var s = V.sub(sState.pos, pDep.pos);
     var d = V.sub(dState.pos, pArr.pos);
+    var srcPark = parkOffset(src, sys, tDep, parent, route);
+    var dstPark = parkOffset(dst, sys, tArr, parent, route);
+    /* A skim leg whose parent IS the giant (a port in orbit round it): the
+     * giant's own position about itself is zero, so the arc would aim at
+     * the centre. The end is the skim point instead, and its park blend is
+     * folded into the end so it is not added twice. */
+    var ZERO_PARK = { dir: { x: 0, y: 0, z: 1 }, vec: { x: 0, y: 0, z: 0 } };
+    if (route.skimSite && dst === parent && dst.id === route.skimSite) { d = dstPark.vec; dstPark = ZERO_PARK; }
+    if (route.skimSite && src === parent && src.id === route.skimSite) { s = srcPark.vec; srcPark = ZERO_PARK; }
     var rs = V.len(s), rd = V.len(d);
     var sh = rs > 1e-9 ? V.scale(s, 1 / rs) : { x: 1, y: 0, z: 0 };
     var dh = rd > 1e-9 ? V.scale(d, 1 / rd) : { x: 0, y: 1, z: 0 };
@@ -1453,8 +1481,8 @@
       key: key, sh: sh, dh: dh, rs: rs, rd: rd, ang: ang, axis: axis,
       chord: V.sub(d, s),
       vs: V.sub(sState.vel, pDep.vel), vd: V.sub(dState.vel, pArr.vel),
-      srcPark: parkOffset(src, sys, tDep, parent, route),
-      dstPark: parkOffset(dst, sys, tArr, parent, route)
+      srcPark: srcPark,
+      dstPark: dstPark
     };
     return route._leg;
   }
