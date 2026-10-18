@@ -1,6 +1,34 @@
 # Changelog
 
-Alpha revisions of Procedural Space Game. Newest first.
+## What Manifest is
+
+Manifest is a procedural space sim built from the ground up, literally:
+gravity first, then the planets that make it, then everything that flies
+between them. One seed always grows the same galaxy (`kawartha`,
+`beaverton`, `driftwood`, `manifest` ...), so a star system you flew last
+month is the same system today, down to where each port sits and what its
+warehouses hold on a given date. Time is part of the seed too: traffic,
+markets and orbits are functions of the clock, so skipping six months gives
+the answer flying them would have.
+
+You fly a ship under real Newtonian flight and Kepler orbits: no rails for
+the player, a cockpit with an attitude ladder, MFD pages and a ship screen
+with guarded switches where a switch should be guarded. Around that sits a
+working economy (ports sell what they make and buy anything, and prices are
+stock), factions and their law, the Syndicate and its runners, rescue
+services, crew and a fleet, industry you can buy into, and a mining ladder
+climbed one rung at a time: survey, claim, cut, and eventually your own
+skimmers and stations. It is a desktop game (Electron), developed and tested
+on a modest machine (Syndicate Crawler, an RX 540) so it has to run on one.
+
+Releases have a number and a pigeon's name. Everything that changes the
+game is entered below with its date, under **Unreleased** until it ships;
+when changes are grouped into a release commit, the section takes the
+version number.
+
+---
+
+Revisions of Manifest (once Procedural Space Game). Newest first.
 
 Each release gets: **Added** (new things you can do), **Changed** (things
 that behave differently than they did), **Fixed** (things that were wrong),
@@ -12,8 +40,120 @@ before they update.
 
 ## Unreleased
 
-Nothing yet. Next up: planetary survey and mining (see the project design
-notes, `mining-and-survey`).
+Since 1.1.0-beta "Abby". Not yet a release: nothing here is pushed until
+Astra has seen it working.
+
+### Added
+
+- **2026-10-15: Driftwood's line merged into Abby.** Planetary rings,
+  asteroid belts and Trojans, the lift car, lightning, the glass-glow
+  option, cockpit greebles, faction names and the rescue fix now sit on
+  Syndicate Crawler's cutaway-and-glow release.
+- **2026-10-16: the 11 October test copy merged.** Station shuttles and
+  drones, the ground-port section cut, the cutaway style option and the
+  stand lift.
+- **2026-10-16: lifts are ridden.** Lift cars, platforms and ramp cars are
+  moving surfaces with collision. A ship waits for the lift, boards, rides
+  the shaft at lift speed and drives off (39 station models route through
+  a lift ride).
+- **2026-10-16: mining, rung 1: survey.** A Survey scanner (6,400 cr,
+  grades) and a Deep survey array (23,500 cr, tonnages) map a world's
+  deposits from orbit along the real ground track: a polar orbit maps the
+  world, an equatorial one a band. Rings map with their planet's equator,
+  belts field by field. Deposits are seed data and agree with the industry
+  already there. Surveys are dated, halve in value every 180 days, and sell
+  once to the Mining Guild at any desk. New SURVEY dashboard page.
+- **2026-10-16: mining, rung 2: claims, drones and landing.** File a claim
+  (1,200 cr a year, once a quarter of the world is mapped), buy up to two
+  mining drones (9,500 cr), set them down, and land on open ground to
+  collect what they dug. Lawless worlds strip unattended drones. N deploys
+  and collects, Shift+N recovers.
+- **2026-10-16: mining, rung 3: the mining laser and gas skimming.** The
+  Mining laser (4,800 cr) cuts ore chunks off rocks in a belt or ring
+  (about 11 s a chunk); scoop them. Rich rocks give ore, poor ones slag. A
+  Gas skimmer (7,800 cr) takes hydrogen from a giant's upper atmosphere,
+  more the deeper you dare against the heat.
+- **2026-10-16: R lifts off.** On the ground, R thrusts up and lifts you
+  off; F thrusts down. Only R lifts off.
+- **2026-10-16: rock torpedoes.** A small nuclear charge on a slow, dumb
+  missile that breaks 6 to 14 chunks off an asteroid. Mining Guild
+  torpedoes (2,500 cr) are sold only at mining ports; Syndicate ones
+  (1,600 cr, grey) at outlaw ports or where corruption runs high.
+  - **Out, never in.** Scanned inbound to a port with one aboard is an
+    offence: 2,600 cr fine a torpedo, and they are seized. A Syndicate
+    torpedo is seized whichever way you are going.
+  - **Safing refund.** Detonate one for safety (well clear of any port) and
+    the Guild pays back half its price, unless the blast was a successful
+    mining shot that earned more than the torpedo cost.
+  - **Sabotage.** A torpedo that goes off close to a station damages it:
+    the port refuses docking for a while, and if you are caught the bounty
+    is 30,000 cr and the owner's standing falls by 40.
+- **2026-10-16: the ordnance panel.** Torpedoes do not launch from the
+  missile key. F5 > ORDNANCE: pick a charge, lift the striped guard (C),
+  then LAUNCH (Enter). The guard drops again after each launch and
+  whenever you leave the tab. The panel shows the nose readout, what the
+  torpedo will hit and how far the nearest station is.
+- **2026-10-16: the torpedo command link.** Every torpedo in flight is
+  listed on the panel with DISARM and DETONATE (D / X for the newest).
+  A disarmed torpedo becomes an inert canister you can scoop back into
+  the rack; the panel warns in red when you are inside the blast.
+
+### Changed
+
+- **2026-10-16: the attitude ladder and bank scale are drawn sharp** under
+  the glass glow. Measured on the RX 540: cockpit in a ring 22 > 40 fps,
+  above it 37 > 51, in a belt field 26 > 40.
+- **2026-10-16: rings do not bloom** (they mask alpha as bodies do).
+- **2026-10-16: mining laser slowed** from about 7 s a chunk to about 11,
+  because a rich rock out-earned a milfuel run, and the balance rule is
+  that mining pays well but never beats active hauling.
+
+### Fixed
+
+- **2026-10-16: contracts never settled after a full arrival.** Two
+  dock-edge detectors shared one flag and the first one consumed it.
+- **2026-10-16: station flicker.** Station vertices were rounded to a
+  4 m grid on a 4 km station, crushing panels and thin walls into
+  coplanar faces (cradle-s: 13,871 coplanar pairs, now 8).
+- **2026-10-16: 45-degree bores poked through the hull.** They are clipped
+  flush at the wall.
+- **2026-10-17: scanner audit.** Astra asked for the scanners to be
+  checked for bugs. Found and fixed:
+  - **Low orbits left holes in a survey.** Below about 1.1 radii the swath
+    is narrower than half a cell, so a diagonal ground track could run
+    between cell centres and leave a chequerboard of unmapped ground it
+    had flown straight over. A cell now counts once the swath reaches into
+    it.
+  - **One fresh cell made an old survey sell as new.** Value aged off the
+    last time any ground was gained. It now ages off the coverage-weighted
+    date of the unsold ground; the page's "as of" still shows the last
+    pass.
+  - **One deep-array cell made a whole scanner survey sell at array
+    price.** Each survey now records how much of it each instrument
+    mapped: the array's share sells at the full rate, the scanner's at
+    0.6.
+  - **The SURVEY page showed tonnages for ground only the scanner had
+    mapped** as soon as an array was fitted. Tonnes now show only once the
+    array itself has mapped a tenth of the world; otherwise grade words.
+  - **The nav page's "carrying" row disagreed with the ship's hold.** A
+    trader you had just robbed still showed a full hold, and a pirate full
+    of other people's cargo showed nothing. It reads the same hold that
+    robbery and wrecks use now.
+  - **The trade analyser could start a run at an empty warehouse.** Runs
+    now start only where there is at least a tonne to load.
+  - Checked and found sound: the survey spin frame agrees with the ground
+    frame that ports and drones use. A survey stalling at 16% round
+    Mirven II a was the test orbit, not the scanner: that moon's Hill
+    sphere is only about 2.2 radii, so small moons close to big planets
+    can only be mapped on close passes, not orbited.
+
+### Saves
+
+Careers carry over. Everything new (surveys, claims, drones, the landed
+spot, shattered rocks, torpedo refunds, sabotage) is additive and loads as
+"nothing yet" on an older save. A survey made before the scanner audit
+keeps exactly the value it had: its ground counts as mapped by the
+instrument its grade says.
 
 ---
 

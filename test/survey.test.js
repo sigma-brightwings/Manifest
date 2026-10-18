@@ -98,28 +98,31 @@ check('a mining head sits on rich ground', mines > 0 && agree === mines, agree +
 check('a giant\'s refinery sits on hydrogen worth skimming', refs > 0 && refAgree === refs, refAgree + ' of ' + refs);
 
 console.log('--- the ground track ---');
-global.Combat = { surveyLevel: function () { return 1; } };
+var LVL = 1;
+global.Combat = { surveyLevel: function () { return LVL; } };
 var sys = systems.filter(function (x) {
   return x.bodies.some(function (b) { return b.kind === 'planet' && b.type === 'rocky'; });
 })[0];
 var world = sys.bodies.filter(function (b) { return b.kind === 'planet' && b.type === 'rocky'; })[0];
-function flyOrbit(inclDeg, totalSec, dt) {
-  var G = { here: { id: 'test' }, ship: { pos: null, vel: null }, surveys: {} };
+function flyOrbit(inclDeg, totalSec, dt, G0, t0, rMul) {
+  var G = G0 || { here: { id: 'test' }, ship: { pos: null, vel: null }, surveys: {} };
+  t0 = t0 || 0;
   var fr = Sv.spinFrame(world, 0), n = fr.n, e1 = fr.e1;
   var e2 = { x: n.y * e1.z - n.z * e1.y, y: n.z * e1.x - n.x * e1.z, z: n.x * e1.y - n.y * e1.x };
   var inc = inclDeg * Math.PI / 180;
   /* Orbit plane spanned by e1 and (e2 cos i + n sin i). */
   var q = { x: e2.x * Math.cos(inc) + n.x * Math.sin(inc), y: e2.y * Math.cos(inc) + n.y * Math.sin(inc),
             z: e2.z * Math.cos(inc) + n.z * Math.sin(inc) };
-  var r = world.radius * 1.3, mu = 6.6743e-20 * world.mass, om = Math.sqrt(mu / (r * r * r));
-  for (var t = 0; t <= totalSec; t += dt) {
+  var r = world.radius * (rMul || 1.3), mu = 6.6743e-20 * world.mass, om = Math.sqrt(mu / (r * r * r));
+  for (var t = t0; t <= t0 + totalSec; t += dt) {
     var bs = Sim.bodyState(world, sys, t);
     var c = Math.cos(om * t), sn = Math.sin(om * t);
     G.ship.pos = V.add(bs.pos, { x: (e1.x * c + q.x * sn) * r, y: (e1.y * c + q.y * sn) * r, z: (e1.z * c + q.z * sn) * r });
     G.ship.vel = V.add(bs.vel, { x: (-e1.x * sn + q.x * c) * r * om, y: (-e1.y * sn + q.y * c) * r * om, z: (-e1.z * sn + q.z * c) * r * om });
-    Sv.step(G, sys, t, t === 0 ? 0 : dt);
+    Sv.step(G, sys, t, t === t0 ? 0 : dt);
   }
-  return { cov: G.surveys['test:' + world.id].cov, period: 2 * Math.PI / om, G: G };
+  return { cov: G.surveys['test:' + world.id].cov, period: 2 * Math.PI / om, G: G,
+           rec: G.surveys['test:' + world.id], tEnd: t - dt };
 }
 var probeP = flyOrbit(90, 1, 1).period;
 var eq = flyOrbit(0, probeP * 12, probeP / 200);
@@ -153,6 +156,72 @@ var round = Sv.cellsOf({ cells: packed });
 var same = true;
 for (var i = 0; i < round.length; i++) if (round[i] !== Sv.cellsOf(rec)[i]) same = false;
 check('packed cells unpack to the same ground', same && Sv.coverageOf(round) === rec.cov);
+
+/* SCANNER AUDIT, 2026-10-17 - one check per bug found. */
+console.log('--- low orbits leave no holes ---');
+(function () {
+  var fr = { e1: { x: 1, y: 0, z: 0 }, e2: { x: 0, y: 1, z: 0 }, n: { x: 0, y: 0, z: 1 }, turn: 0, t: 0 };
+  var w = Sv.swathAt(1, 1.05), d = 15 * Math.PI / 180;
+  /* The corner where four cells meet: every centre is ~10 degrees off. */
+  var corner = { x: Math.cos(d) * Math.cos(d), y: Math.cos(d) * Math.sin(d), z: Math.sin(d) };
+  var cells = new Uint8Array(Sv.LAT_BINS * Sv.LON_BINS);
+  check('a 1.05 R swath over the corner of four cells maps them', Sv.markAt(cells, fr, corner, 0, 0, w) >= 1,
+        (w * 180 / Math.PI).toFixed(1) + ' deg swath');
+  var low = flyOrbit(88, probeP * 12, probeP / 400, null, 0, 1.05);
+  check('a low polar orbit still maps the world', low.cov > 0.9, Math.round(low.cov * 100) + '%');
+})();
+
+console.log('--- one fresh cell does not make an old survey new ---');
+(function () {
+  var YEAR = 365 * 86400;
+  var a = flyOrbit(88, probeP * 0.5, probeP / 200);
+  var covA = a.rec.cov;
+  flyOrbit(88, probeP * 0.03, probeP / 400, a.G, YEAR);
+  var rec2 = a.rec, now = rec2.t;
+  check('the topped-up survey gained only a little', rec2.cov > covA && rec2.cov - covA < covA * 0.5,
+        Math.round(covA * 100) + '% -> ' + Math.round(rec2.cov * 100) + '%');
+  check('its "as of" is the new pass', Math.abs(rec2.t - now) < 1);
+  var asIfNew = Object.assign({}, rec2, { tMean: now });
+  var v = Sv.value(rec2, sys, now), vNew = Sv.value(asIfNew, sys, now);
+  check('it sells as mostly year-old ground, not as new', v < vNew * 0.75 && v > 0, v + ' vs ' + vNew + ' if all new');
+  a.G.ship.credits = 0; a.G.surveys[rec2.key].star = 'test';
+  Sv.sell(a.G, sys, now);
+  flyOrbit(88, probeP * 0.5, probeP / 200, a.G, 2 * YEAR);
+  check('ground mapped after a sale is dated by itself', Math.abs(Sv.ageFactor(rec2, rec2.t) - 1) < 0.01,
+        Sv.ageFactor(rec2, rec2.t).toFixed(3));
+})();
+
+console.log('--- one array cell does not upgrade a scanner survey ---');
+(function () {
+  LVL = 1;
+  var s = flyOrbit(88, probeP * 12, probeP / 200);
+  var scanOnly = Sv.value(s.rec, sys, s.rec.t);
+  LVL = 2;
+  flyOrbit(88, probeP * 0.01, probeP / 400, s.G, s.tEnd + 1);
+  LVL = 1;
+  var rec3 = s.rec, now = rec3.t;
+  check('the array saw only a sliver', Sv.arrayCov(rec3) > 0 && Sv.arrayCov(rec3) < 0.1,
+        Math.round(Sv.arrayCov(rec3) * 1000) / 10 + '%');
+  var allArray = Object.assign({}, rec3, { cov2: rec3.cov });
+  var v = Sv.value(rec3, sys, now), vArr = Sv.value(allArray, sys, now);
+  check('it sells near scanner price, not array price', v < vArr * 0.7 && v >= scanOnly * 0.95,
+        v + ' vs ' + vArr + ' all-array, ' + scanOnly + ' scanner only');
+  check('the page shows grade words, not tonnes (array share under 10%)', Sv.arrayCov(rec3) < 0.1);
+})();
+
+console.log('--- saved careers keep their value ---');
+(function () {
+  var k = 'test:' + world.id;
+  var v2 = Sv.value({ key: k, cov: 0.8, t: 0, grade: 2, soldCov: 0 }, sys, 0);
+  var v2n = Sv.value({ key: k, cov: 0.8, cov2: 0.8, soldCov2: 0, t: 0, grade: 2, soldCov: 0 }, sys, 0);
+  var v1 = Sv.value({ key: k, cov: 0.8, t: 0, grade: 1, soldCov: 0 }, sys, 0);
+  var v1n = Sv.value({ key: k, cov: 0.8, cov2: 0, soldCov2: 0, t: 0, grade: 1, soldCov: 0 }, sys, 0);
+  check('an old array survey is worth what it was', v2 === v2n && v2 > 0, v2 + ' / ' + v2n);
+  check('an old scanner survey is worth what it was', v1 === v1n && v1 > 0, v1 + ' / ' + v1n);
+  var old = { key: k, cov: 0.5, cells: polar.rec.cells, t: 0, grade: 2, soldCov: 0.2 };
+  Sv.migrateRec(old);
+  check('migrating an old array record carries its ground over', old.cov2 === 0.5 && old.cells2 === old.cells && old.soldCov2 === 0.2);
+})();
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

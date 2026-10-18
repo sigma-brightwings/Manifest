@@ -173,6 +173,7 @@
 
   /* ---- coverage -------------------------------------------------------- */
   var LAT_BINS = 12, LON_BINS = 24, NCELL = LAT_BINS * LON_BINS;
+  var CELL_PAD = 0.09;            // rad, ~5 degrees - see markAt
   var LAT_W = [];
   (function () {
     var tot = 0;
@@ -191,16 +192,60 @@
     }
   }
 
-  function cellsOf(rec) {
-    if (!rec._cells) {
-      var a = new Uint8Array(NCELL), s = rec.cells || '';
+  /* `field` is 'cells' (everything mapped, by either instrument) or
+   * 'cells2' (what the deep array itself mapped). Each has its own
+   * unpacked cache beside it. */
+  function cellsOf(rec, field) {
+    field = field || 'cells';
+    var cache = '_' + field;
+    if (!rec[cache]) {
+      var a = new Uint8Array(NCELL), s = rec[field] || '';
       for (var i = 0; i < NCELL; i++) {
         var nib = parseInt(s.charAt(i >> 2) || '0', 16);
         a[i] = (nib >> (i & 3)) & 1;
       }
-      rec._cells = a;
+      rec[cache] = a;
     }
-    return rec._cells;
+    return rec[cache];
+  }
+
+  /* SCANNER AUDIT, 2026-10-17. Two things a record now keeps that it did
+   * not, both because the old single numbers could be gamed:
+   *   cov2  - the share mapped WITH THE DEEP ARRAY. `grade` used to be the
+   *           best instrument ever used, so a world mapped 99% with the
+   *           scanner and one cell with the array sold, and showed
+   *           tonnages, as if the array had mapped all of it.
+   *   tMean - the coverage-weighted date of the mapping. Value used to age
+   *           off `t`, the last time any ground was gained, so one fresh
+   *           cell made a year-old survey sell as new. `t` stays, for the
+   *           page's "as of".
+   * An older record has neither: its array share is all or nothing by its
+   * grade, and its date is `t`, exactly what it was worth before. */
+  function arrayCov(rec) {
+    if (typeof rec.cov2 === 'number') return rec.cov2;
+    return (rec.grade || 0) >= 2 ? (rec.cov || 0) : 0;
+  }
+  function meanT(rec) {
+    return typeof rec.tMean === 'number' ? rec.tMean : rec.t;
+  }
+  /* Bring a record from before the split up to date, once: an array-grade
+   * record counts everything it had as array-mapped, anything else as
+   * scanner-mapped. Worth exactly what it was before. */
+  function migrateRec(rec) {
+    if (typeof rec.cov2 === 'number') return;
+    var arr = (rec.grade || 0) >= 2;
+    rec.cells2 = arr ? (rec.cells || '') : '';
+    rec.cov2 = arr ? (rec.cov || 0) : 0;
+    if (rec.soldCov2 === undefined) rec.soldCov2 = arr ? (rec.soldCov || 0) : 0;
+    delete rec._cells2;
+  }
+  /* Fold `gained` coverage taken at time t into the record's mean date. */
+  function ageIn(rec, before, after, t) {
+    var add = Math.max(0, after - before);
+    if (!add) return;
+    var prev = meanT(rec);
+    rec.tMean = (prev === null || prev === undefined || before <= 0) ? t
+              : (prev * before + t * add) / after;
   }
   function packCells(a) {
     var s = '';
@@ -255,7 +300,12 @@
     /* Into the body's own frame: undo the turn about the axis. */
     var c = Math.cos(-turn), s = Math.sin(-turn);
     var bx = x * c - y * s, by = x * s + y * c;
-    var cw = Math.cos(w), any = 0;
+    /* A cell counts once the swath reaches into it, not only once it
+     * covers the cell's centre: CELL_PAD is about a third of a cell's
+     * width. Without it a low orbit's narrow swath (~9 degrees at 1.05 R)
+     * could run diagonally between centres 15 degrees apart and leave a
+     * chequerboard of holes it had plainly flown over. */
+    var cw = Math.cos(w + CELL_PAD), any = 0;
     for (var i = 0; i < NCELL; i++) {
       if (cells[i]) continue;
       var cc = CELL_CENTRES[i];
@@ -284,7 +334,8 @@
     var rec = G.surveys[key];
     if (!rec) {
       rec = G.surveys[key] = { key: key, star: (G.here && G.here.id) || null, name: name, kind: kind,
-                               cells: '', cov: 0, t: null, grade: 0, soldCov: 0 };
+                               cells: '', cov: 0, t: null, grade: 0, soldCov: 0,
+                               cells2: '', cov2: 0, soldCov2: 0 };
     }
     return rec;
   }
@@ -312,7 +363,9 @@
     if (best) {
       var body = best.b, rec = recordFor(G, sys, keyOf(G, body.id), body.name, 'world');
       G._surveyNow = rec.key;
+      migrateRec(rec);
       var cells = cellsOf(rec), before = rec.cov;
+      var cells2 = lvl >= 2 ? cellsOf(rec, 'cells2') : null, gained2 = 0;
       var bs = Sim.bodyState(body, sys, t);
       var rel = V.sub(ship.pos, bs.pos), vrel = V.sub(ship.vel, bs.vel);
       var r = len(rel), h = cross(rel, vrel), hl = len(h);
@@ -321,6 +374,7 @@
       var w = swathAt(body.radius, r);
       var dir = scale(rel, 1 / r);
       var gained = markAt(cells, fr, dir, t, period, w);
+      if (cells2) gained2 += markAt(cells2, fr, dir, t, period, w);
       /* THE ARC SWEPT THIS FRAME, walked back from here. */
       if (hl > 1e-12 && dt > 0) {
         var omega = hl / (r * r), sweep = omega * dt;
@@ -328,12 +382,19 @@
         var n = Math.min(4000, Math.ceil(sweep / stepA));
         for (var s2 = 1; s2 <= n; s2++) {
           var back = Math.min(sweep, s2 * stepA);
-          gained += markAt(cells, fr, rotate(dir, k, -back), t - back / omega, period, w);
+          var dBack = rotate(dir, k, -back), tBack = t - back / omega;
+          gained += markAt(cells, fr, dBack, tBack, period, w);
+          if (cells2) gained2 += markAt(cells2, fr, dBack, tBack, period, w);
         }
+      }
+      if (gained2) {
+        rec.cells2 = packCells(cells2);
+        rec.cov2 = coverageOf(cells2);
       }
       if (gained) {
         rec.cells = packCells(cells);
         rec.cov = coverageOf(cells);
+        ageIn(rec, before - (rec.soldCov || 0), rec.cov - (rec.soldCov || 0), t);
         rec.t = t;
         rec.grade = Math.max(rec.grade || 0, lvl);
         [0.25, 0.5, 0.75, 0.95].forEach(function (m) {
@@ -341,11 +402,18 @@
         });
         /* A ring lies in its planet's equator: an orbit that maps the
          * equatorial band maps the ring. */
+      }
+      if (gained || gained2) {
         if (body.ring) {
           var rr = recordFor(G, sys, keyOf(G, body.id + ':ring'), body.name + ' ring', 'ring');
+          migrateRec(rr);
           var rb = rr.cov;
           rr.cov = Math.max(rr.cov, bandCoverage(cells));
-          if (rr.cov > rb) { rr.t = t; rr.grade = Math.max(rr.grade || 0, lvl); }
+          if (cells2) rr.cov2 = Math.max(rr.cov2, bandCoverage(cells2));
+          if (rr.cov > rb) {
+            ageIn(rr, rb - (rr.soldCov || 0), rr.cov - (rr.soldCov || 0), t);
+            rr.t = t; rr.grade = Math.max(rr.grade || 0, lvl);
+          }
           if (rb < 0.95 && rr.cov >= 0.95) msgs.push('SURVEY  ' + body.name + ' ring — mapped');
         }
       }
@@ -361,10 +429,22 @@
         if (!c || V.dist(c.pos, ship.pos) > (fld.radius || 50) * 1.5) continue;
         brec = brec || recordFor(G, sys, keyOf(G, belt.id), belt.name, 'belt');
         brec.fields = brec.fields || {};
+        if (typeof brec.cov2 !== 'number') {
+          /* Pre-split belt record: same rule as migrateRec. */
+          brec.fields2 = (brec.grade || 0) >= 2 ? Object.assign({}, brec.fields) : {};
+          brec.cov2 = (brec.grade || 0) >= 2 ? (brec.cov || 0) : 0;
+          if (brec.soldCov2 === undefined) brec.soldCov2 = (brec.grade || 0) >= 2 ? (brec.soldCov || 0) : 0;
+        }
+        brec.fields2 = brec.fields2 || {};
+        if (lvl >= 2 && !brec.fields2[f]) {
+          brec.fields2[f] = 1;
+          brec.cov2 = Object.keys(brec.fields2).length / belt.fields.length;
+        }
         if (!brec.fields[f]) {
           brec.fields[f] = 1;
           var before2 = brec.cov;
           brec.cov = Object.keys(brec.fields).length / belt.fields.length;
+          ageIn(brec, before2 - (brec.soldCov || 0), brec.cov - (brec.soldCov || 0), t);
           brec.t = t; brec.grade = Math.max(brec.grade || 0, lvl);
           msgs.push('SURVEY  ' + belt.name + ' — ' + (fld.name || 'field') + ' mapped (' +
                     Math.round(brec.cov * 100) + '% of the belt)');
@@ -388,8 +468,9 @@
   var BUY_RATE = 20;              // credits per unit grade per commodity-credit, roughly
   var HALF_LIFE_DAYS = 180;
   function ageFactor(rec, now) {
-    if (rec.t === null || rec.t === undefined) return 0;
-    var days = Math.max(0, (now - rec.t) / 86400);
+    var tm = meanT(rec);
+    if (tm === null || tm === undefined) return 0;
+    var days = Math.max(0, (now - tm) / 86400);
     return Math.pow(0.5, days / HALF_LIFE_DAYS);
   }
   function targetFor(sys, rec) {
@@ -413,9 +494,14 @@
       var base = Eco && Eco.BY_ID && Eco.BY_ID[r.cid] ? Eco.BY_ID[r.cid].base : 80;
       sum += r.grade * base;
     });
-    var inst = rec.grade >= 2 ? 1.0 : 0.6;
+    /* The array-mapped part at full rate, the scanner part at 0.6. */
     var c = cov === undefined ? Math.max(0, rec.cov - (rec.soldCov || 0)) : cov;
-    return Math.round(sum * BUY_RATE * c * inst * ageFactor(rec, now) / 10) * 10;
+    var c2 = Math.min(c, Math.max(0, arrayCov(rec) - soldArray(rec)));
+    return Math.round(sum * BUY_RATE * (c2 * 1.0 + (c - c2) * 0.6) * ageFactor(rec, now) / 10) * 10;
+  }
+  function soldArray(rec) {
+    if (typeof rec.soldCov2 === 'number') return rec.soldCov2;
+    return (rec.grade || 0) >= 2 ? (rec.soldCov || 0) : 0;
   }
 
   /* Everything mapped in THIS system the guild would pay for now. */
@@ -429,7 +515,13 @@
   }
   function sell(G, sys, now) {
     var list = saleable(G, sys, now), total = 0;
-    list.forEach(function (s) { total += s.price; s.rec.soldCov = s.rec.cov; });
+    list.forEach(function (s) {
+      total += s.price;
+      s.rec.soldCov = s.rec.cov;
+      s.rec.soldCov2 = arrayCov(s.rec);
+      /* Nothing unsold is left, so the next ground gained starts its own date. */
+      delete s.rec.tMean;
+    });
     if (G.ship) G.ship.credits += total;
     return { total: total, count: list.length };
   }
@@ -452,6 +544,7 @@
     cellsOf: cellsOf, coverageOf: coverageOf, packCells: packCells, markAt: markAt, spinFrame: spinFrame,
     swathAt: swathAt,
     value: value, saleable: saleable, sell: sell, ageFactor: ageFactor,
+    arrayCov: arrayCov, meanT: meanT, migrateRec: migrateRec, CELL_PAD: CELL_PAD,
     gradeWord: gradeWord, fmtTonnes: fmtTonnes
   };
   global.Survey = Survey;

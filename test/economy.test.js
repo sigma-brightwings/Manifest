@@ -1812,6 +1812,26 @@ console.log('--- what the local runs are carrying ---');
         heaviesLoaded === 0, heaviesLoaded + ' of ' + heavies + ' loaded');
 })();
 
+/* SCANNER AUDIT 2026-10-17: the trade analyser never sends you to load
+ * at a port with nothing in the warehouse. Over a spread of dates, so
+ * the warehouses have had time to run dry somewhere. */
+(function () {
+  var runs = 0, loadable = 0, bad = '';
+  seeds(12).forEach(function (sd) {
+    var sys = Gen.generateSystem(sd);
+    [0, 9 * DAY, 41 * DAY, 200 * DAY].forEach(function (t) {
+      Eco.systemAnalysis(sys, t).runs.forEach(function (r) {
+        runs++;
+        var p = Eco.price(r.from, r.cid, t);
+        if (p && p.stock >= 1) loadable++;
+        else if (!bad) bad = sd + ' ' + r.name + ' at ' + r.from.name;
+      });
+    });
+  });
+  check('every analyser run starts where there is cargo to load', runs > 0 && loadable === runs,
+        loadable + ' of ' + runs + (bad ? '  e.g. ' + bad : ''));
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

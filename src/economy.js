@@ -1753,7 +1753,11 @@
           excesses.push({ cid: cid, name: com.name, port: port, fill: p.fill,
                           ask: p.buy, mark: p.buy / com.base });
         }
-        if (p.tradeable && p.buy !== null && (!bestAsk[cid] || p.buy < bestAsk[cid].ask)) {
+        /* SCANNER AUDIT 2026-10-17: a run has to start somewhere you can
+         * actually load. An exporter with an empty warehouse still quotes
+         * an ask, and the analyser was happy to send you there for it. */
+        if (p.tradeable && p.buy !== null && p.stock >= 1 &&
+            (!bestAsk[cid] || p.buy < bestAsk[cid].ask)) {
           bestAsk[cid] = { port: port, ask: p.buy, fill: p.fill };
         }
         if (p.sell !== null && (!bestBid[cid] || p.sell > bestBid[cid].bid)) {

@@ -10160,7 +10160,10 @@
           ctx.fillStyle = r.grade >= 0.55 ? '#7dffb0' : r.grade >= 0.3 ? MFD_HOT : '#ff9f7a';
           ctx.fillRect(110, y - 8, 80 * Math.min(1, r.grade), 7);
           ctx.fillStyle = MFD_INK;
-          ctx.fillText(lvl >= 2 ? Sv.fmtTonnes(r.tonnes) : Sv.gradeWord(r.grade), 198, y);
+          /* Tonnes only if the ARRAY mapped enough of it - fitting one
+           * now does not turn an old scanner pass into numbers. */
+          var arr = rec && Sv.arrayCov ? Sv.arrayCov(rec) : (lvl >= 2 ? cov : 0);
+          ctx.fillText(arr >= 0.1 ? Sv.fmtTonnes(r.tonnes) : Sv.gradeWord(r.grade), 198, y);
           y += 14;
         });
         if (cov < 0.9) {
@@ -10424,9 +10427,19 @@
       var fac2 = G.sys.factionById && G.sys.factionById[nav.obj.faction];
       mfdRow(ctx, sy, 'flag', fac2 ? clipText(fac2.name, 18) : 'Unaligned',
              fac2 ? fac2.color : '#ff8a76');
-      var man = nav.obj.manifest || [];
+      /* SCANNER AUDIT 2026-10-17: this read the route manifest straight
+       * off the traffic state, so a trader you had just robbed still
+       * showed a full hold, and a pirate full of other people's cargo
+       * showed nothing. Same order as Combat.holdOf - an owned hold is
+       * the truth even when empty - with the route as the rail ship's
+       * answer when nothing owns one yet. */
+      var spN = nav.obj.spec;
+      var man = spN && spN.manifest ? spN.manifest
+              : (nav.obj.manifest && nav.obj.manifest.length) ? nav.obj.manifest
+              : (spN && Combat.holdOf ? Combat.holdOf(G.sys, spN) : []);
+      man = man.filter(function (m) { return (m.qty || m.tonnes) > 0; });
       mfdRow(ctx, sy + pitch, 'carrying', man.length
-        ? clipText(man.map(function (m) { return Eco.BY_ID[m.cid].name; }).join(', '), 18)
+        ? clipText(man.map(function (m) { return (Eco.BY_ID[m.cid] || {}).name || m.cid; }).join(', '), 18)
         : '—', MFD_DIM);
 
       /* What the scanner sees, if you bought one. Nothing at all without —
