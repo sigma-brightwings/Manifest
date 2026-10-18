@@ -2684,50 +2684,60 @@
          * each with what a load is and what it fetches today. When every
          * giant refuses for the same reason (no skimmer fitted, no pilot)
          * that reason takes one row instead of a list of identical greys. */
-        var giants = Fleet.skimSites(G.sys);
-        if (giants.length) {
-          var plans = giants.map(function (gb) { return { g: gb, p: Fleet.planWork(G, rec, G.sys, gb.id, 'sell') }; });
-          /* Best-paying first: in a system with five giants the one worth
-           * working is usually the one her port orbits, and it should not
-           * sit fifth in a list of ten rows. Refusals sink to the bottom. */
+        /* Work sites (mining rung 4): giants to skim and, since 2026-10-18,
+         * rings to cut with a mining laser. A ringed giant is both. */
+        var sites = Fleet.workSites ? Fleet.workSites(G.sys) : [];
+        if (sites.length) {
+          var plans = sites.map(function (st) {
+            return { g: st.body, kind: st.kind, p: Fleet.planWork(G, rec, G.sys, st.body.id, 'sell', st.kind) };
+          });
+          /* Best-paying first. Refusals sink to the bottom. */
+          var EcoW = global.Economy, homePort = G.sys.byId[rec.port];
+          var runValue = function (pl) {
+            var v = 0;
+            (Fleet.loadOf(pl) || []).forEach(function (l) {
+              var bid = EcoW ? EcoW.price(homePort, l.cid, G.t) : null;
+              v += l.qty * (bid && bid.sell !== null ? bid.sell : 0);
+            });
+            return Math.round(v);
+          };
+          plans.forEach(function (x) { if (x.p.ok) { x.value = runValue(x.p); x.perDay = Math.round(x.value * 86400 / x.p.period); } });
           plans.sort(function (a, b) {
             if (a.p.ok !== b.p.ok) return a.p.ok ? -1 : 1;
-            return a.p.ok ? (a.p.period - b.p.period) : 0;
+            return a.p.ok ? (b.perDay - a.perDay) : 0;
           });
           var okPlans = plans.filter(function (x) { return x.p.ok; });
           var whys = {};
           plans.forEach(function (x) { if (!x.p.ok) whys[x.p.why] = true; });
-          var homePort = G.sys.byId[rec.port];
           if (!okPlans.length && Object.keys(whys).length === 1) {
-            row('   cannot skim', Object.keys(whys)[0], function () {}, true);
+            row('   cannot work a site', Object.keys(whys)[0], function () {}, true);
           } else {
             plans.forEach(function (x) {
-              if (!x.p.ok) {
-                row('   ⇄ SKIM ' + x.g.name.toUpperCase(), x.p.why, function () {}, true);
-                return;
-              }
+              var cutting = x.kind === 'cut';
+              var label = '   ⇄ ' + (cutting ? 'CUT ' + x.g.name.toUpperCase() + ' RING' : 'SKIM ' + x.g.name.toUpperCase());
+              if (!x.p.ok) { row(label, x.p.why, function () {}, true); return; }
               var pl = x.p;
-              var EcoW = global.Economy;
-              var bid = EcoW ? EcoW.price(homePort, EcoW.FUEL_ID, G.t) : null;
-              var load = Math.round(pl.tonnes * (bid && bid.sell !== null ? bid.sell : 0));
-              var perDay = Math.round(load * 86400 / pl.period);
-              row('   ⇄ SKIM ' + x.g.name.toUpperCase() + ' → SELL AT ' + pl.portName.toUpperCase(),
-                  pl.tonnes + ' t a run, ~' + load + ' cr at today\'s price  ·  a run every ' +
-                  fmtLogAge(pl.period) + ' (~' + perDay + ' cr/day)' +
-                  (pl.shield ? '' : '  ·  no heat shield: slow'),
+              var what = (Fleet.loadOf(pl) || []).map(function (l) {
+                return ((EcoW && EcoW.BY_ID[l.cid] && EcoW.BY_ID[l.cid].name) || l.cid).toLowerCase();
+              }).join(', ');
+              row(label + ' → SELL AT ' + pl.portName.toUpperCase(),
+                  pl.tonnes + ' t a run (' + what + '), ~' + x.value + ' cr at today\'s price  ·  a run every ' +
+                  fmtLogAge(pl.period) + ' (~' + x.perDay + ' cr/day)' +
+                  (!cutting && !pl.shield ? '  ·  no heat shield: slow' : ''),
                   function () {
-                    var r = Fleet.startWork(G, rec, G.sys, x.g.id, 'sell', G.t);
+                    var r = Fleet.startWork(G, rec, G.sys, x.g.id, 'sell', G.t, x.kind);
                     if (!r.ok) { say('She stays: ' + r.why, 5); return; }
-                    say(rec.name + ' is away to skim ' + x.g.name + ' for ' + pl.portName +
-                        ' - first load home in ' + fmtLogAge(Fleet.workArrival(r.work, 0) - G.t), 7);
+                    say(rec.name + ' is away to ' + (cutting ? 'cut in ' + x.g.name + '\'s ring' : 'skim ' + x.g.name) +
+                        ' for ' + pl.portName + ' - first load home in ' +
+                        fmtLogAge(Fleet.workArrival(r.work, 0) - G.t), 7);
                   }, false);
-              row('   ⇄ SKIM ' + x.g.name.toUpperCase() + ' → KEEP ABOARD',
-                  'one run, ' + pl.tonnes + ' t of hydrogen back in her hold  ·  home in ' +
+              row(label + ' → KEEP ABOARD',
+                  'one run, ' + pl.tonnes + ' t of ' + what + ' back in her hold  ·  home in ' +
                   fmtLogAge(2 * pl.cruise + pl.lay),
                   function () {
-                    var r = Fleet.startWork(G, rec, G.sys, x.g.id, 'keep', G.t);
+                    var r = Fleet.startWork(G, rec, G.sys, x.g.id, 'keep', G.t, x.kind);
                     if (!r.ok) { say('She stays: ' + r.why, 5); return; }
-                    say(rec.name + ' is away to skim ' + x.g.name + ' - home with the load in ' +
+                    say(rec.name + ' is away - home with the load in ' +
                         fmtLogAge(Fleet.workArrival(r.work, 0) - G.t), 7);
                   }, false);
             });

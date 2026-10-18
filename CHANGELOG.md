@@ -130,6 +130,17 @@ Astra has seen it working.
   runs out. Small ring chunks can be cut away in a session; big rocks scar.
   Torpedoes take their chunks off the same mass. The CUTTING bar shows
   tonnes toward the next piece. Saved.
+- **2026-10-18: laser ships in rings.** A fleet ship with a pilot and a
+  mining laser (or the cannon) can be put to work in a ring from the Fleet
+  tab, beside the skimming rows: out to the ring, cut and scoop until the
+  hold is full, home to sell, and round again until recalled; or keep the
+  load aboard for one run. What costs her time is chasing and scooping the
+  pieces, which a better pilot does faster, and she keeps less of what she
+  cuts than you would. She only cuts for what her home port buys, and the
+  load is the ring's own mix (water, ores, rare metals by how icy the ring
+  is), sold commodity by commodity and drawn off the ring's survey store.
+  Measured across twelve rings: a median of about 1,400 cr a game day for
+  a steady pilot. The rows are sorted by what they pay a day.
 - **2026-10-18: the mining laser cannon** (6,200 cr, hardpoint). A pulse
   that knocks a piece off the face every shot, from 5 km, with 3 s between
   shots. Against ships it is fully absorbed by a shield that is up, even by

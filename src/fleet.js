@@ -607,6 +607,17 @@
   function skimSites(sys) {
     return ((sys && sys.bodies) || []).filter(isGiant);
   }
+  /* Rings a laser ship can work (2026-10-18): any body with one. A ringed
+   * giant is both a skim site and a cut site; the kind of work says which. */
+  function ringSites(sys) {
+    return ((sys && sys.bodies) || []).filter(function (b) { return !!b.ring; });
+  }
+  /* Every site with the work it takes, giants first. */
+  function workSites(sys) {
+    var out = skimSites(sys).map(function (b) { return { body: b, kind: 'skim' }; });
+    ringSites(sys).forEach(function (b) { out.push({ body: b, kind: 'cut' }); });
+    return out;
+  }
   function hydrogenGrade(giant, sys) {
     var Sv = global.Survey;
     if (!Sv || !Sv.deposits) return 0.6;
@@ -621,13 +632,19 @@
   /* The leg from her port to the giant's upper air. A port in orbit round
    * the giant (or one of its moons) has the giant as the common parent, and
    * the far end is the top of the air, not the centre. */
-  function planSkimLeg(rec, sys, giant) {
+  function planSkimLeg(rec, sys, giant) { return planSiteLeg(rec, sys, giant, giant.radius * 1.015); }
+
+  /* The leg from her port to a work site on a body: the top of a giant's
+   * air, or the middle of a ring. `siteR` is how far from the body's centre
+   * the site is, which only matters when the body IS the common parent. */
+  function planSiteLeg(rec, sys, body, siteR) {
     var Gen = global.Gen;
     var A = sys.byId[rec.port];
+    var giant = body;
     var parent = Gen.commonParent(A, giant, sys);
     var local = parent === giant;
     var ra = Gen.radiusAbout(A, parent, sys);
-    var rb = local ? giant.radius * 1.015 : Gen.radiusAbout(giant, parent, sys);
+    var rb = local ? siteR : Gen.radiusAbout(giant, parent, sys);
     var dist = local ? Math.max(Math.abs(ra - rb), (ra + rb) * 0.2)
                      : Math.sqrt(ra * ra + rb * rb);
     var lt = legTimes(rec, dist);
@@ -637,7 +654,7 @@
 
   /* Can she work this giant, and what would one cycle look like. Refusals
    * in words, like every other row on the fleet page. */
-  function planWork(G, rec, sys, giantId, mode) {
+  function planWork(G, rec, sys, giantId, mode, kind) {
     if (!rec) return { ok: false, why: 'no such ship' };
     if (rec.work) return { ok: false, why: 'she is already working ' + rec.work.siteName };
     if (rec.order) return { ok: false, why: 'she is already under way' };
@@ -648,7 +665,8 @@
     }
     if (!sys || !sys.byId || !sys.byId[rec.port]) return { ok: false, why: 'her clamp is not in this system' };
     var giant = sys.byId[giantId];
-    if (!isGiant(giant)) return { ok: false, why: 'nothing to skim there' };
+    if (kind === 'cut' || (!isGiant(giant) && giant && giant.ring)) return planCut(G, rec, sys, giant, mode, p);
+    if (!isGiant(giant)) return { ok: false, why: 'nothing to skim or cut there' };
     if (!fitted(rec, 'skimmer')) return { ok: false, why: 'she has no gas skimmer fitted' };
     if (rec.arrears > 0) {
       return { ok: false, why: 'the harbour will not release her - ' + rec.arrears + ' cr owed' };
@@ -674,7 +692,7 @@
     var dwell = free / rate;
     var lay = Math.max(WORK_TURNAROUND, dwell);
     var period = 2 * (leg.cruise + lay);
-    return { ok: true, kind: 'skim', site: giant.id, siteName: giant.name,
+    return { ok: true, kind: 'skim', site: giant.id, siteName: giant.name, exKey: giant.id,
              port: rec.port, portName: sys.byId[rec.port].name,
              mode: mode === 'keep' ? 'keep' : 'sell', tonnes: free, grade: grade,
              shield: shield, rate: rate,
@@ -682,8 +700,109 @@
              cruise: leg.cruise, lay: lay, period: period, fuelLeg: leg.fuel };
   }
 
-  function startWork(G, rec, sys, giantId, mode, t) {
-    var w = planWork(G, rec, sys, giantId, mode);
+  /* ---- laser ships in a ring (2026-10-18) ----------------------------------
+   * The same loop as a skimmer, out to a ring and back, with a mining laser
+   * or cannon. What the work costs her is not the cutting - a ring would
+   * fill a hold in twenty minutes of beam - but the CHASING: every 2 t piece
+   * comes off drifting and has to be run down and scooped, minutes each.
+   * That is where the pilot's rating shows (CUT_SCOOP_S), and she keeps
+   * less of what she cuts than you would (CUT_PILOT_YIELD): the balance
+   * rule, ships under orders below working it yourself.
+   *
+   * SHE CUTS FOR WHAT HER PORT BUYS. The mix is the ring's deposits leaned
+   * by how icy it is (Mining.LEAN, the same table your own pieces come
+   * from), less anything her port has no market for - a pilot does not
+   * fill the hold with ore nobody at home will take. */
+  var CUT_SCOOP_S = 240;           // s to run one piece down and scoop it, a steady pilot
+  var CUT_TURNAROUND = 2 * 3600;   // s at home, unloading and making ready
+  var CUT_PILOT_YIELD = 0.7;       // of the ore you would have kept yourself
+
+  function cutRateOf(gun) {
+    var M = global.Mining, tpu = M && M.BEAM_T_PER_UNIT ? M.BEAM_T_PER_UNIT : 0.03;
+    return gun.pulseTonnes ? gun.pulseTonnes / (gun.cooldown || 3)
+                           : (gun.dmg || 1) * tpu / (gun.cooldown || 0.12);
+  }
+  /* Her best mining gun, by how fast it cuts. */
+  function miningGun(rec) {
+    var C = global.Combat, best = null;
+    for (var k in (rec.fit || {})) {
+      var it = C && C.EQUIPMENT ? C.EQUIPMENT[rec.fit[k]] : null;
+      if (it && it.mining && (!best || cutRateOf(it) > cutRateOf(best))) best = it;
+    }
+    return best;
+  }
+
+  function planCut(G, rec, sys, planet, mode, p) {
+    if (!planet || !planet.ring) return { ok: false, why: 'there is no ring there' };
+    var gun = miningGun(rec);
+    if (!gun) return { ok: false, why: 'she has no mining laser fitted' };
+    if (rec.arrears > 0) {
+      return { ok: false, why: 'the harbour will not release her - ' + rec.arrears + ' cr owed' };
+    }
+    var Sv = global.Survey, M = global.Mining;
+    var port = sys.byId[rec.port];
+    var here = rec.star || (G && G.here && G.here.id) || 'sys';
+    var src = { kind: 'ring', planet: planet, name: planet.name + ' ring' };
+    var rows = Sv && Sv.deposits ? Sv.remaining(G, here + ':' + planet.id + ':ring', Sv.deposits(src, sys)) : [];
+    var ice = planet.ring.ice || 0;
+    var LI = (M && M.LEAN && M.LEAN.ice) || {}, LS = (M && M.LEAN && M.LEAN.stone) || {};
+    var mix = [], tot = 0, rich = 0;
+    rows.forEach(function (r) {
+      if (r.cid === 'hydrogen' || !(r.tonnes > 0)) return;
+      if (!port.market || !port.market.rows || !port.market.rows[r.cid]) return;
+      var lean = ice * (LI[r.cid] || 0.2) + (1 - ice) * (LS[r.cid] || 0.2);
+      var x = r.grade * lean;
+      if (!(x > 0)) return;
+      mix.push({ cid: r.cid, x: x }); tot += x;
+      rich = Math.max(rich, r.grade * Math.min(1, lean));
+    });
+    if (!mix.length) return { ok: false, why: 'nothing in ' + planet.name + '\'s ring that ' + port.name + ' buys' };
+    mix = mix.map(function (m) { return { cid: m.cid, f: Math.round(m.x / tot * 1000) / 1000 }; });
+    var cap = capacityOf(rec);
+    var free = Math.floor(cap.cargoCap - cap.holdUsed);
+    if (free < SKIM_MIN_FREE) return { ok: false, why: 'her hold is full - ' + free + ' t free' };
+    var H = (M && M.HARDNESS) || { ice: 1.5, stone: 1 };
+    var hard = ice * H.ice + (1 - ice) * H.stone;
+    var piece = gun.piece || (M && M.PIECE_T) || 2;
+    var cut = cutRateOf(gun) * hard * (0.3 + 0.06 * p.rating);
+    var tPiece = piece / cut + CUT_SCOOP_S / (0.5 + 0.1 * p.rating);
+    var r1 = Math.min(1, rich);
+    var orePer = piece * (0.25 + 0.75 * r1) * (0.5 + 0.5 * r1) * CUT_PILOT_YIELD;
+    var pieces = Math.ceil(free / orePer);
+    var lay = pieces * tPiece + CUT_TURNAROUND;
+    var leg = planSiteLeg(rec, sys, planet, (planet.ring.inner + planet.ring.outer) / 2);
+    var C = global.Combat;
+    var hull = C && C.HULLS ? C.HULLS[rec.hullId] : null;
+    var tankCap = (hull && hull.thrusterCap) || rec.thrusterCap || 16;
+    if (2 * leg.fuel > tankCap + 1e-9) {
+      return { ok: false, why: 'the round trip needs ' + (2 * leg.fuel).toFixed(1) +
+                               ' t of reaction mass, her tanks hold ' + tankCap + ' t' };
+    }
+    return { ok: true, kind: 'cut', site: planet.id, siteName: planet.name + ' ring',
+             exKey: planet.id + ':ring',
+             port: rec.port, portName: port.name,
+             mode: mode === 'keep' ? 'keep' : 'sell', tonnes: free, mix: mix, rich: r1,
+             gun: gun.id, pieces: pieces, perPiece: tPiece,
+             parentId: leg.parentId, local: leg.local, distance: leg.distance,
+             cruise: leg.cruise, lay: lay, period: 2 * (leg.cruise + lay), fuelLeg: leg.fuel };
+  }
+
+  /* What one run brings home, as manifest lines. */
+  function loadOf(w) {
+    var Eco = global.Economy, H = Eco ? Eco.FUEL_ID : 'hydrogen';
+    if (w.kind !== 'cut' || !w.mix) return [{ cid: H, qty: w.tonnes }];
+    return w.mix.map(function (m) { return { cid: m.cid, qty: Math.round(w.tonnes * m.f * 10) / 10 }; })
+                .filter(function (l) { return l.qty > 0; });
+  }
+  function loadWords(load) {
+    var Eco = global.Economy;
+    return load.map(function (l) {
+      return ((Eco && Eco.BY_ID && Eco.BY_ID[l.cid] && Eco.BY_ID[l.cid].name) || l.cid).toLowerCase();
+    }).join(', ');
+  }
+
+  function startWork(G, rec, sys, giantId, mode, t, kind) {
+    var w = planWork(G, rec, sys, giantId, mode, kind);
     if (!w.ok) return w;
     delete w.ok;
     w.t0 = t;
@@ -737,32 +856,37 @@
     var done = workDone(w, t);
     var last = w.stopAfter === undefined ? done - 1 : Math.min(done - 1, w.stopAfter);
     if (w.mode === 'keep') last = Math.min(last, 0);
-    var Eco = global.Economy, H = Eco ? Eco.FUEL_ID : 'hydrogen';
+    var Eco = global.Economy;
+    var load = loadOf(w);
     var sold = 0, cr = 0, n = 0;
     for (var k = w.booked; k <= last && n < WORK_BOOK_MAX; k++, n++) {
       var tA = workArrival(w, k);
-      if (w.mode === 'keep') {
-        rec.cargo = rec.cargo || {};
-        rec.cargo[H] = (rec.cargo[H] || 0) + w.tonnes;
-      } else if (Eco && port.market) {
-        var p = Eco.price(port, H, tA);
-        var each = p && p.sell !== null ? p.sell : 0;
-        cr += Math.round(w.tonnes * each);
-        Eco.applyTrade(port, H, -w.tonnes, tA);
-        sold += w.tonnes;
-      }
       G.extracted = G.extracted || {};
-      var exKey = (rec.star || (G.here && G.here.id) || 'sys') + ':' + w.site;
+      var exKey = (rec.star || (G.here && G.here.id) || 'sys') + ':' + (w.exKey || w.site);
       var ex = G.extracted[exKey] = G.extracted[exKey] || {};
-      ex[H] = (ex[H] || 0) + w.tonnes;
+      for (var li = 0; li < load.length; li++) {
+        var cid = load[li].cid, tn = load[li].qty;
+        if (w.mode === 'keep') {
+          rec.cargo = rec.cargo || {};
+          rec.cargo[cid] = (rec.cargo[cid] || 0) + tn;
+        } else if (Eco && port.market) {
+          var p = Eco.price(port, cid, tA);
+          var each = p && p.sell !== null ? p.sell : 0;
+          cr += Math.round(tn * each);
+          Eco.applyTrade(port, cid, -tn, tA);
+          sold += tn;
+        }
+        ex[cid] = (ex[cid] || 0) + tn;
+      }
       w.booked = k + 1;
     }
+    var what = loadWords(load);
     if (cr > 0 && G.ship) {
       G.ship.credits += cr;
-      lines.push(rec.name + ' sold ' + Math.round(sold) + ' t of hydrogen at ' + w.portName +
+      lines.push(rec.name + ' sold ' + Math.round(sold) + ' t of ' + what + ' at ' + w.portName +
                  ' - ' + cr + ' cr' + (n > 1 ? ' (' + n + ' loads)' : ''));
     } else if (w.mode === 'keep' && n > 0) {
-      lines.push(rec.name + ' is home at ' + w.portName + ' with ' + w.tonnes + ' t of hydrogen aboard');
+      lines.push(rec.name + ' is home at ' + w.portName + ' with ' + w.tonnes + ' t of ' + what + ' aboard');
     }
     var end = w.mode === 'keep' ? 0 : w.stopAfter;
     if (end !== undefined && w.booked > end) {
@@ -808,7 +932,7 @@
   /* What identifies the route she is flying, so syncRoutes can tell "the
    * same one" from "a new one" for an order and a work loop alike. */
   function sigOf(rec) {
-    if (rec.work) return 'w|' + rec.work.t0 + '|' + rec.work.site;
+    if (rec.work) return 'w|' + rec.work.t0 + '|' + rec.work.site + '|' + (rec.work.kind || 'skim');
     if (rec.order) return 'o|' + rec.order.t0 + '|' + rec.order.to;
     return null;
   }
@@ -824,7 +948,6 @@
     if (cached && cached.sig === sig) return cached;
     var C = global.Combat;
     var hull = C && C.HULLS ? C.HULLS[rec.hullId] : null;
-    var Eco = global.Economy, H = Eco ? Eco.FUEL_ID : 'hydrogen';
     var route = {
       id: 'fleet|' + rec.id, sig: sig,
       name: rec.name, reg: rec.reg || null,
@@ -837,9 +960,11 @@
       from: w.port, to: w.site, parentId: w.parentId, local: !!w.local,
       cruise: w.cruise, layover: w.lay, period: w.period,
       t0: w.t0,
-      out: [], back: [{ cid: H, qty: w.tonnes }],
+      out: [], back: loadOf(w),
       souls: 0, distance: w.distance,
-      skimSite: w.site
+      /* Where the far end is: the top of a giant's air, or in its ring
+       * (Sim.parkOffset / legGeometry). */
+      siteId: w.site, siteKind: w.kind === 'cut' ? 'ring' : 'skim'
     };
     ROUTES[rec.id] = route;
     return route;
@@ -1004,7 +1129,8 @@
   function workPhase(w, t) {
     var ph = (t - w.t0) - workCycleAt(w, t) * w.period;
     if (ph < w.cruise) return 'outbound to ' + w.siteName + ', there in ' + fmtEta(w.cruise - ph);
-    if (ph < w.cruise + w.lay) return 'skimming ' + w.siteName + ', ' + fmtEta(w.cruise + w.lay - ph) + ' more';
+    if (ph < w.cruise + w.lay) return (w.kind === 'cut' ? 'cutting in ' : 'skimming ') + w.siteName + ', ' +
+                                      fmtEta(w.cruise + w.lay - ph) + ' more';
     if (ph < 2 * w.cruise + w.lay) return 'inbound to ' + w.portName + ' with ' + w.tonnes +
                                            ' t, alongside in ' + fmtEta(2 * w.cruise + w.lay - ph);
     return 'turning round at ' + w.portName + ', out again in ' + fmtEta(w.period - ph);
@@ -1029,7 +1155,8 @@
     var where = rec.portName || 'somewhere';
     if (sys && sys.byId && sys.byId[rec.port]) where = sys.byId[rec.port].name;
     if (rec.order) where = 'under way → ' + rec.order.toName;
-    if (rec.work) where = 'skimming ' + rec.work.siteName + ' for ' + rec.work.portName;
+    if (rec.work) where = (rec.work.kind === 'cut' ? 'cutting in ' : 'skimming ') + rec.work.siteName +
+                          ' for ' + rec.work.portName;
     if (rec.starName) where += ', ' + rec.starName;
     var tons = 0;
     for (var k in (rec.cargo || {})) tons += rec.cargo[k];
@@ -1055,6 +1182,8 @@
     planWork: planWork, startWork: startWork, recall: recall, bookWork: bookWork,
     bookAllWork: bookAllWork, workArrival: workArrival, workDone: workDone,
     workPhase: workPhase, skimSites: skimSites, legTimes: legTimes,
+    ringSites: ringSites, workSites: workSites, planCut: planCut, loadOf: loadOf,
+    miningGun: miningGun, CUT_SCOOP_S: CUT_SCOOP_S, CUT_TURNAROUND: CUT_TURNAROUND,
     WORK_TURNAROUND: WORK_TURNAROUND, SKIM_RATE: SKIM_RATE,
     systemFor: null,
     ORDER_PARK: ORDER_PARK, ORDER_BURN_LEG: ORDER_BURN_LEG, burnRate: burnRate,

@@ -758,7 +758,7 @@
     launchTorpedo: launchTorpedo, updateTorpedoes: updateTorpedoes, detonate: detonate,
     sabotage: sabotage, sabotaged: sabotaged, claimRefund: claimRefund, isShattered: isShattered,
     /* pieces and wear (2026-10-18) */
-    PIECE_T: PIECE_T, DENSITY: DENSITY, HARDNESS: HARDNESS, BEAM_T_PER_UNIT: BEAM_T_PER_UNIT,
+    PIECE_T: PIECE_T, DENSITY: DENSITY, HARDNESS: HARDNESS, BEAM_T_PER_UNIT: BEAM_T_PER_UNIT, LEAN: LEAN,
     isGone: isGone, rockKey: rockKey, rockMass0: rockMass0, rockMassLeft: rockMassLeft,
     wearScale: wearScale, worn: worn, carve: carve, wornMesh: wornMesh, craterShape: craterShape,
     nearestPort: nearestPort,

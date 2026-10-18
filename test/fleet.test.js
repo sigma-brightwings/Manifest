@@ -678,7 +678,7 @@ console.log('--- work orders: your own skimmers ---');
   check('her tanks are topped up alongside', rec.thrusterFuel === Combat.HULLS.talon.thrusterCap);
   check('an ordinary order is refused while she works', /working/.test(Fleet.canOrder(G, rec, sys, F.far.id).why));
   var mine = sys.traffic.filter(function (x) { return x.kind === 'fleet'; });
-  check('she is on the traffic list once, as a loop', mine.length === 1 && !mine[0].oneWay && mine[0].skimSite === giant.id);
+  check('she is on the traffic list once, as a loop', mine.length === 1 && !mine[0].oneWay && mine[0].siteId === giant.id && mine[0].siteKind === 'skim');
   var route = mine[0], w = rec.work;
   var inAir = Sim.trafficState(route, sys, w.t0 + w.cruise + w.lay * 0.5);
   var gp = Sim.bodyState(giant, sys, w.t0 + w.cruise + w.lay * 0.5).pos;
@@ -790,6 +790,97 @@ console.log('--- work orders: your own skimmers ---');
   } else {
     check('a giant across the system is refused only for reaction mass', /reaction mass/.test(pf.why), pf.why);
   }
+})();
+
+/* ---- LASER SHIPS IN A RING (2026-10-18) ----------------------------------
+ * The same loop, out to a ring with a mining laser. The cost is chasing
+ * the pieces; she cuts only what her port buys; below working it yourself. */
+console.log('--- work orders: laser ships in a ring ---');
+(function () {
+  var Gen = require('../src/generate.js');
+  var Sim = require('../src/sim.js');
+  require('../src/survey.js');
+  require('../src/mining.js');
+  var V3 = require('../src/vec3.js');
+  var here = { id: 'star-r', name: 'Ringed' };
+  function cutter(port, crew, fit, name) {
+    var s = shipOf('talon', 0, crew);
+    s.thrusterFuel = 16;
+    var rec = Fleet.record(s, port.id, name || 'Cutter');
+    rec.fit = fit || { h0: 'mininglaser' };
+    rec.cargo = {};
+    rec.berthTo = rec.wagesTo = 0;
+    rec.portName = port.name; rec.star = here.id; rec.starName = here.name;
+    return rec;
+  }
+  function game(t, fleet, s) { var G = gameAt(t, shipOf('talon', 0, []), fleet); G.here = here; G.sys = s; return G; }
+  /* Systems with a ringed body and a port round it. */
+  var found = [];
+  for (var k = 0; k < 120 && found.length < 12; k++) {
+    var s = Gen.generateSystem('ringcut-' + k);
+    s.bodies.filter(function (b) { return b.ring; }).forEach(function (pl) {
+      var port = (s.ports || []).filter(function (p) { return Gen.commonParent(p, pl, s) === pl; })[0];
+      if (port && found.length < 12) found.push({ seed: 'ringcut-' + k, sys: s, planet: pl, port: port });
+    });
+  }
+  check('found ringed bodies with a port round them', found.length >= 4, found.length + ' of them');
+  if (!found.length) return;
+  var F = found[0], sys = F.sys;
+
+  var bare = cutter(F.port, [person('pilot', 3)], {});
+  check('no mining laser, no cutting', /mining laser/.test(Fleet.planWork(game(0, [bare], sys), bare, sys, F.planet.id, 'sell', 'cut').why));
+  var rec = cutter(F.port, [person('pilot', 3)]);
+  var G = game(0, [rec], sys);
+  var pl = Fleet.planWork(G, rec, sys, F.planet.id, 'sell', 'cut');
+  check('a laser ship can work the ring', pl.ok && pl.kind === 'cut', pl.why);
+  if (!pl.ok) return;
+  var fsum = pl.mix.reduce(function (a, m) { return a + m.f; }, 0);
+  check('what she brings is the ring\'s mix', Math.abs(fsum - 1) < 0.01, JSON.stringify(pl.mix));
+  check('only what her port buys', pl.mix.every(function (m) { return !!F.port.market.rows[m.cid]; }));
+  var green = cutter(F.port, [person('pilot', 1)]);
+  var pg = Fleet.planWork(game(0, [green], sys), green, sys, F.planet.id, 'sell', 'cut');
+  check('a green pilot spends longer chasing pieces', pg.lay > pl.lay,
+        (pg.lay / 3600).toFixed(1) + ' h vs ' + (pl.lay / 3600).toFixed(1) + ' h');
+  var can = cutter(F.port, [person('pilot', 3)], { h0: 'miningcannon' });
+  check('the cannon works a ring too', Fleet.planWork(game(0, [can], sys), can, sys, F.planet.id, 'sell', 'cut').ok);
+
+  var r = Fleet.startWork(G, rec, sys, F.planet.id, 'sell', 0, 'cut');
+  var route = sys.traffic.filter(function (x) { return x.kind === 'fleet'; })[0];
+  check('on the timetable as a ring run', r.ok && route && route.siteKind === 'ring' && route.siteId === F.planet.id);
+  var w = rec.work, tm = w.cruise + w.lay * 0.5;
+  var st = Sim.trafficState(route, sys, tm), ps = Sim.bodyState(F.planet, sys, tm);
+  var rel = V3.sub(st.pos, ps.pos), fr = global.Rings.ringFrame(F.planet);
+  var mid = (F.planet.ring.inner + F.planet.ring.outer) / 2;
+  check('mid-run she is in the ring', st.phase === 'moored' && Math.abs(V3.len(rel) - mid) < mid * 0.01 &&
+        Math.abs(V3.dot(rel, fr.n)) < mid * 0.001, (V3.len(rel) / mid).toFixed(4) + ' of mid radius');
+  var inside = 0;
+  for (var i = 0; i <= 200; i++) {
+    var tt = w.period * i / 200, sp = Sim.trafficState(route, sys, tt);
+    if (V3.dist(sp.pos, Sim.bodyState(F.planet, sys, tt).pos) < F.planet.radius) inside++;
+  }
+  check('never through the planet', inside === 0, inside + ' of 201');
+  Fleet.tick(G, sys, Fleet.workArrival(w, 0) + 1);
+  var exk = here.id + ':' + F.planet.id + ':ring';
+  var booked = Object.keys(G.extracted && G.extracted[exk] || {});
+  check('the load is sold, every commodity in it', G.ship.credits > 0 && booked.length === Fleet.loadOf(w).length,
+        G.ship.credits + ' cr for ' + booked.join(', '));
+  check('and booked against the ring\'s store', booked.length > 0);
+
+  /* WHAT IT PAYS, across systems: well above a drone, well below active. */
+  var rates = found.map(function (f) {
+    var s2 = Gen.generateSystem(f.seed), p2 = s2.byId[f.port.id], pl2 = s2.byId[f.planet.id];
+    var rc = cutter(p2, [person('pilot', 3)]);
+    var Gx = game(0, [rc], s2);
+    var ok = Fleet.startWork(Gx, rc, s2, pl2.id, 'sell', 0, 'cut');
+    if (!ok.ok) return null;
+    Fleet.tick(Gx, s2, 30 * DAY);
+    return Gx.ship.credits / 30;
+  }).filter(function (x) { return x !== null; }).sort(function (a, b) { return a - b; });
+  var med = rates[Math.floor(rates.length / 2)], top = rates[rates.length - 1];
+  console.log('  measured: steady pilot, Talon, mining laser, 30 days: median ' + Math.round(med) +
+              ' cr/day, range ' + Math.round(rates[0]) + '-' + Math.round(top) + ' over ' + rates.length + ' rings');
+  check('a ring pays well above a drone', med > 500, Math.round(med));
+  check('and well under active work, even the best ring', top < 8000, Math.round(top));
 })();
 
 console.log('');

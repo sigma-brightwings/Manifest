@@ -1400,7 +1400,17 @@
      * apron at four radii: just inside the top of the atmosphere, on the
      * day side, spread round the limb by the same route hash so two of
      * your skimmers on one giant are not drawn as one. */
-    if (route && route.skimSite && route.skimSite === port.id) {
+    /* A LASER SHIP'S FAR END IS IN THE RING (2026-10-18): in the ring's own
+     * plane at its middle radius, at an angle hashed from the route, so she
+     * is drawn among the rock she is cutting. */
+    if (route && route.siteId === port.id && route.siteKind === 'ring' && port.ring && global.Rings) {
+      var rfr = global.Rings.ringFrame(port);
+      var rh = portHash({ id: String(route.id) + '@ring@' + port.id });
+      var ra = ((rh % 4096) / 4096) * Math.PI * 2;
+      var rd = V.add(V.scale(rfr.e1, Math.cos(ra)), V.scale(rfr.e2, Math.sin(ra)));
+      return { dir: rd, vec: V.scale(rd, (port.ring.inner + port.ring.outer) / 2) };
+    }
+    if (route && route.siteId === port.id && route.siteKind === 'skim') {
       var sun = V.scale(radial, -1);
       var al2 = V.sub(ps.vel, hs.vel);
       var e2 = V.cross(sun, al2);
@@ -1464,8 +1474,8 @@
      * the centre. The end is the skim point instead, and its park blend is
      * folded into the end so it is not added twice. */
     var ZERO_PARK = { dir: { x: 0, y: 0, z: 1 }, vec: { x: 0, y: 0, z: 0 } };
-    if (route.skimSite && dst === parent && dst.id === route.skimSite) { d = dstPark.vec; dstPark = ZERO_PARK; }
-    if (route.skimSite && src === parent && src.id === route.skimSite) { s = srcPark.vec; srcPark = ZERO_PARK; }
+    if (route.siteId && dst === parent && dst.id === route.siteId) { d = dstPark.vec; dstPark = ZERO_PARK; }
+    if (route.siteId && src === parent && src.id === route.siteId) { s = srcPark.vec; srcPark = ZERO_PARK; }
     var rs = V.len(s), rd = V.len(d);
     var sh = rs > 1e-9 ? V.scale(s, 1 / rs) : { x: 1, y: 0, z: 0 };
     var dh = rd > 1e-9 ? V.scale(d, 1 / rd) : { x: 0, y: 1, z: 0 };
