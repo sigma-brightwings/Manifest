@@ -152,6 +152,8 @@ function inAir(body, sys, frac, t) {
   var v = Math.sqrt(6.6743e-20 * body.mass / r);
   var sp = Sim.makeShip(V.add(bs.pos, { x: r, y: 0, z: 0 }), V.add(bs.vel, { x: 0, y: v, z: 0 }));
   Sim.refreshShip(sp);
+  /* Nose along the orbit - into the air, the way a ram scoop flies. */
+  sp.fwd = { x: 0, y: 1, z: 0 }; sp.up = { x: 1, y: 0, z: 0 }; sp.right = V.cross(sp.fwd, sp.up);
   return sp;
 }
 var Gg = { here: { id: 'test' }, extracted: {} };
@@ -161,9 +163,18 @@ var none = Mn.skimStep(Gg, gsys, t0, 1, false);
 check('no intake, no hydrogen', none === 0 && (Gg.ship.cargo.hydrogen || 0) === hold0);
 var got = Mn.skimStep(Gg, gsys, t0, 1, true);
 var sk = Gg.skimming;
-var expect = sk.rho * sk.v * 1000 * Mn.SKIM_AREA / 1000 * sk.frac;
-check('density x speed x area, in tonnes', Math.abs(got - expect) < 1e-9 && got > 0,
-      got.toFixed(3) + ' t/s at ' + sk.v.toFixed(1) + ' km/s, ' + Math.round(sk.frac * 100) + '% H');
+var expect = sk.rho * sk.v * 1000 * Mn.SKIM_AREA * sk.face / 1000 * sk.frac;
+check('density x speed x area x facing, in tonnes', Math.abs(got - expect) < 1e-9 && got > 0 && sk.face > 0.95,
+      got.toFixed(3) + ' t/s at ' + sk.v.toFixed(1) + ' km/s, ' + Math.round(sk.frac * 100) + '% H, face ' + sk.face.toFixed(3));
+/* A RAM SCOOP (Astra, 2026-10-18): face first or nothing. */
+function aimed(fwd) { var Ga = { here: { id: 'test' }, extracted: {} }; Ga.ship = inAir(giant, gsys, 0.85, t0); Ga.ship.fwd = fwd;
+  return { got: Mn.skimStep(Ga, gsys, t0, 1, true), sk: Ga.skimming }; }
+var side = aimed({ x: 1, y: 0, z: 0 }), tail = aimed({ x: 0, y: -1, z: 0 });
+var off60 = aimed(V.norm({ x: 0, y: 0.5, z: Math.sqrt(3) / 2 }));
+check('side-on, the scoop takes nothing', side.got === 0 && side.sk && side.sk.face === 0);
+check('tail first, nothing', tail.got === 0);
+check('60 degrees off, about half', Math.abs(off60.got / got - 0.5) < 0.03, (off60.got / got).toFixed(3));
+check('and the HUD knows which way the nose should go', side.sk.airDir && V.dot(side.sk.airDir, { x: 0, y: 1, z: 0 }) > 0.95);
 check('into the hold and the ledger', Math.abs((Gg.ship.cargo.hydrogen || 0) - hold0 - got) < 1e-9 &&
       Math.abs(Gg.extracted['test:' + giant.id].hydrogen - got) < 1e-9);
 var Gd = { here: { id: 'test' }, extracted: {} };

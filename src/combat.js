@@ -550,14 +550,15 @@
                   pitch: 'The tonnage, not the adjective. The Guild pays for numbers.' },
 
     /* GAS SKIMMER INTAKE (mining rung 3). Takes hydrogen out of a giant's
-     * air as you fly through it - a charged capture field about forty
-     * metres across, so the flow is density x speed x 1,500 m^2. It does
-     * nothing about the heat; that is what the heat shield is for. */
+     * air as you fly through it - a RAM SCOOP on the nose, a mouth about
+     * forty metres across, so the flow is density x speed x 1,500 m^2 x how
+     * squarely the nose meets the air (Astra, 2026-10-18: face first). It
+     * does nothing about the heat; that is what the heat shield is for. */
     skimmer: { id: 'skimmer', name: 'Gas skimmer intake', slot: 'utility',
                kind: 'skimmer', price: 7800, power: 1.5, mass: 2,
                unique: true,
                minDev: 0.2, minStanding: -100, minCrime: 0, grey: false,
-               pitch: 'Fly it through the top of a giant and the hold fills. Fly it lower and so does the coroner.' },
+               pitch: 'A ram scoop. Point the nose into the top of a giant and the hold fills. Fly it lower and so does the coroner.' },
 
     /* ---- the cargo scoop --------------------------------------------------
      * Picking cargo up used to be a property of having a hold, which made

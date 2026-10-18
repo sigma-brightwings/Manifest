@@ -37,7 +37,13 @@
   var CUT_PER_CHUNK = 90;        // beam work (gun dmg units) to free one chunk - ~11 s held
   var CHUNK_LIFE = 1800;         // s - a chunk waits half an hour for the scoop
   var ROCK_LOOK = 6;             // km - how far round the beam to look for rock
-  var SKIM_AREA = 1500;          // m^2 - the intake's charged capture field
+  var SKIM_AREA = 1500;          // m^2 - the ram scoop's mouth, square on to the flow
+  /* A RAM SCOOP (Astra, 2026-10-18): "skimming hydrogen means going into the
+   * atmosphere of a planet face first. The scoop collects gas as a ram
+   * scoop." The mouth is on the nose, so what it swallows is the flow
+   * through its face: density x speed x area x cos(the angle between the
+   * nose and the oncoming air). Side-on or tail-first, nothing goes in. */
+  var SKIM_ALIGN_MIN = 0.17;     // cos 80 deg - beyond this the mouth sees no flow
   var SKIM_MIN_GRADE = 0.3;      // a giant this poor in hydrogen is not worth the dive
 
   /* ---- pieces and wear (2026-10-18) ---------------------------------------
@@ -402,7 +408,12 @@
     var alt = V.dist(s.pos, atmo.pos) - body.radius;
     var rho = S.airDensity(body, alt);
     if (!(rho > 0)) return 0;
-    var v = V.len(V.sub(s.vel, atmo.vel));                   // km/s
+    var rel = V.sub(s.vel, atmo.vel), v = V.len(rel);       // km/s, through the air
+    /* Nose into the oncoming air. The air comes at you along -rel, so the
+     * nose wants to point along +rel (where you are going through it). */
+    var airDir = v > 1e-9 ? V.scale(rel, 1 / v) : null;
+    var align = (airDir && s.fwd) ? V.dot(V.norm(s.fwd), airDir) : 0;
+    var face = align > SKIM_ALIGN_MIN ? align : 0;
     var key = ((G.here && G.here.id) || 'sys') + ':' + body.id;
     var h2 = Sv() ? Sv().deposits(body, sys).filter(function (r) { return r.cid === 'hydrogen'; })[0] : null;
     var grade = h2 ? h2.grade : 0.6;
@@ -410,10 +421,10 @@
      * hydrogen fraction climbs toward the grade the survey reports. */
     var depth = Math.max(0, at.top - alt);
     var frac = grade * (0.55 + 0.45 * (1 - Math.exp(-depth / (4 * at.scaleHeight))));
-    var tonnes = rho * v * 1000 * SKIM_AREA * dt / 1000 * frac;  // kg/m^3 * m/s * m^2 * s -> kg -> t
+    var tonnes = rho * v * 1000 * SKIM_AREA * face * dt / 1000 * frac;  // kg/m^3 * m/s * m^2 * s -> kg -> t
     var room = s.cargoCap - S.cargoMass(s);
     G.skimming = { body: body, rho: rho, v: v, frac: frac, rate: tonnes / dt, full: room <= 0.01,
-                   poor: grade < SKIM_MIN_GRADE };
+                   poor: grade < SKIM_MIN_GRADE, align: align, face: face, airDir: airDir };
     if (room <= 0.01 || grade < SKIM_MIN_GRADE) return 0;
     tonnes = Math.min(tonnes, room);
     s.cargo.hydrogen = (s.cargo.hydrogen || 0) + tonnes;

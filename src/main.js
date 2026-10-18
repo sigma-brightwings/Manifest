@@ -5475,7 +5475,7 @@
       var sk = G.skimming;
       if (sk && !wasSkim) {
         say(sk.poor ? 'Skimmer: ' + sk.body.name + ' is too poor in hydrogen to be worth the intake'
-                    : 'Skimmer open - ' + sk.body.name, 4);
+                    : 'Skimmer open - ' + sk.body.name + (sk.face > 0.7 ? '' : ' - nose into the air, it is a ram scoop'), 4);
         G.skimShown = Math.floor(G.skimTotal || 0);
       } else if (sk && sk.full && !G.skimFullSaid) {
         G.skimFullSaid = true;
@@ -12287,6 +12287,65 @@
       ctx.fillRect(cx2 + cw2 - 100, cy2 + 9, 86, 10);
       ctx.fillStyle = '#ffd27a';
       ctx.fillRect(cx2 + cw2 - 100, cy2 + 9, 86 * Math.min(1, cp.frac), 10);
+      ctx.restore();
+    }
+
+    /* --- the ram scoop (2026-10-18) ---
+     * In a giant's air with the intake fitted: how squarely the nose meets
+     * the flow, and what that is worth a minute. Off the line, an arrow
+     * from the crosshair to where the nose should go - the direction you
+     * are moving through the air. */
+    var skm = G.skimming;
+    if (skm && !skm.poor && flying()) {
+      ctx.save();
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      var sLabel = 'RAM SCOOP  ' + Math.round(skm.face * 100) + '% on  ·  ' + (skm.rate * 60).toFixed(1) + ' t/min' +
+                   (skm.full ? '  ·  HOLD FULL' : '');
+      var sw = Math.max(240, ctx.measureText(sLabel).width + 120);
+      var sx = (w - sw) / 2, sy = top - 136;
+      panel(ctx, sx, sy, sw, 28, false);
+      var scol = skm.face > 0.9 ? '#7dffb0' : skm.face > 0 ? '#ffd27a' : '#ff7a6a';
+      ctx.fillStyle = scol;
+      ctx.fillText(sLabel, sx + 12, sy + 18);
+      ctx.fillStyle = 'rgba(125,255,176,0.18)';
+      ctx.fillRect(sx + sw - 100, sy + 9, 86, 10);
+      ctx.fillStyle = scol;
+      ctx.fillRect(sx + sw - 100, sy + 9, 86 * skm.face, 10);
+      if (skm.airDir && skm.face < 0.97) {
+        var ad = skm.airDir;
+        var ax = V.dot(ad, G.cam.r), ay = V.dot(ad, G.cam.u);
+        var al = Math.hypot(ax, ay);
+        var adx = al > 1e-6 ? ax / al : 0, ady = al > 1e-6 ? -ay / al : -1;
+        var cxs = w / 2, cys = h / 2;
+        /* Where the nose should go, marked on the glass when it is in view
+         * (a ring with ticks, like a flight-path marker), else an arrow to
+         * it from the crosshair. Label on a dark backing - the horizon bar
+         * and the air streaks are both bright. */
+        var ap = G.cam.project(V.add(G.cam.eye, V.scale(ad, 1e3)));
+        var lx, ly;
+        ctx.lineWidth = 2.5; ctx.strokeStyle = scol;
+        if (ap && !ap.behindEye && ap.x > 40 && ap.x < w - 40 && ap.y > 40 && ap.y < deckTop(h) - 40) {
+          ctx.beginPath(); ctx.arc(ap.x, ap.y, 13, 0, Math.PI * 2); ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(ap.x - 21, ap.y); ctx.lineTo(ap.x - 13, ap.y);
+          ctx.moveTo(ap.x + 13, ap.y); ctx.lineTo(ap.x + 21, ap.y);
+          ctx.moveTo(ap.x, ap.y - 21); ctx.lineTo(ap.x, ap.y - 13);
+          ctx.stroke();
+          ctx.setLineDash([5, 6]); ctx.lineWidth = 1.2;
+          ctx.beginPath(); ctx.moveTo(cxs, cys); ctx.lineTo(ap.x, ap.y); ctx.stroke();
+          ctx.setLineDash([]);
+          lx = ap.x + 26; ly = ap.y - 16;
+        } else {
+          var len = 60;
+          Render.drawArrow(ctx, cxs + adx * 40, cys + ady * 40, adx, ady, len, scol, 3, 12);
+          lx = cxs + adx * (70 + len) - 34; ly = cys + ady * (70 + len) - 6;
+        }
+        var nl = 'NOSE HERE';
+        ctx.fillStyle = 'rgba(4,10,14,0.78)';
+        ctx.fillRect(lx - 4, ly - 12, ctx.measureText(nl).width + 8, 17);
+        ctx.fillStyle = scol;
+        ctx.fillText(nl, lx, ly);
+      }
       ctx.restore();
     }
 

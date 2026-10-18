@@ -130,6 +130,16 @@ Astra has seen it working.
   runs out. Small ring chunks can be cut away in a session; big rocks scar.
   Torpedoes take their chunks off the same mass. The CUTTING bar shows
   tonnes toward the next piece. Saved.
+- **2026-10-18: the gas skimmer is a ram scoop.** Astra: skimming means
+  going into the atmosphere face first, the scoop collecting gas as a ram
+  scoop. The intake's mouth is now on the nose: what it takes is density x
+  speed x its area x how squarely the nose meets the oncoming air (full
+  take nose-first, half at 60 degrees off, nothing side-on beyond 80
+  degrees or tail-first). In the air with it fitted, a RAM SCOOP panel
+  above the crosshair shows how square you are and the tonnes a minute,
+  green when you are on the line; off it, a ringed marker shows where the
+  nose should go, or an arrow to it when it is out of view, labelled NOSE
+  HERE. Your fleet's skimmers are unchanged (their pilots fly it right).
 - **2026-10-18: resource wars, stage 1 (the model and the map).** The
   empires now go to war over ore. Each system has a workable reserve of
   cheap ore that its industry draws down on the clock (the surveyed
