@@ -130,6 +130,14 @@ Astra has seen it working.
   runs out. Small ring chunks can be cut away in a session; big rocks scar.
   Torpedoes take their chunks off the same mass. The CUTTING bar shows
   tonnes toward the next piece. Saved.
+- **2026-10-19: jamming is loud.** Astra: ECM lights you up like a
+  Christmas tree, just not with an ID code, which is suspicious enough.
+  With the jammer on, ships notice you from three times as far (pirates
+  and police alike come for you from 9,000 km instead of 3,000), a police
+  patrol that has already inspected you comes back for another look, every
+  customs scan searches your hold, and a lawful patrol that watches you
+  jam from within 1,000 km for 20 seconds cites you for it (250 cr on your
+  bounty, once per patrol). The INCOMING panel reads ECM ON - LOUD, NO ID.
 - **2026-10-18: countermeasures against missiles.** Four, and each beats
   a seeker a different way. A **decoy launcher** (utility, 2,600 cr, rack
   of 12 charges at 60 cr each from any yard): **O** fires one aft, and each

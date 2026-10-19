@@ -1960,6 +1960,14 @@
   var POLICE_STANDOFF = 45;     // km
   var RESCUE_STANDOFF = 1.5;    // km — a hose length, for the transfer
   var POLICE_DETERRENT = 30000; // km — a pirate will not work this close to the law
+  /* JAMMING IS LOUD (Astra, 2026-10-18): "ECM would light you up like a
+   * christmas tree, just not with an ID code, which is sus enough." With
+   * the jammer on (ship.ecmLoud, set by Combat), every ship in the system
+   * notices you from ECM_REACH times as far, a cop that has already
+   * inspected you comes back to look again, and a lawful cop that watches
+   * an unidentified jammer for ECM_CITE_S within ECM_CITE_KM writes it up. */
+  var ECM_REACH = 3;
+  var ECM_CITE_KM = 1000, ECM_CITE_S = 20;
 
   function wakeNpc(spec, railState) {
     spec.live = {
@@ -2096,7 +2104,9 @@
       /* A responder on its rescue leg is lifted by Combat at the handoff,
        * not by proximity: its rail passing within WAKE_RANGE of you halfway
        * through a system crossing would otherwise wake it into shadowing. */
-      if (!spec.live && !safe && range < WAKE_RANGE && !spec.rescue) { wakeNpc(spec, state); }
+      var loud = !!ship.ecmLoud && !safe;
+      var wakeAt = loud ? WAKE_RANGE * ECM_REACH : WAKE_RANGE;
+      if (!spec.live && !safe && range < wakeAt && !spec.rescue) { wakeNpc(spec, state); }
 
       if (spec.live) {
         if (safe) { sleepNpc(spec); continue; }
@@ -2109,7 +2119,16 @@
         range = steerNpc(spec, sys, t, dtSim, ship);
         spec.modeSince += dtSim;
 
-        if (range > SLEEP_RANGE) { sleepNpc(spec); continue; }
+        if (range > (loud ? SLEEP_RANGE * ECM_REACH : SLEEP_RANGE)) { sleepNpc(spec); continue; }
+        /* An unidentified jammer: the law comes back for another look, and
+         * one that keeps watching writes it up. */
+        if (loud && spec.kind === 'police' && spec.faction !== 'outlaw') {
+          if (spec.mode === 'inspect' && spec.scanned) { spec.scanned = false; spec.scanHoldTime = 0; }
+          if (range < ECM_CITE_KM && !spec.jamCited) {
+            spec.jamSeen = (spec.jamSeen || 0) + dtSim;
+            if (spec.jamSeen >= ECM_CITE_S) { spec.jamCited = true; result.jamReport = spec; }
+          }
+        }
 
         /* A pirate that has actually matched course and closed is in a
          * position to demand something. Requiring BOTH proximity and a low
@@ -5776,7 +5795,7 @@
     heatFlux: heatFlux,
     updateHeating: updateHeating,
     updateGear: updateGear, GEAR_TRAVEL_TIME: GEAR_TRAVEL_TIME,
-    HEAT_LIMIT: HEAT_LIMIT, BASE_HEAT_SHED: BASE_HEAT_SHED, SHIELD_HEAT_DRAIN: SHIELD_HEAT_DRAIN,
+    HEAT_LIMIT: HEAT_LIMIT, ECM_REACH: ECM_REACH, ECM_CITE_KM: ECM_CITE_KM, ECM_CITE_S: ECM_CITE_S, BASE_HEAT_SHED: BASE_HEAT_SHED, SHIELD_HEAT_DRAIN: SHIELD_HEAT_DRAIN,
     heatLineAlt: heatLineAlt,
     predictTrajectory: predictTrajectory,
     beginPrediction: beginPrediction,

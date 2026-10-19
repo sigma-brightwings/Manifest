@@ -4664,6 +4664,8 @@
     var sys = G.sys, ship = G.ship;
     var crime = effectiveCrime(G, sys);
     var searchChance = Math.max(SEARCH_FLOOR, 1 - (crime / 100) * 0.85);
+    /* A hull jamming with no ID gets searched, always. */
+    if (ship.ecmLoud) searchChance = 1;
 
     if (Math.random() >= searchChance) {
       if (hooks && hooks.say) hooks.say(spec.name + ': routine hail — you are clear', 4);
@@ -6142,8 +6144,8 @@
   function toggleEcm(G, hooks) {
     if (!hasEcm(G.ship)) { if (hooks && hooks.say) hooks.say('No ECM jammer fitted', 3); return false; }
     G.ecmOn = !G.ecmOn;
-    if (hooks && hooks.say) hooks.say(G.ecmOn ? 'ECM ON - seekers within ' + ECM.range + ' km may lose lock. It runs hot.'
-                                              : 'ECM off', 3);
+    if (hooks && hooks.say) hooks.say(G.ecmOn ? 'ECM ON - seekers within ' + ECM.range + ' km may lose lock. You are lit up on every scope in the system, with no ID code.'
+                                              : 'ECM off', 4);
     if (hooks && hooks.sound) hooks.sound('click');
     return G.ecmOn;
   }
@@ -6158,7 +6160,10 @@
       });
     }
     var s = G.ship;
-    if (!G.ecmOn || !hasEcm(s) || s.docked || s.landed || !(dt > 0)) return;
+    /* Loud, for Sim.updateEncounters and the scan: a jammer is the
+     * brightest thing on every scope in the system, with no ID code. */
+    s.ecmLoud = !!(G.ecmOn && hasEcm(s) && !s.docked && !s.landed);
+    if (!s.ecmLoud || !(dt > 0)) return;
     addHeat(G, ECM.heat * dt);
     var p = 1 - Math.exp(-ECM.loseRate * dt);
     (sys.missiles || []).forEach(function (ms) {
@@ -6181,6 +6186,19 @@
     var kick = V.norm({ x: Math.random() - 0.5, y: Math.random() - 0.5, z: Math.random() - 0.5 });
     spawnDecoy(sys, t, tgt.live.pos, V.addScaled(tgt.live.vel, kick, DECOY.kick), NPC_DECOY_PULL, DECOY.life,
                function (m) { return m === ms; });
+  }
+
+  /* An unidentified jammer, written up by the cop that watched it. */
+  var JAM_CITATION = 250;
+  function citeJamming(G, spec, hooks) {
+    var fac = spec.faction || 'civil';
+    G.wanted = G.wanted || {};
+    G.wanted[fac] = (G.wanted[fac] || 0) + JAM_CITATION;
+    if (hooks && hooks.say) {
+      hooks.say((spec.name || 'Police') + ': "Unidentified contact, you are jamming. Cut it and squawk your ID." - cited ' +
+                JAM_CITATION + ' cr, bounty now ' + Math.round(G.wanted[fac]) + ' cr', 7);
+    }
+    if (hooks && hooks.sound) hooks.sound('warn');
   }
 
   function updateMissiles(sys, G, t, dtSim, hooks) {
@@ -7520,7 +7538,7 @@
     TRADER_GUN: TRADER_GUN, NPC_GUN: NPC_GUN, SYNDICATE_GUN: SYNDICATE_GUN,
     POLICE_GUN: POLICE_GUN, POLICE_MISSILE: POLICE_MISSILE, firePoliceMissile: firePoliceMissile,
     DECOY: DECOY, FLARE: FLARE, ECM: ECM, PD: PD, decoyRackSize: decoyRackSize, hasEcm: hasEcm,
-    launchDecoy: launchDecoy, dropFlare: dropFlare, toggleEcm: toggleEcm,
+    launchDecoy: launchDecoy, dropFlare: dropFlare, toggleEcm: toggleEcm, citeJamming: citeJamming, JAM_CITATION: JAM_CITATION,
     updateCountermeasures: updateCountermeasures, spawnDecoy: spawnDecoy, updateTurret: updateTurret,
     updateMissiles: updateMissiles,
     SYNDICATE_TRUST: SYNDICATE_TRUST,

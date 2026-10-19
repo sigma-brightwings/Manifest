@@ -5417,6 +5417,7 @@
      * player choice the way a pirate's demand has one, so it is handled
      * here rather than waiting on a key press. */
     if (G.encounter.scanNow) Combat.resolveScan(G, G.encounter.scanNow, HOOKS);
+    if (G.encounter.jamReport) Combat.citeJamming(G, G.encounter.jamReport, HOOKS);
 
     if (G.encounter.warpCap < Infinity) {
       var maxIdx = 0;
@@ -12393,7 +12394,7 @@
       var dRk = Combat.decoyRackSize(G.ship), ecmF = Combat.hasEcm(G.ship);
       var mLabel = 'INCOMING ' + incoming.length + '  ·  ' + fmtDist(nd) +
                    (dRk ? '  ·  DECOYS ' + (G.ship.decoys || 0) + ' [O]' : '') +
-                   (ecmF ? '  ·  ECM ' + (G.ecmOn ? 'ON' : 'OFF') + ' [SHIFT+O]' : '');
+                   (ecmF ? '  ·  ECM ' + (G.ecmOn ? 'ON - LOUD, NO ID' : 'OFF') + ' [SHIFT+O]' : '');
       var mw = ctx.measureText(mLabel).width + 24, mx = (w - mw) / 2, my = h / 2 + 60;
       panel(ctx, mx, my, mw, 24, false);
       var blink = (Math.floor(performance.now() / 300) % 2) === 0;

@@ -2183,6 +2183,63 @@ section('--- countermeasures (2026-10-18) ---');
   check('a trader has none', tr7.decoysLeft === undefined);
 })();
 
+section('--- jamming is loud, with no ID (2026-10-19) ---');
+(function () {
+  var G = makeG();
+  var cop = (G.sys.patrols || []).filter(function (p) { return p.kind === 'police' && p.faction !== 'outlaw'; })[0];
+  check('(fixture) a lawful police patrol to be seen by', !!cop);
+  if (!cop) return;
+  function placeAt(km) {
+    cop.live = null; cop.scanned = false; cop.jamSeen = 0; cop.jamCited = false;
+    var st = Sim.patrolState(cop, G.sys, G.t);
+    G.ship.pos = V.addScaled(st.pos, { x: 1, y: 0, z: 0 }, km);
+    G.ship.vel = V.clone(st.vel);
+  }
+  placeAt(Sim.WAKE_RANGE * 2);
+  G.ship.ecmLoud = false;
+  Sim.updateEncounters(G.sys, G.t, 0.01, G.ship);
+  check('quiet, a cop twice the wake range off does not stir', !cop.live);
+  placeAt(Sim.WAKE_RANGE * 2);
+  G.ship.ecmLoud = true;
+  Sim.updateEncounters(G.sys, G.t, 0.01, G.ship);
+  check('jamming, it does - you are lit up', !!cop.live);
+  /* Watched for long enough, close in, it writes you up. */
+  placeAt(200);
+  G.ship.ecmLoud = true;
+  var rep = null;
+  /* The test ship is not flown, so hold it 200 km off the cop each step
+   * (otherwise the woken cop drifts off at orbital speed). */
+  for (var k = 0; k < 60 && !rep; k++) {
+    if (cop.live) { G.ship.pos = V.addScaled(cop.live.pos, { x: 1, y: 0, z: 0 }, 200); G.ship.vel = V.clone(cop.live.vel); }
+    var r = Sim.updateEncounters(G.sys, G.t, 0.5, G.ship); rep = r.jamReport || null;
+  }
+  check('a cop that watches a jammer cites it', !!rep && rep.kind === 'police' && rep.faction !== 'outlaw' && rep.jamSeen >= Sim.ECM_CITE_S,
+        rep ? (rep === cop ? 'the one placed' : 'a nearer cop, ' + (rep.name || rep.id)) + ' after ' + rep.jamSeen.toFixed(1) + ' s' : 'none');
+  var before = G.wanted[cop.faction] || 0;
+  if (rep) cop = rep;
+  before = G.wanted[cop.faction] || 0;
+  Combat.citeJamming(G, cop, HOOKS);
+  check('for a citation', (G.wanted[cop.faction] || 0) - before === Combat.JAM_CITATION);
+  var again = null;
+  for (var j = 0; j < 60; j++) { var r2 = Sim.updateEncounters(G.sys, G.t, 0.5, G.ship); if (r2.jamReport === cop) again = r2.jamReport; }
+  check('once a cop, not every frame', again === null);
+  /* And the hold is searched, always. */
+  var G2 = makeG(); G2.sys.crimeScore = 100;
+  var p2 = fakeVictim(G2, { kind: 'police', cls: 'police', faction: 'lawfac' });
+  var realRandom = Math.random;
+  Math.random = function () { return 0.99; };
+  G2.ship.ecmLoud = true;
+  var sr = Combat.resolveScan(G2, p2, HOOKS);
+  Math.random = realRandom;
+  check('a jamming hull is always searched', sr.searched === true);
+  var G3 = makeG(); G3.ship.fit.internal0 = 'ecm'; G3.ecmOn = true;
+  Combat.updateCountermeasures(G3.sys, G3, 0, 0.1, HOOKS);
+  var loudOut = G3.ship.ecmLoud;
+  G3.ecmOn = false;
+  Combat.updateCountermeasures(G3.sys, G3, 0.1, 0.1, HOOKS);
+  check('the switch is what makes you loud', loudOut === true && G3.ship.ecmLoud === false);
+})();
+
 section('--- stolen ore and the scan (prospectors, 2026-10-18) ---');
 (function () {
   require('../src/claims.js');
