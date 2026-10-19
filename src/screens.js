@@ -2900,6 +2900,18 @@
       })(Combat.MISSILES[mk]);
     }
 
+    /* Decoy charges, the same way: they need the launcher. */
+    var dRack = Combat.decoyRackSize ? Combat.decoyRackSize(s) : 0;
+    if (dRack) {
+      var dFull = (s.decoys || 0) >= dRack;
+      row('DECOY CHARGE - ' + Combat.DECOY.price + ' cr',
+          'aboard ' + (s.decoys || 0) + ' / ' + dRack + (dFull ? '  ·  rack full' : '  "' + Combat.DECOY.pitch + '"'),
+          function () {
+            var r = Combat.buyOutfit(G, 'decoy', null);
+            say(r > 0 ? 'Decoy loaded - ' + s.decoys + ' aboard' : 'Not enough credits', 4);
+          }, dFull);
+    }
+
     var rack = Combat.sinkRackSize(s);
     if (rack) {
       var sFull = s.sinks >= rack;

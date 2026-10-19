@@ -2103,6 +2103,86 @@ section('--- the law has bite (2026-10-18) ---');
   check('no missiles at somebody who is not wanted', !(G3.sys.missiles || []).length);
 })();
 
+section('--- countermeasures (2026-10-18) ---');
+(function () {
+  var realRandom = Math.random;
+  function inbound(G, km) {
+    var cop = fakeVictim(G, { kind: 'police', cls: 'police', faction: 'lawfac', range: km });
+    cop.hostileToPlayer = true;
+    Math.random = function () { return 0.99; };
+    Combat.firePoliceMissile(G.sys, G, 0, cop, HOOKS);
+    Math.random = realRandom;
+    return G.sys.missiles[G.sys.missiles.length - 1];
+  }
+  function fly(G, secs) { var t = 0; while (t < secs && (G.sys.missiles || []).length) { t += 0.25; Combat.updateMissiles(G.sys, G, t, 0.25, HOOKS); Combat.updateCountermeasures(G.sys, G, t, 0.25, HOOKS); } return t; }
+  function armour(G) { return (G.ship.shieldHp || 0) + G.ship.hullHp; }
+
+  var G = makeG(true);
+  check('no launcher, no charges for sale', Combat.buyOutfit(G, 'decoy', null) === null);
+  G.ship.fit.utility0 = 'decoylauncher';
+  check('with one, they rack', Combat.buyOutfit(G, 'decoy', null) > 0 && G.ship.decoys === 1);
+  G.ship.decoys = 3;
+  var ms = inbound(G, 1.2);
+  Math.random = function () { return 0.4; };
+  Combat.launchDecoy(G.sys, G, 0, HOOKS);
+  Math.random = realRandom;
+  check('a decoy fired late lures the seeker', !!ms.decoy && G.ship.decoys === 2);
+  var hp = armour(G); fly(G, 60);
+  check('and it goes for the decoy, not you', armour(G) === hp);
+
+  var G2 = makeG(true); G2.ship.fit.utility0 = 'decoylauncher'; G2.ship.decoys = 3;
+  var far = inbound(G2, 10);
+  Math.random = function () { return 0.4; };
+  Combat.launchDecoy(G2.sys, G2, 0, HOOKS);
+  Math.random = realRandom;
+  check('the same roll fired early does not', !far.decoy);
+
+  var G3 = makeG(true);
+  var hm = inbound(G3, 3);
+  /* At 3 km a charge lures at 0.5 x 0.8 = 0.4, the flare at 0.85 x 0.8 = 0.68: a 0.6 roll splits them. */
+  Math.random = function () { return 0.6; };
+  var fl = Combat.dropFlare(G3.sys, G3, 0, G3.ship.pos, G3.ship.vel, HOOKS);
+  Math.random = realRandom;
+  check('a tonne of radioactives overboard is a better flare than a charge', !!hm.decoy && fl.hot &&
+        Combat.FLARE.pull > Combat.DECOY.pull && Combat.FLARE.life > Combat.DECOY.life);
+
+  var G4 = makeG(true); G4.ship.fit.internal0 = 'ecm';
+  var em = inbound(G4, 8);
+  check('ECM needs the jammer fitted', Combat.toggleEcm(makeG(true), HOOKS) === false);
+  Combat.toggleEcm(G4, HOOKS);
+  Math.random = function () { return 0; };
+  Combat.updateCountermeasures(G4.sys, G4, 0.1, 0.1, HOOKS);
+  Math.random = realRandom;
+  var hp4 = armour(G4); fly(G4, 60);
+  check('a jammed seeker loses lock and misses', em.lost && armour(G4) === hp4 && G4.ship.heat > 0);
+
+  var G5 = makeG(true); G5.ship.turret = 'turret';
+  var pm = inbound(G5, 2);
+  Math.random = function () { return 0; };
+  Combat.updateTurret(G5.sys, G5, 0, HOOKS);
+  Math.random = realRandom;
+  check('the turret shoots down a seeker inside 3 km', pm.dead === true);
+
+  /* The law's decoys against yours. */
+  var G6 = makeG(true);
+  var cop6 = fakeVictim(G6, { kind: 'police', cls: 'police', faction: 'lawfac', range: 3 });
+  (G6.sys.missiles = []).push({ pos: V.clone(G6.ship.pos), vel: V.clone(G6.ship.vel), target: cop6,
+    dmg: 42, accel: 0.09, born: 0, dies: 60, fuse: 0.09 });
+  Math.random = function () { return 0; };
+  var t6 = 0; while (t6 < 60 && G6.sys.missiles.length) { t6 += 0.1; Combat.updateMissiles(G6.sys, G6, t6, 0.1, HOOKS); }
+  Math.random = realRandom;
+  check('police drop a decoy at your missile', cop6.decoysLeft === 5 && !(cop6.hullHp < (cop6.hullMax || Infinity)),
+        'decoys left ' + cop6.decoysLeft);
+  var G7 = makeG(true);
+  var tr7 = fakeVictim(G7, { range: 3 });
+  (G7.sys.missiles = []).push({ pos: V.clone(G7.ship.pos), vel: V.clone(G7.ship.vel), target: tr7,
+    dmg: 42, accel: 0.09, born: 0, dies: 60, fuse: 0.09 });
+  Math.random = function () { return 0; };
+  var t7 = 0; while (t7 < 60 && G7.sys.missiles.length) { t7 += 0.1; Combat.updateMissiles(G7.sys, G7, t7, 0.1, HOOKS); }
+  Math.random = realRandom;
+  check('a trader has none', tr7.decoysLeft === undefined);
+})();
+
 section('--- stolen ore and the scan (prospectors, 2026-10-18) ---');
 (function () {
   require('../src/claims.js');

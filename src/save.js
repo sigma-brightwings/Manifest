@@ -271,7 +271,7 @@
          * backwards, and they cost four strings. `fit` is the truth. */
         gun: s.gun, turret: s.turret, shield: s.shield,
         heatshield: s.heatshield,
-        shieldHp: s.shieldHp, missiles: s.missiles, sinks: s.sinks,
+        shieldHp: s.shieldHp, missiles: s.missiles, sinks: s.sinks, decoys: s.decoys || 0,
         fit: s.fit || {},
         /* Which trigger each hardpoint answers to. Additive, and absent
          * from every save written before fire groups existed — groupOf()
@@ -482,6 +482,7 @@
     s.heatshield = d.heatshield || null;
     s.shieldHp = d.shieldHp || 0; s.missiles = d.missiles || 0;
     s.sinks = d.sinks || 0;
+    s.decoys = d.decoys || 0;
     if (d.reg) s.reg = d.reg;
     s.shipName = d.shipName || null;
     s.bornId = d.bornId || null;

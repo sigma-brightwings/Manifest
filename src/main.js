@@ -1724,6 +1724,12 @@
           say(dr.ok ? dr.text : 'Drone: ' + (dr.why || dr.text || 'nothing to do'), 5);
           if (dr.ok && global.Save) global.Save.store(G);
           break;
+        /* O fires a decoy aft; SHIFT+O switches the ECM jammer. The
+         * countermeasures (Combat, 2026-10-18). */
+        case 'o':
+          if (e.shiftKey) Combat.toggleEcm(G, HOOKS);
+          else Combat.launchDecoy(G.sys, G, G.t, HOOKS);
+          break;
         /* Z is cruise. SHIFT+Z arms or shuts down the military drive —
          * next to it because they are the same question asked of the two
          * drives, and because arming a Chernobyl is a thing you do while
@@ -4454,6 +4460,11 @@
        * thing the player must not immediately re-swallow. See
        * scoopCanisters. */
       if (can) can.armed = false;
+      /* A tonne or more of something very radioactive is the hottest
+       * thing in the sky: a flare (Astra, 2026-10-18). */
+      if (good && (good.waste || cid === 'fissile') && qty >= Combat.FLARE.minTonnes && Combat.dropFlare) {
+        Combat.dropFlare(G.sys, G, G.t, can ? can.pos : G.ship.pos, can ? can.vel : G.ship.vel, HOOKS);
+      }
     }
 
     /* Dumping waste is a crime and resolves at the moment of the act, the
@@ -12365,6 +12376,37 @@
         ctx.fillRect(lx - 4, ly - 12, ctx.measureText(nl).width + 8, 17);
         ctx.fillStyle = scol;
         ctx.fillText(nl, lx, ly);
+      }
+      ctx.restore();
+    }
+
+    /* --- incoming seekers (2026-10-18) ---
+     * How many, the nearest, and what you have to throw at them; an arrow
+     * to the nearest when it is off the glass, a red diamond on it when it
+     * is not. Lured or jammed ones are not counted - they are not coming. */
+    var incoming = (G.sys.missiles || []).filter(function (m) { return m.atPlayer && !m.dead && !m.lost && !m.decoy; });
+    if (incoming.length && flying()) {
+      var nm = null, nd = Infinity;
+      incoming.forEach(function (m) { var dm = V.dist(m.pos, G.ship.pos); if (dm < nd) { nd = dm; nm = m; } });
+      ctx.save();
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      var dRk = Combat.decoyRackSize(G.ship), ecmF = Combat.hasEcm(G.ship);
+      var mLabel = 'INCOMING ' + incoming.length + '  ·  ' + fmtDist(nd) +
+                   (dRk ? '  ·  DECOYS ' + (G.ship.decoys || 0) + ' [O]' : '') +
+                   (ecmF ? '  ·  ECM ' + (G.ecmOn ? 'ON' : 'OFF') + ' [SHIFT+O]' : '');
+      var mw = ctx.measureText(mLabel).width + 24, mx = (w - mw) / 2, my = h / 2 + 60;
+      panel(ctx, mx, my, mw, 24, false);
+      var blink = (Math.floor(performance.now() / 300) % 2) === 0;
+      ctx.fillStyle = blink ? '#ff5a4a' : '#ff9a8a';
+      ctx.fillText(mLabel, mx + 12, my + 16);
+      var mp = G.cam.project(nm.pos);
+      if (mp && !mp.behindEye && mp.x > 30 && mp.x < w - 30 && mp.y > 30 && mp.y < deckTop(h) - 30) {
+        ctx.strokeStyle = '#ff5a4a'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(mp.x, mp.y - 9); ctx.lineTo(mp.x + 9, mp.y); ctx.lineTo(mp.x, mp.y + 9); ctx.lineTo(mp.x - 9, mp.y); ctx.closePath(); ctx.stroke();
+      } else {
+        var mv = V.sub(nm.pos, G.cam.eye);
+        var msx = V.dot(mv, G.cam.r), msy = V.dot(mv, G.cam.u), ml = Math.hypot(msx, msy) || 1;
+        Render.drawArrow(ctx, w / 2 + msx / ml * 90, h / 2 - msy / ml * 90, msx / ml, -msy / ml, 34, '#ff5a4a', 3, 12);
       }
       ctx.restore();
     }

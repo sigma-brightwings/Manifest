@@ -130,6 +130,24 @@ Astra has seen it working.
   runs out. Small ring chunks can be cut away in a session; big rocks scar.
   Torpedoes take their chunks off the same mass. The CUTTING bar shows
   tonnes toward the next piece. Saved.
+- **2026-10-18: countermeasures against missiles.** Four, and each beats
+  a seeker a different way. A **decoy launcher** (utility, 2,600 cr, rack
+  of 12 charges at 60 cr each from any yard): **O** fires one aft, and each
+  seeker coming for you rolls against it - far likelier when it is close to
+  impact, so the last moment is the moment. **Radioactives as a flare**
+  (Astra's idea): jettison a tonne or more of waste or fissiles with
+  seekers inbound and it is a very hot, oxygen-free flare, much better than
+  a charge and burning longer; dumping waste is still the crime it was.
+  **Point defence**: the auto-turret shoots at a seeker inside 3 km before
+  anything else, and a hit kills it. An **ECM jammer** (internal, 6,800
+  cr): **SHIFT+O** switches it; while on, every seeker within 12 km has a
+  steady chance each second of losing lock, and it puts heat in the hull.
+  A lured seeker chases the decoy and, when that burns out, flies on blind
+  until its fuel is gone. Police and navy carry six decoys a hull and drop
+  one at your missile when it is 4 km out; traders and pirates carry none.
+  With seekers inbound, a flashing INCOMING panel under the crosshair gives
+  the count, the nearest range, your decoys and the ECM state, with a red
+  marker on the nearest one or an arrow to it.
 - **2026-10-18: past the heat shield, the battle shield; and the law has
   bite.** Skimming is an elliptical pass nose-first through the top of a
   giant's air: deeper fills faster, but below a certain depth the heat

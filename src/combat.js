@@ -344,6 +344,10 @@
      * shield, so stacking them would burn 2 MW and four tonnes for no
      * effect — a purchase that silently does nothing is the worst thing a
      * shop can sell you, and the fit check is the right place to say no. */
+    ecm: { id: 'ecm', name: 'ECM jammer', slot: 'internal', kind: 'ecm',
+           price: 6800, power: 2.5, mass: 2, unique: true,
+           minDev: 0.5, minStanding: 0, minCrime: 0, grey: false,
+           pitch: 'Makes a seeker doubt itself. Runs hot doing it.' },
     shield: { id: 'shield', name: 'Shield generator', slot: 'internal',
               kind: 'shield', price: 4800, power: 2.0, mass: 4, unique: true,
               cap: 40, regen: 1.2, regenDelay: 6,
@@ -465,6 +469,13 @@
                     unique: true, rack: 3,
                     minDev: 0.55, minStanding: 0, minCrime: 0, grey: false,
                     pitch: 'Three chances to fire for longer than your hull agrees with.' },
+
+    /* COUNTERMEASURES (2026-10-18) - see DECOY, below the missiles. */
+    decoylauncher: { id: 'decoylauncher', name: 'Decoy launcher', slot: 'utility',
+                     kind: 'decoyrack', price: 2600, power: 0.4, mass: 1,
+                     unique: true, rack: 12,
+                     minDev: 0.35, minStanding: -100, minCrime: 0, grey: false,
+                     pitch: 'Twelve hot little lies, fired aft. Best told at the last second.' },
 
     /* ---- scanners ---------------------------------------------------------
      * Two tiers of one question — how much fight is left in that ship — and
@@ -2751,6 +2762,7 @@
     if (ship.heat === undefined) ship.heat = 0;
     if (ship.missiles === undefined) ship.missiles = 0;
     if (ship.sinks === undefined) ship.sinks = 0;
+    if (ship.decoys === undefined) ship.decoys = 0;
     /* Slots last: migrateFit reads the four legacy fields above and turns
      * them into a fit, then syncLegacy writes them back in the new
      * spelling. A ship that has never seen this code comes out of it with
@@ -5784,6 +5796,27 @@
     if (t < (G.turretCoolUntil || 0)) return;
     var now = (typeof performance !== 'undefined' ? performance.now() : 0) / 1000;
 
+    /* POINT DEFENCE first: a seeker coming for you inside PD.range is the
+     * target, whatever else is hostile. No slew for it - the mount is
+     * already tracking what it is warning you about. */
+    var inc = null, incD = PD.range;
+    (sys.missiles || []).forEach(function (m) {
+      if (!m.atPlayer || m.dead || m.lost || m.decoy) return;
+      var dm = V.dist(m.pos, s.pos);
+      if (dm < incD) { inc = m; incD = dm; }
+    });
+    if (inc) {
+      G.turretCoolUntil = t + tur.cooldown / man.rate;
+      (G.beams = G.beams || []).push({ from: V.clone(s.pos), to: V.clone(inc.pos), color: tur.color, until: now + 0.07 });
+      addHeat(G, (tur.heat || 0) * (tur.cooldown || 0));
+      if (hooks && hooks.sound) hooks.sound('turret');
+      if (Math.random() < PD.hit) {
+        inc.dead = true;
+        (G.explosions = G.explosions || []).push({ pos: V.clone(inc.pos), at: now * 1000, size: 0.5 });
+        if (hooks && hooks.say) hooks.say('Turret: seeker down', 2);
+      }
+      return;
+    }
     var best = null, bestD = tur.range;
     var patrols = sys.patrols || [];
     for (var i = 0; i < patrols.length; i++) {
@@ -6014,6 +6047,142 @@
     if (hooks && hooks.sound) hooks.sound('warn');
   }
 
+
+  /* ---- countermeasures (Astra, 2026-10-18: "we need countermeasures
+   * against missiles") -----------------------------------------------------
+   * Four, chosen with her, and each answers a seeker differently:
+   *
+   *   DECOYS (O): a utility launcher and a rack of charges bought like heat
+   *     sinks. A charge goes out aft, hot and bright for a few seconds; each
+   *     seeker coming for you rolls once against it, likelier the closer it
+   *     is to impact - so a decoy fired at the last moment works best, and
+   *     one fired the moment the warning sounds is a coin toss.
+   *   RADIOACTIVES: Astra - "dumping radioactives would be a very hot 1t
+   *     object, maybe working like a no oxygen flare. You'd use a
+   *     high-activity isotope, and a lot of it." Jettison a tonne or more of
+   *     waste or fissiles with seekers inbound and it is a flare far better
+   *     than a charge, burning for longer. Dumping waste is still a crime.
+   *   POINT DEFENCE: the auto-turret shoots a seeker inside 3 km before it
+   *     shoots a ship. A hit kills it.
+   *   ECM (SHIFT+O): an internal jammer. While it is on, every seeker
+   *     within 12 km has a steady chance a second of losing lock and
+   *     flying on blind. It costs heat.
+   *
+   * The law and the navy carry decoys against YOUR missiles (Astra: navy and
+   * police only), six a hull, dropped when a seeker is 4 km out.
+   *
+   * A seeker that is lured chases the decoy; when the decoy burns out it
+   * has lost lock and flies straight until its fuel is gone. */
+  var DECOY = { id: 'decoy', name: 'Decoy charge', price: 60, pull: 0.5, life: 8, kick: 0.05,
+                pitch: 'Hot, bright, and not you.' };
+  var FLARE = { pull: 0.85, life: 25, minTonnes: 1 };
+  var ECM = { range: 12, loseRate: 0.12, heat: 4 };
+  var PD = { range: 3, hit: 0.45 };
+  var NPC_DECOYS = 6, NPC_DECOY_RANGE = 4, NPC_DECOY_PULL = 0.55;
+
+  function decoyRackSize(ship) {
+    var list = fittedList(ship);
+    for (var i = 0; i < list.length; i++) if (list[i].item.kind === 'decoyrack') return list[i].item.rack;
+    return 0;
+  }
+  function hasEcm(ship) {
+    var list = fittedList(ship);
+    for (var i = 0; i < list.length; i++) if (list[i].item.kind === 'ecm') return true;
+    return false;
+  }
+  /* Closer to impact, likelier to bite: the seeker is looking at a small
+   * patch of sky and the decoy fills it. */
+  function lureOdds(d) { return d < 1.5 ? 1 : d < 6 ? 0.8 : 0.5; }
+
+  function spawnDecoy(sys, t, pos, vel, pull, life, against) {
+    var dc = { pos: V.clone(pos), vel: V.clone(vel), born: t, dies: t + life, pull: pull, seduced: 0 };
+    (sys.decoys = sys.decoys || []).push(dc);
+    (sys.missiles || []).forEach(function (ms) {
+      if (ms.torp || ms.lost || ms.decoy || ms.dead) return;
+      if (!against(ms)) return;
+      var d = V.dist(ms.pos, pos);
+      if (d > 15) return;
+      if (Math.random() < pull * lureOdds(d)) { ms.decoy = dc; dc.seduced++; }
+    });
+    return dc;
+  }
+
+  function launchDecoy(sys, G, t, hooks) {
+    var s = G.ship;
+    function no(why) { if (hooks && hooks.say) hooks.say(why, 3); return false; }
+    if (!decoyRackSize(s)) return no('No decoy launcher fitted');
+    if (!(s.decoys > 0)) return no('Decoy rack empty - charges at any yard');
+    if (s.docked || s.landed) return no('Not from a berth or the ground');
+    s.decoys -= 1;
+    var aft = V.scale(s.fwd, -1);
+    var dc = spawnDecoy(sys, t, V.addScaled(s.pos, aft, 0.05), V.addScaled(s.vel, aft, DECOY.kick),
+                        DECOY.pull, DECOY.life, function (ms) { return ms.atPlayer; });
+    if (hooks && hooks.say) {
+      hooks.say(dc.seduced ? 'DECOY AWAY - ' + dc.seduced + ' seeker' + (dc.seduced === 1 ? '' : 's') +
+                             ' chasing it  ·  ' + s.decoys + ' left'
+                           : 'Decoy away - nothing took it  ·  ' + s.decoys + ' left', 3);
+    }
+    if (hooks && hooks.sound) hooks.sound('click');
+    return true;
+  }
+
+  /* A tonne or more of something very radioactive, overboard: the hottest
+   * thing in the sky for half a minute. Called by the jettison. */
+  function dropFlare(sys, G, t, pos, vel, hooks) {
+    var inbound = (sys.missiles || []).some(function (m) { return m.atPlayer && !m.lost && !m.dead; });
+    var dc = spawnDecoy(sys, t, pos, vel, FLARE.pull, FLARE.life, function (ms) { return ms.atPlayer; });
+    dc.hot = true;
+    if (inbound && hooks && hooks.say) {
+      hooks.say(dc.seduced ? 'HOT DUMP - ' + dc.seduced + ' seeker' + (dc.seduced === 1 ? '' : 's') + ' chasing the isotope'
+                           : 'Hot dump - the seekers stayed on you', 4);
+    }
+    return dc;
+  }
+
+  function toggleEcm(G, hooks) {
+    if (!hasEcm(G.ship)) { if (hooks && hooks.say) hooks.say('No ECM jammer fitted', 3); return false; }
+    G.ecmOn = !G.ecmOn;
+    if (hooks && hooks.say) hooks.say(G.ecmOn ? 'ECM ON - seekers within ' + ECM.range + ' km may lose lock. It runs hot.'
+                                              : 'ECM off', 3);
+    if (hooks && hooks.sound) hooks.sound('click');
+    return G.ecmOn;
+  }
+
+  /* Once a frame: decoys drift and burn out; the jammer works. */
+  function updateCountermeasures(sys, G, t, dt, hooks) {
+    if (sys.decoys && sys.decoys.length) {
+      sys.decoys = sys.decoys.filter(function (dc) {
+        if (t >= dc.dies) return false;
+        dc.pos = V.addScaled(dc.pos, dc.vel, dt);
+        return true;
+      });
+    }
+    var s = G.ship;
+    if (!G.ecmOn || !hasEcm(s) || s.docked || s.landed || !(dt > 0)) return;
+    addHeat(G, ECM.heat * dt);
+    var p = 1 - Math.exp(-ECM.loseRate * dt);
+    (sys.missiles || []).forEach(function (ms) {
+      if (!ms.atPlayer || ms.lost || ms.dead || ms.decoy) return;
+      if (V.dist(ms.pos, s.pos) > ECM.range) return;
+      if (Math.random() < p) {
+        ms.lost = true;
+        if (hooks && hooks.say) hooks.say('ECM - a seeker has lost lock', 3);
+      }
+    });
+  }
+
+  /* The law's decoys against your missile: once, when it is 4 km out. */
+  function npcDecoy(sys, t, ms, tgt) {
+    var sp = tgt.live && tgt.live.spec ? tgt.live.spec : tgt;
+    if (!sp || (sp.kind !== 'police' && sp.kind !== 'navy')) return;
+    if (sp.decoysLeft === undefined) sp.decoysLeft = NPC_DECOYS;
+    if (!(sp.decoysLeft > 0)) return;
+    sp.decoysLeft -= 1;
+    var kick = V.norm({ x: Math.random() - 0.5, y: Math.random() - 0.5, z: Math.random() - 0.5 });
+    spawnDecoy(sys, t, tgt.live.pos, V.addScaled(tgt.live.vel, kick, DECOY.kick), NPC_DECOY_PULL, DECOY.life,
+               function (m) { return m === ms; });
+  }
+
   function updateMissiles(sys, G, t, dtSim, hooks) {
     var list = sys.missiles;
     if (!list || !list.length) return;
@@ -6023,9 +6192,22 @@
       if (ms.torp) { keep.push(ms); continue; }               // mining.js flies these
       /* At the player: the chase reads your ship; a berth or the ground
        * is cover. */
+      if (ms.dead || t >= ms.dies) continue;
+      /* No lock: straight on until the motor is spent. */
+      if (ms.lost) { ms.pos = V.addScaled(ms.pos, ms.vel, Math.max(0, dtSim)); keep.push(ms); continue; }
       var tgt = ms.atPlayer ? ((G.ship.docked || G.ship.landed || G.ship.crashed) ? null : { live: G.ship })
                             : ms.target;
-      if (!tgt || t >= ms.dies || tgt.dead || !tgt.live) continue;    // fuel out, or nothing left to chase
+      if (!tgt || tgt.dead || !tgt.live) continue;    // nothing left to chase
+      /* The law drops a decoy at a seeker 4 km out. */
+      if (!ms.atPlayer && !ms.decoy && !ms.npcRolled && V.dist(ms.pos, tgt.live.pos) < NPC_DECOY_RANGE) {
+        ms.npcRolled = true;
+        npcDecoy(sys, t, ms, tgt);
+      }
+      /* Lured: the decoy is the target; when it burns out, the lock is gone. */
+      if (ms.decoy) {
+        if (t >= ms.decoy.dies) { ms.decoy = null; ms.lost = true; keep.push(ms); continue; }
+        tgt = { live: ms.decoy };
+      }
 
       var left = Math.max(0, dtSim), guard = 0;
       var hitIt = false;
@@ -6059,7 +6241,8 @@
         /* No delivery and no direction: a warhead has no variety, and it goes
          * off ON the hull rather than arriving from anywhere. Both arguments
          * are optional precisely so this line does not have to lie. */
-        if (ms.atPlayer) damagePlayer(G, ms.dmg, hooks, null, V.clone(ms.pos));
+        if (ms.decoy) { /* it got the decoy */ }
+        else if (ms.atPlayer) damagePlayer(G, ms.dmg, hooks, null, V.clone(ms.pos));
         else damageNpc(sys, G, tgt, ms.dmg, t, hooks);
         if (hooks && hooks.sound) hooks.sound('explosion');
         continue;
@@ -6189,6 +6372,7 @@
     updateSink(G, t, hooks, sys);
     updateTurret(sys, G, t, hooks);
     updateMissiles(sys, G, t, dtSim, hooks);
+    updateCountermeasures(sys, G, t, dtSim, hooks);
     if (global.Mining) global.Mining.updateTorpedoes(sys, G, t, dtSim, hooks);
     updateNpcFire(sys, G, t, dtSim, hooks);
 
@@ -7080,6 +7264,10 @@
       ok = !!item && (existing ? existing.n < item.rack
                                : rackList(s).length < rackSlots(s));
     }
+    else if (kind === 'decoy') {
+      var drack = decoyRackSize(s);
+      item = DECOY; ok = drack > 0 && (s.decoys || 0) < drack;
+    }
     else if (kind === 'sink') {
       /* Charges need the launcher, the way seekers would need a rack if
        * seekers had one yet. */
@@ -7092,7 +7280,7 @@
      * enough to pay it — see lienRefusal for why the line is drawn here.
      * The reason itself is surfaced by the caller, which has somewhere to
      * print it; this contract is numeric and older than the lien. */
-    if (kind !== 'missile' && kind !== 'sink' && lienOwed(G) > 0) return null;
+    if (kind !== 'missile' && kind !== 'sink' && kind !== 'decoy' && lienOwed(G) > 0) return null;
     if (s.credits < item.price) return -item.price;
 
     if (kind === 'missile') {
@@ -7121,6 +7309,7 @@
       return item.price;
     }
     if (kind === 'sink') { s.credits -= item.price; s.sinks++; return item.price; }
+    if (kind === 'decoy') { s.credits -= item.price; s.decoys = (s.decoys || 0) + 1; return item.price; }
 
     /* A gun replaces whatever is in the first hardpoint, which is what the
      * old one-gun-at-a-time shop meant by "buying a gun". Anything else
@@ -7330,6 +7519,9 @@
     WITNESS_RANGE: WITNESS_RANGE, DISTRESS_DELAY: DISTRESS_DELAY,
     TRADER_GUN: TRADER_GUN, NPC_GUN: NPC_GUN, SYNDICATE_GUN: SYNDICATE_GUN,
     POLICE_GUN: POLICE_GUN, POLICE_MISSILE: POLICE_MISSILE, firePoliceMissile: firePoliceMissile,
+    DECOY: DECOY, FLARE: FLARE, ECM: ECM, PD: PD, decoyRackSize: decoyRackSize, hasEcm: hasEcm,
+    launchDecoy: launchDecoy, dropFlare: dropFlare, toggleEcm: toggleEcm,
+    updateCountermeasures: updateCountermeasures, spawnDecoy: spawnDecoy, updateTurret: updateTurret,
     updateMissiles: updateMissiles,
     SYNDICATE_TRUST: SYNDICATE_TRUST,
     updateNpcFire: updateNpcFire,
