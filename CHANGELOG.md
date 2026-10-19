@@ -130,6 +130,25 @@ Astra has seen it working.
   runs out. Small ring chunks can be cut away in a session; big rocks scar.
   Torpedoes take their chunks off the same mass. The CUTTING bar shows
   tonnes toward the next piece. Saved.
+- **2026-10-18: past the heat shield, the battle shield; and the law has
+  bite.** Skimming is an elliptical pass nose-first through the top of a
+  giant's air: deeper fills faster, but below a certain depth the heat
+  shield cannot shed the friction. Heat over the limit now burns the
+  battle shield before it touches the hull - fast (a full shield lasts
+  about fifteen seconds at the worst), but long enough to pull the nose up
+  and raise the periapsis - and it does not recharge while it burns. The
+  RAM SCOOP panel has a second row: the altitude the heat shield holds
+  above at your speed, where you are, and your periapsis, coloured when
+  you or your periapsis are below the line. A warning says when the
+  battle shield starts burning. Separately, police were no threat to a
+  fleeing starter ship (their gun did 4.5 a second at best and could not
+  break a 40-point shield). Lawful police now carry a heavier gun (10 a
+  second, 16 km, steadier against a runner) and three missiles each for a
+  fugitive, fired from up to 30 km when you are running or your shield is
+  up, one every 18 seconds, with a MISSILE LAUNCH warning. A police
+  missile takes most of a full shield; it is slower than a Hawk and burns
+  out after 40 seconds, so running early from far out escapes it and
+  running late from close in does not. Docking or landing is cover.
 - **2026-10-18: the gas skimmer is a ram scoop.** Astra: skimming means
   going into the atmosphere face first, the scoop collecting gas as a ram
   scoop. The intake's mouth is now on the nose: what it takes is density x

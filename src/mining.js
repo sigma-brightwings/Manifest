@@ -423,8 +423,12 @@
     var frac = grade * (0.55 + 0.45 * (1 - Math.exp(-depth / (4 * at.scaleHeight))));
     var tonnes = rho * v * 1000 * SKIM_AREA * face * dt / 1000 * frac;  // kg/m^3 * m/s * m^2 * s -> kg -> t
     var room = s.cargoCap - S.cargoMass(s);
+    /* Where the heat shield stops coping at this speed, for the panel. */
+    var shed = (S.BASE_HEAT_SHED || 18) + (s.heatShed || 0);
+    var line = S.heatLineAlt ? S.heatLineAlt(body, v, shed) : 0;
     G.skimming = { body: body, rho: rho, v: v, frac: frac, rate: tonnes / dt, full: room <= 0.01,
-                   poor: grade < SKIM_MIN_GRADE, align: align, face: face, airDir: airDir };
+                   poor: grade < SKIM_MIN_GRADE, align: align, face: face, airDir: airDir,
+                   alt: alt, lineAlt: line, top: at.top };
     if (room <= 0.01 || grade < SKIM_MIN_GRADE) return 0;
     tonnes = Math.min(tonnes, room);
     s.cargo.hydrogen = (s.cargo.hydrogen || 0) + tonnes;

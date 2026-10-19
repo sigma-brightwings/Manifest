@@ -1670,6 +1670,20 @@
    * has. */
   var SYNDICATE_GUN = { dmg: 11, range: 18, cooldown: 0.85, heat: 9 };
 
+  /* THE LAW'S OWN GUN, and its missiles (Astra, 2026-10-18): the starting
+   * ship could outrun any Mirven police, wanted and under fire, because
+   * NPC_GUN (4.5 dps at best, and a hit chance that collapses at speed)
+   * never got through a 40-point shield that refills. "They need to be
+   * able to, or to be equipped with missiles." Both: a heavier, longer
+   * gun that holds its aim better against a runner, and three missiles a
+   * cruiser for a fugitive - fired when you are running or your shield
+   * is still up. A police missile is slower than a Hawk and burns out
+   * sooner, so running early from far out is a real escape and running
+   * late from close in is not. */
+  var POLICE_GUN = { dmg: 9, range: 16, cooldown: 0.9, heat: 7 };
+  var POLICE_MISSILE = { dmg: 34, accel: 0.05, life: 40, fuse: 0.09, speed0: 0.12,
+                         range: 30, every: 18, rack: 3 };
+
   /* ---- merchantmen shoot back --------------------------------------------
    * Freighters used to carry no guns at all, which made robbing one a
    * chore rather than a decision: you closed, you demanded, and nothing
@@ -5980,6 +5994,26 @@
     if (hooks && hooks.sound) hooks.sound('warn');
   }
 
+  /* A police missile at the player. Same flight as yours (updateMissiles),
+   * marked atPlayer so the chase reads the player's ship. */
+  function firePoliceMissile(sys, G, t, sp, hooks) {
+    var m = POLICE_MISSILE, s = G.ship;
+    var dir = V.norm(V.sub(s.pos, sp.live.pos));
+    (sys.missiles = sys.missiles || []).push({
+      pos: V.addScaled(sp.live.pos, dir, 0.06),
+      vel: V.addScaled(sp.live.vel, dir, m.speed0),
+      atPlayer: true, from: sp.id, dmg: m.dmg, accel: m.accel,
+      born: t, dies: t + m.life, fuse: m.fuse
+    });
+    sp.missilesLeft -= 1;
+    sp.missileAt = t + m.every;
+    if (hooks && hooks.say) {
+      hooks.say('MISSILE LAUNCH - ' + (sp.name || 'police') + ' - ' +
+                Math.round(V.dist(sp.live.pos, s.pos)) + ' km. Burn away early or take it.', 5);
+    }
+    if (hooks && hooks.sound) hooks.sound('warn');
+  }
+
   function updateMissiles(sys, G, t, dtSim, hooks) {
     var list = sys.missiles;
     if (!list || !list.length) return;
@@ -5987,8 +6021,11 @@
     for (var i = 0; i < list.length; i++) {
       var ms = list[i];
       if (ms.torp) { keep.push(ms); continue; }               // mining.js flies these
-      var tgt = ms.target;
-      if (t >= ms.dies || tgt.dead || !tgt.live) continue;    // fuel out, or nothing left to chase
+      /* At the player: the chase reads your ship; a berth or the ground
+       * is cover. */
+      var tgt = ms.atPlayer ? ((G.ship.docked || G.ship.landed || G.ship.crashed) ? null : { live: G.ship })
+                            : ms.target;
+      if (!tgt || t >= ms.dies || tgt.dead || !tgt.live) continue;    // fuel out, or nothing left to chase
 
       var left = Math.max(0, dtSim), guard = 0;
       var hitIt = false;
@@ -6022,7 +6059,8 @@
         /* No delivery and no direction: a warhead has no variety, and it goes
          * off ON the hull rather than arriving from anywhere. Both arguments
          * are optional precisely so this line does not have to lie. */
-        damageNpc(sys, G, tgt, ms.dmg, t, hooks);
+        if (ms.atPlayer) damagePlayer(G, ms.dmg, hooks, null, V.clone(ms.pos));
+        else damageNpc(sys, G, tgt, ms.dmg, t, hooks);
         if (hooks && hooks.sound) hooks.sound('explosion');
         continue;
       }
@@ -6056,9 +6094,20 @@
        * stays on NPC_GUN like it always has — carries what its own
        * enforcement wing can buy. See SYNDICATE_GUN. */
       var elite = sp.kind === 'police' && sp.faction === 'outlaw';
+      var cop = sp.kind === 'police' && !sp.defending;
       var gun = (sp.kind === 'trader' || sp.defending) ? TRADER_GUN
-              : elite ? SYNDICATE_GUN : NPC_GUN;
+              : elite ? SYNDICATE_GUN : cop ? POLICE_GUN : NPC_GUN;
       var d = V.dist(sp.live.pos, s.pos);
+      /* A cop with a fugitive in reach and a missile left: away it goes,
+       * when the guns are not enough - running, or the shield still up. */
+      if (cop && sp.hostileToPlayer && d <= POLICE_MISSILE.range) {
+        if (sp.missilesLeft === undefined) sp.missilesLeft = POLICE_MISSILE.rack;
+        var running = d > gun.range * 0.7;
+        if (sp.missilesLeft > 0 && t >= (sp.missileAt || 0) &&
+            (running || (s.shield && s.shieldHp > 10))) {
+          firePoliceMissile(sys, G, t, sp, hooks);
+        }
+      }
       if (d > gun.range) continue;
       if (t < (sp.coolUntil || 0)) continue;
       sp.coolUntil = t + gun.cooldown;
@@ -6067,8 +6116,10 @@
       addNpcHeat(sp, (gun.heat || 0) * (gun.cooldown || 0), null);
 
       var transverse = V.len(V.sub(s.vel, sp.live.vel));
-      var chance = Math.max(0.12, Math.min(0.85,
-        1.0 - d / gun.range * 0.5 - transverse * 1.4));
+      /* Police gunnery is trained for a runner: a firmer floor and less
+       * lost to speed than a pirate's. */
+      var chance = Math.max(cop ? 0.25 : 0.12, Math.min(0.85,
+        1.0 - d / gun.range * 0.5 - transverse * (cop ? 0.8 : 1.4)));
       (G.beams = G.beams || []).push({
         from: V.clone(sp.live.pos), to: V.clone(s.pos),
         color: gun === TRADER_GUN ? '#ffc46b' : elite ? '#c86bff' : '#ff8a76',
@@ -7278,6 +7329,8 @@
     addHeat: addHeat, updateSink: updateSink,
     WITNESS_RANGE: WITNESS_RANGE, DISTRESS_DELAY: DISTRESS_DELAY,
     TRADER_GUN: TRADER_GUN, NPC_GUN: NPC_GUN, SYNDICATE_GUN: SYNDICATE_GUN,
+    POLICE_GUN: POLICE_GUN, POLICE_MISSILE: POLICE_MISSILE, firePoliceMissile: firePoliceMissile,
+    updateMissiles: updateMissiles,
     SYNDICATE_TRUST: SYNDICATE_TRUST,
     updateNpcFire: updateNpcFire,
     UNARMED_CLASSES: UNARMED_CLASSES,

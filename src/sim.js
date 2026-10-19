@@ -1106,6 +1106,26 @@
    * fails if you take it deep at speed — there is meant to be a way to die
    * with one fitted, or it is not a decision, just a tax. */
   var BASE_HEAT_SHED = 18;      // what bare hull radiates away, units/s
+  /* PAST THE HEAT SHIELD, THE BATTLE SHIELD. Astra, 2026-10-18: "there is
+   * a depth beyond which your atmospheric shields can['t] take the heat of
+   * friction with the atmosphere, and then battle shields very quickly
+   * wear down, but slow enough to change your attitude and orbit." So
+   * heat over the limit burns the energy shield before it touches the
+   * hull: points/s per unit of overshoot. At the worst overshoot (200) a
+   * full 40-point shield lasts about fifteen seconds - time to pull the
+   * nose up and raise the periapsis, not time to keep scooping. */
+  var SHIELD_HEAT_DRAIN = 0.0133;
+  /* Where the heat shield stops coping, at a given speed through the air:
+   * HEAT_K sqrt(rho) v^3 = shed  ->  rho = (shed / (HEAT_K v^3))^2, and the
+   * air is exponential, so that is an altitude. 0 when even the bottom of
+   * the air is survivable at this speed; the top when none of it is. */
+  function heatLineAlt(body, v, shed) {
+    var at = body && body.atmosphere;
+    if (!at || !(v > 0)) return 0;
+    var rhoMax = Math.pow(shed / (HEAT_K * v * v * v), 2);
+    if (rhoMax >= at.rho0) return 0;
+    return Math.min(at.top, at.scaleHeight * Math.log(at.rho0 / rhoMax));
+  }
 
   /* ---- surface-pad landing ---------------------------------------------
    * A pad no longer silently refuses a fast approach — you always touch
@@ -1179,8 +1199,22 @@
                 (ship.heat || 0) + (flux - shed) * dt));
     ship.reentryGlow = Math.max(0, Math.min(1, Math.sqrt(flux / GLOW_REFERENCE)));
 
-    if (ship.heat <= HEAT_LIMIT) return 0;
-    var dmg = (ship.heat - HEAT_LIMIT) * HEAT_DAMAGE * dt;
+    if (ship.heat <= HEAT_LIMIT) { ship.shieldBurn = 0; return 0; }
+    var over = ship.heat - HEAT_LIMIT;
+    /* The battle shield takes it first (see SHIELD_HEAT_DRAIN); only what
+     * it cannot cover this step reaches the hull. Burning counts as being
+     * hit, so it does not regenerate while it is going. */
+    ship.shieldBurn = 0;
+    if (ship.shield && ship.shieldHp > 0) {
+      var burn = over * SHIELD_HEAT_DRAIN * dt;
+      var took = Math.min(ship.shieldHp, burn);
+      ship.shieldHp -= took;
+      ship.shieldBurn = burn / dt;
+      ship.lastHitAt = (typeof performance !== 'undefined' ? performance.now() : 0);
+      if (took >= burn - 1e-12) return 0;
+      dt *= 1 - took / burn;
+    }
+    var dmg = over * HEAT_DAMAGE * dt;
     if (ship.hullHp !== undefined) ship.hullHp = Math.max(0, ship.hullHp - dmg);
     return dmg;
   }
@@ -5742,7 +5776,8 @@
     heatFlux: heatFlux,
     updateHeating: updateHeating,
     updateGear: updateGear, GEAR_TRAVEL_TIME: GEAR_TRAVEL_TIME,
-    HEAT_LIMIT: HEAT_LIMIT,
+    HEAT_LIMIT: HEAT_LIMIT, BASE_HEAT_SHED: BASE_HEAT_SHED, SHIELD_HEAT_DRAIN: SHIELD_HEAT_DRAIN,
+    heatLineAlt: heatLineAlt,
     predictTrajectory: predictTrajectory,
     beginPrediction: beginPrediction,
     stepPrediction: stepPrediction,

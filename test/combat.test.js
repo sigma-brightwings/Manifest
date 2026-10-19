@@ -2063,6 +2063,46 @@ section('--- the board says what it is, and what it is for ---');
   }
 })();
 
+section('--- the law has bite (2026-10-18) ---');
+(function () {
+  var NG = Combat.NPC_GUN, PG = Combat.POLICE_GUN;
+  check('a police gun outguns the generic one', PG.dmg / PG.cooldown > 2 * NG.dmg / NG.cooldown && PG.range > NG.range,
+        (PG.dmg / PG.cooldown).toFixed(1) + ' dps vs ' + (NG.dmg / NG.cooldown).toFixed(1));
+  /* A fugitive running from a cop 20 km back, shield up. */
+  var G = makeG(true);
+  G.ship.shield = 'shield'; G.ship.shieldHp = 40; G.ship.hullHp = 100;
+  var cop = fakeVictim(G, { kind: 'police', cls: 'police', faction: 'lawfac', range: 20, name: 'Patrol Cutter' });
+  cop.hostileToPlayer = true;
+  var said = [];
+  var hooks = { say: function (m) { said.push(m); }, sound: function () {} };
+  Combat.updateNpcFire(G.sys, G, 0, 0.1, hooks);
+  var ms = (G.sys.missiles || []).filter(function (m) { return m.atPlayer; });
+  check('a cop fires a missile at a fugitive out of gun range', ms.length === 1 && cop.missilesLeft === 2 &&
+        /MISSILE LAUNCH/.test(said.join(' ')), said[0]);
+  Combat.updateNpcFire(G.sys, G, 5, 0.1, hooks);
+  check('and not another until it has reloaded', (G.sys.missiles || []).length === 1);
+  /* Sitting still 20 km off: it arrives. */
+  var t = 0, before = G.ship.shieldHp + G.ship.hullHp;
+  for (var k = 0; k < 400 && (G.sys.missiles || []).length; k++) { t += 0.25; Combat.updateMissiles(G.sys, G, t, 0.25, hooks); }
+  check('it hits a ship that does not run', (G.sys.missiles || []).length === 0 && G.ship.shieldHp + G.ship.hullHp < before,
+        'arrived in ' + t.toFixed(1) + ' s, shield ' + Math.round(G.ship.shieldHp) + ', hull ' + Math.round(G.ship.hullHp));
+  /* Running early at the starting ship's ~19 m/s^2 from 30 km out. */
+  var G2 = makeG(true);
+  var cop2 = fakeVictim(G2, { kind: 'police', cls: 'police', faction: 'lawfac', range: 30 });
+  cop2.hostileToPlayer = true;
+  Combat.updateNpcFire(G2.sys, G2, 0, 0.1, HOOKS);
+  var away = { x: -1, y: 0, z: 0 }, t2 = 0, hp2 = G2.ship.hullHp;
+  for (var j = 0; j < 400 && (G2.sys.missiles || []).length; j++) {
+    t2 += 0.25; G2.ship.vel = V.addScaled(G2.ship.vel, away, 0.019 * 0.25); G2.ship.pos = V.addScaled(G2.ship.pos, G2.ship.vel, 0.25);
+    Combat.updateMissiles(G2.sys, G2, t2, 0.25, HOOKS);
+  }
+  check('running early from far out burns it out', G2.ship.hullHp === hp2, 'gone after ' + t2.toFixed(1) + ' s');
+  var G3 = makeG(true);
+  var cop3 = fakeVictim(G3, { kind: 'police', cls: 'police', faction: 'lawfac', range: 20 });
+  Combat.updateNpcFire(G3.sys, G3, 0, 0.1, HOOKS);
+  check('no missiles at somebody who is not wanted', !(G3.sys.missiles || []).length);
+})();
+
 section('--- stolen ore and the scan (prospectors, 2026-10-18) ---');
 (function () {
   require('../src/claims.js');

@@ -1198,6 +1198,32 @@ section('--- re-entry heat ---');
   check('the glow is normalised for the renderer',
         bare.reentryGlow >= 0 && bare.reentryGlow <= 1);
 
+  /* PAST THE HEAT SHIELD, THE BATTLE SHIELD (Astra, 2026-10-18). */
+  var deep = shipAtSpeed(bandAlt, bandSpeed);
+  deep.shield = 'shield'; deep.shieldHp = 40; deep.hullHp = 100;
+  var tBurn = 0, hullWhileUp = 0, firstHullAt = null;
+  for (var q = 0; q < 2000 && deep.hullHp > 60; q++) {
+    var up = deep.shieldHp > 0;
+    var d3 = Sim.updateHeating(deep, sys, 0, 0.5);
+    if (deep.shieldBurn > 0) tBurn += 0.5;
+    if (up && deep.shieldHp > 0) hullWhileUp += d3;
+    if (d3 > 0 && firstHullAt === null) firstHullAt = q * 0.5;
+  }
+  check('over the limit the battle shield burns, not the hull', hullWhileUp === 0 && tBurn > 0,
+        'shield burned ' + tBurn.toFixed(1) + ' s before the hull took any');
+  check('and then it is gone and the hull cooks', deep.shieldHp <= 0 && firstHullAt !== null && deep.hullHp < 100);
+  var worst = shipAtSpeed(bandAlt, bandSpeed);
+  worst.shield = 'shield'; worst.shieldHp = 40; worst.heat = 300;
+  var held = 0;
+  while (worst.shieldHp > 0 && held < 600) { worst.heat = 300; Sim.updateHeating(worst, sys, 0, 0.1); held += 0.1; }
+  check('at the worst heat a full shield buys seconds, not minutes', held > 8 && held < 25, held.toFixed(1) + ' s');
+  var vBand = V.len(V.sub(probe.vel, Sim.bodyState(body, sys, 0).vel));
+  var lineAlt = Sim.heatLineAlt(body, vBand, 18 + Combat.MODULES.heatshield.shed);
+  var atLine = shipAtSpeed(lineAlt, bandSpeed);
+  var fl = Sim.heatFlux(atLine, sys, 0);
+  check('the heat-shield line is where the flux meets the shed', Math.abs(fl - (18 + Combat.MODULES.heatshield.shed)) / fl < 0.05 || lineAlt === 0,
+        'line ' + lineAlt.toFixed(1) + ' km, flux there ' + fl.toFixed(1));
+
   // Cool ships cool off rather than staying hot forever.
   var cooling = shipAt(body.atmosphere.top * 3);
   cooling.heat = 50;

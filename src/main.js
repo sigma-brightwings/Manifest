@@ -5446,6 +5446,14 @@
         G.heatWarned = false;
       }
       if (cooked > 0 && G.ship.hullHp <= 0) playerDestroyed();
+      /* Past the heat shield: the battle shield is what is burning now. */
+      if (G.ship.shieldBurn > 0 && !G.shieldBurnSaid) {
+        G.shieldBurnSaid = true;
+        say('PAST THE HEAT SHIELD - battle shield burning. Nose up, raise your periapsis.', 6);
+        if (global.Sound) global.Sound.fx('warn');
+      } else if (!(G.ship.shieldBurn > 0) && G.ship.heat < Sim.HEAT_LIMIT * 0.8) {
+        G.shieldBurnSaid = false;
+      }
     }
 
     /* Contracts age whether or not you are looking at them. */
@@ -12303,7 +12311,19 @@
                    (skm.full ? '  ·  HOLD FULL' : '');
       var sw = Math.max(240, ctx.measureText(sLabel).width + 120);
       var sx = (w - sw) / 2, sy = top - 136;
-      panel(ctx, sx, sy, sw, 28, false);
+      /* The heat shield's line against where you are and where the orbit
+       * bottoms out: an ellipse through the top of the air wants its
+       * periapsis just above the line. A second row on the same panel. */
+      var oeS = Sim.oscElements(G.ship, G.sys, G.t);
+      var peri = oeS && oeS.body === skm.body ? oeS.periAlt : null;
+      var lineTxt = 'HEAT SHIELD HOLDS ABOVE ' + fmtDist(skm.lineAlt) + '  ·  YOU ' + fmtDist(skm.alt) +
+                    (peri !== null ? '  ·  PERIAPSIS ' + fmtDist(peri) : '');
+      sw = Math.max(sw, ctx.measureText(lineTxt).width + 24);
+      sx = (w - sw) / 2; sy -= 18;
+      panel(ctx, sx, sy, sw, 46, false);
+      var under = skm.alt < skm.lineAlt;
+      ctx.fillStyle = under ? '#ff7a6a' : (peri !== null && peri < skm.lineAlt) ? '#ffd27a' : '#9fc4d4';
+      ctx.fillText(lineTxt, sx + 12, sy + 38);
       var scol = skm.face > 0.9 ? '#7dffb0' : skm.face > 0 ? '#ffd27a' : '#ff7a6a';
       ctx.fillStyle = scol;
       ctx.fillText(sLabel, sx + 12, sy + 18);
