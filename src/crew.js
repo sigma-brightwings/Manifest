@@ -134,7 +134,11 @@
     return Math.round(SIGN_BASE * (0.55 + person.rating * 0.36));
   }
   function dailyWage(person) {
-    return Math.round(WAGE_BASE * (0.6 + person.rating * 0.34));
+    /* `wageMul` is a deal struck with one person (favours.js): a captain
+     * who came aboard as a friend works for less, and a partner flying
+     * her own ship draws her half of the profit instead of a wage. */
+    var mul = person.wageMul == null ? 1 : person.wageMul;
+    return Math.round(WAGE_BASE * (0.6 + person.rating * 0.34) * mul);
   }
 
   /* ---- the wage actually running ---------------------------------------
@@ -168,7 +172,7 @@
     var C = global.Combat;
     if (!C || !C.HULLS) return false;
     var hull = C.HULLS[(ship && ship.hullId) || 'talon'];
-    return !!hull && (hull.size === 'M' || hull.size === 'L');
+    return !!hull && (hull.size === 'M' || hull.size === 'L' || hull.size === 'XL');
   }
 
   function aboard(ship) { return (ship && ship.crew) || []; }

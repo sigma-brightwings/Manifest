@@ -38,6 +38,7 @@
 <!-- Load order matters: each file uses the ones above it.
      These are deliberately plain scripts, not ES modules, so the game runs
      by double-clicking this file with no local web server. -->
+<script src="src/release.js"></script>
 <script src="src/vec3.js"></script>
 <script src="src/rng.js"></script>
 <!-- slipspace.js needs nothing but rng, and galaxy.js needs IT — the lane
@@ -64,6 +65,10 @@
 <script src="src/missions.js"></script>
 <script src="src/arcs.js"></script>
 <script src="src/shiptrade.js"></script>
+<script src="src/captains.js"></script>
+<script src="src/messages.js"></script>
+<script src="src/favours.js"></script>
+<script src="src/rumours.js"></script>
 <script src="src/sound.js"></script>
 <script src="src/save.js"></script>
 <script src="src/logo.js"></script>
@@ -81,6 +86,11 @@
 <script src="src/gl.js"></script>
 <script src="src/screens.js"></script>
 <script src="src/main.js"></script>
+<!-- The reader model (messages.js). A MODULE, so it runs after every classic
+     script above and can find window.Messages; it loads in the background
+     and the game reads with the phrase matcher until it is ready, or if
+     `npm run models` has not been run. -->
+<script type="module" src="src/embedder.js"></script>
 <script>
   // Hide the boot card once the first frame has been drawn.
   requestAnimationFrame(function () {

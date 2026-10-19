@@ -876,8 +876,201 @@
                'the ten fitting slots mean it can be made into almost ' +
                'anything given money and patience. Ideal for bulk trade, ' +
                'passenger work with the berths in, and being the reason ' +
-               'pirates get out of bed.' }
+               'pirates get out of bed.' },
+
+    /* ---- EVERY SHIP IN THE SKY, 2026-10-19 ------------------------------
+     * Astra: "I also want the player to be able to purchase ANY ship type,
+     * but only at shipyards can you get a customized L size ship." Asked
+     * which ships: "Civilian, plus warships only for a navy you're in good
+     * standing with." Asked about the giants: an XL class — "sold only at
+     * shipyards, and too big to dock at ordinary ports."
+     *
+     * Each one flies the model its traffic class already flies (`mesh` is
+     * the CLASS key render.js's HULL_ASSIGN maps to a library hull), so a
+     * freighter you buy looks like the freighters you have been passing.
+     *
+     * THE SAME TWO RULES AS THE FOUR ABOVE, checked by the suites: laden
+     * range clears the loneliest star in the cluster (tank ≈ a fifth of
+     * everything else aboard), and every hull that can land can leave the
+     * heaviest world with a port (thrust over laden mass ≥ 11.4). The XL
+     * hulls are exempt from the second and only the second: they never
+     * land — dockRefusal keeps them off every surface pad and every port
+     * not built to take them — so a surface rule they could never be
+     * tested against would be a number nobody reads.
+     *
+     * `military` is the navy's own: sold only at a shipyard of the faction
+     * that flies it, only to a captain at that standing with them, and
+     * never to one they want. `orderOnly` never sits on a floor — it is
+     * built to order at a shipyard or it is not sold at all. */
+    wren:  { id: 'wren', size: 'S', name: 'Wren Shuttle', price: 18000, mesh: 'shuttle',
+             dryMass: 24, thrustKN: 960, thrusterCap: 10, fuelCap: 14,
+             cargoCap: 30, hullMax: 60,
+             /* NO HARDPOINT. "Everything flies armed EXCEPT SHUTTLES" is
+              * this file's own rule for traffic, and the one you can buy is
+              * the same airframe. Trading a gunned ship in for one means
+              * selling the gun first, and the yard says so. */
+             slots: { hardpoint: 0, utility: 1, internal: 2 },
+             rackSlots: 0,
+             powerMW: 4.0, fitMass: 6,
+             blurb: 'the cheapest way off a planet',
+             maker: 'Pell & Daughters',
+             about: 'The ship every port has three of and nobody looks at. ' +
+               'Pell builds the Wren for crew changes and short hops, and ' +
+               'it does those well: it is light, forgiving and almost free ' +
+               'to run. It carries no gun because it was never meant to be ' +
+               'anywhere a gun would help. Ideal for a pilot rebuilding ' +
+               'after a bad loss, or one who would rather not be noticed.' },
+    bollard: { id: 'bollard', size: 'S', name: 'Bollard Tug', price: 44000, mesh: 'tug',
+             dryMass: 50, thrustKN: 1300, thrusterCap: 22, fuelCap: 20,
+             cargoCap: 20, hullMax: 140,
+             slots: { hardpoint: 1, utility: 3, internal: 2 },
+             rackSlots: 1,
+             powerMW: 10.0, fitMass: 16,
+             blurb: 'all engine and fenders',
+             maker: 'Harbour Works Cooperative',
+             about: 'A port tug sold off the harbour list, still wearing ' +
+               'the scuffs of a thousand berthings. The plating is twice ' +
+               'what a ship this size needs, because a tug spends its life ' +
+               'being leaned on, and the thruster tanks are enormous for ' +
+               'the same reason. The hold is a locker. Ideal for salvage, ' +
+               'towing work, and anyone who expects to be rammed.' },
+    samaritan: { id: 'samaritan', size: 'M', name: 'Samaritan Tender', price: 88000, mesh: 'tender',
+             dryMass: 55, thrustKN: 1750, thrusterCap: 18, fuelCap: 26,
+             cargoCap: 50, hullMax: 150,
+             slots: { hardpoint: 1, utility: 2, internal: 5 },
+             rackSlots: 1,
+             powerMW: 15.0, fitMass: 24,
+             blurb: 'built to survive somebody else\'s fight',
+             maker: 'Mercy Orbital',
+             about: 'The rescue tender, decommissioned and sold with the ' +
+               'red cross painted out. Five internal bays where a fighter ' +
+               'would have two, because a tender carries what keeps people ' +
+               'alive — habitat, medical, scanners — and a frame that takes ' +
+               'a beating while it does. One gun, as an apology. Ideal for ' +
+               'a captain who answers maydays, and means to keep doing it.' },
+    sump:  { id: 'sump', size: 'M', name: 'Sump Waste Hauler', price: 70000, mesh: 'hauler',
+             dryMass: 70, thrustKN: 3800, thrusterCap: 20, fuelCap: 56,
+             cargoCap: 180, hullMax: 150,
+             slots: { hardpoint: 1, utility: 3, internal: 4 },
+             rackSlots: 1,
+             powerMW: 14.0, fitMass: 26,
+             blurb: 'cheap hold, because of what usually goes in it',
+             maker: 'Drayton Heavy',
+             about: 'Drayton\'s other freighter, the one they do not put in ' +
+               'the brochure. A bigger hold than the Mule for less money, ' +
+               'because the Sump was built to carry tailings and the ' +
+               'price reflects how few people want one. Scrub her out and ' +
+               'she carries anything. Ideal for bulk trade on a budget, ' +
+               'and for the waste contracts nobody else will touch.' },
+    longhaul: { id: 'longhaul', size: 'L', name: 'Longhaul Freighter', price: 165000, mesh: 'freighter',
+             dryMass: 140, thrustKN: 6800, thrusterCap: 30, fuelCap: 100,
+             cargoCap: 320, hullMax: 260,
+             slots: { hardpoint: 2, utility: 4, internal: 6 },
+             rackSlots: 2,
+             powerMW: 26.0, fitMass: 44,
+             blurb: 'the freighter on every lane',
+             maker: 'Drayton Heavy',
+             about: 'This is the ship you have been passing on every lane ' +
+               'since your first jump — the merchant workhorse, twice the ' +
+               'Mule in every direction. Built in orbit and never meant to ' +
+               'see a pad, though she can. Twelve slots and a reactor with ' +
+               'room in it make her whatever her owner needs. Ideal for a ' +
+               'trader who has outgrown medium hulls and wants a fleet.' },
+    tanker: { id: 'tanker', size: 'L', name: 'Coldwater Tanker', price: 150000, mesh: 'tanker',
+             dryMass: 150, thrustKN: 6800, thrusterCap: 30, fuelCap: 130,
+             cargoCap: 280, hullMax: 240,
+             slots: { hardpoint: 2, utility: 3, internal: 6 },
+             rackSlots: 2,
+             powerMW: 24.0, fitMass: 40,
+             blurb: 'goes further than anything else on the list',
+             maker: 'Coldwater Hydrogen',
+             about: 'A hydrogen hauler with her own tanks enlarged until ' +
+               'she could cross the gaps her cargo is bound for without ' +
+               'drinking it. Nothing civilian has her reach. The hold is a ' +
+               'little smaller than the Longhaul\'s and the hull a little ' +
+               'softer, because tanks take the room. Ideal for the lonely ' +
+               'end of the cluster, and for running fuel where it is short.' },
+    cutter: { id: 'cutter', size: 'L', name: 'Naval Cutter', price: 380000, mesh: 'navy',
+             dryMass: 110, thrustKN: 2800, thrusterCap: 30, fuelCap: 40,
+             cargoCap: 40, hullMax: 320,
+             slots: { hardpoint: 4, utility: 3, internal: 5 },
+             rackSlots: 3,
+             powerMW: 34.0, fitMass: 50,
+             /* ALLIED, the same line the military slipspace drive draws:
+              * navy standard issue goes to people the navy trusts. */
+             military: { minStanding: 40 },
+             blurb: 'the navy\'s own, sold to the navy\'s friends',
+             maker: 'Fleet yards (any faction\'s)',
+             about: 'What the navy dispatches when it means it. Four ' +
+               'hardpoints, armour no merchant would pay for, and a ' +
+               'reactor built to run all of it at once. A yard will build ' +
+               'you one only on the navy\'s word, and the navy gives its ' +
+               'word to captains it already counts as allies. Ideal for ' +
+               'the hunter, the escort, and anyone who wants to be left ' +
+               'alone and has earned the means.' },
+    meridian: { id: 'meridian', size: 'XL', name: 'Meridian Liner', price: 420000, mesh: 'liner',
+             dryMass: 260, thrustKN: 4600, thrusterCap: 40, fuelCap: 90,
+             cargoCap: 120, hullMax: 300,
+             slots: { hardpoint: 2, utility: 4, internal: 8 },
+             rackSlots: 2,
+             powerMW: 32.0, fitMass: 56,
+             orderOnly: true,
+             blurb: 'a passenger city with a drive',
+             maker: 'Meridian Passage',
+             about: 'The brightest thing in any sky she is in — hundreds of ' +
+               'self-lit windows and the eight internal bays to put people ' +
+               'behind them. She docks only where a port was built for her ' +
+               'size: a shipyard, a highport, a fleet carrier. Built to ' +
+               'order and never sold off a floor. Ideal for passenger work ' +
+               'on the settled runs, at a scale nothing smaller can touch.' },
+    leviathan: { id: 'leviathan', size: 'XL', name: 'Leviathan Bulk Carrier', price: 600000, mesh: 'bulk',
+             dryMass: 420, thrustKN: 9000, thrusterCap: 50, fuelCap: 280,
+             cargoCap: 900, hullMax: 420,
+             slots: { hardpoint: 2, utility: 4, internal: 8 },
+             rackSlots: 2,
+             powerMW: 40.0, fitMass: 64,
+             orderOnly: true,
+             blurb: 'the biggest thing at the dock',
+             maker: 'Drayton Heavy',
+             about: 'The silhouette that makes a port read as a port. She ' +
+               'lies off the station for days at a time and moves more ' +
+               'tonnage in one crossing than a Mule does in a season. Slow ' +
+               'beyond anything else you can buy; she docks only at ' +
+               'shipyards, highports and fleet carriers. Built to order. ' +
+               'Ideal for supplying your own holdings, or a market, alone.' },
+    capital: { id: 'capital', size: 'XL', name: 'Capital Ship', price: 4500000, mesh: 'capital',
+             dryMass: 900, thrustKN: 14000, thrusterCap: 80, fuelCap: 250,
+             cargoCap: 200, hullMax: 1500,
+             slots: { hardpoint: 8, utility: 6, internal: 10, capital: 2 },
+             rackSlots: 6,
+             powerMW: 120.0, fitMass: 200,
+             orderOnly: true,
+             /* Further up the same ladder: a capital is not a reward for
+              * being liked, it is a reward for being one of theirs. */
+             military: { minStanding: 70 },
+             blurb: 'the thing everybody else runs from',
+             maker: 'Fleet yards (any faction\'s)',
+             about: 'A warship of the line. Two capital mounts, eight ' +
+               'hardpoints, and more armour than a small station. No navy ' +
+               'sells one; a navy might commission one for a captain it ' +
+               'trusts as it trusts its own admirals. She docks only where ' +
+               'a port was built for her — shipyards, highports, fleet ' +
+               'carriers — and needs a crew to do anything at all. Ideal ' +
+               'for a captain who has stopped running.' }
   };
+
+  /* Sizes, smallest first. XL is new with the hulls above and is the only
+   * class that can never land: see dockRefusal. */
+  var HULL_SIZES = ['S', 'M', 'L', 'XL'];
+  function sizeOf(hullId) {
+    var h = HULLS[hullId];
+    return (h && h.size) || 'M';
+  }
+  /* L and XL: the hulls whose fittings only a shipyard will change. */
+  function bigHull(hullId) {
+    var z = sizeOf(hullId);
+    return z === 'L' || z === 'XL';
+  }
 
   /* ---- slots, power and mass --------------------------------------------
    * Reactor output and fit tonnage scale off dryMass, so the numbers have a
@@ -894,9 +1087,135 @@
    * ONE CATALOGUE, keyed by id, so a slot only ever stores a string. The
    * four older tables above remain the public views onto it: nothing that
    * already reads Combat.GUNS has to learn anything new. */
-  var SLOT_ORDER = ['hardpoint', 'utility', 'internal', 'capital'];
+  /* 'drive' LAST, so every existing key (hardpoint0, internal2 ...) keeps
+   * its index and no save's fit map moves. */
+  var SLOT_ORDER = ['hardpoint', 'utility', 'internal', 'capital', 'drive'];
   var SLOT_LABEL = { hardpoint: 'Hardpoint', utility: 'Utility',
-                     internal: 'Internal', capital: 'Capital mount' };
+                     internal: 'Internal', capital: 'Capital mount',
+                     drive: 'Drive' };
+
+  /* ---- CRUISE DRIVES (2026-10-19) ----------------------------------------
+   * Astra: "each drive class ... class two costs about 10 times as much as
+   * a class one, class three costs 10 times more again, or you can switch
+   * to the milfuel drives. Some ships have a second drive slot, or you can
+   * go for multiple class one drives for half the increase that you would
+   * get from one class. Milfuel drives travel at five times the speed of
+   * normal drives." And, chosen with her: each class doubles the speed;
+   * milfuel's five times is on top of the class; and a bigger, heavier
+   * ship is slower on the same drive.
+   *
+   * So the cruise drive's top speed (main.js cruiseLock) is
+   *
+   *   CRUISE_BASE_C  x  class (1, 2, 4)  x  milfuel (5 while slugs last)
+   *                  x  second drive (1 + half the first's ratio)
+   *                  x  sqrt(reference mass / this ship's mass now)
+   *
+   * and the mass lock still has the last word near anything.
+   *
+   * THE SLOT IS NEVER EMPTY. Every hull leaves the yard with a Class 1
+   * (HULL_STANDARD), every save is given one (migrateFit), and the last
+   * drive on a ship cannot be sold off it (unfitItem) — a ship with no
+   * cruise drive would simply be a ship that cannot cross a system, which
+   * is not a choice anybody should be able to make by accident. Buying a
+   * drive into a full drive bay trades the old one in at the usual 45%.
+   *
+   * Big hulls (L and XL) carry two drive slots; everything else one.
+   *
+   * No mass and no power, deliberately for now: the drive's cost is its
+   * price, and putting it in the fit budget would have re-tuned every
+   * loadout in the game as a side effect. Easy to add once there is a
+   * reason. */
+  var CRUISE_BASE_C = 250;          // a laden Talon on a Class 1, in c
+  var CRUISE_REF_MASS = 146;        // t: that laden Talon
+  var CRUISE_MIL_FACTOR = 5;
+  var CRUISE_SECOND_SHARE = 0.5;    // a second drive adds half of what it would alone
+  var CRUISE_DRIVES = {};
+  (function () {
+    var spec = [
+      { c: 1, price: 4000,   minDev: 0,    minStanding: -100 },
+      { c: 2, price: 40000,  minDev: 0.45, minStanding: 0 },
+      { c: 3, price: 400000, minDev: 0.70, minStanding: 10 }
+    ];
+    for (var i = 0; i < spec.length; i++) {
+      var s = spec[i];
+      CRUISE_DRIVES['cruise' + s.c] = {
+        id: 'cruise' + s.c, name: 'Cruise Drive Class ' + s.c,
+        slot: 'drive', kind: 'cruisedrive', cruiseClass: s.c, mil: false,
+        price: s.price, mass: 0, power: 0,
+        minDev: s.minDev, minStanding: s.minStanding, minCrime: 0, grey: false,
+        pitch: s.c === 1 ? 'What every hull leaves the yard with.'
+             : 'Twice the speed of the class below it, between the planets.'
+      };
+      /* The milfuel version: the Chernobyl's gates, because it is the same
+       * navy stores and the same slugs. Two and a half times the price of
+       * its class. */
+      CRUISE_DRIVES['milcruise' + s.c] = {
+        id: 'milcruise' + s.c, name: 'Military Cruise Drive Class ' + s.c,
+        slot: 'drive', kind: 'cruisedrive', cruiseClass: s.c, mil: true,
+        price: Math.round(s.price * 2.5), mass: 0, power: 0,
+        minDev: 0.80, minStanding: 40, minCrime: 0, grey: false,
+        pitch: 'Five times the speed of its class while it has milfuel to burn, ' +
+               'and waste in the hold for every slug. Without slugs it runs as an ordinary drive.'
+      };
+    }
+  })();
+
+  function driveSlotCount(h) {
+    if (!h) return 0;
+    if (h.slots && h.slots.drive !== undefined) return h.slots.drive;
+    return (h.size === 'L' || h.size === 'XL') ? 2 : 1;
+  }
+
+  /* The drives bolted on, strongest first. */
+  function cruiseDrives(ship) {
+    var list = fittedList(ship), out = [];
+    for (var i = 0; i < list.length; i++) if (list[i].item.kind === 'cruisedrive') out.push(list[i]);
+    return out;
+  }
+
+  /* One drive's own factor: its class, and five times that if it is a
+   * milfuel drive with slugs aboard to burn. */
+  function driveFactor(item, ship) {
+    var f = Math.pow(2, (item.cruiseClass || 1) - 1);
+    var slugs = (ship && ship.cargo && ship.cargo.milfuel) || 0;
+    if (item.mil && slugs > 1e-6) f *= CRUISE_MIL_FACTOR;
+    return f;
+  }
+
+  /* Everything above except the mass, which main.js applies against the
+   * ship's live mass. An empty bay (a ship that predates drives and has
+   * not been migrated) reads as a Class 1, never as zero. */
+  function cruiseMultiplier(ship) {
+    var ds = cruiseDrives(ship).map(function (d) { return driveFactor(d.item, ship); });
+    ds.sort(function (a, b) { return b - a; });
+    if (!ds.length) return 1;
+    var m = ds[0];
+    if (ds.length > 1) m *= 1 + CRUISE_SECOND_SHARE * ds[1] / ds[0];
+    return m;
+  }
+
+  /* Is a milfuel drive the one doing the work right now? main.js burns
+   * slugs instead of reaction mass while it is. */
+  function cruiseOnMilfuel(ship) {
+    var slugs = (ship && ship.cargo && ship.cargo.milfuel) || 0;
+    if (slugs <= 1e-6) return false;
+    return cruiseDrives(ship).some(function (d) { return d.item.mil; });
+  }
+
+  /* Top cruise speed in c for this ship as loaded, before the mass lock. */
+  function cruiseTopC(ship) {
+    var mass = (ship && ship.mass) || CRUISE_REF_MASS;
+    return CRUISE_BASE_C * cruiseMultiplier(ship) * Math.sqrt(CRUISE_REF_MASS / Math.max(1, mass));
+  }
+
+  /* Put a Class 1 in the first drive slot if the ship has no drive at all. */
+  function ensureCruiseDrive(ship) {
+    if (cruiseDrives(ship).length) return false;
+    var key = firstFreeSlot(ship, 'drive');
+    if (!key) return false;
+    fitMap(ship)[key] = 'cruise1';
+    return true;
+  }
 
   /* ---- the two slipspace modules, as things you can actually buy ---------
    * They existed before this: Slip.MODULES has priced a Wake Baffle and a
@@ -995,7 +1314,7 @@
 
   var EQUIPMENT = {};
   (function () {
-    var tables = [GUNS, TURRETS, MODULES, SLIP_MODULES];
+    var tables = [GUNS, TURRETS, MODULES, SLIP_MODULES, CRUISE_DRIVES];
     for (var i = 0; i < tables.length; i++) {
       for (var k in tables[i]) {
         var item = tables[i][k];
@@ -1025,7 +1344,8 @@
     var h = hullOf(ship), out = [];
     if (!h || !h.slots) return out;
     for (var i = 0; i < SLOT_ORDER.length; i++) {
-      var type = SLOT_ORDER[i], n = h.slots[type] || 0;
+      var type = SLOT_ORDER[i];
+      var n = type === 'drive' ? driveSlotCount(h) : (h.slots[type] || 0);
       for (var j = 0; j < n; j++) out.push(type + j);
     }
     return out;
@@ -1187,6 +1507,8 @@
   function unfitItem(ship, key) {
     var map = fitMap(ship), id = map[key];
     if (!id) return null;
+    /* The last cruise drive stays: see CRUISE DRIVES. Replace it instead. */
+    if (EQUIPMENT[id] && EQUIPMENT[id].kind === 'cruisedrive' && cruiseDrives(ship).length <= 1) return null;
     delete map[key];
     syncLegacy(ship);
     return EQUIPMENT[id] || null;
@@ -1196,6 +1518,9 @@
   var RESALE = 0.45;
 
   function sellFitted(G, key) {
+    /* Taking a fitting OFF is a refit too: a large hull is worked on at a
+     * shipyard and nowhere else (yardRefusal, below). */
+    if (yardRefusal(G)) return 0;
     var item = unfitItem(G.ship, key);
     if (!item) return 0;
     var paid = Math.round((item.price || 0) * RESALE);
@@ -1304,7 +1629,7 @@
    * who had sold their scoop and then bought a hull got a hull with no
    * scoop — which under the rule above is wrong, and fails in exactly the
    * silent way the respawn bug did. */
-  var HULL_STANDARD = ['cargoscoop'];
+  var HULL_STANDARD = ['cargoscoop', 'cruise1'];
   var STARTING_FIT = ['phpulse'].concat(HULL_STANDARD);
 
   /* Fit anything on HULL_STANDARD that this ship is missing. Returns the
@@ -1398,6 +1723,10 @@
 
   function migrateFit(ship) {
     if (ship.fit && typeof ship.fit === 'object' && Object.keys(ship.fit).length) {
+      /* Unlike the scoop, the drive is not a thing you may have sold: a
+       * fit map from before drives existed simply has no drive slot, and
+       * gets the Class 1 it was always flying on. */
+      ensureCruiseDrive(ship);
       syncLegacy(ship);
       return ship;
     }
@@ -1761,6 +2090,12 @@
     if (!call) return { ok: false, why: 'no such call' };
     if (call.mine) return { ok: false, why: 'that is your own call' };
     if (call.answeredBy) return { ok: false, why: 'already answered' };
+    /* NO LONGER DORMANT. A captain's own mayday off the schedule in
+     * messages.js — a real trader adrift, or a pirate pretending to be one
+     * — answers through its own path, because the reward is the captain's
+     * gratitude (and the danger is the pirate's intercept), not a victim
+     * spec the law already knows about. */
+    if (call.npc && global.Messages) return global.Messages.answerNpcCall(sys, G, t, call, hooks);
     var reach = V.dist(G.ship.pos, call.pos);
     if (reach > WITNESS_RANGE) {
       return { ok: false, why: 'too far from the scene to be any use' };
@@ -1777,6 +2112,17 @@
      * ever perform would be read as no rescue at all by every `if
      * (spec.vouchesFor)` downstream. The test caught it on the first run. */
     if (call.victim) call.victim.vouchesFor = { at: t, faction: call.faction || null };
+    /* And the captain in the chair will greet you as the one who came.
+     * The public record counts it too — "they say you pull stranded ships
+     * out of the dark" is what strangers hear. */
+    if (global.Captains) {
+      global.Captains.bumpRecord(G, 'rescues', 1, { sys: sys, ship: call.victim, t: t });
+      if (call.victim) {
+        global.Captains.record(G, sys, call.victim, 'answered', t, { hull: G.ship && G.ship.bornId });
+        /* And she owes you one (favours.js). */
+        if (global.Captains.addDebt) global.Captains.addDebt(G, sys, call.victim, 1, t, 'you answered her');
+      }
+    }
     if (hooks && hooks.say) {
       hooks.say(call.name + ': "We will not forget this."', 6);
     }
@@ -3093,7 +3439,9 @@
     for (var i = patrols.length - 1; i >= 0; i--) {
       var s = patrols[i];
       if (s.liftedFrom && !s.live && !s.dead) {
-        s.liftedFrom.suppressed = false;      // back on the timetable
+        /* back on the timetable — unless her captain has joined you since
+         * (favours.js), in which case the lane is not hers any more */
+        s.liftedFrom.suppressed = !!s.liftedFrom.joined;
         patrols.splice(i, 1);
         sys._ships = null;
         sys._traffic = null;
@@ -3476,7 +3824,16 @@
      * response, however dark the deed. */
     spec.distressAt = null;
 
-    if (spec.liftedFrom) spec.liftedFrom.dead = true;
+    if (spec.liftedFrom) { spec.liftedFrom.dead = true; spec.liftedFrom.diedAt = t; }
+    /* A dead ship carries no more news (rumours.js): when, so a rumour she
+     * had already passed on still travels, and one she had not dies with
+     * her. The counter tells the rumour cache the timetable has changed. */
+    spec.diedAt = t;
+    sys._rumourGen = (sys._rumourGen || 0) + 1;
+    if (global.Rumours && global.Rumours.onDeath) global.Rumours.onDeath(G, sys, t);
+    /* Her friend knows who did it (favours.js). Before the crime is
+     * booked, so the friend's memory is keyed to the colours you wore. */
+    if (global.Favours && global.Favours.died) global.Favours.died(G, sys, spec, t);
     if (spec.kind !== 'pirate') {
       var charge = spec.kind === 'tender' ? 'killTender'
                  : spec.kind === 'navy' ? 'killNavy'
@@ -3487,8 +3844,11 @@
       /* AND NO TENDER EVER COMES AGAIN. Counted rather than flagged, saved
        * with the career, reset only by a new one — see startRescue. */
       if (charge === 'killTender') G.tenderKills = (G.tenderKills || 0) + 1;
-    } else if (hooks && hooks.say) {
-      hooks.say('Pirate destroyed — nobody will miss it', 4);
+    } else {
+      /* Nobody will miss it — but people will hear about it. A pirate
+       * kill goes on the public record that captains read you by. */
+      if (global.Captains) global.Captains.bumpRecord(G, 'pirateKills', 1, { sys: sys, ship: spec, t: t });
+      if (hooks && hooks.say) hooks.say('Pirate destroyed — nobody will miss it', 4);
     }
 
     spec.live = null;
@@ -3639,6 +3999,25 @@
   function crime(sys, G, t, kind, victim, hooks) {
     if (!victim || victim.kind === 'pirate') return;    // no law for outlaws
     if (victim.reported === kind) return;               // one report per act
+
+    /* THE VICTIM REMEMBERS, whether or not anybody else saw it. The law
+     * needs a witness; the captain whose hull you just holed does not —
+     * they were there. Recorded before the witness test on purpose, so an
+     * act nobody reported is still an act somebody will greet you about.
+     * See captains.js. The public record counts each victim once per kind
+     * of act, so a burst of fire is one assault on the books, not six. */
+    if (global.Captains) {
+      var ev = kind === 'demand' ? 'robbed'
+             : (kind === 'assault') ? 'attacked'
+             : (/^kill/.test(kind)) ? 'attacked' : null;
+      if (ev) global.Captains.record(G, sys, victim, ev, t, { hull: G.ship && G.ship.bornId });
+      victim._counted = victim._counted || {};
+      if (!victim._counted[kind]) {
+        victim._counted[kind] = true;
+        global.Captains.bumpRecord(G, /^kill/.test(kind) ? 'kills' : 'piracy', 1,
+                                   { sys: sys, ship: victim, t: t });
+      }
+    }
 
     var scene = victim.live ? victim.live.pos : G.ship.pos;
     var witness = witnessNear(sys, t, scene, victim, G);
@@ -4356,6 +4735,16 @@
       return { why: 'expelled', short: 'ORDERED OUT',
                text: 'you are under an order to leave this system — sell or dump ' +
                      'the tailings and every door here opens again' };
+    }
+    /* SHE DOES NOT FIT (2026-10-19). An XL hull — a liner, a bulk carrier,
+     * a capital — ties up only where a port was built to take her: a
+     * shipyard, a highport, a fleet carrier. Never a pad, never a hole in
+     * a moon. Astra: "too big to dock at ordinary ports." */
+    var hullNow = G.ship && G.ship.hullId;
+    if (hullNow && HULLS[hullNow] && HULLS[hullNow].size === 'XL' && !takesXL(port)) {
+      return { why: 'toobig', short: 'TOO BIG',
+               text: 'the ' + HULLS[hullNow].name + ' is too big for this port — she ties up ' +
+                     'only at shipyards, highports and fleet carriers' };
     }
     if (port.faction && wantedHere(G, port.faction)) {
       var fug = G.fugitive && G.fugitive.faction === port.faction;
@@ -6509,6 +6898,9 @@
     var h = HULLS[hullId];
     if (!h) return false;
     var size = h.size || 'M';
+    /* Built to order or not at all: nobody keeps a liner, a bulk carrier
+     * or a warship on the floor on the chance a stranger wants one. */
+    if (h.orderOnly || h.military || size === 'XL') return false;
     if (size === 'S') return true;             // a small hull is always for sale
     if (size === 'L' && !landsLarge(port)) return false;
     var R = global.RNG;
@@ -6529,6 +6921,199 @@
     out.sort(function (a, b) { return HULLS[a].price - HULLS[b].price; });
     return out;
   }
+
+  /* ---- SHIPYARDS, AND WHAT ONLY THEY DO (2026-10-19) ---------------------
+   * Astra: "only at shipyards can you get a customized L size ship." Asked
+   * what customised means: BOTH — built to order (fittings, name and
+   * colours chosen before she is handed over) AND refits: an L or XL hull's
+   * fittings can be changed only at a shipyard. Anywhere else a large hull
+   * is bought as she sits on the floor, with whatever the dock bolted to
+   * her, and flown as she is until a yard can work on her.
+   *
+   * A shipyard is the port ROLE economy.js already rolls — the one that
+   * sells alloys and robotics and has a scaffold on its model. */
+  function isShipyard(port) {
+    return !!(port && port.market && port.market.role === 'shipyard');
+  }
+
+  /* Where an XL hull can tie up at all: a port built to take her. */
+  function takesXL(port) {
+    if (!port || port.surface || port.underground) return false;
+    if (fleetPort(port)) return true;
+    var role = port.market && port.market.role;
+    return role === 'shipyard' || role === 'highport';
+  }
+
+  function dockedPort(G) {
+    var s = G && G.ship;
+    return (s && s.docked && G.sys && G.sys.byId) ? G.sys.byId[s.docked] || null : null;
+  }
+
+  /* WHY THIS YARD WILL NOT TOUCH THIS HULL'S FITTINGS, or null. Consumables
+   * (seekers, sink charges) are not fittings and are sold anywhere. */
+  function yardRefusal(G, hullId) {
+    var id = hullId || (G && G.ship && G.ship.hullId) || 'talon';
+    if (!bigHull(id)) return null;
+    var port = dockedPort(G);
+    /* Off the clamps there is no yard at all to refuse — and nothing in
+     * the game offers a refit there; the suites fit hulls in the abstract. */
+    if (!port || isShipyard(port)) return null;
+    return 'only a shipyard refits a ' + sizeOf(id) + ' hull — she flies as she is until then';
+  }
+
+  /* WHY THIS YARD WILL NOT BUILD HER, or null. Military hulls are the
+   * navy's own: the yard must belong to the faction that flies them, and
+   * that faction must count you as one of its own (ALLIED for a cutter,
+   * further for a capital), and must not want you. */
+  function orderRefusal(G, port, hullId) {
+    var h = HULLS[hullId];
+    if (!h) return 'no such hull';
+    if (!port) return 'only on the clamps';
+    if (!isShipyard(port)) return 'only a shipyard builds to order';
+    var enc = lienRefusal(G);
+    if (enc) return enc;
+    if (h.military) {
+      var fac = port.faction;
+      if (!fac || fac === 'outlaw' || fac === 'civil') return 'a navy builds these, and this yard is nobody\'s navy';
+      if (wantedHere(G, fac)) return 'they will not build a warship for someone they want';
+      var st = (G.standing || {})[fac] || 0;
+      var need = h.military.minStanding || 40;
+      if (st < need) {
+        var M = global.Missions;
+        var band = M && M.standingLabel ? M.standingLabel(need).toUpperCase() : (need + '+');
+        return 'needs ' + band + ' standing (' + need + '+) with the yard\'s navy — you have ' + Math.round(st);
+      }
+    }
+    return null;
+  }
+
+  /* Everything a shipyard will build to order: every L and XL hull, each
+   * with a verdict — a locked warship is a goal, a missing one a bug. */
+  function orderList(G, port) {
+    var out = [];
+    if (!isShipyard(port)) return out;
+    for (var id in HULLS) {
+      if (!bigHull(id)) continue;
+      out.push({ id: id, why: orderRefusal(G, port, id) });
+    }
+    out.sort(function (a, b) { return HULLS[a.id].price - HULLS[b.id].price; });
+    return out;
+  }
+
+  /* WHAT A LARGE HULL ON THE FLOOR COMES WITH. The dock fitted her out of
+   * its own shelf — deterministic per port, hull and two-day window, like
+   * the floor itself — and she is sold with it, at nine tenths of list for
+   * the gear because it is a package. Only items this dock would sell you
+   * anyway, so a floor ship never carries something the shelf beside it
+   * would refuse to. */
+  var STOCK_GEAR_SHARE = 0.9;
+  function stockFit(G, port, hullId, t) {
+    var h = HULLS[hullId];
+    var probe = { hullId: hullId, fit: {} };
+    var cost = 0, items = [];
+    if (!h || !port) return { fit: probe.fit, gear: 0, items: items };
+    var shelf = stockAt(G, port).filter(function (e) {
+      var k = e.item.kind;
+      return e.available && k !== 'missile' && k !== 'sink' && !e.item.grey;
+    });
+    var R = global.RNG;
+    var win = Math.floor((t || 0) / HULL_WINDOW);
+    var keys = slotKeys(probe);
+    for (var i = 0; i < keys.length; i++) {
+      var type = slotType(keys[i]);
+      var fits = shelf.filter(function (e) { return e.item.slot === type; });
+      if (!fits.length) continue;
+      var hsh = (R && R.hashString ? R.hashString('stock|' + port.id + '|' + hullId + '|' + win + '|' + keys[i]) : i * 7919) >>> 0;
+      if ((hsh % 100) >= 70) continue;                  // some bays left empty
+      fits.sort(function (a, b) { return a.item.price - b.item.price; });
+      var pick = fits[(hsh >>> 8) % fits.length];
+      var v = canFit(probe, pick.item.id, keys[i]);
+      if (!v.ok) continue;
+      probe.fit[keys[i]] = pick.item.id;
+      cost += Math.round(pick.item.price * STOCK_GEAR_SHARE);
+      items.push(pick.item.id);
+    }
+    return { fit: probe.fit, gear: cost, items: items };
+  }
+
+  /* Seven tenths, the trade-in fraction, for gear handed in with a hull —
+   * the same number Fleet.resale uses, so the two ways of getting rid of a
+   * fitting agree. */
+  var TRADE_IN = 0.7;
+  function gearValue(ship, exceptKeys) {
+    var v = 0, list = fittedList(ship);
+    for (var i = 0; i < list.length; i++) {
+      if (exceptKeys && exceptKeys[list[i].key]) continue;
+      v += Math.round((list[i].item.price || 0) * TRADE_IN);
+    }
+    return v;
+  }
+
+  /* THE ORDER SHEET, checked. `fit` maps the new hull's slot keys to either
+   * a catalogue id (bought new from this yard) or 'own:<old key>' (moved
+   * across from the ship you arrive in — only when trading her in). Returns
+   * the fit, what it costs, and why not, without touching anything. */
+  function quoteOrder(G, port, hullId, order) {
+    var s = G.ship, h = HULLS[hullId];
+    var keep = !!(order && order.keep);
+    var why = orderRefusal(G, port, hullId);
+    var probe = { hullId: hullId, fit: {} };
+    var buy = 0, reused = {}, moved = {};
+    var shelf = {};
+    stockAt(G, port).forEach(function (e) { if (e.available) shelf[e.item.id] = true; });
+    var want = (order && order.fit) || {};
+    var keys = slotKeys(probe);
+    for (var i = 0; i < keys.length && !why; i++) {
+      var pick = want[keys[i]];
+      if (!pick) continue;
+      var id = pick;
+      if (String(pick).indexOf('own:') === 0) {
+        var from = pick.slice(4);
+        if (keep) { why = 'a ship you keep keeps her gear'; break; }
+        if (reused[from]) { why = 'that fitting is already going somewhere else'; break; }
+        id = fitMap(s)[from];
+        if (!id || !EQUIPMENT[id]) { why = 'nothing in your ' + from; break; }
+        reused[from] = true;
+        moved[from] = keys[i];
+      } else {
+        if (!EQUIPMENT[id]) { why = 'no such fitting'; break; }
+        if (!shelf[id]) { why = EQUIPMENT[id].name + ' is not on this yard\'s shelf'; break; }
+        buy += EQUIPMENT[id].price || 0;
+      }
+      var v = canFit(probe, id, keys[i]);
+      if (!v.ok) { why = EQUIPMENT[id].name + ': ' + v.why; break; }
+      probe.fit[keys[i]] = EQUIPMENT[id].id;
+    }
+    var from0 = HULLS[(s && s.hullId) || 'talon'];
+    var credit = keep ? 0 : Math.round(from0.price * TRADE_IN) + gearValue(s, reused);
+    var cost = h ? h.price + buy - credit : 0;
+    if (!why && cost > 0 && (s.credits || 0) < cost) why = 'need ' + cost + ' cr';
+    /* A commissioned hull is handed over days from now, empty, and what is
+     * in your hold today flies on in the ship you are in. */
+    if (!why && !(order && order.commission) && global.Sim && global.Sim.cargoMass(s) > h.cargoCap) {
+      why = 'hold too small for your cargo — sell some first';
+    }
+    return { ok: !why, why: why, fit: probe.fit, moved: moved, cost: cost,
+             hull: h ? h.price : 0, gear: buy, credit: credit, summary: fitSummary(probe) };
+  }
+
+  /* Paint a buyer can choose at a shipyard: a hull colour and a trim. Named,
+   * because "#3b6e8f" is not a colour anybody asks a yard for. */
+  var PAINTS = [
+    { id: 'yard',     name: 'yard grey',      hex: null },
+    { id: 'navy',     name: 'deep navy',      hex: '#22406e' },
+    { id: 'crimson',  name: 'crimson',        hex: '#8f2630' },
+    { id: 'forest',   name: 'forest green',   hex: '#2f6040' },
+    { id: 'ochre',    name: 'ochre',          hex: '#a8781f' },
+    { id: 'violet',   name: 'violet',         hex: '#5d3b86' },
+    { id: 'teal',     name: 'teal',           hex: '#1f7a7a' },
+    { id: 'sand',     name: 'sandstone',      hex: '#c9b48a' },
+    { id: 'white',    name: 'hospital white', hex: '#e6e9ec' },
+    { id: 'black',    name: 'matte black',    hex: '#1d1f24' },
+    { id: 'orange',   name: 'hazard orange',  hex: '#d0641c' }
+  ];
+  var PAINT_BY_ID = {};
+  PAINTS.forEach(function (p) { PAINT_BY_ID[p.id] = p; });
 
   /* Is this dock a warship? `fleet` is set by Economy.siteFleetCarrier when
    * it converts a port into the navy's own, and the role name follows it —
@@ -6680,13 +7265,60 @@
      * turn a bill into a soft game over. */
     var enc = lienRefusal(G);
     if (enc) return { ok: false, why: enc };
-    if (s.credits < item.price) {
-      return { ok: false, why: 'need ' + item.price + ' cr', short: item.price - s.credits };
+    /* A LARGE HULL IS REFITTED AT A SHIPYARD (2026-10-19). */
+    var yr = yardRefusal(G);
+    if (yr) return { ok: false, why: yr };
+    /* A DRIVE INTO A FULL BAY IS A TRADE-IN. A free drive slot takes it as
+     * a second drive; otherwise it replaces the weakest one fitted, and
+     * that one goes back to the yard at RESALE. Without this the old drive
+     * was simply overwritten — paid for and gone. */
+    var tradeIn = 0, oldKey = null;
+    if (item.kind === 'cruisedrive' && !key) {
+      key = firstFreeSlot(s, 'drive');
+      if (!key) {
+        var ds = cruiseDrives(s).slice().sort(function (a, b) {
+          return driveFactor(a.item, s) - driveFactor(b.item, s) || (a.item.price - b.item.price);
+        });
+        if (ds.length) { key = ds[0].key; oldKey = key; }
+      }
+    }
+    if (item.kind === 'cruisedrive' && key && fitMap(s)[key]) {
+      var old = EQUIPMENT[fitMap(s)[key]];
+      if (old && old.id === item.id) return { ok: false, why: item.name + ' is already fitted there' };
+      if (old) tradeIn = Math.round((old.price || 0) * RESALE);
+      oldKey = key;
+    }
+    var net = item.price - tradeIn;
+    if (s.credits < net) {
+      return { ok: false, why: 'need ' + net + ' cr' + (tradeIn ? ' after trade-in' : ''), short: net - s.credits };
     }
     var v = fitItem(s, id, key);
     if (!v.ok) return v;
-    s.credits -= item.price;
-    return { ok: true, key: v.key, cost: item.price, item: item };
+    s.credits -= net;
+    return { ok: true, key: v.key, cost: net, item: item, tradeIn: tradeIn, replaced: oldKey ? true : false };
+  }
+
+  /* What buying drive `id` would do, without doing it — for the yard row:
+   * which slot, the trade-in, the net price, and the top speed after (in
+   * c, for the ship as loaded now). Mirrors buyEquipment's choice of slot. */
+  function drivePreview(G, id) {
+    var s = G.ship, item = EQUIPMENT[id];
+    if (!item || item.kind !== 'cruisedrive') return null;
+    var key = firstFreeSlot(s, 'drive'), tradeIn = 0, replaces = null;
+    if (!key) {
+      var ds = cruiseDrives(s).slice().sort(function (a, b) {
+        return driveFactor(a.item, s) - driveFactor(b.item, s) || (a.item.price - b.item.price);
+      });
+      if (!ds.length) return { ok: false, why: 'this hull has no drive slot' };
+      key = ds[0].key; replaces = ds[0].item;
+      if (replaces.id === id) return { ok: false, why: 'already fitted', key: key };
+      tradeIn = Math.round((replaces.price || 0) * RESALE);
+    }
+    var probe = { hullId: s.hullId, cargo: s.cargo, mass: s.mass, fit: {} };
+    for (var k in fitMap(s)) probe.fit[k] = fitMap(s)[k];
+    probe.fit[key] = item.id;
+    return { ok: true, key: key, replaces: replaces, tradeIn: tradeIn,
+             net: item.price - tradeIn, topC: cruiseTopC(probe), nowC: cruiseTopC(s) };
   }
 
   /* The original signature, preserved. Positive = bought at that price,
@@ -6777,7 +7409,24 @@
    * That is the only way a fleet ever comes into existence, and it is the
    * same transaction either way — the difference is one term in the price
    * and whether fleet.js gets a row. */
-  function buyHull(G, hullId, keep) {
+  /* `opts` (2026-10-19, shipyards): { fit, name, paint } — the order sheet.
+   * A large hull bought at a SHIPYARD is built to order: `fit` maps her
+   * slot keys to new fittings off this yard's shelf or to 'own:<key>' for
+   * gear moved across from the ship you trade in (default: everything that
+   * fits moves, as before). A large hull bought ANYWHERE ELSE is sold as
+   * she sits — with the dock's own fit (stockFit) — and the gear on the
+   * ship you trade in is taken at seven tenths, since there is nobody here
+   * who can move it across. Small and medium hulls are unchanged. */
+  function defaultOrderFit(s, to, keep) {
+    if (keep) return {};
+    var r = replanFit(s, to);
+    if (!r.ok) return {};
+    var out = {};
+    for (var oldKey in r.moved) out[r.moved[oldKey]] = 'own:' + oldKey;
+    return out;
+  }
+
+  function buyHull(G, hullId, keep, opts) {
     var s = G.ship;
     var to = HULLS[hullId], from = HULLS[s.hullId || 'talon'];
     if (!to || to.id === s.hullId) return { ok: false, why: 'already flying one' };
@@ -6786,7 +7435,27 @@
      * against the hull is to stop owning that hull. */
     var encH = lienRefusal(G);
     if (encH) return { ok: false, why: encH };
-    var cost = keep ? to.price : to.price - Math.round(from.price * 0.7);
+    var port = dockedPort(G);
+    /* BUILT TO ORDER MEANS BUILT (2026-10-19). Astra: "Build time for a
+     * ship is realistic, and lets you anticipate the use of your new ship
+     * even if you get blown up in your current one." A customised large
+     * hull is commissioned (commission(), below) and handed over days
+     * later; what buyHull sells is what is standing on a floor today. */
+    if (to.orderOnly || to.military) {
+      return { ok: false, why: 'the ' + to.name + ' is built to order — commission her at a shipyard' };
+    }
+    var plan = null;
+    if (bigHull(to.id) && port) {
+      if (!hullOnFloor(port, to.id, G.t)) {
+        return { ok: false, why: isShipyard(port)
+          ? 'none on the floor today — commission one and she is built for you'
+          : 'she is not on the floor here' };
+      }
+      var sf = stockFit(G, port, to.id, G.t);
+      var credit = keep ? 0 : Math.round(from.price * TRADE_IN) + gearValue(s, null);
+      plan = { mode: 'stock', fit: sf.fit, moved: {}, cost: to.price + sf.gear - credit };
+    }
+    var cost = plan ? plan.cost : (keep ? to.price : to.price - Math.round(from.price * 0.7));
     if (cost > 0 && s.credits < cost) return { ok: false, why: 'need ' + cost + ' cr' };
     if (global.Sim.cargoMass(s) > to.cargoCap) {
       return { ok: false, why: 'hold too small for your cargo — sell some first' };
@@ -6801,7 +7470,8 @@
      * still a ship, and stripping it on the way out would be the yard
      * quietly helping itself. So the new hull gets the standard kit and
      * nothing else, and the old one keeps what was bolted to it. */
-    var moved = keep ? { ok: true, fit: {}, moved: {} } : replanFit(s, to);
+    var moved = plan ? { ok: true, fit: plan.fit, moved: plan.moved }
+              : keep ? { ok: true, fit: {}, moved: {} } : replanFit(s, to);
     if (!moved.ok) return { ok: false, why: moved.why };
     var parked = null;
     if (keep) {
@@ -6828,6 +7498,12 @@
      * doing the same thing: which hull, bought where, at what hour. */
     s.bornId = to.id + '@' + (G.here ? G.here.id : 'void') + '#' +
                Math.round((G.t || 0) / 3600);
+    /* A NEW HULL FLIES ITS OWN COLOURS. A disguise is paint and a spoofed
+     * transponder on a particular hull (captains.js) — it does not move
+     * across with the gear. The new hull is a face no captain has seen,
+     * which is the design's other route to a clean start ("buy a new
+     * ship"), but under your own honest name it still carries your record. */
+    s.disguise = null;
     s.hullId = to.id;
     s.dryMass = to.dryMass;
     s.thrustKN = to.thrustKN;
@@ -6868,10 +7544,219 @@
         for (var mi = 0; mi < ml.length; mi++) if (ml[mi] && !ml[mi].carrier) ml[mi].carrier = parked.id;
       }
     }
+    /* THE ORDER SHEET'S LAST TWO LINES: her name and her paint. A hull
+     * from any other counter leaves in yard grey. */
+    if (opts && opts.name) s.shipName = String(opts.name).slice(0, 24);
+    s.paint = (opts && opts.paint && (opts.paint.p || opts.paint.t)) ? { p: opts.paint.p || null, t: opts.paint.t || null } : null;
     var fitted = addHullStandard(s);
     syncLegacy(s);
     global.Sim.refreshShip(s);
-    return { ok: true, cost: cost, standard: fitted, parked: parked };
+    return { ok: true, cost: cost, standard: fitted, parked: parked, mode: plan ? plan.mode : 'floor' };
+  }
+
+  /* ---- commissioning: a hull built for you (2026-10-19) -------------------
+   * Astra: "Build time for a ship is realistic, and lets you anticipate the
+   * use of your new ship even if you get blown up in your current one."
+   *
+   * You sign the order sheet at a shipyard and pay for her there and then.
+   * You keep flying the ship you came in, so there is no trade-in at the
+   * desk and nothing of yours moves across: she is built with what is on
+   * this yard's shelf. Days later she is handed over AT THAT YARD as one
+   * of your fleet (Fleet), with a week on the clamp paid for, and from
+   * there you take command of her (takeCommand) — keeping the ship you
+   * are in, or trading her in on the spot.
+   *
+   * The order is yours, not the hull's. Credits, standing and the paper
+   * in your pocket survive a death (stripForRespawn), and so does this:
+   * a pilot who is blown up in the old ship wakes in a Talon with a
+   * better one already on the slip.
+   *
+   * Build time, in days, by size: a few days for a large hull, over a week
+   * for an extra-large one, a fortnight for a capital ship. */
+  var BUILD_DAYS = { L: 3, XL: 8 };
+  var BUILD_DAYS_CAPITAL = 14;
+  var DAY = 86400;
+  /* What the yard covers on the clamp once she is handed over: a week, so
+   * a pilot three stars away is not billed for a ship they have never
+   * seen. Berthing starts after it, in Fleet.settle's weekly arithmetic. */
+  var HANDOVER_GRACE = 7 * DAY;
+
+  function buildDays(hullId) {
+    var h = HULLS[hullId];
+    if (!h) return 0;
+    if (h.military && sizeOf(hullId) === 'XL') return BUILD_DAYS_CAPITAL;   // a capital warship
+    return BUILD_DAYS[sizeOf(hullId)] || 0;
+  }
+
+  function orders(G) { return (G && G.orders) || []; }
+
+  /* Strip the 'own:' lines — a ship you keep flying keeps her gear. */
+  function commissionFit(fit) {
+    var out = {};
+    for (var k in (fit || {})) if (fit[k] && String(fit[k]).indexOf('own:') !== 0) out[k] = fit[k];
+    return out;
+  }
+
+  function quoteCommission(G, hullId, sheet) {
+    var port = dockedPort(G);
+    if (!port || !isShipyard(port)) return { ok: false, why: 'only a shipyard builds to order' };
+    if (!bigHull(hullId)) return { ok: false, why: 'small and medium hulls come off the floor' };
+    var q = quoteOrder(G, port, hullId,
+                       { fit: commissionFit(sheet && sheet.fit), keep: true, commission: true });
+    q.days = buildDays(hullId);
+    q.port = port;
+    return q;
+  }
+
+  function commission(G, hullId, sheet) {
+    var q = quoteCommission(G, hullId, sheet);
+    if (!q.ok) return { ok: false, why: q.why };
+    var port = q.port, s = G.ship, t = G.t || 0;
+    s.credits -= q.cost;
+    var o = {
+      id: 'yo' + Math.round(t) + '-' + hullId + '-' + orders(G).length,
+      hullId: hullId,
+      fit: q.fit,
+      name: (sheet && sheet.name) ? String(sheet.name).slice(0, 24) : null,
+      paint: (sheet && sheet.paint && (sheet.paint.p || sheet.paint.t))
+        ? { p: sheet.paint.p || null, t: sheet.paint.t || null } : null,
+      port: port.id, portName: port.name || null,
+      star: G.here ? G.here.id : null, starName: G.here ? G.here.name : null,
+      placed: t, due: t + q.days * DAY, paid: q.cost
+    };
+    if (!G.orders) G.orders = [];
+    G.orders.push(o);
+    return { ok: true, order: o, cost: q.cost, days: q.days };
+  }
+
+  /* Seconds until she is handed over; 0 once she is due. */
+  function orderEta(o, t) { return o ? Math.max(0, o.due - (t || 0)) : 0; }
+
+  /* Hand over every order that is due, as a fleet record at its yard.
+   * Returns the lines to say. Runs once a frame from main.js and returns
+   * before allocating anything when there is nothing on the slips. */
+  function deliverOrders(G, t) {
+    var list = G && G.orders;
+    if (!list || !list.length) return [];
+    var out = [];
+    for (var i = list.length - 1; i >= 0; i--) {
+      var o = list[i];
+      if (!(t >= o.due)) continue;
+      list.splice(i, 1);
+      var h = HULLS[o.hullId];
+      if (!h || !global.Fleet) continue;
+      var ship = {
+        hullId: o.hullId, fit: {}, cargo: {}, crew: [], passengers: 0,
+        fuel: h.fuelCap, thrusterFuel: h.thrusterCap, hullHp: h.hullMax,
+        shipName: o.name || null, reg: null, paint: o.paint || null,
+        bornId: o.hullId + '@' + (o.star || 'void') + '#' + Math.round(o.due / 3600)
+      };
+      for (var k in o.fit) ship.fit[k] = o.fit[k];
+      addHullStandard(ship);
+      var rec = global.Fleet.record(ship, o.port, o.name || h.name);
+      rec.id = 'fs-' + o.id;                 // stable: the order's id, not the clock's
+      rec.portName = o.portName; rec.star = o.star; rec.starName = o.starName;
+      rec.berthTo = rec.wagesTo = o.due + HANDOVER_GRACE;
+      global.Fleet.add(G, rec);
+      out.push('The ' + (o.name || h.name) + ' is out of the slip at ' +
+               (o.portName || 'the yard') + (o.starName ? ', ' + o.starName : '') +
+               ' — she is yours, and her first week on the clamp is paid. FLEET.');
+    }
+    return out;
+  }
+
+  /* ---- taking command of a ship you own ----------------------------------
+   * You step across the clamp into one of your own ships. `mode` 'keep'
+   * leaves the one you were in on this clamp as part of your fleet;
+   * 'tradein' sells her to the yard at the usual seven tenths, gear and
+   * all, and brings your hold and your people across with you. A
+   * partner's ship is hers, and a ship under way is not on this clamp. */
+  function commandRefusal(G, rec, mode) {
+    var s = G && G.ship;
+    if (!rec) return 'no such ship';
+    if (rec.partner) return 'the ' + rec.name + ' is ' + rec.partner.name + '\'s ship — she flies with you, not for you';
+    if (rec.order) return 'the ' + rec.name + ' is under way';
+    if (!s || !s.docked || rec.port !== s.docked ||
+        (rec.star && G.here && rec.star !== G.here.id)) {
+      return 'the ' + rec.name + ' is at ' + (rec.portName || 'another port') +
+             (rec.starName ? ', ' + rec.starName : '') + ' — go to her';
+    }
+    var lien = lienRefusal(G);
+    if (lien) return lien;
+    if ((rec.arrears || 0) > (s.credits || 0)) {
+      return 'the clamp is owed ' + rec.arrears + ' cr on her — settle it first';
+    }
+    if (mode === 'tradein') {
+      var h = HULLS[rec.hullId];
+      var carried = global.Sim ? global.Sim.cargoMass(s) : 0;
+      var hers = 0;
+      for (var k in (rec.cargo || {})) hers += rec.cargo[k] || 0;
+      if (h && carried + hers > h.cargoCap + 1e-9) return 'her hold will not take yours as well — sell some first';
+    }
+    return null;
+  }
+
+  function tradeInValue(s) {
+    var from = HULLS[(s && s.hullId) || 'talon'];
+    return Math.round((from ? from.price : 0) * TRADE_IN) + gearValue(s, null);
+  }
+
+  function takeCommand(G, recId, mode) {
+    var F = global.Fleet;
+    if (!F) return { ok: false, why: 'no harbour master here' };
+    mode = mode === 'tradein' ? 'tradein' : 'keep';
+    var rec = F.byId(G, recId);
+    var why = commandRefusal(G, rec, mode);
+    if (why) return { ok: false, why: why };
+    var s = G.ship, h = HULLS[rec.hullId];
+    var port = dockedPort(G);
+    if (rec.arrears > 0) { s.credits -= rec.arrears; rec.arrears = 0; }
+    var ml = G.missions || [], mi;
+    var parked = null, credit = 0;
+    if (mode === 'keep') {
+      parked = F.park(G, s, s.docked, s.shipName);
+      parked.portName = port ? port.name : rec.portName;
+      parked.star = G.here ? G.here.id : null;
+      parked.starName = G.here ? G.here.name : null;
+      /* Whatever was riding in the old hold stays in her, and so do the
+       * contracts that go with it. */
+      for (mi = 0; mi < ml.length; mi++) if (ml[mi] && !ml[mi].carrier) ml[mi].carrier = parked.id;
+    } else {
+      credit = tradeInValue(s);
+      s.credits += credit;
+    }
+    /* What was aboard HER comes to you. */
+    for (mi = 0; mi < ml.length; mi++) if (ml[mi] && ml[mi].carrier === rec.id) delete ml[mi].carrier;
+    var cargo = mode === 'keep' ? {} : (s.cargo || {});
+    for (var c in (rec.cargo || {})) cargo[c] = (cargo[c] || 0) + rec.cargo[c];
+    var crew = (mode === 'keep' ? [] : (s.crew || [])).concat(rec.crew || []);
+    var riders = (mode === 'keep' ? 0 : (s.passengers || 0)) + (rec.passengers || 0);
+    F.remove(G, rec.id);
+
+    s.disguise = null;
+    s.hullId = rec.hullId;
+    s.bornId = rec.bornId || null;
+    s.dryMass = h.dryMass;
+    s.thrustKN = h.thrustKN;
+    s.thrusterCap = h.thrusterCap;
+    s.thrusterFuel = Math.min(rec.thrusterFuel != null ? rec.thrusterFuel : h.thrusterCap, h.thrusterCap);
+    s.fuelCap = h.fuelCap;
+    s.fuel = Math.min(rec.fuel != null ? rec.fuel : h.fuelCap, h.fuelCap);
+    s.cargoCap = h.cargoCap;
+    s.hullMax = h.hullMax;
+    s.hullHp = Math.min(rec.hullHp != null ? rec.hullHp : h.hullMax, h.hullMax);
+    s.fit = {};
+    for (var fk in (rec.fit || {})) s.fit[fk] = rec.fit[fk];
+    s.groups = {};
+    s.cargo = cargo;
+    s.crew = crew;
+    s.passengers = riders;
+    s.shipName = rec.name || null;
+    s.reg = rec.reg || null;
+    s.paint = rec.paint || null;
+    syncLegacy(s);
+    if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(s);
+    return { ok: true, mode: mode, parked: parked, credit: credit, name: rec.name, hull: h };
   }
 
   /* ---- death ------------------------------------------------------------ */
@@ -6879,6 +7764,7 @@
    * of the hull. Credits, standing and warrants are part of you. */
   function stripForRespawn(ship) {
     ship.cargo = {};
+    ship.paint = null;              // the new Talon is yard grey
     /* AND THE PEOPLE. The hull is gone and they were in it. Leaving the
      * roster standing would have you paying a gunner who went down with
      * the ship, which is the payroll finding the bug for you — and a crew
@@ -6941,6 +7827,10 @@
     fitItem: fitItem, unfitItem: unfitItem, sellFitted: sellFitted,
     syncLegacy: syncLegacy, migrateFit: migrateFit, replanFit: replanFit,
     buyEquipment: buyEquipment, stockAt: stockAt,
+    CRUISE_DRIVES: CRUISE_DRIVES, CRUISE_BASE_C: CRUISE_BASE_C, CRUISE_REF_MASS: CRUISE_REF_MASS,
+    cruiseDrives: cruiseDrives, cruiseMultiplier: cruiseMultiplier, cruiseTopC: cruiseTopC,
+    cruiseOnMilfuel: cruiseOnMilfuel, drivePreview: drivePreview, driveSlotCount: driveSlotCount,
+    ensureCruiseDrive: ensureCruiseDrive,
     SINK: SINK, sinkRackSize: sinkRackSize, armSink: armSink,
     scanLevel: scanLevel, scanShip: scanShip, hasScoop: hasScoop,
     npcArmament: npcArmament, hasTradeAnalyser: hasTradeAnalyser, playerDps: playerDps,
@@ -7025,6 +7915,16 @@
     bountyTotal: bountyTotal, wantedHere: wantedHere, fleetPort: fleetPort,
     sellsHulls: sellsHulls,
     landsLarge: landsLarge, hullOnFloor: hullOnFloor, hullsAt: hullsAt,
+    /* shipyards, 2026-10-19 */
+    HULL_SIZES: HULL_SIZES, sizeOf: sizeOf, bigHull: bigHull, isShipyard: isShipyard,
+    takesXL: takesXL, yardRefusal: yardRefusal, orderRefusal: orderRefusal,
+    orderList: orderList, stockFit: stockFit, quoteOrder: quoteOrder,
+    commission: commission, quoteCommission: quoteCommission, buildDays: buildDays,
+    orders: orders, orderEta: orderEta, deliverOrders: deliverOrders,
+    takeCommand: takeCommand, commandRefusal: commandRefusal, tradeInValue: tradeInValue,
+    BUILD_DAYS: BUILD_DAYS, BUILD_DAYS_CAPITAL: BUILD_DAYS_CAPITAL, HANDOVER_GRACE: HANDOVER_GRACE,
+    defaultOrderFit: defaultOrderFit, PAINTS: PAINTS, PAINT_BY_ID: PAINT_BY_ID,
+    TRADE_IN: TRADE_IN,
     hullChance: hullChance, HULL_WINDOW: HULL_WINDOW,
     transponderKind: transponderKind, forgedPasses: forgedPasses,
     transponderPasses: transponderPasses, FORGED_PASS: FORGED_PASS,

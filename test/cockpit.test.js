@@ -94,6 +94,52 @@ console.log('--- looking forward ---');
   });
 });
 
+/* ---- the dash screens never overlap -----------------------------------
+ * Astra, 2026-10-19: "panels overlap. This is a problem." They did, by 43
+ * to 138 px between neighbouring housings, at every size this suite tried
+ * — and every check above passed, because each one looked at a panel on
+ * its own. This one looks at NEIGHBOURS: the housings (bezel included,
+ * which is the bit the old angle sum left out), projected through the real
+ * camera, separated by a margin, at every window shape and across the
+ * whole range of cockpit sizes from the smallest hull to the largest. */
+console.log('--- the dash screens never overlap ---');
+(function () {
+  function sepGap(a, b) {                      // >0: px apart, <0: overlapping
+    var best = -Infinity;
+    [a, b].forEach(function (p) {
+      for (var i = 0; i < p.length; i++) {
+        var q = p[(i + 1) % p.length];
+        var nx = -(q.y - p[i].y), ny = q.x - p[i].x, l = Math.hypot(nx, ny);
+        if (l < 1e-9) continue; nx /= l; ny /= l;
+        var amin = Infinity, amax = -Infinity, bmin = Infinity, bmax = -Infinity;
+        a.forEach(function (v) { var d = v.x * nx + v.y * ny; if (d < amin) amin = d; if (d > amax) amax = d; });
+        b.forEach(function (v) { var d = v.x * nx + v.y * ny; if (d < bmin) bmin = d; if (d > bmax) bmax = d; });
+        best = Math.max(best, bmin - amax, amin - bmax);
+      }
+    });
+    return best;
+  }
+  var dash = Render.MFD_MOUNTS.filter(function (m) { return Math.abs(m.bearing) < 60 * DEG; })
+    .sort(function (a, b) { return a.bearing - b.bearing; });
+  [[1920, 1080], [1280, 800], [1024, 768], [3840, 2160], [900, 1600], [764, 928]].forEach(function (dim) {
+    var w = dim[0], h = dim[1];
+    [0.86, 1, 1.3].forEach(function (size) {
+      var cam = new Render.Camera();
+      cam.buildCockpit(ship, w, h, { yaw: 0, pitch: 0 });
+      var q = dash.map(function (m) {
+        return Render.clipProject(cam, Render.localPoly(ship, Render.mfdCorners(m, 0.022, { size: size })));
+      });
+      for (var i = 0; i + 1 < q.length; i++) {
+        if (!q[i] || !q[i + 1]) continue;
+        var g = sepGap(q[i], q[i + 1]);
+        var need = 8 * w / 1280;               // a visible strip of dash between them
+        check(w + 'x' + h + ' size ' + size + ': ' + dash[i].id + ' and ' + dash[i + 1].id +
+              ' housings do not overlap', g >= need, g.toFixed(1) + ' px apart, need ' + need.toFixed(1));
+      }
+    });
+  });
+})();
+
 /* ---- the screens you turn your head to ---------------------------------
  * Astra asked for the comms channel "on a monitor up and to the right at
  * the player's 3 o'clock, angled 45 degrees facing down", and a panel at

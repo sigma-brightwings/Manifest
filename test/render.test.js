@@ -576,7 +576,11 @@ console.log('--- dashboard panels ---');
   var texts = drawn.texts.slice(mark);
   function count(s) { return texts.filter(function (t) { return t === s; }).length; }
   check('the orbit page is drawn on the dashboard', count('ORBIT') >= 1);
-  check('the target page is drawn on the dashboard', count('TARGET') >= 1);
+  /* With nothing locked the lock screen reads NAV: TARGET is for ships
+   * only (Astra, 2026-10-19: "target should be reserved for ships that are
+   * targeted either for hailing or weapons fire"). */
+  check('the lock page is drawn on the dashboard, as NAV with no ship locked',
+        count('NAV') >= 1 && count('TARGET') === 0, 'NAV ' + count('NAV') + ', TARGET ' + count('TARGET'));
   check('the scope is drawn twice: on the dash and on the flat band',
         count('SCOPE') >= 2, count('SCOPE') + ' times');
   check('and the frame still had no errors in it', errorsSince(mark).length === 0,
@@ -1077,7 +1081,10 @@ console.log('--- the yard, the board, and a fight on screen ---');
     check('the ' + tab.toUpperCase() + ' tab renders', errorsSince(mark).length === 0,
           errorsSince(mark)[0]);
     yardBtns = yardBtns.concat(G.hotspots.filter(function (s) {
-      return s.hint && /HAWK|TURRET|SHIELD|MULE|DART|KESTREL/.test(s.hint);
+      /* A hull row carries its size letter — "[M]" — which since every
+       * ship type went on sale (2026-10-19) is a surer mark of one than a
+       * name that may have scrolled below the cheaper hulls. */
+      return s.hint && /HAWK|TURRET|SHIELD|MULE|DART|KESTREL|\[(S|M|L|XL)\]/.test(s.hint);
     }));
   });
   check('it sells weapons and hulls', yardBtns.length >= 3, yardBtns.length + ' buttons');
@@ -1439,6 +1446,40 @@ console.log('--- the yard, the board, and a fight on screen ---');
   G.ship.hullHp = G.ship.hullMax;
   G.sys.missiles = [];
   G.beams = [];
+  G.missions = [];
+  frames(2);
+})();
+
+/* ARRIVING SETTLES THE CONTRACT (2026-10-17). Astra: "missions still don't
+ * auto-clear when you arrive at the mission destination." They never did:
+ * the arrival desk read the docking edge and moved G.wasDocked before the
+ * contracts got to read it, so completeAtDock was never called from the
+ * game at all. missions.test.js calls completeAtDock by hand and could not
+ * see that — only the real frame loop can, which is why this is here. */
+console.log('--- arriving settles the contract ---');
+(function () {
+  var dest = (G.sys.ports || []).filter(function (p) { return p.docking && !p.surface; })[0];
+  check('there is a port to deliver to', !!dest);
+  if (!dest) return;
+  var cid = W.Economy.COMMODITIES ? W.Economy.COMMODITIES[0].id : 'grain';
+  if (G.ship.docked) Sim.undockShip(G.ship, G.sys, G.t, 0.003);
+  G.dockTarget = null;
+  frames(2);                                   // one undocked frame, so the next dock is an edge
+  check('away from the clamps first', !G.ship.docked && !G.wasDocked);
+  G.ship.cargo = {};
+  G.ship.cargo[cid] = 3;
+  W.Sim.refreshShip(G.ship);
+  var credits0 = G.ship.credits;
+  G.missions = [{ id: 'arrival-edge-test', type: 'haul', toPortId: dest.id, cid: cid,
+                  tonnes: 3, pay: 777, faction: dest.factionId, deadline: G.t + 1e8 }];
+  Sim.dockShip(G.ship, dest, G.sys, G.t);
+  frames(2);
+  check('docking at the destination settles the contract by itself',
+        !(G.missions || []).some(function (m) { return m.id === 'arrival-edge-test'; }),
+        (G.missions || []).length + ' contract(s) still open');
+  check('and pays for it', G.ship.credits - credits0 === 777,
+        'credits moved by ' + (G.ship.credits - credits0));
+  check('and takes the freight', !(G.ship.cargo[cid] > 0), cid + ' ' + (G.ship.cargo[cid] || 0) + 't');
   G.missions = [];
   frames(2);
 })();

@@ -23,8 +23,13 @@ fs.mkdirSync(outdir, { recursive: true });
 const packaged = process.env.PROBE_EXE;
 const exe = packaged || path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe');
 /* A scratch userData, fresh each run, so a probe never reads or autosaves
- * over the career Astra is actually playing (electron/main.js honours it). */
-const scratch = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'manifest-probe-'));
+ * over the career Astra is actually playing (electron/main.js honours it).
+ * PROBE_PROFILE=<dir> names the folder instead, to keep it between runs.
+ * (The scratch default was written 2026-10-15, lost in a merge, and put
+ * back 2026-10-19.) */
+const scratch = process.env.PROBE_PROFILE ? path.resolve(process.env.PROBE_PROFILE)
+  : fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'manifest-probe-'));
+fs.mkdirSync(scratch, { recursive: true });
 const child = spawn(exe, (packaged ? [] : ['.']).concat(['--remote-debugging-port=' + PORT]),
                     { cwd: packaged ? path.dirname(packaged) : ROOT, stdio: ['ignore', 'pipe', 'pipe'],
                       env: Object.assign({}, process.env, { MANIFEST_PROBE_USERDATA: scratch }) });

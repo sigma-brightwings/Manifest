@@ -44,6 +44,8 @@
       /* The birth mark travels with the hull, so a ship you come back to
        * has the bridge you learned. */
       bornId: ship.bornId || null,
+      /* And her paint (shipyards, 2026-10-19). */
+      paint: ship.paint || null,
       fit: fit,
       cargo: cargo,
       fuel: ship.fuel, thrusterFuel: ship.thrusterFuel,
@@ -707,7 +709,10 @@
            (tons > 0 ? '  ·  ' + Math.round(tons) + ' t aboard' : '  ·  empty') +
            (rec.passengers > 0 ? '  ·  ' + rec.passengers + ' aboard' : '') +
            (rec.crew && rec.crew.length ? '  ·  ' + rec.crew.length + ' crew'
-                                        : '  ·  no crew');
+                                        : '  ·  no crew') +
+           (rec.partner ? '  ·  ' + rec.partner.name + '\'s ship, profit split ' +
+                          Math.round((1 - rec.partner.share) * 100) + '/' +
+                          Math.round(rec.partner.share * 100) : '');
   }
 
   var Fleet = {

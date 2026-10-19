@@ -234,7 +234,11 @@
      * the navy likes you. */
     { id: 'milfuel',  name: 'Military drive fuel', tier: 3,
       base: Math.round(FISSILE_BASE * FISSILE_PER_MILFUEL * ENRICH_MARGIN),
-      cat: 'special', milfuel: true, severity: 3, shelfDays: 8, shelfMax: 24 },
+      /* shelfMax 24 -> 18 (2026-10-19): twilight worlds settled more of the
+       * galaxy, plants made more, and the best single run reached 127,711 cr,
+       * past a Kestrel. 18 puts the median run back where it was before them
+       * (80,564 cr against 78,780) and the best at 95,783. */
+      cat: 'special', milfuel: true, severity: 3, shelfDays: 8, shelfMax: 18 },
 
     /* Fruit, off the vines and the orchard rows under a civilian farm's
      * domes — the same farms that make the wine. Appended LAST so no tier or

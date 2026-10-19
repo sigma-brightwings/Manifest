@@ -706,6 +706,11 @@ console.log('--- and the doors are doors ---');
     }
     d.leaves.forEach(function (lf) {
       if (lf.field) { fields++; return; }
+      /* A lift car and the hatch over it (2026-10-17) are moving parts but
+       * not door leaves: the car runs down its shaft, not across a doorway,
+       * and a hatch is there-or-not like a field. transfer.test.js pins
+       * both — where the car is drawn, and what you hit. */
+      if (lf.car || lf.hatch) return;
       if (!(lf.travel > 0)) { bad++; console.log('  FAIL  ' + modelId + ' leaf ' + lf.node + ' does not move'); return; }
       movers++;
       minTravel = Math.min(minTravel, lf.travel);

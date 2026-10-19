@@ -12,7 +12,12 @@ var http = require('http'), fs = require('fs'), path = require('path');
 var port = parseInt(process.argv[2], 10) || 8732;
 var root = path.resolve(__dirname, '..');
 var TYPES = { '.html': 'text/html', '.js': 'text/javascript',
-              '.css': 'text/css', '.json': 'application/json' };
+              '.css': 'text/css', '.json': 'application/json',
+              /* The reader model (src/embedder.js): a module script, its
+               * WebAssembly runtime — which the browser refuses to stream
+               * under any other type — and the weights. */
+              '.mjs': 'text/javascript', '.wasm': 'application/wasm',
+              '.onnx': 'application/octet-stream' };
 
 http.createServer(function (req, res) {
   var url = req.url.split('?')[0];

@@ -160,8 +160,16 @@
     if (!s.corr && !s.viol) return base;
     if (!Gen || !Gen.permissivity || !sys || sys.violence === undefined ||
         sys.corruption === undefined) return base;
-    return Gen.permissivity(violenceOf(G, sys, starId),
-                            clamp(sys.corruption + s.corr, 0, 100));
+    /* THE SHIFT, NOT THE FORMULA. buildGovernment works the generated score
+     * out from the unrounded axes and stores the axes rounded, so the
+     * formula on the stored axes is one off in about one system in six.
+     * Taking the formula's DIFFERENCE and adding it to the generated score
+     * keeps the system's own number as the starting point, so the first
+     * nudge a holding gives it moves it by the nudge, not by that one. */
+    var shifted = Gen.permissivity(violenceOf(G, sys, starId),
+                                   clamp(sys.corruption + s.corr, 0, 100));
+    var stored = Gen.permissivity(sys.violence, sys.corruption);
+    return clamp(base + (shifted - stored), 0, 100);
   }
   function devOf(G, port, starId) {
     var d = (port && port.market && typeof port.market.dev === 'number') ? port.market.dev : 0.25;

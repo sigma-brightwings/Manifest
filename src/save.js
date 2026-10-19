@@ -184,6 +184,35 @@
    * world's. Orientation vectors are saved whole — recomputing them would
    * be easy, but waking up pointed somewhere you weren't is disorienting in
    * the most literal sense. */
+  /* SAVED MID-CRUISE, LOADED AT 6.7c (fixed 2026-10-19). Inside the cruise
+   * bubble the hull's velocity is the cruise speed — up to CRUISE_MAX,
+   * two million km/s — and nothing here knew about cruise, so an autosave
+   * taken in it wrote that number down and a load dropped you into plain
+   * flight at it: "speed 2000000.000 km/s", no bubble, no way to slow.
+   * Found playing a save from the 18th. A save in cruise is now written as
+   * the drop-out it would have been: the circular orbit you are standing
+   * in, which is exactly what main.js's dropCruise hands back. */
+  function circularHere(G) {
+    var Sim = global.Sim, V = global.V;
+    var dom = Sim && Sim.dominantBody(G.ship.pos, G.sys, G.t);
+    if (!dom || !(dom.mu > 0)) return null;
+    var bs = Sim.bodyState(dom, G.sys, G.t);
+    var rel = V.sub(G.ship.pos, bs.pos), r = V.len(rel);
+    if (r < 1e-6) return null;
+    var up = V.scale(rel, 1 / r);
+    var ref = Math.abs(up.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 0, y: 1, z: 0 };
+    return V.addScaled(bs.vel, V.norm(V.cross(ref, up)), Math.sqrt(dom.mu / r));
+  }
+  /* And the saves already written that way. Nothing outside the bubble
+   * flies at a twentieth of c — a torch at full burn for a month does not
+   * get there — so a loaded velocity past that, relative to the body you
+   * are near, can only be a cruise that was frozen into the file. */
+  var FROZEN_CRUISE_KMS = 15000;
+  function savedVel(G) {
+    if (!G.cruise) return G.ship.vel;
+    return circularHere(G) || G.ship.vel;
+  }
+
   function snapshot(G) {
     var s = G.ship;
     return {
@@ -198,7 +227,7 @@
        * survives a reload — it was paid for. */
       charted: Object.keys(G.charted || {}),
       ship: {
-        pos: s.pos, vel: s.vel, fwd: s.fwd, up: s.up, right: s.right,
+        pos: s.pos, vel: savedVel(G), fwd: s.fwd, up: s.up, right: s.right,
         fuel: s.fuel, thrusterFuel: s.thrusterFuel,
         /* Whether the military drive is armed. Additive and undefined-safe:
          * Slipspace.milRunning treats anything but an explicit false as
@@ -276,11 +305,19 @@
         groups: s.groups || {},
         /* Named things belong to the pilot, not the hull. */
         reg: s.reg || null, shipName: s.shipName || null,
+        /* WHAT SHE IS PRETENDING TO BE (captains.js, step 2). Additive: an
+         * older career has no disguise and flies its own colours, which it
+         * was. The count is kept separately so a fresh refit after a
+         * restore draws a new false name rather than the old one again. */
+        disguise: s.disguise || null, disguiseCount: s.disguiseCount || 0,
         /* Additive, and absent from every save written before the cockpit
          * kit existed — those load with bornId null and cockpitSpec falls
          * back to the hull id, which is a stable seed too. So an old career
          * gets a consistent bridge, just not a uniquely flaired one. */
-        bornId: s.bornId || null
+        bornId: s.bornId || null,
+        /* The colours a shipyard painted her (combat.js PAINTS). Additive:
+         * an older career's hull is yard grey, which it was. */
+        paint: s.paint || null
       },
       pilotName: G.pilotName || null,
       standing: G.standing || {},
@@ -341,6 +378,9 @@
        * it had. Stored whole because a parked ship IS its record — there
        * is no live object to reconstruct it from. */
       fleet: G.fleet || [],
+      /* Hulls on the slips (Combat.commission, 2026-10-19). Paid for, so a
+       * save that dropped them would be a save that ate the money. */
+      orders: G.orders || [],
       /* THE PLANTS YOU OWN, and what they have done to the systems they
        * are in (holdings.js). Both additive: an older career loads owning
        * nothing, and every system reads exactly its generated government. */
@@ -359,6 +399,34 @@
        * standing tally (so a reload cannot reset the daily cap). Added
        * field, absent in older saves — restore defaults it. */
       shipTrade: G.shipTrade || null,
+      /* WHO REMEMBERS YOU, and what you have done in public (captains.js).
+       * Both additive: an older career loads with no captain who has ever
+       * met you and a clean record, which is the honest reading — nobody
+       * out there was keeping count before. Only captains you have actually
+       * dealt with are in here; everyone else regenerates from the seed. */
+      captains: G.captains || {},
+      record: G.record || null,
+      /* YOUR OWN DISTRESS CALLS still in the air, with who answered and
+       * when they arrive (messages.js). Additive. Saved because the
+       * arrival is where a lie is found out, and a reload must not be a
+       * way to make the responder never get there. */
+      broadcasts: G.broadcasts || [],
+      /* FAVOURS AND PARTNERS (favours.js). Additive. `joined` is which
+       * captains left their lanes to fly with you — the timetable is
+       * regenerated from the seed and would put them back otherwise; the
+       * ask is saved so a reload is not a way to dodge answering it. */
+      joined: G.joined || {},
+      favourAsk: G.favourAsk || null,
+      tipAt: G.tipAt == null ? null : G.tipAt,
+      /* WHAT PEOPLE ARE SAYING (rumours.js). Additive — and an older
+       * career loads with `rumours` absent; what its record held by then
+       * becomes `recordLegacy`, known everywhere as it always was, and
+       * everything after travels by ship. Who has heard each rumour is not
+       * saved: it is worked out again from the timetable. */
+      rumours: G.rumours || null,
+      recordLegacy: G.recordLegacy || null,
+      hearsay: G.hearsay || [],
+      rumourSeq: G.rumourSeq || 0,
       ledger: G.ledgerLog || []
     };
   }
@@ -418,6 +486,15 @@
 
     var s = G.ship, d = data.ship;
     s.pos = d.pos; s.vel = d.vel; s.fwd = d.fwd; s.up = d.up; s.right = d.right;
+    /* A cruise frozen into an older save: put the hull back in the orbit
+     * the drop-out would have given it. See savedVel. */
+    try {
+      var domL = global.Sim && global.Sim.dominantBody(s.pos, G.sys, G.t);
+      if (domL) {
+        var vRelL = global.V.sub(s.vel, global.Sim.bodyState(domL, G.sys, G.t).vel);
+        if (global.V.len(vRelL) > FROZEN_CRUISE_KMS) s.vel = circularHere(G) || s.vel;
+      }
+    } catch (e) { /* leave it as saved */ }
     s.fuel = d.fuel; s.thrusterFuel = d.thrusterFuel;
     s.milArmed = d.milArmed;
     s.crew = (d.crew || []).slice();
@@ -444,7 +521,10 @@
     s.sinks = d.sinks || 0;
     if (d.reg) s.reg = d.reg;
     s.shipName = d.shipName || null;
+    s.disguise = (d.disguise && d.disguise.transponder) ? d.disguise : null;
+    s.disguiseCount = d.disguiseCount || 0;
     s.bornId = d.bornId || null;
+    s.paint = (d.paint && typeof d.paint === 'object') ? d.paint : null;
     G.pilotName = data.pilotName || null;
 
     /* The hull's fixed numbers come from the catalogue, not the save —
@@ -483,6 +563,7 @@
     G.allegiance = data.allegiance || null;
     G.owed = data.owed || [];
     G.fleet = data.fleet || [];
+    G.orders = data.orders || [];
     G.holdings = data.holdings || [];
     G.uplift = (data.uplift && typeof data.uplift === 'object') ? data.uplift : {};
     G.rescue = data.rescue || null;
@@ -490,6 +571,23 @@
     G.doneMissions = data.doneMissions || {};
     G.campaigns = data.campaigns || {};
     G.shipTrade = data.shipTrade || null;
+    G.captains = (data.captains && typeof data.captains === 'object') ? data.captains : {};
+    G.record = (data.record && typeof data.record === 'object') ? data.record : null;
+    G.broadcasts = Array.isArray(data.broadcasts) ? data.broadcasts : [];
+    G.msgDraft = null;
+    G.joined = (data.joined && typeof data.joined === 'object') ? data.joined : {};
+    G.favourAsk = data.favourAsk || null;
+    G.tipAt = data.tipAt == null ? null : data.tipAt;
+    G._favourSlot = null;
+    G.rumours = Array.isArray(data.rumours) ? data.rumours : [];
+    /* A career from before rumours: what it had done by then was known
+     * everywhere at once (the old public record), and stays known — the
+     * rumours that run on the timetable start from here. */
+    G.recordLegacy = data.recordLegacy ||
+      (!Array.isArray(data.rumours) && G.record ? JSON.parse(JSON.stringify(G.record)) : null);
+    G.hearsay = Array.isArray(data.hearsay) ? data.hearsay : [];
+    G.rumourSeq = data.rumourSeq || 0;
+    G._rumourSlot = null;
     G.ledgerLog = data.ledger || [];
 
     if (d.docked && G.sys.byId[d.docked]) {

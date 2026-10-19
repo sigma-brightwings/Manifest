@@ -85,6 +85,9 @@ section('--- the catalogue is not allowed to strand you ---');
 (function () {
   for (var id in Combat.HULLS) {
     var h = Combat.HULLS[id];
+    /* An XL hull cannot dock at a surface port at all (dockRefusal), so it
+     * can never be standing on one — see test/shipyard.test.js. */
+    if (h.size === 'XL') continue;
     var laden = h.dryMass + h.fuelCap + h.thrusterCap + h.cargoCap;
     var g = (h.thrustKN / laden) / 1.15;
     check(h.name + ' can lift off every port that exists',
@@ -675,8 +678,11 @@ section('--- slots, power and mass ---');
   var G = makeG();
   var s = G.ship;
 
-  check('a Talon has seven slots in three flavours',
-        Combat.slotKeys(s).length === 7 &&
+  /* Eight in four since 2026-10-19: the drive bay, which holds the cruise
+   * drive (see test/cruisedrive.test.js) and comes last so no older key
+   * moved. */
+  check('a Talon has eight slots in four flavours, the drive bay last',
+        Combat.slotKeys(s).length === 8 && Combat.slotKeys(s)[7] === 'drive0' &&
         Combat.slotKeys(s).filter(function (k) {
           return Combat.slotType(k) === 'hardpoint';
         }).length === 2, Combat.slotKeys(s).join(','));
@@ -811,8 +817,9 @@ section('--- migrating a career that predates slots ---');
    * fit map. Catching cargo used to be a property of having a hold and is
    * now a fitting, so a career that predates slots is handed the thing it
    * has always been able to do rather than quietly losing it. */
-  check('nothing was silently confiscated, and the scoop was issued',
-        Combat.fittedList(s).length === 4 &&
+  /* And five since the cruise drive: every hull's standard Class 1. */
+  check('nothing was silently confiscated, and the scoop and drive were issued',
+        Combat.fittedList(s).length === 5 && s.fit.drive0 === 'cruise1' &&
         Combat.hasScoop(s), JSON.stringify(s.fit));
 
   // Idempotent: migrating an already-migrated ship changes nothing.
@@ -3342,7 +3349,18 @@ console.log('--- what is on the floor at a shipyard ---');
       var sizes = list.map(function (id) { return Combat.HULLS[id].size || 'M'; });
       if (sizes.indexOf('S') < 0) noS++;
       if (sizes.indexOf('L') >= 0) { if (pad) surfL++; bandL[bi]++; }
-      if (sizes.indexOf('M') >= 0) bandM[bi]++;
+      /* PER HULL, not "any medium at all": since every ship type went on
+       * sale (2026-10-19) there are four medium hulls, and a developed dock
+       * carrying at least one of four was always going to read 100%. The
+       * question is still whether each one gets likelier. */
+      var nM = 0, mOnFloor = 0;
+      for (var hk in Combat.HULLS) {
+        var hh = Combat.HULLS[hk];
+        if ((hh.size || 'M') !== 'M' || hh.orderOnly || hh.military) continue;
+        nM++;
+        if (list.indexOf(hk) >= 0) mOnFloor++;
+      }
+      bandM[bi] += nM ? mOnFloor / nM : 0;
       if (!list.length) empty++;
     }
   }

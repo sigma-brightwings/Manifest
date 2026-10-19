@@ -2628,6 +2628,14 @@
     if (global.GLWorld && global.GLWorld.setIndoors) global.GLWorld.setIndoors(!!on);
   }
 
+  /* See gl.js setCutaway. The 2D painter cannot cut a hole in a wall —
+   * it has no per-pixel stage to do it in — which is why main.js only asks
+   * for a cutaway when the GPU layer is live and keeps the old boom clamp
+   * otherwise. */
+  function setCutaway(cut) {
+    if (global.GLWorld && global.GLWorld.setCutaway) global.GLWorld.setCutaway(cut || null);
+  }
+
   function paintMesh(ctx, cam, frame, mesh, scale, sunDir, tint, edge) {
     var world = [], i;
     for (i = 0; i < mesh.v.length; i++) {
@@ -2673,7 +2681,7 @@
         poly: poly,
         depth: (Math.max(da, NEAR_CLIP) + Math.max(db, NEAR_CLIP)
               + Math.max(dc, NEAR_CLIP)) / 3,
-        color: mat.color || tint,
+        color: PAINT_NOW && !mat.lit ? paintFace(mat.color || tint) : (mat.color || tint),
         alpha: mat.alpha,
         /* Indoors the sun term becomes a lamp at the eye — see the same
          * branch in gl.js, which owns the reasoning. Kept in step here so a
@@ -3160,6 +3168,41 @@
     return out;
   }
 
+  /* ---- A SHIPYARD'S PAINT (2026-10-19) -----------------------------------
+   * The colours chosen on a shipyard's order sheet (Combat.PAINTS): a hull
+   * colour and a trim. The models carry their own per-face colours, so a
+   * paint job is a remap rather than a flat fill — every face keeps its own
+   * brightness, the darker plates take the hull colour and the light ones
+   * the trim, and the self-lit faces (windows, nav lamps) are never painted
+   * over. The same rule as FRAG_MESH's uPaint, so a hull looks like itself
+   * whichever renderer draws it. Set around one draw by the caller and
+   * cleared after; null is yard grey. */
+  var PAINT_NOW = null;
+  var PAINT_SPLIT = 0.62, PAINT_MIX = 0.72;
+  function hexRGB(hex) {
+    if (typeof hex !== 'string' || hex.charAt(0) !== '#' || hex.length !== 7) return null;
+    var n = parseInt(hex.slice(1), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  function paintRGB(paint) {
+    if (!paint) return null;
+    var p = hexRGB(paint.p), t = hexRGB(paint.t);
+    if (!p && !t) return null;
+    return { p: p, t: t };
+  }
+  function paintFace(base) {
+    var b = hexRGB(base) || [190, 205, 225];
+    var l = (0.299 * b[0] + 0.587 * b[1] + 0.114 * b[2]) / 255;
+    var c = l > PAINT_SPLIT ? (PAINT_NOW.t || PAINT_NOW.p) : (PAINT_NOW.p || PAINT_NOW.t);
+    if (!c) return base;
+    var k = 0.55 + 0.9 * l, out = [];
+    for (var i = 0; i < 3; i++) {
+      var target = Math.min(255, c[i] * k);
+      out.push(Math.round(b[i] + (target - b[i]) * PAINT_MIX));
+    }
+    return '#' + ((1 << 24) | (out[0] << 16) | (out[1] << 8) | out[2]).toString(16).slice(1);
+  }
+
   /* Shade a hull colour by a lighting factor. Accepts the '#rrggbb' the
    * generator hands out, and falls back to a neutral grey hull. */
   function shadeTint(tint, shade) {
@@ -3362,9 +3405,15 @@
      * them and nothing about the size of you on screen changes except
      * which silhouette it is. */
     var mesh = hullPreviewMesh((ship && ship.hullId) || 'talon');
+    /* Her shipyard paint, if she has any — see PAINT_NOW. A crash tint
+     * (the caller's red) wins over paint: that is a warning, not a look. */
+    var pr = tint ? null : paintRGB(ship && ship.paint);
     if (!(gpuWorld() && global.GLWorld.queueMesh(cam, ship, mesh, SHIP_LEN, sunDir,
-                                                 ship.reentryGlow || 0, ship.windDir))) {
-      paintMesh(ctx, cam, ship, mesh, SHIP_LEN, sunDir, tint);
+                                                 ship.reentryGlow || 0, ship.windDir,
+                                                 undefined, pr))) {
+      PAINT_NOW = pr;
+      try { paintMesh(ctx, cam, ship, mesh, SHIP_LEN, sunDir, tint); }
+      finally { PAINT_NOW = null; }
     }
     /* The legs go on the plain queueMesh path rather than the plasma one.
      * They are the coldest thing on the ship — the last part to see air on
@@ -3781,6 +3830,346 @@
     return mesh;
   }
 
+  /* ---- STATION LIGHTS: beacons, and a way in you can see from far out ---
+   *
+   * An orbital dock had no dressing at all — no ground to put a town on —
+   * so from outside it was whatever lamps its modeller happened to light,
+   * which for most of the library is almost none: a grey block in the dark.
+   * This is the orbital counterpart of the pad lamps, and it is built for
+   * the glow pass (gl.js POST) to pick up: every lamp is a '!' face.
+   *
+   * TWO KINDS, both in the FE2/FFE register — small flat lit shapes, read
+   * by their pattern rather than by detail:
+   *
+   *   BEACONS at the extremities. White double-flash strobes at both ends of
+   *   the longest axis, a red and a green steady lamp at the ends of the
+   *   next one (so which way round a station is reads from a distance), and
+   *   a slow red anti-collision lamp on top.
+   *
+   *   APPROACH STRINGS, two rows of amber lamps per berth edging the clear
+   *   line in from open space — the same line Gen.berthApertures measures
+   *   for the arrival rail, so the lamps can never lead you into a wall the
+   *   rail would not. When you are cleared for a berth, a white "rabbit"
+   *   runs down YOUR berth's rows toward the door.
+   *
+   * COST, against Astra's "don't overstress the 4 GB": every piece is built
+   * once per MODEL (a lamp layout is a fact about the art, like the entry
+   * lines it reads) and blinking is choosing which prebuilt piece to queue
+   * this frame, never rebuilding. A station's whole kit is a few hundred
+   * triangles; a frame queues at most four of its pieces. */
+  var LIGHT_KITS = {};
+  var LAMP_BEACON = 0.016;          // station radii, half-size of a beacon box
+  var LAMP_STRING = 0.0075;         // ...and of an approach lamp
+  var STRING_STEP = 0.07;           // spacing along the approach
+  var STRING_HALF = 0.05;           // each row's offset from the centreline
+  var CHASE_PHASES = 4;
+
+  function lampBox(mesh, p, half, color) {
+    addBox(mesh, p, [half, 0, 0], [0, half, 0], [0, 0, half], color);
+  }
+
+  function stationLightKit(port, model) {
+    var kit = LIGHT_KITS[model];
+    if (kit) return kit;
+    var hull = stationMeshes()[model];
+    if (!hull) { var lp = libPort(model); hull = lp && lp.shell; }
+    if (!hull || !hull.v || !hull.v.length) return null;   // not loaded yet: ask again next frame
+
+    /* The extremities, measured off the hull itself. */
+    var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    var loV = [null, null, null], hiV = [null, null, null];
+    for (var i = 0; i < hull.v.length; i++) {
+      var v = hull.v[i];
+      for (var a = 0; a < 3; a++) {
+        if (v[a] < lo[a]) { lo[a] = v[a]; loV[a] = v; }
+        if (v[a] > hi[a]) { hi[a] = v[a]; hiV[a] = v; }
+      }
+    }
+    var span = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+    var axes = [0, 1, 2].sort(function (p, q) { return span[q] - span[p]; });
+    function proud(v, a, sign) {
+      var p = v.slice();
+      p[a] += sign * LAMP_BEACON * 1.5;     // stood just off the hull, never inside it
+      return p;
+    }
+    var strobe = emptyMesh(); strobe.c = [];
+    var steady = emptyMesh(); steady.c = [];
+    var topLamp = emptyMesh(); topLamp.c = [];
+    var long = axes[0], side = axes[1];
+    lampBox(strobe, proud(loV[long], long, -1), LAMP_BEACON, '!#fff6dc');
+    lampBox(strobe, proud(hiV[long], long, 1), LAMP_BEACON, '!#fff6dc');
+    lampBox(steady, proud(loV[side], side, -1), LAMP_BEACON, '!#ff3b30');
+    lampBox(steady, proud(hiV[side], side, 1), LAMP_BEACON, '!#38ff6a');
+    /* "Top" is the model's +z — the axis stations are stood up along. */
+    lampBox(topLamp, proud(hiV[2], 2, 1), LAMP_BEACON * 0.8, '!#ff2a1f');
+
+    /* The approach strings, per berth. */
+    var strings = emptyMesh(); strings.c = [];
+    var chase = [];
+    var Gen = global.Gen;
+    var berths = (Gen && Gen.modelledBerths) ? Gen.modelledBerths(port) : null;
+    var n = berths ? berths.length : 0;
+    for (var b = 0; b < n; b++) {
+      var ap = Gen.berthApertures(port, b);
+      chase[b] = null;
+      if (!ap || !ap.reachable || !ap.entry) continue;
+      var door = [ap.mid[0] + ap.normal[0] * (ap.gate || 0),
+                  ap.mid[1] + ap.normal[1] * (ap.gate || 0),
+                  ap.mid[2] + ap.normal[2] * (ap.gate || 0)];
+      var e = ap.entry;
+      /* Across the corridor: any axis not along it, made perpendicular. */
+      var ref = Math.abs(e[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+      var x = [e[1] * ref[2] - e[2] * ref[1], e[2] * ref[0] - e[0] * ref[2], e[0] * ref[1] - e[1] * ref[0]];
+      var xl = Math.sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]) || 1;
+      x = [x[0] / xl, x[1] / xl, x[2] / xl];
+      /* From just outside the doors to a little past where the hull ends —
+       * far enough out to be seen before you commit to the line. */
+      var reach = Math.min(1.6, Math.max(0.7, (ap.exit || 0.4) + 0.55));
+      var count = Math.max(4, Math.floor(reach / STRING_STEP));
+      var phases = [];
+      for (var ph = 0; ph < CHASE_PHASES; ph++) { phases[ph] = emptyMesh(); phases[ph].c = []; }
+      for (var j = 0; j < count; j++) {
+        var d = 0.06 + j * STRING_STEP;
+        for (var sgn = -1; sgn <= 1; sgn += 2) {
+          var p = [door[0] + e[0] * d + x[0] * STRING_HALF * sgn,
+                   door[1] + e[1] * d + x[1] * STRING_HALF * sgn,
+                   door[2] + e[2] * d + x[2] * STRING_HALF * sgn];
+          lampBox(strings, p, LAMP_STRING, '!#d98a2b');
+          lampBox(phases[j % CHASE_PHASES], p, LAMP_STRING * 1.25, '!#ffffff');
+        }
+      }
+      chase[b] = phases;
+    }
+    kit = LIGHT_KITS[model] = { strobe: strobe, steady: steady, top: topLamp,
+                                strings: strings, chase: chase };
+    return kit;
+  }
+
+  /* `t` is WALL CLOCK seconds, for the same reason as the pad lamps: a lamp
+   * on a timer is not something the simulation drives, and sim time would
+   * turn the flashing into a blur under time warp. `chaseBerth` is the berth
+   * you are cleared for at THIS station, or null. */
+  function drawStationLights(ctx, cam, frame, port, model, radiusKm, sunDir, t, chaseBerth) {
+    var kit = stationLightKit(port, model);
+    if (!kit) return;
+    var draw = function (m) {
+      if (!m || !m.f.length) return;
+      if (gpuWorld() && global.GLWorld.queueMesh(cam, frame, m, radiusKm, sunDir)) return;
+      paintMesh(ctx, cam, frame, m, radiusKm, sunDir, '#ffffff');
+    };
+    draw(kit.steady);
+    draw(kit.strings);
+    var s = t % 1.6;                                  // strobe: a double flash
+    if (s < 0.07 || (s > 0.2 && s < 0.27)) draw(kit.strobe);
+    if ((t % 1.3) < 0.55) draw(kit.top);              // anti-collision: slow
+    if (typeof chaseBerth === 'number' && kit.chase[chaseBerth]) {
+      /* The rabbit runs INWARD: lamp index grows outward, so the lit phase
+       * steps down as time goes on. Eight steps a second. */
+      var step = Math.floor(t * 8) % CHASE_PHASES;
+      draw(kit.chase[chaseBerth][(CHASE_PHASES - step) % CHASE_PHASES]);
+    }
+  }
+
+  /* ---- OUTWORKS: the structures round a dock --------------------------
+   *
+   * Astra: "the station right now looks nice, but we can have more — just
+   * other geometry." So a dock grows a few outbuildings: tank farms, cargo
+   * stacks, solar wings, comms masts, shipyard scaffolds, greenhouse rings,
+   * chosen by what the port DOES (a mining head stacks ore cans, a
+   * refinery keeps tanks, a yard has frames with work in them), each
+   * tethered back to the hull by a truss and carrying red obstruction
+   * lamps for the glow pass.
+   *
+   * A PURE FUNCTION OF THE PORT, decided here rather than in generate.js,
+   * for one reason: placement has to avoid every berth's way in, and the
+   * way in is measured off the model (Gen.berthApertures), which is loaded
+   * lazily and does not exist at generation time. So the layout is seeded
+   * from the port's own identity — same port, same outworks, every visit,
+   * every save — and needs no new save field and no generator change.
+   *
+   * KEPT OUT OF EVERY APPROACH. A candidate spot is thrown away if it sits
+   * within 40 degrees of any berth's entry line as seen from that berth's
+   * door, or too close to the door itself. The approach lamps run down
+   * those same lines, so nothing built here can stand in a corridor the
+   * lamps tell you to fly.
+   *
+   * Only for the NEAR tier (main.js stationTier): a dock across the system
+   * costs nothing for having a yard. Visual only — like the hulls, nothing
+   * here collides. */
+  var OUTWORK_MENU = {
+    mining:       ['stack', 'stack', 'stack', 'tanks', 'mast'],
+    reprocessing: ['tanks', 'tanks', 'tanks', 'mast', 'stack'],
+    milfuel:      ['tanks', 'tanks', 'tanks', 'mast'],
+    shipyard:     ['scaffold', 'scaffold', 'scaffold', 'stack', 'solar'],
+    agri:         ['green', 'green', 'green', 'solar'],
+    highport:     ['solar', 'solar', 'mast', 'mast', 'green'],
+    orbital:      ['solar', 'mast', 'stack', 'tanks']
+  };
+  var CAN_COLOURS = ['#c8642e', '#2f6ca8', '#8a8f96', '#b89b3a', '#5d7f4a', '#9a4646'];
+  var OUT_PLATE = '#8d949f', OUT_TRUSS = '#5b626d', OBSTRUCTION = '!#ff3326';
+
+  /* merge() with an orientation: each source vertex v lands at
+   * o + ax*v.x + ay*v.y + az*v.z. The outworks face outward from the hub,
+   * which no axis-aligned merge can say. */
+  function mergeAxes(dst, src, o, ax, ay, az, col) {
+    var base = dst.v.length, i;
+    for (i = 0; i < src.v.length; i++) {
+      var v = src.v[i];
+      dst.v.push([o[0] + ax[0] * v[0] + ay[0] * v[1] + az[0] * v[2],
+                  o[1] + ax[1] * v[0] + ay[1] * v[1] + az[1] * v[2],
+                  o[2] + ax[2] * v[0] + ay[2] * v[1] + az[2] * v[2]]);
+    }
+    if (!dst.c) { dst.c = []; while (dst.c.length < dst.f.length) dst.c.push(null); }
+    for (i = 0; i < src.f.length; i++) {
+      dst.f.push([src.f[i][0] + base, src.f[i][1] + base, src.f[i][2] + base]);
+      dst.c.push(src.c ? src.c[i] : (col || null));
+    }
+  }
+
+  function vlen(a) { return Math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]); }
+  function vnorm(a) { var l = vlen(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; }
+  function vcross(a, b) {
+    return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  }
+
+  /* One outwork, built in its own frame: +z points away from the hub. */
+  function outworkPart(kind, rng) {
+    var m = emptyMesh(); m.c = [];
+    var lamp = function (x, y, z) { lampBox(m, [x, y, z], 0.006, OBSTRUCTION); };
+    var i, j, k;
+    if (kind === 'tanks') {
+      var n = 3 + rng.int(0, 2), gap = 0.085;
+      var x0 = -(n - 1) * gap / 2;
+      merge(m, box((n - 1) * gap / 2 + 0.05, 0.012, 0.012), 0, 0, -0.07, 1, OUT_TRUSS);
+      for (i = 0; i < n; i++) {
+        merge(m, tube(10, 0.034, 0.034, 0.065, true), x0 + i * gap, 0, 0, 1,
+              rng.chance(0.3) ? '#9aa6b4' : '#c8bfae');
+      }
+      lamp(x0 - 0.05, 0, 0.07); lamp(-x0 + 0.05, 0, 0.07);
+    } else if (kind === 'stack') {
+      var nx = 3 + rng.int(0, 2), ny = 2 + rng.int(0, 1), nz = 2 + rng.int(0, 2), c = 0.026;
+      merge(m, box(nx * c + 0.01, ny * c + 0.01, 0.006), 0, 0, -0.006, 1, OUT_PLATE);
+      for (i = 0; i < nx; i++) for (j = 0; j < ny; j++) for (k = 0; k < nz; k++) {
+        if (k > 0 && rng.chance(0.18)) continue;              // gaps where cans have gone
+        merge(m, box(c * 0.92, c * 0.45, c * 0.42),
+              (i - (nx - 1) / 2) * c * 2, (j - (ny - 1) / 2) * c * 1.05, k * c * 0.9 + c * 0.45,
+              1, rng.pick(CAN_COLOURS));
+      }
+      lamp(nx * c + 0.01, ny * c, 0.01); lamp(-nx * c - 0.01, -ny * c, 0.01);
+    } else if (kind === 'solar') {
+      var span = 0.28 + rng.range(0, 0.12);
+      merge(m, box(span, 0.008, 0.008), 0, 0, 0, 1, OUT_TRUSS);
+      for (var sd = -1; sd <= 1; sd += 2) {
+        merge(m, box(span * 0.42, 0.075, 0.003), sd * span * 0.52, 0, 0, 1, '#1f3561');
+        merge(m, box(span * 0.43, 0.004, 0.004), sd * span * 0.52, 0.077, 0, 1, OUT_PLATE);
+        merge(m, box(span * 0.43, 0.004, 0.004), sd * span * 0.52, -0.077, 0, 1, OUT_PLATE);
+        lamp(sd * (span * 0.95 + 0.01), 0, 0.006);
+      }
+    } else if (kind === 'mast') {
+      var h = 0.18 + rng.range(0, 0.1);
+      merge(m, box(0.007, 0.007, h / 2), 0, 0, h / 2, 1, OUT_TRUSS);
+      merge(m, tube(12, 0.09, 0.012, 0.018, true), 0, 0, h * 0.72, 1, '#d9d6cf');
+      merge(m, box(0.035, 0.035, 0.01), 0, 0, 0.01, 1, OUT_PLATE);
+      lamp(0, 0, h + 0.008);
+    } else if (kind === 'scaffold') {
+      var hx = 0.1 + rng.range(0, 0.05), hy = 0.06, hz = 0.07, b = 0.0045;
+      for (var a = -1; a <= 1; a += 2) for (var bb = -1; bb <= 1; bb += 2) {
+        merge(m, box(hx, b, b), 0, a * hy, bb * hz, 1, '#b9a24c');
+        merge(m, box(b, hy, b), a * hx, 0, bb * hz, 1, '#b9a24c');
+        merge(m, box(b, b, hz), a * hx, bb * hy, 0, 1, '#b9a24c');
+      }
+      /* Work in the frame: a hull half built, plates missing. */
+      merge(m, box(hx * 0.62, hy * 0.45, hz * 0.4), -hx * 0.1, 0, 0, 1, '#6f7783');
+      merge(m, box(hx * 0.3, hy * 0.35, hz * 0.32), hx * 0.55, 0, 0, 1, '#7c8591');
+      lampBox(m, [hx, hy, hz], 0.006, '!#ffb347'); lampBox(m, [-hx, -hy, hz], 0.006, '!#ffb347');
+      lamp(hx, -hy, -hz); lamp(-hx, hy, -hz);
+    } else {                                   // 'green': a greenhouse ring
+      var R = 0.11 + rng.range(0, 0.04);
+      merge(m, rimRing(16, R, 0.022, 0.022), 0, 0, 0, 1, '~9#9fc9d8');
+      merge(m, rimRing(16, R, 0.016, 0.016), 0, 0, 0, 1, '!#7fd36b');
+      merge(m, spokes(4, 0.015, R, 0.006), 0, 0, 0, 1, OUT_TRUSS);
+      lamp(R + 0.03, 0, 0); lamp(-R - 0.03, 0, 0);
+    }
+    return m;
+  }
+
+  function stationOutworks(port, model) {
+    var key = model + '|' + port.id;
+    if (port._outworks && port._outworks.key === key) return port._outworks.mesh;
+    var hull = stationMeshes()[model];
+    if (!hull) { var lp = libPort(model); hull = lp && lp.shell; }
+    if (!hull || !hull.v || !hull.v.length) return null;   // not loaded yet
+    if (!RNG) return null;
+
+    var R = 0;
+    for (var i = 0; i < hull.v.length; i++) R = Math.max(R, vlen(hull.v[i]));
+
+    /* Every berth's way in, as (door, direction) pairs to keep clear of. */
+    var keepOut = [];
+    var Gen = global.Gen;
+    var nb = (Gen && Gen.modelledBerths && Gen.modelledBerths(port)) || [];
+    for (var b = 0; b < nb.length; b++) {
+      var ap = Gen.berthApertures(port, b);
+      if (!ap || !ap.mid) continue;
+      var dir = ap.entry || ap.normal;
+      keepOut.push({ door: [ap.mid[0] + ap.normal[0] * (ap.gate || 0),
+                            ap.mid[1] + ap.normal[1] * (ap.gate || 0),
+                            ap.mid[2] + ap.normal[2] * (ap.gate || 0)], dir: vnorm(dir) });
+    }
+    function clear(p) {
+      for (var k = 0; k < keepOut.length; k++) {
+        var ko = keepOut[k];
+        var d = [p[0] - ko.door[0], p[1] - ko.door[1], p[2] - ko.door[2]];
+        var dl = vlen(d);
+        if (dl < 0.45) return false;
+        if ((d[0] * ko.dir[0] + d[1] * ko.dir[1] + d[2] * ko.dir[2]) / dl > 0.766) return false;   // cos 40°
+      }
+      return true;
+    }
+
+    var rng = new RNG('outworks|' + port.name + '|' + port.id + '|' + model);
+    var role = (port.market && port.market.role) || 'orbital';
+    var menu = OUTWORK_MENU[role] || OUTWORK_MENU.orbital;
+    var want = 2 + rng.int(0, 2);
+    var mesh = emptyMesh(); mesh.c = [];
+    var placed = [];
+    for (var tries = 0; tries < 60 && placed.length < want; tries++) {
+      /* A direction on the sphere, then a distance just off the hull. */
+      var zz = rng.range(-0.8, 0.8), th = rng.range(0, Math.PI * 2), rr = Math.sqrt(1 - zz * zz);
+      var out = [rr * Math.cos(th), rr * Math.sin(th), zz];
+      var dist = R * rng.range(1.18, 1.55) + 0.12;
+      var p = [out[0] * dist, out[1] * dist, out[2] * dist];
+      if (!clear(p)) continue;
+      var crowded = false;
+      for (var q = 0; q < placed.length; q++) {
+        var dq = [p[0] - placed[q][0], p[1] - placed[q][1], p[2] - placed[q][2]];
+        if (vlen(dq) < 0.5) { crowded = true; break; }
+      }
+      if (crowded) continue;
+      placed.push(p);
+      var az = vnorm(out);
+      var ref = Math.abs(az[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+      var ax = vnorm(vcross(ref, az)), ay = vcross(az, ax);
+      mergeAxes(mesh, outworkPart(rng.pick(menu), rng), p, ax, ay, az);
+      /* The tether: a truss from the outwork back to just inside the
+       * hull's outer reach, so it reads as attached rather than parked. */
+      var tl = (dist - R * 0.92) / 2;
+      mergeAxes(mesh, box(0.006, 0.006, tl),
+                [out[0] * (dist - tl - 0.04), out[1] * (dist - tl - 0.04), out[2] * (dist - tl - 0.04)],
+                ax, ay, az, OUT_TRUSS);
+    }
+    port._outworks = { key: key, mesh: mesh };
+    return mesh;
+  }
+
+  function drawStationOutworks(ctx, cam, frame, port, model, radiusKm, sunDir) {
+    var mesh = stationOutworks(port, model);
+    if (!mesh || !mesh.f.length) return;
+    mesh = accented(mesh);
+    if (gpuWorld() && global.GLWorld.queueMesh(cam, frame, mesh, radiusKm, sunDir)) return;
+    paintMesh(ctx, cam, frame, mesh, radiusKm, sunDir, OUT_PLATE);
+  }
+
   /* Drawn only for SURFACE ports: an orbital dock has no ground to build a
    * town on, and generate.js gives it no blocks. */
   function drawPortDressing(ctx, cam, frame, port, radiusKm, sunDir) {
@@ -4103,6 +4492,31 @@
       owner[i] = best;
     }
 
+    /* PARTS THAT MOVE ON THEIR OWN (2026-10-17): lift cars, and the hatch
+     * a car parks under. Claimed by the converter face by face, not by a
+     * box, because the ring's platform sits flush in its hatch — same
+     * footprint, same few metres of height — and a box round either takes
+     * the other with it. Claimed FIRST, so no door leaf and no hull keeps a
+     * face that belongs to a car. Shell bucket only: that is where every
+     * one the library declares lives, and the other buckets are drawn by
+     * other code that never moves anything. */
+    var partFaces = [];
+    var declared = (raw && raw.parts) || [];
+    for (var pi = 0; pi < declared.length; pi++) {
+      var pt = declared[pi];
+      if (!pt || pt.bucket !== 'shell' || !pt.r) continue;
+      var pf = [], pc = [];
+      for (var ri = 0; ri < pt.r.length; ri++) {
+        for (var fx = pt.r[ri][0]; fx < pt.r[ri][1] && fx < shell.f.length; fx++) {
+          if (owner[fx] === -2) continue;
+          owner[fx] = -2;
+          pf.push(shell.f[fx]);
+          pc.push(shell.c ? shell.c[fx] : null);
+        }
+      }
+      if (pf.length) partFaces.push({ part: pt, f: pf, c: pc });
+    }
+
     /* CARRY THE COLOURS ACROSS, and this cost a station its paint.
      *
      * `decompress` expands the library's palette-index pair into `c` — one
@@ -4122,6 +4536,7 @@
     for (i = 0; i < shell.f.length; i++) {
       var o = owner[i];
       var col = shell.c ? shell.c[i] : null;
+      if (o === -2) continue;                 // a car's or a hatch's; see above
       if (o < 0) { hullF.push(shell.f[i]); hullC.push(col); }
       else { leaves[o].f.push(shell.f[i]); leaves[o].c.push(col); }
     }
@@ -4250,6 +4665,40 @@
       });
     }
 
+    /* The parts, as leaves of two new kinds. A CAR slides along its own
+     * travel (`d`, top to bottom), driven by the arrival's `car.f` rather
+     * than by any door. A HATCH is there while its berth's inner gate is
+     * shut and gone once it opens — the art says it is a hatch and nothing
+     * about how one moves, so it is drawn the way a field and a roll-up
+     * slat already are. Its berth is the nearest one, as for any leaf. */
+    var carDefs = (raw && raw.cars) || [];
+    for (var pq = 0; pq < partFaces.length; pq++) {
+      var P = partFaces[pq], node = P.part.node;
+      var leaf = { node: node, mesh: { v: shell.v, f: P.f, c: P.c },
+                   box: null, axis: [0, 0, 0], travel: 0, field: false, berthMid: null };
+      if (P.part.kind === 'car') {
+        var cd = null;
+        for (var cq = 0; cq < carDefs.length; cq++) if (carDefs[cq].node === node) cd = carDefs[cq];
+        if (!cd || !cd.d) continue;
+        var dl = Math.sqrt(dot3(cd.d, cd.d));
+        if (!(dl > 1e-9)) continue;
+        leaf.car = true;
+        leaf.axis = [cd.d[0] / dl, cd.d[1] / dl, cd.d[2] / dl];
+        leaf.travel = dl;
+      } else if (P.part.kind === 'hatch') {
+        leaf.hatch = true;
+        var hm = P.part.mid, hbd = Infinity;
+        for (var hb = 0; berths && hb < berths.length; hb++) {
+          var bh = berths[hb];
+          if (!bh || !bh.mid || !hm) continue;
+          var e0 = bh.mid[0] - hm[0], e1 = bh.mid[1] - hm[1], e2 = bh.mid[2] - hm[2];
+          var ed = e0 * e0 + e1 * e1 + e2 * e2;
+          if (ed < hbd) { hbd = ed; leaf.berthMid = bh.mid; }
+        }
+      } else continue;
+      out.push(leaf);
+    }
+
     if (!out.length) return null;
     /* ---- AND THE DOORWAY IS A HOLE ------------------------------------
      *
@@ -4308,7 +4757,9 @@
         var alongSum = 0, mine = 0;
         for (var li = 0; li < out.length; li++) {
           var lf2 = out[li];
-          if (lf2.field || !lf2.berthMid) continue;
+          /* A car or a hatch is no part of a doorway's leaves: counting the
+           * ring's floor hatch here would reshape the heavy bay's opening. */
+          if (lf2.field || lf2.car || lf2.hatch || !lf2.berthMid) continue;
           if (lf2.berthMid[0] !== bth.mid[0] || lf2.berthMid[1] !== bth.mid[1] ||
               lf2.berthMid[2] !== bth.mid[2]) continue;
           mine++;
@@ -5325,6 +5776,33 @@
     return m;
   }
 
+  /* WHERE A CAR OR A HATCH IS, from the same `doors` value everything else
+   * reads, so the car you see and the car you hit are one number.
+   *
+   * A car: `doors.car` is `{ node, f }`, carried from the arrival pose —
+   * 0 at the top of its travel, 1 at the bottom. Any other car, and any
+   * car when no arrival is riding it, is at rest where it was modelled.
+   *
+   * A hatch: hidden while ITS berth's inner gate is open (more than half),
+   * matched by position the way every leaf is matched to its berth. */
+  function partState(lf, doors) {
+    if (lf.car) {
+      var c = doors && doors.car;
+      var f = (c && c.node === lf.node && c.f > 0) ? Math.min(1, c.f) : 0;
+      return { f: f, hidden: false };
+    }
+    if (lf.hatch) {
+      var openHere = false;
+      if (doors && doors.inner > 0.5 && doors.berthMid && lf.berthMid) {
+        var dx = lf.berthMid[0] - doors.berthMid[0], dy = lf.berthMid[1] - doors.berthMid[1],
+            dz = lf.berthMid[2] - doors.berthMid[2];
+        openHere = dx * dx + dy * dy + dz * dz <= 1e-6;
+      }
+      return { f: 0, hidden: openHere };
+    }
+    return { f: 0, hidden: false };
+  }
+
   function drawStationModel(ctx, cam, frame, radiusKm, sunDir, model, tint, doors, section) {
     /* WITH THE DOORS SEPARATED when this model has any: the hull without
      * them, then each leaf at its own offset. `doors` is { open, berth }
@@ -5373,6 +5851,16 @@
       }
       for (var i = 0; i < d.leaves.length; i++) {
         var lf = d.leaves[i];
+        /* A lift car is wherever the arrival riding it says (partState). */
+        if (lf.car || lf.hatch) {
+          var ps = partState(lf, doors);
+          if (ps.hidden) continue;
+          var cs = lf.travel * ps.f;
+          paintPart(ctx, cam, cs > 1e-9
+            ? shiftFrame(frame, lf.axis[0] * cs, lf.axis[1] * cs, lf.axis[2] * cs, radiusKm)
+            : frame, lf.mesh, radiusKm, sunDir, tint);
+          continue;
+        }
         var f = open;
         if (mine !== null && lf.berthMid) {
           /* Whose door. Compared by POSITION rather than by index, because
@@ -6048,7 +6536,16 @@
       /* Only the berth that was given clearance moves; every other leaf in
        * the station is shut, which is the same rule drawStationModel uses. */
       var f = open;
-      if (want && lf.berthMid) {
+      if (lf.car || lf.hatch) {
+        /* Neither is a door leaf, so a question about one doorway leaves
+         * them out; otherwise they collide where they are drawn — the same
+         * partState the renderer reads. (Both were solid hull before they
+         * were split out, so a shut hatch and a car at rest still are.) */
+        if (doors && doors.onlyMine) continue;
+        var ps = partState(lf, doors);
+        if (ps.hidden) continue;
+        f = ps.f;
+      } else if (want && lf.berthMid) {
         var dx = lf.berthMid[0] - want[0], dy = lf.berthMid[1] - want[1],
             dz = lf.berthMid[2] - want[2];
         if (dx * dx + dy * dy + dz * dz > 1e-6) {
@@ -6670,7 +7167,7 @@
 
   /* `size` is the wake's world radius in km; the caller decides that, since
    * it knows the scale of the system it is standing in. */
-  function drawWake(ctx, cam, pos, wake, size, tSec) {
+  function drawWake(ctx, cam, pos, wake, size, tSec, deep) {
     var p = cam.project(pos);
     if (!p) return null;
     if (p.x < -240 || p.x > cam.w + 240 || p.y < -240 || p.y > cam.h + 240) return p;
@@ -6717,6 +7214,40 @@
     var glowEdge = depart ? '176,26,34' : '34,68,205';
     var boltCore = depart ? '255,242,224' : '236,248,255';  // the strike itself
     var boltHalo = depart ? '255,138,86' : '128,196,255';   // what it lights up
+
+    /* SEEN FROM THE BOTTOM OF A WELL (2026-10-19). Astra: "From the
+     * surface of a planet it would be even more pronounced, like a cross
+     * between a black hole redshift but in higher speed." `deep` is how far
+     * down a world's gravity well the viewer is — 1 on the ground, 0 three
+     * radii up (main.js) — and it pushes a departure's colours down toward
+     * a deep, dark red and swells it, and an arrival's toward violet. A
+     * stylised exaggeration rather than a calculation; strictly, light
+     * falling into a well arrives blueshifted, and it is the receding
+     * hull's speed that reddens a departure. */
+    deep = Math.max(0, Math.min(1, deep || 0));
+    if (deep > 0) {
+      var mixC = function (a, b, k) {
+        a = a.split(','); b = b.split(',');
+        return a.map(function (x, i) { return Math.round(+x + (+b[i] - +x) * k); }).join(',');
+      };
+      glowCore = mixC(glowCore, depart ? '214,26,12' : '150,70,255', deep);
+      glowEdge = mixC(glowEdge, depart ? '110,4,8' : '64,10,170', deep);
+      boltHalo = mixC(boltHalo, depart ? '255,64,32' : '176,120,255', deep);
+      strength = Math.min(1, strength * (1 + 0.8 * deep));
+      r *= 1 + 0.6 * deep;
+    }
+
+    /* THE TEAR ITSELF, while it is fresh. A wake is what is left of the
+     * rip a hull made (see THE RIFT, below): for the first quarter of an
+     * hour the rip is still visibly open in the middle of its cloud,
+     * closing — red where a ship left, blue where one came through. */
+    var RIFT_OPEN_S = 900;
+    if (wake.age !== undefined && wake.age < RIFT_OPEN_S) {
+      var open = 1 - wake.age / RIFT_OPEN_S;
+      var rH = Math.max(4, r * 1.1) * (0.35 + 0.65 * open);
+      drawRift(ctx, p.x, p.y, rH, rH * 0.18 * open + 1, depart ? RIFT_RED : RIFT_BLUE,
+               Math.min(1, 0.4 + strength) * (0.3 + 0.7 * open), tSec);
+    }
 
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
@@ -6919,19 +7450,122 @@
    * where its nose is pointed (the boresight, always dead centre here).
    * They only coincide when you are burning straight prograde — everywhere
    * else, this is the one honest answer to "which way am I really moving". */
+  /* AND ITS OPPOSITE (2026-10-19). Astra: "we need a way to know if the
+   * ship is facing into or out of the direction of travel that's easier to
+   * find". The prograde marker alone could not say it: turn your tail to
+   * your motion — the braking attitude, the one you most need to confirm —
+   * and the marker was behind you and simply not drawn. So:
+   *
+   *   - the RETROGRADE marker (circle with a cross, as on every navball)
+   *     is on the glass whenever it is in front of you;
+   *   - when prograde is off the glass, an arrow at the edge points to it,
+   *     so it is never just missing;
+   *   - both carry the dark halo, so they hold up over a lit planet.
+   *
+   * The words — PROGRADE / RETROGRADE and the angle — are drawFacingCue,
+   * under the ladder; this is the picture. */
+  var VEL_INK = '#ffd36b';
+  function velMarkerOnGlass(p, w, h) {
+    return p && p.x > 14 && p.x < w - 14 && p.y > 14 && p.y < h - 14;
+  }
   function drawFlightPathMarker(ctx, cam, progradeDir, w, h) {
+    if (!progradeDir) return;
     var p = cam.projectDir(progradeDir);
-    if (!p) return;
-    if (p.x < 6 || p.x > w - 6 || p.y < 6 || p.y > h - 6) return;
-    ctx.save();
-    ctx.strokeStyle = '#ffd36b';
-    ctx.lineWidth = 1.4;
-    ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, Math.PI * 2); ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(p.x - 11, p.y); ctx.lineTo(p.x - 6, p.y);
-    ctx.moveTo(p.x + 6, p.y); ctx.lineTo(p.x + 11, p.y);
-    ctx.moveTo(p.x, p.y - 9); ctx.lineTo(p.x, p.y - 6);
-    ctx.stroke();
+    var r = cam.projectDir(V.scale(progradeDir, -1));
+    inkBegin(ctx);
+    if (velMarkerOnGlass(p, w, h)) {
+      ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+      ctx.strokeStyle = INK_HALO; ctx.lineWidth = 4.4; ctx.stroke();
+      ctx.strokeStyle = VEL_INK; ctx.lineWidth = 1.6; ctx.stroke();
+      inkSeg(ctx, p.x - 12, p.y, p.x - 6, p.y, VEL_INK, 1.6, 1);
+      inkSeg(ctx, p.x + 6, p.y, p.x + 12, p.y, VEL_INK, 1.6, 1);
+      inkSeg(ctx, p.x, p.y - 10, p.x, p.y - 6, VEL_INK, 1.6, 1);
+    } else {
+      /* Off the glass: an arrow at the edge pointing the way to turn your
+       * head to find prograde. Taken from the camera's own axes rather than
+       * from a projection, so a prograde behind you and to the right is
+       * still "turn right" with no sign to flip. Not drawn when retrograde
+       * is on the glass: then you can see which way you are going. */
+      var d = { x: V.dot(progradeDir, cam.r), y: -V.dot(progradeDir, cam.u) };
+      var dl = Math.hypot(d.x, d.y);
+      if (dl > 1e-9 && !velMarkerOnGlass(r, w, h)) {
+        d.x /= dl; d.y /= dl;
+        var R = Math.min(w, h) * 0.36;
+        var ax = w / 2 + d.x * R, ay = h / 2 + d.y * R;
+        drawArrow(ctx, ax - d.x * 8, ay - d.y * 8, d.x, d.y, 18, VEL_INK, 2, 8);
+        ctx.textAlign = 'center';
+        inkText(ctx, 'PRO', ax - d.x * 22, ay - d.y * 22 + 4, 'bold 10px ui-monospace, monospace', VEL_INK, 0.9);
+      }
+    }
+    if (velMarkerOnGlass(r, w, h)) {
+      ctx.beginPath(); ctx.arc(r.x, r.y, 7, 0, Math.PI * 2);
+      ctx.strokeStyle = INK_HALO; ctx.lineWidth = 4.4; ctx.stroke();
+      ctx.strokeStyle = VEL_INK; ctx.lineWidth = 1.6; ctx.stroke();
+      var k = 4.9;
+      inkSeg(ctx, r.x - k, r.y - k, r.x + k, r.y + k, VEL_INK, 1.6, 1);
+      inkSeg(ctx, r.x - k, r.y + k, r.x + k, r.y - k, VEL_INK, 1.6, 1);
+      inkSeg(ctx, r.x - 13, r.y, r.x - 7, r.y, VEL_INK, 1.6, 1);
+      inkSeg(ctx, r.x + 7, r.y, r.x + 13, r.y, VEL_INK, 1.6, 1);
+      inkSeg(ctx, r.x, r.y + 7, r.x, r.y + 11, VEL_INK, 1.6, 1);
+    }
+    ctx.restore();
+  }
+
+  /* The nose against the direction of travel, as words and a number:
+   * which way you are facing, and how far off it you are. The angle is
+   * measured from whichever of prograde and retrograde is nearer, because
+   * that is the one you are trying to hold. Pure, so it is testable. */
+  var FACING_LOCK = 10;                 // degrees: "on" prograde/retrograde
+  function facingInfo(fwd, prograde, speedKms) {
+    if (!prograde || !(speedKms > 0.001)) return { mode: 'still', deg: 0 };
+    var c = Math.max(-1, Math.min(1, V.dot(fwd, prograde)));
+    var off = Math.acos(c) * 180 / Math.PI;      // 0 = nose on prograde
+    if (off <= 90) return { mode: 'pro', deg: off, locked: off <= FACING_LOCK };
+    return { mode: 'retro', deg: 180 - off, locked: 180 - off <= FACING_LOCK };
+  }
+
+  /* Under the ladder, centred, where the eye already is: the symbol of the
+   * marker you are nearer, and the words. Bright and boxed when you are on
+   * it; plain when you are not; nothing to say when you are not moving. */
+  function drawFacingCue(ctx, w, h, info, y) {
+    if (!info) return;
+    var cx = w / 2;
+    inkBegin(ctx);
+    ctx.textAlign = 'left';
+    var label, col;
+    if (info.mode === 'still') { label = 'NOT MOVING'; col = 'rgba(180,205,235,0.8)'; }
+    else {
+      label = (info.mode === 'pro' ? 'PROGRADE ' : 'RETROGRADE ') +
+              (info.locked && info.deg < 0.5 ? '' : Math.round(info.deg) + '° OFF');
+      col = info.locked ? VEL_INK : '#cfe8ff';
+    }
+    var font = 'bold 13px ui-monospace, monospace';
+    ctx.font = font;
+    var tw = ctx.measureText(label).width;
+    var iconW = info.mode === 'still' ? 0 : 26;
+    var x0 = cx - (tw + iconW) / 2;
+    if (info.locked) {
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = 'rgba(0,14,10,0.55)';
+      ctx.fillRect(x0 - 8, y - 15, tw + iconW + 16, 22);
+      ctx.strokeStyle = VEL_INK; ctx.lineWidth = 1.4;
+      ctx.strokeRect(x0 - 7.5, y - 14.5, tw + iconW + 15, 21);
+    }
+    if (iconW) {
+      var ix = x0 + 9, iy = y - 4;
+      ctx.beginPath(); ctx.arc(ix, iy, 5, 0, Math.PI * 2);
+      ctx.strokeStyle = INK_HALO; ctx.lineWidth = 4; ctx.globalAlpha = 1; ctx.stroke();
+      ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.stroke();
+      if (info.mode === 'pro') {
+        inkSeg(ctx, ix - 10, iy, ix - 5, iy, col, 1.5, 1);
+        inkSeg(ctx, ix + 5, iy, ix + 10, iy, col, 1.5, 1);
+        inkSeg(ctx, ix, iy - 9, ix, iy - 5, col, 1.5, 1);
+      } else {
+        inkSeg(ctx, ix - 3.5, iy - 3.5, ix + 3.5, iy + 3.5, col, 1.5, 1);
+        inkSeg(ctx, ix - 3.5, iy + 3.5, ix + 3.5, iy - 3.5, col, 1.5, 1);
+      }
+    }
+    inkText(ctx, label, x0 + iconW, y + 1, font, col, 1);
     ctx.restore();
   }
 
@@ -6959,6 +7593,277 @@
     ctx.moveTo(cx, cy - R + 12); ctx.lineTo(cx - 5, cy - R); ctx.lineTo(cx + 5, cy - R);
     ctx.closePath(); ctx.fill();
     ctx.restore();
+  }
+
+  /* Heading tape: the strip across the top of a fighter HUD. The scale
+   * slides, the index caret stays put, and the boxed number under it is the
+   * heading to the degree. North is the reference body's own pole (see
+   * Sim.headingAngles), so N/E/S/W are true directions on whatever world
+   * has you, and the REF tag at the end of the strip says which world that
+   * is — the frame changes when the dominant body does, and a compass that
+   * silently swapped its north would be worse than none.
+   *
+   * hd     — Sim.headingAngles result
+   * opts   — { cy: line y, ref: body name, bugColor }
+   *
+   * Drawn with a dark halo under every stroke and glyph, in source-over,
+   * rather than the glass's additive glow: additive light cannot get darker
+   * than what is behind it, which is why the old symbology vanished against
+   * a sunlit planet. This is what real HUDs fight with brightness; we can
+   * fight it with contrast. Returns the bottom y it used. */
+  /* HUD ink: every stroke and glyph twice, a wide dark halo then the
+   * colour, in source-over. Shared by the heading tape and the air-data
+   * boxes so the glass reads as one instrument, and so whatever finally
+   * replaces the glass's additive glow has one place to start from. */
+  var INK_HALO = 'rgba(0,14,10,0.62)';
+  function inkSeg(ctx, x0, y0, x1, y1, col, lw, alpha) {
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = INK_HALO; ctx.lineWidth = lw + 3;
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+    ctx.strokeStyle = col; ctx.lineWidth = lw;
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+  }
+  function inkText(ctx, s, x, y, font, col, alpha) {
+    ctx.globalAlpha = alpha;
+    ctx.font = font;
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = INK_HALO; ctx.lineWidth = 3.5;
+    ctx.strokeText(s, x, y);
+    ctx.fillStyle = col;
+    ctx.fillText(s, x, y);
+  }
+  function inkPoly(ctx, pts, col, fill, alpha) {
+    ctx.globalAlpha = alpha;
+    ctx.beginPath(); ctx.moveTo(pts[0], pts[1]);
+    for (var i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]);
+    ctx.closePath();
+    ctx.strokeStyle = INK_HALO; ctx.lineWidth = 4; ctx.stroke();
+    if (fill) { ctx.fillStyle = col; ctx.fill(); }
+    else { ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.stroke(); }
+  }
+  function inkBegin(ctx) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.shadowBlur = 0; ctx.shadowColor = 'transparent';
+    ctx.lineCap = 'butt';
+  }
+
+  /* Air-data boxes: speed on the left, altitude on the right, at horizon
+   * height either side of the ladder, as on every fighter HUD since the
+   * seventies. Boxes, not tapes (the F-35 call): our speeds run from
+   * millimetres a second to multiples of c, and a tape over that range is
+   * either useless at one end or a blur at the other. Pilots read the box.
+   *
+   * d = {
+   *   speed: { value, unit },          the box, and its unit under it
+   *   g, peak:  numbers or null        felt G and the peak held since launch
+   *   alt:   { value, unit } | null    null when nothing is close enough
+   *   vs:    { dir: +1|-1|0, text }    vertical speed, arrow + magnitude
+   *   air:   { text, inside } | null   the atmosphere line under altitude
+   *   cy                                box centre y
+   * }
+   * The speed box is right-aligned to its anchor and the altitude box
+   * left-aligned to its, so both grow away from the centre and never into
+   * the ladder. Returns { left, right } x extents for anything placed
+   * beside them. */
+  function drawAirData(ctx, w, h, d) {
+    var GREEN = '#6ef0c0';
+    var cx = w / 2, cy = d.cy || h / 2;
+    var off = Math.max(190, Math.min(w * 0.27, 420));
+    var BH = 26, FONT = 'bold 18px ui-monospace, monospace';
+    var SMALL = '12px ui-monospace, monospace';
+    inkBegin(ctx);
+
+    function box(xAnchor, side, v) {
+      ctx.font = FONT;
+      var tw = ctx.measureText(v.value).width;
+      var bw = Math.max(70, tw + 18);
+      var x0 = side < 0 ? xAnchor - bw : xAnchor;
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = 'rgba(0,14,10,0.55)';
+      ctx.fillRect(x0, cy - BH / 2, bw, BH);
+      ctx.strokeStyle = GREEN; ctx.lineWidth = 1.5;
+      ctx.strokeRect(x0 + 0.5, cy - BH / 2 + 0.5, bw - 1, BH - 1);
+      ctx.textAlign = 'center';
+      inkText(ctx, v.value, x0 + bw / 2, cy + 6, FONT, GREEN, 1);
+      ctx.textAlign = side < 0 ? 'right' : 'left';
+      var ux = side < 0 ? x0 + bw : x0;
+      if (v.unit) inkText(ctx, v.unit, ux, cy + BH / 2 + 14, '11px ui-monospace, monospace', GREEN, 0.8);
+      return { x0: x0, x1: x0 + bw, textX: ux };
+    }
+    function line(x, row, s, col, align) {
+      ctx.textAlign = align;
+      inkText(ctx, s, x, cy + BH / 2 + 14 + row * 16, SMALL, col || GREEN, 0.95);
+    }
+
+    // Speed, and the G meter under it where a fighter keeps it.
+    var L = box(cx - off, -1, d.speed);
+    if (d.g !== null && d.g !== undefined) {
+      line(L.textX, 1, 'G ' + fmtG(d.g), null, 'right');
+      line(L.textX, 2, 'PK ' + (d.peak === null || d.peak === undefined ? '--' : fmtG(d.peak)), null, 'right');
+    }
+
+    // Altitude, vertical speed, and the air.
+    var R = null;
+    if (d.alt) {
+      R = box(cx + off, 1, d.alt);
+      var row = 1;
+      if (d.vs) {
+        var x = R.textX;
+        line(x + 30, row, d.vs.text, null, 'left');
+        inkText(ctx, 'VS', x, cy + BH / 2 + 14 + row * 16, SMALL, GREEN, 0.95);
+        // The direction as an arrow, not a sign: up the glass is up.
+        if (d.vs.dir) {
+          var ay = cy + BH / 2 + 10 + row * 16, ax = x + 22;
+          inkPoly(ctx, d.vs.dir > 0
+            ? [ax - 5, ay + 3, ax + 5, ay + 3, ax, ay - 6]
+            : [ax - 5, ay - 6, ax + 5, ay - 6, ax, ay + 3], GREEN, true, 0.95);
+        }
+        row++;
+      }
+      if (d.air) line(R.textX, row, d.air.text, d.air.inside ? '#ffe6a8' : null, 'left');
+    }
+    ctx.restore();
+    return { left: L.x0, right: R ? R.x1 : cx + off };
+  }
+  function fmtG(g) {
+    var a = Math.abs(g);
+    return a < 10 ? g.toFixed(1) : Math.round(g).toString();
+  }
+
+  /* What goes in the boxes. The number is sized to be read at a glance and
+   * the unit is printed under it, because the unit changes with the regime
+   * (m/s on approach, km/s in orbit, c in cruise) and a bare number that
+   * silently changed units would be the worst instrument on the glass. */
+  function sep(n) { return Math.round(n).toLocaleString('en-US'); }
+  function airSpeedReadout(kms, cruising) {
+    var b = kms / C_KMS;
+    if (cruising && b >= 0.001) return { value: b.toFixed(b < 1 ? 3 : b < 10 ? 2 : 1), unit: 'c' };
+    var a = Math.abs(kms);
+    if (a < 1) { var ms = kms * 1000; return { value: Math.abs(ms) < 10 ? ms.toFixed(1) : sep(ms), unit: 'M/S' }; }
+    if (a < 1000) return { value: kms.toFixed(a < 10 ? 2 : a < 100 ? 1 : 0), unit: 'KM/S' };
+    return { value: sep(kms), unit: 'KM/S' };
+  }
+  function altitudeReadout(km) {
+    var a = Math.abs(km);
+    if (a < 10) return { value: sep(km * 1000), unit: 'M' };
+    if (a < 1000) return { value: km.toFixed(1), unit: 'KM' };
+    if (a < 1e6) return { value: sep(km), unit: 'KM' };
+    return { value: (km / 1e6).toFixed(2), unit: 'MKM' };
+  }
+  function vsReadout(kms) {
+    var a = Math.abs(kms);
+    var text = a < 0.1 ? (a * 1000).toFixed(1) + ' m/s'
+             : a < 1 ? Math.round(a * 1000) + ' m/s'
+             : a.toFixed(2) + ' km/s';
+    return { dir: a < 1e-4 ? 0 : kms > 0 ? 1 : -1, text: text };
+  }
+  /* The air under you, for the line beneath altitude. Inside it, density in
+   * kg/m³ — the number a scoop will care about — in amber, because being in
+   * air is a state with consequences. Above it, how far down the top is.
+   * A world with no air gets no line at all. */
+  function airReadout(body, altKm, rho) {
+    var at = body && body.atmosphere;
+    if (!at) return null;
+    if (altKm < at.top) {
+      var r = rho >= 0.01 ? rho.toPrecision(2) : rho.toExponential(1);
+      return { text: 'ρ ' + r + ' kg/m³', inside: true };
+    }
+    var dk = altKm - at.top;
+    return { text: 'AIR ▼ ' + (dk < 1000 ? dk.toFixed(0) : sep(dk)) + ' km', inside: false };
+  }
+
+  var TAPE_SPAN = 25;                 // degrees either side of the index
+  var CARDINAL = { 0: 'N', 90: 'E', 180: 'S', 270: 'W' };
+  var INTERCARD = { 45: 'NE', 135: 'SE', 225: 'SW', 315: 'NW' };
+  function drawHeadingTape(ctx, w, h, hd, opts) {
+    opts = opts || {};
+    var cx = w / 2, T = opts.cy || 60;
+    var half = Math.min(170, w * 0.18);
+    var ppd = half / TAPE_SPAN;
+    var GREEN = '#6ef0c0', HALO = 'rgba(0,14,10,0.62)';
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.shadowBlur = 0; ctx.shadowColor = 'transparent';
+    ctx.lineCap = 'butt';
+    ctx.textAlign = 'center';
+
+    function seg(x0, y0, x1, y1, col, lw, alpha) { inkSeg(ctx, x0, y0, x1, y1, col, lw, alpha); }
+    function text(s, x, y, font, col, alpha) { inkText(ctx, s, x, y, font, col, alpha); }
+    function poly(pts, col, fill, alpha) { inkPoly(ctx, pts, col, fill, alpha); }
+
+    // No north to have: say where you are instead of spinning the scale.
+    if (hd.noNorth) {
+      text((hd.atPole === 'N' ? 'NORTH' : 'SOUTH') + ' POLE · NO HEADING',
+           cx, T, 'bold 12px ui-monospace, monospace', GREEN, 0.9);
+      ctx.restore();
+      return T + 6;
+    }
+
+    var hdg = hd.hdgDeg;
+    /* Nose straight up or down: there is no heading, so there is no scale
+     * to slide. A frozen strip reading 000 would be a lie with a caret on
+     * it; the box says --- and the strip stays dark. */
+    if (!hd.degenerate) {
+    seg(cx - half, T, cx + half, T, GREEN, 1.4, 0.85);
+    var first = Math.ceil((hdg - TAPE_SPAN) / 5) * 5;
+    for (var a = first; a <= hdg + TAPE_SPAN + 1e-9; a += 5) {
+      var x = cx + (a - hdg) * ppd;
+      var edge = Math.abs(a - hdg) / TAPE_SPAN;           // 0 centre .. 1 end
+      var fade = edge > 0.75 ? 1 - (edge - 0.75) / 0.25 * 0.7 : 1;
+      var deg = ((a % 360) + 360) % 360;
+      var major = deg % 10 === 0;
+      seg(x, T, x, T - (major ? 10 : 5), GREEN, major ? 1.6 : 1.2, 0.85 * fade);
+      if (CARDINAL[deg] !== undefined) {
+        text(CARDINAL[deg], x, T - 15, 'bold 15px ui-monospace, monospace',
+             deg === 0 ? '#ffe6a8' : GREEN, fade);
+      } else if (INTERCARD[deg] !== undefined) {
+        /* A row of their own, above the numbers: at 45° they land between
+         * two labels five degrees away, which on a narrow window is about
+         * the width of a label. */
+        seg(x, T - 12, x, T - 18, GREEN, 1, 0.6 * fade);
+        text(INTERCARD[deg], x, T - 21, 'bold 11px ui-monospace, monospace', GREEN, 0.85 * fade);
+      } else if (major) {
+        var lab = deg < 10 ? '00' + deg : deg < 100 ? '0' + deg : '' + deg;
+        text(lab, x, T - 14, '12px ui-monospace, monospace', GREEN, 0.9 * fade);
+      }
+    }
+
+    // Steering bug: bearing to the nav lock. Off the strip it parks at the
+    // end that is the shorter way round, as an arrow pointing past it.
+    if (hd.bugDeg !== null && hd.bugDeg !== undefined) {
+      var col = opts.bugColor || '#ffd36b';
+      var d = ((hd.bugDeg - hdg + 540) % 360) - 180;
+      if (Math.abs(d) <= TAPE_SPAN) {
+        var bx = cx + d * ppd;
+        poly([bx - 6, T + 9, bx + 6, T + 9, bx, T + 2], col, false, 0.95);
+      } else {
+        var s = d > 0 ? 1 : -1, ex = cx + s * (half + 8);
+        poly([ex, T - 5, ex, T + 5, ex + s * 9, T], col, true, 0.95);
+      }
+    }
+    }
+
+    // Fixed index and the boxed readout under it.
+    poly([cx, T + 1, cx - 5, T + 9, cx + 5, T + 9], '#ffe6a8', true, 1);
+    var bw = 46, bh = 19, by = T + 12;
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = 'rgba(0,14,10,0.55)';
+    ctx.fillRect(cx - bw / 2, by, bw, bh);
+    ctx.strokeStyle = GREEN; ctx.lineWidth = 1.4;
+    ctx.strokeRect(cx - bw / 2 + 0.5, by + 0.5, bw - 1, bh - 1);
+    var shown = hd.degenerate ? '---' : (function (v) {
+      var r = Math.round(v) % 360;
+      return r < 10 ? '00' + r : r < 100 ? '0' + r : '' + r;
+    })(hdg);
+    text(shown, cx, by + 14, 'bold 14px ui-monospace, monospace', GREEN, 1);
+
+    if (opts.ref) {
+      ctx.textAlign = 'left';
+      text('REF ' + opts.ref, cx + half + 22, T + 4, '11px ui-monospace, monospace', GREEN, 0.75);
+    }
+    ctx.restore();
+    return by + bh;
   }
 
   /* ======================================================================
@@ -7021,154 +7926,446 @@
            alpha.toFixed(3) + ')';
   }
 
-  /* `hyper` is { time, intensity, flash, twist } — the caller owns the
-   * state machine, this only draws a moment of it. */
-  function drawHyperspace(ctx, w, h, hyper) {
+  /* ---- THE RIFT (2026-10-19) ---------------------------------------------
+   * Astra picked it over a lensing bubble and a tidied tunnel: a jump
+   * tears a RED rift ahead of you and you fly into it; inside is dark,
+   * with filaments streaming past; you come out through a BLUE one. Red
+   * where a hull leaves and blue where it arrives is the wakes' own code
+   * (slipspace.js), so what you see other ships leave behind is visibly
+   * the same tear you went through. And the TNG rule from the cruise sky
+   * holds in here too — "stuff you've left behind should appear red from
+   * your perspective": a filament coming at you is blue-violet, and flips
+   * red as it goes past your shoulder.
+   *
+   * The tear is one seeded shape, the same every jump, drawn at any size:
+   * a jagged spine top to bottom, a lens-shaped opening along it that is
+   * widest in the middle, and its edges shimmering. Opening it is just
+   * growing H (half height) and W (half width) — and W keeps growing until
+   * the rift is wider than the screen, which is the moment you are in it.
+   *
+   * `hyper` is { time, intensity, flash, phase, u } — u is how far through
+   * the phase (main.js owns the state machine). `overlay` is true while
+   * the real world is drawn underneath: as the rift opens in the charge,
+   * and as the blue wash fades after you emerge. */
+  var RIFT_SHAPE = null;
+  function riftShape() {
+    if (RIFT_SHAPE) return RIFT_SHAPE;
+    var rng = new RNG('slipspace-rift');
+    var pts = [], x = 0, N = 30;
+    for (var i = 0; i <= N; i++) {
+      var s = i / N;                                  // 0 top .. 1 bottom
+      x += rng.range(-1, 1) * 0.10;
+      x *= 0.86;                                      // keep the spine near the middle
+      pts.push({ s: s, x: x, wl: rng.range(0.55, 1.25), wr: rng.range(0.55, 1.25), ph: rng.angle() });
+    }
+    RIFT_SHAPE = pts;
+    return pts;
+  }
+
+  /* The opening as a closed path: down the left lip, back up the right. */
+  function riftPath(ctx, cx, cy, H, W, t) {
+    var pts = riftShape(), i, p, y, hw, j;
+    ctx.beginPath();
+    for (i = 0; i < pts.length; i++) {
+      p = pts[i]; y = cy + (p.s * 2 - 1) * H;
+      hw = W * Math.sin(Math.PI * p.s) * p.wl * (1 + 0.10 * Math.sin(t * 7 + p.ph));
+      j = cx + p.x * H * 0.35 - hw;
+      if (i) ctx.lineTo(j, y); else ctx.moveTo(j, y);
+    }
+    for (i = pts.length - 1; i >= 0; i--) {
+      p = pts[i]; y = cy + (p.s * 2 - 1) * H;
+      hw = W * Math.sin(Math.PI * p.s) * p.wr * (1 + 0.10 * Math.sin(t * 6 + p.ph * 1.7));
+      ctx.lineTo(cx + p.x * H * 0.35 + hw, y);
+    }
+    ctx.closePath();
+  }
+
+  var RIFT_RED = { edge: [255, 72, 46], hot: [255, 196, 160], core: [10, 2, 6] };
+  var RIFT_BLUE = { edge: [96, 160, 255], hot: [214, 236, 255], core: [2, 4, 14] };
+  function rgba(c, a) { return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + Math.max(0, Math.min(1, a)).toFixed(3) + ')'; }
+
+  function drawRift(ctx, cx, cy, H, W, pal, alpha, t) {
+    if (H < 1 || alpha <= 0.002) return;
+    /* The space around it bends: a glow, and rings of distortion. */
+    var gr = ctx.createRadialGradient(cx, cy, 0, cx, cy, H * 1.5);
+    gr.addColorStop(0, rgba(pal.edge, 0.30 * alpha));
+    gr.addColorStop(1, rgba(pal.edge, 0));
+    ctx.fillStyle = gr;
+    ctx.fillRect(cx - H * 1.5, cy - H * 1.5, H * 3, H * 3);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (var k = 0; k < 3; k++) {
+      var ph = (t * 0.6 + k / 3) % 1;
+      ctx.strokeStyle = rgba(pal.edge, 0.12 * alpha * (1 - ph));
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, W * 2 + H * 0.5 * ph + 4, H * (1.05 + 0.4 * ph), 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+    /* The inside of the tear: not space. */
+    riftPath(ctx, cx, cy, H, W, t);
+    ctx.fillStyle = rgba(pal.core, 0.92 * alpha);
+    ctx.fill();
+    /* The lips, burning: wide and faint, then hot and narrow. */
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineJoin = 'round';
+    var passes = [[14, 0.12, pal.edge], [6, 0.35, pal.edge], [2, 0.9, pal.hot]];
+    for (var q = 0; q < passes.length; q++) {
+      riftPath(ctx, cx, cy, H, W, t);
+      ctx.strokeStyle = rgba(passes[q][2], passes[q][1] * alpha);
+      ctx.lineWidth = passes[q][0];
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /* A filament's colour at depth u: blue-violet coming at you, flipping
+   * red as it passes (u past ~0.6, where it is beside you on screen). */
+  function riftFilament(u, hue, alpha) {
+    var ah = smooth01((0.68 - u) / 0.14);            // 1 ahead, 0 passed
+    var r = 255 + (130 + 60 * hue - 255) * ah;
+    var g = 70 + (140 - 70) * ah;
+    var b = 50 + (255 - 50) * ah;
+    return 'rgba(' + Math.round(r) + ',' + Math.round(g) + ',' + Math.round(b) + ',' + alpha.toFixed(3) + ')';
+  }
+
+  function drawHyperspace(ctx, w, h, hyper, overlay) {
     var cx = w / 2, cy = h / 2;
     var maxR = Math.hypot(w, h) * 0.62;
-    var stars = hyperStars();
-    var T = hyper.time;
-    var I = Math.max(0, Math.min(1, hyper.intensity));
-    var spin = (hyper.twist === undefined ? T * 0.22 : hyper.twist);
+    var T = hyper.time || 0;
+    var I = Math.max(0, Math.min(1, hyper.intensity || 0));
+    var phase = hyper.phase || 'tunnel';
+    var u = Math.max(0, Math.min(1, hyper.u === undefined ? 0.5 : hyper.u));
+    var S = Math.min(w, h);
 
     ctx.save();
-
-    /* The tube itself: a deep well, dark at the rim so the streaks have
-     * somewhere to come from, and a hot core they come out of. */
-    var bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR);
-    bg.addColorStop(0, 'rgba(180,240,255,' + (0.30 * I).toFixed(3) + ')');
-    bg.addColorStop(0.10, 'rgba(70,150,235,' + (0.22 * I).toFixed(3) + ')');
-    bg.addColorStop(0.45, 'rgba(24,40,110,' + (0.30 * I).toFixed(3) + ')');
-    bg.addColorStop(1, 'rgba(4,6,20,' + (0.85 * I).toFixed(3) + ')');
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, w, h);
-
-    ctx.globalCompositeOperation = 'lighter';
-
-    /* Rings, rushing past. Eight of them on a shared cycle, brightest at
-     * the middle of their run so they fade in and out rather than popping
-     * into existence at the centre. */
-    ctx.lineWidth = 1.6;
-    for (var k = 0; k < 8; k++) {
-      var ru = (k / 8 + T * 0.34) % 1;
-      var rr = hyperRadius(ru, maxR);
-      if (rr < 2) continue;
-      var ra = 4 * ru * (1 - ru) * 0.5 * I;
-      ctx.strokeStyle = hyperColor(ru, 0.5, ra);
-      ctx.beginPath();
-      // Slightly elliptical and rotating, so the tunnel reads as twisting
-      // rather than as a set of concentric circles.
-      ctx.ellipse(cx, cy, rr, rr * (0.92 + 0.08 * Math.sin(T * 0.7 + k)), spin, 0, K.TAU);
-      ctx.stroke();
-    }
-
-    /* The streaks. This is the effect; everything else is staging. */
-    for (var i = 0; i < stars.length; i++) {
-      var s = stars[i];
-      var u = (s.z + T * s.speed * 0.30) % 1;
-      var u2 = u + 0.02 + 0.16 * I * s.speed;
-      if (u2 > 1) u2 = 1;
-      var r0 = hyperRadius(u, maxR), r1 = hyperRadius(u2, maxR);
-      if (r1 < 1.5) continue;
-
-      // Each streak spirals a little, and more of them the deeper you are.
-      var ang = s.a + spin * (1 + s.twist * 0.6) + u * 0.55 * s.twist;
-      var ca = Math.cos(ang), sa = Math.sin(ang);
-      var alpha = Math.min(1, 0.25 + u * 1.1) * I;
-
-      ctx.strokeStyle = hyperColor(u, s.hue, alpha);
-      ctx.lineWidth = s.width * (0.4 + u * 1.5);
-      ctx.beginPath();
-      ctx.moveTo(cx + ca * r0, cy + sa * r0);
-      ctx.lineTo(cx + ca * r1, cy + sa * r1);
-      ctx.stroke();
-    }
-
-    /* The core. A hot point you are falling into, pulsing enough to feel
-     * alive but not enough to strobe. */
-    var coreR = maxR * (0.05 + 0.02 * Math.sin(T * 5.1)) * I;
-    if (coreR > 1) {
-      var core = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR * 4);
-      core.addColorStop(0, 'rgba(255,255,255,' + (0.85 * I).toFixed(3) + ')');
-      core.addColorStop(0.25, 'rgba(150,225,255,' + (0.35 * I).toFixed(3) + ')');
-      core.addColorStop(1, 'rgba(90,160,255,0)');
-      ctx.fillStyle = core;
+    if (phase === 'charge') {
+      /* THE TEAR OPENS, in the real sky ahead. Drawn as an overlay on the
+       * world. A sliver first, lengthening; then it gapes, and in the last
+       * fifth it is wider than the screen — you are going in. */
+      var o = smooth01(u / 0.55);
+      var H = S * 0.46 * o;
+      /* Opens on the nose (main.js passes where it projects), drifting to
+       * the middle as it swallows the view. */
+      if (hyper.cx !== undefined) {
+        var gulp = smooth01((u - 0.6) / 0.4);
+        cx = hyper.cx + (cx - hyper.cx) * gulp;
+        cy = hyper.cy + (cy - hyper.cy) * gulp;
+      }
+      var Wd = S * (0.006 + 0.07 * smooth01(u));
+      if (u > 0.78) {
+        var gape = Math.pow((u - 0.78) / 0.22, 2.2);
+        Wd += S * 3.2 * gape;
+        H *= 1 + 1.6 * gape;
+      }
+      /* The world reddens around it as it widens. */
+      ctx.fillStyle = 'rgba(70,6,4,' + (0.35 * smooth01((u - 0.5) / 0.5)).toFixed(3) + ')';
       ctx.fillRect(0, 0, w, h);
+      drawRift(ctx, cx, cy, H, Wd, RIFT_RED, 0.25 + 0.75 * o, T);
+    } else if (phase === 'tunnel' || (phase === 'exit' && !overlay)) {
+      /* INSIDE. Not space: dark wine at the walls, a violet depth ahead. */
+      var bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR);
+      bg.addColorStop(0, 'rgb(34,18,66)');
+      bg.addColorStop(0.35, 'rgb(14,6,30)');
+      bg.addColorStop(0.8, 'rgb(22,3,8)');
+      bg.addColorStop(1, 'rgb(46,5,8)');
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, w, h);
+      ctx.globalCompositeOperation = 'lighter';
+      var stars = hyperStars(), spin = T * 0.10;
+      /* The walls: ragged rings of the tear itself, sliding past. */
+      var pts = riftShape();
+      for (var k = 0; k < 6; k++) {
+        var ru = (k / 6 + T * 0.22) % 1;
+        var rr = hyperRadius(ru, maxR);
+        if (rr < 3) continue;
+        ctx.strokeStyle = riftFilament(ru, 0.5, 4 * ru * (1 - ru) * 0.30 * I);
+        ctx.lineWidth = 1 + 3 * ru;
+        ctx.beginPath();
+        for (var a = 0; a <= 30; a++) {
+          var p = pts[a % pts.length], th = a / 30 * Math.PI * 2 + spin + k;
+          var jag = 1 + p.x * 0.9 + 0.04 * Math.sin(T * 5 + p.ph);
+          var X = cx + Math.cos(th) * rr * jag, Y = cy + Math.sin(th) * rr * jag;
+          if (a) ctx.lineTo(X, Y); else ctx.moveTo(X, Y);
+        }
+        ctx.stroke();
+      }
+      /* The filaments, streaming past: soft, two passes each. */
+      ctx.lineCap = 'round';
+      for (var i = 0; i < stars.length; i++) {
+        var s = stars[i];
+        var fu = (s.z + T * s.speed * 0.26) % 1;
+        var fu2 = Math.min(1, fu + 0.03 + 0.14 * s.speed);
+        var r0 = hyperRadius(fu, maxR), r1 = hyperRadius(fu2, maxR);
+        if (r1 < 1.5) continue;
+        var an = s.a + spin * (1 + s.twist * 0.5) + fu * 0.45 * s.twist;
+        var ca = Math.cos(an), sa = Math.sin(an);
+        var al = Math.min(1, 0.2 + fu * 1.1) * I;
+        for (var pass = 0; pass < 2; pass++) {
+          ctx.strokeStyle = riftFilament(fu, s.hue, al * (pass ? 0.75 : 0.18));
+          ctx.lineWidth = s.width * (0.4 + fu * 1.4) * (pass ? 1 : 3);
+          ctx.beginPath();
+          ctx.moveTo(cx + ca * r0, cy + sa * r0);
+          ctx.lineTo(cx + ca * r1, cy + sa * r1);
+          ctx.stroke();
+        }
+      }
+      ctx.globalCompositeOperation = 'source-over';
+      /* THE WAY OUT: blue, growing at the far end through the last of the
+       * tunnel, and gaping through the first third of the exit. */
+      var ex = phase === 'tunnel' ? smooth01((u - 0.8) / 0.2) * 0.25
+             : 0.25 + 0.75 * Math.min(1, u / 0.3);
+      if (ex > 0) {
+        var eH = S * (0.04 + 0.42 * ex);
+        var eW = S * 0.05 * ex + (ex > 0.7 ? S * 3.2 * Math.pow((ex - 0.7) / 0.3, 2.2) : 0);
+        drawRift(ctx, cx, cy, eH, eW, RIFT_BLUE, Math.min(1, ex * 3), T);
+      }
+    } else {
+      /* OUT, with the real sky back underneath: a blue wash dying away
+       * from the edges in, and nothing else. */
+      var fade = I * (1 - smooth01((u - 0.3) / 0.7));
+      if (fade > 0.002) {
+        var vg = ctx.createRadialGradient(cx, cy, S * 0.2, cx, cy, maxR);
+        vg.addColorStop(0, 'rgba(120,170,255,0)');
+        vg.addColorStop(1, 'rgba(120,170,255,' + (0.45 * fade).toFixed(3) + ')');
+        ctx.fillStyle = vg;
+        ctx.fillRect(0, 0, w, h);
+      }
     }
-
     ctx.restore();
 
-    /* The two flashes that bracket the whole thing: entry and exit. Drawn
-     * last, over everything, because that is what a flash is. */
+    /* The flashes: red-white going in, blue-white coming out. */
     if (hyper.flash > 0.001) {
       ctx.save();
-      ctx.fillStyle = 'rgba(226,244,255,' + Math.min(1, hyper.flash).toFixed(3) + ')';
+      ctx.fillStyle = (phase === 'exit' ? 'rgba(214,232,255,' : 'rgba(255,214,196,') +
+                      Math.min(1, hyper.flash).toFixed(3) + ')';
       ctx.fillRect(0, 0, w, h);
       ctx.restore();
     }
   }
 
-  /* Cruise: the sky smeared, with the system still visible through it.
+  /* ======================================================================
+   * THE SKY AT SPEED — STREAKS AND THE RED-BLUE SHIFT (2026-10-19)
+   * ======================================================================
+   * Third version, and the one Astra asked for by pointing at a thing she
+   * had seen: "in Star Trek TNG, in some of the remastered scenes, there's
+   * this red-blue starfield, where right as you pass a point of light it
+   * rapidly shifts in color." With it: "I liked the old cruise animation a
+   * bit better, just, we need a bit of planets covering the lines and blur
+   * them a bit so we get a streak and not just a point or a line."
    *
-   * Different problem from hyperspace. There you are nowhere and the tunnel
-   * is the whole view; here you are still IN the system and still need to
-   * see where you are going, so this streaks the starfield radially about
-   * the direction of travel and leaves everything else alone. Length scales
-   * with speed, so the effect tells you how fast you are going without a
-   * number — which is the entire reason to warp a starfield rather than
-   * just print a velocity. */
-  function drawCruiseWarp(ctx, cam, stars, headDir, speedFrac, w, h) {
-    var f = Math.max(0, Math.min(1, speedFrac));
-    if (f < 0.005) return;
-    var vp = cam.projectDir(headDir);
-    // Looking away from where we are going: streak from the far side.
-    var behind = !vp;
-    if (behind) {
-      var back = cam.projectDir(V.scale(headDir, -1));
-      if (!back) return;
-      vp = { x: 2 * cam.cx - back.x, y: 2 * cam.cy - back.y };
-    }
+   * So, what each earlier version contributed and what it gave up:
+   *   - the FIRST (the radial streaks of 2026-09) is the shape: every star
+   *     smeared along the way it is moving across the sky, longest abeam,
+   *     none dead ahead. Back, and now drawn by the world layer, behind
+   *     the planets, as soft blurred quads rather than hard lines.
+   *   - the SECOND (2026-10-17's relativistic sky) contributed a true thing
+   *     about light — ahead is blue, behind is red — and an untrue-looking
+   *     thing about the screen: aberration crowding every star into a ring
+   *     and a black rear sky above 1.5c. The colour stays and the rest goes.
+   *     Stars sit where they are; only their colour and their smear move.
+   *   - its trails-follow-the-turn idea stays too, folded in: in a turn the
+   *     streak picks up where the star WAS on screen a moment ago, so a
+   *     yaw still swings them rather than leaving them aimed at the nose.
+   *
+   * The colour is the TNG rule, not a blackbody formula: a star in the
+   * forward half is washed blue-white and a little brighter, one in the
+   * rear half red and a little dimmer, and the change happens in a narrow
+   * band either side of abeam — ±6° — so a star you watch go past flicks
+   * from one to the other as it crosses your shoulder. How hard the wash
+   * is, and how long the smear, both ride one number: `cruiseFrac`, where
+   * the speed sits between 0.02c and the drive's 2000c on a log scale.
+   *
+   * Pure functions, exported, and gl.js's star shader carries cruiseSky
+   * line for line (node cannot run a shader; test/cruisesky.test.js pins
+   * this one). */
+  var C_KMS = 299792.458;
+  var CRUISE_SKY_BETA = 0.02;      // below this the ordinary sky is drawn instead
+  var CRUISE_TOP_BETA = 2000;      // the drive's cap (main.js CRUISE_MAX), in c
+  var SHIFT_FULL_AT = 0.35;        // cruiseFrac at which the colour wash is complete (~1c)
+  var ABEAM_BAND = 0.10;           // |cos| either side of abeam the flip happens over
+  var SKY_BLUE = [178, 212, 255];
+  var SKY_RED = [255, 84, 58];
 
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    var stretch = 0.10 + 5.5 * f * f;
+  /* 0 at 0.02c, 1 at the cap, log in between. */
+  function cruiseFrac(beta) {
+    if (!(beta >= CRUISE_SKY_BETA)) return 0;
+    var f = Math.log(beta / CRUISE_SKY_BETA) / Math.log(CRUISE_TOP_BETA / CRUISE_SKY_BETA);
+    return Math.max(0, Math.min(1, f));
+  }
+  function smooth01(x) { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); }
+
+  /* For a star at cos `ct` from the heading, at `beta`:
+   *   f     the speed fraction above;
+   *   s     how strong the colour wash is (0..1);
+   *   ahead 1 in the forward half, 0 in the rear, the narrow flip between;
+   *   lum   brightness multiplier. */
+  function cruiseSky(ct, beta) {
+    var f = cruiseFrac(beta);
+    var s = smooth01(f / SHIFT_FULL_AT);
+    var ahead = smooth01((ct + ABEAM_BAND) / (2 * ABEAM_BAND));
+    return { f: f, s: s, ahead: ahead, lum: 1 + s * (0.6 * ahead - 0.35 * (1 - ahead)) };
+  }
+
+  /* The star's own colour washed toward blue or red by `sky`. 0-255.
+   * The star's own colour fades in with the wash too, so nothing jumps at
+   * the 0.02c line: the ordinary sky is white. */
+  function skyColour(base, sky) {
+    var a = sky.ahead, k = sky.s * 0.8, out = [];
+    for (var i = 0; i < 3; i++) {
+      var own = 255 + (base[i] - 255) * sky.s;
+      var tint = SKY_RED[i] + (SKY_BLUE[i] - SKY_RED[i]) * a;
+      out.push(Math.round(own + (tint - own) * k));
+    }
+    return out;
+  }
+
+  /* A star's own temperature, from the tint the sky was seeded with — no
+   * new random draws, so every seed keeps the sky it has. */
+  function starTemp(st) {
+    if (st.T) return st.T;
+    st.T = st.tint === '#ffd9c0' ? 4000 : (st.tint === '#c9dcff' ? 12000 : 6500);
+    return st.T;
+  }
+
+  /* Blackbody colour, Tanner Helland's fit, 1000-40000 K. Cached by 100 K
+   * step: the sky asks for a few hundred distinct values a frame at most. */
+  var K2RGB = {};
+  function k2rgb(T) {
+    var key = Math.round(Math.max(1000, Math.min(40000, T)) / 100);
+    if (K2RGB[key]) return K2RGB[key];
+    var t = key, r, g, b;
+    if (t <= 66) {
+      r = 255; g = 99.47 * Math.log(t) - 161.12;
+      b = t <= 19 ? 0 : 138.52 * Math.log(t - 10) - 305.04;
+    } else {
+      r = 329.7 * Math.pow(t - 60, -0.1332); g = 288.12 * Math.pow(t - 60, -0.0755); b = 255;
+    }
+    var c = function (x) { return Math.max(0, Math.min(255, x | 0)); };
+    return (K2RGB[key] = c(r) + ',' + c(g) + ',' + c(b));
+  }
+
+  /* Camera.projectDir, for a camera remembered as plain numbers. */
+  function projectWith(c, d) {
+    var depth = d.x * c.f.x + d.y * c.f.y + d.z * c.f.z;
+    if (depth <= 1e-6) return null;
+    var k = c.flen / depth;
+    return { x: c.cx + (d.x * c.r.x + d.y * c.r.y + d.z * c.r.z) * k,
+             y: c.cy - (d.x * c.u.x + d.y * c.u.y + d.z * c.u.z) * k };
+  }
+
+  /* THE STREAKS, as geometry: a flat list, nine numbers a segment (ax, ay
+   * at the STAR, bx, by at the tail, in screen px; r, g, b 0-255; alpha;
+   * width px), and the stars' own dots as a second list (x, y, r, g, b,
+   * alpha, size). The world layer draws the segments behind the planets
+   * with a soft cross-section and a tail that fades (GLWorld.drawTrails);
+   * a 2D overlay would put them across every planet's face, which Astra
+   * ruled out — "that breaks the immersion."
+   *
+   * WHERE THE TAIL POINTS. A ship flying along `head` sees every star
+   * slide away from the heading toward the point behind it, fastest
+   * abeam. So the tail runs to where the star sat a little earlier — its
+   * direction swung back toward the heading by STREAK_REACH(f) radians'
+   * worth — which is radial about the vanishing point when you look ahead,
+   * converging on the anti-point when you look back, and longest beside
+   * you, all from one rule and wherever the camera is. A turn adds where
+   * the star was on screen at the oldest remembered frame (`trail`, see
+   * main.js), so the streaks swing through a yaw. */
+  var STREAK_REACH_MIN = 0.015;    // radians of sky a streak spans at the slowest
+  var STREAK_REACH_MAX = 0.60;     // ... and at the cap
+  var STREAK_MAX_SCREEN = 0.55;    // longest streak, as a fraction of the larger screen side
+
+  function cruiseTrails(cam, stars, headDir, w, h, beta, trail) {
+    var segs = [], dots = [];
+    var f = cruiseFrac(beta || 0);
+    if (!f) return { segs: segs, dots: dots };
+    var reach = STREAK_REACH_MIN + (STREAK_REACH_MAX - STREAK_REACH_MIN) * f * f;
+    var maxLen = Math.max(w, h) * STREAK_MAX_SCREEN;
+    var oldest = trail && trail.length ? trail[trail.length - 1] : null;
+    var hx = headDir.x, hy = headDir.y, hz = headDir.z;
     for (var i = 0; i < stars.length; i++) {
-      var p = cam.projectDir(stars[i].d);
-      if (!p) continue;
-      if (p.x < -220 || p.x > w + 220 || p.y < -220 || p.y > h + 220) continue;
-      var dx = p.x - vp.x, dy = p.y - vp.y;
-      var L = Math.hypot(dx, dy);
-      if (L < 0.5) continue;
-      var len = Math.min(L * stretch, Math.max(w, h) * 1.4);
-      var ux = dx / L, uy = dy / L;
-      ctx.strokeStyle = 'rgba(190,225,255,' + (stars[i].b * (0.30 + 0.55 * f)).toFixed(3) + ')';
-      ctx.lineWidth = stars[i].size * (0.8 + 0.9 * f);
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      ctx.lineTo(p.x + ux * len, p.y + uy * len);
-      ctx.stroke();
-    }
+      var st = stars[i], d = st.d;
+      var p = cam.projectDir(d);
+      if (!p || p.x < -60 || p.x > w + 60 || p.y < -60 || p.y > h + 60) continue;
+      var ct = d.x * hx + d.y * hy + d.z * hz;
+      var sky = cruiseSky(ct, beta);
+      var bright = st.b * sky.lum;
+      if (bright < 0.03) continue;
+      var base = k2rgb(starTemp(st)).split(',').map(Number);
+      var rgb = skyColour(base, sky);
+      var a0 = Math.min(1, bright);
 
-    // A faint bloom at the vanishing point, so the direction of travel has
-    // somewhere to be.
-    if (!behind) {
-      var gr = Math.max(w, h) * (0.05 + 0.10 * f);
-      var g = ctx.createRadialGradient(vp.x, vp.y, 0, vp.x, vp.y, gr);
-      g.addColorStop(0, 'rgba(170,215,255,' + (0.16 * f).toFixed(3) + ')');
-      g.addColorStop(1, 'rgba(120,170,255,0)');
-      ctx.fillStyle = g;
+      /* Where it was: the direction swung toward the heading. */
+      var px = d.x + hx * reach, py = d.y + hy * reach, pz = d.z + hz * reach;
+      var pl = Math.sqrt(px * px + py * py + pz * pz);
+      var tx = 0, ty = 0;
+      if (pl > 1e-9) {
+        var q = cam.projectDir({ x: px / pl, y: py / pl, z: pz / pl });
+        if (q) { tx = q.x - p.x; ty = q.y - p.y; }
+      }
+      if (oldest) {
+        var hp = projectWith(oldest, d);
+        if (hp) { tx += hp.x - p.x; ty += hp.y - p.y; }
+      }
+      var L = Math.sqrt(tx * tx + ty * ty);
+      if (L > maxLen) { tx *= maxLen / L; ty *= maxLen / L; L = maxLen; }
+      var width = st.size * (1.1 + 1.6 * f);
+      if (L >= 0.6) segs.push(p.x, p.y, p.x + tx, p.y + ty, rgb[0], rgb[1], rgb[2], a0 * 0.85, width);
+      dots.push(p.x, p.y, rgb[0], rgb[1], rgb[2], a0, st.size * (1 + 0.5 * sky.s));
+    }
+    return { segs: segs, dots: dots };
+  }
+
+  /* `gpuSky`: the world layer drew the stars (in their shifted colours) in
+   * its own pass and draws the streaks too, straight after them and so
+   * behind every planet. The overlay only darkens the screen's edges, the
+   * old version's "what sells speed more than the streaks do", which is a
+   * wash over everything and so is right where it is. Without a world
+   * layer the streaks and dots fall back to this overlay. */
+  function drawCruiseWarp(ctx, cam, stars, headDir, speedFrac, w, h, beta, gpuSky, trail) {
+    var f = cruiseFrac(beta || 0);
+    if (!f) return;
+    var tr = cruiseTrails(cam, stars, headDir, w, h, beta, trail);
+    var GLW = global.GLWorld;
+    var onGpu = gpuSky && GLW && GLW.drawTrails && (GLW.drawTrails(tr.segs) || !tr.segs.length);
+    ctx.save();
+    if (!onGpu) {
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.lineCap = 'round';
+      var sg = tr.segs;
+      for (var i = 0; i < sg.length; i += 9) {
+        /* Two passes, wide and faint then narrow, for a soft edge on a
+         * canvas that has no blur of its own. */
+        for (var pass = 0; pass < 2; pass++) {
+          ctx.strokeStyle = 'rgba(' + sg[i + 4] + ',' + sg[i + 5] + ',' + sg[i + 6] + ',' +
+                            (sg[i + 7] * (pass ? 0.7 : 0.25)).toFixed(3) + ')';
+          ctx.lineWidth = sg[i + 8] * (pass ? 1 : 2.6);
+          ctx.beginPath();
+          ctx.moveTo(sg[i], sg[i + 1]);
+          ctx.lineTo(sg[i + 2], sg[i + 3]);
+          ctx.stroke();
+        }
+      }
+      if (!gpuSky) {
+        var dt = tr.dots;
+        for (var j = 0; j < dt.length; j += 7) {
+          var sz = dt[j + 6];
+          ctx.fillStyle = 'rgba(' + dt[j + 2] + ',' + dt[j + 3] + ',' + dt[j + 4] + ',' + dt[j + 5].toFixed(3) + ')';
+          ctx.fillRect(dt[j] - sz / 2, dt[j + 1] - sz / 2, sz, sz);
+        }
+      }
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    if (ctx.createRadialGradient) {
+      var vig = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.30,
+                                         w / 2, h / 2, Math.max(w, h) * 0.75);
+      vig.addColorStop(0, 'rgba(0,0,0,0)');
+      vig.addColorStop(1, 'rgba(2,6,18,' + (0.40 * f).toFixed(3) + ')');
+      ctx.fillStyle = vig;
       ctx.fillRect(0, 0, w, h);
     }
-    ctx.restore();
-
-    // Edge darkening, which is what sells speed more than the streaks do.
-    ctx.save();
-    var vig = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.28,
-                                       w / 2, h / 2, Math.max(w, h) * 0.75);
-    vig.addColorStop(0, 'rgba(0,0,0,0)');
-    vig.addColorStop(1, 'rgba(2,6,18,' + (0.55 * f).toFixed(3) + ')');
-    ctx.fillStyle = vig;
-    ctx.fillRect(0, 0, w, h);
     ctx.restore();
   }
 
@@ -7293,24 +8490,33 @@
    * the cockpit is still real geometry. Every mounting below is therefore a
    * bearing, a height and a lean, and the corners are derived.
    *
-   * The bearings are ±24°, not the ±60° that "ten and two" would mean
+   * The bearings are ±28°, not the ±60° that "ten and two" would mean
    * literally. A panel's horizontal offset on screen is the focal length
    * times the tangent of its bearing, and at 34° — never mind 60° — the
    * outer panel walks off the side of an 800-pixel-wide window entirely.
    * Measured in the running game at the size the window actually was, not
-   * reasoned about. 24° is as wide as the arc goes and stays in front of
-   * you at any window shape worth supporting.
+   * reasoned about. (It was ±24° until the overlap below was measured.)
    *
    * The widths are set by the same arithmetic: a panel subtends
    * atan(hw / r) either side of its bearing, so three panels fit without
    * overlapping only while the outer ones' inner edges clear the centre
-   * one's outer edge. 28° with these widths leaves about a degree of gap,
-   * and the whole layout is angular, so it holds at every window size
-   * rather than being tuned to one. */
+   * one's outer edge.
+   *
+   * MEASURED, 2026-10-19, because the version of this paragraph that said
+   * "28° leaves about a degree of gap" was written over mounts at 24°, and
+   * the housings — 22 mm proud of the glass on every side — were never in
+   * the sum. Projected through the real cockpit camera, neighbouring
+   * housings overlapped by 43 to 138 px at every window size the suite
+   * knows (Astra: "panels overlap. This is a problem."). Now ±28° with the
+   * screens 6% smaller: worst case (a 1920 window, the smallest hull) the
+   * housings clear by ~20 px at 1280-equivalent, and the arc still sits
+   * 60 px inside the edges of a 1280x800 window. The cockpit suite checks
+   * the gap between neighbours directly now, so this cannot drift again
+   * without failing. */
   var MFD_MOUNTS = [
-    { id: 'left',   bearing: -24 * Math.PI / 180, r: 1.12, y: -0.37, lean: 0.70, hw: 0.23, hh: 0.089, w: 460, h: 178 },
-    { id: 'centre', bearing: 0,                   r: 1.06, y: -0.39, lean: 0.62, hw: 0.24, hh: 0.093, w: 460, h: 178 },
-    { id: 'right',  bearing: 24 * Math.PI / 180,  r: 1.12, y: -0.37, lean: 0.70, hw: 0.23, hh: 0.089, w: 460, h: 178 },
+    { id: 'left',   bearing: -28 * Math.PI / 180, r: 1.12, y: -0.37, lean: 0.70, hw: 0.216, hh: 0.084, w: 460, h: 178 },
+    { id: 'centre', bearing: 0,                   r: 1.06, y: -0.39, lean: 0.62, hw: 0.226, hh: 0.087, w: 460, h: 178 },
+    { id: 'right',  bearing: 28 * Math.PI / 180,  r: 1.12, y: -0.37, lean: 0.70, hw: 0.216, hh: 0.084, w: 460, h: 178 },
     /* Two more on the rear bulkhead, for the same reason the side windows
      * run so far aft: you can turn all the way round now, and a cockpit
      * that rewards looking behind you with a blank wall is a cockpit that
@@ -7353,7 +8559,12 @@
      * can read from the airlock. Square root of the scale, so a 1.16x room
      * carries a 1.08x screen. */
     var k = spec ? spec.size : 1;
-    var ks = spec ? Math.sqrt(spec.size) : 1;
+    /* ...and only ever slower UPWARD. Below the reference ship the square
+     * root runs the wrong way: a 0.86x room got 0.93x screens, wider than
+     * the room had space for, and on the smallest hulls the three dash
+     * screens overlapped by most of a bezel. A small cockpit shrinks its
+     * screens with it. */
+    var ks = spec ? (spec.size < 1 ? spec.size : Math.sqrt(spec.size)) : 1;
     hw *= ks; hh *= ks;
     var cx = s * m.r * k, cz = c * m.r * k;
     var rx = c, rz = -s;                                   // along the width
@@ -7507,7 +8718,21 @@
     dart:    { wrap: 1.24, room: 0.90, brow: 0.82, rake: 0.60 },
     talon:   { wrap: 1.00, room: 1.00, brow: 1.00, rake: 0.46 },
     kestrel: { wrap: 1.09, room: 1.07, brow: 1.02, rake: 0.42 },
-    mule:    { wrap: 0.86, room: 1.16, brow: 1.22, rake: 0.26 }
+    mule:    { wrap: 0.86, room: 1.16, brow: 1.22, rake: 0.26 },
+    /* The hulls added 2026-10-19, each read as the nearest of the four in
+     * character: a shuttle is a small courier, a tug and a hauler are
+     * working freighters, the big merchants sit you further back still,
+     * and the warships wrap the glass like the interceptor they outgrew. */
+    wren:      { wrap: 1.04, room: 0.94, brow: 0.92, rake: 0.50 },
+    bollard:   { wrap: 0.92, room: 1.02, brow: 1.18, rake: 0.30 },
+    samaritan: { wrap: 0.98, room: 1.08, brow: 1.08, rake: 0.36 },
+    sump:      { wrap: 0.86, room: 1.14, brow: 1.24, rake: 0.26 },
+    longhaul:  { wrap: 0.84, room: 1.20, brow: 1.26, rake: 0.24 },
+    tanker:    { wrap: 0.84, room: 1.20, brow: 1.28, rake: 0.24 },
+    cutter:    { wrap: 1.16, room: 1.04, brow: 0.94, rake: 0.52 },
+    meridian:  { wrap: 0.90, room: 1.22, brow: 1.18, rake: 0.30 },
+    leviathan: { wrap: 0.82, room: 1.24, brow: 1.30, rake: 0.22 },
+    capital:   { wrap: 1.06, room: 1.24, brow: 1.20, rake: 0.34 }
   };
   /* Which drawn model a player hull wears, so the rake can be measured off
    * the thing you can actually see out of. */
@@ -7568,7 +8793,7 @@
 
   var PORTRAIT_FILL = 2.35;          // how far back to stand, in model reaches
 
-  function drawHullPortrait(ctx, x, y, w, h, hullId, spin, tint) {
+  function drawHullPortrait(ctx, x, y, w, h, hullId, spin, tint, paint) {
     if (!(w > 8) || !(h > 8)) return false;
     var mesh = hullPreviewMesh(hullId);
     if (!mesh || !mesh.f || !mesh.f.length) return false;
@@ -7604,7 +8829,11 @@
     ctx.rect(x, y, w, h);
     ctx.clip();
     ctx.translate(x, y);
-    paintMesh(ctx, cam, frame, mesh, 1, sunDir, tint || '#b9c6d8');
+    /* The order sheet's paint, so the ship on the card is the ship you are
+     * about to commission (see PAINT_NOW). */
+    PAINT_NOW = paintRGB(paint);
+    try { paintMesh(ctx, cam, frame, mesh, 1, sunDir, tint || '#b9c6d8'); }
+    finally { PAINT_NOW = null; }
     ctx.restore();
     return true;
   }
@@ -7612,7 +8841,11 @@
   function hullFineness(hullId) {
     if (FINENESS_CACHE[hullId] !== undefined) return FINENESS_CACHE[hullId];
     var out = null;
-    var modelId = HULL_ASSIGN[COCKPIT_CLASS[hullId] || hullId];
+    /* The four original hulls keep their entries; every hull added since
+     * names its traffic class as `mesh`, and the class is its model. */
+    var HL = global.Combat && global.Combat.HULLS;
+    var modelId = HULL_ASSIGN[COCKPIT_CLASS[hullId] ||
+                              (HL && HL[hullId] && HL[hullId].mesh) || hullId];
     var mesh = modelId ? libHull(modelId) : null;
     if (mesh && mesh.v && mesh.v.length) {
       var minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
@@ -9232,6 +10465,9 @@
     drawProjectionWash: drawProjectionWash,
     drawHyperspace: drawHyperspace,
     drawCruiseWarp: drawCruiseWarp,
+    cruiseSky: cruiseSky, starTemp: starTemp, cruiseTrails: cruiseTrails,
+    cruiseFrac: cruiseFrac, skyColour: skyColour,
+    CRUISE_SKY_BETA: CRUISE_SKY_BETA, CRUISE_TOP_BETA: CRUISE_TOP_BETA, C_KMS: C_KMS,
     hyperStars: hyperStars,
     hyperRadius: hyperRadius,
     drawHoloTarget: drawHoloTarget,
@@ -9240,6 +10476,8 @@
     berthDressing: berthDressing, berthAds: berthAds, adSlot: adSlot,
     ADS: ADS, AD_SECONDS: AD_SECONDS,
     drawPortDressing: drawPortDressing,
+    drawStationLights: drawStationLights,
+    drawStationOutworks: drawStationOutworks,
     drawPortLamps: drawPortLamps,
     drawPortDoors: drawPortDoors,
     /* How far a leaf slides, in PAD RADII, for anything that needs to
@@ -9279,6 +10517,7 @@
     interiorBounds: interiorBounds,
     insideInterior: insideInterior,
     setIndoors: setIndoors,
+    setCutaway: setCutaway,
     setAccent: setAccent, accented: accented, accentSwap: accentSwap,
     drawContrail: drawContrail,
     portSolidity: portSolidity,
@@ -9335,7 +10574,12 @@
     SHIP_LEN: SHIP_LEN,
     drawAttitudeLadder: drawAttitudeLadder,
     drawFlightPathMarker: drawFlightPathMarker,
-    drawBankScale: drawBankScale
+    drawBankScale: drawBankScale,
+    drawHeadingTape: drawHeadingTape,
+    drawAirData: drawAirData,
+    facingInfo: facingInfo, drawFacingCue: drawFacingCue,
+    airSpeedReadout: airSpeedReadout, altitudeReadout: altitudeReadout,
+    vsReadout: vsReadout, airReadout: airReadout
   };
 
   global.Render = Render;

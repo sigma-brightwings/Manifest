@@ -72,9 +72,13 @@
      * panel; hanging it from the top of its slot puts the gap somewhere the
      * eye expects one. */
     ctx.save();
-    ctx.translate(x + (w - MFD_W * s) / 2, y);
+    var ox = x + (w - MFD_W * s) / 2;
+    ctx.translate(ox, y);
     ctx.scale(s, s);
-    fn(ctx);
+    /* The page also gets where it landed, so a page that has clickable
+     * parts (the NAV card's tabs) can put its click targets on screen
+     * rather than in its own 460x178 space. Pages that ignore it, ignore it. */
+    fn(ctx, { ox: ox, oy: y, s: s });
     ctx.restore();
     return MFD_H * s;                 // how tall it actually came out
   }
@@ -350,6 +354,103 @@
     ctx.restore();
   }
 
+  /* THE SYSTEM YOU ARE IN, AS THE CHART WOULD SHOW IT (2026-10-19). Astra:
+   * "slipspace chart info should be displayed for current system in the
+   * nav menu. Stuff like what type of planet each of the bodies in order
+   * from their star are." The jump chart already said this about
+   * somewhere else — the survey rows, and the planets numbered out from
+   * the star — and said nothing about here, which is the system you most
+   * need it for.
+   *
+   * Pure: the planets, nearest the star first, each with its moons and
+   * the ports that work it (on the planet, in orbit of it, or on or round
+   * one of its moons — they all serve that world). */
+  function systemManifest(sys) {
+    var bodies = sys.bodies || [];
+    var planets = bodies.filter(function (b) { return b.kind === 'planet'; })
+      .sort(function (a, b) { return ((a.orbit && a.orbit.a) || 0) - ((b.orbit && b.orbit.a) || 0); });
+    var moonsOf = {}, portsOf = {};
+    bodies.forEach(function (b) {
+      if (b.kind === 'moon' && b.orbit) (moonsOf[b.orbit.parent] = moonsOf[b.orbit.parent] || []).push(b);
+    });
+    var hostOf = {};
+    planets.forEach(function (p) {
+      hostOf[p.id] = p.id;
+      (moonsOf[p.id] || []).forEach(function (m) { hostOf[m.id] = p.id; });
+    });
+    (sys.ports || []).forEach(function (pt) {
+      var on = pt.parentBody ? pt.parentBody.id : (pt.orbit ? pt.orbit.parent : null);
+      var world = on && hostOf[on];
+      if (world) portsOf[world] = (portsOf[world] || 0) + 1;
+    });
+    return planets.map(function (p, i) {
+      return { n: i + 1, body: p, typeName: p.typeName || p.type, composition: p.composition || null,
+               habitable: !!p.habitable, zone: zoneTag(p), moons: (moonsOf[p.id] || []).length,
+               ports: portsOf[p.id] || 0, atmosphere: !!p.atmosphere };
+    });
+  }
+
+  /* Where on a world people can live, as the chart writes it. 'HZ' for a
+   * world that is temperate all over; a twilight world names its strip,
+   * because "habitable" alone would have you landing on the burning side. */
+  function zoneTag(b) {
+    if (!b || !b.habitable) return '';
+    if (b.habitableBand === 'terminator') return 'HZ ring';
+    if (b.habitableBand === 'equator') return 'HZ band';
+    return 'HZ';
+  }
+  var BAND_NOTES = {
+    terminator: 'Tidally locked: one face to the star, forever. Life holds to the twilight ring between the burning day and the frozen night, where the sun sits on the horizon.',
+    equator: 'Lies on its side: each pole bakes for half the year and freezes for the other. Only the equator sees a sunrise every day, and that is where everyone lives.'
+  };
+
+  /* One world, as the chart would describe it: where it sits, what it is,
+   * the air, how many moons and ports, the pull at the surface and the
+   * length of its day, and — for a world in the habitable zone — what the
+   * chart says about life and the people on it. Pure; the WORLD tab of the
+   * NAV card draws exactly this. A moon is described against its planet. */
+  function ordinal(n) {
+    var s = ['th', 'st', 'nd', 'rd'], v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+  }
+  function worldFacts(sys, body) {
+    var list = systemManifest(sys);
+    var star = sys.root || (sys.bodies || []).filter(function (b) { return b.kind === 'star'; })[0];
+    var place, row = null;
+    if (body.kind === 'moon' && body.orbit) {
+      var parent = sys.byId ? sys.byId[body.orbit.parent] : null;
+      place = 'moon of ' + (parent ? parent.name : 'its planet');
+      for (var i = 0; i < list.length; i++) if (parent && list[i].body === parent) row = list[i];
+    } else {
+      for (var j = 0; j < list.length; j++) if (list[j].body === body) row = list[j];
+      place = row ? ordinal(row.n) + ' of ' + list.length + ' from ' + (star ? star.name : 'the star') : '—';
+    }
+    var G0 = 9.80665e-3;
+    var gSurf = (body.mu && body.radius) ? body.mu / (body.radius * body.radius) / G0 : null;
+    var per = body.rotation && body.rotation.period;
+    return {
+      name: body.name,
+      place: place,
+      planetRow: row,                              // the planet this card belongs to, in the list
+      typeName: body.typeName || body.type,
+      habitable: !!body.habitable,
+      zone: body.habitableBand === 'terminator' ? 'HZ · twilight ring'
+          : body.habitableBand === 'equator' ? 'HZ · equator band'
+          : body.habitable ? 'HZ' : '',
+      air: body.composition || (body.atmosphere ? 'thin atmosphere' : 'no atmosphere'),
+      moons: body.kind === 'planet' && row ? row.moons : 0,
+      ports: row ? (body.kind === 'planet' ? row.ports : null) : null,
+      gravity: gSurf,
+      dayHours: per ? per / 3600 : null,
+      retrograde: !!(per && per < 0),
+      /* A locked planet's day IS its year, and the number of hours in it
+       * is not the interesting fact; that it never ends is. */
+      day: body.kind === 'planet' && body.tidallyLocked ? 'tidally locked' : null,
+      tiltDeg: body.rotation ? body.rotation.tilt * 180 / Math.PI : null,
+      notes: [BAND_NOTES[body.habitableBand], body.lifeNote, body.cultureNote].filter(function (s) { return !!s; })
+    };
+  }
+
   /* --- F3: local navigation ---------------------------------------------
    * The list, the lock, the scope and the autopilot on one screen, because
    * every one of those is a different view of the same decision: where in
@@ -398,11 +499,21 @@
       }
       ctx.fillStyle = e.hostile ? '#ff8a76' : (idx === sel ? MFD_HOT : e.color);
       ctx.fillText(navMark(e), pad + 12, yy);
+      /* Clipped to the room the distance actually leaves, measured, not to
+       * a fixed 24 characters — at a narrow window the two ran into each
+       * other ("Coldwater Drove38,606 km"). */
+      var distTxt = fmtDist(e.range);
+      var nameRoom = listW - 12 - ctx.measureText(distTxt).width - 10 - 26;
+      var nm = e.name;
+      if (ctx.measureText(nm).width > nameRoom) {
+        while (nm.length > 2 && ctx.measureText(nm + '.').width > nameRoom) nm = nm.slice(0, -1);
+        nm += '.';
+      }
       ctx.fillStyle = idx === sel ? MFD_HOT : MFD_INK;
-      ctx.fillText(clipText(e.name, 24), pad + 26, yy);
+      ctx.fillText(nm, pad + 26, yy);
       ctx.fillStyle = idx === sel ? MFD_HOT : MFD_DIM;
       ctx.textAlign = 'right';
-      ctx.fillText(fmtDist(e.range), pad + listW - 12, yy);
+      ctx.fillText(distTxt, pad + listW - 12, yy);
       ctx.textAlign = 'left';
       hot(pad + 6, yy - 12, listW - 12, rowH, (function (entry) {
         return function () { G.navTarget = { kind: entry.kind, id: entry.id }; };
@@ -417,18 +528,26 @@
      * only worth using at a size the page was drawn for. */
     var rx = pad * 2 + listW, rw = w - rx - pad;
     var pageW = Math.min(500, rw * 0.5);
+    /* No room for the scope beside them: the pages take the whole column
+     * instead of half of it and an empty half beside. Halved on a narrow
+     * window they came out at 7 px type — the NAV card unreadable. */
+    if (rw - pageW - pad < 200) pageW = Math.min(500, rw);
     var half = Math.min((colH - pad) / 2, tileHeight(pageW));
     tile(ctx, rx, top + pad, pageW, half, drawTargetPage);
+
+    /* The NAV tile above is where the locked world's WORLD / SYSTEM card
+     * lives on this screen, clickable (see drawWorldCard in main.js). */
     tile(ctx, rx, top + pad + half + pad, pageW, half, drawAutoPage);
 
     var sx = rx + pageW + pad, sw = w - sx - pad;
     if (sw < 200) return;
+    var scopeH = colH;
     ctx.save();
     ctx.fillStyle = '#040a0e';
-    ctx.fillRect(sx, top + pad, sw, colH);
+    ctx.fillRect(sx, top + pad, sw, scopeH);
     ctx.strokeStyle = MFD_EDGE;
     ctx.lineWidth = 2;
-    ctx.strokeRect(sx + 2, top + pad + 2, sw - 4, colH - 4);
+    ctx.strokeRect(sx + 2, top + pad + 2, sw - 4, scopeH - 4);
     ctx.fillStyle = '#12414f';
     ctx.fillRect(sx + 4, top + pad + 4, sw - 8, 19);
     ctx.font = 'bold 13px ui-monospace, monospace';
@@ -437,11 +556,11 @@
     ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = '#7fd6c0';
     ctx.textAlign = 'right';
-    ctx.fillText('0.75 AU  ·  nose up  ·  stalks show height', sx + sw - 10, top + pad + 18);
+    if (sw > 330) ctx.fillText('0.75 AU  ·  nose up  ·  stalks show height', sx + sw - 10, top + pad + 18);
     ctx.textAlign = 'left';
     ctx.restore();
-    scopeBody(ctx, sx + sw / 2, top + pad + 26 + (colH - 34) * 0.5,
-              Math.min(sw / 2 - 30, 280), Math.min((colH - 60) * 0.42, 120));
+    scopeBody(ctx, sx + sw / 2, top + pad + 26 + (scopeH - 34) * 0.5,
+              Math.min(sw / 2 - 30, 280), Math.min((scopeH - 60) * 0.42, 120));
   }
 
   /* --- F4: comms ---------------------------------------------------------
@@ -465,8 +584,11 @@
     for (i = 0; i < calls.length; i++) {
       var dc = calls[i];
       var away = V.dist(dc.pos, G.ship.pos);
+      var npcSit = dc.npc && dc.claims && dc.claims.situation && global.Messages
+        ? global.Messages.WORDS.situation[dc.claims.situation.value] : null;
       var what = dc.mine
         ? 'YOUR MAYDAY — ' + Combat.maydayWord(dc.kind)
+        : npcSit ? 'MAYDAY — ' + npcSit
         : Combat.offenceWord(dc.kind);
       out.push({
         kind: 'distress', obj: dc, call: dc,
@@ -682,7 +804,7 @@
       ctx.fillText(distText, pad + listW - 12, yy);
       ctx.textAlign = 'left';
       hot(pad + 6, yy - 13, listW - 12, rowH, (function (n) {
-        return function () { G.commsSel = n; G.piracyMenu = null; };
+        return function () { G.commsSel = n; G.piracyMenu = null; G.talkMenu = null; G.recruitMenu = null; };
       })(idx));
     }
     ctx.restore();
@@ -755,6 +877,14 @@
     ctx.fillText('Traffic control answers immediately; ships answer when they feel like it.',
                  rx + 16, top + pad + chanH - 14);
     ctx.restore();
+
+    /* The message you are typing, along the foot of the channel pane — the
+     * same edit line the identity rows use, drawn where you are looking. */
+    if (G.msgEditing && editing()) {
+      drawEditField(ctx, rx + 10, top + pad + chanH - 58, rw - 20, 42);
+    } else if (G.msgEditing) {
+      G.msgEditing = false;       // Esc cancelled it without a commit
+    }
   }
 
   /* ---- the ship trade board ---------------------------------------------
@@ -951,11 +1081,127 @@
     ctx.restore();
   }
 
+  /* ---- YOUR OWN WORDS (messages.js) ----------------------------------------
+   * The one free-text field on the console. Typed into the same edit line
+   * the identity rows use, then READ: the draft below is a modal set of
+   * rows showing what the game understood and, for every claim the ship
+   * does not bear out, the lie spelled out. Send, edit, or cancel — and if
+   * it is a lie, the send button says so. */
+  function beginMsgEdit(kind, target, value) {
+    G.msgEditing = true;
+    beginEdit({
+      label: kind === 'distress' ? 'DISTRESS CALL  —  say what is happening'
+                                 : 'MESSAGE TO ' + String((target && target.name) || 'them').toUpperCase(),
+      value: value || '', max: 140,
+      hint: 'Enter to read it back  ·  Esc to cancel',
+      allow: function (ch) { return /[A-Za-z0-9 .,'!?\-:;()]/.test(ch) ? ch : ''; },
+      commit: function (v) {
+        G.msgEditing = false;
+        if (!v || !global.Messages) return;
+        global.Messages.draft(G, G.sys, G.t, kind, v, target ? { name: target.name } : null);
+      }
+    });
+  }
+
+  function draftOptions() {
+    var M = global.Messages, d = G.msgDraft, opts = [];
+    /* Still being read (the embedding reader is asynchronous): say so,
+     * and offer only the way out. */
+    if (d.pending) {
+      opts.push({ label: 'Reading your message…', enabled: false,
+                  note: clipText('"' + d.text + '"', 58), fn: function () {} });
+      opts.push({ label: 'Cancel', enabled: true, fn: function () { G.msgDraft = null; } });
+      return opts;
+    }
+    /* Re-checked every frame: if the drive dies while you are reading it
+     * back, "drive failure" stops being a lie, and the rows say so. */
+    var chk = M.check(G, G.sys, G.t, d.claims, d.kind);
+    d.check = chk;
+    opts.push({ label: 'READ AS', enabled: false, note: clipText('"' + d.text + '"', 58),
+                fn: function () {} });
+    var any = false;
+    chk.items.forEach(function (it) {
+      if (it.slot === 'distress') {
+        opts.push({ label: '! Ship not in distress', enabled: false,
+                    note: 'send anyway and it is a lie', fn: function () {} });
+        return;
+      }
+      any = true;
+      opts.push({
+        label: (it.ok ? '' : '! ') + it.slot.charAt(0).toUpperCase() + it.slot.slice(1) + ': ' +
+               (it.neg ? 'NOT ' : '') + clipText(it.label, 22),
+        enabled: false,
+        note: it.ok ? 'true' : it.prompt + ' — send anyway?',
+        fn: function () {}
+      });
+    });
+    if (!any) {
+      opts.push({ label: 'Nothing readable', enabled: false,
+                  note: 'nobody will know what you mean — edit it', fn: function () {} });
+    }
+    /* A message goes to a ship, which has to still be in range to hear it. */
+    var target = null;
+    if (d.kind === 'message') {
+      var cs = commsContacts();
+      for (var i = 0; i < cs.length; i++) {
+        if (cs[i].kind === 'ship' && cs[i].name === d.target) { target = cs[i]; break; }
+      }
+    }
+    var reachable = d.kind === 'distress' || (target && target.range <= Combat.HAIL_RANGE_KM);
+    opts.push({
+      label: chk.honest ? 'Send' : 'Send anyway — knowingly false',
+      enabled: !!reachable && (any || d.kind === 'message'),
+      note: !reachable ? 'they are out of range now'
+          : chk.honest ? 'every word of it is true'
+          : chk.weight.event === 'exploited' ? 'the worst kind of lie there is'
+          : 'if they find out, they will remember',
+      fn: function () {
+        if (d.kind === 'distress') M.sendDistress(G, G.sys, G.t, d, hooksFor());
+        else if (target) M.sendMessage(G, G.sys, G.t, target.obj, d, hooksFor());
+        G.msgDraft = null;
+      }
+    });
+    opts.push({ label: 'Edit', enabled: true, note: 'change the words',
+                fn: function () {
+                  var keep = d; G.msgDraft = null;
+                  beginMsgEdit(keep.kind, keep.target ? { name: keep.target } : null, keep.text);
+                } });
+    opts.push({ label: 'Cancel', enabled: true, fn: function () { G.msgDraft = null; } });
+    return opts;
+  }
+
   /* What you can say to whoever is selected. Deliberately shaped as a list
    * of intents rather than a dialogue tree — the tree is the next piece of
    * work and this is the shape it will grow into. */
   function commsOptions(c) {
     var opts = [];
+
+    /* An unsent message takes the channel over until it is sent or
+     * dropped, the same way a trade board does: you are mid-sentence. */
+    if (G.msgDraft && global.Messages) return draftOptions();
+
+    /* A CAPTAIN YOU OWE IS ASKING (favours.js). Her row leads with the
+     * ask until you answer it or it runs out — and running out is a no. */
+    var ask = G.favourAsk;
+    if (ask && global.Favours && c.name === ask.name &&
+        (!ask.star || !G.here || ask.star === G.here.id)) {
+      opts.push({
+        label: ask.speaker + ' asks a favour', enabled: false,
+        note: '"' + global.Favours.askText(ask) + '"  ·  ' + fmtTime(Math.max(0, ask.until - G.t)) + ' to answer',
+        fn: function () {}
+      });
+      opts.push({
+        label: ask.kind === 'credits' ? 'Wire her ' + ask.amount + ' cr' : 'Pass across ' + ask.amount + ' t of reaction mass',
+        enabled: ask.kind === 'credits' ? (G.ship.credits || 0) >= ask.amount
+                                         : (G.ship.thrusterFuel || 0) > ask.amount + 1,
+        note: ask.kind === 'credits' ? 'squares you with her' : 'within ' + global.Favours.MASS_RANGE + ' km · squares you with her',
+        fn: function () { global.Favours.answerAsk(G, G.sys, true, G.t, hooksFor()); }
+      });
+      opts.push({
+        label: 'Refuse', enabled: true, note: 'she will remember it',
+        fn: function () { global.Favours.answerAsk(G, G.sys, false, G.t, hooksFor()); }
+      });
+    }
 
     /* A live call on the band. Your own gives you the state of the answer;
      * somebody else's gives you the one action worth having. */
@@ -987,11 +1233,29 @@
       }
       var reach = V.dist(G.ship.pos, call.pos);
       var close = reach <= Combat.WITNESS_RANGE;
+      /* A CAPTAIN'S OWN MAYDAY (messages.js) says something, and what it
+       * says may not be true. Two rows before the answer: hear it in full,
+       * and check the transponder against the registry — the one tell a
+       * careful pilot has against a pirate's bait. */
+      if (call.npc && global.Messages) {
+        opts.push({
+          label: 'Hear the message', enabled: true,
+          note: clipText('"' + (call.text || '') + '"', 52),
+          fn: function () { say(call.name + ': "' + call.text + '"', 9); }
+        });
+        opts.push({
+          label: 'Check the transponder', enabled: true,
+          note: 'reg ' + (call.reg || 'none') + ' against the registry',
+          fn: function () {
+            say('Registry: ' + global.Messages.checkTransponder(G, G.sys, G.t, call), 9);
+          }
+        });
+      }
       opts.push({
         label: 'Answer the call', enabled: close && !call.answeredBy,
-        /* DORMANT: nothing in this build can attack an NPC, so no call but
-         * your own can currently appear here with an attacker to drive off.
-         * The button is real and so is what it does — see answerDistress. */
+        /* No longer dormant: a captain's own mayday off the schedule in
+         * messages.js can appear here and be answered — see answerNpcCall.
+         * A victim of the player's own crimes still answers the old way. */
         note: call.answeredBy ? 'already answered'
             : close ? 'you are near enough to help'
             : 'too far from the scene to be any use',
@@ -1070,6 +1334,16 @@
           var r = Combat.mayday(G.sys, G, G.t, Combat.HELP_SECURITY, hooksFor());
           if (!r.ok) say('Cannot transmit: ' + r.why, 4);
         }
+      });
+      /* IN YOUR OWN WORDS. The two above are the beacon: honest, read off
+       * the ship. This one is a message every captain in range hears, and
+       * who comes depends on what you say and who they are — which is also
+       * what makes it the one you can lie with. See messages.js. */
+      opts.push({
+        label: 'Distress call — in your own words…',
+        enabled: flying && !!global.Messages,
+        note: flying ? 'say what is wrong; captains decide who comes' : 'you are berthed',
+        fn: function () { beginMsgEdit('distress', null, ''); }
       });
 
       /* ---- the tow -------------------------------------------------------
@@ -1217,8 +1491,145 @@
               offer.cost + ' credits."', 6);
         }
       });
+      /* ---- WHO YOU SAY YOU ARE (captains.js, step 2) --------------------
+       * A new name, new paint and a spoofed transponder, from a yard where
+       * somebody can be bought — the grey market's own line, corruption 60.
+       * Rumours and your public record attach to the identity you
+       * broadcast, so a fresh one starts clean; captains who have seen the
+       * HULL may still know it is you, and being caught is a seen lie.
+       *
+       * Deck-only, and shown greyed with its reason at an honest yard, so a
+       * player can find out the service exists without being told where. */
+      var CapY = global.Captains;
+      if (docked && CapY) {
+        var idNow = CapY.identity(G);
+        var whyNot = CapY.refitRefusal(G, G.sys, c.obj, 'paint');
+        var honestYard = whyNot && /nobody here/.test(whyNot);
+        if (honestYard) {
+          opts.push({ label: 'Refit identity…', enabled: false, note: whyNot,
+                      fn: function () {} });
+        } else {
+          ['paint', 'full'].forEach(function (ext) {
+            var R = CapY.REFITS[ext];
+            var why = CapY.refitRefusal(G, G.sys, c.obj, ext);
+            opts.push({
+              label: 'Refit: ' + R.label + ' — ' + R.price + ' cr',
+              enabled: !why,
+              note: why || R.note,
+              fn: function () {
+                var r = CapY.refit(G, G.sys, c.obj, ext);
+                if (!r.ok) { say('No: ' + r.why, 5); return; }
+                say('Out of the yard as the ' + r.ident.name + ', transponder ' +
+                    r.ident.transponder + '. Nobody has heard of her.', 8);
+              }
+            });
+          });
+        }
+        if (idNow.disguised) {
+          opts.push({
+            label: 'Restore your own colours — ' + CapY.RESTORE_PRICE + ' cr',
+            enabled: G.ship.credits >= CapY.RESTORE_PRICE,
+            note: 'flying as the ' + idNow.name + ' (' + idNow.transponder + ')',
+            fn: function () {
+              var r = CapY.restoreIdentity(G, c.obj);
+              say(r.ok ? 'Your own name back on the hull, and your own record with it.'
+                       : 'No: ' + r.why, 6);
+            }
+          });
+        }
+      }
+      /* DOCK TALK (rumours.js): what has reached THIS port about whoever
+       * you are flying as, so the player can see their reputation travel
+       * rather than infer it from cold shoulders. */
+      var Rm = global.Rumours, CapT = global.Captains;
+      if (docked && Rm && G.rumours && CapT) {
+        var heardHere = Rm.portHeard(G, G.sys, c.obj.id, G.t, CapT.identity(G).key);
+        opts.push({
+          label: 'Listen to the dock talk', enabled: true,
+          note: heardHere.length ? heardHere.length + ' thing' + (heardHere.length > 1 ? 's' : '') +
+                                   ' said about you here' : 'nobody here is talking about you',
+          fn: function () {
+            if (!heardHere.length) { say('Nobody at ' + (c.obj.name || 'this port') + ' has heard of you.', 5); return; }
+            heardHere.sort(function (a, b) {
+              return Rm.weightOf(b.R, G.sys.starId, G.t) - Rm.weightOf(a.R, G.sys.starId, G.t);
+            });
+            heardHere.slice(0, 3).forEach(function (h, i) {
+              var line = Rm.lineFor(G, G.sys, { R: h.R, via: c.obj.id, here: h.R.star === G.sys.starId },
+                                    'dock|' + c.obj.id + '|' + i);
+              if (line) say(line, 8);
+            });
+          }
+        });
+      }
       opts.push({ label: 'Mission board', enabled: true,
                   note: 'F7', fn: function () { selectPanel(6); } });
+    } else if (G.talkMenu === c.name) {
+      /* TALK. Your own words, or a plain question. Behind one row on the
+       * main list so the ship menu does not grow past the pane. */
+      var inR = !c.hostile && c.range <= Combat.HAIL_RANGE_KM;
+      opts.push({
+        label: 'Send a message…', enabled: inR && !!global.Messages,
+        note: !inR ? 'out of transmitter range' : 'your own words — they will read them',
+        fn: function () { G.talkMenu = null; beginMsgEdit('message', { name: c.name }, ''); }
+      });
+      opts.push({
+        label: 'Ask what they carry, and where', enabled: inR && !!global.Messages,
+        note: !inR ? 'out of transmitter range' : 'a wary captain may not say',
+        fn: function () {
+          G.talkMenu = null;
+          global.Messages.askCargo(G, G.sys, G.t, c.obj, hooksFor());
+        }
+      });
+      /* FAVOURS (favours.js). Only when she owes you, and each with what
+       * it will do in the note. */
+      var Fav = global.Favours;
+      if (Fav && inR) {
+        Fav.favourOptions(G, G.sys, c.obj, G.t).forEach(function (o) {
+          opts.push({
+            label: o.label, enabled: o.enabled, note: o.note,
+            fn: function () {
+              G.talkMenu = null;
+              Fav.callIn(G, G.sys, c.obj, o.id, G.t, hooksFor());
+            }
+          });
+        });
+        /* "Looking for another fleetmate?" — shown only to a captain who
+         * would actually make the offer, so the row is never a tease. */
+        if (!Fav.recruitRefusal(G, G.sys, c.obj)) {
+          opts.push({
+            label: 'Go into business together…', enabled: true,
+            note: 'she brings her ship, or comes aboard herself',
+            fn: function () { G.talkMenu = null; G.recruitMenu = c.name; }
+          });
+        }
+      }
+      opts.push({ label: 'Back', enabled: true, fn: function () { G.talkMenu = null; } });
+    } else if (G.recruitMenu === c.name && global.Favours) {
+      /* Astra: "Offer both." Two deals, each spelled out before it is
+       * struck, because neither can be taken back with a click. */
+      var FavR = global.Favours;
+      var recP = global.Captains ? global.Captains.profile(G, G.sys, c.obj) : null;
+      var recRole = recP && Crew && Crew.ROLES ? Crew.ROLES[FavR.roleFor(recP)] : null;
+      var roleName = recRole ? recRole.name.toLowerCase() : 'officer';
+      opts.push({
+        label: 'Partners — she brings the ' + (c.name || 'ship'), enabled: true,
+        note: 'joins your fleet and takes orders · stays hers · profit 50/50 · cannot be sold · leaves if you mistreat her',
+        fn: function () {
+          G.recruitMenu = null;
+          var r = FavR.recruit(G, G.sys, c.obj, 'partner', G.t, hooksFor());
+          if (!r.ok) say('No: ' + r.why, 5);
+        }
+      });
+      opts.push({
+        label: 'Crew — she comes aboard as your ' + roleName, enabled: true,
+        note: 'a skilled officer at a friend\'s wage · her mate takes her ship home',
+        fn: function () {
+          G.recruitMenu = null;
+          var r = FavR.recruit(G, G.sys, c.obj, 'crew', G.t, hooksFor());
+          if (!r.ok) say('No: ' + r.why, 5);
+        }
+      });
+      opts.push({ label: 'Not now', enabled: true, fn: function () { G.recruitMenu = null; } });
     } else if (G.piracyMenu === c.name) {
       /* The other side of the gun. Everything the pirates have been doing
        * to the player, offered back — with the same witness rules, the same
@@ -1256,10 +1667,27 @@
        * the price shown and the price charged cannot drift apart. */
       var inRange = !c.hostile && c.range <= Combat.HAIL_RANGE_KM;
       var aid = (!c.hostile && c.obj) ? Combat.hailAssist(G, c.obj) : null;
+      /* HAIL IS A GREETING NOW, and the greeting is the relationship.
+       * Astra: "Are you a filthy pirate, or do you rescue stranded ships?"
+       * Who answers, and how they sound, comes from what this captain has
+       * seen you do — or, if they have never met you, from what you have
+       * done in public — through their own temper and values. See
+       * Captains.greeting. The note names who is in the chair before you
+       * press anything, so the mood is a thing you can read, not a dice
+       * roll you find out about. */
+      var Cap = global.Captains;
+      var who = (Cap && c.obj && !c.hostile) ? Cap.describe(G, G.sys, c.obj) : null;
       opts.push({
         label: 'Hail', enabled: true,
+        note: c.hostile ? 'they are not talking' : !inRange ? 'out of transmitter range' : who,
         fn: function () {
-          say(c.name + (c.hostile ? ' does not answer.' : ' acknowledges.'), 4);
+          if (c.hostile) { say(c.name + ' does not answer.', 4); return; }
+          if (!inRange) { say(c.name + ' is too far out to raise.', 4); return; }
+          /* speak, not greeting: the captain remembers having said it, so
+           * the next hail is a different line (captains.js RECALL). */
+          var g = Cap ? Cap.speak(G, G.sys, c.obj, G.t) : null;
+          if (!g) { say(c.name + ' acknowledges.', 4); return; }
+          say(g.speaker + ', ' + c.name + ': "' + g.text + '"', 9);
         }
       });
       /* A WARSHIP IS NOT A SHOP. A capital answers one way whatever you
@@ -1309,6 +1737,12 @@
             : rumoured ? 'that is all they have heard today'
             : 'what the crew have heard — markets, lanes',
         fn: function () { Combat.hailShip(G, G.sys, G.t, c.obj, 'rumour', hooksFor()); }
+      });
+      opts.push({
+        label: 'Talk…', enabled: inRange && !isCapital && !!global.Messages,
+        note: !inRange ? 'out of transmitter range'
+            : isCapital ? 'a warship does not chat' : 'your own words, or a question',
+        fn: function () { G.talkMenu = c.name; G.piracyMenu = null; }
       });
       /* TRADE. One row where there were two, because there is a board
        * behind it now: every line in their hold and every line in yours,
@@ -2241,15 +2675,32 @@
         Math.round(Sim.cargoMass(s)) + ' / ' + s.cargoCap + ' t',
         function () {}, true);
 
-    if (!mine.length) {
-      row('YOU OWN NO OTHER SHIP', 'buy a hull with KEEP HER and the old one stays yours',
+    /* ON THE SLIPS, wherever they are: a hull you have paid for is part of
+     * the fleet you are planning, even while she is still being built. */
+    var slips = Combat.orders ? Combat.orders(G) : [];
+    slips.forEach(function (o) {
+      var oh = Combat.HULLS[o.hullId] || {};
+      row((o.name || oh.name || o.hullId).toUpperCase() + '  ·  ON THE SLIP',
+          (oh.name || o.hullId) + ' at ' + (o.portName || 'a yard') +
+          (o.starName ? ', ' + o.starName : '') + '  ·  ready in ' +
+          fmtLogAge(Combat.orderEta(o, G.t)),
           function () {}, true);
+    });
+
+    if (!mine.length) {
+      if (!slips.length) {
+        row('YOU OWN NO OTHER SHIP', 'buy a hull with KEEP HER and the old one stays yours',
+            function () {}, true);
+      }
       return 0;
     }
 
     for (var i = 0; i < mine.length; i++) {
       (function (rec) {
-        var hereNow = rec.port === s.docked && !rec.order;
+        /* Port ids are per system ('b7' is a different dock at every star),
+         * so "on this clamp" has to be this star as well. */
+        var hereNow = rec.port === s.docked && !rec.order &&
+                      !(rec.star && G.here && rec.star !== G.here.id);
         var worth = Fleet.resale(rec);
 
         /* UNDER WAY. One row, no action: she is on the timetable and the
@@ -2286,6 +2737,13 @@
               /* Selling is only possible where she is, which is the same
                * rule as every other transaction in this game: you cannot
                * trade a hold from the far side of the galaxy either. */
+              /* A PARTNER'S SHIP IS HERS (favours.js). She flies with you
+               * and takes your orders; the title was never yours. */
+              if (rec.partner) {
+                say('The ' + rec.name + ' is ' + rec.partner.name + '\'s ship — she flies with you, ' +
+                    'but she is not yours to sell', 6);
+                return;
+              }
               if (!hereNow) {
                 say(rec.name + ' is at ' + (rec.portName || 'another port') +
                     ' — you have to be standing beside a ship to sell her', 6);
@@ -2305,6 +2763,30 @@
                               net + ' cr to you' : ''), 6);
             },
             false, { hot: hereNow });
+
+        /* TAKE COMMAND (2026-10-19). Step across the clamp into her. Two
+         * rows because they are two transactions: the ship you are in
+         * stays as one of yours, or the yard takes her in part exchange. */
+        if (hereNow && !rec.partner && Combat.takeCommand) {
+          var cur = s.shipName || (hull ? hull.name : 'your ship');
+          var whyK = Combat.commandRefusal(G, rec, 'keep');
+          var whyT = Combat.commandRefusal(G, rec, 'tradein');
+          var back = Combat.tradeInValue(s);
+          var stepAcross = function (mode) {
+            var r = Combat.takeCommand(G, rec.id, mode);
+            if (!r.ok) { say('Not yet: ' + r.why, 6); return; }
+            say('You have command of the ' + r.name + '.' +
+                (r.parked ? ' The ' + r.parked.name + ' stays on the clamp, still yours.'
+                          : ' The yard took the ' + cur + ' for ' + r.credit + ' cr.') +
+                (Crew && Crew.needsCrew && Crew.needsCrew(G.ship) && !(G.ship.crew || []).length
+                  ? ' She wants hands — CREW.' : ''), 9);
+          };
+          row('  ▶ TAKE COMMAND  ·  keep the ' + cur, whyK || 'she stays here as one of yours',
+              function () { stepAcross('keep'); }, !!whyK);
+          row('  ▶ TAKE COMMAND  ·  trade in the ' + cur + '  +' + back + ' cr',
+              whyT || 'your hold and your people come across with you',
+              function () { stepAcross('tradein'); }, !!whyT);
+        }
 
         /* STANDING ORDERS. A row per port she could be sent to, under the
          * ship it applies to, each carrying the crossing time — a
@@ -2386,6 +2868,11 @@
     var keys = Combat.slotKeys(s);
     var map = s.fit || {};
     var shown = 0;
+    /* A LARGE HULL IS WORKED ON AT A SHIPYARD (2026-10-19). Said once, at
+     * the top, rather than as a dozen greyed SELL rows that will not say
+     * why — doctrine 5. The rows still show what she carries. */
+    var yardNo = Combat.yardRefusal ? Combat.yardRefusal(G) : null;
+    if (yardNo) row('NO REFITS HERE', yardNo, function () {}, true);
     for (var i = 0; i < keys.length; i++) {
       var key = keys[i];
       var type = Combat.slotType(key);
@@ -2402,9 +2889,9 @@
               return function () {
                 var got = Combat.sellFitted(G, k);
                 say(got ? 'Sold the ' + nm.toLowerCase() + ' for ' + got + ' cr'
-                        : 'Nothing in that slot', 4);
+                        : (yardNo ? 'No: ' + yardNo : 'Nothing in that slot'), 4);
               };
-            })(key, item.name), false);
+            })(key, item.name), !!yardNo);
         /* Fire-group assignment gets its own row rather than sharing the
          * slot's. The slot row is SELL, and a control that sometimes sells
          * a 38,000 cr gun and sometimes moves it between triggers is a
@@ -2532,9 +3019,26 @@
       var fitCheck = Combat.canFit(s, it.id);
       var afford = s.credits >= it.price;
       var sub;
+      /* A cruise drive into a full bay is a trade-in, not a refusal: say
+       * what it replaces, what it costs after, and how fast you will be. */
+      var dp = it.kind === 'cruisedrive' && Combat.drivePreview ? Combat.drivePreview(G, it.id) : null;
+      if (dp) {
+        fitCheck = dp.ok ? { ok: true } : { ok: false, why: dp.why };
+        afford = s.credits >= (dp.ok ? dp.net : it.price);
+      }
+      var yardWhy = Combat.yardRefusal ? Combat.yardRefusal(G) : null;
+      if (yardWhy) fitCheck = { ok: false, why: yardWhy };
       if (lienWhy) sub = 'not while the lien stands — see above';
       else if (!fitCheck.ok) sub = fitCheck.why;
-      else if (!afford) sub = 'short ' + (it.price - s.credits) + ' cr';
+      else if (!afford) sub = 'short ' + ((dp && dp.ok ? dp.net : it.price) - s.credits) + ' cr';
+      else if (dp && dp.ok) {
+        var fc = function (c) { return c >= 100 ? Math.round(c) + 'c' : c.toFixed(1) + 'c'; };
+        var dry = it.mil && !((s.cargo && s.cargo.milfuel) > 1e-6);
+        sub = 'top speed ' + fc(dp.nowC) + ' → ' + fc(dp.topC) +
+              (dry ? ' (' + fc(dp.topC * 5) + ' with milfuel aboard)' : '') +
+              (dp.replaces ? '  ·  trades in ' + dp.replaces.name + ' (' + dp.tradeIn + ' cr)  ·  ' + dp.net + ' cr net'
+                           : '  ·  second drive');
+      }
       else if (it.kind === 'gun') sub = it.dmg + ' dmg · ' + it.range + ' km · ' +
                                        it.power.toFixed(1) + ' MW · ' + it.heat + ' heat/s';
       else if (it.kind === 'reactor') sub = '+' + it.powerBonus.toFixed(1) + ' MW · ' + it.mass + ' t';
@@ -2576,8 +3080,16 @@
      * but a large hull is built in orbit and never lands, so a pad or an
      * underground bay carries S and M only, and the medium classes are
      * likelier the more developed the dock. See Combat.hullsAt. */
+    var yard = Combat.isShipyard && Combat.isShipyard(port);
+    /* TWO COUNTERS AT A SHIPYARD (2026-10-19): the floor, where a hull is
+     * sold as she stands and you fly her out today, and the slips, where
+     * one is built to your sheet and handed over days from now. The same
+     * large hull can be on both, so the card is told which you picked —
+     * G.yardBuild — rather than guessing from the hull. */
     var order = Combat.hullsAt(port, G.t).filter(function (id) { return id !== s.hullId; });
-    if (!order.length) {
+    var built = yard ? Combat.orderList(G, port) : [];
+    var buildable = built.filter(function (e) { return !e.why; }).map(function (e) { return e.id; });
+    if (!order.length && !built.length) {
       row('NO HULLS ON THE FLOOR TODAY',
           Combat.landsLarge(port)
             ? 'a better developed dock carries the larger classes'
@@ -2585,16 +3097,194 @@
           function () {}, true);
       return 0;
     }
-    if (order.indexOf(G.yardHull) < 0) G.yardHull = order[0];
+    if (!yard) G.yardBuild = false;
+    var pickList = G.yardBuild ? buildable : order;
+    if (pickList.indexOf(G.yardHull) < 0) {
+      if (order.length) { G.yardBuild = false; G.yardHull = order[0]; }
+      else { G.yardBuild = !!buildable.length; G.yardHull = buildable[0] || null; }
+    }
+    if (order.length) {
+      row(yard ? 'ON THE FLOOR  ·  fly her out today' : 'ON THE FLOOR  ·  large hulls sold as they sit',
+          yard ? 'as she stands; a large hull keeps the yard\'s own fit'
+               : 'only a shipyard builds a large hull to order, or refits one',
+          function () {}, true);
+    }
     for (var i = 0; i < order.length; i++) {
       var hull = Combat.HULLS[order[i]];
-      var delta = hull.price - Math.round(Combat.HULLS[s.hullId || 'talon'].price * 0.7);
-      row(hull.name.toUpperCase() + '  [' + (hull.size || 'M') + ']  —  ' + delta + ' cr',
-          hull.cargoCap + 't hold · ' + hull.hullMax + ' hull · ' + hull.blurb,
-          (function (hid) { return function () { G.yardHull = hid; }; })(hull.id),
-          false, { hot: G.yardHull === hull.id });
+      var deal = hullDeal(hull.id, false, false);
+      var sub = hull.cargoCap + 't hold · ' + hull.hullMax + ' hull · ' + hull.blurb;
+      /* A large hull off a floor comes with the dock's own fit, and says so. */
+      if (deal.stock) {
+        sub = (deal.stock.items.length
+               ? 'as she sits: ' + deal.stock.items.map(function (id) {
+                   return (Combat.EQUIPMENT[id] || {}).name || id;
+                 }).join(', ')
+               : 'as she sits: bare') + ' · ' + hull.cargoCap + 't hold';
+      }
+      row(hull.name.toUpperCase() + '  [' + (hull.size || 'M') + ']  —  ' + deal.cost + ' cr',
+          sub,
+          (function (hid) { return function () { G.yardHull = hid; G.yardBuild = false; }; })(hull.id),
+          false, { hot: !G.yardBuild && G.yardHull === hull.id });
     }
+
+    /* ---- BUILT TO ORDER (2026-10-19) -------------------------------------
+     * Astra: "only at shipyards can you get a customized L size ship."
+     * Every L and XL hull, the navy's own included — a locked warship is
+     * drawn with the standing it needs, because that reads as a goal. */
+    if (built.length) {
+      row('BUILT TO ORDER AT ' + (port.name || 'this yard').toUpperCase(),
+          'paid now, built to your sheet, handed over here — fly what you have meanwhile',
+          function () {}, true);
+      for (var b = 0; b < built.length; b++) {
+        (function (e) {
+          var bh = Combat.HULLS[e.id];
+          var days = Combat.buildDays ? Combat.buildDays(e.id) : 0;
+          row(bh.name.toUpperCase() + '  [' + bh.size + ']' +
+              (e.why ? '  —  LOCKED' : '  —  from ' + bh.price + ' cr  ·  ' + days + ' days on the slip'),
+              e.why || (bh.cargoCap + 't hold · ' + bh.hullMax + ' hull · ' + bh.blurb),
+              function () { G.yardHull = e.id; G.yardBuild = true; }, !!e.why,
+              { hot: G.yardBuild && G.yardHull === e.id });
+        })(built[b]);
+      }
+    }
+
+    /* ON THE SLIPS: what you have already ordered here, and when. */
+    var slips = (Combat.orders ? Combat.orders(G) : []).filter(function (o) {
+      return o.port === port.id && (!o.star || !G.here || o.star === G.here.id);
+    });
+    slips.forEach(function (o) {
+      var oh = Combat.HULLS[o.hullId] || {};
+      row('ON THE SLIP  ·  ' + (o.name || oh.name || o.hullId).toUpperCase(),
+          (oh.name || o.hullId) + '  ·  ready in ' + fmtLogAge(Combat.orderEta(o, G.t)) +
+          '  ·  paid ' + o.paid + ' cr',
+          function () {}, true);
+    });
+
+    /* THE ORDER SHEET, for the hull on the card when it is being built. */
+    if (yard && G.yardBuild && G.yardHull && Combat.bigHull(G.yardHull)) drawOrderSheet(row, s, port, G.yardHull);
     return HULL_CARD_H;
+  }
+
+  /* ---- the order sheet ---------------------------------------------------
+   * One draft at a time, kept on G so it survives a frame and is dropped
+   * when the hull on the card changes. A slot row cycles ▶ through: empty,
+   * then everything on this yard's shelf that suits it (your own gear stays
+   * on the ship you keep flying while she is built). Colours cycle the same
+   * way. Nothing is spent until COMMISSION on the card, and the totals row
+   * is the yard's own quote, refusal and all. */
+  function orderFor(hullId) {
+    var o = G.yardOrder;
+    if (o && o.hullId === hullId) return o;
+    var to = Combat.HULLS[hullId];
+    /* She is built new and you keep flying the ship you are in, so the
+     * sheet starts empty — nothing of yours moves across to a hull that
+     * will not exist for days. */
+    G.yardOrder = {
+      hullId: hullId,
+      fit: Combat.defaultOrderFit(G.ship, to, true),
+      name: '', paint: { p: 'yard', t: 'yard' }
+    };
+    return G.yardOrder;
+  }
+
+  function paintOf(o) {
+    if (!o || !o.paint) return null;
+    var P = Combat.PAINT_BY_ID || {};
+    var p = P[o.paint.p], t = P[o.paint.t];
+    var hp = p && p.hex, ht = t && t.hex;
+    return (hp || ht) ? { p: hp || null, t: ht || null } : null;
+  }
+
+  function slotOptions(s, port, key, o) {
+    var type = Combat.slotType(key);
+    var opts = [null];
+    Combat.stockAt(G, port).forEach(function (e) {
+      var it = e.item;
+      if (!e.available || it.slot !== type || it.kind === 'missile' || it.kind === 'sink') return;
+      opts.push(it.id);
+    });
+    return opts;
+  }
+
+  function optionName(s, pick) {
+    if (!pick) return 'empty';
+    if (String(pick).indexOf('own:') === 0) {
+      var id = (s.fit || {})[pick.slice(4)];
+      return ((Combat.EQUIPMENT[id] || {}).name || id) + ' (yours)';
+    }
+    var it = Combat.EQUIPMENT[pick];
+    return it ? it.name + ' (' + it.price + ' cr)' : pick;
+  }
+
+  function drawOrderSheet(row, s, port, hullId) {
+    var o = orderFor(hullId);
+    var probe = { hullId: hullId, fit: {} };
+    var keys = Combat.slotKeys(probe);
+    row('ORDER SHEET  ·  ' + Combat.HULLS[hullId].name.toUpperCase(),
+        'click a line to change it ▶', function () {}, true);
+    keys.forEach(function (key) {
+      var type = Combat.slotType(key);
+      var label = (Combat.SLOT_LABEL[type] || type).toUpperCase() + ' ' +
+                  (parseInt(key.replace(/\D+/g, ''), 10) + 1);
+      row('  ' + label + ':  ' + optionName(s, o.fit[key]) + '  ▶', null, function () {
+        var list = slotOptions(s, port, key, o);
+        var at = list.indexOf(o.fit[key] || null);
+        var next = list[(at + 1) % list.length];
+        if (next) o.fit[key] = next; else delete o.fit[key];
+      });
+    });
+    row('  NAME:  ' + (o.name || '(as the yard numbers her)'), 'click to name her', function () {
+      beginEdit({ label: 'HER NAME', value: o.name || '', max: 24,
+        allow: function (c) { return /[A-Za-z0-9 .'\-]/.test(c) ? c : ''; },
+        commit: function (v) { o.name = v || ''; } });
+    });
+    var P = Combat.PAINTS || [];
+    function cyclePaint(which) {
+      var ids = P.map(function (p) { return p.id; });
+      var at = ids.indexOf(o.paint[which]);
+      o.paint[which] = ids[(at + 1) % ids.length];
+    }
+    var pn = (Combat.PAINT_BY_ID[o.paint.p] || {}).name || 'yard grey';
+    var tn = (Combat.PAINT_BY_ID[o.paint.t] || {}).name || 'yard grey';
+    row('  HULL COLOUR:  ' + pn + '  ▶', null, function () { cyclePaint('p'); });
+    row('  TRIM:  ' + tn + '  ▶', null, function () { cyclePaint('t'); });
+    var q = Combat.quoteCommission(G, hullId, { fit: o.fit });
+    var sum = q.summary || {};
+    row('  ' + (q.ok ? 'QUOTE' : 'CANNOT BUILD') + ':  hull ' + (q.hull || 0) + ' + fittings ' + (q.gear || 0) +
+        ' = ' + (q.cost || 0) + ' cr  ·  ready in ' + (q.days || 0) + ' days',
+        (q.ok ? '' : q.why + '  ·  ') + 'power ' + (sum.powerUsed || 0).toFixed(1) + ' / ' +
+        (sum.powerCap || 0).toFixed(1) + ' MW · fit ' + (sum.massUsed || 0).toFixed(1) + ' / ' +
+        (sum.massCap || 0) + ' t',
+        function () {}, true, { hot: !q.ok });
+  }
+
+  /* What the card's two buttons will cost, by the same arithmetic buyHull
+   * runs. A large hull is a quote (shipyard) or a floor package (elsewhere);
+   * anything else is the old sticker-minus-trade-in. */
+  function hullDeal(hullId, keep, build) {
+    var s = G.ship, hull = Combat.HULLS[hullId];
+    var here = Combat.HULLS[(s && s.hullId) || 'talon'];
+    var port = s && s.docked && G.sys ? G.sys.byId[s.docked] : null;
+    if (build === undefined) build = !!G.yardBuild;
+    if (hull && Combat.bigHull && Combat.bigHull(hullId) && port) {
+      if (build && Combat.isShipyard(port)) {
+        var o = orderFor(hullId);
+        var q = Combat.quoteCommission(G, hullId, { fit: o.fit });
+        return { cost: q.cost || 0, ok: q.ok, why: q.why, fit: q.fit, order: o, days: q.days };
+      }
+      var sf = Combat.stockFit(G, port, hullId, G.t);
+      var credit = keep ? 0 : Math.round(here.price * Combat.TRADE_IN) + gearCredit(s);
+      return { cost: hull.price + sf.gear - credit, ok: true, stock: sf };
+    }
+    return { cost: keep ? hull.price : hull.price - Math.round((here ? here.price : 0) * 0.7), ok: true };
+  }
+
+  function gearCredit(s) {
+    var v = 0;
+    Combat.fittedList(s).forEach(function (f) {
+      v += Math.round((f.item.price || 0) * Combat.TRADE_IN);
+    });
+    return v;
   }
 
   /* THE BUY BUTTON IS ITS OWN BUTTON. Astra: "Have a separate Buy button."
@@ -2607,8 +3297,11 @@
   function buyTheSelectedHull(keep) {
     var hull = Combat.HULLS[G.yardHull];
     if (!hull) return;
-    var r = Combat.buyHull(G, hull.id, keep);
+    var r = Combat.buyHull(G, hull.id, keep, null);
     if (!r.ok) { say('No deal: ' + r.why, 5); return; }
+    if (r.mode === 'stock') {
+      say('She is yours as she sits — only a shipyard will change her fittings.', 7);
+    }
     if (r.parked) {
       say('The ' + r.parked.name + ' stays on the clamp — she is still yours. ' +
           'F5, FLEET.', 8);
@@ -2637,6 +3330,18 @@
     }
   }
 
+  /* COMMISSION: the sheet goes with the money, and she goes on the slip. */
+  function commissionTheSelectedHull() {
+    var hull = Combat.HULLS[G.yardHull];
+    if (!hull || !G.yardOrder || G.yardOrder.hullId !== hull.id) return;
+    var o = G.yardOrder;
+    var r = Combat.commission(G, hull.id, { fit: o.fit, name: o.name || null, paint: paintOf(o) });
+    if (!r.ok) { say('No deal: ' + r.why, 5); return; }
+    G.yardOrder = null;
+    say('Signed. The ' + (r.order.name || hull.name) + ' goes on the slip — ready here in ' +
+        r.days + ' days. The yard will call when she is out; take command of her on FLEET.', 9);
+  }
+
   /* The ship itself, turning, with what the spec sheet cannot say beside
    * it. Wall clock rather than sim time: a showroom model turns while the
    * game is paused, because it is a display and not a simulation. */
@@ -2656,8 +3361,10 @@
     var picW = Math.min(190, Math.max(110, Math.round(w * 0.34)));
     var now = (typeof performance !== 'undefined' ? performance.now() : 0) / 1000;
     var spin = (now / SHOWROOM_TURN) * Math.PI * 2;
+    /* In the colours on the order sheet, when there is one for her. */
+    var sheet = G.yardBuild && G.yardOrder && G.yardOrder.hullId === hull.id ? paintOf(G.yardOrder) : null;
     var drew = Render.drawHullPortrait
-      ? Render.drawHullPortrait(ctx, x + 14, y + 4, picW, h - 12, hull.id, spin)
+      ? Render.drawHullPortrait(ctx, x + 14, y + 4, picW, h - 12, hull.id, spin, null, sheet)
       : false;
     if (!drew) {
       ctx.save();
@@ -2693,11 +3400,14 @@
      * number, because "BUY" on its own is how you find out what a hull cost
      * by looking at your credits afterwards. Trade-in is already in it — the
      * same arithmetic buyHull does, said out loud. */
-    var here = Combat.HULLS[(G.ship && G.ship.hullId) || 'talon'];
-    var cost = hull.price - Math.round((here ? here.price : 0) * 0.7);
-    var full = hull.price;
+    /* The SAME arithmetic buyHull runs — a large hull's price is a quote
+     * from the order sheet at a shipyard, or her floor package elsewhere. */
+    var dealT = hullDeal(hull.id, false), dealK = hullDeal(hull.id, true);
+    var cost = dealT.cost;
+    var full = dealK.cost;
     var creds = G.ship.credits || 0;
-    var short = creds < cost;
+    var short = creds < cost || !dealT.ok;
+    var built = !!dealT.order;
     /* TWO WAYS TO LEAVE WITH HER, and they are a different transaction
      * rather than a different price. Trading in is what the yard has
      * always done: the old hull goes, its gear comes across, and the
@@ -2707,22 +3417,32 @@
      * own two ships, and therefore the only way there is ever anything to
      * give an order to. */
     var bw = Math.min(176, (tw - 10) / 2), by = y + h - 28;
-    btn(ctx, tx, by, bw, 20,
-        (cost >= 0 ? 'TRADE IN  —  ' + cost + ' cr'
-                   : 'TRADE DOWN  —  +' + (-cost) + ' cr'),
-        function () { buyTheSelectedHull(false); },
-        { font: 11, disabled: short, hot: !short });
-
     var docked = !!(G.ship && G.ship.docked);
-    var shortKeep = creds < full;
-    btn(ctx, tx + bw + 10, by, bw, 20, 'KEEP HER  —  ' + full + ' cr',
-        function () { buyTheSelectedHull(true); },
-        { font: 11, disabled: shortKeep || !docked, hot: !shortKeep && docked });
+    var shortKeep = creds < full || !dealK.ok;
+    if (built) {
+      /* BUILT TO ORDER IS ONE BUTTON: you pay, she goes on the slip, and
+       * you fly on in the ship you are in. Trading that one in, or keeping
+       * her, is a choice made at the hand-over on FLEET. */
+      btn(ctx, tx, by, Math.min(tw, bw * 2 + 10), 20,
+          'COMMISSION — ' + cost + ' cr  ·  READY IN ' + (dealT.days || 0) + ' DAYS',
+          function () { commissionTheSelectedHull(); },
+          { font: 10, disabled: short, hot: !short });
+    } else {
+      btn(ctx, tx, by, bw, 20,
+          'TRADE IN  —  ' + (cost >= 0 ? cost + ' cr' : '+' + (-cost) + ' cr'),
+          function () { buyTheSelectedHull(false); },
+          { font: 11, disabled: short, hot: !short });
+      btn(ctx, tx + bw + 10, by, bw, 20, 'KEEP HER  —  ' + full + ' cr',
+          function () { buyTheSelectedHull(true); },
+          { font: 11, disabled: shortKeep || !docked, hot: !shortKeep && docked });
+    }
 
     ctx.save();
     ctx.font = 'bold 10px ui-monospace, monospace';
     ctx.fillStyle = '#ffb86b';
-    if (short) {
+    if (!dealT.ok && dealT.why && !/^need /.test(dealT.why)) {
+      ctx.fillText(clipText(dealT.why, Math.floor(tw / 6.2)), tx, by - 6);
+    } else if (short) {
       ctx.fillText('short ' + (cost - creds) + ' cr', tx, by - 6);
     } else if (!docked) {
       ctx.fillText('dock to keep a second ship', tx + bw + 10, by - 6);
@@ -4190,7 +4910,7 @@
           infoRows.push(['access', plan.to.restricted.label.toUpperCase() +
             ' — transponder required']);
         }
-        rows(ctx, dx, sy + 20, infoRows, '#7e93b3', '#cfe0ff', dw);
+        var infoH = rows(ctx, dx, sy + 20, infoRows, '#7e93b3', '#cfe0ff', dw);
 
         /* A fact about the SYSTEM as a whole, not any one world in it — see
          * Gen.systemNote. Keyed off what actually got generated here (how
@@ -4198,7 +4918,7 @@
          * much port infrastructure exists), not the violence/corruption
          * axis the rows above already cover. */
         if (known.systemNote) {
-          var noteY = sy + 20 + infoRows.length * 15 + 14;
+          var noteY = sy + 20 + infoH + 14;
           ctx.save();
           ctx.font = 'bold 11px ui-monospace, monospace';
           ctx.fillStyle = 'rgba(200,220,245,0.7)';
@@ -4264,16 +4984,20 @@
         ];
         pPlanets.forEach(function (b, idx) {
           scanRows.push([(idx + 1) + '. ' + b.typeName,
-            (b.composition || '—') + (b.habitable ? '  ·  in the HZ' : '')]);
+            (b.composition || '—') + (b.habitableBand === 'terminator' ? '  ·  twilight ring'
+              : b.habitableBand === 'equator' ? '  ·  equator band'
+              : b.habitable ? '  ·  in the HZ' : '')]);
         });
-        rows(ctx, dx, noteBaseY, scanRows, '#7e93b3', '#cfe0ff', dw);
+        /* A long composition (gas giants) wraps inside rows(), so the
+         * table's height comes back from it rather than rows * 15. */
+        var scanH = rows(ctx, dx, noteBaseY, scanRows, '#7e93b3', '#cfe0ff', dw);
 
         /* A travel-guide's idea of anywhere worth living — see
          * Gen.buildFlavor. Capped at two worlds so a system with several
          * habitable candidates cannot run this panel off the bottom of
          * the screen. */
         var habitables = pPlanets.filter(function (b) { return b.habitable; }).slice(0, 2);
-        var fy = noteBaseY + scanRows.length * 15 + 16;
+        var fy = noteBaseY + scanH + 16;
         var cols = Math.max(20, Math.floor(dw / 6.49));
         ctx.save();
         ctx.font = 'bold 11px ui-monospace, monospace';
@@ -4339,6 +5063,7 @@
     bind: bind,
     draw: draw,
     commsContacts: commsContacts,
+    systemManifest: systemManifest, worldFacts: worldFacts,
     btn: btn,
     tile: tile,
     tileHeight: tileHeight,

@@ -201,6 +201,9 @@ console.log('--- a laden ship cannot outrun a pirate; an empty one can ---');
   check('the galaxy has a worst pad at all', worst > 0, String(worst));
   Object.keys(Combat.HULLS).forEach(function (id) {
     var h = Combat.HULLS[id];
+    /* XL hulls never land — Combat.dockRefusal keeps them off every pad —
+     * so they are the one class this rule does not bind. Checked below. */
+    if (h.size === 'XL') return;
     var laden = h.dryMass + h.fuelCap + h.thrusterCap + h.cargoCap;
     var g = h.thrustKN / laden;
     check('a laden ' + id + ' can lift off the heaviest world with a port',

@@ -10,12 +10,822 @@ before they update.
 
 ---
 
-## Unreleased — alpha 5 (in progress)
+## Unreleased
+
+Since Abby. Changes made on the 1.1 line after the release was cut.
+
+### Added
+
+- **A ship built to order takes time to build (2026-10-19).** Astra:
+  *"Build time for a ship is realistic, and lets you anticipate the use
+  of your new ship even if you get blown up in your current one."*
+  - *Commission, don't buy.* At a shipyard the BUILT TO ORDER list now
+    shows each hull's time on the slip, and the card's one button is
+    **COMMISSION — price · READY IN n DAYS**. You pay in full when you
+    sign. You keep flying the ship you came in, so there is no trade-in
+    at the desk, and the order sheet offers only the yard's shelf (your
+    own gear stays on the ship you are in).
+  - *Build time:* 3 days for a large hull, 8 for an extra-large one, 14
+    for a Capital Ship. My pick; say if you want them longer or shorter.
+  - *The order is yours, not the hull's.* It is saved, and a death does
+    not touch it. A pilot blown up in the old ship wakes in a Talon with
+    the new one still on the slip.
+  - *Hand-over.* When she is done she is delivered at that yard as one
+    of your fleet, tanks full, fitted, named and painted to the sheet.
+    The yard calls you wherever you are, and her first week on the clamp
+    is paid. The slip shows on the HULLS tab at that yard and on FLEET
+    everywhere, with a countdown.
+  - *Take command.* On FLEET, any ship of yours on the clamp you are
+    docked at has two new rows. **▶ TAKE COMMAND · keep the …** leaves
+    the ship you were in here as one of yours, with her hold and the
+    contracts riding in it. **▶ TAKE COMMAND · trade in the …** sells
+    her to the yard at seven tenths, gear and all, and your hold and
+    people come across with you. Not for a partner's ship, one under
+    way, or while a lien is outstanding. Unpaid berthing on her is
+    settled first.
+  - *The floor is still the floor.* A large civilian hull that happens
+    to be standing on a yard's floor is sold as she sits and flown out
+    today, as at any other dock. Warships and XL hulls are only ever
+    commissioned.
+  - Cancelling an order is not offered. Say if you want it, perhaps with
+    a forfeit.
+
+- **Cruise drives come in classes (2026-10-19).** Astra: "class two costs
+  about 10 times as much as a class one, class three costs 10 times more
+  again, or you can switch to the milfuel drives ... some ships have a
+  second drive slot ... milfuel drives travel at five times the speed of
+  normal drives." With her, each class doubles the speed, milfuel's ×5 is
+  on top of the class, and a heavier ship is slower on the same drive.
+  - **Top cruise speed:** 250c × class (1, 2, 4) × milfuel (×5 while slugs
+    last) × a second drive (1 + half its ratio to the first) × √(146 t ÷
+    the ship's mass now). A laden Talon on its Class 1 makes 250c; empty,
+    about 340c. The mass lock still governs anywhere near a body.
+  - **The drives:**
+
+    | Drive | Price | Gates |
+    |---|---|---|
+    | Class 1 | 4,000 cr | standard on every hull |
+    | Class 2 | 40,000 cr | development 0.45 |
+    | Class 3 | 400,000 cr | development 0.70, standing 10 |
+    | Military, each class | 2.5× its class | the Chernobyl's gates: development 0.80, standing 40 |
+
+    A military drive burns milfuel slugs (0.45 t and 0.28 t of waste per
+    20 AU) instead of reaction mass. With no slugs aboard it runs as an
+    ordinary drive of its class.
+  - **The drive slot:** a new slot type, `drive`. L and XL hulls have two,
+    everything else one. It is never empty: every hull leaves the yard with
+    a Class 1, every save is given one on load, and the last drive cannot
+    be sold. Buying into a full bay trades in the weakest drive at the usual
+    45%. The yard row shows the top speed before and after, the trade-in
+    and the net price. Drives carry no mass and no power yet.
+  - New suite `test/cruisedrive.test.js` (20 checks).
+
+- **The sky at cruise speed: the old streaks, blurred, behind the planets,
+  with a TNG red-blue shift (2026-10-19).** Astra: "I liked the old cruise
+  animation a bit better, just, we need a bit of planets covering the lines
+  and blur them a bit so we get a streak and not just a point or a line",
+  and the TNG-remaster starfield "where right as you pass a point of light
+  it rapidly shifts in color."
+  - **The streaks:** each star streaks back toward where it was. That
+    makes them radial about the heading when looking ahead, longest
+    abeam, and swinging with a turn.
+  - **How they're drawn:** by the world layer as soft gaussian quads that
+    fade along the tail, so planets cover them.
+  - **The colour:** stars ahead are washed blue-white and brighter, stars
+    behind red and dimmer. The flip happens within ±6° of abeam.
+  - **What sets the strength:** wash and streak length ride one log-scale
+    number from 0.02c to 2000c.
+  - **What went:** the 2026-10-17 relativistic aberration and black rear
+    sky. The edge darkening is back.
+  - `test/cruisesky.test.js` was rewritten for the new rule (22 checks).
+
+- **Slipspace transit is a rift (2026-10-19).** Astra chose it from three.
+  - **Going in:** a red tear opens on the nose in the real sky and gapes
+    until it swallows the view.
+  - **Inside:** dark wine and violet, with ragged walls. Filaments come at
+    you blue-violet and flip red as they pass, the same rule as the
+    cruise sky.
+  - **Coming out:** a blue rift grows at the far end, gapes, and flashes
+    you out onto the real sky under a fading blue wash.
+  - **Corridors:** in a slipspace corridor, the exit rift tracks corridor
+    progress.
+
+- **Fresh wakes show the tear (2026-10-19).** Astra asked whether other
+  ships leave "a red exit cloud of distorted space, like a rip in the
+  fabric of the universe."
+  - **The tear:** they did leave a cloud, but no visible rip. Now a wake's
+    rift stays open in the middle of its cloud for its first 15 minutes,
+    closing: red for a departure, blue for an arrival.
+  - **From deep in a well:** seen from low over a world (full on the
+    ground, none three radii up), a departure wake is deeper red and
+    larger, and an arrival violet. This is a deliberate exaggeration;
+    strictly, light falling into a well arrives blueshifted.
+  - **How often:** measured across 800 samples, about 1.7 wakes per system
+    at any moment, half of them departures, and about one departure a day
+    per system.
+
+- **Every ship type is for sale, and shipyards build large ones to order
+  (2026-10-19).** Astra: *"I also want the player to be able to purchase
+  ANY ship type, but only at shipyards can you get a customized L size
+  ship."* Asked which ships: civilian, plus warships *"only for a navy
+  you're in good standing with"*. What "customized" means: **both**
+  built to order and refits only at a shipyard. The biggest ships get an
+  **XL** class.
+  - *Ten new hulls*, each flying the model its traffic class already
+    flies. **S:** Wren Shuttle (unarmed, like every shuttle), Bollard Tug.
+    **M:** Samaritan Tender, Sump Waste Hauler. **L:** Longhaul Freighter,
+    Coldwater Tanker (the longest reach of any civilian hull), Naval
+    Cutter. **XL:** Meridian Liner, Leviathan Bulk Carrier, Capital Ship.
+    Every one clears the loneliest star laden. Every hull that can land
+    can still lift off the heaviest world with a port. The Kestrel stays
+    the mercenary hull.
+  - *Warships are the navy's own.* A Naval Cutter is built only at a
+    shipyard of a real power, for a captain ALLIED with it (40+). A
+    Capital Ship needs 70+. A navy that wants you builds you nothing. A
+    locked warship is still listed, with the standing it needs.
+  - *Built to order.* At a shipyard every L and XL hull is on the books,
+    whether or not one is on the floor. Its order sheet has one line per
+    slot. Click a line ▶ to cycle through empty, your own fittings (moved
+    across when you trade in), and everything on the yard's shelf. Below
+    those: her name, a hull colour and a trim from eleven paints, and a
+    live quote (hull + fittings − trade-in, with the power and mass
+    budget). Nothing is spent until **BUILD** on the card, and the card's
+    ship turns in the colours on the sheet.
+  - *Elsewhere, as she sits.* An ordinary orbital dock still has the odd
+    L hull on its floor. It comes with the dock's own fit, the gear at
+    nine tenths of list. The fittings on the ship you trade in are taken
+    at seven tenths, because nobody there can move them across. The hull
+    list says what she carries.
+  - *Refits only at a shipyard.* An L or XL hull's fittings cannot be
+    bought or sold anywhere else. The fitting page says so once, at the
+    top. Missiles and heat-sink charges are not fittings and are sold
+    everywhere. S and M hulls refit anywhere, as before.
+  - *XL is too big for ordinary ports.* An XL hull docks only at
+    shipyards, highports and fleet carriers. Never on a pad, never
+    underground, never at an ordinary orbital dock. The refusal says
+    so on the approach.
+  - *Paint.* Your hull colour and trim are drawn in flight on both
+    renderers (the GPU path through a new paint input on the hull
+    shader), and in the showroom. Windows and nav lamps are never painted
+    over. A hull from any other counter is yard grey.
+  - Tests: new `test/shipyard.test.js` (53 checks). The take-off checks in
+    `ships` and `combat` now skip XL hulls, since they never land. The
+    medium-hull floor-odds check now counts per hull, because with four
+    medium hulls "a dock has at least one" was always going to read 100%.
+    A fleet test that kept a Kestrel bought off an ordinary floor now
+    keeps a Mule. The render test that looks for hull rows now recognises
+    them by their size letter, because the old names can scroll below the
+    cheaper new hulls. Checked in the real Electron shell with
+    `tools/probe-shipyard.js`. `tools/electron-probe.cjs` now takes
+    `PROBE_PROFILE=<dir>`, which runs a probe in a throwaway profile so
+    one that docks or buys can never touch the real career's autosave.
+  - Known: in flight every player hull is still drawn at the same 25 m,
+    a liner included, as it always has been. Scaling the player's ship to
+    its class is a separate change.
+
+  *Saves:* additive (`ship.paint`; fleet records carry `paint`). No
+  version bump.
+
+- **Twilight worlds: tidally locked rings and sideways equators
+  (2026-10-19).** Astra: "tidally locked worlds: they can have habitable
+  regions right along their star-set zone, or the day/night line around
+  the equator." Fully habitable, both kinds.
+  - *Tidally locked.* A solid world inside 0.45 AU × (star mass)^⅓ is
+    locked: one day per year, its pole on its own orbit's normal, and
+    longitude 0 always under the star. In practice that is most red
+    dwarf habitable zones and nothing near a sun-like star. If it is
+    terran, ocean, desert or tundra and sits between 0.8 × the zone's
+    inner edge and its outer edge, it lives in its **twilight ring**: the
+    strip where the star sits low on the horizon forever, running over
+    both poles, between a bleached dayside and an iced nightside.
+  - *Tipped.* About one solid world in fourteen outside the lock line
+    lies on its side (80–100° tilt), Uranus-style. If it is one of the
+    same four types and inside the habitable zone, it lives in an
+    **equator band**: each pole bakes for half the year and freezes for
+    the other.
+  - *Fully habitable* means the same as any other habitable world: life
+    and culture notes, economy, development, and two or three stations
+    plus one or two pads. Pads on a ring world sit in the ring, about 9°
+    sunward of the exact terminator, so the star stays low but up all
+    year. Pads on a band world sit within ±12° of the equator.
+  - *On screen.*
+    - The planet shader paints the zones by the real sun angle (locked)
+      or by latitude (tipped). The living strip is tinted green so a
+      desert ring world reads as somewhere things grow. Polar caps stand
+      down on both kinds.
+    - The NAV card says **HZ ring** / **HZ band** and "tidally locked" for
+      the day, adds a one-line description of the strip, and appends "on
+      its side" to the day length of a tipped world.
+    - The SYSTEM tab and the slipspace chart preview name the strip too.
+  - *Same seed, same systems.* The old rule is kept as
+    `habitableGlobal`, and every id- and draw-sensitive site reads it, so
+    every existing body keeps its id, name and orbit. The extra ports
+    come from their own substreams after the last existing id. The one
+    visible knock-on: in about 70 of 200 systems, a newly habitable
+    world nudges the economy, and in a few of those the fleet carrier
+    moves to a different port (it takes the garrison's name).
+  - *Scale.* Across 200 kawartha systems: 506 locked worlds, 54 tipped,
+    188 ring worlds, 18 band worlds, 91 newly habitable. Mean system
+    development goes from 0.51 to 0.54. A first cut let rings reach in
+    to 0.55 × the inner edge; that put a desert ring in more than half of
+    all systems, so it was pulled back to 0.8.
+  - *Rotation frames can now lean any way.* Adds an optional
+    `rotation.az`, the azimuth of the tilt, read by Sim.surfaceOffset,
+    Sim.bodyPole, Rings.ringFrame and GLWorld.spinOf. Only locked worlds
+    set it; everything else takes exactly the old path.
+  - New suite `test/twilight.test.js` (20 checks). It covers id, name and
+    orbit stability against `opts.noTwilight`, the subsolar point all
+    year (worst 10.1°, all of it eccentricity libration), pads in their
+    strip, the star's height over ring pads, port counts, determinism,
+    and the card wording.
+
+- **Every ship has a captain, and they remember you (2026-10-18).**
+  Step 1 of the named-captains / rumours / disguise plan
+  (DESIGN-NOTES-CAPTAINS-RUMOURS-DISGUISE-v3). Every NPC ship — traders,
+  patrols, pirates — has a captain with a name, a temperament (wary,
+  friendly, mercenary, principled, gruff), values (abolitionist,
+  profit-first, lawful, pirate-sympathetic), a home port, and one friend
+  and one rival among the other captains in the system. All of it is a
+  pure function of the seed and the ship, drawn from its own substream,
+  so no existing seed changed. A captain only gets a saved record once
+  they have actually dealt with you; their memory of you is numbers, not
+  text — honesty and feeling as two separate dials, a count of first-hand
+  encounters, and the single most memorable thing you did to or for them.
+  A trader you pull off its rails is the same person it was on the
+  timetable; a patrol riding a lane is not the freighter on that lane.
+  New `src/captains.js`; pinned by `test/captains.test.js`.
+
+- **Hail is a greeting, from furious to grateful (2026-10-18).** Astra:
+  "Are you a filthy pirate, or do you rescue stranded ships?" Pressing
+  Hail now gets you the captain, by name, in a voice set by how they feel
+  about you and coloured by their temper — and, unless they are neutral,
+  *why*: "I still have your scorch marks on my hull", "They say you pull
+  stranded ships out of the dark". **Seen beats heard**: a captain who
+  has dealt with you goes by what they saw; one who has never met you
+  goes by your public record, read through their values (a pirate-minded
+  captain admires the career a lawful one despises). Grateful is reserved
+  for someone you actually saved. The comms row says who is in the chair
+  and their mood before you press it. The public record is new: assaults,
+  robberies, kills, pirate kills and answered distress calls are now
+  counted. Weights measured across 24 seeds, not guessed — the first pass
+  put every trader at "furious" for one bad career, and the test prints
+  the spread so it cannot drift back.
+
+- **Disguise: a new name, new paint, a spoofed transponder
+  (2026-10-18).** Step 2. At a yard where somebody can be bought
+  (corruption 60, the grey market's own line) the station menu offers a
+  paint-and-name refit (1,800 cr) or a full refit with a spoofed
+  transponder and re-plating (6,500 cr); restoring your own colours is
+  400 cr anywhere. Your public record and (later) rumours attach to the
+  identity you broadcast, so a disguise starts with a clean sheet — but
+  captains who have seen the **hull** may recognise it: about half the
+  time under paint, about a fifth under a full refit (measured in the
+  test), more the more often they have seen you. Being caught is a seen
+  lie and they say so. A captain you fooled keeps a separate memory of the
+  stranger they met, so what you do in disguise does not bleed onto the
+  real you. A legal rename or re-registration is **not** a disguise — the
+  registry links it, and your record follows. A newly bought hull flies
+  its own colours. Fleet markings exist as data (your fleet: a three-letter
+  code and a bicolour off the seed; a faction's: a tricolour off its chart
+  colour) but nothing paints them on a hull yet. **Not yet built:** the
+  sabotage missions from the same section of the plan.
+
+  *Saves:* additive (`captains`, `record`, `ship.disguise`,
+  `ship.disguiseCount`), no version bump; an older career loads with
+  nobody who remembers it and a clean record.
+
+- **Your own words on the band, read back before they go (2026-10-18).**
+  Step 3. The police channel has a new row, *Distress call — in your own
+  words*, and every ship has *Talk…* (*Send a message*, *Ask what they
+  carry, and where*). You type; the game reads what you typed into claims
+  — cargo, situation, threat — and shows them back as **Read as** before
+  anything is sent, each one checked against your real ship. A claim that
+  is not true is marked, a mayday from a ship that is fine says *Ship not
+  in distress*, and the button changes to *Send anyway — knowingly
+  false*: every lie in this game is a conscious one. Lies are weighed on
+  the design's two axes (what they exploit, what they cost responders);
+  "freed slaves aboard, drive about to explode" when neither is true is
+  the worst there is. Captains who hear your call decide whether to come by
+  their values (an abolitionist races in for people in a hold; a
+  pirate-minded one may come for very different reasons), how they feel
+  about you, and whether they have caught you lying before. When they
+  arrive they look: a false emergency is plain to see, a false cargo claim
+  only to a captain who scans the hold. An honest call from a ship really
+  in trouble also goes out on the existing mayday, and the first captain
+  there passes a hose. Captains answer messages from their real state and
+  temper — a wary one may say "None of your business."
+  New `src/messages.js`; pinned by `test/messages.test.js`.
+
+- **Captains call for help too, and some of them are lying (2026-10-18).**
+  On a seeded schedule (a 40% chance every four hours, a pure function of
+  seed, star and clock), a trader in real trouble calls for help — the
+  first rescues the game has ever been able to offer, and the way to a
+  captain who is genuinely grateful. Where pirates work the lanes, close
+  to half the calls are bait, transmitted from wherever the pirate is
+  actually lurking, so answering one flies you into its intercept with
+  nothing new spawned. *Check the transponder* is the tell: a real caller
+  checks out; a copied registration belongs to a ship the registry puts
+  somewhere else entirely; an invented one is not on file at all.
+
+- **Captains remember your deeds and your words, and never say the same
+  line twice (2026-10-18).** Astra: *"just to say 'last time I responded
+  to your call, you were lying' or 'you saved my cargo and my crew, not to
+  mention my ship. Looking for another fleetmate? We could go into
+  business together.'"* Each captain keeps a short log of what happened
+  between you — what was at stake, and your own words, quoted — and builds
+  the hail from it: a greeting, the memory, and a closing, coloured by
+  how they feel. A captain only ever talks about something that actually
+  happened. Every line said is remembered and never repeated; back-to-back
+  hails never reuse the greeting, the memory or the closing. Being *told*
+  something is kept but does not count as having seen you act, so one
+  chat does not wipe out what a stranger has heard about your piracy.
+  (A generative model was considered for this and set aside: these lines
+  need no writer, cost nothing, and cannot invent a deed you did not do.)
+
+- **A small language model reads what you type (2026-10-18).** Astra:
+  *"we want the maximal ability to process language in English."*
+  transformers.js runs **all-MiniLM-L12-v2** locally in the game — offline,
+  no network, ~35 MB — so "our engines are toast" reads as a drive
+  failure without anyone having written "toast" down. Chosen by
+  measurement, not size: five models were tuned on half of a labelled set
+  of 56 phrasings (`test/reader-phrases.json`, written before any model
+  ran) and scored on the other half. Held-out accuracy per claim:
+
+  | Reader | Held-out | Paraphrases | Mixed | Size | Per message |
+  |---|---|---|---|---|---|
+  | Phrase matcher alone | 82.1% | 77.3% | 70.8% | — | <1 ms |
+  | **MiniLM-L12 + matcher** | **92.9%** | 90.7% | 91.7% | 35 MB | 7 ms (node), ~35 ms in game |
+  | MiniLM-L6 + matcher | 91.7% | 90.7% | 87.5% | 24 MB | 4 ms |
+  | gte-small | 89.3% | 89.3% | 87.5% | 35 MB | 8 ms |
+  | bge-base | 89.3% | 92.0% | 95.8% | 111 MB | 20 ms |
+  | bge-small | 85.7% | 88.0% | 91.7% | 35 MB | 8 ms |
+
+  The set is small — a point or two is one sentence — and it stays in the
+  suite to catch any slide. Negation is still read by the matcher
+  (embedding models cannot tell "carrying slaves" from "not carrying
+  slaves"), and a negator that *describes* trouble ("can't steer", "no
+  thrust") is no longer read as a denial. Known miss: "We are dead in the
+  water, kids aboard" still loses the drive failure; the fix for it lost
+  on the measurement. In the real Electron shell the model is ready about
+  2 seconds after launch; until then, or if its files are missing, the
+  game reads with the phrase matcher and nothing else changes. Staged by
+  the new `npm run models` (which `npm run dist` now runs) into `lang/`
+  and `vendor/`, both gitignored; re-run the comparison with
+  `npm run bench:reader`. The first in-game test caught that
+  transformers.js's `web` build expects a bundler; the self-contained
+  build is the one vendored.
+
+  *Saves:* additive (`broadcasts`, and captain memories gained `log`,
+  `said` and `lastBits`), no version bump.
+
+- **Favours, friends and rivals, and going into business (2026-10-18).**
+  Step 4 of the captains plan (sections 6 and 8), in the new
+  `src/favours.js`.
+  - *Debts.* Save a ship, or answer a real mayday, and her captain owes
+    you one; answer *your* honest mayday and you owe her. Clamped at ±5.
+  - *She pays it back.* Unasked: a captain who owes you and sees a raider
+    on your lane warns you, with its name and range. Or you call it in
+    from **Talk…** — where the pirates are, reaction mass passed across
+    (within 50 km), or a word with her people (+5 standing). Each costs
+    one, and the note says what it does before you press it.
+  - *She calls it in.* A captain you owe, on your board, asks for credits
+    or reaction mass. Her row on the comms page leads with the ask, a
+    countdown and *Wire her… / Pass across… / Refuse*. Refusing — or
+    letting it run out — costs feeling, and she brings it up: a refusal
+    outranks the rescue that earned the ask.
+  - *Friends hear, rivals wonder.* Rob, shoot, lie to or exploit a
+    captain and her friend hears it near-first-hand — on the `heard`
+    dial, counted above your public record for someone who has never seen
+    you, and at a third for someone who has. Save her and her friend warms
+    to you, and her rival grows suspicious. Kill her and her friend knows
+    whose guns. They say it by name: *"You crossed (her name). That means
+    you crossed me."* Hearsay keeps to the colours you wore.
+  - *Going into business* — Astra: **"Offer both."** A grateful trader's
+    **Go into business together…** row gives two deals. **Partners:** she
+    brings her ship into your fleet, takes standing orders, draws no
+    wage, and every contract she delivers splits 50/50; she stays hers —
+    the yard will not sell her — and she leaves, ship and all, if her
+    berth fees go unpaid, if you turn on her, or if you start killing
+    crews (or robbing traders, unless she is profit-first). **Crew:** she
+    hands her ship to her mate and comes aboard as a skilled officer
+    (rated good or better) at a friend's wage, 60% of the going rate.
+    Either way her ship leaves its lane for good. Patrols and pirates
+    never make the offer — and no longer say they will.
+  - Tests: new `test/favours.test.js` (64 checks).
+
+  *Saves:* additive (`joined`, `favourAsk`, `tipAt`; captain memories
+  gained `heard` in use, `debt` in use and `joined`; fleet records may
+  carry `partner`; crew may carry `wageMul`), no version bump.
+
+- **Rumours travel at the speed of ships (2026-10-18).** Step 5, the last
+  of the captains plan (section 3), in the new `src/rumours.js`. Until now
+  a stranger read your public record, and every stranger in the galaxy
+  knew it the instant it changed. Now:
+  - *A rumour starts where somebody saw.* Robbery, a killing, a rescue,
+    a lie found out, a pirate kill: each starts a rumour aboard the ship
+    that saw it. That is the victim if she lived, otherwise the nearest
+    honest ship or station within witness range. If nobody was close
+    enough, there is no rumour at all. A ship destroyed before she berths
+    takes the story with her.
+  - *It travels on the timetable.* No faster-than-ship news. A ship that
+    knows tells the port she next berths at, and every ship that berths
+    at a port that knows carries it on. The timetable is a pure function
+    of the clock, so who hears when is calculated, not simulated: the
+    earliest arrival over the berthing schedule, once per rumour per
+    system, accurate at any time warp. In a busy system it takes days to
+    reach everyone.
+  - *Between stars, with the trade.* Once a port knows, the news goes to
+    each nearby star's busiest port. The four nearest stars are linked,
+    and the trip takes 7 hours per light year (the same as your drive)
+    plus a day's wait for a ship heading that way. Three hops at most,
+    with the rumour 40% fainter at each. You can outrun your
+    reputation, or be caught by it at the next port.
+  - *Seen beats heard.* A captain who has seen you act goes by what she
+    saw. A stranger reads only the rumours that have reached her ship,
+    through her values (lies on the band now count too, and a mayday used
+    as bait counts three times as much). She says where she heard it: *"At
+    Halden Dock, they say you killed the crew of the Redsail Tender."* /
+    *"Out in Kappa Lyrae, they say you pull ships out of the dark."*
+  - *Friends hear at ship speed too.* Step 4's friend and rival hearsay
+    now reaches them when the news reaches their ship, not instantly.
+  - *Rumours stick to an identity.* Each one is about whoever you were
+    flying as, so a fresh transponder starts unheard of, and a disguise
+    that earns a name keeps it.
+  - *They fade.* Half as loud every 120 days.
+  - **Listen to the dock talk**, a new row on a port's comms page while
+    docked: what has reached this port about you, loudest first.
+  - Decisions I took that you may want changed: rumours do not
+    *distort* as they are retold, they only fade with distance and time;
+    the half-life is 120 days; the reach is three star hops. Any of the
+    three is a single constant at the top of `rumours.js`.
+  - Tests: new `test/rumours.test.js` (38 checks). Among them, the
+    calculated berthing times are compared with the real timetable at 300
+    sample points.
+
+  *Saves:* additive (`rumours`, `hearsay`, `rumourSeq`, `recordLegacy`).
+  Who has heard what is not saved; it is worked out again from the
+  timetable. A career saved before this loads with its record as it stood
+  copied into `recordLegacy`, still known everywhere, so nothing you had
+  done is forgotten. Everything from then on travels by ship. No version
+  bump.
+
+- **The NAV card: the chart's view of a locked world (2026-10-19).**
+  Astra: "slipspace chart info should be displayed for current system in
+  the nav menu. Stuff like what type of planet each of the bodies in order
+  from their star are", then a box under the locked planet in the world
+  view, "integrate the two somehow, using a tab", and in the cockpit "on a
+  panel, not on the HUD". Lock a planet or moon and its card has two tabs:
+  - **WORLD**: where it sits (4th of 12 from the star, or moon of its
+    planet), its type with `HZ` for a habitable-zone world, its air,
+    moons and ports, surface pull, length of day, and the chart's notes
+    on life and people; plus range, closing and ETA.
+  - **SYSTEM**: every planet numbered out from the star with its type and
+    ☾ moons and ⌂ ports, the locked one lit. Clicking a row locks it.
+  
+  It hangs under the locked world in the exterior and map views, with a
+  leader to it (above it if there is no room below). When the world is off
+  the screen or behind you, the card pins to that edge with an arrow
+  pointing the way to the world. In the cockpit it is the NAV console
+  screen, read-only like every console screen, so **M** flips the tab (M
+  was free since the market moved to comms); the other two places take
+  clicks. F3 shows it as its NAV tile. `Screens.systemManifest`,
+  `Screens.worldFacts`, `drawWorldCard`; pinned against real generated
+  systems by `test/navsystem.test.js` (95).
+
+- **NAV and TARGET are different screens now (2026-10-19).** Astra: "call
+  that screen NAV instead of TARGET — target should be reserved for ships
+  that are targeted either for hailing or weapons fire." The lock screen
+  heads itself NAV for a planet, moon, station or port and TARGET only for
+  a ship. The contact list, which was also called NAV, is CONTACTS, the
+  name F3 already gave it. In F5 → PANELS they are listed as NAV / TARGET
+  and CONTACTS; saved panel assignments keep working, since the ids did
+  not change.
+
+- **Which way you are facing, on the glass (2026-10-19).** Astra: "we need
+  a way to know if the ship is facing into or out of the direction of
+  travel that's easier to find on the HUD". Under the attitude line, a
+  cue reads **PROGRADE** or **RETROGRADE** with how many degrees off you
+  are, boxed in amber when you are within 10°; NOT MOVING when there is
+  nothing to face. The retrograde marker (circle with a cross) is now on
+  the glass whenever it is in front of you, and when prograde is off the
+  glass an arrow at the edge points the way to turn to find it. Before,
+  turning your tail to your motion simply made the marker vanish. Both
+  markers carry the dark halo. `Render.facingInfo`, `Render.drawFacingCue`.
+
+- **Orbit line: ahead solid, behind dotted (2026-10-19).** Astra: "orbit
+  already traveled should be in dotted lines, or orbit to be travelled,
+  whichever reads easier." The half-period ahead of the ship is the solid
+  line and leaves it the way it is going; the half-period just flown is
+  dotted and arrives at it from behind. Split by flight TIME, not by
+  angle, so on an eccentric orbit the solid half really is where you will
+  be in half an orbit. Re-split every frame, so the join stays on the ship
+  at any time warp. The ORBIT console page draws its sketch the same way,
+  with an arrowhead showing which way round you are going.
+  `Kepler.samplePathSplit`; pinned by `test/orbitline.test.js` (43),
+  which flies the ship half a period by brute RK4 to check the solid half
+  ends where the ship really is.
+
+- **Speed and altitude boxes, and a G meter (2026-10-18).** The rest of
+  the fighter-HUD air data, either side of the ladder at horizon height.
+  Boxes rather than tapes (the F-35 choice): our speeds run from mm/s to
+  multiples of c and a tape is useless at one end of that range or the
+  other. **Speed** (left) is relative to the same body the heading tape and
+  ladder use, with its unit printed under the box because the unit changes
+  with the regime: M/S on approach, KM/S in orbit, c in cruise. **G** sits
+  under it, as on a real jet, with **PK** (the peak since you last left a
+  berth; a berth or the arrival rail clears it). G is *felt* G, gravity
+  excluded: coasting in orbit is 0.0, a burn is the burn, air is the drag,
+  and parked it reads the deck's 1.0 (see artificial gravity, below).
+  **Altitude** (right) is above the surface of the
+  reference body: metres below 10 km, then km, then Mkm. Under it,
+  vertical speed with an up or down arrow, and the air: inside an
+  atmosphere, the density in kg/m³ in amber (the number atmosphere mining
+  will run on); above one, how far down the top of the air is. Same dark
+  halo as the heading tape. `Sim.feltAccel`, `Render.drawAirData` and its
+  four readout formatters; pinned by `test/airdata.test.js` (43).
+
+- **Decks have artificial gravity (2026-10-19).** Astra: pads and common
+  areas have "clarke-tech artificial gravity generators ... just to make
+  design easier." Docked anywhere (a ring berth, a station that does not
+  spin, a pad on a moon you could jump off) and on the arrival rail once
+  you are through the door, the G meter reads **1.0**, pressing up off the
+  deck. Before this it read the real physics, which was right and not the
+  game: 0.036 G on a small moon's pad and 0 in a station.
+
+- **Air drag is a quarter as brutal (2026-10-19).** Astra, after the new G
+  meter showed a coast through thick air at 2 km/s pulling 17 G: "make the
+  air drag less brutal on the ship." One knob, `Sim.DRAG_SCALE = 0.25`:
+  drag area was Cd·A with Cd taken as 1, which is a brick, and a quarter of
+  that is a streamlined hull. The same coast now pulls 4.4 G. Air bleeds
+  speed a quarter as fast, so scoop passes survive at depth and an
+  aerobrake takes longer or goes deeper. **Heat is unchanged** (it reads
+  density and speed, not drag), so a fast entry still cooks you; you just
+  are not also crushed. Every drag behaviour the tests pin is a ratio
+  (orbits inside air decay, laden ships hold orbit longer, gear down costs
+  a third more) and all still hold.
+
+- **Heading tape on the cockpit glass (2026-10-17).** The fighter-HUD
+  strip across the top, above the bank arc: the scale slides, the caret
+  stays put, and the boxed number under it is your heading to the degree.
+  North is the **dominant body's own spin pole** laid onto the local
+  horizon (the same horizon the pitch ladder levels against), so N/E/S/W
+  are true directions on whatever world has you, and E is always the way
+  the ground turns. Cardinals are lettered (N in amber), intercardinals sit
+  on a row above the numbers, and a `REF` tag at the end names the body
+  the compass is using, because north changes when the dominant body does.
+  The nav lock gets a steering bug on the strip; off the strip it parks as
+  an arrow at the end that is the shorter way round. On a pole the strip
+  says `NORTH POLE · NO HEADING`; with the nose straight up or down the box
+  reads `---` and the scale goes dark rather than freezing on 000. It is
+  drawn with a dark halo instead of the glass's additive glow, so it stays
+  readable over a sunlit planet. Shown while you are looking ahead, like
+  the bank scale. `Sim.bodyPole`, `Sim.headingAngles`,
+  `Render.drawHeadingTape`; pinned by `test/heading.test.js` (41).
+
+- **The sky at cruise speed is physics, not paint (2026-10-17).** Astra
+  chose the model from four with sliders in front of her: *special
+  relativity below c, the classical outrun-the-light picture above it,
+  easing from one to the other between 1c and 1.5c.* Below c, stars are
+  seen where aberration puts them — crowding into a ring ahead as you near
+  c — and coloured by their own temperature times the Doppler factor:
+  ahead blue and bright, behind red and dim. Above 1.5c there is no
+  aberration, the forward shift is the classical 1 + β cos θ, and the rear
+  sky is black because its light cannot catch you. Every star has a
+  temperature now (from the tint it was seeded with, so no seed's sky
+  changes). Drawn in the world layer's star pass, behind the planets.
+  `Render.cruiseSky`; pinned by `test/cruisesky.test.js`.
+
+- **Star trails follow each star, not the nose (2026-10-17).** The old
+  cruise streaks all pointed away from the heading. Now a star's trail is
+  the path its *apparent* position has traced on screen over the last
+  third of a second, each point through that moment's own camera — motion
+  blur and comet tail in one rule (Astra picked both). Turns swing and
+  curve the trails, looking about blurs them, a change of speed stretches
+  each along its own aberration path; a steady cruise keeps a short stub
+  toward where the star would sit slightly slower. The painted bloom at
+  the vanishing point and the darkened screen edges are gone. The trails
+  are drawn in the world layer straight after the stars, so a planet
+  covers them exactly as it covers the stars — on the 2D overlay they ran
+  across planets' faces, which Astra ruled out (*"that breaks the
+  immersion"*). `Render.cruiseTrails` + `GLWorld.drawTrails`; only a
+  machine with no world layer falls back to drawing them in 2D.
+
+- **The ring's lift car rides down with the ship (2026-10-17).** Astra:
+  *"we need the car to ride with the ship."* The converter now reads the
+  art's own `extras.motion` lift declarations and records each car (and
+  the `hatch` panels over it) face by face; the renderer lifts them out of
+  the hull and draws the car wherever the arrival says it is. Ship and car
+  move by the same eased number, so the hull cannot drift off the pad; the
+  empty car climbs back once the ship is clear, and comes down to collect
+  it on the way out. You collide with the car where it is drawn. The floor
+  hatch is there while shut and gone while open (the art says it is a
+  hatch, not how one moves). Only the ring uses a car on its routes; the
+  skimmer's and spine's cars stay at rest. `test/transfer.test.js`.
+
+### Changed
+
+- **Milfuel shelves hold at most 18 t, down from 24 (2026-10-19).** Twilight
+  worlds settled more of the galaxy, so licensed plants made more. The
+  best single slug run in the economy suite reached 127,711 cr, more than
+  a Kestrel, which is exactly what the shelf cap exists to stop. At 18 t
+  the median run is back to what it was before twilight worlds (80,564 cr
+  against 78,780) and the best is 95,783.
+
+- **Small bays reached through a heavy bay cycle an airlock first
+  (2026-10-17).** In to the heavy bay's stand, the outer doors close, *then*
+  the inner gate opens, then on through the hull — the hull used to carry
+  straight on through a gate that had not opened. At the ring this is the
+  whole way down: stand, hatch, down the well onto the lift, ridden down
+  the shaft, a beat on the pad, and rolled off level along the spoke deck
+  (the converter's route corner hung ~150 m up in the spoke and made the
+  hull hop). Bays with no lift skip the ride legs and take no extra time.
+
+### Fixed
+
+- **Work that had been committed went missing from the working copy
+  (2026-10-19).** Two lines of work split on 2026-10-15: Driftwood on one
+  branch, the 1.1.0-beta "Abby" release on another. The working copy had
+  lost parts of both. Restored by three-way merge, without touching
+  anything done since:
+  - **From Driftwood:**
+    - planetary rings drawn by their own shader;
+    - cockpit greebles and the glass glow;
+    - refusing to undock inside a station;
+    - a crash counted as a loss;
+    - culling small moons;
+    - the belt chart;
+    - the hull-import fix for lift shafts;
+    - test probes that never touch your real career (they run in a
+      throwaway profile) and the crash log.
+  - **From Abby:** the release name and number in `package.json`
+    (1.1.0-beta "Abby"), `src/release.js` loaded on the page, the
+    Manifest names for the installers, and Abby's own section in this
+    file. Everything written after Abby was cut was moved up here into
+    Unreleased.
+  The rings, greebles and release suites pass again. The branches
+  themselves still need reconciling in git.
+- **A holding's first nudge could move a system's crime score by one
+  too many (2026-10-19).** The galaxy works the score out before rounding
+  a government's two axes. A holding then re-ran the formula on the
+  rounded ones, so in about one system in six the first change jumped by
+  an extra point. It now adds its change to the system's own score.
+
+- **Crossing a system took half an hour (2026-10-19).** Astra: "That gas
+  giant is 27 minutes flight time from Mirven I, even at 6 times c", and
+  in her Talon "the fastest speed allowed, even between planets, was
+  6.7c". The cruise drive was capped at 2.0e6 km/s for every ship.
+  - **The cap:** now the drive's own ceiling (see *Cruise drives come in
+    classes*). The global constant stays only as a 20,000c guard rail.
+  - **Engaging:** the drive now engages on **full**, following the mass
+    lock up and down. `,` takes it off full; `.` up to the limit puts it
+    back on.
+  - **Arriving:** with full on, the arrival look-ahead is 0.5 s instead of
+    2.5 s. At 2.5 s it dropped you out 23 million km short of Beta
+    Mirven VII.
+  - **Fuel:** reaction mass per km is cut from 1.1e-8 to 1.5e-9 t. At the
+    old rate a 20 AU crossing would have burned twice a full tank.
+  - **Measured at the 2000c cap** (before drive classes): Linethor I to
+    XI, 42 AU, in 64 s; Beta Mirven I to VII in 46 s.
+
+- **Slipspace drops you well outside the habitable zone (2026-10-19).**
+  Astra: jumps "should dump you not close to the HZ, but a ways out".
+  - **Where:** you arrive in orbit about the star, on the line to the
+    busiest world.
+  - **How far:** the furthest of three: the frost line, 1.6 × the habitable
+    zone's outer edge, or 1.25 × that world's distance.
+  - **On arrival:** nose on the world, the world locked, the camera on
+    the ship.
+  - In Taost that was 1.32 AU out, with the world at 0.33 AU.
+
+- **Clouds stood still over tidally locked worlds (2026-10-19).** The
+  cloud deck turned at a multiple of the world's day, and a locked world's
+  day is its year. Past four days the deck now runs on a nominal 30-hour
+  circulation. Found by `weather.test.js`, whose wettest pad had landed on
+  a ring world.
+
+- **Arriving at a world whose only port is a pad crashed (2026-10-19).**
+  enterSystem read the pad's orbit for the camera distance. Found by the
+  first corridor jump into a twilight system.
+
+- **A new game could crash spawning over a world whose first port was a
+  pad (2026-10-19).** The spawn picked `children[0]` of any kind and read
+  its orbit. A ground pad has no orbit. It now picks the first ORBITAL
+  station, and spawnShip ignores a pad if one is handed to it anyway.
+  Twilight worlds hit this every time: their old pad comes before the
+  stations added for them.
+
+- **Cockpit panels overlapped (2026-10-19).** Astra: "panels overlap.
+  This is a problem." Three separate overlaps, all fixed:
+  - *The dash screens overlapped each other*, by 43 to 138 px between
+    housings at every window size, worst on the smallest hulls. The
+    mounting comment claimed the arc was 28° with a degree to spare; the
+    mounts were at 24° and the housings were never counted. Now ±28° with
+    the screens 6% smaller, and small cockpits shrink their screens with
+    the room instead of more slowly than it. Worst case now ~21 px clear.
+    The cockpit suite checks neighbours against each other at six window
+    shapes and three cockpit sizes (36 new checks), so it cannot drift back.
+  - *The help hints ran across the ORBIT screen.* With the band stowed and
+    the console showing, both hint lines move to the top-left corner.
+  - *The icon bar sat on the bottom of the screens.* With the band stowed,
+    the cockpit view is now built for the window above the bar rather than
+    the whole window, so the console sits above it. The GPU layer projects
+    through the same camera, so the world stays in register.
+  - The NAV contacts list ran ship names into their distances on a narrow
+    window ("Coldwater Drove38,606 km"); names are now clipped to the room
+    the distance leaves.
+  - On a narrow window F3's pages shrank to half a column at 7 px type;
+    with no room for the scope beside them they now take the full column.
+  - The AUTOPILOT page's last line ("mass locked by …") ran 7 px into its
+    own soft-key strip; the column is packed to end inside the page.
+
+- **Flat orbits were drawn rotated (2026-10-19).** An orbit lying in the
+  system plane, which is most of them, has no node line, and
+  `Kepler.elementsFromState` then left the argument of periapsis at 0: the
+  ellipse had the right shape but its periapsis pointed along +X wherever
+  it really was, so the line could miss the ship by thousands of km. Found
+  by the new orbit-line test. Flat orbits now keep their periapsis
+  (retrograde ones measured the other way), and "no node line" is judged
+  relative to the angular momentum, not against an absolute 1e-9 that
+  rounding noise could pass.
+
+- **A save taken in cruise loaded at 6.7c (2026-10-19).** Inside the
+  cruise bubble the hull's velocity is the cruise speed, up to 2,000,000
+  km/s, and the save did not know about cruise: it wrote that velocity
+  down, and loading dropped you into ordinary flight at it with no bubble
+  and no way to slow. A save in cruise is now written as the drop-out
+  would leave you, in the circular orbit you are standing in, and an
+  older save carrying a frozen cruise velocity (anything over 15,000 km/s
+  relative to the nearest body) is repaired the same way on load.
+
+- **Contracts never completed on arrival (2026-10-17).** Astra: *"missions
+  still don't auto-clear when you arrive at the mission destination."* Two
+  things wait for the docking moment — the arrival desk and the contracts
+  — and the desk marked it handled first, so the contracts always saw "not
+  just docked". Read once now, and both get it. The same dead branch held
+  the clamp sound and the autosave on docking, which now happen too. A
+  render-suite test flies the real frame loop through it.
+
+- **Docking at a ring's heavy bay could crash (2026-10-17).** Leg timings
+  were cached per station off berth 0's path, and a ring's berth 0 is a
+  routed small bay — so the heavy bay was handed the long routed table and
+  read off the end of its own short path. Cached per berth and per model now,
+  and a mismatch returns no pose instead of throwing.
+
+- **Ships flew through the ring's lift shaft wall (2026-10-17).** The route
+  to a small bay ran diagonally from the heavy bay's stand to the foot of the
+  lift, through the closed inner gate and the shaft wall. It now goes
+  straight down the shaft (see Changed).
+
+- **The world analysis sheet printed a gas giant's atmosphere over its own
+  label (2026-10-17).** Long values in the star chart's two-column rows now
+  wrap onto right-aligned continuation lines, and the text below moves down
+  to fit.
+
+---
+
+## 1.1.0-beta "Abby" (2026-10-15)
+
+**Releases have names now** as well as numbers, the way Linux distributions
+do. They are pigeons from the rescue, in no fixed order. This one is named
+for Abby, a PMV survivor. The name is on the title screen, in the window
+title and in `src/release.js`; `test/release.test.js` keeps it and the
+number in step with `package.json`.
+
+This section was opened for alpha 5 and never closed for 1.0.0-beta
+(2026-09-16), so everything below, down to "Before this changelog", shipped
+in Abby. Since 1.0: crew and a fleet, weather you fly through, two rescue
+services with a bill and a hull lien, standing orders, analysers and
+rumours, ship-to-ship trade, industry you can buy into, milfuel works, the
+Syndicate's fleet and its runners, and the station cutaway and glow pass.
+
+### Fixed (release housekeeping)
+
+- **The game was being built as "Procedural Space Game" 0.1.0 again.** A
+  commit on 2026-09-16 restored an old `package.json` and undid the rename,
+  so every build after 1.0 carried the old name, and a build under the old
+  name looks for saves in the old folder. The Manifest name, appId, artifact
+  names, desktop entry and maintainer are back.
+- **The rescue test still expected a flat fee that was waived when you were
+  broke.** Since the tow-and-bill change the fee is quoted at dispatch and
+  any shortfall becomes a lien on the hull. The test now checks that.
+
+### Saves
+
+Careers carry over. The `game://` origin and the `%APPDATA%\Manifest`
+folder are unchanged, and `electron/main.js` still copies saves across from
+the old name if it finds them there instead.
+
+### Everything else since alpha 4
+
 
 Outfitting, weapons, and the law. See `PLAN.md` for the
 full design and the phases still outstanding.
 
 ### Added
+
+- **Cruise speed reads in c.** `0.412c`, `3.10c` on the console and the
+  autopilot page, for the cruise speed and the mass-lock limit. Below a
+  thousandth of c the old km/s readout carries on.
 
 - **Trading with a ship you have hailed is a proper market now.** `F4` →
   pick a ship → `Trade…` opens a board in the channel pane: every line in
@@ -342,6 +1152,17 @@ full design and the phases still outstanding.
   pilot cleared to own the drive is cleared to carry what it burns.
 
 ### Fixed
+
+- **Lightning went back to a strobe (restored 2026-10-19).** The 10-17
+  branch merge kept the other side's copy of the planet shader's flash
+  block, and the old one-slot lightning came back with it: every stroke
+  started on the same 0.9 s beat. Restored from the Driftwood commit:
+  strokes slide off the beat by a hashed offset, a late stroke is
+  allowed to finish in the next slot, and storms burst and go quiet on
+  four slow rhythms instead of firing at a flat rate. The cut-band code
+  the merge brought in is untouched. `test/weather.test.js` was the
+  canary (it checks that every weather constant reaches the shader) and
+  is back to 41/41; the shader compiles on the GPU and planets draw.
 
 - **Buying off a passing ship emptied the whole line, for the session.**
   The purchase came off `route.out` — the template manifest every later
@@ -932,6 +1753,31 @@ full design and the phases still outstanding.
   room; they now pay off in a freighter's hold.
 
 ### Saves
+
+**Cruise drives (2026-10-19) need no version bump.** The drive bay is a
+new slot type keyed after every existing one (`drive0`, `drive1`), so no
+saved fit key moves. A save without a drive is given a Class 1 on load
+(`migrateFit`).
+
+**Twilight worlds (2026-10-19) need no version bump.** Systems are
+regenerated from the seed and every existing body keeps its id, so a
+docked or targeted id still resolves. What does move:
+- Every tidally locked world's day and pole changed, so pads on those
+  worlds now stand somewhere else at a given moment.
+- Pads on ring and band worlds were folded into their strip.
+
+A ship saved docked or landed at one of those pads is put back on the pad
+wherever it now is. A ship saved in free flight low over one could find
+the ground in a different place.
+
+**Nothing from 2026-10-17 touches a save.** The cruise sky and its trails
+are pure functions of speed, heading and the seeded sky; the trail history
+is never stored. The lift car and hatch data were added to the port index
+as two new fields (`cars`, `parts`) and nothing else in it changed — proved
+by diffing a fresh conversion against the shipped index, since the
+converter on disk has drifted from the shipped data (a full re-run would
+also rewrite 69 models' interior routes; that is a separate decision).
+A ship already parked in a ring's small bay leaves by the new route.
 
 **Runners change only a flag.** An existing career's systems keep every
 port, route, manifest and price; some routes in lawful space now report the

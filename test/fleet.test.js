@@ -530,7 +530,10 @@ console.log('--- standing orders: a timetable entry, not an agent ---');
   buyer.docked = A.id; buyer.cargo = { grain: 6 }; buyer.passengers = 0;
   var Gk = { t: 0, ship: buyer, fleet: [], here: here, sys: sys,
              missions: [haul('k1', B, 'grain', 6, 100)] };
-  var bought = Combat.buyHull(Gk, 'kestrel', true);
+  /* A medium hull: a large one off an ordinary floor is a different
+   * transaction since shipyards (test/shipyard.test.js), and this is about
+   * the contracts, not about where large hulls are sold. */
+  var bought = Combat.buyHull(Gk, 'mule', true);
   check('the kept hull is in the book', bought.ok && Gk.fleet.length === 1, JSON.stringify(bought));
   check('with the contract marked as hers', Gk.missions[0].carrier === Gk.fleet[0].id);
   check('and the freight in her hold', Gk.fleet[0].cargo.grain === 6 && !buyer.cargo.grain);
