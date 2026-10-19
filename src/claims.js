@@ -365,6 +365,7 @@
     var S = Sv();
     var lag = (0.3 + (S ? S.hash01(d.id + ':rep:' + Math.round(t)) : 0.5) * 1.7) * DAY;
     G.thefts.push({ id: d.id, owner: d.owner, fac: d.fac, star: d.star, world: d.name, what: what,
+                    anon: !!(G.ship && G.ship.silent),
                     t: t, value: Math.round(value), reportAt: npcNextService(d, t) + lag, reported: false });
   }
   /* The owner comes round, finds it, and calls it in. Lazy, like the rest. */
@@ -376,6 +377,12 @@
       var f = list[i];
       if (f.reported || t < f.reportAt) continue;
       f.reported = true; n++;
+      /* Taken while running silent: nobody knows whose ship it was. */
+      if (f.anon) {
+        if (hooks && hooks.say) hooks.say(f.owner + ' found their ' + (f.what === 'drone' ? 'drone gone' : 'hopper empty') +
+                                          ' on ' + f.world + ' - reported, but nobody logged the ship', 6);
+        continue;
+      }
       var b = THEFT_BOUNTY + Math.round(f.value * THEFT_VALUE_SHARE);
       G.wanted = G.wanted || {};
       G.wanted[f.fac] = (G.wanted[f.fac] || 0) + b;

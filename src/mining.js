@@ -656,6 +656,7 @@
                         name: port.name, faction: port.faction || 'civil', t: t };
     var Cb = global.Combat;
     if (Cb && Cb.reportSabotage) Cb.reportSabotage(sys, G, t, port, hooks);
+    if (global.Missions && global.Missions.onSabotage) global.Missions.onSabotage(G, sys, port, t, hooks);
   }
 
   function sabotaged(G, port, t) {

@@ -1615,7 +1615,8 @@
          * is the correct amount of friction for ending a career, and that is
          * also the reason it has NOT been added to the pause menu — a row
          * that discards your save does not belong one line under Resume. */
-        case 'x': killRotation(); break;
+        /* SHIFT+X is silent running (the shroud suite); X alone kills rotation. */
+        case 'x': if (e.shiftKey) Combat.toggleSilent(G, HOOKS); else killRotation(); break;
         /* B was respawn from the start; missiles arrived later and wanted a
          * key. It stays both, split by context: a crashed ship has no
          * missiles worth speaking of, and a flying one has no respawning to
@@ -12378,6 +12379,25 @@
         ctx.fillStyle = scol;
         ctx.fillText(nl, lx, ly);
       }
+      ctx.restore();
+    }
+
+    /* --- silent running (2026-10-19) --- dark or broken, and the heat
+     * that decides how long you can stay dark. */
+    if (G.silentOn && flying()) {
+      ctx.save();
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      var hf = Math.min(1, (G.ship.heat || 0) / Sim.HEAT_LIMIT);
+      var broke = !G.ship.silent;
+      var why = G.ecmOn ? 'ECM IS ON' : (G.t < (G.silentBreakUntil || 0)) ? 'COVER BROKEN ' + Math.ceil(G.silentBreakUntil - G.t) + ' s'
+              : ((G.ship.throttle || 0) > Combat.SILENT.throttle) ? 'BURNING TOO HARD' : '';
+      var sl = (broke ? why : 'SILENT RUNNING') + '  ·  heat ' + Math.round((G.ship.heat || 0)) + ' / ' + Sim.HEAT_LIMIT + '  ·  [SHIFT+X]';
+      var sw2 = ctx.measureText(sl).width + 24, sx2 = (w - sw2) / 2, sy2 = h / 2 + 92;
+      panel(ctx, sx2, sy2, sw2, 24, false);
+      ctx.fillStyle = broke ? '#ffb86b' : hf > 0.8 ? '#ff7a6a' : '#9fc4d4';
+      ctx.fillText(sl, sx2 + 12, sy2 + 16);
+      ctx.fillStyle = 'rgba(159,196,212,0.2)'; ctx.fillRect(sx2 + 12, sy2 + 20, sw2 - 24, 2);
+      ctx.fillStyle = hf > 0.8 ? '#ff7a6a' : '#9fc4d4'; ctx.fillRect(sx2 + 12, sy2 + 20, (sw2 - 24) * hf, 2);
       ctx.restore();
     }
 

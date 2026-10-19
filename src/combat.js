@@ -344,6 +344,12 @@
      * shield, so stacking them would burn 2 MW and four tonnes for no
      * effect — a purchase that silently does nothing is the worst thing a
      * shop can sell you, and the fit check is the right place to say no. */
+    /* THE SHROUD SUITE - not for sale anywhere; the end of a chain
+     * (arcs.js) and the thing a sabotage run is built around. */
+    shroud: { id: 'shroud', name: 'Shroud suite', slot: 'internal', kind: 'shroud',
+              price: 0, power: 1.5, mass: 2, unique: true, unlisted: true,
+              minDev: 0, minStanding: -100, minCrime: 0, grey: false,
+              pitch: 'Not on any list. Neither are you, while it runs.' },
     ecm: { id: 'ecm', name: 'ECM jammer', slot: 'internal', kind: 'ecm',
            price: 6800, power: 2.5, mass: 2, unique: true,
            minDev: 0.5, minStanding: 0, minCrime: 0, grey: false,
@@ -3879,6 +3885,11 @@
    * a station. A heavy bounty with its owners and their standing gone. */
   function reportSabotage(sys, G, t, port, hooks) {
     var fac = port.faction || 'civil';
+    if (G.ship && G.ship.silent) {
+      if (hooks && hooks.say) hooks.say('SABOTAGE - ' + port.name + ' logs the strike: no transponder, no ID on the hull', 8);
+      if (hooks && hooks.sound) hooks.sound('warn');
+      return;
+    }
     G.wanted = G.wanted || {};
     G.wanted[fac] = (G.wanted[fac] || 0) + BOUNTY.sabotage;
     if (global.Missions) global.Missions.bumpStanding(G, fac, -40);
@@ -3893,6 +3904,7 @@
     if (victim.reported === kind) return;               // one report per act
 
     var scene = victim.live ? victim.live.pos : G.ship.pos;
+    var anon = !!(G.ship && G.ship.silent);
     var witness = witnessNear(sys, t, scene, victim, G);
 
     if (witness) {
@@ -3907,8 +3919,10 @@
        * rebuilt from their rails every time t moves, so anything written
        * on one is gone by the next frame; it lives on G, which is also
        * what makes it survive a save. */
+      if (G.pendingReport && !anon) G.pendingReport.anon = false;
       if (!G.pendingReport) {
         G.pendingReport = {
+          anon: anon,
           kind: kind, fac: victim.faction || 'civil',
           at: t + WITNESS_CALL_DELAY,
           by: witness.name || 'a witness',
@@ -3943,8 +3957,10 @@
     } else if (!victim.distressAt) {
       victim.distressAt = t + distressDelayFor(victim);
       victim.distressKind = kind;
+      victim.distressAnon = anon;
     } else if (BOUNTY[kind] > BOUNTY[victim.distressKind || 'assault']) {
       victim.distressKind = kind;   // the charge escalates with the act
+      if (!anon) victim.distressAnon = false;
     }
   }
 
@@ -4326,7 +4342,7 @@
     if (q.pending) { G.pendingReport = null; }
     if (q.victim) { q.victim.distressAt = null; q.victim.distressKind = null; }
     report(G, q.kind, { faction: q.pending ? q.pending.fac : (q.victim.faction || 'civil') },
-           hooks, 'paid off and reported anyway');
+           hooks, 'paid off and reported anyway', q.pending ? q.pending.anon : q.victim.distressAnon);
     if (hooks && hooks.say) {
       hooks.say(q.intimidate
         ? q.who + ' called it in anyway. Somebody is braver than they look.'
@@ -4335,8 +4351,14 @@
     return { paid: q.price, stuck: false };
   }
 
-  function report(G, kind, victim, hooks, how) {
+  function report(G, kind, victim, hooks, how, anon) {
     var fac = victim.faction || 'civil';
+    /* An unidentified hull: the act is on the record, and nobody's name
+     * is on it (the shroud suite). */
+    if (anon) {
+      if (hooks && hooks.say) hooks.say('CRIME REPORTED (' + how + ') - unidentified hull, no ID to put a bounty on', 6);
+      return;
+    }
     G.wanted = G.wanted || {};
     G.wanted[fac] = (G.wanted[fac] || 0) + (BOUNTY[kind] || 300);
     if (hooks && hooks.say) {
@@ -4673,6 +4695,14 @@
     }
 
     var scanFac = spec.faction || 'civil';
+    /* AN INFILTRATION RUN IS BLOWN BY A SEARCH (arcs.js sequels): the
+     * contract lapses now and the chain breaks on the next tick. */
+    (G.missions || []).forEach(function (mm) {
+      if (!mm.infiltrate || mm.blownBy) return;
+      mm.blownBy = spec.name || 'a patrol';
+      mm.deadline = Math.min(mm.deadline, (G.t || 0) - 1);
+      if (hooks && hooks.say) hooks.say('SEARCHED - ' + mm.blownBy + ' has seen your hold. The run is blown.', 7);
+    });
     /* Rock torpedoes first, by their own rule (torpedoSearch): Syndicate
      * charges always, Guild ones only heading in to a station. */
     torpedoSearch(G, scanFac, G.t, hooks, spec.name);
@@ -5756,6 +5786,7 @@
 
       fireOne(sys, G, t, e.item, e.key, hooks);
       fired++;
+      breakCover(G, t);
     }
     /* One report for the volley. Three emitters cycling together should
      * sound like a ship firing, not like three ships. */
@@ -5780,6 +5811,9 @@
   function updateTurret(sys, G, t, hooks) {
     var s = G.ship;
     if (!s.turret || s.docked || s.landed) return;
+    /* Running silent, the mount holds its fire: a turret that shot at
+     * things would be a beacon you paid for. */
+    if (G.silentOn) return;
     var tur = TURRETS[s.turret];
 
     /* WHO IS ON IT. On a small hull, you are — one seat with everything in
@@ -5943,6 +5977,7 @@
     var rack = racksOf(s)[s.missileId];
     if (rack) rack.n = Math.max(0, rack.n - 1);
     syncRacks(s);
+    breakCover(G, t);
     (sys.missiles = sys.missiles || []).push({
       pos: V.addScaled(s.pos, s.fwd, 0.06),
       vel: V.addScaled(s.vel, s.fwd, m.speed0),
@@ -6160,6 +6195,9 @@
       });
     }
     var s = G.ship;
+    /* Silent, for Sim (heat, who notices you) and for the law (no ID). */
+    s.silent = !!(G.silentOn && hasShroud(s) && !s.docked && !s.landed && !G.ecmOn &&
+                  t >= (G.silentBreakUntil || 0) && !((s.throttle || 0) > SILENT.throttle));
     /* Loud, for Sim.updateEncounters and the scan: a jammer is the
      * brightest thing on every scope in the system, with no ID code. */
     s.ecmLoud = !!(G.ecmOn && hasEcm(s) && !s.docked && !s.landed);
@@ -6200,6 +6238,48 @@
     }
     if (hooks && hooks.sound) hooks.sound('warn');
   }
+
+
+  /* ---- the shroud suite: silent running (Astra, 2026-10-19) ---------------
+   * "Those jammers should be hard to come by, and probably at the end of
+   * their own quest line. Because if you want to be able to do a sabotage
+   * mission, you got to be able to get in and out without being detected or
+   * identified." The ECM is the loud panic button and stays in the yards;
+   * this is the quiet one, and nobody sells it (unlisted): it is the reward
+   * at the end of the navy's or the Syndicate's second chain (arcs.js).
+   *
+   * Silent running, chosen with her: SHIFT+X. Transponder dark, emissions
+   * masked, radiators shut.
+   *   - Ships notice you only inside SILENT.wakeKm (Sim, ship.silent).
+   *   - Nobody can read an ID: a crime committed while silent is reported
+   *     as an unidentified hull and carries no bounty; so is a theft, and a
+   *     sabotage.
+   *   - The price is heat: with the radiators shut the hull sheds nothing
+   *     and the suite itself runs warm (Sim.updateHeating), so cover lasts
+   *     a couple of minutes before the heat limit - then the battle shield
+   *     and the hull pay, the same rule as an atmosphere.
+   *   - Firing anything, or burning over half throttle, breaks cover for a
+   *     few seconds. The auto-turret holds its fire while you run silent.
+   *   - It cannot run with the ECM on: the jammer is the loudest thing in
+   *     the sky. */
+  var SILENT = { throttle: 0.5, breakS: 5 };
+  function hasShroud(ship) {
+    var list = fittedList(ship);
+    for (var i = 0; i < list.length; i++) if (list[i].item.kind === 'shroud') return true;
+    return false;
+  }
+  function toggleSilent(G, hooks) {
+    if (!hasShroud(G.ship)) { if (hooks && hooks.say) hooks.say('No shroud suite fitted', 3); return false; }
+    G.silentOn = !G.silentOn;
+    if (G.silentOn) G.ecmOn = false;
+    if (hooks && hooks.say) {
+      hooks.say(G.silentOn ? 'SILENT RUNNING - transponder dark, radiators shut. Heat will build. Firing, or burning past half throttle, breaks cover.'
+                           : 'Silent running off - transponder live, radiators open', 5);
+    }
+    if (hooks && hooks.sound) hooks.sound('click');
+    return G.silentOn;
+  }
+  function breakCover(G, t) { if (G.silentOn) G.silentBreakUntil = t + SILENT.breakS; }
 
   function updateMissiles(sys, G, t, dtSim, hooks) {
     var list = sys.missiles;
@@ -6403,7 +6483,7 @@
     /* A witness's call, if it was neither bought nor intimidated away. */
     if (G.pendingReport && t >= G.pendingReport.at) {
       report(G, G.pendingReport.kind, { faction: G.pendingReport.fac }, hooks,
-             'witnessed by ' + G.pendingReport.by);
+             'witnessed by ' + G.pendingReport.by, G.pendingReport.anon);
       G.pendingReport = null;
     }
 
@@ -6417,7 +6497,7 @@
          * and from one event. Before this, the second happened and the
          * first was only ever a word in a comment. */
         broadcastDistress(sys, G, t, sp, sp.distressKind || 'assault', hooks);
-        report(G, sp.distressKind || 'assault', sp, hooks, 'distress call');
+        report(G, sp.distressKind || 'assault', sp, hooks, 'distress call', sp.distressAnon);
         sp.reported = sp.distressKind;
         sp.distressAt = null;
       }
@@ -7538,7 +7618,8 @@
     TRADER_GUN: TRADER_GUN, NPC_GUN: NPC_GUN, SYNDICATE_GUN: SYNDICATE_GUN,
     POLICE_GUN: POLICE_GUN, POLICE_MISSILE: POLICE_MISSILE, firePoliceMissile: firePoliceMissile,
     DECOY: DECOY, FLARE: FLARE, ECM: ECM, PD: PD, decoyRackSize: decoyRackSize, hasEcm: hasEcm,
-    launchDecoy: launchDecoy, dropFlare: dropFlare, toggleEcm: toggleEcm, citeJamming: citeJamming, JAM_CITATION: JAM_CITATION,
+    launchDecoy: launchDecoy, dropFlare: dropFlare, toggleEcm: toggleEcm,
+    SILENT: SILENT, hasShroud: hasShroud, toggleSilent: toggleSilent, breakCover: breakCover, report: report, citeJamming: citeJamming, JAM_CITATION: JAM_CITATION,
     updateCountermeasures: updateCountermeasures, spawnDecoy: spawnDecoy, updateTurret: updateTurret,
     updateMissiles: updateMissiles,
     SYNDICATE_TRUST: SYNDICATE_TRUST,

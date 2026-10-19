@@ -1025,6 +1025,9 @@
        * Without this, docking here ahead of her nagged "contract needs Xt
        * aboard" about tonnes you deliberately do not have. */
       if (m.carrier) continue;
+      /* A sabotage settles when the torpedo lands (onSabotage), not at a dock;
+       * a void contact is the road not taken. */
+      if (m.type === 'sabotage' || m.choiceVoid) continue;
 
       /* A passage settles on people rather than on freight, and it can
        * settle badly: somebody who spent the trip locked in a hold with
@@ -1114,6 +1117,8 @@
     var list = G.missions || [];
     for (var i = list.length - 1; i >= 0; i--) {
       var m = list[i];
+      /* The other half of a settled choice: gone quietly. */
+      if (m.choiceVoid) { (G.doneMissions = G.doneMissions || {})[m.id] = true; list.splice(i, 1); continue; }
       if (t <= m.deadline) continue;
       /* A LATE PASSAGE IS NOT A LATE PARCEL. Astra chose lateness as one of
        * the three things passengers react to, and the reaction is that they
@@ -1171,6 +1176,23 @@
     return any;
   }
 
+  /* A torpedo on a station: any sabotage contract against that port is
+   * done, paid where you are, and a chain chapter casts its next one. */
+  function onSabotage(G, sys, port, t, hooks) {
+    var list = G.missions || [];
+    for (var i = list.length - 1; i >= 0; i--) {
+      var m = list[i];
+      if (m.type !== 'sabotage' || m.toPortId !== port.id) continue;
+      G.ship.credits += m.pay;
+      bumpStanding(G, m.faction, STANDING_WIN.haul || 3);
+      (G.doneMissions = G.doneMissions || {})[m.id] = true;
+      list.splice(i, 1);
+      if (hooks && hooks.say) hooks.say('Contract complete - ' + port.name + ' is closed for a season. ' + m.pay + ' cr', 6);
+      if (hooks && hooks.sound) hooks.sound('pay');
+      if (m.campaign && global.Arcs) global.Arcs.onStepComplete(G, m, port, sys, t, hooks);
+    }
+  }
+
   function standing(G, fac) { return (G.standing || {})[fac] || 0; }
 
   function bumpStanding(G, fac, delta) {
@@ -1195,7 +1217,7 @@
     completeAtDock: completeAtDock, update: update,
     standing: standing, bumpStanding: bumpStanding, standingLabel: standingLabel,
     alreadyHave: alreadyHave,
-    bondedTonnes: bondedTonnes, sellableTonnes: sellableTonnes,
+    bondedTonnes: bondedTonnes, sellableTonnes: sellableTonnes, onSabotage: onSabotage,
     bondHolder: bondHolder,
     carriedBy: carriedBy, loadRefusal: loadRefusal, loadOnto: loadOnto,
     unloadRefusal: unloadRefusal, unloadFrom: unloadFrom,

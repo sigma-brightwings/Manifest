@@ -130,6 +130,31 @@ Astra has seen it working.
   runs out. Small ring chunks can be cut away in a session; big rocks scar.
   Torpedoes take their chunks off the same mass. The CUTTING bar shows
   tonnes toward the next piece. Saved.
+- **2026-10-19: the shroud suite, silent running, and the chains that end
+  with it.** Astra: a quiet jammer should be hard to come by, at the end of
+  its own quest line, because a sabotage run means getting in and out
+  without being detected or identified. The loud ECM stays in the yards;
+  the **shroud suite** is sold nowhere. **SHIFT+X** runs silent:
+  transponder dark and radiators shut. Ships notice you only inside 200 km
+  (instead of 3,000). Crimes you commit are reported as an unidentified
+  hull with no bounty, and so are thefts from other prospectors' drones and
+  a torpedo sabotage. The price is heat: the hull sheds nothing and the
+  suite runs warm, so cover lasts about two minutes before the heat limit,
+  and then the battle shield and hull pay. Firing anything or burning past
+  half throttle breaks cover for five seconds; the auto-turret holds its
+  fire; it cannot run with the ECM on. A panel under the crosshair shows
+  SILENT RUNNING or why cover is broken, with the heat. You earn the suite
+  from either side: once the first chain is done (The Powder Chain or The
+  Long Arrangement), the same dock offers a five-chapter sequel - **The
+  Grey Ledger** for the navy's intelligence people, **Blackout** for the
+  Syndicate. Its chapters are infiltration runs (reach a hostile system and
+  dock without being searched; a search blows the run and breaks the
+  chain), recovering the prototype from a wreck, burning a contact (two
+  contracts on your board - deliver him, or let him run for less pay and a
+  hit to your standing; whichever you settle first is your answer), and a
+  first sabotage (hole a named port with a rock torpedo; it settles the
+  moment the torpedo lands, and done silent it carries no name). The last
+  chapter fits the suite, or holds it at the yard if no slot is free.
 - **2026-10-19: jamming is loud.** Astra: ECM lights you up like a
   Christmas tree, just not with an ID code, which is suspicious enough.
   With the jammer on, ships notice you from three times as far (pirates

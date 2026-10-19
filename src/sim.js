@@ -1194,9 +1194,12 @@
      * sustained load. A heat shield is a pipe: no capacity at all, but it
      * moves heat away continuously for as long as the load lasts. Buying
      * the wrong one for the job is a real mistake, and it should be. */
-    var shed = BASE_HEAT_SHED + (ship.heatShed || 0);
+    /* Running silent the radiators are shut: nothing is shed, and the
+     * suite itself runs warm. */
+    var shed = ship.silent ? 0 : BASE_HEAT_SHED + (ship.heatShed || 0);
+    var made = ship.silent ? SILENT_HEAT : 0;
     ship.heat = Math.max(0, Math.min(HEAT_MAX,
-                (ship.heat || 0) + (flux - shed) * dt));
+                (ship.heat || 0) + (flux + made - shed) * dt));
     ship.reentryGlow = Math.max(0, Math.min(1, Math.sqrt(flux / GLOW_REFERENCE)));
 
     if (ship.heat <= HEAT_LIMIT) { ship.shieldBurn = 0; return 0; }
@@ -1967,6 +1970,10 @@
    * inspected you comes back to look again, and a lawful cop that watches
    * an unidentified jammer for ECM_CITE_S within ECM_CITE_KM writes it up. */
   var ECM_REACH = 3;
+  /* SILENT RUNNING (the shroud suite, Combat): only a ship this close
+   * notices you at all. */
+  var SILENT_WAKE_KM = 200;
+  var SILENT_HEAT = 0.8;          // units/s the suite makes with the radiators shut
   var ECM_CITE_KM = 1000, ECM_CITE_S = 20;
 
   function wakeNpc(spec, railState) {
@@ -2105,7 +2112,7 @@
        * not by proximity: its rail passing within WAKE_RANGE of you halfway
        * through a system crossing would otherwise wake it into shadowing. */
       var loud = !!ship.ecmLoud && !safe;
-      var wakeAt = loud ? WAKE_RANGE * ECM_REACH : WAKE_RANGE;
+      var wakeAt = loud ? WAKE_RANGE * ECM_REACH : ship.silent ? SILENT_WAKE_KM : WAKE_RANGE;
       if (!spec.live && !safe && range < wakeAt && !spec.rescue) { wakeNpc(spec, state); }
 
       if (spec.live) {
@@ -5795,7 +5802,7 @@
     heatFlux: heatFlux,
     updateHeating: updateHeating,
     updateGear: updateGear, GEAR_TRAVEL_TIME: GEAR_TRAVEL_TIME,
-    HEAT_LIMIT: HEAT_LIMIT, ECM_REACH: ECM_REACH, ECM_CITE_KM: ECM_CITE_KM, ECM_CITE_S: ECM_CITE_S, BASE_HEAT_SHED: BASE_HEAT_SHED, SHIELD_HEAT_DRAIN: SHIELD_HEAT_DRAIN,
+    HEAT_LIMIT: HEAT_LIMIT, ECM_REACH: ECM_REACH, SILENT_WAKE_KM: SILENT_WAKE_KM, SILENT_HEAT: SILENT_HEAT, ECM_CITE_KM: ECM_CITE_KM, ECM_CITE_S: ECM_CITE_S, BASE_HEAT_SHED: BASE_HEAT_SHED, SHIELD_HEAT_DRAIN: SHIELD_HEAT_DRAIN,
     heatLineAlt: heatLineAlt,
     predictTrajectory: predictTrajectory,
     beginPrediction: beginPrediction,
