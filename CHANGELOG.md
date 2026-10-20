@@ -305,6 +305,39 @@ Astra has seen it working.
   wide enough for large ships. A module that holds a berth counts as a dock
   whatever its parts are named. The contact sheet draws routes, doors and
   ways on, and has a filter box ("pass" shows the pass-throughs).
+- **2026-10-20: ports that grow — the plan, not yet drawn.** Designed with
+  Astra over 19–20 October; nothing in the running game changes yet (the
+  three new `src/` files are not loaded by `index.html`).
+  - `tools/growth-points.cjs` → `src/growth-points.js`: where each of the
+    96 port models can grow. Points on its known berth routes with a
+    straight neck out through the wall, points over outer doors (an add-on
+    there turns the door inward and must be a pass-through), and hull
+    points for add-ons with no berth. Each carries the biggest ship its
+    route takes and the open ROOM measured around it, and each model
+    carries its own symmetry, read off the mesh. About two minutes for all
+    96, from data already in `src/ports`; no converter run.
+  - The same function runs on every chopped module, so **every piece has
+    growth points of its own** (Astra: "growth points should exist for all
+    station types ... so that custom stations can be built"): a station
+    grows from the free points of everything in it.
+  - `tools/module-index.cjs` → `src/modules.js`: the chopped modules as
+    the game needs them, one per form and paint, in game axes and metres,
+    with the family each was cut from (1,739 modules). Ship pieces are
+    scaled to the game's 25 m hull.
+  - `src/growth.js`: each port's building history from twelve years before
+    the game to forty after, seed + clock like the wars, cached. ORDER
+    (wealth and law, less for a Syndicate hold, less for the corruption you
+    leave) picks who builds each piece: the PORTBUILDERS' UNION (mirrored
+    sets, the core's own family of pieces, a Crawler on site, never cut
+    loose), MOONLIGHTERS (pairs with gaps, short chains), or SCAVENGERS
+    (single pieces welded onto pieces, ship parts and mismatched paint, cut
+    loose again after some years: a wreckhold). Chains stop at three pieces
+    unless a large hub carries them on; no piece is bigger than what it
+    hangs on; nothing standing overlaps. About half of each port's growth
+    is already there when the game starts, the rest arrives over fifteen
+    years. A Crawler stopped on its way (`Growth.delay`) pushes its job and
+    every later one back.
+  - `test/growth.test.js` (19 checks).
 
 ### Changed
 

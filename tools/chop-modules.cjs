@@ -448,6 +448,37 @@ function clipRoute(b, route, e) {
   return { door: ep, route: [ep.at].concat(route.slice(last + 1)), whole: false };
 }
 
+/* ---- a module's own growth points ---------------------------------------
+ * Astra, 2026-10-20: growth points for ALL station types, so custom
+ * stations can be built. Same function as the port cores
+ * (tools/growth-points.cjs pointsOf), in the module's own frame turned to
+ * game axes (+z up, glb2hulls' toGame), origin at the module's base. Its
+ * routes, its outer doors and its ways on become points; a way on is
+ * where the next piece of a chain continues the route. */
+var GP = null;
+function toGame(p) { return [p[0], -p[2], p[1]]; }
+function moduleGrowth(entry, tris, origin) {
+  GP = GP || require('./growth-points.cjs');
+  var d = { v: [], f: [] };
+  tris.forEach(function (t) {
+    var b = d.v.length;
+    for (var k = 0; k < 3; k++) d.v.push(toGame([t[k][0] - origin[0], t[k][1] - origin[1], t[k][2] - origin[2]]));
+    d.f.push([b, b + 1, b + 2]);
+  });
+  var segs = [], mouths = [], doors = [];
+  entry.berths.forEach(function (b) {
+    mouths.push(toGame(b.at));
+    if (b.route) for (var i = 0; i + 1 < b.route.length; i++)
+      segs.push({ a: toGame(b.route[i]), b: toGame(b.route[i + 1]), cls: b.cls, berths: [b.node] });
+    if (b.outerDoor && b.door && b.door.normal) doors.push({ mid: toGame(b.door.at), normal: toGame(b.door.normal), cls: b.cls, node: b.node });
+  });
+  var r = GP.pointsOf({ d: d, segs: segs, mouths: mouths, ground: false, doors: doors, hullGrid: 3 });
+  entry.exits.forEach(function (x) {
+    r.points.push({ i: r.points.length, at: toGame(x.at), normal: toGame(x.normal), cls: x.cls, exit: true, to: x.to });
+  });
+  return r;
+}
+
 /* ---- run ---------------------------------------------------------------- */
 function main() {
   fs.rmSync(path.join(OUT, 'glb'), { recursive: true, force: true });   // our own output only
@@ -529,6 +560,10 @@ function main() {
           tris: m.tris.length,
           size: sz.map(function (v) { return +v.toFixed(3); }),
           relSize: +(Math.max.apply(null, sz) / ch.span).toFixed(3),
+          /* The whole source model's longest side, in its own units. Ships
+           * are authored at no fixed scale and the game draws every hull at
+           * SHIP_LEN (25 m), so a ship module's metres are size x 25 / this. */
+          modelSpan: +ch.span.toFixed(3),
           parts: m.parts.slice(0, 24).concat(m.parts.length > 24 ? ['…+' + (m.parts.length - 24)] : []),
           berths: mb,
           passThrough: exits.length > 0,
@@ -544,6 +579,7 @@ function main() {
           file: 'glb/' + id + '.glb'
         };
         writeGlb(path.join(OUT, entry.file), m.tris, model.g.json.materials || [], origin);
+        entry.growth = moduleGrowth(entry, m.tris, origin);
         byKey[key] = entry;
         catalog.modules.push(entry);
         /* The contact sheet carries one mesh per SHAPE (poses share it), or
