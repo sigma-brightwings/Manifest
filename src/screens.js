@@ -2663,31 +2663,80 @@
     return 0;
   }
 
-  /* --- MODULES: station modules and the Crawler that carries them --------
-   * Astra, 2026-10-20: a Crawler "ships one L size module or two M size
-   * modules or up to three S size modules, but you have to build the L
-   * size first". Built here at a yard, with build time; craned aboard a
-   * Crawler here; founding a station from them is the next slice. */
+  /* --- MODULES: station crates and the Crawler that carries them ----------
+   * Astra, 2026-10-20: the Crawler is a station's first L bay, and her 24
+   * cubes carry "station component crates" — 6 S, 4 M, 2 L or 1 XL to a
+   * cube. Crates are built here at a yard, with build time, and craned
+   * aboard a Crawler here. Founding a station from her is the next slice. */
   function drawYardModules(ctx, x, w, row, s, port) {
     var Cn = global.Construction;
     var yard = Combat.isShipyard(port);
     var mine = Cn.owned(G);
     var crawler = Cn.isCrawler(s);
 
-    /* THE BAY, first when you are in a Crawler: what is aboard and room. */
+    /* HER CUBES, first when you are in a Crawler. */
     if (crawler) {
-      var used = Cn.loadUsed(Cn.aboard(s));
-      row('CRAWLER BAY  ·  ' + used + ' of ' + Cn.BAY + ' used',
-          'one L, or two M, or three S', function () {}, true);
+      var cc = Cn.crateCubes(Cn.aboard(s)), fc = Cn.freightCubes(s);
+      row('CRAWLER CUBES  ·  ' + cc + ' crates  ·  ' + fc + ' freight  ·  ' +
+          (Cn.CUBES - cc - fc) + ' empty  of ' + Cn.CUBES,
+          'a cube holds 6 S, 4 M, 2 L or 1 XL crates, or ' + Cn.TONNES_PER_CUBE + ' t of freight',
+          function () {}, true);
       Cn.aboard(s).forEach(function (a) {
-        var rec = Cn.byId(G, a.id), m = Cn.BY_ID[a.moduleId] || { name: a.moduleId, size: '?' };
-        row('  ' + m.name.toUpperCase() + '  [' + m.size + ']' + (rec && rec.pattern ? '  ·  ' + rec.pattern : ''),
-            yard ? 'click to lift it off onto this yard\'s floor' : 'aboard — a shipyard can lift it off',
+        var c = Cn.BY_ID[a.crateId];
+        row('  ' + c.name.toUpperCase() + ' CRATE  [' + c.size + ']',
+            yard ? 'aboard  ·  click to lift it off onto this yard\'s floor'
+                 : 'aboard  ·  a shipyard can lift it off',
             function () {
               var r = Cn.unload(G, a.id);
-              say(r.ok ? m.name + ' lifted off — it waits here' : 'Not here: ' + r.why, 5);
+              say(r.ok ? c.name + ' crate lifted off — it waits here' : 'Not here: ' + r.why, 5);
             }, !yard);
       });
+    }
+
+    if (crawler) {
+      /* WHAT THIS LOAD WOULD FOUND (Astra agreed, 2026-10-20): Crew
+       * quarters, one defining crate, one more to make it work. A type
+       * whose defining crate is aboard says what it still lacks; the rest
+       * stay quiet unless nothing is close. */
+      var load = Cn.aboard(s);
+      var found = Cn.canFound(load);
+      var near = found.filter(function (f) { return f.ok || f.defining; });
+      row('THIS LOAD FOUNDS', near.length ? 'a Crawler becomes a station\'s first bay — founding comes next'
+                                          : 'nothing yet: Crew quarters, a defining crate, and what it needs',
+          function () {}, true);
+      near.forEach(function (f) {
+        row('  ' + (f.ok ? '✓ ' : '· ') + f.name.toUpperCase(),
+            f.ok ? 'all there' : 'still needs: ' + f.missing.map(function (id) {
+              return Cn.BY_ID[id] ? Cn.BY_ID[id].name : id;
+            }).join(', '),
+            function () {}, true, { hot: f.ok });
+      });
+
+      /* HER CRAFT BAY: three S slots, a tug always. More tugs, faster in
+       * orbit; the heavy shuttle, faster to the surface. */
+      var lo = Cn.loadoutOf(s);
+      var dO = Cn.buildDaysFor(load, lo, false), dS = Cn.buildDaysFor(load, lo, true);
+      function days(d) { return !isFinite(d) ? 'can\'t' : d < 0.05 ? '—' : d.toFixed(1) + ' d'; }
+      row('CRAFT BAY  ·  ' + lo.name.toUpperCase() + '  ·  ' + lo.craft.map(function (c) {
+            return Cn.CRAFT[c].name; }).join(' + '),
+          'this load: orbit ' + days(dO) + '  ·  surface ' + days(dS) + '  ·  ' + lo.blurb,
+          function () {}, true);
+      if (yard) {
+        Cn.LOADOUTS.forEach(function (to) {
+          if (to.id === lo.id) return;
+          var c = Cn.loadoutCost(lo.id, to.id);
+          var tO = Cn.buildDaysFor(load, to, false), tS = Cn.buildDaysFor(load, to, true);
+          row('  ▶ REFIT TO ' + to.name.toUpperCase() + '  ' + (c >= 0 ? '— ' + c + ' cr' : '+' + (-c) + ' cr'),
+              to.craft.map(function (k) { return Cn.CRAFT[k].name; }).join(' + ') +
+              (load.length ? '  ·  orbit ' + days(tO) + '  ·  surface ' + days(tS) : '  ·  ' + to.blurb),
+              function () {
+                var r = Cn.changeLoadout(G, to.id);
+                say(r.ok ? 'Her bay is ' + to.name.toLowerCase() + ' now' +
+                           (r.cost > 0 ? ' — ' + r.cost + ' cr' : r.cost < 0 ? ' — ' + (-r.cost) + ' cr back' : '')
+                         : 'No: ' + r.why, 6);
+              }, c > 0 && (s.credits || 0) < c);
+        });
+      }
     }
 
     /* WAITING AT THIS YARD, and on its slips. */
@@ -2699,56 +2748,50 @@
           crawler ? 'click one to crane it aboard ▶' : 'a Crawler can load these here',
           function () {}, true);
       here.forEach(function (r) {
-        var m = Cn.BY_ID[r.moduleId] || { name: r.moduleId, size: '?' };
+        var c = Cn.BY_ID[r.crateId];
         var onSlip = !Cn.ready(r, G.t);
         var why = onSlip ? null : Cn.loadRefusal(G, r);
-        row('  ' + m.name.toUpperCase() + '  [' + m.size + ']' + (r.pattern ? '  ·  ' + r.pattern : '') +
-            (onSlip ? '  ·  ON THE SLIP' : ''),
-            onSlip ? 'ready in ' + fmtLogAge(r.due - G.t) : (why || 'load her ▶'),
+        row('  ' + c.name.toUpperCase() + ' CRATE  [' + c.size + ']' + (onSlip ? '  ·  ON THE SLIP' : ''),
+            onSlip ? 'ready in ' + fmtLogAge(r.due - G.t) : (why || 'load it ▶'),
             function () {
               var res = Cn.load(G, r.id);
-              say(res.ok ? m.name + ' craned aboard' : 'Not yet: ' + res.why, 5);
+              say(res.ok ? c.name + ' crate craned aboard' : 'Not yet: ' + res.why, 5);
             }, onSlip || !!why, { hot: !onSlip && !why });
       });
     }
 
-    /* ELSEWHERE: everything you own at other yards. */
-    var away = mine.filter(function (r) { return !r.aboard && here.indexOf(r) < 0; });
-    away.forEach(function (r) {
-      var m = Cn.BY_ID[r.moduleId] || { name: r.moduleId, size: '?' };
-      row(m.name.toUpperCase() + '  [' + m.size + ']  ·  AT ' + (r.portName || 'another yard').toUpperCase(),
+    /* ELSEWHERE: crates you own at other yards. */
+    mine.filter(function (r) { return !r.aboard && here.indexOf(r) < 0; }).forEach(function (r) {
+      var c = Cn.BY_ID[r.crateId];
+      row(c.name.toUpperCase() + ' CRATE  [' + c.size + ']  ·  AT ' + (r.portName || 'another yard').toUpperCase(),
           (r.starName ? r.starName + '  ·  ' : '') +
           (Cn.ready(r, G.t) ? 'ready' : 'ready in ' + fmtLogAge(r.due - G.t)),
           function () {}, true);
     });
 
-    /* THE CATALOGUE, at a yard only. The core comes first, and the M and S
-     * rows say so until there is one. */
     if (!yard) {
       if (!mine.length && !crawler) {
-        row('NO MODULES', 'station modules are built at a shipyard', function () {}, true);
+        row('NO STATION CRATES', 'station crates are built at a shipyard', function () {}, true);
       }
       return 0;
     }
-    if (G.modulePattern == null) G.modulePattern = Cn.PATTERNS[0];
-    row('BUILD A MODULE AT ' + (port.name || 'this yard').toUpperCase(),
-        'paid now, built here, waits here for a Crawler', function () {}, true);
-    Cn.MODULES.forEach(function (m) {
-      var why = Cn.orderRefusal(G, m.id);
-      var label = '  ' + m.name.toUpperCase() + '  [' + m.size + ']  —  ' + m.price + ' cr  ·  ' +
-                  m.days + (m.days === 1 ? ' day' : ' days');
-      row(label, why || m.blurb, function () {
-        var r = Cn.order(G, m.id, { pattern: G.modulePattern });
-        say(r.ok ? m.name + ' ordered — ready here in ' + r.days + (r.days === 1 ? ' day' : ' days')
-                 : 'No: ' + r.why, 6);
-      }, !!why);
-      if (m.core) {
-        row('    PATTERN:  ' + G.modulePattern + '  ▶', 'the shape the station will have',
-            function () {
-              var i = Cn.PATTERNS.indexOf(G.modulePattern);
-              G.modulePattern = Cn.PATTERNS[(i + 1) % Cn.PATTERNS.length];
-            });
-      }
+
+    /* THE CATALOGUE. The L comes first: a station starts as a Crawler, so
+     * until you have one every row says so. */
+    row('BUILD A STATION CRATE AT ' + (port.name || 'this yard').toUpperCase(),
+        Cn.hasCrawler(G) ? 'paid now, built here, waits here for a Crawler'
+                         : 'a station starts as a Crawler — commission one on HULLS first',
+        function () {}, true);
+    Cn.CRATES.forEach(function (c) {
+      var why = Cn.orderRefusal(G, c.id);
+      row('  ' + c.name.toUpperCase() + '  [' + c.size + ']  —  ' + c.price + ' cr  ·  ' +
+          c.days + (c.days === 1 ? ' day' : ' days'),
+          why || (c.blurb + '  ·  ' + Cn.PER_CUBE[c.size] + ' to a cube'),
+          function () {
+            var r = Cn.order(G, c.id);
+            say(r.ok ? c.name + ' crate ordered — ready here in ' + r.days + (r.days === 1 ? ' day' : ' days')
+                     : 'No: ' + r.why, 6);
+          }, !!why);
     });
     return 0;
   }
@@ -3211,9 +3254,10 @@
       var deal = hullDeal(hull.id, false, false);
       var sub = hull.cargoCap + 't hold · ' + hull.hullMax + ' hull · ' + hull.blurb;
       /* A large hull off a floor comes with the dock's own fit, and says so. */
-      if (deal.stock) {
-        sub = (deal.stock.items.length
-               ? 'as she sits: ' + deal.stock.items.map(function (id) {
+      var comes = (deal.stock && deal.stock.items) || deal.outfit || [];
+      if (comes.length || deal.stock) {
+        sub = (comes.length
+               ? 'comes with: ' + comes.map(function (id) {
                    return (Combat.EQUIPMENT[id] || {}).name || id;
                  }).join(', ')
                : 'as she sits: bare') + ' · ' + hull.cargoCap + 't hold';
@@ -3258,7 +3302,7 @@
     });
 
     /* THE ORDER SHEET, for the hull on the card when it is being built. */
-    if (yard && G.yardBuild && G.yardHull && Combat.bigHull(G.yardHull)) drawOrderSheet(row, s, port, G.yardHull);
+    if (yard && G.yardBuild && G.yardHull) drawOrderSheet(row, s, port, G.yardHull);
     return HULL_CARD_H;
   }
 
@@ -3363,15 +3407,25 @@
     var here = Combat.HULLS[(s && s.hullId) || 'talon'];
     var port = s && s.docked && G.sys ? G.sys.byId[s.docked] : null;
     if (build === undefined) build = !!G.yardBuild;
+    /* Built to order: any size since 2026-10-20 (every hull has a build
+     * price), bare unless the sheet says otherwise. */
+    if (hull && port && build && Combat.isShipyard(port)) {
+      var o = orderFor(hullId);
+      var q = Combat.quoteCommission(G, hullId, { fit: o.fit });
+      return { cost: q.cost || 0, ok: q.ok, why: q.why, fit: q.fit, order: o, days: q.days };
+    }
     if (hull && Combat.bigHull && Combat.bigHull(hullId) && port) {
-      if (build && Combat.isShipyard(port)) {
-        var o = orderFor(hullId);
-        var q = Combat.quoteCommission(G, hullId, { fit: o.fit });
-        return { cost: q.cost || 0, ok: q.ok, why: q.why, fit: q.fit, order: o, days: q.days };
-      }
       var sf = Combat.stockFit(G, port, hullId, G.t);
       var credit = keep ? 0 : Math.round(here.price * Combat.TRADE_IN) + gearCredit(s);
       return { cost: hull.price + sf.gear - credit, ok: true, stock: sf };
+    }
+    /* Off the floor, outfitted: buyHull's own sum, outfit included. */
+    if (hull && Combat.floorQuote) {
+      /* A trade the fit cannot survive (a gun on a hull with no hardpoint)
+       * is still offered, as it always was: the click says why, in buyHull's
+       * own words, rather than the button going dark with no reason. */
+      var fq = Combat.floorQuote(G, hullId, keep);
+      return { cost: fq.cost, ok: true, outfit: fq.outfit || [] };
     }
     return { cost: keep ? hull.price : hull.price - Math.round((here ? here.price : 0) * 0.7), ok: true };
   }
@@ -3480,6 +3534,16 @@
     ctx.font = 'bold 10px ui-monospace, monospace';
     ctx.fillStyle = '#7fd6c0';
     ctx.fillText(clipText(hull.maker || '', Math.floor(tw / 6.6)), tx, y + 29);
+    /* BUILD, BUY AND HANDS (2026-10-20). Astra: every hull gets "a cost to
+     * build, to buy and what the default outfitting is", and "the number
+     * of crew required to operate each one without the player flying it".
+     * The outfit itself is named on the floor row; this is the one line
+     * that holds the three numbers side by side. */
+    var hands = Crew && Crew.crewNeeded ? Crew.crewNeeded(hull.id) : null;
+    ctx.fillStyle = '#9fc7d2';
+    ctx.fillText(clipText('build ' + hull.price + ' cr  ·  buy ' + (Combat.buyPrice ? Combat.buyPrice(hull.id) : hull.price) +
+                          ' cr outfitted' + (hands ? '  ·  crew ' + hands.total + ' (' + (hands.total - hands.pilot) +
+                          ' with you flying)' : ''), Math.floor(tw / 6.6)), tx, y + 42);
 
     ctx.font = 'bold 10px ui-monospace, monospace';
     ctx.fillStyle = MFD_INK;
@@ -3488,8 +3552,8 @@
      * A sentence with a button sitting on its last line reads as a rendering
      * fault, and this is the one panel where the player is about to spend
      * everything they have. */
-    for (var li = 0; li < lines.length && y + 44 + li * 12 < y + h - 32; li++) {
-      ctx.fillText(lines[li], tx, y + 44 + li * 12);
+    for (var li = 0; li < lines.length && y + 57 + li * 12 < y + h - 32; li++) {
+      ctx.fillText(lines[li], tx, y + 57 + li * 12);
     }
     ctx.restore();
 

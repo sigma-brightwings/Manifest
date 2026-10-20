@@ -46,6 +46,8 @@
       bornId: ship.bornId || null,
       /* And her paint (shipyards, 2026-10-19). */
       paint: ship.paint || null,
+      /* A Crawler's craft bay loadout goes with her (construction.js). */
+      craftBay: ship.craftBay || null,
       fit: fit,
       cargo: cargo,
       fuel: ship.fuel, thrusterFuel: ship.thrusterFuel,

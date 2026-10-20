@@ -576,7 +576,20 @@
      * are hull keys for the navy's and the Syndicate's own when they fly. */
     crawler: 'crawler_civilian',
     crawler_navy: 'crawler_navy',
-    crawler_syndicate: 'crawler_syndicate'
+    crawler_syndicate: 'crawler_syndicate',
+    /* THE REST OF THE SKY MADE FLYABLE (2026-10-20). The heavy tug and
+     * heavy shuttle are the Crawler's bay craft and wear the M members of
+     * the families their small sisters wear. NOTE the Sump waste hauler
+     * (`hauler`, above) also wears tug-m, so the Hawser and the Sump share
+     * a silhouette until the Sump is given a model of its own.
+     *
+     * The fighter's key is `lance`, not `fighter`, on purpose: the Dart's
+     * cockpit names `fighter` in COCKPIT_CLASS and has always fallen back
+     * to its archetype rake because that key was empty. Filling it would
+     * have quietly re-raked the Dart's glass. */
+    tug_heavy: 'tug-m',
+    shuttle_heavy: 'shuttle-m',
+    lance: 'fighter-s'
   };
 
   /* A ship may carry its OWN size letter, and when it does it wins.
@@ -3411,7 +3424,8 @@
      * length exactly as the procedural one is, so SHIP_LEN still scales
      * them and nothing about the size of you on screen changes except
      * which silhouette it is. */
-    var mesh = hullPreviewMesh((ship && ship.hullId) || 'talon');
+    /* The ship passed along so a Crawler draws what is in her cubes. */
+    var mesh = hullPreviewMesh((ship && ship.hullId) || 'talon', ship);
     /* Her shipyard paint, if she has any — see PAINT_NOW. A crash tint
      * (the caller's red) wins over paint: that is a warning, not a look. */
     var pr = tint ? null : paintRGB(ship && ship.paint);
@@ -4223,6 +4237,91 @@
    * across the mouth; they are simply not drawn once the gate is open,
    * which is also the honest answer to the note about the field rendering
    * as an opaque lit slab. */
+  /* A force-field panel, rebuilt as two sliding door leaves (2026-10-20).
+   * Measured in the berth's own frame (berthBasis): the panel's extent
+   * across the opening on both axes and through it. The leaves split the
+   * WIDER axis, so a wide bay gets doors that part sideways and a tall one
+   * doors that part top and bottom — and each travels its own width. */
+  var FIELD_DOOR_BODY = '#5b6068';
+  var FIELD_DOOR_STRIPE = '#d9a521';
+  var FIELD_DOOR_MIN_THICK = 0.003;      // station radii; a field was a plane
+  function fieldToDoors(verts, faces, box, berth) {
+    var n0 = berth.normal, nl = Math.sqrt(dot3(n0, n0)) || 1;
+    var n = [n0[0] / nl, n0[1] / nl, n0[2] / nl];
+    var B = berthBasis(n0), m = berth.mid;
+    var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (var fi = 0; fi < faces.length; fi++) {
+      for (var k = 0; k < faces[fi].length; k++) {
+        var p = verts[faces[fi][k]];
+        var d = [p[0] - m[0], p[1] - m[1], p[2] - m[2]];
+        var c = [dot3(d, B[0]), dot3(d, B[1]), dot3(d, n)];
+        for (var a = 0; a < 3; a++) { if (c[a] < lo[a]) lo[a] = c[a]; if (c[a] > hi[a]) hi[a] = c[a]; }
+      }
+    }
+    if (!isFinite(lo[0])) return [];
+    /* THE PANEL'S OWN PLANE. A field across a berth's mouth is thin along
+     * the berth normal; a hall gate inside the station (the big skimmers'
+     * `hallGateForceField`) can stand at right angles to it. So the thin
+     * axis of the three is the panel's normal, the wider of the other two
+     * is the one the leaves part along, and a panel that is not across its
+     * berth's mouth is an internal door — it opens with the station, not
+     * with one berth's clearance, the same as the cradle's liftWell gate. */
+    var axes = [B[0], B[1], n];
+    var ext = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+    var thin = ext[0] <= ext[1] ? (ext[0] <= ext[2] ? 0 : 2) : (ext[1] <= ext[2] ? 1 : 2);
+    var inPlane = [0, 1, 2].filter(function (q) { return q !== thin; });
+    var split = ext[inPlane[0]] >= ext[inPlane[1]] ? inPlane[0] : inPlane[1];
+    var keep = split === inPlane[0] ? inPlane[1] : inPlane[0];
+    var mouth = thin === 2;
+    var midS = (lo[split] + hi[split]) / 2;
+    var wMid = (lo[thin] + hi[thin]) / 2;
+    var thick = Math.max(ext[thin], FIELD_DOOR_MIN_THICK);
+    function toWorld(s, t, w) {
+      var u = [0, 0, 0];
+      u[split] = s; u[keep] = t; u[thin] = w;
+      return [m[0] + axes[0][0] * u[0] + axes[1][0] * u[1] + axes[2][0] * u[2],
+              m[1] + axes[0][1] * u[0] + axes[1][1] * u[1] + axes[2][1] * u[2],
+              m[2] + axes[0][2] * u[0] + axes[1][2] * u[1] + axes[2][2] * u[2]];
+    }
+    function slab(mesh, s0, s1, t0, t1, w0, w1, col) {
+      var base = mesh.v.length;
+      var corners = [[s0, t0, w0], [s1, t0, w0], [s1, t1, w0], [s0, t1, w0],
+                     [s0, t0, w1], [s1, t0, w1], [s1, t1, w1], [s0, t1, w1]];
+      corners.forEach(function (q) { mesh.v.push(toWorld(q[0], q[1], q[2])); });
+      [[0, 1, 2], [0, 2, 3], [4, 6, 5], [4, 7, 6], [0, 4, 5], [0, 5, 1],
+       [3, 2, 6], [3, 6, 7], [0, 3, 7], [0, 7, 4], [1, 5, 6], [1, 6, 2]].forEach(function (f) {
+        mesh.f.push([f[0] + base, f[1] + base, f[2] + base]);
+        mesh.c.push(col);
+      });
+    }
+    var out = [];
+    var w0 = wMid - thick / 2, w1 = wMid + thick / 2;
+    var seam = Math.min(0.06 * (hi[split] - lo[split]) / 2, 0.004);
+    [[lo[split], midS, -1, 'L'], [midS, hi[split], 1, 'R']].forEach(function (h) {
+      var mesh = { v: [], f: [], c: [] };
+      slab(mesh, h[0], h[1], lo[keep], hi[keep], w0, w1, FIELD_DOOR_BODY);
+      /* A hazard stripe down the meeting edge, so the seam reads as a door. */
+      var e0 = h[2] < 0 ? h[1] - seam : h[0], e1 = h[2] < 0 ? h[1] : h[0] + seam;
+      slab(mesh, e0, e1, lo[keep], hi[keep], w0 - thick * 0.15, w1 + thick * 0.15, FIELD_DOOR_STRIPE);
+      var dir = axes[split];
+      var lmin = [Infinity, Infinity, Infinity], lmax = [-Infinity, -Infinity, -Infinity];
+      mesh.v.forEach(function (q) {
+        for (var a2 = 0; a2 < 3; a2++) { if (q[a2] < lmin[a2]) lmin[a2] = q[a2]; if (q[a2] > lmax[a2]) lmax[a2] = q[a2]; }
+      });
+      out.push({
+        node: box.node + '#' + h[3],
+        mesh: mesh,
+        box: { node: box.node + '#' + h[3], min: lmin, max: lmax,
+               mid: [(lmin[0] + lmax[0]) / 2, (lmin[1] + lmax[1]) / 2, (lmin[2] + lmax[2]) / 2] },
+        axis: [dir[0] * h[2], dir[1] * h[2], dir[2] * h[2]],
+        travel: h[1] - h[0],
+        field: false, generated: true,
+        berthMid: mouth ? berth.mid : null
+      });
+    });
+    return out;
+  }
+
   function extrasByName(role) {
     var raw = global.PortLib && global.PortLib[role];
     var out = {};
@@ -4601,6 +4700,19 @@
           var dd = ddx * ddx + ddy * ddy + ddz * ddz;
           if (dd < bd) { bd = dd; berth = bb2; }
         }
+      }
+
+      /* NO FORCE FIELDS (Astra, 2026-10-20: "air locks to keep stations
+       * pressurized (let's get rid of the force fields)"). A field panel
+       * across a berth's mouth becomes a pair of sliding doors cut to the
+       * panel's own extent: split down the long side of the opening, each
+       * leaf parting by its own width until the opening is clear. They are
+       * ordinary leaves from here on — drawn sliding, hit where they stand,
+       * and cycled by the airlock the berth already declares. Roll-up
+       * garage slats are not fields and keep their there-or-not rule. */
+      if (field && /ForceField$/i.test(box.node || '') && berth && berth.normal) {
+        var gen = fieldToDoors(shell.v, leaves[j].f, box, berth);
+        if (gen.length) { for (var gq = 0; gq < gen.length; gq++) out.push(gen[gq]); continue; }
       }
 
       var axis = [0, 0, 0], travel = 0;
@@ -7179,7 +7291,8 @@
     if (!p) return null;
     if (p.x < -240 || p.x > cam.w + 240 || p.y < -240 || p.y > cam.h + 240) return p;
 
-    var strength = Math.max(0, Math.min(1, wake.strength));
+    // The eye's curve, not the scanner's (Slip.makeWake `glow`).
+    var strength = Math.max(0, Math.min(1, wake.glow !== undefined ? wake.glow : wake.strength));
     if (strength <= 0.004) return p;
 
     /* Floored AND capped, and both bounds were earned.
@@ -7245,15 +7358,17 @@
     }
 
     /* THE TEAR ITSELF, while it is fresh. A wake is what is left of the
-     * rip a hull made (see THE RIFT, below): for the first quarter of an
-     * hour the rip is still visibly open in the middle of its cloud,
-     * closing — red where a ship left, blue where one came through. */
-    var RIFT_OPEN_S = 900;
-    if (wake.age !== undefined && wake.age < RIFT_OPEN_S) {
-      var open = 1 - wake.age / RIFT_OPEN_S;
+     * rip a hull made (see THE RIFT, below): the rip stays visible in the
+     * middle of its cloud for the wake's whole life, closing on the same
+     * half-life as the cloud (Slip.wakeDecay) — red where a ship left,
+     * blue where one came through. Was a quarter of an hour; Astra wanted
+     * hours, decaying like an isotope (2026-10-20). */
+    var open = wake.decay !== undefined ? wake.decay
+      : (wake.age !== undefined && wake.age < 900 ? 1 - wake.age / 900 : 0);
+    if (open > 0.01) {
       var rH = Math.max(4, r * 1.1) * (0.35 + 0.65 * open);
       drawRift(ctx, p.x, p.y, rH, rH * 0.18 * open + 1, depart ? RIFT_RED : RIFT_BLUE,
-               Math.min(1, 0.4 + strength) * (0.3 + 0.7 * open), tSec);
+               Math.min(1, 0.4 + strength) * open, tSec);
     }
 
     ctx.save();
@@ -8740,7 +8855,21 @@
     meridian:  { wrap: 0.90, room: 1.22, brow: 1.18, rake: 0.30 },
     leviathan: { wrap: 0.82, room: 1.24, brow: 1.30, rake: 0.22 },
     crawler:   { wrap: 0.80, room: 1.26, brow: 1.34, rake: 0.20 },
-    capital:   { wrap: 1.06, room: 1.24, brow: 1.20, rake: 0.34 }
+    capital:   { wrap: 1.06, room: 1.24, brow: 1.20, rake: 0.34 },
+    /* The hulls made flyable 2026-10-20, read the same way. The heavy tug
+     * sits like the Bollard but in a bigger room, and also gets the grab
+     * arms drawn past the glass (drawGrabArms); the runner and the fighter
+     * wrap the glass hardest of anything, because what they do is look for
+     * the next target; the carrier's bridge is the biggest room in the
+     * game, set furthest back behind the most structure. */
+    heavytug:      { wrap: 0.94, room: 1.06, brow: 1.16, rake: 0.30 },
+    heavyshuttle:  { wrap: 1.02, room: 1.04, brow: 0.98, rake: 0.44 },
+    trader:        { wrap: 0.92, room: 1.06, brow: 1.08, rake: 0.36 },
+    runner:        { wrap: 1.20, room: 0.94, brow: 0.86, rake: 0.58 },
+    enforcer:      { wrap: 1.14, room: 0.98, brow: 0.92, rake: 0.54 },
+    enforcerheavy: { wrap: 1.04, room: 1.04, brow: 1.14, rake: 0.46 },
+    fighter:       { wrap: 1.30, room: 0.86, brow: 0.78, rake: 0.64 },
+    carrier:       { wrap: 0.80, room: 1.30, brow: 1.36, rake: 0.20 }
   };
   /* Which drawn model a player hull wears, so the rake can be measured off
    * the thing you can actually see out of. */
@@ -8777,10 +8906,105 @@
    * spilling over the text beside it. The mesh is drawn at unit length
    * around the origin, so "how far back to stand" is a function of the
    * model's own extent rather than a number per hull. */
-  function hullPreviewMesh(hullId) {
+  function hullPreviewMesh(hullId, ship) {
     var h = global.Combat && global.Combat.HULLS && global.Combat.HULLS[hullId];
     var kind = (h && h.mesh) || 'courier';
-    return libHull(HULL_ASSIGN[kind] || HULL_ASSIGN.courier) || shipMeshes().courier;
+    var base = libHull(HULL_ASSIGN[kind] || HULL_ASSIGN.courier) || shipMeshes().courier;
+    if (kind === 'crawler') return crawlerLoaded(HULL_ASSIGN[kind], base, ship);
+    return base;
+  }
+
+  /* ---- the Crawler's cubes (2026-10-20) ----------------------------------
+   * Astra: "it can [carry freight], but we have dedicated cargo haulers for
+   * that ... I want to see both in game." The frame in hulls.js is
+   * imported WITHOUT its 24 containers (ref/crawler-src keeps the full
+   * models); each cube is drawn here as what it holds — her own container
+   * for freight, crates for station components (6 S, 4 M, 2 L or 1 XL to a
+   * cube, construction.js), or nothing.
+   *
+   * Cube centres and size are in the hull's normalised frame, measured
+   * with the importer's own transform: vertex bounds of the frame, centred
+   * (mid y -1.72 m, z +0.20 m), 478.0 m to the unit.
+   *
+   * RE-MEASURED 2026-10-20 for Astra's re-export (bottom L berth, stern
+   * craft bay; ref/crawler-src/crawler_allLiveries_14of24.glb). That file
+   * draws 14 of the 24 cubes, so all 24 centres come from the generator's
+   * own cube list it carried in its extras, and the 14 drawn ones agree with
+   * them to the decimetre. The container colours are the models' own, cube
+   * by cube, per livery. */
+  var CRAWLER_CUBE = 0.0837;           // 40 m
+  var CRAWLER_BAND_UP = 0.023;         // 11 m above the cube's centre
+  var CRAWLER_BAND_HALF = 0.0052;      // 5 m deep
+  var CRAWLER_CUBES = [
+    [0.0481, 0.035, -0.151], [-0.0481, 0.035, -0.151], [0.0481, -0.0613, -0.151], [-0.0481, -0.0613, -0.151],
+    [0.0481, 0.035, -0.0548], [-0.0481, 0.035, -0.0548], [0.0481, -0.0613, -0.0548], [-0.0481, -0.0613, -0.0548],
+    [0.0481, 0.035, 0.0414], [-0.0481, 0.035, 0.0414], [0.0481, -0.0613, 0.0414], [-0.0481, -0.0613, 0.0414],
+    [0.0481, 0.035, 0.1377], [-0.0481, 0.035, 0.1377], [0.0481, -0.0613, 0.1377], [-0.0481, -0.0613, 0.1377],
+    [0.0481, 0.035, 0.2339], [-0.0481, 0.035, 0.2339], [0.0481, -0.0613, 0.2339], [-0.0481, -0.0613, 0.2339],
+    [0.0481, 0.035, 0.3301], [-0.0481, 0.035, 0.3301], [0.0481, -0.0613, 0.3301], [-0.0481, -0.0613, 0.3301]
+  ];
+  /* [body, band] per cube, as the models paint them. */
+  var CRAWLER_FREIGHT = {
+    crawler_civilian: ['#b5af9e', '#b5af9e', '#9e9f99', '#d5cfbf', '#b5af9e', '#b5af9e', '#b5af9e', '#9e9f99',
+                       '#d5cfbf', '#b5af9e', '#b5af9e', '#b5af9e', '#b5af9e', '#9e9f99', '#d5cfbf', '#d5cfbf',
+                       '#9e9f99', '#d5cfbf', '#9e9f99', '#b5af9e', '#9e9f99', '#9e9f99', '#b5af9e', '#d5cfbf']
+                      .map(function (b) { return [b, '#5e5f5a']; }),
+    crawler_navy: Array.apply(null, Array(24)).map(function () { return ['#69717a', '#32373d']; }),
+    crawler_syndicate: [['#792220', '#a72e29'], ['#792220', '#792220'], ['#6a2825', '#5d5f63'], ['#792220', '#792220'],
+                        ['#6a2825', '#1c1c1d'], ['#393b3d', '#a72e29'], ['#7c7e82', '#792220'], ['#7c7e82', '#5d5f63'],
+                        ['#5d5f63', '#792220'], ['#4b4d51', '#5d5f63'], ['#5d5f63', '#a72e29'], ['#792220', '#a72e29'],
+                        ['#6a2825', '#792220'], ['#393b3d', '#792220'], ['#5d5f63', '#a72e29'], ['#7c7e82', '#1c1c1d'],
+                        ['#5d5f63', '#1c1c1d'], ['#4b4d51', '#a72e29'], ['#5d5f63', '#5d5f63'], ['#792220', '#a72e29'],
+                        ['#5d5f63', '#5d5f63'], ['#4b4d51', '#792220'], ['#393b3d', '#a72e29'], ['#4b4d51', '#1c1c1d']]
+  };
+  /* Station crates: the clamp yellow of the frame's own hazard paint, so a
+   * Crawler carrying a station reads as one from across a system. */
+  var CRATE_COL = { crawler_civilian: '#e7b327', crawler_navy: '#c9ced4', crawler_syndicate: '#a72e29' };
+  var CRATE_STRAP = '#1d1f24';
+  /* How a cube is divided for n crates of a size: [x, y, z] counts. */
+  var CRATE_GRID = { XL: [1, 1, 1], L: [1, 1, 2], M: [2, 1, 2], S: [2, 1, 3] };
+  var CRAWLER_CACHE = {};
+
+  function crawlerLoaded(libId, base, ship) {
+    var Cn = global.Construction;
+    if (!base || !base.v || !Cn) return base;
+    var lay = ship ? Cn.layout(ship) : Cn.fullLayout();
+    var key = libId + '|' + lay.map(function (c) {
+      return !c ? '-' : c.kind === 'freight' ? 'f' : c.size + c.n;
+    }).join('');
+    if (CRAWLER_CACHE[key]) return CRAWLER_CACHE[key];
+    /* A new object, never the cached library mesh: gl.js caches GPU
+     * buffers on the mesh object, and the frame is shared by every load. */
+    var m = {};
+    /* Everything but the per-object caches (`_gl` buffers, `_nozzles`),
+     * which belong to the frame mesh and would draw it without the cubes. */
+    for (var p in base) if (p.charAt(0) !== '_') m[p] = base[p];
+    m.v = base.v.slice(); m.f = base.f.slice();
+    m.c = base.c ? base.c.slice() : null;
+    var h = CRAWLER_CUBE / 2;
+    var freight = CRAWLER_FREIGHT[libId] || CRAWLER_FREIGHT.crawler_civilian;
+    var crateCol = CRATE_COL[libId] || CRATE_COL.crawler_civilian;
+    for (var i = 0; i < lay.length; i++) {
+      var cell = lay[i], at = CRAWLER_CUBES[i];
+      if (!cell) continue;
+      if (cell.kind === 'freight') {
+        merge(m, box(h, h, h), at[0], at[1], at[2], 1, freight[i][0]);
+        /* The band: 8.5–13.5 m above the cube's centre, a hair proud of the sides. */
+        merge(m, box(h * 1.015, CRAWLER_BAND_HALF, h * 1.015), at[0], at[1] + CRAWLER_BAND_UP, at[2], 1, freight[i][1]);
+        continue;
+      }
+      var g = CRATE_GRID[cell.size] || [1, 1, 1];
+      var cw = CRAWLER_CUBE / g[0], cd = CRAWLER_CUBE / g[2];
+      var gap = 0.0016;                // a couple of metres between crates
+      for (var k = 0; k < cell.n; k++) {
+        var gx = k % g[0], gz = Math.floor(k / g[0]) % g[2];
+        var cx = at[0] - h + cw * (gx + 0.5), cz = at[2] - h + cd * (gz + 0.5);
+        merge(m, box(cw / 2 - gap, h - gap, cd / 2 - gap), cx, at[1], cz, 1, crateCol);
+        merge(m, box(cw / 2 - gap * 0.6, 0.004, cd / 2 - gap * 0.6), cx, at[1] + h * 0.55, cz, 1, CRATE_STRAP);
+      }
+    }
+    CRAWLER_CACHE[key] = m;
+    return m;
   }
 
   /* Half the model's largest extent, so a long freighter stands further off
@@ -9155,6 +9379,7 @@
    * and once you can turn your head, that ordering stops being a nicety and
    * starts being the difference between a cockpit and a mess. */
   function drawCockpitShell(ctx, cam, ship, w, h) {
+    drawGrabArms(ctx, cam, ship);       // outside the glass: behind the shell
     var apertures = apertureSet(cam, ship);
 
     /* Fill the whole screen and punch every window out of it with a single
@@ -9871,6 +10096,93 @@
       ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
     }
     ctx.restore();
+  }
+
+  /* ---- a tug's grab arms, seen from the seat (2026-10-20) ----------------
+   * Astra: "creating a custom cockpit that shows the grab arms on the tugs".
+   *
+   * The tug models carry two grab arms (grabberArm0L/R) mounted outboard of
+   * the canopy and reaching well past the nose — in tug-s they run from
+   * just behind the seat to 1.5 hull-units ahead of it, either side of the
+   * glass, with the jaws at the tips. So from the seat they are two booms
+   * running away from you along the lower corners of the windscreen, the
+   * caution-striped forearms angling in, and the jaws ahead where whatever
+   * you are towing sits.
+   *
+   * Drawn in the cockpit's own metres (eye at the origin, glass 1.2 m
+   * ahead), measured off the model at about three metres to its unit, and
+   * scaled with the room so a heavy tug's bigger bridge keeps them in the
+   * same place relative to the glass. Drawn first thing in
+   * drawCockpitShell: the parts behind the frame are hidden by it, and
+   * what shows is what the windows show. The jaws stand open; there is no
+   * player tow yet for them to close on (`ship.tow` is the OTHER way round
+   * — you being towed). */
+  var ARM_STEEL = '#4a5058', ARM_DARK = '#2c3036', ARM_CAUTION = '#d9a521', ARM_STRIPE = '#1d1f24';
+
+  function drawGrabArms(ctx, cam, ship) {
+    var HL = global.Combat && global.Combat.HULLS;
+    var hull = HL && HL[ship && ship.hullId];
+    if (!hull || !hull.grabArms) return;
+    var spec = cockpitSpec(ship);
+    var k = spec.arch.room * spec.size;
+    var closed = false;
+    var faces = [];
+
+    /* A beam from a to b, with half-thickness hx (sideways) and hy (up),
+     * as its four long faces and two ends. */
+    function beam(a, b, hx, hy, col) {
+      var c = [];
+      [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(function (s) {
+        c.push([a[0] + s[0] * hx, a[1] + s[1] * hy, a[2]]);
+      });
+      [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(function (s) {
+        c.push([b[0] + s[0] * hx, b[1] + s[1] * hy, b[2]]);
+      });
+      var quads = [[0, 1, 5, 4, 0.70], [3, 2, 6, 7, 1.00], [0, 3, 7, 4, 0.82],
+                   [1, 2, 6, 5, 0.82], [0, 1, 2, 3, 0.60], [4, 5, 6, 7, 0.60]];
+      quads.forEach(function (q) {
+        var pts = [c[q[0]], c[q[1]], c[q[2]], c[q[3]]].map(function (p) {
+          return [p[0] * k, p[1] * k, p[2] * k];
+        });
+        var mid = [0, 0, 0];
+        pts.forEach(function (p) { mid[0] += p[0] / 4; mid[1] += p[1] / 4; mid[2] += p[2] / 4; });
+        faces.push({ pts: pts, d: mid[0] * mid[0] + mid[1] * mid[1] + mid[2] * mid[2],
+                     col: shade(col, q[4]) });
+      });
+    }
+
+    [-1, 1].forEach(function (side) {
+      /* Below the eye and outboard of the glass, so you look DOWN along
+       * them and see their length rather than their ends. */
+      var x0 = 2.10 * side, x1 = 1.55 * side, xj = 1.15 * side;
+      var y0 = -0.62, y1 = -0.72;
+      beam([x0, y0, 0.6], [x0, y0, 1.6], 0.34, 0.30, ARM_DARK);                    // shoulder
+      beam([x0, y0, 1.6], [x0, y0, 4.0], 0.18, 0.16, ARM_STEEL);                   // upper arm
+      beam([x0, y0, 3.9], [x0, y1, 4.3], 0.24, 0.22, ARM_DARK);                    // knuckle
+      beam([x0, y1, 4.3], [x1, y1, 7.0], 0.14, 0.13, ARM_CAUTION);                 // forearm
+      for (var st = 0; st < 4; st++) {                                              // its stripes
+        var z = 4.7 + st * 0.55;
+        var xs = x0 + (x1 - x0) * (z - 4.3) / 2.7;
+        beam([xs, y1, z], [xs + (x1 - x0) * 0.08, y1, z + 0.22], 0.145, 0.135, ARM_STRIPE);
+      }
+      /* The jaws: two prongs from the wrist, reaching in toward the line
+       * of flight, open while she waits. */
+      var gap = closed ? 0.05 : 0.28;
+      beam([x1, y1, 7.0], [xj, y1 + gap, 8.3], 0.06, 0.06, ARM_STEEL);
+      beam([x1, y1, 7.0], [xj, y1 - gap, 8.3], 0.06, 0.06, ARM_STEEL);
+    });
+
+    faces.sort(function (a, b) { return b.d - a.d; });     // far to near
+    for (var i = 0; i < faces.length; i++) {
+      var poly = clipProject(cam, localPoly(ship, faces[i].pts));
+      if (poly) fillPoly(ctx, poly, faces[i].col, 'rgba(0,0,0,0.35)');
+    }
+  }
+
+  function shade(hex, f) {
+    var n = parseInt(hex.slice(1), 16);
+    var r = Math.round(((n >> 16) & 255) * f), g = Math.round(((n >> 8) & 255) * f), b = Math.round((n & 255) * f);
+    return 'rgb(' + r + ',' + g + ',' + b + ')';
   }
 
   /* Kept for callers that just want the lot in one go, in the right order

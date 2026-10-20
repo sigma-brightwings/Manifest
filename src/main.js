@@ -1311,7 +1311,7 @@
   function loseModulesAboard() {
     if (!global.Construction) return;
     var n = global.Construction.lostWith(G, G.ship);
-    if (n) say(n + ' station module' + (n > 1 ? 's' : '') + ' went down with her', 6);
+    if (n) say(n + ' station crate' + (n > 1 ? 's' : '') + ' went down with her', 6);
   }
 
   /* Bring the ship back after a crash. There is no "undo" for a decayed
@@ -1548,6 +1548,19 @@
        * not want falls through to the flight controls, so the ship never
        * stops answering the thrust keys just because you opened a screen. */
       if (!flying() && modeKey(e)) return;
+
+      /* ON FOOT the keyboard is a walker's: held keys move you (update
+       * hands them to walk.js), E uses what you face, Esc still opens the
+       * menu, and nothing reaches the flight controls — U on foot must not
+       * launch the ship you have just walked away from. O, docked and in
+       * the seat, is how you stand up. */
+      var wk = e.key.toLowerCase();
+      if (G.walk && flying() && wk !== 'escape') {
+        G.keys[wk] = true;
+        if (wk === 'e' || wk === 'enter') { e.preventDefault(); walkUse(); }
+        return;
+      }
+      if (wk === 'o' && flying() && G.ship.docked && !G.hyper) { startWalk(); return; }
 
       G.keys[e.key.toLowerCase()] = true;
 
@@ -1989,6 +2002,14 @@
        * held, and it has to be, now that the buttons are triggers: keeping
        * the old drag requirement would have meant you could only turn the
        * ship while firing it. Everywhere else a drag is still a drag. */
+      /* On foot a drag turns your head and body together. */
+      if (G.walk && flying() && !menuOpen()) {
+        if (dragging && global.Walk) {
+          global.Walk.look(G.walk, (e.clientX - lastX) * 0.0045, -(e.clientY - lastY) * 0.0045);
+        }
+        lastX = e.clientX; lastY = e.clientY;
+        return;
+      }
       var aiming = mouseArmed() && !G.freeLook;
       /* Free-look reaches the head with no button held too — the whole
        * point is that it replaces the stick, not that it adds a drag. */
@@ -5085,6 +5106,24 @@
       return;
     }
 
+    /* On foot: the walker takes the held keys; the world keeps running
+     * with them hidden from the flight controls, so W is a step and not a
+     * burn. A ship that is no longer docked (she was sold, or ordered out)
+     * ends the walk. */
+    var heldKeys = null;
+    if (G.walk) {
+      if (!G.ship.docked || !global.Walk) G.walk = null;
+      else {
+        if (flying()) global.Walk.step(G.walk, G.keys, dtReal);
+        heldKeys = G.keys;
+        G.keys = {};
+      }
+    }
+    try { updateWorld(dtReal); } finally { if (heldKeys) G.keys = heldKeys; }
+  }
+
+  function updateWorld(dtReal) {
+
     /* In transit nothing else happens. No physics, no markets, no
      * encounters — you are not anywhere for them to happen in. The camera
      * still follows the ship so the cockpit stays put around you. */
@@ -6437,6 +6476,13 @@
     else cam.build(w, h);
 
     ctx.setTransform(ps, 0, 0, ps, 0, 0);
+    /* On foot the station is the whole screen. The GL world is cleared to
+     * rock so nothing outside shows through the 2D layer's floor. */
+    if (G.walk && flying() && !menuOpen() && global.Walk) {
+      if (glLive()) { ctx.clearRect(0, 0, w, h); global.GLWorld.begin(ROCK_CLEAR); }
+      drawWalkView(ctx, w, h);
+      return;
+    }
     /* With the GL layer live the sky is ITS clear colour, and this canvas
      * has to be genuinely transparent or it would paint over the world it is
      * supposed to be an overlay on. Without GL, nothing has changed and the
@@ -8445,6 +8491,102 @@
       }
       ctx.restore();
     }
+  }
+
+  /* ---- on foot (2026-10-20) ----------------------------------------------
+   * Astra: "full first person walking. We do need to model station
+   * interiors to walk in." walk.js builds the station's deck plan and walks
+   * it; this is where the game hands you over to it and takes you back.
+   *
+   * O, docked, steps you out of the seat into your berth. The ship stays on
+   * her clamp and the world keeps running. E acts on what you are facing:
+   * your own hatch takes you back to the cockpit; another of your ships
+   * berthed here takes command of her, keeping the one you walked off
+   * (Combat.takeCommand 'keep' — the one already on the Fleet tab); a
+   * counter opens its screen, and the F-keys still work as a shortcut
+   * (Astra: keep both). */
+  function walkShips() {
+    var s = G.ship, out = [];
+    var hullOf = function (id) { return (Combat.HULLS && Combat.HULLS[id]) || {}; };
+    var me = hullOf(s.hullId || 'talon');
+    out.push({ id: 'current', size: me.size || 'S', name: s.shipName || me.name || 'your ship', current: true });
+    (G.fleet || []).forEach(function (r) {
+      if (r.port !== s.docked) return;
+      if (r.star && G.here && r.star !== G.here.id) return;
+      out.push({ id: r.id, size: hullOf(r.hullId).size || 'M', name: r.name || hullOf(r.hullId).name || 'ship' });
+    });
+    return out;
+  }
+
+  function startWalk() {
+    var Walk = global.Walk, s = G.ship;
+    if (!Walk || !s.docked) { say('Dock first — there is nowhere to step out to', 3); return; }
+    var port = G.sys && G.sys.byId ? G.sys.byId[s.docked] : null;
+    if (!port) return;
+    var plan = Walk.layout(port.id, {
+      seed: G.seed || (G.galaxy && G.galaxy.seed) || '',
+      yard: !!(Combat.isShipyard && Combat.isShipyard(port)),
+      ships: walkShips()
+    });
+    G.walk = Walk.start(plan);
+    G.walk.portName = port.name || 'the station';
+    G.panel = 0;
+    say('You step out into your berth at ' + G.walk.portName +
+        '  —  WASD to walk, drag to look, E to use, Esc for the menu', 8);
+  }
+
+  function walkUse() {
+    var w = G.walk, it = w && w.near;
+    if (!it) return;
+    if (it.kind === 'mine') { G.walk = null; say('Back in the seat', 3); return; }
+    if (it.kind === 'fleet') {
+      var r = Combat.takeCommand ? Combat.takeCommand(G, it.ship.id, 'keep') : { ok: false, why: 'no harbour master' };
+      if (!r.ok) { say('Not now: ' + r.why, 5); return; }
+      G.walk = null;
+      say('You take command of the ' + (r.name || it.ship.name) + ' — the ship you walked off stays on her clamp', 7);
+      return;
+    }
+    /* The counters open the screens the F-keys already open. */
+    var idx = function (id) {
+      for (var i = 0; i < MODES.length; i++) if (MODES[i].id === id) return i;
+      return -1;
+    };
+    if (it.kind === 'market') { selectPanel(3); return; }
+    if (it.kind === 'yard') { G.yardTab = 'hulls'; selectPanel(idx('ship') >= 0 ? idx('ship') : 4); return; }
+    if (it.kind === 'crew') { G.yardTab = 'crew'; selectPanel(idx('ship') >= 0 ? idx('ship') : 4); return; }
+    if (it.kind === 'bar') { say('The bar is quiet — the people who drink here come next', 5); return; }
+  }
+
+  function drawWalkView(ctx, w, h) {
+    var Walk = global.Walk;
+    var view = Walk.draw(ctx, G.walk, w, h - FBAR_H);
+    ctx.save();
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    var it = G.walk.near;
+    if (it) {
+      ctx.fillStyle = 'rgba(6,16,22,0.8)';
+      var line = 'E  —  ' + it.label;
+      var tw = ctx.measureText(line).width;
+      ctx.fillRect(w / 2 - tw / 2 - 12, (h - FBAR_H) / 2 + 26, tw + 24, 24);
+      ctx.fillStyle = '#ffe9a8';
+      ctx.fillText(line, w / 2, (h - FBAR_H) / 2 + 43);
+    }
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(180,240,255,0.8)';
+    ctx.fillText((G.walk.portName || '') + (view && view.room ? '  ·  ' + view.room.label : ''), w / 2, 22);
+    ctx.fillStyle = 'rgba(180,240,255,0.55)';
+    ctx.fillText('WASD walk  ·  Shift run  ·  drag or arrows to look  ·  E use  ·  Esc menu', w / 2, h - FBAR_H - 10);
+    if (G.message && performance.now() < G.messageUntil) {
+      ctx.font = 'bold 14px ui-monospace, monospace';
+      var mw = ctx.measureText(G.message).width;
+      ctx.fillStyle = 'rgba(6,16,22,0.85)';
+      ctx.fillRect(w / 2 - mw / 2 - 14, h - FBAR_H - 66, mw + 28, 30);
+      ctx.fillStyle = '#e6f0ff';
+      ctx.fillText(G.message, w / 2, h - FBAR_H - 46);
+    }
+    ctx.restore();
+    drawIconBar(ctx, w, h - FBAR_H);
   }
 
   /* ---- cockpit ----------------------------------------------------------

@@ -319,7 +319,9 @@
          * an older career's hull is yard grey, which it was. */
         paint: s.paint || null,
         /* What rides in a Crawler's truss (construction.js). */
-        modules: s.modules || []
+        modules: s.modules || [],
+        /* A Crawler's craft bay loadout (construction.js). */
+        craftBay: s.craftBay || null
       },
       pilotName: G.pilotName || null,
       standing: G.standing || {},
@@ -531,6 +533,7 @@
     s.bornId = d.bornId || null;
     s.paint = (d.paint && typeof d.paint === 'object') ? d.paint : null;
     s.modules = Array.isArray(d.modules) ? d.modules : [];
+    s.craftBay = d.craftBay || null;
     G.pilotName = data.pilotName || null;
 
     /* The hull's fixed numbers come from the catalogue, not the save —

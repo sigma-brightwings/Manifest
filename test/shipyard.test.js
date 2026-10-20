@@ -12,6 +12,7 @@
 'use strict';
 
 var path = require('path');
+var fs = require('fs');
 var SRC = path.join(__dirname, '..', 'src');
 global.window = global;
 var V = require(path.join(SRC, 'vec3.js'));
@@ -128,8 +129,13 @@ section('--- built to order ---');
   check('a shipyard builds every large hull', ['kestrel', 'longhaul', 'tanker', 'cutter',
         'meridian', 'leviathan', 'capital'].every(function (id) { return ids.indexOf(id) >= 0; }),
         ids.join(','));
-  check('and no small or medium one (those are on the floor)',
-        ids.every(function (id) { return Combat.bigHull(id); }));
+  /* Since 2026-10-20 every hull has a build price (Astra: "a cost to
+   * build, to buy"), so a yard builds the small and medium ones too. */
+  check('and the small and medium ones as well (build = bare)',
+        ['talon', 'wren', 'mule', 'heavytug', 'trader'].every(function (id) { return ids.indexOf(id) >= 0; }),
+        ids.join(','));
+  check('but never a Syndicate hull at a yard the Syndicate does not hold',
+        port.faction === 'outlaw' || ids.indexOf('enforcer') < 0);
   var cut = list.filter(function (e) { return e.id === 'cutter'; })[0];
   check('a warship is locked to a stranger, and says why', cut.why && /standing/.test(cut.why), cut.why);
   G.standing[port.faction] = 45;
@@ -337,6 +343,65 @@ section('--- too big to dock ---');
   }
   G.ship.hullId = 'longhaul';
   check('an L hull is not refused for size', !Combat.dockRefusal(G, found.surface.port));
+})();
+
+section('--- every hull: build, buy, outfit (2026-10-20) ---');
+(function () {
+  /* Astra: "any other non-buyable non-flyable ship type updated with a
+   * cockpit, a model name and a cost to build, to buy and what the
+   * default outfitting is." And: "Build = bare, Buy = outfitted". */
+  var ids = Object.keys(Combat.HULLS);
+  ['heavytug', 'heavyshuttle', 'trader', 'runner', 'enforcer', 'enforcerheavy', 'fighter', 'carrier']
+    .forEach(function (id) { check('the ' + id + ' is a hull now', !!Combat.HULLS[id]); });
+  var bad = ids.filter(function (id) {
+    var r = Combat.fitStock(Combat.standardProbe(id));
+    return r.added.length !== Combat.HULLS[id].stock.length;
+  });
+  check('every hull\'s default outfit fits her slots, mass and power', !bad.length, bad.join(','));
+  check('every hull has a build price and a buy price no lower', ids.every(function (id) {
+    return Combat.HULLS[id].price > 0 && Combat.buyPrice(id) >= Combat.HULLS[id].price;
+  }));
+  var render = fs.readFileSync(path.join(SRC, 'render.js'), 'utf8');
+  var noCockpit = ids.filter(function (id) { return !new RegExp('\\b' + id + ':\\s*\\{ wrap:').test(render); });
+  check('every hull has a cockpit', !noCockpit.length, noCockpit.join(','));
+  var HullLib = require(path.join(SRC, 'hulls.js'));
+  var noModel = ids.filter(function (id) {
+    var m = new RegExp('\\n\\s*' + Combat.HULLS[id].mesh + ":\\s*'([^']+)'").exec(render);
+    return !m || !HullLib[m[1]];
+  });
+  check('every hull wears a model in the library', !noModel.length, noModel.join(','));
+
+  if (!found.yard) return;
+  var G = makeG(found.yard);
+  G.ship.credits = 300000;
+  var before = G.ship.credits;
+  var r = Combat.buyHull(G, 'bollard', false);
+  var outfitCost = (r.outfit || []).reduce(function (n, id) { return n + Math.round(Combat.EQUIPMENT[id].price * 0.9); }, 0);
+  check('a hull off the floor arrives outfitted', r.ok && r.outfit.length > 0, r.why || JSON.stringify(r.outfit));
+  check('…and the outfit is in the price', before - G.ship.credits ===
+        Combat.HULLS.bollard.price - Math.round(Combat.HULLS.talon.price * 0.7) + outfitCost);
+  check('…while the gun she came in with moved across', JSON.stringify(G.ship.fit).indexOf('phpulse') >= 0);
+  var q = Combat.quoteCommission(G, 'talon', {});
+  check('a yard builds a small hull to order, bare, in a day', q.ok && q.days === 1 && q.cost === Combat.HULLS.talon.price,
+        q.why || (q.days + ' d, ' + q.cost));
+  check('a fleet carrier takes a month', Combat.buildDays('carrier') === 30);
+
+  /* The grey hulls' gate. */
+  var port = found.yard.port, fac = port.faction;
+  check('the Syndicate does not sell its hulls where it does not hold the port',
+        port.faction === 'outlaw' || !Combat.hullGate(G, port, Combat.HULLS.enforcer).present);
+  var synd = Object.assign({}, port, { faction: 'outlaw' });
+  G.standing.outlaw = 0;
+  var g0 = Combat.hullGate(G, synd, Combat.HULLS.enforcer);
+  check('in a port it holds, it names the standing it wants', g0.present && /standing/.test(g0.why || ''), g0.why);
+  G.standing.outlaw = 50;
+  check('a friend of the Syndicate can buy the enforcer', !Combat.hullGate(G, synd, Combat.HULLS.enforcer).why);
+  check('but not the heavy, which wants 70', /70/.test(Combat.hullGate(G, synd, Combat.HULLS.enforcerheavy).why || ''));
+  G.sys.corruption = 0;
+  check('no runner where the law cannot be bought', !Combat.hullGate(G, port, Combat.HULLS.runner).present);
+  G.sys.corruption = 95;
+  check('a runner where it can', Combat.hullGate(G, port, Combat.HULLS.runner).present);
+  void fac;
 })();
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

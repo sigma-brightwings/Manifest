@@ -175,6 +175,55 @@
     return !!hull && (hull.size === 'M' || hull.size === 'L' || hull.size === 'XL');
   }
 
+  /* ---- HOW MANY HANDS SHE TAKES (2026-10-20) -----------------------------
+   * Astra: "we also need to know the number of crew required to operate
+   * each one without the player flying it, which is the number of crew
+   * needed to run the lasers, the engines and the turrets, plus a pilot's
+   * requirement unless the player takes control of it."
+   *
+   * Derived, like needsCrew, so every hull has an answer:
+   *   PILOT     one, unless you are the one flying her.
+   *   ENGINES   none on a small hull (the pilot minds them), one on an M,
+   *             two on an L, and on an XL three plus one per thousand
+   *             tonnes dry — a carrier's engine rooms are a town.
+   *   LASERS    the pilot fires the forward pair on a small or medium
+   *             hull; every other two hardpoints want a gunner, and on an
+   *             L or XL — where the pilot only flies — all of them do. A
+   *             capital mount is two gunners on its own.
+   *   TURRETS   one gunner each (turretCrewing: a good engineer can stand
+   *             in, slower).
+   * Counted off what is FITTED when a ship is given, so an empty hardpoint
+   * needs nobody; off her default outfit when only a hull id is. */
+  function crewNeeded(shipOrHull, playerFlying) {
+    var C = global.Combat;
+    if (!C || !C.HULLS) return { pilot: 0, engineer: 0, gunner: 0, total: 0 };
+    var ship = typeof shipOrHull === 'string' ? null : shipOrHull;
+    var hullId = ship ? (ship.hullId || 'talon') : shipOrHull;
+    var hull = C.HULLS[hullId];
+    if (!hull) return { pilot: 0, engineer: 0, gunner: 0, total: 0 };
+    var fitted = [];
+    if (ship && C.fittedList) {
+      fitted = C.fittedList(ship).map(function (f) { return { type: f.type, item: f.item }; });
+    } else if (C.standardProbe && C.fitStock && C.fittedList) {
+      var probe = C.standardProbe(hullId);
+      C.fitStock(probe);
+      fitted = C.fittedList(probe).map(function (f) { return { type: f.type, item: f.item }; });
+    }
+    var size = hull.size || 'M';
+    var guns = 0, capitalGuns = 0, turrets = 0;
+    fitted.forEach(function (f) {
+      if (f.type === 'capital') capitalGuns++;
+      else if (f.item.kind === 'gun') guns++;
+      else if (f.item.kind === 'turret') turrets++;
+    });
+    var pilot = playerFlying ? 0 : 1;
+    var engineer = size === 'S' ? 0 : size === 'M' ? 1 : size === 'L' ? 2
+                 : 3 + Math.floor((hull.dryMass || 0) / 1000);
+    var pilotFires = (size === 'S' || size === 'M') ? 2 : 0;
+    var gunner = Math.ceil(Math.max(0, guns - pilotFires) / 2) + capitalGuns * 2 + turrets;
+    return { pilot: pilot, engineer: engineer, gunner: gunner, total: pilot + engineer + gunner };
+  }
+
   function aboard(ship) { return (ship && ship.crew) || []; }
 
   function best(ship, role) {
@@ -232,7 +281,7 @@
     forHire: forHire, make: make, personName: personName,
     signingFee: signingFee, dailyWage: dailyWage,
     WAGE_DAY: WAGE_DAY, payrollDue: payrollDue,
-    needsCrew: needsCrew, aboard: aboard, best: best,
+    needsCrew: needsCrew, crewNeeded: crewNeeded, aboard: aboard, best: best,
     turretCrewing: turretCrewing, canBeOrdered: canBeOrdered,
     describe: describe
   };

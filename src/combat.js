@@ -926,6 +926,9 @@
              slots: { hardpoint: 1, utility: 3, internal: 2 },
              rackSlots: 1,
              powerMW: 10.0, fitMass: 16,
+             /* The tug models carry grab arms (grabberArm0L/R); the cockpit
+              * draws them past the glass (render.js drawGrabArms). */
+             grabArms: true,
              blurb: 'all engine and fenders',
              maker: 'Harbour Works Cooperative',
              about: 'A port tug sold off the harbour list, still wearing ' +
@@ -1057,16 +1060,17 @@
                'a port was built for her — shipyards, highports, fleet ' +
                'carriers — and needs a crew to do anything at all. Ideal ' +
                'for a captain who has stopped running.' },
-    /* THE CRAWLER (2026-10-20). Astra: "the new station-constructor ...
-     * There's only one size, and it ships one L size module or two M size
-     * modules or up to three S size modules." Station modules ride in her
-     * truss (construction.js holds the load rule and the catalogue); the
-     * hold below is the little she carries besides. About 454 m long —
-     * the biggest hull in the game — so XL and commission-only. Price and
-     * stats are Claude's first numbers, offered to Astra to change. */
+    /* THE CRAWLER (2026-10-20). Astra: "the new station-constructor" —
+     * and then, "crawlers be the frame for L size bays, so they become the
+     * first bay in a station, and carry the station's components". Her 24
+     * container cubes take station component crates (6 S, 4 M, 2 L or 1 XL
+     * to a cube — construction.js) or freight; the hold below is all 24
+     * cubes as freight, and construction.js shrinks it by the cubes crates
+     * take. About 478 m long (Astra's 2026-10-20 re-export) — the biggest hull in the game — so XL and
+     * commission-only. Price and stats are Claude's first numbers. */
     crawler: { id: 'crawler', size: 'XL', name: 'Crawler', price: 450000, mesh: 'crawler',
              dryMass: 640, thrustKN: 9500, thrusterCap: 60, fuelCap: 300,
-             cargoCap: 120, hullMax: 520,
+             cargoCap: 600, hullMax: 520,
              slots: { hardpoint: 1, utility: 4, internal: 6 },
              rackSlots: 1,
              powerMW: 40.0, fitMass: 60,
@@ -1074,12 +1078,161 @@
              constructor: true,
              blurb: 'carries a station to where it will stand',
              maker: 'Drayton Heavy',
-             about: 'A station constructor. Her truss takes one L module, ' +
-               'or two M, or three S, built at a shipyard and craned ' +
-               'aboard there. A station starts with its L core; everything ' +
-               'else bolts on after. She docks only at shipyards, highports ' +
-               'and fleet carriers, and she needs a crew. Built to order. ' +
-               'Ideal for a captain who wants a place of their own.' }
+             about: 'A station constructor, and the first bay of the ' +
+               'station she builds. Her 24 container cubes carry station ' +
+               'component crates — six S, four M, two L or one XL to a cube ' +
+               '— craned aboard at a shipyard, or ordinary freight in any ' +
+               'cube the crates leave. She docks only at shipyards, ' +
+               'highports and fleet carriers, and she needs a crew. Built ' +
+               'to order. Ideal for a captain who wants a place of their own.' },
+
+    /* ---- EVERY SHIP IN THE SKY, PART TWO (2026-10-20) --------------------
+     * Astra: "I want any other non-buyable non-flyable ship type updated
+     * with a cockpit, a model name and a cost to build, to buy and what the
+     * default outfitting is." Asked which: the trader, the pirate runner,
+     * the Syndicate's enforcer and heavy, the unassigned fighter family,
+     * the heavy tug and heavy shuttle the Crawler's bay carries, and "the
+     * fleet carrier too, since it's a station that's designed to be able
+     * to move, just, pretty slowly because the inertia of carrying a whole
+     * fleet's worth of shit takes a while to change the direction of
+     * motion on."
+     *
+     * Where the grey ones are sold, Astra: Syndicate-gated. The runner is on
+     * the floor where somebody can be bought (`grey`, the same corruption
+     * gate as the grey guns); the enforcers only where the Syndicate holds
+     * the port, to a captain the Syndicate trusts (`syndicate`, standing
+     * with `outlaw`, the same gate as the Syndicate-issue gun).
+     *
+     * Stats are Claude's first numbers, held to the same two rules as every
+     * hull above (laden range, and thrust to leave the heaviest pad). */
+    heavytug: { id: 'heavytug', size: 'M', name: 'Hawser Heavy Tug', price: 66000, mesh: 'tug_heavy',
+             dryMass: 75, thrustKN: 2300, thrusterCap: 26, fuelCap: 30,
+             cargoCap: 30, hullMax: 220,
+             slots: { hardpoint: 1, utility: 3, internal: 3 },
+             rackSlots: 1,
+             powerMW: 14.0, fitMass: 22,
+             grabArms: true,
+             blurb: 'two arms and the shoulders to use them',
+             maker: 'Harbour Works Cooperative',
+             about: 'The Bollard\'s big sister, built for the jobs a port ' +
+               'tug cannot shift: hull sections, stalled freighters, the ' +
+               'crates a Crawler carries out to a building site. Her grab ' +
+               'arms reach past the nose, so from the seat you watch them ' +
+               'close on whatever you are towing. The plating is the ' +
+               'thickest of any civilian M hull. Ideal for salvage, ' +
+               'heavy towing and station building.' },
+    heavyshuttle: { id: 'heavyshuttle', size: 'M', name: 'Heron Heavy Shuttle', price: 60000, mesh: 'shuttle_heavy',
+             dryMass: 40, thrustKN: 1900, thrusterCap: 12, fuelCap: 26,
+             cargoCap: 80, hullMax: 90,
+             /* Unarmed, like every shuttle: the one class that flies without
+              * a gun, and the Heron is still a shuttle, only wider. */
+             slots: { hardpoint: 0, utility: 1, internal: 3 },
+             rackSlots: 0,
+             powerMW: 6.0, fitMass: 10,
+             blurb: 'a shuttle with a freighter\'s hold',
+             maker: 'Pell & Daughters',
+             about: 'Pell stretched the Wren sideways until it could carry a ' +
+               'cargo pallet and a full crew change at once. She is a ' +
+               'shuttle in everything but size: no gun, forgiving on a pad, ' +
+               'cheap to run. Builders ferry station crates down to surface ' +
+               'sites in her. Ideal for ground work, crew rotations and ' +
+               'short heavy hops.' },
+    trader: { id: 'trader', size: 'M', name: 'Tallyman Trader', price: 72000, mesh: 'trade',
+             dryMass: 60, thrustKN: 4200, thrusterCap: 18, fuelCap: 40,
+             cargoCap: 110, hullMax: 120,
+             slots: { hardpoint: 2, utility: 2, internal: 4 },
+             rackSlots: 2,
+             powerMW: 14.0, fitMass: 22,
+             blurb: 'the merchant on every short run',
+             maker: 'Ardwick Yards, Coldwater',
+             about: 'The hull the independent merchants fly between ' +
+               'neighbouring worlds. Smaller than the Mule and quicker to ' +
+               'turn, with a hold sized for the cargo one captain can sell ' +
+               'in one port. Ardwick builds her the way they build the ' +
+               'Talon: nothing clever, nothing a dockside mechanic has not ' +
+               'seen. Ideal for a trader outgrowing courier work.' },
+    runner: { id: 'runner', size: 'M', name: 'Corsair Runner', price: 68000, mesh: 'pirate',
+             dryMass: 34, thrustKN: 3600, thrusterCap: 15, fuelCap: 30,
+             cargoCap: 40, hullMax: 85,
+             slots: { hardpoint: 3, utility: 1, internal: 2 },
+             rackSlots: 1,
+             powerMW: 10.0, fitMass: 12,
+             /* On a floor only where somebody can be bought — the grey
+              * guns' own gate. */
+             grey: { minCorrupt: 60 },
+             blurb: 'fast enough to choose her fights',
+             maker: 'nobody who signs their work',
+             about: 'What pirates fly. Nobody builds a runner on purpose; ' +
+               'they are fast light hulls stripped of everything that is ' +
+               'not engine or gun, sold out of the back of yards in ports ' +
+               'where the law can be bought. The armour is thin. Ideal for ' +
+               'a captain who wants to arrive first, and leave first.' },
+    enforcer: { id: 'enforcer', size: 'M', name: 'Syndicate Enforcer', price: 110000, mesh: 'enforcer',
+             dryMass: 45, thrustKN: 3900, thrusterCap: 16, fuelCap: 32,
+             cargoCap: 30, hullMax: 140,
+             slots: { hardpoint: 3, utility: 2, internal: 3 },
+             rackSlots: 2,
+             powerMW: 14.0, fitMass: 16,
+             syndicate: { minStanding: 40 },
+             blurb: 'the mob\'s patrol ship',
+             maker: 'Syndicate yards',
+             about: 'The ship the Syndicate\'s enforcement wing flies ' +
+               'when it collects. Quick, well armoured for her size and ' +
+               'built to carry three guns. The Syndicate sells her only in ' +
+               'ports it holds, and only to captains it already counts as ' +
+               'friends. Ideal for anyone who works for the Syndicate, or ' +
+               'wants to be mistaken for someone who does.' },
+    enforcerheavy: { id: 'enforcerheavy', size: 'M', name: 'Syndicate Heavy', price: 175000, mesh: 'enforcer_heavy',
+             dryMass: 70, thrustKN: 4600, thrusterCap: 20, fuelCap: 40,
+             cargoCap: 30, hullMax: 240,
+             slots: { hardpoint: 4, utility: 2, internal: 4 },
+             rackSlots: 2,
+             powerMW: 18.0, fitMass: 26,
+             syndicate: { minStanding: 70 },
+             blurb: 'bolted-on armour and four guns',
+             maker: 'Syndicate yards',
+             about: 'The enforcer with armour bolted over every flank, sent ' +
+               'when a debt has gone unpaid too long. Four hardpoints and ' +
+               'a hull that shrugs off a patrol\'s first volley. The ' +
+               'Syndicate keeps her for its own: only a captain it trusts ' +
+               'as one of its own can buy one. Ideal for the work the ' +
+               'enforcer is too light for.' },
+    fighter: { id: 'fighter', size: 'S', name: 'Lance Fighter', price: 48000, mesh: 'lance',
+             dryMass: 18, thrustKN: 2200, thrusterCap: 10, fuelCap: 14,
+             cargoCap: 4, hullMax: 60,
+             slots: { hardpoint: 2, utility: 1, internal: 1 },
+             rackSlots: 1,
+             powerMW: 6.0, fitMass: 6,
+             /* The navy's own, like the cutter: a carrier's strike wing. */
+             military: { minStanding: 40 },
+             blurb: 'a carrier\'s strike wing, one seat at a time',
+             maker: 'Fleet yards (any faction\'s)',
+             about: 'The fighter a fleet carrier launches by the dozen. Two ' +
+               'guns, an engine and a seat. There is almost no hold and no ' +
+               'room for anything else. A navy builds one for a captain it ' +
+               'already counts as an ally. Ideal for escort work and for ' +
+               'pilots who fly for the joy of it.' },
+    carrier: { id: 'carrier', size: 'XL', name: 'Fleet Carrier', price: 18000000, mesh: 'carrier',
+             dryMass: 3000, thrustKN: 12000, thrusterCap: 120, fuelCap: 1100,
+             cargoCap: 2000, hullMax: 4000,
+             slots: { hardpoint: 10, utility: 8, internal: 14, capital: 2 },
+             rackSlots: 6,
+             powerMW: 200.0, fitMass: 400,
+             orderOnly: true,
+             military: { minStanding: 85 },
+             /* Astra: "a station that's designed to be able to move, just,
+              * pretty slowly". The thrust above is a capital's on four
+              * times the mass: she turns like a continent. */
+             mobileStation: true,
+             blurb: 'a city that can leave',
+             maker: 'Fleet yards (any faction\'s)',
+             about: 'A fleet carrier: a station built to move, with a ' +
+               'whole fleet\'s stores and a city aboard. She changes course ' +
+               'slowly, because there is so much of her. Only a navy ' +
+               'builds one, and only for a captain it trusts as it trusts ' +
+               'its own admirals. She docks only at shipyards and ' +
+               'highports. Ideal for a captain who wants to take the ' +
+               'station with them.' }
   };
 
   /* Sizes, smallest first. XL is new with the hulls above and is the only
@@ -1596,7 +1749,11 @@
     }
     var hullNow = hullOf(ship);
     ship.seats = seats;
-    if (hullNow) ship.cargoCap = Math.max(0, hullNow.cargoCap - holdCost);
+    /* A Crawler's cubes that hold station crates are not hold (2026-10-20,
+     * construction.js): her freight is whatever containers are left. */
+    var Cn = global.Construction;
+    var crateHold = (Cn && Cn.isCrawler(ship)) ? Cn.crateCubes(Cn.aboard(ship)) * Cn.TONNES_PER_CUBE : 0;
+    if (hullNow) ship.cargoCap = Math.max(0, hullNow.cargoCap - holdCost - crateHold);
     /* Anybody aboard a ship that no longer has a berth for them is put off
      * at the next dock, not vaporised — but the count cannot exceed the
      * berths, or the manifest starts lying. */
@@ -1654,6 +1811,91 @@
    * silent way the respawn bug did. */
   var HULL_STANDARD = ['cargoscoop', 'cruise1'];
   var STARTING_FIT = ['phpulse'].concat(HULL_STANDARD);
+
+  /* ---- THE DEFAULT OUTFIT (2026-10-20) ------------------------------------
+   * Astra: every hull gets "a cost to build, to buy and what the default
+   * outfitting is", and asked what the two prices mean: "Build = bare,
+   * Buy = outfitted". So a hull has two prices:
+   *
+   *   BUILD  `price`: the bare hull, commissioned at a shipyard and
+   *          handed over days later, fitted with whatever you put on the
+   *          order sheet (and HULL_STANDARD, which every hull gets).
+   *   BUY    buyPrice(): off a floor today, with the outfit below in the
+   *          price at nine tenths of list, as a package.
+   *
+   * This is not the gun printer the STARTING_FIT note warns about: the gear
+   * is paid for, at nearly full price. The lists are the maker's own fit —
+   * what the traffic class flies, roughly — and every one is checked to fit
+   * its hull's slots, mass and power (combat.test). */
+  var HULL_STOCK = {
+    talon:     ['phpulse'],
+    dart:      ['phint', 'phint'],
+    kestrel:   ['phint', 'phint', 'shield'],
+    mule:      ['phpulse', 'shield', 'tradescan'],
+    wren:      ['heatshield'],
+    bollard:   ['phpulse', 'shield', 'hullscan'],
+    samaritan: ['phpulse', 'habunit', 'shield', 'hullscan'],
+    sump:      ['phpulse', 'shield'],
+    longhaul:  ['phint', 'phint', 'shield', 'reactor1', 'tradescan'],
+    tanker:    ['phint', 'phint', 'shield', 'reactor1'],
+    cutter:    ['pipulse', 'pipulse', 'piint', 'piint', 'shield', 'reactor2', 'combatscan'],
+    meridian:  ['phint', 'phint', 'habunit', 'habunit', 'habunit', 'shield', 'reactor1'],
+    leviathan: ['phint', 'phint', 'shield', 'reactor1', 'tradescan'],
+    capital:   ['mupulse', 'mupulse', 'pibeam', 'pibeam', 'pibeam', 'pibeam',
+                'shield', 'reactor3', 'combatanalyser'],
+    crawler:   ['phint', 'shield', 'reactor1'],
+    heavytug:      ['phpulse', 'shield', 'hullscan'],
+    heavyshuttle:  ['heatshield', 'habunit'],
+    trader:        ['phint', 'phpulse', 'shield', 'tradescan'],
+    runner:        ['greyphint', 'greyphint', 'phpulse'],
+    enforcer:      ['pipulse', 'pipulse', 'phint', 'shield'],
+    enforcerheavy: ['piint', 'pipulse', 'pipulse', 'phint', 'shield'],
+    fighter:       ['phint', 'phint'],
+    carrier:       ['mupulse', 'mupulse', 'piint', 'piint', 'piint', 'piint',
+                    'shield', 'reactor3', 'combatanalyser']
+  };
+  for (var stockHull in HULLS) HULLS[stockHull].stock = HULL_STOCK[stockHull] || [];
+
+  /* Fit the default outfit into a ship's EMPTY slots — never over anything
+   * already there, so gear moved across in a trade-in stays where it is
+   * and the outfit only fills what is left. Returns what went in and what
+   * it costs at the package share. */
+  function fitStock(ship) {
+    var h = hullOf(ship), added = [], cost = 0;
+    if (!ship.fit) ship.fit = {};
+    var list = (h && h.stock) || [];
+    for (var i = 0; i < list.length; i++) {
+      var it = EQUIPMENT[list[i]];
+      if (!it) continue;
+      var key = firstFreeSlot(ship, it.slot);
+      if (!key) continue;
+      if (!canFit(ship, it.id, key).ok) continue;
+      ship.fit[key] = it.id;
+      added.push(it.id);
+      cost += Math.round((it.price || 0) * 0.9);
+    }
+    return { added: added, cost: cost };
+  }
+
+  /* A bare hull with only HULL_STANDARD bolted on — what the outfit is
+   * fitted around, since the scoop and the cruise drive take their slots
+   * first on every hull that leaves a yard. */
+  function standardProbe(hullId) {
+    var probe = { hullId: hullId, fit: {} };
+    for (var i = 0; i < HULL_STANDARD.length; i++) {
+      var it = EQUIPMENT[HULL_STANDARD[i]];
+      var key = it && firstFreeSlot(probe, it.slot);
+      if (key) probe.fit[key] = it.id;
+    }
+    return probe;
+  }
+
+  /* The floor price: the bare hull and her whole default outfit. */
+  function buyPrice(hullId) {
+    var h = HULLS[hullId];
+    if (!h) return 0;
+    return h.price + fitStock(standardProbe(hullId)).cost;
+  }
 
   /* Fit anything on HULL_STANDARD that this ship is missing. Returns the
    * ids actually added, so a caller can say so rather than leaving the
@@ -6924,6 +7166,7 @@
     /* Built to order or not at all: nobody keeps a liner, a bulk carrier
      * or a warship on the floor on the chance a stranger wants one. */
     if (h.orderOnly || h.military || size === 'XL') return false;
+    if ((h.grey || h.syndicate) && !hullGate(global.Game, port, h).present) return false;
     if (size === 'S') return true;             // a small hull is always for sale
     if (size === 'L' && !landsLarge(port)) return false;
     var R = global.RNG;
@@ -6935,6 +7178,33 @@
     var dev = effectiveDev(global.Game, port);
     var v = (R.hashString('hull|' + port.id + '|' + hullId + '|' + win) % 1000) / 1000;
     return v < hullChance(size, dev);
+  }
+
+  /* THE GREY HULLS' GATE (2026-10-20, Astra: Syndicate-gated). Is this
+   * hull sold here at all (`present`), and if so, will they sell it to you
+   * (`why` is the refusal, or null)? The same two gates the grey and the
+   * Syndicate-issue guns pass through in stockAt:
+   *   grey       only where corruption reaches minCorrupt;
+   *   syndicate  only where the Syndicate holds the port, and only to a
+   *              captain whose standing with `outlaw` reaches minStanding
+   *              and whom they do not want. */
+  function hullGate(G, port, h) {
+    if (!h || !(h.grey || h.syndicate)) return { present: true, why: null };
+    if (!port) return { present: false, why: 'only on the clamps' };
+    if (h.syndicate) {
+      if ((port.faction || 'civil') !== 'outlaw') return { present: false, why: 'the Syndicate sells these only in ports it holds' };
+      if (G && wantedHere(G, 'outlaw')) return { present: true, why: 'they will not sell one to someone they want' };
+      var st = (G && G.standing && G.standing.outlaw) || 0;
+      if (st < (h.syndicate.minStanding || 0)) {
+        return { present: true, why: 'needs ' + h.syndicate.minStanding + '+ standing with the Syndicate — you have ' + Math.round(st) };
+      }
+      return { present: true, why: null };
+    }
+    var sys = G && G.sys;
+    var crime = sys ? effectiveCrime(G, sys) : 0;
+    var corrupt = sys ? effectiveCorruption(G, sys.corruption !== undefined ? sys.corruption : crime) : 0;
+    if (corrupt < (h.grey.minCorrupt || 0)) return { present: false, why: 'nobody sells a runner where the law cannot be bought' };
+    return { present: true, why: null };
   }
 
   /* Everything this dock has today, in catalogue order. */
@@ -6995,6 +7265,8 @@
     if (!isShipyard(port)) return 'only a shipyard builds to order';
     var enc = lienRefusal(G);
     if (enc) return enc;
+    var gate = hullGate(G, port, h);
+    if (!gate.present || gate.why) return gate.why;
     if (h.military) {
       var fac = port.faction;
       if (!fac || fac === 'outlaw' || fac === 'civil') return 'a navy builds these, and this yard is nobody\'s navy';
@@ -7010,53 +7282,37 @@
     return null;
   }
 
-  /* Everything a shipyard will build to order: every L and XL hull, each
-   * with a verdict — a locked warship is a goal, a missing one a bug. */
+  /* Everything a shipyard will build to order, each with a verdict — a
+   * locked warship is a goal, a missing one a bug. */
   function orderList(G, port) {
     var out = [];
     if (!isShipyard(port)) return out;
+    /* EVERY hull, since 2026-10-20: each one has a build price (Astra:
+     * "a cost to build, to buy"), so a shipyard will build any of them. A
+     * grey hull this yard does not deal in at all is left off the list
+     * rather than shown locked — the yard would not admit to it. */
     for (var id in HULLS) {
-      if (!bigHull(id)) continue;
+      var hg = hullGate(G, port, HULLS[id]);
+      if (!hg.present) continue;
       out.push({ id: id, why: orderRefusal(G, port, id) });
     }
     out.sort(function (a, b) { return HULLS[a.id].price - HULLS[b.id].price; });
     return out;
   }
 
-  /* WHAT A LARGE HULL ON THE FLOOR COMES WITH. The dock fitted her out of
-   * its own shelf — deterministic per port, hull and two-day window, like
-   * the floor itself — and she is sold with it, at nine tenths of list for
-   * the gear because it is a package. Only items this dock would sell you
-   * anyway, so a floor ship never carries something the shelf beside it
-   * would refuse to. */
+  /* WHAT A HULL ON THE FLOOR COMES WITH, and at what share of list. */
   var STOCK_GEAR_SHARE = 0.9;
+  /* BUY = OUTFITTED (Astra, 2026-10-20: "Build = bare, Buy = outfitted").
+   * A hull off the floor comes with her DEFAULT OUTFIT — `HULL_STOCK`,
+   * the maker's own fit, the same on every floor — and the gear is in the
+   * price at nine tenths, as a package. This replaced a fit the dock
+   * rolled out of its own shelf, which made the same hull a different
+   * ship at every port and left the yard unable to say what she came with.
+   * (`G`, `port` and `t` are kept in the signature for the callers.) */
   function stockFit(G, port, hullId, t) {
-    var h = HULLS[hullId];
-    var probe = { hullId: hullId, fit: {} };
-    var cost = 0, items = [];
-    if (!h || !port) return { fit: probe.fit, gear: 0, items: items };
-    var shelf = stockAt(G, port).filter(function (e) {
-      var k = e.item.kind;
-      return e.available && k !== 'missile' && k !== 'sink' && !e.item.grey;
-    });
-    var R = global.RNG;
-    var win = Math.floor((t || 0) / HULL_WINDOW);
-    var keys = slotKeys(probe);
-    for (var i = 0; i < keys.length; i++) {
-      var type = slotType(keys[i]);
-      var fits = shelf.filter(function (e) { return e.item.slot === type; });
-      if (!fits.length) continue;
-      var hsh = (R && R.hashString ? R.hashString('stock|' + port.id + '|' + hullId + '|' + win + '|' + keys[i]) : i * 7919) >>> 0;
-      if ((hsh % 100) >= 70) continue;                  // some bays left empty
-      fits.sort(function (a, b) { return a.item.price - b.item.price; });
-      var pick = fits[(hsh >>> 8) % fits.length];
-      var v = canFit(probe, pick.item.id, keys[i]);
-      if (!v.ok) continue;
-      probe.fit[keys[i]] = pick.item.id;
-      cost += Math.round(pick.item.price * STOCK_GEAR_SHARE);
-      items.push(pick.item.id);
-    }
-    return { fit: probe.fit, gear: cost, items: items };
+    var probe = standardProbe(hullId);
+    var r = fitStock(probe);
+    return { fit: probe.fit, gear: r.cost, items: r.added };
   }
 
   /* Seven tenths, the trade-in fraction, for gear handed in with a hull —
@@ -7449,6 +7705,38 @@
     return out;
   }
 
+  /* The default outfit laid over the gear that is moving across: the
+   * scoop and cruise drive's slots reserved first (and handed back empty,
+   * for addHullStandard to fill and report), then the outfit into whatever
+   * is left. */
+  function outfitOver(hullId, movedFit) {
+    var probe = { hullId: hullId, fit: {} };
+    for (var mk in (movedFit || {})) probe.fit[mk] = movedFit[mk];
+    var reserved = [];
+    for (var hs = 0; hs < HULL_STANDARD.length; hs++) {
+      if (hasFitted(probe, HULL_STANDARD[hs])) continue;
+      var it = EQUIPMENT[HULL_STANDARD[hs]];
+      var key = it && firstFreeSlot(probe, it.slot);
+      if (key) { probe.fit[key] = it.id; reserved.push(key); }
+    }
+    var r = fitStock(probe);
+    for (var rk = 0; rk < reserved.length; rk++) delete probe.fit[reserved[rk]];
+    return { fit: probe.fit, cost: r.cost, added: r.added };
+  }
+
+  /* What the floor will charge for her, by buyHull's own arithmetic, for
+   * the yard card to print before you press anything. Small and medium
+   * hulls only — a large one is quoted through stockFit. */
+  function floorQuote(G, hullId, keep) {
+    var s = G.ship, to = HULLS[hullId], from = HULLS[s.hullId || 'talon'];
+    if (!to) return { ok: false, cost: 0, outfit: [] };
+    var base = keep ? to.price : to.price - Math.round(from.price * 0.7);
+    var moved = keep ? { ok: true, fit: {} } : replanFit(s, to);
+    if (!moved.ok) return { ok: false, why: moved.why, cost: base, outfit: [] };
+    var o = outfitOver(hullId, moved.fit);
+    return { ok: true, cost: base + o.cost, outfit: o.added, outfitCost: o.cost };
+  }
+
   function buyHull(G, hullId, keep, opts) {
     var s = G.ship;
     var to = HULLS[hullId], from = HULLS[s.hullId || 'talon'];
@@ -7468,6 +7756,8 @@
     if (to.orderOnly || to.military) {
       return { ok: false, why: 'the ' + to.name + ' is built to order — commission her at a shipyard' };
     }
+    var gate = hullGate(G, port, to);
+    if (!gate.present || gate.why) return { ok: false, why: gate.why };
     var plan = null;
     if (bigHull(to.id) && port) {
       if (!hullOnFloor(port, to.id, G.t)) {
@@ -7477,7 +7767,7 @@
       }
       var sf = stockFit(G, port, to.id, G.t);
       var credit = keep ? 0 : Math.round(from.price * TRADE_IN) + gearValue(s, null);
-      plan = { mode: 'stock', fit: sf.fit, moved: {}, cost: to.price + sf.gear - credit };
+      plan = { mode: 'stock', fit: sf.fit, moved: {}, cost: to.price + sf.gear - credit, items: sf.items };
     }
     var cost = plan ? plan.cost : (keep ? to.price : to.price - Math.round(from.price * 0.7));
     if (cost > 0 && s.credits < cost) return { ok: false, why: 'need ' + cost + ' cr' };
@@ -7497,6 +7787,19 @@
     var moved = plan ? { ok: true, fit: plan.fit, moved: plan.moved }
               : keep ? { ok: true, fit: {}, moved: {} } : replanFit(s, to);
     if (!moved.ok) return { ok: false, why: moved.why };
+    /* BUY = OUTFITTED (2026-10-20). A hull off the floor arrives with her
+     * default outfit in whatever slots your own gear did not take, and the
+     * outfit is in the price. The scoop and cruise drive keep the slots
+     * they always get (they are reserved here, then left for
+     * addHullStandard below so it can still report them). The large-hull
+     * floor (`plan`) already carries the outfit, from stockFit. */
+    var outfit = null;
+    if (!plan) {
+      outfit = outfitOver(to.id, moved.fit);
+      cost += outfit.cost;
+      if (cost > 0 && s.credits < cost) return { ok: false, why: 'need ' + cost + ' cr' };
+      moved = { ok: true, fit: outfit.fit, moved: moved.moved };
+    }
     var parked = null;
     if (keep) {
       /* A ship you are keeping has to be SOMEWHERE, and the only place a
@@ -7575,7 +7878,8 @@
     var fitted = addHullStandard(s);
     syncLegacy(s);
     global.Sim.refreshShip(s);
-    return { ok: true, cost: cost, standard: fitted, parked: parked, mode: plan ? plan.mode : 'floor' };
+    return { ok: true, cost: cost, standard: fitted, parked: parked, mode: plan ? plan.mode : 'floor',
+             outfit: outfit ? outfit.added : (plan && plan.items) || [] };
   }
 
   /* ---- commissioning: a hull built for you (2026-10-19) -------------------
@@ -7597,8 +7901,12 @@
    *
    * Build time, in days, by size: a few days for a large hull, over a week
    * for an extra-large one, a fortnight for a capital ship. */
-  var BUILD_DAYS = { L: 3, XL: 8 };
+  /* S and M added 2026-10-20, when every hull got a build price: a day for
+   * a small hull, two for a medium. A fleet carrier is a month: she is a
+   * station. */
+  var BUILD_DAYS = { S: 1, M: 2, L: 3, XL: 8 };
   var BUILD_DAYS_CAPITAL = 14;
+  var BUILD_DAYS_CARRIER = 30;
   var DAY = 86400;
   /* What the yard covers on the clamp once she is handed over: a week, so
    * a pilot three stars away is not billed for a ship they have never
@@ -7608,6 +7916,7 @@
   function buildDays(hullId) {
     var h = HULLS[hullId];
     if (!h) return 0;
+    if (h.mobileStation) return BUILD_DAYS_CARRIER;                          // a fleet carrier
     if (h.military && sizeOf(hullId) === 'XL') return BUILD_DAYS_CAPITAL;   // a capital warship
     return BUILD_DAYS[sizeOf(hullId)] || 0;
   }
@@ -7624,7 +7933,6 @@
   function quoteCommission(G, hullId, sheet) {
     var port = dockedPort(G);
     if (!port || !isShipyard(port)) return { ok: false, why: 'only a shipyard builds to order' };
-    if (!bigHull(hullId)) return { ok: false, why: 'small and medium hulls come off the floor' };
     var q = quoteOrder(G, port, hullId,
                        { fit: commissionFit(sheet && sheet.fit), keep: true, commission: true });
     q.days = buildDays(hullId);
@@ -7728,7 +8036,7 @@
    * a parked record has nowhere to keep a station module. So the modules
    * come off at a yard before anybody leaves her (construction.js). */
   function modulesAboardRefusal() {
-    return 'station modules are still in her truss — lift them off at a shipyard first';
+    return 'station crates are still in her truss — lift them off at a shipyard first';
   }
 
   function tradeInValue(s) {
@@ -7789,6 +8097,7 @@
     s.shipName = rec.name || null;
     s.reg = rec.reg || null;
     s.paint = rec.paint || null;
+    s.craftBay = rec.craftBay || null;
     syncLegacy(s);
     if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(s);
     return { ok: true, mode: mode, parked: parked, credit: credit, name: rec.name, hull: h };
@@ -7800,6 +8109,7 @@
   function stripForRespawn(ship) {
     ship.cargo = {};
     ship.paint = null;              // the new Talon is yard grey
+    ship.craftBay = null;           // and has no craft bay
     /* AND THE PEOPLE. The hull is gone and they were in it. Leaving the
      * roster standing would have you paying a gunner who went down with
      * the ship, which is the payroll finding the bug for you — and a crew
@@ -7954,6 +8264,9 @@
     HULL_SIZES: HULL_SIZES, sizeOf: sizeOf, bigHull: bigHull, isShipyard: isShipyard,
     takesXL: takesXL, yardRefusal: yardRefusal, orderRefusal: orderRefusal,
     orderList: orderList, stockFit: stockFit, quoteOrder: quoteOrder,
+    HULL_STOCK: HULL_STOCK, fitStock: fitStock, standardProbe: standardProbe, buyPrice: buyPrice,
+    hullGate: hullGate, BUILD_DAYS_CARRIER: BUILD_DAYS_CARRIER,
+    outfitOver: outfitOver, floorQuote: floorQuote,
     commission: commission, quoteCommission: quoteCommission, buildDays: buildDays,
     orders: orders, orderEta: orderEta, deliverOrders: deliverOrders,
     takeCommand: takeCommand, commandRefusal: commandRefusal, tradeInValue: tradeInValue,

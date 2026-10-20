@@ -38,6 +38,21 @@ function check(name, cond, detail) {
 function section(t) { console.log('\n' + t); }
 
 /* A minimal player-shaped G, orbiting a real planet in a real system. */
+/* BUY = OUTFITTED since 2026-10-20: a hull off the floor arrives with her
+ * default outfit. The sections below test the fitting rules themselves
+ * (budgets, fire groups), so they start from what the old floor sold:
+ * the gear you brought, and nothing the yard added. */
+function buyBare(G, id, keep, opts) {
+  var r = Combat.buyHull(G, id, keep, opts);
+  var left = ((r && r.outfit) || []).slice(), fit = G.ship.fit || {};
+  Object.keys(fit).reverse().forEach(function (k) {
+    var i = left.indexOf(fit[k]);
+    if (i >= 0) { left.splice(i, 1); delete fit[k]; }
+  });
+  Combat.syncLegacy(G.ship);
+  return r;
+}
+
 function makeG(deepSpace) {
   var sys = Gen.generateSystem('kawartha');
   var planet = sys.bodies.filter(function (b) { return b.kind === 'planet'; })[0];
@@ -702,7 +717,7 @@ section('--- slots, power and mass ---');
    * sharper statement of the tradeoff than the design went looking for. */
   var K = makeG();
   K.ship.credits = 500000;
-  Combat.buyHull(K, 'kestrel');
+  buyBare(K, 'kestrel');
   check('a Kestrel cannot run a Class 3 beam alongside its starter gun',
         !Combat.canFit(K.ship, 'mubeam').ok);
   Combat.sellFitted(K, 'hardpoint0');
@@ -736,7 +751,7 @@ section('--- slots, power and mass ---');
    * mass budget the binding constraint instead of a decoration. */
   var Rk = makeG();
   Rk.ship.credits = 500000;
-  Combat.buyHull(Rk, 'kestrel');
+  buyBare(Rk, 'kestrel');
   Combat.sellFitted(Rk, 'hardpoint0');
   /* The cargo scoop comes off too, and that is the point rather than a
    * workaround. A Class 3 beam (9 t), a Mk II reactor (9 t) and a shield
@@ -998,7 +1013,10 @@ section('--- buying hulls ---');
   G.ship.credits = 200000;
   var before = G.ship.credits;
   var r = Combat.buyHull(G, 'mule');
-  var expected = Combat.HULLS.mule.price - Math.round(Combat.HULLS.talon.price * 0.7);
+  /* Plus her default outfit, at nine tenths: buy = outfitted. */
+  var outfitCost = (r.outfit || []).reduce(function (n, id) {
+    return n + Math.round(Combat.EQUIPMENT[id].price * 0.9); }, 0);
+  var expected = Combat.HULLS.mule.price - Math.round(Combat.HULLS.talon.price * 0.7) + outfitCost;
   check('the trade-in maths is honest', r.ok && before - G.ship.credits === expected,
         (before - G.ship.credits) + ' vs ' + expected);
   check('the new hull is whole and fitted numbers moved over',
@@ -1050,7 +1068,7 @@ section('--- fire groups ---');
 (function () {
   var G = makeG();
   G.ship.credits = 200000;
-  Combat.buyHull(G, 'kestrel');            // three hardpoints to play with
+  buyBare(G, 'kestrel');            // three hardpoints to play with
   Combat.buyEquipment(G, 'phbeam', 'hardpoint1');
 
   check('a fresh ship puts everything on the primary trigger',
@@ -1077,7 +1095,7 @@ section('--- fire groups ---');
    * one would have made the second gun do nothing at all. */
   var pair = makeG();
   pair.ship.credits = 200000;
-  Combat.buyHull(pair, 'kestrel');
+  buyBare(pair, 'kestrel');
   Combat.buyEquipment(pair, 'phpulse', 'hardpoint1');
   var prey = fakeVictim(pair, { range: 2 });
   pair.ship.fwd = V.norm(V.sub(prey.live.pos, pair.ship.pos));
@@ -1094,10 +1112,10 @@ section('--- fire groups ---');
    * slot has to travel with the gear when the hull changes under it. */
   var swap = makeG();
   swap.ship.credits = 200000;
-  Combat.buyHull(swap, 'kestrel');
+  buyBare(swap, 'kestrel');
   Combat.buyEquipment(swap, 'phbeam', 'hardpoint1');
   Combat.setGroup(swap.ship, 'hardpoint1', 'b');
-  Combat.buyHull(swap, 'talon');
+  buyBare(swap, 'talon');
   check('a gun keeps its trigger across a hull change',
         Combat.gunsInGroup(swap.ship, 'b').length === 1 &&
         Combat.gunsInGroup(swap.ship, 'b')[0].item.id === 'phbeam',

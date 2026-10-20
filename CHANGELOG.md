@@ -16,53 +16,240 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
-- **The Crawler, a station constructor, and station modules
-  (2026-10-20).** Astra: *"This is the new station-constructor, called the
-  Crawler. There's only one size, and it ships one L size module or two M
-  size modules or up to three S size modules, but you have to build the L
-  size first, to start hauling more freight in, otherwise you're just
-  stitching ship hulls together."* Her answers:
-  - The L module is the station's **core**. M and S modules bolt onto it
-    and add functions. This replaces the old plan of growing a station
-    S → M → L.
-  - A Crawler is **bought or hired**.
-  - Modules are **built at a shipyard**.
-  This is the first slice. Founding a station from a core comes next. See
-  `claude/crawler-and-station-modules.md`.
-  - **The models.** Astra's three liveries (civilian, navy, Syndicate)
-    are in the hull library: `ref/glb/crawler_*.glb` → `src/hulls.js`.
-    No other hull changed. She is about 454 m long, with a truss of 24
-    cargo containers. The models have no cockpit interior or landing gear
-    yet, and all three carry the registration AE-2696 in their geometry.
-  - **The hull.** XL, built to order at a shipyard only (8 days on the
-    slip), 450,000 cr. 120 t hold, needs a crew, never on a floor. Price
-    and stats are my first numbers; say if you want them different.
-  - **Modules, on a new MODULES tab** (shown at shipyards, in a Crawler,
-    or once you own one):
-    - **L:** Station core, 240,000 cr, 6 days. You pick its pattern
-      (cylinder, spine, ring or cradle) with ▶.
-    - **M**, 3 days each: market hall, refinery line, hab ring, repair
-      dock, warehouse.
-    - **S**, 1 day each: extra berth, defence battery, comms relay, fuel
-      store.
-    - You pay when you order, and the module waits at that yard when it is
-      done. The yard calls when it is ready.
-    - **The core comes first:** until you own one, the M and S rows say
-      "a station starts as an L core — order the core first".
-    - The catalogue and prices are my pick; change anything.
-  - **Loading.** In a Crawler at the yard, click a ready module to crane
-    it aboard, and click one in the bay to lift it off. Only a shipyard can
-    do either.
-    - The bay holds one L, two M or three S. That is counted as weights 6,
-      3 and 2 in a bay of 6, so one M and one S also fit together. You
-      didn't say either way; tell me if that should be refused.
-    - Modules aboard are lost with the Crawler.
-    - You can't trade her in, swap out of her, or keep her as a fleet ship
-      while modules are aboard: lift them off first.
-  - **Saves:** the modules and what is in the truss are saved. Older
-    careers load owning none.
-  - Also fixed: a commissioned hull now leaves the yard with a
-    registration (it had none).
+- **The Crawler: the first bay of a station, and the crates it carries
+  (2026-10-20).** Astra, over the day:
+  - *"This is the new station-constructor, called the Crawler. There's only
+    one size."*
+  - *"crawlers be the frame for L size bays, so they become the first bay in
+    a station, and carry the station's components, for if it's to be a
+    skimmer or a shipyard. To get the XL sized shipyards, we stitch two
+    crawlers together."*
+  - *"6 to a cube for S modules and 4 for M modules, 2 for L modules and 1
+    for XL modules which are station component crates."*
+  - On freight: *"we have dedicated cargo haulers for that, right? I want to
+    see both in game."*
+
+  Her answers: a Crawler that becomes a station is **permanent**; every
+  player-buildable station type comes from a Crawler plus the right crates;
+  Crawlers can **chain**, more than two. This is the first slice. Founding
+  and stitching come next (`claude/crawler-and-station-modules.md`).
+  - **The Crawler is the station's first L bay**, so there is no separate
+    core module. You can only order crates once you have a Crawler
+    (flying, in your fleet, or on the slip). That is your "L first" rule.
+  - **The models.** Your three liveries are in the hull library, imported
+    as the bare frame. The originals are kept in `ref/crawler-src/`. No
+    other hull changed.
+  - **Her 24 cubes, drawn as what they hold:**
+    - her own container when it holds freight;
+    - yellow station crates (navy and Syndicate in their own colours);
+    - nothing when empty.
+    A full Crawler rebuilt this way is exactly your model, face for face.
+  - **Packing.** A cube holds 6 S, 4 M, 2 L or 1 XL crates, one size per
+    cube. Any cube without crates is 25 t of freight, so an empty Crawler
+    has a 600 t hold. That is less than a Leviathan, so the haulers stay
+    the better freighters. The hold shrinks as crates take cubes.
+  - **The hull.** XL, built to order at a shipyard (8 days),
+    450,000 cr, needs a crew, never sold ready-built.
+  - **Crates, on the yard's MODULES tab.** Paid when ordered, built with
+    build time, and waiting at that yard when done.
+    - XL: slipway.
+    - L: skimmer rig, refinery line, ore works, market hall, hab ring.
+    - M: warehouse, repair dock, reactor pile, crew quarters.
+    - S: berth clamp, defence battery, comms relay, fuel cell.
+    In a Crawler at the yard, click a crate to crane it aboard (▶) or lift
+    it off. The tab shows her cubes as crates / freight / empty. Crates
+    aboard are lost with her, and you must lift them off before you trade
+    her in or step into another ship. **The catalogue and prices are my
+    pick.**
+  - **Crates cost about what a mid-tier ship does** (Astra: *"modules are
+    like the price of mid tier ships each, so building out a large size
+    station is an expensive, but often worthwhile goal"*):
+    - S: 60–75k;
+    - M: 80–110k;
+    - L: 120–165k;
+    - the XL slipway: 200k.
+
+    A Crawler plus a slipway, two L, four M and six S comes to about
+    1.7 million.
+  - **Her bay door and her small-craft bay** (Astra: *"it's on the bottom
+    of the crawler and I'm building the model for us now. It will also have
+    a docking bay L size for two tugs and one shuttle, for bringing shit
+    from orbit down to the surface for surface ports."*):
+    - a garage-style door on her **underside**, one leaf sliding up behind
+      the other, usable only once a station is being built;
+    - her own **M craft bay with three S slots**. Her craft ferry crates
+      from orbit down to surface ports. A **tug is always required**,
+      because only tugs have grab arms to move parts out of the crates in
+      orbit. A bigger (M) shuttle takes two slots. That gives three
+      loadouts:
+      - standard: 2 tugs + 1 shuttle;
+      - orbital push: 3 tugs, faster in orbit;
+      - planetary push: 1 tug + the M shuttle, faster on the surface.
+    The door and the bay's geometry wait on Astra's re-exported model.
+  - **Her craft bay, in the rules (2026-10-20).** Astra: *"More tugs speed
+    up the work, giving buying them a purpose at all."*
+    - Every Crawler comes with the standard bay. At a shipyard, the
+      MODULES tab offers a ▶ refit to each of the other loadouts. New craft
+      cost full price; departing craft come back at seven tenths (standard
+      → orbital push is 31,400 cr). Her crew flies them.
+    - Claude's first rates: a tug unpacks 1.5 cubes a day in orbit; a Wren
+      shuttle ferries 1 cube a day down to a surface site, the heavy
+      shuttle 2.5. The tab shows how many days this load would take in
+      orbit and on a surface with each bay. With no tug it can't build;
+      with no shuttle it can't reach a surface.
+    - The bay is saved, follows her into the fleet and back, and is lost
+      with her.
+    - **Her bay only ever carries her tugs and shuttles** (Astra: *"that
+      way we don't have custom-ship-won't-fit problems later."*). No
+      player ship, fleet hull or future modular ship docks in it.
+      `Construction.bayTakes` is the one check.
+    - **The M tug** (Astra: *"there's also an M size tug in the models we
+      currently have, and one of those unloads it a higher speed, but not
+      double."*). The Heavy tug (art: tug-m) unpacks 2.25 cubes a day,
+      half again an S tug, and costs 66,000 cr.
+    - **The pads decide what fits** (Astra chose this from her re-exported
+      model). The bay has two S pads by the door and one M pad further in.
+      An S pad takes an S craft; the M pad takes one M craft or one S
+      craft. This replaced "three S slots, an M craft takes two". The
+      loadouts, with their refit price from standard:
+
+      | loadout | craft | orbit | surface | refit |
+      | :-- | :-- | --: | --: | --: |
+      | Standard | 2 tugs + Wren | 3.0 | 1.0 | — |
+      | Orbital push | 3 tugs | 4.5 | — | 31,400 |
+      | Planetary push | 2 tugs + heavy shuttle | 3.0 | 2.5 | 47,400 |
+      | Heavy tug | tug + Wren + heavy tug | 3.75 | 1.0 | 35,200 |
+      | Heavy orbital | 2 tugs + heavy tug | 5.25 | — | 53,400 |
+
+      Rates are cubes a day; "—" means it can't supply a surface site.
+  - **What a load founds (2026-10-20), the agreed bill of crates:**
+    - market: market + warehouse;
+    - refinery: refinery + warehouse;
+    - skimmer: skim rig + refinery;
+    - mining: ore works + warehouse;
+    - passenger hab: hab ring + two berths;
+    - shipyard: slipway + repair;
+    - XL shipyard: slipway + repair, two Crawlers stitched.
+    Every one also needs Crew quarters. The MODULES tab shows ✓ for each
+    type her load can found, or what it still needs. Founding itself,
+    where she becomes the first L bay, is the next slice.
+  - **Astra's re-exported Crawler is in (2026-10-20)**
+    (`new models/20-10-2026/crawler_allLiveries_14of24.glb`, kept as
+    `ref/crawler-src/crawler_allLiveries_14of24.glb`):
+    - She's 478 m long now (was 454), 153 m wide, 204 m tall.
+    - The one file holds all three liveries. It is split into
+      `ref/glb/crawler_{civilian,navy,syndicate}.glb`, each with its cargo
+      detached, and `src/hulls.js` is regenerated (57 models).
+    - The generator's own state rode along in the file's extras: all 24
+      cubes and every part as Three.js JSON, 7.5 MB of the 9.5 MB. It is
+      stripped on import.
+    - The file draws 14 of the 24 cubes. All 24 centres were re-measured
+      from the generator's cube list, so the game still draws every cube
+      by what it holds.
+    - New in the model, not yet working in the game:
+      - the L berth in her belly, with its pad and two bottom leaves;
+      - the stern craft bay, with its roll-up door and pads `padS0`,
+        `padS1` and `padM`;
+      - 12 tug grab points along her flanks.
+    - Fixed in passing: the "frame carries no containers" test was a face
+      count, which every re-export broke. It now looks for geometry inside
+      a cube's volume.
+  - **Saves:** crates and what is in her cubes are saved. Older careers
+    load with none.
+  - Also: a commissioned hull now leaves the yard with a registration (it
+    had none).
+
+- **On foot in a station (2026-10-20), first slice.** Astra: *"full first
+  person walking. We do need to model station interiors to walk in. We
+  also want to be able to talk to NPC characters who are also on site."*
+  - **O**, while docked, stands you up out of the seat into your berth.
+  - Moving: **WASD** to walk, **Shift** to run, drag or the arrow keys to
+    look.
+  - **E** uses what you face:
+    - your own hatch takes you back to the cockpit;
+    - another of your ships berthed here makes you take command of her,
+      and the ship you walked off stays on her clamp;
+    - the market desk, the shipyard counter and the crew hall board open
+      their screens. The F-keys still work too (Astra: keep both).
+  - **The station is code-built from the seed** (Astra: code-built now,
+    her generator's modules later), so a port is the same building every
+    visit. `src/walk.js` builds it:
+    - the L docking port and its double doors;
+    - a spine corridor, with berths off both sides that get smaller the
+      further they are from the L port, as Astra laid stations out;
+    - a concourse with the bar, the market desk and the yard counter;
+    - the crew hall.
+  - Rooms are boxes. **The doors are the only way between rooms**, and
+    you slide along walls.
+  - Each of your ships in port gets a berth of her own size, with a lit
+    hatch.
+  - The world keeps running while you walk. Flight keys are held away from
+    the ship, so U on foot does not launch her.
+  - Not yet: the people. The bar says it is quiet for now. NPCs and talking
+    to them, the Syndicate contact, and the shuttle's docking tube come
+    next (`claude/walking-stations.md`).
+  - Tests: `test/walk.test.js` (26 checks: same plan every visit, every
+    room reachable from your berth, walls stop you and doors don't, berths
+    descend in size, a hatch for every ship of yours). Checked in the real
+    shell by `tools/probe-walk.js`: step out, walk, board the other ship.
+
+- **Every ship in the sky can be flown, built and bought (2026-10-20).**
+  Astra: *"I want any other non-buyable non-flyable ship type updated with
+  a cockpit, a model name and a cost to build, to buy and what the default
+  outfitting is"*, with *"Build = bare, Buy = outfitted"*, and *"the
+  number of crew required to operate each one without the player flying
+  it."*
+  - **Eight new hulls**, all Claude's first numbers:
+
+    | hull | size | model | build | buy | crew* | sold |
+    | :-- | :-- | :-- | --: | --: | :-: | :-- |
+    | Hawser Heavy Tug | M | tug-m | 66,000 | 73,110 | 2 | floor |
+    | Heron Heavy Shuttle | M | shuttle-m | 60,000 | 76,290 | 2 | floor |
+    | Tallyman Trader | M | trader-m | 72,000 | 85,680 | 2 | floor |
+    | Corsair Runner | M | runner-m | 68,000 | 70,800 | 3 | floor where corruption ≥ 60 |
+    | Syndicate Enforcer | M | enforcer-m | 110,000 | 121,970 | 3 | Syndicate ports, standing 40 |
+    | Syndicate Heavy | M | enforcer_heavy-m | 175,000 | 192,550 | 3 | Syndicate ports, standing 70 |
+    | Lance Fighter | S | fighter-s | 48,000 | 51,060 | 1 | built for navy allies (40) |
+    | Fleet Carrier | XL | carrier-l | 18,000,000 | 18,112,140 | 10 | built for navy at 85; 30 days |
+
+    \*Crew is what she takes with nobody else flying her; one fewer with
+    you at the helm.
+  - The Hawser and Heron are the Crawler's bay craft, now flyable, at the
+    same prices. The carrier is the slow, mobile station Astra described
+    (*"pretty slowly because the inertia of carrying a whole fleet's worth
+    of shit takes a while to change"*): a capital's thrust on four times
+    the mass.
+  - **Build = bare, buy = outfitted, for every hull.** Each hull now has a
+    default outfit (`HULL_STOCK`, combat.js); its gear is in the floor
+    price at nine tenths.
+    - Off the floor, your own gear still moves across, and the outfit
+      fills whatever slots are left.
+    - A large hull off a floor now carries that outfit, not a random fit
+      from the dock's shelf.
+    - Every shipyard builds every hull to order, bare, in 1 day (S),
+      2 (M), 3 (L), 8 (XL), 14 (a capital) or 30 (a carrier).
+    - The yard card shows build, buy and crew on one line, and floor rows
+      name what she comes with.
+  - **Crew per hull** (`Crew.crewNeeded`):
+    - a pilot, unless you fly her;
+    - engineers: none on S, 1 on M, 2 on L, 3 on XL plus 1 per 1,000 t;
+    - a gunner per two guns beyond the forward pair the pilot fires on
+      S and M (every gun on L and XL), two per capital mount, and one per
+      turret.
+  - **Cockpits:** every new hull has its own bridge. The Bollard and the
+    Hawser draw their grab arms from the seat: two booms along the lower
+    corners of the windscreen, caution-striped forearms angling in, and
+    open jaws ahead (`render.js drawGrabArms`). The jaws stay open until
+    there is a player tow for them to close on.
+  - Grey and Syndicate hulls pass the same gates as the grey and
+    Syndicate-issue guns (`Combat.hullGate`).
+  - Note: the Sump waste hauler also wears tug-m, so it and the Hawser
+    share a silhouette.
+  - Tests: shipyard (outfits fit, prices, a cockpit and a model for every
+    hull, gates), crew (hands per hull), construction (craft are real
+    hulls). The combat suite's fitting tests now start from a bare hull
+    (`buyBare`).
+
 - **A ship built to order takes time to build (2026-10-19).** Astra:
   *"Build time for a ship is realistic, and lets you anticipate the use
   of your new ship even if you get blown up in your current one."*
@@ -170,6 +357,20 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
   - **How often:** measured across 800 samples, about 1.7 wakes per system
     at any moment, half of them departures, and about one departure a day
     per system.
+  - **Tears and clouds linger for hours, and decay (2026-10-20).** Astra
+    wanted them to last "hours, not minutes", and to "slowly fade and
+    shrink over the time it does show in system; almost like radioactive
+    decay".
+    - *The decay:* `Slip.wakeDecay` gives a wake a 6-hour half-life over
+      its 16-hour life. It is shifted so it lands on exactly zero at 16
+      hours instead of popping out. That is about 65% at 3 hours, 28% at
+      8 and 11% at 12.
+    - *What decays:* the cloud's drawn brightness (`glow`), its size (the
+      hole closes to a quarter of its torn width) and the rift in its
+      middle all follow that one curve. The rift used to vanish after 15
+      minutes; it is now open for the wake's whole life.
+    - *What doesn't:* scan fidelity still reads the old `strength`, so
+      nothing in the wake-hunting balance moves.
 
 - **Every ship type is for sale, and shipyards build large ones to order
   (2026-10-19).** Astra: *"I also want the player to be able to purchase
@@ -670,6 +871,28 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
   skimmer's and spine's cars stay at rest. `test/transfer.test.js`.
 
 ### Changed
+
+- **No more force fields: every station that had one has sliding doors
+  now (2026-10-20).** Astra: *"air locks to keep stations pressurized
+  (let's get rid of the force fields)"*.
+  - **Which stations:** 24 of the 96 station models still sealed a bay
+    with a force field. They are every refinery and skimmer station and
+    the mountain, runway and runway-city ground sites. The other 72
+    already had real doors.
+  - **What replaces each field:** a pair of door leaves, cut to the
+    field's own size. They split down the long side of the opening, with
+    a hazard stripe on the meeting edge, and slide apart until the
+    opening is clear.
+  - **They behave like real doors:** you can hit them where they stand,
+    and they open in the same airlock cycle the berth already runs
+    (outer gate, then inner, never both).
+  - **Internal gates:** two gates inside the big skimmers stand at right
+    angles to their berth. They became internal doors that open with the
+    station, like the cradle's lift-well gate.
+  - **Roll-up garage slats at the yards are unchanged.**
+  - `berths.test.js` now fails if any force field survives anywhere.
+  - Station modules drawn from your generator will bring their own
+    airlocks.
 
 - **Milfuel shelves hold at most 18 t, down from 24 (2026-10-19).** Twilight
   worlds settled more of the galaxy, so licensed plants made more. The

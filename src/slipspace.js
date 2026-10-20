@@ -672,6 +672,19 @@
    * life put the wrong one of those in the player's way. */
   var WAKE_LIFE = 16 * 3600;         // seconds until it is gone entirely
   var WAKE_SCAN_RANGE = 240000;      // km — you have to go and look
+  var WAKE_HALF_LIFE = 6 * 3600;     // seconds — how a wake LOOKS as it goes
+
+  /* 1 at birth, 0 at WAKE_LIFE, halving every WAKE_HALF_LIFE in between:
+   * exponential decay with the tail shifted down so it reaches zero
+   * exactly when the wake stops existing. With a 6 h half-life over 16 h
+   * that is about 65% at 3 h, 28% at 8 h, 11% at 12 h. */
+  function wakeDecay(age) {
+    if (!(age > 0)) return 1;
+    if (age >= WAKE_LIFE) return 0;
+    var k = Math.LN2 / WAKE_HALF_LIFE;
+    var floor = Math.exp(-k * WAKE_LIFE);
+    return (Math.exp(-k * age) - floor) / (1 - floor);
+  }
 
   function wakesAt(galaxy, star, t) {
     var runs = runsAt(galaxy, star, t);
@@ -703,6 +716,7 @@
      * second mechanic. */
     var linear = Math.max(0, 1 - (age / WAKE_LIFE));
     var fade = linear * linear;               // disperses fast at first
+    var decay = wakeDecay(age);
     var full = wakeRadius(st.leg.tonnes);
     var baffled = st.leg.baffle
       ? (MODULES.baffle.wakeFactor[st.leg.baffle] || 0.4) : 1;
@@ -724,11 +738,20 @@
       /* What is left of it NOW. A wake does not only dim as it disperses, it
        * CLOSES: space is pulling itself back together, and a mark that faded
        * while staying the same size would read as a light being turned down
-       * rather than a wound healing. Shrinks to 45% over its life, on a
-       * gentler curve than the brightness so an old wake is faint and small
-       * rather than vanishing at the same rate on both axes. */
-      radius: full * (0.45 + 0.55 * linear),
+       * rather than a wound healing. */
+      /* HALF-LIFE, like radioactive decay (2026-10-20). Astra: "it should
+       * slowly fade and shrink over the time it does show in system;
+       * almost like radioactive decay." Size and brightness both follow
+       * wakeDecay(): half gone every WAKE_HALF_LIFE, renormalised so it
+       * lands on exactly zero at WAKE_LIFE instead of popping out at
+       * 6%. The hole closes to a quarter of its torn size. */
+      radius: full * (0.25 + 0.75 * decay),
       strength: fade * baffled,
+      /* What the EYE sees, kept apart from what the scanner reads.
+       * `strength` (and so scan fidelity and every balance number built
+       * on it) is untouched; only the drawing reads `glow`. */
+      glow: decay * baffled,
+      decay: decay,
       baffled: !!st.leg.baffle,
       departedAt: st.departedAt,
       arrivesAt: st.arrivesAt,
@@ -1420,6 +1443,8 @@
     bearing: bearing,
 
     WAKE_LIFE: WAKE_LIFE,
+    WAKE_HALF_LIFE: WAKE_HALF_LIFE,
+    wakeDecay: wakeDecay,
     WAKE_SCAN_RANGE: WAKE_SCAN_RANGE,
     wakesAt: wakesAt,
     jumpRingRadius: jumpRingRadius,
