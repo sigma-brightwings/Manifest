@@ -301,6 +301,7 @@
     /* A new career owns one ship, and it is the one you are in. */
     G.fleet = [];
     G.orders = [];                 // hulls on the slips — Combat.commission
+    G.stationModules = [];         // station modules, ordered or carried — construction.js
     /* Owns no plants, and has changed no system. */
     G.holdings = [];
     G.uplift = {};
@@ -1304,11 +1305,21 @@
     G.viewMode = 'orbit';
   }
 
+  /* Station modules riding in a Crawler's truss were part of the hull: a
+   * Crawler lost is her load lost (construction.js). Said, because a
+   * quarter of a million credits does not vanish quietly. */
+  function loseModulesAboard() {
+    if (!global.Construction) return;
+    var n = global.Construction.lostWith(G, G.ship);
+    if (n) say(n + ' station module' + (n > 1 ? 's' : '') + ' went down with her', 6);
+  }
+
   /* Bring the ship back after a crash. There is no "undo" for a decayed
    * orbit or a bad burn — you get a fresh start above the same world you
    * spawned at, at the CURRENT simulation time, not a reload. */
   function respawnShip() {
     if (!G.ship.landed) { say('Not crashed — nothing to respawn from', 2); return; }
+    loseModulesAboard();
     spawnShip(G.spawnHost, G.homeStation, G.t, true);
     Combat.stripForRespawn(G.ship);
     G.deadPanels = {};
@@ -1323,6 +1334,7 @@
       pos: V.clone(G.ship.pos), at: performance.now(), size: 2.5
     });
     HOOKS.sound('explosion');
+    loseModulesAboard();
     spawnShip(G.spawnHost, G.homeStation, G.t, true);
     Combat.stripForRespawn(G.ship);
     G.hullWarned = false;
@@ -5419,6 +5431,11 @@
     if (Combat.deliverOrders && G.orders && G.orders.length) {
       var handed = Combat.deliverOrders(G, G.t);
       for (var hi = 0; hi < handed.length; hi++) { logTrade(handed[hi]); say(handed[hi], 9); }
+    }
+    /* Station modules off the slip, likewise (construction.js). */
+    if (global.Construction && G.stationModules && G.stationModules.length) {
+      var mods = global.Construction.announce(G, G.t);
+      for (var mi2 = 0; mi2 < mods.length; mi2++) { logTrade(mods[mi2]); say(mods[mi2], 9); }
     }
 
     if (G.ship.docked) {

@@ -16,6 +16,53 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **The Crawler, a station constructor, and station modules
+  (2026-10-20).** Astra: *"This is the new station-constructor, called the
+  Crawler. There's only one size, and it ships one L size module or two M
+  size modules or up to three S size modules, but you have to build the L
+  size first, to start hauling more freight in, otherwise you're just
+  stitching ship hulls together."* Her answers:
+  - The L module is the station's **core**. M and S modules bolt onto it
+    and add functions. This replaces the old plan of growing a station
+    S → M → L.
+  - A Crawler is **bought or hired**.
+  - Modules are **built at a shipyard**.
+  This is the first slice. Founding a station from a core comes next. See
+  `claude/crawler-and-station-modules.md`.
+  - **The models.** Astra's three liveries (civilian, navy, Syndicate)
+    are in the hull library: `ref/glb/crawler_*.glb` → `src/hulls.js`.
+    No other hull changed. She is about 454 m long, with a truss of 24
+    cargo containers. The models have no cockpit interior or landing gear
+    yet, and all three carry the registration AE-2696 in their geometry.
+  - **The hull.** XL, built to order at a shipyard only (8 days on the
+    slip), 450,000 cr. 120 t hold, needs a crew, never on a floor. Price
+    and stats are my first numbers; say if you want them different.
+  - **Modules, on a new MODULES tab** (shown at shipyards, in a Crawler,
+    or once you own one):
+    - **L:** Station core, 240,000 cr, 6 days. You pick its pattern
+      (cylinder, spine, ring or cradle) with ▶.
+    - **M**, 3 days each: market hall, refinery line, hab ring, repair
+      dock, warehouse.
+    - **S**, 1 day each: extra berth, defence battery, comms relay, fuel
+      store.
+    - You pay when you order, and the module waits at that yard when it is
+      done. The yard calls when it is ready.
+    - **The core comes first:** until you own one, the M and S rows say
+      "a station starts as an L core — order the core first".
+    - The catalogue and prices are my pick; change anything.
+  - **Loading.** In a Crawler at the yard, click a ready module to crane
+    it aboard, and click one in the bay to lift it off. Only a shipyard can
+    do either.
+    - The bay holds one L, two M or three S. That is counted as weights 6,
+      3 and 2 in a bay of 6, so one M and one S also fit together. You
+      didn't say either way; tell me if that should be refused.
+    - Modules aboard are lost with the Crawler.
+    - You can't trade her in, swap out of her, or keep her as a fleet ship
+      while modules are aboard: lift them off first.
+  - **Saves:** the modules and what is in the truss are saved. Older
+    careers load owning none.
+  - Also fixed: a commissioned hull now leaves the yard with a
+    registration (it had none).
 - **A ship built to order takes time to build (2026-10-19).** Astra:
   *"Build time for a ship is realistic, and lets you anticipate the use
   of your new ship even if you get blown up in your current one."*

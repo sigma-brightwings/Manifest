@@ -1056,7 +1056,30 @@
                'trusts as it trusts its own admirals. She docks only where ' +
                'a port was built for her — shipyards, highports, fleet ' +
                'carriers — and needs a crew to do anything at all. Ideal ' +
-               'for a captain who has stopped running.' }
+               'for a captain who has stopped running.' },
+    /* THE CRAWLER (2026-10-20). Astra: "the new station-constructor ...
+     * There's only one size, and it ships one L size module or two M size
+     * modules or up to three S size modules." Station modules ride in her
+     * truss (construction.js holds the load rule and the catalogue); the
+     * hold below is the little she carries besides. About 454 m long —
+     * the biggest hull in the game — so XL and commission-only. Price and
+     * stats are Claude's first numbers, offered to Astra to change. */
+    crawler: { id: 'crawler', size: 'XL', name: 'Crawler', price: 450000, mesh: 'crawler',
+             dryMass: 640, thrustKN: 9500, thrusterCap: 60, fuelCap: 300,
+             cargoCap: 120, hullMax: 520,
+             slots: { hardpoint: 1, utility: 4, internal: 6 },
+             rackSlots: 1,
+             powerMW: 40.0, fitMass: 60,
+             orderOnly: true,
+             constructor: true,
+             blurb: 'carries a station to where it will stand',
+             maker: 'Drayton Heavy',
+             about: 'A station constructor. Her truss takes one L module, ' +
+               'or two M, or three S, built at a shipyard and craned ' +
+               'aboard there. A station starts with its L core; everything ' +
+               'else bolts on after. She docks only at shipyards, highports ' +
+               'and fleet carriers, and she needs a crew. Built to order. ' +
+               'Ideal for a captain who wants a place of their own.' }
   };
 
   /* Sizes, smallest first. XL is new with the hulls above and is the only
@@ -7435,6 +7458,7 @@
      * against the hull is to stop owning that hull. */
     var encH = lienRefusal(G);
     if (encH) return { ok: false, why: encH };
+    if (s.modules && s.modules.length) return { ok: false, why: modulesAboardRefusal() };
     var port = dockedPort(G);
     /* BUILT TO ORDER MEANS BUILT (2026-10-19). Astra: "Build time for a
      * ship is realistic, and lets you anticipate the use of your new ship
@@ -7648,7 +7672,10 @@
       var ship = {
         hullId: o.hullId, fit: {}, cargo: {}, crew: [], passengers: 0,
         fuel: h.fuelCap, thrusterFuel: h.thrusterCap, hullHp: h.hullMax,
-        shipName: o.name || null, reg: null, paint: o.paint || null,
+        /* Her papers: a new hull leaves the yard registered, from the seed
+         * and the order, so the same order always reads the same code. */
+        shipName: o.name || null, paint: o.paint || null,
+        reg: global.Sim && global.Sim.regCode ? global.Sim.regCode((G.seed || '') + '|yard|' + o.id) : null,
         bornId: o.hullId + '@' + (o.star || 'void') + '#' + Math.round(o.due / 3600)
       };
       for (var k in o.fit) ship.fit[k] = o.fit[k];
@@ -7683,6 +7710,7 @@
     }
     var lien = lienRefusal(G);
     if (lien) return lien;
+    if (s.modules && s.modules.length) return modulesAboardRefusal();
     if ((rec.arrears || 0) > (s.credits || 0)) {
       return 'the clamp is owed ' + rec.arrears + ' cr on her — settle it first';
     }
@@ -7694,6 +7722,13 @@
       if (h && carried + hers > h.cargoCap + 1e-9) return 'her hold will not take yours as well — sell some first';
     }
     return null;
+  }
+
+  /* A Crawler's truss is not a hold that moves across with the cargo, and
+   * a parked record has nowhere to keep a station module. So the modules
+   * come off at a yard before anybody leaves her (construction.js). */
+  function modulesAboardRefusal() {
+    return 'station modules are still in her truss — lift them off at a shipyard first';
   }
 
   function tradeInValue(s) {

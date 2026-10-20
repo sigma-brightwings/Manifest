@@ -222,6 +222,7 @@ section('--- commissioned, not bought (build time) ---');
         rec.paint && rec.paint.p === '#22406e' && rec.fit.hardpoint1 === shelf[0].item.id, JSON.stringify(rec));
   check('…with her first week on the clamp paid',
         Fleet.berthDue(rec, G.t + 6 * 86400).cr === 0 && Fleet.berthDue(rec, G.t + 15 * 86400).cr > 0);
+  check('…registered', /^[A-Z]{2}-\d{4}$/.test(rec.reg || ''), rec.reg);
   check('…tanks full and hull whole', rec.fuel === Combat.HULLS.longhaul.fuelCap &&
         rec.hullHp === Combat.HULLS.longhaul.hullMax);
 

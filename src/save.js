@@ -317,7 +317,9 @@
         bornId: s.bornId || null,
         /* The colours a shipyard painted her (combat.js PAINTS). Additive:
          * an older career's hull is yard grey, which it was. */
-        paint: s.paint || null
+        paint: s.paint || null,
+        /* What rides in a Crawler's truss (construction.js). */
+        modules: s.modules || []
       },
       pilotName: G.pilotName || null,
       standing: G.standing || {},
@@ -381,6 +383,9 @@
       /* Hulls on the slips (Combat.commission, 2026-10-19). Paid for, so a
        * save that dropped them would be a save that ate the money. */
       orders: G.orders || [],
+      /* Station modules, on the slip, at a yard or in a Crawler's truss
+       * (construction.js, 2026-10-20). Paid for, so saved. */
+      stationModules: G.stationModules || [],
       /* THE PLANTS YOU OWN, and what they have done to the systems they
        * are in (holdings.js). Both additive: an older career loads owning
        * nothing, and every system reads exactly its generated government. */
@@ -525,6 +530,7 @@
     s.disguiseCount = d.disguiseCount || 0;
     s.bornId = d.bornId || null;
     s.paint = (d.paint && typeof d.paint === 'object') ? d.paint : null;
+    s.modules = Array.isArray(d.modules) ? d.modules : [];
     G.pilotName = data.pilotName || null;
 
     /* The hull's fixed numbers come from the catalogue, not the save —
@@ -564,6 +570,7 @@
     G.owed = data.owed || [];
     G.fleet = data.fleet || [];
     G.orders = data.orders || [];
+    G.stationModules = Array.isArray(data.stationModules) ? data.stationModules : [];
     G.holdings = data.holdings || [];
     G.uplift = (data.uplift && typeof data.uplift === 'object') ? data.uplift : {};
     G.rescue = data.rescue || null;

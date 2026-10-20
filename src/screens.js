@@ -2318,6 +2318,12 @@
      * because owning one is a thing you check on every time you dock. */
     var tabs = [['fit', 'FITTING'], ['buy', 'BUY'], ['hull', 'HULLS'],
                 ['crew', 'CREW'], ['fleet', 'FLEET'], ['works', 'INDUSTRY']];
+    /* STATION MODULES (construction.js, 2026-10-20): at a shipyard, or
+     * wherever you are flying a Crawler, or own a module at all. */
+    var Cn = global.Construction;
+    var showModules = !!Cn && (Combat.isShipyard(port) || Cn.isCrawler(s) || Cn.owned(G).length > 0);
+    if (showModules) tabs.push(['modules', 'MODULES']);
+    else if (G.yardTab === 'modules') G.yardTab = 'hull';
     /* A SIXTH TAB DOES NOT FIT BESIDE THE BUDGET on a laptop-width window:
      * the bar's text runs to about x + 360 and six tabs want 396 px of what
      * is left. So when they would collide, the tabs take a row of their own
@@ -2424,6 +2430,7 @@
     else if (G.yardTab === 'crew') drawYardCrew(ctx, x, w, row, s, port);
     else if (G.yardTab === 'fleet') drawYardFleet(ctx, x, w, row, s, port);
     else if (G.yardTab === 'works') drawYardIndustry(ctx, x, w, row, s, port);
+    else if (G.yardTab === 'modules') drawYardModules(ctx, x, w, row, s, port);
     else cardH = drawYardHulls(ctx, x, w, row, s, port) || 0;
 
     /* ---- the window ---- */
@@ -2653,6 +2660,96 @@
         }
       })(mine[j]);
     }
+    return 0;
+  }
+
+  /* --- MODULES: station modules and the Crawler that carries them --------
+   * Astra, 2026-10-20: a Crawler "ships one L size module or two M size
+   * modules or up to three S size modules, but you have to build the L
+   * size first". Built here at a yard, with build time; craned aboard a
+   * Crawler here; founding a station from them is the next slice. */
+  function drawYardModules(ctx, x, w, row, s, port) {
+    var Cn = global.Construction;
+    var yard = Combat.isShipyard(port);
+    var mine = Cn.owned(G);
+    var crawler = Cn.isCrawler(s);
+
+    /* THE BAY, first when you are in a Crawler: what is aboard and room. */
+    if (crawler) {
+      var used = Cn.loadUsed(Cn.aboard(s));
+      row('CRAWLER BAY  ·  ' + used + ' of ' + Cn.BAY + ' used',
+          'one L, or two M, or three S', function () {}, true);
+      Cn.aboard(s).forEach(function (a) {
+        var rec = Cn.byId(G, a.id), m = Cn.BY_ID[a.moduleId] || { name: a.moduleId, size: '?' };
+        row('  ' + m.name.toUpperCase() + '  [' + m.size + ']' + (rec && rec.pattern ? '  ·  ' + rec.pattern : ''),
+            yard ? 'click to lift it off onto this yard\'s floor' : 'aboard — a shipyard can lift it off',
+            function () {
+              var r = Cn.unload(G, a.id);
+              say(r.ok ? m.name + ' lifted off — it waits here' : 'Not here: ' + r.why, 5);
+            }, !yard);
+      });
+    }
+
+    /* WAITING AT THIS YARD, and on its slips. */
+    var here = mine.filter(function (r) {
+      return !r.aboard && r.port === s.docked && (!r.star || !G.here || r.star === G.here.id);
+    });
+    if (here.length) {
+      row('YOURS AT ' + (port.name || 'this yard').toUpperCase(),
+          crawler ? 'click one to crane it aboard ▶' : 'a Crawler can load these here',
+          function () {}, true);
+      here.forEach(function (r) {
+        var m = Cn.BY_ID[r.moduleId] || { name: r.moduleId, size: '?' };
+        var onSlip = !Cn.ready(r, G.t);
+        var why = onSlip ? null : Cn.loadRefusal(G, r);
+        row('  ' + m.name.toUpperCase() + '  [' + m.size + ']' + (r.pattern ? '  ·  ' + r.pattern : '') +
+            (onSlip ? '  ·  ON THE SLIP' : ''),
+            onSlip ? 'ready in ' + fmtLogAge(r.due - G.t) : (why || 'load her ▶'),
+            function () {
+              var res = Cn.load(G, r.id);
+              say(res.ok ? m.name + ' craned aboard' : 'Not yet: ' + res.why, 5);
+            }, onSlip || !!why, { hot: !onSlip && !why });
+      });
+    }
+
+    /* ELSEWHERE: everything you own at other yards. */
+    var away = mine.filter(function (r) { return !r.aboard && here.indexOf(r) < 0; });
+    away.forEach(function (r) {
+      var m = Cn.BY_ID[r.moduleId] || { name: r.moduleId, size: '?' };
+      row(m.name.toUpperCase() + '  [' + m.size + ']  ·  AT ' + (r.portName || 'another yard').toUpperCase(),
+          (r.starName ? r.starName + '  ·  ' : '') +
+          (Cn.ready(r, G.t) ? 'ready' : 'ready in ' + fmtLogAge(r.due - G.t)),
+          function () {}, true);
+    });
+
+    /* THE CATALOGUE, at a yard only. The core comes first, and the M and S
+     * rows say so until there is one. */
+    if (!yard) {
+      if (!mine.length && !crawler) {
+        row('NO MODULES', 'station modules are built at a shipyard', function () {}, true);
+      }
+      return 0;
+    }
+    if (G.modulePattern == null) G.modulePattern = Cn.PATTERNS[0];
+    row('BUILD A MODULE AT ' + (port.name || 'this yard').toUpperCase(),
+        'paid now, built here, waits here for a Crawler', function () {}, true);
+    Cn.MODULES.forEach(function (m) {
+      var why = Cn.orderRefusal(G, m.id);
+      var label = '  ' + m.name.toUpperCase() + '  [' + m.size + ']  —  ' + m.price + ' cr  ·  ' +
+                  m.days + (m.days === 1 ? ' day' : ' days');
+      row(label, why || m.blurb, function () {
+        var r = Cn.order(G, m.id, { pattern: G.modulePattern });
+        say(r.ok ? m.name + ' ordered — ready here in ' + r.days + (r.days === 1 ? ' day' : ' days')
+                 : 'No: ' + r.why, 6);
+      }, !!why);
+      if (m.core) {
+        row('    PATTERN:  ' + G.modulePattern + '  ▶', 'the shape the station will have',
+            function () {
+              var i = Cn.PATTERNS.indexOf(G.modulePattern);
+              G.modulePattern = Cn.PATTERNS[(i + 1) % Cn.PATTERNS.length];
+            });
+      }
+    });
     return 0;
   }
 

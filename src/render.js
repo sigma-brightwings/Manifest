@@ -569,7 +569,14 @@
      * shipyards". Left alone deliberately — reassigning the waste class is
      * a separate decision about a separate ship, and churning it here to
      * tidy up a comment would be the wrong reason. */
-    tug: 'tug-s'
+    tug: 'tug-s',
+    /* THE CRAWLER, the station constructor (2026-10-20). One size, three
+     * liveries, matching the station art's civilian / -navy / -syn sets.
+     * `crawler` is what a player's commissioned one wears; the other two
+     * are hull keys for the navy's and the Syndicate's own when they fly. */
+    crawler: 'crawler_civilian',
+    crawler_navy: 'crawler_navy',
+    crawler_syndicate: 'crawler_syndicate'
   };
 
   /* A ship may carry its OWN size letter, and when it does it wins.
@@ -8732,6 +8739,7 @@
     cutter:    { wrap: 1.16, room: 1.04, brow: 0.94, rake: 0.52 },
     meridian:  { wrap: 0.90, room: 1.22, brow: 1.18, rake: 0.30 },
     leviathan: { wrap: 0.82, room: 1.24, brow: 1.30, rake: 0.22 },
+    crawler:   { wrap: 0.80, room: 1.26, brow: 1.34, rake: 0.20 },
     capital:   { wrap: 1.06, room: 1.24, brow: 1.20, rake: 0.34 }
   };
   /* Which drawn model a player hull wears, so the rake can be measured off
