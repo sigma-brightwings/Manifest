@@ -277,6 +277,21 @@ Astra has seen it working.
   it cools, its mount on the hull glows red, three capacitors on the
   cockpit dash glow and fade, and a CAPACITORS bar under the crosshair
   counts down.
+- **2026-10-19: `tools/chop-modules.cjs`, station modules cut from the
+  existing art.** Reads every port in `ref/ports` and every ship in
+  `update_models`, gathers their named parts into functional assemblies
+  (dock, habitat, command, storage, power, comms, propulsion, industry,
+  defence, structure, hull, access), and writes each as its own `.glb`
+  with a catalog (`modules.json`): kind, size, parts, colours, the models
+  it came from, and **sockets** — the places where it was joined to a
+  different assembly in its parent model, which is where the next module
+  bolts on. Trim (decals, lamps, glass, greebles) goes with the nearest
+  assembly; terrain, interiors, gear and stands are left out; the greeble
+  kit is skipped. 171 models give 2,851 distinct modules in about 1,335
+  forms (the same form in another paint, size or pose counts once), with a
+  contact sheet (`index.html`, hover to turn). Output goes to
+  `Claude outputs/modules`; nothing in `src/` changes. Groundwork for ports
+  that grow and for cracked ports rebuilt over years.
 
 ### Changed
 
