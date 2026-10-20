@@ -13,15 +13,20 @@
 # prefixes are station-/city-/deep-. Everything else is a hull.
 #
 #   -WhatIf   print the plan and touch nothing.
+#   -Source   the drop folder to read (default: new models\update_models).
 #
 # Run from the repo root:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\stage-update-models.ps1
+#
+# The drop folder moved from update_models\ to new models\update_models\
+# (recorded 2026-10-20). Only this tool ever read it: the game itself reads
+# the converted libraries in src\, built from ref\, never the drop.
 
-param([switch]$WhatIf)
+param([switch]$WhatIf, [string]$Source = 'new models\update_models')
 
 $ErrorActionPreference = 'Stop'
 
-$SRC = 'update_models'
+$SRC = $Source
 if (-not (Test-Path $SRC)) { Write-Output "$SRC not found - nothing to stage."; exit 0 }
 
 New-Item -ItemType Directory -Force -Path 'ref\glb', 'ref\ports', 'ref\port-art' | Out-Null

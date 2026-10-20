@@ -159,6 +159,18 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
   - Also: a commissioned hull now leaves the yard with a registration (it
     had none).
 
+- **The model drop folder moved (2026-10-20).**
+  - `update_models/` now lives at `new models/update_models/`, all 76
+    files. Git had been showing them as deleted; the move is now recorded
+    as one.
+  - **Nothing in the game read that folder.** The game reads the converted
+    libraries in `src/` (`hulls.js`, `ports/`), which are built from
+    `ref/`.
+  - The one thing that did read it, `tools/stage-update-models.ps1` (it
+    files a drop into `ref/`), now defaults to the new place and takes
+    `-Source` for any other.
+  - Checked with `-WhatIf`: it plans 71 models from the new location.
+
 - **On foot in a station (2026-10-20), first slice.** Astra: *"full first
   person walking. We do need to model station interiors to walk in. We
   also want to be able to talk to NPC characters who are also on site."*
