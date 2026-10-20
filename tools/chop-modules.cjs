@@ -382,6 +382,72 @@ function shapeFamily(tris, g, form) {
   return crypto.createHash('sha1').update(s).digest('hex').slice(0, 12);
 }
 
+/* ---- berth routes: carried into the modules ---------------------------
+ * src/ports.js already holds, for every berth, the route in: `via`
+ * corners from the entrance to the berth, in PORT units (game axes, +z up,
+ * origin and scale from the converter). Undo that here so the corners sit
+ * in the same GLB frame as the modules:
+ *     game = p * metresPerUnit + origin;  glb = (g0, g2, -g1)
+ * the inverse of glb2hulls' toGame (x, -z, y), which is a rotation.
+ *
+ * Then each berth goes to the module whose box holds its end, and its
+ * route is CLIPPED to that box: the last place the route comes in
+ * through the box wall is the module's real doorway (a socket you can
+ * route through, not a guess from touching boxes), and the piece inside
+ * is the module's own route, door to berth. A berth with no `via` is
+ * reached straight from space: it has its own outer door. */
+var PortLib = null;
+function loadPortLib() {
+  if (PortLib !== null) return PortLib;
+  try { global.window = global.window || global; require(path.join(ROOT, 'src', 'ports.js')); PortLib = global.PortLib || {}; }
+  catch (e) { console.warn('no src/ports.js: modules carry no routes (' + e.message + ')'); PortLib = {}; }
+  return PortLib;
+}
+function portBerths(id) {
+  var p = loadPortLib()[id];
+  if (!p || !p.anchors || !p.anchors.berths || !p.metresPerUnit) return [];
+  var k = p.metresPerUnit, o = p.origin || [0, 0, 0];
+  function toGlb(q) { var g = [q[0] * k + o[0], q[1] * k + o[1], q[2] * k + o[2]]; return [g[0], g[2], -g[1]]; }
+  function dirGlb(n) { return [n[0], n[2], -n[1]]; }
+  var B = p.anchors.berths;
+  return B.map(function (b, i) {
+    var route = null;
+    if (b.via && b.via.length) {
+      var head = (b.entry !== undefined && B[b.entry]) ? [B[b.entry].mid] : [];
+      route = head.concat(b.via, [b.mid]).map(toGlb);
+    }
+    return { index: i, node: b.node, cls: b.cls, kind: b.kind, mid: toGlb(b.mid),
+             normal: b.normal ? dirGlb(b.normal) : null, route: route,
+             ride: !!b.ride, lift: !!b.lift, outerDoor: !route };
+  });
+}
+function inside(b, p, e) {
+  for (var a = 0; a < 3; a++) if (p[a] < b.min[a] - e || p[a] > b.max[a] + e) return false;
+  return true;
+}
+/* Where segment p->q (p outside, q inside) crosses into box b, and the
+ * outward normal of the face it came through (slab method). */
+function entryPoint(b, p, q, e) {
+  var t0 = 0, face = 0, sgn = 1;
+  for (var a = 0; a < 3; a++) {
+    var d = q[a] - p[a];
+    if (Math.abs(d) < 1e-12) continue;
+    var lo = (b.min[a] - e - p[a]) / d, hi = (b.max[a] + e - p[a]) / d;
+    var tin = Math.min(lo, hi);
+    if (tin > t0) { t0 = tin; face = a; sgn = d > 0 ? -1 : 1; }
+  }
+  var n = [0, 0, 0]; n[face] = sgn;
+  return { at: [0,1,2].map(function (a) { return p[a] + (q[a] - p[a]) * t0; }), normal: n };
+}
+function clipRoute(b, route, e) {
+  var last = -1;
+  for (var i = route.length - 1; i >= 0; i--) if (!inside(b, route[i], e)) { last = i; break; }
+  if (last < 0) return { door: { at: route[0], normal: null }, route: route.slice(), whole: true };
+  if (last === route.length - 1) return null;          // the berth end is not in this box
+  var ep = entryPoint(b, route[last], route[last + 1], e);
+  return { door: ep, route: [ep.at].concat(route.slice(last + 1)), whole: false };
+}
+
 /* ---- run ---------------------------------------------------------------- */
 function main() {
   fs.rmSync(path.join(OUT, 'glb'), { recursive: true, force: true });   // our own output only
@@ -396,6 +462,8 @@ function main() {
       try { model = readModel(file); } catch (e) { console.warn('skip ' + f + ': ' + e.message); return; }
       nFiles++;
       var ch = chop(model);
+      var berths = from === 'port' ? portBerths(f.replace(/\.glb$/i, '')) : [];
+      var claimed = {};
       var stem = f.replace(/\.glb$/i, '').replace(/[^A-Za-z0-9_-]+/g, '');
       ch.mods.forEach(function (m) {
         if (m.kind === 'terrain') return;          // the ground is not a module
@@ -403,10 +471,57 @@ function main() {
         /* Origin: centre in x/z, BOTTOM in y — a module sits on what it is
          * bolted to, so its base is the natural pivot. */
         var origin = [c[0], m.box.min[1], c[2]];
+        var eB = ch.span * 0.002;
+        function loc(p) { return [0,1,2].map(function (a) { return +(p[a] - origin[a]).toFixed(3); }); }
+        var mb = [];
+        berths.forEach(function (b) {
+          if (claimed[b.index] || !inside(m.box, b.mid, eB)) return;
+          claimed[b.index] = true;
+          var e = { node: b.node, cls: b.cls, kind: b.kind, outerDoor: b.outerDoor, at: loc(b.mid) };
+          if (b.outerDoor) { if (b.normal) e.door = { at: loc(b.mid), normal: b.normal }; }
+          else {
+            var cr = clipRoute(m.box, b.route, eB);
+            if (cr) {
+              e.door = { at: loc(cr.door.at), normal: cr.door.normal };
+              e.route = cr.route.map(loc);
+              e.wholeRoute = cr.whole;
+              e.ride = b.ride; e.lift = b.lift;
+            }
+          }
+          mb.push(e);
+        });
+        /* PASS-THROUGH (Astra, 2026-10-19: "outer doors can then become the
+         * doors between the inside and outside of the NEXT add-on"). A
+         * module that other berths' routes run THROUGH — in at one face, out
+         * at another, to a berth that is not its own — is what can sit in
+         * the middle of a chain. Record each way out, and the biggest class
+         * that travels it: size passes outward, so an SM-only passage
+         * cannot have an L berth behind it. */
+        var exits = [];
+        berths.forEach(function (b) {
+          if (!b.route || inside(m.box, b.mid, eB)) return;
+          var r = b.route, was = false;
+          for (var i = 0; i < r.length; i++) {
+            var now = inside(m.box, r[i], eB);
+            if (was && !now) {
+              var ep = entryPoint(m.box, r[i], r[i - 1], eB);   // walked backwards: the face it leaves by
+              var at = loc(ep.at), hit = null;
+              exits.forEach(function (x) { if (Math.hypot(x.at[0]-at[0], x.at[1]-at[1], x.at[2]-at[2]) < ch.span * 0.03) hit = x; });
+              if (hit) { if (b.cls === 'L') hit.cls = 'L'; hit.to.push(b.node); }
+              else exits.push({ at: at, normal: ep.normal, cls: b.cls, to: [b.node] });
+              break;
+            }
+            was = was || now;
+          }
+        });
+        /* A module that owns a berth is a dock whatever its parts are
+         * called: the spine's berths sit in segments named for the hull. */
+        if (mb.length && m.kind !== 'dock') { m.kindByName = m.kind; m.kind = 'dock'; }
         var key = shapeKey(m.tris, model.g, origin, ch.span);
         var src = { model: path.relative(ROOT, file).replace(/\\/g, '/'), parts: m.parts.length };
-        if (byKey[key]) { byKey[key].sources.push(src); return; }
+        if (byKey[key]) { byKey[key].sources.push(src); return; }   // same geometry, same colours: same berths
         counts[m.kind] = (counts[m.kind] || 0) + 1;
+        if (m.kindByName) m.parts.unshift('(named as ' + m.kindByName + ')');
         var id = m.kind + '-' + stem + '-' + String(counts[m.kind]).padStart(3, '0');
         var sz = size(m.box);
         var entry = {
@@ -415,6 +530,12 @@ function main() {
           size: sz.map(function (v) { return +v.toFixed(3); }),
           relSize: +(Math.max.apply(null, sz) / ch.span).toFixed(3),
           parts: m.parts.slice(0, 24).concat(m.parts.length > 24 ? ['…+' + (m.parts.length - 24)] : []),
+          berths: mb,
+          passThrough: exits.length > 0,
+          exits: exits,
+          carries: exits.some(function (x) { return x.cls === 'L'; }) ? 'L' : (exits.length ? 'SM' : null),
+          outerDoor: mb.some(function (b) { return b.outerDoor; }),
+          routeDoors: mb.filter(function (b) { return b.route && !b.wholeRoute; }).length,
           sockets: m.sockets.map(function (s) {
             return { at: s.at.map(function (v, a) { return +(v - origin[a]).toFixed(3); }), normal: s.normal, to: s.to };
           }),
@@ -461,7 +582,10 @@ function previewMesh(entry, tris, g, origin) {
     }).concat([ci[h]]);
   });
   return { id: entry.id, kind: entry.kind, from: entry.from, sh: entry.form, n: entry.sources.length, s: entry.sockets.length, c: cols, f: f,
-           k: entry.sockets.map(function (s) { return s.at.map(function (v) { return Math.round(v / sz * 100); }).concat([s.to]); }) };
+           k: entry.sockets.map(function (s) { return s.at.map(function (v) { return Math.round(v / sz * 100); }).concat([s.to]); }),
+           r: entry.berths.filter(function (b) { return b.route; }).map(function (b) { return b.route.map(function (p) { return p.map(function (v) { return Math.round(v / sz * 100); }); }); }),
+           x: entry.exits.map(function (q) { return q.at.map(function (v) { return Math.round(v / sz * 100); }).concat([q.cls]); }),
+           o: entry.berths.filter(function (b) { return b.outerDoor; }).map(function (b) { return b.at.map(function (v) { return Math.round(v / sz * 100); }); }) };
 }
 
 function writeViewer(file, data) {
@@ -470,10 +594,10 @@ function writeViewer(file, data) {
 '#bar{position:sticky;top:0;background:#0b0e14;padding:8px 0;z-index:2}button{background:#1b2230;color:#cfd6e4;border:1px solid #2c3648;border-radius:4px;margin:2px;padding:4px 8px;cursor:pointer}' +
 'button.on{background:#3a5a8c}#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}' +
 '.c{background:#121722;border:1px solid #232b3a;border-radius:6px;padding:6px}.c canvas{width:100%;height:auto;display:block}.c b{font-size:11px;word-break:break-all}.c i{color:#8aa0c0;font-style:normal;font-size:11px}</style>\n' +
-'<h1>Station modules <span id=n></span></h1><div id=bar></div><div id=grid></div>\n' +
+'<h1>Station modules <span id=n></span></h1><p style="color:#8aa0c0;margin:0 0 6px">pink dots: contacts with other modules · cyan: a berth route, ring = where it enters this module · yellow ring: berth with its own outer door · green square: a way on to berths further in (bright = large ships fit)</p><div id=bar></div><div id=grid></div>\n' +
 '<script>var D=' + JSON.stringify(data) + ';\n' +
 'var kinds=["all"].concat(Array.from(new Set(D.map(function(d){return d.kind}))).sort()),cur="all",yaw=0.7;\n' +
-'var bar=document.getElementById("bar");kinds.forEach(function(k){var b=document.createElement("button");b.textContent=k+" ("+(k=="all"?D.length:D.filter(function(d){return d.kind==k}).length)+")";b.onclick=function(){cur=k;[].forEach.call(bar.children,function(x){x.className=""});b.className="on";draw()};bar.appendChild(b)});bar.firstChild.className="on";\n' +
+'var bar=document.getElementById("bar");kinds.forEach(function(k){var b=document.createElement("button");b.textContent=k+" ("+(k=="all"?D.length:D.filter(function(d){return d.kind==k}).length)+")";b.onclick=function(){cur=k;[].forEach.call(bar.children,function(x){x.className=""});b.className="on";draw()};bar.appendChild(b)});bar.firstChild.className="on";var q=document.createElement("input");q.placeholder="filter: id, e.g. spine-l or pass";q.style.cssText="margin-left:12px;padding:4px;background:#121722;color:#cfd6e4;border:1px solid #2c3648;border-radius:4px;width:220px";q.oninput=function(){draw()};bar.appendChild(q);\n' +
 'function rot(p){var c=Math.cos(yaw),s=Math.sin(yaw),x=p[0]*c-p[2]*s,z=p[0]*s+p[2]*c,y=p[1];var e=0.5,ce=Math.cos(e),se=Math.sin(e);return[x,y*ce-z*se,y*se+z*ce]}\n' +
 'function shade(h,k){var r=parseInt(h.substr(1,2),16),g=parseInt(h.substr(3,2),16),b=parseInt(h.substr(5,2),16);return"rgb("+Math.round(r*k)+","+Math.round(g*k)+","+Math.round(b*k)+")"}\n' +
 'function paint(cv,d){var x=cv.getContext("2d"),W=cv.width,H=cv.height;x.fillStyle="#0e131c";x.fillRect(0,0,W,H);var fs=d.f.map(function(f){var a=rot(f[0]),b=rot(f[1]),c=rot(f[2]);return{a:a,b:b,c:c,z:(a[2]+b[2]+c[2])/3,col:d.c[f[3]]}});\n' +
@@ -481,10 +605,13 @@ function writeViewer(file, data) {
 ' var sc=0.85*Math.min(W/(mx[0]-mn[0]||1),H/(mx[1]-mn[1]||1)),ox=W/2-sc*(mn[0]+mx[0])/2,oy=H/2+sc*(mn[1]+mx[1])/2;function P(p){return[ox+sc*p[0],oy-sc*p[1]]}\n' +
 ' fs.sort(function(a,b){return b.z-a.z});fs.forEach(function(o){var u=[o.b[0]-o.a[0],o.b[1]-o.a[1],o.b[2]-o.a[2]],v=[o.c[0]-o.a[0],o.c[1]-o.a[1],o.c[2]-o.a[2]];var n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];var l=Math.hypot(n[0],n[1],n[2])||1;var k=0.35+0.65*Math.abs((n[0]*0.4+n[1]*0.7-n[2]*0.6)/l);\n' +
 '  var A=P(o.a),B=P(o.b),C=P(o.c);x.beginPath();x.moveTo(A[0],A[1]);x.lineTo(B[0],B[1]);x.lineTo(C[0],C[1]);x.closePath();x.fillStyle=shade(o.col,k);x.fill();x.strokeStyle=x.fillStyle;x.lineWidth=0.5;x.stroke()});\n' +
-' d.k.forEach(function(s){var p=P(rot(s));x.fillStyle="#ff4fa3";x.beginPath();x.arc(p[0],p[1],3,0,7);x.fill()})}\n' +
+' d.k.forEach(function(s){var p=P(rot(s));x.fillStyle="#ff4fa3";x.beginPath();x.arc(p[0],p[1],3,0,7);x.fill()});\n' +
+' (d.r||[]).forEach(function(r){x.strokeStyle="#3ff0ff";x.lineWidth=2;x.beginPath();r.forEach(function(q,i){var p=P(rot(q));if(i)x.lineTo(p[0],p[1]);else x.moveTo(p[0],p[1])});x.stroke();var a=P(rot(r[0]));x.beginPath();x.arc(a[0],a[1],5,0,7);x.stroke()});\n' +
+' (d.x||[]).forEach(function(q){var p=P(rot(q));x.fillStyle=q[3]=="L"?"#3fff6a":"#a6ff3f";x.fillRect(p[0]-5,p[1]-5,10,10)});\n' +
+' (d.o||[]).forEach(function(q){var p=P(rot(q));x.strokeStyle="#ffd23f";x.lineWidth=2;x.beginPath();x.arc(p[0],p[1],6,0,7);x.stroke()})}\n' +
 'var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting&&!e.target._done){e.target._done=1;paint(e.target,e.target._d)}})},{rootMargin:"300px"});\n' +
-'function draw(){var g=document.getElementById("grid");g.innerHTML="";var L=D.filter(function(d){return cur=="all"||d.kind==cur});document.getElementById("n").textContent="— "+L.length+" shown";\n' +
-' L.forEach(function(d){var c=document.createElement("div");c.className="c";var cv=document.createElement("canvas");cv.width=320;cv.height=220;c.appendChild(cv);c.insertAdjacentHTML("beforeend","<b>"+d.id+"</b><br><i>"+d.kind+" · "+d.from+" · "+d.f.length+" tris · "+d.s+" sockets · in "+d.n+" model(s)"+(d.poses>1?" · "+d.poses+" copies (pose/paint/size)":"")+"</i>");g.appendChild(c);io.observe(cv);cv._d=d;\n' +
+'function draw(){var g=document.getElementById("grid");g.innerHTML="";var t=(q.value||"").toLowerCase();var L=D.filter(function(d){return (cur=="all"||d.kind==cur)&&(!t||(t=="pass"?(d.x&&d.x.length):d.id.toLowerCase().indexOf(t)>=0))});document.getElementById("n").textContent="— "+L.length+" shown";\n' +
+' L.forEach(function(d){var c=document.createElement("div");c.className="c";var cv=document.createElement("canvas");cv.width=320;cv.height=220;c.appendChild(cv);c.insertAdjacentHTML("beforeend","<b>"+d.id+"</b><br><i>"+d.kind+" · "+d.from+" · "+d.f.length+" tris · "+d.s+" sockets"+((d.r&&d.r.length)?" · "+d.r.length+" routed berth(s)":"")+((d.o&&d.o.length)?" · "+d.o.length+" outer door(s)":"")+((d.x&&d.x.length)?" · PASS-THROUGH ("+d.x.length+" way(s) on)":"")+" · in "+d.n+" model(s)"+(d.poses>1?" · "+d.poses+" copies (pose/paint/size)":"")+"</i>");g.appendChild(c);io.observe(cv);cv._d=d;\n' +
 '  cv.onmousemove=function(e){yaw=(e.offsetX/cv.clientWidth)*6.28;paint(cv,d)};cv.onmouseleave=function(){yaw=0.7;paint(cv,d)}})}draw();</script>\n';
   fs.writeFileSync(file, html);
 }

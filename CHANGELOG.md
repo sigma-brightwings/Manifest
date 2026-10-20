@@ -292,6 +292,19 @@ Astra has seen it working.
   contact sheet (`index.html`, hover to turn). Output goes to
   `Claude outputs/modules`; nothing in `src/` changes. Groundwork for ports
   that grow and for cracked ports rebuilt over years.
+  Same day, second pass: **modules carry their berth routes.** Each berth's
+  route in from `src/ports.js` is turned back into the model's frame and
+  clipped to the module that holds the berth; where it crosses the module's
+  wall is the module's real doorway, and the piece inside is its own route.
+  Berths reached straight from space are marked as having their own outer
+  door. A module that other berths' routes run through is marked
+  **pass-through**, with each way on and the biggest ship that fits it
+  (Astra: outer doors become the doors into the next add-on, so these are
+  the pieces that can sit in the middle of a chain). 407 berths: 259
+  routed, 148 with their own door; 169 pass-through modules, 30 of them
+  wide enough for large ships. A module that holds a berth counts as a dock
+  whatever its parts are named. The contact sheet draws routes, doors and
+  ways on, and has a filter box ("pass" shows the pass-throughs).
 
 ### Changed
 
