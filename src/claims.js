@@ -153,9 +153,12 @@
     if (!claimFor(G, key, t)) return { ok: false, why: 'no live claim on ' + world.name + ' - file one at any desk' };
     if (!(G.ship.drones > 0)) return { ok: false, why: 'no drones aboard - the desk sells them' };
     var rows = Sv().remaining(G, key, Sv().deposits(world, sys)).filter(function (r) {
-      return r.cid !== 'hydrogen' && (r.tonnes > 0 || !isFinite(r.tonnes));
+      return r.cid !== 'hydrogen' && (r.tonnes > 0 || !isFinite(r.tonnes)) &&
+             Sv().readable(G.surveys && G.surveys[key], r.cid);
     });
-    if (!rows.length) return { ok: false, why: 'nothing here a drone can dig' };
+    /* A drone digs what your survey has READ: it cannot be pointed at
+     * fissiles nobody here has seen. */
+    if (!rows.length) return { ok: false, why: 'nothing your survey has read here that a drone can dig' };
     var Eco = global.Economy;
     rows.sort(function (a, b) {
       var va = a.grade * (Eco && Eco.BY_ID[a.cid] ? Eco.BY_ID[a.cid].base : 1);

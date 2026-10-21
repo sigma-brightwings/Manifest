@@ -595,6 +595,25 @@ Astra has seen it working.
   hold a leg, so its wing legs fold and then swing flat under the wing
   instead. No stowed leg reaches into a cockpit. Two new checks: every
   legged hull stands level, with its feet below its lowest point.
+- **2026-10-21: survey instruments are graded by what they can see.**
+  Astra: "a grade 1 scanner tells you where low grade minerals are, and
+  grade 2 will tell you where fissiles are, and a grade 3 tells you where
+  precious metals are."
+  - **Grade 1, survey scanner** (6,400 cr): ores, water ice, hydrogen.
+  - **Grade 2, gamma survey spectrometer** (new, 13,800 cr, development
+    0.40 or better): adds fissiles.
+  - **Grade 3, deep survey array** (23,500 cr): adds rare metals, and gives
+    tonnes instead of words.
+  - The SURVEY page lists only what an instrument of the right grade has
+    mapped. It names the classes nobody has read ("not read - grade 2
+    survey") whether or not anything is there, so the page never gives
+    away which worlds hold fissiles.
+  - The Guild pays for each commodity only on ground mapped by an
+    instrument that reads it. Measured on one rich rocky world: about 660
+    cr at grade 1, 3,030 at grade 2, 6,630 at grade 3. Flying sold ground
+    again at a higher grade sells the newly read classes.
+  - A drone digs the most valuable thing your survey has read, so a
+    grade-1 survey keeps it on ore and ice.
 - **2026-10-16: the attitude ladder and bank scale are drawn sharp** under
   the glass glow. Measured on the RX 540: cockpit in a ring 22 > 40 fps,
   above it 37 > 51, in a belt field 26 > 40.
@@ -671,7 +690,10 @@ Careers carry over. Everything new (surveys, claims, drones, the landed
 spot, shattered rocks, torpedo refunds, sabotage) is additive and loads as
 "nothing yet" on an older save. A survey made before the scanner audit
 keeps exactly the value it had: its ground counts as mapped by the
-instrument its grade says.
+instrument its grade says. A survey taken with the deep array before
+2026-10-21 counts as grade 3 and is worth what it was. One taken with the
+scanner now reads ore, ice and hydrogen only, so an unsold scanner survey
+of a world with fissiles or rare metals is worth less than it was.
 A city site's town is placed from the port itself, not from the save, so
 an older career sees it in its new place the next time it lands there.
 

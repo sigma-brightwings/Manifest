@@ -107,9 +107,11 @@ Sim.updateLandedShip(ship, sys, t0);
 var dep = Cl.act(G, sys, t0);
 check('landed on the claim, N sets a drone down', dep.ok && ship.drones === 1 && G.drones.length === 1, dep.text || dep.why);
 var d = G.drones[0];
-var rows = Sv.remaining(G, key, Sv.deposits(world, sys)).filter(function (r) { return r.cid !== 'hydrogen' && r.tonnes > 0; });
+/* What the SURVEY has read (2026-10-21): this record is grade 1, so ores and ice. */
+var rows = Sv.remaining(G, key, Sv.deposits(world, sys)).filter(function (r) { return r.cid !== 'hydrogen' && r.tonnes > 0 && Sv.readable(G.surveys[key], r.cid); });
 var bestV = Math.max.apply(null, rows.map(function (r) { return r.grade * Eco.BY_ID[r.cid].base; }));
-check('it digs the most valuable thing there', Math.abs(d.grade * Eco.BY_ID[d.cid].base - bestV) < 1e-9, d.cid + ' grade ' + d.grade.toFixed(2));
+check('it digs the most valuable thing the survey has read', Math.abs(d.grade * Eco.BY_ID[d.cid].base - bestV) < 1e-9, d.cid + ' grade ' + d.grade.toFixed(2));
+check('a grade-1 survey keeps it off fissiles and rare metals', Sv.classOf(d.cid) === 1, d.cid);
 d.stripRate = 1e-9;                         // a quiet system, for the arithmetic
 var h10 = Cl.hopper(G, d, t0 + 10 * DAY);
 check('the hopper fills at rate x grade', Math.abs(h10.tonnes - Cl.DRONE_RATE * d.grade * 10) < 1e-9, h10.tonnes.toFixed(3) + ' t in 10 days');

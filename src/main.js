@@ -10186,7 +10186,7 @@
   function drawSurveyPage(ctx) {
     var Sv = global.Survey;
     var lvl = Sv ? Sv.level(G.ship) : 0;
-    mfdShell(ctx, 'SURVEY', lvl ? (lvl >= 2 ? 'deep array  ·  tonnage' : 'scanner  ·  grades only')
+    mfdShell(ctx, 'SURVEY', lvl ? ['', 'grade 1 \u00b7 ore, ice, hydrogen', 'grade 2 \u00b7 + fissiles', 'grade 3 \u00b7 + rare metals, tonnes'][Math.min(3, lvl)]
                                 : 'no survey instrument fitted');
     if (!lvl) {
       ctx.font = 'bold 12px ui-monospace, monospace';
@@ -10219,7 +10219,13 @@
       ctx.fillStyle = G._surveyNow === key ? MFD_HOT : MFD_DIM;
       ctx.fillText((G._surveyNow === key ? 'SURVEYING  ' : '') + Math.round(cov * 100) + '% mapped' +
                    (rec && rec.t !== null ? '  ·  as of ' + fmtEpoch(rec.t) : '  ·  never surveyed'), 12, MFD_BODY_TOP + 28);
-      var rows = Sv.remaining(G, key, Sv.deposits(tgt, G.sys));
+      /* Only what an instrument that reads its class has mapped. The
+       * classes nobody has read are named whether or not anything is there
+       * - "not read" must not give away which worlds have fissiles. */
+      var rows = Sv.remaining(G, key, Sv.deposits(tgt, G.sys)).filter(function (r) {
+        return rec && Sv.readable(rec, r.cid);
+      });
+      var unread = [2, 3].filter(function (c) { return !(rec && Sv.covClass(rec, c) >= 0.1); });
       var y = MFD_BODY_TOP + 46;
       if (cov < 0.1) {
         ctx.fillStyle = MFD_DIM;
@@ -10237,8 +10243,16 @@
           ctx.fillStyle = MFD_INK;
           /* Tonnes only if the ARRAY mapped enough of it - fitting one
            * now does not turn an old scanner pass into numbers. */
-          var arr = rec && Sv.arrayCov ? Sv.arrayCov(rec) : (lvl >= 2 ? cov : 0);
+          var arr = rec && Sv.arrayCov ? Sv.arrayCov(rec) : (lvl >= 3 ? cov : 0);
           ctx.fillText(arr >= 0.1 ? Sv.fmtTonnes(r.tonnes) : Sv.gradeWord(r.grade), 198, y);
+          y += 14;
+        });
+        unread.forEach(function (c) {
+          ctx.font = 'bold 11px ui-monospace, monospace';
+          ctx.fillStyle = MFD_DIM;
+          ctx.fillText(c === 2 ? 'Fissiles' : 'Rare metals', 12, y);
+          ctx.font = 'bold 10px ui-monospace, monospace';
+          ctx.fillText('not read - grade ' + c + ' survey', 110, y);
           y += 14;
         });
         if (cov < 0.9) {

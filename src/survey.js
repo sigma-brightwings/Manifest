@@ -32,6 +32,21 @@
 
   /* ---- the commodities a survey reports ------------------------------- */
   var CIDS = ['ores', 'rare', 'fissile', 'water', 'hydrogen'];
+
+  /* WHICH INSTRUMENT READS WHICH CLASS (Astra, 2026-10-15): "a grade 1
+   * scanner tells you where low grade minerals are, and grade 2 will tell
+   * you where fissiles are, and a grade 3 tells you where precious metals
+   * are." Cumulative - grade 3 reads all three - and physically honest:
+   * bulk ore and ice show in reflected light, fissiles announce themselves
+   * in gamma, and trace metals hide in ordinary rock until the deepest
+   * instrument resolves them. Grade 3 is also the one that gives tonnes.
+   *
+   * A record keeps one coverage per class: cells/cov (every grade),
+   * cellsF/covF (grade 2 and up), cells2/cov2 (grade 3, the array; the name
+   * is older than the middle grade). */
+  var CLASS = { ores: 1, water: 1, hydrogen: 1, fissile: 2, rare: 3 };
+  var TOP = 3;
+  function classOf(cid) { return CLASS[cid] || 1; }
   var NAMES = { ores: 'Metal ores', rare: 'Rare metals', fissile: 'Fissiles',
                 water: 'Water ice', hydrogen: 'Hydrogen' };
 
@@ -231,13 +246,50 @@
   /* Bring a record from before the split up to date, once: an array-grade
    * record counts everything it had as array-mapped, anything else as
    * scanner-mapped. Worth exactly what it was before. */
+  /* Version 2 (2026-10-21) is the three-grade survey. Before it, grade 2
+   * WAS the deep array, and the array read every class - so an old array
+   * record becomes grade 3 with its fissile coverage equal to its array
+   * coverage, worth exactly what it was. An old scanner record reads the
+   * common class only, because that is what the scanner reads now. */
   function migrateRec(rec) {
-    if (typeof rec.cov2 === 'number') return;
+    if (!rec || rec.v >= 2) return;
     var arr = (rec.grade || 0) >= 2;
-    rec.cells2 = arr ? (rec.cells || '') : '';
-    rec.cov2 = arr ? (rec.cov || 0) : 0;
-    if (rec.soldCov2 === undefined) rec.soldCov2 = arr ? (rec.soldCov || 0) : 0;
-    delete rec._cells2;
+    if (typeof rec.cov2 !== 'number') {
+      rec.cells2 = arr ? (rec.cells || '') : '';
+      if (rec.fields) rec.fields2 = arr ? Object.assign({}, rec.fields) : {};
+      rec.cov2 = arr ? (rec.cov || 0) : 0;
+      if (rec.soldCov2 === undefined) rec.soldCov2 = arr ? (rec.soldCov || 0) : 0;
+    }
+    rec.cellsF = rec.cells2 || '';
+    if (rec.fields2) rec.fieldsF = Object.assign({}, rec.fields2);
+    rec.covF = rec.cov2 || 0;
+    rec.soldCovF = rec.soldCov2 || 0;
+    if (arr) rec.grade = TOP;
+    rec.v = 2;
+    delete rec._cells2; delete rec._cellsF;
+  }
+  /* Coverage, and coverage already sold, of one class. A record from
+   * before version 2 answers by the old rule: only the array read
+   * fissiles. */
+  function covClass(rec, cls) {
+    if (!rec) return 0;
+    if (cls >= 3) return arrayCov(rec);
+    if (cls === 2) return typeof rec.covF === 'number' ? rec.covF : arrayCov(rec);
+    return rec.cov || 0;
+  }
+  function soldClass(rec, cls) {
+    if (!rec) return 0;
+    if (cls >= 3) return soldArray(rec);
+    if (cls === 2) return typeof rec.soldCovF === 'number' ? rec.soldCovF : soldArray(rec);
+    return rec.soldCov || 0;
+  }
+  /* Has this survey read this commodity well enough to say anything? The
+   * same tenth-of-the-ground floor the SURVEY page has always used. */
+  function readable(rec, cid) { return covClass(rec, classOf(cid)) >= 0.1; }
+  function unsoldAny(rec) {
+    var u = 0;
+    for (var c = 1; c <= TOP; c++) u = Math.max(u, covClass(rec, c) - soldClass(rec, c));
+    return u;
   }
   /* Fold `gained` coverage taken at time t into the record's mean date. */
   function ageIn(rec, before, after, t) {
@@ -314,7 +366,9 @@
     return any;
   }
 
-  /* The instrument. 0: none. 1: a survey scanner. 2: a deep survey array. */
+  /* The instrument's grade. 0: none. 1: survey scanner (ores, ice,
+   * hydrogen). 2: gamma spectrometer (+ fissiles). 3: deep survey array
+   * (+ rare metals, and tonnes). */
   function level(ship) {
     var C = global.Combat;
     return C && C.surveyLevel ? C.surveyLevel(ship) : 0;
@@ -335,7 +389,8 @@
     if (!rec) {
       rec = G.surveys[key] = { key: key, star: (G.here && G.here.id) || null, name: name, kind: kind,
                                cells: '', cov: 0, t: null, grade: 0, soldCov: 0,
-                               cells2: '', cov2: 0, soldCov2: 0 };
+                               cells2: '', cov2: 0, soldCov2: 0,
+                               cellsF: '', covF: 0, soldCovF: 0, v: 2 };
     }
     return rec;
   }
@@ -365,7 +420,8 @@
       G._surveyNow = rec.key;
       migrateRec(rec);
       var cells = cellsOf(rec), before = rec.cov;
-      var cells2 = lvl >= 2 ? cellsOf(rec, 'cells2') : null, gained2 = 0;
+      var cellsF = lvl >= 2 ? cellsOf(rec, 'cellsF') : null, gainedF = 0;
+      var cells2 = lvl >= 3 ? cellsOf(rec, 'cells2') : null, gained2 = 0;
       var bs = Sim.bodyState(body, sys, t);
       var rel = V.sub(ship.pos, bs.pos), vrel = V.sub(ship.vel, bs.vel);
       var r = len(rel), h = cross(rel, vrel), hl = len(h);
@@ -374,6 +430,7 @@
       var w = swathAt(body.radius, r);
       var dir = scale(rel, 1 / r);
       var gained = markAt(cells, fr, dir, t, period, w);
+      if (cellsF) gainedF += markAt(cellsF, fr, dir, t, period, w);
       if (cells2) gained2 += markAt(cells2, fr, dir, t, period, w);
       /* THE ARC SWEPT THIS FRAME, walked back from here. */
       if (hl > 1e-12 && dt > 0) {
@@ -384,13 +441,21 @@
           var back = Math.min(sweep, s2 * stepA);
           var dBack = rotate(dir, k, -back), tBack = t - back / omega;
           gained += markAt(cells, fr, dBack, tBack, period, w);
+          if (cellsF) gainedF += markAt(cellsF, fr, dBack, tBack, period, w);
           if (cells2) gained2 += markAt(cells2, fr, dBack, tBack, period, w);
         }
+      }
+      if (gainedF) {
+        rec.cellsF = packCells(cellsF);
+        rec.covF = coverageOf(cellsF);
       }
       if (gained2) {
         rec.cells2 = packCells(cells2);
         rec.cov2 = coverageOf(cells2);
       }
+      /* Re-flying mapped ground with a better instrument gains nothing in
+       * the common class, but it is still a better survey. */
+      if (gainedF || gained2) rec.grade = Math.max(rec.grade || 0, lvl);
       if (gained) {
         rec.cells = packCells(cells);
         rec.cov = coverageOf(cells);
@@ -403,13 +468,15 @@
         /* A ring lies in its planet's equator: an orbit that maps the
          * equatorial band maps the ring. */
       }
-      if (gained || gained2) {
+      if (gained || gainedF || gained2) {
         if (body.ring) {
           var rr = recordFor(G, sys, keyOf(G, body.id + ':ring'), body.name + ' ring', 'ring');
           migrateRec(rr);
           var rb = rr.cov;
           rr.cov = Math.max(rr.cov, bandCoverage(cells));
+          if (cellsF) rr.covF = Math.max(rr.covF || 0, bandCoverage(cellsF));
           if (cells2) rr.cov2 = Math.max(rr.cov2, bandCoverage(cells2));
+          if (cellsF || cells2) rr.grade = Math.max(rr.grade || 0, lvl);
           if (rr.cov > rb) {
             ageIn(rr, rb - (rr.soldCov || 0), rr.cov - (rr.soldCov || 0), t);
             rr.t = t; rr.grade = Math.max(rr.grade || 0, lvl);
@@ -429,16 +496,18 @@
         if (!c || V.dist(c.pos, ship.pos) > (fld.radius || 50) * 1.5) continue;
         brec = brec || recordFor(G, sys, keyOf(G, belt.id), belt.name, 'belt');
         brec.fields = brec.fields || {};
-        if (typeof brec.cov2 !== 'number') {
-          /* Pre-split belt record: same rule as migrateRec. */
-          brec.fields2 = (brec.grade || 0) >= 2 ? Object.assign({}, brec.fields) : {};
-          brec.cov2 = (brec.grade || 0) >= 2 ? (brec.cov || 0) : 0;
-          if (brec.soldCov2 === undefined) brec.soldCov2 = (brec.grade || 0) >= 2 ? (brec.soldCov || 0) : 0;
-        }
+        migrateRec(brec);
+        brec.fieldsF = brec.fieldsF || {};
         brec.fields2 = brec.fields2 || {};
-        if (lvl >= 2 && !brec.fields2[f]) {
+        if (lvl >= 2 && !brec.fieldsF[f]) {
+          brec.fieldsF[f] = 1;
+          brec.covF = Object.keys(brec.fieldsF).length / belt.fields.length;
+          brec.grade = Math.max(brec.grade || 0, lvl);
+        }
+        if (lvl >= 3 && !brec.fields2[f]) {
           brec.fields2[f] = 1;
           brec.cov2 = Object.keys(brec.fields2).length / belt.fields.length;
+          brec.grade = Math.max(brec.grade || 0, lvl);
         }
         if (!brec.fields[f]) {
           brec.fields[f] = 1;
@@ -489,15 +558,21 @@
     if (!tgt) return 0;
     var Eco = global.Economy;
     var rows = deposits(tgt, sys);
+    /* Each commodity is paid on the ground mapped by an instrument that
+     * reads its class, and no other: a grade-1 survey of a rare-metal world
+     * sells for its ore and its ice. The array-mapped part at full rate,
+     * the rest at 0.6, as before. */
+    var a2 = Math.max(0, arrayCov(rec) - soldArray(rec));
     var sum = 0;
     rows.forEach(function (r) {
       var base = Eco && Eco.BY_ID && Eco.BY_ID[r.cid] ? Eco.BY_ID[r.cid].base : 80;
-      sum += r.grade * base;
+      var cls = classOf(r.cid);
+      var c = Math.max(0, covClass(rec, cls) - soldClass(rec, cls));
+      if (cov !== undefined) c = Math.min(c, cov);
+      var ca = Math.min(c, a2);
+      sum += r.grade * base * (ca * 1.0 + (c - ca) * 0.6);
     });
-    /* The array-mapped part at full rate, the scanner part at 0.6. */
-    var c = cov === undefined ? Math.max(0, rec.cov - (rec.soldCov || 0)) : cov;
-    var c2 = Math.min(c, Math.max(0, arrayCov(rec) - soldArray(rec)));
-    return Math.round(sum * BUY_RATE * (c2 * 1.0 + (c - c2) * 0.6) * ageFactor(rec, now) / 10) * 10;
+    return Math.round(sum * BUY_RATE * ageFactor(rec, now) / 10) * 10;
   }
   function soldArray(rec) {
     if (typeof rec.soldCov2 === 'number') return rec.soldCov2;
@@ -508,7 +583,8 @@
   function saleable(G, sys, now) {
     var here = (G.here && G.here.id) || 'sys';
     return Object.keys(G.surveys || {}).map(function (k) { return G.surveys[k]; }).filter(function (rec) {
-      return rec.star === here && rec.cov - (rec.soldCov || 0) > 0.02;
+      migrateRec(rec);
+      return rec.star === here && unsoldAny(rec) > 0.02;
     }).map(function (rec) {
       return { rec: rec, price: value(rec, sys, now) };
     }).filter(function (s) { return s.price > 0; });
@@ -519,6 +595,7 @@
       total += s.price;
       s.rec.soldCov = s.rec.cov;
       s.rec.soldCov2 = arrayCov(s.rec);
+      s.rec.soldCovF = covClass(s.rec, 2);
       /* Nothing unsold is left, so the next ground gained starts its own date. */
       delete s.rec.tMean;
     });
@@ -545,6 +622,8 @@
     swathAt: swathAt,
     value: value, saleable: saleable, sell: sell, ageFactor: ageFactor,
     arrayCov: arrayCov, meanT: meanT, migrateRec: migrateRec, CELL_PAD: CELL_PAD,
+    CLASS: CLASS, TOP: TOP, classOf: classOf, covClass: covClass, soldClass: soldClass,
+    readable: readable, unsoldAny: unsoldAny,
     gradeWord: gradeWord, fmtTonnes: fmtTonnes
   };
   global.Survey = Survey;
