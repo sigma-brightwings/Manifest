@@ -18,10 +18,12 @@
  *   - Growth points kept to the useful ones: every way on, door and route
  *     point, and up to HULL_KEEP hull points spread over the faces.
  *
- * Point record: [x, y, z, face, type, cls]
+ * Point record: [x, y, z, face, type, cls, from?]
  *   face  0..5 = +x -x +y -y +z -z (the outward normal)
  *   type  'r' route, 'd' outer door, 'x' way on, 'h' hull
  *   cls   'L' | 'SM' | null
+ *   from  route points with a neck: [x, y, z] on the module's own route
+ *         where the neck starts (2026-10-21)
  */
 'use strict';
 var fs = require('fs');
@@ -65,7 +67,10 @@ function main() {
     }
     var P = keep.map(function (q) {
       var type = q.exit ? 'x' : q.door ? 'd' : q.hull ? 'h' : 'r';
-      return [r2(q.at[0] * k), r2(q.at[1] * k), r2(q.at[2] * k), face(q.normal), type, q.cls || null];
+      var rec = [r2(q.at[0] * k), r2(q.at[1] * k), r2(q.at[2] * k), face(q.normal), type, q.cls || null];
+      /* a route point's NECK: where on the module's own route it starts */
+      if (type === 'r' && q.from && q.neck > 0.005) rec.push([r2(q.from[0] * k), r2(q.from[1] * k), r2(q.from[2] * k)]);
+      return rec;
     });
     var cls = null;
     e.berths.forEach(function (b) { if (b.cls === 'L') cls = 'L'; else if (!cls && b.cls) cls = b.cls; });

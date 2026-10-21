@@ -355,6 +355,16 @@ Astra has seen it working.
     carries its neck (`slot.neck`: from the route point out through the
     wall to the piece), and the paper draws them as corridors, 30 m for
     S/M routes, 60 m for L. `test/growth.test.js`: 26 checks.
+    Same day, third pass: **necks off pieces too.** `tools/module-index.cjs`
+    now keeps where each module route point's neck starts (1,760 of them;
+    `src/modules.js` regenerated; every other value is unchanged), so a
+    piece welded onto another piece's route gets a neck back into that
+    piece. **The Union varies its blocks**: a form it has already built at
+    a port is a third as likely next time (then a fifth...), and when only
+    one or two big forms fit it reaches down in size until it has three to
+    choose from. A rich spine builds 5–9 forms where it could build one;
+    pad sites and farms stay narrow, because their families have few
+    pieces that fit a flat ground site. 29 checks.
 
 ### Changed
 

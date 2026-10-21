@@ -146,6 +146,36 @@ console.log('--- necks ---');
   });
   check('a piece on a berth route has a neck from the route to it', routeSlots > 0 && withNeck === routeSlots, withNeck + ' of ' + routeSlots);
   check('the neck is the measured one, and only route pieces have one', bad === 0, bad + ' wrong');
+  /* off a piece: the neck runs back into the PARENT piece's own route */
+  var chained = 0, cBad = 0;
+  plans.forEach(function (x) {
+    x.p.slots.forEach(function (s) {
+      if (s.parent < 0 || !s.neck) return;
+      chained++;
+      var P = x.p.slots[s.parent], b = P.box, e = 1e-6;
+      var inP = [0, 1, 2].every(function (i) { return s.neck.from[i] >= b.min[i] - e && s.neck.from[i] <= b.max[i] + e; });
+      if (s.neck.to !== s.at || !inP) cBad++;
+    });
+  });
+  check('pieces on a piece\'s route have necks too', chained > 0, chained + ' chained necks');
+  check('a chained neck starts inside the piece it hangs on', cBad === 0, cBad + ' wrong');
+})();
+
+console.log('--- variety ---');
+(function () {
+  /* 2026-10-21: with only "the biggest that fits", a rich spine built one
+   * 139 m access trunk in every set. Families with few big pieces (pad
+   * sites, farms) are narrow whatever the Union does, so the spine is the
+   * case that shows whether the Union is choosing. */
+  var fs = [0, 1, 2, 3, 4].map(function (i) {
+    var seen = {}, by = {};
+    Gr.plan(ctx(RICH, 'spine-l', 700 + i)).slots.forEach(function (s) {
+      if (s.builder === 'union' && !by[s.set]) { by[s.set] = 1; seen[s.mod.f || s.mod.id] = 1; }
+    });
+    return Object.keys(seen).length;
+  });
+  check('a rich spine builds several forms, not one block over and over', fs.every(function (n) { return n >= 3; }),
+    'forms per port: ' + fs.join(' '));
 })();
 
 console.log('--- standing pieces ---');

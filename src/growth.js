@@ -240,7 +240,10 @@
       for (var b = 0; b < 3; b++) { if (c[b] < mn[b]) mn[b] = c[b]; if (c[b] > mx[b]) mx[b] = c[b]; }
     }
     var pts = mod.p.map(function (q) {
-      return { at: T(q), normal: mv(R, FACES[q[3]]).map(Math.round), type: q[4], cls: q[5] };
+      var at = T(q), from = q[6] ? T(q[6]) : null;
+      return { at: at, normal: mv(R, FACES[q[3]]).map(Math.round), type: q[4], cls: q[5],
+               /* a route point's neck, back along into this piece's own route */
+               from: from, neck: from ? Math.sqrt(dot([at[0]-from[0], at[1]-from[1], at[2]-from[2]], [at[0]-from[0], at[1]-from[1], at[2]-from[2]])) : 0 };
     }).filter(function (q) { return dot(q.normal, n) > -0.5 || q.type === 'x'; });   // not back into the parent
     return { R: R, jc: jc, at: at, box: { min: mn, max: mx }, pts: pts };
   }
@@ -283,7 +286,7 @@
   function build(ctx, key) {
     var core = points(ctx.model), lib = portLib(ctx.model);
     var res = { key: key, model: ctx.model, order0: orderAt(ctx, 0), wealth: wealthOf(ctx.sys, ctx.port),
-                slots: [], crawlers: [] };
+                slots: [], crawlers: [], forms: {} };
     if (!core || !lib || !mods().length) return res;
     var mpu = lib.metresPerUnit || 100, H = core.half || 1;
     var role = (ctx.port && ctx.port.market && ctx.port.market.role) || '_';
@@ -378,12 +381,29 @@
    * within UNION_BIG of the biggest. Moonlighters and scavengers take
    * whatever comes. */
   var UNION_BIG = 0.6;
+  var REPEAT = 2;     // each time the Union has built a form here, a third (then a fifth...) as likely again
+  var MIN_FORMS = 3;  // ...but never down to fewer forms than this if smaller ones fit
   function biggest(c) {
     if (c.length < 2) return c;
     var sz = function (m) { return Math.max(m.s[0], m.s[1], m.s[2]); };
+    var form = function (m) { return m.f || m.id; };
     var top = 0;
     c.forEach(function (m) { if (sz(m) > top) top = sz(m); });
-    return c.filter(function (m) { return sz(m) >= UNION_BIG * top; });
+    var out = c.filter(function (m) { return sz(m) >= UNION_BIG * top; });
+    /* A family with only one or two big pieces would build nothing else
+     * (a pad site was five sets in six one form): reach down in size,
+     * biggest first, until there are MIN_FORMS to choose from. */
+    var forms = {};
+    out.forEach(function (m) { forms[form(m)] = 1; });
+    if (Object.keys(forms).length < MIN_FORMS) {
+      c.filter(function (m) { return out.indexOf(m) < 0; })
+       .sort(function (a, b) { return sz(b) - sz(a); })
+       .forEach(function (m) {
+         if (Object.keys(forms).length >= MIN_FORMS && !forms[form(m)]) return;
+         if (Object.keys(forms).length < MIN_FORMS || forms[form(m)]) { out.push(m); forms[form(m)] = 1; }
+       });
+    }
+    return out;
   }
   function pickWeighted(list, w, r) {
     var sum = 0, i;
@@ -442,7 +462,12 @@
       if (wantBerth && f.cls === 'SM') cand = cand.filter(function (m) { return m.cls !== 'L'; });
       if (who === 'union') cand = biggest(cand);
       if (!cand.length) continue;
-      var mod = cand[Math.floor(R('mod' + g + '.' + tries) * cand.length)];
+      /* The Union does not build the same block over and over when it has
+       * others: a form it has already built here is less likely each time
+       * (2026-10-21: a rich pad site was five sets in six one form). */
+      var mod = who === 'union'
+        ? pickWeighted(cand, cand.map(function (m) { return 1 / (1 + REPEAT * (res.forms[m.f || m.id] || 0)); }), R('mod' + g + '.' + tries))
+        : cand[Math.floor(R('mod' + g + '.' + tries) * cand.length)];
       var spin = Math.floor(R('spin' + g + '.' + tries) * 4);
       var pl = place(mod, f.at, f.normal, spin, mpu);
       if (f.depth === 0 && !fitsCore(pl, f, mpu, H)) continue;
@@ -475,6 +500,7 @@
        * piece will not stand there, it tries another piece or place. */
       if (who === 'union' && group.length < wanted + 1) continue;
       var set = res.slots.length;
+      if (who === 'union') res.forms[mod.f || mod.id] = (res.forms[mod.f || mod.id] || 0) + 1;
       var dur = who === 'union' ? (0.4 + 0.4 * R('dur' + g)) : who === 'moonlighter' ? (0.6 + 0.7 * R('dur' + g)) : (0.2 + 1.8 * R('dur' + g));
       group.forEach(function (gq) {
         var id = res.slots.length;
@@ -496,7 +522,7 @@
         var child = Math.max.apply(null, mod.s) * CHILD_SHRINK;
         gq.pl.pts.forEach(function (q) {
           free.push({ at: q.at, normal: q.normal, type: q.type, cls: q.cls, depth: slot.depth, size: hub ? FREE_CORE * H * mpu : child,
-                      owner: id, used: false, hub: hub });
+                      owner: id, used: false, hub: hub, from: q.from, neck: q.neck });
         });
       });
       return group.length;
