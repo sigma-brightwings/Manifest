@@ -338,6 +338,23 @@ Astra has seen it working.
     years. A Crawler stopped on its way (`Growth.delay`) pushes its job and
     every later one back.
   - `test/growth.test.js` (19 checks).
+  - **2026-10-21, second pass.** The Union now builds **big, and from the
+    station's own family**: it takes a piece of its own family before
+    another family's piece of the asked-for kind (a rich spine had been
+    growing refinery tanks and cradle bins, because a spine has no storage
+    piece worth the name), and of what fits it takes the largest (anything
+    within 60% of the biggest). On a rich `spine-l` that is spine habitats,
+    docks and access trunks of 76–139 m, where it was 48–60 m bins. Union
+    sets go **along the station's main axis**: a long station (a spine)
+    grows lengthwise and a flat one along its axle; a point facing out off
+    either end is three times as likely to be built on, a point with no
+    mirror mate a third as likely, every member of a set stands at the same
+    station along the axis (within 4% of the half-span), and the Union no
+    longer builds half a set — if a mirror is free and the piece will not
+    stand there, it tries another. **Necks**: each piece on a berth route
+    carries its neck (`slot.neck`: from the route point out through the
+    wall to the piece), and the paper draws them as corridors, 30 m for
+    S/M routes, 60 m for L. `test/growth.test.js`: 26 checks.
 
 ### Changed
 

@@ -85,6 +85,67 @@ console.log('--- the Union ---');
   check('Union jobs bring Crawlers', crawlers > 0, crawlers + ' Crawlers');
   check('scavengers bring none', plans.filter(function (x) { return x.sys === POOR; }).every(function (x) {
     return x.p.slots.filter(function (s) { return s.builder === 'union'; }).length || !x.p.crawlers.length; }));
+
+  /* 2026-10-21: bigger pieces, from the station's own family */
+  var famOf = function (m) { return String(m).replace(/-(navy|syn)(?=-|$)/, '').replace(/-[sml]$/, ''); };
+  var size = function (s) { return Math.max.apply(null, s.mod.s); };
+  var un = [], mo = [];
+  plans.forEach(function (x) {
+    x.p.slots.forEach(function (s) {
+      if (s.builder === 'union') un.push({ s: s, fam: famOf(x.c.model) });
+      if (s.builder === 'moonlighter') mo.push(s);
+    });
+  });
+  var own = un.filter(function (u) { return u.s.mod.fam === u.fam; }).length;
+  check('the Union builds from the station\'s own family', own / un.length > 0.75, own + ' of ' + un.length);
+  var mean = function (l) { return l.reduce(function (a, b) { return a + b; }, 0) / (l.length || 1); };
+  var mu = mean(un.map(function (u) { return size(u.s); })), mm = mean(mo.map(size));
+  check('Union pieces are bigger than moonlighters\'', mu > mm * 1.2, Math.round(mu) + ' m against ' + Math.round(mm) + ' m');
+})();
+
+console.log('--- the main axis ---');
+(function () {
+  check('a spine\'s main axis is its length', Gr.mainAxis(GrowthPoints['spine-l']) === 1);
+  var bad = 0, n = 0, ends = 0, endUnion = 0;
+  plans.filter(function (x) { return x.sys === RICH && x.p.axis >= 0; }).forEach(function (x) {
+    var ax = x.p.axis, by = {};
+    x.p.slots.forEach(function (s) { if (s.builder === 'union') (by[s.set] = by[s.set] || []).push(s); });
+    Object.keys(by).forEach(function (q) {
+      var ss = by[q];
+      ss.forEach(function (s) {
+        n++;
+        if (Math.abs(Math.abs(s.at[ax]) - Math.abs(ss[0].at[ax])) > Gr.AX_TOL * 1.001 + 1e-6) bad++;
+      });
+    });
+    var b = GrowthPoints[x.c.model].box, c = (b.max[ax] + b.min[ax]) / 2, h = (b.max[ax] - b.min[ax]) / 2;
+    x.p.slots.forEach(function (s) {
+      if (s.builder !== 'union' || s.parent >= 0) return;
+      endUnion++;
+      if (Math.abs(s.n[ax]) > 0.5 && s.n[ax] * (s.at[ax] - c) / h > 0.5) ends++;
+    });
+  });
+  check('a Union set stands at one station along the main axis', bad === 0, bad + ' of ' + n + ' pieces off station');
+  check('the Union carries the station on at its ends', ends > 0, ends + ' of ' + endUnion + ' core pieces at the ends');
+})();
+
+console.log('--- necks ---');
+(function () {
+  var withNeck = 0, routeSlots = 0, bad = 0;
+  plans.forEach(function (x) {
+    var P = GrowthPoints[x.c.model];
+    x.p.slots.forEach(function (s) {
+      if (s.parent >= 0 || s.point === undefined) return;
+      var q = P.points[s.point];
+      if (!q || !q.from || !(q.neck > 0.005)) { if (s.neck) bad++; return; }
+      routeSlots++;
+      if (!s.neck) return;
+      withNeck++;
+      var d = Math.sqrt([0, 1, 2].reduce(function (a, i) { var v = s.neck.to[i] - s.neck.from[i]; return a + v * v; }, 0));
+      if (Math.abs(d - q.neck) > 0.01 || s.neck.to !== s.at) bad++;
+    });
+  });
+  check('a piece on a berth route has a neck from the route to it', routeSlots > 0 && withNeck === routeSlots, withNeck + ' of ' + routeSlots);
+  check('the neck is the measured one, and only route pieces have one', bad === 0, bad + ' wrong');
 })();
 
 console.log('--- standing pieces ---');

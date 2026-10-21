@@ -61,6 +61,7 @@
   var FREE_CORE = 0.30;               // growth-points.cjs FREE: room checked off a core point
   var SIDE_CORE = 1.6;                // lateral allowance off a core point, x the depth allowance
   var SYM_TOL = 0.12;                 // symmetry match, x the core half-span
+  var AX_TOL = 0.04;                  // a Union set's station along the main axis, x the half-span
 
   function hash01(s) {
     var h = 2166136261 >>> 0;
@@ -149,6 +150,36 @@
     _:            ['habitat', 'storage', 'power', 'comms', 'structure']
   };
 
+  /* ---- the main axis of a core --------------------------------------------
+   * A spine is long: it grows at its ends and in rings along its length. A
+   * ring or a dish is flat: it grows along its axle. A station about as
+   * deep as it is wide has no main axis and the Union builds where it
+   * likes. Returns 0/1/2, or -1. */
+  var AXIS_LONG = 1.3, AXIS_FLAT = 0.6;
+  function mainAxis(core) {
+    var b = core && core.box;
+    if (!b) return -1;
+    var e = [0, 1, 2].map(function (a) { return b.max[a] - b.min[a]; });
+    var o = [0, 1, 2].sort(function (p, q) { return e[q] - e[p]; });
+    if (e[o[0]] >= AXIS_LONG * e[o[1]]) return o[0];
+    if (e[o[2]] <= AXIS_FLAT * e[o[1]]) return o[2];
+    return -1;
+  }
+  /* How much the Union wants a core point. Off the END of the main axis
+   * (facing out along it, in the outer part of the station) it carries the
+   * station on: three times as likely as anywhere else. */
+  var END_WEIGHT = 3, END_FRAC = 0.5, LONE_WEIGHT = 0.35;
+  function axisWeight(f, ax, core) {
+    if (f.depth > 0) return 1;
+    if (ax >= 0) {
+      var c = (core.box.max[ax] + core.box.min[ax]) / 2, h = (core.box.max[ax] - core.box.min[ax]) / 2 || 1;
+      var out = f.normal[ax] * (f.at[ax] - c) / h;
+      if (Math.abs(f.normal[ax]) > 0.5 && out > END_FRAC) return END_WEIGHT;
+    }
+    /* off the ends, a point with no mirror mate makes a set of one */
+    return f.mates ? 1 : LONE_WEIGHT;
+  }
+
   /* ---- symmetry of a core ------------------------------------------------- */
   var symCache = {};
   /* named by the axes they negate: three mirrors, three half-turns */
@@ -173,11 +204,15 @@
     }
     return (symCache[model] = out);
   }
-  function partner(pts, q, M, tol) {
+  /* axTol: when given, a partner must also stand at the mirrored STATION
+   * along main axis ax within axTol - a Union set is a clean rib round the
+   * spine, not three pieces near each other. */
+  function partner(pts, q, M, tol, ax, axTol) {
     var at = M(q.at), n = M(q.normal), best = -1, bd = tol;
     for (var i = 0; i < pts.length; i++) {
       var o = pts[i];
       if (dot(o.normal, n) < 0.99) continue;
+      if (axTol && ax >= 0 && Math.abs(o.at[ax] - at[ax]) > axTol) continue;
       var dx = o.at[0]-at[0], dy = o.at[1]-at[1], dz = o.at[2]-at[2], d = Math.sqrt(dx*dx + dy*dy + dz*dz);
       if (d < bd) { bd = d; best = i; }
     }
@@ -264,7 +299,20 @@
       var rm = q.room || [FREE_CORE * H, FREE_CORE * H, FREE_CORE * H, FREE_CORE * H, FREE_CORE * H];
       var size = Math.max(rm[0], Math.min(rm[1] + rm[2], rm[3] + rm[4])) * mpu;
       return { at: q.at, normal: q.normal, type: q.hull ? 'h' : q.door ? 'd' : 'r', cls: q.cls || null,
-               depth: 0, size: size, room: rm, owner: -1, idx: q.i, used: false };
+               depth: 0, size: size, room: rm, owner: -1, idx: q.i, used: false,
+               /* the NECK: the corridor cut from the berth route out through
+                * the wall to where the piece stands */
+               from: q.from || null, neck: q.neck || 0 };
+    });
+    var ax = mainAxis(core);
+    res.axis = ax;
+    /* how many mirror mates each core point has, at its own station */
+    free.forEach(function (f) {
+      f.mates = 0;
+      sym.forEach(function (M) {
+        var j = partner(core.points, core.points[f.idx], M, SYM_TOL * H, ax, AX_TOL * H);
+        if (j >= 0 && j !== f.idx) f.mates++;
+      });
     });
     /* CAP: how many pieces a port can carry at once - more for wealth, and
      * more for a wreckhold, which is all pieces. It is reached gradually:
@@ -287,7 +335,7 @@
       var standing = res.slots.filter(function (s) { return s.t0 <= t && !(s.strip <= t); }).length;
       if (standing >= capNow(t)) continue;
       var wantBerth = R('berth' + guard) < (who === 'union' ? 0.45 : 0.3);
-      tryPlace(ctx, res, free, who, wantBerth, theme, liv, mpu, H, t, guard, R, sym, core);
+      tryPlace(ctx, res, free, who, wantBerth, theme, liv, mpu, H, t, guard, R, sym, core, ax);
     }
     /* the Union's jobs bring a Crawler */
     var sets = {};
@@ -326,7 +374,26 @@
     return c;
   }
 
-  function tryPlace(ctx, res, free, who, wantBerth, theme, liv, mpu, H, t, g, R, sym, core) {
+  /* The Union builds BIG: of the pieces that fit, the largest - anything
+   * within UNION_BIG of the biggest. Moonlighters and scavengers take
+   * whatever comes. */
+  var UNION_BIG = 0.6;
+  function biggest(c) {
+    if (c.length < 2) return c;
+    var sz = function (m) { return Math.max(m.s[0], m.s[1], m.s[2]); };
+    var top = 0;
+    c.forEach(function (m) { if (sz(m) > top) top = sz(m); });
+    return c.filter(function (m) { return sz(m) >= UNION_BIG * top; });
+  }
+  function pickWeighted(list, w, r) {
+    var sum = 0, i;
+    for (i = 0; i < list.length; i++) sum += w[i];
+    var x = r * sum;
+    for (i = 0; i < list.length; i++) { x -= w[i]; if (x < 0) return list[i]; }
+    return list[list.length - 1];
+  }
+
+  function tryPlace(ctx, res, free, who, wantBerth, theme, liv, mpu, H, t, g, R, sym, core, ax) {
     var alive = res.slots.filter(function (s) { return s.t0 <= t && !(s.strip <= t); });
     /* which free points this builder may use */
     var pool = free.filter(function (f) {
@@ -348,7 +415,9 @@
     var all = mods();
     for (var tries = 0; tries < 6; tries++) {
       var from = (who === 'scavenger' && onPieces.length && R('reef' + g + '.' + tries) < 0.65) ? onPieces : pool;
-      var f = from[Math.floor(R('pt' + g + '.' + tries) * from.length)];
+      var f = who === 'union'
+        ? pickWeighted(from, from.map(function (q) { return axisWeight(q, ax, core); }), R('pt' + g + '.' + tries))
+        : from[Math.floor(R('pt' + g + '.' + tries) * from.length)];
       var kind = theme[Math.floor(R('kind' + g + '.' + tries) * theme.length)];
       var needPass = f.type === 'd' ? (f.cls || 'SM') : null;
       /* past the chain limit only a large hub carries on */
@@ -358,11 +427,20 @@
       var fam = String(ctx.model).replace(/-(navy|syn)(?=-|$)/, '').replace(/-[sml]$/, '');
       var cand = candidatesFor(all, kind, wantBerth, liv, who, maxM, minM, needPass, fam);
       /* in the core's family, any kind it has will do: a spine's pieces
-       * are whatever a spine is made of */
-      if (!cand.length && who !== 'scavenger')
-        cand = candidatesFor(all.filter(function (m) { return m.fam === fam; }), null, wantBerth, liv, who, maxM, minM, needPass, fam)
+       * are whatever a spine is made of. The Union goes to its own family
+       * BEFORE another family's piece of the right kind (2026-10-21: a rich
+       * spine was growing refinery tanks and cradle bins because the spine
+       * has no storage piece worth the name); others only when nothing fits. */
+      var ownCand = function () {
+        return candidatesFor(all.filter(function (m) { return m.fam === fam; }), null, wantBerth, liv, who, maxM, minM, needPass, fam)
           .filter(function (m) { return wantBerth || !m.nb; });
+      };
+      if (who === 'union' && !cand.some(function (m) { return m.fam === fam; })) {
+        var oc = ownCand();
+        if (oc.length) cand = oc;
+      } else if (!cand.length && who !== 'scavenger') cand = ownCand();
       if (wantBerth && f.cls === 'SM') cand = cand.filter(function (m) { return m.cls !== 'L'; });
+      if (who === 'union') cand = biggest(cand);
       if (!cand.length) continue;
       var mod = cand[Math.floor(R('mod' + g + '.' + tries) * cand.length)];
       var spin = Math.floor(R('spin' + g + '.' + tries) * 4);
@@ -377,21 +455,25 @@
       if (alive.some(function (s) { return overlap(pl.box, s.box, 0.02); })) continue;
       /* the set: the Union builds every mirror at once; a moonlighter means
        * to and sometimes does not; a scavenger builds one */
-      var group = [{ f: f, pl: pl }];
+      var group = [{ f: f, pl: pl }], wanted = 0;
       if (f.depth === 0 && f.idx !== undefined && who !== 'scavenger' && sym.length) {
         var o = orderAt(ctx, Math.max(t, 0));
         sym.forEach(function (M, mi) {
           if (who === 'moonlighter' && R('gap' + g + '.' + mi) < 0.35) return;
-          var j = partner(core.points, core.points[f.idx], M, SYM_TOL * H);
+          var j = partner(core.points, core.points[f.idx], M, SYM_TOL * H, ax, who === 'union' ? AX_TOL * H : 0);
           if (j < 0) return;
           var fp = free.filter(function (x) { return x.owner < 0 && x.idx === j && !x.used; })[0];
           if (!fp || group.some(function (gq) { return gq.f === fp; })) return;
+          wanted++;
           var pp = place(mod, fp.at, fp.normal, spin, mpu);
           if (!fitsCore(pp, fp, mpu, H)) return;
           if (alive.concat(group.map(function (gq) { return { box: gq.pl.box }; })).some(function (s) { return overlap(pp.box, s.box, 0.02); })) return;
           group.push({ f: fp, pl: pp });
         });
       }
+      /* The Union does not build half a set: if a mirror is free but this
+       * piece will not stand there, it tries another piece or place. */
+      if (who === 'union' && group.length < wanted + 1) continue;
       var set = res.slots.length;
       var dur = who === 'union' ? (0.4 + 0.4 * R('dur' + g)) : who === 'moonlighter' ? (0.6 + 0.7 * R('dur' + g)) : (0.2 + 1.8 * R('dur' + g));
       group.forEach(function (gq) {
@@ -404,6 +486,9 @@
         var slot = { id: id, set: set, mod: mod, builder: who, at: gq.f.at, n: gq.f.normal, R: gq.pl.R, jc: gq.pl.jc,
                      box: gq.pl.box, parent: parent, depth: hub ? 0 : gq.f.depth + 1, point: gq.f.idx,
                      t0: t, t1: t + dur * YEAR, strip: strip, hub: !!hub,
+                     /* the corridor from the berth route to the piece, cut when
+                      * the piece is: {from, to, cls}, port units */
+                     neck: gq.f.from && gq.f.neck > 0.005 ? { from: gq.f.from, to: gq.f.at, cls: gq.f.cls || 'SM' } : null,
                      /* a berth over an outer door turns that door inward */
                      covers: gq.f.type === 'd' ? true : undefined };
         res.slots.push(slot);
@@ -479,7 +564,7 @@
   var Growth = {
     plan: plan, stateAt: stateAt, delay: delay,
     baseOrder: baseOrder, orderAt: orderAt, wealthOf: wealthOf, builderFor: builderFor,
-    symmetry: symmetry, place: place, overlap: overlap,
+    symmetry: symmetry, place: place, overlap: overlap, mainAxis: mainAxis, AX_TOL: AX_TOL, UNION_BIG: UNION_BIG,
     UNION_AT: UNION_AT, MOON_AT: MOON_AT, CHAIN_MAX: CHAIN_MAX, CHILD_SHRINK: CHILD_SHRINK,
     T_START: T_START, T_END: T_END, YEAR: YEAR, DAY: DAY,
     _clear: function () { planCache = {}; symCache = {}; }
