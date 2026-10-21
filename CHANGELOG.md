@@ -375,6 +375,12 @@ Astra has seen it working.
 - **2026-10-16: mining laser slowed** from about 7 s a chunk to about 11,
   because a rich rock out-earned a milfuel run, and the balance rule is
   that mining pays well but never beats active hauling.
+- **2026-10-21: the loading screen says Manifest.** It said "PROCEDURAL
+  SPACE GAME" in grey on black. It now shows the title card: the navy
+  field, the eight-pointed compass rose and the Manifest wordmark, drawn
+  from src/logo.js (now loaded first, before anything else), with the
+  tagline and "loading". It fades into the title screen instead of
+  blinking off.
 
 ### Fixed
 

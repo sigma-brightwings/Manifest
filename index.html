@@ -18,10 +18,19 @@
   #gl { z-index: 0; pointer-events: none; }
   #view { z-index: 1; touch-action: none; cursor: grab; background: transparent; }
   #view:active { cursor: grabbing; }
+  /* The boot card is the title card's first frame: the same navy (TITLE_BG
+     in main.js), the same rose and wordmark from logo.js, drawn while the
+     rest of the scripts load. It fades rather than vanishing, so it hands
+     over to the title screen instead of blinking. */
   #boot {
     position: fixed; inset: 0; display: grid; place-items: center;
-    background: #04060c; z-index: 10; text-align: center; line-height: 1.7;
+    background: #232973; z-index: 10; text-align: center; line-height: 1.7;
+    transition: opacity 0.7s ease;
   }
+  #boot canvas { display: block; margin: 0 auto; }
+  #bootline { font-size: 13px; color: #ffc90e; letter-spacing: 0.18em; font-weight: bold;
+              text-shadow: 0 2px 6px rgba(6,9,40,0.85); }
+  #bootload { font-size: 12px; color: #c3c3c3; margin-top: 10px; letter-spacing: 0.1em; }
 </style>
 </head>
 <body>
@@ -29,11 +38,52 @@
 <canvas id="view"></canvas>
 <div id="boot">
   <div>
-    <div style="color:#ffe6a8">PROCEDURAL SPACE GAME</div>
-    <div style="font-size:12px;color:#7e93b3">gravity, clockwork, cockpit and cargo</div>
-    <div style="font-size:12px;color:#7e93b3;margin-top:12px">loading&hellip;</div>
+    <canvas id="bootmark" role="img" aria-label="Manifest"></canvas>
+    <div id="bootline">GRAVITY, CLOCKWORK, COCKPIT AND CARGO</div>
+    <div id="bootload">loading&hellip;</div>
   </div>
 </div>
+
+<!-- logo.js first of all: it needs nothing else, and the boot card draws
+     the rose and the wordmark out of it while everything below loads. -->
+<script src="src/logo.js"></script>
+<script>
+  (function () {
+    var c = document.getElementById('bootmark');
+    if (!c || !window.Logo) return;
+    var W = window.innerWidth, H = window.innerHeight;
+    // Proportions as the title screen lays out its lockup (drawTitleScreen).
+    var roseR = Math.max(60, Math.min(W * 0.275, H * 0.30));
+    var markW = Math.min(W * 0.60, roseR * 2.55);
+    var markH = markW / Logo.MARK_ASPECT;
+    var cw = Math.ceil(Math.max(roseR * 2, markW) + 24), ch = Math.ceil(roseR * 2 + 12);
+    var dpr = window.devicePixelRatio || 1;
+    c.style.width = cw + 'px'; c.style.height = ch + 'px';
+    c.width = Math.round(cw * dpr); c.height = Math.round(ch * dpr);
+    var ctx = c.getContext('2d');
+    ctx.scale(dpr, dpr);
+    // The rose is drawn as added light, so it needs the navy under it.
+    ctx.fillStyle = '#232973';
+    ctx.fillRect(0, 0, cw, ch);
+    var cx = cw / 2, cy = ch / 2;
+    Logo.drawRose(ctx, cx, cy, roseR, 0.46, true);
+    // The wordmark in the title screen's three passes: shadow, halo, letter.
+    Logo.markPath(ctx, cx, cy, markW);
+    ctx.save();
+    ctx.shadowColor = 'rgba(6,9,40,0.85)';
+    ctx.shadowBlur = Math.max(6, markH * 0.13);
+    ctx.shadowOffsetY = Math.max(2, markH * 0.035);
+    ctx.fillStyle = Logo.INK.letter;
+    ctx.fill('evenodd');
+    ctx.restore();
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = Math.max(1.5, markH * 0.040);
+    ctx.strokeStyle = Logo.INK.halo;
+    ctx.stroke();
+    ctx.fillStyle = Logo.INK.letter;
+    ctx.fill('evenodd');
+  })();
+</script>
 
 <!-- Load order matters: each file uses the ones above it.
      These are deliberately plain scripts, not ES modules, so the game runs
@@ -71,7 +121,7 @@
 <script src="src/shiptrade.js"></script>
 <script src="src/sound.js"></script>
 <script src="src/save.js"></script>
-<script src="src/logo.js"></script>
+<!-- logo.js is loaded at the top, for the boot card. -->
 <script src="src/hulls.js"></script>
 <!-- Generated from ref/ports by `node tools/glb2hulls.js ref/ports --ports`.
      OPTIONAL by design: delete it and every port falls back to the
@@ -91,7 +141,10 @@
   requestAnimationFrame(function () {
     requestAnimationFrame(function () {
       var b = document.getElementById('boot');
-      if (b) b.remove();
+      if (!b) return;
+      b.style.pointerEvents = 'none';
+      b.style.opacity = '0';
+      setTimeout(function () { b.remove(); }, 800);
     });
   });
 </script>
