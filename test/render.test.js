@@ -160,6 +160,8 @@ require('../src/sound.js');
 require('../src/save.js');
 /* The title card's artwork — the wordmark outline and the compass rose. */
 require('../src/logo.js');
+/* And the captains' stories that sit under the title menu. */
+require('../src/captains.js');
 require('../src/hulls.js');
 /* The weather field. gl.js is not in this harness, but screens and the
  * comms channel ask Weather what a port's sky is doing. */

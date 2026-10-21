@@ -13818,17 +13818,18 @@
   /* ---- the title card ----------------------------------------------------
    *
    * Astra's design, and the one screen in the game that is allowed to be a
-   * picture rather than an instrument. The rose is drawn faint and large
-   * behind everything, the wordmark sits over it at full strength, and the
-   * tagline sits under that; the menu is below the lockup rather than on
-   * top of it.
+   * picture rather than an instrument. A starfield, and on it the lockup:
+   * the wordmark over the compass rose, the tagline under them. On a wide
+   * screen the lockup has the left column to itself and the menu sits on
+   * the right with a captain's story under it (captains.js), a different
+   * one every time the game starts. Sky, layout and lockup live in logo.js,
+   * shared with the boot card.
    *
    * It fades in, in that order, and then it STAYS. Nothing here times out
    * and nothing dims when you move the selection — you can sit on this
    * screen, and the whole point of a title card is that somebody does.
    */
-  var TITLE_BG = '#232973';          // the card's navy
-  var TITLE_ROSE_ALPHA = 0.46;       // "big faint rose behind everything", added not mixed
+  var titleStory = null;             // picked once per launch, kept for the session
   var TITLE_FADE = {                 // seconds: [start, length]
     rose: [0.15, 1.5],
     mark: [0.55, 1.2],
@@ -13851,113 +13852,83 @@
     if (G.title) G.title.born = performance.now() - 9000;
   }
 
-  /* A FIXED STARFIELD, not the galaxy's. It is drawn from a constant seed
-   * so the title card looks the same every time it is opened — this is a
-   * printed thing, and a printed thing does not reshuffle itself. Built
-   * once and kept: five hundred stars is nothing to draw and a great deal
-   * to keep re-rolling. */
-  var titleStars = null;
-  function titleStarfield(w, h) {
-    if (titleStars && titleStars.w === w && titleStars.h === h) return titleStars.list;
-    var rng = new RNG('manifest-title-card');
-    var list = [];
-    for (var i = 0; i < 520; i++) {
-      list.push({
-        x: rng.next() * w, y: rng.next() * h,
-        r: 0.4 + rng.next() * rng.next() * 1.8,
-        a: 0.12 + rng.next() * 0.5,
-        /* Each one breathes on its own clock, slowly. A field that all
-         * pulses together is a field that is obviously a loop. */
-        ph: rng.next() * Math.PI * 2,
-        sp: 0.25 + rng.next() * 0.6
-      });
+  /* The captain's story, in a box the size of the menu's, under it. Word
+   * wrapped by measurement so it is right in whatever monospace the system
+   * has; a story that would run past the box is cut at the last line that
+   * fits rather than drawn over the edge. */
+  function drawTitleStory(ctx, x, y, bw, bh, story) {
+    panel(ctx, x, y, bw, bh, true);
+    ctx.save();
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = Logo.INK.gold;
+    spacedText(ctx, story.name.toUpperCase(), x + 30, y + 30, 1.5);
+    ctx.font = '13px ui-monospace, monospace';
+    ctx.fillStyle = '#cfd9ee';
+    var words = story.text.split(' '), line = '', ly = y + 58, maxW = bw - 60;
+    for (var i = 0; i < words.length; i++) {
+      var tryLine = line ? line + ' ' + words[i] : words[i];
+      if (line && ctx.measureText(tryLine).width > maxW) {
+        if (ly > y + bh - 16) break;
+        ctx.fillText(line, x + 30, ly);
+        ly += 20;
+        line = words[i];
+      } else line = tryLine;
     }
-    titleStars = { w: w, h: h, list: list };
-    return list;
+    if (line && ly <= y + bh - 16) ctx.fillText(line, x + 30, ly);
+    ctx.restore();
   }
 
   function drawTitleScreen(ctx, w, h) {
     var t = G.title;
     /* Lazily, so every door into this screen gets the fade without having
      * to remember to set it — and there are four of them. */
-    if (!t.born) t.born = performance.now();
+    /* The boot card (index.html) has already drawn this lockup and is
+     * fading out over the top of it, so on the game's first frame the card
+     * starts finished: fading it in again underneath would make the rose
+     * vanish and come back. Every later visit fades in as it always did. */
+    if (!t.born) {
+      t.born = performance.now();
+      if (global.ManifestBootCard) { t.born -= 9000; global.ManifestBootCard = false; }
+    }
+    if (!titleStory) titleStory = global.Captains ? global.Captains.pick() : null;
     var items = titleItems();
 
-    ctx.save();
-    ctx.fillStyle = TITLE_BG;
-    ctx.fillRect(0, 0, w, h);
-    var stars = titleStarfield(w, h);
-    var now = performance.now() / 1000;
-    for (var si = 0; si < stars.length; si++) {
-      var st = stars[si];
-      ctx.globalAlpha = st.a * (0.62 + 0.38 * Math.sin(now * st.sp + st.ph));
-      ctx.fillStyle = '#dbe6ff';
-      ctx.beginPath();
-      ctx.arc(st.x, st.y, st.r, 0, K.TAU);
-      ctx.fill();
-    }
-    ctx.restore();
+    Logo.drawSky(ctx, w, h, performance.now() / 1000);
     G.hotspots = [];
 
     /* ---- layout ----
-     * The menu is placed first, from the bottom, because it is the part
-     * with a hard minimum size; the lockup takes whatever is left, which
-     * is how this stays sane on a short window. */
+     * logo.js owns it, so the boot card places the lockup exactly where
+     * this screen will. Wide: lockup in the left column, menu and story
+     * stacked on the right. Narrow: stacked, story left out. */
+    var L = Logo.layout(w, h, MENU_W);
     var panelH = 74 + items.length * 32;
-    var px = (w - MENU_W) / 2;
-    var py = Math.min(h * 0.615, h - panelH - 26);
-    var lockH = Math.max(120, py - 26);
-
-    var roseR = Math.min(w * 0.275, lockH * 0.50);
-    var cx = w / 2, roseCy = 14 + lockH * 0.50;
-    var markW = Math.min(w * 0.60, roseR * 2.55);
-    var markH = markW / Logo.MARK_ASPECT;
+    var storyH = 74 + 5 * 32;          // the menu box's own size, as Astra asked
+    var px = L.menuX, py;
+    if (L.wide) py = Math.round((h - (panelH + 26 + storyH)) / 2);
+    else py = Math.min(L.lineY + 48, h - panelH - 16);
+    var cx = L.cx;
 
     var aRose = fadeAt(t.born, 'rose');
     var aMark = fadeAt(t.born, 'mark');
     var aLine = fadeAt(t.born, 'line');
     var aMenu = fadeAt(t.born, 'menu');
 
-    if (aRose > 0) Logo.drawRose(ctx, cx, roseCy, roseR, TITLE_ROSE_ALPHA * aRose, true);
-
-    if (aMark > 0) {
-      ctx.save();
-      ctx.globalAlpha = aMark;
-      /* Three passes over one path. The shadow is what lifts the letters
-       * off the rose behind them — white on pale grey is the one place
-       * this lockup could go soft, and it is the reason the card's own
-       * version was hard to read. */
-      Logo.markPath(ctx, cx, roseCy, markW);
-      ctx.save();
-      ctx.shadowColor = 'rgba(6,9,40,0.85)';
-      ctx.shadowBlur = Math.max(6, markH * 0.13);
-      ctx.shadowOffsetY = Math.max(2, markH * 0.035);
-      ctx.fillStyle = Logo.INK.letter;
-      ctx.fill('evenodd');
-      ctx.restore();
-      ctx.lineJoin = 'round';
-      ctx.lineWidth = Math.max(1.5, markH * 0.040);
-      ctx.strokeStyle = Logo.INK.halo;
-      ctx.stroke();
-      ctx.fillStyle = Logo.INK.letter;
-      ctx.fill('evenodd');
-      ctx.restore();
-    }
+    Logo.drawLockup(ctx, L, aRose, aMark);
 
     if (aLine > 0) {
       ctx.save();
       ctx.globalAlpha = aLine;
-      var lineSize = Math.max(12, Math.min(20, Math.round(markW * 0.030)));
+      var lineSize = Math.max(12, Math.min(17, Math.round(L.markW * 0.030)));
       ctx.font = 'bold ' + lineSize + 'px ui-monospace, monospace';
       ctx.fillStyle = Logo.INK.gold;
       ctx.textAlign = 'center';
       /* Letter-spaced by hand rather than with the `letterSpacing`
        * property, which not every canvas has. A tagline under a script
        * logotype wants air; the same words set solid read as a caption. */
-      var lineY = roseCy + markH * 0.62 + lineSize * 2.0;
-      /* Both lines carry the same shadow the wordmark does, because both
-       * of them cross the rose's south point and gold on tan is no
-       * contrast at all. */
+      var lineY = L.lineY;
+      /* Both lines carry a shadow, so stars behind them do not break up
+       * the letters. */
       ctx.shadowColor = 'rgba(6,9,40,0.9)';
       ctx.shadowBlur = 6;
       ctx.shadowOffsetY = 1;
@@ -13999,6 +13970,13 @@
     if (t.note) drawMenuNote(ctx, box, t.note);
     if (t.edit) drawEditField(ctx, box, t.edit);
     ctx.restore();
+
+    if (L.wide && titleStory && aLine > 0) {
+      ctx.save();
+      ctx.globalAlpha = aLine;
+      drawTitleStory(ctx, px, py + panelH + 26, MENU_W, storyH, titleStory);
+      ctx.restore();
+    }
   }
 
   /* Draw a string with extra space between the letters, centred or left by

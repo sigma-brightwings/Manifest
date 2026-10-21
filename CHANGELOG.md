@@ -381,6 +381,18 @@ Astra has seen it working.
   from src/logo.js (now loaded first, before anything else), with the
   tagline and "loading". It fades into the title screen instead of
   blinking off.
+- **2026-10-21: a new title card.** The wordmark is "Manifest" in Uncial
+  Antiqua (chosen to suggest an epic voyage) in place of the Segoe
+  Script, as outlines in src/logo.js. The navy is gone: the card is a
+  starfield, with the wordmark above the compass rose rather than across
+  it. On a wide window the logo has the left column and the menu sits on
+  the right, with a box the menu's size under it telling one captain's
+  rise (src/captains.js, twelve of them, a different one each launch and
+  never the same twice running). Narrow windows stack the logo over the
+  menu and leave the story out. The loading screen draws the same sky
+  and logo in the same place from logo.js, and the title's first showing
+  starts finished so the hand-over does not flicker. Tests: captains, 10
+  checks; render 950/950.
 
 ### Fixed
 
