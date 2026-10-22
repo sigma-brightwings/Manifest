@@ -187,6 +187,76 @@ function triangulate(loop, ax) {
   return out;
 }
 
+/* ---- round parts: tanks, bells, blisters ---------------------------------
+ *
+ * Astra, 2026-10-21: "anything spherical or even close to it has to be
+ * clipped separately with a flat section to attach it to other parts of the
+ * hull." The grid would slice a tank into curved shards; instead a round
+ * part is its own piece (a pod), never cut by the grid, trimmed ONCE with a
+ * flat face on the side where it meets the hull, and that face plated so it
+ * can attach to any hull piece. A dome is already flat on one side, and
+ * that side is its face.
+ *
+ * Round means: at least 20 triangles; a sphere's box nearly cubic (longest
+ * side within 1.35 of the shortest) with every vertex within 12% of the same
+ * distance from its centre; a dome's short side about half the other two
+ * with every vertex within 18% of the same distance from the middle of its
+ * flat face. Big enough to be a module: at least 6% of the ship's length
+ * across. And not something that only happens to be round: lamps, beacons,
+ * antenna tips, nozzles, engines, dishes, noses, cockpits and interiors stay
+ * with the hull they belong to.
+ */
+var NOT_POD = /lamp|beacon|antenna|nozzle|rcs|engine|dish|interior|cockpit|canopy|glass|forebody|nose/i;
+var POD_TRIM = 0.2;   // fraction of the diameter trimmed off to make the flat face
+function roundKind(p, shipLen) {
+  if (p.tris.length < 20 || NOT_POD.test(p.name || '')) return null;
+  var d = [0, 1, 2].map(function (a) { return p.hi[a] - p.lo[a]; });
+  var big = Math.max.apply(0, d), small = Math.min.apply(0, d);
+  if (big < 0.06 * shipLen) return null;
+  var vs = []; p.tris.forEach(function (t) { t.forEach(function (v) { vs.push(v); }); });
+  function spread(c) {
+    var ds = vs.map(function (v) { return Math.hypot(v[0] - c[0], v[1] - c[1], v[2] - c[2]); });
+    var m = ds.reduce(function (a, b) { return a + b; }, 0) / ds.length;
+    return Math.sqrt(ds.reduce(function (a, b) { return a + (b - m) * (b - m); }, 0) / ds.length) / m;
+  }
+  var mid = [0, 1, 2].map(function (a) { return (p.lo[a] + p.hi[a]) / 2; });
+  if (big / small <= 1.35 && spread(mid) < 0.12) return { kind: 'sphere' };
+  var ax = d.indexOf(small), others = d.filter(function (_, i) { return i !== ax; });
+  if (Math.abs(others[0] - others[1]) / big < 0.2 && small / big > 0.35 && small / big < 0.65) {
+    for (var e = 0; e < 2; e++) {
+      var c = mid.slice(); c[ax] = e ? p.hi[ax] : p.lo[ax];
+      if (spread(c) < 0.18) return { kind: 'dome', ax: ax, side: e ? 1 : -1 };
+    }
+  }
+  return null;
+}
+/* Which way does a sphere meet the hull? For each of the six directions,
+ * count the other parts' vertices just past that face of its box (within
+ * a quarter of its size, inside its footprint): the busiest direction is
+ * where it is mounted. */
+function mountSide(p, parts) {
+  var best = null, bn = -1, size = Math.max(p.hi[0] - p.lo[0], p.hi[1] - p.lo[1], p.hi[2] - p.lo[2]);
+  [0, 1, 2].forEach(function (ax) {
+    [-1, 1].forEach(function (sg) {
+      var face = sg > 0 ? p.hi[ax] : p.lo[ax], n = 0;
+      var o = [0, 1, 2].filter(function (k) { return k !== ax; });
+      parts.forEach(function (q) {
+        if (q === p) return;
+        q.tris.forEach(function (t) {
+          t.forEach(function (v) {
+            var dd = (v[ax] - face) * sg;
+            if (dd < -0.25 * size || dd > 0.25 * size) return;
+            if (v[o[0]] < p.lo[o[0]] || v[o[0]] > p.hi[o[0]] || v[o[1]] < p.lo[o[1]] || v[o[1]] > p.hi[o[1]]) return;
+            n++;
+          });
+        });
+      });
+      if (n > bn) { bn = n; best = { ax: ax, side: sg }; }
+    });
+  });
+  return best;
+}
+
 function chop(file) {
   var base = path.basename(file, '.glb'), m = /^(.*)-([sml])$/.exec(base);
   var fam = m[1], size = m[2], row = (TABLE[fam] || {})[size] || (TABLE[fam] || {}).m;
@@ -212,9 +282,39 @@ function chop(file) {
     (cells[key] = cells[key] || []);
     for (var k = 1; k + 1 < poly.length; k++) cells[key].push({ p: [poly[0], poly[k], poly[k + 1]], c: col, cap: !!cap });
   }
+  var pods = [], podN = 0;
   parts.forEach(function (p) {
     var c = [0, 1, 2].map(function (a) { return (p.lo[a] + p.hi[a]) / 2; });
     if (p.wing) { p.tris.forEach(function (t) { put(c[0] < 0 ? 'wingR' : 'wingL', t, t.col); }); return; }
+    var rk = roundKind(p, len);
+    if (rk) {
+      var key0 = 'pod' + (podN++), counts0 = {};
+      p.tris.forEach(function (t) { counts0[t.col] = (counts0[t.col] || 0) + 1; });
+      var col0 = +Object.keys(counts0).sort(function (a, b) { return counts0[b] - counts0[a]; })[0];
+      var mount, plane;
+      if (rk.kind === 'dome') {
+        /* Its flat face is its mount. Plate it a hair inside, in case the
+         * model left the base open. */
+        mount = { ax: rk.ax, side: rk.side };
+        plane = (rk.side > 0 ? p.hi[rk.ax] : p.lo[rk.ax]) - rk.side * 0.005 * (p.hi[rk.ax] - p.lo[rk.ax]);
+      } else {
+        mount = mountSide(p, parts);
+        var span = p.hi[mount.ax] - p.lo[mount.ax];
+        plane = (mount.side > 0 ? p.hi[mount.ax] : p.lo[mount.ax]) - mount.side * POD_TRIM * span;
+      }
+      /* Keep the side away from the mount; the trimmed cap sat against the hull. */
+      var keepAbove = mount.side < 0;
+      p.tris.forEach(function (t) { var q = clipKeep(t, mount.ax, plane, keepAbove); if (q.length >= 3) put(key0, q, t.col); });
+      chainLoops(sliceSegments(p.tris, mount.ax, plane), 1e-5 * len).forEach(function (loop) {
+        triangulate(loop, mount.ax).forEach(function (tri) {
+          var nrm = cross3(tri), out = mount.side;   // the plate faces the hull it mounts on
+          put(key0, (nrm[mount.ax] * out > 0) ? tri : tri.slice().reverse(), col0, true);
+          capCount++;
+        });
+      });
+      pods.push({ key: key0, ax: mount.ax, side: mount.side, at: plane, kind: rk.kind, name: p.name });
+      return;
+    }
     var long = (p.hi[2] - p.lo[2]) >= 0.4 * len || (p.hi[1] - p.lo[1]) >= 0.6 * H || (p.hi[0] - p.lo[0]) >= 0.8 * halfW;
     if (!long) {
       var key = [idxOf(c[0], P[0]), idxOf(c[1], P[1]), idxOf(c[2], P[2])].join(',');
@@ -287,8 +387,8 @@ function chop(file) {
   var pieces = Object.keys(cells).map(function (key) {
     var tr = cells[key], b = { lo: [1e9, 1e9, 1e9], hi: [-1e9, -1e9, -1e9] };
     tr.forEach(function (t) { t.p.forEach(function (v) { for (var a = 0; a < 3; a++) { b.lo[a] = Math.min(b.lo[a], v[a]); b.hi[a] = Math.max(b.hi[a], v[a]); } }); });
-    var cell = /^wing/.test(key) ? null : key.split(',').map(Number);
-    var role = !cell ? 'wing' : nz === 0 ? 'mid' : cell[2] === nz ? 'fore' : cell[2] === 0 ? 'aft' : 'mid';
+    var cell = /^(wing|pod)/.test(key) ? null : key.split(',').map(Number);
+    var role = /^pod/.test(key) ? 'pod' : !cell ? 'wing' : nz === 0 ? 'mid' : cell[2] === nz ? 'fore' : cell[2] === 0 ? 'aft' : 'mid';
     return { id: key, cell: cell, cells: cell ? [key] : [], role: role, lo: b.lo.map(r4), hi: b.hi.map(r4), tris: tr };
   }).filter(function (p) { return p.tris.length; });
 
@@ -362,8 +462,23 @@ function chop(file) {
       });
     });
   });
+  /* A pod joins the hull piece that lies against its flat face: the one
+   * whose box reaches nearest that plane from the mount side and overlaps
+   * the pod's footprint the most. */
+  pods.forEach(function (pd) {
+    var pod = pieces.filter(function (p) { return p.id === pd.key; })[0]; if (!pod) return;
+    var o = [0, 1, 2].filter(function (k) { return k !== pd.ax; }), best = null, bs = -Infinity;
+    pieces.forEach(function (p) {
+      if (!p.cell) return;
+      var gap = pd.side > 0 ? p.lo[pd.ax] - pd.at : pd.at - p.hi[pd.ax];
+      var ov = o.map(function (k) { return Math.max(0, Math.min(p.hi[k], pod.hi[k]) - Math.max(p.lo[k], pod.lo[k])); });
+      var score = ov[0] * ov[1] - Math.abs(gap) * len;
+      if (score > bs) { bs = score; best = p; }
+    });
+    if (best) joints.push({ a: best.id, b: pod.id, axis: 'xyz'[pd.ax], at: r4(pd.at), span: null, pod: pd.kind });
+  });
   pieces.forEach(function (w) {
-    if (w.cell) return;
+    if (w.cell || w.role === 'pod') return;
     var root = w.id === 'wingL' ? w.lo : w.hi, best = null, bd = Infinity;
     pieces.forEach(function (p) {
       if (!p.cell) return;

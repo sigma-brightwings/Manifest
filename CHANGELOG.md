@@ -417,6 +417,16 @@ Astra has seen it working.
   part's own paint (capital-l: 1,718 plate triangles). Scraps are judged on
   the model's own geometry, not on the plates. The viewer can show the
   plates in yellow.
+- **2026-10-21: round parts are pods (ship-modules).** A tank, bell or
+  blister is never sliced by the cut grid: it becomes its own piece,
+  trimmed once with a flat face (a fifth of its diameter) on the side where
+  it meets the hull, and that face plated so it can mount on any hull
+  piece; a dome's own flat side is its face. Round means a near-cube box
+  with every vertex about the same distance from the centre (or a dome's),
+  at least 6% of the ship's length across, and not a lamp, beacon, antenna
+  tip, nozzle, engine, dish, nose or cockpit. Found on the couriers,
+  shuttles, small trader, H2 freighters, tenders and tugs; smaller round
+  parts stay whole inside their hull piece.
 
 ### Fixed
 
