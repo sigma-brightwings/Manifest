@@ -427,6 +427,16 @@ Astra has seen it working.
   tip, nozzle, engine, dish, nose or cockpit. Found on the couriers,
   shuttles, small trader, H2 freighters, tenders and tugs; smaller round
   parts stay whole inside their hull piece.
+- **2026-10-21: plates are slabs, and every tank is a pod (ship-modules).**
+  A plate was a sheet on the cut, so two joined pieces put two sheets in
+  the same place and they fought for the pixels. Each plate is now a slab:
+  outer face on the cut, inner face set back into its own piece (1% of the
+  ship's length, at most a quarter of the part's own depth), walls round
+  the edge. Pods' mounting faces too. The pod floor is 2.5% of the ship's
+  length, not 6%: the same propellant tank is 3% of an L hull and 7% of an
+  S, so a ratio alone made it a pod on one and not the other. Valves and
+  sensor blisters stay with the hull by name. Propellant tanks are now pods
+  on the freighters, liners, navy-l and enforcers as well.
 
 ### Fixed
 

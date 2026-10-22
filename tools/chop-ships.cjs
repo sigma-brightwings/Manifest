@@ -187,6 +187,45 @@ function triangulate(loop, ax) {
   return out;
 }
 
+/* ---- plates have thickness -----------------------------------------------
+ *
+ * Astra, 2026-10-21: "surfaces need to be more than just the surface, they
+ * need a bit of chunkiness, so we don't have clipping problems." A plate
+ * that is only a sheet sits exactly where the next piece's plate sits when
+ * two pieces are joined, and the two fight for the same pixels. So every
+ * plate is a SLAB: its outer face on the cut, an inner face set back into
+ * its own piece, and walls round its edge. Joined pieces then meet face to
+ * face, each with solid behind it.
+ *
+ * slabPolys(loop, ax, v, dir, T): the slab for one closed outline lying on
+ * the plane ax = v, extending a depth T in direction dir (+1 or -1) along
+ * ax. Its outer face faces -dir (out of the piece), its inner face +dir.
+ * Walls are emitted with both windings, so they read solid from either side
+ * whatever the outline's direction.
+ */
+var PLATE_DEPTH = 0.01;   // of the ship's length, before the per-part limit below
+function slabPolys(loop, ax, v, dir, T) {
+  var polys = [];
+  function cross(p) {
+    var a = p[0], b = p[1], c = p[2];
+    var u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    return [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+  }
+  function moved(p) { var q = p.slice(); q[ax] = v + dir * T; return q; }
+  var flat = loop.map(function (p) { var q = p.slice(); q[ax] = v; return q; });
+  triangulate(flat, ax).forEach(function (tri) {
+    var outer = cross(tri)[ax] * -dir > 0 ? tri : tri.slice().reverse();
+    polys.push(outer);
+    polys.push(outer.map(moved).reverse());
+  });
+  for (var i = 0; i < flat.length; i++) {
+    var a = flat[i], b = flat[(i + 1) % flat.length], a2 = moved(a), b2 = moved(b);
+    polys.push([a, b, b2, a2]);
+    polys.push([a2, b2, b, a]);
+  }
+  return polys;
+}
+
 /* ---- round parts: tanks, bells, blisters ---------------------------------
  *
  * Astra, 2026-10-21: "anything spherical or even close to it has to be
@@ -201,18 +240,22 @@ function triangulate(loop, ax) {
  * side within 1.35 of the shortest) with every vertex within 12% of the same
  * distance from its centre; a dome's short side about half the other two
  * with every vertex within 18% of the same distance from the middle of its
- * flat face. Big enough to be a module: at least 6% of the ship's length
- * across. And not something that only happens to be round: lamps, beacons,
- * antenna tips, nozzles, engines, dishes, noses, cockpits and interiors stay
- * with the hull they belong to.
+ * flat face. Big enough to be a module: at least 2.5% of the ship's length
+ * across. A ratio alone cannot decide it: the same propellant tank is 3% of
+ * an L hull and 7% of an S, and a 6% floor made it a pod on one and not the
+ * other (surveyed with Claude outputs/sphere-survey.cjs). So the floor is
+ * low, and what only happens to be round is left out by name: lamps,
+ * beacons, antenna tips, nozzles, engines, dishes, noses, cockpits,
+ * interiors, valves (plumbing, 1.5-2.9%) and sensor blisters (dressing,
+ * 1.8-3.2%) stay with the hull they belong to.
  */
-var NOT_POD = /lamp|beacon|antenna|nozzle|rcs|engine|dish|interior|cockpit|canopy|glass|forebody|nose/i;
+var NOT_POD = /lamp|beacon|antenna|nozzle|rcs|engine|dish|interior|cockpit|canopy|glass|forebody|nose|valve|blister/i;
 var POD_TRIM = 0.2;   // fraction of the diameter trimmed off to make the flat face
 function roundKind(p, shipLen) {
   if (p.tris.length < 20 || NOT_POD.test(p.name || '')) return null;
   var d = [0, 1, 2].map(function (a) { return p.hi[a] - p.lo[a]; });
   var big = Math.max.apply(0, d), small = Math.min.apply(0, d);
-  if (big < 0.06 * shipLen) return null;
+  if (big < 0.025 * shipLen) return null;
   var vs = []; p.tris.forEach(function (t) { t.forEach(function (v) { vs.push(v); }); });
   function spread(c) {
     var ds = vs.map(function (v) { return Math.hypot(v[0] - c[0], v[1] - c[1], v[2] - c[2]); });
@@ -305,11 +348,13 @@ function chop(file) {
       /* Keep the side away from the mount; the trimmed cap sat against the hull. */
       var keepAbove = mount.side < 0;
       p.tris.forEach(function (t) { var q = clipKeep(t, mount.ax, plane, keepAbove); if (q.length >= 3) put(key0, q, t.col); });
+      /* The mounting face is a slab too, reaching back into the pod; its
+       * outer face faces the hull it mounts on. */
+      var Tp = Math.min(PLATE_DEPTH * len, 0.25 * (p.hi[mount.ax] - p.lo[mount.ax]));
       chainLoops(sliceSegments(p.tris, mount.ax, plane), 1e-5 * len).forEach(function (loop) {
-        triangulate(loop, mount.ax).forEach(function (tri) {
-          var nrm = cross3(tri), out = mount.side;   // the plate faces the hull it mounts on
-          put(key0, (nrm[mount.ax] * out > 0) ? tri : tri.slice().reverse(), col0, true);
-          capCount++;
+        slabPolys(loop, mount.ax, plane, -mount.side, Tp).forEach(function (poly) {
+          put(key0, poly, col0, true);
+          capCount += poly.length - 2;
         });
       });
       pods.push({ key: key0, ax: mount.ax, side: mount.side, at: plane, kind: rk.kind, name: p.name });
@@ -346,34 +391,33 @@ function chop(file) {
     [0, 1, 2].forEach(function (ax) {
       P[ax].forEach(function (v, k) {
         if (v <= p.lo[ax] || v >= p.hi[ax]) return;
+        /* One slab each side of the cut, set back into its own piece:
+         * the cell below gets one reaching down (-ax), the cell above one
+         * reaching up. Depth: 1% of the ship, but never more than a quarter
+         * of this part's own depth, so a thin part keeps a thin slab. */
+        var T = Math.min(PLATE_DEPTH * len, 0.25 * (p.hi[ax] - p.lo[ax]));
         chainLoops(sliceSegments(p.tris, ax, v), 1e-5 * len).forEach(function (loop) {
-          triangulate(loop, ax).forEach(function (tri) {
-            var items = [{ poly: tri, cell: [0, 0, 0] }];
-            [0, 1, 2].forEach(function (ax2) {
-              if (ax2 === ax || !P[ax2].length) return;
-              var planes = P[ax2], next = [];
-              items.forEach(function (it) {
-                for (var kk = 0; kk <= planes.length; kk++) {
-                  var q = it.poly;
-                  if (kk > 0) q = clipKeep(q, ax2, planes[kk - 1], true);
-                  if (kk < planes.length && q.length >= 3) q = clipKeep(q, ax2, planes[kk], false);
-                  if (q.length >= 3) { var cc = it.cell.slice(); cc[ax2] = kk; next.push({ poly: q, cell: cc }); }
-                }
+          [[-1, k], [1, k + 1]].forEach(function (side) {
+            slabPolys(loop, ax, v, side[0], T).forEach(function (poly) {
+              var items = [{ poly: poly, cell: [0, 0, 0] }];
+              [0, 1, 2].forEach(function (ax2) {
+                if (ax2 === ax || !P[ax2].length) return;
+                var planes = P[ax2], next = [];
+                items.forEach(function (it) {
+                  for (var kk = 0; kk <= planes.length; kk++) {
+                    var q = it.poly;
+                    if (kk > 0) q = clipKeep(q, ax2, planes[kk - 1], true);
+                    if (kk < planes.length && q.length >= 3) q = clipKeep(q, ax2, planes[kk], false);
+                    if (q.length >= 3) { var cc = it.cell.slice(); cc[ax2] = kk; next.push({ poly: q, cell: cc }); }
+                  }
+                });
+                items = next;
               });
-              items = next;
-            });
-            items.forEach(function (it) {
-              var below = it.cell.slice(), above = it.cell.slice();
-              below[ax] = k; above[ax] = k + 1;
-              /* Outward: the cell below the plane sees its cap facing +ax,
-               * the one above facing -ax. The triangulation's winding is
-               * fixed in the plane's 2D, so one side gets it reversed. */
-              var poly = it.poly, rev = poly.slice().reverse();
-              var nrm = cross3(poly);
-              var up = nrm[ax] > 0 ? poly : rev, down = nrm[ax] > 0 ? rev : poly;
-              put(below.join(','), up, col, true);
-              put(above.join(','), down, col, true);
-              capCount += 2;
+              items.forEach(function (it) {
+                var cell = it.cell.slice(); cell[ax] = side[1];
+                put(cell.join(','), it.poly, col, true);
+                capCount += it.poly.length - 2;
+              });
             });
           });
         });

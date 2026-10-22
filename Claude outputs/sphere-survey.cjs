@@ -33,10 +33,18 @@ function classify(p) {
   }
   return null;
 }
-var total = { sphere: 0, dome: 0 };
+var NOT_POD = /lamp|beacon|antenna|nozzle|rcs|engine|dish|interior|cockpit|canopy|glass|forebody|nose/i;
+var rows = [];
 fs.readdirSync(DIR).filter(function (f) { return /\.glb$/.test(f); }).sort().forEach(function (f) {
-  var L = load(path.join(DIR, f)), hits = [];
-  L.parts.forEach(function (p) { var c = classify(p); if (c) { total[c.kind]++; hits.push(c.kind + ' ' + (p.name || '?').slice(0, 28) + (c.flat ? ' flat ' + c.flat : '')); } });
-  if (hits.length) console.log(f.replace('.glb', '') + '\t' + hits.join(' | '));
+  var L = load(path.join(DIR, f));
+  var lo = 1e9, hi = -1e9; L.parts.forEach(function (p) { lo = Math.min(lo, p.lo[2]); hi = Math.max(hi, p.hi[2]); });
+  var len = hi - lo;
+  L.parts.forEach(function (p) {
+    if (NOT_POD.test(p.name || '')) return;
+    var c = classify(p); if (!c) return;
+    var big = Math.max(p.hi[0] - p.lo[0], p.hi[1] - p.lo[1], p.hi[2] - p.lo[2]);
+    rows.push({ pct: 100 * big / len, ship: f.replace('.glb', ''), kind: c.kind, name: (p.name || '?').replace(/ShiphullMain|Shiphull/, '..').slice(0, 34) });
+  });
 });
-console.log('totals', JSON.stringify(total));
+rows.sort(function (a, b) { return a.pct - b.pct; });
+rows.forEach(function (r) { console.log(r.pct.toFixed(1) + '%\t' + r.kind + '\t' + r.ship + '\t' + r.name); });
