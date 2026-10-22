@@ -649,7 +649,8 @@
       mesh.gear = src.gear.map(function (p) {
         var pm = { v: p.v, f: p.f, c: [] };
         for (var k = 0; k < p.ci.length; k++) pm.c.push(p.pal[p.ci[k]]);
-        return { role: p.role, pivot: p.pivot, axis: p.axis, stow: p.stow, mesh: pm };
+        return { role: p.role, pivot: p.pivot, axis: p.axis, stow: p.stow,
+                 lift: p.lift || null, hinge: p.hinge || null, swing: p.swing || 0, mesh: pm };
       });
     }
     /* One entry per engineGlow node in the model, so a three-engine hull
@@ -3345,8 +3346,47 @@
    * without a second code path. */
   function gearPhase(role, travel) {
     var t = Math.max(0, Math.min(1, travel));
-    var p = role === 'door' ? t / 0.45 : (t - 0.35) / 0.65;
+    var p = role === 'door' ? t / 0.45 : (t - 0.5) / 0.5;
     return Math.max(0, Math.min(1, p));
+  }
+
+  /* FOLD, THEN LIFT (Astra, 2026-10-21). A leg is two parts now: the upper
+   * `strut` hangs from the hinge and the lower `shin` hangs from the knee.
+   * Going up, the shin folds back alongside the strut over the first half
+   * of the leg's travel, and then the folded pair pulls straight up into
+   * the hull by `lift` over the second half — after which the door, whose
+   * slice of the travel begins only once the leg is home, closes behind
+   * it. Coming down is the same thing read backwards. Each half eases in
+   * and out, so a leg pauses for a beat at the fold rather than snapping.
+   * A part with no `lift` (an older converted hull) turns by `stow` over
+   * the leg's whole travel, as every leg used to.
+   *
+   * A leg with no room to pull up inside (the runner's wing legs, under a
+   * wing too thin to hold them) carries `swing` and `hinge` instead: its
+   * second half swings the folded pair flat about the hinge. Both turns are
+   * about the same axis, so the part's frame simply turns by the sum, and
+   * its pivot is carried round the hinge by the swing.
+   *
+   * Returned: `ang` the part's total turn, `piv` where its pivot is now. */
+  function ease(x) { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); }
+  function gearPose(p, travel) {
+    if (p.role === 'door') return { ang: p.stow * (1 - gearPhase('door', travel)), piv: p.pivot };
+    var u = 1 - gearPhase(p.role, travel);
+    if (!p.lift) return { ang: p.stow * u, piv: p.pivot };
+    var second = ease((u - 0.5) / 0.5), ang = p.stow * ease(u / 0.5), piv = p.pivot;
+    if (p.swing && p.hinge) {
+      var sw = p.swing * second, h = p.hinge;
+      var r = rotVec([piv[0] - h[0], piv[1] - h[1], piv[2] - h[2]], p.axis, sw);
+      return { ang: ang + sw, piv: [h[0] + r[0], h[1] + r[1], h[2] + r[2]] };
+    }
+    var l = p.lift;
+    return { ang: ang, piv: [piv[0] + l[0] * second, piv[1] + l[1] * second, piv[2] + l[2] * second] };
+  }
+  function rotVec(v, k, a) {
+    var c = Math.cos(a), s = Math.sin(a), d = k[0] * v[0] + k[1] * v[1] + k[2] * v[2];
+    return [v[0] * c + (k[1] * v[2] - k[2] * v[1]) * s + k[0] * d * (1 - c),
+            v[1] * c + (k[2] * v[0] - k[0] * v[2]) * s + k[1] * d * (1 - c),
+            v[2] * c + (k[0] * v[1] - k[1] * v[0]) * s + k[2] * d * (1 - c)];
   }
 
   /* The ship's basis, rotated about `axis` by `ang`, with its origin moved
@@ -3371,14 +3411,14 @@
 
     for (var i = 0; i < parts.length; i++) {
       var p = parts[i];
-      var ang = p.stow * (1 - gearPhase(p.role, travel));
+      var pose = gearPose(p, travel), ang = pose.ang, q = pose.piv;
 
       /* Pivot and axis are given in the hull's own axes, so both are
        * resolved against the ship's CURRENT attitude every frame rather
        * than stored as world points — the same rule the muzzles follow, and
        * for the same reason: at 5 km/s a frozen world point detaches
        * visibly within one frame. */
-      var a = p.axis, q = p.pivot;
+      var a = p.axis;
       var k = { x: R.x * a[0] + U.x * a[1] + F.x * a[2],
                 y: R.y * a[0] + U.y * a[1] + F.y * a[2],
                 z: R.z * a[0] + U.z * a[1] + F.z * a[2] };
@@ -3417,7 +3457,7 @@
     var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     for (var i = 0; i < parts.length; i++) {
       var p = parts[i];
-      var ang = p.stow * (1 - gearPhase(p.role, travel));
+      var pose = gearPose(p, travel), ang = pose.ang, piv = pose.piv;
       var a = p.axis;
       var k = { x: a[0], y: a[1], z: a[2] };
       var c = Math.cos(ang), s = Math.sin(ang), kd = 1 - c;
@@ -3426,9 +3466,9 @@
       var F = rotAxis(HULL_F, k, c, s, kd);
       for (var v = 0; v < p.mesh.v.length; v++) {
         var q = p.mesh.v[v];
-        var w = [p.pivot[0] + R.x * q[0] + U.x * q[1] + F.x * q[2],
-                 p.pivot[1] + R.y * q[0] + U.y * q[1] + F.y * q[2],
-                 p.pivot[2] + R.z * q[0] + U.z * q[1] + F.z * q[2]];
+        var w = [piv[0] + R.x * q[0] + U.x * q[1] + F.x * q[2],
+                 piv[1] + R.y * q[0] + U.y * q[1] + F.y * q[2],
+                 piv[2] + R.z * q[0] + U.z * q[1] + F.z * q[2]];
         for (var b = 0; b < 3; b++) {
           if (w[b] < lo[b]) lo[b] = w[b];
           if (w[b] > hi[b]) hi[b] = w[b];
@@ -10401,7 +10441,7 @@
     faceMaterial: faceMaterial,
     shipMeshes: shipMeshes,
     libHull: libHull,
-    gearPhase: gearPhase, gearBounds: gearBounds, gearTravelOf: gearTravelOf,
+    gearPhase: gearPhase, gearPose: gearPose, gearBounds: gearBounds, gearTravelOf: gearTravelOf,
     hullIds: hullIds, assignHull: assignHull,
     HULL_ASSIGN: HULL_ASSIGN,
     hullSpan: hullSpan,

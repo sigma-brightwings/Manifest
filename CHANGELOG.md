@@ -368,6 +368,21 @@ Astra has seen it working.
 
 ### Changed
 
+- **2026-10-21: landing legs stand level, fold in half and pull up inside.**
+  The hull converter (`tools/glb2hulls.js`) now brings every foot on a
+  hull down to one level: the deepest foot, or 1% of a hull length under
+  the lowest point of the hull if that is deeper. Legs are only ever
+  lengthened, by sliding their lower half down the leg's own line. The
+  heavy enforcer's nose leg grows about 6% of a hull length to match its
+  rear legs, the runner's wing legs about 11% to match its nose leg, and
+  the bulk hauler, courier and enforcer legs a little each so the feet
+  clear the keel. Each leg is also cut at the knee: going up, the lower
+  half folds back alongside the upper half, the folded pair pulls
+  straight up into the hull, and then the bay door closes behind it
+  (coming down is the same in reverse). The runner's wing is too thin to
+  hold a leg, so its wing legs fold and then swing flat under the wing
+  instead. No stowed leg reaches into a cockpit. Two new checks: every
+  legged hull stands level, with its feet below its lowest point.
 - **2026-10-16: the attitude ladder and bank scale are drawn sharp** under
   the glass glow. Measured on the RX 540: cockpit in a ring 22 > 40 fps,
   above it 37 > 51, in a belt field 26 > 40.

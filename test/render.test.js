@@ -1902,17 +1902,37 @@ console.log('--- the landing gear ---');
    * right on one model and wrong on another is exactly the failure this
    * catches, and it is invisible in a screenshot of the ship you happened
    * to be flying. */
-  var badAxis = [], badStow = [], noLift = [], noFold = [], badDoor = [];
+  var badAxis = [], badStow = [], noLift = [], noFold = [], badDoor = [], uneven = [], bellyDown = [];
   rigged.forEach(function (id) {
     var m = R.libHull(id);
     m.gear.forEach(function (p) {
       var len = Math.hypot(p.axis[0], p.axis[1], p.axis[2]);
       if (Math.abs(len - 1) > 1e-3) badAxis.push(id);
-      /* A hinge that turns by nothing is a hinge the converter failed to
+      /* A part that neither turns nor lifts is one the converter failed to
        * measure, and it would read on screen as gear that never moves —
-       * which is the bug this whole change exists to fix. */
-      if (!(Math.abs(p.stow) > 0.2)) badStow.push(id + '/' + p.role);
+       * which is the bug this whole change exists to fix. Since the legs
+       * fold (2026-10-21) the upper strut does not turn at all; it lifts,
+       * or swings with `swing` where there is no room to lift. */
+      var lifts = p.lift && Math.hypot(p.lift[0], p.lift[1], p.lift[2]) > 0.01;
+      if (!(Math.abs(p.stow) > 0.2 || lifts || Math.abs(p.swing || 0) > 0.2)) badStow.push(id + '/' + p.role);
     });
+
+    /* LEVEL, AND CLEAR OF THE BELLY (Astra, 2026-10-21): every foot at the
+     * same depth, and that depth under the lowest point of the hull. */
+    var feet = [];
+    m.gear.forEach(function (p) {
+      if (p.role !== 'shin') return;
+      var lo = Infinity;
+      p.mesh.v.forEach(function (q) { lo = Math.min(lo, p.pivot[1] + q[1]); });
+      feet.push(lo);
+    });
+    if (feet.length) {
+      var belly = Infinity;
+      m.v.forEach(function (q) { belly = Math.min(belly, q[1]); });
+      var spread = Math.max.apply(null, feet) - Math.min.apply(null, feet);
+      if (spread > 0.003) uneven.push(id + ' by ' + spread.toFixed(3));
+      if (!(Math.max.apply(null, feet) < belly)) bellyDown.push(id);
+    }
 
     var down = R.gearBounds(m, 1), up = R.gearBounds(m, 0);
 
@@ -1920,11 +1940,10 @@ console.log('--- the landing gear ---');
      * pulled back up. Those two comparisons are the whole feature, and both
      * are claims about this code rather than about the models.
      *
-     * NOT "the feet are the lowest thing on the ship", which was the first
-     * version of this check and which `bulk-s` fails honestly: its keel
-     * hangs lower than its gear does, so the hauler would settle on its
-     * belly. That is a fact about the art, and asserting it here would be
-     * this suite failing every time a modeller drew a deep hull. */
+     * (That the feet ARE the lowest thing on the ship used to be left
+     * unchecked, because `bulk-s` honestly failed it: its keel hung lower
+     * than its gear. Since 2026-10-21 the converter lengthens legs until
+     * they clear the keel, and the check above holds every hull to it.) */
     var bay = Infinity;
     for (var g = 0; g < m.gear.length; g++) {
       if (m.gear[g].pivot[1] < bay) bay = m.gear[g].pivot[1];
@@ -1935,7 +1954,18 @@ console.log('--- the landing gear ---');
                                                      ' -> ' + up.lo[1].toFixed(3));
   });
   check('every hinge axis is a unit vector', badAxis.length === 0, badAxis.join(' '));
-  check('and every hinge actually turns', badStow.length === 0, badStow.slice(0, 4).join(' '));
+  check('and every moving part actually moves', badStow.length === 0, badStow.slice(0, 4).join(' '));
+  check('every legged hull stands level on its feet', uneven.length === 0, uneven.slice(0, 4).join(' | '));
+  check('and its feet reach below its lowest point', bellyDown.length === 0, bellyDown.slice(0, 4).join(' '));
+  /* The fold: halfway up, every shin has turned through most of its fold and
+   * nothing has lifted yet; at the end it has lifted (or swung). */
+  var shin = { role: 'shin', stow: 3, lift: [0, 0.1, 0], pivot: [0, 0, 0], axis: [1, 0, 0] };
+  var mid = R.gearPose(shin, 0.75), home = R.gearPose(shin, 0.5);
+  check('a leg folds in half before it lifts',
+        Math.abs(mid.ang - 3) < 1e-6 && mid.piv[1] === 0 && Math.abs(home.piv[1] - 0.1) < 1e-6,
+        mid.ang.toFixed(2) + ' ' + mid.piv[1] + ' ' + home.piv[1]);
+  check('and the door does not start to close until the leg is home',
+        R.gearPhase('door', 0.5) === 1);
   check('deployed, every leg hangs below its own bay', noLift.length === 0,
         noLift.slice(0, 3).join(' | '));
   check('and stowing pulls them up into the hull', noFold.length === 0,

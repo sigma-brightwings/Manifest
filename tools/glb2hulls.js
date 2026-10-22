@@ -285,6 +285,188 @@ function stowAngle(extendDir, axis, pivot) {
   return best;
 }
 
+/* ---- LEGS THAT STAND LEVEL, AND FOLD AWAY (Astra, 2026-10-21) ----------
+ * Two things the models as drawn do not do.
+ *
+ * 1. STAND LEVEL, CLEAR OF THE BELLY. On most hulls every foot reaches the
+ *    same depth, but not all: the heavy enforcer's nose leg stops 6% of a
+ *    hull length short of its rear legs, the runner's wing legs 11% short of
+ *    its nose leg, and the bulk hauler's keel hangs below all of its feet.
+ *    So every foot is brought down to one level: the deepest foot on the
+ *    hull, or LEG_CLEAR under the lowest point of the hull itself if that is
+ *    deeper. A leg is lengthened, never shortened: its lower half slides
+ *    down along the leg's own line, which stretches the strut and moves the
+ *    foot and the bottom of the brace with it.
+ *
+ * 2. FOLD IN HALF, THEN PULL UP INSIDE. A leg used to swing up whole about
+ *    its hinge, and lay flat along the belly, outside it. Now each strut is
+ *    cut at the knee, halfway down. The lower half (a `shin`) folds up
+ *    about the knee until it lies alongside the upper half; then both pull
+ *    straight up into the hull, far enough to clear the bay; then the door
+ *    closes behind them. `lift` is that last move, in hull units; the
+ *    renderer owns the timing. */
+var LEG_CLEAR = 0.01;          // feet at least this far under the lowest point of the hull
+var KNEE = 0.5;                // where the strut folds, as a fraction of its reach
+var FOLD = 175 * Math.PI / 180;
+var LIFT_SPARE = 0.006;        // how far above the bay mouth the folded leg ends up
+
+/* Cut a triangle list by the plane dot(p, n) = k into the part below k and
+ * the part at or above it. Sutherland-Hodgman per triangle, fanned back to
+ * triangles; colours ride along. */
+function splitByPlane(v, f, c, n, k) {
+  var sides = [{ v: [], f: [], c: [] }, { v: [], f: [], c: [] }];
+  for (var t = 0; t < f.length; t++) {
+    var tri = [v[f[t][0]], v[f[t][1]], v[f[t][2]]];
+    for (var s = 0; s < 2; s++) {
+      var keep = function (p) { var d = vDot(p, n) - k; return s === 0 ? d < 0 : d >= 0; };
+      var poly = [];
+      for (var i = 0; i < 3; i++) {
+        var a = tri[i], b = tri[(i + 1) % 3], ia = keep(a), ib = keep(b);
+        if (ia) poly.push(a);
+        if (ia !== ib) {
+          var da = vDot(a, n) - k, db = vDot(b, n) - k, u = da / (da - db);
+          poly.push([a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u]);
+        }
+      }
+      if (poly.length < 3) continue;
+      var S = sides[s], base = S.v.length;
+      poly.forEach(function (p) { S.v.push(p); });
+      for (var j = 1; j + 1 < poly.length; j++) { S.f.push([base, base + j, base + j + 1]); S.c.push(c[t]); }
+    }
+  }
+  return sides;
+}
+
+/* Is there any hull surface straight above point w? A vertical ray against
+ * every triangle, in the xz plane by barycentrics. */
+function hullAbove(V, F, w) {
+  for (var t = 0; t < F.length; t++) {
+    var a = V[F[t][0]], b = V[F[t][1]], c = V[F[t][2]];
+    if (Math.max(a[1], b[1], c[1]) <= w[1]) continue;
+    var d = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
+    if (Math.abs(d) < 1e-12) continue;
+    var l1 = ((b[2] - c[2]) * (w[0] - c[0]) + (c[0] - b[0]) * (w[2] - c[2])) / d;
+    var l2 = ((c[2] - a[2]) * (w[0] - c[0]) + (a[0] - c[0]) * (w[2] - c[2])) / d;
+    var l3 = 1 - l1 - l2;
+    if (l1 < 0 || l2 < 0 || l3 < 0) continue;
+    if (l1 * a[1] + l2 * b[1] + l3 * c[1] > w[1]) return true;
+  }
+  return false;
+}
+
+function shapeGear(parts, hullV, hullF, id) {
+  var r3 = function (x) { return Math.round(x * 1000) / 1000; };
+  var r4 = function (x) { return Math.round(x * 10000) / 10000; };
+  var struts = parts.filter(function (p) { return p.role === 'strut'; });
+  if (!struts.length) return parts;
+
+  /* Unpack each strut to plain vertices and a face colour per face, and
+   * find the line it hangs along: from the pin to its deepest point. */
+  struts.forEach(function (p) {
+    p._c = p.ci.map(function (i) { return p.pal[i]; });
+    var low = p.v[0];
+    p.v.forEach(function (q) { if (q[1] < low[1]) low = q; });
+    p._e = vNorm(low);
+    p._reach = Math.hypot(low[0], low[1], low[2]);
+    p._foot = p.pivot[1] + low[1];
+  });
+
+  var belly = Infinity;
+  hullV.forEach(function (q) { if (q[1] < belly) belly = q[1]; });
+  var level = Math.min(belly - LEG_CLEAR, Math.min.apply(null, struts.map(function (p) { return p._foot; })));
+  var notes = [];
+
+  var out = parts.filter(function (p) { return p.role !== 'strut'; });
+  struts.forEach(function (p) {
+    var e = p._e, v = p.v;
+    /* 1. Lengthen: everything below the knee slides down the leg's line. */
+    var drop = p._foot - level;
+    if (drop > 0.001 && e[1] < -0.2) {
+      var d = drop / -e[1], cut = p._reach * KNEE;
+      v = v.map(function (q) {
+        return vDot(q, e) > cut ? [q[0] + e[0] * d, q[1] + e[1] * d, q[2] + e[2] * d] : q;
+      });
+      notes.push(p.id.split('/')[0].replace(/^gear/, '') + ' +' + r3(drop));
+      p._reach += d;
+    }
+
+    /* 2. Cut at the knee. */
+    var kd = p._reach * KNEE, knee = [e[0] * kd, e[1] * kd, e[2] * kd];
+    var halves = splitByPlane(v, p.f, p._c, e, kd);
+
+    /* Fold the shin toward the inside of the hull: of the two ways round,
+     * the one that carries the foot nearer the ship's centreline. A leg on
+     * the centreline folds aft. */
+    var inward = Math.abs(p.pivot[0]) > 0.01 ? vNorm([-p.pivot[0], 0, 0]) : [0, 0, -1];
+    var axis = p.axis, fold = FOLD;
+    var probe = rotAbout(e, axis, Math.PI / 2);
+    if (vDot(probe, inward) < vDot(rotAbout(e, axis, -Math.PI / 2), inward)) fold = -FOLD;
+
+    /* 3. How far to pull the folded leg up: until its lowest point is above
+     * the pin, which is where the bay's mouth is. */
+    var lowest = Infinity;
+    halves[0].v.forEach(function (q) { if (q[1] < lowest) lowest = q[1]; });
+    halves[1].v.forEach(function (q) {
+      var r = rotAbout([q[0] - knee[0], q[1] - knee[1], q[2] - knee[2]], axis, fold);
+      if (r[1] + knee[1] < lowest) lowest = r[1] + knee[1];
+    });
+    var lift = [0, r4(-lowest + LIFT_SPARE), 0];
+
+    /* Does the folded leg fit? Its top, stowed, against the highest hull
+     * vertex over the same patch of belly. Said out loud per leg, because a
+     * foot poking through the top of a wing is the one failure here that a
+     * glance at the landed ship would never show. */
+    var pts = [], out1 = 0;
+    halves[0].v.forEach(function (q) { pts.push([p.pivot[0] + q[0], p.pivot[1] + q[1] + lift[1], p.pivot[2] + q[2]]); });
+    halves[1].v.forEach(function (q) {
+      var r = rotAbout([q[0] - knee[0], q[1] - knee[1], q[2] - knee[2]], axis, fold);
+      pts.push([p.pivot[0] + r[0] + knee[0], p.pivot[1] + r[1] + knee[1] + lift[1], p.pivot[2] + r[2] + knee[2]]);
+    });
+    pts.forEach(function (w) { if (!hullAbove(hullV, hullF, w)) out1++; });
+    /* WHERE THERE IS NO ROOM: the runner's wing legs hang from a wing far
+     * too thin to hold them, folded or not. A leg that would mostly stick
+     * out of the hull instead folds and then SWINGS up flat about its hinge
+     * by the angle the whole leg used to stow by, so it ends up tucked
+     * under the wing at half its old length rather than standing up through
+     * the top of it. */
+    var swing = 0;
+    if (out1 > 0.25 * pts.length) {
+      swing = p.stow;
+      lift = [0, 0, 0];
+      console.log('  ~ ' + id + ' ' + p.id.split('/')[0] + ': no room to pull up inside (' + Math.round(100 * out1 / pts.length) + '% outside); folds and swings flat instead');
+    } else if (out1) {
+      console.log('  ! ' + id + ' ' + p.id.split('/')[0] + ': ' + Math.round(100 * out1 / pts.length) + '% of the stowed leg has no hull above it');
+    }
+
+    function pack(h, origin) {
+      var pp = { pal: [], ci: [] }, idx = {};
+      h.c.forEach(function (col) {
+        if (idx[col] === undefined) { idx[col] = pp.pal.length; pp.pal.push(col); }
+        pp.ci.push(idx[col]);
+      });
+      pp.v = h.v.map(function (q) { return [r3(q[0] - origin[0]), r3(q[1] - origin[1]), r3(q[2] - origin[2])]; });
+      pp.f = h.f;
+      return pp;
+    }
+    var up = pack(halves[0], [0, 0, 0]), lo = pack(halves[1], knee);
+    /* `hinge` and `swing` only when the leg swings: the shin then turns
+     * about the hip by the same angle as the strut, carried with it. */
+    var sw = swing ? { hinge: p.pivot, swing: r4(swing) } : {};
+    out.push(Object.assign({ id: p.id, role: 'strut', pivot: p.pivot, axis: p.axis, stow: 0, lift: lift },
+                           sw, { v: up.v, f: up.f, pal: up.pal, ci: up.ci }));
+    out.push(Object.assign({ id: p.id.replace(/Hinge$/i, 'Knee'), role: 'shin',
+               pivot: [r3(p.pivot[0] + knee[0]), r3(p.pivot[1] + knee[1]), r3(p.pivot[2] + knee[2])],
+               axis: p.axis, stow: r4(fold), lift: lift },
+               sw, { v: lo.v, f: lo.f, pal: lo.pal, ci: lo.ci }));
+  });
+  if (notes.length) console.log('  legs lengthened on ' + id + ': ' + notes.join(', '));
+  out.sort(function (p, q) {
+    return (p.role < q.role ? -1 : p.role > q.role ? 1 : 0) ||
+           p.pivot[2] - q.pivot[2] || p.pivot[0] - q.pivot[0];
+  });
+  return out;
+}
+
 /* ---- PORTS: the anchors a port carries ---------------------------------
  * Same mechanism as the emitters above — a named node opens one bounding
  * box and its children add to it — applied to the things a PORT has to tell
@@ -1387,7 +1569,7 @@ function convert(file) {
       return (p.role < q.role ? -1 : p.role > q.role ? 1 : 0) ||
              p.pivot[2] - q.pivot[2] || p.pivot[0] - q.pivot[0];
     });
-    if (parts.length) out.gear = parts;
+    if (parts.length) out.gear = shapeGear(parts, ext.v, ext.f, id);
   }
 
   var live = emitters.filter(function (e) { return isFinite(e.min[0]); });
