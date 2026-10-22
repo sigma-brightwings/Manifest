@@ -393,6 +393,13 @@ Astra has seen it working.
   and logo in the same place from logo.js, and the title's first showing
   starts finished so the hand-over does not flicker. Tests: captains, 10
   checks; render 950/950.
+- **2026-10-21: where the factory ships come apart.** tools/ship-cuts.json
+  holds Astra's cuts for all 18 factory families at S, M and L: length
+  cuts, deck cuts, and mirrored side cuts, as fractions of each hull. Set
+  by eye in a cut editor (Claude outputs/ship-cuts-editor.cjs builds one
+  page per size, real triangles from above and from the side, draggable
+  lines). The carrier's conning tower is its cockpit, reached by lift.
+  Groundwork for ship modules; nothing in the game reads it yet.
 
 ### Fixed
 
