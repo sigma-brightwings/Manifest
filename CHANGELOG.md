@@ -368,6 +368,15 @@ Astra has seen it working.
 
 ### Changed
 
+- **2026-10-21: ship cuts tuned to the hulls' own seams** (ship-modules
+  idea-stream). `tools/tune-cuts.cjs` moves each of Astra's cuts by at most
+  4% to wherever it slices the least hull, and only when that slices at
+  least 10% less than her line; it merges cuts that would leave a sliver
+  under 4%, turns side cuts within 3% of the middle into one true centreline
+  split, and drops cuts that would trim only the outermost 3%. 51 of 54
+  ships changed (169 moves, 28 merges or drops). Her table is kept as
+  `tools/ship-cuts-astra.json`. The chopper now makes a single plane for a
+  centreline cut instead of two at the same place.
 - **2026-10-16: the attitude ladder and bank scale are drawn sharp** under
   the glass glow. Measured on the RX 540: cockpit in a ring 22 > 40 fps,
   above it 37 > 51, in a belt field 26 > 40.

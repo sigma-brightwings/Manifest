@@ -310,7 +310,7 @@ function chop(file) {
   var len = hi[2] - lo[2], H = hi[1] - lo[1], halfW = Math.max(Math.abs(lo[0]), Math.abs(hi[0]));
   /* Planes ascending in model units. z: nose is +z, so a cut f from the nose is at hi - f*len. */
   var P = [
-    row.x.reduce(function (a, f) { return a.concat([f * halfW, -f * halfW]); }, []).sort(function (a, b) { return a - b; }),
+    row.x.reduce(function (a, f) { return a.concat(f === 0 ? [0] : [f * halfW, -f * halfW]); }, []).sort(function (a, b) { return a - b; }),   // f=0 is one centreline plane, not two
     row.y.map(function (f) { return lo[1] + f * H; }).sort(function (a, b) { return a - b; }),
     row.z.map(function (f) { return hi[2] - f * len; }).sort(function (a, b) { return a - b; })
   ];
