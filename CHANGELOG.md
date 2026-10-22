@@ -400,6 +400,16 @@ Astra has seen it working.
   page per size, real triangles from above and from the side, draggable
   lines). The carrier's conning tower is its cockpit, reached by lift.
   Groundwork for ship modules; nothing in the game reads it yet.
+- **2026-10-21: the factory ships come apart (experiment, ship-modules
+  branch).** tools/chop-ships.cjs cuts all 54 factory ships along Astra's
+  cut table into modules: wings off whole as a mirrored pair, small parts
+  kept whole in the cell their centre is in, hull shells sliced at the
+  planes. Cells holding only a lamp or a bracket fold into the nearest
+  piece of the same role, and a ship always keeps a fore and an aft piece
+  (capital-l: 102 cells to 28 pieces; fighter-m: 23 to 20). Every pair of
+  touching pieces records its joint. _ship-modules/view.html shows any ship
+  pulled apart, drag to turn. Cut faces are still open; caps and standard
+  sockets per size come next. Nothing in the game reads it yet.
 
 ### Fixed
 
