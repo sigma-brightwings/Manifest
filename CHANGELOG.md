@@ -368,6 +368,13 @@ Astra has seen it working.
 
 ### Changed
 
+- **2026-10-21: the comms channel fits a short window.** A port's ten
+  options at a fixed 38 px a row printed over the traffic log in a short
+  window, and the notes beside them ran off the right edge. The channel
+  pane now takes the height its buttons need from the log first (the log
+  keeps at least 96 px), the rows close up if that is still not enough,
+  the footnote gives way when it is very tight, and every note is clipped
+  to the pane, or left out if there is no room for a word of it.
 - **2026-10-21: landing legs stand level, fold in half and pull up inside.**
   The hull converter (`tools/glb2hulls.js`) now brings every foot on a
   hull down to one level: the deepest foot, or 1% of a hull length under

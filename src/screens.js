@@ -697,9 +697,22 @@
      * at 720 px the 44% split left room for six lines of a ship's hold. */
     var logH = G.shipDeal ? Math.max(96, Math.round(colH * 0.26))
                           : Math.max(120, Math.round(colH * 0.44));
+    var sel = contacts[G.commsSel];
+    /* THE CHANNEL'S BUTTONS FIT ITS PANE (Astra, 2026-10-21). A port offers
+     * up to ten things, and at a fixed 38 px a row that is 470 px of pane —
+     * which a short window's 56% split never had, so the bottom buttons
+     * printed straight over the traffic log. Now the channel takes what its
+     * buttons need from the log first (down to the log's floor of 96 px),
+     * and if that is still not enough the rows themselves close up, below. */
+    var dealing = !!(sel && G.shipDeal && G.shipDeal.name === sel.name && sel.obj && global.ShipTrade);
+    var opts = (sel && !dealing) ? commsOptions(sel) : null;
+    var OPT_TOP = 90, OPT_FOOT = 30, OPT_ROW = 38;
+    if (opts && opts.length) {
+      var need = OPT_TOP + opts.length * OPT_ROW + OPT_FOOT;
+      if (colH - logH - 10 < need) logH = Math.max(96, colH - 10 - need);
+    }
     var chanH = colH - logH - 10;
     drawMessageLog(ctx, rx, top + pad + chanH + 10, rw, logH);
-    var sel = contacts[G.commsSel];
     ctx.save();
     ctx.fillStyle = '#040a0e';
     ctx.fillRect(rx, top + pad, rw, chanH);
@@ -729,32 +742,51 @@
 
     /* The trade board takes the channel pane over while it is open: the
      * intents underneath are a menu, and you have picked from it. */
-    if (G.shipDeal && G.shipDeal.name === sel.name && sel.obj && global.ShipTrade) {
+    if (dealing) {
       drawShipDeal(ctx, rx, y, rw, top + pad + chanH, sel);
       return;
     }
     if (G.shipDeal) G.shipDeal = null;
 
-    var opts = commsOptions(sel);
-    var by = y + 44, bw = Math.min(300, rw - 32), bh = 30;
+    /* Rows close up to fit what is left: the full 30 + 8 when there is
+     * room, then tighter gaps, then shorter buttons (never under 18 px,
+     * which still holds the 11 px label). When it is that tight the footnote
+     * under them gives its line up to the buttons as well. */
+    var by = y + 44, bw = Math.min(300, rw - 32);
+    var paneEnd = top + pad + chanH - 8;
+    var showFoot = true;
+    var step = Math.floor((paneEnd - OPT_FOOT + 8 - by) / Math.max(1, opts.length));
+    if (step < 26) { showFoot = false; step = Math.floor((paneEnd - by) / Math.max(1, opts.length)); }
+    step = Math.max(20, Math.min(OPT_ROW, step));
+    var gap = step >= 34 ? 8 : step >= 26 ? 5 : 2, bh = step - gap;
     for (var i = 0; i < opts.length; i++) {
-      btn(ctx, rx + 16, by + i * (bh + 8), bw, bh, opts[i].label, opts[i].fn,
+      var oy = by + i * step;
+      btn(ctx, rx + 16, oy, bw, bh, opts[i].label, opts[i].fn,
           { disabled: !opts[i].enabled });
+      /* The note beside a button is CLIPPED to the pane, measured rather
+       * than counted — at a narrow window "doors are shut to you" ran off
+       * the edge of the screen — and left out altogether when there is
+       * not room for a word of it. */
       if (opts[i].note) {
         ctx.save();
         ctx.font = 'bold 11px ui-monospace, monospace';
         ctx.fillStyle = 'rgba(160,185,220,0.6)';
-        ctx.fillText(opts[i].note, rx + 24 + bw, by + i * (bh + 8) + 19);
+        var nx = rx + 24 + bw, room = rx + rw - 12 - nx;
+        var nChars = Math.floor(room / (ctx.measureText('M').width || 6.6));
+        if (nChars >= 6) ctx.fillText(clipText(opts[i].note, nChars), nx, oy + bh / 2 + 4);
         ctx.restore();
       }
     }
 
-    ctx.save();
-    ctx.font = 'bold 11px ui-monospace, monospace';
-    ctx.fillStyle = 'rgba(160,185,220,0.55)';
-    ctx.fillText('Traffic control answers immediately; ships answer when they feel like it.',
-                 rx + 16, top + pad + chanH - 14);
-    ctx.restore();
+    if (showFoot) {
+      ctx.save();
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(160,185,220,0.55)';
+      var footChars = Math.floor((rw - 32) / (ctx.measureText('M').width || 6.6));
+      ctx.fillText(clipText('Traffic control answers immediately; ships answer when they feel like it.', footChars),
+                   rx + 16, top + pad + chanH - 14);
+      ctx.restore();
+    }
   }
 
   /* ---- the ship trade board ---------------------------------------------
