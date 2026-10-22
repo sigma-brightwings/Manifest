@@ -410,6 +410,13 @@ Astra has seen it working.
   touching pieces records its joint. _ship-modules/view.html shows any ship
   pulled apart, drag to turn. Cut faces are still open; caps and standard
   sockets per size come next. Nothing in the game reads it yet.
+- **2026-10-21: what a cut opens, a plate closes (ship-modules).** Where a
+  cut slices one of a ship's solids, the outline it leaves on the plane is
+  traced and filled: a wall at a length or side cut, a floor or ceiling at
+  a deck cut, given to the pieces on both sides facing outward, in the
+  part's own paint (capital-l: 1,718 plate triangles). Scraps are judged on
+  the model's own geometry, not on the plates. The viewer can show the
+  plates in yellow.
 
 ### Fixed
 

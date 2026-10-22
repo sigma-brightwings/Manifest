@@ -12,6 +12,7 @@ canvas{display:block}
  <span>pull apart <input id="ex" type="range" min="0" max="100" value="45"></span>
  <label><input id="tint" type="checkbox" checked> colour by piece</label>
  <label><input id="joints" type="checkbox" checked> joints</label>
+ <label><input id="plates" type="checkbox"> show plates added at the cuts</label>
  <span style="color:#9fb0cc">drag to turn &middot; wheel to zoom</span>
 </div>
 <canvas id="cv"></canvas>
@@ -37,12 +38,12 @@ function load(name) {
       p.ctr = [0, 1, 2].map(function (a) { return (p.lo[a] + p.hi[a]) / 2; });
       p.hue = (i * 137.508) % 360;
       p.tris = [];
-      for (var k = 0; k < p.v.length; k += 9) p.tris.push({ a: [p.v[k], p.v[k + 1], p.v[k + 2]], b: [p.v[k + 3], p.v[k + 4], p.v[k + 5]], c: [p.v[k + 6], p.v[k + 7], p.v[k + 8]], col: p.c[k / 9] });
+      for (var k = 0; k < p.v.length; k += 9) p.tris.push({ a: [p.v[k], p.v[k + 1], p.v[k + 2]], b: [p.v[k + 3], p.v[k + 4], p.v[k + 5]], c: [p.v[k + 6], p.v[k + 7], p.v[k + 8]], col: p.c[k / 9], cap: p.cap ? p.cap[k / 9] : 0 });
     });
     zoom = 1; size();
   });
 }
-['ex', 'tint', 'joints'].forEach(function (id) { document.getElementById(id).oninput = draw; });
+['ex', 'tint', 'joints', 'plates'].forEach(function (id) { document.getElementById(id).oninput = draw; });
 var drag = null;
 cv.onmousedown = function (e) { drag = [e.clientX, e.clientY, yaw, pitch]; };
 addEventListener('mouseup', function () { drag = null; });
@@ -79,7 +80,7 @@ function draw() {
       var u = [t.b[0] - t.a[0], t.b[1] - t.a[1], t.b[2] - t.a[2]], w = [t.c[0] - t.a[0], t.c[1] - t.a[1], t.c[2] - t.a[2]];
       var nx = u[1] * w[2] - u[2] * w[1], ny = u[2] * w[0] - u[0] * w[2], nz = u[0] * w[1] - u[1] * w[0], nl = Math.hypot(nx, ny, nz) || 1;
       var lit = 0.35 + 0.65 * Math.abs((nx * LIGHT[0] + ny * LIGHT[1] + nz * LIGHT[2]) / nl);
-      list.push({ A: A, B: B, C: C, z: (A[2] + B[2] + C[2]) / 3, p: p, lit: lit, col: t.col });
+      list.push({ A: A, B: B, C: C, z: (A[2] + B[2] + C[2]) / 3, p: p, lit: lit, col: t.col, cap: t.cap });
     });
   });
   list.sort(function (a, b) { return a.z - b.z; });
@@ -87,7 +88,8 @@ function draw() {
     var base;
     if (tint) base = 'hsl(' + q.p.hue + ',55%,' + Math.round(22 + 40 * q.lit) + '%)';
     else { var h = S.colours[q.col] || '#888888'; base = shade(h, q.lit); }
-    if (hover === q.p) base = 'hsl(50,95%,' + Math.round(40 + 30 * q.lit) + '%)';
+    if (q.cap && document.getElementById('plates').checked) base = 'hsl(48,100%,' + Math.round(45 + 25 * q.lit) + '%)';
+    if (hover === q.p) base = 'hsl(190,90%,' + Math.round(40 + 30 * q.lit) + '%)';
     x.fillStyle = base; x.strokeStyle = base; x.lineWidth = 0.6;
     x.beginPath(); x.moveTo(q.A[0], q.A[1]); x.lineTo(q.B[0], q.B[1]); x.lineTo(q.C[0], q.C[1]); x.closePath(); x.fill(); x.stroke();
   });

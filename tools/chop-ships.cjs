@@ -108,6 +108,85 @@ function clipKeep(poly, ax, v, keepAbove) {
 }
 function idxOf(v, planes) { var k = 0; while (k < planes.length && v > planes[k]) k++; return k; }
 
+/* ---- caps: closing what a cut opened ------------------------------------
+ *
+ * The factory ships are built from closed solids (boxes, cylinders), so a
+ * plane through one cuts a closed outline. Every triangle the plane crosses
+ * contributes one segment of it; chained end to end, the segments are the
+ * outline, and filled, the outline is the wall (length and side cuts) or
+ * the floor or ceiling (deck cuts) the cut left open. An open sheet (a
+ * single quad) gives a segment that chains to nothing, and is left alone.
+ */
+function sliceSegments(tris, ax, v) {
+  var segs = [];
+  tris.forEach(function (t) {
+    var pts = [];
+    for (var i = 0; i < 3; i++) {
+      var a = t[i], b = t[(i + 1) % 3], da = a[ax] - v, db = b[ax] - v;
+      if (da === 0 && db === 0) continue;   // an edge lying in the plane: its neighbours supply it
+      if ((da <= 0 && db > 0) || (da > 0 && db <= 0)) {
+        var u = da / (da - db);
+        pts.push([a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u]);
+      }
+    }
+    if (pts.length === 2) segs.push(pts);
+  });
+  return segs;
+}
+function chainLoops(segs, tol) {
+  function k(p) { return p.map(function (c) { return Math.round(c / tol); }).join(','); }
+  var ends = {};
+  segs.forEach(function (s, i) { [0, 1].forEach(function (e) { (ends[k(s[e])] = ends[k(s[e])] || []).push([i, e]); }); });
+  var used = new Array(segs.length), loops = [];
+  for (var i = 0; i < segs.length; i++) {
+    if (used[i]) continue;
+    used[i] = true;
+    var loop = [segs[i][0], segs[i][1]], start = k(segs[i][0]), cur = segs[i][1], closed = false;
+    for (var guard = 0; guard < segs.length; guard++) {
+      if (k(cur) === start) { closed = true; loop.pop(); break; }
+      var next = (ends[k(cur)] || []).filter(function (r) { return !used[r[0]]; })[0];
+      if (!next) break;
+      used[next[0]] = true;
+      cur = segs[next[0]][1 - next[1]];
+      loop.push(cur);
+    }
+    if (closed && loop.length >= 3) loops.push(loop);
+  }
+  return loops;
+}
+/* Ear clipping in the plane's own 2D (the two other axes). Handles the
+ * concave outlines a cut through an L-shaped part can make. */
+function triangulate(loop, ax) {
+  var o = [0, 1, 2].filter(function (k) { return k !== ax; });
+  var pts = loop.map(function (p) { return [p[o[0]], p[o[1]]]; });
+  var area = 0;
+  for (var i = 0; i < pts.length; i++) { var a = pts[i], b = pts[(i + 1) % pts.length]; area += a[0] * b[1] - b[0] * a[1]; }
+  var idx = loop.map(function (_, i) { return i; });
+  if (area < 0) idx.reverse();
+  var out = [], guard = 0;
+  function cross(a, b, c) { return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]); }
+  function inside(p, a, b, c) { return cross(a, b, p) >= 0 && cross(b, c, p) >= 0 && cross(c, a, p) >= 0; }
+  while (idx.length > 3 && guard++ < 5000) {
+    var cut = false;
+    for (var j = 0; j < idx.length; j++) {
+      var i0 = idx[(j + idx.length - 1) % idx.length], i1 = idx[j], i2 = idx[(j + 1) % idx.length];
+      var A = pts[i0], B = pts[i1], C = pts[i2];
+      if (cross(A, B, C) <= 1e-12) continue;
+      var ear = true;
+      for (var m = 0; m < idx.length && ear; m++) {
+        var q = idx[m]; if (q === i0 || q === i1 || q === i2) continue;
+        if (inside(pts[q], A, B, C)) ear = false;
+      }
+      if (!ear) continue;
+      out.push([loop[i0], loop[i1], loop[i2]]);
+      idx.splice(j, 1); cut = true; break;
+    }
+    if (!cut) break;   // degenerate outline: what is left is not filled
+  }
+  if (idx.length === 3) out.push([loop[idx[0]], loop[idx[1]], loop[idx[2]]]);
+  return out;
+}
+
 function chop(file) {
   var base = path.basename(file, '.glb'), m = /^(.*)-([sml])$/.exec(base);
   var fam = m[1], size = m[2], row = (TABLE[fam] || {})[size] || (TABLE[fam] || {}).m;
@@ -123,9 +202,15 @@ function chop(file) {
     row.z.map(function (f) { return hi[2] - f * len; }).sort(function (a, b) { return a - b; })
   ];
   var cells = {};   // key "xi,yi,zi" or "wingL"/"wingR" -> [{p:[v,v,v], c:col}]
-  function put(key, poly, col) {
+  var capCount = 0;
+  function cross3(poly) {
+    var a = poly[0], b = poly[1], c = poly[2];
+    var u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    return [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+  }
+  function put(key, poly, col, cap) {
     (cells[key] = cells[key] || []);
-    for (var k = 1; k + 1 < poly.length; k++) cells[key].push({ p: [poly[0], poly[k], poly[k + 1]], c: col });
+    for (var k = 1; k + 1 < poly.length; k++) cells[key].push({ p: [poly[0], poly[k], poly[k + 1]], c: col, cap: !!cap });
   }
   parts.forEach(function (p) {
     var c = [0, 1, 2].map(function (a) { return (p.lo[a] + p.hi[a]) / 2; });
@@ -152,6 +237,47 @@ function chop(file) {
         items = next;
       });
       items.forEach(function (it) { put(it.cell.join(','), it.poly, t.col); });
+    });
+    /* Caps for this part on every plane that crosses it. Each cap polygon
+     * is split by the other two axes' planes like any other face, then
+     * given to the cells on BOTH sides of its own plane, facing outward. */
+    var counts = {}; p.tris.forEach(function (t) { counts[t.col] = (counts[t.col] || 0) + 1; });
+    var col = +Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; })[0];
+    [0, 1, 2].forEach(function (ax) {
+      P[ax].forEach(function (v, k) {
+        if (v <= p.lo[ax] || v >= p.hi[ax]) return;
+        chainLoops(sliceSegments(p.tris, ax, v), 1e-5 * len).forEach(function (loop) {
+          triangulate(loop, ax).forEach(function (tri) {
+            var items = [{ poly: tri, cell: [0, 0, 0] }];
+            [0, 1, 2].forEach(function (ax2) {
+              if (ax2 === ax || !P[ax2].length) return;
+              var planes = P[ax2], next = [];
+              items.forEach(function (it) {
+                for (var kk = 0; kk <= planes.length; kk++) {
+                  var q = it.poly;
+                  if (kk > 0) q = clipKeep(q, ax2, planes[kk - 1], true);
+                  if (kk < planes.length && q.length >= 3) q = clipKeep(q, ax2, planes[kk], false);
+                  if (q.length >= 3) { var cc = it.cell.slice(); cc[ax2] = kk; next.push({ poly: q, cell: cc }); }
+                }
+              });
+              items = next;
+            });
+            items.forEach(function (it) {
+              var below = it.cell.slice(), above = it.cell.slice();
+              below[ax] = k; above[ax] = k + 1;
+              /* Outward: the cell below the plane sees its cap facing +ax,
+               * the one above facing -ax. The triangulation's winding is
+               * fixed in the plane's 2D, so one side gets it reversed. */
+              var poly = it.poly, rev = poly.slice().reverse();
+              var nrm = cross3(poly);
+              var up = nrm[ax] > 0 ? poly : rev, down = nrm[ax] > 0 ? rev : poly;
+              put(below.join(','), up, col, true);
+              put(above.join(','), down, col, true);
+              capCount += 2;
+            });
+          });
+        });
+      });
     });
   });
 
@@ -180,7 +306,16 @@ function chop(file) {
   var before = pieces.length;
   function extentOf(p) { return Math.max(p.hi[0] - p.lo[0], p.hi[1] - p.lo[1], p.hi[2] - p.lo[2]); }
   function hull(p) { return !!p.cell; }
-  function frag(p) { return hull(p) && (extentOf(p) < 0.12 * len || p.tris.length < 40); }
+  /* Judged on the model's own geometry: the plates a cut added are not what
+   * makes a piece worth having, and counting them made scraps look real. */
+  function own(p) { var n = 0; p.tris.forEach(function (t) { if (!t.cap) n++; }); return n; }
+  function frag(p) {
+    if (!hull(p)) return false;
+    var b = { lo: [1e9, 1e9, 1e9], hi: [-1e9, -1e9, -1e9] }, n = 0;
+    p.tris.forEach(function (t) { if (t.cap) return; n++; t.p.forEach(function (v) { for (var a = 0; a < 3; a++) { b.lo[a] = Math.min(b.lo[a], v[a]); b.hi[a] = Math.max(b.hi[a], v[a]); } }); });
+    if (!n) return true;   // nothing but plates: a cut through empty space
+    return Math.max(b.hi[0] - b.lo[0], b.hi[1] - b.lo[1], b.hi[2] - b.lo[2]) < 0.12 * len || n < 40;
+  }
   function centre(p) { return [0, 1, 2].map(function (a) { return (p.lo[a] + p.hi[a]) / 2; }); }
   function roleCount(r) { return pieces.filter(function (p) { return p.role === r; }).length; }
   var stuck = {};
@@ -244,13 +379,13 @@ function chop(file) {
     ship: base, family: fam, size: size, colours: L.colours,
     bounds: { lo: lo.map(r4), hi: hi.map(r4) }, planes: P.map(function (a) { return a.map(r4); }),
     pieces: pieces.map(function (p) {
-      var flat = [], cols = [];
-      p.tris.forEach(function (t) { t.p.forEach(function (v) { flat.push(r4(v[0]), r4(v[1]), r4(v[2])); }); cols.push(t.c); });
-      return { id: p.id, cell: p.cell, role: p.role, lo: p.lo, hi: p.hi, v: flat, c: cols };
+      var flat = [], cols = [], caps = [];
+      p.tris.forEach(function (t) { t.p.forEach(function (v) { flat.push(r4(v[0]), r4(v[1]), r4(v[2])); }); cols.push(t.c); caps.push(t.cap ? 1 : 0); });
+      return { id: p.id, cell: p.cell, role: p.role, lo: p.lo, hi: p.hi, v: flat, c: cols, cap: caps };
     }),
     joints: joints
   };
-  return { out: out, summary: { ship: base, pieces: pieces.length, cells: before, joints: joints.length, tris: tris,
+  return { out: out, summary: { ship: base, pieces: pieces.length, cells: before, joints: joints.length, tris: tris, caps: capCount,
     roles: pieces.reduce(function (r, p) { r[p.role] = (r[p.role] || 0) + 1; return r; }, {}) } };
 }
 function r4(v) { return Math.round(v * 10000) / 10000; }
@@ -263,7 +398,7 @@ files.forEach(function (f) {
   var r = chop(path.join(DIR, f));
   fs.writeFileSync(path.join(OUT, r.summary.ship + '.json'), JSON.stringify(r.out));
   index.push(r.summary);
-  console.log(r.summary.ship + '\t' + r.summary.cells + ' cells > ' + r.summary.pieces + ' pieces\t' + r.summary.joints + ' joints\t' +
+  console.log(r.summary.ship + '\t' + r.summary.cells + ' cells > ' + r.summary.pieces + ' pieces\t' + r.summary.joints + ' joints\t' + r.summary.caps + ' cap tris\t' +
     Object.keys(r.summary.roles).map(function (k) { return k + ' ' + r.summary.roles[k]; }).join(', '));
 });
 if (!want.length) fs.writeFileSync(path.join(OUT, 'index.json'), JSON.stringify(index));
