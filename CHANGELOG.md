@@ -368,6 +368,30 @@ Astra has seen it working.
 
 ### Changed
 
+- **2026-10-24: every city site's town stands somewhere of its own.**
+  Astra: "randomize the location of the city portion and the domes on
+  those ports, without putting them on the landing apron or the door."
+  The pad and runway city sites (s, m and l) carry their settlement as one
+  piece in the art: three habitat domes, two greenhouse domes, the tubes
+  between them, a water tank, sheds, solar panels and a mast, on a slab of
+  its own. It always stood in the same corner. Now each port turns it to
+  its own heading and stands it in its own place: on the site plate or
+  beside the field. It stays clear of everything standing on the site, and
+  further clear of the pad, the runway (and the runway's line well past
+  both ends, under the approach and climb-out) and the doors. It stays
+  within 1.12 of the site's half-span, so it never stands in the town
+  dressing round the port. The domes move with the city rather than on
+  their own: they are three sizes, and each one's vestibule faces the tube
+  that reaches it, so a dome moved alone would leave a tube running into a
+  blank wall. `tools/port-sites.cjs` reads the .glb models and writes
+  `src/port-sites.js` (where each city is, and what it must keep clear
+  of); render.js lifts exactly the city's 1,772 triangles out of the port
+  (every corner inside the city's box: by centre it once took a slab of
+  ground with it) and draws them where `Render.citySpot` puts them. The
+  seed is new, `port.dressing.citySeed`, on its own random stream: the
+  galaxy fingerprints and every port's signs, blocks and domes are
+  unchanged. Where the art had the city there is now open site plate.
+  `test/city-sites.test.js`, 52 checks.
 - **2026-10-21: the comms channel fits a short window.** A port's ten
   options at a fixed 38 px a row printed over the traffic log in a short
   window, and the notes beside them ran off the right edge. The channel
@@ -467,6 +491,8 @@ spot, shattered rocks, torpedo refunds, sabotage) is additive and loads as
 "nothing yet" on an older save. A survey made before the scanner audit
 keeps exactly the value it had: its ground counts as mapped by the
 instrument its grade says.
+A city site's town is placed from the port itself, not from the save, so
+an older career sees it in its new place the next time it lands there.
 
 ---
 

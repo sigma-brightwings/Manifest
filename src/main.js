@@ -11256,6 +11256,12 @@
           }
           Render.drawStationModel(ctx, cam, frame, b.radius, sun, model, b.color,
                                   stationDoors(b), indoors ? shipSection(b) : null);
+          /* A city site's town, where this port's seed put it (Render.citySpot).
+           * From outside only: it stands on the surface, out of view of a
+           * berth or the hangar under it. */
+          if (b.surface && !indoors && Render.drawPortCity) {
+            Render.drawPortCity(ctx, cam, frame, b, b.radius, sun, model, b.color);
+          }
           if (turns) {
             Render.drawPortPart(ctx, cam, stationFrame(b), b.radius, sun,
                                 model, 'spin', b.color);

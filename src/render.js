@@ -709,6 +709,15 @@
     }
     var whole = decompress(src);
     var split = splitMovers(whole, src.movers);
+    /* THE CITY OF A CITY SITE IS LIFTED OUT TOO (2026-10-24), and drawn by
+     * drawPortCity wherever this port's seed puts it. Out of the solid
+     * shell as well: it is not where the art left it any more. */
+    var site = citySite(role);
+    var cityCut = site ? splitCity(split ? split.shell : whole, site.city) : null;
+    if (cityCut) {
+      if (split) split.shell = cityCut.shell; else split = { shell: cityCut.shell, movers: null };
+      whole = splitCity(whole, site.city).shell;
+    }
     var out = {
       kind: src.kind,
       /* The hull WITHOUT its cars: every drawing path reads `shell`, so the
@@ -718,6 +727,7 @@
        * the art left it. */
       solidShell: whole,
       movers: split ? split.movers : null,
+      city: cityCut ? cityCut.city : null,
       interior: src.interior ? decompress(src.interior) : null,
       spin: src.spin ? decompress(src.spin) : null,
       anchors: src.anchors || null,
@@ -783,6 +793,195 @@
                  mesh: { v: shell.v, f: boxes[k].f, c: shell.c ? boxes[k].c : null } });
     }
     return { shell: { v: shell.v, f: hullF, c: shell.c ? hullC : shell.c }, movers: out };
+  }
+
+  /* ---- THE CITY ON A CITY SITE STANDS SOMEWHERE OF ITS OWN (2026-10-24) --
+   *
+   * Astra: "randomize the location of the city portion and the domes on
+   * those ports, without putting them on the landing apron or the door to
+   * get some more variety."
+   *
+   * pad-city-site and runway-city-site carry their settlement as one node
+   * in the art - three habitat domes, two greenhouse domes, the tubes
+   * between them, a tank, sheds, solar panels and a mast, on a slab of
+   * its own - and every port drawn from the same model had it in the same
+   * corner. tools/port-sites.cjs reads the .glb (the game's copy has no
+   * names left in it) and writes src/port-sites.js: the city's box, and
+   * boxes for everything on the site it must keep clear of.
+   *
+   * ONE PIECE. The domes are not interchangeable: they are three sizes,
+   * and each dome's vestibule faces the tube that reaches it, so a dome
+   * moved on its own leaves a tube running into a blank wall. The city
+   * moves and turns as a whole, and the domes go with it.
+   *
+   * The triangles are lifted out of the hull by box, the way the cars
+   * are; the art keeps the plate the city stands on just below the
+   * city's own slab, so the cut is exact (render.test.js counts it
+   * against the art: 1,772 triangles on every one of the six models). */
+  /* (Not portSite: that name is taken further down, by the role -> site
+   * kind lookup, and the later declaration wins.) */
+  function citySite(role) {
+    var S = global.PortSites;
+    return (S && role && S[role]) || null;
+  }
+
+  function inBox(p, lo, hi) {
+    return p[0] >= lo[0] && p[0] <= hi[0] && p[1] >= lo[1] && p[1] <= hi[1] && p[2] >= lo[2] && p[2] <= hi[2];
+  }
+  function splitCity(shell, box) {
+    if (!shell || !shell.f || !shell.f.length || !box) return null;
+    var ex = (box[3] - box[0]) * 0.01, ey = (box[4] - box[1]) * 0.01;
+    var lo = [box[0] - ex, box[1] - ey, box[2] - 1e-4], hi = [box[3] + ex, box[4] + ey, box[5] + 1e-3];
+    var keepF = [], keepC = [], cityF = [], cityC = [];
+    for (var i = 0; i < shell.f.length; i++) {
+      var t = shell.f[i], a = shell.v[t[0]], b = shell.v[t[1]], c = shell.v[t[2]];
+      var col = shell.c ? shell.c[i] : null, mine = false;
+      /* EVERY CORNER inside, not the centre. The site plate is a few huge
+       * triangles running the length of the site, and one of them has its
+       * centre under the city: by centre it went with the city and left a
+       * hole in the ground behind it (measured: 1,773 cut against 1,772 in
+       * the art, on all six models). Nothing of the city reaches outside
+       * its own box, so the corner test takes exactly the city. */
+      if (a && b && c) mine = inBox(a, lo, hi) && inBox(b, lo, hi) && inBox(c, lo, hi);
+      if (mine) { cityF.push(t); cityC.push(col); } else { keepF.push(t); keepC.push(col); }
+    }
+    if (!cityF.length) return null;
+    return { shell: { v: shell.v, f: keepF, c: shell.c ? keepC : shell.c },
+             city: { v: shell.v, f: cityF, c: shell.c ? cityC : shell.c } };
+  }
+
+  /* WHERE IT GOES. All in port units, the site's own frame, +z up.
+   *
+   *   - clear of everything standing on the site by CITY_MARGIN, and of
+   *     the pad, the runway and the doors by LAND_MARGIN, which is wider:
+   *     a ship has to come down on one and taxi through the other;
+   *   - clear of the RUNWAY'S LINE for STRIP_REACH beyond either end, so
+   *     nothing stands under the approach or the climb-out;
+   *   - inside CITY_REACH of the centre, every corner of it. The town
+   *     dressing (generate.js portBlocks, portDomes) starts at 1.15 and the
+   *     signs and the control cabinet stand further out still, so the two
+   *     settlements never stand in each other;
+   *   - and no further than CITY_NEAR from something of the port, so it
+   *     reads as the port's own town and not a camp in the next valley.
+   *
+   * Any heading. The seed (generate.js dressing.citySeed) drives a small
+   * generator, and the first of CITY_TRIES candidates that fits is the
+   * answer; if none does, the art's own corner, which fits by design.
+   * Cached on the port: a place does not move between visits. */
+  var CITY_MARGIN = 0.03, LAND_MARGIN = 0.10, STRIP_REACH = 2.0;
+  var CITY_REACH = 1.12, CITY_NEAR = 0.20, CITY_TRIES = 160;
+
+  function cityBlocks(site) {
+    var out = [], i, r;
+    for (i = 0; i < site.keep.length; i++) {
+      r = site.keep[i];
+      out.push([r[0] - CITY_MARGIN, r[1] - CITY_MARGIN, r[2] + CITY_MARGIN, r[3] + CITY_MARGIN]);
+    }
+    for (i = 0; i < site.land.length; i++) {
+      r = site.land[i];
+      out.push([r[0] - LAND_MARGIN, r[1] - LAND_MARGIN, r[2] + LAND_MARGIN, r[3] + LAND_MARGIN]);
+    }
+    if (site.strip) {
+      r = site.strip;
+      /* along its long side, out past both ends */
+      if (r[3] - r[1] >= r[2] - r[0]) out.push([r[0] - LAND_MARGIN, r[1] - STRIP_REACH, r[2] + LAND_MARGIN, r[3] + STRIP_REACH]);
+      else out.push([r[0] - STRIP_REACH, r[1] - LAND_MARGIN, r[2] + STRIP_REACH, r[3] + LAND_MARGIN]);
+    }
+    return out;
+  }
+  function boxGap(a, b) {        // distance between two 2D boxes, 0 if they touch
+    var dx = Math.max(0, a[0] - b[2], b[0] - a[2]), dy = Math.max(0, a[1] - b[3], b[1] - a[3]);
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+  /* mulberry32: small, seedable, and the same numbers in every browser */
+  function seeded(s) {
+    var a = (Math.floor(s * 4294967296) >>> 0) || 0x9e3779b9;
+    return function () {
+      a = (a + 0x6D2B79F5) >>> 0;
+      var t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  /* The city's footprint at a heading and a centre, as a 2D box (the box
+   * round the turned rectangle: conservative, so a fit is a real fit). */
+  function cityFoot(c, rot, x, y) {
+    var hx = (c[3] - c[0]) / 2, hy = (c[4] - c[1]) / 2;
+    var cs = Math.abs(Math.cos(rot)), sn = Math.abs(Math.sin(rot));
+    var ex = cs * hx + sn * hy, ey = sn * hx + cs * hy;
+    return [x - ex, y - ey, x + ex, y + ey];
+  }
+  function cityFits(foot, blocks, near) {
+    var corners = [[foot[0], foot[1]], [foot[2], foot[1]], [foot[0], foot[3]], [foot[2], foot[3]]];
+    for (var k = 0; k < 4; k++) {
+      if (Math.sqrt(corners[k][0] * corners[k][0] + corners[k][1] * corners[k][1]) > CITY_REACH) return false;
+    }
+    var close = false;
+    for (var i = 0; i < blocks.length; i++) {
+      var b = blocks[i];
+      if (foot[0] < b[2] && foot[2] > b[0] && foot[1] < b[3] && foot[3] > b[1]) return false;
+    }
+    for (var j = 0; j < near.length && !close; j++) if (boxGap(foot, near[j]) <= CITY_NEAR) close = true;
+    return close;
+  }
+
+  /* -> { rot, x, y, cx, cy }: a point p of the city goes to
+   * R(rot) (p - c) + (x, y). Null when this port has no city to move. */
+  function citySpot(role, port) {
+    var site = citySite(role);
+    if (!site || !port) return null;
+    var memo = port._citySpot || (port._citySpot = {});
+    if (memo[role] !== undefined) return memo[role];
+    var c = site.city, cx = (c[0] + c[3]) / 2, cy = (c[1] + c[4]) / 2;
+    var home = { rot: 0, x: cx, y: cy, cx: cx, cy: cy, home: true };
+    var seed = port.dressing && typeof port.dressing.citySeed === 'number'
+      ? port.dressing.citySeed : null;
+    if (seed === null) {
+      /* A port built without dressing (a fixture, an old save): a seed from
+       * its name, so it still has a place of its own and keeps it. */
+      var s = String(port.id || '') + '|' + String(port.name || ''), h = 2166136261;
+      for (var q = 0; q < s.length; q++) { h ^= s.charCodeAt(q); h = Math.imul(h, 16777619) >>> 0; }
+      seed = h / 4294967296;
+    }
+    var rnd = seeded(seed), blocks = cityBlocks(site);
+    var near = site.keep.concat(site.land);
+    var spot = null;
+    for (var t = 0; t < CITY_TRIES && !spot; t++) {
+      var rot = rnd() * Math.PI * 2;
+      var r = Math.sqrt(rnd()) * CITY_REACH, a = rnd() * Math.PI * 2;
+      var x = Math.cos(a) * r, y = Math.sin(a) * r;
+      if (cityFits(cityFoot(c, rot, x, y), blocks, near)) spot = { rot: rot, x: x, y: y, cx: cx, cy: cy, home: false };
+    }
+    memo[role] = spot || home;
+    return memo[role];
+  }
+
+  /* The frame that draws the city where citySpot put it: turned about the
+   * site's up axis and slid. A rotation about +z keeps the frame right-
+   * handed, so no face turns inside out. */
+  function cityFrame(frame, sp, km) {
+    var cs = Math.cos(sp.rot), sn = Math.sin(sp.rot);
+    var R = frame.right, U = frame.up;
+    var right = { x: R.x * cs + U.x * sn, y: R.y * cs + U.y * sn, z: R.z * cs + U.z * sn };
+    var up = { x: -R.x * sn + U.x * cs, y: -R.y * sn + U.y * cs, z: -R.z * sn + U.z * cs };
+    var ox = R.x * sp.x + U.x * sp.y - right.x * sp.cx - up.x * sp.cy;
+    var oy = R.y * sp.x + U.y * sp.y - right.y * sp.cx - up.y * sp.cy;
+    var oz = R.z * sp.x + U.z * sp.y - right.z * sp.cx - up.z * sp.cy;
+    return { pos: { x: frame.pos.x + ox * km, y: frame.pos.y + oy * km, z: frame.pos.z + oz * km },
+             right: right, up: up, fwd: frame.fwd };
+  }
+
+  /* Drawn by main.js beside drawStationModel, from outside: the city is on
+   * the surface, and from a berth or the hangar below it is not in view. */
+  function drawPortCity(ctx, cam, frame, port, radiusKm, sunDir, role, tint) {
+    if (!port || !port.surface || !frame) return false;
+    var lib = libPort(role);
+    if (!lib || !lib.city || !lib.city.f.length) return false;
+    var sp = citySpot(role, port);
+    var fr = sp ? cityFrame(frame, sp, radiusKm) : frame;
+    paintPart(ctx, cam, fr, lib.city, radiusKm, sunDir, tint);
+    return true;
   }
 
   /* Who is riding. main.js hands over the world positions of the hulls
@@ -10451,6 +10650,9 @@
     portLivery: portLivery, ROLE_PATTERNS: ROLE_PATTERNS, PORT_HELD_BACK: PORT_HELD_BACK,
     prefetchPorts: prefetchPorts, portGeometryArrived: portGeometryArrived,
     setMoverRiders: setMoverRiders, moverPose: moverPose, splitMovers: splitMovers,
+    drawPortCity: drawPortCity, citySpot: citySpot, cityFrame: cityFrame, splitCity: splitCity,
+    citySite: citySite, cityBlocks: cityBlocks, cityFoot: cityFoot,
+    CITY_REACH: CITY_REACH, CITY_NEAR: CITY_NEAR,
     poolFor: poolFor, PORT_POOL: PORT_POOL,
     portClass: portClass, portSizeFor: portSizeFor,
     PORT_PATTERNS: PORT_PATTERNS, PORT_SIZE_CUTS: PORT_SIZE_CUTS,

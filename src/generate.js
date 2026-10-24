@@ -1108,7 +1108,15 @@
          * you are looking at something on a planet or something in orbit. */
         padLight: port.surface ? '#ffb45c' : '#7fd0ff',
         hazard: rng.chance(0.5) ? '#ffcf3b' : '#ff7a3b',
-        grime: rng.range(0, 1)
+        grime: rng.range(0, 1),
+        /* WHERE THE CITY STANDS on a modelled city site (Astra,
+         * 2026-10-24: "randomize the location of the city portion and the
+         * domes ... without putting them on the landing apron or the
+         * door"). Render.citySpot turns this into a place clear of the
+         * pad, the runway and the doors. Its OWN stream, salted like the
+         * control cabinet's, so drawing it moves nothing else in the
+         * dressing or the galaxy. */
+        citySeed: port.surface ? new RNG('city|' + ((sys && sys.seed) || '') + '|' + port.id).range(0, 1) : null
       };
     }
   }
