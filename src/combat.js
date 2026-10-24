@@ -6778,7 +6778,7 @@
     if (charted) {
       var fac = G.galaxy.factionById[charted.factionId];
       text += ' Came through ' + charted.name +
-              (fac ? ' — that is ' + fac.name + ' space' : '') + '.';
+              (fac ? ' — that is ' + fac.name + ' space' : ' — nobody holds it, nothing there but the star') + '.';
     } else if (route && route._told) {
       text += ' Told you everything I know.';
     }

@@ -425,6 +425,72 @@ Astra has seen it working.
     most three weeks; 37 checks. The paper shows each port early in its
     build-out, halfway and finished, not game years 0/5/15.
     `Claude outputs/growth-timeline.cjs` prints the timings per order.
+- **2026-10-24: no-man's land — 450 stars, and most of them nobody's.**
+  Astra: "not every star system has anything in it but hydrogen for fuel
+  to keep moving at the star or one of the planets, by increasing the
+  number of stars to 450 and creating a kind of no-man's land in between
+  polities; this makes every game have its own expansion into new
+  territory which can inter-relate with faction missions." Decided with
+  her: a bigger disc at the same spacing, about 45% claimed, the Syndicate
+  both inside the empires and out in the frontier, and (later stages)
+  both the polities and the player expanding into it.
+  - **The galaxy** (`src/galaxy.js`): 450 stars on a 72.75 ly disc (was
+    200 on 48.5), the same density, so a hop is the hop it always was. No
+    star is left more than 8.8 ly from its nearest neighbour (the rim had
+    one at 10.7, past a laden Mule's 9.7). Each empire claims the compact
+    region round its capital, an even share of 45% of the stars, and never
+    a star within 4 ly of another empire's: there is always open space
+    between them. The first capital stands within 10 ly of home, so a
+    career always begins inside a polity; the others stand out at 0.8 of
+    the disc's reach at evenly spaced bearings - opposite each other when
+    there are three - so the open space lies between every pair
+    (farthest-point sampling had put both rim empires on one flank of
+    kawartha, leaving half the map a single empty frontier). The
+    Syndicate's three holds and
+    the three minor powers are carved out of claimed space as before (their
+    shares now of claimed space), and the Syndicate also keeps two
+    **frontier outposts** of four systems out in no-man's land, with no
+    empire round them. On kawartha: 212 of 450 claimed, 238 nobody's.
+  - **Empty systems** (`src/generate.js`, `opts.empty`): a star nobody holds
+    generates its star, worlds, moons, rings and belts exactly as it would
+    (every stream is forked, nothing moves) and then no ports: no market,
+    no traffic, no patrols, no flag, no law (`government: unclaimed`,
+    `crimeScore` 100, as deep space), `sys.empty`. A bare seed never
+    generates empty. `Galaxy.systemOpts` is the one call the game's system
+    cache, the chart's preview and the wars' summary all use. Courier and
+    passage contracts and the arcs' courier, infiltration and recovery
+    steps only go to stars somebody holds; a hailed ship's charting says
+    "nobody holds it".
+  - **Star skimming** (`src/sim.js`, `src/mining.js`): every star has a
+    CORONA out to three of its radii that the ram scoop works in - density
+    x speed x area x facing, as for a giant, densest deepest. No drag (an
+    orbit through it is the orbit it was), and RADIANT heat, inverse square
+    of distance and fourth power of temperature: a red dwarf can be skimmed
+    deep on a bare hull, a sun-like star wants a heat shield deep, a hot
+    white one cooks even a shielded hull at half depth. About 1.7 t/min at
+    the top, 5.5 halfway, 20-55 deep. **Skimmed hydrogen fills the jump
+    tank first, then the hold** - at a giant as well as a star - so a ship
+    can keep moving through systems with no port. 87 of 714 empty systems
+    in three galaxies have no giant at all; the star is their fuel.
+  - Arriving where the busiest port is a pad no longer parks you under the
+    pad (main.js `enterSystem` wanted an orbital station; a latent bug the
+    new map walked into).
+  - **Saves: epoch 3.** A career from before this is in a galaxy that no
+    longer exists, so it does not load (the DEPRECATED shelf was empty).
+  - Tests: `galaxy.test.js` "no-man's land" (empty systems really empty and
+    with the worlds they would have had, home claimed, about 45% claimed,
+    the empires apart, frontier outposts) and the territory checks rewritten
+    for claimed space, 96 checks; `mining.test.js` "the star" (skimming,
+    tank before hold, heat by star class, every star has a corona), 106;
+    `render.test.js` "an empty system" (arrive, every screen F1-F8, both
+    views), 967. The slipspace tear-out test and the jump's clock check
+    leaned on the old map's first lane (empty, long); they now take the
+    longest lane and accept a live corridor's own crossing time.
+    `Claude outputs`: `empty-smoke.cjs`, `corona-check.cjs`,
+    `galaxy-map.cjs` (the map top down, held and nobody's).
+  - **Next** (agreed, not built): the empires and the player expanding into
+    no-man's land on the clock - Crawlers founding ports there, dated like
+    the wars - and the faction missions that hang off it.
 
 ### Changed
 

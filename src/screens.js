@@ -4128,9 +4128,8 @@
   function previewSystem(star) {
     G.systemCache = G.systemCache || {};
     if (!G.systemCache[star.id]) {
-      var fac = (G.galaxy && G.galaxy.factionById) ? G.galaxy.factionById[star.factionId] : null;
-      var opts = fac ? { faction: fac, allFactions: G.galaxy.factions } : undefined;
-      G.systemCache[star.id] = Gen.generateSystem(star.seed, opts);
+      /* the same call systemFor makes in main.js: owner, or empty */
+      G.systemCache[star.id] = Gen.generateSystem(star.seed, Galaxy.systemOpts(G.galaxy, star));
     }
     return G.systemCache[star.id];
   }

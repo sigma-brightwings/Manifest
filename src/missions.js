@@ -446,7 +446,7 @@
       } else if (roll < 0.78 && galaxy) {
         // COURIER: a parcel to a neighbouring star. Any port there counts.
         var near = galaxy.stars.filter(function (s) {
-          if (s === here) return false;
+          if (s === here || !s.factionId) return false;     // nobody's star has no port to deliver to (2026-10-24)
           var d = global.Galaxy.distance3(here, s);
           return d > 0 && d < 9;
         });
@@ -545,7 +545,7 @@
 
       if (far) {
         var near = galaxy.stars.filter(function (st) {
-          if (st === here) return false;
+          if (st === here || !st.factionId) return false;   // passengers go where there is a port (2026-10-24)
           var d = global.Galaxy.distance3(here, st);
           return d > 0 && d < 9;
         });

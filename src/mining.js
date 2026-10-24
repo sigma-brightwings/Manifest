@@ -45,6 +45,7 @@
    * nose and the oncoming air). Side-on or tail-first, nothing goes in. */
   var SKIM_ALIGN_MIN = 0.17;     // cos 80 deg - beyond this the mouth sees no flow
   var SKIM_MIN_GRADE = 0.3;      // a giant this poor in hydrogen is not worth the dive
+  var STAR_GRADE = 0.9;          // a star's corona: hydrogen, near enough all of it (2026-10-24)
 
   /* ---- pieces and wear (2026-10-18) ---------------------------------------
    * Astra: the beam "can go continuously before 2t of mined material is
@@ -402,11 +403,18 @@
     var S = Sim(), s = G.ship;
     G.skimming = null;
     if (!hasIntake || !S || !s || s.docked || s.landed || !(dt > 0)) return 0;
+    /* A giant's air, or (2026-10-24) a star's corona: every system has a
+     * star, so every system has fuel. */
     var atmo = S.atmosphereContext(s.pos, sys, t);
-    if (!atmo || !isGiant(atmo.body)) return 0;
+    var star = null;
+    if (!atmo || !isGiant(atmo.body)) {
+      atmo = S.coronaContext ? S.coronaContext(s.pos, sys, t) : null;
+      if (!atmo) return 0;
+      star = atmo.body;
+    }
     var body = atmo.body, at = body.atmosphere;
     var alt = V.dist(s.pos, atmo.pos) - body.radius;
-    var rho = S.airDensity(body, alt);
+    var rho = star ? S.coronaDensity(star, atmo.r) : S.airDensity(body, alt);
     if (!(rho > 0)) return 0;
     var rel = V.sub(s.vel, atmo.vel), v = V.len(rel);       // km/s, through the air
     /* Nose into the oncoming air. The air comes at you along -rel, so the
@@ -415,23 +423,39 @@
     var align = (airDir && s.fwd) ? V.dot(V.norm(s.fwd), airDir) : 0;
     var face = align > SKIM_ALIGN_MIN ? align : 0;
     var key = ((G.here && G.here.id) || 'sys') + ':' + body.id;
-    var h2 = Sv() ? Sv().deposits(body, sys).filter(function (r) { return r.cid === 'hydrogen'; })[0] : null;
-    var grade = h2 ? h2.grade : 0.6;
-    /* Richer with depth: the top of the air is haze and ammonia, the
-     * hydrogen fraction climbs toward the grade the survey reports. */
-    var depth = Math.max(0, at.top - alt);
-    var frac = grade * (0.55 + 0.45 * (1 - Math.exp(-depth / (4 * at.scaleHeight))));
+    var grade, frac, top;
+    if (star) {
+      /* A star's plasma is most of it hydrogen, top to bottom. */
+      grade = STAR_GRADE; frac = STAR_GRADE; top = (S.CORONA_TOP - 1) * body.radius;
+    } else {
+      var h2 = Sv() ? Sv().deposits(body, sys).filter(function (r) { return r.cid === 'hydrogen'; })[0] : null;
+      grade = h2 ? h2.grade : 0.6;
+      /* Richer with depth: the top of the air is haze and ammonia, the
+       * hydrogen fraction climbs toward the grade the survey reports. */
+      var depth = Math.max(0, at.top - alt);
+      frac = grade * (0.55 + 0.45 * (1 - Math.exp(-depth / (4 * at.scaleHeight))));
+      top = at.top;
+    }
     var tonnes = rho * v * 1000 * SKIM_AREA * face * dt / 1000 * frac;  // kg/m^3 * m/s * m^2 * s -> kg -> t
+    /* THE TANKS FIRST (2026-10-24): skimmed hydrogen is reaction mass, so it
+     * tops up the jump tank before anything goes in the hold - that is what
+     * lets a ship keep moving through systems with no port. */
+    var tankRoom = Math.max(0, (s.fuelCap || 0) - (s.fuel || 0));
     var room = s.cargoCap - S.cargoMass(s);
     /* Where the heat shield stops coping at this speed, for the panel. */
     var shed = (S.BASE_HEAT_SHED || 18) + (s.heatShed || 0);
-    var line = S.heatLineAlt ? S.heatLineAlt(body, v, shed) : 0;
-    G.skimming = { body: body, rho: rho, v: v, frac: frac, rate: tonnes / dt, full: room <= 0.01,
+    var line = star ? S.coronaLineAlt(star, shed) : (S.heatLineAlt ? S.heatLineAlt(body, v, shed) : 0);
+    G.skimming = { body: body, star: !!star, rho: rho, v: v, frac: frac, rate: tonnes / dt,
+                   full: room <= 0.01 && tankRoom <= 0.01, tankFull: tankRoom <= 0.01,
                    poor: grade < SKIM_MIN_GRADE, align: align, face: face, airDir: airDir,
-                   alt: alt, lineAlt: line, top: at.top };
-    if (room <= 0.01 || grade < SKIM_MIN_GRADE) return 0;
-    tonnes = Math.min(tonnes, room);
-    s.cargo.hydrogen = (s.cargo.hydrogen || 0) + tonnes;
+                   alt: alt, lineAlt: line, top: top };
+    if ((room <= 0.01 && tankRoom <= 0.01) || grade < SKIM_MIN_GRADE) return 0;
+    var toTank = Math.min(tonnes, tankRoom);
+    s.fuel = (s.fuel || 0) + toTank;
+    var toHold = Math.min(tonnes - toTank, Math.max(0, room));
+    tonnes = toTank + toHold;
+    G.skimToTank = (G.skimToTank || 0) + toTank;
+    if (toHold > 0) s.cargo.hydrogen = (s.cargo.hydrogen || 0) + toHold;
     S.refreshShip(s);
     G.extracted = G.extracted || {};
     var ex = G.extracted[key] = G.extracted[key] || {};

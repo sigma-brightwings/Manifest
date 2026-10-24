@@ -631,6 +631,22 @@
       }
     }
 
+    /* NOBODY'S SYSTEM (2026-10-24). Astra: "not every star system has
+     * anything in it but hydrogen for fuel to keep moving at the star or one
+     * of the planets" - the no-man's land between the polities. The star,
+     * its worlds, moons, rings and belts are generated exactly as they would
+     * be (every stream above is forked, so nothing moves); then every port
+     * built over or on them is taken away. No port means no market, no
+     * traffic and no garrison below. Only a galaxy star nobody holds is
+     * generated this way (Galaxy.systemOpts); a bare seed never is. */
+    if (opts.empty) {
+      var strip = function (b) {
+        b.children = b.children.filter(function (c) { return !isStation(c); });
+        b.children.forEach(strip);
+      };
+      strip(star);
+    }
+
     var sys = finalize({
       root: star, seed: seed, seedHash: base.seed,
       name: starName,
@@ -654,6 +670,23 @@
      * anywhere downstream of buildGovernment. Own substream, no draws
      * taken from anything else. */
     buildFlavor(sys, base);
+    /* Nobody's system: nobody's flag, nobody's law - the same answer the
+     * deep-space drop-out gives (interstellarSystem), because it is the
+     * same fact. Marked `empty` so the chart, the HUD and the market can
+     * ask rather than infer it from an empty port list. */
+    if (opts.empty) {
+      sys.empty = true;
+      sys.factions = [];
+      sys.factionById = { outlaw: sys.outlaw };
+      sys.government = { id: 'none', name: 'unclaimed', crime: 100 };
+      sys.violence = 0;
+      sys.corruption = 0;
+      sys.crimeScore = 100;
+      sys.pirateHeld = false;
+      sys.development = 0;
+      sys.systemNote = 'Nobody holds this system. No port, no market, no law - hydrogen for the taking, at the star' +
+        (sys.bodies.some(function (b) { return b.type === 'gasGiant' || b.type === 'iceGiant'; }) ? ' and the giants' : '') + '.';
+    }
     buildTraffic(sys, base);
     buildPatrols(sys, base);
     /* The Syndicate's heavies — after every patrol exists, so no id or draw

@@ -333,9 +333,8 @@
    * should still be disturbed when you come back to it. */
   function systemFor(star) {
     if (!G.systemCache[star.id]) {
-      var fac = (G.galaxy && G.galaxy.factionById) ? G.galaxy.factionById[star.factionId] : null;
-      var opts = fac ? { faction: fac, allFactions: G.galaxy.factions } : undefined;
-      G.systemCache[star.id] = Gen.generateSystem(star.seed, opts);
+      /* its owner, or nobody's - an empty system (Galaxy.systemOpts, 2026-10-24) */
+      G.systemCache[star.id] = Gen.generateSystem(star.seed, Galaxy.systemOpts(G.galaxy, star));
     }
     return G.systemCache[star.id];
   }
@@ -430,7 +429,10 @@
       if (bestPort) host = bestPort.parentBody;
     }
 
-    var station = host.children.filter(function (c) { return c.kind === 'station'; })[0];
+    /* ORBITAL only (2026-10-24): arriving where the busiest port is a pad
+     * made the pad `station`, and a pad has no orbit to park under - every
+     * reader below (and of G.homeStation) wants the station in the sky. */
+    var station = host.children.filter(function (c) { return c.kind === 'station' && !c.surface && c.orbit; })[0];
     G.homeStation = station || null;
     G.spawnHost = host;
 
@@ -5496,11 +5498,18 @@
       var sk = G.skimming;
       if (sk && !wasSkim) {
         say(sk.poor ? 'Skimmer: ' + sk.body.name + ' is too poor in hydrogen to be worth the intake'
-                    : 'Skimmer open - ' + sk.body.name + (sk.face > 0.7 ? '' : ' - nose into the air, it is a ram scoop'), 4);
+                    : 'Skimmer open - ' + sk.body.name + (sk.star ? ' corona' : '') +
+                      (sk.face > 0.7 ? '' : ' - nose into ' + (sk.star ? 'your direction of travel' : 'the air') + ', it is a ram scoop') +
+                      (sk.tankFull ? '' : ' - filling the tanks first'), 4);
         G.skimShown = Math.floor(G.skimTotal || 0);
+        G.skimTankSaid = !!sk.tankFull;
+      } else if (sk && sk.tankFull && !G.skimTankSaid && !sk.full) {
+        /* 2026-10-24: skimmed hydrogen fills the jump tank before the hold */
+        G.skimTankSaid = true;
+        say('Skimmer: tanks full - the rest goes in the hold', 4);
       } else if (sk && sk.full && !G.skimFullSaid) {
         G.skimFullSaid = true;
-        say('Skimmer: hold full', 4);
+        say('Skimmer: tanks and hold full', 4);
       } else if (sk && !sk.full && !sk.poor && Math.floor(G.skimTotal || 0) >= (G.skimShown || 0) + 5) {
         G.skimShown = Math.floor(G.skimTotal || 0);
         say('Skimming ' + sk.body.name + ' - ' + (sk.rate * 60).toFixed(1) + ' t/min, ' +

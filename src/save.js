@@ -59,7 +59,16 @@
    * marker for "everything below this line can be removed without breaking
    * anything downstream of it in time", which is only useful if the lines
    * are far enough apart to be worth drawing. */
-  var VERSION = 2;
+  /* EPOCH 3 — no-man's land (2026-10-24).
+   *
+   * The galaxy was redrawn: 450 stars on a 73 ly disc where there were 200
+   * on 48, the empires holding compact cores with open space between them,
+   * and the stars nobody holds generating EMPTY - no port, no market. A
+   * career from epoch 2 is docked at ports, in systems and on courses that
+   * no longer exist in the same seed, so there is nothing to migrate it to.
+   * Astra chose it knowing that ("a new galaxy, so current saves won't
+   * carry over"). The shelf was empty; nothing else goes with it. */
+  var VERSION = 3;
 
   /* Written but no longer read. Delete the lot at the next epoch bump, then
    * empty this list. Each entry says what replaced it, because "why is this

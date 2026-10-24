@@ -202,6 +202,58 @@ if (gasG) {
   check('a gas giant\'s cannot, for long', fluxGas > shield, gasG.b.name + ': ' + fluxGas.toFixed(0) + ' > ' + shield);
 }
 
+console.log('--- the star (2026-10-24) ---');
+/* Astra: empty systems have "hydrogen for fuel to keep moving at the star
+ * or one of the planets". Not every system has a giant; every one has a
+ * star. */
+var starOf = {};
+gal.stars.forEach(function (st) { if (!starOf[st.cls]) starOf[st.cls] = Gen.generateSystem(st.seed); });
+function inCorona(sys, k, t) {
+  var star = sys.root, bs = Sim.bodyState(star, sys, t);
+  var r = star.radius * k, v = Math.sqrt(6.6743e-20 * star.mass / r);
+  var sp = Sim.makeShip(V.add(bs.pos, { x: r, y: 0, z: 0 }), V.add(bs.vel, { x: 0, y: v, z: 0 }));
+  Sim.refreshShip(sp);
+  sp.fwd = { x: 0, y: 1, z: 0 }; sp.up = { x: 1, y: 0, z: 0 }; sp.right = V.cross(sp.fwd, sp.up);
+  return sp;
+}
+var sunSys = starOf.G || starOf.K || starOf.F;
+var Gs = { here: { id: 'test' }, extracted: {} };
+Gs.ship = inCorona(sunSys, 1.5, t0);
+Gs.ship.fuel = 2;
+var tank0 = Gs.ship.fuel, holdH0 = Gs.ship.cargo.hydrogen || 0;
+var sGot = Mn.skimStep(Gs, sunSys, t0, 1, true), ssk = Gs.skimming;
+check('a star\'s corona can be skimmed', sGot > 0 && ssk && ssk.star, sGot.toFixed(3) + ' t/s in ' + sunSys.root.name + ' (' + sunSys.root.type + ')');
+check('density x speed x area x facing, as for a giant',
+      ssk && Math.abs(sGot - ssk.rho * ssk.v * 1000 * Mn.SKIM_AREA * ssk.face / 1000 * ssk.frac) < 1e-9);
+check('it fills the jump tank before the hold', Math.abs(Gs.ship.fuel - tank0 - sGot) < 1e-9 && (Gs.ship.cargo.hydrogen || 0) === holdH0,
+      tank0 + ' -> ' + Gs.ship.fuel.toFixed(2) + ' t in the tank');
+var spill = 0;
+for (var q = 0; q < 600 && !Gs.skimming.tankFull; q++) spill += Mn.skimStep(Gs, sunSys, t0 + q, 1, true);
+var more = Mn.skimStep(Gs, sunSys, t0 + 601, 1, true);
+check('and once the tank is full, the hold', Gs.ship.fuel <= Gs.ship.fuelCap + 1e-9 && Gs.skimming.tankFull && (Gs.ship.cargo.hydrogen || 0) > holdH0 && more > 0,
+      'tank ' + Gs.ship.fuel.toFixed(1) + '/' + Gs.ship.fuelCap + ' t, hold ' + (Gs.ship.cargo.hydrogen || 0).toFixed(2) + ' t');
+var Gdeep = { here: { id: 'test' }, extracted: {} };
+Gdeep.ship = inCorona(sunSys, 1.2, t0); Gdeep.ship.fuel = 0;
+check('deeper takes more', Mn.skimStep(Gdeep, sunSys, t0, 1, true) > sGot * 2);
+var Gout = { here: { id: 'test' }, extracted: {} };
+Gout.ship = inCorona(sunSys, Sim.CORONA_TOP + 0.5, t0);
+check('outside the corona, nothing', Mn.skimStep(Gout, sunSys, t0, 1, true) === 0 && !Gout.skimming);
+check('and no drag: the corona is not air', !Sim.atmosphereContext(Gs.ship.pos, sunSys, t0));
+var bare = 18;
+if (starOf.M) check('a red dwarf can be skimmed deep on a bare hull',
+  Sim.heatFlux(inCorona(starOf.M, 1.2, t0), starOf.M, t0) < bare, Sim.heatFlux(inCorona(starOf.M, 1.2, t0), starOf.M, t0).toFixed(0) + ' < ' + bare);
+check('a sun-like star wants a heat shield halfway down',
+  Sim.heatFlux(inCorona(sunSys, 1.5, t0), sunSys, t0) > bare && Sim.heatFlux(inCorona(sunSys, 1.5, t0), sunSys, t0) < shield,
+  Sim.heatFlux(inCorona(sunSys, 1.5, t0), sunSys, t0).toFixed(0));
+var hot = starOf.A || starOf.B || starOf.O;
+if (hot) check('a hot star is dangerous deep even under one',
+  Sim.heatFlux(inCorona(hot, 1.5, t0), hot, t0) > shield, hot.root.type + ': ' + Sim.heatFlux(inCorona(hot, 1.5, t0), hot, t0).toFixed(0) + ' > ' + shield);
+var noCorona = gal.stars.filter(function (st, i) { return i < 120; }).filter(function (st) {
+  var sy = Gen.generateSystem(st.seed, { empty: true });
+  return !Sim.coronaContext(V.add(Sim.bodyState(sy.root, sy, 0).pos, { x: sy.root.radius * 2, y: 0, z: 0 }), sy, 0);
+});
+check('every star has a corona to skim', noCorona.length === 0, noCorona.length + ' without');
+
 console.log('--- rock torpedoes ---');
 var TG = Combat.MISSILES.rocktorp, TS = Combat.MISSILES.syndtorp;
 check('two torpedoes: the Guild\'s and the Syndicate\'s', TG && TG.torpedo && TS && TS.torpedo && TS.grey && !TG.grey,

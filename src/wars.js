@@ -67,7 +67,8 @@
     var out = [], byId = {}, oreAll = [];
     gal.stars.forEach(function (st) {
       var fac = gal.factionById ? gal.factionById[st.factionId] : null;
-      var s = Gen.generateSystem(st.seed, fac ? { faction: fac, allFactions: gal.factions } : {});
+      /* nobody's star (2026-10-24): empty, nothing to fight over yet */
+      var s = Gen.generateSystem(st.seed, fac ? { faction: fac, allFactions: gal.factions } : { empty: true, allFactions: gal.factions });
       var ore = 0;
       (s.ports || []).forEach(function (p) {
         var rows = p.market && p.market.rows;

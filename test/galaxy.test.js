@@ -157,9 +157,11 @@ console.log('--- galactic territory ---');
 
   check('two or three majors hold the galaxy between them',
         majors.length >= 2 && majors.length <= 3, majors.length + ' majors');
+  /* 2026-10-24: its holds inside the empires, plus outposts in no-man's land */
   check('exactly one outlaw power, and it holds pockets rather than a realm',
         outlaws.length === 1 && !outlaws[0].capitalId &&
-        (outlaws[0].holdIds || []).length === Galaxy.PIRATE_HOLDS,
+        (outlaws[0].holdIds || []).length === Galaxy.PIRATE_HOLDS + (outlaws[0].frontierHolds || 0) &&
+        (outlaws[0].frontierHolds || 0) >= 1,
         outlaws.length + ' outlaw, ' +
         ((outlaws[0] || {}).holdIds || []).length + ' holds');
   check('and the brokers sit inside that map rather than beside it',
@@ -169,9 +171,17 @@ console.log('--- galactic territory ---');
   check('every faction has a name, an id and a colour', g.factions.every(function (f) {
     return f.name && f.color && f.id;
   }));
-  check('every star has a controlling faction', g.stars.every(function (s) {
-    return !!g.factionById[s.factionId];
+  /* 2026-10-24: not every star - the rest is no-man's land - but every star
+   * that is claimed is claimed by a real faction, home always is, and the
+   * claimed share is about the one designed. */
+  var claimedN = g.stars.filter(function (s) { return !!s.factionId; }).length;
+  check('every claimed star has a controlling faction', g.stars.every(function (s) {
+    return !s.factionId || !!g.factionById[s.factionId];
   }));
+  check('home is always claimed', !!g.factionById[g.home.factionId], g.home.factionId);
+  check('about ' + Math.round(Galaxy.CLAIMED_SHARE * 100) + '% is claimed, the rest is no-man\'s land',
+        Math.abs(claimedN / g.stars.length - Galaxy.CLAIMED_SHARE) < 0.06,
+        claimedN + ' of ' + g.stars.length);
 
   var count = {};
   g.stars.forEach(function (s) { count[s.factionId] = (count[s.factionId] || 0) + 1; });
@@ -200,10 +210,12 @@ console.log('--- galactic territory ---');
   check('a capital is always held by its own faction', stray.length === 0,
         stray.map(function (f) { return f.name; }).join(', '));
 
-  var pirateShare = (count.outlaw || 0) / g.stars.length;
+  /* shares of CLAIMED space since 2026-10-24 */
+  var claimedAll = g.stars.filter(function (s) { return !!s.factionId; }).length;
+  var pirateShare = (count.outlaw || 0) / claimedAll;
   var minorShare = minors.reduce(function (n, f) {
     return n + (count[f.id] || 0);
-  }, 0) / g.stars.length;
+  }, 0) / claimedAll;
   check('the Syndicate holds about the share it was designed to',
         Math.abs(pirateShare - Galaxy.PIRATE_SHARE) < 0.06,
         (pirateShare * 100).toFixed(0) + '% vs ' + (Galaxy.PIRATE_SHARE * 100) + '%');
@@ -227,9 +239,10 @@ console.log('--- galactic territory ---');
           var p = g.factionById[f.parentId];
           return p && !p.minor && !p.outlaw;
         }));
+  /* the holds inside the empires name one; a frontier outpost has none */
   check('the Syndicate records a parent for each of its holds',
-        (outlaws[0].holdParents || []).length === Galaxy.PIRATE_HOLDS &&
-        outlaws[0].holdParents.every(function (p) { return !!g.factionById[p]; }),
+        (outlaws[0].holdParents || []).length === outlaws[0].holdIds.length &&
+        outlaws[0].holdParents.every(function (p, hi) { return hi < Galaxy.PIRATE_HOLDS ? !!g.factionById[p] : p === null; }),
         (outlaws[0].holdParents || []).join(', '));
 
   // Determinism, same as everything else in this game.
@@ -733,6 +746,61 @@ console.log('--- the renderer turns a world the way the world turns ---');
           GL.spinOf(any, 4242).weather === GL.spinOf(any, 4242).weather &&
           GL.spinOf(any, 4242).weather !== GL.spinOf(any, 4243).weather);
   }
+})();
+
+/* ---- no-man's land (2026-10-24) -----------------------------------------
+ * Astra: "not every star system has anything in it but hydrogen for fuel
+ * ... a kind of no-man's land in between polities". */
+console.log('--- no-man\'s land ---');
+(function () {
+  var g = Galaxy.build('kawartha');
+  var open = g.stars.filter(Galaxy.isEmpty);
+  check('most of the map is nobody\'s', open.length > g.stars.length * 0.45, open.length + ' of ' + g.stars.length);
+  var sample = open.filter(function (s, i) { return i % 6 === 0; });
+  var bad = sample.filter(function (st) {
+    var s = Gen.generateSystem(st.seed, Galaxy.systemOpts(g, st));
+    return !s.empty || s.ports.length || (s.traffic || []).length || (s.patrols || []).length ||
+           s.factions.length || s.crimeScore !== 100;
+  });
+  check('a nobody\'s star is an empty system: no port, traffic, patrol or flag, no law',
+        bad.length === 0, sample.length + ' sampled, ' + bad.length + ' not empty');
+  /* the worlds are the worlds a port-full generation would have had */
+  var st0 = open[0];
+  var full = Gen.generateSystem(st0.seed), bare = Gen.generateSystem(st0.seed, Galaxy.systemOpts(g, st0));
+  var worlds = function (s) { return s.bodies.filter(function (b) { return b.kind !== 'station'; })
+    .map(function (b) { return b.id + ':' + b.name + ':' + Math.round(b.radius); }).join('|'); };
+  check('and it has exactly the worlds it would have had', worlds(full) === worlds(bare), full.bodies.length + ' bodies, ' + bare.bodies.length + ' without ports');
+  check('a bare seed still generates ports, as it always did', Gen.generateSystem('kawartha').ports.length > 0);
+  var claimedBad = g.stars.filter(function (st, i) { return !Galaxy.isEmpty(st) && i % 9 === 0; }).filter(function (st) {
+    return Gen.generateSystem(st.seed, Galaxy.systemOpts(g, st)).empty;
+  });
+  check('a claimed star never generates empty', claimedBad.length === 0);
+  /* Between the empires: every major's nearest neighbouring major is
+   * across some unclaimed space, not border to border everywhere. */
+  var majors = g.factions.filter(function (f) { return !f.minor && !f.outlaw; });
+  var gaps = 0;
+  majors.forEach(function (f) {
+    var mine = g.stars.filter(function (s) { return s.factionId === f.id; });
+    var touching = mine.some(function (a) {
+      return g.stars.some(function (b) {
+        if (!b.factionId || b.factionId === f.id) return false;
+        var bf = g.factionById[b.factionId];
+        if (bf && bf.outlaw) return false;     // the Syndicate is one power across several empires, nobody's border
+        var top = bf; while (top && top.parentId) top = g.factionById[top.parentId];
+        return top && !top.outlaw && top.id !== f.id && Galaxy.distance3(a, b) < 4;
+      });
+    });
+    if (!touching) gaps++;
+  });
+  check('the empires do not touch: open space between them', gaps === majors.length, gaps + ' of ' + majors.length + ' majors stand apart');
+  var outlaw = g.factionById.outlaw;
+  var frontier = (outlaw.holdIds || []).filter(function (id, i) { return outlaw.holdParents[i] === null; });
+  check('the Syndicate also squats out in it', frontier.length >= 1 && frontier.every(function (id) {
+    var st = g.byId[id];
+    /* an outpost claims its few nearest open stars, so the next open one
+     * can be a couple of hops off */
+    return g.stars.some(function (o) { return Galaxy.isEmpty(o) && Galaxy.distance3(o, st) < 18; });
+  }), frontier.length + ' frontier outposts');
 })();
 
 console.log('');

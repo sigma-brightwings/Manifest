@@ -1161,7 +1161,54 @@
    * "warm" and "worryingly warm" is the one worth seeing. */
   var GLOW_REFERENCE = 220;
 
+  /* ---- a star's corona (2026-10-24) -------------------------------------
+   * Astra: an empty system has "hydrogen for fuel to keep moving at the
+   * star or one of the planets". Not every system has a giant, so every
+   * star can be skimmed: the CORONA is the thin plasma out to CORONA_TOP
+   * star radii from its centre. Kept OUT of the air model on purpose - no
+   * drag (an orbit through it is the orbit it always was), and its heat is
+   * RADIANT, not compression: the cube law at the hundreds of km/s a ship
+   * does that close to a star would cook anything at once. Radiant heat
+   * goes as the inverse square of the distance and the fourth power of the
+   * star's temperature, so a red dwarf can be skimmed on a bare hull, a
+   * sun-like star wants a heat shield to go deep, and a hot blue one is
+   * dangerous even at the edge. STAR_HEAT is the flux at the photosphere
+   * of a 5,778 K star: bare hull (18) copes at the very top of a sun-like
+   * corona, a heat shield (+130) almost all the way down. */
+  var CORONA_TOP = 3;            // x the star's radius, from its centre
+  var STAR_HEAT = 160;           // heat units/s at a sun-like photosphere
+  var CORONA_RHO = 3.6e-6;       // kg/m^3 at the photosphere, falling as (R/r)^4
+  function starTempFactor(star) { var k = (star.temp || 5778) / 5778; return k * k * k * k; }
+  function coronaContext(pos, sys, t) {
+    var star = sys && sys.root;
+    if (!star || star.kind !== 'star' || !(star.radius > 0)) return null;
+    var st = bodyState(star, sys, t);
+    var r = V.dist(pos, st.pos);
+    if (r >= CORONA_TOP * star.radius || r <= star.radius) return null;
+    return { body: star, pos: st.pos, vel: st.vel, r: r };
+  }
+  function starFlux(star, r) {
+    return STAR_HEAT * starTempFactor(star) * (star.radius / r) * (star.radius / r);
+  }
+  function coronaDensity(star, r) {
+    var q = star.radius / r;
+    return CORONA_RHO * q * q * q * q;
+  }
+  /* Where radiant heat matches what the hull sheds: the deepest a pilot can
+   * hold without heat building. Distance from the photosphere, km. */
+  function coronaLineAlt(star, shed) {
+    var r = star.radius * Math.sqrt(STAR_HEAT * starTempFactor(star) / Math.max(1e-6, shed));
+    return Math.max(0, Math.min((CORONA_TOP - 1) * star.radius, r - star.radius));
+  }
+
   function heatFlux(ship, sys, t) {
+    var f = airFlux(ship, sys, t);
+    var c = coronaContext(ship.pos, sys, t);
+    if (c) f += starFlux(c.body, c.r);
+    return f;
+  }
+
+  function airFlux(ship, sys, t) {
     var atmo = atmosphereContext(ship.pos, sys, t);
     if (!atmo) { ship.windDir = null; return 0; }
     var alt = V.dist(ship.pos, atmo.pos) - atmo.body.radius;
@@ -5801,6 +5848,8 @@
     atmosphereContext: atmosphereContext,
     heatFlux: heatFlux,
     updateHeating: updateHeating,
+    coronaContext: coronaContext, starFlux: starFlux, coronaDensity: coronaDensity, coronaLineAlt: coronaLineAlt,
+    CORONA_TOP: CORONA_TOP, STAR_HEAT: STAR_HEAT,
     updateGear: updateGear, GEAR_TRAVEL_TIME: GEAR_TRAVEL_TIME,
     HEAT_LIMIT: HEAT_LIMIT, ECM_REACH: ECM_REACH, SILENT_WAKE_KM: SILENT_WAKE_KM, SILENT_HEAT: SILENT_HEAT, ECM_CITE_KM: ECM_CITE_KM, ECM_CITE_S: ECM_CITE_S, BASE_HEAT_SHED: BASE_HEAT_SHED, SHIELD_HEAT_DRAIN: SHIELD_HEAT_DRAIN,
     heatLineAlt: heatLineAlt,

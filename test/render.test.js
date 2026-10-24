@@ -4208,6 +4208,7 @@ console.log('--- a jump, end to end ---');
   check('and it drops you back into the cockpit to watch', G.panel === 0, String(G.panel));
 
   var sawCharge = false, sawTunnel = false, sawExit = false;
+  var hyLive = !!(G.hyper && G.hyper.corridor && G.hyper.corridor.live);
   var clockRose = false, lastClock = G.hyper ? G.hyper.clock : 0;
   var guard = 0;
   while (G.hyper && guard++ < 2000) {
@@ -4225,8 +4226,15 @@ console.log('--- a jump, end to end ---');
   check('it took a few seconds, not a frame', guard > 60, guard + ' frames');
 
   check('the jump moved us to another star', G.here.id !== before, G.here.id);
+  /* A LIVE corridor (traffic on the lane) is flown, and arrives when the
+   * crossing does - a touch sooner than planned, the ship being lighter by
+   * the fuel it paid. An empty lane plays the cutscene and lands on the
+   * plan to the second. (2026-10-24: the 450-star map's first lane from
+   * home has traffic; the old one's did not.) */
   check('the clock advanced by the transit time',
-        Math.abs((G.t - t0) - plan.seconds) < 1, ((G.t - t0) / 86400).toFixed(2) + ' d');
+        hyLive ? Math.abs((G.t - t0) / plan.seconds - 1) < 0.05 : Math.abs((G.t - t0) - plan.seconds) < 1,
+        (hyLive ? 'live corridor, ' : '') + ((G.t - t0) / 86400).toFixed(2) + ' d against ' +
+        (plan.seconds / 86400).toFixed(2) + ' d planned, to ' + plan.to.id + ', at ' + G.here.id);
   check('it cost jump fuel', G.ship.fuel < fuel0,
         fuel0.toFixed(1) + ' -> ' + G.ship.fuel.toFixed(1) + ' t');
   check('we arrived in a real system', !!G.sys && G.sys.bodies.length > 3);
@@ -4234,6 +4242,40 @@ console.log('--- a jump, end to end ---');
 
   // And the system we left is remembered rather than regenerated.
   check('the system we left is cached', !!G.systemCache[before]);
+})();
+
+console.log('--- an empty system (2026-10-24) ---');
+(function () {
+  /* No-man's land: arriving somewhere with no port, no market, no traffic
+   * and no law must draw, and every screen must say so rather than throw. */
+  newFlying('kawartha');
+  frames(2);
+  var empty = G.galaxy.stars.filter(function (st) { return !st.factionId; })[0];
+  check('the galaxy has empty systems', !!empty, empty && empty.id);
+  if (!empty) return;
+  var mark = drawn.texts.length;
+  W.Game.enterSystem(empty, { arrive: true });
+  frames(3);
+  check('arriving in one renders cleanly', errorsSince(mark).length === 0, errorsSince(mark)[0]);
+  check('and it is empty', G.sys.empty === true && G.sys.ports.length === 0 && (G.sys.traffic || []).length === 0,
+        G.sys.name + ', ' + G.sys.bodies.length + ' bodies');
+  check('with somewhere to orbit', !!G.ship && !G.ship.docked && !!G.spawnHost, G.spawnHost && G.spawnHost.name);
+  var keydown = listeners.keydown[0];
+  ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8'].forEach(function (k) {
+    var m2 = drawn.texts.length;
+    keydown({ key: k, shiftKey: false, preventDefault: function () {} });
+    frames(2);
+    check('the ' + k + ' screen draws there', errorsSince(m2).length === 0, errorsSince(m2)[0]);
+    keydown({ key: 'Escape', shiftKey: false, preventDefault: function () {} });
+    frames(1);
+  });
+  G.panel = 0;
+  G.viewMode = 'orbit';
+  var m3 = drawn.texts.length;
+  frames(3);
+  check('and the exterior view', errorsSince(m3).length === 0, errorsSince(m3)[0]);
+  G.viewMode = 'cockpit';
+  frames(1);
 })();
 
 console.log('--- the tunnel, drawn ---');

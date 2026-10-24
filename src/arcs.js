@@ -100,7 +100,7 @@
       if (!galaxy || !here) return null;
       var want = opts && opts.target;
       var nearI = galaxy.stars.filter(function (s) {
-        if (s === here) return false;
+        if (s === here || !s.factionId) return false;   // a port to dock at (2026-10-24)
         var d = global.Galaxy.distance3(here, s);
         return d > 0 && d < 14;
       });
@@ -154,7 +154,7 @@
     if (type === 'courier') {
       if (!galaxy || !here) return null;
       var near = galaxy.stars.filter(function (s) {
-        if (s === here) return false;
+        if (s === here || !s.factionId) return false;   // a port to deliver to (2026-10-24)
         var d = global.Galaxy.distance3(here, s);
         return d > 0 && d < 9;
       });
