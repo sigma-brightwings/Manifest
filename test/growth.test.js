@@ -299,20 +299,54 @@ console.log('--- scavengers cut loose ---');
   check('wreckholds chain', deep);
 })();
 
+console.log('--- time ---');
+(function () {
+  /* Astra, 2026-10-24: "I don't think it'd take literal decades to finish
+   * one of these things" - "I meant the whole station". */
+  var D = Gr.DAY, longest = 0, lateBuilt = 0, uMax = 0, before = 0, during = 0, after = 0, n = 0;
+  var all = plans.slice();
+  for (var i = 0; i < 60; i++) all.push({ c: ctx(i % 3 === 0 ? RICH : i % 3 === 1 ? MID : POOR, 'spine-l', 1200 + i) });
+  all.forEach(function (x) {
+    var p = Gr.plan(x.c);
+    if (!p.slots.length) return;
+    n++;
+    var b = p.buildout, w = b.t1 - b.t0;
+    if (w > longest) longest = w;
+    /* after its build-out a station is finished: only scavengers still weld */
+    p.slots.forEach(function (s) {
+      if (s.t0 > b.t1 && s.builder !== 'scavenger') lateBuilt++;
+      if (s.builder === 'union') uMax = Math.max(uMax, s.t1 - s.t0);
+    });
+    if (b.t1 <= 0) before++; else if (b.t0 <= 0) during++; else after++;
+  });
+  check('a whole station is built out in three years at most', longest <= 3 * Gr.YEAR + 1, (longest / Gr.YEAR).toFixed(2) + ' years, longest');
+  check('after its build-out only scavengers still build', lateBuilt === 0, lateBuilt + ' late pieces');
+  check('a Union piece takes three weeks at most on site', uMax <= 21 * D + 1, (uMax / D).toFixed(1) + ' days, longest');
+  check('most ports are finished when the game starts, some are building, some begin later',
+    before > during && during > 0 && after > 0, before + ' finished, ' + during + ' building, ' + after + ' later, of ' + n);
+})();
+
 console.log('--- the player ---');
 (function () {
   var x = plans.filter(function (q) { return q.sys === RICH; })[0];
-  var c0 = ctx(RICH, x.c.model, 900);
-  var p0 = Gr.plan(c0), s = p0.slots.filter(function (q) { return q.builder === 'union' && q.t0 > 0; })[0];
+  /* most ports were built out before the game; find one still to come */
+  var c0, p0, s, kk;
+  for (kk = 900; kk < 1000 && !s; kk++) {
+    c0 = ctx(RICH, x.c.model, kk);
+    p0 = Gr.plan(c0);
+    s = p0.slots.filter(function (q) { return q.builder === 'union' && q.t0 > 0; })[0];
+  }
+  kk--;
   if (!s) { check('a future Union job to delay', false); return; }
   var G = {};
   Gr.delay(G, c0.key, s.id, 200 * Gr.DAY);
-  var c1 = ctx(RICH, x.c.model, 900, 'civ', G);
+  var c1 = ctx(RICH, x.c.model, kk, 'civ', G);
   var p1 = Gr.plan(c1);
   var okLater = p1.slots.every(function (q) { return q.id < s.id ? q.t0 === p0.slots[q.id].t0 : Math.abs(q.t0 - p0.slots[q.id].t0 - 200 * Gr.DAY) < 1; });
   check('a stopped Crawler pushes its job and every later one back', okLater);
   var cr = p1.crawlers.filter(function (c) { return c.slots.indexOf(s.id) >= 0; })[0];
-  check('and the Crawler comes later too', cr && Math.abs(cr.arrive - (p1.slots[s.id].t0 - 25 * Gr.DAY)) < 1);
+  var cr0 = p0.crawlers.filter(function (c) { return c.slots.indexOf(s.id) >= 0; })[0];
+  check('and the Crawler comes later too', cr && cr0 && Math.abs(cr.arrive - cr0.arrive - 200 * Gr.DAY) < 1 && cr.arrive < p1.slots[s.id].t0);
   var Gc = { corruptionShift: { s901: { v: 60, t: 0 } } };
   var a = Gr.orderAt(ctx(RICH, 'spine-l', 901), 1 * Gr.DAY), b = Gr.orderAt(ctx(RICH, 'spine-l', 901, 'civ', Gc), 1 * Gr.DAY);
   check('your corruption lowers order', b < a, a.toFixed(2) + ' > ' + b.toFixed(2));

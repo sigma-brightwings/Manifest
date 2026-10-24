@@ -404,6 +404,27 @@ Astra has seen it working.
       same over all 96 models; `path-builders.cjs` counts docks by builder.
       The paper (`growth-paper.cjs`) draws the primary's way in as a cyan
       arrow and its kept-clear approach dashed.
+  - **2026-10-24, later: a station is built out in a year or two, not
+    decades.** (Astra: "I don't think it'd take literal decades to finish
+    one of these things" — "I meant the whole station".) Growth had run
+    from twelve years before the game to fifteen after, a piece a year,
+    each 5–16 months on site. Now each port has ONE **build-out**: the
+    Union finishes a station in 0.7–1.3 years, moonlighters in 1.2–2.2,
+    scavengers in 1.5–3 (`Growth.BUILDOUT_Y`). On site a Union piece takes
+    1–3 weeks, a moonlighter's 3–9, a scavenger's 1–10 (`PIECE_DAYS`; a
+    Crawler's tugs unpack an L piece in hours, the rest is fitting out),
+    and a Crawler is there 5 days before and 3 after. When a port's
+    build-out falls is its own, between twelve years before the game and
+    four years in: over every model × 3 orders × 4 seeds, about two in
+    three are finished when you arrive, one in ten is building on day
+    one, a quarter begin in your first four years. After it a station is
+    finished; only where order has really fallen to scavengers do they keep
+    welding on and cutting loose, about every ten months (a wreckhold is
+    never finished). `test/growth.test.js` "time": the longest build-out
+    3.0 years, no Union or moonlighter piece after one, a Union piece at
+    most three weeks; 37 checks. The paper shows each port early in its
+    build-out, halfway and finished, not game years 0/5/15.
+    `Claude outputs/growth-timeline.cjs` prints the timings per order.
 
 ### Changed
 

@@ -62,6 +62,12 @@
   var SIDE_CORE = 1.6;                // lateral allowance off a core point, x the depth allowance
   var SYM_TOL = 0.12;                 // symmetry match, x the core half-span
   var AX_TOL = 0.04;                  // a Union set's station along the main axis, x the half-span
+  /* time (2026-10-24): a whole station is built out in about a year, not decades */
+  var BUILDOUT_Y = { union: [0.7, 1.3], moonlighter: [1.2, 2.2], scavenger: [1.5, 3] };   // years, the whole build-out
+  var BUILDOUT_LATEST = 4 * YEAR;     // the last a build-out begins; the earliest is T_START
+  var PIECE_DAYS = { union: [7, 21], moonlighter: [20, 60], scavenger: [7, 70] };      // on site, one piece
+  var CHURN_Y = 0.8;                  // after the build-out: a scavenger job about this often
+  var CRAWLER_LEAD = 5, CRAWLER_STAY = 3;   // days the Crawler is on site before and after
 
   function hash01(s) {
     var h = 2166136261 >>> 0;
@@ -406,25 +412,39 @@
       });
     });
     /* CAP: how many pieces a port can carry at once - more for wealth, and
-     * more for a wreckhold, which is all pieces. It is reached gradually:
-     * about half of it by the day the game starts (so ports already differ
-     * from each other), the rest over the next fifteen years (so you can
-     * watch them grow). Counted on what is STANDING, so a scavenger's piece
-     * cut loose makes room for the next one. */
+     * more for a wreckhold, which is all pieces. Counted on what is
+     * STANDING, so a scavenger's piece cut loose makes room for the next.
+     *
+     * THE BUILD-OUT (Astra, 2026-10-24: "I don't think it'd take literal
+     * decades to finish one of these things" - the whole station). A port
+     * is built out in ONE stretch of BUILDOUT_Y years: about a year for the
+     * Union, longer for moonlighters and scavengers. When that stretch
+     * fell is the port's own: long before the game for most (they are
+     * finished when you arrive), under way on the day it starts for some,
+     * in your first few years for the rest, so there are always Crawlers
+     * somewhere. After it the station is finished, except where scavengers
+     * hold it: they keep welding on and cutting loose (a station that
+     * slides into their hands is the mess grown round clean Union pieces). */
     var cap = Math.round(3 + 9 * res.wealth + (1 - res.order0) * (ctx.sys && ctx.sys.pirateHeld ? 14 : 5));
-    var capNow = function (tt) {
-      var f0 = 0.45 + 0.2 * res.wealth;
-      return Math.round(cap * (tt <= 0 ? f0 * (tt - T_START) / -T_START : f0 + (1 - f0) * Math.min(1, tt / (15 * YEAR))));
-    };
-    var t = T_START, guard = 0;
+    var who0 = builderFor(res.order0);
+    var span = (BUILDOUT_Y[who0][0] + (BUILDOUT_Y[who0][1] - BUILDOUT_Y[who0][0]) * R('span')) * YEAR;
+    var start = T_START + R('start') * (BUILDOUT_LATEST - T_START);
+    res.buildout = { t0: start, t1: start + span };
+    var t = start, guard = 0;
     while (t < T_END && guard++ < 400) {
+      var inWin = t < start + span;
       var o = orderAt(ctx, Math.max(t, 0));
       var who = builderFor(clamp(o + (R('who' + guard) - 0.5) * 0.08, 0, 1));
-      var meanY = who === 'scavenger' ? 0.8 : Math.max(0.5, 2.2 - 1.4 * res.wealth);
-      t += meanY * (0.5 + R('gap' + guard)) * YEAR;
+      /* in the build-out, jobs come one after another to fill the cap in
+       * time; after it only scavengers work, every few months */
+      t += (inWin ? span / (cap + 1) : CHURN_Y * YEAR) * (0.5 + R('gap' + guard));
       if (t >= T_END) break;
+      /* after it: only where order really has fallen to scavengers (no
+       * wobble - a middling port on the line does not churn for decades) */
+      if (!(t < start + span) && builderFor(orderAt(ctx, Math.max(t, 0))) !== 'scavenger') { t += CHURN_Y * YEAR; continue; }
+      if (!(t < start + span)) who = 'scavenger';
       var standing = res.slots.filter(function (s) { return s.t0 <= t && !(s.strip <= t); }).length;
-      if (standing >= capNow(t)) continue;
+      if (standing >= cap) continue;
       var wantBerth = R('berth' + guard) < (who === 'union' ? 0.45 : 0.3);
       tryPlace(ctx, res, free, who, wantBerth, theme, liv, mpu, H, t, guard, R, sym, core, ax);
     }
@@ -434,7 +454,7 @@
     Object.keys(sets).forEach(function (k) {
       var ss = sets[k], s0 = ss[0], size = Math.max.apply(null, s0.mod.s) / mpu;
       res.crawlers.push({ set: +k, slots: ss.map(function (s) { return s.id; }),
-                         arrive: s0.t0 - 25 * DAY, leave: s0.t1 + 7 * DAY,
+                         arrive: s0.t0 - CRAWLER_LEAD * DAY, leave: s0.t1 + CRAWLER_STAY * DAY,
                          at: [s0.at[0] + s0.n[0] * (size + 0.4 * H), s0.at[1] + s0.n[1] * (size + 0.4 * H), s0.at[2] + s0.n[2] * (size + 0.4 * H)],
                          tugs: 3 });
     });
@@ -592,7 +612,10 @@
       if (who === 'union' && group.length < wanted + 1) continue;
       var set = res.slots.length;
       if (who === 'union') res.forms[mod.f || mod.id] = (res.forms[mod.f || mod.id] || 0) + 1;
-      var dur = who === 'union' ? (0.4 + 0.4 * R('dur' + g)) : who === 'moonlighter' ? (0.6 + 0.7 * R('dur' + g)) : (0.2 + 1.8 * R('dur' + g));
+      /* on site, per piece (2026-10-24): a Crawler's tugs unpack an L piece
+       * in hours (claude/crawler-and-station-modules.md: 1.5 cubes a day a
+       * tug, two L modules to a cube); the rest is fitting out */
+      var dD = PIECE_DAYS[who], dur = (dD[0] + (dD[1] - dD[0]) * R('dur' + g)) * DAY / YEAR;
       group.forEach(function (gq) {
         var id = res.slots.length;
         var parent = gq.f.owner;
@@ -661,7 +684,7 @@
     });
     res.crawlers.forEach(function (c) {
       var s = res.slots[c.slots[0]];
-      c.arrive = s.t0 - 25 * DAY; c.leave = s.t1 + 7 * DAY;
+      c.arrive = s.t0 - CRAWLER_LEAD * DAY; c.leave = s.t1 + CRAWLER_STAY * DAY;
     });
   }
   function delay(G, key, slot, dt) {
@@ -690,6 +713,7 @@
     T_START: T_START, T_END: T_END, YEAR: YEAR, DAY: DAY,
     wayIn: function (model) { var lib = portLib(model), P = points(model); return lib && P ? wayIn(model, lib, P.half || 1) : null; },
     LANE_W: LANE_W, LANE_LEN: LANE_LEN,
+    BUILDOUT_Y: BUILDOUT_Y, BUILDOUT_LATEST: BUILDOUT_LATEST, PIECE_DAYS: PIECE_DAYS,
     _clear: function () { planCache = {}; symCache = {}; wayCache = {}; }
   };
   global.Growth = Growth;

@@ -84,9 +84,14 @@ cases.forEach(function (cs, ci) {
   var m = model;
   if (cs.livery !== 'civ' && PortLib[model.replace(/-([sml])$/, '-' + cs.livery + '-$1')]) m = model.replace(/-([sml])$/, '-' + cs.livery + '-$1');
   var ctx = { G: {}, sys: cs.sys, port: { id: 'p' + ci, livery: cs.livery, market: { dev: cs.dev, role: 'orbital' } }, starId: 'paper' + ci, model: m, key: 'paper:' + ci };
-  var pl = Gr.plan(ctx);
-  times.forEach(function (ty) {
-    var st = Gr.stateAt(ctx, ty * Gr.YEAR);
+  var pl = Gr.plan(ctx), bo = pl.buildout;
+  /* 2026-10-24: a station is built out in a year or two, so show ITS
+   * build-out - early, halfway, finished - not fixed years of the game */
+  var span = bo.t1 - bo.t0;
+  [['early in the build-out', bo.t0 + 0.2 * span], ['halfway', bo.t0 + 0.55 * span], ['finished', bo.t1 + 0.1 * Gr.YEAR]].forEach(function (tq) {
+    var tt = tq[1], ty = tq[0] + ' (month ' + Math.round((tt - bo.t0) / Gr.YEAR * 12) + ' of ' + (span / Gr.YEAR * 12).toFixed(0) +
+      '; game year ' + (tt / Gr.YEAR).toFixed(1) + ')';
+    var st = Gr.stateAt(ctx, tt);
     var tris = [];
     st.slots.forEach(function (x) {
       var s = x.slot, mesh = modMesh(s.mod);
@@ -110,7 +115,7 @@ cases.forEach(function (cs, ci) {
               lane: lane ? [K(lane.min), K(lane.max)] : null };
     }
     var docks = st.slots.filter(function (x) { return x.slot.mod.nb; }).length;
-    panels.push({ title: cs.name + ' — year ' + ty + ' — order ' + st.order.toFixed(2) + ', ' + st.slots.length + ' pieces, ' + docks + ' add-on docks' +
+    panels.push({ title: cs.name + ' — ' + ty + ' — order ' + st.order.toFixed(2) + ', ' + st.slots.length + ' pieces, ' + docks + ' add-on docks' +
       (st.crawlers.length ? ', ' + st.crawlers.length + ' Crawler on site' : ''),
       add: tris, way: way, cr: st.crawlers.map(function (c) { return c.at.map(function (v) { return Math.round(v * 1000); }); }) });
   });
