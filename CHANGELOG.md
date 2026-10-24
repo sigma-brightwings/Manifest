@@ -452,6 +452,35 @@ Astra has seen it working.
   galaxy fingerprints and every port's signs, blocks and domes are
   unchanged. Where the art had the city there is now open site plate.
   `test/city-sites.test.js`, 52 checks.
+  Same day, second pass: **the domes stand on their own, and the tubes
+  always join them up.** Astra: "ensure that the domes always have tubes
+  that connect to a branch point, a thicker tube, which goes directly into
+  one of the faces of one of the city buildings." The slab, the tank, the
+  two sheds, the panels and the mast still move as one piece; each of the
+  five domes now has a spot of its own, turned so its porch door faces a
+  branch point, a capped drum on the ground. A thin tube runs from every
+  dome's door to the drum, and one trunk runs from the drum square into
+  the middle of one wall of one shed (both sheds and five different walls
+  get used). The sizes are taken from the art. A thin tube is square and
+  a shade bigger than a dome's door, so it closes over it. The trunk is up
+  to twice as wide and a little taller, but at most 85% of the wall's width
+  and under the eave. It cannot simply be the art's tube made fatter: the
+  art's tube is taller than a shed. Tubes have the art's tube colours, roof
+  strip and ports, and run a little below the ground so they sit flush on
+  the slab or off it. Every layout is checked before use: the trunk leaves
+  through clear ground, no dome stands in another dome or a building, and
+  no tube crosses a dome, a building or the trunk. The art's own four tubes
+  are no longer drawn. The city is cut into its parts by a run list read
+  off the art (`tools/port-sites.cjs`; the converter keeps the art's node
+  order, checked on all six models), so nothing is guessed where a tube
+  meets a porch. If no layout fits a port, the city goes whole, as the art
+  laid it out, as before; on all six models every port tested found one.
+  `test/city-sites.test.js`, 107 checks: every port joins its domes; every
+  tube ends at its own dome's door, wherever that door has been turned to;
+  the trunk is square to the wall, in the middle of it, fits it, stays
+  under the eave and is thicker than the tubes; nothing crosses anything;
+  and every corner of everything drawn stays off the pad, the runway's
+  line and the doors.
 - **2026-10-21: the comms channel fits a short window.** A port's ten
   options at a fixed 38 px a row printed over the traffic log in a short
   window, and the notes beside them ran off the right edge. The channel

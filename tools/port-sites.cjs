@@ -109,10 +109,115 @@ function site(id) {
    * to whatever they stand beside: keep them as ordinary keep-outs, they
    * were already pushed above */
   var c = boxes[cityIdx];
-  return {
+  var out = {
     city: [r4(c.min[0]), r4(c.min[1]), r4(c.min[2]), r4(c.max[0]), r4(c.max[1]), r4(c.max[2])],
     keep: keep, land: land, strip: strip
   };
+  /* ---- THE CITY'S PARTS (2026-10-24, second pass) ------------------------
+   * Astra: the domes should "always have tubes that connect to a branch
+   * point, a thicker tube, which goes directly into one of the faces of one
+   * of the city buildings", and each dome stands on its own.
+   *
+   * The converter keeps the art's node order, so the city is one run of
+   * triangles at the end of the model, leaf by leaf (checked on all six:
+   * every leaf's slice lies inside that leaf's own box). So the parts are
+   * written as a RUN LIST - [kind, triangles] in order - and render.js
+   * slices them exactly, with no box test to get wrong where a tube runs
+   * into a dome's porch:
+   *   core       the slab, the tank, the sheds, the panels, the mast
+   *   d<n>       one dome: shell, ring, porch, door, ports, crown, beds
+   *   tube/roof/port   the art's own tubes, dropped when the domes move
+   * and beside it what the network needs: each dome's centre, radius and
+   * mouth (its porch door), the sheds as boxes (their faces are what a
+   * trunk goes into), and the tube's section, measured off the art. */
+  var leaves = [];
+  (function list(i) {
+    var nd = J.nodes[i];
+    if (nd.mesh !== undefined) {
+      var t = 0;
+      J.meshes[nd.mesh].primitives.forEach(function (pr) {
+        t += (pr.indices !== undefined ? J.accessors[pr.indices].count : J.accessors[pr.attributes.POSITION].count) / 3;
+      });
+      leaves.push({ i: i, name: nd.name || '', n: t, box: boxes[i] });
+    }
+    (nd.children || []).forEach(list);
+  })(cityIdx);
+  function kindOf(name) {
+    var m = /^city(?:hab|agri)(\d+)/.exec(name);
+    if (m) return 'd' + m[1];
+    if (/^cityTubeRoof/.test(name)) return 'roof';
+    if (/^cityTubePort/.test(name)) return 'port';
+    if (/^cityTube\d/.test(name)) return 'tube';
+    return 'core';
+  }
+  var runs = [];
+  leaves.forEach(function (L) {
+    var k = kindOf(L.name);
+    if (runs.length && runs[runs.length - 1][0] === k) runs[runs.length - 1][1] += L.n;
+    else runs.push([k, L.n]);
+  });
+  function grow(b, x) {
+    if (!x) return b;
+    if (!b) return { min: x.min.slice(), max: x.max.slice() };
+    for (var a = 0; a < 3; a++) { b.min[a] = Math.min(b.min[a], x.min[a]); b.max[a] = Math.max(b.max[a], x.max[a]); }
+    return b;
+  }
+  var domes = {}, core = null, sheds = {}, groundC = Infinity, stands = {};
+  leaves.forEach(function (L) {
+    var k = kindOf(L.name);
+    if (k === 'core') core = grow(core, L.box);
+    if (L.name === 'cityApron') groundC = L.box.max[2];
+    /* the shed's WALLS, not its roof: a trunk goes into a wall, and the
+     * eave is what it must stay under */
+    var s = /^cityUtility(\d+)$/.exec(L.name);
+    if (s) sheds[s[1]] = grow(sheds[s[1]], L.box);
+    /* what stands on the slab, grouped by what it is: a tube or a dome
+     * must go round these */
+    if (k === 'core' && !/Apron|Decal/.test(L.name)) {
+      var g = L.name.replace(/^city/, '').replace(/(Roof|Band|Leg|Beacon)?\d*$/, '').replace(/Roof$/, '') +
+              (/^city(Utility|SolarPanel|SolarLeg)/.test(L.name) ? (/(\d+)$/.exec(L.name) || ['', ''])[1] : '');
+      stands[g] = grow(stands[g], L.box);
+    }
+    if (k[0] === 'd') {
+      var d = domes[k] || (domes[k] = { box: null, ring: null, door: null });
+      d.box = grow(d.box, L.box);
+      if (/Ring$/.test(L.name)) d.ring = L.box;
+      if (/VestibuleDoor$/.test(L.name)) d.door = L.box;
+    }
+  });
+  var dl = Object.keys(domes).sort().map(function (k) {
+    var d = domes[k], rb = d.ring || d.box;
+    var cx = (rb.min[0] + rb.max[0]) / 2, cy = (rb.min[1] + rb.max[1]) / 2;
+    var r = Math.max(rb.max[0] - rb.min[0], rb.max[1] - rb.min[1]) / 2;
+    var db = d.door;
+    return { k: k, c: [r4(cx), r4(cy)], r: r4(r),
+             /* everything of the dome, porch included, lies inside this */
+             reach: r4(Math.max(Math.abs(d.box.min[0] - cx), Math.abs(d.box.max[0] - cx), Math.abs(d.box.min[1] - cy), Math.abs(d.box.max[1] - cy)) * Math.SQRT2),
+             mouth: [r4((db.min[0] + db.max[0]) / 2), r4((db.min[1] + db.max[1]) / 2), r4(db.min[2]), r4(db.max[2])] };
+  });
+  /* the tube's section: its node's own axes, scaled */
+  var tubeLeaf = leaves.filter(function (L) { return /^cityTube\d$/.test(L.name); })[0];
+  var section = null;
+  if (tubeLeaf) {
+    var nd = J.nodes[tubeLeaf.i], A = J.accessors[J.meshes[nd.mesh].primitives[0].attributes.POSITION];
+    var Wm = (function world(i) { var m = mat(J.nodes[i]); var p = parent[i]; while (p !== undefined && p >= 0) { m = mul(mat(J.nodes[p]), m); p = parent[p]; } return m; })(tubeLeaf.i);
+    var ext = [0, 1, 2].map(function (a) {
+      var e = [0, 0, 0]; e[a] = A.max[a] - A.min[a];
+      var o = xf(Wm, [0, 0, 0]), q = xf(Wm, e);
+      return Math.hypot(q[0] - o[0], q[1] - o[1], q[2] - o[2]) / mpu;
+    }).sort(function (a, b) { return a - b; });
+    var roofLeaf = leaves.filter(function (L) { return /^cityTubeRoof\d$/.test(L.name); })[0];
+    section = { w: r4(ext[1]), h: r4(tubeLeaf.box.max[2] - tubeLeaf.box.min[2]), z0: r4(tubeLeaf.box.min[2]),
+                roof: roofLeaf ? r4(roofLeaf.box.max[2] - roofLeaf.box.min[2]) : 0, len: r4(ext[2]) };
+  }
+  out.runs = runs;
+  out.core = [r4(core.min[0]), r4(core.min[1]), r4(core.min[2]), r4(core.max[0]), r4(core.max[1]), r4(core.max[2])];
+  out.ground = r4(isFinite(groundC) ? groundC : c.min[2]);
+  out.domes = dl;
+  out.sheds = Object.keys(sheds).sort().map(function (k) { var b = sheds[k]; return [r4(b.min[0]), r4(b.min[1]), r4(b.min[2]), r4(b.max[0]), r4(b.max[1]), r4(b.max[2])]; });
+  out.tube = section;
+  out.stands = Object.keys(stands).sort().map(function (k) { var b = stands[k]; return [r4(b.min[0]), r4(b.min[1]), r4(b.max[0]), r4(b.max[1])]; });
+  return out;
 }
 
 var out = {};
@@ -121,7 +226,10 @@ Object.keys(Lib).sort().forEach(function (id) {
   var s = site(id);
   if (!s) { console.log(id + ': no city node'); return; }
   out[id] = s;
-  console.log(id + ': city ' + s.city.join(' ') + '  keep ' + s.keep.length + '  land/doors ' + s.land.length + (s.strip ? '  strip' : ''));
+  console.log(id + ': city ' + s.city.join(' ') + '  keep ' + s.keep.length + '  land/doors ' + s.land.length + (s.strip ? '  strip' : '') +
+    '\n    runs ' + s.runs.map(function (r) { return r[0] + ':' + r[1]; }).join(' ') +
+    '\n    domes ' + s.domes.map(function (d) { return d.k + ' r' + d.r + ' reach' + d.reach; }).join(', ') + '  sheds ' + s.sheds.length +
+    '  tube ' + JSON.stringify(s.tube) + '  ground ' + s.ground);
 });
 var file = path.join(ROOT, 'src', 'port-sites.js');
 fs.writeFileSync(file,

@@ -64,17 +64,80 @@ ids.forEach(function (id) {
     lib.solidShell.f.length + ' + ' + got + ' of ' + file.f.length);
 });
 
-console.log('--- where it goes ---');
-function moveFn(sp) {
-  var cs = Math.cos(sp.rot), sn = Math.sin(sp.rot);
-  return function (p) { var dx = p[0] - sp.cx, dy = p[1] - sp.cy; return [cs * dx - sn * dy + sp.x, sn * dx + cs * dy + sp.y, p[2]]; };
-}
+console.log('--- the city in parts ---');
 ids.forEach(function (id) {
-  var lib = R.libPort(id), site = Sites[id], city = lib.city;
-  /* the city's own corners, once, then moved per port */
-  var used = {};
-  city.f.forEach(function (t) { used[t[0]] = used[t[1]] = used[t[2]] = 1; });
-  var verts = Object.keys(used).map(function (k) { return city.v[k]; });
+  var parts = R.cityParts(id), site = Sites[id];
+  var domeTris = site.domes.map(function (d) { return parts && parts.domes[d.k] ? parts.domes[d.k].f.length : 0; });
+  var total = parts ? parts.core.f.length + domeTris.reduce(function (a, b) { return a + b; }, 0) : 0;
+  var tubes = site.runs.filter(function (r) { return /^(tube|roof|port)$/.test(r[0]); }).reduce(function (a, r) { return a + r[1]; }, 0);
+  check(id + ': core, five domes and the art\'s tubes are the whole city', parts && site.domes.length === 5 && total + tubes === R.libPort(id).city.f.length,
+    'core ' + (parts && parts.core.f.length) + ', domes ' + domeTris.join('/') + ', art tubes ' + tubes);
+  /* each dome's slice lies round its own centre, inside its reach */
+  var stray = 0;
+  site.domes.forEach(function (d) {
+    var m = parts.domes[d.k];
+    m.f.forEach(function (t) { t.forEach(function (vi) { var v = m.v[vi]; if (Math.hypot(v[0] - d.c[0], v[1] - d.c[1]) > d.reach + 1e-3) stray++; }); });
+  });
+  check(id + ': every dome slice is that dome', stray === 0, stray + ' corners outside');
+});
+
+console.log('--- the tubes ---');
+function placed(chain, p) { return R.cityPlace(chain, p); }
+ids.forEach(function (id) {
+  var site = Sites[id], S = R.citySizes(site), n = 300;
+  var net = 0, loose = 0, offHub = 0, wallBad = 0, tooTall = 0, notThicker = 0, crossed = 0, crowded = 0, sheds = {};
+  for (var i = 0; i < n; i++) {
+    var sp = R.citySpot(id, { id: 't' + i, surface: true, dressing: { citySeed: (i + 0.5) / n } });
+    var L = sp.layout;
+    if (!L) continue;
+    net++;
+    var B = L.branch, F = L.face, own = site.sheds[F.s];
+    sheds[F.s + ':' + F.n.join(',')] = 1;
+    /* every dome: its tube starts at the branch point and ends AT ITS DOOR,
+     * where the door actually is once the dome is turned and placed */
+    L.domes.forEach(function (d) {
+      var art = site.domes.filter(function (x) { return x.k === d.k; })[0];
+      var door = placed([{ rot: d.rot, x: d.c[0], y: d.c[1], cx: art.c[0], cy: art.c[1] }], [art.mouth[0], art.mouth[1], 0]);
+      if (Math.hypot(door[0] - d.m[0], door[1] - d.m[1]) > 1e-9) loose++;
+      /* and the door faces the branch point */
+      var toB = [B[0] - d.m[0], B[1] - d.m[1]], out = [d.m[0] - d.c[0], d.m[1] - d.c[1]];
+      if (toB[0] * out[0] + toB[1] * out[1] <= 0) loose++;
+    });
+    /* the trunk: from the branch point into the middle of a shed wall */
+    var onWall = F.n[0] !== 0
+      ? Math.abs(F.at[0] - (F.n[0] > 0 ? own[3] : own[0])) < 1e-9 && Math.abs(F.at[1] - (own[1] + own[4]) / 2) < 1e-9
+      : Math.abs(F.at[1] - (F.n[1] > 0 ? own[4] : own[1])) < 1e-9 && Math.abs(F.at[0] - (own[0] + own[3]) / 2) < 1e-9;
+    var dir = [B[0] - F.at[0], B[1] - F.at[1]], dl = Math.hypot(dir[0], dir[1]);
+    var square = Math.abs(dir[0] / dl - F.n[0]) < 1e-9 && Math.abs(dir[1] / dl - F.n[1]) < 1e-9;
+    if (!onWall || !square || L.trunkW > F.w * 0.85 + 1e-12) wallBad++;
+    if (S.ground + S.trunkH > own[5] + 1e-12) tooTall++;               // under the eave
+    if (!(L.trunkW > S.thin * 1.2 && S.trunkH > S.thin)) notThicker++;
+    /* nothing crosses anything: domes apart, tubes clear of other domes and
+     * of every building, the trunk clear of all but its own shed */
+    L.domes.forEach(function (d, a) {
+      L.domes.forEach(function (e, b) {
+        if (a < b && Math.hypot(d.c[0] - e.c[0], d.c[1] - e.c[1]) < d.reach + e.reach) crowded++;
+        if (a !== b && R._distPtSeg && R._distPtSeg(e.c[0], e.c[1], B[0], B[1], d.m[0], d.m[1]) < e.reach + S.thin / 2) crossed++;
+      });
+      (site.stands || []).forEach(function (s) {
+        if (R._distPtBox(d.c[0], d.c[1], s) < d.reach) crowded++;
+        if (R._segHitsBox(B[0], B[1], d.m[0], d.m[1], s, S.thin / 2)) crossed++;
+      });
+    });
+  }
+  check(id + ': every port joins its domes with tubes', net === n, net + ' of ' + n);
+  check(id + ': every tube runs from the branch point to its own dome\'s door, and the door faces it', loose === 0, loose + ' wrong');
+  check(id + ': the trunk goes square into the middle of a shed wall, and fits it', wallBad === 0, wallBad + ' wrong; ' + Object.keys(sheds).length + ' different walls used');
+  check(id + ': and stays under the eave', tooTall === 0);
+  check(id + ': the trunk is thicker than the tubes', notThicker === 0,
+    'trunk ' + (S.thin * 2).toFixed(4) + ' wide at most, ' + S.trunkH.toFixed(4) + ' tall; tubes ' + S.thin.toFixed(4));
+  check(id + ': no dome stands in another or in a building', crowded === 0, crowded + ' found');
+  check(id + ': no tube runs through a dome or a building', crossed === 0, crossed + ' found');
+});
+
+console.log('--- where it goes ---');
+ids.forEach(function (id) {
+  var site = Sites[id];
   var n = 300, home = 0, onLand = 0, onKeep = 0, out = 0, spots = {}, quads = [0, 0, 0, 0];
   for (var i = 0; i < n; i++) {
     var port = { id: 'c' + i, surface: true, dressing: { citySeed: (i + 0.5) / n } };
@@ -82,9 +145,17 @@ ids.forEach(function (id) {
     if (sp.home) { home++; continue; }
     spots[sp.x.toFixed(3) + ',' + sp.y.toFixed(3)] = 1;
     quads[Math.floor(((sp.rot % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) / (Math.PI / 2)) % 4]++;
-    var mv = moveFn(sp), hitL = false, hitK = false, far = false;
+    /* EVERY CORNER OF EVERYTHING DRAWN - core, domes, tubes, drum, trunk -
+     * through the same chains drawPortCity uses */
+    var verts = [];
+    R.cityDrawList(id, port).forEach(function (it) {
+      var used = {};
+      it.mesh.f.forEach(function (t) { used[t[0]] = used[t[1]] = used[t[2]] = 1; });
+      Object.keys(used).forEach(function (k) { verts.push(placed(it.chain, it.mesh.v[k])); });
+    });
+    var hitL = false, hitK = false, far = false;
     for (var v = 0; v < verts.length; v++) {
-      var p = mv(verts[v]);
+      var p = verts[v];
       if (Math.hypot(p[0], p[1]) > R.CITY_REACH + 1e-9) far = true;
       for (var a = 0; a < site.land.length && !hitL; a++) {
         var b = site.land[a];
@@ -127,7 +198,7 @@ console.log('--- the frame ---');
 (function () {
   var id = ids[0], sp = R.citySpot(id, { id: 'f', surface: true, dressing: { citySeed: 0.77 } });
   var frame = { pos: { x: 10, y: -4, z: 2 }, right: { x: 0, y: 1, z: 0 }, up: { x: 0, y: 0, z: 1 }, fwd: { x: 1, y: 0, z: 0 } };
-  var km = 3.5, fr = R.cityFrame(frame, sp, km), mv = moveFn(sp), worst = 0;
+  var km = 3.5, fr = R.cityFrame(frame, sp, km), mv = function (p) { return placed([sp], p); }, worst = 0;
   [[0.5, 0.1, 0.02], [0.7, -0.15, 0.08], [0.6, 0, 0]].forEach(function (p) {
     var m = mv(p);
     var want = { x: frame.pos.x + (frame.right.x * m[0] + frame.up.x * m[1] + frame.fwd.x * m[2]) * km,
@@ -139,6 +210,23 @@ console.log('--- the frame ---');
     worst = Math.max(worst, Math.abs(got.x - want.x), Math.abs(got.y - want.y), Math.abs(got.z - want.z));
   });
   check('the city frame draws where the placement says', worst < 1e-9, 'worst ' + worst.toExponential(1) + ' km');
+  /* and a dome, through TWO frames, lands where cityPlace says */
+  var list = R.cityDrawList(id, { id: 'f', surface: true, dressing: { citySeed: 0.77 } });
+  var dome = list.filter(function (it) { return it.chain.length === 2; })[0], worst2 = 0;
+  if (dome) {
+    var f2 = R.cityFrame(R.cityFrame(frame, dome.chain[0], km), dome.chain[1], km);
+    dome.mesh.f.slice(0, 20).forEach(function (t) {
+      var p = dome.mesh.v[t[0]], m = placed(dome.chain, p);
+      var want = { x: frame.pos.x + (frame.right.x * m[0] + frame.up.x * m[1] + frame.fwd.x * m[2]) * km,
+                   y: frame.pos.y + (frame.right.y * m[0] + frame.up.y * m[1] + frame.fwd.y * m[2]) * km,
+                   z: frame.pos.z + (frame.right.z * m[0] + frame.up.z * m[1] + frame.fwd.z * m[2]) * km };
+      var got = { x: f2.pos.x + (f2.right.x * p[0] + f2.up.x * p[1] + f2.fwd.x * p[2]) * km,
+                  y: f2.pos.y + (f2.right.y * p[0] + f2.up.y * p[1] + f2.fwd.y * p[2]) * km,
+                  z: f2.pos.z + (f2.right.z * p[0] + f2.up.z * p[1] + f2.fwd.z * p[2]) * km };
+      worst2 = Math.max(worst2, Math.abs(got.x - want.x), Math.abs(got.y - want.y), Math.abs(got.z - want.z));
+    });
+  }
+  check('a dome, through two frames, draws where its placement says', !!dome && worst2 < 1e-9, 'worst ' + worst2.toExponential(1) + ' km');
   var cr = { x: fr.right.y * fr.up.z - fr.right.z * fr.up.y, y: fr.right.z * fr.up.x - fr.right.x * fr.up.z, z: fr.right.x * fr.up.y - fr.right.y * fr.up.x };
   var hand = cr.x * fr.fwd.x + cr.y * fr.fwd.y + cr.z * fr.fwd.z;
   var hand0 = (function (f) { var c = { x: f.right.y * f.up.z - f.right.z * f.up.y, y: f.right.z * f.up.x - f.right.x * f.up.z, z: f.right.x * f.up.y - f.right.y * f.up.x }; return c.x * f.fwd.x + c.y * f.fwd.y + c.z * f.fwd.z; })(frame);

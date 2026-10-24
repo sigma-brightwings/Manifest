@@ -904,37 +904,229 @@
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
   }
-  /* The city's footprint at a heading and a centre, as a 2D box (the box
-   * round the turned rectangle: conservative, so a fit is a real fit). */
-  function cityFoot(c, rot, x, y) {
-    var hx = (c[3] - c[0]) / 2, hy = (c[4] - c[1]) / 2;
-    var cs = Math.abs(Math.cos(rot)), sn = Math.abs(Math.sin(rot));
-    var ex = cs * hx + sn * hy, ey = sn * hx + cs * hy;
-    return [x - ex, y - ey, x + ex, y + ey];
+  /* ---- THE CITY IN PARTS, AND THE TUBES BETWEEN THEM (2026-10-24) --------
+   *
+   * Astra: "ensure that the domes always have tubes that connect to a
+   * branch point, a thicker tube, which goes directly into one of the
+   * faces of one of the city buildings", and each dome on a spot of its
+   * own.
+   *
+   * So the city is drawn in parts. The CORE - the slab, the tank, the two
+   * sheds, the solar panels, the mast - moves and turns as one piece, as
+   * before. Each DOME stands on its own spot, turned so its porch door
+   * faces the BRANCH POINT, a drum on the ground. A THIN TUBE runs from
+   * every dome's door to the drum, and one TRUNK, wider and taller, runs
+   * from the drum straight into the middle of one wall of one shed. The
+   * art's own four tubes, which joined the domes in the art's layout, are
+   * not drawn when the domes move.
+   *
+   * THE SIZES COME FROM THE ART, not from a guess. A thin tube is square,
+   * a shade bigger than a dome's door so it closes over it; the trunk is
+   * up to twice as wide and a little taller, but never wider than 85% of
+   * the wall it enters or taller than 92% of it - it goes INTO the wall,
+   * under the eave, which is why it cannot simply be the art's tube made
+   * fatter: the art's tube is taller than a shed. Tubes and the drum run a
+   * little below the ground, so they sit flush whether they cross the
+   * slab or the bare site.
+   *
+   * THE LAYOUT IS SEEDED, in the city's own frame, and checked before it
+   * is used: the trunk leaves its wall through clear ground; every dome
+   * stands clear of the slab's buildings, the other domes, the trunk and
+   * every other tube; every thin tube is a straight line from its door to
+   * the drum that crosses nothing. Then the whole of it - core, drum,
+   * trunk, tubes and domes, piece by piece - is placed on the site the way
+   * the city alone was (citySpot). A layout that cannot be placed is
+   * thrown away and another drawn; if none can, the city goes whole, in
+   * the art's own layout, with the art's own tubes. */
+  var CITY_LAYOUTS = 6, DOME_TRIES = 80, DOME_FAN = 2.6;   // radians either side of the trunk's line
+  var CITY_PARTS = {};
+
+  /* The city's triangles, sliced by the run list tools/port-sites.cjs
+   * read off the art (the converter keeps the art's order). Null when the
+   * counts do not add up - the art changed under the data - and then the
+   * city is drawn whole. */
+  function cityParts(role) {
+    if (CITY_PARTS[role] !== undefined) return CITY_PARTS[role];
+    CITY_PARTS[role] = null;
+    var site = citySite(role), lib = libPort(role);
+    if (!site || !site.runs || !site.domes || !site.sheds || !site.tube || !lib || !lib.city) return null;
+    var city = lib.city, total = 0, i;
+    for (i = 0; i < site.runs.length; i++) total += site.runs[i][1];
+    if (total !== city.f.length) return null;
+    var parts = { core: null, domes: {}, colour: {} }, at = 0;
+    function take(n) { return { v: city.v, f: city.f.slice(at, at + n), c: city.c ? city.c.slice(at, at + n) : null }; }
+    function add(dst, m) {
+      if (!dst) return m;
+      dst.f = dst.f.concat(m.f);
+      if (dst.c) dst.c = dst.c.concat(m.c);
+      return dst;
+    }
+    for (i = 0; i < site.runs.length; i++) {
+      var k = site.runs[i][0], n = site.runs[i][1], m = take(n);
+      if (k === 'core') parts.core = add(parts.core, m);
+      else if (k.charAt(0) === 'd') parts.domes[k] = add(parts.domes[k], m);
+      else if (!parts.colour[k] && m.c && m.c.length) parts.colour[k] = m.c[0];
+      at += n;
+    }
+    CITY_PARTS[role] = parts;
+    return parts;
   }
-  function cityFits(foot, blocks, near) {
-    var corners = [[foot[0], foot[1]], [foot[2], foot[1]], [foot[0], foot[3]], [foot[2], foot[3]]];
-    for (var k = 0; k < 4; k++) {
-      if (Math.sqrt(corners[k][0] * corners[k][0] + corners[k][1] * corners[k][1]) > CITY_REACH) return false;
+
+  function citySizes(site) {
+    var d0 = site.domes[0], door = d0.mouth[3] - d0.mouth[2];
+    var sh = site.sheds[0], wall = sh[5] - sh[2];
+    var thin = Math.min(site.tube.w, door * 1.15);
+    return {
+      thin: thin,                                   // square, a shade over the door
+      trunkH: Math.min(wall * 0.92, thin * 1.35),   // under the eave
+      wall: wall,
+      roof: site.tube.roof || thin * 0.12,
+      unit: site.tube.len || thin * 2.5,            // the art's tube length: the city's own yardstick
+      ground: site.ground,
+      sink: thin * 0.5,
+      margin: thin * 0.5
+    };
+  }
+
+  /* 2D helpers for the layout */
+  function distPtSeg(px, py, ax, ay, bx, by) {
+    var dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+    var t = l2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2)) : 0;
+    return Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
+  }
+  function distPtBox(px, py, b) {
+    var dx = Math.max(b[0] - px, 0, px - b[2]), dy = Math.max(b[1] - py, 0, py - b[3]);
+    return Math.hypot(dx, dy);
+  }
+  /* does segment A-B pass through box b grown by pad (Liang-Barsky) */
+  function segHitsBox(ax, ay, bx, by, b, pad) {
+    var x0 = b[0] - pad, y0 = b[1] - pad, x1 = b[2] + pad, y1 = b[3] + pad;
+    var t0 = 0, t1 = 1, dx = bx - ax, dy = by - ay;
+    var p = [-dx, dx, -dy, dy], q = [ax - x0, x1 - ax, ay - y0, y1 - ay];
+    for (var i = 0; i < 4; i++) {
+      if (p[i] === 0) { if (q[i] < 0) return false; continue; }
+      var r = q[i] / p[i];
+      if (p[i] < 0) { if (r > t1) return false; if (r > t0) t0 = r; }
+      else { if (r < t0) return false; if (r < t1) t1 = r; }
     }
-    var close = false;
-    for (var i = 0; i < blocks.length; i++) {
-      var b = blocks[i];
-      if (foot[0] < b[2] && foot[2] > b[0] && foot[1] < b[3] && foot[3] > b[1]) return false;
+    return t0 <= t1;
+  }
+
+  /* One layout, in the city's own (art) frame. Null if this draw of the
+   * dice cannot be made to work. */
+  function cityLayout(site, rnd) {
+    var S = citySizes(site), stands = site.stands || [];
+    /* the four walls of each shed, in a seeded order */
+    var faces = [];
+    site.sheds.forEach(function (b, si) {
+      var cx = (b[0] + b[3]) / 2, cy = (b[1] + b[4]) / 2;
+      faces.push({ s: si, n: [1, 0], at: [b[3], cy], w: b[4] - b[1] },
+                 { s: si, n: [-1, 0], at: [b[0], cy], w: b[4] - b[1] },
+                 { s: si, n: [0, 1], at: [cx, b[4]], w: b[3] - b[0] },
+                 { s: si, n: [0, -1], at: [cx, b[1]], w: b[3] - b[0] });
+    });
+    for (var i = faces.length - 1; i > 0; i--) { var j = Math.floor(rnd() * (i + 1)), tmp = faces[i]; faces[i] = faces[j]; faces[j] = tmp; }
+    var domes = site.domes.slice().sort(function (a, b) { return b.r - a.r; });
+    for (var fi = 0; fi < faces.length; fi++) {
+      var F = faces[fi], n = F.n;
+      var tw = Math.min(F.w * 0.85, S.thin * 2);
+      var hubR = tw * 0.75;
+      var Lt = S.unit * (1.0 + rnd() * 1.2);
+      var B = [F.at[0] + n[0] * Lt, F.at[1] + n[1] * Lt];
+      var own = site.sheds[F.s];
+      /* the trunk leaves through clear ground: nothing but its own shed */
+      var others = stands.filter(function (b) {
+        return !(b[0] <= own[3] + 1e-4 && b[2] >= own[0] - 1e-4 && b[1] <= own[4] + 1e-4 && b[3] >= own[1] - 1e-4);
+      });
+      var ex = [F.at[0] + n[0] * 1e-4, F.at[1] + n[1] * 1e-4];
+      if (others.some(function (b) { return segHitsBox(ex[0], ex[1], B[0], B[1], b, tw / 2 + S.margin) || distPtBox(B[0], B[1], b) < hubR + S.margin; })) continue;
+      var placed = [], ok = true;
+      var base = Math.atan2(n[1], n[0]);
+      for (var di = 0; di < domes.length && ok; di++) {
+        var d = domes[di];
+        var mo = [d.mouth[0] - d.c[0], d.mouth[1] - d.c[1]], mOff = Math.hypot(mo[0], mo[1]);
+        var reach = Math.max(d.r * 1.08, mOff + S.thin * 0.6);
+        var got = null;
+        for (var k = 0; k < DOME_TRIES && !got; k++) {
+          /* A FAN ROUND THE DRUM, nearly all the way: five domes this size
+           * at this distance take about 80 degrees each, so a half-plane
+           * fan (the first try) refused every layout. The trunk's own side
+           * is kept clear by the checks below, not by the fan. A dome that
+           * keeps failing goes further out. */
+          var a = base + (rnd() * 2 - 1) * DOME_FAN;
+          var u = [Math.cos(a), Math.sin(a)];
+          var g = S.unit * (0.35 + rnd() * (1.0 + k / 15));
+          var D = hubR + g + mOff;
+          var C = [B[0] + u[0] * D, B[1] + u[1] * D];
+          var M = [C[0] - u[0] * mOff, C[1] - u[1] * mOff];
+          var bad = false;
+          /* the dome, clear of the slab's buildings (its own shed too), the
+           * trunk, and the domes and tubes already down */
+          for (var q = 0; q < stands.length && !bad; q++) if (distPtBox(C[0], C[1], stands[q]) < reach + S.margin) bad = true;
+          if (!bad && distPtSeg(C[0], C[1], F.at[0], F.at[1], B[0], B[1]) < reach + tw / 2 + S.margin) bad = true;
+          for (q = 0; q < placed.length && !bad; q++) {
+            var P = placed[q];
+            if (Math.hypot(C[0] - P.c[0], C[1] - P.c[1]) < reach + P.reach + S.margin) bad = true;
+            else if (distPtSeg(C[0], C[1], B[0], B[1], P.m[0], P.m[1]) < reach + S.thin / 2 + S.margin) bad = true;
+            /* and its tube, clear of the domes already down */
+            else if (distPtSeg(P.c[0], P.c[1], B[0], B[1], M[0], M[1]) < P.reach + S.thin / 2 + S.margin) bad = true;
+          }
+          /* its tube crosses no building */
+          for (q = 0; q < stands.length && !bad; q++) if (segHitsBox(B[0], B[1], M[0], M[1], stands[q], S.thin / 2 + S.margin)) bad = true;
+          if (bad) continue;
+          var rot = Math.atan2(-u[1], -u[0]) - Math.atan2(mo[1], mo[0]);
+          got = { k: d.k, c: C, art: d.c, rot: rot, m: M, u: u, reach: reach };
+        }
+        if (got) placed.push(got); else ok = false;
+      }
+      if (!ok) continue;
+      /* the pieces, as 2D boxes in the city frame, for placing on the site */
+      var pieces = [[site.core[0], site.core[1], site.core[3], site.core[4]],
+                    [B[0] - hubR, B[1] - hubR, B[0] + hubR, B[1] + hubR]];
+      function seg(A, Bq, w) { pieces.push([Math.min(A[0], Bq[0]) - w, Math.min(A[1], Bq[1]) - w, Math.max(A[0], Bq[0]) + w, Math.max(A[1], Bq[1]) + w]); }
+      seg(F.at, B, tw / 2);
+      placed.forEach(function (P) {
+        seg(B, P.m, S.thin / 2);
+        pieces.push([P.c[0] - P.reach, P.c[1] - P.reach, P.c[0] + P.reach, P.c[1] + P.reach]);
+      });
+      return { sizes: S, face: F, trunkW: tw, hubR: hubR, branch: B, domes: placed, pieces: pieces };
     }
-    for (var j = 0; j < near.length && !close; j++) if (boxGap(foot, near[j]) <= CITY_NEAR) close = true;
+    return null;
+  }
+
+  /* Every piece, turned and slid, clear of the site and close to it. */
+  function piecesFit(pieces, rot, x, y, cx, cy, blocks, near) {
+    var cs = Math.cos(rot), sn = Math.sin(rot), close = false;
+    for (var i = 0; i < pieces.length; i++) {
+      var p = pieces[i], lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+      var cr = [[p[0], p[1]], [p[2], p[1]], [p[0], p[3]], [p[2], p[3]]];
+      for (var k = 0; k < 4; k++) {
+        var dx = cr[k][0] - cx, dy = cr[k][1] - cy;
+        var X = cs * dx - sn * dy + x, Y = sn * dx + cs * dy + y;
+        if (Math.hypot(X, Y) > CITY_REACH) return false;
+        lo[0] = Math.min(lo[0], X); lo[1] = Math.min(lo[1], Y); hi[0] = Math.max(hi[0], X); hi[1] = Math.max(hi[1], Y);
+      }
+      var f = [lo[0], lo[1], hi[0], hi[1]];
+      for (var j = 0; j < blocks.length; j++) {
+        var b = blocks[j];
+        if (f[0] < b[2] && f[2] > b[0] && f[1] < b[3] && f[3] > b[1]) return false;
+      }
+      for (j = 0; j < near.length && !close; j++) if (boxGap(f, near[j]) <= CITY_NEAR) close = true;
+    }
     return close;
   }
 
-  /* -> { rot, x, y, cx, cy }: a point p of the city goes to
-   * R(rot) (p - c) + (x, y). Null when this port has no city to move. */
+  /* -> { rot, x, y, cx, cy, layout }: a point p of the city's frame goes
+   * to R(rot) (p - c) + (x, y); `layout` places the domes and the tubes
+   * inside that frame (null: the city as the art drew it). Null when this
+   * port has no city to move. */
   function citySpot(role, port) {
     var site = citySite(role);
     if (!site || !port) return null;
     var memo = port._citySpot || (port._citySpot = {});
     if (memo[role] !== undefined) return memo[role];
     var c = site.city, cx = (c[0] + c[3]) / 2, cy = (c[1] + c[4]) / 2;
-    var home = { rot: 0, x: cx, y: cy, cx: cx, cy: cy, home: true };
+    var home = { rot: 0, x: cx, y: cy, cx: cx, cy: cy, home: true, layout: null };
     var seed = port.dressing && typeof port.dressing.citySeed === 'number'
       ? port.dressing.citySeed : null;
     if (seed === null) {
@@ -946,15 +1138,94 @@
     }
     var rnd = seeded(seed), blocks = cityBlocks(site);
     var near = site.keep.concat(site.land);
-    var spot = null;
-    for (var t = 0; t < CITY_TRIES && !spot; t++) {
-      var rot = rnd() * Math.PI * 2;
-      var r = Math.sqrt(rnd()) * CITY_REACH, a = rnd() * Math.PI * 2;
-      var x = Math.cos(a) * r, y = Math.sin(a) * r;
-      if (cityFits(cityFoot(c, rot, x, y), blocks, near)) spot = { rot: rot, x: x, y: y, cx: cx, cy: cy, home: false };
+    var spot = null, t;
+    var canSplit = !!cityParts(role);
+    for (var at = 0; at < CITY_LAYOUTS && !spot && canSplit; at++) {
+      var lay = cityLayout(site, rnd);
+      if (!lay) continue;
+      var pcx = (site.core[0] + site.core[3]) / 2, pcy = (site.core[1] + site.core[4]) / 2;
+      for (t = 0; t < CITY_TRIES && !spot; t++) {
+        var rot = rnd() * Math.PI * 2;
+        var r = Math.sqrt(rnd()) * CITY_REACH, a = rnd() * Math.PI * 2;
+        var x = Math.cos(a) * r, y = Math.sin(a) * r;
+        if (piecesFit(lay.pieces, rot, x, y, pcx, pcy, blocks, near)) spot = { rot: rot, x: x, y: y, cx: pcx, cy: pcy, home: false, layout: lay };
+      }
+    }
+    /* none would go: the city whole, as the art laid it out */
+    var whole = [[c[0], c[1], c[3], c[4]]];
+    for (t = 0; t < CITY_TRIES && !spot; t++) {
+      var rot2 = rnd() * Math.PI * 2;
+      var r2 = Math.sqrt(rnd()) * CITY_REACH, a2 = rnd() * Math.PI * 2;
+      var x2 = Math.cos(a2) * r2, y2 = Math.sin(a2) * r2;
+      if (piecesFit(whole, rot2, x2, y2, cx, cy, blocks, near)) spot = { rot: rot2, x: x2, y: y2, cx: cx, cy: cy, home: false, layout: null };
     }
     memo[role] = spot || home;
     return memo[role];
+  }
+
+  /* The tubes, the drum and the trunk, as one mesh in the city's frame. */
+  function cityNetwork(lay, parts) {
+    var S = lay.sizes, mesh = { v: [], f: [], c: [] };
+    var body = parts.colour.tube || '#8a909a', roof = parts.colour.roof || body, win = parts.colour.port || '!#ffcf8a';
+    var z0 = S.ground;
+    function run(A, B, w, h) {
+      var dx = B[0] - A[0], dy = B[1] - A[1], L = Math.hypot(dx, dy);
+      if (L < 1e-6) return;
+      var u = [dx / L, dy / L], p = [-u[1], u[0]];
+      var mx = (A[0] + B[0]) / 2, my = (A[1] + B[1]) / 2;
+      var hz = (h + S.sink) / 2;
+      addBox(mesh, [mx, my, z0 - S.sink + hz], [u[0] * L / 2, u[1] * L / 2, 0], [p[0] * w / 2, p[1] * w / 2, 0], [0, 0, hz], body);
+      addBox(mesh, [mx, my, z0 + h + S.roof / 2], [u[0] * L / 2, u[1] * L / 2, 0], [p[0] * w * 0.56, p[1] * w * 0.56, 0], [0, 0, S.roof / 2], roof);
+      /* lit ports down both sides, as the art's tubes have */
+      var nw = Math.max(1, Math.floor(L / (S.unit / 3)));
+      for (var i = 0; i < nw; i++) {
+        var t = (i + 0.5) / nw;
+        for (var sd = -1; sd <= 1; sd += 2) {
+          addBox(mesh, [A[0] + dx * t + p[0] * sd * w * 0.51, A[1] + dy * t + p[1] * sd * w * 0.51, z0 + h * 0.62],
+                 [u[0] * w * 0.14, u[1] * w * 0.14, 0], [p[0] * w * 0.02, p[1] * w * 0.02, 0], [0, 0, h * 0.1], win);
+        }
+      }
+    }
+    var F = lay.face, B = lay.branch, n = F.n;
+    /* the trunk: into the wall, by a little, so it reads as going in */
+    run([F.at[0] - n[0] * S.thin * 0.15, F.at[1] - n[1] * S.thin * 0.15], B, lay.trunkW, S.trunkH);
+    /* each dome's tube, closing over its door */
+    lay.domes.forEach(function (d) {
+      run(B, [d.m[0] + d.u[0] * S.thin * 0.15, d.m[1] + d.u[1] * S.thin * 0.15], S.thin, S.thin);
+    });
+    /* the branch point: a drum a little taller than the trunk, capped */
+    var hubH = S.trunkH * 1.2, hh = (hubH + S.sink) / 2;
+    merge(mesh, tube(10, lay.hubR, lay.hubR, hh, true), B[0], B[1], z0 - S.sink + hh, 1, body);
+    merge(mesh, tube(10, lay.hubR * 1.06, lay.hubR * 0.7, S.roof, true), B[0], B[1], z0 + hubH + S.roof, 1, roof);
+    return mesh;
+  }
+
+  /* What is drawn for a city, and where: each mesh with the placements
+   * that carry it from its own frame onto the site, innermost last. Used
+   * by drawPortCity and by the tests, so the two cannot disagree. */
+  function cityDrawList(role, port) {
+    var lib = libPort(role);
+    if (!lib || !lib.city || !lib.city.f.length) return [];
+    var sp = citySpot(role, port);
+    if (!sp) return [{ mesh: lib.city, chain: [] }];
+    var parts = sp.layout ? cityParts(role) : null;
+    if (!parts) return [{ mesh: lib.city, chain: [sp] }];
+    var lay = sp.layout;
+    var out = [{ mesh: parts.core, chain: [sp] },
+               { mesh: lay.net || (lay.net = cityNetwork(lay, parts)), chain: [sp] }];
+    lay.domes.forEach(function (d) {
+      out.push({ mesh: parts.domes[d.k], chain: [sp, { rot: d.rot, x: d.c[0], y: d.c[1], cx: d.art[0], cy: d.art[1] }] });
+    });
+    return out;
+  }
+  /* a point of a mesh, through its chain, into the site frame */
+  function cityPlace(chain, p) {
+    var q = [p[0], p[1], p[2]];
+    for (var i = chain.length - 1; i >= 0; i--) {
+      var s = chain[i], cs = Math.cos(s.rot), sn = Math.sin(s.rot), dx = q[0] - s.cx, dy = q[1] - s.cy;
+      q = [cs * dx - sn * dy + s.x, sn * dx + cs * dy + s.y, q[2]];
+    }
+    return q;
   }
 
   /* The frame that draws the city where citySpot put it: turned about the
@@ -976,11 +1247,13 @@
    * the surface, and from a berth or the hangar below it is not in view. */
   function drawPortCity(ctx, cam, frame, port, radiusKm, sunDir, role, tint) {
     if (!port || !port.surface || !frame) return false;
-    var lib = libPort(role);
-    if (!lib || !lib.city || !lib.city.f.length) return false;
-    var sp = citySpot(role, port);
-    var fr = sp ? cityFrame(frame, sp, radiusKm) : frame;
-    paintPart(ctx, cam, fr, lib.city, radiusKm, sunDir, tint);
+    var list = cityDrawList(role, port);
+    if (!list.length) return false;
+    for (var i = 0; i < list.length; i++) {
+      var fr = frame;
+      for (var k = 0; k < list[i].chain.length; k++) fr = cityFrame(fr, list[i].chain[k], radiusKm);
+      paintPart(ctx, cam, fr, list[i].mesh, radiusKm, sunDir, tint);
+    }
     return true;
   }
 
@@ -10651,7 +10924,9 @@
     prefetchPorts: prefetchPorts, portGeometryArrived: portGeometryArrived,
     setMoverRiders: setMoverRiders, moverPose: moverPose, splitMovers: splitMovers,
     drawPortCity: drawPortCity, citySpot: citySpot, cityFrame: cityFrame, splitCity: splitCity,
-    citySite: citySite, cityBlocks: cityBlocks, cityFoot: cityFoot,
+    citySite: citySite, cityBlocks: cityBlocks, cityParts: cityParts, cityLayout: cityLayout,
+    cityDrawList: cityDrawList, cityPlace: cityPlace, citySizes: citySizes,
+    _distPtSeg: distPtSeg, _distPtBox: distPtBox, _segHitsBox: segHitsBox,
     CITY_REACH: CITY_REACH, CITY_NEAR: CITY_NEAR,
     poolFor: poolFor, PORT_POOL: PORT_POOL,
     portClass: portClass, portSizeFor: portSizeFor,

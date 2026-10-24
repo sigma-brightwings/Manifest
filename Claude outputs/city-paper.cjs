@@ -5,7 +5,7 @@ var ROOT = path.join(__dirname, '..');
 ['vec3', 'kepler', 'hulls', 'ports', 'port-sites'].forEach(function (m) { require(path.join(ROOT, 'src', m + '.js')); });
 var R = require(path.join(ROOT, 'src', 'render.js'));
 var models = process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(PortSites);
-var W = 300, H = 300, S = 120;   // px per port unit; view +-1.25
+var W = 420, H = 420, S = 168;   // px per port unit; view +-1.25
 function proj(p) { return [W / 2 + p[0] * S, H / 2 - p[1] * S]; }
 function shade(hex, z) {
   hex = String(hex || '#888').replace(/^[!~0-9]*/, '').replace(/^#?/, '#');
@@ -25,7 +25,7 @@ function tris(mesh, xf) {
   return out;
 }
 var html = '<!doctype html><meta charset=utf-8><title>City sites</title><style>body{background:#0b0e14;color:#cfd6e4;font:12px system-ui;margin:10px}h3{margin:10px 0 4px;font-size:14px}.r{display:flex;gap:6px;flex-wrap:wrap}.p{background:#10151e;border:1px solid #232b3a}.p div{padding:2px 4px}</style>';
-html += '<p>Top-down. Grey: the port. Red outline: pad / runway / doors kept clear. Green outline: the city where this port puts it; dotted: where the art had it. Dashed circle: CITY_REACH.</p>';
+html += '<p>Top-down. Grey: the port. Red outline: pad / runway / doors kept clear. Yellow ring: the branch point. Dotted: where the art had the city. Dashed circle: CITY_REACH.</p>';
 models.forEach(function (id) {
   var lib = R.libPort(id), site = PortSites[id];
   var base = tris(lib.shell, function (p) { return p; }).sort(function (a, b) { return a.z - b.z; });
@@ -36,11 +36,19 @@ models.forEach(function (id) {
   html += '<h3>' + id + '</h3><div class=r>';
   for (var k = 0; k < 6; k++) {
     var port = { id: 'sheet' + k, surface: true, dressing: { citySeed: (k * 0.161 + 0.07) % 1 } };
-    var sp = R.citySpot(id, port), cs = Math.cos(sp.rot), sn = Math.sin(sp.rot);
-    var move = function (p) { var dx = p[0] - sp.cx, dy = p[1] - sp.cy; return [cs * dx - sn * dy + sp.x, sn * dx + cs * dy + sp.y, p[2]]; };
-    var city = tris(lib.city, move).sort(function (a, b) { return a.z - b.z; });
-    var corners = [[c[0], c[1]], [c[3], c[1]], [c[3], c[4]], [c[0], c[4]]].map(function (q) { return proj(move([q[0], q[1], 0])); });
-    var outline = '<polygon points="' + corners.map(function (q) { return q[0].toFixed(1) + ',' + q[1].toFixed(1); }).join(' ') + '" fill="none" stroke="#5dff8a" stroke-width="1.5"/>';
+    var sp = R.citySpot(id, port);
+    /* exactly what drawPortCity draws: each mesh through its own chain */
+    var city = [];
+    R.cityDrawList(id, port).forEach(function (it) {
+      city = city.concat(tris(it.mesh, function (p) { return R.cityPlace(it.chain, p); }));
+    });
+    city.sort(function (a, b) { return a.z - b.z; });
+    var outline = '';
+    if (sp.layout) {
+      /* the branch point, ringed */
+      var B = proj(R.cityPlace([sp], [sp.layout.branch[0], sp.layout.branch[1], 0]));
+      outline = '<circle cx="' + B[0].toFixed(1) + '" cy="' + B[1].toFixed(1) + '" r="5" fill="none" stroke="#ffd23f" stroke-width="1.5"/>';
+    }
     var circ = '<circle cx="' + W / 2 + '" cy="' + H / 2 + '" r="' + (R.CITY_REACH * S).toFixed(1) + '" fill="none" stroke="#445" stroke-dasharray="4,4"/>';
     html += '<div class=p><svg width=' + W + ' height=' + H + '>' + circ + baseSvg + landSvg + homeSvg +
       city.map(function (t) { return '<polygon points="' + t.d + '" fill="' + t.c + '"/>'; }).join('') + outline +
