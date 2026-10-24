@@ -101,14 +101,23 @@ cases.forEach(function (cs, ci) {
         tris.push(w.concat([scaffold ? '#e0b030' : t[3], s.builder[0]]));
       });
     });
-    panels.push({ title: cs.name + ' — year ' + ty + ' — order ' + st.order.toFixed(2) + ', ' + st.slots.length + ' pieces' +
+    /* the primary L entrance (2026-10-24): an arrow in, and its approach kept clear */
+    var W = Gr.wayIn(m), way = null;
+    if (W && W.mid) {
+      var lane = W.lanes.filter(function (l) { return l.node === W.node; })[0];
+      var K = function (p) { return p.map(function (v) { return Math.round(v * 1000); }); };
+      way = { a: K([0, 1, 2].map(function (i) { return W.mid[i] + W.normal[i] * 0.55; })), b: K(W.mid),
+              lane: lane ? [K(lane.min), K(lane.max)] : null };
+    }
+    var docks = st.slots.filter(function (x) { return x.slot.mod.nb; }).length;
+    panels.push({ title: cs.name + ' — year ' + ty + ' — order ' + st.order.toFixed(2) + ', ' + st.slots.length + ' pieces, ' + docks + ' add-on docks' +
       (st.crawlers.length ? ', ' + st.crawlers.length + ' Crawler on site' : ''),
-      add: tris, cr: st.crawlers.map(function (c) { return c.at.map(function (v) { return Math.round(v * 1000); }); }) });
+      add: tris, way: way, cr: st.crawlers.map(function (c) { return c.at.map(function (v) { return Math.round(v * 1000); }); }) });
   });
 });
 var coreQ = coreTris.map(function (t) { return [t[0], t[1], t[2]].map(function (p) { return p.map(function (v) { return Math.round(v * 1000); }); }).concat([t[3]]); });
 var html = '<!doctype html><meta charset=utf-8><title>Ports growing</title><style>body{background:#0b0e14;color:#cfd6e4;font:13px system-ui;margin:12px}.g{display:grid;grid-template-columns:1fr;gap:8px}.p canvas{width:100%;background:#0e131c;border:1px solid #232b3a}</style>' +
-'<h2 style="font-size:16px">' + model + ' growing — core in grey, add-ons in their own paint, amber = under construction, green = necks (corridor cut from the berth route out to the piece), magenta diamond = Crawler. Drag any panel to turn all.</h2><div class=g id=g></div><script>var C=' + JSON.stringify(coreQ) + ',P=' + JSON.stringify(panels) + ';var yaw=0.7,pit=1.0;var cv=[];' +
+'<h2 style="font-size:16px">' + model + ' growing — core in grey, add-ons in their own paint, amber = under construction, green = necks (corridor cut from the berth route out to the piece), magenta diamond = Crawler, cyan arrow = the way in through the primary L berth, dashed cyan = its approach, kept clear. Drag any panel to turn all.</h2><div class=g id=g></div><script>var C=' + JSON.stringify(coreQ) + ',P=' + JSON.stringify(panels) + ';var yaw=0.7,pit=1.0;var cv=[];' +
 'P.forEach(function(p){var d=document.createElement("div");d.className="p";d.innerHTML="<div>"+p.title+"</div>";var c=document.createElement("canvas");c.width=760;c.height=520;d.appendChild(c);document.getElementById("g").appendChild(d);cv.push([c,p])});' +
 'function R(q){var cy=Math.cos(yaw),sy=Math.sin(yaw);var x=q[0]*cy-q[1]*sy,y=q[0]*sy+q[1]*cy,z=q[2];var cp=Math.cos(pit),sp=Math.sin(pit);return[x,y*cp-z*sp,y*sp+z*cp]}' +
 'function shade(h,k){var r=parseInt(h.substr(1,2),16),g=parseInt(h.substr(3,2),16),b=parseInt(h.substr(5,2),16);return"rgb("+(r*k|0)+","+(g*k|0)+","+(b*k|0)+")"}' +
@@ -116,7 +125,9 @@ var html = '<!doctype html><meta charset=utf-8><title>Ports growing</title><styl
 'var all=C.map(function(t){return[t[0],t[1],t[2],t[3],1]}).concat(p.add.map(function(t){return[t[0],t[1],t[2],t[3],0]}));' +
 'var fs=all.map(function(t){var a=R(t[0]),b=R(t[1]),e=R(t[2]);return{a:a,b:b,e:e,z:(a[2]+b[2]+e[2])/3,c:t[3],core:t[4]}}).sort(function(u,v){return v.z-u.z});' +
 'fs.forEach(function(o){var u=[o.b[0]-o.a[0],o.b[1]-o.a[1],o.b[2]-o.a[2]],v=[o.e[0]-o.a[0],o.e[1]-o.a[1],o.e[2]-o.a[2]];var n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];var l=Math.hypot(n[0],n[1],n[2])||1;var k=0.4+0.6*Math.abs((n[0]*0.3+n[1]*0.5-n[2]*0.8)/l);x.globalAlpha=o.core?0.35:1;x.fillStyle=o.core?shade("#7d8590",k*0.8):shade(o.c,k*1.15);x.beginPath();x.moveTo(ox+o.a[0]*s,oy+o.a[1]*s);x.lineTo(ox+o.b[0]*s,oy+o.b[1]*s);x.lineTo(ox+o.e[0]*s,oy+o.e[1]*s);x.closePath();x.fill();x.strokeStyle=x.fillStyle;x.lineWidth=0.4;x.stroke()});' +
-'p.cr.forEach(function(q){var r=R(q);var X=ox+r[0]*s,Y=oy+r[1]*s;x.fillStyle="#ff3fd2";x.beginPath();x.moveTo(X,Y-9);x.lineTo(X+7,Y);x.lineTo(X,Y+9);x.lineTo(X-7,Y);x.fill()})})}' +
+'p.cr.forEach(function(q){var r=R(q);var X=ox+r[0]*s,Y=oy+r[1]*s;x.fillStyle="#ff3fd2";x.beginPath();x.moveTo(X,Y-9);x.lineTo(X+7,Y);x.lineTo(X,Y+9);x.lineTo(X-7,Y);x.fill()});' +
+'if(p.way){var w=p.way;x.globalAlpha=1;if(w.lane){var m=w.lane[0],M=w.lane[1],cs=[];for(var i=0;i<8;i++)cs.push(R([i&1?M[0]:m[0],i&2?M[1]:m[1],i&4?M[2]:m[2]]));x.setLineDash([5,4]);x.strokeStyle="rgba(64,220,255,0.55)";x.lineWidth=1;[[0,1],[2,3],[4,5],[6,7],[0,2],[1,3],[4,6],[5,7],[0,4],[1,5],[2,6],[3,7]].forEach(function(e){x.beginPath();x.moveTo(ox+cs[e[0]][0]*s,oy+cs[e[0]][1]*s);x.lineTo(ox+cs[e[1]][0]*s,oy+cs[e[1]][1]*s);x.stroke()});x.setLineDash([])}' +
+'var A=R(w.a),B=R(w.b),X0=ox+A[0]*s,Y0=oy+A[1]*s,X1=ox+B[0]*s,Y1=oy+B[1]*s,an=Math.atan2(Y1-Y0,X1-X0);x.strokeStyle=x.fillStyle="#40dcff";x.lineWidth=4;x.beginPath();x.moveTo(X0,Y0);x.lineTo(X1,Y1);x.stroke();x.beginPath();x.moveTo(X1,Y1);x.lineTo(X1-16*Math.cos(an-0.45),Y1-16*Math.sin(an-0.45));x.lineTo(X1-16*Math.cos(an+0.45),Y1-16*Math.sin(an+0.45));x.closePath();x.fill()}})}' +
 'var dr=null;window.onmousedown=function(e){dr=[e.clientX,e.clientY]};window.onmouseup=function(){dr=null};window.onmousemove=function(e){if(!dr)return;yaw+=(e.clientX-dr[0])*0.01;pit+=(e.clientY-dr[1])*0.01;dr=[e.clientX,e.clientY];draw()};draw();</script>';
 fs.writeFileSync(path.join(__dirname, 'growth-paper-' + model + '.html'), html);
 console.log('ok', panels.map(function (p) { return p.title; }).join('\n'));

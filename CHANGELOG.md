@@ -365,6 +365,45 @@ Astra has seen it working.
     choose from. A rich spine builds 5–9 forms where it could build one;
     pad sites and farms stay narrow, because their families have few
     pieces that fit a flat ground site. 29 checks.
+  - **2026-10-24: a way in from the primary L berth.** (Astra: "ensure that
+    all constructed stations have a path for ships to enter from the
+    primary L size berth and be taken through to their docking bay
+    somewhere inside the stations".) Before this, nothing tied an add-on
+    dock to the station's routes: a dock whose bays open to space stood on
+    its base with its neck into a blank wall, and across every port model
+    3,506 of 23,438 grown pieces stood in front of a primary L berth's
+    mouth. Now:
+    - The **primary** entrance is the L berth most of the core's routes
+      come in through (berthL0 on a spine, berthLFwd on a cylinder; a
+      ground site's busiest entrance). `Growth.wayIn(model)`.
+    - `tools/module-index.cjs` keeps each module's **way in**: `in` (the
+      biggest ship its doorway takes), `jd` (where the doorway is) and
+      `ob` (bays open only to space). A dock whose bays all open through
+      one face, mouths within 60 m, is **turned in** (`ti`): that outer
+      door faces the station and becomes its doorway (Astra, 10-19:
+      "outer doors can then become the doors ... of the NEXT add-on"). A
+      pass-through with no bay joins by one of its ways on, door to door,
+      instead of standing on its base. `src/modules.js` regenerated.
+    - `src/growth.js`: every free point carries **reach**, the biggest
+      class that gets there from the primary, inside: a core route that
+      comes in through the primary, then the route points and ways on of
+      pieces that are reached through their doorways. A dock is built only
+      where it is reached by a ship its size, and only if it has no bay open
+      straight to space. A piece is set so its **doorway** lands on the
+      neck. Nothing stands in a **lane** in front of any mouth that opens to
+      space (45 m either side, 1.5 half-spans out), and nothing is built
+      over the primary's mouth (yard models had three points there).
+    - Cost, every model × rich/middling/poor × 4 seeds: 4,265 docks where
+      there were 5,079 (L: 160 of 226), every one reached; Union docks
+      577 of 975. Docks reached only through a second L entrance (cradle
+      Beta, some refinery and yard routes) are no longer grown.
+    - `test/growth.test.js` "the way in", worked out from the port data
+      and not from growth.js's bookkeeping: every grown bay reached, its
+      class fits the whole way, the primary's approach clear and its mouth
+      not built over. 33 checks. `Claude outputs/path-sweep.cjs` runs the
+      same over all 96 models; `path-builders.cjs` counts docks by builder.
+      The paper (`growth-paper.cjs`) draws the primary's way in as a cyan
+      arrow and its kept-clear approach dashed.
 
 ### Changed
 

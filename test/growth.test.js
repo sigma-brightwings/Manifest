@@ -161,6 +161,87 @@ console.log('--- necks ---');
   check('a chained neck starts inside the piece it hangs on', cBad === 0, cBad + ' wrong');
 })();
 
+console.log('--- the way in ---');
+(function () {
+  /* Astra, 2026-10-24: "ensure that all constructed stations have a path
+   * for ships to enter from the primary L size berth and be taken through
+   * to their docking bay somewhere inside the stations".
+   * Worked out here from the port data itself, not from growth.js's own
+   * bookkeeping: the PRIMARY entrance is the L berth (a ground site's
+   * entrance) that most of the core's berth routes come in through. */
+  function primaryOf(m) {
+    var L = PortLib[m], B = L.anchors.berths || [], cnt = {};
+    B.forEach(function (b) {
+      var e = b.doorVia ? 'E' + b.door
+        : b.entry !== undefined ? String(b.entry)
+        : b.exitVia ? String(B.findIndex(function (x) { return x.node === b.exitVia; })) : null;
+      if (e !== null && e !== '-1') cnt[e] = (cnt[e] || 0) + 1;
+    });
+    var best = Object.keys(cnt).sort(function (a, b) { return cnt[b] - cnt[a]; })[0];
+    if (best === undefined) return null;
+    var mouth = best[0] === 'E' ? L.entrances[+best.slice(1)] : B[+best];
+    var enters = {};
+    B.forEach(function (b) {
+      var e = b.doorVia ? 'E' + b.door
+        : b.entry !== undefined ? String(b.entry)
+        : b.exitVia ? String(B.findIndex(function (x) { return x.node === b.exitVia; })) : null;
+      if (e === best) enters[b.node] = true;
+    });
+    return { mouth: mouth, enters: enters };
+  }
+  var big = function (c) { return c === 'L'; };
+  var fits = function (need, have) { return !!have && (!big(need) || big(have)); };
+  var bays = 0, reached = 0, why = {}, lane = 0, laneN = 0, cover = 0;
+  plans.forEach(function (x) {
+    var m = x.c.model, P = primaryOf(m), G = GrowthPoints[m], H = G.half || 1;
+    x.p.slots.forEach(function (s) {
+      if (!s.mod.nb) return;
+      bays++;
+      var need = s.mod.cls || 'SM', cur = s, ok = true, r = '';
+      for (var hop = 0; hop < 12 && ok; hop++) {
+        var md = cur.mod;
+        if (md.nb && md.ob) { ok = false; r = 'a bay open only to space'; break; }
+        if (!fits(need, md.in)) { ok = false; r = md.in ? 'doorway too small' : 'no inside doorway'; break; }
+        if (cur.parent < 0) {
+          var q = G.points[cur.point];
+          if (!P || !q || q.hull || q.door) { ok = false; r = 'on the core\'s hull or a door'; break; }
+          if (!P.enters[q.via]) { ok = false; r = 'on a route from another entrance'; break; }
+          if (!fits(need, q.cls)) { ok = false; r = 'on a route too small'; break; }
+          break;
+        }
+        if (cur.via !== 'r' && cur.via !== 'x') { ok = false; r = 'off a piece\'s hull or door'; break; }
+        cur = x.p.slots[cur.parent];
+      }
+      if (ok) reached++; else why[r] = (why[r] || 0) + 1;
+    });
+    /* the primary's approach: nothing standing in front of its mouth, and
+     * nothing built over it */
+    if (!P) return;
+    var mo = P.mouth, n = mo.normal, a = Math.abs(n[0]) > 0.5 ? 0 : Math.abs(n[1]) > 0.5 ? 1 : 2;
+    var w = 45 / (PortLib[m].metresPerUnit || 100);
+    x.p.slots.forEach(function (s) {
+      if (s.parent < 0 && G.points[s.point] && G.points[s.point].door && G.points[s.point].via === mo.node) cover++;
+      laneN++;
+      var b = s.box, hit = true;
+      for (var i = 0; i < 3; i++) {
+        if (i === a) {
+          var lo = n[a] > 0 ? mo.mid[a] : mo.mid[a] - 1.5 * H, hi = n[a] > 0 ? mo.mid[a] + 1.5 * H : mo.mid[a];
+          if (b.max[i] <= lo || b.min[i] >= hi) hit = false;
+        } else {
+          var hw = Math.max(w, (mo.max && mo.min) ? (mo.max[i] - mo.min[i]) / 2 : 0);
+          if (b.max[i] <= mo.mid[i] - hw || b.min[i] >= mo.mid[i] + hw) hit = false;
+        }
+      }
+      if (hit) lane++;
+    });
+  });
+  check('every grown docking bay is reached from the primary L berth, inside', bays > 0 && reached === bays,
+    reached + ' of ' + bays + (Object.keys(why).length ? '; ' + JSON.stringify(why) : ''));
+  check('nothing stands in the primary L berth\'s approach', lane === 0, lane + ' of ' + laneN + ' pieces');
+  check('nothing is built over the primary L berth\'s mouth', cover === 0, cover + ' pieces');
+  check('stations still grow docking bays', bays >= plans.length / 2, bays + ' bays in ' + plans.length + ' plans');
+})();
+
 console.log('--- variety ---');
 (function () {
   /* 2026-10-21: with only "the biggest that fits", a rich spine built one

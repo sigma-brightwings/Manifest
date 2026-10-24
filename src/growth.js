@@ -229,7 +229,11 @@
     var s = mod.s, hx = s[0] / 2, hy = s[1] / 2;
     var box = [[-hx, hx], [-hy, hy], [0, s[2]]];
     var jc = [0, 0, 0];
-    for (var a = 0; a < 3; a++) jc[a] = jn[a] > 0.5 ? box[a][1] : jn[a] < -0.5 ? box[a][0] : (box[a][0] + box[a][1]) / 2;
+    /* the point of the join face set on `at`: its DOORWAY when it has one
+     * (2026-10-24, so the neck comes out where ships go in), else the
+     * middle of the face */
+    for (var a = 0; a < 3; a++) jc[a] = jn[a] > 0.5 ? box[a][1] : jn[a] < -0.5 ? box[a][0]
+      : mod.jd ? clamp(mod.jd[a], box[a][0], box[a][1]) : (box[a][0] + box[a][1]) / 2;
     function T(m) {
       var r = mv(R, [m[0] - jc[0], m[1] - jc[1], m[2] - jc[2]]);
       return [at[0] + r[0] / mpu, at[1] + r[1] / mpu, at[2] + r[2] / mpu];
@@ -244,7 +248,7 @@
       return { at: at, normal: mv(R, FACES[q[3]]).map(Math.round), type: q[4], cls: q[5],
                /* a route point's neck, back along into this piece's own route */
                from: from, neck: from ? Math.sqrt(dot([at[0]-from[0], at[1]-from[1], at[2]-from[2]], [at[0]-from[0], at[1]-from[1], at[2]-from[2]])) : 0 };
-    }).filter(function (q) { return dot(q.normal, n) > -0.5 || q.type === 'x'; });   // not back into the parent
+    }).filter(function (q) { return dot(q.normal, n) > -0.5; });   // not back into the parent: that face is the way in
     return { R: R, jc: jc, at: at, box: { min: mn, max: mx }, pts: pts };
   }
   function inVol(a, b) {   // volume of box a inside box b
@@ -258,6 +262,84 @@
       if (a.min[i] + e >= b.max[i] - e || b.min[i] + e >= a.max[i] - e) return false;
     }
     return true;
+  }
+
+  /* ---- the way in ---------------------------------------------------------
+   * Astra, 2026-10-24: "ensure that all constructed stations have a path
+   * for ships to enter from the primary L size berth and be taken through
+   * to their docking bay somewhere inside the stations".
+   *
+   * The PRIMARY entrance is the L berth that most of the core's berth
+   * routes come in through (a ground site's: the entrance most of its
+   * routes start from). A free point is REACHED when a ship can get to it
+   * from there, inside, and `reach` is the biggest class that can: a point
+   * on a core route that comes in through the primary, a route point or
+   * way on of a piece that is itself reached. A piece is reached when it
+   * stands on a reached point by its doorway (ModuleLib `in`), and passes
+   * on the smaller of the two classes. A docking bay is only built where
+   * it is reached, by a ship of its size, and only from pieces with no bay
+   * that opens straight to space (`ob`). Nothing stands in front of a
+   * mouth that opens to space (a LANE, LANE_LEN of the half-span out and
+   * LANE_W either side), and nothing is built over the primary's mouth.
+   * An add-on over another outer door (a 'd' point) is that door's own
+   * lane: it is the door now. */
+  var LANE_W = 45;        // metres either side of a mouth's middle, at the least
+  var LANE_LEN = 1.5;     // x the core's half-span, out from the mouth
+  function isL(c) { return c === 'L'; }
+  function fitsCls(need, have) { return !!have && (!isL(need) || isL(have)); }
+  function minCls(a, b) { return a && b ? (isL(a) && isL(b) ? 'L' : 'SM') : null; }
+  function entryKey(B, b) {
+    if (b.doorVia && typeof b.door === 'number') return 'E' + b.door;
+    if (b.entry !== undefined && B[b.entry]) return String(b.entry);
+    if (b.exitVia) {
+      for (var i = 0; i < B.length; i++) if (B[i].node === b.exitVia) return String(i);
+    }
+    return null;
+  }
+  function laneOf(m, mpu, H) {
+    var n = m.normal, a = Math.abs(n[0]) > 0.5 ? 0 : Math.abs(n[1]) > 0.5 ? 1 : 2;
+    var mn = [0, 0, 0], mx = [0, 0, 0];
+    for (var i = 0; i < 3; i++) {
+      if (i === a) {
+        mn[i] = n[a] > 0 ? m.mid[i] : m.mid[i] - LANE_LEN * H;
+        mx[i] = n[a] > 0 ? m.mid[i] + LANE_LEN * H : m.mid[i];
+      } else {
+        var hw = Math.max(LANE_W / mpu, m.min && m.max ? (m.max[i] - m.min[i]) / 2 : 0);
+        mn[i] = m.mid[i] - hw; mx[i] = m.mid[i] + hw;
+      }
+    }
+    return { node: m.node, min: mn, max: mx };
+  }
+  function inLane(b, l) {
+    for (var i = 0; i < 3; i++) if (b.max[i] <= l.min[i] || b.min[i] >= l.max[i]) return false;
+    return true;
+  }
+  var wayCache = {};
+  function wayIn(model, lib, H) {
+    if (wayCache[model]) return wayCache[model];
+    var B = lib.anchors && lib.anchors.berths || [], E = lib.entrances || [], cnt = {}, best = null;
+    B.forEach(function (b) { var k = entryKey(B, b); if (k !== null) cnt[k] = (cnt[k] || 0) + 1; });
+    Object.keys(cnt).forEach(function (k) { if (best === null || cnt[k] > cnt[best]) best = k; });
+    var mouth = best === null ? null : best[0] === 'E' ? E[+best.slice(1)] : B[+best];
+    var enters = {};
+    B.forEach(function (b) { if (best !== null && entryKey(B, b) === best) enters[b.node] = true; });
+    var mpu = lib.metresPerUnit || 100;
+    var mouths = E.concat(B.filter(function (b) { return !b.via && !b.doorVia; }))
+      .filter(function (m) { return m && m.mid && m.normal; });
+    return (wayCache[model] = {
+      node: mouth ? mouth.node : null, mid: mouth ? mouth.mid : null, normal: mouth ? mouth.normal : null,
+      enters: enters, lanes: mouths.map(function (m) { return laneOf(m, mpu, H); })
+    });
+  }
+  /* in a lane it may not stand in: every lane but that of the door it covers */
+  function blocksWay(way, box, f) {
+    var own = f.depth === 0 && f.type === 'd' ? f.via : null;
+    return way.lanes.some(function (l) { return l.node !== own && inLane(box, l); });
+  }
+  /* a dock this point can take: a way in from inside, no bay open to space,
+   * and the route here wide enough for its biggest ship */
+  function dockFits(m, f) {
+    return !!(m['in'] && !m.ob && fitsCls(m.cls || 'SM', minCls(m['in'], f.reach)));
   }
 
   /* ---- the plan ----------------------------------------------------------- */
@@ -294,15 +376,21 @@
     var liv = (ctx.port && ctx.port.livery) || 'civ';
     var R = function (label) { return hash01(key + '|' + ctx.model + '|' + label); };
     var sym = symmetry(ctx.model);
+    var way = res.way = wayIn(ctx.model, lib, H);
 
-    /* free points: {at, normal, type, cls, depth, size (max metres), slot (owner or -1), core idx} */
+    /* free points: {at, normal, type, cls, depth, size (max metres), slot (owner or -1), core idx,
+     *               reach (biggest class that gets here from the primary, inside, or null)} */
     var free = core.points.map(function (q) {
       /* the room growth-points.cjs measured: the biggest module that could
        * stand here is about as big as the larger of its depth and its width */
       var rm = q.room || [FREE_CORE * H, FREE_CORE * H, FREE_CORE * H, FREE_CORE * H, FREE_CORE * H];
       var size = Math.max(rm[0], Math.min(rm[1] + rm[2], rm[3] + rm[4])) * mpu;
-      return { at: q.at, normal: q.normal, type: q.hull ? 'h' : q.door ? 'd' : 'r', cls: q.cls || null,
-               depth: 0, size: size, room: rm, owner: -1, idx: q.i, used: false,
+      var type = q.hull ? 'h' : q.door ? 'd' : 'r';
+      return { at: q.at, normal: q.normal, type: type, cls: q.cls || null,
+               depth: 0, size: size, room: rm, owner: -1, idx: q.i,
+               via: q.via, reach: type === 'r' && way.enters[q.via] ? (q.cls || 'SM') : null,
+               /* never over the primary's own mouth */
+               used: type === 'd' && q.via === way.node,
                /* the NECK: the corridor cut from the berth route out through
                 * the wall to where the piece stands */
                from: q.from || null, neck: q.neck || 0 };
@@ -425,7 +513,7 @@
       if (who === 'union' && f.depth > 0 && !f.hub) return false;
       if (who === 'moonlighter' && f.depth > 1) return false;
       if (f.depth >= CHAIN_MAX && !f.hub) return false;
-      if (wantBerth) return f.type !== 'h';
+      if (wantBerth) return !!f.reach;    // a bay only where a ship gets in from the primary
       return true;
     });
     if (!pool.length) return 0;
@@ -459,7 +547,7 @@
         var oc = ownCand();
         if (oc.length) cand = oc;
       } else if (!cand.length && who !== 'scavenger') cand = ownCand();
-      if (wantBerth && f.cls === 'SM') cand = cand.filter(function (m) { return m.cls !== 'L'; });
+      if (wantBerth) cand = cand.filter(function (m) { return dockFits(m, f); });
       if (who === 'union') cand = biggest(cand);
       if (!cand.length) continue;
       /* The Union does not build the same block over and over when it has
@@ -478,6 +566,7 @@
       if (f.depth > 0 && f.owner >= 0 &&
           inVol(pl.box, core.box) > inVol(res.slots[f.owner].box, core.box) * 1.0001 + 1e-9) continue;
       if (alive.some(function (s) { return overlap(pl.box, s.box, 0.02); })) continue;
+      if (blocksWay(res.way, pl.box, f)) continue;
       /* the set: the Union builds every mirror at once; a moonlighter means
        * to and sometimes does not; a scavenger builds one */
       var group = [{ f: f, pl: pl }], wanted = 0;
@@ -490,8 +579,10 @@
           var fp = free.filter(function (x) { return x.owner < 0 && x.idx === j && !x.used; })[0];
           if (!fp || group.some(function (gq) { return gq.f === fp; })) return;
           wanted++;
+          if (wantBerth && !dockFits(mod, fp)) return;
           var pp = place(mod, fp.at, fp.normal, spin, mpu);
           if (!fitsCore(pp, fp, mpu, H)) return;
+          if (blocksWay(res.way, pp.box, fp)) return;
           if (alive.concat(group.map(function (gq) { return { box: gq.pl.box }; })).some(function (s) { return overlap(pp.box, s.box, 0.02); })) return;
           group.push({ f: fp, pl: pp });
         });
@@ -511,6 +602,9 @@
         var hub = mod.pass === 'L' && mod.door;
         var slot = { id: id, set: set, mod: mod, builder: who, at: gq.f.at, n: gq.f.normal, R: gq.pl.R, jc: gq.pl.jc,
                      box: gq.pl.box, parent: parent, depth: hub ? 0 : gq.f.depth + 1, point: gq.f.idx,
+                     /* what it stands on ('r' route, 'x' way on, 'd' door, 'h' hull), and the
+                      * biggest class that gets into it from the primary entrance, or null */
+                     via: gq.f.type, reach: mod['in'] && gq.f.reach ? minCls(mod['in'], gq.f.reach) : null,
                      t0: t, t1: t + dur * YEAR, strip: strip, hub: !!hub,
                      /* the corridor from the berth route to the piece, cut when
                       * the piece is: {from, to, cls}, port units */
@@ -522,7 +616,8 @@
         var child = Math.max.apply(null, mod.s) * CHILD_SHRINK;
         gq.pl.pts.forEach(function (q) {
           free.push({ at: q.at, normal: q.normal, type: q.type, cls: q.cls, depth: slot.depth, size: hub ? FREE_CORE * H * mpu : child,
-                      owner: id, used: false, hub: hub, from: q.from, neck: q.neck });
+                      owner: id, used: false, hub: hub, from: q.from, neck: q.neck,
+                      reach: slot.reach && (q.type === 'r' || q.type === 'x') ? minCls(q.cls || 'SM', slot.reach) : null });
         });
       });
       return group.length;
@@ -593,7 +688,9 @@
     symmetry: symmetry, place: place, overlap: overlap, mainAxis: mainAxis, AX_TOL: AX_TOL, UNION_BIG: UNION_BIG,
     UNION_AT: UNION_AT, MOON_AT: MOON_AT, CHAIN_MAX: CHAIN_MAX, CHILD_SHRINK: CHILD_SHRINK,
     T_START: T_START, T_END: T_END, YEAR: YEAR, DAY: DAY,
-    _clear: function () { planCache = {}; symCache = {}; }
+    wayIn: function (model) { var lib = portLib(model), P = points(model); return lib && P ? wayIn(model, lib, P.half || 1) : null; },
+    LANE_W: LANE_W, LANE_LEN: LANE_LEN,
+    _clear: function () { planCache = {}; symCache = {}; wayCache = {}; }
   };
   global.Growth = Growth;
   if (typeof module !== 'undefined' && module.exports) module.exports = Growth;
