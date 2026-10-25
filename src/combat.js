@@ -548,23 +548,32 @@
                  minDev: 0.45, minStanding: -100, minCrime: 0, grey: false,
                  pitch: 'Every warehouse in the system, sorted by who is desperate.' },
 
-    /* ---- survey instruments (mining rung 1, 2026-10-16) -------------------
-     * Astra: "scan planet for minerals and mining". What separates the two is
-     * the same thing that separates the hull and combat scanners: PRECISION.
-     * The cheap one says whether a deposit is poor or rich; the array says
-     * how many megatonnes, and the Mining Guild pays more for a survey taken
-     * with one. Both map the same swath - coverage is your orbit's work, not
-     * the instrument's. A utility slot, like every other receiver. */
+    /* ---- survey instruments (mining rung 1, 2026-10-16; graded 2026-10-21)
+     * Astra: "scan planet for minerals and mining", and then: "a grade 1
+     * scanner tells you where low grade minerals are, and grade 2 will tell
+     * you where fissiles are, and a grade 3 tells you where precious metals
+     * are." So the ladder is WHAT you can see, not only how precisely:
+     *   1  ores, water ice, hydrogen - reflectance, the cheap look;
+     *   2  + fissiles - a gamma spectrometer, and they give themselves away;
+     *   3  + rare metals, and the tonnage - the deep array.
+     * See survey.js CLASS. All three map the same swath - coverage is your
+     * orbit's work, not the instrument's. A utility slot, like every other
+     * receiver, and one group: carrying two is a slot spent to learn less. */
     surveyscan: { id: 'surveyscan', name: 'Survey scanner', slot: 'utility',
                   kind: 'survey', survey: 1, price: 6400, power: 0.8, mass: 1,
                   uniqueGroup: 'survey',
                   minDev: 0.25, minStanding: -100, minCrime: 0, grey: false,
-                  pitch: 'Maps what is under the ground you fly over. Poor or rich, not how much.' },
+                  pitch: 'Grade 1. Ore, ice and hydrogen, poor or rich. Blind to anything rarer.' },
+    gammasurvey: { id: 'gammasurvey', name: 'Gamma survey spectrometer', slot: 'utility',
+                   kind: 'survey', survey: 2, price: 13800, power: 1.4, mass: 2,
+                   uniqueGroup: 'survey',
+                   minDev: 0.40, minStanding: -100, minCrime: 0, grey: false,
+                   pitch: 'Grade 2. Adds the fissiles - they give themselves away.' },
     deepsurvey: { id: 'deepsurvey', name: 'Deep survey array', slot: 'utility',
-                  kind: 'survey', survey: 2, price: 23500, power: 2.0, mass: 3,
+                  kind: 'survey', survey: 3, price: 23500, power: 2.0, mass: 3,
                   uniqueGroup: 'survey',
                   minDev: 0.55, minStanding: 0, minCrime: 0, grey: false,
-                  pitch: 'The tonnage, not the adjective. The Guild pays for numbers.' },
+                  pitch: 'Grade 3. Rare metals too, and the tonnage. The Guild pays for numbers.' },
 
     /* GAS SKIMMER INTAKE (mining rung 3). Takes hydrogen out of a giant's
      * air as you fly through it - a RAM SCOOP on the nose, a mouth about
@@ -3498,7 +3507,8 @@
     return best;
   }
 
-  /* 0 no survey instrument, 1 the scanner, 2 the deep array (survey.js). */
+  /* The survey grade fitted: 0 none, 1 scanner, 2 gamma spectrometer, 3
+   * deep array (survey.js CLASS says what each reads). */
   function surveyLevel(ship) {
     var list = fittedList(ship), best = 0;
     for (var i = 0; i < list.length; i++) {

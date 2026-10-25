@@ -10,7 +10,9 @@
  *   - GROUND TRACK: an equatorial orbit maps a band, a polar one maps the
  *     world, and a frame several orbits long (time warp) maps what flying
  *     those orbits would have;
- *   - DATED: a survey's value falls with age, and the Guild pays once.
+ *   - DATED: a survey's value falls with age, and the Guild pays once;
+ *   - GRADED (2026-10-21): grade 1 reads ores, ice and hydrogen, grade 2 adds
+ *     fissiles, grade 3 adds rare metals - and pays, and digs, by that.
  */
 global.window = global.window || global;
 require('../src/vec3.js');
@@ -203,7 +205,7 @@ console.log('--- one array cell does not upgrade a scanner survey ---');
   LVL = 1;
   var s = flyOrbit(88, probeP * 12, probeP / 200);
   var scanOnly = Sv.value(s.rec, sys, s.rec.t);
-  LVL = 2;
+  LVL = 3;
   flyOrbit(88, probeP * 0.01, probeP / 400, s.G, s.tEnd + 1);
   LVL = 1;
   var rec3 = s.rec, now = rec3.t;
@@ -224,10 +226,85 @@ console.log('--- saved careers keep their value ---');
   var v1 = Sv.value({ key: k, cov: 0.8, t: 0, grade: 1, soldCov: 0 }, sys, 0);
   var v1n = Sv.value({ key: k, cov: 0.8, cov2: 0, soldCov2: 0, t: 0, grade: 1, soldCov: 0 }, sys, 0);
   check('an old array survey is worth what it was', v2 === v2n && v2 > 0, v2 + ' / ' + v2n);
-  check('an old scanner survey is worth what it was', v1 === v1n && v1 > 0, v1 + ' / ' + v1n);
+  check('an old scanner record prices the same split or not', v1 === v1n && v1 > 0, v1 + ' / ' + v1n);
   var old = { key: k, cov: 0.5, cells: polar.rec.cells, t: 0, grade: 2, soldCov: 0.2 };
   Sv.migrateRec(old);
   check('migrating an old array record carries its ground over', old.cov2 === 0.5 && old.cells2 === old.cells && old.soldCov2 === 0.2);
+})();
+
+console.log('--- grade 1 ore, grade 2 fissiles, grade 3 rare metals ---');
+(function () {
+  check('each commodity has its grade',
+        Sv.classOf('ores') === 1 && Sv.classOf('water') === 1 && Sv.classOf('hydrogen') === 1 &&
+        Sv.classOf('fissile') === 2 && Sv.classOf('rare') === 3);
+  /* A rocky world holding all three classes. */
+  var pick = null;
+  systems.some(function (sy) {
+    return sy.bodies.some(function (b) {
+      if (!turning(b)) return false;              // see turning, above
+      var by = {}; Sv.deposits(b, sy).forEach(function (r) { by[r.cid] = r.grade; });
+      if ((by.ores || 0) > 0.1 && (by.fissile || 0) > 0.1 && (by.rare || 0) > 0.1) { pick = { sys: sy, w: b }; return true; }
+      return false;
+    });
+  });
+  check('a rocky world with ore, fissiles and rare metals exists', !!pick);
+  if (!pick) return;
+  sys = pick.sys; world = pick.w;
+  var k = 'test:' + world.id;
+
+  LVL = 1;
+  var g1 = flyOrbit(88, probeP * 12, probeP / 200);
+  var r = g1.rec;
+  r.star = 'test';
+  check('grade 1 reads the ore', Sv.readable(r, 'ores'));
+  check('but not the fissiles or the rare metals', !Sv.readable(r, 'fissile') && !Sv.readable(r, 'rare'));
+  var v1 = Sv.value(r, sys, r.t);
+  var commons = Sv.value({ key: k, cov: r.cov, cov2: 0, covF: 0, soldCov: 0, soldCov2: 0, soldCovF: 0, t: r.t, tMean: r.tMean, v: 2, grade: 1 }, sys, r.t);
+  check('it sells for the common class only', v1 === commons && v1 > 0, v1 + ' cr');
+
+  LVL = 2;
+  flyOrbit(88, probeP * 12, probeP / 200, g1.G, g1.tEnd + 1);
+  check('grade 2 over the same ground reads the fissiles', Sv.readable(r, 'fissile') && r.grade === 2,
+        Math.round(Sv.covClass(r, 2) * 100) + '%');
+  check('still not the rare metals', !Sv.readable(r, 'rare'));
+  var v2 = Sv.value(r, sys, r.t);
+  check('and is worth more', v2 > v1, v1 + ' -> ' + v2);
+
+  LVL = 3;
+  flyOrbit(88, probeP * 12, probeP / 200, g1.G, g1.tEnd + probeP * 13);
+  check('grade 3 reads the rare metals, in tonnes', Sv.readable(r, 'rare') && Sv.arrayCov(r) > 0.8 && r.grade === 3,
+        Math.round(Sv.arrayCov(r) * 100) + '% by the array, grade ' + r.grade);
+  var v3 = Sv.value(r, sys, r.t);
+  check('and is worth the most', v3 > v2, v2 + ' -> ' + v3);
+  LVL = 1;
+
+  console.log('--- re-surveying sold ground at a higher grade ---');
+  var G = { here: { id: 'test' }, ship: { pos: null, vel: null, credits: 0 }, surveys: {} };
+  LVL = 1;
+  var s1 = flyOrbit(88, probeP * 12, probeP / 200, G);
+  s1.rec.star = 'test';
+  Sv.sell(G, sys, s1.rec.t);
+  check('a sold grade-1 survey has nothing left to sell', Sv.saleable(G, sys, s1.rec.t).length === 0);
+  LVL = 3;
+  flyOrbit(88, probeP * 12, probeP / 200, G, s1.tEnd + 1);
+  LVL = 1;
+  var again = Sv.saleable(G, sys, s1.rec.t);
+  check('flying it again at grade 3 has the fissiles and rare metals to sell', again.length === 1 && again[0].price > 0,
+        again.length ? again[0].price + ' cr' : 'none');
+
+  console.log('--- saves from before the grades ---');
+  var oldArr = { key: k, cov: 0.8, cells: g1.rec.cells, cov2: 0.8, cells2: g1.rec.cells, soldCov2: 0, t: 0, grade: 2, soldCov: 0 };
+  var before = Sv.value(oldArr, sys, 0);
+  Sv.migrateRec(oldArr);
+  check('an old deep-array record becomes grade 3 and reads everything',
+        oldArr.grade === 3 && oldArr.v === 2 && Sv.readable(oldArr, 'fissile') && Sv.readable(oldArr, 'rare'));
+  check('and is worth what it was', Sv.value(oldArr, sys, 0) === before && before > 0, before + ' cr');
+  var oldScan = { key: k, cov: 0.8, cells: g1.rec.cells, t: 0, grade: 1, soldCov: 0 };
+  var beforeS = Sv.value(oldScan, sys, 0);
+  Sv.migrateRec(oldScan);
+  check('an old scanner record stays grade 1 and reads the common class only',
+        oldScan.grade === 1 && Sv.readable(oldScan, 'ores') && !Sv.readable(oldScan, 'fissile') && !Sv.readable(oldScan, 'rare'));
+  check('priced the same before and after migrating', Sv.value(oldScan, sys, 0) === beforeS, beforeS + ' cr');
 })();
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
