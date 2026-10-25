@@ -138,13 +138,15 @@ ids.forEach(function (id) {
 console.log('--- where it goes ---');
 ids.forEach(function (id) {
   var site = Sites[id];
-  var n = 300, home = 0, onLand = 0, onKeep = 0, out = 0, spots = {}, quads = [0, 0, 0, 0];
+  var n = 300, home = 0, onLand = 0, onKeep = 0, out = 0, spots = {}, quads = [0, 0, 0, 0], skew = 0;
   for (var i = 0; i < n; i++) {
     var port = { id: 'c' + i, surface: true, dressing: { citySeed: (i + 0.5) / n } };
     var sp = R.citySpot(id, port);
     if (sp.home) { home++; continue; }
     spots[sp.x.toFixed(3) + ',' + sp.y.toFixed(3)] = 1;
-    quads[Math.floor(((sp.rot % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) / (Math.PI / 2)) % 4]++;
+    var qt = sp.rot / (Math.PI / 2);
+    if (Math.abs(qt - Math.round(qt)) > 1e-9) skew++;
+    quads[((Math.round(qt) % 4) + 4) % 4]++;
     /* EVERY CORNER OF EVERYTHING DRAWN - core, domes, tubes, drum, trunk -
      * through the same chains drawPortCity uses */
     var verts = [];
@@ -178,6 +180,9 @@ ids.forEach(function (id) {
   check(id + ': off everything standing on the site', onKeep === 0, onKeep + ' of ' + n);
   check(id + ': inside CITY_REACH, clear of the town dressing', out === 0, out + ' of ' + n);
   check(id + ': most ports find a place of their own', home < n * 0.05, home + ' stay where the art had it');
+  /* Astra, 2026-10-24: the building the domes connect to stands at a right
+   * angle to the other structures' walls - the slab turns in quarter turns */
+  check(id + ': the slab and its sheds stand square to the site', skew === 0, skew + ' at an angle');
   check(id + ': and the places differ', Object.keys(spots).length > n * 0.9 && quads.every(function (x) { return x > 0; }),
     Object.keys(spots).length + ' places, headings by quarter ' + quads.join('/'));
 });

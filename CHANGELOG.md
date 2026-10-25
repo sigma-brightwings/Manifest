@@ -561,6 +561,16 @@ Astra has seen it working.
   under the eave and is thicker than the tubes; nothing crosses anything;
   and every corner of everything drawn stays off the pad, the runway's
   line and the doors.
+  Same day, third pass: **the slab stands square to the site.** Astra:
+  "the building that the domes connect to must be at a right angle to the
+  other structures' walls; humans don't just put dotted lines on the
+  ground to denote a square and then put a big four sided building at an
+  angle to the lines." The slab, the tank, the sheds, the panels and the
+  mast now turn only in quarter turns, so every wall runs with the pad's,
+  the plates' and the markings'; the trunk leaves a shed wall square, so it
+  runs with them too. The domes are round and keep any heading, and their
+  tubes run where the domes are. All four quarter turns are used.
+  `test/city-sites.test.js`, 113 checks.
 - **2026-10-21: the comms channel fits a short window.** A port's ten
   options at a fixed 38 px a row printed over the traffic log in a short
   window, and the notes beside them ran off the right edge. The channel

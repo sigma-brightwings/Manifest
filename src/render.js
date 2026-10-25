@@ -1094,6 +1094,15 @@
     return null;
   }
 
+  /* SQUARE TO THE SITE. Astra: "the building that the domes connect to
+   * must be at a right angle to the other structures' walls; humans don't
+   * just put dotted lines on the ground to denote a square and then put a
+   * big four sided building at an angle to the lines." The slab and its
+   * sheds turn only in quarter turns, so every wall runs with the pad's,
+   * the plates' and the markings'. The domes are round and keep any
+   * heading; the tubes run where the domes are. */
+  function squareTurn(rnd) { return Math.floor(rnd() * 4) * (Math.PI / 2); }
+
   /* Every piece, turned and slid, clear of the site and close to it. */
   function piecesFit(pieces, rot, x, y, cx, cy, blocks, near) {
     var cs = Math.cos(rot), sn = Math.sin(rot), close = false;
@@ -1145,7 +1154,7 @@
       if (!lay) continue;
       var pcx = (site.core[0] + site.core[3]) / 2, pcy = (site.core[1] + site.core[4]) / 2;
       for (t = 0; t < CITY_TRIES && !spot; t++) {
-        var rot = rnd() * Math.PI * 2;
+        var rot = squareTurn(rnd);
         var r = Math.sqrt(rnd()) * CITY_REACH, a = rnd() * Math.PI * 2;
         var x = Math.cos(a) * r, y = Math.sin(a) * r;
         if (piecesFit(lay.pieces, rot, x, y, pcx, pcy, blocks, near)) spot = { rot: rot, x: x, y: y, cx: pcx, cy: pcy, home: false, layout: lay };
@@ -1154,7 +1163,7 @@
     /* none would go: the city whole, as the art laid it out */
     var whole = [[c[0], c[1], c[3], c[4]]];
     for (t = 0; t < CITY_TRIES && !spot; t++) {
-      var rot2 = rnd() * Math.PI * 2;
+      var rot2 = squareTurn(rnd);
       var r2 = Math.sqrt(rnd()) * CITY_REACH, a2 = rnd() * Math.PI * 2;
       var x2 = Math.cos(a2) * r2, y2 = Math.sin(a2) * r2;
       if (piecesFit(whole, rot2, x2, y2, cx, cy, blocks, near)) spot = { rot: rot2, x: x2, y: y2, cx: cx, cy: cy, home: false, layout: null };
