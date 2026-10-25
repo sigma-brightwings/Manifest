@@ -946,6 +946,9 @@
     G.paused = false;
     G.keys = {};
     G.ship.thrust = V.zero();
+    /* The red tear you leave behind, for anyone (you included) who comes
+     * back within sixteen hours. */
+    leaveOwnWake('departure');
 
     G.hyper = {
       plan: plan,
@@ -1066,6 +1069,7 @@
         hy.swapped = true;
         G.t = hy.arriveT;
         enterSystem(hy.plan.to, { arrive: true });
+        leaveOwnWake('arrival');
       }
     } else {
       hy.phase = 'exit';
@@ -1172,6 +1176,7 @@
       hy.departT = G.t - cor.crossSeconds;
       hy.swapped = true;
       enterSystem(hy.plan.to, { arrive: true });
+      leaveOwnWake('arrival');
     }
     return true;
   }
@@ -6549,7 +6554,7 @@
     var hyperOwns = G.hyper && (G.hyper.phase === 'tunnel' ||
                                 (G.hyper.phase === 'exit' && !((G.hyper.u || 0) >= 0.3 && G.hyper.swapped)));
     if (hyperOwns) {
-      Render.drawHyperspace(ctx, w, h, G.hyper, false);
+      drawHyperTear(ctx, w, h, false);
       if (G.viewMode === 'cockpit') drawCockpitView(ctx, cam, w, h);
       else drawShip(ctx, cam);
       drawHUD(ctx, w, h);
@@ -6586,6 +6591,17 @@
     var cruiseBeta = G.cruise ? G.cruise.speed / Render.C_KMS : 0;
     var warpOwnsSky = cruiseBeta >= Render.CRUISE_SKY_BETA;
     var gpuSky = glLive();
+    /* THE TEARS, before the sky: the lens bends the stars and the planets,
+     * so it has to be set before either is drawn (2026-10-21). Same gate as
+     * drawWakes — the traffic toggle, and never indoors. */
+    G._frameTears = null;
+    if (gpuSky && global.GLWorld.tears && G.showTraffic && !inside && !buried) {
+      G._frameTears = frameTears(cam);
+      global.GLWorld.setTears(G._frameTears.map(function (ft) {
+        return { dir: ft.ts.dir, E: ft.ts.thetaE, arrival: ft.ts.arrival, open: ft.ts.open,
+                 dist: ft.ts.dist };
+      }));
+    }
     if (!buried && !inside) {
       if (gpuSky) global.GLWorld.drawStars(cam, G.cruise ? G.ship.fwd : null, cruiseBeta);
       else if (!warpOwnsSky) Render.drawStarfield(ctx, cam, G.stars);
@@ -6828,7 +6844,7 @@
       var nose = G.ship && cam.projectDir ? cam.projectDir(G.ship.fwd) : null;
       G.hyper.cx = nose ? nose.x : w / 2;
       G.hyper.cy = nose ? nose.y : h / 2;
-      Render.drawHyperspace(ctx, w, h, G.hyper, true);
+      drawHyperTear(ctx, w, h, true);
     }
 
     if (G.viewMode === 'cockpit') drawCockpitView(ctx, cam, w, h);
@@ -7265,8 +7281,104 @@
     return best;
   }
 
+  /* The jump's rift, drawn by Render.drawHyperspace, with its veil handed to
+   * the world layer when there is one (Render.drawTearRift). Fifty metres
+   * out: in front of everything in the world, behind your own cockpit. */
+  function drawHyperTear(ctx, w, h, overlay) {
+    var hy = G.hyper;
+    hy.gpuTears = !!(glLive() && global.GLWorld.tears);
+    hy.gpuTear = null;
+    Render.drawHyperspace(ctx, w, h, hy, overlay);
+    var t = hy.gpuTear;
+    if (t && hy.gpuTears) {
+      global.GLWorld.queueTear({ x: t.x, y: t.y, depth: 0.05, E: t.E, W: t.W, H: t.H,
+                                 roll: t.roll, arrival: t.arrival, open: 1, glow: t.glow,
+                                 time: performance.now() / 1000 });
+    }
+  }
+
+  /* ---- YOUR OWN TEARS (2026-10-21) ----------------------------------------
+   * The timetable's wakes are everybody else's. Yours are real too: the red
+   * tear you leave where you jumped from, and the blue one you come out of,
+   * which hangs behind you as you fly away from it. Visual only — nobody
+   * scans their own wake — and not saved: a reload is a fresh look at the
+   * sky. They decay on the same curve as any other (Slip.wakeDecay) and
+   * are gone in sixteen hours. */
+  var OWN_WAKE_MAX = 8;
+  var POLE = { x: 0, y: 0, z: 1 };
+  function leaveOwnWake(kind) {
+    if (!G.ship || !G.here || !G.sys) return;
+    var full = Slip.wakeRadius(Slip.allUpMass(G.ship));
+    var sunPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
+    /* The rip opens ahead of the nose going in, and you come out of it, so
+     * an arrival's hangs behind you. A cloud tens of thousands of km
+     * across, so it sits well clear of the hull rather than on it. */
+    var at = V.addScaled(G.ship.pos, G.ship.fwd, (kind === 'departure' ? 1.5 : -1.5) * full);
+    var list = G.ownWakes || (G.ownWakes = []);
+    list.push({ own: true, kind: kind, starId: G.here.id, t0: G.t,
+                rel: V.sub(at, sunPos), radiusFull: full,
+                id: 'own:' + kind + ':' + G.here.id + ':' + Math.round(G.t) });
+    while (list.length > OWN_WAKE_MAX) list.shift();
+  }
+  function ownWakesNow() {
+    var src = G.ownWakes, out = [];
+    if (!src || !src.length || !G.here) return out;
+    for (var i = 0; i < src.length; i++) {
+      var o = src[i], age = G.t - o.t0;
+      if (o.starId !== G.here.id || age < 0 || age >= Slip.WAKE_LIFE) continue;
+      var dec = Slip.wakeDecay(age);
+      out.push({ own: true, id: o.id, kind: o.kind, age: age, decay: dec, glow: dec,
+                 rel: o.rel, radius: o.radiusFull * (0.25 + 0.75 * dec) });
+    }
+    return out;
+  }
+
+  /* Every tear in view this frame, worked out ONCE, before the sky is drawn:
+   * the stars need the lenses before anything else is on the screen, and
+   * drawWakes reuses the same list for the clouds and the lightning. */
+  function wakeDepth() {
+    var deep = 0;
+    var dom = Sim.dominantBody(G.ship.pos, G.sys, G.t);
+    if (dom && dom.kind !== 'star' && dom.radius) {
+      var alt = V.dist(Sim.bodyPosition(dom, G.sys, G.t), G.ship.pos) - dom.radius;
+      deep = Math.max(0, Math.min(1, 1 - alt / (2 * dom.radius)));
+    }
+    return deep;
+  }
+  function frameTears(cam) {
+    var list = wakesNow().concat(ownWakesNow());
+    if (!list.length) return [];
+    var sunPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
+    var radius = Slip.jumpRingRadius(G.sys);
+    var deep = wakeDepth(), out = [];
+    for (var i = 0; i < list.length; i++) {
+      var w = list[i];
+      var pos = w.own ? V.add(sunPos, w.rel) : Slip.wakePosition(w, sunPos, radius);
+      var ts = Render.tearScreen(cam, pos, w, w.radius || 30000, deep, POLE);
+      if (ts && ts.glow > 0.004) out.push({ w: w, pos: pos, ts: ts });
+    }
+    return out;
+  }
+
   function drawWakes(ctx, cam) {
-    var list = wakesNow();
+    /* THE WORLD LAYER'S TEARS: lens set before the stars (see draw), the
+     * cloud and veil and the lightning queued here for gl.js to draw at
+     * each tear's depth. The labels stay 2D. */
+    if (G._frameTears) {
+      var nowS = performance.now() / 1000;
+      for (var t = 0; t < G._frameTears.length; t++) {
+        var ft = G._frameTears[t], ts = ft.ts;
+        global.GLWorld.queueTear({ x: ts.x, y: ts.y, depth: ts.depth, E: ts.E, W: ts.W, H: ts.H,
+                                   roll: ts.roll, arrival: ts.arrival, open: ts.open,
+                                   glow: ts.glow, time: nowS });
+        global.GLWorld.queueBolts(Render.tearBolts(ft.w.id, nowS, ts),
+                                  ts.arrival ? Render.BOLT_TINT_ARRIVE : Render.BOLT_TINT_DEPART,
+                                  ts.depth);
+        if (!ft.w.own) labelWake(ctx, ft.w, ft.pos, ts);
+      }
+      return;
+    }
+    var list = wakesNow().concat(ownWakesNow());
     if (!list.length) return;
     var sunPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
     var radius = Slip.jumpRingRadius(G.sys);
@@ -7295,16 +7407,21 @@
 
     for (var i = 0; i < list.length; i++) {
       var w = list[i];
-      var pos = Slip.wakePosition(w, sunPos, radius);
+      var pos = w.own ? V.add(sunPos, w.rel) : Slip.wakePosition(w, sunPos, radius);
       var p = Render.drawWake(ctx, cam, pos, w, w.radius || 30000, now, deep);
-      if (!p) continue;
+      if (!p || w.own) continue;
+      labelWake(ctx, w, pos, p);
+    }
+  }
 
+  function labelWake(ctx, w, pos, p) {
+    {
       /* Label it only once it is worth reading. A sky full of permanently
        * captioned smudges would be noise; a caption appearing as you close
        * on one is the instrument doing its job in front of you. */
       var d = V.dist(pos, G.ship.pos);
       var read = Slip.scanWake(w, d);
-      if (!read.inRange) continue;
+      if (!read.inRange) return;
 
       /* On its own dark backing, and offset clear of the cloud.
        *

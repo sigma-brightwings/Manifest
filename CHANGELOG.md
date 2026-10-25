@@ -384,6 +384,77 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
     - *What doesn't:* scan fidelity still reads the old `strength`, so
       nothing in the wake-hunting balance moves.
 
+- **Tears bend light, boil and throw lightning (2026-10-21).** Built
+  from a mockup Astra signed off ("wake glow and stuff are great. Let's
+  implement them, arrival and departure, and then we should work those
+  clouds into what we see as we reach our slipspace destination"). On
+  the world layer a wake is now drawn by gl.js; the old 2D cloud stays
+  as the fallback for machines without it.
+  - **Lensing:** a tear is a point-mass lens. Up to four a frame bend
+    the sky. Stars move outward and brighten, and a second pass draws
+    each star's faint second image across the tear. Planets bend too,
+    since they are ray-cast per pixel and their view ray is bent before
+    the sphere test. Ships and stations are not bent. The lens is tied to
+    the cloud's size, so it shrinks as the wake decays.
+  - **Shift:** what is seen near a departure tear is redshifted, near an
+    arrival blueshifted.
+  - **The tear itself:** a brighter glow, then a churning veil filling
+    the rip that hides whatever is behind it. The veil is dark and
+    smouldering for a departure, lit from inside for an arrival
+    (brighter than the space round it). The lips of the rip burn.
+  - **Lightning, its own shader:** forked bolts built on the CPU cross
+    the dark gap from the cloud on one side to the cloud on the other.
+    Each re-flashes two to four times down its channel, like a real
+    stroke. Arrival bolts are thicker, more forked and reach further:
+    "very large, angry bolts of plasma discharge jumping the gap". No
+    lightning on a mote under about ten pixels.
+  - **The jump itself:** the red rift opening ahead in the charge and the
+    blue way out at the end of the tunnel are cut out of the 2D picture,
+    and the world layer draws the same veil through the hole. So you go
+    in through a boiling dark cloud and come out through a lit blue one,
+    with the lightning across it.
+  - **Your own tears:** jumping leaves a red tear ahead of where you
+    were, and you come out of a blue one that hangs behind you. Both
+    decay like any other wake and are gone in sixteen hours. Visual
+    only, and not saved.
+  - **Lore,** in Astra's words, which is why nothing radiates forward:
+    "we're not creating a bubble of superluminal space which carries
+    particles, we're tearing space a new arsehole and punching our ship
+    into the dimension which holds up 4D spacetime, beneath physics
+    itself. Nobody knows why."
+  - **Stations and ships bend too (second pass, same day).** Astra: "I
+    do want the thing to lens planets and stations alike." Hulls are
+    triangles with no per-pixel ray, so each vertex is moved to where
+    its image is seen (`tearPush` in the mesh shader) and shifted red or
+    blue like everything else.
+  - **Only what is behind a tear bends.** Each tear now carries its
+    distance. A planet, station or ship nearer than the tear (your own
+    cockpit included) is left alone, with a short blend across the
+    tear's own distance. Planets in front used to be bent too.
+  - **A bent planet's drawing square** grows by an Einstein radius, so
+    its pushed-out edge is no longer cut off flat.
+  - **Lightning on the tunnel walls.** Astra: "we need to make the
+    lightning stick to the inside walls of the tunnel." Each strike lives
+    in tunnel coordinates (angle round the tube, depth). Its main channel
+    crawls round the inside of the tube, riding toward you with the wall
+    rings, and its forks reach along the tube. It is coloured like the
+    walls (blue-violet ahead, red once beside you) and drawn bigger the
+    nearer it is. It clings rather than strikes: half a second to a
+    second, re-flashing three to six times, never dropping below a
+    visible glow until it dies.
+  - **A bit more lensing.** Astra: "a bit more lensing." Lens strength
+    is now its own knob, `TEAR_LENS_GAIN` (1.55) in render.js, applied to
+    the bending angle only. The cloud, slit and lightning keep their
+    size, so the sky bends 1.55× harder round a tear of the same size.
+    1.8 was tried first; it warped planets well clear of the tear.
+  - **Known limits:** a planet still gets no second image, and a coarse
+    hull bends as straight-edged facets.
+  - *Tests:* new `test/tear.test.js` (29 checks). It covers the lens
+    equation both ways and pins the shader text. It also checks screen
+    size against the 2D cloud's floor and cap, that the slit follows the
+    pole, and that every bolt crosses the gap, with arrivals thicker,
+    more forked and longer.
+
 - **Every ship type is for sale, and shipyards build large ones to order
   (2026-10-19).** Astra: *"I also want the player to be able to purchase
   ANY ship type, but only at shipyards can you get a customized L size

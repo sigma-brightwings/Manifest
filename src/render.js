@@ -7284,6 +7284,215 @@
     return (h >>> 0) / 4294967296;
   }
 
+  /* ======================================================================
+   * TEARS ON THE GPU: LENS, VEIL AND LIGHTNING (2026-10-21)
+   * ======================================================================
+   * Astra signed off a mockup and asked for it in the game, arrival and
+   * departure both. On the world layer a wake is now drawn by gl.js
+   * (GL.setTears for the lens, GL.queueTear for the cloud, veil and lips,
+   * GL.queueBolts for the lightning, which is its own shader); drawWake
+   * below stays as the complete 2D fallback. This block is the arithmetic
+   * both sides share, in plain JS so node can test it.
+   *
+   * Lore, in Astra's words, which is why nothing here radiates forward or
+   * carries particles: "we're not creating a bubble of superluminal space
+   * which carries particles, we're tearing space a new arsehole and
+   * punching our ship into the dimension which holds up 4D spacetime,
+   * beneath physics itself. Nobody knows why." */
+
+  /* The point-mass lens. A source at angle beta from the lens, with
+   * Einstein angle E, is seen at two places on the line through the lens:
+   * `plus` on its own side (brighter) and `minus` on the far side (negative
+   * = across the lens). mu are the magnifications. VERT_STARS in gl.js is
+   * this, line for line. */
+  function lensImages(beta, E) {
+    var root = Math.sqrt(beta * beta + 4 * E * E);
+    var u = beta / E;
+    var m = (u * u + 2) / (2 * u * Math.sqrt(u * u + 4));
+    return { plus: 0.5 * (beta + root), minus: 0.5 * (beta - root),
+             muPlus: m + 0.5, muMinus: m - 0.5 };
+  }
+  /* And backwards, for a view ray (planets): where did light seen at
+   * theta come from? */
+  function lensSource(theta, E) { return theta - E * E / theta; }
+
+  /* Where a tear is on screen and how big each part of it is, in pixels.
+   * The cloud's radius `r` follows drawWake exactly — same floor, same cap —
+   * so a wake is the same size on both renderers; the Einstein radius is
+   * tied to it (the glow reaches 1/e at about r), so the lens shrinks with
+   * the cloud as the wake decays. `pole` is the system's up: the slit runs
+   * along it on screen. TEAR_LENS_GAIN scales only the bending (thetaE),
+   * not the cloud or slit, so lens strength is tuned apart from size. */
+  var TEAR_E_PER_R = 1 / 2.4;
+  var TEAR_LENS_GAIN = 1.55;
+  function tearScreen(cam, pos, wake, size, deep, pole) {
+    var p = cam.project(pos);
+    if (!p) return null;
+    if (p.x < -400 || p.x > cam.w + 400 || p.y < -400 || p.y > cam.h + 400) return null;
+    deep = Math.max(0, Math.min(1, deep || 0));
+    var floor = 2.2 + Math.min(3.2, size / 22000);
+    var r = Math.max(floor, Math.min(Math.min(cam.w, cam.h) * 0.10, size * p.scale));
+    r *= 1 + 0.6 * deep;
+    var open = wake.decay !== undefined ? wake.decay
+      : Math.max(0, 1 - (wake.age || 0) / (wake.life || 57600));
+    var glow = wake.glow !== undefined ? wake.glow : wake.strength;
+    glow = Math.max(0, Math.min(1.4, (glow || 0) * (1 + 0.8 * deep)));
+    var E = r * TEAR_E_PER_R;
+    var H = E * 1.5 + 4, W = (E * 0.40 + 1.5) * open;
+    /* The slit's direction on screen: the pole, projected at the tear. */
+    var along = [0, -1];
+    if (pole) {
+      var q = cam.project({ x: pos.x + pole.x * size, y: pos.y + pole.y * size, z: pos.z + pole.z * size });
+      if (q) {
+        var ax = q.x - p.x, ay = q.y - p.y, al = Math.sqrt(ax * ax + ay * ay);
+        if (al > 1e-6) along = [ax / al, ay / al];
+      }
+    }
+    var dx = pos.x - cam.eye.x, dy = pos.y - cam.eye.y, dz = pos.z - cam.eye.z;
+    var dl = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+    return {
+      x: p.x, y: p.y, depth: p.depth, r: r, E: E, W: W, H: H,
+      roll: [along[1], -along[0]],            // the across-the-slit axis
+      arrival: wake.kind === 'arrival', open: open, glow: glow,
+      thetaE: E * TEAR_LENS_GAIN / cam.flen,
+      dist: dl,                               // km: only what is beyond this bends
+      dir: { x: dx / dl, y: dy / dl, z: dz / dl }
+    };
+  }
+
+  /* ---- the lightning ----------------------------------------------------
+   * Astra: "more like lightning, forked, and coming from the churning
+   * cloud", "the energy should cross the dark space, not align with it",
+   * and for an arrival "very large, angry bolts of plasma discharge jumping
+   * the gap". A bolt is built once, in units of the slit's half-height,
+   * x across the rip and y along it: a jagged main channel from the cloud
+   * on one side to the cloud on the other, plus forks. It re-flashes down
+   * the same channel two to four times, like a real stroke, and dies.
+   * Visual only, so Math.random is fine — nothing about a system depends
+   * on where a spark went. `rnd` can be passed in for a test. */
+  function jagLine(a, b, rough, depth, rnd) {
+    var pts = [a, b];
+    for (var lvl = 0; lvl < depth; lvl++) {
+      var nx = [pts[0]];
+      for (var i = 0; i < pts.length - 1; i++) {
+        var p = pts[i], q = pts[i + 1];
+        var dx = q[0] - p[0], dy = q[1] - p[1], L = Math.sqrt(dx * dx + dy * dy) || 1e-9;
+        var off = (rnd() - 0.5) * L * rough;
+        nx.push([(p[0] + q[0]) / 2 - dy / L * off, (p[1] + q[1]) / 2 + dx / L * off], q);
+      }
+      pts = nx;
+    }
+    return pts;
+  }
+  function makeBolt(Wn, arrival, rnd) {
+    rnd = rnd || Math.random;
+    var side = rnd() < 0.5 ? -1 : 1;
+    var y0 = rnd() * 1.5 - 0.75;
+    var reachA = arrival ? 3.2 + rnd() * 2.2 : 1.5 + rnd() * 1.2;
+    var reachB = arrival ? 3.2 + rnd() * 2.2 : 1.5 + rnd() * 1.2;
+    var a = [-side * Wn * reachA, y0];
+    var b = [side * Wn * reachB, y0 + (rnd() - 0.5) * (arrival ? 0.8 : 0.45)];
+    var main = jagLine(a, b, arrival ? 0.75 : 0.55, arrival ? 6 : 5, rnd);
+    var branches = [{ pts: main, core: arrival ? 2.6 : 1.5, halo: arrival ? 9 : 7, k: 1 }];
+    var nf = arrival ? 2 + Math.floor(rnd() * 3)
+                     : 1 + (rnd() < 0.6 ? 1 : 0) + (rnd() < 0.25 ? 1 : 0);
+    var span = Math.sqrt((b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1]));
+    for (var f = 0; f < nf; f++) {
+      var i0 = Math.floor(main.length * (0.2 + rnd() * 0.6));
+      var o = main[i0], nxt = main[Math.min(main.length - 1, i0 + 3)];
+      var dx = nxt[0] - o[0], dy = nxt[1] - o[1], L = Math.sqrt(dx * dx + dy * dy) || 1e-9;
+      var ang = (rnd() < 0.5 ? -1 : 1) * (0.35 + rnd() * 0.6);
+      var c = Math.cos(ang), s = Math.sin(ang);
+      var len = span * (0.2 + rnd() * 0.35);
+      var ex = [o[0] + (dx * c - dy * s) / L * len, o[1] + (dx * s + dy * c) / L * len];
+      branches.push({ pts: jagLine(o, ex, arrival ? 0.75 : 0.6, arrival ? 5 : 4, rnd),
+                      core: arrival ? 1.7 : 1.0, halo: arrival ? 6 : 4.5, k: arrival ? 0.8 : 0.65 });
+    }
+    var flashes = [], t = 0, n = 2 + Math.floor(rnd() * 3);
+    for (var j = 0; j < n; j++) { flashes.push([t, 0.035 + rnd() * 0.04]); t += 0.05 + rnd() * 0.08; }
+    return { branches: branches, flashes: flashes, life: t + 0.05, age: 0 };
+  }
+  function boltLevel(bt) {
+    var v = 0;
+    for (var j = 0; j < bt.flashes.length; j++) {
+      var f = bt.flashes[j], u = (bt.age - f[0]) / f[1];
+      if (u >= 0 && u < 1) v = Math.max(v, (1 - u) * (j === 0 ? 1 : 0.75));
+    }
+    return Math.max(v, 0.12 * Math.max(0, 1 - bt.age / bt.life));
+  }
+
+  /* The live strikes on each tear, keyed by the caller (a wake id, or
+   * 'slip-exit'). Wall clock, not sim time: lightning is something your
+   * eye sees, and time warp should not turn it into a strobe. Returns the
+   * strokes as screen-pixel polylines, ready for GL.queueBolts or
+   * drawBolts2D. `t` is a tearScreen result (or anything with the same
+   * x, y, W, H, roll, arrival, open, glow). */
+  var TEAR_BOLTS = {}, TEAR_BOLT_SWEEP = 0;
+  function tearBolts(key, now, t) {
+    var st = TEAR_BOLTS[key];
+    if (!st) st = TEAR_BOLTS[key] = { bolts: [], last: now };
+    var dt = Math.max(0, Math.min(0.1, now - st.last));
+    st.last = now;
+    if (now - TEAR_BOLT_SWEEP > 2) {
+      TEAR_BOLT_SWEEP = now;
+      for (var k in TEAR_BOLTS) if (now - TEAR_BOLTS[k].last > 3) delete TEAR_BOLTS[k];
+    }
+    var arr = !!t.arrival;
+    /* No lightning on a mote: below about ten pixels it would be noise. */
+    var live = t.glow > 0.02 && t.open > 0.03 && t.H >= 10;
+    if (live && st.bolts.length < (arr ? 4 : 3) && Math.random() < dt * (arr ? 11 : 7) * t.open) {
+      st.bolts.push(makeBolt(Math.max(0.05, t.W / t.H), arr));
+    }
+    for (var i = st.bolts.length - 1; i >= 0; i--) {
+      st.bolts[i].age += dt;
+      if (st.bolts[i].age > st.bolts[i].life) st.bolts.splice(i, 1);
+    }
+    if (!live || !st.bolts.length) return [];
+    var H = t.H, rx = t.roll[0], ry = t.roll[1], ux = -ry, uy = rx;
+    /* Widths were tuned on a slit about 56 px tall. */
+    var wsc = Math.max(0.4, Math.min(2, H / 56)) * (0.55 + 0.45 * t.open);
+    var out = [];
+    for (var b = 0; b < st.bolts.length; b++) {
+      var bt = st.bolts[b];
+      var lvl = boltLevel(bt) * t.open * Math.min(1.2, t.glow + 0.3) * (arr ? 1.5 : 1.6);
+      if (lvl <= 0.003) continue;
+      for (var j = 0; j < bt.branches.length; j++) {
+        var br = bt.branches[j], pts = new Array(br.pts.length);
+        for (var m = 0; m < br.pts.length; m++) {
+          var lx = br.pts[m][0] * H, ly = br.pts[m][1] * H;
+          pts[m] = [t.x + lx * rx + ly * ux, t.y + lx * ry + ly * uy];
+        }
+        out.push({ pts: pts, core: br.core * wsc, halo: br.halo * wsc, I: lvl * br.k });
+      }
+    }
+    return out;
+  }
+  var BOLT_TINT_DEPART = [1.0, 0.55, 0.32], BOLT_TINT_ARRIVE = [0.45, 0.65, 1.0];
+
+  /* The same strokes on a 2D canvas: the fallback renderer, and inside the
+   * slipspace tunnel, which is drawn in 2D over the world layer. */
+  function drawBolts2D(ctx, polys, tint) {
+    if (!polys || !polys.length) return;
+    var tc = Math.round(tint[0] * 255) + ',' + Math.round(tint[1] * 255) + ',' + Math.round(tint[2] * 255);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    for (var pass = 0; pass < 3; pass++) {
+      for (var i = 0; i < polys.length; i++) {
+        var p = polys[i], a = Math.min(1, p.I);
+        ctx.strokeStyle = pass === 0 ? 'rgba(' + tc + ',' + (0.10 * a).toFixed(3) + ')'
+                        : pass === 1 ? 'rgba(' + tc + ',' + (0.35 * a).toFixed(3) + ')'
+                        : 'rgba(255,248,240,' + (0.95 * a).toFixed(3) + ')';
+        ctx.lineWidth = pass === 0 ? p.halo * 2.2 : pass === 1 ? p.halo * 0.8 : Math.max(1, p.core * 1.2);
+        ctx.beginPath();
+        ctx.moveTo(p.pts[0][0], p.pts[0][1]);
+        for (var k = 1; k < p.pts.length; k++) ctx.lineTo(p.pts[k][0], p.pts[k][1]);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
   /* `size` is the wake's world radius in km; the caller decides that, since
    * it knows the scale of the system it is standing in. */
   function drawWake(ctx, cam, pos, wake, size, tSec, deep) {
@@ -8143,6 +8352,134 @@
     ctx.restore();
   }
 
+  /* THE JUMP'S OWN TEAR, WITH THE WAKE'S CLOUD IN IT (2026-10-21).
+   * Astra: "work those clouds into what we see as we reach our slipspace
+   * destination." When the world layer can draw a tear, the rift you jump
+   * through is the same thing a wake is: the opening is cut out of the 2D
+   * picture and gl.js draws the veil through the hole — dark and smouldering
+   * going in, lit from inside coming out — while the lips and the lightning
+   * are drawn here on top, so the tunnel walls cannot hide them. main.js
+   * queues the GPU half off `hyper.gpuTear`. */
+  function hyperNow() {
+    return (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()) / 1000;
+  }
+  function drawTearRift(ctx, cx, cy, H, W, alpha, t, hyper, arrival) {
+    if (H < 1 || alpha <= 0.002) return;
+    var pal = arrival ? RIFT_BLUE : RIFT_RED;
+    var gr = ctx.createRadialGradient(cx, cy, 0, cx, cy, H * 1.6);
+    gr.addColorStop(0, rgba(pal.edge, (arrival ? 0.45 : 0.32) * alpha));
+    gr.addColorStop(1, rgba(pal.edge, 0));
+    ctx.fillStyle = gr;
+    ctx.fillRect(cx - H * 1.6, cy - H * 1.6, H * 3.2, H * 3.2);
+    /* The opening: not painted, cut. Whatever the world layer draws there
+     * is what you see through the tear. */
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-out';
+    riftPath(ctx, cx, cy, H, W, t);
+    ctx.fillStyle = 'rgba(0,0,0,' + Math.min(1, alpha * 1.2).toFixed(3) + ')';
+    ctx.fill();
+    ctx.restore();
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineJoin = 'round';
+    var passes = [[16, 0.14, pal.edge], [6, 0.40, pal.edge], [2, 0.95, pal.hot]];
+    for (var q = 0; q < passes.length; q++) {
+      riftPath(ctx, cx, cy, H, W, t);
+      ctx.strokeStyle = rgba(passes[q][2], passes[q][1] * alpha);
+      ctx.lineWidth = passes[q][0];
+      ctx.stroke();
+    }
+    ctx.restore();
+    /* The GPU's veil a little wider than the cut, so its billowing edge is
+     * what meets the lips rather than a hard line. */
+    var tear = { x: cx, y: cy, H: H, W: W * 1.3, E: H / 1.5, roll: [1, 0],
+                 arrival: arrival, open: 1, glow: Math.min(1, alpha) };
+    hyper.gpuTear = tear;
+    drawBolts2D(ctx, tearBolts(arrival ? 'slip-exit' : 'slip-entry', hyperNow(),
+                               { x: cx, y: cy, W: W, H: H, roll: [1, 0], arrival: arrival,
+                                 open: 1, glow: Math.min(1, alpha) }),
+                arrival ? BOLT_TINT_ARRIVE : BOLT_TINT_DEPART);
+  }
+
+  /* LIGHTNING THAT CLINGS TO THE TUNNEL WALLS (2026-10-21).
+   * Astra: "we need to make the lightning stick to the inside walls of the
+   * tunnel." Each strike lives on the wall: its main channel crawls round
+   * the inside of the tube at one depth, riding toward you with the ragged
+   * wall rings (the same 0.22 a second they move at), and its forks reach
+   * along the tube toward the neighbouring ring. Coloured like the walls
+   * themselves — blue-violet ahead, red once it is beside you — and drawn
+   * bigger the nearer it is. Built once per strike, in tunnel coordinates
+   * (angle round the tube, depth u), so it stays stuck to the wall as the
+   * tube spins and streams past. Visual only: Math.random. */
+  var TUNNEL_BOLTS = { list: [], last: null };
+  function makeWallBolt(T) {
+    var rnd = Math.random;
+    /* On the nearer walls, where the tube is wide enough for a strike to
+     * read: deep in the tube it is a few pixels across. */
+    var u0 = 0.45 + rnd() * 0.45, a0 = rnd() * Math.PI * 2;
+    var span = (0.5 + rnd() * 1.1) * (rnd() < 0.5 ? -1 : 1);
+    var N = 22, main = [];
+    var du = 0, dr = 0;
+    for (var i = 0; i <= N; i++) {
+      du += (rnd() - 0.5) * 0.012; du *= 0.85;      // wanders a little in depth
+      dr = (rnd() - 0.5) * 0.06;                    // and hugs the wall, ragged
+      main.push({ a: a0 + span * i / N, du: du, dr: dr });
+    }
+    var forks = [], nf = 1 + Math.floor(rnd() * 3);
+    for (var f = 0; f < nf; f++) {
+      var at = main[2 + Math.floor(rnd() * (N - 4))], fp = [], fu = 0, fa = 0;
+      var dir = rnd() < 0.5 ? -1 : 1, len = 0.04 + rnd() * 0.08;
+      for (var k = 0; k <= 10; k++) {
+        fu = dir * len * k / 10; fa += (rnd() - 0.5) * 0.08;
+        fp.push({ a: at.a + fa, du: at.du + fu, dr: (rnd() - 0.5) * 0.06 });
+      }
+      forks.push(fp);
+    }
+    /* Clinging, not striking: it crawls on the wall for half a second to a
+     * second, re-flashing as it goes, and never drops below a glow you can
+     * see against the tunnel until it dies (wallBoltLevel). */
+    var flashes = [], t = 0, n = 3 + Math.floor(rnd() * 4);
+    for (var j = 0; j < n; j++) { flashes.push([t, 0.05 + rnd() * 0.06]); t += 0.10 + rnd() * 0.16; }
+    return { T0: T, u0: u0, main: main, forks: forks, flashes: flashes, life: t + 0.1, age: 0 };
+  }
+  function wallBoltLevel(bt) {
+    var fade = Math.max(0, 1 - bt.age / bt.life);
+    var flick = 0.75 + 0.25 * Math.sin(bt.age * 61 + bt.u0 * 40);
+    return Math.max(boltLevel(bt), 0.45 * Math.sqrt(fade) * flick);
+  }
+  function drawTunnelWallBolts(ctx, cx, cy, maxR, T, I) {
+    var st = TUNNEL_BOLTS;
+    var dt = st.last === null ? 0 : Math.max(0, Math.min(0.1, T - st.last));
+    if (st.last !== null && T < st.last) st.list.length = 0;    // a new jump
+    st.last = T;
+    if (st.list.length < 5 && Math.random() < dt * 5) st.list.push(makeWallBolt(T));
+    var spin = T * 0.10;
+    for (var b = st.list.length - 1; b >= 0; b--) {
+      var bt = st.list[b];
+      bt.age += dt;
+      var u = bt.u0 + (T - bt.T0) * 0.22;
+      if (bt.age > bt.life || u > 1.05) { st.list.splice(b, 1); continue; }
+      var lvl = wallBoltLevel(bt) * I;
+      if (lvl <= 0.003) continue;
+      var place = function (p) {
+        var r = hyperRadius(u + p.du, maxR) * (1 + p.dr), an = p.a + spin;
+        return [cx + Math.cos(an) * r, cy + Math.sin(an) * r];
+      };
+      var near = Math.max(0.25, Math.min(1.6, u * 1.6));
+      /* Heavier than a wake's strokes: the tunnel behind them is busy. */
+      var polys = [{ pts: bt.main.map(place), core: 2.4 * near, halo: 11 * near, I: lvl * 1.4 }];
+      for (var f = 0; f < bt.forks.length; f++) {
+        polys.push({ pts: bt.forks[f].map(place), core: 1.6 * near, halo: 7 * near, I: lvl });
+      }
+      /* The walls' own colours: ahead blue-violet, past red. */
+      var ah = smooth01((0.68 - u) / 0.14);
+      var tint = [BOLT_TINT_DEPART[0] + (BOLT_TINT_ARRIVE[0] - BOLT_TINT_DEPART[0]) * ah,
+                  BOLT_TINT_DEPART[1] + (BOLT_TINT_ARRIVE[1] - BOLT_TINT_DEPART[1]) * ah,
+                  BOLT_TINT_DEPART[2] + (BOLT_TINT_ARRIVE[2] - BOLT_TINT_DEPART[2]) * ah];
+      drawBolts2D(ctx, polys, tint);
+    }
+  }
+
   /* A filament's colour at depth u: blue-violet coming at you, flipping
    * red as it passes (u past ~0.6, where it is beside you on screen). */
   function riftFilament(u, hue, alpha) {
@@ -8185,7 +8522,8 @@
       /* The world reddens around it as it widens. */
       ctx.fillStyle = 'rgba(70,6,4,' + (0.35 * smooth01((u - 0.5) / 0.5)).toFixed(3) + ')';
       ctx.fillRect(0, 0, w, h);
-      drawRift(ctx, cx, cy, H, Wd, RIFT_RED, 0.25 + 0.75 * o, T);
+      if (hyper.gpuTears) drawTearRift(ctx, cx, cy, H, Wd, 0.25 + 0.75 * o, T, hyper, false);
+      else drawRift(ctx, cx, cy, H, Wd, RIFT_RED, 0.25 + 0.75 * o, T);
     } else if (phase === 'tunnel' || (phase === 'exit' && !overlay)) {
       /* INSIDE. Not space: dark wine at the walls, a violet depth ahead. */
       var bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR);
@@ -8214,6 +8552,9 @@
         }
         ctx.stroke();
       }
+      /* Lightning ON the walls (2026-10-21) — see tunnelWallBolts. */
+      drawTunnelWallBolts(ctx, cx, cy, maxR, T, I);
+      ctx.globalCompositeOperation = 'lighter';
       /* The filaments, streaming past: soft, two passes each. */
       ctx.lineCap = 'round';
       for (var i = 0; i < stars.length; i++) {
@@ -8242,7 +8583,8 @@
       if (ex > 0) {
         var eH = S * (0.04 + 0.42 * ex);
         var eW = S * 0.05 * ex + (ex > 0.7 ? S * 3.2 * Math.pow((ex - 0.7) / 0.3, 2.2) : 0);
-        drawRift(ctx, cx, cy, eH, eW, RIFT_BLUE, Math.min(1, ex * 3), T);
+        if (hyper.gpuTears) drawTearRift(ctx, cx, cy, eH, eW, Math.min(1, ex * 3), T, hyper, true);
+        else drawRift(ctx, cx, cy, eH, eW, RIFT_BLUE, Math.min(1, ex * 3), T);
       }
     } else {
       /* OUT, with the real sky back underneath: a blue wash dying away
@@ -10809,6 +11151,15 @@
     drawExhaust: drawExhaust,
     drawShipExhaust: drawShipExhaust, nozzlesOf: nozzlesOf,
     drawWake: drawWake,
+    lensImages: lensImages,
+    lensSource: lensSource,
+    tearScreen: tearScreen,
+    makeBolt: makeBolt,
+    boltLevel: boltLevel,
+    tearBolts: tearBolts,
+    drawBolts2D: drawBolts2D,
+    BOLT_TINT_DEPART: BOLT_TINT_DEPART,
+    BOLT_TINT_ARRIVE: BOLT_TINT_ARRIVE,
     WAKE_ARCS: WAKE_ARCS,
     WAKE_BOLTS: WAKE_BOLTS,
     wakeHash: wakeHash,
