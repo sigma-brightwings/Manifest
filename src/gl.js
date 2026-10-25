@@ -3245,7 +3245,13 @@
     iceGiant: { ocean: 0.00, sea: '#000000', ice: 0.00 },
     gasGiant: { ocean: 0.00, sea: '#000000', ice: 0.00 }
   };
+  /* THE TABLE LIVES IN WEATHER.JS now (2026-10-25): the survey reads the
+   * same seas and caps on the CPU to put water where the picture shows it.
+   * The copy above is the fallback for gl.js loaded on its own (the hull
+   * viewer), and test/survey.test.js checks the two have not drifted. */
   function terrainOf(b) {
+    var W = global.Weather;
+    if (W && W.terrainOf) return W.terrainOf(b);
     return TERRAIN[b.type] || { ocean: 0, sea: '#000000', ice: 0 };
   }
 

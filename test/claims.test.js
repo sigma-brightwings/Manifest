@@ -103,13 +103,24 @@ check('drones are bought', Cl.buyDrone(G).ok && Cl.buyDrone(G).ok && ship.drones
 check('and the racks hold two', !Cl.buyDrone(G).ok && ship.drones === 2);
 
 console.log('--- drones ---');
+/* Deposits are somewhere now (2026-10-25): set down on the ore body, the
+ * richest ore cell, as a prospector who had read the map would. */
+(function () {
+  var m = Sv.groundMap(world, sys), best = 0;
+  if (m && m.grade.ores) for (var i = 0; i < Sv.NCELL; i++) if (m.grade.ores[i] > m.grade.ores[best]) best = i;
+  var la = Math.floor(best / Sv.LON_BINS), lo = best % Sv.LON_BINS;
+  ship.landedAt.lat = -Math.PI / 2 + (la + 0.5) * Math.PI / Sv.LAT_BINS;
+  ship.landedAt.lon = (lo + 0.5) * 2 * Math.PI / Sv.LON_BINS;
+})();
 Sim.updateLandedShip(ship, sys, t0);
 var dep = Cl.act(G, sys, t0);
 check('landed on the claim, N sets a drone down', dep.ok && ship.drones === 1 && G.drones.length === 1, dep.text || dep.why);
 var d = G.drones[0];
 /* What the SURVEY has read (2026-10-21): this record is grade 1, so ores and ice. */
 var rows = Sv.remaining(G, key, Sv.deposits(world, sys)).filter(function (r) { return r.cid !== 'hydrogen' && r.tonnes > 0 && Sv.readable(G.surveys[key], r.cid); });
-var bestV = Math.max.apply(null, rows.map(function (r) { return r.grade * Eco.BY_ID[r.cid].base; }));
+/* ...at the grade of the ground it stands on. */
+var cellHere = Sv.cellOfLatLon(ship.landedAt.lat, ship.landedAt.lon);
+var bestV = Math.max.apply(null, rows.map(function (r) { return Sv.localGrade(world, sys, r.cid, cellHere) * Eco.BY_ID[r.cid].base; }));
 check('it digs the most valuable thing the survey has read', Math.abs(d.grade * Eco.BY_ID[d.cid].base - bestV) < 1e-9, d.cid + ' grade ' + d.grade.toFixed(2));
 check('a grade-1 survey keeps it off fissiles and rare metals', Sv.classOf(d.cid) === 1, d.cid);
 d.stripRate = 1e-9;                         // a quiet system, for the arithmetic

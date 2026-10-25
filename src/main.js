@@ -2556,6 +2556,8 @@
         if (key === ';' || key === ':') { snapNode('peri'); return true; }
         if (key === "'" || key === '"') { snapNode('apo'); return true; }
         if (key === '\\' || key === '|') { startNodeBurn(); return true; }
+        /* Y: a polar survey orbit, planned for you (see planPolarOrbit). */
+        if (key === 'y') { planPolarOrbit(); return true; }
         return false;
     }
     return false;
@@ -3608,6 +3610,32 @@
     say(prompt || 'Node placed — I cycles axis, − and = set it, \\ flies it', 6);
   }
 
+  /* A POLAR SURVEY ORBIT IN ONE KEY (2026-10-25). Astra: "we need easier
+   * controls to put the ship into a polar orbit for mapping mineral
+   * deposits." Sim.polarPlan finds the next equator crossing and the one
+   * burn there that leaves you circular at that height, pole to pole; it
+   * goes on the planner as an ordinary node, replacing any there, so the
+   * cost and the new orbit are in front of you before anything fires.
+   * \ flies it, the same as any plan. */
+  function planPolarOrbit() {
+    if (G.ship.docked) { say('Nothing to plan from the clamps - undock first', 3); return; }
+    if (G.ship.landed) { say('Nothing to plan from the ground - lift off first', 3); return; }
+    if (G.nodeBurn) { say('A burn is already armed - \\ stands it down first', 3); return; }
+    var p = Sim.polarPlan(G.ship, G.sys, G.t);
+    if (!p || p.why) { say('No polar orbit to plan: ' + (p ? p.why : 'no answer'), 5); return; }
+    clearNode(true);
+    G.node = Sim.makeNode(p.t, p.dv);
+    G.nodeAxis = 0;
+    G.nodeStale = 0;
+    var Sv = global.Survey;
+    var high = Sv && p.radiusR > Sv.RANGE_R;
+    say('Polar survey orbit over ' + p.body.name + ': burn at the equator in ' + fmtTime(p.t - G.t) +
+        ', ' + fmtSpeed(p.magnitude) + ', heading ' + p.heading + ' at ' + fmtDist(p.altitude) +
+        (p.burn.feasible ? '' : ' - MORE THAN YOUR REACTION MASS') +
+        (high ? ' - too high for the survey; it maps within ' + Sv.RANGE_R + ' radii' : '') +
+        '.  \\ flies it', 9);
+  }
+
   function clearNode(quiet) {
     if (!G.node) { if (!quiet) say('No node to clear', 1.5); return; }
     cancelNodeBurn(null);
@@ -3824,8 +3852,19 @@
        * stages rather than straight to 1x means the wait is not tedious. */
       if (toIgnition < 120) G.warpIndex = Math.min(G.warpIndex, 2);
       if (toIgnition < 20) G.warpIndex = 0;
+      /* AND NEVER A FRAME LONGER THAN A THIRD OF THE WAIT (2026-10-25).
+       * The two steps above assume a frame is shorter than 120 s; at the
+       * top warps it is not, and the polar planner's hour-long coasts
+       * are exactly where a player reaches for them. One frame went from
+       * "two minutes out" to "past ignition", the engine lit late, and the
+       * burn was counted against that long frame's clock - 8 km/s booked,
+       * a few metres per second delivered. Coming down a notch at a time
+       * here keeps the last frames short whatever warp you arrived in. */
+      var frame = (G.lastDtSim || 0) / Math.max(1, WARPS[G.warpIndex] || 1);
+      while (G.warpIndex > 0 && toIgnition < 3 * WARPS[G.warpIndex] * Math.max(frame, 0.02)) G.warpIndex--;
       if (toIgnition > 0) return null;
       nb.phase = 'burn';
+      nb.lit = false;
       say('Ignition — ' + fmtSpeed(nb.remaining) + ' to burn', 4);
     }
 
@@ -3839,6 +3878,11 @@
        * frame worth more delta-v than remains would sail straight past it
        * and the node would never converge. */
       var accel = G.ship.maxAccel;
+      /* The clock this command will be flown on is the NEXT step's, and
+       * that is a 1x step now: the last frame's dtSim belongs to the warp
+       * it was flown at. The first burning frame books one real frame at
+       * most, not the warped one before it. */
+      if (!nb.lit) { nb.lit = true; dtSim = Math.min(dtSim, 1 / 30); }
       var dt = Math.max(dtSim, 1e-6);
       var throttle = Math.min(1, nb.remaining / (accel * dt));
       var cmd = V.scale(nb.dir, accel * throttle);
@@ -9826,7 +9870,7 @@
     ctx.fillStyle = '#5d8fa4';
     ctx.textAlign = 'right';
     ctx.fillText(clipText(
-      'I node · \\ fly it · drag to turn · wheel to zoom · Tab walks the bodies · C back to the ship · Esc to the cockpit',
+      'I node · Y polar orbit · \\ fly it · drag to turn · wheel to zoom · Tab walks the bodies · C back to the ship · Esc to the cockpit',
       Math.max(0, Math.floor(hintRoom / 6.16))), w - 14, 18);
     ctx.textAlign = 'left';
     ctx.restore();
@@ -10901,7 +10945,7 @@
      * press I, while I does nothing where you are sitting, is the greyed-out
      * button problem with the label still lit. */
     mfdShell(ctx, 'MANOEUVRE', (modeId() === 'system' || modeId() === 'node')
-      ? 'I place/axis   − = adjust   ; \' snap   \\ fly   ⇧I clear'
+      ? 'I place/axis  − = adjust  ; \' snap  \\ fly  Y polar  ⇧I clear'
       : 'F2 orbit map to plan');
     var y = MFD_BODY_TOP + 14;
 
@@ -10914,8 +10958,10 @@
       ctx.fillText('− =  adjust  (shift fine, ctrl coarse)', 10, y + 54);
       ctx.fillText('; \'  snap to periapsis / apoapsis', 10, y + 68);
       ctx.fillText('\\    fly it   ·   shift-I clears', 10, y + 82);
+      ctx.fillStyle = '#7dffb0';
+      ctx.fillText('Y    plan a polar survey orbit for me', 10, y + 96);
       ctx.fillStyle = MFD_HOT;
-      ctx.fillText('on the F2 orbit map  ·  LEFT ALT drags the handles', 10, y + 104);
+      ctx.fillText('on the F2 orbit map  ·  LEFT ALT drags the handles', 10, y + 112);
       return;
     }
 
@@ -11109,6 +11155,37 @@
    * else the one you are in orbit about. NOTHING WITHOUT THE INSTRUMENT,
    * for the trade page's reason: a blank list would read as "nothing
    * here", which no instrument aboard has said. */
+  /* The ground map's colours, one per commodity, and the list's swatches. */
+  var GROUND_INK = { ores: '#d9854a', rare: '#ffd36b', fissile: '#9dff5a',
+                     water: '#5fb4ff', hydrogen: '#c9a6ff' };
+  function groundInk(cid, grade) {
+    var hex = GROUND_INK[cid] || '#7dffb0';
+    var r = parseInt(hex.substr(1, 2), 16), g = parseInt(hex.substr(3, 2), 16), b = parseInt(hex.substr(5, 2), 16);
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + (0.25 + 0.75 * Math.min(1, grade / 0.8)).toFixed(2) + ')';
+  }
+  /* The most valuable commodity your instruments have read in one cell,
+   * if any of it there is better than trace: trace ground is everywhere,
+   * and colouring it drowned the ore bodies in a wash of their own colour
+   * (seen in game, 2026-10-25). */
+  function readTop(Sv, body, rec, cell) {
+    var list = Sv.groundAt ? Sv.groundAt(body, G.sys, cell) : [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].grade >= 0.1 && Sv.cellRead(rec, list[i].cid, cell)) return list[i];
+    }
+    return null;
+  }
+  /* The survey cell under the ship, on this world: where you are landed,
+   * or the point beneath you within the instrument's range. */
+  function surveyCellUnder(Sv, body) {
+    if (!Sv.cellOfWorld || !body || !G.ship) return null;
+    var s = G.ship;
+    if (s.landed && s.landedAt && s.landedAt.body === body.id) return Sv.cellOfLatLon(s.landedAt.lat, s.landedAt.lon);
+    var bp = Sim.bodyPosition(body, G.sys, G.t);
+    var rel = V.sub(s.pos, bp), r = V.len(rel);
+    if (!(r > 0) || r > body.radius * Sv.RANGE_R) return null;
+    return Sv.cellOfWorld(body, V.scale(rel, 1 / r), G.t);
+  }
+
   function drawSurveyPage(ctx) {
     var Sv = global.Survey;
     var lvl = Sv ? Sv.level(G.ship) : 0;
@@ -11137,6 +11214,7 @@
       ctx.fillStyle = MFD_DIM;
       ctx.fillText('lock a world, or orbit within ' + Sv.RANGE_R + ' radii of one.', 12, MFD_BODY_TOP + 20);
       ctx.fillText('a polar orbit maps all of it; an equatorial one, a band.', 12, MFD_BODY_TOP + 36);
+      ctx.fillText('in orbit, Y on the F2 orbit map plans a polar one for you.', 12, MFD_BODY_TOP + 52);
     } else {
       var cov = rec ? rec.cov : 0;
       ctx.fillStyle = MFD_INK;
@@ -11151,16 +11229,37 @@
       var rows = Sv.remaining(G, key, Sv.deposits(tgt, G.sys)).filter(function (r) {
         return rec && Sv.readable(rec, r.cid);
       });
+      /* The grade shown is the BEST GROUND YOU HAVE SEEN for it, not the
+       * world's: a deposit is somewhere, and until you have flown over the
+       * somewhere you do not know how good it gets (2026-10-25). */
+      if (rec && rec.kind === 'world' && Sv.groundMap && Sv.groundMap(tgt, G.sys)) {
+        rows.forEach(function (r) {
+          var best = 0;
+          for (var c2 = 0; c2 < Sv.NCELL; c2++) {
+            if (!Sv.cellRead(rec, r.cid, c2)) continue;
+            var lg = Sv.localGrade(tgt, G.sys, r.cid, c2);
+            if (lg > best) best = lg;
+          }
+          r.grade = best;
+        });
+        rows.sort(function (a, b) { return b.grade - a.grade; });
+      }
       var unread = [2, 3].filter(function (c) { return !(rec && Sv.covClass(rec, c) >= 0.1); });
-      var y = MFD_BODY_TOP + 46;
+      var y = MFD_BODY_TOP + 44;
+      /* Five lines at most, read and unread together: the ground under
+       * you and the Guild's line need the bottom of the column. */
+      var spare = 5 - unread.length;
       if (cov < 0.1) {
         ctx.fillStyle = MFD_DIM;
         ctx.fillText('not enough of it mapped to say what is there.', 12, y);
       } else {
-        rows.slice(0, 5).forEach(function (r) {
+        rows.slice(0, Math.max(2, spare)).forEach(function (r) {
           ctx.font = 'bold 11px ui-monospace, monospace';
+          /* The swatch is the map's colour for it: the list is the key. */
+          ctx.fillStyle = GROUND_INK[r.cid] || MFD_INK;
+          ctx.fillRect(12, y - 7, 5, 6);
           ctx.fillStyle = MFD_INK;
-          ctx.fillText(r.name, 12, y);
+          ctx.fillText(r.name, 21, y);
           /* The bar is the grade; the word or the number is the instrument. */
           ctx.fillStyle = 'rgba(74,151,176,0.22)';
           ctx.fillRect(110, y - 8, 80, 7);
@@ -11171,33 +11270,59 @@
            * now does not turn an old scanner pass into numbers. */
           var arr = rec && Sv.arrayCov ? Sv.arrayCov(rec) : (lvl >= 3 ? cov : 0);
           ctx.fillText(arr >= 0.1 ? Sv.fmtTonnes(r.tonnes) : Sv.gradeWord(r.grade), 198, y);
-          y += 14;
+          y += 13;
         });
         unread.forEach(function (c) {
           ctx.font = 'bold 11px ui-monospace, monospace';
           ctx.fillStyle = MFD_DIM;
-          ctx.fillText(c === 2 ? 'Fissiles' : 'Rare metals', 12, y);
+          ctx.fillText(c === 2 ? 'Fissiles' : 'Rare metals', 21, y);
           ctx.font = 'bold 10px ui-monospace, monospace';
           ctx.fillText('not read - grade ' + c + ' survey', 110, y);
-          y += 14;
+          y += 13;
         });
-        if (cov < 0.9) {
+        if (cov < 0.9 && y < MFD_BODY_BOTTOM - 26) {
           ctx.font = 'bold 10px ui-monospace, monospace';
           ctx.fillStyle = MFD_DIM;
-          ctx.fillText('estimate - ' + Math.round(cov * 100) + '% of the ground seen', 12, y + 2);
+          ctx.fillText('best ground seen so far - ' + Math.round(cov * 100) + '% mapped', 21, y);
         }
       }
-      /* The ground you have seen: latitude up, longitude across. */
-      if (rec && rec.kind === 'world') {
+      /* THE GROUND, WHERE IT IS (2026-10-25): latitude up, longitude
+       * across, each mapped cell in the colour of the most valuable thing
+       * your instruments have read THERE, brighter where it is richer. A
+       * fissile hotspot only shows on ground the spectrometer has flown. */
+      if (rec && rec.kind === 'world' && tgt.kind) {
         var cells = Sv.cellsOf(rec), mx = 318, my = MFD_BODY_TOP + 6, cw = 5, chh = 6;
         ctx.strokeStyle = 'rgba(74,151,176,0.5)';
         ctx.strokeRect(mx - 1, my - 1, Sv.LON_BINS * cw + 2, Sv.LAT_BINS * chh + 2);
         for (var la = 0; la < Sv.LAT_BINS; la++) {
           for (var lo = 0; lo < Sv.LON_BINS; lo++) {
-            if (!cells[la * Sv.LON_BINS + lo]) continue;
-            ctx.fillStyle = 'rgba(125,255,176,0.7)';
+            var ci = la * Sv.LON_BINS + lo;
+            if (!cells[ci]) continue;
+            var top = readTop(Sv, tgt, rec, ci);
+            ctx.fillStyle = top ? groundInk(top.cid, top.grade) : 'rgba(74,151,176,0.35)';
             ctx.fillRect(mx + lo * cw, my + (Sv.LAT_BINS - 1 - la) * chh, cw - 1, chh - 1);
           }
+        }
+        /* YOU: the ground under the ship, boxed. */
+        var under = surveyCellUnder(Sv, tgt);
+        if (under !== null) {
+          var ula = Math.floor(under / Sv.LON_BINS), ulo = under % Sv.LON_BINS;
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(mx + ulo * cw - 1.5, my + (Sv.LAT_BINS - 1 - ula) * chh - 1.5, cw + 2, chh + 2);
+          ctx.font = 'bold 10px ui-monospace, monospace';
+          var ub;
+          if (!cells[under]) { ctx.fillStyle = MFD_DIM; ub = 'BELOW YOU  not mapped yet'; }
+          else {
+            var here3 = Sv.groundAt(tgt, G.sys, under).filter(function (g) {
+              return Sv.cellRead(rec, g.cid, under) && g.grade >= 0.05;
+            }).slice(0, 2);
+            ctx.fillStyle = here3.length ? MFD_HOT : MFD_DIM;
+            ub = 'BELOW YOU  ' + (here3.length ? here3.map(function (g) {
+              return (Sv.NAMES[g.cid] || g.cid).toLowerCase().split(' ')[0] + ' ' + Sv.gradeWord(g.grade).toLowerCase();
+            }).join('  ·  ') : 'nothing worth digging');
+          }
+          ctx.fillText(clipText(ub, 50), 12, MFD_BODY_BOTTOM - 17);
         }
       }
       /* Rung 2: your claim on it, and what your drones there have dug. */

@@ -3624,6 +3624,14 @@
     var hs = bodyState(body, sys, t);
     var rel = V.sub(pos, hs.pos), r = V.len(rel);
     var rot = body.rotation || { period: 86400, tilt: 0, phase: 0 };
+    /* Undo `az` first (2026-10-25): surfaceOffset turns a locked world's
+     * whole tipped frame about z by it, and this was the one reader that
+     * did not, so a ship set down on a twilight world was put back on the
+     * ground somewhere else the next frame. */
+    if (rot.az) {
+      var caz = Math.cos(rot.az), saz = Math.sin(rot.az);
+      rel = { x: caz * rel.x + saz * rel.y, y: -saz * rel.x + caz * rel.y, z: rel.z };
+    }
     var ct = Math.cos(rot.tilt), st = Math.sin(rot.tilt);
     /* Undo the tilt about x, then the spin about the axis. */
     var x = rel.x, y = rel.y * ct + rel.z * st, z = -rel.y * st + rel.z * ct;
@@ -5718,6 +5726,117 @@
     };
   }
 
+  /* ---- A POLAR SURVEY ORBIT, PLANNED FOR YOU (2026-10-25) ---------------
+   *
+   * Astra: "we need easier controls to put the ship into a polar orbit for
+   * mapping mineral deposits." A survey maps a band from an equatorial
+   * orbit and the whole world from a polar one, and getting from the first
+   * to the second by nudging node handles is a chore nobody needs to do by
+   * hand twice.
+   *
+   * So this finds the next moment the ship crosses the world's EQUATOR
+   * (its spin equator - the survey's frame, not the system plane), which is
+   * the one place a plane change can swing the orbit over the poles, and
+   * works out the single burn there that leaves the ship on a CIRCULAR
+   * orbit at that height running pole to pole. Of the two ways round, the
+   * one nearer the way you are already going (the cheaper burn). Returned
+   * as an ordinary node - pro, nor, rad, and a time - so it goes on the
+   * planner like any other: you see the orbit it gives, what it costs and
+   * whether you can afford it, and fly it with the same key.
+   *
+   * Found by flying a copy of the ship forward on the real integrator, not
+   * off the conic, so the node lands where nodePlan will put the ship.
+   * Not every crossing will do: the burn has to have room to start half
+   * its length before the node, so a crossing too soon for that is passed
+   * over for the next. When there is no plan - no world to orbit, an open
+   * orbit, nothing crossing within two orbits - the answer is { why }. */
+  function spinPole(body) {
+    var rot = body.rotation, tilt = rot ? rot.tilt : 0, az = (rot && rot.az) || 0;
+    return { x: Math.sin(tilt) * Math.sin(az), y: -Math.sin(tilt) * Math.cos(az), z: Math.cos(tilt) };
+  }
+  function polarPlan(ship, sys, t, opts) {
+    opts = opts || {};
+    var dom = dominantBody(ship.pos, sys, t);
+    if (!dom || !(dom.mu > 0) || (dom.kind !== 'planet' && dom.kind !== 'moon')) return { why: 'no world to orbit' };
+    var bs0 = bodyState(dom, sys, t);
+    var oe = K.elementsFromState(V.sub(ship.pos, bs0.pos), V.sub(ship.vel, bs0.vel), dom.mu);
+    if (!oe.closed || !isFinite(oe.period)) return { why: 'not in orbit about ' + dom.name };
+    var pole = spinPole(dom);
+    var horizon = oe.period * 2.2;
+    var minLead = opts.minLead || 20;
+
+    /* The signed height above the equator's plane, along a flown copy. */
+    var ghost = makeShip(ship.pos, ship.vel);
+    ghost.thrust = V.zero();
+    function side(s, tt) { return V.dot(V.sub(s.pos, bodyPosition(dom, sys, tt)), pole); }
+    var tt = t, prev = side(ghost, tt), steps = 0, found = [];
+    var hl = V.cross(V.sub(ship.pos, bs0.pos), V.sub(ship.vel, bs0.vel));
+    var flat = Math.abs(V.dot(V.norm(hl), pole)) > 0.9995;      // already equatorial
+    if (flat) {
+      /* Every point of an equatorial orbit is on the equator: take the
+       * soonest moment the burn has room for, a little way ahead. */
+      found.push(null);
+    } else {
+      while (tt < t + horizon && steps < 20000 && found.length < 4) {
+        var h = Math.min(suggestedStep(ghost, sys, tt), oe.period / 180);
+        var before = { pos: V.clone(ghost.pos), vel: V.clone(ghost.vel), t: tt };
+        stepShip(ghost, sys, tt, h);
+        tt += h; steps++;
+        var now = side(ghost, tt);
+        if ((prev <= 0 && now > 0) || (prev >= 0 && now < 0)) {
+          /* Bisect inside the step, re-flying it from its start. */
+          var lo = 0, hi = h;
+          for (var it = 0; it < 30; it++) {
+            var mid = (lo + hi) / 2;
+            var g2 = makeShip(before.pos, before.vel); g2.thrust = V.zero();
+            stepShip(g2, sys, before.t, mid);
+            var sm = side(g2, before.t + mid);
+            if ((sm > 0) === (now > 0)) hi = mid; else lo = mid;
+          }
+          found.push(before.t + (lo + hi) / 2);
+        }
+        prev = now;
+      }
+    }
+    if (!found.length) return { why: 'no equator crossing within two orbits' };
+
+    for (var k = 0; k < found.length; k++) {
+      var tc = found[k];
+      if (tc === null) tc = t + Math.max(minLead, oe.period * 0.05);
+      var at = nodePlan(ship, sys, t, makeNode(tc, {}), { maxSteps: 20000 });
+      if (!at) continue;
+      var b = at.basis, rel = b.rel, vrel = b.vrel, r = V.len(rel);
+      /* Due north or due south along the ground, at circular speed. */
+      var up = V.scale(rel, 1 / r);
+      var north = V.sub(pole, V.scale(up, V.dot(pole, up)));
+      var nl = V.len(north);
+      if (nl < 1e-9) continue;
+      north = V.scale(north, 1 / nl);
+      var vc = Math.sqrt(dom.mu / r);
+      var dir = V.dot(vrel, north) >= 0 ? 1 : -1;
+      var want = V.scale(north, vc * dir);
+      var dv = V.sub(want, vrel);
+      /* Into the node's own axes. Prograde and radial are not at right
+       * angles on an ellipse, so the in-plane part is solved for, not
+       * projected. */
+      var P = b.prograde, R = b.radial, N = b.normal;
+      var nor = V.dot(dv, N);
+      var dvP = V.dot(dv, P), dvR = V.dot(dv, R), kpr = V.dot(P, R);
+      var den = 1 - kpr * kpr;
+      var pro = den > 1e-9 ? (dvP - kpr * dvR) / den : dvP;
+      var rad = den > 1e-9 ? (dvR - kpr * dvP) / den : 0;
+      var mag = V.len(dv);
+      var burn = nodeBurn(ship, mag);
+      if (tc - burn.lead - t < minLead) continue;      // no room to start it
+      return {
+        t: tc, dv: { pro: pro, nor: nor, rad: rad }, magnitude: mag, burn: burn,
+        body: dom, altitude: r - dom.radius, radiusR: r / dom.radius,
+        heading: dir > 0 ? 'north' : 'south', period: 2 * Math.PI * Math.sqrt(r * r * r / dom.mu)
+      };
+    }
+    return { why: 'no crossing leaves room to start the burn' };
+  }
+
   /* ---- jettisoned cargo -------------------------------------------------
    * A canister is a ship with no engine: it inherits your state vector at
    * the moment you push it out, and from then on it is on the same physics
@@ -6176,7 +6295,7 @@
     nodeBurn: nodeBurn,
     nodePlan: nodePlan,
     predictAfterNode: predictAfterNode,
-    apsisTimes: apsisTimes,
+    apsisTimes: apsisTimes, polarPlan: polarPlan,
     circularOrbit: circularOrbit,
     cargoMass: cargoMass,
     shipMass: shipMass,

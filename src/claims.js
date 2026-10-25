@@ -159,6 +159,15 @@
     /* A drone digs what your survey has READ: it cannot be pointed at
      * fissiles nobody here has seen. */
     if (!rows.length) return { ok: false, why: 'nothing your survey has read here that a drone can dig' };
+    /* WHERE IT STANDS DECIDES WHAT IT DIGS (2026-10-25). Deposits are
+     * somewhere now (Survey.groundMap): a drone works the ground under it,
+     * at that ground's grade, not the world's best. */
+    var S = Sv(), cell = S.cellOfLatLon ? S.cellOfLatLon(G.ship.landedAt.lat, G.ship.landedAt.lon) : -1;
+    if (cell >= 0 && S.groundMap && S.groundMap(world, sys)) {
+      rows = rows.map(function (r) {
+        return { cid: r.cid, name: r.name, tonnes: r.tonnes, grade: S.localGrade(world, sys, r.cid, cell) };
+      });
+    }
     var Eco = global.Economy;
     rows.sort(function (a, b) {
       var va = a.grade * (Eco && Eco.BY_ID[a.cid] ? Eco.BY_ID[a.cid].base : 1);
@@ -176,7 +185,8 @@
     /* A stolen drone set down on your own claim is yours now. */
     if (G.ship.hotDrones > 0) G.ship.hotDrones -= 1;
     return { ok: true, drone: d, text: 'Drone down on ' + world.name + ' - digging ' + best.name.toLowerCase() +
-             ' (' + Sv().gradeWord(best.grade).toLowerCase() + ')' };
+             ' (' + Sv().gradeWord(best.grade).toLowerCase() + ' ground here)' +
+             (best.grade < 0.1 ? ' - the survey map shows where it is richer' : '') };
   }
 
   function collect(G, sys, t, d) {

@@ -177,6 +177,260 @@
     return bodyDeposits(target, sys);
   }
 
+  /* ---- WHERE ON THE WORLD IT IS (2026-10-25) ------------------------------
+   *
+   * Astra: "planets should have mineral deposits which are location-based,
+   * where you might find metals/precious metals in some ratio in one
+   * place, water where there's water on the surface, fissiles show up with
+   * the gamma spectrometer, and so on."
+   *
+   * A world's grade (bodyDeposits, above) is now its BEST ground, and the
+   * ground map says where that is: one local grade per survey cell, per
+   * commodity. Seed data like the rest - hashes of the star, the world and
+   * the commodity, no rng - so the same ore is under the same mountain in
+   * every game, and asking draws nothing.
+   *
+   *   METALS come in provinces: two to five ore bodies, each a patch of the
+   *   world with its own centre, size and MIX - one is nearly all base
+   *   metal, another carries a good share of precious metal with it. Ore
+   *   and rare metals are read off the same provinces, so where you find
+   *   one you find the other in that province's ratio. Ore bodies stand on
+   *   land where the world has seas (a drone needs ground to stand on).
+   *   A surface mining port sits on its world's first province: the mine
+   *   is where the ore is.
+   *   FISSILES are hotspots - one to three, small - which is why they want
+   *   the gamma spectrometer: in reflected light they are ordinary rock.
+   *   WATER is where the picture shows it: under the seas and in the ice
+   *   caps you can see from orbit (Weather.terrainAt, the shader's own
+   *   arithmetic), a little in the ground elsewhere. A molten world's sea
+   *   is lava and counts for nothing. An ice world is ice all over. A
+   *   tidally locked world's ice is its night side.
+   *   HYDROGEN is a giant's air: the same everywhere.
+   *
+   * Every map's best cell is the world's grade, so nothing anywhere pays
+   * more than the world did before; what changed is that most of a world
+   * pays less, and you have to find the good ground. */
+  var GROUND_CACHE = new WeakMap();
+  var ORE_FLOOR = 0.12, RARE_FLOOR = 0.03, FISSILE_FLOOR = 0.02, DAMP_FLOOR = 0.08;
+
+  function sphereDir(tag) {
+    var z = 2 * hash01(tag + 'z') - 1, a = 2 * Math.PI * hash01(tag + 'a');
+    var s = Math.sqrt(Math.max(0, 1 - z * z));
+    return [s * Math.cos(a), s * Math.sin(a), z];
+  }
+  function dot3(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+  function dirOfLatLon(lat, lon) {
+    return [Math.cos(lat) * Math.cos(lon), Math.cos(lat) * Math.sin(lon), Math.sin(lat)];
+  }
+  /* The survey cell a latitude/longitude falls in - the same lat/lon a pad
+   * or a landing spot carries (sim.js surfaceOffset, landSpot). */
+  function cellOfLatLon(lat, lon) {
+    var la = Math.floor((lat + Math.PI / 2) / (Math.PI / LAT_BINS));
+    la = Math.max(0, Math.min(LAT_BINS - 1, la));
+    var l = lon % (2 * Math.PI); if (l < 0) l += 2 * Math.PI;
+    var lo = Math.min(LON_BINS - 1, Math.floor(l / (2 * Math.PI / LON_BINS)));
+    return la * LON_BINS + lo;
+  }
+  /* A world direction at time t, to its cell (the inverse of markAt). */
+  function cellOfWorld(body, dirW, t) {
+    var fr = spinFrame(body, t);
+    var x = dot(dirW, fr.e1), y = dot(dirW, fr.e2), z = dot(dirW, fr.n);
+    var c = Math.cos(-fr.turn), s = Math.sin(-fr.turn);
+    var bx = x * c - y * s, by = x * s + y * c;
+    var r = Math.sqrt(bx * bx + by * by + z * z) || 1;
+    return cellOfLatLon(Math.asin(Math.max(-1, Math.min(1, z / r))), Math.atan2(by, bx));
+  }
+  /* A cell's centre as a body-fixed vector in world axes: the shader's
+   * frame (Weather.bodyFixed), so the two agree on where a coastline is. */
+  function cellBodyFixed(fr, i) {
+    var cc = CELL_CENTRES[i];
+    return { x: cc[0] * fr.e1.x + cc[1] * fr.e2.x + cc[2] * fr.n.x,
+             y: cc[0] * fr.e1.y + cc[1] * fr.e2.y + cc[2] * fr.n.y,
+             z: cc[0] * fr.e1.z + cc[1] * fr.e2.z + cc[2] * fr.n.z };
+  }
+  /* Seas and ice per cell, as the picture paints them (null: no picture to
+   * ask, which is a giant, or a run without weather.js). */
+  function terrainCells(body, sys) {
+    var W = global.Weather;
+    if (!W || !W.terrainAt) return null;
+    var T = W.terrainOf(body);
+    if (!(T.ocean > 0.001) && !(T.ice > 0.001) && !body.habitableBand) return null;
+    var fr = spinFrame(body, 0);
+    var sunB = null;
+    if (body.habitableBand === 'terminator' && global.Sim && global.Sim.bodyPosition && sys && sys.root) {
+      var Sim = global.Sim;
+      var sp = Sim.bodyPosition(sys.root, sys, 0), bp = Sim.bodyPosition(body, sys, 0);
+      var d = { x: sp.x - bp.x, y: sp.y - bp.y, z: sp.z - bp.z }, dl = len(d) || 1;
+      sunB = W.bodyFixed(body, scale(d, 1 / dl), 0);
+    }
+    var sea = new Float32Array(NCELL), ice = new Float32Array(NCELL);
+    for (var i = 0; i < NCELL; i++) {
+      var g = W.terrainAt(body, cellBodyFixed(fr, i), sunB);
+      sea[i] = g.lava ? 0 : g.sea;
+      ice[i] = g.ice;
+    }
+    return { sea: sea, ice: ice, lava: !!T.lava };
+  }
+  /* A field of bumps, normalised so its best cell is 1, over a floor. */
+  function bumps(list, floor) {
+    var f = new Float32Array(NCELL), top = 0;
+    for (var i = 0; i < NCELL; i++) {
+      var cc = CELL_CENTRES[i], v = 0;
+      for (var j = 0; j < list.length; j++) {
+        var b = list[j];
+        var ang = Math.acos(Math.max(-1, Math.min(1, dot3(cc, b.c))));
+        v = Math.max(v, b.w * Math.exp(-(ang / b.r) * (ang / b.r)));
+      }
+      f[i] = v; if (v > top) top = v;
+    }
+    for (i = 0; i < NCELL; i++) f[i] = floor + (1 - floor) * (top > 0 ? f[i] / top : 0);
+    return f;
+  }
+
+  function groundMap(body, sys) {
+    if (!body || (body.kind !== 'planet' && body.kind !== 'moon')) return null;
+    var star = sys.star ? sys.star.id : (sys.root && sys.root.id) || '';
+    var tag = (sys.seedTag || sys.name || star) + '|' + body.id + '|';
+    /* Cached on the body object itself, not by tag: body ids repeat from
+     * system to system, and so, now and then, do star names. */
+    var hit = GROUND_CACHE.get(body);
+    if (hit && hit.sys === sys) return hit;
+    var rows = bodyDeposits(body, sys), g = {};
+    rows.forEach(function (r) { g[r.cid] = r.grade; });
+    var key = typeKey(body);
+    var terr = terrainCells(body, sys);
+    var out = { tag: tag, sys: sys, world: g, grade: {}, sea: terr ? terr.sea : null, ice: terr ? terr.ice : null };
+
+    /* METAL PROVINCES. Province 0 is the strongest. Each surface mining
+     * port stands on one - on the middle of its cell, so the ground it
+     * stands on is the province's best - and a port that sells rare metals
+     * stands on a rich mix. Each carries its own rare-metal share. */
+    var heads = portsOn(body, sys).filter(function (p) {
+      return p.surface && roleOf(p) === 'mining' && typeof p.lat === 'number';
+    }).map(function (p) {
+      var rows2 = (p.market && p.market.rows) || {}, best = 'ores', bp = -1;
+      ['ores', 'rare', 'fissile'].forEach(function (cid) {
+        var prod = rows2[cid] ? (rows2[cid].prod || 0) : 0;
+        if (prod > bp) { bp = prod; best = cid; }
+      });
+      var cc0 = CELL_CENTRES[cellOfLatLon(p.lat, p.lon)];
+      return { c: [cc0[0], cc0[1], cc0[2]], cid: best };
+    });
+    var metalHeads = heads.filter(function (h) { return h.cid !== 'fissile'; });
+    var nProv = Math.max(metalHeads.length + 1, 2 + Math.floor(hash01(tag + 'prov#') * 4));
+    var prov = [];
+    for (var j = 0; j < nProv; j++) {
+      var pt = tag + 'prov' + j + ':', c = null;
+      if (j < metalHeads.length) c = metalHeads[j].c;
+      for (var tries = 0; !c && tries < 12; tries++) {
+        var cand = sphereDir(pt + tries);
+        if (!terr || terr.lava) { c = cand; break; }
+        var ci = cellOfLatLon(Math.asin(cand[2]), Math.atan2(cand[1], cand[0]));
+        if (terr.sea[ci] < 0.5 && terr.ice[ci] < 0.5) c = cand;
+      }
+      c = c || sphereDir(pt + 'last');
+      var share = hash01(pt + 'share');
+      share = share * share;
+      var isHead = j < metalHeads.length;
+      if (isHead && metalHeads[j].cid === 'rare') share = Math.max(share, 0.8);
+      prov.push({ c: c, r: 0.16 + 0.38 * hash01(pt + 'r'),
+                  w: (j === 0 || isHead) ? 1 : 0.45 + 0.5 * hash01(pt + 'w'),
+                  share: share });
+    }
+    if (g.ores) {
+      var of = bumps(prov, ORE_FLOOR);
+      out.grade.ores = scaleBy(of, g.ores, terr, 0.75);
+    }
+    if (g.rare) {
+      var rf = bumps(prov.map(function (p) { return { c: p.c, r: p.r * 0.8, w: p.w * (0.15 + 0.85 * p.share) }; }),
+                     RARE_FLOOR);
+      out.grade.rare = scaleBy(rf, g.rare, terr, 0.75);
+    }
+    out.provinces = prov.map(function (p) { return { lat: Math.asin(p.c[2]), lon: Math.atan2(p.c[1], p.c[0]),
+                                                     r: p.r, share: p.share }; });
+    /* FISSILE HOTSPOTS. */
+    if (g.fissile) {
+      var fisHeads = heads.filter(function (h) { return h.cid === 'fissile'; });
+      var nHot = Math.max(fisHeads.length, 1 + Math.floor(hash01(tag + 'hot#') * 3)), hots = [];
+      for (var k = 0; k < nHot; k++) {
+        hots.push({ c: k < fisHeads.length ? fisHeads[k].c : sphereDir(tag + 'hot' + k + ':'),
+                    r: 0.08 + 0.14 * hash01(tag + 'hot' + k + ':r'),
+                    w: (k === 0 || k < fisHeads.length) ? 1 : 0.4 + 0.6 * hash01(tag + 'hot' + k + ':w') });
+      }
+      out.grade.fissile = scaleBy(bumps(hots, FISSILE_FLOOR), g.fissile, terr, 0.5);
+    }
+    /* WATER, where the picture has it. */
+    if (g.water) {
+      var wf = new Float32Array(NCELL), icy = key === 'iceball' || key === 'iceMoon';
+      var damp = icy ? 0.6 : DAMP_FLOOR, any = 0;
+      for (var i = 0; i < NCELL; i++) {
+        var v = damp;
+        if (terr) v = Math.max(v, terr.sea[i], terr.ice[i]);
+        wf[i] = v; if (v > any) any = v;
+      }
+      /* No sea and no cap to be seen (a dry rock, a moon the shader does
+       * not dress): the ice is buried, poleward, in patches. */
+      if (!terr || any <= damp + 1e-6) {
+        var buried = [];
+        for (var q = 0; q < 3; q++) {
+          var dq = sphereDir(tag + 'ice' + q + ':');
+          var pole = hash01(tag + 'ice' + q + ':p') < 0.5 ? -1 : 1;
+          dq[2] = pole * (0.6 + 0.4 * Math.abs(dq[2]));
+          var dl3 = Math.sqrt(dot3(dq, dq)); dq = [dq[0] / dl3, dq[1] / dl3, dq[2] / dl3];
+          buried.push({ c: dq, r: 0.25 + 0.3 * hash01(tag + 'ice' + q + ':r'), w: q === 0 ? 1 : 0.6 });
+        }
+        var bf = bumps(buried, damp);
+        for (i = 0; i < NCELL; i++) wf[i] = Math.max(wf[i], bf[i]);
+      }
+      var wTop = 0;
+      for (i = 0; i < NCELL; i++) if (wf[i] > wTop) wTop = wf[i];
+      out.grade.water = new Float32Array(NCELL);
+      for (i = 0; i < NCELL; i++) out.grade.water[i] = g.water * (wTop > 0 ? wf[i] / wTop : 0);
+    }
+    if (g.hydrogen) {
+      out.grade.hydrogen = new Float32Array(NCELL);
+      for (i = 0; i < NCELL; i++) out.grade.hydrogen[i] = g.hydrogen;
+    }
+    GROUND_CACHE.set(body, out);
+    return out;
+  }
+  /* World grade times the local field. Under a sea the ore is still there
+   * but harder to reach: `wet` of it is lost where the cell is drowned. */
+  function scaleBy(f, grade, terr, wet) {
+    var o = new Float32Array(NCELL);
+    for (var i = 0; i < NCELL; i++) {
+      var k = terr ? 1 - wet * terr.sea[i] : 1;
+      o[i] = grade * f[i] * k;
+    }
+    return o;
+  }
+  /* The local grade of one commodity in one cell (0 where there is none). */
+  function localGrade(body, sys, cid, cell) {
+    var m = groundMap(body, sys);
+    var a = m && m.grade[cid];
+    return a ? a[cell] : 0;
+  }
+  /* Everything in one cell, richest first by value. */
+  function groundAt(body, sys, cell) {
+    var m = groundMap(body, sys);
+    if (!m) return [];
+    var Eco = global.Economy;
+    return CIDS.filter(function (cid) { return m.grade[cid] && m.grade[cid][cell] > 0.005; }).map(function (cid) {
+      var gr = m.grade[cid][cell];
+      var base = Eco && Eco.BY_ID && Eco.BY_ID[cid] ? Eco.BY_ID[cid].base : 1;
+      return { cid: cid, name: NAMES[cid], grade: gr, worth: gr * base };
+    }).sort(function (a, b) { return b.worth - a.worth; });
+  }
+  /* Has the survey read this commodity on this cell? Its class's own
+   * coverage, cell by cell. */
+  function cellRead(rec, cid, cell) {
+    if (!rec) return false;
+    var cls = classOf(cid);
+    var field = cls >= 3 ? 'cells2' : cls === 2 ? 'cellsF' : 'cells';
+    var a = cellsOf(rec, field);
+    return !!a[cell];
+  }
+
   function remaining(G, key, rows) {
     var ex = (G && G.extracted && G.extracted[key]) || {};
     return rows.map(function (r) {
@@ -624,7 +878,9 @@
     arrayCov: arrayCov, meanT: meanT, migrateRec: migrateRec, CELL_PAD: CELL_PAD,
     CLASS: CLASS, TOP: TOP, classOf: classOf, covClass: covClass, soldClass: soldClass,
     readable: readable, unsoldAny: unsoldAny,
-    gradeWord: gradeWord, fmtTonnes: fmtTonnes
+    gradeWord: gradeWord, fmtTonnes: fmtTonnes,
+    groundMap: groundMap, localGrade: localGrade, groundAt: groundAt, cellRead: cellRead,
+    cellOfLatLon: cellOfLatLon, cellOfWorld: cellOfWorld, NCELL: NCELL
   };
   global.Survey = Survey;
   if (typeof module !== 'undefined' && module.exports) module.exports = Survey;

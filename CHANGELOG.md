@@ -75,6 +75,55 @@ Astra has seen it working.
   - **Arrival.** A pad is never taken as the home station: the Shared
     line's fallback to "any station" is what had put a pad with no orbit
     under spawnShip.
+- **2026-10-25: survey instruments graded, carried over.** The 21 October
+  commit (grade 1 scanner, grade 2 gamma spectrometer, grade 3 deep array;
+  its own entry is below) was only in the older copy on C:; it is on this
+  line now.
+- **2026-10-25: deposits are somewhere, and a polar orbit is one key.**
+  Astra: "we need easier controls to put the ship into a polar orbit for
+  mapping mineral deposits. planets should have mineral deposits which are
+  location-based, where you might find metals/precious metals in some
+  ratio in one place, water where there's water on the surface, fissiles
+  show up with the gamma spectrometer, and so on."
+  - **Y on the F2 orbit map plans a polar survey orbit.** It finds the
+    next time you cross the world's equator (its spin equator, the one the
+    survey maps in) and puts one node there: the burn that leaves you
+    circular at that height, running pole to pole, the cheaper way round.
+    It is an ordinary node, so the planner shows the new orbit, the burn
+    and the reaction mass before anything fires, and \ flies it. It warns
+    if the orbit would be too high for the survey (three radii). Flown by
+    the autopilot from an inclined low orbit (a 10.4 km/s, nine-minute burn):
+    0.4° off polar, e 0.013.
+  - **Every world has a ground map.** One grade per survey cell, per
+    commodity. A world's grade is now its best ground; most of it is
+    poorer (75% of all ground is under half its world's grade).
+    - Metals come in two to five provinces. Each has its own mix: some are
+      nearly all base metal, some carry a good share of precious metal, and
+      where you find the precious metal you find ore with it. Ore bodies
+      stand on land where a world has seas.
+    - Fissiles are one to three small hotspots, which only the gamma
+      spectrometer shows.
+    - Water is where the picture shows it: under the seas and in the ice
+      caps you can see from orbit, a little in the ground elsewhere. Lava is
+      not water. An ice world is ice all over. A tidally locked world's ice
+      is its night side. Worlds with no visible water have buried ice, in
+      patches toward the poles.
+    - A surface mining port stands on its world's ore body (94 of 94).
+  - **The SURVEY page's map shows it.** Each mapped cell is the colour of
+    the most valuable thing your instruments have read there (ore rust,
+    precious gold, fissile green, water blue, hydrogen violet), brighter
+    where it is richer. The list's swatches are the key. The ground under
+    you is boxed, with a BELOW YOU line saying what is there. The grades
+    in the list are the best ground you have seen so far.
+  - **A drone digs the ground it stands on**, at that ground's grade, and
+    says so when it is poor.
+  - Seas and caps are worked out on the CPU by the shader's own arithmetic.
+    The terrain table moved from gl.js to weather.js so both read one copy.
+    The survey and the picture agree on every coastline sampled.
+  - Fixed on the way: landing on a tidally locked world worked out the
+    landing spot without undoing the pole's lean (`az`), so the ship was
+    put back on the ground somewhere else the next frame.
+  - `test/ground.test.js` (20 checks), `test/polar.test.js` (15).
 
 - **2026-10-15: Driftwood's line merged into Abby.** Planetary rings,
   asteroid belts and Trojans, the lift car, lightning, the glass-glow
