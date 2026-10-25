@@ -1,0 +1,207 @@
+/* airdata.test.js — the speed box, the G meter and the altitude box.
+ *
+ *     node test/airdata.test.js
+ *
+ * Astra, 2026-10-18, on why altitude has to be right: "we have atmosphere
+ * mining which will be dependent on the altitude". Felt G is what the crew
+ * feels (gravity excluded, as on a fighter's meter); altitude is above the
+ * surface of the same body the heading tape and ladder use.
+ */
+global.window = global.window || global;
+var V = require('../src/vec3.js');
+require('../src/economy.js');
+var Gen = require('../src/generate.js');
+var Sim = require('../src/sim.js');
+require('../src/hulls.js');
+require('../src/ports.js');
+var Render = require('../src/render.js');
+var Galaxy = require('../src/galaxy.js');
+
+var pass = 0, fail = 0;
+function check(n, c, d) {
+  if (c) { pass++; console.log('  ok   ' + n + (d ? '   ' + d : '')); }
+  else { fail++; console.log('  FAIL  ' + n + (d ? '   ' + d : '')); }
+}
+function near(a, b, tol) { return Math.abs(a - b) <= (tol || 1e-9); }
+
+console.log('--- what goes in the boxes ---');
+function rd(r) { return r.value + ' ' + r.unit; }
+[[0.0052, false, '5.2 M/S'], [0.4123, false, '412 M/S'], [7.842, false, '7.84 KM/S'],
+ [31.47, false, '31.5 KM/S'], [452.6, false, '453 KM/S'],
+ [0.412 * 299792.458, true, '0.412 c'], [3.1 * 299792.458, true, '3.10 c'],
+ [0.0001 * 299792.458, true, '30.0 KM/S']].forEach(function (c) {
+  var r = Render.airSpeedReadout(c[0], c[1]);
+  check('speed ' + c[0].toPrecision(4) + (c[1] ? ' cruising' : '') + ' reads ' + c[2], rd(r) === c[2], rd(r));
+});
+[[0.5, '500 M'], [8.42, '8,420 M'], [184.23, '184.2 KM'], [18600, '18,600 KM'], [2.5e6, '2.50 MKM']].forEach(function (c) {
+  var r = Render.altitudeReadout(c[0]);
+  check('altitude ' + c[0] + ' km reads ' + c[1], rd(r) === c[1], rd(r));
+});
+var up = Render.vsReadout(0.012), dn = Render.vsReadout(-0.45), still = Render.vsReadout(0);
+check('climbing 12 m/s points up', up.dir === 1 && up.text === '12.0 m/s', up.text);
+check('sinking 450 m/s points down', dn.dir === -1 && dn.text === '450 m/s', dn.text);
+check('holding level has no arrow', still.dir === 0);
+
+console.log('--- the air line ---');
+var thick = { atmosphere: { rho0: 1.2, scaleHeight: 8, top: 96 } };
+check('a world with no air gets no line', Render.airReadout({}, 50, 0) === null);
+var inA = Render.airReadout(thick, 20, Sim.airDensityAt(thick, 20));
+check('inside the air: density, flagged', inA && inA.inside && /^ρ 0\.099 kg\/m³$/.test(inA.text), inA && inA.text);
+var thin = Render.airReadout(thick, 90, Sim.airDensityAt(thick, 90));
+check('thin air goes to exponent form', thin && /e-/.test(thin.text), thin && thin.text);
+var above = Render.airReadout(thick, 436, 0);
+check('above it: how far down the top is, with a pointer', above && !above.inside && above.text === 'AIR ▼ 340 km', above && above.text);
+check('density at the top is zero', Sim.airDensityAt(thick, 96) === 0);
+
+console.log('--- felt G in flight ---');
+var empty = { gravBodies: [], byId: {} };
+function flyer(th, vel) {
+  return { pos: { x: 1e9, y: 0, z: 0 }, vel: vel || { x: 0, y: 0, z: 0 }, thrust: th, noDrag: true, mass: 80 };
+}
+check('coasting is weightless whatever is pulling', near(V.len(Sim.feltAccel(flyer({ x: 0, y: 0, z: 0 }), empty, 0)), 0));
+var oneG = V.len(Sim.feltAccel(flyer({ x: Sim.G0, y: 0, z: 0 }), empty, 0)) / Sim.G0;
+check('a 1 G burn reads 1.0', near(oneG, 1, 1e-12), oneG);
+var diag = V.len(Sim.feltAccel(flyer({ x: 3 * Sim.G0, y: 4 * Sim.G0, z: 0 }), empty, 0)) / Sim.G0;
+check('a burn on two axes reads its magnitude', near(diag, 5, 1e-9), diag);
+
+/* Drag counts — a scoop pass in air is felt even with the drive off. */
+var gal = Galaxy.build('kawartha');
+function optsFor(st) {
+  var fac = gal.factionById ? gal.factionById[st.factionId] : null;
+  return fac ? { faction: fac, allFactions: gal.factions } : undefined;
+}
+var airy = null, pad = null, orbital = null;
+for (var s = 0; s < gal.stars.length && (!airy || !pad || !orbital); s++) {
+  var sys = Gen.generateSystem(gal.stars[s].seed, optsFor(gal.stars[s]));
+  if (!airy) sys.gravBodies.forEach(function (b) { if (!airy && b.atmosphere && b.radius) airy = { sys: sys, body: b }; });
+  (sys.ports || []).forEach(function (p) {
+    if (!p.docking) return;
+    if (!pad && p.surface && p.parentBody && p.parentBody.mu) pad = { sys: sys, port: p };
+    if (!orbital && !p.surface) orbital = { sys: sys, port: p };
+  });
+}
+check('the galaxy has a world with air', !!airy);
+if (airy) {
+  var b = airy.body, st = Sim.bodyState(b, airy.sys, 0);
+  var at = b.atmosphere, h = at.scaleHeight * 2;
+  var p = V.addScaled(st.pos, { x: 1, y: 0, z: 0 }, b.radius + h);
+  var sh = { pos: p, vel: V.add(st.vel, { x: 0, y: 2, z: 0 }), thrust: { x: 0, y: 0, z: 0 }, mass: 80, dragArea: 14 };
+  var fd = V.len(Sim.feltAccel(sh, airy.sys, 0));
+  var rho = Sim.airDensityAt(b, h);
+  var expect = 0.5 * rho * 2 * 2 * 14 * Sim.DRAG_SCALE / 80;
+  check('coasting through air, drag is what you feel', near(fd, expect, expect * 1e-6), (fd / Sim.G0).toFixed(3) + ' G');
+  /* Astra, 2026-10-19: "make the air drag less brutal". The same coast
+   * read 17.4 G before; a quarter of that now. */
+  check('and it is a quarter of the brick it used to be', Sim.DRAG_SCALE === 0.25 &&
+        near(fd / Sim.G0, 17.448 * 0.25, 0.01), (fd / Sim.G0).toFixed(2) + ' G, was 17.45');
+}
+
+console.log('--- felt G in a berth ---');
+function newShip(pos, vel) {
+  return { cls: 'courier', dryMass: 80, hullHp: 100, gear: true, thrusterCap: 10,
+           pos: V.clone(pos), vel: V.clone(vel), cargo: {}, thrust: { x: 0, y: 0, z: 0 },
+           fwd: { x: 1, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 }, right: { x: 0, y: -1, z: 0 },
+           cleared: {} };
+}
+check('the galaxy has a ground pad', !!pad);
+if (pad) {
+  var t = 5000;
+  var ps = Sim.bodyState(pad.port, pad.sys, t);
+  var s1 = newShip(ps.pos, ps.vel);
+  Sim.dockShip(s1, pad.port, pad.sys, t);
+  check('docked on the pad', s1.docked === pad.port.id);
+  if (s1.docked === pad.port.id) {
+    /* Astra, 2026-10-19: pads and common areas have "clarke-tech
+     * artificial gravity generators ... just to make design easier".
+     * The world under this pad pulls a few hundredths of a G; the deck
+     * reads one, pressing up out of the ground. */
+    var world = pad.port.parentBody;
+    Sim.updateDockedShip(s1, pad.sys, t);
+    var ws = Sim.bodyState(world, pad.sys, t);
+    var r = V.sub(s1.pos, ws.pos);
+    var got = Sim.feltAccel(s1, pad.sys, t);
+    check('a pad reads one standard G whatever the world', near(V.len(got) / Sim.G0, 1, 1e-12),
+          (V.len(got) / Sim.G0).toFixed(3) + ' G on a world of ' +
+          (world.mu / V.dot(r, r) / Sim.G0).toFixed(3) + ' G');
+    check('and it pushes up, out of the ground', V.dot(got, r) > 0);
+
+    /* The rail: nothing while the hull is still being drawn in from
+     * outside, the deck once it is through the door. */
+    var railer = { pos: s1.pos, vel: s1.vel, thrust: { x: 0, y: 0, z: 0 }, noDrag: true,
+                   arrival: { port: pad.port.id, berth: s1.dockOffset.berth, at: t, lead: 10 } };
+    check('on the rail lead-in, outside: nothing to feel', near(V.len(Sim.feltAccel(railer, pad.sys, t + 5)), 0));
+    check('on the rail inside: the deck\'s 1 G', near(V.len(Sim.feltAccel(railer, pad.sys, t + 15)) / Sim.G0, 1, 1e-12));
+  }
+}
+check('the galaxy has an orbital port', !!orbital);
+if (orbital) {
+  var os = Sim.bodyState(orbital.port, orbital.sys, 0);
+  var s2 = newShip(os.pos, os.vel);
+  Sim.dockShip(s2, orbital.port, orbital.sys, 0);
+  var g2 = V.len(Sim.feltAccel(s2, orbital.sys, 0)) / Sim.G0;
+  check('a station berth reads one standard G too', s2.docked === orbital.port.id && near(g2, 1, 1e-12), g2.toFixed(4) + ' G');
+}
+
+console.log('--- drawing it ---');
+function stubCtx() {
+  var texts = [];
+  return new Proxy({ texts: texts }, {
+    get: function (o, k) {
+      if (k in o) return o[k];
+      if (k === 'fillText') return function (s, x, y) { texts.push({ s: s, x: x, y: y }); };
+      if (k === 'measureText') return function (s) { return { width: String(s).length * 11 }; };
+      return function () {};
+    },
+    set: function (o, k, v) { o[k] = v; return true; }
+  });
+}
+var ctx = stubCtx();
+var ext = Render.drawAirData(ctx, 1600, 900, {
+  cy: 450, speed: Render.airSpeedReadout(0.4123), g: 2.43, peak: 5.07,
+  alt: Render.altitudeReadout(184.2), vs: Render.vsReadout(-0.012),
+  air: Render.airReadout(thick, 184.2, 0)
+});
+function has(s) { return ctx.texts.some(function (t) { return t.s === s; }); }
+function xOf(s) { return ctx.texts.filter(function (t) { return t.s === s; })[0].x; }
+check('speed box shows 412 and its unit', has('412') && has('M/S'));
+check('G and peak under it', has('G 2.4') && has('PK 5.1'));
+check('altitude box shows 184.2 KM', has('184.2') && has('KM'));
+check('vertical speed under altitude', has('VS') && has('12.0 m/s'));
+check('air line under that', has('AIR ▼ 88 km'));
+check('speed sits left of centre, altitude right', xOf('412') < 800 && xOf('184.2') > 800);
+check('both clear of the ladder (±190 px at least)', ext.left < 800 - 190 && ext.right > 800 + 190, ext.left + ' .. ' + ext.right);
+var ctx2 = stubCtx();
+Render.drawAirData(ctx2, 1600, 900, { cy: 450, speed: Render.airSpeedReadout(0), g: 1, peak: null, alt: null });
+check('docked: peak shows --', ctx2.texts.some(function (t) { return t.s === 'PK --'; }));
+
+/* ---- facing into or against the way you are going --------------------
+ * Astra, 2026-10-19: "we need a way to know if the ship is facing into or
+ * out of the direction of travel that's easier to find". */
+console.log('--- facing ---');
+var PRO = { x: 0, y: 1, z: 0 };
+function face(deg) {
+  var r = deg * Math.PI / 180;
+  return { x: Math.sin(r), y: Math.cos(r), z: 0 };
+}
+var f0 = Render.facingInfo(face(0), PRO, 2);
+check('nose on prograde: PROGRADE, on it', f0.mode === 'pro' && f0.locked && f0.deg < 1e-6);
+var f8 = Render.facingInfo(face(8), PRO, 2);
+check('8° off still counts as on it', f8.mode === 'pro' && f8.locked && Math.abs(f8.deg - 8) < 1e-6);
+var f40 = Render.facingInfo(face(40), PRO, 2);
+check('40° off: prograde side, not on it', f40.mode === 'pro' && !f40.locked && Math.abs(f40.deg - 40) < 1e-6);
+var f175 = Render.facingInfo(face(175), PRO, 2);
+check('tail to the motion: RETROGRADE, 5° off, on it', f175.mode === 'retro' && f175.locked && Math.abs(f175.deg - 5) < 1e-6);
+var f120 = Render.facingInfo(face(120), PRO, 2);
+check('120° off prograde reads 60° off retrograde', f120.mode === 'retro' && Math.abs(f120.deg - 60) < 1e-6);
+check('not moving: nothing to face', Render.facingInfo(face(0), PRO, 0).mode === 'still');
+function cueTexts(info) {
+  var c = stubCtx();
+  Render.drawFacingCue(c, 1600, 900, info, 500);
+  return c.texts.map(function (t) { return t.s; });
+}
+check('the cue says PROGRADE when on it', cueTexts(f0).indexOf('PROGRADE ') >= 0);
+check('and gives the angle when off', cueTexts(f40).indexOf('PROGRADE 40° OFF') >= 0, cueTexts(f40).join('|'));
+check('and RETROGRADE when the tail leads', cueTexts(f175).indexOf('RETROGRADE 5° OFF') >= 0, cueTexts(f175).join('|'));
+
+console.log('\n' + pass + ' passed, ' + fail + ' failed');
+process.exit(fail ? 1 : 0);

@@ -69,6 +69,22 @@
   /* The heaviest world a full ship can leave, in m/s^2. */
   var MAX_SURFACE_G = (SHIP_SPEC.thrustKN / ladenMass(SHIP_SPEC)) / LIFT_MARGIN;
 
+  /* Twilight worlds — see the planet loop in generateSystem. Tides lock a
+   * solid world inside TIDAL_LOCK_AU × (star mass in suns)^⅓; a little
+   * under one solid world in fourteen outside that is knocked on its side. */
+  var TIDAL_LOCK_AU = 0.45;
+  var TIPPED_CHANCE = 0.07;
+  /* How far inside the habitable zone a locked world's ring can still be
+   * temperate, as a fraction of its inner edge (insolation ∝ 1/a², so
+   * 0.80 is about 1.6× the sunlight the zone's own edge gets — the
+   * nightside dumps the rest). 0.55 was tried first: physically
+   * defensible, but it made a desert ring in more than half of all
+   * systems and lifted the whole galaxy's development with it. */
+  var TWILIGHT_INNER = 0.80;
+  /* How far a ring world's pads sit toward the dayside of the exact
+   * terminator, in radians of longitude (~8.6°: the star 8.6° up). */
+  var TWILIGHT_PAD_SUNWARD = 0.15;
+
   /* Surface gravity of a body, in m/s^2. mu is km^3/s^2 and radius is km,
    * so mu/r^2 comes out in km/s^2 and wants a factor of a thousand. */
   function surfaceGravity(body) {
@@ -415,14 +431,56 @@
         ? prng.range(12, 31) * DEG
         : Math.abs(prng.gauss(0, 2.4)) * DEG;
 
+      /* TWILIGHT WORLDS (2026-10-19).
+       *
+       * The old rule — in the habitable zone and terran or ocean — is
+       * `habitableGlobal`, and it is still what every id- and draw-
+       * sensitive site below reads (station host order, the port and pad
+       * counts, pad latitude), so every station and pad any seed ever had
+       * is still where it was, with the same id.
+       *
+       * On top of it, two kinds of world that live in a strip:
+       *   - TIDALLY LOCKED. Close to a star, tides stop a world's day. One
+       *     face bakes, the other freezes, and the ring between them — the
+       *     terminator, where the star sits on the horizon forever — is
+       *     temperate. That ring runs over both poles. The distance
+       *     tides reach scales with the cube root of the star's mass; the
+       *     0.45 AU constant puts the line inside every red dwarf's
+       *     habitable zone and nowhere near a sun-like star's.
+       *   - TIPPED. Uranus-like: on its side, so each pole spends half the
+       *     year staring at the star and half in the dark. The poles
+       *     swing between scorch and freeze; the equator, which sees a
+       *     sunrise every day of the year, is the only stable place.
+       * A locked world can be habitable well inside the normal zone (the
+       * nightside is a heat sink), so the band starts at 0.55 of hzInner.
+       * Desert and tundra worlds qualify too — the ring is the oasis.
+       *
+       * No draws on prng: the tipped roll is its own fork per planet. */
+      var habitableGlobal = (aAU >= hzInner && aAU <= hzOuter &&
+                             (type === 'terran' || type === 'ocean'));
+      var solid = (type !== 'gasGiant' && type !== 'iceGiant');
+      /* opts.noTwilight builds the system as it was before — the suite
+       * uses it to prove nothing else moved. */
+      var tw0 = !opts.noTwilight;
+      var tidallyLocked = tw0 && solid && aAU < TIDAL_LOCK_AU * Math.cbrt(pre.massSol);
+      var tipped = tw0 && solid && !tidallyLocked && base.fork('tipped-' + p).chance(TIPPED_CHANCE);
+      var bandType = (type === 'terran' || type === 'ocean' || type === 'desert' || type === 'tundra');
+      var habitableBand = null;
+      if (tidallyLocked && bandType && aAU >= TWILIGHT_INNER * hzInner && aAU <= hzOuter) habitableBand = 'terminator';
+      else if (tipped && bandType && aAU >= hzInner && aAU <= hzOuter) habitableBand = 'equator';
+      else if (habitableGlobal) habitableBand = 'global';
+
       var planet = {
         id: 'b' + (id++), name: starName + ' ' + ROMAN[p],
         kind: 'planet', type: type, typeName: def.name,
         mass: massKg, radius: radiusFromMass(massKg, def.density),
         color: def.color, albedo: def.albedo,
         insolation: luminosity / (aAU * aAU),
-        habitable: (aAU >= hzInner && aAU <= hzOuter &&
-                    (type === 'terran' || type === 'ocean')),
+        habitable: habitableBand !== null,
+        habitableGlobal: habitableGlobal,
+        habitableBand: habitableBand,
+        tidallyLocked: tidallyLocked,
+        tipped: tipped,
         atmosphere: makeAtmosphere(type, prng),
         composition: atmosphereComposition(type, flavRng),
         orbit: {
@@ -488,8 +546,11 @@
     var strng = base.fork('stations');
     var hosts = planets.slice().sort(function (x, y) {
       // Prefer habitable worlds, then giants (moons to mine), then the rest.
-      var sx = (x.habitable ? 3 : 0) + (x.type === 'gasGiant' ? 2 : 0) + (x.children.length ? 1 : 0);
-      var sy = (y.habitable ? 3 : 0) + (y.type === 'gasGiant' ? 2 : 0) + (y.children.length ? 1 : 0);
+      // habitableGlobal, not habitable: twilight worlds get their ports
+      // from their own substream after the pads, so this order — and with
+      // it every station id — is what it was before they existed.
+      var sx = (x.habitableGlobal ? 3 : 0) + (x.type === 'gasGiant' ? 2 : 0) + (x.children.length ? 1 : 0);
+      var sy = (y.habitableGlobal ? 3 : 0) + (y.type === 'gasGiant' ? 2 : 0) + (y.children.length ? 1 : 0);
       if (sy !== sx) return sy - sx;
       return x.orbit.a - y.orbit.a; // stable tiebreak keeps this deterministic
     });
@@ -567,7 +628,7 @@
       /* The settlement chain's `fSettled` term — how many separate places
        * on one world are worth calling at. A frontier galaxy answers "one,
        * and be grateful"; a settled one puts a second city on a rock. */
-      var want = cand.habitable ? (Eco.pressuredChance(por, 0.4) ? 3 : 2)
+      var want = cand.habitableGlobal ? (Eco.pressuredChance(por, 0.4) ? 3 : 2)
                : (have > 0 && Eco.pressuredChance(por, 0.45) ? 2 : have);
       if (want > have) hostsNeedingMore.push({ planet: cand, want: want, have: have });
     }
@@ -622,12 +683,50 @@
     }
     for (var li = 0; li < landable.length; li++) {
       var world = landable[li];
-      var wantPads = world.habitable ? (spr.chance(0.35) ? 2 : 1)
+      var wantPads = world.habitableGlobal ? (spr.chance(0.35) ? 2 : 1)
                    : (spr.chance(world.kind === 'moon' ? 0.30 : 0.38) ? 1 : 0);
       for (var pd = 0; pd < wantPads; pd++) {
         var padPort = makeSurfacePort(world, spr, pd, ugr);
         padPort.id = 'b' + (id++);
         world.children.push(padPort);
+      }
+    }
+
+    /* --- twilight worlds: the ports the old rule did not give them -------
+     * A world that is habitable only in its ring or band was not habitable
+     * at all before 2026-10-19, so the blocks above gave it a lonely-rock
+     * share of ports. Top it up to what a habitable world gets — two or
+     * three stations, one or two pads — from its own substreams, AFTER
+     * every existing id has been handed out. Same seed, same everything
+     * that was there, plus the new ports at the end of the id list. */
+    var twp = base.fork('twilight-ports');
+    var twd = base.fork('twilight-pads');
+    var twu = base.fork('twilight-underground');
+    for (var tw = 0; tw < planets.length; tw++) {
+      var tpl = planets[tw];
+      if (!tpl.habitable || tpl.habitableGlobal) continue;
+      var tOrbital = tpl.children.filter(function (c) { return isStation(c) && !c.surface; });
+      var tHave = tOrbital.length;
+      var tWant = Eco.pressuredChance(twp, 0.4) ? 3 : 2;
+      var tUsed = tOrbital.map(function (c) { return c.orbit.a; });
+      for (var tx = tHave; tx < tWant; tx++) {
+        var tst = makeStation(tpl, star, twp, tUsed);
+        if (!tst) break;
+        tst.id = 'b' + (id++);
+        tpl.children.push(tst);
+        tUsed.push(tst.orbit.a);
+      }
+      /* Pads only if the world can be landed on at all — the gravity rule
+       * still comes first. */
+      var tLand = [];
+      collectLandable(tpl, tLand);
+      if (!tLand.length) continue;
+      var tPads = tpl.children.filter(function (c) { return c.surface; }).length;
+      var tPadWant = twd.chance(0.35) ? 2 : 1;
+      for (var tq = tPads; tq < tPadWant; tq++) {
+        var tPort = makeSurfacePort(tpl, twd, tq, twu, true);
+        tPort.id = 'b' + (id++);
+        tpl.children.push(tPort);
       }
     }
 
@@ -654,6 +753,7 @@
     });
 
     buildRotations(sys, base);
+    settleTwilightPads(sys);
     /* Rings and belts (2026-10-15). Their own substreams, forked off the
      * seed, so nothing generated before or after them moves — and after the
      * rotations, because a ring lies in its planet's equator. Read at call
@@ -1024,7 +1124,12 @@
     if (!port.surface || !world) return out;
     /* How much of its own air the place has to grow. A breathable world
      * needs almost none; a rock needs all of it. */
-    var need = world.habitable ? 0.25 : 1;
+    /* A twilight world breathes in its ring but farms under glass anyway:
+     * the light is a permanent dawn or a hard seasonal swing, and crops
+     * want more than that. Somewhere between a garden world and a rock. */
+    var need = !world.habitable ? 1
+             : (world.habitableBand === 'terminator' || world.habitableBand === 'equator') ? 0.6
+             : 0.25;
     var dev = 0.35;
     if (port.market && typeof port.market.dev === 'number') dev = port.market.dev;
     var count = Math.max(1, Math.round((1 + dev * 3) * need));
@@ -1981,11 +2086,17 @@
    * `ug` is the independent underground-bay stream (see the call site) —
    * kept off `rng` so this feature could be added without shifting a single
    * existing pad's name, position or size for a seed already in play. */
-  function makeSurfacePort(world, rng, index, ug) {
+  function makeSurfacePort(world, rng, index, ug, twilight) {
     var g = surfaceGravity(world);
     /* Ports cluster at temperate latitudes on worlds anyone lives on and
-     * anywhere at all on the ones nobody does. */
-    var lat = world.habitable
+     * anywhere at all on the ones nobody does.
+     *
+     * habitableGlobal on the main pass, not habitable: gauss and range do
+     * not take the same draws, so a twilight world reading `habitable`
+     * here would shift every pad rolled after it. The twilight pass
+     * (`twilight` true) has its own streams and can read the new flag. */
+    var settled = twilight ? world.habitable : world.habitableGlobal;
+    var lat = settled
       ? rng.gauss(0, 0.55) : rng.range(-1.35, 1.35);
     lat = Math.max(-1.45, Math.min(1.45, lat));
     /* Pad radius in KILOMETRES, and it used to be 0.6–2.2 of them — a
@@ -2004,7 +2115,7 @@
     /* Airless, sunbaked or radiation-scoured worlds bury their ports
      * against the weather; the pleasant ones mostly build in the open.
      * Rolled from `ug` — see the note above the function. */
-    var underground = ug ? ug.chance(world.habitable ? 0.18 : 0.42) : false;
+    var underground = ug ? ug.chance(settled ? 0.18 : 0.42) : false;
     var shaftDepth = padRadius * (underground ? UNDERGROUND_DEPTH : SHALLOW_DEPTH);
     return {
       id: null,
@@ -2068,6 +2179,57 @@
         tilt: Math.abs(r.gauss(0, 14)) * DEG,
         phase: r.angle()
       };
+      /* Twilight worlds override the draws above rather than skipping
+       * them, so the per-body stream reads the same either way. */
+      if (b.kind === 'planet' && b.tidallyLocked) {
+        /* One day per year, the pole on the orbit's own normal, and phased
+         * so longitude 0 is the point under the star.
+         *
+         * Tilt = inclination and az = the ascending node put the equator IN
+         * the orbital plane, with the body's longitude 0 along the node
+         * line (sim.js surfaceOffset). The planet is argp + M past the node,
+         * the star is opposite, and the spin turns at the rate M does — so
+         * phase = argp + m0 + π. Exact for a circle; eccentricity rocks the
+         * star a few degrees either side of noon, which is libration, and
+         * real locked worlds do it too. Upright to the SYSTEM it was not:
+         * a world on a 30° orbit had its star wander 30° off its equator
+         * every season and its ring with it. */
+        b.rotation.period = b.orbit.period;
+        b.rotation.tilt = b.orbit.inc;
+        b.rotation.az = b.orbit.lan;
+        b.rotation.phase = b.orbit.argp + b.orbit.m0 + Math.PI;
+      } else if (b.kind === 'planet' && b.tipped) {
+        b.rotation.tilt = r.range(80, 100) * DEG;   // on its side
+      }
+    }
+  }
+
+  /* Where people build on a twilight world. Runs after buildRotations, no
+   * draws: each pad keeps its rolled position and is folded into the
+   * strip. A terminator pad goes to longitude ±90° (the ring, given the
+   * phase set above), keeping its latitude, since the ring runs pole to
+   * pole; an equator pad keeps its longitude and has its latitude squeezed
+   * into the band. A little of the original roll survives in each so two
+   * pads on one world do not land on top of each other. */
+  function settleTwilightPads(sys) {
+    for (var i = 0; i < sys.bodies.length; i++) {
+      var w = sys.bodies[i];
+      if (w.kind !== 'planet') continue;
+      if (w.habitableBand !== 'terminator' && w.habitableBand !== 'equator') continue;
+      for (var c = 0; c < w.children.length; c++) {
+        var pad = w.children[c];
+        if (!pad.surface) continue;
+        if (w.habitableBand === 'terminator') {
+          var l = ((pad.lon % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+          var side = l < Math.PI ? 1 : -1;               // dawn or dusk edge
+          var jitter = (l % Math.PI) / Math.PI - 0.5;    // -0.5..0.5
+          /* A touch sunward of 90°, where the star is low but up — the
+           * middle of the ring as the shader paints it (gl.js). */
+          pad.lon = side * (Math.PI / 2 - TWILIGHT_PAD_SUNWARD) + jitter * 0.12;
+        } else {
+          pad.lat = pad.lat * 0.15;                      // inside ~±12°
+        }
+      }
     }
   }
 
@@ -3297,6 +3459,13 @@
       var roll = rr.next();
       if (!fence || roll >= chance) continue;
       r.flag = 'outlaw';
+      /* Astra (2026-10-21): "Syndicate runners don't get chased by cops
+       * unless they are firing on a civilian vessel as the aggressor. The
+       * syndicate pays off the police." So police never scan, hail or chase
+       * a runner. The only thing that may ever turn them on one is the
+       * runner opening fire on a civilian first. Today no NPC fires on
+       * another NPC, so that case cannot arise yet: damageNpc in combat.js
+       * has no caller but the player's own guns. */
       r.runner = true;
     }
   }

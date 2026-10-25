@@ -1304,6 +1304,14 @@ console.log('--- government and crime permissivity ---');
         mean(lowDevCrime || [0]).toFixed(1) + ' vs ' + mean(highDevCrime || [0]).toFixed(1));
 
   // The user's rule explicitly: NOT every low-tech system is high crime.
+  /* Low-development systems are rare — five in these 150 seeds, one
+   * since twilight worlds (2026-10-19) settled more of the galaxy — so a
+   * claim about them cannot rest on whichever handful the first 150 hold.
+   * Keep drawing until there are a dozen to look at. */
+  for (var ex = 150; lowDevCrime.length < 12 && ex < 1500; ex++) {
+    var xs = Gen.generateSystem('seed-' + ex);
+    if (xs.crimeScore !== undefined && xs.development < 0.3) lowDevCrime.push(xs.crimeScore);
+  }
   var lowDevButLawful = lowDevCrime.filter(function (c) { return c < 40; }).length;
   check('a low-development system can still be low-crime (not deterministic)', lowDevButLawful > 0,
         lowDevButLawful + ' of ' + lowDevCrime.length);

@@ -69,7 +69,9 @@ function carrySavesAcrossTheRename() {
 
 /* PROBES NEVER TOUCH A REAL CAREER. tools/electron-probe.cjs sets this to a
  * scratch folder, so a probe's autosave lands there and not in %APPDATA%.
- * Before the migration on purpose: a probe has no saves to carry. */
+ * Before the migration on purpose: a probe has no saves to carry.
+ * (Restored 2026-10-19 — written 2026-10-15 on Driftwood, committed, and
+ * lost from this copy in a later merge.) */
 if (process.env.MANIFEST_PROBE_USERDATA) {
   app.setPath('userData', process.env.MANIFEST_PROBE_USERDATA);
 } else {

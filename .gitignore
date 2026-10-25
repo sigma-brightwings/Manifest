@@ -1,5 +1,16 @@
 # Dependencies and build output
 node_modules/
+
+# THE READER MODEL AND ITS RUNTIME (src/embedder.js). Both are staged by
+# `npm run models` — the weights downloaded once from the Hugging Face hub,
+# the browser build of transformers.js copied out of node_modules — and are
+# 24 MB and 22 MB of binary that would sit in history forever. Named lang/
+# rather than models/ on purpose: models/ was the old .glb scratch area
+# (see below), and a folder the game depends on must never share a name
+# with one somebody is told it is safe to empty. Without either the game
+# still runs; it reads typed messages with the phrase matcher instead.
+lang/
+vendor/
 dist/
 build/icon.png
 

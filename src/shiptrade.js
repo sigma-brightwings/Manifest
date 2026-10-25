@@ -213,6 +213,65 @@
     for (var k in b) if (!(b[k].until >= t)) delete b[k];
   }
 
+  /* ---- choking a port (2026-10-21) ----------------------------------------
+   * Astra: "buying cargo off a ship means it doesn't have that cargo for the
+   * destination. Provides a way to choke a station without killing trade
+   * ships."
+   *
+   * Her manifest IS a scheduled delivery: generate.js registered it with
+   * the port she is bound for, and the market counts on it. So what you buy
+   * off her is entered against that port as a delivery that never came —
+   * `{ star, port, cid, qty, at, period }`, `at` being when she docks there
+   * — and Economy.shortfalls takes it back out of the shelf from then on,
+   * on the same curve the delivery would have gone in on. Kept in
+   * G.shipTrade.shorts (saved) and attached to the market whenever its
+   * system is entered. Only cargo bound for a port in this system with a
+   * market for it: a ship leaving the system takes her hold with her. */
+  var SHORT_FORGET = 6;          // periods: by then the term is under 2%
+
+  function arrivalOf(contact, t) {
+    var r = contact.route;
+    if (!r || !(r.period > 0) || r.t0 === undefined || r.cruise === undefined) return null;
+    var cycle = r.oneWay ? 0 : Math.floor((t - r.t0) / r.period);
+    var start = r.t0 + cycle * r.period;
+    var out = contact.outbound !== false;
+    var legStart = out ? start : start + r.cruise + (r.layover || 0);
+    return { at: legStart + r.cruise, period: r.period };
+  }
+
+  function shortDelivery(G, sys, contact, cid, qty, t) {
+    var dest = contact.to;
+    if (!dest || !dest.market || !dest.market.rows || !dest.market.rows[cid]) return null;
+    var when = arrivalOf(contact, t);
+    if (!when) return null;
+    var e = { star: (G.here && G.here.id) || null, port: dest.id, cid: cid, qty: qty,
+              at: when.at, period: when.period };
+    var b = book(G);
+    if (!b.shorts) b.shorts = [];
+    b.shorts.push(e);
+    if (!dest.market.shorts) dest.market.shorts = [];
+    dest.market.shorts.push(e);
+    return { port: dest, at: when.at, qty: qty };
+  }
+
+  /* Put the saved shortfalls back on this system's markets, and forget the
+   * ones that have long since faded. Called when a system is entered. */
+  function attach(G, sys, t) {
+    var b = G.shipTrade;
+    var list = (b && b.shorts) || [];
+    var here = (G.here && G.here.id) || null;
+    if (b && b.shorts) {
+      b.shorts = list.filter(function (e) { return !(t - e.at > SHORT_FORGET * e.period); });
+      list = b.shorts;
+    }
+    var ports = (sys && sys.ports) || [];
+    for (var i = 0; i < ports.length; i++) {
+      var p = ports[i];
+      if (!p.market) continue;
+      p.market.shorts = list.filter(function (e) { return e.star === here && e.port === p.id; });
+    }
+  }
+
   /* ---- the door ---------------------------------------------------------- */
 
   /* Null when this hull will talk trade with you; otherwise the reason, in
@@ -473,6 +532,9 @@
       rec.took[cid] = (rec.took[cid] || 0) + qty;
       text = contact.name + ' transfers ' + qty + ' t of ' + row.name.toLowerCase() +
              ' for ' + total.toLocaleString('en-US') + ' cr.';
+      /* And her destination goes without it. */
+      var short = shortDelivery(G, sys, contact, cid, qty, t);
+      if (short) text += '  ' + (short.port.name || 'Her port') + ' will be ' + qty + ' t short.';
     } else {
       if (!row.held) return no('You have no ' + row.name.toLowerCase() + ' aboard.');
       if (row.sellEach === null) {
@@ -538,7 +600,9 @@
     DAILY_CAP: DAILY_CAP, SPARE_ROOM: SPARE_ROOM, DEFAULT_ROOM: DEFAULT_ROOM,
     flagOf: flagOf, spaceOf: spaceOf, legOf: legOf,
     refusal: refusal, board: board, consequence: consequence,
-    deal: deal, maxBuy: maxBuy, prune: prune
+    deal: deal, maxBuy: maxBuy, prune: prune,
+    arrivalOf: arrivalOf, shortDelivery: shortDelivery, attach: attach,
+    SHORT_FORGET: SHORT_FORGET
   };
 
   global.ShipTrade = ShipTrade;

@@ -190,5 +190,107 @@ for (var s3 = 0; s3 < gal.stars.length && orbTried < 6; s3++) {
 check('a small bay behind a heavy one is left the way it was entered', orbTried > 0 && orbOut === orbTried,
       orbOut + '/' + orbTried);
 
+/* ---- down the ring's lift, not through its wall (2026-10-17) ----------
+ * Astra: "passing internal elevator shafts in ring station; the ship
+ * passes thru the wall instead of waiting for doors to open and then
+ * sitting on the elevator pad." */
+console.log('--- the airlock, then the lift ---');
+(function () {
+  var fx0 = Gen.generateSystem('arrival-sweep').ports.filter(function (p) { return !p.surface; })[0];
+  /* A fresh id per model: Sim caches leg timings per port and berth, and
+   * in the game a port never changes which model it wears. */
+  var asModel = function (id) {
+    Render.assignPort('orbital', id);
+    return Object.assign({}, fx0, { id: fx0.id + '@' + id });
+  };
+  var fx;
+  ['ring-s', 'ring-m', 'ring-l'].forEach(function (id) {
+    fx = asModel(id);
+    var n = (Gen.modelledBerths(fx) || []).length, b = -1;
+    for (var i = 0; i < n; i++) if (Gen.berthRoute(fx, i)) { b = i; break; }
+    if (b < 0) { check(id + ': has a routed small bay', false); return; }
+    var path = Sim.arrivalPath(fx, b), legs = Sim.legsFor(fx, b);
+    var sys = Gen.generateSystem('arrival-sweep');
+    var ids = legs.map(function (L) { return L.id; }).join(',');
+    check(id + ': the hull stops at the heavy bay for the airlock to cycle',
+          ids === 'lineup,open,enter,settle,admit,board,lift,pad,transfer', ids);
+    /* Slots: 3 the L stand, 6 on the car at the top, 7 the car's foot, 9 the stand. */
+    var Ls = path[3], top = path[6], foot = path[7], stand = path[9];
+    check(id + ': the hull goes STRAIGHT down the well and the shaft, not across',
+          Math.abs(foot.x - Ls.x) < 1e-9 && Math.abs(foot.y - Ls.y) < 1e-9 &&
+          Math.abs(top.x - Ls.x) < 1e-9 && Ls.z > top.z && top.z > foot.z + 0.1,
+          'well ' + (Ls.z - top.z).toFixed(3) + ', shaft ' + (top.z - foot.z).toFixed(3));
+
+    /* THE CAR RIDES WITH THE SHIP: the hull's run down the shaft is exactly
+     * the car's travel, and the car's position is the hull's own eased u. */
+    var car = global.PortLib[id].cars[0];
+    check(id + ': the ride is exactly the car\'s travel',
+          path.car === car.node && Math.abs((foot.z - top.z) - car.d[2]) < 1e-9,
+          path.car + ' ride ' + (foot.z - top.z).toFixed(4) + ' vs d ' + car.d[2]);
+    var acc = 0, starts = [];
+    for (var k = 0; k < legs.length; k++) { starts.push(acc); acc += legs[k].dur; }
+    var together = 0, sampled = 0;
+    for (var s = 1; s < 10; s++) {
+      var q = Sim.arrivalPose(fx, sys, 0, b, starts[6] + legs[6].dur * s / 10);
+      if (!q) continue;
+      sampled++;
+      if (q.legId === 'lift' && q.car && Math.abs(q.car.f - q.u) < 1e-12) together++;
+    }
+    check(id + ': through the ride the car is exactly where the hull is', sampled === 9 && together === 9,
+          together + '/' + sampled);
+    var p0 = Sim.arrivalPose(fx, sys, 0, b, 0), pE = Sim.arrivalPose(fx, sys, 0, b, acc - 1e-6);
+    var onBoard = Sim.arrivalPose(fx, sys, 0, b, starts[6] - 1e-6);
+    check(id + ': the car waits at the top, and is home again when the rail ends',
+          p0.car.f === 0 && onBoard.car.f === 0 && pE.car.f < 1e-6,
+          'start ' + p0.car.f + ', boarded ' + onBoard.car.f + ', end ' + pE.car.f.toExponential(1));
+    var midT = Sim.arrivalPose(fx, sys, 0, b, starts[8] + legs[8].dur * 0.4);
+    check(id + ': and is still at the bottom while the hull rolls off it',
+          midT && midT.car.f === 1, midT ? 'f ' + midT.car.f : 'no pose');
+    check(id + ': it takes time to ride, then sits on the pad',
+          legs[6].dur >= 4 && legs[7].dur > 0, legs[6].dur.toFixed(1) + ' s + ' + legs[7].dur + ' s');
+
+    /* The hatch must be open by the time the hull leaves the stand. */
+    var atDrop = Sim.arrivalPose(fx, sys, 0, b, starts[5] + 0.01);
+    check(id + ': the floor hatch is open before the hull sinks through it',
+          atDrop && atDrop.gates.inner < 0.01 && atDrop.legId === 'board',
+          atDrop ? atDrop.legId + ' inner ' + atDrop.gates.inner.toFixed(3) : 'no pose');
+    /* And the run across the spoke deck is level: off the car, onto the stand. */
+    var pts = [foot].concat(path.through, [stand]), dzMax = 0;
+    for (var qq = 1; qq < pts.length; qq++) dzMax = Math.max(dzMax, Math.abs(pts[qq].z - pts[0].z));
+    check(id + ': the transfer rolls along the deck, no hop off the platform', dzMax < 0.005,
+          'dz ' + dzMax.toFixed(4));
+
+    /* ---- and the renderer draws the car there, and you hit it there ---- */
+    var dd = Render.portDoors(id);
+    var cars = dd.leaves.filter(function (l) { return l.car; });
+    var hatches = dd.leaves.filter(function (l) { return l.hatch; });
+    check(id + ': the car and its hatch come out of the hull as moving parts',
+          cars.length === 1 && hatches.length === 2 && cars[0].mesh.f.length > 0,
+          cars.length + ' car (' + (cars[0] ? cars[0].mesh.f.length : 0) + ' faces), ' + hatches.length + ' hatch panels');
+    var Lmid = Gen.berthApertures(fx, Gen.berthRoute(fx, b).entry).mid;
+    var down = [car.mid[0], car.mid[1], car.mid[2] + 0.05], up2 = [car.mid[0], car.mid[1], car.mid[2] - 0.05];
+    var atRest = Render.leafHit(id, down, up2, { open: 0, inner: 1, berthMid: Lmid,
+                                                  car: { node: car.node, f: 0 } });
+    var gone = Render.leafHit(id, down, up2, { open: 0, inner: 1, berthMid: Lmid,
+                                                car: { node: car.node, f: 1 } });
+    var shut = Render.leafHit(id, down, up2, { open: 0, inner: 0, berthMid: Lmid,
+                                                car: { node: car.node, f: 1 } });
+    check(id + ': the car is solid where it is, and gone from where it was',
+          !!atRest && !gone, 'at rest ' + (atRest ? 'hit' : 'miss') + ', ridden away ' + (gone ? 'hit' : 'miss'));
+    check(id + ': and a shut hatch still closes the well', !!shut, shut ? 'hit' : 'miss');
+  });
+  /* A routed model with no lift under its heavy bay: no ride, no idling. */
+  fx = asModel('cradle-m');
+  var nC = (Gen.modelledBerths(fx) || []).length, bC = -1;
+  for (var iC = 0; iC < nC; iC++) if (Gen.berthRoute(fx, iC)) { bC = iC; break; }
+  if (bC >= 0) {
+    var lc = Sim.legsFor(fx, bC);
+    check('cradle-m: no car under the heavy bay, so board, lift and pad take no time',
+          lc[5].dur === 0 && lc[6].dur === 0 && lc[7].dur === 0,
+          lc[5].dur + ' / ' + lc[6].dur + ' / ' + lc[7].dur);
+  }
+  Render.assignPort('orbital', null);
+})();
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

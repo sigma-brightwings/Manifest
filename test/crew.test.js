@@ -176,6 +176,26 @@ console.log('--- and a ship you are not in ---');
         Crew.canBeOrdered({ crew: [person('pilot', 1)] }));
 })();
 
+console.log('--- how many hands each hull takes (2026-10-20) ---');
+(function () {
+  /* Astra: "the number of crew needed to run the lasers, the engines and
+   * the turrets, plus a pilot's requirement unless the player takes
+   * control of it." */
+  var ids = Object.keys(Combat.HULLS);
+  check('every hull has a crew figure, with a pilot unless you fly her', ids.every(function (id) {
+    var n = Crew.crewNeeded(id), y = Crew.crewNeeded(id, true);
+    return n.pilot === 1 && y.pilot === 0 && n.total === y.total + 1 && n.total >= 1;
+  }));
+  check('a small hull runs on a pilot alone', Crew.crewNeeded('talon').total === 1);
+  check('a medium hull wants an engineer', Crew.crewNeeded('mule').engineer === 1);
+  check('a carrier wants more hands than a capital ship',
+        Crew.crewNeeded('carrier').total > Crew.crewNeeded('capital').total);
+  var ship = { hullId: 'kestrel', fit: {} };
+  check('an empty hardpoint needs nobody', Crew.crewNeeded(ship).gunner === 0);
+  ship.fit = { utility0: 'turret' };
+  check('a turret needs a gunner', Crew.crewNeeded(ship).gunner === 1);
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

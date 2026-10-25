@@ -888,6 +888,12 @@
    * late cut on a passage — with the one difference that nothing about
    * the trip was being shot at: a ship on a timetable is not in the
    * encounter system. */
+  /* A partner's ship (favours.js) splits what she earns with her captain. */
+  function partnerShare(G, rec, pay) {
+    var F = global.Favours;
+    return (rec && rec.partner && F && F.partnerCut) ? F.partnerCut(G, rec, pay) : pay;
+  }
+
   function deliverByCarrier(G, rec, port, t) {
     var lines = [], list = G.missions || [];
     for (var i = list.length - 1; i >= 0; i--) {
@@ -897,7 +903,7 @@
       if (m.type === 'passage') {
         rec.passengers = Math.max(0, (rec.passengers || 0) - (m.souls || 0));
         var cut = passageCut({ t: t }, m);
-        G.ship.credits += cut.pay;
+        G.ship.credits += partnerShare(G, rec, cut.pay);
         bumpStanding(G, m.faction, cut.standing);
         lines.push(rec.name + ' at ' + port.name + ': ' + cut.text);
       } else {
@@ -911,9 +917,12 @@
         }
         rec.cargo[m.cid] = held - m.tonnes;
         if (rec.cargo[m.cid] <= 1e-9) delete rec.cargo[m.cid];
-        G.ship.credits += m.pay;
+        var mine = partnerShare(G, rec, m.pay);
+        G.ship.credits += mine;
         bumpStanding(G, m.faction, STANDING_WIN[m.type] || 3);
-        lines.push(rec.name + ' delivered at ' + port.name + ' — ' + m.pay + ' cr');
+        lines.push(rec.name + ' delivered at ' + port.name + ' — ' + m.pay + ' cr' +
+                   (mine !== m.pay ? ' (' + mine + ' to you, ' + (m.pay - mine) + ' to ' +
+                                     rec.partner.name + ')' : ''));
       }
       (G.doneMissions = G.doneMissions || {})[m.id] = true;
       list.splice(i, 1);

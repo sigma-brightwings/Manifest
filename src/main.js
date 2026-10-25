@@ -191,6 +191,16 @@
     return (km / AU).toFixed(4) + ' AU';
   }
 
+  /* Cruise speed in c, which is how Astra wants it read ("0.___ c or 1.5c
+   * or 10c"). Below a thousandth of c that is a meaningless string of
+   * zeroes, so the ordinary readout carries on down there. */
+  function fmtCruise(kms) {
+    var b = kms / Render.C_KMS;
+    if (b < 0.001) return fmtSpeed(kms);
+    if (b < 1) return b.toFixed(3) + 'c';
+    return b.toFixed(b < 10 ? 2 : 1) + 'c';
+  }
+
   function fmtSpeed(kms) {
     if (Math.abs(kms) < 0.001) return (kms * 1e6).toFixed(0) + ' mm/s';
     if (Math.abs(kms) < 1) return (kms * 1000).toFixed(1) + ' m/s';
@@ -295,11 +305,26 @@
     G.missions = [];
     /* A new career owns one ship, and it is the one you are in. */
     G.fleet = [];
+    G.orders = [];                 // hulls on the slips — Combat.commission
+    G.stationModules = [];         // station modules, ordered or carried — construction.js
     /* Owns no plants, and has changed no system. */
     G.holdings = [];
     G.uplift = {};
     /* And has never shot an ambulance. */
     G.tenderKills = 0;
+    /* Nobody has met you and nobody has heard of you (captains.js). */
+    G.captains = {};
+    G.record = null;
+    G.broadcasts = [];
+    G.msgDraft = null;
+    G.joined = {};
+    G.favourAsk = null;
+    G.tipAt = null;
+    /* And nobody is talking about you yet (rumours.js). */
+    G.rumours = [];
+    G.hearsay = [];
+    G.rumourSeq = 0;
+    G.recordLegacy = null;
     G.rescue = null;
     G.doneMissions = {};
     G.campaigns = {};
@@ -335,6 +360,11 @@
     if (!G.systemCache[star.id]) {
       /* its owner, or nobody's - an empty system (Galaxy.systemOpts, 2026-10-24) */
       G.systemCache[star.id] = Gen.generateSystem(star.seed, Galaxy.systemOpts(G.galaxy, star));
+      /* Which star this is, on the system itself. Captains are keyed by
+       * star and ship (route ids are per-system), and asking G.here works
+       * only for the system you are in — a rumour about somewhere else
+       * needs the system to know its own name. */
+      G.systemCache[star.id].starId = star.id;
     }
     return G.systemCache[star.id];
   }
@@ -360,6 +390,9 @@
     G.charted = G.charted || {};
     G.charted[star.id] = true;
     G.sys = systemFor(star);
+    /* Deliveries you bought off ships before they arrived (shiptrade.js):
+     * back onto this system's shelves, wherever the system came from. */
+    if (global.ShipTrade && global.ShipTrade.attach) global.ShipTrade.attach(G, G.sys, G.t || 0);
     /* Fetch the station art this system's ports wear now, while the jump
      * tunnel is still on screen, rather than as each one comes into view.
      * ports.js is an index since 2026-09-22; the triangles are per model. */
@@ -431,7 +464,9 @@
 
     /* ORBITAL only (2026-10-24): arriving where the busiest port is a pad
      * made the pad `station`, and a pad has no orbit to park under - every
-     * reader below (and of G.homeStation) wants the station in the sky. */
+     * reader below (and of G.homeStation) wants the station in the sky.
+     * (The NPC line, 2026-10-19, fell back to any station, pad included;
+     * that is the case that crashed spawnShip, so the fallback is gone.) */
     var station = host.children.filter(function (c) { return c.kind === 'station' && !c.surface && c.orbit; })[0];
     G.homeStation = station || null;
     G.spawnHost = host;
@@ -443,7 +478,42 @@
        * space, because being dropped stationary next to a star with a full
        * hold and no plan is not an arrival, it is a problem. */
       var keep = G.ship;
-      G.ship = Sim.circularOrbit(host, G.sys, G.t, host.radius * 5.5, 0.12, 1.1);
+      /* OUT PAST THE GOOD WORLDS, NOT BESIDE ONE (2026-10-19). Astra: the
+       * jump should "dump you not close to the HZ, but a ways out". Gravity
+       * wells foul a slipspace exit the way they mass-lock the cruise
+       * drive, so the drop comes out where the system's pull is thin: past
+       * the frost line, past half again the habitable zone's outer edge,
+       * and a quarter beyond the world you were aimed at — whichever is
+       * furthest. Same longitude as that world, so the cruise in is a
+       * straight line, in a circular orbit about the star, nose on the
+       * world and the world locked. With the 2000c drive that is a minute
+       * or so of approach, which is the arrival we want: the system
+       * coming up at you, not appearing round you. */
+      /* Not `star`: that is enterSystem's own parameter, and a var of the
+       * same name would overwrite it. */
+      var sun = G.sys.root;
+      var arrived = false;
+      if (sun && host && host.orbit && sun.mu > 0) {
+        var sPos = Sim.bodyPosition(sun, G.sys, G.t);
+        var hPos = Sim.bodyPosition(host, G.sys, G.t);
+        var hRel = V.sub(hPos, sPos);
+        var hDist = V.len(hRel);
+        var R = Math.max(G.sys.frostLine || 0, (G.sys.hzOuter || 0) * 1.6, hDist * 1.25);
+        if (hDist > 0 && isFinite(R)) {
+          G.ship = Sim.circularOrbit(sun, G.sys, G.t, R - sun.radius, 0.0,
+                                     Math.atan2(hRel.y, hRel.x));
+          var toHost = V.norm(V.sub(hPos, G.ship.pos));
+          var rgt = V.cross(toHost, { x: 0, y: 0, z: 1 });
+          if (V.len(rgt) > 1e-6) {
+            G.ship.fwd = toHost;
+            G.ship.right = V.norm(rgt);
+            G.ship.up = V.cross(G.ship.right, G.ship.fwd);
+          }
+          G.navTarget = { kind: 'body', id: host.id };
+          arrived = true;
+        }
+      }
+      if (!arrived) G.ship = Sim.circularOrbit(host, G.sys, G.t, host.radius * 5.5, 0.12, 1.1);
       G.ship.credits = keep.credits;
       G.ship.fuel = keep.fuel;
       G.ship.thrusterFuel = keep.thrusterFuel;
@@ -547,8 +617,17 @@
     G.focus = host;
     G.followShip = false;
     G.cam.target = V.clone(Sim.bodyPosition(host, G.sys, G.t));
-    G.cam.dist = (station ? station.orbit.a : host.radius * 3) * 3.2;
+    /* A ground pad has no orbit: a world whose only port is on the
+     * surface used to crash arriving here. */
+    G.cam.dist = (station && station.orbit ? station.orbit.a : host.radius * 3) * 3.2;
     G.cam.yaw = 0.7; G.cam.pitch = 0.38;
+    /* Dropped out far from the world (above): watch the ship, not a planet
+     * an AU away from it. */
+    if (opts.arrive && arrived) {
+      G.followShip = true; G.focus = null;
+      G.cam.target = V.clone(G.ship.pos);
+      G.cam.dist = CHASE_DIST;
+    }
     G.trajectoryStale = 0;
     G.trajJob = null;              // a job plotted in the old system means nothing here
     G.impactForecast = null;
@@ -557,8 +636,10 @@
     G.market = null;
     G.contact = null;
     /* A lock on something in the system you just left is not a lock, it is
-     * a stale id that happens to match a different body. Release it. */
-    G.navTarget = null;
+     * a stale id that happens to match a different body. Release it —
+     * unless the arrival above has just locked the world it dropped you
+     * out toward, which is a body of THIS system. */
+    if (!(opts.arrive && G.navTarget && G.sys.byId[G.navTarget.id] === host)) G.navTarget = null;
     /* And a wake chase ends when you arrive: either you are here because you
      * followed it, in which case it is spent, or you went somewhere else, in
      * which case it was abandoned. Either way the intercept arithmetic was
@@ -877,6 +958,9 @@
     G.paused = false;
     G.keys = {};
     G.ship.thrust = V.zero();
+    /* The red tear you leave behind, for anyone (you included) who comes
+     * back within sixteen hours. */
+    leaveOwnWake('departure');
 
     G.hyper = {
       plan: plan,
@@ -978,12 +1062,14 @@
     if (e < HYPER_CHARGE) {
       hy.phase = 'charge';
       var c = e / HYPER_CHARGE;
+      hy.u = c;                       // how far through the phase — the rift is drawn off it
       // Spins up slowly then all at once, which is what spinning up is.
       hy.intensity = c * c * 0.85;
       hy.flash = c > 0.93 ? (c - 0.93) / 0.07 * 0.9 : 0;
     } else if (e < HYPER_CHARGE + HYPER_TUNNEL) {
       hy.phase = 'tunnel';
       var u = (e - HYPER_CHARGE) / HYPER_TUNNEL;
+      hy.u = u;
       hy.intensity = 1;
       // Entry flash decaying, then the exit flash beginning to build.
       hy.flash = u < 0.12 ? (1 - u / 0.12) * 0.9 : 0;
@@ -995,12 +1081,16 @@
         hy.swapped = true;
         G.t = hy.arriveT;
         enterSystem(hy.plan.to, { arrive: true });
+        leaveOwnWake('arrival');
       }
     } else {
       hy.phase = 'exit';
       var x = (e - HYPER_CHARGE - HYPER_TUNNEL) / HYPER_EXIT;
+      hy.u = x;
       hy.intensity = 1 - x * x;
-      hy.flash = x < 0.30 ? (1 - x / 0.30) * 0.75 : 0;
+      /* The blue rift gapes through the first 30% and the flash peaks as
+       * you pass through it, then clears onto the real sky (see draw()). */
+      hy.flash = x < 0.30 ? Math.pow(x / 0.30, 3) * 0.85 : Math.max(0, 1 - (x - 0.30) / 0.30) * 0.85;
     }
 
     /* The clock, running forward across the whole sequence. Eased so it
@@ -1040,6 +1130,11 @@
   function advanceCorridorPhase(dtReal) {
     var hy = G.hyper, cor = hy.corridor;
     hy.phase = 'tunnel';
+    /* The rift draws the way out growing over the last of the tunnel off
+     * this, so in a corridor it has to be how far along the corridor you
+     * are — not whatever the charge left behind, which put the blue exit
+     * rift in front of you from the first frame. */
+    hy.u = Math.max(0, Math.min(1, cor.progress || 0));
     hy.intensity = 1;
     hy.flash = Math.max(0, hy.flash - dtReal * 3);
 
@@ -1093,6 +1188,7 @@
       hy.departT = G.t - cor.crossSeconds;
       hy.swapped = true;
       enterSystem(hy.plan.to, { arrive: true });
+      leaveOwnWake('arrival');
     }
     return true;
   }
@@ -1193,6 +1289,7 @@
   /* Placed here rather than inline so a crash has somewhere to go back to:
    * respawnShip() calls this again at the current sim time. */
   function spawnShip(host, station, atTime, keepShip) {
+    if (station && !station.orbit) station = null;   // a ground pad has no orbit to sit under
     var startAlt = station
       ? (station.orbit.a * 0.93 - host.radius)
       : host.radius * 0.55;
@@ -1225,11 +1322,21 @@
     G.viewMode = 'orbit';
   }
 
+  /* Station modules riding in a Crawler's truss were part of the hull: a
+   * Crawler lost is her load lost (construction.js). Said, because a
+   * quarter of a million credits does not vanish quietly. */
+  function loseModulesAboard() {
+    if (!global.Construction) return;
+    var n = global.Construction.lostWith(G, G.ship);
+    if (n) say(n + ' station crate' + (n > 1 ? 's' : '') + ' went down with her', 6);
+  }
+
   /* Bring the ship back after a crash. There is no "undo" for a decayed
    * orbit or a bad burn — you get a fresh start above the same world you
    * spawned at, at the CURRENT simulation time, not a reload. */
   function respawnShip() {
     if (!G.ship.landed || !G.ship.crashed) { say('Not crashed — nothing to respawn from', 2); return; }
+    loseModulesAboard();
     spawnShip(G.spawnHost, G.homeStation, G.t, true);
     Combat.stripForRespawn(G.ship);
     G.deadPanels = {};
@@ -1244,6 +1351,7 @@
       pos: V.clone(G.ship.pos), at: performance.now(), size: 2.5
     });
     HOOKS.sound('explosion');
+    loseModulesAboard();
     spawnShip(G.spawnHost, G.homeStation, G.t, true);
     Combat.stripForRespawn(G.ship);
     G.hullWarned = false;
@@ -1499,18 +1607,42 @@
        * stops answering the thrust keys just because you opened a screen. */
       if (!flying() && modeKey(e)) return;
 
+      /* ON FOOT the keyboard is a walker's: held keys move you (update
+       * hands them to walk.js), E uses what you face, Esc still opens the
+       * menu, and nothing reaches the flight controls — U on foot must not
+       * launch the ship you have just walked away from. O, docked and in
+       * the seat, is how you stand up. */
+      var wk = e.key.toLowerCase();
+      if (G.walk && flying() && wk !== 'escape') {
+        G.keys[wk] = true;
+        if (wk === 'e' || wk === 'enter') { e.preventDefault(); walkUse(); }
+        return;
+      }
+      /* O stands you up — into your own ship now, not onto the station deck
+       * (2026-10-24): walk aft to the airlock to step out. Berthed or set
+       * down on a pad; never in flight, where the seat is the only place
+       * anyone should be. */
+      if (wk === 'o' && flying() && (G.ship.docked || G.ship.landed) && !G.hyper) { startShipWalk('seat'); return; }
+
       G.keys[e.key.toLowerCase()] = true;
 
       switch (e.key.toLowerCase()) {
         /* In cruise these set the drive's speed instead of the clock —
          * there is no reason to accelerate time when you are already
          * crossing a system in a couple of minutes. */
+        /* `full` is "as fast as the lock allows", and it follows the lock
+         * up as you climb clear. With the cap at 2000c an absolute speed
+         * would need twenty-odd presses of . to use; this needs one. Any
+         * press of , takes the drive off full and holds what you have. */
         case ',':
-          if (G.cruise) G.cruise.speed = Math.max(CRUISE_MIN, G.cruise.speed / 1.6);
+          if (G.cruise) { G.cruise.full = false; G.cruise.speed = Math.max(CRUISE_MIN, G.cruise.speed / 1.6); }
           else G.warpIndex = Math.max(0, G.warpIndex - 1);
           break;
         case '.':
-          if (G.cruise) G.cruise.speed = Math.min(G.cruise.maxSpeed, G.cruise.speed * 1.6);
+          if (G.cruise) {
+            G.cruise.speed = Math.min(G.cruise.maxSpeed, G.cruise.speed * 1.6);
+            if (G.cruise.speed >= G.cruise.maxSpeed * 0.999) G.cruise.full = true;
+          }
           else G.warpIndex = Math.min(WARPS.length - 1, G.warpIndex + 1);
           break;
         case 'p': G.paused = !G.paused; break;
@@ -1698,8 +1830,17 @@
           if (e.shiftKey) { startAutoMode('follow'); break; }
           clearNavTarget();
           break;
+        /* M flips the NAV card between the locked WORLD and the SYSTEM it
+         * sits in. M was freed when the market moved to the port's comms
+         * channel; the card is the one place a key is needed, because the
+         * console screens take no clicks. */
+        case 'm':
+          G.lockTab = G.lockTab === 'system' ? 'world' : 'system';
+          say(G.lockTab === 'system' ? 'NAV card: SYSTEM' : 'NAV card: WORLD', 1.5);
+          break;
         case 'home': recentreLook(); break;
-        /* M, K, Y and ` are gone. The market moved to the docked port's own
+        /* (M came back on 2026-10-19 for the NAV card, above.)
+         * M, K, Y and ` are gone. The market moved to the docked port's own
          * comms channel — see the station options in screens.js, where the
          * row reads "Request market data" at range and becomes "Market" on
          * the deck. The other three were Options rows wearing keys.
@@ -1942,6 +2083,14 @@
        * held, and it has to be, now that the buttons are triggers: keeping
        * the old drag requirement would have meant you could only turn the
        * ship while firing it. Everywhere else a drag is still a drag. */
+      /* On foot a drag turns your head and body together. */
+      if (G.walk && flying() && !menuOpen()) {
+        if (dragging && global.Walk) {
+          global.Walk.look(G.walk, (e.clientX - lastX) * 0.0045, -(e.clientY - lastY) * 0.0045);
+        }
+        lastX = e.clientX; lastY = e.clientY;
+        return;
+      }
       var aiming = mouseArmed() && !G.freeLook;
       /* Free-look reaches the head with no button held too — the whole
        * point is that it replaces the stick, not that it adds a drag. */
@@ -2459,11 +2608,42 @@
    *     falling straight into it, so dropping out hands you the local
    *     circular velocity instead.
    */
+  var CRUISE_TAIL_S = 0.35;         // s of wall clock a star's trail remembers
   var CRUISE_MIN = 60;              // km/s
-  var CRUISE_MAX = 2.0e6;           // km/s — contrived, and admitted to
+  /* 2000c (2026-10-19). It was 2.0e6 km/s, about 6.7c, and Astra measured
+   * what that meant: "That gas giant is 27 minutes flight time from
+   * Mirven I, even at 6 times c." Twenty AU at a flat 6.7c is twenty-five
+   * minutes however good the route. The cap is not what shapes a trip
+   * anyway — the mass lock is, and it winds you up and down exponentially
+   * (CRUISE_LOCK_K: the limit is your clearance covered in ~1.8 s) — so
+   * lifting the cap turns that same crossing into about a minute and
+   * changes nothing near a planet, where the lock was always the limit. */
+  /* The ceiling is now the DRIVE's (cruiseTopKms, Combat.cruiseTopC):
+   * class, milfuel, second drive and mass. This is only a guard above the
+   * best thing that table can produce (about 12,000c), so a bad number
+   * somewhere can never send a ship across the galaxy in a frame. */
+  var CRUISE_MAX = 6.0e9;           // km/s — 20,000c, a guard rail and nothing more
   var CRUISE_LOCK_K = 0.55;         // speed limit per km of clearance
-  var CRUISE_BURN = 1.1e-8;         // tonnes of reaction mass per km flown
+  /* Cut with the cap. At 1.1e-8 t/km a 20 AU crossing burned 33 t, twice
+   * a full tank — the old cap hid that, because nobody sat through the
+   * twenty-five minutes. 1.5e-9 makes the same crossing 4.5 t: a real
+   * line on the bill, and a tank still runs dry somewhere around 70 AU. */
+  var CRUISE_BURN = 1.5e-9;         // tonnes of reaction mass per km flown
+  /* A milfuel cruise drive's appetite: a tenth of the reaction-mass rate
+   * per km, but slugs are dear and every one burned leaves 0.62 t of waste
+   * (Slip's MIL_WASTE_PER_SLUG ratio) — a 20 AU crossing is ~0.45 t of
+   * slugs and ~0.28 t of drums. */
+  var CRUISE_MIL_BURN = 1.5e-10;    // tonnes of milfuel per km flown
+  var CRUISE_MIL_WASTE = 0.62;      // tonnes of waste per tonne of milfuel
   var CRUISE_CLEAR = 2.5;           // body radii you must be outside to engage
+
+  /* THE DRIVE'S OWN CEILING (2026-10-19): class, milfuel, a second drive
+   * and the ship's mass now — Combat.cruiseTopC. CRUISE_MAX stays as a
+   * guard above anything that table can produce. */
+  function cruiseTopKms() {
+    var c = (global.Combat && Combat.cruiseTopC) ? Combat.cruiseTopC(G.ship) : CRUISE_MAX / Render.C_KMS;
+    return Math.min(CRUISE_MAX, c * Render.C_KMS);
+  }
 
   /* How fast may we go here, and what is holding us back? */
   function cruiseLock() {
@@ -2484,7 +2664,7 @@
       if (r < ratio) { ratio = r; worst = b; }
     }
     var maxSpeed = Math.max(CRUISE_MIN,
-      Math.min(CRUISE_MAX, CRUISE_LOCK_K * Math.max(0, bestClear)));
+      Math.min(cruiseTopKms(), CRUISE_LOCK_K * Math.max(0, bestClear)));
     return {
       body: worst || best,
       clearance: bestClear,
@@ -2515,6 +2695,9 @@
     if (G.node) { clearNode(true); say('Cruise engaged — manoeuvre node dropped', 4); }
     G.cruise = {
       speed: Math.min(lock.maxSpeed, 2000),
+      /* Engages on full: the lock already slows you for anything near,
+       * so a drive that starts at a crawl only adds key presses. */
+      full: true,
       maxSpeed: lock.maxSpeed,
       lockBody: lock.body,
       rate: CRUISE_BURN * 1e6,        // quoted per Mkm, which is readable
@@ -2577,6 +2760,7 @@
     var lock = cruiseLock();
     c.maxSpeed = lock.maxSpeed;
     c.lockBody = lock.body;
+    if (c.full && !(G.autodock && G.autodock.mode === 'dock')) c.speed = c.maxSpeed;
     if (c.speed > c.maxSpeed) c.speed = c.maxSpeed;
     if (c.speed < CRUISE_MIN) c.speed = CRUISE_MIN;
 
@@ -2591,6 +2775,28 @@
     }
 
     var step = c.speed * dtReal;                 // km this frame
+    /* A MILFUEL DRIVE BURNS SLUGS, not reaction mass, and breeds waste in
+     * the hold at the Chernobyl's own ratio. When the last slug goes, the
+     * drive carries on as an ordinary one of its class — the speed limit
+     * drops by five on the next frame (Combat.cruiseTopC) — and says so. */
+    if (global.Combat && Combat.cruiseOnMilfuel && Combat.cruiseOnMilfuel(G.ship)) {
+      var slugBurn = step * CRUISE_MIL_BURN;
+      var cg = G.ship.cargo;
+      var used = Math.min(cg.milfuel, slugBurn);
+      cg.milfuel -= used;
+      cg.waste = (cg.waste || 0) + used * CRUISE_MIL_WASTE;
+      if (cg.milfuel < 1e-6) {
+        delete cg.milfuel;
+        say('Milfuel spent — the drive is back on reaction mass at its own class', 5);
+      }
+      c.travelled += step;
+      Sim.refreshShip(G.ship);
+      G.ship.pos = V.addScaled(G.ship.pos, G.ship.fwd, step);
+      G.ship.vel = V.scale(G.ship.fwd, c.speed);
+      G.t += dtReal;
+      if (lock.clearance < 0) { dropCruise('collision avoidance'); return; }
+      return cruiseArrivalChecks(c, lock);
+    }
     var burn = step * CRUISE_BURN;
     if (burn >= G.ship.thrusterFuel) {
       G.ship.thrusterFuel = 0;
@@ -2610,14 +2816,23 @@
      * something's gravity well, which is exactly how you are supposed to
      * arrive — so drop out rather than grinding along at the floor speed. */
     if (lock.clearance < 0) { dropCruise('collision avoidance'); return; }
+    cruiseArrivalChecks(c, lock);
+  }
 
+  /* The rest of a cruise frame's arrival tests, shared by the reaction-
+   * mass path above and the milfuel one. */
+  function cruiseArrivalChecks(c, lock) {
     /* Arrival, and it has to test that we are CLOSING. Dropping out simply
      * because the target is nearby would strand you the moment you engaged
      * cruise while still locked onto the place you were leaving — which is
      * the normal way anyone would use it. */
     var nav = navTargetState();
     var autoOwnsDrop = G.autodock && G.autodock.mode === 'dock';
-    if (!autoOwnsDrop && nav && nav.closing > 0 && nav.range < Math.max(400, c.speed * 2.5)) {
+    /* On full the lock is already slowing you for the target, so the
+     * look-ahead only has to cover a frame or two; 2.5 s of a 10c approach
+     * dropped you out 23 million km short (measured, Beta Mirven VII). */
+    var lookAhead = c.full ? 0.5 : 2.5;
+    if (!autoOwnsDrop && nav && nav.closing > 0 && nav.range < Math.max(400, c.speed * lookAhead)) {
       dropCruise('arrived at ' + nav.name);
       return;
     }
@@ -5018,6 +5233,39 @@
       return;
     }
 
+    /* On foot: the walker takes the held keys; the world keeps running
+     * with them hidden from the flight controls, so W is a step and not a
+     * burn. A ship that is no longer docked (she was sold, or ordered out)
+     * ends the walk. */
+    /* The people on the deck you are on move first, so a door one of them
+     * is waiting at is held open this same frame (npc.js). */
+    var npcHold = updateNpcs(dtReal);
+    var heldKeys = null;
+    if (G.walk) {
+      /* Aboard your own ship a pad will do as well as a berth. */
+      var berthed = G.ship.docked || (G.walk.ship && G.ship.landed);
+      if (!berthed || !global.Walk) G.walk = null;
+      else {
+        if (flying()) {
+          global.Walk.step(G.walk, G.keys, dtReal);
+          npcFacing();
+          /* Doors on the wall clock, like the walking itself. */
+          if (G.walk.ship && global.ShipDeck) global.ShipDeck.updateDoors(G.walk.plan, G.walk, dtReal, npcHold);
+        }
+        heldKeys = G.keys;
+        G.keys = {};
+      }
+    }
+    /* In the seat, the bridge door slides shut behind you. */
+    if (!G.walk && G.viewMode === 'cockpit' && global.ShipDeck && global.Render && global.Render.shipInterior) {
+      var deck = global.Render.shipInterior(G.ship);
+      if (deck) global.ShipDeck.updateDoors(deck.plan, null, dtReal, npcHold);
+    }
+    try { updateWorld(dtReal); } finally { if (heldKeys) G.keys = heldKeys; }
+  }
+
+  function updateWorld(dtReal) {
+
     /* In transit nothing else happens. No physics, no markets, no
      * encounters — you are not anywhere for them to happen in. The camera
      * still follows the ship so the cockpit stays put around you. */
@@ -5344,7 +5592,24 @@
      * after, that branch was skipped because the ship was docked. It
      * silently never fired: no fine, no clearance consumed. Out here it
      * runs once a frame whatever the ship is doing. */
-    if (!G.wasDocked && G.ship.docked) {
+    /* THE EDGE, TAKEN ONCE (2026-10-17). Astra: "missions still don't
+     * auto-clear when you arrive at the mission destination." Two things
+     * wait for this same moment — this desk, and the contracts further
+     * down — and each used to test it for itself. This one then set
+     * G.wasDocked straight after, so by the time the contracts asked
+     * "did we just dock?" the answer was already no, every time: no
+     * contract settled on arrival, ever. Read here, before anything moves
+     * the flag, and both read the same answer. */
+    var justDocked = !!G.ship.docked && !G.wasDocked;
+    /* The G meter, read in the update rather than the cockpit draw so a
+     * burn flown from the exterior camera still counts toward the peak.
+     * Peak is what you pulled since you last left a berth: a berth (or the
+     * rail carrying you into one) clears it, because its 1 G is not
+     * something you flew. */
+    G.gFelt = V.len(Sim.feltAccel(G.ship, G.sys, G.t)) / Sim.G0;
+    if (G.ship.docked || G.arrivalPose) G.gPeak = null;
+    else G.gPeak = Math.max(G.gPeak || 0, G.gFelt);
+    if (justDocked) {
       var arrivedAt = G.sys.byId[G.ship.docked];
       /* Occupancy is measured at the instant the clamps close, not when
          clearance was asked for: a berth that emptied while you flew in is
@@ -5378,6 +5643,18 @@
     /* Thefts from other prospectors' drones are reported when the owner
      * next comes round - on the clock, wherever you are. */
     if (global.Claims && G.thefts && G.thefts.length) global.Claims.tickThefts(G, G.t, HOOKS);
+    /* AND THE ONES ON THE SLIPS. A commissioned hull is handed over at her
+     * yard when her build time is up, wherever you are — said, and logged,
+     * so a pilot three stars away hears that she is ready. */
+    if (Combat.deliverOrders && G.orders && G.orders.length) {
+      var handed = Combat.deliverOrders(G, G.t);
+      for (var hi = 0; hi < handed.length; hi++) { logTrade(handed[hi]); say(handed[hi], 9); }
+    }
+    /* Station modules off the slip, likewise (construction.js). */
+    if (global.Construction && G.stationModules && G.stationModules.length) {
+      var mods = global.Construction.announce(G, G.t);
+      for (var mi2 = 0; mi2 < mods.length; mi2++) { logTrade(mods[mi2]); say(mods[mi2], 9); }
+    }
 
     if (G.ship.docked) {
       G.dockStatus = null;
@@ -5464,6 +5741,14 @@
      * steers on it next frame — one frame of lag nobody can perceive. */
     Combat.update(G.sys, G, G.t, G.lastDtSim || 0, HOOKS);
 
+    /* The band: captains' own maydays off the seeded schedule, and the
+     * ones who answered YOURS arriving to see whether you told the truth
+     * (messages.js). After Combat, so a call it pruned this frame is not
+     * re-read as live. */
+    if (global.Messages) global.Messages.update(G.sys, G, G.t, HOOKS);
+    if (global.Favours) global.Favours.update(G.sys, G, G.t, HOOKS);
+    if (global.Rumours) global.Rumours.update(G.sys, G, G.t);
+
     stepContrails();
 
     /* The legs, moving. Outside the paused/docked guard below on purpose:
@@ -5538,6 +5823,10 @@
 
     /* The dock is an event, not just a state: contracts settle, the ledger
      * hits the disk, and the clamps make their noise, exactly once. */
+    /* The edge taken above, not re-read here: the desk has already moved
+     * G.wasDocked by now. (Both lines fixed this the same week; the merge
+     * keeps the NPC line's justDocked and this line's dockEdge hand-off,
+     * which is set from it.) */
     if (G.dockEdge) {
       G.dockEdge = false;
       var dockedPort = G.ship.docked && G.sys.byId[G.ship.docked];
@@ -6548,12 +6837,38 @@
     var cam = G.cam;
     if (G.viewMode === 'cockpit') {
       cam.cockpitFov = cockpitFov();
-      cam.buildCockpit(G.ship, w, h, G.look);
-      applyCockpitSway(cam);
+      /* THE VIEW ENDS AT THE ICON BAR (2026-10-19). With the band stowed,
+       * the cockpit used to project into the whole window, and the icon
+       * bar along the bottom then sat on the lower third of the console
+       * screens — the second half of "panels overlap". The view is built
+       * for the window above the bar instead. Everything — the GL layer
+       * included — projects through cam.cx/cy/flen, so the world, the
+       * glass and the console stay in register; the band keeps its own
+       * layout, which already accounts for the bar. */
+      var viewH = (flying() && !bandShown()) ? h - FBAR_H : h;
+      /* On foot in your own ship, the eye is the walker's: standing, in the
+       * ship's frame, through the same projection as the seat. */
+      if (shipWalkGpu()) cam.buildWalker(G.ship, G.walk, G.walk.plan.floorY, w, h - FBAR_H);
+      else {
+        cam.buildCockpit(G.ship, w, viewH, G.look);
+        applyCockpitSway(cam);
+      }
     }
     else cam.build(w, h);
 
     ctx.setTransform(ps, 0, 0, ps, 0, 0);
+    /* On foot the station is the whole screen. The GL world is cleared to
+     * rock so nothing outside shows through the 2D layer's floor. Your own
+     * ship, with the GPU room, is drawn as the world it sits in instead —
+     * see drawShipWalkView. */
+    if (G.walk && flying() && !menuOpen() && global.Walk && !shipWalkGpu()) {
+      if (glLive()) { ctx.clearRect(0, 0, w, h); global.GLWorld.begin(ROCK_CLEAR); }
+      /* With the GPU the station deck is drawn on the world layer like your
+       * ship's rooms, so the people on it can stand in it (2026-10-25). */
+      if (stationWalkGpu()) { drawStationWalkGpu(ctx, cam, w, h); return; }
+      drawWalkView(ctx, w, h);
+      return;
+    }
     /* With the GL layer live the sky is ITS clear colour, and this canvas
      * has to be genuinely transparent or it would paint over the world it is
      * supposed to be an overlay on. Without GL, nothing has changed and the
@@ -6620,8 +6935,15 @@
      * frame is real geometry rather than a picture. So the hyperspace
      * layer goes exactly where the starfield and the planets would, and
      * everything after it runs unchanged. */
-    if (G.hyper) {
-      Render.drawHyperspace(ctx, w, h, G.hyper);
+    /* THE RIFT (2026-10-19) owns the screen only while you are inside it:
+     * the tunnel, and the first 30% of the exit while the blue rift gapes.
+     * Before that — the charge, the red tear opening — and after, as the
+     * blue wash clears, the real world is drawn and the rift is laid over
+     * it at the end of this function. */
+    var hyperOwns = G.hyper && (G.hyper.phase === 'tunnel' ||
+                                (G.hyper.phase === 'exit' && !((G.hyper.u || 0) >= 0.3 && G.hyper.swapped)));
+    if (hyperOwns) {
+      drawHyperTear(ctx, w, h, false);
       if (G.viewMode === 'cockpit') drawCockpitView(ctx, cam, w, h);
       else drawShip(ctx, cam);
       drawHUD(ctx, w, h);
@@ -6649,17 +6971,53 @@
     /* No stars underground. They are the one thing that cannot possibly be
      * true down there, and they are exactly what made a berthed ship look
      * like it was parked in orbit. */
+    /* THE SKY AT SPEED (2026-10-17): in cruise the stars are where a ship
+     * at this fraction of c would see them, and the colour it would see
+     * them — see Render.cruiseSky. The world layer does it in its own star
+     * pass, behind the planets; without one, the 2D warp draws the whole
+     * sky itself and the ordinary one is left out, or the two would show
+     * every star twice in two places. */
+    var cruiseBeta = G.cruise ? G.cruise.speed / Render.C_KMS : 0;
+    var warpOwnsSky = cruiseBeta >= Render.CRUISE_SKY_BETA;
+    var gpuSky = glLive();
+    /* THE TEARS, before the sky: the lens bends the stars and the planets,
+     * so it has to be set before either is drawn (2026-10-21). Same gate as
+     * drawWakes — the traffic toggle, and never indoors. */
+    G._frameTears = null;
+    if (gpuSky && global.GLWorld.tears && G.showTraffic && !inside && !buried) {
+      G._frameTears = frameTears(cam);
+      global.GLWorld.setTears(G._frameTears.map(function (ft) {
+        return { dir: ft.ts.dir, E: ft.ts.thetaE, arrival: ft.ts.arrival, open: ft.ts.open,
+                 dist: ft.ts.dist };
+      }));
+    }
     if (!buried && !inside) {
-      if (glLive()) global.GLWorld.drawStars(cam);
-      else Render.drawStarfield(ctx, cam, G.stars);
+      if (gpuSky) global.GLWorld.drawStars(cam, G.cruise ? G.ship.fwd : null, cruiseBeta);
+      else if (!warpOwnsSky) Render.drawStarfield(ctx, cam, G.stars);
     }
 
     /* Cruise smears the sky over the top of the real one. The system stays
      * drawn underneath — you still need to see the planet you are aiming
      * at — which is the difference between this and hyperspace. */
-    if (G.cruise) {
+    /* The trails are where each star APPEARED over the last CRUISE_TAIL_S
+     * seconds of wall clock, so the history keeps the camera, heading and
+     * speed of every recent frame — newest first — and is dropped the
+     * moment cruise ends, so the next one starts clean. Wall clock, not sim
+     * time: a trail is something your eye sees, and time warp should not
+     * stretch it. See Render.drawCruiseWarp. */
+    if (G.cruise && !buried && !inside) {
+      var tNow = nowSeconds();
+      var tail = G.cruiseTrail || (G.cruiseTrail = []);
       Render.drawCruiseWarp(ctx, cam, G.stars, G.ship.fwd,
-                            G.cruise.speed / Math.max(G.cruise.maxSpeed, 1), w, h);
+                            G.cruise.speed / Math.max(G.cruise.maxSpeed, 1), w, h,
+                            cruiseBeta, gpuSky, tail);
+      tail.unshift({ r: V.clone(cam.r), u: V.clone(cam.u), f: V.clone(cam.f),
+                     flen: cam.flen, cx: cam.cx, cy: cam.cy,
+                     head: V.clone(G.ship.fwd), beta: cruiseBeta, t: tNow });
+      while (tail.length && tNow - tail[tail.length - 1].t > CRUISE_TAIL_S) tail.pop();
+      if (tail.length > 240) tail.length = 240;
+    } else {
+      G.cruiseTrail = null;
     }
 
     var starPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
@@ -6822,7 +7180,22 @@
       // The prediction is stored relative to its reference body; anchor it to
       // wherever that body is right now.
       var tOff = Sim.bodyPosition(G.trajectory.reference, G.sys, G.t);
-      Render.strokePath(ctx, cam, G.trajectory.points, '#63e6a8', 1.6, 0.9, null, tOff);
+      /* AHEAD SOLID, BEHIND DOTTED (2026-10-19). Astra: the orbit already
+       * travelled and the orbit still to travel should read differently.
+       * The next half-period is the solid line, leaving the ship the way
+       * it is going; the half just flown is dotted and arrives at the
+       * ship from behind. Re-split every frame rather than taken from the
+       * cached path, which is refreshed four times a second and at high
+       * warp would leave the join a long way from the ship. An integrated
+       * path is all future, so it stays solid. */
+      var split = G.trajectory.kepler
+        ? Sim.ellipsePath(G.ship, G.sys, G.t, TRAJ_SEGMENTS, G.trajectory.reference) : null;
+      if (split && split.ahead) {
+        Render.strokePath(ctx, cam, split.behind, '#63e6a8', 1.3, 0.55, [2, 5], tOff);
+        Render.strokePath(ctx, cam, split.ahead, '#63e6a8', 1.8, 0.95, null, tOff);
+      } else {
+        Render.strokePath(ctx, cam, G.trajectory.points, '#63e6a8', 1.6, 0.9, null, tOff);
+      }
       if (G.trajectory.impact) {
         var ip = cam.project(V.add(tOff, G.trajectory.impact.rel));
         if (ip) {
@@ -6861,8 +7234,23 @@
      * traffic toggle: Y hides the timetable, not the fight. */
     drawCombatFx(ctx, cam);
 
+    /* The rift laid over the real sky — opening ahead in the charge,
+     * clearing after you emerge. Under the cockpit frame, which is in
+     * front of the window the rift is seen through. */
+    if (G.hyper) {
+      /* The tear opens where the nose points, not wherever the middle of
+       * the screen happens to be: in the exterior view that is the hull. */
+      var nose = G.ship && cam.projectDir ? cam.projectDir(G.ship.fwd) : null;
+      G.hyper.cx = nose ? nose.x : w / 2;
+      G.hyper.cy = nose ? nose.y : h / 2;
+      drawHyperTear(ctx, w, h, true);
+    }
+
     if (G.viewMode === 'cockpit') drawCockpitView(ctx, cam, w, h);
     else drawShip(ctx, cam);
+    /* On foot aboard, nobody is flying: no markers, no labels, no flight
+     * hints. drawShipWalkView drew the walker's own overlay and the bar. */
+    if (shipWalkGpu()) return;
     drawHUD(ctx, w, h);
     drawBurnBanner(ctx, w, h);
     drawCursor(ctx);
@@ -7294,8 +7682,104 @@
     return best;
   }
 
+  /* The jump's rift, drawn by Render.drawHyperspace, with its veil handed to
+   * the world layer when there is one (Render.drawTearRift). Fifty metres
+   * out: in front of everything in the world, behind your own cockpit. */
+  function drawHyperTear(ctx, w, h, overlay) {
+    var hy = G.hyper;
+    hy.gpuTears = !!(glLive() && global.GLWorld.tears);
+    hy.gpuTear = null;
+    Render.drawHyperspace(ctx, w, h, hy, overlay);
+    var t = hy.gpuTear;
+    if (t && hy.gpuTears) {
+      global.GLWorld.queueTear({ x: t.x, y: t.y, depth: 0.05, E: t.E, W: t.W, H: t.H,
+                                 roll: t.roll, arrival: t.arrival, open: 1, glow: t.glow,
+                                 time: performance.now() / 1000 });
+    }
+  }
+
+  /* ---- YOUR OWN TEARS (2026-10-21) ----------------------------------------
+   * The timetable's wakes are everybody else's. Yours are real too: the red
+   * tear you leave where you jumped from, and the blue one you come out of,
+   * which hangs behind you as you fly away from it. Visual only — nobody
+   * scans their own wake — and not saved: a reload is a fresh look at the
+   * sky. They decay on the same curve as any other (Slip.wakeDecay) and
+   * are gone in sixteen hours. */
+  var OWN_WAKE_MAX = 8;
+  var POLE = { x: 0, y: 0, z: 1 };
+  function leaveOwnWake(kind) {
+    if (!G.ship || !G.here || !G.sys) return;
+    var full = Slip.wakeRadius(Slip.allUpMass(G.ship));
+    var sunPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
+    /* The rip opens ahead of the nose going in, and you come out of it, so
+     * an arrival's hangs behind you. A cloud tens of thousands of km
+     * across, so it sits well clear of the hull rather than on it. */
+    var at = V.addScaled(G.ship.pos, G.ship.fwd, (kind === 'departure' ? 1.5 : -1.5) * full);
+    var list = G.ownWakes || (G.ownWakes = []);
+    list.push({ own: true, kind: kind, starId: G.here.id, t0: G.t,
+                rel: V.sub(at, sunPos), radiusFull: full,
+                id: 'own:' + kind + ':' + G.here.id + ':' + Math.round(G.t) });
+    while (list.length > OWN_WAKE_MAX) list.shift();
+  }
+  function ownWakesNow() {
+    var src = G.ownWakes, out = [];
+    if (!src || !src.length || !G.here) return out;
+    for (var i = 0; i < src.length; i++) {
+      var o = src[i], age = G.t - o.t0;
+      if (o.starId !== G.here.id || age < 0 || age >= Slip.WAKE_LIFE) continue;
+      var dec = Slip.wakeDecay(age);
+      out.push({ own: true, id: o.id, kind: o.kind, age: age, decay: dec, glow: dec,
+                 rel: o.rel, radius: o.radiusFull * (0.25 + 0.75 * dec) });
+    }
+    return out;
+  }
+
+  /* Every tear in view this frame, worked out ONCE, before the sky is drawn:
+   * the stars need the lenses before anything else is on the screen, and
+   * drawWakes reuses the same list for the clouds and the lightning. */
+  function wakeDepth() {
+    var deep = 0;
+    var dom = Sim.dominantBody(G.ship.pos, G.sys, G.t);
+    if (dom && dom.kind !== 'star' && dom.radius) {
+      var alt = V.dist(Sim.bodyPosition(dom, G.sys, G.t), G.ship.pos) - dom.radius;
+      deep = Math.max(0, Math.min(1, 1 - alt / (2 * dom.radius)));
+    }
+    return deep;
+  }
+  function frameTears(cam) {
+    var list = wakesNow().concat(ownWakesNow());
+    if (!list.length) return [];
+    var sunPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
+    var radius = Slip.jumpRingRadius(G.sys);
+    var deep = wakeDepth(), out = [];
+    for (var i = 0; i < list.length; i++) {
+      var w = list[i];
+      var pos = w.own ? V.add(sunPos, w.rel) : Slip.wakePosition(w, sunPos, radius);
+      var ts = Render.tearScreen(cam, pos, w, w.radius || 30000, deep, POLE);
+      if (ts && ts.glow > 0.004) out.push({ w: w, pos: pos, ts: ts });
+    }
+    return out;
+  }
+
   function drawWakes(ctx, cam) {
-    var list = wakesNow();
+    /* THE WORLD LAYER'S TEARS: lens set before the stars (see draw), the
+     * cloud and veil and the lightning queued here for gl.js to draw at
+     * each tear's depth. The labels stay 2D. */
+    if (G._frameTears) {
+      var nowS = performance.now() / 1000;
+      for (var t = 0; t < G._frameTears.length; t++) {
+        var ft = G._frameTears[t], ts = ft.ts;
+        global.GLWorld.queueTear({ x: ts.x, y: ts.y, depth: ts.depth, E: ts.E, W: ts.W, H: ts.H,
+                                   roll: ts.roll, arrival: ts.arrival, open: ts.open,
+                                   glow: ts.glow, time: nowS });
+        global.GLWorld.queueBolts(Render.tearBolts(ft.w.id, nowS, ts),
+                                  ts.arrival ? Render.BOLT_TINT_ARRIVE : Render.BOLT_TINT_DEPART,
+                                  ts.depth);
+        if (!ft.w.own) labelWake(ctx, ft.w, ft.pos, ts);
+      }
+      return;
+    }
+    var list = wakesNow().concat(ownWakesNow());
     if (!list.length) return;
     var sunPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
     var radius = Slip.jumpRingRadius(G.sys);
@@ -7312,18 +7796,33 @@
      * a screen-filling wash of orange that washed the whole game out. */
     var now = performance.now() / 1000;
 
+    /* How deep in a world's well the viewer stands: 1 on the ground, 0
+     * three radii up. Seen from down there a wake is more pronounced
+     * (Render.drawWake). A star does not count — its well is everywhere. */
+    var deep = 0;
+    var dom = Sim.dominantBody(G.ship.pos, G.sys, G.t);
+    if (dom && dom.kind !== 'star' && dom.radius) {
+      var alt = V.dist(Sim.bodyPosition(dom, G.sys, G.t), G.ship.pos) - dom.radius;
+      deep = Math.max(0, Math.min(1, 1 - alt / (2 * dom.radius)));
+    }
+
     for (var i = 0; i < list.length; i++) {
       var w = list[i];
-      var pos = Slip.wakePosition(w, sunPos, radius);
-      var p = Render.drawWake(ctx, cam, pos, w, w.radius || 30000, now);
-      if (!p) continue;
+      var pos = w.own ? V.add(sunPos, w.rel) : Slip.wakePosition(w, sunPos, radius);
+      var p = Render.drawWake(ctx, cam, pos, w, w.radius || 30000, now, deep);
+      if (!p || w.own) continue;
+      labelWake(ctx, w, pos, p);
+    }
+  }
 
+  function labelWake(ctx, w, pos, p) {
+    {
       /* Label it only once it is worth reading. A sky full of permanently
        * captioned smudges would be noise; a caption appearing as you close
        * on one is the instrument doing its job in front of you. */
       var d = V.dist(pos, G.ship.pos);
       var read = Slip.scanWake(w, d);
-      if (!read.inRange) continue;
+      if (!read.inRange) return;
 
       /* On its own dark backing, and offset clear of the cloud.
        *
@@ -8522,6 +9021,353 @@
     }
   }
 
+  /* ---- on foot (2026-10-20) ----------------------------------------------
+   * Astra: "full first person walking. We do need to model station
+   * interiors to walk in." walk.js builds the station's deck plan and walks
+   * it; this is where the game hands you over to it and takes you back.
+   *
+   * O, docked, steps you out of the seat into your berth. The ship stays on
+   * her clamp and the world keeps running. E acts on what you are facing:
+   * your own hatch takes you back to the cockpit; another of your ships
+   * berthed here takes command of her, keeping the one you walked off
+   * (Combat.takeCommand 'keep' — the one already on the Fleet tab); a
+   * counter opens its screen, and the F-keys still work as a shortcut
+   * (Astra: keep both). */
+  function walkShips() {
+    var s = G.ship, out = [];
+    var hullOf = function (id) { return (Combat.HULLS && Combat.HULLS[id]) || {}; };
+    var me = hullOf(s.hullId || 'talon');
+    out.push({ id: 'current', size: me.size || 'S', name: s.shipName || me.name || 'your ship', current: true });
+    (G.fleet || []).forEach(function (r) {
+      if (r.port !== s.docked) return;
+      if (r.star && G.here && r.star !== G.here.id) return;
+      out.push({ id: r.id, size: hullOf(r.hullId).size || 'M', name: r.name || hullOf(r.hullId).name || 'ship' });
+    });
+    return out;
+  }
+
+  function startWalk() {
+    var Walk = global.Walk, s = G.ship;
+    if (!Walk || !s.docked) { say('Dock first — there is nowhere to step out to', 3); return; }
+    var port = G.sys && G.sys.byId ? G.sys.byId[s.docked] : null;
+    if (!port) return;
+    var plan = Walk.layout(port.id, {
+      seed: G.seed || (G.galaxy && G.galaxy.seed) || '',
+      yard: !!(Combat.isShipyard && Combat.isShipyard(port)),
+      ships: walkShips()
+    });
+    G.walk = Walk.start(plan);
+    G.walk.portName = port.name || 'the station';
+    G.panel = 0;
+    say('You step out into your berth at ' + G.walk.portName +
+        '  —  WASD to walk, drag to look, E to use, Esc for the menu', 8);
+  }
+
+  /* ---- on foot in your own ship (2026-10-24) -----------------------------
+   * Astra: "There needs to be doors that slide into the structure of the
+   * ship to open the way from the cockpit into the rest of the ship", and,
+   * asked what the door should do: walkable to your airlock. So O no longer
+   * drops you straight onto the station deck. It stands you up behind the
+   * seat; the bridge door slides into the bulkhead as you reach it; the
+   * passage runs aft to the airlock, and the hatch there is the way out
+   * into your berth. Coming back, your hatch on the station deck brings you
+   * aboard at the airlock rather than straight into the seat, and E at the
+   * seat sits you down.
+   *
+   * The plan and the room are Render.shipInterior's (shipdeck.js) — the
+   * same plan Walk.step walks and the same meshes the seat view draws. */
+  function startShipWalk(from) {
+    var d = global.Render && global.Render.shipInterior ? global.Render.shipInterior(G.ship) : null;
+    if (!d || !global.Walk) { startWalk(); return; }
+    var p = d.plan, at = from === 'aboard' ? p.aboard : p.spawn;
+    G.walk = global.Walk.start(p);
+    G.walk.x = at.x; G.walk.z = at.z; G.walk.yaw = at.yaw; G.walk.pitch = 0;
+    G.walk.ship = true;
+    var hull = (Combat.HULLS && Combat.HULLS[G.ship.hullId]) || {};
+    G.walk.portName = G.ship.shipName || hull.name || 'your ship';
+    G.viewMode = 'cockpit';
+    G.look.yaw = 0; G.look.pitch = 0;
+    G.panel = 0;
+    say(from === 'aboard'
+        ? 'You come aboard  —  WASD to walk, drag to look, E at the seat to fly'
+        : 'You get up out of the seat  —  WASD to walk, drag to look, E to use, Esc for the menu', 7);
+  }
+
+  /* The doorway the cockpit is seen through from where you stand, as it is
+   * open right now, on screen: from the bridge deck the helm's arch; from
+   * the passage the bridge door; from anywhere else, none of it. */
+  function shipWalkClip(cam) {
+    var w = G.walk, p = w && w.plan, SD = global.ShipDeck;
+    if (!p || !p.rooms || w.z > p.rooms[0].z0) return null;
+    var here = global.Walk.roomAt(p, w.x, w.z);
+    var byId = function (id) { return SD && SD.doorById ? SD.doorById(p, id) : null; };
+    var d = null;
+    if (here && here.kind === 'bridgedeck') d = byId('helm');
+    else if (here && here.kind === 'passage') d = byId('bridge');
+    else if (!here) d = byId('helm') && w.z > byId('helm').wall[0] - 0.01 ? byId('helm') : byId('bridge');
+    if (!d) return [];
+    var gap = d.arch ? SD.DOOR_HW : (SD ? SD.leafTravel(d.open) : 0);
+    if (gap < 0.02) return [];
+    var y0 = p.floorY, y1 = p.floorY + (SD ? SD.DOOR_H : 2), z = d.wall[1];
+    var M = global.Render.M;
+    var pts = [[-gap, y1, z], [gap, y1, z], [gap, y0, z], [-gap, y0, z]].map(function (q) {
+      return Render.localToWorld(G.ship, q[0] * M, q[1] * M, q[2] * M);
+    });
+    return Render.clipProject(cam, pts) || [];
+  }
+
+  /* Walking your own ship with the GPU room: the world as the eye sees it,
+   * your own cockpit cut by its windows, the seat you got out of, and
+   * nothing on the glass — there is nobody flying. */
+  function drawShipWalkView(ctx, cam, w, h) {
+    var p = G.walk.plan, clip = shipWalkClip(cam);
+    queueNpcs(cam);
+    Render.drawCockpitShell(ctx, cam, G.ship, w, h, { seat: true, walking: true, clip: clip });
+    var inner = Render.drawCockpitInterior(ctx, cam, G.ship, w, h, { clip: clip });
+    drawDashPanels(ctx, inner.mfds, false);
+    drawWalkOverlay(ctx, w, h, global.Walk.roomAt(p, G.walk.x, G.walk.z));
+  }
+
+  function shipWalkGpu() {
+    return !!(G.walk && G.walk.ship && glLive() && global.Render && global.Render.cockpitGpu &&
+              global.Render.cockpitGpu());
+  }
+
+  /* ---- the people (2026-10-25) -------------------------------------------
+   * Astra: "We should use these crew models on ships and stations in game,
+   * in the first person mode. They should also be on NPC ships. Give them
+   * each a basic AI script so they do their assigned jobs by class."
+   *
+   * npc.js decides who is where and what they are doing, npcmodel.js builds
+   * the bodies and npcgl.js draws them. This is the glue: one scene at a
+   * time — the deck you are on, or your own ship's when you are in the seat
+   * — rebuilt when that changes (another port, a hand signed on or paid off,
+   * a refit that moved the furniture). */
+  var npcScene = null, npcClock = 0;
+
+  function npcSceneNow() {
+    var NpcM = global.Npc;
+    if (!NpcM || !G.ship) return null;
+    var signed = (Crew && Crew.aboard ? Crew.aboard(G.ship) : []).map(function (c) { return c.id || c.name; });
+    var roster = signed.join(',');
+    if (G.walk && !G.walk.ship && G.walk.plan) {
+      var plan = G.walk.plan;
+      /* Rebuilt when you sign somebody on: they leave the hall. */
+      if (npcScene && npcScene.plan === plan && npcScene.roster === roster) return npcScene;
+      var port = G.sys && G.sys.byId ? G.sys.byId[plan.portId] : null;
+      npcScene = NpcM.stationScene(plan, port, G.sys, {
+        t: G.t, seed: G.seed || '', livery: port && port.livery,
+        navy: !!(Eco && Eco.navyPresent && Eco.navyPresent(G.sys)),
+        corruption: G.sys && G.sys.corruption, signed: signed
+      });
+      npcScene.roster = roster;
+      return npcScene;
+    }
+    var d = Render.shipInterior ? Render.shipInterior(G.ship) : null;
+    if (!d) return null;
+    if (npcScene && npcScene.plan === d.plan && npcScene.roster === roster) return npcScene;
+    npcScene = NpcM.shipScene(d.plan, G.ship, { t: G.t });
+    npcScene.roster = roster;
+    return npcScene;
+  }
+
+  /* One tick of everybody on the current deck. Returns the sliding doors
+   * somebody is waiting at, for ShipDeck.updateDoors to hold open. Never
+   * allowed to stop the frame: people are scenery to the flight model. */
+  function updateNpcs(dt) {
+    var sc = null;
+    try { sc = npcSceneNow(); } catch (e) { if (global.console) console.error(e); sc = null; }
+    if (!sc) return {};
+    npcClock += dt;
+    var onDeck = !!(G.walk && ((sc.kind === 'ship') === !!G.walk.ship));
+    var you = null;
+    if (onDeck) you = { x: G.walk.x, z: G.walk.z };
+    else if (sc.kind === 'ship') {
+      /* In the seat, you are a body in the helm chair to walk round. */
+      var seat = sc.plan.items.filter(function (it) { return it.kind === 'seat'; })[0];
+      if (seat) you = { x: seat.x, z: seat.z };
+    }
+    try {
+      return global.Npc.update(sc, dt, { now: npcClock, t: G.t, player: you,
+                                         playerWalking: !!(G.walk && G.walk.ship), helmFree: true });
+    } catch (e) { if (global.console) console.error(e); return {}; }
+  }
+
+  /* E talks to whoever you are facing, when they are nearer than the
+   * nearest thing to use. */
+  function npcFacing() {
+    if (!G.walk || !npcScene || !global.Npc) return;
+    if ((npcScene.kind === 'ship') !== !!G.walk.ship) return;
+    var p = global.Npc.facing(npcScene, G.walk);
+    if (!p) return;
+    var it = G.walk.near, d = Math.hypot(p.x - G.walk.x, p.z - G.walk.z);
+    if (it && Math.hypot(it.x - G.walk.x, it.z - G.walk.z) < d) return;
+    G.walk.near = { kind: 'npc', label: 'Talk to ' + p.name, npc: p, x: p.x, z: p.z };
+  }
+
+  /* Hand this frame's bodies to the GPU, in the docked ship's frame — the
+   * frame both your own rooms and a station deck are drawn in. */
+  function queueNpcs(cam) {
+    var sc = npcScene, NG = global.NpcGL, s = G.ship;
+    if (!sc || !NG || !glLive() || !global.Npc || !s) return;
+    var eye = G.walk ? { x: G.walk.x, z: G.walk.z } : { x: 0, z: 0 };
+    NG.queue(cam, { pos: s.pos, right: s.right, up: s.up, fwd: s.fwd }, Render.M,
+             global.Npc.figures(sc, eye, 2));
+  }
+
+  /* Without the GPU, the nearest few bodies go into walk.js's painter's
+   * sort as flat triangles, coloured off their own skins. */
+  function npcQuads2D() {
+    var sc = npcScene, NM = global.NpcModel;
+    if (!sc || !NM || !global.Npc || !G.walk) return null;
+    if ((sc.kind === 'ship') !== !!G.walk.ship) return null;
+    var out = [], fy = sc.floorY || 0;
+    global.Npc.figures(sc, { x: G.walk.x, z: G.walk.z }, 1).slice(0, 5).forEach(function (f) {
+      if (Math.hypot(f.person.x - G.walk.x, f.person.z - G.walk.z) > 14) return;
+      var m = f.model, cols = NM.faceColours(m);
+      for (var t = 0; t < m.tris; t++) {
+        var a = NM.posed(m, f.mats, t * 3), b = NM.posed(m, f.mats, t * 3 + 1), c = NM.posed(m, f.mats, t * 3 + 2);
+        a[1] -= fy; b[1] -= fy; c[1] -= fy;
+        out.push({ pts: [a, b, c], col: cols[t] });
+      }
+    });
+    return out;
+  }
+
+  /* On foot in a station, with the GPU: the deck walk.js laid out, as one
+   * mesh on the world layer (Walk.meshFor), drawn through the walker's eye
+   * in the docked ship's frame; the people in it; and the labels and the
+   * overlay on the 2D canvas over the top. */
+  function stationWalkGpu() {
+    return !!(G.walk && !G.walk.ship && G.walk.plan && glLive() && global.Walk && global.Walk.meshFor &&
+              global.GLWorld && global.GLWorld.queueCockpit && G.ship && G.ship.pos && G.ship.fwd);
+  }
+  function drawStationWalkGpu(ctx, cam, w, h) {
+    var p = G.walk.plan, s = G.ship;
+    cam.buildWalker(s, G.walk, 0, w, h - FBAR_H);
+    global.GLWorld.queueCockpit(cam, { pos: s.pos, right: s.right, up: s.up, fwd: s.fwd }, null,
+                                global.Walk.meshFor(p), [], Render.M);
+    queueNpcs(cam);
+    var room = global.Walk.roomAt(p, G.walk.x, G.walk.z);
+    drawWalkLabels(ctx, cam, p, room, w, h);
+    drawWalkOverlay(ctx, w, h, room);
+  }
+  /* The things to use in the room you are in, labelled where they stand,
+   * and the dot at the middle of the view — what Walk.draw paints itself
+   * on the 2D path. Projected here rather than through cam.project, whose
+   * near plane is whatever the last outside view set. */
+  function drawWalkLabels(ctx, cam, p, here, w, h) {
+    var M = Render.M;
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    p.items.forEach(function (it) {
+      if (it.silent) return;
+      var r = global.Walk.roomAt(p, it.x, it.z);
+      if (!r || (here && r !== here)) return;
+      var q = Render.localToWorld(G.ship, it.x * M, 2.4 * M, it.z * M);
+      var vx = q.x - cam.eye.x, vy = q.y - cam.eye.y, vz = q.z - cam.eye.z;
+      var dpt = vx * cam.f.x + vy * cam.f.y + vz * cam.f.z;
+      if (dpt < 0.3 * M || dpt > 30 * M) return;
+      var sx = cam.cx + (vx * cam.r.x + vy * cam.r.y + vz * cam.r.z) * cam.flen / dpt;
+      var sy = cam.cy - (vx * cam.u.x + vy * cam.u.y + vz * cam.u.z) * cam.flen / dpt;
+      ctx.fillStyle = it === G.walk.near ? '#ffe9a8' : 'rgba(180,240,255,0.75)';
+      ctx.fillText(it.label, sx, sy);
+    });
+    ctx.fillStyle = 'rgba(220,240,255,0.7)';
+    ctx.beginPath(); ctx.arc(w / 2, (h - FBAR_H) / 2, 2, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  function walkUse() {
+    var w = G.walk, it = w && w.near;
+    if (!it) return;
+    /* Somebody to talk to (npc.js): who they are and a line in character. */
+    if (it.kind === 'npc') {
+      if (global.Npc) say(global.Npc.talk(it.npc) + (it.npc.forHire ? '   —   terms are on the crew board' : ''), 7);
+      return;
+    }
+    if (w.ship) {
+      if (it.kind === 'seat') {
+        G.walk = null;
+        G.look.yaw = 0; G.look.pitch = 0;
+        say('Back in the seat', 3);
+        return;
+      }
+      if (it.kind === 'station') {
+        var who = Crew && Crew.aboard ? Crew.aboard(G.ship).filter(function (c) { return c.role === it.role; }) : [];
+        say(who.length
+            ? (who.length === 1 ? who[0].name : who.length + ' ' + (Crew.ROLES && Crew.ROLES[it.role] ? Crew.ROLES[it.role].name.toLowerCase() + 's' : 'crew'))
+              + ' signed on for this station  —  seeing them at it comes with the crew walking the ship'
+            : 'Nobody signed on to stand this watch  —  hire at a crew hall', 6);
+        return;
+      }
+      if (it.kind === 'galley') { say('The galley  —  coffee, ration packs, and a kettle bolted to the counter', 4); return; }
+      if (it.kind === 'hatch') {
+        if (G.ship.docked) { startWalk(); return; }
+        say(G.ship.landed ? 'The hatch opens onto the pad  —  walking outside comes later'
+                          : 'Nothing past that hatch but vacuum', 5);
+      }
+      return;
+    }
+    /* Your own hatch on the station deck brings you aboard at the airlock. */
+    if (it.kind === 'mine') { startShipWalk('aboard'); return; }
+    if (it.kind === 'fleet') {
+      var r = Combat.takeCommand ? Combat.takeCommand(G, it.ship.id, 'keep') : { ok: false, why: 'no harbour master' };
+      if (!r.ok) { say('Not now: ' + r.why, 5); return; }
+      G.walk = null;
+      say('You take command of the ' + (r.name || it.ship.name) + ' — the ship you walked off stays on her clamp', 7);
+      return;
+    }
+    /* The counters open the screens the F-keys already open. */
+    var idx = function (id) {
+      for (var i = 0; i < MODES.length; i++) if (MODES[i].id === id) return i;
+      return -1;
+    };
+    if (it.kind === 'market') { selectPanel(3); return; }
+    if (it.kind === 'yard') { G.yardTab = 'hulls'; selectPanel(idx('ship') >= 0 ? idx('ship') : 4); return; }
+    if (it.kind === 'crew') { G.yardTab = 'crew'; selectPanel(idx('ship') >= 0 ? idx('ship') : 4); return; }
+    if (it.kind === 'bar') { say('The bar is quiet — the people who drink here come next', 5); return; }
+  }
+
+  function drawWalkView(ctx, w, h) {
+    var Walk = global.Walk;
+    var view = Walk.draw(ctx, G.walk, w, h - FBAR_H, npcQuads2D());
+    drawWalkOverlay(ctx, w, h, view && view.room);
+  }
+
+  /* What is in front of you, where you are, and how to move: the same over
+   * a station's deck and your own (2026-10-24). */
+  function drawWalkOverlay(ctx, w, h, room) {
+    ctx.save();
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    var it = G.walk.near;
+    if (it) {
+      ctx.fillStyle = 'rgba(6,16,22,0.8)';
+      var line = 'E  —  ' + it.label;
+      var tw = ctx.measureText(line).width;
+      ctx.fillRect(w / 2 - tw / 2 - 12, (h - FBAR_H) / 2 + 26, tw + 24, 24);
+      ctx.fillStyle = '#ffe9a8';
+      ctx.fillText(line, w / 2, (h - FBAR_H) / 2 + 43);
+    }
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(180,240,255,0.8)';
+    ctx.fillText((G.walk.portName || '') + (room ? '  ·  ' + room.label : ''), w / 2, 22);
+    ctx.fillStyle = 'rgba(180,240,255,0.55)';
+    ctx.fillText('WASD walk  ·  Shift run  ·  drag or arrows to look  ·  E use  ·  Esc menu', w / 2, h - FBAR_H - 10);
+    if (G.message && performance.now() < G.messageUntil) {
+      ctx.font = 'bold 14px ui-monospace, monospace';
+      var mw = ctx.measureText(G.message).width;
+      ctx.fillStyle = 'rgba(6,16,22,0.85)';
+      ctx.fillRect(w / 2 - mw / 2 - 14, h - FBAR_H - 66, mw + 28, 30);
+      ctx.fillStyle = '#e6f0ff';
+      ctx.fillText(G.message, w / 2, h - FBAR_H - 46);
+    }
+    ctx.restore();
+    drawIconBar(ctx, w, h - FBAR_H);
+  }
+
   /* ---- cockpit ----------------------------------------------------------
    * The interior is real geometry (render.js). This function is the
    * division of labour the cockpit design is built on: flight-critical
@@ -8543,7 +9389,10 @@
     var hotC = 0;
     for (var ci = 0; ci < cgC.length; ci++) hotC = Math.max(hotC, cgC[ci].k);
     G.ship.capGlow = cgC.length ? { fitted: cgC.length, k: hotC } : null;
+    if (shipWalkGpu()) { drawShipWalkView(ctx, cam, w, h); return; }
     var shell = G.showCockpitFrame ? Render.drawCockpitShell(ctx, cam, G.ship, w, h) : null;
+    /* Your crew at their stations, behind you on the bridge deck. */
+    if (shell && Render.cockpitGpu && Render.cockpitGpu()) queueNpcs(cam);
     var apertures = shell ? shell.apertures : null;
     var aperture = shell ? shell.aperture : null;
 
@@ -8586,14 +9435,58 @@
     }
 
     Render.glassBegin(ctx, aperture);
-    var angles = Render.drawAttitudeLadder(ctx, cam, G.ship, attitudeUp(lv), w, h);
-    Render.drawFlightPathMarker(ctx, cam, fr.prograde, w, h);
+    /* The glass is laid out against the VIEW, which ends at the icon bar
+     * when the band is stowed (see draw), not against the window. */
+    var hv = cam.h || h;
+    var angles = Render.drawAttitudeLadder(ctx, cam, G.ship, attitudeUp(lv), w, hv);
+    Render.drawFlightPathMarker(ctx, cam, fr.prograde, w, hv);
     // The bank scale is a fixed instrument on the glass ahead of you, so it
     // has no business being drawn once you have looked away from it.
-    if (centred) Render.drawBankScale(ctx, w, h, angles.rollDeg, h * 0.30);
+    if (centred) Render.drawBankScale(ctx, w, hv, angles.rollDeg, hv * 0.30);
 
     // The navigation lock gets the strongest box on the glass.
     var nav = navTargetState();
+
+    /* Heading tape, above the bank arc. North is the dominant body's own
+     * spin pole laid onto the same horizon the ladder levels against, so a
+     * ship sitting on a station deck reads its heading off that deck. The
+     * bug is the bearing to the nav lock. */
+    if (centred && lv.body) {
+      var upH = attitudeUp(lv);
+      var toNav = nav ? V.sub(nav.pos, G.ship.pos) : null;
+      var navLen = toNav ? V.len(toNav) : 0;
+      var hd = Sim.headingAngles(G.ship, upH, Sim.bodyPole(lv.body),
+                                 navLen > 1e-9 ? V.scale(toNav, 1 / navLen) : null);
+      Render.drawHeadingTape(ctx, w, h, hd, {
+        cy: Math.max(40, hv * 0.30 - 74 - 44),
+        ref: lv.body.name.toUpperCase(),
+        bugColor: nav && nav.hostile ? '#ff6b5a' : '#ffd36b'
+      });
+    }
+
+    /* Air data: speed (with the G meter under it) and altitude, all quoted
+     * against the same body the tape and the ladder use, so every number on
+     * the glass shares one REF. Peak G is the most you have pulled since you
+     * last left a berth; sitting in one clears it, because the berth's own
+     * 1 G is not something you flew. */
+    var felt = G.gFelt || 0;
+    if (centred && lv.body) {
+      var refSt = Sim.bodyState(lv.body, G.sys, G.t);
+      var rRel = V.sub(G.ship.pos, refSt.pos);
+      var rLen = V.len(rRel);
+      var vRel = V.sub(G.ship.vel, refSt.vel);
+      var altKm = rLen - (lv.body.radius || 0);
+      var cruising = !!G.cruise;
+      Render.drawAirData(ctx, w, h, {
+        cy: hv / 2,
+        speed: Render.airSpeedReadout(cruising ? G.cruise.speed : V.len(vRel), cruising),
+        g: felt,
+        peak: G.gPeak,
+        alt: Render.altitudeReadout(altKm),
+        vs: rLen > 1e-9 ? Render.vsReadout(V.dot(vRel, rRel) / rLen) : null,
+        air: Render.airReadout(lv.body, altKm, Sim.airDensityAt(lv.body, altKm))
+      });
+    }
     if (nav) {
       Render.drawHoloTarget(ctx, cam, nav.pos, nav.name,
         fmtDist(nav.range) + (isFinite(nav.eta) ? '  ETA ' + fmtTime(nav.eta) : ''),
@@ -8622,9 +9515,14 @@
       ctx.textAlign = 'center';
       ctx.fillText(angles.degenerate ? '' :
         'PITCH ' + angles.pitchDeg.toFixed(1) + '°   ROLL ' + angles.rollDeg.toFixed(1) +
-        '°   REF ' + lv.body.name.toUpperCase(), w / 2, h / 2 + 40);
+        '°   REF ' + lv.body.name.toUpperCase(), w / 2, hv / 2 + 40);
       ctx.textAlign = 'left';
       ctx.restore();
+      /* Facing into or against the way you are going, in words, under the
+       * attitude line where the eye already is. Against the same body as
+       * the speed box and the markers. */
+      Render.drawFacingCue(ctx, w, h,
+        Render.facingInfo(G.ship.fwd, fr.prograde, fr.vrel ? V.len(fr.vrel) : 0), hv / 2 + 66);
     }
     /* Last thing on the glass, and INSIDE the clip on purpose: the field
      * flares a metre outside the canopy, so you see it through the glass and
@@ -8891,6 +9789,11 @@
     if (G.viewMode === 'cockpit' && flying()) {
       for (var ph = 0; ph < panelHots.length; ph++) G.hotspots.push(panelHots[ph]);
     }
+    /* The NAV card under a locked world, in the views from outside. Drawn
+     * here rather than in the world pass because this is where clicks are
+     * registered for the frame — anything registered earlier is wiped by
+     * the line at the top of this function. */
+    if (G.viewMode !== 'cockpit' && (flying() || mapMode())) drawLockCardInWorld(ctx, G.cam, w, h);
     var barY = h - FBAR_H;
     if (bandShown()) drawFlightBand(ctx, w, h, barY);
     else if (flying()) drawStowedHint(ctx, w, barY);
@@ -8986,15 +9889,31 @@
     ctx.save();
     ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(125,255,207,0.55)';
-    ctx.textAlign = 'center';
-    /* Above the footer line, not through it — the footer already owns
-     * barY - 8, and two strings sharing a baseline is how you get a smear. */
-    ctx.fillText(G.cockpitChrome === 2
+    var text = G.cockpitChrome === 2
       ? 'canopy only  ·  K for the instrument band'
-      : 'instruments on the console  ·  K for the band  ·  F5 → PANELS to reassign',
-                 w / 2, barY - 24);
+      : 'instruments on the console  ·  K for the band  ·  F5 → PANELS to reassign';
+    if (consoleScreensShown()) {
+      /* Not across the screens: see consoleScreensShown. */
+      ctx.textAlign = 'left';
+      ctx.fillText(text, 14, 30);
+    } else {
+      ctx.textAlign = 'center';
+      /* Above the footer line, not through it — the footer already owns
+       * barY - 8, and two strings sharing a baseline is how you get a smear. */
+      ctx.fillText(text, w / 2, barY - 24);
+    }
     ctx.textAlign = 'left';
     ctx.restore();
+  }
+
+  /* THE CONSOLE SCREENS OWN THE BOTTOM OF THE VIEW (2026-10-19). With the
+   * band stowed in the cockpit, the three dash screens stand exactly where
+   * the two hint lines used to be printed, and the hints ran straight
+   * across the ORBIT page (Astra: "panels overlap. This is a problem.").
+   * In that one state both lines move to the top-left corner, over the
+   * canopy frame, where they cover nothing you read. */
+  function consoleScreensShown() {
+    return flying() && G.viewMode === 'cockpit' && G.cockpitChrome === 1;
   }
 
   /* ---- F1: flying -------------------------------------------------------
@@ -9293,8 +10212,12 @@
     { id: 'scope',   title: 'SCOPE',   draw: function (ctx, w, h) { drawDeckScope(ctx, 0, 0, w, h); } },
     { id: 'aft',     title: 'AFT',     draw: function (ctx, w, h) { drawAftView(ctx, w, h); } },
     { id: 'orbit',   title: 'ORBIT',   draw: function (ctx) { drawOrbitPage(ctx); } },
-    { id: 'target',  title: 'TARGET',  draw: function (ctx) { drawTargetPage(ctx); } },
-    { id: 'nav',     title: 'NAV',     draw: function (ctx) { drawNavPage(ctx); } },
+    /* Ids kept, names changed (2026-10-19): the lock screen heads itself
+     * NAV for a place and TARGET for a ship, so it is listed as both; the
+     * list of everything in range was "NAV" too and is CONTACTS now, the
+     * name F3 already gave it, so no two screens answer to one name. */
+    { id: 'target',  title: 'NAV / TARGET', draw: function (ctx) { drawTargetPage(ctx); } },
+    { id: 'nav',     title: 'CONTACTS', draw: function (ctx) { drawNavPage(ctx); } },
     { id: 'ship',    title: 'SHIP',    draw: function (ctx) { drawShipPage(ctx); } },
     { id: 'cargo',   title: 'CARGO',   draw: function (ctx) { drawCargoPage(ctx); } },
     { id: 'auto',    title: 'AUTO',    draw: function (ctx) { drawAutoPage(ctx); } },
@@ -9794,7 +10717,7 @@
     var owedNow = Combat.bountyTotal(G);
     if (owedNow > 0) row('WANTED', Math.round(owedNow) + ' cr', '#ff5a5a');
     if (G.cruise) {
-      row('CRUISE', fmtSpeed(G.cruise.speed), '#b4f0ff');
+      row('CRUISE', fmtCruise(G.cruise.speed), '#b4f0ff');
     } else if (G.ship.docked) {
       var st = G.sys.byId[G.ship.docked];
       row('docked', clipText(st.name, 16), '#7dffb0');
@@ -9899,8 +10822,8 @@
 
     if (G.cruise) {
       mfdRow(ctx, y, 'mode', 'CRUISE ENGAGED', '#b4f0ff');
-      mfdRow(ctx, y + 16, 'speed', fmtSpeed(G.cruise.speed));
-      mfdRow(ctx, y + 32, 'limit', fmtSpeed(G.cruise.maxSpeed) + '  (mass lock)');
+      mfdRow(ctx, y + 16, 'speed', fmtCruise(G.cruise.speed));
+      mfdRow(ctx, y + 32, 'limit', fmtCruise(G.cruise.maxSpeed) + '  (mass lock)');
       mfdRow(ctx, y + 48, 'burn rate', G.cruise.rate.toFixed(3) + ' t / Mkm');
       mfdRow(ctx, y + 64, 'nearest', G.cruise.lockBody ? G.cruise.lockBody.name : '—');
       mfdRow(ctx, y + 80, 'target', nav ? clipText(nav.name, 22) : 'none', MFD_HOT);
@@ -9948,19 +10871,22 @@
     mfdRow(ctx, y, 'mode', 'MANUAL', MFD_DIM);
     ctx.font = 'bold 12px ui-monospace, monospace';
     ctx.fillStyle = MFD_DIM;
-    ctx.fillText('Z    engage cruise drive — crosses a', 10, y + 22);
-    ctx.fillText('     whole system in minutes', 10, y + 35);
-    ctx.fillText('T    clamp, then T again to dock', 10, y + 55);
-    ctx.fillText('     (it will cruise the long leg itself)', 10, y + 68);
-    ctx.fillText('Shift+T  match orbit    Shift+L  follow', 10, y + 85);
+    /* Packed to end at y + 110 = 150, inside MFD_BODY_BOTTOM. At the old
+     * spacing the last line sat at 159, through the soft-key strip
+     * (2026-10-19, found under "panels overlap"). */
+    ctx.fillText('Z    engage cruise drive — crosses a', 10, y + 20);
+    ctx.fillText('     whole system in minutes', 10, y + 33);
+    ctx.fillText('T    clamp, then T again to dock', 10, y + 50);
+    ctx.fillText('     (it will cruise the long leg itself)', 10, y + 63);
+    ctx.fillText('Shift+T  match orbit    Shift+L  follow', 10, y + 79);
     ctx.fillStyle = nav ? MFD_INK : '#ff8a76';
     ctx.fillText(nav ? ('locked: ' + clipText(nav.name, 26))
-                     : 'no lock — [ ] to pick a destination', 10, y + 103);
+                     : 'no lock — [ ] to pick a destination', 10, y + 95);
 
     var lock = cruiseLock();
     ctx.fillStyle = lock.can ? '#7dffb0' : '#ffb86b';
     ctx.fillText(lock.can ? 'cruise drive ready'
-                          : 'mass locked by ' + lock.body.name, 10, y + 119);
+                          : 'mass locked by ' + lock.body.name, 10, y + 110);
   }
 
   /* --- NODE: the manoeuvre plan -----------------------------------------
@@ -10057,7 +10983,7 @@
    * The list scrolls to keep the lock in view rather than making you hunt
    * for where the cursor went. */
   function drawNavPage(ctx) {
-    mfdShell(ctx, 'NAVIGATION', '[ ] cycle target    L release    T assign dock clamp');
+    mfdShell(ctx, 'CONTACTS', '[ ] cycle lock    L release    T assign dock clamp');
     var list = navList();
     var rows = 8, rowH = 14;
     var sel = -1;
@@ -10458,10 +11384,258 @@
     return frac > 0.6 ? '#7dffb0' : frac > 0.25 ? '#ffd36b' : '#ff8a76';
   }
 
-  function drawTargetPage(ctx) {
+  /* ---- THE NAV CARD: a locked world, as the chart describes it ----------
+   * Astra, 2026-10-19: the slipspace chart's information for the system
+   * you are in, "what type of planet each of the bodies in order from
+   * their star are" — then: a box under the planet you have locked, in the
+   * world view, "and integrate the two somehow, using a tab"; and in the
+   * cockpit "on a panel, not on the HUD".
+   *
+   * So this is one page, drawn three places: on a console screen (where
+   * it is read-only, like every screen in the cockpit, and M flips the
+   * tab), as a tile on F3, and hanging under the locked world in the
+   * exterior view (both clickable). Two tabs:
+   *
+   *   WORLD   where it sits, what it is, its air, moons and ports, surface
+   *           pull, day, and the chart's notes on life and people
+   *   SYSTEM  every planet, nearest the star first, with this one lit —
+   *           click a row to lock that world instead
+   *
+   * `xf` is where the page landed on screen ({ox, oy, s}), or nothing on
+   * a console screen, which takes no clicks. */
+  function pageHot(xf, x, y, w, h, fn) {
+    if (!xf) return;
+    hot(xf.ox + x * xf.s, xf.oy + y * xf.s, w * xf.s, h * xf.s, fn);
+  }
+  function cardRow(ctx, x0, x1, y, label, value, color) {
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.textAlign = 'left';
+    ctx.fillText(label, x0, y);
+    var room = x1 - x0 - ctx.measureText(label).width - 10;
+    var v = String(value);
+    while (v.length > 2 && ctx.measureText(v).width > room) v = v.slice(0, -2) + '.';
+    ctx.fillStyle = color || MFD_INK;
+    ctx.textAlign = 'right';
+    ctx.fillText(v, x1, y);
+    ctx.textAlign = 'left';
+  }
+  function drawWorldCard(ctx, nav, xf) {
+    var body = nav.obj;
+    var tab = G.lockTab === 'system' ? 'system' : 'world';
+    mfdShell(ctx, 'NAV', 'M world / system    [ ] cycle    L release');
+
+    /* The tabs, in the title bar's right end. */
+    var tabs = [['world', 'WORLD', 300], ['system', 'SYSTEM', 378]];
+    tabs.forEach(function (t) {
+      var on = t[0] === tab;
+      ctx.fillStyle = on ? '#1f6b7f' : '#0c2b35';
+      ctx.fillRect(t[2], 5, 74, 17);
+      ctx.strokeStyle = on ? '#b4f0ff' : 'rgba(74,151,176,0.6)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(t[2] + 0.5, 5.5, 73, 16);
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = on ? '#eaffff' : MFD_DIM;
+      ctx.textAlign = 'center';
+      ctx.fillText(t[1], t[2] + 37, 18);
+      ctx.textAlign = 'left';
+      pageHot(xf, t[2], 5, 74, 17, (function (id) {
+        return function () { G.lockTab = id; };
+      })(t[0]));
+    });
+
+    var facts = global.Screens.worldFacts(G.sys, body);
+    if (tab === 'world') {
+      var y = MFD_BODY_TOP + 14;
+      ctx.font = 'bold 13px ui-monospace, monospace';
+      ctx.fillStyle = MFD_HOT;
+      ctx.fillText(clipText(body.name, 22), 10, y);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = facts.habitable ? '#7dffb0' : '#cfe0ff';
+      /* Short form of the zone — 'HZ ring' and 'HZ band' — so the name on
+       * the left keeps its 22 characters. The note below says the rest. */
+      var zt = facts.planetRow && facts.planetRow.body === body ? facts.planetRow.zone
+             : (facts.habitable ? 'HZ' : '');
+      ctx.fillText(facts.typeName + (zt ? '  ·  ' + zt : ''), MFD_W - 10, y);
+      ctx.textAlign = 'left';
+
+      /* Two columns: getting there on the left, the world on the right. */
+      var y1 = y + 19, p = 15;
+      cardRow(ctx, 10, 214, y1, 'range', fmtDist(nav.range));
+      cardRow(ctx, 10, 214, y1 + p, 'closing', fmtSpeed(nav.closing),
+              nav.closing > 0 ? '#7dffb0' : '#ff9f7a');
+      cardRow(ctx, 10, 214, y1 + p * 2, 'ETA', isFinite(nav.eta) ? fmtTime(nav.eta) : 'opening', MFD_DIM);
+      cardRow(ctx, 10, 214, y1 + p * 3, 'pull', facts.gravity !== null
+        ? facts.gravity.toFixed(2) + ' g' : '—');
+      cardRow(ctx, 232, MFD_W - 10, y1, 'place', facts.place);
+      cardRow(ctx, 232, MFD_W - 10, y1 + p, 'air', facts.air);
+      cardRow(ctx, 232, MFD_W - 10, y1 + p * 2, body.kind === 'planet' ? 'moons · ports' : 'ports',
+              body.kind === 'planet' ? facts.moons + ' · ' + (facts.ports || 0) : String(facts.ports || 0));
+      cardRow(ctx, 232, MFD_W - 10, y1 + p * 3, 'day', facts.day ? facts.day
+        : facts.dayHours
+        ? Math.abs(facts.dayHours).toFixed(1) + ' h' + (facts.retrograde ? ' retro' : '') +
+          (facts.tiltDeg !== null && facts.tiltDeg > 60 ? ' · on its side' : '')
+        : '—');
+
+      /* The chart's own words, for a world anyone might live on. */
+      var ny = y1 + p * 4 + 3;
+      if (facts.notes.length) {
+        ctx.font = '11px ui-monospace, monospace';
+        ctx.fillStyle = 'rgba(200,220,245,0.75)';
+        var lines = [];
+        facts.notes.forEach(function (n) { lines = lines.concat(wrapToWidth(ctx, n, MFD_W - 20, MFD_W - 20)); });
+        for (var li = 0; li < lines.length && ny <= MFD_BODY_BOTTOM; li++, ny += 12) {
+          var ln = lines[li];
+          if (ny + 12 > MFD_BODY_BOTTOM && li < lines.length - 1) ln = ln.replace(/\s*\S*$/, ' …');
+          ctx.fillText(ln, 10, ny);
+        }
+      }
+      return;
+    }
+
+    /* SYSTEM: two columns, nearest the star first, down then across. */
+    var list = global.Screens.systemManifest(G.sys);
+    var star = G.sys.root;
+    var top = MFD_BODY_TOP + 12, rowH = 14;
+    var perCol = Math.floor((MFD_BODY_BOTTOM - top) / rowH) + 1;
+    var lit = facts.planetRow ? facts.planetRow.body : null;
+    var shown = Math.min(list.length, perCol * 2 - (list.length > perCol * 2 ? 1 : 0));
+    for (var i = 0; i < shown; i++) {
+      var r = list[i];
+      var col = Math.floor(i / perCol), row = i % perCol;
+      var cx = 8 + col * 226, cy = top + row * rowH, cw = 218;
+      var isLit = r.body === lit;
+      if (isLit) {
+        ctx.fillStyle = 'rgba(255,211,107,0.20)';
+        ctx.fillRect(cx - 2, cy - 11, cw + 2, rowH);
+      }
+      var desig = (star && r.body.name.indexOf(star.name + ' ') === 0)
+        ? r.body.name.slice(star.name.length + 1) : r.body.name;
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText(r.n + '.', cx, cy);
+      ctx.fillStyle = isLit ? MFD_HOT : MFD_INK;
+      ctx.fillText(clipText(desig, 5), cx + 22, cy);
+      var tag = (r.moons ? '☾' + r.moons : '') + (r.ports ? (r.moons ? ' ' : '') + '⌂' + r.ports : '');
+      ctx.textAlign = 'right';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText(tag, cx + cw - 4, cy);
+      var tagW = tag ? ctx.measureText(tag).width + 6 : 0;
+      ctx.textAlign = 'left';
+      ctx.fillStyle = r.habitable ? '#7dffb0' : (isLit ? MFD_HOT : '#cfe0ff');
+      /* The zone is the fact; the type name gives way to it when the row
+       * is tight, so "Desert wo. HZ ring" rather than "Desert world HZ r." */
+      var zs = r.zone ? ' ' + r.zone : '';
+      var t = r.typeName;
+      var room = cw - 4 - tagW - 64 - (zs ? ctx.measureText(zs).width : 0);
+      while (t.length > 2 && ctx.measureText(t).width > room) t = t.slice(0, -2) + '.';
+      ctx.fillText(t + zs, cx + 60, cy);
+      pageHot(xf, cx - 2, cy - 11, cw + 2, rowH, (function (b) {
+        return function () { G.navTarget = { kind: 'body', id: b.id }; say('Locked ' + b.name, 2); };
+      })(r.body));
+    }
+    if (shown < list.length) {
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('+' + (list.length - shown) + ' further out', 8 + 226, top + (perCol - 1) * rowH);
+    }
+  }
+
+  /* The card in the world: hung under the locked planet or moon, a thin
+   * leader up to it, the same page as the console's at a smaller scale.
+   * When the world is off the screen or behind you, the card pins to the
+   * nearest edge and an arrow on it points the way to the world, so the
+   * information never vanishes and never sits over the thing you are
+   * trying to look at. */
+  function drawLockCardInWorld(ctx, cam, w, h) {
     var nav = navTargetState();
-    mfdShell(ctx, 'TARGET', nav ? '[ ] cycle    L release    T clamp / auto-dock'
-                                : '[ ] to lock something');
+    if (!nav || nav.kind !== 'body' || !(nav.obj.kind === 'planet' || nav.obj.kind === 'moon')) return;
+    /* Sized to be READ: two thirds was 7 px type on a small window. Never
+     * under 0.8 of the console page, full size on a wide window. */
+    var s = Math.max(0.8, Math.min(1, w / 1150)), cw = MFD_W * s, ch = MFD_H * s;
+    var floor = deckTop(h) - 8;
+    var p = cam.project(nav.pos);
+    var onScreen = p && p.x > 0 && p.x < w && p.y > 0 && p.y < h;
+    var rpx = onScreen ? Math.max(6, (nav.obj.radius || 0) * p.scale) : 0;
+    var x, y, arrow = null;
+    if (onScreen) {
+      x = p.x - cw / 2;
+      y = p.y + rpx + 22;
+      /* Not enough room under it: hang it above instead. */
+      if (y + ch > floor) y = p.y - rpx - 22 - ch;
+    } else {
+      /* Off the glass: the direction to it, from the camera's own axes so
+       * that "behind you and to the right" still points right. */
+      var d = V.sub(nav.pos, cam.eye);
+      var dx = V.dot(d, cam.r), dy = -V.dot(d, cam.u);
+      var dl = Math.hypot(dx, dy) || 1;
+      dx /= dl; dy /= dl;
+      x = w / 2 + dx * w - cw / 2;
+      y = h / 2 + dy * h - ch / 2;
+      arrow = { dx: dx, dy: dy };
+    }
+    /* Pinned cards keep room outside them for the arrow. */
+    var m = arrow ? 30 : 8;
+    x = Math.max(m, Math.min(w - cw - m, x));
+    y = Math.max(m, Math.min(floor - ch - (arrow ? 22 : 0), y));
+
+    ctx.save();
+    if (onScreen) {
+      /* The leader: from the world's edge to the card. */
+      var ly = y > p.y ? y : y + ch;
+      ctx.strokeStyle = 'rgba(127,214,192,0.55)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y + (y > p.y ? rpx + 3 : -rpx - 3));
+      ctx.lineTo(Math.max(x + 6, Math.min(x + cw - 6, p.x)), ly);
+      ctx.stroke();
+    }
+    ctx.translate(x, y);
+    ctx.scale(s, s);
+    drawWorldCard(ctx, nav, { ox: x, oy: y, s: s });
+    ctx.restore();
+    if (arrow) {
+      /* On the card's own edge, pointing out toward the world. */
+      /* Where the ray from the card's centre toward the world leaves the
+       * card, then a little beyond — so the arrow sits on the side that
+       * faces the world, whichever side that is. */
+      var tx = Math.abs(arrow.dx) > 1e-6 ? (cw / 2) / Math.abs(arrow.dx) : Infinity;
+      var ty = Math.abs(arrow.dy) > 1e-6 ? (ch / 2) / Math.abs(arrow.dy) : Infinity;
+      var tEdge = Math.min(tx, ty) + 6;
+      drawEdgeArrow(ctx, x + cw / 2 + arrow.dx * tEdge, y + ch / 2 + arrow.dy * tEdge,
+                    arrow.dx, arrow.dy);
+    }
+  }
+  function drawEdgeArrow(ctx, x, y, dx, dy) {
+    ctx.save();
+    ctx.fillStyle = '#ffd36b';
+    ctx.strokeStyle = 'rgba(0,14,10,0.62)';
+    ctx.lineWidth = 3;
+    var px = -dy, py = dx, L = 13, W = 7;
+    ctx.beginPath();
+    ctx.moveTo(x + dx * L, y + dy * L);
+    ctx.lineTo(x + px * W, y + py * W);
+    ctx.lineTo(x - px * W, y - py * W);
+    ctx.closePath();
+    ctx.stroke(); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawTargetPage(ctx, xf) {
+    var nav = navTargetState();
+    /* NAV OR TARGET, BY WHAT IS LOCKED (2026-10-19). Astra: "call that
+     * screen NAV instead of TARGET — target should be reserved for ships
+     * that are targeted either for hailing or weapons fire." One lock, one
+     * screen, two names: a place you are going is NAV, a ship you might
+     * hail or shoot is TARGET, and with nothing locked it is NAV, waiting. */
+    var isShip = nav && nav.kind === 'ship';
+    if (nav && nav.kind === 'body' && (nav.obj.kind === 'planet' || nav.obj.kind === 'moon')) {
+      drawWorldCard(ctx, nav, xf);
+      return;
+    }
+    mfdShell(ctx, isShip ? 'TARGET' : 'NAV',
+             nav ? '[ ] cycle    L release    T clamp / auto-dock'
+                 : '[ ] to lock something');
     if (!nav) {
       ctx.font = 'bold 13px ui-monospace, monospace';
       ctx.fillStyle = MFD_DIM;
@@ -10969,18 +12143,6 @@
      * worse than a clean side-on one. Periapsis is to the right, so the
      * ellipse centre sits a*e to the LEFT of the focus. */
     ctx.save();
-    ctx.strokeStyle = 'rgba(120,240,190,0.7)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.ellipse(cx - a * e * scale, cy, a * scale, bAxis * scale, 0, 0, K.TAU);
-    ctx.stroke();
-
-    // The body at the focus, to scale against its own orbit.
-    ctx.fillStyle = oe.body.color;
-    ctx.beginPath();
-    ctx.arc(cx, cy, Math.max(1.6, oe.body.radius * scale), 0, K.TAU);
-    ctx.fill();
-
     /* Us, at our true anomaly. Recovered from the orbit equation rather
      * than carried around: r = a(1-e^2)/(1+e cos v), and the sign comes
      * from whether we are climbing or falling. */
@@ -10995,6 +12157,50 @@
       nu = Math.acos(Math.max(-1, Math.min(1, cosNu)));
       if (V.dot(rel, vrel) < 0) nu = -nu;   // falling toward periapsis
     }
+
+    /* AHEAD SOLID, BEHIND DOTTED — the same rule as the line in the world
+     * view, split at half a period ahead of us by time, so the two pictures
+     * agree. Points in the orbit's own plane: x = a(cosE - e) from the
+     * focus, y = b sinE, drawn with y up. */
+    var E0 = 2 * Math.atan2(Math.sqrt(1 - e) * Math.sin(nu / 2),
+                            Math.sqrt(1 + e) * Math.cos(nu / 2));
+    var Eh = K.solveKepler(E0 - e * Math.sin(E0) + Math.PI, e);
+    var span = K.wrapAngle(Eh - E0) || Math.PI;
+    function orbPt(E) {
+      return { x: cx + a * (Math.cos(E) - e) * scale, y: cy - bAxis * Math.sin(E) * scale };
+    }
+    function arc(Ea, dE, dash, alpha, lw) {
+      ctx.setLineDash(dash || []);
+      ctx.strokeStyle = 'rgba(120,240,190,' + alpha + ')';
+      ctx.lineWidth = lw;
+      ctx.beginPath();
+      for (var i = 0, n = 48; i <= n; i++) {
+        var p = orbPt(Ea + dE * i / n);
+        if (i) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
+      }
+      ctx.stroke();
+    }
+    arc(E0 + span, K.TAU - span, [2, 4], 0.45, 1);
+    arc(E0, span, null, 0.9, 1.4);
+    ctx.setLineDash([]);
+    /* An arrowhead a little way along the solid half, pointing the way we
+     * are going round. The dot says where; this says which way. */
+    var pA = orbPt(E0 + span * 0.12), pB = orbPt(E0 + span * 0.17);
+    var adx = pB.x - pA.x, ady = pB.y - pA.y, al = Math.hypot(adx, ady) || 1;
+    adx /= al; ady /= al;
+    ctx.fillStyle = 'rgba(120,240,190,0.95)';
+    ctx.beginPath();
+    ctx.moveTo(pB.x + adx * 4, pB.y + ady * 4);
+    ctx.lineTo(pB.x - adx * 3 - ady * 3.5, pB.y - ady * 3 + adx * 3.5);
+    ctx.lineTo(pB.x - adx * 3 + ady * 3.5, pB.y - ady * 3 - adx * 3.5);
+    ctx.closePath(); ctx.fill();
+
+    // The body at the focus, to scale against its own orbit.
+    ctx.fillStyle = oe.body.color;
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(1.6, oe.body.radius * scale), 0, K.TAU);
+    ctx.fill();
+
     ctx.fillStyle = MFD_HOT;
     ctx.beginPath();
     ctx.arc(cx + Math.cos(nu) * r * scale, cy - Math.sin(nu) * r * scale, 2.8, 0, K.TAU);
@@ -11585,7 +12791,10 @@
       ap = Gen.berthApertures ? Gen.berthApertures(port, berth) : ap;
       return { open: 1 - G.arrivalPose.gates.apron,
                inner: 1 - G.arrivalPose.gates.inner,
-               berth: berth, berthMid: ap && ap.mid };
+               berth: berth, berthMid: ap && ap.mid,
+               /* And the lift car the hull is riding, where it is this
+                * frame (2026-10-17: "the car to ride with the ship"). */
+               car: G.arrivalPose.car || null };
     }
 
     /* EVERYWHERE ELSE, ONE AUTHORITY. Sim.stationDoorState runs the airlock
@@ -12062,19 +13271,61 @@
     ctx.restore();
   }
 
+  /* Label left, value right-aligned. A value too long to sit beside its
+   * label used to be drawn anyway and run leftward straight over the label
+   * (the gas giant's composition on the star-map scan did exactly that).
+   * Now it word-wraps: as much as fits on the label's line, the rest on
+   * right-aligned continuation lines underneath. Returns the height used,
+   * so a caller that draws below the table can move down with it —
+   * callers that ignore it lose nothing, since a table that never wraps is
+   * still exactly list.length * 15 tall. */
   function rows(ctx, x, y, list, labelColor, valueColor, width) {
     ctx.save();
     ctx.font = 'bold 12px ui-monospace, SFMono-Regular, Menlo, monospace';
+    var cy = y;
     for (var i = 0; i < list.length; i++) {
-      if (!list[i]) continue;
+      if (!list[i]) { cy += 15; continue; }
+      var label = String(list[i][0]), value = String(list[i][1]);
       ctx.fillStyle = labelColor;
-      ctx.fillText(list[i][0], x, y + i * 15);
+      ctx.textAlign = 'left';
+      ctx.fillText(label, x, cy);
       ctx.fillStyle = list[i][2] || valueColor;
       ctx.textAlign = 'right';
-      ctx.fillText(list[i][1], x + width, y + i * 15);
+      var firstAvail = width - ctx.measureText(label).width - 14;
+      if (ctx.measureText(value).width <= firstAvail) {
+        ctx.fillText(value, x + width, cy);
+        cy += 15;
+      } else {
+        var lines = wrapToWidth(ctx, value, firstAvail, width - 24);
+        for (var k = 0; k < lines.length; k++) {
+          if (lines[k]) ctx.fillText(lines[k], x + width, cy);
+          cy += k === lines.length - 1 ? 15 : 14;
+        }
+      }
       ctx.textAlign = 'left';
     }
     ctx.restore();
+    return cy - y;
+  }
+
+  /* Greedy word wrap by measured pixel width: the first line gets
+   * firstW, every later line laterW. If not even the first word fits
+   * beside the label, the first line is left empty and everything starts
+   * on the line below. */
+  function wrapToWidth(ctx, text, firstW, laterW) {
+    var words = text.split(' '), out = [], cur = '';
+    for (var i = 0; i < words.length; i++) {
+      var maxW = out.length === 0 ? firstW : laterW;
+      var trial = cur ? cur + ' ' + words[i] : words[i];
+      if (ctx.measureText(trial).width <= maxW || (!cur && out.length > 0)) {
+        cur = trial;
+      } else {
+        out.push(cur);
+        cur = words[i];
+      }
+    }
+    out.push(cur);
+    return out;
   }
 
   function drawHUD(ctx, w, h) {
@@ -12524,7 +13775,7 @@
         : 'H help   ·   drag to orbit   ·   wheel / +- zoom   ·   Esc menu   ·   Enter cockpit   ·   ';
       ctx.fillText(hint +
                    (G.gridStep ? 'grid ring ' + fmtDist(G.gridStep) + '   ·   ' : '') +
-                   Math.round(G.fps) + ' fps', 14, top - 8);
+                   Math.round(G.fps) + ' fps', 14, consoleScreensShown() ? 16 : top - 8);
     }
     ctx.restore();
 
@@ -13922,7 +15173,7 @@
       t.born = performance.now();
       if (global.ManifestBootCard) { t.born -= 9000; global.ManifestBootCard = false; }
     }
-    if (!titleStory) titleStory = global.Captains ? global.Captains.pick() : null;
+    if (!titleStory) titleStory = global.CaptainStories ? global.CaptainStories.pick() : null;
     var items = titleItems();
 
     Logo.drawSky(ctx, w, h, performance.now() / 1000);
@@ -14006,6 +15257,20 @@
       ctx.save();
       ctx.globalAlpha = aLine;
       drawTitleStory(ctx, px, py + panelH + 26, MENU_W, storyH, titleStory);
+      ctx.restore();
+    }
+
+    /* WHICH BUILD, in the corner and out of the way: the number and the
+     * release's name (see release.js). Faded in with the tagline, since
+     * it is part of the card rather than part of the menu. */
+    var Rel = global.Release;
+    if (Rel && aLine > 0) {
+      ctx.save();
+      ctx.globalAlpha = aLine;
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(200,218,250,0.55)';
+      ctx.textAlign = 'right';
+      ctx.fillText(Rel.version + '  \u00b7  \u201c' + Rel.name + '\u201d', w - 18, h - 16);
       ctx.restore();
     }
   }

@@ -45,6 +45,37 @@ Astra has seen it working.
 
 ### Added
 
+- **2026-10-25: the Shared_AI line merged (ship interiors and people).**
+  Seven commits from Driftwood's branch, ending at "Walk your own ship,
+  and people on it", carried onto this line in a trial branch first. Its
+  own entries follow this line's under each heading below. Where the two
+  had built the same thing twice:
+  - **Captains.** The NPC captains in their ships keep `captains.js`. The
+    stories under the title menu moved to `captain-stories.js`
+    (`CaptainStories`), with their own test.
+  - **Lift rides, both kinds.** The ring's car under its heavy bay rides
+    on the restored car-and-lift legs (board, lift, pad, transfer, the car
+    drawn under you). A lift inside the hull (`route.ride`) is still driven
+    to, waited on, ridden and left (`routePhases`), now on the transfer leg
+    rather than one long enter leg. The ring's platform is no longer also
+    lifted out as a mover, so it is drawn once.
+  - **Moving parts after a split.** The converter's car and hatch faces are
+    numbered against the whole hull; lifting movers or a city out of it
+    moved every number after them, so the ring's car collided as most of
+    the station. The split hull now remembers where each face came from
+    (`oi`), and the converter re-reads the runs after clipping bores.
+  - **survey.test.js** flies over a world that turns. Twilight worlds can
+    be tidally locked now, and the first rock it used to pick is one.
+  - **The cutaway.** This line's cone, cut greebles, ground-port section
+    and cutaway styles are kept over the older band-and-quiet-zone shader.
+    Faction paint and the slipspace tear are carried in the same shader.
+  - **Docking.** Both lines had fixed the dock edge; one edge
+    (`justDocked`) hands on to the contracts, the torpedo berth scan and
+    the save.
+  - **Arrival.** A pad is never taken as the home station: the Shared
+    line's fallback to "any station" is what had put a pad with no orbit
+    under spawnShip.
+
 - **2026-10-15: Driftwood's line merged into Abby.** Planetary rings,
   asteroid belts and Trojans, the lift car, lightning, the glass-glow
   option, cockpit greebles, faction names and the rescue fix now sit on
@@ -508,6 +539,1131 @@ Astra has seen it working.
     no-man's land on the clock - Crawlers founding ports there, dated like
     the wars - and the faction missions that hang off it.
 
+- **People: your crew at their stations, a station deck with people on it,
+  and the crews of the ships in port (2026-10-25).** Astra: *"We should use
+  these crew models on ships and stations in game, in the first person
+  mode. They should also be on NPC ships. Give them each a basic AI script
+  so they do their assigned jobs by class."* The models are the ones she
+  designed on the turntable page ("Manifest Crew Roster") on 2026-10-24/25.
+  - **The bodies** (`src/npcmodel.js`). Fourteen roles: pilot, engineer,
+    gunner, security, tactical, medic and loadmaster for a ship's crew;
+    raider and captain for pirates; enforcer, heavy and fixer for the
+    Syndicate; marine and officer for the Navy.
+    - Low-poly in the first Unreal Tournament's manner, 700 to 2,400
+      triangles each, with the detail painted on one 512 × 512 skin per
+      person rather than modelled.
+    - A ship's crew wears its livery: none on a civilian ship, Navy blue
+      and white, Syndicate charcoal and gold (an engineer's hard hat always
+      yellow or red), or a pirate crew's mismatched patches.
+    - Everything carried is attached: the loadmaster's antenna to a
+      bracket on the frame, rifles to two-point slings over the shoulder,
+      the smart optics to the helmet by a cable. Exo-frames hinge at
+      elbows and knees, and every body has ankles.
+    - Rifles are built from one datum, the chamber, and check six rules
+      of how a gas carbine works (ejection port over the magazine well,
+      trigger behind it, buffer tube in line with the bore, and the rest).
+    - Each body is skinned on eleven bones, so posing one costs eleven
+      matrices and no rebuild.
+  - **Drawn on the GPU** (`src/npcgl.js`): one draw call per person,
+    depth-tested against the room they stand in, lit like the cockpit
+    room. `gl.js` gains `GLWorld.addPass`, run after the cockpit room and
+    before the screens. Without WebGL2 the nearest few people go into
+    walk.js's painter's sort as flat triangles coloured off their skins.
+  - **Who is where, and what they do** (`src/npc.js`):
+    - **Your crew** are the people on your roster. On watch (eight-hour
+      watches on the game clock, two of every three) engineers and gunners
+      sit at the bridge-deck stations of their own role, one to a seat; a
+      second hand for a one-station role stands at the shoulder of whoever
+      has it. An engineer now and then walks aft to look over the passage
+      and the lock. Off watch, people sleep in their bunks or work at the
+      galley. A pilot takes the helm whenever you get out of the seat, and
+      gets up when you want it back; with you in the seat, the pilot on
+      watch stands at your shoulder.
+    - **A station deck** has a market clerk, a yard clerk where there is a
+      yard, a bartender and a crew-hall steward at their counters;
+      security in the port's colours (the Syndicate's enforcers and a heavy
+      at the big lock in their ports, marines at the big lock and a customs
+      officer where the Navy keeps a garrison, the port's own officers
+      elsewhere); the hands in the crew hall, who are exactly the people
+      `Crew.forHire` lists for that port and week, less anyone you have
+      already signed on; and now and then a
+      Syndicate face in the bar, more often where the port is bought.
+    - **Other ships' crews.** Every ship moored at the port
+      (`Sim.berthOccupants`) sends its people, in its owner's colours: one
+      works her berth, the rest go between the bar and the concourse.
+      `Npc.crewForShip` is the same crew for any NPC ship wherever she is
+      met, ready for boarding.
+    - People walk room to room through the doors only, round counters,
+      wait at a sliding door until it opens (and hold it open:
+      `ShipDeck.updateDoors` takes their `hold`), and stop short of you
+      for a moment rather than walk through you.
+    - **E talks to whoever you are facing**: their name, what they are,
+      and a line in character. A hand for hire says how good they are.
+  - **The station deck is drawn on the GPU** when it is available
+    (`Walk.meshFor`): the same plates the 2D deck painted, as one mesh in
+    the docked ship's frame, so the people on it are depth-tested against
+    its walls. The 2D deck is unchanged without WebGL2.
+  - Tests: `test/npc.test.js` (28 checks). Seen in game on the Crawler
+    (`tools/probe-npc.js`, RX 540): a Dart's bridge deck from the seat and
+    on foot, her quarters, and a station's spine, concourse, bar and crew
+    hall with 23 people about; the concourse held 57 fps.
+
+- **A modelled cockpit for every ship, a sliding door aft, and a walk to
+  your airlock (2026-10-24).** Astra: *"We need to have a modeled interior
+  for every ship that doesn't have one, specifically the cockpit. There
+  needs to be doors that slide into the structure of the ship to open the
+  way from the cockpit into the rest of the ship, and the syndicate ships
+  need to have the dark grey and red motif on the interior too."* Her
+  answers: a real 3D room per hull on the GPU; the door walkable to your
+  airlock; Syndicate colours on the Corsair Runner, Enforcer, Syndicate
+  Heavy and a Crawler in Syndicate livery. See `claude/ship-interiors.md`.
+  - **The cockpit is a room now.** Every hull's bridge is a GPU mesh
+    fitted to that hull's own glass and size (`src/shipdeck.js`, from
+    `Render.cockpitGeometry`):
+    - windscreen, quarter-lights and side windows each set in a wall;
+    - the floor window at the bottom of a footwell under the dash slot;
+    - side consoles, the overhead, a ceiling with light strips, and the
+      rear bulkhead.
+    It used to be one flat-painted room for all 23 hulls. The modelled
+    cockpits inside the GLB files were never drawn and still are not.
+  - **The windows keep exactly their shapes.** Each pane is drawn first,
+    depth only, and the room after it. A wall behind glass fails the depth
+    test and the world already drawn shows through. Tests show no wall
+    stands between the seat and any window, on any hull, and every window
+    is set in a wall with no sky past its edge.
+  - **The door.** Two leaves in the rear bulkhead slide sideways into the
+    wall to open, with a lit trim round the frame and a hazard stripe where
+    they meet. Each opens as you reach it and closes behind you.
+  - **Walking.** O, berthed or on a pad, stands you up behind the seat
+    (it used to drop you on the station deck).
+    - You walk aft through the bridge door, down a passage (longer on
+      bigger ships: 2.4 m on an S hull to 8 m on an XL), through a second
+      sliding door into the airlock.
+    - The hatch's lamp is green when there is somewhere to step out to.
+      E at the hatch, berthed, steps you out at your berth on the station
+      deck. On the station deck, E at your own hatch brings you aboard at
+      the airlock. E at the seat sits you down.
+    - Walking uses the seat view's projection from a standing eye, so the
+      room, the screens and the world through the glass all line up.
+      From the passage the cockpit is seen only through the doorway.
+      There is no flight HUD on foot.
+  - **The Syndicate's interior.** Dark grey walls, floor, consoles and
+    leaves; red door trim, stripes and hazard edges; red-and-amber switch
+    panels on grey plate; a red accent strip on the dash. All taken from
+    the hull art's own `syn*` and `syndicate_*` materials. On the Runner,
+    Enforcer and Syndicate Heavy, and on any Crawler in their livery.
+    Navy hulls (Cutter, Capital, Carrier) get a cooler grey with pale-blue
+    trim.
+- **Bridges with crew stations, and crew quarters (2026-10-24).** Astra:
+  *"M and L size ships might have multiple crew stations on the bridge"*,
+  *"create them so that they match the geometry of the ship, but with
+  multiple crew stations"*, and *"All ships which have crew stations
+  require crew quarters."* No crew-station models exist in the art (every
+  hull file has only the pilot's seat), so the stations are built in code.
+  - **The bridge deck.** On every M, L and XL hull, the bulkhead behind
+    the helm stays where it was, with its rear screens and greebles. Its
+    doorway is now an open arch onto a bridge deck behind it, with the
+    sliding bridge door at the deck's aft end.
+  - **The stations.** One for each hand the hull needs with you at the
+    helm (`Crew.crewNeeded`): engineering (amber screens) and gunnery (red).
+    Each is a console against the side wall with a seat facing it, down
+    both walls on a wide hull and the port wall on a narrow one. Up to six;
+    a Carrier's nine share them, gunnery included. E at a station says
+    who signed on for it, or that nobody has. Seeing crew at them comes
+    with the NPC work.
+  - **Crew quarters.** On every ship with stations, off the port side of
+    the passage behind a sliding door that runs into the wall:
+    - a bunk for every hand and one for you, in two-high stacks with
+      reading lamps and end boards;
+    - lockers, and a galley across the aft end, after the navy yards'
+      crew rooms.
+    The passage is lengthened to fit them.
+  - S hulls (Talon, Wren, Bollard, Lance) stay one-seat, with no deck and
+    no quarters.
+  - The Carrier's and Capital's conning-tower bridges and elevators are
+    the next slice. For now they get a large bridge deck like the others.
+  - *Tests:* `test/shipdeck.test.js` +14 checks (49):
+    - stations and bunks per hull;
+    - every room on every hull can be walked to;
+    - the helm's bulkhead has not moved;
+    - the quarters door is wall while shut and its leaves go into the wall.
+  - `test/tear.test.js` now runs in `npm test`.
+- **A Crawler in a faction's colours (2026-10-24).** Astra: *"Player
+  crawlers can have syndicate livery if they're operating for the
+  Syndicate."* Her answer: you choose it when you commission or repaint,
+  and the same goes for a navy.
+  - The order sheet for a Crawler has a LIVERY line: civilian, navy or
+    Syndicate.
+  - The FLEET tab offers a repaint of the Crawler under your hands
+    (4,000 cr).
+  - Syndicate colours need a yard the Syndicate holds and 40+ standing
+    with them (an Enforcer's line), and they must not want you. A navy's
+    need its own yard and 40+ standing (ALLIED, a Cutter's line).
+  - She wears that livery's model outside (`crawler_syndicate`,
+    `crawler_navy`) and its room inside, until she is repainted.
+    `Combat.liveryRefusal`, `Combat.repaintLivery`.
+
+- **Choking a port by buying her cargo in flight (2026-10-21).** Astra:
+  *"buying cargo off a ship means it doesn't have that cargo for the
+  destination. Provides a way to choke a station without killing trade
+  ships."*
+  - When you buy a line off a trader, the port she was bound for gets
+    that much less of it when she arrives. The deal says so: "*Port* will
+    be N t short."
+  - Nothing changes at the port before she gets there. When she docks,
+    the shelf is short by what she no longer carries, and the gap fades
+    the way a delivery would (the same decay as the inbound arrivals).
+  - Buying the same line off more ships deepens the shortage. Other ports
+    are untouched.
+  - Shortages are saved with the trade book and forgotten once they have
+    faded (`Economy.shortfalls`, `ShipTrade.shortDelivery`,
+    `ShipTrade.attach`). 9 new checks in `test/shiptrade.test.js`.
+- **The police leave Syndicate runners alone (2026-10-21).** Astra:
+  *"Syndicate runners don't get chased by cops unless they are firing on a
+  civilian vessel as the aggressor. The syndicate pays off the police."*
+  This already held in the game. Police never scan, hail or chase a
+  runner, and no NPC fires on another NPC yet, so a runner can never be
+  the aggressor. The rule is now written into `buildRunners`
+  (generate.js), so whoever adds NPC-on-NPC fire knows what it must
+  respect.
+
+- **The Crawler: the first bay of a station, and the crates it carries
+  (2026-10-20).** Astra, over the day:
+  - *"This is the new station-constructor, called the Crawler. There's only
+    one size."*
+  - *"crawlers be the frame for L size bays, so they become the first bay in
+    a station, and carry the station's components, for if it's to be a
+    skimmer or a shipyard. To get the XL sized shipyards, we stitch two
+    crawlers together."*
+  - *"6 to a cube for S modules and 4 for M modules, 2 for L modules and 1
+    for XL modules which are station component crates."*
+  - On freight: *"we have dedicated cargo haulers for that, right? I want to
+    see both in game."*
+
+  Her answers: a Crawler that becomes a station is **permanent**; every
+  player-buildable station type comes from a Crawler plus the right crates;
+  Crawlers can **chain**, more than two. This is the first slice. Founding
+  and stitching come next (`claude/crawler-and-station-modules.md`).
+  - **The Crawler is the station's first L bay**, so there is no separate
+    core module. You can only order crates once you have a Crawler
+    (flying, in your fleet, or on the slip). That is your "L first" rule.
+  - **The models.** Your three liveries are in the hull library, imported
+    as the bare frame. The originals are kept in `ref/crawler-src/`. No
+    other hull changed.
+  - **Her 24 cubes, drawn as what they hold:**
+    - her own container when it holds freight;
+    - yellow station crates (navy and Syndicate in their own colours);
+    - nothing when empty.
+    A full Crawler rebuilt this way is exactly your model, face for face.
+  - **Packing.** A cube holds 6 S, 4 M, 2 L or 1 XL crates, one size per
+    cube. Any cube without crates is 25 t of freight, so an empty Crawler
+    has a 600 t hold. That is less than a Leviathan, so the haulers stay
+    the better freighters. The hold shrinks as crates take cubes.
+  - **The hull.** XL, built to order at a shipyard (8 days),
+    450,000 cr, needs a crew, never sold ready-built.
+  - **Crates, on the yard's MODULES tab.** Paid when ordered, built with
+    build time, and waiting at that yard when done.
+    - XL: slipway.
+    - L: skimmer rig, refinery line, ore works, market hall, hab ring.
+    - M: warehouse, repair dock, reactor pile, crew quarters.
+    - S: berth clamp, defence battery, comms relay, fuel cell.
+    In a Crawler at the yard, click a crate to crane it aboard (▶) or lift
+    it off. The tab shows her cubes as crates / freight / empty. Crates
+    aboard are lost with her, and you must lift them off before you trade
+    her in or step into another ship. **The catalogue and prices are my
+    pick.**
+  - **Crates cost about what a mid-tier ship does** (Astra: *"modules are
+    like the price of mid tier ships each, so building out a large size
+    station is an expensive, but often worthwhile goal"*):
+    - S: 60–75k;
+    - M: 80–110k;
+    - L: 120–165k;
+    - the XL slipway: 200k.
+
+    A Crawler plus a slipway, two L, four M and six S comes to about
+    1.7 million.
+  - **Her bay door and her small-craft bay** (Astra: *"it's on the bottom
+    of the crawler and I'm building the model for us now. It will also have
+    a docking bay L size for two tugs and one shuttle, for bringing shit
+    from orbit down to the surface for surface ports."*):
+    - a garage-style door on her **underside**, one leaf sliding up behind
+      the other, usable only once a station is being built;
+    - her own **M craft bay with three S slots**. Her craft ferry crates
+      from orbit down to surface ports. A **tug is always required**,
+      because only tugs have grab arms to move parts out of the crates in
+      orbit. A bigger (M) shuttle takes two slots. That gives three
+      loadouts:
+      - standard: 2 tugs + 1 shuttle;
+      - orbital push: 3 tugs, faster in orbit;
+      - planetary push: 1 tug + the M shuttle, faster on the surface.
+    The door and the bay's geometry wait on Astra's re-exported model.
+  - **Her craft bay, in the rules (2026-10-20).** Astra: *"More tugs speed
+    up the work, giving buying them a purpose at all."*
+    - Every Crawler comes with the standard bay. At a shipyard, the
+      MODULES tab offers a ▶ refit to each of the other loadouts. New craft
+      cost full price; departing craft come back at seven tenths (standard
+      → orbital push is 31,400 cr). Her crew flies them.
+    - Claude's first rates: a tug unpacks 1.5 cubes a day in orbit; a Wren
+      shuttle ferries 1 cube a day down to a surface site, the heavy
+      shuttle 2.5. The tab shows how many days this load would take in
+      orbit and on a surface with each bay. With no tug it can't build;
+      with no shuttle it can't reach a surface.
+    - The bay is saved, follows her into the fleet and back, and is lost
+      with her.
+    - **Her bay only ever carries her tugs and shuttles** (Astra: *"that
+      way we don't have custom-ship-won't-fit problems later."*). No
+      player ship, fleet hull or future modular ship docks in it.
+      `Construction.bayTakes` is the one check.
+    - **The M tug** (Astra: *"there's also an M size tug in the models we
+      currently have, and one of those unloads it a higher speed, but not
+      double."*). The Heavy tug (art: tug-m) unpacks 2.25 cubes a day,
+      half again an S tug, and costs 66,000 cr.
+    - **The pads decide what fits** (Astra chose this from her re-exported
+      model). The bay has two S pads by the door and one M pad further in.
+      An S pad takes an S craft; the M pad takes one M craft or one S
+      craft. This replaced "three S slots, an M craft takes two". The
+      loadouts, with their refit price from standard:
+
+      | loadout | craft | orbit | surface | refit |
+      | :-- | :-- | --: | --: | --: |
+      | Standard | 2 tugs + Wren | 3.0 | 1.0 | — |
+      | Orbital push | 3 tugs | 4.5 | — | 31,400 |
+      | Planetary push | 2 tugs + heavy shuttle | 3.0 | 2.5 | 47,400 |
+      | Heavy tug | tug + Wren + heavy tug | 3.75 | 1.0 | 35,200 |
+      | Heavy orbital | 2 tugs + heavy tug | 5.25 | — | 53,400 |
+
+      Rates are cubes a day; "—" means it can't supply a surface site.
+  - **What a load founds (2026-10-20), the agreed bill of crates:**
+    - market: market + warehouse;
+    - refinery: refinery + warehouse;
+    - skimmer: skim rig + refinery;
+    - mining: ore works + warehouse;
+    - passenger hab: hab ring + two berths;
+    - shipyard: slipway + repair;
+    - XL shipyard: slipway + repair, two Crawlers stitched.
+    Every one also needs Crew quarters. The MODULES tab shows ✓ for each
+    type her load can found, or what it still needs. Founding itself,
+    where she becomes the first L bay, is the next slice.
+  - **Astra's re-exported Crawler is in (2026-10-20)**
+    (`new models/20-10-2026/crawler_allLiveries_14of24.glb`, kept as
+    `ref/crawler-src/crawler_allLiveries_14of24.glb`):
+    - She's 478 m long now (was 454), 153 m wide, 204 m tall.
+    - The one file holds all three liveries. It is split into
+      `ref/glb/crawler_{civilian,navy,syndicate}.glb`, each with its cargo
+      detached, and `src/hulls.js` is regenerated (57 models).
+    - The generator's own state rode along in the file's extras: all 24
+      cubes and every part as Three.js JSON, 7.5 MB of the 9.5 MB. It is
+      stripped on import.
+    - The file draws 14 of the 24 cubes. All 24 centres were re-measured
+      from the generator's cube list, so the game still draws every cube
+      by what it holds.
+    - New in the model, not yet working in the game:
+      - the L berth in her belly, with its pad and two bottom leaves;
+      - the stern craft bay, with its roll-up door and pads `padS0`,
+        `padS1` and `padM`;
+      - 12 tug grab points along her flanks.
+    - Fixed in passing: the "frame carries no containers" test was a face
+      count, which every re-export broke. It now looks for geometry inside
+      a cube's volume.
+  - **Saves:** crates and what is in her cubes are saved. Older careers
+    load with none.
+  - Also: a commissioned hull now leaves the yard with a registration (it
+    had none).
+
+- **The model drop folder moved (2026-10-20).**
+  - `update_models/` now lives at `new models/update_models/`, all 76
+    files. Git had been showing them as deleted; the move is now recorded
+    as one.
+  - **Nothing in the game read that folder.** The game reads the converted
+    libraries in `src/` (`hulls.js`, `ports/`), which are built from
+    `ref/`.
+  - The one thing that did read it, `tools/stage-update-models.ps1` (it
+    files a drop into `ref/`), now defaults to the new place and takes
+    `-Source` for any other.
+  - Checked with `-WhatIf`: it plans 71 models from the new location.
+
+- **On foot in a station (2026-10-20), first slice.** Astra: *"full first
+  person walking. We do need to model station interiors to walk in. We
+  also want to be able to talk to NPC characters who are also on site."*
+  - **O**, while docked, stands you up out of the seat into your berth.
+  - Moving: **WASD** to walk, **Shift** to run, drag or the arrow keys to
+    look.
+  - **E** uses what you face:
+    - your own hatch takes you back to the cockpit;
+    - another of your ships berthed here makes you take command of her,
+      and the ship you walked off stays on her clamp;
+    - the market desk, the shipyard counter and the crew hall board open
+      their screens. The F-keys still work too (Astra: keep both).
+  - **The station is code-built from the seed** (Astra: code-built now,
+    her generator's modules later), so a port is the same building every
+    visit. `src/walk.js` builds it:
+    - the L docking port and its double doors;
+    - a spine corridor, with berths off both sides that get smaller the
+      further they are from the L port, as Astra laid stations out;
+    - a concourse with the bar, the market desk and the yard counter;
+    - the crew hall.
+  - Rooms are boxes. **The doors are the only way between rooms**, and
+    you slide along walls.
+  - Each of your ships in port gets a berth of her own size, with a lit
+    hatch.
+  - The world keeps running while you walk. Flight keys are held away from
+    the ship, so U on foot does not launch her.
+  - Not yet: the people. The bar says it is quiet for now. NPCs and talking
+    to them, the Syndicate contact, and the shuttle's docking tube come
+    next (`claude/walking-stations.md`).
+  - Tests: `test/walk.test.js` (26 checks: same plan every visit, every
+    room reachable from your berth, walls stop you and doors don't, berths
+    descend in size, a hatch for every ship of yours). Checked in the real
+    shell by `tools/probe-walk.js`: step out, walk, board the other ship.
+
+- **Every ship in the sky can be flown, built and bought (2026-10-20).**
+  Astra: *"I want any other non-buyable non-flyable ship type updated with
+  a cockpit, a model name and a cost to build, to buy and what the default
+  outfitting is"*, with *"Build = bare, Buy = outfitted"*, and *"the
+  number of crew required to operate each one without the player flying
+  it."*
+  - **Eight new hulls**, all Claude's first numbers:
+
+    | hull | size | model | build | buy | crew* | sold |
+    | :-- | :-- | :-- | --: | --: | :-: | :-- |
+    | Hawser Heavy Tug | M | tug-m | 66,000 | 73,110 | 2 | floor |
+    | Heron Heavy Shuttle | M | shuttle-m | 60,000 | 76,290 | 2 | floor |
+    | Tallyman Trader | M | trader-m | 72,000 | 85,680 | 2 | floor |
+    | Corsair Runner | M | runner-m | 68,000 | 70,800 | 3 | floor where corruption ≥ 60 |
+    | Syndicate Enforcer | M | enforcer-m | 110,000 | 121,970 | 3 | Syndicate ports, standing 40 |
+    | Syndicate Heavy | M | enforcer_heavy-m | 175,000 | 192,550 | 3 | Syndicate ports, standing 70 |
+    | Lance Fighter | S | fighter-s | 48,000 | 51,060 | 1 | built for navy allies (40) |
+    | Fleet Carrier | XL | carrier-l | 18,000,000 | 18,112,140 | 10 | built for navy at 85; 30 days |
+
+    \*Crew is what she takes with nobody else flying her; one fewer with
+    you at the helm.
+  - The Hawser and Heron are the Crawler's bay craft, now flyable, at the
+    same prices. The carrier is the slow, mobile station Astra described
+    (*"pretty slowly because the inertia of carrying a whole fleet's worth
+    of shit takes a while to change"*): a capital's thrust on four times
+    the mass.
+  - **Build = bare, buy = outfitted, for every hull.** Each hull now has a
+    default outfit (`HULL_STOCK`, combat.js); its gear is in the floor
+    price at nine tenths.
+    - Off the floor, your own gear still moves across, and the outfit
+      fills whatever slots are left.
+    - A large hull off a floor now carries that outfit, not a random fit
+      from the dock's shelf.
+    - Every shipyard builds every hull to order, bare, in 1 day (S),
+      2 (M), 3 (L), 8 (XL), 14 (a capital) or 30 (a carrier).
+    - The yard card shows build, buy and crew on one line, and floor rows
+      name what she comes with.
+  - **Crew per hull** (`Crew.crewNeeded`):
+    - a pilot, unless you fly her;
+    - engineers: none on S, 1 on M, 2 on L, 3 on XL plus 1 per 1,000 t;
+    - a gunner per two guns beyond the forward pair the pilot fires on
+      S and M (every gun on L and XL), two per capital mount, and one per
+      turret.
+  - **Cockpits:** every new hull has its own bridge. The Bollard and the
+    Hawser draw their grab arms from the seat: two booms along the lower
+    corners of the windscreen, caution-striped forearms angling in, and
+    open jaws ahead (`render.js drawGrabArms`). The jaws stay open until
+    there is a player tow for them to close on.
+  - Grey and Syndicate hulls pass the same gates as the grey and
+    Syndicate-issue guns (`Combat.hullGate`).
+  - Note: the Sump waste hauler also wears tug-m, so it and the Hawser
+    share a silhouette.
+  - Tests: shipyard (outfits fit, prices, a cockpit and a model for every
+    hull, gates), crew (hands per hull), construction (craft are real
+    hulls). The combat suite's fitting tests now start from a bare hull
+    (`buyBare`).
+
+- **A ship built to order takes time to build (2026-10-19).** Astra:
+  *"Build time for a ship is realistic, and lets you anticipate the use
+  of your new ship even if you get blown up in your current one."*
+  - *Commission, don't buy.* At a shipyard the BUILT TO ORDER list now
+    shows each hull's time on the slip, and the card's one button is
+    **COMMISSION — price · READY IN n DAYS**. You pay in full when you
+    sign. You keep flying the ship you came in, so there is no trade-in
+    at the desk, and the order sheet offers only the yard's shelf (your
+    own gear stays on the ship you are in).
+  - *Build time:* 3 days for a large hull, 8 for an extra-large one, 14
+    for a Capital Ship. My pick; say if you want them longer or shorter.
+  - *The order is yours, not the hull's.* It is saved, and a death does
+    not touch it. A pilot blown up in the old ship wakes in a Talon with
+    the new one still on the slip.
+  - *Hand-over.* When she is done she is delivered at that yard as one
+    of your fleet, tanks full, fitted, named and painted to the sheet.
+    The yard calls you wherever you are, and her first week on the clamp
+    is paid. The slip shows on the HULLS tab at that yard and on FLEET
+    everywhere, with a countdown.
+  - *Take command.* On FLEET, any ship of yours on the clamp you are
+    docked at has two new rows. **▶ TAKE COMMAND · keep the …** leaves
+    the ship you were in here as one of yours, with her hold and the
+    contracts riding in it. **▶ TAKE COMMAND · trade in the …** sells
+    her to the yard at seven tenths, gear and all, and your hold and
+    people come across with you. Not for a partner's ship, one under
+    way, or while a lien is outstanding. Unpaid berthing on her is
+    settled first.
+  - *The floor is still the floor.* A large civilian hull that happens
+    to be standing on a yard's floor is sold as she sits and flown out
+    today, as at any other dock. Warships and XL hulls are only ever
+    commissioned.
+  - Cancelling an order is not offered. Say if you want it, perhaps with
+    a forfeit.
+
+- **Cruise drives come in classes (2026-10-19).** Astra: "class two costs
+  about 10 times as much as a class one, class three costs 10 times more
+  again, or you can switch to the milfuel drives ... some ships have a
+  second drive slot ... milfuel drives travel at five times the speed of
+  normal drives." With her, each class doubles the speed, milfuel's ×5 is
+  on top of the class, and a heavier ship is slower on the same drive.
+  - **Top cruise speed:** 250c × class (1, 2, 4) × milfuel (×5 while slugs
+    last) × a second drive (1 + half its ratio to the first) × √(146 t ÷
+    the ship's mass now). A laden Talon on its Class 1 makes 250c; empty,
+    about 340c. The mass lock still governs anywhere near a body.
+  - **The drives:**
+
+    | Drive | Price | Gates |
+    |---|---|---|
+    | Class 1 | 4,000 cr | standard on every hull |
+    | Class 2 | 40,000 cr | development 0.45 |
+    | Class 3 | 400,000 cr | development 0.70, standing 10 |
+    | Military, each class | 2.5× its class | the Chernobyl's gates: development 0.80, standing 40 |
+
+    A military drive burns milfuel slugs (0.45 t and 0.28 t of waste per
+    20 AU) instead of reaction mass. With no slugs aboard it runs as an
+    ordinary drive of its class.
+  - **The drive slot:** a new slot type, `drive`. L and XL hulls have two,
+    everything else one. It is never empty: every hull leaves the yard with
+    a Class 1, every save is given one on load, and the last drive cannot
+    be sold. Buying into a full bay trades in the weakest drive at the usual
+    45%. The yard row shows the top speed before and after, the trade-in
+    and the net price. Drives carry no mass and no power yet.
+  - New suite `test/cruisedrive.test.js` (20 checks).
+
+- **The sky at cruise speed: the old streaks, blurred, behind the planets,
+  with a TNG red-blue shift (2026-10-19).** Astra: "I liked the old cruise
+  animation a bit better, just, we need a bit of planets covering the lines
+  and blur them a bit so we get a streak and not just a point or a line",
+  and the TNG-remaster starfield "where right as you pass a point of light
+  it rapidly shifts in color."
+  - **The streaks:** each star streaks back toward where it was. That
+    makes them radial about the heading when looking ahead, longest
+    abeam, and swinging with a turn.
+  - **How they're drawn:** by the world layer as soft gaussian quads that
+    fade along the tail, so planets cover them.
+  - **The colour:** stars ahead are washed blue-white and brighter, stars
+    behind red and dimmer. The flip happens within ±6° of abeam.
+  - **What sets the strength:** wash and streak length ride one log-scale
+    number from 0.02c to 2000c.
+  - **What went:** the 2026-10-17 relativistic aberration and black rear
+    sky. The edge darkening is back.
+  - `test/cruisesky.test.js` was rewritten for the new rule (22 checks).
+
+- **Slipspace transit is a rift (2026-10-19).** Astra chose it from three.
+  - **Going in:** a red tear opens on the nose in the real sky and gapes
+    until it swallows the view.
+  - **Inside:** dark wine and violet, with ragged walls. Filaments come at
+    you blue-violet and flip red as they pass, the same rule as the
+    cruise sky.
+  - **Coming out:** a blue rift grows at the far end, gapes, and flashes
+    you out onto the real sky under a fading blue wash.
+  - **Corridors:** in a slipspace corridor, the exit rift tracks corridor
+    progress.
+
+- **Fresh wakes show the tear (2026-10-19).** Astra asked whether other
+  ships leave "a red exit cloud of distorted space, like a rip in the
+  fabric of the universe."
+  - **The tear:** they did leave a cloud, but no visible rip. Now a wake's
+    rift stays open in the middle of its cloud for its first 15 minutes,
+    closing: red for a departure, blue for an arrival.
+  - **From deep in a well:** seen from low over a world (full on the
+    ground, none three radii up), a departure wake is deeper red and
+    larger, and an arrival violet. This is a deliberate exaggeration;
+    strictly, light falling into a well arrives blueshifted.
+  - **How often:** measured across 800 samples, about 1.7 wakes per system
+    at any moment, half of them departures, and about one departure a day
+    per system.
+  - **Tears and clouds linger for hours, and decay (2026-10-20).** Astra
+    wanted them to last "hours, not minutes", and to "slowly fade and
+    shrink over the time it does show in system; almost like radioactive
+    decay".
+    - *The decay:* `Slip.wakeDecay` gives a wake a 6-hour half-life over
+      its 16-hour life. It is shifted so it lands on exactly zero at 16
+      hours instead of popping out. That is about 65% at 3 hours, 28% at
+      8 and 11% at 12.
+    - *What decays:* the cloud's drawn brightness (`glow`), its size (the
+      hole closes to a quarter of its torn width) and the rift in its
+      middle all follow that one curve. The rift used to vanish after 15
+      minutes; it is now open for the wake's whole life.
+    - *What doesn't:* scan fidelity still reads the old `strength`, so
+      nothing in the wake-hunting balance moves.
+
+- **Tears bend light, boil and throw lightning (2026-10-21).** Built
+  from a mockup Astra signed off ("wake glow and stuff are great. Let's
+  implement them, arrival and departure, and then we should work those
+  clouds into what we see as we reach our slipspace destination"). On
+  the world layer a wake is now drawn by gl.js; the old 2D cloud stays
+  as the fallback for machines without it.
+  - **Lensing:** a tear is a point-mass lens. Up to four a frame bend
+    the sky. Stars move outward and brighten, and a second pass draws
+    each star's faint second image across the tear. Planets bend too,
+    since they are ray-cast per pixel and their view ray is bent before
+    the sphere test. Ships and stations are not bent. The lens is tied to
+    the cloud's size, so it shrinks as the wake decays.
+  - **Shift:** what is seen near a departure tear is redshifted, near an
+    arrival blueshifted.
+  - **The tear itself:** a brighter glow, then a churning veil filling
+    the rip that hides whatever is behind it. The veil is dark and
+    smouldering for a departure, lit from inside for an arrival
+    (brighter than the space round it). The lips of the rip burn.
+  - **Lightning, its own shader:** forked bolts built on the CPU cross
+    the dark gap from the cloud on one side to the cloud on the other.
+    Each re-flashes two to four times down its channel, like a real
+    stroke. Arrival bolts are thicker, more forked and reach further:
+    "very large, angry bolts of plasma discharge jumping the gap". No
+    lightning on a mote under about ten pixels.
+  - **The jump itself:** the red rift opening ahead in the charge and the
+    blue way out at the end of the tunnel are cut out of the 2D picture,
+    and the world layer draws the same veil through the hole. So you go
+    in through a boiling dark cloud and come out through a lit blue one,
+    with the lightning across it.
+  - **Your own tears:** jumping leaves a red tear ahead of where you
+    were, and you come out of a blue one that hangs behind you. Both
+    decay like any other wake and are gone in sixteen hours. Visual
+    only, and not saved.
+  - **Lore,** in Astra's words, which is why nothing radiates forward:
+    "we're not creating a bubble of superluminal space which carries
+    particles, we're tearing space a new arsehole and punching our ship
+    into the dimension which holds up 4D spacetime, beneath physics
+    itself. Nobody knows why."
+  - **Stations and ships bend too (second pass, same day).** Astra: "I
+    do want the thing to lens planets and stations alike." Hulls are
+    triangles with no per-pixel ray, so each vertex is moved to where
+    its image is seen (`tearPush` in the mesh shader) and shifted red or
+    blue like everything else.
+  - **Only what is behind a tear bends.** Each tear now carries its
+    distance. A planet, station or ship nearer than the tear (your own
+    cockpit included) is left alone, with a short blend across the
+    tear's own distance. Planets in front used to be bent too.
+  - **A bent planet's drawing square** grows by an Einstein radius, so
+    its pushed-out edge is no longer cut off flat.
+  - **Lightning on the tunnel walls.** Astra: "we need to make the
+    lightning stick to the inside walls of the tunnel." Each strike lives
+    in tunnel coordinates (angle round the tube, depth). Its main channel
+    crawls round the inside of the tube, riding toward you with the wall
+    rings, and its forks reach along the tube. It is coloured like the
+    walls (blue-violet ahead, red once beside you) and drawn bigger the
+    nearer it is. It clings rather than strikes: half a second to a
+    second, re-flashing three to six times, never dropping below a
+    visible glow until it dies.
+  - **A bit more lensing.** Astra: "a bit more lensing." Lens strength
+    is now its own knob, `TEAR_LENS_GAIN` (1.55) in render.js, applied to
+    the bending angle only. The cloud, slit and lightning keep their
+    size, so the sky bends 1.55× harder round a tear of the same size.
+    1.8 was tried first; it warped planets well clear of the tear.
+  - **Known limits:** a planet still gets no second image, and a coarse
+    hull bends as straight-edged facets.
+  - *Tests:* new `test/tear.test.js` (29 checks). It covers the lens
+    equation both ways and pins the shader text. It also checks screen
+    size against the 2D cloud's floor and cap, that the slit follows the
+    pole, and that every bolt crosses the gap, with arrivals thicker,
+    more forked and longer.
+
+- **Every ship type is for sale, and shipyards build large ones to order
+  (2026-10-19).** Astra: *"I also want the player to be able to purchase
+  ANY ship type, but only at shipyards can you get a customized L size
+  ship."* Asked which ships: civilian, plus warships *"only for a navy
+  you're in good standing with"*. What "customized" means: **both**
+  built to order and refits only at a shipyard. The biggest ships get an
+  **XL** class.
+  - *Ten new hulls*, each flying the model its traffic class already
+    flies. **S:** Wren Shuttle (unarmed, like every shuttle), Bollard Tug.
+    **M:** Samaritan Tender, Sump Waste Hauler. **L:** Longhaul Freighter,
+    Coldwater Tanker (the longest reach of any civilian hull), Naval
+    Cutter. **XL:** Meridian Liner, Leviathan Bulk Carrier, Capital Ship.
+    Every one clears the loneliest star laden. Every hull that can land
+    can still lift off the heaviest world with a port. The Kestrel stays
+    the mercenary hull.
+  - *Warships are the navy's own.* A Naval Cutter is built only at a
+    shipyard of a real power, for a captain ALLIED with it (40+). A
+    Capital Ship needs 70+. A navy that wants you builds you nothing. A
+    locked warship is still listed, with the standing it needs.
+  - *Built to order.* At a shipyard every L and XL hull is on the books,
+    whether or not one is on the floor. Its order sheet has one line per
+    slot. Click a line ▶ to cycle through empty, your own fittings (moved
+    across when you trade in), and everything on the yard's shelf. Below
+    those: her name, a hull colour and a trim from eleven paints, and a
+    live quote (hull + fittings − trade-in, with the power and mass
+    budget). Nothing is spent until **BUILD** on the card, and the card's
+    ship turns in the colours on the sheet.
+  - *Elsewhere, as she sits.* An ordinary orbital dock still has the odd
+    L hull on its floor. It comes with the dock's own fit, the gear at
+    nine tenths of list. The fittings on the ship you trade in are taken
+    at seven tenths, because nobody there can move them across. The hull
+    list says what she carries.
+  - *Refits only at a shipyard.* An L or XL hull's fittings cannot be
+    bought or sold anywhere else. The fitting page says so once, at the
+    top. Missiles and heat-sink charges are not fittings and are sold
+    everywhere. S and M hulls refit anywhere, as before.
+  - *XL is too big for ordinary ports.* An XL hull docks only at
+    shipyards, highports and fleet carriers. Never on a pad, never
+    underground, never at an ordinary orbital dock. The refusal says
+    so on the approach.
+  - *Paint.* Your hull colour and trim are drawn in flight on both
+    renderers (the GPU path through a new paint input on the hull
+    shader), and in the showroom. Windows and nav lamps are never painted
+    over. A hull from any other counter is yard grey.
+  - Tests: new `test/shipyard.test.js` (53 checks). The take-off checks in
+    `ships` and `combat` now skip XL hulls, since they never land. The
+    medium-hull floor-odds check now counts per hull, because with four
+    medium hulls "a dock has at least one" was always going to read 100%.
+    A fleet test that kept a Kestrel bought off an ordinary floor now
+    keeps a Mule. The render test that looks for hull rows now recognises
+    them by their size letter, because the old names can scroll below the
+    cheaper new hulls. Checked in the real Electron shell with
+    `tools/probe-shipyard.js`. `tools/electron-probe.cjs` now takes
+    `PROBE_PROFILE=<dir>`, which runs a probe in a throwaway profile so
+    one that docks or buys can never touch the real career's autosave.
+  - Known: in flight every player hull is still drawn at the same 25 m,
+    a liner included, as it always has been. Scaling the player's ship to
+    its class is a separate change.
+
+  *Saves:* additive (`ship.paint`; fleet records carry `paint`). No
+  version bump.
+
+- **Twilight worlds: tidally locked rings and sideways equators
+  (2026-10-19).** Astra: "tidally locked worlds: they can have habitable
+  regions right along their star-set zone, or the day/night line around
+  the equator." Fully habitable, both kinds.
+  - *Tidally locked.* A solid world inside 0.45 AU × (star mass)^⅓ is
+    locked: one day per year, its pole on its own orbit's normal, and
+    longitude 0 always under the star. In practice that is most red
+    dwarf habitable zones and nothing near a sun-like star. If it is
+    terran, ocean, desert or tundra and sits between 0.8 × the zone's
+    inner edge and its outer edge, it lives in its **twilight ring**: the
+    strip where the star sits low on the horizon forever, running over
+    both poles, between a bleached dayside and an iced nightside.
+  - *Tipped.* About one solid world in fourteen outside the lock line
+    lies on its side (80–100° tilt), Uranus-style. If it is one of the
+    same four types and inside the habitable zone, it lives in an
+    **equator band**: each pole bakes for half the year and freezes for
+    the other.
+  - *Fully habitable* means the same as any other habitable world: life
+    and culture notes, economy, development, and two or three stations
+    plus one or two pads. Pads on a ring world sit in the ring, about 9°
+    sunward of the exact terminator, so the star stays low but up all
+    year. Pads on a band world sit within ±12° of the equator.
+  - *On screen.*
+    - The planet shader paints the zones by the real sun angle (locked)
+      or by latitude (tipped). The living strip is tinted green so a
+      desert ring world reads as somewhere things grow. Polar caps stand
+      down on both kinds.
+    - The NAV card says **HZ ring** / **HZ band** and "tidally locked" for
+      the day, adds a one-line description of the strip, and appends "on
+      its side" to the day length of a tipped world.
+    - The SYSTEM tab and the slipspace chart preview name the strip too.
+  - *Same seed, same systems.* The old rule is kept as
+    `habitableGlobal`, and every id- and draw-sensitive site reads it, so
+    every existing body keeps its id, name and orbit. The extra ports
+    come from their own substreams after the last existing id. The one
+    visible knock-on: in about 70 of 200 systems, a newly habitable
+    world nudges the economy, and in a few of those the fleet carrier
+    moves to a different port (it takes the garrison's name).
+  - *Scale.* Across 200 kawartha systems: 506 locked worlds, 54 tipped,
+    188 ring worlds, 18 band worlds, 91 newly habitable. Mean system
+    development goes from 0.51 to 0.54. A first cut let rings reach in
+    to 0.55 × the inner edge; that put a desert ring in more than half of
+    all systems, so it was pulled back to 0.8.
+  - *Rotation frames can now lean any way.* Adds an optional
+    `rotation.az`, the azimuth of the tilt, read by Sim.surfaceOffset,
+    Sim.bodyPole, Rings.ringFrame and GLWorld.spinOf. Only locked worlds
+    set it; everything else takes exactly the old path.
+  - New suite `test/twilight.test.js` (20 checks). It covers id, name and
+    orbit stability against `opts.noTwilight`, the subsolar point all
+    year (worst 10.1°, all of it eccentricity libration), pads in their
+    strip, the star's height over ring pads, port counts, determinism,
+    and the card wording.
+
+- **Every ship has a captain, and they remember you (2026-10-18).**
+  Step 1 of the named-captains / rumours / disguise plan
+  (DESIGN-NOTES-CAPTAINS-RUMOURS-DISGUISE-v3). Every NPC ship — traders,
+  patrols, pirates — has a captain with a name, a temperament (wary,
+  friendly, mercenary, principled, gruff), values (abolitionist,
+  profit-first, lawful, pirate-sympathetic), a home port, and one friend
+  and one rival among the other captains in the system. All of it is a
+  pure function of the seed and the ship, drawn from its own substream,
+  so no existing seed changed. A captain only gets a saved record once
+  they have actually dealt with you; their memory of you is numbers, not
+  text — honesty and feeling as two separate dials, a count of first-hand
+  encounters, and the single most memorable thing you did to or for them.
+  A trader you pull off its rails is the same person it was on the
+  timetable; a patrol riding a lane is not the freighter on that lane.
+  New `src/captains.js`; pinned by `test/captains.test.js`.
+
+- **Hail is a greeting, from furious to grateful (2026-10-18).** Astra:
+  "Are you a filthy pirate, or do you rescue stranded ships?" Pressing
+  Hail now gets you the captain, by name, in a voice set by how they feel
+  about you and coloured by their temper — and, unless they are neutral,
+  *why*: "I still have your scorch marks on my hull", "They say you pull
+  stranded ships out of the dark". **Seen beats heard**: a captain who
+  has dealt with you goes by what they saw; one who has never met you
+  goes by your public record, read through their values (a pirate-minded
+  captain admires the career a lawful one despises). Grateful is reserved
+  for someone you actually saved. The comms row says who is in the chair
+  and their mood before you press it. The public record is new: assaults,
+  robberies, kills, pirate kills and answered distress calls are now
+  counted. Weights measured across 24 seeds, not guessed — the first pass
+  put every trader at "furious" for one bad career, and the test prints
+  the spread so it cannot drift back.
+
+- **Disguise: a new name, new paint, a spoofed transponder
+  (2026-10-18).** Step 2. At a yard where somebody can be bought
+  (corruption 60, the grey market's own line) the station menu offers a
+  paint-and-name refit (1,800 cr) or a full refit with a spoofed
+  transponder and re-plating (6,500 cr); restoring your own colours is
+  400 cr anywhere. Your public record and (later) rumours attach to the
+  identity you broadcast, so a disguise starts with a clean sheet — but
+  captains who have seen the **hull** may recognise it: about half the
+  time under paint, about a fifth under a full refit (measured in the
+  test), more the more often they have seen you. Being caught is a seen
+  lie and they say so. A captain you fooled keeps a separate memory of the
+  stranger they met, so what you do in disguise does not bleed onto the
+  real you. A legal rename or re-registration is **not** a disguise — the
+  registry links it, and your record follows. A newly bought hull flies
+  its own colours. Fleet markings exist as data (your fleet: a three-letter
+  code and a bicolour off the seed; a faction's: a tricolour off its chart
+  colour) but nothing paints them on a hull yet. **Not yet built:** the
+  sabotage missions from the same section of the plan.
+
+  *Saves:* additive (`captains`, `record`, `ship.disguise`,
+  `ship.disguiseCount`), no version bump; an older career loads with
+  nobody who remembers it and a clean record.
+
+- **Your own words on the band, read back before they go (2026-10-18).**
+  Step 3. The police channel has a new row, *Distress call — in your own
+  words*, and every ship has *Talk…* (*Send a message*, *Ask what they
+  carry, and where*). You type; the game reads what you typed into claims
+  — cargo, situation, threat — and shows them back as **Read as** before
+  anything is sent, each one checked against your real ship. A claim that
+  is not true is marked, a mayday from a ship that is fine says *Ship not
+  in distress*, and the button changes to *Send anyway — knowingly
+  false*: every lie in this game is a conscious one. Lies are weighed on
+  the design's two axes (what they exploit, what they cost responders);
+  "freed slaves aboard, drive about to explode" when neither is true is
+  the worst there is. Captains who hear your call decide whether to come by
+  their values (an abolitionist races in for people in a hold; a
+  pirate-minded one may come for very different reasons), how they feel
+  about you, and whether they have caught you lying before. When they
+  arrive they look: a false emergency is plain to see, a false cargo claim
+  only to a captain who scans the hold. An honest call from a ship really
+  in trouble also goes out on the existing mayday, and the first captain
+  there passes a hose. Captains answer messages from their real state and
+  temper — a wary one may say "None of your business."
+  New `src/messages.js`; pinned by `test/messages.test.js`.
+
+- **Captains call for help too, and some of them are lying (2026-10-18).**
+  On a seeded schedule (a 40% chance every four hours, a pure function of
+  seed, star and clock), a trader in real trouble calls for help — the
+  first rescues the game has ever been able to offer, and the way to a
+  captain who is genuinely grateful. Where pirates work the lanes, close
+  to half the calls are bait, transmitted from wherever the pirate is
+  actually lurking, so answering one flies you into its intercept with
+  nothing new spawned. *Check the transponder* is the tell: a real caller
+  checks out; a copied registration belongs to a ship the registry puts
+  somewhere else entirely; an invented one is not on file at all.
+
+- **Captains remember your deeds and your words, and never say the same
+  line twice (2026-10-18).** Astra: *"just to say 'last time I responded
+  to your call, you were lying' or 'you saved my cargo and my crew, not to
+  mention my ship. Looking for another fleetmate? We could go into
+  business together.'"* Each captain keeps a short log of what happened
+  between you — what was at stake, and your own words, quoted — and builds
+  the hail from it: a greeting, the memory, and a closing, coloured by
+  how they feel. A captain only ever talks about something that actually
+  happened. Every line said is remembered and never repeated; back-to-back
+  hails never reuse the greeting, the memory or the closing. Being *told*
+  something is kept but does not count as having seen you act, so one
+  chat does not wipe out what a stranger has heard about your piracy.
+  (A generative model was considered for this and set aside: these lines
+  need no writer, cost nothing, and cannot invent a deed you did not do.)
+
+- **A small language model reads what you type (2026-10-18).** Astra:
+  *"we want the maximal ability to process language in English."*
+  transformers.js runs **all-MiniLM-L12-v2** locally in the game — offline,
+  no network, ~35 MB — so "our engines are toast" reads as a drive
+  failure without anyone having written "toast" down. Chosen by
+  measurement, not size: five models were tuned on half of a labelled set
+  of 56 phrasings (`test/reader-phrases.json`, written before any model
+  ran) and scored on the other half. Held-out accuracy per claim:
+
+  | Reader | Held-out | Paraphrases | Mixed | Size | Per message |
+  |---|---|---|---|---|---|
+  | Phrase matcher alone | 82.1% | 77.3% | 70.8% | — | <1 ms |
+  | **MiniLM-L12 + matcher** | **92.9%** | 90.7% | 91.7% | 35 MB | 7 ms (node), ~35 ms in game |
+  | MiniLM-L6 + matcher | 91.7% | 90.7% | 87.5% | 24 MB | 4 ms |
+  | gte-small | 89.3% | 89.3% | 87.5% | 35 MB | 8 ms |
+  | bge-base | 89.3% | 92.0% | 95.8% | 111 MB | 20 ms |
+  | bge-small | 85.7% | 88.0% | 91.7% | 35 MB | 8 ms |
+
+  The set is small — a point or two is one sentence — and it stays in the
+  suite to catch any slide. Negation is still read by the matcher
+  (embedding models cannot tell "carrying slaves" from "not carrying
+  slaves"), and a negator that *describes* trouble ("can't steer", "no
+  thrust") is no longer read as a denial. Known miss: "We are dead in the
+  water, kids aboard" still loses the drive failure; the fix for it lost
+  on the measurement. In the real Electron shell the model is ready about
+  2 seconds after launch; until then, or if its files are missing, the
+  game reads with the phrase matcher and nothing else changes. Staged by
+  the new `npm run models` (which `npm run dist` now runs) into `lang/`
+  and `vendor/`, both gitignored; re-run the comparison with
+  `npm run bench:reader`. The first in-game test caught that
+  transformers.js's `web` build expects a bundler; the self-contained
+  build is the one vendored.
+
+  *Saves:* additive (`broadcasts`, and captain memories gained `log`,
+  `said` and `lastBits`), no version bump.
+
+- **Favours, friends and rivals, and going into business (2026-10-18).**
+  Step 4 of the captains plan (sections 6 and 8), in the new
+  `src/favours.js`.
+  - *Debts.* Save a ship, or answer a real mayday, and her captain owes
+    you one; answer *your* honest mayday and you owe her. Clamped at ±5.
+  - *She pays it back.* Unasked: a captain who owes you and sees a raider
+    on your lane warns you, with its name and range. Or you call it in
+    from **Talk…** — where the pirates are, reaction mass passed across
+    (within 50 km), or a word with her people (+5 standing). Each costs
+    one, and the note says what it does before you press it.
+  - *She calls it in.* A captain you owe, on your board, asks for credits
+    or reaction mass. Her row on the comms page leads with the ask, a
+    countdown and *Wire her… / Pass across… / Refuse*. Refusing — or
+    letting it run out — costs feeling, and she brings it up: a refusal
+    outranks the rescue that earned the ask.
+  - *Friends hear, rivals wonder.* Rob, shoot, lie to or exploit a
+    captain and her friend hears it near-first-hand — on the `heard`
+    dial, counted above your public record for someone who has never seen
+    you, and at a third for someone who has. Save her and her friend warms
+    to you, and her rival grows suspicious. Kill her and her friend knows
+    whose guns. They say it by name: *"You crossed (her name). That means
+    you crossed me."* Hearsay keeps to the colours you wore.
+  - *Going into business* — Astra: **"Offer both."** A grateful trader's
+    **Go into business together…** row gives two deals. **Partners:** she
+    brings her ship into your fleet, takes standing orders, draws no
+    wage, and every contract she delivers splits 50/50; she stays hers —
+    the yard will not sell her — and she leaves, ship and all, if her
+    berth fees go unpaid, if you turn on her, or if you start killing
+    crews (or robbing traders, unless she is profit-first). **Crew:** she
+    hands her ship to her mate and comes aboard as a skilled officer
+    (rated good or better) at a friend's wage, 60% of the going rate.
+    Either way her ship leaves its lane for good. Patrols and pirates
+    never make the offer — and no longer say they will.
+  - Tests: new `test/favours.test.js` (64 checks).
+
+  *Saves:* additive (`joined`, `favourAsk`, `tipAt`; captain memories
+  gained `heard` in use, `debt` in use and `joined`; fleet records may
+  carry `partner`; crew may carry `wageMul`), no version bump.
+
+- **Rumours travel at the speed of ships (2026-10-18).** Step 5, the last
+  of the captains plan (section 3), in the new `src/rumours.js`. Until now
+  a stranger read your public record, and every stranger in the galaxy
+  knew it the instant it changed. Now:
+  - *A rumour starts where somebody saw.* Robbery, a killing, a rescue,
+    a lie found out, a pirate kill: each starts a rumour aboard the ship
+    that saw it. That is the victim if she lived, otherwise the nearest
+    honest ship or station within witness range. If nobody was close
+    enough, there is no rumour at all. A ship destroyed before she berths
+    takes the story with her.
+  - *It travels on the timetable.* No faster-than-ship news. A ship that
+    knows tells the port she next berths at, and every ship that berths
+    at a port that knows carries it on. The timetable is a pure function
+    of the clock, so who hears when is calculated, not simulated: the
+    earliest arrival over the berthing schedule, once per rumour per
+    system, accurate at any time warp. In a busy system it takes days to
+    reach everyone.
+  - *Between stars, with the trade.* Once a port knows, the news goes to
+    each nearby star's busiest port. The four nearest stars are linked,
+    and the trip takes 7 hours per light year (the same as your drive)
+    plus a day's wait for a ship heading that way. Three hops at most,
+    with the rumour 40% fainter at each. You can outrun your
+    reputation, or be caught by it at the next port.
+  - *Seen beats heard.* A captain who has seen you act goes by what she
+    saw. A stranger reads only the rumours that have reached her ship,
+    through her values (lies on the band now count too, and a mayday used
+    as bait counts three times as much). She says where she heard it: *"At
+    Halden Dock, they say you killed the crew of the Redsail Tender."* /
+    *"Out in Kappa Lyrae, they say you pull ships out of the dark."*
+  - *Friends hear at ship speed too.* Step 4's friend and rival hearsay
+    now reaches them when the news reaches their ship, not instantly.
+  - *Rumours stick to an identity.* Each one is about whoever you were
+    flying as, so a fresh transponder starts unheard of, and a disguise
+    that earns a name keeps it.
+  - *They fade.* Half as loud every 120 days.
+  - **Listen to the dock talk**, a new row on a port's comms page while
+    docked: what has reached this port about you, loudest first.
+  - Decisions I took that you may want changed: rumours do not
+    *distort* as they are retold, they only fade with distance and time;
+    the half-life is 120 days; the reach is three star hops. Any of the
+    three is a single constant at the top of `rumours.js`.
+  - Tests: new `test/rumours.test.js` (38 checks). Among them, the
+    calculated berthing times are compared with the real timetable at 300
+    sample points.
+
+  *Saves:* additive (`rumours`, `hearsay`, `rumourSeq`, `recordLegacy`).
+  Who has heard what is not saved; it is worked out again from the
+  timetable. A career saved before this loads with its record as it stood
+  copied into `recordLegacy`, still known everywhere, so nothing you had
+  done is forgotten. Everything from then on travels by ship. No version
+  bump.
+
+- **The NAV card: the chart's view of a locked world (2026-10-19).**
+  Astra: "slipspace chart info should be displayed for current system in
+  the nav menu. Stuff like what type of planet each of the bodies in order
+  from their star are", then a box under the locked planet in the world
+  view, "integrate the two somehow, using a tab", and in the cockpit "on a
+  panel, not on the HUD". Lock a planet or moon and its card has two tabs:
+  - **WORLD**: where it sits (4th of 12 from the star, or moon of its
+    planet), its type with `HZ` for a habitable-zone world, its air,
+    moons and ports, surface pull, length of day, and the chart's notes
+    on life and people; plus range, closing and ETA.
+  - **SYSTEM**: every planet numbered out from the star with its type and
+    ☾ moons and ⌂ ports, the locked one lit. Clicking a row locks it.
+  
+  It hangs under the locked world in the exterior and map views, with a
+  leader to it (above it if there is no room below). When the world is off
+  the screen or behind you, the card pins to that edge with an arrow
+  pointing the way to the world. In the cockpit it is the NAV console
+  screen, read-only like every console screen, so **M** flips the tab (M
+  was free since the market moved to comms); the other two places take
+  clicks. F3 shows it as its NAV tile. `Screens.systemManifest`,
+  `Screens.worldFacts`, `drawWorldCard`; pinned against real generated
+  systems by `test/navsystem.test.js` (95).
+
+- **NAV and TARGET are different screens now (2026-10-19).** Astra: "call
+  that screen NAV instead of TARGET — target should be reserved for ships
+  that are targeted either for hailing or weapons fire." The lock screen
+  heads itself NAV for a planet, moon, station or port and TARGET only for
+  a ship. The contact list, which was also called NAV, is CONTACTS, the
+  name F3 already gave it. In F5 → PANELS they are listed as NAV / TARGET
+  and CONTACTS; saved panel assignments keep working, since the ids did
+  not change.
+
+- **Which way you are facing, on the glass (2026-10-19).** Astra: "we need
+  a way to know if the ship is facing into or out of the direction of
+  travel that's easier to find on the HUD". Under the attitude line, a
+  cue reads **PROGRADE** or **RETROGRADE** with how many degrees off you
+  are, boxed in amber when you are within 10°; NOT MOVING when there is
+  nothing to face. The retrograde marker (circle with a cross) is now on
+  the glass whenever it is in front of you, and when prograde is off the
+  glass an arrow at the edge points the way to turn to find it. Before,
+  turning your tail to your motion simply made the marker vanish. Both
+  markers carry the dark halo. `Render.facingInfo`, `Render.drawFacingCue`.
+
+- **Orbit line: ahead solid, behind dotted (2026-10-19).** Astra: "orbit
+  already traveled should be in dotted lines, or orbit to be travelled,
+  whichever reads easier." The half-period ahead of the ship is the solid
+  line and leaves it the way it is going; the half-period just flown is
+  dotted and arrives at it from behind. Split by flight TIME, not by
+  angle, so on an eccentric orbit the solid half really is where you will
+  be in half an orbit. Re-split every frame, so the join stays on the ship
+  at any time warp. The ORBIT console page draws its sketch the same way,
+  with an arrowhead showing which way round you are going.
+  `Kepler.samplePathSplit`; pinned by `test/orbitline.test.js` (43),
+  which flies the ship half a period by brute RK4 to check the solid half
+  ends where the ship really is.
+
+- **Speed and altitude boxes, and a G meter (2026-10-18).** The rest of
+  the fighter-HUD air data, either side of the ladder at horizon height.
+  Boxes rather than tapes (the F-35 choice): our speeds run from mm/s to
+  multiples of c and a tape is useless at one end of that range or the
+  other. **Speed** (left) is relative to the same body the heading tape and
+  ladder use, with its unit printed under the box because the unit changes
+  with the regime: M/S on approach, KM/S in orbit, c in cruise. **G** sits
+  under it, as on a real jet, with **PK** (the peak since you last left a
+  berth; a berth or the arrival rail clears it). G is *felt* G, gravity
+  excluded: coasting in orbit is 0.0, a burn is the burn, air is the drag,
+  and parked it reads the deck's 1.0 (see artificial gravity, below).
+  **Altitude** (right) is above the surface of the
+  reference body: metres below 10 km, then km, then Mkm. Under it,
+  vertical speed with an up or down arrow, and the air: inside an
+  atmosphere, the density in kg/m³ in amber (the number atmosphere mining
+  will run on); above one, how far down the top of the air is. Same dark
+  halo as the heading tape. `Sim.feltAccel`, `Render.drawAirData` and its
+  four readout formatters; pinned by `test/airdata.test.js` (43).
+
+- **Decks have artificial gravity (2026-10-19).** Astra: pads and common
+  areas have "clarke-tech artificial gravity generators ... just to make
+  design easier." Docked anywhere (a ring berth, a station that does not
+  spin, a pad on a moon you could jump off) and on the arrival rail once
+  you are through the door, the G meter reads **1.0**, pressing up off the
+  deck. Before this it read the real physics, which was right and not the
+  game: 0.036 G on a small moon's pad and 0 in a station.
+
+- **Air drag is a quarter as brutal (2026-10-19).** Astra, after the new G
+  meter showed a coast through thick air at 2 km/s pulling 17 G: "make the
+  air drag less brutal on the ship." One knob, `Sim.DRAG_SCALE = 0.25`:
+  drag area was Cd·A with Cd taken as 1, which is a brick, and a quarter of
+  that is a streamlined hull. The same coast now pulls 4.4 G. Air bleeds
+  speed a quarter as fast, so scoop passes survive at depth and an
+  aerobrake takes longer or goes deeper. **Heat is unchanged** (it reads
+  density and speed, not drag), so a fast entry still cooks you; you just
+  are not also crushed. Every drag behaviour the tests pin is a ratio
+  (orbits inside air decay, laden ships hold orbit longer, gear down costs
+  a third more) and all still hold.
+
+- **Heading tape on the cockpit glass (2026-10-17).** The fighter-HUD
+  strip across the top, above the bank arc: the scale slides, the caret
+  stays put, and the boxed number under it is your heading to the degree.
+  North is the **dominant body's own spin pole** laid onto the local
+  horizon (the same horizon the pitch ladder levels against), so N/E/S/W
+  are true directions on whatever world has you, and E is always the way
+  the ground turns. Cardinals are lettered (N in amber), intercardinals sit
+  on a row above the numbers, and a `REF` tag at the end names the body
+  the compass is using, because north changes when the dominant body does.
+  The nav lock gets a steering bug on the strip; off the strip it parks as
+  an arrow at the end that is the shorter way round. On a pole the strip
+  says `NORTH POLE · NO HEADING`; with the nose straight up or down the box
+  reads `---` and the scale goes dark rather than freezing on 000. It is
+  drawn with a dark halo instead of the glass's additive glow, so it stays
+  readable over a sunlit planet. Shown while you are looking ahead, like
+  the bank scale. `Sim.bodyPole`, `Sim.headingAngles`,
+  `Render.drawHeadingTape`; pinned by `test/heading.test.js` (41).
+
+- **The sky at cruise speed is physics, not paint (2026-10-17).** Astra
+  chose the model from four with sliders in front of her: *special
+  relativity below c, the classical outrun-the-light picture above it,
+  easing from one to the other between 1c and 1.5c.* Below c, stars are
+  seen where aberration puts them — crowding into a ring ahead as you near
+  c — and coloured by their own temperature times the Doppler factor:
+  ahead blue and bright, behind red and dim. Above 1.5c there is no
+  aberration, the forward shift is the classical 1 + β cos θ, and the rear
+  sky is black because its light cannot catch you. Every star has a
+  temperature now (from the tint it was seeded with, so no seed's sky
+  changes). Drawn in the world layer's star pass, behind the planets.
+  `Render.cruiseSky`; pinned by `test/cruisesky.test.js`.
+
+- **Star trails follow each star, not the nose (2026-10-17).** The old
+  cruise streaks all pointed away from the heading. Now a star's trail is
+  the path its *apparent* position has traced on screen over the last
+  third of a second, each point through that moment's own camera — motion
+  blur and comet tail in one rule (Astra picked both). Turns swing and
+  curve the trails, looking about blurs them, a change of speed stretches
+  each along its own aberration path; a steady cruise keeps a short stub
+  toward where the star would sit slightly slower. The painted bloom at
+  the vanishing point and the darkened screen edges are gone. The trails
+  are drawn in the world layer straight after the stars, so a planet
+  covers them exactly as it covers the stars — on the 2D overlay they ran
+  across planets' faces, which Astra ruled out (*"that breaks the
+  immersion"*). `Render.cruiseTrails` + `GLWorld.drawTrails`; only a
+  machine with no world layer falls back to drawing them in 2D.
+
+- **The ring's lift car rides down with the ship (2026-10-17).** Astra:
+  *"we need the car to ride with the ship."* The converter now reads the
+  art's own `extras.motion` lift declarations and records each car (and
+  the `hatch` panels over it) face by face; the renderer lifts them out of
+  the hull and draws the car wherever the arrival says it is. Ship and car
+  move by the same eased number, so the hull cannot drift off the pad; the
+  empty car climbs back once the ship is clear, and comes down to collect
+  it on the way out. You collide with the car where it is drawn. The floor
+  hatch is there while shut and gone while open (the art says it is a
+  hatch, not how one moves). Only the ring uses a car on its routes; the
+  skimmer's and spine's cars stay at rest. `test/transfer.test.js`.
+
 ### Changed
 
 - **2026-10-24: every city site's town stands somewhere of its own.**
@@ -621,6 +1777,72 @@ Astra has seen it working.
   starts finished so the hand-over does not flicker. Tests: captains, 10
   checks; render 950/950.
 
+- **The cockpit scales as one piece, and the bulkhead moved aft
+  (2026-10-24).** Part of the ship-interiors work above.
+  - **The scaling fix.** Before, the glass and screens grew with a hull's
+    size but the consoles, overhead, bulkhead and dash were fixed at the
+    Talon's. On a Mule the side windows sat outside its own consoles and
+    the dash stopped well short of the windscreen. Now:
+    - the room scales across and up with the hull, and fore and aft with
+      the windscreen's real distance;
+    - the dash runs from its near edge to the sill.
+    The Talon is unchanged.
+  - **Small hulls' dash screens are inside the glass now.** On a Dart,
+    Fighter or Wren they stood past the windscreen, which the flat cockpit
+    hid. They are drawn in toward the eye, scaled about it, so from the
+    seat they look exactly the size they did.
+  - **The rear bulkhead is 1.3 m behind the eye (it was 0.5 m)**, so there
+    is room to stand and a door to walk through. The two rear screens sit
+    either side of the door and are a third bigger. The bulkhead's greebles
+    keep clear of the door and both screens.
+  - **O stands you up in your own ship** instead of on the station deck.
+    The station deck is through your airlock.
+  - *Tests:*
+    - new `test/shipdeck.test.js` (35 checks), now in `npm test`;
+    - `test/greebles.test.js` checks each hull's fittings against that
+      hull's own walls, not one fixed Talon-sized box, and checks nothing
+      is mounted on the door (14);
+    - `walk.js`: a shut sliding door is wall, and E only reaches things in
+      the room you stand in.
+
+- **No more force fields: every station that had one has sliding doors
+  now (2026-10-20).** Astra: *"air locks to keep stations pressurized
+  (let's get rid of the force fields)"*.
+  - **Which stations:** 24 of the 96 station models still sealed a bay
+    with a force field. They are every refinery and skimmer station and
+    the mountain, runway and runway-city ground sites. The other 72
+    already had real doors.
+  - **What replaces each field:** a pair of door leaves, cut to the
+    field's own size. They split down the long side of the opening, with
+    a hazard stripe on the meeting edge, and slide apart until the
+    opening is clear.
+  - **They behave like real doors:** you can hit them where they stand,
+    and they open in the same airlock cycle the berth already runs
+    (outer gate, then inner, never both).
+  - **Internal gates:** two gates inside the big skimmers stand at right
+    angles to their berth. They became internal doors that open with the
+    station, like the cradle's lift-well gate.
+  - **Roll-up garage slats at the yards are unchanged.**
+  - `berths.test.js` now fails if any force field survives anywhere.
+  - Station modules drawn from your generator will bring their own
+    airlocks.
+
+- **Milfuel shelves hold at most 18 t, down from 24 (2026-10-19).** Twilight
+  worlds settled more of the galaxy, so licensed plants made more. The
+  best single slug run in the economy suite reached 127,711 cr, more than
+  a Kestrel, which is exactly what the shelf cap exists to stop. At 18 t
+  the median run is back to what it was before twilight worlds (80,564 cr
+  against 78,780) and the best is 95,783.
+
+- **Small bays reached through a heavy bay cycle an airlock first
+  (2026-10-17).** In to the heavy bay's stand, the outer doors close, *then*
+  the inner gate opens, then on through the hull — the hull used to carry
+  straight on through a gate that had not opened. At the ring this is the
+  whole way down: stand, hatch, down the well onto the lift, ridden down
+  the shaft, a beat on the pad, and rolled off level along the spoke deck
+  (the converter's route corner hung ~150 m up in the spoke and made the
+  hull hop). Bays with no lift skip the ride legs and take no extra time.
+
 ### Fixed
 
 - **2026-10-16: contracts never settled after a full arrival.** Two
@@ -665,6 +1887,145 @@ Astra has seen it working.
   system to system. It is kept per system now; older saves' entries still
   count, so nothing a torpedo took comes back.
 
+- **Work that had been committed went missing from the working copy
+  (2026-10-19).** Two lines of work split on 2026-10-15: Driftwood on one
+  branch, the 1.1.0-beta "Abby" release on another. The working copy had
+  lost parts of both. Restored by three-way merge, without touching
+  anything done since:
+  - **From Driftwood:**
+    - planetary rings drawn by their own shader;
+    - cockpit greebles and the glass glow;
+    - refusing to undock inside a station;
+    - a crash counted as a loss;
+    - culling small moons;
+    - the belt chart;
+    - the hull-import fix for lift shafts;
+    - test probes that never touch your real career (they run in a
+      throwaway profile) and the crash log.
+  - **From Abby:** the release name and number in `package.json`
+    (1.1.0-beta "Abby"), `src/release.js` loaded on the page, the
+    Manifest names for the installers, and Abby's own section in this
+    file. Everything written after Abby was cut was moved up here into
+    Unreleased.
+  The rings, greebles and release suites pass again. The branches
+  themselves still need reconciling in git.
+- **A holding's first nudge could move a system's crime score by one
+  too many (2026-10-19).** The galaxy works the score out before rounding
+  a government's two axes. A holding then re-ran the formula on the
+  rounded ones, so in about one system in six the first change jumped by
+  an extra point. It now adds its change to the system's own score.
+
+- **Crossing a system took half an hour (2026-10-19).** Astra: "That gas
+  giant is 27 minutes flight time from Mirven I, even at 6 times c", and
+  in her Talon "the fastest speed allowed, even between planets, was
+  6.7c". The cruise drive was capped at 2.0e6 km/s for every ship.
+  - **The cap:** now the drive's own ceiling (see *Cruise drives come in
+    classes*). The global constant stays only as a 20,000c guard rail.
+  - **Engaging:** the drive now engages on **full**, following the mass
+    lock up and down. `,` takes it off full; `.` up to the limit puts it
+    back on.
+  - **Arriving:** with full on, the arrival look-ahead is 0.5 s instead of
+    2.5 s. At 2.5 s it dropped you out 23 million km short of Beta
+    Mirven VII.
+  - **Fuel:** reaction mass per km is cut from 1.1e-8 to 1.5e-9 t. At the
+    old rate a 20 AU crossing would have burned twice a full tank.
+  - **Measured at the 2000c cap** (before drive classes): Linethor I to
+    XI, 42 AU, in 64 s; Beta Mirven I to VII in 46 s.
+
+- **Slipspace drops you well outside the habitable zone (2026-10-19).**
+  Astra: jumps "should dump you not close to the HZ, but a ways out".
+  - **Where:** you arrive in orbit about the star, on the line to the
+    busiest world.
+  - **How far:** the furthest of three: the frost line, 1.6 × the habitable
+    zone's outer edge, or 1.25 × that world's distance.
+  - **On arrival:** nose on the world, the world locked, the camera on
+    the ship.
+  - In Taost that was 1.32 AU out, with the world at 0.33 AU.
+
+- **Clouds stood still over tidally locked worlds (2026-10-19).** The
+  cloud deck turned at a multiple of the world's day, and a locked world's
+  day is its year. Past four days the deck now runs on a nominal 30-hour
+  circulation. Found by `weather.test.js`, whose wettest pad had landed on
+  a ring world.
+
+- **Arriving at a world whose only port is a pad crashed (2026-10-19).**
+  enterSystem read the pad's orbit for the camera distance. Found by the
+  first corridor jump into a twilight system.
+
+- **A new game could crash spawning over a world whose first port was a
+  pad (2026-10-19).** The spawn picked `children[0]` of any kind and read
+  its orbit. A ground pad has no orbit. It now picks the first ORBITAL
+  station, and spawnShip ignores a pad if one is handed to it anyway.
+  Twilight worlds hit this every time: their old pad comes before the
+  stations added for them.
+
+- **Cockpit panels overlapped (2026-10-19).** Astra: "panels overlap.
+  This is a problem." Three separate overlaps, all fixed:
+  - *The dash screens overlapped each other*, by 43 to 138 px between
+    housings at every window size, worst on the smallest hulls. The
+    mounting comment claimed the arc was 28° with a degree to spare; the
+    mounts were at 24° and the housings were never counted. Now ±28° with
+    the screens 6% smaller, and small cockpits shrink their screens with
+    the room instead of more slowly than it. Worst case now ~21 px clear.
+    The cockpit suite checks neighbours against each other at six window
+    shapes and three cockpit sizes (36 new checks), so it cannot drift back.
+  - *The help hints ran across the ORBIT screen.* With the band stowed and
+    the console showing, both hint lines move to the top-left corner.
+  - *The icon bar sat on the bottom of the screens.* With the band stowed,
+    the cockpit view is now built for the window above the bar rather than
+    the whole window, so the console sits above it. The GPU layer projects
+    through the same camera, so the world stays in register.
+  - The NAV contacts list ran ship names into their distances on a narrow
+    window ("Coldwater Drove38,606 km"); names are now clipped to the room
+    the distance leaves.
+  - On a narrow window F3's pages shrank to half a column at 7 px type;
+    with no room for the scope beside them they now take the full column.
+  - The AUTOPILOT page's last line ("mass locked by …") ran 7 px into its
+    own soft-key strip; the column is packed to end inside the page.
+
+- **Flat orbits were drawn rotated (2026-10-19).** An orbit lying in the
+  system plane, which is most of them, has no node line, and
+  `Kepler.elementsFromState` then left the argument of periapsis at 0: the
+  ellipse had the right shape but its periapsis pointed along +X wherever
+  it really was, so the line could miss the ship by thousands of km. Found
+  by the new orbit-line test. Flat orbits now keep their periapsis
+  (retrograde ones measured the other way), and "no node line" is judged
+  relative to the angular momentum, not against an absolute 1e-9 that
+  rounding noise could pass.
+
+- **A save taken in cruise loaded at 6.7c (2026-10-19).** Inside the
+  cruise bubble the hull's velocity is the cruise speed, up to 2,000,000
+  km/s, and the save did not know about cruise: it wrote that velocity
+  down, and loading dropped you into ordinary flight at it with no bubble
+  and no way to slow. A save in cruise is now written as the drop-out
+  would leave you, in the circular orbit you are standing in, and an
+  older save carrying a frozen cruise velocity (anything over 15,000 km/s
+  relative to the nearest body) is repaired the same way on load.
+
+- **Contracts never completed on arrival (2026-10-17).** Astra: *"missions
+  still don't auto-clear when you arrive at the mission destination."* Two
+  things wait for the docking moment — the arrival desk and the contracts
+  — and the desk marked it handled first, so the contracts always saw "not
+  just docked". Read once now, and both get it. The same dead branch held
+  the clamp sound and the autosave on docking, which now happen too. A
+  render-suite test flies the real frame loop through it.
+
+- **Docking at a ring's heavy bay could crash (2026-10-17).** Leg timings
+  were cached per station off berth 0's path, and a ring's berth 0 is a
+  routed small bay — so the heavy bay was handed the long routed table and
+  read off the end of its own short path. Cached per berth and per model now,
+  and a mismatch returns no pose instead of throwing.
+
+- **Ships flew through the ring's lift shaft wall (2026-10-17).** The route
+  to a small bay ran diagonally from the heavy bay's stand to the foot of the
+  lift, through the closed inner gate and the shaft wall. It now goes
+  straight down the shaft (see Changed).
+
+- **The world analysis sheet printed a gas giant's atmosphere over its own
+  label (2026-10-17).** Long values in the star chart's two-column rows now
+  wrap onto right-aligned continuation lines, and the text below moves down
+  to fit.
+
 ### Saves
 
 Careers carry over. Everything new (surveys, claims, drones, the landed
@@ -674,6 +2035,16 @@ keeps exactly the value it had: its ground counts as mapped by the
 instrument its grade says.
 A city site's town is placed from the port itself, not from the save, so
 an older career sees it in its new place the next time it lands there.
+
+- **Careers load unchanged.**
+  - A Crawler's livery is new and optional (`livery`, `liveryFaction` on
+    the ship and on fleet records); an older career's Crawler loads
+    civilian, which it was.
+  - Walking aboard is not saved, any more than walking a station is: a
+    load puts you back in the seat.
+  - The people (2026-10-25) are not saved either. Who is where is worked
+    out from the roster, the port and the clock, so a load finds the same
+    people at the same posts without storing any of them.
 
 ---
 
@@ -716,6 +2087,10 @@ Outfitting, weapons, and the law. See `PLAN.md` for the
 full design and the phases still outstanding.
 
 ### Added
+
+- **Cruise speed reads in c.** `0.412c`, `3.10c` on the console and the
+  autopilot page, for the cruise speed and the mass-lock limit. Below a
+  thousandth of c the old km/s readout carries on.
 
 - **Trading with a ship you have hailed is a proper market now.** `F4` →
   pick a ship → `Trade…` opens a board in the channel pane: every line in
@@ -1042,6 +2417,17 @@ full design and the phases still outstanding.
   pilot cleared to own the drive is cleared to carry what it burns.
 
 ### Fixed
+
+- **Lightning went back to a strobe (restored 2026-10-19).** The 10-17
+  branch merge kept the other side's copy of the planet shader's flash
+  block, and the old one-slot lightning came back with it: every stroke
+  started on the same 0.9 s beat. Restored from the Driftwood commit:
+  strokes slide off the beat by a hashed offset, a late stroke is
+  allowed to finish in the next slot, and storms burst and go quiet on
+  four slow rhythms instead of firing at a flat rate. The cut-band code
+  the merge brought in is untouched. `test/weather.test.js` was the
+  canary (it checks that every weather constant reaches the shader) and
+  is back to 41/41; the shader compiles on the GPU and planets draw.
 
 - **Buying off a passing ship emptied the whole line, for the session.**
   The purchase came off `route.out` — the template manifest every later
@@ -1632,6 +3018,31 @@ full design and the phases still outstanding.
   room; they now pay off in a freighter's hold.
 
 ### Saves
+
+**Cruise drives (2026-10-19) need no version bump.** The drive bay is a
+new slot type keyed after every existing one (`drive0`, `drive1`), so no
+saved fit key moves. A save without a drive is given a Class 1 on load
+(`migrateFit`).
+
+**Twilight worlds (2026-10-19) need no version bump.** Systems are
+regenerated from the seed and every existing body keeps its id, so a
+docked or targeted id still resolves. What does move:
+- Every tidally locked world's day and pole changed, so pads on those
+  worlds now stand somewhere else at a given moment.
+- Pads on ring and band worlds were folded into their strip.
+
+A ship saved docked or landed at one of those pads is put back on the pad
+wherever it now is. A ship saved in free flight low over one could find
+the ground in a different place.
+
+**Nothing from 2026-10-17 touches a save.** The cruise sky and its trails
+are pure functions of speed, heading and the seeded sky; the trail history
+is never stored. The lift car and hatch data were added to the port index
+as two new fields (`cars`, `parts`) and nothing else in it changed — proved
+by diffing a fresh conversion against the shipped index, since the
+converter on disk has drifted from the shipped data (a full re-run would
+also rewrite 69 models' interior routes; that is a separate decision).
+A ship already parked in a ring's small bay leaves by the new route.
 
 **Runners change only a flag.** An existing career's systems keep every
 port, route, manifest and price; some routes in lawful space now report the

@@ -115,8 +115,29 @@ check('and no longer on the market', !r4.ok && r4.mine);
 console.log('--- the desk ---');
 var h = H.list(G)[0], id = target.star.id, base = target.sys.corruption;
 var crimeBefore = H.crimeOf(G, target.sys, id);
+/* A Syndicate hold's score is pinned at 100 rather than worked out from
+ * its two axes (generate.js), so the formula only applies off a hold.
+ * buildGovernment works the score out from the UNROUNDED axes and stores
+ * them rounded, so in about one system in six the formula on the stored
+ * axes is one off. crimeOf (fixed 2026-10-19) adds a holding's shift to the
+ * GENERATED score rather than re-running the formula, so the first nudge
+ * no longer jumps by that one. */
 check('an untouched system reads its generated crime score exactly',
-      crimeBefore === target.sys.crimeScore && Gen.permissivity(target.sys.violence, base) === target.sys.crimeScore);
+      crimeBefore === target.sys.crimeScore &&
+      (target.sys.pirateHeld ? target.sys.crimeScore === 100
+                             : Math.abs(Gen.permissivity(target.sys.violence, base) - target.sys.crimeScore) <= 1),
+      crimeBefore + ' / ' + target.sys.crimeScore + (target.sys.pirateHeld ? ' (hold)' : ''));
+(function () {
+  /* The smallest shift moves the score by the formula's own step, never more. */
+  var fake = { crimeScore: target.sys.crimeScore, violence: target.sys.violence, corruption: target.sys.corruption };
+  var sid = 'probe-star', G9 = { uplift: {} };
+  G9.uplift[sid] = { corr: -10, viol: 0, dev: 0 };
+  var step = Gen.permissivity(fake.violence, fake.corruption - 10) - Gen.permissivity(fake.violence, fake.corruption);
+  var want = Math.max(0, Math.min(100, fake.crimeScore + step));
+  var got = H.crimeOf(G9, fake, sid);
+  check('a nudge moves the generated score by the formula\'s own step, and no more',
+        step < 0 && got === want, fake.crimeScore + ' -> ' + got + ' (step ' + step + ')');
+})();
 var c0 = G.ship.credits;
 var lines = H.settle(G, 3.5 * H.WEEK);
 check('three whole weeks paid, the half carried', lines.length === 1 && h.paidTo === 3 * H.WEEK, lines[0]);

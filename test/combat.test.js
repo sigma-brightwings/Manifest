@@ -38,6 +38,21 @@ function check(name, cond, detail) {
 function section(t) { console.log('\n' + t); }
 
 /* A minimal player-shaped G, orbiting a real planet in a real system. */
+/* BUY = OUTFITTED since 2026-10-20: a hull off the floor arrives with her
+ * default outfit. The sections below test the fitting rules themselves
+ * (budgets, fire groups), so they start from what the old floor sold:
+ * the gear you brought, and nothing the yard added. */
+function buyBare(G, id, keep, opts) {
+  var r = Combat.buyHull(G, id, keep, opts);
+  var left = ((r && r.outfit) || []).slice(), fit = G.ship.fit || {};
+  Object.keys(fit).reverse().forEach(function (k) {
+    var i = left.indexOf(fit[k]);
+    if (i >= 0) { left.splice(i, 1); delete fit[k]; }
+  });
+  Combat.syncLegacy(G.ship);
+  return r;
+}
+
 function makeG(deepSpace) {
   var sys = Gen.generateSystem('kawartha');
   var planet = sys.bodies.filter(function (b) { return b.kind === 'planet'; })[0];
@@ -85,6 +100,9 @@ section('--- the catalogue is not allowed to strand you ---');
 (function () {
   for (var id in Combat.HULLS) {
     var h = Combat.HULLS[id];
+    /* An XL hull cannot dock at a surface port at all (dockRefusal), so it
+     * can never be standing on one — see test/shipyard.test.js. */
+    if (h.size === 'XL') continue;
     var laden = h.dryMass + h.fuelCap + h.thrusterCap + h.cargoCap;
     var g = (h.thrustKN / laden) / 1.15;
     check(h.name + ' can lift off every port that exists',
@@ -675,8 +693,11 @@ section('--- slots, power and mass ---');
   var G = makeG();
   var s = G.ship;
 
-  check('a Talon has seven slots in three flavours',
-        Combat.slotKeys(s).length === 7 &&
+  /* Eight in four since 2026-10-19: the drive bay, which holds the cruise
+   * drive (see test/cruisedrive.test.js) and comes last so no older key
+   * moved. */
+  check('a Talon has eight slots in four flavours, the drive bay last',
+        Combat.slotKeys(s).length === 8 && Combat.slotKeys(s)[7] === 'drive0' &&
         Combat.slotKeys(s).filter(function (k) {
           return Combat.slotType(k) === 'hardpoint';
         }).length === 2, Combat.slotKeys(s).join(','));
@@ -696,7 +717,7 @@ section('--- slots, power and mass ---');
    * sharper statement of the tradeoff than the design went looking for. */
   var K = makeG();
   K.ship.credits = 500000;
-  Combat.buyHull(K, 'kestrel');
+  buyBare(K, 'kestrel');
   check('a Kestrel cannot run a Class 3 beam alongside its starter gun',
         !Combat.canFit(K.ship, 'mubeam').ok);
   Combat.sellFitted(K, 'hardpoint0');
@@ -730,7 +751,7 @@ section('--- slots, power and mass ---');
    * mass budget the binding constraint instead of a decoration. */
   var Rk = makeG();
   Rk.ship.credits = 500000;
-  Combat.buyHull(Rk, 'kestrel');
+  buyBare(Rk, 'kestrel');
   Combat.sellFitted(Rk, 'hardpoint0');
   /* The cargo scoop comes off too, and that is the point rather than a
    * workaround. A Class 3 beam (9 t), a Mk II reactor (9 t) and a shield
@@ -811,8 +832,9 @@ section('--- migrating a career that predates slots ---');
    * fit map. Catching cargo used to be a property of having a hold and is
    * now a fitting, so a career that predates slots is handed the thing it
    * has always been able to do rather than quietly losing it. */
-  check('nothing was silently confiscated, and the scoop was issued',
-        Combat.fittedList(s).length === 4 &&
+  /* And five since the cruise drive: every hull's standard Class 1. */
+  check('nothing was silently confiscated, and the scoop and drive were issued',
+        Combat.fittedList(s).length === 5 && s.fit.drive0 === 'cruise1' &&
         Combat.hasScoop(s), JSON.stringify(s.fit));
 
   // Idempotent: migrating an already-migrated ship changes nothing.
@@ -991,7 +1013,10 @@ section('--- buying hulls ---');
   G.ship.credits = 200000;
   var before = G.ship.credits;
   var r = Combat.buyHull(G, 'mule');
-  var expected = Combat.HULLS.mule.price - Math.round(Combat.HULLS.talon.price * 0.7);
+  /* Plus her default outfit, at nine tenths: buy = outfitted. */
+  var outfitCost = (r.outfit || []).reduce(function (n, id) {
+    return n + Math.round(Combat.EQUIPMENT[id].price * 0.9); }, 0);
+  var expected = Combat.HULLS.mule.price - Math.round(Combat.HULLS.talon.price * 0.7) + outfitCost;
   check('the trade-in maths is honest', r.ok && before - G.ship.credits === expected,
         (before - G.ship.credits) + ' vs ' + expected);
   check('the new hull is whole and fitted numbers moved over',
@@ -1043,7 +1068,7 @@ section('--- fire groups ---');
 (function () {
   var G = makeG();
   G.ship.credits = 200000;
-  Combat.buyHull(G, 'kestrel');            // three hardpoints to play with
+  buyBare(G, 'kestrel');            // three hardpoints to play with
   Combat.buyEquipment(G, 'phbeam', 'hardpoint1');
 
   check('a fresh ship puts everything on the primary trigger',
@@ -1070,7 +1095,7 @@ section('--- fire groups ---');
    * one would have made the second gun do nothing at all. */
   var pair = makeG();
   pair.ship.credits = 200000;
-  Combat.buyHull(pair, 'kestrel');
+  buyBare(pair, 'kestrel');
   Combat.buyEquipment(pair, 'phpulse', 'hardpoint1');
   var prey = fakeVictim(pair, { range: 2 });
   pair.ship.fwd = V.norm(V.sub(prey.live.pos, pair.ship.pos));
@@ -1087,10 +1112,10 @@ section('--- fire groups ---');
    * slot has to travel with the gear when the hull changes under it. */
   var swap = makeG();
   swap.ship.credits = 200000;
-  Combat.buyHull(swap, 'kestrel');
+  buyBare(swap, 'kestrel');
   Combat.buyEquipment(swap, 'phbeam', 'hardpoint1');
   Combat.setGroup(swap.ship, 'hardpoint1', 'b');
-  Combat.buyHull(swap, 'talon');
+  buyBare(swap, 'talon');
   check('a gun keeps its trigger across a hull change',
         Combat.gunsInGroup(swap.ship, 'b').length === 1 &&
         Combat.gunsInGroup(swap.ship, 'b')[0].item.id === 'phbeam',
@@ -3546,7 +3571,18 @@ console.log('--- what is on the floor at a shipyard ---');
       var sizes = list.map(function (id) { return Combat.HULLS[id].size || 'M'; });
       if (sizes.indexOf('S') < 0) noS++;
       if (sizes.indexOf('L') >= 0) { if (pad) surfL++; bandL[bi]++; }
-      if (sizes.indexOf('M') >= 0) bandM[bi]++;
+      /* PER HULL, not "any medium at all": since every ship type went on
+       * sale (2026-10-19) there are four medium hulls, and a developed dock
+       * carrying at least one of four was always going to read 100%. The
+       * question is still whether each one gets likelier. */
+      var nM = 0, mOnFloor = 0;
+      for (var hk in Combat.HULLS) {
+        var hh = Combat.HULLS[hk];
+        if ((hh.size || 'M') !== 'M' || hh.orderOnly || hh.military) continue;
+        nM++;
+        if (list.indexOf(hk) >= 0) mOnFloor++;
+      }
+      bandM[bi] += nM ? mOnFloor / nM : 0;
       if (!list.length) empty++;
     }
   }

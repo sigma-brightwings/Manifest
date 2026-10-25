@@ -113,10 +113,14 @@
     var tilt = planet.rotation ? planet.rotation.tilt : 0;
     var c = Math.cos(tilt), s = Math.sin(tilt);
     var spin = (planet.rotation && planet.rotation.period < 0) ? -1 : 1;
+    /* A locked world's frame is also turned about z by `az` (sim.js
+     * surfaceOffset). Zero for everything else, which is the old frame. */
+    var az = (planet.rotation && planet.rotation.az) || 0;
+    var ca = Math.cos(az), sa = Math.sin(az);
     return {
-      e1: { x: 1, y: 0, z: 0 },
-      e2: { x: 0, y: c, z: s },
-      n: { x: 0, y: -s, z: c },
+      e1: { x: ca, y: sa, z: 0 },
+      e2: { x: -sa * c, y: ca * c, z: s },
+      n: { x: sa * s, y: -ca * s, z: c },
       spin: spin
     };
   }

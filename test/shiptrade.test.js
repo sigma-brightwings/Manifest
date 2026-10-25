@@ -496,6 +496,73 @@ if (law && crook) {
         none.text);
 }
 
+/* ---- choking a port (2026-10-21) ------------------------------------------
+ * Astra: "buying cargo off a ship means it doesn't have that cargo for the
+ * destination. Provides a way to choke a station without killing trade
+ * ships." */
+section('what you buy off a ship, her destination goes without');
+(function () {
+  var hit = null;
+  for (var s = 0; s < galaxy.stars.length && s < 80 && !hit; s++) {
+    var star = galaxy.stars[s];
+    var G = makeG(star);
+    var routes = G.sys.traffic || [];
+    for (var r = 0; r < routes.length && !hit; r++) {
+      for (var k = 0; k < 6 && !hit; k++) {
+        var t = routes[r].period * (k / 6);
+        G.t = t;
+        var c = contactOn(G, routes[r], t);
+        if (ST.refusal(G, G.sys, c)) continue;
+        var dest = c.to;
+        if (!dest || !dest.market) continue;
+        var when = ST.arrivalOf(c, t);
+        if (!when || when.at <= t + 60) continue;
+        var rows = ST.board(G, G.sys, t, c).rows.filter(function (row) {
+          return row.buyEach !== null && row.theirs >= 3 && dest.market.rows[row.cid] &&
+                 Eco.analyticStock(dest, row.cid, when.at + 60) > 6;
+        });
+        if (rows.length) hit = { G: G, c: c, t: t, dest: dest, row: rows[0], when: when };
+      }
+    }
+  }
+  check('found a laden ship bound for a market here', !!hit);
+  if (!hit) return;
+  var G = hit.G, c = hit.c, t = hit.t, dest = hit.dest, cid = hit.row.cid, at = hit.when.at;
+  G.shipTrade = null; dest.market.shorts = [];
+  G.ship.cargo = {}; G.ship.cargoCap = 64; G.ship.credits = 500000; Sim.refreshShip(G.ship);
+  var nowBefore = Eco.analyticStock(dest, cid, t);
+  var landBefore = Eco.analyticStock(dest, cid, at + 60);
+  var res = ST.deal(G, G.sys, t, c, cid, 3);
+  check('the deal goes through and says the port will be short',
+        res.ok && /short/.test(res.text), res.text);
+  check('nothing changes at the port before she gets there',
+        Math.abs(Eco.analyticStock(dest, cid, t) - nowBefore) < 1e-9);
+  var landAfter = Eco.analyticStock(dest, cid, at + 60);
+  var expect = 3 * Math.exp(-60 / (hit.when.period * 0.55));
+  check('when she docks, the shelf is short by what she no longer carries',
+        Math.abs((landBefore - landAfter) - expect) < 1e-6,
+        (landBefore - landAfter).toFixed(3) + ' vs ' + expect.toFixed(3));
+  var later = at + ST.SHORT_FORGET * hit.when.period;
+  check('and it fades as the next ships come in', Eco.shortfalls(dest.market, cid, later) < 3 * 0.02);
+  check('buying the same line again deepens it', (function () {
+    var r2 = ST.deal(G, G.sys, t, c, cid, 2);
+    return r2.ok && Math.abs(Eco.shortfalls(dest.market, cid, at + 60) - 5 * Math.exp(-60 / (hit.when.period * 0.55))) < 1e-6;
+  })());
+  /* Saved with the trade book, and back on the shelf after a reload. */
+  var saved = JSON.parse(JSON.stringify(G.shipTrade));
+  dest.market.shorts = [];
+  G.shipTrade = saved;
+  ST.attach(G, G.sys, t);
+  check('it survives a reload: back on the market when the system is entered',
+        Math.abs(Eco.analyticStock(dest, cid, at + 60) - (landBefore - 5 * Math.exp(-60 / (hit.when.period * 0.55)))) < 1e-6 ||
+        Eco.analyticStock(dest, cid, at + 60) === 0);
+  ST.attach(G, G.sys, later + hit.when.period);
+  check('and is forgotten once it has faded', G.shipTrade.shorts.length === 0, G.shipTrade.shorts.length);
+  check('a port it was not bound for is untouched', G.sys.ports.every(function (p) {
+    return p === dest || !p.market || !(p.market.shorts || []).length;
+  }));
+})();
+
 /* ---- the old one-line offer still works, through the new door ------------ */
 
 section('the quick offer is a view of the board');

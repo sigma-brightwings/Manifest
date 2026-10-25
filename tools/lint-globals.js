@@ -31,8 +31,8 @@ var path = require('path');
 
 /* The names each src file publishes onto `global`. */
 var MODULES = ['V', 'RNG', 'Kepler', 'Economy', 'Gen', 'Galaxy', 'Sim',
-               'Combat', 'Missions', 'Arcs', 'Sound', 'Save', 'Hulls', 'Fleet', 'Crew', 'Holdings', 'ShipTrade',
-               'Render', 'GLWorld', 'Screens', 'Slipspace', 'Logo', 'Weather', 'Game', 'Captains'];
+               'Combat', 'Missions', 'Arcs', 'Sound', 'Save', 'Hulls', 'Fleet', 'Crew', 'Holdings', 'ShipTrade', 'Captains', 'Messages', 'Favours', 'Rumours', 'Construction', 'Walk', 'ShipDeck', 'Npc', 'NpcModel', 'NpcGL',
+               'Render', 'GLWorld', 'Screens', 'Slipspace', 'Logo', 'Weather', 'Game', 'CaptainStories'];
 
 var srcDir = path.resolve(__dirname, '..', 'src');
 var files = fs.readdirSync(srcDir).filter(function (f) { return /\.js$/.test(f); });

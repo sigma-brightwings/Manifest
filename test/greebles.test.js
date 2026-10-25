@@ -73,15 +73,34 @@ var r1 = R.greebleReadings(s);
 check('throttle reads straight through', Math.abs(r1.throttle - 0.5) < 1e-9 && Math.abs(r1.fuel - 30 / 37) < 1e-9);
 
 console.log('--- in the room ---');
-/* Every quad on its slab: within the cockpit's own walls, a metre and a half
- * of the seat, so nothing floats out through the hull. */
+/* Every quad on its slab: within the cockpit's own walls, so nothing floats
+ * out through the hull. Each ship's OWN walls since 2026-10-24, when the
+ * room started scaling with the glass and the bulkhead moved aft to make
+ * room for a door (Render.cockpitGeometry); this used to be one fixed box,
+ * the Talon's, with the bulkhead at -0.6 m. */
 var stray = 0;
 hulls.forEach(function (h) {
+  var g = R.cockpitGeometry(R.cockpitSpec(ship(h))), e = 0.02;
   L[h].items.forEach(function (i) {
-    i.pts.forEach(function (p) { if (Math.abs(p[0]) > 1.35 || Math.abs(p[1]) > 0.8 || p[2] > 1.25 || p[2] < -0.6) stray++; });
+    i.pts.forEach(function (p) {
+      if (Math.abs(p[0]) > g.sideX + e || p[1] > g.ceilY + e || p[1] < g.floorY - e ||
+          p[2] > g.frontZ + e || p[2] < g.bulkZ - e) stray++;
+    });
   });
 });
 check('nothing is mounted outside the cockpit', stray === 0, stray + ' corners out');
+/* And nothing on the door. */
+var onDoor = 0;
+hulls.forEach(function (h) {
+  var g = R.cockpitGeometry(R.cockpitSpec(ship(h)));
+  L[h].items.forEach(function (i) {
+    var allOn = i.pts.every(function (p) {
+      return Math.abs(p[2] - g.bulkZ) < 0.02 && Math.abs(p[0]) < g.doorHW && p[1] < g.floorY + g.doorH;
+    });
+    if (allOn) onDoor++;
+  });
+});
+check('nothing is mounted on the door', onDoor === 0, onDoor + ' fittings on it');
 var sizes = [];
 L.mule.blocks.forEach(function (b) { sizes.push(b.rad); });
 check('no fitting is bigger than a panel', Math.max.apply(null, sizes) < 0.22,

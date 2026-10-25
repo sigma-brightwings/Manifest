@@ -673,6 +673,7 @@ console.log('--- and the doors are doors ---');
 (function () {
   var bad = 0, checkedM = 0, noDoors = [];
   var minTravel = Infinity, maxTravel = 0, fields = 0, movers = 0;
+  var forceLeft = [], generatedDoors = 0;
   MODELS.forEach(function (modelId) {
     var d = Render.portDoors(modelId);
     checkedM++;
@@ -705,7 +706,17 @@ console.log('--- and the doors are doors ---');
       console.log('  FAIL  ' + modelId + ' is more door than station');
     }
     d.leaves.forEach(function (lf) {
-      if (lf.field) { fields++; return; }
+      if (lf.field) {
+        fields++;
+        if (/ForceField/i.test(lf.node || '')) forceLeft.push(modelId + ':' + lf.node);
+        return;
+      }
+      if (lf.generated) generatedDoors++;
+      /* A lift car and the hatch over it (2026-10-17) are moving parts but
+       * not door leaves: the car runs down its shaft, not across a doorway,
+       * and a hatch is there-or-not like a field. transfer.test.js pins
+       * both — where the car is drawn, and what you hit. */
+      if (lf.car || lf.hatch) return;
       if (!(lf.travel > 0)) { bad++; console.log('  FAIL  ' + modelId + ' leaf ' + lf.node + ' does not move'); return; }
       movers++;
       minTravel = Math.min(minTravel, lf.travel);
@@ -733,8 +744,15 @@ console.log('--- and the doors are doors ---');
   });
   check('every orbital model with gates gives up its doors', bad === 0,
         bad + ' bad of ' + checkedM + ' models');
-  check('and each one has exactly the field panels it declared',
-        fields > 0, fields + ' force fields');
+  check('and each one has exactly the roll-up panels it declared',
+        fields > 0, fields + ' roll-up slats');
+  /* NO FORCE FIELDS (Astra, 2026-10-20: "air locks to keep stations
+   * pressurized (let's get rid of the force fields)"). Every field panel
+   * in the library is rebuilt as a pair of sliding doors (render.js
+   * fieldToDoors); none may survive as a there-or-not panel. */
+  check('no force fields anywhere — each one is a pair of sliding doors now',
+        forceLeft.length === 0 && generatedDoors > 0,
+        forceLeft.slice(0, 3).join(' ') + ' · ' + generatedDoors + ' generated leaves');
   console.log('  ' + movers + ' sliding leaves, travel ' + minTravel.toFixed(3) +
               '-' + maxTravel.toFixed(3) + ' station radii' +
               (noDoors.length ? '   (no gates: ' + noDoors.join(' ') + ')' : ''));

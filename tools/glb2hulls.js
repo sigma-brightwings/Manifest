@@ -1850,13 +1850,15 @@ function clipBucketFaces(buckets, bi, n, d) {
   var changed = 0, eps = 1e-7;
   function r3(x) { return Math.round(x * 100000) / 100000; }   // vertex precision: five places
   buckets.forEach(function (bk) {
-    var F = [], Cc = [], O = [], B = [];
+    var F = [], Cc = [], O = [], B = [], PK = [];
+    var pk = bk.pk || [];
     for (var fi = 0; fi < bk.f.length; fi++) {
       var f = bk.f[fi];
-      if (bk.bo[fi] !== bi) { F.push(f); Cc.push(bk.c[fi]); O.push(bk.o[fi]); B.push(bk.bo[fi]); continue; }
+      var pkf = pk[fi] === undefined ? -1 : pk[fi];
+      if (bk.bo[fi] !== bi) { F.push(f); Cc.push(bk.c[fi]); O.push(bk.o[fi]); B.push(bk.bo[fi]); PK.push(pkf); continue; }
       var P = f.map(function (vi) { return bk.v[vi]; });
       var s = P.map(function (p) { return p[0] * n[0] + p[1] * n[1] + p[2] * n[2] - d; });
-      if (s[0] <= eps && s[1] <= eps && s[2] <= eps) { F.push(f); Cc.push(bk.c[fi]); O.push(bk.o[fi]); B.push(bi); continue; }
+      if (s[0] <= eps && s[1] <= eps && s[2] <= eps) { F.push(f); Cc.push(bk.c[fi]); O.push(bk.o[fi]); B.push(bi); PK.push(pkf); continue; }
       changed++;
       if (s[0] > -eps && s[1] > -eps && s[2] > -eps) continue;     // wholly outside: gone
       /* Sutherland-Hodgman against one plane: a triangle becomes a
@@ -1874,10 +1876,10 @@ function clipBucketFaces(buckets, bi, n, d) {
       var base = bk.v.length;
       poly.forEach(function (p) { bk.v.push(p); });
       for (var q = 1; q + 1 < poly.length; q++) {
-        F.push([base, base + q, base + q + 1]); Cc.push(bk.c[fi]); O.push(bk.o[fi]); B.push(bi);
+        F.push([base, base + q, base + q + 1]); Cc.push(bk.c[fi]); O.push(bk.o[fi]); B.push(bi); PK.push(pkf);
       }
     }
-    bk.f = F; bk.c = Cc; bk.o = O; bk.bo = B;
+    bk.f = F; bk.c = Cc; bk.o = O; bk.bo = B; bk.pk = PK;
   });
   return changed;
 }
@@ -1885,9 +1887,10 @@ function clipBucketFaces(buckets, bi, n, d) {
 function convertPort(file) {
   var g = parseGlb(fs.readFileSync(file));
   var j = g.json;
-  var ext = { v: [], f: [], c: [], o: [], bo: [] };     // the shell
-  var inr = { v: [], f: [], c: [], o: [], bo: [] };     // only visible from inside
-  var spn = { v: [], f: [], c: [], o: [], bo: [] };     // turns about +z
+  /* pk: which car or hatch part each face belongs to, -1 for none. */
+  var ext = { v: [], f: [], c: [], o: [], bo: [], pk: [] };     // the shell
+  var inr = { v: [], f: [], c: [], o: [], bo: [], pk: [] };     // only visible from inside
+  var spn = { v: [], f: [], c: [], o: [], bo: [], pk: [] };     // turns about +z
   /* Which inclined bore a face belongs to (-1: none) - see clipBores. */
   var bores = [];
   var single = {}, multi = {}, extras = [], groups = [], carriers = {};
@@ -1900,6 +1903,57 @@ function convertPort(file) {
   /* MOVERS (2026-10-16): one box per declared car, grown over its subtree,
    * with where it can go (see moverStops). */
   var movers = [];
+  /* CARS THAT RIDE (2026-10-17). Astra: "we need the car to ride with the
+   * ship." A node that declares `extras.motion` of kind `lift` — the ring's
+   * `ringLiftPlatform`, `{ axis: 'y', from: 63.1, to: 9.35 }` in its
+   * parent's frame — is a car the game should MOVE, not just a volume a
+   * route may cross. Each is measured over its whole subtree (platform,
+   * turntable and all) at the position it was exported at, and written out
+   * with its travel as a vector, so the renderer can lift those triangles
+   * out of the hull and draw them wherever the car is this frame. Additive
+   * on purpose: the carrier boxes the interior routes are found in are not
+   * touched, so no route moves because of this. */
+  var cars = {};
+  /* EXACTLY WHICH FACES ARE THE CAR, and which are the hatch over it. A box
+   * will not do for the ring: its platform parks flush in the heavy bay's
+   * inner gate, same footprint and the same few metres of height, so a box
+   * drawn round either takes the other with it. So the faces each one owns
+   * are recorded as they are emitted — runs of indices into the bucket's
+   * face list, which is written out in that same order. A hatch is any
+   * node the art tags `hatch: true` (the ring's InnerGate and InnerSeal). */
+  var parts = [];
+  /* THE RUNS ARE RE-READ AT THE END (merge, 2026-10-25). They are noted as
+   * faces are emitted, but the bores are clipped and their faces rebuilt
+   * after that (clipBores), which moves every index after the first one it
+   * touches. So each face also carries its part's number in the bucket's
+   * `pk` list, which the clip carries along with the face, and partRuns
+   * rebuilds `r` from it once the faces are final. */
+  function notePart(name, kind, bucketName, from, to, b, bucket) {
+    if (to <= from) return;
+    var last = parts.length ? parts[parts.length - 1] : null;
+    if (last && last.node === name && last.bucket === bucketName &&
+        last.r[last.r.length - 1][1] === from) {
+      last.r[last.r.length - 1][1] = to;
+    } else if (last && last.node === name && last.bucket === bucketName) {
+      last.r.push([from, to]);
+    } else {
+      parts.push({ node: name, kind: kind, bucket: bucketName, r: [[from, to]], box: b });
+    }
+    if (bucket) for (var k = from; k < to; k++) bucket.pk[k] = parts.length - 1;
+  }
+  function partRuns() {
+    var byName = { shell: ext, interior: inr, spin: spn };
+    parts.forEach(function (pt, pi) {
+      var bk = byName[pt.bucket], r = [];
+      for (var fi = 0; fi < bk.f.length; fi++) {
+        if (bk.pk[fi] !== pi) continue;
+        if (r.length && r[r.length - 1][1] === fi) r[r.length - 1][1] = fi + 1;
+        else r.push([fi, fi + 1]);
+      }
+      pt.r = r;
+    });
+    parts = parts.filter(function (pt) { return pt.r.length; });
+  }
   /* The scene root's own transform. A bay's declared `dockPath` is written
    * in the root's LOCAL frame (the station as designed, before the builder
    * grounded it), so it needs the root's matrix and nothing else — measured
@@ -1981,12 +2035,27 @@ function convertPort(file) {
    * the axis names. glTF front (+Z) therefore becomes the bay's -Y. */
   function toGame(p) { return [p[0], -p[2], p[1]]; }
 
-  function walk(nodeIdx, parentMat, inInterior, inSpin, anchors, inOmit, parentIdx, inGate, inOpen, inCarry, inEntr, inMover, inBore) {
+  function walk(nodeIdx, parentMat, inInterior, inSpin, anchors, inOmit, parentIdx, inGate, inOpen, inCarry, inEntr, inMover, inBore, inCar) {
     var node = j.nodes[nodeIdx];
     var local = node.matrix ? node.matrix.slice()
                             : matFromTRS(node.translation, node.rotation, node.scale);
     var world = matMul(parentMat, local);
     var name = node.name || '';
+    var mo = node.extras && node.extras.motion;
+    var carKey = inCar || null;
+    if (!carKey && mo && mo.kind === 'lift' && typeof mo.from === 'number' &&
+        typeof mo.to === 'number' && /^[xyz]$/.test(mo.axis || '')) {
+      carKey = name;
+      var ax = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[mo.axis];
+      var dl = mo.to - mo.from;
+      var q0 = toGame(matApply(parentMat, [0, 0, 0]));
+      var q1 = toGame(matApply(parentMat, [ax[0] * dl, ax[1] * dl, ax[2] * dl]));
+      cars[carKey] = box();
+      cars[carKey].node = name;
+      cars[carKey].d = [q1[0] - q0[0], q1[1] - q0[1], q1[2] - q0[2]];
+      var cmk = CARRIER_RE.exec(name);
+      cars[carKey].key = cmk ? cmk[1].toLowerCase() : null;
+    }
     if (parentIdx === -1 && !rootMat) rootMat = world;
     /* A bore: named as one, and never the car inside it (the car is a
      * mover, drawn on its own and clipped by its stops). */
@@ -2222,6 +2291,7 @@ function convertPort(file) {
           if (!omit) into.v.push(w);
           if (mine) grow(mine, w);
           if (ckey) grow(carriers[ckey], w);
+          if (carKey) grow(cars[carKey], w);
           if (ekey) grow(entrances[ekey], w);
           if (mvHere && !omit) grow(mvHere, w);
         }
@@ -2230,17 +2300,26 @@ function convertPort(file) {
         var idx = prim.indices !== undefined
           ? accessorData(g, prim.indices)
           : pos.map(function (_, n) { return n; });
+        var fStart = into.f.length;
         for (var t = 0; t < idx.length; t += 3) {
           into.f.push([base + idx[t], base + idx[t + 1], base + idx[t + 2]]);
           into.c.push(col);
           into.o.push(openHere ? 1 : 0);
           into.bo.push(mvHere ? -1 : boreHere);
+          into.pk.push(-1);
+        }
+        var bucketName = into === inr ? 'interior' : (into === spn ? 'spin' : 'shell');
+        if (carKey) notePart(carKey, 'car', bucketName, fStart, into.f.length, cars[carKey], into);
+        else if (node.extras && node.extras.hatch === true) {
+          var hb = box();
+          for (var hv = 0; hv < pos.length; hv++) grow(hb, toGame(matApply(world, pos[hv])));
+          notePart(name, 'hatch', bucketName, fStart, into.f.length, hb, into);
         }
       }
     }
     for (var ch = 0; ch < (node.children || []).length; ch++) {
       walk(node.children[ch], world, interior, spin, mine, inOmitNext, nodeIdx,
-           inGate || gateHere, openHere, ckey, ekey, mvHere, boreHere);
+           inGate || gateHere, openHere, ckey, ekey, mvHere, boreHere, carKey);
     }
   }
 
@@ -2432,6 +2511,11 @@ function convertPort(file) {
       fixBox(mv);
       mv.stops = (mv.stops || []).map(function (s) { return fix(s); });
     });
+    /* A car's travel is a direction, and `fix` is a right-angle rotation
+     * about the origin, so it turns the vector the same way. */
+    for (var cr2 in cars) { fixBox(cars[cr2]); cars[cr2].d = fix(cars[cr2].d); }
+    /* A car part shares its car's box, fixed just above; a hatch has its own. */
+    parts.forEach(function (pt) { if (pt.kind === 'hatch') fixBox(pt.box); });
   }
 
   var all = ext.v.concat(inr.v, spn.v);
@@ -2487,6 +2571,7 @@ function convertPort(file) {
   if (kind === 'orbital' && bores.length) clipBores([ext, inr], bores, file);
   var lifted = liftCoplanar([ext, inr, spn]);
   if (lifted) console.log('    lifted ' + lifted + ' flush panel face(s) off the surface beneath');
+  partRuns();
 
   function placedBox(b) {
     if (!b || !isFinite(b.min[0])) return null;
@@ -2666,6 +2751,24 @@ function convertPort(file) {
   /* The art's declared routes are working data for the router, not index. */
   (anchors.berths || []).forEach(function (b) { delete b.declared; delete b.carriage; });
   if (carried.length) out.carriers = carried.map(function (c) { return { min: c.min, max: c.max, key: c.key }; });
+  /* The cars, at their exported position, with the run to the far end of
+   * their travel as `d` in the same normalised units (a vector, so scaled
+   * but not moved by the origin). */
+  var carList = Object.keys(cars).map(function (cn) {
+    var pb = placedBox(cars[cn]);
+    if (!pb) return null;
+    var dv = cars[cn].d;
+    return { node: cars[cn].node, key: cars[cn].key, min: pb.min, max: pb.max, mid: pb.mid,
+             d: [r3(dv[0] * scale), r3(dv[1] * scale), r3(dv[2] * scale)] };
+  }).filter(Boolean);
+  if (carList.length) out.cars = carList;
+  /* And the faces each car and hatch owns, as [from, to) runs into its
+   * bucket's face list, with where it is so the game can tell whose it is. */
+  var partList = parts.map(function (pt) {
+    var pb = placedBox(pt.box);
+    return pb ? { node: pt.node, kind: pt.kind, bucket: pt.bucket, r: pt.r, mid: pb.mid } : null;
+  }).filter(Boolean);
+  if (partList.length) out.parts = partList;
   /* The model's own metres per normalised unit, so a shaft spec can be
    * handed back to the builder in the units it was drawn in. */
   out.metresPerUnit = Math.round(1000 / scale) / 1000;

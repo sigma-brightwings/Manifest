@@ -89,6 +89,11 @@
      ship has anyone on it. -->
 <script src="src/crew.js"></script>
 <script src="src/fleet.js"></script>
+<script src="src/construction.js"></script>
+<script src="src/walk.js"></script>
+<script src="src/shipdeck.js"></script>
+<script src="src/npcmodel.js"></script>
+<script src="src/npc.js"></script>
 <!-- Industry you own, and what it does to a system. After combat.js, whose
      effectiveCorruption reads it, and after fleet.js, beside which it
      settles at the desk. -->
@@ -96,6 +101,10 @@
 <script src="src/missions.js"></script>
 <script src="src/arcs.js"></script>
 <script src="src/shiptrade.js"></script>
+<script src="src/captains.js"></script>
+<script src="src/messages.js"></script>
+<script src="src/favours.js"></script>
+<script src="src/rumours.js"></script>
 <script src="src/sound.js"></script>
 <script src="src/save.js"></script>
 <!-- logo.js is loaded at the top, for the boot card. -->
@@ -115,10 +124,17 @@
      drift apart. -->
 <script src="src/weather.js"></script>
 <script src="src/gl.js"></script>
+<script src="src/npcgl.js"></script>
 <script src="src/screens.js"></script>
-<!-- The captains' stories on the title card. Needs nothing; main.js picks one. -->
-<script src="src/captains.js"></script>
+<!-- The captains' stories on the title card. Needs nothing; main.js picks one.
+     (captains.js, above, is the captains out in their ships.) -->
+<script src="src/captain-stories.js"></script>
 <script src="src/main.js"></script>
+<!-- The reader model (messages.js). A MODULE, so it runs after every classic
+     script above and can find window.Messages; it loads in the background
+     and the game reads with the phrase matcher until it is ready, or if
+     `npm run models` has not been run. -->
+<script type="module" src="src/embedder.js"></script>
 <script>
   // Hide the boot card once the first frame has been drawn.
   requestAnimationFrame(function () {

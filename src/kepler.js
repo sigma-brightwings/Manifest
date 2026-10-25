@@ -123,6 +123,55 @@
     return pts;
   }
 
+  /* The same loop, cut in two at the ship: the half-period AHEAD of it and
+   * the half-period BEHIND. Astra, 2026-10-19: the orbit already travelled
+   * and the orbit to be travelled should read differently, "whichever
+   * reads easier". Split by TIME, not by angle — on an eccentric orbit
+   * half the angle is nowhere near half the trip, and "where will I be in
+   * half an orbit" is the question the line answers.
+   *
+   * ahead runs from the ship forward; behind runs from half a period ago
+   * up to the ship, so both meet at it and each is drawn in the direction
+   * of travel. Sampled evenly in eccentric anomaly within each half, like
+   * samplePath, so periapsis is as smooth as it ever was. */
+  function samplePathSplit(el, segments, pos) {
+    segments = segments || 240;
+    var e = el.e;
+    var sqrt1me2 = Math.sqrt(1 - e * e);
+    /* Where the ship sits on the loop, read in the SAME axes the sampler
+     * draws in. Taking it from el.nu was the first version and it put the
+     * join on the far side of every orbit lying flat in the system plane:
+     * with no inclination there is no node line, and the true anomaly and
+     * the argument of periapsis are then measured from different zeros.
+     * Projecting the position onto the sampler's own P and Q cannot
+     * disagree with the sampler. */
+    var E0;
+    if (pos) {
+      var P = perifocalToWorld(1, 0, el.inc, el.lan, el.argp);
+      var Q = perifocalToWorld(0, 1, el.inc, el.lan, el.argp);
+      var px = pos.x * P.x + pos.y * P.y + pos.z * P.z;
+      var qy = pos.x * Q.x + pos.y * Q.y + pos.z * Q.z;
+      E0 = Math.atan2(qy / (el.a * sqrt1me2), px / el.a + e);
+    } else {
+      E0 = 2 * Math.atan2(Math.sqrt(1 - e) * Math.sin(el.nu / 2),
+                          Math.sqrt(1 + e) * Math.cos(el.nu / 2));
+    }
+    var M0 = E0 - e * Math.sin(E0);
+    var Eh = solveKepler(M0 + Math.PI, e);
+    var span = wrapAngle(Eh - E0);                 // eccentric anomaly to half a period on
+    if (span < 1e-9) span = Math.PI;
+    function at(E) {
+      return perifocalToWorld(el.a * (Math.cos(E) - e), el.a * sqrt1me2 * Math.sin(E),
+                              el.inc, el.lan, el.argp);
+    }
+    function run(Ea, dE) {
+      var n = Math.max(8, Math.round(segments * dE / TAU)), pts = [];
+      for (var i = 0; i <= n; i++) pts.push(at(Ea + dE * i / n));
+      return pts;
+    }
+    return { ahead: run(E0, span), behind: run(E0 + span, TAU - span) };
+  }
+
   /* The inverse problem: given a state vector relative to a body, what orbit
    * am I currently on? This is the "osculating" orbit — the ellipse the ship
    * would follow if every other body vanished. It is what the HUD reports as
@@ -147,12 +196,30 @@
 
     var nVec = { x: -h.y, y: h.x, z: 0 }; // node line
     var nLen = V.len(nVec);
-    var lan = nLen > 1e-9 ? wrapAngle(Math.atan2(nVec.y, nVec.x)) : 0;
+    /* "No node line" is RELATIVE to |h|, not an absolute 1e-9. Angular
+     * momentum here runs from 1e4 to 1e10 km^2/s, so an orbit flat but for
+     * rounding error had a node line made of noise, an inclination of
+     * 1e-15, and an argument of periapsis whose sign came from whichever
+     * way eVec.z's noise fell. */
+    var hasNode = nLen > 1e-8 * hLen;
+    var lan = hasNode ? wrapAngle(Math.atan2(nVec.y, nVec.x)) : 0;
 
     var argp = 0;
-    if (nLen > 1e-9 && e > 1e-9) {
+    if (hasNode && e > 1e-9) {
       argp = Math.acos(Math.max(-1, Math.min(1, V.dot(nVec, eVec) / (nLen * e))));
       if (eVec.z < 0) argp = TAU - argp;
+    } else if (e > 1e-9) {
+      /* FLAT ORBITS KEEP THEIR PERIAPSIS (2026-10-19). With no node line
+       * this used to leave argp at 0, which threw away where periapsis
+       * IS: every orbit lying in the system plane — most of them — was
+       * drawn with its periapsis along +X wherever it really pointed, an
+       * ellipse of the right shape rotated off the ship. Found when the
+       * orbit line was split at the ship and the join missed it by
+       * thousands of km. With lan = 0, argp is the longitude of
+       * periapsis; Rx(inc) at 180° mirrors y, so a retrograde flat orbit
+       * measures it the other way round. */
+      var lonP = Math.atan2(eVec.y, eVec.x);
+      argp = wrapAngle(h.z >= 0 ? lonP : -lonP);
     }
 
     var closed = energy < 0;
@@ -171,7 +238,7 @@
     if (e > 1e-9) {
       nu = Math.acos(Math.max(-1, Math.min(1, V.dot(eVec, pos) / (e * r))));
       if (V.dot(pos, vel) < 0) nu = TAU - nu;
-    } else if (nLen > 1e-9) {
+    } else if (hasNode) {
       nu = Math.acos(Math.max(-1, Math.min(1, V.dot(nVec, pos) / (nLen * r))));
       if (pos.z < 0) nu = TAU - nu;
     } else {
@@ -221,6 +288,7 @@
     state: state,
     position: position,
     samplePath: samplePath,
+    samplePathSplit: samplePathSplit,
     elementsFromState: elementsFromState
   };
 

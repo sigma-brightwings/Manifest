@@ -69,9 +69,22 @@
 
     // v = omega x r, with omega = (0,0,w) tipped by the same rotation.
     var oy = -st * w, oz = ct * w;
+    var vx = oy * pz - oz * py, vy = oz * px, vz = -oy * px;
+    /* `az` turns the whole tipped frame about system z, which is what lets
+     * a pole lean in any direction rather than only toward -y. Only the
+     * tidally locked worlds use it (their pole stands on their own orbit's
+     * normal, so `az` is the orbit's node); everything else leaves it
+     * undefined and takes exactly the old path. */
+    if (rot.az) {
+      var ca = Math.cos(rot.az), sa = Math.sin(rot.az);
+      return {
+        pos: { x: ca * px - sa * py, y: sa * px + ca * py, z: pz },
+        vel: { x: ca * vx - sa * vy, y: sa * vx + ca * vy, z: vz }
+      };
+    }
     return {
       pos: { x: px, y: py, z: pz },
-      vel: { x: oy * pz - oz * py, y: oz * px, z: -oy * px }
+      vel: { x: vx, y: vy, z: vz }
     };
   }
 
@@ -755,6 +768,60 @@
     return { pitchDeg: pitchDeg, rollDeg: rollDeg, horizFwd: horizFwd, degenerate: false };
   }
 
+  /* ---- heading, against the world you are on ---------------------------
+   *
+   * A body's north pole is its spin axis: body-fixed +z tipped about x by
+   * the axial tilt, the same construction surfaceOffset uses to put a pad
+   * on the ground and GLWorld.spinOf uses to paint the ice caps. One axis,
+   * so the N on the tape points at the cap you can see.
+   *
+   * It is the right-hand pole (the one the world turns anticlockwise
+   * about), which is the IAU convention, so on a world spinning the usual
+   * way the sun rises in the E. A star with no rotation entry gets tilt 0,
+   * so deep in a system north is simply system north. */
+  function bodyPole(body) {
+    var tilt = (body && body.rotation) ? body.rotation.tilt || 0 : 0;
+    var az = (body && body.rotation) ? body.rotation.az || 0 : 0;   // see surfaceOffset
+    return { x: Math.sin(tilt) * Math.sin(az), y: -Math.sin(tilt) * Math.cos(az), z: Math.cos(tilt) };
+  }
+
+  /* Compass heading of the nose: north is the pole projected onto the
+   * local horizon (the plane normal to upRef), east is N x U, and the
+   * heading is measured clockwise from N, 0..360, exactly as on a chart.
+   *
+   * Two places it stops being an answer, and they are reported rather than
+   * jittered through: standing on a pole, where every direction is south
+   * (noNorth), and pointing straight up or down, where the nose has no
+   * horizontal component to take a bearing of (attitudeAngles' own pole).
+   *
+   * `targetDir`, if given, is a unit vector to something; its bearing comes
+   * back too so the tape can carry a bug for it. */
+  function headingAngles(ship, upRef, pole, targetDir) {
+    var pUp = V.dot(pole, upRef);
+    var north = V.sub(pole, V.scale(upRef, pUp));
+    var nLen = V.len(north);
+    if (nLen < 0.02) {
+      return { hdgDeg: 0, bugDeg: null, noNorth: true, degenerate: false,
+               atPole: pUp > 0 ? 'N' : 'S' };
+    }
+    north = V.scale(north, 1 / nLen);
+    var east = V.cross(north, upRef);
+    function bearing(d) {
+      var h = V.sub(d, V.scale(upRef, V.dot(d, upRef)));
+      if (V.len(h) < 1e-4) return null;
+      var deg = Math.atan2(V.dot(h, east), V.dot(h, north)) / (Math.PI / 180);
+      return deg < 0 ? deg + 360 : deg;
+    }
+    var hdg = bearing(ship.fwd);
+    return {
+      hdgDeg: hdg === null ? 0 : hdg,
+      bugDeg: targetDir ? bearing(targetDir) : null,
+      noNorth: false,
+      degenerate: hdg === null,
+      north: north, east: east
+    };
+  }
+
   /* ---- the ship's mass budget ------------------------------------------
    * Once there is cargo, "how hard can I push" stops being a constant. The
    * drive produces a fixed FORCE, so acceleration is force over mass, and
@@ -1021,13 +1088,74 @@
     var rel = V.sub(vel, atmo.vel);
     var speed = V.len(rel);
     if (speed < 1e-9) return ZERO_ACC;
-    var k = 0.5 * rho * speed * (ship.dragArea || DEFAULT_DRAG_AREA) /
+    var k = 0.5 * rho * speed * (ship.dragArea || DEFAULT_DRAG_AREA) * DRAG_SCALE /
             Math.max(ship.mass || 1, 1e-6);
     return { x: -rel.x * k, y: -rel.y * k, z: -rel.z * k };
   }
 
   var ZERO_ACC = { x: 0, y: 0, z: 0 };
   var DEFAULT_DRAG_AREA = 14;      // Cd*A, m^2 — a small ship, blunt side on
+  /* THE ONE KNOB ON HOW HARD AIR BITES (2026-10-19). Astra, after the G
+   * meter showed a coast through thick air at 2 km/s pulling 17 G: "make
+   * the air drag less brutal on the ship". dragArea is Cd·A with Cd taken
+   * as 1 — a brick. A quarter of that is a hull with a drag coefficient a
+   * streamlined body actually has, so this is the honest place to turn it
+   * rather than the area (which the gear factor and the laden/empty test
+   * lean on) or the density (which the heat model and the HUD read).
+   * Every drag relationship the tests pin is a ratio, and survives it.
+   *
+   * What it changes in play: air bleeds speed a quarter as fast, so a
+   * scoop pass is survivable at depth, and an aerobrake takes longer or
+   * goes deeper. Heat is untouched — it reads density and speed, not drag. */
+  var DRAG_SCALE = 0.25;
+
+  /* ---- felt acceleration (the G meter) ---------------------------------
+   *
+   * What the crew feels, which is what a fighter's G meter shows: every
+   * force on the hull EXCEPT gravity, because gravity pulls the pilot and
+   * the seat equally and so cannot be felt. Coasting in orbit is 0 G however
+   * hard the planet is pulling; a burn is the burn; air is the drag.
+   * Returned in km/s^2; divide by G0 for G.
+   *
+   * Docked, the deck holds you at one standard G, everywhere. Astra,
+   * 2026-10-19: pads and common areas have "clarke-tech artificial gravity
+   * generators ... just to make design easier." So a berth on a spinning
+   * ring, a clamp on a station that does not spin, and a pad on a moon you
+   * could jump off all read 1.0, pressing up off the deck you are sitting
+   * on. What the world's own gravity does under that is the generator's
+   * problem, not the pilot's.
+   *
+   * (An earlier version derived the real thing — the berth's acceleration
+   * against free fall — and it was right to five places: a small moon's pad
+   * read 0.036 G and a non-spinning station 0. Right and not the game.) */
+  var DECK_G = 1;
+  function feltAccel(ship, sys, t) {
+    /* On the arrival rail too, once past its lead-in: the lift and the
+     * traverser run through the same pressurised bays as the berth. The
+     * lead-in is the hull still being drawn in from outside, where there
+     * is no deck under it and nothing to feel. */
+    var arr = ship.arrival;
+    var onDeck = !!ship.docked ||
+                 !!(arr && t - arr.at >= (arr.lead || 0));
+    if (onDeck) {
+      var target = sys.byId[ship.docked || arr.port];
+      if (!target) return ZERO_ACC;
+      var up = null;
+      var off = ship.dockOffset;
+      var bs = berthState(target, sys, t, ship.docked ? off && off.berth : arr.berth);
+      if (bs && bs.basis && bs.basis.up) up = bs.basis.up;
+      else {
+        var host = target.surface && target.parentBody ? target.parentBody : null;
+        var away = host ? V.sub(ship.pos, bodyPosition(host, sys, t)) : null;
+        up = away && V.len(away) > 1e-9 ? V.norm(away) : localVertical(ship.pos, sys, t).up;
+      }
+      return V.scale(up, DECK_G * G0);
+    }
+    var th = ship.thrust || ZERO_ACC;
+    var atmo = ship.noDrag ? null : atmosphereContext(ship.pos, sys, t);
+    var dr = dragAccel(ship.pos, ship.vel, atmo, ship);
+    return { x: th.x + dr.x, y: th.y + dr.y, z: th.z + dr.z };
+  }
 
   function stepShip(ship, sys, t, dt) {
     var p0 = ship.pos, v0 = ship.vel, th = ship.thrust;
@@ -3945,6 +4073,63 @@
     { id: 'admit', dur: 2.5, apron: 1, inner: 0, lift: 1, bay: 0 }
   ];
 
+  /* THROUGH A HEAVY BAY TO A SMALL ONE (2026-10-17). Astra: "passing
+   * internal elevator shafts in ring station; the ship passes thru the wall
+   * instead of waiting for doors to open and then sitting on the elevator
+   * pad."
+   *
+   * The five-leg table above ran the whole route through the hull in its
+   * `enter` leg, so the hull crossed the heavy bay's INNER gate before
+   * `admit` had opened it — and the converter's route, string-pulled to
+   * one corner, ran diagonally from the L stand to the bottom of the ring's
+   * lift, through the shaft wall rather than down the shaft.
+   *
+   * So a routed arrival is an airlock cycle followed by a ride: in to the
+   * heavy bay's stand, the outer doors close behind, THEN the inner gate
+   * opens, then straight down the lift onto its pad (where there is one —
+   * see liftRide), a beat at rest on the pad, then across to the bay. The
+   * inner gate shuts overhead as the transfer starts. A departure is this
+   * table run backwards, so the gate opens before the hull rises into it.
+   *
+   * The first three legs are the five-leg table's, unchanged, so the door
+   * choreography and ORBITAL_ENCLOSED_FROM mean the same thing in both. */
+  /* THE CAR RIDES WITH THE SHIP (2026-10-17). Astra: "we need the car to
+   * ride with the ship." The ring's heavy bay is a vertical well: the stand
+   * is just inside the outer doors, and the lift platform waits at the
+   * bottom of the well, flush in the floor hatch. So after the airlock the
+   * hull sinks down the well onto the platform (`board`), and the platform
+   * carries it down the shaft (`lift`) — the two offsets come from the same
+   * eased number, so the hull cannot drift off the pad. Where a model has
+   * no car under its heavy bay, board/lift/pad are zero-length.
+   * See liftRide and carAt. */
+  var ORBITAL_ROUTED_LEGS = [
+    { id: 'lineup',   dur: 3.0, apron: 1, inner: 1, lift: 1, bay: 1 },
+    { id: 'open',     dur: 2.5, apron: 0, inner: 1, lift: 1, bay: 0 },
+    { id: 'enter',    dur: 5.0, apron: 0, inner: 1, lift: 1, bay: 0 },
+    { id: 'settle',   dur: 2.5, apron: 1, inner: 1, lift: 1, bay: 0 },
+    { id: 'admit',    dur: 2.5, apron: 1, inner: 0, lift: 1, bay: 0 },
+    { id: 'board',    dur: 6.0, apron: 1, inner: 0, lift: 1, bay: 0 },
+    { id: 'lift',     dur: 6.0, apron: 1, inner: 0, lift: 1, bay: 0 },
+    { id: 'pad',      dur: 1.5, apron: 1, inner: 0, lift: 1, bay: 0 },
+    { id: 'transfer', dur: 8.0, apron: 1, inner: 1, lift: 1, bay: 0 }
+  ];
+  /* Leg indices the rest of the rail reads by number. Slot k is where leg k
+   * starts, so the path has one more slot than the table has legs. */
+  var ROUTED_BOARD_LEG = 5, ROUTED_LIFT_LEG = 6, ROUTED_TRANSFER_LEG = 8;
+
+  /* Where the car is, 0 at the top of its travel (where it was modelled)
+   * and 1 at the bottom, at this point in a routed arrival. It waits at the
+   * top until the hull has boarded, rides down WITH it, and once the hull
+   * is halfway along the spoke — clear of the shaft — goes back up empty,
+   * so it is home when the rail ends. A departure is this run backwards:
+   * the empty car comes down to meet the hull, and carries it up. */
+  function carAt(leg, u) {
+    if (leg < ROUTED_LIFT_LEG) return 0;
+    if (leg === ROUTED_LIFT_LEG) return u;
+    if (leg < ROUTED_TRANSFER_LEG) return 1;
+    return u < 0.5 ? 1 : 1 - ease((u - 0.5) * 2);
+  }
+
   /* `enter` is the leg that crosses the door plane. */
   var ORBITAL_ENCLOSED_FROM = 2;
 
@@ -4014,20 +4199,26 @@
   var THREAD_SPEED = 0.04;        // km/s, the leg from the gate to the stand
   var RUN_IN_DUR = [3.0, 12.0];   // seconds, floor and ceiling
   var THREAD_DUR = [5.0, 20.0];
-  /* A route on through the hull to a small bay is a journey, not a threshold:
-   * it gets a minute before the speed is allowed to rise. */
-  var THREAD_ROUTE_DUR = [8.0, 60.0];
   var LEGS_CACHE = {};
+
+  /* The lift is slower than a hull threading a throat — it is a platform
+   * with a ship on it — and the transfer across the spoke deck is a
+   * journey but no longer the whole route through the hull. */
+  var LIFT_SPEED = 0.025;          // km/s
+  var LIFT_DUR = [4.0, 20.0];
+  var TRANSFER_DUR = [5.0, 40.0];
 
   function scaledLegs(port, berth) {
     var path = orbitalPath(port, berth || 0);
     if (!path || path.length < 5) return ORBITAL_LEGS;
+    var routed = path.length === ORBITAL_ROUTED_LEGS.length + 1;
+    var TABLE = routed ? ORBITAL_ROUTED_LEGS : ORBITAL_LEGS;
     var r = port.radius || 1;
     var span = function (a, b) {
-      /* The enter leg of a route through a heavy bay is its corners, not
-       * the chord from the L gate to a stand on the far side of the hull. */
-      var pts = (a === 2 && b === 3 && path.through)
-        ? [path[2]].concat(path.through, [path[3]]) : [path[a], path[b]];
+      /* The transfer leg of a route through a heavy bay is its corners,
+       * not the chord from the lift's foot to a stand across the hull. */
+      var pts = (routed && a === ROUTED_TRANSFER_LEG && path.through)
+        ? [path[a]].concat(path.through, [path[b]]) : [path[a], path[b]];
       var s = 0;
       for (var q = 1; q < pts.length; q++) {
         var dx = pts[q].x - pts[q - 1].x, dy = pts[q].y - pts[q - 1].y,
@@ -4040,12 +4231,24 @@
       return Math.max(lim[0], Math.min(lim[1], km / speed));
     };
     var out = [];
-    var phases = routePhases(path, r);
-    for (var i = 0; i < ORBITAL_LEGS.length; i++) {
-      var L = ORBITAL_LEGS[i], dur = L.dur;
+    /* A heavy bay with no car under it (every routed model but the ring)
+     * has nothing to board, ride or sit on: those legs take no time at
+     * all, rather than idling a hull at the L stand. */
+    var B = ROUTED_BOARD_LEG, LL = ROUTED_LIFT_LEG, T = ROUTED_TRANSFER_LEG;
+    var boardKm = routed ? span(B, B + 1) : 0;
+    var liftKm = routed ? span(LL, LL + 1) : 0;
+    /* A lift the route rides THROUGH the hull, rather than the car under
+     * the heavy bay: the transfer leg stops on it, rides it, gets off. */
+    var phases = routed ? routePhases(path, r) : null;
+    for (var i = 0; i < TABLE.length; i++) {
+      var L = TABLE[i], dur = L.dur;
       if (L.id === 'lineup') dur = fit(span(0, 1), RUN_IN_SPEED, RUN_IN_DUR);
-      else if (L.id === 'enter' && phases) dur = phases.total;
-      else if (L.id === 'enter') dur = fit(span(2, 3), THREAD_SPEED, path.through ? THREAD_ROUTE_DUR : THREAD_DUR);
+      else if (L.id === 'enter') dur = fit(span(2, 3), THREAD_SPEED, THREAD_DUR);
+      else if (L.id === 'board') dur = boardKm > 1e-6 ? fit(boardKm, THREAD_SPEED, THREAD_DUR) : 0;
+      else if (L.id === 'lift') dur = liftKm > 1e-6 ? fit(liftKm, LIFT_SPEED, LIFT_DUR) : 0;
+      else if (L.id === 'pad') dur = liftKm > 1e-6 ? L.dur : 0;
+      else if (L.id === 'transfer' && phases) dur = phases.total;
+      else if (L.id === 'transfer') dur = fit(span(T, T + 1), THREAD_SPEED, TRANSFER_DUR);
       if (dur === L.dur) { out.push(L); continue; }
       /* A COPY, never a mutation of the table — ORBITAL_LEGS is shared by
        * every station in the galaxy, and editing it in place would give the
@@ -4060,11 +4263,17 @@
    * traverse their paths before continuing. The most efficient path is not
    * the one we want to see here."
    *
-   * A route that takes a lift is walked in three phases rather than one
-   * glide: DRIVE to the car (on the corners, to rest on it), RIDE - settle,
-   * the car runs its whole shaft with the hull on it, settle - and DRIVE
-   * off to the stand. Each phase starts and ends at rest. Returns null for
-   * a route with no ride, which keeps its old single glide.
+   * A route that takes a lift inside the hull (the converter's route.ride:
+   * a cargo elevator between decks, not the ring's car under its heavy bay,
+   * which has legs of its own) is walked in three phases on the transfer
+   * leg rather than one glide: DRIVE to the car, RIDE - settle, the car
+   * runs its whole shaft with the hull on it, settle - and DRIVE off to the
+   * stand. Each phase starts and ends at rest. Null for a route with no
+   * ride, which keeps the single glide.
+   *
+   * Carried across the 2026-10-25 merge onto the restored car legs: the
+   * walked polyline is the transfer leg's, [path[T]].concat(through,
+   * [path[T + 1]]), and path.rideAt indexes it.
    *
    * The car's own speed is a lift's, not a hull's: the run is timed to
    * take RIDE_DUR seconds clamped, because a two-kilometre shaft at
@@ -4074,8 +4283,10 @@
   var RIDE_SETTLE = 2.0;           // s at each end: latch, then release
   var DRIVE_DUR = [2.0, 30.0];     // s, each drive phase
   function routePhases(path, r) {
-    if (!path || !path.through || !(path.rideAt >= 1)) return null;
-    var pl = [path[2]].concat(path.through, [path[3]]);
+    if (!path || !path.through || !(path.rideAt >= 1) || path.car) return null;
+    var T = ROUTED_TRANSFER_LEG;
+    if (path.length !== ORBITAL_ROUTED_LEGS.length + 1) return null;
+    var pl = [path[T]].concat(path.through, [path[T + 1]]);
     var k = path.rideAt;
     if (k + 1 >= pl.length) return null;
     function len(i0, i1) {
@@ -4095,7 +4306,7 @@
   }
 
   /* Where along the walked polyline the hull is, `t` seconds into the
-   * enter leg of a riding route. */
+   * transfer leg of a riding route. */
   function ridePoint(ph, t) {
     var pl = ph.pl, k = ph.k;
     function walk(i0, i1, u) {
@@ -4114,16 +4325,22 @@
     return { loc: walk(k + 1, pl.length - 1, ease(Math.min(1, t / ph.d2))), phase: 'drive' };
   }
 
-  /* Per berth where a berth has its own route in; per port otherwise, which
-   * is what it always was (berth 0's path sets the timings). */
+  /* The leg table for this berth, with its timings fitted to the berth's
+   * own path. */
   function legsFor(port, berth) {
     if (!port || port.surface) return ARRIVAL_LEGS;
-    var Gen = global.Gen;
-    var routed = berth && Gen && Gen.berthRoute && Gen.berthRoute(port, berth);
-    var b = routed ? berth : 0;
+    /* PER BERTH, ALWAYS (2026-10-17). This used to key every unrouted
+     * berth on berth 0's path — harmless while every orbital table had
+     * five legs, and a crash once a routed one had eight: on a ring, berth
+     * 0 IS a routed small bay, so the heavy bay was handed the eight-leg
+     * table with its own five-slot path and read off the end of it. The
+     * model id is in the key too, because a port's model can be swapped
+     * under it (the hull viewer, and every test that sweeps the models). */
+    var b = berth || 0;
     var key = port.id;
     if (key === undefined || key === null) return scaledLegs(port, b);
-    key = key + '#' + b;
+    var R = global.Render;
+    key = key + '#' + b + '@' + ((R && R.portModelFor) ? R.portModelFor(port) : '');
     if (LEGS_CACHE[key]) return LEGS_CACHE[key];
     LEGS_CACHE[key] = scaledLegs(port, b);
     return LEGS_CACHE[key];
@@ -4211,6 +4428,51 @@
     ];
   }
 
+  /* THE CAR UNDER A HEAVY BAY, and where a hull stands on it at either end
+   * of its travel — or null when the bay has none.
+   *
+   * The converter writes every node the art declares as a moving lift
+   * (`extras.motion`, kind 'lift') as a `car`: its box at the position it
+   * was modelled, and `d`, the run to the far end of its travel, both in
+   * the model's normalised frame — the same frame the berths and route
+   * corners are in. The ring's `ringLiftPlatform` sits at the bottom of the
+   * heavy bay's well, flush in the floor hatch, and runs down to the spoke
+   * decks. A car is THIS bay's when its footprint holds the L stand and its
+   * travel is downward.
+   *
+   * A hull stands on it the way it stands on any deck: `standoff` above
+   * the surface, which is how every stand in the game is set. So `top` is
+   * where the hull boards and `foot` where it rolls off, exactly `d` apart,
+   * which is what lets the renderer move the car by `d * f` and the hull
+   * by the same f and have them stay together.
+   *
+   * Read from the PortLib index entry, not libPort: cars are metadata, and
+   * asking for them must not fetch a model's triangles. */
+  function liftRide(port, Ls) {
+    var R = global.Render, Gen = global.Gen;
+    var id = (R && R.portModelFor) ? R.portModelFor(port) : null;
+    var lib = id && global.PortLib ? global.PortLib[id] : null;
+    var cs = lib && lib.cars;
+    if (!cs || !Ls) return null;
+    var TOL = 0.01;
+    var g = Gen && Gen.bayGeometry ? Gen.bayGeometry(port) : null;
+    var ride = (g && g.standoff) || 0;
+    for (var i = 0; i < cs.length; i++) {
+      var c = cs[i];
+      if (!c || !c.min || !c.max || !c.d || !(c.d[2] < 0)) continue;
+      if (Ls.x < c.min[0] - TOL || Ls.x > c.max[0] + TOL ||
+          Ls.y < c.min[1] - TOL || Ls.y > c.max[1] + TOL) continue;
+      if (!(Ls.z > c.max[2])) continue;            // the stand is above it
+      var top = { x: Ls.x, y: Ls.y, z: c.max[2] + ride };
+      return {
+        node: c.node,
+        top: top,
+        foot: { x: top.x + c.d[0], y: top.y + c.d[1], z: top.z + c.d[2] }
+      };
+    }
+    return null;
+  }
+
   /* The station's, in the same frame and the same five slots.
    *
    * THE MODELLED ROUTE is a straight line along the berth's own normal:
@@ -4235,29 +4497,55 @@
     /* IN THROUGH THE HEAVY BAY (2026-09-24). Astra: an S/M ship "is able
      * to path all the way through to the S or M bay from the L bay
      * entrances". Where the art has that route (Gen.berthRoute), the hold,
-     * the doors and the run-in are the L berth's, and the `enter` leg does
-     * not stop at the L stand: it carries on along the route's corners to
-     * this berth's stand. Same five slots, so the leg table, the gates and
-     * every reader of the path are unchanged; the corners ride along as
-     * `through`, which arrivalPose walks when it is present. */
+     * the doors and the run-in are the L berth's. Since 2026-10-17 the
+     * hull then STOPS at the L stand for the airlock to cycle, and rides on
+     * from there (ORBITAL_ROUTED_LEGS) — it used to carry straight on
+     * through a gate that had not opened yet. */
     var route = Gen.berthRoute ? Gen.berthRoute(port, berth || 0) : null;
     if (route) {
       var outer = orbitalPath(port, route.entry);
       if (outer && outer.length === 5) {
+        /* Ten slots for ORBITAL_ROUTED_LEGS' nine legs (leg k runs slot k
+         * to slot k+1): hold, gate, gate; the L stand three times (arrive,
+         * outer doors shut, hatch open); onto the car; the car's foot
+         * twice (ridden down, sat on); and this berth's stand. The route's
+         * corners ride along as `through` for the transfer leg. */
         var stand = { x: off.x, y: off.y, z: z };
-        var thru = [outer[3]];
+        var Ls = outer[3];
+        var thru = [];
         for (var vi = 0; vi < route.via.length; vi++) {
           thru.push({ x: route.via[vi][0], y: route.via[vi][1], z: route.via[vi][2] });
         }
-        var p5 = [outer[0], outer[1], outer[2], stand, stand];
-        p5.through = thru;
-        p5.entry = route.entry;
-        /* THE RIDE, where the route takes a lift (see routePhases): its
-         * boarding corner as an index into the walked polyline
-         * [path[2]].concat(through, [stand]) - through[0] is the L stand,
-         * so via index i sits at polyline index i + 2. */
-        p5.rideAt = (route.ride && typeof route.ride[0] === 'number') ? route.ride[0] + 2 : -1;
-        return p5;
+        var ride = liftRide(port, Ls);
+        var top = ride ? ride.top : Ls, foot = ride ? ride.foot : Ls;
+        /* Off the car the hull ROLLS along the spoke deck, so the route's
+         * corners are levelled onto the line from the car's foot to the
+         * stand. The converter's corner rides about 0.03 radii up in the
+         * spoke's air — a hundred-odd metres at the ring's size — which
+         * reads as the hull hopping off the platform and back down. */
+        if (ride && thru.length) {
+          var tot = 0, seg = [], prev = foot;
+          for (var ti = 0; ti <= thru.length; ti++) {
+            var nx = ti < thru.length ? thru[ti] : stand;
+            var l = Math.sqrt((nx.x - prev.x) * (nx.x - prev.x) + (nx.y - prev.y) * (nx.y - prev.y));
+            seg.push(l); tot += l; prev = nx;
+          }
+          var run = 0;
+          for (var tj = 0; tj < thru.length; tj++) {
+            run += seg[tj];
+            var k = tot > 1e-9 ? run / tot : 0;
+            thru[tj] = { x: thru[tj].x, y: thru[tj].y, z: foot.z + (stand.z - foot.z) * k };
+          }
+        }
+        var p10 = [outer[0], outer[1], outer[2], Ls, Ls, Ls, top, foot, foot, stand];
+        p10.through = thru;
+        p10.entry = route.entry;
+        if (ride) p10.car = ride.node;
+        /* A lift ridden on the way across (see routePhases): its boarding
+         * corner as an index into the transfer leg's polyline
+         * [foot].concat(through, [stand]), so via index i is polyline i + 1. */
+        p10.rideAt = (!ride && route.ride && typeof route.ride[0] === 'number') ? route.ride[0] + 1 : -1;
+        return p10;
       }
     }
 
@@ -4303,6 +4591,11 @@
     var Gen = global.Gen;
     var orbital = !!(port && !port.surface);
     var LEGS = legsFor(port, berth);
+    /* Every leg starts at its own slot. A table longer than the path is a
+     * stale cache or a mismatched model, and riding it would read off the
+     * end of the path — return no pose, which every caller already treats
+     * as "dock now" rather than as a crash. */
+    if (orbital && path.length < LEGS.length) return null;
 
     var leg = 0, acc = 0;
     while (leg < LEGS.length - 1 && el >= acc + LEGS[leg].dur) {
@@ -4318,12 +4611,13 @@
     /* On through the hull, when the berth is reached by way of a heavy bay:
      * the enter leg walks the route's corners, by length. */
     var surfTan = null, ridePhase = null;
-    var phs = (leg === 2 && orbital) ? routePhases(path, port.radius || 1) : null;
+    var phs = (leg === ROUTED_TRANSFER_LEG && orbital) ? routePhases(path, port.radius || 1) : null;
     if (phs) {
       /* Stop on the car, let it run, get off: see routePhases. */
       var rp = ridePoint(phs, Math.max(0, el - acc));
       loc = rp.loc; ridePhase = rp.phase;
-    } else if (leg === 2 && path.through && orbital) {
+    } else if (leg === ROUTED_TRANSFER_LEG && path.through && orbital &&
+        path.length === ORBITAL_ROUTED_LEGS.length + 1) {
       var pl = [a].concat(path.through, [b]);
       var got = alongRoute(pl.map(function (p) { return { e: p.x, n: p.y, u: p.z }; }), u);
       loc = { x: got.e, y: got.n, z: got.u };
@@ -4371,12 +4665,13 @@
        * carries a hull across a room and then onto a stand at right angles
        * to it. A station has no room to cross. */
       fwd = berthFacing(basis, Gen.berthOffset(port, berth || 0));
-      /* Through a heavy bay: nose out of the L bay while at its doors, then
-       * turned, over the run through the hull, to face out of the bay it is
-       * going to. The carrier turns it; nothing else in the rail does. */
-      if (typeof path.entry === 'number' && leg <= 2) {
+      /* Through a heavy bay: nose out of the L bay through the airlock and
+       * down the lift, then turned, over the transfer across the deck, to
+       * face out of the bay it is going to. The carrier turns it; nothing
+       * else in the rail does. */
+      if (typeof path.entry === 'number' && leg <= ROUTED_TRANSFER_LEG) {
         var fE = berthFacing(basis, Gen.berthOffset(port, path.entry));
-        var k2 = leg < 2 ? 0 : u;
+        var k2 = leg < ROUTED_TRANSFER_LEG ? 0 : u;
         var mixed = V.add(V.scale(fE, 1 - k2), V.scale(fwd, k2));
         if (V.len(mixed) < 1e-6) mixed = V.add(V.scale(fE, 1 - k2), V.scale(basis.up, 0.2));
         fwd = V.norm(mixed);
@@ -4415,12 +4710,16 @@
       pos: pos, vel: V.clone(basis.entrance.vel),
       fwd: fwd, up: V.norm(V.cross(right, fwd)), right: right,
       leg: leg, legId: L.id, u: u,
-      /* 'drive' | 'board' | 'ride' | 'alight' on a route that takes a
-       * lift; null otherwise. */
+      /* 'drive' | 'board' | 'ride' | 'alight' on a route that rides a lift
+       * on its way across (routePhases); null otherwise. */
       ride: ridePhase,
       /* The heavy bay this arrival comes in by, when it is not the berth's
        * own doors — the doors to run are that bay's (see stationDoors). */
       entry: typeof path.entry === 'number' ? path.entry : null,
+      /* The lift car this arrival rides, and where along its travel it is
+       * (0 top, 1 bottom) — the renderer draws the car there. Same leg and
+       * same eased u as the hull, so the two cannot part company. */
+      car: path.car ? { node: path.car, f: carAt(leg, u) } : null,
       enclosed: leg >= enclosedFrom(port),
       /* The mechanism poses, 0 open and 1 sealed, matching the model's own
        * setApronDoors/setInnerGate/setLift/setBayGates. Interpolated within
@@ -5111,8 +5410,13 @@
     var vrel = V.sub(ship.vel, bodyVelocity(dom, sys, t));
     var el = K.elementsFromState(rel, vrel, dom.mu);
     if (!el.closed || !isFinite(el.period)) return null;
+    var halves = K.samplePathSplit(el, segments || 240, rel);
     return {
       points: K.samplePath(el, segments || 240),
+      /* The same loop in two halves at the ship, for drawing: what you are
+       * about to fly, solid, and what you have just flown, dotted. */
+      ahead: halves.ahead,
+      behind: halves.behind,
       impact: null,
       reference: dom,
       horizon: el.period,
@@ -5820,6 +6124,12 @@
     localVertical: localVertical,
     relativeToShipFrame: relativeToShipFrame,
     attitudeAngles: attitudeAngles,
+    bodyPole: bodyPole,
+    headingAngles: headingAngles,
+    feltAccel: feltAccel,
+    DRAG_SCALE: DRAG_SCALE,
+    airDensityAt: airDensity,
+    G0: G0,
     makeShip: makeShip,
     integrateAttitude: integrateAttitude,
     stepShip: stepShip,

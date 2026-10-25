@@ -18,12 +18,15 @@
     "icon": "node tools/make-icon.js",
     "serve": "node tools/serve.js",
     "lint": "node tools/lint-globals.js",
-    "test": "node tools/lint-globals.js && node test/physics.test.js && node test/render.test.js && node test/cockpit.test.js && node test/economy.test.js && node test/nodes.test.js && node test/ships.test.js && node test/berths.test.js && node test/galaxy.test.js && node test/weather.test.js && node test/crew.test.js && node test/fleet.test.js && node test/analysers.test.js && node test/rescue.test.js && node test/combat.test.js && node test/arcs.test.js && node test/syndicate-fleet.test.js && node test/milfuel.test.js && node test/holdings.test.js && node test/slipspace.test.js && node test/shiptrade.test.js && node test/release.test.js && node test/captains.test.js && node test/rings.test.js && node test/greebles.test.js && node test/survey.test.js && node test/claims.test.js && node test/mining.test.js",
-    "dist": "npm run icon && electron-builder --win --linux",
-    "dist:win": "npm run icon && electron-builder --win",
-    "dist:linux": "npm run icon && electron-builder --linux"
+    "test": "node tools/lint-globals.js && node test/physics.test.js && node test/render.test.js && node test/cockpit.test.js && node test/economy.test.js && node test/nodes.test.js && node test/ships.test.js && node test/berths.test.js && node test/galaxy.test.js && node test/weather.test.js && node test/crew.test.js && node test/fleet.test.js && node test/analysers.test.js && node test/rescue.test.js && node test/combat.test.js && node test/arcs.test.js && node test/syndicate-fleet.test.js && node test/milfuel.test.js && node test/holdings.test.js && node test/slipspace.test.js && node test/shiptrade.test.js && node test/rings.test.js && node test/captains.test.js && node test/captain-stories.test.js && node test/messages.test.js && node test/favours.test.js && node test/rumours.test.js && node test/shipyard.test.js && node test/greebles.test.js && node test/release.test.js && node test/survey.test.js && node test/claims.test.js && node test/mining.test.js && node test/construction.test.js && node test/walk.test.js && node test/shipdeck.test.js && node test/tear.test.js && node test/npc.test.js",
+    "models": "node tools/fetch-models.mjs",
+    "bench:reader": "node tools/bench-reader.mjs",
+    "dist": "npm run icon && npm run models && electron-builder --win --linux",
+    "dist:win": "npm run icon && npm run models && electron-builder --win",
+    "dist:linux": "npm run icon && npm run models && electron-builder --linux"
   },
   "devDependencies": {
+    "@huggingface/transformers": "^3.8.1",
     "electron": "^38.0.0",
     "electron-builder": "^26.0.0"
   },
@@ -41,13 +44,25 @@
       "index.html",
       "src/**/*",
       "electron/**/*",
+      "vendor/transformers/**/*",
+      "lang/Xenova/all-MiniLM-L12-v2/**/*",
       "README.md",
       "FLIGHT-CARD.md"
     ],
     "win": {
       "target": [
-        { "target": "portable", "arch": ["x64"] },
-        { "target": "nsis", "arch": ["x64"] }
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "portable": {
@@ -62,7 +77,12 @@
     },
     "linux": {
       "target": [
-        { "target": "tar.gz", "arch": ["x64"] }
+        {
+          "target": "tar.gz",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "category": "Game",
       "synopsis": "Gravity, clockwork, cockpit and cargo.",

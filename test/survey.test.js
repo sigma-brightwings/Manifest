@@ -100,10 +100,17 @@ check('a giant\'s refinery sits on hydrogen worth skimming', refs > 0 && refAgre
 console.log('--- the ground track ---');
 var LVL = 1;
 global.Combat = { surveyLevel: function () { return LVL; } };
-var sys = systems.filter(function (x) {
-  return x.bodies.some(function (b) { return b.kind === 'planet' && b.type === 'rocky'; });
-})[0];
-var world = sys.bodies.filter(function (b) { return b.kind === 'planet' && b.type === 'rocky'; })[0];
+/* A world that TURNS under the orbit. Since the twilight worlds (2026-10-19,
+ * merged here 2026-10-25) a close-in rock can be tidally locked - its day
+ * as long as its year - and a polar orbit over a world that does not turn
+ * maps one great circle's strip however long you fly it, which is right
+ * and is not what these checks are about. */
+function turning(b) {
+  return b.kind === 'planet' && b.type === 'rocky' &&
+         !(b.rotation && b.rotation.period > 3 * 86400);
+}
+var sys = systems.filter(function (x) { return x.bodies.some(turning); })[0];
+var world = sys.bodies.filter(turning)[0];
 function flyOrbit(inclDeg, totalSec, dt, G0, t0, rMul) {
   var G = G0 || { here: { id: 'test' }, ship: { pos: null, vel: null }, surveys: {} };
   t0 = t0 || 0;

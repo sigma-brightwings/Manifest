@@ -117,6 +117,7 @@
     'uniform float uIce;',        // how far the caps reach, 0 = none
     'uniform float uSeed;',
     'uniform float uBanded;',     // 1 = gas/ice giant: latitude bands, not terrain
+    'uniform float uBand;',       // twilight world: 1 = terminator ring, 2 = equator band
     /* THE WORLD'S OWN SPIN, not a made-up one.
      *
      * This used to be a single `uSpin` that scrolled at a fixed rate about
@@ -407,10 +408,50 @@
      * makes the water look like more ground in a different colour. */
     '  base *= mix(0.82 + 0.34 * elev, 1.0, sea);',
 
-    /* Ice caps. Latitude comes off the world's spin axis, which is +y here,
-     * roughened slightly by the elevation field so the cap edge is ragged
-     * rather than a drawn circle. */
-    '  if (uIce > 0.001) {',
+    /* TWILIGHT WORLDS. Painted before the caps so the caps can stand down.
+     *
+     * A locked world (uBand 1) is zoned by the REAL sun angle, not by a
+     * body-fixed longitude: its day face is where ndl is high, by
+     * construction, so this is the same thing and needs no phase. Baked
+     * rock where the star stands overhead, ice where it never rises, and
+     * the world's own colours — its seas, its land — only in the ring.
+     *
+     * A world on its side (uBand 2) is zoned by latitude: whichever pole
+     * is turned to the star this season is scorched, the other frozen,
+     * and the equator keeps the world's own colours. Which pole is which
+     * swaps over the year, as it should. */
+    /* Bleached salt-pan pale for the baked side, so it reads as burnt
+     * even on a world whose own colour is already desert tan; and the
+     * living strip carries a little green, so a desert ring world looks
+     * like somewhere things grow rather than more of the same sand. */
+    '  vec3 scorch = vec3(0.92, 0.82, 0.64) * (0.86 + 0.22 * elev);',
+    '  vec3 frost = vec3(0.86, 0.91, 0.97);',
+    '  vec3 verdure = vec3(0.30, 0.46, 0.24) * (0.80 + 0.40 * elev);',
+    '  if (uBand > 0.5 && uBand < 1.5) {',
+    '    float jag = (elev - 0.5) * 0.16;',
+    /* The ring sits a little sunward of the geometric terminator — the
+     * star low but up, which is where the warmth is and also where the
+     * shading term below leaves it visible. Centred on ndl 0 it was
+     * almost all in the dark and read as nothing at all. */
+    '    float dayside = smoothstep(0.40, 0.64, ndl + jag);',
+    '    float nightside = 1.0 - smoothstep(-0.34, -0.10, ndl + jag);',
+    '    float living = (1.0 - dayside) * (1.0 - nightside);',
+    '    base = mix(base, verdure, 0.55 * living * (1.0 - sea));',
+    '    base = mix(base, scorch, dayside);',
+    '    base = mix(base, frost, nightside);',
+    '  } else if (uBand > 1.5) {',
+    '    float blat = dot(n, uSpinAxis);',
+    '    float jag2 = (elev - 0.5) * 0.12;',
+    '    float polar = smoothstep(0.34, 0.58, abs(blat) + jag2);',
+    '    float facing = smoothstep(-0.15, 0.15, sign(blat) * dot(uSpinAxis, uSunDir));',
+    '    base = mix(base, verdure, 0.55 * (1.0 - polar) * (1.0 - sea));',
+    '    base = mix(base, mix(frost, scorch, facing), polar);',
+    '  }',
+    /* Ice caps. Latitude comes off the world's spin axis, roughened
+     * slightly by the elevation field so the cap edge is ragged rather
+     * than a drawn circle. Not on a twilight world: a locked world's poles
+     * sit IN the living ring, and a tipped world's poles are done above. */
+    '  if (uIce > 0.001 && uBand < 0.5) {',
     /* On the real poles now, which is also where the generator has been
      * putting the cold all along. */
     '    float lat = abs(dot(n, uSpinAxis));',
@@ -554,7 +595,10 @@
      * offset, evaluate the PREVIOUS slot as well so a late stroke is not
      * guillotined at the boundary, and modulate each cell's firing
      * threshold with four slow co-prime rhythms so storms burst and then go
-     * quiet instead of ticking over at a flat rate. */
+     * quiet instead of ticking over at a flat rate.
+     *
+     * (Restored 2026-10-19: the 10-17 branch merge took the other side's
+     * copy of this block and the old one-slot strobe came back with it.) */
     '    if (storm > 0.03 && uFlashGain > 0.0) {',
     /* The patch one stroke lights: about a twelfth of the world across,
      * which is enormous for a thunderstorm and the smallest thing worth
@@ -667,6 +711,226 @@
     });
   })(FRAG_BODY);
 
+  /* ---- TORN SPACE BENDS LIGHT (2026-10-21) ------------------------------
+   *
+   * A slipspace tear is a hole punched through spacetime into whatever
+   * holds it up, and the space around a hole like that is curved: what is
+   * behind it is lensed. Astra chose this over a tachyon glow after seeing
+   * a mockup — stars sliding round a point where nothing glows sells "space
+   * is torn here" better than any brightness could, because it moves as
+   * you fly.
+   *
+   * Up to four tears a frame (GL.setTears), each a direction from the eye
+   * and an Einstein angle. The point-mass lens equation, beta = theta -
+   * E^2/theta, in both directions:
+   *   - tearBend takes a VIEW ray to the direction its light came from.
+   *     Planets are ray-cast per pixel, so they bend for free this way.
+   *   - stars are points with known directions, so they map forward: each
+   *     star's primary image moves out, and a second pass draws the faint
+   *     second image on the far side of the tear (VERT_STARS, uImage).
+   * Render.lensImages is this arithmetic in JS, and test/tear.test.js pins
+   * it; change one, change the other.
+   *
+   * And the shift: what is seen through the space round a departure is
+   * reddened, round an arrival blued, strongest near the tear. Same
+   * numbers as the mockup Astra signed off. Ships and stations have no
+   * per-pixel ray, so they take the lens per VERTEX instead (tearPush in
+   * VERT_MESH): each corner moves to where its image is seen. A coarse
+   * hull bends as straight-edged facets, which at the size a tear is on
+   * screen is not visible. */
+  /* ONLY WHAT IS BEHIND A TEAR BENDS (2026-10-21, second pass). Each tear
+   * carries its distance (uTearK.z, km), and everything here takes the
+   * distance of the thing being drawn: a planet or a station nearer than
+   * the tear is in front of it and is left alone, with a short blend
+   * across the tear's own distance so nothing snaps. Stars pass a huge
+   * distance: always behind. */
+  var TEAR_GLSL = [
+    'uniform vec4 uTear[4];',    // xyz: unit direction from the eye; w: Einstein angle, rad
+    'uniform vec4 uTearK[4];',   // x: 0 departure, 1 arrival; y: how open; z: distance, km
+    'uniform int uTearN;',
+    'float tearBehind(int i, float dist) {',
+    '  float z = uTearK[i].z;',
+    '  return z <= 0.0 ? 1.0 : smoothstep(z * 0.97, z * 1.03, dist);',
+    '}',
+    /* A view ray to where its light came from (planets: per pixel). */
+    'vec3 tearBend(vec3 d, float dist) {',
+    '  for (int i = 0; i < 4; i++) {',
+    '    if (i >= uTearN) break;',
+    '    float E = uTear[i].w; if (E <= 0.0) continue;',
+    '    float wb = tearBehind(i, dist); if (wb <= 0.0) continue;',
+    '    vec3 T = uTear[i].xyz; float c = dot(d, T);',
+    '    float th = acos(clamp(c, -1.0, 1.0));',
+    '    if (th < 1e-7 || th > E * 40.0) continue;',
+    '    vec3 p = normalize(d - T * c);',
+    '    float b = mix(th, th - E * E / th, wb);',
+    '    d = T * cos(b) + p * sin(b);',
+    '  }',
+    '  return d;',
+    '}',
+    /* A point to where its primary image is seen (stations and ships: per
+     * vertex). The forward half of the same lens; see VERT_STARS. */
+    'vec3 tearPush(vec3 d, float dist) {',
+    '  for (int i = 0; i < 4; i++) {',
+    '    if (i >= uTearN) break;',
+    '    float E = uTear[i].w; if (E <= 0.0) continue;',
+    '    float wb = tearBehind(i, dist); if (wb <= 0.0) continue;',
+    '    vec3 T = uTear[i].xyz; float c = dot(d, T);',
+    '    float b = acos(clamp(c, -1.0, 1.0));',
+    '    if (b < 1e-7 || b > E * 40.0) continue;',
+    '    vec3 p = normalize(d - T * c);',
+    '    float th = mix(b, 0.5 * (b + sqrt(b * b + 4.0 * E * E)), wb);',
+    '    d = T * cos(th) + p * sin(th);',
+    '  }',
+    '  return d;',
+    '}',
+    /* x: how red, y: how blue, for something seen in direction d */
+    'vec2 tearShift(vec3 d, float dist) {',
+    '  vec2 w = vec2(0.0);',
+    '  for (int i = 0; i < 4; i++) {',
+    '    if (i >= uTearN) break;',
+    '    float E = uTear[i].w; if (E <= 0.0) continue;',
+    '    float th = acos(clamp(dot(d, uTear[i].xyz), -1.0, 1.0));',
+    '    float rr = th / (E * 2.4);',
+    '    float k = exp(-rr * rr * 0.35) * min(1.0, uTearK[i].y * 1.5) * tearBehind(i, dist);',
+    '    if (uTearK[i].x > 0.5) w.y = max(w.y, k); else w.x = max(w.x, k);',
+    '  }',
+    '  return w;',
+    '}',
+    'vec3 dopplerTint(vec3 c, vec2 w) {',
+    '  vec3 red = vec3(c.r * 1.5 + c.g * 0.4, c.g * 0.45, c.b * 0.2);',
+    '  vec3 blu = vec3(c.r * 0.25, c.g * 0.7 + c.r * 0.2, c.b * 1.7 + c.g * 0.5);',
+    '  c = mix(c, red, w.x);',
+    '  return mix(c, blu, w.y);',
+    '}'
+  ].join('\n');
+
+  /* The planet shader takes the lens by bending its view ray before the
+   * sphere test, and takes the shift on whatever it finally drew. Done to
+   * the finished source so the body shader itself stays readable. */
+  FRAG_BODY = (function (src) {
+    var RAY = '+ uFwd   * uFlen);';
+    if (src.indexOf(RAY) < 0 || src.indexOf('void main() {') < 0) {
+      throw new Error('gl.js: body shader no longer has the hooks the tear lens needs');
+    }
+    src = src.replace('void main() {', TEAR_GLSL + '\nvoid shadeBody() {');
+    src = src.replace(RAY, RAY + '\n  rd = tearBend(rd, length(uCenterRel));');
+    return src + '\nvoid main() {\n' +
+      '  vec3 rd0 = normalize(uRight * (vPx.x - uScreenPx.x) + uUp * (uScreenPx.y - vPx.y) + uFwd * uFlen);\n' +
+      '  shadeBody();\n' +
+      '  if (uTearN > 0) frag.rgb = dopplerTint(frag.rgb, tearShift(rd0, length(uCenterRel)));\n' +
+      '}\n';
+  })(FRAG_BODY);
+
+  /* ---- THE TEAR ITSELF: cloud, veil and lips (2026-10-21) ---------------
+   *
+   * The mockup's look, in a screen-facing quad at the tear's own depth so a
+   * planet in front of it hides it. Everything is in screen pixels round
+   * the tear's centre, turned so y runs along the slit (main.js points it
+   * along the system's pole).
+   *   - a glow round the whole wound: red for a departure, blue for an
+   *     arrival, brighter than the 2D cloud it replaces;
+   *   - THE VEIL, a churning cloud filling the rip and the heart of the lens
+   *     so whatever lies behind the tear is never seen: dark and smouldering
+   *     for a departure, lit from inside — brighter than the space around
+   *     it — for an arrival;
+   *   - the lips of the rip, burning.
+   * Premultiplied: the glow adds light, the veil covers what is behind.
+   * The lightning is NOT here; it has its own program (VERT_BOLT). */
+  var VERT_TEAR = [
+    '#version 300 es',
+    'in vec2 aCorner;',
+    'uniform vec2 uCenterPx;',
+    'uniform float uQuadPx;',
+    'uniform vec2 uViewportPx;',
+    'uniform float uDepth;',          // encoded, 0..1
+    'out vec2 vLocal;',
+    'void main() {',
+    '  vLocal = aCorner * uQuadPx;',
+    '  vec2 px = uCenterPx + vLocal;',
+    '  gl_Position = vec4(px.x / uViewportPx.x * 2.0 - 1.0, 1.0 - px.y / uViewportPx.y * 2.0,',
+    '                     uDepth * 2.0 - 1.0, 1.0);',
+    '}'
+  ].join('\n');
+
+  var FRAG_TEAR = [
+    '#version 300 es',
+    'precision highp float;',
+    'in vec2 vLocal;',
+    'uniform vec2 uRoll;',            // the across-the-slit axis on screen
+    'uniform float uE, uW, uH;',      // Einstein radius, rip half-width, half-height: px
+    'uniform float uOpen, uGlow, uMode, uT;',
+    'out vec4 frag;',
+    'float h1(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }',
+    'float vn(vec3 p) { vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);',
+    '  return mix(mix(mix(h1(i), h1(i + vec3(1,0,0)), f.x), mix(h1(i + vec3(0,1,0)), h1(i + vec3(1,1,0)), f.x), f.y),',
+    '             mix(mix(h1(i + vec3(0,0,1)), h1(i + vec3(1,0,1)), f.x), mix(h1(i + vec3(0,1,1)), h1(i + vec3(1,1,1)), f.x), f.y), f.z); }',
+    'void main() {',
+    '  float x = dot(vLocal, uRoll), y = dot(vLocal, vec2(-uRoll.y, uRoll.x));',
+    '  float th = length(vLocal);',
+    '  float W = max(uW, 0.5), H = max(uH, 1.0);',
+    '  float jag = (vn(vec3(y / H * 4.0, uT * 0.3, 1.7)) - 0.5) * 1.2 + (vn(vec3(y / H * 11.0, uT * 0.6, 8.3)) - 0.5) * 0.45;',
+    '  float sx = (x - W * jag) / W, sy = y / H;',
+    /* the glow */
+    '  float rr = th / (uE * 2.4 + 2.0);',
+    '  vec3 cIn = mix(vec3(1.0, 0.22, 0.10), vec3(0.25, 0.45, 1.0), uMode);',
+    '  vec3 cHot = mix(vec3(1.0, 0.55, 0.30), vec3(0.65, 0.85, 1.0), uMode);',
+    '  vec3 glow = uGlow * (cIn * exp(-rr * rr) * (0.75 + 0.35 * uMode) + cHot * exp(-rr * rr * 4.0) * (0.5 + 0.25 * uMode));',
+    /* the veil */
+    /* The churn is measured in a capped width, so a rip gaping wider than
+     * the screen (the jump itself) still boils instead of streaking. */
+    '  float Wq = min(W, H * 0.25);',
+    '  vec3 q = vec3((x - Wq * jag) / Wq * 0.55, sy * 2.4, uT * 0.2);',
+    '  float n = vn(q * 2.0 + vec3(0.0, -uT * 0.45, 0.0)) * 0.55 + vn(q * 4.5 + vec3(uT * 0.7, 0.0, 0.0)) * 0.3 + vn(q * 10.0) * 0.15;',
+    '  float billow = (n - 0.5) * 0.9;',
+    '  float inside = smoothstep(1.7 + billow, 0.7, abs(sx)) * smoothstep(1.05 + billow * 0.3, 0.75, abs(sy));',
+    '  float core = smoothstep(0.75, 0.3, th / max(uE, 0.5));',
+    '  float occ = clamp(max(inside, core), 0.0, 1.0) * 0.97 * smoothstep(0.0, 0.08, uOpen);',
+    '  vec3 fogD = mix(vec3(0.22, 0.03, 0.05), vec3(1.25, 0.42, 0.18), smoothstep(0.3, 0.8, n)) + vec3(1.0, 0.75, 0.55) * pow(n, 6.0) * 1.6;',
+    '  vec3 fogA = mix(vec3(0.25, 0.4, 0.95), vec3(0.95, 1.1, 1.5), smoothstep(0.3, 0.85, n)) + vec3(0.9, 1.0, 1.2) * pow(n, 5.0) * 1.2;',
+    '  vec3 fog = mix(fogD, fogA, uMode);',
+    /* the lips */
+    '  vec3 lips = uGlow * mix(vec3(1.0, 0.6, 0.38), vec3(0.6, 0.8, 1.0), uMode) *',
+    '              exp(-pow((abs(sx) - 1.15) * 2.4, 2.0)) * smoothstep(1.0, 0.5, abs(sy)) * 1.1;',
+    '  vec3 rgb = glow * (1.0 - occ) + fog * occ + lips;',
+    '  frag = vec4(rgb, occ);',
+    '}'
+  ].join('\n');
+
+  /* ---- THE LIGHTNING (2026-10-21) ---------------------------------------
+   * Its own program, as Astra asked: the bolts are real forked polylines
+   * built on the CPU (Render.tearBolts), crossing the dark gap from the
+   * cloud on one side to the cloud on the other, and drawn here as
+   * feathered quads — a hot white core in a tinted halo — added on top of
+   * the tear at its depth. */
+  var VERT_BOLT = [
+    '#version 300 es',
+    'in vec2 aPx;',
+    'in vec4 aW;',                    // x: px across the stroke, y: core px, z: halo px, w: intensity
+    'uniform vec2 uViewportPx;',
+    'uniform float uDepth;',
+    'out vec4 vW;',
+    'void main() {',
+    '  vW = aW;',
+    '  gl_Position = vec4(aPx.x / uViewportPx.x * 2.0 - 1.0, 1.0 - aPx.y / uViewportPx.y * 2.0,',
+    '                     uDepth * 2.0 - 1.0, 1.0);',
+    '}'
+  ].join('\n');
+
+  var FRAG_BOLT = [
+    '#version 300 es',
+    'precision mediump float;',
+    'in vec4 vW;',
+    'uniform vec3 uTint;',
+    'out vec4 frag;',
+    'void main() {',
+    '  float d = abs(vW.x);',
+    '  float core = exp(-d * d / (vW.y * vW.y));',
+    '  float halo = exp(-d / vW.z) * (1.0 - smoothstep(vW.z * 2.2, vW.z * 3.0, d));',
+    '  vec3 c = mix(uTint, vec3(1.0), core * 0.8) * (core * 1.9 + halo * 0.55) * vW.w;',
+    '  frag = vec4(c, 0.0);',
+    '}'
+  ].join('\n');
+
   /* The starfield has to live down here too, and that is not an
    * optimisation — it is a correctness fix. The 2D canvas is now strictly an
    * overlay, so anything drawn on it appears IN FRONT of every planet. Left
@@ -677,26 +941,101 @@
    * Projected on the GPU from the same camera basis the CPU uses, so it
    * matches the 2D layer's framing exactly. Directions only: these are at
    * effective infinity and have no position. */
+  /* THE SKY AT SPEED (2026-10-19, the TNG red-blue rule; it replaced the
+   * 2026-10-17 relativistic sky). In cruise each star stays where it is
+   * and is washed blue-white in the forward half, red in the rear, with
+   * the flip in a narrow band at abeam; how strongly rides the speed on a
+   * log scale, 0.02c to 2000c. This is Render.cruiseSky line for
+   * line, and must stay so: change one, change the other. The JS one is
+   * what test/cruisesky.test.js pins (node cannot run a shader). It lives
+   * here because a star has to be BEHIND the planets, which only this
+   * layer can do.
+   * Below uBeta 0.02 nothing moves and every star is white, exactly as it
+   * always was. aMag.z is the star's own temperature (Render.starTemp). */
   var VERT_STARS = [
     '#version 300 es',
     'in vec3 aDir;',
-    'in vec2 aMag;',            // x = brightness, y = size in px
+    'in vec3 aMag;',            // x = brightness, y = size in px, z = temperature K
     'uniform vec3 uRight, uUp, uFwd;',
     'uniform float uFlen;',
     'uniform vec2 uCenterPx;',
     'uniform vec2 uViewportPx;',
+    'uniform vec3 uHead;',
+    'uniform float uBeta;',
     'out float vB;',
+    'out vec3 vCol;',
+    'vec3 k2rgb(float T) {',
+    '  float t = clamp(T, 1000.0, 40000.0) / 100.0; vec3 c;',
+    '  if (t <= 66.0) { c.r = 255.0; c.g = 99.47 * log(t) - 161.12;',
+    '    c.b = t <= 19.0 ? 0.0 : 138.52 * log(t - 10.0) - 305.04; }',
+    '  else { c.r = 329.7 * pow(t - 60.0, -0.1332); c.g = 288.12 * pow(t - 60.0, -0.0755); c.b = 255.0; }',
+    '  return clamp(c / 255.0, 0.0, 1.0);',
+    '}',
+    TEAR_GLSL,
+    'uniform float uImage;',     // 0: each star's primary image; 1: its second image, if a tear makes one
     'void main() {',
-    '  float depth = dot(aDir, uFwd);',
-    '  if (depth <= 1e-6) {',           // behind the camera: park it offscreen
+    '  vec3 dir = aDir; float bright = aMag.x, size = aMag.y; vCol = vec3(1.0);',
+    '  if (uBeta >= 0.02) {',
+    '    float ct = dot(aDir, uHead);',
+    '    float f = clamp(log(uBeta / 0.02) / log(2000.0 / 0.02), 0.0, 1.0);',
+    '    float s = clamp(f / 0.35, 0.0, 1.0); s = s * s * (3.0 - 2.0 * s);',
+    '    float ah = clamp((ct + 0.10) / 0.20, 0.0, 1.0); ah = ah * ah * (3.0 - 2.0 * ah);',
+    '    float lum = 1.0 + s * (0.6 * ah - 0.35 * (1.0 - ah));',
+    '    vec3 tint = mix(vec3(255.0, 84.0, 58.0), vec3(178.0, 212.0, 255.0), ah) / 255.0;',
+    '    vCol = mix(mix(vec3(1.0), k2rgb(aMag.z), s), tint, s * 0.8);',
+    '    bright *= lum;',
+    '    size *= 1.0 + 0.5 * s;',
+    '  }',
+    /* THE LENS, forward: a star at angle b from a tear is seen at
+     * (b + sqrt(b^2 + 4E^2)) / 2 on its own side, magnified, and faintly
+     * at (b - sqrt(b^2 + 4E^2)) / 2 — the far side. Render.lensImages. */
+    '  if (uTearN > 0) {',
+    '    if (uImage < 0.5) {',
+    '      for (int i = 0; i < 4; i++) {',
+    '        if (i >= uTearN) break;',
+    '        float E = uTear[i].w; if (E <= 0.0) continue;',
+    '        vec3 T = uTear[i].xyz; float c = dot(dir, T);',
+    '        float b = acos(clamp(c, -1.0, 1.0));',
+    '        if (b < 1e-7 || b > E * 40.0) continue;',
+    '        vec3 p = normalize(dir - T * c);',
+    '        float th = 0.5 * (b + sqrt(b * b + 4.0 * E * E));',
+    '        float u = b / E;',
+    '        float mu = (u * u + 2.0) / (2.0 * u * sqrt(u * u + 4.0)) + 0.5;',
+    '        dir = T * cos(th) + p * sin(th);',
+    '        bright *= min(mu, 4.0);',
+    '      }',
+    '    } else {',
+    /* Only the strongest pull on this star makes a second image worth
+     * drawing; past six Einstein angles it is far too faint to see. */
+    '      float bu = 1e9; vec3 bT = vec3(0.0), bp = vec3(0.0); float bb = 0.0, bE = 0.0;',
+    '      for (int i = 0; i < 4; i++) {',
+    '        if (i >= uTearN) break;',
+    '        float E = uTear[i].w; if (E <= 0.0) continue;',
+    '        vec3 T = uTear[i].xyz; float c = dot(dir, T);',
+    '        float b = acos(clamp(c, -1.0, 1.0));',
+    '        if (b < 1e-7) continue;',
+    '        float u = b / E;',
+    '        if (u < bu) { bu = u; bT = T; bp = normalize(dir - T * c); bb = b; bE = E; }',
+    '      }',
+    '      if (bu > 6.0) { bright = 0.0; } else {',
+    '        float th = 0.5 * (bb - sqrt(bb * bb + 4.0 * bE * bE));',
+    '        float mu = (bu * bu + 2.0) / (2.0 * bu * sqrt(bu * bu + 4.0)) - 0.5;',
+    '        dir = bT * cos(th) + bp * sin(th);',
+    '        bright *= min(mu, 4.0);',
+    '      }',
+    '    }',
+    '    vCol = dopplerTint(vCol, tearShift(dir, 1e30));',
+    '  }',
+    '  float depth = dot(dir, uFwd);',
+    '  if (depth <= 1e-6 || bright < 0.03) {',   // behind the camera, or not seen: park it offscreen
     '    gl_Position = vec4(2.0, 2.0, 0.0, 1.0); gl_PointSize = 1.0; vB = 0.0; return;',
     '  }',
-    '  float k = uFlen / depth;',
-    '  vec2 px = uCenterPx + vec2(dot(aDir, uRight) * k, -dot(aDir, uUp) * k);',
+    '  float kk = uFlen / depth;',
+    '  vec2 px = uCenterPx + vec2(dot(dir, uRight) * kk, -dot(dir, uUp) * kk);',
     '  gl_Position = vec4(px.x / uViewportPx.x * 2.0 - 1.0,',
     '                     1.0 - px.y / uViewportPx.y * 2.0, 0.0, 1.0);',
-    '  gl_PointSize = aMag.y;',
-    '  vB = aMag.x;',
+    '  gl_PointSize = size;',
+    '  vB = min(1.0, bright);',
     '}'
   ].join('\n');
 
@@ -704,8 +1043,47 @@
     '#version 300 es',
     'precision mediump float;',
     'in float vB;',
+    'in vec3 vCol;',
     'out vec4 frag;',
-    'void main() { frag = vec4(vec3(1.0), vB); }'
+    'void main() { frag = vec4(vCol, vB); }'
+  ].join('\n');
+
+  /* THE STAR TRAILS IN CRUISE (2026-10-17). Astra: "we have to not have
+   * them cross in front of planets, that breaks the immersion." So they
+   * are drawn here, straight after the stars and before anything else in
+   * the frame, where every planet drawn later covers them — exactly as the
+   * stars themselves are. The geometry is Render.cruiseTrails', already in
+   * screen pixels: each segment arrives as a thin quad, two triangles, with
+   * its colour and fade per vertex (WebGL will not draw a line wider than
+   * one pixel on most hardware, so a line primitive cannot carry a star's
+   * size). */
+  var VERT_TRAIL = [
+    '#version 300 es',
+    'in vec2 aPx;',
+    'in vec4 aCol;',
+    'in vec2 aUV;',
+    'uniform vec2 uViewportPx;',
+    'out vec4 vC;',
+    'out vec2 vUV;',
+    'void main() {',
+    '  gl_Position = vec4(aPx.x / uViewportPx.x * 2.0 - 1.0, 1.0 - aPx.y / uViewportPx.y * 2.0, 0.0, 1.0);',
+    '  vC = aCol; vUV = aUV;',
+    '}'
+  ].join('\n');
+
+  var FRAG_TRAIL = [
+    '#version 300 es',
+    'precision mediump float;',
+    'in vec4 vC;',
+    'in vec2 vUV;',
+    'out vec4 frag;',
+    /* x across the quad (-1..1), y along it (0 at the star, 1 at the tail):
+     * a gaussian cross-section for the blur, and a tail that fades out. */
+    'void main() {',
+    '  float across = exp(-vUV.x * vUV.x * 3.2);',
+    '  float along = pow(1.0 - clamp(vUV.y, 0.0, 1.0), 1.4);',
+    '  frag = vec4(vC.rgb, vC.a * across * along);',
+    '}'
   ].join('\n');
 
   /* ---- ship and station meshes ------------------------------------------
@@ -753,10 +1131,24 @@
     'uniform float uNear;',
     'out vec3 vNrm; out vec3 vCol; out float vEmis; out vec3 vRel;',
     'out float vAlpha;',
+    TEAR_GLSL,
     'void main() {',
     '  vec3 rel = uModelRel + uRot * (aPos * uScale);',
     '  vNrm = uRot * aNrm; vCol = aCol; vEmis = aEmis; vRel = rel;',
     '  vAlpha = aAlpha;',
+    /* A station or ship behind a tear is lensed like the planets are
+     * (Astra, 2026-10-21: "I do want the thing to lens planets and stations
+     * alike"): each vertex is moved to where its image is seen, and
+     * coloured by the shift. Anything nearer than the tear — your own
+     * cockpit, a ship between you and it — is untouched (tearBehind). */
+    '  if (uTearN > 0) {',
+    '    float L = length(rel);',
+    '    if (L > 1e-9) {',
+    '      vec3 dd = tearPush(rel / L, L);',
+    '      rel = dd * L; vRel = rel;',
+    '      vCol = dopplerTint(vCol, tearShift(dd, L));',
+    '    }',
+    '  }',
     /* ---- THE NEAR PLANE, AND WHY THE HARDWARE HAS TO OWN IT ------------
      *
      * This used to read:
@@ -821,6 +1213,11 @@
      * default and the opaque path short-circuits on it, so a hull costs one
      * float compare and nothing else. */
     'uniform float uAlpha;',
+    /* A shipyard's paint (Combat.PAINTS, 2026-10-19): rgb hull colour and
+     * strength in uPaint, trim in uTrim. w = 0 is yard grey, and every hull
+     * but the player's is queued at 0. Same remap as render.js paintFace. */
+    'uniform vec4 uPaint;',
+    'uniform vec3 uTrim;',
     /* Re-entry plasma. uGlow is Sim.updateHeating's normalised flux and
      * uWind is the direction the air is arriving from, both already
      * computed by the flight model — the shader invents nothing, it only
@@ -977,8 +1374,14 @@
      * self-lit faces the interior bucket already carries become the light
      * in it. */
     '  float lamp = abs(dot(n, toCam));',
-    '  vec3 lit = vCol * (0.26 + 0.70 * lam);',
-    '  vec3 dim = vCol * (0.10 + 0.55 * lamp);',
+    '  vec3 base = vCol;',
+    '  if (uPaint.w > 0.0 && vEmis < 0.5) {',
+    '    float pl = dot(vCol, vec3(0.299, 0.587, 0.114));',
+    '    vec3 pc = (pl > 0.62 ? uTrim : uPaint.rgb) * (0.55 + 0.9 * pl);',
+    '    base = mix(vCol, min(pc, vec3(1.0)), uPaint.w);',
+    '  }',
+    '  vec3 lit = base * (0.26 + 0.70 * lam);',
+    '  vec3 dim = base * (0.10 + 0.55 * lamp);',
     '  vec3 c = vEmis > 0.5 ? vCol * 1.15 : mix(lit, dim, uIndoors);',
     '  float glow = vEmis > 0.5 ? mix(1.0, 0.28, uIndoors) : 0.0;',
 
@@ -1412,6 +1815,10 @@
   var panelProg = null, panelUni = null, panelVao = null, panelBuf = null;
   var panelQueue = [], panelSlots = [];
   var ringProg = null, ringUni = null, ringVao = null, ringQueue = [];
+  /* Tears (2026-10-21): the lens, the tear quads, and the lightning. */
+  var tearN = 0, tearA = new Float32Array(16), tearK = new Float32Array(16);
+  var tearProg = null, tearUni = null, tearVao = null, tearQueue = [];
+  var boltProg = null, boltUni = null, boltVao = null, boltBuf = null, boltQueue = [];
 
   /* The logarithmic depth range. NEAR is ten centimetres, because the
    * cockpit view sits about a metre from its own console; FAR is far past
@@ -1462,7 +1869,8 @@
       prog = link(gl, VERT_BODY, FRAG_BODY, 'body');
       starProg = link(gl, VERT_STARS, FRAG_STARS, 'stars');
       starUni = uniforms(gl, starProg, ['uRight', 'uUp', 'uFwd', 'uFlen',
-                                        'uCenterPx', 'uViewportPx']);
+                                        'uCenterPx', 'uViewportPx', 'uHead', 'uBeta',
+                                        'uTear', 'uTearK', 'uTearN', 'uImage']);
       meshProg = link(gl, VERT_MESH, FRAG_MESH, 'mesh');
       meshUni = uniforms(gl, meshProg, ['uModelRel', 'uRot', 'uScale',
                                         'uRight', 'uUp', 'uFwd', 'uFlen',
@@ -1470,7 +1878,8 @@
                                         'uNear', 'uInvLogRange', 'uIndoors',
                                         'uGlow', 'uWind',
                                         'uAlpha', 'uCut', 'uCutR', 'uCutRim', 'uCutUp',
-                                        'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD']);
+                                        'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD',
+                                        'uPaint', 'uTrim', 'uTear', 'uTearK', 'uTearN']);
     } catch (e) {
       if (global.console) console.error(e.message);
       GL.available = false; gl = null; return false;
@@ -1484,11 +1893,12 @@
                               'uStormSalt', 'uStormSaltPrev', 'uStormSlow',
                               'uStormPhase', 'uFlashGain',
                               'uWeather', 'uCenterDepth', 'uWorldRadius',
-                              'uNear', 'uInvLogRange', 'uBanded',
+                              'uNear', 'uInvLogRange', 'uBanded', 'uBand',
                               'uOcean', 'uSeaColor', 'uIce',
                               'uCenterRel', 'uScreenPx', 'uFlen',
                               'uHoleRel', 'uHoleR', 'uHaloPush',
-                              'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD']);
+                              'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD',
+                              'uTear', 'uTearK', 'uTearN']);
 
     quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
@@ -1570,9 +1980,47 @@
       gl.enableVertexAttribArray(rloc);
       gl.vertexAttribPointer(rloc, 2, gl.FLOAT, false, 0, 0);
       gl.bindVertexArray(null);
-    } catch (e3) {
-      if (global.console) console.error(e3.message);
+    } catch (e4) {
+      if (global.console) console.error(e4.message);
       ringProg = null;
+    }
+
+    /* The tear and its lightning. Each allowed to fail alone: a driver that
+     * will not build them costs you the look of a wake, and main.js falls
+     * back to the 2D cloud (GL.tears false). */
+    try {
+      tearProg = link(gl, VERT_TEAR, FRAG_TEAR, 'tear');
+      tearUni = uniforms(gl, tearProg, ['uCenterPx', 'uQuadPx', 'uViewportPx', 'uDepth',
+                                        'uRoll', 'uE', 'uW', 'uH',
+                                        'uOpen', 'uGlow', 'uMode', 'uT']);
+      tearVao = gl.createVertexArray();
+      gl.bindVertexArray(tearVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+      var tloc = gl.getAttribLocation(tearProg, 'aCorner');
+      gl.enableVertexAttribArray(tloc);
+      gl.vertexAttribPointer(tloc, 2, gl.FLOAT, false, 0, 0);
+      gl.bindVertexArray(null);
+    } catch (e5) {
+      if (global.console) console.error(e5.message);
+      tearProg = null;
+    }
+    try {
+      boltProg = link(gl, VERT_BOLT, FRAG_BOLT, 'bolt');
+      boltUni = uniforms(gl, boltProg, ['uViewportPx', 'uDepth', 'uTint']);
+      boltBuf = gl.createBuffer();
+      boltVao = gl.createVertexArray();
+      gl.bindVertexArray(boltVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, boltBuf);
+      var bp = gl.getAttribLocation(boltProg, 'aPx');
+      var bw = gl.getAttribLocation(boltProg, 'aW');
+      gl.enableVertexAttribArray(bp);
+      gl.vertexAttribPointer(bp, 2, gl.FLOAT, false, 24, 0);
+      gl.enableVertexAttribArray(bw);
+      gl.vertexAttribPointer(bw, 4, gl.FLOAT, false, 24, 8);
+      gl.bindVertexArray(null);
+    } catch (e6) {
+      if (global.console) console.error(e6.message);
+      boltProg = null;
     }
 
     gl.disable(gl.DEPTH_TEST);
@@ -1581,6 +2029,7 @@
     GL.available = true;
     GL.panels = !!panelProg;
     GL.rings = !!ringProg;
+    GL.tears = !!(tearProg && boltProg);
     return true;
   };
 
@@ -1596,11 +2045,15 @@
   GL.setStarfield = function (stars) {
     if (!gl || !stars || !stars.length) return;
     var dirs = new Float32Array(stars.length * 3);
-    var mags = new Float32Array(stars.length * 2);
+    /* Brightness, size, and the star's own temperature — the last is only
+     * read in cruise, where the shader shifts it (see VERT_STARS). */
+    var mags = new Float32Array(stars.length * 3);
+    var R = global.Render;
     for (var i = 0; i < stars.length; i++) {
       var s = stars[i];
       dirs[i * 3] = s.d.x; dirs[i * 3 + 1] = s.d.y; dirs[i * 3 + 2] = s.d.z;
-      mags[i * 2] = s.b; mags[i * 2 + 1] = Math.max(1, s.size);
+      mags[i * 3] = s.b; mags[i * 3 + 1] = Math.max(1, s.size);
+      mags[i * 3 + 2] = (R && R.starTemp) ? R.starTemp(s) : 6500;
     }
     starVao = gl.createVertexArray();
     gl.bindVertexArray(starVao);
@@ -1617,13 +2070,84 @@
     gl.bufferData(gl.ARRAY_BUFFER, mags, gl.STATIC_DRAW);
     var lm = gl.getAttribLocation(starProg, 'aMag');
     gl.enableVertexAttribArray(lm);
-    gl.vertexAttribPointer(lm, 2, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribPointer(lm, 3, gl.FLOAT, false, 0, 0);
 
     gl.bindVertexArray(null);
     starCount = stars.length;
   };
 
-  GL.drawStars = function (cam) {
+  /* The cruise trails (see VERT_TRAIL), drawn now — call it straight after
+   * drawStars, so everything later in the frame covers them. `segs` is
+   * Render.cruiseTrails' flat list, nine numbers a segment: ax, ay, bx, by
+   * in CSS pixels, r, g, b in 0-255, alpha, width in pixels. Compiled on
+   * first use and on its own: a trail program that will not build costs the
+   * trails, never the rest of the world layer. Returns whether it drew. */
+  var trailProg = null, trailUni = null, trailVao = null, trailBuf = null;
+  var trailBroken = false, trailData = null;
+  GL.drawTrails = function (segs) {
+    if (!gl || trailBroken || !segs || !segs.length) return false;
+    if (!trailProg) {
+      try {
+        trailProg = link(gl, VERT_TRAIL, FRAG_TRAIL, 'trails');
+        trailUni = uniforms(gl, trailProg, ['uViewportPx']);
+        trailVao = gl.createVertexArray();
+        gl.bindVertexArray(trailVao);
+        trailBuf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, trailBuf);
+        var lp = gl.getAttribLocation(trailProg, 'aPx');
+        var lc = gl.getAttribLocation(trailProg, 'aCol');
+        var lu = gl.getAttribLocation(trailProg, 'aUV');
+        gl.enableVertexAttribArray(lp);
+        gl.vertexAttribPointer(lp, 2, gl.FLOAT, false, 32, 0);
+        gl.enableVertexAttribArray(lc);
+        gl.vertexAttribPointer(lc, 4, gl.FLOAT, false, 32, 8);
+        gl.enableVertexAttribArray(lu);
+        gl.vertexAttribPointer(lu, 2, gl.FLOAT, false, 32, 24);
+        gl.bindVertexArray(null);
+      } catch (e) {
+        trailBroken = true;
+        if (global.console) console.error(e.message);
+        return false;
+      }
+    }
+    var n = Math.floor(segs.length / 9), need = n * 6 * 8;
+    if (!trailData || trailData.length < need) trailData = new Float32Array(Math.max(need, 6 * 8 * 1024));
+    var o = 0;
+    for (var i = 0; i < n; i++) {
+      var k = i * 9;
+      var ax = segs[k], ay = segs[k + 1], bx = segs[k + 2], by = segs[k + 3];
+      var dx = bx - ax, dy = by - ay, L = Math.sqrt(dx * dx + dy * dy);
+      if (!(L > 1e-3)) continue;
+      /* Feathered: the quad is wider than the streak so the gaussian in
+       * FRAG_TRAIL has room to fall off — a soft smear, not a ruled line. */
+      var hw = segs[k + 8] * 0.5 * 2.2 + 1.0;
+      var nx = -dy / L * hw, ny = dx / L * hw;
+      var r = segs[k + 4] / 255, g = segs[k + 5] / 255, b = segs[k + 6] / 255, a = segs[k + 7];
+      var quad = [ax + nx, ay + ny, 1, 0,  ax - nx, ay - ny, -1, 0,  bx + nx, by + ny, 1, 1,
+                  bx + nx, by + ny, 1, 1,  ax - nx, ay - ny, -1, 0,  bx - nx, by - ny, -1, 1];
+      for (var q = 0; q < 24; q += 4) {
+        trailData[o++] = quad[q]; trailData[o++] = quad[q + 1];
+        trailData[o++] = r; trailData[o++] = g; trailData[o++] = b; trailData[o++] = a;
+        trailData[o++] = quad[q + 2]; trailData[o++] = quad[q + 3];
+      }
+    }
+    if (!o) return true;
+    gl.disable(gl.DEPTH_TEST);
+    gl.colorMask(true, true, true, false);     // never the glow mask, as for stars
+    gl.useProgram(trailProg);
+    gl.bindVertexArray(trailVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, trailBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, trailData.subarray(0, o), gl.DYNAMIC_DRAW);
+    gl.uniform2f(trailUni.uViewportPx, vw, vh);
+    gl.drawArrays(gl.TRIANGLES, 0, o / 8);
+    gl.bindVertexArray(null);
+    gl.colorMask(true, true, true, true);
+    return true;
+  };
+
+  /* `head` and `beta` are cruise's: the direction of travel and speed over
+   * c. Omitted (or beta under 0.02) the sky is the ordinary one. */
+  GL.drawStars = function (cam, head, beta) {
     if (!gl || !starVao || !starCount) return;
     /* The backdrop, and nothing is ever behind it — so it neither tests
      * nor writes depth, and everything drawn afterwards simply covers it. */
@@ -1638,10 +2162,142 @@
     gl.uniform1f(starUni.uFlen, cam.flen);
     gl.uniform2f(starUni.uCenterPx, cam.cx, cam.cy);
     gl.uniform2f(starUni.uViewportPx, vw, vh);
+    var hd = head || { x: 0, y: 0, z: 1 };
+    gl.uniform3f(starUni.uHead, hd.x, hd.y, hd.z);
+    gl.uniform1f(starUni.uBeta, (head && beta > 0) ? beta : 0);
+    setTearUniforms(starUni);
+    gl.uniform1f(starUni.uImage, 0);
     gl.drawArrays(gl.POINTS, 0, starCount);
+    /* The second images, only when a tear is there to make them. */
+    if (tearN) {
+      gl.uniform1f(starUni.uImage, 1);
+      gl.drawArrays(gl.POINTS, 0, starCount);
+    }
     gl.bindVertexArray(null);
     gl.colorMask(true, true, true, true);
   };
+
+  /* ---- TEARS (2026-10-21) ------------------------------------------------
+   * setTears: the lenses for this frame, set before drawStars. Each is
+   * { dir: unit vector from the eye, E: Einstein angle in radians,
+   *   arrival: bool, open: 0..1 }. The four strongest are kept.
+   * queueTear / queueBolts: the tear's own quad and its lightning, in
+   * screen pixels, drawn after the hulls at the tear's depth. */
+  function setTearUniforms(u) {
+    gl.uniform1i(u.uTearN, tearN);
+    if (tearN) {
+      gl.uniform4fv(u.uTear, tearA);
+      gl.uniform4fv(u.uTearK, tearK);
+    }
+  }
+  GL.setTears = function (list) {
+    tearN = 0;
+    if (!list || !list.length) return;
+    var l = list.slice().sort(function (a, b) { return b.E - a.E; });
+    for (var i = 0; i < l.length && tearN < 4; i++) {
+      var t = l[i];
+      if (!(t.E > 1e-6) || !t.dir) continue;
+      var o = tearN * 4;
+      tearA[o] = t.dir.x; tearA[o + 1] = t.dir.y; tearA[o + 2] = t.dir.z; tearA[o + 3] = t.E;
+      tearK[o] = t.arrival ? 1 : 0; tearK[o + 1] = t.open; tearK[o + 2] = t.dist || 0; tearK[o + 3] = 0;
+      tearN++;
+    }
+  };
+  function depth01(km) {
+    return Math.max(0, Math.min(1, Math.log2(Math.max(DEPTH_NEAR, km) / DEPTH_NEAR) * INV_LOG_RANGE));
+  }
+  /* t: { x, y (CSS px), depth (km), E, W, H (px), roll: [across.x, across.y],
+   *      arrival, open, glow, time } */
+  GL.queueTear = function (t) {
+    if (!gl || !tearProg) return false;
+    tearQueue.push(t);
+    return true;
+  };
+  /* polys: [{ pts: [[x, y], ...] CSS px, core, halo (px), I }]; tint [r,g,b] */
+  GL.queueBolts = function (polys, tint, depthKm) {
+    if (!gl || !boltProg) return false;
+    if (polys && polys.length) boltQueue.push({ polys: polys, tint: tint, depth: depthKm });
+    return true;
+  };
+
+  function drawTears() {
+    if (!tearQueue.length || !tearProg) return;
+    tearQueue.sort(function (a, b) { return b.depth - a.depth; });
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.depthMask(false);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    /* A tear is a light, not a surface, but it must not bloom the whole
+     * frame: kept out of the glow mask like the stars. */
+    gl.colorMask(true, true, true, false);
+    gl.useProgram(tearProg);
+    gl.bindVertexArray(tearVao);
+    gl.uniform2f(tearUni.uViewportPx, vw, vh);
+    for (var i = 0; i < tearQueue.length; i++) {
+      var t = tearQueue[i];
+      var quadPx = Math.max(t.E * 2.4 * 2.6 + 6, t.H * 1.3, t.W * 3.5) + 4;
+      gl.uniform2f(tearUni.uCenterPx, t.x, t.y);
+      gl.uniform1f(tearUni.uQuadPx, quadPx);
+      gl.uniform1f(tearUni.uDepth, depth01(t.depth));
+      gl.uniform2f(tearUni.uRoll, t.roll[0], t.roll[1]);
+      gl.uniform1f(tearUni.uE, t.E);
+      gl.uniform1f(tearUni.uW, t.W);
+      gl.uniform1f(tearUni.uH, t.H);
+      gl.uniform1f(tearUni.uOpen, t.open);
+      gl.uniform1f(tearUni.uGlow, t.glow);
+      gl.uniform1f(tearUni.uMode, t.arrival ? 1 : 0);
+      gl.uniform1f(tearUni.uT, t.time % 1000);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+    gl.bindVertexArray(null);
+    gl.colorMask(true, true, true, true);
+    gl.depthMask(true);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  }
+
+  function drawBolts() {
+    if (!boltQueue.length || !boltProg) return;
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.depthMask(false);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    gl.colorMask(true, true, true, false);
+    gl.useProgram(boltProg);
+    gl.bindVertexArray(boltVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, boltBuf);
+    gl.uniform2f(boltUni.uViewportPx, vw, vh);
+    for (var q = 0; q < boltQueue.length; q++) {
+      var b = boltQueue[q], v = [];
+      for (var i = 0; i < b.polys.length; i++) {
+        var br = b.polys[i], pts = br.pts, half = br.halo * 3;
+        for (var k = 0; k < pts.length - 1; k++) {
+          var p0 = pts[k], p1 = pts[k + 1];
+          var dx = p1[0] - p0[0], dy = p1[1] - p0[1], len = Math.sqrt(dx * dx + dy * dy) || 1e-6;
+          /* stretched a core's width past each end so joints do not gap */
+          var tx = dx / len * br.core, ty = dy / len * br.core;
+          var nx = -dy / len * half, ny = dx / len * half;
+          var ax = p0[0] - tx, ay = p0[1] - ty, bx = p1[0] + tx, by = p1[1] + ty;
+          v.push(ax + nx, ay + ny, half, br.core, br.halo, br.I,
+                 ax - nx, ay - ny, -half, br.core, br.halo, br.I,
+                 bx + nx, by + ny, half, br.core, br.halo, br.I,
+                 bx + nx, by + ny, half, br.core, br.halo, br.I,
+                 ax - nx, ay - ny, -half, br.core, br.halo, br.I,
+                 bx - nx, by - ny, -half, br.core, br.halo, br.I);
+        }
+      }
+      if (!v.length) continue;
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(v), gl.DYNAMIC_DRAW);
+      gl.uniform1f(boltUni.uDepth, depth01(b.depth));
+      gl.uniform3f(boltUni.uTint, b.tint[0], b.tint[1], b.tint[2]);
+      gl.drawArrays(gl.TRIANGLES, 0, v.length / 6);
+    }
+    gl.bindVertexArray(null);
+    gl.colorMask(true, true, true, true);
+    gl.depthMask(true);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  }
 
   /* Upload a hull once, expanded to flat triangles.
    *
@@ -1773,7 +2429,15 @@
   var cutFlag = null;
   GL.setCutaway = function (cut) { cutFlag = cut || null; };
 
-  GL.queueMesh = function (cam, frame, mesh, scale, sunDir, glow, wind, alpha) {
+  /* `paint` is render.js's paintRGB result — { p: [r,g,b] | null, t: … }
+   * in 0..255 — or absent for yard grey. */
+  function paintVec(paint) {
+    if (!paint || (!paint.p && !paint.t)) return null;
+    var p = paint.p || paint.t, t = paint.t || paint.p;
+    return { p: [p[0] / 255, p[1] / 255, p[2] / 255], t: [t[0] / 255, t[1] / 255, t[2] / 255] };
+  }
+
+  GL.queueMesh = function (cam, frame, mesh, scale, sunDir, glow, wind, alpha, paint) {
     if (!gl || !meshProg || !mesh || !mesh.f || !mesh.f.length) return false;
     /* The double-precision subtraction that keeps this usable. Everything
      * the shader sees is small; the big numbers never leave JavaScript. */
@@ -1790,6 +2454,7 @@
                       * never heard of alpha must not get an invisible hull. */
                      alpha: (typeof alpha === 'number' && alpha >= 0 && alpha < 1)
                             ? alpha : 1,
+                     paint: paintVec(paint),
                      /* Set by GL.setIndoors for the frames the eye spends
                       * inside something. Per-mesh rather than per-frame
                       * because a station's hull and the ship parked in it
@@ -2011,6 +2676,9 @@
     meshQueue.length = 0;
     panelQueue.length = 0;
     ringQueue.length = 0;
+    tearQueue.length = 0;
+    boltQueue.length = 0;
+    tearN = 0;
     hole = null;
     groundCut = null;
     if (!gl) return;
@@ -2242,13 +2910,46 @@
     gl.colorMask(true, true, true, true);
   }
 
+  /* ---- PASSES OTHER FILES ADD (2026-10-25) -------------------------------
+   * A pass is a function (gl, env) run after the cockpit room and before
+   * the screens, into whatever framebuffer the frame is being drawn to.
+   * `env` carries what a pass needs to agree with this file about the
+   * picture — the viewport, the log-depth constants — and the shader
+   * helpers, so a new kind of thing to draw can live in its own file
+   * without this one learning about it. npcgl.js (the people) is the first.
+   * A pass that throws is reported and skipped, never allowed to take the
+   * rest of the frame with it. */
+  var extraPasses = [];
+  GL.addPass = function (fn) {
+    if (typeof fn === 'function' && extraPasses.indexOf(fn) < 0) extraPasses.push(fn);
+  };
+  function drawExtraPasses() {
+    if (!extraPasses.length) return;
+    var env = { vw: vw, vh: vh, near: DEPTH_NEAR, invLogRange: INV_LOG_RANGE, link: link, uniforms: uniforms };
+    for (var i = 0; i < extraPasses.length; i++) {
+      try { extraPasses[i](gl, env); } catch (e) { if (global.console) console.error(e); }
+    }
+    gl.bindVertexArray(null);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  }
+
   GL.end = function () {
     if (!gl) return;
     drawBodies();
     drawMeshes();
+    /* Tears after the hulls, so a ship in front of one covers it, and the
+     * lightning after its tear, added on top. */
+    drawTears();
+    drawBolts();
     /* After the hulls, before the screens: translucent, so it blends over
      * what is behind it and is hidden by what is in front. */
     drawRings();
+    /* The cockpit after everything outside it, because its windows write
+     * depth (see drawCockpit), and before the screens mounted in it. */
+    drawCockpit();
+    /* The people (npcgl.js), standing in the room just drawn. */
+    drawExtraPasses();
     /* Last, so the screens are lit over a finished world rather than
      * competing with it — and after the hull, so a panel is depth-tested
      * against the cockpit it is mounted in. */
@@ -2275,6 +2976,7 @@
     gl.uniform2f(uni.uViewportPx, vw, vh);
     gl.uniform1f(uni.uNear, DEPTH_NEAR);
     gl.uniform1f(uni.uInvLogRange, INV_LOG_RANGE);
+    setTearUniforms(uni);
 
     for (var i = 0; i < queue.length; i++) {
       var q = queue[i], b = q.body, cam = q.cam;
@@ -2309,6 +3011,14 @@
                     Math.max(Math.abs(q.y), Math.abs(vh - q.y));
         quadPx = Math.max(quadPx, reach);
       }
+      /* A tear can throw a planet's image up to one Einstein radius out
+       * past its own silhouette; the square has to reach that far or the
+       * bent edge is cut off flat. */
+      if (tearN) {
+        var maxE = 0;
+        for (var te = 0; te < tearN; te++) maxE = Math.max(maxE, tearA[te * 4 + 3]);
+        quadPx += maxE * cam.flen * 1.25;
+      }
       gl.uniform1f(uni.uQuadPx, quadPx);
       gl.uniform1f(uni.uPad, pad);
       gl.uniform3f(uni.uRight, cam.r.x, cam.r.y, cam.r.z);
@@ -2336,6 +3046,10 @@
        * uniform state honest. */
       var banded = (!isStar && (b.type === 'gasGiant' || b.type === 'iceGiant'));
       gl.uniform1f(uni.uBanded, banded ? 1 : 0);
+      /* Twilight worlds: 1 = living ring at the terminator, 2 = living
+       * band at the equator of a world on its side. */
+      gl.uniform1f(uni.uBand, isStar ? 0 : b.habitableBand === 'terminator' ? 1
+                                           : b.habitableBand === 'equator' ? 2 : 0);
       gl.uniform1f(uni.uOcean, (isStar || banded) ? 0 : terr.ocean);
       gl.uniform3f(uni.uSeaColor, sc[0], sc[1], sc[2]);
       gl.uniform1f(uni.uIce, (isStar || banded) ? 0 : terr.ice);
@@ -2393,12 +3107,17 @@
      * no blend state and — more importantly — still needs no sort. Turning
      * blending on would cost fill rate for nothing and would not make the
      * glass any more correct. */
+    meshPassBegin(meshQueue[0].cam);
+    for (var i = 0; i < meshQueue.length; i++) drawQueuedMesh(meshQueue[i]);
+    gl.bindVertexArray(null);
+    gl.enable(gl.BLEND);
+  }
+
+  function meshPassBegin(cam) {
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LESS);
     gl.disable(gl.BLEND);
     gl.useProgram(meshProg);
-
-    var cam = meshQueue[0].cam;
     gl.uniform2f(meshUni.uViewportPx, vw, vh);
     gl.uniform2f(meshUni.uCenterPx, cam.cx, cam.cy);
     gl.uniform1f(meshUni.uFlen, cam.flen);
@@ -2407,9 +3126,66 @@
     gl.uniform3f(meshUni.uFwd, cam.f.x, cam.f.y, cam.f.z);
     gl.uniform1f(meshUni.uNear, DEPTH_NEAR);
     gl.uniform1f(meshUni.uInvLogRange, INV_LOG_RANGE);
+    setTearUniforms(meshUni);
+  }
 
-    for (var i = 0; i < meshQueue.length; i++) {
-      var m = meshQueue[i];
+  /* ---- THE COCKPIT, last of the world (2026-10-24) -----------------------
+   * Astra: "a modeled interior for every ship … specifically the cockpit."
+   * The room is a mesh like any other, in the ship's frame — but it is
+   * cut by its windows, and the windows are not holes in it. Every pane is
+   * drawn first with colour writes off: it puts its depth in the buffer
+   * and nothing else. Then the room: any wall behind a pane is further than
+   * the pane and fails the depth test, so whatever the world already drew
+   * there — stars, a planet, the station you are parked in — is what you
+   * see. That is why this pass comes after everything outside (bodies,
+   * hulls, tears, lightning, rings) and before the screens: once a pane
+   * has written its depth, nothing beyond it can be drawn.
+   *
+   * Indoors-lit always: a cockpit has no sun in it. Your own hull is never
+   * queued in the seat view, so nothing of the ship's outside is in the
+   * way of the glass. */
+  var cockpitQ = null;
+  GL.queueCockpit = function (cam, frame, portals, room, parts, scale) {
+    if (!gl || !meshProg || !room || !room.f || !room.f.length) return false;
+    function item(mesh, off) {
+      off = off || ZERO_OFF;
+      var p = {
+        x: frame.pos.x + (frame.right.x * off[0] + frame.up.x * off[1] + frame.fwd.x * off[2]) * scale,
+        y: frame.pos.y + (frame.right.y * off[0] + frame.up.y * off[1] + frame.fwd.y * off[2]) * scale,
+        z: frame.pos.z + (frame.right.z * off[0] + frame.up.z * off[1] + frame.fwd.z * off[2]) * scale
+      };
+      return { mesh: mesh, rel: { x: p.x - cam.eye.x, y: p.y - cam.eye.y, z: p.z - cam.eye.z },
+               scale: scale, sun: ZERO3, r: frame.right, u: frame.up, f: frame.fwd, cam: cam,
+               glow: 0, wind: ZERO3, alpha: 1, paint: null, indoors: 1, cut: null };
+    }
+    cockpitQ = {
+      cam: cam,
+      portals: portals && portals.f && portals.f.length ? item(portals) : null,
+      room: item(room),
+      parts: (parts || []).filter(function (pt) { return pt && pt.mesh && pt.mesh.f && pt.mesh.f.length; })
+                          .map(function (pt) { return item(pt.mesh, pt.off); })
+    };
+    return true;
+  };
+  var ZERO_OFF = [0, 0, 0];
+
+  function drawCockpit() {
+    var q = cockpitQ;
+    cockpitQ = null;
+    if (!q) return;
+    meshPassBegin(q.cam);
+    if (q.portals) {
+      gl.colorMask(false, false, false, false);
+      drawQueuedMesh(q.portals);
+      gl.colorMask(true, true, true, true);
+    }
+    drawQueuedMesh(q.room);
+    for (var i = 0; i < q.parts.length; i++) drawQueuedMesh(q.parts[i]);
+    gl.bindVertexArray(null);
+    gl.enable(gl.BLEND);
+  }
+
+  function drawQueuedMesh(m) {
       var up = uploadMesh(m.mesh);
       gl.bindVertexArray(up.vao);
       gl.uniform3f(meshUni.uModelRel, m.rel.x, m.rel.y, m.rel.z);
@@ -2418,6 +3194,12 @@
       gl.uniform1f(meshUni.uGlow, m.glow);
       gl.uniform3f(meshUni.uWind, m.wind.x, m.wind.y, m.wind.z);
       gl.uniform1f(meshUni.uAlpha, m.alpha);
+      if (m.paint) {
+        gl.uniform4f(meshUni.uPaint, m.paint.p[0], m.paint.p[1], m.paint.p[2], 0.72);
+        gl.uniform3f(meshUni.uTrim, m.paint.t[0], m.paint.t[1], m.paint.t[2]);
+      } else {
+        gl.uniform4f(meshUni.uPaint, 0, 0, 0, 0);
+      }
       gl.uniform1f(meshUni.uIndoors, m.indoors);
       if (m.box) uploadBox(meshUni, m.box, cam);
       else gl.uniform4f(meshUni.uBoxO, 0, 0, 0, 0);
@@ -2438,9 +3220,6 @@
         m.f.x, m.f.y, m.f.z
       ]);
       gl.drawArrays(gl.TRIANGLES, 0, up.count);
-    }
-    gl.bindVertexArray(null);
-    gl.enable(gl.BLEND);
   }
 
   /* Terrain, per world type: how much of it is under something, what that
@@ -2573,13 +3352,20 @@
      * the tilt. Asking that question HERE rather than inventing an axis is
      * the whole reason the caps, the bands, the continents and the pads
      * now agree. */
-    var ax = { x: 0, y: -Math.sin(tilt), z: Math.cos(tilt) };
+    var az = (rot && rot.az) || 0;   // a locked world's pole leans along its own orbit normal
+    var ax = { x: Math.sin(tilt) * Math.sin(az), y: -Math.sin(tilt) * Math.cos(az), z: Math.cos(tilt) };
     /* A star, or anything the generator did not spin, still needs an axis
      * and a phase — it just gets a nominal day so its own noise field is
      * not frozen to the sky. */
     var period = (rot && rot.period) ? rot.period : 86400;
     var phase = (rot ? rot.phase : 0) + (TAU / period) * t;
-    var deck = phase * DECK_SUPER;
+    /* A TIDALLY LOCKED WORLD STILL HAS WEATHER (2026-10-19). Its day is
+     * its year, and a deck turning at a multiple of THAT stands still —
+     * the clouds over a ring world froze in place. Its air circulates
+     * anyway (day side to night side, endlessly), so past four days the
+     * deck runs on a nominal 30-hour circulation of its own. */
+    var deckPeriod = Math.abs(period) > 4 * 86400 ? (period < 0 ? -1 : 1) * 30 * 3600 : period;
+    var deck = ((rot ? rot.phase : 0) + (TAU / deckPeriod) * t) * DECK_SUPER;
     return {
       ax: ax,
       phase: wrap(phase, TAU),

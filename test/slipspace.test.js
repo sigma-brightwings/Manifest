@@ -263,10 +263,28 @@ section('wakes');
     ok(young.radius / young.radiusFull > 0.95, 'a fresh wake is close to full size');
     ok(old.radius / old.radiusFull < 0.60, 'a nearly-gone one has closed up substantially');
     ok(old.strength < young.strength, 'and is fainter too');
-    /* Both axes, but not at the same rate — brightness goes quadratically
-     * and size linearly, so the old one is very faint and merely small. */
+    /* The scanner's strength still falls quadratically; the hole closes on
+     * the visual half-life and never below a quarter of its torn size. */
     ok((old.strength / young.strength) < (old.radius / old.radiusFull),
        'brightness fades faster than the hole closes');
+  }
+
+  /* HALF-LIFE (2026-10-20): what you SEE decays like an isotope — halves
+   * every WAKE_HALF_LIFE, monotone, and lands on exactly zero at the end
+   * of the wake's life rather than popping out. */
+  var D = S.wakeDecay, H = S.WAKE_HALF_LIFE, L = S.WAKE_LIFE;
+  ok(D(0) === 1 && D(L) === 0, 'decay runs from 1 at birth to 0 at the end of life');
+  var mono = true;
+  for (var di = 1; di <= 64; di++) if (D(L * di / 64) > D(L * (di - 1) / 64)) mono = false;
+  ok(mono, 'and never brightens on the way down');
+  var raw = Math.exp(-Math.LN2 * 2), fl = Math.exp(-Math.LN2 * L / H);
+  ok(Math.abs(D(2 * H) - (raw - fl) / (1 - fl)) < 1e-9,
+     'two half-lives in, a quarter is left (less the shifted tail)', D(2 * H).toFixed(3));
+  ok(D(8 * 3600) > 0.25 && D(12 * 3600) > 0.10,
+     'still plainly there hours later', D(8 * 3600).toFixed(2) + ' at 8 h, ' + D(12 * 3600).toFixed(2) + ' at 12 h');
+  if (young && old) {
+    ok(old.glow < young.glow && old.radius < young.radius,
+       'an old wake is both dimmer and smaller to the eye');
   }
 
   /* A baffle must NOT shrink the hole. It scatters the return so nobody can
