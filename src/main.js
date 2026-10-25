@@ -382,6 +382,9 @@
     G.charted = G.charted || {};
     G.charted[star.id] = true;
     G.sys = systemFor(star);
+    /* Deliveries you bought off ships before they arrived (shiptrade.js):
+     * back onto this system's shelves, wherever the system came from. */
+    if (global.ShipTrade && global.ShipTrade.attach) global.ShipTrade.attach(G, G.sys, G.t || 0);
     /* Fetch the station art this system's ports wear now, while the jump
      * tunnel is still on screen, rather than as each one comes into view.
      * ports.js is an index since 2026-09-22; the triangles are per model. */

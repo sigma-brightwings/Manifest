@@ -581,6 +581,9 @@
     G.doneMissions = data.doneMissions || {};
     G.campaigns = data.campaigns || {};
     G.shipTrade = data.shipTrade || null;
+    /* The system was entered above, before the trade book was back; put
+     * the deliveries you bought off ships onto its shelves now. */
+    if (global.ShipTrade && global.ShipTrade.attach && G.sys) global.ShipTrade.attach(G, G.sys, G.t || 0);
     G.captains = (data.captains && typeof data.captains === 'object') ? data.captains : {};
     G.record = (data.record && typeof data.record === 'object') ? data.record : null;
     G.broadcasts = Array.isArray(data.broadcasts) ? data.broadcasts : [];

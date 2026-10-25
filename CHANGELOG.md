@@ -16,6 +16,30 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **Choking a port by buying her cargo in flight (2026-10-21).** Astra:
+  *"buying cargo off a ship means it doesn't have that cargo for the
+  destination. Provides a way to choke a station without killing trade
+  ships."*
+  - When you buy a line off a trader, the port she was bound for gets
+    that much less of it when she arrives. The deal says so: "*Port* will
+    be N t short."
+  - Nothing changes at the port before she gets there. When she docks,
+    the shelf is short by what she no longer carries, and the gap fades
+    the way a delivery would (the same decay as the inbound arrivals).
+  - Buying the same line off more ships deepens the shortage. Other ports
+    are untouched.
+  - Shortages are saved with the trade book and forgotten once they have
+    faded (`Economy.shortfalls`, `ShipTrade.shortDelivery`,
+    `ShipTrade.attach`). 9 new checks in `test/shiptrade.test.js`.
+- **The police leave Syndicate runners alone (2026-10-21).** Astra:
+  *"Syndicate runners don't get chased by cops unless they are firing on a
+  civilian vessel as the aggressor. The syndicate pays off the police."*
+  This already held in the game. Police never scan, hail or chase a
+  runner, and no NPC fires on another NPC yet, so a runner can never be
+  the aggressor. The rule is now written into `buildRunners`
+  (generate.js), so whoever adds NPC-on-NPC fire knows what it must
+  respect.
+
 - **The Crawler: the first bay of a station, and the crates it carries
   (2026-10-20).** Astra, over the day:
   - *"This is the new station-constructor, called the Crawler. There's only

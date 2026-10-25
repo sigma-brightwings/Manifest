@@ -1347,12 +1347,36 @@
     return add;
   }
 
+  /* DELIVERIES THAT NEVER CAME (2026-10-21). Astra: "buying cargo off a
+   * ship means it doesn't have that cargo for the destination. Provides a
+   * way to choke a station without killing trade ships." Cargo bought off
+   * a ship in flight (shiptrade.js) is entered here, against the port it
+   * was bound for, as `{ cid, qty, at, period }`: what that ship would
+   * have unloaded, and when. From the moment she arrives it is taken back
+   * out on exactly the curve scheduledDeliveries put it in on, so the
+   * shortfall lands when she docks and fades as the next ships come in.
+   * Keep buying a port's supply off the ships bringing it and the shelf
+   * stays empty — nobody has to be shot. */
+  function shortfalls(mkt, cid, t) {
+    var list = mkt.shorts;
+    if (!list || !list.length) return 0;
+    var less = 0;
+    for (var i = 0; i < list.length; i++) {
+      var s = list[i];
+      if (s.cid !== cid) continue;
+      var age = t - s.at;
+      if (age < 0) continue;
+      less += s.qty * Math.exp(-age / (s.period * 0.55));
+    }
+    return less;
+  }
+
   function analyticStock(port, cid, t) {
     var mkt = port.market;
     var row = mkt.rows[cid];
     if (!row) return 0;
     var lvl = row.base + row.amp * Math.sin(TAU * (t / row.periodS) + row.phase);
-    var stock = lvl * row.cap + scheduledDeliveries(mkt, cid, t);
+    var stock = lvl * row.cap + scheduledDeliveries(mkt, cid, t) - shortfalls(mkt, cid, t);
     return clamp(stock, 0, row.cap);
   }
 
@@ -1880,6 +1904,7 @@
     populationOf: populationOf,
     buildPortMarket: buildPortMarket,
     analyticStock: analyticStock,
+    shortfalls: shortfalls,
     ledgerAt: ledgerAt,
     stock: stock,
     price: price,

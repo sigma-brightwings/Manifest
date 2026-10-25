@@ -3381,6 +3381,13 @@
       var roll = rr.next();
       if (!fence || roll >= chance) continue;
       r.flag = 'outlaw';
+      /* Astra (2026-10-21): "Syndicate runners don't get chased by cops
+       * unless they are firing on a civilian vessel as the aggressor. The
+       * syndicate pays off the police." So police never scan, hail or chase
+       * a runner. The only thing that may ever turn them on one is the
+       * runner opening fire on a civilian first. Today no NPC fires on
+       * another NPC, so that case cannot arise yet: damageNpc in combat.js
+       * has no caller but the player's own guns. */
       r.runner = true;
     }
   }
