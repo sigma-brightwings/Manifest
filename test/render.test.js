@@ -4274,7 +4274,7 @@ console.log('--- an empty system (2026-10-24) ---');
     frames(1);
   });
   /* Out here the tank is filled from the hold (2026-10-24): skim, then F5
-   * and the TO TANKS button, or F on that screen. */
+   * and the TO TANKS button, or Enter on the hydrogen row. */
   G.ship.cargo.hydrogen = 20;
   G.ship.fuel = 1;
   Sim.refreshShip(G.ship);
@@ -4283,10 +4283,22 @@ console.log('--- an empty system (2026-10-24) ---');
   frames(2);
   var shown = drawn.texts.slice(m4).some(function (t) { return /TO TANKS/.test(String(t.text || t)); });
   check('the ship screen offers the hold\'s hydrogen to the tanks', shown);
+  /* F is the down thrusters, and a screen being up must not take it
+   * (Astra, 2026-10-24) - it reaches the ship and moves no fuel. */
   keydown({ key: 'f', shiftKey: false, preventDefault: function () {} });
-  frames(1);
+  check('F still reaches the thrusters from the ship screen', !!G.keys.f && G.ship.fuel === 1);
+  if (listeners.keyup && listeners.keyup[0]) listeners.keyup[0]({ key: 'f', shiftKey: false, preventDefault: function () {} });
+  G.keys = {};
+  G.invSel = 0;
+  /* walk the selection to the hydrogen row, as a player would */
+  for (var walk = 0; walk < 20; walk++) {
+    keydown({ key: 'Enter', shiftKey: false, preventDefault: function () {} });
+    frames(1);
+    if (G.ship.fuel > 1) break;
+    keydown({ key: 'ArrowDown', shiftKey: false, preventDefault: function () {} });
+  }
   var room = G.ship.fuelCap - 1;
-  check('and F puts it in the jump tank', Math.abs(G.ship.fuel - (1 + Math.min(20, room))) < 0.02 &&
+  check('and Enter on the hydrogen row puts it in the jump tank', Math.abs(G.ship.fuel - (1 + Math.min(20, room))) < 0.02 &&
         Math.abs((G.ship.cargo.hydrogen || 0) - Math.max(0, 20 - room)) < 0.02,
         'tank ' + G.ship.fuel.toFixed(2) + '/' + G.ship.fuelCap + ', hold ' + (G.ship.cargo.hydrogen || 0).toFixed(2) + ' t');
   keydown({ key: 'Escape', shiftKey: false, preventDefault: function () {} });

@@ -2324,9 +2324,12 @@
           if (held[G.invSel]) jettison(held[G.invSel].cid, e.shiftKey ? Infinity : 1);
           return true;
         }
-        /* F: hold hydrogen into the jump tank (2026-10-24), the same letter
-         * that refuels at a port's desk. */
-        if (key === 'f' && !G.ship.docked) { refuelFromHold(); return true; }
+        /* ENTER on the hydrogen row: the hold's hydrogen into the jump tank
+         * (2026-10-24). Not F, which is the down thrusters and must reach
+         * the ship from every screen (Astra). Enter is "yes", and this is a
+         * yes - nothing is thrown away. */
+        if (key === 'enter' && (G.shipTab || 'status') === 'status' &&
+            held[G.invSel] && held[G.invSel].cid === 'hydrogen') { refuelFromHold(); return true; }
         return false;
       }
 
@@ -4025,8 +4028,8 @@
   }
 
   /* Hydrogen in the hold into the jump tank (2026-10-24): skim, then refuel
-   * from the SHIP screen (F5, the TO TANKS button on the hydrogen row, or F
-   * there). Contract hydrogen stays where it is. */
+   * from the SHIP screen (F5, the TO TANKS button on the hydrogen row, or
+   * Enter on that row). Contract hydrogen stays where it is. */
   function refuelFromHold() {
     var have = (G.ship.cargo && G.ship.cargo.hydrogen) || 0;
     if (have <= 0) { say('No hydrogen in the hold', 2); return 0; }
@@ -5522,7 +5525,7 @@
         G.skimShown = Math.floor(G.skimTotal || 0);
       } else if (sk && sk.full && !G.skimFullSaid) {
         G.skimFullSaid = true;
-        say('Skimmer: hold full' + (G.ship.fuel < G.ship.fuelCap - 0.01 ? ' - F5 then F puts hydrogen in the jump tank' : ''), 4);
+        say('Skimmer: hold full' + (G.ship.fuel < G.ship.fuelCap - 0.01 ? ' - F5, TO TANKS puts hydrogen in the jump tank' : ''), 4);
       } else if (sk && !sk.full && !sk.poor && Math.floor(G.skimTotal || 0) >= (G.skimShown || 0) + 5) {
         G.skimShown = Math.floor(G.skimTotal || 0);
         say('Skimming ' + sk.body.name + ' - ' + (sk.rate * 60).toFixed(1) + ' t/min, ' +

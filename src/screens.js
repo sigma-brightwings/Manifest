@@ -1878,7 +1878,7 @@
                         : panels ? 'Tab ordnance   ·   pick a mount, then pick a page'
                              : (G.ship.docked ? 'Tab guns   ·   F4 trade   ·   ↑↓ select   ·   Del jettison'
                                               : 'Tab guns   ·   ↑↓ select   ·   Del jettison   ·   Shift+Del all' +
-                                                (G.ship.cargo && G.ship.cargo.hydrogen > 0 && G.ship.fuel < G.ship.fuelCap - 0.01 ? '   ·   F hydrogen to tanks' : '')));
+                                                (G.ship.cargo && G.ship.cargo.hydrogen > 0 && G.ship.fuel < G.ship.fuelCap - 0.01 ? '   ·   Enter on hydrogen: to tanks' : '')));
 
     /* Two tabs across the top: the inventory layout, and the guns board
      * that used to live on the deck MFD cycle. Clickable, and Tab toggles
@@ -2150,7 +2150,7 @@
       ctx.restore();
 
       /* HYDROGEN IS FUEL (2026-10-24): skimmed into the hold, and into the
-       * jump tank when the pilot says so - this button, or F on this screen. */
+       * jump tank when the pilot says so - this button, or Enter on this row. */
       var canTank = it.cid === 'hydrogen' && refuelFromHold && G.ship.fuel < G.ship.fuelCap - 0.01;
       var btnX0 = btnX1 - btnW - 8;
       hot(rx + 8, yy, Math.max(40, (canTank ? btnX0 : btnX1) - rx - 12), rowH - 4, (function (n) {
