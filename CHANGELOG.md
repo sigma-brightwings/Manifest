@@ -16,6 +16,170 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **People: your crew at their stations, a station deck with people on it,
+  and the crews of the ships in port (2026-10-25).** Astra: *"We should use
+  these crew models on ships and stations in game, in the first person
+  mode. They should also be on NPC ships. Give them each a basic AI script
+  so they do their assigned jobs by class."* The models are the ones she
+  designed on the turntable page ("Manifest Crew Roster") on 2026-10-24/25.
+  - **The bodies** (`src/npcmodel.js`). Fourteen roles: pilot, engineer,
+    gunner, security, tactical, medic and loadmaster for a ship's crew;
+    raider and captain for pirates; enforcer, heavy and fixer for the
+    Syndicate; marine and officer for the Navy.
+    - Low-poly in the first Unreal Tournament's manner, 700 to 2,400
+      triangles each, with the detail painted on one 512 × 512 skin per
+      person rather than modelled.
+    - A ship's crew wears its livery: none on a civilian ship, Navy blue
+      and white, Syndicate charcoal and gold (an engineer's hard hat always
+      yellow or red), or a pirate crew's mismatched patches.
+    - Everything carried is attached: the loadmaster's antenna to a
+      bracket on the frame, rifles to two-point slings over the shoulder,
+      the smart optics to the helmet by a cable. Exo-frames hinge at
+      elbows and knees, and every body has ankles.
+    - Rifles are built from one datum, the chamber, and check six rules
+      of how a gas carbine works (ejection port over the magazine well,
+      trigger behind it, buffer tube in line with the bore, and the rest).
+    - Each body is skinned on eleven bones, so posing one costs eleven
+      matrices and no rebuild.
+  - **Drawn on the GPU** (`src/npcgl.js`): one draw call per person,
+    depth-tested against the room they stand in, lit like the cockpit
+    room. `gl.js` gains `GLWorld.addPass`, run after the cockpit room and
+    before the screens. Without WebGL2 the nearest few people go into
+    walk.js's painter's sort as flat triangles coloured off their skins.
+  - **Who is where, and what they do** (`src/npc.js`):
+    - **Your crew** are the people on your roster. On watch (eight-hour
+      watches on the game clock, two of every three) engineers and gunners
+      sit at the bridge-deck stations of their own role, one to a seat; a
+      second hand for a one-station role stands at the shoulder of whoever
+      has it. An engineer now and then walks aft to look over the passage
+      and the lock. Off watch, people sleep in their bunks or work at the
+      galley. A pilot takes the helm whenever you get out of the seat, and
+      gets up when you want it back; with you in the seat, the pilot on
+      watch stands at your shoulder.
+    - **A station deck** has a market clerk, a yard clerk where there is a
+      yard, a bartender and a crew-hall steward at their counters;
+      security in the port's colours (the Syndicate's enforcers and a heavy
+      at the big lock in their ports, marines at the big lock and a customs
+      officer where the Navy keeps a garrison, the port's own officers
+      elsewhere); the hands in the crew hall, who are exactly the people
+      `Crew.forHire` lists for that port and week, less anyone you have
+      already signed on; and now and then a
+      Syndicate face in the bar, more often where the port is bought.
+    - **Other ships' crews.** Every ship moored at the port
+      (`Sim.berthOccupants`) sends its people, in its owner's colours: one
+      works her berth, the rest go between the bar and the concourse.
+      `Npc.crewForShip` is the same crew for any NPC ship wherever she is
+      met, ready for boarding.
+    - People walk room to room through the doors only, round counters,
+      wait at a sliding door until it opens (and hold it open:
+      `ShipDeck.updateDoors` takes their `hold`), and stop short of you
+      for a moment rather than walk through you.
+    - **E talks to whoever you are facing**: their name, what they are,
+      and a line in character. A hand for hire says how good they are.
+  - **The station deck is drawn on the GPU** when it is available
+    (`Walk.meshFor`): the same plates the 2D deck painted, as one mesh in
+    the docked ship's frame, so the people on it are depth-tested against
+    its walls. The 2D deck is unchanged without WebGL2.
+  - Tests: `test/npc.test.js` (28 checks). Seen in game on the Crawler
+    (`tools/probe-npc.js`, RX 540): a Dart's bridge deck from the seat and
+    on foot, her quarters, and a station's spine, concourse, bar and crew
+    hall with 23 people about; the concourse held 57 fps.
+
+- **A modelled cockpit for every ship, a sliding door aft, and a walk to
+  your airlock (2026-10-24).** Astra: *"We need to have a modeled interior
+  for every ship that doesn't have one, specifically the cockpit. There
+  needs to be doors that slide into the structure of the ship to open the
+  way from the cockpit into the rest of the ship, and the syndicate ships
+  need to have the dark grey and red motif on the interior too."* Her
+  answers: a real 3D room per hull on the GPU; the door walkable to your
+  airlock; Syndicate colours on the Corsair Runner, Enforcer, Syndicate
+  Heavy and a Crawler in Syndicate livery. See `claude/ship-interiors.md`.
+  - **The cockpit is a room now.** Every hull's bridge is a GPU mesh
+    fitted to that hull's own glass and size (`src/shipdeck.js`, from
+    `Render.cockpitGeometry`):
+    - windscreen, quarter-lights and side windows each set in a wall;
+    - the floor window at the bottom of a footwell under the dash slot;
+    - side consoles, the overhead, a ceiling with light strips, and the
+      rear bulkhead.
+    It used to be one flat-painted room for all 23 hulls. The modelled
+    cockpits inside the GLB files were never drawn and still are not.
+  - **The windows keep exactly their shapes.** Each pane is drawn first,
+    depth only, and the room after it. A wall behind glass fails the depth
+    test and the world already drawn shows through. Tests show no wall
+    stands between the seat and any window, on any hull, and every window
+    is set in a wall with no sky past its edge.
+  - **The door.** Two leaves in the rear bulkhead slide sideways into the
+    wall to open, with a lit trim round the frame and a hazard stripe where
+    they meet. Each opens as you reach it and closes behind you.
+  - **Walking.** O, berthed or on a pad, stands you up behind the seat
+    (it used to drop you on the station deck).
+    - You walk aft through the bridge door, down a passage (longer on
+      bigger ships: 2.4 m on an S hull to 8 m on an XL), through a second
+      sliding door into the airlock.
+    - The hatch's lamp is green when there is somewhere to step out to.
+      E at the hatch, berthed, steps you out at your berth on the station
+      deck. On the station deck, E at your own hatch brings you aboard at
+      the airlock. E at the seat sits you down.
+    - Walking uses the seat view's projection from a standing eye, so the
+      room, the screens and the world through the glass all line up.
+      From the passage the cockpit is seen only through the doorway.
+      There is no flight HUD on foot.
+  - **The Syndicate's interior.** Dark grey walls, floor, consoles and
+    leaves; red door trim, stripes and hazard edges; red-and-amber switch
+    panels on grey plate; a red accent strip on the dash. All taken from
+    the hull art's own `syn*` and `syndicate_*` materials. On the Runner,
+    Enforcer and Syndicate Heavy, and on any Crawler in their livery.
+    Navy hulls (Cutter, Capital, Carrier) get a cooler grey with pale-blue
+    trim.
+- **Bridges with crew stations, and crew quarters (2026-10-24).** Astra:
+  *"M and L size ships might have multiple crew stations on the bridge"*,
+  *"create them so that they match the geometry of the ship, but with
+  multiple crew stations"*, and *"All ships which have crew stations
+  require crew quarters."* No crew-station models exist in the art (every
+  hull file has only the pilot's seat), so the stations are built in code.
+  - **The bridge deck.** On every M, L and XL hull, the bulkhead behind
+    the helm stays where it was, with its rear screens and greebles. Its
+    doorway is now an open arch onto a bridge deck behind it, with the
+    sliding bridge door at the deck's aft end.
+  - **The stations.** One for each hand the hull needs with you at the
+    helm (`Crew.crewNeeded`): engineering (amber screens) and gunnery (red).
+    Each is a console against the side wall with a seat facing it, down
+    both walls on a wide hull and the port wall on a narrow one. Up to six;
+    a Carrier's nine share them, gunnery included. E at a station says
+    who signed on for it, or that nobody has. Seeing crew at them comes
+    with the NPC work.
+  - **Crew quarters.** On every ship with stations, off the port side of
+    the passage behind a sliding door that runs into the wall:
+    - a bunk for every hand and one for you, in two-high stacks with
+      reading lamps and end boards;
+    - lockers, and a galley across the aft end, after the navy yards'
+      crew rooms.
+    The passage is lengthened to fit them.
+  - S hulls (Talon, Wren, Bollard, Lance) stay one-seat, with no deck and
+    no quarters.
+  - The Carrier's and Capital's conning-tower bridges and elevators are
+    the next slice. For now they get a large bridge deck like the others.
+  - *Tests:* `test/shipdeck.test.js` +14 checks (49):
+    - stations and bunks per hull;
+    - every room on every hull can be walked to;
+    - the helm's bulkhead has not moved;
+    - the quarters door is wall while shut and its leaves go into the wall.
+  - `test/tear.test.js` now runs in `npm test`.
+- **A Crawler in a faction's colours (2026-10-24).** Astra: *"Player
+  crawlers can have syndicate livery if they're operating for the
+  Syndicate."* Her answer: you choose it when you commission or repaint,
+  and the same goes for a navy.
+  - The order sheet for a Crawler has a LIVERY line: civilian, navy or
+    Syndicate.
+  - The FLEET tab offers a repaint of the Crawler under your hands
+    (4,000 cr).
+  - Syndicate colours need a yard the Syndicate holds and 40+ standing
+    with them (an Enforcer's line), and they must not want you. A navy's
+    need its own yard and 40+ standing (ALLIED, a Cutter's line).
+  - She wears that livery's model outside (`crawler_syndicate`,
+    `crawler_navy`) and its room inside, until she is repainted.
+    `Combat.liveryRefusal`, `Combat.repaintLivery`.
+
 - **Choking a port by buying her cargo in flight (2026-10-21).** Astra:
   *"buying cargo off a ship means it doesn't have that cargo for the
   destination. Provides a way to choke a station without killing trade
@@ -979,6 +1143,34 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Changed
 
+- **The cockpit scales as one piece, and the bulkhead moved aft
+  (2026-10-24).** Part of the ship-interiors work above.
+  - **The scaling fix.** Before, the glass and screens grew with a hull's
+    size but the consoles, overhead, bulkhead and dash were fixed at the
+    Talon's. On a Mule the side windows sat outside its own consoles and
+    the dash stopped well short of the windscreen. Now:
+    - the room scales across and up with the hull, and fore and aft with
+      the windscreen's real distance;
+    - the dash runs from its near edge to the sill.
+    The Talon is unchanged.
+  - **Small hulls' dash screens are inside the glass now.** On a Dart,
+    Fighter or Wren they stood past the windscreen, which the flat cockpit
+    hid. They are drawn in toward the eye, scaled about it, so from the
+    seat they look exactly the size they did.
+  - **The rear bulkhead is 1.3 m behind the eye (it was 0.5 m)**, so there
+    is room to stand and a door to walk through. The two rear screens sit
+    either side of the door and are a third bigger. The bulkhead's greebles
+    keep clear of the door and both screens.
+  - **O stands you up in your own ship** instead of on the station deck.
+    The station deck is through your airlock.
+  - *Tests:*
+    - new `test/shipdeck.test.js` (35 checks), now in `npm test`;
+    - `test/greebles.test.js` checks each hull's fittings against that
+      hull's own walls, not one fixed Talon-sized box, and checks nothing
+      is mounted on the door (14);
+    - `walk.js`: a shut sliding door is wall, and E only reaches things in
+      the room you stand in.
+
 - **No more force fields: every station that had one has sliding doors
   now (2026-10-20).** Astra: *"air locks to keep stations pressurized
   (let's get rid of the force fields)"*.
@@ -1157,6 +1349,18 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
   label (2026-10-17).** Long values in the star chart's two-column rows now
   wrap onto right-aligned continuation lines, and the text below moves down
   to fit.
+
+### Saves
+
+- **Careers load unchanged.**
+  - A Crawler's livery is new and optional (`livery`, `liveryFaction` on
+    the ship and on fleet records); an older career's Crawler loads
+    civilian, which it was.
+  - Walking aboard is not saved, any more than walking a station is: a
+    load puts you back in the seat.
+  - The people (2026-10-25) are not saved either. Who is where is worked
+    out from the roster, the port and the clock, so a load finds the same
+    people at the same posts without storing any of them.
 
 ---
 

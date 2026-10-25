@@ -46,6 +46,9 @@
       bornId: ship.bornId || null,
       /* And her paint (shipyards, 2026-10-19). */
       paint: ship.paint || null,
+      /* And whose colours a Crawler wears (combat.js liveryRefusal). */
+      livery: ship.livery || null,
+      liveryFaction: ship.liveryFaction || null,
       /* A Crawler's craft bay loadout goes with her (construction.js). */
       craftBay: ship.craftBay || null,
       fit: fit,

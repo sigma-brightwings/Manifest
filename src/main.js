@@ -1568,7 +1568,11 @@
         if (wk === 'e' || wk === 'enter') { e.preventDefault(); walkUse(); }
         return;
       }
-      if (wk === 'o' && flying() && G.ship.docked && !G.hyper) { startWalk(); return; }
+      /* O stands you up — into your own ship now, not onto the station deck
+       * (2026-10-24): walk aft to the airlock to step out. Berthed or set
+       * down on a pad; never in flight, where the seat is the only place
+       * anyone should be. */
+      if (wk === 'o' && flying() && (G.ship.docked || G.ship.landed) && !G.hyper) { startShipWalk('seat'); return; }
 
       G.keys[e.key.toLowerCase()] = true;
 
@@ -5118,14 +5122,29 @@
      * with them hidden from the flight controls, so W is a step and not a
      * burn. A ship that is no longer docked (she was sold, or ordered out)
      * ends the walk. */
+    /* The people on the deck you are on move first, so a door one of them
+     * is waiting at is held open this same frame (npc.js). */
+    var npcHold = updateNpcs(dtReal);
     var heldKeys = null;
     if (G.walk) {
-      if (!G.ship.docked || !global.Walk) G.walk = null;
+      /* Aboard your own ship a pad will do as well as a berth. */
+      var berthed = G.ship.docked || (G.walk.ship && G.ship.landed);
+      if (!berthed || !global.Walk) G.walk = null;
       else {
-        if (flying()) global.Walk.step(G.walk, G.keys, dtReal);
+        if (flying()) {
+          global.Walk.step(G.walk, G.keys, dtReal);
+          npcFacing();
+          /* Doors on the wall clock, like the walking itself. */
+          if (G.walk.ship && global.ShipDeck) global.ShipDeck.updateDoors(G.walk.plan, G.walk, dtReal, npcHold);
+        }
         heldKeys = G.keys;
         G.keys = {};
       }
+    }
+    /* In the seat, the bridge door slides shut behind you. */
+    if (!G.walk && G.viewMode === 'cockpit' && global.ShipDeck && global.Render && global.Render.shipInterior) {
+      var deck = global.Render.shipInterior(G.ship);
+      if (deck) global.ShipDeck.updateDoors(deck.plan, null, dtReal, npcHold);
     }
     try { updateWorld(dtReal); } finally { if (heldKeys) G.keys = heldKeys; }
   }
@@ -6478,16 +6497,26 @@
        * glass and the console stay in register; the band keeps its own
        * layout, which already accounts for the bar. */
       var viewH = (flying() && !bandShown()) ? h - FBAR_H : h;
-      cam.buildCockpit(G.ship, w, viewH, G.look);
-      applyCockpitSway(cam);
+      /* On foot in your own ship, the eye is the walker's: standing, in the
+       * ship's frame, through the same projection as the seat. */
+      if (shipWalkGpu()) cam.buildWalker(G.ship, G.walk, G.walk.plan.floorY, w, h - FBAR_H);
+      else {
+        cam.buildCockpit(G.ship, w, viewH, G.look);
+        applyCockpitSway(cam);
+      }
     }
     else cam.build(w, h);
 
     ctx.setTransform(ps, 0, 0, ps, 0, 0);
     /* On foot the station is the whole screen. The GL world is cleared to
-     * rock so nothing outside shows through the 2D layer's floor. */
-    if (G.walk && flying() && !menuOpen() && global.Walk) {
+     * rock so nothing outside shows through the 2D layer's floor. Your own
+     * ship, with the GPU room, is drawn as the world it sits in instead —
+     * see drawShipWalkView. */
+    if (G.walk && flying() && !menuOpen() && global.Walk && !shipWalkGpu()) {
       if (glLive()) { ctx.clearRect(0, 0, w, h); global.GLWorld.begin(ROCK_CLEAR); }
+      /* With the GPU the station deck is drawn on the world layer like your
+       * ship's rooms, so the people on it can stand in it (2026-10-25). */
+      if (stationWalkGpu()) { drawStationWalkGpu(ctx, cam, w, h); return; }
       drawWalkView(ctx, w, h);
       return;
     }
@@ -6852,6 +6881,9 @@
 
     if (G.viewMode === 'cockpit') drawCockpitView(ctx, cam, w, h);
     else drawShip(ctx, cam);
+    /* On foot aboard, nobody is flying: no markers, no labels, no flight
+     * hints. drawShipWalkView drew the walker's own overlay and the bar. */
+    if (shipWalkGpu()) return;
     drawHUD(ctx, w, h);
     drawBurnBanner(ctx, w, h);
     drawCursor(ctx);
@@ -8655,10 +8687,255 @@
         '  —  WASD to walk, drag to look, E to use, Esc for the menu', 8);
   }
 
+  /* ---- on foot in your own ship (2026-10-24) -----------------------------
+   * Astra: "There needs to be doors that slide into the structure of the
+   * ship to open the way from the cockpit into the rest of the ship", and,
+   * asked what the door should do: walkable to your airlock. So O no longer
+   * drops you straight onto the station deck. It stands you up behind the
+   * seat; the bridge door slides into the bulkhead as you reach it; the
+   * passage runs aft to the airlock, and the hatch there is the way out
+   * into your berth. Coming back, your hatch on the station deck brings you
+   * aboard at the airlock rather than straight into the seat, and E at the
+   * seat sits you down.
+   *
+   * The plan and the room are Render.shipInterior's (shipdeck.js) — the
+   * same plan Walk.step walks and the same meshes the seat view draws. */
+  function startShipWalk(from) {
+    var d = global.Render && global.Render.shipInterior ? global.Render.shipInterior(G.ship) : null;
+    if (!d || !global.Walk) { startWalk(); return; }
+    var p = d.plan, at = from === 'aboard' ? p.aboard : p.spawn;
+    G.walk = global.Walk.start(p);
+    G.walk.x = at.x; G.walk.z = at.z; G.walk.yaw = at.yaw; G.walk.pitch = 0;
+    G.walk.ship = true;
+    var hull = (Combat.HULLS && Combat.HULLS[G.ship.hullId]) || {};
+    G.walk.portName = G.ship.shipName || hull.name || 'your ship';
+    G.viewMode = 'cockpit';
+    G.look.yaw = 0; G.look.pitch = 0;
+    G.panel = 0;
+    say(from === 'aboard'
+        ? 'You come aboard  —  WASD to walk, drag to look, E at the seat to fly'
+        : 'You get up out of the seat  —  WASD to walk, drag to look, E to use, Esc for the menu', 7);
+  }
+
+  /* The doorway the cockpit is seen through from where you stand, as it is
+   * open right now, on screen: from the bridge deck the helm's arch; from
+   * the passage the bridge door; from anywhere else, none of it. */
+  function shipWalkClip(cam) {
+    var w = G.walk, p = w && w.plan, SD = global.ShipDeck;
+    if (!p || !p.rooms || w.z > p.rooms[0].z0) return null;
+    var here = global.Walk.roomAt(p, w.x, w.z);
+    var byId = function (id) { return SD && SD.doorById ? SD.doorById(p, id) : null; };
+    var d = null;
+    if (here && here.kind === 'bridgedeck') d = byId('helm');
+    else if (here && here.kind === 'passage') d = byId('bridge');
+    else if (!here) d = byId('helm') && w.z > byId('helm').wall[0] - 0.01 ? byId('helm') : byId('bridge');
+    if (!d) return [];
+    var gap = d.arch ? SD.DOOR_HW : (SD ? SD.leafTravel(d.open) : 0);
+    if (gap < 0.02) return [];
+    var y0 = p.floorY, y1 = p.floorY + (SD ? SD.DOOR_H : 2), z = d.wall[1];
+    var M = global.Render.M;
+    var pts = [[-gap, y1, z], [gap, y1, z], [gap, y0, z], [-gap, y0, z]].map(function (q) {
+      return Render.localToWorld(G.ship, q[0] * M, q[1] * M, q[2] * M);
+    });
+    return Render.clipProject(cam, pts) || [];
+  }
+
+  /* Walking your own ship with the GPU room: the world as the eye sees it,
+   * your own cockpit cut by its windows, the seat you got out of, and
+   * nothing on the glass — there is nobody flying. */
+  function drawShipWalkView(ctx, cam, w, h) {
+    var p = G.walk.plan, clip = shipWalkClip(cam);
+    queueNpcs(cam);
+    Render.drawCockpitShell(ctx, cam, G.ship, w, h, { seat: true, walking: true, clip: clip });
+    var inner = Render.drawCockpitInterior(ctx, cam, G.ship, w, h, { clip: clip });
+    drawDashPanels(ctx, inner.mfds, false);
+    drawWalkOverlay(ctx, w, h, global.Walk.roomAt(p, G.walk.x, G.walk.z));
+  }
+
+  function shipWalkGpu() {
+    return !!(G.walk && G.walk.ship && glLive() && global.Render && global.Render.cockpitGpu &&
+              global.Render.cockpitGpu());
+  }
+
+  /* ---- the people (2026-10-25) -------------------------------------------
+   * Astra: "We should use these crew models on ships and stations in game,
+   * in the first person mode. They should also be on NPC ships. Give them
+   * each a basic AI script so they do their assigned jobs by class."
+   *
+   * npc.js decides who is where and what they are doing, npcmodel.js builds
+   * the bodies and npcgl.js draws them. This is the glue: one scene at a
+   * time — the deck you are on, or your own ship's when you are in the seat
+   * — rebuilt when that changes (another port, a hand signed on or paid off,
+   * a refit that moved the furniture). */
+  var npcScene = null, npcClock = 0;
+
+  function npcSceneNow() {
+    var NpcM = global.Npc;
+    if (!NpcM || !G.ship) return null;
+    var signed = (Crew && Crew.aboard ? Crew.aboard(G.ship) : []).map(function (c) { return c.id || c.name; });
+    var roster = signed.join(',');
+    if (G.walk && !G.walk.ship && G.walk.plan) {
+      var plan = G.walk.plan;
+      /* Rebuilt when you sign somebody on: they leave the hall. */
+      if (npcScene && npcScene.plan === plan && npcScene.roster === roster) return npcScene;
+      var port = G.sys && G.sys.byId ? G.sys.byId[plan.portId] : null;
+      npcScene = NpcM.stationScene(plan, port, G.sys, {
+        t: G.t, seed: G.seed || '', livery: port && port.livery,
+        navy: !!(Eco && Eco.navyPresent && Eco.navyPresent(G.sys)),
+        corruption: G.sys && G.sys.corruption, signed: signed
+      });
+      npcScene.roster = roster;
+      return npcScene;
+    }
+    var d = Render.shipInterior ? Render.shipInterior(G.ship) : null;
+    if (!d) return null;
+    if (npcScene && npcScene.plan === d.plan && npcScene.roster === roster) return npcScene;
+    npcScene = NpcM.shipScene(d.plan, G.ship, { t: G.t });
+    npcScene.roster = roster;
+    return npcScene;
+  }
+
+  /* One tick of everybody on the current deck. Returns the sliding doors
+   * somebody is waiting at, for ShipDeck.updateDoors to hold open. Never
+   * allowed to stop the frame: people are scenery to the flight model. */
+  function updateNpcs(dt) {
+    var sc = null;
+    try { sc = npcSceneNow(); } catch (e) { if (global.console) console.error(e); sc = null; }
+    if (!sc) return {};
+    npcClock += dt;
+    var onDeck = !!(G.walk && ((sc.kind === 'ship') === !!G.walk.ship));
+    var you = null;
+    if (onDeck) you = { x: G.walk.x, z: G.walk.z };
+    else if (sc.kind === 'ship') {
+      /* In the seat, you are a body in the helm chair to walk round. */
+      var seat = sc.plan.items.filter(function (it) { return it.kind === 'seat'; })[0];
+      if (seat) you = { x: seat.x, z: seat.z };
+    }
+    try {
+      return global.Npc.update(sc, dt, { now: npcClock, t: G.t, player: you,
+                                         playerWalking: !!(G.walk && G.walk.ship), helmFree: true });
+    } catch (e) { if (global.console) console.error(e); return {}; }
+  }
+
+  /* E talks to whoever you are facing, when they are nearer than the
+   * nearest thing to use. */
+  function npcFacing() {
+    if (!G.walk || !npcScene || !global.Npc) return;
+    if ((npcScene.kind === 'ship') !== !!G.walk.ship) return;
+    var p = global.Npc.facing(npcScene, G.walk);
+    if (!p) return;
+    var it = G.walk.near, d = Math.hypot(p.x - G.walk.x, p.z - G.walk.z);
+    if (it && Math.hypot(it.x - G.walk.x, it.z - G.walk.z) < d) return;
+    G.walk.near = { kind: 'npc', label: 'Talk to ' + p.name, npc: p, x: p.x, z: p.z };
+  }
+
+  /* Hand this frame's bodies to the GPU, in the docked ship's frame — the
+   * frame both your own rooms and a station deck are drawn in. */
+  function queueNpcs(cam) {
+    var sc = npcScene, NG = global.NpcGL, s = G.ship;
+    if (!sc || !NG || !glLive() || !global.Npc || !s) return;
+    var eye = G.walk ? { x: G.walk.x, z: G.walk.z } : { x: 0, z: 0 };
+    NG.queue(cam, { pos: s.pos, right: s.right, up: s.up, fwd: s.fwd }, Render.M,
+             global.Npc.figures(sc, eye, 2));
+  }
+
+  /* Without the GPU, the nearest few bodies go into walk.js's painter's
+   * sort as flat triangles, coloured off their own skins. */
+  function npcQuads2D() {
+    var sc = npcScene, NM = global.NpcModel;
+    if (!sc || !NM || !global.Npc || !G.walk) return null;
+    if ((sc.kind === 'ship') !== !!G.walk.ship) return null;
+    var out = [], fy = sc.floorY || 0;
+    global.Npc.figures(sc, { x: G.walk.x, z: G.walk.z }, 1).slice(0, 5).forEach(function (f) {
+      if (Math.hypot(f.person.x - G.walk.x, f.person.z - G.walk.z) > 14) return;
+      var m = f.model, cols = NM.faceColours(m);
+      for (var t = 0; t < m.tris; t++) {
+        var a = NM.posed(m, f.mats, t * 3), b = NM.posed(m, f.mats, t * 3 + 1), c = NM.posed(m, f.mats, t * 3 + 2);
+        a[1] -= fy; b[1] -= fy; c[1] -= fy;
+        out.push({ pts: [a, b, c], col: cols[t] });
+      }
+    });
+    return out;
+  }
+
+  /* On foot in a station, with the GPU: the deck walk.js laid out, as one
+   * mesh on the world layer (Walk.meshFor), drawn through the walker's eye
+   * in the docked ship's frame; the people in it; and the labels and the
+   * overlay on the 2D canvas over the top. */
+  function stationWalkGpu() {
+    return !!(G.walk && !G.walk.ship && G.walk.plan && glLive() && global.Walk && global.Walk.meshFor &&
+              global.GLWorld && global.GLWorld.queueCockpit && G.ship && G.ship.pos && G.ship.fwd);
+  }
+  function drawStationWalkGpu(ctx, cam, w, h) {
+    var p = G.walk.plan, s = G.ship;
+    cam.buildWalker(s, G.walk, 0, w, h - FBAR_H);
+    global.GLWorld.queueCockpit(cam, { pos: s.pos, right: s.right, up: s.up, fwd: s.fwd }, null,
+                                global.Walk.meshFor(p), [], Render.M);
+    queueNpcs(cam);
+    var room = global.Walk.roomAt(p, G.walk.x, G.walk.z);
+    drawWalkLabels(ctx, cam, p, room, w, h);
+    drawWalkOverlay(ctx, w, h, room);
+  }
+  /* The things to use in the room you are in, labelled where they stand,
+   * and the dot at the middle of the view — what Walk.draw paints itself
+   * on the 2D path. Projected here rather than through cam.project, whose
+   * near plane is whatever the last outside view set. */
+  function drawWalkLabels(ctx, cam, p, here, w, h) {
+    var M = Render.M;
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    p.items.forEach(function (it) {
+      if (it.silent) return;
+      var r = global.Walk.roomAt(p, it.x, it.z);
+      if (!r || (here && r !== here)) return;
+      var q = Render.localToWorld(G.ship, it.x * M, 2.4 * M, it.z * M);
+      var vx = q.x - cam.eye.x, vy = q.y - cam.eye.y, vz = q.z - cam.eye.z;
+      var dpt = vx * cam.f.x + vy * cam.f.y + vz * cam.f.z;
+      if (dpt < 0.3 * M || dpt > 30 * M) return;
+      var sx = cam.cx + (vx * cam.r.x + vy * cam.r.y + vz * cam.r.z) * cam.flen / dpt;
+      var sy = cam.cy - (vx * cam.u.x + vy * cam.u.y + vz * cam.u.z) * cam.flen / dpt;
+      ctx.fillStyle = it === G.walk.near ? '#ffe9a8' : 'rgba(180,240,255,0.75)';
+      ctx.fillText(it.label, sx, sy);
+    });
+    ctx.fillStyle = 'rgba(220,240,255,0.7)';
+    ctx.beginPath(); ctx.arc(w / 2, (h - FBAR_H) / 2, 2, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
   function walkUse() {
     var w = G.walk, it = w && w.near;
     if (!it) return;
-    if (it.kind === 'mine') { G.walk = null; say('Back in the seat', 3); return; }
+    /* Somebody to talk to (npc.js): who they are and a line in character. */
+    if (it.kind === 'npc') {
+      if (global.Npc) say(global.Npc.talk(it.npc) + (it.npc.forHire ? '   —   terms are on the crew board' : ''), 7);
+      return;
+    }
+    if (w.ship) {
+      if (it.kind === 'seat') {
+        G.walk = null;
+        G.look.yaw = 0; G.look.pitch = 0;
+        say('Back in the seat', 3);
+        return;
+      }
+      if (it.kind === 'station') {
+        var who = Crew && Crew.aboard ? Crew.aboard(G.ship).filter(function (c) { return c.role === it.role; }) : [];
+        say(who.length
+            ? (who.length === 1 ? who[0].name : who.length + ' ' + (Crew.ROLES && Crew.ROLES[it.role] ? Crew.ROLES[it.role].name.toLowerCase() + 's' : 'crew'))
+              + ' signed on for this station  —  seeing them at it comes with the crew walking the ship'
+            : 'Nobody signed on to stand this watch  —  hire at a crew hall', 6);
+        return;
+      }
+      if (it.kind === 'galley') { say('The galley  —  coffee, ration packs, and a kettle bolted to the counter', 4); return; }
+      if (it.kind === 'hatch') {
+        if (G.ship.docked) { startWalk(); return; }
+        say(G.ship.landed ? 'The hatch opens onto the pad  —  walking outside comes later'
+                          : 'Nothing past that hatch but vacuum', 5);
+      }
+      return;
+    }
+    /* Your own hatch on the station deck brings you aboard at the airlock. */
+    if (it.kind === 'mine') { startShipWalk('aboard'); return; }
     if (it.kind === 'fleet') {
       var r = Combat.takeCommand ? Combat.takeCommand(G, it.ship.id, 'keep') : { ok: false, why: 'no harbour master' };
       if (!r.ok) { say('Not now: ' + r.why, 5); return; }
@@ -8679,7 +8956,13 @@
 
   function drawWalkView(ctx, w, h) {
     var Walk = global.Walk;
-    var view = Walk.draw(ctx, G.walk, w, h - FBAR_H);
+    var view = Walk.draw(ctx, G.walk, w, h - FBAR_H, npcQuads2D());
+    drawWalkOverlay(ctx, w, h, view && view.room);
+  }
+
+  /* What is in front of you, where you are, and how to move: the same over
+   * a station's deck and your own (2026-10-24). */
+  function drawWalkOverlay(ctx, w, h, room) {
     ctx.save();
     ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.textAlign = 'center';
@@ -8694,7 +8977,7 @@
     }
     ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(180,240,255,0.8)';
-    ctx.fillText((G.walk.portName || '') + (view && view.room ? '  ·  ' + view.room.label : ''), w / 2, 22);
+    ctx.fillText((G.walk.portName || '') + (room ? '  ·  ' + room.label : ''), w / 2, 22);
     ctx.fillStyle = 'rgba(180,240,255,0.55)';
     ctx.fillText('WASD walk  ·  Shift run  ·  drag or arrows to look  ·  E use  ·  Esc menu', w / 2, h - FBAR_H - 10);
     if (G.message && performance.now() < G.messageUntil) {
@@ -8724,7 +9007,10 @@
    * ladder rather than the ladder floating over the console. That mattered
    * a little before; now that the head can turn, it matters constantly. */
   function drawCockpitView(ctx, cam, w, h) {
+    if (shipWalkGpu()) { drawShipWalkView(ctx, cam, w, h); return; }
     var shell = G.showCockpitFrame ? Render.drawCockpitShell(ctx, cam, G.ship, w, h) : null;
+    /* Your crew at their stations, behind you on the bridge deck. */
+    if (shell && Render.cockpitGpu && Render.cockpitGpu()) queueNpcs(cam);
     var apertures = shell ? shell.apertures : null;
     var aperture = shell ? shell.aperture : null;
 

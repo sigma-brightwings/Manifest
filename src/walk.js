@@ -202,6 +202,9 @@
     }
     for (i = 0; i < plan.doors.length; i++) {
       var d = plan.doors[i];
+      /* A sliding door (shipdeck.js) is only a way through while it is
+       * open; shut, it is wall like the rest. */
+      if (d.shut) continue;
       if (d.axis === 'z') {
         if (x > d.x0 + RADIUS && x < d.x1 - RADIUS && z > d.z0 && z < d.z1) return true;
       } else {
@@ -255,8 +258,16 @@
   function facing(w) {
     var best = null, bd = Infinity;
     var fx = Math.sin(w.yaw), fz = Math.cos(w.yaw);
+    /* Only in the room you are standing in: in a ship the seat is two
+     * metres from the passage, through a doorway, and E there should not
+     * sit you down in it. */
+    var here = roomAt(w.plan, w.x, w.z);
     for (var i = 0; i < w.plan.items.length; i++) {
       var it = w.plan.items[i];
+      /* Furniture with nothing to use on it (a ship's dash and consoles)
+       * is in the plan only to be walked round. */
+      if (it.silent) continue;
+      if (here && roomAt(w.plan, it.x, it.z) !== here) continue;
       var dx = it.x - w.x, dz = it.z - w.z, d = Math.sqrt(dx * dx + dz * dz);
       if (d > REACH + 0.6) continue;
       if (d > 0.2 && (dx * fx + dz * fz) / d < 0.35) continue;
@@ -397,7 +408,10 @@
     out.push({ pts: [[x, 2.62, z - 1.2], [x, 2.62, z + 1.2], [x, 2.8, z + 1.2], [x, 2.8, z - 1.2]], col: col, bias: -0.04 });
   }
 
-  function draw(ctx, w, W, H) {
+  /* `extra`: more polygons for the painter's sort, in the plan's metres —
+   * the people on the deck when there is no GPU to draw them (npc.js,
+   * 2026-10-25). Each is { pts: [[x,y,z] …], col }. */
+  function draw(ctx, w, W, H, extra) {
     var plan = w.plan, c = camera(w, W, H);
     ctx.fillStyle = '#05070a';
     ctx.fillRect(0, 0, W, H);
@@ -426,6 +440,7 @@
       if (it.counter) boxQuads(it.counter, 0, 1.05, it.kind === 'bar' ? '#6b4a33' : '#3f5560', quads);
       if (it.ship) hatchQuads(it, r, quads);
     });
+    if (extra) for (var e = 0; e < extra.length; e++) quads.push(extra[e]);
     /* Far to near. */
     quads.forEach(function (q) {
       var m = [0, 0, 0];
@@ -458,7 +473,7 @@
     ctx.textAlign = 'center';
     plan.items.forEach(function (it) {
       var r = roomAt(plan, it.x, it.z);
-      if (!r || (here && r !== here)) return;
+      if (it.silent || !r || (here && r !== here)) return;
       var p = project(c, [[it.x, 2.4, it.z], [it.x, 2.4, it.z], [it.x, 2.4, it.z]]);
       var cs = toCam(c, [it.x, 2.4, it.z]);
       if (!p || cs.d < 0.3 || cs.d > 30) return;
@@ -472,11 +487,62 @@
     return { room: here };
   }
 
+  /* ---- the station deck as one mesh, for the GPU (2026-10-25) ------------
+   * The same plates draw() paints — floors, ceilings, the walls cut for
+   * their doors, the trim, the light strips, the counters and the hatches —
+   * in the renderer's mesh format ({ v, f, c }, '!' for a self-lit face),
+   * so a station deck can be drawn on the world layer the way your own
+   * ship's rooms are, and the people standing in it (npcgl.js) can be
+   * depth-tested against its walls. Every room, not just the ones near you:
+   * the GPU does not mind, and a closed building is what keeps the world
+   * outside from showing through a far doorway. Built once per plan. */
+  function hexOf(col) {
+    if (col.charAt(0) === '#') return col;
+    var m = /rgb\((\d+),(\d+),(\d+)\)/.exec(col);
+    if (!m) return '#808080';
+    return '#' + [m[1], m[2], m[3]].map(function (n) { return ('0' + (+n).toString(16)).slice(-2); }).join('');
+  }
+  function meshFor(plan) {
+    if (plan._mesh) return plan._mesh;
+    var quads = [];
+    /* The trim stripe lies ON its wall. The painter's sort kept it in front
+     * with a bias; a depth buffer needs it actually in front, so it is
+     * stood a centimetre off the wall into the room, or the two flicker. */
+    plan.rooms.forEach(function (r) {
+      var from = quads.length;
+      roomQuads(plan, r, quads);
+      for (var i = from; i < quads.length; i++) {
+        if (!quads[i].bias || quads[i].bias > -0.01 || quads[i].bias < -0.03) continue;
+        quads[i].pts = quads[i].pts.map(function (p) {
+          var q = p.slice();
+          if (Math.abs(q[0] - r.x0) < 1e-6) q[0] += 0.012; else if (Math.abs(q[0] - r.x1) < 1e-6) q[0] -= 0.012;
+          if (Math.abs(q[2] - r.z0) < 1e-6) q[2] += 0.012; else if (Math.abs(q[2] - r.z1) < 1e-6) q[2] -= 0.012;
+          return q;
+        });
+      }
+    });
+    plan.items.forEach(function (it) {
+      var r = roomAt(plan, it.x, it.z);
+      if (!r) return;
+      if (it.counter) boxQuads(it.counter, 0, 1.05, it.kind === 'bar' ? '#6b4a33' : '#3f5560', quads);
+      if (it.ship) hatchQuads(it, r, quads);
+    });
+    var m = { v: [], f: [], c: [] };
+    quads.forEach(function (q) {
+      var col = hexOf(q.col), lit = col.toLowerCase() === '#e8f4ff' || (q.bias || 0) <= -0.04;
+      var n = m.v.length;
+      q.pts.forEach(function (p) { m.v.push([p[0], p[1], p[2]]); });
+      for (var i = 1; i + 1 < q.pts.length; i++) { m.f.push([n, n + i, n + i + 1]); m.c.push((lit ? '!' : '') + col); }
+    });
+    plan._mesh = m;
+    return m;
+  }
+
   var Walk = {
     EYE: EYE, RADIUS: RADIUS, WALK: WALK, RUN: RUN, REACH: REACH,
     layout: layout, standable: standable, roomAt: roomAt,
     start: start, step: step, look: look, facing: facing, draw: draw,
-    sizeClass: sizeClass
+    sizeClass: sizeClass, meshFor: meshFor
   };
 
   global.Walk = Walk;

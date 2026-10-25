@@ -2814,6 +2814,26 @@
         (hull ? hull.name : '') + '  ·  here  ·  ' +
         Math.round(Sim.cargoMass(s)) + ' / ' + s.cargoCap + ' t',
         function () {}, true);
+    /* REPAINT IN A FACTION'S COLOURS (2026-10-24): a Crawler only, at a
+     * shipyard, in the livery of whoever holds the yard and trusts you —
+     * the same rule as building her that way (Combat.liveryRefusal). */
+    if (Combat.LIVERY_HULLS && Combat.LIVERY_HULLS[s.hullId] && Combat.repaintLivery) {
+      var nowLiv = s.livery || 'civ';
+      ['civ', 'navy', 'syn'].forEach(function (liv) {
+        if (liv === nowLiv) return;
+        var why = !Combat.isShipyard(port) ? 'only a shipyard repaints a hull'
+                : Combat.liveryRefusal(G, port, liv);
+        row('  ▶ REPAINT IN ' + (Combat.LIVERY_NAMES[liv] || liv).toUpperCase() + ' LIVERY  ·  ' +
+            Combat.REPAINT_PRICE + ' cr',
+            why || 'she flies their colours, outside and in, until she is repainted',
+            function () {
+              var r = Combat.repaintLivery(G, liv);
+              if (!r.ok) { say('Not here: ' + r.why, 6); return; }
+              say('She comes out of the paint shed in ' + Combat.LIVERY_NAMES[liv] + ' colours — ' +
+                  r.cost + ' cr', 7);
+            }, !!why);
+      });
+    }
 
     /* ON THE SLIPS, wherever they are: a hull you have paid for is part of
      * the fleet you are planning, even while she is still being built. */
@@ -3389,7 +3409,18 @@
     var tn = (Combat.PAINT_BY_ID[o.paint.t] || {}).name || 'yard grey';
     row('  HULL COLOUR:  ' + pn + '  ▶', null, function () { cyclePaint('p'); });
     row('  TRIM:  ' + tn + '  ▶', null, function () { cyclePaint('t'); });
-    var q = Combat.quoteCommission(G, hullId, { fit: o.fit });
+    /* WHOSE COLOURS (2026-10-24): a Crawler can be built in a navy's or
+     * the Syndicate's livery, at their own yard, to a captain they trust.
+     * The line shows why not when the yard would refuse it. */
+    if (Combat.LIVERY_HULLS && Combat.LIVERY_HULLS[hullId]) {
+      var LV = ['civ', 'navy', 'syn'];
+      var lw = Combat.liveryRefusal(G, port, o.livery || 'civ');
+      row('  LIVERY:  ' + (Combat.LIVERY_NAMES[o.livery || 'civ'] || 'civilian') + '  ▶',
+          lw || 'whose colours she flies, outside and in', function () {
+            o.livery = LV[(LV.indexOf(o.livery || 'civ') + 1) % LV.length];
+          }, false, { hot: !!lw });
+    }
+    var q = Combat.quoteCommission(G, hullId, { fit: o.fit, livery: o.livery });
     var sum = q.summary || {};
     row('  ' + (q.ok ? 'QUOTE' : 'CANNOT BUILD') + ':  hull ' + (q.hull || 0) + ' + fittings ' + (q.gear || 0) +
         ' = ' + (q.cost || 0) + ' cr  ·  ready in ' + (q.days || 0) + ' days',
@@ -3411,7 +3442,7 @@
      * price), bare unless the sheet says otherwise. */
     if (hull && port && build && Combat.isShipyard(port)) {
       var o = orderFor(hullId);
-      var q = Combat.quoteCommission(G, hullId, { fit: o.fit });
+      var q = Combat.quoteCommission(G, hullId, { fit: o.fit, livery: o.livery });
       return { cost: q.cost || 0, ok: q.ok, why: q.why, fit: q.fit, order: o, days: q.days };
     }
     if (hull && Combat.bigHull && Combat.bigHull(hullId) && port) {
@@ -3486,7 +3517,8 @@
     var hull = Combat.HULLS[G.yardHull];
     if (!hull || !G.yardOrder || G.yardOrder.hullId !== hull.id) return;
     var o = G.yardOrder;
-    var r = Combat.commission(G, hull.id, { fit: o.fit, name: o.name || null, paint: paintOf(o) });
+    var r = Combat.commission(G, hull.id, { fit: o.fit, name: o.name || null, paint: paintOf(o),
+                                                  livery: o.livery || null });
     if (!r.ok) { say('No deal: ' + r.why, 5); return; }
     G.yardOrder = null;
     say('Signed. The ' + (r.order.name || hull.name) + ' goes on the slip — ready here in ' +

@@ -2874,6 +2874,30 @@
     gl.depthMask(true);
   }
 
+  /* ---- PASSES OTHER FILES ADD (2026-10-25) -------------------------------
+   * A pass is a function (gl, env) run after the cockpit room and before
+   * the screens, into whatever framebuffer the frame is being drawn to.
+   * `env` carries what a pass needs to agree with this file about the
+   * picture — the viewport, the log-depth constants — and the shader
+   * helpers, so a new kind of thing to draw can live in its own file
+   * without this one learning about it. npcgl.js (the people) is the first.
+   * A pass that throws is reported and skipped, never allowed to take the
+   * rest of the frame with it. */
+  var extraPasses = [];
+  GL.addPass = function (fn) {
+    if (typeof fn === 'function' && extraPasses.indexOf(fn) < 0) extraPasses.push(fn);
+  };
+  function drawExtraPasses() {
+    if (!extraPasses.length) return;
+    var env = { vw: vw, vh: vh, near: DEPTH_NEAR, invLogRange: INV_LOG_RANGE, link: link, uniforms: uniforms };
+    for (var i = 0; i < extraPasses.length; i++) {
+      try { extraPasses[i](gl, env); } catch (e) { if (global.console) console.error(e); }
+    }
+    gl.bindVertexArray(null);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  }
+
   GL.end = function () {
     if (!gl) return;
     drawBodies();
@@ -2885,6 +2909,11 @@
     /* After the hulls, before the screens: translucent, so it blends over
      * what is behind it and is hidden by what is in front. */
     drawRings();
+    /* The cockpit after everything outside it, because its windows write
+     * depth (see drawCockpit), and before the screens mounted in it. */
+    drawCockpit();
+    /* The people (npcgl.js), standing in the room just drawn. */
+    drawExtraPasses();
     /* Last, so the screens are lit over a finished world rather than
      * competing with it — and after the hull, so a panel is depth-tested
      * against the cockpit it is mounted in. */
@@ -3037,12 +3066,17 @@
      * no blend state and — more importantly — still needs no sort. Turning
      * blending on would cost fill rate for nothing and would not make the
      * glass any more correct. */
+    meshPassBegin(meshQueue[0].cam);
+    for (var i = 0; i < meshQueue.length; i++) drawQueuedMesh(meshQueue[i]);
+    gl.bindVertexArray(null);
+    gl.enable(gl.BLEND);
+  }
+
+  function meshPassBegin(cam) {
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LESS);
     gl.disable(gl.BLEND);
     gl.useProgram(meshProg);
-
-    var cam = meshQueue[0].cam;
     gl.uniform2f(meshUni.uViewportPx, vw, vh);
     gl.uniform2f(meshUni.uCenterPx, cam.cx, cam.cy);
     gl.uniform1f(meshUni.uFlen, cam.flen);
@@ -3052,9 +3086,65 @@
     gl.uniform1f(meshUni.uNear, DEPTH_NEAR);
     gl.uniform1f(meshUni.uInvLogRange, INV_LOG_RANGE);
     setTearUniforms(meshUni);
+  }
 
-    for (var i = 0; i < meshQueue.length; i++) {
-      var m = meshQueue[i];
+  /* ---- THE COCKPIT, last of the world (2026-10-24) -----------------------
+   * Astra: "a modeled interior for every ship … specifically the cockpit."
+   * The room is a mesh like any other, in the ship's frame — but it is
+   * cut by its windows, and the windows are not holes in it. Every pane is
+   * drawn first with colour writes off: it puts its depth in the buffer
+   * and nothing else. Then the room: any wall behind a pane is further than
+   * the pane and fails the depth test, so whatever the world already drew
+   * there — stars, a planet, the station you are parked in — is what you
+   * see. That is why this pass comes after everything outside (bodies,
+   * hulls, tears, lightning, rings) and before the screens: once a pane
+   * has written its depth, nothing beyond it can be drawn.
+   *
+   * Indoors-lit always: a cockpit has no sun in it. Your own hull is never
+   * queued in the seat view, so nothing of the ship's outside is in the
+   * way of the glass. */
+  var cockpitQ = null;
+  GL.queueCockpit = function (cam, frame, portals, room, parts, scale) {
+    if (!gl || !meshProg || !room || !room.f || !room.f.length) return false;
+    function item(mesh, off) {
+      off = off || ZERO_OFF;
+      var p = {
+        x: frame.pos.x + (frame.right.x * off[0] + frame.up.x * off[1] + frame.fwd.x * off[2]) * scale,
+        y: frame.pos.y + (frame.right.y * off[0] + frame.up.y * off[1] + frame.fwd.y * off[2]) * scale,
+        z: frame.pos.z + (frame.right.z * off[0] + frame.up.z * off[1] + frame.fwd.z * off[2]) * scale
+      };
+      return { mesh: mesh, rel: { x: p.x - cam.eye.x, y: p.y - cam.eye.y, z: p.z - cam.eye.z },
+               scale: scale, sun: ZERO3, r: frame.right, u: frame.up, f: frame.fwd, cam: cam,
+               glow: 0, wind: ZERO3, alpha: 1, paint: null, indoors: 1, cut: null };
+    }
+    cockpitQ = {
+      cam: cam,
+      portals: portals && portals.f && portals.f.length ? item(portals) : null,
+      room: item(room),
+      parts: (parts || []).filter(function (pt) { return pt && pt.mesh && pt.mesh.f && pt.mesh.f.length; })
+                          .map(function (pt) { return item(pt.mesh, pt.off); })
+    };
+    return true;
+  };
+  var ZERO_OFF = [0, 0, 0];
+
+  function drawCockpit() {
+    var q = cockpitQ;
+    cockpitQ = null;
+    if (!q) return;
+    meshPassBegin(q.cam);
+    if (q.portals) {
+      gl.colorMask(false, false, false, false);
+      drawQueuedMesh(q.portals);
+      gl.colorMask(true, true, true, true);
+    }
+    drawQueuedMesh(q.room);
+    for (var i = 0; i < q.parts.length; i++) drawQueuedMesh(q.parts[i]);
+    gl.bindVertexArray(null);
+    gl.enable(gl.BLEND);
+  }
+
+  function drawQueuedMesh(m) {
       var up = uploadMesh(m.mesh);
       gl.bindVertexArray(up.vao);
       gl.uniform3f(meshUni.uModelRel, m.rel.x, m.rel.y, m.rel.z);
@@ -3087,9 +3177,6 @@
         m.f.x, m.f.y, m.f.z
       ]);
       gl.drawArrays(gl.TRIANGLES, 0, up.count);
-    }
-    gl.bindVertexArray(null);
-    gl.enable(gl.BLEND);
   }
 
   /* Terrain, per world type: how much of it is under something, what that

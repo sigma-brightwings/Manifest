@@ -7282,6 +7282,63 @@
     return null;
   }
 
+  /* ---- A CRAWLER IN SOMEBODY'S COLOURS (2026-10-24) ---------------------
+   * Astra: "Player crawlers can have syndicate livery if they're operating
+   * for the Syndicate." Asked what makes it so: commissioned in their
+   * colours — ordered, or repainted, at a yard the Syndicate holds, to a
+   * captain they trust as far as they trust an Enforcer's (40) — and it
+   * stays Syndicate until it is repainted. The same for a navy, at that
+   * navy's own yard, to a captain it counts as ALLIED (40, the Cutter's
+   * line). The livery is the model the hull wears outside (crawler_navy,
+   * crawler_syndicate) and the colours of the room inside (shipdeck.js).
+   *
+   * `livery` on a ship is null (civilian), 'navy' or 'syn' — the same
+   * three words the station art uses (render.js LIVERY_SUFFIX). */
+  var LIVERY_HULLS = { crawler: true };
+  var LIVERY_NAMES = { civ: 'civilian', navy: 'navy', syn: 'Syndicate' };
+  var LIVERY_STANDING = 40;
+  var REPAINT_PRICE = 4000;
+
+  function liveryRefusal(G, port, livery) {
+    if (!livery || livery === 'civ') return null;
+    if (!port) return 'only on the clamps';
+    if (!isShipyard(port)) return 'only a shipyard paints a hull in a faction\'s colours';
+    var fac = port.faction || 'civil';
+    if (livery === 'syn') {
+      if (fac !== 'outlaw') return 'only a yard the Syndicate holds puts a hull in their colours';
+      if (G && wantedHere(G, 'outlaw')) return 'they will not put their colours on someone they want';
+      var st = (G && G.standing && G.standing.outlaw) || 0;
+      if (st < LIVERY_STANDING) return 'needs ' + LIVERY_STANDING + '+ standing with the Syndicate — you have ' + Math.round(st);
+      return null;
+    }
+    if (livery === 'navy') {
+      if (fac === 'outlaw' || fac === 'civil') return 'only a navy\'s own yard paints a hull in its colours';
+      if (G && wantedHere(G, fac)) return 'they will not put their colours on someone they want';
+      var sn = (G && G.standing && G.standing[fac]) || 0;
+      if (sn < LIVERY_STANDING) return 'needs ' + LIVERY_STANDING + '+ standing with the yard\'s navy — you have ' + Math.round(sn);
+      return null;
+    }
+    return 'no such livery';
+  }
+
+  /* Repaint the ship under your hands. Returns { ok, why, cost }. */
+  function repaintLivery(G, livery) {
+    var s = G && G.ship;
+    if (!s || !LIVERY_HULLS[s.hullId]) return { ok: false, why: 'only a Crawler wears a faction\'s livery' };
+    var want = livery === 'civ' ? null : livery;
+    if ((s.livery || null) === want) return { ok: false, why: 'she is already in those colours' };
+    var port = dockedPort(G);
+    if (!port || !isShipyard(port)) return { ok: false, why: 'only a shipyard repaints a hull' };
+    var why = liveryRefusal(G, port, livery);
+    if (why) return { ok: false, why: why };
+    if ((s.credits || 0) < REPAINT_PRICE) return { ok: false, why: 'a repaint is ' + REPAINT_PRICE + ' cr' };
+    s.credits -= REPAINT_PRICE;
+    s.livery = want;
+    /* Faction colours are the faction's: a navy livery remembers whose. */
+    s.liveryFaction = want === 'navy' ? port.faction : (want === 'syn' ? 'outlaw' : null);
+    return { ok: true, cost: REPAINT_PRICE, livery: want };
+  }
+
   /* Everything a shipyard will build to order, each with a verdict — a
    * locked warship is a goal, a missing one a bug. */
   function orderList(G, port) {
@@ -7875,6 +7932,9 @@
      * from any other counter leaves in yard grey. */
     if (opts && opts.name) s.shipName = String(opts.name).slice(0, 24);
     s.paint = (opts && opts.paint && (opts.paint.p || opts.paint.t)) ? { p: opts.paint.p || null, t: opts.paint.t || null } : null;
+    /* Off the floor she is nobody's: a faction livery is commissioned or
+     * repainted at a yard (liveryRefusal). */
+    s.livery = null; s.liveryFaction = null;
     var fitted = addHullStandard(s);
     syncLegacy(s);
     global.Sim.refreshShip(s);
@@ -7937,6 +7997,12 @@
                        { fit: commissionFit(sheet && sheet.fit), keep: true, commission: true });
     q.days = buildDays(hullId);
     q.port = port;
+    /* A livery the yard will not paint is a build it will not take. */
+    var liv = sheet && sheet.livery;
+    if (q.ok && liv && liv !== 'civ') {
+      var lw = LIVERY_HULLS[hullId] ? liveryRefusal(G, port, liv) : 'only a Crawler wears a faction\'s livery';
+      if (lw) { q.ok = false; q.why = lw; }
+    }
     return q;
   }
 
@@ -7952,6 +8018,9 @@
       name: (sheet && sheet.name) ? String(sheet.name).slice(0, 24) : null,
       paint: (sheet && sheet.paint && (sheet.paint.p || sheet.paint.t))
         ? { p: sheet.paint.p || null, t: sheet.paint.t || null } : null,
+      livery: (sheet && (sheet.livery === 'navy' || sheet.livery === 'syn')) ? sheet.livery : null,
+      liveryFaction: sheet && sheet.livery === 'navy' ? port.faction
+                   : (sheet && sheet.livery === 'syn' ? 'outlaw' : null),
       port: port.id, portName: port.name || null,
       star: G.here ? G.here.id : null, starName: G.here ? G.here.name : null,
       placed: t, due: t + q.days * DAY, paid: q.cost
@@ -7983,6 +8052,7 @@
         /* Her papers: a new hull leaves the yard registered, from the seed
          * and the order, so the same order always reads the same code. */
         shipName: o.name || null, paint: o.paint || null,
+        livery: o.livery || null, liveryFaction: o.liveryFaction || null,
         reg: global.Sim && global.Sim.regCode ? global.Sim.regCode((G.seed || '') + '|yard|' + o.id) : null,
         bornId: o.hullId + '@' + (o.star || 'void') + '#' + Math.round(o.due / 3600)
       };
@@ -8097,6 +8167,8 @@
     s.shipName = rec.name || null;
     s.reg = rec.reg || null;
     s.paint = rec.paint || null;
+    s.livery = rec.livery || null;
+    s.liveryFaction = rec.liveryFaction || null;
     s.craftBay = rec.craftBay || null;
     syncLegacy(s);
     if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(s);
@@ -8109,6 +8181,8 @@
   function stripForRespawn(ship) {
     ship.cargo = {};
     ship.paint = null;              // the new Talon is yard grey
+    ship.livery = null;             // and nobody's colours
+    ship.liveryFaction = null;
     ship.craftBay = null;           // and has no craft bay
     /* AND THE PEOPLE. The hull is gone and they were in it. Leaving the
      * roster standing would have you paying a gunner who went down with
@@ -8272,6 +8346,8 @@
     takeCommand: takeCommand, commandRefusal: commandRefusal, tradeInValue: tradeInValue,
     BUILD_DAYS: BUILD_DAYS, BUILD_DAYS_CAPITAL: BUILD_DAYS_CAPITAL, HANDOVER_GRACE: HANDOVER_GRACE,
     defaultOrderFit: defaultOrderFit, PAINTS: PAINTS, PAINT_BY_ID: PAINT_BY_ID,
+    liveryRefusal: liveryRefusal, repaintLivery: repaintLivery, LIVERY_HULLS: LIVERY_HULLS,
+    LIVERY_NAMES: LIVERY_NAMES, LIVERY_STANDING: LIVERY_STANDING, REPAINT_PRICE: REPAINT_PRICE,
     TRADE_IN: TRADE_IN,
     hullChance: hullChance, HULL_WINDOW: HULL_WINDOW,
     transponderKind: transponderKind, forgedPasses: forgedPasses,

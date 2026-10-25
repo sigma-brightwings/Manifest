@@ -318,6 +318,11 @@
         /* The colours a shipyard painted her (combat.js PAINTS). Additive:
          * an older career's hull is yard grey, which it was. */
         paint: s.paint || null,
+        /* Whose colours a Crawler wears, 2026-10-24 (combat.js
+         * liveryRefusal). Additive: an older career's Crawler is civilian,
+         * which it was. */
+        livery: s.livery || null,
+        liveryFaction: s.liveryFaction || null,
         /* What rides in a Crawler's truss (construction.js). */
         modules: s.modules || [],
         /* A Crawler's craft bay loadout (construction.js). */
@@ -532,6 +537,8 @@
     s.disguiseCount = d.disguiseCount || 0;
     s.bornId = d.bornId || null;
     s.paint = (d.paint && typeof d.paint === 'object') ? d.paint : null;
+    s.livery = (d.livery === 'navy' || d.livery === 'syn') ? d.livery : null;
+    s.liveryFaction = s.livery ? (d.liveryFaction || null) : null;
     s.modules = Array.isArray(d.modules) ? d.modules : [];
     s.craftBay = d.craftBay || null;
     G.pilotName = data.pilotName || null;

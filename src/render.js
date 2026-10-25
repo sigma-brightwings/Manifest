@@ -137,6 +137,31 @@
     this.w = w; this.h = h;
   };
 
+  /* ON FOOT IN YOUR OWN SHIP (2026-10-24): the eye of someone standing in
+   * it. `w` is walk.js's walker — x to starboard and z forward in metres,
+   * yaw and pitch as walk.js turns them — and `floorY` is the deck in the
+   * cockpit's own metres (shipdeck.js), so the eye is a standing height
+   * above it. The same projection as the seat, so the room, the screens
+   * and the world through the glass all line up exactly as they do there. */
+  Camera.prototype.buildWalker = function (ship, w, floorY, wpx, hpx) {
+    var eyeH = (global.Walk && global.Walk.EYE) || 1.65;
+    this.eye = localToWorld(ship, w.x * M, (floorY + eyeH) * M, w.z * M);
+    var cp = Math.cos(w.pitch), sp = Math.sin(w.pitch);
+    var sy = Math.sin(w.yaw), cy = Math.cos(w.yaw);
+    var R = ship.right, U = ship.up, F = ship.fwd;
+    function comb(a, b, c) {
+      return { x: R.x * a + U.x * b + F.x * c, y: R.y * a + U.y * b + F.y * c, z: R.z * a + U.z * b + F.z * c };
+    }
+    this.f = V.norm(comb(sy * cp, sp, cy * cp));
+    this.r = V.norm(comb(cy, 0, -sy));
+    this.u = V.norm(V.cross(this.r, this.f));
+    this.look = { yaw: 0, pitch: 0 };
+    var fov = this.cockpitFov || 68 * DEG;
+    this.flen = (0.5 * hpx) / Math.tan(fov / 2);
+    this.cx = wpx / 2; this.cy = hpx / 2;
+    this.w = wpx; this.h = hpx;
+  };
+
   /* World point -> screen. Returns null behind the camera.
    * `scale` converts a world length at that depth into pixels. */
   Camera.prototype.project = function (p) {
@@ -8986,8 +9011,15 @@
      * that rewards looking behind you with a blank wall is a cockpit that
      * teaches you not to look. These are upright and face the seat, so
      * turning round reads them the right way up. */
-    { id: 'rear-left',  bearing: -145 * Math.PI / 180, r: 0.62, y: -0.02, lean: -0.14, hw: 0.30, hh: 0.116, w: 460, h: 178 },
-    { id: 'rear-right', bearing: 145 * Math.PI / 180,  r: 0.62, y: -0.02, lean: -0.14, hw: 0.30, hh: 0.116, w: 460, h: 178 },
+    /* MOVED 2026-10-24 with the bulkhead, which went from half a metre
+     * behind the eye to 1.3 m so there is a door to walk through (see
+     * cockpitGeometry). Each screen now sits either side of that door —
+     * 0.84 m outboard, 0.24 m proud of the wall — still turned to face the
+     * seat, and a third bigger so it subtends about what it did from its
+     * old place: 16 degrees of half-width instead of 26, because a screen
+     * the size of a door would not be a screen. */
+    { id: 'rear-left',  bearing: -141.6 * Math.PI / 180, r: 1.352, y: 0.02, lean: -0.10, hw: 0.36, hh: 0.139, w: 460, h: 178 },
+    { id: 'rear-right', bearing: 141.6 * Math.PI / 180,  r: 1.352, y: 0.02, lean: -0.10, hw: 0.36, hh: 0.139, w: 460, h: 178 },
     /* THE OVERHEAD, at the pilot's 3 o'clock and angled down at them.
      * Astra specified it to the degree — "a monitor up and to the right at
      * the player's 3 o'clock, angled 45 degrees facing down" — and it is
@@ -9030,13 +9062,28 @@
      * screens with it. */
     var ks = spec ? (spec.size < 1 ? spec.size : Math.sqrt(spec.size)) : 1;
     hw *= ks; hh *= ks;
-    var cx = s * m.r * k, cz = c * m.r * k;
+    /* INSIDE THE GLASS (2026-10-24). On the smallest hulls the dash screens
+     * stood further out than the windscreen — a Dart's centre screen 0.94 m
+     * ahead of the eye, its glass 0.86 m. Flat-painted, nobody could tell;
+     * with the room drawn in depth, the windscreen hides whatever is past
+     * it. So a forward screen that would stand closer than 14 cm to the
+     * glass is drawn in toward the eye, the whole mount scaled about it —
+     * position, height and size alike — so from the seat it subtends
+     * exactly what it did and only its distance changes. At the Talon the
+     * centre screen is exactly at that line, so nothing there moves. */
+    var f = 1;
+    if (spec && spec.reach && Math.abs(m.bearing) < Math.PI / 2) {
+      var zmax = spec.reach * k - 0.14, cz0 = c * m.r * k;
+      if (cz0 > zmax && cz0 > 1e-6) f = Math.max(0.5, zmax / cz0);
+    }
+    hw *= f; hh *= f;
+    var cx = s * m.r * k * f, cz = c * m.r * k * f;
     var rx = c, rz = -s;                                   // along the width
     var sl = Math.sin(m.lean), cl = Math.cos(m.lean);
     var ux = s * sl, uy = cl, uz = c * sl;                 // up the height
     function corner(sx, sy) {
       return [cx + rx * hw * sx + ux * hh * sy,
-              m.y * k + uy * hh * sy,
+              m.y * k * f + uy * hh * sy,
               cz + rz * hw * sx + uz * hh * sy];
     }
     return [corner(-1, 1), corner(1, 1), corner(1, -1), corner(-1, -1)];
@@ -9047,7 +9094,10 @@
    * that they stopped being flat slots on the dash. */
   var MFD_SLOTS = MFD_MOUNTS;
 
-  function dashPoint(s, t) {
+  /* With a spec, the dash fitted to that ship's glass (cockpitGeometry);
+   * without one, the Talon's, which is what the suite measures against. */
+  function dashPoint(s, t, spec) {
+    if (spec) return dashLerp(cockpitGeometry(spec).dash, s, t);
     var fx = DASH.fl[0] + (DASH.fr[0] - DASH.fl[0]) * s;
     var fy = DASH.fl[1] + (DASH.fr[1] - DASH.fl[1]) * s;
     var fz = DASH.fl[2] + (DASH.fr[2] - DASH.fl[2]) * s;
@@ -9251,9 +9301,20 @@
   function hullPreviewMesh(hullId, ship) {
     var h = global.Combat && global.Combat.HULLS && global.Combat.HULLS[hullId];
     var kind = (h && h.mesh) || 'courier';
+    if (kind === 'crawler') {
+      /* A player's Crawler in a navy's or the Syndicate's colours wears
+       * that livery's model (2026-10-24, Combat.liveryRefusal). */
+      var cid = crawlerLibId(ship);
+      return crawlerLoaded(cid, libHull(cid) || libHull(HULL_ASSIGN.crawler) || shipMeshes().courier, ship);
+    }
     var base = libHull(HULL_ASSIGN[kind] || HULL_ASSIGN.courier) || shipMeshes().courier;
-    if (kind === 'crawler') return crawlerLoaded(HULL_ASSIGN[kind], base, ship);
     return base;
+  }
+
+  function crawlerLibId(ship) {
+    var liv = ship && ship.livery;
+    return liv === 'syn' ? HULL_ASSIGN.crawler_syndicate
+         : liv === 'navy' ? HULL_ASSIGN.crawler_navy : HULL_ASSIGN.crawler;
   }
 
   /* ---- the Crawler's cubes (2026-10-20) ----------------------------------
@@ -9668,6 +9729,164 @@
     }
   }
 
+  /* ---- THE ROOM AROUND THE GLASS (2026-10-24) -----------------------------
+   * Astra: "We need to have a modeled interior for every ship that doesn't
+   * have one, specifically the cockpit. There needs to be doors that slide
+   * into the structure of the ship to open the way from the cockpit into
+   * the rest of the ship." See claude/ship-interiors.md.
+   *
+   * Everything about the cockpit's shape, in one place and in the cockpit's
+   * own metres, for one ship's spec: the panes, the walls just outside
+   * them, the dash, the consoles, the overhead, the bulkhead and its door.
+   * shipdeck.js builds the walkable plan and the GPU room from it; the 2D
+   * interior and the greebles mount on the same surfaces.
+   *
+   * THE SCALING FIX. Before this, the glass and the screens grew with
+   * spec.size but the consoles, overhead, bulkhead and dash were fixed at
+   * the Talon's size — so on a Mule the side windows sat outside its own
+   * consoles and the dash ended well short of the windscreen. Now the whole
+   * room scales with the glass, and the dash runs from its near edge to the
+   * windscreen's sill whatever the hull. At the Talon (size 1, room 1)
+   * every number below is the old one to the millimetre, bar the bulkhead.
+   *
+   * THE BULKHEAD MOVED AFT, from half a metre behind the eye to 1.3 m, so
+   * there is somewhere to stand when you get out of the seat and a door to
+   * walk through. Never nearer than that on a small hull: a Dart's bay is
+   * the Talon's bay, because the person standing in it is the same size.
+   * The two rear screens moved outboard of the door with it. */
+  var BULK_Z = -1.30, FLOOR_Y = -1.10, HEADROOM = 2.05;
+  var FOOT_HW = 0.32, DASH_NEAR_Z = 0.40, CONSOLE_X = 0.80, CONSOLE_Z0 = 0.12;
+
+  function cockpitGeometry(spec) {
+    if (!spec) spec = cockpitSpec({});
+    if (spec._geom) return spec._geom;
+    var k = spec.size || 1;
+    var segs = canopySegments(spec);
+    var main = segs[0], qR = segs[1], qL = segs[2];
+    var frontZ = main[0][2];
+    var sillY = Infinity;
+    for (var i = 0; i < main.length; i++) sillY = Math.min(sillY, main[i][1]);
+    var hingeX = 1.22 * k;
+    var sideX = 1.30 * k + 0.012;
+    /* THE ROOM'S EDGE, in plan, from the windscreen round to the bulkhead:
+     * the quarter-light's whole width from the hinge to its outer edge Q,
+     * then a short wall from Q straight back toward the seat until it
+     * reaches the side wall at R, then the side wall aft.
+     *
+     * Q-to-R runs along the line of sight from the seat, so from the seat it
+     * is seen edge-on and can never stand in front of any glass. The first
+     * version cut across from where the quarter-light's line met the side
+     * wall, and on every hull bigger than a Talon (whose windscreen moves
+     * out faster than its side windows do) that put solid wall in front of
+     * the outer half of each quarter-light. */
+    var qx = qR[1][0], qz = qR[1][2];
+    var meetZ = qx > sideX + 1e-6 ? qz * sideX / qx : qz;
+    var floorY = FLOOR_Y * k;
+    var ceilY = Math.max(0.80 * k, floorY + HEADROOM);
+    var bulkZ = BULK_Z * Math.max(1, k);
+    var sideL = scalePts(SIDE_WINDOW, k), sideR = mirrorX(sideL);
+    var floorWin = scalePts(FLOOR_WINDOW, k);
+    var footZ = 0;
+    for (i = 0; i < floorWin.length; i++) footZ = Math.max(footZ, floorWin[i][2]);
+    footZ = Math.max(footZ + 0.06, frontZ + 0.05);
+
+    /* The dash: near edge where it always was (scaled), far edge on the
+     * windscreen's sill. */
+    var dash = {
+      fl: [DASH.fl[0] * k, sillY, frontZ], fr: [DASH.fr[0] * k, sillY, frontZ],
+      nl: [DASH.nl[0] * k, DASH.nl[1] * k, DASH.nl[2] * k],
+      nr: [DASH.nr[0] * k, DASH.nr[1] * k, DASH.nr[2] * k]
+    };
+    var dashNearZ = dash.nl[2];
+    var deskY = function (z) {
+      var u = (z - dash.nl[2]) / ((dash.fl[2] - dash.nl[2]) || 1);
+      return dash.nl[1] + (dash.fl[1] - dash.nl[1]) * u;
+    };
+    var dp = function (s, tt) { return dashLerp(dash, s, tt); };
+    var dashFaces = [];
+    /* Glare shield and desk, each in two halves round the floor-window
+     * slot, exactly the four surfaces the 2D interior always filled. */
+    [[-0.98, -0.98 + SLOT_S0 * 1.96], [-0.98 + SLOT_S1 * 1.96, 0.98]].forEach(function (h) {
+      var x0 = h[0] * k, x1 = h[1] * k;
+      dashFaces.push({ tone: 'glare', pts: [[x0, sillY, frontZ], [x1, sillY, frontZ],
+        [x1 * 0.88, sillY - 0.06 * k, frontZ - 0.22 * k], [x0 * 0.88, sillY - 0.06 * k, frontZ - 0.22 * k]] });
+    });
+    [[0, SLOT_S0], [SLOT_S1, 1]].forEach(function (h) {
+      dashFaces.push({ tone: 'console', desk: true,
+                       pts: [dp(h[0], 0.04), dp(h[1], 0.04), dp(h[1], 1), dp(h[0], 1)] });
+    });
+
+    /* Across and up with the hull's size; fore and aft with the windscreen's
+     * actual distance, which grows faster (reach is room x size, and the
+     * glass sits at reach x size) — a Dart's glass is 0.86 m out and a
+     * Mule's 2.14 m, so consoles and overhead sized off `k` alone ran
+     * through the Dart's windscreen and stopped short of the Mule's. */
+    var kz = frontZ / CANOPY_Z;
+    function sc(pts) { return pts.map(function (p) { return [p[0] * k, p[1] * k, p[2] * kz]; }); }
+    var cl = sc(INTERIOR[0].pts), cr = sc(INTERIOR[1].pts);
+    var consoles = [
+      { side: -1, top: cl, inner: [cl[2], cl[3]], end: [cl[1], cl[2]], front: [cl[0], cl[3]] },
+      { side: 1, top: cr, inner: [cr[2], cr[1]], end: [cr[3], cr[2]], front: [cr[0], cr[1]] }
+    ];
+    var overhead = sc(INTERIOR[2].pts);
+    var bulkhead = [[-sideX, ceilY, bulkZ + 0.002], [sideX, ceilY, bulkZ + 0.002],
+                    [sideX, floorY, bulkZ + 0.002], [-sideX, floorY, bulkZ + 0.002]];
+
+    var g = {
+      k: k, frontZ: frontZ, sillY: sillY, hingeX: hingeX, sideX: sideX, meetZ: meetZ,
+      quarterOuter: [Math.max(qx, sideX), qz],
+      floorY: floorY, ceilY: ceilY, bulkZ: bulkZ, footHW: FOOT_HW * k, footZ: footZ,
+      main: main, quarters: [qR, qL], sides: [sideL, sideR], floorWin: floorWin,
+      windows: [main, qR, qL, sideL, sideR, floorWin],
+      dash: dash, dashNearZ: dashNearZ, dashHW: 0.98 * k, deskY: deskY, dashFaces: dashFaces,
+      consoles: consoles, consoleX: CONSOLE_X * k, consoleZ0: CONSOLE_Z0 * kz,
+      overhead: overhead, overheadZ0: 0.46 * kz, bulkhead: bulkhead, kz: kz,
+      doorHW: global.ShipDeck ? global.ShipDeck.DOOR_HW : 0.45,
+      doorH: global.ShipDeck ? global.ShipDeck.DOOR_H : 2.0
+    };
+    g.bulkRegions = bulkheadRegions(g, spec);
+    spec._geom = g;
+    return g;
+  }
+
+  function dashLerp(d, s, t) {
+    var out = [];
+    for (var a = 0; a < 3; a++) {
+      var f = d.fl[a] + (d.fr[a] - d.fl[a]) * s;
+      var n = d.nl[a] + (d.nr[a] - d.nl[a]) * s;
+      out.push(f + (n - f) * t);
+    }
+    return out;
+  }
+
+  /* Free space on the bulkhead for greebles, in its (u, v) — u across from
+   * port, v down from the ceiling: either side of the door, round the rear
+   * screens, clear of the kick plate. Worked out from the real door and
+   * the real screens so neither can be greebled over whatever size the
+   * room is. */
+  function bulkheadRegions(g, spec) {
+    var W = 2 * g.sideX, Hh = g.ceilY - g.floorY;
+    var uOf = function (x) { return (x + g.sideX) / W; };
+    var vOf = function (y) { return (g.ceilY - y) / Hh; };
+    var door0 = uOf(-g.doorHW - 0.08), door1 = uOf(g.doorHW + 0.08);
+    var out = [];
+    MFD_MOUNTS.forEach(function (m) {
+      if (Math.abs(m.bearing) < Math.PI / 2) return;
+      var c = mfdCorners(m, 0.03, spec);
+      var xs = c.map(function (p) { return p[0]; }), ys = c.map(function (p) { return p[1]; });
+      var u0 = uOf(Math.min.apply(null, xs)), u1 = uOf(Math.max.apply(null, xs));
+      var v0 = vOf(Math.max.apply(null, ys)), v1 = vOf(Math.min.apply(null, ys));
+      var left = u1 < 0.5;
+      var c0 = left ? 0.02 : door1 + 0.01, c1 = left ? door0 - 0.01 : 0.98;
+      if (c1 - c0 < 0.02) return;
+      if (v0 - 0.06 > 0.04) out.push([c0, 0.04, c1, v0 - 0.02]);
+      out.push([c0, v1 + 0.02, c1, Math.min(0.80, v1 + 0.30)]);
+      if (u0 - 0.01 - c0 > 0.02) out.push([c0, v0, u0 - 0.01, v1]);
+      if (c1 - (u1 + 0.01) > 0.02) out.push([u1 + 0.01, v0, c1, v1]);
+    });
+    return out;
+  }
+
   function tracePath(ctx, pts) {
     ctx.moveTo(pts[0].x, pts[0].y);
     for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
@@ -9720,25 +9939,55 @@
    * the attitude ladder instead of the ladder floating over the console —
    * and once you can turn your head, that ordering stops being a nicety and
    * starts being the difference between a cockpit and a mess. */
-  function drawCockpitShell(ctx, cam, ship, w, h) {
+  function drawCockpitShell(ctx, cam, ship, w, h, opts) {
     drawGrabArms(ctx, cam, ship);       // outside the glass: behind the shell
     var apertures = apertureSet(cam, ship);
+    var a;
 
     /* Fill the whole screen and punch every window out of it with a single
      * even-odd fill. One operation, any number of openings, correct at any
      * head angle and any aspect ratio, with no clipping rectangle to keep
-     * in sync with the geometry. */
+     * in sync with the geometry.
+     *
+     * WITH THE GPU ROOM (2026-10-24) the same fill ERASES instead: the room
+     * is on the world layer under this canvas, and everything this canvas
+     * already holds outside the glass — a 2D tunnel, a label, a wake —
+     * is outside the ship and has to go, exactly as the painted hull used
+     * to cover it. Through the glass, nothing changes. */
+    var gpu = cockpitGpu() && queueCockpitRoom(cam, ship, opts);
     ctx.save();
-    var grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, '#141a24');
-    grad.addColorStop(0.55, '#0e131b');
-    grad.addColorStop(1, '#080b11');
-    ctx.fillStyle = grad;
+    if (gpu) {
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.fillStyle = '#000';
+    } else {
+      var grad = ctx.createLinearGradient(0, 0, 0, h);
+      grad.addColorStop(0, '#141a24');
+      grad.addColorStop(0.55, '#0e131b');
+      grad.addColorStop(1, '#080b11');
+      ctx.fillStyle = grad;
+    }
     ctx.beginPath();
     ctx.rect(0, 0, w, h);
-    for (var a = 0; a < apertures.length; a++) tracePath(ctx, apertures[a].pts);
+    for (a = 0; a < apertures.length; a++) tracePath(ctx, apertures[a].pts);
     ctx.fill('evenodd');
+    /* Walking aft of the bridge door, the windows are only seen through the
+     * doorway (`opts.clip`, on screen), so everything outside it goes too —
+     * all of it, with the door shut. */
+    if (gpu && opts && opts.clip) {
+      ctx.beginPath();
+      ctx.rect(0, 0, w, h);
+      if (opts.clip.length) tracePath(ctx, opts.clip);
+      ctx.fill('evenodd');
+    }
     ctx.restore();
+
+    /* On foot the window furniture below is drawn by the room itself; these
+     * flat strokes have no depth and would show through the walls. */
+    if (gpu && opts && opts.walking) {
+      var fr = null;
+      for (a = 0; a < apertures.length; a++) if (apertures[a].id === 'front') fr = apertures[a].pts;
+      return { apertures: apertures, aperture: fr, gpu: true };
+    }
 
     // Inner lip on every opening — a highlight, so each window has an edge.
     ctx.save();
@@ -9774,48 +10023,64 @@
 
     var front = null;
     for (a = 0; a < apertures.length; a++) if (apertures[a].id === 'front') front = apertures[a].pts;
-    return { apertures: apertures, aperture: front };
+    return { apertures: apertures, aperture: front, gpu: !!gpu };
   }
 
   /* Everything between the pilot and the glass. */
-  function drawCockpitInterior(ctx, cam, ship, w, h) {
-    var i;
+  function drawCockpitInterior(ctx, cam, ship, w, h, opts) {
+    var i, poly;
+    opts = opts || {};
     var spec = cockpitSpec(ship);
+    var geo = cockpitGeometry(spec);
+    /* Consumed: the room was queued for this camera by this frame's shell. */
+    var gpu = cockpitGpu() && ROOM_QUEUED.ship === ship && ROOM_QUEUED.cam === cam;
+    ROOM_QUEUED.ship = ROOM_QUEUED.cam = null;
+
+    /* WALKING, OUT OF THE ROOM: everything on this canvas below is inside
+     * the cockpit, and from the passage the cockpit is only ever seen
+     * through its door — so the whole layer is clipped to the doorway. */
+    ctx.save();
+    if (opts.clip) {
+      ctx.beginPath();
+      if (opts.clip.length) tracePath(ctx, opts.clip); else ctx.rect(0, 0, 0, 0);
+      ctx.clip();
+    }
 
     /* Side consoles, overhead panel and rear bulkhead — the things that
      * make turning your head worth doing. Clipped, because at wide head
-     * angles these are exactly the polygons that straddle the eye plane. */
-    for (i = 0; i < INTERIOR.length; i++) {
-      var poly = clipProject(cam, localPoly(ship, INTERIOR[i].pts));
-      if (poly) fillPoly(ctx, poly, INTERIOR[i].fill, INTERIOR[i].line);
-    }
-
-    /* The dashboard. Two surfaces: a dark glare shield facing the window
-     * and the console proper facing the pilot, so the fold between them
-     * catches a different shade and the whole thing reads as solid. */
-    /* Both surfaces are drawn in two halves, left of the slot and right of
-     * it, so the landing window in the floor has something to be seen
-     * through. A console with a hole in it is the entire point; a console
-     * drawn as one piece over the top of the hole is a window into a
-     * cupboard. */
-    shieldHalf(-0.98, -0.98 + SLOT_S0 * 1.96);
-    shieldHalf(-0.98 + SLOT_S1 * 1.96, 0.98);
-
-    deskHalf(0, SLOT_S0);
-    deskHalf(SLOT_S1, 1);
-
-    function shieldHalf(x0, x1) {
-      var poly = clipProject(cam, localPoly(ship, [
-        [x0, -0.46, 1.20], [x1, -0.46, 1.20],
-        [x1 * 0.88, -0.52, 0.98], [x0 * 0.88, -0.52, 0.98]]));
-      if (poly) fillPoly(ctx, poly, '#080b10');
-    }
-
-    function deskHalf(s0, s1) {
-      var poly = clipProject(cam, localPoly(ship, [
-        dashPoint(s0, 0.04), dashPoint(s1, 0.04),
-        dashPoint(s1, 1), dashPoint(s0, 1)]));
-      if (poly) fillPoly(ctx, poly, '#161d28', 'rgba(120,150,190,0.20)');
+     * angles these are exactly the polygons that straddle the eye plane.
+     *
+     * The same surfaces either way, from cockpitGeometry. WITHOUT the GPU
+     * room they are filled here, flat, as they always were — the dash in
+     * two halves round the floor-window slot, glare shield and desk. WITH
+     * it they are the room's, lit on the world layer, and what is left to
+     * do here is the old painter's trick the other way round: the HUD on
+     * the glass was drawn before this, and wherever a slab of the room is
+     * in front of the glass the HUD has to go, or the attitude ladder would
+     * float over the console. So the same polygons ERASE. */
+    var slabs = [];
+    geo.consoles.forEach(function (c) { slabs.push({ pts: c.top, fill: '#131a25', line: 'rgba(120,150,190,0.16)' }); });
+    slabs.push({ pts: geo.overhead, fill: '#0f151e', line: 'rgba(120,150,190,0.12)' });
+    geo.dashFaces.forEach(function (f) {
+      slabs.push({ pts: f.pts, fill: f.desk ? '#161d28' : '#080b10', line: f.desk ? 'rgba(120,150,190,0.20)' : null });
+    });
+    if (gpu) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'destination-out';
+      for (i = 0; i < slabs.length; i++) {
+        poly = clipProject(cam, localPoly(ship, slabs[i].pts));
+        if (poly) fillPoly(ctx, poly, '#000');
+      }
+      ctx.restore();
+    } else {
+      /* The bulkhead first, with the door in it, then the rest. The door is
+       * drawn shut: without the GPU room there is no walking aft to open
+       * it for, and a painted gap would be a window into nothing. */
+      drawBulkhead2D(ctx, cam, ship, geo);
+      for (i = 0; i < slabs.length; i++) {
+        poly = clipProject(cam, localPoly(ship, slabs[i].pts));
+        if (poly) fillPoly(ctx, poly, slabs[i].fill, slabs[i].line);
+      }
     }
 
     /* --- what is bolted to the console -------------------------------------
@@ -9829,12 +10094,12 @@
 
     // Warning and status lamps, on the strip between the glare shield and
     // the screens. Every one of them is driven by the real ship.
-    lampRow(ctx, cam, ship);
+    lampRow(ctx, cam, ship, spec);
 
     // Screws down the fold of the glare shield: four dots, and the cheapest
     // thing in here that says "assembled" rather than "modelled".
     for (i = 0; i < 4; i++) {
-      var sp = projLocal(cam, ship, dashPoint(0.09 + i * 0.273, 0.028));
+      var sp = projLocal(cam, ship, dashPoint(0.09 + i * 0.273, 0.028, spec));
       if (!sp) continue;
       ctx.fillStyle = 'rgba(150,180,215,0.30)';
       ctx.beginPath(); ctx.arc(sp.x, sp.y, 1.4, 0, K.TAU); ctx.fill();
@@ -9903,13 +10168,34 @@
      * a light on it. The greebles above cover the whole console now, so
      * those placeholders are retired rather than drawn under them. */
 
-    return { mfds: mfds, emitters: emitters };
+    ctx.restore();
+    return { mfds: mfds, emitters: emitters, gpu: gpu };
+  }
+
+  /* The bulkhead on the 2D path: the wall either side of the door and over
+   * it, and the door itself, shut, with its two leaves and the hazard edge
+   * where they meet. */
+  function drawBulkhead2D(ctx, cam, ship, g) {
+    var z = g.bulkZ + 0.002, dw = g.doorHW, top = g.floorY + g.doorH;
+    var pieces = [
+      { pts: [[-g.sideX, g.ceilY, z], [-dw, g.ceilY, z], [-dw, g.floorY, z], [-g.sideX, g.floorY, z]], fill: '#111823' },
+      { pts: [[dw, g.ceilY, z], [g.sideX, g.ceilY, z], [g.sideX, g.floorY, z], [dw, g.floorY, z]], fill: '#111823' },
+      { pts: [[-dw, g.ceilY, z], [dw, g.ceilY, z], [dw, top, z], [-dw, top, z]], fill: '#111823' },
+      { pts: [[-dw, top, z - 0.06], [0, top, z - 0.06], [0, g.floorY, z - 0.06], [-dw, g.floorY, z - 0.06]], fill: '#1a2330' },
+      { pts: [[0, top, z - 0.06], [dw, top, z - 0.06], [dw, g.floorY, z - 0.06], [0, g.floorY, z - 0.06]], fill: '#1a2330' },
+      { pts: [[-0.03, top - 0.05, z - 0.058], [0.03, top - 0.05, z - 0.058],
+              [0.03, g.floorY + 0.05, z - 0.058], [-0.03, g.floorY + 0.05, z - 0.058]], fill: '#a8781f' }
+    ];
+    for (var i = 0; i < pieces.length; i++) {
+      var poly = clipProject(cam, localPoly(ship, pieces[i].pts));
+      if (poly) fillPoly(ctx, poly, pieces[i].fill, 'rgba(120,150,190,0.18)');
+    }
   }
 
   /* Eight lamps across the console, on the lip just behind the screens.
    * Colour is state, not decoration — a dark lamp means that system has
    * nothing to say. */
-  function lampRow(ctx, cam, ship) {
+  function lampRow(ctx, cam, ship, spec) {
     var fuelFrac = ship.fuelCap ? ship.fuel / ship.fuelCap : 1;
     var thrFrac = ship.thrusterCap ? ship.thrusterFuel / ship.thrusterCap : 1;
     var hullHurt = ship.hullMax ? ship.hull < ship.hullMax * 0.999 : false;
@@ -9935,8 +10221,8 @@
     for (var i = 0; i < lamps.length; i++) {
       var s0 = 0.055 + i * 0.114;
       var q = projQuad(cam, ship,
-        dashPoint(s0, 0.325), dashPoint(s0 + 0.062, 0.325),
-        dashPoint(s0 + 0.062, 0.385), dashPoint(s0, 0.385));
+        dashPoint(s0, 0.325, spec), dashPoint(s0 + 0.062, 0.325, spec),
+        dashPoint(s0 + 0.062, 0.385, spec), dashPoint(s0, 0.385, spec));
       if (!q) continue;
       fillPoly(ctx, q, lamps[i], 'rgba(10,14,20,0.85)');
       if (lamps[i] === OFF) continue;
@@ -10023,8 +10309,33 @@
     kestrel: { pal: ['#8fd8ff', '#e8eef7', '#ffb347', '#7dffb0'], accent: '#9fc4ff',
                metal: '#19212d', density: 0.86 },
     mule:    { pal: ['#7dffb0', '#ffb347', '#ffd27a', '#8fd8ff'], accent: '#b8e07a',
-               metal: '#1c2229', density: 0.96 }
+               metal: '#1c2229', density: 0.96 },
+    /* THE SYNDICATE'S OWN (2026-10-24). Astra: "the syndicate ships need to
+     * have the dark grey and red motif on the interior too." Plate in the
+     * hull art's own greys, the accent strip in its red, and the lights red
+     * and amber with the one green kept for the bars that have to read as
+     * "fine". The enforcers guard their switches like the Dart; a runner
+     * does not bother. */
+    /* `plate`, `screw` and `lever` replace the civilian blue-black under the
+     * fittings with the same neutral greys, so a Syndicate panel is grey
+     * metal with red light on it rather than navy metal with red light. */
+    runner:        { pal: ['#ff4a3d', '#ffb347', '#ff7a52', '#7dffb0'], accent: '#c8362f',
+                     metal: '#232325', density: 0.70,
+                     plate: '#111112', screw: '#4b4d51', lever: '#393b3d' },
+    enforcer:      { pal: ['#ff4a3d', '#ff7a52', '#ffb347', '#7dffb0'], accent: '#a72e29',
+                     metal: '#26272a', density: 0.78, guards: true,
+                     plate: '#111112', screw: '#4b4d51', lever: '#393b3d' },
+    enforcerheavy: { pal: ['#ff4a3d', '#ffb347', '#ff7a52', '#7dffb0'], accent: '#a72e29',
+                     metal: '#2b2c2e', density: 0.90, guards: true,
+                     plate: '#111112', screw: '#4b4d51', lever: '#393b3d' }
   };
+
+  /* Whose fittings: the hull's own, except a Crawler in the Syndicate's
+   * colours, which is fitted out like their heavy (2026-10-24). */
+  function greebleStyle(ship) {
+    if (ship && ship.livery === 'syn') return GREEBLE_HULLS.enforcerheavy;
+    return GREEBLE_HULLS[ship && ship.hullId] || GREEBLE_HULLS.talon;
+  }
 
   /* Free space on each surface, in that surface's own (u, v), chosen to stay
    * clear of what is already mounted: the rear screens and the hatch panel
@@ -10045,14 +10356,26 @@
    * flat coordinates and land on whichever slab it was given. Exactly ON
    * the slab: the interior is painted in order on the 2D canvas, so a block
    * drawn after its surface is in front of it with no depth to fight. */
-  function greebleSurface(name) {
-    var q;
-    if (name === 'dash') return function (u, v) { return dashPoint(u, v); };
-    if (name === 'sideL') q = INTERIOR[0].pts;
-    else if (name === 'sideR') { q = INTERIOR[1].pts; q = [q[0], q[3], q[2], q[1]]; }
-    else if (name === 'overhead') q = INTERIOR[2].pts;
-    else q = INTERIOR[3].pts;
+  /* The surfaces are the room's own (cockpitGeometry), so a greeble lands on
+   * the slab the GPU draws, scaled with the hull. Without a spec, the
+   * Talon's, as before. */
+  function greebleSurface(name, spec) {
+    var q, g = spec ? cockpitGeometry(spec) : null;
+    if (name === 'dash') return function (u, v) { return dashPoint(u, v, spec); };
+    if (name === 'sideL') q = g ? g.consoles[0].top : INTERIOR[0].pts;
+    else if (name === 'sideR') { q = g ? g.consoles[1].top : INTERIOR[1].pts; q = [q[0], q[3], q[2], q[1]]; }
+    else if (name === 'overhead') q = g ? g.overhead : INTERIOR[2].pts;
+    else q = g ? g.bulkhead : INTERIOR[3].pts;
     return function (u, v) { return quadPoint(q, u, v); };
+  }
+
+  /* The regions for one ship: the fixed ones, with the bulkhead's worked
+   * out round that ship's door and rear screens. */
+  function greebleRegions(spec) {
+    var g = cockpitGeometry(spec);
+    return GREEBLE_REGIONS.map(function (r) {
+      return r.surf === 'bulkhead' ? { surf: 'bulkhead', rects: g.bulkRegions } : r;
+    });
   }
 
   /* Split a free rect into blocks, the way panel space gets carved up on a
@@ -10091,8 +10414,10 @@
    * per cockpit key and cached on the spec, so the per-frame cost is
    * projecting and filling, nothing else. */
   function greebleLayout(ship, spec) {
-    if (spec._greebles) return spec._greebles;
-    var style = GREEBLE_HULLS[ship.hullId] || GREEBLE_HULLS.talon;
+    var style = greebleStyle(ship);
+    /* Rebuilt if a repaint changed whose colours she wears; the same seed,
+     * so the fittings stay where they were and only their colours change. */
+    if (spec._greebles && spec._greebles.style === style) return spec._greebles;
     var rng = new RNG(spec.key + '|greebles');
     var items = [], blocks = [], binds = 0, caution = false;
 
@@ -10101,8 +10426,9 @@
       return x < 0.55 ? p[0] : x < 0.75 ? p[1] : x < 0.9 ? p[2] : p[3];
     }
 
-    for (var g = 0; g < GREEBLE_REGIONS.length; g++) {
-      var reg = GREEBLE_REGIONS[g], at = greebleSurface(reg.surf);
+    var REGIONS = greebleRegions(spec);
+    for (var g = 0; g < REGIONS.length; g++) {
+      var reg = REGIONS[g], at = greebleSurface(reg.surf, spec);
       /* The slab's size in metres, averaged across its two opposite edges. */
       var lu = (dist3(at(0, 0), at(1, 0)) + dist3(at(0, 1), at(1, 1))) / 2;
       var lv = (dist3(at(0, 0), at(0, 1)) + dist3(at(1, 0), at(1, 1))) / 2;
@@ -10150,12 +10476,12 @@
           var sc = [[mu, mv], [1 - mu, mv], [1 - mu, 1 - mv], [mu, 1 - mv]];
           for (var s = 0; s < 4; s++) {
             add({ pts: quad(sc[s][0] - su, sc[s][1] - sv, sc[s][0] + su, sc[s][1] + sv),
-                  fill: '#3a4656' });
+                  fill: style.screw || '#3a4656' });
           }
           continue;
         }
 
-        add({ pts: quad(0, 0, 1, 1), fill: '#0b1016', line: 'rgba(130,160,200,0.24)' }, 0);
+        add({ pts: quad(0, 0, 1, 1), fill: style.plate || '#0b1016', line: 'rgba(130,160,200,0.24)' }, 0);
         var aspect = mw / mh;
         var pick = rng.range(0, 1);
         var kind = aspect > 2.2 ? (pick < 0.55 ? 'ledbar' : pick < 0.8 ? 'readout' : 'vent')
@@ -10180,7 +10506,7 @@
           for (var rs = 0; rs < rowsS; rs++) {
             for (var i = 0; i < n; i++) {
               var xc = (i + 0.5) * fw, yt = rs * fh + fh * 0.18;
-              add({ pts: quad(xc - lw, yt, xc + lw, yt + lh), fill: '#2b3542', line: 'rgba(0,0,0,0.6)' });
+              add({ pts: quad(xc - lw, yt, xc + lw, yt + lh), fill: style.lever || '#2b3542', line: 'rgba(0,0,0,0.6)' });
               if (style.guards && rng.chance(0.25)) {
                 add({ pts: quad(xc - lw * 1.6, yt - fh * 0.06, xc + lw * 1.6, yt), fill: '#7a2a24' });
               }
@@ -10410,14 +10736,14 @@
    * colour, split around the floor-window slot. The one bit of the new
    * lighting you can see looking straight ahead. */
   function drawAccentStrips(ctx, cam, ship, spec) {
-    var style = GREEBLE_HULLS[ship.hullId] || GREEBLE_HULLS.talon;
+    var style = greebleStyle(ship);
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round';
     var spans = [[0.02, SLOT_S0 - 0.01], [SLOT_S1 + 0.01, 0.98]];
     for (var s = 0; s < spans.length; s++) {
-      var a = projLocal(cam, ship, dashPoint(spans[s][0], 0.045));
-      var b = projLocal(cam, ship, dashPoint(spans[s][1], 0.045));
+      var a = projLocal(cam, ship, dashPoint(spans[s][0], 0.045, spec));
+      var b = projLocal(cam, ship, dashPoint(spans[s][1], 0.045, spec));
       if (!a || !b) continue;
       ctx.strokeStyle = hexA(style.accent, 0.18);
       ctx.lineWidth = 6;
@@ -10430,8 +10756,8 @@
      * rather than a gap. */
     for (var e = 0; e < 2; e++) {
       var s0 = e ? SLOT_S1 : SLOT_S0;
-      var p0 = projLocal(cam, ship, dashPoint(s0, 0.08));
-      var p1 = projLocal(cam, ship, dashPoint(s0, 0.95));
+      var p0 = projLocal(cam, ship, dashPoint(s0, 0.08, spec));
+      var p1 = projLocal(cam, ship, dashPoint(s0, 0.95, spec));
       if (!p0 || !p1) continue;
       ctx.strokeStyle = hexA(style.accent, 0.5);
       ctx.lineWidth = 1.2;
@@ -10780,6 +11106,65 @@
     return true;
   }
 
+  /* ---- the inside of your own ship, on the GPU (2026-10-24) --------------
+   * One per cockpit key (hull + bornId), built from cockpitGeometry by
+   * shipdeck.js and cached on the spec beside everything else about that
+   * cockpit: the walkable plan and the meshes the world layer draws. */
+  var COCKPIT_ROOM_ON = true;
+  var ROOM_QUEUED = { ship: null, cam: null };
+
+  function cockpitGpu() {
+    return !!(COCKPIT_ROOM_ON && global.ShipDeck && global.GLWorld &&
+              global.GLWorld.available && global.GLWorld.queueCockpit);
+  }
+
+  function shipInterior(ship) {
+    var SD = global.ShipDeck;
+    if (!SD || !ship) return null;
+    var spec = cockpitSpec(ship);
+    var HL = global.Combat && global.Combat.HULLS;
+    var hull = HL && HL[ship.hullId];
+    /* The library model this hull wears, so a Crawler in Syndicate colours
+     * is known by its livery (Combat.liveryRefusal) and not only by a hull
+     * key. A repaint changes it, so the room is rebuilt when it does. */
+    var libId = hull && hull.mesh === 'crawler' ? crawlerLibId(ship) : ((hull && HULL_ASSIGN[hull.mesh]) || '');
+    if (spec._deck && spec._deck.libId === libId) return spec._deck;
+    var g = cockpitGeometry(spec);
+    /* Who works her, with you at the helm (crew.js), off the hull's own
+     * default outfit so a refit does not move the furniture. */
+    var crew = global.Crew && global.Crew.crewNeeded ? global.Crew.crewNeeded(ship.hullId, true) : null;
+    var plan = SD.plan(g, { hullId: ship.hullId, libId: libId, size: hull && hull.size, key: spec.key, crew: crew });
+    spec._deck = { spec: spec, geom: g, plan: plan, meshes: SD.meshes(g, plan), libId: libId };
+    return spec._deck;
+  }
+
+  /* Queue the room for this frame. `opts.seat` draws the pilot's seat —
+   * only while you are out of it; seated, you are where it is, and its
+   * back would stand between you and the rear screens. Door leaves are
+   * moved by however far each door's `open` has eased (shipdeck.js). */
+  function queueCockpitRoom(cam, ship, opts) {
+    opts = opts || {};
+    var d = shipInterior(ship), SD = global.ShipDeck;
+    if (!d) return false;
+    var frame = { pos: ship.pos, right: ship.right, up: ship.up, fwd: ship.fwd };
+    var parts = [];
+    d.plan.doors.forEach(function (door) {
+      var lv = d.meshes.leaves[door.id];
+      if (!lv) return;
+      var tr = SD.leafTravel(door.open);
+      /* Across the ship for a fore-and-aft wall; fore and aft for a door
+       * in a side wall (the quarters'). */
+      if (door.axis === 'x') parts.push({ mesh: lv[0], off: [0, 0, -tr] }, { mesh: lv[1], off: [0, 0, tr] });
+      else parts.push({ mesh: lv[0], off: [-tr, 0, 0] }, { mesh: lv[1], off: [tr, 0, 0] });
+    });
+    /* The airlock's lamp: green when there is somewhere to step out to. */
+    parts.push({ mesh: (ship.docked || ship.landed) ? d.meshes.lampOk : d.meshes.lampNo });
+    if (opts.seat) parts.push({ mesh: d.meshes.seat });
+    var ok = global.GLWorld.queueCockpit(cam, frame, d.meshes.portals, d.meshes.room, parts, M);
+    if (ok) { ROOM_QUEUED.ship = ship; ROOM_QUEUED.cam = cam; }
+    return ok;
+  }
+
   /* Can this panel go through the GPU as a real quad in the world? */
   function mfdGpu(panel) {
     return !!(panel && panel.world && global.GLWorld &&
@@ -11094,6 +11479,11 @@
     CANOPY_Z: CANOPY_Z,
     APERTURE: APERTURE,
     cockpitSpec: cockpitSpec, canopySegments: canopySegments,
+    cockpitGeometry: cockpitGeometry, shipInterior: shipInterior,
+    queueCockpitRoom: queueCockpitRoom, cockpitGpu: cockpitGpu,
+    greebleRegions: greebleRegions, greebleSurface: greebleSurface,
+    /* A switch for comparing the GPU room with the 2D cockpit it replaced. */
+    setCockpitRoom: function (on) { COCKPIT_ROOM_ON = !!on; },
     hullFineness: hullFineness, COCKPIT_ARCH: COCKPIT_ARCH,
     MFD_SLOTS: MFD_SLOTS,
     MFD_MOUNTS: MFD_MOUNTS,
