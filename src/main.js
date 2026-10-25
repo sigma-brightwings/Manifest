@@ -3864,35 +3864,56 @@
       while (G.warpIndex > 0 && toIgnition < 3 * WARPS[G.warpIndex] * Math.max(frame, 0.02)) G.warpIndex--;
       if (toIgnition > 0) return null;
       nb.phase = 'burn';
-      nb.lit = false;
-      say('Ignition — ' + fmtSpeed(nb.remaining) + ' to burn', 4);
+      /* The engine lights with the clock wound up as far as the burn
+       * allows (see burnWarpCap) - a nine-minute burn should not be nine
+       * real minutes. Astra, 2026-10-25, yes to warp through long burns. */
+      G.warpIndex = burnWarpCap(nb.remaining / Math.max(G.ship.maxAccel, 1e-12));
+      say('Ignition — ' + fmtSpeed(nb.remaining) + ' to burn' +
+          (G.warpIndex > 0 ? ', warp ' + WARPS[G.warpIndex] + '×' : ''), 4);
     }
 
     if (nb.phase === 'burn') {
-      G.warpIndex = 0;
       if (nb.remaining <= 0) { finishNodeBurn(); return null; }
       if (G.ship.thrusterFuel <= 0) { cancelNodeBurn('out of reaction mass'); return null; }
 
-      /* Throttle back over the last fraction of a second of burn so the
-       * final substep cannot overshoot the target delta-v. Without this a
-       * frame worth more delta-v than remains would sail straight past it
-       * and the node would never converge. */
       var accel = G.ship.maxAccel;
-      /* The clock this command will be flown on is the NEXT step's, and
-       * that is a 1x step now: the last frame's dtSim belongs to the warp
-       * it was flown at. The first burning frame books one real frame at
-       * most, not the warped one before it. */
-      if (!nb.lit) { nb.lit = true; dtSim = Math.min(dtSim, 1 / 30); }
-      var dt = Math.max(dtSim, 1e-6);
+      /* WARP THROUGH THE BURN, coming down as it ends. The player may take
+       * it lower; the autopilot only ever brings it down from here. */
+      G.warpIndex = Math.min(G.warpIndex, burnWarpCap(nb.remaining / Math.max(accel, 1e-12)));
+      /* Throttle back over the last step of the burn so it cannot
+       * overshoot the target delta-v. The step it will be flown on is
+       * this frame's: the warp just set, times a real frame. */
+      var dt = Math.max(WARPS[G.warpIndex] * (G.frameReal || 1 / 60), 1e-6);
       var throttle = Math.min(1, nb.remaining / (accel * dt));
-      var cmd = V.scale(nb.dir, accel * throttle);
-      // Count what the engine will actually deliver this step.
-      nb.remaining -= accel * throttle * dt;
-      nb.spent += accel * throttle * dt;
-      if (nb.remaining <= 1e-9) nb.remaining = 0;
-      return cmd;
+      /* NOT COUNTED HERE (2026-10-25). The integrator may take a shorter
+       * step than asked - the physics clamp, the impact net - so what the
+       * engine delivered is booked after the step, on the clock it really
+       * ran for (bookNodeBurn). Counting it here against a guessed frame
+       * is how 8 km/s was once booked for a few metres per second. */
+      nb.cmdAccel = accel * throttle;
+      return V.scale(nb.dir, nb.cmdAccel);
     }
     return null;
+  }
+
+  /* The highest warp a burn of `secLeft` seconds may run at: at least forty
+   * frames of burn left at that rate, so the plan's fixed direction is
+   * flown in steps short against the burn, and the last of it at 1x. */
+  function burnWarpCap(secLeft) {
+    var fr = Math.max(G.frameReal || 1 / 60, 1 / 240);
+    var i = WARPS.length - 1;
+    while (i > 0 && WARPS[i] * fr * 40 > secLeft) i--;
+    return i;
+  }
+  /* What the engine actually delivered over the step just integrated. */
+  function bookNodeBurn(dtSim) {
+    var nb = G.nodeBurn;
+    if (!nb || nb.phase !== 'burn' || !(nb.cmdAccel > 0) || !(dtSim > 0)) return;
+    var dv = nb.cmdAccel * dtSim;
+    nb.remaining -= dv;
+    nb.spent += dv;
+    nb.cmdAccel = 0;
+    if (nb.remaining <= 1e-9) nb.remaining = 0;
   }
 
   function finishNodeBurn() {
@@ -5339,6 +5360,9 @@
       return;
     }
 
+    /* This frame's real length, for the burn autopilot to size its last
+     * step against (see advanceNodeBurn) before the step is taken. */
+    G.frameReal = dtReal;
     applyControls(dtReal);
 
     var warp = WARPS[G.warpIndex];
@@ -5532,8 +5556,10 @@
         G.impactForecast = null;
       }
 
+      var tStep = G.t;
       var res = Sim.advanceShip(G.ship, G.sys, G.t, dtSim, 3000);
       G.t = res.t;
+      bookNodeBurn(G.t - tStep);
       /* A STRUCTURE CRASH IS A LOSS TOO. A station wall, a berth or a pad
        * taken hard enough sets `crashed` WITHOUT `landed` (there is no
        * surface to sit on), and the report below only reads `landed` — so

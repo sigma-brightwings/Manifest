@@ -6313,6 +6313,48 @@ console.log('--- manoeuvre nodes ---');
   press('i', { shiftKey: true });
   G.panel = 0;
   check('cleared again for the sections below', !G.node && !G.nodeBurn);
+
+  /* A POLAR SURVEY ORBIT, FLOWN BY THE LOOP (2026-10-25). Y on the orbit
+   * map plans it; \ flies it; the coast is warped the way a player would,
+   * and the long burn itself runs under warp now (Astra: yes to warping
+   * through long burns) - booked on the clock the integrator really ran,
+   * so it ends polar rather than with a few metres per second spent. */
+  G.ship = Sim.circularOrbit(planet, G.sys, G.t, planet.radius * 0.3, 0.3, 0.4);
+  Sim.refreshShip(G.ship);
+  G.ship.thrusterFuel = G.ship.thrusterCap || G.ship.thrusterFuel;
+  frames(2);
+  press('F2');
+  press('y');
+  check('Y on the orbit map plans a polar survey orbit', !!G.node && /Polar survey orbit/.test(G.message || ''),
+        G.message);
+  frames(2);
+  var burnSec = G.nodePlan ? G.nodePlan.burn.duration : 0;
+  press('\\');
+  check('and \\ flies it', !!G.nodeBurn);
+  var guardP = 0, burnFrames = 0, warpedBurn = false;
+  while (G.nodeBurn && guardP++ < 6000) {
+    if (G.nodeBurn.phase === 'align' && G.warpIndex < 6) G.warpIndex = 6;   // the player's hand on the warp
+    frame(16);
+    if (G.nodeBurn && G.nodeBurn.phase === 'burn') { burnFrames++; if (G.warpIndex > 0) warpedBurn = true; }
+  }
+  check('the polar burn finishes', !G.nodeBurn, 'still going after ' + guardP + ' frames');
+  /* At 1x a burn of burnSec seconds is burnSec / 0.016 frames here. */
+  check('under warp, not in real time', warpedBurn && burnSec > 60 && burnFrames < burnSec / 0.016 / 10,
+        burnFrames + ' frames for a ' + burnSec.toFixed(0) + ' s burn (' + Math.round(burnSec / 0.016) + ' at 1x)');
+  (function () {
+    var bsP = Sim.bodyState(planet, G.sys, G.t);
+    var relP = V.sub(G.ship.pos, bsP.pos), velP = V.sub(G.ship.vel, bsP.vel);
+    var rotP = planet.rotation || { tilt: 0 }, azP = rotP.az || 0;
+    var poleP = { x: Math.sin(rotP.tilt) * Math.sin(azP), y: -Math.sin(rotP.tilt) * Math.cos(azP), z: Math.cos(rotP.tilt) };
+    var hP = V.norm(V.cross(relP, velP));
+    var off = Math.asin(Math.min(1, Math.abs(V.dot(hP, poleP)))) * 180 / Math.PI;
+    var oeP = Sim.oscElements(G.ship, G.sys, G.t);
+    check('and leaves the ship over the poles', off < 2 && oeP.e < 0.03,
+          off.toFixed(2) + ' deg off polar, e ' + oeP.e.toFixed(3));
+  })();
+  G.warpIndex = 0;
+  G.panel = 0;
+  frames(1);
 })();
 
 /* The zoom used to have a floor of 1 km, set for a camera that spends most

@@ -124,6 +124,18 @@ Astra has seen it working.
     landing spot without undoing the pole's lean (`az`), so the ship was
     put back on the ground somewhere else the next frame.
   - `test/ground.test.js` (20 checks), `test/polar.test.js` (15).
+- **2026-10-25: the burn autopilot warps through long burns.** Astra said
+  yes to it: the polar plane change is a seven-to-nine-minute burn, and the
+  autopilot used to hold every burn at 1x.
+  - At ignition the clock goes up as far as leaves at least forty frames
+    of burn, and comes down a notch at a time as the burn runs out, so the
+    last of it is flown at 1x. You can take it lower yourself; the
+    autopilot only ever brings it down.
+  - What the engine delivered is now booked after each step, on the clock
+    the integrator actually ran (the physics clamp and the impact net can
+    both shorten a step), not guessed before it.
+  - In the render suite's flown test: the polar burn finishes in a small
+    fraction of the frames it took at 1x, and ends within 2° of polar.
 
 - **2026-10-15: Driftwood's line merged into Abby.** Planetary rings,
   asteroid belts and Trojans, the lift car, lightning, the glass-glow
