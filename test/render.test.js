@@ -138,6 +138,10 @@ require('../src/rng.js');
  * module happens to require it first is a dependency waiting to break. */
 require('../src/slipspace.js');
 require('../src/kepler.js');
+/* The skimmer and the hold-to-tank pump (2026-10-24). index.html has
+ * loaded it here since mining rung 3; this harness never did, so the game's
+ * F5 refuel found no Mining and moved nothing - only here. */
+require('../src/mining.js');
 require('../src/economy.js');
 require('../src/generate.js');
 require('../src/galaxy.js');
@@ -4269,6 +4273,24 @@ console.log('--- an empty system (2026-10-24) ---');
     keydown({ key: 'Escape', shiftKey: false, preventDefault: function () {} });
     frames(1);
   });
+  /* Out here the tank is filled from the hold (2026-10-24): skim, then F5
+   * and the TO TANKS button, or F on that screen. */
+  G.ship.cargo.hydrogen = 20;
+  G.ship.fuel = 1;
+  Sim.refreshShip(G.ship);
+  var m4 = drawn.texts.length;
+  keydown({ key: 'F5', shiftKey: false, preventDefault: function () {} });
+  frames(2);
+  var shown = drawn.texts.slice(m4).some(function (t) { return /TO TANKS/.test(String(t.text || t)); });
+  check('the ship screen offers the hold\'s hydrogen to the tanks', shown);
+  keydown({ key: 'f', shiftKey: false, preventDefault: function () {} });
+  frames(1);
+  var room = G.ship.fuelCap - 1;
+  check('and F puts it in the jump tank', Math.abs(G.ship.fuel - (1 + Math.min(20, room))) < 0.02 &&
+        Math.abs((G.ship.cargo.hydrogen || 0) - Math.max(0, 20 - room)) < 0.02,
+        'tank ' + G.ship.fuel.toFixed(2) + '/' + G.ship.fuelCap + ', hold ' + (G.ship.cargo.hydrogen || 0).toFixed(2) + ' t');
+  keydown({ key: 'Escape', shiftKey: false, preventDefault: function () {} });
+  frames(1);
   G.panel = 0;
   G.viewMode = 'orbit';
   var m3 = drawn.texts.length;

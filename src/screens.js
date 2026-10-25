@@ -23,6 +23,7 @@
 
   /* Wired by main.js at boot. Unpacked to bare names so the moved code is
    * byte-for-byte the code that was tested in its old home. */
+  var refuelFromHold;
   var G, say, selectPanel, hot, navList, navTargetState, navMark, jettison,
       heldCargo, openMarket, plottedCourse, jumpCandidates, doJump, complyWithDemand,
       hailAuthority, payOutstanding, hailSelected, exitTransfer, shipDealTrade,
@@ -37,6 +38,7 @@
     say = api.say; selectPanel = api.selectPanel; hot = api.hot;
     navList = api.navList; navTargetState = api.navTargetState;
     navMark = api.navMark; jettison = api.jettison; heldCargo = api.heldCargo;
+    refuelFromHold = api.refuelFromHold;
     openMarket = api.openMarket;
     plottedCourse = api.plottedCourse; jumpCandidates = api.jumpCandidates;
     doJump = api.doJump; complyWithDemand = api.complyWithDemand;
@@ -1875,7 +1877,8 @@
                         : ordnance ? 'Tab status   ·   ↑↓ charge   ·   C guard   ·   Enter launch   ·   D disarm   ·   X detonate'
                         : panels ? 'Tab ordnance   ·   pick a mount, then pick a page'
                              : (G.ship.docked ? 'Tab guns   ·   F4 trade   ·   ↑↓ select   ·   Del jettison'
-                                              : 'Tab guns   ·   ↑↓ select   ·   Del jettison   ·   Shift+Del all'));
+                                              : 'Tab guns   ·   ↑↓ select   ·   Del jettison   ·   Shift+Del all' +
+                                                (G.ship.cargo && G.ship.cargo.hydrogen > 0 && G.ship.fuel < G.ship.fuelCap - 0.01 ? '   ·   F hydrogen to tanks' : '')));
 
     /* Two tabs across the top: the inventory layout, and the guns board
      * that used to live on the deck MFD cycle. Clickable, and Tab toggles
@@ -2146,9 +2149,18 @@
       ctx.textAlign = 'left';
       ctx.restore();
 
-      hot(rx + 8, yy, Math.max(40, btnX1 - rx - 12), rowH - 4, (function (n) {
+      /* HYDROGEN IS FUEL (2026-10-24): skimmed into the hold, and into the
+       * jump tank when the pilot says so - this button, or F on this screen. */
+      var canTank = it.cid === 'hydrogen' && refuelFromHold && G.ship.fuel < G.ship.fuelCap - 0.01;
+      var btnX0 = btnX1 - btnW - 8;
+      hot(rx + 8, yy, Math.max(40, (canTank ? btnX0 : btnX1) - rx - 12), rowH - 4, (function (n) {
         return function () { G.invSel = n; };
       })(i));
+      if (canTank) {
+        btn(ctx, btnX0, yy + 2, btnW, rowH - 8, 'TO TANKS',
+            (function (n) { return function () { G.invSel = n; refuelFromHold(); }; })(i),
+            { font: 11 });
+      }
 
       /* The two buttons, right where the cargo is. */
       btn(ctx, btnX1, yy + 2, btnW, rowH - 8, 'EJECT 1t',

@@ -2324,6 +2324,9 @@
           if (held[G.invSel]) jettison(held[G.invSel].cid, e.shiftKey ? Infinity : 1);
           return true;
         }
+        /* F: hold hydrogen into the jump tank (2026-10-24), the same letter
+         * that refuels at a port's desk. */
+        if (key === 'f' && !G.ship.docked) { refuelFromHold(); return true; }
         return false;
       }
 
@@ -4021,6 +4024,22 @@
     logTrade('Jump fuel +' + got.toFixed(2) + 't  ' + fmtCredits(-got * p.buy));
   }
 
+  /* Hydrogen in the hold into the jump tank (2026-10-24): skim, then refuel
+   * from the SHIP screen (F5, the TO TANKS button on the hydrogen row, or F
+   * there). Contract hydrogen stays where it is. */
+  function refuelFromHold() {
+    var have = (G.ship.cargo && G.ship.cargo.hydrogen) || 0;
+    if (have <= 0) { say('No hydrogen in the hold', 2); return 0; }
+    if (G.ship.fuelCap - G.ship.fuel < 0.01) { say('Tank already full', 2); return 0; }
+    var keep = global.Missions && global.Missions.bondedTonnes ? global.Missions.bondedTonnes(G, 'hydrogen') : 0;
+    if (!global.Mining) { say('The fuel pump is not fitted in this build', 3); return 0; }
+    var got = global.Mining.refuelFromHold(G.ship, keep);
+    if (got <= 0) { say('That hydrogen is under contract - it is not yours to burn', 3); return 0; }
+    say('Jump tank +' + got.toFixed(2) + 't from the hold  -  ' + G.ship.fuel.toFixed(1) + ' / ' + G.ship.fuelCap + ' t', 3);
+    if (G.invSel >= heldCargo().length) G.invSel = Math.max(0, heldCargo().length - 1);
+    return got;
+  }
+
   /* Hand over what the pirate asked for. There is no combat in this pass,
    * so the alternative is not "fight" — it is "outrun", and whether you can
    * depends on how full your hold is. That is the whole point of the mass
@@ -5499,17 +5518,11 @@
       if (sk && !wasSkim) {
         say(sk.poor ? 'Skimmer: ' + sk.body.name + ' is too poor in hydrogen to be worth the intake'
                     : 'Skimmer open - ' + sk.body.name + (sk.star ? ' corona' : '') +
-                      (sk.face > 0.7 ? '' : ' - nose into ' + (sk.star ? 'your direction of travel' : 'the air') + ', it is a ram scoop') +
-                      (sk.tankFull ? '' : ' - filling the tanks first'), 4);
+                      (sk.face > 0.7 ? '' : ' - nose into ' + (sk.star ? 'your direction of travel' : 'the air') + ', it is a ram scoop'), 4);
         G.skimShown = Math.floor(G.skimTotal || 0);
-        G.skimTankSaid = !!sk.tankFull;
-      } else if (sk && sk.tankFull && !G.skimTankSaid && !sk.full) {
-        /* 2026-10-24: skimmed hydrogen fills the jump tank before the hold */
-        G.skimTankSaid = true;
-        say('Skimmer: tanks full - the rest goes in the hold', 4);
       } else if (sk && sk.full && !G.skimFullSaid) {
         G.skimFullSaid = true;
-        say('Skimmer: tanks and hold full', 4);
+        say('Skimmer: hold full' + (G.ship.fuel < G.ship.fuelCap - 0.01 ? ' - F5 then F puts hydrogen in the jump tank' : ''), 4);
       } else if (sk && !sk.full && !sk.poor && Math.floor(G.skimTotal || 0) >= (G.skimShown || 0) + 5) {
         G.skimShown = Math.floor(G.skimTotal || 0);
         say('Skimming ' + sk.body.name + ' - ' + (sk.rate * 60).toFixed(1) + ' t/min, ' +
@@ -14347,7 +14360,7 @@
       G: G,
       say: say, selectPanel: selectPanel, hot: hot,
       navList: navList, navTargetState: navTargetState, navMark: navMark,
-      jettison: jettison, heldCargo: heldCargo,
+      jettison: jettison, heldCargo: heldCargo, refuelFromHold: refuelFromHold,
       /* The trade console, handed over because the way IN to it is now the
        * docked port's own comms channel rather than a letter key. */
       openMarket: openMarket,

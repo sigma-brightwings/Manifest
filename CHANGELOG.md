@@ -488,6 +488,20 @@ Astra has seen it working.
     longest lane and accept a live corridor's own crossing time.
     `Claude outputs`: `empty-smoke.cjs`, `corona-check.cjs`,
     `galaxy-map.cjs` (the map top down, held and nobody's).
+  - **2026-10-24, later: you choose when the hold fills the tank.** (Astra:
+    "fuel that you have in the hold as like hydrogen can be used to refuel
+    the ship so you skim and then choose to refuel from inside the ship
+    menu or ship screen".) The tanks-first skimming above is undone:
+    skimmed hydrogen goes into the HOLD, at a star or a giant, as it did.
+    `Mining.refuelFromHold` pumps hold hydrogen into the jump tank, as much
+    as the tank has room for, never the tonnes held under contract; on F5
+    SHIP the hydrogen row has a **TO TANKS** button, and **F** on that
+    screen does the same (undocked; at a port's desk F still buys fuel).
+    "Skimmer: hold full" says how. The render harness now loads mining.js,
+    as index.html always has (without it the pump found no Mining). Tests:
+    mining 110 (into the hold not the tank, the pump fills to the brim and
+    no further, contract hydrogen stays), render 969 (in an empty system,
+    F5 shows TO TANKS and F fills the tank).
   - **Next** (agreed, not built): the empires and the player expanding into
     no-man's land on the clock - Crawlers founding ports there, dated like
     the wars - and the faction missions that hang off it.

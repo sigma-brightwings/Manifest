@@ -225,13 +225,20 @@ var sGot = Mn.skimStep(Gs, sunSys, t0, 1, true), ssk = Gs.skimming;
 check('a star\'s corona can be skimmed', sGot > 0 && ssk && ssk.star, sGot.toFixed(3) + ' t/s in ' + sunSys.root.name + ' (' + sunSys.root.type + ')');
 check('density x speed x area x facing, as for a giant',
       ssk && Math.abs(sGot - ssk.rho * ssk.v * 1000 * Mn.SKIM_AREA * ssk.face / 1000 * ssk.frac) < 1e-9);
-check('it fills the jump tank before the hold', Math.abs(Gs.ship.fuel - tank0 - sGot) < 1e-9 && (Gs.ship.cargo.hydrogen || 0) === holdH0,
-      tank0 + ' -> ' + Gs.ship.fuel.toFixed(2) + ' t in the tank');
-var spill = 0;
-for (var q = 0; q < 600 && !Gs.skimming.tankFull; q++) spill += Mn.skimStep(Gs, sunSys, t0 + q, 1, true);
-var more = Mn.skimStep(Gs, sunSys, t0 + 601, 1, true);
-check('and once the tank is full, the hold', Gs.ship.fuel <= Gs.ship.fuelCap + 1e-9 && Gs.skimming.tankFull && (Gs.ship.cargo.hydrogen || 0) > holdH0 && more > 0,
-      'tank ' + Gs.ship.fuel.toFixed(1) + '/' + Gs.ship.fuelCap + ' t, hold ' + (Gs.ship.cargo.hydrogen || 0).toFixed(2) + ' t');
+/* Astra, 2026-10-24: "you skim and then choose to refuel from inside the
+ * ship menu" - into the hold, and the tank only when asked. */
+check('it goes into the hold, not the tank', Gs.ship.fuel === tank0 && Math.abs((Gs.ship.cargo.hydrogen || 0) - holdH0 - sGot) < 1e-9,
+      sGot.toFixed(3) + ' t in the hold, tank still ' + tank0 + ' t');
+for (var q = 0; q < 120; q++) Mn.skimStep(Gs, sunSys, t0 + q, 1, true);
+var inHold = Gs.ship.cargo.hydrogen, room = Gs.ship.fuelCap - Gs.ship.fuel;
+var moved = Mn.refuelFromHold(Gs.ship, 0);
+check('refuelling from the hold fills the tank, no further', Math.abs(moved - Math.min(inHold, room)) < 0.011 && Gs.ship.fuel <= Gs.ship.fuelCap + 1e-9,
+      moved.toFixed(2) + ' t moved, tank ' + Gs.ship.fuel.toFixed(2) + '/' + Gs.ship.fuelCap + ', hold ' + (Gs.ship.cargo.hydrogen || 0).toFixed(2) + ' t');
+check('and the tonnes come out of the hold', Math.abs(((Gs.ship.cargo.hydrogen || 0) + moved) - inHold) < 1e-9);
+check('a full tank takes nothing more', Mn.refuelFromHold(Gs.ship, 0) === 0);
+var Gk = { ship: { fuel: 0, fuelCap: 30, cargo: { hydrogen: 10 } } };
+check('hydrogen under contract is not burned', Mn.refuelFromHold(Gk.ship, 8) === 2 && Gk.ship.cargo.hydrogen === 8 && Gk.ship.fuel === 2);
+check('and with none aboard, nothing', Mn.refuelFromHold({ fuel: 0, fuelCap: 30, cargo: {} }, 0) === 0);
 var Gdeep = { here: { id: 'test' }, extracted: {} };
 Gdeep.ship = inCorona(sunSys, 1.2, t0); Gdeep.ship.fuel = 0;
 check('deeper takes more', Mn.skimStep(Gdeep, sunSys, t0, 1, true) > sGot * 2);

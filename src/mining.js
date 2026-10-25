@@ -437,31 +437,48 @@
       top = at.top;
     }
     var tonnes = rho * v * 1000 * SKIM_AREA * face * dt / 1000 * frac;  // kg/m^3 * m/s * m^2 * s -> kg -> t
-    /* THE TANKS FIRST (2026-10-24): skimmed hydrogen is reaction mass, so it
-     * tops up the jump tank before anything goes in the hold - that is what
-     * lets a ship keep moving through systems with no port. */
-    var tankRoom = Math.max(0, (s.fuelCap || 0) - (s.fuel || 0));
+    /* Into the HOLD. The pilot decides when it goes into the tanks
+     * (refuelFromHold, below; Astra 2026-10-24: "you skim and then choose to
+     * refuel from inside the ship menu"). */
     var room = s.cargoCap - S.cargoMass(s);
     /* Where the heat shield stops coping at this speed, for the panel. */
     var shed = (S.BASE_HEAT_SHED || 18) + (s.heatShed || 0);
     var line = star ? S.coronaLineAlt(star, shed) : (S.heatLineAlt ? S.heatLineAlt(body, v, shed) : 0);
-    G.skimming = { body: body, star: !!star, rho: rho, v: v, frac: frac, rate: tonnes / dt,
-                   full: room <= 0.01 && tankRoom <= 0.01, tankFull: tankRoom <= 0.01,
+    G.skimming = { body: body, star: !!star, rho: rho, v: v, frac: frac, rate: tonnes / dt, full: room <= 0.01,
                    poor: grade < SKIM_MIN_GRADE, align: align, face: face, airDir: airDir,
                    alt: alt, lineAlt: line, top: top };
-    if ((room <= 0.01 && tankRoom <= 0.01) || grade < SKIM_MIN_GRADE) return 0;
-    var toTank = Math.min(tonnes, tankRoom);
-    s.fuel = (s.fuel || 0) + toTank;
-    var toHold = Math.min(tonnes - toTank, Math.max(0, room));
-    tonnes = toTank + toHold;
-    G.skimToTank = (G.skimToTank || 0) + toTank;
-    if (toHold > 0) s.cargo.hydrogen = (s.cargo.hydrogen || 0) + toHold;
+    if (room <= 0.01 || grade < SKIM_MIN_GRADE) return 0;
+    tonnes = Math.min(tonnes, room);
+    s.cargo.hydrogen = (s.cargo.hydrogen || 0) + tonnes;
     S.refreshShip(s);
     G.extracted = G.extracted || {};
     var ex = G.extracted[key] = G.extracted[key] || {};
     ex.hydrogen = (ex.hydrogen || 0) + tonnes;
     G.skimTotal = (G.skimTotal || 0) + tonnes;
     return tonnes;
+  }
+
+  /* ---- refuelling from the hold (2026-10-24) -------------------------------
+   * Astra: "fuel that you have in the hold as like hydrogen can be used to
+   * refuel the ship so you skim and then choose to refuel from inside the
+   * ship menu or ship screen". Hydrogen is the jump drive's reaction mass,
+   * so a tonne in the hold is a tonne the tank can take: as much as the
+   * tank has room for, never the tonnes held under contract (`keep`) -
+   * freight is not yours to burn. Anywhere, docked or not: it is a pump
+   * between two tanks of your own. Returns the tonnes moved. */
+  function refuelFromHold(ship, keep) {
+    if (!ship || !ship.cargo) return 0;
+    var have = ship.cargo.hydrogen || 0;
+    var free = Math.max(0, have - (keep || 0));
+    var room = Math.max(0, (ship.fuelCap || 0) - (ship.fuel || 0));
+    var t = Math.floor(Math.min(free, room) * 100) / 100;
+    if (t <= 0) return 0;
+    ship.cargo.hydrogen = have - t;
+    if (ship.cargo.hydrogen <= 1e-9) delete ship.cargo.hydrogen;
+    ship.fuel = (ship.fuel || 0) + t;
+    var S = Sim();
+    if (S && S.refreshShip) S.refreshShip(ship);
+    return t;
   }
 
   /* ---- rock torpedoes ------------------------------------------------------
@@ -794,7 +811,7 @@
     TORP_SPEED: TORP_SPEED, TORP_LIFE: TORP_LIFE, TORP_ARM: TORP_ARM, TORP_BLAST: TORP_BLAST,
     TORP_SHATTER: TORP_SHATTER, SABOTAGE_DAYS: SABOTAGE_DAYS, TORP_CLEAR_OF_PORT: TORP_CLEAR_OF_PORT,
     rocksNear: rocksNear, rayRock: rayRock, chunkOf: chunkOf, cut: cut, spawnChunk: spawnChunk,
-    skimStep: skimStep, isGiant: isGiant,
+    skimStep: skimStep, isGiant: isGiant, refuelFromHold: refuelFromHold,
     launchTorpedo: launchTorpedo, updateTorpedoes: updateTorpedoes, detonate: detonate,
     sabotage: sabotage, sabotaged: sabotaged, claimRefund: claimRefund, isShattered: isShattered,
     /* pieces and wear (2026-10-18) */
