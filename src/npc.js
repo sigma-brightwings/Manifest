@@ -254,25 +254,50 @@
     var CrewM = global.Crew;
     var roster = (CrewM && CrewM.aboard) ? CrewM.aboard(ship) : (ship && ship.crew) || [];
     var liv = liveryFor({ livery: ship && ship.livery, faction: ship && ship.liveryFaction });
+    /* Assigned off the whole ship: on a decked hull `plan` is one deck. */
+    var W = plan.ship || plan;
     var stations = { engineer: [], gunner: [] };
-    itemsOfKind(plan, 'station').forEach(function (it) { if (stations[it.role]) stations[it.role].push(it); });
+    itemsOfKind(W, 'station').forEach(function (it) { if (stations[it.role]) stations[it.role].push(it); });
     var used = { engineer: 0, gunner: 0 };
+    /* The turret's seat (2026-10-25) goes to the gunner the turret takes —
+     * the best one, as crew.js turretCrewing chooses — and every other
+     * gunner works the forward guns from a bridge gunnery station (crew.js
+     * gunnery). On an S ship, the second seat — a co-pilot's or a gunner's
+     * console — goes to whoever fits it, and failing that to anybody. */
+    var turrets = itemsOfKind(W, 'turret').slice(), tUsed = 0;
+    var gy = CrewM && CrewM.gunnery ? CrewM.gunnery(ship) : null;
+    var onMount = {};
+    if (gy) gy.mounts.forEach(function (c) { onMount[c.id || c.name] = true; });
+    var spare = itemsOfKind(W, 'copilot').concat(W.size === 'S' ? itemsOfKind(W, 'station') : []);
+    var taken = [];
     var people = roster.map(function (c, i) {
       var role = (c.role === 'engineer' || c.role === 'gunner' || c.role === 'pilot') ? c.role : 'engineer';
       var p = person('crew|' + (c.id || c.name), c.name, role, liv, role, { crew: c, rating: c.rating });
+      if (role === 'gunner' && tUsed < turrets.length && (!gy || onMount[c.id || c.name])) { p.turret = turrets[tUsed++]; return p; }
       /* One person to a seat. A second gunner for a one-gunner hull still
        * stands the watch — at the shoulder of whoever has the seat. */
       var list = stations[role];
+      if (role === 'pilot') list = itemsOfKind(W, 'copilot');
       if (list && list.length) {
         if (used[role] < list.length) p.station = list[used[role]];
         else p.assist = list[used[role] % list.length];
         used[role]++;
       }
-      p.bunk = plan.bunkAt && plan.bunkAt.length ? plan.bunkAt[i % plan.bunkAt.length] : null;
-      p.upper = plan.bunkAt && plan.bunkAt.length ? (Math.floor(i / plan.bunkAt.length) % 2 === 1) : false;
+      if (p.station) taken.push(p.station);
       return p;
     });
-    var sc = { kind: 'ship', plan: plan, people: people, floorY: plan.floorY || 0, key: opts.key || '' };
+    people.forEach(function (p) {
+      if (p.station || p.turret) return;
+      var free = spare.filter(function (it) { return taken.indexOf(it) < 0; })[0];
+      if (free) { p.station = free; p.assist = null; taken.push(free); }
+    });
+    people.forEach(function (p, i) {
+      p.bunk = W.bunkAt && W.bunkAt.length ? W.bunkAt[i % W.bunkAt.length] : null;
+      p.upper = W.bunkAt && W.bunkAt.length ? (Math.floor(i / W.bunkAt.length) % 2 === 1) : false;
+      return p;
+    });
+    var sc = { kind: 'ship', plan: plan, people: people, floorY: plan.floorY || 0, key: opts.key || '',
+               deck: plan.deck || null, car: plan.deck ? roomById(plan, 'lift-' + plan.deck) : null };
     people.forEach(function (p) { placeAtStart(sc, p, opts.t || 0); });
     return sc;
   }
@@ -438,46 +463,83 @@
     var plan = sc.plan, n = p.n++;
     var hold = 20 + draw(p.id, n + 'h') * 70;
     if (sc.kind === 'ship') {
+      /* THE WHOLE SHIP, not just this deck (2026-10-25): on a decked hull a
+       * hand's station may be on the bridge while you are on the main deck.
+       * Every task says which deck it is on; update() sends a hand whose
+       * next job is elsewhere into the lift, and brings one out of it whose
+       * job is here. `W` is the whole plan; `dp(room)` the deck plan a spot
+       * is drawn from. */
+      var W = plan.ship || plan;
+      var dp = function (rm) { return (W.decks && rm && W.decks[rm.deck]) || plan; };
+      var on = function (task, d) { task.deck = d || null; return task; };
       /* The pilot has the conn whenever you do not. */
       if (p.role === 'pilot') {
-        var seat = itemsOfKind(plan, 'seat')[0];
+        var seat = itemsOfKind(W, 'seat')[0];
         if (ctx.playerWalking && seat && ctx.helmFree) {
-          return { at: { x: seat.x, z: seat.z - 0.08 }, act: 'sit', yaw: 0, hold: 600, helm: true };
+          return on({ at: { x: seat.x, z: seat.sitZ !== undefined ? seat.sitZ : seat.z - 0.08 }, act: 'sit', yaw: 0, hold: 600, helm: true }, seat.deck);
         }
       }
-      if (onWatch(p, t) && p.station) {
-        /* On watch: at the station, with now and then a round aft (an
-         * engineer's look at the passage and the lock; anybody's stretch). */
-        if (draw(p.id, n + 'r') < (p.role === 'engineer' ? 0.22 : 0.1) && !p.lastRound) {
+      /* A ship with no bunks (an S) keeps no watches: whoever is aboard is
+       * at their seat. */
+      var watch = (W.bunkAt && W.bunkAt.length) ? onWatch(p, t) : true;
+      if (watch && (p.station || p.turret)) {
+        /* On watch: at the station, with now and then a round. An
+         * engineer's goes to the engine room, or now and then the cargo
+         * bay, to look at what is there (2026-10-25: before there was an
+         * engine room, the airlock); anybody else's is a stretch in the
+         * passage. */
+        if (draw(p.id, n + 'r') < (p.role === 'engineer' ? 0.3 : 0.1) && !p.lastRound) {
           p.lastRound = true;
-          var aft = roomsOfKind(plan, p.role === 'engineer' ? 'airlock' : 'passage')[0] || roomsOfKind(plan, 'passage')[0];
-          if (aft) return { at: spotIn(plan, aft, p.id, n), act: 'work', hold: 6 + draw(p.id, n + 'w') * 8 };
+          if (p.role === 'engineer') {
+            var con = itemsOfKind(W, 'engine')[0], hold2 = 15 + draw(p.id, n + 'w') * 30;
+            if (con && draw(p.id, n + 'e') < 0.7) {
+              return on({ at: { x: con.x + (draw(p.id, n + 'ex') - 0.5) * 0.5, z: con.counter[3] + 0.4 }, act: 'work', yaw: Math.PI, hold: hold2 }, con.deck);
+            }
+            var hold3 = roomsOfKind(W, 'cargo')[0] || roomsOfKind(W, 'airlock')[0];
+            if (hold3) return on({ at: spotIn(dp(hold3), hold3, p.id, n, 1.0), act: 'work', hold: 6 + draw(p.id, n + 'w') * 10 }, hold3.deck);
+          }
+          /* A stretch on the deck their station is on. */
+          var stDeck = (p.turret || p.station || {}).deck;
+          var aft = roomsOfKind(W, 'passage').concat(roomsOfKind(W, 'bridgedeck')).filter(function (r) { return !stDeck || r.deck === stDeck; })[0]
+                    || roomsOfKind(W, 'passage')[0];
+          if (aft) return on({ at: spotIn(dp(aft), aft, p.id, n), act: 'stand', hold: 6 + draw(p.id, n + 'w') * 8 }, aft.deck);
         }
         p.lastRound = false;
+        if (p.turret) {
+          var tu = p.turret;
+          return on({ at: { x: tu.x, z: tu.z - 0.1 }, act: 'sit', yaw: 0, hold: hold * 2, station: true }, tu.deck);
+        }
         var st = p.station, side = st.x < 0 ? -1 : 1;
-        return { at: { x: st.x - side * 0.08, z: st.z }, act: 'sit', yaw: side * Math.PI / 2, hold: hold * 2, station: true };
+        /* A seat that faces forward (the co-pilot's) is sat in like the
+         * helm; a console against a wall is faced. */
+        if (st.yaw !== undefined) return on({ at: { x: st.x, z: st.sitZ !== undefined ? st.sitZ : st.z - 0.08 }, act: 'sit', yaw: st.yaw, hold: hold * 2, station: true }, st.deck);
+        return on({ at: { x: st.x - side * 0.08, z: st.z }, act: 'sit', yaw: side * Math.PI / 2, hold: hold * 2, station: true }, st.deck);
       }
       /* With you in the seat, the pilot on watch stands at your shoulder. */
       if (p.role === 'pilot' && onWatch(p, t)) {
-        var ck = roomsOfKind(plan, 'cockpit')[0];
-        if (ck && plan.bay !== undefined) {
+        var ck = roomsOfKind(W, 'cockpit')[0];
+        if (ck && W.bay !== undefined) {
           var bx = Math.max(ck.x0 + 0.45, Math.min(ck.x1 - 0.45, (ck.x1 - ck.x0) > 1.6 ? ck.x0 + 0.5 : 0));
-          return { at: { x: bx, z: plan.bay }, act: 'stand', yaw: 0, hold: hold };
+          return on({ at: { x: bx, z: W.bay }, act: 'stand', yaw: 0, hold: hold }, ck.deck);
         }
       }
       if (onWatch(p, t) && p.assist) {
         var as = p.assist, sd = as.x < 0 ? -1 : 1;
-        return { at: { x: as.x - sd * 0.55, z: as.z - 0.55 }, act: 'stand', yaw: sd * Math.PI / 2, hold: hold };
+        return on({ at: { x: as.x - sd * 0.55, z: as.z - 0.55 }, act: 'stand', yaw: sd * Math.PI / 2, hold: hold }, as.deck);
       }
       /* Off watch: the bunk most of the time, the galley the rest. */
-      var galley = itemsOfKind(plan, 'galley')[0];
+      var galley = itemsOfKind(W, 'galley')[0];
+      /* And now and then the medbay, for whatever a hand goes there for. */
+      var medb = roomsOfKind(W, 'medbay')[0];
+      if (medb && draw(p.id, n + 'm') < 0.06) return on({ at: spotIn(dp(medb), medb, p.id, n, 0.6), act: 'stand', hold: 10 + draw(p.id, n + 'mh') * 20 }, medb.deck);
+      var qr = roomsOfKind(W, 'quarters')[0];
       if (p.bunk && draw(p.id, n + 'b') < 0.6) {
         var b = p.bunk;
-        return { at: { x: b.inboard ? b.x0 - 0.35 : b.x1 + 0.35, z: (b.z0 + b.z1) / 2 }, act: 'lie', yaw: Math.PI, hold: hold * 3, bunk: b, upper: p.upper && b.two };
+        return on({ at: { x: b.inboard ? b.x0 - 0.35 : b.x1 + 0.35, z: (b.z0 + b.z1) / 2 }, act: 'lie', yaw: Math.PI, hold: hold * 3, bunk: b, upper: p.upper && b.two }, qr && qr.deck);
       }
-      if (galley) return { at: { x: galley.x + (draw(p.id, n + 'gx') - 0.5) * 0.8, z: galley.z + 0.65 }, act: 'work', yaw: Math.PI, hold: hold };
-      var pass = roomsOfKind(plan, 'passage')[0] || plan.rooms[0];
-      return { at: spotIn(plan, pass, p.id, n, 0.35), act: 'stand', hold: hold };
+      if (galley) return on({ at: { x: galley.x + (draw(p.id, n + 'gx') - 0.5) * 0.8, z: galley.z + 0.65 }, act: 'work', yaw: Math.PI, hold: hold }, galley.deck);
+      var pass = roomsOfKind(W, 'passage')[0] || W.rooms[0];
+      return on({ at: spotIn(dp(pass), pass, p.id, n, 0.35), act: 'stand', hold: hold }, pass.deck);
     }
     /* On a station deck. */
     if (p.post) {
@@ -504,6 +566,15 @@
    * them, not walking there from a corner. */
   function placeAtStart(sc, p, t) {
     var task = nextTask(sc, p, t, { playerWalking: false, helmFree: false });
+    /* On another deck: not here, until their work brings them here. */
+    p.away = elsewhere(sc, task);
+    if (p.away && sc.car) {
+      var cm = carMiddle(sc);
+      p.x = cm.x; p.z = cm.z; p.yaw = 0; p.sit = 0; p.lie = 0;
+      begin(p, task, 0);
+      p.act = 'away';
+      return;
+    }
     p.x = task.at.x; p.z = task.at.z;
     if (!standable(sc.plan, p.x, p.z) && task.act !== 'sit' && task.act !== 'lie') {
       var r = roomAt(sc.plan, task.at.x, task.at.z) || sc.plan.rooms[0], s = spotIn(sc.plan, r, p.id, 'start');
@@ -514,6 +585,8 @@
     p.sit = task.act === 'sit' ? 1 : 0;
     p.lie = task.act === 'lie' ? 1 : 0;
   }
+  function elsewhere(sc, task) { return !!(sc.deck && task.deck && task.deck !== sc.deck); }
+  function carMiddle(sc) { return { x: (sc.car.x0 + sc.car.x1) / 2, z: (sc.car.z0 + sc.car.z1) / 2 }; }
   function begin(p, task, now) {
     p.task = task; p.act = 'walk'; p.until = now + task.hold;
     p.helm = !!task.helm;
@@ -532,11 +605,27 @@
     sc.people.forEach(function (p) {
       /* A pilot sitting at the helm gets up when you want it back. */
       if (p.helm && !ctx.playerWalking) { p.task = null; p.until = 0; p.sit = 0; }
+      /* And goes to it as soon as you leave it, not when the job in hand
+       * is done — a seat nobody is in is the first thing a pilot sees. */
+      if (sc.kind === 'ship' && p.role === 'pilot' && !p.helm && ctx.playerWalking && ctx.helmFree &&
+          p.task && !p.task.helm && itemsOfKind(plan.ship || plan, 'seat').length) { p.task = null; }
       if (!p.task || (p.act !== 'walk' && now >= p.until)) {
         var task = nextTask(sc, p, ctx.t || 0, ctx);
         begin(p, task, now);
-        p.path = route(plan, { x: p.x, z: p.z }, task.at);
+        if (elsewhere(sc, task)) {
+          /* Work on another deck: into the lift, and gone. Already gone, they
+           * stay gone. */
+          if (p.away) { p.act = 'away'; return; }
+          p.leaving = true;
+          p.path = route(plan, { x: p.x, z: p.z }, carMiddle(sc));
+        } else {
+          /* Work here: out of the lift if they were away. */
+          if (p.away) { var cm = carMiddle(sc); p.x = cm.x; p.z = cm.z; p.away = false; p.sit = 0; p.lie = 0; }
+          p.leaving = false;
+          p.path = route(plan, { x: p.x, z: p.z }, task.at);
+        }
       }
+      if (p.away) return;
       if (p.act === 'walk') {
         /* Get up first. */
         if (p.sit > 0 || p.lie > 0) {
@@ -545,7 +634,10 @@
           return;
         }
         var wp = p.path[0];
-        if (!wp) { p.act = p.task.act; p.gait = 0; return; }
+        if (!wp) {
+          if (p.leaving) { p.away = true; p.leaving = false; p.act = 'away'; p.gait = 0; return; }
+          p.act = p.task.act; p.gait = 0; return;
+        }
         /* A shut door is waited at — and asked to open. */
         if (wp.door) {
           var dd = null;
@@ -647,7 +739,8 @@
     var NM = global.NpcModel;
     if (!NM) return [];
     budget = budget === undefined ? 2 : budget;
-    var list = sc.people.slice();
+    /* Nobody on another deck (2026-10-25). */
+    var list = sc.people.filter(function (p) { return !p.away; });
     if (eye) list.sort(function (a, b) { return dist(a, eye) - dist(b, eye); });
     var out = [];
     list.forEach(function (p) {
@@ -665,6 +758,7 @@
     reach = reach || 1.9;
     var best = null, bd = Infinity, fx = Math.sin(w.yaw), fz = Math.cos(w.yaw);
     sc.people.forEach(function (p) {
+      if (p.away) return;
       var dx = p.x - w.x, dz = p.z - w.z, d = Math.hypot(dx, dz);
       if (d > reach || d < 0.05) return;
       if ((dx * fx + dz * fz) / d < 0.5) return;
@@ -679,9 +773,13 @@
     var line = lines[p.line++ % lines.length];
     var CrewM = global.Crew;
     var who = p.name;
+    /* A gunner's knack (crew.js, 2026-10-25) is what you hire one for, so
+     * they say it. */
+    var kn = CrewM && CrewM.knackOf ? CrewM.knackOf(p.forHire || p.crew) : null;
+    var kw = kn ? ' (' + CrewM.KNACKS[kn].name + ')' : '';
     if (p.staff) who += ', ' + p.staff.toLowerCase();
-    else if (p.forHire && CrewM && CrewM.ratingWord) who += ', ' + CrewM.ratingWord(p.forHire.rating) + ' ' + p.role + ', looking for a berth';
-    else if (p.crew) who += ', your ' + p.role;
+    else if (p.forHire && CrewM && CrewM.ratingWord) who += ', ' + CrewM.ratingWord(p.forHire.rating) + ' ' + p.role + kw + ', looking for a berth';
+    else if (p.crew) who += ', your ' + p.role + kw;
     else if (p.shipName) who += ' of the ' + p.shipName;
     return who + ':  "' + line + '"';
   }

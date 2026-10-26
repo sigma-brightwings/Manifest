@@ -617,7 +617,7 @@
     if (opts.arrive && arrived) {
       G.followShip = true; G.focus = null;
       G.cam.target = V.clone(G.ship.pos);
-      G.cam.dist = CHASE_DIST;
+      G.cam.dist = chaseDist();
     }
     G.trajectoryStale = 0;
     G.trajJob = null;              // a job plotted in the old system means nothing here
@@ -1917,7 +1917,9 @@
        * screen live here, and a click that lands on one must never also
        * swing the camera, turn the pilot's head, or fire the guns. */
       if (global.Sound) global.Sound.poke();
-      var spot = overHot(e.clientX, e.clientY);
+      /* The pointer is hidden and captured on foot: it is not over anything,
+       * whatever its last on-screen position was. */
+      var spot = pointerLocked() ? null : overHot(e.clientX, e.clientY);
       if (spot) { HOOKS.sound('click'); spot.fn(); return; }
 
       if (G.cursor.active) {
@@ -2016,7 +2018,12 @@
        * ship while firing it. Everywhere else a drag is still a drag. */
       /* On foot a drag turns your head and body together. */
       if (G.walk && flying() && !menuOpen()) {
-        if (dragging && global.Walk) {
+        /* With the pointer captured (mouselook, below) the mouse IS your
+         * head, no button held; movementX/Y are the only numbers that move
+         * while the pointer is locked. Without the lock, a drag as before. */
+        if (pointerLocked() && global.Walk) {
+          global.Walk.look(G.walk, (e.movementX || 0) * WALK_LOOK, -(e.movementY || 0) * WALK_LOOK);
+        } else if (dragging && global.Walk) {
           global.Walk.look(G.walk, (e.clientX - lastX) * 0.0045, -(e.clientY - lastY) * 0.0045);
         }
         lastX = e.clientX; lastY = e.clientY;
@@ -2088,6 +2095,14 @@
         pinch = d;
       }
     }, { passive: false });
+    /* Registered after every other input handler, so they run once whatever the
+     * key or click did has happened — getting up out of the seat, opening a
+     * screen, holding Alt — and the capture follows. A browser only grants
+     * the lock inside an input event, which is why this is here and not in
+     * the frame. */
+    window.addEventListener('keydown', function () { syncPointerLock(true); });
+    window.addEventListener('keyup', function () { syncPointerLock(true); });
+    canvas.addEventListener('mousedown', function () { syncPointerLock(true); });
     canvas.addEventListener('touchend', function () { dragging = false; pinch = 0; });
   }
 
@@ -2166,7 +2181,7 @@
    * camera lost at the wrong distance had no reset at all. */
   function recentreLook() {
     if (G.viewMode !== 'cockpit') {
-      G.cam.dist = CHASE_DIST;
+      G.cam.dist = chaseDist();
       say('Camera reset to chase distance', 1.5);
       return;
     }
@@ -2237,6 +2252,14 @@
   /* Roughly the framing the game boots with: exterior, tracking the ship,
    * pulled out far enough that the local orbits read as a diagram. */
   var CHASE_DIST = 0.06;             // km — close enough to admire the hull
+  /* Your hull's length (2026-10-25): 25 m, or a Capital's 250 and a
+   * Carrier's 300 (Render.hullLength). The chase camera and its zoom floor
+   * stand off in proportion, so a 300 m ship is not admired from inside. */
+  function shipLen(s) {
+    s = s || G.ship;
+    return (Render.hullLength ? Render.hullLength(s) : 0) || Render.SHIP_LEN || 0.025;
+  }
+  function chaseDist() { return CHASE_DIST * shipLen() / (Render.SHIP_LEN || 0.025); }
 
   /* The zoom stops. MIN_CAM_DIST used to be 1.0 km, which is a hundred times
    * further out than the chase camera parks — so the first notch of the
@@ -2277,7 +2300,7 @@
                 + (G.cockpitFov / DEG).toFixed(0) + '° field)', 1.5);
       }
     } else {
-      G.cam.dist = Math.max(MIN_CAM_DIST, Math.min(MAX_CAM_DIST, G.cam.dist * f));
+      G.cam.dist = Math.max(MIN_CAM_DIST * shipLen() / (Render.SHIP_LEN || 0.025), Math.min(MAX_CAM_DIST, G.cam.dist * f));
       if (announce) say('Camera ' + fmtDist(G.cam.dist), 1.5);
     }
   }
@@ -2371,8 +2394,8 @@
        * camera out there, coming back out to the chase view left it stranded
        * and the hull stayed a speck. A tighter window means F1 always gives
        * you a ship-sized ship back; Home does the same without the toggle. */
-      if (G.cam.dist > CHASE_DIST * 8 || G.cam.dist < CHASE_DIST * 0.1) {
-        G.cam.dist = CHASE_DIST;
+      if (G.cam.dist > chaseDist() * 8 || G.cam.dist < chaseDist() * 0.1) {
+        G.cam.dist = chaseDist();
       }
       say('Exterior view', 2);
     }
@@ -3605,6 +3628,35 @@
    * one thing, and let go, so there is never a state to be surprised by.
    * Letting go mid-drag also ends the drag, which is the behaviour a hand
    * expects from a key it is holding. */
+  /* ---- mouselook on foot (2026-10-25) -------------------------------------
+   * Astra: "we're going to autoset mouselook for first person view." Asked:
+   * ON FOOT ONLY — walking your own ship or a station; the seat keeps drag
+   * to look, right-Alt free look and F9 mouse aim — and CAPTURE THE POINTER,
+   * so you can turn all the way round. Held left Alt gives the pointer back
+   * for the icon bar and the screens, as it does for the cursor everywhere;
+   * Esc (the browser lets go on Esc itself), any F-screen, the menu or
+   * sitting down do too. A click puts it back after Esc. */
+  var WALK_LOOK = 0.0028;           // rad per count of mouse movement
+  function pointerLocked() {
+    return !!(canvas && typeof document !== 'undefined' && document.pointerLockElement === canvas);
+  }
+  function walkLookWanted() {
+    return !!(G.walk && flying() && !menuOpen() && !(G.cursor && G.cursor.active));
+  }
+  /* `ask` only from inside an input event; every frame only ever lets go. */
+  function syncPointerLock(ask) {
+    if (!canvas || typeof document === 'undefined' || !canvas.requestPointerLock) return;
+    var want = walkLookWanted(), have = pointerLocked();
+    if (want && !have && ask) {
+      try {
+        var r = canvas.requestPointerLock();
+        if (r && r.catch) r.catch(function () {});      // refused (e.g. just after Esc): the next click asks again
+      } catch (e) { /* not granted here; the next input event asks again */ }
+    } else if (!want && have && document.exitPointerLock) {
+      document.exitPointerLock();
+    }
+  }
+
   function setCursorMode(on) {
     if (G.cursor.active === on) return;
     G.cursor.active = on;
@@ -5132,10 +5184,15 @@
       if (!berthed || !global.Walk) G.walk = null;
       else {
         if (flying()) {
-          global.Walk.step(G.walk, G.keys, dtReal);
-          npcFacing();
-          /* Doors on the wall clock, like the walking itself. */
-          if (G.walk.ship && global.ShipDeck) global.ShipDeck.updateDoors(G.walk.plan, G.walk, dtReal, npcHold);
+          /* Riding the lift or the tram, the keys do nothing: you are being
+           * carried (advanceRide below). */
+          if (G.walk.ride) advanceRide(dtReal, npcHold);
+          else {
+            global.Walk.step(G.walk, G.keys, dtReal);
+            npcFacing();
+            /* Doors on the wall clock, like the walking itself. */
+            if (G.walk.ship && global.ShipDeck) global.ShipDeck.updateDoors(G.walk.plan, G.walk, dtReal, npcHold);
+          }
         }
         heldKeys = G.keys;
         G.keys = {};
@@ -6260,7 +6317,7 @@
     var cy = Math.cos(G.cam.yaw), sy = Math.sin(G.cam.yaw);
     var eye = V.addScaled(G.cam.target, { x: cp * cy, y: cp * sy, z: sp }, asked);
     var within = Sim.insideStation ? Sim.insideStation(eye, G.sys, G.t) : port;
-    var rShip = (Render.SHIP_LEN || 0.025) * CUT_SHIP;
+    var rShip = shipLen() * CUT_SHIP;
     return {
       port: port,
       room: room,
@@ -6499,9 +6556,9 @@
       var viewH = (flying() && !bandShown()) ? h - FBAR_H : h;
       /* On foot in your own ship, the eye is the walker's: standing, in the
        * ship's frame, through the same projection as the seat. */
-      if (shipWalkGpu()) cam.buildWalker(G.ship, G.walk, G.walk.plan.floorY, w, h - FBAR_H);
+      if (shipWalkGpu()) cam.buildWalker(cockpitShip(), G.walk, G.walk.plan.floorY + (G.walk.rideDy || 0), w, h - FBAR_H);
       else {
-        cam.buildCockpit(G.ship, w, viewH, G.look);
+        cam.buildCockpit(cockpitShip(), w, viewH, G.look);
         applyCockpitSway(cam);
       }
     }
@@ -8458,7 +8515,7 @@
           mz = Render.seatMuzzle(beam.side || 1, drop);
         }
         var origin = (beam.fromShip && mz)
-          ? Render.localToWorld(G.ship, mz.r, mz.u, mz.f)
+          ? Render.localToWorld(cockpitShip(), mz.r, mz.u, mz.f)
           : beam.from;
         /* And the far end has to be just as live, or the beam pivots about
          * its muzzle as the ship moves and the view fills with a fan of
@@ -8684,7 +8741,7 @@
     G.walk.portName = port.name || 'the station';
     G.panel = 0;
     say('You step out into your berth at ' + G.walk.portName +
-        '  —  WASD to walk, drag to look, E to use, Esc for the menu', 8);
+        '  —  WASD to walk, the mouse looks, E to use, hold Alt for the pointer, Esc for the menu', 8);
   }
 
   /* ---- on foot in your own ship (2026-10-24) -----------------------------
@@ -8704,6 +8761,12 @@
     var d = global.Render && global.Render.shipInterior ? global.Render.shipInterior(G.ship) : null;
     if (!d || !global.Walk) { startWalk(); return; }
     var p = d.plan, at = from === 'aboard' ? p.aboard : p.spawn;
+    /* A decked hull (shipdeck.js, 2026-10-25): out of the seat onto the
+     * bridge deck, in at the hatch onto the main deck. */
+    if (p.decks) {
+      p = p.decks[from === 'aboard' ? 'main' : 'bridge'];
+      setLive(p.ship, { carY: p.floorY, moving: false });
+    }
     G.walk = global.Walk.start(p);
     G.walk.x = at.x; G.walk.z = at.z; G.walk.yaw = at.yaw; G.walk.pitch = 0;
     G.walk.ship = true;
@@ -8713,8 +8776,74 @@
     G.look.yaw = 0; G.look.pitch = 0;
     G.panel = 0;
     say(from === 'aboard'
-        ? 'You come aboard  —  WASD to walk, drag to look, E at the seat to fly'
-        : 'You get up out of the seat  —  WASD to walk, drag to look, E to use, Esc for the menu', 7);
+        ? 'You come aboard  —  WASD to walk, the mouse looks, E at the seat to fly'
+        : 'You get up out of the seat  —  WASD to walk, the mouse looks, E to use, hold Alt for the pointer', 7);
+  }
+
+  /* ---- the lift and the tram (2026-10-25) --------------------------------
+   * Astra chose a REAL RIDE for the lift: the doors close, the car moves at
+   * LIFT_SPEED with you in it, the doors open on the new deck. And a TRAM
+   * down the engineering spine. Both carry you: the keys do nothing while
+   * you ride, the eye moves with the car, and you step off where it stops.
+   * The car and the tram are drawn where `plan.live` says (render.js). */
+  function setLive(ship, o) {
+    ship.live = ship.live || {};
+    for (var k in o) ship.live[k] = o[k];
+  }
+  var RIDE_DOORS = 0.8;           // s for the doors to close, and to open
+  function startRide(kind, it) {
+    var w = G.walk, p = w.plan, ship = p.ship, SD = global.ShipDeck;
+    if (!ship) return;
+    if (kind === 'lift') {
+      var to = ship.decks[it.to];
+      if (!to) return;
+      var dy = to.floorY - p.floorY, secs = Math.abs(dy) / (SD.liftSpeed ? SD.liftSpeed(ship.hullId) : SD.LIFT_SPEED);
+      w.ride = { kind: 'lift', from: p, to: to, t: 0, dur: RIDE_DOORS + secs + RIDE_DOORS, travel: secs, dy: dy };
+      /* Into the middle of the car, facing the way you will step out. */
+      w.x = 0; w.z = (ship.carZ[0] + ship.carZ[1]) / 2;
+      say((dy > 0 ? '▲  ' : '▼  ') + SD.DECK_NAME[it.to], 3);
+    } else {
+      var t = ship.tram, toB = it.to === 'b';
+      var za = t.a, zb = t.b, dist = Math.abs(zb - za);
+      w.ride = { kind: 'tram', toB: toB, t: 0, z0: toB ? za : zb, z1: toB ? zb : za, dur: dist / SD.TRAM_SPEED + 2,
+                 off: toB ? t.offB : t.offA };
+      w.x = 0; w.z = w.ride.z0;
+      w.yaw = toB ? Math.PI : 0;
+      say(toB ? 'The tram runs aft to engineering' : 'The tram runs forward to the lift', 3);
+    }
+    w.near = null;
+  }
+  /* Eased: starts and stops rather than snapping. */
+  function ease(u) { u = Math.max(0, Math.min(1, u)); return u * u * (3 - 2 * u); }
+  function advanceRide(dt, npcHold) {
+    var w = G.walk, r = w.ride, SD = global.ShipDeck;
+    r.t += dt;
+    if (r.kind === 'lift') {
+      var ship = r.from.ship;
+      /* Doors shut first (nobody at them: walker null), then the car moves. */
+      SD.updateDoors(r.from, null, dt, {});
+      var u = (r.t - RIDE_DOORS) / Math.max(0.01, r.travel);
+      w.rideDy = r.dy * ease(u);
+      setLive(ship, { carY: r.from.floorY + w.rideDy, moving: r.t > 0.2 && r.t < r.dur - RIDE_DOORS * 0.5 });
+      if (r.t >= RIDE_DOORS + r.travel) {
+        /* Arrived: you are on the other deck now; its door opens for you
+         * the way any door does. */
+        w.plan = r.to; w.rideDy = 0; w.deck = r.to.deck;
+        setLive(ship, { carY: r.to.floorY, moving: false });
+        w.ride = null;
+        w.yaw = r.to.deck === 'bridge' ? 0 : Math.PI;
+        say(SD.DECK_NAME[r.to.deck], 2);
+      }
+    } else {
+      var v = ease(r.t / (r.dur - 0.5));
+      w.z = r.z0 + (r.z1 - r.z0) * v;
+      setLive(w.plan.ship, { tramZ: w.z });
+      if (r.t >= r.dur) {
+        w.ride = null;
+        w.z = r.off;
+        setLive(w.plan.ship, { tramZ: r.z1 });
+      }
+    }
   }
 
   /* The doorway the cockpit is seen through from where you stand, as it is
@@ -8722,6 +8851,8 @@
    * the passage the bridge door; from anywhere else, none of it. */
   function shipWalkClip(cam) {
     var w = G.walk, p = w && w.plan, SD = global.ShipDeck;
+    /* Below the bridge, the cockpit's 2D layer has nothing to show through. */
+    if (p && p.deck && p.deck !== 'bridge') return [];
     if (!p || !p.rooms || w.z > p.rooms[0].z0) return null;
     var here = global.Walk.roomAt(p, w.x, w.z);
     var byId = function (id) { return SD && SD.doorById ? SD.doorById(p, id) : null; };
@@ -8735,7 +8866,7 @@
     var y0 = p.floorY, y1 = p.floorY + (SD ? SD.DOOR_H : 2), z = d.wall[1];
     var M = global.Render.M;
     var pts = [[-gap, y1, z], [gap, y1, z], [gap, y0, z], [-gap, y0, z]].map(function (q) {
-      return Render.localToWorld(G.ship, q[0] * M, q[1] * M, q[2] * M);
+      return Render.localToWorld(cockpitShip(), q[0] * M, q[1] * M, q[2] * M);
     });
     return Render.clipProject(cam, pts) || [];
   }
@@ -8746,10 +8877,32 @@
   function drawShipWalkView(ctx, cam, w, h) {
     var p = G.walk.plan, clip = shipWalkClip(cam);
     queueNpcs(cam);
-    Render.drawCockpitShell(ctx, cam, G.ship, w, h, { seat: true, walking: true, clip: clip });
-    var inner = Render.drawCockpitInterior(ctx, cam, G.ship, w, h, { clip: clip });
+    drawOwnHullFromBridge(ctx, cam);
+    Render.drawCockpitShell(ctx, cam, cockpitShip(), w, h, { seat: true, walking: true, clip: clip });
+    var inner = Render.drawCockpitInterior(ctx, cam, cockpitShip(), w, h,
+                                           { clip: clip, walking: !p.deck || p.deck === 'bridge' });
     drawDashPanels(ctx, inner.mfds, false);
     drawWalkOverlay(ctx, w, h, global.Walk.roomAt(p, G.walk.x, G.walk.z));
+  }
+
+  /* The frame the cockpit and your rooms are drawn in: the ship, or on a
+   * Capital or Carrier her bridge up in the conning tower (render.js
+   * bridgeFrame, 2026-10-25). */
+  function cockpitShip() {
+    return (global.Render && Render.bridgeFrame) ? Render.bridgeFrame(G.ship) : G.ship;
+  }
+  /* From a tower bridge the rest of her is the view, all the way round —
+   * the deck below, the terraces, the mast, the flight deck — with the
+   * gallery or cab you are in left out of it (Render.bridgeCutMesh). */
+  function drawOwnHullFromBridge(ctx, cam) {
+    if (!G.ship || !Render.bridgeSpec || !Render.bridgeSpec(G.ship)) return;
+    /* Only on the bridge deck, where the glass is. Below it the rooms are
+     * closed boxes inside her, and her own frames and bulkheads would stand
+     * in them. */
+    var wk = G.walk;
+    if (wk && wk.ship && wk.plan && ((wk.plan.deck && wk.plan.deck !== 'bridge') || Math.abs(wk.rideDy || 0) > 0.05)) return;
+    var sunDir = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), G.ship.pos));
+    Render.drawShipModel(ctx, cam, G.ship, sunDir, null, { fromBridge: true });
   }
 
   function shipWalkGpu() {
@@ -8789,8 +8942,11 @@
     }
     var d = Render.shipInterior ? Render.shipInterior(G.ship) : null;
     if (!d) return null;
-    if (npcScene && npcScene.plan === d.plan && npcScene.roster === roster) return npcScene;
-    npcScene = NpcM.shipScene(d.plan, G.ship, { t: G.t });
+    /* On a decked hull, the deck you are on — the bridge when you are in
+     * the seat (shipdeck.js decks). */
+    var dp = d.plan.decks ? ((G.walk && G.walk.ship && G.walk.plan.ship === d.plan) ? G.walk.plan : d.plan.decks.bridge) : d.plan;
+    if (npcScene && npcScene.plan === dp && npcScene.roster === roster) return npcScene;
+    npcScene = NpcM.shipScene(dp, G.ship, { t: G.t });
     npcScene.roster = roster;
     return npcScene;
   }
@@ -8804,13 +8960,10 @@
     if (!sc) return {};
     npcClock += dt;
     var onDeck = !!(G.walk && ((sc.kind === 'ship') === !!G.walk.ship));
-    var you = null;
-    if (onDeck) you = { x: G.walk.x, z: G.walk.z };
-    else if (sc.kind === 'ship') {
-      /* In the seat, you are a body in the helm chair to walk round. */
-      var seat = sc.plan.items.filter(function (it) { return it.kind === 'seat'; })[0];
-      if (seat) you = { x: seat.x, z: seat.z };
-    }
+    /* Only a walker is given way to. In the seat you are already furniture
+     * they route round (the seat is a counter), and stopping short of you
+     * there held a co-pilot at the door of a two-seat cockpit (2026-10-25). */
+    var you = onDeck ? { x: G.walk.x, z: G.walk.z } : null;
     try {
       return global.Npc.update(sc, dt, { now: npcClock, t: G.t, player: you,
                                          playerWalking: !!(G.walk && G.walk.ship), helmFree: true });
@@ -8834,6 +8987,9 @@
   function queueNpcs(cam) {
     var sc = npcScene, NG = global.NpcGL, s = G.ship;
     if (!sc || !NG || !glLive() || !global.Npc || !s) return;
+    /* Your own crew are in your rooms, which on a tower hull are up in the
+     * tower; a station's people are in the station's frame. */
+    if (sc.kind === 'ship') s = cockpitShip();
     var eye = G.walk ? { x: G.walk.x, z: G.walk.z } : { x: 0, z: 0 };
     NG.queue(cam, { pos: s.pos, right: s.right, up: s.up, fwd: s.fwd }, Render.M,
              global.Npc.figures(sc, eye, 2));
@@ -8918,14 +9074,54 @@
         say('Back in the seat', 3);
         return;
       }
+      /* A gunnery console says what the gunners on it are doing for the
+       * forward guns (crew.js gunnery, 2026-10-25). */
+      if (it.kind === 'station' && it.role === 'gunner' && Crew && Crew.gunnery) {
+        var gq = Crew.gunnery(G.ship), lines = [];
+        if (gq.cool) lines.push(gq.cool.name + ', a cool hand: guns run ' + Math.round((1 - gq.heatMul) * 100) + '% cooler and draw ' + Math.round((1 - gq.powerMul) * 100) + '% less');
+        if (gq.mark) lines.push(gq.mark.name + ', a marksman: ' + Math.round((gq.dmgMul - 1) * 100) + '% harder, a ' + Math.round((gq.coneMul - 1) * 100) + '% wider cone');
+        say(lines.length ? 'Gunnery  —  ' + lines.join('  ·  ')
+                         : (gq.mounts.length ? 'Gunnery  —  your gunner is on the turret; a second one would sit here'
+                                             : 'Gunnery  —  nobody on it; a gunner here runs the forward guns cooler or truer, by their knack'), 7);
+        return;
+      }
       if (it.kind === 'station') {
         var who = Crew && Crew.aboard ? Crew.aboard(G.ship).filter(function (c) { return c.role === it.role; }) : [];
         say(who.length
             ? (who.length === 1 ? who[0].name : who.length + ' ' + (Crew.ROLES && Crew.ROLES[it.role] ? Crew.ROLES[it.role].name.toLowerCase() + 's' : 'crew'))
-              + ' signed on for this station  —  seeing them at it comes with the crew walking the ship'
+              + ' signed on for this station  —  they stand it when they are on watch'
             : 'Nobody signed on to stand this watch  —  hire at a crew hall', 6);
         return;
       }
+      /* The rooms added 2026-10-25. */
+      var hands = function (role) { return Crew && Crew.aboard ? Crew.aboard(G.ship).filter(function (c) { return c.role === role; }) : []; };
+      if (it.kind === 'copilot') {
+        var cp = hands('pilot');
+        say(cp.length ? cp[0].name + '\'s seat  —  they take the helm when you get up'
+                      : 'The co-pilot\'s seat  —  empty; she flies with one, and a pilot from a crew hall would sit here', 6);
+        return;
+      }
+      if (it.kind === 'turret') {
+        var tc = Crew && Crew.turretCrewing ? Crew.turretCrewing(G.ship) : null;
+        say(tc && tc.who ? 'The turret  —  ' + tc.why
+                         : 'The turret  —  nobody on it; your best gunner sits here, or a good engineer can slave it from below', 6);
+        return;
+      }
+      if (it.kind === 'engine') { say('The drive console  —  reactor temperature, flow, and a log the engineers keep by hand', 5); return; }
+      if (it.kind === 'medcab' || it.kind === 'medkit') {
+        say(it.kind === 'medkit' ? 'Medical supplies  —  dressings, a splint, a trauma kit, and the auto-injectors'
+                                 : 'The medical cabinet  —  stocked, sealed, and checked at every port', 5);
+        return;
+      }
+      if (it.kind === 'cargo') {
+        var held = Sim && Sim.cargoMass ? Sim.cargoMass(G.ship) : 0;
+        say(held ? 'Cargo manifest  —  ' + Math.round(held) + ' of ' + G.ship.cargoCap + ' t aboard  (the market screen has the detail)'
+                 : 'Cargo manifest  —  the hold is empty', 5);
+        return;
+      }
+      if (it.kind === 'liftbtn') { startRide('lift', it); return; }
+      if (it.kind === 'tram') { startRide('tram', it); return; }
+      if (it.kind === 'hangardoor') { say('The hangar doors  —  they open for craft, not for people on foot', 4); return; }
       if (it.kind === 'galley') { say('The galley  —  coffee, ration packs, and a kettle bolted to the counter', 4); return; }
       if (it.kind === 'hatch') {
         if (G.ship.docked) { startWalk(); return; }
@@ -8979,7 +9175,7 @@
     ctx.fillStyle = 'rgba(180,240,255,0.8)';
     ctx.fillText((G.walk.portName || '') + (room ? '  ·  ' + room.label : ''), w / 2, 22);
     ctx.fillStyle = 'rgba(180,240,255,0.55)';
-    ctx.fillText('WASD walk  ·  Shift run  ·  drag or arrows to look  ·  E use  ·  Esc menu', w / 2, h - FBAR_H - 10);
+    ctx.fillText('WASD walk  ·  Shift run  ·  mouse or arrows to look  ·  E use  ·  hold Alt for the pointer  ·  Esc menu', w / 2, h - FBAR_H - 10);
     if (G.message && performance.now() < G.messageUntil) {
       ctx.font = 'bold 14px ui-monospace, monospace';
       var mw = ctx.measureText(G.message).width;
@@ -9008,7 +9204,8 @@
    * a little before; now that the head can turn, it matters constantly. */
   function drawCockpitView(ctx, cam, w, h) {
     if (shipWalkGpu()) { drawShipWalkView(ctx, cam, w, h); return; }
-    var shell = G.showCockpitFrame ? Render.drawCockpitShell(ctx, cam, G.ship, w, h) : null;
+    drawOwnHullFromBridge(ctx, cam);
+    var shell = G.showCockpitFrame ? Render.drawCockpitShell(ctx, cam, cockpitShip(), w, h) : null;
     /* Your crew at their stations, behind you on the bridge deck. */
     if (shell && Render.cockpitGpu && Render.cockpitGpu()) queueNpcs(cam);
     var apertures = shell ? shell.apertures : null;
@@ -9044,7 +9241,7 @@
       drawTransitGlass(ctx, w, h);
       Render.glassEnd(ctx);
       if (shell) {
-        var hyperInner = Render.drawCockpitInterior(ctx, cam, G.ship, w, h);
+        var hyperInner = Render.drawCockpitInterior(ctx, cam, cockpitShip(), w, h);
         drawDashPanels(ctx, hyperInner.mfds, true);
         Render.drawProjectionWash(ctx, aperture, hyperInner.emitters, w, h,
                                   Math.floor(performance.now() / 90));
@@ -9158,7 +9355,7 @@
        * the three things you look at while flying rather than while
        * reading. The flat band along the bottom still carries everything,
        * so nothing depends on being able to read a surface in perspective. */
-      var inner = Render.drawCockpitInterior(ctx, cam, G.ship, w, h);
+      var inner = Render.drawCockpitInterior(ctx, cam, cockpitShip(), w, h);
       drawDashPanels(ctx, inner.mfds, false);
       Render.drawProjectionWash(ctx, aperture, inner.emitters, w, h,
                                 Math.floor(performance.now() / 90));
@@ -9732,7 +9929,7 @@
 
     if (!aftCam) aftCam = new Render.Camera();
     aftCam.cockpitFov = AFT_FOV;
-    aftCam.buildCockpit(G.ship, vw, vh, { yaw: Math.PI, pitch: 0 });
+    aftCam.buildCockpit(cockpitShip(), vw, vh, { yaw: Math.PI, pitch: 0 });
     /* buildCockpit centres on (vw/2, vh/2); the panel's viewport starts at
      * (4, top), so shift the principal point rather than translating the
      * canvas — projections elsewhere in this frame must not move. */
@@ -9848,7 +10045,10 @@
   var DASH_PAGE_BY_ID = {};
   DASH_PAGES.forEach(function (p) { DASH_PAGE_BY_ID[p.id] = p; });
 
-  function dashPageFor(id) {
+  /* A bridge station's screen starts on the page its job wants (2026-10-25):
+   * the gunner the target, the engineer the ship. */
+  var STATION_DEFAULT = { gunner: 'target', engineer: 'ship' };
+  function dashPageFor(id, role) {
     if (!G.dashPages) {
       /* The default set is the one you fly with: where things are, the path
        * you are on, and the thing you are aimed at, with the housekeeping
@@ -9858,6 +10058,7 @@
                       /* The overhead's default is the reason it exists. */
                       overhead: 'chatter' };
     }
+    if (!G.dashPages[id] && role) G.dashPages[id] = STATION_DEFAULT[role] || 'scope';
     return DASH_PAGE_BY_ID[G.dashPages[id]] || DASH_PAGE_BY_ID.blank;
   }
 
@@ -9949,7 +10150,7 @@
     if (!mfds || !mfds.length) return;
     for (var i = 0; i < mfds.length; i++) {
       var p = mfds[i];
-      var page = dashPageFor(p.id);
+      var page = dashPageFor(p.id, p.role);
 
       /* NO CLICK TARGET. The panels are read-only in the cockpit now —
        * see setDashPage for why, and F5 → PANELS for where it moved to.
@@ -12428,7 +12629,7 @@
      * do, and the exhaust should show where the reaction mass is actually
      * going rather than where the nose happens to be. */
     if (V.len(G.ship.thrust) > 0) {
-      Render.drawShipExhaust(ctx, cam, G.ship, Render.SHIP_LEN,
+      Render.drawShipExhaust(ctx, cam, G.ship, shipLen(),
                              Math.min(1, V.len(G.ship.thrust) / Math.max(G.ship.maxAccel, 1e-12)),
                              'courier', G.ship.thrust, performance.now() / 1000);
     }
@@ -12458,7 +12659,7 @@
     /* Re-entry: the sheath and wake, round the hull you can see. Outside
      * the size branch too — a streak of fire across the sky is exactly how
      * a ship reads from far away while it is coming in. */
-    Render.drawReentryPlasma(ctx, cam, G.ship, Render.SHIP_LEN,
+    Render.drawReentryPlasma(ctx, cam, G.ship, shipLen(),
                              G.ship.reentryGlow || 0, G.ship.windDir, nowSeconds());
     playerShieldShell(ctx, cam);
     drawHullBlooms(ctx, cam, G.ship);
@@ -12486,7 +12687,7 @@
     var nowS = nowSeconds();
     var live = liveImpacts(s, nowS);
     if (lenPx >= SHELL_MIN_PX) {
-      Render.drawShellField(ctx, cam, s, Render.SHIP_LEN, 'hull:' + (s.hullId || 'talon'),
+      Render.drawShellField(ctx, cam, s, shipLen(s), 'hull:' + (s.hullId || 'talon'),
                             s.shieldHp / cap, lit, live, nowS);
     } else {
       farShieldGlow(ctx, cam, s, s.shieldHp / cap, lit, live, lenPx, nowS);
@@ -14913,6 +15114,7 @@
       G.fps = G.fps * 0.9 + (1 / Math.max(dt, 1e-4)) * 0.1;
       try {
         update(dt);
+        syncPointerLock(false);
         draw();
         /* Flush the world layer AFTER the whole frame has been walked, not
          * partway through it. Ships and stations are queued well after the

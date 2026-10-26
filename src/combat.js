@@ -566,7 +566,7 @@
 
   var MISSILES = {
     hawk: { id: 'hawk', name: 'Hawk seeker', price: 420, rack: 8,
-            dmg: 42, accel: 0.09, life: 60, fuse: 0.09, speed0: 0.15,
+            dmg: 42, accel: 0.09, life: 60, fuse: 0.09, speed0: 0.15, track: 0.05,
             pitch: 'Fire and forget. Mostly forget.' },
 
     /* The reason anyone pays 420 credits for a Hawk.
@@ -576,7 +576,7 @@
      * legitimate purchase in volume, which is the point. What you are
      * actually buying is the cook-off risk below. */
     bootleg: { id: 'bootleg', name: 'Bootleg seeker', price: 200, rack: 14,
-               dmg: 28, accel: 0.065, life: 38, fuse: 0.11, speed0: 0.13,
+               dmg: 28, accel: 0.065, life: 38, fuse: 0.11, speed0: 0.13, track: 0.022,
                grey: true, minCorrupt: 60, uncertified: true,
                pitch: 'Sold by the crate, no questions, no paperwork and ' +
                       'no guarantee it leaves the rail.' }
@@ -1547,11 +1547,26 @@
     return out;
   }
 
+  /* The gunnery bonus for a ship, or none: crew.js may not be loaded (a
+   * test of the yard alone) and a ship may have nobody aboard. */
+  var NO_GUNNERY = { heatMul: 1, powerMul: 1, dmgMul: 1, coneMul: 1, trackMul: 1, slipMul: 1 };
+  function gunneryOf(ship) {
+    var Cr = global.Crew;
+    return (Cr && Cr.gunnery && ship) ? Cr.gunnery(ship) : NO_GUNNERY;
+  }
+  function gunPowerMul(ship) { return gunneryOf(ship).powerMul; }
+
   function fitSummary(ship) {
     var h = hullOf(ship), list = fittedList(ship);
     var power = 0, mass = 0, bonus = 0;
+    /* A cool hand at the gunnery console runs the forward guns on less
+     * (crew.js gunnery, 2026-10-25) — and Astra chose that it counts here,
+     * at the yard, so a good one lets her fit more gun than the reactor
+     * would carry bare. Pay them off and the ship is over budget, which
+     * fireGroup turns into guns that cycle slower. */
+    var gm = gunPowerMul(ship);
     for (var i = 0; i < list.length; i++) {
-      power += list[i].item.power || 0;
+      power += (list[i].item.power || 0) * (list[i].item.kind === 'gun' ? gm : 1);
       mass += list[i].item.mass || 0;
       bonus += list[i].item.powerBonus || 0;      // reactors
     }
@@ -1612,14 +1627,16 @@
     var freeP = sum.powerFree, freeM = sum.massFree;
     if (occupant && EQUIPMENT[occupant]) {
       var occ = EQUIPMENT[occupant];
-      freeP += (occ.power || 0) - (occ.powerBonus || 0);   // pulling a reactor costs its bonus
+      freeP += (occ.power || 0) * (occ.kind === 'gun' ? gunPowerMul(ship) : 1) - (occ.powerBonus || 0);   // pulling a reactor costs its bonus
       freeM += occ.mass || 0;
     }
     /* Net demand, because a reactor is an item with negative draw: what it
      * asks of the budget is its own consumption minus what it contributes. */
-    var demandP = (item.power || 0) - (item.powerBonus || 0);
+    /* A gun is judged at the draw the gunnery console runs it on. */
+    var drawP = (item.power || 0) * (item.kind === 'gun' ? gunPowerMul(ship) : 1);
+    var demandP = drawP - (item.powerBonus || 0);
     if (demandP > freeP + 1e-9) {
-      return { ok: false, key: key, why: 'needs ' + (item.power || 0).toFixed(1) +
+      return { ok: false, key: key, why: 'needs ' + drawP.toFixed(1) +
                ' MW, only ' + freeP.toFixed(1) + ' free' };
     }
     if ((item.mass || 0) > freeM + 1e-9) {
@@ -5011,6 +5028,15 @@
                text: 'the ' + HULLS[hullNow].name + ' is too big for this port — she ties up ' +
                      'only at shipyards, highports and fleet carriers' };
     }
+    /* AND AT HER TRUE SIZE (2026-10-25): a 250 m Capital or a 300 m Carrier
+     * goes only where a bay is big enough to take her — measured, as every
+     * berth is (sim.js berthFitsHull). Nearly every yard and highport has
+     * one; a small highport may not. */
+    var SimG = global.Sim;
+    if (hullNow && SimG && SimG.berthFitsHull && !SimG.berthFitsHull(G.ship, port)) {
+      return { why: 'toobig', short: 'TOO BIG',
+               text: 'no bay here takes the ' + HULLS[hullNow].name + ' — she wants a bigger yard or highport' };
+    }
     if (port.faction && wantedHere(G, port.faction)) {
       var fug = G.fugitive && G.fugitive.faction === port.faction;
       return fug
@@ -5767,11 +5793,13 @@
     return out;
   }
 
-  function coneHit(from, fwd, target, range, dist) {
+  /* `widen` multiplies the aiming cone (a marksman's, crew.js gunnery);
+   * optional, so every older caller keeps the old cone. */
+  function coneHit(from, fwd, target, range, dist, widen) {
     if (dist > range || dist < 1e-6) return false;
     var dir = V.scale(V.sub(target, from), 1 / dist);
     var dot = V.dot(fwd, dir);
-    return dot > Math.cos(AIM_CONE + Math.atan2(0.08, dist));
+    return dot > Math.cos(AIM_CONE * (widen || 1) + Math.atan2(0.08, dist));
   }
 
   /* ---- fire groups --------------------------------------------------------
@@ -5867,8 +5895,11 @@
    * a gun on a small ship actually looks like it is. The guns are still far
    * enough apart to read as separate weapons converging, which is the whole
    * reason they are offset at all. */
-  function hullLen() {
+  /* This ship's length (2026-10-25: a Capital is 250 m and a Carrier 300 m,
+   * Render.hullLength; everything else SHIP_LEN). With no ship, the fleet's. */
+  function hullLen(ship) {
     var R = global.Render;
+    if (R && R.hullLength && ship) return R.hullLength(ship);
     return (R && R.SHIP_LEN) || 0.010;
   }
   var MUZZLE_FWD = 0.85;       // of hull length, ahead of the origin: the nose
@@ -5907,8 +5938,11 @@
     if (real && real.length) {
       var m = real[n % real.length];
       var wrap = Math.floor(n / real.length);
-      if (!wrap) return { r: m.r, u: m.u, f: m.f };
-      return { r: m.r * (1 + 0.5 * wrap), u: m.u, f: m.f };
+      /* Measured on a hull drawn at SHIP_LEN; a longer one carries them out
+       * to its own nose. */
+      var ks = hullLen(ship) / hullLen();
+      if (!wrap) return { r: m.r * ks, u: m.u * ks, f: m.f * ks };
+      return { r: m.r * (1 + 0.5 * wrap) * ks, u: m.u * ks, f: m.f * ks };
     }
 
     /* Fallback, for a hull whose model carries no guns — capitals and
@@ -5919,7 +5953,7 @@
     var girth = Math.min(1.5, Math.pow(((h && h.dryMass) || 42) / 42, 1 / 3));
     var side = (n % 2) ? -1 : 1;              // starboard first, then port
     var rank = 1 + Math.floor(n / 2) * 0.7;   // stepping outboard in pairs
-    var len = hullLen();
+    var len = hullLen(ship);
     return { r: side * len * MUZZLE_SPREAD * girth * rank,
              u: -len * MUZZLE_DOWN,
              f: len * MUZZLE_FWD };
@@ -5947,10 +5981,13 @@
     var mz = muzzleOf(s, key);
     var beamEnd = V.addScaled(muzzleWorld(s, mz), s.fwd, gun.range);
     var hit = null, hitDist = Infinity;
+    /* Who is at the gunnery console (crew.js, 2026-10-25): a marksman
+     * widens the cone and hits harder, a cool hand takes heat off. */
+    var gy = gunneryOf(s);
     var cands = targetsInRange(sys, G, t, gun.range + 1);
     for (var i = 0; i < cands.length; i++) {
       var c = cands[i];
-      if (coneHit(s.pos, s.fwd, c.state.pos, gun.range, c.range) && c.range < hitDist) {
+      if (coneHit(s.pos, s.fwd, c.state.pos, gun.range, c.range, gy.coneMul) && c.range < hitDist) {
         hit = c.state; hitDist = c.range;
       }
     }
@@ -5999,7 +6036,7 @@
      *
      * Through addHeat rather than ship.heat, so a live sink takes its cut
      * and the gun code never has to know sinks exist. */
-    addHeat(G, (gun.heat || 0) * (gun.cooldown || 0));
+    addHeat(G, (gun.heat || 0) * (gun.cooldown || 0) * gy.heatMul);
 
     if (!hit) return null;
     var spec = hit.spec || liftTrader(sys, hit, t);
@@ -6010,7 +6047,7 @@
      * `vsShield` and `vsHull` mean something, and the muzzle goes through as
      * the direction so the flare lands on the side you actually shot. */
     if (spec) {
-      damageNpc(sys, G, spec, damageAtRange(gun, hitDist), t, hooks,
+      damageNpc(sys, G, spec, damageAtRange(gun, hitDist) * gy.dmgMul, t, hooks,
                 gun, muzzleWorld(s, mz));
     }
     return spec;
@@ -6068,10 +6105,21 @@
 
     var cools = G.gunCool = G.gunCool || {};
     var fired = 0;
+    /* OVER BUDGET (2026-10-25). The yard never lets you fit past the
+     * reactor, but a cool hand's saving counts there (crew.js gunnery), so
+     * paying one off can leave a ship drawing more than she makes. Nothing
+     * is taken off her: the guns share what there is, and cycle slower in
+     * proportion — 20% over, a fifth slower. */
+    var fsum = fitSummary(s);
+    var brown = (fsum.powerCap > 0 && fsum.powerFree < 0) ? fsum.powerUsed / fsum.powerCap : 1;
+    if (brown > 1 && hooks && hooks.say && t >= (G.brownAt || -Infinity) + 8) {
+      G.brownAt = t;
+      hooks.say('Reactor over budget by ' + (-fsum.powerFree).toFixed(1) + ' MW — guns cycling slow', 4);
+    }
     for (var i = 0; i < guns.length; i++) {
       var e = guns[i];
       if (t < (cools[e.key] || 0)) continue;
-      cools[e.key] = t + e.item.cooldown;
+      cools[e.key] = t + e.item.cooldown * brown;
 
       /* A salvaged emitter that fails to cycle.
        *
@@ -6182,7 +6230,7 @@
      * point down the nose. Same offset treatment as the hardpoints, and for
      * the same reason: from the seat, a beam leaving the ship's origin
      * leaves from behind your own head. */
-    var turMz = { r: 0, u: hullLen() * 0.12, f: hullLen() * 0.18 };
+    var turMz = { r: 0, u: hullLen(s) * 0.12, f: hullLen(s) * 0.18 };
     (G.beams = G.beams || []).push({
       from: muzzleWorld(s, turMz), muzzle: turMz, fromShip: true,
       to: V.clone(best.live.pos), target: best.live,
@@ -6258,11 +6306,15 @@
     var rack = racksOf(s)[s.missileId];
     if (rack) rack.n = Math.max(0, rack.n - 1);
     syncRacks(s);
+    /* A gunner aboard guides it (crew.js gunnery): a seeker that can follow
+     * a faster-crossing target, and slips off one less often. */
+    var gy = gunneryOf(s);
     (sys.missiles = sys.missiles || []).push({
       pos: V.addScaled(s.pos, s.fwd, 0.06),
       vel: V.addScaled(s.vel, s.fwd, m.speed0),
       target: target, dmg: m.dmg, accel: m.accel,
-      born: t, dies: t + m.life, fuse: m.fuse
+      born: t, dies: t + m.life, fuse: m.fuse,
+      track: (m.track || SEEKER_TRACK) * gy.trackMul, slip: gy.slipMul
     });
     /* Launching at someone is assault the moment the seeker goes hot. */
     crime(sys, G, t, 'assault', target, hooks);
@@ -6321,6 +6373,29 @@
     if (hooks && hooks.sound) hooks.sound('warn');
   }
 
+  /* ---- LOSING THE LOCK (2026-10-25) ----------------------------------------
+   * Until now a seeker never lost anything: it chased until it hit or its
+   * fuel ran out, which left "missile targeting accuracy" — what Astra says
+   * a gunner improves — nothing to improve. And the Bootleg's catalogue
+   * line already promised a seeker that "gives up if the target turns
+   * hard"; nothing did.
+   *
+   * So a seeker has a TRACK RATE: how fast the target may slide across its
+   * view (the line-of-sight rate, |r x v| / r^2, rad/s) before it starts to
+   * slip. Over it, the chance of losing lock is a hazard that grows with how
+   * far over — SEEKER_SLIP per second at twice the limit. Lost, the motor
+   * stops steering and it coasts: it can still blunder into the target, it
+   * will not chase. Inside SEEKER_COMMIT of the target it is committed and
+   * cannot lose it, so the end-game geometry of every hit is not a coin.
+   *
+   * Calibrated against this very loop (2026-10-25): from 10 km, a target
+   * crossing at 0.2 km/s is hit every time by both; at 0.5 the Bootleg hits
+   * about one in ten and the Hawk always; at 0.8 the Hawk about a third.
+   * An exceptional gunner takes those to about 80% and 100%. NPCs here hardly
+   * manoeuvre, so what loses a lock in practice is launching at something
+   * crossing fast — a shot the player chooses to take. */
+  var SEEKER_TRACK = 0.05, SEEKER_SLIP = 0.5, SEEKER_COMMIT = 1.5;
+
   function updateMissiles(sys, G, t, dtSim, hooks) {
     var list = sys.missiles;
     if (!list || !list.length) return;
@@ -6350,7 +6425,19 @@
 
         /* Substep small enough that one step cannot fly through the fuse. */
         var h = Math.min(left, 0.5, Math.max(0.02, d / Math.max(0.2, relSpeed) * 0.4));
-        ms.vel = V.addScaled(ms.vel, cmd, ms.accel * h);
+        /* Does it keep the lock this step? A live roll, like a shot
+         * connecting: this is the moment, not the world. */
+        if (!ms.lost && ms.track && d > SEEKER_COMMIT) {
+          var losRate = V.len(V.cross(to, relVel)) / (d * d);
+          if (losRate > ms.track) {
+            var hz = SEEKER_SLIP * (losRate / ms.track - 1) * (ms.slip === undefined ? 1 : ms.slip);
+            if (Math.random() < 1 - Math.exp(-hz * h)) {
+              ms.lost = true;
+              if (hooks && hooks.say) hooks.say('Seeker lost lock', 3);
+            }
+          }
+        }
+        if (!ms.lost) ms.vel = V.addScaled(ms.vel, cmd, ms.accel * h);
         ms.pos = V.addScaled(ms.pos, ms.vel, h);
         left -= h;
       }
@@ -8322,6 +8409,8 @@
     initShip: initShip, npcHull: npcHull,
     update: update,
     fireGun: fireGun, fireGroup: fireGroup, fireMissile: fireMissile,
+    /* For the gunnery test (2026-10-25): seekers can lose a lock now. */
+    updateMissiles: updateMissiles, SEEKER_TRACK: SEEKER_TRACK, SEEKER_COMMIT: SEEKER_COMMIT,
     groupOf: groupOf, setGroup: setGroup, toggleGroup: toggleGroup,
     gunsInGroup: gunsInGroup,
     muzzleOf: muzzleOf, muzzleWorld: muzzleWorld, hullLen: hullLen,

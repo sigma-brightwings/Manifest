@@ -270,8 +270,13 @@
       if (here && roomAt(w.plan, it.x, it.z) !== here) continue;
       var dx = it.x - w.x, dz = it.z - w.z, d = Math.sqrt(dx * dx + dz * dz);
       if (d > REACH + 0.6) continue;
-      if (d > 0.2 && (dx * fx + dz * fz) / d < 0.35) continue;
-      if (d < bd) { bd = d; best = it; }
+      var cos = d > 1e-6 ? (dx * fx + dz * fz) / d : 1;
+      if (d > 0.2 && cos < 0.35) continue;
+      /* An `aim` item (a lift's buttons, 2026-10-25: a row of them a hand
+       * apart) is picked by where you are looking, not by which is nearest
+       * — or the nearest would always win. */
+      var score = it.aim ? (1 - cos) * 8 + d * 0.1 : d;
+      if (score < bd) { bd = score; best = it; }
     }
     return best;
   }

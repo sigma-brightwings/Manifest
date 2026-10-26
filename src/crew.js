@@ -261,6 +261,67 @@
              why: 'nobody on the turret' };
   }
 
+  /* ---- WHAT A GUNNER ON THE BRIDGE IS FOR (2026-10-25) -------------------
+   * Astra: "gunners act as a stat boost on component heating and energy
+   * draw requirements or increased damage/probability of hit for the
+   * forward facing guns. They also increase missile targeting accuracy."
+   *
+   * Asked how the "or" works, she chose BY THE GUNNER: every gunner has a
+   * knack, one or the other, and you hire for the one you want.
+   *   COOL HAND   the forward guns run cooler and draw less — and the
+   *               lower draw counts at the yard, so a good one lets you fit
+   *               guns the reactor could not otherwise carry (her choice);
+   *   MARKSMAN    they hit harder, and the aiming cone is wider, so a shot
+   *               a little off the nose still connects.
+   * And every gunner, of either knack, steadies the missiles' seekers.
+   *
+   * WHO GIVES IT. The turret takes the best gunner aboard (turretCrewing
+   * above has always picked that way), so the knacks come from the OTHER
+   * gunners — the ones at the bridge's gunnery consoles. One of each knack
+   * counts, the best of each. On a small hull the pilot works the turret,
+   * so a gunner there is all bridge. Scaled by rating: a green hand gives a
+   * fifth of what an exceptional one does.
+   *
+   * The knack is a pure function of who they are (their id), so it needs no
+   * save field and a hand in the hall has the same knack aboard. */
+  var KNACKS = {
+    cool:     { id: 'cool', name: 'cool hand',
+                what: 'runs the forward guns cooler and on less power' },
+    marksman: { id: 'marksman', name: 'marksman',
+                what: 'lays the forward guns: harder hits, a wider cone' }
+  };
+  /* At an exceptional rating (5). */
+  var GUNNERY_MAX = { heat: 0.30, power: 0.25, dmg: 0.25, cone: 0.8, track: 0.6, slip: 0.5 };
+
+  function knackOf(p) {
+    if (!p || p.role !== 'gunner') return null;
+    if (p.knack && KNACKS[p.knack]) return p.knack;
+    var s = String(p.id || p.name || ''), h = 2166136261 >>> 0;
+    for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    return (h >>> 7) & 1 ? 'cool' : 'marksman';
+  }
+
+  function gunnery(ship) {
+    var gunners = aboard(ship).filter(function (p) { return p.role === 'gunner'; });
+    gunners.sort(function (a, b) { return (b.rating - a.rating) || (String(a.id) < String(b.id) ? -1 : 1); });
+    var mounts = (ship && ship.turret && needsCrew(ship)) ? 1 : 0;
+    var bridge = gunners.slice(mounts);
+    var cool = null, mark = null;
+    bridge.forEach(function (p) {
+      var k = knackOf(p);
+      if (k === 'cool' && (!cool || p.rating > cool.rating)) cool = p;
+      if (k === 'marksman' && (!mark || p.rating > mark.rating)) mark = p;
+    });
+    var fc = cool ? cool.rating / 5 : 0, fm = mark ? mark.rating / 5 : 0;
+    var guide = gunners.length ? gunners[0] : null, fg = guide ? guide.rating / 5 : 0;
+    return {
+      mounts: gunners.slice(0, mounts), bridge: bridge, cool: cool, mark: mark, guide: guide,
+      heatMul: 1 - GUNNERY_MAX.heat * fc, powerMul: 1 - GUNNERY_MAX.power * fc,
+      dmgMul: 1 + GUNNERY_MAX.dmg * fm, coneMul: 1 + GUNNERY_MAX.cone * fm,
+      trackMul: 1 + GUNNERY_MAX.track * fg, slipMul: 1 - GUNNERY_MAX.slip * fg
+    };
+  }
+
   /* Can this ship be given an order? The next slice needs it and the
    * answer belongs with the people, not with the order. */
   function canBeOrdered(rec) {
@@ -269,8 +330,9 @@
 
   /* One line for a roster. */
   function describe(p) {
+    var k = knackOf(p);
     return p.name + '  ·  ' + ROLES[p.role].name.toLowerCase() + ', ' +
-           ratingWord(p.rating);
+           ratingWord(p.rating) + (k ? ', ' + KNACKS[k].name : '');
   }
 
   var Crew = {
@@ -283,6 +345,7 @@
     WAGE_DAY: WAGE_DAY, payrollDue: payrollDue,
     needsCrew: needsCrew, crewNeeded: crewNeeded, aboard: aboard, best: best,
     turretCrewing: turretCrewing, canBeOrdered: canBeOrdered,
+    KNACKS: KNACKS, GUNNERY_MAX: GUNNERY_MAX, knackOf: knackOf, gunnery: gunnery,
     describe: describe
   };
 

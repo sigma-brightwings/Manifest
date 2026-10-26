@@ -314,9 +314,32 @@
    * the one function that knows which model that is. */
   function hullBox(ship) {
     var R = global.Render;
+    /* YOUR HULL AT ITS TRUE SIZE (2026-10-25): a Capital is 250 m and a
+     * Carrier 300 m (Render.hullLength), so the bay is measured against her
+     * own model at that length. Every other player hull is still measured
+     * as before — at 25 m they all fit everywhere, and nothing about where
+     * they berth moves. */
+    var C = global.Combat;
+    if (ship && ship.hullId && !ship.cls && R && R.TRUE_LEN && R.TRUE_LEN[ship.hullId] && C && C.HULLS) {
+      var h = C.HULLS[ship.hullId], spH = h && R.hullSpan ? R.hullSpan(h.mesh) : null;
+      if (spH) {
+        var k = R.hullLength(ship) / spH.l;
+        return [spH.w * k, spH.h * k, spH.l * k];
+      }
+    }
     var kind = (ship && (ship.meshKind || ship.cls)) || 'courier';
     var sp = R && R.hullSpan ? R.hullSpan(kind) : null;
     return sp ? [sp.w, sp.h, sp.l] : [0.005, 0.005, 0.010];
+  }
+
+  /* Does any bay at this port take this ship? A port with no modelled bays
+   * has nothing to measure and takes her, as before. */
+  function berthFitsHull(ship, port) {
+    var boxes = berthBoxes(port);
+    if (!boxes || !boxes.length) return true;
+    var need = hullBox(ship);
+    for (var i = 0; i < boxes.length; i++) if (boxes[i] && boxFits(need, boxes[i])) return true;
+    return false;
   }
 
   /* Does this hull go in this alcove? Both boxes are sorted longest-first
@@ -5915,7 +5938,7 @@
      * re-deriving it and pinning its own arithmetic instead of the game's. */
     berthFacing: berthFacing,
     assignBerth: assignBerth,
-    hullBox: hullBox, berthBoxes: berthBoxes, boxFits: boxFits,
+    hullBox: hullBox, berthBoxes: berthBoxes, boxFits: boxFits, berthFitsHull: berthFitsHull,
     berthRoom: berthRoom,
     padCapture: padCapture,
     landingDamage: landingDamage,

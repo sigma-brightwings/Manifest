@@ -16,6 +16,175 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **The Capital and the Carrier at their true size, flown from the conning
+  tower (2026-10-25).** Astra: *"Let's fit the cockpits to the Carrier and
+  Capital class ships to align with where the conning tower is on the
+  model, and the rest of the ship should be visible since the tower has a
+  360 degree window views."* At 25 m the Capital's observation gallery was
+  33 cm tall, so asked, she chose **true size in the world**: the Capital
+  is **250 m** and the Carrier **300 m**, everywhere — drawn, fought and
+  berthed at that length. Every other hull is still 25 m.
+  - **The bridge is in the tower.** Your seat and the bridge deck sit in
+    the Capital's observation gallery (eye 37.9 m up, in its window band)
+    and in the Carrier's island cab (20.5 m up, over the flight deck). The
+    cockpit view, walking aboard, your crew at their stations and the rear
+    view all use that position; the ship turns about her own centre as
+    before.
+  - **360° glass.** The bridge deck's side walls, the aft bulkhead either
+    side of the door and the lift lobby are glazed. From the bridge you see
+    the rest of her — decks, terraces, mast, turrets, the flight deck —
+    with the gallery or cab you are standing in left out of the model so
+    its walls do not block the view (its floor stays, just below the
+    sill). Below the bridge the decks are closed rooms, as before.
+  - **The tower's height.** The lift drops 41.5 m to the Capital's main
+    deck and 35 m to the Carrier's, at 8 m/s (about five seconds). The
+    first guesses were 14 m and 10 m.
+  - **Docking:** a port needs a bay big enough for her real size. Nearly
+    every yard and highport has one; where none fits, docking is refused as
+    TOO BIG. A port without modelled bays still takes her.
+  - **Outside:** the chase camera, its zoom limit, the exhaust, re-entry
+    plasma and shield all scale with her length, and the guns fire from
+    where they are on a 250 or 300 m hull.
+  - NPC traffic is unchanged: the NPC capital class is still 520 m.
+  - **Screens on the bridge deck (2026-10-25).** Astra: *"On that conning
+    tower bridge should be MFD panels which are configurable, as with the
+    smaller ships."* The helm's own screens were already there; now every
+    crew station on the bridge deck carries a live MFD across its face, with
+    the same pages as the helm's. F5 → PANELS gains a HELM / BRIDGE DECK
+    switch on these two hulls: the bridge deck is laid out bow-up with each
+    wall's stations, and ◀ ▶ arrows point to the wall each screen is on.
+    Gunnery starts on NAV / TARGET, Engineering on SHIP. Like the helm's, the
+    choices last for the session. The station screens are only drawn when
+    you can see them: walking the bridge deck, or turned round in the seat.
+  - Tests: `test/towers.test.js` (new, in `npm test`); `shipdeck.test.js`
+    allows the tower's extra panes.
+
+- **Decks, a lift and a tram on the big ships: conning towers (2026-10-25).**
+  Astra (2026-10-24): *"for the Capital and Carrier ships, there's a conning
+  tower, which means the Bridge is on the top of it, and an elevator must be
+  used to traverse from that to the flight deck or other parts of the
+  ship."* The flight deck is the Carrier's hangar; the stops are the
+  bridge, the main deck and airlock, the hangar, and a junction from which
+  engineering is reached; the XL hulls without a tower get decks and a lift
+  too. Asked on 2026-10-25: the lift is a **real ride**, the hangar holds
+  **your parked craft**, and the long way aft to engineering is a **tram**.
+  - **Which hulls:** Capital, Carrier, Meridian, Leviathan, Crawler. The
+    bridge stands above the main deck by the tower: Capital 14 m, Carrier
+    10, Leviathan 8, Crawler 5, Meridian 4 (Capital and Carrier since
+    measured off their models at true size: 41.5 m and 35 m, see above). Every other hull is one deck, as
+    before.
+  - **The decks** (shipdeck.js): the **bridge** (cockpit, stations, the
+    bridge door, a lift lobby); the **main deck** (passage, quarters, medbay,
+    turret if fitted, airlock and cargo bay — where you come aboard); the
+    **junction** 3.2 m below it (a tram platform, a 30–38 m tramway, the far
+    platform and the **engine room**, which moves down here from the
+    passage on these hulls); and on the Carrier the **hangar**, a 22 × 40 ×
+    9 m bay with three pads and its doors lit at the aft end. The bridge
+    deck runs forward of the lift shaft and every other deck aft of it, so
+    no deck is ever seen from another but through the lift.
+  - **The lift:** one car in one shaft, a door on every deck. Inside, a
+    button per other deck on the starboard wall, marked **▲** up or **▼**
+    down; you press the one you are LOOKING at (walk.js now picks such
+    things by gaze, not by nearest). The doors close, the car moves at
+    3 m/s with you in it — the eye moves, the keys rest — and the doors
+    open on the new deck. Each landing has a lit panel showing which deck
+    it is.
+  - **The tram:** E at the platform's edge and it carries you aft at up to
+    8 m/s down the lit tube to engineering, and back.
+  - **The hangar's craft:** the small ships of your fleet berthed at the
+    same port stand on the pads, in their own models at full length.
+  - **The crew** (npc.js): every job knows its deck. A hand whose next work
+    is on another deck walks into the lift and is gone from yours; one whose
+    work brings them to your deck steps out of it. On the bridge you see
+    engineers leave for the engine room and come back.
+  - Tests: shipdeck.test.js walks a decked ship by the lift and checks each
+    deck from it, the buttons' arrows and that the one you look at is the
+    one pressed, the deck heights, the hangar clearing the tramway; npc.test
+    checks crew leaving and returning by lift. `tools/probe-decks.js`
+    rides the whole route in the real game (57 fps on the RX 540).
+  - **Not done:** NPC ships' interiors (boarding), crew riding the tram
+    with you, and conning-tower glass on the bridge to match each hull's
+    exterior art.
+
+- **Gunners on the bridge: a knack each, for the forward guns and the
+  seekers (2026-10-25).** Astra: *"gunners act as a stat boost on component
+  heating and energy draw requirements or increased damage/probability of
+  hit for the forward facing guns. They also increase missile targeting
+  accuracy."* Asked how the "or" works, she chose **by the gunner**; asked
+  whether the lower draw counts at the yard, **yes**; asked whether seekers
+  may lose a lock so accuracy means something, **yes**.
+  - **The knack** (crew.js `knackOf`): every gunner is a **cool hand** or a
+    **marksman**, a pure function of who they are (no save field). The hall
+    and the crew screen say which; so do they, if you talk to them.
+  - **Who gives it** (crew.js `gunnery`): a fitted turret takes your best
+    gunner (as it always has); the others sit at the bridge's gunnery
+    consoles, and the best of each knack there counts. Scaled by rating —
+    an exceptional hand gives the full amount, a green one a fifth.
+  - **Cool hand:** forward guns put up to 30% less heat into the hull and
+    draw up to 25% less power — on the yard's own count, so a good one lets
+    you fit more gun than the reactor carries bare.
+  - **Marksman:** up to 25% more damage, and an aiming cone up to 80% wider,
+    so a shot a little off the nose still connects.
+  - **Every gunner, either knack, guides the seekers:** see below.
+  - **Over budget** (new): pay off the cool hand who was making the fit
+    legal and the ship draws more than she makes. Nothing is taken off her;
+    the forward guns share what there is and cycle slower in proportion
+    (20% over, a fifth slower). Paying them off says so, the reactor line on
+    the ship screen goes red, and a fight reminds you.
+  - **Seekers can lose a lock** (combat.js `updateMissiles`). Until now a
+    missile never missed but by running out of fuel, and the Bootleg's
+    "gives up if the target turns hard" was a line in the catalogue only.
+    A seeker now has a track rate (Hawk 0.05 rad/s, Bootleg 0.022): when the
+    target slides across its view faster than that, it may slip off and
+    coast. Inside 1.5 km it is committed. From 10 km a target crossing at
+    0.2 km/s is hit by both every time; at 0.5 the Bootleg hits about one in
+    ten; at 0.8 the Hawk about a third — and an exceptional gunner aboard
+    takes those to about 80% and 100%. "Seeker lost lock" when it happens.
+  - **The turret room follows the turret.** No stock hull carries one, so
+    the dome-per-gunner room from earlier today put every gunner in the
+    wrong place: the turret position now appears when a turret is fitted
+    (one seat, the gunner it takes), and the rest work from the bridge.
+  - Tests: `test/gunnery.test.js` (22 checks: knacks, who gives what, heat,
+    damage, the cone, the yard's count, over-budget cycling, seekers with
+    and without a gunner, Bootleg vs Hawk), added to `npm test`.
+
+- **The rest of the ship: engine room, turret, medbay, cargo bay, and a
+  second seat on some small ships (2026-10-25).** Astra: *"S ships aren't
+  all one seaters. Some have crew positions for a second pilot or gunner.
+  M ships should have a small medbay, while S ships have medical supplies
+  in the cockpit."* Asked which and how, she chose: the Wren and the Bollard
+  get a co-pilot's seat beside yours, the Lance a gunner's console behind
+  you, the Talon stays one seat; and the second seat is optional — nobody
+  has to be hired to fly her, whoever you sign on sits there.
+  - **M and up** (shipdeck.js): off the passage to starboard, a medbay (one
+    bed on an M, two from L, a vitals screen over each and a cabinet, lit
+    in white and green — no cross, it is a protected emblem) and an engine
+    room (the drive trunk down the outboard wall with glowing inspection
+    bands in the ship's colours, the drive console on the aft wall). To
+    port, aft of the quarters, a turret: a seat per gunner (up to three),
+    each under a glass dome let into the ceiling that the sky shows through
+    like any window. Aft of the airlock, through a third sliding door, a
+    cargo bay with crates stacked down both walls and a manifest terminal.
+    The passage grows to fit both walls.
+  - **S**: medical supplies on the bulkhead beside the door, and the second
+    seat on the Wren, Bollard and Lance.
+  - **The crew use them** (npc.js): gunners on watch sit under the turret
+    domes (a bridge gunnery station only when the domes are full);
+    engineers' rounds go to the drive console, now and then the cargo bay;
+    off watch a hand sometimes looks into the medbay. On an S ship there are
+    no watches — your hand is in the second seat, and a co-pilot takes the
+    helm the moment you get up. A hand of any trade takes a free second seat.
+  - **E** on the new things says what they are: the co-pilot's seat and the
+    turret say who sits there, the manifest says how full the hold is.
+  - **Fixed on the way:** a pilot taking the helm was planted behind the
+    seat's backrest instead of on it; and the crew stopped to give way to
+    you while you were sitting in the pilot's seat, which held a co-pilot
+    at the door of a two-seat cockpit.
+  - Tests: shipdeck.test.js and npc.test.js check every hull's rooms by
+    size, that every room and everything labelled in it can be walked to
+    from the airlock, the turret seats per gunner, and the crew in them.
+    `tools/probe-rooms.js` photographs them in the real game.
+
 - **People: your crew at their stations, a station deck with people on it,
   and the crews of the ships in port (2026-10-25).** Astra: *"We should use
   these crew models on ships and stations in game, in the first person
@@ -1142,6 +1311,23 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
   skimmer's and spine's cars stay at rest. `test/transfer.test.js`.
 
 ### Changed
+
+- **Mouselook on foot (2026-10-25).** Astra: *"we're going to autoset
+  mouselook for first person view."* Asked: **on foot only**, with the
+  **pointer captured**. When you get up out of the seat, or walk a station,
+  the mouse turns your head with no button held, and the pointer is hidden
+  and locked to the window so you can turn all the way round. Hold left Alt
+  to get the pointer back for the icon bar; let go and the mouse looks again.
+  Esc, the menu, any F-screen and sitting down release it too, and a click
+  (or any key) on the way back captures it again. The seat is unchanged:
+  drag to look, right-Alt free look, F9 mouse aim. The walking hints now say
+  "the mouse looks" and "hold Alt for the pointer". Probe:
+  `tools/probe-mouselook.js`.
+
+- **The loading screen says MANIFEST (2026-10-25).** The boot screen
+  (`index.html`, `#boot`) still read "PROCEDURAL SPACE GAME", the working
+  title. It now reads "MANIFEST"; the tagline under it ("gravity,
+  clockwork, cockpit and cargo") is unchanged.
 
 - **The cockpit scales as one piece, and the bulkhead moved aft
   (2026-10-24).** Part of the ship-interiors work above.

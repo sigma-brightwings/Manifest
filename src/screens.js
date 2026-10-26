@@ -1830,14 +1830,110 @@
     return { fwd: fwd.sort(byBearing), aft: aft.sort(byBearing) };
   }
 
+  /* THE BRIDGE DECK'S STATIONS (2026-10-25), on a conning-tower bridge.
+   * Astra: "On that conning tower bridge should be MFD panels which are
+   * configurable, as with the smaller ships." Each crew station's screen
+   * (ShipDeck.stationScreen) is a mount like the helm's, named for the job
+   * at it. Empty on every other hull. */
+  function deckStations() {
+    if (!Render || !Render.bridgeSpec || !Render.bridgeSpec(G.ship) || !Render.shipInterior) return [];
+    var d = Render.shipInterior(G.ship);
+    if (!d || !d.plan.tower) return [];
+    var SD = global.ShipDeck, names = (SD && SD.ROLE_NAME) || {};
+    var out = [], count = {};
+    d.plan.stations.forEach(function (st, i) {
+      if (st.cockpit) return;
+      count[st.role] = (count[st.role] || 0) + 1;
+      out.push({ id: 'station-' + i, role: st.role, side: st.side, z: st.z,
+                 name: (names[st.role] || st.role) + ' ' + count[st.role] });
+    });
+    return out;
+  }
+
+  /* A plan of the deck, bow up the page: each wall's stations in their
+   * fore-and-aft order, the aisle between. Which wall a screen is on is
+   * shown by where its tile sits and the arrow pointing at that wall, not
+   * by a word. */
+  function drawDeckStations(ctx, sts, bayX, bayY, bayW, bayH) {
+    var tileW = Math.min(170, (bayW - 120) / 2), tileH = 50, gap = 10;
+    var rows = {};
+    sts.forEach(function (o) { rows[o.side] = (rows[o.side] || []).concat([o]); });
+    var nRows = Math.max((rows[-1] || []).length, (rows[1] || []).length, 1);
+    var blockH = nRows * (tileH + gap) + 40;
+    var y0 = bayY + Math.max(30, (bayH - blockH) / 2);
+    var cx = bayX + bayW / 2;
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(125,255,207,0.45)';
+    ctx.fillText('▲  helm  ▲', cx, y0 - 12);
+    ctx.strokeStyle = 'rgba(125,255,207,0.18)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(cx, y0); ctx.lineTo(cx, y0 + nRows * (tileH + gap)); ctx.stroke();
+    [-1, 1].forEach(function (side) {
+      var list = (rows[side] || []).slice().sort(function (a, b) { return b.z - a.z; });
+      var x = side < 0 ? cx - 40 - tileW : cx + 40;
+      list.forEach(function (o, k) {
+        var y = y0 + k * (tileH + gap);
+        var page = dash.pageFor(o.id, o.role), on = G.panelPick === o.id;
+        ctx.fillStyle = on ? '#12414f' : '#081419';
+        ctx.fillRect(x, y, tileW, tileH);
+        ctx.strokeStyle = MFD_EDGE;
+        ctx.lineWidth = on ? 2 : 1;
+        ctx.strokeRect(x + 1, y + 1, tileW - 2, tileH - 2);
+        ctx.textAlign = 'center';
+        ctx.font = 'bold 13px ui-monospace, monospace';
+        ctx.fillStyle = on ? '#b4f0ff' : MFD_INK;
+        ctx.fillText(page.title, x + tileW / 2, y + 22);
+        ctx.font = 'bold 10px ui-monospace, monospace';
+        ctx.fillStyle = '#5d6f78';
+        ctx.fillText(o.name, x + tileW / 2, y + 39);
+        /* From the aisle to the wall this screen is on. */
+        ctx.fillStyle = 'rgba(125,255,207,0.45)';
+        ctx.fillText(side < 0 ? '◀' : '▶', side < 0 ? x + tileW + 20 : x - 20, y + tileH / 2 + 4);
+        hot(x, y, tileW, tileH, (function (id) {
+          return function () { G.panelPick = id; };
+        })(o.id), 'select this station\'s screen');
+      });
+    });
+    ctx.fillStyle = '#5d6f78';
+    ctx.fillText('the bridge deck, aft of the helm', cx, y0 + nRows * (tileH + gap) + 14);
+    ctx.textAlign = 'left';
+  }
+
   function drawPanelsTab(ctx, pad, top, w, bottom) {
     if (!dash) return;
     var arc = mountArc();
-    if (!G.panelPick || !dash.pageFor(G.panelPick)) G.panelPick = 'centre';
+    var sts = deckStations(), stById = {};
+    sts.forEach(function (o) { stById[o.id] = o; });
+    if (G.panelsView !== 'deck' || !sts.length) G.panelsView = 'helm';
+    var picked = String(G.panelPick || '');
+    if (G.panelsView === 'deck' && !stById[picked]) G.panelPick = sts[0].id;
+    if (G.panelsView === 'helm' && (!G.panelPick || picked.indexOf('station-') === 0)) G.panelPick = 'centre';
+    var pickRole = stById[G.panelPick] ? stById[G.panelPick].role : undefined;
 
     var listW = Math.min(190, Math.max(150, w * 0.2));
     var bayW = w - pad * 2 - listW - 16;
     var bayX = pad, bayY = top, bayH = bottom - top - pad;
+
+    /* Helm or bridge deck, on a hull that has both. */
+    if (sts.length) {
+      [['helm', 'HELM'], ['deck', 'BRIDGE DECK']].forEach(function (c, ci) {
+        var cw = 120, chx = bayX + ci * (cw + 8), on = G.panelsView === c[0];
+        ctx.fillStyle = on ? '#12414f' : 'rgba(8,20,25,0.7)';
+        ctx.fillRect(chx, bayY, cw, 20);
+        ctx.strokeStyle = on ? MFD_EDGE : 'rgba(74,151,176,0.35)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(chx + 0.5, bayY + 0.5, cw - 1, 19);
+        ctx.font = 'bold 11px ui-monospace, monospace';
+        ctx.fillStyle = on ? '#b4f0ff' : MFD_INK;
+        ctx.textAlign = 'center';
+        ctx.fillText(c[1], chx + cw / 2, bayY + 14);
+        ctx.textAlign = 'left';
+        hot(chx, bayY, cw, 20, function () { G.panelsView = c[0]; },
+            c[0] === 'deck' ? 'the crew stations\' screens' : 'the helm\'s screens');
+      });
+      bayY += 28; bayH -= 28;
+    }
 
     /* --- the console, in plan --- */
     var tileW = Math.min(150, (bayW - 24) / Math.max(1, arc.fwd.length) - 10);
@@ -1884,6 +1980,9 @@
       })(m.id), 'select this mount');
     }
 
+    if (G.panelsView === 'deck') {
+      drawDeckStations(ctx, sts, bayX, bayY, bayW, bayH);
+    } else {
     var cx = bayX + bayW / 2;
     /* The console block sits in the middle of the bay rather than hanging
      * off the top of it: this tab is a picture of a cockpit, and a cockpit
@@ -1919,14 +2018,16 @@
     ctx.textAlign = 'center';
     ctx.fillText('rear bulkhead — turn round to read these', cx, rowAftY + tileH + 16);
     ctx.textAlign = 'left';
+    }
 
     /* --- the pages you can put on it --- */
     var lx = bayX + bayW + 16, ly = top;
     ctx.font = 'bold 12px ui-monospace, monospace';
     ctx.fillStyle = '#b4f0ff';
-    ctx.fillText(String(G.panelPick).replace('-', ' ').toUpperCase(), lx, ly + 12);
+    ctx.fillText((stById[G.panelPick] ? stById[G.panelPick].name
+                  : String(G.panelPick).replace('-', ' ')).toUpperCase(), lx, ly + 12);
     ly += 22;
-    var cur = dash.pageFor(G.panelPick);
+    var cur = dash.pageFor(G.panelPick, pickRole);
     var rowH = 20;
     for (var k = 0; k < dash.pages.length; k++) {
       var pg = dash.pages[k];
@@ -2296,8 +2397,11 @@
     ctx.save();
     ctx.font = 'bold 11px ui-monospace, monospace';
     var pTight = sum.powerFree < 1.0, mTight = sum.massFree < 1.5;
-    ctx.fillStyle = pTight ? '#ffb86b' : '#7fd6c0';
-    ctx.fillText('POWER ' + sum.powerUsed.toFixed(1) + ' / ' + sum.powerCap.toFixed(1) + ' MW',
+    /* Red when she is drawing more than she makes — possible since a cool
+     * hand's saving counts here and can be paid off (2026-10-25). */
+    ctx.fillStyle = sum.powerFree < 0 ? '#ff6b5a' : pTight ? '#ffb86b' : '#7fd6c0';
+    ctx.fillText('POWER ' + sum.powerUsed.toFixed(1) + ' / ' + sum.powerCap.toFixed(1) + ' MW' +
+                 (sum.powerFree < 0 ? '  OVER — guns slow' : ''),
                  x + 12, barY + 11);
     ctx.fillStyle = mTight ? '#ffb86b' : '#7fd6c0';
     ctx.fillText('MASS ' + sum.massUsed.toFixed(1) + ' / ' + sum.massCap + ' t',
@@ -2517,6 +2621,22 @@
           function () {}, true);
     }
 
+    /* The gunnery console (crew.js gunnery, 2026-10-25): what the gunners
+     * not on the turret are doing for the forward guns and the seekers. */
+    if (Crew.gunnery) {
+      var gy = Crew.gunnery(s), bits = [];
+      if (gy.cool) bits.push(gy.cool.name + ': guns ' + Math.round((1 - gy.heatMul) * 100) + '% cooler, ' +
+                             Math.round((1 - gy.powerMul) * 100) + '% less draw');
+      if (gy.mark) bits.push(gy.mark.name + ': ' + Math.round((gy.dmgMul - 1) * 100) + '% harder, cone ' +
+                             Math.round((gy.coneMul - 1) * 100) + '% wider');
+      if (gy.guide) bits.push('seekers track ' + Math.round((gy.trackMul - 1) * 100) + '% faster crossers');
+      if (bits.length || gy.mounts.length) {
+        row(gy.bridge.length ? 'GUNNERY CONSOLE' : 'GUNNERY CONSOLE EMPTY',
+            bits.length ? bits.join('  ·  ') : 'every gunner aboard is on the turret — a second would sit here',
+            function () {}, true, { hot: !!(gy.cool || gy.mark) });
+      }
+    }
+
     var mine = Crew.aboard(s);
     var wages = 0;
     for (var i = 0; i < mine.length; i++) wages += Crew.dailyWage(mine[i]);
@@ -2527,11 +2647,20 @@
 
     for (var j = 0; j < mine.length; j++) {
       (function (p) {
+        var kn = Crew.knackOf ? Crew.knackOf(p) : null;
         row('  ' + p.name, Crew.ROLES[p.role].name + ', ' + Crew.ratingWord(p.rating) +
+            (kn ? ', ' + Crew.KNACKS[kn].name : '') +
             '  ·  ' + Crew.dailyWage(p) + ' cr/day',
             function () {
               s.crew = Crew.aboard(s).filter(function (q) { return q.id !== p.id; });
-              say(p.name + ' takes their kit and goes.', 5);
+              /* A cool hand's saving counted at the yard; without them she
+               * may be drawing more than the reactor makes. Say so now, not
+               * in the middle of the next fight. */
+              var after = Combat.fitSummary ? Combat.fitSummary(s) : null;
+              say(p.name + ' takes their kit and goes.' +
+                  (after && after.powerFree < 0 ? '  The reactor is ' + (-after.powerFree).toFixed(1) +
+                   ' MW over without them — the guns will cycle slow until you refit or hire another cool hand.' : ''),
+                  after && after.powerFree < 0 ? 9 : 5);
             });
       })(mine[j]);
     }
@@ -2552,7 +2681,9 @@
         var poor = s.credits < fee;
         row('  ' + p.name + '  —  ' + fee + ' cr',
             Crew.ROLES[p.role].name + ', ' + Crew.ratingWord(p.rating) + '  ·  ' +
-            Crew.dailyWage(p) + ' cr/day  ·  ' + Crew.ROLES[p.role].what,
+            Crew.dailyWage(p) + ' cr/day  ·  ' +
+            (Crew.knackOf && Crew.knackOf(p) ? Crew.KNACKS[Crew.knackOf(p)].name + ' — ' + Crew.KNACKS[Crew.knackOf(p)].what
+                                             : Crew.ROLES[p.role].what),
             function () {
               if (s.credits < fee) { say('You cannot cover the signing fee', 4); return; }
               s.credits -= fee;

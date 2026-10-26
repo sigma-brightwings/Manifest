@@ -317,6 +317,96 @@
    * this number; it now asks. */
   var SHIP_LEN = 0.025;   // km — every hull, 25 m nose to tail
 
+  /* ---- EXCEPT THE TWO WITH A CONNING TOWER (2026-10-25) ------------------
+   * Astra: "Let's fit the cockpits to the Carrier and Capital class ships to
+   * align with where the conning tower is on the model, and the rest of the
+   * ship should be visible since the tower has a 360 degree window views."
+   * At 25 m the Capital's observation gallery is 33 cm tall and the
+   * Carrier's island cab 75 cm — nobody stands in either. Asked, she chose
+   * TRUE SIZE IN THE WORLD, the Capital at 250 m and the Carrier at 300 m:
+   * drawn, docked and fought at that length everywhere, and every other
+   * hull keeps SHIP_LEN. (The traffic classes already carried their own
+   * sizes — a naval cutter is 240 m, the NPC capital ship 520 m; this is
+   * the hull YOU fly.) */
+  var TRUE_LEN = { capital: 0.250, carrier: 0.300 };
+  function hullLength(x) {
+    var id = typeof x === 'string' ? x : (x && x.hullId);
+    return (id && TRUE_LEN[id]) || SHIP_LEN;
+  }
+
+  /* ---- THE BRIDGE IN THE TOWER --------------------------------------------
+   * Where the cockpit sits on those two: `at` is the cockpit's origin (the
+   * seated eye, see Camera.buildCockpit) in the ship's own metres — x to
+   * starboard, y up, z forward — placed in the Capital's observation
+   * gallery (its window band 36.3–39.5 m up, the glass ahead of the helm at
+   * its forward face) and in the Carrier's island cab (glass 18.9–24.3 m up,
+   * the cab's forward face). `cut` is the part of the model the bridge
+   * replaces, in the hull's unit-length frame: from inside, the gallery or
+   * cab's own walls and roof are left out of the outside hull so the room
+   * and its glass are what you see — its floor stays, a platform round the
+   * bridge's glass a little below the sill — and everything else of her — decks,
+   * terraces, mast, the flight deck — is the view. Measured off the models
+   * (capital-l observationGallery, carrier-l bridgeCab). */
+  var BRIDGE = {
+    capital: { at: [44.25, 37.9, 60.8],  cut: [0.125, 0.1395, 0.143, 0.230, 0.168, 0.258] },
+    carrier: { at: [29.4, 20.5, 40.66],  cut: [0.057, 0.0575, 0.012, 0.139, 0.093, 0.155] }
+  };
+  function bridgeSpec(x) {
+    var id = typeof x === 'string' ? x : (x && x.hullId);
+    return (id && BRIDGE[id]) || null;
+  }
+  /* The frame the cockpit and every room aboard are drawn in: the ship
+   * itself for every hull whose cockpit is at its origin, and for a tower
+   * hull a stand-in that reads her live attitude through to the ship and
+   * has its own position up in the tower. One per ship, kept (WeakMap, so
+   * it never rides along into a save), and the cockpit's cached spec is
+   * shared with the ship so the rooms, their doors and the lift are the
+   * same objects whichever frame asked for them. */
+  var BRIDGE_FRAMES = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  function bridgeFrame(ship) {
+    var b = bridgeSpec(ship);
+    if (!b || !BRIDGE_FRAMES || !ship.pos || !ship.fwd) return ship;
+    var p = BRIDGE_FRAMES.get(ship);
+    if (!p) {
+      p = Object.create(ship);
+      Object.defineProperty(p, '_cockpit', {
+        get: function () { return ship._cockpit; },
+        set: function (v) { ship._cockpit = v; },
+        enumerable: false, configurable: true
+      });
+      p._base = ship;
+      BRIDGE_FRAMES.set(ship, p);
+    }
+    p.pos = localToWorld(ship, b.at[0] * 0.001, b.at[1] * 0.001, b.at[2] * 0.001);
+    return p;
+  }
+  /* The hull with the bridge's own shell taken out: every triangle whose
+   * centre falls inside the cut box goes. A new mesh object, built once per
+   * library mesh — gl.js caches its buffers on the object. */
+  var BRIDGE_CUT_CACHE = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  function bridgeCutMesh(mesh, ship) {
+    var b = bridgeSpec(ship);
+    if (!b || !mesh || !mesh.v || !mesh.f || !BRIDGE_CUT_CACHE) return mesh;
+    var hit = BRIDGE_CUT_CACHE.get(mesh);
+    if (hit) return hit;
+    var c = b.cut, m = {}, k;
+    for (k in mesh) if (k.charAt(0) !== '_') m[k] = mesh[k];
+    m.f = []; m.c = mesh.c ? [] : null;
+    for (var i = 0; i < mesh.f.length; i++) {
+      var f = mesh.f[i], cx = 0, cy = 0, cz = 0;
+      for (var j = 0; j < f.length; j++) {
+        var v = mesh.v[f[j]];
+        cx += v[0]; cy += v[1]; cz += v[2];
+      }
+      cx /= f.length; cy /= f.length; cz /= f.length;
+      if (cx > c[0] && cx < c[3] && cy > c[1] && cy < c[4] && cz > c[2] && cz < c[5]) continue;
+      m.f.push(f);
+      if (m.c) m.c.push(mesh.c[i]);
+    }
+    BRIDGE_CUT_CACHE.set(mesh, m);
+    return m;
+  }
+
   /* ======================================================================
    * MESHES
    * ======================================================================
@@ -2633,7 +2723,7 @@
   function shipScreenLength(cam, ship) {
     var sp = cam.project(ship.pos);
     if (!sp) return 0;
-    return SHIP_LEN * sp.scale;
+    return hullLength(ship) * sp.scale;
   }
 
   /* Any point given in a frame's own axes (x=right, y=up, z=forward), in km,
@@ -3430,7 +3520,7 @@
    * so it is the only thing that carries the plasma terms. NPCs fly the
    * same shader with the glow at zero, which costs one branch that is
    * never taken. */
-  function drawShipModel(ctx, cam, ship, sunDir, tint) {
+  function drawShipModel(ctx, cam, ship, sunDir, tint, opts) {
     /* ---- YOU FLY THE SHIP YOU BOUGHT --------------------------------------
      * Astra: "make it so that in flight your ship is the one you are
      * flying, and that it loads THAT model instead of the courier."
@@ -3454,18 +3544,23 @@
     /* Her shipyard paint, if she has any — see PAINT_NOW. A crash tint
      * (the caller's red) wins over paint: that is a warning, not a look. */
     var pr = tint ? null : paintRGB(ship && ship.paint);
-    if (!(gpuWorld() && global.GLWorld.queueMesh(cam, ship, mesh, SHIP_LEN, sunDir,
+    var L = hullLength(ship);
+    /* From your own conning tower (shipdeck.js, 2026-10-25) the gallery or
+     * cab you are standing in is left out, or its walls would be all you
+     * saw. */
+    if (opts && opts.fromBridge) mesh = bridgeCutMesh(mesh, ship);
+    if (!(gpuWorld() && global.GLWorld.queueMesh(cam, ship, mesh, L, sunDir,
                                                  ship.reentryGlow || 0, ship.windDir,
                                                  undefined, pr))) {
       PAINT_NOW = pr;
-      try { paintMesh(ctx, cam, ship, mesh, SHIP_LEN, sunDir, tint); }
+      try { paintMesh(ctx, cam, ship, mesh, L, sunDir, tint); }
       finally { PAINT_NOW = null; }
     }
     /* The legs go on the plain queueMesh path rather than the plasma one.
      * They are the coldest thing on the ship — the last part to see air on
      * the way down and the first thing a pad touches — and giving them the
      * hull's re-entry glow would light them up before the nose. */
-    drawHullGear(ctx, cam, ship, mesh, SHIP_LEN, sunDir, tint, gearTravelOf(ship));
+    drawHullGear(ctx, cam, ship, mesh, L, sunDir, tint, gearTravelOf(ship));
   }
 
   /* ---- torch drives -----------------------------------------------------
@@ -10163,6 +10258,27 @@
       emitters.push({ x: b.cx, y: b.cy });
     }
 
+    /* THE BRIDGE DECK'S SCREENS (2026-10-25). On a conning-tower bridge
+     * each crew station carries a live MFD (ShipDeck.stationScreen), drawn
+     * on the world layer like the helm's and depth-tested there, so a wall
+     * or a console hides it. Only when they can be seen — walking the
+     * bridge deck, or turned round in the seat — since each is a readout
+     * redrawn on its own clock. GPU only: the bridge deck is a GPU room. */
+    var SDk = global.ShipDeck, showSt = opts.walking || Math.abs((cam.look && cam.look.yaw) || 0) > 0.9;
+    if (showSt && SDk && SDk.stationScreen && global.GLWorld && global.GLWorld.available) {
+      var dk = shipInterior(ship);
+      if (dk && dk.plan.tower) {
+        var px = SDk.STATION_SCREEN_PX;
+        dk.plan.stations.forEach(function (st, si) {
+          if (st.cockpit) return;
+          var cs = SDk.stationScreen(st, dk.geom.sideX, dk.geom.floorY);
+          var wc2 = cs.map(function (q) { return localToWorld(ship, q[0] * M, q[1] * M, q[2] * M); });
+          var sp = { id: 'station-' + si, role: st.role, n: st.n, w: px[0], h: px[1], world: wc2, cam: cam, station: true };
+          if (mfdGpu(sp)) mfds.push(sp);
+        });
+      }
+    }
+
     /* Side-console switch blocks used to be drawn here (sideConsoleDetail):
      * three flat blocks a console, so turning your head found something with
      * a light on it. The greebles above cover the whole console now, so
@@ -11128,14 +11244,48 @@
      * is known by its livery (Combat.liveryRefusal) and not only by a hull
      * key. A repaint changes it, so the room is rebuilt when it does. */
     var libId = hull && hull.mesh === 'crawler' ? crawlerLibId(ship) : ((hull && HULL_ASSIGN[hull.mesh]) || '');
-    if (spec._deck && spec._deck.libId === libId) return spec._deck;
+    /* A fitted turret puts a turret position aboard (shipdeck.js, 2026-10-25),
+     * so fitting or pulling one rebuilds the room, as a repaint does. */
+    var tur = !!ship.turret;
+    if (spec._deck && spec._deck.libId === libId && spec._deck.turret === tur) return spec._deck;
     var g = cockpitGeometry(spec);
     /* Who works her, with you at the helm (crew.js), off the hull's own
      * default outfit so a refit does not move the furniture. */
     var crew = global.Crew && global.Crew.crewNeeded ? global.Crew.crewNeeded(ship.hullId, true) : null;
-    var plan = SD.plan(g, { hullId: ship.hullId, libId: libId, size: hull && hull.size, key: spec.key, crew: crew });
-    spec._deck = { spec: spec, geom: g, plan: plan, meshes: SD.meshes(g, plan), libId: libId };
+    var plan = SD.plan(g, { hullId: ship.hullId, libId: libId, size: hull && hull.size, key: spec.key, crew: crew, turret: tur });
+    spec._deck = { spec: spec, geom: g, plan: plan, meshes: SD.meshes(g, plan), libId: libId, turret: tur };
     return spec._deck;
+  }
+
+  /* YOUR CRAFT IN THE HANGAR (Carrier, 2026-10-25). Astra chose "your
+   * parked craft": the small ships of your fleet berthed at the port she
+   * is docked at stand on her pads, in their own models, at their own
+   * length. Up to one per pad; the rest are elsewhere in the bay, as far as
+   * anybody can see. */
+  var CRAFT_LEN = 16;          // m, an S hull nose to tail
+  function hangarCraft(ship, plan) {
+    var G = global.Game, out = [];
+    if (!G || !G.fleet || !ship.docked) return out;
+    var HL = global.Combat && global.Combat.HULLS;
+    var here = G.fleet.filter(function (r) {
+      var h = HL && HL[r.hullId];
+      return r.port === ship.docked && h && h.size === 'S';
+    });
+    here.slice(0, plan.hangarPads.length).forEach(function (r, i) {
+      var h = HL[r.hullId], lib = libHull(HULL_ASSIGN[h.mesh] || HULL_ASSIGN.courier);
+      if (!lib) return;
+      if (!lib._hangar) {
+        /* Unit-length model to metres, and stood on its gear: lifted so
+         * its lowest point is on the deck. */
+        var minY = Infinity;
+        lib.v.forEach(function (v) { if (v[1] < minY) minY = v[1]; });
+        lib._hangar = { v: lib.v.map(function (v) { return [v[0] * CRAFT_LEN, (v[1] - minY) * CRAFT_LEN, v[2] * CRAFT_LEN]; }),
+                        f: lib.f, c: lib.c };
+      }
+      var pd = plan.hangarPads[i];
+      out.push({ mesh: lib._hangar, off: [pd.x, plan.deckY.hangar, pd.z] });
+    });
+    return out;
   }
 
   /* Queue the room for this frame. `opts.seat` draws the pilot's seat —
@@ -11154,12 +11304,28 @@
       var tr = SD.leafTravel(door.open);
       /* Across the ship for a fore-and-aft wall; fore and aft for a door
        * in a side wall (the quarters'). */
-      if (door.axis === 'x') parts.push({ mesh: lv[0], off: [0, 0, -tr] }, { mesh: lv[1], off: [0, 0, tr] });
-      else parts.push({ mesh: lv[0], off: [-tr, 0, 0] }, { mesh: lv[1], off: [tr, 0, 0] });
+      /* `yOff` is the door's deck below the bridge (shipdeck.js decks). */
+      var dy = door.yOff || 0;
+      if (door.axis === 'x') parts.push({ mesh: lv[0], off: [0, dy, -tr] }, { mesh: lv[1], off: [0, dy, tr] });
+      else parts.push({ mesh: lv[0], off: [-tr, dy, 0] }, { mesh: lv[1], off: [tr, dy, 0] });
     });
     /* The airlock's lamp: green when there is somewhere to step out to. */
     parts.push({ mesh: (ship.docked || ship.landed) ? d.meshes.lampOk : d.meshes.lampNo });
+    /* A decked hull's lift car and tram, where main.js last put them
+     * (`plan.live`), and your small craft parked in a Carrier's hangar. */
+    if (d.meshes.car) {
+      var live = d.plan.live || {};
+      var carY = live.carY !== undefined ? live.carY : d.plan.deckY.bridge;
+      parts.push({ mesh: d.meshes.car.body, off: [0, carY, 0] });
+      if (live.moving) parts.push({ mesh: d.meshes.car.doors, off: [0, carY, 0] });
+      var tz = live.tramZ !== undefined ? live.tramZ : d.plan.tram.a;
+      parts.push({ mesh: d.meshes.tram, off: [0, d.plan.deckY.junction, tz] });
+      if (d.plan.hangarPads) hangarCraft(ship, d.plan).forEach(function (pc) { parts.push(pc); });
+    }
     if (opts.seat) parts.push({ mesh: d.meshes.seat });
+    /* An S cockpit's second seat and medical kit (shipdeck.js, 2026-10-25):
+     * always there, seated or not. */
+    if (d.meshes.fittings) parts.push({ mesh: d.meshes.fittings });
     var ok = global.GLWorld.queueCockpit(cam, frame, d.meshes.portals, d.meshes.room, parts, M);
     if (ok) { ROOM_QUEUED.ship = ship; ROOM_QUEUED.cam = cam; }
     return ok;
@@ -11632,7 +11798,8 @@
      * drawing maths, where it can be tested without a canvas. */
     boltSpan: boltSpan, boltRibbon: boltRibbon,
     BOLT_MIN_W: BOLT_MIN_W, BOLT_MAX_W: BOLT_MAX_W, BOLT_SEGS: BOLT_SEGS,
-    SHIP_LEN: SHIP_LEN,
+    SHIP_LEN: SHIP_LEN, TRUE_LEN: TRUE_LEN, hullLength: hullLength,
+    BRIDGE: BRIDGE, bridgeSpec: bridgeSpec, bridgeFrame: bridgeFrame, bridgeCutMesh: bridgeCutMesh,
     drawAttitudeLadder: drawAttitudeLadder,
     drawFlightPathMarker: drawFlightPathMarker,
     drawBankScale: drawBankScale,

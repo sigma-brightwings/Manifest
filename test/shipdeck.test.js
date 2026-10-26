@@ -46,7 +46,13 @@ ids.forEach(function (id) {
   /* One pane per window the seat view punches: main, two quarter-lights,
    * two side windows, the floor — as triangles, two per quad, six for the
    * eight-sided windscreen. */
-  if (d.meshes.portals.f.length !== 6 + 2 + 2 + 2 + 2 + 2) badPanes.push(id + ':' + d.meshes.portals.f.length);
+  /* And, since 2026-10-25, a dome over each turret seat: ten segments in
+   * two bands of quads and a cap of ten triangles. */
+  var domes = (d.plan.turrets || []).length * (2 * 10 * 2 + 10);
+  /* And on the two with a conning tower, the tower's glass all round the
+   * bridge deck and lobby (towers.test.js) — more, never fewer. */
+  var seatPanes = 6 + 2 + 2 + 2 + 2 + 2 + domes, nP = d.meshes.portals.f.length;
+  if (d.plan.tower ? nP <= seatPanes : nP !== seatPanes) badPanes.push(id + ':' + nP);
   ['room', 'portals', 'seat'].forEach(function (k) {
     d.meshes[k].v.forEach(function (v) { if (!v.every(isFinite)) nan.push(id + ':' + k); });
   });
@@ -142,23 +148,41 @@ check('the bulkhead is a metre and more behind the seat', t.geom.bulkZ <= -1.3, 
 
 console.log('--- the doors ---');
 var stuck = [], early = [];
-ids.forEach(function (id) {
-  var d = R.shipInterior(ship(id)), p = d.plan;
-  p.doors.forEach(function (dd) { dd.open = 0; dd.shut = true; });
-  var w = Walk.start({ rooms: p.rooms, doors: p.doors, items: p.items, spawn: p.spawn });
-  /* Shut, the doorway is wall: a step into the sill is refused. */
-  var bz = p.doors[0].wall[1];
-  if (Walk.standable(p, 0, bz)) early.push(id);
+/* Walk `p` straight aft from `from` until z is below `z`, the doors
+ * opening as you come. */
+function walkAft(p, from, z) {
+  var w = Walk.start({ rooms: p.rooms, doors: p.doors, items: p.items, spawn: from });
   w.yaw = Math.PI;
   for (var i = 0; i < 2000; i++) {
     SD.updateDoors(p, w, 1 / 30);
     Walk.step(w, { w: true }, 1 / 30);
-    if (w.z < p.rooms[2].z1 - 0.5) break;
+    if (w.z < z) break;
   }
-  if (!(w.z < p.rooms[2].z1 - 0.5)) stuck.push(id + ' z=' + w.z.toFixed(2));
+  return w;
+}
+ids.forEach(function (id) {
+  var d = R.shipInterior(ship(id)), whole = d.plan;
+  whole.doors.forEach(function (dd) { dd.open = 0; dd.shut = true; });
+  /* A decked hull (2026-10-25): aft on the bridge deck into the lift, and
+   * on the main deck out of it aft to the airlock. */
+  var p = whole.decks ? whole.decks.bridge : whole;
+  /* Shut, the doorway is wall: a step into the sill is refused. */
+  var bz = SD.doorById(whole, 'bridge').wall[1];
+  if (Walk.standable(p, 0, bz)) early.push(id);
+  var lockZ = SD.roomByKind(whole, 'airlock').z1 - 0.5;
+  if (whole.decks) {
+    var carMid = (whole.carZ[0] + whole.carZ[1]) / 2;
+    var w1 = walkAft(p, p.spawn, carMid);
+    if (!(w1.z < carMid)) stuck.push(id + ' bridge z=' + w1.z.toFixed(2));
+    var w2 = walkAft(whole.decks.main, { x: 0, z: carMid, yaw: Math.PI }, lockZ);
+    if (!(w2.z < lockZ)) stuck.push(id + ' main z=' + w2.z.toFixed(2));
+  } else {
+    var w = walkAft(p, p.spawn, lockZ);
+    if (!(w.z < lockZ)) stuck.push(id + ' z=' + w.z.toFixed(2));
+  }
 });
 check('a shut door is wall', !early.length, early.join(', '));
-check('get up, walk aft, and both doors open for you all the way to the airlock', !stuck.length, stuck.join(', '));
+check('get up, walk aft, and the doors open for you all the way to the airlock (by the lift on a decked hull)', !stuck.length, stuck.join(', '));
 var p0 = t.plan;
 p0.doors.forEach(function (dd) { dd.open = 1; });
 SD.updateDoors(p0, { x: 0, z: 50 }, 5);
@@ -190,7 +214,9 @@ ids.forEach(function (id) {
   var p = R.shipInterior(ship(id)).plan, need = Crew.crewNeeded(id, true);
   var size = Combat.HULLS[id].size;
   if (size === 'S') {
-    if (p.stations.length || kinds(p).indexOf('quarters') >= 0 || kinds(p).indexOf('bridgedeck') >= 0) soloExtra.push(id);
+    /* Only the Lance's gunner console behind you, in the cockpit itself. */
+    var inBridge = p.stations.filter(function (st) { return !st.cockpit; }).length;
+    if (inBridge || kinds(p).indexOf('quarters') >= 0 || kinds(p).indexOf('bridgedeck') >= 0) soloExtra.push(id);
     return;
   }
   var want = Math.min(SD.STATION_MAX, need.engineer + need.gunner);
@@ -211,9 +237,10 @@ check('a crowded bridge shares its stations out, gunnery included',
       cr.length === SD.STATION_MAX && cr.indexOf('gunner') >= 0 && cr.indexOf('engineer') >= 0, cr.join(','));
 /* Everything reachable: from where you stand up, with the doors open,
  * every room on every hull — so no station or bunk walls anything off. */
-function fill(p) {
+function fill(p, from) {
+  from = from || p.spawn;
   p.doors.forEach(function (d) { if (d.slide) { d.open = 1; d.shut = false; } });
-  var h = 0.05, ox = p.spawn.x, oz = p.spawn.z, seen = { '0,0': 1 }, q = [[0, 0]];
+  var h = 0.05, ox = from.x, oz = from.z, seen = { '0,0': 1 }, q = [[0, 0]];
   while (q.length) {
     var c = q.pop();
     [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(function (d) {
@@ -225,15 +252,26 @@ function fill(p) {
   return function (x, z) { return !!seen[Math.round((x - ox) / h) + ',' + Math.round((z - oz) / h)]; };
 }
 var cutOff = [];
+/* Each deck of a decked hull on its own, from the lift (2026-10-25): the
+ * lift is the only way between them, and the tramway is ridden, not
+ * walked. */
+function eachDeck(whole, fn) {
+  if (!whole.decks) { fn(whole, whole.spawn); return; }
+  var mid = { x: 0, z: (whole.carZ[0] + whole.carZ[1]) / 2 };
+  whole.deckOrder.forEach(function (dk) { fn(whole.decks[dk], mid); });
+}
 ids.forEach(function (id) {
-  var p = R.shipInterior(ship(id)).plan, has = fill(p);
-  p.rooms.forEach(function (r) {
-    var ok = false;
-    for (var x = r.x0 + 0.35; x < r.x1 - 0.3 && !ok; x += 0.05)
-      for (var z = r.z0 + 0.35; z < r.z1 - 0.3 && !ok; z += 0.05) if (has(x, z)) ok = true;
-    if (!ok) cutOff.push(id + ':' + r.kind);
+  eachDeck(R.shipInterior(ship(id)).plan, function (p, from) {
+    var has = fill(p, from);
+    p.rooms.forEach(function (r) {
+      var ok = false;
+      for (var x = r.x0 + 0.35; x < r.x1 - 0.3 && !ok; x += 0.05)
+        for (var z = r.z0 + 0.35; z < r.z1 - 0.3 && !ok; z += 0.05) if (has(x, z)) ok = true;
+      /* The far platform and the engine room are the tram's end. */
+      if (!ok && !(r.id === 'platform-aft' || (r.kind === 'engine' && r.deck === 'junction'))) cutOff.push(id + ':' + r.kind);
+    });
+    p.doors.forEach(function (d) { if (d.slide) { d.open = 0; d.shut = true; } });
   });
-  p.doors.forEach(function (d) { if (d.slide) { d.open = 0; d.shut = true; } });
 });
 check('every room on every ship can be walked to', !cutOff.length, cutOff.join(', '));
 /* The helm keeps its bulkhead where the seat has always had it; the
@@ -329,6 +367,144 @@ var r2 = Combat.repaintLivery(Gr, 'civ');
 check('and the same yard paints her back to civilian', r2.ok && Gr.ship.livery === null);
 Gr.ship.hullId = 'talon';
 check('nobody paints a Talon in faction colours', !Combat.repaintLivery(Gr, 'syn').ok);
+
+console.log('--- the rest of her (2026-10-25) ---');
+/* Astra: "S ships aren't all one seaters... M ships should have a small
+ * medbay, while S ships have medical supplies in the cockpit." */
+var wrongRooms = [], wrongTurrets = [], wrongSecond = [], noKit = [], unreachable = [], wrongBeds = [];
+var WANT_SECOND = { wren: 'copilot', bollard: 'copilot', fighter: 'gunner', talon: null };
+ids.forEach(function (id) {
+  var d = R.shipInterior(ship(id)), p = d.plan, size = Combat.HULLS[id].size, need = Crew.crewNeeded(id, true);
+  var ks = kinds(p);
+  var has = function (k) { return ks.indexOf(k) >= 0; };
+  if (size === 'S') {
+    if (has('medbay') || has('engine') || has('cargo') || has('turret')) wrongRooms.push(id);
+    if (p.second !== WANT_SECOND[id]) wrongSecond.push(id + ':' + p.second);
+    if (!p.items.some(function (it) { return it.kind === 'medkit'; })) noKit.push(id);
+  } else {
+    if (!has('medbay') || !has('engine') || !has('cargo')) wrongRooms.push(id + ' ' + ks.join('/'));
+    /* And the turret-fitted deck is walked too, below. */
+    p = R.shipInterior(Object.assign(ship(id), { turret: 'turret' })).plan;
+    /* No turret fitted, no turret position; fit one and it is there, one
+     * seat — the one gunner a turret takes (crew.js turretCrewing). */
+    if (has('turret')) wrongRooms.push(id + ' turret without a turret');
+    var pt = R.shipInterior(Object.assign(ship(id), { turret: 'turret' })).plan;
+    if (pt.turrets.length !== 1 || !pt.rooms.some(function (r) { return r.kind === 'turret'; })) wrongTurrets.push(id + ' ' + pt.turrets.length);
+    if (p.beds.length !== (size === 'M' ? 1 : 2)) wrongBeds.push(id + ' ' + p.beds.length);
+  }
+  /* Every room and every labelled thing in it can be walked to from the
+   * airlock, with the doors open: a flood fill over the deck at 10 cm. */
+  /* Deck by deck on a decked hull, from the lift — and on the junction
+   * from the far end of the tram too, which is how engineering is reached. */
+  var whole = p, starts = [];
+  if (whole.decks) {
+    var mid = { x: 0, z: (whole.carZ[0] + whole.carZ[1]) / 2 };
+    whole.deckOrder.forEach(function (dk) {
+      starts.push([whole.decks[dk], mid]);
+      if (dk === 'junction') starts.push([whole.decks[dk], { x: 0, z: whole.tram.offB }]);
+    });
+  } else starts.push([whole, whole.aboard]);
+  var cells = [], seenAll = {};
+  starts.forEach(function (st) {
+    var dpl = st[0];
+    dpl.doors.forEach(function (dd) { if (dd.slide) { dd.open = 1; dd.shut = false; } });
+    var k0 = [Math.round(st[1].x * 10), Math.round(st[1].z * 10)], q = [k0], seen = {};
+    seen[k0] = true;
+    while (q.length) {
+      var c = q.pop(); cells.push([c[0], c[1], dpl.deck || 'main']);
+      [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(function (o) {
+        var n = [c[0] + o[0], c[1] + o[1]];
+        if (seen[n] || !Walk.standable(dpl, n[0] / 10, n[1] / 10)) return;
+        seen[n] = true; q.push(n);
+      });
+    }
+    dpl.doors.forEach(function (dd) { if (dd.slide) { dd.open = 0; dd.shut = true; } });
+  });
+  var near = function (x, z, r, dk) { return cells.some(function (c) { return (!dk || c[2] === dk) && Math.hypot(c[0] / 10 - x, c[1] / 10 - z) < r; }); };
+  whole.rooms.forEach(function (rm) {
+    if (rm.walk === false) return;
+    if (!near((rm.x0 + rm.x1) / 2, (rm.z0 + rm.z1) / 2, Math.max(rm.x1 - rm.x0, rm.z1 - rm.z0) / 2, whole.decks ? rm.deck : null)) unreachable.push(id + ':' + rm.kind);
+  });
+  whole.items.forEach(function (it) {
+    if (it.silent || !it.label) return;
+    if (!near(it.x, it.z, 1.2, whole.decks ? it.deck : null)) unreachable.push(id + ':' + it.kind);
+  });
+});
+check('S: no medbay, engine room, turret or cargo bay', !wrongRooms.filter(function (s) { return s.indexOf(' ') < 0; }).length);
+check('M and up: a medbay, an engine room and a cargo bay; no turret position unless a turret is fitted',
+      !wrongRooms.filter(function (s) { return s.indexOf(' ') >= 0; }).length, wrongRooms.join(', '));
+check('a fitted turret puts one turret seat aboard every M and up', !wrongTurrets.length, wrongTurrets.join(', '));
+check('S: a fitted turret is worked from the seat — no turret room', !R.shipInterior(Object.assign(ship('talon'), { turret: 'turret' })).plan.rooms.some(function (r) { return r.kind === 'turret'; }));
+check('a small medbay (one bed) on an M, two beds from L', !wrongBeds.length, wrongBeds.join(', '));
+check('Wren and Bollard have a co-pilot\'s seat, the Lance a gunner\'s, the Talon one seat',
+      !wrongSecond.length, wrongSecond.join(', '));
+check('every S cockpit carries medical supplies', !noKit.length, noKit.join(', '));
+check('every room and everything labelled in it can be walked to from the airlock',
+      !unreachable.length, unreachable.slice(0, 8).join(', '));
+/* The second seat is optional: she still flies with nobody in it. */
+check('the second seat asks nobody to be hired', ['wren', 'bollard', 'fighter'].every(function (id) {
+  return Crew.crewNeeded(id, true).total === 0;
+}));
+
+console.log('--- conning towers, decks and the lift (2026-10-25) ---');
+/* Astra: the Capital and Carrier have a conning tower with the bridge on
+ * top and an elevator down; the stops are the bridge, the main deck and
+ * airlock, the hangar (Carrier only), and a junction from which engineering
+ * is reached — by tram, she chose; the other XL hulls get decks and a lift. */
+var decked = ids.filter(function (id) { return !!R.shipInterior(ship(id)).plan.decks; }).sort();
+check('the five XL hulls have decks, and nothing else does', decked.join(',') === 'capital,carrier,crawler,leviathan,meridian', decked.join(','));
+var badDeck = [];
+decked.forEach(function (id) {
+  var p = R.shipInterior(ship(id)).plan, order = p.deckOrder;
+  var want = id === 'carrier' ? 'bridge,main,junction,hangar' : 'bridge,main,junction';
+  if (order.join(',') !== want) badDeck.push(id + ' stops ' + order.join(','));
+  if (Math.abs(p.deckY.bridge - p.deckY.main - SD.TOWER[id]) > 1e-9) badDeck.push(id + ' tower');
+  for (var i = 1; i < order.length; i++) if (!(p.deckY[order[i]] < p.deckY[order[i - 1]])) badDeck.push(id + ' order of floors');
+  order.forEach(function (dk, hi) {
+    var dp = p.decks[dk];
+    if (!dp.rooms.some(function (r) { return r.kind === 'lift'; })) badDeck.push(id + ':' + dk + ' no car');
+    if (!dp.doors.some(function (d) { return d.lift; })) badDeck.push(id + ':' + dk + ' no landing');
+    var btn = dp.items.filter(function (it) { return it.kind === 'liftbtn'; });
+    if (btn.length !== order.length - 1) badDeck.push(id + ':' + dk + ' buttons ' + btn.length);
+    btn.forEach(function (b) {
+      var up = order.indexOf(b.to) < hi;
+      if (b.label.charAt(0) !== (up ? '▲' : '▼') || !b.aim) badDeck.push(id + ':' + dk + ' button ' + b.label);
+    });
+    if (dp.floorY !== p.deckY[dk]) badDeck.push(id + ':' + dk + ' floor');
+  });
+  /* The bridge deck is all forward of the car, every other deck all aft:
+   * no deck is ever seen from another but through the lift. */
+  p.decks.bridge.rooms.forEach(function (r) { if (r.kind !== 'lift' && r.z0 < p.carZ[1] - 1e-6) badDeck.push(id + ' bridge room ' + r.kind + ' aft of the car'); });
+  order.slice(1).forEach(function (dk) {
+    p.decks[dk].rooms.forEach(function (r) { if (r.kind !== 'lift' && r.z1 > p.carZ[0] + 1e-6) badDeck.push(id + ' ' + dk + ' room ' + r.kind + ' forward of the car'); });
+  });
+  /* The engine room is down at the junction, at the tram's far end. */
+  var engs = p.rooms.filter(function (r) { return r.kind === 'engine'; });
+  if (engs.length !== 1 || engs[0].deck !== 'junction' || !(engs[0].z1 <= p.tram.z0)) badDeck.push(id + ' engine room');
+  if (!(p.tram.z1 - p.tram.z0 >= 30)) badDeck.push(id + ' spine ' + (p.tram.z1 - p.tram.z0));
+  if (!p.decks.main.items.some(function (it) { return it.kind === 'hatch'; })) badDeck.push(id + ' no hatch on the main deck');
+  if (p.decks.main.rooms.some(function (r) { return r.kind === 'cockpit'; })) badDeck.push(id + ' cockpit below');
+  /* Below the junction, the hangar clears it: its roof is under the
+   * tramway's floor, which runs aft over the same ground. */
+  if (p.deckY.hangar !== undefined && !(p.deckY.hangar + SD.HANGAR[2] < p.deckY.junction - 0.35)) badDeck.push(id + ' hangar roof');
+  var d = R.shipInterior(ship(id));
+  if (!d.meshes.car || !d.meshes.tram || !d.meshes.car.doors.f.length) badDeck.push(id + ' car/tram mesh');
+  if (d.meshes.room.v.some(function (v) { return !v.every(isFinite); })) badDeck.push(id + ' NaN');
+});
+check('each deck: a car, a landing, a button per other deck (▲ up, ▼ down, picked by looking)', !badDeck.length, badDeck.slice(0, 6).join('; '));
+var cp = R.shipInterior(ship('carrier')).plan;
+check('the Carrier\'s hangar has three pads marked', cp.hangarPads.length === 3 && !!SD.roomByKind(cp, 'hangar'));
+check('only the Carrier has a hangar', decked.every(function (id) { return (id === 'carrier') === !!SD.roomByKind(R.shipInterior(ship(id)).plan, 'hangar'); }));
+/* Looking at a button picks it, not the nearest one (walk.js aim). */
+var mp = cp.decks.main, cm = { x: 0, z: (cp.carZ[0] + cp.carZ[1]) / 2 };
+var bts = mp.items.filter(function (it) { return it.kind === 'liftbtn'; });
+var picked = bts.every(function (b) {
+  var w = Walk.start({ rooms: mp.rooms, doors: mp.doors, items: mp.items, spawn: { x: cm.x - 0.2, z: cm.z, yaw: 0 } });
+  w.yaw = Math.atan2(b.x - w.x, b.z - w.z);
+  var it = Walk.facing(w);
+  return it === b;
+});
+check('in the car, the button you look at is the one E presses', picked, bts.map(function (b) { return b.label; }).join(' | '));
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
