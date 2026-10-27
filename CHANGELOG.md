@@ -16,6 +16,232 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **Women and men, every skin tone, every build (2026-10-26).** Astra: *"We
+  should make sure that the female characters are well represented in race
+  and bust size, as it is important."*
+  - Who is a woman is decided per person (`People.sexOf`), and the portrait
+    follows the body under the suit, so the sketch and the figure agree.
+  - **The split (same evening).** Astra: *"let's be representative of how
+    it's a nearly 50/50 split, in terms of men and women born, gender
+    identity notwithstanding, and that smaller, more violent cultures might
+    only survive by keeping the women out of the fighting."* So
+    (`People.P_MALE`):
+    - **Big societies** (civilian, navy, Syndicate) sit near the birth ratio
+      overall, about 52% men, with a mild tilt: 60% men in the fighting jobs
+      (marines, tactical, heavies, enforcers, security, gunners) and 44% in
+      the rest.
+    - **Pirates** are the small, violent culture. About 95% of their fighters
+      are men; the women aboard (about 65%) keep the ship running.
+  - Women and men both come in all seven skin tones at even odds, measured
+    over 3,000 people: no tone is favoured for either sex.
+  - Women's bodies come in five bust sizes (`People.BUSTS`: 0.45, 0.65, 0.85,
+    1.0 and 1.15 of the stock body), seeded per person. The shape is changed
+    before the body is measured, so vests, harnesses and plates are fitted to
+    her, not to the stock body.
+  - A woman's portrait draws from the same features, eased: a lighter jaw
+    and chin, finer brows, fuller lips, no beard or stubble, and a buzz cut
+    where the dice gave a receding horseshoe.
+  - Tests: big societies are 47–56% men; over 90% of pirate raiders are men
+    and most pirate engineers are women; all seven tones for both sexes;
+    every bust size turns up; the portrait matches the body and no woman is
+    bearded; a bigger bust measures deeper.
+
+- **The people are Quaternius' bodies now (2026-10-26).** Astra, looking at
+  free character kits: *"let's do the quaternius models"*. The 3D people
+  stand on Quaternius' Universal Base Characters (the two in the free
+  Standard pack, a male and a female body) and move with his Universal
+  Animation Library. Both are CC0 (`assets/quaternius/LICENSE.txt`).
+  - **What stays:** every role's look. The helmet, pack, vest, harness,
+    exo-frame, rifle, boots and the face kit are still built by
+    `npcmodel.js` as before. They're lifted onto the new skeleton by
+    `people.js`: head kit is fitted to the head, chest kit to the torso's
+    width at each height, arm kit is swung out to the new body's T-pose,
+    and leg kit follows its joint. The suit's paint (each role's markings and
+    the ship's livery) is wrapped round the new body by matching texture
+    coordinates part by part.
+  - **Animation:** standing, talking, walking (timed to the stride, so feet
+    land where they step), sitting at a station and talking while seated,
+    and working. The clips blend as people start and stop. Each body takes
+    the library's clips through a retarget pair a bone, since the bodies
+    are proportioned differently from the clip rig.
+  - **Who gets which body:** seeded by name and role, so a person is always
+    the same body.
+  - **Pipeline:** `tools/glb2people.cjs` reads the packs (.glb or .gltf),
+    folds the 30 finger bones into the hands (23 bones left), resamples
+    every clip at 30 fps and writes `src/people-data.js`. `src/rig.js`
+    samples, blends and poses at runtime. `npcgl.js` draws a body (smooth,
+    four weights a vertex) and its kit (flat, one bone a vertex) through
+    one program.
+  - **Fixed on the way:** torsos torn into shards in the game but not in
+    previews. The deck position was folded into every bone matrix in single
+    precision, and a chest vertex blending four bones landed in four
+    slightly different places. A person is now posed about their own feet,
+    and the place they stand is added once, in the draw. The pass also
+    forces depth writes on.
+  - **Not yet:** the old box figures are still built, since they hold the
+    paint and kit the new bodies borrow and they're the fallback without a
+    GPU. Hands are bare under the gloves' colour, not gloved shapes.
+
+- **Each role's suit in its portrait, and the face kit on the suited body
+  (2026-10-26).** Astra: *"let's make a variant for each class type, since
+  some of that would still be visible in person like that."* Asked which she
+  meant, the suit in the portrait or the kit on the 3D figure, she said both.
+  - **The portrait shows the suit that body wears.** The sitter is drawn a
+    little smaller so the shoulders get room, and the collar and shoulders
+    are that role's suit, in the same colours the body is built in
+    (`NpcModel.suitOf`: a crew role takes the ship's outfit, a faction role
+    its own):
+    - pilot: harness straps crossing the chest, seal ring in the accent
+      colour;
+    - engineer: a reflective yoke, and a chest pocket with a pen;
+    - gunner: a quilted vest under a steel flak collar;
+    - security: a vest with the SECURITY strip, a shoulder radio, and an
+      arm band;
+    - tactical: a chest plate and dome pauldrons;
+    - medic: white sleeves, a sash, and the green disc with its staff;
+    - loadmaster: the exo-frame bar across the shoulders with hazard
+      chevrons, and the radio mast with its light;
+    - raider: the stolen navy pauldron, a patched sleeve, and stitched
+      patches;
+    - pirate captain: lapels, a red sash, the steel arm with rivets, and
+      trophy plates stacked on one shoulder;
+    - enforcer: a high collar and black lapels;
+    - heavy: an armour plate, big pauldrons and a gold line;
+    - fixer: a white shirt, a gold tie and the gold seal ring;
+    - marine: a chest plate with white chevrons, square pauldrons with
+      white trim, and the rig straps;
+    - officer: a white placket, white epaulettes and gold pips.
+  - **The kit shows on the 3D figure where a helmet wouldn't hide it.** It
+    is the same roll as the portrait (`Portrait.gearOf`, which `npc.js`
+    hands to `NpcModel.build`), fitted to each role's helmet (`HEAD_FIT`;
+    the slab helmets of tactical, marine and heavy sit flatter):
+    - an eyepiece: a lens glowing over one eye on the visor, with its
+      housing on the shell;
+    - a cyber-eye: a hard point of light behind the visor;
+    - goggles: strapped round the outside of the helmet;
+    - a rebreather: filter canisters and a grille at the chin;
+    - a headset: a whip antenna with a red tip.
+    Glasses, shades, an eyepatch, an earpiece, tattoos, piercings and face
+    paint are all under the helmet, so only the portrait has them. A piece
+    the role's helmet already carries isn't doubled: the gunner's eyepiece
+    and ear cups, the raider's goggles, the captain's red eye.
+  - Tests: kit is built onto the body and cached; hidden kit leaves the
+    body bare; every role takes the kit; suits come in the right colours;
+    the portrait and the body share one roll. Probe: `tools/probe-kit.js`.
+
+- **Haircuts in the portraits (2026-10-26).** Astra: *"the hairstyles
+  appear identical across all the faces."* The 3D body has six hairstyles,
+  and under a helmet nobody sees them. The sketch had only been drawing those
+  six, and four of them came out as the same cap-shaped mass. Now each face
+  rolls a cut of its own, from the body's family:
+  - short: crop, side part, fringe, quiff, curls, afro, undercut, top knot,
+    widow's peak;
+  - long: loose, waves, ponytail, bun, bob, braids, locs;
+  - slick: slicked back, slick side part, undercut, widow's peak;
+  - buzz: buzz, fade, cornrows;
+  - bald: bald, horseshoe (more likely over 50);
+  - mohawk: mohawk, spikes, a low curly hawk.
+  - The cut is rolled in its own seeded stream (`'cut|'`), so the rest of
+    every face stays exactly as it was. The table is `CUTS` in
+    `src/portrait.js`.
+  - **Any face, any cut (same day).** Astra: *"we aren't modelling hair on
+    the 3D models for the NPCs anyways."* So the portrait no longer keeps to
+    the body's family of hairstyles, and the list above is just the set of
+    cuts. Every face draws from all 26 cuts by weight (`CUT_ODDS`). A role
+    makes a few cuts more likely (`CUT_LEAN`):
+    - raiders: hawks, about a quarter of them;
+    - marines and tactical: buzz and fade;
+    - officers: side parts and buns;
+    - fixers: slicked back;
+    - captains: long hair and locs.
+    The old forced styles (every raider a mohawk, every fixer slicked) are
+    gone. A pirate captain still has a beard. Past 54, a fifth of faces go
+    bald or horseshoe. The horseshoe's side tufts are soft ovals now, not
+    boxes.
+  - The hair is drawn as locks (clumps of strokes) rather than evenly spaced
+    lines, which had read as a knitted cap. It has a band of sheen and a
+    soft hairline. The crown now sits above the skull: before, the skull's
+    top showed as a pale band over short hair.
+  - Hair that hangs behind the head (long, bob, ponytail, braids, locs,
+    afro, bun) no longer tints the face with its colour wash.
+  - `tools/portrait-sheet.html` names each portrait's cut in its caption.
+  - Tests: a crowd of 300 has at least a dozen different cuts, and all 26
+    turn up; raiders lean to hawks; a face keeps its cut; every cut has odds.
+
+- **Colour in the portraits, and a randomiser for the kit people wear on
+  their faces (2026-10-26).** Astra: *"colorize them somewhat and then give a
+  script to randomize things like eyepieces, rebreathers, etc."*
+  - The sketches keep their pencil, with a light wash of colour laid under
+    it: skin and hair in the body's own colours, an iris colour, some warmth
+    in the lips and cheeks, and the suit collar and shoulders in the
+    livery's colour (teal-grey for civilians, navy blue, charcoal and gold
+    for the Syndicate, rust for pirates).
+  - Each face is rolled a kit from twelve pieces: eyepiece (a monocle HUD
+    with an LED by the ear), cyber-eye, eyepatch, rebreather mask with side
+    canisters, goggles pushed up on the brow, glasses, shades, earpiece and
+    wire, headset with boom mic, piercings, a tattoo (neck barcode or cheek
+    chevrons) and face paint. Each piece goes on the left or right side.
+  - The odds are per role, in one table at the top of `src/portrait.js`
+    (`GEAR`). Gunners mostly wear an eyepiece, raiders and captains go for
+    cyber-eyes, patches, ink and metal, engineers and loadmasters wear
+    goggles and rebreathers, and security wears an earpiece. A second
+    table (`CLASH`) keeps pieces that can't share a face apart, such as a
+    patch and glasses, or two things on the same eye.
+  - It's seeded from the person, in its own stream, so a person always has
+    the same kit and their face doesn't change.
+  - `tools/portrait-sheet.html`: open it in a browser to see a sheet of
+    portraits by role and livery, with a tally of the kit. Change the odds
+    in `GEAR` and reload to see the spread.
+  - Tests: the kit is the same every time; every piece turns up in a crowd
+    of 400; no clashing pieces are worn together; and plenty of faces wear
+    nothing.
+
+- **Talking to people on foot (2026-10-25).** Astra: *"let's make sure we
+  have some more complex dialogue trees for NPCs, based on a few rules which
+  already exist for the comms traffic."* Asked, she chose all four of those
+  rules, and that talk feeds the systems the game already has. E on anyone
+  on a deck opens a conversation: their line over numbered replies (1–9 or
+  click). Greyed replies say why they are not open to you. Esc, Goodbye or
+  walking away ends it. They stop and face you while you talk, and the
+  pointer is free until you walk on.
+  - **Temper and values**, drawn with the same weights a captain's chair
+    uses: port security leans lawful, nobody in a Syndicate jacket is an
+    abolitionist.
+  - **Their opinion of you** comes from the same rules a captain on the
+    band uses (`Captains.judge`, split out of `opinion` for this). Station
+    people know what their port has heard (`Rumours.tallyAt`). A docked
+    ship's crew speak for their captain. Your own crew know your whole
+    record, and whether they have been paid. A furious face offers only
+    Goodbye.
+  - **Memory, no repeats.** Each person remembers what passed between you
+    (`G.people`, saved) and brings it up. They never open the same way twice
+    running.
+  - **Lies are checked.** "What is your business here?" is answered with
+    the comms page's claims, checked against the real ship by
+    `Messages.check`. Customs and marines always read your manifest, and
+    lawful or principled port security can pull it. A caught lie goes in
+    their memory and on your public record.
+  - **What talk can do:**
+    - Buy a round, once a day, which warms the bartender and loosens the
+      talk: who in port can't stand whom, raiders on the lanes, and whether
+      the officials can be bought.
+    - Ask who is in port and how each captain feels about you.
+    - Read the market off the clerk.
+    - Ask the yard about your hull, and about new papers.
+    - Haggle a hand down (once each). They sign on at the agreed fee and
+      wage, through `wageMul`.
+    - Pay a warrant at the customs desk.
+    - Buy friends in a port from a fixer (`Combat.bribePort`).
+    - Ask a docked crew about their captain, where they are bound, and
+      whether she owes you (`Favours`).
+    - Ask your own crew how the ship is (real numbers) and how they are
+      holding up.
+  - Fixed on the way: on foot, the icon bar added ten click targets every
+    frame and nothing cleared them. The walk overlay now rebuilds the list
+    each frame, as the cockpit does.
+  - Tests: `test/dialogue.test.js` (new, in `npm test`). Probe:
+    `tools/probe-dialogue.js`.
+
 - **The Capital and the Carrier at their true size, flown from the conning
   tower (2026-10-25).** Astra: *"Let's fit the cockpits to the Carrier and
   Capital class ships to align with where the conning tower is on the
@@ -1311,6 +1537,39 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
   skimmer's and spine's cars stay at rest. `test/transfer.test.js`.
 
 ### Changed
+
+- **Everyone in a pressure suit; the face is in a sketch (2026-10-25).**
+  Astra: *"why don't we replace all NPC models with those that have
+  pressure suits and helmets"*, then: *"Helmets remain on, but during
+  chat, a portrait drawn in a 2D style and built a little bit like an FBI
+  sketch."*
+  - **The suit** (`npcmodel.js`): every body now wears a sealed helmet
+    with a dark face plate and a faint HUD line, a seal ring at the neck,
+    and a life-support pack with a hose up to the helmet. Each role's old
+    headgear became its helmet, so roles still read across a room:
+    - engineer: hard-hat shell and lamp, yellow or red on a Syndicate ship;
+    - security: SEC band and sun peak;
+    - medic: white helmet with the green disc;
+    - gunner: ear cups and the red eyepiece;
+    - raider: battered helmet with a rust crest and orange goggles;
+    - pirate captain: spike and red eye;
+    - enforcer: gold band;
+    - fixer: gold-tinted plate;
+    - marines, tactical and heavies keep the slab helmets they already had.
+    The raider's bare tattooed arm is now a patched sleeve with the tattoos
+    painted on.
+  - **The portrait** (`portrait.js`, new): talking to someone shows their
+    face beside what they say. It is assembled like a police composite:
+    face shape, jaw and chin, eyes, brows, nose, mouth, ears, hairline,
+    age lines, and the occasional scar or mole, each picked from a small
+    catalogue by the person's seed. It is drawn in graphite on paper:
+    outlines laid twice, hatching for tone, the shadow side
+    cross-hatched, and the suit's collar ring at the bottom. Skin tone,
+    hair and stubble come from the same draws as the body's painted face
+    (`NpcModel.lookOf`), so the sketch is the person in the suit. The
+    same person is always the same face.
+  - Tests: `npc.test.js` checks that every body is sealed and that the
+    portrait matches the body. Probe: `tools/probe-suits.js`.
 
 - **Mouselook on foot (2026-10-25).** Astra: *"we're going to autoset
   mouselook for first person view."* Asked: **on foot only**, with the

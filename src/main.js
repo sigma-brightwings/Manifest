@@ -1490,6 +1490,14 @@
         return;
       }
 
+      /* IN CONVERSATION (dialogue.js): the number keys are your replies,
+       * not the instrument pages, and Esc ends it rather than opening the
+       * menu. Everything else — walking off included — works as usual. */
+      if (G.talk && G.walk && flying()) {
+        if (/^[1-9]$/.test(e.key)) { e.preventDefault(); talkChoose(parseInt(e.key, 10) - 1); return; }
+        if (e.key === 'Escape') { e.preventDefault(); closeTalk(); return; }
+      }
+
       /* Tab, on the F5 SHIP screen, flips between the STATUS & INVENTORY
        * layout and the GUNS board — the guns page's only home now that it
        * has left the deck MFD cycle. Handled here, above the mode dispatch,
@@ -3641,7 +3649,7 @@
     return !!(canvas && typeof document !== 'undefined' && document.pointerLockElement === canvas);
   }
   function walkLookWanted() {
-    return !!(G.walk && flying() && !menuOpen() && !(G.cursor && G.cursor.active));
+    return !!(G.walk && flying() && !menuOpen() && !(G.cursor && G.cursor.active) && !G.talk);
   }
   /* `ask` only from inside an input event; every frame only ever lets go. */
   function syncPointerLock(ask) {
@@ -5198,6 +5206,7 @@
         G.keys = {};
       }
     }
+    updateTalk();
     /* In the seat, the bridge door slides shut behind you. */
     if (!G.walk && G.viewMode === 'cockpit' && global.ShipDeck && global.Render && global.Render.shipInterior) {
       var deck = global.Render.shipInterior(G.ship);
@@ -8966,7 +8975,8 @@
     var you = onDeck ? { x: G.walk.x, z: G.walk.z } : null;
     try {
       return global.Npc.update(sc, dt, { now: npcClock, t: G.t, player: you,
-                                         playerWalking: !!(G.walk && G.walk.ship), helmFree: true });
+                                         playerWalking: !!(G.walk && G.walk.ship), helmFree: true,
+                                         talkTo: G.talk && onDeck ? G.talk.person.id : null });
     } catch (e) { if (global.console) console.error(e); return {}; }
   }
 
@@ -9064,6 +9074,7 @@
     if (!it) return;
     /* Somebody to talk to (npc.js): who they are and a line in character. */
     if (it.kind === 'npc') {
+      if (global.Dialogue) { openTalk(it.npc); return; }
       if (global.Npc) say(global.Npc.talk(it.npc) + (it.npc.forHire ? '   —   terms are on the crew board' : ''), 7);
       return;
     }
@@ -9159,10 +9170,14 @@
   /* What is in front of you, where you are, and how to move: the same over
    * a station's deck and your own (2026-10-24). */
   function drawWalkOverlay(ctx, w, h, room) {
+    /* Rebuilt every frame here, as drawConsole does in flight: on foot
+     * nothing else clears the list, and the icon bar was adding ten more
+     * entries to it every frame you walked. */
+    G.hotspots = [];
     ctx.save();
     ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.textAlign = 'center';
-    var it = G.walk.near;
+    var it = G.talk ? null : G.walk.near;
     if (it) {
       ctx.fillStyle = 'rgba(6,16,22,0.8)';
       var line = 'E  —  ' + it.label;
@@ -9185,7 +9200,101 @@
       ctx.fillText(G.message, w / 2, h - FBAR_H - 46);
     }
     ctx.restore();
+    if (G.talk) drawTalkPanel(ctx, w, h - FBAR_H);
     drawIconBar(ctx, w, h - FBAR_H);
+  }
+
+  /* ---- talking to people (dialogue.js, 2026-10-25) ------------------------
+   * E on somebody opens a conversation: their line over your numbered
+   * replies. 1–9 or a click picks one; a greyed reply says why it is not
+   * open to you. Esc, Goodbye or walking away ends it. The pointer is let go
+   * while you talk (walkLookWanted) and taken back when you are done. */
+  function talkPort() {
+    var p = G.walk && G.walk.plan;
+    var id = p && (p.portId || (G.ship && (G.ship.docked || G.ship.landed)));
+    return (id && G.sys && G.sys.byId) ? G.sys.byId[id] || null : null;
+  }
+  function openTalk(person) {
+    var st = global.Dialogue.open(G, G.sys, talkPort(), person, G.t);
+    if (!st) return;
+    G.talk = { st: st, person: person, closeAt: 0 };
+    G.walk.near = null;
+  }
+  function closeTalk() { G.talk = null; }
+  function talkChoose(i) {
+    var tk = G.talk;
+    if (!tk) return;
+    if (tk.st.end) { closeTalk(); return; }
+    global.Dialogue.choose(G, G.sys, talkPort(), tk.st, i);
+    /* Signing someone on changes who is on the deck. */
+    if (tk.st.hired) npcScene = null;
+    if (tk.st.end) tk.closeAt = performance.now() + 3500;
+  }
+  /* Per frame: walked off, sat down, or said goodbye a moment ago. */
+  function updateTalk() {
+    var tk = G.talk;
+    if (!tk) return;
+    if (!G.walk || !flying() || !global.Dialogue.inRange(G.walk, tk.person) ||
+        (tk.closeAt && performance.now() > tk.closeAt)) closeTalk();
+  }
+  function wrapTalk(ctx, text, maxW) {
+    var words = String(text).split(' '), lines = [], cur = '';
+    for (var i = 0; i < words.length; i++) {
+      var t = cur ? cur + ' ' + words[i] : words[i];
+      if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = words[i]; }
+      else cur = t;
+    }
+    if (cur) lines.push(cur);
+    return lines;
+  }
+  var BAND_INK = { furious: '#ff6b6b', angry: '#ff9a6b', cold: '#9fb4c8', neutral: '#b4f0ff',
+                   warm: '#bfe8a0', glad: '#7dffb0', grateful: '#7dffb0' };
+  function drawTalkPanel(ctx, w, h) {
+    var tk = G.talk, st = tk.st;
+    var opts = st.end ? [] : global.Dialogue.options(G, G.sys, talkPort(), st);
+    /* THE FACE UNDER THE HELMET (portrait.js): a composite sketch beside
+     * what they say, for as long as you are talking. */
+    var pc = global.Portrait ? global.Portrait.canvasFor(tk.person) : null;
+    var picW = pc ? 128 : 0, picH = pc ? 160 : 0;
+    var pw = Math.min(780 + picW, w - 32), px = (w - pw) / 2, pad = 14, tx = px + (pc ? picW + pad : 0);
+    ctx.save();
+    ctx.font = '14px ui-monospace, monospace';
+    var lines = wrapTalk(ctx, '"' + st.line + '"', pw - pad * 2 - (pc ? picW + pad : 0));
+    var rowH = 22, ph = Math.max(pad + 20 + lines.length * 19 + 10 + opts.length * rowH + pad, picH + pad * 2);
+    var py = h - 84 - ph;
+    ctx.fillStyle = 'rgba(5,12,18,0.92)';
+    ctx.fillRect(px, py, pw, ph);
+    ctx.strokeStyle = 'rgba(125,255,207,0.35)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(px + 0.5, py + 0.5, pw - 1, ph - 1);
+    if (pc) ctx.drawImage(pc, px + pad, py + pad, picW, picH);
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = '#ffe9a8';
+    ctx.fillText(st.speaker || tk.person.name, tx + pad, py + pad + 10);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = BAND_INK[st.band] || '#b4f0ff';
+    ctx.fillText(st.band || '', px + pw - pad, py + pad + 10);
+    ctx.textAlign = 'left';
+    ctx.font = '14px ui-monospace, monospace';
+    ctx.fillStyle = st.refused ? '#c08a8a' : '#e6f0ff';
+    var y = py + pad + 20;
+    for (var i = 0; i < lines.length; i++) { y += 19; ctx.fillText(lines[i], tx + pad, y - 4); }
+    y += 10;
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    for (var j = 0; j < opts.length; j++) {
+      var o = opts[j], oy = y + j * rowH;
+      ctx.fillStyle = o.ok ? '#b4f0ff' : '#5d6f78';
+      ctx.fillText((j + 1) + '   ' + o.label + (o.ok ? '' : '   — ' + o.why), tx + pad, oy + 15);
+      hot(tx, oy, pw - (tx - px), rowH, (function (ix) { return function () { talkChoose(ix); }; })(j),
+          o.ok ? 'say this' : o.why);
+    }
+    if (st.end) {
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = '#5d6f78';
+      ctx.fillText('(any number or Esc to walk on)', tx + pad, py + ph - 8);
+    }
+    ctx.restore();
   }
 
   /* ---- cockpit ----------------------------------------------------------

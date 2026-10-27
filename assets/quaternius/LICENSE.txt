@@ -1,0 +1,27 @@
+Quaternius assets used in Manifest's people (src/people-data.js, made by tools/glb2people.cjs):
+  - Universal Animation Library (Standard), https://quaternius.com/packs/universalanimationlibrary.html
+  - Universal Base Characters (Standard): Superhero_Male_FullBody, Superhero_Female_FullBody, https://quaternius.itch.io/universal-base-characters
+Both are CC0 1.0. The original licence text, as shipped with the packs:
+
+This is the standard FREE version of the Universal Base Characters Kit, which only contains 
+a portion of the models . You can buy the SOURCE version which has all the models with rigged .blends,
+and Unity(URP), Unreal Engine and Godot projects
+with custom shaders already set up.
+
+You can get the other version from the website https://quaternius.com
+
+-------------------------------------------------------
+License:
+CC0 1.0 Universal (CC0 1.0) 
+Public Domain Dedication
+https://creativecommons.org/publicdomain/zero/1.0/
+
+------------------------------------------------------
+Models by @Quaternius
+Consider supporting me on Patreon!
+
+https://www.patreon.com/quaternius
+
+-------------------------------------------------------
+Join the Discord Server:
+https://discord.gg/vJqnRUYRfT

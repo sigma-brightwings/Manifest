@@ -392,8 +392,14 @@
    * counts in the shape of the public record — so captains.js reads it
    * the same way — plus the loudest rumour per field, for her to quote. */
   function tally(G, sys, contact, t, idKey) {
+    return tallyAt(G, sys, nodeOf(contact), t, idKey);
+  }
+  /* The same, for a place on the network rather than a ship: 'P:<port>'
+   * is a port, which hears everything any ship berthing there has heard.
+   * The people on a station's deck (dialogue.js, 2026-10-25) know what
+   * their port knows. */
+  function tallyAt(G, sys, node, t, idKey) {
     var out = { counts: {}, top: {} };
-    var node = nodeOf(contact);
     if (!node || !G.rumours || !sys) return out;
     var net = netOf(sys);
     for (var i = 0; i < G.rumours.length; i++) {
@@ -496,7 +502,7 @@
   }
 
   var Rumours = {
-    spawn: spawn, tally: tally, lineFor: lineFor, portHeard: portHeard,
+    spawn: spawn, tally: tally, tallyAt: tallyAt, lineFor: lineFor, portHeard: portHeard,
     propagate: propagate, netOf: netOf, berthTime: berthTime, starSpread: starSpread,
     originFor: originFor, nodeOf: nodeOf, heardAt: heardAt, weightOf: weightOf,
     defer: defer, settle: settle, update: update, onDeath: onDeath, LINES: LINES,

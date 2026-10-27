@@ -500,6 +500,77 @@
     return{g:R,front:a(.04,L.bore-.01,L.hand.z1-.02),rear:a(-.03,L.tube.y-.01,L.stock.z1+.04),port:a(.032,.066,c-.03)};}
   function rod(K,p,a,b,r,col){const A=new THREE.Vector3(a[0],a[1],a[2]),B=new THREE.Vector3(b[0],b[1],b[2]),d=B.clone().sub(A),m=K.m(p,cylR(r,r,d.length(),5),col);m.position.copy(A).add(B).multiplyScalar(.5);m.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),d.normalize());return m;}
 
+  /* ---------- the pressure suit (2026-10-25) ----------
+   * Astra: "replace all NPC models with those that have pressure suits and
+   * helmets … Helmets remain on, but during chat, a portrait drawn in a 2D
+   * style and built a little bit like an FBI sketch" (portrait.js). So every
+   * body is sealed: a helmet shell over the head, a dark visor across the
+   * front with the suit's HUD glowing faintly in it, a seal ring at the neck
+   * and a life-support pack on the back with its hose up to the helmet. What
+   * a role's hat or cap used to say, its helmet says now — the engineer's is
+   * a hard-hat shell (yellow or red on a Syndicate ship), security's carries
+   * the SEC band and a sun peak, the medic's is white with the green disc —
+   * so the roles still read across a room. The face is still painted under
+   * the shell; nothing outside ever sees it. */
+  function helmet(K,g,o){const cy=1.632,sc=[1,1.04,1.06];
+    K.m(g,ico(.152,1),o.src||o.col,0,cy,.004,{s:sc});
+    /* The face plate: most of the front of the helmet, brow to chin, unless
+     * the role wants a slit (gunner, raider, pirate captain). */
+    const vb=o.visor==='slot'?[1.32,.3]:o.visor==='low'?[.95,1.0]:[.82,1.2],vw=o.visor==='slot'?1.9:2.15;
+    K.m(g,new THREE.SphereGeometry(.157,14,6,PI/2-vw/2,vw,vb[0],vb[1]),o.tint||'#0d1417',0,cy,.004,{s:sc});
+    if(o.glow)K.g(g,box(.1,.006,.004),o.glow,0,cy-.035,.171);
+    K.m(g,cylR(.104,.112,.05,10),o.ring||'#5F5E5A',0,1.5,0);
+    if(o.lamp)K.g(g,box(.042,.026,.02),'#FAC775',.09,cy+.07,.135,{ry:.5});}
+  /* ---------- the face kit, where it shows through a sealed suit (2026-10-26) ----------
+   * Astra: "let's make a variant for each class type, since some of that
+   * would still be visible in person". The portrait rolls each person's kit
+   * (portrait.js GEAR); the part of it a helmet doesn't hide goes on the body
+   * too, fitted to that role's helmet:
+   *   eyepiece   a lens glowing on the visor over one eye, its housing on the shell
+   *   cybereye   a small hard point of light behind the visor
+   *   goggles    pushed up and strapped round the outside of the helmet
+   *   rebreather filter canisters at the chin, a grille between them
+   *   headset    a whip antenna off the side of the helmet
+   * Glasses, shades, an eyepatch, an earpiece, ink, paint and metal are all
+   * under the shell: only the portrait has them. HEAD_FIT is each helmet's
+   * eye height, how far forward the visor face is, and the side of the
+   * shell; slab helmets (tactical, marine, heavy) are flatter in front. */
+  const KIT_SHOWN=['eyepiece','cybereye','goggles','rebreather','headset'];
+  const HEAD_FIT={_:{eye:1.644,front:.168,side:.155,brow:1.715,chin:1.545},
+    tactical:{eye:1.632,front:.13,side:.134,brow:1.70,chin:1.54,slab:true},
+    marine:{eye:1.645,front:.13,side:.134,brow:1.705,chin:1.54,slab:true},
+    heavy:{eye:1.636,front:.136,side:.14,brow:1.705,chin:1.54,slab:true},
+    gunner:{eye:1.64,front:.168,side:.19,brow:1.715,chin:1.545}};
+  /* What the role's own helmet already carries there. */
+  const KIT_BUILTIN={gunner:{eyepiece:'R',headset:'*'},raider:{goggles:'*'},captain:{eyepiece:'R',cybereye:'R'}};
+  const LENS=['#5fd0e0','#e0a53a','#d8483e','#8ad06a'];
+  function kitOn(K,g,key,gear){
+    if(!gear)return;const F=HEAD_FIT[key]||HEAD_FIT._,own=KIT_BUILTIN[key]||{};
+    const has=(k)=>gear[k]&&!(own[k]==='*'||own[k]===gear[k].side);
+    const sd=(k)=>gear[k].side==='L'?-1:1,lens=(k)=>LENS[Math.floor(gear[k].tint*LENS.length)%LENS.length];
+    if(has('eyepiece')){const x=sd('eyepiece')*.048;
+      K.m(g,cylR(.027,.027,.014,10),'#3a3d40',x,F.eye,F.front+.003,{rx:PI/2});
+      K.g(g,cylR(.019,.019,.01,10),lens('eyepiece'),x,F.eye,F.front+.009,{rx:PI/2});
+      rod(K,g,[x+Math.sign(x)*.027,F.eye,F.front],[Math.sign(x)*F.side*.92,F.eye+.01,F.front*.45],.006,'#3a3d40');
+      K.m(g,box(.022,.03,.03),'#3a3d40',Math.sign(x)*F.side*.95,F.eye+.01,F.front*.4);}
+    if(has('cybereye'))K.g(g,cylR(.009,.009,.006,8),lens('cybereye'),sd('cybereye')*.046,F.eye,F.front+.004,{rx:PI/2});
+    if(has('goggles')){const y=F.brow,z=F.front*.84,c=lens('goggles');
+      const bd=F.slab?.142:.165;           // the strap, just proud of the shell all the way round
+      K.m(g,cylR(bd,bd,.016,12,true),'#4a3a2c',0,y,0,{s:[1,1,F.slab?1:1.06],ds:1});
+      for(const s2 of [-1,1]){K.m(g,cylR(.024,.024,.024,10),'#4a4640',s2*.046,y,z,{rx:PI/2-.35});
+        K.g(g,cylR(.016,.016,.01,10),c,s2*.046,y+.004,z+.01,{rx:PI/2-.35});}}
+    if(has('rebreather')){const y=F.chin,z=F.front*.78;
+      for(const s2 of [-1,1])K.m(g,cylR(.024,.022,.065,8),'#7a7f72',s2*.075,y,z,{rx:PI/2-.5,rz:-s2*.35});
+      K.m(g,box(.06,.034,.022),'#4a4e56',0,y-.004,z+.018);
+      for(let i=0;i<3;i++)K.m(g,box(.046,.004,.004),'#2b2b2a',0,y-.014+i*.01,z+.03);}
+    if(has('headset')){const s2=sd('headset'),x=s2*F.side*1.02;
+      K.m(g,cylR(.02,.02,.03,8),'#2b2b2a',x,F.eye,-.01,{rz:PI/2});
+      rod(K,g,[x,F.eye+.01,-.02],[x+s2*.02,F.eye+.2,-.06],.004,'#2b2b2a');
+      K.g(g,box(.01,.01,.01),'#E24B4A',x+s2*.02,F.eye+.205,-.06);}
+  }
+  function pack(K,g,col,B){B=B||1;K.m(g,box(.26*B,.32,.11),col,0,1.23,-.17*B);K.m(g,box(.2*B,.05,.09),shade(col,.7),0,1.41,-.165*B);
+    rod(K,g,[.07,1.4,-.17*B],[.06,1.56,-.115],.014,'#2b2b2a');}
+
   /* ---------- painted parts ---------- */
   function face(K,s){const H=K.p('head'),sk=s.skin;H.fill(sk).noise(.04).wrap(.22);
     const d=shade(sk,.62),m=shade(sk,.82);
@@ -527,14 +598,18 @@
     else if(k==='pir'){c.strokeStyle=G.red;c.lineWidth=Math.max(1.5,s*.32);c.beginPath();c.moveTo(x-s,y-s);c.lineTo(x+s,y+s);c.moveTo(x+s,y-s);c.lineTo(x-s,y+s);c.stroke();}});}
 
   /* ---------- base humanoid ---------- */
-  function body(K,s){
+  /* body() makes the bare figure; everything a role adds after it is kit
+   * (helmet, pack, vests, rifles …). The meshes are tagged so people.js can
+   * lift the kit off onto a Quaternius body, and the spec is kept for the
+   * suit's colours. */
+  function body(K,s){K.inBody=true;K.spec=s;const r_=body0(K,s);K.inBody=false;return r_;}
+  function body0(K,s){
     const g=new THREE.Group(),B=s.bulk||1,legC={L:s.legL||s.pants,R:s.legR||s.pants},arms={},upper={},legs={},J={};
     K.p('torso').cloth(s.shirt);K.p('pelvis').cloth(s.pants);face(K,s);
     K.m(g,cylR(.17*B,.15*B,.14,8),'pelvis',0,.94,0,{s:[1,1,.7]});
     K.m(g,lathe(TORSO,8,B),'torso',0,1.23,0,{s:[1,1,.62]});
     K.m(g,cylR(.05,.056,.08),s.skin,0,1.49,0);
     K.m(g,headGeo(),'head',0,1.61,0);
-    if(!s.helmet)K.m(g,box(.022,.034,.03),s.skin,0,1.598,.104);
     for(const sd of [-1,1]){const k=sd<0?'L':'R',sc=s['sleeve'+k]||s.shirt,fc=s['fore'+k]||sc,hc=s['hand'+k]||s.gloves||s.skin,bc=s['boot'+k]||s.boots;
       K.p('thigh'+k).cloth(legC[k]).seam(.02);K.p('shin'+k).cloth(legC[k]).seam(.02);
       limb(K.p('up'+k),sc,s.skin);limb(K.p('fo'+k),fc,s.skin);bootP(K.p('boot'+k),bc);handP(K.p('hand'+k),hc,hc===s.skin);
@@ -545,7 +620,7 @@
       K.m(kneeI,cylR(.067*B,.054*B,.42),'shin'+k,lx,.29,0);
       const ank=grp(kneeI,lx,.09,0),ankI=grp(ank,-lx,-.09,0);J['ankle'+k]=ank;legs[k].ankle=ankI;
       K.m(kneeI,ico(.052*B,0),bc,lx,.09,0);
-      K.m(ankI,box(.12*B,.1,.26),'boot'+k,lx,.06,.035);K.m(ankI,box(.126*B,.022,.27),'#1b1b1b',lx,.011,.035);
+      K.inBody=false;K.m(ankI,box(.12*B,.1,.26),'boot'+k,lx,.06,.035);K.m(ankI,box(.126*B,.022,.27),'#1b1b1b',lx,.011,.035);K.inBody=true;   // boots go with the kit onto a new body (people.js)
       const u=grp(g,sd*.25*B,1.42,0,{rz:sd*.09});upper[k]=u;
       K.m(u,ico(.07*B,0),sc,0,-.01,0);
       K.m(u,cylR(.058*B,.05*B,.3),'up'+k,0,-.15,0);
@@ -578,13 +653,11 @@
   /* ---------- roster ---------- */
   const FAC={crew:{name:'Ship crew',col:'--crew'},pirate:{name:'Pirates',col:'--pirate'},syn:{name:'Syndicate',col:'--syn'},navy:{name:'Navy',col:'--navy'}};
   const R=[
-  {key:'pilot',fac:'crew',role:'Pilot',room:'Cockpit',name:'Ines Varga',notes:['Rounded flight helmet with a wraparound visor','Harness straps and leg loops are painted, not modelled','One-piece flight suit in the ship\'s livery'],
+  {key:'pilot',fac:'crew',role:'Pilot',room:'Cockpit',name:'Ines Varga',notes:['Sealed flight helmet with a wraparound visor','Harness straps and leg loops are painted, not modelled','One-piece flight suit in the ship\'s livery'],
    build(K,r,c){const o=c.o,b=crewBody(K,c,{pants:o.shirt,gloves:'#3a3a38'}),g=b.g,T=K.p('torso'),Hn=o.harness;
     T.ln([[.36,.04],[.6,.74]],Hn,6).ln([[.64,.04],[.4,.74]],Hn,6).r(.47,.34,.06,.1,'#B4B2A9').r(.485,.36,.03,.06,'#5F5E5A');
     ['L','R'].forEach(k=>{K.p('thigh'+k).r(0,.06,1,.08,Hn).r(.38,.8,.24,.2,'#3a3a38');K.p('shin'+k).r(.38,0,.24,.16,'#3a3a38');});
-    K.m(g,ico(.135),o.helm,0,1.625,0);
-    K.g(g,new THREE.CylinderGeometry(.139,.139,.055,12,1,true,-1,2),o.glow==='#5DCAA5'?'#5DB0F0':o.glow,0,1.628,0,{ds:1});
-    K.m(g,cylR(.09,.1,.04,8),o.acc,0,1.5,0);K.m(g,box(.07,.1,.05),shade(o.shirt,.75),.13,.72,.05);
+    helmet(K,g,{col:o.helm,visor:'wide',glow:o.glow==='#5DCAA5'?'#5DB0F0':o.glow,ring:o.acc});pack(K,g,shade(o.shirt,.8));K.m(g,box(.07,.1,.05),shade(o.shirt,.75),.13,.72,.05);
     return b;}},
   {key:'engineer',fac:'crew',role:'Engineer',room:'Engine room',name:'Tobiah Rusk',notes:['Hard hat: seeded on civilian ships, yellow or red on Syndicate ships','Reflective bands and knee pads painted on','Toolbelt with pouches, wrench in hand'],
    build(K,r,c){const o=c.o,b=crewBody(K,c,{gloves:'#7a5236'}),g=b.g,band=o.trim||'#d8d8d0';
@@ -593,32 +666,32 @@
     if(c.liv==='syn')Ht.txt(String(10+Math.floor(r()*89)),.25,.5,13,'#1a1a19');
     if(c.liv==='civ')Ht.r(.2,.35,.1,.3,shade(o.hat,.8)).r(.7,.35,.1,.3,shade(o.hat,.8));
     if(o.worn)for(let i=0;i<9;i++)Ht.dot(r(),.2+r()*.6,1+r()*2,'rgba(0,0,0,.35)');
-    K.m(g,dome(.13,10,3),'hat',0,1.655,0);K.m(g,cylR(.165,.165,.016,10),shade(o.hat,.9),0,1.66,0);K.m(g,box(.03,.03,.24),o.hat,0,1.775,0);
+    helmet(K,g,{src:'hat',visor:'wide',glow:o.glow,lamp:true});K.m(g,box(.03,.03,.25),o.hat,0,1.795,0);pack(K,g,shade(o.shirt,.8));
     ['L','R'].forEach(k=>{K.p('fo'+k).r(0,.4,1,.1,band).r(0,.43,1,.03,o.trim?shade(band,.8):'#B8D23C');K.p('shin'+k).r(0,.5,1,.08,band);
       K.p('thigh'+k).r(.38,.8,.24,.2,'#454a3a');K.p('shin'+k).r(.38,0,.24,.18,'#454a3a');});
     K.m(g,cylR(.18,.18,.07,8),'#633806',0,.9,0,{s:[1,1,.76]});
     [[-.17,.06],[.17,.06],[0,.135]].forEach(p=>K.m(g,box(.07,.09,.05),'#854F0B',p[0],.87,p[1]));
     const a=b.arms.R;K.m(a,box(.026,.3,.022),'#B4B2A9',0,-.74,.03);K.m(a,new THREE.TorusGeometry(.035,.012,3,6),'#B4B2A9',0,-.9,.03);
     return b;}},
-  {key:'gunner',fac:'crew',role:'Gunner',room:'Turret room',name:'Pell Achterberg',notes:['Quilted padded vest painted over the suit','Headset with boom mic, red targeting eyepiece','Flak collar against spall'],
+  {key:'gunner',fac:'crew',role:'Gunner',room:'Turret room',name:'Pell Achterberg',notes:['Quilted padded vest painted over the suit','Ear cups and boom mic on the helmet, red targeting eyepiece over the visor','Flak collar against spall'],
    build(K,r,c){const o=c.o,b=crewBody(K,c,{gloves:'#3a3d3f'}),g=b.g,T=K.p('torso'),v=shade(o.shirt,.72);
     T.r(.22,.1,.56,.66,v);for(let i=0;i<7;i++){T.ln([[.22+i*.09,.1],[.22+i*.09-.12,.76]],'rgba(0,0,0,.35)',1).ln([[.22+i*.09,.1],[.22+i*.09+.12,.76]],'rgba(0,0,0,.35)',1);}
     T.ln([[.5,.1],[.5,.76]],'rgba(0,0,0,.6)',2);
     K.m(g,cylR(.2,.25,.09,8),G.steelD,0,1.45,0,{s:[1,1,.72]});
-    rod(K,g,[-.115,1.61,0],[-.075,1.715,0],.01,'#3a3d3f');rod(K,g,[-.075,1.715,0],[.075,1.715,0],.01,'#3a3d3f');rod(K,g,[.075,1.715,0],[.115,1.61,0],.01,'#3a3d3f');
-    for(const sd of [-1,1])K.m(g,cylR(.045,.045,.04,8),'#3a3d3f',sd*.105,1.61,0,{rz:PI/2});
-    rod(K,g,[-.12,1.6,.015],[-.035,1.555,.1],.007,'#3a3d3f');K.m(g,box(.02,.015,.015),'#2b2b2a',-.035,1.555,.103);
-    K.g(g,cylR(.026,.026,.04,6),G.red,.04,1.626,.112,{rx:PI/2});
+    helmet(K,g,{col:shade(o.shirt,.85),visor:'slot',glow:o.glow});pack(K,g,shade(o.shirt,.7));
+    for(const sd of [-1,1])K.m(g,cylR(.05,.05,.04,8),'#3a3d3f',sd*.16,1.62,0,{rz:PI/2});
+    rod(K,g,[-.16,1.6,.03],[-.08,1.56,.15],.007,'#3a3d3f');K.m(g,box(.02,.015,.015),'#2b2b2a',-.08,1.56,.153);
+    K.g(g,cylR(.026,.026,.03,6),G.red,.05,1.64,.172,{rx:PI/2});
     return b;}},
-  {key:'security',fac:'crew',role:'Security',room:'Mess, corridors, berths',name:'Dana Mbeki',notes:['Everyday duty: breaking up crew fights, escorting, watching the brig','Stun baton in hand; sidearm stays holstered unless it is needed','Peaked duty cap, shoulder radio, vest stencilled SECURITY'],
+  {key:'security',fac:'crew',role:'Security',room:'Mess, corridors, berths',name:'Dana Mbeki',notes:['Everyday duty: breaking up crew fights, escorting, watching the brig','Stun baton in hand; sidearm stays holstered unless it is needed','Helmet with the SEC band and a sun peak, shoulder radio, vest stencilled SECURITY'],
    build(K,r,c){const o=c.o,b=crewBody(K,c,{gloves:'#3a3d3f'}),g=b.g,T=K.p('torso'),vest=shade(o.shirt,.62);
     T.r(.26,.12,.48,.52,vest).ln([[.5,.12],[.5,.64]],'rgba(0,0,0,.45)',1).r(.27,.28,.2,.06,'rgba(240,240,230,.85)').txt('SECURITY',.37,.31,7,vest).r(0,.36,.22,.07,'rgba(240,240,230,.75)').txt('SECURITY',.11,.395,7,vest);
     if(o.emb)emblem(T,.62,.24,o.emb,6);
     K.p('upL').r(0,.3,1,.14,o.acc);
     const capC=shade(o.shirt,.8);
     K.p('hat').fill(capC).noise(.05).vgrad(.1).r(0,.55,1,.2,o.acc).txt('SEC',.25,.3,10,'rgba(240,240,230,.85)');
-    K.m(g,cylR(.112,.108,.07,10),'hat',0,1.685,0);K.m(g,dome(.112,10,2),capC,0,1.72,0,{s:[1,.5,1]});
-    K.m(g,box(.16,.012,.08),'#1b1b1b',0,1.66,.115,{rx:-.25});
+    helmet(K,g,{src:'hat',visor:'wide',glow:o.glow});pack(K,g,shade(o.shirt,.7));
+    K.m(g,box(.17,.012,.07),'#1b1b1b',0,1.735,.155,{rx:-.2});
     K.m(g,box(.04,.06,.03),'#2b2f31',-.13,1.42,.1);K.m(g,box(.008,.05,.008),'#2b2f31',-.14,1.475,.1);K.g(g,box(.012,.008,.006),o.glow,-.12,1.43,.116);
     const Lh=b.legs.R.hip;K.m(Lh,box(.06,.16,.08),'#2b2f31',.17,.73,0);K.m(Lh,box(.1,.025,.09),'#2b2f31',.13,.8,0);
     K.m(Lh,box(.032,.075,.04),'#26292b',.17,.84,-.005,{rx:-.15});
@@ -633,7 +706,7 @@
     K.p('upL').r(0,.3,1,.14,o.acc);
     K.p('helm').fill('#3a3f42').noise(.05).wrap(.3).r(0,.85,1,.15,'#2a2e30').ln([[0,.3],[1,.3]],'rgba(0,0,0,.4)',1).txt('TAC',.15,.55,10,o.acc);
     K.m(g,cylR(.132,.125,.24,8),'helm',0,1.625,0,{s:[1,1,.97]});K.m(g,dome(.13,8,2),'#3a3f42',0,1.745,0,{s:[1,.35,.97]});
-    K.g(g,box(.2,.032,.02),o.glow,0,1.632,.124);
+    K.g(g,box(.2,.032,.02),o.glow,0,1.632,.124);K.m(g,cylR(.104,.112,.05,10),'#2a2e30',0,1.5,0);pack(K,g,'#3a3f42');
     for(const sd of [-1,1])K.m(g,dome(.1,6,2),'#3a3f42',sd*.27,1.44,0,{s:[1.15,.8,1.15]});
     for(const sd of [-1,1])K.m(b.legs[sd<0?'L':'R'].knee,box(.09,.1,.04),'#3a3f42',sd*.09,.5,.07);
     const Lh=b.legs.R.hip;K.m(Lh,box(.06,.16,.08),'#2b2f31',.17,.73,0);K.m(Lh,box(.1,.025,.09),'#2b2f31',.13,.8,0);K.m(Lh,box(.032,.075,.04),'#26292b',.17,.84,-.005,{rx:-.15});
@@ -642,7 +715,7 @@
       strap(K,g,rf.port,anchor(g,.125,1.585,-.03),[[.3,1.0,.06],[.29,1.3,.03],[.2,1.48,-.04]],.005,'#151515')];
     K.m(g,box(.02,.03,.03),'#151515',.125,1.585,-.03);
     return b;}},
-  {key:'medic',fac:'crew',role:'Medic',room:'Medbay',name:'Yusuf Halloran',notes:['Caduceus (the staff of Hermes) on a green disc, not a red cross','White sleeves, sash strap and headband all painted','Head lamp and satchel modelled'],
+  {key:'medic',fac:'crew',role:'Medic',room:'Medbay',name:'Yusuf Halloran',notes:['Caduceus (the staff of Hermes) on a green disc, not a red cross','White sleeves and sash strap painted; white helmet with the green disc','Head lamp and satchel modelled'],
    build(K,r,c){const o=c.o,wh='#E3E1DA',b=crewBody(K,c,{sleeveL:wh,sleeveR:wh,gloves:'#D3D1C7'}),g=b.g,T=K.p('torso');
     const cad=(P,fx,fy,s,sx)=>P.draw((cx,X0,Y,W,H)=>{const x=0,y=Y+fy*H,wh='#F1EFE8';cx.save();cx.translate(X0+fx*W,0);cx.scale(sx,1);
       cx.fillStyle=wh;cx.beginPath();cx.arc(x,y,s+1.5,0,PI*2);cx.fill();cx.fillStyle='#639922';cx.beginPath();cx.arc(x,y,s,0,PI*2);cx.fill();
@@ -653,15 +726,15 @@
         cx.beginPath();cx.arc(x+sd*s*.16,y0-s*.04,lw*.9,0,PI*2);cx.fill();}cx.restore();});
     cad(T,.4,.34,22,.55);cad(K.p('upR'),.75,.3,14,.6);
     T.ln([[.64,.02],[.36,.86]],'#C9C6BC',5);
-    K.p('head').r(0,.27,1,.06,wh);
-    K.g(g,box(.05,.035,.03),'#FAC775',0,1.672,.106);
+    helmet(K,g,{col:wh,visor:'wide',glow:'#97C459',lamp:true});pack(K,g,'#C9C6BC');
+    K.m(g,cylR(.036,.036,.01,10),'#639922',0,1.745,.115,{rx:PI/2-.75});K.m(g,box(.006,.05,.012),'#F1EFE8',0,1.747,.12,{rx:-.75});
     K.m(g,box(.14,.14,.07),'#C9C6BC',-.21,.9,.05);
     return b;}},
   {key:'loadmaster',fac:'crew',role:'Loadmaster',room:'Cargo bay',name:'Grit Solberg',notes:['Exo-frame hinged at the elbows and knees, clamped on with cuffs','Oversized power gloves','Hazard chevrons painted on the back; radio mast on the frame'],
    build(K,r,c){const o=c.o,b=crewBody(K,c),g=b.g,T=K.p('torso'),hz=o.trim||'#B8D23C';
     for(let i=0;i<6;i++)T.poly([[i*.04,.3],[i*.04+.02,.3],[i*.04+.06,.6],[i*.04+.04,.6]],i%2?'#1b1b1b':hz);
     for(let i=0;i<6;i++)T.poly([[1-i*.04,.3],[1-i*.04-.02,.3],[1-i*.04-.06,.6],[1-i*.04-.04,.6]],i%2?'#1b1b1b':hz);
-    K.m(g,dome(.116,8,2),o.acc,0,1.648,0);K.m(g,box(.12,.012,.08),o.acc,0,1.655,.12);
+    helmet(K,g,{col:o.acc,visor:'wide',glow:o.glow,lamp:true});
     K.m(g,box(.62,.045,.06),'#9a9891',0,1.47,-.02);K.m(g,box(.045,.56,.045),'#9a9891',0,1.2,-.13);
     K.m(g,box(.04,.03,.04),'#5F5E5A',.2,1.507,-.02);rod(K,g,[.2,1.52,-.02],[.2,1.82,-.02],.008,'#9a9891');K.g(g,box(.025,.025,.025),o.glow,.2,1.83,-.02);
     for(const sd of [-1,1]){const k=sd<0?'L':'R',Lg=b.legs[k],U=b.upper[k],a=b.arms[k],fr='#9a9891',cu='#444441',hg='#5F5E5A';
@@ -673,9 +746,10 @@
       K.m(a,cylR(.026,.026,.026,8),hg,sd*.078,-.3,0,{rz:PI/2});
       K.m(a,box(.115,.14,.1),shade(hz,.9),0,-.62,0);K.m(a,cylR(.062,.062,.05,6),'#444441',0,-.53,0);}
     return b;}},
-  {key:'raider',fac:'pirate',role:'Raider',room:'Boarding party',name:'Scab',notes:['One bare tattooed arm, one stolen navy pauldron (side is seeded)','Patches and stitching painted; red bandana painted on the face','Orange goggles glow first in a dark corridor'],
+  {key:'raider',fac:'pirate',role:'Raider',room:'Boarding party',name:'Scab',notes:['One patched sleeve painted with tattoo work, one stolen navy pauldron (side is seeded)','Patches and stitching painted; a battered helmet with a crest of rust spikes','Orange goggles glow first in a dark corridor'],
    build(K,r,c){const f=c.flip,bareL=f<0;
-    const b=body(K,{shirt:G.rust,pants:'#5F5E5A',legL:bareL?'#5F5E5A':'#444441',legR:bareL?'#444441':'#5F5E5A',sleeveL:bareL?c.skin:G.rust,sleeveR:bareL?G.rust:c.skin,boots:'#2b2724',bootL:bareL?'#2b2724':'#633806',bootR:bareL?'#633806':'#2b2724',skin:c.skin,hair:c.hair,style:'mohawk'}),g=b.g,T=K.p('torso');
+    const pat='#6b5040';
+    const b=body(K,{shirt:G.rust,pants:'#5F5E5A',gloves:'#3a2a20',legL:bareL?'#5F5E5A':'#444441',legR:bareL?'#444441':'#5F5E5A',sleeveL:bareL?pat:G.rust,sleeveR:bareL?G.rust:pat,boots:'#2b2724',bootL:bareL?'#2b2724':'#633806',bootR:bareL?'#633806':'#2b2724',skin:c.skin,hair:c.hair,style:'mohawk'}),g=b.g,T=K.p('torso');
     T.patch(.3,.2,.14,.16,'#6b4a32').patch(.58,.45,.12,.12,'#5F5E5A').ln([[.42,.6],[.5,.7],[.44,.8]],'rgba(0,0,0,.5)',1);
     emblem(T,.15,.3,'pir',5);
     ['up','fo'].forEach(p=>{const P=K.p(p+(bareL?'L':'R')),tc='rgba(20,60,70,.75)';P.ln([[.3,.1],[.6,.3],[.35,.5],[.65,.75]],tc,2).ln([[.45,.05],[.45,.9]],tc,1);});
@@ -683,9 +757,9 @@
     K.p('head').poly([[.3,.53],[.7,.53],[.62,.72],[.5,.86],[.38,.72]],G.red).ln([[.36,.6],[.64,.6]],shade(G.red,.7),1);
     for(let i=0;i<8;i++){const a=i/8*PI*2+.2;K.m(g,cone(.042,.12,3),G.rust,Math.sin(a)*.165,.96,Math.cos(a)*.11,{rx:PI});}
     K.m(g,box(.15,.07,.15),G.navy,-f*.29,1.46,0,{rz:-f*.3});
-    for(let i=0;i<4;i++)K.m(g,cone(.02,.07+i%2*.02,3),c.hair,0,1.75,-.07+i*.045);
-    for(const sd of [-1,1])K.g(g,cylR(.028,.028,.03,6),G.pGlow,sd*.04,1.668,.1,{rx:PI/2});
-    K.m(g,new THREE.TorusGeometry(.105,.01,3,10),'#1e1a17',0,1.668,0,{rx:PI/2});
+    helmet(K,g,{col:'#6e5a48',visor:'slot',tint:'#1a1210',ring:'#3a2a20'});pack(K,g,'#5a4a3a');
+    for(let i=0;i<4;i++)K.m(g,cone(.022,.08+i%2*.02,3),G.rust,0,1.81,-.08+i*.05);
+    for(const sd of [-1,1])K.g(g,cylR(.028,.028,.03,6),G.pGlow,sd*.045,1.66,.172,{rx:PI/2});
     const a=b.arms[bareL?'L':'R'];K.m(a,box(.022,.44,.055),'#B4B2A9',0,-.86,.03);K.m(a,box(.03,.1,.04),'#3a2a20',0,-.62,.03);
     return b;}},
   {key:'captain',fac:'pirate',role:'Captain',room:'Someone else\'s bridge',name:'Mother Corrow',notes:['Long torn coat, patched and stitched in the skin','Prosthetic arm with painted panel lines and rivets','Trophy plates stacked on one shoulder, one red eye'],
@@ -697,10 +771,11 @@
     K.m(g,skirtGeo(.17,.31,.66,7,true),'coat',0,.63,0,{ds:1});
     for(const sd of [-1,1])K.m(b.legs[sd<0?'L':'R'].knee,cylR(.072,.072,.22,6),'#1f1d1b',sd*.09,.18,0);
     const sx=-f*.29;[[G.steelD,0],[G.navy,.05],['#B05535',.1]].forEach((p,i)=>K.m(g,box(.17-i*.02,.035,.16-i*.02),p[0],sx,1.45+p[1],0,{rz:-f*(.25+i*.12)}));
-    K.m(g,cone(.125,.27,5),G.steel,0,1.79,0);K.m(g,cylR(.135,.135,.025,8),G.steelD,0,1.665,0);
-    K.g(g,box(.04,.022,.01),G.red,.036,1.626,.108);
+    helmet(K,g,{col:G.steelD,visor:'slot',tint:'#140c0a',ring:G.steel});pack(K,g,G.rustD);
+    K.m(g,cone(.09,.18,5),G.steel,0,1.86,0);
+    K.g(g,box(.04,.022,.01),G.red,.045,1.645,.172);
     return b;}},
-  {key:'enforcer',fac:'syn',role:'Enforcer',room:'Port concourse',name:'Mr. Lisle',notes:['Knee-length coat with painted lapels and buttons','Gold cap band is the only colour on them','Half-mask painted on the face; baton in hand'],
+  {key:'enforcer',fac:'syn',role:'Enforcer',room:'Port concourse',name:'Mr. Lisle',notes:['Knee-length coat with painted lapels and buttons','Gold cap band is the only colour on them','Black visor with a gold HUD line; baton in hand'],
    build(K,r,c){const b=body(K,{shirt:G.syn,pants:'#323130',boots:'#1a1a19',gloves:'#1a1a19',skin:c.skin,hair:c.hair,style:'buzz'}),g=b.g,T=K.p('torso');
     T.poly([[.42,0],[.5,.5],[.38,.3]],'#1a1a19').poly([[.58,0],[.5,.5],[.62,.3]],'#1a1a19');for(let i=0;i<3;i++)T.dot(.53,.55+i*.12,1.6,'#4a4946');
     K.p('head').r(.33,.56,.34,.24,'#1a1a19').ln([[.34,.67],[.66,.67]],'#2f2e2c',1);
@@ -708,7 +783,7 @@
     K.m(g,skirtGeo(.165,.255,.5,8),'coat',0,.69,0,{ds:1});
     K.m(g,cylR(.085,.125,.14,8,true),G.syn,0,1.515,0,{ds:1});
     K.p('helm').fill(G.syn).noise(.04).wrap(.3).r(0,.68,1,.24,G.gold).r(0,.74,1,.04,shade(G.gold,.7));
-    K.m(g,cylR(.112,.112,.075,8),'helm',0,1.69,0);K.m(g,box(.13,.012,.075),G.syn,0,1.66,.1);
+    helmet(K,g,{src:'helm',visor:'wide',tint:'#0b0b0b',glow:G.gold,ring:'#1a1a19'});pack(K,g,'#1f1f1e');
     K.m(b.arms.R,cylR(.016,.016,.36,6),G.steelD,0,-.74,.05,{rx:.35});
     return b;}},
   {key:'heavy',fac:'syn',role:'Heavy',room:'Wherever the hull docks',name:'Bruno Kasza',notes:['Bulked frame to pair with the enforcer_heavy hull','Armour plating painted; riot shield with stencilling and scuffs','Gold visor slit'],
@@ -718,17 +793,18 @@
     for(const sd of [-1,1])K.m(g,box(.21,.12,.21),G.synL,sd*.35,1.47,0,{rz:sd*-.15});
     K.p('helm').fill(G.synL).noise(.05).wrap(.3).ln([[0,.25],[1,.25]],'rgba(0,0,0,.4)',1);
     K.m(g,cylR(.137,.13,.25,8),'helm',0,1.625,0);K.m(g,dome(.136,8,2),G.synL,0,1.75,0,{s:[1,.35,1]});
-    K.g(g,box(.16,.018,.02),G.gold,0,1.636,.13);
+    K.g(g,box(.16,.018,.02),G.gold,0,1.636,.13);K.m(g,cylR(.13,.14,.05,10),'#1a1a19',0,1.5,0);pack(K,g,G.synL,1.28);
     const Sh=K.p('coat').fill('#55544f').noise(.07).vgrad(.08).r(0,.26,1,.07,G.gold).r(.3,.42,.4,.1,'#2b2b2a').txt('R-0'+(1+Math.floor(r()*9)),.5,.75,14,'rgba(0,0,0,.55)');
     for(let i=0;i<10;i++)Sh.ln([[r(),r()],[r(),r()]],'rgba(255,255,255,.12)',1);
     b.hold={L:1};const sg=grp(g,-.35,1.0,.17,{ry:-.35});K.m(sg,box(.44,.78,.035),'coat');rod(K,g,[-.37,.82,.02],[-.36,.85,.15],.014,'#2b2b2a');K.m(g,box(.03,.12,.03),'#2b2b2a',-.36,.85,.15);
     return b;}},
-  {key:'fixer',fac:'syn',role:'Fixer',room:'A quiet booth',name:'Celeste Aumont',notes:['No armour, face showing: talk, don\'t shoot','Suit, shirt and gold tie all painted on','Datapad for quoting the price of silence'],
+  {key:'fixer',fac:'syn',role:'Fixer',room:'A quiet booth',name:'Celeste Aumont',notes:['No armour: talk, don\'t shoot. Gold-tinted visor, a gold seal ring','Suit, shirt and gold tie all painted on','Datapad for quoting the price of silence'],
    build(K,r,c){const b=body(K,{shirt:G.syn,pants:G.syn,boots:'#412402',skin:c.skin,hair:c.hair,style:'slick',bulk:.94}),g=b.g,T=K.p('torso');
     T.poly([[.42,0],[.58,0],[.5,.45]],G.white).poly([[.485,.08],[.515,.08],[.525,.52],[.5,.58],[.475,.52]],G.gold);
     T.poly([[.4,0],[.5,.5],[.36,.32]],'#1a1a19').poly([[.6,0],[.5,.5],[.64,.32]],'#1a1a19').r(.33,.28,.06,.03,G.white);
     K.p('pelvis').r(0,0,1,.18,'#1a1a19');
     K.g(b.arms.R,box(.09,.13,.012),G.tealG,0,-.63,.065,{rx:-.5});
+    helmet(K,g,{col:G.syn,visor:'low',tint:'#2a1e08',glow:G.gold,ring:G.gold});pack(K,g,'#1f1f1e',.94);
     return b;}},
   {key:'marine',fac:'navy',role:'Marine',room:'Boarding and inspection',name:'Pvt. Okafor',notes:['Chest rig with three spare rifle magazines in open-top pouches, radio and admin pouch','Square pauldrons with white trim','Rifle across the chest on a two-point sling; smart optic cabled up to the helmet HUD','T-visor helmet; chevron and plate seams painted'],
    build(K,r,c){const b=body(K,{shirt:G.navy,pants:G.navyD,boots:'#1c2732',gloves:G.navyD,skin:c.skin,helmet:true}),g=b.g,T=K.p('torso');
@@ -739,7 +815,7 @@
     for(const sd of [-1,1])K.m(g,box(.15,.11,.15),'pad',sd*.29,1.45,0);
     K.p('helm').fill(G.navyD).noise(.04).wrap(.3).r(0,.88,1,.08,G.white).txt(String(100+Math.floor(r()*899)),.0,.5,10,'rgba(238,237,230,.7)');
     K.m(g,cylR(.132,.126,.25,8),'helm',0,1.625,0);K.m(g,dome(.131,8,2),G.navyD,0,1.75,0,{s:[1,.3,1]});
-    K.g(g,box(.18,.03,.02),G.vblue,0,1.645,.125);K.g(g,box(.034,.09,.02),G.vblue,0,1.6,.125);
+    K.g(g,box(.18,.03,.02),G.vblue,0,1.645,.125);K.g(g,box(.034,.09,.02),G.vblue,0,1.6,.125);K.m(g,cylR(.104,.112,.05,10),G.navy,0,1.5,0);pack(K,g,G.navyD);
     const rig='#2a3542',rigD='#1f2832',mz='#33373a';
     K.m(g,box(.3,.15,.03),rig,0,1.11,.122);for(let i=0;i<4;i++)K.m(g,box(.29,.006,.004),rigD,0,1.06+i*.03,.138);
     [-.085,0,.085].forEach(x=>{K.m(g,box(.064,.095,.036),rig,x,1.105,.152);K.m(g,box(.062,.008,.038),rigD,x,1.15,.152);
@@ -755,14 +831,15 @@
       strap(K,g,rf.port,anchor(g,.125,1.585,-.03),[[.07,1.4,.19],[.15,1.48,.1]],.005,'#151515')];
     K.m(g,box(.02,.03,.03),'#151515',.125,1.585,-.03);
     return b;}},
-  {key:'officer',fac:'navy',role:'Officer',room:'Customs and command',name:'Lt. Imre Vass',notes:['White belt, placket, cuffs and trouser stripes painted','Beret, so the outline never matches a Syndicate cap','Rank pips on the collar'],
+  {key:'officer',fac:'navy',role:'Officer',room:'Customs and command',name:'Lt. Imre Vass',notes:['White belt, placket, cuffs and trouser stripes painted','Navy helmet with a white seal ring, so the outline never matches a Syndicate one','Rank pips on the collar'],
    build(K,r,c){const b=body(K,{shirt:G.navy,pants:G.navyD,boots:'#161616',skin:c.skin,hair:c.hair,style:'short'}),g=b.g,T=K.p('torso');
     T.r(.49,.06,.02,.8,G.white).r(0,0,1,.06,G.navyD);for(let i=0;i<3;i++)T.dot(.4+i*.035,.03,1.5,G.gold);
     K.p('pelvis').r(0,0,1,.4,G.white).r(.47,0,.06,.4,'#B4B2A9');
     K.p('thighL').r(.145,0,.05,1,G.white);K.p('shinL').r(.145,0,.05,1,G.white);K.p('thighR').r(.645,0,.05,1,G.white);K.p('shinR').r(.645,0,.05,1,G.white);
     ['L','R'].forEach(k=>K.p('fo'+k).r(0,.8,1,.1,G.white));
     for(const sd of [-1,1])K.m(g,box(.12,.025,.1),G.white,sd*.21,1.455,0);
-    K.m(g,ico(.12),G.navyD,.015,1.715,0,{s:[1.12,.36,1.07],rz:-.2});K.m(g,box(.025,.03,.01),G.white,-.065,1.715,.105);
+    helmet(K,g,{col:G.navyD,visor:'wide',glow:G.vblue,ring:G.white});pack(K,g,G.navyD);
+    K.m(g,box(.025,.03,.01),G.white,-.075,1.73,.15);
     return b;}}
   ];
   const byKey={};R.forEach(x=>byKey[x.key]=x);
@@ -803,6 +880,7 @@
       m: function (p, geo, src, X, Y, Z, o) {
         mapUV(geo, REG[src] || K.sw(src));
         var m = new Node(geo);
+        if (K.inBody) m.isBody = true;
         p.add(place(m, X, Y, Z, o));
         return m;
       },
@@ -810,6 +888,7 @@
         mapUV(geo, K.flat(c));
         var m = new Node(geo);
         m.emis = 1;
+        if (K.inBody) m.isBody = true;
         p.add(place(m, X, Y, Z, o));
         return m;
       },
@@ -851,13 +930,15 @@
       for (var p = n; p; p = p.parent) if (idOf.has(p)) return idOf.get(p);
       return 0;
     }
-    var pos = [], uv = [], bone = [], emis = [];
+    var pos = [], uv = [], bone = [], emis = [], kit = { pos: [], uv: [], bone: [], emis: [], part: [] }, partN = 0;
     function emit(n) {
       if (n.geo) {
         var W = world.get(n), P = n.geo.attributes.position, U = n.geo.attributes.uv, bi = boneOf(n.parent);
+        if (!n.isBody) partN++;
         for (var i = 0; i < P.count; i++) {
           var q = m4apply(W, P.getX(i), P.getY(i), P.getZ(i));
           pos.push(q[0], q[1], q[2]); uv.push(U.getX(i), U.getY(i)); bone.push(bi); emis.push(n.emis);
+          if (!n.isBody) { kit.pos.push(q[0], q[1], q[2]); kit.uv.push(U.getX(i), U.getY(i)); kit.bone.push(bi); kit.emis.push(n.emis); kit.part.push(partN); }
         }
       }
       n.children.forEach(emit);
@@ -869,6 +950,7 @@
       var pts = [[w0[12], w0[13], w0[14]]].concat(s.via.map(function (v) { return m4apply(gW, v.x, v.y, v.z); }), [[w1[12], w1[13], w1[14]]]);
       var bones = [boneOf(s.a0)].concat(s.via.map(function () { return boneOf(s.g); }), [boneOf(s.a1)]);
       for (var i = 0; i + 1 < pts.length; i++) {
+        partN++;
         var A = new V3(pts[i][0], pts[i][1], pts[i][2]), B = new V3(pts[i + 1][0], pts[i + 1][1], pts[i + 1][2]);
         var d = B.clone().sub(A), L = d.length();
         var g = cylR(s.r, s.r, 1, 5); mapUV(g, K.sw(s.col));
@@ -881,6 +963,7 @@
           var q = m4apply(W, P.getX(k), P.getY(k), P.getZ(k));
           pos.push(q[0], q[1], q[2]); uv.push(U.getX(k), U.getY(k));
           bone.push(P.getY(k) < 0 ? bones[i] : bones[i + 1]); emis.push(0);
+          kit.pos.push(q[0], q[1], q[2]); kit.uv.push(U.getX(k), U.getY(k)); kit.bone.push(P.getY(k) < 0 ? bones[i] : bones[i + 1]); kit.emis.push(0); kit.part.push(-partN);
         }
       }
     });
@@ -896,35 +979,59 @@
     return {
       pos: new Float32Array(pos), uv: new Float32Array(uv), bone: new Float32Array(bone), emis: new Float32Array(emis),
       count: pos.length / 3, tris: pos.length / 9,
-      bones: { names: BONES, parent: parent, rel: rel, restInv: restW.map(m4inv) }
+      bones: { names: BONES, parent: parent, rel: rel, restInv: restW.map(m4inv), restW: restW },
+      kit: { pos: new Float32Array(kit.pos), uv: new Float32Array(kit.uv), bone: new Uint8Array(kit.bone), emis: new Uint8Array(kit.emis), part: Int32Array.from(kit.part), count: kit.pos.length / 3 }
     };
   }
 
   /* ---- the people there are ------------------------------------------- */
-  var ROLES = R.map(function (x) { return { key: x.key, fac: x.fac, role: x.role, room: x.room, notes: x.notes.slice() }; });
+  var ROLES = R.map(function (x) { return { key: x.key, fac: x.fac, role: x.role, room: x.room,
+    notes: x.notes.concat(['Pressure suit, sealed helmet and life-support pack; the face is in the portrait (portrait.js)']) }; });
   var LIVERIES = Object.keys(LIVS);
 
   /* One body, built once and cached by its key. `liv` only matters to the
    * ship-crew roles; the faction roles carry their own colours. */
   var CACHE = {};
-  function build(key, name, liv) {
+  /* Who is under the helmet: the same draws build() makes, in the same
+   * order, without building anything — what portrait.js draws from. */
+  function lookOf(key, name) {
+    var pr = rng(hash(name + '|' + key));
+    return { skin: pick(pr, SKIN), hair: pick(pr, HAIR), style: pick(pr, STYLES), facial: pr() < .3 ? 'stubble' : null,
+             h: .96 + pr() * .08, flip: pr() < .5 ? -1 : 1 };
+  }
+  /* The colours of a body's suit, for the portrait's collar and shoulders:
+   * the same outfit build() dresses a ship's crew in, and each faction
+   * role's own. */
+  function suitOf(key, name, liv) {
+    var ch = byKey[key] || byKey.pilot;
+    liv = LIVS[liv] ? liv : 'civ';
+    var lk = lookOf(ch.key, name || '');
+    var o = ch.fac === 'crew' ? outfit(liv, rng(hash((name || '') + '|' + ch.key + '|' + liv))) : null;
+    return { key: ch.key, fac: ch.fac, liv: liv, o: o, G: G, flip: lk.flip };
+  }
+  function gearSig(gear) {
+    if (!gear) return '';
+    return KIT_SHOWN.filter(function (k) { return gear[k]; }).map(function (k) { return k + gear[k].side + Math.floor(gear[k].tint * 4); }).join(',');
+  }
+  function build(key, name, liv, gear) {
     var ch = byKey[key];
     if (!ch) return null;
     liv = LIVS[liv] ? liv : 'civ';
-    var cacheKey = key + '|' + name + '|' + (ch.fac === 'crew' ? liv : '');
+    var cacheKey = key + '|' + name + '|' + (ch.fac === 'crew' ? liv : '') + '|' + gearSig(gear);
     if (CACHE[cacheKey]) return CACHE[cacheKey];
     var pr = rng(hash(name + '|' + key));
     var c = { skin: pick(pr, SKIN), hair: pick(pr, HAIR), style: pick(pr, STYLES), facial: pr() < .3 ? 'stubble' : null,
               h: .96 + pr() * .08, flip: pr() < .5 ? -1 : 1, liv: liv };
     if (ch.fac === 'crew') c.o = outfit(liv, rng(hash(name + '|' + key + '|' + liv)));
     var K = Kit(hash(key + name)), b = ch.build(K, pr, c);
+    kitOn(K, b.g, key, gear);
     b.g.scale.setScalar(c.h * (key === 'heavy' ? 1.06 : 1));
     var root = new Node();
     root.add(b.g);
     var m = finalize(K, b, root);
     m.key = key; m.name = name; m.liv = liv; m.fac = ch.fac; m.role = ch.role;
     m.canvas = K.cv; m.hold = b.hold || {}; m.height = 1.78 * c.h * (key === 'heavy' ? 1.06 : 1);
-    m.look = c;
+    m.look = c; m.gear = gearSig(gear); m.spec = K.spec || null; m.bulk = (K.spec && K.spec.bulk) || 1;
     CACHE[cacheKey] = m;
     return m;
   }
@@ -987,7 +1094,7 @@
 
   var NpcModel = {
     ROLES: ROLES, LIVERIES: LIVERIES, BONES: BONES, ATLAS: S,
-    build: build, skin: skin, posed: posed, faceColours: faceColours,
+    build: build, lookOf: lookOf, suitOf: suitOf, REG: REG, ATLAS: S, TORSO: TORSO, KIT_SHOWN: KIT_SHOWN, HEAD_FIT: HEAD_FIT, skin: skin, posed: posed, faceColours: faceColours, SKIN: SKIN, HAIR: HAIR,
     rifleRules: function () { return RL.rules.map(function (r) { return { rule: r[0], ok: !!r[1] }; }); },
     hash: hash
   };

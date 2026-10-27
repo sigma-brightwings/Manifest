@@ -418,6 +418,10 @@
        * dealt with are in here; everyone else regenerates from the seed. */
       captains: G.captains || {},
       record: G.record || null,
+      /* WHO YOU HAVE TALKED TO ON FOOT, and what passed between you
+       * (dialogue.js, 2026-10-25). Additive, like captains: an older career
+       * loads with nobody on any deck who has met you. */
+      people: G.people || {},
       /* YOUR OWN DISTRESS CALLS still in the air, with who answered and
        * when they arrive (messages.js). Additive. Saved because the
        * arrival is where a lie is found out, and a reload must not be a
@@ -592,6 +596,7 @@
      * the deliveries you bought off ships onto its shelves now. */
     if (global.ShipTrade && global.ShipTrade.attach && G.sys) global.ShipTrade.attach(G, G.sys, G.t || 0);
     G.captains = (data.captains && typeof data.captains === 'object') ? data.captains : {};
+    G.people = (data.people && typeof data.people === 'object') ? data.people : {};
     G.record = (data.record && typeof data.record === 'object') ? data.record : null;
     G.broadcasts = Array.isArray(data.broadcasts) ? data.broadcasts : [];
     G.msgDraft = null;

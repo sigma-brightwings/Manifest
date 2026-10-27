@@ -603,38 +603,16 @@
     return { rec: recordOf(G, idKey), top: {} };
   }
 
-  /* ---- what they think of you, all told -----------------------------------
-   * One number for the greeting, plus WHY — the doctrine that refusals carry
-   * reasons applies to a cold shoulder too. A captain who greets you with
-   * contempt and never says what for would read as a bug.
-   *
-   * SEEN BEATS HEARD. If the captain has first-hand experience of you, their
-   * own feeling is the whole answer and your reputation is background. Only
-   * a captain who has never seen you act falls back on the public record
-   * (and, later, rumours). */
-  function opinion(G, sys, contact) {
-    var p = profile(G, sys, contact);
-    if (!p) return null;
-    /* A friend's word that has reached her ship by now (rumours.js) lands
-     * before she is asked, so the answer is as of this moment. */
-    if (global.Rumours && G.hearsay && G.hearsay.length) global.Rumours.settle(G, sys, G.t || 0, p.key);
-    /* Which you they are looking at (see resolve): the real one, a
-     * disguise they saw through, or a stranger in paint they believe. */
-    var rv = resolve(G, sys, contact);
-    var m = rv.m;
-    var hr = heardRecord(G, sys, contact, rv.id.key);
-    var rec = hr.rec, top = hr.top;
-    var reasons = [];
-    var score;
-    /* Seen through the paint but not yet told so: the greeting is about
-     * exactly that. noteMet records it; this lets the line say it on the
-     * same hail rather than the next one. */
-    if (rv.through && m) {
-      score = Math.min(m.feeling || 0, 0) + EVENTS.disguise.feeling;
-      reasons.push({ kind: 'tag', tag: 'CAUGHT_IN_DISGUISE', w: 10 });
-      return finish();
-    }
-
+  /* WHAT THEY MAKE OF YOU, from what they have to go on: their own memory
+   * of you (`m`, when they have seen you act) or else what they have heard
+   * (`rec`, counts in the shape of the public record, and `top`, the
+   * loudest rumour per field) read through their values and coloured by
+   * their temper. Split out of `opinion` (2026-10-25) so the people you
+   * meet on foot (dialogue.js) judge you by exactly the rules a captain on
+   * the band does. `p` needs { values, temper, faction }. */
+  function judge(G, p, m, rec, top) {
+    var score, reasons = [];
+    rec = rec || {}; top = top || {};
     /* A FRIEND'S WORD (favours.js) sits on `heard`. It nudges a captain
      * who has seen you herself — a third, because her own eyes come
      * first — and counts in full for one who has not, above the public
@@ -643,7 +621,7 @@
     if (m && m.seen > 0) {
       score = m.feeling + heard / 3;
       if (m.tag) reasons.push({ kind: 'tag', tag: m.tag, w: 10 });
-      return finish();
+      return done();
     }
 
     /* Never met. Read the record through their values: the same career is
@@ -693,13 +671,53 @@
      * nobody greets you coldly "because I am wary". */
     score += p.temper === 'friendly' ? 0.7 : p.temper === 'wary' ? -0.7
            : p.temper === 'gruff' ? -0.3 : 0;
-    return finish();
+    return done();
 
     function add(v, why, rumour) {
       if (!v) return;
       score += v;
       reasons.push({ kind: why, w: Math.abs(v), v: v, rumour: rumour || null });
     }
+    function done() { return { score: score, reasons: reasons }; }
+  }
+
+  /* ---- what they think of you, all told -----------------------------------
+   * One number for the greeting, plus WHY — the doctrine that refusals carry
+   * reasons applies to a cold shoulder too. A captain who greets you with
+   * contempt and never says what for would read as a bug.
+   *
+   * SEEN BEATS HEARD. If the captain has first-hand experience of you, their
+   * own feeling is the whole answer and your reputation is background. Only
+   * a captain who has never seen you act falls back on the public record
+   * (and, later, rumours). */
+  function opinion(G, sys, contact) {
+    var p = profile(G, sys, contact);
+    if (!p) return null;
+    /* A friend's word that has reached her ship by now (rumours.js) lands
+     * before she is asked, so the answer is as of this moment. */
+    if (global.Rumours && G.hearsay && G.hearsay.length) global.Rumours.settle(G, sys, G.t || 0, p.key);
+    /* Which you they are looking at (see resolve): the real one, a
+     * disguise they saw through, or a stranger in paint they believe. */
+    var rv = resolve(G, sys, contact);
+    var m = rv.m;
+    var hr = heardRecord(G, sys, contact, rv.id.key);
+    var rec = hr.rec, top = hr.top;
+    var reasons = [];
+    var score;
+    /* Seen through the paint but not yet told so: the greeting is about
+     * exactly that. noteMet records it; this lets the line say it on the
+     * same hail rather than the next one. */
+    if (rv.through && m) {
+      score = Math.min(m.feeling || 0, 0) + EVENTS.disguise.feeling;
+      reasons.push({ kind: 'tag', tag: 'CAUGHT_IN_DISGUISE', w: 10 });
+      return finish();
+    }
+
+    var j = judge(G, p, m, rec, top);
+    score = j.score;
+    reasons = j.reasons;
+    return finish();
+
     function finish() {
       reasons.sort(function (a, b) { return b.w - a.w; });
       return { score: score, profile: p, memory: m || null,
@@ -1214,7 +1232,8 @@
   var Captains = {
     profile: profile, memory: memory, record: record, noteMet: noteMet, speak: speak,
     salientEntry: salientEntry, stakesPhrase: stakesPhrase, RECALL: RECALL, LOG_MAX: LOG_MAX,
-    opinion: opinion, greeting: greeting, describe: describe, bumpRecord: bumpRecord,
+    opinion: opinion, judge: judge, bandOf: bandOf, heardRecord: heardRecord,
+    greeting: greeting, describe: describe, bumpRecord: bumpRecord,
     keyOf: keyOf, hasCaptain: hasCaptain, rosterOf: rosterOf, roleOf: roleOf,
     addressOf: addressOf, resolve: resolve, recordOf: recordOf,
     identity: identity, refit: refit, refitRefusal: refitRefusal, restoreIdentity: restoreIdentity,
@@ -1222,6 +1241,7 @@
     REFITS: REFITS, RESTORE_PRICE: RESTORE_PRICE, SHADY_CORRUPTION: SHADY_CORRUPTION,
     TAGS: TAGS, EVENTS: EVENTS, BANDS: BANDS, OPENERS: OPENERS, REASONS: REASONS,
     DIAL: DIAL, TEMPERS: TEMPERS, VALUES: VALUES, LOG_RANK: LOG_RANK,
+    VALUE_WEIGHTS: VALUE_WEIGHTS, TEMPER_WEIGHTS: TEMPER_WEIGHTS, weighted: weighted,
     _logEntry: logEntry,
     _clearCache: function () { _profiles = {}; }
   };

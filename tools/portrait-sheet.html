@@ -1,0 +1,60 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Portrait sheet</title>
+<style>
+  body { margin: 0; background: #1d1f22; color: #d8d4ca; font: 13px/1.4 system-ui, sans-serif; }
+  header { padding: 10px 14px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; border-bottom: 1px solid #333; }
+  select, button, input { background: #2a2d31; color: inherit; border: 1px solid #444; padding: 4px 8px; border-radius: 3px; }
+  #g { display: flex; flex-wrap: wrap; gap: 10px; padding: 12px; }
+  figure { margin: 0; width: 200px; }
+  figcaption { font-size: 11px; color: #9a968c; padding-top: 3px; }
+  canvas { width: 200px; display: block; }
+</style></head>
+<body>
+<!-- Open this file in a browser (no server needed). It draws the in-game
+     portraits from src/portrait.js, rolling each one's kit from the GEAR
+     odds table in that file. Change the odds there and reload to see the
+     spread change. The batch number salts the ids, so a new batch is a new
+     crowd; the same batch is always the same crowd. -->
+<header>
+  <label>Role <select id="role"></select></label>
+  <label>Livery <select id="liv"><option value="">mixed</option><option>civ</option><option>navy</option><option>syn</option><option>pir</option></select></label>
+  <label>Batch <input id="batch" type="number" value="1" min="1" style="width:5em"></label>
+  <button id="next">New batch</button>
+  <span id="tally"></span>
+</header>
+<div id="g"></div>
+<script src="../src/npcmodel.js"></script>
+<script src="../src/portrait.js"></script>
+<script>
+(function () {
+  var FIRST = ['Ama','Bo','Cal','Dov','Esk','Frey','Ines','Jex','Kiri','Lio','Mags','Nesh','Ora','Pell','Rue','Sana','Teo','Ulla','Vex','Wren'];
+  var LAST = ['Vance','Iveson','Salt','Grieve','Rask','Hoyt','Wray','Varga','Corrow','Morrow','Kell','Rook','Ostry','Brand','Lund','Marr'];
+  var LIVS = ['civ', 'navy', 'syn', 'pir'];
+  var roleSel = document.getElementById('role'), livSel = document.getElementById('liv');
+  var batch = document.getElementById('batch'), g = document.getElementById('g'), tally = document.getElementById('tally');
+  roleSel.innerHTML = '<option value="">every role</option>' + Object.keys(Portrait.GEAR).filter(function (k) { return k !== '_default'; })
+    .map(function (k) { return '<option>' + k + '</option>'; }).join('');
+  function draw() {
+    Portrait._clear(); g.innerHTML = '';
+    var roles = roleSel.value ? [roleSel.value] : Object.keys(Portrait.GEAR).filter(function (k) { return k !== '_default'; });
+    var n = roleSel.value ? 24 : roles.length * 2, count = {};
+    for (var i = 0; i < n; i++) {
+      var role = roles[i % roles.length], b = +batch.value || 1;
+      var name = FIRST[(i * 7 + b * 3) % FIRST.length] + ' ' + LAST[(i * 5 + b * 11) % LAST.length];
+      var p = { id: 'sheet|' + b + '|' + i, name: name, body: role, role: role, liv: livSel.value || LIVS[(i + b) % 4] };
+      var fig = document.createElement('figure'), c = Portrait.canvasFor(p);
+      var pf = Portrait.features(p), kit = Object.keys(pf.gear);
+      kit.forEach(function (k) { count[k] = (count[k] || 0) + 1; });
+      fig.appendChild(c);
+      var cap = document.createElement('figcaption');
+      cap.textContent = name + ' · ' + role + ' · ' + p.liv + ' · ' + pf.cut + (kit.length ? ' · ' + kit.join(', ') : '');
+      fig.appendChild(cap); g.appendChild(fig);
+    }
+    tally.textContent = Object.keys(count).sort().map(function (k) { return k + ' ' + count[k]; }).join(' · ');
+  }
+  roleSel.onchange = livSel.onchange = batch.onchange = draw;
+  document.getElementById('next').onclick = function () { batch.value = (+batch.value || 1) + 1; draw(); };
+  draw();
+})();
+</script>
+</body></html>

@@ -366,7 +366,9 @@
                                souls: r.souls, size: r.size });
       var berth = free[i] || null;
       crew.slice(0, 4).forEach(function (c, j) {
-        var extra = { shipName: o.name, ship: crew.ship };
+        /* `route`: the ship she berthed off, so her people can speak for
+         * their captain (dialogue.js reads Captains.opinion off it). */
+        var extra = { shipName: o.name, ship: crew.ship, route: r.id ? r : null };
         if (berth && j === 0) extra.post = berthPost(plan, berth, c.id);
         else extra.patrol = j % 2 ? ['bar', 'concourse'] : ['concourse', 'bar'];
         people.push(person(c.id, c.name, c.body, c.liv, c.role, extra));
@@ -601,6 +603,7 @@
     ctx = ctx || {};
     /* The scene last ticked, for a probe or the console to read. */
     Npc.lastScene = sc;
+    talkingTo = ctx.talkTo || null;   // who the player is talking to, for the talking clips
     var plan = sc.plan, hold = {}, now = ctx.now || 0;
     sc.people.forEach(function (p) {
       /* A pilot sitting at the helm gets up when you want it back. */
@@ -626,6 +629,15 @@
         }
       }
       if (p.away) return;
+      /* Somebody you are talking to (dialogue.js) stops what they are doing
+       * and turns to you, sitting or standing as they were; the task picks
+       * up again when you walk away. */
+      if (ctx.talkTo && ctx.talkTo === p.id && ctx.player) {
+        p.gait = 0;
+        face(p, ctx.player, dt);
+        if (p.act === 'walk') { p.until = now + 2; }
+        return;
+      }
       if (p.act === 'walk') {
         /* Get up first. */
         if (p.sit > 0 || p.lie > 0) {
@@ -735,6 +747,7 @@
    * Builds bodies lazily — at most `budget` a frame, nearest first, so a
    * concourse full of people arrives over a few frames rather than as one
    * long hitch — and returns [{ model, mats, person }] for npcgl.js. */
+  var talkingTo = null;
   function figures(sc, eye, budget) {
     var NM = global.NpcModel;
     if (!NM) return [];
@@ -744,10 +757,33 @@
     if (eye) list.sort(function (a, b) { return dist(a, eye) - dist(b, eye); });
     var out = [];
     list.forEach(function (p) {
-      if (!p.model && budget > 0) { p.model = NM.build(p.body, p.name, p.liv); budget--; }
+      /* The face kit that shows through a sealed suit (eyepiece, goggles,
+       * rebreather …) goes on the body too: portrait.js rolls it. */
+      if (!p.model && budget > 0) { p.model = NM.build(p.body, p.name, p.liv, global.Portrait && global.Portrait.gearOf ? global.Portrait.gearOf(p) : null); budget--; }
       if (!p.model) return;
-      p.mats = NM.skin(p.model, pose(sc, p), p.mats);
-      out.push({ model: p.model, mats: p.mats, person: p });
+      var o = pose(sc, p);
+      p.mats = NM.skin(p.model, o, p.mats);
+      /* The Quaternius body (people.js), where its data is loaded: the same
+       * person, the same kit, moved by the animation library. Built on the
+       * same budget, after the old figure it borrows its paint and kit from. */
+      var PP = global.People, RG = global.Rig;
+      if (PP && RG && p.rig === undefined && budget > 0) { p.rig = PP.build(p.body, p.name, p.liv, global.Portrait && global.Portrait.gearOf ? global.Portrait.gearOf(p) : null) || null; budget--; }
+      if (p.rig) {
+        var s = p.sit || 0;
+        /* The sitting clips put the hips back over the seat on their own,
+         * a quarter-metre behind where they stand: bring them forward by
+         * that so they land where npc.js sat them. */
+        var fwd = s * 0.24, yaw = o.yaw || 0;
+        /* Posed about the person's own feet; where they stand is added once,
+         * at the end (npcgl.js). Folded into every bone, a deck position
+         * thousands of metres from the frame's origin rounded differently in
+         * each of the four bones a chest vertex blends, and tore the torso
+         * into shards (2026-10-26). */
+        p.rmats = RG.pose(p.rig.body, PP.layers(p, !!(talkingTo && talkingTo === p.id)), {
+          x: 0, z: 0, y: 0, yaw: yaw, lean: o.lean || 0, scale: p.rig.scale }, p.rmats);
+        p.rpos = { x: o.x + Math.sin(yaw) * fwd, y: (o.y || 0), z: o.z + Math.cos(yaw) * fwd };
+      }
+      out.push({ model: p.model, mats: p.mats, person: p, rig: p.rig || null, rmats: p.rig ? p.rmats : null, rpos: p.rig ? p.rpos : null });
     });
     return out;
   }

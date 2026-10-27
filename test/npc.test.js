@@ -70,6 +70,92 @@ var rules = NM.rifleRules();
 check('the rifle generator passes its layout rules', rules.every(function (r) { return r.ok; }),
       rules.filter(function (r) { return !r.ok; }).map(function (r) { return r.rule; }).join('; ') || rules.length + ' rules');
 
+/* PRESSURE SUITS (2026-10-25): everybody is sealed, so something stands
+ * in front of every face — a visor or a helmet's own front — and nobody's
+ * painted face can be seen from outside. */
+var open = [];
+NM.ROLES.forEach(function (r) {
+  var m = NM.build(r.key, 'Sealed Person', 'civ'), hit = false, k = m.look.h * (r.key === 'heavy' ? 1.06 : 1);
+  for (var i = 0; i < m.count && !hit; i++) {
+    var x = m.pos[i * 3] / k, y = m.pos[i * 3 + 1] / k, z = m.pos[i * 3 + 2] / k;
+    if (Math.abs(x) < 0.11 && y > 1.57 && y < 1.69 && z > 0.12) hit = true;
+  }
+  if (!hit) open.push(r.key);
+});
+check('every body is sealed: something in front of every face', !open.length, open.join(', ') || NM.ROLES.length + ' roles');
+var lk = NM.lookOf('engineer', 'Ama Lund'), bl = NM.build('engineer', 'Ama Lund', 'civ').look;
+check('who is under the helmet is the same person the body was painted as',
+      lk.skin === bl.skin && lk.hair === bl.hair && lk.style === bl.style && lk.facial === bl.facial);
+var Portrait = require('../src/portrait.js');
+var fa = Portrait.features({ id: 'x1', name: 'Ama Lund', body: 'engineer' }), fb2 = Portrait.features({ id: 'x1', name: 'Ama Lund', body: 'engineer' });
+var fc = Portrait.features({ id: 'x2', name: 'Bo Rask', body: 'pilot' });
+check('a portrait is the same face every time', JSON.stringify(fa) === JSON.stringify(fb2));
+check('and two people are two faces', JSON.stringify(fa) !== JSON.stringify(fc));
+check('and it has the body\'s hair', fa.style === lk.style);
+check('a portrait carries its colours (skin, hair, eyes)', /^#/.test(fa.skinHex) && /^#/.test(fa.hairHex) && /^#/.test(fa.eyeHex));
+var crowd = [], seen = {}, clashOk = true;
+for (var gi = 0; gi < 400; gi++) {
+  var role = Object.keys(Portrait.GEAR)[gi % Object.keys(Portrait.GEAR).length];
+  var gp = { id: 'g' + gi, name: 'G ' + gi, body: role === '_default' ? 'pilot' : role, role: role };
+  var gk = Portrait.features(gp).gear;
+  crowd.push(gk); Object.keys(gk).forEach(function (k) { seen[k] = true; });
+  if ((gk.glasses && (gk.shades || gk.goggles)) || (gk.shades && gk.goggles) || (gk.rebreather && gk.headset) || (gk.headset && gk.earpiece)) clashOk = false;
+  if (gk.eyepatch && (gk.glasses || gk.shades || gk.goggles)) clashOk = false;
+  if (gk.cybereye && gk.eyepatch && gk.cybereye.side === gk.eyepatch.side) clashOk = false;
+  if (gk.cybereye && gk.eyepiece && gk.cybereye.side === gk.eyepiece.side) clashOk = false;
+  if (gk.eyepatch && gk.eyepiece && gk.eyepatch.side === gk.eyepiece.side) clashOk = false;
+}
+check('a portrait\'s kit is the same kit every time', JSON.stringify(Portrait.features(gp).gear) === JSON.stringify(Portrait.features(gp).gear));
+check('every piece of kit turns up somewhere in a crowd', Portrait.GEAR_PIECES.every(function (k) { return seen[k]; }), Portrait.GEAR_PIECES.filter(function (k) { return !seen[k]; }).join(','));
+check('and nobody wears two things that can\'t share a face', clashOk);
+check('and plenty of faces wear nothing', crowd.filter(function (k) { return !Object.keys(k).length; }).length > 40);
+var cutsSeen = {};
+for (var ci = 0; ci < 300; ci++) {
+  var cf = Portrait.features({ id: 'cut' + ci, name: 'C ' + ci, body: 'pilot', role: 'pilot' });
+  cutsSeen[cf.cut] = true;
+}
+check('haircuts vary: a crowd has a dozen different cuts', Object.keys(cutsSeen).length >= 12, Object.keys(cutsSeen).length + ' cuts');
+var hawks = 0; for (var hi = 0; hi < 200; hi++) { var hc = Portrait.features({ id: 'rd' + hi, name: 'R ' + hi, body: 'raider', role: 'raider' }).cut; if (/hawk|spikes/.test(hc)) hawks++; }
+check('any cut can turn up on any body, but raiders lean to hawks', Object.keys(cutsSeen).length >= 20 && hawks > 40, Object.keys(cutsSeen).length + ' cuts, ' + hawks + '/200 raiders hawked');
+check('and a face keeps its cut', Portrait.features({ id: 'cut7', name: 'C 7', body: 'pilot' }).cut === Portrait.features({ id: 'cut7', name: 'C 7', body: 'pilot' }).cut);
+check('every cut has odds', Object.keys(Portrait.CUTS).every(function (c) { return Portrait.CUT_ODDS[c] > 0; }));
+/* --- who the people are: women and men, every skin tone, every build (2026-10-26) --- */
+global.NpcModel = NM; global.Rig = require('../src/rig.js'); global.People = require('../src/people.js');
+var sexN = { f: 0, m: 0 }, toneBy = { f: {}, m: {} }, busts = {}, bearded = 0, agree = true;
+NM.ROLES.forEach(function (r) {
+  for (var pi = 0; pi < 120; pi++) {
+    var nm = 'Crew ' + r.key + ' ' + pi, pf = Portrait.features({ id: 'who' + r.key + pi, name: nm, body: r.key, role: r.key });
+    sexN[pf.sex]++; toneBy[pf.sex][pf.skinHex] = 1;
+    if (pf.sex !== global.People.sexOf(r.key, nm)) agree = false;
+    if (pf.sex === 'f') { busts[global.People.bustFor(r.key, nm)] = 1; if (pf.beard || pf.stubble) bearded++; }
+  }
+});
+var PPx = global.People, crewMix = { civ: ['pilot', 'engineer', 'loadmaster', 'gunner', 'medic', 'security'], navy: ['officer', 'marine', 'pilot', 'engineer', 'marine', 'gunner', 'medic', 'tactical'], syn: ['enforcer', 'pilot', 'engineer', 'heavy', 'gunner', 'enforcer'] };
+var bigM = 0, bigN = 0, pirFight = 0, pirOther = 0;
+Object.keys(crewMix).forEach(function (lv) { for (var ci = 0; ci < 2400; ci++) { var rk = crewMix[lv][ci % crewMix[lv].length]; bigN++; if (PPx.sexOf(rk, 'B' + lv + ci, lv) === 'm') bigM++; } });
+for (var ri = 0; ri < 2000; ri++) { if (PPx.sexOf('raider', 'R' + ri, 'pir') === 'm') pirFight++; if (PPx.sexOf('engineer', 'E' + ri, 'pir') === 'f') pirOther++; }
+check('the big societies are near the birth ratio, men and women alike', bigM / bigN > 0.47 && bigM / bigN < 0.56, (100 * bigM / bigN).toFixed(1) + '% men');
+check('a pirate crew keeps its women out of the fighting', pirFight / 2000 > 0.9, (100 * pirFight / 2000).toFixed(1) + '% of raiders are men');
+check('and the women aboard keep the ship running', pirOther / 2000 > 0.5, (100 * pirOther / 2000).toFixed(1) + '% of pirate engineers are women');
+check('women and men both come in all seven skin tones', Object.keys(toneBy.f).length === NM.SKIN.length && Object.keys(toneBy.m).length === NM.SKIN.length);
+check('women come in every bust size', Object.keys(busts).length === global.People.BUSTS.length, Object.keys(busts).join(','));
+check('a portrait is the same sex as the body under the suit, and no woman is drawn bearded', agree && bearded === 0);
+var fA = global.People.fit('female', 0.45), fB = global.People.fit('female', 1.15);
+check('a bust size changes the body, and the fit is measured on it', fA.pos !== fB.pos && fA.trunkAt(1.31).hd < fB.trunkAt(1.31).hd, fA.trunkAt(1.31).hd.toFixed(3) + ' < ' + fB.trunkAt(1.31).hd.toFixed(3));
+/* --- the kit that shows through a sealed suit, and the suit in the portrait (2026-10-26) --- */
+var kitAll = { eyepiece: { side: 'R', tint: 0.3 }, goggles: { side: 'L', tint: 0.9 }, rebreather: { side: 'R', tint: 0 }, headset: { side: 'L', tint: 0 } };
+var bare = NM.build('pilot', 'Kit Test', 'civ'), kitted = NM.build('pilot', 'Kit Test', 'civ', kitAll);
+check('kit that shows through a helmet is built onto the body', kitted !== bare && kitted.tris > bare.tris, bare.tris + ' -> ' + kitted.tris);
+check('and the same kit is the same cached body', NM.build('pilot', 'Kit Test', 'civ', kitAll) === kitted);
+var under = NM.build('pilot', 'Kit Test', 'civ', { glasses: { side: 'L', tint: 0 }, tattoo: { side: 'R', tint: 0 }, earpiece: { side: 'L', tint: 0 } });
+check('and what the helmet hides (glasses, ink, an earpiece) is not', under === bare);
+check('every role takes the kit', NM.ROLES.every(function (r) { var m = NM.build(r.key, 'Kit ' + r.key, 'civ', kitAll); return m && m.gear; }));
+var su = NM.suitOf('security', 'Dana Mbeki', 'navy'), sf = NM.suitOf('fixer', 'Celeste Aumont', 'civ');
+check('a crew suit comes in the ship\'s outfit, a faction suit in its own', su.o && su.o.shirt === '#1d5a96' && !sf.o && sf.fac === 'syn');
+var pfs = Portrait.features({ id: 'suit1', name: 'Dana Mbeki', body: 'security', role: 'security', liv: 'navy' });
+check('the portrait draws the suit the body wears', pfs.suit && pfs.suit.key === 'security' && pfs.suit.o.shirt === su.o.shirt);
+check('and the person\'s kit is one roll for both', JSON.stringify(Portrait.gearOf({ id: 'suit1', name: 'Dana Mbeki', body: 'security', role: 'security' })) === JSON.stringify(pfs.gear));
+
 var a = NM.build('marine', 'Pvt. Okafor', 'navy'), b = NM.build('marine', 'Pvt. Okafor', 'navy');
 check('a body is the same body every time', a === b && a.tris === b.tris);
 var hats = {};

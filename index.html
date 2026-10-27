@@ -63,6 +63,15 @@
 <script src="src/shipdeck.js"></script>
 <script src="src/npcmodel.js"></script>
 <script src="src/npc.js"></script>
+<!-- The face under the helmet, as a composite sketch, for the
+     conversation panel. Reads NpcModel at call time. -->
+<script src="src/portrait.js"></script>
+<!-- The people's bodies (2026-10-26): Quaternius' Universal Base Characters and
+     animation library (CC0), and the runtime that poses them and dresses them
+     in the old figures' paint and kit. After npcmodel.js and portrait.js. -->
+<script src="src/people-data.js"></script>
+<script src="src/rig.js"></script>
+<script src="src/people.js"></script>
 <!-- Industry you own, and what it does to a system. After combat.js, whose
      effectiveCorruption reads it, and after fleet.js, beside which it
      settles at the desk. -->
@@ -74,6 +83,9 @@
 <script src="src/messages.js"></script>
 <script src="src/favours.js"></script>
 <script src="src/rumours.js"></script>
+<!-- Talking to people on foot: reads captains, rumours, favours and
+     messages at call time, so after them. -->
+<script src="src/dialogue.js"></script>
 <script src="src/sound.js"></script>
 <script src="src/save.js"></script>
 <script src="src/logo.js"></script>
