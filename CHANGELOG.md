@@ -1882,6 +1882,30 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Changed
 
+- **One line of work (2026-10-30).** Astra: *"let's take all the various
+  work streams and integrate them into one."* Everything now lives on
+  `master`:
+  - The parallel sessions' uncommitted work from 2026-10-26 to 10-30
+    (boarding, the tithe, upkeep, notes, cargo containers, hulls sized to
+    their interiors) is committed (136d10f).
+  - The Pages site branch (the landing page and the workflow that
+    publishes the game on a push to master) is merged in.
+  - The Abby release line had grown from a different root. Every one of
+    its commits was already in the game's line, which was checked line by
+    line, so it is joined by a merge that keeps the game exactly as it was.
+    Its history and the release tags v0.1.0-alpha5 to v1.1.0-beta are all
+    on master now.
+  - The `driftwood-2026-10-15`, `crawler-abby` and `pages-site` branches,
+    the website's spare worktree, and two old stashes (both already in the
+    game) are retired. Every old head is kept as a `backup/2026-10-30-*`
+    branch or tag.
+  - Nine test suites that had never been part of `npm test` are in it now
+    (farms, transfer, cruisesky, heading, airdata, orbitline, navsystem,
+    twilight, cruisedrive). All of them pass.
+  - Port models and `src/ports/*.js` are stored through Git LFS, as
+    `.gitattributes` had asked for. Their content did not change.
+    `Claude outputs/` is ignored.
+  - Nothing is pushed yet.
 - **The more you take, the more serious the crime (2026-10-30).** Astra, after
   one hold-up came to 41,028 cr: *"that's a lot of money, it should be a more
   serious crime the more money you take."*
