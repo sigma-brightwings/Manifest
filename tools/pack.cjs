@@ -65,43 +65,68 @@ function pairs() {
 function readGz(rel) { return zlib.gunzipSync(fs.readFileSync(path.join(ROOT, rel))); }
 function has(rel) { return fs.existsSync(path.join(ROOT, rel)); }
 
+/* WHAT WAS LAST IN SYNC. A fingerprint of every working copy as it was the
+ * last time pack or unpack made it match its .gz, in .pack-state.json (not
+ * tracked). It is how a working copy that is merely OLD (the repo moved on:
+ * a merge, a pull, a checkout) is told from one somebody EDITED. An old one
+ * is refreshed by unpack and called stale by check; an edited one is never
+ * overwritten without --force, and check says to pack it. */
+var STATE = path.join(ROOT, '.pack-state.json');
+function loadState() { try { return JSON.parse(fs.readFileSync(STATE, 'utf8')); } catch (e) { return {}; } }
+function saveState(st) { fs.writeFileSync(STATE, JSON.stringify(st)); }
+function sum(buf) { return require('crypto').createHash('sha1').update(buf).digest('hex'); }
+
 function pack(verbose) {
-  var wrote = 0, same = 0;
+  var wrote = 0, same = 0, st = loadState();
   pairs().forEach(function (p) {
     if (!has(p.plain)) return;
     var raw = fs.readFileSync(path.join(ROOT, p.plain));
+    st[p.plain] = sum(raw);
     if (has(p.gz) && readGz(p.gz).equals(raw)) { same++; return; }
     fs.writeFileSync(path.join(ROOT, p.gz), zlib.gzipSync(raw, { level: 9 }));
     wrote++;
     if (verbose) console.log('packed   ' + p.gz);
   });
+  saveState(st);
   console.log('pack: ' + wrote + ' written, ' + same + ' already current');
 }
 
 function unpack(force) {
-  var wrote = 0, kept = 0;
+  var wrote = 0, kept = 0, st = loadState();
   pairs().forEach(function (p) {
     if (!has(p.gz)) return;
     var data = readGz(p.gz);
     if (has(p.plain)) {
-      if (fs.readFileSync(path.join(ROOT, p.plain)).equals(data)) return;
-      if (!force) { kept++; console.log('kept     ' + p.plain + '  (differs from its .gz; pack it, or unpack --force)'); return; }
+      var raw = fs.readFileSync(path.join(ROOT, p.plain));
+      if (raw.equals(data)) { st[p.plain] = sum(data); return; }
+      var edited = st[p.plain] !== sum(raw);
+      if (edited && !force) {
+        kept++;
+        console.log('kept     ' + p.plain + '  (edited since it was last unpacked: `npm run pack` stores it, `unpack --force` throws it away)');
+        return;
+      }
     }
     fs.writeFileSync(path.join(ROOT, p.plain), data);
+    st[p.plain] = sum(data);
     wrote++;
   });
+  saveState(st);
   console.log('unpack: ' + wrote + ' written' + (kept ? ', ' + kept + ' edited copies left alone' : ''));
 }
 
-/* [{plain, why}] for every working copy that is not what the repo holds. */
+/* [{plain, why, kind}] for every working copy that is not what the repo
+ * holds. kind 'edited' means pack it; kind 'stale' means unpack. */
 function stale() {
-  var bad = [];
+  var bad = [], st = loadState();
   pairs().forEach(function (p) {
     if (!has(p.plain)) return;
-    if (!has(p.gz)) { bad.push({ plain: p.plain, why: 'has no .gz' }); return; }
+    if (!has(p.gz)) { bad.push({ plain: p.plain, why: 'has no .gz', kind: 'edited' }); return; }
     var held;
-    try { held = readGz(p.gz); } catch (e) { bad.push({ plain: p.plain, why: 'its .gz is unreadable' }); return; }
-    if (!held.equals(fs.readFileSync(path.join(ROOT, p.plain)))) bad.push({ plain: p.plain, why: 'differs from its .gz' });
+    try { held = readGz(p.gz); } catch (e) { bad.push({ plain: p.plain, why: 'its .gz is unreadable', kind: 'edited' }); return; }
+    var raw = fs.readFileSync(path.join(ROOT, p.plain));
+    if (held.equals(raw)) return;
+    if (st[p.plain] && st[p.plain] === sum(raw)) bad.push({ plain: p.plain, why: 'is older than its .gz (run `npm run unpack`)', kind: 'stale' });
+    else bad.push({ plain: p.plain, why: 'was edited and is not stored (run `npm run pack`)', kind: 'edited' });
   });
   return bad;
 }
@@ -114,8 +139,8 @@ if (require.main === module) {
   else if (mode === 'unpack') unpack(process.argv.indexOf('--force') > 0);
   else if (mode === 'check') {
     var bad = stale();
-    bad.forEach(function (b) { console.log('  ' + b.plain + ': ' + b.why); });
-    if (bad.length) { console.log('pack check: ' + bad.length + ' working file(s) not stored. Run `npm run pack`.'); process.exit(1); }
+    bad.slice(0, 20).forEach(function (b) { console.log('  ' + b.plain + ' ' + b.why); });
+    if (bad.length) { console.log('pack check: ' + bad.length + ' working file(s) do not match what is stored.'); process.exit(1); }
     console.log('pack check: every working copy matches what is stored');
   } else { console.log('usage: node tools/pack.cjs [pack|unpack [--force]|check]'); process.exit(2); }
 }

@@ -77,3 +77,6 @@ models/
 # the one thing a diff cannot help with. Real port art belongs in
 # ref/ports/ and is tracked like every other model.
 test/fixtures/
+
+# tools/pack.cjs's record of what each working copy was when last in sync.
+.pack-state.json

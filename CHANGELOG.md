@@ -2469,6 +2469,44 @@ Astra has seen it working.
 
 ### Changed
 
+- **One line, really: the mining work and the ship cuts come in (2026-10-30).**
+  Asked to test the mining drones, the work turned out not to be on master
+  at all. It was in a second family of checkouts that had grown from the
+  Abby release and never reached GitHub: `X:\Manifest-trial`,
+  `X:\Manifest-merge` and `X:\Manifest-ships`, plus an older copy in
+  `C:\Manifest-merge`. Astra: *"Merge first, then test"*, with all of
+  their sessions finished.
+  - **The mining line is merged.** It brings survey instruments graded
+    by what they see, deposits that sit somewhere on a world, the polar
+    survey orbit, claims and drones, the mining laser and cannon, gas
+    skimming, rock torpedoes and the ordnance panel, countermeasures and
+    the shroud suite, other prospectors, a fence in every system,
+    resource wars, skimmers and laser ships under work orders,
+    no-man's-land systems, ridden lifts and the burn autopilot that
+    warps.
+  - **The station-growth checkout is recorded as merged.** Its two extra
+    commits were already in: the first copy of the graded-survey commit,
+    and a scratch script.
+  - **Astra's ship-cut table and its tools are merged** (69 new files).
+  - **C:\Manifest-merge is superseded.** Its survey commit was carried
+    over, and its two uncommitted lines were already on master.
+  - **Where both lines changed the same thing:**
+    - The cutaway keeps Astra's double orange line of 2026-10-26, and gains
+      the mining line's ground-port section box and kept deck.
+    - A crime report carries both the take and an unidentified hull.
+    - Open ground with a recorded spot rides the world and lifts on R;
+      other landings keep the settle-and-lift-off fix.
+    - F5 tabs: STATUS, GUNS, ORDNANCE, PANELS, NOTES.
+    - The station geometry takes the finer vertices (the flicker fix),
+      with our move of the ground-site aprons re-applied.
+  - **Tests:** 62 suites now, all green. That includes city-sites,
+    growth, prospectors, stealth and wars, which the mining line kept
+    outside `npm test`.
+  - **`npm run unpack` now refreshes stale copies by itself.** It keeps
+    a record of what each working copy was when last in sync
+    (`.pack-state.json`, untracked), so a copy that is only old (after a
+    merge or a pull) is refreshed, while one you edited is kept, and
+    `npm test` says which.
 - **The models and station geometry are stored compressed, and the game
   unpacks them itself (2026-10-30).** Astra: *"can you compress the data
   somehow?"*, then *"and ensure the executable can unpack the compressed
