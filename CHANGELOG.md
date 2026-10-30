@@ -2789,6 +2789,15 @@ Astra has seen it working.
     again at a higher grade sells the newly read classes.
   - A drone digs the most valuable thing your survey has read, so a
     grade-1 survey keeps it on ore and ice.
+- **2026-10-21: ship cuts tuned to the hulls' own seams** (ship-modules
+  idea-stream). `tools/tune-cuts.cjs` moves each of Astra's cuts by at most
+  4% to wherever it slices the least hull, and only when that slices at
+  least 10% less than her line; it merges cuts that would leave a sliver
+  under 4%, turns side cuts within 3% of the middle into one true centreline
+  split, and drops cuts that would trim only the outermost 3%. 51 of 54
+  ships changed (169 moves, 28 merges or drops). Her table is kept as
+  `tools/ship-cuts-astra.json`. The chopper now makes a single plane for a
+  centreline cut instead of two at the same place.
 - **2026-10-16: the attitude ladder and bank scale are drawn sharp** under
   the glass glow. Measured on the RX 540: cockpit in a ring 22 > 40 fps,
   above it 37 > 51, in a belt field 26 > 40.
@@ -2814,6 +2823,50 @@ Astra has seen it working.
   and logo in the same place from logo.js, and the title's first showing
   starts finished so the hand-over does not flicker. Tests: captains, 10
   checks; render 950/950.
+- **2026-10-21: where the factory ships come apart.** tools/ship-cuts.json
+  holds Astra's cuts for all 18 factory families at S, M and L: length
+  cuts, deck cuts, and mirrored side cuts, as fractions of each hull. Set
+  by eye in a cut editor (Claude outputs/ship-cuts-editor.cjs builds one
+  page per size, real triangles from above and from the side, draggable
+  lines). The carrier's conning tower is its cockpit, reached by lift.
+  Groundwork for ship modules; nothing in the game reads it yet.
+- **2026-10-21: the factory ships come apart (experiment, ship-modules
+  branch).** tools/chop-ships.cjs cuts all 54 factory ships along Astra's
+  cut table into modules: wings off whole as a mirrored pair, small parts
+  kept whole in the cell their centre is in, hull shells sliced at the
+  planes. Cells holding only a lamp or a bracket fold into the nearest
+  piece of the same role, and a ship always keeps a fore and an aft piece
+  (capital-l: 102 cells to 28 pieces; fighter-m: 23 to 20). Every pair of
+  touching pieces records its joint. _ship-modules/view.html shows any ship
+  pulled apart, drag to turn. Cut faces are still open; caps and standard
+  sockets per size come next. Nothing in the game reads it yet.
+- **2026-10-21: what a cut opens, a plate closes (ship-modules).** Where a
+  cut slices one of a ship's solids, the outline it leaves on the plane is
+  traced and filled: a wall at a length or side cut, a floor or ceiling at
+  a deck cut, given to the pieces on both sides facing outward, in the
+  part's own paint (capital-l: 1,718 plate triangles). Scraps are judged on
+  the model's own geometry, not on the plates. The viewer can show the
+  plates in yellow.
+- **2026-10-21: round parts are pods (ship-modules).** A tank, bell or
+  blister is never sliced by the cut grid: it becomes its own piece,
+  trimmed once with a flat face (a fifth of its diameter) on the side where
+  it meets the hull, and that face plated so it can mount on any hull
+  piece; a dome's own flat side is its face. Round means a near-cube box
+  with every vertex about the same distance from the centre (or a dome's),
+  at least 6% of the ship's length across, and not a lamp, beacon, antenna
+  tip, nozzle, engine, dish, nose or cockpit. Found on the couriers,
+  shuttles, small trader, H2 freighters, tenders and tugs; smaller round
+  parts stay whole inside their hull piece.
+- **2026-10-21: plates are slabs, and every tank is a pod (ship-modules).**
+  A plate was a sheet on the cut, so two joined pieces put two sheets in
+  the same place and they fought for the pixels. Each plate is now a slab:
+  outer face on the cut, inner face set back into its own piece (1% of the
+  ship's length, at most a quarter of the part's own depth), walls round
+  the edge. Pods' mounting faces too. The pod floor is 2.5% of the ship's
+  length, not 6%: the same propellant tank is 3% of an L hull and 7% of an
+  S, so a ratio alone made it a pod on one and not the other. Valves and
+  sensor blisters stay with the hull by name. Propellant tanks are now pods
+  on the freighters, liners, navy-l and enforcers as well.
 
 - **The cockpit scales as one piece, and the bulkhead moved aft
   (2026-10-24).** Part of the ship-interiors work above.

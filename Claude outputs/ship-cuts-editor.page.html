@@ -1,0 +1,199 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Factory ship cut editor</title>
+<style>
+body{background:#0b0f1a;color:#cfd9ee;font:13px ui-monospace,Consolas,monospace;margin:16px}
+h3{margin:0 0 6px}.help{color:#9fb0cc;margin-bottom:10px;line-height:1.6}
+.k span{padding:0 6px}.g{display:grid;grid-template-columns:repeat(auto-fill,minmax(560px,1fr));gap:12px}
+.c{background:#121828;padding:8px;border:1px solid #232c44}.c b{color:#fff;font-size:14px}
+.c .v{color:#9fb0cc;margin:4px 0}canvas{display:block;width:100%;cursor:default}
+button{background:#1d2740;color:#dfe8ff;border:1px solid #3a4a70;padding:3px 8px;margin:4px 4px 0 0;font:12px ui-monospace,monospace;cursor:pointer}
+button:hover{background:#2a3860}pre{background:#121828;padding:10px;white-space:pre-wrap;border:1px solid #232c44}
+</style></head><body>
+<h3>Factory ship cut editor (size <span id="sz"></span>) &nbsp; <a href="_ship-cut-editor-s.html" style="color:#8fb4ff">S</a> &middot; <a href="_ship-cut-editor-m.html" style="color:#8fb4ff">M</a> &middot; <a href="_ship-cut-editor-l.html" style="color:#8fb4ff">L</a></h3>
+<div class="help" id="from"></div>
+<div class="help">Drag a dashed line to move a cut &middot; double-click a line to remove it &middot; buttons add cuts.<br>
+<b>Length</b> cuts run nose to tail (white) &middot; <b>deck</b> cuts split the ship top from bottom (cyan, side view) &middot;
+<b>side</b> cuts split it out from the centreline and always come as a mirrored pair (magenta, top view).</div>
+<div class="k"><span style="color:#4f9bff">&#9632; cockpit</span><span style="color:#b9c0cc">&#9632; mid</span><span style="color:#ff8a3d">&#9632; engine</span><span style="color:#49c27a">&#9632; wings</span>
+<span>alternate shades = separate decks or side pieces</span></div><br>
+<div class="g" id="g"></div>
+<h3 style="margin-top:16px">The table <button id="copy">copy</button></h3><pre id="out"></pre>
+<script>
+var SIZE = /*SIZE*/, SHIPS = /*DATA*/;
+document.getElementById('sz').textContent = SIZE.toUpperCase();
+document.getElementById('from').textContent = SIZE === 'm' ? 'Your saved M cuts.'
+  : 'Ships without their own ' + SIZE.toUpperCase() + ' cuts start from the M cuts. Larger hulls may need more decks or segments.';
+var KEY = 'manifest.shipCuts.' + SIZE, saved = {};
+try { saved = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { saved = {}; }
+var CUTS = window.CUTS = {};
+/* A COPY of the first guess, never the guess itself: edits mutate CUTS, and
+ * "reset to first guess" has to have something unmutated to go back to. */
+SHIPS.forEach(function (s) { CUTS[s.fam] = saved[s.fam] || JSON.parse(JSON.stringify(s.cuts)); });
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(CUTS)); } catch (e) {}
+  var o = {}; Object.keys(CUTS).sort().forEach(function (k) {
+    var c = CUTS[k]; o[k] = { z: c.z.slice().sort(num), y: c.y.slice().sort(num), x: c.x.slice().sort(num) };
+  });
+  document.getElementById('out').textContent = JSON.stringify(o, null, 1);
+}
+function num(a, b) { return a - b; }
+document.getElementById('copy').onclick = function () { try { navigator.clipboard.writeText(document.getElementById('out').textContent); } catch (e) {} };
+
+/* ---- geometry ---- */
+function clipKeep(poly, ax, v, keepAbove) {
+  var out = [];
+  for (var i = 0; i < poly.length; i++) {
+    var a = poly[i], b = poly[(i + 1) % poly.length];
+    var da = keepAbove ? a[ax] - v : v - a[ax], db = keepAbove ? b[ax] - v : v - b[ax];
+    if (da >= 0) out.push(a);
+    if ((da >= 0) !== (db >= 0)) { var u = da / (da - db); out.push([a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u]); }
+  }
+  return out;
+}
+/* Split polygons along one axis at ascending planes; idx = interval counted from the low end. */
+function split(items, ax, planes) {
+  if (!planes.length) return items;
+  var out = [];
+  items.forEach(function (it) {
+    for (var k = 0; k <= planes.length; k++) {
+      var p = it.poly;
+      if (k > 0) p = clipKeep(p, ax, planes[k - 1], true);
+      if (k < planes.length && p.length >= 3) p = clipKeep(p, ax, planes[k], false);
+      if (p.length >= 3) { var c = it.cell.slice(); c[ax] = k; out.push({ poly: p, cell: c, w: it.w }); }
+    }
+  });
+  return out;
+}
+function idxOf(v, planes) { var k = 0; while (k < planes.length && v > planes[k]) k++; return k; }
+
+function prep(s) {
+  var lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
+  s.parts.forEach(function (p) {
+    p.tris = []; var t = p.t;
+    p.lo = [1e9, 1e9, 1e9]; p.hi = [-1e9, -1e9, -1e9];
+    for (var i = 0; i + 8 < t.length; i += 9) {
+      var tri = [[t[i], t[i + 1], t[i + 2]], [t[i + 3], t[i + 4], t[i + 5]], [t[i + 6], t[i + 7], t[i + 8]]];
+      p.tris.push(tri);
+      tri.forEach(function (v) { for (var a = 0; a < 3; a++) { p.lo[a] = Math.min(p.lo[a], v[a]); p.hi[a] = Math.max(p.hi[a], v[a]); } });
+    }
+    for (var a = 0; a < 3; a++) { lo[a] = Math.min(lo[a], p.lo[a]); hi[a] = Math.max(hi[a], p.hi[a]); }
+  });
+  s.lo = lo; s.hi = hi; s.L = hi[2] - lo[2]; s.H = hi[1] - lo[1];
+  s.halfW = Math.max(Math.abs(lo[0]), Math.abs(hi[0]));
+  s.parts.forEach(function (p) {
+    p.long = (p.hi[2] - p.lo[2]) >= 0.4 * s.L || (p.hi[1] - p.lo[1]) >= 0.6 * s.H || (p.hi[0] - p.lo[0]) >= 0.8 * s.halfW;
+    p.c = [0, 1, 2].map(function (a) { return (p.lo[a] + p.hi[a]) / 2; });
+  });
+}
+/* Cut planes in model units: z ascending (tail to nose), y ascending, x ascending (mirrored). */
+function planes(s) {
+  var c = CUTS[s.fam];
+  var z = c.z.map(function (f) { return s.hi[2] - f * s.L; }).sort(num);
+  var y = c.y.map(function (f) { return s.lo[1] + f * s.H; }).sort(num);
+  var x = []; c.x.forEach(function (f) { x.push(f * s.halfW, -f * s.halfW); }); x.sort(num);
+  return { z: z, y: y, x: x };
+}
+function slice(s) {
+  var P = planes(s), out = [];
+  s.parts.forEach(function (p) {
+    if (p.w || !p.long) {
+      var cell = [idxOf(p.c[0], P.x), idxOf(p.c[1], P.y), idxOf(p.c[2], P.z)];
+      p.tris.forEach(function (t) { out.push({ poly: t, cell: cell, w: p.w }); });
+    } else {
+      var items = p.tris.map(function (t) { return { poly: t, cell: [0, 0, 0], w: 0 }; });
+      items = split(split(split(items, 2, P.z), 1, P.y), 0, P.x);
+      out = out.concat(items);
+    }
+  });
+  return { items: out, P: P };
+}
+
+/* ---- drawing ---- */
+var HUE = { cockpit: [215, 85], mid: [220, 10], engine: [24, 95], wing: [145, 55] };
+function colour(it, nz) {
+  var zi = nz - it.cell[2];   // 0 at the nose
+  var role = it.w ? 'wing' : nz === 0 ? 'mid' : zi === 0 ? 'cockpit' : zi === nz ? 'engine' : 'mid';
+  var h = HUE[role], light = ((it.cell[0] + it.cell[1]) % 2) ? 42 : 62;
+  return 'hsla(' + h[0] + ',' + h[1] + '%,' + light + '%,0.6)';
+}
+function card(s) {
+  prep(s);
+  var d = document.createElement('div'); d.className = 'c';
+  d.innerHTML = '<b>' + s.fam + '</b><div class="v"></div>';
+  var cv = document.createElement('canvas'); cv.width = 1120; cv.height = 860; d.appendChild(cv);
+  ['length', 'deck', 'side'].forEach(function (kind) {
+    var b = document.createElement('button'); b.textContent = '+ ' + kind + ' cut';
+    b.onclick = function () { var c = CUTS[s.fam], arr = kind === 'length' ? c.z : kind === 'deck' ? c.y : c.x; arr.push(gapMid(arr, kind === 'side' ? 0 : 0)); arr.sort(num); draw(); save(); };
+    d.appendChild(b);
+  });
+  var rb = document.createElement('button'); rb.textContent = 'reset to first guess';
+  rb.onclick = function () { CUTS[s.fam] = JSON.parse(JSON.stringify(s.cuts)); draw(); save(); };
+  d.appendChild(rb);
+  document.getElementById('g').appendChild(d);
+  var x = cv.getContext('2d');
+  var sc = 1040 / s.L;
+  sc = Math.min(sc, 340 / (2 * s.halfW || 1), 340 / (s.H || 1));
+  var X0 = 40, TOP = 210, SIDE = 640;
+  function sx(z) { return X0 + (s.hi[2] - z) * sc; }
+  function tyX(xv) { return TOP - xv * sc; }
+  function syY(yv) { return SIDE - (yv - (s.lo[1] + s.hi[1]) / 2) * sc; }
+  var drag = null, raf = 0;
+  function draw() {
+    if (raf) return;
+    raf = requestAnimationFrame(function () {
+      raf = 0;
+      var r = slice(s), nz = r.P.z.length;
+      x.clearRect(0, 0, cv.width, cv.height);
+      x.fillStyle = '#9fb0cc'; x.font = '22px ui-monospace,monospace';
+      x.fillText('from above', 12, 26); x.fillText('from the side', 12, 456);
+      x.fillText('◀ nose', X0, cv.height - 10);
+      r.items.forEach(function (it) {
+        x.fillStyle = colour(it, nz);
+        for (var view = 0; view < 2; view++) {
+          x.beginPath();
+          it.poly.forEach(function (v, i) {
+            var px = sx(v[2]), py = view ? syY(v[1]) : tyX(v[0]);
+            i ? x.lineTo(px, py) : x.moveTo(px, py);
+          });
+          x.closePath(); x.fill();
+        }
+      });
+      var c = CUTS[s.fam];
+      x.lineWidth = 2; x.setLineDash([10, 8]); x.font = '22px ui-monospace,monospace';
+      c.z.forEach(function (f) { var px = X0 + f * s.L * sc; x.strokeStyle = '#ffffff'; line(px, 36, px, cv.height - 36); x.fillStyle = '#fff'; x.fillText(f.toFixed(2), px + 6, 56); });
+      c.x.forEach(function (f) { x.strokeStyle = '#ff5bd8'; [1, -1].forEach(function (sg) { var py = tyX(sg * f * s.halfW); line(X0, py, X0 + s.L * sc, py); }); x.fillStyle = '#ff5bd8'; x.fillText(f.toFixed(2), X0 + s.L * sc + 8, tyX(f * s.halfW) + 8); });
+      c.y.forEach(function (f) { var py = syY(s.lo[1] + f * s.H); x.strokeStyle = '#47e0ff'; line(X0, py, X0 + s.L * sc, py); x.fillStyle = '#47e0ff'; x.fillText(f.toFixed(2), X0 + s.L * sc + 8, py + 8); });
+      x.setLineDash([]);
+      d.querySelector('.v').textContent = 'length ' + fmt(c.z) + '  ·  decks ' + fmt(c.y) + '  ·  sides ' + fmt(c.x);
+    });
+  }
+  function line(a, b, c2, d2) { x.beginPath(); x.moveTo(a, b); x.lineTo(c2, d2); x.stroke(); }
+  function pos(e) { var r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * cv.width / r.width, (e.clientY - r.top) * cv.height / r.height]; }
+  function hit(m) {
+    var c = CUTS[s.fam], best = null, bd = 14;
+    c.z.forEach(function (f, i) { var dd = Math.abs(m[0] - (X0 + f * s.L * sc)); if (dd < bd) { bd = dd; best = { k: 'z', i: i }; } });
+    if (m[1] < 430) c.x.forEach(function (f, i) { [1, -1].forEach(function (sg) { var dd = Math.abs(m[1] - tyX(sg * f * s.halfW)); if (dd < bd) { bd = dd; best = { k: 'x', i: i }; } }); });
+    else c.y.forEach(function (f, i) { var dd = Math.abs(m[1] - syY(s.lo[1] + f * s.H)); if (dd < bd) { bd = dd; best = { k: 'y', i: i }; } });
+    return best;
+  }
+  function value(k, m) {
+    var f = k === 'z' ? (m[0] - X0) / (s.L * sc)
+          : k === 'x' ? Math.abs(TOP - m[1]) / sc / s.halfW
+          : ((SIDE - m[1]) / sc + (s.lo[1] + s.hi[1]) / 2 - s.lo[1]) / s.H;
+    return Math.round(Math.max(0.02, Math.min(0.98, f)) * 100) / 100;
+  }
+  cv.addEventListener('mousedown', function (e) { drag = hit(pos(e)); if (drag) e.preventDefault(); });
+  cv.addEventListener('mousemove', function (e) {
+    var m = pos(e);
+    if (!drag) { cv.style.cursor = hit(m) ? (hit(m).k === 'z' ? 'ew-resize' : 'ns-resize') : 'default'; return; }
+    CUTS[s.fam][drag.k][drag.i] = value(drag.k, m); draw();
+  });
+  window.addEventListener('mouseup', function () { if (drag) { drag = null; save(); } });
+  cv.addEventListener('dblclick', function (e) { var h = hit(pos(e)); if (h) { CUTS[s.fam][h.k].splice(h.i, 1); draw(); save(); } });
+  draw();
+}
+function fmt(a) { return a.length ? a.slice().sort(num).map(function (f) { return f.toFixed(2); }).join(', ') : 'none'; }
+function gapMid(arr) { var p = [0].concat(arr.slice().sort(num), [1]), best = 0, at = 0.5; for (var i = 0; i + 1 < p.length; i++) if (p[i + 1] - p[i] > best) { best = p[i + 1] - p[i]; at = (p[i] + p[i + 1]) / 2; } return Math.round(at * 100) / 100; }
+SHIPS.forEach(card);
+save();
+</script></body></html>
