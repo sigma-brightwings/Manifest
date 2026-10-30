@@ -1,0 +1,110 @@
+# The public site: a landing page in the title card's colours at the root,
+# and the game itself, untouched, at /play/.
+#
+# NOT JEKYLL. GitHub's suggested Pages workflow runs the whole repo through
+# Jekyll, and for this repo that is wrong twice over. The game needs no
+# build step at all — index.html runs as it stands — and Jekyll would have
+# rendered every .md file in the root into a public page: PLAN.md,
+# CLAUDE.md, next.md, NEXT-STEPS.md. Those are working notes, not a
+# website. So this workflow copies exactly the files the game loads, and
+# nothing else reaches the site.
+#
+# LFS IS LOAD-BEARING HERE TOO, same as in build.yml. The station art in
+# src/ports/*.js lives in Git LFS. A checkout without it holds 130-byte
+# pointer files with a .js extension, and the browser would try to run
+# them — every station would fail to load with a syntax error. Only
+# src/ports is pulled, not the .glb sources under ref/, because the site
+# never touches those.
+#
+# THE LFS PULL IS CACHED, because LFS downloads from Actions count against
+# the repository owner's LFS bandwidth, and src/ports is ~270 MB. Without
+# the cache every push would download all of it again. With it, a deploy
+# only pays for that when the station art itself has changed.
+
+name: pages
+
+on:
+  push:
+    branches: ["master"]
+    # Only redeploy when something the site actually serves has changed.
+    # A push that only edits PLAN.md has nothing to publish.
+    paths:
+      - "index.html"
+      - "src/**"
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time. A run already deploying is allowed to finish
+# rather than being cancelled half-published.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # v5 and newer throughout: the v4-era actions run on Node 20, which the
+      # runners have deprecated (see the note in build.yml).
+      - uses: actions/checkout@v5
+
+      # A fingerprint of every LFS object the site needs. It changes only
+      # when the station art changes, which is what makes it a cache key.
+      - name: List station art
+        run: git lfs ls-files -l --include "src/ports/*.js" | cut -d' ' -f1 | sort > .lfs-ports-id
+
+      - uses: actions/cache@v5
+        with:
+          path: .git/lfs
+          key: lfs-ports-${{ hashFiles('.lfs-ports-id') }}
+
+      - name: Pull station art
+        run: git lfs pull --include "src/ports/*.js"
+
+      # Refuse to publish pointer files. If the pull failed quietly — quota
+      # exhausted is the likely way — this is where it gets caught, instead
+      # of in a tester's console.
+      - name: Check no LFS pointers remain
+        run: |
+          bad=$(grep -l '^version https://git-lfs.github.com/spec' src/ports/*.js || true)
+          if [ -n "$bad" ]; then
+            echo "::error::These station files are still LFS pointers, not art:"
+            echo "$bad"
+            exit 1
+          fi
+
+      # Assemble the site. The game goes in as-is: index.html plus src/,
+      # minus the node-only *.cjs verifiers, which a browser never loads.
+      - name: Assemble site
+        run: |
+          mkdir -p _site/play
+          cp -r site/. _site/
+          cp index.html _site/play/
+          cp -r src _site/play/src
+          find _site/play/src -name '*.cjs' -delete
+          # Belt and braces: tells Pages not to run Jekyll on what we upload.
+          touch _site/.nojekyll
+          du -sh _site
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
