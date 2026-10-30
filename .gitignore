@@ -42,6 +42,15 @@ _test_output.txt
 # from every session. Scratch by design; the repo is the record.
 Claude outputs/
 
+# THE WORKING COPIES OF PACKED FILES (tools/pack.cjs, 2026-10-30). What
+# git tracks is the .gz beside each of these; the plain file is only there
+# so Blender and the tools can open it. `npm run unpack` writes them out,
+# `npm run pack` stores your changes, and `npm test` fails while a working
+# copy differs from what is stored.
+ref/**/*.glb
+new models/**/*.glb
+src/ports/*.js
+
 # The models/ staging area. Almost every .glb in it duplicated ref/glb/ —
 # the copy tools/glb2hulls.js actually consumes — with a third copy under
 # "models/Manifest Models/uploads/". Tracking it would have written the same

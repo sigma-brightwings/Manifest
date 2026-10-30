@@ -25,6 +25,7 @@ const { app, BrowserWindow, Menu, protocol, net, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { readPacked, typeOf: packedType } = require('./packed.js');
 
 /* ---- THE RENAME CARRIES THE SAVES ------------------------------------
  *
@@ -109,7 +110,7 @@ protocol.registerSchemesAsPrivileged([{
 }]);
 
 function serveGameScheme() {
-  protocol.handle('game', (request) => {
+  protocol.handle('game', async (request) => {
     let pathname;
     try {
       pathname = decodeURIComponent(new URL(request.url).pathname);
@@ -124,6 +125,15 @@ function serveGameScheme() {
     const file = path.resolve(ROOT, '.' + pathname);
     if (file !== ROOT && !file.startsWith(ROOT + path.sep)) {
       return new Response('forbidden', { status: 403 });
+    }
+    /* Stored packed (tools/pack.cjs, 2026-10-30): the station geometry
+     * ships as src/ports/*.js.gz, and is unpacked here, in memory, on the
+     * way to the page. See electron/packed.js. */
+    try {
+      const packed = await readPacked(file);
+      if (packed) return new Response(packed, { status: 200, headers: { 'content-type': packedType(file) } });
+    } catch (e) {
+      return new Response('unreadable: ' + pathname, { status: 500 });
     }
     return net.fetch(pathToFileURL(file).toString());
   });

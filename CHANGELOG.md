@@ -1882,6 +1882,33 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Changed
 
+- **The models and station geometry are stored compressed, and the game
+  unpacks them itself (2026-10-30).** Astra: *"can you compress the data
+  somehow?"*, then *"and ensure the executable can unpack the compressed
+  data."*
+  - Every .glb model and the station geometry (`src/ports/*.js`) is now
+    stored gzipped, in plain git, with no Git LFS. That is 403 files, which
+    go from 684.8 MB to 60.5 MB.
+  - It is lossless. Each .gz was checked against the LFS checksum of the
+    file it replaces, and all 403 match byte for byte.
+  - **The .exe ships only the packed station files, 33 MB instead of 270 MB.**
+    Its `game://` scheme unpacks each one in memory as the game asks for it
+    (`electron/packed.js`), so the game sees exactly the script the
+    generator wrote. Checked on a real Windows build: all 90 stations
+    loaded from the .gz files, with no plain copies present.
+  - The dev server (`tools/serve.js`) and the node loader in `src/ports.js`
+    that the suites use read the .gz in the same way. The Pages deploy
+    unpacks them on the runner, so the website doesn't change.
+  - The plain files are still on disk as working copies that git ignores,
+    so Blender and the tools open them as before.
+    - `npm run unpack` writes them out after a fresh checkout.
+    - `npm run pack` stores your changes.
+    - `npm test` fails while any working copy differs from what is stored,
+      so an edit can't silently miss the repo.
+  - `test/packed.test.js` has 12 checks, and `tools/probe-packed.js`
+    checks a packaged build.
+  - The CI and Pages workflows no longer touch LFS, so there is no LFS
+    bandwidth cost on deploys.
 - **One line of work (2026-10-30).** Astra: *"let's take all the various
   work streams and integrate them into one."* Everything now lives on
   `master`:

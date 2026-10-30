@@ -9,17 +9,13 @@
 # website. So this workflow copies exactly the files the game loads, and
 # nothing else reaches the site.
 #
-# LFS IS LOAD-BEARING HERE TOO, same as in build.yml. The station art in
-# src/ports/*.js lives in Git LFS. A checkout without it holds 130-byte
-# pointer files with a .js extension, and the browser would try to run
-# them — every station would fail to load with a syntax error. Only
-# src/ports is pulled, not the .glb sources under ref/, because the site
-# never touches those.
-#
-# THE LFS PULL IS CACHED, because LFS downloads from Actions count against
-# the repository owner's LFS bandwidth, and src/ports is ~270 MB. Without
-# the cache every push would download all of it again. With it, a deploy
-# only pays for that when the station art itself has changed.
+# THE STATION GEOMETRY IS STORED PACKED (tools/pack.cjs, 2026-10-30). The
+# repo holds src/ports/<id>.js.gz, not the scripts the browser runs, and a
+# static host cannot unpack them on the way out. So the runner unpacks them
+# here, into the copy that is published, and the .gz files are left out of
+# the site. Until 2026-10-30 these lived in Git LFS and every uncached
+# deploy pulled ~270 MB against the LFS bandwidth quota; now the checkout
+# is the whole of it.
 
 name: pages
 
@@ -54,30 +50,14 @@ jobs:
       # runners have deprecated (see the note in build.yml).
       - uses: actions/checkout@v5
 
-      # A fingerprint of every LFS object the site needs. It changes only
-      # when the station art changes, which is what makes it a cache key.
-      - name: List station art
-        run: git lfs ls-files -l --include "src/ports/*.js" | cut -d' ' -f1 | sort > .lfs-ports-id
-
-      - uses: actions/cache@v5
-        with:
-          path: .git/lfs
-          key: lfs-ports-${{ hashFiles('.lfs-ports-id') }}
-
-      - name: Pull station art
-        run: git lfs pull --include "src/ports/*.js"
-
-      # Refuse to publish pointer files. If the pull failed quietly — quota
-      # exhausted is the likely way — this is where it gets caught, instead
-      # of in a tester's console.
-      - name: Check no LFS pointers remain
+      # Unpack the station geometry the browser will ask for.
+      - name: Unpack station art
         run: |
-          bad=$(grep -l '^version https://git-lfs.github.com/spec' src/ports/*.js || true)
-          if [ -n "$bad" ]; then
-            echo "::error::These station files are still LFS pointers, not art:"
-            echo "$bad"
-            exit 1
-          fi
+          n=0
+          for f in src/ports/*.js.gz; do gunzip -kf "$f"; n=$((n+1)); done
+          echo "unpacked $n stations"
+          # Refuse to publish a site with no stations in it.
+          if [ "$n" -lt 1 ]; then echo "::error::No packed station geometry found"; exit 1; fi
 
       # Assemble the site. The game goes in as-is: index.html plus src/,
       # minus the node-only *.cjs verifiers, which a browser never loads.
@@ -88,6 +68,8 @@ jobs:
           cp index.html _site/play/
           cp -r src _site/play/src
           find _site/play/src -name '*.cjs' -delete
+          # The packed copies were unpacked above; the browser never reads them.
+          find _site/play/src -name '*.gz' -delete
           # Belt and braces: tells Pages not to run Jekyll on what we upload.
           touch _site/.nojekyll
           du -sh _site

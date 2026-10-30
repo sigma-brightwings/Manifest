@@ -9,6 +9,7 @@
  * build that looks exactly like a playtest of today's.
  */
 var http = require('http'), fs = require('fs'), path = require('path');
+var Packed = require('../electron/packed.js');
 var port = parseInt(process.argv[2], 10) || 8732;
 var root = path.resolve(__dirname, '..');
 var TYPES = { '.html': 'text/html', '.js': 'text/javascript',
@@ -24,6 +25,16 @@ http.createServer(function (req, res) {
   if (url === '/') url = '/index.html';
   var file = path.join(root, url);
   if (file.indexOf(root) !== 0) { res.writeHead(403); res.end(); return; }
+  /* Stored packed (tools/pack.cjs): answer for a .gz-only file with its
+   * unpacked bytes, exactly as the .exe does (electron/packed.js). */
+  var packed = null;
+  try { packed = Packed.readPackedSync(file); } catch (e) { res.writeHead(500); res.end('unreadable'); return; }
+  if (packed) {
+    res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'text/plain',
+                         'Cache-Control': 'no-store, no-cache, must-revalidate' });
+    res.end(packed);
+    return;
+  }
   fs.readFile(file, function (err, data) {
     if (err) { res.writeHead(404); res.end('not found'); return; }
     res.writeHead(200, {

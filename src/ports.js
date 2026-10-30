@@ -58,7 +58,15 @@
     if (GEO_STATE[id] === 'failed' || GEO_STATE[id] === 'pending') return false;
     if (typeof document === 'undefined' && typeof require === 'function' && typeof __dirname === 'string') {
       try {
-        var d = require(require('path').join(__dirname, 'ports', id + '.js'));
+        /* Stored packed (tools/pack.cjs): the .js.gz is the tracked copy and
+         * the plain .js only a working copy, so read whichever is there. */
+        var fs_ = require('fs'), file = require('path').join(__dirname, 'ports', id + '.js'), d;
+        if (fs_.existsSync(file)) d = require(file);
+        else {
+          var mod = { exports: {} };
+          (new Function('module', 'exports', require('zlib').gunzipSync(fs_.readFileSync(file + '.gz')).toString('utf8')))(mod, mod.exports);
+          d = mod.exports;
+        }
         if (global.PortGeoData) delete global.PortGeoData[id];
         return geoMerge(id, d);
       } catch (e) { GEO_STATE[id] = 'failed'; return false; }

@@ -2,8 +2,11 @@
 # Without this every file shows as modified on a machine with the other convention.
 * text=auto
 # Binary: never touch these.
-*.glb filter=lfs diff=lfs merge=lfs -text
 *.png binary
 *.ico binary
 *.exe binary
-src/ports/*.js filter=lfs diff=lfs merge=lfs -text
+# The models and the station geometry are stored gzipped (tools/pack.cjs,
+# 2026-10-30), in plain git. They were in Git LFS until then; LFS stored
+# them uncompressed and counted every byte against the quota.
+*.gz binary
+*.glb binary
