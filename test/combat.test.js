@@ -2088,6 +2088,210 @@ section('--- the board says what it is, and what it is for ---');
   }
 })();
 
+section('--- the law has bite (2026-10-18) ---');
+(function () {
+  var NG = Combat.NPC_GUN, PG = Combat.POLICE_GUN;
+  check('a police gun outguns the generic one', PG.dmg / PG.cooldown > 2 * NG.dmg / NG.cooldown && PG.range > NG.range,
+        (PG.dmg / PG.cooldown).toFixed(1) + ' dps vs ' + (NG.dmg / NG.cooldown).toFixed(1));
+  /* A fugitive running from a cop 20 km back, shield up. */
+  var G = makeG(true);
+  G.ship.shield = 'shield'; G.ship.shieldHp = 40; G.ship.hullHp = 100;
+  var cop = fakeVictim(G, { kind: 'police', cls: 'police', faction: 'lawfac', range: 20, name: 'Patrol Cutter' });
+  cop.hostileToPlayer = true;
+  var said = [];
+  var hooks = { say: function (m) { said.push(m); }, sound: function () {} };
+  Combat.updateNpcFire(G.sys, G, 0, 0.1, hooks);
+  var ms = (G.sys.missiles || []).filter(function (m) { return m.atPlayer; });
+  check('a cop fires a missile at a fugitive out of gun range', ms.length === 1 && cop.missilesLeft === 2 &&
+        /MISSILE LAUNCH/.test(said.join(' ')), said[0]);
+  Combat.updateNpcFire(G.sys, G, 5, 0.1, hooks);
+  check('and not another until it has reloaded', (G.sys.missiles || []).length === 1);
+  /* Sitting still 20 km off: it arrives. */
+  var t = 0, before = G.ship.shieldHp + G.ship.hullHp;
+  for (var k = 0; k < 400 && (G.sys.missiles || []).length; k++) { t += 0.25; Combat.updateMissiles(G.sys, G, t, 0.25, hooks); }
+  check('it hits a ship that does not run', (G.sys.missiles || []).length === 0 && G.ship.shieldHp + G.ship.hullHp < before,
+        'arrived in ' + t.toFixed(1) + ' s, shield ' + Math.round(G.ship.shieldHp) + ', hull ' + Math.round(G.ship.hullHp));
+  /* Running early at the starting ship's ~19 m/s^2 from 30 km out. */
+  var G2 = makeG(true);
+  var cop2 = fakeVictim(G2, { kind: 'police', cls: 'police', faction: 'lawfac', range: 30 });
+  cop2.hostileToPlayer = true;
+  Combat.updateNpcFire(G2.sys, G2, 0, 0.1, HOOKS);
+  var away = { x: -1, y: 0, z: 0 }, t2 = 0, hp2 = G2.ship.hullHp;
+  for (var j = 0; j < 400 && (G2.sys.missiles || []).length; j++) {
+    t2 += 0.25; G2.ship.vel = V.addScaled(G2.ship.vel, away, 0.019 * 0.25); G2.ship.pos = V.addScaled(G2.ship.pos, G2.ship.vel, 0.25);
+    Combat.updateMissiles(G2.sys, G2, t2, 0.25, HOOKS);
+  }
+  check('running early from far out burns it out', G2.ship.hullHp === hp2, 'gone after ' + t2.toFixed(1) + ' s');
+  var G3 = makeG(true);
+  var cop3 = fakeVictim(G3, { kind: 'police', cls: 'police', faction: 'lawfac', range: 20 });
+  Combat.updateNpcFire(G3.sys, G3, 0, 0.1, HOOKS);
+  check('no missiles at somebody who is not wanted', !(G3.sys.missiles || []).length);
+})();
+
+section('--- countermeasures (2026-10-18) ---');
+(function () {
+  var realRandom = Math.random;
+  function inbound(G, km) {
+    var cop = fakeVictim(G, { kind: 'police', cls: 'police', faction: 'lawfac', range: km });
+    cop.hostileToPlayer = true;
+    Math.random = function () { return 0.99; };
+    Combat.firePoliceMissile(G.sys, G, 0, cop, HOOKS);
+    Math.random = realRandom;
+    return G.sys.missiles[G.sys.missiles.length - 1];
+  }
+  function fly(G, secs) { var t = 0; while (t < secs && (G.sys.missiles || []).length) { t += 0.25; Combat.updateMissiles(G.sys, G, t, 0.25, HOOKS); Combat.updateCountermeasures(G.sys, G, t, 0.25, HOOKS); } return t; }
+  function armour(G) { return (G.ship.shieldHp || 0) + G.ship.hullHp; }
+
+  var G = makeG(true);
+  check('no launcher, no charges for sale', Combat.buyOutfit(G, 'decoy', null) === null);
+  G.ship.fit.utility0 = 'decoylauncher';
+  check('with one, they rack', Combat.buyOutfit(G, 'decoy', null) > 0 && G.ship.decoys === 1);
+  G.ship.decoys = 3;
+  var ms = inbound(G, 1.2);
+  Math.random = function () { return 0.4; };
+  Combat.launchDecoy(G.sys, G, 0, HOOKS);
+  Math.random = realRandom;
+  check('a decoy fired late lures the seeker', !!ms.decoy && G.ship.decoys === 2);
+  var hp = armour(G); fly(G, 60);
+  check('and it goes for the decoy, not you', armour(G) === hp);
+
+  var G2 = makeG(true); G2.ship.fit.utility0 = 'decoylauncher'; G2.ship.decoys = 3;
+  var far = inbound(G2, 10);
+  Math.random = function () { return 0.4; };
+  Combat.launchDecoy(G2.sys, G2, 0, HOOKS);
+  Math.random = realRandom;
+  check('the same roll fired early does not', !far.decoy);
+
+  var G3 = makeG(true);
+  var hm = inbound(G3, 3);
+  /* At 3 km a charge lures at 0.5 x 0.8 = 0.4, the flare at 0.85 x 0.8 = 0.68: a 0.6 roll splits them. */
+  Math.random = function () { return 0.6; };
+  var fl = Combat.dropFlare(G3.sys, G3, 0, G3.ship.pos, G3.ship.vel, HOOKS);
+  Math.random = realRandom;
+  check('a tonne of radioactives overboard is a better flare than a charge', !!hm.decoy && fl.hot &&
+        Combat.FLARE.pull > Combat.DECOY.pull && Combat.FLARE.life > Combat.DECOY.life);
+
+  var G4 = makeG(true); G4.ship.fit.internal0 = 'ecm';
+  var em = inbound(G4, 8);
+  check('ECM needs the jammer fitted', Combat.toggleEcm(makeG(true), HOOKS) === false);
+  Combat.toggleEcm(G4, HOOKS);
+  Math.random = function () { return 0; };
+  Combat.updateCountermeasures(G4.sys, G4, 0.1, 0.1, HOOKS);
+  Math.random = realRandom;
+  var hp4 = armour(G4); fly(G4, 60);
+  check('a jammed seeker loses lock and misses', em.lost && armour(G4) === hp4 && G4.ship.heat > 0);
+
+  var G5 = makeG(true); G5.ship.turret = 'turret';
+  var pm = inbound(G5, 2);
+  Math.random = function () { return 0; };
+  Combat.updateTurret(G5.sys, G5, 0, HOOKS);
+  Math.random = realRandom;
+  check('the turret shoots down a seeker inside 3 km', pm.dead === true);
+
+  /* The law's decoys against yours. */
+  var G6 = makeG(true);
+  var cop6 = fakeVictim(G6, { kind: 'police', cls: 'police', faction: 'lawfac', range: 3 });
+  (G6.sys.missiles = []).push({ pos: V.clone(G6.ship.pos), vel: V.clone(G6.ship.vel), target: cop6,
+    dmg: 42, accel: 0.09, born: 0, dies: 60, fuse: 0.09 });
+  Math.random = function () { return 0; };
+  var t6 = 0; while (t6 < 60 && G6.sys.missiles.length) { t6 += 0.1; Combat.updateMissiles(G6.sys, G6, t6, 0.1, HOOKS); }
+  Math.random = realRandom;
+  check('police drop a decoy at your missile', cop6.decoysLeft === 5 && !(cop6.hullHp < (cop6.hullMax || Infinity)),
+        'decoys left ' + cop6.decoysLeft);
+  var G7 = makeG(true);
+  var tr7 = fakeVictim(G7, { range: 3 });
+  (G7.sys.missiles = []).push({ pos: V.clone(G7.ship.pos), vel: V.clone(G7.ship.vel), target: tr7,
+    dmg: 42, accel: 0.09, born: 0, dies: 60, fuse: 0.09 });
+  Math.random = function () { return 0; };
+  var t7 = 0; while (t7 < 60 && G7.sys.missiles.length) { t7 += 0.1; Combat.updateMissiles(G7.sys, G7, t7, 0.1, HOOKS); }
+  Math.random = realRandom;
+  check('a trader has none', tr7.decoysLeft === undefined);
+})();
+
+section('--- jamming is loud, with no ID (2026-10-19) ---');
+(function () {
+  var G = makeG();
+  var cop = (G.sys.patrols || []).filter(function (p) { return p.kind === 'police' && p.faction !== 'outlaw'; })[0];
+  check('(fixture) a lawful police patrol to be seen by', !!cop);
+  if (!cop) return;
+  function placeAt(km) {
+    cop.live = null; cop.scanned = false; cop.jamSeen = 0; cop.jamCited = false;
+    var st = Sim.patrolState(cop, G.sys, G.t);
+    G.ship.pos = V.addScaled(st.pos, { x: 1, y: 0, z: 0 }, km);
+    G.ship.vel = V.clone(st.vel);
+  }
+  placeAt(Sim.WAKE_RANGE * 2);
+  G.ship.ecmLoud = false;
+  Sim.updateEncounters(G.sys, G.t, 0.01, G.ship);
+  check('quiet, a cop twice the wake range off does not stir', !cop.live);
+  placeAt(Sim.WAKE_RANGE * 2);
+  G.ship.ecmLoud = true;
+  Sim.updateEncounters(G.sys, G.t, 0.01, G.ship);
+  check('jamming, it does - you are lit up', !!cop.live);
+  /* Watched for long enough, close in, it writes you up. */
+  placeAt(200);
+  G.ship.ecmLoud = true;
+  var rep = null;
+  /* The test ship is not flown, so hold it 200 km off the cop each step
+   * (otherwise the woken cop drifts off at orbital speed). */
+  for (var k = 0; k < 60 && !rep; k++) {
+    if (cop.live) { G.ship.pos = V.addScaled(cop.live.pos, { x: 1, y: 0, z: 0 }, 200); G.ship.vel = V.clone(cop.live.vel); }
+    var r = Sim.updateEncounters(G.sys, G.t, 0.5, G.ship); rep = r.jamReport || null;
+  }
+  check('a cop that watches a jammer cites it', !!rep && rep.kind === 'police' && rep.faction !== 'outlaw' && rep.jamSeen >= Sim.ECM_CITE_S,
+        rep ? (rep === cop ? 'the one placed' : 'a nearer cop, ' + (rep.name || rep.id)) + ' after ' + rep.jamSeen.toFixed(1) + ' s' : 'none');
+  var before = G.wanted[cop.faction] || 0;
+  if (rep) cop = rep;
+  before = G.wanted[cop.faction] || 0;
+  Combat.citeJamming(G, cop, HOOKS);
+  check('for a citation', (G.wanted[cop.faction] || 0) - before === Combat.JAM_CITATION);
+  var again = null;
+  for (var j = 0; j < 60; j++) { var r2 = Sim.updateEncounters(G.sys, G.t, 0.5, G.ship); if (r2.jamReport === cop) again = r2.jamReport; }
+  check('once a cop, not every frame', again === null);
+  /* And the hold is searched, always. */
+  var G2 = makeG(); G2.sys.crimeScore = 100;
+  var p2 = fakeVictim(G2, { kind: 'police', cls: 'police', faction: 'lawfac' });
+  var realRandom = Math.random;
+  Math.random = function () { return 0.99; };
+  G2.ship.ecmLoud = true;
+  var sr = Combat.resolveScan(G2, p2, HOOKS);
+  Math.random = realRandom;
+  check('a jamming hull is always searched', sr.searched === true);
+  var G3 = makeG(); G3.ship.fit.internal0 = 'ecm'; G3.ecmOn = true;
+  Combat.updateCountermeasures(G3.sys, G3, 0, 0.1, HOOKS);
+  var loudOut = G3.ship.ecmLoud;
+  G3.ecmOn = false;
+  Combat.updateCountermeasures(G3.sys, G3, 0.1, 0.1, HOOKS);
+  check('the switch is what makes you loud', loudOut === true && G3.ship.ecmLoud === false);
+})();
+
+section('--- stolen ore and the scan (prospectors, 2026-10-18) ---');
+(function () {
+  require('../src/claims.js');
+  var realRandom = Math.random;
+  var G = makeG();
+  G.sys.crimeScore = 40;
+  var cop = fakeVictim(G, { kind: 'police', cls: 'police', faction: 'lawfac' });
+  G.ship.cargo = { ores: 12 }; G.ship.hot = { ores: 5 }; G.ship.drones = 2; G.ship.hotDrones = 1;
+  /* Searched (first roll), and an inspector who will not be bought (second). */
+  var rolls = 0;
+  Math.random = function () { return rolls++ === 0 ? 0.01 : 0.99; };
+  var r = Combat.resolveScan(G, cop, HOOKS);
+  Math.random = realRandom;
+  check('a scan finds the hot tonnes and only those', r.contraband && G.ship.cargo.ores === 7 && !(G.ship.hot.ores > 0),
+        (r.seized || []).join(', '));
+  check('and the stolen drone, not yours', G.ship.drones === 1 && G.ship.hotDrones === 0);
+  check('and fines you for it', G.wanted.lawfac > 0, Math.round(G.wanted.lawfac) + ' cr');
+  var G2 = makeG();
+  G2.sys.crimeScore = 40;
+  var pir = fakeVictim(G2, { kind: 'police', cls: 'police', faction: 'outlaw' });
+  G2.ship.cargo = { ores: 12 }; G2.ship.hot = { ores: 12 };
+  Math.random = function () { return 0.01; };
+  var r2 = Combat.resolveScan(G2, pir, HOOKS);
+  Math.random = realRandom;
+  check('an outlaw inspector does not care whose ore it was', !r2.contraband && G2.ship.cargo.ores === 12);
+})();
+
 section('--- contraband and the scan ---');
 (function () {
   check('the catalogue lists narcotics and arms as contraband',

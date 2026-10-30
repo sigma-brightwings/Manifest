@@ -394,6 +394,12 @@
       var r2 = rowFor(c2);
       r2.held = held;
       r2.yours = M ? M.sellableTonnes(G, c2, held) : held;
+      /* Stolen ore goes to an outlaw hull or a fence, nobody else. */
+      var hot2 = (!flag.outlaw && global.Claims) ? global.Claims.hotOf(G, c2) : 0;
+      if (hot2 > 0) {
+        r2.yours = Math.max(0, r2.yours - hot2);
+        if (r2.yours < 1) { r2.sellWhy = 'hot - a fence or a Syndicate hull'; continue; }
+      }
       if (com2.base <= 0) { r2.sellWhy = 'find a reprocessing plant'; continue; }
       if (com2.contraband && !flag.outlaw) {
         r2.sellWhy = 'not through a customs scan';

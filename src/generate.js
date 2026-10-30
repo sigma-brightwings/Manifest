@@ -730,6 +730,22 @@
       }
     }
 
+    /* NOBODY'S SYSTEM (2026-10-24). Astra: "not every star system has
+     * anything in it but hydrogen for fuel to keep moving at the star or one
+     * of the planets" - the no-man's land between the polities. The star,
+     * its worlds, moons, rings and belts are generated exactly as they would
+     * be (every stream above is forked, so nothing moves); then every port
+     * built over or on them is taken away. No port means no market, no
+     * traffic and no garrison below. Only a galaxy star nobody holds is
+     * generated this way (Galaxy.systemOpts); a bare seed never is. */
+    if (opts.empty) {
+      var strip = function (b) {
+        b.children = b.children.filter(function (c) { return !isStation(c); });
+        b.children.forEach(strip);
+      };
+      strip(star);
+    }
+
     var sys = finalize({
       root: star, seed: seed, seedHash: base.seed,
       name: starName,
@@ -754,6 +770,23 @@
      * anywhere downstream of buildGovernment. Own substream, no draws
      * taken from anything else. */
     buildFlavor(sys, base);
+    /* Nobody's system: nobody's flag, nobody's law - the same answer the
+     * deep-space drop-out gives (interstellarSystem), because it is the
+     * same fact. Marked `empty` so the chart, the HUD and the market can
+     * ask rather than infer it from an empty port list. */
+    if (opts.empty) {
+      sys.empty = true;
+      sys.factions = [];
+      sys.factionById = { outlaw: sys.outlaw };
+      sys.government = { id: 'none', name: 'unclaimed', crime: 100 };
+      sys.violence = 0;
+      sys.corruption = 0;
+      sys.crimeScore = 100;
+      sys.pirateHeld = false;
+      sys.development = 0;
+      sys.systemNote = 'Nobody holds this system. No port, no market, no law - hydrogen for the taking, at the star' +
+        (sys.bodies.some(function (b) { return b.type === 'gasGiant' || b.type === 'iceGiant'; }) ? ' and the giants' : '') + '.';
+    }
     buildTraffic(sys, base);
     buildPatrols(sys, base);
     /* The Syndicate's heavies — after every patrol exists, so no id or draw
@@ -1213,7 +1246,15 @@
          * you are looking at something on a planet or something in orbit. */
         padLight: port.surface ? '#ffb45c' : '#7fd0ff',
         hazard: rng.chance(0.5) ? '#ffcf3b' : '#ff7a3b',
-        grime: rng.range(0, 1)
+        grime: rng.range(0, 1),
+        /* WHERE THE CITY STANDS on a modelled city site (Astra,
+         * 2026-10-24: "randomize the location of the city portion and the
+         * domes ... without putting them on the landing apron or the
+         * door"). Render.citySpot turns this into a place clear of the
+         * pad, the runway and the doors. Its OWN stream, salted like the
+         * control cabinet's, so drawing it moves nothing else in the
+         * dressing or the galaxy. */
+        citySeed: port.surface ? new RNG('city|' + ((sys && sys.seed) || '') + '|' + port.id).range(0, 1) : null
       };
     }
   }
@@ -1457,7 +1498,10 @@
     var k = ((i % sorted.length) + sorted.length) % sorted.length;
     var b = sorted[k];
     if (!b || typeof b.entry !== 'number' || !b.via || b.entry === k || !sorted[b.entry]) return null;
-    return { entry: b.entry, via: b.via, cls: b.cls || null };
+    /* `ride`: [i, j], the via corners where the hull boards a lift car and
+     * where it gets off, when the route rides one (glb2hulls, 2026-10-16).
+     * The arrival stops on the car and lets it run - see arrivalPose. */
+    return { entry: b.entry, via: b.via, cls: b.cls || null, ride: b.ride || null };
   }
 
   /* THE WAY DOWN TO A GROUND SITE'S BERTH (2026-09-24), or null.
@@ -1951,11 +1995,24 @@
       for (var vi = 1; vi < sorted.length; vi++) {
         if (vol(sorted[vi]) > vol(sorted[biggest])) biggest = vi;
       }
+      /* AND ON THE STAND, NOT IN IT. The deck is the cast structure; the
+       * stand Render.berthDressing builds sits a lift above that, and the
+       * hull was parked off the cast deck as if the stand were not there —
+       * Astra, at Waypoint Dock: "make the ship sit just a bit higher on
+       * the launch pad, so it isn't embedded in it". Measured: the stand's
+       * plate came out ~5.7 m above the deck and the tallest hull's keel
+       * 1 m above it. So the stand's own height is added here, from the
+       * one function that builds it. Only where there is a stand to stand
+       * on — a modelled ORBITAL berth with a renderer (the stand is drawn
+       * by drawStationModel, which ground ports do not go through); headless
+       * callers keep the old number. */
+      var stand = (R2 && R2.standTopKm && !port.surface && deck !== null && deck !== undefined)
+        ? R2.standTopKm() / (port.radius || 1) : 0;
       return {
         x: bx.mid[0],
         y: bx.mid[1],
         /* Floor of the bay, not its middle. */
-        z: floorZ + g.standoff,
+        z: floorZ + g.standoff + stand,
         /* WHICH WAY THE BAY OPENS, from the throat's own orientation.
          *
          * The converter reduces each berth's node transform to a unit
@@ -3329,6 +3386,27 @@
       if (!cr.chance(chance)) return;
       Eco.addBlackMarketRows(port, cr.fork('bm-' + port.id));
     });
+    /* A FENCE IN EVERY SYSTEM. Astra, 2026-10-18: "there should be a
+     * syndicate-friendly port in every system so that you don't have to
+     * jump to another star system far away just to sell your stolen
+     * shit. Although jumping to a syndicate-only system gets you a
+     * higher price." Measured first: about one system in six with ports
+     * had no back room outside a Guild hall. Those get one at the port
+     * least worth watching - the lowest-development market that is not
+     * the Guild's - on its own fork, so every back room above and every
+     * other port is exactly what it was. The Syndicate-hold premium is
+     * the fence's price (claims.js FENCE_*_SYND), not another port. */
+    var open = (sys.ports || []).filter(function (p) {
+      return p.market && (p.market.role || p.market.roleId) !== 'mining';
+    });
+    if (open.length && !open.some(function (p) { return p.market.blackMarket; })) {
+      open.sort(function (a, b) {
+        return ((a.market.dev || 0) - (b.market.dev || 0)) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+      });
+      var fr = base.fork('fence-every');
+      Eco.addBlackMarketRows(open[0], fr.fork('bm-' + open[0].id));
+      open[0].market.fence = true;     // placed for the stolen-goods trade, not by crime
+    }
   }
 
   /* --- Syndicate runners ---------------------------------------------------

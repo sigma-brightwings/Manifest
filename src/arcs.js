@@ -76,6 +76,8 @@
     if (offer.type === 'courier') return 2200;
     if (offer.type === 'disposal') return offer.tonnes * 75;
     if (offer.type === 'smuggle') return offer.tonnes * 140;
+    if (offer.type === 'sabotage') return 5000;
+    if (offer.infiltrate) return 3200;
     return offer.tonnes * 40;
   }
 
@@ -88,8 +90,49 @@
    * board uses, on their own rng draw. Falls back to a legal haul when the
    * system cannot support the requested flavour (no black market, no
    * neighbouring star to courier to) rather than breaking the chain. */
-  function castStep(type, port, sys, galaxy, here, rng, t) {
+  function castStep(type, port, sys, galaxy, here, rng, t, opts) {
     var Eco = global.Economy;
+
+    /* THE SEQUELS' CHAPTER KINDS (see POWER_ARCS.navy2). Each degrades to an
+     * ordinary courier or haul where this system cannot support it, so the
+     * story still happens. */
+    if (type === 'infiltrate' || type === 'recover') {
+      if (!galaxy || !here) return null;
+      var want = opts && opts.target;
+      var nearI = galaxy.stars.filter(function (s) {
+        if (s === here || !s.factionId) return false;   // a port to dock at (2026-10-24)
+        var d = global.Galaxy.distance3(here, s);
+        return d > 0 && d < 14;
+      });
+      if (!nearI.length) return null;
+      var hostile = nearI.filter(function (s) {
+        return want === 'syndicate' ? s.factionId === 'outlaw'
+             : want === 'lawful' ? (s.factionId !== 'outlaw') : false;
+      });
+      var starI = rng.pick(hostile.length && type === 'infiltrate' ? hostile : nearI);
+      return {
+        type: 'courier', cid: 'parcel', tonnes: 1, infiltrate: type === 'infiltrate',
+        from: port.id, fromName: port.name, toStarId: starI.id, toName: starI.name + ' system',
+        toStar: starI,
+        text: type === 'infiltrate' ? 'into the ' + starI.name + ' system and docked, unsearched'
+                                    : 'recover the prototype from the wreck in the ' + starI.name + ' system'
+      };
+    }
+    if (type === 'sabotage') {
+      var wantS = opts && opts.target;
+      var portsS = (sys.ports || []).filter(function (p) { return p !== port && p.market; });
+      if (!portsS.length) return null;
+      var pref = portsS.filter(function (p) {
+        return wantS === 'syndicate' ? (p.faction === 'outlaw' || (p.market && p.market.blackMarket))
+             : wantS === 'lawful' ? p.faction !== 'outlaw' : false;
+      });
+      var tgtS = rng.pick(pref.length ? pref : portsS);
+      return {
+        type: 'sabotage', cid: null, tonnes: 0,
+        from: port.id, fromName: port.name, toPortId: tgtS.id, toName: tgtS.name,
+        text: 'hole ' + tgtS.name + ' with a rock torpedo'
+      };
+    }
     if (type === 'smuggle') {
       if (!port.market || !port.market.blackMarket) {
         return castStep('haul', port, sys, galaxy, here, rng, t);
@@ -111,7 +154,7 @@
     if (type === 'courier') {
       if (!galaxy || !here) return null;
       var near = galaxy.stars.filter(function (s) {
-        if (s === here) return false;
+        if (s === here || !s.factionId) return false;   // a port to deliver to (2026-10-24)
         var d = global.Galaxy.distance3(here, s);
         return d > 0 && d < 9;
       });
@@ -283,10 +326,16 @@
    * picked back up, from the top, once the cooldown passes. */
   function onStepFailed(G, m, t, hooks) {
     if (m.power) {
-      var pp = (G.powers = G.powers || {})[m.power];
-      if (pp) { pp.status = 'failed'; pp.cooldownUntil = t + FAIL_COOLDOWN; }
+      var pk = m.powerKey || m.power;
+      var pp = (G.powers = G.powers || {})[pk];
+      /* One of the contact's two contracts lapsing is not the chain failing
+       * while the other is still open. */
+      if (m.choiceGroup && (G.missions || []).some(function (o) { return o !== m && o.choiceGroup === m.choiceGroup && !o.choiceVoid && t <= o.deadline; })) return;
+      if (m.choiceVoid) return;
+      if (pp && pp.status === 'failed' && pp.failedAt === t) return;
+      if (pp) { pp.status = 'failed'; pp.cooldownUntil = t + FAIL_COOLDOWN; pp.failedAt = t; }
       if (hooks && hooks.say) {
-        hooks.say('You have dropped ' + (POWER_ARCS[m.power] || {}).name +
+        hooks.say((m.blownBy ? 'Searched by ' + m.blownBy + ' - the run is blown. ' : '') + 'You have dropped ' + (POWER_ARCS[pk] || {}).name +
                   '. They will let you start again, eventually.', 7);
       }
       return;
@@ -342,8 +391,86 @@
   var POWER_STANDING_WIN = 8;        // per chapter, on top of the ordinary gain
 
   var POWER_ARCS = {
+
+    /* ===================================================================
+     * THE SEQUELS, AND WHAT THEY ARE FOR (Astra, 2026-10-19): the quiet
+     * jammer is "hard to come by, probably at the end of [its] own quest
+     * line - if you want to do a sabotage mission, you got to be able to
+     * get in and out without being detected or identified." Either path:
+     * the navy's intelligence people or the Syndicate, whichever side you
+     * signed for in the first chain, and only once that chain is done.
+     *
+     * Four kinds of chapter, all four of which she picked:
+     *   infiltrate - into a hostile system and docked without being
+     *                searched; a search blows the run;
+     *   recover    - the hardware itself, from where it was lost;
+     *   contact    - somebody who knows too much: deliver them, or let
+     *                them run. Two contracts, the first one settled wins;
+     *   sabotage   - hole a station with a rock torpedo. Done silent, the
+     *                strike carries no name.
+     * The reward is the shroud suite (Combat, silent running). */
+    navy2: {
+      id: 'grey-ledger', power: 'navy', key: 'navy2', sequel: true, name: 'The Grey Ledger',
+      gate: 40,
+      hook: 'Fleet intelligence has a use for somebody already on the roll',
+      reward: { id: 'shroud', credits: 36000, standing: 30 },
+      rewardText: 'The shroud suite, fitted in a closed bay and never written down. ' +
+                  'SHIFT+X runs silent: no transponder, no ID, and the heat builds until you stop.',
+      steps: [
+        { type: 'infiltrate', payMul: 1.6, target: 'syndicate',
+          title: 'Lights Out',
+          text: 'Into Syndicate space and docked, without being searched. If anyone ' +
+                'looks in your hold, the run is over and the ledger closes on you.' },
+        { type: 'recover', payMul: 1.9,
+          title: 'Salvage Rights',
+          text: 'A fleet courier went dark eleven months ago carrying a prototype. ' +
+                'The wreck is where the last log put it. Bring back what is left of the suite.' },
+        { type: 'contact', payMul: 2.2,
+          title: 'The Quiet Man, Again',
+          text: 'The man the Syndicate moved knows what the suite is. Deliver him and ' +
+                'his case to the fleet - or put him somewhere nobody will look, and say you lost him.' },
+        { type: 'sabotage', payMul: 2.6, target: 'syndicate',
+          title: 'A Hole in the Ledger',
+          text: 'A Syndicate port is keeping the arrangement\'s books. A rock torpedo ' +
+                'closes it for a season. Do it unseen and nobody knows whose war this is. ' +
+                'The Guild sells the torpedoes; the fleet does not.' },
+        { type: 'infiltrate', payMul: 3.0, target: 'syndicate',
+          title: 'Home Unseen',
+          text: 'The suite\'s test logs come out the way you went in: unscanned.' }
+      ]
+    },
+    syndicate2: {
+      id: 'blackout', power: 'syndicate', key: 'syndicate2', sequel: true, name: 'Blackout',
+      gate: 30,
+      hook: 'The arrangement wants somebody who can go where the navy is looking',
+      reward: { id: 'shroud', credits: 40000, standing: 25 },
+      rewardText: 'The shroud suite - the navy\'s own prototype, and now yours. ' +
+                  'SHIFT+X runs silent: no transponder, no ID, and the heat builds until you stop.',
+      steps: [
+        { type: 'infiltrate', payMul: 1.6, target: 'lawful',
+          title: 'Under the Lamp',
+          text: 'Into a system the law watches and docked, without being searched. ' +
+                'A search means the run is blown and so, for a while, are you.' },
+        { type: 'recover', payMul: 1.9,
+          title: 'Somebody Else\'s Prototype',
+          text: 'The navy lost a courier and a prototype eleven months ago. The ' +
+                'arrangement knows where. Get there before the fleet does.' },
+        { type: 'contact', payMul: 2.2,
+          title: 'The Quartermaster',
+          text: 'The quartermaster who started all of this will talk to anybody now. ' +
+                'The arrangement wants him delivered. You could also tell him to run.' },
+        { type: 'sabotage', payMul: 2.6, target: 'lawful',
+          title: 'Lights Out at the Yard',
+          text: 'A lawful port that has been asking questions. A rock torpedo closes it ' +
+                'for a season. Do it unseen and the questions have nobody to land on. ' +
+                'The Syndicate sells the charges.' },
+        { type: 'infiltrate', payMul: 3.0, target: 'lawful',
+          title: 'Back Through the Door',
+          text: 'Out through the same door you came in by. Nobody looks in your hold.' }
+      ]
+    },
     navy: {
-      id: 'powder-chain', power: 'navy', name: 'The Powder Chain',
+      id: 'powder-chain', power: 'navy', key: 'navy', name: 'The Powder Chain',
       /* Not a high bar. The navy's problem in this story is that it needs
        * somebody who is not already inside it. */
       gate: 15,
@@ -382,7 +509,7 @@
       ]
     },
     syndicate: {
-      id: 'long-arrangement', power: 'syndicate', name: 'The Long Arrangement',
+      id: 'long-arrangement', power: 'syndicate', key: 'syndicate', name: 'The Long Arrangement',
       gate: 10,
       hook: 'Somebody wants a favour done and will not say by whom',
       reward: { id: 'forgedtransponder', credits: 30000, standing: 25 },
@@ -463,18 +590,21 @@
     var power = powerAt(G, port, sys);
     if (!power) return [];
     var arc = POWER_ARCS[power];
+    G.powers = G.powers || {};
+    /* The first chain done, the second is what this dock offers. */
+    if (G.powers[power] && G.powers[power].status === 'completed' && POWER_ARCS[power + '2']) arc = POWER_ARCS[power + '2'];
     if (!arc || powerBarred(G, power)) return [];
     if (powerStanding(G, power, port) < arc.gate) return [];
 
-    G.powers = G.powers || {};
-    var progress = G.powers[power];
+    var progress = G.powers[arc.key || power];
     if (progress && (progress.status === 'active' || progress.status === 'completed')) return [];
     if (progress && progress.cooldownUntil && t < progress.cooldownUntil) return [];
 
     var win = windowIndex(t);
     var rng = new RNG('power|' + arc.id + '|' + port.id + '|' + win);
     var step = arc.steps[0];
-    var offer = castStep(step.type, port, sys, galaxy, here, rng, t);
+    var offer = castStep(step.type, port, sys, galaxy, here, rng, t, { target: step.target });
+    if (!offer) offer = castStep('haul', port, sys, galaxy, here, rng, t);
     if (!offer) return [];
 
     return [dress(powerEntry(arc, 0, offer, port, t), port, sys, here, offer.toStar)];
@@ -492,8 +622,8 @@
       deadline: deadlineFor(offer, t),
       text: arc.name + ' — ' + step.title + ': ' + offer.text,
       desc: step.text,
-      campaign: true, power: arc.power, arcId: arc.id, factionId: powerFaction(arc.power, port),
-      step: idx
+      campaign: true, power: arc.power, powerKey: arc.key || arc.power, arcId: arc.id, factionId: powerFaction(arc.power, port),
+      step: idx, infiltrate: !!offer.infiltrate
     };
   }
 
@@ -505,8 +635,20 @@
     var arc = null;
     for (var k in POWER_ARCS) if (POWER_ARCS[k].id === m.arcId) arc = POWER_ARCS[k];
     if (!arc) return;
-    var progress = (G.powers = G.powers || {})[arc.power] ||
-                   (G.powers[arc.power] = { arcId: arc.id, step: m.step, status: 'active' });
+    var pkey = arc.key || arc.power;
+    var progress = (G.powers = G.powers || {})[pkey] ||
+                   (G.powers[pkey] = { arcId: arc.id, step: m.step, status: 'active' });
+    /* THE CONTACT, settled: whichever of the two contracts landed first
+     * is the choice; the other one is void (Missions drops it). Letting
+     * him run costs you with the people who wanted him. */
+    if (m.choiceGroup) {
+      (G.missions || []).forEach(function (o) { if (o !== m && o.choiceGroup === m.choiceGroup) o.choiceVoid = true; });
+      progress.contact = m.choice;
+      if (m.choice === 'run' && global.Missions) {
+        global.Missions.bumpStanding(G, powerFaction(arc.power, port), -12);
+        if (hooks && hooks.say) hooks.say('He is gone, and you say you lost him. Nobody believes you; nobody can prove otherwise.', 7);
+      }
+    }
 
     if (global.Missions) {
       global.Missions.bumpStanding(G, powerFaction(arc.power, port), POWER_STANDING_WIN);
@@ -528,7 +670,7 @@
     /* THE POINT OF NO RETURN, and it is the ACT of taking the chapter
      * rather than delivering it — you are choosing when you sign, not when
      * you arrive. Nothing clears it afterwards. */
-    if (nextIdx === POINT_OF_NO_RETURN && !G.allegiance) {
+    if (nextIdx === POINT_OF_NO_RETURN && !G.allegiance && !arc.sequel) {
       G.allegiance = arc.power;
       var other = arc.power === 'navy' ? POWER_ARCS.syndicate : POWER_ARCS.navy;
       G.powers[other.power] = { arcId: other.id, step: 0, status: 'barred' };
@@ -542,7 +684,9 @@
 
     var win = windowIndex(t);
     var rng = new RNG('power|' + arc.id + '|' + nextIdx + '|' + win + '|' + port.id);
-    var offer = castStep(arc.steps[nextIdx].type, port, sys, G.galaxy, G.here, rng, t);
+    var nstep = arc.steps[nextIdx];
+    if (nstep.type === 'contact') return castContact(G, arc, nextIdx, port, sys, t, rng, progress, hooks);
+    var offer = castStep(nstep.type, port, sys, G.galaxy, G.here, rng, t, { target: nstep.target });
     /* AN AUTHORED CHAIN MUST NOT STALL. The generic arcs above can afford
      * to — they are a shape, and a shape that cannot be cast here can be
      * picked up at the next port of the same flag. A story cannot: it
@@ -577,6 +721,37 @@
         hooks.say(arc.name + ' — ' + arc.steps[nextIdx].title, 6);
       }
     }
+    if (hooks && hooks.sound) hooks.sound('click');
+  }
+
+  /* THE CONTACT: two contracts for one chapter. Deliver him to the people
+   * who want him (full pay), or drop him somewhere nobody will look (less,
+   * and it costs standing). One parcel - his case - and whichever contract
+   * settles first decides. */
+  function castContact(G, arc, idx, port, sys, t, rng, progress, hooks) {
+    var a = castStep('courier', port, sys, G.galaxy, G.here, rng, t);
+    var b = castStep('courier', port, sys, G.galaxy, G.here, rng, t);
+    for (var tries = 0; a && b && b.toStarId === a.toStarId && tries < 6; tries++) b = castStep('courier', port, sys, G.galaxy, G.here, rng, t);
+    if (!a) a = castStep('haul', port, sys, G.galaxy, G.here, rng, t);
+    if (!a) { progress.status = 'stalled'; return; }
+    var group = arc.key + '|contact|' + windowIndex(t);
+    var ea = dress(powerEntry(arc, idx, a, port, t), port, sys, G.here, a.toStar);
+    ea.id += '|deliver'; ea.choiceGroup = group; ea.choice = 'deliver';
+    ea.text = arc.name + ' - ' + arc.steps[idx].title + ': deliver him to ' + a.toName;
+    var list = (G.missions = G.missions || []);
+    list.push(ea);
+    if (b && b.toStarId !== a.toStarId) {
+      var eb = dress(powerEntry(arc, idx, b, port, t), port, sys, G.here, b.toStar);
+      eb.id += '|run'; eb.choiceGroup = group; eb.choice = 'run';
+      eb.pay = Math.round(eb.pay * 0.4);
+      eb.text = arc.name + ' - ' + arc.steps[idx].title + ': OR let him run - drop him in ' + b.toName;
+      list.push(eb);
+    }
+    var Sim = global.Sim;
+    var free = Sim ? G.ship.cargoCap - Sim.cargoMass(G.ship) : 1;
+    if (Sim && a.cid && free >= a.tonnes) { G.ship.cargo[a.cid] = (G.ship.cargo[a.cid] || 0) + a.tonnes; Sim.refreshShip(G.ship); }
+    progress.step = idx; progress.status = 'active';
+    if (hooks && hooks.say) hooks.say(arc.name + ' - ' + arc.steps[idx].title + '. Two contracts on your board: deliver him, or let him run. The first one you settle is your answer.', 9);
     if (hooks && hooks.sound) hooks.sound('click');
   }
 

@@ -405,7 +405,7 @@ if (dirty) {
   for (var si = 0; si < galaxy.stars.length; si++) {
     var st = galaxy.stars[si];
     var sf = galaxy.factionById[st.factionId];
-    if (sf.outlaw) continue;
+    if (!sf || sf.outlaw) continue;     // nobody's star (2026-10-24): no traffic to measure
     var sy = systemFor(st);
     var n = 0;
     (sy.traffic || []).forEach(function (r) { legs++; if (r.runner) { run++; n++; } });
@@ -421,7 +421,8 @@ if (dirty) {
           crookedRun + '/' + crooked + ' vs ' + cleanRun + '/' + clean);
   }
   var heldRunner = galaxy.stars.some(function (st) {
-    return galaxy.factionById[st.factionId].outlaw &&
+    var sf = galaxy.factionById[st.factionId];     // nobody's star has no flag (2026-10-24)
+    return !!sf && sf.outlaw &&
            (systemFor(st).traffic || []).some(function (r) { return r.runner; });
   });
   check('a hold has no runners — its traffic already flies the flag', !heldRunner);

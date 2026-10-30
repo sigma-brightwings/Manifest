@@ -138,6 +138,10 @@ require('../src/rng.js');
  * module happens to require it first is a dependency waiting to break. */
 require('../src/slipspace.js');
 require('../src/kepler.js');
+/* The skimmer and the hold-to-tank pump (2026-10-24). index.html has
+ * loaded it here since mining rung 3; this harness never did, so the game's
+ * F5 refuel found no Mining and moved nothing - only here. */
+require('../src/mining.js');
 require('../src/economy.js');
 require('../src/generate.js');
 require('../src/galaxy.js');
@@ -160,6 +164,8 @@ require('../src/sound.js');
 require('../src/save.js');
 /* The title card's artwork — the wordmark outline and the compass rose. */
 require('../src/logo.js');
+/* And the captains' stories that sit under the title menu. */
+require('../src/captain-stories.js');
 require('../src/hulls.js');
 /* The weather field. gl.js is not in this harness, but screens and the
  * comms channel ask Weather what a port's sky is doing. */
@@ -2008,17 +2014,37 @@ console.log('--- the landing gear ---');
    * right on one model and wrong on another is exactly the failure this
    * catches, and it is invisible in a screenshot of the ship you happened
    * to be flying. */
-  var badAxis = [], badStow = [], noLift = [], noFold = [], badDoor = [], hangOut = [];
+  var badAxis = [], badStow = [], noLift = [], noFold = [], badDoor = [], hangOut = [], uneven = [], bellyDown = [];
   rigged.forEach(function (id) {
     var m = R.libHull(id);
     m.gear.forEach(function (p) {
       var len = Math.hypot(p.axis[0], p.axis[1], p.axis[2]);
       if (Math.abs(len - 1) > 1e-3) badAxis.push(id);
-      /* A hinge that turns by nothing is a hinge the converter failed to
+      /* A part that neither turns nor lifts is one the converter failed to
        * measure, and it would read on screen as gear that never moves —
-       * which is the bug this whole change exists to fix. */
-      if (!(Math.abs(p.stow) > 0.2)) badStow.push(id + '/' + p.role);
+       * which is the bug this whole change exists to fix. Since the legs
+       * fold (2026-10-21) the upper strut does not turn at all; it lifts,
+       * or swings with `swing` where there is no room to lift. */
+      var lifts = p.lift && Math.hypot(p.lift[0], p.lift[1], p.lift[2]) > 0.01;
+      if (!(Math.abs(p.stow) > 0.2 || lifts || Math.abs(p.swing || 0) > 0.2)) badStow.push(id + '/' + p.role);
     });
+
+    /* LEVEL, AND CLEAR OF THE BELLY (Astra, 2026-10-21): every foot at the
+     * same depth, and that depth under the lowest point of the hull. */
+    var feet = [];
+    m.gear.forEach(function (p) {
+      if (p.role !== 'shin') return;
+      var lo = Infinity;
+      p.mesh.v.forEach(function (q) { lo = Math.min(lo, p.pivot[1] + q[1]); });
+      feet.push(lo);
+    });
+    if (feet.length) {
+      var belly = Infinity;
+      m.v.forEach(function (q) { belly = Math.min(belly, q[1]); });
+      var spread = Math.max.apply(null, feet) - Math.min.apply(null, feet);
+      if (spread > 0.003) uneven.push(id + ' by ' + spread.toFixed(3));
+      if (!(Math.max.apply(null, feet) < belly)) bellyDown.push(id);
+    }
 
     var down = R.gearBounds(m, 1), up = R.gearBounds(m, 0);
 
@@ -2026,11 +2052,10 @@ console.log('--- the landing gear ---');
      * pulled back up. Those two comparisons are the whole feature, and both
      * are claims about this code rather than about the models.
      *
-     * NOT "the feet are the lowest thing on the ship", which was the first
-     * version of this check and which `bulk-s` fails honestly: its keel
-     * hangs lower than its gear does, so the hauler would settle on its
-     * belly. That is a fact about the art, and asserting it here would be
-     * this suite failing every time a modeller drew a deep hull. */
+     * (That the feet ARE the lowest thing on the ship used to be left
+     * unchecked, because `bulk-s` honestly failed it: its keel hung lower
+     * than its gear. Since 2026-10-21 the converter lengthens legs until
+     * they clear the keel, and the check above holds every hull to it.) */
     var bay = Infinity;
     for (var g = 0; g < m.gear.length; g++) {
       if (m.gear[g].pivot[1] < bay) bay = m.gear[g].pivot[1];
@@ -2060,7 +2085,18 @@ console.log('--- the landing gear ---');
   check('gear up, nothing hangs out under the belly', hangOut.length === 0,
         hangOut.slice(0, 3).join(' | '));
   check('every hinge axis is a unit vector', badAxis.length === 0, badAxis.join(' '));
-  check('and every hinge actually turns', badStow.length === 0, badStow.slice(0, 4).join(' '));
+  check('and every moving part actually moves', badStow.length === 0, badStow.slice(0, 4).join(' '));
+  check('every legged hull stands level on its feet', uneven.length === 0, uneven.slice(0, 4).join(' | '));
+  check('and its feet reach below its lowest point', bellyDown.length === 0, bellyDown.slice(0, 4).join(' '));
+  /* The fold: halfway up, every shin has turned through most of its fold and
+   * nothing has lifted yet; at the end it has lifted (or swung). */
+  var shin = { role: 'shin', stow: 3, lift: [0, 0.1, 0], pivot: [0, 0, 0], axis: [1, 0, 0] };
+  var mid = R.gearPose(shin, 0.75), home = R.gearPose(shin, 0.5);
+  check('a leg folds in half before it lifts',
+        Math.abs(mid.ang - 3) < 1e-6 && mid.piv[1] === 0 && Math.abs(home.piv[1] - 0.1) < 1e-6,
+        mid.ang.toFixed(2) + ' ' + mid.piv[1] + ' ' + home.piv[1]);
+  check('and the door does not start to close until the leg is home',
+        R.gearPhase('door', 0.5) === 1);
   check('deployed, every leg hangs below its own bay', noLift.length === 0,
         noLift.slice(0, 3).join(' | '));
   check('and stowing pulls them up into the hull', noFold.length === 0,
@@ -4303,6 +4339,7 @@ console.log('--- a jump, end to end ---');
   check('and it drops you back into the cockpit to watch', G.panel === 0, String(G.panel));
 
   var sawCharge = false, sawTunnel = false, sawExit = false;
+  var hyLive = !!(G.hyper && G.hyper.corridor && G.hyper.corridor.live);
   var clockRose = false, lastClock = G.hyper ? G.hyper.clock : 0;
   var guard = 0;
   while (G.hyper && guard++ < 2000) {
@@ -4320,8 +4357,15 @@ console.log('--- a jump, end to end ---');
   check('it took a few seconds, not a frame', guard > 60, guard + ' frames');
 
   check('the jump moved us to another star', G.here.id !== before, G.here.id);
+  /* A LIVE corridor (traffic on the lane) is flown, and arrives when the
+   * crossing does - a touch sooner than planned, the ship being lighter by
+   * the fuel it paid. An empty lane plays the cutscene and lands on the
+   * plan to the second. (2026-10-24: the 450-star map's first lane from
+   * home has traffic; the old one's did not.) */
   check('the clock advanced by the transit time',
-        Math.abs((G.t - t0) - plan.seconds) < 1, ((G.t - t0) / 86400).toFixed(2) + ' d');
+        hyLive ? Math.abs((G.t - t0) / plan.seconds - 1) < 0.05 : Math.abs((G.t - t0) - plan.seconds) < 1,
+        (hyLive ? 'live corridor, ' : '') + ((G.t - t0) / 86400).toFixed(2) + ' d against ' +
+        (plan.seconds / 86400).toFixed(2) + ' d planned, to ' + plan.to.id + ', at ' + G.here.id);
   check('it cost jump fuel', G.ship.fuel < fuel0,
         fuel0.toFixed(1) + ' -> ' + G.ship.fuel.toFixed(1) + ' t');
   check('we arrived in a real system', !!G.sys && G.sys.bodies.length > 3);
@@ -4329,6 +4373,70 @@ console.log('--- a jump, end to end ---');
 
   // And the system we left is remembered rather than regenerated.
   check('the system we left is cached', !!G.systemCache[before]);
+})();
+
+console.log('--- an empty system (2026-10-24) ---');
+(function () {
+  /* No-man's land: arriving somewhere with no port, no market, no traffic
+   * and no law must draw, and every screen must say so rather than throw. */
+  newFlying('kawartha');
+  frames(2);
+  var empty = G.galaxy.stars.filter(function (st) { return !st.factionId; })[0];
+  check('the galaxy has empty systems', !!empty, empty && empty.id);
+  if (!empty) return;
+  var mark = drawn.texts.length;
+  W.Game.enterSystem(empty, { arrive: true });
+  frames(3);
+  check('arriving in one renders cleanly', errorsSince(mark).length === 0, errorsSince(mark)[0]);
+  check('and it is empty', G.sys.empty === true && G.sys.ports.length === 0 && (G.sys.traffic || []).length === 0,
+        G.sys.name + ', ' + G.sys.bodies.length + ' bodies');
+  check('with somewhere to orbit', !!G.ship && !G.ship.docked && !!G.spawnHost, G.spawnHost && G.spawnHost.name);
+  var keydown = listeners.keydown[0];
+  ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8'].forEach(function (k) {
+    var m2 = drawn.texts.length;
+    keydown({ key: k, shiftKey: false, preventDefault: function () {} });
+    frames(2);
+    check('the ' + k + ' screen draws there', errorsSince(m2).length === 0, errorsSince(m2)[0]);
+    keydown({ key: 'Escape', shiftKey: false, preventDefault: function () {} });
+    frames(1);
+  });
+  /* Out here the tank is filled from the hold (2026-10-24): skim, then F5
+   * and the TO TANKS button, or Enter on the hydrogen row. */
+  G.ship.cargo.hydrogen = 20;
+  G.ship.fuel = 1;
+  Sim.refreshShip(G.ship);
+  var m4 = drawn.texts.length;
+  keydown({ key: 'F5', shiftKey: false, preventDefault: function () {} });
+  frames(2);
+  var shown = drawn.texts.slice(m4).some(function (t) { return /TO TANKS/.test(String(t.text || t)); });
+  check('the ship screen offers the hold\'s hydrogen to the tanks', shown);
+  /* F is the down thrusters, and a screen being up must not take it
+   * (Astra, 2026-10-24) - it reaches the ship and moves no fuel. */
+  keydown({ key: 'f', shiftKey: false, preventDefault: function () {} });
+  check('F still reaches the thrusters from the ship screen', !!G.keys.f && G.ship.fuel === 1);
+  if (listeners.keyup && listeners.keyup[0]) listeners.keyup[0]({ key: 'f', shiftKey: false, preventDefault: function () {} });
+  G.keys = {};
+  G.invSel = 0;
+  /* walk the selection to the hydrogen row, as a player would */
+  for (var walk = 0; walk < 20; walk++) {
+    keydown({ key: 'Enter', shiftKey: false, preventDefault: function () {} });
+    frames(1);
+    if (G.ship.fuel > 1) break;
+    keydown({ key: 'ArrowDown', shiftKey: false, preventDefault: function () {} });
+  }
+  var room = G.ship.fuelCap - 1;
+  check('and Enter on the hydrogen row puts it in the jump tank', Math.abs(G.ship.fuel - (1 + Math.min(20, room))) < 0.02 &&
+        Math.abs((G.ship.cargo.hydrogen || 0) - Math.max(0, 20 - room)) < 0.02,
+        'tank ' + G.ship.fuel.toFixed(2) + '/' + G.ship.fuelCap + ', hold ' + (G.ship.cargo.hydrogen || 0).toFixed(2) + ' t');
+  keydown({ key: 'Escape', shiftKey: false, preventDefault: function () {} });
+  frames(1);
+  G.panel = 0;
+  G.viewMode = 'orbit';
+  var m3 = drawn.texts.length;
+  frames(3);
+  check('and the exterior view', errorsSince(m3).length === 0, errorsSince(m3)[0]);
+  G.viewMode = 'cockpit';
+  frames(1);
 })();
 
 console.log('--- the tunnel, drawn ---');
@@ -6291,6 +6399,48 @@ console.log('--- manoeuvre nodes ---');
   press('i', { shiftKey: true });
   G.panel = 0;
   check('cleared again for the sections below', !G.node && !G.nodeBurn);
+
+  /* A POLAR SURVEY ORBIT, FLOWN BY THE LOOP (2026-10-25). Y on the orbit
+   * map plans it; \ flies it; the coast is warped the way a player would,
+   * and the long burn itself runs under warp now (Astra: yes to warping
+   * through long burns) - booked on the clock the integrator really ran,
+   * so it ends polar rather than with a few metres per second spent. */
+  G.ship = Sim.circularOrbit(planet, G.sys, G.t, planet.radius * 0.3, 0.3, 0.4);
+  Sim.refreshShip(G.ship);
+  G.ship.thrusterFuel = G.ship.thrusterCap || G.ship.thrusterFuel;
+  frames(2);
+  press('F2');
+  press('y');
+  check('Y on the orbit map plans a polar survey orbit', !!G.node && /Polar survey orbit/.test(G.message || ''),
+        G.message);
+  frames(2);
+  var burnSec = G.nodePlan ? G.nodePlan.burn.duration : 0;
+  press('\\');
+  check('and \\ flies it', !!G.nodeBurn);
+  var guardP = 0, burnFrames = 0, warpedBurn = false;
+  while (G.nodeBurn && guardP++ < 6000) {
+    if (G.nodeBurn.phase === 'align' && G.warpIndex < 6) G.warpIndex = 6;   // the player's hand on the warp
+    frame(16);
+    if (G.nodeBurn && G.nodeBurn.phase === 'burn') { burnFrames++; if (G.warpIndex > 0) warpedBurn = true; }
+  }
+  check('the polar burn finishes', !G.nodeBurn, 'still going after ' + guardP + ' frames');
+  /* At 1x a burn of burnSec seconds is burnSec / 0.016 frames here. */
+  check('under warp, not in real time', warpedBurn && burnSec > 60 && burnFrames < burnSec / 0.016 / 10,
+        burnFrames + ' frames for a ' + burnSec.toFixed(0) + ' s burn (' + Math.round(burnSec / 0.016) + ' at 1x)');
+  (function () {
+    var bsP = Sim.bodyState(planet, G.sys, G.t);
+    var relP = V.sub(G.ship.pos, bsP.pos), velP = V.sub(G.ship.vel, bsP.vel);
+    var rotP = planet.rotation || { tilt: 0 }, azP = rotP.az || 0;
+    var poleP = { x: Math.sin(rotP.tilt) * Math.sin(azP), y: -Math.sin(rotP.tilt) * Math.cos(azP), z: Math.cos(rotP.tilt) };
+    var hP = V.norm(V.cross(relP, velP));
+    var off = Math.asin(Math.min(1, Math.abs(V.dot(hP, poleP)))) * 180 / Math.PI;
+    var oeP = Sim.oscElements(G.ship, G.sys, G.t);
+    check('and leaves the ship over the poles', off < 2 && oeP.e < 0.03,
+          off.toFixed(2) + ' deg off polar, e ' + oeP.e.toFixed(3));
+  })();
+  G.warpIndex = 0;
+  G.panel = 0;
+  frames(1);
 })();
 
 /* The zoom used to have a floor of 1 km, set for a camera that spends most
@@ -6551,7 +6701,10 @@ console.log('--- options ---');
                            /* And G.glassGlow, the same way again (2026-10-15):
                             * this test flagged the row as row 10 before the
                             * fingerprint knew it existed. */
-                           G.glassGlow]);
+                           G.glassGlow,
+                           /* And G.cutawayStyle, from the 11 Oct test copy,
+                            * when the two lines were merged: row 9. */
+                           G.cutawayStyle]);
   }
   function openOptions() {
     if (G.menu && G.menu.page === 'options') return;

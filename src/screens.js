@@ -23,6 +23,7 @@
 
   /* Wired by main.js at boot. Unpacked to bare names so the moved code is
    * byte-for-byte the code that was tested in its old home. */
+  var refuelFromHold;
   var G, say, selectPanel, hot, navList, navTargetState, navMark, jettison,
       heldCargo, openMarket, plottedCourse, jumpCandidates, doJump, complyWithDemand,
       hailAuthority, payOutstanding, hailSelected, exitTransfer, shipDealTrade,
@@ -37,6 +38,7 @@
     say = api.say; selectPanel = api.selectPanel; hot = api.hot;
     navList = api.navList; navTargetState = api.navTargetState;
     navMark = api.navMark; jettison = api.jettison; heldCargo = api.heldCargo;
+    refuelFromHold = api.refuelFromHold;
     openMarket = api.openMarket;
     plottedCourse = api.plottedCourse; jumpCandidates = api.jumpCandidates;
     doJump = api.doJump; complyWithDemand = api.complyWithDemand;
@@ -880,9 +882,22 @@
      * at 720 px the 44% split left room for six lines of a ship's hold. */
     var logH = G.shipDeal ? Math.max(96, Math.round(colH * 0.26))
                           : Math.max(120, Math.round(colH * 0.44));
+    var sel = contacts[G.commsSel];
+    /* THE CHANNEL'S BUTTONS FIT ITS PANE (Astra, 2026-10-21). A port offers
+     * up to ten things, and at a fixed 38 px a row that is 470 px of pane —
+     * which a short window's 56% split never had, so the bottom buttons
+     * printed straight over the traffic log. Now the channel takes what its
+     * buttons need from the log first (down to the log's floor of 96 px),
+     * and if that is still not enough the rows themselves close up, below. */
+    var dealing = !!(sel && G.shipDeal && G.shipDeal.name === sel.name && sel.obj && global.ShipTrade);
+    var opts = (sel && !dealing) ? commsOptions(sel) : null;
+    var OPT_TOP = 90, OPT_FOOT = 30, OPT_ROW = 38;
+    if (opts && opts.length) {
+      var need = OPT_TOP + opts.length * OPT_ROW + OPT_FOOT;
+      if (colH - logH - 10 < need) logH = Math.max(96, colH - 10 - need);
+    }
     var chanH = colH - logH - 10;
     drawMessageLog(ctx, rx, top + pad + chanH + 10, rw, logH);
-    var sel = contacts[G.commsSel];
     ctx.save();
     ctx.fillStyle = '#040a0e';
     ctx.fillRect(rx, top + pad, rw, chanH);
@@ -915,32 +930,51 @@
 
     /* The trade board takes the channel pane over while it is open: the
      * intents underneath are a menu, and you have picked from it. */
-    if (G.shipDeal && G.shipDeal.name === sel.name && sel.obj && global.ShipTrade) {
+    if (dealing) {
       drawShipDeal(ctx, rx, y, rw, top + pad + chanH, sel);
       return;
     }
     if (G.shipDeal) G.shipDeal = null;
 
-    var opts = commsOptions(sel);
-    var by = y + 44, bw = Math.min(300, rw - 32), bh = 30;
+    /* Rows close up to fit what is left: the full 30 + 8 when there is
+     * room, then tighter gaps, then shorter buttons (never under 18 px,
+     * which still holds the 11 px label). When it is that tight the footnote
+     * under them gives its line up to the buttons as well. */
+    var by = y + 44, bw = Math.min(300, rw - 32);
+    var paneEnd = top + pad + chanH - 8;
+    var showFoot = true;
+    var step = Math.floor((paneEnd - OPT_FOOT + 8 - by) / Math.max(1, opts.length));
+    if (step < 26) { showFoot = false; step = Math.floor((paneEnd - by) / Math.max(1, opts.length)); }
+    step = Math.max(20, Math.min(OPT_ROW, step));
+    var gap = step >= 34 ? 8 : step >= 26 ? 5 : 2, bh = step - gap;
     for (var i = 0; i < opts.length; i++) {
-      btn(ctx, rx + 16, by + i * (bh + 8), bw, bh, opts[i].label, opts[i].fn,
+      var oy = by + i * step;
+      btn(ctx, rx + 16, oy, bw, bh, opts[i].label, opts[i].fn,
           { disabled: !opts[i].enabled });
+      /* The note beside a button is CLIPPED to the pane, measured rather
+       * than counted — at a narrow window "doors are shut to you" ran off
+       * the edge of the screen — and left out altogether when there is
+       * not room for a word of it. */
       if (opts[i].note) {
         ctx.save();
         ctx.font = 'bold 11px ui-monospace, monospace';
         ctx.fillStyle = 'rgba(160,185,220,0.6)';
-        ctx.fillText(opts[i].note, rx + 24 + bw, by + i * (bh + 8) + 19);
+        var nx = rx + 24 + bw, room = rx + rw - 12 - nx;
+        var nChars = Math.floor(room / (ctx.measureText('M').width || 6.6));
+        if (nChars >= 6) ctx.fillText(clipText(opts[i].note, nChars), nx, oy + bh / 2 + 4);
         ctx.restore();
       }
     }
 
-    ctx.save();
-    ctx.font = 'bold 11px ui-monospace, monospace';
-    ctx.fillStyle = 'rgba(160,185,220,0.55)';
-    ctx.fillText('Traffic control answers immediately; ships answer when they feel like it.',
-                 rx + 16, top + pad + chanH - 14);
-    ctx.restore();
+    if (showFoot) {
+      ctx.save();
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(160,185,220,0.55)';
+      var footChars = Math.floor((rw - 32) / (ctx.measureText('M').width || 6.6));
+      ctx.fillText(clipText('Traffic control answers immediately; ships answer when they feel like it.', footChars),
+                   rx + 16, top + pad + chanH - 14);
+      ctx.restore();
+    }
 
     /* The message you are typing, along the foot of the channel pane — the
      * same edit line the identity rows use, drawn where you are looking. */
@@ -1632,6 +1666,93 @@
               offer.cost + ' credits."', 6);
         }
       });
+      /* THE MINING GUILD BUYS SURVEYS (mining rung 1). At any desk, for
+       * what you have mapped in this system that it has not already paid
+       * for - priced on what is there, how much you saw, the instrument,
+       * and how old the reading is. Sold on the deck, like the charts. */
+      var Sv = global.Survey;
+      var sv = Sv ? Sv.saleable(G, G.sys, G.t) : [];
+      var svTotal = 0;
+      sv.forEach(function (s) { svTotal += s.price; });
+      opts.push({
+        label: 'Sell survey data',
+        enabled: docked && svTotal > 0,
+        note: !docked ? 'sold on the deck'
+            : !sv.length ? 'nothing mapped here the Guild has not paid for'
+            : 'Mining Guild: ' + svTotal + ' cr for ' + sv.length + ' survey' + (sv.length === 1 ? '' : 's'),
+        fn: function () {
+          var got = Sv.sell(G, G.sys, G.t);
+          if (!got.total) return;
+          say(c.obj.name + ' Guild office: "' + got.count + ' survey' + (got.count === 1 ? '' : 's') +
+              ' on file. ' + got.total + ' credits."', 6);
+        }
+      });
+      /* CLAIMS AND DRONES (mining rung 2). The claim is filed on the world
+       * your nav is locked to; with no lock, on the best-mapped world here
+       * you do not already hold. Renewal is the same line. */
+      var Cl = global.Claims;
+      if (Cl && Sv) {
+        var clBody = null;
+        if (G.navTarget && G.navTarget.kind === 'body') clBody = G.sys.byId[G.navTarget.id] || null;
+        if (!clBody || !Cl.claimable(G, G.sys, clBody, G.t).ok) {
+          var bestCov = -1;
+          G.sys.bodies.forEach(function (b) {
+            var ck = Cl.claimable(G, G.sys, b, G.t);
+            if (!ck.ok || ck.renew) return;
+            var rc = G.surveys[ck.key];
+            if (rc.cov > bestCov) { bestCov = rc.cov; clBody = b; }
+          });
+        }
+        var cl = clBody ? Cl.claimable(G, G.sys, clBody, G.t)
+                        : { ok: false, why: 'survey a quarter of a world here first' };
+        opts.push({
+          label: cl.renew ? 'Renew mining claim' : 'File mining claim',
+          enabled: cl.ok && G.ship.credits >= Cl.CLAIM_FEE,
+          note: !cl.ok ? cl.why
+              : clBody.name + ', one year - ' + Cl.CLAIM_FEE + ' cr' + (cl.renew ? ' (' + cl.why + ')' : ''),
+          fn: function () {
+            var got = Cl.fileClaim(G, G.sys, clBody, G.t);
+            if (got.ok) say('Mining Guild: claim on ' + clBody.name + (got.renewed ? ' renewed' : ' filed') +
+                            ' to day ' + Math.floor(got.claim.until / 86400) + '. Land there and set a drone down (N).', 7);
+          }
+        });
+        var nd = G.ship.drones || 0;
+        opts.push({
+          label: 'Buy mining drone',
+          enabled: nd < Cl.DRONE_MAX && G.ship.credits >= Cl.DRONE_PRICE,
+          note: nd >= Cl.DRONE_MAX ? 'racks full - ' + nd + ' aboard'
+              : Cl.DRONE_PRICE + ' cr - ' + nd + ' aboard, ' + Cl.HOPPER + ' t hopper',
+          fn: function () { if (Cl.buyDrone(G).ok) say('Drone racked. ' + G.ship.drones + ' aboard.', 4); }
+        });
+        /* A stolen drone, to the back room - only where there is one. */
+        if ((G.ship.hotDrones || 0) > 0 && Cl.isFence && Cl.isFence(c.obj)) {
+          var fdp = Cl.fenceDronePrice(G.sys);
+          opts.push({
+            label: 'Fence a stolen drone',
+            enabled: docked,
+            note: !docked ? 'in the back room, on the deck' : fdp + ' cr, no questions - ' + G.ship.hotDrones + ' aboard',
+            fn: function () {
+              var got = Cl.fenceDrone(G, G.sys, c.obj);
+              if (got.ok) say('The fence counts out ' + got.paid + ' cr and the drone goes through a side door.', 5);
+            }
+          });
+        }
+      }
+      /* THE GUILD'S TORPEDO LOG (mining rung 3): half back on every serial
+       * that went off for safety rather than for profit. Any desk - the
+       * Guild has one in every port. */
+      var Mn = global.Mining;
+      if (Mn && (G.torpRefund || 0) > 0) {
+        opts.push({
+          label: 'Guild torpedo refund',
+          enabled: docked,
+          note: !docked ? 'paid on the deck' : Math.round(G.torpRefund) + ' cr owed on safed torpedoes',
+          fn: function () {
+            var got = Mn.claimRefund(G);
+            if (got) say('Mining Guild: torpedo log checked - ' + got + ' cr refunded.', 5);
+          }
+        });
+      }
       /* ---- WHO YOU SAY YOU ARE (captains.js, step 2) --------------------
        * A new name, new paint and a spoofed transponder, from a yard where
        * somebody can be bought — the grey market's own line, corruption 60.
@@ -2090,6 +2211,233 @@
     ctx.textAlign = 'left';
   }
 
+  /* ---- ORDNANCE: the rock torpedo launch panel ---------------------------
+   * Astra: "for something like that, the player should have to use an
+   * internal panel, uncover the launch switch, then launch it." A nuclear
+   * charge is not on the trigger. You point the nose, come here, read what
+   * the nose is on, choose the charge, lift the guard (C, or click it), and
+   * press LAUNCH (Enter, or click). The guard drops after every launch and
+   * whenever you leave this tab - one charge per lift, deliberately. */
+  var NOSE_LOOK = 12;     // km down the nose the panel reads rock from
+  function noseReading() {
+    var Mn = global.Mining, s = G.ship;
+    if (!Mn || !G.sys || s.docked || s.landed) return null;
+    var fwd = V.norm(s.fwd);
+    var rocks = Mn.rocksNear(G, G.sys, V.addScaled(s.pos, fwd, NOSE_LOOK / 2), G.t, NOSE_LOOK / 2 + 1);
+    var best = null;
+    rocks.forEach(function (r) {
+      var rel = V.sub(r.pos, s.pos), along = V.dot(rel, fwd);
+      if (along <= 0) return;
+      var off = V.len(V.addScaled(rel, fwd, -along));
+      if (off > r.size) return;                        // the path misses it
+      if (!best || along < best.along) best = { rock: r, along: along };
+    });
+    var np = Mn.nearestPort(G.sys, s.pos, G.t);
+    return { rock: best, port: np };
+  }
+
+  function drawOrdnanceTab(ctx, pad, top, w, bottom) {
+    var s = G.ship, Mn = global.Mining;
+    var MS = Combat.MISSILES;
+    var racks = Combat.racksOf ? Combat.racksOf(s) : (s.racks || {});
+    var kinds = ['rocktorp', 'syndtorp'].filter(function (k) { return racks[k] && racks[k].n > 0; });
+    if (!G.torpPick || kinds.indexOf(G.torpPick) < 0) G.torpPick = kinds[0] || null;
+
+    var x = pad, y = top + 6, pw = Math.min(w - pad * 2, 900), ph = bottom - top - pad - 6;
+    ctx.save();
+    ctx.fillStyle = '#05090c';
+    ctx.fillRect(x, y, pw, ph);
+    ctx.strokeStyle = MFD_EDGE; ctx.lineWidth = 2;
+    ctx.strokeRect(x + 2, y + 2, pw - 4, ph - 4);
+
+    /* Left: what is in the racks, and which charge is loaded. */
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText('ROCK CHARGE RACKS', x + 16, y + 26);
+    var ry = y + 50;
+    if (!kinds.length) {
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('No rock torpedoes aboard.', x + 16, ry);
+      ctx.fillText('The Mining Guild sells them at its halls;', x + 16, ry + 18);
+      ctx.fillText('the Syndicate sells them where it is the landlord.', x + 16, ry + 36);
+    }
+    kinds.forEach(function (k) {
+      var on = G.torpPick === k, m = MS[k];
+      ctx.fillStyle = on ? '#12414f' : '#081419';
+      ctx.fillRect(x + 14, ry - 16, 330, 26);
+      ctx.strokeStyle = on ? '#7dffcf' : MFD_EDGE; ctx.lineWidth = on ? 2 : 1;
+      ctx.strokeRect(x + 15, ry - 15, 328, 24);
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = on ? '#ffffff' : MFD_INK;
+      ctx.fillText((on ? 'LOADED  ' : '        ') + m.name.toUpperCase() + '  x' + racks[k].n, x + 22, ry + 2);
+      hot(x + 14, ry - 16, 330, 26, function () { G.torpPick = k; G.torpCover = false; }, 'pick');
+      ry += 34;
+    });
+    ry += 8;
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    [ 'Dumb charge: 200 m/s down the nose, no seeker.',
+      'Arms 500 m out. Self-destructs after 5 minutes.',
+      'Blast 1 km - keep clear. Near a station it is sabotage.',
+      'Never carry one home: a berth scan seizes it.' ].forEach(function (l) {
+      ctx.fillText(l, x + 16, ry); ry += 15;
+    });
+    if ((G.torpRefund || 0) > 0) {
+      ctx.fillStyle = '#7dffb0';
+      ctx.fillText('Guild refund owed: ' + Math.round(G.torpRefund) + ' cr, any desk', x + 16, ry + 6);
+    }
+
+    /* Middle: what the nose is on, read before you commit. */
+    var mx = x + 370;
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText('NOSE', mx, y + 26);
+    var nr = noseReading();
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    var ny = y + 50;
+    if (!nr) {
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText(s.docked ? 'In a berth.' : s.landed ? 'On the ground.' : 'No reading.', mx, ny);
+    } else {
+      if (nr.rock) {
+        var rk = nr.rock.rock;
+        ctx.fillStyle = '#ffd27a';
+        ctx.fillText('ON ROCK - ' + (rk.kind || 'rock').toUpperCase() + ', ' + Math.round(rk.size * 1000) + ' m', mx, ny);
+        ctx.fillStyle = MFD_INK;
+        ctx.fillText(nr.rock.along.toFixed(2) + ' km  -  ' + Math.round(nr.rock.along / Mn.TORP_SPEED) + ' s to impact', mx, ny + 18);
+        if (rk.size < Mn.TORP_SHATTER) { ctx.fillStyle = MFD_DIM; ctx.fillText('small enough to shatter', mx, ny + 36); }
+        if (nr.rock.along < Mn.TORP_ARM) {
+          ctx.fillStyle = '#ff9f7a';
+          ctx.fillText('INSIDE ARMING RANGE - it will pass', mx, ny + 54);
+        } else if (nr.rock.along < Mn.TORP_BLAST * 1.2) {
+          ctx.fillStyle = '#ff9f7a';
+          ctx.fillText('YOU ARE INSIDE THE BLAST - back off', mx, ny + 54);
+        }
+      } else {
+        ctx.fillStyle = MFD_DIM;
+        ctx.fillText('No rock within ' + NOSE_LOOK + ' km down the nose.', mx, ny);
+        ctx.fillText('A launch now is a safing shot.', mx, ny + 18);
+      }
+      if (nr.port) {
+        var near = nr.port.dist < Mn.TORP_CLEAR_OF_PORT;
+        ctx.fillStyle = near ? '#ff6b5a' : MFD_DIM;
+        var pd = nr.port.dist;
+        var pdTxt = pd < 1000 ? pd.toFixed(1) + ' km' : pd < 1e6 ? Math.round(pd) + ' km'
+                  : (pd / 1.495978707e8).toFixed(2) + ' AU';
+        ctx.fillText(near ? 'STATION CLOSE' : 'nearest station', mx, ny + 84);
+        ctx.fillText(clipText(nr.port.port.name, 24) + '  ' + pdTxt, mx, ny + 102);
+      }
+    }
+
+    /* Under the nose: what is already out there, and the command link to
+     * it. DISARM safes one (it drifts on inert, scoop it back); DETONATE
+     * blows it where it is. Out of link range the buttons go dead. */
+    var fl = Mn ? Mn.torpedoesInFlight(G.sys) : [];
+    var fy = y + 190;
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText('IN FLIGHT', mx, fy);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    if (!fl.length) {
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('nothing out', mx, fy + 20);
+    } else {
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('D disarms, X detonates the newest', mx, fy + 18);
+    }
+    fl.slice(-6).reverse().forEach(function (tp, i) {
+      var ly = fy + 40 + i * 36;
+      var d = V.dist(G.ship.pos, tp.pos);
+      var inLink = d <= Mn.TORP_LINK;
+      var armedNow = G.t >= tp.born + Mn.TORP_ARM / Mn.TORP_SPEED;
+      var left = Math.max(0, tp.dies - G.t);
+      /* Still inside its own blast radius of you: detonating it now hurts. */
+      var tooClose = d < Mn.TORP_BLAST * 1.1;
+      ctx.fillStyle = !inLink ? MFD_DIM : tooClose ? '#ff6b5a' : MFD_INK;
+      if (tooClose && inLink) ctx.fillText('inside the blast - detonating hurts you', mx, ly + 14);
+      ctx.fillStyle = !inLink ? MFD_DIM : tooClose ? '#ff6b5a' : MFD_INK;
+      ctx.fillText((tp.guild ? 'GUILD ' : 'UNREG ') + (d < 100 ? d.toFixed(1) : Math.round(d)) + ' km  ' +
+                   (armedNow ? 'ARMED' : 'arming') + '  ' + Math.floor(left / 60) + ':' +
+                   ('0' + Math.floor(left % 60)).slice(-2), mx, ly);
+      function btn(bx0, label, colour, fn) {
+        ctx.fillStyle = inLink ? colour : '#1a2226';
+        ctx.fillRect(bx0, ly - 13, 78, 20);
+        ctx.fillStyle = inLink ? '#05090c' : '#4a5a60';
+        ctx.textAlign = 'center';
+        ctx.fillText(label, bx0 + 39, ly + 1);
+        ctx.textAlign = 'left';
+        if (inLink) hot(bx0, ly - 13, 78, 20, fn, label.toLowerCase());
+      }
+      btn(mx + 200, 'DISARM', '#7dffcf', function () { Mn.disarmTorpedo(G.sys, G, G.t, tp.id, hooksFor()); });
+      btn(mx + 284, 'DETONATE', '#ff9f7a', function () { Mn.detonateTorpedo(G.sys, G, G.t, tp.id, hooksFor()); });
+    });
+
+    /* Right: the guarded switch. */
+    var gx = x + pw - 230, gy = y + 40, gw2 = 190, gh2 = 150;
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText('LAUNCH', gx, y + 26);
+    var live = !!G.torpPick && !s.docked && !s.landed;
+    /* The button underneath. */
+    ctx.fillStyle = '#1a0606';
+    ctx.fillRect(gx, gy, gw2, gh2);
+    ctx.strokeStyle = '#6b2a24'; ctx.lineWidth = 2;
+    ctx.strokeRect(gx + 1, gy + 1, gw2 - 2, gh2 - 2);
+    var bx = gx + gw2 / 2, by = gy + gh2 / 2 + 8;
+    ctx.beginPath(); ctx.arc(bx, by, 44, 0, Math.PI * 2);
+    ctx.fillStyle = G.torpCover && live ? '#e0392b' : '#5a1d18';
+    ctx.fill();
+    ctx.strokeStyle = '#2a0c0a'; ctx.lineWidth = 4; ctx.stroke();
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = G.torpCover && live ? '#fff2ee' : '#a26a64';
+    ctx.fillText('LAUNCH', bx, by + 5);
+    if (G.torpCover) {
+      /* The cover, flipped up above the housing. */
+      ctx.fillStyle = 'rgba(255,200,40,0.85)';
+      ctx.fillRect(gx, gy - 34, gw2, 26);
+      ctx.save();
+      ctx.beginPath(); ctx.rect(gx, gy - 34, gw2, 26); ctx.clip();
+      ctx.fillStyle = '#111';
+      for (var st = -26; st < gw2; st += 18) {
+        ctx.beginPath();
+        ctx.moveTo(gx + st, gy - 8); ctx.lineTo(gx + st + 9, gy - 8);
+        ctx.lineTo(gx + st + 35, gy - 34); ctx.lineTo(gx + st + 26, gy - 34);
+        ctx.closePath(); ctx.fill();
+      }
+      ctx.restore();
+      ctx.fillStyle = '#ffd27a';
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillText('GUARD UP - C to close', bx, gy + gh2 + 18);
+      if (live) hot(gx, gy, gw2, gh2, function () {
+        Combat.launchTorpedo(G.sys, G, G.t, G.torpPick, hooksFor());
+      }, 'launch');
+    } else {
+      /* The cover, down over the button: striped, and in the way. */
+      ctx.fillStyle = 'rgba(255,200,40,0.9)';
+      ctx.fillRect(gx + 6, gy + 6, gw2 - 12, gh2 - 12);
+      ctx.save();
+      ctx.beginPath(); ctx.rect(gx + 6, gy + 6, gw2 - 12, gh2 - 12); ctx.clip();
+      ctx.fillStyle = '#111';
+      for (var s2 = -gh2; s2 < gw2; s2 += 22) {
+        ctx.beginPath();
+        ctx.moveTo(gx + s2, gy + gh2); ctx.lineTo(gx + s2 + 11, gy + gh2);
+        ctx.lineTo(gx + s2 + 11 + gh2, gy); ctx.lineTo(gx + s2 + gh2, gy);
+        ctx.closePath(); ctx.fill();
+      }
+      ctx.restore();
+      ctx.fillStyle = 'rgba(5,9,12,0.85)';
+      ctx.fillRect(gx + 30, gy + gh2 / 2 - 14, gw2 - 60, 26);
+      ctx.fillStyle = live ? '#ffd27a' : '#8a7a50';
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillText(live ? 'LIFT GUARD (C)' : (G.torpPick ? 'NOT HERE' : 'EMPTY'), bx, gy + gh2 / 2 + 4);
+      if (live) hot(gx, gy, gw2, gh2, function () { G.torpCover = true; say('Launch guard up', 2); }, 'guard');
+    }
+    ctx.textAlign = 'left';
+    ctx.restore();
+  }
+
   function drawPanelsTab(ctx, pad, top, w, bottom) {
     if (!dash) return;
     var arc = mountArc();
@@ -2434,23 +2782,29 @@
   }
 
   function drawShipScreen(ctx, w, bottom) {
-    if (G.shipTab !== 'guns' && G.shipTab !== 'panels' && G.shipTab !== 'notes') G.shipTab = 'status';
+    if (G.shipTab !== 'guns' && G.shipTab !== 'panels' && G.shipTab !== 'ordnance' && G.shipTab !== 'notes') G.shipTab = 'status';
     var guns = G.shipTab === 'guns';
     var panels = G.shipTab === 'panels';
+    var ordnance = G.shipTab === 'ordnance';
     var notes = G.shipTab === 'notes';
+    /* The launch guard drops whenever you are not looking at it. */
+    if (!ordnance) G.torpCover = false;
     /* Off the notes tab, nothing is still holding the keyboard for it. */
     if (!notes && NOTE) NOTE = null;
     var top = modeFrame(ctx, w, bottom,
                         guns ? 'SHIP — GUNS'
                         : panels ? 'SHIP — CONSOLE PANELS'
+                        : ordnance ? 'SHIP — ORDNANCE'
                         : notes ? 'SHIP — NOTES'
                         : 'SHIP STATUS & INVENTORY',
-                        guns ? 'Tab panels   ·   space fires A   ·   shift+space fires B'
+                        guns ? 'Tab ordnance   ·   space fires A   ·   shift+space fires B'
                         : panels ? 'Tab notes   ·   pick a mount, then pick a page'
+                        : ordnance ? 'Tab panels   ·   ↑↓ charge   ·   C guard   ·   Enter launch   ·   D disarm   ·   X detonate'
                         : notes ? (NOTE ? 'Esc stops writing   ·   kept as you type'
                                         : 'Tab status   ·   Enter writes   ·   E exports   ·   ↑↓ scroll the log')
                              : (G.ship.docked ? 'Tab guns   ·   F4 trade   ·   ↑↓ select   ·   Del jettison'
-                                              : 'Tab guns   ·   ↑↓ select   ·   Del jettison   ·   Shift+Del all'));
+                                              : 'Tab guns   ·   ↑↓ select   ·   Del jettison   ·   Shift+Del all' +
+                                                (G.ship.cargo && G.ship.cargo.hydrogen > 0 && G.ship.fuel < G.ship.fuelCap - 0.01 ? '   ·   Enter on hydrogen: to tanks' : '')));
 
     /* Two tabs across the top: the inventory layout, and the guns board
      * that used to live on the deck MFD cycle. Clickable, and Tab toggles
@@ -2460,6 +2814,7 @@
     var tabH = 22, tabW = 150, tabY = top + 4;
     var tabs = [ { id: 'status', label: 'STATUS & INVENTORY', wide: true },
                  { id: 'guns',   label: 'GUNS' },
+                 { id: 'ordnance', label: 'ORDNANCE' },
                  { id: 'panels', label: 'PANELS' },
                  { id: 'notes',  label: 'NOTES' } ];
     var tx = pad;
@@ -2484,6 +2839,7 @@
 
     if (panels) { drawPanelsTab(ctx, pad, top, w, bottom); return; }
     if (notes) { drawNotesTab(ctx, pad, top, w, bottom); return; }
+    if (ordnance) { drawOrdnanceTab(ctx, pad, top, w, bottom); return; }
     if (guns) {
       /* The guns board, hosted in a tile the same way the ship page is on
        * the status tab — it draws into its own flat 460x178 MFD space and
@@ -2721,9 +3077,18 @@
       ctx.textAlign = 'left';
       ctx.restore();
 
-      hot(rx + 8, yy, Math.max(40, btnX1 - rx - 12), rowH - 4, (function (n) {
+      /* HYDROGEN IS FUEL (2026-10-24): skimmed into the hold, and into the
+       * jump tank when the pilot says so - this button, or Enter on this row. */
+      var canTank = it.cid === 'hydrogen' && refuelFromHold && G.ship.fuel < G.ship.fuelCap - 0.01;
+      var btnX0 = btnX1 - btnW - 8;
+      hot(rx + 8, yy, Math.max(40, (canTank ? btnX0 : btnX1) - rx - 12), rowH - 4, (function (n) {
         return function () { G.invSel = n; };
       })(i));
+      if (canTank) {
+        btn(ctx, btnX0, yy + 2, btnW, rowH - 8, 'TO TANKS',
+            (function (n) { return function () { G.invSel = n; refuelFromHold(); }; })(i),
+            { font: 11 });
+      }
 
       /* The two buttons, right where the cargo is. */
       btn(ctx, btnX1, yy + 2, btnW, rowH - 8, 'EJECT 1t',
@@ -3390,6 +3755,27 @@
         /* UNDER WAY. One row, no action: she is on the timetable and the
          * order closes itself when the arithmetic says. The countdown is
          * what makes it a ship rather than a line in a book. */
+        /* WORKING (mining rung 4). One row that says where in the loop she
+         * is, and clicking it recalls her: she finishes the run she is on
+         * and stands down at her port. A second click does nothing new -
+         * the row says she is already standing down. */
+        if (rec.work) {
+          var wk = rec.work;
+          row(rec.name.toUpperCase() + '  ·  WORKING ' + wk.siteName.toUpperCase(),
+              Fleet.workPhase(wk, G.t) + '  ·  ' + wk.booked + ' load' + (wk.booked === 1 ? '' : 's') +
+              ' home' + (wk.stopAfter !== undefined ? '  ·  STANDING DOWN after this run'
+                                                    : '  ·  click to recall'),
+              function () {
+                if (wk.stopAfter !== undefined) {
+                  say(rec.name + ' is already standing down after this run', 4);
+                  return;
+                }
+                var r = Fleet.recall(G, rec, G.t);
+                if (r.ok) say(rec.name + ' will stand down at ' + wk.portName + ' in ' +
+                              fmtLogAge(Math.max(0, r.at - G.t)), 6);
+              }, wk.stopAfter !== undefined);
+          return;
+        }
         if (rec.order) {
           row(rec.name.toUpperCase() + '  ·  UNDER WAY',
               'for ' + rec.order.toName + '  ·  alongside in ' +
@@ -3516,6 +3902,71 @@
           }
         }
 
+        /* WORK ORDERS (mining rung 4). One pair of rows per giant in the
+         * system - SELL at her port, or KEEP the load aboard for one run -
+         * each with what a load is and what it fetches today. When every
+         * giant refuses for the same reason (no skimmer fitted, no pilot)
+         * that reason takes one row instead of a list of identical greys. */
+        /* Work sites (mining rung 4): giants to skim and, since 2026-10-18,
+         * rings to cut with a mining laser. A ringed giant is both. */
+        var sites = Fleet.workSites ? Fleet.workSites(G.sys) : [];
+        if (sites.length) {
+          var plans = sites.map(function (st) {
+            return { g: st.body, kind: st.kind, p: Fleet.planWork(G, rec, G.sys, st.body.id, 'sell', st.kind) };
+          });
+          /* Best-paying first. Refusals sink to the bottom. */
+          var EcoW = global.Economy, homePort = G.sys.byId[rec.port];
+          var runValue = function (pl) {
+            var v = 0;
+            (Fleet.loadOf(pl) || []).forEach(function (l) {
+              var bid = EcoW ? EcoW.price(homePort, l.cid, G.t) : null;
+              v += l.qty * (bid && bid.sell !== null ? bid.sell : 0);
+            });
+            return Math.round(v);
+          };
+          plans.forEach(function (x) { if (x.p.ok) { x.value = runValue(x.p); x.perDay = Math.round(x.value * 86400 / x.p.period); } });
+          plans.sort(function (a, b) {
+            if (a.p.ok !== b.p.ok) return a.p.ok ? -1 : 1;
+            return a.p.ok ? (b.perDay - a.perDay) : 0;
+          });
+          var okPlans = plans.filter(function (x) { return x.p.ok; });
+          var whys = {};
+          plans.forEach(function (x) { if (!x.p.ok) whys[x.p.why] = true; });
+          if (!okPlans.length && Object.keys(whys).length === 1) {
+            row('   cannot work a site', Object.keys(whys)[0], function () {}, true);
+          } else {
+            plans.forEach(function (x) {
+              var cutting = x.kind === 'cut';
+              var label = '   ⇄ ' + (cutting ? 'CUT ' + x.g.name.toUpperCase() + ' RING' : 'SKIM ' + x.g.name.toUpperCase());
+              if (!x.p.ok) { row(label, x.p.why, function () {}, true); return; }
+              var pl = x.p;
+              var what = (Fleet.loadOf(pl) || []).map(function (l) {
+                return ((EcoW && EcoW.BY_ID[l.cid] && EcoW.BY_ID[l.cid].name) || l.cid).toLowerCase();
+              }).join(', ');
+              row(label + ' → SELL AT ' + pl.portName.toUpperCase(),
+                  pl.tonnes + ' t a run (' + what + '), ~' + x.value + ' cr at today\'s price  ·  a run every ' +
+                  fmtLogAge(pl.period) + ' (~' + x.perDay + ' cr/day)' +
+                  (!cutting && !pl.shield ? '  ·  no heat shield: slow' : ''),
+                  function () {
+                    var r = Fleet.startWork(G, rec, G.sys, x.g.id, 'sell', G.t, x.kind);
+                    if (!r.ok) { say('She stays: ' + r.why, 5); return; }
+                    say(rec.name + ' is away to ' + (cutting ? 'cut in ' + x.g.name + '\'s ring' : 'skim ' + x.g.name) +
+                        ' for ' + pl.portName + ' - first load home in ' +
+                        fmtLogAge(Fleet.workArrival(r.work, 0) - G.t), 7);
+                  }, false);
+              row(label + ' → KEEP ABOARD',
+                  'one run, ' + pl.tonnes + ' t of ' + what + ' back in her hold  ·  home in ' +
+                  fmtLogAge(2 * pl.cruise + pl.lay),
+                  function () {
+                    var r = Fleet.startWork(G, rec, G.sys, x.g.id, 'keep', G.t, x.kind);
+                    if (!r.ok) { say('She stays: ' + r.why, 5); return; }
+                    say(rec.name + ' is away - home with the load in ' +
+                        fmtLogAge(Fleet.workArrival(r.work, 0) - G.t), 7);
+                  }, false);
+            });
+          }
+        }
+
         var pilot = Fleet.pilotOf(rec);
         var ports = (G.sys.ports || []).filter(function (p) { return p.id !== rec.port; });
         var first = ports.length ? Fleet.canOrder(G, rec, G.sys, ports[0].id) : null;
@@ -3633,7 +4084,10 @@
     }
     for (var mk in Combat.MISSILES) {
       (function (m) {
-        if (m.grey) return;
+        /* Rock torpedoes are on the shelf only where somebody sells them:
+         * a Guild hall, or the Syndicate's side of the counter. */
+        if (m.torpedo) { if (!Combat.torpedoSoldAt(G, port, m)) return; }
+        else if (m.grey) return;
         var have = rackOf(m.id);
         var full = have ? have.n >= m.rack : racksNow.length >= rackCap;
         var armed = s.missileId === m.id && s.missiles > 0;
@@ -3659,6 +4113,18 @@
               }, false);
         }
       })(Combat.MISSILES[mk]);
+    }
+
+    /* Decoy charges, the same way: they need the launcher. */
+    var dRack = Combat.decoyRackSize ? Combat.decoyRackSize(s) : 0;
+    if (dRack) {
+      var dFull = (s.decoys || 0) >= dRack;
+      row('DECOY CHARGE - ' + Combat.DECOY.price + ' cr',
+          'aboard ' + (s.decoys || 0) + ' / ' + dRack + (dFull ? '  ·  rack full' : '  "' + Combat.DECOY.pitch + '"'),
+          function () {
+            var r = Combat.buyOutfit(G, 'decoy', null);
+            say(r > 0 ? 'Decoy loaded - ' + s.decoys + ' aboard' : 'Not enough credits', 4);
+          }, dFull);
     }
 
     var rack = Combat.sinkRackSize(s);
@@ -5111,9 +5577,8 @@
   function previewSystem(star) {
     G.systemCache = G.systemCache || {};
     if (!G.systemCache[star.id]) {
-      var fac = (G.galaxy && G.galaxy.factionById) ? G.galaxy.factionById[star.factionId] : null;
-      var opts = fac ? { faction: fac, allFactions: G.galaxy.factions } : undefined;
-      G.systemCache[star.id] = Gen.generateSystem(star.seed, opts);
+      /* the same call systemFor makes in main.js: owner, or empty */
+      G.systemCache[star.id] = Gen.generateSystem(star.seed, Galaxy.systemOpts(G.galaxy, star));
     }
     return G.systemCache[star.id];
   }
@@ -5455,6 +5920,16 @@
       ctx.restore();
     }
 
+    /* RESOURCE WARS (wars.js, 2026-10-18): the fronts now, and the stars
+     * that have changed hands. Public news, but marked only on stars you
+     * hold the sheet for, like the checkpoint brackets below. */
+    var Wr = global.Wars, warNow = {}, takenBy = {}, warList = [], warHist = null;
+    if (Wr && G.galaxy.rivals) {
+      warList = Wr.warsAt(G.galaxy, G, G.t);
+      warList.forEach(function (wv) { warNow[wv.star] = wv; });
+      warHist = Wr.history(G.galaxy, G, G.t);
+      warHist.wars.forEach(function (wv) { if (wv.won && wv.t1 <= G.t) takenBy[wv.star] = wv; });
+    }
     for (var i = 0; i < G.galaxy.stars.length; i++) {
       var s = G.galaxy.stars[i];
       var sp = toScreen(s);
@@ -5501,6 +5976,19 @@
         ctx.lineTo(sp.x + br, y + br - 3);
         ctx.stroke();
       }
+      if (G.charted[s.id] && takenBy[s.id]) {
+        var nf = G.galaxy.factionById[takenBy[s.id].att];
+        ctx.strokeStyle = (nf && nf.color) || '#ffffff'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(sp.x, y, r + 4, 0, K.TAU); ctx.stroke();
+      }
+      if (G.charted[s.id] && warNow[s.id]) {
+        var wr = r + 6;
+        ctx.strokeStyle = '#ff5a4a'; ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(sp.x - wr, y - wr); ctx.lineTo(sp.x + wr, y + wr);
+        ctx.moveTo(sp.x + wr, y - wr); ctx.lineTo(sp.x - wr, y + wr);
+        ctx.stroke();
+      }
       if (isHere) {
         ctx.strokeStyle = '#ffe6a8'; ctx.lineWidth = 1.4;
         ctx.beginPath(); ctx.arc(sp.x, y, r + 5, 0, K.TAU); ctx.stroke();
@@ -5531,6 +6019,35 @@
       ctx.restore();
     }
 
+    /* --- the news: the fronts, or the last war, or the reserves --- */
+    if (Wr && warHist) {
+      var fn2 = function (id) { var f = G.galaxy.factionById[id]; return f ? f.name : id; };
+      var news;
+      if (warList.length) {
+        news = 'WAR: ' + warList.slice(0, 2).map(function (wv) {
+          return fn2(wv.att) + ' against ' + fn2(wv.def) + ' for ' + wv.starName;
+        }).join('   ·   ') + (warList.length > 2 ? '   ·   +' + (warList.length - 2) + ' more' : '');
+      } else {
+        var past = warHist.wars.filter(function (wv) { return wv.t1 <= G.t; });
+        var lw = past[past.length - 1];
+        if (lw) news = 'LAST WAR: ' + fn2(lw.att) + ' ' + (lw.won ? 'took ' : 'failed to take ') + lw.starName +
+                       ' from ' + fn2(lw.def) + ', ' + fmtEpoch(lw.t1);
+        else {
+          var stN = Wr.stateAt(G.galaxy, G, G.t), sc = 0, nE = 0;
+          Object.keys(stN).forEach(function (e) { sc += stN[e].scarcity; nE++; });
+          news = 'AT PEACE   ·   the empires have worked ' + Math.round(100 * sc / Math.max(1, nE)) +
+                 '% of their cheap ore';
+        }
+      }
+      ctx.save();
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = warList.length ? '#ff7a6a' : '#9fb4d0';
+      /* Under the chart's own header line: the right column's length
+       * depends on the system described, the bottom belongs to the keys. */
+      ctx.fillText(clipText(news, Math.floor((plotSize + 20) / 7.3)), px + 24, py + 66);
+      ctx.restore();
+    }
+
     /* --- the destination, in words --- */
     if (plan && dw > 180) {
       // The legend sits in this same right-hand column above this block;
@@ -5546,6 +6063,14 @@
       ctx.fillStyle = '#7e93b3';
       ctx.fillText('class ' + plan.to.cls + '   ·   ' + plan.to.temp + ' K   ·   ' +
                    plan.to.luminosity.toFixed(2) + ' L☉', dx, dyy + 18);
+      /* The war over it, or who took it. */
+      var fname = function (id) { var f = G.galaxy.factionById[id]; return f ? f.name : id; };
+      var wv2 = warNow[plan.to.id], tk = takenBy[plan.to.id];
+      if (wv2 || tk) {
+        ctx.fillStyle = wv2 ? '#ff7a6a' : '#ffd27a';
+        ctx.fillText(wv2 ? 'CONTESTED - ' + clipText(fname(wv2.att), 18) + ' attacking'
+                         : 'TAKEN by ' + clipText(fname(tk.att), 22) + ', ' + fmtEpoch(tk.t1), dx, dyy + 34);
+      }
       ctx.restore();
 
       rows(ctx, dx, dyy + 46, [
@@ -5700,8 +6225,13 @@
             ' in transit']
         ];
         pPlanets.forEach(function (b, idx) {
+          /* Clipped to what fits beside the label: right-aligned, a long
+           * composition used to run back over the world's name. The HZ
+           * marker is kept whole - it is the part that matters. */
+          var compCols = Math.max(16, Math.floor((dw - 100) / 7.3));
           scanRows.push([(idx + 1) + '. ' + b.typeName,
-            (b.composition || '—') + (b.habitableBand === 'terminator' ? '  ·  twilight ring'
+            clipText(b.composition || '—', compCols - (b.habitable ? 16 : 0)) +
+            (b.habitableBand === 'terminator' ? '  ·  twilight ring'
               : b.habitableBand === 'equator' ? '  ·  equator band'
               : b.habitable ? '  ·  in the HZ' : '')]);
         });

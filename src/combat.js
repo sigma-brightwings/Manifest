@@ -102,8 +102,12 @@
    * this same constant under its older name) and their own quartermaster
    * will sell you what their own enforcement wing carries. One threshold,
    * because it is one fact about you — the Syndicate has decided you are
-   * inside rather than a customer — not two coincidentally equal ones. */
-  var SYNDICATE_TRUST = 70;
+   * inside rather than a customer — not two coincidentally equal ones.
+   *
+   * 70 -> 50, 2026-10-11, Astra: the perks should open at 50. Seventy
+   * sat behind most of a career of Syndicate work; fifty is "they know
+   * your name", which is when a mob starts treating you as one of theirs. */
+  var SYNDICATE_TRUST = 50;
 
   function laser(id, name, particle, variety, price, power, mass, dmg, cooldown,
                  range, heat, color, avail, pitch) {
@@ -169,6 +173,41 @@
     mupulse: laser('mupulse', 'Muon pulse accelerator', 'muon', 'pulse',
                    14000, 9.0, 7.0, 24, 0.40, 34, 11, '#6bd5ff', [0.70, 10],
                    'Reach without apology. Bring a reactor and a firm opinion.'),
+    /* THE MINING LASER (mining rung 3, mining.js). A photon beam tuned to
+     * heat a few square metres of rock until a chunk spalls off, not to
+     * hurt anything that moves: one point a cycle against a hull, three
+     * kilometres of reach. Hold it on a rock and it cuts continuously; every
+     * 2 t cut comes off as a piece (about eight seconds on stone, faster on
+     * ice, slower on metal - mining.js PIECE_T, HARDNESS), carved out of the
+     * rock where the beam was. The scoop does the rest. */
+    mininglaser: (function () {
+      var g = laser('mininglaser', 'Mining laser', 'photon', 'beam',
+                    4800, 2.6, 2.5, 1, 0.12, 3, 8, '#ffd27a', [0.15, -100],
+                    'Cuts rock, not ships. Hold it steady and bring a scoop.');
+      g.mining = true;
+      return g;
+    })(),
+    /* THE MINING LASER CANNON (2026-10-18). Astra: "works like the pulse
+     * laser except it gets fully absorbed by shields, and it has a 3 second
+     * cooldown where the mount and capacitors for it glow red, then fade."
+     * Each pulse knocks a piece off the face (pulseTonnes, harder rock
+     * gives less), at five kilometres where the beam reaches three. Against
+     * a ship: a shield soaks the whole shot (`shieldAbsorbs`, splitDamage)
+     * and nothing reaches the hull; a ship with no shield up takes it like
+     * a pulse. A tool that is a weapon only against the defenceless. The
+     * glow is `cooldownGlow`: read off G.gunCool by the hull, the cockpit
+     * capacitor bank and the HUD bar. */
+    miningcannon: (function () {
+      var g = laser('miningcannon', 'Mining laser cannon', 'photon', 'pulse',
+                    6200, 3.2, 3.0, 12, 3.0, 5, 10, '#ff6a3a', [0.15, -100],
+                    'Knocks a piece off the face from five kilometres. Give the capacitors their three seconds.');
+      g.mining = true;
+      g.pulseTonnes = 0.75;
+      g.piece = 0.75;
+      g.shieldAbsorbs = true;
+      g.cooldownGlow = true;
+      return g;
+    })(),
     muint:   laser('muint', 'Muon intermittent accelerator', 'muon', 'intermittent',
                    24000, 11.0, 8.0, 62, 1.00, 40, 18, '#5ab8ff', [0.70, 25],
                    'Sixty-two points, once a second, from further than they can answer.'),
@@ -305,6 +344,16 @@
      * shield, so stacking them would burn 2 MW and four tonnes for no
      * effect — a purchase that silently does nothing is the worst thing a
      * shop can sell you, and the fit check is the right place to say no. */
+    /* THE SHROUD SUITE - not for sale anywhere; the end of a chain
+     * (arcs.js) and the thing a sabotage run is built around. */
+    shroud: { id: 'shroud', name: 'Shroud suite', slot: 'internal', kind: 'shroud',
+              price: 0, power: 1.5, mass: 2, unique: true, unlisted: true,
+              minDev: 0, minStanding: -100, minCrime: 0, grey: false,
+              pitch: 'Not on any list. Neither are you, while it runs.' },
+    ecm: { id: 'ecm', name: 'ECM jammer', slot: 'internal', kind: 'ecm',
+           price: 6800, power: 2.5, mass: 2, unique: true,
+           minDev: 0.5, minStanding: 0, minCrime: 0, grey: false,
+           pitch: 'Makes a seeker doubt itself. Runs hot doing it.' },
     shield: { id: 'shield', name: 'Shield generator', slot: 'internal',
               kind: 'shield', price: 4800, power: 2.0, mass: 4, unique: true,
               cap: 40, regen: 1.2, regenDelay: 6,
@@ -427,6 +476,13 @@
                     minDev: 0.55, minStanding: 0, minCrime: 0, grey: false,
                     pitch: 'Three chances to fire for longer than your hull agrees with.' },
 
+    /* COUNTERMEASURES (2026-10-18) - see DECOY, below the missiles. */
+    decoylauncher: { id: 'decoylauncher', name: 'Decoy launcher', slot: 'utility',
+                     kind: 'decoyrack', price: 2600, power: 0.4, mass: 1,
+                     unique: true, rack: 12,
+                     minDev: 0.35, minStanding: -100, minCrime: 0, grey: false,
+                     pitch: 'Twelve hot little lies, fired aft. Best told at the last second.' },
+
     /* ---- scanners ---------------------------------------------------------
      * Two tiers of one question — how much fight is left in that ship — and
      * what separates them is PRECISION, not access.
@@ -491,6 +547,44 @@
                  unique: true,
                  minDev: 0.45, minStanding: -100, minCrime: 0, grey: false,
                  pitch: 'Every warehouse in the system, sorted by who is desperate.' },
+
+    /* ---- survey instruments (mining rung 1, 2026-10-16; graded 2026-10-21)
+     * Astra: "scan planet for minerals and mining", and then: "a grade 1
+     * scanner tells you where low grade minerals are, and grade 2 will tell
+     * you where fissiles are, and a grade 3 tells you where precious metals
+     * are." So the ladder is WHAT you can see, not only how precisely:
+     *   1  ores, water ice, hydrogen - reflectance, the cheap look;
+     *   2  + fissiles - a gamma spectrometer, and they give themselves away;
+     *   3  + rare metals, and the tonnage - the deep array.
+     * See survey.js CLASS. All three map the same swath - coverage is your
+     * orbit's work, not the instrument's. A utility slot, like every other
+     * receiver, and one group: carrying two is a slot spent to learn less. */
+    surveyscan: { id: 'surveyscan', name: 'Survey scanner', slot: 'utility',
+                  kind: 'survey', survey: 1, price: 6400, power: 0.8, mass: 1,
+                  uniqueGroup: 'survey',
+                  minDev: 0.25, minStanding: -100, minCrime: 0, grey: false,
+                  pitch: 'Grade 1. Ore, ice and hydrogen, poor or rich. Blind to anything rarer.' },
+    gammasurvey: { id: 'gammasurvey', name: 'Gamma survey spectrometer', slot: 'utility',
+                   kind: 'survey', survey: 2, price: 13800, power: 1.4, mass: 2,
+                   uniqueGroup: 'survey',
+                   minDev: 0.40, minStanding: -100, minCrime: 0, grey: false,
+                   pitch: 'Grade 2. Adds the fissiles - they give themselves away.' },
+    deepsurvey: { id: 'deepsurvey', name: 'Deep survey array', slot: 'utility',
+                  kind: 'survey', survey: 3, price: 23500, power: 2.0, mass: 3,
+                  uniqueGroup: 'survey',
+                  minDev: 0.55, minStanding: 0, minCrime: 0, grey: false,
+                  pitch: 'Grade 3. Rare metals too, and the tonnage. The Guild pays for numbers.' },
+
+    /* GAS SKIMMER INTAKE (mining rung 3). Takes hydrogen out of a giant's
+     * air as you fly through it - a RAM SCOOP on the nose, a mouth about
+     * forty metres across, so the flow is density x speed x 1,500 m^2 x how
+     * squarely the nose meets the air (Astra, 2026-10-18: face first). It
+     * does nothing about the heat; that is what the heat shield is for. */
+    skimmer: { id: 'skimmer', name: 'Gas skimmer intake', slot: 'utility',
+               kind: 'skimmer', price: 7800, power: 1.5, mass: 2,
+               unique: true,
+               minDev: 0.2, minStanding: -100, minCrime: 0, grey: false,
+               pitch: 'A ram scoop. Point the nose into the top of a giant and the hold fills. Fly it lower and so does the coroner.' },
 
     /* ---- the cargo scoop --------------------------------------------------
      * Picking cargo up used to be a property of having a hold, which made
@@ -579,8 +673,88 @@
                dmg: 28, accel: 0.065, life: 38, fuse: 0.11, speed0: 0.13, track: 0.022,
                grey: true, minCorrupt: 60, uncertified: true,
                pitch: 'Sold by the crate, no questions, no paperwork and ' +
-                      'no guarantee it leaves the rail.' }
+                      'no guarantee it leaves the rail.' },
+
+    /* ROCK TORPEDOES (mining.js). A small nuclear charge on a dumb motor:
+     * no seeker, no lock, 200 m/s down the nose, and 6-14 chunks off
+     * whatever rock it meets. Only two people sell them. The Mining Guild,
+     * at its halls (mining-head ports), with a serial it logs - half back
+     * for one you destroyed for safety. The Syndicate, anywhere it is the
+     * landlord or the law can be bought, with no serial and no refund, and
+     * contraband everywhere you carry it. Either kind aboard on the way IN
+     * to a station is an offence: they go out to the belt, never home. */
+    rocktorp: { id: 'rocktorp', name: 'Guild rock torpedo', price: 2500, rack: 4,
+                torpedo: true, guildOnly: true,
+                pitch: 'Serial-numbered. Take it out, set it off, bring back the log - not the torpedo.' },
+    syndtorp: { id: 'syndtorp', name: 'Unregistered rock charge', price: 1600, rack: 4,
+                torpedo: true, grey: true, minCorrupt: 60, contraband: true,
+                pitch: 'Same yield, no serial. Nobody refunds what nobody logged.' }
   };
+
+  /* Who sells which torpedo here, if anyone. */
+  function torpedoSoldAt(G, port, m) {
+    if (!port || !m || !m.torpedo) return false;
+    if (m.guildOnly) return !!(port.market && (port.market.role || port.market.roleId) === 'mining');
+    var sys = G.sys;
+    if ((port.faction || '') === 'outlaw') return true;
+    var crime = effectiveCrime(G, sys);
+    var corrupt = effectiveCorruption(G, (sys && sys.corruption !== undefined) ? sys.corruption : crime);
+    return corrupt >= (m.minCorrupt || 0);
+  }
+
+  /* Torpedoes aboard, by kind. */
+  function torpedoesAboard(ship) {
+    var racks = racksOf(ship), out = { guild: 0, synd: 0, total: 0 };
+    for (var k in racks) {
+      var m = MISSILES[k];
+      if (!m || !m.torpedo || !(racks[k].n > 0)) continue;
+      if (m.grey) out.synd += racks[k].n; else out.guild += racks[k].n;
+      out.total += racks[k].n;
+    }
+    return out;
+  }
+
+  /* Is the ship heading IN to a station? Closing on the nearest port and
+   * within a day's coast of it. Guild torpedoes are legal going out. */
+  function inboundToPort(G, t) {
+    var Mn = global.Mining, s = G.ship;
+    if (!Mn || !G.sys) return false;
+    if (s.docked) return true;
+    var np = Mn.nearestPort(G.sys, s.pos, t);
+    if (!np) return false;
+    var rel = V.sub(s.pos, np.pos), d = V.len(rel);
+    var closing = d > 1e-9 ? -V.dot(rel, V.sub(s.vel, np.vel)) / d : 0;
+    return np.dist < 20000 && closing > 0.02;
+  }
+
+  /* The search, for torpedoes: Syndicate charges always, Guild ones on the
+   * way in. Seized, and fined about their price again each. Returns what
+   * was found, or null. */
+  var TORP_FINE = 2600;
+  function torpedoSearch(G, fac, t, hooks, who) {
+    var s = G.ship, tor = torpedoesAboard(s);
+    if (!tor.total) return null;
+    var inbound = inboundToPort(G, t);
+    var seize = tor.synd + (inbound ? tor.guild : 0);
+    if (!seize) return null;
+    var racks = racksOf(s);
+    ['syndtorp', 'rocktorp'].forEach(function (k) {
+      if (!racks[k]) return;
+      if (k === 'syndtorp' || inbound) delete racks[k];
+    });
+    syncRacks(s);
+    var fine = seize * TORP_FINE;
+    G.wanted = G.wanted || {};
+    G.wanted[fac] = (G.wanted[fac] || 0) + fine;
+    if (global.Missions) global.Missions.bumpStanding(G, fac, STANDING_HIT[2] || -8);
+    if (hooks && hooks.say) {
+      hooks.say((who || 'Customs') + ': ' + seize + ' rock torpedo' + (seize === 1 ? '' : 'es') +
+                ' aboard' + (tor.synd ? ', unregistered' : ', inbound to a station') +
+                ' - seized, fined ' + fine + ' cr', 8);
+    }
+    if (hooks && hooks.sound) hooks.sound('warn');
+    return { seized: seize, fine: fine };
+  }
 
   /* ---- RACKS, PLURAL ------------------------------------------------------
    * Astra: N racks off the MISSILES table, both firable, selectable in the
@@ -655,11 +829,22 @@
   function syncRacks(ship) {
     var racks = racksOf(ship);
     var armed = racks[ship.missileId];
+    /* Rock torpedoes are never what the missile trigger is armed with -
+     * they go from the ordnance panel - so a seeker rack, if there is one,
+     * takes the trigger instead. */
+    if (armed && MISSILES[armed.id] && MISSILES[armed.id].torpedo) {
+      var seekers = rackList(ship).filter(function (r) { return !(MISSILES[r.id] && MISSILES[r.id].torpedo); });
+      if (seekers.length) armed = null;
+    }
     if (!armed || armed.n <= 0) {
       /* The armed rack ran dry. Arm whatever else is aboard rather than
        * leaving the trigger pointed at an empty rail - a player who has
        * bootlegs left should not have to visit a menu to fire them. */
-      var list = rackList(ship);
+      var list = rackList(ship).sort(function (a, b) {
+        var ta = MISSILES[a.id] && MISSILES[a.id].torpedo ? 1 : 0;
+        var tb = MISSILES[b.id] && MISSILES[b.id].torpedo ? 1 : 0;
+        return ta - tb;                                   // seekers first
+      });
       armed = list[0] || null;
       ship.missileId = armed ? armed.id : (ship.missileId || 'hawk');
     }
@@ -2122,6 +2307,20 @@
    * has. */
   var SYNDICATE_GUN = { dmg: 11, range: 18, cooldown: 0.85, heat: 9 };
 
+  /* THE LAW'S OWN GUN, and its missiles (Astra, 2026-10-18): the starting
+   * ship could outrun any Mirven police, wanted and under fire, because
+   * NPC_GUN (4.5 dps at best, and a hit chance that collapses at speed)
+   * never got through a 40-point shield that refills. "They need to be
+   * able to, or to be equipped with missiles." Both: a heavier, longer
+   * gun that holds its aim better against a runner, and three missiles a
+   * cruiser for a fugitive - fired when you are running or your shield
+   * is still up. A police missile is slower than a Hawk and burns out
+   * sooner, so running early from far out is a real escape and running
+   * late from close in is not. */
+  var POLICE_GUN = { dmg: 9, range: 16, cooldown: 0.9, heat: 7 };
+  var POLICE_MISSILE = { dmg: 34, accel: 0.05, life: 40, fuse: 0.09, speed0: 0.12,
+                         range: 30, every: 18, rack: 3 };
+
   /* ---- merchantmen shoot back --------------------------------------------
    * Freighters used to carry no guns at all, which made robbing one a
    * chore rather than a decision: you closed, you demanded, and nothing
@@ -3126,16 +3325,16 @@
    * is that everyone agrees not to. */
   var BOUNTY = { demand: 400, assault: 300, kill: 2800, killPolice: 6000,
                  killNavy: 12000, killLiner: 9000, killTender: 14000,
-                 smuggling: 0 };
+                 smuggling: 0, sabotage: 30000 };
   /* THE MORE YOU TAKE, THE WORSE THE CRIME (2026-10-30). Astra, when a
    * transfer at gunpoint came to 41,028 cr: "that's a lot of money, it
    * should be a more serious crime the more money you take." So a hold-up
    * is charged at its flat rate (BOUNTY.demand: having pointed a gun) plus
-   * half of what you took — credits, or cargo at its base price. Half, not
+   * half of what you took - credits, or cargo at its base price. Half, not
    * all: getting caught should cost you most of a big score, not more than
    * all of it, or nobody would ever take the risk and the transfer would be
    * a trap rather than a choice. A cash box of 1,900 cr adds 950 to the
-   * bounty — past WANTED_HUNT with the flat charge, so the police come —
+   * bounty - past WANTED_HUNT with the flat charge, so the police come -
    * and a 40,000 cr transfer adds 20,000. The price of a witness's silence
    * rises with it (HUSH_LOOT_SHARE): keeping quiet about a fortune is a
    * bigger thing to keep quiet about. */
@@ -3221,6 +3420,7 @@
     if (ship.heat === undefined) ship.heat = 0;
     if (ship.missiles === undefined) ship.missiles = 0;
     if (ship.sinks === undefined) ship.sinks = 0;
+    if (ship.decoys === undefined) ship.decoys = 0;
     /* Slots last: migrateFit reads the four legacy fields above and turns
      * them into a fit, then syncLegacy writes them back in the new
      * spelling. A ship that has never seen this code comes out of it with
@@ -3319,6 +3519,13 @@
     }
     return false;
   }
+  function hasSkimmer(ship) {
+    var list = fittedList(ship);
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].item.kind === 'skimmer') return true;
+    }
+    return false;
+  }
 
   /* ---- what your scanner can tell you ------------------------------------
    * 0 nothing, 1 a fraction, 2 the numbers. Reads off the slots like
@@ -3328,6 +3535,17 @@
     for (var i = 0; i < list.length; i++) {
       var it = list[i].item;
       if (it.kind === 'scanner' && (it.scan || 0) > best) best = it.scan;
+    }
+    return best;
+  }
+
+  /* The survey grade fitted: 0 none, 1 scanner, 2 gamma spectrometer, 3
+   * deep array (survey.js CLASS says what each reads). */
+  function surveyLevel(ship) {
+    var list = fittedList(ship), best = 0;
+    for (var i = 0; i < list.length; i++) {
+      var it = list[i].item;
+      if (it.kind === 'survey' && (it.survey || 0) > best) best = it.survey;
     }
     return best;
   }
@@ -3670,6 +3888,12 @@
     if (!(dmg > 0)) return { shield: 0, hull: 0, through: false };
     if (!(shieldHp > 0) || !(vs > 0)) {
       return { shield: 0, hull: dmg * vh, through: true };
+    }
+    /* FULLY ABSORBED BY SHIELDS (the mining laser cannon): a shield that is
+     * up takes the shot and NOTHING goes through to the hull, even when this
+     * shot is the one that empties it. */
+    if (d.shieldAbsorbs) {
+      return { shield: Math.min(shieldHp, dmg * vs), hull: 0, through: false };
     }
     var offered = dmg * vs;
     var soaked = Math.min(shieldHp, offered);
@@ -4297,6 +4521,55 @@
    * enough to the SCENE to hear the victim shouting, the report is
    * immediate. Otherwise the victim starts a transmission timer; update()
    * files the report when it expires, and killNpc cancels it. */
+  /* A BLAST (mining.js, the rock torpedo): everything inside `radius` of
+   * `pos` takes damage falling linearly to nothing at the edge. NPCs go
+   * through damageNpc, so the law sees it exactly as it sees a shot; the
+   * pilot takes hull, heat, and a shove away from the flash. */
+  function blastAt(sys, G, t, pos, radius, dmg, hooks) {
+    var Sim = global.Sim, hit = 0;
+    var ships = Sim.shipsAll(sys, t);
+    for (var i = 0; i < ships.length; i++) {
+      var sh = ships[i];
+      if (sh.route && sh.route.suppressed) continue;
+      var d = V.dist(sh.pos, pos);
+      if (d >= radius) continue;
+      var spec = sh.spec || liftTrader(sys, sh, t);
+      if (spec) { damageNpc(sys, G, spec, dmg * (1 - d / radius), t, hooks, null, pos); hit++; }
+    }
+    var s = G.ship;
+    if (s && !s.docked && !s.landed) {
+      var dp = V.dist(s.pos, pos);
+      if (dp < radius) {
+        var k = 1 - dp / radius;
+        damagePlayer(G, dmg * k, hooks, null, pos);
+        addHeat(G, 60 * k);
+        var away = dp > 1e-9 ? V.scale(V.sub(s.pos, pos), 1 / dp) : s.fwd;
+        s.vel = V.addScaled(s.vel, away, 0.008 * k);
+        if (hooks && hooks.say) hooks.say('CAUGHT IN THE BLAST - ' + Math.round(dmg * k) + ' hull', 5);
+      }
+    }
+    return hit;
+  }
+
+  /* A station hit by a torpedo knows what happened and who: no witness
+   * roll, no window to buy silence - the victim is the witness and it is
+   * a station. A heavy bounty with its owners and their standing gone. */
+  function reportSabotage(sys, G, t, port, hooks) {
+    var fac = port.faction || 'civil';
+    if (G.ship && G.ship.silent) {
+      if (hooks && hooks.say) hooks.say('SABOTAGE - ' + port.name + ' logs the strike: no transponder, no ID on the hull', 8);
+      if (hooks && hooks.sound) hooks.sound('warn');
+      return;
+    }
+    G.wanted = G.wanted || {};
+    G.wanted[fac] = (G.wanted[fac] || 0) + BOUNTY.sabotage;
+    if (global.Missions) global.Missions.bumpStanding(G, fac, -40);
+    if (hooks && hooks.say) {
+      hooks.say('SABOTAGE - ' + port.name + ' logs the strike: bounty ' + BOUNTY.sabotage + ' cr', 8);
+    }
+    if (hooks && hooks.sound) hooks.sound('warn');
+  }
+
   function crime(sys, G, t, kind, victim, hooks) {
     if (!victim || victim.kind === 'pirate') return;    // no law for outlaws
     if (victim.reported === kind) return;               // one report per act
@@ -4321,6 +4594,7 @@
     }
 
     var scene = victim.live ? victim.live.pos : G.ship.pos;
+    var anon = !!(G.ship && G.ship.silent);
     var witness = witnessNear(sys, t, scene, victim, G);
 
     if (witness) {
@@ -4335,8 +4609,10 @@
        * rebuilt from their rails every time t moves, so anything written
        * on one is gone by the next frame; it lives on G, which is also
        * what makes it survive a save. */
+      if (G.pendingReport && !anon) G.pendingReport.anon = false;
       if (!G.pendingReport) {
         G.pendingReport = {
+          anon: anon,
           kind: kind, fac: victim.faction || 'civil',
           at: t + WITNESS_CALL_DELAY,
           by: witness.name || 'a witness',
@@ -4371,8 +4647,10 @@
     } else if (!victim.distressAt) {
       victim.distressAt = t + distressDelayFor(victim);
       victim.distressKind = kind;
+      victim.distressAnon = anon;
     } else if (BOUNTY[kind] > BOUNTY[victim.distressKind || 'assault']) {
       victim.distressKind = kind;   // the charge escalates with the act
+      if (!anon) victim.distressAnon = false;
     }
   }
 
@@ -4760,7 +5038,7 @@
     if (q.pending) { G.pendingReport = null; }
     if (q.victim) { q.victim.distressAt = null; q.victim.distressKind = null; q.victim.lootUnreported = 0; }
     report(G, q.kind, { faction: q.pending ? q.pending.fac : (q.victim.faction || 'civil') },
-           hooks, 'paid off and reported anyway', lootQ);
+           hooks, 'paid off and reported anyway', lootQ, q.pending ? q.pending.anon : q.victim.distressAnon);
     if (hooks && hooks.say) {
       hooks.say(q.intimidate
         ? q.who + ' called it in anyway. Somebody is braver than they look.'
@@ -4807,8 +5085,14 @@
 
   /* `loot`: what was taken in the act, credits or cargo at base price;
    * it is charged on top of the act's own rate (lootBounty, above). */
-  function report(G, kind, victim, hooks, how, loot) {
+  function report(G, kind, victim, hooks, how, loot, anon) {
     var fac = victim.faction || 'civil';
+    /* An unidentified hull: the act is on the record, and nobody's name
+     * is on it (the shroud suite). */
+    if (anon) {
+      if (hooks && hooks.say) hooks.say('CRIME REPORTED (' + how + ') - unidentified hull, no ID to put a bounty on', 6);
+      return;
+    }
     G.wanted = G.wanted || {};
     var extra = lootBounty(loot);
     G.wanted[fac] = (G.wanted[fac] || 0) + (BOUNTY[kind] || 300) + extra;
@@ -5077,6 +5361,13 @@
    * One function, and every reader of a refusal goes through it. */
   function dockRefusal(G, port) {
     if (!port) return null;
+    /* A station a torpedo has holed is not taking ships until it is fixed. */
+    var sab = global.Mining && global.Mining.sabotaged(G, port, G.t);
+    if (sab) {
+      return { why: 'sabotaged', short: 'DAMAGED',
+               text: 'berths shut after a torpedo strike - ' +
+                     Math.ceil((sab.until - G.t) / 86400) + ' days to repair' };
+    }
     /* Under an order to leave, nothing here opens for you. Not a separate
      * punishment so much as the same one: "and then you leave" is not a
      * request if you can still dock, refuel and carry on trading. Dumping
@@ -5158,6 +5449,8 @@
      * for Navy or Police in plain clothes, and look. */
     var suspect = spec.faction === 'outlaw' && global.Tithe && global.Tithe.suspected(G, sys, G.t);
     if (suspect) searchChance = Math.max(searchChance, global.Tithe.SUSPECT_SEARCH);
+    /* A hull jamming with no ID gets searched, always. */
+    if (ship.ecmLoud) searchChance = 1;
 
     if (Math.random() >= searchChance) {
       if (hooks && hooks.say) hooks.say(spec.name + ': routine hail — you are clear', 4);
@@ -5165,12 +5458,30 @@
     }
 
     var scanFac = spec.faction || 'civil';
+    /* AN INFILTRATION RUN IS BLOWN BY A SEARCH (arcs.js sequels): the
+     * contract lapses now and the chain breaks on the next tick. */
+    (G.missions || []).forEach(function (mm) {
+      if (!mm.infiltrate || mm.blownBy) return;
+      mm.blownBy = spec.name || 'a patrol';
+      mm.deadline = Math.min(mm.deadline, (G.t || 0) - 1);
+      if (hooks && hooks.say) hooks.say('SEARCHED - ' + mm.blownBy + ' has seen your hold. The run is blown.', 7);
+    });
+    /* Rock torpedoes first, by their own rule (torpedoSearch): Syndicate
+     * charges always, Guild ones only heading in to a station. */
+    torpedoSearch(G, scanFac, G.t, hooks, spec.name);
     var found = [];
     for (var cid in ship.cargo) {
       if (!(ship.cargo[cid] > 1e-9)) continue;
       var sev = contrabandSeverity(G, cid, scanFac);
       if (sev > 0) found.push({ cid: cid, sev: sev });
+      /* Stolen ore (claims.js): only the hot tonnes, and not to an
+       * outlaw inspector, who is the one buying it. */
+      else if (scanFac !== 'outlaw' && global.Claims && global.Claims.hotOf(G, cid) >= 1) {
+        found.push({ cid: cid, sev: 1, hot: global.Claims.hotOf(G, cid) });
+      }
     }
+    var hotDrones = (scanFac !== 'outlaw' && ship.hotDrones > 0) ? ship.hotDrones : 0;
+    if (hotDrones) found.push({ cid: null, sev: 1, drones: hotDrones });
     if (!found.length) {
       if (hooks && hooks.say) hooks.say(spec.name + (suspect ? ' turns your hold over — you refused the tithe — and finds nothing' : ' scans your hold — nothing flagged, cleared'), 5);
       if (hooks && hooks.sound) hooks.sound('click');
@@ -5189,7 +5500,7 @@
     var bribeChance = Math.max(0, Math.min(0.75, (corrupt - HUSH_MIN_CORRUPTION) / 100));
     if (bribeChance > 0 && Math.random() < bribeChance) {
       var wouldBeFine = 0;
-      found.forEach(function (f) { wouldBeFine += fineFor(ship.cargo[f.cid], f.sev); });
+      found.forEach(function (f) { wouldBeFine += fineFor(f.drones ? f.drones * 5 : f.hot || ship.cargo[f.cid], f.sev); });
       var ask = Math.max(50, Math.round(wouldBeFine * 0.55));
       if (ship.credits >= ask) {
         ship.credits -= ask;
@@ -5206,11 +5517,21 @@
 
     var fine = 0, seized = [], worst = 0;
     found.forEach(function (f) {
-      var qty = ship.cargo[f.cid];
+      if (f.drones) {
+        fine += fineFor(f.drones * 5, f.sev);
+        if (f.sev > worst) worst = f.sev;
+        seized.push(f.drones + ' stolen drone' + (f.drones === 1 ? '' : 's'));
+        ship.drones = Math.max(0, (ship.drones || 0) - f.drones); ship.hotDrones = 0;
+        return;
+      }
+      var qty = f.hot || ship.cargo[f.cid];
       fine += fineFor(qty, f.sev);
       if (f.sev > worst) worst = f.sev;
-      seized.push(qty.toFixed(0) + 't ' + Economy.BY_ID[f.cid].name);
-      delete ship.cargo[f.cid];
+      seized.push(qty.toFixed(0) + 't ' + (f.hot ? 'stolen ' : '') + Economy.BY_ID[f.cid].name);
+      if (f.hot) {
+        ship.cargo[f.cid] -= qty; if (ship.cargo[f.cid] <= 1e-9) delete ship.cargo[f.cid];
+        if (ship.hot) delete ship.hot[f.cid];
+      } else delete ship.cargo[f.cid];
     });
     if (global.Sim) global.Sim.refreshShip(ship);
     fine = Math.round(fine);
@@ -6033,6 +6354,26 @@
              f: len * MUZZLE_FWD };
   }
 
+  /* THE CANNON'S CAPACITORS (2026-10-18). For every fitted gun that glows
+   * through its cooldown (the mining laser cannon), how hot it still is:
+   * 1 the instant it fires, fading to 0 when it is ready again - read off
+   * the same G.gunCool the trigger obeys, so the glow cannot disagree with
+   * whether the gun will fire. One answer for the hull mount, the cockpit
+   * capacitor bank and the HUD bar. */
+  function cannonGlow(G, t) {
+    var out = [];
+    if (!G || !G.ship) return out;
+    var list = fittedList(G.ship), cools = G.gunCool || {};
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i];
+      if (!e.item.cooldownGlow) continue;
+      var k = ((cools[e.key] || 0) - t) / (e.item.cooldown || 1);
+      out.push({ key: e.key, k: Math.max(0, Math.min(1, k)), cooldown: e.item.cooldown,
+                 muzzle: muzzleWorld(G.ship, muzzleOf(G.ship, e.key)) });
+    }
+    return out;
+  }
+
   function muzzleWorld(ship, mz) {
     var p = V.clone(ship.pos);
     p = V.addScaled(p, ship.right, mz.r);
@@ -6066,6 +6407,15 @@
       }
     }
 
+    /* A MINING LASER STOPS ON ROCK (mining.js). Whatever rock is nearer
+     * than the ship it would have hit takes the shot instead, and the beam
+     * is drawn to the face being cut. */
+    var rockEnd = null;
+    if (gun.mining && global.Mining) {
+      var mc = global.Mining.cut(sys, G, t, gun, hitDist, hooks);
+      if (mc) { rockEnd = mc.end; hit = null; }
+    }
+
     /* BOTH ENDS ARE LIVE, and that is not a refinement — it is the whole
      * correctness condition. Tracking the muzzle while leaving the far end
      * frozen where it was fired makes every beam still on screen stretch
@@ -6090,8 +6440,8 @@
      * as a broken gun, not because the shot is slow. */
     (G.beams = G.beams || []).push({
       from: muzzleWorld(s, mz), muzzle: mz, fromShip: true,
-      to: hit ? V.clone(hit.pos) : beamEnd,
-      target: hit || null, range: gun.range,
+      to: hit ? V.clone(hit.pos) : (rockEnd || beamEnd),
+      target: hit || (rockEnd ? { pos: rockEnd, rock: true } : null), range: gun.range,
       variety: gun.variety || 'pulse', side: mz.r < 0 ? -1 : 1,
       color: gun.color, born: now, until: now + 0.42
     });
@@ -6222,6 +6572,7 @@
 
       fireOne(sys, G, t, e.item, e.key, hooks);
       fired++;
+      breakCover(G, t);
     }
     /* One report for the volley. Three emitters cycling together should
      * sound like a ship firing, not like three ships. */
@@ -6246,6 +6597,9 @@
   function updateTurret(sys, G, t, hooks) {
     var s = G.ship;
     if (!s.turret || s.docked || s.landed) return;
+    /* Running silent, the mount holds its fire: a turret that shot at
+     * things would be a beacon you paid for. */
+    if (G.silentOn) return;
     var tur = TURRETS[s.turret];
 
     /* WHO IS ON IT. On a small hull, you are — one seat with everything in
@@ -6264,6 +6618,27 @@
     if (t < (G.turretCoolUntil || 0)) return;
     var now = (typeof performance !== 'undefined' ? performance.now() : 0) / 1000;
 
+    /* POINT DEFENCE first: a seeker coming for you inside PD.range is the
+     * target, whatever else is hostile. No slew for it - the mount is
+     * already tracking what it is warning you about. */
+    var inc = null, incD = PD.range;
+    (sys.missiles || []).forEach(function (m) {
+      if (!m.atPlayer || m.dead || m.lost || m.decoy) return;
+      var dm = V.dist(m.pos, s.pos);
+      if (dm < incD) { inc = m; incD = dm; }
+    });
+    if (inc) {
+      G.turretCoolUntil = t + tur.cooldown / man.rate;
+      (G.beams = G.beams || []).push({ from: V.clone(s.pos), to: V.clone(inc.pos), color: tur.color, until: now + 0.07 });
+      addHeat(G, (tur.heat || 0) * (tur.cooldown || 0));
+      if (hooks && hooks.sound) hooks.sound('turret');
+      if (Math.random() < PD.hit) {
+        inc.dead = true;
+        (G.explosions = G.explosions || []).push({ pos: V.clone(inc.pos), at: now * 1000, size: 0.5 });
+        if (hooks && hooks.say) hooks.say('Turret: seeker down', 2);
+      }
+      return;
+    }
     var best = null, bestD = tur.range;
     var patrols = sys.patrols || [];
     for (var i = 0; i < patrols.length; i++) {
@@ -6335,6 +6710,14 @@
       if (hooks && hooks.say) hooks.say(s.missiles > 0 ? 'Not now' : 'No missiles aboard', 2);
       return;
     }
+    /* A ROCK TORPEDO IS NOT ON THE TRIGGER. Astra: "the player should have
+     * to use an internal panel, uncover the launch switch, then launch it."
+     * So the missile key refuses it and says where the switch is. */
+    var armedM = MISSILES[s.missileId];
+    if (armedM && armedM.torpedo) {
+      if (hooks && hooks.say) hooks.say('Rock torpedoes launch from the ordnance panel - F5, ORDNANCE tab', 4);
+      return;
+    }
     var target = null;
     if (G.navTarget && G.navTarget.kind === 'ship') {
       var patrols = sys.patrols || [];
@@ -6383,6 +6766,7 @@
     /* A gunner aboard guides it (crew.js gunnery): a seeker that can follow
      * a faster-crossing target, and slips off one less often. */
     var gy = gunneryOf(s);
+    breakCover(G, t);
     (sys.missiles = sys.missiles || []).push({
       pos: V.addScaled(s.pos, s.fwd, 0.06),
       vel: V.addScaled(s.vel, s.fwd, m.speed0),
@@ -6393,6 +6777,29 @@
     /* Launching at someone is assault the moment the seeker goes hot. */
     crime(sys, G, t, 'assault', target, hooks);
     if (hooks && hooks.sound) hooks.sound('missile');
+  }
+
+  /* THE ORDNANCE PANEL'S LAUNCH SWITCH, and the only way a rock torpedo
+   * leaves the ship. The cover has to be up (G.torpCover, lifted on the
+   * panel) and it drops again the moment one goes: one charge per lift.
+   * Returns { ok, why }. */
+  function launchTorpedo(sys, G, t, id, hooks) {
+    var s = G.ship, m = MISSILES[id];
+    function no(why) { if (hooks && hooks.say) hooks.say(why, 4); return { ok: false, why: why }; }
+    if (!m || !m.torpedo) return no('Nothing loaded');
+    if (!G.torpCover) return no('Lift the switch cover first');
+    if (s.docked || s.landed) return no('Not from a berth or the ground');
+    if (G.warpIndex > 0) return no('Not under time compression');
+    if (!global.Mining) return no('No launcher');
+    var rk = racksOf(s)[id];
+    if (!rk || !(rk.n > 0)) return no('No ' + m.name.toLowerCase() + ' aboard');
+    rk.n -= 1;
+    if (rk.n <= 0) delete racksOf(s)[id];
+    syncRacks(s);
+    G.torpCover = false;
+    var tp = global.Mining.launchTorpedo(sys, G, t, m, hooks);
+    if (hooks && hooks.sound) hooks.sound('missile');
+    return { ok: true, torpedo: tp };
   }
 
   /* Dump the rack. Certain, total, and free of consequences beyond the
@@ -6469,6 +6876,222 @@
    * manoeuvre, so what loses a lock in practice is launching at something
    * crossing fast — a shot the player chooses to take. */
   var SEEKER_TRACK = 0.05, SEEKER_SLIP = 0.5, SEEKER_COMMIT = 1.5;
+  /* A police missile at the player. Same flight as yours (updateMissiles),
+   * marked atPlayer so the chase reads the player's ship. */
+  function firePoliceMissile(sys, G, t, sp, hooks) {
+    var m = POLICE_MISSILE, s = G.ship;
+    var dir = V.norm(V.sub(s.pos, sp.live.pos));
+    (sys.missiles = sys.missiles || []).push({
+      pos: V.addScaled(sp.live.pos, dir, 0.06),
+      vel: V.addScaled(sp.live.vel, dir, m.speed0),
+      atPlayer: true, from: sp.id, dmg: m.dmg, accel: m.accel,
+      born: t, dies: t + m.life, fuse: m.fuse
+    });
+    sp.missilesLeft -= 1;
+    sp.missileAt = t + m.every;
+    if (hooks && hooks.say) {
+      hooks.say('MISSILE LAUNCH - ' + (sp.name || 'police') + ' - ' +
+                Math.round(V.dist(sp.live.pos, s.pos)) + ' km. Burn away early or take it.', 5);
+    }
+    if (hooks && hooks.sound) hooks.sound('warn');
+  }
+
+
+  /* ---- countermeasures (Astra, 2026-10-18: "we need countermeasures
+   * against missiles") -----------------------------------------------------
+   * Four, chosen with her, and each answers a seeker differently:
+   *
+   *   DECOYS (O): a utility launcher and a rack of charges bought like heat
+   *     sinks. A charge goes out aft, hot and bright for a few seconds; each
+   *     seeker coming for you rolls once against it, likelier the closer it
+   *     is to impact - so a decoy fired at the last moment works best, and
+   *     one fired the moment the warning sounds is a coin toss.
+   *   RADIOACTIVES: Astra - "dumping radioactives would be a very hot 1t
+   *     object, maybe working like a no oxygen flare. You'd use a
+   *     high-activity isotope, and a lot of it." Jettison a tonne or more of
+   *     waste or fissiles with seekers inbound and it is a flare far better
+   *     than a charge, burning for longer. Dumping waste is still a crime.
+   *   POINT DEFENCE: the auto-turret shoots a seeker inside 3 km before it
+   *     shoots a ship. A hit kills it.
+   *   ECM (SHIFT+O): an internal jammer. While it is on, every seeker
+   *     within 12 km has a steady chance a second of losing lock and
+   *     flying on blind. It costs heat.
+   *
+   * The law and the navy carry decoys against YOUR missiles (Astra: navy and
+   * police only), six a hull, dropped when a seeker is 4 km out.
+   *
+   * A seeker that is lured chases the decoy; when the decoy burns out it
+   * has lost lock and flies straight until its fuel is gone. */
+  var DECOY = { id: 'decoy', name: 'Decoy charge', price: 60, pull: 0.5, life: 8, kick: 0.05,
+                pitch: 'Hot, bright, and not you.' };
+  var FLARE = { pull: 0.85, life: 25, minTonnes: 1 };
+  var ECM = { range: 12, loseRate: 0.12, heat: 4 };
+  var PD = { range: 3, hit: 0.45 };
+  var NPC_DECOYS = 6, NPC_DECOY_RANGE = 4, NPC_DECOY_PULL = 0.55;
+
+  function decoyRackSize(ship) {
+    var list = fittedList(ship);
+    for (var i = 0; i < list.length; i++) if (list[i].item.kind === 'decoyrack') return list[i].item.rack;
+    return 0;
+  }
+  function hasEcm(ship) {
+    var list = fittedList(ship);
+    for (var i = 0; i < list.length; i++) if (list[i].item.kind === 'ecm') return true;
+    return false;
+  }
+  /* Closer to impact, likelier to bite: the seeker is looking at a small
+   * patch of sky and the decoy fills it. */
+  function lureOdds(d) { return d < 1.5 ? 1 : d < 6 ? 0.8 : 0.5; }
+
+  function spawnDecoy(sys, t, pos, vel, pull, life, against) {
+    var dc = { pos: V.clone(pos), vel: V.clone(vel), born: t, dies: t + life, pull: pull, seduced: 0 };
+    (sys.decoys = sys.decoys || []).push(dc);
+    (sys.missiles || []).forEach(function (ms) {
+      if (ms.torp || ms.lost || ms.decoy || ms.dead) return;
+      if (!against(ms)) return;
+      var d = V.dist(ms.pos, pos);
+      if (d > 15) return;
+      if (Math.random() < pull * lureOdds(d)) { ms.decoy = dc; dc.seduced++; }
+    });
+    return dc;
+  }
+
+  function launchDecoy(sys, G, t, hooks) {
+    var s = G.ship;
+    function no(why) { if (hooks && hooks.say) hooks.say(why, 3); return false; }
+    if (!decoyRackSize(s)) return no('No decoy launcher fitted');
+    if (!(s.decoys > 0)) return no('Decoy rack empty - charges at any yard');
+    if (s.docked || s.landed) return no('Not from a berth or the ground');
+    s.decoys -= 1;
+    var aft = V.scale(s.fwd, -1);
+    var dc = spawnDecoy(sys, t, V.addScaled(s.pos, aft, 0.05), V.addScaled(s.vel, aft, DECOY.kick),
+                        DECOY.pull, DECOY.life, function (ms) { return ms.atPlayer; });
+    if (hooks && hooks.say) {
+      hooks.say(dc.seduced ? 'DECOY AWAY - ' + dc.seduced + ' seeker' + (dc.seduced === 1 ? '' : 's') +
+                             ' chasing it  ·  ' + s.decoys + ' left'
+                           : 'Decoy away - nothing took it  ·  ' + s.decoys + ' left', 3);
+    }
+    if (hooks && hooks.sound) hooks.sound('click');
+    return true;
+  }
+
+  /* A tonne or more of something very radioactive, overboard: the hottest
+   * thing in the sky for half a minute. Called by the jettison. */
+  function dropFlare(sys, G, t, pos, vel, hooks) {
+    var inbound = (sys.missiles || []).some(function (m) { return m.atPlayer && !m.lost && !m.dead; });
+    var dc = spawnDecoy(sys, t, pos, vel, FLARE.pull, FLARE.life, function (ms) { return ms.atPlayer; });
+    dc.hot = true;
+    if (inbound && hooks && hooks.say) {
+      hooks.say(dc.seduced ? 'HOT DUMP - ' + dc.seduced + ' seeker' + (dc.seduced === 1 ? '' : 's') + ' chasing the isotope'
+                           : 'Hot dump - the seekers stayed on you', 4);
+    }
+    return dc;
+  }
+
+  function toggleEcm(G, hooks) {
+    if (!hasEcm(G.ship)) { if (hooks && hooks.say) hooks.say('No ECM jammer fitted', 3); return false; }
+    G.ecmOn = !G.ecmOn;
+    if (hooks && hooks.say) hooks.say(G.ecmOn ? 'ECM ON - seekers within ' + ECM.range + ' km may lose lock. You are lit up on every scope in the system, with no ID code.'
+                                              : 'ECM off', 4);
+    if (hooks && hooks.sound) hooks.sound('click');
+    return G.ecmOn;
+  }
+
+  /* Once a frame: decoys drift and burn out; the jammer works. */
+  function updateCountermeasures(sys, G, t, dt, hooks) {
+    if (sys.decoys && sys.decoys.length) {
+      sys.decoys = sys.decoys.filter(function (dc) {
+        if (t >= dc.dies) return false;
+        dc.pos = V.addScaled(dc.pos, dc.vel, dt);
+        return true;
+      });
+    }
+    var s = G.ship;
+    /* Silent, for Sim (heat, who notices you) and for the law (no ID). */
+    s.silent = !!(G.silentOn && hasShroud(s) && !s.docked && !s.landed && !G.ecmOn &&
+                  t >= (G.silentBreakUntil || 0) && !((s.throttle || 0) > SILENT.throttle));
+    /* Loud, for Sim.updateEncounters and the scan: a jammer is the
+     * brightest thing on every scope in the system, with no ID code. */
+    s.ecmLoud = !!(G.ecmOn && hasEcm(s) && !s.docked && !s.landed);
+    if (!s.ecmLoud || !(dt > 0)) return;
+    addHeat(G, ECM.heat * dt);
+    var p = 1 - Math.exp(-ECM.loseRate * dt);
+    (sys.missiles || []).forEach(function (ms) {
+      if (!ms.atPlayer || ms.lost || ms.dead || ms.decoy) return;
+      if (V.dist(ms.pos, s.pos) > ECM.range) return;
+      if (Math.random() < p) {
+        ms.lost = true;
+        if (hooks && hooks.say) hooks.say('ECM - a seeker has lost lock', 3);
+      }
+    });
+  }
+
+  /* The law's decoys against your missile: once, when it is 4 km out. */
+  function npcDecoy(sys, t, ms, tgt) {
+    var sp = tgt.live && tgt.live.spec ? tgt.live.spec : tgt;
+    if (!sp || (sp.kind !== 'police' && sp.kind !== 'navy')) return;
+    if (sp.decoysLeft === undefined) sp.decoysLeft = NPC_DECOYS;
+    if (!(sp.decoysLeft > 0)) return;
+    sp.decoysLeft -= 1;
+    var kick = V.norm({ x: Math.random() - 0.5, y: Math.random() - 0.5, z: Math.random() - 0.5 });
+    spawnDecoy(sys, t, tgt.live.pos, V.addScaled(tgt.live.vel, kick, DECOY.kick), NPC_DECOY_PULL, DECOY.life,
+               function (m) { return m === ms; });
+  }
+
+  /* An unidentified jammer, written up by the cop that watched it. */
+  var JAM_CITATION = 250;
+  function citeJamming(G, spec, hooks) {
+    var fac = spec.faction || 'civil';
+    G.wanted = G.wanted || {};
+    G.wanted[fac] = (G.wanted[fac] || 0) + JAM_CITATION;
+    if (hooks && hooks.say) {
+      hooks.say((spec.name || 'Police') + ': "Unidentified contact, you are jamming. Cut it and squawk your ID." - cited ' +
+                JAM_CITATION + ' cr, bounty now ' + Math.round(G.wanted[fac]) + ' cr', 7);
+    }
+    if (hooks && hooks.sound) hooks.sound('warn');
+  }
+
+
+  /* ---- the shroud suite: silent running (Astra, 2026-10-19) ---------------
+   * "Those jammers should be hard to come by, and probably at the end of
+   * their own quest line. Because if you want to be able to do a sabotage
+   * mission, you got to be able to get in and out without being detected or
+   * identified." The ECM is the loud panic button and stays in the yards;
+   * this is the quiet one, and nobody sells it (unlisted): it is the reward
+   * at the end of the navy's or the Syndicate's second chain (arcs.js).
+   *
+   * Silent running, chosen with her: SHIFT+X. Transponder dark, emissions
+   * masked, radiators shut.
+   *   - Ships notice you only inside SILENT.wakeKm (Sim, ship.silent).
+   *   - Nobody can read an ID: a crime committed while silent is reported
+   *     as an unidentified hull and carries no bounty; so is a theft, and a
+   *     sabotage.
+   *   - The price is heat: with the radiators shut the hull sheds nothing
+   *     and the suite itself runs warm (Sim.updateHeating), so cover lasts
+   *     a couple of minutes before the heat limit - then the battle shield
+   *     and the hull pay, the same rule as an atmosphere.
+   *   - Firing anything, or burning over half throttle, breaks cover for a
+   *     few seconds. The auto-turret holds its fire while you run silent.
+   *   - It cannot run with the ECM on: the jammer is the loudest thing in
+   *     the sky. */
+  var SILENT = { throttle: 0.5, breakS: 5 };
+  function hasShroud(ship) {
+    var list = fittedList(ship);
+    for (var i = 0; i < list.length; i++) if (list[i].item.kind === 'shroud') return true;
+    return false;
+  }
+  function toggleSilent(G, hooks) {
+    if (!hasShroud(G.ship)) { if (hooks && hooks.say) hooks.say('No shroud suite fitted', 3); return false; }
+    G.silentOn = !G.silentOn;
+    if (G.silentOn) G.ecmOn = false;
+    if (hooks && hooks.say) {
+      hooks.say(G.silentOn ? 'SILENT RUNNING - transponder dark, radiators shut. Heat will build. Firing, or burning past half throttle, breaks cover.'
+                           : 'Silent running off - transponder live, radiators open', 5);
+    }
+    if (hooks && hooks.sound) hooks.sound('click');
+    return G.silentOn;
+  }
+  function breakCover(G, t) { if (G.silentOn) G.silentBreakUntil = t + SILENT.breakS; }
 
   function updateMissiles(sys, G, t, dtSim, hooks) {
     var list = sys.missiles;
@@ -6476,8 +7099,25 @@
     var keep = [];
     for (var i = 0; i < list.length; i++) {
       var ms = list[i];
-      var tgt = ms.target;
-      if (t >= ms.dies || tgt.dead || !tgt.live) continue;    // fuel out, or nothing left to chase
+      if (ms.torp) { keep.push(ms); continue; }               // mining.js flies these
+      /* At the player: the chase reads your ship; a berth or the ground
+       * is cover. */
+      if (ms.dead || t >= ms.dies) continue;
+      /* No lock: straight on until the motor is spent. */
+      if (ms.lost) { ms.pos = V.addScaled(ms.pos, ms.vel, Math.max(0, dtSim)); keep.push(ms); continue; }
+      var tgt = ms.atPlayer ? ((G.ship.docked || G.ship.landed || G.ship.crashed) ? null : { live: G.ship })
+                            : ms.target;
+      if (!tgt || tgt.dead || !tgt.live) continue;    // nothing left to chase
+      /* The law drops a decoy at a seeker 4 km out. */
+      if (!ms.atPlayer && !ms.decoy && !ms.npcRolled && V.dist(ms.pos, tgt.live.pos) < NPC_DECOY_RANGE) {
+        ms.npcRolled = true;
+        npcDecoy(sys, t, ms, tgt);
+      }
+      /* Lured: the decoy is the target; when it burns out, the lock is gone. */
+      if (ms.decoy) {
+        if (t >= ms.decoy.dies) { ms.decoy = null; ms.lost = true; keep.push(ms); continue; }
+        tgt = { live: ms.decoy };
+      }
 
       var left = Math.max(0, dtSim), guard = 0;
       var hitIt = false;
@@ -6523,7 +7163,9 @@
         /* No delivery and no direction: a warhead has no variety, and it goes
          * off ON the hull rather than arriving from anywhere. Both arguments
          * are optional precisely so this line does not have to lie. */
-        damageNpc(sys, G, tgt, ms.dmg, t, hooks);
+        if (ms.decoy) { /* it got the decoy */ }
+        else if (ms.atPlayer) damagePlayer(G, ms.dmg, hooks, null, V.clone(ms.pos));
+        else damageNpc(sys, G, tgt, ms.dmg, t, hooks);
         if (hooks && hooks.sound) hooks.sound('explosion');
         continue;
       }
@@ -6557,9 +7199,20 @@
        * stays on NPC_GUN like it always has — carries what its own
        * enforcement wing can buy. See SYNDICATE_GUN. */
       var elite = sp.kind === 'police' && sp.faction === 'outlaw';
+      var cop = sp.kind === 'police' && !sp.defending;
       var gun = (sp.kind === 'trader' || sp.defending) ? TRADER_GUN
-              : elite ? SYNDICATE_GUN : NPC_GUN;
+              : elite ? SYNDICATE_GUN : cop ? POLICE_GUN : NPC_GUN;
       var d = V.dist(sp.live.pos, s.pos);
+      /* A cop with a fugitive in reach and a missile left: away it goes,
+       * when the guns are not enough - running, or the shield still up. */
+      if (cop && sp.hostileToPlayer && d <= POLICE_MISSILE.range) {
+        if (sp.missilesLeft === undefined) sp.missilesLeft = POLICE_MISSILE.rack;
+        var running = d > gun.range * 0.7;
+        if (sp.missilesLeft > 0 && t >= (sp.missileAt || 0) &&
+            (running || (s.shield && s.shieldHp > 10))) {
+          firePoliceMissile(sys, G, t, sp, hooks);
+        }
+      }
       if (d > gun.range) continue;
       if (t < (sp.coolUntil || 0)) continue;
       sp.coolUntil = t + gun.cooldown;
@@ -6568,8 +7221,10 @@
       addNpcHeat(sp, (gun.heat || 0) * (gun.cooldown || 0), null);
 
       var transverse = V.len(V.sub(s.vel, sp.live.vel));
-      var chance = Math.max(0.12, Math.min(0.85,
-        1.0 - d / gun.range * 0.5 - transverse * 1.4));
+      /* Police gunnery is trained for a runner: a firmer floor and less
+       * lost to speed than a pirate's. */
+      var chance = Math.max(cop ? 0.25 : 0.12, Math.min(0.85,
+        1.0 - d / gun.range * 0.5 - transverse * (cop ? 0.8 : 1.4)));
       (G.beams = G.beams || []).push({
         from: V.clone(sp.live.pos), to: V.clone(s.pos),
         color: gun === TRADER_GUN ? '#ffc46b' : elite ? '#c86bff' : '#ff8a76',
@@ -6639,6 +7294,8 @@
     updateSink(G, t, hooks, sys);
     updateTurret(sys, G, t, hooks);
     updateMissiles(sys, G, t, dtSim, hooks);
+    updateCountermeasures(sys, G, t, dtSim, hooks);
+    if (global.Mining) global.Mining.updateTorpedoes(sys, G, t, dtSim, hooks);
     updateNpcFire(sys, G, t, dtSim, hooks);
 
     updateNpcHeat(sys, G, t, dtSim, hooks);
@@ -6650,7 +7307,7 @@
     /* A witness's call, if it was neither bought nor intimidated away. */
     if (G.pendingReport && t >= G.pendingReport.at) {
       report(G, G.pendingReport.kind, { faction: G.pendingReport.fac }, hooks,
-             'witnessed by ' + G.pendingReport.by, G.pendingReport.loot);
+             'witnessed by ' + G.pendingReport.by, G.pendingReport.loot, G.pendingReport.anon);
       G.pendingReport = null;
     }
 
@@ -6664,7 +7321,7 @@
          * and from one event. Before this, the second happened and the
          * first was only ever a word in a comment. */
         broadcastDistress(sys, G, t, sp, sp.distressKind || 'assault', hooks);
-        report(G, sp.distressKind || 'assault', sp, hooks, 'distress call', sp.lootUnreported);
+        report(G, sp.distressKind || 'assault', sp, hooks, 'distress call', sp.lootUnreported, sp.distressAnon);
         sp.lootUnreported = 0;
         sp.reported = sp.distressKind;
         sp.distressAt = null;
@@ -6981,7 +7638,7 @@
     if (charted) {
       var fac = G.galaxy.factionById[charted.factionId];
       text += ' Came through ' + charted.name +
-              (fac ? ' — that is ' + fac.name + ' space' : '') + '.';
+              (fac ? ' — that is ' + fac.name + ' space' : ' — nobody holds it, nothing there but the star') + '.';
     } else if (route && route._told) {
       text += ' Told you everything I know.';
     }
@@ -7887,6 +8544,10 @@
       ok = !!item && (existing ? existing.n < item.rack
                                : rackList(s).length < rackSlots(s));
     }
+    else if (kind === 'decoy') {
+      var drack = decoyRackSize(s);
+      item = DECOY; ok = drack > 0 && (s.decoys || 0) < drack;
+    }
     else if (kind === 'sink') {
       /* Charges need the launcher, the way seekers would need a rack if
        * seekers had one yet. */
@@ -7899,7 +8560,7 @@
      * enough to pay it — see lienRefusal for why the line is drawn here.
      * The reason itself is surfaced by the caller, which has somewhere to
      * print it; this contract is numeric and older than the lien. */
-    if (kind !== 'missile' && kind !== 'sink' && lienOwed(G) > 0) return null;
+    if (kind !== 'missile' && kind !== 'sink' && kind !== 'decoy' && lienOwed(G) > 0) return null;
     if (s.credits < item.price) return -item.price;
 
     if (kind === 'missile') {
@@ -7928,6 +8589,7 @@
       return item.price;
     }
     if (kind === 'sink') { s.credits -= item.price; s.sinks++; return item.price; }
+    if (kind === 'decoy') { s.credits -= item.price; s.decoys = (s.decoys || 0) + 1; return item.price; }
 
     /* A gun replaces whatever is in the first hardpoint, which is what the
      * old one-gun-at-a-time shop meant by "buying a gun". Anything else
@@ -8094,6 +8756,7 @@
      * ship"), but under your own honest name it still carries your record. */
     s.disguise = null;
     s.hullId = to.id;
+    s.meshKind = null;             // a new hull wears its own outside
     s.dryMass = to.dryMass;
     s.thrustKN = to.thrustKN;
     s.thrusterCap = to.thrusterCap;
@@ -8456,7 +9119,7 @@
     cruiseOnMilfuel: cruiseOnMilfuel, drivePreview: drivePreview, driveSlotCount: driveSlotCount,
     ensureCruiseDrive: ensureCruiseDrive,
     SINK: SINK, sinkRackSize: sinkRackSize, armSink: armSink,
-    scanLevel: scanLevel, scanShip: scanShip, hasScoop: hasScoop,
+    scanLevel: scanLevel, scanShip: scanShip, hasScoop: hasScoop, hasSkimmer: hasSkimmer, surveyLevel: surveyLevel,
     npcArmament: npcArmament, hasTradeAnalyser: hasTradeAnalyser, playerDps: playerDps,
     hailRumour: hailRumour, rumourFacts: rumourFacts, RUMOUR_DAY: RUMOUR_DAY,
     startRescue: startRescue, updateRescue: updateRescue, restoreRescue: restoreRescue,
@@ -8476,6 +9139,12 @@
     addHeat: addHeat, updateSink: updateSink,
     WITNESS_RANGE: WITNESS_RANGE, DISTRESS_DELAY: DISTRESS_DELAY,
     TRADER_GUN: TRADER_GUN, NPC_GUN: NPC_GUN, SYNDICATE_GUN: SYNDICATE_GUN,
+    POLICE_GUN: POLICE_GUN, POLICE_MISSILE: POLICE_MISSILE, firePoliceMissile: firePoliceMissile,
+    DECOY: DECOY, FLARE: FLARE, ECM: ECM, PD: PD, decoyRackSize: decoyRackSize, hasEcm: hasEcm,
+    launchDecoy: launchDecoy, dropFlare: dropFlare, toggleEcm: toggleEcm,
+    SILENT: SILENT, hasShroud: hasShroud, toggleSilent: toggleSilent, breakCover: breakCover, report: report, citeJamming: citeJamming, JAM_CITATION: JAM_CITATION,
+    updateCountermeasures: updateCountermeasures, spawnDecoy: spawnDecoy, updateTurret: updateTurret,
+    updateMissiles: updateMissiles,
     SYNDICATE_TRUST: SYNDICATE_TRUST,
     updateNpcFire: updateNpcFire,
     UNARMED_CLASSES: UNARMED_CLASSES,
@@ -8531,11 +9200,15 @@
     updateMissiles: updateMissiles, SEEKER_TRACK: SEEKER_TRACK, SEEKER_COMMIT: SEEKER_COMMIT,
     groupOf: groupOf, setGroup: setGroup, toggleGroup: toggleGroup,
     gunsInGroup: gunsInGroup,
-    muzzleOf: muzzleOf, muzzleWorld: muzzleWorld, hullLen: hullLen,
+    muzzleOf: muzzleOf, muzzleWorld: muzzleWorld, hullLen: hullLen, cannonGlow: cannonGlow,
     manifestFor: manifestFor, holdOf: holdOf, purseOf: purseOf,
     npcShield: npcShield, splitDamage: splitDamage, hullSize: hullSize,
     NPC_SHIELD: NPC_SHIELD, MAX_IMPACTS: MAX_IMPACTS,
     damageNpc: damageNpc, damagePlayer: damagePlayer, killNpc: killNpc,
+    blastAt: blastAt, reportSabotage: reportSabotage, torpedoSoldAt: torpedoSoldAt,
+    launchTorpedo: launchTorpedo,
+    torpedoesAboard: torpedoesAboard, torpedoSearch: torpedoSearch, inboundToPort: inboundToPort,
+    TORP_FINE: TORP_FINE,
     liftTrader: liftTrader,
     reapLifted: reapLifted,
     LOOT_BOUNTY_SHARE: LOOT_BOUNTY_SHARE, HUSH_LOOT_SHARE: HUSH_LOOT_SHARE, lootBounty: lootBounty,

@@ -1257,6 +1257,26 @@
    * fails if you take it deep at speed — there is meant to be a way to die
    * with one fitted, or it is not a decision, just a tax. */
   var BASE_HEAT_SHED = 18;      // what bare hull radiates away, units/s
+  /* PAST THE HEAT SHIELD, THE BATTLE SHIELD. Astra, 2026-10-18: "there is
+   * a depth beyond which your atmospheric shields can['t] take the heat of
+   * friction with the atmosphere, and then battle shields very quickly
+   * wear down, but slow enough to change your attitude and orbit." So
+   * heat over the limit burns the energy shield before it touches the
+   * hull: points/s per unit of overshoot. At the worst overshoot (200) a
+   * full 40-point shield lasts about fifteen seconds - time to pull the
+   * nose up and raise the periapsis, not time to keep scooping. */
+  var SHIELD_HEAT_DRAIN = 0.0133;
+  /* Where the heat shield stops coping, at a given speed through the air:
+   * HEAT_K sqrt(rho) v^3 = shed  ->  rho = (shed / (HEAT_K v^3))^2, and the
+   * air is exponential, so that is an altitude. 0 when even the bottom of
+   * the air is survivable at this speed; the top when none of it is. */
+  function heatLineAlt(body, v, shed) {
+    var at = body && body.atmosphere;
+    if (!at || !(v > 0)) return 0;
+    var rhoMax = Math.pow(shed / (HEAT_K * v * v * v), 2);
+    if (rhoMax >= at.rho0) return 0;
+    return Math.min(at.top, at.scaleHeight * Math.log(at.rho0 / rhoMax));
+  }
 
   /* ---- surface-pad landing ---------------------------------------------
    * A pad no longer silently refuses a fast approach — you always touch
@@ -1292,7 +1312,54 @@
    * "warm" and "worryingly warm" is the one worth seeing. */
   var GLOW_REFERENCE = 220;
 
+  /* ---- a star's corona (2026-10-24) -------------------------------------
+   * Astra: an empty system has "hydrogen for fuel to keep moving at the
+   * star or one of the planets". Not every system has a giant, so every
+   * star can be skimmed: the CORONA is the thin plasma out to CORONA_TOP
+   * star radii from its centre. Kept OUT of the air model on purpose - no
+   * drag (an orbit through it is the orbit it always was), and its heat is
+   * RADIANT, not compression: the cube law at the hundreds of km/s a ship
+   * does that close to a star would cook anything at once. Radiant heat
+   * goes as the inverse square of the distance and the fourth power of the
+   * star's temperature, so a red dwarf can be skimmed on a bare hull, a
+   * sun-like star wants a heat shield to go deep, and a hot blue one is
+   * dangerous even at the edge. STAR_HEAT is the flux at the photosphere
+   * of a 5,778 K star: bare hull (18) copes at the very top of a sun-like
+   * corona, a heat shield (+130) almost all the way down. */
+  var CORONA_TOP = 3;            // x the star's radius, from its centre
+  var STAR_HEAT = 160;           // heat units/s at a sun-like photosphere
+  var CORONA_RHO = 3.6e-6;       // kg/m^3 at the photosphere, falling as (R/r)^4
+  function starTempFactor(star) { var k = (star.temp || 5778) / 5778; return k * k * k * k; }
+  function coronaContext(pos, sys, t) {
+    var star = sys && sys.root;
+    if (!star || star.kind !== 'star' || !(star.radius > 0)) return null;
+    var st = bodyState(star, sys, t);
+    var r = V.dist(pos, st.pos);
+    if (r >= CORONA_TOP * star.radius || r <= star.radius) return null;
+    return { body: star, pos: st.pos, vel: st.vel, r: r };
+  }
+  function starFlux(star, r) {
+    return STAR_HEAT * starTempFactor(star) * (star.radius / r) * (star.radius / r);
+  }
+  function coronaDensity(star, r) {
+    var q = star.radius / r;
+    return CORONA_RHO * q * q * q * q;
+  }
+  /* Where radiant heat matches what the hull sheds: the deepest a pilot can
+   * hold without heat building. Distance from the photosphere, km. */
+  function coronaLineAlt(star, shed) {
+    var r = star.radius * Math.sqrt(STAR_HEAT * starTempFactor(star) / Math.max(1e-6, shed));
+    return Math.max(0, Math.min((CORONA_TOP - 1) * star.radius, r - star.radius));
+  }
+
   function heatFlux(ship, sys, t) {
+    var f = airFlux(ship, sys, t);
+    var c = coronaContext(ship.pos, sys, t);
+    if (c) f += starFlux(c.body, c.r);
+    return f;
+  }
+
+  function airFlux(ship, sys, t) {
     var atmo = atmosphereContext(ship.pos, sys, t);
     if (!atmo) { ship.windDir = null; return 0; }
     var alt = V.dist(ship.pos, atmo.pos) - atmo.body.radius;
@@ -1325,13 +1392,30 @@
      * sustained load. A heat shield is a pipe: no capacity at all, but it
      * moves heat away continuously for as long as the load lasts. Buying
      * the wrong one for the job is a real mistake, and it should be. */
-    var shed = BASE_HEAT_SHED + (ship.heatShed || 0);
+    /* Running silent the radiators are shut: nothing is shed, and the
+     * suite itself runs warm. */
+    var shed = ship.silent ? 0 : BASE_HEAT_SHED + (ship.heatShed || 0);
+    var made = ship.silent ? SILENT_HEAT : 0;
     ship.heat = Math.max(0, Math.min(HEAT_MAX,
-                (ship.heat || 0) + (flux - shed) * dt));
+                (ship.heat || 0) + (flux + made - shed) * dt));
     ship.reentryGlow = Math.max(0, Math.min(1, Math.sqrt(flux / GLOW_REFERENCE)));
 
-    if (ship.heat <= HEAT_LIMIT) return 0;
-    var dmg = (ship.heat - HEAT_LIMIT) * HEAT_DAMAGE * dt;
+    if (ship.heat <= HEAT_LIMIT) { ship.shieldBurn = 0; return 0; }
+    var over = ship.heat - HEAT_LIMIT;
+    /* The battle shield takes it first (see SHIELD_HEAT_DRAIN); only what
+     * it cannot cover this step reaches the hull. Burning counts as being
+     * hit, so it does not regenerate while it is going. */
+    ship.shieldBurn = 0;
+    if (ship.shield && ship.shieldHp > 0) {
+      var burn = over * SHIELD_HEAT_DRAIN * dt;
+      var took = Math.min(ship.shieldHp, burn);
+      ship.shieldHp -= took;
+      ship.shieldBurn = burn / dt;
+      ship.lastHitAt = (typeof performance !== 'undefined' ? performance.now() : 0);
+      if (took >= burn - 1e-12) return 0;
+      dt *= 1 - took / burn;
+    }
+    var dmg = over * HEAT_DAMAGE * dt;
     if (ship.hullHp !== undefined) ship.hullHp = Math.max(0, ship.hullHp - dmg);
     return dmg;
   }
@@ -1546,6 +1630,35 @@
     var park = (port.dockCaptureRadius || port.radius * 4) * 0.85;
     var dir = radial;
 
+    /* A SKIMMER'S FAR END IS THE TOP OF THE AIR (mining rung 4: your own
+     * ships working a giant under a work order, Fleet.workRouteFor). Not an
+     * apron at four radii: just inside the top of the atmosphere, on the
+     * day side, spread round the limb by the same route hash so two of
+     * your skimmers on one giant are not drawn as one. */
+    /* A LASER SHIP'S FAR END IS IN THE RING (2026-10-18): in the ring's own
+     * plane at its middle radius, at an angle hashed from the route, so she
+     * is drawn among the rock she is cutting. */
+    if (route && route.siteId === port.id && route.siteKind === 'ring' && port.ring && global.Rings) {
+      var rfr = global.Rings.ringFrame(port);
+      var rh = portHash({ id: String(route.id) + '@ring@' + port.id });
+      var ra = ((rh % 4096) / 4096) * Math.PI * 2;
+      var rd = V.add(V.scale(rfr.e1, Math.cos(ra)), V.scale(rfr.e2, Math.sin(ra)));
+      return { dir: rd, vec: V.scale(rd, (port.ring.inner + port.ring.outer) / 2) };
+    }
+    if (route && route.siteId === port.id && route.siteKind === 'skim') {
+      var sun = V.scale(radial, -1);
+      var al2 = V.sub(ps.vel, hs.vel);
+      var e2 = V.cross(sun, al2);
+      if (V.len(e2) < 1e-9) e2 = anyPerpendicular(sun);
+      e2 = V.norm(e2);
+      var n2 = V.norm(V.cross(e2, sun));
+      var h2 = portHash({ id: String(route.id) + '@skim@' + port.id });
+      var a2 = ((h2 % 4096) / 4096) * Math.PI * 2;
+      var sp2 = 0.25 + ((h2 >>> 12) % 1000) / 1000 * 0.9;
+      var d2 = V.norm(V.addScaled(V.addScaled(sun, e2, Math.cos(a2) * sp2), n2, Math.sin(a2) * sp2));
+      return { dir: d2, vec: V.scale(d2, port.radius * 1.015) };
+    }
+
     if (route && route.id && !port.surface && !port.underground) {
       var along = V.sub(ps.vel, hs.vel);
       var east = V.cross(radial, along);
@@ -1589,6 +1702,15 @@
     var sState = bodyStateAt(src, sys, tDep), dState = bodyStateAt(dst, sys, tArr);
     var s = V.sub(sState.pos, pDep.pos);
     var d = V.sub(dState.pos, pArr.pos);
+    var srcPark = parkOffset(src, sys, tDep, parent, route);
+    var dstPark = parkOffset(dst, sys, tArr, parent, route);
+    /* A skim leg whose parent IS the giant (a port in orbit round it): the
+     * giant's own position about itself is zero, so the arc would aim at
+     * the centre. The end is the skim point instead, and its park blend is
+     * folded into the end so it is not added twice. */
+    var ZERO_PARK = { dir: { x: 0, y: 0, z: 1 }, vec: { x: 0, y: 0, z: 0 } };
+    if (route.siteId && dst === parent && dst.id === route.siteId) { d = dstPark.vec; dstPark = ZERO_PARK; }
+    if (route.siteId && src === parent && src.id === route.siteId) { s = srcPark.vec; srcPark = ZERO_PARK; }
     var rs = V.len(s), rd = V.len(d);
     var sh = rs > 1e-9 ? V.scale(s, 1 / rs) : { x: 1, y: 0, z: 0 };
     var dh = rd > 1e-9 ? V.scale(d, 1 / rd) : { x: 0, y: 1, z: 0 };
@@ -1604,8 +1726,8 @@
       key: key, sh: sh, dh: dh, rs: rs, rd: rd, ang: ang, axis: axis,
       chord: V.sub(d, s),
       vs: V.sub(sState.vel, pDep.vel), vd: V.sub(dState.vel, pArr.vel),
-      srcPark: parkOffset(src, sys, tDep, parent, route),
-      dstPark: parkOffset(dst, sys, tArr, parent, route)
+      srcPark: srcPark,
+      dstPark: dstPark
     };
     return route._leg;
   }
@@ -2078,6 +2200,18 @@
   var POLICE_STANDOFF = 45;     // km
   var RESCUE_STANDOFF = 1.5;    // km — a hose length, for the transfer
   var POLICE_DETERRENT = 30000; // km — a pirate will not work this close to the law
+  /* JAMMING IS LOUD (Astra, 2026-10-18): "ECM would light you up like a
+   * christmas tree, just not with an ID code, which is sus enough." With
+   * the jammer on (ship.ecmLoud, set by Combat), every ship in the system
+   * notices you from ECM_REACH times as far, a cop that has already
+   * inspected you comes back to look again, and a lawful cop that watches
+   * an unidentified jammer for ECM_CITE_S within ECM_CITE_KM writes it up. */
+  var ECM_REACH = 3;
+  /* SILENT RUNNING (the shroud suite, Combat): only a ship this close
+   * notices you at all. */
+  var SILENT_WAKE_KM = 200;
+  var SILENT_HEAT = 0.8;          // units/s the suite makes with the radiators shut
+  var ECM_CITE_KM = 1000, ECM_CITE_S = 20;
 
   function wakeNpc(spec, railState, sys) {
     spec.live = {
@@ -2344,7 +2478,9 @@
       /* A responder on its rescue leg is lifted by Combat at the handoff,
        * not by proximity: its rail passing within WAKE_RANGE of you halfway
        * through a system crossing would otherwise wake it into shadowing. */
-      if (!spec.live && !safe && range < WAKE_RANGE && !spec.rescue) { wakeNpc(spec, state, sys); }
+      var loud = !!ship.ecmLoud && !safe;
+      var wakeAt = loud ? WAKE_RANGE * ECM_REACH : ship.silent ? SILENT_WAKE_KM : WAKE_RANGE;
+      if (!spec.live && !safe && range < wakeAt && !spec.rescue) { wakeNpc(spec, state, sys); }
 
       if (spec.live) {
         if (safe) { sleepNpc(spec); continue; }
@@ -2376,7 +2512,16 @@
         range = steerNpc(spec, sys, t, dtSim, ship);
         spec.modeSince += dtSim;
 
-        if (range > SLEEP_RANGE) { sleepNpc(spec); continue; }
+        if (range > (loud ? SLEEP_RANGE * ECM_REACH : SLEEP_RANGE)) { sleepNpc(spec); continue; }
+        /* An unidentified jammer: the law comes back for another look, and
+         * one that keeps watching writes it up. */
+        if (loud && spec.kind === 'police' && spec.faction !== 'outlaw') {
+          if (spec.mode === 'inspect' && spec.scanned) { spec.scanned = false; spec.scanHoldTime = 0; }
+          if (range < ECM_CITE_KM && !spec.jamCited) {
+            spec.jamSeen = (spec.jamSeen || 0) + dtSim;
+            if (spec.jamSeen >= ECM_CITE_S) { spec.jamCited = true; result.jamReport = spec; }
+          }
+        }
 
         /* A pirate that has actually matched course and closed is in a
          * position to demand something. Requiring BOTH proximity and a low
@@ -3653,6 +3798,9 @@
         var n = V.norm(V.sub(ship.pos, bp));
         ship.pos = V.add(bp, V.scale(n, b.radius));
         ship.vel = V.clone(bv);
+        /* A clean landing is a place on the world, not a frozen frame:
+         * see landSpot / updateLandedShip. A crash stays a crash. */
+        ship.landedAt = ship.crashed ? null : landSpot(b, sys, t, ship.pos);
         return b;
       }
     }
@@ -3676,6 +3824,68 @@
     // a near-circular station orbit can't tilt the docked ship over time.
     prograde = V.norm(V.cross(normal, radial));
     return { radial: radial, prograde: prograde, normal: normal };
+  }
+
+  /* ---- ON THE GROUND, away from any port (2026-10-16) ---------------------
+   * Mining rung 2 needs it: "placing a drone means landing". Until now a
+   * gentle touchdown on open ground set `landed` and stopped the clock -
+   * the only way off was respawn. Now a clean landing holds the ship at a
+   * latitude and longitude on the world, riding its spin with the same
+   * arithmetic a surface port uses (surfaceOffset), with time running; and
+   * it can lift off again when its thrust beats the world's gravity - the
+   * liftoff rule, which is what makes a heavy world hard to claim. */
+  function landSpot(body, sys, t, pos) {
+    var hs = bodyState(body, sys, t);
+    var rel = V.sub(pos, hs.pos), r = V.len(rel);
+    var rot = body.rotation || { period: 86400, tilt: 0, phase: 0 };
+    /* Undo `az` first (2026-10-25): surfaceOffset turns a locked world's
+     * whole tipped frame about z by it, and this was the one reader that
+     * did not, so a ship set down on a twilight world was put back on the
+     * ground somewhere else the next frame. */
+    if (rot.az) {
+      var caz = Math.cos(rot.az), saz = Math.sin(rot.az);
+      rel = { x: caz * rel.x + saz * rel.y, y: -saz * rel.x + caz * rel.y, z: rel.z };
+    }
+    var ct = Math.cos(rot.tilt), st = Math.sin(rot.tilt);
+    /* Undo the tilt about x, then the spin about the axis. */
+    var x = rel.x, y = rel.y * ct + rel.z * st, z = -rel.y * st + rel.z * ct;
+    var lat = Math.asin(Math.max(-1, Math.min(1, z / Math.max(r, 1e-9))));
+    var lonW = Math.atan2(y, x);
+    var w = K.TAU / rot.period;
+    var lon = (lonW - rot.phase - w * t) % K.TAU;
+    if (lon > Math.PI) lon -= K.TAU; else if (lon < -Math.PI) lon += K.TAU;
+    return { body: body.id, lat: lat, lon: lon, elevation: 0.004 };
+  }
+  function updateLandedShip(ship, sys, t) {
+    var at = ship.landedAt;
+    var body = at && sys.byId[at.body];
+    if (!body) return false;
+    var hs = bodyState(body, sys, t);
+    var off = surfaceOffset(body, at, t);
+    ship.pos = V.add(hs.pos, off.pos);
+    ship.vel = V.add(hs.vel, off.vel);
+    /* Sitting on its gear: up is the local vertical, the nose kept level. */
+    var up = V.norm(off.pos);
+    var fwd = V.sub(ship.fwd || anyPerpendicular(up), V.scale(up, V.dot(ship.fwd || up, up)));
+    if (V.len(fwd) < 1e-6) fwd = anyPerpendicular(up);
+    ship.fwd = V.norm(fwd); ship.up = up; ship.right = V.cross(ship.fwd, ship.up);
+    return true;
+  }
+  function surfaceG(body) {
+    return 6.6743e-20 * body.mass / (body.radius * body.radius);     // km/s^2
+  }
+  /* Up, if the drive can do it: { ok, accel, g } in km/s^2. */
+  function liftOff(ship, sys, t) {
+    var at = ship.landedAt, body = at && sys.byId[at.body];
+    if (!body) return { ok: false };
+    var g = surfaceG(body), accel = (ship.maxAccel || 0) * Math.max(0, ship.throttle || 0);
+    if (!(accel > g * 1.02)) return { ok: false, accel: accel, g: g, max: ship.maxAccel || 0 };
+    updateLandedShip(ship, sys, t);
+    var up = ship.up;
+    ship.pos = V.add(ship.pos, V.scale(up, 0.03));
+    ship.vel = V.add(ship.vel, V.scale(up, 0.004));
+    ship.landed = false; ship.landedOn = null; ship.landedAt = null;
+    return { ok: true, accel: accel, g: g };
   }
 
   /* Is the ship inside the target's capture envelope right now? Read-only —
@@ -4249,6 +4459,9 @@
     var B = ROUTED_BOARD_LEG, LL = ROUTED_LIFT_LEG, T = ROUTED_TRANSFER_LEG;
     var boardKm = routed ? span(B, B + 1) : 0;
     var liftKm = routed ? span(LL, LL + 1) : 0;
+    /* A lift the route rides THROUGH the hull, rather than the car under
+     * the heavy bay: the transfer leg stops on it, rides it, gets off. */
+    var phases = routed ? routePhases(path, r) : null;
     for (var i = 0; i < TABLE.length; i++) {
       var L = TABLE[i], dur = L.dur;
       if (L.id === 'lineup') dur = fit(span(0, 1), RUN_IN_SPEED, RUN_IN_DUR);
@@ -4256,6 +4469,7 @@
       else if (L.id === 'board') dur = boardKm > 1e-6 ? fit(boardKm, THREAD_SPEED, THREAD_DUR) : 0;
       else if (L.id === 'lift') dur = liftKm > 1e-6 ? fit(liftKm, LIFT_SPEED, LIFT_DUR) : 0;
       else if (L.id === 'pad') dur = liftKm > 1e-6 ? L.dur : 0;
+      else if (L.id === 'transfer' && phases) dur = phases.total;
       else if (L.id === 'transfer') dur = fit(span(T, T + 1), THREAD_SPEED, TRANSFER_DUR);
       if (dur === L.dur) { out.push(L); continue; }
       /* A COPY, never a mutation of the table — ORBITAL_LEGS is shared by
@@ -4265,6 +4479,72 @@
                  lift: L.lift, bay: L.bay });
     }
     return out;
+  }
+
+  /* THE RIDE (2026-10-16). Astra: "the ship should wait for elevators to
+   * traverse their paths before continuing. The most efficient path is not
+   * the one we want to see here."
+   *
+   * A route that takes a lift inside the hull (the converter's route.ride:
+   * a cargo elevator between decks, not the ring's car under its heavy bay,
+   * which has legs of its own) is walked in three phases on the transfer
+   * leg rather than one glide: DRIVE to the car, RIDE - settle, the car
+   * runs its whole shaft with the hull on it, settle - and DRIVE off to the
+   * stand. Each phase starts and ends at rest. Null for a route with no
+   * ride, which keeps the single glide.
+   *
+   * Carried across the 2026-10-25 merge onto the restored car legs: the
+   * walked polyline is the transfer leg's, [path[T]].concat(through,
+   * [path[T + 1]]), and path.rideAt indexes it.
+   *
+   * The car's own speed is a lift's, not a hull's: the run is timed to
+   * take RIDE_DUR seconds clamped, because a two-kilometre shaft at
+   * hull-threading speed would be a minute and a half of nothing. */
+  var RIDE_SPEED = 0.08;           // km/s
+  var RIDE_DUR = [6.0, 24.0];      // s, the run itself
+  var RIDE_SETTLE = 2.0;           // s at each end: latch, then release
+  var DRIVE_DUR = [2.0, 30.0];     // s, each drive phase
+  function routePhases(path, r) {
+    if (!path || !path.through || !(path.rideAt >= 1) || path.car) return null;
+    var T = ROUTED_TRANSFER_LEG;
+    if (path.length !== ORBITAL_ROUTED_LEGS.length + 1) return null;
+    var pl = [path[T]].concat(path.through, [path[T + 1]]);
+    var k = path.rideAt;
+    if (k + 1 >= pl.length) return null;
+    function len(i0, i1) {
+      var s = 0;
+      for (var q = i0 + 1; q <= i1; q++) {
+        var dx = pl[q].x - pl[q - 1].x, dy = pl[q].y - pl[q - 1].y, dz = pl[q].z - pl[q - 1].z;
+        s += Math.sqrt(dx * dx + dy * dy + dz * dz);
+      }
+      return s * r;
+    }
+    function clamp(x, lim) { return Math.max(lim[0], Math.min(lim[1], x)); }
+    var d1 = clamp(len(0, k) / THREAD_SPEED, DRIVE_DUR);
+    var run = clamp(len(k, k + 1) / RIDE_SPEED, RIDE_DUR);
+    var d2 = clamp(len(k + 1, pl.length - 1) / THREAD_SPEED, DRIVE_DUR);
+    return { pl: pl, k: k, d1: d1, run: run, d2: d2,
+             total: d1 + RIDE_SETTLE + run + RIDE_SETTLE + d2 };
+  }
+
+  /* Where along the walked polyline the hull is, `t` seconds into the
+   * transfer leg of a riding route. */
+  function ridePoint(ph, t) {
+    var pl = ph.pl, k = ph.k;
+    function walk(i0, i1, u) {
+      var sub = pl.slice(i0, i1 + 1).map(function (p) { return { e: p.x, n: p.y, u: p.z }; });
+      var g = alongRoute(sub, u);
+      return { x: g.e, y: g.n, z: g.u };
+    }
+    if (t < ph.d1) return { loc: walk(0, k, ease(t / ph.d1)), phase: 'drive' };
+    t -= ph.d1;
+    if (t < RIDE_SETTLE) return { loc: pl[k], phase: 'board' };
+    t -= RIDE_SETTLE;
+    if (t < ph.run) return { loc: walk(k, k + 1, ease(t / ph.run)), phase: 'ride' };
+    t -= ph.run;
+    if (t < RIDE_SETTLE) return { loc: pl[k + 1], phase: 'alight' };
+    t -= RIDE_SETTLE;
+    return { loc: walk(k + 1, pl.length - 1, ease(Math.min(1, t / ph.d2))), phase: 'drive' };
   }
 
   /* The leg table for this berth, with its timings fitted to the berth's
@@ -4483,6 +4763,10 @@
         p10.through = thru;
         p10.entry = route.entry;
         if (ride) p10.car = ride.node;
+        /* A lift ridden on the way across (see routePhases): its boarding
+         * corner as an index into the transfer leg's polyline
+         * [foot].concat(through, [stand]), so via index i is polyline i + 1. */
+        p10.rideAt = (!ride && route.ride && typeof route.ride[0] === 'number') ? route.ride[0] + 1 : -1;
         return p10;
       }
     }
@@ -4548,8 +4832,13 @@
                 z: a.z + (b.z - a.z) * u };
     /* On through the hull, when the berth is reached by way of a heavy bay:
      * the enter leg walks the route's corners, by length. */
-    var surfTan = null;
-    if (leg === ROUTED_TRANSFER_LEG && path.through && orbital &&
+    var surfTan = null, ridePhase = null;
+    var phs = (leg === ROUTED_TRANSFER_LEG && orbital) ? routePhases(path, port.radius || 1) : null;
+    if (phs) {
+      /* Stop on the car, let it run, get off: see routePhases. */
+      var rp = ridePoint(phs, Math.max(0, el - acc));
+      loc = rp.loc; ridePhase = rp.phase;
+    } else if (leg === ROUTED_TRANSFER_LEG && path.through && orbital &&
         path.length === ORBITAL_ROUTED_LEGS.length + 1) {
       var pl = [a].concat(path.through, [b]);
       var got = alongRoute(pl.map(function (p) { return { e: p.x, n: p.y, u: p.z }; }), u);
@@ -4643,6 +4932,9 @@
       pos: pos, vel: V.clone(basis.entrance.vel),
       fwd: fwd, up: V.norm(V.cross(right, fwd)), right: right,
       leg: leg, legId: L.id, u: u,
+      /* 'drive' | 'board' | 'ride' | 'alight' on a route that rides a lift
+       * on its way across (routePhases); null otherwise. */
+      ride: ridePhase,
       /* The heavy bay this arrival comes in by, when it is not the berth's
        * own doors — the doors to run are that bay's (see stationDoors). */
       entry: typeof path.entry === 'number' ? path.entry : null,
@@ -5648,6 +5940,117 @@
     };
   }
 
+  /* ---- A POLAR SURVEY ORBIT, PLANNED FOR YOU (2026-10-25) ---------------
+   *
+   * Astra: "we need easier controls to put the ship into a polar orbit for
+   * mapping mineral deposits." A survey maps a band from an equatorial
+   * orbit and the whole world from a polar one, and getting from the first
+   * to the second by nudging node handles is a chore nobody needs to do by
+   * hand twice.
+   *
+   * So this finds the next moment the ship crosses the world's EQUATOR
+   * (its spin equator - the survey's frame, not the system plane), which is
+   * the one place a plane change can swing the orbit over the poles, and
+   * works out the single burn there that leaves the ship on a CIRCULAR
+   * orbit at that height running pole to pole. Of the two ways round, the
+   * one nearer the way you are already going (the cheaper burn). Returned
+   * as an ordinary node - pro, nor, rad, and a time - so it goes on the
+   * planner like any other: you see the orbit it gives, what it costs and
+   * whether you can afford it, and fly it with the same key.
+   *
+   * Found by flying a copy of the ship forward on the real integrator, not
+   * off the conic, so the node lands where nodePlan will put the ship.
+   * Not every crossing will do: the burn has to have room to start half
+   * its length before the node, so a crossing too soon for that is passed
+   * over for the next. When there is no plan - no world to orbit, an open
+   * orbit, nothing crossing within two orbits - the answer is { why }. */
+  function spinPole(body) {
+    var rot = body.rotation, tilt = rot ? rot.tilt : 0, az = (rot && rot.az) || 0;
+    return { x: Math.sin(tilt) * Math.sin(az), y: -Math.sin(tilt) * Math.cos(az), z: Math.cos(tilt) };
+  }
+  function polarPlan(ship, sys, t, opts) {
+    opts = opts || {};
+    var dom = dominantBody(ship.pos, sys, t);
+    if (!dom || !(dom.mu > 0) || (dom.kind !== 'planet' && dom.kind !== 'moon')) return { why: 'no world to orbit' };
+    var bs0 = bodyState(dom, sys, t);
+    var oe = K.elementsFromState(V.sub(ship.pos, bs0.pos), V.sub(ship.vel, bs0.vel), dom.mu);
+    if (!oe.closed || !isFinite(oe.period)) return { why: 'not in orbit about ' + dom.name };
+    var pole = spinPole(dom);
+    var horizon = oe.period * 2.2;
+    var minLead = opts.minLead || 20;
+
+    /* The signed height above the equator's plane, along a flown copy. */
+    var ghost = makeShip(ship.pos, ship.vel);
+    ghost.thrust = V.zero();
+    function side(s, tt) { return V.dot(V.sub(s.pos, bodyPosition(dom, sys, tt)), pole); }
+    var tt = t, prev = side(ghost, tt), steps = 0, found = [];
+    var hl = V.cross(V.sub(ship.pos, bs0.pos), V.sub(ship.vel, bs0.vel));
+    var flat = Math.abs(V.dot(V.norm(hl), pole)) > 0.9995;      // already equatorial
+    if (flat) {
+      /* Every point of an equatorial orbit is on the equator: take the
+       * soonest moment the burn has room for, a little way ahead. */
+      found.push(null);
+    } else {
+      while (tt < t + horizon && steps < 20000 && found.length < 4) {
+        var h = Math.min(suggestedStep(ghost, sys, tt), oe.period / 180);
+        var before = { pos: V.clone(ghost.pos), vel: V.clone(ghost.vel), t: tt };
+        stepShip(ghost, sys, tt, h);
+        tt += h; steps++;
+        var now = side(ghost, tt);
+        if ((prev <= 0 && now > 0) || (prev >= 0 && now < 0)) {
+          /* Bisect inside the step, re-flying it from its start. */
+          var lo = 0, hi = h;
+          for (var it = 0; it < 30; it++) {
+            var mid = (lo + hi) / 2;
+            var g2 = makeShip(before.pos, before.vel); g2.thrust = V.zero();
+            stepShip(g2, sys, before.t, mid);
+            var sm = side(g2, before.t + mid);
+            if ((sm > 0) === (now > 0)) hi = mid; else lo = mid;
+          }
+          found.push(before.t + (lo + hi) / 2);
+        }
+        prev = now;
+      }
+    }
+    if (!found.length) return { why: 'no equator crossing within two orbits' };
+
+    for (var k = 0; k < found.length; k++) {
+      var tc = found[k];
+      if (tc === null) tc = t + Math.max(minLead, oe.period * 0.05);
+      var at = nodePlan(ship, sys, t, makeNode(tc, {}), { maxSteps: 20000 });
+      if (!at) continue;
+      var b = at.basis, rel = b.rel, vrel = b.vrel, r = V.len(rel);
+      /* Due north or due south along the ground, at circular speed. */
+      var up = V.scale(rel, 1 / r);
+      var north = V.sub(pole, V.scale(up, V.dot(pole, up)));
+      var nl = V.len(north);
+      if (nl < 1e-9) continue;
+      north = V.scale(north, 1 / nl);
+      var vc = Math.sqrt(dom.mu / r);
+      var dir = V.dot(vrel, north) >= 0 ? 1 : -1;
+      var want = V.scale(north, vc * dir);
+      var dv = V.sub(want, vrel);
+      /* Into the node's own axes. Prograde and radial are not at right
+       * angles on an ellipse, so the in-plane part is solved for, not
+       * projected. */
+      var P = b.prograde, R = b.radial, N = b.normal;
+      var nor = V.dot(dv, N);
+      var dvP = V.dot(dv, P), dvR = V.dot(dv, R), kpr = V.dot(P, R);
+      var den = 1 - kpr * kpr;
+      var pro = den > 1e-9 ? (dvP - kpr * dvR) / den : dvP;
+      var rad = den > 1e-9 ? (dvR - kpr * dvP) / den : 0;
+      var mag = V.len(dv);
+      var burn = nodeBurn(ship, mag);
+      if (tc - burn.lead - t < minLead) continue;      // no room to start it
+      return {
+        t: tc, dv: { pro: pro, nor: nor, rad: rad }, magnitude: mag, burn: burn,
+        body: dom, altitude: r - dom.radius, radiusR: r / dom.radius,
+        heading: dir > 0 ? 'north' : 'south', period: 2 * Math.PI * Math.sqrt(r * r * r / dom.mu)
+      };
+    }
+    return { why: 'no crossing leaves room to start the burn' };
+  }
+
   /* ---- jettisoned cargo -------------------------------------------------
    * A canister is a ship with no engine: it inherits your state vector at
    * the moment you push it out, and from then on it is on the same physics
@@ -5822,7 +6225,7 @@
   /* Wreckage the cap is allowed to throw away. A spent heat sink is on the
    * debris path for its physics but is not litter, so it does not count
    * toward the cap and is never the piece the cap deletes. */
-  function isCullable(c) { return c.kind === 'debris' && !c.sink; }
+  function isCullable(c) { return c.kind === 'debris' && !c.sink && !c.ore; }
 
   /* Everything about a wreck is a pure function of the ship that made it, so
    * a replayed kill throws the same pieces the same way. Math.random() here
@@ -6069,6 +6472,7 @@
     scanForImpact: scanForImpact,
     dockingStatus: dockingStatus,
     dockShip: dockShip,
+    landSpot: landSpot, updateLandedShip: updateLandedShip, liftOff: liftOff, surfaceG: surfaceG,
     updateDockedShip: updateDockedShip,
     controlState: controlState, controlInRange: controlInRange,
     beginArrival: beginArrival, stepArrival: stepArrival,
@@ -6087,8 +6491,11 @@
     atmosphereContext: atmosphereContext,
     heatFlux: heatFlux,
     updateHeating: updateHeating,
+    coronaContext: coronaContext, starFlux: starFlux, coronaDensity: coronaDensity, coronaLineAlt: coronaLineAlt,
+    CORONA_TOP: CORONA_TOP, STAR_HEAT: STAR_HEAT,
     updateGear: updateGear, GEAR_TRAVEL_TIME: GEAR_TRAVEL_TIME,
-    HEAT_LIMIT: HEAT_LIMIT,
+    HEAT_LIMIT: HEAT_LIMIT, ECM_REACH: ECM_REACH, SILENT_WAKE_KM: SILENT_WAKE_KM, SILENT_HEAT: SILENT_HEAT, ECM_CITE_KM: ECM_CITE_KM, ECM_CITE_S: ECM_CITE_S, BASE_HEAT_SHED: BASE_HEAT_SHED, SHIELD_HEAT_DRAIN: SHIELD_HEAT_DRAIN,
+    heatLineAlt: heatLineAlt,
     predictTrajectory: predictTrajectory,
     beginPrediction: beginPrediction,
     stepPrediction: stepPrediction,
@@ -6102,7 +6509,7 @@
     nodeBurn: nodeBurn,
     nodePlan: nodePlan,
     predictAfterNode: predictAfterNode,
-    apsisTimes: apsisTimes,
+    apsisTimes: apsisTimes, polarPlan: polarPlan,
     circularOrbit: circularOrbit,
     cargoMass: cargoMass,
     shipMass: shipMass,

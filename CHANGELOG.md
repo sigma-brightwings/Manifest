@@ -1,6 +1,34 @@
 # Changelog
 
-Alpha revisions of Procedural Space Game. Newest first.
+## What Manifest is
+
+Manifest is a procedural space sim built from the ground up, literally:
+gravity first, then the planets that make it, then everything that flies
+between them. One seed always grows the same galaxy (`kawartha`,
+`beaverton`, `driftwood`, `manifest` ...), so a star system you flew last
+month is the same system today, down to where each port sits and what its
+warehouses hold on a given date. Time is part of the seed too: traffic,
+markets and orbits are functions of the clock, so skipping six months gives
+the answer flying them would have.
+
+You fly a ship under real Newtonian flight and Kepler orbits: no rails for
+the player, a cockpit with an attitude ladder, MFD pages and a ship screen
+with guarded switches where a switch should be guarded. Around that sits a
+working economy (ports sell what they make and buy anything, and prices are
+stock), factions and their law, the Syndicate and its runners, rescue
+services, crew and a fleet, industry you can buy into, and a mining ladder
+climbed one rung at a time: survey, claim, cut, and eventually your own
+skimmers and stations. It is a desktop game (Electron), developed and tested
+on a modest machine (Syndicate Crawler, an RX 540) so it has to run on one.
+
+Releases have a number and a pigeon's name. Everything that changes the
+game is entered below with its date, under **Unreleased** until it ships;
+when changes are grouped into a release commit, the section takes the
+version number.
+
+---
+
+Revisions of Manifest (once Procedural Space Game). Newest first.
 
 Each release gets: **Added** (new things you can do), **Changed** (things
 that behave differently than they did), **Fixed** (things that were wrong),
@@ -754,6 +782,565 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
     size, that every room and everything labelled in it can be walked to
     from the airlock, the turret seats per gunner, and the crew in them.
     `tools/probe-rooms.js` photographs them in the real game.
+Since 1.1.0-beta "Abby". Not yet a release: nothing here is pushed until
+Astra has seen it working.
+
+### Added
+
+- **2026-10-25: the Shared_AI line merged (ship interiors and people).**
+  Seven commits from Driftwood's branch, ending at "Walk your own ship,
+  and people on it", carried onto this line in a trial branch first. Its
+  own entries follow this line's under each heading below. Where the two
+  had built the same thing twice:
+  - **Captains.** The NPC captains in their ships keep `captains.js`. The
+    stories under the title menu moved to `captain-stories.js`
+    (`CaptainStories`), with their own test.
+  - **Lift rides, both kinds.** The ring's car under its heavy bay rides
+    on the restored car-and-lift legs (board, lift, pad, transfer, the car
+    drawn under you). A lift inside the hull (`route.ride`) is still driven
+    to, waited on, ridden and left (`routePhases`), now on the transfer leg
+    rather than one long enter leg. The ring's platform is no longer also
+    lifted out as a mover, so it is drawn once.
+  - **Moving parts after a split.** The converter's car and hatch faces are
+    numbered against the whole hull; lifting movers or a city out of it
+    moved every number after them, so the ring's car collided as most of
+    the station. The split hull now remembers where each face came from
+    (`oi`), and the converter re-reads the runs after clipping bores.
+  - **survey.test.js** flies over a world that turns. Twilight worlds can
+    be tidally locked now, and the first rock it used to pick is one.
+  - **The cutaway.** This line's cone, cut greebles, ground-port section
+    and cutaway styles are kept over the older band-and-quiet-zone shader.
+    Faction paint and the slipspace tear are carried in the same shader.
+  - **Docking.** Both lines had fixed the dock edge; one edge
+    (`justDocked`) hands on to the contracts, the torpedo berth scan and
+    the save.
+  - **Arrival.** A pad is never taken as the home station: the Shared
+    line's fallback to "any station" is what had put a pad with no orbit
+    under spawnShip.
+- **2026-10-25: survey instruments graded, carried over.** The 21 October
+  commit (grade 1 scanner, grade 2 gamma spectrometer, grade 3 deep array;
+  its own entry is below) was only in the older copy on C:; it is on this
+  line now.
+- **2026-10-25: deposits are somewhere, and a polar orbit is one key.**
+  Astra: "we need easier controls to put the ship into a polar orbit for
+  mapping mineral deposits. planets should have mineral deposits which are
+  location-based, where you might find metals/precious metals in some
+  ratio in one place, water where there's water on the surface, fissiles
+  show up with the gamma spectrometer, and so on."
+  - **Y on the F2 orbit map plans a polar survey orbit.** It finds the
+    next time you cross the world's equator (its spin equator, the one the
+    survey maps in) and puts one node there: the burn that leaves you
+    circular at that height, running pole to pole, the cheaper way round.
+    It is an ordinary node, so the planner shows the new orbit, the burn
+    and the reaction mass before anything fires, and \ flies it. It warns
+    if the orbit would be too high for the survey (three radii). Flown by
+    the autopilot from an inclined low orbit (a 10.4 km/s, nine-minute burn):
+    0.4° off polar, e 0.013.
+  - **Every world has a ground map.** One grade per survey cell, per
+    commodity. A world's grade is now its best ground; most of it is
+    poorer (75% of all ground is under half its world's grade).
+    - Metals come in two to five provinces. Each has its own mix: some are
+      nearly all base metal, some carry a good share of precious metal, and
+      where you find the precious metal you find ore with it. Ore bodies
+      stand on land where a world has seas.
+    - Fissiles are one to three small hotspots, which only the gamma
+      spectrometer shows.
+    - Water is where the picture shows it: under the seas and in the ice
+      caps you can see from orbit, a little in the ground elsewhere. Lava is
+      not water. An ice world is ice all over. A tidally locked world's ice
+      is its night side. Worlds with no visible water have buried ice, in
+      patches toward the poles.
+    - A surface mining port stands on its world's ore body (94 of 94).
+  - **The SURVEY page's map shows it.** Each mapped cell is the colour of
+    the most valuable thing your instruments have read there (ore rust,
+    precious gold, fissile green, water blue, hydrogen violet), brighter
+    where it is richer. The list's swatches are the key. The ground under
+    you is boxed, with a BELOW YOU line saying what is there. The grades
+    in the list are the best ground you have seen so far.
+  - **A drone digs the ground it stands on**, at that ground's grade, and
+    says so when it is poor.
+  - Seas and caps are worked out on the CPU by the shader's own arithmetic.
+    The terrain table moved from gl.js to weather.js so both read one copy.
+    The survey and the picture agree on every coastline sampled.
+  - Fixed on the way: landing on a tidally locked world worked out the
+    landing spot without undoing the pole's lean (`az`), so the ship was
+    put back on the ground somewhere else the next frame.
+  - `test/ground.test.js` (20 checks), `test/polar.test.js` (15).
+- **2026-10-25: the burn autopilot warps through long burns.** Astra said
+  yes to it: the polar plane change is a seven-to-nine-minute burn, and the
+  autopilot used to hold every burn at 1x.
+  - At ignition the clock goes up as far as leaves at least forty frames
+    of burn, and comes down a notch at a time as the burn runs out, so the
+    last of it is flown at 1x. You can take it lower yourself; the
+    autopilot only ever brings it down.
+  - What the engine delivered is now booked after each step, on the clock
+    the integrator actually ran (the physics clamp and the impact net can
+    both shorten a step), not guessed before it.
+  - In the render suite's flown test: the polar burn finishes in a small
+    fraction of the frames it took at 1x, and ends within 2° of polar.
+
+- **2026-10-15: Driftwood's line merged into Abby.** Planetary rings,
+  asteroid belts and Trojans, the lift car, lightning, the glass-glow
+  option, cockpit greebles, faction names and the rescue fix now sit on
+  Syndicate Crawler's cutaway-and-glow release.
+- **2026-10-16: the 11 October test copy merged.** Station shuttles and
+  drones, the ground-port section cut, the cutaway style option and the
+  stand lift.
+- **2026-10-16: lifts are ridden.** Lift cars, platforms and ramp cars are
+  moving surfaces with collision. A ship waits for the lift, boards, rides
+  the shaft at lift speed and drives off (39 station models route through
+  a lift ride).
+- **2026-10-16: mining, rung 1: survey.** A Survey scanner (6,400 cr,
+  grades) and a Deep survey array (23,500 cr, tonnages) map a world's
+  deposits from orbit along the real ground track: a polar orbit maps the
+  world, an equatorial one a band. Rings map with their planet's equator,
+  belts field by field. Deposits are seed data and agree with the industry
+  already there. Surveys are dated, halve in value every 180 days, and sell
+  once to the Mining Guild at any desk. New SURVEY dashboard page.
+- **2026-10-16: mining, rung 2: claims, drones and landing.** File a claim
+  (1,200 cr a year, once a quarter of the world is mapped), buy up to two
+  mining drones (9,500 cr), set them down, and land on open ground to
+  collect what they dug. Lawless worlds strip unattended drones. N deploys
+  and collects, Shift+N recovers.
+- **2026-10-16: mining, rung 3: the mining laser and gas skimming.** The
+  Mining laser (4,800 cr) cuts ore chunks off rocks in a belt or ring
+  (about 11 s a chunk); scoop them. Rich rocks give ore, poor ones slag. A
+  Gas skimmer (7,800 cr) takes hydrogen from a giant's upper atmosphere,
+  more the deeper you dare against the heat.
+- **2026-10-16: R lifts off.** On the ground, R thrusts up and lifts you
+  off; F thrusts down. Only R lifts off.
+- **2026-10-16: rock torpedoes.** A small nuclear charge on a slow, dumb
+  missile that breaks 6 to 14 chunks off an asteroid. Mining Guild
+  torpedoes (2,500 cr) are sold only at mining ports; Syndicate ones
+  (1,600 cr, grey) at outlaw ports or where corruption runs high.
+  - **Out, never in.** Scanned inbound to a port with one aboard is an
+    offence: 2,600 cr fine a torpedo, and they are seized. A Syndicate
+    torpedo is seized whichever way you are going.
+  - **Safing refund.** Detonate one for safety (well clear of any port) and
+    the Guild pays back half its price, unless the blast was a successful
+    mining shot that earned more than the torpedo cost.
+  - **Sabotage.** A torpedo that goes off close to a station damages it:
+    the port refuses docking for a while, and if you are caught the bounty
+    is 30,000 cr and the owner's standing falls by 40.
+- **2026-10-16: the ordnance panel.** Torpedoes do not launch from the
+  missile key. F5 > ORDNANCE: pick a charge, lift the striped guard (C),
+  then LAUNCH (Enter). The guard drops again after each launch and
+  whenever you leave the tab. The panel shows the nose readout, what the
+  torpedo will hit and how far the nearest station is.
+- **2026-10-16: the torpedo command link.** Every torpedo in flight is
+  listed on the panel with DISARM and DETONATE (D / X for the newest).
+  A disarmed torpedo becomes an inert canister you can scoop back into
+  the rack; the panel warns in red when you are inside the blast.
+
+- **2026-10-17: mining, rung 4: your own skimmers.** A ship in your fleet
+  with a pilot and a Gas skimmer can be put to work on a giant from the
+  Fleet tab (F5, docked): she flies out, skims, comes home to the port she
+  is clamped at and sells the load there, and goes back out, until you
+  recall her. Or **keep aboard**: one run, and the hydrogen comes home in
+  her hold (for stockpiling toward a station of your own).
+  - She skims the safe way, a pass an orbit, so a run takes hours: a better
+    pilot, a heat shield and an ice giant rather than a gas giant all make
+    it shorter. About 1,500–2,500 cr a game day for one ship at a giant her
+    port orbits; a giant across the system is honestly not worth it, and
+    the row says so.
+  - Every load is sold at the price on the day she brings it in, and her
+    sales push that port's hydrogen price down like yours do.
+  - Recall finishes the run she is on. A pilot who walks over unpaid wages
+    brings her home first. Her tanks refill free alongside, as yours do.
+  - She is real traffic: drawn in the giant's upper air while she skims,
+    on the scope and the channel, and hailable.
+  - Drone collection by your own ships was left out on purpose: having to
+    land is what keeps a drone below active work. That job goes to an
+    outpost on your claim in rung 5.
+
+- **2026-10-18: the mining beam takes real pieces off a rock.** The mining
+  laser cuts continuously, and every 2 t it cuts comes off as a piece to
+  scoop: about 5 s on ice, 8 s on stone, 13 s on metal. Rocks weigh what
+  their size and material say (a 5 m ice chunk is about 470 t), every
+  piece comes off that mass, and it is carved out of the rock where the
+  beam was: a crater in the rock's own surface that turns with it,
+  deepening while you hold the beam on one face, with fresh paler rock
+  showing in the cut. A rock shrinks as it loses mass and is gone when it
+  runs out. Small ring chunks can be cut away in a session; big rocks scar.
+  Torpedoes take their chunks off the same mass. The CUTTING bar shows
+  tonnes toward the next piece. Saved.
+- **2026-10-19: the shroud suite, silent running, and the chains that end
+  with it.** Astra: a quiet jammer should be hard to come by, at the end of
+  its own quest line, because a sabotage run means getting in and out
+  without being detected or identified. The loud ECM stays in the yards;
+  the **shroud suite** is sold nowhere. **SHIFT+X** runs silent:
+  transponder dark and radiators shut. Ships notice you only inside 200 km
+  (instead of 3,000). Crimes you commit are reported as an unidentified
+  hull with no bounty, and so are thefts from other prospectors' drones and
+  a torpedo sabotage. The price is heat: the hull sheds nothing and the
+  suite runs warm, so cover lasts about two minutes before the heat limit,
+  and then the battle shield and hull pay. Firing anything or burning past
+  half throttle breaks cover for five seconds; the auto-turret holds its
+  fire; it cannot run with the ECM on. A panel under the crosshair shows
+  SILENT RUNNING or why cover is broken, with the heat. You earn the suite
+  from either side: once the first chain is done (The Powder Chain or The
+  Long Arrangement), the same dock offers a five-chapter sequel - **The
+  Grey Ledger** for the navy's intelligence people, **Blackout** for the
+  Syndicate. Its chapters are infiltration runs (reach a hostile system and
+  dock without being searched; a search blows the run and breaks the
+  chain), recovering the prototype from a wreck, burning a contact (two
+  contracts on your board - deliver him, or let him run for less pay and a
+  hit to your standing; whichever you settle first is your answer), and a
+  first sabotage (hole a named port with a rock torpedo; it settles the
+  moment the torpedo lands, and done silent it carries no name). The last
+  chapter fits the suite, or holds it at the yard if no slot is free.
+- **2026-10-19: jamming is loud.** Astra: ECM lights you up like a
+  Christmas tree, just not with an ID code, which is suspicious enough.
+  With the jammer on, ships notice you from three times as far (pirates
+  and police alike come for you from 9,000 km instead of 3,000), a police
+  patrol that has already inspected you comes back for another look, every
+  customs scan searches your hold, and a lawful patrol that watches you
+  jam from within 1,000 km for 20 seconds cites you for it (250 cr on your
+  bounty, once per patrol). The INCOMING panel reads ECM ON - LOUD, NO ID.
+- **2026-10-18: countermeasures against missiles.** Four, and each beats
+  a seeker a different way. A **decoy launcher** (utility, 2,600 cr, rack
+  of 12 charges at 60 cr each from any yard): **O** fires one aft, and each
+  seeker coming for you rolls against it - far likelier when it is close to
+  impact, so the last moment is the moment. **Radioactives as a flare**
+  (Astra's idea): jettison a tonne or more of waste or fissiles with
+  seekers inbound and it is a very hot, oxygen-free flare, much better than
+  a charge and burning longer; dumping waste is still the crime it was.
+  **Point defence**: the auto-turret shoots at a seeker inside 3 km before
+  anything else, and a hit kills it. An **ECM jammer** (internal, 6,800
+  cr): **SHIFT+O** switches it; while on, every seeker within 12 km has a
+  steady chance each second of losing lock, and it puts heat in the hull.
+  A lured seeker chases the decoy and, when that burns out, flies on blind
+  until its fuel is gone. Police and navy carry six decoys a hull and drop
+  one at your missile when it is 4 km out; traders and pirates carry none.
+  With seekers inbound, a flashing INCOMING panel under the crosshair gives
+  the count, the nearest range, your decoys and the ECM state, with a red
+  marker on the nearest one or an arrow to it.
+- **2026-10-18: past the heat shield, the battle shield; and the law has
+  bite.** Skimming is an elliptical pass nose-first through the top of a
+  giant's air: deeper fills faster, but below a certain depth the heat
+  shield cannot shed the friction. Heat over the limit now burns the
+  battle shield before it touches the hull - fast (a full shield lasts
+  about fifteen seconds at the worst), but long enough to pull the nose up
+  and raise the periapsis - and it does not recharge while it burns. The
+  RAM SCOOP panel has a second row: the altitude the heat shield holds
+  above at your speed, where you are, and your periapsis, coloured when
+  you or your periapsis are below the line. A warning says when the
+  battle shield starts burning. Separately, police were no threat to a
+  fleeing starter ship (their gun did 4.5 a second at best and could not
+  break a 40-point shield). Lawful police now carry a heavier gun (10 a
+  second, 16 km, steadier against a runner) and three missiles each for a
+  fugitive, fired from up to 30 km when you are running or your shield is
+  up, one every 18 seconds, with a MISSILE LAUNCH warning. A police
+  missile takes most of a full shield; it is slower than a Hawk and burns
+  out after 40 seconds, so running early from far out escapes it and
+  running late from close in does not. Docking or landing is cover.
+- **2026-10-18: the gas skimmer is a ram scoop.** Astra: skimming means
+  going into the atmosphere face first, the scoop collecting gas as a ram
+  scoop. The intake's mouth is now on the nose: what it takes is density x
+  speed x its area x how squarely the nose meets the oncoming air (full
+  take nose-first, half at 60 degrees off, nothing side-on beyond 80
+  degrees or tail-first). In the air with it fitted, a RAM SCOOP panel
+  above the crosshair shows how square you are and the tonnes a minute,
+  green when you are on the line; off it, a ringed marker shows where the
+  nose should go, or an arrow to it when it is out of view, labelled NOSE
+  HERE. Your fleet's skimmers are unchanged (their pilots fly it right).
+- **2026-10-18: resource wars, stage 1 (the model and the map).** The
+  empires now go to war over ore. Each system has a workable reserve of
+  cheap ore that its industry draws down on the clock (the surveyed
+  tonnage is the whole crust and is unchanged); scarcity is felt within a
+  game year. An empire's chaos is the share of its systems where the law
+  has been bought or the Syndicate holds, and scarcity pushes more of them
+  over the line. When scarcity times chaos gets high enough, the empire
+  declares on a rival's richest reachable border system; the war runs two
+  to six months, the stronger and less chaotic side usually wins, and a
+  win moves the system to the winner. First wars come in years two to
+  three, from the empire with the most chaos, on all three test seeds.
+  Corruption you leave behind counts, but it fades in weeks, so only
+  crime kept up moves a war. It is all seed and clock: the same seed and
+  the same player give the same wars. Seen on the galaxy map: contested
+  systems carry a red cross, taken ones a ring in the new owner's colour,
+  the destination readout says who is attacking or who took it, and a
+  news line under the chart header gives the fronts, the last war, or how
+  much of their cheap ore the empires have worked. Fixed on the same
+  page: a long atmosphere description no longer runs over the planet
+  names in the destination's world list.
+- **2026-10-18: a fence in every system.** About one system in six had
+  no back room outside a Guild hall, so stolen goods meant a jump. Each of
+  those now has one, at its least developed market that is not the
+  Guild's; every other port, and every back room that was already there,
+  is unchanged, and so are the seed fingerprints. A Syndicate hold still
+  pays more (85% against 60%). Holding hot goods, the refusal at a market
+  and the message when you take them name the back room in this system.
+- **2026-10-18: other prospectors, and stealing from them.** Other
+  outfits now have claims and drones on about one world in eight, in
+  nearly every system with a port: Ibarra Ore Co., Halloran & Daughters
+  and so on, one to three drones a claim. They are worked out from the
+  seed, so they are the same every time and no existing world, port or
+  fingerprint changed. Each owner comes round to empty their drones every
+  few weeks. Lock a world and get within a few radii: their drones are
+  marked on the ground in orange (yours in green), with an arrow to the
+  nearest when it is off screen, and the SURVEY page names who has claimed
+  it. Land beside one: **N** empties its hopper into your hold and
+  **SHIFT+N** pries the drone itself loose into your racks (empty it
+  first). What you take is **hot**: a customs scan seizes the hot tonnes
+  and any stolen drone and fines you (a corrupt inspector can still be
+  paid off; an outlaw one does not care), Guild halls and ordinary
+  markets will not buy it, and a fence (a black market that is not a
+  Guild hall) pays 60% of the price, 85% in a Syndicate hold. A fence
+  also buys a stolen drone (3,800 cr; 5,225 cr in a Syndicate hold), or
+  set it down on your own claim and it is yours. Lawful traders will not
+  take hot ore ship to ship; Syndicate hulls will. The owner reports the
+  theft when they next come round, a few days to weeks later, wherever
+  you are by then: a bounty of 900 cr plus half of what you took, with
+  their flag. Saved.
+- **2026-10-18: laser ships in rings.** A fleet ship with a pilot and a
+  mining laser (or the cannon) can be put to work in a ring from the Fleet
+  tab, beside the skimming rows: out to the ring, cut and scoop until the
+  hold is full, home to sell, and round again until recalled; or keep the
+  load aboard for one run. What costs her time is chasing and scooping the
+  pieces, which a better pilot does faster, and she keeps less of what she
+  cuts than you would. She only cuts for what her home port buys, and the
+  load is the ring's own mix (water, ores, rare metals by how icy the ring
+  is), sold commodity by commodity and drawn off the ring's survey store.
+  Measured across twelve rings: a median of about 1,400 cr a game day for
+  a steady pilot. The rows are sorted by what they pay a day.
+- **2026-10-18: the mining laser cannon** (6,200 cr, hardpoint). A pulse
+  that knocks a piece off the face every shot, from 5 km, with 3 s between
+  shots. Against ships it is fully absorbed by a shield that is up, even by
+  the shot that empties it; a bare hull takes it like a pulse laser. While
+  it cools, its mount on the hull glows red, three capacitors on the
+  cockpit dash glow and fade, and a CAPACITORS bar under the crosshair
+  counts down.
+- **2026-10-19: `tools/chop-modules.cjs`, station modules cut from the
+  existing art.** Reads every port in `ref/ports` and every ship in
+  `update_models`, gathers their named parts into functional assemblies
+  (dock, habitat, command, storage, power, comms, propulsion, industry,
+  defence, structure, hull, access), and writes each as its own `.glb`
+  with a catalog (`modules.json`): kind, size, parts, colours, the models
+  it came from, and **sockets** — the places where it was joined to a
+  different assembly in its parent model, which is where the next module
+  bolts on. Trim (decals, lamps, glass, greebles) goes with the nearest
+  assembly; terrain, interiors, gear and stands are left out; the greeble
+  kit is skipped. 171 models give 2,851 distinct modules in about 1,335
+  forms (the same form in another paint, size or pose counts once), with a
+  contact sheet (`index.html`, hover to turn). Output goes to
+  `Claude outputs/modules`; nothing in `src/` changes. Groundwork for ports
+  that grow and for cracked ports rebuilt over years.
+  Same day, second pass: **modules carry their berth routes.** Each berth's
+  route in from `src/ports.js` is turned back into the model's frame and
+  clipped to the module that holds the berth; where it crosses the module's
+  wall is the module's real doorway, and the piece inside is its own route.
+  Berths reached straight from space are marked as having their own outer
+  door. A module that other berths' routes run through is marked
+  **pass-through**, with each way on and the biggest ship that fits it
+  (Astra: outer doors become the doors into the next add-on, so these are
+  the pieces that can sit in the middle of a chain). 407 berths: 259
+  routed, 148 with their own door; 169 pass-through modules, 30 of them
+  wide enough for large ships. A module that holds a berth counts as a dock
+  whatever its parts are named. The contact sheet draws routes, doors and
+  ways on, and has a filter box ("pass" shows the pass-throughs).
+- **2026-10-20: ports that grow — the plan, not yet drawn.** Designed with
+  Astra over 19–20 October; nothing in the running game changes yet (the
+  three new `src/` files are not loaded by `index.html`).
+  - `tools/growth-points.cjs` → `src/growth-points.js`: where each of the
+    96 port models can grow. Points on its known berth routes with a
+    straight neck out through the wall, points over outer doors (an add-on
+    there turns the door inward and must be a pass-through), and hull
+    points for add-ons with no berth. Each carries the biggest ship its
+    route takes and the open ROOM measured around it, and each model
+    carries its own symmetry, read off the mesh. About two minutes for all
+    96, from data already in `src/ports`; no converter run.
+  - The same function runs on every chopped module, so **every piece has
+    growth points of its own** (Astra: "growth points should exist for all
+    station types ... so that custom stations can be built"): a station
+    grows from the free points of everything in it.
+  - `tools/module-index.cjs` → `src/modules.js`: the chopped modules as
+    the game needs them, one per form and paint, in game axes and metres,
+    with the family each was cut from (1,739 modules). Ship pieces are
+    scaled to the game's 25 m hull.
+  - `src/growth.js`: each port's building history from twelve years before
+    the game to forty after, seed + clock like the wars, cached. ORDER
+    (wealth and law, less for a Syndicate hold, less for the corruption you
+    leave) picks who builds each piece: the PORTBUILDERS' UNION (mirrored
+    sets, the core's own family of pieces, a Crawler on site, never cut
+    loose), MOONLIGHTERS (pairs with gaps, short chains), or SCAVENGERS
+    (single pieces welded onto pieces, ship parts and mismatched paint, cut
+    loose again after some years: a wreckhold). Chains stop at three pieces
+    unless a large hub carries them on; no piece is bigger than what it
+    hangs on; nothing standing overlaps. About half of each port's growth
+    is already there when the game starts, the rest arrives over fifteen
+    years. A Crawler stopped on its way (`Growth.delay`) pushes its job and
+    every later one back.
+  - `test/growth.test.js` (19 checks).
+  - **2026-10-21, second pass.** The Union now builds **big, and from the
+    station's own family**: it takes a piece of its own family before
+    another family's piece of the asked-for kind (a rich spine had been
+    growing refinery tanks and cradle bins, because a spine has no storage
+    piece worth the name), and of what fits it takes the largest (anything
+    within 60% of the biggest). On a rich `spine-l` that is spine habitats,
+    docks and access trunks of 76–139 m, where it was 48–60 m bins. Union
+    sets go **along the station's main axis**: a long station (a spine)
+    grows lengthwise and a flat one along its axle; a point facing out off
+    either end is three times as likely to be built on, a point with no
+    mirror mate a third as likely, every member of a set stands at the same
+    station along the axis (within 4% of the half-span), and the Union no
+    longer builds half a set — if a mirror is free and the piece will not
+    stand there, it tries another. **Necks**: each piece on a berth route
+    carries its neck (`slot.neck`: from the route point out through the
+    wall to the piece), and the paper draws them as corridors, 30 m for
+    S/M routes, 60 m for L. `test/growth.test.js`: 26 checks.
+    Same day, third pass: **necks off pieces too.** `tools/module-index.cjs`
+    now keeps where each module route point's neck starts (1,760 of them;
+    `src/modules.js` regenerated; every other value is unchanged), so a
+    piece welded onto another piece's route gets a neck back into that
+    piece. **The Union varies its blocks**: a form it has already built at
+    a port is a third as likely next time (then a fifth...), and when only
+    one or two big forms fit it reaches down in size until it has three to
+    choose from. A rich spine builds 5–9 forms where it could build one;
+    pad sites and farms stay narrow, because their families have few
+    pieces that fit a flat ground site. 29 checks.
+  - **2026-10-24: a way in from the primary L berth.** (Astra: "ensure that
+    all constructed stations have a path for ships to enter from the
+    primary L size berth and be taken through to their docking bay
+    somewhere inside the stations".) Before this, nothing tied an add-on
+    dock to the station's routes: a dock whose bays open to space stood on
+    its base with its neck into a blank wall, and across every port model
+    3,506 of 23,438 grown pieces stood in front of a primary L berth's
+    mouth. Now:
+    - The **primary** entrance is the L berth most of the core's routes
+      come in through (berthL0 on a spine, berthLFwd on a cylinder; a
+      ground site's busiest entrance). `Growth.wayIn(model)`.
+    - `tools/module-index.cjs` keeps each module's **way in**: `in` (the
+      biggest ship its doorway takes), `jd` (where the doorway is) and
+      `ob` (bays open only to space). A dock whose bays all open through
+      one face, mouths within 60 m, is **turned in** (`ti`): that outer
+      door faces the station and becomes its doorway (Astra, 10-19:
+      "outer doors can then become the doors ... of the NEXT add-on"). A
+      pass-through with no bay joins by one of its ways on, door to door,
+      instead of standing on its base. `src/modules.js` regenerated.
+    - `src/growth.js`: every free point carries **reach**, the biggest
+      class that gets there from the primary, inside: a core route that
+      comes in through the primary, then the route points and ways on of
+      pieces that are reached through their doorways. A dock is built only
+      where it is reached by a ship its size, and only if it has no bay open
+      straight to space. A piece is set so its **doorway** lands on the
+      neck. Nothing stands in a **lane** in front of any mouth that opens to
+      space (45 m either side, 1.5 half-spans out), and nothing is built
+      over the primary's mouth (yard models had three points there).
+    - Cost, every model × rich/middling/poor × 4 seeds: 4,265 docks where
+      there were 5,079 (L: 160 of 226), every one reached; Union docks
+      577 of 975. Docks reached only through a second L entrance (cradle
+      Beta, some refinery and yard routes) are no longer grown.
+    - `test/growth.test.js` "the way in", worked out from the port data
+      and not from growth.js's bookkeeping: every grown bay reached, its
+      class fits the whole way, the primary's approach clear and its mouth
+      not built over. 33 checks. `Claude outputs/path-sweep.cjs` runs the
+      same over all 96 models; `path-builders.cjs` counts docks by builder.
+      The paper (`growth-paper.cjs`) draws the primary's way in as a cyan
+      arrow and its kept-clear approach dashed.
+  - **2026-10-24, later: a station is built out in a year or two, not
+    decades.** (Astra: "I don't think it'd take literal decades to finish
+    one of these things" — "I meant the whole station".) Growth had run
+    from twelve years before the game to fifteen after, a piece a year,
+    each 5–16 months on site. Now each port has ONE **build-out**: the
+    Union finishes a station in 0.7–1.3 years, moonlighters in 1.2–2.2,
+    scavengers in 1.5–3 (`Growth.BUILDOUT_Y`). On site a Union piece takes
+    1–3 weeks, a moonlighter's 3–9, a scavenger's 1–10 (`PIECE_DAYS`; a
+    Crawler's tugs unpack an L piece in hours, the rest is fitting out),
+    and a Crawler is there 5 days before and 3 after. When a port's
+    build-out falls is its own, between twelve years before the game and
+    four years in: over every model × 3 orders × 4 seeds, about two in
+    three are finished when you arrive, one in ten is building on day
+    one, a quarter begin in your first four years. After it a station is
+    finished; only where order has really fallen to scavengers do they keep
+    welding on and cutting loose, about every ten months (a wreckhold is
+    never finished). `test/growth.test.js` "time": the longest build-out
+    3.0 years, no Union or moonlighter piece after one, a Union piece at
+    most three weeks; 37 checks. The paper shows each port early in its
+    build-out, halfway and finished, not game years 0/5/15.
+    `Claude outputs/growth-timeline.cjs` prints the timings per order.
+- **2026-10-24: no-man's land — 450 stars, and most of them nobody's.**
+  Astra: "not every star system has anything in it but hydrogen for fuel
+  to keep moving at the star or one of the planets, by increasing the
+  number of stars to 450 and creating a kind of no-man's land in between
+  polities; this makes every game have its own expansion into new
+  territory which can inter-relate with faction missions." Decided with
+  her: a bigger disc at the same spacing, about 45% claimed, the Syndicate
+  both inside the empires and out in the frontier, and (later stages)
+  both the polities and the player expanding into it.
+  - **The galaxy** (`src/galaxy.js`): 450 stars on a 72.75 ly disc (was
+    200 on 48.5), the same density, so a hop is the hop it always was. No
+    star is left more than 8.8 ly from its nearest neighbour (the rim had
+    one at 10.7, past a laden Mule's 9.7). Each empire claims the compact
+    region round its capital, an even share of 45% of the stars, and never
+    a star within 4 ly of another empire's: there is always open space
+    between them. The first capital stands within 10 ly of home, so a
+    career always begins inside a polity; the others stand out at 0.8 of
+    the disc's reach at evenly spaced bearings - opposite each other when
+    there are three - so the open space lies between every pair
+    (farthest-point sampling had put both rim empires on one flank of
+    kawartha, leaving half the map a single empty frontier). The
+    Syndicate's three holds and
+    the three minor powers are carved out of claimed space as before (their
+    shares now of claimed space), and the Syndicate also keeps two
+    **frontier outposts** of four systems out in no-man's land, with no
+    empire round them. On kawartha: 212 of 450 claimed, 238 nobody's.
+  - **Empty systems** (`src/generate.js`, `opts.empty`): a star nobody holds
+    generates its star, worlds, moons, rings and belts exactly as it would
+    (every stream is forked, nothing moves) and then no ports: no market,
+    no traffic, no patrols, no flag, no law (`government: unclaimed`,
+    `crimeScore` 100, as deep space), `sys.empty`. A bare seed never
+    generates empty. `Galaxy.systemOpts` is the one call the game's system
+    cache, the chart's preview and the wars' summary all use. Courier and
+    passage contracts and the arcs' courier, infiltration and recovery
+    steps only go to stars somebody holds; a hailed ship's charting says
+    "nobody holds it".
+  - **Star skimming** (`src/sim.js`, `src/mining.js`): every star has a
+    CORONA out to three of its radii that the ram scoop works in - density
+    x speed x area x facing, as for a giant, densest deepest. No drag (an
+    orbit through it is the orbit it was), and RADIANT heat, inverse square
+    of distance and fourth power of temperature: a red dwarf can be skimmed
+    deep on a bare hull, a sun-like star wants a heat shield deep, a hot
+    white one cooks even a shielded hull at half depth. About 1.7 t/min at
+    the top, 5.5 halfway, 20-55 deep. **Skimmed hydrogen fills the jump
+    tank first, then the hold** - at a giant as well as a star - so a ship
+    can keep moving through systems with no port. 87 of 714 empty systems
+    in three galaxies have no giant at all; the star is their fuel.
+  - Arriving where the busiest port is a pad no longer parks you under the
+    pad (main.js `enterSystem` wanted an orbital station; a latent bug the
+    new map walked into).
+  - **Saves: epoch 3.** A career from before this is in a galaxy that no
+    longer exists, so it does not load (the DEPRECATED shelf was empty).
+  - Tests: `galaxy.test.js` "no-man's land" (empty systems really empty and
+    with the worlds they would have had, home claimed, about 45% claimed,
+    the empires apart, frontier outposts) and the territory checks rewritten
+    for claimed space, 96 checks; `mining.test.js` "the star" (skimming,
+    tank before hold, heat by star class, every star has a corona), 106;
+    `render.test.js` "an empty system" (arrive, every screen F1-F8, both
+    views), 967. The slipspace tear-out test and the jump's clock check
+    leaned on the old map's first lane (empty, long); they now take the
+    longest lane and accept a live corridor's own crossing time.
+    `Claude outputs`: `empty-smoke.cjs`, `corona-check.cjs`,
+    `galaxy-map.cjs` (the map top down, held and nobody's).
+  - **2026-10-24, later: you choose when the hold fills the tank.** (Astra:
+    "fuel that you have in the hold as like hydrogen can be used to refuel
+    the ship so you skim and then choose to refuel from inside the ship
+    menu or ship screen".) The tanks-first skimming above is undone:
+    skimmed hydrogen goes into the HOLD, at a star or a giant, as it did.
+    `Mining.refuelFromHold` pumps hold hydrogen into the jump tank, as much
+    as the tank has room for, never the tonnes held under contract; on F5
+    SHIP the hydrogen row has a **TO TANKS** button, and **Enter** on that
+    row does the same. (It was F for an hour; F is the down thrusters, and
+    a screen that is up must never take a flight key - Astra.) "Skimmer:
+    hold full" says how. The render harness now loads mining.js,
+    as index.html always has (without it the pump found no Mining). Tests:
+    mining 110 (into the hold not the tank, the pump fills to the brim and
+    no further, contract hydrogen stays), render 970 (in an empty system,
+    F5 shows TO TANKS, F still reaches the thrusters from that screen,
+    Enter on the hydrogen row fills the tank).
+  - **Next** (agreed, not built): the empires and the player expanding into
+    no-man's land on the clock - Crawlers founding ports there, dated like
+    the wars - and the faction missions that hang off it.
 
 - **People: your crew at their stations, a station deck with people on it,
   and the crews of the ships in port (2026-10-25).** Astra: *"We should use
@@ -2098,6 +2685,135 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
   (`index.html`, `#boot`) still read "PROCEDURAL SPACE GAME", the working
   title. It now reads "MANIFEST"; the tagline under it ("gravity,
   clockwork, cockpit and cargo") is unchanged.
+- **2026-10-24: every city site's town stands somewhere of its own.**
+  Astra: "randomize the location of the city portion and the domes on
+  those ports, without putting them on the landing apron or the door."
+  The pad and runway city sites (s, m and l) carry their settlement as one
+  piece in the art: three habitat domes, two greenhouse domes, the tubes
+  between them, a water tank, sheds, solar panels and a mast, on a slab of
+  its own. It always stood in the same corner. Now each port turns it to
+  its own heading and stands it in its own place: on the site plate or
+  beside the field. It stays clear of everything standing on the site, and
+  further clear of the pad, the runway (and the runway's line well past
+  both ends, under the approach and climb-out) and the doors. It stays
+  within 1.12 of the site's half-span, so it never stands in the town
+  dressing round the port. The domes move with the city rather than on
+  their own: they are three sizes, and each one's vestibule faces the tube
+  that reaches it, so a dome moved alone would leave a tube running into a
+  blank wall. `tools/port-sites.cjs` reads the .glb models and writes
+  `src/port-sites.js` (where each city is, and what it must keep clear
+  of); render.js lifts exactly the city's 1,772 triangles out of the port
+  (every corner inside the city's box: by centre it once took a slab of
+  ground with it) and draws them where `Render.citySpot` puts them. The
+  seed is new, `port.dressing.citySeed`, on its own random stream: the
+  galaxy fingerprints and every port's signs, blocks and domes are
+  unchanged. Where the art had the city there is now open site plate.
+  `test/city-sites.test.js`, 52 checks.
+  Same day, second pass: **the domes stand on their own, and the tubes
+  always join them up.** Astra: "ensure that the domes always have tubes
+  that connect to a branch point, a thicker tube, which goes directly into
+  one of the faces of one of the city buildings." The slab, the tank, the
+  two sheds, the panels and the mast still move as one piece; each of the
+  five domes now has a spot of its own, turned so its porch door faces a
+  branch point, a capped drum on the ground. A thin tube runs from every
+  dome's door to the drum, and one trunk runs from the drum square into
+  the middle of one wall of one shed (both sheds and five different walls
+  get used). The sizes are taken from the art. A thin tube is square and
+  a shade bigger than a dome's door, so it closes over it. The trunk is up
+  to twice as wide and a little taller, but at most 85% of the wall's width
+  and under the eave. It cannot simply be the art's tube made fatter: the
+  art's tube is taller than a shed. Tubes have the art's tube colours, roof
+  strip and ports, and run a little below the ground so they sit flush on
+  the slab or off it. Every layout is checked before use: the trunk leaves
+  through clear ground, no dome stands in another dome or a building, and
+  no tube crosses a dome, a building or the trunk. The art's own four tubes
+  are no longer drawn. The city is cut into its parts by a run list read
+  off the art (`tools/port-sites.cjs`; the converter keeps the art's node
+  order, checked on all six models), so nothing is guessed where a tube
+  meets a porch. If no layout fits a port, the city goes whole, as the art
+  laid it out, as before; on all six models every port tested found one.
+  `test/city-sites.test.js`, 107 checks: every port joins its domes; every
+  tube ends at its own dome's door, wherever that door has been turned to;
+  the trunk is square to the wall, in the middle of it, fits it, stays
+  under the eave and is thicker than the tubes; nothing crosses anything;
+  and every corner of everything drawn stays off the pad, the runway's
+  line and the doors.
+  Same day, third pass: **the slab stands square to the site.** Astra:
+  "the building that the domes connect to must be at a right angle to the
+  other structures' walls; humans don't just put dotted lines on the
+  ground to denote a square and then put a big four sided building at an
+  angle to the lines." The slab, the tank, the sheds, the panels and the
+  mast now turn only in quarter turns, so every wall runs with the pad's,
+  the plates' and the markings'; the trunk leaves a shed wall square, so it
+  runs with them too. The domes are round and keep any heading, and their
+  tubes run where the domes are. All four quarter turns are used.
+  `test/city-sites.test.js`, 113 checks.
+- **2026-10-21: the comms channel fits a short window.** A port's ten
+  options at a fixed 38 px a row printed over the traffic log in a short
+  window, and the notes beside them ran off the right edge. The channel
+  pane now takes the height its buttons need from the log first (the log
+  keeps at least 96 px), the rows close up if that is still not enough,
+  the footnote gives way when it is very tight, and every note is clipped
+  to the pane, or left out if there is no room for a word of it.
+- **2026-10-21: landing legs stand level, fold in half and pull up inside.**
+  The hull converter (`tools/glb2hulls.js`) now brings every foot on a
+  hull down to one level: the deepest foot, or 1% of a hull length under
+  the lowest point of the hull if that is deeper. Legs are only ever
+  lengthened, by sliding their lower half down the leg's own line. The
+  heavy enforcer's nose leg grows about 6% of a hull length to match its
+  rear legs, the runner's wing legs about 11% to match its nose leg, and
+  the bulk hauler, courier and enforcer legs a little each so the feet
+  clear the keel. Each leg is also cut at the knee: going up, the lower
+  half folds back alongside the upper half, the folded pair pulls
+  straight up into the hull, and then the bay door closes behind it
+  (coming down is the same in reverse). The runner's wing is too thin to
+  hold a leg, so its wing legs fold and then swing flat under the wing
+  instead. No stowed leg reaches into a cockpit. Two new checks: every
+  legged hull stands level, with its feet below its lowest point.
+- **2026-10-21: survey instruments are graded by what they can see.**
+  Astra: "a grade 1 scanner tells you where low grade minerals are, and
+  grade 2 will tell you where fissiles are, and a grade 3 tells you where
+  precious metals are."
+  - **Grade 1, survey scanner** (6,400 cr): ores, water ice, hydrogen.
+  - **Grade 2, gamma survey spectrometer** (new, 13,800 cr, development
+    0.40 or better): adds fissiles.
+  - **Grade 3, deep survey array** (23,500 cr): adds rare metals, and gives
+    tonnes instead of words.
+  - The SURVEY page lists only what an instrument of the right grade has
+    mapped. It names the classes nobody has read ("not read - grade 2
+    survey") whether or not anything is there, so the page never gives
+    away which worlds hold fissiles.
+  - The Guild pays for each commodity only on ground mapped by an
+    instrument that reads it. Measured on one rich rocky world: about 660
+    cr at grade 1, 3,030 at grade 2, 6,630 at grade 3. Flying sold ground
+    again at a higher grade sells the newly read classes.
+  - A drone digs the most valuable thing your survey has read, so a
+    grade-1 survey keeps it on ore and ice.
+- **2026-10-16: the attitude ladder and bank scale are drawn sharp** under
+  the glass glow. Measured on the RX 540: cockpit in a ring 22 > 40 fps,
+  above it 37 > 51, in a belt field 26 > 40.
+- **2026-10-16: rings do not bloom** (they mask alpha as bodies do).
+- **2026-10-16: mining laser slowed** from about 7 s a chunk to about 11,
+  because a rich rock out-earned a milfuel run, and the balance rule is
+  that mining pays well but never beats active hauling.
+- **2026-10-21: the loading screen says Manifest.** It said "PROCEDURAL
+  SPACE GAME" in grey on black. It now shows the title card: the navy
+  field, the eight-pointed compass rose and the Manifest wordmark, drawn
+  from src/logo.js (now loaded first, before anything else), with the
+  tagline and "loading". It fades into the title screen instead of
+  blinking off.
+- **2026-10-21: a new title card.** The wordmark is "Manifest" in Uncial
+  Antiqua (chosen to suggest an epic voyage) in place of the Segoe
+  Script, as outlines in src/logo.js. The navy is gone: the card is a
+  starfield, with the wordmark above the compass rose rather than across
+  it. On a wide window the logo has the left column and the menu sits on
+  the right, with a box the menu's size under it telling one captain's
+  rise (src/captains.js, twelve of them, a different one each launch and
+  never the same twice running). Narrow windows stack the logo over the
+  menu and leave the story out. The loading screen draws the same sky
+  and logo in the same place from logo.js, and the title's first showing
+  starts finished so the hand-over does not flicker. Tests: captains, 10
+  checks; render 950/950.
 
 - **The cockpit scales as one piece, and the bulkhead moved aft
   (2026-10-24).** Part of the ship-interiors work above.
@@ -2368,6 +3084,47 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
   She lifts off when the vertical thrust beats gravity by 2%, as long as
   nobody is walking aboard. She won't lift off with the ramp down: "The
   ramp is not up".
+- **2026-10-16: contracts never settled after a full arrival.** Two
+  dock-edge detectors shared one flag and the first one consumed it.
+- **2026-10-16: station flicker.** Station vertices were rounded to a
+  4 m grid on a 4 km station, crushing panels and thin walls into
+  coplanar faces (cradle-s: 13,871 coplanar pairs, now 8).
+- **2026-10-16: 45-degree bores poked through the hull.** They are clipped
+  flush at the wall.
+- **2026-10-17: scanner audit.** Astra asked for the scanners to be
+  checked for bugs. Found and fixed:
+  - **Low orbits left holes in a survey.** Below about 1.1 radii the swath
+    is narrower than half a cell, so a diagonal ground track could run
+    between cell centres and leave a chequerboard of unmapped ground it
+    had flown straight over. A cell now counts once the swath reaches into
+    it.
+  - **One fresh cell made an old survey sell as new.** Value aged off the
+    last time any ground was gained. It now ages off the coverage-weighted
+    date of the unsold ground; the page's "as of" still shows the last
+    pass.
+  - **One deep-array cell made a whole scanner survey sell at array
+    price.** Each survey now records how much of it each instrument
+    mapped: the array's share sells at the full rate, the scanner's at
+    0.6.
+  - **The SURVEY page showed tonnages for ground only the scanner had
+    mapped** as soon as an array was fitted. Tonnes now show only once the
+    array itself has mapped a tenth of the world; otherwise grade words.
+  - **The nav page's "carrying" row disagreed with the ship's hold.** A
+    trader you had just robbed still showed a full hold, and a pirate full
+    of other people's cargo showed nothing. It reads the same hold that
+    robbery and wrecks use now.
+  - **The trade analyser could start a run at an empty warehouse.** Runs
+    now start only where there is at least a tonne to load.
+  - Checked and found sound: the survey spin frame agrees with the ground
+    frame that ports and drones use. A survey stalling at 16% round
+    Mirven II a was the test orbit, not the scanner: that moon's Hill
+    sphere is only about 2.2 radii, so small moons close to big planets
+    can only be mapped on close passes, not orbited.
+
+- **2026-10-18: a rock shattered at one star also vanished at others.**
+  Rock state was kept by rock id alone, and ring-rock ids repeat from
+  system to system. It is kept per system now; older saves' entries still
+  count, so nothing a torpedo took comes back.
 
 - **Work that had been committed went missing from the working copy
   (2026-10-19).** Two lines of work split on 2026-10-15: Driftwood on one
@@ -2512,6 +3269,17 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 - `notes` (string) and `journal` (array) are new, and additive. An older save
   loads with an empty notepad and an empty log; nothing is invented for it.
+
+Careers carry over. Everything new (surveys, claims, drones, the landed
+spot, shattered rocks, torpedo refunds, sabotage) is additive and loads as
+"nothing yet" on an older save. A survey made before the scanner audit
+keeps exactly the value it had: its ground counts as mapped by the
+instrument its grade says. A survey taken with the deep array before
+2026-10-21 counts as grade 3 and is worth what it was. One taken with the
+scanner now reads ore, ice and hydrogen only, so an unsold scanner survey
+of a world with fissiles or rare metals is worth less than it was.
+A city site's town is placed from the port itself, not from the save, so
+an older career sees it in its new place the next time it lands there.
 
 - **Careers load unchanged.**
   - A Crawler's livery is new and optional (`livery`, `liveryFaction` on

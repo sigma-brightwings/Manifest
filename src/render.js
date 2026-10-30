@@ -842,7 +842,8 @@
       mesh.gear = src.gear.map(function (p) {
         var pm = { v: p.v, f: p.f, c: [] };
         for (var k = 0; k < p.ci.length; k++) pm.c.push(p.pal[p.ci[k]]);
-        return { role: p.role, pivot: p.pivot, axis: p.axis, stow: p.stow, mesh: pm };
+        return { role: p.role, pivot: p.pivot, axis: p.axis, stow: p.stow,
+                 lift: p.lift || null, hinge: p.hinge || null, swing: p.swing || 0, mesh: pm };
       });
     }
     /* One entry per engineGlow node in the model, so a three-engine hull
@@ -899,9 +900,32 @@
       if (!global.PortGeo || !global.PortGeo.load(role)) return null;
       src = lib[role];
     }
+    var whole = decompress(src);
+    /* A car the converter also exports as a moving PART (the ring's lift
+     * platform: src.cars, 2026-10-17) is drawn and ridden that way - see
+     * portDoors - so it is not lifted out a second time as a mover. */
+    var carNodes = null;
+    (src.cars || []).forEach(function (cr) { (carNodes = carNodes || {})[cr.node] = true; });
+    var split = splitMovers(whole, src.movers, carNodes);
+    /* THE CITY OF A CITY SITE IS LIFTED OUT TOO (2026-10-24), and drawn by
+     * drawPortCity wherever this port's seed puts it. Out of the solid
+     * shell as well: it is not where the art left it any more. */
+    var site = citySite(role);
+    var cityCut = site ? splitCity(split ? split.shell : whole, site.city) : null;
+    if (cityCut) {
+      if (split) split.shell = cityCut.shell; else split = { shell: cityCut.shell, movers: null };
+      whole = splitCity(whole, site.city).shell;
+    }
     var out = {
       kind: src.kind,
-      shell: decompress(src),
+      /* The hull WITHOUT its cars: every drawing path reads `shell`, so the
+       * cars are drawn once, by drawMovers, where their riders are. */
+      shell: split ? split.shell : whole,
+      /* ...and WITH them, for collision, which still sees each car where
+       * the art left it. */
+      solidShell: whole,
+      movers: split ? split.movers : null,
+      city: cityCut ? cityCut.city : null,
       interior: src.interior ? decompress(src.interior) : null,
       spin: src.spin ? decompress(src.spin) : null,
       anchors: src.anchors || null,
@@ -913,6 +937,586 @@
     };
     PORT_CACHE[role] = out;
     return out;
+  }
+
+  /* ---- MOVERS: the floors that carry a hull (2026-10-16) -----------------
+   *
+   * Astra: "the elevator pads are invisible inside the stations", and "we
+   * need to give the two things different classifications. Openables are
+   * one thing, then there are moving surfaces-with-collision."
+   *
+   * The converter now exports each declared car (glb2hulls: movers) with
+   * its box, the unit axis it runs on and how far along it each way it can
+   * go from where the art left it. The car's triangles are lifted out of
+   * the hull here, by box, the way door leaves are, and drawn by drawMovers
+   * at the pose that puts the car under whatever is riding it.
+   *
+   * Without this a small hull rode a lift whose car stayed parked at the
+   * top: the route went down the shaft, the floor did not, and the ship sank
+   * through an empty shaft with nothing under it - an "invisible pad". */
+  /* `oi` on the shell it returns is each face's index in the shell it was
+   * given (or in that shell's own `oi`), so the converter's part runs —
+   * indices into the WHOLE shell — still find their faces after a split. */
+  function splitMovers(shell, movers, skipNodes) {
+    if (!shell || !shell.f || !shell.f.length || !movers || !movers.length) return null;
+    var boxes = [];
+    for (var m = 0; m < movers.length; m++) {
+      var b = movers[m];
+      if (!b || !b.min || !b.max) continue;
+      if (skipNodes && b.node && skipNodes[b.node]) continue;
+      var e = [(b.max[0] - b.min[0]) * 0.02 + 1e-4, (b.max[1] - b.min[1]) * 0.02 + 1e-4,
+               (b.max[2] - b.min[2]) * 0.02 + 1e-4];
+      boxes.push({ src: b, lo: [b.min[0] - e[0], b.min[1] - e[1], b.min[2] - e[2]],
+                   hi: [b.max[0] + e[0], b.max[1] + e[1], b.max[2] + e[2]], f: [], c: [] });
+    }
+    if (!boxes.length) return null;
+    var hullF = [], hullC = [], hullO = [], taken = 0;
+    for (var i = 0; i < shell.f.length; i++) {
+      var t = shell.f[i], a = shell.v[t[0]], bb = shell.v[t[1]], c = shell.v[t[2]];
+      var col = shell.c ? shell.c[i] : null, own = null;
+      if (a && bb && c) {
+        var px = (a[0] + bb[0] + c[0]) / 3, py = (a[1] + bb[1] + c[1]) / 3, pz = (a[2] + bb[2] + c[2]) / 3;
+        for (var k = 0; k < boxes.length && !own; k++) {
+          var x = boxes[k];
+          if (px >= x.lo[0] && px <= x.hi[0] && py >= x.lo[1] && py <= x.hi[1] &&
+              pz >= x.lo[2] && pz <= x.hi[2]) own = x;
+        }
+      }
+      if (own) { own.f.push(t); own.c.push(col); taken++; }
+      else { hullF.push(t); hullC.push(col); hullO.push(shell.oi ? shell.oi[i] : i); }
+    }
+    if (!taken) return null;
+    var out = [];
+    for (k = 0; k < boxes.length; k++) {
+      var s = boxes[k].src;
+      if (!boxes[k].f.length) continue;
+      out.push({ node: s.node, min: s.min, max: s.max, mid: s.mid, axis: s.axis || null,
+                 range: s.range || [0, 0], serves: s.serves || null,
+                 mesh: { v: shell.v, f: boxes[k].f, c: shell.c ? boxes[k].c : null } });
+    }
+    return { shell: { v: shell.v, f: hullF, c: shell.c ? hullC : shell.c, oi: hullO }, movers: out };
+  }
+
+  /* ---- THE CITY ON A CITY SITE STANDS SOMEWHERE OF ITS OWN (2026-10-24) --
+   *
+   * Astra: "randomize the location of the city portion and the domes on
+   * those ports, without putting them on the landing apron or the door to
+   * get some more variety."
+   *
+   * pad-city-site and runway-city-site carry their settlement as one node
+   * in the art - three habitat domes, two greenhouse domes, the tubes
+   * between them, a tank, sheds, solar panels and a mast, on a slab of
+   * its own - and every port drawn from the same model had it in the same
+   * corner. tools/port-sites.cjs reads the .glb (the game's copy has no
+   * names left in it) and writes src/port-sites.js: the city's box, and
+   * boxes for everything on the site it must keep clear of.
+   *
+   * ONE PIECE. The domes are not interchangeable: they are three sizes,
+   * and each dome's vestibule faces the tube that reaches it, so a dome
+   * moved on its own leaves a tube running into a blank wall. The city
+   * moves and turns as a whole, and the domes go with it.
+   *
+   * The triangles are lifted out of the hull by box, the way the cars
+   * are; the art keeps the plate the city stands on just below the
+   * city's own slab, so the cut is exact (render.test.js counts it
+   * against the art: 1,772 triangles on every one of the six models). */
+  /* (Not portSite: that name is taken further down, by the role -> site
+   * kind lookup, and the later declaration wins.) */
+  function citySite(role) {
+    var S = global.PortSites;
+    return (S && role && S[role]) || null;
+  }
+
+  function inBox(p, lo, hi) {
+    return p[0] >= lo[0] && p[0] <= hi[0] && p[1] >= lo[1] && p[1] <= hi[1] && p[2] >= lo[2] && p[2] <= hi[2];
+  }
+  function splitCity(shell, box) {
+    if (!shell || !shell.f || !shell.f.length || !box) return null;
+    var ex = (box[3] - box[0]) * 0.01, ey = (box[4] - box[1]) * 0.01;
+    var lo = [box[0] - ex, box[1] - ey, box[2] - 1e-4], hi = [box[3] + ex, box[4] + ey, box[5] + 1e-3];
+    var keepF = [], keepC = [], keepO = [], cityF = [], cityC = [];
+    for (var i = 0; i < shell.f.length; i++) {
+      var t = shell.f[i], a = shell.v[t[0]], b = shell.v[t[1]], c = shell.v[t[2]];
+      var col = shell.c ? shell.c[i] : null, mine = false;
+      /* EVERY CORNER inside, not the centre. The site plate is a few huge
+       * triangles running the length of the site, and one of them has its
+       * centre under the city: by centre it went with the city and left a
+       * hole in the ground behind it (measured: 1,773 cut against 1,772 in
+       * the art, on all six models). Nothing of the city reaches outside
+       * its own box, so the corner test takes exactly the city. */
+      if (a && b && c) mine = inBox(a, lo, hi) && inBox(b, lo, hi) && inBox(c, lo, hi);
+      if (mine) { cityF.push(t); cityC.push(col); }
+      else { keepF.push(t); keepC.push(col); keepO.push(shell.oi ? shell.oi[i] : i); }
+    }
+    if (!cityF.length) return null;
+    return { shell: { v: shell.v, f: keepF, c: shell.c ? keepC : shell.c, oi: keepO },
+             city: { v: shell.v, f: cityF, c: shell.c ? cityC : shell.c } };
+  }
+
+  /* WHERE IT GOES. All in port units, the site's own frame, +z up.
+   *
+   *   - clear of everything standing on the site by CITY_MARGIN, and of
+   *     the pad, the runway and the doors by LAND_MARGIN, which is wider:
+   *     a ship has to come down on one and taxi through the other;
+   *   - clear of the RUNWAY'S LINE for STRIP_REACH beyond either end, so
+   *     nothing stands under the approach or the climb-out;
+   *   - inside CITY_REACH of the centre, every corner of it. The town
+   *     dressing (generate.js portBlocks, portDomes) starts at 1.15 and the
+   *     signs and the control cabinet stand further out still, so the two
+   *     settlements never stand in each other;
+   *   - and no further than CITY_NEAR from something of the port, so it
+   *     reads as the port's own town and not a camp in the next valley.
+   *
+   * Any heading. The seed (generate.js dressing.citySeed) drives a small
+   * generator, and the first of CITY_TRIES candidates that fits is the
+   * answer; if none does, the art's own corner, which fits by design.
+   * Cached on the port: a place does not move between visits. */
+  var CITY_MARGIN = 0.03, LAND_MARGIN = 0.10, STRIP_REACH = 2.0;
+  var CITY_REACH = 1.12, CITY_NEAR = 0.20, CITY_TRIES = 160;
+
+  function cityBlocks(site) {
+    var out = [], i, r;
+    for (i = 0; i < site.keep.length; i++) {
+      r = site.keep[i];
+      out.push([r[0] - CITY_MARGIN, r[1] - CITY_MARGIN, r[2] + CITY_MARGIN, r[3] + CITY_MARGIN]);
+    }
+    for (i = 0; i < site.land.length; i++) {
+      r = site.land[i];
+      out.push([r[0] - LAND_MARGIN, r[1] - LAND_MARGIN, r[2] + LAND_MARGIN, r[3] + LAND_MARGIN]);
+    }
+    if (site.strip) {
+      r = site.strip;
+      /* along its long side, out past both ends */
+      if (r[3] - r[1] >= r[2] - r[0]) out.push([r[0] - LAND_MARGIN, r[1] - STRIP_REACH, r[2] + LAND_MARGIN, r[3] + STRIP_REACH]);
+      else out.push([r[0] - STRIP_REACH, r[1] - LAND_MARGIN, r[2] + STRIP_REACH, r[3] + LAND_MARGIN]);
+    }
+    return out;
+  }
+  function boxGap(a, b) {        // distance between two 2D boxes, 0 if they touch
+    var dx = Math.max(0, a[0] - b[2], b[0] - a[2]), dy = Math.max(0, a[1] - b[3], b[1] - a[3]);
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+  /* mulberry32: small, seedable, and the same numbers in every browser */
+  function seeded(s) {
+    var a = (Math.floor(s * 4294967296) >>> 0) || 0x9e3779b9;
+    return function () {
+      a = (a + 0x6D2B79F5) >>> 0;
+      var t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  /* ---- THE CITY IN PARTS, AND THE TUBES BETWEEN THEM (2026-10-24) --------
+   *
+   * Astra: "ensure that the domes always have tubes that connect to a
+   * branch point, a thicker tube, which goes directly into one of the
+   * faces of one of the city buildings", and each dome on a spot of its
+   * own.
+   *
+   * So the city is drawn in parts. The CORE - the slab, the tank, the two
+   * sheds, the solar panels, the mast - moves and turns as one piece, as
+   * before. Each DOME stands on its own spot, turned so its porch door
+   * faces the BRANCH POINT, a drum on the ground. A THIN TUBE runs from
+   * every dome's door to the drum, and one TRUNK, wider and taller, runs
+   * from the drum straight into the middle of one wall of one shed. The
+   * art's own four tubes, which joined the domes in the art's layout, are
+   * not drawn when the domes move.
+   *
+   * THE SIZES COME FROM THE ART, not from a guess. A thin tube is square,
+   * a shade bigger than a dome's door so it closes over it; the trunk is
+   * up to twice as wide and a little taller, but never wider than 85% of
+   * the wall it enters or taller than 92% of it - it goes INTO the wall,
+   * under the eave, which is why it cannot simply be the art's tube made
+   * fatter: the art's tube is taller than a shed. Tubes and the drum run a
+   * little below the ground, so they sit flush whether they cross the
+   * slab or the bare site.
+   *
+   * THE LAYOUT IS SEEDED, in the city's own frame, and checked before it
+   * is used: the trunk leaves its wall through clear ground; every dome
+   * stands clear of the slab's buildings, the other domes, the trunk and
+   * every other tube; every thin tube is a straight line from its door to
+   * the drum that crosses nothing. Then the whole of it - core, drum,
+   * trunk, tubes and domes, piece by piece - is placed on the site the way
+   * the city alone was (citySpot). A layout that cannot be placed is
+   * thrown away and another drawn; if none can, the city goes whole, in
+   * the art's own layout, with the art's own tubes. */
+  var CITY_LAYOUTS = 6, DOME_TRIES = 80, DOME_FAN = 2.6;   // radians either side of the trunk's line
+  var CITY_PARTS = {};
+
+  /* The city's triangles, sliced by the run list tools/port-sites.cjs
+   * read off the art (the converter keeps the art's order). Null when the
+   * counts do not add up - the art changed under the data - and then the
+   * city is drawn whole. */
+  function cityParts(role) {
+    if (CITY_PARTS[role] !== undefined) return CITY_PARTS[role];
+    CITY_PARTS[role] = null;
+    var site = citySite(role), lib = libPort(role);
+    if (!site || !site.runs || !site.domes || !site.sheds || !site.tube || !lib || !lib.city) return null;
+    var city = lib.city, total = 0, i;
+    for (i = 0; i < site.runs.length; i++) total += site.runs[i][1];
+    if (total !== city.f.length) return null;
+    var parts = { core: null, domes: {}, colour: {} }, at = 0;
+    function take(n) { return { v: city.v, f: city.f.slice(at, at + n), c: city.c ? city.c.slice(at, at + n) : null }; }
+    function add(dst, m) {
+      if (!dst) return m;
+      dst.f = dst.f.concat(m.f);
+      if (dst.c) dst.c = dst.c.concat(m.c);
+      return dst;
+    }
+    for (i = 0; i < site.runs.length; i++) {
+      var k = site.runs[i][0], n = site.runs[i][1], m = take(n);
+      if (k === 'core') parts.core = add(parts.core, m);
+      else if (k.charAt(0) === 'd') parts.domes[k] = add(parts.domes[k], m);
+      else if (!parts.colour[k] && m.c && m.c.length) parts.colour[k] = m.c[0];
+      at += n;
+    }
+    CITY_PARTS[role] = parts;
+    return parts;
+  }
+
+  function citySizes(site) {
+    var d0 = site.domes[0], door = d0.mouth[3] - d0.mouth[2];
+    var sh = site.sheds[0], wall = sh[5] - sh[2];
+    var thin = Math.min(site.tube.w, door * 1.15);
+    return {
+      thin: thin,                                   // square, a shade over the door
+      trunkH: Math.min(wall * 0.92, thin * 1.35),   // under the eave
+      wall: wall,
+      roof: site.tube.roof || thin * 0.12,
+      unit: site.tube.len || thin * 2.5,            // the art's tube length: the city's own yardstick
+      ground: site.ground,
+      sink: thin * 0.5,
+      margin: thin * 0.5
+    };
+  }
+
+  /* 2D helpers for the layout */
+  function distPtSeg(px, py, ax, ay, bx, by) {
+    var dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+    var t = l2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2)) : 0;
+    return Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
+  }
+  function distPtBox(px, py, b) {
+    var dx = Math.max(b[0] - px, 0, px - b[2]), dy = Math.max(b[1] - py, 0, py - b[3]);
+    return Math.hypot(dx, dy);
+  }
+  /* does segment A-B pass through box b grown by pad (Liang-Barsky) */
+  function segHitsBox(ax, ay, bx, by, b, pad) {
+    var x0 = b[0] - pad, y0 = b[1] - pad, x1 = b[2] + pad, y1 = b[3] + pad;
+    var t0 = 0, t1 = 1, dx = bx - ax, dy = by - ay;
+    var p = [-dx, dx, -dy, dy], q = [ax - x0, x1 - ax, ay - y0, y1 - ay];
+    for (var i = 0; i < 4; i++) {
+      if (p[i] === 0) { if (q[i] < 0) return false; continue; }
+      var r = q[i] / p[i];
+      if (p[i] < 0) { if (r > t1) return false; if (r > t0) t0 = r; }
+      else { if (r < t0) return false; if (r < t1) t1 = r; }
+    }
+    return t0 <= t1;
+  }
+
+  /* One layout, in the city's own (art) frame. Null if this draw of the
+   * dice cannot be made to work. */
+  function cityLayout(site, rnd) {
+    var S = citySizes(site), stands = site.stands || [];
+    /* the four walls of each shed, in a seeded order */
+    var faces = [];
+    site.sheds.forEach(function (b, si) {
+      var cx = (b[0] + b[3]) / 2, cy = (b[1] + b[4]) / 2;
+      faces.push({ s: si, n: [1, 0], at: [b[3], cy], w: b[4] - b[1] },
+                 { s: si, n: [-1, 0], at: [b[0], cy], w: b[4] - b[1] },
+                 { s: si, n: [0, 1], at: [cx, b[4]], w: b[3] - b[0] },
+                 { s: si, n: [0, -1], at: [cx, b[1]], w: b[3] - b[0] });
+    });
+    for (var i = faces.length - 1; i > 0; i--) { var j = Math.floor(rnd() * (i + 1)), tmp = faces[i]; faces[i] = faces[j]; faces[j] = tmp; }
+    var domes = site.domes.slice().sort(function (a, b) { return b.r - a.r; });
+    for (var fi = 0; fi < faces.length; fi++) {
+      var F = faces[fi], n = F.n;
+      var tw = Math.min(F.w * 0.85, S.thin * 2);
+      var hubR = tw * 0.75;
+      var Lt = S.unit * (1.0 + rnd() * 1.2);
+      var B = [F.at[0] + n[0] * Lt, F.at[1] + n[1] * Lt];
+      var own = site.sheds[F.s];
+      /* the trunk leaves through clear ground: nothing but its own shed */
+      var others = stands.filter(function (b) {
+        return !(b[0] <= own[3] + 1e-4 && b[2] >= own[0] - 1e-4 && b[1] <= own[4] + 1e-4 && b[3] >= own[1] - 1e-4);
+      });
+      var ex = [F.at[0] + n[0] * 1e-4, F.at[1] + n[1] * 1e-4];
+      if (others.some(function (b) { return segHitsBox(ex[0], ex[1], B[0], B[1], b, tw / 2 + S.margin) || distPtBox(B[0], B[1], b) < hubR + S.margin; })) continue;
+      var placed = [], ok = true;
+      var base = Math.atan2(n[1], n[0]);
+      for (var di = 0; di < domes.length && ok; di++) {
+        var d = domes[di];
+        var mo = [d.mouth[0] - d.c[0], d.mouth[1] - d.c[1]], mOff = Math.hypot(mo[0], mo[1]);
+        var reach = Math.max(d.r * 1.08, mOff + S.thin * 0.6);
+        var got = null;
+        for (var k = 0; k < DOME_TRIES && !got; k++) {
+          /* A FAN ROUND THE DRUM, nearly all the way: five domes this size
+           * at this distance take about 80 degrees each, so a half-plane
+           * fan (the first try) refused every layout. The trunk's own side
+           * is kept clear by the checks below, not by the fan. A dome that
+           * keeps failing goes further out. */
+          var a = base + (rnd() * 2 - 1) * DOME_FAN;
+          var u = [Math.cos(a), Math.sin(a)];
+          var g = S.unit * (0.35 + rnd() * (1.0 + k / 15));
+          var D = hubR + g + mOff;
+          var C = [B[0] + u[0] * D, B[1] + u[1] * D];
+          var M = [C[0] - u[0] * mOff, C[1] - u[1] * mOff];
+          var bad = false;
+          /* the dome, clear of the slab's buildings (its own shed too), the
+           * trunk, and the domes and tubes already down */
+          for (var q = 0; q < stands.length && !bad; q++) if (distPtBox(C[0], C[1], stands[q]) < reach + S.margin) bad = true;
+          if (!bad && distPtSeg(C[0], C[1], F.at[0], F.at[1], B[0], B[1]) < reach + tw / 2 + S.margin) bad = true;
+          for (q = 0; q < placed.length && !bad; q++) {
+            var P = placed[q];
+            if (Math.hypot(C[0] - P.c[0], C[1] - P.c[1]) < reach + P.reach + S.margin) bad = true;
+            else if (distPtSeg(C[0], C[1], B[0], B[1], P.m[0], P.m[1]) < reach + S.thin / 2 + S.margin) bad = true;
+            /* and its tube, clear of the domes already down */
+            else if (distPtSeg(P.c[0], P.c[1], B[0], B[1], M[0], M[1]) < P.reach + S.thin / 2 + S.margin) bad = true;
+          }
+          /* its tube crosses no building */
+          for (q = 0; q < stands.length && !bad; q++) if (segHitsBox(B[0], B[1], M[0], M[1], stands[q], S.thin / 2 + S.margin)) bad = true;
+          if (bad) continue;
+          var rot = Math.atan2(-u[1], -u[0]) - Math.atan2(mo[1], mo[0]);
+          got = { k: d.k, c: C, art: d.c, rot: rot, m: M, u: u, reach: reach };
+        }
+        if (got) placed.push(got); else ok = false;
+      }
+      if (!ok) continue;
+      /* the pieces, as 2D boxes in the city frame, for placing on the site */
+      var pieces = [[site.core[0], site.core[1], site.core[3], site.core[4]],
+                    [B[0] - hubR, B[1] - hubR, B[0] + hubR, B[1] + hubR]];
+      function seg(A, Bq, w) { pieces.push([Math.min(A[0], Bq[0]) - w, Math.min(A[1], Bq[1]) - w, Math.max(A[0], Bq[0]) + w, Math.max(A[1], Bq[1]) + w]); }
+      seg(F.at, B, tw / 2);
+      placed.forEach(function (P) {
+        seg(B, P.m, S.thin / 2);
+        pieces.push([P.c[0] - P.reach, P.c[1] - P.reach, P.c[0] + P.reach, P.c[1] + P.reach]);
+      });
+      return { sizes: S, face: F, trunkW: tw, hubR: hubR, branch: B, domes: placed, pieces: pieces };
+    }
+    return null;
+  }
+
+  /* SQUARE TO THE SITE. Astra: "the building that the domes connect to
+   * must be at a right angle to the other structures' walls; humans don't
+   * just put dotted lines on the ground to denote a square and then put a
+   * big four sided building at an angle to the lines." The slab and its
+   * sheds turn only in quarter turns, so every wall runs with the pad's,
+   * the plates' and the markings'. The domes are round and keep any
+   * heading; the tubes run where the domes are. */
+  function squareTurn(rnd) { return Math.floor(rnd() * 4) * (Math.PI / 2); }
+
+  /* Every piece, turned and slid, clear of the site and close to it. */
+  function piecesFit(pieces, rot, x, y, cx, cy, blocks, near) {
+    var cs = Math.cos(rot), sn = Math.sin(rot), close = false;
+    for (var i = 0; i < pieces.length; i++) {
+      var p = pieces[i], lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+      var cr = [[p[0], p[1]], [p[2], p[1]], [p[0], p[3]], [p[2], p[3]]];
+      for (var k = 0; k < 4; k++) {
+        var dx = cr[k][0] - cx, dy = cr[k][1] - cy;
+        var X = cs * dx - sn * dy + x, Y = sn * dx + cs * dy + y;
+        if (Math.hypot(X, Y) > CITY_REACH) return false;
+        lo[0] = Math.min(lo[0], X); lo[1] = Math.min(lo[1], Y); hi[0] = Math.max(hi[0], X); hi[1] = Math.max(hi[1], Y);
+      }
+      var f = [lo[0], lo[1], hi[0], hi[1]];
+      for (var j = 0; j < blocks.length; j++) {
+        var b = blocks[j];
+        if (f[0] < b[2] && f[2] > b[0] && f[1] < b[3] && f[3] > b[1]) return false;
+      }
+      for (j = 0; j < near.length && !close; j++) if (boxGap(f, near[j]) <= CITY_NEAR) close = true;
+    }
+    return close;
+  }
+
+  /* -> { rot, x, y, cx, cy, layout }: a point p of the city's frame goes
+   * to R(rot) (p - c) + (x, y); `layout` places the domes and the tubes
+   * inside that frame (null: the city as the art drew it). Null when this
+   * port has no city to move. */
+  function citySpot(role, port) {
+    var site = citySite(role);
+    if (!site || !port) return null;
+    var memo = port._citySpot || (port._citySpot = {});
+    if (memo[role] !== undefined) return memo[role];
+    var c = site.city, cx = (c[0] + c[3]) / 2, cy = (c[1] + c[4]) / 2;
+    var home = { rot: 0, x: cx, y: cy, cx: cx, cy: cy, home: true, layout: null };
+    var seed = port.dressing && typeof port.dressing.citySeed === 'number'
+      ? port.dressing.citySeed : null;
+    if (seed === null) {
+      /* A port built without dressing (a fixture, an old save): a seed from
+       * its name, so it still has a place of its own and keeps it. */
+      var s = String(port.id || '') + '|' + String(port.name || ''), h = 2166136261;
+      for (var q = 0; q < s.length; q++) { h ^= s.charCodeAt(q); h = Math.imul(h, 16777619) >>> 0; }
+      seed = h / 4294967296;
+    }
+    var rnd = seeded(seed), blocks = cityBlocks(site);
+    var near = site.keep.concat(site.land);
+    var spot = null, t;
+    var canSplit = !!cityParts(role);
+    for (var at = 0; at < CITY_LAYOUTS && !spot && canSplit; at++) {
+      var lay = cityLayout(site, rnd);
+      if (!lay) continue;
+      var pcx = (site.core[0] + site.core[3]) / 2, pcy = (site.core[1] + site.core[4]) / 2;
+      for (t = 0; t < CITY_TRIES && !spot; t++) {
+        var rot = squareTurn(rnd);
+        var r = Math.sqrt(rnd()) * CITY_REACH, a = rnd() * Math.PI * 2;
+        var x = Math.cos(a) * r, y = Math.sin(a) * r;
+        if (piecesFit(lay.pieces, rot, x, y, pcx, pcy, blocks, near)) spot = { rot: rot, x: x, y: y, cx: pcx, cy: pcy, home: false, layout: lay };
+      }
+    }
+    /* none would go: the city whole, as the art laid it out */
+    var whole = [[c[0], c[1], c[3], c[4]]];
+    for (t = 0; t < CITY_TRIES && !spot; t++) {
+      var rot2 = squareTurn(rnd);
+      var r2 = Math.sqrt(rnd()) * CITY_REACH, a2 = rnd() * Math.PI * 2;
+      var x2 = Math.cos(a2) * r2, y2 = Math.sin(a2) * r2;
+      if (piecesFit(whole, rot2, x2, y2, cx, cy, blocks, near)) spot = { rot: rot2, x: x2, y: y2, cx: cx, cy: cy, home: false, layout: null };
+    }
+    memo[role] = spot || home;
+    return memo[role];
+  }
+
+  /* The tubes, the drum and the trunk, as one mesh in the city's frame. */
+  function cityNetwork(lay, parts) {
+    var S = lay.sizes, mesh = { v: [], f: [], c: [] };
+    var body = parts.colour.tube || '#8a909a', roof = parts.colour.roof || body, win = parts.colour.port || '!#ffcf8a';
+    var z0 = S.ground;
+    function run(A, B, w, h) {
+      var dx = B[0] - A[0], dy = B[1] - A[1], L = Math.hypot(dx, dy);
+      if (L < 1e-6) return;
+      var u = [dx / L, dy / L], p = [-u[1], u[0]];
+      var mx = (A[0] + B[0]) / 2, my = (A[1] + B[1]) / 2;
+      var hz = (h + S.sink) / 2;
+      addBox(mesh, [mx, my, z0 - S.sink + hz], [u[0] * L / 2, u[1] * L / 2, 0], [p[0] * w / 2, p[1] * w / 2, 0], [0, 0, hz], body);
+      addBox(mesh, [mx, my, z0 + h + S.roof / 2], [u[0] * L / 2, u[1] * L / 2, 0], [p[0] * w * 0.56, p[1] * w * 0.56, 0], [0, 0, S.roof / 2], roof);
+      /* lit ports down both sides, as the art's tubes have */
+      var nw = Math.max(1, Math.floor(L / (S.unit / 3)));
+      for (var i = 0; i < nw; i++) {
+        var t = (i + 0.5) / nw;
+        for (var sd = -1; sd <= 1; sd += 2) {
+          addBox(mesh, [A[0] + dx * t + p[0] * sd * w * 0.51, A[1] + dy * t + p[1] * sd * w * 0.51, z0 + h * 0.62],
+                 [u[0] * w * 0.14, u[1] * w * 0.14, 0], [p[0] * w * 0.02, p[1] * w * 0.02, 0], [0, 0, h * 0.1], win);
+        }
+      }
+    }
+    var F = lay.face, B = lay.branch, n = F.n;
+    /* the trunk: into the wall, by a little, so it reads as going in */
+    run([F.at[0] - n[0] * S.thin * 0.15, F.at[1] - n[1] * S.thin * 0.15], B, lay.trunkW, S.trunkH);
+    /* each dome's tube, closing over its door */
+    lay.domes.forEach(function (d) {
+      run(B, [d.m[0] + d.u[0] * S.thin * 0.15, d.m[1] + d.u[1] * S.thin * 0.15], S.thin, S.thin);
+    });
+    /* the branch point: a drum a little taller than the trunk, capped */
+    var hubH = S.trunkH * 1.2, hh = (hubH + S.sink) / 2;
+    merge(mesh, tube(10, lay.hubR, lay.hubR, hh, true), B[0], B[1], z0 - S.sink + hh, 1, body);
+    merge(mesh, tube(10, lay.hubR * 1.06, lay.hubR * 0.7, S.roof, true), B[0], B[1], z0 + hubH + S.roof, 1, roof);
+    return mesh;
+  }
+
+  /* What is drawn for a city, and where: each mesh with the placements
+   * that carry it from its own frame onto the site, innermost last. Used
+   * by drawPortCity and by the tests, so the two cannot disagree. */
+  function cityDrawList(role, port) {
+    var lib = libPort(role);
+    if (!lib || !lib.city || !lib.city.f.length) return [];
+    var sp = citySpot(role, port);
+    if (!sp) return [{ mesh: lib.city, chain: [] }];
+    var parts = sp.layout ? cityParts(role) : null;
+    if (!parts) return [{ mesh: lib.city, chain: [sp] }];
+    var lay = sp.layout;
+    var out = [{ mesh: parts.core, chain: [sp] },
+               { mesh: lay.net || (lay.net = cityNetwork(lay, parts)), chain: [sp] }];
+    lay.domes.forEach(function (d) {
+      out.push({ mesh: parts.domes[d.k], chain: [sp, { rot: d.rot, x: d.c[0], y: d.c[1], cx: d.art[0], cy: d.art[1] }] });
+    });
+    return out;
+  }
+  /* a point of a mesh, through its chain, into the site frame */
+  function cityPlace(chain, p) {
+    var q = [p[0], p[1], p[2]];
+    for (var i = chain.length - 1; i >= 0; i--) {
+      var s = chain[i], cs = Math.cos(s.rot), sn = Math.sin(s.rot), dx = q[0] - s.cx, dy = q[1] - s.cy;
+      q = [cs * dx - sn * dy + s.x, sn * dx + cs * dy + s.y, q[2]];
+    }
+    return q;
+  }
+
+  /* The frame that draws the city where citySpot put it: turned about the
+   * site's up axis and slid. A rotation about +z keeps the frame right-
+   * handed, so no face turns inside out. */
+  function cityFrame(frame, sp, km) {
+    var cs = Math.cos(sp.rot), sn = Math.sin(sp.rot);
+    var R = frame.right, U = frame.up;
+    var right = { x: R.x * cs + U.x * sn, y: R.y * cs + U.y * sn, z: R.z * cs + U.z * sn };
+    var up = { x: -R.x * sn + U.x * cs, y: -R.y * sn + U.y * cs, z: -R.z * sn + U.z * cs };
+    var ox = R.x * sp.x + U.x * sp.y - right.x * sp.cx - up.x * sp.cy;
+    var oy = R.y * sp.x + U.y * sp.y - right.y * sp.cx - up.y * sp.cy;
+    var oz = R.z * sp.x + U.z * sp.y - right.z * sp.cx - up.z * sp.cy;
+    return { pos: { x: frame.pos.x + ox * km, y: frame.pos.y + oy * km, z: frame.pos.z + oz * km },
+             right: right, up: up, fwd: frame.fwd };
+  }
+
+  /* Drawn by main.js beside drawStationModel, from outside: the city is on
+   * the surface, and from a berth or the hangar below it is not in view. */
+  function drawPortCity(ctx, cam, frame, port, radiusKm, sunDir, role, tint) {
+    if (!port || !port.surface || !frame) return false;
+    var list = cityDrawList(role, port);
+    if (!list.length) return false;
+    for (var i = 0; i < list.length; i++) {
+      var fr = frame;
+      for (var k = 0; k < list[i].chain.length; k++) fr = cityFrame(fr, list[i].chain[k], radiusKm);
+      paintPart(ctx, cam, fr, list[i].mesh, radiusKm, sunDir, tint);
+    }
+    return true;
+  }
+
+  /* Who is riding. main.js hands over the world positions of the hulls
+   * that might be on a car this frame (the player's, at least), each with
+   * how far its keel sits below its centre, in km. */
+  var MOVER_RIDERS = [];
+  function setMoverRiders(list) { MOVER_RIDERS = list || []; }
+
+  /* Where along its run a car should be: under the first rider found inside
+   * its ride, else where the art left it. In model units along `axis`. */
+  function moverPose(mv, frame, radiusKm) {
+    if (!mv.axis || !(mv.range[1] - mv.range[0] > 1e-6)) return 0;
+    var ax = mv.axis, mid = mv.mid;
+    var hx = (mv.max[0] - mv.min[0]) / 2, hy = (mv.max[1] - mv.min[1]) / 2, hz = (mv.max[2] - mv.min[2]) / 2;
+    var halfAlong = Math.abs(ax[0]) * hx + Math.abs(ax[1]) * hy + Math.abs(ax[2]) * hz;
+    var reach = Math.max(hx, hy, hz) * 1.6;
+    for (var i = 0; i < MOVER_RIDERS.length; i++) {
+      var r = MOVER_RIDERS[i];
+      if (!r || !r.pos) continue;
+      var dx = r.pos.x - frame.pos.x, dy = r.pos.y - frame.pos.y, dz = r.pos.z - frame.pos.z;
+      var p = [(dx * frame.right.x + dy * frame.right.y + dz * frame.right.z) / radiusKm,
+               (dx * frame.up.x + dy * frame.up.y + dz * frame.up.z) / radiusKm,
+               (dx * frame.fwd.x + dy * frame.fwd.y + dz * frame.fwd.z) / radiusKm];
+      var q = [p[0] - mid[0], p[1] - mid[1], p[2] - mid[2]];
+      var along = q[0] * ax[0] + q[1] * ax[1] + q[2] * ax[2];
+      var lat = [q[0] - ax[0] * along, q[1] - ax[1] * along, q[2] - ax[2] * along];
+      var latD = Math.sqrt(lat[0] * lat[0] + lat[1] * lat[1] + lat[2] * lat[2]);
+      if (along < mv.range[0] - halfAlong - reach || along > mv.range[1] + halfAlong + reach) continue;
+      if (latD > reach) continue;
+      /* The car's TOP under the keel. Model +z is up in every port frame,
+       * and a car keeps level, so on anything steeper than a gentle ramp
+       * the pose is solved on z; on the flat it follows along the run. */
+      var keel = (r.keelKm || 0) / radiusKm, s;
+      if (Math.abs(ax[2]) > 0.3) s = (p[2] - keel - mv.max[2]) / ax[2];
+      else s = along;
+      return Math.max(mv.range[0], Math.min(mv.range[1], s));
+    }
+    return 0;
+  }
+
+  function drawMovers(ctx, cam, frame, radiusKm, sunDir, model, tint) {
+    var lib = libPort(model);
+    var list = lib && lib.movers;
+    if (!list || !list.length) return;
+    for (var i = 0; i < list.length; i++) {
+      var mv = list[i];
+      var s = moverPose(mv, frame, radiusKm);
+      var fr = (s && mv.axis) ? shiftFrame(frame, mv.axis[0] * s, mv.axis[1] * s, mv.axis[2] * s, radiusKm) : frame;
+      paintPart(ctx, cam, fr, mv.mesh, radiusKm, sunDir, tint);
+    }
   }
 
   function portIds() {
@@ -1435,6 +2039,22 @@
    *
    * The fallback is a courier-ish box rather than zero, because "we do not
    * know how big it is" must not read as "it fits anywhere". */
+  /* How far the stand's lift puts its plating above the cast deck, as a
+   * fraction of a hull height — see berthDressing for why it is lifted at
+   * all. Module-level because the generator has to agree with it: a stand
+   * raised here and a hull parked by the old number is a ship standing IN
+   * its own pad, which is exactly what Astra saw. */
+  var STAND_LIFT = 0.66;
+
+  /* THE TOP OF THE STAND, in km above the cast deck: the lift plus the
+   * plate (padC + padT in berthDressing, in hull lengths). Gen.berthOffset
+   * adds this, so the hull rests on the pad rather than in it. */
+  function standTopKm() {
+    var h = hullSpan('courier');
+    var lift = STAND_LIFT * ((h && h.h) || 0);
+    return lift + (0.012 + 0.004 + 0.012) * SHIP_LEN;
+  }
+
   function hullSpan(kind) {
     var id = HULL_ASSIGN[kind] || HULL_ASSIGN.courier;
     var m = global.HullLib && global.HullLib[id];
@@ -3445,8 +4065,47 @@
    * without a second code path. */
   function gearPhase(role, travel) {
     var t = Math.max(0, Math.min(1, travel));
-    var p = role === 'door' ? t / 0.45 : (t - 0.35) / 0.65;
+    var p = role === 'door' ? t / 0.45 : (t - 0.5) / 0.5;
     return Math.max(0, Math.min(1, p));
+  }
+
+  /* FOLD, THEN LIFT (Astra, 2026-10-21). A leg is two parts now: the upper
+   * `strut` hangs from the hinge and the lower `shin` hangs from the knee.
+   * Going up, the shin folds back alongside the strut over the first half
+   * of the leg's travel, and then the folded pair pulls straight up into
+   * the hull by `lift` over the second half — after which the door, whose
+   * slice of the travel begins only once the leg is home, closes behind
+   * it. Coming down is the same thing read backwards. Each half eases in
+   * and out, so a leg pauses for a beat at the fold rather than snapping.
+   * A part with no `lift` (an older converted hull) turns by `stow` over
+   * the leg's whole travel, as every leg used to.
+   *
+   * A leg with no room to pull up inside (the runner's wing legs, under a
+   * wing too thin to hold them) carries `swing` and `hinge` instead: its
+   * second half swings the folded pair flat about the hinge. Both turns are
+   * about the same axis, so the part's frame simply turns by the sum, and
+   * its pivot is carried round the hinge by the swing.
+   *
+   * Returned: `ang` the part's total turn, `piv` where its pivot is now. */
+  function ease(x) { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); }
+  function gearPose(p, travel) {
+    if (p.role === 'door') return { ang: p.stow * (1 - gearPhase('door', travel)), piv: p.pivot };
+    var u = 1 - gearPhase(p.role, travel);
+    if (!p.lift) return { ang: p.stow * u, piv: p.pivot };
+    var second = ease((u - 0.5) / 0.5), ang = p.stow * ease(u / 0.5), piv = p.pivot;
+    if (p.swing && p.hinge) {
+      var sw = p.swing * second, h = p.hinge;
+      var r = rotVec([piv[0] - h[0], piv[1] - h[1], piv[2] - h[2]], p.axis, sw);
+      return { ang: ang + sw, piv: [h[0] + r[0], h[1] + r[1], h[2] + r[2]] };
+    }
+    var l = p.lift;
+    return { ang: ang, piv: [piv[0] + l[0] * second, piv[1] + l[1] * second, piv[2] + l[2] * second] };
+  }
+  function rotVec(v, k, a) {
+    var c = Math.cos(a), s = Math.sin(a), d = k[0] * v[0] + k[1] * v[1] + k[2] * v[2];
+    return [v[0] * c + (k[1] * v[2] - k[2] * v[1]) * s + k[0] * d * (1 - c),
+            v[1] * c + (k[2] * v[0] - k[0] * v[2]) * s + k[1] * d * (1 - c),
+            v[2] * c + (k[0] * v[1] - k[1] * v[0]) * s + k[2] * d * (1 - c)];
   }
 
   /* The ship's basis, rotated about `axis` by `ang`, with its origin moved
@@ -3542,14 +4201,14 @@
 
     for (var i = 0; i < parts.length; i++) {
       var p = parts[i];
-      var ang = p.stow * (1 - gearPhase(p.role, travel));
+      var pose = gearPose(p, travel), ang = pose.ang, q = pose.piv;
 
       /* Pivot and axis are given in the hull's own axes, so both are
        * resolved against the ship's CURRENT attitude every frame rather
        * than stored as world points — the same rule the muzzles follow, and
        * for the same reason: at 5 km/s a frozen world point detaches
        * visibly within one frame. */
-      var a = p.axis, q = p.pivot;
+      var a = p.axis;
       var k = { x: R.x * a[0] + U.x * a[1] + F.x * a[2],
                 y: R.y * a[0] + U.y * a[1] + F.y * a[2],
                 z: R.z * a[0] + U.z * a[1] + F.z * a[2] };
@@ -3589,7 +4248,7 @@
     var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     for (var i = 0; i < parts.length; i++) {
       var p = parts[i];
-      var ang = p.stow * (1 - gearPhase(p.role, travel));
+      var pose = gearPose(p, travel), ang = pose.ang, piv = pose.piv;
       var a = p.axis;
       var k = { x: a[0], y: a[1], z: a[2] };
       var c = Math.cos(ang), s = Math.sin(ang), kd = 1 - c;
@@ -3598,9 +4257,9 @@
       var F = rotAxis(HULL_F, k, c, s, kd);
       for (var v = 0; v < p.mesh.v.length; v++) {
         var q = p.mesh.v[v];
-        var w = [p.pivot[0] + R.x * q[0] + U.x * q[1] + F.x * q[2],
-                 p.pivot[1] + R.y * q[0] + U.y * q[1] + F.y * q[2],
-                 p.pivot[2] + R.z * q[0] + U.z * q[1] + F.z * q[2]];
+        var w = [piv[0] + R.x * q[0] + U.x * q[1] + F.x * q[2],
+                 piv[1] + R.y * q[0] + U.y * q[1] + F.y * q[2],
+                 piv[2] + R.z * q[0] + U.z * q[1] + F.z * q[2]];
         for (var b = 0; b < 3; b++) {
           if (w[b] < lo[b]) lo[b] = w[b];
           if (w[b] > hi[b]) hi[b] = w[b];
@@ -4144,8 +4803,18 @@
    * this frame, never rebuilding. A station's whole kit is a few hundred
    * triangles; a frame queues at most four of its pieces. */
   var LIGHT_KITS = {};
-  var LAMP_BEACON = 0.016;          // station radii, half-size of a beacon box
-  var LAMP_STRING = 0.0075;         // ...and of an approach lamp
+  var LAMP_BEACON_FAR = 0.016;      // station radii, half-size of a beacon box
+  var LAMP_STRING_FAR = 0.0075;     // ...and of an approach lamp
+  /* Up close a lamp is a lamp-sized thing. The far sizes are chosen to be
+   * read from tens of kilometres — 64 m boxes on a 4 km station — and with
+   * the cutaway putting the camera right beside the hull, the beacons
+   * filled the corner of the screen as great glowing yellow blocks. So
+   * inside a few station radii the kit is swapped for one whose beacons
+   * are a few metres across. Two sizes rather than a continuous scale:
+   * each size is a cached mesh, and a scale that moved with the camera
+   * would rebuild the kit every frame of a zoom. */
+  var LAMP_NEAR_KM = 0.004;         // half-size of a beacon up close
+  var LAMP_NEAR_RANGE = 2.5;        // station radii from the centre
   var STRING_STEP = 0.07;           // spacing along the approach
   var STRING_HALF = 0.05;           // each row's offset from the centreline
   var CHASE_PHASES = 4;
@@ -4154,8 +4823,13 @@
     addBox(mesh, p, [half, 0, 0], [0, half, 0], [0, 0, half], color);
   }
 
-  function stationLightKit(port, model) {
-    var kit = LIGHT_KITS[model];
+  /* `scale` shrinks every lamp about its own centre (see drawStationLights
+   * for why there are two sizes); the kit is cached per model and size. */
+  function stationLightKit(port, model, scale) {
+    scale = scale || 1;
+    var kitKey = model + '|' + scale.toFixed(4);
+    var kit = LIGHT_KITS[kitKey];
+    var LAMP_BEACON = LAMP_BEACON_FAR * scale, LAMP_STRING = LAMP_STRING_FAR * scale;
     if (kit) return kit;
     var hull = stationMeshes()[model];
     if (!hull) { var lp = libPort(model); hull = lp && lp.shell; }
@@ -4226,7 +4900,7 @@
       }
       chase[b] = phases;
     }
-    kit = LIGHT_KITS[model] = { strobe: strobe, steady: steady, top: topLamp,
+    kit = LIGHT_KITS[kitKey] = { strobe: strobe, steady: steady, top: topLamp,
                                 strings: strings, chase: chase };
     return kit;
   }
@@ -4236,7 +4910,10 @@
    * turn the flashing into a blur under time warp. `chaseBerth` is the berth
    * you are cleared for at THIS station, or null. */
   function drawStationLights(ctx, cam, frame, port, model, radiusKm, sunDir, t, chaseBerth) {
-    var kit = stationLightKit(port, model);
+    var near = cam && cam.eye && frame && frame.pos &&
+               V.dist(cam.eye, frame.pos) < radiusKm * LAMP_NEAR_RANGE;
+    var scale = near ? Math.min(1, LAMP_NEAR_KM / (LAMP_BEACON_FAR * radiusKm)) : 1;
+    var kit = stationLightKit(port, model, scale);
     if (!kit) return;
     var draw = function (m) {
       if (!m || !m.f.length) return;
@@ -4253,6 +4930,156 @@
        * steps down as time goes on. Eight steps a second. */
       var step = Math.floor(t * 8) % CHASE_PHASES;
       draw(kit.chase[chaseBerth][(CHASE_PHASES - step) % CHASE_PHASES]);
+    }
+  }
+
+  /* ---- BUSY SPACE: the small craft that live round a dock ----------------
+   *
+   * One of the four things Astra picked for the space near a station once
+   * the RX 540 arrived: "busy space". A dock with nothing moving round it
+   * reads as a model on a stand. So each one keeps a handful of small craft
+   * of its own — shuttles working the approach lanes, in to the doors and
+   * out again, and work drones circling the hull on tilted loops.
+   *
+   * ON RAILS, BY CONSTRUCTION. Every craft's position is a closed-form
+   * function of sim time, like the traffic and the patrols (doctrine 3):
+   * nothing is integrated, nothing is saved, and a dock you come back to
+   * after an hour has its shuttles where an hour of flying would have put
+   * them. SEEDED FROM THE PORT'S OWN IDENTITY in a string of its own
+   * ('tenders|...'), so it consumes no draw anything else relies on
+   * (doctrine 2) and the same dock has the same craft every visit.
+   *
+   * VISUAL ONLY, and near tier only (main.js stationTier) — the same terms
+   * as the outworks. They are not contacts: you cannot hail, target or hit
+   * them, and they do not occupy berths. They keep to the approach lines
+   * the lamps already mark and to loops outside the hull, which is where
+   * a pilot expects to find small craft and nowhere else. */
+  var TENDER_CACHE = {};
+  var TENDER_MESH = {};
+
+  function tenderMesh(kind) {
+    if (TENDER_MESH[kind]) return TENDER_MESH[kind];
+    var m = emptyMesh(); m.c = [];
+    if (kind === 'drone') {
+      /* A pod with two outrigger thrusters: unit size, +z forward. */
+      addBox(m, [0, 0, 0], [0.28, 0, 0], [0, 0.22, 0], [0, 0, 0.42], '#c9a440');
+      addBox(m, [0.42, 0, -0.1], [0.12, 0, 0], [0, 0.1, 0], [0, 0, 0.22], '#5d6168');
+      addBox(m, [-0.42, 0, -0.1], [0.12, 0, 0], [0, 0.1, 0], [0, 0, 0.22], '#5d6168');
+      addBox(m, [0, 0.24, 0.1], [0.06, 0, 0], [0, 0.04, 0], [0, 0, 0.06], '!#ffb347');
+      addBox(m, [0.42, 0, -0.34], [0.07, 0, 0], [0, 0.06, 0], [0, 0, 0.03], '!#7ed3ff');
+      addBox(m, [-0.42, 0, -0.34], [0.07, 0, 0], [0, 0.06, 0], [0, 0, 0.03], '!#7ed3ff');
+    } else {
+      /* A boxy shuttle: hull, cab, engine block, nav lamps port and
+       * starboard, a white tail lamp. */
+      addBox(m, [0, 0, 0], [0.22, 0, 0], [0, 0.16, 0], [0, 0, 0.5], '#aab2bd');
+      addBox(m, [0, 0.12, 0.34], [0.16, 0, 0], [0, 0.07, 0], [0, 0, 0.14], '#2b3440');
+      addBox(m, [0, 0, -0.52], [0.18, 0, 0], [0, 0.12, 0], [0, 0, 0.06], '#4a515c');
+      addBox(m, [0, 0, -0.6], [0.12, 0, 0], [0, 0.08, 0], [0, 0, 0.02], '!#ff9a3c');
+      addBox(m, [-0.24, 0, 0.1], [0.03, 0, 0], [0, 0.03, 0], [0, 0, 0.03], '!#ff3b30');
+      addBox(m, [0.24, 0, 0.1], [0.03, 0, 0], [0, 0.03, 0], [0, 0, 0.03], '!#38ff6a');
+      addBox(m, [0, 0.17, -0.45], [0.03, 0, 0], [0, 0.03, 0], [0, 0, 0.03], '!#fff6dc');
+    }
+    TENDER_MESH[kind] = m;
+    return m;
+  }
+
+  /* The schedule for one dock: paths in the model's own units (station
+   * radii), craft sizes in km — a shuttle is a shuttle at any dock. */
+  function stationTenders(port, model) {
+    var key = (port.id || port.name) + '|' + model;
+    if (TENDER_CACHE[key] !== undefined) return TENDER_CACHE[key];
+    var Gen = global.Gen;
+    var rng = new RNG('tenders|' + port.name + '|' + port.id + '|' + model);
+    var list = [];
+    /* Shuttles on the lanes the lamps mark. */
+    var berths = (Gen && Gen.modelledBerths) ? Gen.modelledBerths(port) : null;
+    var lanes = [];
+    for (var b = 0; berths && b < berths.length; b++) {
+      var ap = Gen.berthApertures(port, b);
+      if (!ap || !ap.reachable || !ap.entry) continue;
+      var door = [ap.mid[0] + ap.normal[0] * (ap.gate || 0),
+                  ap.mid[1] + ap.normal[1] * (ap.gate || 0),
+                  ap.mid[2] + ap.normal[2] * (ap.gate || 0)];
+      lanes.push({ door: door, e: ap.entry,
+                   reach: Math.min(2.2, Math.max(1.0, (ap.exit || 0.4) + 1.1)) });
+    }
+    var nLane = Math.min(lanes.length, rng.int(1, 3));
+    for (var i = 0; i < nLane; i++) {
+      var ln = lanes[rng.int(0, lanes.length - 1)];
+      list.push({ kind: 'shuttle', lane: ln,
+                  period: rng.range(70, 120), phase: rng.next(),
+                  size: rng.range(0.015, 0.022),          // km — a work shuttle
+                  offset: rng.range(-0.04, 0.04) });
+    }
+    /* Drones on tilted loops round the hull. */
+    var nDrone = rng.int(2, 4);
+    for (var d = 0; d < nDrone; d++) {
+      var tilt = rng.range(-0.9, 0.9), node = rng.angle();
+      list.push({ kind: 'drone', radius: rng.range(1.15, 1.55),
+                  period: rng.range(160, 320) * (rng.chance(0.5) ? 1 : -1),
+                  phase: rng.next(), tilt: tilt, node: node,
+                  size: rng.range(0.005, 0.008) });      // km
+    }
+    TENDER_CACHE[key] = list;
+    return list;
+  }
+
+  /* Where a craft is at time t and which way it points, model units. */
+  function tenderPose(c, t) {
+    if (c.kind === 'shuttle') {
+      /* In, hold at the doors, out, hold off the end of the lane. Eased at
+       * both ends so it decelerates into the hold rather than stopping
+       * dead — the one thing that makes a small craft read as flown. */
+      var u = ((t / c.period + c.phase) % 1 + 1) % 1;
+      var ease = function (x) { return x * x * (3 - 2 * x); };
+      var k, inbound;
+      if (u < 0.42) { k = 1 - ease(u / 0.42); inbound = true; }
+      else if (u < 0.5) { k = 0; inbound = true; }
+      else if (u < 0.92) { k = ease((u - 0.5) / 0.42); inbound = false; }
+      else { k = 1; inbound = false; }
+      var ln = c.lane, e = ln.e;
+      var dist = 0.12 + k * ln.reach;
+      var side = Math.abs(e[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+      var x = [e[1] * side[2] - e[2] * side[1], e[2] * side[0] - e[0] * side[2],
+               e[0] * side[1] - e[1] * side[0]];
+      var xl = Math.sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]) || 1;
+      var p = [ln.door[0] + e[0] * dist + x[0] / xl * c.offset,
+               ln.door[1] + e[1] * dist + x[1] / xl * c.offset,
+               ln.door[2] + e[2] * dist + x[2] / xl * c.offset];
+      /* Nose to the door on the way in, nose out on the way out. */
+      var f = inbound ? [-e[0], -e[1], -e[2]] : [e[0], e[1], e[2]];
+      return { p: p, f: f, burn: (u < 0.42 || (u > 0.5 && u < 0.92)) };
+    }
+    var a = (t / c.period + c.phase) * Math.PI * 2;
+    var ca = Math.cos(a), sa = Math.sin(a);
+    var cn = Math.cos(c.node), sn = Math.sin(c.node);
+    var ct = Math.cos(c.tilt), st = Math.sin(c.tilt);
+    /* A circle in the x-y plane, tilted about x, then turned about z. */
+    var lx = ca, ly = sa * ct, lz = sa * st;
+    var p2 = [c.radius * (lx * cn - ly * sn), c.radius * (lx * sn + ly * cn), c.radius * lz];
+    var dx = -sa, dy = ca * ct, dz = ca * st;
+    var dir = c.period > 0 ? 1 : -1;
+    var f2 = [dir * (dx * cn - dy * sn), dir * (dx * sn + dy * cn), dir * dz];
+    return { p: p2, f: f2, burn: true };
+  }
+
+  function drawStationTraffic(ctx, cam, frame, port, model, radiusKm, sunDir, t) {
+    if (!gpuWorld()) return;                 // a 2D canvas has enough to draw
+    var list = stationTenders(port, model);
+    if (!list || !list.length) return;
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i], pose = tenderPose(c, t);
+      var w = localToWorld(frame, pose.p[0] * radiusKm, pose.p[1] * radiusKm,
+                           pose.p[2] * radiusKm);
+      var fw = { x: frame.right.x * pose.f[0] + frame.up.x * pose.f[1] + frame.fwd.x * pose.f[2],
+                 y: frame.right.y * pose.f[0] + frame.up.y * pose.f[1] + frame.fwd.y * pose.f[2],
+                 z: frame.right.z * pose.f[0] + frame.up.z * pose.f[1] + frame.fwd.z * pose.f[2] };
+      fw = V.norm(fw);
+      var upRef = Math.abs(V.dot(fw, frame.fwd)) < 0.95 ? frame.fwd : frame.right;
+      var right = V.norm(V.cross(upRef, fw));
+      var up = V.cross(fw, right);
+      var cf = { pos: w, right: right, up: up, fwd: fw };
+      global.GLWorld.queueMesh(cam, cf, tenderMesh(c.kind), c.size, sunDir);
     }
   }
 
@@ -4454,6 +5281,418 @@
     mesh = accented(mesh);
     if (gpuWorld() && global.GLWorld.queueMesh(cam, frame, mesh, radiusKm, sunDir)) return;
     paintMesh(ctx, cam, frame, mesh, radiusKm, sunDir, OUT_PLATE);
+  }
+
+  /* ---- THE CUT FACE: what the beam went through ------------------------
+   *
+   * Astra: "make the cut look like it's slicing through sections of cable
+   * and panels as well, so it looks like a laser literally CUT AWAY the
+   * station bit that you're looking through" — "use greeblies and
+   * scaffolding for that effect".
+   *
+   * The shader opens the hole; this furnishes its edge. A station's plates
+   * are a skin with nothing behind them, so a clean cut through one is a
+   * paper-thin line, and that is what makes it read as a rendering trick
+   * rather than as metal that was there and has been burnt away. What sells
+   * a cutaway drawing is the INSIDE of the wall: layered plate, cable runs
+   * sheared off, the frame the plating hung on.
+   *
+   * WHERE THE EDGE IS, found rather than guessed. The cut's boundary is the
+   * cone's surface, so CUT_RAYS lines are run down that surface from the
+   * eye's end to the ship's, and every station triangle one of them
+   * crosses is a place the beam went through a wall. That is where a site
+   * goes. A line that crosses a plate nearly edge-on — a floor running
+   * along the line of sight — is skipped, for the same reason the shader
+   * skips its band there: the cut runs ALONG that surface, not through it,
+   * and stubs sticking out of it would line the floor like a runway.
+   *
+   * ONLY ON THE GPU. The geometry is ordinary boxes, but the hole they sit
+   * round only exists in the fragment shader; on the 2D renderer there is
+   * no hole and these would be cables hanging in a wall.
+   *
+   * COST. The triangle list is flattened once per model. A rebuild is
+   * CUT_RAYS segment casts against the triangles inside the cone's box, and
+   * happens only when the cone has moved by more than CUT_REBUILD of its own
+   * length — so zooming rebuilds a few times a second and a parked camera
+   * never does. The old mesh's buffers are handed back to the card on every
+   * rebuild (GL.releaseMesh), so a long zoom does not leak video memory. */
+  var CUT_RAYS = 48;
+  /* Where along the cone the edge starts being furnished. The eye's end of
+   * the cut is beside or behind the lens: a site there is either off the
+   * screen or a glowing block the size of the screen (measured — the first
+   * pass filled a corner with them). Starting a third of the way down also
+   * shrinks the box the triangles are filtered against, which is most of
+   * the rebuild's cost. */
+  var CUT_FROM = 0.5;
+  var CUT_PER_RAY = 6;         // walls one line may cross before we stop caring
+  var CUT_MAX_SITES = 200;
+  var CUT_FAR = 3;             // station radii, eye to ship
+  var CUT_REBUILD = 0.015;     // of the eye-to-ship distance
+  var CUT_TRIS = {};
+  var CUT_LAST = { key: null, mesh: null };
+
+  var CUT_PLATE = ['#6b7480', '#4a515c', '#8a929c', '#5d6168'];
+  var CUT_CABLE = ['#c0392b', '#e2b714', '#2e6fd8', '#2c9e4b', '#1c1c1c', '#d07a2a'];
+  var CUT_FRAME = '#9aa1a8';
+  var CUT_HOT = '!#ff7a1a';    // the lip, still glowing
+  var CUT_CORE = '!#ffb347';   // a severed conductor's end
+
+  function cutTris(model) {
+    if (CUT_TRIS[model]) return CUT_TRIS[model];
+    var lib = libPort(model);
+    if (!lib) return null;                 // procedural, or not loaded yet: ask again
+    var P = [], N = [], keys = ['shell', 'interior', 'spin'];
+    for (var k = 0; k < keys.length; k++) {
+      var m = lib[keys[k]];
+      if (!m || !m.f || !m.v) continue;
+      for (var i = 0; i < m.f.length; i++) {
+        var tri = m.f[i];
+        for (var j = 1; j + 1 < tri.length; j++) {
+          var a = m.v[tri[0]], b = m.v[tri[j]], c = m.v[tri[j + 1]];
+          if (!a || !b || !c) continue;
+          var ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+          var wx = c[0] - a[0], wy = c[1] - a[1], wz = c[2] - a[2];
+          var nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+          var nl = Math.sqrt(nx * nx + ny * ny + nz * nz);
+          if (!(nl > 1e-14)) continue;
+          P.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+          N.push(nx / nl, ny / nl, nz / nl);
+        }
+      }
+    }
+    if (!N.length) return null;
+    CUT_TRIS[model] = { p: new Float32Array(P), n: new Float32Array(N), count: N.length / 3 };
+    return CUT_TRIS[model];
+  }
+
+  /* Where along o + d*t, 0 < t < 1, the segment meets triangle `i`, or -1.
+   * Möller–Trumbore, both faces — the art's winding is not to be trusted. */
+  function cutHit(T, i, o, d) {
+    var p = T.p, b = i * 9;
+    var ax = p[b], ay = p[b + 1], az = p[b + 2];
+    var e1x = p[b + 3] - ax, e1y = p[b + 4] - ay, e1z = p[b + 5] - az;
+    var e2x = p[b + 6] - ax, e2y = p[b + 7] - ay, e2z = p[b + 8] - az;
+    var px = d[1] * e2z - d[2] * e2y, py = d[2] * e2x - d[0] * e2z, pz = d[0] * e2y - d[1] * e2x;
+    var det = e1x * px + e1y * py + e1z * pz;
+    if (Math.abs(det) < 1e-18) return -1;
+    var inv = 1 / det;
+    var tx = o[0] - ax, ty = o[1] - ay, tz = o[2] - az;
+    var u = (tx * px + ty * py + tz * pz) * inv;
+    if (u < 0 || u > 1) return -1;
+    var qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x;
+    var v = (d[0] * qx + d[1] * qy + d[2] * qz) * inv;
+    if (v < 0 || u + v > 1) return -1;
+    var t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+    return (t > 0 && t < 1) ? t : -1;
+  }
+
+  function v3add(a, b, k) { return [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k]; }
+  function v3sc(a, k) { return [a[0] * k, a[1] * k, a[2] * k]; }
+  function v3dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+  function v3cross(a, b) {
+    return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  }
+  function v3norm(a) {
+    var l = Math.sqrt(v3dot(a, a));
+    return l > 1e-14 ? [a[0] / l, a[1] / l, a[2] / l] : null;
+  }
+
+  /* One place the beam went through a wall. P is on the wall, n is the
+   * wall's normal, e runs along the cut, inw points into the hole, s is
+   * the site's scale and halfE half its share of the cut's length. */
+  function cutSite(mesh, P, n, e, inw, s, halfE, rng, scaffold) {
+    var i;
+    /* The lip: a strip of plate still glowing where the beam left it. */
+    addBox(mesh, v3add(P, inw, 0.08 * s), v3sc(e, halfE), v3sc(n, 0.14 * s),
+           v3sc(inw, 0.08 * s), CUT_HOT);
+    /* The wall in section: two or three skins of plate, each sheared at a
+     * different depth, so the edge is ragged instead of ruled. */
+    var layers = rng.int(2, 3);
+    for (i = 0; i < layers; i++) {
+      var off = (i - (layers - 1) / 2) * 0.45 * s;
+      var out = rng.range(0.2, 1.1) * s;
+      var w = halfE * rng.range(0.5, 1.0);
+      var base = v3add(v3add(P, n, off), e, rng.range(-0.3, 0.3) * halfE);
+      addBox(mesh, v3add(base, inw, out * 0.5), v3sc(e, w), v3sc(n, 0.07 * s),
+             v3sc(inw, out * 0.5), rng.pick(CUT_PLATE));
+      addBox(mesh, v3add(base, inw, out), v3sc(e, w), v3sc(n, 0.075 * s),
+             v3sc(inw, 0.04 * s), CUT_HOT);
+    }
+    /* Cable runs, cut off where they crossed the beam: insulation in the
+     * colours a loom actually comes in, and a hot copper end on each. */
+    var nc = rng.int(2, 5);
+    for (i = 0; i < nc; i++) {
+      var at = v3add(v3add(P, e, rng.range(-0.8, 0.8) * halfE), n, rng.range(-0.5, 0.5) * s);
+      var dir = v3norm(v3add(v3add(inw, e, rng.range(-0.35, 0.35)), n, rng.range(-0.35, 0.35)));
+      if (!dir) continue;
+      var side = v3norm(v3cross(dir, n)) || e;
+      var side2 = v3cross(dir, side);
+      var len = rng.range(0.5, 2.4) * s, th = rng.range(0.05, 0.11) * s;
+      addBox(mesh, v3add(at, dir, len * 0.5), v3sc(dir, len * 0.5), v3sc(side, th),
+             v3sc(side2, th), rng.pick(CUT_CABLE));
+      addBox(mesh, v3add(at, dir, len), v3sc(dir, th * 0.6), v3sc(side, th * 0.8),
+             v3sc(side2, th * 0.8), CUT_CORE);
+    }
+    /* And every so often the frame the plating hung on: two rails along the
+     * cut, standing proud of the lip on struts, with a brace across. */
+    if (scaffold) {
+      var reach = rng.range(0.9, 1.6) * s, bar = 0.06 * s;
+      for (var sd = -1; sd <= 1; sd += 2) {
+        addBox(mesh, v3add(v3add(P, n, sd * 0.6 * s), inw, reach), v3sc(e, halfE),
+               v3sc(n, bar), v3sc(inw, bar), CUT_FRAME);
+        for (var qq = -1; qq <= 1; qq += 2) {
+          addBox(mesh, v3add(v3add(v3add(P, e, qq * halfE * 0.8), n, sd * 0.6 * s), inw, reach * 0.5),
+                 v3sc(e, bar), v3sc(n, bar), v3sc(inw, reach * 0.5), CUT_FRAME);
+        }
+      }
+      var diag = v3norm(v3add(v3sc(e, halfE * 1.6), n, 1.2 * s));
+      if (diag) {
+        var dl = Math.sqrt(halfE * halfE * 2.56 + 1.44 * s * s) * 0.5;
+        addBox(mesh, v3add(P, inw, reach), v3sc(diag, dl),
+               v3sc(inw, bar), v3sc(v3norm(v3cross(diag, inw)) || n, bar), CUT_FRAME);
+      }
+    }
+  }
+
+  /* The greeble mesh for a cut, in MODEL units. S and E are the ship and
+   * the eye, rS and rE the cone's radius at each, `metre` one metre. */
+  function cutGreebleMesh(model, S, E, rS, rE, metre) {
+    var A = [S[0] - E[0], S[1] - E[1], S[2] - E[2]];
+    var L = Math.sqrt(v3dot(A, A));
+    if (!(L > 1e-9)) return null;
+    var q = Math.max(L * CUT_REBUILD, metre * 2);
+    var key = [model, Math.round(E[0] / q), Math.round(E[1] / q), Math.round(E[2] / q),
+               Math.round(S[0] / q), Math.round(S[1] / q), Math.round(S[2] / q),
+               Math.round(rE / q), Math.round(L / q)].join('|');
+    if (CUT_LAST.key === key) return CUT_LAST.mesh;
+    /* NOTHING TO FURNISH FROM FAR AWAY. Past a few station radii the cut
+     * edge is a few pixels across, and the cone is wide enough to take in
+     * the whole station — measured on the RX 540, a rebuild out there cast
+     * against every triangle in the model and took 277 ms. The hole is
+     * still cut; it just stops being dressed. */
+    if (L > CUT_FAR) return null;
+    var T = cutTris(model);
+    if (!T) return null;
+    var clock = (typeof performance !== 'undefined') ? performance : Date;
+    var t0 = clock.now();
+
+    /* Furnish only from CUT_FROM down to the ship: move the start there. */
+    E = v3add(E, A, CUT_FROM);
+    rE = rE + (rS - rE) * CUT_FROM;
+    A = [S[0] - E[0], S[1] - E[1], S[2] - E[2]];
+    L = Math.sqrt(v3dot(A, A));
+    var ax = v3sc(A, 1 / L);
+    var a = v3norm(Math.abs(ax[0]) < 0.9 ? v3cross(ax, [1, 0, 0]) : v3cross(ax, [0, 1, 0]));
+    var b = v3cross(ax, a);
+
+    /* Only the triangles inside the cone's box are worth casting against. */
+    var lo = [], hi = [], k, i;
+    for (k = 0; k < 3; k++) {
+      lo[k] = Math.min(E[k] - rE, S[k] - rS);
+      hi[k] = Math.max(E[k] + rE, S[k] + rS);
+    }
+    var cand = [];
+    for (i = 0; i < T.count; i++) {
+      var o9 = i * 9, out = false;
+      for (k = 0; k < 3; k++) {
+        var p0 = T.p[o9 + k], p1 = T.p[o9 + 3 + k], p2 = T.p[o9 + 6 + k];
+        if (Math.max(p0, p1, p2) < lo[k] || Math.min(p0, p1, p2) > hi[k]) { out = true; break; }
+      }
+      if (!out) cand.push(i);
+    }
+
+    var mesh = emptyMesh(); mesh.c = [];
+    var sites = 0;
+    for (var r = 0; r < CUT_RAYS && sites < CUT_MAX_SITES; r++) {
+      var th = (r + 0.5) / CUT_RAYS * Math.PI * 2;
+      var u = v3add(v3sc(a, Math.cos(th)), b, Math.sin(th));
+      var o = v3add(E, u, rE);
+      var d = v3add(v3sub3(S, o), u, rS);
+      var hits = [];
+      for (var c = 0; c < cand.length; c++) {
+        var t = cutHit(T, cand[c], o, d);
+        if (t > 0) hits.push([t, cand[c]]);
+      }
+      /* Nearest the ship first: that end of the cut is what is framed
+       * round the hull, and the eye's end is mostly off the screen. */
+      hits.sort(function (x, y) { return y[0] - x[0]; });
+      for (var h = 0; h < hits.length && h < CUT_PER_RAY && sites < CUT_MAX_SITES; h++) {
+        var tt = hits[h][0], ti = hits[h][1];
+        var n = [T.n[ti * 3], T.n[ti * 3 + 1], T.n[ti * 3 + 2]];
+        if (Math.abs(v3dot(n, u)) > 0.8) continue;          // the cut runs along it
+        var e = v3norm(v3cross(n, u));
+        if (!e) continue;
+        var rLocal = rE + (rS - rE) * tt;
+        var s = Math.max(metre * 1.5, Math.min(metre * 18, rLocal * 0.08));
+        var halfE = Math.min(Math.PI * rLocal / CUT_RAYS, s * 6);
+        var rng = new RNG('cut|' + model + '|' + r + '|' + h);
+        cutSite(mesh, v3add(o, d, tt), n, e, v3sc(u, -1), s, halfE, rng, r % 3 === 0);
+        sites++;
+      }
+    }
+    if (CUT_LAST.mesh && global.GLWorld && global.GLWorld.releaseMesh) {
+      global.GLWorld.releaseMesh(CUT_LAST.mesh);
+    }
+    CUT_LAST = { key: key, mesh: mesh, sites: sites, cand: cand.length,
+                 ms: clock.now() - t0, faces: mesh.f.length };
+    return mesh;
+  }
+  function v3sub3(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+
+  /* `cut` is { pos, eye (world km), rShip, rEye (km) } — the same cone the
+   * shader is cutting with this frame. */
+  function drawCutGreebles(ctx, cam, frame, model, radiusKm, sunDir, cut) {
+    if (!cut || !gpuWorld() || !(radiusKm > 0)) return;
+    function local(p) {
+      var rx = p.x - frame.pos.x, ry = p.y - frame.pos.y, rz = p.z - frame.pos.z;
+      return [(rx * frame.right.x + ry * frame.right.y + rz * frame.right.z) / radiusKm,
+              (rx * frame.up.x + ry * frame.up.y + rz * frame.up.z) / radiusKm,
+              (rx * frame.fwd.x + ry * frame.fwd.y + rz * frame.fwd.z) / radiusKm];
+    }
+    var mesh = cutGreebleMesh(model, local(cut.pos), local(cut.eye),
+                              cut.rShip / radiusKm, cut.rEye / radiusKm, 0.001 / radiusKm);
+    if (mesh && mesh.f.length) global.GLWorld.queueMesh(cam, frame, mesh, radiusKm, sunDir);
+  }
+
+  /* ---- THE GROUND-PORT SECTION'S WALLS ------------------------------------
+   *
+   * main.js's groundCutFor decides the box; the shaders take out what is
+   * inside it; this draws what a cut through a street would actually show.
+   * The planet is an analytic sphere and the town is a few boxes — there is
+   * no ground under the street to reveal, so the cut faces are built here:
+   * the box's two sides, its back, and its floor beyond the hangar, each
+   * with the hangar's own opening left out of it so you see into the room.
+   *
+   * IN LAYERS, top down, because that is the whole of what makes a section
+   * read as one: road, paving, the street's concrete slab, a services
+   * course with pipe ends in it, fill, and then rock in alternating beds to
+   * the hangar floor. Thicknesses are in metres, so a big port and a small
+   * one cut through the same street. Flat colours, no lamp, no glow — this
+   * is a drawing of the ground, not a light in it. */
+  var SECTION_BANDS = [
+    [0.35, '#2b2d31'],     // road
+    [0.25, '#8d9096'],     // paving
+    [1.2,  '#a6a29a'],     // slab
+    [1.6,  '#3f3a35'],     // services
+    [3.0,  '#6b5338']      // fill
+  ];
+  var SECTION_ROCK = ['#4f4a44', '#5b564e'];
+  var SECTION_ROCK_BED = 5;            // metres per bed
+  var SECTION_FLOOR = '#3a3631';
+  var SECTION_PIPES = ['#9a8f7f', '#b23b2e', '#2e6fd8', '#9a8f7f'];
+  var SECTION_LAST = { key: null, mesh: null };
+
+  function sectionMesh(sc) {
+    var q = 0.002;
+    var key = [sc.ax, sc.sg, sc.aMin, sc.aMax, sc.bHalf, sc.ship[0], sc.ship[1],
+               sc.ship[2], sc.floor, sc.ceil, sc.ground, sc.r].map(function (v) {
+      return Math.round(v / q);
+    }).join('|');
+    if (SECTION_LAST.key === key) return SECTION_LAST.mesh;
+
+    var m = 0.001 / sc.r;                       // one metre, in model units
+    var mesh = { v: [], f: [], c: [], noAccent: true };
+    var S = sc.ship, ax = sc.ax, bx = 1 - sc.ax, sg = sc.sg, lift = sc.lift;
+    function P(a, b, z) {
+      var p = [0, 0, z + lift];
+      p[ax] = S[ax] + sg * a;
+      p[bx] = S[bx] + b;
+      return p;
+    }
+    function quad(p0, p1, p2, p3, col) {
+      var o = mesh.v.length;
+      mesh.v.push(p0, p1, p2, p3);
+      mesh.f.push([o, o + 1, o + 2], [o, o + 2, o + 3]);
+      mesh.c.push(col, col);
+    }
+    /* A rectangle with a rectangular hole in it, as up to four rectangles. */
+    function minus(u0, u1, v0, v1, h) {
+      if (!h) return [[u0, u1, v0, v1]];
+      var hu0 = Math.max(u0, h[0]), hu1 = Math.min(u1, h[1]);
+      var hv0 = Math.max(v0, h[2]), hv1 = Math.min(v1, h[3]);
+      if (!(hu1 > hu0 && hv1 > hv0)) return [[u0, u1, v0, v1]];
+      var out = [];
+      if (hu0 > u0) out.push([u0, hu0, v0, v1]);
+      if (u1 > hu1) out.push([hu1, u1, v0, v1]);
+      if (hv0 > v0) out.push([hu0, hu1, v0, hv0]);
+      if (v1 > hv1) out.push([hu0, hu1, hv1, v1]);
+      return out;
+    }
+    /* The bands as [zTop, zBottom, colour], from the street down. */
+    var bands = [], z = sc.ground, i;
+    for (i = 0; i < SECTION_BANDS.length && z > sc.floor; i++) {
+      var zb = Math.max(sc.floor, z - SECTION_BANDS[i][0] * m);
+      bands.push([z, zb, SECTION_BANDS[i][1], i === 3]);
+      z = zb;
+    }
+    for (i = 0; z > sc.floor; i++) {
+      var zr = Math.max(sc.floor, z - SECTION_ROCK_BED * m);
+      bands.push([z, zr, SECTION_ROCK[i % 2], false]);
+      z = zr;
+    }
+    /* One wall: `at(u, v)` maps its own 2D coordinates (u along the wall,
+     * v = model z) to a point; `inward` is the unit step into the cut. */
+    function wall(u0, u1, hole, at, inward) {
+      var rects = minus(u0, u1, sc.floor, sc.ground, hole);
+      for (var ri = 0; ri < rects.length; ri++) {
+        var rc = rects[ri];
+        for (var bi = 0; bi < bands.length; bi++) {
+          var top = Math.min(rc[3], bands[bi][0]), bot = Math.max(rc[2], bands[bi][1]);
+          if (!(top > bot)) continue;
+          quad(at(rc[0], bot), at(rc[1], bot), at(rc[1], top), at(rc[0], top), bands[bi][2]);
+          /* Pipe ends in the services course, every four metres. */
+          if (bands[bi][3]) {
+            var mid = (top + bot) * 0.5, hs = Math.min(0.25 * m, (top - bot) * 0.3);
+            for (var pu = rc[0] + 2 * m, k = 0; pu < rc[1] - m; pu += 4 * m, k++) {
+              var c = at(pu, mid);
+              var c2 = [c[0] + inward[0] * 0.2 * m, c[1] + inward[1] * 0.2 * m, c[2]];
+              var col = SECTION_PIPES[k % SECTION_PIPES.length];
+              var uu = at(pu + hs, mid), d = [uu[0] - c[0], uu[1] - c[1], uu[2] - c[2]];
+              addBox(mesh, c2, d, [0, 0, hs], [inward[0] * 0.2 * m, inward[1] * 0.2 * m, 0], col);
+            }
+          }
+        }
+      }
+    }
+    function unitOf(axis, sign) { var u = [0, 0]; u[axis] = sign; return u; }
+    var inA = unitOf(ax, sg), inB = unitOf(bx, 1);
+    /* The two sides. */
+    [1, -1].forEach(function (side) {
+      var bw = side * sc.bHalf;
+      var hole = (bw > sc.rB0 && bw < sc.rB1) ? [sc.rA0, sc.rA1, sc.floor, sc.ceil] : null;
+      wall(sc.aMin, sc.aMax, hole, function (u, v) { return P(u, bw, v); },
+           [-inB[0] * side, -inB[1] * side]);
+    });
+    /* The back. */
+    var backHole = (sc.aMin > sc.rA0 && sc.aMin < sc.rA1)
+      ? [sc.rB0, sc.rB1, sc.floor, sc.ceil] : null;
+    wall(-sc.bHalf, sc.bHalf, backHole, function (u, v) { return P(sc.aMin, u, v); },
+         [inA[0], inA[1]]);
+    /* The floor, where the hangar's own floor does not reach. A hair under
+     * the deck so the two never fight over the same pixels. */
+    var fz = sc.floor - 0.05 * m;
+    var floors = minus(sc.aMin, sc.aMax, -sc.bHalf, sc.bHalf,
+                       [sc.rA0, sc.rA1, sc.rB0, sc.rB1]);
+    for (i = 0; i < floors.length; i++) {
+      var fr = floors[i];
+      quad(P(fr[0], fr[2], fz), P(fr[1], fr[2], fz), P(fr[1], fr[3], fz),
+           P(fr[0], fr[3], fz), SECTION_FLOOR);
+    }
+
+    if (SECTION_LAST.mesh && global.GLWorld && global.GLWorld.releaseMesh) {
+      global.GLWorld.releaseMesh(SECTION_LAST.mesh);
+    }
+    SECTION_LAST = { key: key, mesh: mesh };
+    return mesh;
+  }
+
+  /* `sc` is G.cutaway.section from main.js's groundCutFor. */
+  function drawGroundSection(ctx, cam, sc, sunDir) {
+    if (!sc || !gpuWorld()) return;
+    var mesh = sectionMesh(sc);
+    if (!mesh || !mesh.f.length) return;
+    var frame = { pos: sc.entrance, right: sc.east, up: sc.north, fwd: sc.up };
+    global.GLWorld.queueMesh(cam, frame, mesh, sc.r, sunDir);
   }
 
   /* Drawn only for SURFACE ports: an orbital dock has no ground to build a
@@ -4871,21 +6110,33 @@
      * face that belongs to a car. Shell bucket only: that is where every
      * one the library declares lives, and the other buckets are drawn by
      * other code that never moves anything. */
+    /* The runs index the WHOLE shell as converted; the shell here may have
+     * had movers or a city lifted out of it, and its `oi` says where each
+     * face it kept sat in the whole one (merge, 2026-10-25). */
     var partFaces = [];
     var declared = (raw && raw.parts) || [];
+    var partOf = {}, anyPart = false;
     for (var pi = 0; pi < declared.length; pi++) {
       var pt = declared[pi];
       if (!pt || pt.bucket !== 'shell' || !pt.r) continue;
-      var pf = [], pc = [];
       for (var ri = 0; ri < pt.r.length; ri++) {
-        for (var fx = pt.r[ri][0]; fx < pt.r[ri][1] && fx < shell.f.length; fx++) {
-          if (owner[fx] === -2) continue;
-          owner[fx] = -2;
-          pf.push(shell.f[fx]);
-          pc.push(shell.c ? shell.c[fx] : null);
+        for (var fo = pt.r[ri][0]; fo < pt.r[ri][1]; fo++) {
+          if (partOf[fo] === undefined) { partOf[fo] = pi; anyPart = true; }
         }
       }
-      if (pf.length) partFaces.push({ part: pt, f: pf, c: pc });
+    }
+    if (anyPart) {
+      var byPart = {};
+      for (var fx = 0; fx < shell.f.length; fx++) {
+        var orig = shell.oi ? shell.oi[fx] : fx;
+        var pw = partOf[orig];
+        if (pw === undefined) continue;
+        owner[fx] = -2;
+        var bp = byPart[pw] || (byPart[pw] = { part: declared[pw], f: [], c: [] });
+        bp.f.push(shell.f[fx]);
+        bp.c.push(shell.c ? shell.c[fx] : null);
+      }
+      for (pi = 0; pi < declared.length; pi++) if (byPart[pi]) partFaces.push(byPart[pi]);
     }
 
     /* CARRY THE COLOURS ACROSS, and this cost a station its paint.
@@ -5814,7 +7065,6 @@
      * structure under it. Written as the span times the fraction rather
      * than as a number, because a constant scaled by another constant is a
      * bug wearing a disguise. */
-    var STAND_LIFT = 0.66;                        // of one hull height
     var lift = STAND_LIFT * hullSpan('courier').h * M2U;
     var o = [bx.mid[0], bx.mid[1], deck + lift];
     var f = bx.normal ? [bx.normal[0], bx.normal[1], bx.normal[2]] : [1, 0, 0];
@@ -6188,6 +7438,10 @@
   }
 
   function drawStationModel(ctx, cam, frame, radiusKm, sunDir, model, tint, doors, section) {
+    /* The cars first, whichever way the hull is drawn below: they are not
+     * part of any compartment's hull, and a floor that vanished with its
+     * section door would be the same invisible pad again. */
+    drawMovers(ctx, cam, frame, radiusKm, sunDir, model, tint);
     /* WITH THE DOORS SEPARATED when this model has any: the hull without
      * them, then each leaf at its own offset. `doors` is { open, berth }
      * — how far, and whose. Only the berth you are cleared into moves,
@@ -6232,6 +7486,15 @@
         }
       } else {
         paintPart(ctx, cam, frame, d.hull, radiusKm, sunDir, tint);
+        /* THE STAND GOES WITH THE SHIP, inside or out. It used to be drawn
+         * only with the compartment, which was every view there was of a
+         * berth — until the cutaway let you see one through the hull from
+         * outside, and the hull, parked on a pad that was not being drawn,
+         * hung six metres over a bare deck. */
+        if (mine !== null) {
+          paintPart(ctx, cam, frame, berthDressing(model, mine, radiusKm),
+                    radiusKm, sunDir, tint);
+        }
       }
       for (var i = 0; i < d.leaves.length; i++) {
         var lf = d.leaves[i];
@@ -7089,7 +8352,9 @@
      * asked and null forever afterwards — which reads exactly like the
      * feature not working, because it is not. */
     SOLIDITY[role] = null;
-    var shell = lib && lib.shell;
+    /* The whole hull, cars included at their rest poses: lifting the cars
+     * out for drawing must not open holes in what a hull collides with. */
+    var shell = lib && (lib.solidShell || lib.shell);
     if (!shell || !shell.v || !shell.v.length || !shell.f || !shell.f.length) return null;
 
     var N = SOLID_N, i, j, a;
@@ -10350,6 +11615,7 @@
      * bolted to that slab. */
     drawAccentStrips(ctx, cam, ship, spec);
     drawGreebles(ctx, cam, ship, spec, w, h);
+    drawCapacitorBank(ctx, cam, ship);
 
     var mfds = [], emitters = [];
     for (i = 0; i < MFD_MOUNTS.length; i++) {
@@ -11023,6 +12289,57 @@
       ctx.strokeStyle = hexA(style.accent, 0.5);
       ctx.lineWidth = 1.2;
       ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /* THE MINING LASER CANNON'S CAPACITOR BANK (2026-10-18, Astra: "the
+   * mount and capacitors for it glow red, then fade"). Three cans bolted to
+   * the right of the dash, out by the knee, only when a cannon is fitted
+   * (ship.capGlow, set by main.js from Combat.cannonGlow). Cold they are
+   * dark metal; the instant the cannon fires they go orange-red and cool
+   * through a dull red to nothing over its three seconds, with the glow
+   * spilling onto the panel round them. */
+  var CAP_BANK = { s0: 0.855, s1: 0.965, t0: 0.50, t1: 0.66 };
+  function drawCapacitorBank(ctx, cam, ship) {
+    var cg = ship && ship.capGlow;
+    if (!cg || !cg.fitted) return;
+    var k = Math.max(0, Math.min(1, cg.k || 0));
+    var cans = 3, ds = (CAP_BANK.s1 - CAP_BANK.s0) / cans;
+    ctx.save();
+    var centres = [];
+    for (var i = 0; i < cans; i++) {
+      var s0 = CAP_BANK.s0 + ds * (i + 0.14), s1 = CAP_BANK.s0 + ds * (i + 0.86);
+      var pts = [dashPoint(s0, CAP_BANK.t0), dashPoint(s1, CAP_BANK.t0),
+                 dashPoint(s1, CAP_BANK.t1), dashPoint(s0, CAP_BANK.t1)];
+      var poly = clipProject(cam, localPoly(ship, pts));
+      if (!poly || poly.length < 3) continue;
+      /* The can, then its band of heat, then a strap across it. */
+      ctx.fillStyle = '#262c33';
+      ctx.beginPath(); tracePath(ctx, poly); ctx.fill();
+      if (k > 0.01) {
+        ctx.fillStyle = 'rgba(255,' + Math.round(40 + 120 * k) + ',' + Math.round(20 + 30 * k) + ',' +
+                        (0.25 + 0.7 * k).toFixed(3) + ')';
+        ctx.beginPath(); tracePath(ctx, poly); ctx.fill();
+      }
+      ctx.strokeStyle = 'rgba(140,160,190,0.35)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); tracePath(ctx, poly); ctx.stroke();
+      var cx = 0, cy = 0;
+      for (var p = 0; p < poly.length; p++) { cx += poly[p].x; cy += poly[p].y; }
+      centres.push({ x: cx / poly.length, y: cy / poly.length,
+                     r: Math.abs(poly[1].x - poly[0].x) + Math.abs(poly[2].y - poly[1].y) });
+    }
+    if (k > 0.01) {
+      ctx.globalCompositeOperation = 'lighter';
+      for (var c = 0; c < centres.length; c++) {
+        var ce = centres[c], rad = Math.max(10, ce.r * 1.3);
+        var gr = ctx.createRadialGradient(ce.x, ce.y, 0, ce.x, ce.y, rad);
+        gr.addColorStop(0, 'rgba(255,70,40,' + (0.35 * k).toFixed(3) + ')');
+        gr.addColorStop(1, 'rgba(255,40,20,0)');
+        ctx.fillStyle = gr;
+        ctx.fillRect(ce.x - rad, ce.y - rad, rad * 2, rad * 2);
+      }
     }
     ctx.restore();
   }
@@ -11978,6 +13295,22 @@
   var GLASS_GLOW = true;
   function setGlassGlow(on) { GLASS_GLOW = !!on; }
 
+  /* ...AND THE LADDER IS WHERE NEARLY ALL OF IT WENT. Measured 2026-10-16
+   * on the RX 540, inside Taolmai VII's ring at 1920 px: 22 fps with the
+   * glow everywhere, 51 with it off, and 50 with it on everywhere EXCEPT
+   * the attitude ladder and the bank scale (34 for the ladder alone). So
+   * "a discrete card pays a fraction" above was wrong - it pays the same,
+   * because the cost is long strokes, not the adapter. Those two are drawn
+   * sharp; at canopy scale the halo on a thin dashed rung was invisible
+   * anyway, and the text, reticles and target boxes keep theirs. */
+  function unblurred(fn) {
+    return function (ctx) {
+      var b = ctx.shadowBlur;
+      ctx.shadowBlur = 0;
+      try { return fn.apply(this, arguments); } finally { ctx.shadowBlur = b; }
+    };
+  }
+
   function glassBegin(ctx, aperture) {
     ctx.save();
     if (aperture) {
@@ -12283,7 +13616,7 @@
     faceMaterial: faceMaterial,
     shipMeshes: shipMeshes,
     libHull: libHull,
-    gearPhase: gearPhase, gearBounds: gearBounds, gearTravelOf: gearTravelOf,
+    gearPhase: gearPhase, gearPose: gearPose, gearBounds: gearBounds, gearTravelOf: gearTravelOf,
     hullIds: hullIds, assignHull: assignHull,
     HULL_ASSIGN: HULL_ASSIGN,
     hullSpan: hullSpan,
@@ -12292,6 +13625,12 @@
     portRole: portRole, assignPort: assignPort, PORT_ASSIGN: PORT_ASSIGN,
     portLivery: portLivery, ROLE_PATTERNS: ROLE_PATTERNS, PORT_HELD_BACK: PORT_HELD_BACK,
     prefetchPorts: prefetchPorts, portGeometryArrived: portGeometryArrived,
+    setMoverRiders: setMoverRiders, moverPose: moverPose, splitMovers: splitMovers,
+    drawPortCity: drawPortCity, citySpot: citySpot, cityFrame: cityFrame, splitCity: splitCity,
+    citySite: citySite, cityBlocks: cityBlocks, cityParts: cityParts, cityLayout: cityLayout,
+    cityDrawList: cityDrawList, cityPlace: cityPlace, citySizes: citySizes,
+    _distPtSeg: distPtSeg, _distPtBox: distPtBox, _segHitsBox: segHitsBox,
+    CITY_REACH: CITY_REACH, CITY_NEAR: CITY_NEAR,
     poolFor: poolFor, PORT_POOL: PORT_POOL,
     portClass: portClass, portSizeFor: portSizeFor,
     PORT_PATTERNS: PORT_PATTERNS, PORT_SIZE_CUTS: PORT_SIZE_CUTS,
@@ -12302,6 +13641,17 @@
     insideInterior: insideInterior,
     setIndoors: setIndoors,
     setCutaway: setCutaway,
+    standTopKm: standTopKm,
+    drawCutGreebles: drawCutGreebles,
+    drawGroundSection: drawGroundSection,
+    drawStationTraffic: drawStationTraffic,
+    stationTenders: stationTenders,
+    cutGreebleMesh: cutGreebleMesh,
+    /* What the last rebuild cost and made — for profiling, not for play. */
+    cutStats: function () {
+      return { sites: CUT_LAST.sites, cand: CUT_LAST.cand, ms: CUT_LAST.ms,
+               faces: CUT_LAST.faces };
+    },
     setAccent: setAccent, accented: accented, accentSwap: accentSwap,
     drawContrail: drawContrail,
     portSolidity: portSolidity,
@@ -12359,9 +13709,9 @@
     BRIDGE: BRIDGE, bridgeSpec: bridgeSpec, bridgeFrame: bridgeFrame, bridgeCutMesh: bridgeCutMesh,
     hullFit: hullFit, cockpitAt: cockpitAt, rampExterior: rampExterior, hatchModel: hatchModel, outsidePlan: outsidePlan, groundPatch: groundPatch,
     OUTSIDE_CROUCH: OUTSIDE_CROUCH,
-    drawAttitudeLadder: drawAttitudeLadder,
+    drawAttitudeLadder: unblurred(drawAttitudeLadder),
     drawFlightPathMarker: drawFlightPathMarker,
-    drawBankScale: drawBankScale,
+    drawBankScale: unblurred(drawBankScale),
     drawHeadingTape: drawHeadingTape,
     drawAirData: drawAirData,
     facingInfo: facingInfo, drawFacingCue: drawFacingCue,

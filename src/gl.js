@@ -96,6 +96,10 @@
     'uniform vec3 uHoleRel;',     // eye -> a shaft mouth on this body, km
     'uniform float uHoleR;',      // its radius, km; 0 disables the cut
     'uniform float uHaloPush;',   // km behind the centre the halo sits; a ring's outer radius
+    /* The ground-port section box — see GL.setGroundCut. */
+    'uniform vec4 uBoxO;',        // eye -> ship, km; w = 1 when on
+    'uniform vec3 uBoxA, uBoxB, uBoxU;',
+    'uniform vec4 uBoxD;',        // along min, along max, half width, floor
     'uniform vec2 uScreenPx;',    // the camera's principal point (cx, cy)
     'uniform float uFlen;',
     'uniform float uPad;',        // quad half-size measured in body radii (>1)
@@ -305,6 +309,13 @@
      * would be on screen at once they are both far enough away that the
      * mouth is sub-pixel anyway. */
     '  if (uHoleR > 0.0 && distance(hit, uHoleRel) < uHoleR) discard;',
+    /* And the section, when the camera has been pulled up out of a ground
+     * port: the street over the hangar is not there. */
+    '  if (uBoxO.w > 0.5) {',
+    '    vec3 bq = hit - uBoxO.xyz;',
+    '    float ba = dot(bq, uBoxA), bb = dot(bq, uBoxB), bz = dot(bq, uBoxU);',
+    '    if (ba > uBoxD.x && ba < uBoxD.y && abs(bb) < uBoxD.z && bz > uBoxD.w) discard;',
+    '  }',
     '  gl_FragDepth = encodeDepth(dot(hit, uFwd));',
     '  vec3 n = normalize(hit - oc);',
     '  float ndl = dot(n, uSunDir);',
@@ -1223,6 +1234,12 @@
     /* (widest the cut-face band may get in km, quiet zone as a fraction of
      * the local radius, how much colour the quiet zone drains, 0..1). */
     'uniform vec3 uCutBand;',
+    /* Which way is up at the berth: the deck under the ship is kept, the
+     * walls round it are not. Zero means "keep the whole bubble". */
+    'uniform vec3 uCutUp;',
+    'uniform vec4 uBoxO;',
+    'uniform vec3 uBoxA, uBoxB, uBoxU;',
+    'uniform vec4 uBoxD;',
     'out vec4 frag;',
 
     /* ---- SCREEN-DOOR TRANSPARENCY, and why it is not alpha blending -----
@@ -1296,6 +1313,13 @@
      * the local radius; inside it colour is drained toward a dimmed grey
      * by uCutBand.z and lamp glow is turned off, so the cut is the loudest
      * thing at the hole and the far wall keeps its colour as the backdrop. */
+    /* THE BUBBLE IS A FLOOR, NOT A SPHERE (from the trial line). Inside the
+     * ground-port section box only what is at or below the deck survives. */
+    '  if (uBoxO.w > 0.5) {',
+    '    vec3 bq = vRel - uBoxO.xyz;',
+    '    float ba = dot(bq, uBoxA), bb = dot(bq, uBoxB), bz = dot(bq, uBoxU);',
+    '    if (ba > uBoxD.x && ba < uBoxD.y && abs(bb) < uBoxD.z && bz > uBoxD.w) discard;',
+    '  }',
     '  bool rim = false;',
     '  float rimU = 0.0;',
     '  vec3 cutW = vec3(0.0);',
@@ -1303,7 +1327,9 @@
     '  if (uCut.w > 0.5) {',
     '    float L2 = max(dot(uCut.xyz, uCut.xyz), 1e-12);',
     '    float t = dot(vRel, uCut.xyz) / L2;',
-    '    if (t > 0.0 && t < 1.0 && distance(vRel, uCut.xyz) > uCutR.x) {',
+    '    vec3 q = vRel - uCut.xyz;',
+    '    bool deck = length(q) < uCutR.x && dot(q, uCutUp) < uCutR.x * 0.15;',
+    '    if (t > 0.0 && t < 1.0 && !deck) {',
     '      float r = mix(uCutR.y, uCutR.x, t);',
     '      vec3 off = vRel - uCut.xyz * t;',
     '      float d = length(off);',
@@ -1891,7 +1917,9 @@
                                         'uNear', 'uInvLogRange', 'uIndoors',
                                         'uGlow', 'uWind',
                                         'uAlpha', 'uCut', 'uCutR', 'uCutRim',
-                                        'uCutBand', 'uPaint', 'uTrim',
+                                        'uCutBand', 'uCutUp',
+                                        'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD',
+                                        'uPaint', 'uTrim',
                                         'uTear', 'uTearK', 'uTearN']);
     } catch (e) {
       if (global.console) console.error(e.message);
@@ -1910,6 +1938,7 @@
                               'uOcean', 'uSeaColor', 'uIce',
                               'uCenterRel', 'uScreenPx', 'uFlen',
                               'uHoleRel', 'uHoleR', 'uHaloPush',
+                              'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD',
                               'uTear', 'uTearK', 'uTearN']);
 
     quad = gl.createBuffer();
@@ -2375,9 +2404,11 @@
     }
 
     var vaoM = gl.createVertexArray();
+    var bufs = [];
     gl.bindVertexArray(vaoM);
     function attr(data, name, n) {
       var b = gl.createBuffer();
+      bufs.push(b);
       gl.bindBuffer(gl.ARRAY_BUFFER, b);
       gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
       var l = gl.getAttribLocation(meshProg, name);
@@ -2388,9 +2419,22 @@
     attr(alp, 'aAlpha', 1);
     gl.bindVertexArray(null);
 
-    mesh._gl = { vao: vaoM, count: tris * 3, id: ++meshSeq };
+    mesh._gl = { vao: vaoM, count: tris * 3, id: ++meshSeq, bufs: bufs };
     return mesh._gl;
   }
+
+  /* GIVE A MESH'S VIDEO MEMORY BACK. Every other mesh in the game is built
+   * once and lives for the session, so nothing ever needed this. The cut
+   * greebles are rebuilt whenever the camera moves far enough to move the
+   * cut, and each rebuild is a fresh object — without this, every notch of
+   * the wheel would leave five buffers behind on the card for good. */
+  GL.releaseMesh = function (mesh) {
+    if (!gl || !mesh || !mesh._gl) return;
+    var g = mesh._gl;
+    for (var i = 0; g.bufs && i < g.bufs.length; i++) gl.deleteBuffer(g.bufs[i]);
+    gl.deleteVertexArray(g.vao);
+    mesh._gl = null;
+  };
 
   /* Queue one hull. `frame` is the renderer's own {pos, right, up, fwd} —
    * the same object paintMesh takes — and `scale` its length in km. */
@@ -2469,7 +2513,8 @@
                      indoors: indoorsFlag,
                      /* Relative to the eye here, in doubles, for the same
                       * reason `rel` is. */
-                     cut: cutFlag ? {
+                     box: (cutFlag && cutFlag.box) ? cutFlag.box : null,
+                     cut: (cutFlag && !cutFlag.box) ? {
                        x: cutFlag.pos.x - cam.eye.x,
                        y: cutFlag.pos.y - cam.eye.y,
                        z: cutFlag.pos.z - cam.eye.z,
@@ -2481,7 +2526,8 @@
                        quiet: typeof cutFlag.quiet === 'number'
                               ? cutFlag.quiet : CUT_QUIET,
                        drain: typeof cutFlag.drain === 'number'
-                              ? cutFlag.drain : CUT_DRAIN
+                              ? cutFlag.drain : CUT_DRAIN,
+                       up: cutFlag.up || ZERO3
                      } : null });
     return true;
   };
@@ -2650,6 +2696,24 @@
    * relevant stops punching a hole in the planet on the very next frame
    * rather than leaving one behind. */
   var hole = null;
+
+  /* THE GROUND-PORT SECTION (from the trial line). A box in the port's own
+   * frame: everything inside it above the hangar floor is not drawn, so a
+   * camera pulled up out of the bay looks down into it the way a cutaway
+   * drawing of a building does. `box` is { origin (world km, the ship),
+   * a, b, u (unit axes), aMin, aMax, bHalf, zMin (km, from the origin) }. */
+  var groundCut = null;
+  GL.setGroundCut = function (bodyId, box) {
+    groundCut = (bodyId && box) ? { bodyId: bodyId, box: box } : null;
+  };
+  function uploadBox(uni, bx, cam) {
+    gl.uniform4f(uni.uBoxO, bx.origin.x - cam.eye.x, bx.origin.y - cam.eye.y,
+                 bx.origin.z - cam.eye.z, 1);
+    gl.uniform3f(uni.uBoxA, bx.a.x, bx.a.y, bx.a.z);
+    gl.uniform3f(uni.uBoxB, bx.b.x, bx.b.y, bx.b.z);
+    gl.uniform3f(uni.uBoxU, bx.u.x, bx.u.y, bx.u.z);
+    gl.uniform4f(uni.uBoxD, bx.aMin, bx.aMax, bx.bHalf, bx.zMin);
+  }
   GL.setSurfaceHole = function (bodyId, worldPos, radiusKm) {
     hole = (bodyId && worldPos && radiusKm > 0)
       ? { bodyId: bodyId, pos: worldPos, radius: radiusKm } : null;
@@ -2668,6 +2732,7 @@
     boltQueue.length = 0;
     tearN = 0;
     hole = null;
+    groundCut = null;
     if (!gl) return;
     gl.bindFramebuffer(gl.FRAMEBUFFER, postReady() ? post.msFbo : null);
     /* Alpha cleared to ZERO, not one: in the offscreen buffer alpha is the
@@ -2853,6 +2918,9 @@
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.depthMask(false);
+    /* Rings are lit by the sun like the planet they circle, so - as in
+     * drawBodies - their blended alpha must stay out of the glow mask. */
+    gl.colorMask(true, true, true, false);
     gl.useProgram(ringProg);
     gl.bindVertexArray(ringVao);
     var cam = ringQueue[0].cam;
@@ -3064,6 +3132,11 @@
       } else {
         gl.uniform1f(uni.uHoleR, 0);
       }
+      if (groundCut && groundCut.bodyId === b.id) {
+        uploadBox(uni, groundCut.box, cam);
+      } else {
+        gl.uniform4f(uni.uBoxO, 0, 0, 0, 0);
+      }
       gl.uniform2f(uni.uScreenPx, cam.cx, cam.cy);
       gl.uniform1f(uni.uFlen, cam.flen);
 
@@ -3179,11 +3252,14 @@
         gl.uniform4f(meshUni.uPaint, 0, 0, 0, 0);
       }
       gl.uniform1f(meshUni.uIndoors, m.indoors);
+      if (m.box) uploadBox(meshUni, m.box, cam);
+      else gl.uniform4f(meshUni.uBoxO, 0, 0, 0, 0);
       if (m.cut) {
         gl.uniform4f(meshUni.uCut, m.cut.x, m.cut.y, m.cut.z, 1);
         gl.uniform3f(meshUni.uCutR, m.cut.rShip, m.cut.rEye, m.cut.rim);
         gl.uniform3f(meshUni.uCutRim, m.cut.color[0], m.cut.color[1], m.cut.color[2]);
         gl.uniform3f(meshUni.uCutBand, m.cut.bandMax, m.cut.quiet, m.cut.drain);
+        gl.uniform3f(meshUni.uCutUp, m.cut.up.x, m.cut.up.y, m.cut.up.z);
       } else {
         gl.uniform4f(meshUni.uCut, 0, 0, 0, 0);
       }
@@ -3221,7 +3297,13 @@
     iceGiant: { ocean: 0.00, sea: '#000000', ice: 0.00 },
     gasGiant: { ocean: 0.00, sea: '#000000', ice: 0.00 }
   };
+  /* THE TABLE LIVES IN WEATHER.JS now (2026-10-25): the survey reads the
+   * same seas and caps on the CPU to put water where the picture shows it.
+   * The copy above is the fallback for gl.js loaded on its own (the hull
+   * viewer), and test/survey.test.js checks the two have not drifted. */
   function terrainOf(b) {
+    var W = global.Weather;
+    if (W && W.terrainOf) return W.terrainOf(b);
     return TERRAIN[b.type] || { ocean: 0, sea: '#000000', ice: 0 };
   }
 

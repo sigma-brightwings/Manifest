@@ -380,7 +380,92 @@
     };
   }
 
+  /* ---- THE GROUND UNDER THE WEATHER (2026-10-25) -------------------------
+   *
+   * Where a world's seas and ice caps are, on the CPU, by the same
+   * arithmetic gl.js paints them with. Astra: "water where there's water on
+   * the surface" - so a survey's water has to sit under the seas you can
+   * see from orbit, which means asking the picture rather than inventing a
+   * second coastline. Moved here from gl.js (which reads it back) for the
+   * same reason the forecast lives here: one copy, two languages.
+   *
+   * `ocean` is a sea LEVEL against the elevation field, not a percentage -
+   * fbm sits around 0.5, so 0.5 is roughly half drowned and 0.72 is mostly
+   * water. A gas or ice giant has no surface to flood and no pole to
+   * freeze. A molten world's sea is lava: `lava` says so, and the survey
+   * does not count it as water. */
+  var TERRAIN = {
+    molten:   { ocean: 0.52, sea: '#ff7a2e', ice: 0.00, lava: true },
+    rocky:    { ocean: 0.00, sea: '#000000', ice: 0.04 },
+    desert:   { ocean: 0.16, sea: '#8f6a3a', ice: 0.07 },   // dry basins
+    terran:   { ocean: 0.55, sea: '#2a5c93', ice: 0.16 },
+    ocean:    { ocean: 0.78, sea: '#1f5586', ice: 0.13 },
+    tundra:   { ocean: 0.38, sea: '#3f6a86', ice: 0.34 },
+    iceball:  { ocean: 0.10, sea: '#8fb8cc', ice: 0.62 },
+    iceGiant: { ocean: 0.00, sea: '#000000', ice: 0.00 },
+    gasGiant: { ocean: 0.00, sea: '#000000', ice: 0.00 }
+  };
+  var NO_TERRAIN = { ocean: 0, sea: '#000000', ice: 0 };
+  function terrainOf(b) { return TERRAIN[b && b.type] || NO_TERRAIN; }
+
+  /* The world's pole, as gl.js spinOf builds it (and Rings.ringFrame, and
+   * sim.js's pads): +z tipped about x by the tilt, turned by `az` on a
+   * locked world. */
+  function spinAxis(body) {
+    var rot = body.rotation, tilt = rot ? rot.tilt : 0, az = (rot && rot.az) || 0;
+    return { x: Math.sin(tilt) * Math.sin(az), y: -Math.sin(tilt) * Math.cos(az), z: Math.cos(tilt) };
+  }
+  function spinPhase(body, t) {
+    var rot = body.rotation;
+    var period = (rot && rot.period) ? rot.period : 86400;
+    return (rot ? rot.phase : 0) + (TAU / period) * t;
+  }
+  /* A world direction at time t into the world's own body-fixed frame -
+   * the shader's spinAbout(n, uSpinAxis, -uSpinPhase). */
+  function bodyFixed(body, d, t) {
+    var k = spinAxis(body), a = -spinPhase(body, t);
+    var c = Math.cos(a), s = Math.sin(a), kd = k.x * d.x + k.y * d.y + k.z * d.z;
+    return { x: d.x * c + (k.y * d.z - k.z * d.y) * s + k.x * kd * (1 - c),
+             y: d.y * c + (k.z * d.x - k.x * d.z) * s + k.y * kd * (1 - c),
+             z: d.z * c + (k.x * d.y - k.y * d.x) * s + k.z * kd * (1 - c) };
+  }
+  /* The elevation field at a body-fixed unit direction: the shader's
+   * terrain block, line for line (gl.js FRAG, "---- terrain"). */
+  function elevationAt(body, p) {
+    var sd = hashSeed(body.id);
+    var x = p.x * 2.6 + sd, y = p.y * 2.6 + sd, z = p.z * 2.6 + sd;
+    var e = fbm(x, y, z);
+    var e2 = fbm(x * 0.55 + e * 1.4, y * 0.55 + e * 1.4, z * 0.55 + e * 1.4);
+    return e + (e2 - e) * 0.45;
+  }
+  /* What the picture shows at a body-fixed direction: `sea` and `ice` are
+   * 0..1 as the shader blends them, `elev` the field. `sunB` is the star's
+   * direction in the same frame, needed only for a tidally locked world,
+   * whose ice is its night side rather than its poles. */
+  function terrainAt(body, p, sunB) {
+    var T = terrainOf(body), elev = elevationAt(body, p);
+    var sea = T.ocean > 0.001 ? 1 - smoothstep(T.ocean - 0.035, T.ocean + 0.035, elev) : 0;
+    var ice = 0, k = spinAxis(body);
+    var band = body.habitableBand;
+    if (band === 'terminator') {
+      if (sunB) {
+        var ndl = p.x * sunB.x + p.y * sunB.y + p.z * sunB.z;
+        ice = 1 - smoothstep(-0.34, -0.10, ndl + (elev - 0.5) * 0.16);
+      }
+    } else if (band === 'equator') {
+      var blat = Math.abs(p.x * k.x + p.y * k.y + p.z * k.z);
+      ice = smoothstep(0.34, 0.58, blat + (elev - 0.5) * 0.12);
+    } else if (T.ice > 0.001) {
+      var lat = Math.abs(p.x * k.x + p.y * k.y + p.z * k.z);
+      var edge = T.ice * (0.85 + 0.30 * elev);
+      ice = smoothstep(1 - edge - 0.06, 1 - edge + 0.06, lat);
+    }
+    return { elev: elev, sea: sea, ice: ice, lava: !!T.lava };
+  }
+
   var Weather = {
+    TERRAIN: TERRAIN, terrainOf: terrainOf, terrainAt: terrainAt,
+    elevationAt: elevationAt, bodyFixed: bodyFixed, spinAxis: spinAxis,
     K: K, fbm: fbm, hashSeed: hashSeed, sample: sample, lookup: lookup,
     report: report, describe: describe, hasWeather: hasWeather,
     aloft: aloft, DECK_LO: DECK_LO, DECK_HI: DECK_HI,

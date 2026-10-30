@@ -604,7 +604,11 @@ section('the corridor');
    * "skipped" — which is a test that reports success while testing nothing. */
   {
     var corX = null, victim = null;
-    var allLanes = S.lanesFrom(g, g.home);
+    /* Longest lane first (2026-10-24): on a 3.9 ly hop nobody can be held
+     * long enough to tear out, which is the corridor working, not failing. */
+    var allLanes = S.lanesFrom(g, g.home).slice().sort(function (p, q) {
+      return Galaxy.distance3(q.a, q.b) - Galaxy.distance3(p.a, p.b);
+    });
     for (var li = 0; li < allLanes.length && !victim; li++) {
       var other = allLanes[li].a.id === g.home.id ? allLanes[li].b : allLanes[li].a;
       for (var ti = 0; ti < 900 && !victim; ti++) {
@@ -612,7 +616,10 @@ section('the corridor');
         var trial = S.openCorridor({ galaxy: g, from: g.home, to: other, tonnes: 82, t: tt });
         for (var v = 0; v < trial.contacts.length; v++) {
           var c = trial.contacts[v];
-          if (c.sameWay && S.canHold(82, c.tonnes, c.anchor) && S.tearCost(c.tonnes) < 12) {
+          /* and with half its lane still to run (2026-10-24: on the 450-star
+           * map the first one found was nearly home, and arrived before the
+           * lock could close - a lucky geometry the test had leaned on) */
+          if (c.sameWay && S.canHold(82, c.tonnes, c.anchor) && S.tearCost(c.tonnes) < 12 && c.progress < 0.2) {
             corX = trial; victim = c; break;
           }
         }

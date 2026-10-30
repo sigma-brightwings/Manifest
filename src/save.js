@@ -59,7 +59,16 @@
    * marker for "everything below this line can be removed without breaking
    * anything downstream of it in time", which is only useful if the lines
    * are far enough apart to be worth drawing. */
-  var VERSION = 2;
+  /* EPOCH 3 — no-man's land (2026-10-24).
+   *
+   * The galaxy was redrawn: 450 stars on a 73 ly disc where there were 200
+   * on 48, the empires holding compact cores with open space between them,
+   * and the stars nobody holds generating EMPTY - no port, no market. A
+   * career from epoch 2 is docked at ports, in systems and on courses that
+   * no longer exist in the same seed, so there is nothing to migrate it to.
+   * Astra chose it knowing that ("a new galaxy, so current saves won't
+   * carry over"). The shelf was empty; nothing else goes with it. */
+  var VERSION = 3;
 
   /* Written but no longer read. Delete the lot at the next epoch bump, then
    * empty this list. Each entry says what replaced it, because "why is this
@@ -228,6 +237,9 @@
       charted: Object.keys(G.charted || {}),
       ship: {
         pos: s.pos, vel: savedVel(G), fwd: s.fwd, up: s.up, right: s.right,
+        /* Standing on open ground (rung 2): the spot on the world, which
+         * turns with it, not the position, which was only true at save. */
+        landedAt: (s.landed && !s.crashed && s.landedAt) ? s.landedAt : null,
         fuel: s.fuel, thrusterFuel: s.thrusterFuel,
         /* Whether the military drive is armed. Additive and undefined-safe:
          * Slipspace.milRunning treats anything but an explicit false as
@@ -274,7 +286,8 @@
           return out;
         })(),
         missileSeq: s.missileSeq,
-        cargo: s.cargo, credits: s.credits,
+        cargo: s.cargo, credits: s.credits, drones: s.drones || 0,
+        hot: s.hot || {}, hotDrones: s.hotDrones || 0,
         /* WHO IS IN THE BACK. Seats are derived from the fitting and come
          * back on their own; people are not, so they are written. A save
          * that dropped them would land the ship with live passage
@@ -289,12 +302,14 @@
          * Additive, and old saves have no `arrival` to consult. */
         docked: s.docked || (s.arrival ? s.arrival.port : null),
         hullId: s.hullId, hullHp: s.hullHp,
+        /* Additive: the outside a hull is wearing, when it is not its own. */
+        meshKind: s.meshKind || null,
         /* The four legacy fields are still written, and deliberately so:
          * they are what an older build would read if a save travelled
          * backwards, and they cost four strings. `fit` is the truth. */
         gun: s.gun, turret: s.turret, shield: s.shield,
         heatshield: s.heatshield,
-        shieldHp: s.shieldHp, missiles: s.missiles, sinks: s.sinks,
+        shieldHp: s.shieldHp, missiles: s.missiles, sinks: s.sinks, decoys: s.decoys || 0,
         fit: s.fit || {},
         /* Which trigger each hardpoint answers to. Additive, and absent
          * from every save written before fire groups existed — groupOf()
@@ -419,6 +434,36 @@
        * standing tally (so a reload cannot reset the daily cap). Added
        * field, absent in older saves — restore defaults it. */
       shipTrade: G.shipTrade || null,
+      /* SURVEYS (mining rung 1): what you have mapped, where and when, as
+       * packed cell strings - the unpacked cache (_cells) stays behind.
+       * Additive: an older career loads having mapped nothing. */
+      surveys: (function () {
+        var out = {}, s = G.surveys || {};
+        Object.keys(s).forEach(function (k) {
+          var r = s[k], c = {};
+          Object.keys(r).forEach(function (f) { if (f.charAt(0) !== '_') c[f] = r[f]; });
+          out[k] = c;
+        });
+        return out;
+      })(),
+      extracted: G.extracted || {},
+      /* CLAIMS AND DRONES (mining rung 2). A drone is its timetable - where
+       * it sits, what it digs, when it was last emptied - so it saves as
+       * plain data and needs nothing re-run on load. */
+      claims: G.claims || {},
+      drones: G.drones || [],
+      /* Other prospectors' drones are derived from the seed; only what
+       * YOU did to them is written, and the thefts not yet reported. */
+      npcDrones: G.npcDrones || {},
+      thefts: G.thefts || [],
+      /* RUNG 3: rocks a torpedo shattered stay gone, the Guild's refund log
+       * stays owed, and a holed station stays shut until its date. */
+      shattered: G.shattered || {},
+      /* What the beam has taken out of each rock (2026-10-18): tonnes gone
+       * and the craters, in the rock's own frame. Additive. */
+      rockWear: G.rockWear || {},
+      torpRefund: G.torpRefund || 0,
+      sabotage: G.sabotage || {},
       /* WHO REMEMBERS YOU, and what you have done in public (captains.js).
        * Both additive: an older career loads with no captain who has ever
        * met you and a clean record, which is the honest reading — nobody
@@ -541,12 +586,17 @@
     if (d.racks) s.racks = d.racks;
     s.missileSeq = d.missileSeq;
     s.cargo = d.cargo || {}; s.credits = d.credits;
+    s.drones = d.drones || 0;
+    s.hot = (d.hot && typeof d.hot === 'object') ? d.hot : {};
+    s.hotDrones = d.hotDrones || 0;
     s.passengers = d.passengers || 0;
     s.hullId = d.hullId; s.hullHp = d.hullHp;
+    if (d.meshKind) s.meshKind = d.meshKind;
     s.gun = d.gun; s.turret = d.turret; s.shield = d.shield;
     s.heatshield = d.heatshield || null;
     s.shieldHp = d.shieldHp || 0; s.missiles = d.missiles || 0;
     s.sinks = d.sinks || 0;
+    s.decoys = d.decoys || 0;
     if (d.reg) s.reg = d.reg;
     s.shipName = d.shipName || null;
     s.disguise = (d.disguise && d.disguise.transponder) ? d.disguise : null;
@@ -607,6 +657,16 @@
     G.doneMissions = data.doneMissions || {};
     G.campaigns = data.campaigns || {};
     G.shipTrade = data.shipTrade || null;
+    G.surveys = (data.surveys && typeof data.surveys === 'object') ? data.surveys : {};
+    G.extracted = (data.extracted && typeof data.extracted === 'object') ? data.extracted : {};
+    G.claims = (data.claims && typeof data.claims === 'object') ? data.claims : {};
+    G.drones = Array.isArray(data.drones) ? data.drones : [];
+    G.npcDrones = (data.npcDrones && typeof data.npcDrones === 'object') ? data.npcDrones : {};
+    G.thefts = Array.isArray(data.thefts) ? data.thefts : [];
+    G.shattered = (data.shattered && typeof data.shattered === 'object') ? data.shattered : {};
+    G.rockWear = (data.rockWear && typeof data.rockWear === 'object') ? data.rockWear : {};
+    G.torpRefund = data.torpRefund || 0;
+    G.sabotage = (data.sabotage && typeof data.sabotage === 'object') ? data.sabotage : {};
     /* The system was entered above, before the trade book was back; put
      * the deliveries you bought off ships onto its shelves now. */
     if (global.ShipTrade && global.ShipTrade.attach && G.sys) global.ShipTrade.attach(G, G.sys, G.t || 0);
@@ -635,6 +695,11 @@
       Sim.dockShip(s, G.sys.byId[d.docked], G.sys, G.t);
     } else {
       s.docked = null;
+    }
+    if (!s.docked && d.landedAt && G.sys.byId[d.landedAt.body] && Sim.updateLandedShip) {
+      s.landed = true; s.crashed = false; s.landedOn = G.sys.byId[d.landedAt.body];
+      s.landedAt = d.landedAt;
+      Sim.updateLandedShip(s, G.sys, G.t);
     }
 
     /* PICKING A CAREER UP IS NOT AN ARRIVAL, and the line below is the

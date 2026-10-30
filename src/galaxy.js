@@ -51,8 +51,23 @@
    * stars before this and can reach all of them after it. The span does
    * grow, 83 ly to 110, so crossing the whole cluster is a longer trip —
    * that part is the point. */
-  var DEFAULT_STARS = 200;
-  var CLUSTER_RADIUS = 48.5;     // ly
+  /* AND AGAIN, 2026-10-24: 450 stars, with NO-MAN'S LAND between the
+   * polities (Astra: "not every star system has anything in it but
+   * hydrogen for fuel ... a kind of no-man's land in between polities;
+   * this makes every game have its own expansion into new territory").
+   * Same rule as before: the radius moves with the count so the density
+   * does not, 48.5 x sqrt(450 / 200) = 72.75 ly, and a hop is the hop it
+   * always was. The polities hold about CLAIMED_SHARE of it between them;
+   * the rest is empty systems (see assignFactions). */
+  var DEFAULT_STARS = 450;
+  var CLUSTER_RADIUS = 72.75;    // ly
+  var CLAIMED_SHARE = 0.45;      // of all stars, held by the empires and the powers inside them
+  var CAPITAL0_NEAR_HOME_LY = 10; // the first capital is near home, so a career starts inside a polity
+  var FRONTIER_OUTPOSTS = 2;     // Syndicate outposts squatting in no-man's land ...
+  var OUTPOST_STARS = 4;         // ... of about this many systems each
+  var MAX_HOP_LY = 8.8;          // no star further than this from its nearest neighbour
+  var BORDER_GAP_LY = 4;         // no empire claims a star this close to another empire's
+  var RIM_CAPITAL = 0.8;         // the other empires' capitals, this far out of the disc's reach
   var CLUSTER_THICKNESS = 7;     // ly, half-height — a squashed disc, not a ball
   var MIN_SEPARATION = 1.1;      // ly; two stars closer than this are one star
 
@@ -104,6 +119,30 @@
 
       var id = 's' + stars.length;
       stars.push(makeStar(id, rootSeed + ':' + id, x, y, z));
+    }
+
+    /* NOBODY STRANDED (2026-10-24). At 450 stars the disc's thin rim left a
+     * star 10.7 ly from its nearest neighbour, past a laden Mule's 9.7 ly
+     * on a full tank. Any star further than MAX_HOP_LY from every other is
+     * pulled in along the line to its nearest until it is MAX_HOP_LY away;
+     * a few passes, since moving one can leave another the loneliest. */
+    for (var pass = 0; pass < 4; pass++) {
+      var moved = 0;
+      for (var li = 1; li < stars.length; li++) {
+        var near = null, nd = Infinity;
+        for (var lj = 0; lj < stars.length; lj++) {
+          if (lj === li) continue;
+          var dd = distance3(stars[li], stars[lj]);
+          if (dd < nd) { nd = dd; near = stars[lj]; }
+        }
+        if (!near || nd <= MAX_HOP_LY) continue;
+        var k = MAX_HOP_LY / nd;
+        stars[li].x = near.x + (stars[li].x - near.x) * k;
+        stars[li].y = near.y + (stars[li].y - near.y) * k;
+        stars[li].z = near.z + (stars[li].z - near.z) * k;
+        moved++;
+      }
+      if (!moved) break;
     }
 
     /* Display names. The preview draws from the same 'star' substream the
@@ -231,15 +270,28 @@
     var fr = new RNG('galaxy-factions|' + rootSeed);
     var count = fr.int(2, 3);   // "up to 3" per the brief
 
-    var capitals = [stars[fr.int(0, stars.length - 1)]];
-    while (capitals.length < count) {
-      var best = null, bestD = -1;
-      for (var i = 0; i < stars.length; i++) {
-        var d = Infinity;
-        for (var c = 0; c < capitals.length; c++) {
-          d = Math.min(d, distance3(stars[i], capitals[c]));
-        }
-        if (d > bestD) { bestD = d; best = stars[i]; }
+    /* The first capital stands near home (2026-10-24): with most of the
+     * map unclaimed, a career that began in an empty system would begin
+     * with no port to stand in. Same draw, from a smaller list. */
+    var nearHome = stars.filter(function (st) { return distance3(st, stars[0]) <= CAPITAL0_NEAR_HOME_LY; });
+    var capitals = [nearHome[fr.int(0, nearHome.length - 1)]];
+    /* THE OTHERS, SPREAD ROUND THE DISC (2026-10-24). Farthest-point
+     * sampling from a central first capital put both rim capitals on the
+     * same flank on kawartha, leaving half the map one empty frontier
+     * rather than open space BETWEEN the polities. So they stand out at
+     * RIM_CAPITAL of the disc's reach, at evenly spaced bearings from a
+     * random start: opposite each other when there are three empires. */
+    var reach = 0, i;
+    for (i = 0; i < stars.length; i++) reach = Math.max(reach, Math.sqrt(stars[i].x * stars[i].x + stars[i].y * stars[i].y));
+    var th0 = fr.next() * 2 * Math.PI;
+    for (var kc = 1; kc < count; kc++) {
+      var th = th0 + (kc - 1) * 2 * Math.PI / (count - 1);
+      var tx = Math.cos(th) * reach * RIM_CAPITAL, ty = Math.sin(th) * reach * RIM_CAPITAL;
+      var best = null, bestD = Infinity;
+      for (i = 0; i < stars.length; i++) {
+        if (capitals.indexOf(stars[i]) >= 0) continue;
+        var d = Math.hypot(stars[i].x - tx, stars[i].y - ty);
+        if (d < bestD) { bestD = d; best = stars[i]; }
       }
       capitals.push(best);
     }
@@ -282,7 +334,11 @@
      * Capitals are pinned to their own faction first: a capital in
      * somebody else's territory would be absurd, and greedy assignment
      * alone does not guarantee otherwise. */
-    var cap = Math.ceil(stars.length / factions.length);
+    /* NO-MAN'S LAND (2026-10-24). The cap is an even share of CLAIMED_SHARE
+     * of the stars, not of all of them, and what the caps leave is nobody's:
+     * each empire is the compact region round its capital, and the
+     * stars between them are empty. */
+    var cap = Math.ceil(Math.round(stars.length * CLAIMED_SHARE) / factions.length);
     var counts = {}, s2, f2;
     for (f2 = 0; f2 < factions.length; f2++) counts[factions[f2].id] = 0;
     for (s2 = 0; s2 < stars.length; s2++) stars[s2].factionId = null;
@@ -299,25 +355,30 @@
       }
     }
     pairs.sort(function (a, b) { return a.d - b.d; });
+    /* AND NEVER BORDER TO BORDER (2026-10-24): a star within BORDER_GAP_LY
+     * of another empire's is left to nobody, so between any two empires
+     * there is always open space to cross. */
+    var held = factions.map(function (fx, k) { return [capitals[k]]; });
     for (var pi = 0; pi < pairs.length; pi++) {
       var pr2 = pairs[pi];
       if (stars[pr2.s].factionId) continue;
       var fid = factions[pr2.f].id;
       if (counts[fid] >= cap) continue;
+      var tooNear = false;
+      for (var hf = 0; hf < held.length && !tooNear; hf++) {
+        if (hf === pr2.f) continue;
+        for (var hs = 0; hs < held[hf].length; hs++) {
+          if (distance3(stars[pr2.s], held[hf][hs]) < BORDER_GAP_LY) { tooNear = true; break; }
+        }
+      }
+      if (tooNear) continue;
       stars[pr2.s].factionId = fid;
+      held[pr2.f].push(stars[pr2.s]);
       counts[fid]++;
     }
-    /* Anything the caps shut out — possible only on the last star or two —
-     * falls back to plain nearest. */
-    for (s2 = 0; s2 < stars.length; s2++) {
-      if (stars[s2].factionId) continue;
-      var owner = factions[0], ownerD = distance3(stars[s2], capitals[0]);
-      for (f2 = 1; f2 < factions.length; f2++) {
-        var d2 = distance3(stars[s2], capitals[f2]);
-        if (d2 < ownerD) { ownerD = d2; owner = factions[f2]; }
-      }
-      stars[s2].factionId = owner.id;
-    }
+    /* What the caps shut out stays unclaimed: that is no-man's land. Home
+     * is always somebody's (its capital is within CAPITAL0_NEAR_HOME_LY). */
+    if (!stars[0].factionId) stars[0].factionId = factions[0].id;
 
     /* The majors are done and their draws are untouched above this line.
      * Everything that follows claims ground BACK off them, out of its own
@@ -409,14 +470,17 @@
 
     /* Claim the nearest unclaimed stars to a seed, seed included. This is
      * what makes a hold a REGION: growth is by proximity, so a pocket is
-     * always connected and always convex-ish, whatever the local density. */
-    function grow(seed, want, id) {
+     * always connected and always convex-ish, whatever the local density.
+     * `frontier` (2026-10-24): a pocket inside an empire takes only that
+     * kind of star - somebody's - and a frontier outpost only nobody's. */
+    function grow(seed, want, id, frontier) {
       var order = stars.slice().sort(function (a, b) {
         return distance3(a, seed) - distance3(b, seed);
       });
       var got = 0, from = {};
       for (var k = 0; k < order.length && got < want; k++) {
         if (claimed[order[k].id]) continue;
+        if (!!frontier !== !order[k].factionId) continue;
         /* WHOSE SPACE THIS WAS, and it is free to know. The majors' greedy
          * pass runs first and leaves no star unassigned, so every star a
          * pocket takes is already somebody's, and the previous owner is
@@ -451,7 +515,12 @@
      * reserved for pirates since before any of this existed, so every
      * `faction === 'outlaw'` test in combat, traffic and the HUD keeps
      * working and simply starts resolving to a named power. */
-    var remoteThird = byRemote.slice(0, Math.max(PIRATE_HOLDS, Math.floor(stars.length / 3)))
+    /* Inside an empire, its far reaches (2026-10-24: the remote third of
+     * what is CLAIMED - the unclaimed stars are further out still, and the
+     * Syndicate's frontier outposts go there, below). */
+    var owned = byRemote.filter(function (r) { return !!r.st.factionId; });
+    var nClaimed = owned.length;
+    var remoteThird = owned.slice(0, Math.max(PIRATE_HOLDS, Math.floor(nClaimed / 3)))
                               .map(function (r) { return r.st; })
                               .filter(function (st) { return !capitalIds[st.id]; });
     var pirateSeeds = [];
@@ -471,7 +540,7 @@
       wasteBan: true,
       holdIds: pirateSeeds.map(function (st) { return st.id; })
     };
-    var pirateWant = Math.round(stars.length * PIRATE_SHARE);
+    var pirateWant = Math.round(nClaimed * PIRATE_SHARE);   // shares of claimed space since 2026-10-24
     /* One parent per HOLD, aligned with holdIds, plus the dominant one on
      * the faction itself. A syndicate with three strongholds may well be
      * embedded in more than one empire at once, and which empire a given
@@ -498,12 +567,12 @@
      * and not the deep frontier, which is where the pirates already are.
      * They are ordinary factions in every respect the rest of the game
      * cares about; `minor` is a display fact, not a rule. */
-    var lo = Math.floor(stars.length * 0.30), hi = Math.floor(stars.length * 0.85);
-    var midBand = byRemote.slice(lo, hi).map(function (r) { return r.st; })
+    var lo = Math.floor(nClaimed * 0.30), hi = Math.floor(nClaimed * 0.85);
+    var midBand = owned.slice(lo, hi).map(function (r) { return r.st; })
                           .filter(function (st) { return !claimed[st.id]; });
     var minorSeeds = [];
     seedPocket(midBand, minorSeeds, MINOR_POWERS);
-    var minorWant = Math.round(stars.length * MINOR_SHARE);
+    var minorWant = Math.round(nClaimed * MINOR_SHARE);
     for (i = 0; i < minorSeeds.length; i++) {
       var mf = {
         id: 'gm' + i,
@@ -521,6 +590,25 @@
          * their systems for somebody, and this is who. */
         mf.parentId = mgrew.parent;
         powers.push(mf);
+      }
+    }
+
+    /* --- the Syndicate's frontier outposts (2026-10-24) -----------------
+     * Astra chose "both": holds inside the empires, as above, and outposts
+     * squatting in no-man's land, where no navy reaches at all. Seeded
+     * across the unclaimed stars by the same farthest-point sampling, each
+     * a few systems. They are holds of the one Syndicate (holdIds), with
+     * no empire round them (a null holdParent). */
+    if (pirateSeeds.length) {
+      var open = stars.filter(function (st) { return !st.factionId && !claimed[st.id]; });
+      var outSeeds = [];
+      seedPocket(open, outSeeds, FRONTIER_OUTPOSTS);
+      for (i = 0; i < outSeeds.length; i++) {
+        var og = grow(outSeeds[i], OUTPOST_STARS, 'outlaw', true);
+        if (!og.got) continue;
+        pirate.holdIds.push(outSeeds[i].id);
+        pirate.holdParents.push(null);
+        pirate.frontierHolds = (pirate.frontierHolds || 0) + 1;
       }
     }
 
@@ -864,8 +952,26 @@
     };
   }
 
+  /* What a star's system is generated with: its owner, or - nobody's star,
+   * 2026-10-24 - EMPTY: the star, its worlds, rings and belts, no ports.
+   * One function for every caller (the game's system cache, the chart's
+   * preview, the wars' summary) so no two of them can disagree about
+   * whether a system has anybody in it. */
+  function systemOpts(galaxy, star) {
+    if (!galaxy || !star) return undefined;
+    var fac = galaxy.factionById ? galaxy.factionById[star.factionId] : null;
+    if (fac) return { faction: fac, allFactions: galaxy.factions };
+    return { empty: true, allFactions: galaxy.factions };
+  }
+  function isEmpty(star) { return !!star && !star.factionId; }
+
   var Galaxy = {
     LY: LY,
+    systemOpts: systemOpts,
+    isEmpty: isEmpty,
+    CLAIMED_SHARE: CLAIMED_SHARE,
+    CAPITAL0_NEAR_HOME_LY: CAPITAL0_NEAR_HOME_LY,
+    FRONTIER_OUTPOSTS: FRONTIER_OUTPOSTS,
     DEFAULT_STARS: DEFAULT_STARS,
     CLUSTER_RADIUS: CLUSTER_RADIUS,
     FUEL_PER_LY_PER_TONNE: FUEL_PER_LY_PER_TONNE,
