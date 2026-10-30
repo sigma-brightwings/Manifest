@@ -102,6 +102,7 @@
       var r = tr[i];
       if (r.kind === 'fleet' || !r.from || !r.to || !(r.period > 0)) continue;
       addShip('r:' + r.id, r, r.from, r.to, r);
+      ships['r:' + r.id].timetabled = true;     // flies Sim.trafficState, breakdowns and all
     }
     var pt = sys.patrols || [], orbiters = [];
     for (i = 0; i < pt.length; i++) {
@@ -135,24 +136,33 @@
   /* The first moment at or after t that a timetabled ship is moored at
    * port X. One cycle: depart A, cruise, moored at B for the layover,
    * cruise back, moored at A for the rest of the period. */
-  function berthTime(sched, X, t) {
+  /* With `sys`, a leg on which her tank let go (upkeep.js) ends when the
+   * tug brings her in, not when the timetable said she would arrive: she
+   * is in the berth from the tug's arrival — earlier or later than the
+   * timetable — to the end of the layover, as Sim.trafficState has her. */
+  function berthTime(sched, X, t, sys) {
     var P = sched.period, c = sched.cruise, l = sched.layover;
+    var U = sys ? global.Upkeep : null;
     var k = Math.floor((t - sched.t0) / P);
     for (var j = k - 1; j <= k + 1; j++) {
-      var cs = sched.t0 + j * P, s, e;
-      if (X === sched.to) { s = cs + c; e = cs + c + l; }
-      else { s = cs + 2 * c + l; e = cs + P; }
+      var cs = sched.t0 + j * P, s, e, leg;
+      if (X === sched.to) { s = cs + c; e = cs + c + l; leg = 2 * j; }
+      else { s = cs + 2 * c + l; e = cs + P; leg = 2 * j + 1; }
+      if (U) {
+        var bd = U.breakOn(sched, sys, leg);
+        if (bd) s = bd.towAt;
+      }
       if (t < e && t >= s) return t;
       if (t < s) return s;
     }
     return sched.t0 + (k + 2) * P + (X === sched.to ? c : 2 * c + l);
   }
 
-  function contactTime(ship, X, t) {
+  function contactTime(ship, X, t, sys) {
     var tc;
     if (ship.orbit) tc = ship.orbit === X ? t + (ship.lag || 0) : Infinity;
     else if (X !== ship.ports[0] && X !== ship.ports[1]) return Infinity;
-    else tc = berthTime(ship.sched, X, t);
+    else tc = berthTime(ship.sched, X, t, ship.timetabled ? sys : null);
     /* A ship destroyed before she got there tells nobody. A dead ship
      * with no recorded time (an older save) is taken as always dead. */
     var o = ship.owner;
@@ -184,12 +194,12 @@
         var pid = cur.slice(2), list = net.touch[pid] || [];
         for (var i = 0; i < list.length; i++) {
           var sh = net.ships[list[i]];
-          if (sh) nb.push({ n: list[i], t: contactTime(sh, pid, ct), via: pid });
+          if (sh) nb.push({ n: list[i], t: contactTime(sh, pid, ct, sys), via: pid });
         }
       } else {
         var s = net.ships[cur];
         if (s) for (var j = 0; j < s.ports.length; j++) {
-          if (s.ports[j]) nb.push({ n: 'P:' + s.ports[j], t: contactTime(s, s.ports[j], ct), via: null });
+          if (s.ports[j]) nb.push({ n: 'P:' + s.ports[j], t: contactTime(s, s.ports[j], ct, sys), via: null });
         }
       }
       for (var k = 0; k < nb.length; k++) {

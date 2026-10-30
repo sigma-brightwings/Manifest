@@ -135,14 +135,20 @@ var t = R.shipInterior(ship('talon'));
 check('the same ship is the same inside every time',
       JSON.stringify(SD.plan(t.geom, { hullId: 'talon', size: 'S', key: t.spec.key }).rooms) ===
       JSON.stringify(SD.plan(t.geom, { hullId: 'talon', size: 'S', key: t.spec.key }).rooms));
-check('cockpit, passage, airlock, front to back',
+/* 2026-10-26: the airlock left the end of the passage for its port side,
+ * so its inner door is across the ship from the ramp in its floor (Astra:
+ * "perpendicular to the ramp is another airlock door"). */
+var tl = t.plan.rooms[2], tp = t.plan.rooms[1];
+check('cockpit, passage, airlock: the cockpit forward, the airlock off the passage\'s port side',
       t.plan.rooms.map(function (r) { return r.kind; }).join(',') === 'cockpit,passage,airlock' &&
-      t.plan.rooms[0].z0 > t.plan.rooms[1].z0 && t.plan.rooms[1].z0 > t.plan.rooms[2].z0);
+      t.plan.rooms[0].z0 > tp.z0 && tl.x1 <= tp.x0 + 1e-9 && tl.z1 <= tp.z1 && tl.z0 >= tp.z0 - 1e-9);
 var lens = ['S', 'M', 'L', 'XL'].map(function (sz) {
   var p = SD.plan(t.geom, { hullId: 'talon', size: sz, key: 'x' });
   return p.rooms[1].z1 - p.rooms[1].z0;
 });
-check('a bigger ship has a longer passage', lens[0] < lens[1] && lens[1] < lens[2] && lens[2] < lens[3],
+/* A small ship's passage is as long as her airlock beside it needs, which
+ * can be as long as a medium one's: never shorter. */
+check('a bigger ship has a longer passage (never a shorter one)', lens[0] <= lens[1] && lens[1] < lens[2] && lens[2] < lens[3],
       lens.map(function (l) { return l.toFixed(1); }).join(' < '));
 check('the bulkhead is a metre and more behind the seat', t.geom.bulkZ <= -1.3, t.geom.bulkZ.toFixed(2) + ' m');
 

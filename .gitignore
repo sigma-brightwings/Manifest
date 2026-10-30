@@ -38,6 +38,10 @@ desktop.ini
 # Scratch test output.
 _test_output.txt
 
+# Claude's working area: probe output, suite logs, patches and backups
+# from every session. Scratch by design; the repo is the record.
+Claude outputs/
+
 # The models/ staging area. Almost every .glb in it duplicated ref/glb/ —
 # the copy tools/glb2hulls.js actually consumes — with a third copy under
 # "models/Manifest Models/uploads/". Tracking it would have written the same

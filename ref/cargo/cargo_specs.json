@@ -1,0 +1,1881 @@
+[
+ {
+  "id": "freight",
+  "name": "Freight crate",
+  "identity": "#2d6cb4",
+  "materials": {
+   "freight_blue": {
+    "hex": "#2d6cb4",
+    "roughness": 0.7,
+    "metalness": 0.2,
+    "emissive": 0
+   },
+   "gunmetal": {
+    "hex": "#3b4148",
+    "roughness": 0.65,
+    "metalness": 0.3,
+    "emissive": 0
+   },
+   "lamp_green": {
+    "hex": "#6dff8e",
+    "roughness": null,
+    "metalness": null,
+    "emissive": 1.8
+   }
+  },
+  "parts": [
+   {
+    "name": "body",
+    "type": "box",
+    "size": [
+     0.92,
+     0.9,
+     0.92
+    ],
+    "positions": [
+     [
+      0,
+      0.51,
+      0
+     ]
+    ],
+    "material": "freight_blue"
+   },
+   {
+    "name": "post",
+    "type": "box",
+    "size": [
+     0.08,
+     1,
+     0.08
+    ],
+    "positions": [
+     [
+      -0.46,
+      0.5,
+      -0.46
+     ],
+     [
+      0.46,
+      0.5,
+      -0.46
+     ],
+     [
+      -0.46,
+      0.5,
+      0.46
+     ],
+     [
+      0.46,
+      0.5,
+      0.46
+     ]
+    ],
+    "material": "gunmetal"
+   },
+   {
+    "name": "base",
+    "type": "box",
+    "size": [
+     1,
+     0.06,
+     1
+    ],
+    "positions": [
+     [
+      0,
+      0.03,
+      0
+     ]
+    ],
+    "material": "gunmetal"
+   },
+   {
+    "name": "door_rib",
+    "type": "box",
+    "size": [
+     0.04,
+     0.8,
+     0.03
+    ],
+    "positions": [
+     [
+      -0.3,
+      0.51,
+      0.47
+     ],
+     [
+      0.3,
+      0.51,
+      0.47
+     ]
+    ],
+    "material": "gunmetal"
+   },
+   {
+    "name": "placard_front",
+    "type": "decal",
+    "size": [
+     0.3,
+     0.3,
+     0.006
+    ],
+    "positions": [
+     [
+      0,
+      0.52,
+      0.463
+     ]
+    ],
+    "placard": {
+     "picto": "arrows",
+     "bg": "#e8ecee",
+     "fg": "#2d6cb4",
+     "shape": "square",
+     "face": "z+"
+    }
+   },
+   {
+    "name": "placard_side",
+    "type": "decal",
+    "size": [
+     0.006,
+     0.3,
+     0.3
+    ],
+    "positions": [
+     [
+      0.463,
+      0.52,
+      0
+     ]
+    ],
+    "placard": {
+     "picto": "arrows",
+     "bg": "#e8ecee",
+     "fg": "#2d6cb4",
+     "shape": "square",
+     "face": "x+"
+    }
+   },
+   {
+    "name": "status_lamp",
+    "type": "box",
+    "size": [
+     0.1,
+     0.04,
+     0.02
+    ],
+    "positions": [
+     [
+      0,
+      0.86,
+      0.47
+     ]
+    ],
+    "material": "lamp_green"
+   },
+   {
+    "name": "manifest",
+    "type": "decal",
+    "size": [
+     0.36,
+     0.08,
+     0.006
+    ],
+    "positions": [
+     [
+      0,
+      0.27,
+      0.463
+     ]
+    ],
+    "placard": {
+     "picto": "manifest",
+     "shape": "manifest",
+     "text": "TEXTILES",
+     "bg": "#e8ecee",
+     "fg": "#141619",
+     "stripe": "#2d6cb4",
+     "face": "z+"
+    }
+   }
+  ]
+ },
+ {
+  "id": "bulk",
+  "name": "Bulk bin",
+  "identity": "#d0702a",
+  "materials": {
+   "bulk_orange": {
+    "hex": "#d0702a",
+    "roughness": 0.75,
+    "metalness": 0.2,
+    "emissive": 0
+   },
+   "gunmetal": {
+    "hex": "#3b4148",
+    "roughness": 0.65,
+    "metalness": 0.3,
+    "emissive": 0
+   },
+   "steel": {
+    "hex": "#646b74",
+    "roughness": 0.5,
+    "metalness": 0.35,
+    "emissive": 0
+   },
+   "dark": {
+    "hex": "#24282d",
+    "roughness": 0.8,
+    "metalness": 0.2,
+    "emissive": 0
+   }
+  },
+  "parts": [
+   {
+    "name": "hopper",
+    "type": "frustum",
+    "size": [
+     0.92,
+     0.64,
+     0.74
+    ],
+    "positions": [
+     [
+      0,
+      0.57,
+      0
+     ]
+    ],
+    "material": "bulk_orange"
+   },
+   {
+    "name": "post",
+    "type": "box",
+    "size": [
+     0.08,
+     0.96,
+     0.08
+    ],
+    "positions": [
+     [
+      -0.46,
+      0.48,
+      -0.46
+     ],
+     [
+      0.46,
+      0.48,
+      -0.46
+     ],
+     [
+      -0.46,
+      0.48,
+      0.46
+     ],
+     [
+      0.46,
+      0.48,
+      0.46
+     ]
+    ],
+    "material": "gunmetal"
+   },
+   {
+    "name": "lid",
+    "type": "box",
+    "size": [
+     1,
+     0.04,
+     1
+    ],
+    "positions": [
+     [
+      0,
+      0.98,
+      0
+     ]
+    ],
+    "material": "bulk_orange"
+   },
+   {
+    "name": "hinge",
+    "type": "cyl",
+    "size": [
+     0.025,
+     0.025,
+     0.9
+    ],
+    "segments": 8,
+    "axis": "x",
+    "positions": [
+     [
+      0,
+      0.975,
+      -0.5
+     ]
+    ],
+    "material": "steel"
+   },
+   {
+    "name": "chute",
+    "type": "cyl",
+    "size": [
+     0.09,
+     0.09,
+     0.12
+    ],
+    "segments": 8,
+    "positions": [
+     [
+      0,
+      0.15,
+      0
+     ]
+    ],
+    "material": "dark"
+   },
+   {
+    "name": "brace",
+    "type": "box",
+    "size": [
+     1,
+     0.06,
+     0.06
+    ],
+    "positions": [
+     [
+      0,
+      0.06,
+      0.46
+     ],
+     [
+      0,
+      0.06,
+      -0.46
+     ]
+    ],
+    "material": "gunmetal"
+   },
+   {
+    "name": "placard_front",
+    "type": "decal",
+    "size": [
+     0.28,
+     0.28,
+     0.006
+    ],
+    "rotation": [
+     0.18675022996339324,
+     0,
+     0
+    ],
+    "positions": [
+     [
+      0,
+      0.6,
+      0.402
+     ]
+    ],
+    "placard": {
+     "picto": "grain",
+     "bg": "#1b1d20",
+     "fg": "#d0702a",
+     "shape": "square",
+     "face": "z+"
+    }
+   },
+   {
+    "name": "manifest",
+    "type": "decal",
+    "size": [
+     0.36,
+     0.08,
+     0.006
+    ],
+    "rotation": [
+     0.18675022996339324,
+     0,
+     0
+    ],
+    "positions": [
+     [
+      0,
+      0.36,
+      0.356
+     ]
+    ],
+    "placard": {
+     "picto": "manifest",
+     "shape": "manifest",
+     "text": "GRAIN",
+     "bg": "#e8ecee",
+     "fg": "#141619",
+     "stripe": "#d0702a",
+     "face": "z+"
+    }
+   }
+  ]
+ },
+ {
+  "id": "cryo",
+  "name": "Cryo tank",
+  "identity": "#b5302a",
+  "materials": {
+   "cryo_red": {
+    "hex": "#b5302a",
+    "roughness": 0.55,
+    "metalness": 0.25,
+    "emissive": 0
+   },
+   "frost": {
+    "hex": "#cfd6d8",
+    "roughness": 0.85,
+    "metalness": 0.05,
+    "emissive": 0
+   },
+   "gunmetal": {
+    "hex": "#3b4148",
+    "roughness": 0.65,
+    "metalness": 0.3,
+    "emissive": 0
+   },
+   "lamp_amber": {
+    "hex": "#ffb03a",
+    "roughness": null,
+    "metalness": null,
+    "emissive": 1.8
+   }
+  },
+  "parts": [
+   {
+    "name": "tank",
+    "type": "cyl",
+    "size": [
+     0.38,
+     0.38,
+     0.88
+    ],
+    "segments": 12,
+    "axis": "x",
+    "positions": [
+     [
+      0,
+      0.52,
+      0
+     ]
+    ],
+    "material": "cryo_red"
+   },
+   {
+    "name": "band",
+    "type": "cyl",
+    "size": [
+     0.395,
+     0.395,
+     0.07
+    ],
+    "segments": 12,
+    "axis": "x",
+    "positions": [
+     [
+      -0.25,
+      0.52,
+      0
+     ],
+     [
+      0.25,
+      0.52,
+      0
+     ]
+    ],
+    "material": "frost"
+   },
+   {
+    "name": "saddle",
+    "type": "box",
+    "size": [
+     0.1,
+     0.18,
+     0.92
+    ],
+    "positions": [
+     [
+      -0.4,
+      0.09,
+      0
+     ],
+     [
+      0.4,
+      0.09,
+      0
+     ]
+    ],
+    "material": "gunmetal"
+   },
+   {
+    "name": "post",
+    "type": "box",
+    "size": [
+     0.06,
+     1,
+     0.06
+    ],
+    "positions": [
+     [
+      -0.47,
+      0.5,
+      -0.47
+     ],
+     [
+      0.47,
+      0.5,
+      -0.47
+     ],
+     [
+      -0.47,
+      0.5,
+      0.47
+     ],
+     [
+      0.47,
+      0.5,
+      0.47
+     ]
+    ],
+    "material": "gunmetal"
+   },
+   {
+    "name": "pressure_lamp",
+    "type": "box",
+    "size": [
+     0.06,
+     0.03,
+     0.06
+    ],
+    "positions": [
+     [
+      0.12,
+      0.915,
+      0
+     ]
+    ],
+    "material": "lamp_amber"
+   },
+   {
+    "name": "hazard_flame",
+    "type": "decal",
+    "size": [
+     0.3,
+     0.3,
+     0.006
+    ],
+    "positions": [
+     [
+      0,
+      0.52,
+      0.386
+     ]
+    ],
+    "placard": {
+     "picto": "flame",
+     "bg": "#f0c020",
+     "fg": "#141619",
+     "shape": "diamond",
+     "face": "z+"
+    }
+   },
+   {
+    "name": "manifest",
+    "type": "decal",
+    "size": [
+     0.36,
+     0.08,
+     0.006
+    ],
+    "rotation": [
+     -0.7853981633974483,
+     0,
+     0
+    ],
+    "positions": [
+     [
+      0,
+      0.7816,
+      0.2616
+     ]
+    ],
+    "placard": {
+     "picto": "manifest",
+     "shape": "manifest",
+     "text": "HYDROGEN",
+     "bg": "#e8ecee",
+     "fg": "#141619",
+     "stripe": "#b5302a",
+     "face": "z+"
+    }
+   }
+  ]
+ },
+ {
+  "id": "tote",
+  "name": "Liquid tote",
+  "identity": "#1f9c92",
+  "materials": {
+   "tote_teal": {
+    "hex": "#1f9c92",
+    "roughness": 0.45,
+    "metalness": 0.1,
+    "emissive": 0
+   },
+   "steel": {
+    "hex": "#646b74",
+    "roughness": 0.5,
+    "metalness": 0.35,
+    "emissive": 0
+   },
+   "dark": {
+    "hex": "#24282d",
+    "roughness": 0.8,
+    "metalness": 0.2,
+    "emissive": 0
+   },
+   "level_teal": {
+    "hex": "#4dffe6",
+    "roughness": null,
+    "metalness": null,
+    "emissive": 1.6
+   }
+  },
+  "parts": [
+   {
+    "name": "pallet",
+    "type": "box",
+    "size": [
+     1,
+     0.12,
+     1
+    ],
+    "positions": [
+     [
+      0,
+      0.06,
+      0
+     ]
+    ],
+    "material": "dark"
+   },
+   {
+    "name": "tank",
+    "type": "box",
+    "size": [
+     0.86,
+     0.8,
+     0.86
+    ],
+    "positions": [
+     [
+      0,
+      0.52,
+      0
+     ]
+    ],
+    "material": "tote_teal"
+   },
+   {
+    "name": "cage_post",
+    "type": "box",
+    "size": [
+     0.05,
+     0.88,
+     0.05
+    ],
+    "positions": [
+     [
+      -0.475,
+      0.56,
+      -0.475
+     ],
+     [
+      0.475,
+      0.56,
+      -0.475
+     ],
+     [
+      -0.475,
+      0.56,
+      0.475
+     ],
+     [
+      0.475,
+      0.56,
+      0.475
+     ]
+    ],
+    "material": "steel"
+   },
+   {
+    "name": "cage_belt",
+    "type": "box",
+    "size": [
+     0.96,
+     0.04,
+     0.96
+    ],
+    "positions": [
+     [
+      0,
+      0.4,
+      0
+     ],
+     [
+      0,
+      0.72,
+      0
+     ]
+    ],
+    "material": "steel"
+   },
+   {
+    "name": "filler_cap",
+    "type": "cyl",
+    "size": [
+     0.1,
+     0.1,
+     0.06
+    ],
+    "segments": 10,
+    "positions": [
+     [
+      0,
+      0.95,
+      0
+     ]
+    ],
+    "material": "dark"
+   },
+   {
+    "name": "level_strip",
+    "type": "box",
+    "size": [
+     0.03,
+     0.66,
+     0.012
+    ],
+    "positions": [
+     [
+      0.3,
+      0.53,
+      0.434
+     ]
+    ],
+    "material": "level_teal"
+   },
+   {
+    "name": "placard_front",
+    "type": "decal",
+    "size": [
+     0.24,
+     0.24,
+     0.006
+    ],
+    "positions": [
+     [
+      -0.05,
+      0.56,
+      0.434
+     ]
+    ],
+    "placard": {
+     "picto": "drop",
+     "bg": "#e8ecee",
+     "fg": "#1f9c92",
+     "shape": "square",
+     "face": "z+"
+    }
+   },
+   {
+    "name": "manifest",
+    "type": "decal",
+    "size": [
+     0.36,
+     0.08,
+     0.006
+    ],
+    "positions": [
+     [
+      -0.05,
+      0.27,
+      0.434
+     ]
+    ],
+    "placard": {
+     "picto": "manifest",
+     "shape": "manifest",
+     "text": "CHEMICALS",
+     "bg": "#e8ecee",
+     "fg": "#141619",
+     "stripe": "#1f9c92",
+     "face": "z+"
+    }
+   }
+  ]
+ },
+ {
+  "id": "reefer",
+  "name": "Reefer",
+  "identity": "#d6e4ea",
+  "materials": {
+   "reefer_ice": {
+    "hex": "#d6e4ea",
+    "roughness": 0.8,
+    "metalness": 0.05,
+    "emissive": 0
+   },
+   "gunmetal": {
+    "hex": "#3b4148",
+    "roughness": 0.65,
+    "metalness": 0.3,
+    "emissive": 0
+   },
+   "black": {
+    "hex": "#141619",
+    "roughness": 0.9,
+    "metalness": 0.1,
+    "emissive": 0
+   },
+   "lamp_cyan": {
+    "hex": "#5fe6ff",
+    "roughness": null,
+    "metalness": null,
+    "emissive": 2
+   }
+  },
+  "parts": [
+   {
+    "name": "body",
+    "type": "box",
+    "size": [
+     0.92,
+     0.94,
+     0.82
+    ],
+    "positions": [
+     [
+      0,
+      0.5,
+      -0.05
+     ]
+    ],
+    "material": "reefer_ice"
+   },
+   {
+    "name": "post",
+    "type": "box",
+    "size": [
+     0.08,
+     1,
+     0.08
+    ],
+    "positions": [
+     [
+      -0.46,
+      0.5,
+      -0.46
+     ],
+     [
+      0.46,
+      0.5,
+      -0.46
+     ],
+     [
+      -0.46,
+      0.5,
+      0.46
+     ],
+     [
+      0.46,
+      0.5,
+      0.46
+     ]
+    ],
+    "material": "gunmetal"
+   },
+   {
+    "name": "cooling_unit",
+    "type": "box",
+    "size": [
+     0.84,
+     0.88,
+     0.12
+    ],
+    "positions": [
+     [
+      0,
+      0.5,
+      0.42
+     ]
+    ],
+    "material": "gunmetal"
+   },
+   {
+    "name": "fan_grille",
+    "type": "cyl",
+    "size": [
+     0.2,
+     0.2,
+     0.03
+    ],
+    "segments": 12,
+    "axis": "z",
+    "positions": [
+     [
+      -0.14,
+      0.64,
+      0.495
+     ]
+    ],
+    "material": "black"
+   },
+   {
+    "name": "condenser",
+    "type": "box",
+    "size": [
+     0.64,
+     0.16,
+     0.02
+    ],
+    "positions": [
+     [
+      0,
+      0.2,
+      0.49
+     ]
+    ],
+    "material": "black"
+   },
+   {
+    "name": "temp_lamp",
+    "type": "cyl",
+    "size": [
+     0.045,
+     0.045,
+     0.02
+    ],
+    "segments": 10,
+    "axis": "z",
+    "positions": [
+     [
+      0.26,
+      0.4,
+      0.49
+     ]
+    ],
+    "material": "lamp_cyan"
+   },
+   {
+    "name": "placard_front",
+    "type": "decal",
+    "size": [
+     0.2,
+     0.2,
+     0.006
+    ],
+    "positions": [
+     [
+      0.26,
+      0.66,
+      0.483
+     ]
+    ],
+    "placard": {
+     "picto": "snow",
+     "bg": "#141619",
+     "fg": "#5fe6ff",
+     "shape": "square",
+     "face": "z+"
+    }
+   },
+   {
+    "name": "placard_side",
+    "type": "decal",
+    "size": [
+     0.006,
+     0.34,
+     0.34
+    ],
+    "positions": [
+     [
+      0.463,
+      0.55,
+      -0.05
+     ]
+    ],
+    "placard": {
+     "picto": "snow",
+     "bg": "#141619",
+     "fg": "#5fe6ff",
+     "shape": "square",
+     "face": "x+"
+    }
+   },
+   {
+    "name": "manifest",
+    "type": "decal",
+    "size": [
+     0.36,
+     0.08,
+     0.006
+    ],
+    "positions": [
+     [
+      -0.14,
+      0.36,
+      0.483
+     ]
+    ],
+    "placard": {
+     "picto": "manifest",
+     "shape": "manifest",
+     "text": "MEDICAL",
+     "bg": "#e8ecee",
+     "fg": "#141619",
+     "stripe": "#d6e4ea",
+     "face": "z+"
+    }
+   }
+  ]
+ },
+ {
+  "id": "livestock",
+  "name": "Livestock pen",
+  "identity": "#58a63a",
+  "materials": {
+   "pen_green": {
+    "hex": "#58a63a",
+    "roughness": 0.8,
+    "metalness": 0.1,
+    "emissive": 0
+   },
+   "gunmetal": {
+    "hex": "#3b4148",
+    "roughness": 0.65,
+    "metalness": 0.3,
+    "emissive": 0
+   },
+   "interior": {
+    "hex": "#1a1d20",
+    "roughness": 0.95,
+    "metalness": 0,
+    "emissive": 0
+   }
+  },
+  "parts": [
+   {
+    "name": "floor",
+    "type": "box",
+    "size": [
+     1,
+     0.1,
+     1
+    ],
+    "positions": [
+     [
+      0,
+      0.05,
+      0
+     ]
+    ],
+    "material": "gunmetal"
+   },
+   {
+    "name": "roof",
+    "type": "box",
+    "size": [
+     1,
+     0.06,
+     1
+    ],
+    "positions": [
+     [
+      0,
+      0.95,
+      0
+     ]
+    ],
+    "material": "pen_green"
+   },
+   {
+    "name": "post",
+    "type": "box",
+    "size": [
+     0.08,
+     1,
+     0.08
+    ],
+    "positions": [
+     [
+      -0.46,
+      0.5,
+      -0.46
+     ],
+     [
+      0.46,
+      0.5,
+      -0.46
+     ],
+     [
+      -0.46,
+      0.5,
+      0.46
+     ],
+     [
+      0.46,
+      0.5,
+      0.46
+     ]
+    ],
+    "material": "gunmetal"
+   },
+   {
+    "name": "stall",
+    "type": "box",
+    "size": [
+     0.9,
+     0.82,
+     0.9
+    ],
+    "positions": [
+     [
+      0,
+      0.51,
+      0
+     ]
+    ],
+    "material": "interior"
+   },
+   {
+    "name": "slat_ring",
+    "type": "box",
+    "size": [
+     0.98,
+     0.1,
+     0.98
+    ],
+    "positions": [
+     [
+      0,
+      0.26,
+      0
+     ],
+     [
+      0,
+      0.48,
+      0
+     ],
+     [
+      0,
+      0.7,
+      0
+     ]
+    ],
+    "material": "pen_green"
+   },
+   {
+    "name": "placard_front",
+    "type": "decal",
+    "size": [
+     0.24,
+     0.24,
+     0.006
+    ],
+    "positions": [
+     [
+      0,
+      0.48,
+      0.494
+     ]
+    ],
+    "placard": {
+     "picto": "paw",
+     "bg": "#e8ecee",
+     "fg": "#3f7d27",
+     "shape": "square",
+     "face": "z+"
+    }
+   },
+   {
+    "name": "manifest",
+    "type": "decal",
+    "size": [
+     0.36,
+     0.08,
+     0.006
+    ],
+    "positions": [
+     [
+      0,
+      0.7,
+      0.494
+     ]
+    ],
+    "placard": {
+     "picto": "manifest",
+     "shape": "manifest",
+     "text": "LIVESTOCK",
+     "bg": "#e8ecee",
+     "fg": "#141619",
+     "stripe": "#58a63a",
+     "face": "z+"
+    }
+   }
+  ]
+ },
+ {
+  "id": "cask",
+  "name": "Shielded cask",
+  "identity": "#b23a86",
+  "materials": {
+   "cask_steel": {
+    "hex": "#454c54",
+    "roughness": 0.6,
+    "metalness": 0.35,
+    "emissive": 0
+   },
+   "cask_magenta": {
+    "hex": "#b23a86",
+    "roughness": 0.6,
+    "metalness": 0.2,
+    "emissive": 0
+   },
+   "dark": {
+    "hex": "#24282d",
+    "roughness": 0.8,
+    "metalness": 0.2,
+    "emissive": 0
+   },
+   "lamp_magenta": {
+    "hex": "#ff5ac8",
+    "roughness": null,
+    "metalness": null,
+    "emissive": 2
+   }
+  },
+  "parts": [
+   {
+    "name": "plinth",
+    "type": "box",
+    "size": [
+     0.9,
+     0.1,
+     0.9
+    ],
+    "positions": [
+     [
+      0,
+      0.05,
+      0
+     ]
+    ],
+    "material": "dark"
+   },
+   {
+    "name": "chamfer_lower",
+    "type": "cyl",
+    "size": [
+     0.42,
+     0.34,
+     0.08
+    ],
+    "segments": 16,
+    "positions": [
+     [
+      0,
+      0.14,
+      0
+     ]
+    ],
+    "material": "cask_steel"
+   },
+   {
+    "name": "drum",
+    "type": "cyl",
+    "size": [
+     0.42,
+     0.42,
+     0.76
+    ],
+    "segments": 16,
+    "positions": [
+     [
+      0,
+      0.56,
+      0
+     ]
+    ],
+    "material": "cask_steel"
+   },
+   {
+    "name": "chamfer_upper",
+    "type": "cyl",
+    "size": [
+     0.34,
+     0.42,
+     0.08
+    ],
+    "segments": 16,
+    "positions": [
+     [
+      0,
+      0.98,
+      0
+     ]
+    ],
+    "material": "cask_steel"
+   },
+   {
+    "name": "hazard_band",
+    "type": "cyl",
+    "size": [
+     0.426,
+     0.426,
+     0.1
+    ],
+    "segments": 16,
+    "positions": [
+     [
+      0,
+      0.85,
+      0
+     ]
+    ],
+    "texture": "hazard"
+   },
+   {
+    "name": "id_band",
+    "type": "cyl",
+    "size": [
+     0.436,
+     0.436,
+     0.06
+    ],
+    "segments": 16,
+    "positions": [
+     [
+      0,
+      0.26,
+      0
+     ],
+     [
+      0,
+      0.7,
+      0
+     ]
+    ],
+    "material": "cask_magenta"
+   },
+   {
+    "name": "trefoil_front",
+    "type": "decal",
+    "size": [
+     0.3,
+     0.3,
+     0.006
+    ],
+    "positions": [
+     [
+      0,
+      0.48,
+      0.425
+     ]
+    ],
+    "placard": {
+     "picto": "trefoil",
+     "bg": "#f0c020",
+     "fg": "#141619",
+     "shape": "square",
+     "face": "z+"
+    }
+   },
+   {
+    "name": "trefoil_side",
+    "type": "decal",
+    "size": [
+     0.006,
+     0.3,
+     0.3
+    ],
+    "positions": [
+     [
+      0.425,
+      0.48,
+      0
+     ]
+    ],
+    "placard": {
+     "picto": "trefoil",
+     "bg": "#f0c020",
+     "fg": "#141619",
+     "shape": "square",
+     "face": "x+"
+    }
+   },
+   {
+    "name": "trefoil_top",
+    "type": "disc",
+    "size": [
+     0.22,
+     0.006
+    ],
+    "segments": 16,
+    "positions": [
+     [
+      0,
+      1.023,
+      0
+     ]
+    ],
+    "placard": {
+     "picto": "trefoil",
+     "bg": "#f0c020",
+     "fg": "#141619",
+     "shape": "disc"
+    }
+   },
+   {
+    "name": "seal_lamp",
+    "type": "box",
+    "size": [
+     0.06,
+     0.02,
+     0.04
+    ],
+    "positions": [
+     [
+      0.37,
+      0.11,
+      0.38
+     ]
+    ],
+    "material": "lamp_magenta"
+   },
+   {
+    "name": "manifest",
+    "type": "decal",
+    "size": [
+     0.36,
+     0.08,
+     0.006
+    ],
+    "positions": [
+     [
+      0,
+      0.05,
+      0.453
+     ]
+    ],
+    "placard": {
+     "picto": "manifest",
+     "shape": "manifest",
+     "text": "RADIOACTIVE",
+     "bg": "#e8ecee",
+     "fg": "#141619",
+     "stripe": "#b23a86",
+     "face": "z+"
+    }
+   }
+  ]
+ },
+ {
+  "id": "secure",
+  "name": "Secure case",
+  "identity": "#9b7bff",
+  "materials": {
+   "shell": {
+    "hex": "#2a2d34",
+    "roughness": 0.4,
+    "metalness": 0.25,
+    "emissive": 0
+   },
+   "steel": {
+    "hex": "#646b74",
+    "roughness": 0.5,
+    "metalness": 0.35,
+    "emissive": 0
+   },
+   "dark": {
+    "hex": "#24282d",
+    "roughness": 0.8,
+    "metalness": 0.2,
+    "emissive": 0
+   },
+   "seal_violet": {
+    "hex": "#9b7bff",
+    "roughness": null,
+    "metalness": null,
+    "emissive": 2.2
+   }
+  },
+  "parts": [
+   {
+    "name": "runner",
+    "type": "box",
+    "size": [
+     0.1,
+     0.04,
+     0.86
+    ],
+    "positions": [
+     [
+      -0.38,
+      0.02,
+      0
+     ],
+     [
+      0.38,
+      0.02,
+      0
+     ]
+    ],
+    "material": "dark"
+   },
+   {
+    "name": "shell_lower",
+    "type": "box",
+    "size": [
+     1,
+     0.4,
+     0.92
+    ],
+    "positions": [
+     [
+      0,
+      0.24,
+      0
+     ]
+    ],
+    "material": "shell"
+   },
+   {
+    "name": "shell_lid",
+    "type": "box",
+    "size": [
+     1,
+     0.28,
+     0.92
+    ],
+    "positions": [
+     [
+      0,
+      0.6,
+      0
+     ]
+    ],
+    "material": "shell"
+   },
+   {
+    "name": "seal_seam",
+    "type": "box",
+    "size": [
+     0.98,
+     0.02,
+     0.9
+    ],
+    "positions": [
+     [
+      0,
+      0.45,
+      0
+     ]
+    ],
+    "material": "seal_violet"
+   },
+   {
+    "name": "lock",
+    "type": "box",
+    "size": [
+     0.12,
+     0.16,
+     0.04
+    ],
+    "positions": [
+     [
+      -0.3,
+      0.45,
+      0.47
+     ],
+     [
+      0.3,
+      0.45,
+      0.47
+     ]
+    ],
+    "material": "steel"
+   },
+   {
+    "name": "handle",
+    "type": "box",
+    "size": [
+     0.04,
+     0.05,
+     0.34
+    ],
+    "positions": [
+     [
+      -0.52,
+      0.3,
+      0
+     ],
+     [
+      0.52,
+      0.3,
+      0
+     ]
+    ],
+    "material": "steel"
+   },
+   {
+    "name": "placard_top",
+    "type": "decal",
+    "size": [
+     0.3,
+     0.006,
+     0.3
+    ],
+    "positions": [
+     [
+      0,
+      0.743,
+      0
+     ]
+    ],
+    "placard": {
+     "picto": "lock",
+     "bg": "#9b7bff",
+     "fg": "#141619",
+     "shape": "square",
+     "face": "y+"
+    }
+   },
+   {
+    "name": "manifest",
+    "type": "decal",
+    "size": [
+     0.36,
+     0.08,
+     0.006
+    ],
+    "positions": [
+     [
+      0,
+      0.22,
+      0.463
+     ]
+    ],
+    "placard": {
+     "picto": "manifest",
+     "shape": "manifest",
+     "text": "AI CORES",
+     "bg": "#e8ecee",
+     "fg": "#141619",
+     "stripe": "#9b7bff",
+     "face": "z+"
+    }
+   }
+  ]
+ },
+ {
+  "id": "lumber",
+  "name": "Lumber stack",
+  "identity": "#bb8a4c",
+  "materials": {
+   "timber_light": {
+    "hex": "#bb8a4c",
+    "roughness": 0.9,
+    "metalness": 0,
+    "emissive": 0
+   },
+   "timber_dark": {
+    "hex": "#9a6a35",
+    "roughness": 0.9,
+    "metalness": 0,
+    "emissive": 0
+   },
+   "skid_wood": {
+    "hex": "#5e4329",
+    "roughness": 0.95,
+    "metalness": 0,
+    "emissive": 0
+   },
+   "strap": {
+    "hex": "#56606c",
+    "roughness": 0.5,
+    "metalness": 0.35,
+    "emissive": 0
+   }
+  },
+  "parts": [
+   {
+    "name": "skid",
+    "type": "box",
+    "size": [
+     0.12,
+     0.1,
+     0.98
+    ],
+    "positions": [
+     [
+      -0.34,
+      0.05,
+      0
+     ],
+     [
+      0.34,
+      0.05,
+      0
+     ]
+    ],
+    "material": "skid_wood"
+   },
+   {
+    "name": "layer_1",
+    "type": "box",
+    "size": [
+     1,
+     0.19,
+     0.98
+    ],
+    "positions": [
+     [
+      0,
+      0.195,
+      0
+     ]
+    ],
+    "material": "timber_light"
+   },
+   {
+    "name": "layer_2",
+    "type": "box",
+    "size": [
+     0.96,
+     0.19,
+     1
+    ],
+    "positions": [
+     [
+      0.01,
+      0.395,
+      0
+     ]
+    ],
+    "material": "timber_dark"
+   },
+   {
+    "name": "layer_3",
+    "type": "box",
+    "size": [
+     1,
+     0.19,
+     0.97
+    ],
+    "positions": [
+     [
+      -0.005,
+      0.595,
+      0.01
+     ]
+    ],
+    "material": "timber_light"
+   },
+   {
+    "name": "layer_4",
+    "type": "box",
+    "size": [
+     0.95,
+     0.19,
+     0.99
+    ],
+    "positions": [
+     [
+      0.01,
+      0.795,
+      -0.005
+     ]
+    ],
+    "material": "timber_dark"
+   },
+   {
+    "name": "strap",
+    "type": "box",
+    "size": [
+     1.012,
+     0.81,
+     0.05
+    ],
+    "positions": [
+     [
+      0,
+      0.495,
+      0.3
+     ],
+     [
+      0,
+      0.495,
+      -0.3
+     ]
+    ],
+    "material": "strap"
+   },
+   {
+    "name": "tag_front",
+    "type": "decal",
+    "size": [
+     0.22,
+     0.22,
+     0.006
+    ],
+    "positions": [
+     [
+      0,
+      0.495,
+      0.504
+     ]
+    ],
+    "placard": {
+     "picto": "tree",
+     "bg": "#141619",
+     "fg": "#d9a65f",
+     "shape": "square",
+     "face": "z+"
+    }
+   },
+   {
+    "name": "manifest",
+    "type": "decal",
+    "size": [
+     0.36,
+     0.08,
+     0.006
+    ],
+    "positions": [
+     [
+      0,
+      0.795,
+      0.503
+     ]
+    ],
+    "placard": {
+     "picto": "manifest",
+     "shape": "manifest",
+     "text": "TIMBER",
+     "bg": "#e8ecee",
+     "fg": "#141619",
+     "stripe": "#bb8a4c",
+     "face": "z+"
+    }
+   }
+  ]
+ }
+]

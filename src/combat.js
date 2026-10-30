@@ -3009,7 +3009,7 @@
                   : short > 0 ? paid + ' cr paid, ' + short + ' cr against the hull'
                   : paid + ' cr';
           var line = spec.name + ' — ' + what + '  ·  ' + how;
-          if (hooks && hooks.ledger) hooks.ledger(line); else talk(line, 8);
+          if (hooks && hooks.ledger) hooks.ledger(line, 'rescue'); else talk(line, 8);
           if (short > 0) {
             talk((quote.who || spec.name) + ' holds a lien on this hull — ' + lienOwed(G) +
                  ' cr.  Every sale gives up a share until it clears, and the yard is shut to you.', 10);
@@ -3127,6 +3127,21 @@
   var BOUNTY = { demand: 400, assault: 300, kill: 2800, killPolice: 6000,
                  killNavy: 12000, killLiner: 9000, killTender: 14000,
                  smuggling: 0 };
+  /* THE MORE YOU TAKE, THE WORSE THE CRIME (2026-10-30). Astra, when a
+   * transfer at gunpoint came to 41,028 cr: "that's a lot of money, it
+   * should be a more serious crime the more money you take." So a hold-up
+   * is charged at its flat rate (BOUNTY.demand: having pointed a gun) plus
+   * half of what you took — credits, or cargo at its base price. Half, not
+   * all: getting caught should cost you most of a big score, not more than
+   * all of it, or nobody would ever take the risk and the transfer would be
+   * a trap rather than a choice. A cash box of 1,900 cr adds 950 to the
+   * bounty — past WANTED_HUNT with the flat charge, so the police come —
+   * and a 40,000 cr transfer adds 20,000. The price of a witness's silence
+   * rises with it (HUSH_LOOT_SHARE): keeping quiet about a fortune is a
+   * bigger thing to keep quiet about. */
+  var LOOT_BOUNTY_SHARE = 0.5;
+  var HUSH_LOOT_SHARE = 0.15;
+  function lootBounty(loot) { return loot > 0 ? Math.round(loot * LOOT_BOUNTY_SHARE) : 0; }
   var SMUGGLING_FINE_PER_TONNE = 180;   // cr/t, on top of losing the cargo itself
   var SEARCH_FLOOR = 0.12;   // even the most permissive system still checks sometimes
 
@@ -3703,6 +3718,9 @@
       },
       mode: 'breakoff', modeSince: 0
     };
+    /* Lifted while adrift (upkeep.js): no reaction mass, so no fleeing.
+     * Sim.steerNpc coasts her until somebody fuels her. */
+    if (state.adrift) { spec.adrift = true; spec.live.adrift = true; }
     spec.reg = route.reg || (global.Sim.regCode ? global.Sim.regCode(route.id) : null);
     spec.live.reg = spec.reg;
     spec.live.spec = spec; spec.live.kind = 'trader';
@@ -4045,6 +4063,7 @@
 
   function killNpc(sys, G, spec, t, hooks) {
     spec.dead = true;
+    jot(G, 'kill', 'Destroyed ' + (spec.kind === 'pirate' ? 'the pirate ' : 'the ') + (spec.name || 'ship'));
     var at = spec.live ? spec.live.pos : null;
     var vel = spec.live ? spec.live.vel : V.zero();
 
@@ -4630,9 +4649,12 @@
     target.standing = standing;
     target.discount = mult;
     target.corruption = corrupt;
+    /* And what was taken: silence about a fortune costs more than silence
+     * about a pointed gun (HUSH_LOOT_SHARE). */
+    target.loot = (target.pending ? target.pending.loot : target.victim ? target.victim.lootUnreported : 0) || 0;
     target.price = target.intimidate
       ? 0
-      : Math.max(50, Math.round(TRADE_REFERENCE * level * tonnes * mult));
+      : Math.max(50, Math.round(TRADE_REFERENCE * level * tonnes * mult + target.loot * HUSH_LOOT_SHARE * mult));
     /* Whether it stays bought. Corruption is the larger term because it is
      * the institutional fact — an arrangement everyone here understands —
      * and standing is the personal one on top of it. Neither alone gets you
@@ -4720,6 +4742,8 @@
        * an institutional arrangement, and costs the player nothing to set
        * up — see the section comment above `bumpCorruption`. */
       if (!q.intimidate) bumpCorruption(G, CORRUPTION_BUMP_HUSH);
+      jot(G, 'crime', q.intimidate ? 'Leaned on ' + q.who + ' to keep quiet. It worked.'
+                                   : 'Paid ' + q.who + ' ' + Math.round(q.price) + ' cr to keep quiet');
       if (hooks && hooks.say) {
         hooks.say(q.intimidate
           ? 'You had a word with ' + q.who + '. Nothing was transmitted.'
@@ -4732,10 +4756,11 @@
     /* Took the money and talked. Exactly the risk the pirates are supposed
      * to be insuring against, which is why standing raises `stick` — and
      * why it never raises it to 1. */
+    var lootQ = q.pending ? q.pending.loot : q.victim ? q.victim.lootUnreported : 0;
     if (q.pending) { G.pendingReport = null; }
-    if (q.victim) { q.victim.distressAt = null; q.victim.distressKind = null; }
+    if (q.victim) { q.victim.distressAt = null; q.victim.distressKind = null; q.victim.lootUnreported = 0; }
     report(G, q.kind, { faction: q.pending ? q.pending.fac : (q.victim.faction || 'civil') },
-           hooks, 'paid off and reported anyway');
+           hooks, 'paid off and reported anyway', lootQ);
     if (hooks && hooks.say) {
       hooks.say(q.intimidate
         ? q.who + ' called it in anyway. Somebody is braver than they look.'
@@ -4744,13 +4769,56 @@
     return { paid: q.price, stuck: false };
   }
 
-  function report(G, kind, victim, hooks, how) {
+  /* WHAT YOU TOOK GOES ON THE CHARGE. The act was filed (crime) before the
+   * taking, so the take is added to whichever report is still to come: a
+   * witness's, or the victim's own distress call. If both have already
+   * gone out — a second hold-up of a ship that has already called it in —
+   * she calls again with the new figure, and it is added now. */
+  function chargeLoot(G, sys, t, spec, loot, hooks) {
+    if (!(loot > 0) || !spec || spec.kind === 'pirate') return;
+    if (G.pendingReport && t < G.pendingReport.at) {
+      G.pendingReport.loot = (G.pendingReport.loot || 0) + loot;
+    } else if (spec.distressAt) {
+      spec.lootUnreported = (spec.lootUnreported || 0) + loot;
+    } else if (spec.reported && !spec.dead) {
+      var fac = spec.faction || 'civil', extra = lootBounty(loot);
+      G.wanted = G.wanted || {};
+      G.wanted[fac] = (G.wanted[fac] || 0) + extra;
+      jot(G, 'crime', 'The ' + (spec.name || 'victim') + ' reported ' + Math.round(loot) + ' cr more taken. Bounty with ' +
+          facName(G, fac) + ' now ' + Math.round(G.wanted[fac]) + ' cr');
+      if (hooks && hooks.say) {
+        hooks.say('CRIME REPORTED (' + (spec.name || 'the victim') + ' again) — ' + Math.round(loot) +
+                  ' cr taken, +' + extra + ' on the charge — bounty now ' + Math.round(G.wanted[fac]) + ' cr', 6);
+      }
+    }
+  }
+
+  /* The captain's log on the F5 NOTES tab (journal.js), when it is loaded.
+   * Required directly under node, where the tests may not have loaded it. */
+  function jot(G, kind, text) {
+    var J = global.Journal;
+    if (!J && typeof require !== 'undefined') { try { J = require('./journal.js'); } catch (e) { J = null; } }
+    if (J && G) J.add(G, kind, text);
+  }
+  function facName(G, fac) {
+    var f = G && G.galaxy && G.galaxy.factionById && G.galaxy.factionById[fac];
+    return (f && f.name) || (fac === 'civil' || !fac ? 'the local law' : fac);
+  }
+
+  /* `loot`: what was taken in the act, credits or cargo at base price;
+   * it is charged on top of the act's own rate (lootBounty, above). */
+  function report(G, kind, victim, hooks, how, loot) {
     var fac = victim.faction || 'civil';
     G.wanted = G.wanted || {};
-    G.wanted[fac] = (G.wanted[fac] || 0) + (BOUNTY[kind] || 300);
+    var extra = lootBounty(loot);
+    G.wanted[fac] = (G.wanted[fac] || 0) + (BOUNTY[kind] || 300) + extra;
+    jot(G, 'crime', 'Reported for ' + kind + (victim.name ? ' against the ' + victim.name : '') +
+        ' (' + how + ')' + (extra ? ', ' + Math.round(loot) + ' cr taken' : '') +
+        '. Bounty with ' + facName(G, fac) + ' now ' + Math.round(G.wanted[fac]) + ' cr');
     if (hooks && hooks.say) {
-      hooks.say('CRIME REPORTED (' + how + ') — bounty now ' +
-                Math.round(G.wanted[fac]) + ' cr', 6);
+      hooks.say('CRIME REPORTED (' + how + ')' +
+                (extra ? ' — ' + Math.round(loot) + ' cr taken, +' + extra + ' on the charge' : '') +
+                ' — bounty now ' + Math.round(G.wanted[fac]) + ' cr', 6);
     }
     if (hooks && hooks.sound) hooks.sound('warn');
   }
@@ -5062,6 +5130,7 @@
     if (G.ship.credits < cost) return -cost;
     G.ship.credits -= cost;
     delete G.wanted[faction];
+    jot(G, 'law', 'Cleared a bounty with ' + facName(G, faction) + ': ' + cost + ' cr');
     return cost;
   }
 
@@ -5085,6 +5154,10 @@
     var sys = G.sys, ship = G.ship;
     var crime = effectiveCrime(G, sys);
     var searchChance = Math.max(SEARCH_FLOOR, 1 - (crime / 100) * 0.85);
+    /* REFUSED THE TITHE (tithe.js): the overboss's own patrols take you
+     * for Navy or Police in plain clothes, and look. */
+    var suspect = spec.faction === 'outlaw' && global.Tithe && global.Tithe.suspected(G, sys, G.t);
+    if (suspect) searchChance = Math.max(searchChance, global.Tithe.SUSPECT_SEARCH);
 
     if (Math.random() >= searchChance) {
       if (hooks && hooks.say) hooks.say(spec.name + ': routine hail — you are clear', 4);
@@ -5099,7 +5172,7 @@
       if (sev > 0) found.push({ cid: cid, sev: sev });
     }
     if (!found.length) {
-      if (hooks && hooks.say) hooks.say(spec.name + ' scans your hold — nothing flagged, cleared', 5);
+      if (hooks && hooks.say) hooks.say(spec.name + (suspect ? ' turns your hold over — you refused the tithe — and finds nothing' : ' scans your hold — nothing flagged, cleared'), 5);
       if (hooks && hooks.sound) hooks.sound('click');
       return { searched: true, contraband: false };
     }
@@ -5753,6 +5826,7 @@
     G.ship.credits -= cost;
     if (G.wanted) delete G.wanted[fac];
     G.fugitive = null;
+    jot(G, 'law', 'Turned yourself in to ' + facName(G, fac) + ' and paid ' + cost + ' cr');
     return cost;
   }
 
@@ -6576,7 +6650,7 @@
     /* A witness's call, if it was neither bought nor intimidated away. */
     if (G.pendingReport && t >= G.pendingReport.at) {
       report(G, G.pendingReport.kind, { faction: G.pendingReport.fac }, hooks,
-             'witnessed by ' + G.pendingReport.by);
+             'witnessed by ' + G.pendingReport.by, G.pendingReport.loot);
       G.pendingReport = null;
     }
 
@@ -6590,7 +6664,8 @@
          * and from one event. Before this, the second happened and the
          * first was only ever a word in a comment. */
         broadcastDistress(sys, G, t, sp, sp.distressKind || 'assault', hooks);
-        report(G, sp.distressKind || 'assault', sp, hooks, 'distress call');
+        report(G, sp.distressKind || 'assault', sp, hooks, 'distress call', sp.lootUnreported);
+        sp.lootUnreported = 0;
         sp.reported = sp.distressKind;
         sp.distressAt = null;
       }
@@ -6667,7 +6742,7 @@
        * shooting it used to disagree about what it had aboard, because only
        * the death path ever invented a manifest. */
       var man = holdOf(sys, spec);
-      var gave = 0;
+      var gave = 0, cargoLoot = 0;
       for (var i = 0; i < man.length && gave < 2; i++) {
         var amount = man[i] && (man[i].qty || man[i].tonnes) || 0;
         if (!(amount > 0)) continue;
@@ -6691,7 +6766,11 @@
         if (man[i].qty !== undefined) man[i].qty -= taken;
         else man[i].tonnes = amount - taken;
         gave++;
+        /* Cargo is loot too, at its base price (waste is worth nothing). */
+        var ecoC = global.Economy && global.Economy.BY_ID ? global.Economy.BY_ID[man[i].cid] : null;
+        cargoLoot += taken * Math.max(0, ecoC ? ecoC.base : 0);
       }
+      chargeLoot(G, sys, t, spec, cargoLoot, hooks);
       /* Empty lines are dropped rather than left as zeroes, so "running
        * empty" is a real answer instead of a list of nothings. */
       for (var z = man.length - 1; z >= 0; z--) {
@@ -6702,15 +6781,46 @@
        * away the moment the ship sleeps — parking the emptied array here is
        * what stops "I robbed you" from being forgotten by a nap. */
       spec.manifest = man;
+      if (gave) jot(G, 'robbery', 'Made the ' + spec.name + ' dump cargo worth about ' + Math.round(cargoLoot) + ' cr');
       if (hooks && hooks.say) {
         hooks.say(gave ? spec.name + ' dumps cargo and runs — scoop it before it drifts'
                        : spec.name + ' is running empty. Nothing to take.', 5);
+      }
+    } else if (spec.liftedFrom && global.Upkeep && global.Upkeep.eligible(spec.liftedFrom)) {
+      /* A SCHEDULED TRADER'S ONE PURSE (upkeep.js, 2026-10-30): the number
+       * her own screen shows. 'credits' is her cash box, a tenth of it;
+       * 'account' is a transfer of all of it but what she needs to make
+       * port. Astra: "give the option to take more than a shakedown, but
+       * not everything, because that would mean they have nothing to get
+       * to port." Either comes off her purse until she next settles with
+       * her owners, so a ship you robbed has less to pay you with if you
+       * are the one who answers her mayday. */
+      var U = global.Upkeep, route = spec.liftedFrom;
+      var how = what === 'account' ? 'account' : 'cash';
+      var got = U.rob(G, sys, t, route, how);
+      if (got > 0) {
+        s.credits += got;
+        chargeLoot(G, sys, t, spec, got, hooks);
+        if (hooks && hooks.ledger) hooks.ledger((how === 'account' ? 'Transfer from the ' : 'Cash from the ') + spec.name + ' +' + got, 'robbery');
+        else jot(G, 'robbery', (how === 'account' ? 'Transfer from the ' : 'Cash from the ') + spec.name + ' +' + got);
+        if (hooks && hooks.say) {
+          hooks.say(how === 'account'
+            ? spec.name + ' transfers ' + got + ' cr. "That leaves us what it takes to make port, and not a credit more."'
+            : spec.name + ' hands over the cash box: ' + got + ' cr.', 6);
+        }
+        /* Her master's memory of it is the crime's ('robbed', above). */
+      } else if (hooks && hooks.say) {
+        hooks.say(how === 'account'
+          ? spec.name + ': "There is nothing above what we need to make port. Take that and we drift."'
+          : spec.name + ': "The box is empty — you or somebody like you had it already."', 6);
       }
     } else {
       var cash = purseOf(sys, spec);
       if (cash > 0) {
         spec.purse = 0;
         s.credits += cash;
+        chargeLoot(G, sys, t, spec, cash, hooks);
+        jot(G, 'robbery', 'Took ' + cash + ' cr off the ' + spec.name);
         if (hooks && hooks.say) hooks.say(spec.name + ' transfers ' + cash + ' cr and runs.', 5);
       } else if (hooks && hooks.say) {
         /* Named as a second visit rather than as a refusal, because it is
@@ -7275,13 +7385,21 @@
    *   syndicate  only where the Syndicate holds the port, and only to a
    *              captain whose standing with `outlaw` reaches minStanding
    *              and whom they do not want. */
+  /* Standing with the Syndicate as their own doors read it: your real
+   * standing, plus the trust a paid tithe buys in this system (tithe.js). */
+  function syndicateStanding(G) {
+    var st = (G && G.standing && G.standing.outlaw) || 0;
+    if (G && global.Tithe && G.sys) st += global.Tithe.standingBonus(G, G.sys, G.t || 0);
+    return st;
+  }
+
   function hullGate(G, port, h) {
     if (!h || !(h.grey || h.syndicate)) return { present: true, why: null };
     if (!port) return { present: false, why: 'only on the clamps' };
     if (h.syndicate) {
       if ((port.faction || 'civil') !== 'outlaw') return { present: false, why: 'the Syndicate sells these only in ports it holds' };
       if (G && wantedHere(G, 'outlaw')) return { present: true, why: 'they will not sell one to someone they want' };
-      var st = (G && G.standing && G.standing.outlaw) || 0;
+      var st = syndicateStanding(G);
       if (st < (h.syndicate.minStanding || 0)) {
         return { present: true, why: 'needs ' + h.syndicate.minStanding + '+ standing with the Syndicate — you have ' + Math.round(st) };
       }
@@ -7394,7 +7512,7 @@
     if (livery === 'syn') {
       if (fac !== 'outlaw') return 'only a yard the Syndicate holds puts a hull in their colours';
       if (G && wantedHere(G, 'outlaw')) return 'they will not put their colours on someone they want';
-      var st = (G && G.standing && G.standing.outlaw) || 0;
+      var st = syndicateStanding(G);
       if (st < LIVERY_STANDING) return 'needs ' + LIVERY_STANDING + '+ standing with the Syndicate — you have ' + Math.round(st);
       return null;
     }
@@ -7580,7 +7698,7 @@
      * bribe that could not open this shelf would not be much of a bribe. */
     var corrupt = effectiveCorruption(G, (sys && sys.corruption !== undefined) ? sys.corruption : crime);
     var fac = port.faction || 'civil';
-    var standing = (G.standing || {})[fac] || 0;
+    var standing = fac === 'outlaw' ? syndicateStanding(G) : (G.standing || {})[fac] || 0;
     var hot = wantedHere(G, fac);
     var facName = (sys && sys.factions || []).filter(function (f) {
       return f.id === fac;
@@ -7603,7 +7721,7 @@
          * should not see this gun, and a career criminal the Allies want
          * dead on sight should, provided the mob likes them. */
         if (fac !== 'outlaw') continue;                // not their turf
-        var outlawStanding = (G.standing || {}).outlaw || 0;
+        var outlawStanding = syndicateStanding(G);
         if (hot) {
           verdict = 'they will not arm someone they want';
         } else if (outlawStanding < (it.minStanding || 0)) {
@@ -8419,6 +8537,8 @@
     NPC_SHIELD: NPC_SHIELD, MAX_IMPACTS: MAX_IMPACTS,
     damageNpc: damageNpc, damagePlayer: damagePlayer, killNpc: killNpc,
     liftTrader: liftTrader,
+    reapLifted: reapLifted,
+    LOOT_BOUNTY_SHARE: LOOT_BOUNTY_SHARE, HUSH_LOOT_SHARE: HUSH_LOOT_SHARE, lootBounty: lootBounty,
     crime: crime, witnessNear: witnessNear,
     bountyTotal: bountyTotal, wantedHere: wantedHere, fleetPort: fleetPort,
     sellsHulls: sellsHulls,
@@ -8444,7 +8564,7 @@
     capitalShadow: capitalShadow, CAPITAL_WATCH: CAPITAL_WATCH,
     contrabandAboardFor: contrabandAboardFor,
     dockRefused: dockRefused, dockRefusal: dockRefusal, payBounty: payBounty,
-    demandFrom: demandFrom,
+    demandFrom: demandFrom, syndicateStanding: syndicateStanding,
     repairCost: repairCost, repair: repair, deadPanelCount: deadPanelCount,
     buyOutfit: buyOutfit, buyHull: buyHull,
     stripForRespawn: stripForRespawn

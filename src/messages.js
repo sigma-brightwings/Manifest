@@ -874,24 +874,33 @@
   }
 
   /* ---- NPC distress calls ---------------------------------------------------
-   * The band is not only yours. On a seeded schedule a captain calls for
-   * help: usually a real trader in real trouble — the rescue the design
-   * wants you able to make — and, where pirates work the lanes, sometimes a
-   * pirate pretending to be one, transmitting from where it actually lurks.
-   * The ambush is the pirate's own intercept (Sim.wakeNpc), triggered by
-   * you flying to it; nothing new is spawned.
+   * The band is not only yours. A captain calls for help: a real trader in
+   * real trouble — the rescue the design wants you able to make — and,
+   * where pirates work the lanes, sometimes a pirate pretending to be one,
+   * transmitting from where it actually lurks. The ambush is the pirate's
+   * own intercept (Sim.wakeNpc), triggered by you flying to it; nothing
+   * new is spawned.
+   *
+   * THE REAL ONES ARE upkeep.js's NOW (2026-10-30). This schedule used to
+   * put real traders on the band as well, and they were phantoms: the call
+   * said adrift while the ship it named flew on along her timetable, and
+   * "answering" was a thank-you with nobody there. A real mayday is now a
+   * ship whose tank actually let go, adrift where the call says, until you
+   * or a tug get to her. What is left here is the bait, at the rate that
+   * keeps it about the share of the band it always was where pirates work
+   * (roughly half: upkeep puts a real ship adrift every five days or so in
+   * a typical system, and this a lure about as often).
    *
    * STATELESS. Whether a call is on the band at time t is a pure function
    * of (seed, star, slot): it is pushed when t is inside its window and is
    * not already there, so a reload, a jump out and back, or time warp all
    * agree. */
   var NPC_SLOT = 4 * 3600;      // s — one chance of a call per four hours
-  var NPC_CHANCE = 0.4;
+  var NPC_CHANCE = 0.03;        // of slots, a lure, where pirates work
   var NPC_LIFE = 5400;          // s — an hour and a half on the band
-  var FAKE_SHARE = 0.45;        // of calls, where a pirate is working
 
   function npcCallFor(G, sys, slot) {
-    var Sim = global.Sim, Cap = global.Captains;
+    var Sim = global.Sim;
     if (!sys || !sys.traffic || !sys.traffic.length) return null;
     var starId = (sys.starId) || (G.here && G.here.id) || 'here';
     var rng = new RNG('npcmayday|' + G.seed + '|' + starId + '|' + slot);
@@ -899,10 +908,10 @@
     var fireAt = slot * NPC_SLOT + rng.range(0, NPC_SLOT * 0.6);
 
     var pirates = (sys.patrols || []).filter(function (p) { return p.kind === 'pirate' && !p.dead; });
-    var fake = pirates.length > 0 && rng.chance(FAKE_SHARE);
+    if (!pirates.length) return null;
+    var fake = true;
     var routes = sys.traffic.filter(function (r) { return r.kind !== 'fleet' && !r.suppressed; });
     if (!routes.length) return null;
-    var sit = rng.pick(['drive', 'drive', 'breach', 'lifesupport', 'casualties']);
     var call = { npc: true, fake: fake, slot: slot, from: 'npc|' + starId + '|' + slot,
                  at: fireAt, until: fireAt + NPC_LIFE, mine: false, want: 'tender',
                  cls: 'ship', kind: 'mayday', answeredBy: null };
@@ -922,14 +931,6 @@
       call.copiedRoute = copied ? copied.id : null;
       call.reg = copied ? (copied.reg || (Sim.regCode ? Sim.regCode(copied.id) : null))
                         : (Sim.regCode ? Sim.regCode('fake|' + G.seed + '|' + slot) : null);
-    } else {
-      var route = routes[rng.int(0, routes.length - 1)];
-      call.routeId = route.id;
-      call.name = route.name;
-      call.reg = route.reg || (Sim.regCode ? Sim.regCode(route.id) : null);
-      var cargoClaim = route.cls === 'liner' ? { value: 'humanitarian', label: 'passengers', neg: false }
-                                             : { value: 'ordinary', label: 'freight', neg: false };
-      call.claims = { situation: { value: sit, label: '', neg: false }, cargo: cargoClaim };
     }
     call.text = compose(call.claims, call.from);
     return call;
@@ -1003,6 +1004,10 @@
     var Sim = global.Sim;
     if (!call || !call.npc) return 'Registered, and transmitting from where the registry expects.';
     if (!call.fake) {
+      if (call.upkeep) {
+        return 'Registered to the ' + call.name + ', off her timetable since her tank went. ' +
+               'The beacon is where her last position report says she is. It checks out.';
+      }
       return 'Registered to the ' + call.name + ', on her timetabled run. It checks out.';
     }
     if (call.copiedRoute) {
@@ -1026,6 +1031,16 @@
   function answerNpcCall(sys, G, t, call, hooks) {
     var Cap = global.Captains;
     function say(m, secs) { if (hooks && hooks.say) hooks.say(m, secs || 7); }
+    /* A SHIP THAT IS REALLY ADRIFT (upkeep.js). Answering is passing her
+     * mass, which takes being alongside; a part-load leaves the call open
+     * so the next trip can finish it. */
+    if (call.upkeep && global.Upkeep) {
+      var her = (sys.traffic || []).filter(function (r) { return r.id === call.routeId; })[0];
+      if (!her) return { ok: false, why: 'she is not on the registry any more' };
+      var tr = global.Upkeep.transfer(G, sys, t, her, hooks);
+      if (tr.ok && tr.done) call.answeredBy = 'player';
+      return tr;
+    }
     var reach = V.dist(G.ship.pos, call.pos);
     if (reach > SCENE_RANGE) return { ok: false, why: 'too far from the scene to be any use' };
     call.answeredBy = 'player';
@@ -1152,6 +1167,8 @@
   function update(sys, G, t, hooks) {
     if (!G || !sys) return;
     updateNpcCalls(G, sys, t);
+    /* The real ones: ships whose tanks have actually let go (upkeep.js). */
+    if (global.Upkeep) global.Upkeep.updateCalls(G, sys, t);
     var bs = G.broadcasts || [];
     for (var i = 0; i < bs.length; i++) {
       var b = bs[i];

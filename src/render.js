@@ -329,7 +329,56 @@
    * sizes — a naval cutter is 240 m, the NPC capital ship 520 m; this is
    * the hull YOU fly.) */
   var TRUE_LEN = { capital: 0.250, carrier: 0.300 };
+  /* ---- AND NOW EVERY HULL HAS A SIZE OF HER OWN (2026-10-26) --------------
+   * Astra: "resize all ships to be large enough that you can climb into
+   * them from the ramp, up and into a room which seals the ramp", and "if
+   * you have to resize hulls to fit their interiors, do it." At 25 m the
+   * rooms of an L or XL hull ran out through her tail. tools/fit-hulls.js
+   * found, for each, the smallest length at which every room aboard is
+   * inside her model (src/hullfit.js); she is drawn, docked and berthed at
+   * that length from now on, through the same TRUE_LEN every caller already
+   * reads. The two tower hulls keep theirs. */
+  (function () {
+    /* Headless (the tests, the tools), the table is a file beside this
+     * one; in the page it is a script tag before it. */
+    if (!global.HullFit && typeof require === 'function') {
+      try { require('./hullfit.js'); } catch (e) { /* not generated yet: every hull at SHIP_LEN */ }
+    }
+    var F = global.HullFit || {};
+    for (var id in F) if (F[id] && F[id].len && !F[id].tower) TRUE_LEN[id] = F[id].len / 1000;
+  })();
+  /* EACH SHIP HER OWN SIZE (2026-10-29). Ships in space are drawn at their
+   * route's size (generate.js), 1.4 to 4.5 times the hull's fitted length,
+   * so a 97 m waste hauler was a 31 m ship once you were aboard. Astra:
+   * "we'll increase the ship size so that the hull interior makes sense",
+   * and, asked, each ship her own size. So a ship object may carry
+   * `lengthKm` (main.js sets it on a ship you board, to the length she is
+   * drawn at): her length is that, her fit is the hull's scaled up to it
+   * (the cockpit at the same point of her model), and her hold is
+   * stretched aft to fill the extra (shipInterior). Hulls you fly carry no
+   * `lengthKm` and are exactly as they were. */
+  function hullFit(x) {
+    var id = typeof x === 'string' ? x : (x && x.hullId);
+    var F = global.HullFit;
+    var f = (id && F && F[id] && F[id].len) ? F[id] : null;
+    if (!f || typeof x !== 'object' || !(x.lengthKm > 0) || x.lengthKm * 1000 <= f.len + 1e-6) return f;
+    var k = x.lengthKm * 1000 / f.len;
+    if (x._fitScaled && x._fitScaled.k === k && x._fitScaled.base === f) return x._fitScaled.fit;
+    var s = {};
+    for (var key in f) s[key] = f[key];
+    s.len = f.len * k;
+    if (f.at) s.at = [f.at[0] * k, f.at[1] * k, f.at[2] * k];
+    if (typeof f.ground === 'number') s.ground = f.ground * k;
+    s.scale = k;
+    try { Object.defineProperty(x, '_fitScaled', { value: { k: k, base: f, fit: s }, writable: true, configurable: true, enumerable: false }); }
+    catch (e) { /* a frozen object: unscaled caching is fine */ }
+    return s;
+  }
   function hullLength(x) {
+    if (x && typeof x === 'object' && x.lengthKm > 0) {
+      var base = TRUE_LEN[x.hullId] || SHIP_LEN;
+      return Math.max(base, x.lengthKm);
+    }
     var id = typeof x === 'string' ? x : (x && x.hullId);
     return (id && TRUE_LEN[id]) || SHIP_LEN;
   }
@@ -363,9 +412,18 @@
    * shared with the ship so the rooms, their doors and the lift are the
    * same objects whichever frame asked for them. */
   var BRIDGE_FRAMES = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
-  function bridgeFrame(ship) {
+  /* Where the cockpit is in her, in her own metres: up the tower on the
+   * two that have one, and on every other hull wherever fit-hulls put it
+   * so her rooms are inside her (2026-10-26: it used to be her centre). */
+  function cockpitAt(ship) {
     var b = bridgeSpec(ship);
-    if (!b || !BRIDGE_FRAMES || !ship.pos || !ship.fwd) return ship;
+    if (b) return b.at;
+    var f = hullFit(ship);
+    return f && f.at && (f.at[0] || f.at[1] || f.at[2]) ? f.at : null;
+  }
+  function bridgeFrame(ship) {
+    var at = ship && cockpitAt(ship);
+    if (!at || !BRIDGE_FRAMES || !ship.pos || !ship.fwd) return ship;
     var p = BRIDGE_FRAMES.get(ship);
     if (!p) {
       p = Object.create(ship);
@@ -377,7 +435,7 @@
       p._base = ship;
       BRIDGE_FRAMES.set(ship, p);
     }
-    p.pos = localToWorld(ship, b.at[0] * 0.001, b.at[1] * 0.001, b.at[2] * 0.001);
+    p.pos = localToWorld(ship, at[0] * 0.001, at[1] * 0.001, at[2] * 0.001);
     return p;
   }
   /* The hull with the bridge's own shell taken out: every triangle whose
@@ -3406,9 +3464,80 @@
     };
   }
 
+  /* TUCKED BEHIND ITS DOORS (2026-10-29). Astra, flying a Talon: "there's
+   * something wrong with the landing gear doors". Measured across every
+   * rigged hull: the doors close flush with the skin (within a centimetre
+   * or two), but the converter's strut `stow` angle leaves every leg 0.2 to
+   * 0.6 m short of folding away — on the Talon the main legs hang 0.30 m
+   * below the belly with the gear up, straight through their own shut
+   * doors, which is the striped lump you see on her underside in flight.
+   *
+   * So the stow angle is corrected here, once per mesh, from the hull
+   * itself: the skin over the bay is the lowest hull face over the leg's
+   * footprint (deployed or stowed), and the leg turns further the SAME way
+   * until it is above that, or — if no angle that way clears it — the
+   * least it can be turned the other way round that does. Doors are left
+   * as the converter measured them; they already close flush. Measured,
+   * not tuned: the result depends only on the model. */
+  var TUCK_EPS = 0.0004;                 // model units (~1 cm on a 25 m hull)
+  function partLowest(p, ang) {
+    var a = p.axis, k = { x: a[0], y: a[1], z: a[2] };
+    var kl = Math.hypot(k.x, k.y, k.z) || 1; k.x /= kl; k.y /= kl; k.z /= kl;
+    var c = Math.cos(ang), s = Math.sin(ang), kd = 1 - c;
+    var Rv = rotAxis(HULL_R, k, c, s, kd), Uv = rotAxis(HULL_U, k, c, s, kd), Fv = rotAxis(HULL_F, k, c, s, kd);
+    var lo = Infinity, x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (var v = 0; v < p.mesh.v.length; v++) {
+      var q = p.mesh.v[v];
+      var wx = p.pivot[0] + Rv.x * q[0] + Uv.x * q[1] + Fv.x * q[2];
+      var wy = p.pivot[1] + Rv.y * q[0] + Uv.y * q[1] + Fv.y * q[2];
+      var wz = p.pivot[2] + Rv.z * q[0] + Uv.z * q[1] + Fv.z * q[2];
+      if (wy < lo) lo = wy;
+      if (wx < x0) x0 = wx; if (wx > x1) x1 = wx; if (wz < z0) z0 = wz; if (wz > z1) z1 = wz;
+    }
+    return { lo: lo, x0: x0, x1: x1, z0: z0, z1: z1 };
+  }
+  function tuckGear(mesh) {
+    if (!mesh || !mesh.gear || mesh._tucked) return;
+    mesh._tucked = true;
+    for (var i = 0; i < mesh.gear.length; i++) {
+      var p = mesh.gear[i];
+      if (p.role !== 'strut' || !p.mesh || !p.mesh.v || !(Math.abs(p.stow) > 0.2)) continue;
+      /* How far the leg hangs below the skin at angle `ang`: the skin is
+       * taken over the ground the leg covers deployed AND at that angle,
+       * since a leg that swings forward folds under a different bit of
+       * belly. Positive means it hangs out. */
+      var d0 = partLowest(p, 0);
+      var hang = function (ang) {
+        var s = partLowest(p, ang);
+        var bx0 = Math.min(d0.x0, s.x0), bx1 = Math.max(d0.x1, s.x1);
+        var bz0 = Math.min(d0.z0, s.z0), bz1 = Math.max(d0.z1, s.z1);
+        var skin = Infinity;
+        for (var f = 0; f < mesh.f.length; f++) {
+          var face = mesh.f[f], cx = 0, cy = 0, cz = 0;
+          for (var j = 0; j < face.length; j++) { var vv = mesh.v[face[j]]; cx += vv[0]; cy += vv[1]; cz += vv[2]; }
+          cx /= face.length; cy /= face.length; cz /= face.length;
+          if (cx >= bx0 && cx <= bx1 && cz >= bz0 && cz <= bz1 && cy < skin) skin = cy;
+        }
+        return isFinite(skin) ? skin - s.lo : -Infinity;
+      };
+      if (hang(p.stow) <= TUCK_EPS) continue;
+      /* The same way round first, then the other; failing both, whichever
+       * angle leaves the least of it showing. */
+      var sign = p.stow < 0 ? -1 : 1, step = Math.PI / 180, found = null, best = p.stow, bestH = hang(p.stow), a, h;
+      for (a = Math.abs(p.stow); a <= Math.PI + 1e-9 && found === null; a += step) {
+        h = hang(sign * a); if (h <= TUCK_EPS) found = sign * a; else if (h < bestH) { bestH = h; best = sign * a; }
+      }
+      for (a = step; a <= Math.PI + 1e-9 && found === null; a += step) {
+        h = hang(-sign * a); if (h <= TUCK_EPS) found = -sign * a; else if (h < bestH) { bestH = h; best = -sign * a; }
+      }
+      p.stowMeasured = p.stow; p.stow = found !== null ? found : best;
+    }
+  }
+
   function drawHullGear(ctx, cam, frame, mesh, lengthKm, sunDir, tint, travel) {
     var parts = mesh && mesh.gear;
     if (!parts || !parts.length) return;
+    tuckGear(mesh);
     var R = frame.right, U = frame.up, F = frame.fwd;
 
     for (var i = 0; i < parts.length; i++) {
@@ -3456,6 +3585,7 @@
   function gearBounds(mesh, travel) {
     var parts = mesh && mesh.gear;
     if (!parts || !parts.length) return null;
+    tuckGear(mesh);
     var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     for (var i = 0; i < parts.length; i++) {
       var p = parts[i];
@@ -3549,6 +3679,21 @@
      * cab you are standing in is left out, or its walls would be all you
      * saw. */
     if (opts && opts.fromBridge) mesh = bridgeCutMesh(mesh, ship);
+    /* HER RAMP (2026-10-26): the bay it lies in is cut through her belly,
+     * and the ramp, its bay's walls and the airlock over it are drawn in
+     * her frame at however far down it is. Only your own ship carries an
+     * airlock state, so nobody else's belly is opened. */
+    var ramp = (ship && ship.airlock && ship.hullId && !(opts && opts.fromBridge)) ? rampExterior(ship, mesh, L) : null;
+    if (ramp) {
+      mesh = ramp.hull;
+      var parts = [ramp.bay, ramp.ramp];
+      for (var rpi = 0; rpi < parts.length; rpi++) {
+        if (!parts[rpi] || !parts[rpi].f.length) continue;
+        if (!(gpuWorld() && global.GLWorld.queueMesh(cam, ship, parts[rpi], L, sunDir, 0, null))) {
+          paintMesh(ctx, cam, ship, parts[rpi], L, sunDir, tint);
+        }
+      }
+    }
     if (!(gpuWorld() && global.GLWorld.queueMesh(cam, ship, mesh, L, sunDir,
                                                  ship.reentryGlow || 0, ship.windDir,
                                                  undefined, pr))) {
@@ -11247,14 +11392,412 @@
     /* A fitted turret puts a turret position aboard (shipdeck.js, 2026-10-25),
      * so fitting or pulling one rebuilds the room, as a repaint does. */
     var tur = !!ship.turret;
-    if (spec._deck && spec._deck.libId === libId && spec._deck.turret === tur) return spec._deck;
+    /* What is in her hold (2026-10-28): the crates are stacked from it, so
+     * the room is rebuilt when it changes — in tenths of a hold and by which
+     * goods, not every tonne, so scooping a canister does not rebuild a
+     * ship's worth of meshes. */
+    var load = holdLoad(ship, hull);
+    if (spec._deck && spec._deck.libId === libId && spec._deck.turret === tur &&
+        spec._deck.loadKey === load.key) return spec._deck;
     var g = cockpitGeometry(spec);
     /* Who works her, with you at the helm (crew.js), off the hull's own
      * default outfit so a refit does not move the furniture. */
     var crew = global.Crew && global.Crew.crewNeeded ? global.Crew.crewNeeded(ship.hullId, true) : null;
-    var plan = SD.plan(g, { hullId: ship.hullId, libId: libId, size: hull && hull.size, key: spec.key, crew: crew, turret: tur });
-    spec._deck = { spec: spec, geom: g, plan: plan, meshes: SD.meshes(g, plan), libId: libId, turret: tur };
+    /* How far her airlock deck stands above the ground on her gear: the
+     * ramp's drop (hullfit.js). */
+    var fit = hullFit(ship), capScale = 1;
+    var popts = { hullId: ship.hullId, libId: libId, size: hull && hull.size, key: spec.key, crew: crew, turret: tur,
+                  rampDrop: fit && (fit.dropRoom || fit.drop), rampReach: fit && fit.drop,
+                  load: load.load };
+    var plan = SD.plan(g, popts);
+    /* A ship bigger than her hull's fitted length (hullFit, `lengthKm`):
+     * the same rooms, the cockpit at the same point of her model, and her
+     * hold (or, with none, her passage) run on aft by however much further
+     * her stern now is — the aft end of the plan scaled with her, less a
+     * metre for the bulkhead. Planned twice; the plan takes no draw for
+     * `stretch`, so the rest of her is the same ship. */
+    if (fit && fit.scale > 1.01) {
+      var aftR = SD.roomByKind(plan, 'cargo') || SD.roomByKind(plan, 'passage');
+      var aftZ = aftR ? aftR.z0 : 0;
+      var stretch = aftZ < 0 ? Math.max(0, -aftZ * (fit.scale - 1) - 1.0) : 0;
+      var base0 = SD.roomByKind(plan, 'cargo');
+      if (stretch > 0.5) {
+        popts.stretch = stretch;
+        plan = SD.plan(g, popts);
+      }
+      /* AND WIDENED (2026-10-29, Astra: "widen the hold"). As wide as her
+       * own hull is, all the way down the bay, at floor and at ceiling, a
+       * metre clear of her skin each side — measured against her model the
+       * way tools/fit-hulls.js measures every room (hull above and below
+       * the point), never wider than her beam has grown. Then her hold's
+       * capacity grows with its floor, so a crate holds what it held on the
+       * fitted hull and the stacks say what is really in her. */
+      var cg = SD.roomByKind(plan, 'cargo');
+      if (cg && base0) {
+        var hw0 = (cg.x1 - cg.x0) / 2, hw = widestHold(ship, plan, cg, hw0, hw0 * fit.scale);
+        if (hw > hw0 + 0.3) {
+          popts.cargoHW = hw;
+          plan = SD.plan(g, popts);
+          cg = SD.roomByKind(plan, 'cargo');
+        }
+        /* Her capacity is the one the timetable sized her by (generate.js
+         * holdCapacity: her hull's, times the square of how much longer
+         * she is), so the crates fill her to the half the trade put in her. */
+        if (fit.scale > 1.01) {
+          capScale = fit.scale * fit.scale;
+          var load2 = holdLoad(ship, hull, capScale);
+          popts.load = load2.load;
+          plan = SD.plan(g, popts);
+        }
+      }
+    }
+    spec._deck = { spec: spec, geom: g, plan: plan, meshes: SD.meshes(g, plan), libId: libId, turret: tur, loadKey: load.key,
+                   /* What her hold takes, at the size it is drawn (her screens read it). */
+                   holdCap: (ship.cargoCap || (hull && hull.cargoCap) || 0) * capScale };
     return spec._deck;
+  }
+  /* The widest half-width (m) a hold at `cg` can have inside her model,
+   * between `lo` and `hi`, in quarter-metre steps down from `hi`. */
+  var HULL_COLS = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  function hullColumns(mesh) {
+    var ix = HULL_COLS && HULL_COLS.get(mesh);
+    if (ix) return ix;
+    var N = 64, cells = [], tris = [];
+    for (var i = 0; i < N * N; i++) cells.push([]);
+    var cell = function (u) { return Math.max(0, Math.min(N - 1, Math.floor((u + 0.55) / 1.1 * N))); };
+    mesh.f.forEach(function (f) {
+      for (var k = 1; k + 1 < f.length; k++) {
+        var a = mesh.v[f[0]], b = mesh.v[f[k]], c = mesh.v[f[k + 1]];
+        var d = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
+        if (Math.abs(d) < 1e-12) continue;
+        var id = tris.push({ a: a, b: b, c: c, d: d }) - 1;
+        var cx0 = cell(Math.min(a[0], b[0], c[0])), cx1 = cell(Math.max(a[0], b[0], c[0]));
+        var cz0 = cell(Math.min(a[2], b[2], c[2])), cz1 = cell(Math.max(a[2], b[2], c[2]));
+        for (var cx = cx0; cx <= cx1; cx++) for (var cz = cz0; cz <= cz1; cz++) cells[cz * N + cx].push(id);
+      }
+    });
+    ix = {
+      inside: function (x, y, z) {
+        var list = cells[cell(z) * N + cell(x)], above = false, below = false;
+        for (var i = 0; i < list.length; i++) {
+          var t = tris[list[i]], a = t.a, b = t.b, c = t.c;
+          var l1 = ((b[2] - c[2]) * (x - c[0]) + (c[0] - b[0]) * (z - c[2])) / t.d;
+          if (l1 < 0 || l1 > 1) continue;
+          var l2 = ((c[2] - a[2]) * (x - c[0]) + (a[0] - c[0]) * (z - c[2])) / t.d, l3 = 1 - l1 - l2;
+          if (l2 < 0 || l3 < 0) continue;
+          if (l1 * a[1] + l2 * b[1] + l3 * c[1] > y) above = true; else below = true;
+          if (above && below) return true;
+        }
+        return false;
+      }
+    };
+    if (HULL_COLS) HULL_COLS.set(mesh, ix);
+    return ix;
+  }
+  function widestHold(ship, plan, cg, lo, hi) {
+    var mesh = hullPreviewMesh(ship.hullId, ship);
+    if (!mesh || !mesh.f) return lo;
+    var ix = hullColumns(mesh), Lm = hullLength(ship) * 1000, at = cockpitAt(ship) || [0, 0, 0];
+    var fy = plan.decks ? plan.decks.main.floorY : plan.floorY, h = cg.y1 || 3;
+    var xc = (cg.x0 + cg.x1) / 2, CLEAR = 1.0;
+    var fits = function (w) {
+      for (var z = cg.z0 + 0.1; z <= cg.z1 - 0.1; z += 1.0) {
+        for (var s = -1; s <= 1; s += 2) {
+          var x = xc + s * (w + CLEAR);
+          if (!ix.inside((at[0] + x) / Lm, (at[1] + fy + 0.05) / Lm, (at[2] + z) / Lm)) return false;
+          if (!ix.inside((at[0] + x) / Lm, (at[1] + fy + h - 0.05) / Lm, (at[2] + z) / Lm)) return false;
+        }
+      }
+      return true;
+    };
+    for (var w = hi; w > lo; w -= 0.25) if (fits(w)) return w;
+    return lo;
+  }
+  /* A ship's hold as the deck plan wants it: how full, and of what, biggest
+   * line first. Your ship's `cargo` is { cid: t }; a ship you are aboard
+   * carries the same, set from her manifest when you board (main.js).
+   * `capScale` (a hold widened and lengthened past her hull's: shipInterior)
+   * grows her capacity with her floor. `cap` goes with it, so each crate
+   * can say how many tonnes it is. */
+  function holdLoad(ship, hull, capScale) {
+    var cap = (ship.cargoCap || (hull && hull.cargoCap) || 0) * (capScale || 1), lines = [], tot = 0;
+    for (var cid in (ship.cargo || {})) {
+      var t = ship.cargo[cid] || 0;
+      if (t > 0) { lines.push({ cid: cid, t: t }); tot += t; }
+    }
+    lines.sort(function (a, b) { return b.t - a.t || (a.cid < b.cid ? -1 : 1); });
+    var fill = cap > 0 ? Math.min(1, tot / cap) : 0;
+    var key = Math.round(fill * 10) + '|' + lines.slice(0, 4).map(function (l) { return l.cid; }).join(',');
+    return { key: key, load: cap > 0 ? { fill: fill, lines: lines, cap: cap, total: tot } : null };
+  }
+
+  /* ---- THE RAMP, FROM OUTSIDE (2026-10-26) --------------------------------
+   * Her rooms are in her cockpit's frame (cockpitAt), in metres; her model
+   * is unit length about her centre. So a point of the plan is (at + p) / L
+   * in the model. The bay is the ramp's well carried down through her: her
+   * own skin under it is cut away (every triangle whose middle is in the
+   * well's footprint and below the deck), the bay's four walls go from the
+   * lowest of that skin up to the deck, and the airlock above is a box with
+   * a ceiling, so an open ramp shows a room at the top of it and not the
+   * inside of a model. The ramp itself is shipdeck's, in the same units. */
+  var RAMP_CUT = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  function rampExterior(ship, mesh, Lkm) {
+    var SD = global.ShipDeck, d = shipInterior(ship);
+    var at = cockpitAt(ship) || [0, 0, 0];
+    if (!SD || !d || !d.plan.ramp || !mesh || !mesh.v || !RAMP_CUT) return null;
+    var p = d.plan, rp = p.ramp, Lm = Lkm * 1000;
+    var fy = p.decks ? p.decks.main.floorY : p.floorY;
+    var lockR = SD.roomByKind(p, 'airlock');
+    var U = function (x, y, z) { return [(at[0] + x) / Lm, (at[1] + y) / Lm, (at[2] + z) / Lm]; };
+    var per = RAMP_CUT.get(mesh);
+    if (!per) { per = {}; RAMP_CUT.set(mesh, per); }
+    var key = ship.hullId + '|' + Lm;
+    var c = per[key];
+    if (!c) {
+      var a = U(rp.x0, fy, rp.foot), b = U(rp.x1, fy, rp.hinge);
+      var x0 = Math.min(a[0], b[0]), x1 = Math.max(a[0], b[0]), z0 = Math.min(a[2], b[2]), z1 = Math.max(a[2], b[2]);
+      var yTop = a[1], hull = {}, k, low = yTop, skinVotes = {};
+      for (k in mesh) if (k.charAt(0) !== '_') hull[k] = mesh[k];
+      hull.f = []; hull.c = mesh.c ? [] : null;
+      for (var i = 0; i < mesh.f.length; i++) {
+        var f = mesh.f[i], cx = 0, cy = 0, cz = 0;
+        for (var j = 0; j < f.length; j++) { var v = mesh.v[f[j]]; cx += v[0]; cy += v[1]; cz += v[2]; }
+        cx /= f.length; cy /= f.length; cz /= f.length;
+        if (cx > x0 && cx < x1 && cz > z0 && cz < z1 && cy < yTop) {
+          for (j = 0; j < f.length; j++) low = Math.min(low, mesh.v[f[j]][1]);
+          /* What colour her skin was where the well is cut, so the doors
+           * that close it are painted to match. */
+          if (mesh.c && typeof mesh.c[i] === 'string') skinVotes[mesh.c[i]] = (skinVotes[mesh.c[i]] || 0) + 1;
+          continue;
+        }
+        hull.f.push(f);
+        if (mesh.c) hull.c.push(mesh.c[i]);
+      }
+      /* The bay: walls from her lowest cut skin to the deck, and the
+       * airlock's box over it. In the plan's metres, then to the model. */
+      var pal = p.palette || {}, bay = { v: [], f: [], c: [] };
+      var lowM = low * Lm - at[1] - 0.05;
+      function q4(A, B, C, D, col) {
+        var n = bay.v.length;
+        [A, B, C, D].forEach(function (P) { bay.v.push(U(P[0], P[1], P[2])); });
+        bay.f.push([n, n + 1, n + 2]); bay.c.push(col);
+        bay.f.push([n, n + 2, n + 3]); bay.c.push(col);
+      }
+      var wc = pal.lockWall || '#2e3640', top = fy + 2.3;
+      q4([rp.x0, lowM, rp.foot], [rp.x1, lowM, rp.foot], [rp.x1, fy, rp.foot], [rp.x0, fy, rp.foot], wc);
+      q4([rp.x0, lowM, rp.hinge], [rp.x1, lowM, rp.hinge], [rp.x1, fy, rp.hinge], [rp.x0, fy, rp.hinge], wc);
+      q4([rp.x0, lowM, rp.foot], [rp.x0, lowM, rp.hinge], [rp.x0, fy, rp.hinge], [rp.x0, fy, rp.foot], wc);
+      q4([rp.x1, lowM, rp.foot], [rp.x1, lowM, rp.hinge], [rp.x1, fy, rp.hinge], [rp.x1, fy, rp.foot], wc);
+      if (lockR) {
+        var r = lockR;
+        q4([r.x0, top, r.z0], [r.x1, top, r.z0], [r.x1, top, r.z1], [r.x0, top, r.z1], pal.ceil || '#1f242b');
+        q4([r.x0, fy, r.z0], [r.x1, fy, r.z0], [r.x1, top, r.z0], [r.x0, top, r.z0], wc);
+        q4([r.x0, fy, r.z1], [r.x1, fy, r.z1], [r.x1, top, r.z1], [r.x0, top, r.z1], wc);
+        q4([r.x0, fy, r.z0], [r.x0, fy, r.z1], [r.x0, top, r.z1], [r.x0, top, r.z0], wc);
+        q4([r.x1, fy, r.z0], [r.x1, fy, r.z1], [r.x1, top, r.z1], [r.x1, top, r.z0], wc);
+        /* The floor round the well, so the landing is there to look up at. */
+        q4([r.x0, fy, rp.hinge], [r.x1, fy, rp.hinge], [r.x1, fy, r.z1], [r.x0, fy, r.z1], pal.passFloor || '#20262f');
+        q4([r.x0, fy, r.z0], [r.x1, fy, r.z0], [r.x1, fy, rp.foot], [r.x0, fy, rp.foot], pal.passFloor || '#20262f');
+        q4([r.x0, fy, rp.foot], [rp.x0, fy, rp.foot], [rp.x0, fy, rp.hinge], [r.x0, fy, rp.hinge], pal.passFloor || '#20262f');
+        q4([rp.x1, fy, rp.foot], [r.x1, fy, rp.foot], [r.x1, fy, rp.hinge], [rp.x1, fy, rp.hinge], pal.passFloor || '#20262f');
+        q4([r.x0 + 0.9, top - 0.01, r.z0 + 0.3], [r.x0 + 1.1, top - 0.01, r.z0 + 0.3],
+           [r.x0 + 1.1, top - 0.01, r.z1 - 0.3], [r.x0 + 0.9, top - 0.01, r.z1 - 0.3], pal.light || '!#d8ecff');
+      }
+      var skinCol = null, skinN = 0;
+      for (var sc in skinVotes) if (skinVotes[sc] > skinN) { skinN = skinVotes[sc]; skinCol = sc; }
+      c = per[key] = { hull: hull, bay: bay, ramps: {}, lowM: lowM, skin: skinCol };
+    }
+    /* The ramp at a twentieth of its travel at a time. */
+    var t = Math.round(Math.max(0, Math.min(1, ship.airlock.ramp || 0)) * 20) / 20;
+    var rm = c.ramps[t];
+    if (!rm) {
+      var m = SD.rampMesh(p.palette || {}, rp, fy, t);
+      var mv = m.v.slice(), mf = m.f.slice(), mc = m.c.slice();
+      /* HER BELLY DOORS (2026-10-29). The ramp stows at deck height, above
+       * her skin, so shut it left an open dark well under her — Astra, on
+       * a Talon: "I don't see where there could be a ramp". Two leaves
+       * close the well flush with the skin, framed in hazard stripe so the
+       * way in reads from outside; they slide back into the bay sides in
+       * the first part of the travel, before the ramp starts to show. */
+      var yd = c.lowM + 0.04, open = Math.min(1, t / 0.15), halfW = (rp.x1 - rp.x0) / 2;
+      var zf = Math.min(rp.foot, rp.hinge), zh = Math.max(rp.foot, rp.hinge);
+      var quad = function (A, B, C, D, col) {
+        var n = mv.length; mv.push(A, B, C, D);
+        mf.push([n, n + 1, n + 2], [n, n + 2, n + 3]); mc.push(col, col);
+      };
+      var leaf = c.skin || '#5d6670', seam = '#1b1f24';
+      if (open < 1) {
+        var wL = halfW * (1 - open);
+        quad([rp.x0, yd, zf], [rp.x0 + wL - 0.02, yd, zf], [rp.x0 + wL - 0.02, yd, zh], [rp.x0, yd, zh], leaf);
+        quad([rp.x1 - wL + 0.02, yd, zf], [rp.x1, yd, zf], [rp.x1, yd, zh], [rp.x1 - wL + 0.02, yd, zh], leaf);
+        if (open === 0) quad([rp.x0 + halfW - 0.02, yd + 0.005, zf], [rp.x0 + halfW + 0.02, yd + 0.005, zf],
+                             [rp.x0 + halfW + 0.02, yd + 0.005, zh], [rp.x0 + halfW - 0.02, yd + 0.005, zh], seam);
+      }
+      /* HAZARD STRIPES round the mouth, always (Astra, 2026-10-29: "we
+       * need to put hazard stripes around the ramp ... around all ramps
+       * like it"). A band a quarter-metre wide, yellow and black at 45°,
+       * on every hull's ramp: this is the one place on her belly that
+       * moves under someone's feet. Each stripe is a parallelogram along
+       * the band, clipped to it, so the corners stay square. */
+      var b = 0.24, yt = yd - 0.01, SW = 0.2;
+      var YEL = '#f4c21a', BLK = '#141414';
+      /* One straight run of band from (u0) to (u1) along an axis, across
+       * from (w0) to (w1). `put(u, w)` maps it to the plan's x/z. */
+      var band = function (u0, u1, w0, w1, put) {
+        var bw = w1 - w0, n = Math.ceil((u1 - u0 + bw) / SW);
+        for (var si = 0; si < n; si++) {
+          var a0 = u0 - bw + si * SW, a1 = a0 + SW;
+          var cl = function (u) { return Math.max(u0, Math.min(u1, u)); };
+          quad(put(cl(a0), w0), put(cl(a1), w0), put(cl(a1 + bw), w1), put(cl(a0 + bw), w1), si % 2 ? BLK : YEL);
+        }
+      };
+      var PX = function (u, w) { return [u, yt, w]; }, PZ = function (u, w) { return [w, yt, u]; };
+      band(rp.x0 - b, rp.x1 + b, zf - b, zf, PX);
+      band(rp.x0 - b, rp.x1 + b, zh, zh + b, PX);
+      band(zf, zh, rp.x0 - b, rp.x0, PZ);
+      band(zf, zh, rp.x1, rp.x1 + b, PZ);
+      rm = c.ramps[t] = { v: mv.map(function (v) { return U(v[0], v[1], v[2]); }), f: mf, c: mc };
+    }
+    return { hull: c.hull, bay: c.bay, ramp: rm, lowM: c.lowM };
+  }
+
+  /* ---- WHERE HER HATCH IS, FROM OUTSIDE (2026-10-29) ---------------------
+   * For two ships meeting in space (boarding.js): the middle of her ramp's
+   * mouth, on her belly skin, and the box her hull fills, both in MODEL
+   * units (her length is 1; multiply by the length she is drawn at for
+   * km). Model axes are her right, up and fore. Null for a hull with no
+   * ramp. Cached on her interior, which is cached per hull. */
+  function hatchModel(ship) {
+    var d = shipInterior(ship);
+    if (!d || !d.plan || !d.plan.ramp) return null;
+    if (d._hatch) return d._hatch;
+    var mesh = hullPreviewMesh(ship.hullId, ship);
+    if (!mesh || !mesh.v) return null;
+    var L = hullLength(ship), Lm = L * 1000, at = cockpitAt(ship) || [0, 0, 0], rp = d.plan.ramp;
+    var ext = rampExterior(Object.create(ship, { airlock: { value: { ramp: 0 } } }), mesh, L);
+    var fy = d.plan.decks ? d.plan.decks.main.floorY : d.plan.floorY;
+    var skinY = ext ? ext.lowM + 0.05 : fy;
+    var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (var i = 0; i < mesh.v.length; i++) {
+      for (var k = 0; k < 3; k++) { var q = mesh.v[i][k]; if (q < lo[k]) lo[k] = q; if (q > hi[k]) hi[k] = q; }
+    }
+    d._hatch = {
+      hatch: [(at[0] + (rp.x0 + rp.x1) / 2) / Lm, (at[1] + skinY) / Lm, (at[2] + (rp.foot + rp.hinge) / 2) / Lm],
+      lo: lo, hi: hi, lengthKm: L
+    };
+    return d._hatch;
+  }
+
+  /* ---- ON THE GROUND BESIDE HER (2026-10-26) ------------------------------
+   * The walk.js plan for standing outside your ship once the ramp is down:
+   * in her cockpit's frame like her rooms (so one walker crosses from one
+   * to the other without a seam), its floor the ground her gear stands on.
+   * Two rooms: the ramp, first so it is found first, and a wide square of
+   * ground round her. Her belly is the ceiling over part of it: `clearAt`
+   * is how much headroom she leaves at a spot (her lowest skin over it,
+   * the ramp's bay cut out), and where it is less than a crouch you
+   * cannot go. A post at the ramp's foot works it from out here. */
+  var OUTSIDE_CROUCH = 0.6;                // m: lower than this, nobody gets under her — not even on hands and knees
+  function outsidePlan(ship) {
+    var d = shipInterior(ship), SD = global.ShipDeck, f = hullFit(ship);
+    if (!d || !d.plan.ramp || !SD || !f) return null;
+    if (d.outside) return d.outside;
+    var at = cockpitAt(ship) || [0, 0, 0], rp = d.plan.ramp;
+    var L = hullLength(ship), Lm = L * 1000;
+    var gy = f.ground - at[1];                     // the ground, in the room's metres
+    var mesh = hullPreviewMesh(ship.hullId, ship);
+    var ext = rampExterior(Object.create(ship, { airlock: { value: { ramp: 1 } } }), mesh, L);
+    var hull = ext ? ext.hull : mesh;
+    /* Her lowest skin over every half-metre of ground, as clearance. */
+    var STEP = 0.5, half = Lm * 0.6 + 2;
+    var cx0 = -at[0] - half, cz0 = -at[2] - half, n = Math.ceil(half * 2 / STEP);
+    var low = new Float32Array(n * n);
+    for (var i = 0; i < low.length; i++) low[i] = Infinity;
+    for (var fi = 0; fi < hull.f.length; fi++) {
+      var fc = hull.f[fi];
+      for (var k = 1; k + 1 < fc.length; k++) {
+        var a = hull.v[fc[0]], b = hull.v[fc[k]], c = hull.v[fc[k + 1]];
+        /* Exactly where she is over each cell's middle, not her bounding
+         * box: a big slanted panel would otherwise wall off all the
+         * ground under it at the height of its lowest corner. */
+        var ax = a[0] * Lm - at[0], az = a[2] * Lm - at[2], bx = b[0] * Lm - at[0], bz = b[2] * Lm - at[2];
+        var qx = c[0] * Lm - at[0], qz = c[2] * Lm - at[2];
+        var det = (bz - qz) * (ax - qx) + (qx - bx) * (az - qz);
+        if (Math.abs(det) < 1e-9) continue;
+        var ay = a[1] * Lm - at[1] - gy, by = b[1] * Lm - at[1] - gy, qy = c[1] * Lm - at[1] - gy;
+        var x0 = Math.min(ax, bx, qx), x1 = Math.max(ax, bx, qx), z0 = Math.min(az, bz, qz), z1 = Math.max(az, bz, qz);
+        var ia = Math.max(0, Math.ceil((x0 - cx0) / STEP - 0.5)), ib = Math.min(n - 1, Math.floor((x1 - cx0) / STEP - 0.5));
+        var ja = Math.max(0, Math.ceil((z0 - cz0) / STEP - 0.5)), jb = Math.min(n - 1, Math.floor((z1 - cz0) / STEP - 0.5));
+        for (var ii = ia; ii <= ib; ii++) for (var jj = ja; jj <= jb; jj++) {
+          var px = cx0 + (ii + 0.5) * STEP, pz = cz0 + (jj + 0.5) * STEP;
+          var l1 = ((bz - qz) * (px - qx) + (qx - bx) * (pz - qz)) / det;
+          if (l1 < -1e-6 || l1 > 1 + 1e-6) continue;
+          var l2 = ((qz - az) * (px - qx) + (ax - qx) * (pz - qz)) / det, l3 = 1 - l1 - l2;
+          if (l2 < -1e-6 || l3 < -1e-6) continue;
+          var y = l1 * ay + l2 * by + l3 * qy, o = jj * n + ii;
+          if (y < low[o]) low[o] = y;
+        }
+      }
+    }
+    function clearAt(x, z) {
+      var ii = Math.floor((x - cx0) / STEP), jj = Math.floor((z - cz0) / STEP);
+      /* Over nothing of hers, nothing overhead. */
+      if (ii < 0 || jj < 0 || ii >= n || jj >= n) return Infinity;
+      return low[jj * n + ii];
+    }
+    var reach = Math.max(70, Lm * 1.4);
+    var run = rp.mode === 'lift' ? 0 : rp.len * Math.cos(rp.angle);
+    var footZ = rp.hinge - (rp.mode === 'lift' ? rp.len : run);
+    var rooms = [
+      { id: 'ramp', kind: 'ramp', x0: rp.x0, x1: rp.x1, z0: footZ - 0.3, z1: rp.hinge, y0: 0, y1: 3, label: 'Ramp' },
+      { id: 'ground', kind: 'ground', x0: -at[0] - reach, x1: -at[0] + reach, z0: -at[2] - reach, z1: -at[2] + reach,
+        y0: 0, y1: 50, label: (ship.landedOn && ship.landedOn.name) || 'Outside' }
+    ];
+    var post = { kind: 'rampctl', x: rp.x1 + 0.7, z: footZ - 0.6, label: 'Ramp controls',
+                 counter: [rp.x1 + 0.55, footZ - 0.75, rp.x1 + 0.85, footZ - 0.45] };
+    var items = [post];
+    /* A lift is ridden: its own control on the platform, to take you up. */
+    if (rp.mode === 'lift') items.push({ kind: 'rampctl', x: rp.xc, z: rp.hinge - 0.4, label: 'Lift controls' });
+    var plan = {
+      kind: 'outside', outside: true, rooms: rooms, doors: [], items: items,
+      spawn: { x: (rp.x0 + rp.x1) / 2, z: footZ - 1.2, yaw: Math.PI }, floorY: gy,
+      ramp: rp, ship: d.plan, clearAt: clearAt, footZ: footZ,
+      blocked: function (x, z) {
+        var onRamp = x >= rp.x0 && x <= rp.x1 && z >= footZ - 0.3 && z <= rp.hinge;
+        var t = (ship.airlock && ship.airlock.ramp) || 0;
+        /* The ramp is somewhere to stand only when it is all the way down. */
+        if (onRamp) return t < 0.999;
+        return clearAt(x, z) < OUTSIDE_CROUCH;
+      }
+    };
+    d.outside = plan;
+    return plan;
+  }
+
+  /* A patch of ground under her, so there is something to stand on even
+   * where the world's own surface is drawn coarse: a disc of her world's
+   * colour, in her frame, at her gear's foot. Unit length, like her. */
+  var GROUND_TINT = { terran: '#4f6a3a', ocean: '#3e5f45', desert: '#a8865a', tundra: '#8e9a9a',
+                      rocky: '#6d655c', iceball: '#c9d6de', molten: '#4a2a22' };
+  function groundPatch(ship) {
+    var f = hullFit(ship);
+    if (!f) return null;
+    var body = ship.landedOn, type = body && (body.type || body.worldType);
+    var key = (type || 'rocky') + '|' + f.ground;
+    ship._groundPatch = ship._groundPatch || {};
+    if (ship._groundPatch[key]) return ship._groundPatch[key];
+    /* Out to a few kilometres — near enough the horizon from a standing
+     * eye that the world's own coarse surface is never what you stand on. */
+    var Lm = hullLength(ship) * 1000, R0 = 3000 / Lm, y = (f.ground - 0.02) / Lm;
+    var col = GROUND_TINT[type] || GROUND_TINT.rocky, m = { v: [[0, y, 0]], f: [], c: [] };
+    var N = 32;
+    for (var i = 0; i < N; i++) {
+      var t = i / N * Math.PI * 2;
+      m.v.push([Math.cos(t) * R0, y, Math.sin(t) * R0]);
+    }
+    for (i = 0; i < N; i++) { m.f.push([0, 1 + (i + 1) % N, 1 + i]); m.c.push(col); }
+    ship._groundPatch[key] = m;
+    return m;
   }
 
   /* YOUR CRAFT IN THE HANGAR (Carrier, 2026-10-25). Astra chose "your
@@ -11309,8 +11852,20 @@
       if (door.axis === 'x') parts.push({ mesh: lv[0], off: [0, dy, -tr] }, { mesh: lv[1], off: [0, dy, tr] });
       else parts.push({ mesh: lv[0], off: [-tr, dy, 0] }, { mesh: lv[1], off: [tr, dy, 0] });
     });
-    /* The airlock's lamp: green when there is somewhere to step out to. */
-    parts.push({ mesh: (ship.docked || ship.landed) ? d.meshes.lampOk : d.meshes.lampNo });
+    /* The airlock's lamp: green when the airlock is at the outside's
+     * pressure and the way out is yours (airlock.js). Its ramp, at however
+     * far down it is, in the same metres as the room. */
+    var AL = global.Airlock, base = ship._base || ship;
+    parts.push({ mesh: (AL && base.airlock ? AL.lampGreen(base) : false) ? d.meshes.lampOk : d.meshes.lampNo });
+    if (d.plan.ramp && SD.rampMesh) {
+      var rt = Math.round(Math.max(0, Math.min(1, (base.airlock && base.airlock.ramp) || 0)) * 20) / 20;
+      d.rampMeshes = d.rampMeshes || {};
+      if (!d.rampMeshes[rt]) {
+        var rfy = d.plan.decks ? d.plan.decks.main.floorY : d.plan.floorY;
+        d.rampMeshes[rt] = SD.rampMesh(d.plan.palette || {}, d.plan.ramp, rfy, rt);
+      }
+      parts.push({ mesh: d.rampMeshes[rt] });
+    }
     /* A decked hull's lift car and tram, where main.js last put them
      * (`plan.live`), and your small craft parked in a Carrier's hangar. */
     if (d.meshes.car) {
@@ -11326,7 +11881,9 @@
     /* An S cockpit's second seat and medical kit (shipdeck.js, 2026-10-25):
      * always there, seated or not. */
     if (d.meshes.fittings) parts.push({ mesh: d.meshes.fittings });
-    var ok = global.GLWorld.queueCockpit(cam, frame, d.meshes.portals, d.meshes.room, parts, M);
+    /* From outside her (2026-10-26) there is no glass to see the world
+     * through, only her own skin, so the panes are not drawn. */
+    var ok = global.GLWorld.queueCockpit(cam, frame, opts.noPortals ? null : d.meshes.portals, d.meshes.room, parts, M);
     if (ok) { ROOM_QUEUED.ship = ship; ROOM_QUEUED.cam = cam; }
     return ok;
   }
@@ -11800,6 +12357,8 @@
     BOLT_MIN_W: BOLT_MIN_W, BOLT_MAX_W: BOLT_MAX_W, BOLT_SEGS: BOLT_SEGS,
     SHIP_LEN: SHIP_LEN, TRUE_LEN: TRUE_LEN, hullLength: hullLength,
     BRIDGE: BRIDGE, bridgeSpec: bridgeSpec, bridgeFrame: bridgeFrame, bridgeCutMesh: bridgeCutMesh,
+    hullFit: hullFit, cockpitAt: cockpitAt, rampExterior: rampExterior, hatchModel: hatchModel, outsidePlan: outsidePlan, groundPatch: groundPatch,
+    OUTSIDE_CROUCH: OUTSIDE_CROUCH,
     drawAttitudeLadder: drawAttitudeLadder,
     drawFlightPathMarker: drawFlightPathMarker,
     drawBankScale: drawBankScale,

@@ -915,7 +915,7 @@
   }
   var CAPTAIN = {
     id: 'captain', label: 'Who is your captain?',
-    when: function (ctx) { return !!captainOf(ctx); },
+    when: function (ctx) { return !ctx.person.master && !!captainOf(ctx); },
     run: function (ctx) {
       if (ctx.op.band === 'furious') return refusal(ctx, 'captain');
       var cp = captainOf(ctx).profile;
@@ -927,11 +927,18 @@
     }
   };
   var OWES = {
-    id: 'owes', label: 'Does your captain owe me anything?',
+    /* Asked of her master aboard her own ship (boarding, 2026-10-29) it is
+     * "do YOU owe me", and she answers for herself. */
+    id: 'owes', label: function (ctx) { return ctx.person.master ? 'Do you owe me anything?' : 'Does your captain owe me anything?'; },
     when: function (ctx) { return !!captainOf(ctx) && !!global.Favours; },
     run: function (ctx) {
       if (refusing(ctx)) return refusal(ctx, 'owes');
       var cap = captainOf(ctx), d = global.Favours.debtOf(ctx.G, ctx.sys, cap.contact);
+      if (ctx.person.master) {
+        if (d > 0) return 'I owe you ' + (d > 1 ? 'more than one' : 'one') + '. I have not forgotten.';
+        if (d < 0) return 'Other way round. You owe me' + (d < -1 ? ', and not just the once' : '') + '.';
+        return 'No. We are square.';
+      }
       if (d > 0) return 'She says she owes you ' + (d > 1 ? 'more than one' : 'one') + '. Call her on the band — she will not forget.';
       if (d < 0) return 'Other way round, the way she tells it. You owe her' + (d < -1 ? ', and not just the once' : '') + '.';
       return 'Not that I know of. You are square.';
@@ -952,6 +959,74 @@
       var top = (b.manifest || []).slice().sort(function (x, y) { return (y.qty || 0) - (x.qty || 0); })[0];
       var what = top ? Math.round(top.qty) + ' tonnes of ' + ((Eco && Eco.BY_ID[top.cid] && Eco.BY_ID[top.cid].name) || top.cid).toLowerCase() : 'not much';
       return 'Out to ' + (b.to ? b.to.name : 'the next port') + ' when we are loaded. ' + what.charAt(0).toUpperCase() + what.slice(1) + '.';
+    }
+  };
+
+  /* ---- aboard her (2026-10-28) ----
+   * Astra, on what you can do once you are aboard somebody else's ship:
+   * talk to the crew, trade with the captain, recruit, and take cargo. The
+   * first is everything above; these are the next two. Cargo is in her
+   * hold, not in a conversation. */
+
+  /* Her master opens her books: the same board the comms page shows for a
+   * hailed hull (shiptrade.js), at the same prices and with the same
+   * refusals — standing moves the price, never the door. main.js opens it
+   * when the conversation sets `state.trade`. */
+  var DEAL = {
+    id: 'deal', label: 'Can we do business?',
+    when: function (ctx) {
+      if (!ctx.person.master) return false;
+      if (refusing(ctx)) return 'not with you';
+      /* `contactOf`, not a stored contact: main.js looks her up fresh, since
+       * a moored ship's rail position is one frame's. */
+      var ST = global.ShipTrade, c = ctx.person.contactOf ? ctx.person.contactOf() : null;
+      if (!c) return 'her books are not open to the band';
+      var why = ST && c ? ST.refusal(ctx.G, ctx.sys, c) : null;
+      return why ? why.replace(/\.$/, '').toLowerCase() : true;
+    },
+    run: function (ctx) {
+      ctx.state.trade = true;
+      ctx.state.end = true;
+      return sayLine(ctx, ['Here is what is in the hold. Prices are prices.', 'Fine. Let us see what you have got.',
+                           'Sit down. I will show you the manifest.'], 'deal');
+    }
+  };
+
+  /* Poaching a hand off her (Crew records, as the hall's are). A hand
+   * walks off a ship for one of two reasons: they like you, or you pay them
+   * more than she does — so the fee is the hall's half again, and the
+   * unhappy and the loyal do not come at any price. Rating and knack are
+   * pure functions of who they are, as everything about them is. */
+  var POACH = 1.5;
+  var CREW_ROLES = { pilot: true, engineer: true, gunner: true };
+  function poachRecord(ctx) {
+    var P = ctx.person, r = 1 + (hash('rating|' + P.id) % 4);
+    return { id: P.id, name: P.name, role: P.role, rating: Math.max(1, Math.min(5, r)), from: P.shipName || '' };
+  }
+  function poachFee(ctx) {
+    var CrewM = global.Crew;
+    return Math.round((CrewM && CrewM.signingFee ? CrewM.signingFee(poachRecord(ctx)) : 400) * POACH);
+  }
+  var RECRUIT = {
+    id: 'recruit', label: function (ctx) { return 'Fly with me instead (' + poachFee(ctx) + ' cr)'; },
+    when: function (ctx) {
+      var P = ctx.person;
+      if (P.master || !CREW_ROLES[P.role]) return false;
+      var band = ctx.op.band;
+      if (refusing(ctx) || band === 'cold') return 'they would not leave her for you';
+      if (ctx.p.values === 'lawful' && band === 'neutral') return 'they signed on for the whole run';
+      if (credits(ctx.G) < poachFee(ctx)) return 'you have ' + credits(ctx.G) + ' cr';
+      return true;
+    },
+    run: function (ctx) {
+      var CrewM = global.Crew, s = ctx.G.ship, rec = poachRecord(ctx);
+      s.credits -= poachFee(ctx);
+      (s.crew = (CrewM && CrewM.aboard ? CrewM.aboard(s) : (s.crew || [])).slice()).push(rec);
+      record(ctx.G, ctx.p.key, 'hired', ctx.t);
+      ctx.state.hired = true;
+      ctx.state.end = true;
+      return sayLine(ctx, ['I will get my kit. Do not tell the captain until I am off.', 'About time somebody asked.',
+                           'Right. I was done with this tub anyway.'], 'poached');
     }
   };
 
@@ -1011,6 +1086,10 @@
     yours: [STATUS, MOOD, PRAISE],
     hire: [TERMS, SKILLS, HAGGLE, SIGN],
     shipcrew: [CAPTAIN, BOUND, OWES],
+    /* The same crew, aboard their own ship (main.js picks this list when
+     * `person.aboard`). DEAL is her master's, RECRUIT the hands'; each
+     * hides itself from the other, so five lines is still enough. */
+    aboard: [DEAL, RECRUIT, CAPTAIN, BOUND, OWES],
     bartender: [ROUND, TALK, INPORT],
     market: [CHEAP, DEAR, SPECIAL],
     yard: [HULL, PAPERS],
@@ -1039,7 +1118,7 @@
     var list;
     if (state.node && SUB[state.node]) list = SUB[state.node];
     else {
-      list = [WHO, HEARD].concat(TOPICS[ctx.p.kind] || []);
+      list = [WHO, HEARD].concat((state.person.aboard && TOPICS.aboard) || TOPICS[ctx.p.kind] || []);
       /* A furious face has nothing to say to you but goodbye. */
       if (ctx.op.band === 'furious') list = [];
     }

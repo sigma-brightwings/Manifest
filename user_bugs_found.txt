@@ -1,0 +1,5 @@
+Capital ships should be done in both navy colors and syndicate colors
+
+Pirates should have their own style of ships, distinct from the dark corpo aesthetic of the syndicate.
+
+we still have a bug where you aren't able to take off vertically, nor does the auto-docking thing place you back on the launch pad after being taken inside.

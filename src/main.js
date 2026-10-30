@@ -307,6 +307,12 @@
     G.uplift = {};
     /* And has never shot an ambulance. */
     G.tenderKills = 0;
+    /* Nor fuelled anybody (upkeep.js). */
+    G.npcLedger = {};
+    /* And has written nothing down, nor had anything written down for her
+     * (journal.js, the F5 NOTES tab). */
+    G.notes = '';
+    G.journal = [];
     /* Nobody has met you and nobody has heard of you (captains.js). */
     G.captains = {};
     G.record = null;
@@ -367,6 +373,7 @@
 
   function enterSystem(star, opts) {
     opts = opts || {};
+    var firstTime = !G.visited[star.id];
     G.here = star;
     G.visited[star.id] = true;
     /* AND THE CHART LEARNS WHOSE IT IS. Astra: "the map is meant to pull
@@ -382,6 +389,11 @@
     G.charted = G.charted || {};
     G.charted[star.id] = true;
     G.sys = systemFor(star);
+    /* The captain's log notes where she came in (journal.js). Only a real
+     * arrival: a new career and a loaded save do not count as one. */
+    if (opts.arrive && global.Journal) {
+      global.Journal.add(G, 'travel', 'Arrived in ' + star.name + (firstTime ? ', the first time here' : ''));
+    }
     /* Deliveries you bought off ships before they arrived (shiptrade.js):
      * back onto this system's shelves, wherever the system came from. */
     if (global.ShipTrade && global.ShipTrade.attach) global.ShipTrade.attach(G, G.sys, G.t || 0);
@@ -408,6 +420,13 @@
      * you. Only on ARRIVAL — booting a career or loading a save inside a
      * hold must not re-levy a fine you already paid. */
     if (opts.arrive && global.Combat) Combat.wasteCustoms(G, star, G.sys, HOOKS);
+
+    /* And the overboss's collector, if this is his hold (tithe.js). Only on
+     * arrival, for the same reason: a load inside a hold is not a visit. */
+    if (opts.arrive && global.Tithe) {
+      var titheCall = global.Tithe.onArrive(G, G.sys, G.t || 0);
+      if (titheCall) { say(titheCall.say, 10); if (titheCall.asked) HOOKS.sound('warn'); }
+    }
 
     G.stars = Render.makeStarfield(star.seed, 1600);
     /* Hand the sky to the GPU layer too. Same array, so the cruise-warp
@@ -683,6 +702,9 @@
     };
 
     G.here = here;
+    if (global.Journal) {
+      global.Journal.add(G, 'travel', 'Out of slipspace in deep space, between ' + drop.from.name + ' and ' + drop.to.name);
+    }
     G.sys = Gen.interstellarSystem(drop.nearer, {
       name: 'deep space — ' + drop.from.name + ' to ' + drop.to.name
     });
@@ -1359,7 +1381,7 @@
   var HOOKS = {
     say: say,
     /* A line that is money as well as news — the tender's call-out fee. */
-    ledger: function (text) { logTrade(text); },
+    ledger: function (text, kind) { logTrade(text, kind); },
     sound: function (n) { if (global.Sound) global.Sound.fx(n); },
     destroyed: playerDestroyed,
     hullHit: hullHit
@@ -1505,7 +1527,7 @@
        * to them unchanged. */
       if (e.key === 'Tab' && !G.hyper && !G.market && modeId() === 'ship') {
         e.preventDefault();
-        var st = ['status', 'guns', 'panels'];
+        var st = ['status', 'guns', 'panels', 'notes'];
         var si = st.indexOf(G.shipTab);
         G.shipTab = st[(si < 0 ? 0 : si + 1) % st.length];
         return;
@@ -1580,7 +1602,17 @@
        * (2026-10-24): walk aft to the airlock to step out. Berthed or set
        * down on a pad; never in flight, where the seat is the only place
        * anyone should be. */
-      if (wk === 'o' && flying() && (G.ship.docked || G.ship.landed) && !G.hyper) { startShipWalk('seat'); return; }
+      /* ...and now in flight too (2026-10-29). Astra: "standing up from my
+       * station doesn't work", flying, in space; asked, she chose that the
+       * ship holds while you are up. So the controls are yours only from
+       * the seat: a pilot in the crew takes the helm and keeps whatever
+       * the autopilot was doing, and with nobody to hand her to she simply
+       * coasts on the course she had. The outer door stays sealed in
+       * flight (airlock.js already refuses to cycle out into nothing). */
+      if (wk === 'o' && flying() && !G.hyper && !G.walk && !G.ship.crashed) {
+        if (G.ship.docked || G.ship.landed || tubed()) { startShipWalk('seat'); return; }
+        standUpUnderway(); return;
+      }
 
       G.keys[e.key.toLowerCase()] = true;
 
@@ -1854,6 +1886,12 @@
          * cargo line, and waste is the one thing you jettison deliberately
          * rather than in a hurry. */
         case 'u':
+          /* Joined to a ship: U reels her tube in and leaves you adrift. */
+          if (G.ship.tether && !G.walk) {
+            if (global.Boarding) global.Boarding.release(G, G.sys);
+            say('Tube reeled in. You are adrift.', 4);
+            break;
+          }
           if (G.ship.docked) {
             /* A surface port is a hangar behind closed doors now, so
              * leaving one is something you are given rather than something
@@ -2010,6 +2048,9 @@
      * below, and the same failure it prevents. */
     window.addEventListener('blur', releaseTriggers);
     window.addEventListener('mousemove', function (e) {
+      /* Where the pointer is, for anything drawn that lights up under it
+       * (the talk panel's replies, 2026-10-29). */
+      G.mouseAt = { x: e.clientX, y: e.clientY };
       /* With the cursor out, the mouse belongs to the interface: it does not
        * turn the pilot's head and it does not swing the camera. This is the
        * whole point of the modifier — a drag handle you cannot reach without
@@ -2425,6 +2466,20 @@
         return handleStarMapKey(e);
 
       case 'ship': {
+        /* THE NOTES TAB (journal.js). Its own keys, and NOT the inventory's:
+         * Del here must not throw cargo out of a hold you cannot see. While
+         * the notepad is being written in it has the whole keyboard (above),
+         * so none of this runs then. */
+        if (G.shipTab === 'notes') {
+          if (key === 'enter' || key === 'w') { global.Screens.beginNotes(); return true; }
+          if (key === 'e') { global.Screens.exportNotes(); return true; }
+          if (key === 'arrowdown') { global.Screens.scrollNotesLog(1); return true; }
+          if (key === 'arrowup') { global.Screens.scrollNotesLog(-1); return true; }
+          if (key === 'pagedown') { global.Screens.scrollNotesLog(5); return true; }
+          if (key === 'pageup') { global.Screens.scrollNotesLog(-5); return true; }
+          if (key === 'backspace' || key === 'delete') return true;
+          return false;
+        }
         var held = heldCargo();
         if (key === 'arrowdown') { G.invSel = Math.min(held.length - 1, G.invSel + 1); return true; }
         if (key === 'arrowup') { G.invSel = Math.max(0, G.invSel - 1); return true; }
@@ -3957,6 +4012,9 @@
   function marketRows() {
     if (!G.market) return [];
     var list = Eco.priceList(G.market.port, G.t);
+    /* A port the overboss holds gives a ship that has paid his tithe a
+     * better price both ways (tithe.js). */
+    if (global.Tithe) list = list.map(function (r) { return global.Tithe.adjustRow(G, G.sys, G.market.port, r, G.t); });
     /* Anything the player is carrying stays on the list even where the port
      * does not trade it, or a hold full of ore at a port that has never
      * heard of ore would simply have nowhere to appear. */
@@ -4155,12 +4213,17 @@
               (res.bought ? ' from ' : ' to ') + c.name + '  ' +
               fmtCredits(res.bought ? -res.total : res.total) });
       if (G.ledgerLog.length > 6) G.ledgerLog.length = 6;
+      if (global.Journal) global.Journal.add(G, 'trade', G.ledgerLog[0].text);
     }
   }
 
-  function logTrade(text) {
+  /* `kind` is the captain's log's (journal.js): a ledger line is money,
+   * and most money is trade, but a cash box taken or a rescue paid for is
+   * filed under what it was. */
+  function logTrade(text, kind) {
     G.ledgerLog.unshift({ text: text, t: G.t });
     if (G.ledgerLog.length > 6) G.ledgerLog.length = 6;
+    if (global.Journal) global.Journal.add(G, kind || 'trade', text);
     say(text, 3);
   }
 
@@ -4220,6 +4283,7 @@
     say('Handed over ' + paid + ' — ' + spec.name + ' is breaking off', 6);
     G.ledgerLog.unshift({ text: 'Robbed of ' + paid + ' by ' + spec.name, t: G.t });
     if (G.ledgerLog.length > 6) G.ledgerLog.length = 6;
+    if (global.Journal) global.Journal.add(G, 'robbed', 'Robbed of ' + paid + ' by ' + spec.name);
   }
 
   /* Dumping waste in space rather than paying to dispose of it properly.
@@ -5128,7 +5192,9 @@
      * the orbit does. ArrowUp/Down pitch the nose, ArrowLeft/Right yaw it,
      * Q/E roll. Sign convention: ArrowUp pitches the nose toward the
      * ship's own "up", verified against the attitude ladder in testing. */
-    if (!G.ship.docked) {
+    /* Not on the ground either: she stands on her gear there, and the
+     * arrows would spin her on it. */
+    if (!G.ship.docked && !(G.ship.landed && !G.ship.crashed)) {
       // Verified empirically (test/physics.test.js, "attitude control sign
       // conventions"): with this mapping, ArrowUp pitches the nose toward
       // the ship's own up, ArrowRight yaws it toward the ship's own right,
@@ -5188,16 +5254,22 @@
     var heldKeys = null;
     if (G.walk) {
       /* Aboard your own ship a pad will do as well as a berth. */
-      var berthed = G.ship.docked || (G.walk.ship && G.ship.landed);
+      /* ...or joined to another ship by her tube (boarding.js). */
+      /* ...or under way, the helm handed over (standUpUnderway). */
+      var berthed = G.ship.docked || (G.walk.ship && (G.ship.landed || tubed() || G.walk.underway));
       if (!berthed || !global.Walk) G.walk = null;
       else {
+        /* Aboard her, she is kept at her berth as the station turns. */
+        if (G.aboard) poseVisitor();
         if (flying()) {
           /* Riding the lift or the tram, the keys do nothing: you are being
            * carried (advanceRide below). */
           if (G.walk.ride) advanceRide(dtReal, npcHold);
           else {
             global.Walk.step(G.walk, G.keys, dtReal);
+            if (G.walk.ship) { rampWalk(); rideLift(); }
             npcFacing();
+            if (G.walk.ship) lockLabels();
             /* Doors on the wall clock, like the walking itself. */
             if (G.walk.ship && global.ShipDeck) global.ShipDeck.updateDoors(G.walk.plan, G.walk, dtReal, npcHold);
           }
@@ -5206,6 +5278,11 @@
         G.keys = {};
       }
     }
+    /* Off her decks by any road but her hatch — sold out from under you,
+     * ordered off, the walk ended — and you are not aboard her any more. */
+    if (G.aboard && !G.walk) { G.aboard = null; npcScene = null; }
+    /* The airlock runs whether anybody is in it or not (airlock.js). */
+    tickAirlock(dtReal);
     updateTalk();
     /* In the seat, the bridge door slides shut behind you. */
     if (!G.walk && G.viewMode === 'cockpit' && global.ShipDeck && global.Render && global.Render.shipInterior) {
@@ -5213,6 +5290,52 @@
       if (deck) global.ShipDeck.updateDoors(deck.plan, null, dtReal, npcHold);
     }
     try { updateWorld(dtReal); } finally { if (heldKeys) G.keys = heldKeys; }
+  }
+
+  /* ---- standing on open ground, and leaving it (2026-10-26) -------------
+   * A touchdown away from a port used to leave her however she arrived —
+   * tipped, her centre on the surface and half her hull under it. She is
+   * stood up on her gear now: her up is the ground's, her nose kept where
+   * it pointed, lifted so her gear's feet are on the surface (hullfit.js
+   * `ground`). That is the pose her ramp is drawn and walked in. */
+  function settleLanded() {
+    var s = G.ship, b = s.landedOn;
+    if (!b || !G.sys) return;
+    var bp = Sim.bodyPosition(b, G.sys, G.t);
+    var n = V.norm(V.sub(s.pos, bp));
+    var f = V.sub(s.fwd, V.scale(n, V.dot(s.fwd, n)));
+    if (V.len(f) < 1e-6) f = V.len(V.cross(n, s.right)) > 1e-6 ? V.cross(s.right, n) : { x: n.y, y: -n.x, z: 0 };
+    s.fwd = V.norm(f);
+    s.up = n;
+    s.right = V.norm(V.cross(s.fwd, s.up));
+    s.up = V.norm(V.cross(s.right, s.fwd));
+    var fit = Render.hullFit ? Render.hullFit(s) : null;
+    var stand = fit ? -fit.ground / 1000 : (Render.hullLength ? Render.hullLength(s) * 0.2 : 0.005);
+    s.pos = V.add(bp, V.scale(n, b.radius + stand));
+    s.vel = Sim.bodyVelocity ? V.clone(Sim.bodyVelocity(b, G.sys, G.t)) : s.vel;
+    s.settled = true;
+  }
+
+  /* Lift off: more push straight up than her world pulls down, and her
+   * ramp up. She leaves the ground with the ground's own motion and a
+   * metre a second of climb, and from there the integrator has her. */
+  function liftOff() {
+    var s = G.ship, b = s.landedOn;
+    if (!b || !s.thrust || G.walk) return;
+    var bp = Sim.bodyPosition(b, G.sys, G.t);
+    var n = V.norm(V.sub(s.pos, bp));
+    var push = V.dot(s.thrust, n), pull = V.len(Sim.acceleration(s.pos, G.sys, G.t));
+    if (!(push > pull * 1.02)) return;
+    if (global.Airlock && !global.Airlock.sealed(s)) {
+      if (!G.rampWarned) { say('The ramp is not up  —  she will not lift with it hanging open', 4); G.rampWarned = true; }
+      return;
+    }
+    G.rampWarned = false;
+    var bv = Sim.bodyVelocity ? Sim.bodyVelocity(b, G.sys, G.t) : V.zero();
+    s.landed = false; s.landedOn = null; s.crashed = false; s.settled = false;
+    s.vel = V.add(bv, V.scale(n, 0.001));
+    s.pos = V.add(s.pos, V.scale(n, 0.0005));
+    say('Lift-off', 2);
   }
 
   function updateWorld(dtReal) {
@@ -5247,6 +5370,16 @@
     }
 
     applyControls(dtReal);
+
+    /* She is coming alongside (boarding.js): the frame she is close and
+     * still, her tube runs out to you. */
+    if (G.ship.tether && !G.ship.tether.joined && global.Boarding) {
+      ensureSlot(G.ship.tether);
+      var tubeEv = global.Boarding.settle(G, G.sys, G.t);
+      if (tubeEv === 'joined') say('The ' + G.ship.tether.name + ' is alongside  —  her tube is running out to your hatch. O to get up when it is made fast', 7);
+      else if (tubeEv === 'gone') say('She is gone  —  nobody is coming alongside', 5);
+      else if (tubeEv === 'gaveup') say('She gave up waiting and went back to her lane', 5);
+    }
 
     var warp = WARPS[G.warpIndex];
     G.lastDtSim = 0;
@@ -5296,6 +5429,18 @@
       G.t += G.lastDtSim;
       G.warpIndex = 0;
       G.arrivalPose = Sim.stepArrival(G.ship, G.sys, G.t);
+    } else if (!G.paused && tubed()) {
+      /* JOINED TO HER BY A TUBE (boarding.js, 2026-10-29). Held off her at
+       * the tube's length, on her velocity, with nothing to integrate —
+       * docked to a ship instead of a station. Real time only: she flies
+       * her own rail, and a tube is not something to take through warp. */
+      G.warpIndex = 0;
+      G.lastDtSim = dtReal;
+      G.t += G.lastDtSim;
+      G.arrivalPose = null;
+      /* holdTether() runs after the encounters have moved her this frame
+       * (below), not here: pinned to where she WAS, you sat one frame of
+       * her travel behind her — a kilometre at 55 km/s. */
     } else if (!G.paused && G.ship.docked) {
       /* Docked: rigidly attached to the target, so there is nothing to
        * integrate and nothing that can go wrong — time is free to run at
@@ -5304,6 +5449,16 @@
       G.t += G.lastDtSim;
       G.arrivalPose = null;
       Sim.updateDockedShip(G.ship, G.sys, G.t);
+    } else if (!G.paused && G.ship.landed && !G.ship.crashed) {
+      /* ON THE GROUND: nothing to integrate, so the only question is
+       * whether the pilot is lifting off (2026-10-26 — before this nothing
+       * ever cleared `landed`, and a ship set down on open ground could not
+       * leave it: the "can't take off vertically" bug). */
+      G.lastDtSim = 0;
+      /* Stood up on her gear the first frame she is down, however she got
+       * there (a touchdown, a load, a script). */
+      if (!G.ship.settled) settleLanded();
+      liftOff();
     } else if (!G.paused && !G.ship.landed) {
       var dtSim = warp * dtReal;
       if (dtSim > maxDt) {
@@ -5431,6 +5586,7 @@
       }
       if (G.ship.landed && !G.reported) {
         G.reported = true;
+        if (!G.ship.crashed) settleLanded();
         say(G.ship.crashed
           ? 'Impact with ' + G.ship.landedOn.name + ' at ' + fmtSpeed(G.ship.impactSpeed) + '   (B to respawn)'
           : 'Touchdown on ' + G.ship.landedOn.name, 8);
@@ -5627,7 +5783,16 @@
      * moment the pages stopped all being drawn at once. */
     navTargetState();
 
+    /* Where you stand with the overboss here, for Sim's patrols and
+     * pirates to read; and a call left unanswered becomes a refusal. */
+    if (global.Tithe) {
+      G.sys.tithe = global.Tithe.status(G, G.sys, G.t);
+      var titheTick = global.Tithe.tick(G, G.sys, G.t);
+      if (titheTick) { say(titheTick.say, 8); G.sys.tithe = global.Tithe.status(G, G.sys, G.t); }
+    }
     G.encounter = Sim.updateEncounters(G.sys, G.t, G.lastDtSim || 0, G.ship);
+    /* Joined by her tube: you go where she has just gone. */
+    if (!G.paused && tubed()) holdTether();
 
     /* A police scan resolves itself the instant it happens — there is no
      * player choice the way a pirate's demand has one, so it is handled
@@ -6547,7 +6712,20 @@
 
   var _starPos = null;      // this frame's star position, for GL lighting
 
+  /* The canvas the chart is drawn to while you are standing outside
+   * (draw, 2026-10-26): kept, never shown. */
+  var mainCtx = null, offCanvas = null;
+  function offscreenCtx(w, h, ps) {
+    if (!offCanvas) offCanvas = document.createElement('canvas');
+    if (offCanvas.width !== Math.ceil(w * ps)) offCanvas.width = Math.ceil(w * ps);
+    if (offCanvas.height !== Math.ceil(h * ps)) offCanvas.height = Math.ceil(h * ps);
+    var c = offCanvas.getContext('2d');
+    c.setTransform(ps, 0, 0, ps, 0, 0);
+    return c;
+  }
+
   function draw() {
+    if (mainCtx) { ctx = mainCtx; mainCtx = null; }
     var ps = pixelScale();
     var w = canvas.width / ps;
     var h = canvas.height / ps;
@@ -6565,7 +6743,8 @@
       var viewH = (flying() && !bandShown()) ? h - FBAR_H : h;
       /* On foot in your own ship, the eye is the walker's: standing, in the
        * ship's frame, through the same projection as the seat. */
-      if (shipWalkGpu()) cam.buildWalker(cockpitShip(), G.walk, G.walk.plan.floorY + (G.walk.rideDy || 0), w, h - FBAR_H);
+      if (shipWalkGpu()) cam.buildWalker(cockpitShip(), G.walk, G.walk.plan.floorY + (G.walk.rideDy || 0) +
+                                         (G.walk.dy || 0) + (G.walk.eyeDy || 0), w, h - FBAR_H);
       else {
         cam.buildCockpit(cockpitShip(), w, viewH, G.look);
         applyCockpitSway(cam);
@@ -6604,6 +6783,8 @@
      * below is about what you can SEE from where you are, and a chart is
      * not a thing you see from anywhere. */
     var inside = mapMode() ? null : viewEnclosure();
+    /* The station the hull is in, cutaway or not — see `enclosing` below. */
+    var home = mapMode() ? null : enclosedPort();
 
     /* Rock behind a shed as well as behind a burrow. `buried` is a
      * geometric test — is the eye below the planet's radius — and a camera
@@ -6615,6 +6796,12 @@
     if (glLive()) {
       ctx.clearRect(0, 0, w, h);
       global.GLWorld.begin(rock ? ROCK_CLEAR : null);
+      /* STANDING OUTSIDE HER (2026-10-26): the world is the GL layer's to
+       * draw — sky, sun, the ground — and the chart over it is not yours
+       * any more. Orbit lines, body markers and labels, traffic and the
+       * predicted path go to a canvas nobody sees until the walk view is
+       * drawn; the screen keeps the world and the person in it. */
+      if (G.walk && G.walk.outside) { mainCtx = ctx; ctx = offscreenCtx(w, h, ps); }
       /* HOW MUCH LIGHTNING TO DRAW, decided by the clock rather than by
        * the weather. A stroke lasts about a tenth of a second; at warp the
        * frames are seconds or minutes apart, so sampling it would give
@@ -6818,7 +7005,14 @@
        * around you and is drawn, whatever its middle does in the
        * projection. */
       var near = V.dist(pos, cam.target);
-      var enclosing = near < (body.radius || 0);
+      /* ...AND THE STATION YOU ARE IN IS ENCLOSING WHEREVER ITS BERTH IS.
+       * `radius` is not the hull's reach: the berths sit at or past it
+       * (Waypoint Dock, r 4.18 km, parks you 4.36 km out), so a berthed
+       * ship failed the sphere test, the centre fell behind the eye, and
+       * the whole station was culled — the ship alone in black space, and
+       * the cutaway with nothing to cut. Astra, 2026-10-26: "what happened
+       * to our station cutaway for ships which are inside stations?" */
+      var enclosing = near < (body.radius || 0) || (body === home);
       /* ...AND A WORLD YOU ARE STANDING OVER IS NOT CULLED ON IT EITHER.
        *
        * The same centre-point test, the other way up. Seventy-five km over
@@ -6945,6 +7139,7 @@
       drawHyperTear(ctx, w, h, true);
     }
 
+    if (mainCtx) { ctx = mainCtx; mainCtx = null; }
     if (G.viewMode === 'cockpit') drawCockpitView(ctx, cam, w, h);
     else drawShip(ctx, cam);
     /* On foot aboard, nobody is flying: no markers, no labels, no flight
@@ -8736,21 +8931,45 @@
     return out;
   }
 
-  function startWalk() {
+  /* The ships moored here now, for their berths and hatches on the deck
+   * (walk.js `others`, 2026-10-28): the port's own timetable, as the crew
+   * scene reads it, each with the size of the hull she is walked as. */
+  function walkOthers(port) {
+    var occ = Sim.berthOccupants ? Sim.berthOccupants(port, G.sys, G.t) : [];
+    return occ.filter(function (o) { return o.route; }).map(function (o) {
+      var hd = (Combat.HULLS || {})[hullForClass(o.route.cls || o.route.className)] || {};
+      return { name: o.name, size: hd.size || (o.large ? 'L' : 'M'), route: o.route };
+    });
+  }
+  /* `atBerth`: the berth room to stand in, coming off another ship's hatch
+   * (leaveVisitor) — otherwise your own. */
+  function startWalk(atBerth) {
     var Walk = global.Walk, s = G.ship;
     if (!Walk || !s.docked) { say('Dock first — there is nowhere to step out to', 3); return; }
     var port = G.sys && G.sys.byId ? G.sys.byId[s.docked] : null;
     if (!port) return;
+    G.aboard = null;
     var plan = Walk.layout(port.id, {
       seed: G.seed || (G.galaxy && G.galaxy.seed) || '',
       yard: !!(Combat.isShipyard && Combat.isShipyard(port)),
-      ships: walkShips()
+      ships: walkShips(),
+      others: walkOthers(port)
     });
     G.walk = Walk.start(plan);
+    if (atBerth) {
+      var hatchAt = plan.items.filter(function (it) { return it.kind === 'other' && it.berth === atBerth; })[0];
+      var br = plan.rooms.filter(function (r) { return r.id === atBerth; })[0];
+      if (hatchAt && br) {
+        G.walk.x = hatchAt.x + (br.side < 0 ? 1.4 : -1.4); G.walk.z = hatchAt.z;
+        /* Facing out of the berth, as you step off your own. */
+        G.walk.yaw = br.side < 0 ? Math.PI / 2 : -Math.PI / 2;
+      }
+    }
     G.walk.portName = port.name || 'the station';
     G.panel = 0;
-    say('You step out into your berth at ' + G.walk.portName +
-        '  —  WASD to walk, the mouse looks, E to use, hold Alt for the pointer, Esc for the menu', 8);
+    say(atBerth ? 'Back on the deck at ' + G.walk.portName
+                : 'You step out into your berth at ' + G.walk.portName +
+                  '  —  WASD to walk, the mouse looks, E to use, hold Alt for the pointer, Esc for the menu', atBerth ? 4 : 8);
   }
 
   /* ---- on foot in your own ship (2026-10-24) -----------------------------
@@ -8767,8 +8986,11 @@
    * The plan and the room are Render.shipInterior's (shipdeck.js) — the
    * same plan Walk.step walks and the same meshes the seat view draws. */
   function startShipWalk(from) {
-    var d = global.Render && global.Render.shipInterior ? global.Render.shipInterior(G.ship) : null;
-    if (!d || !global.Walk) { startWalk(); return; }
+    /* Hers, if you are boarding her (G.aboard is set before this is called);
+     * yours otherwise. */
+    var hullW = walkHull();
+    var d = global.Render && global.Render.shipInterior ? global.Render.shipInterior(hullW) : null;
+    if (!d || !global.Walk) { G.aboard = null; startWalk(); return; }
     var p = d.plan, at = from === 'aboard' ? p.aboard : p.spawn;
     /* A decked hull (shipdeck.js, 2026-10-25): out of the seat onto the
      * bridge deck, in at the hatch onto the main deck. */
@@ -8779,14 +9001,255 @@
     G.walk = global.Walk.start(p);
     G.walk.x = at.x; G.walk.z = at.z; G.walk.yaw = at.yaw; G.walk.pitch = 0;
     G.walk.ship = true;
-    var hull = (Combat.HULLS && Combat.HULLS[G.ship.hullId]) || {};
-    G.walk.portName = G.ship.shipName || hull.name || 'your ship';
+    /* In from the berth, you are in the airlock with the hatch you came
+     * through still open behind you, the room at the berth's pressure:
+     * the controls by the inner door cycle you in (airlock.js). */
+    if (from === 'aboard' && global.Airlock) {
+      var al = global.Airlock.state(hullW);
+      al.side = 'out'; al.cycle = null; al.hatch = hullW.docked ? 1 : 0;
+    }
+    var hull = (Combat.HULLS && Combat.HULLS[hullW.hullId]) || {};
+    G.walk.portName = hullW.shipName || hull.name || 'your ship';
     G.viewMode = 'cockpit';
     G.look.yaw = 0; G.look.pitch = 0;
     G.panel = 0;
-    say(from === 'aboard'
+    say(G.aboard
+        ? 'Aboard the ' + hullW.shipName + '  —  the controls by the inner door cycle you in; her people are hers, not yours'
+        : from === 'aboard'
         ? 'You come aboard  —  WASD to walk, the mouse looks, E at the seat to fly'
         : 'You get up out of the seat  —  WASD to walk, the mouse looks, E to use, hold Alt for the pointer', 7);
+  }
+
+  /* Out of the seat with her still flying (2026-10-29). The walk is the
+   * same walk; what changes is who has her. The flight controls never see
+   * the keys while you are on foot (update, above), so with nobody at the
+   * helm she keeps exactly the course she had; a pilot keeps whatever the
+   * autopilot was flying. Time compression drops to real time, since a
+   * walk is at walking pace and a ship coasting at x1000 with nobody in
+   * the seat is a ship nobody is watching. */
+  function helmPilot() {
+    return (global.Crew && global.Crew.best) ? global.Crew.best(G.ship, 'pilot') : null;
+  }
+  function standUpUnderway() {
+    G.warpIndex = 0;
+    startShipWalk('seat');
+    if (!G.walk) return;
+    G.walk.underway = true;
+    var pl = helmPilot();
+    G.walk.helm = pl ? pl.name : null;
+    /* With nobody to hand her to, nothing flies her: the autopilots stand
+     * down and the cruise drive drops out into the orbit she is in. */
+    if (!pl) {
+      cancelAutodock();
+      cancelNodeBurn();
+      dropCruise('nobody at the helm');
+      G.ship.thrust = V.zero();
+    }
+    say(pl ? pl.name + ' has the helm  —  she holds what she was doing; E at the seat to take her back'
+           : 'Nobody at the helm  —  she coasts on her course, the controls locked until you sit back down', 7);
+  }
+
+  /* ---- the airlock and the ramp (2026-10-26) ---------------------------------
+   * airlock.js holds the state, shipdeck.js the room and the ramp, render.js
+   * the ground outside her. This is the glue: the airlock ticks every frame
+   * whether anybody is in it or not (a cycle you started finishes while you
+   * wait); the walker crosses from her airlock down the ramp to the ground
+   * and back without a seam, because both plans are in her cockpit's frame;
+   * and the controls inside and the post at the ramp's foot both work it. */
+  function lockPlan() {
+    var d = global.Render && Render.shipInterior ? Render.shipInterior(walkHull()) : null;
+    return d ? d.plan : null;
+  }
+  function mainDeckPlan() {
+    var p = lockPlan();
+    return p && p.decks ? p.decks.main : p;
+  }
+  function lockCtx() {
+    var s = walkHull();
+    return { landed: !!(s.landed && !s.crashed), docked: !!(s.docked || (s.tether && s.tether.joined)),
+             tube: !!((s.tether && s.tether.joined) || s.docked === 'tube'),
+             breathable: global.Airlock ? global.Airlock.breathable(s.landedOn) : true };
+  }
+  function lockFloorY() { var p = lockPlan(); return p ? (p.decks ? p.decks.main.floorY : p.floorY) : 0; }
+  /* While the ramp is moving its well is nowhere to stand. */
+  function armRampWell(p) {
+    if (!p || p._rampArmed || !p.ramp) return;
+    var rp = p.ramp;
+    var veto = function (x, z) {
+      var t = (walkHull() && walkHull().airlock && walkHull().airlock.ramp) || 0;
+      if (!(x >= rp.x0 && x <= rp.x1 && z >= rp.foot && z <= rp.hinge)) return false;
+      /* A lift's well is a hole whenever its platform is not up here. */
+      if (rp.mode === 'lift') return t > 0.001 && !(G.walk && G.walk.outside === false && onPlatform(G.walk));
+      return t > 0 && t < 0.999;
+    };
+    p.blocked = veto;
+    if (p.decks) for (var k in p.decks) p.decks[k].blocked = veto;
+    p._rampArmed = true;
+  }
+  function tickAirlock(dt) {
+    var AL = global.Airlock;
+    if (!AL || !walkHull()) return;
+    /* Yours runs on even while you are aboard her, so a cycle you left
+     * running finishes; hers is the one whose events you hear. */
+    if (G.aboard && G.ship && Render.shipInterior) {
+      var mine = Render.shipInterior(G.ship);
+      if (mine) AL.step(G.ship, mine.plan, dt, { landed: !!(G.ship.landed && !G.ship.crashed), docked: !!G.ship.docked, breathable: true });
+    }
+    var p = lockPlan();
+    if (!p) return;
+    armRampWell(p);
+    var ctx = lockCtx();
+    var ev = AL.step(walkHull(), p, dt, ctx);
+    if (!ev) return;
+    var air = ctx.breathable ? '' : '  —  suit sealed, the air out there is not air';
+    if (ev === 'lowering') say('Cycled out  —  ramp coming down' + air, 5);
+    else if (ev === 'hatch') say('Cycled out  —  the hatch is open to your berth', 5);
+    else if (ev === 'out') say('Cycled out' + air, 4);
+    else if (ev === 'in') say('Cycled in  —  the inner door is yours', 4);
+  }
+  /* On a lift's platform (its whole footprint). */
+  function onPlatform(w) {
+    var p = lockPlan(), rp = p && p.ramp;
+    return !!(rp && w && w.x >= rp.x0 && w.x <= rp.x1 && w.z <= rp.hinge && w.z >= rp.foot);
+  }
+  /* Is the walker standing on the ramp (or its lift)? */
+  function onRamp(w) {
+    var p = lockPlan(), rp = p && p.ramp;
+    if (!rp || !w) return false;
+    var foot = rp.mode === 'lift' ? rp.foot : rp.hinge - rp.len;
+    return w.x >= rp.x0 - 0.05 && w.x <= rp.x1 + 0.05 && w.z <= rp.hinge && w.z >= foot - 0.3 &&
+           (w.outside || !w.plan.deck || w.plan.deck === 'main');
+  }
+  /* After each step: your feet on the ramp, and across between her and
+   * the ground at its ends. */
+  function rampWalk() {
+    var w = G.walk, SD = global.ShipDeck;
+    if (!w || !w.ship || !SD || !SD.rampFloor) return;
+    var p = lockPlan(), rp = p && p.ramp;
+    if (!rp) return;
+    var t = (walkHull().airlock && walkHull().airlock.ramp) || 0, fy = lockFloorY();
+    var run = rp.mode === 'lift' ? 0 : rp.len * Math.cos(rp.angle * t);
+    var inX = w.x >= rp.x0 && w.x <= rp.x1;
+    w.eyeDy = 0;
+    if (rp.mode === 'lift') return;           // ridden, not walked: rideLift
+    if (!w.outside) {
+      var onMain = !w.plan.deck || w.plan.deck === 'main';
+      var f = onMain && t >= 0.999 && inX ? SD.rampFloor(rp, fy, t, w.x, w.z) : null;
+      w.dy = f !== null ? f - w.plan.floorY : 0;
+      /* Off the bottom of it, onto the ground. A lift: stepping off its
+       * platform once it is down. */
+      var bottom = rp.mode === 'lift' ? rp.foot + 0.15 : rp.hinge - run + 0.15;
+      if (onMain && t >= 0.999 && inX && w.z < bottom) {
+        var op = Render.outsidePlan(walkHull());
+        if (op) {
+          w.plan = op; w.outside = true; w.near = null;
+          w.dy = 0;
+          var where = walkHull().landedOn ? walkHull().landedOn.name : 'the ground';
+          say('On ' + where + (lockCtx().breathable ? '' : '  —  in your suit') +
+              '  —  the post at the foot of the ramp works it', 5);
+        }
+      }
+      return;
+    }
+    /* Outside. */
+    var op2 = w.plan;
+    var f2 = (t >= 0.999 && inX) ? SD.rampFloor(rp, fy, t, w.x, w.z) : null;
+    w.dy = f2 !== null ? Math.max(0, f2 - op2.floorY) : 0;
+    if (rp.mode === 'lift' && t >= 0.999 && inX && w.z <= rp.hinge && w.z >= rp.foot) w.dy = 0;
+    /* Up into the airlock at the top. A lift carries you up on its own
+     * when it is raised — so it is ridden, not climbed: step onto it and
+     * use the post. */
+    var top = rp.mode === 'lift' ? rp.foot - 1 : rp.hinge - 0.35;
+    if (rp.mode !== 'lift' && t >= 0.999 && inX && w.z > top) {
+      w.plan = mainDeckPlan(); w.outside = false; w.near = null;
+      w.dy = SD.rampFloor(rp, fy, t, w.x, Math.min(w.z, rp.hinge)) - w.plan.floorY;
+      return;
+    }
+    /* Under her belly, you duck. */
+    var clear = op2.clearAt ? op2.clearAt(w.x, w.z) : Infinity;
+    var EYE = global.Walk.EYE || 1.65;
+    if (clear < EYE + 0.2 && !(inX && w.z <= rp.hinge && w.z >= op2.footZ - 0.3)) w.eyeDy = Math.max(-1.3, clear - 0.2 - EYE);
+  }
+  /* The lift platform, ridden: standing on it while it moves carries you
+   * between her airlock and the ground. */
+  function rideLift() {
+    var w = G.walk, p = lockPlan(), rp = p && p.ramp;
+    if (!w || !rp || rp.mode !== 'lift') return;
+    var t = (walkHull().airlock && walkHull().airlock.ramp) || 0, fy = lockFloorY();
+    var on = w.x >= rp.x0 && w.x <= rp.x1 && w.z <= rp.hinge && w.z >= rp.foot;
+    if (!on) return;
+    if (!w.outside) {
+      w.dy = -rp.drop * t;
+      if (t >= 0.999) {
+        var op = Render.outsidePlan(walkHull());
+        if (op) { w.plan = op; w.outside = true; w.dy = 0; }
+      }
+    } else {
+      w.dy = rp.drop * (1 - t);
+      if (t <= 0.001) { w.plan = mainDeckPlan(); w.outside = false; w.dy = 0; }
+    }
+  }
+  /* The words over the airlock's things, for what they would do now. */
+  function lockLabels() {
+    var it = G.walk && G.walk.near, AL = global.Airlock;
+    if (!it || !AL) return;
+    var a = AL.state(walkHull()), c = lockCtx();
+    var lp = lockPlan(), lift = !!(lp && lp.ramp && lp.ramp.mode === 'lift');
+    if (it.kind === 'rampctl' && lift) {
+      it.label = a.ramp > 0 || a.want > 0 ? '▲  Raise the lift' : '▼  Lower the lift';
+      return;
+    }
+    if (it.kind === 'ramp' && lift && a.side === 'out' && !c.docked) {
+      it.label = a.ramp > 0 ? 'Lift  —  coming down' : '▼  Lower the lift';
+      return;
+    }
+    if (it.kind === 'hatch') it.label = AL.panelLabel(walkHull(), c);
+    else if (it.kind === 'ramp') {
+      it.label = a.side !== 'out' ? 'Ramp  —  sealed to the ship'
+               : c.docked ? (a.hatch ? (c.tube ? (G.aboard ? 'Down the tube, back to your ship' : 'Down the tube to her') : (G.aboard ? 'Down onto the deck' : 'Down into your berth')) : 'Open the hatch')
+               : a.ramp >= 0.999 ? 'Ramp  —  walk down it' : a.want > 0 ? 'Ramp  —  coming down' : 'Lower the ramp';
+    } else if (it.kind === 'rampctl') {
+      it.label = a.ramp > 0 || a.want > 0 ? '▲  Raise the ramp' : '▼  Lower the ramp';
+    }
+  }
+  function lockUse(it) {
+    var AL = global.Airlock;
+    if (!AL) return false;
+    var a = AL.state(walkHull()), c = lockCtx(), w = G.walk, r;
+    c.inLock = true;
+    if (it.kind === 'hatch') {
+      if (a.cycle) { say('The airlock is cycling', 2); return true; }
+      if (a.side === 'out' && a.ramp > 0 && onRamp(w) && lockPlan().ramp.mode !== 'lift') { say('Step off the ramp first', 3); return true; }
+      r = AL.request(walkHull(), a.side === 'in' ? 'out' : 'in', c);
+      say(r.ok ? r.say : 'Not now  —  ' + r.why, r.ok ? 4 : 4);
+      return true;
+    }
+    if (it.kind === 'ramp') {
+      if (a.side !== 'out') { say('Sealed to the ship  —  the controls by the inner door cycle the airlock', 4); return true; }
+      if (c.docked) {
+        if (!a.hatch) { a.hatch = 1; say('Hatch open', 2); return true; }
+        /* Off her and onto the deck at her berth, when it is her hatch;
+         * down the tube to her, when it is yours and she has run one out. */
+        if (G.aboard) leaveVisitor();
+        else if (tubed()) boardByTube();
+        else startWalk();
+        return true;
+      }
+      if (a.ramp >= 0.999) { say('Walk down it', 2); return true; }
+      r = AL.request(walkHull(), 'lower', c);
+      say(r.ok ? r.say : 'Not now  —  ' + r.why, 4);
+      return true;
+    }
+    if (it.kind === 'rampctl') {
+      if (a.ramp > 0 || a.want > 0) {
+        /* A ramp is not raised under anybody; a lift is ridden up. */
+        if (onRamp(w) && lockPlan().ramp.mode !== 'lift') { say('Step off the ramp first', 3); return true; }
+        r = AL.request(walkHull(), 'raise', c);
+      } else r = AL.request(walkHull(), 'lower', c);
+      say(r.ok ? r.say : 'Not now  —  ' + r.why, 4);
+      return true;
+    }
+    return false;
   }
 
   /* ---- the lift and the tram (2026-10-25) --------------------------------
@@ -8884,6 +9347,15 @@
    * your own cockpit cut by its windows, the seat you got out of, and
    * nothing on the glass — there is nobody flying. */
   function drawShipWalkView(ctx, cam, w, h) {
+    /* Out of her, or on the ramp below her deck (2026-10-26): she is the
+     * thing you are looking at, not a room you are in. */
+    if (G.walk.outside || (G.walk.dy || 0) < -0.3) { drawOutsideView(ctx, cam, w, h); return; }
+    /* Down through an open ramp's well, the ground she is standing on. */
+    if (G.ship.landed && G.ship.airlock && G.ship.airlock.ramp > 0 && glLive() && Render.groundPatch) {
+      var gp0 = Render.groundPatch(G.ship);
+      var sun0 = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), G.ship.pos));
+      if (gp0) global.GLWorld.queueMesh(cam, G.ship, gp0, Render.hullLength(G.ship), sun0, 0, null);
+    }
     var p = G.walk.plan, clip = shipWalkClip(cam);
     queueNpcs(cam);
     drawOwnHullFromBridge(ctx, cam);
@@ -8894,24 +9366,401 @@
     drawWalkOverlay(ctx, w, h, global.Walk.roomAt(p, G.walk.x, G.walk.z));
   }
 
+  /* Standing beside her: her hull, its ramp and the bay it comes out of,
+   * the room at the top of it (no glass: from out here there is none to
+   * see the world through), a patch of her world's ground under her, and
+   * what there is to use. */
+  function drawOutsideView(ctx, cam, w, h) {
+    var s = G.ship;
+    var sunDir = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), s.pos));
+    Render.drawShipModel(ctx, cam, s, sunDir, null);
+    var gp = Render.groundPatch ? Render.groundPatch(s) : null;
+    if (gp && glLive()) global.GLWorld.queueMesh(cam, s, gp, Render.hullLength(s), sunDir, 0, null);
+    if (Render.queueCockpitRoom && Render.cockpitGpu && Render.cockpitGpu()) {
+      Render.queueCockpitRoom(cam, cockpitShip(), { noPortals: true });
+    }
+    var p = G.walk.plan;
+    drawWalkLabels(ctx, cam, p, global.Walk.roomAt(p, G.walk.x, G.walk.z), w, h,
+                   cockpitShip(), p.floorY + 1.6);
+    drawWalkOverlay(ctx, w, h, global.Walk.roomAt(p, G.walk.x, G.walk.z));
+  }
+
   /* The frame the cockpit and your rooms are drawn in: the ship, or on a
    * Capital or Carrier her bridge up in the conning tower (render.js
    * bridgeFrame, 2026-10-25). */
   function cockpitShip() {
-    return (global.Render && Render.bridgeFrame) ? Render.bridgeFrame(G.ship) : G.ship;
+    var s = walkHull();
+    return (global.Render && Render.bridgeFrame) ? Render.bridgeFrame(s) : s;
+  }
+
+  /* ---- ABOARD SOMEBODY ELSE'S SHIP (2026-10-28) ----------------------------
+   * Astra chose boarding to come next: aboard at a station first, then
+   * invited in space, then a disabled ship taken by force — and once aboard,
+   * talk to the crew, trade with the captain, recruit, and take cargo.
+   *
+   * She is walked exactly as your own ship is, which is the point: the plan
+   * is Render.shipInterior's for her hull, the rooms and their doors are
+   * shipdeck.js's, her airlock is airlock.js's. What changes is WHOSE hull
+   * every one of those asks about, and that is this one function. Every
+   * walking path that used to say G.ship — the frame you are drawn in, the
+   * airlock you cycle, the ramp you walk — says walkHull() instead, so a
+   * walk aboard her cannot reach into your ship's airlock by accident.
+   *
+   * `G.aboard` is { ship, route, port, how } while you are on her decks or
+   * on your way to them, and null otherwise. It is never saved: a load puts
+   * you back in your own seat, which is where a save is taken from. */
+  function walkHull() {
+    return (G.aboard && G.aboard.ship) || G.ship;
+  }
+  /* The hull she is drawn and walked as: the player hull built on the same
+   * library model her class flies (Render's HULL_ASSIGN goes class → model,
+   * Combat.HULLS goes hull → model, so the hull whose `mesh` is her class is
+   * her). Measured 2026-10-28: every traffic class has exactly such a hull. */
+  function hullForClass(cls) {
+    var H = Combat.HULLS || {};
+    for (var id in H) if (H[id].mesh === cls) return id;
+    return 'mule';
+  }
+  /* A stand-in she can be walked on: the fields shipInterior, the airlock
+   * and the frame code read off a ship, and nothing the flight model would
+   * mistake for yours. Her position is a berth of the port's that is not
+   * yours, refreshed every frame (poseVisitor) because the station moves. */
+  function makeVisitor(route, port) {
+    var hid = hullForClass(route.cls || route.className), hd = (Combat.HULLS || {})[hid] || {};
+    var v = { hullId: hid, bornId: 'visit|' + (route.id || route.name), dryMass: hd.dryMass || 60,
+              shipName: route.name, docked: port ? port.id : null, landed: false, cargo: {}, crew: [],
+              visitor: true, route: route, pos: V.clone(G.ship.pos), vel: V.clone(G.ship.vel || V.zero()),
+              fwd: V.clone(G.ship.fwd), up: V.clone(G.ship.up), right: V.clone(G.ship.right) };
+    /* As long inside as she is drawn outside (Render.hullFit, 2026-10-29):
+     * her route's size is the length the sky draws her at. */
+    if (route.size > 0) v.lengthKm = route.size;
+    return v;
+  }
+  function poseVisitor() {
+    var a = G.aboard;
+    /* At the other end of a tube: where she is on her own rail, lying the
+     * way your hull lies (the tube joins you belly to belly). */
+    if (a && a.ship && a.how === 'tube') {
+      var her = global.Boarding && G.ship.tether ? global.Boarding.herState(G.sys, G.t, G.ship.tether.key || G.ship.tether.name) : null;
+      if (!her) return;
+      a.ship.pos = V.clone(her.pos); a.ship.vel = V.clone(her.vel || V.zero());
+      /* Lying the way she lies — upside down beneath you, belly to belly,
+       * when that is her slot. */
+      a.ship.fwd = her.fwd || G.ship.fwd; a.ship.up = her.up || G.ship.up; a.ship.right = her.right || G.ship.right;
+      return;
+    }
+    if (!a || !a.ship || !a.port || !Sim.berthState) return;
+    var mine = (G.ship.dockOffset && typeof G.ship.dockOffset.berth === 'number') ? G.ship.dockOffset.berth : 0;
+    var cap = Sim.berthCapacity ? Sim.berthCapacity(a.port) : 2;
+    var idx = a.berth;
+    if (typeof idx !== 'number') idx = a.berth = (mine + 1) % Math.max(1, cap);
+    var bs = Sim.berthState(a.port, G.sys, G.t, idx);
+    var s = a.ship;
+    s.pos = bs ? bs.pos : V.clone(G.ship.pos);
+    s.vel = bs ? bs.vel : V.clone(G.ship.vel || V.zero());
+    s.fwd = G.ship.fwd; s.up = G.ship.up; s.right = G.ship.right;
+  }
+  /* Who works her: the crew the concourse already showed you, as a contact
+   * the comms page and ShipTrade understand (the moored ship off the same
+   * list, by name), so her master's books are the hailed board's books. */
+  function visitInfo(route) {
+    return { id: route.id || route.name, name: route.name, faction: route.faction, cls: route.cls || route.className,
+             souls: route.souls, size: route.size, route: route };
+  }
+  /* By her route where there is one: names repeat in a system, and a
+   * contact found by name alone can be a namesake across the system
+   * (boarding.js herState, 2026-10-29). */
+  function visitContact(name, route) {
+    var list = global.Screens && global.Screens.commsContacts ? global.Screens.commsContacts() : [];
+    var byName = null;
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i];
+      if (c.kind !== 'ship') continue;
+      if (route && c.obj && c.obj.route && c.obj.route.id === route.id) return c;
+      if (!byName && c.name === name) byName = c;
+    }
+    return byName;
+  }
+  /* Up her hatch from the station deck: into her airlock, the hatch you came
+   * through open behind you, as you come aboard your own. */
+  function boardAtBerth(it) {
+    var o = it.other, port = G.sys && G.sys.byId ? G.sys.byId[G.ship.docked] : null;
+    if (!o || !o.route || !port) return;
+    G.aboard = { ship: makeVisitor(o.route, port), route: o.route, port: port, how: 'berth', berthItem: it.berth };
+    /* Her hold, as the crates in it will be stacked (shipdeck.js `load`). */
+    var hv = G.aboard.ship, hd = (Combat.HULLS || {})[hv.hullId] || {};
+    hv.cargoCap = hd.cargoCap || 0;
+    visitHold().forEach(function (m) { hv.cargo[m.cid] = (hv.cargo[m.cid] || 0) + (m.qty || m.tonnes || 0); });
+    poseVisitor();
+    if (!Render.shipInterior || !Render.shipInterior(G.aboard.ship)) { G.aboard = null; say('Her hatch is sealed', 3); return; }
+    startShipWalk('aboard');
+  }
+  /* What is really in her hold, from the ONE place the game keeps it: her
+   * contact's manifest, through Combat.holdOf — the read point robbery, a
+   * kill and her master's trade board all use. The first draft read the
+   * load she is taking on for her next leg instead, and the probe caught
+   * the two disagreeing on the same deck: 57 t of waste in her hold, and
+   * "their hold is empty" on her master's books a minute later. Moored, she
+   * has unloaded; what she will carry next is a different fact, and it is
+   * said as one. */
+  function visitHold() {
+    var a = G.aboard, c = a && visitContact(a.route.name, a.route);
+    var man = c && c.obj ? (Combat.holdOf ? Combat.holdOf(G.sys, c.obj) : (c.obj.manifest || [])) : [];
+    return man.filter(function (m) { return ((m.qty || m.tonnes) || 0) >= 1; });
+  }
+  function visitNextLoad() {
+    var a = G.aboard, r = a && a.route;
+    if (!r) return [];
+    var man = (r.from === (a.port && a.port.id) ? r.out : r.back) || [];
+    return man.filter(function (m) { return ((m.qty || m.tonnes) || 0) >= 1; });
+  }
+  function tonnesLine(man) {
+    var E = global.Economy;
+    return man.slice(0, 4).map(function (m) {
+      var c = E && E.BY_ID ? E.BY_ID[m.cid] : null;
+      return Math.round(m.qty || m.tonnes) + ' t ' + (c ? c.name.toLowerCase() : m.cid);
+    }).join(', ') + (man.length > 4 ? ', and more' : '');
+  }
+  function visitHoldLine() {
+    var man = visitHold(), next = visitNextLoad();
+    if (man.length) return 'Her hold  —  ' + tonnesLine(man);
+    return 'Her hold  —  empty' + (next.length ? '; the load going in for her next run is ' + tonnesLine(next) : ', and nothing booked for her next run');
+  }
+  /* Down her ramp or out of her hatch: back onto the station deck, at her
+   * berth rather than yours. */
+  function leaveVisitor() {
+    /* Back down her tube into your own airlock, when that is how you came. */
+    if (G.aboard && G.aboard.how === 'tube') {
+      G.aboard = null;
+      npcScene = null;
+      startShipWalk('aboard');
+      say('Back through the tube  —  your own airlock; the controls by the inner door cycle you in', 6);
+      return;
+    }
+    var at = G.aboard && G.aboard.berthItem;
+    G.aboard = null;
+    npcScene = null;
+    startWalk(at);
+  }
+
+  /* ---- THE TUBE (boarding.js, 2026-10-29) ---------------------------------
+   * She said yes and ran her tube out: you hang off her at its length, on
+   * her velocity, the way a docked ship rides its station. If she is gone —
+   * docked, jumped, dead, or simply no longer on the list — the tube parts
+   * and you are adrift where you were, and if you were aboard her at the
+   * time you are put back in your own airlock first: nobody is left in a
+   * tube that is not there. */
+  function holdTether() {
+    var tt = G.ship.tether, BD = global.Boarding;
+    var her = BD && tt ? BD.herState(G.sys, G.t, tt.key || tt.name) : null;
+    /* Only her leaving the list parts it: a rail ship in any phase she is
+     * still listed in keeps her tube out. */
+    if (!her) {
+      BD.release(G, G.sys);
+      if (G.aboard && G.aboard.how === 'tube') { G.aboard = null; npcScene = null; G.walk = null; }
+      say('The tube parts  —  the ' + tt.name + ' has gone', 6);
+      return;
+    }
+    tt.tube = Math.min(1, (tt.tube || 0) + G.lastDtSim / TUBE_RUN_S);
+    if (tt.slot) {
+      /* In her slot: you are where the slot says she is not — the same
+       * offset, taken back off her, in your own frame. */
+      var o = tt.slot.off;
+      G.ship.pos = V.sub(her.pos, V.add(V.add(V.scale(G.ship.right, o[0]), V.scale(G.ship.up, o[1])), V.scale(G.ship.fwd, o[2])));
+    } else {
+      G.ship.pos = V.addScaled(her.pos, tt.dir, global.Boarding.TUBE_KM);
+    }
+    G.ship.vel = V.clone(her.vel || V.zero());
+    G.ship.thrust = V.zero();
+    G.ship.throttle = 0;
+    G.ship.angRate = { pitch: 0, yaw: 0, roll: 0 };
+    G.cam.target = V.clone(G.ship.pos);
+    if (G.aboard && G.aboard.how === 'tube') poseVisitor();
+  }
+  var TUBE_RUN_S = 6;            // s for her tube to reach your hatch
+
+  /* WHERE SHE LIES WHEN SHE IS ALONGSIDE (2026-10-29). Astra, asked how the
+   * two ships should sit: "it should be ship dependent". So:
+   *
+   *   - two hulls of a size (neither more than STACK_RATIO the other's
+   *     length) lie BELLY TO BELLY: she comes in beneath you upside down,
+   *     her ramp's mouth straight under yours, and the tube is a short
+   *     straight run between them;
+   *   - a big ship and a small one lie SIDE BY SIDE, level, facing the same
+   *     way, on the side your hatch is on, the tube dropping out of one
+   *     belly, across underneath, and up into the other.
+   *
+   * Both measured off the two hulls (Render.hatchModel: the ramp's mouth on
+   * the belly skin, and the box each hull fills), so the gap is whatever
+   * keeps the hulls CLEAR_KM apart and no more — never the centre-to-centre
+   * 30 m that put a Talon inside a waste hauler. Everything is in YOUR
+   * frame (right, up, fore), in km: `off` is her centre, `tube` the line
+   * of the tube from her hatch to yours. */
+  var STACK_RATIO = 1.6;
+  var CLEAR_KM = 0.004;          // between the hulls, belly to belly
+  var SIDE_CLEAR_KM = 0.008;     // between the hulls, side by side
+  var TUBE_DROP_KM = 0.0025;     // under the lower belly, side by side
+  function alongsideSlot(her) {
+    if (!her || !her.route || !Render.hatchModel) return null;
+    var me = Render.hatchModel(G.ship);
+    var vis = makeVisitor(her.route, null), hm = Render.hatchModel(vis);
+    if (!me || !hm) return null;
+    var Lme = Render.hullLength(G.ship), Lher = her.size || hm.lengthKm;
+    var km = function (a, L) { return [a[0] * L, a[1] * L, a[2] * L]; };
+    var mh = km(me.hatch, Lme), mlo = km(me.lo, Lme), mhi = km(me.hi, Lme);
+    var hh = km(hm.hatch, Lher), hlo = km(hm.lo, Lher), hhi = km(hm.hi, Lher);
+    var lenMe = mhi[2] - mlo[2], lenHer = hhi[2] - hlo[2];
+    var ratio = Math.max(lenMe, lenHer) / Math.max(1e-9, Math.min(lenMe, lenHer));
+    if (ratio <= STACK_RATIO) {
+      /* Rolled over, her (x, y, z) lies along your (-x, -y, z). The gap is
+       * what keeps your lowest point clear of her highest (her own lowest,
+       * now turned up at you), measured from the two hatches. */
+      var gap = (mh[1] - mlo[1]) + (hh[1] - hlo[1]) + CLEAR_KM;
+      var herHatch = [mh[0], mh[1] - gap, mh[2]];
+      return { mode: 'stacked', flip: true, gap: gap, lengths: [lenMe, lenHer],
+               off: [mh[0] + hh[0], mh[1] - gap + hh[1], mh[2] - hh[2]],
+               tube: [herHatch, mh] };
+    }
+    /* Level beside you, on your hatch's side, hatch heights and stations
+     * along the hull matched so the tube's run across is square. */
+    var side = mh[0] >= 0 ? 1 : -1;
+    var cx = side > 0 ? mhi[0] - hlo[0] + SIDE_CLEAR_KM : mlo[0] - hhi[0] - SIDE_CLEAR_KM;
+    var cy = mh[1] - hh[1], cz = mh[2] - hh[2];
+    var hx = cx + hh[0];
+    var floor = Math.min(mlo[1], cy + hlo[1]) - TUBE_DROP_KM;
+    return { mode: 'side', flip: false, gap: Math.abs(hx - mh[0]), lengths: [lenMe, lenHer],
+             off: [cx, cy, cz],
+             tube: [[hx, mh[1], mh[2]], [hx, floor, mh[2]], [mh[0], floor, mh[2]], mh] };
+  }
+  function ensureSlot(tt) {
+    var BD = global.Boarding;
+    if (!tt || !BD || !BD.specOf) return;
+    var spec = BD.specOf(G.sys, tt.key || tt.name);
+    if (!spec || spec.slot !== undefined) return;
+    var her = BD.herState(G.sys, G.t, tt.key || tt.name);
+    spec.slot = alongsideSlot(her) || null;
+  }
+  /* Joined to a ship by her tube — not merely waiting for her to come. */
+  function tubed() { return !!(G.ship && G.ship.tether && G.ship.tether.joined); }
+
+  /* Down your ramp's well into the tube, and up into her airlock. Her outer
+   * hatch is open to the tube, as a berth hatch is to a station. */
+  function boardByTube() {
+    var tt = G.ship.tether, her = tt && global.Boarding ? global.Boarding.herState(G.sys, G.t, tt.key || tt.name) : null;
+    if (!her || !her.route) { say('There is nobody at the other end of the tube', 4); return; }
+    if ((tt.tube || 0) < 1) { say('Her tube is still running out to you', 3); return; }
+    var v = makeVisitor(her.route, null);
+    v.docked = 'tube';
+    var hd = (Combat.HULLS || {})[v.hullId] || {};
+    v.cargoCap = hd.cargoCap || 0;
+    G.aboard = { ship: v, route: her.route, port: null, how: 'tube' };
+    visitHold().forEach(function (m) { v.cargo[m.cid] = (v.cargo[m.cid] || 0) + (m.qty || m.tonnes || 0); });
+    poseVisitor();
+    if (!Render.shipInterior || !Render.shipInterior(v)) { G.aboard = null; say('Her hatch is sealed', 3); return; }
+    startShipWalk('aboard');
+    say('Across the tube and up into the ' + tt.name + '\'s airlock  —  the controls by her inner door cycle you in', 7);
+  }
+
+  /* The tube itself, from outside: a ribbed grey sleeve from your hull to
+   * hers, run out over TUBE_RUN_S. One small mesh in a frame laid along the
+   * line between you, unit long, scaled to the gap. */
+  var TUBE_MESH = null;
+  function tubeMesh() {
+    if (TUBE_MESH) return TUBE_MESH;
+    var v = [], f = [], c = [], N = 10, R = 0.06, RINGS = 8;
+    for (var k = 0; k <= RINGS; k++) {
+      var z = k / RINGS, r = R * (k % 2 ? 0.92 : 1);
+      for (var i = 0; i < N; i++) {
+        var a = i / N * Math.PI * 2;
+        v.push([Math.cos(a) * r, Math.sin(a) * r, z]);
+      }
+    }
+    for (k = 0; k < RINGS; k++) {
+      for (var j = 0; j < N; j++) {
+        var a0 = k * N + j, a1 = k * N + (j + 1) % N, b0 = a0 + N, b1 = a1 + N;
+        f.push([a0, a1, b1]); c.push(k % 2 ? '#5d636b' : '#787f88');
+        f.push([a0, b1, b0]); c.push(k % 2 ? '#5d636b' : '#787f88');
+      }
+    }
+    TUBE_MESH = { v: v, f: f, c: c };
+    return TUBE_MESH;
+  }
+  /* A ribbed sleeve along a polyline (km, your frame), as a mesh in metres:
+   * a metre in radius whatever the length, unlike tubeMesh, which scales
+   * its girth with the gap. Only the first `run` of it, from her end. */
+  var SLOT_TUBE = { key: null, mesh: null };
+  function slotTubeMesh(pts, run) {
+    var key = pts.map(function (p) { return p.join(','); }).join('|') + '|' + Math.round(run * 40);
+    if (SLOT_TUBE.key === key) return SLOT_TUBE.mesh;
+    var P = pts.map(function (p) { return [p[0] * 1000, p[1] * 1000, p[2] * 1000]; });
+    var total = 0, i;
+    for (i = 1; i < P.length; i++) total += Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1], P[i][2] - P[i - 1][2]);
+    var want = total * Math.max(0, Math.min(1, run)), v = [], f = [], c = [], N = 10, R = 1.0, RIB = 1.2;
+    for (i = 1; i < P.length && want > 1e-3; i++) {
+      var A = P[i - 1], B = P[i], d = [B[0] - A[0], B[1] - A[1], B[2] - A[2]], len = Math.hypot(d[0], d[1], d[2]);
+      if (len < 1e-6) continue;
+      var use = Math.min(len, want); want -= use;
+      d = [d[0] / len, d[1] / len, d[2] / len];
+      var tmp = Math.abs(d[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+      var p = [d[1] * tmp[2] - d[2] * tmp[1], d[2] * tmp[0] - d[0] * tmp[2], d[0] * tmp[1] - d[1] * tmp[0]];
+      var pl = Math.hypot(p[0], p[1], p[2]); p = [p[0] / pl, p[1] / pl, p[2] / pl];
+      var q = [d[1] * p[2] - d[2] * p[1], d[2] * p[0] - d[0] * p[2], d[0] * p[1] - d[1] * p[0]];
+      var rings = Math.max(1, Math.ceil(use / RIB)), base = v.length;
+      for (var k = 0; k <= rings; k++) {
+        var s = use * k / rings, r = R * (k % 2 ? 0.9 : 1);
+        for (var j = 0; j < N; j++) {
+          var a = j / N * Math.PI * 2, ca = Math.cos(a) * r, sa = Math.sin(a) * r;
+          v.push([A[0] + d[0] * s + p[0] * ca + q[0] * sa, A[1] + d[1] * s + p[1] * ca + q[1] * sa, A[2] + d[2] * s + p[2] * ca + q[2] * sa]);
+        }
+      }
+      for (k = 0; k < rings; k++) {
+        for (var jj = 0; jj < N; jj++) {
+          var a0 = base + k * N + jj, a1 = base + k * N + (jj + 1) % N, b0 = a0 + N, b1 = a1 + N, col = k % 2 ? '#5d636b' : '#787f88';
+          f.push([a0, a1, b1]); c.push(col);
+          f.push([a0, b1, b0]); c.push(col);
+        }
+      }
+    }
+    SLOT_TUBE.key = key;
+    SLOT_TUBE.mesh = f.length ? { v: v, f: f, c: c } : null;
+    return SLOT_TUBE.mesh;
+  }
+  function drawTube(cam) {
+    var tt = G.ship.tether;
+    if (!tt || !tt.joined || !glLive() || !global.GLWorld || !global.GLWorld.queueMesh) return;
+    var her = global.Boarding.herState(G.sys, G.t, tt.key || tt.name);
+    if (!her) return;
+    var run = Math.max(0.02, tt.tube || 0), gap = global.Boarding.TUBE_KM;
+    var sunS = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), G.ship.pos));
+    /* Hatch to hatch, along her slot's line (alongsideSlot), in metres in
+     * your frame, run out from her end over TUBE_RUN_S. */
+    if (tt.slot && tt.slot.tube) {
+      var m = slotTubeMesh(tt.slot.tube, run);
+      if (m) global.GLWorld.queueMesh(cam, { pos: G.ship.pos, right: G.ship.right, up: G.ship.up, fwd: G.ship.fwd },
+                                      m, 0.001, sunS, 0, null);
+      return;
+    }
+    /* From her side, towards you: it is hers. */
+    var fwd = V.scale(tt.dir, 1);
+    var right = V.norm(V.cross(fwd, Math.abs(fwd.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 }));
+    var up = V.cross(right, fwd);
+    var sun = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), G.ship.pos));
+    global.GLWorld.queueMesh(cam, { pos: her.pos, right: right, up: up, fwd: fwd }, tubeMesh(), gap * run, sun, 0, null);
   }
   /* From a tower bridge the rest of her is the view, all the way round —
    * the deck below, the terraces, the mast, the flight deck — with the
    * gallery or cab you are in left out of it (Render.bridgeCutMesh). */
   function drawOwnHullFromBridge(ctx, cam) {
-    if (!G.ship || !Render.bridgeSpec || !Render.bridgeSpec(G.ship)) return;
+    /* Hers, when you are aboard her (walkHull). */
+    var hullS = walkHull();
+    if (!hullS || !Render.bridgeSpec || !Render.bridgeSpec(hullS)) return;
     /* Only on the bridge deck, where the glass is. Below it the rooms are
      * closed boxes inside her, and her own frames and bulkheads would stand
      * in them. */
     var wk = G.walk;
     if (wk && wk.ship && wk.plan && ((wk.plan.deck && wk.plan.deck !== 'bridge') || Math.abs(wk.rideDy || 0) > 0.05)) return;
-    var sunDir = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), G.ship.pos));
-    Render.drawShipModel(ctx, cam, G.ship, sunDir, null, { fromBridge: true });
+    var sunDir = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), hullS.pos));
+    Render.drawShipModel(ctx, cam, hullS, sunDir, null, { fromBridge: true });
   }
 
   function shipWalkGpu() {
@@ -8946,6 +9795,32 @@
         navy: !!(Eco && Eco.navyPresent && Eco.navyPresent(G.sys)),
         corruption: G.sys && G.sys.corruption, signed: signed
       });
+      /* A hand you talked off another ship is aboard yours now, not in the
+       * bar (dialogue.js RECRUIT keeps their id). */
+      npcScene.people = npcScene.people.filter(function (p) { return signed.indexOf(p.id) < 0; });
+      npcScene.roster = roster;
+      return npcScene;
+    }
+    /* Aboard her: her crew on her deck (Npc.visitScene), less anyone you
+     * have talked off her and signed on (they are aboard yours now). Her
+     * master carries her contact, so "Can we do business?" opens the same
+     * board the comms page would. */
+    if (G.aboard && G.walk && G.walk.ship) {
+      var dv = Render.shipInterior ? Render.shipInterior(G.aboard.ship) : null;
+      if (!dv) return null;
+      var vp = dv.plan.decks ? (G.walk.plan.ship === dv.plan ? G.walk.plan : dv.plan.decks.main) : dv.plan;
+      if (npcScene && npcScene.plan === vp && npcScene.roster === roster && npcScene.visit) return npcScene;
+      npcScene = NpcM.visitScene(vp, visitInfo(G.aboard.route), { t: G.t });
+      /* Looked up FRESH, every time it is asked. A traffic contact is a
+       * snapshot of one frame's rail position, and a moored ship rides her
+       * station round its orbit at tens of km/s — a contact held from when
+       * you came aboard was a hundred km "away" a few seconds later, and her
+       * master refused to trade with you from his own deck as out of range. */
+      var herName = G.aboard.route.name, herRoute = G.aboard.route;
+      npcScene.people = npcScene.people.filter(function (p) { return signed.indexOf(p.id) < 0; });
+      npcScene.people.forEach(function (p) {
+        if (p.master) p.contactOf = function () { var c = visitContact(herName, herRoute); return c ? c.obj : null; };
+      });
       npcScene.roster = roster;
       return npcScene;
     }
@@ -8975,7 +9850,7 @@
     var you = onDeck ? { x: G.walk.x, z: G.walk.z } : null;
     try {
       return global.Npc.update(sc, dt, { now: npcClock, t: G.t, player: you,
-                                         playerWalking: !!(G.walk && G.walk.ship), helmFree: true,
+                                         playerWalking: !!(G.walk && G.walk.ship), helmFree: !G.aboard,
                                          talkTo: G.talk && onDeck ? G.talk.person.id : null });
     } catch (e) { if (global.console) console.error(e); return {}; }
   }
@@ -8983,7 +9858,7 @@
   /* E talks to whoever you are facing, when they are nearer than the
    * nearest thing to use. */
   function npcFacing() {
-    if (!G.walk || !npcScene || !global.Npc) return;
+    if (!G.walk || !npcScene || !global.Npc || G.walk.outside) return;
     if ((npcScene.kind === 'ship') !== !!G.walk.ship) return;
     var p = global.Npc.facing(npcScene, G.walk);
     if (!p) return;
@@ -9046,8 +9921,10 @@
    * and the dot at the middle of the view — what Walk.draw paints itself
    * on the 2D path. Projected here rather than through cam.project, whose
    * near plane is whatever the last outside view set. */
-  function drawWalkLabels(ctx, cam, p, here, w, h) {
+  function drawWalkLabels(ctx, cam, p, here, w, h, frame, labelY) {
     var M = Render.M;
+    frame = frame || G.ship;
+    labelY = labelY === undefined ? 2.4 : labelY;
     ctx.save();
     ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.textAlign = 'center';
@@ -9055,7 +9932,7 @@
       if (it.silent) return;
       var r = global.Walk.roomAt(p, it.x, it.z);
       if (!r || (here && r !== here)) return;
-      var q = Render.localToWorld(G.ship, it.x * M, 2.4 * M, it.z * M);
+      var q = Render.localToWorld(frame, it.x * M, labelY * M, it.z * M);
       var vx = q.x - cam.eye.x, vy = q.y - cam.eye.y, vz = q.z - cam.eye.z;
       var dpt = vx * cam.f.x + vy * cam.f.y + vz * cam.f.z;
       if (dpt < 0.3 * M || dpt > 30 * M) return;
@@ -9072,17 +9949,41 @@
   function walkUse() {
     var w = G.walk, it = w && w.near;
     if (!it) return;
+    /* Under way, your pilot is IN the seat, so the seat is behind her: E
+     * at her takes the helm back, and she gets up for you. */
+    if (it.kind === 'npc' && w.ship && !G.aboard && w.underway && w.helm && it.npc && it.npc.name === w.helm) {
+      it = { kind: 'seat' };
+    }
     /* Somebody to talk to (npc.js): who they are and a line in character. */
     if (it.kind === 'npc') {
       if (global.Dialogue) { openTalk(it.npc); return; }
       if (global.Npc) say(global.Npc.talk(it.npc) + (it.npc.forHire ? '   —   terms are on the crew board' : ''), 7);
       return;
     }
+    /* Aboard her: her consoles are hers. The airlock and the lift work for
+     * you as they would at home; the seat, the stations and the turret say
+     * whose they are; her hold says what is really in it (her manifest). */
+    if (w.ship && G.aboard) {
+      if (it.kind === 'hatch' || it.kind === 'ramp' || it.kind === 'rampctl') { lockUse(it); return; }
+      if (it.kind === 'liftbtn') { startRide('lift', it); return; }
+      if (it.kind === 'tram') { startRide('tram', it); return; }
+      var her = G.aboard.ship.shipName;
+      if (it.kind === 'cargo') { say(visitHoldLine(), 7); return; }
+      if (it.kind === 'seat') { say('Her helm  —  her master\'s chair, not yours', 4); return; }
+      if (it.kind === 'station' || it.kind === 'copilot' || it.kind === 'turret' || it.kind === 'engine') {
+        say('The ' + her + '\'s ' + (it.kind === 'turret' ? 'turret' : it.kind === 'engine' ? 'drive console' : 'console') +
+            '  —  her crew\'s to stand, not yours', 4);
+        return;
+      }
+      if (it.kind === 'galley') { say('Her galley  —  somebody else\'s coffee', 3); return; }
+      return;
+    }
     if (w.ship) {
       if (it.kind === 'seat') {
+        var took = w.underway && w.helm;
         G.walk = null;
         G.look.yaw = 0; G.look.pitch = 0;
-        say('Back in the seat', 3);
+        say(took ? 'Back in the seat  —  you have her, ' + took + ' stands down' : 'Back in the seat', 3);
         return;
       }
       /* A gunnery console says what the gunners on it are doing for the
@@ -9134,15 +10035,15 @@
       if (it.kind === 'tram') { startRide('tram', it); return; }
       if (it.kind === 'hangardoor') { say('The hangar doors  —  they open for craft, not for people on foot', 4); return; }
       if (it.kind === 'galley') { say('The galley  —  coffee, ration packs, and a kettle bolted to the counter', 4); return; }
-      if (it.kind === 'hatch') {
-        if (G.ship.docked) { startWalk(); return; }
-        say(G.ship.landed ? 'The hatch opens onto the pad  —  walking outside comes later'
-                          : 'Nothing past that hatch but vacuum', 5);
-      }
+      /* The airlock's controls, the ramp in its floor, and the post at the
+       * ramp's foot (2026-10-26). */
+      if (it.kind === 'hatch' || it.kind === 'ramp' || it.kind === 'rampctl') { lockUse(it); return; }
       return;
     }
     /* Your own hatch on the station deck brings you aboard at the airlock. */
     if (it.kind === 'mine') { startShipWalk('aboard'); return; }
+    /* Somebody else's (2026-10-28): up her hatch and into her airlock. */
+    if (it.kind === 'other') { boardAtBerth(it); return; }
     if (it.kind === 'fleet') {
       var r = Combat.takeCommand ? Combat.takeCommand(G, it.ship.id, 'keep') : { ok: false, why: 'no harbour master' };
       if (!r.ok) { say('Not now: ' + r.why, 5); return; }
@@ -9220,7 +10121,11 @@
     G.talk = { st: st, person: person, closeAt: 0 };
     G.walk.near = null;
   }
-  function closeTalk() { G.talk = null; }
+  function closeTalk() {
+    G.talk = null;
+    /* The hand the panel put up goes away with it. */
+    if (canvas && canvas.style) canvas.style.cursor = '';
+  }
   function talkChoose(i) {
     var tk = G.talk;
     if (!tk) return;
@@ -9228,6 +10133,18 @@
     global.Dialogue.choose(G, G.sys, talkPort(), tk.st, i);
     /* Signing someone on changes who is on the deck. */
     if (tk.st.hired) npcScene = null;
+    /* Her master opened her books (dialogue.js DEAL): the hailed-ship board
+     * on the comms page, pinned to her by name as a hailed deal is. */
+    if (tk.st.trade && tk.person.contactOf) {
+      tk.st.trade = false;
+      var ci = -1;
+      for (var mi = 0; mi < MODES.length; mi++) if (MODES[mi].id === 'comms') ci = mi;
+      if (ci >= 0) selectPanel(ci);
+      /* After the page change, which drops any open deal (selectPanel). */
+      G.shipDeal = { name: tk.person.shipName, sel: 0 };
+      closeTalk();
+      return;
+    }
     if (tk.st.end) tk.closeAt = performance.now() + 3500;
   }
   /* Per frame: walked off, sat down, or said goodbye a moment ago. */
@@ -9282,18 +10199,40 @@
     for (var i = 0; i < lines.length; i++) { y += 19; ctx.fillText(lines[i], tx + pad, y - 4); }
     y += 10;
     ctx.font = 'bold 13px ui-monospace, monospace';
+    /* MOUSE-NAVIGABLE (2026-10-29). Astra: "NPC dialogue trees should be
+     * mouse-navigable." A click always chose a reply, but nothing on the
+     * panel said so: the rows did not answer the pointer, so it read as a
+     * keyboard menu. Now the reply under the pointer lights up with a bar
+     * and a ▶, the pointer becomes a hand over one you can say, and when
+     * the talk is over a click anywhere on the panel walks on. The numbers
+     * stay for the keyboard. */
+    var mx = -1, my = -1;
+    if (G.mouseAt && canvas && canvas.getBoundingClientRect && !pointerLocked()) {
+      var cr = canvas.getBoundingClientRect();
+      mx = G.mouseAt.x - cr.left; my = G.mouseAt.y - cr.top;
+    }
+    var pointy = false, rw = pw - (tx - px);
     for (var j = 0; j < opts.length; j++) {
       var o = opts[j], oy = y + j * rowH;
-      ctx.fillStyle = o.ok ? '#b4f0ff' : '#5d6f78';
-      ctx.fillText((j + 1) + '   ' + o.label + (o.ok ? '' : '   — ' + o.why), tx + pad, oy + 15);
-      hot(tx, oy, pw - (tx - px), rowH, (function (ix) { return function () { talkChoose(ix); }; })(j),
+      var over = mx >= tx && mx <= tx + rw && my >= oy && my < oy + rowH;
+      if (over) {
+        ctx.fillStyle = o.ok ? 'rgba(125,255,207,0.14)' : 'rgba(120,130,140,0.10)';
+        ctx.fillRect(tx + 4, oy + 1, rw - 8, rowH - 2);
+        if (o.ok) pointy = true;
+      }
+      ctx.fillStyle = !o.ok ? '#5d6f78' : over ? '#ffe9a8' : '#b4f0ff';
+      ctx.fillText((over && o.ok ? '▶  ' : (j + 1) + '   ') + o.label + (o.ok ? '' : '   — ' + o.why), tx + pad, oy + 15);
+      hot(tx, oy, rw, rowH, (function (ix) { return function () { talkChoose(ix); }; })(j),
           o.ok ? 'say this' : o.why);
     }
     if (st.end) {
       ctx.font = 'bold 11px ui-monospace, monospace';
       ctx.fillStyle = '#5d6f78';
-      ctx.fillText('(any number or Esc to walk on)', tx + pad, py + ph - 8);
+      ctx.fillText('(click, any number or Esc to walk on)', tx + pad, py + ph - 8);
+      hot(px, py, pw, ph, function () { closeTalk(); }, 'walk on');
+      pointy = mx >= px && mx <= px + pw && my >= py && my <= py + ph;
     }
+    if (canvas && canvas.style) canvas.style.cursor = pointy ? 'pointer' : '';
     ctx.restore();
   }
 
@@ -10091,6 +11030,8 @@
     var closest = null, closestRange = Infinity;
     for (i = 0; i < ships.length; i++) {
       var sh = ships[i];
+      /* On her own screen (panelShipFor) she is not a contact of hers. */
+      if (G.ship.visitorPanel && G.ship.routeId && sh.route && sh.route.id === G.ship.routeId) continue;
       p = aftCam.project(sh.pos);
       var rng = V.dist(sh.pos, G.ship.pos);
       if (rng < closestRange) { closestRange = rng; closest = sh; }
@@ -10149,6 +11090,9 @@
     { id: 'system',  title: 'SYSTEM',  draw: function (ctx) { drawSystemPage(ctx); } },
     { id: 'chatter', title: 'CHATTER', draw: function (ctx) { drawChatterPage(ctx); } },
     { id: 'trade',   title: 'TRADE',   draw: function (ctx) { drawTradePage(ctx); } },
+    { id: 'engine',  title: 'ENGINE',  draw: function (ctx) { drawEnginePage(ctx); } },
+    { id: 'weapons', title: 'WEAPONS', draw: function (ctx) { drawWeaponsPage(ctx); } },
+    { id: 'guns',    title: 'GUNS',    draw: function (ctx) { drawGunsPage(ctx); } },
     { id: 'blank',   title: 'OFF',     draw: null }
   ];
   var DASH_PAGE_BY_ID = {};
@@ -10254,7 +11198,62 @@
     return SCANLINE_PATTERN;
   }
 
+  /* HER SCREENS SHOW HER (2026-10-29). Astra: "make sure that the panels on
+   * the ship we're boarding display that ship's information" — aboard her,
+   * her bridge screens were drawing your credits, your tanks and your hold.
+   * So while her screens are drawn, the pages are handed a ship that IS
+   * her: her hull's tanks and drive, her manifest in her hold (the one
+   * visitHold reads), where she is and which way she lies. What the game
+   * does not keep for a ship that is not yours it does not invent: her
+   * jump tank reads full. Her reaction mass and her master's purse it
+   * does now know (upkeep.js, the next day), and shows. */
+  function panelShipFor(v) {
+    var hd = (Combat.HULLS || {})[v.hullId] || {};
+    var s = v._panel;
+    if (!s) {
+      s = v._panel = Sim.makeShip(v.pos, v.vel);
+      s.hullId = v.hullId;
+      s.shipName = v.shipName;
+      if (hd.dryMass) s.dryMass = hd.dryMass;
+      if (hd.thrustKN) s.thrustKN = hd.thrustKN;
+      if (hd.fuelCap) { s.fuelCap = hd.fuelCap; s.fuel = hd.fuelCap; }
+      if (hd.thrusterCap) { s.thrusterCap = hd.thrusterCap; s.thrusterFuel = hd.thrusterCap; }
+      s.hullMax = hd.hullMax || s.hullMax; s.hull = s.hullMax;
+      s.credits = 0;
+      s.crew = [];
+      s.visitorPanel = true;
+      s.routeId = v.route && v.route.id;
+    }
+    s.pos = v.pos; s.vel = v.vel; s.fwd = v.fwd; s.up = v.up; s.right = v.right;
+    s.cargo = v.cargo || {};
+    /* HER TANK AND HER PURSE (upkeep.js, 2026-10-30): both functions of
+     * where she is on her timetable now, plus whatever you have passed her
+     * or been paid. Her reaction mass, not your hull's full tank — and a
+     * dead tank says so. */
+    var U = global.Upkeep, rt = v.route;
+    if (U && rt && U.eligible(rt)) {
+      var fu = U.fuelAt(rt, G.sys, G.t, G);
+      s.thrusterCap = fu.tank; s.thrusterFuel = fu.t; s.tankLeaking = fu.leaking;
+      s.visitorPurse = U.purseAt(rt, G.sys, G.t, G);
+    }
+    /* Her hold as big as it is drawn (Render.shipInterior holdCap, widened
+     * and lengthened with her), so the screen and the crates agree. */
+    var dk = Render.shipInterior ? Render.shipInterior(v) : null;
+    s.cargoCap = Math.round(Math.max((dk && dk.holdCap) || v.cargoCap || hd.cargoCap || 0, Sim.cargoMass({ cargo: s.cargo }) || 0));
+    s.docked = (v.docked && v.docked !== 'tube') ? v.docked : null;
+    s.landed = false;
+    if (Sim.refreshShip) Sim.refreshShip(s);
+    return s;
+  }
   function drawDashPanels(ctx, mfds, hyper) {
+    var her = G.aboard && G.aboard.ship ? panelShipFor(G.aboard.ship) : null;
+    if (!her) return drawDashPanelsAs(ctx, mfds, hyper);
+    var mine = G.ship;
+    G.ship = her;
+    try { drawDashPanelsAs(ctx, mfds, hyper); }
+    finally { G.ship = mine; }
+  }
+  function drawDashPanelsAs(ctx, mfds, hyper) {
     panelHots.length = 0;
     if (!mfds || !mfds.length) return;
     for (var i = 0; i < mfds.length; i++) {
@@ -10523,7 +11522,9 @@
 
     // Burn rose. Arrows, never words: "prograde" is true from any angle
     // and "left" is not.
-    var cx = x + 62, cy = y + 84, R = 40;
+    /* Sized so its labels stay inside the panel (Astra, 2026-10-29: RET
+     * was cut by the frame and PRO ran into the bars). */
+    var cx = x + 62, cy = y + 88, R = 34;
     var a = G.activeThrust || {};
     var dirs = [
       { key: 'pro',    dx: 1,  dy: 0,  tag: 'PRO' },
@@ -10538,17 +11539,29 @@
     ctx.beginPath(); ctx.arc(cx, cy, R, 0, K.TAU); ctx.stroke();
     for (var i = 0; i < dirs.length; i++) {
       var d = dirs[i], on = !!a[d.key];
-      Render.drawArrow(ctx, cx + d.dx * 11, cy + d.dy * 11, d.dx, d.dy, R - 13,
+      Render.drawArrow(ctx, cx + d.dx * 9, cy + d.dy * 9, d.dx, d.dy, R - 11,
                        on ? '#7dfaff' : 'rgba(120,170,200,0.40)', on ? 2.4 : 1.2, on ? 8 : 6);
       ctx.font = 'bold 10px ui-monospace, monospace';
       ctx.fillStyle = on ? '#7dfaff' : 'rgba(140,175,200,0.6)';
       var tw = ctx.measureText(d.tag).width;
-      ctx.fillText(d.tag, cx + d.dx * (R + 12) - tw / 2, cy + d.dy * (R + 12) + 3.5);
+      ctx.fillText(d.tag, cx + d.dx * (R + 11) - tw / 2, cy + d.dy * (R + 11) + 3.5);
     }
     ctx.restore();
 
     // Throttle and the two tanks.
-    var bx = x + 120, bw = w - 132;
+    var bx = x + 128, bw = w - 140;
+    /* A label on the left and its figure on the right, so a long one
+     * cannot run off the panel: if the two would meet, the figure on the
+     * right is the one that goes (the bar still says it). */
+    function pair(left, right, yy) {
+      ctx.textAlign = 'left';
+      ctx.fillText(left, bx, yy);
+      if (right && ctx.measureText(left).width + ctx.measureText(right).width + 12 <= bw) {
+        ctx.textAlign = 'right';
+        ctx.fillText(right, bx + bw, yy);
+        ctx.textAlign = 'left';
+      }
+    }
     ctx.save();
     ctx.font = 'bold 11px ui-monospace, monospace';
 
@@ -10557,14 +11570,12 @@
     bar(bx, y + 50, (s.throttle || 0), '#7dfaff');
 
     ctx.fillStyle = MFD_DIM;
-    ctx.fillText('jump fuel  ' + s.fuel.toFixed(1) + ' t   ·   ' +
-                 fmtLy(Galaxy.maxRange(s)), bx, y + 76);
+    pair('jump fuel  ' + s.fuel.toFixed(1) + ' t', fmtLy(Galaxy.maxRange(s)), y + 76);
     bar(bx, y + 80, s.fuel / s.fuelCap, s.fuel / s.fuelCap < 0.2 ? '#ff7a7a' : '#6ef0c0');
 
     var endur = Sim.thrusterEndurance(s);
     ctx.fillStyle = MFD_DIM;
-    ctx.fillText('thrusters  ' + s.thrusterFuel.toFixed(1) + ' t   ·   ' +
-                 fmtTime(endur) + ' burn', bx, y + 106);
+    pair('thrusters  ' + s.thrusterFuel.toFixed(1) + ' t', fmtTime(endur) + ' burn', y + 106);
     bar(bx, y + 110, s.thrusterFuel / s.thrusterCap,
         s.thrusterFuel / s.thrusterCap < 0.15 ? '#ff7a7a' : '#9fd4ff');
 
@@ -11528,13 +12539,25 @@
 
   /* --- SHIP: the two tanks, the hold, and the money ---------------------- */
   function drawShipPage(ctx) {
-    mfdShell(ctx, 'SHIP', G.ship.docked ? 'F4 trade    F refuel    U undock'
-                                        : 'T dock    F6 chart    Z cruise');
     var s = G.ship;
+    /* Her own screen (panelShipFor): her name where your money would be,
+     * and no keys, because none of them are yours to press here. */
+    if (s.visitorPanel) mfdShell(ctx, 'SHIP', 'her master has the helm');
+    else mfdShell(ctx, 'SHIP', G.ship.docked ? 'F4 trade    F refuel    U undock'
+                                             : 'T dock    F6 chart    Z cruise');
     var cargo = Sim.cargoMass(s);
     var y = MFD_BODY_TOP + 14;
 
-    mfdRow(ctx, y, 'credits', fmtCredits(s.credits), MFD_HOT);
+    if (s.visitorPanel) {
+      var hd2 = (Combat.HULLS || {})[s.hullId] || {};
+      /* Her purse beside her name, now the game knows it (upkeep.js). */
+      if (s.visitorPurse != null) {
+        mfdLabelled(ctx, y, clipText((s.shipName || 'unnamed') + (hd2.name ? ' · ' + hd2.name : ''), 26),
+                    'purse ' + fmtCredits(s.visitorPurse), MFD_HOT);
+      } else {
+        mfdRow(ctx, y, 'vessel', clipText((s.shipName || 'unnamed') + (hd2.name ? '  ·  ' + hd2.name : ''), 34), MFD_HOT);
+      }
+    } else mfdRow(ctx, y, 'credits', fmtCredits(s.credits), MFD_HOT);
 
     mfdLabelled(ctx, y + 20, 'jump fuel  ' + s.fuel.toFixed(1) + ' / ' + s.fuelCap + ' t',
                 fmtLy(Galaxy.maxRange(s)), MFD_INK);
@@ -11545,8 +12568,9 @@
      * by percentage — the only question you ever ask of it is whether you
      * have enough left to finish what you are doing. */
     var endur = Sim.thrusterEndurance(s);
-    mfdLabelled(ctx, y + 50, 'thrusters  ' + s.thrusterFuel.toFixed(1) + ' / ' + s.thrusterCap + ' t',
-                fmtTime(endur) + ' burn', endur < 1800 ? '#ffb86b' : MFD_INK);
+    mfdLabelled(ctx, y + 50, 'thrusters  ' + s.thrusterFuel.toFixed(1) + ' / ' + Math.round(s.thrusterCap) + ' t',
+                s.tankLeaking ? 'TANK GONE' : fmtTime(endur) + ' burn',
+                s.tankLeaking ? '#ff7a7a' : endur < 1800 ? '#ffb86b' : MFD_INK);
     mfdBar(ctx, y + 55, s.thrusterFuel / s.thrusterCap,
            s.thrusterFuel / s.thrusterCap < 0.15 ? '#ff7a7a' : '#9fd4ff');
 
@@ -11764,6 +12788,424 @@
     mfdBar(ctx, MFD_BODY_BOTTOM - 8, hf,
            hf >= 1 ? '#ff7a7a' : (hf > 0.55 ? '#ffb86b' : '#6ef0c0'));
   }
+  /* --- SYSTEM GLYPHS ------------------------------------------------------
+   * Astra: "use some kind of graphic to identify systems from one another."
+   *
+   * One small vector glyph per ship system, drawn straight onto the panel
+   * canvas — no image files, nothing to load, and they scale and
+   * foreshorten with the glass exactly as the text does.
+   *
+   * SHAPE CARRIES THE MEANING, COLOUR ONLY CONFIRMS IT. A pilot reading a
+   * panel at an angle, through phosphor wash, possibly colour-blind, has to
+   * tell fuel from heat by outline alone: a drop is not a flame is not a
+   * thermometer. The colour is the system's colour everywhere it appears on
+   * these pages — its glyph, its bar, its pips — so once learnt it is a
+   * second, faster cue, but nothing depends on it.
+   *
+   * Every glyph is drawn centred on (x, y) in a box `s` pixels across, in
+   * stroke so it stays legible at the 12-16px a dashboard panel affords. */
+  var SYS_COLOR = {
+    jump:    '#6ef0c0',   // slipspace fuel
+    thrust:  '#9fd4ff',   // reaction mass
+    reactor: '#ffd36b',   // power
+    gravity: '#c9a8ff',   // what you are fighting
+    heat:    '#ff9a5c',
+    gun:     '#e8f2ff',
+    missile: '#ff7aa8',
+    sink:    '#7dfaff',
+    shield:  '#7dfaff',
+    turret:  '#b8e986',
+    cargo:   '#ffd36b'
+  };
+
+  var SYS_GLYPH = {
+    /* A drop inside a ring: fuel, and the ring is the slipspace it buys. */
+    jump: function (c, x, y, s) {
+      var r = s * 0.5;
+      c.beginPath(); c.arc(x, y, r, 0, K.TAU); c.stroke();
+      c.beginPath();
+      c.moveTo(x, y - r * 0.62);
+      c.quadraticCurveTo(x + r * 0.5, y + r * 0.05, x, y + r * 0.5);
+      c.quadraticCurveTo(x - r * 0.5, y + r * 0.05, x, y - r * 0.62);
+      c.fill();
+    },
+    /* An engine bell with its exhaust: reaction mass. */
+    thrust: function (c, x, y, s) {
+      var h = s * 0.5;
+      c.beginPath();
+      c.moveTo(x - h * 0.35, y - h); c.lineTo(x + h * 0.35, y - h);
+      c.lineTo(x + h * 0.75, y + h * 0.1); c.lineTo(x - h * 0.75, y + h * 0.1);
+      c.closePath(); c.stroke();
+      c.beginPath();
+      c.moveTo(x - h * 0.5, y + h * 0.25);
+      c.lineTo(x, y + h); c.lineTo(x + h * 0.5, y + h * 0.25);
+      c.fill();
+    },
+    /* A lightning bolt: the reactor, and what the fit draws from it. */
+    reactor: function (c, x, y, s) {
+      var h = s * 0.5;
+      c.beginPath();
+      c.moveTo(x + h * 0.25, y - h); c.lineTo(x - h * 0.55, y + h * 0.1);
+      c.lineTo(x - h * 0.02, y + h * 0.1); c.lineTo(x - h * 0.25, y + h);
+      c.lineTo(x + h * 0.55, y - h * 0.15); c.lineTo(x + h * 0.02, y - h * 0.15);
+      c.closePath(); c.fill();
+    },
+    /* A body with a downward arrow onto a ground line: local gravity. */
+    gravity: function (c, x, y, s) {
+      var h = s * 0.5;
+      c.beginPath(); c.moveTo(x - h, y + h); c.lineTo(x + h, y + h); c.stroke();
+      c.beginPath(); c.moveTo(x, y - h); c.lineTo(x, y + h * 0.45); c.stroke();
+      c.beginPath();
+      c.moveTo(x - h * 0.45, y); c.lineTo(x, y + h * 0.6); c.lineTo(x + h * 0.45, y);
+      c.stroke();
+    },
+    /* A thermometer: hull heat. */
+    heat: function (c, x, y, s) {
+      var h = s * 0.5;
+      c.beginPath();
+      c.moveTo(x - h * 0.22, y + h * 0.3); c.lineTo(x - h * 0.22, y - h * 0.75);
+      c.arc(x, y - h * 0.75, h * 0.22, Math.PI, 0);
+      c.lineTo(x + h * 0.22, y + h * 0.3);
+      c.stroke();
+      c.beginPath(); c.arc(x, y + h * 0.58, h * 0.4, 0, K.TAU); c.fill();
+    },
+    /* A barrel on a mount, pointing up — rotated by the caller to the side
+     * of the hull the muzzle is on. */
+    gun: function (c, x, y, s) {
+      var h = s * 0.5;
+      c.fillRect(x - h * 0.6, y + h * 0.2, h * 1.2, h * 0.7);   // mount
+      c.fillRect(x - h * 0.16, y - h, h * 0.32, h * 1.25);      // barrel
+    },
+    /* A missile, nose up: body, fins, and a nose cone. */
+    missile: function (c, x, y, s) {
+      var h = s * 0.5, b = h * 0.2;
+      c.beginPath();
+      c.moveTo(x, y - h);
+      c.lineTo(x + b, y - h * 0.55); c.lineTo(x + b, y + h * 0.45);
+      c.lineTo(x + h * 0.45, y + h); c.lineTo(x - h * 0.45, y + h);
+      c.lineTo(x - b, y + h * 0.45); c.lineTo(x - b, y - h * 0.55);
+      c.closePath(); c.fill();
+    },
+    /* A finned block: the heat sink you throw overboard. */
+    sink: function (c, x, y, s) {
+      var h = s * 0.5;
+      c.strokeRect(x - h * 0.7, y - h * 0.25, h * 1.4, h * 1.1);
+      for (var i = -1; i <= 1; i++) {
+        c.beginPath();
+        c.moveTo(x + i * h * 0.45, y - h * 0.25); c.lineTo(x + i * h * 0.45, y - h);
+        c.stroke();
+      }
+    },
+    /* A shield, heater-shaped. */
+    shield: function (c, x, y, s) {
+      var h = s * 0.5;
+      c.beginPath();
+      c.moveTo(x, y - h); c.lineTo(x + h * 0.8, y - h * 0.6);
+      c.lineTo(x + h * 0.6, y + h * 0.35); c.lineTo(x, y + h);
+      c.lineTo(x - h * 0.6, y + h * 0.35); c.lineTo(x - h * 0.8, y - h * 0.6);
+      c.closePath(); c.stroke();
+    },
+    /* A dome with a barrel: the auto-turret. */
+    turret: function (c, x, y, s) {
+      var h = s * 0.5;
+      c.beginPath(); c.arc(x, y + h * 0.3, h * 0.6, Math.PI, 0); c.fill();
+      c.fillRect(x - h * 0.8, y + h * 0.3, h * 1.6, h * 0.35);
+      c.save(); c.translate(x, y + h * 0.1); c.rotate(-0.7);
+      c.fillRect(-h * 0.12, -h * 1.05, h * 0.24, h * 0.9);
+      c.restore();
+    },
+    /* A crate with a cross-brace: the hold. */
+    cargo: function (c, x, y, s) {
+      var h = s * 0.45;
+      c.strokeRect(x - h, y - h, h * 2, h * 2);
+      c.beginPath();
+      c.moveTo(x - h, y - h); c.lineTo(x + h, y + h);
+      c.moveTo(x + h, y - h); c.lineTo(x - h, y + h);
+      c.stroke();
+    }
+  };
+
+  /* Draw one glyph. `rot` turns it about its centre (radians); `alpha`
+   * dims it — an empty slot is the same glyph, ghosted, so the outline
+   * still says what belongs there. */
+  function sysGlyph(ctx, kind, x, y, s, color, rot, alpha) {
+    var g = SYS_GLYPH[kind];
+    if (!g) return;
+    ctx.save();
+    if (alpha !== undefined) ctx.globalAlpha *= alpha;
+    ctx.translate(x, y);
+    if (rot) ctx.rotate(rot);
+    ctx.strokeStyle = ctx.fillStyle = color || SYS_COLOR[kind] || MFD_INK;
+    ctx.lineWidth = Math.max(1.2, s / 10);
+    ctx.lineJoin = 'round';
+    g(ctx, 0, 0, s);
+    ctx.restore();
+  }
+
+  /* A segmented bar — cells rather than a smear, because a count of lit
+   * cells reads at a glance on a screen seen edge-on, and a sliver of
+   * continuous bar does not. A frac above 1 lights every cell and turns
+   * the frame the warning colour. */
+  function mfdCells(ctx, x, y, w, h, frac, color, cells) {
+    cells = cells || 20;
+    var gap = 2, cw = (w - gap * (cells - 1)) / cells;
+    var lit = Math.round(Math.max(0, Math.min(1, frac)) * cells);
+    for (var i = 0; i < cells; i++) {
+      ctx.fillStyle = i < lit ? color : 'rgba(74,151,176,0.18)';
+      ctx.fillRect(x + i * (cw + gap), y, cw, h);
+    }
+    if (frac > 1) {
+      ctx.strokeStyle = '#ff7a7a';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x - 2, y - 2, w + 4, h + 4);
+    }
+  }
+
+  /* One system row: glyph, name, cells, and the figure that matters. */
+  function sysRow(ctx, y, kind, label, frac, value, valueColor, barColor) {
+    var col = SYS_COLOR[kind];
+    sysGlyph(ctx, kind, 20, y + 2, 16, col);
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText(label, 36, y - 1);
+    ctx.fillStyle = valueColor || MFD_INK;
+    ctx.textAlign = 'right';
+    ctx.fillText(value, MFD_W - 10, y - 1);
+    ctx.textAlign = 'left';
+    mfdCells(ctx, 36, y + 4, MFD_W - 46, 7, frac, barColor || col, 24);
+  }
+
+  /* --- ENGINE: what the ship moves on ------------------------------------
+   * Fuel for the slipspace drive, reaction mass for the torch, the reactor
+   * that feeds every fitting, and thrust against the gravity it has to beat.
+   * The SHIP page already says most of this in words; this page says it in
+   * shapes, for a panel you read out of the corner of your eye. */
+  function drawEnginePage(ctx) {
+    var s = G.ship;
+    mfdShell(ctx, 'ENGINE', s.docked ? 'F refuel    U undock'
+                                     : 'Z cruise    , . time warp');
+    var y = MFD_BODY_TOP + 18;
+
+    var jf = s.fuelCap ? s.fuel / s.fuelCap : 0;
+    sysRow(ctx, y, 'jump', 'slipspace fuel',
+           jf, s.fuel.toFixed(1) + ' t  ·  ' + fmtLy(Galaxy.maxRange(s)),
+           jf < 0.2 ? '#ff7a7a' : MFD_INK, jf < 0.2 ? '#ff7a7a' : null);
+
+    var tf = s.thrusterCap ? s.thrusterFuel / s.thrusterCap : 0;
+    var endur = Sim.thrusterEndurance(s);
+    sysRow(ctx, y + 30, 'thrust', 'reaction mass',
+           tf, fmtTime(endur) + ' burn',
+           endur < 1800 ? '#ffb86b' : MFD_INK, tf < 0.15 ? '#ff7a7a' : null);
+
+    /* Load, not charge: the reactor never runs down, but a fit that asks
+     * for more than it makes is the most common way to buy a module that
+     * does nothing. */
+    var fs = Combat.fitSummary(s);
+    var load = fs.powerCap > 0 ? fs.powerUsed / fs.powerCap : 0;
+    sysRow(ctx, y + 60, 'reactor', 'reactor load',
+           load, fs.powerUsed.toFixed(1) + ' / ' + fs.powerCap.toFixed(1) + ' MW',
+           load > 1 ? '#ff7a7a' : load > 0.9 ? '#ffb86b' : MFD_INK,
+           load > 1 ? '#ff7a7a' : null);
+
+    /* The bar is the share of the engine that gravity eats. Full means the
+     * engine can hold you here and do nothing else; over full, it cannot
+     * hold you at all. */
+    var gHere = V.len(Sim.acceleration(s.pos, G.sys, G.t)) * 1000;
+    var thrustNow = s.maxAccel * 1000;
+    var eaten = thrustNow > 0 ? gHere / thrustNow : (gHere > 0 ? 2 : 0);
+    sysRow(ctx, y + 90, 'gravity', 'gravity vs thrust',
+           eaten, gHere.toFixed(2) + ' / ' + thrustNow.toFixed(2) + ' m/s²',
+           s.fuelOut ? '#ff7a7a' : eaten > 1 ? '#ffb86b' : MFD_INK,
+           eaten > 1 ? '#ff7a7a' : null);
+  }
+
+  /* --- WEAPONS: heat, hardpoints and racks -------------------------------
+   * Everything you need mid-fight on one glass: how hot the hull is and
+   * whether a sink is soaking it, every hardpoint (fitted or empty) with the
+   * side it fires from and whether it is cycling, and every missile rack as
+   * a row of rounds you can count.
+   *
+   * Like GUNS, it invents no state. Heat is ship.heat against
+   * Sim.HEAT_LIMIT, cycling is G.gunCool, rounds are the racks. */
+  var HEAT_SCALE = 1.3;   // the gauge reads to 130% so "over" has room to show
+
+  function drawWeaponsPage(ctx) {
+    var s = G.ship, t = G.t;
+    var cools = G.gunCool || {};
+    mfdShell(ctx, 'WEAPONS', G.warpIndex > 0
+      ? 'guns inhibited under time compression'
+      : 'space A · shift+space B · B missile · shift+B rack');
+
+    /* ---- the thermometer, down the left side ---- */
+    var limit = Sim.HEAT_LIMIT || 100;
+    var heat = s.heat || 0;
+    var hf = heat / limit;
+    var gx = 12, gy = MFD_BODY_TOP + 22, gw = 18, gh = 96;
+    sysGlyph(ctx, 'heat', gx + 6, MFD_BODY_TOP + 10, 14);
+    ctx.fillStyle = 'rgba(74,151,176,0.18)';
+    ctx.fillRect(gx, gy, gw, gh);
+    var fillH = gh * Math.min(1, hf / HEAT_SCALE);
+    ctx.fillStyle = hf >= 1 ? '#ff5a5a' : hf >= 0.55 ? '#ffb86b' : SYS_COLOR.heat;
+    ctx.fillRect(gx, gy + gh - fillH, gw, fillH);
+    // Ticks: the warning line and the limit, so the colour is never the only cue.
+    var ticks = [[0.55, '#ffb86b'], [1, '#ff5a5a']];
+    for (var ti = 0; ti < ticks.length; ti++) {
+      var ty = gy + gh - gh * ticks[ti][0] / HEAT_SCALE;
+      ctx.strokeStyle = ticks[ti][1];
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(gx - 4, ty); ctx.lineTo(gx + gw + 4, ty); ctx.stroke();
+    }
+    ctx.strokeStyle = 'rgba(74,151,176,0.6)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(gx, gy, gw, gh);
+    /* The figure sits beside the glyph at the head of the gauge rather than
+     * riding the fill line, where it collided with the sink column. */
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = hf >= 1 ? '#ff7a7a' : MFD_INK;
+    ctx.fillText(Math.round(hf * 100) + '%', gx + 16, MFD_BODY_TOP + 14);
+
+    /* A live sink sits beside the gauge, filling as it soaks — the thing
+     * you are waiting on when you have just mashed the panic button. */
+    if (G.sink && G.sink.live && Combat.SINK) {
+      var sf = G.sink.held / Combat.SINK.capacity;
+      sysGlyph(ctx, 'sink', 50, gy + 8, 12);
+      ctx.fillStyle = 'rgba(74,151,176,0.18)';
+      ctx.fillRect(45, gy + 18, 10, gh - 18);
+      ctx.fillStyle = SYS_COLOR.sink;
+      var sh = (gh - 18) * Math.min(1, sf);
+      ctx.fillRect(45, gy + gh - sh, 10, sh);
+    }
+
+    var rx = 76, rw = MFD_W - rx - 8;
+
+    /* ---- hardpoints: one box per hardpoint the hull has ---- */
+    var byKey = {}, fitted = Combat.fittedList(s), i;
+    for (i = 0; i < fitted.length; i++) byKey[fitted[i].key] = fitted[i].item;
+    var keys = Combat.slotKeys(s), hp = [];
+    for (i = 0; i < keys.length; i++) {
+      if (Combat.slotType(keys[i]) === 'hardpoint') hp.push(keys[i]);
+    }
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText('HARDPOINTS', rx, MFD_BODY_TOP + 10);
+
+    var by = MFD_BODY_TOP + 14, bh = 36;
+    if (!hp.length) {
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillText('this hull carries no guns', rx, by + 22);
+    }
+    var bw = hp.length ? Math.min(124, (rw - (hp.length - 1) * 6) / hp.length) : 0;
+    for (i = 0; i < hp.length; i++) {
+      var key = hp[i], it = byKey[key], bx = rx + i * (bw + 6);
+      if (!it) {
+        ctx.setLineDash && ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = 'rgba(74,151,176,0.5)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+        ctx.setLineDash && ctx.setLineDash([]);
+        sysGlyph(ctx, 'gun', bx + 14, by + bh / 2, 16, null, 0, 0.3);
+        ctx.font = 'bold 10px ui-monospace, monospace';
+        ctx.fillStyle = MFD_DIM;
+        ctx.fillText('EMPTY', bx + 28, by + bh / 2 + 4);
+        continue;
+      }
+      var ready = !(t < (cools[key] || 0));
+      ctx.fillStyle = ready ? 'rgba(74,151,176,0.12)' : 'rgba(255,211,107,0.16)';
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.strokeStyle = ready ? 'rgba(74,151,176,0.6)' : MFD_HOT;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+
+      /* The glyph points the way the muzzle does — Astra's standing note:
+       * a pointer, never the word. Forward guns point up the panel. */
+      var mz = Combat.muzzleOf(s, key);
+      var rot = (!mz || Math.abs(mz.r) < 1e-6) ? 0 : (mz.r > 0 ? Math.PI / 2 : -Math.PI / 2);
+      sysGlyph(ctx, 'gun', bx + 13, by + 14, 15, SYS_COLOR.gun, rot);
+
+      var grp = Combat.groupOf ? Combat.groupOf(s, key) : null;
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillStyle = MFD_INK;
+      ctx.fillText(clipText(it.name || it.id, Math.max(4, Math.floor((bw - 30) / 6.2))),
+                   bx + 26, by + 12);
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText((grp ? 'grp ' + String(grp).toUpperCase() : 'no grp') +
+                   '  +' + ((it.heat || 0) * (it.cooldown || 0)).toFixed(0) + ' ht',
+                   bx + 26, by + 24);
+      /* Cycle bar along the foot of the box: full when ready to fire. */
+      var cd = it.cooldown || 1;
+      var left = Math.max(0, (cools[key] || 0) - t);
+      mfdCells(ctx, bx + 4, by + bh - 7, bw - 8, 4, 1 - left / cd,
+               ready ? SYS_COLOR.gun : MFD_HOT, 8);
+    }
+
+    /* ---- missile racks: every round a silhouette you can count ---- */
+    var my = by + bh + 14;
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText('MISSILE RACKS', rx, my);
+    var racks = Combat.rackList(s), nSlots = Combat.rackSlots(s);
+    var rowH = Math.min(18, 40 / Math.max(1, nSlots));
+    for (var r = 0; r < nSlots; r++) {
+      var ry = my + 4 + r * rowH, rk = racks[r];
+      if (!rk) {
+        sysGlyph(ctx, 'missile', rx + 6, ry + rowH / 2, 12, null, 0, 0.3);
+        ctx.fillStyle = MFD_DIM;
+        ctx.fillText('empty rack', rx + 18, ry + rowH / 2 + 4);
+        continue;
+      }
+      var def = Combat.MISSILES[rk.id] || { name: rk.id, rack: rk.n };
+      var armed = rk.id === s.missileId;
+      var cap = Math.max(rk.n, def.rack || rk.n);
+      if (armed) {
+        ctx.fillStyle = 'rgba(255,122,168,0.14)';
+        ctx.fillRect(rx - 2, ry, rw + 2, rowH - 1);
+        // An arrowhead, not the word "armed", marks the rack on the trigger.
+        ctx.fillStyle = SYS_COLOR.missile;
+        ctx.beginPath();
+        ctx.moveTo(rx - 8, ry + 2); ctx.lineTo(rx - 2, ry + rowH / 2);
+        ctx.lineTo(rx - 8, ry + rowH - 3); ctx.closePath(); ctx.fill();
+      }
+      ctx.fillStyle = armed ? MFD_INK : MFD_DIM;
+      ctx.fillText(clipText(def.name.replace(' seeker', ''), 8), rx + 2, ry + rowH / 2 + 4);
+      var px = rx + 64, pw = rw - 64 - 30;
+      var step = Math.min(12, pw / Math.max(1, cap));
+      for (var m = 0; m < cap; m++) {
+        sysGlyph(ctx, 'missile', px + m * step + step / 2, ry + rowH / 2,
+                 Math.min(13, rowH - 3), SYS_COLOR.missile, 0, m < rk.n ? 1 : 0.22);
+      }
+      ctx.textAlign = 'right';
+      ctx.fillStyle = armed ? MFD_INK : MFD_DIM;
+      ctx.fillText(String(rk.n), MFD_W - 10, ry + rowH / 2 + 4);
+      ctx.textAlign = 'left';
+    }
+
+    /* ---- defensive fittings, as a strip of glyphs along the bottom ---- */
+    var dy = MFD_BODY_BOTTOM - 6, dx = rx;
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    var sinkRack = Combat.sinkRackSize ? Combat.sinkRackSize(s) : 0;
+    if (sinkRack) {
+      sysGlyph(ctx, 'sink', dx + 6, dy - 3, 12);
+      for (var k = 0; k < sinkRack; k++) {
+        ctx.fillStyle = k < (s.sinks || 0) ? SYS_COLOR.sink : 'rgba(74,151,176,0.25)';
+        ctx.fillRect(dx + 16 + k * 7, dy - 8, 5, 9);
+      }
+      dx += 22 + sinkRack * 7 + 12;
+    }
+    if (s.shield) {
+      var scap = (Combat.MODULES.shield && Combat.MODULES.shield.cap) || 1;
+      sysGlyph(ctx, 'shield', dx + 6, dy - 3, 12);
+      ctx.fillStyle = s.shieldHp > 5 ? SYS_COLOR.shield : '#ffb86b';
+      ctx.fillText(Math.round(Math.max(0, s.shieldHp || 0) / scap * 100) + '%', dx + 16, dy + 1);
+      dx += 60;
+    }
+    if (s.turret) {
+      sysGlyph(ctx, 'turret', dx + 6, dy - 3, 12);
+      ctx.fillStyle = MFD_INK;
+      ctx.fillText('auto', dx + 16, dy + 1);
+      dx += 52;
+    }
+  }
+
 
   /* --- CARGO: the manifest, priced where you are ------------------------- */
   function drawCargoPage(ctx) {
@@ -12749,8 +14191,16 @@
     var lenPx = Render.shipScreenLength(cam, G.ship);
     if (lenPx > 4) {
       var sunDir = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), G.ship.pos));
+      /* Her airlock state exists from the first frame, not from the first
+       * time you work it: the ramp's bay and its shut doors are drawn off
+       * it, and a ship whose lock had never been cycled showed a plain
+       * belly with no way in (Astra, 2026-10-29: "I don't see where there
+       * could be a ramp"). */
+      if (global.Airlock) global.Airlock.state(G.ship);
       Render.drawShipModel(ctx, cam, G.ship, sunDir,
         G.ship.crashed ? '#ff8a7a' : null);
+      /* Her tube to you, while you are joined (boarding.js). */
+      drawTube(cam);
     } else {
       ctx.save();
       ctx.fillStyle = G.ship.crashed ? '#ff6b6b' : '#ffffff';
@@ -13378,7 +14828,10 @@
     var lines = enc.active.map(function (spec) {
       var st = spec.live;
       var rng = st ? V.dist(st.pos, G.ship.pos) : 0;
+      var tt = G.ship.tether;
       var what = spec.mode === 'attack' ? 'ATTACKING'
+        /* A trader you asked aboard (boarding.js) is not running away. */
+        : spec.mode === 'alongside' ? (tt && tt.joined ? (tt.tube >= 1 ? 'tube made fast' : 'running her tube out') : 'coming alongside')
         : spec.kind === 'trader' ? 'fleeing'
         : spec.kind === 'pirate'
         ? (spec.mode === 'breakoff' ? 'breaking off' : spec.mode === 'demand' ? 'HOLDING YOU UP' : 'closing')
@@ -15157,7 +16610,8 @@
       pages: {
         system: drawSystemPage, chart: drawChartPage, orbit: drawOrbitPage,
         target: drawTargetPage, auto: drawAutoPage, node: drawNodePage,
-        ship: drawShipPage, guns: drawGunsPage
+        ship: drawShipPage, guns: drawGunsPage,
+        engine: drawEnginePage, weapons: drawWeaponsPage
       },
       RADAR_RANGE: RADAR_RANGE,
       MFD_W: MFD_W, MFD_H: MFD_H,
@@ -15262,6 +16716,11 @@
    * a console — can put the ship through something the game would do to it
    * rather than reaching in and setting the aftermath by hand. */
   G.hooks = HOOKS;
+  /* The panel pages, by id, so a playtest can paint one full size into its
+   * own canvas and LOOK at it. Tests boot against a stubbed canvas and are
+   * blind to layout; this is the handle for the eyes. Read-only - the
+   * assignment still goes through F5 -> PANELS. */
+  G.dashPage = function (id) { return DASH_PAGE_BY_ID[id] || null; };
   global.Game = G;
   if (typeof document !== 'undefined') {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

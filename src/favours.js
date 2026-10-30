@@ -52,6 +52,14 @@
    * a pension. */
   var DEBT_MAX = 5;
 
+  /* The captain's log on the F5 NOTES tab (journal.js), when it is loaded.
+   * Required directly under node, where the tests may not have loaded it. */
+  function jot(G, kind, text) {
+    var J = global.Journal;
+    if (!J && typeof require !== 'undefined') { try { J = require('./journal.js'); } catch (e) { J = null; } }
+    if (J && G) J.add(G, kind, text);
+  }
+
   function addDebt(G, sys, contact, n, t, why) {
     var C = Cap();
     if (!C || !C.hasCaptain(contact)) return null;
@@ -59,6 +67,10 @@
     var m = C.memory(G, r.key, true);
     m.debt = clamp((m.debt || 0) + (n | 0), -DEBT_MAX, DEBT_MAX);
     if (why) m.debtWhy = why;
+    /* Who, by the name you know her by, for the F5 NOTES tab's "who owes
+     * whom" (journal.js). The memory is keyed by id, not name. */
+    if (contact && contact.name) m.who = contact.name;
+    if (t != null) m.debtAt = t;
     return m;
   }
 
@@ -244,6 +256,7 @@
     } else return { ok: false };
     addDebt(G, sys, contact, -1, t, null);
     C.record(G, sys, contact, 'favour', t, null);
+    jot(G, 'favour', 'Called in a favour from the ' + (contact.name || 'ship') + ': ' + line);
     say(who + line + (debt - 1 <= 0 ? ' And now we are square."' : '"'), 9);
     return { ok: true, line: line };
   }
@@ -308,6 +321,9 @@
       C.record(G, sys, contact, give ? 'repaid' : 'refused', t, null);
       if (give) addDebt(G, sys, contact, 1, t, null);
     }
+    jot(G, 'favour', give ? 'The ' + a.name + ' asked a favour back, and you gave ' +
+                            (a.kind === 'credits' ? a.amount + ' cr' : a.amount + ' t of mass')
+                          : 'The ' + a.name + ' asked a favour back, and you said no');
     say(a.speaker + ', ' + a.name + ': "' +
         (give ? 'Thank you. That is us square, or near enough."'
               : 'After everything. All right. I will remember that."'), 8);
@@ -404,6 +420,9 @@
     sys._traffic = null; sys._ships = null;
     m.joined = mode; m.debt = 0;
     var who = p.title + ' ' + p.family;
+    jot(G, 'crew', mode === 'partner'
+      ? who + ' of the ' + (route.name || 'ship') + ' became your partner'
+      : who + ' left the ' + (route.name || 'ship') + ' to join your crew');
     if (mode === 'partner') {
       say(who + ': "Partners, then. Half of what she earns is yours, half is mine, and she stays my ship. ' +
           'You will find the ' + rec.name + ' at ' + (rec.portName || 'her next port') + '."', 10);

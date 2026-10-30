@@ -161,11 +161,12 @@
       commit: spec.commit || function () {}
     };
   }
-  function editing() { return !!EDIT; }
+  function editing() { return !!EDIT || !!NOTE; }
   function editState() { return EDIT; }
-  function cancelEdit() { EDIT = null; }
+  function cancelEdit() { EDIT = null; NOTE = null; }
 
   function editKey(e) {
+    if (NOTE) return notesKey(e);
     if (!EDIT) return false;
     var k = e.key;
     if (k === 'Escape') { EDIT = null; return true; }
@@ -184,6 +185,55 @@
     }
     /* Everything else — arrows, function keys, Tab, digits past the cap —
      * is swallowed rather than passed on. See the note above. */
+    return true;
+  }
+
+  /* ---- the notepad (F5 NOTES, journal.js) -------------------------------
+   * The second text entry, and the first with more than one line. The same
+   * rule as the field: while it has focus it takes the WHOLE keyboard. The
+   * difference is Escape. Here it throws nothing away, because what you type
+   * goes into G.notes as you type it — stopping is only stopping, and a
+   * pilot who hits Esc out of habit does not lose a page of notes.
+   *
+   * The editing itself is Journal.noteKey, a pure function of {text,
+   * caret}, so it is tested without a screen. This keeps where the caret is
+   * and whether the view should follow it. */
+  var NOTE = null;
+
+  function beginNotes(caret) {
+    if (!global.Journal) return;
+    var len = String(G.notes || '').length;
+    NOTE = { caret: caret == null ? len : Math.max(0, Math.min(len, caret)),
+             cols: 60, rows: 10, goalCol: null, follow: true };
+  }
+  function writingNotes() { return !!NOTE; }
+  function stopNotes() { NOTE = null; }
+
+  function notesKey(e) {
+    var J = global.Journal;
+    if (!J) { NOTE = null; return true; }
+    var st = { text: String(G.notes || ''), caret: NOTE.caret, cols: NOTE.cols,
+               rows: NOTE.rows, goalCol: NOTE.goalCol, max: J.NOTES_MAX };
+    var r = J.noteKey(st, e);
+    if (r === 'done') { NOTE = null; return true; }
+    if (r === 'paste') {
+      /* The clipboard is asynchronous, and main.js has already cancelled
+       * the key (so no paste event comes). Read it, and insert wherever the
+       * caret is by the time it arrives. */
+      var nav = global.navigator;
+      if (nav && nav.clipboard && nav.clipboard.readText) {
+        nav.clipboard.readText().then(function (txt) {
+          if (!NOTE) return;
+          var s2 = { text: String(G.notes || ''), caret: NOTE.caret, max: J.NOTES_MAX };
+          J.insert(s2, txt);
+          J.setNotes(G, s2.text);
+          NOTE.caret = s2.caret; NOTE.follow = true;
+        }, function () { say('The clipboard would not give that up', 3); });
+      }
+      return true;
+    }
+    if (st.text !== G.notes) J.setNotes(G, st.text);
+    NOTE.caret = st.caret; NOTE.goalCol = st.goalCol; NOTE.follow = true;
     return true;
   }
 
@@ -601,6 +651,16 @@
       });
     }
 
+    /* THE OVERBOSS'S COLLECTOR (tithe.js), in a hold. A frequency like the
+     * police channels, so range 0 — and above them, because it is the one
+     * that has just called you and is waiting for an answer. */
+    if (global.Tithe && global.Tithe.held(G.sys)) {
+      var mob = (G.sys.factions || []).filter(function (f) { return f && f.outlaw; })[0];
+      out.push({ kind: 'collector', obj: null, name: global.Tithe.bossName(G) + ' collector',
+                 range: 0, who: global.Tithe.channelNote(G, G.sys, G.t),
+                 color: (mob && mob.color) || '#c86bff' });
+    }
+
     /* Police channels, one per faction flying a flag here.
      *
      * Range 0 on purpose, so they sort to the top of a list that is
@@ -782,6 +842,7 @@
        * list. A glyph in a legend has to be typeable even when nothing
        * asks you to type it. */
       ctx.fillText(c.kind === 'authority' ? '*'
+                 : c.kind === 'collector' ? '$'
                  : c.kind === 'station' ? '#'
                  : (c.hostile ? '!' : '>'), pad + 12, yy);
       /* Clip the name to the room actually left over, not to a fixed
@@ -844,9 +905,12 @@
     ctx.fillText(sel.name, rx + 16, y);
     ctx.font = 'bold 12px ui-monospace, monospace';
     ctx.fillStyle = MFD_DIM;
+    /* A call or a frequency sorts at range 0 because it is a transmission,
+     * not a place; "0 m out" under it read as a ship sitting on top of you.
+     * A distress line already says how far the scene is (2026-10-30). */
     ctx.fillText(sel.who +
                  (sel.obj && sel.obj.reg ? '   ·   reg ' + sel.obj.reg : '') +
-                 '   ·   ' + fmtDist(sel.range) + ' out', rx + 16, y + 18);
+                 (sel.kind === 'distress' || !(sel.range > 0) ? '' : '   ·   ' + fmtDist(sel.range) + ' out'), rx + 16, y + 18);
     ctx.restore();
 
     /* The trade board takes the channel pane over while it is open: the
@@ -1251,6 +1315,53 @@
           }
         });
       }
+      /* A SHIP REALLY ADRIFT (upkeep.js): the answer is mass, passed on a
+       * line, so the row says what she needs, what you have, and what is
+       * stopping you — and stays after a part-load, for the next trip. */
+      if (call.upkeep && global.Upkeep) {
+        var Upk = global.Upkeep;
+        var herR = (G.sys.traffic || []).filter(function (r) { return r.id === call.routeId; })[0];
+        if (herR) {
+          var herLed = Upk.ledgerOf(G, G.sys, herR);
+          var sdNow = Upk.stranded(herR, G.sys, G.t);
+          var banked = herLed && sdNow && herLed.fuelLeg === sdNow.leg ? herLed.fuelT || 0 : 0;
+          var stillT = Math.max(0, Upk.needOf(herR) - banked);
+          var spare = Upk.spareOf(G.ship);
+          var herV = sdNow && sdNow.adrift ? Upk.herNow(herR, G.sys, sdNow).vel : null;
+          var relKms = herV ? V.dist(herV, G.ship.vel) : 0;
+          var lineKm = Upk.transferKm(), inReach = reach <= lineKm, matched = relKms <= Upk.TRANSFER_KMS;
+          opts.push({
+            label: 'Pass her reaction mass',
+            enabled: !!(sdNow && sdNow.adrift) && inReach && matched && spare.total > 0.25,
+            note: !(sdNow && sdNow.adrift) ? 'she is not adrift any more'
+                : !inReach ? 'needs ' + stillT.toFixed(1) + ' t · come within ' + lineKm + ' km'
+                : !matched ? 'match her drift (' + Math.round(relKms * 1000) + ' m/s)'
+                : spare.total <= 0.25 ? 'needs ' + stillT.toFixed(1) + ' t · you have none to spare'
+                : 'needs ' + stillT.toFixed(1) + ' t · you can spare ' + spare.total.toFixed(1) +
+                  (spare.hold > 0 ? ' (' + spare.hold.toFixed(1) + ' in the hold)' : ''),
+            fn: function () {
+              var r = Combat.answerDistress(G.sys, G, G.t, call, hooksFor());
+              if (!r.ok) say('Cannot: ' + r.why, 5);
+            }
+          });
+        }
+        /* Locked as HER, not as a point: the lock carries her velocity,
+         * which is what matching her drift is flown against. */
+        opts.push({
+          label: 'Lock her up', enabled: true,
+          note: fmtDist(reach) + ' away · ' + call.name,
+          fn: function () {
+            G.showTraffic = true;
+            /* Off her rail (robbed while adrift, say) she is listed by her
+             * lifted spec's id, not her route's. */
+            var rt0 = (G.sys.traffic || []).filter(function (r) { return r.id === call.routeId; })[0];
+            var lf = rt0 && global.Upkeep ? global.Upkeep.liftedOf(rt0, G.sys) : null;
+            G.navTarget = { kind: 'ship', id: lf ? lf.id : call.routeId };
+            say('Locked — ' + call.name + ', adrift, ' + fmtDist(reach) + ' out', 5);
+          }
+        });
+        return opts;
+      }
       opts.push({
         label: 'Answer the call', enabled: close && !call.answeredBy,
         /* No longer dormant: a captain's own mayday off the schedule in
@@ -1272,6 +1383,36 @@
           G.navTarget = { kind: 'point', pos: call.pos, name: call.name + ' (distress)' };
           say('Scene marked — ' + call.name + ', ' + fmtDist(reach) + ' out', 5);
         }
+      });
+      return opts;
+    }
+
+    if (c.kind === 'collector') {
+      /* Pay, haggle, refuse: Astra's three answers. Paying stays on the
+       * list after a refusal, late and dearer, because that is the way
+       * back. */
+      var tst = global.Tithe.status(G, G.sys, G.t);
+      var owe = global.Tithe.owed(G, G.sys, G.t);
+      var tAnswer = function (r) { say(r.ok ? r.say : 'Cannot: ' + r.why, r.ok ? 8 : 4); };
+      opts.push({
+        label: tst === 'suspected' ? 'Pay the tithe, late' : 'Pay the tithe',
+        enabled: tst !== 'paid' && G.ship.credits >= owe,
+        note: tst === 'paid' ? global.Tithe.channelNote(G, G.sys, G.t)
+            : G.ship.credits >= owe ? owe + ' cr' : owe + ' cr — you have ' + Math.round(G.ship.credits),
+        fn: function () { tAnswer(global.Tithe.pay(G, G.sys, G.t, 'channel')); }
+      });
+      opts.push({
+        label: 'Haggle',
+        enabled: global.Tithe.canHaggle(G, G.sys, G.t),
+        note: tst === 'paid' ? 'paid' : tst === 'suspected' ? 'past haggling'
+            : global.Tithe.canHaggle(G, G.sys, G.t) ? 'once — it may go up' : 'haggled — that is the price',
+        fn: function () { tAnswer(global.Tithe.haggle(G, G.sys, G.t)); }
+      });
+      opts.push({
+        label: 'Refuse',
+        enabled: tst !== 'paid' && tst !== 'suspected',
+        note: tst === 'paid' ? 'paid' : tst === 'suspected' ? 'refused — SUSPECTED this week' : 'they will take you for the law',
+        fn: function () { tAnswer(global.Tithe.refuse(G, G.sys, G.t)); }
       });
       return opts;
     }
@@ -1642,14 +1783,30 @@
           Combat.demandFrom(G.sys, G, G.t, c.obj, 'cargo', hooksFor());
         }
       });
+      /* Two ways into one purse (upkeep.js, 2026-10-30): the cash box, or
+       * her account down to what she needs to make port. A ship with no
+       * timetable (a pirate, a lane hauler torn out of slipspace) has only
+       * the cash it carries, and the second row does not show. */
+      var herRoute = c.obj && (c.obj.route || c.obj.liftedFrom || (c.obj.spec && c.obj.spec.liftedFrom));
+      var hasAccount = !!(herRoute && global.Upkeep && global.Upkeep.eligible(herRoute));
       opts.push({
-        label: 'Demand credits', enabled: true,
-        note: 'wired straight to your account',
+        label: hasAccount ? 'Demand the cash box' : 'Demand credits', enabled: true,
+        note: hasAccount ? 'the cash aboard · a tenth of her purse' : 'wired straight to your account',
         fn: function () {
           G.piracyMenu = null;
           Combat.demandFrom(G.sys, G, G.t, c.obj, 'credits', hooksFor());
         }
       });
+      if (hasAccount) {
+        opts.push({
+          label: 'Demand a transfer', enabled: true,
+          note: 'all she has but what she needs to make port',
+          fn: function () {
+            G.piracyMenu = null;
+            Combat.demandFrom(G.sys, G, G.t, c.obj, 'account', hooksFor());
+          }
+        });
+      }
       opts.push({
         label: 'Never mind', enabled: true,
         fn: function () { G.piracyMenu = null; }
@@ -1761,6 +1918,39 @@
             : '',
         fn: function () { G.shipDeal = { name: c.name, sel: 0 }; }
       });
+      /* ASKING TO COME ABOARD (boarding.js, 2026-10-29). Astra agreed the
+       * invited crossing is a tube she runs out to you, so the row's note
+       * says the one thing to fix first — closer, slower, or who you are
+       * to her — before you ask. Joined, the same row reels it back in. */
+      var BD = global.Boarding;
+      if (BD && G.ship.tether && G.ship.tether.name === c.name) {
+        var joinedT = !!G.ship.tether.joined;
+        opts.push({
+          label: joinedT ? 'Reel the tube in' : 'Call her off', enabled: true,
+          note: joinedT ? 'U does the same  —  to cross, get up and go out through your airlock'
+                        : 'she is coming alongside  —  hold where you are',
+          fn: function () {
+            BD.release(G, G.sys);
+            say(joinedT ? 'Tube reeled in. You are adrift beside the ' + c.name + '.'
+                        : c.name + ' goes back to her lane.', 5);
+          }
+        });
+      } else if (BD) {
+        var boardWhy = c.hostile ? 'not answering'
+                     : (BD.NEVER[c.obj && (c.obj.cls || c.obj.kind)] ? 'she does not take visitors'
+                     : (!c.obj || !c.obj.route) ? 'no berth for visitors aboard'
+                     : BD.gate(G, c.obj));
+        opts.push({
+          label: 'Ask to come aboard',
+          enabled: !boardWhy,
+          note: boardWhy ? clipText(boardWhy, 64) : 'if she will, she comes alongside and runs a tube to your hatch',
+          fn: function () {
+            var r = BD.join(G, G.sys, G.t, c.obj);
+            if (r.ok) say(c.name + ': "' + r.line + '"   —   hold where you are', 9);
+            else say(c.name + (r.line ? ': "' + r.line + '"' : ' will not have you aboard') + '   (' + r.why + ')', 7);
+          }
+        });
+      }
       opts.push({
         label: 'Request assistance',
         enabled: inRange && !isCapital && !!aid && G.ship.credits >= aid.cost,
@@ -2028,7 +2218,10 @@
                   : String(G.panelPick).replace('-', ' ')).toUpperCase(), lx, ly + 12);
     ly += 22;
     var cur = dash.pageFor(G.panelPick, pickRole);
-    var rowH = 20;
+    /* The roster outgrew a fixed 20px row: the loop below stops at the
+     * bottom of the window, and the page it dropped was OFF, the last one.
+     * Rows now shrink to fit every page, down to a 14px floor. */
+    var rowH = Math.max(14, Math.min(20, Math.floor((bottom - pad - ly) / dash.pages.length)));
     for (var k = 0; k < dash.pages.length; k++) {
       var pg = dash.pages[k];
       var sel = pg.id === cur.id;
@@ -2040,7 +2233,7 @@
       ctx.strokeRect(lx + 0.5, ly + 0.5, listW - 1, rowH - 3);
       ctx.font = 'bold 12px ui-monospace, monospace';
       ctx.fillStyle = sel ? '#b4f0ff' : MFD_INK;
-      ctx.fillText(pg.title, lx + 8, ly + 14);
+      ctx.fillText(pg.title, lx + 8, ly + rowH - 6);
       hot(lx, ly, listW, rowH - 2, (function (pid) {
         return function () { dash.set(G.panelPick, pid); };
       })(pg.id), 'show this page here');
@@ -2048,16 +2241,214 @@
     }
   }
 
+  /* ---- F5 NOTES: the notepad, who owes whom, and the ship's log ---------
+   * Astra, 2026-10-30: both a notepad and a log the game keeps; saved with
+   * the game and exportable. Left, the notepad. Right, the debts (read off
+   * the captains' own memories, journal.js) and the log, newest first,
+   * with a filter row. The wheel scrolls whichever the pointer is over. */
+  var notesView = { top: 0, logTop: 0, group: 'all' };
+
+  function notesPanel(ctx, x, y, w, h, title, lit) {
+    ctx.save();
+    ctx.fillStyle = '#040a0e';
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = lit ? '#ffd36b' : MFD_EDGE;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 2, y + 2, w - 4, h - 4);
+    ctx.fillStyle = '#12414f';
+    ctx.fillRect(x + 4, y + 4, w - 8, 19);
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText(title, x + 10, y + 18);
+    ctx.restore();
+    return y + 28;
+  }
+
+  function overRect(x, y, w, h) {
+    return G.cursor && G.cursor.active && G.cursor.x >= x && G.cursor.x <= x + w &&
+           G.cursor.y >= y && G.cursor.y <= y + h;
+  }
+
+  function exportNotes() {
+    var J = global.Journal;
+    if (!J) return;
+    if (J.download(G)) say('Notes exported: ' + J.fileName(G), 5);
+    else say('Could not write the file from here', 4);
+  }
+
+  function scrollNotesLog(n) {
+    notesView.logTop = Math.max(0, notesView.logTop + n);
+  }
+
+  function drawNotesTab(ctx, pad, top, w, bottom) {
+    var J = global.Journal;
+    if (!J) return;
+    var y0 = top + 4, colH = bottom - y0 - pad;
+    var leftW = Math.floor((w - pad * 3) * 0.5);
+    var rx = pad * 2 + leftW, rw = w - rx - pad;
+    var writing = !!NOTE;
+
+    /* --- the notepad --- */
+    var ny = notesPanel(ctx, pad, y0, leftW, colH, 'NOTEPAD', writing);
+    btn(ctx, pad + leftW - 84, y0 + 5, 76, 17, writing ? 'DONE' : 'WRITE',
+        function () { if (NOTE) NOTE = null; else beginNotes(); }, { bold: true, hot: writing });
+    btn(ctx, pad + leftW - 168, y0 + 5, 76, 17, 'EXPORT', exportNotes, { bold: true });
+
+    var text = String(G.notes || '');
+    ctx.save();
+    ctx.font = '13px ui-monospace, monospace';
+    var cw = ctx.measureText('M').width || 7.8, lh = 17;
+    var tx = pad + 12, ty = ny + 4, sbW = 10;
+    var areaW = leftW - 24 - sbW - 4, areaH = colH - (ny - y0) - 30;
+    var cols = Math.max(12, Math.floor(areaW / cw));
+    var rows = Math.max(3, Math.floor(areaH / lh));
+    var lines = J.wrap(text, cols);
+    var maxTop = Math.max(0, lines.length - rows);
+    if (NOTE) {
+      NOTE.cols = cols; NOTE.rows = rows;
+      if (NOTE.follow) {
+        var at = J.caretLine(lines, NOTE.caret);
+        if (at.line < notesView.top) notesView.top = at.line;
+        if (at.line >= notesView.top + rows) notesView.top = at.line - rows + 1;
+        NOTE.follow = false;
+      }
+    }
+    notesView.top = Math.max(0, Math.min(maxTop, notesView.top));
+
+    if (!text && !writing) {
+      ctx.fillStyle = 'rgba(160,185,220,0.45)';
+      var hint = wrapText('Nothing written yet. Click here, or press Enter, and write whatever ' +
+                          'you want to keep: prices, routes, who to look for, what you promised ' +
+                          'and to whom. It is saved with the game.', cols);
+      for (var hi = 0; hi < hint.length && hi < rows; hi++) ctx.fillText(hint[hi], tx, ty + 12 + hi * lh);
+    }
+    ctx.fillStyle = '#e8f6ff';
+    for (var li = 0; li < rows && notesView.top + li < lines.length; li++) {
+      var L = lines[notesView.top + li];
+      ctx.fillText(text.slice(L.start, L.end), tx, ty + 12 + li * lh);
+    }
+    if (writing && (Math.floor(Date.now() / 450) % 2)) {
+      var cl = J.caretLine(lines, NOTE.caret);
+      var row = cl.line - notesView.top;
+      if (row >= 0 && row < rows) {
+        ctx.fillStyle = '#ffd36b';
+        ctx.fillRect(tx + cl.col * cw - 1, ty + row * lh, 2, lh - 1);
+      }
+    }
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(160,185,220,0.55)';
+    ctx.fillText(text.length.toLocaleString() + ' / ' + J.NOTES_MAX.toLocaleString() +
+                 ' characters   ·   saved with the game', tx, y0 + colH - 12);
+    ctx.restore();
+
+    /* Click to write, at the place you clicked. */
+    hot(tx - 4, ty, areaW + 8, rows * lh, function () {
+      var line = notesView.top + Math.floor((G.cursor.y - ty) / lh);
+      var col = Math.round((G.cursor.x - tx) / cw);
+      var c = J.caretAt(J.wrap(String(G.notes || ''), cols), line, col);
+      if (NOTE) { NOTE.caret = c; NOTE.goalCol = null; } else beginNotes(c);
+    }, 'write here');
+    if (lines.length > rows) {
+      drawScrollbar(ctx, pad + leftW - sbW - 8, ty, sbW, rows * lh, lines.length, rows, notesView.top,
+                    function (p) { notesView.top = Math.max(0, Math.min(maxTop, p)); });
+    }
+    if (overRect(pad, y0, leftW, colH)) {
+      setScrollRegion(pad, y0, leftW, colH, function (d) {
+        notesView.top = Math.max(0, Math.min(maxTop, notesView.top + d * 3));
+      });
+    }
+
+    /* --- who owes whom --- */
+    var ds = J.debts(G);
+    var owedRows = Math.max(1, Math.min(ds.length, 8));
+    var oh = Math.min(Math.floor(colH * 0.32), 30 + owedRows * 16 + 10);
+    var oy = notesPanel(ctx, rx, y0, rw, oh, 'WHO OWES WHOM', false);
+    ctx.save();
+    var ocols = Math.max(16, Math.floor((rw - 24) / 7.2));
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    if (!ds.length) {
+      ctx.fillStyle = 'rgba(160,185,220,0.55)';
+      ctx.fillText(clipText('Nobody, either way. Pull a ship off a dead tank and her captain owes you.', ocols),
+                   rx + 12, oy + 12);
+    }
+    var fit = Math.max(1, Math.floor((oh - 34) / 16));
+    for (var di = 0; di < ds.length && di < fit; di++) {
+      var dd = ds[di];
+      ctx.fillStyle = dd.debt > 0 ? '#7fe0a0' : '#ffb86b';
+      var dl = J.debtLine(dd) + (dd.why ? ' — ' + dd.why : '');
+      if (di === fit - 1 && ds.length > fit) dl = '…and ' + (ds.length - fit + 1) + ' more (in the export)';
+      ctx.fillText(clipText(dl, ocols), rx + 12, oy + 12 + di * 16);
+    }
+    ctx.restore();
+
+    /* --- the ship's log --- */
+    var ly0 = y0 + oh + 8, lh2 = colH - oh - 8;
+    var ly = notesPanel(ctx, rx, ly0, rw, lh2, 'SHIP\'S LOG', false);
+    var gx = rx + 10;
+    for (var gi = 0; gi < J.GROUPS.length; gi++) {
+      var gr = J.GROUPS[gi], gw = gr.label.length * 8 + 18;
+      btn(ctx, gx, ly, gw, 18, gr.label, (function (id) {
+        return function () { notesView.group = id; notesView.logTop = 0; };
+      })(gr.id), { bold: true, hot: notesView.group === gr.id, font: 10 });
+      gx += gw + 6;
+    }
+    var es = J.entries(G, notesView.group);
+    var listY = ly + 26, listH = ly0 + lh2 - listY - 8;
+    var lcols = Math.max(16, Math.floor((rw - 24 - sbW - 4) / 7.2));
+    notesView.logTop = Math.max(0, Math.min(Math.max(0, es.length - 1), notesView.logTop));
+    ctx.save();
+    if (!es.length) {
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(160,185,220,0.55)';
+      var none = wrapText(notesView.group === 'all'
+        ? 'Nothing yet. Rescues, robberies, charges, debts, contracts, trades and arrivals are written here as they happen.'
+        : 'Nothing of that kind yet.', lcols);
+      for (var ni = 0; ni < none.length; ni++) ctx.fillText(none[ni], rx + 12, listY + 12 + ni * 16);
+    }
+    var yy = listY, shown = 0;
+    for (var ei = notesView.logTop; ei < es.length; ei++) {
+      var en = es[ei], kd = J.kindOf(en.kind);
+      var body = wrapText(en.text + (en.n > 1 ? '  (x' + en.n + ')' : ''), lcols);
+      var need = 15 + body.length * 15 + 6;
+      if (yy + need > listY + listH && shown > 0) break;
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillStyle = kd.color;
+      ctx.fillText(kd.label, rx + 12, yy + 11);
+      ctx.fillStyle = 'rgba(160,185,220,0.6)';
+      ctx.fillText(J.fmtEpoch(en.t) + (en.at ? '  ·  ' + en.at : ''), rx + 12 + 80, yy + 11);
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = '#d8ecf4';
+      for (var bi = 0; bi < body.length; bi++) ctx.fillText(body[bi], rx + 12, yy + 26 + bi * 15);
+      yy += need; shown++;
+    }
+    ctx.restore();
+    if (es.length > shown) {
+      drawScrollbar(ctx, rx + rw - sbW - 8, listY, sbW, listH, es.length, Math.max(1, shown), notesView.logTop,
+                    function (p) { notesView.logTop = Math.max(0, Math.min(es.length - 1, p)); });
+    }
+    if (overRect(rx, ly0, rw, lh2)) {
+      setScrollRegion(rx, ly0, rw, lh2, function (d) {
+        notesView.logTop = Math.max(0, Math.min(Math.max(0, es.length - 1), notesView.logTop + d));
+      });
+    }
+  }
+
   function drawShipScreen(ctx, w, bottom) {
-    if (G.shipTab !== 'guns' && G.shipTab !== 'panels') G.shipTab = 'status';
+    if (G.shipTab !== 'guns' && G.shipTab !== 'panels' && G.shipTab !== 'notes') G.shipTab = 'status';
     var guns = G.shipTab === 'guns';
     var panels = G.shipTab === 'panels';
+    var notes = G.shipTab === 'notes';
+    /* Off the notes tab, nothing is still holding the keyboard for it. */
+    if (!notes && NOTE) NOTE = null;
     var top = modeFrame(ctx, w, bottom,
                         guns ? 'SHIP — GUNS'
                         : panels ? 'SHIP — CONSOLE PANELS'
+                        : notes ? 'SHIP — NOTES'
                         : 'SHIP STATUS & INVENTORY',
                         guns ? 'Tab panels   ·   space fires A   ·   shift+space fires B'
-                        : panels ? 'Tab status   ·   pick a mount, then pick a page'
+                        : panels ? 'Tab notes   ·   pick a mount, then pick a page'
+                        : notes ? (NOTE ? 'Esc stops writing   ·   kept as you type'
+                                        : 'Tab status   ·   Enter writes   ·   E exports   ·   ↑↓ scroll the log')
                              : (G.ship.docked ? 'Tab guns   ·   F4 trade   ·   ↑↓ select   ·   Del jettison'
                                               : 'Tab guns   ·   ↑↓ select   ·   Del jettison   ·   Shift+Del all'));
 
@@ -2069,7 +2460,8 @@
     var tabH = 22, tabW = 150, tabY = top + 4;
     var tabs = [ { id: 'status', label: 'STATUS & INVENTORY', wide: true },
                  { id: 'guns',   label: 'GUNS' },
-                 { id: 'panels', label: 'PANELS' } ];
+                 { id: 'panels', label: 'PANELS' },
+                 { id: 'notes',  label: 'NOTES' } ];
     var tx = pad;
     for (var ti = 0; ti < tabs.length; ti++) {
       var tw = tabs[ti].wide ? tabW : 90;
@@ -2091,6 +2483,7 @@
     top = tabY + tabH + 6;   // content starts below the tab strip
 
     if (panels) { drawPanelsTab(ctx, pad, top, w, bottom); return; }
+    if (notes) { drawNotesTab(ctx, pad, top, w, bottom); return; }
     if (guns) {
       /* The guns board, hosted in a tile the same way the ship page is on
        * the status tab — it draws into its own flat 460x178 MFD space and
@@ -5397,6 +5790,9 @@
      * function-key and number-row handling — see the note by beginEdit. */
     editing: editing, editKey: editKey, editState: editState,
     cancelEdit: cancelEdit, beginEdit: beginEdit,
+    /* The F5 notepad (journal.js), which also answers to editing(). */
+    beginNotes: beginNotes, writingNotes: writingNotes, stopNotes: stopNotes,
+    exportNotes: exportNotes, scrollNotesLog: scrollNotesLog,
     /* main.js routes the wheel here before the camera zoom sees it. */
     wheelAt: wheelAt
   };

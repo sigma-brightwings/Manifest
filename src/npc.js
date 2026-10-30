@@ -302,6 +302,56 @@
     return sc;
   }
 
+  /* SOMEBODY ELSE'S SHIP, with you aboard her (2026-10-28).
+   *
+   * Astra chose boarding to come next, and the faces on her deck are the
+   * ones crewForShip has always promised: the same ids, names and bodies
+   * that were drinking on the concourse, so the engineer you bought a round
+   * for is the engineer at her drive console. `info` is what crewForShip
+   * takes ({ id, name, faction, cls, souls, size }) plus `route`, so each
+   * of them can speak for their captain the way they do in the bar.
+   *
+   * Who works where follows the hull's own consoles, as your crew do, with
+   * two differences that are hers and not yours: the first of them (her
+   * master — captain, officer, enforcer) holds the helm, since nobody aboard
+   * is waiting for you to sit in it; and the hands with no console of their
+   * kind stand their watch in a room that suits them — marines and security
+   * at the airlock, a loadmaster in the hold, a medic in the medbay. */
+  var GUARD_ROOM = { marine: 'airlock', security: 'airlock', tactical: 'airlock', heavy: 'airlock',
+                     raider: 'cargo', loadmaster: 'cargo', medic: 'medbay', officer: 'passage',
+                     enforcer: 'passage', captain: 'passage' };
+  function visitScene(plan, info, opts) {
+    opts = opts || {};
+    var W = plan.ship || plan;
+    var crew = crewForShip(info);
+    var stations = { engineer: [], gunner: [] };
+    itemsOfKind(W, 'station').forEach(function (it) { if (stations[it.role]) stations[it.role].push(it); });
+    var used = { engineer: 0, gunner: 0 }, turrets = itemsOfKind(W, 'turret').slice(), tUsed = 0;
+    var copilots = itemsOfKind(W, 'copilot'), cUsed = 0;
+    var extraBase = { shipName: info.name || '', ship: info.name || '', route: info.route || null, aboard: true };
+    var people = crew.map(function (c, i) {
+      var extra = {};
+      for (var k in extraBase) extra[k] = extraBase[k];
+      extra.master = i === 0;
+      var p = person(c.id, c.name, c.body, c.liv, c.role, extra);
+      if (i === 0) { p.helmSeat = true; return p; }
+      if (c.role === 'gunner' && tUsed < turrets.length) { p.turret = turrets[tUsed++]; return p; }
+      if (c.role === 'pilot' && cUsed < copilots.length) { p.station = copilots[cUsed++]; return p; }
+      var list = stations[c.role];
+      if (list && used[c.role] < list.length) { p.station = list[used[c.role]++]; return p; }
+      p.guard = GUARD_ROOM[c.role] || 'passage';
+      return p;
+    });
+    people.forEach(function (p, i) {
+      p.bunk = W.bunkAt && W.bunkAt.length ? W.bunkAt[i % W.bunkAt.length] : null;
+      p.upper = W.bunkAt && W.bunkAt.length ? (Math.floor(i / W.bunkAt.length) % 2 === 1) : false;
+    });
+    var sc = { kind: 'ship', plan: plan, people: people, floorY: plan.floorY || 0, key: 'visit|' + (info.id || info.name),
+               deck: plan.deck || null, car: plan.deck ? roomById(plan, 'lift-' + plan.deck) : null, visit: true };
+    people.forEach(function (p) { placeAtStart(sc, p, opts.t || 0); });
+    return sc;
+  }
+
   /* A port's people. `port` and `sys` are the game's; `opts` carries the
    * clock, whether the port has a yard, and who controls it. */
   function stationScene(plan, port, sys, opts) {
@@ -359,12 +409,16 @@
      * work it, the rest are in the bar or on the concourse. */
     var Sim = global.Sim;
     var occ = (Sim && Sim.berthOccupants && port && sys) ? Sim.berthOccupants(port, sys, t) : [];
-    var free = roomsOfKind(plan, 'berth').filter(function (b) { return !b.ship; });
+    var free = roomsOfKind(plan, 'berth').filter(function (b) { return !b.ship && !b.other; });
     occ.slice(0, 6).forEach(function (o, i) {
       var r = o.route || {};
       var crew = crewForShip({ id: r.id || o.name, name: o.name, faction: r.faction, cls: r.cls || r.className,
                                souls: r.souls, size: r.size });
-      var berth = free[i] || null;
+      /* Her own berth, where the plan gave her one (walk.js `others`, for
+       * boarding: 2026-10-28) — the hand working it stands by the hatch you
+       * would board her by. Otherwise one of the free ones, as before. */
+      var berth = roomsOfKind(plan, 'berth').filter(function (b) { return b.other && b.other.name === o.name; })[0] ||
+                  free[i] || null;
       crew.slice(0, 4).forEach(function (c, j) {
         /* `route`: the ship she berthed off, so her people can speak for
          * their captain (dialogue.js reads Captains.opinion off it). */
@@ -399,10 +453,22 @@
     syn: ['enforcer', 'pilot', 'engineer', 'heavy', 'gunner', 'enforcer'],
     pir: ['captain', 'raider', 'raider', 'engineer', 'raider', 'gunner']
   };
+  /* A traffic route's `size` is a number (her mass fraction, sim.js), not a
+   * letter, so every ship in port used to come out as an S with a crew of
+   * two — and a hauler you boarded had one hand aboard besides her master
+   * (found boarding, 2026-10-28). The letter is the hull's: the player hull
+   * built on the model her class flies, the same one boarding walks her as. */
+  function sizeLetter(info) {
+    if (typeof info.size === 'string') return info.size;
+    var H = global.Combat && global.Combat.HULLS, cls = info.cls;
+    if (H && cls) for (var k in H) if (H[k].mesh === cls) return H[k].size || 'M';
+    return null;
+  }
   function crewForShip(info) {
     info = info || {};
     var liv = liveryFor(info), id = 'ship|' + (info.id || info.name || '?');
-    var n = Math.max(1, Math.min(8, (info.souls | 0) || (info.size === 'L' || info.size === 'XL' ? 5 : info.size === 'M' ? 3 : 2)));
+    var sz = sizeLetter(info);
+    var n = Math.max(1, Math.min(8, (info.souls | 0) || (sz === 'L' || sz === 'XL' ? 5 : sz === 'M' ? 3 : 2)));
     var roles = SHIP_ROLES[liv];
     /* Where in the list a ship starts, so a port full of freighters is not
      * a bar full of engineers — the first role stays first (the captain,
@@ -453,9 +519,16 @@
     var x = (d.x0 + d.x1) / 2 + side * ((d.x1 - d.x0) / 2 + 0.9), z = Math.max(room.z0 + 0.8, Math.min(room.z1 - 0.8, (d.at || 0) - 1.2));
     return { x: x, z: z, yaw: Math.PI };
   }
+  /* Off to one side of her hatch, not in front of it (2026-10-28). The hand
+   * used to stand within a metre of the hatch's middle, so with boarding,
+   * E facing the hatch found the hand first — nearer than the thing you
+   * were looking at — and you could talk to her crew all day and never get
+   * aboard. Two metres and more along the wall clears it. */
   function berthPost(plan, berth, key) {
     var hx = berth.side < 0 ? berth.x0 + 1.6 : berth.x1 - 1.6, zc = (berth.z0 + berth.z1) / 2;
-    return { x: hx, z: zc + (draw(key, 'bz') - 0.5) * 2, yaw: berth.side < 0 ? -Math.PI / 2 : Math.PI / 2, working: true };
+    var side = draw(key, 'bz') < 0.5 ? -1 : 1;
+    var reach = Math.min(2.0 + draw(key, 'bz2') * 0.9, (berth.z1 - berth.z0) / 2 - 0.5);
+    return { x: hx, z: zc + side * reach, yaw: berth.side < 0 ? -Math.PI / 2 : Math.PI / 2, working: true };
   }
 
   /* ---- what to do next --------------------------------------------------
@@ -474,6 +547,19 @@
       var W = plan.ship || plan;
       var dp = function (rm) { return (W.decks && rm && W.decks[rm.deck]) || plan; };
       var on = function (task, d) { task.deck = d || null; return task; };
+      /* ABOARD SOMEBODY ELSE'S SHIP (visitScene, 2026-10-28): her master
+       * holds her helm, and the hands with no console of their own — her
+       * marines, her security, her raiders — stand their watch in a room
+       * rather than at a seat. Both flags are only ever set by visitScene,
+       * so your own crew's scripts are untouched. */
+      if (p.helmSeat) {
+        var hs = itemsOfKind(W, 'seat')[0];
+        if (hs) return on({ at: { x: hs.x, z: hs.sitZ !== undefined ? hs.sitZ : hs.z - 0.08 }, act: 'sit', yaw: 0, hold: 600, station: true }, hs.deck);
+      }
+      if (p.guard && onWatch(p, t)) {
+        var gr = roomsOfKind(W, p.guard)[0] || roomsOfKind(W, 'passage')[0];
+        if (gr) return on({ at: spotIn(dp(gr), gr, p.id, n, 0.8), act: 'stand', hold: 8 + draw(p.id, n + 'g') * 14 }, gr.deck);
+      }
       /* The pilot has the conn whenever you do not. */
       if (p.role === 'pilot') {
         var seat = itemsOfKind(W, 'seat')[0];
@@ -823,7 +909,7 @@
   /* What sits in a scene's walls, for doors that must open: the caller
    * merges this with the walker's own proximity. */
   var Npc = {
-    WATCH: WATCH, liveryFor: liveryFor, crewForShip: crewForShip,
+    WATCH: WATCH, liveryFor: liveryFor, crewForShip: crewForShip, visitScene: visitScene,
     shipScene: shipScene, stationScene: stationScene,
     update: update, pose: pose, figures: figures, facing: facing, talk: talk,
     route: route, onWatch: onWatch, nameFrom: nameFrom

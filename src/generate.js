@@ -3548,6 +3548,86 @@
     bulk:      { size: 0.230, color: '#b9c0cc', accel: 0.0008, label: 'bulk carrier' }
   };
 
+  /* ---- HALF-FULL HOLDS (2026-10-30) --------------------------------------
+   * Astra: "half-full holds that arrive at a rate commensurate with that,
+   * and have less XL size haulers." A ship is drawn at her route's size and
+   * now walked at it too (render.js), and her hold holds what a hold that
+   * size holds — her hull's capacity times the square of how much longer
+   * she is than her fitted length (the bay runs aft and widens with her
+   * beam; its height does not grow). Measured across 80 seeds before this:
+   * waste haulers drawn at a median 95 m were 9% full, freighters 27%,
+   * tankers 29%, and local shuttles carried three times what a shuttle
+   * holds.
+   *
+   * So each route's ship is SIZED FOR HER LOAD: as long as it takes for the
+   * heavier of her two legs to fill her to `fill` (42-62%, her own), held
+   * between her hull's fitted length and her class's longest. Inside those
+   * bounds the timetable does not move. Where a bound bites — a load too
+   * light for even the smallest hull, or too heavy for the biggest — she
+   * runs LESS or MORE often instead, and every leg's tonnage moves by the
+   * same factor, so what reaches every market per day is exactly what it
+   * was: the half-full hold arrives at the rate the trade pays for.
+   *
+   * The table is the hulls these classes are flown as (combat.js HULLS:
+   * cargoCap; hullfit.js: fitted length). The suite checks the two agree. */
+  var CLASS_HOLD = {
+    shuttle:   { len: 25, cap: 30,  max: 70 },
+    freighter: { len: 35, cap: 160, max: 150 },
+    hauler:    { len: 31, cap: 180, max: 110 },
+    tanker:    { len: 51, cap: 280, max: 190 },
+    liner:     { len: 80, cap: 120, max: 190 }
+  };
+  var HOLD_FILL = [0.42, 0.62];
+  var PERIOD_SLOWER_MAX = 3;          // never fewer than a third of the trips
+  /* A hold of class `cls` at `lengthM` metres, in tonnes. */
+  function holdCapacity(cls, lengthM) {
+    var H = CLASS_HOLD[cls];
+    if (!H) return 0;
+    var k = Math.max(1, lengthM / H.len);
+    return H.cap * k * k;
+  }
+  function tonnesOf(m) {
+    var s = 0;
+    for (var i = 0; m && i < m.length; i++) s += m[i].qty > 0 ? m[i].qty : 0;
+    return s;
+  }
+  /* Size `route` to her load, and when `retime`, move her period (and so
+   * her layover) where a size bound bites, scaling her manifests with it.
+   * Draws one number from `hf` whatever happens, so the stream does not
+   * depend on which branch ran. */
+  function sizeForLoad(route, hf, retime, minLayover) {
+    var f = HOLD_FILL[0] + (HOLD_FILL[1] - HOLD_FILL[0]) * hf.next();
+    var H = CLASS_HOLD[route.cls];
+    var load = Math.max(tonnesOf(route.out), tonnesOf(route.back));
+    if (!H || !(load > 0)) return;
+    var want = H.len * Math.sqrt(Math.max(1, load / f / H.cap));
+    var L = Math.max(H.len, Math.min(H.max, want));
+    var cap = holdCapacity(route.cls, L);
+    if (retime && Math.abs(load - f * cap) > 0.1 * f * cap) {
+      var m = f * cap / load;
+      var minP = 2 * (route.cruise + (minLayover || 0));
+      var newP = Math.max(minP, Math.min(route.period * PERIOD_SLOWER_MAX, route.period * m));
+      m = newP / route.period;
+      if (Math.abs(m - 1) > 1e-6) {
+        route.period = newP;
+        route.layover = newP / 2 - route.cruise;
+        [route.out, route.back].forEach(function (man) {
+          for (var i = 0; man && i < man.length; i++) man[i].qty *= m;
+        });
+      }
+    }
+    /* A load the biggest of her class cannot carry, even run as often as
+     * her crossing allows: she is the rare one longer than her class's
+     * longest, rather than a hold that is fuller than full. */
+    var after = Math.max(tonnesOf(route.out), tonnesOf(route.back));
+    if (after > 0.95 * cap) {
+      L = H.len * Math.sqrt(Math.max(1, after / 0.9 / H.cap));
+      cap = holdCapacity(route.cls, L);
+    }
+    route.size = L / 1000;
+    route.holdCap = cap;
+  }
+
   var LINE_NAMES = ['Ardent', 'Coldwater', 'Fenwick', 'Halcyon', 'Ironwake', 'Juno',
                     'Kestrel', 'Lodestar', 'Mirefast', 'Northlight', 'Overwater',
                     'Pilgrim', 'Quillon', 'Redsail', 'Slipstream', 'Tallow'];
@@ -3674,6 +3754,7 @@
     pairs.sort(function (x, y) { return y.score - x.score; });
     var maxRoutes = Math.min(28, 6 + ports.length * 3);
     pairs = pairs.slice(0, maxRoutes);
+    var hf = tr.fork('holdfill');
 
     for (i = 0; i < pairs.length; i++) {
       var pr = pairs[i];
@@ -3714,13 +3795,17 @@
         distance: dist
       };
       sys.traffic.push(route);
+      /* Her size from her load, and her timetable with it where a size
+       * bound bites (HALF-FULL HOLDS, above). Its own fork: the draws above
+       * are the ones they always were. */
+      sizeForLoad(route, hf, true, pr.local ? 0.1 * 86400 : 0.5 * 86400);
 
       /* Register the manifests as scheduled deliveries so the market model
        * knows when this ship's cargo lands. The outbound leg arrives at B
        * at t0 + cruise; the return leg arrives at A at t0 + 2*cruise +
        * layover. Both repeat every period. */
-      registerDeliveries(B, out, route.t0, cruise, period);
-      registerDeliveries(A, back, route.t0, 2 * cruise + layover, period);
+      registerDeliveries(B, route.out, route.t0, route.cruise, route.period);
+      registerDeliveries(A, route.back, route.t0, 2 * route.cruise + route.layover, route.period);
     }
 
     fillLocalHolds(sys, tr, ports);
@@ -3808,7 +3893,7 @@
   }
 
   function fillLocalHolds(sys, tr, ports) {
-    var fr = tr.fork('feedflow');
+    var fr = tr.fork('feedflow'), hf2 = tr.fork('feedhold');
     var byId = {};
     for (var i = 0; i < ports.length; i++) byId[ports[i].id] = ports[i];
     var routes = sys.traffic || [];
@@ -3824,6 +3909,8 @@
       if (!out.length && !back.length) continue;
       route.out = out;
       route.back = back;
+      /* Sized for what she now carries, as every scheduled route is. */
+      sizeForLoad(route, hf2, true, 0.1 * 86400);
 
       /* Arrives at the far end, and leaves this one. The departure is
        * registered at the moment the ship goes, which is t0 outbound and
@@ -4016,7 +4103,7 @@
      * feeder's schedule and re-time small-craft traffic in every existing
      * seed. Its own stream leaves `fr` bit-for-bit as it was: the same
      * shuttles, at the same minutes, now with something aboard. */
-    var sr = tr.fork('feedshare');
+    var sr = tr.fork('feedshare'), hf3 = tr.fork('feederhold');
     var locals = [];
     var i, j;
     for (i = 0; i < ports.length; i++) {
@@ -4064,6 +4151,9 @@
           back: shareOf(flowBack, FEEDERS_PER_PAIR, sr),
           distance: dist
         });
+        /* Sized for her share (HALF-FULL HOLDS). Her timetable is not
+         * touched: nothing she carries is registered with a market. */
+        sizeForLoad(sys.traffic[sys.traffic.length - 1], hf3, false);
         n++;
       }
     }
@@ -4195,7 +4285,7 @@
   var Gen = {
     AU: AU, M_SUN: M_SUN, M_EARTH: M_EARTH, R_SUN: R_SUN, DEG: DEG,
     PLANET_TYPES: PLANET_TYPES,
-    SHIP_CLASSES: SHIP_CLASSES,
+    SHIP_CLASSES: SHIP_CLASSES, CLASS_HOLD: CLASS_HOLD, HOLD_FILL: HOLD_FILL, holdCapacity: holdCapacity,
     PATROL_CLASSES: PATROL_CLASSES,
     OUTLAW: OUTLAW,
     SHIP_SPEC: SHIP_SPEC,

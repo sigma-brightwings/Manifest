@@ -16,6 +16,242 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **A NOTES tab on the F5 ship screen (2026-10-30).** Astra: *"add a Notes
+  section to the F5 menu, under a new tab."* She chose both a notepad and a
+  log the game keeps, saved with the game and exportable to a file.
+  - **Tab order:** STATUS, GUNS, PANELS, then NOTES (Tab cycles; the tabs are
+    clickable).
+  - **The notepad** (left).
+    - Click it, press Enter or W, or press WRITE to type.
+    - It is multi-line: Enter is a new line. Backspace and Delete work, with
+      Ctrl to delete a word. The arrows move the caret, Ctrl+arrows move a word,
+      Home/End go to the line's ends, Ctrl+Home/End to the text's, and Page
+      Up/Down move a page. Ctrl+V pastes.
+    - Clicking puts the caret where you clicked. Long lines wrap.
+    - While you write, it takes the whole keyboard, so a 7 in a note does not
+      flip an instrument page.
+    - Esc stops writing and throws nothing away, because the text goes into
+      the save as you type it. Leaving the tab stops writing too.
+    - Capped at 20,000 characters.
+  - **Who owes whom** (top right): read off the captains' own memories, so
+    it always matches what a captain will say to you. Captains who owe you
+    come first (green), then the ones you owe (amber), each with the reason.
+    `Favours.addDebt` now keeps the ship's name on the memory (`who`,
+    `debtAt`). A memory saved before this shows the ship's id instead.
+  - **Ship's log** (bottom right): newest first, with ALL / PEOPLE / CRIME /
+    TRADE / TRAVEL filters. The arrows, Page Up/Down and the wheel scroll it.
+    Each entry has its kind, the game clock and the star you were at. The same
+    line twice within a minute is folded into one, counted. The last 300 are
+    kept.
+  - **What gets written to the log:**
+    - rescues (each load of mass passed, and the payment);
+    - hold-ups (cargo dumped, cash box, transfer, purse);
+    - being robbed;
+    - every crime reported, with the bounty and the faction's name;
+    - witnesses paid or leaned on;
+    - bounties cleared and turning yourself in;
+    - kills;
+    - favours called in, asked back, given or refused;
+    - captains who join you as partner or crew;
+    - the Syndicate tithe, paid or refused;
+    - contracts and passages, done or failed;
+    - every ledger line: market and ship-to-ship trades, wages and berthing,
+      fleet arrivals, hulls and modules delivered, a tender's rescue of you;
+    - arrivals in a system (marked the first time), and dropping out of
+      slipspace in deep space.
+    `hooks.ledger(text, kind)` takes an optional kind, so a cash box or a
+    rescue payment is filed under what it was rather than as trade.
+  - **EXPORT** (or E) downloads a .txt: the notes, who owes whom, then the
+    whole log. It is CRLF for Notepad, and named after the ship and the game
+    clock. The game runs with no Node in the page, so this is the browser's
+    own download, and Electron asks where to save it.
+  - On the notes tab, Del no longer reaches the inventory's jettison, so it
+    cannot throw out cargo you cannot see.
+  - New `src/journal.js` (global `Journal`). `test/journal.test.js` (56 checks)
+    covers the log, the debts, the export, the notepad's editing, and saving.
+    `render.test.js` drives the tab through the real keyboard handler.
+    `upkeep.test.js` checks that a rescue and a hold-up land in the log.
+
+- **The walkway inside the ship is dressed (2026-10-30).** Astra: *"add some
+  more detail to the walkway inside the ship."* The passage was ribs, one light
+  strip, lockers and two hazard lines in a dark box. Now it has:
+  - floor plates, with a tread runner down the middle;
+  - kick plates along both walls, with low path lights set in them;
+  - panel seams on the walls between the ribs;
+  - a handrail at hip height down the port wall;
+  - two pipe runs under the ceiling, with coloured bands, and a cable tray on
+    the other side;
+  - vent grilles in the ceiling either side of the light;
+  - a fire extinguisher by the aft door and a first-aid box by the fore one;
+  - lit signs with arrows: BRIDGE (LIFT on the decked hulls), CARGO, and
+    AIRLOCK beside its door. Each arrow points the way along the passage, as
+    seen from the wall it hangs on.
+  - Everything stays within 16 cm of a wall or lies flat on the floor, so the
+    walkway is as wide as it was. `boarding.test.js` checks this on all 18
+    one-deck hulls. Nothing draws from the rng, so no deck lays out
+    differently.
+
+- **A container for each kind of cargo (2026-10-30).** Astra: *"let's
+  create some different models for the different cargo types."* Claude
+  Design drew nine from the brief, and they now fill every hold:
+  - The nine: a freight crate, a bulk hopper, a cryo tank, a liquid tote, a
+    reefer, a livestock pen, a shielded cask, a secure case and a lumber
+    stack. Each has its placard pictogram and its own lamp.
+  - Every commodity ships in one of them (`CargoKit.kindFor`): hydrogen and
+    military drive fuel in cryo tanks; ores, rare metals and grain in
+    hoppers; water, chemicals and wine in totes; fish, fruit, medicine and
+    gene therapies chilled; livestock penned; waste and fissiles in casks;
+    computers, AI cores, luxuries and fusion cells locked; timber strapped;
+    everything else crated.
+  - Each container's manifest strip prints the real cargo's name in a
+    5x7 pixel font.
+  - Containers face the aisle and stack two high, not three. At a metre
+    tall, a third would reach the lights. A full hold is now two to a slot,
+    and each stack's label gives tonnes to a tenth under 100 t, so the
+    labels still add up to the manifest.
+  - How it is built: the sheet is in `ref/cargo/`, as the GLBs and
+    `cargo_specs.json`. `tools/cargo-kit.cjs` reads the parts (boxes,
+    cylinders, a square hopper, the cask's lid disc) and samples each
+    placard's texture onto a 16x16 grid of its two colours. It writes
+    `src/cargokit-data.js`, and `src/cargokit.js` builds the containers
+    into the hold's own vertex-coloured mesh. There are no textures and
+    nothing new to load. A full 2.5x Mule hold (68 stacks) comes to about
+    72k triangles.
+  - `boarding.test.js`: there are nine kinds; every commodity has one;
+    each container builds whole and fits its 1.1 m slot; two stack under
+    the lights; the strip spells the cargo; and a full hold stays a
+    reasonable mesh.
+
+- **Other ships carry fuel and money, and some run dry (2026-10-30).**
+  Astra: *"how expensive would it be to track her money and fuel? Having
+  other ships in need of fuel can give us a reason to buy a rescue tender
+  for ourselves."* Nothing is simulated tick by tick: like the timetable,
+  all of it is worked out from the clock (`src/upkeep.js`).
+  - **Her tank.** She leaves full, arrives with 60% left, and refills early
+    in her layover. It grows with her size, the way her hold does.
+  - **Her purse.** Her float, plus her cut of each leg (5% of what she
+    carries), paid over to her owners every six legs.
+  - **Breakdowns.** On about one leg in eighty a scheduled trader's
+    reaction-mass tank lets go early in the leg (8-22% of the way). She
+    burns what is left to go into orbit where she is, then drifts on that
+    orbit, tumbling slowly. Feeders, the heavies and your own fleet never
+    break down. In the survey that is about one ship adrift per system
+    every four to five days (288 in 26,852 legs).
+  - **Her mayday is real.** While she is adrift she is on the distress
+    band, the beacon follows her, and the call says what she needs:
+    *"Anyone with 20 tonnes of mass to spare, we will pay."* The port she
+    was bound for sends a tug, which reaches her 12-48 hours later and
+    always before her next departure. After that she is in her berth and
+    back on her timetable.
+  - **Passing her mass.** F4 on her call: "Pass her reaction mass", within
+    50 km and matched to 100 m/s, with "Lock her up" to put the nav lock on
+    her. Hydrogen in your hold goes first, then your own tank above a 2 t
+    reserve. A part-load is banked, so a second trip can finish it. That is
+    what a tender, or a hold full of hydrogen, is for.
+  - **When she has enough**, she pays what she can from her purse (1.5x
+    hydrogen's price plus 400 cr for the trip), owes you a favour,
+    remembers that you saved her ship, and flies herself home from where
+    she is. Once she is out of sight she is back on her timetable, and that
+    leg stays rescued.
+  - **Her screens show it.** Aboard her, the SHIP page shows her purse next
+    to her name, and her real reaction mass, with "TANK GONE" when it has.
+  - **Saved:** `npcLedger` holds what you passed, what was paid and which
+    legs you rescued, keyed by system and route. It is put back on the
+    routes after a load.
+  - **The schedule's own maydays are bait only now.** `messages.js` used
+    to put real traders on the band as well, and they were phantoms: the
+    ship named in the call flew on along her timetable while her beacon
+    sat where she wasn't. Real maydays now come only from ships that are
+    really adrift. Pirate lures stay at about the same share of the band
+    where pirates work (3% of four-hour slots).
+  - Rumours' berthing times follow a breakdown too: a ship that broke
+    down tells the port she was bound for when the tug brings her in.
+  - `test/upkeep.test.js` (46 checks): how often legs break, that she is
+    exactly where her timetable had her at the leak, that she stays on a
+    bound orbit clear of the body, the tow, the tank and purse curves, the
+    call, a part-load and a second trip, being paid, flying home, and
+    surviving a save. `messages.test.js` now pins bait-only, and
+    `rumours.test.js` checks berths against the real states.
+
+- **Boarding, slice two: aboard a ship in space, by invitation (2026-10-29).**
+  Within 25 km of a trader, F4 offers "Ask to come aboard". If she agrees
+  ("Hold where you are and we will come to you"), she leaves her lane and
+  comes alongside to 30 m off your hull.
+  - Her tube runs out to your hatch over six seconds; the contacts box
+    follows it: "coming alongside", "running her tube out", "tube made
+    fast".
+  - While joined, she flies the pair and you ride with her: her drives go
+    cold and she coasts on her own orbit. Time runs at normal speed.
+  - O gets you up; your airlock cycles out into the tube instead of
+    onto a ramp; down the tube and up into her airlock; her controls
+    cycle you in. Her crew are aboard and her master will talk to you.
+  - Back the same way. U in the seat, or "Reel the tube in" on F4, lets
+    her go, and she goes back to her lane.
+  - She gives up after ten minutes if you never get close enough.
+  - `tools/probe-tube.js` (muted) runs the whole loop: she joined in 37 s
+    from 7.7 km, held 30.0 m for the walk across and back, and her
+    velocity changed by 0.11 m/s (gravity) while joined.
+- **Conversations work with the mouse (2026-10-29).** Astra: *"NPC
+  dialogue trees should be mouse-navigable."* Clicking a reply already
+  chose it, but nothing on the panel showed that.
+  - The reply under the pointer now lights up with a bar and a ▶.
+  - The pointer becomes a hand over a reply you can choose; a greyed-out
+    reply shows its reason without changing the pointer.
+  - When the conversation is over, a click anywhere on the panel walks on.
+  - The number keys still work. The probe (`tools/probe-talk-mouse.js`,
+    muted) hovers, clicks a reply, clicks Goodbye and clicks the panel shut,
+    using the mouse alone.
+
+- **Boarding, slice one: aboard another ship at a station (2026-10-28).**
+  Astra chose boarding to come next, in three ways (docked beside her at a
+  station, invited in space, a disabled ship by force), with a standoff
+  you talk your way through when her crew don't want you there. Once
+  aboard you can talk to the crew, trade with the captain, recruit, and
+  take cargo. A ship ends up disabled in either of two ways (her drive
+  knocked out, or her crew surrendering), and those are slices two and
+  three. This is the first.
+  - **Every ship moored at the port has a berth and a hatch on the
+    station deck** (`walk.js` `others`). E on her hatch takes you up into
+    her airlock, the way your own does. The deck grows berths to fit
+    everyone without changing what its seed draws.
+  - **She is walked as a real hull.** Her class flies the same library
+    model as one of the player hulls (`hullForClass`, measured: every
+    traffic class has one), so her rooms are `Render.shipInterior`'s and
+    her airlock is `airlock.js`'s. Every walking path that used to say
+    `G.ship` (the frame, the airlock, the ramp, the lift) now asks
+    `walkHull()`. Your own airlock keeps running while you're aboard her.
+  - **Her crew are the faces from the concourse** (`Npc.visitScene` over
+    `crewForShip`). Her master holds her helm. Her gunner, engineer and
+    co-pilot take her consoles. Hands with no console stand their watch
+    where they belong: marines at the airlock, a loadmaster in the hold, a
+    medic in the medbay.
+  - **What you can say aboard** (`dialogue.js`):
+    - her master offers *"Can we do business?"*, which opens the
+      hailed-ship trade board on the comms page, at its prices and with
+      its refusals;
+    - her pilot, engineer or gunner can be asked to *"Fly with me
+      instead"*. That costs half again the crew hall's signing fee, and
+      the hand refuses if they're cold toward you, or lawful and only
+      neutral. Their rating is a pure function of who they are. Once
+      signed, they leave her deck and the bar.
+  - **Her hold says what is really in it**: her contact's manifest
+    through `Combat.holdOf`, the same source her trade board, a robbery
+    and a kill all read. Moored, a ship has usually unloaded, so the line
+    says so and names the load going in for her next run.
+  - **Her consoles are hers.** Her seat, stations, turret and drive
+    console tell you whose they are rather than letting you sit down.
+- **Crates in a hold are what is in it (2026-10-28).** From the open
+  list: *"cargo crates are random. They don't reflect what's actually in
+  your hold."*
+  - Yours and hers are now stacked from the cargo (`shipdeck.js` `load`,
+    `Render.holdLoad`): none in an empty hold, every slot three high in a
+    full one, filled from the door aft.
+  - Each crate is tinted by the goods in it, so one cargo reads as one
+    colour and a mixed hold as bands.
+  - The room is rebuilt when the hold changes by a tenth or its goods
+    change, not on every tonne.
+  - With no ship to ask, the old seeded scatter is unchanged.
+
 - **Women and men, every skin tone, every build (2026-10-26).** Astra: *"We
   should make sure that the female characters are well represented in race
   and bust size, as it is important."*
@@ -81,6 +317,114 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
   - **Not yet:** the old box figures are still built, since they hold the
     paint and kit the new bodies borrow and they're the fallback without a
     GPU. Hands are bare under the gloves' colour, not gloved shapes.
+
+- **The overboss's tithe (2026-10-26).** Astra: *"in Syndicate controlled
+  systems, paying a tithe to the overboss or whatever is a great way to show
+  you're not Navy or Police."* Asked, she chose:
+  - **Two places to pay it.** The overboss's collector hails you when you
+    arrive in a Syndicate hold, and a fixer (or any Syndicate face) in the
+    bar of one of their ports takes it too.
+  - **Paying buys all of these:**
+    - their patrols and their pirates leave you alone in that system;
+    - a little standing with the Syndicate (+2);
+    - their own doors (Syndicate-issue guns, hulls and livery, and anything
+      on a Syndicate port's shelf) read you 15 points higher;
+    - 5% better prices both ways at their ports.
+  - **Refusing marks you SUSPECTED** of being Navy or Police in that system.
+  - **The law doesn't care.** In her words: *"Even the lawful empires
+    treat the Syndicate as better than pirates, but worse than civilians.
+    It's well known that they tax travellers in their space, and the
+    general advice is to pay the tithe and keep problems from following you
+    back to your home port."* Paying touches no lawful faction's standing or
+    record.
+
+  How it works (`src/tithe.js`, new):
+
+  - **The call.** On arrival in a hold the collector names his price; the
+    log tells you to press F4 to answer. His channel (`$`) is at the top of
+    the comms list, with three choices:
+    - **Pay**;
+    - **Haggle**: once per call, and it can go up as well as down. The
+      roll is seeded by system and day, so reloading doesn't change it;
+    - **Refuse**.
+  - **Ignoring him** for 10 minutes counts as refusing.
+  - **The price.** 150 cr, plus 120/300/800 for a medium, large or extra-large
+    hull, plus 3% of what the hold is worth. A friend of the Syndicate pays
+    as little as half; someone they dislike pays up to 1.6×.
+  - **How long it lasts.** A tithe covers that one system for a week of
+    game time. Come back after that and he calls again; inside the week, he
+    tells you your mark is still good.
+  - **Left alone** (`sim.js`):
+    - their pirates and patrols that wake near a ship that has paid only
+      shadow it;
+    - a pirate that is already holding you up breaks off when you pay;
+    - a Syndicate patrol about to inspect you waves you through.
+  - **Suspected**, for a week:
+    - a Syndicate patrol searches you at least 90% of the time;
+    - it looks again every ten minutes it holds on you;
+    - their pirates don't break off when a patrol is near.
+  - **Clearing suspicion.** Paying late, at 1.25×, on the channel or across
+    the bar.
+  - **Better prices** apply to the market rows of a Syndicate port while
+    you're paid up. The port's own book is unchanged.
+  - **The fixer** remembers that you paid through them.
+  - `test/tithe.test.js` (46 checks).
+
+- **A way out of every ship: an airlock and a belly ramp (2026-10-26).**
+  Astra: *"create a set of stairs/ramp which can be opened from both inside
+  and outside the ship and which allows travel from inside to outside of
+  the ship"*, *"ensure that all models have a pathway to the exterior which
+  will seal against vacuum"*, and *"climb into them from the ramp, up and
+  into a room which seals the ramp and then perpendicular to the ramp is
+  another airlock door which opens into the main interior of the ship."*
+  Asked: you suit up in the airlock on airless worlds; the inner door and
+  the ramp are **never** open together; a belly ramp on every hull.
+  - **The airlock** (`shipdeck.js`) is a sealed room off the port side of
+    the passage. Its inner door (`lock`) is across the room from the ramp
+    well, at right angles to the ramp. Its controls are on the outboard
+    wall, and a lamp shows red while sealed and green while open to the
+    outside.
+  - **The cycle** (`airlock.js`, new): every trip in or out pumps for 5 s,
+    and only once both ends are shut. The inner door is locked whenever the
+    room isn't at the ship's pressure. Cycling out while landed lowers the
+    ramp; docked, it opens the berth hatch instead. Cycling in raises the
+    ramp first. Nothing out there in flight: the controls refuse.
+  - **Three ways down**, picked by how far the deck is off the ground under
+    her gear: a 30° ramp, a 42° stair where a ramp would be too long, or a
+    lift platform (2.6 m) on the tall hulls (Sump, Tanker, Meridian,
+    Leviathan, Heavy Tug, Crawler). Treads, rails and hazard edges; the
+    ramp swings from its hinge in 4 s.
+  - **Walking out.** Walk down the ramp (or ride the lift) and you are on
+    the ground beside her. You can see her from outside on her gear, with
+    the ramp down, standing on a ground patch tinted for the world. There's
+    a post at the foot of the ramp that raises and lowers it from outside.
+    Under a low belly you crouch (the Crawler's needs a crawl). Chart
+    overlays are hidden while you're outside.
+  - **From outside** the hull is cut open under the ramp well, with the
+    well walls and the lit airlock above it.
+  - `test/airlock.test.js` (24 checks): every hull's rooms fit inside her
+    model; the door is perpendicular; the ramp foot reaches the ground; a
+    flood-fill walk from the cockpit reaches open ground; the seal state
+    machine never has both ends open.
+
+- **ENGINE and WEAPONS pages on the cockpit MFDs (2026-10-26).** Astra:
+  *"Ship interiors require MFD panels which show things like engine fuel,
+  heat in weapons, number of missiles and their hard points, etc. use some
+  kind of graphic to identify systems from one another."*
+  - Every system has its own colour and glyph (`SYS_COLOR`, `SYS_GLYPH`),
+    used on every page, so a system reads the same at a glance wherever it
+    appears.
+  - **ENGINE**: slipspace fuel, reaction mass, reactor load, and gravity
+    against thrust.
+  - **WEAPONS**:
+    - a heat thermometer with ticks at 55% and 100%, beside a live column
+      for the heat sinks;
+    - each hardpoint as a box with its gun glyph turned to the muzzle side,
+      its fire group, its heat per shot and its cycle bar;
+    - missile racks as silhouettes, with an arrowhead on the armed rack;
+    - a strip for sinks, shield and turret.
+  - The panel list on the side screens shrinks its rows to fit (min 14 px).
+    `G.dashPage(id)` switches a page for playtests.
 
 - **Each role's suit in its portrait, and the face kit on the suited body
   (2026-10-26).** Astra: *"let's make a variant for each class type, since
@@ -1538,6 +1882,122 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Changed
 
+- **The more you take, the more serious the crime (2026-10-30).** Astra, after
+  one hold-up came to 41,028 cr: *"that's a lot of money, it should be a more
+  serious crime the more money you take."*
+  - A hold-up is charged its flat 400 cr plus half of what you took: credits,
+    or cargo at its base price (waste counts as nothing).
+  - Half, not all, so that being caught costs most of a big score rather than
+    more than all of it. Otherwise the big transfer would be a trap rather
+    than a choice.
+  - Typical charges when reported:
+
+    | Take | Amount taken | Charge |
+    |---|---|---|
+    | Freighter's cash box | 1,900 cr | +950 cr (with the flat 400, past the 800 cr at which police hunt you) |
+    | 40,000 cr transfer | 40,000 cr | +20,000 cr |
+
+  - The take rides on whichever report is still to come: a witness's, or the
+    victim's own distress call. The report line says how much was taken and
+    what it added.
+  - A second hold-up of a ship that has already called it in is added at once,
+    with the new figure.
+  - Buying a witness's silence costs more too: 15% of what you took, on top of
+    the usual price.
+  - `upkeep.test.js` checks that the take rides on the pending report and that
+    the bounty rises by the flat charge plus half of what was taken.
+
+- **A trader has one purse, and a gun gets you part of it (2026-10-30).**
+  Before, a shakedown took a fixed 150-850 cr that had nothing to do with the
+  purse on her own screen, which the robbery left untouched. Astra: *"give the
+  option to take more than a shakedown, but not everything, because that would
+  mean they have nothing to get to port."* On a scheduled trader, the piracy
+  menu now offers:
+  - **Demand the cash box.** The cash aboard, a tenth of her purse. Once
+    you've taken it, it stays empty until she is next in port.
+  - **Demand a transfer.** Everything above what she needs to make port: a
+    leg's reaction mass at hydrogen's price, plus her berth fee. She keeps
+    that much and pays the rest.
+  - Both come off the purse her screen shows, until she next settles with her
+    owners (every six legs), when her float is topped back up. So a ship you
+    robbed has less to pay you with if you answer her mayday, and she's worth
+    robbing again next month.
+  - Ships without a timetable (pirates, lane haulers torn out of slipspace)
+    keep the old single "Demand credits".
+  - Rescue payments use the same purse and the same top-up.
+  - Typical takes (`Claude outputs/purse-survey.cjs`, 1,072 ships):
+
+    | Ship | Cash box | Transfer (median) |
+    |---|---|---|
+    | Shuttle | ~400 cr | 2,500 cr |
+    | Hauler | ~630 cr | 5,100 cr |
+    | Freighter | ~1,900 cr | 15,800 cr |
+    | Tanker | ~2,200 cr | 17,600 cr |
+    | Liner | ~2,900 cr | 24,900 cr |
+
+    The old shakedown was about 500 cr whatever the ship.
+  - `upkeep.test.js` covers the cash box, the floor the transfer leaves, a
+    second demand getting nothing, the top-up at settling, and the comms path
+    end to end.
+
+- **A small hold shows more of what is in it (2026-10-30).** A hold with more
+  cargoes than stacks (a Mule's has two slots) used to show only as many
+  cargoes as it had stacks. Now each container is its own cargo, biggest
+  first, two to a stack, and a mixed stack's label names both. Holds with
+  room for every cargo are unchanged: still one cargo to a stack.
+
+- **Ships run about half full, and are sized for it (2026-10-30).** Astra:
+  *"half-full holds that arrive at a rate commensurate with that, and have
+  less XL size haulers."* Measured across 80 seeds first: waste haulers
+  drawn at a median 95 m were 9% full, freighters 27%, tankers 29%, and
+  local shuttles were carrying three times what a shuttle holds.
+  - A ship's hold now holds her hull's capacity times the square of how
+    much longer she is than her fitted length (`Gen.holdCapacity`); her
+    walked hold, her screens and her crates use the same number.
+  - Each scheduled route's ship is sized so the heavier of her two legs
+    fills her to her own 42–62%, between her hull's fitted length and
+    her class's longest (shuttle 70 m, freighter 150, hauler 110,
+    tanker 190, liner 190). Where a bound bites, she runs more or less
+    often instead (at most three times less often), and every leg's
+    tonnage moves by the same factor, so what each market receives per
+    day is unchanged. The rare load too heavy even then gets a ship
+    longer than her class's longest rather than an overfull hold.
+  - After, across the same 80 seeds: every class runs at a median 50–53%
+    full (10th–90th percentile 43–61%). Waste haulers are now a median
+    38 m, 70 m at the 90th percentile; the 100 m ones are rare.
+    Freighters 88 m, tankers 117 m, liners 147 m. Local shuttles grew
+    to 70 m and run more often, because what they carry is a third of
+    each port's through-flow.
+  - Return legs are lighter wherever the far end exports less.
+  - Its own random streams: every other draw in the generator is what it
+    was, but ship sizes and some timetables in every system change.
+  - `test/boarding.test.js`: the hold table matches the hulls, the drawn
+    hold matches the timetable's, and 1,071 scheduled ships across 40
+    seeds run at a median 51% with none over full.
+- **Every hull resized to fit her interior (2026-10-26).** Astra: *"if you
+  have to resize hulls to fit their interiors, do it."* `tools/fit-hulls.js`
+  finds, for each model, the smallest length and cockpit position at which
+  every room on every deck sits inside the hull (hull above and below each
+  sample, 4% edge allowance). It writes `src/hullfit.js` (`HullFit`), which
+  `render.js` reads for `TRUE_LEN` and the cockpit anchor.
+  - New lengths, in m:
+
+    | Hull | m | Hull | m | Hull | m |
+    |---|---|---|---|---|---|
+    | Talon | 25 | Dart | 33 | Kestrel | 34 |
+    | Mule | 35 | Wren | 25 | Bollard | 25 |
+    | Samaritan | 29 | Sump | 31 | Longhaul | 38 |
+    | Tanker | 51 | Cutter | 36 | Meridian | 80 |
+    | Leviathan | 80 | Crawler | 164 | Heavy Tug | 31 |
+    | Heavy Shuttle | 30 | Trader | 32 | Runner | 40 |
+    | Enforcer | 31 | Enforcer Heavy | 31 | Fighter | 25 |
+
+  - The capital ship and the carrier keep their lengths and bridges.
+  - Bigger ships need bigger berths. A port turns you away when your hull
+    won't fit its berth, and ports that don't take XL hulls refuse them.
+  - The cargo bay now hangs off the aft end of the passage, with a door, so
+    the airlock can have the port side.
+
 - **Everyone in a pressure suit; the face is in a sketch (2026-10-25).**
   Astra: *"why don't we replace all NPC models with those that have
   pressure suits and helmets"*, then: *"Helmets remain on, but during
@@ -1655,6 +2115,208 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
   hull hop). Bays with no lift skip the ride legs and take no extra time.
 
 ### Fixed
+
+- **A ship adrift stays adrift when you rob or hail her (2026-10-30).** Robbing
+  her, or anything else that takes her off her timetable, used to hand her a
+  working drive: she would run like any other trader.
+  - Now she keeps her dead tank. She coasts under gravity with her slow tumble
+    (`Sim.steerNpc`, `spec.adrift` from `Combat.liftTrader`), and stays on the
+    distress band, her beacon wherever she drifts.
+  - Passing her mass works on her where she actually is, and gives her a drive
+    again.
+  - "Lock her up" finds her by the right id.
+  - Asking her aboard gets *"We would, if we could make way. Pass us some mass
+    and ask again."*
+  - The comms header no longer reads "0 m out" under a distress call or a
+    traffic-control frequency.
+  - **Seen in the game** (`Claude outputs/probe-rescue.js`, muted). At Mirven,
+    the Mirefast Drover's tank let go:
+    - her call was on the band and her transponder checked out;
+    - one pass from a hold short of hydrogen left her needing 0.8 t more;
+    - a second pass finished it, she paid 1,370 cr, her call came off the
+      band, and she lit up and flew off;
+    - the Tallow Runner, robbed while adrift, stayed exactly where her rail's
+      drift has her (0.000 km) with her throttle at zero, still calling.
+  - `upkeep.test.js` (58 checks) covers: asked aboard, robbed, still calling,
+    and fuelled while lifted.
+
+- **Container lettering read backwards (2026-10-30).** Astra: *"'Hydrogen
+  Fuel' letters are backwards, ensure lettering always reads correctly no
+  matter what side of the hull the cargo is on."*
+  - The cause: the deck's frame is left-handed as the game draws it (your
+    right is up × forward). The containers were laid out in the design sheet's
+    right-handed axes, so every strip and pictogram came out mirrored.
+  - The fix: `cargokit.js faceFrame` now runs each face's reading direction
+    along normal × up. A container's turn is a pure rotation, so this fixes
+    both walls of the hold at once.
+  - Checked in the game on a container on each wall, and by a test that holds
+    every face (front, side, lid) on both walls against the walker's own
+    right.
+
+- **Her hold, her screens, her crates (2026-10-30).** Astra: *"widen the
+  hold, and make sure that the panels on the ship we're boarding display
+  that ship's information. Make sure that the boxes in the hold are
+  representative of what is actually in the hold."*
+  - **Widened.** A ship bigger than her hull's fitted length has her hold
+    widened to her own beam: measured against her model down the whole
+    bay, at floor and ceiling, a metre clear of her skin, the way
+    `tools/fit-hulls.js` measures rooms. The Pilgrim Barge's went from
+    about 4 m wide to 11.9 m. Extra rows of crates go inboard of the wall
+    rows, with a 1.8 m aisle kept clear down the middle.
+  - **Her screens show her.** Aboard her, her bridge displays were
+    drawing your credits, tanks and hold. They now show her: her name and
+    hull where your money was, her hull's tanks (full: the game does not
+    track an NPC's fuel), her manifest in her hold, against her hold's
+    real size. Her own aft screen no longer lists her as its nearest
+    contact. Your ship's screens are unchanged.
+  - **The crates are her cargo.** Every line of the manifest gets its
+    own stacks, at least one however small (two tonnes of medicine among
+    300 t of waste used to round away to nothing), and a stack holds only
+    one cargo. Facing a crate now says what is in it and how much
+    ("Radioactive waste · 20 t"); the stacks of a line add up to the
+    tonnes on the manifest. The hold fills from the door, as the old
+    comment always said, so a half-empty hold no longer looks like an
+    empty corridor from its door. Her hold's capacity grows with its
+    floor (a 108 m hauler holds about 7,000 t), so the stacks are true to
+    how full she is: the Pilgrim Barge's 78 t of waste is three stacks.
+  - `test/boarding.test.js`: the widened hold, every crate inside it,
+    every manifest line represented, the labels adding up, the bigger
+    capacity. 50 checks.
+- **A ship was far smaller inside than outside (2026-10-29).** Ships in
+  space are drawn at their route's size, 1.4 to 4.5 times their hull's
+  fitted length: the Pilgrim Barge is about 100 m long outside and was a
+  31 m ship once you were aboard. Astra: *"we'll increase the ship size
+  so that the hull interior makes sense"*, and, asked, each ship her own
+  size.
+  - A ship you board is as long inside as she is drawn outside. Her
+    cockpit sits at the same point of her model, and her hold (or, on a
+    small ship with no hold, her passage) runs on aft to fill the extra.
+    The Pilgrim Barge, drawn at 108 m, now has a 46 m hold.
+  - Her other rooms, her crew and her ramp are as before.
+  - Hulls you fly are unchanged.
+  - The ships-alongside layout and her hatch position use the same
+    length, so the tube still meets her ramp.
+  - `test/boarding.test.js`: every traffic hull at three times her length
+    has the same rooms, a longer hold, her cockpit scaled with her, and
+    nothing reaching further aft in her model than before.
+- **Ships met nose to nose, with a Talon half inside a hauler (2026-10-29).**
+  Astra: *"why are the ships coming together nose to nose?"* She aimed at
+  a point 30 m from your centre, kept her nose wherever her approach had
+  left it, and the tube ran centre to centre. Asked how they should lie,
+  Astra said *"it should be ship dependent"*, so now:
+  - **Two hulls of a size** (neither more than 1.6 times the other's
+    length) lie **belly to belly**: she comes in beneath you upside down
+    and the tube runs straight between the two ramps.
+  - **A big ship and a small one** lie **side by side**, level and facing
+    the same way, on your hatch's side. The tube drops out of her belly,
+    runs across underneath, and rises into yours.
+  - The gap comes from both hulls' shapes (`Render.hatchModel`: each
+    ramp's mouth on the belly, and the box each hull fills), so they
+    never overlap.
+  - She points where her drive pushes: at you on the way in, engines
+    first while braking, and turns to her final attitude in the last
+    300 m. The tube connects only when she is within 5 m of her place and
+    lying the right way.
+  - The tube is a metre in radius whatever its length (it used to fatten
+    with the gap).
+  - Measured by `tools/probe-tube.js`: a Talon and a 97 m waste hauler
+    side by side, 44 m of tube; a Meridian and a 108 m hauler belly to
+    belly, her up exactly opposite yours, 29.5 m of tube.
+- **Her drives burned flat out while she sat alongside (2026-10-29).** Once
+  joined she was still steering toward your pinned position from a frame
+  back, so she braked at full thrust every frame, which showed as lit
+  plumes and slowly took her off her orbit. Joined, she now just coasts
+  under gravity with her throttle at zero.
+- **Her master was asked "Does your captain owe me anything?"** She is
+  the captain. She is now asked "Do you owe me anything?" and answers for
+  herself.
+- **A ship asked alongside hovered about 1 km out (2026-10-29).** Astra:
+  *"it is still hovering out about 1km in distance."* Her steering ran
+  after your ship had already moved that frame, but she moved only after
+  steering, so she always settled one frame of travel ahead of her aim.
+  At 55 km/s and 60 fps that is 0.92 km. She now catches up to the same
+  moment first, then steers. The same ordering held you a frame behind
+  her once the tube was joined, so you are now pinned to her after she
+  has moved, not before. Measured: she closes from 7.7 km and the tube
+  joins at 30.0 m in 33 s, and holds there.
+- **The contacts box said a ship you asked aboard was "fleeing".** It
+  now says "coming alongside", "running her tube out", then "tube made
+  fast".
+- **The FLIGHT panel ran out of its frame.** RET was cut off by the left
+  edge, PRO ran into the fuel bars, and the thruster burn time ran off
+  the right. The burn rose is smaller, the bars start further right, and
+  each figure (light-years, burn time) is right-aligned against its label;
+  if a figure will not fit, it is dropped and the bar still shows it.
+- **Landing gear hung out through its own shut doors (2026-10-29).** Astra,
+  flying a Talon: *"there's something wrong with the landing gear doors."*
+  The doors closed flush, but every hull's legs stowed 0.2–0.6 m short of
+  folding away, so they poked down through the doors in flight.
+  - `render.js` now measures each leg's stow angle against the hull's own
+    belly over its bay, once per model: it turns the leg further the same
+    way until it is inside, or the other way round if that is the only
+    way it fits. Doors are left as they were.
+  - A new render test says nothing hangs below the belly with the gear up,
+    on every rigged hull.
+- **No way in showed on her belly (2026-10-29).** *"I don't see where there
+  could be a ramp to get in and out of the ship."*
+  - The ramp and its bay were only drawn once the airlock had been used
+    at least once. Your ship now has her airlock from the first frame.
+  - With the ramp up, the well was an open dark hole: the ramp stows at
+    deck height, above the skin. Two door leaves, painted the colour of
+    the skin they replace, now close it flush with the belly. They slide
+    apart in the first part of the ramp's travel.
+  - Hazard stripes round every ramp (*"we need to put hazard stripes
+    around the ramp ... around all ramps like it"*): a band about a
+    quarter-metre wide of yellow and black at 45°, on all four sides of
+    the opening, on every hull that has a ramp. It stays there with the
+    ramp down as well as up.
+- **Standing up in flight did nothing (2026-10-29).** *"standing up from my
+  station doesn't work."* O only worked docked or landed. Now it works in
+  flight too (not in hyperspace). Astra chose that the ship holds while
+  you are up:
+  - A pilot in your crew takes the helm and keeps whatever the autopilot
+    was doing. E at the seat (or at her, sitting in it) takes it back.
+  - With no pilot she coasts: the autopilots stand down, cruise drops out,
+    and the controls stay locked until you sit down again.
+  - Time compression drops to real time when you stand.
+  - The outer door stays sealed in flight.
+- **A ship's crew size came from a fraction (2026-10-28).**
+  `crewForShip` compared a route's `size` (a mass fraction, e.g. 0.09) to
+  'L' and 'M', so every ship in port was crewed like an S, with two
+  souls. It now takes the size letter from her hull: three for an M,
+  five for an L or XL. The concourse is a little busier for it.
+- **The hand working a berth stood in front of its hatch.** E facing the
+  hatch found the hand first, so you could talk to her crew but never
+  get aboard her. They stand two metres or more along the wall now.
+- **Her master refused to trade with you from his own deck** as "out of
+  transmitter range". A traffic contact is one frame's rail position,
+  and a moored ship rides her station round its orbit at tens of km/s,
+  so a contact held from the moment you boarded was a hundred km away
+  seconds later. Her contact is looked up fresh every time it's asked.
+
+- **The station vanished round a berthed ship, and the cutaway with it
+  (2026-10-26).** Astra: "what happened to our station cutaway for ships
+  which are inside stations?" The berths sit at or just past a station's
+  `radius` (Waypoint Dock: r 4.18 km, berth 4.36 km from the centre), so
+  the "camera inside the bounding sphere" test failed. The centre then fell
+  behind the eye and the whole station was culled: the ship sat alone in
+  black space, and the cutaway had nothing to cut. The station the hull is
+  in (`enclosedPort()`) now always counts as enclosing (`main.js`, the body
+  list in the world draw).
+  - **The cut edge is a double orange line with black between** (Astra: "a
+    less busy, but still nicely convincing double orange line, with black
+    in between them"). The capped band is split in thirds: orange, black,
+    orange (`gl.js` FRAG_MESH). The band is skipped where the cut runs
+    *along* a surface, like a floor lying along the line of sight, so it
+    doesn't leave long orange slivers converging on the ship. That check
+    came from the unmerged `cutaway-test` build.
+
+- **A landed ship couldn't take off (2026-10-26).** `landed` was never
+  cleared, so throttling up did nothing. Now, once landed, she settles
+  onto the surface (upright, gear on the ground, turning with the world).
+  She lifts off when the vertical thrust beats gravity by 2%, as long as
+  nobody is walking aboard. She won't lift off with the ramp down: "The
+  ramp is not up".
 
 - **Work that had been committed went missing from the working copy
   (2026-10-19).** Two lines of work split on 2026-10-15: Driftwood on one
@@ -1797,6 +2459,9 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Saves
 
+- `notes` (string) and `journal` (array) are new, and additive. An older save
+  loads with an empty notepad and an empty log; nothing is invented for it.
+
 - **Careers load unchanged.**
   - A Crawler's livery is new and optional (`livery`, `liveryFaction` on
     the ship and on fleet records); an older career's Crawler loads
@@ -1806,6 +2471,12 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
   - The people (2026-10-25) are not saved either. Who is where is worked
     out from the roster, the port and the clock, so a load finds the same
     people at the same posts without storing any of them.
+
+  - The airlock (2026-10-26) is not saved either: a load finds her
+    sealed, ramp up. A career saved while landed loads landed and settles
+    onto the surface as before.
+  - Who you have paid and who you have refused (`tithe`, by system) is
+    saved. An older career owes nobody anything.
 
 ---
 

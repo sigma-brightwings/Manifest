@@ -164,6 +164,8 @@ require('../src/hulls.js');
 /* The weather field. gl.js is not in this harness, but screens and the
  * comms channel ask Weather what a port's sky is doing. */
 require('../src/weather.js');
+/* The captain's notes and log (F5 NOTES). */
+require('../src/journal.js');
 require('../src/render.js');
 require('../src/screens.js');
 require('../src/main.js');
@@ -1913,6 +1915,71 @@ console.log('--- the guns panel ---');
   frames(2);
 })();
 
+/* F5 NOTES (journal.js, 2026-10-30): a fourth tab. A notepad that takes
+ * the whole keyboard while you write in it — a "7" in a note must not flip
+ * an instrument page — a log the game keeps, and who owes whom. */
+(function () {
+  newFlying();
+  var keydown = listeners.keydown[0];
+  function press(k, extra) {
+    var e = { key: k, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false, preventDefault: function () {} };
+    for (var x in (extra || {})) e[x] = extra[x];
+    keydown(e);
+  }
+  var beforePanel = G.panel, beforeTab = G.shipTab;
+  G.viewMode = 'cockpit';
+  press('F5');
+  var shipPanel = G.panel;
+  G.shipTab = 'panels';
+  press('Tab');
+  check('Tab goes on from PANELS to NOTES', G.shipTab === 'notes', G.shipTab);
+  var mark = drawn.texts.length;
+  frame();
+  var texts = drawn.texts.slice(mark);
+  check('the notes tab draws the notepad, the debts and the log',
+        ['NOTEPAD', 'WHO OWES WHOM', 'SHIP\'S LOG', 'EXPORT'].every(function (s) { return texts.indexOf(s) !== -1; }),
+        texts.slice(0, 14).join(' | '));
+  check('and renders without error', errorsSince(mark).length === 0, errorsSince(mark)[0]);
+
+  /* Del is the inventory's jettison. On a tab with no inventory on it, it
+   * must do nothing at all. */
+  G.ship.cargo.water = 5;
+  G.invSel = 0;
+  press('Delete');
+  check('Del on the notes tab throws nothing out of the hold', G.ship.cargo.water === 5);
+  delete G.ship.cargo.water;
+
+  G.notes = '';
+  press('Enter');
+  check('Enter starts writing', W.Screens.writingNotes());
+  var mfd = G.mfdPage;
+  'Fuel at Kesh 7'.split('').forEach(function (ch) { press(ch); });
+  press('Enter'); press('x');
+  check('what you type is the note, newline and all', G.notes === 'Fuel at Kesh 7\nx', JSON.stringify(G.notes));
+  check('and the 7 did not go to the instruments', G.panel === shipPanel && G.mfdPage === mfd && G.shipTab === 'notes');
+  var m2 = drawn.texts.length;
+  frame();
+  check('the note is on the page', drawn.texts.slice(m2).indexOf('Fuel at Kesh 7') !== -1);
+  press('Escape');
+  check('Esc stops writing, keeps the note, and stays on the screen',
+        !W.Screens.writingNotes() && G.notes === 'Fuel at Kesh 7\nx' && G.panel === shipPanel);
+
+  W.Journal.add(G, 'rescue', 'Fuelled the Test Barge');
+  var m3 = drawn.texts.length;
+  frame();
+  var t3 = drawn.texts.slice(m3);
+  check('the log shows what the game wrote down', t3.indexOf('RESCUE') !== -1 &&
+        t3.some(function (t) { return /Fuelled the Test Barge/.test(t); }), t3.join(' | ').slice(0, 200));
+  check('and still draws cleanly', errorsSince(m3).length === 0, errorsSince(m3)[0]);
+
+  press('Tab');
+  check('and Tab comes round to STATUS again', G.shipTab === 'status');
+  G.notes = ''; G.journal = [];
+  G.panel = beforePanel;
+  G.shipTab = beforeTab;
+  frames(2);
+})();
+
 /* The landing gear, which for a long time was three legs welded to the
  * belly of every ship in the game. The models were authored gear-down and
  * the converter baked every node transform into the vertices, so the legs
@@ -1941,7 +2008,7 @@ console.log('--- the landing gear ---');
    * right on one model and wrong on another is exactly the failure this
    * catches, and it is invisible in a screenshot of the ship you happened
    * to be flying. */
-  var badAxis = [], badStow = [], noLift = [], noFold = [], badDoor = [];
+  var badAxis = [], badStow = [], noLift = [], noFold = [], badDoor = [], hangOut = [];
   rigged.forEach(function (id) {
     var m = R.libHull(id);
     m.gear.forEach(function (p) {
@@ -1972,7 +2039,26 @@ console.log('--- the landing gear ---');
                                                 ' vs bay ' + bay.toFixed(3));
     if (!(up.lo[1] > down.lo[1] + 0.005)) noFold.push(id + ' ' + down.lo[1].toFixed(3) +
                                                      ' -> ' + up.lo[1].toFixed(3));
+
+    /* GEAR UP MEANS GONE (2026-10-29). Astra, flying a Talon: "there's
+     * something wrong with the landing gear doors" — every leg stowed 0.2
+     * to 0.6 m below the belly, through its own shut doors. The skin is the
+     * lowest hull face over the ground the gear covers either way; nothing
+     * stowed may hang below it by more than a whisker (0.002 of the hull's
+     * length — 5 cm on a Talon). */
+    var x0 = Math.min(down.lo[0], up.lo[0]), x1 = Math.max(down.hi[0], up.hi[0]);
+    var z0 = Math.min(down.lo[2], up.lo[2]), z1 = Math.max(down.hi[2], up.hi[2]);
+    var skin = Infinity;
+    m.f.forEach(function (f) {
+      var c = [0, 0, 0];
+      f.forEach(function (ix) { for (var k = 0; k < 3; k++) c[k] += m.v[ix][k] / f.length; });
+      if (c[0] >= x0 && c[0] <= x1 && c[2] >= z0 && c[2] <= z1 && c[1] < skin) skin = c[1];
+    });
+    if (isFinite(skin) && up.lo[1] < skin - 0.002) hangOut.push(id + ' ' + up.lo[1].toFixed(4) +
+                                                                ' under skin ' + skin.toFixed(4));
   });
+  check('gear up, nothing hangs out under the belly', hangOut.length === 0,
+        hangOut.slice(0, 3).join(' | '));
   check('every hinge axis is a unit vector', badAxis.length === 0, badAxis.join(' '));
   check('and every hinge actually turns', badStow.length === 0, badStow.slice(0, 4).join(' '));
   check('deployed, every leg hangs below its own bay', noLift.length === 0,

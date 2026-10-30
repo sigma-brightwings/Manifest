@@ -76,7 +76,7 @@ section('berthing times match the timetable');
     [r.from, r.to].forEach(function (X) {
       for (var k = 0; k < 6; k++) {
         var t = r.t0 + (k * 0.37 + i * 0.11) * r.period;
-        var bt = Rum.berthTime(r, X, t);
+        var bt = Rum.berthTime(r, X, t, sys);
         var st = Sim.trafficState(r, sys, bt + 1);
         n++;
         if (bt < t || st.phase !== 'moored' || !st.to || st.to.id !== X) bad++;

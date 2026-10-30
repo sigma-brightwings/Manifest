@@ -1020,6 +1020,14 @@
     if (global.Sim) global.Sim.refreshShip(G.ship);
   }
 
+  /* The captain's log on the F5 NOTES tab (journal.js), when it is loaded.
+   * Required directly under node, where the tests may not have loaded it. */
+  function jot(G, kind, text) {
+    var J = global.Journal;
+    if (!J && typeof require !== 'undefined') { try { J = require('./journal.js'); } catch (e) { J = null; } }
+    if (J && G) J.add(G, kind, text);
+  }
+
   function completeAtDock(G, port, sys, t, hooks) {
     var Sim = global.Sim;
     passengersWalkOff(G, port, hooks);
@@ -1048,6 +1056,7 @@
           /* Somebody did not arrive. There is no partial payment for that
            * and there should not be. */
           bumpStanding(G, m.faction, -STANDING_LOSS * 2);
+          jot(G, 'mission', 'Passage failed at ' + port.name + ': ' + ((m.souls || 0) - aboard) + ' of ' + m.souls + ' did not arrive');
           if (hooks && hooks.say) {
             hooks.say('PASSAGE FAILED — ' + ((m.souls || 0) - aboard) +
                       ' of ' + m.souls + ' did not arrive. No fee.', 8);
@@ -1057,6 +1066,7 @@
         }
         var cut = passageCut(G, m);
         G.ship.credits += cut.pay;
+        jot(G, 'mission', 'Passage to ' + port.name + ' done: ' + cut.text);
         bumpStanding(G, m.faction, cut.standing);
         if (hooks && hooks.say) hooks.say(cut.text, 6);
         if (hooks && hooks.sound) hooks.sound(cut.pay > 0 ? 'pay' : 'warn');
@@ -1079,6 +1089,9 @@
       bumpStanding(G, m.faction, STANDING_WIN[m.type] || 3);
       (G.doneMissions = G.doneMissions || {})[m.id] = true;
       list.splice(i, 1);
+      jot(G, 'mission', 'Contract complete at ' + port.name + ': ' + m.tonnes + ' t of ' +
+          ((global.Economy && global.Economy.BY_ID && global.Economy.BY_ID[m.cid] && global.Economy.BY_ID[m.cid].name) || m.cid) +
+          ', ' + m.pay + ' cr');
       if (hooks && hooks.say) hooks.say('Contract complete — ' + m.pay + ' cr', 5);
       if (hooks && hooks.sound) hooks.sound('pay');
       /* A campaign chapter settling is what casts the next one — see

@@ -71,6 +71,42 @@
   var PASSAGE_LEN = { S: 2.4, M: 3.8, L: 5.6, XL: 8.0 };
   var LOCK_HW = 1.2, LOCK_D = 2.4, LOCK_H = 2.3;
   var HATCH_HW = 0.55, HATCH_H = 1.95;
+
+  /* ---- the way out (2026-10-26) ------------------------------------------
+   * Astra: "create a set of stairs/ramp which can be opened from both
+   * inside and outside the ship and which allows travel from inside to
+   * outside of the ship", then "ensure that all models have a pathway to
+   * the exterior which will seal against vacuum", and on the shape: "climb
+   * into them from the ramp, up and into a room which seals the ramp and
+   * then perpendicular to the ramp is another airlock door which opens into
+   * the main interior of the ship." Asked, she chose a BELLY RAMP on every
+   * hull, the two doors NEVER open together (every trip is a cycle), and
+   * a suit put on in the airlock wherever the air outside is not air.
+   *
+   * So the airlock is a room off the passage's port side. Its inner door is
+   * in the passage wall — a side door, across the ship — and the ramp runs
+   * fore and aft in its floor: perpendicular, as she drew it. The ramp is
+   * hinged at the landing's aft edge; raised, it IS the floor aft of the
+   * landing and the seal under it; lowered, its far end drops through her
+   * belly to the ground. `rampDrop` (opts) is how far the deck is above the
+   * ground with her gear down, from her fitted model (render.js HULL_FIT);
+   * a ship too tall for any ramp a room can hold gets a lift platform that
+   * lowers straight down instead. */
+  var LOCK_W = 2.4;                        // across the ship
+  var LOCK_LAND = 1.6;                     // the landing: inner door to the ramp's head
+  var RAMP_HW = { S: 0.6, M: 0.75, L: 0.85, XL: 1.0 };
+  var RAMP_SLOPE = 30 * Math.PI / 180, STAIR_SLOPE = 42 * Math.PI / 180;
+  var RAMP_MAX = 10.0;                     // m of ramp a room is allowed to hold
+  var LIFT_LEN = 2.6;                      // m, a lift platform, fore and aft
+  function rampShape(drop, size) {
+    drop = drop > 0 ? drop : 2.6;
+    var hw = RAMP_HW[size] || 0.75;
+    var len = drop / Math.sin(RAMP_SLOPE);
+    if (len <= RAMP_MAX) return { mode: 'ramp', len: Math.max(1.6, len), angle: Math.asin(Math.min(1, drop / Math.max(1.6, len))), drop: drop, hw: hw };
+    len = drop / Math.sin(STAIR_SLOPE);
+    if (len <= RAMP_MAX) return { mode: 'stair', len: len, angle: STAIR_SLOPE, drop: drop, hw: hw };
+    return { mode: 'lift', len: LIFT_LEN, angle: 0, drop: drop, hw: Math.max(hw, 1.0) };
+  }
   /* How near a sliding door has to be before it opens for you, and how long
    * it takes. Wall-clock seconds, like the station doors. */
   var DOOR_REACH = 1.7, DOOR_TIME = 0.7;
@@ -139,6 +175,12 @@
   var ENGINE_H = 2.7, TURRET_W = 2.2, TURRET_SEAT = 1.2, TURRET_MAX = 3;
   var CARGO = { M: [3.4, 4.0], L: [4.2, 6.0], XL: [5.2, 8.0] };           // width, length
   var CARGO_H = 2.9;
+  /* The containers (cargokit.js) are a metre cube give or take, drawn at
+   * the sheet's own size (the secure case's handles take it to 1.08 m, in
+   * a 1.1 m slot); two of them stand 2.1 m, and a third would be into the
+   * lights at 2.9. So a stack is two high now, not three (the 0.7 m boxes
+   * before them went three), and a full hold is two to a slot. */
+  var CRATE_SCALE = 1, CRATE_GAP = 0.02, CRATE_STACK = 2;
   var DOME_R = 0.42;                       // the turret's glass, over the gunner's head
 
   /* ---- decks, the lift and the tram (2026-10-25) ----------------------------
@@ -321,11 +363,28 @@
     var tLen = gunners ? 0.6 + gunners * TURRET_SEAT + 0.2 : 0;
     /* On a decked hull the engine room is far aft, down at the junction. */
     var med = big ? MED[size] : null, eng = big && !decked ? ENGINE[size] : null;
-    var portNeed = (crewed ? qLen : 0) + (tLen ? SIDE_GAP + WALL_T + tLen : 0);
+    /* The airlock is the last room down the port side, on every hull. */
+    var rs = rampShape(opts.rampDrop, size);
+    /* The room is sized for `rampDrop` (hullfit's, rounded up a quarter
+     * metre so the fit tool and the game build the same room); the ramp is
+     * angled for her true height, `rampReach`, so its foot is on the ground
+     * and not a hand's width under it. */
+    if (opts.rampReach > 0 && rs.mode !== 'lift') {
+      rs.angle = Math.asin(Math.min(1, opts.rampReach / rs.len));
+      rs.drop = opts.rampReach;
+    } else if (opts.rampReach > 0) rs.drop = opts.rampReach;
+    var lockLen = LOCK_LAND + rs.len + 0.25;
+    var portNeed = (crewed ? qLen : 0) + (tLen ? SIDE_GAP + WALL_T + tLen : 0) + SIDE_GAP + WALL_T + lockLen;
     var stbdNeed = big ? med[1] + (eng ? SIDE_GAP + WALL_T + eng[1] : 0) : 0;
     var len = PASSAGE_LEN[size] * (0.9 + 0.2 * rng.next());
     if (crewed) len = Math.max(len, qLen + 0.6);
-    if (big) len = Math.max(len, portNeed + 0.6, stbdNeed + 0.6);
+    len = Math.max(len, portNeed + 0.6);
+    if (big) len = Math.max(len, stbdNeed + 0.6);
+    /* A ship bigger than her hull's fitted length (render.js shipInterior,
+     * 2026-10-29) is run on aft: her hold takes the extra, or with no hold
+     * her passage does. No draw is taken for it. */
+    var stretch = opts.stretch > 0 ? opts.stretch : 0;
+    if (!big) len += stretch;
     /* The lift (decked hulls): a lobby aft of the bridge door, then the
      * car; the main deck's passage starts aft of the car, a deck down. */
     var lobby = null, cars = {}, carZ = null;
@@ -337,8 +396,6 @@
     }
     var p0 = p1 - len;
     var passage = room('passage', 'passage', -PASSAGE_HW, PASSAGE_HW, p0, p1, PASSAGE_H, 'Passage');
-    var l1 = p0 - WALL_T, l0 = l1 - LOCK_D;
-    var lock = room('airlock', 'airlock', -LOCK_HW, LOCK_HW, l0, l1, LOCK_H, 'Airlock');
     /* The bulkhead has thickness, and the plan's rooms are boxes that must
      * meet at a shared wall for a door to join them. So each door's box is
      * stretched across the wall's thickness: from the cockpit's aft wall to
@@ -346,8 +403,6 @@
     var dBridge = slider('bridge', deck || bridge, lobby || passage, doorFront, 'Bridge door');
     var bAft = lobby ? lobby.z1 : p1;
     dBridge.z0 = bAft - 0.8; dBridge.z1 = doorFront + 0.8; dBridge.wall = [bAft, doorFront];
-    var dLock = slider('lock', passage, lock, p0, 'Airlock door');
-    dLock.z0 = l1 - 0.8; dLock.z1 = p0 + 0.8; dLock.wall = [l1, p0];
     /* The helm's arch: the old doorway, always open. */
     if (deck) {
       doors.push({ id: 'helm', a: bridge.id, b: deck.id, axis: 'z', at: geom.bulkZ, w: ARCH_HW * 2, h: DOOR_H,
@@ -391,12 +446,29 @@
       medbay = sideRoom('medbay', 'medbay', 1, zTop, med[0], med[1], QUARTERS_H, 'Medbay', 'Medbay door');
       if (eng) engine = sideRoom('engine', 'engine', 1, medbay.z0 - SIDE_GAP - WALL_T, eng[0], eng[1], ENGINE_H,
                                  'Engine room', 'Engine room door');
-      /* The cargo bay, aft of the airlock: cargo comes aboard where you do. */
-      var cz1 = l0 - WALL_T, cw = Math.max(CARGO[size][0], 2 * LOCK_HW) / 2;
-      cargo = room('cargo', 'cargo', -cw, cw, cz1 - CARGO[size][1], cz1, CARGO_H, 'Cargo bay');
-      var dCargo = slider('cargo', lock, cargo, l0, 'Cargo door');
-      dCargo.z0 = cz1 - 0.8; dCargo.z1 = l0 + 0.8; dCargo.wall = [cz1, l0];
+      /* The cargo bay, off the passage's aft end (2026-10-26: it was aft of
+       * the airlock, which now stands beside the passage). */
+      /* `cargoHW`: a hold widened to her own beam (render.js shipInterior,
+       * a ship bigger than her hull's fitted length). */
+      var cz1 = p0 - WALL_T, cw = Math.max(Math.max(CARGO[size][0], 2 * LOCK_HW) / 2, opts.cargoHW > 0 ? opts.cargoHW : 0);
+      cargo = room('cargo', 'cargo', -cw, cw, cz1 - CARGO[size][1] - stretch, cz1, CARGO_H, 'Cargo bay');
+      var dCargo = slider('cargo', passage, cargo, p0, 'Cargo door');
+      dCargo.z0 = cz1 - 0.8; dCargo.z1 = p0 + 0.8; dCargo.wall = [cz1, p0];
     }
+    /* THE AIRLOCK, last down the port side: the inner door in the passage
+     * wall at its forward end, the landing inside it, the ramp aft of that
+     * in the floor. Its door is `lock` and it SEALS: airlock.js holds it
+     * shut whenever the room is not at the ship's own pressure. */
+    var portTop = turret ? turret.z0 - SIDE_GAP - WALL_T
+                : quarters ? quarters.z0 - SIDE_GAP - WALL_T : p1 - SIDE_GAP;
+    var lock = sideRoom('airlock', 'airlock', -1, portTop, LOCK_W, lockLen, LOCK_H, 'Airlock', 'Airlock door');
+    var dLock = doors[doors.length - 1];
+    dLock.id = 'lock'; dLock.seal = true;
+    var hinge = lock.z1 - LOCK_LAND, rxc = (lock.x0 + lock.x1) / 2;
+    var rampSpec = { room: lock.id, xc: rxc, hw: rs.hw, x0: rxc - rs.hw, x1: rxc + rs.hw,
+                     hinge: hinge, len: rs.len, foot: hinge - rs.len, angle: rs.angle, mode: rs.mode, drop: rs.drop,
+                     /* Where it lands with her gear down: run along the floor below. */
+                     run: rs.mode === 'lift' ? 0 : rs.len * Math.cos(rs.angle) };
 
     /* Things to use. */
     function item(kind, x, z, label, extra) {
@@ -411,9 +483,12 @@
     item('dash', 0, geom.dashNearZ, '', { counter: [-geom.dashHW, geom.dashNearZ - 0.02, geom.dashHW, geom.frontZ], silent: true });
     item('console', -geom.consoleX, geom.consoleZ0, '', { counter: [-geom.sideX, geom.consoleZ0, -geom.consoleX, geom.frontZ], silent: true });
     item('console', geom.consoleX, geom.consoleZ0, '', { counter: [geom.consoleX, geom.consoleZ0, geom.sideX, geom.frontZ], silent: true });
-    /* The outer hatch is on the port side of the airlock. */
+    /* The airlock's controls on its outboard wall at the landing (kind
+     * `hatch`, as the old outer hatch was: whatever asked for the way out
+     * still finds it), and the ramp's head in the floor aft of them. */
     itemDeck = 'main';
-    item('hatch', -LOCK_HW + 0.35, (l0 + l1) / 2, 'Airlock hatch', { wallX: -LOCK_HW });
+    item('hatch', lock.x0 + 0.3, dLock.zc, 'Airlock controls', { wallX: lock.x0 });
+    item('ramp', rxc, hinge - 0.35, 'Ramp', { floor: true });
 
     /* THE STATIONS, down the deck's walls from the arch aft. Each is a
      * console against the wall and a seat facing it; the label says whose
@@ -500,17 +575,148 @@
            counter: [ecx0, engine.z0, ecx1, engine.z0 + 0.55] });
     }
     if (cargo) {
-      /* Crates in stacks down both walls, one to three high, the aisle
-       * clear; the manifest terminal by the door. */
+      /* Crates in stacks down both walls, one or two high (CRATE_STACK),
+       * the aisle clear; the manifest terminal by the door. */
       for (var cz = cargo.z0 + 0.3; cz + 1.1 <= cargo.z1 - 1.3; cz += 1.3) {
         [-1, 1].forEach(function (sd) {
-          if (rng2.next() < 0.15) return;
+          /* Every draw is still taken, loaded hold or not, so the rest of
+           * this stream decides what it always decided. */
+          var skip = rng2.next() < 0.15;
           var x0c = sd < 0 ? cargo.x0 + 0.1 : cargo.x1 - 1.2, cr = { x0: x0c, x1: x0c + 1.1, z0: cz, z1: cz + 1.1,
-               high: 1 + Math.floor(rng2.next() * 3), tint: rng2.next() };
-          crates.push(cr);
-          item('crate', x0c + 0.55, cz + 0.55, '', { silent: true, counter: [cr.x0, cr.z0, cr.x1, cr.z1] });
+               high: Math.min(CRATE_STACK, 1 + Math.floor(rng2.next() * 3)), tint: rng2.next() };
+          if (!skip || opts.load) crates.push(cr);
         });
       }
+      /* A WIDENED HOLD (2026-10-29) has room for more than two walls of
+       * crates: further rows inboard of them, a 1.8 m aisle kept clear down
+       * the middle. Their own stream, so a hold of the usual width draws
+       * nothing new and is the hold it always was. */
+      var aisle = 0.9, inner = [];
+      for (var ix0 = cargo.x0 + 1.3; ix0 + 1.1 <= -aisle; ix0 += 1.3) inner.push(ix0);
+      for (var ix1 = cargo.x1 - 1.2 - 1.3; ix1 >= aisle; ix1 -= 1.3) inner.push(ix1);
+      if (inner.length && opts.cargoHW > 0) {
+        var rng3 = stream('shipdeck3|' + (opts.key || opts.hullId || ''));
+        for (var cz2 = cargo.z0 + 0.3; cz2 + 1.1 <= cargo.z1 - 1.3; cz2 += 1.3) {
+          inner.forEach(function (xi) {
+            var skip2 = rng3.next() < 0.15;
+            var cr2 = { x0: xi, x1: xi + 1.1, z0: cz2, z1: cz2 + 1.1, high: Math.min(CRATE_STACK, 1 + Math.floor(rng3.next() * 3)), tint: rng3.next() };
+            if (!skip2 || opts.load) crates.push(cr2);
+          });
+        }
+      }
+      /* WHAT IS IN THE HOLD, NOT A RANDOM PILE (2026-10-28). The crates were
+       * a seeded scatter, the same whatever she carried — "cargo crates are
+       * random, they don't reflect what's actually in your hold". With
+       * `opts.load` ({ fill 0..1, lines: [{ cid, t }] }) every slot down
+       * both walls is a stack of up to CRATE_STACK, filled from the door aft in
+       * proportion to how full she is, and each crate is tinted by what is
+       * in it, so a hold of one cargo reads as one colour and a mixed one as
+       * bands of several. Without it (no ship to ask), the old scatter. */
+      if (opts.load) {
+        /* FROM THE DOOR (2026-10-29). The comment above always said so; the
+         * slots were filled from the far end, which left a half-empty hold
+         * reading as an empty corridor from its door. Nearest the door
+         * first, the wall rows before the inboard ones. */
+        crates.sort(function (a, b) {
+          return (b.z1 - a.z1) || (Math.abs(b.x0 + b.x1) - Math.abs(a.x0 + a.x1));
+        });
+        var units = crates.length * CRATE_STACK, full = Math.round(units * Math.max(0, Math.min(1, opts.load.fill || 0)));
+        var lines = (opts.load.lines || []).filter(function (l) { return l.t > 0; });
+        var total = lines.reduce(function (a, l) { return a + l.t; }, 0) || 1;
+        /* EVERY LINE OF HER MANIFEST GETS CRATES (2026-10-29: "make sure that
+         * the boxes in the hold are representative of what is actually in
+         * the hold"). Each line its share of the filled units, at least one
+         * however small, and its own stacks: a stack holds one cargo, so a
+         * crate of medicine is never painted the colour of the ore beside
+         * it, and a few tonnes of it are never rounded away. */
+        if (lines.length && full < lines.length) full = Math.min(units, lines.length);
+        var want = lines.map(function (l) { return Math.max(1, Math.round(full * l.t / total)); });
+        var over = want.reduce(function (a, u) { return a + u; }, 0) - full;
+        for (var wi = 0; over > 0 && wi < want.length * 4; wi++) {
+          var most = want.indexOf(Math.max.apply(null, want));
+          if (want[most] > 1) { want[most]--; over--; } else break;
+        }
+        /* Every line starts its own stack, so a line's odd last unit costs a
+         * whole slot. Near full, those can add up to more slots than the
+         * hold has, and the last line would run out of crates and its label
+         * short of its tonnes; take units off the biggest line until the
+         * stacks fit (2026-10-30, when stacks went from three to two). */
+        var slotsFor = function () {
+          return want.reduce(function (a, u) { return a + Math.ceil(u / CRATE_STACK); }, 0);
+        };
+        for (var wj = 0; slotsFor() > crates.length && wj < units; wj++) {
+          var most2 = want.indexOf(Math.max.apply(null, want));
+          if (want[most2] > 1) want[most2]--; else break;
+        }
+        var ci = 0, unitT = opts.load.cap > 0 ? opts.load.cap / units : 0;
+        crates.forEach(function (cr) { cr.high = 0; cr.levels = []; });
+        if (lines.length <= crates.length) {
+          lines.forEach(function (l, li) {
+            var left = want[li];
+            while (left > 0 && ci < crates.length) {
+              var cr = crates[ci++], h = Math.min(CRATE_STACK, left);
+              cr.high = h; left -= h;
+              cr.cid = l.cid; cr.tint = (hash('crate|' + l.cid) % 997) / 997;
+              /* What this stack holds, in the line's own tonnes. */
+              cr.tonnes = l.t * h / want[li];
+              for (var lv = 0; lv < h; lv++) cr.levels.push({ cid: l.cid, t: l.t / want[li] });
+            }
+          });
+        } else {
+          /* MORE CARGOES THAN STACKS (2026-10-30). A small hold — a Mule's
+           * has two slots — with a manifest of nine lines could only ever
+           * show two of them, one container each. Each container says what
+           * is in it now, so a stack need not be one cargo: here every
+           * container is its own line, the biggest lines first, as many as
+           * the hold has room for, two to a stack. What does not fit is
+           * still on the manifest terminal by the door. */
+          var order = lines.map(function (l, i) { return i; })
+            .sort(function (a, b) { return lines[b].t - lines[a].t; });
+          var budget = Math.min(units, Math.max(full, lines.length));
+          var per = order.map(function () { return 1; });
+          var spare = budget - per.length;
+          if (spare < 0) { order = order.slice(0, budget); per = per.slice(0, budget); spare = 0; }
+          /* The rest of the budget to the biggest lines, by size. */
+          var totT = order.reduce(function (a, i) { return a + lines[i].t; }, 0) || 1;
+          order.forEach(function (i, k) {
+            var extra = Math.min(spare, Math.floor(spare * lines[i].t / totT));
+            per[k] += extra;
+          });
+          var used = per.reduce(function (a, u) { return a + u; }, 0);
+          for (var k2 = 0; used < budget && k2 < per.length; k2++, used++) per[k2]++;
+          var slot = 0;
+          order.forEach(function (i, k) {
+            for (var u = 0; u < per[k] && slot < units; u++, slot++) {
+              var cr2 = crates[Math.floor(slot / CRATE_STACK)];
+              cr2.levels.push({ cid: lines[i].cid, t: lines[i].t / per[k] });
+              cr2.high = cr2.levels.length;
+            }
+          });
+          crates.forEach(function (cr3) {
+            if (!cr3.levels.length) return;
+            cr3.cid = cr3.levels[0].cid; cr3.tint = (hash('crate|' + cr3.cid) % 997) / 997;
+            cr3.tonnes = cr3.levels.reduce(function (a, v) { return a + v.t; }, 0);
+            cr3.mixed = cr3.levels.some(function (v) { return v.cid !== cr3.cid; });
+          });
+        }
+        crates = crates.filter(function (cr) { return cr.high > 0; });
+        if (!unitT) crates.forEach(function (cr) { delete cr.tonnes; });
+      }
+      /* A crate with a known cargo says what it is when you face it. */
+      var ECO = global.Economy, nameOf = function (cid) {
+        var c = ECO && ECO.BY_ID ? ECO.BY_ID[cid] : null;
+        return c ? c.name : cid;
+      };
+      crates.forEach(function (cr) {
+        /* A tenth of a tonne under a hundred: with stacks of two there are
+         * more of them, and whole tonnes each added up to five short of a
+         * 300 t line. */
+        var tFmt = function (t) { return (t >= 100 ? Math.round(t) : t.toFixed(1)) + ' t'; };
+        var lbl = !cr.cid ? ''
+          : cr.mixed ? cr.levels.map(function (v) { return nameOf(v.cid) + (unitT ? ' ' + tFmt(v.t) : ''); }).join('  /  ')
+          : nameOf(cr.cid) + (cr.tonnes ? '  ·  ' + tFmt(cr.tonnes) : '');
+        item('crate', cr.x0 + 0.55, cr.z0 + 0.55, lbl, { silent: !lbl, counter: [cr.x0, cr.z0, cr.x1, cr.z1], cid: cr.cid || null });
+      });
       item('cargo', cargo.x1 - 0.35, cargo.z1 - 0.25, 'Cargo manifest', { counter: [cargo.x1 - 0.6, cargo.z1 - 0.4, cargo.x1, cargo.z1] });
     }
     itemDeck = 'bridge';
@@ -636,7 +842,9 @@
      * the hatch, facing forward up the passage. */
     var bay = (SEAT[1] - 0.30 + geom.bulkZ + 0.30) / 2;
     var spawn = { x: 0, z: bay, yaw: Math.PI };
-    var aboard = { x: -LOCK_HW + 0.9, z: (l0 + l1) / 2, yaw: 0 };
+    /* Coming aboard you are on the airlock's landing, facing its inner
+     * door across the ship. */
+    var aboard = { x: rxc, z: hinge + 0.6, yaw: Math.PI / 2 };
 
     /* The first three rooms are always cockpit, passage, airlock (the old
      * plan's order, which callers index); the bridge deck and quarters
@@ -668,7 +876,8 @@
       rooms: rooms, doors: doors, items: items, spawn: spawn, aboard: aboard,
       floorY: geom.floorY, k: k, bay: bay, size: size,
       stations: stations, bunks: bunks, bunkAt: bunkAt, sides: sides,
-      turrets: turrets, beds: beds, crates: crates, drive: drive, second: second, medkit: medkit
+      turrets: turrets, beds: beds, crates: crates, drive: drive, second: second, medkit: medkit,
+      ramp: rampSpec
     };
     if (decked) {
       /* A walk.js plan per deck: the same objects, filtered, with that
@@ -706,7 +915,9 @@
       var cx = d.axis === 'x' ? (d.wall[0] + d.wall[1]) / 2 : 0;
       var cz = d.axis === 'x' ? d.zc : (d.wall ? (d.wall[0] + d.wall[1]) / 2 : d.at);
       var near = w ? Math.hypot(w.x - cx, w.z - cz) < DOOR_REACH : false;
-      var want = (near || hold[d.id]) ? 1 : 0;
+      /* A sealing door (the airlock's inner one) held by airlock.js stays
+       * shut whoever is at it: nobody opens it onto the outside. */
+      var want = d.locked ? 0 : (near || hold[d.id]) ? 1 : 0;
       var step = Math.max(0, dt || 0) / DOOR_TIME;
       d.open = want > d.open ? Math.min(1, d.open + step) : Math.max(0, d.open - step);
       d.shut = d.open < 0.85;
@@ -981,7 +1192,10 @@
       bulkhead(room, pal, fy, dLM.wall[1], CAR_HW, fy + CAR_H, dLM.wall[0], PASSAGE_HW, fy + PASSAGE_H, false, [pal.lockWall, pal.passWall]);
       liftSign(room, pal, fy, dLM.wall[0] - 0.006, -1, 'main', p);
     }
-    bulkhead(room, pal, fy, dL.wall[1], PASSAGE_HW, fy + PASSAGE_H, dL.wall[0], LOCK_HW, fy + LOCK_H, false);
+    /* The passage's aft wall: the cargo bay's door through it from M up,
+     * a plain wall on a small hull (2026-10-26: the airlock used to be
+     * through here; it is off the port side now). */
+    var dC = doorById(p, 'cargo'), cg = roomByKind(p, 'cargo');
 
     /* THE PASSAGE: ribs every metre and a bit, a light down the ceiling,
      * lockers along the starboard wall, a hazard edge to the floor. */
@@ -991,7 +1205,7 @@
     var sideDoors = p.doors.filter(function (d) { return d.axis === 'x'; });
     var portZ = sideDoors.filter(function (d) { return d.wall[1] <= 0; }).map(function (d) { return d.zc; });
     var stbdZ = sideDoors.filter(function (d) { return d.wall[0] >= 0; }).map(function (d) { return d.zc; });
-    var skipP = ['z0', 'z1'];
+    var skipP = dC ? ['z0', 'z1'] : ['z1'];
     if (portZ.length) skipP.push('x0');
     if (stbdZ.length) skipP.push('x1');
     boxRoom(room, ps.x0, fy, ps.z0, ps.x1, fy + PASSAGE_H, ps.z1, pal.passWall, pal.passFloor, pal.ceil, skipP);
@@ -1025,37 +1239,19 @@
       var x0 = s * (PASSAGE_HW - 0.12), x1 = s * (PASSAGE_HW - 0.04), y = fy + 0.004;
       quad(room, [x0, y, ps.z0], [x1, y, ps.z0], [x1, y, ps.z1], [x0, y, ps.z1], pal.hazard);
     });
+    passageDetail(room, pal, fy, ps, portZ, stbdZ, p, !!(dC && cg));
 
-    /* THE AIRLOCK: hazard chevrons on the floor, the hatch on the port
-     * wall with its status lamp, a light over it. */
-    var lk = p.rooms[2];
-    var dC = doorById(p, 'cargo'), cg = roomByKind(p, 'cargo');
-    boxRoom(room, lk.x0, fy, lk.z0, lk.x1, fy + LOCK_H, lk.z1, pal.lockWall, pal.passFloor, pal.ceil, dC ? ['z1', 'z0'] : ['z1']);
     if (dC && cg) {
-      bulkhead(room, pal, fy, dC.wall[1], LOCK_HW, fy + LOCK_H, dC.wall[0], cg.x1, fy + CARGO_H, false, [pal.lockWall, pal.lockWall]);
+      bulkhead(room, pal, fy, dC.wall[1], PASSAGE_HW, fy + PASSAGE_H, dC.wall[0], cg.x1, fy + CARGO_H, false, [pal.passWall, pal.lockWall]);
     }
-    for (i = 0; i < 6; i++) {
-      var zc = lk.z0 + 0.25 + i * 0.38;
-      quad(room, [-0.9, fy + 0.004, zc], [0.9, fy + 0.004, zc], [0.9, fy + 0.004, zc + 0.16], [-0.9, fy + 0.004, zc + 0.16],
-           i % 2 ? pal.hazardDark : pal.hazard);
-    }
-    var hz = (lk.z0 + lk.z1) / 2, hx = -LOCK_HW + 0.005;
-    quad(room, [hx, fy, hz - HATCH_HW - 0.08], [hx, fy, hz + HATCH_HW + 0.08], [hx, fy + HATCH_H + 0.08, hz + HATCH_HW + 0.08],
-         [hx, fy + HATCH_H + 0.08, hz - HATCH_HW - 0.08], pal.jamb);
-    quad(room, [hx + 0.004, fy + 0.02, hz - HATCH_HW], [hx + 0.004, fy + 0.02, hz + HATCH_HW],
-         [hx + 0.004, fy + HATCH_H, hz + HATCH_HW], [hx + 0.004, fy + HATCH_H, hz - HATCH_HW], pal.hatch);
-    quad(room, [hx + 0.008, fy + 1.0, hz - 0.03], [hx + 0.008, fy + 1.0, hz + 0.03],
-         [hx + 0.008, fy + 1.6, hz + 0.03], [hx + 0.008, fy + 1.6, hz - 0.03], pal.leafEdge);
-    quad(room, [-0.5, fy + LOCK_H - 0.01, hz - 0.08], [0.5, fy + LOCK_H - 0.01, hz - 0.08],
-         [0.5, fy + LOCK_H - 0.01, hz + 0.08], [-0.5, fy + LOCK_H - 0.01, hz + 0.08], pal.light);
-    /* The hatch's lamp is its own little mesh, so it can say green or red
-     * without rebuilding the room. */
-    var lampAt = [hx + 0.01, fy + HATCH_H + 0.16, hz];
-    var lampOk = mesh(), lampNo = mesh();
-    [[lampOk, pal.hatchLit], [lampNo, pal.hatchShut]].forEach(function (pr) {
-      quad(pr[0], [lampAt[0], lampAt[1] - 0.05, lampAt[2] - 0.12], [lampAt[0], lampAt[1] - 0.05, lampAt[2] + 0.12],
-           [lampAt[0], lampAt[1] + 0.05, lampAt[2] + 0.12], [lampAt[0], lampAt[1] + 0.05, lampAt[2] - 0.12], pr[1]);
-    });
+
+    /* THE AIRLOCK (2026-10-26): off the port side, its inner door in the
+     * passage wall, the landing inside it and the ramp's well aft of that.
+     * The floor is laid round the well; the ramp itself is a part of its own
+     * (rampMesh), moved by how far it is down. */
+    var lk = roomByKind(p, 'airlock'), rp = p.ramp;
+    var lockMesh = airlockMesh(room, pal, fy, lk, dL, rp);
+    var lampOk = lockMesh.lampOk, lampNo = lockMesh.lampNo;
 
     /* THE DOORS' LEAVES, each modelled where it sits shut; the caller moves
      * it along x by leafTravel(open). Inside the bulkhead's thickness, so
@@ -1153,7 +1349,7 @@
       car: car, tram: tramCar, lampDy: dyMain,
       fittings: fittings.f.length ? fittings : null,
       leaves: (function () {
-        var lv = { bridge: leaves(dB.wall[0], dB.wall[1]), lock: leaves(dL.wall[0], dL.wall[1]) };
+        var lv = { bridge: leaves(dB.wall[0], dB.wall[1]) };
         if (dC) lv.cargo = leaves(dC.wall[0], dC.wall[1]);
         sideDoors.forEach(function (d) { lv[d.id] = sideLeaves(d); });
         return lv;
@@ -1438,6 +1634,108 @@
 
   /* THE MEDBAY: beds down the outboard wall with a screen over each, a
    * cabinet on the inboard wall, the room lit whiter than the rest. */
+  /* ---- THE AIRLOCK AND ITS RAMP (2026-10-26) --------------------------------
+   * The room: walls, ceiling, the inner door's wall, and a floor laid round
+   * the ramp's well. The controls on the outboard wall at the landing, with
+   * their lamp as two little meshes (green: the room is at the outside's
+   * pressure and the way out is yours; red: sealed to the ship). */
+  function airlockMesh(m, pal, fy, r, door, rp) {
+    var top = fy + LOCK_H;
+    boxRoom(m, r.x0, fy, r.z0, r.x1, top, r.z1, pal.lockWall, pal.passFloor, pal.ceil, ['x1', 'floor']);
+    sideDoorWall(m, r.x1, r.z0, r.z1, fy, top, door.zc, pal.lockWall);
+    var y = fy, F = pal.passFloor;
+    /* Round the well: the landing forward of it, a strip aft, and the two
+     * walkways down its sides. */
+    quad(m, [r.x0, y, rp.hinge], [r.x1, y, rp.hinge], [r.x1, y, r.z1], [r.x0, y, r.z1], F);
+    if (rp.foot > r.z0) quad(m, [r.x0, y, r.z0], [r.x1, y, r.z0], [r.x1, y, rp.foot], [r.x0, y, rp.foot], F);
+    if (rp.x0 > r.x0) quad(m, [r.x0, y, rp.foot], [rp.x0, y, rp.foot], [rp.x0, y, rp.hinge], [r.x0, y, rp.hinge], F);
+    if (r.x1 > rp.x1) quad(m, [rp.x1, y, rp.foot], [r.x1, y, rp.foot], [r.x1, y, rp.hinge], [rp.x1, y, rp.hinge], F);
+    /* A hazard rim round the well, so its edge is the thing you see. */
+    var e = 0.07, yy = y + 0.004;
+    quad(m, [rp.x0 - e, yy, rp.hinge], [rp.x1 + e, yy, rp.hinge], [rp.x1 + e, yy, rp.hinge + e], [rp.x0 - e, yy, rp.hinge + e], pal.hazard);
+    quad(m, [rp.x0 - e, yy, rp.foot - e], [rp.x1 + e, yy, rp.foot - e], [rp.x1 + e, yy, rp.foot], [rp.x0 - e, yy, rp.foot], pal.hazard);
+    quad(m, [rp.x0 - e, yy, rp.foot], [rp.x0, yy, rp.foot], [rp.x0, yy, rp.hinge], [rp.x0 - e, yy, rp.hinge], pal.hazard);
+    quad(m, [rp.x1, yy, rp.foot], [rp.x1 + e, yy, rp.foot], [rp.x1 + e, yy, rp.hinge], [rp.x1, yy, rp.hinge], pal.hazard);
+    /* Chevrons across the landing. */
+    for (var i = 0; i < 3; i++) {
+      var zc = rp.hinge + 0.25 + i * 0.4;
+      if (zc + 0.16 > r.z1 - 0.1) break;
+      quad(m, [r.x0 + 0.2, yy, zc], [r.x1 - 0.2, yy, zc], [r.x1 - 0.2, yy, zc + 0.16], [r.x0 + 0.2, yy, zc + 0.16],
+           i % 2 ? pal.hazardDark : pal.hazard);
+    }
+    /* Lights down the ceiling, over the landing and the well. */
+    var xc = (r.x0 + r.x1) / 2;
+    quad(m, [xc - 0.08, top - 0.01, r.z0 + 0.3], [xc + 0.08, top - 0.01, r.z0 + 0.3],
+         [xc + 0.08, top - 0.01, r.z1 - 0.3], [xc - 0.08, top - 0.01, r.z1 - 0.3], pal.light);
+    /* The controls: a housing on the outboard wall, its screen, and the
+     * lamp over it. */
+    var hz = door.zc, hx = r.x0 + 0.005;
+    box(m, r.x0, fy + 1.05, hz - 0.22, r.x0 + 0.08, fy + 1.55, hz + 0.22, pal.jamb);
+    quad(m, [hx + 0.08, fy + 1.12, hz - 0.17], [hx + 0.08, fy + 1.12, hz + 0.17],
+         [hx + 0.08, fy + 1.48, hz + 0.17], [hx + 0.08, fy + 1.48, hz - 0.17], pal.trim);
+    var lampAt = [hx + 0.01, fy + 1.75, hz];
+    var lampOk = mesh(), lampNo = mesh();
+    [[lampOk, pal.hatchLit], [lampNo, pal.hatchShut]].forEach(function (pr) {
+      quad(pr[0], [lampAt[0], lampAt[1] - 0.05, lampAt[2] - 0.12], [lampAt[0], lampAt[1] - 0.05, lampAt[2] + 0.12],
+           [lampAt[0], lampAt[1] + 0.05, lampAt[2] + 0.12], [lampAt[0], lampAt[1] + 0.05, lampAt[2] - 0.12], pr[1]);
+    });
+    return { lampOk: lampOk, lampNo: lampNo };
+  }
+
+  /* The ramp at `t` (0 raised and sealed, 1 down on the ground), in the
+   * room's metres. A ramp or a stair turns about its hinge, the landing's
+   * aft edge, so its far end drops through the belly; a lift platform
+   * comes straight down. Treads every step, a hazard edge, rails both
+   * sides. Built for a handful of t a second while it moves; the caller
+   * keeps the result while it does not. */
+  function rampPoint(rp, fy, t, x, y, z) {
+    if (rp.mode === 'lift') return [x, y - rp.drop * t, z];
+    var a = rp.angle * t, dz = z - rp.hinge, dy = y - fy;
+    return [x, fy + dy * Math.cos(a) + dz * Math.sin(a), rp.hinge + dz * Math.cos(a) - dy * Math.sin(a)];
+  }
+  function rampMesh(pal, rp, fy, t) {
+    var m = mesh();
+    var P = function (x, y, z) { return rampPoint(rp, fy, t, x, y, z); };
+    var x0 = rp.x0, x1 = rp.x1, z1 = rp.hinge, z0 = rp.foot, th = 0.12;
+    /* The slab: its walking face, its underside (the seal, seen from
+     * outside), and the edges. */
+    quad(m, P(x0, fy, z0), P(x1, fy, z0), P(x1, fy, z1), P(x0, fy, z1), pal.passFloor);
+    quad(m, P(x0, fy - th, z0), P(x0, fy - th, z1), P(x1, fy - th, z1), P(x1, fy - th, z0), pal.hatch);
+    quad(m, P(x0, fy - th, z0), P(x1, fy - th, z0), P(x1, fy, z0), P(x0, fy, z0), pal.hazard);
+    quad(m, P(x0, fy - th, z0), P(x0, fy, z0), P(x0, fy, z1), P(x0, fy - th, z1), pal.hatch);
+    quad(m, P(x1, fy - th, z0), P(x1, fy - th, z1), P(x1, fy, z1), P(x1, fy, z0), pal.hatch);
+    /* Treads: a step's worth of grip every 0.3 m, so a slope reads as
+     * something you climb. */
+    var yy = fy + 0.006;
+    for (var z = z1 - 0.15; z > z0 + 0.1; z -= 0.3) {
+      quad(m, P(x0 + 0.06, yy, z - 0.05), P(x1 - 0.06, yy, z - 0.05), P(x1 - 0.06, yy, z), P(x0 + 0.06, yy, z), pal.rib);
+    }
+    quad(m, P(x0, yy, z0), P(x0 + 0.06, yy, z0), P(x0 + 0.06, yy, z1), P(x0, yy, z1), pal.hazard);
+    quad(m, P(x1 - 0.06, yy, z0), P(x1, yy, z0), P(x1, yy, z1), P(x1 - 0.06, yy, z1), pal.hazard);
+    /* The rails, which fold flat with it when it is up. */
+    if (t > 0.02) {
+      var rh = 0.9 * Math.min(1, t * 1.5);
+      [x0 + 0.03, x1 - 0.03].forEach(function (xr) {
+        for (var zp = z1 - 0.2; zp > z0 + 0.1; zp -= 1.2) {
+          quad(m, P(xr - 0.02, fy, zp - 0.03), P(xr + 0.02, fy, zp - 0.03), P(xr + 0.02, fy + rh, zp - 0.03), P(xr - 0.02, fy + rh, zp - 0.03), pal.rib);
+        }
+        quad(m, P(xr, fy + rh - 0.04, z0 + 0.1), P(xr, fy + rh - 0.04, z1 - 0.2), P(xr, fy + rh, z1 - 0.2), P(xr, fy + rh, z0 + 0.1), pal.trim);
+      });
+    }
+    return m;
+  }
+
+  /* Where your feet are on the ramp, in the room's metres: the height of
+   * its walking face under (x, z) at `t`, or null if (x, z) is not over it
+   * as it lies now. */
+  function rampFloor(rp, fy, t, x, z) {
+    if (!rp || x < rp.x0 || x > rp.x1) return null;
+    if (rp.mode === 'lift') return (z <= rp.hinge && z >= rp.foot) ? fy - rp.drop * t : null;
+    var a = rp.angle * t, run = rp.len * Math.cos(a);
+    if (z > rp.hinge || z < rp.hinge - run) return null;
+    return fy + (z - rp.hinge) * Math.tan(a);
+  }
+
   function medbayMesh(m, pal, fy, r, door, p) {
     var top = fy + QUARTERS_H;
     sideShell(m, pal, fy, r, door, top, pal.passWall, pal.passFloor);
@@ -1508,13 +1806,264 @@
          [lx + 0.05, top - 0.006, r.z1 - 0.3], [lx - 0.05, top - 0.006, r.z1 - 0.3], pal.light);
   }
 
+  /* THE PASSAGE, DRESSED (2026-10-30). Astra: "add some more detail to the
+   * walkway inside the ship." It was ribs, one light strip, lockers and two
+   * hazard lines in a dark box. Now, everything inside 12 cm of a wall or
+   * flat to the floor, so the 1.3 m you walk down is as wide as it was:
+   *   - the floor in plates, with a tread runner down the middle;
+   *   - kick plates along both walls, and low path lights set in them;
+   *   - panel seams on the walls between the ribs;
+   *   - a handrail at hip height down the port wall;
+   *   - two pipe runs along the port wall under the ceiling, with coloured
+   *     bands, and a cable tray along the starboard one;
+   *   - vent grilles in the ceiling between the light and the walls;
+   *   - a fire extinguisher by the aft door and a first-aid box by the fore;
+   *   - lit signs, an arrow to each end and to the airlock. Astra wants
+   *     direction shown as arrows rather than "left" and "right": the arrow
+   *     on a sign points the way along the passage, worked out for the wall
+   *     it hangs on, so it is right from either side.
+   * Nothing here draws from the rng, so no deck lays out differently. */
+  function passageDetail(m, pal, fy, ps, portZ, stbdZ, p, hasCargo) {
+    var HW = PASSAGE_HW, top = fy + PASSAGE_H;
+    var GAP = DOOR_HW + 0.12;              // keep this clear of a doorway's middle
+    /* The stretches of a wall between its doorways. */
+    function spans(zs) {
+      var out = [], cuts = zs.slice().sort(function (a, b) { return a - b; }), z0 = ps.z0 + 0.05;
+      cuts.forEach(function (zc) {
+        if (zc - GAP > z0 + 0.05) out.push([z0, zc - GAP]);
+        z0 = Math.max(z0, zc + GAP);
+      });
+      if (ps.z1 - 0.05 > z0 + 0.05) out.push([z0, ps.z1 - 0.05]);
+      return out;
+    }
+    function clear(zs, z, pad) { return !zs.some(function (zc) { return Math.abs(z - zc) < DOOR_HW + pad; }); }
+    var SEAM = pal.jamb, PIPE_A = pal.rib, PIPE_B = '#5c4a38', TRAY = pal.overhead, CABLE = '#15191f';
+
+    /* The floor: plates 0.6 m long, a tread runner down the middle. */
+    var fz = fy + 0.002;
+    quad(m, [-0.22, fz, ps.z0], [0.22, fz, ps.z0], [0.22, fz, ps.z1], [-0.22, fz, ps.z1], pal.floor);
+    for (var zp = ps.z0 + 0.6; zp < ps.z1 - 0.1; zp += 0.6) {
+      quad(m, [-(HW - 0.12), fz + 0.001, zp - 0.008], [HW - 0.12, fz + 0.001, zp - 0.008],
+           [HW - 0.12, fz + 0.001, zp + 0.008], [-(HW - 0.12), fz + 0.001, zp + 0.008], SEAM);
+    }
+    [-0.22, 0.22].forEach(function (x) {
+      quad(m, [x - 0.006, fz + 0.001, ps.z0], [x + 0.006, fz + 0.001, ps.z0], [x + 0.006, fz + 0.001, ps.z1], [x - 0.006, fz + 0.001, ps.z1], SEAM);
+    });
+
+    [-1, 1].forEach(function (s) {
+      var zs = s < 0 ? portZ : stbdZ, xw = s * HW;
+      spans(zs).forEach(function (sp) {
+        /* Kick plate, 14 cm, standing 2 cm off the wall. */
+        box(m, Math.min(xw, s * (HW - 0.02)), fy, sp[0], Math.max(xw, s * (HW - 0.02)), fy + 0.14, sp[1], SEAM, pal.rib);
+        /* Path lights in it, one a metre and a quarter. */
+        for (var zl = sp[0] + 0.3; zl < sp[1] - 0.1; zl += 1.25) {
+          var xf = s * (HW - 0.022);
+          quad(m, [xf, fy + 0.06, zl - 0.05], [xf, fy + 0.06, zl + 0.05], [xf, fy + 0.085, zl + 0.05], [xf, fy + 0.085, zl - 0.05], pal.trim);
+        }
+        /* A horizontal panel seam at 1.2 m. */
+        var xs = s * (HW - 0.006);
+        quad(m, [xs, fy + 1.19, sp[0]], [xs, fy + 1.19, sp[1]], [xs, fy + 1.205, sp[1]], [xs, fy + 1.205, sp[0]], SEAM);
+      });
+      /* Vertical seams halfway between the ribs. */
+      for (var zv = ps.z1 - 0.6 - 0.625; zv > ps.z0 + 0.2; zv -= 1.25) {
+        if (!clear(zs, zv, 0.1)) continue;
+        var xv = s * (HW - 0.006);
+        quad(m, [xv, fy + 0.14, zv - 0.007], [xv, fy + 0.14, zv + 0.007], [xv, top - 0.25, zv + 0.007], [xv, top - 0.25, zv - 0.007], SEAM);
+      }
+    });
+
+    /* The handrail, port side, at hip height, on brackets at the ribs. */
+    spans(portZ).forEach(function (sp) {
+      if (sp[1] - sp[0] < 0.6) return;
+      box(m, -HW + 0.055, fy + 0.96, sp[0] + 0.1, -HW + 0.09, fy + 0.995, sp[1] - 0.1, pal.leaf, pal.leafEdge);
+      for (var zb = sp[0] + 0.25; zb < sp[1] - 0.1; zb += 1.25) {
+        box(m, -HW, fy + 0.965, zb - 0.015, -HW + 0.06, fy + 0.99, zb + 0.015, SEAM);
+      }
+    });
+
+    /* Pipes along the port wall under the ceiling, banded every three
+     * metres; a cable tray along the starboard wall, above the lockers. */
+    function pipeZ(x, y, r, col) {
+      var n = 6, ring = [];
+      for (var i = 0; i < n; i++) {
+        var a = i / n * Math.PI * 2;
+        ring.push([x + Math.cos(a) * r, y + Math.sin(a) * r]);
+      }
+      for (i = 0; i < n; i++) {
+        var a2 = ring[i], b2 = ring[(i + 1) % n];
+        quad(m, [a2[0], a2[1], ps.z0], [b2[0], b2[1], ps.z0], [b2[0], b2[1], ps.z1], [a2[0], a2[1], ps.z1], col);
+      }
+      for (var zb2 = ps.z0 + 1.5; zb2 < ps.z1 - 0.5; zb2 += 3) {
+        for (i = 0; i < n; i++) {
+          var a3 = ring[i], b3 = ring[(i + 1) % n], k = 1.08;
+          quad(m, [x + (a3[0] - x) * k, y + (a3[1] - y) * k, zb2 - 0.04], [x + (b3[0] - x) * k, y + (b3[1] - y) * k, zb2 - 0.04],
+               [x + (b3[0] - x) * k, y + (b3[1] - y) * k, zb2 + 0.04], [x + (a3[0] - x) * k, y + (a3[1] - y) * k, zb2 + 0.04],
+               col === PIPE_B ? pal.hazard : pal.leafEdge);
+        }
+      }
+    }
+    pipeZ(-HW + 0.05, top - 0.09, 0.035, PIPE_A);
+    pipeZ(-HW + 0.05, top - 0.19, 0.028, PIPE_B);
+    box(m, HW - 0.17, top - 0.21, ps.z0, HW - 0.01, top - 0.195, ps.z1, TRAY);
+    box(m, HW - 0.15, top - 0.195, ps.z0, HW - 0.04, top - 0.16, ps.z1, CABLE);
+    for (var zt = ps.z0 + 0.4; zt < ps.z1 - 0.2; zt += 1.25) {
+      box(m, HW - 0.17, top - 0.21, zt - 0.01, HW - 0.01, top - 0.15, zt + 0.01, SEAM);   // a tie-down over the bundle
+    }
+
+    /* Vent grilles in the ceiling, either side of the light, every other bay. */
+    var cy = top - 0.004;
+    for (var zg = ps.z1 - 1.2, bay = 0; zg > ps.z0 + 0.6; zg -= 1.25, bay++) {
+      if (bay % 2) continue;
+      [-1, 1].forEach(function (s) {
+        var x0 = s * 0.2, x1 = s * 0.46;
+        quad(m, [x0, cy, zg - 0.22], [x1, cy, zg - 0.22], [x1, cy, zg + 0.22], [x0, cy, zg + 0.22], CABLE);
+        for (var k = -2; k <= 2; k++) {
+          var zk = zg + k * 0.08;
+          quad(m, [x0 + s * 0.02, cy - 0.002, zk - 0.012], [x1 - s * 0.02, cy - 0.002, zk - 0.012],
+               [x1 - s * 0.02, cy - 0.002, zk + 0.012], [x0 + s * 0.02, cy - 0.002, zk + 0.012], SEAM);
+        }
+      });
+    }
+
+    /* A fire extinguisher by the aft door, port side; a first-aid box by
+     * the fore one. Only where the wall is clear. */
+    /* The first clear spot from `z` stepping `dz` along the wall, up to
+     * `n` steps; null if there is none. */
+    function firstClear(zs, z, dz, n, pad) {
+      for (var i3 = 0; i3 <= n; i3++, z += dz) {
+        if (z < ps.z0 + 0.3 || z > ps.z1 - 0.3) return null;
+        if (clear(zs, z, pad)) return z;
+      }
+      return null;
+    }
+    /* Below the handrail (0.96 m), so the two never cross. */
+    var zx = firstClear(portZ, ps.z0 + 0.45, 0.4, 6, 0.2);
+    if (zx !== null) {
+      var xc = -HW + 0.085, r = 0.065, n2 = 8, ring2 = [];
+      for (var i2 = 0; i2 < n2; i2++) {
+        var a4 = i2 / n2 * Math.PI * 2;
+        ring2.push([xc + Math.cos(a4) * r, zx + Math.sin(a4) * r]);
+      }
+      for (i2 = 0; i2 < n2; i2++) {
+        var c1 = ring2[i2], c2 = ring2[(i2 + 1) % n2];
+        quad(m, [c1[0], fy + 0.25, c1[1]], [c2[0], fy + 0.25, c2[1]], [c2[0], fy + 0.75, c2[1]], [c1[0], fy + 0.75, c1[1]], '#b8261f');
+        tri(m, [xc, fy + 0.78, zx], [c1[0], fy + 0.75, c1[1]], [c2[0], fy + 0.75, c2[1]], '#b8261f');
+      }
+      box(m, xc - 0.02, fy + 0.75, zx - 0.02, xc + 0.02, fy + 0.83, zx + 0.02, '#1a1a1a');      // the valve
+      box(m, -HW, fy + 0.5, zx - 0.09, -HW + 0.02, fy + 0.54, zx + 0.09, SEAM);                // the bracket
+    }
+    var za = firstClear(portZ, ps.z1 - 0.55, -0.4, 8, 0.2);
+    if (za !== null) {
+      box(m, -HW, fy + 1.35, za - 0.17, -HW + 0.09, fy + 1.6, za + 0.17, '#e6e9ec');
+      var xa = -HW + 0.092;
+      quad(m, [xa, fy + 1.455, za - 0.06], [xa, fy + 1.455, za + 0.06], [xa, fy + 1.495, za + 0.06], [xa, fy + 1.495, za - 0.06], '#1f9d55');
+      quad(m, [xa, fy + 1.415, za - 0.02], [xa, fy + 1.415, za + 0.02], [xa, fy + 1.535, za + 0.02], [xa, fy + 1.535, za - 0.02], '#1f9d55');
+    }
+
+    /* SIGNS. Fore and aft name what is at each end; the airlock's points at
+     * its door. Lit in the palette's trim, on a console-dark plate. */
+    var CK = global.CargoKit;
+    if (!CK || !CK.textRows) return;
+    function arrowRows(right) {
+      var a = ['   #   ', '    #  ', '     # ', '#######', '     # ', '    #  ', '   #   '];
+      return right ? a : a.map(function (r) { return r.split('').reverse().join(''); });
+    }
+    /* A sign on the wall x = side·HW, centred at z, saying `word` with an
+     * arrow pointing along +z (dir 1) or −z (dir −1). The reader faces the
+     * wall; their right is n × up with n the wall's normal into the
+     * passage (see cargokit.js faceFrame), which for x = side·HW is
+     * (0, 0, −side): so +z is on their right on the port wall. */
+    function sign(side, z, y, word, dir, off) {
+      var nx = -side, rightZ = nx;                        // reader's right along z: sign of nx
+      var pointsRight = dir * rightZ > 0;
+      var txt = CK.textRows(word), arr = arrowRows(pointsRight), rows = [];
+      for (var r = 0; r < 7; r++) rows.push(pointsRight ? txt[r] + '   ' + arr[r] : arr[r] + '   ' + txt[r]);
+      var cols = rows[0].length, cell = 0.013, w = cols * cell + 0.06, h = 7 * cell + 0.05;
+      var xw = side * (HW - 0.008 - (off || 0)), xs = side * (HW - 0.014 - (off || 0));
+      /* The plate, then the lit cells, one quad a run. u runs along the
+       * reader's right: +z·rightZ. */
+      function at(uu, vv, x) { return [x, y + vv, z + rightZ * uu]; }
+      quad(m, at(-w / 2, -h / 2, xw), at(w / 2, -h / 2, xw), at(w / 2, h / 2, xw), at(-w / 2, h / 2, xw), pal.console);
+      for (var rr = 0; rr < 7; rr++) {
+        var row = rows[rr], st = 0;
+        for (var cc = 1; cc <= cols; cc++) {
+          if (cc < cols && row.charAt(cc) === row.charAt(st)) continue;
+          if (row.charAt(st) === '#') {
+            var u0 = -cols * cell / 2 + st * cell, u1 = -cols * cell / 2 + cc * cell;
+            var v1 = 3.5 * cell - rr * cell, v0 = v1 - cell;
+            quad(m, at(u0, v0, xs), at(u1, v0, xs), at(u1, v1, xs), at(u0, v1, xs), pal.trim);
+          }
+          st = cc;
+        }
+      }
+    }
+    var foreWord = p.decks ? 'LIFT' : 'BRIDGE';
+    /* Where things already hang on each wall, so no two signs (or a sign
+     * and the first-aid box) overlap. */
+    var taken = { '-1': za !== null ? [za] : [], '1': [] };
+    function free(side, z) {
+      return taken[side].every(function (t) { return Math.abs(t - z) > 0.75; });
+    }
+    /* The airlock's first: beside its door on the same wall (across from
+     * it, an arrow at the door would be an arrow at the wall), pointing
+     * along to it. */
+    var dLk = doorById(p, 'lock');
+    if (dLk && dLk.zc > ps.z0 && dLk.zc < ps.z1) {
+      var zs2 = dLk.zc + (dLk.zc + 1.2 < ps.z1 ? 1.0 : -1.0);
+      if (clear(portZ, zs2, 0.3) && free(-1, zs2)) {
+        sign(-1, zs2, fy + 1.78, 'AIRLOCK', zs2 > dLk.zc ? -1 : 1);
+        taken['-1'].push(zs2);
+      }
+    }
+    /* Fore and aft signs near each end, at eye height, stepping in from
+     * the end (`dz`) past doorways and other signs: on the port wall
+     * (between the handrail and the pipes) where it is clear, else on the
+     * starboard wall, stood off it far enough to hang in front of a locker. */
+    function placeSign(z, word, dir, dz) {
+      for (var i4 = 0; i4 <= 10; i4++, z += dz) {
+        if (z < ps.z0 + 0.5 || z > ps.z1 - 0.5) return;
+        var sides = [-1, 1];
+        for (var j4 = 0; j4 < 2; j4++) {
+          var sd = sides[j4], zs4 = sd < 0 ? portZ : stbdZ;
+          if (clear(zs4, z, 0.45) && free(sd, z)) {
+            sign(sd, z, fy + 1.78, word, dir, sd > 0 ? 0.012 : 0);
+            taken[String(sd)].push(z);
+            return;
+          }
+        }
+      }
+    }
+    placeSign(ps.z0 + 1.1, foreWord, 1, 0.4);
+    if (hasCargo) placeSign(ps.z1 - 1.1, 'CARGO', -1, -0.4);
+  }
+
   /* THE CARGO BAY: crates stacked down both walls, hazard lines either side
    * of the aisle, lights in rows, the manifest terminal by the door. */
   function cargoMesh(m, pal, fy, r, p) {
     var top = fy + CARGO_H;
     boxRoom(m, r.x0, fy, r.z0, r.x1, top, r.z1, pal.lockWall, pal.passFloor, pal.ceil, ['z1']);
     var CRATE = ['#4a5a4a', '#5a4e3a', '#3e4c5e', '#5e3e36'];
+    /* THE CONTAINERS (2026-10-30): one kind per kind of cargo, from Claude
+     * Design's sheet (cargokit.js) — a cryo tank of hydrogen, a hopper of
+     * ore, a shielded cask of waste, each with its placard and its cargo's
+     * name on the strip. Fronts to the aisle, two high. A stack with no
+     * cargo named (no ship to ask) is a crate of some kind from its tint. */
+    var CK = global.CargoKit, ECO = global.Economy;
+    var kitH = CK ? CK.HEIGHT * CRATE_SCALE + CRATE_GAP : 0;
     p.crates.forEach(function (c) {
+      if (CK) {
+        var kinds = CK.kinds();
+        var ccx = (c.x0 + c.x1) / 2, ccz = (c.z0 + c.z1) / 2;
+        for (var k = 0; k < c.high; k++) {
+          /* Each level its own cargo when the stack is mixed. */
+          var cidK = c.levels && c.levels[k] ? c.levels[k].cid : c.cid;
+          var kind = cidK ? CK.kindFor(cidK) : kinds[Math.floor(c.tint * kinds.length) % kinds.length];
+          var cm = ECO && ECO.BY_ID && cidK ? ECO.BY_ID[cidK] : null;
+          CK.build(m, kind, { x: ccx, y: fy + k * kitH, z: ccz, yaw: ccx < 0 ? Math.PI / 2 : -Math.PI / 2,
+                              scale: CRATE_SCALE, label: cm ? cm.name : '' });
+        }
+        return;
+      }
       var col = CRATE[Math.floor(c.tint * CRATE.length) % CRATE.length];
       for (var h = 0; h < c.high; h++) {
         var y0 = fy + h * 0.72, inset = h ? 0.04 : 0;
@@ -1751,7 +2300,7 @@
 
   function boxRoom(m, x0, y0, z0, x1, y1, z1, wall, floor, ceil, skip) {
     skip = skip || [];
-    quad(m, [x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], floor);
+    if (skip.indexOf('floor') < 0) quad(m, [x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], floor);
     if (skip.indexOf('ceil') < 0) quad(m, [x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1], ceil);
     if (skip.indexOf('x0') < 0) quad(m, [x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], wall);
     if (skip.indexOf('x1') < 0) quad(m, [x1, y0, z0], [x1, y0, z1], [x1, y1, z1], [x1, y1, z0], wall);
@@ -1763,13 +2312,16 @@
     DOOR_HW: DOOR_HW, DOOR_H: DOOR_H, WALL_T: WALL_T, PASSAGE_LEN: PASSAGE_LEN,
     LOCK_HW: LOCK_HW, DOOR_REACH: DOOR_REACH, DOOR_TIME: DOOR_TIME, SEAT: SEAT,
     PALETTES: PALETTES, SYNDICATE: SYNDICATE, NAVY: NAVY,
+    CRATE_STACK: CRATE_STACK, CRATE_SCALE: CRATE_SCALE,
     paletteFor: paletteFor, plan: plan, updateDoors: updateDoors, leafTravel: leafTravel,
     meshes: meshes, frame: frame,
     stationScreen: stationScreen, STATION_SCREEN_PX: STATION_SCREEN_PX,
     DECKED: DECKED, TOWER: TOWER, LIFT_SPEED: LIFT_SPEED, liftSpeed: liftSpeed, TRAM_SPEED: TRAM_SPEED, DECK_NAME: DECK_NAME,
     CAR_H: CAR_H, HANGAR: HANGAR,
     stationRoles: stationRoles, ROLE_NAME: ROLE_NAME, STATION_MAX: STATION_MAX,
-    doorById: doorById, roomByKind: roomByKind
+    doorById: doorById, roomByKind: roomByKind,
+    rampShape: rampShape, rampMesh: rampMesh, rampFloor: rampFloor, rampPoint: rampPoint,
+    LOCK_W: LOCK_W, LOCK_LAND: LOCK_LAND, RAMP_MAX: RAMP_MAX
   };
 
   global.ShipDeck = ShipDeck;

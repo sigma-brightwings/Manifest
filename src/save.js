@@ -404,6 +404,14 @@
        * ETA flown after it. */
       rescue: G.rescue || null,
       tenderKills: G.tenderKills || 0,
+      /* WHAT YOU DID FOR OTHER SHIPS (upkeep.js): mass passed, money that
+       * changed hands, the legs you pulled ships out of. Everything else
+       * about their tanks and purses is a function of time. Additive. */
+      npcLedger: G.npcLedger || {},
+      /* THE F5 NOTES TAB (journal.js): what you wrote, and what the game
+       * wrote down for you. Additive; an older save has neither. */
+      notes: typeof G.notes === 'string' ? G.notes : '',
+      journal: Array.isArray(G.journal) ? G.journal : [],
       doneMissions: G.doneMissions || {},
       campaigns: G.campaigns || {},
       /* Ship-to-ship trade: what each voyage has already sold or bought
@@ -422,6 +430,10 @@
        * (dialogue.js, 2026-10-25). Additive, like captains: an older career
        * loads with nobody on any deck who has met you. */
       people: G.people || {},
+      /* THE OVERBOSS'S TITHE (tithe.js, 2026-10-26): who you have paid and
+       * who you have refused, by system. Additive: an older career owes
+       * nobody anything. */
+      tithe: G.tithe || {},
       /* YOUR OWN DISTRESS CALLS still in the air, with who answered and
        * when they arrive (messages.js). Additive. Saved because the
        * arrival is where a lie is found out, and a reload must not be a
@@ -589,6 +601,9 @@
     G.uplift = (data.uplift && typeof data.uplift === 'object') ? data.uplift : {};
     G.rescue = data.rescue || null;
     G.tenderKills = data.tenderKills || 0;
+    G.npcLedger = (data.npcLedger && typeof data.npcLedger === 'object') ? data.npcLedger : {};
+    G.notes = typeof data.notes === 'string' ? data.notes : '';
+    G.journal = Array.isArray(data.journal) ? data.journal : [];
     G.doneMissions = data.doneMissions || {};
     G.campaigns = data.campaigns || {};
     G.shipTrade = data.shipTrade || null;
@@ -597,6 +612,7 @@
     if (global.ShipTrade && global.ShipTrade.attach && G.sys) global.ShipTrade.attach(G, G.sys, G.t || 0);
     G.captains = (data.captains && typeof data.captains === 'object') ? data.captains : {};
     G.people = (data.people && typeof data.people === 'object') ? data.people : {};
+    G.tithe = (data.tithe && typeof data.tithe === 'object') ? data.tithe : {};
     G.record = (data.record && typeof data.record === 'object') ? data.record : null;
     G.broadcasts = Array.isArray(data.broadcasts) ? data.broadcasts : [];
     G.msgDraft = null;

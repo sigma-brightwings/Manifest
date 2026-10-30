@@ -54,8 +54,11 @@ console.log('--- true length ---');
 check('the Capital is 250 m', Math.abs(R.hullLength('capital') - 0.250) < 1e-9);
 check('the Carrier is 300 m', Math.abs(R.hullLength(ship('carrier')) - 0.300) < 1e-9);
 var others = Object.keys(Combat.HULLS).filter(function (id) { return TOWERS.indexOf(id) < 0; });
-check('every other hull is still 25 m', others.every(function (id) { return R.hullLength(id) === R.SHIP_LEN; }),
-      others.length + ' hulls');
+/* 2026-10-26: not 25 m any more, but each at the length her rooms need
+ * (tools/fit-hulls.js, src/hullfit.js) — and never shorter than she was. */
+check('every other hull is at her fitted length, never under 25 m', others.every(function (id) {
+  return Math.abs(R.hullLength(id) * 1000 - global.HullFit[id].len) < 1e-6 && R.hullLength(id) >= R.SHIP_LEN - 1e-12;
+}), others.length + ' hulls');
 var capBox = Sim.hullBox(ship('capital')).map(function (v) { return v * 1000; });
 check('the Capital is measured for a bay at her own size', capBox[2] > 249 && capBox[2] < 251 && capBox[0] > 60,
       capBox.map(function (v) { return v.toFixed(0); }).join(' × ') + ' m');
@@ -157,7 +160,11 @@ TOWERS.forEach(function (id) {
   check(id + ': the ride up is quick', secs < 6.5, secs.toFixed(1) + ' s');
 });
 var talon = ship('talon');
-check('an ordinary hull is drawn from its own origin', R.bridgeFrame(talon) === talon && !R.bridgeSpec(talon));
+/* 2026-10-26: not her origin any more but where tools/fit-hulls.js put
+ * the cockpit so her rooms are inside her — and still no tower. */
+var tAt = R.cockpitAt(talon), tFit = global.HullFit && global.HullFit.talon;
+check('an ordinary hull\'s cockpit is where her fit put it, with no tower', !R.bridgeSpec(talon) && !!tAt && !!tFit &&
+      tAt[0] === tFit.at[0] && tAt[1] === tFit.at[1] && tAt[2] === tFit.at[2]);
 check('and its hull is never cut', R.bridgeCutMesh(HullLib['capital-l'], talon) === HullLib['capital-l']);
 check('and its lift (if any) is the ordinary one', SD.liftSpeed('meridian') === SD.LIFT_SPEED);
 var mer = R.shipInterior(ship('meridian'));

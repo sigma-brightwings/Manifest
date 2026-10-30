@@ -1297,16 +1297,21 @@
      * by uCutBand.z and lamp glow is turned off, so the cut is the loudest
      * thing at the hole and the far wall keeps its colour as the backdrop. */
     '  bool rim = false;',
+    '  float rimU = 0.0;',
+    '  vec3 cutW = vec3(0.0);',
     '  float near = 0.0;',
     '  if (uCut.w > 0.5) {',
     '    float L2 = max(dot(uCut.xyz, uCut.xyz), 1e-12);',
     '    float t = dot(vRel, uCut.xyz) / L2;',
     '    if (t > 0.0 && t < 1.0 && distance(vRel, uCut.xyz) > uCutR.x) {',
     '      float r = mix(uCutR.y, uCutR.x, t);',
-    '      float d = length(vRel - uCut.xyz * t);',
+    '      vec3 off = vRel - uCut.xyz * t;',
+    '      float d = length(off);',
     '      if (d < r) discard;',
     '      float band = min(r * uCutR.z, uCutBand.x);',
     '      rim = d < r + band;',
+    '      rimU = (d - r) / max(band, 1e-12);',
+    '      cutW = off / max(d, 1e-12);',
     '      near = 1.0 - smoothstep(r + band, r + band + r * uCutBand.y, d);',
     '    }',
     '  }',
@@ -1426,8 +1431,22 @@
     '    c = mix(c, vec3(luma) * 0.6, near * uCutBand.z);',
     '    glow *= 1.0 - near;',
     '  }',
-    /* Flat, unlit, no glow: a cut face is a colour, not a lamp. */
-    '  if (rim) { c = uCutRim; glow = 0.0; }',
+    /* Flat, unlit, no glow: a cut face is a colour, not a lamp.
+     *
+     * TWO ORANGE LINES WITH BLACK BETWEEN (2026-10-26). Astra: "a less
+     * busy, but still nicely convincing double orange line, with black in
+     * between them". Thirds across the band: orange, black, orange.
+     *
+     * AND NOT WHERE THE CUT RUNS ALONG A SURFACE, carried over from the
+     * cutaway-test build. A floor lying along the line of sight is sliced
+     * in two long slivers beside the hole, and a band on those read as
+     * orange wedges (runway markings converging on the ship). A wall the
+     * cut goes THROUGH has its normal across the cone's radial direction;
+     * one the cut runs ALONG has it lined up with it. */
+    '  if (rim && abs(dot(n, cutW)) < 0.8) {',
+    '    c = (rimU > 0.33 && rimU < 0.67) ? vec3(0.02, 0.018, 0.016) : uCutRim;',
+    '    glow = 0.0;',
+    '  }',
     '  frag = vec4(c, clamp(glow, 0.0, 1.0));',
     '}'
   ].join('\n');

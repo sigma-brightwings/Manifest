@@ -1672,7 +1672,46 @@
    * fraction of a leg each of those takes. */
   var TRAFFIC_TOUCHDOWN = 0.05;
 
+  /* THE TIMETABLE, AND THE ODD LEG THAT GOES WRONG (upkeep.js). A ship
+   * whose reaction-mass tank let go on this leg is not where her timetable
+   * says: she is coasting from where it happened, then — once a tug has
+   * reached her — in the berth she was bound for, until the timetable has
+   * her there anyway. Both are pure functions of t, like everything else
+   * here. trafficCore is the timetable alone, for upkeep.js to ask where
+   * the leak caught her. */
+  var _upkeep = null;
+  function upkeepMod() {
+    if (_upkeep) return _upkeep;
+    if (global.Upkeep) return (_upkeep = global.Upkeep);
+    if (typeof require !== 'undefined') {
+      try { _upkeep = require('./upkeep.js'); } catch (e) { _upkeep = null; }
+    }
+    return _upkeep;
+  }
+
   function trafficState(route, sys, t) {
+    if (!route.feeder && !route.heavy && !route.oneWay) {
+      var U = upkeepMod();
+      var sd = U ? U.stranded(route, sys, t) : null;
+      if (sd) {
+        if (sd.adrift) return sd.state;
+        /* Towed in: moored where she was bound, drives cold. */
+        var A0 = sys.byId[route.from], B0 = sys.byId[route.to];
+        var src0 = sd.outbound ? A0 : B0, dst0 = sd.outbound ? B0 : A0;
+        var pose0 = dockPose(dst0, sys, t, sys.byId[route.parentId], route);
+        var tow = finishTraffic(route, pose0.pos, pose0.vel, pose0.fwd, pose0.up,
+                                'moored', 1, src0, dst0, sd.outbound);
+        tow.throttle = 0;
+        tow.landed = !!pose0.landed;
+        tow.inside = !!pose0.inside;
+        tow.towed = true;
+        return tow;
+      }
+    }
+    return trafficCore(route, sys, t);
+  }
+
+  function trafficCore(route, sys, t) {
     var A = sys.byId[route.from], B = sys.byId[route.to];
     var parent = sys.byId[route.parentId];
     var period = route.period, cruise = route.cruise, lay = route.layover;
@@ -2040,7 +2079,7 @@
   var RESCUE_STANDOFF = 1.5;    // km — a hose length, for the transfer
   var POLICE_DETERRENT = 30000; // km — a pirate will not work this close to the law
 
-  function wakeNpc(spec, railState) {
+  function wakeNpc(spec, railState, sys) {
     spec.live = {
       pos: V.clone(railState.pos), vel: V.clone(railState.vel),
       fwd: V.clone(railState.fwd), up: V.clone(railState.up), right: V.clone(railState.right),
@@ -2053,10 +2092,46 @@
     spec.mode = spec.rescue ? 'rescue'
               : spec.kind === 'pirate' ? 'intercept'
               : spec.kind === 'police' ? 'inspect' : 'shadow';
+    /* THE OVERBOSS'S MARK (tithe.js). In a hold you have paid for, his
+     * pirates and his own patrols wake, look, and leave you be. */
+    if (sys && sys.tithe === 'paid' && !spec.rescue && titheSpares(spec)) spec.mode = 'shadow';
     spec.modeSince = 0;
     spec.hailed = false;
     decorate(spec.live, spec);
     return spec.live;
+  }
+
+  /* Who the overboss's tithe buys off: his pirates, and his own patrols. */
+  function titheSpares(spec) {
+    return spec.kind === 'pirate' || (spec.kind === 'police' && spec.faction === 'outlaw');
+  }
+
+  /* Turn a hull's nose a fraction `k` (0..1) of the way to `fwd`, keeping
+   * her up as near `up` as the new nose allows. A lerp of the nose rather
+   * than a true slerp, nudged sideways when the two are nearly opposite so
+   * it never passes through zero. */
+  function turnTo(live, fwd, up, k) {
+    var f0 = live.fwd || fwd;
+    var mix = V.add(V.scale(f0, 1 - k), V.scale(fwd, k));
+    if (V.len(mix) < 1e-3) mix = V.add(mix, V.scale(anyPerpendicular(f0), 0.05));
+    var f = V.norm(mix);
+    var r = V.cross(f, up || live.up || { x: 0, y: 0, z: 1 });
+    if (V.len(r) < 1e-6) r = anyPerpendicular(f);
+    live.right = V.norm(r);
+    live.fwd = f;
+    live.up = V.cross(live.right, live.fwd);
+  }
+  /* Her attitude in a slot alongside you: your nose, and your up or (lying
+   * beneath you belly to belly) its opposite. */
+  function slotAttitude(live, ship, slot, k) {
+    var up = slot.flip ? V.scale(ship.up, -1) : ship.up;
+    if (k >= 1) {
+      live.fwd = V.clone(ship.fwd);
+      live.up = V.clone(up);
+      live.right = V.cross(live.fwd, live.up);
+      return;
+    }
+    turnTo(live, ship.fwd, V.add(V.scale(live.up || up, 1 - k), V.scale(up, k)), k);
   }
 
   function steerNpc(spec, sys, t, dtSim, ship) {
@@ -2068,7 +2143,101 @@
      * exchange of letters. */
     var standoff = spec.mode === 'attack' ? 6
                  : spec.mode === 'rescue' ? RESCUE_STANDOFF
+                 /* A ship you asked aboard (boarding.js), coming to a tube's
+                  * length off your hull. */
+                 : spec.mode === 'alongside' ? (spec.standoffKm || 0.03)
                  : spec.kind === 'pirate' ? PIRATE_STANDOFF : POLICE_STANDOFF;
+
+    /* A DEAD TANK (upkeep.js, 2026-10-30). A trader lifted off her rail
+     * while she was adrift — robbed, hailed, fired on — has no reaction
+     * mass to flee, fight or come alongside with, whatever her mode says.
+     * She coasts under gravity and keeps her slow tumble, as she did on
+     * her rail, until somebody passes her mass (Upkeep.transfer clears
+     * this) or she is reaped back onto her timetable. */
+    if (spec.adrift) {
+      var dtD = Math.max(0, dtSim);
+      var gD = acceleration(live.pos, sys, t);
+      live.vel = V.addScaled(live.vel, gD, dtD);
+      live.pos = V.addScaled(live.pos, live.vel, dtD);
+      var aD = dtD * 0.0035, cD = Math.cos(aD), sD = Math.sin(aD), f0 = live.fwd, u0 = live.up;
+      if (f0 && u0) {
+        live.fwd = V.norm(V.add(V.scale(f0, cD), V.scale(u0, sD)));
+        live.up = V.norm(V.sub(V.scale(u0, cD), V.scale(f0, sD)));
+        live.right = V.cross(live.fwd, live.up);
+      }
+      live.throttle = 0;
+      live.mode = spec.mode;
+      live.adrift = true;
+      return V.dist(ship.pos, live.pos);
+    }
+
+    /* COMING ALONGSIDE (boarding.js, 2026-10-29) is flown, not chased. The
+     * station-keeping loop below took three minutes to bring a hauler from
+     * 8 km to within a kilometre and was still oscillating there (measured,
+     * probe-tube.js) — fine for a patrol that only wants to be near you,
+     * useless for a ship that has to stop a tube's length off your hatch.
+     * So: a straight approach at what her drive can stop from (v² = 2ad,
+     * capped), on top of your own velocity, the change limited to her
+     * acceleration per step. Gravity pulls you both the same way, and she
+     * matches whatever you are doing, so it needs no term of its own. */
+    if (spec.mode === 'alongside') {
+      /* HER CLOCK FIRST (2026-10-29). This runs after your ship has taken
+       * this frame's step, so her position is a frame older than yours.
+       * Steering from that and stepping afterwards settled her exactly one
+       * frame of travel AHEAD of the aim point: at 55 km/s and 60 fps,
+       * 0.92 km, which is the "hovering about 1 km out" Astra saw. So she
+       * moves up to the same instant first, then steers from there. */
+      var dtA = Math.max(0, dtSim);
+      /* JOINED BY HER TUBE she is the one flying the pair: no more steering
+       * toward you (you are pinned to her, after this, by main.js), just
+       * her own coast under gravity with her drives cold. Steering here
+       * chased your pinned position from a frame back and burned flat out
+       * every frame to do it, slowing her off her orbit. */
+      var slot = spec.slot;
+      if (spec.tubeJoined) {
+        var gJ = acceleration(live.pos, sys, t);
+        live.vel = V.addScaled(live.vel, gJ, dtA);
+        live.pos = V.addScaled(live.pos, live.vel, dtA);
+        if (slot) slotAttitude(live, ship, slot, 1);
+        live.throttle = 0;
+        live.mode = spec.mode;
+        return V.dist(ship.pos, live.pos);
+      }
+      live.pos = V.addScaled(live.pos, live.vel, dtA);
+      toShip = V.sub(ship.pos, live.pos);
+      range = V.len(toShip);
+      /* HER SLOT (2026-10-29). Astra: "why are the ships coming together
+       * nose to nose?" — they were aimed centre to centre, 30 m apart, with
+       * her nose left wherever her approach pointed it. Now main.js gives
+       * her a place in YOUR frame (spec.slot: beneath you upside down,
+       * bellies together, or level beside you, by the two hulls' sizes),
+       * and the aim is that place wherever your ship is pointing. Without a
+       * slot (a hull with no ramp) she keeps the old tube's length off. */
+      var aimA;
+      if (slot) {
+        aimA = V.add(ship.pos, V.add(V.add(V.scale(ship.right, slot.off[0]), V.scale(ship.up, slot.off[1])),
+                                     V.scale(ship.fwd, slot.off[2])));
+      } else {
+        var brg = range > 1e-6 ? V.scale(toShip, -1 / range) : { x: 1, y: 0, z: 0 };
+        aimA = V.addScaled(ship.pos, brg, standoff);
+      }
+      var offA = V.sub(aimA, live.pos), dA = V.len(offA);
+      var aMax = Math.max(spec.accel || 0, 0.03);
+      var vClose = Math.min(0.4, Math.sqrt(2 * aMax * dA));
+      var wantV = dA > 1e-9 ? V.addScaled(ship.vel, offA, vClose / dA) : V.clone(ship.vel);
+      var dvA = V.sub(wantV, live.vel), dvL = V.len(dvA), lim = aMax * Math.max(dtSim, 1e-6);
+      if (dvL > lim) dvA = V.scale(dvA, lim / dvL);
+      live.vel = V.add(live.vel, dvA);
+      /* Her nose. Burning hard, it points the way her drive is pushing —
+       * toward you on the way in, and away from you, engines first, while
+       * she brakes; the last few hundred metres she comes round to the
+       * attitude of her slot, so she settles lying the way you lie. */
+      if (slot && dA < 0.3) slotAttitude(live, ship, slot, Math.min(1, dtA * 0.9));
+      else if (dvL > lim * 0.5) turnTo(live, V.norm(dvA), live.up, Math.min(1, dtA * 0.9));
+      live.mode = spec.mode;
+      live.throttle = Math.min(1, dvL / Math.max(lim, 1e-9));
+      return V.dist(ship.pos, live.pos);
+    }
 
     var aim;
     var matchVel = ship.vel;
@@ -2175,14 +2344,33 @@
       /* A responder on its rescue leg is lifted by Combat at the handoff,
        * not by proximity: its rail passing within WAKE_RANGE of you halfway
        * through a system crossing would otherwise wake it into shadowing. */
-      if (!spec.live && !safe && range < WAKE_RANGE && !spec.rescue) { wakeNpc(spec, state); }
+      if (!spec.live && !safe && range < WAKE_RANGE && !spec.rescue) { wakeNpc(spec, state, sys); }
 
       if (spec.live) {
         if (safe) { sleepNpc(spec); continue; }
 
-        if (spec.kind === 'pirate' && spec.mode !== 'breakoff' && policeNearby(sys, t, ship.pos)) {
+        /* Paid up, mid-encounter: they see the mark and go. A pirate already
+         * shooting (`hostileToPlayer`) is past caring. */
+        if (sys.tithe === 'paid' && titheSpares(spec) && !spec.hostileToPlayer) {
+          if (spec.kind === 'pirate' && (spec.mode === 'intercept' || spec.mode === 'demand')) {
+            spec.mode = 'breakoff'; spec.demanding = false; spec.brokeOffBecause = 'tithe';
+          } else if (spec.kind === 'police' && spec.mode === 'inspect') {
+            spec.mode = 'shadow';
+          }
+        }
+
+        /* A ship that refused the tithe is fair game: the overboss's
+         * pirates do not back off for a patrol over it. */
+        if (spec.kind === 'pirate' && spec.mode !== 'breakoff' && sys.tithe !== 'suspected' &&
+            policeNearby(sys, t, ship.pos)) {
           spec.mode = 'breakoff';
           spec.brokeOffBecause = 'police';
+        }
+
+        /* And his patrols look again, every ten minutes they hold on you. */
+        if (sys.tithe === 'suspected' && spec.kind === 'police' && spec.faction === 'outlaw' &&
+            spec.scanned && spec.modeSince > 600) {
+          spec.scanned = false; spec.scanHoldTime = 0; spec.modeSince = 0;
         }
 
         range = steerNpc(spec, sys, t, dtSim, ship);
@@ -2403,7 +2591,10 @@
     var souls = st.route.souls || 0;
 
     var text;
-    if (souls > 0 && st.phase !== 'moored' && (h >>> 5) % 2 === 0) {
+    if (st.phase === 'adrift') {
+      /* A dead tank (upkeep.js) is the only thing she has to say. */
+      text = 'adrift, tank gone — anyone with mass to spare';
+    } else if (souls > 0 && st.phase !== 'moored' && (h >>> 5) % 2 === 0) {
       text = souls + ' aboard for ' + (dst ? dst.name : 'onward');
     } else if (st.phase === 'descent') {
       text = 'on final into ' + (dst ? dst.name : 'the port');
@@ -5944,6 +6135,7 @@
     landingDamage: landingDamage,
     smootherstep: smootherstep,
     trafficState: trafficState,
+    trafficCore: trafficCore,
     trafficAll: trafficAll,
     berthStatus: berthStatus,
     berthCapacity: berthCapacity,

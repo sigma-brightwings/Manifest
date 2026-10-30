@@ -11,8 +11,8 @@
  *  - lies are weighed on the design's two axes, and "freed slaves, drive
  *    about to explode" is the worst kind;
  *  - responders are chosen by values, and arriving is where lies are found;
- *  - NPC maydays are a pure function of the seed and the clock, real ones
- *    can be answered for gratitude, and a pirate's bait can be checked.
+ *  - NPC lures are a pure function of the seed and the clock, and a
+ *    pirate's bait can be checked (real maydays: test/upkeep.test.js).
  */
 'use strict';
 
@@ -225,7 +225,10 @@ section('--- the band is not only yours ---');
 (function () {
   var star = busy(true);
   var G = makeG(star);
-  var found = 0, fakes = 0, slots = 300;
+  /* THE SCHEDULE HERE IS BAIT ONLY (2026-10-30). Real maydays are ships
+   * whose tanks really let go (upkeep.js; test/upkeep.test.js answers
+   * one); this schedule's real calls were phantoms and are gone. */
+  var found = 0, fakes = 0, slots = 3000;
   for (var s = 0; s < slots; s++) {
     var c = M.npcCallFor(G, G.sys, s);
     if (!c) continue;
@@ -235,39 +238,22 @@ section('--- the band is not only yours ---');
     if (JSON.stringify(again) !== JSON.stringify(c)) { check('same slot, same call', false); return; }
   }
   console.log('     ' + found + ' calls in ' + slots + ' slots, ' + fakes + ' of them pirates');
-  check('calls happen at roughly the designed rate', found > slots * 0.3 && found < slots * 0.5, found);
-  check('where pirates work, some calls are bait', fakes > 0 && fakes < found, fakes + '/' + found);
+  check('lures happen at roughly the designed rate', found > slots * 0.015 && found < slots * 0.05, found);
+  check('and every call off this schedule is a lure, not a phantom', fakes === found, fakes + '/' + found);
 
-  /* Find a real one and a fake one, put each on the band, answer each. */
-  var real = null, bait = null;
-  for (var s2 = 0; s2 < slots && (!real || !bait); s2++) {
+  var bait = null;
+  for (var s2 = 0; s2 < slots && !bait; s2++) {
     var c2 = M.npcCallFor(G, G.sys, s2);
-    if (!c2) continue;
-    if (c2.fake && !bait) bait = c2;
-    if (!c2.fake && !real) real = c2;
+    if (c2 && c2.fake) bait = c2;
   }
-  check('found a real call and a bait call', !!real && !!bait);
-  if (!real || !bait) return;
+  check('found a bait call', !!bait);
+  if (!bait) return;
 
   var hooks = { said: [], say: function (m) { hooks.said.push(m); } };
   G.distress = [];
-  M.updateNpcCalls(G, G.sys, real.at + 10);
-  var live = G.distress.filter(function (x) { return x.from === real.from; })[0];
-  check('a call goes on the band inside its window', !!live && !!live.pos);
-  M.updateNpcCalls(G, G.sys, real.at + 20);
-  check('and only once', G.distress.filter(function (x) { return x.from === real.from; }).length === 1);
-  check('the transponder of a real caller checks out',
-        /checks out/.test(M.checkTransponder(G, G.sys, real.at, live)));
-
-  G.ship.pos = V.clone(live.pos);
-  var r = Combat.answerDistress(G.sys, G, real.at + 30, live, hooks);
-  check('answering a real call works', r.ok && !r.fake, r.why);
-  var route = G.sys.traffic.filter(function (x) { return x.id === real.routeId; })[0];
-  var mem = Cap.memory(G, Cap.keyOf(G, G.sys, { route: route, id: route.id }));
-  check('the captain you saved is grateful', mem && mem.tag === 'SAVED_MY_SHIP' &&
-        Cap.greeting(G, G.sys, { route: route, id: route.id }, real.at + 100).band === 'grateful',
-        mem && mem.tag);
-  check('and the rescue is on your record', Cap.recordOf(G).rescues === 1);
+  M.updateNpcCalls(G, G.sys, bait.at + 10);
+  check('a lure goes on the band once, not every frame', (M.updateNpcCalls(G, G.sys, bait.at + 20),
+        G.distress.filter(function (x) { return x.from === bait.from; }).length === 1));
 
   G.distress = [];
   M.updateNpcCalls(G, G.sys, bait.at + 10);
@@ -280,7 +266,7 @@ section('--- the band is not only yours ---');
   var r2 = Combat.answerDistress(G.sys, G, bait.at + 30, live2, hooks);
   check('answering it walks you into the pirate', r2.ok && r2.fake);
   check('which says so', hooks.said.some(function (s) { return /not on any timetable/.test(s); }));
-  check('and nobody is grateful for it', Cap.recordOf(G).rescues === 1);
+  check('and nobody is grateful for it', !(Cap.recordOf(G).rescues > 0));
 
   /* After its window the call does not come back. */
   G.distress = [];

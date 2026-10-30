@@ -107,10 +107,15 @@
      * is busier — and at least one of each size a ship of yours needs. */
     var need = { L: 0, M: 0, S: 0 };
     (opts.ships || []).forEach(function (s) { need[sizeClass(s.size)]++; });
+    /* The ships moored here as well (2026-10-28): every one of them is in a
+     * berth, so the deck has room for all of them. Adds berths, never draws
+     * — the rng below is asked the same questions either way. */
+    var needOthers = { L: 0, M: 0, S: 0 };
+    (opts.others || []).slice(0, 6).forEach(function (o) { needOthers[sizeClass(o.size)]++; });
     var count = {
-      L: Math.max(1, need.L),
-      M: Math.max(rng.int(2, 3), need.M),
-      S: Math.max(rng.int(2, 4), need.S)
+      L: Math.max(1, need.L + needOthers.L),
+      M: Math.max(rng.int(2, 3), need.M + needOthers.M),
+      S: Math.max(rng.int(2, 4), need.S + needOthers.S)
     };
     var order = [];
     ['L', 'M', 'S'].forEach(function (sz) { for (var i = 0; i < count[sz]; i++) order.push(sz); });
@@ -182,6 +187,22 @@
       if (s.current) spawn = { x: hx + (br.side < 0 ? 1.4 : -1.4), z: (br.z0 + br.z1) / 2,
                                yaw: br.side < 0 ? Math.PI / 2 : -Math.PI / 2 };
     });
+    /* AND EVERYBODY ELSE'S (2026-10-28), for boarding. `opts.others` are the
+     * ships moored here now ({ name, size, route }) in the order the port's
+     * timetable gives them; each takes a free berth of its size after yours,
+     * and its hatch is the way aboard her. A ship with no berth of her size
+     * left is still in port — her crew still drink in the bar — she just
+     * has no hatch on this deck. */
+    (opts.others || []).slice(0, 6).forEach(function (o) {
+      var want = sizeClass(o.size);
+      var k = -1;
+      for (var j = 0; j < free.length; j++) if (free[j].size === want) { k = j; break; }
+      if (k < 0) return;
+      var br = free.splice(k, 1)[0];
+      br.other = o;
+      var hx = br.side < 0 ? br.x0 + 0.9 : br.x1 - 0.9;
+      item('other', hx, (br.z0 + br.z1) / 2, 'Board  ·  ' + (o.name || 'ship'), { other: o, berth: br.id });
+    });
     if (!spawn) spawn = { x: 0, z: -6, yaw: 0 };
 
     return { portId: portId, rooms: rooms, doors: doors, items: items, spawn: spawn };
@@ -192,6 +213,10 @@
    * doorway, a wall's width in from its jambs. Counters are furniture: you
    * stand against them, not in them. */
   function standable(plan, x, z) {
+    /* A plan may veto ground of its own (2026-10-26): outside your ship,
+     * where her belly comes down too low to walk under; inside, the ramp's
+     * well while the ramp is moving. */
+    if (plan.blocked && plan.blocked(x, z)) return false;
     for (var i = 0; i < plan.items.length; i++) {
       var c = plan.items[i].counter;
       if (c && x > c[0] - RADIUS && x < c[2] + RADIUS && z > c[1] - RADIUS && z < c[3] + RADIUS) return false;
@@ -408,7 +433,7 @@
    * one of yours. */
   function hatchQuads(it, room, out) {
     var x = it.x < (room.x0 + room.x1) / 2 ? room.x0 + 0.02 : room.x1 - 0.02;
-    var z = it.z, col = it.kind === 'mine' ? '#7fd6c0' : it.kind === 'fleet' ? '#d9a521' : '#556';
+    var z = it.z, col = it.kind === 'mine' ? '#7fd6c0' : it.kind === 'fleet' ? '#d9a521' : it.kind === 'other' ? '#9aa6b4' : '#556';
     out.push({ pts: [[x, 0, z - 1.1], [x, 0, z + 1.1], [x, 2.6, z + 1.1], [x, 2.6, z - 1.1]], col: '#1a1e24', bias: -0.03 });
     out.push({ pts: [[x, 2.62, z - 1.2], [x, 2.62, z + 1.2], [x, 2.8, z + 1.2], [x, 2.8, z - 1.2]], col: col, bias: -0.04 });
   }
@@ -443,7 +468,7 @@
       var r = roomAt(plan, it.x, it.z);
       if (!r || !show[r.id]) return;
       if (it.counter) boxQuads(it.counter, 0, 1.05, it.kind === 'bar' ? '#6b4a33' : '#3f5560', quads);
-      if (it.ship) hatchQuads(it, r, quads);
+      if (it.ship || it.other) hatchQuads(it, r, quads);
     });
     if (extra) for (var e = 0; e < extra.length; e++) quads.push(extra[e]);
     /* Far to near. */
@@ -530,7 +555,7 @@
       var r = roomAt(plan, it.x, it.z);
       if (!r) return;
       if (it.counter) boxQuads(it.counter, 0, 1.05, it.kind === 'bar' ? '#6b4a33' : '#3f5560', quads);
-      if (it.ship) hatchQuads(it, r, quads);
+      if (it.ship || it.other) hatchQuads(it, r, quads);
     });
     var m = { v: [], f: [], c: [] };
     quads.forEach(function (q) {
