@@ -2507,6 +2507,23 @@ Astra has seen it working.
     (`.pack-state.json`, untracked), so a copy that is only old (after a
     merge or a pull) is refreshed, while one you edited is kept, and
     `npm test` says which.
+- **The whole history without Git LFS, ready for a fresh GitHub repo
+  (2026-10-30).** Astra: *"we do a fresh repo and delete the former, but
+  first we test"*.
+  - Every commit since the first upload stored its models as LFS
+    pointers. Each of the 494 pointers is replaced by the file it
+    named, so every version of every model is in ordinary git, where
+    git compresses it.
+  - The whole history is 160 MB, and GitHub will hold no LFS at all.
+  - Same 194 commits, authors, dates and merges, and the same files
+    today, byte for byte. Release tags v0.1.0-alpha5 to v1.1.0-beta are
+    carried across.
+  - Commit IDs from the first upload onward are new. The old line is
+    kept locally as `backup/2026-10-30-master-lfs-history`, and every ref
+    as it was is in `C:\Manifest-safety-2026-10-30`.
+  - Built with `git fast-export | fast-import`. `git lfs migrate export`
+    was tried first and given up: on this two-root history it gave the
+    upload commit a parent it never had.
 - **The models and station geometry are stored compressed, and the game
   unpacks them itself (2026-10-30).** Astra: *"can you compress the data
   somehow?"*, then *"and ensure the executable can unpack the compressed
