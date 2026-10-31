@@ -1334,11 +1334,7 @@
     '      vec3 off = vRel - uCut.xyz * t;',
     '      float d = length(off);',
     '      if (d < r) discard;',
-    '      float band = min(r * uCutR.z, uCutBand.x);',
-    '      rim = d < r + band;',
-    '      rimU = (d - r) / max(band, 1e-12);',
-    '      cutW = off / max(d, 1e-12);',
-    '      near = 1.0 - smoothstep(r + band, r + band + r * uCutBand.y, d);',
+    '      if (d < r * (1.0 + uCutR.z)) { rim = true; rimU = (d - r) / (r * uCutR.z); cutW = off / max(d, 1e-9); }',
     '    }',
     '  }',
     '  float depth = dot(vRel, uFwd);',
@@ -1409,10 +1405,7 @@
      * it, and the hangar's neon strips — every one a full-strength lamp —
      * were the next loudest thing on screen. Only indoors, only with the
      * cut on, so a berth seen normally is lit exactly as it was. */
-    '  if (uCut.w > 0.5 && uIndoors > 0.5 && vEmis > 0.5) {',
-    '    c *= 0.75;',
-    '    glow *= 0.6;',
-    '  }',
+
 
     /* Shock heating, on the faces actually meeting the air.
      *
@@ -1457,21 +1450,16 @@
     '    c = mix(c, vec3(luma) * 0.6, near * uCutBand.z);',
     '    glow *= 1.0 - near;',
     '  }',
-    /* Flat, unlit, no glow: a cut face is a colour, not a lamp.
-     *
-     * TWO ORANGE LINES WITH BLACK BETWEEN (2026-10-26). Astra: "a less
-     * busy, but still nicely convincing double orange line, with black in
-     * between them". Thirds across the band: orange, black, orange.
-     *
-     * AND NOT WHERE THE CUT RUNS ALONG A SURFACE, carried over from the
-     * cutaway-test build. A floor lying along the line of sight is sliced
-     * in two long slivers beside the hole, and a band on those read as
-     * orange wedges (runway markings converging on the ship). A wall the
-     * cut goes THROUGH has its normal across the cone's radial direction;
-     * one the cut runs ALONG has it lined up with it. */
+    /* THE CUT FACE, LOOK B (Astra, 2026-10-30, choosing between the two
+     * lines' versions side by side: "I want option B"). The inner third is
+     * still hot from the beam - self-lit and fed to the glow pass - and the
+     * rest is scorched plate, so the edge reads as burnt through rather
+     * than drawn on. Replaces the double orange line of 2026-10-26. Not
+     * painted where the cut runs ALONG a surface (a floor lying along the
+     * line of sight), where a band would read as runway markings. */
     '  if (rim && abs(dot(n, cutW)) < 0.8) {',
-    '    c = (rimU > 0.33 && rimU < 0.67) ? vec3(0.02, 0.018, 0.016) : uCutRim;',
-    '    glow = 0.0;',
+    '    if (rimU < 0.35) { c = uCutRim; glow = max(glow, 0.85); }',
+    '    else { c = vec3(0.16, 0.11, 0.085); glow = 0.0; }',
     '  }',
     '  frag = vec4(c, clamp(glow, 0.0, 1.0));',
     '}'
@@ -2467,7 +2455,7 @@
   /* Safety orange, darkened: FE2's cutaway diagrams hatched a section in a
    * flat warm colour, and it has to read against grey plating, black
    * Syndicate hulls and pale fleet paint alike. */
-  var CUT_RIM = [0.78, 0.42, 0.12];
+  var CUT_RIM = [1.0, 0.48, 0.12];
   /* The band's ceiling, the quiet zone and how hard it drains — see THE
    * BAND IS CAPPED in FRAG_MESH. Three metres is about an eighth of a hull
    * length: a pen line at berth distance, not a sleeve over every pipe.

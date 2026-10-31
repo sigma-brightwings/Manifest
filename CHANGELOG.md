@@ -2507,6 +2507,19 @@ Astra has seen it working.
     (`.pack-state.json`, untracked), so a copy that is only old (after a
     merge or a pull) is refreshed, while one you edited is kept, and
     `npm test` says which.
+- **The station cutaway: a burnt-through edge, and nothing else round it
+  (2026-10-30).** Shown the two lines' cut faces side by side at the same
+  berth, Astra chose the mining line's: *"I want option B but let's get rid
+  of all the wires and greebles and shit that currently makes it look like
+  a graphics failure."*
+  - **The cut face** is a hot beam-orange lip that glows, with scorched
+    plate behind it. It replaces the double orange line of 2026-10-26.
+  - **No furniture round the cut.** The cables and frame that stood on the
+    edge, and the ring of pipes round the ship when seen from above, are
+    gone. `Render.drawCutGreebles` is no longer called.
+  - **The setting has two choices:** Laser cut, or Off (the camera stops
+    at the wall). A saved "Laser cut - cables and frame" or "Clean cut"
+    loads as Laser cut.
 - **The whole history without Git LFS, ready for a fresh GitHub repo
   (2026-10-30).** Astra: *"we do a fresh repo and delete the former, but
   first we test"*.

@@ -14492,14 +14492,11 @@
           }
           if (cut) {
             Render.setCutaway(null);
-            /* The edge furniture, drawn AFTER the cut is cleared: it stands
-             * on the cone's surface, and cut by it, half of every cable
-             * would go. */
-            if (G.cutawayStyle === 0 && Render.drawCutGreebles) {
-              Render.drawCutGreebles(ctx, cam, frame, model, b.radius, sun,
-                                     { pos: G.ship.pos, eye: cam.eye,
-                                       rShip: cut.rShip, rEye: cut.rEye });
-            }
+            /* No furniture round the cut (2026-10-30). The cables and frame
+             * that used to stand on the cut's edge (Render.drawCutGreebles,
+             * still in render.js) read as a graphics failure - Astra: "get
+             * rid of all the wires and greebles". The edge is the shader's
+             * hot lip and scorched plate, and nothing else. */
           }
           /* The town, the boards and the pad lighting. Held to a higher
            * threshold than the pad itself: the dressing is detail, and
@@ -16598,14 +16595,14 @@
           return i < 0 ? RENDER_SCALES.indexOf(1) : i;
         },
         set: function (i) { setRenderScale(RENDER_SCALES[i]); } },
-      /* Astra asked for the cutaway to be toggleable. Three ways rather
-       * than on/off because there are two separate things to want off:
-       * the furnished edge (more triangles, and a rebuild while zooming),
-       * and the hole itself. */
+      /* Astra asked for the cutaway to be toggleable. Two ways since
+       * 2026-10-30, when the furnished edge went: the laser cut, or no
+       * hole at all. Stored as before (0 cut, 2 off; an old 1, "clean
+       * cut", is now the same as 0). */
       { kind: 'choice', label: 'Station cutaway', key: '',
-        options: ['Laser cut — cables and frame', 'Clean cut', 'Off — camera stops at the wall'],
-        get: function () { return G.cutawayStyle || 0; },
-        set: function (i) { G.cutawayStyle = i; } },
+        options: ['Laser cut', 'Off — camera stops at the wall'],
+        get: function () { return G.cutawayStyle === 2 ? 1 : 0; },
+        set: function (i) { G.cutawayStyle = i === 1 ? 2 : 0; } },
       { kind: 'choice', label: 'Cockpit chrome', key: '',
         options: ['Instrument band', 'Band stowed', 'Canopy only'],
         get: function () { return G.cockpitChrome || 0; },
@@ -16734,7 +16731,7 @@
         G.cockpitChrome = p.cockpitChrome % 3;
         G.showCockpitFrame = G.cockpitChrome !== 2;
       }
-      if (typeof p.cutawayStyle === 'number') G.cutawayStyle = ((p.cutawayStyle % 3) + 3) % 3;
+      if (typeof p.cutawayStyle === 'number') G.cutawayStyle = p.cutawayStyle === 2 ? 2 : 0;
       if (typeof p.assist === 'boolean') G.assist = p.assist;
       if (typeof p.vector === 'boolean') G.vector = p.vector;
       if (p.flightMode === 'ship' || p.flightMode === 'orbital') G.flightMode = p.flightMode;
