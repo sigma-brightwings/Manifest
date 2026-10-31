@@ -2520,6 +2520,16 @@ Astra has seen it working.
   - **The setting has two choices:** Laser cut, or Off (the camera stops
     at the wall). A saved "Laser cut - cables and frame" or "Clean cut"
     loads as Laser cut.
+- **The game goes back under its own name, sigma-brightwings/Manifest
+  (2026-10-30).** Astra: *"I want you to wipe the current Manifest repo and
+  then push our changes"*. She chose to delete the old repo and recreate it
+  empty, which frees its ~548 MB of Git LFS storage, rather than
+  force-push over it, which would have left that storage in place. The
+  short-lived Manifest_Main is deleted afterwards.
+  - The landing page links (download, flight card, bug reports, source)
+    point at sigma-brightwings/Manifest again.
+  - The pushed history is the LFS-free one: the same commits and release
+    tags, with models stored gzipped.
 - **The whole history without Git LFS, ready for a fresh GitHub repo
   (2026-10-30).** Astra: *"we do a fresh repo and delete the former, but
   first we test"*.
