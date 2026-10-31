@@ -9549,7 +9549,15 @@
     var list = (G.sys && G.sys.ports) || [], best = null, bd = Infinity;
     list.forEach(function (p) {
       if (!p || p === port || !Combat.isShipyard(p)) return;
-      var d = (p.pos && port.pos) ? Math.hypot(p.pos[0] - port.pos[0], p.pos[1] - port.pos[1], (p.pos[2] || 0) - (port.pos[2] || 0)) : 0;
+      /* Where they are NOW, off their orbits, when the ports carry no
+       * fixed position (2026-10-31): a 0 for every one picked whichever
+       * was listed first. */
+      var d;
+      if (p.pos && port.pos) d = Math.hypot(p.pos[0] - port.pos[0], p.pos[1] - port.pos[1], (p.pos[2] || 0) - (port.pos[2] || 0));
+      else {
+        var a = Sim.bodyPosition(p, G.sys, G.t), b = Sim.bodyPosition(port, G.sys, G.t);
+        d = (a && b) ? V.dist(a, b) : Infinity;
+      }
       if (d < bd) { bd = d; best = p; }
     });
     return best ? (best.name || null) : null;
@@ -11305,7 +11313,10 @@
       for (var i = 0; i < MODES.length; i++) if (MODES[i].id === id) return i;
       return -1;
     };
-    if (it.kind === 'market' || it.kind === 'freight') { selectPanel(3); return; }
+    if (it.kind === 'market') { selectPanel(3); return; }
+    /* The freight office is where contracts are let (2026-10-31): it opens
+     * the contract board, not the market screen beside it. */
+    if (it.kind === 'freight') { selectPanel(idx('missions') >= 0 ? idx('missions') : 6); return; }
     if (it.kind === 'yard') { G.yardTab = 'hulls'; selectPanel(idx('ship') >= 0 ? idx('ship') : 4); return; }
     if (it.kind === 'crew') { G.yardTab = 'crew'; selectPanel(idx('ship') >= 0 ? idx('ship') : 4); return; }
     if (it.kind === 'bar') { say('The bar is quiet — the people who drink here come next', 5); return; }

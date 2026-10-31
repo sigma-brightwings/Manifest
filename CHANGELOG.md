@@ -72,6 +72,14 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **Small open items (2026-10-31).**
+  - **The freight office** in the cargo hall now opens the contract board
+    (F7, MISSIONS), where hauls are let, instead of the market screen.
+  - **The outfitter on a wall ad** (`outfitterFor`) is now the nearest
+    shipyard port by where the ports actually are on their orbits. When
+    ports carried no fixed position, every one measured 0 and the first
+    listed won.
+
 - **The pirates split from the Syndicate (2026-10-31).** Astra: *"Syndicate
   is mafia. Pirates are like their disposable muscle."*
   - **Three pirate bands** (`pb0`–`pb2`), with names like *The Vezor
