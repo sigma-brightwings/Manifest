@@ -3462,7 +3462,9 @@
    * it has no per-pixel stage to do it in — which is why main.js only asks
    * for a cutaway when the GPU layer is live and keeps the old boom clamp
    * otherwise. */
+  var CUT_NOW = null;
   function setCutaway(cut) {
+    CUT_NOW = cut || null;
     if (global.GLWorld && global.GLWorld.setCutaway) global.GLWorld.setCutaway(cut || null);
   }
 
@@ -4355,6 +4357,18 @@
      * cab you are standing in is left out, or its walls would be all you
      * saw. */
     if (opts && opts.fromBridge) mesh = bridgeCutMesh(mesh, ship);
+    /* HER WINDOWS, FROM OUTSIDE (2026-10-31). Astra: see-through windows
+     * on other ships. The skin over her cockpit is taken off (her tower's
+     * cut box on a towered hull, the cockpit's own box on the rest), and her
+     * rooms are drawn where they are inside her, with her glass over them
+     * as glass — so what you see through her canopy is her cockpit, and up
+     * an open ramp her airlock, in the place they are walked. */
+    var win = (opts && opts.windows && !opts.fromBridge && gpuWorld() && ship && ship.hullId) ? shipInterior(ship) : null;
+    var well = null;
+    if (win) {
+      if (bridgeSpec(ship)) mesh = bridgeCutMesh(mesh, ship);
+      else if ((well = windowWell(mesh, ship, win))) mesh = well.opaque;
+    }
     /* HER RAMP (2026-10-26): the bay it lies in is cut through her belly,
      * and the ramp, its bay's walls and the airlock over it are drawn in
      * her frame at however far down it is. Only your own ship carries an
@@ -4362,7 +4376,10 @@
     var ramp = (ship && ship.airlock && ship.hullId && !(opts && opts.fromBridge)) ? rampExterior(ship, mesh, L) : null;
     if (ramp) {
       mesh = ramp.hull;
-      var parts = [ramp.bay, ramp.ramp];
+      /* With her rooms drawn in place (windows), the airlock box the bay
+       * carries is the room's own airlock a second time: left out, or the
+       * two fight for the same pixels as the double ramp did. */
+      var parts = win ? [ramp.ramp] : [ramp.bay, ramp.ramp];
       for (var rpi = 0; rpi < parts.length; rpi++) {
         if (!parts[rpi] || !parts[rpi].f.length) continue;
         if (!(gpuWorld() && global.GLWorld.queueMesh(cam, ship, parts[rpi], L, sunDir, 0, null))) {
@@ -4370,6 +4387,7 @@
         }
       }
     }
+    if (well) global.GLWorld.setCutaway({ box: wellBox(ship, well) });
     if (!(gpuWorld() && global.GLWorld.queueMesh(cam, ship, mesh, L, sunDir,
                                                  ship.reentryGlow || 0, ship.windDir,
                                                  undefined, pr))) {
@@ -4377,11 +4395,94 @@
       try { paintMesh(ctx, cam, ship, mesh, L, sunDir, tint); }
       finally { PAINT_NOW = null; }
     }
+    if (well) {
+      global.GLWorld.setCutaway(CUT_NOW);
+      if (well.glass.f.length) global.GLWorld.queueMesh(cam, ship, well.glass, L, sunDir, 0, null, HULL_GLASS_ALPHA);
+    }
     /* The legs go on the plain queueMesh path rather than the plasma one.
      * They are the coldest thing on the ship — the last part to see air on
      * the way down and the first thing a pad touches — and giving them the
      * hull's re-entry glow would light them up before the nose. */
     drawHullGear(ctx, cam, ship, mesh, L, sunDir, tint, gearTravelOf(ship));
+    if (win) queueRoomsInPlace(cam, ship, win, sunDir);
+  }
+
+  /* HER CANOPY WELL. A hull model's glass is a dark panel on her skin, and
+   * on most hulls it stands a metre or more ahead of (and above) the
+   * cockpit room her crew actually sit in. So what is taken off is not the
+   * skin over the room but the WELL between the two: a box from the room's
+   * front wall out to the far side of her glass, as wide and as tall as
+   * either, cut per pixel in the shader (a per-face cut either left her big
+   * forward plates standing or tore holes the size of them). Her glass
+   * faces near the cockpit come out of the hull and are drawn as glass;
+   * through them, the well, and through the room's own front panes, her
+   * cockpit. Glass is the library's canopy colour and the trader's. */
+  var HULL_GLASS = { '#222a25': 1, '#1c2620': 1 };
+  var HULL_GLASS_ALPHA = 0.32;
+  var WELL_CACHE = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  function windowWell(mesh, ship, d) {
+    var ck = d && d.plan && d.plan.rooms.filter(function (r) { return r.kind === 'cockpit'; })[0];
+    if (!ck || !mesh || !mesh.f || !mesh.c || !WELL_CACHE) return null;
+    var Lm = hullLength(ship) * 1000, at = cockpitAt(ship) || [0, 0, 0];
+    var key = ship.hullId + '|' + Lm.toFixed(2);
+    var per = WELL_CACHE.get(mesh);
+    if (!per) { per = {}; WELL_CACHE.set(mesh, per); }
+    if (per[key]) return per[key];
+    var fy = d.plan.floorY;
+    var rx0 = at[0] + ck.x0, rx1 = at[0] + ck.x1, cx = (rx0 + rx1) / 2, rhw = (rx1 - rx0) / 2;
+    var ry0 = at[1] + fy, ry1 = ry0 + (ck.y1 || 2.4), rz0 = at[2] + ck.z0, rz1 = at[2] + ck.z1;
+    var opaque = { v: mesh.v, f: [], c: [] }, glass = { v: mesh.v, f: [], c: [] }, k;
+    for (k in mesh) if (k.charAt(0) !== '_' && !(k in opaque)) opaque[k] = glass[k] = mesh[k];
+    var g = null;
+    for (var i = 0; i < mesh.f.length; i++) {
+      var f = mesh.f[i], col = mesh.c[i];
+      var x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9, z0 = 1e9, z1 = -1e9;
+      for (var j = 0; j < f.length; j++) {
+        var v = mesh.v[f[j]], x = v[0] * Lm, y = v[1] * Lm, z = v[2] * Lm;
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        if (z < z0) z0 = z; if (z > z1) z1 = z;
+      }
+      var near = HULL_GLASS[col] && (x0 + x1) / 2 - cx < rhw + 3 && cx - (x0 + x1) / 2 < rhw + 3 &&
+                 (z0 + z1) / 2 > rz0 - 1 && (z0 + z1) / 2 < rz1 + 8 &&
+                 (y0 + y1) / 2 > ry0 - 1 && (y0 + y1) / 2 < ry1 + 3;
+      if (!near) { opaque.f.push(f); opaque.c.push(col); continue; }
+      glass.f.push(f); glass.c.push(col);
+      if (!g) g = { x0: x0, x1: x1, y0: y0, y1: y1, z0: z0, z1: z1 };
+      else {
+        g.x0 = Math.min(g.x0, x0); g.x1 = Math.max(g.x1, x1); g.y0 = Math.min(g.y0, y0);
+        g.y1 = Math.max(g.y1, y1); g.z0 = Math.min(g.z0, z0); g.z1 = Math.max(g.z1, z1);
+      }
+    }
+    /* No glass near her cockpit: the well is the half-metre of skin ahead
+     * of the room's front wall, where its panes look out. */
+    var w = g ? {
+      cx: cx, hw: Math.max(rhw, Math.max(g.x1 - cx, cx - g.x0)) + 0.1,
+      z0: Math.min(rz1 - 0.2, g.z0 - 0.1), z1: g.z1 + 0.15,
+      y0: ry0 + 0.1, y1: Math.max(ry1, g.y1) + 0.15
+    } : { cx: cx, hw: rhw + 0.1, z0: rz1 - 0.2, z1: rz1 + 0.6, y0: ry0 + 0.1, y1: ry1 + 0.1 };
+    per[key] = { opaque: opaque, glass: glass, well: w };
+    return per[key];
+  }
+  /* The well as gl.js's cut box, in km off her frame. */
+  function wellBox(ship, well) {
+    var w = well.well;
+    return { origin: localToWorld(ship, w.cx * 0.001, 0, 0), a: ship.fwd, b: ship.right, u: ship.up,
+             aMin: w.z0 * 0.001, aMax: w.z1 * 0.001, bHalf: w.hw * 0.001,
+             zMin: w.y0 * 0.001, zMax: w.y1 * 0.001 };
+  }
+
+  /* Her rooms in her (the whole deck, indoors-lit, in her cockpit's frame)
+   * and her panes over them as tinted glass. */
+  var WINDOW_ALPHA = 0.3;
+  function queueRoomsInPlace(cam, ship, d, sunDir) {
+    var G2 = global.GLWorld;
+    if (!G2 || !G2.queueMesh || !d.meshes || !d.meshes.room) return;
+    var F = bridgeFrame(ship);
+    setIndoors(true);
+    G2.queueMesh(cam, F, d.meshes.room, M, F.up, 0);
+    if (d.meshes.fittings) G2.queueMesh(cam, F, d.meshes.fittings, M, F.up, 0);
+    setIndoors(false);
+    if (d.meshes.portals) G2.queueMesh(cam, F, d.meshes.portals, M, sunDir, 0, null, WINDOW_ALPHA);
   }
 
   /* ---- torch drives -----------------------------------------------------

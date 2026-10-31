@@ -100,6 +100,7 @@
     'uniform vec4 uBoxO;',        // eye -> ship, km; w = 1 when on
     'uniform vec3 uBoxA, uBoxB, uBoxU;',
     'uniform vec4 uBoxD;',        // along min, along max, half width, floor
+    'uniform float uBoxTop;',     // ceiling (1e9 = none)
     'uniform vec2 uScreenPx;',    // the camera's principal point (cx, cy)
     'uniform float uFlen;',
     'uniform float uPad;',        // quad half-size measured in body radii (>1)
@@ -314,7 +315,7 @@
     '  if (uBoxO.w > 0.5) {',
     '    vec3 bq = hit - uBoxO.xyz;',
     '    float ba = dot(bq, uBoxA), bb = dot(bq, uBoxB), bz = dot(bq, uBoxU);',
-    '    if (ba > uBoxD.x && ba < uBoxD.y && abs(bb) < uBoxD.z && bz > uBoxD.w) discard;',
+    '    if (ba > uBoxD.x && ba < uBoxD.y && abs(bb) < uBoxD.z && bz > uBoxD.w && bz < uBoxTop) discard;',
     '  }',
     '  gl_FragDepth = encodeDepth(dot(hit, uFwd));',
     '  vec3 n = normalize(hit - oc);',
@@ -1240,6 +1241,7 @@
     'uniform vec4 uBoxO;',
     'uniform vec3 uBoxA, uBoxB, uBoxU;',
     'uniform vec4 uBoxD;',
+    'uniform float uBoxTop;',
     'out vec4 frag;',
 
     /* ---- SCREEN-DOOR TRANSPARENCY, and why it is not alpha blending -----
@@ -1318,7 +1320,7 @@
     '  if (uBoxO.w > 0.5) {',
     '    vec3 bq = vRel - uBoxO.xyz;',
     '    float ba = dot(bq, uBoxA), bb = dot(bq, uBoxB), bz = dot(bq, uBoxU);',
-    '    if (ba > uBoxD.x && ba < uBoxD.y && abs(bb) < uBoxD.z && bz > uBoxD.w) discard;',
+    '    if (ba > uBoxD.x && ba < uBoxD.y && abs(bb) < uBoxD.z && bz > uBoxD.w && bz < uBoxTop) discard;',
     '  }',
     '  bool rim = false;',
     '  float rimU = 0.0;',
@@ -1906,7 +1908,7 @@
                                         'uGlow', 'uWind',
                                         'uAlpha', 'uCut', 'uCutR', 'uCutRim',
                                         'uCutBand', 'uCutUp',
-                                        'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD',
+                                        'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD', 'uBoxTop',
                                         'uPaint', 'uTrim',
                                         'uTear', 'uTearK', 'uTearN']);
     } catch (e) {
@@ -1926,7 +1928,7 @@
                               'uOcean', 'uSeaColor', 'uIce',
                               'uCenterRel', 'uScreenPx', 'uFlen',
                               'uHoleRel', 'uHoleR', 'uHaloPush',
-                              'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD',
+                              'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD', 'uBoxTop',
                               'uTear', 'uTearK', 'uTearN']);
 
     quad = gl.createBuffer();
@@ -2701,6 +2703,9 @@
     gl.uniform3f(uni.uBoxB, bx.b.x, bx.b.y, bx.b.z);
     gl.uniform3f(uni.uBoxU, bx.u.x, bx.u.y, bx.u.z);
     gl.uniform4f(uni.uBoxD, bx.aMin, bx.aMax, bx.bHalf, bx.zMin);
+    /* A lid, for a box that is a window well rather than a cutaway: unset
+     * means open to the sky, as every box was before. */
+    gl.uniform1f(uni.uBoxTop, typeof bx.zMax === 'number' ? bx.zMax : 1e9);
   }
   GL.setSurfaceHole = function (bodyId, worldPos, radiusKm) {
     hole = (bodyId && worldPos && radiusKm > 0)
@@ -3240,7 +3245,9 @@
         gl.uniform4f(meshUni.uPaint, 0, 0, 0, 0);
       }
       gl.uniform1f(meshUni.uIndoors, m.indoors);
-      if (m.box) uploadBox(meshUni, m.box, cam);
+      /* m.cam: this loop has no `cam` of its own, and until the canopy
+       * wells (2026-10-31) nothing queued a mesh with a box to find out. */
+      if (m.box) uploadBox(meshUni, m.box, m.cam);
       else gl.uniform4f(meshUni.uBoxO, 0, 0, 0, 0);
       if (m.cut) {
         gl.uniform4f(meshUni.uCut, m.cut.x, m.cut.y, m.cut.z, 1);

@@ -8388,7 +8388,7 @@
       if (!sp && !touching) continue;
       if (!touching && (sp.x < -60 || sp.x > cam.w + 60 || sp.y < -60 || sp.y > cam.h + 60)) continue;
       if (touching && (!sp || sp.x < -60 || sp.x > cam.w + 60 || sp.y < -60 || sp.y > cam.h + 60)) {
-        Render.drawHullModel(ctx, cam, s, s.size, V.norm(V.sub(sunPos, s.pos)), s.color, s.hullClass || s.cls);
+        drawTrafficHull(ctx, cam, s, V.norm(V.sub(sunPos, s.pos)), s.hullClass || s.cls);
         continue;
       }
 
@@ -8410,7 +8410,7 @@
       var lenPx = s.size * sp.scale;
       if (lenPx > 4) {
         var sunDir = V.norm(V.sub(sunPos, s.pos));
-        Render.drawHullModel(ctx, cam, s, s.size, sunDir, s.color, hullKey);
+        drawTrafficHull(ctx, cam, s, sunDir, hullKey);
         // Port red, starboard green, in the ship's own frame — so which way
         // it is facing is readable without a label.
         if (lenPx > 14 && blink < 1) {
@@ -10492,6 +10492,33 @@
     }
     return v;
   }
+  /* SEE-THROUGH WINDOWS ON OTHER SHIPS (2026-10-31). Within WINDOWS_KM of
+   * the eye a ship in the traffic is drawn as the hull she is walked as (a
+   * visitor, the same stand-in boarding uses) with her rooms in her and her
+   * glass as glass (Render.drawShipModel `windows`); further off she is the
+   * traffic silhouette she always was. One stand-in per ship, kept. */
+  var WINDOWS_KM = 0.4;
+  var STAND_INS = {}, standInCount = 0;
+  function trafficStandIn(s) {
+    if (s.spec && s.spec.live) return specVisitor(s.spec);
+    if (!s.route) return null;
+    var k = s.route.id || s.route.name, v = STAND_INS[k];
+    if (!v) {
+      if (++standInCount > 200) { STAND_INS = {}; standInCount = 1; }
+      v = STAND_INS[k] = makeVisitor(s.route, null);
+      v.docked = null;
+    }
+    v.pos = s.pos; v.vel = s.vel || v.vel; v.fwd = s.fwd; v.up = s.up;
+    v.right = s.right || V.norm(V.cross(s.fwd, s.up));
+    return v;
+  }
+  function drawTrafficHull(ctx, cam, s, sunDir, hullKey) {
+    if (glLive() && s.fwd && s.up && V.dist(s.pos, cam.eye) < WINDOWS_KM) {
+      var sv = trafficStandIn(s);
+      if (sv) { Render.drawShipModel(ctx, cam, sv, sunDir, null, { windows: true }); return; }
+    }
+    Render.drawHullModel(ctx, cam, s, s.size, sunDir, s.color, hullKey);
+  }
   var EVA_LOOK_KM = 3;              // a disabled ship this close is marked
   /* The disabled ship nearest the suit (or your ship, when you are not out). */
   function evaTarget(from) {
@@ -11327,11 +11354,8 @@
     var e = G.eva, E = global.Eva, vh = h - FBAR_H;
     var sunDir = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), G.ship.pos));
     if (global.Airlock) global.Airlock.state(G.ship);
-    Render.drawShipModel(ctx, cam, G.ship, sunDir, null);
-    /* Close in, the room up her ramp: her airlock is where the light is. */
-    if (V.dist(e.pos, G.ship.pos) < 0.25 && Render.queueCockpitRoom && Render.cockpitGpu && Render.cockpitGpu()) {
-      Render.queueCockpitRoom(cam, cockpitShip(), { noPortals: true });
-    }
+    /* Her rooms in her, through her glass and up her ramp (windows). */
+    Render.drawShipModel(ctx, cam, G.ship, sunDir, null, { windows: V.dist(e.pos, G.ship.pos) < WINDOWS_KM });
     var mine = e.mine || rampFootWorld(G.ship), tg = e.tg;
     /* HER, AS A SHIP AND NOT A SILHOUETTE: the hull her decks are walked in
      * (the visitor), her ramp's bay cut out and the ramp down when her
@@ -11341,10 +11365,7 @@
       var v = tg.visitor;
       if (global.Airlock) global.Airlock.state(v);
       var sunV = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), v.pos));
-      Render.drawShipModel(ctx, cam, v, sunV, null);
-      if (v.airlock && v.airlock.ramp > 0 && V.dist(e.pos, v.pos) < 0.25 && Render.queueCockpitRoom && Render.cockpitGpu && Render.cockpitGpu()) {
-        Render.queueCockpitRoom(cam, Render.bridgeFrame ? Render.bridgeFrame(v) : v, { noPortals: true });
-      }
+      Render.drawShipModel(ctx, cam, v, sunV, null, { windows: V.dist(e.pos, v.pos) < WINDOWS_KM });
     }
     var taken = [];
     evaMark(ctx, cam, mine && mine.world, 'YOUR RAMP', '#7dfaff', w, vh, taken);
@@ -15838,8 +15859,9 @@
        * belly with no way in (Astra, 2026-10-29: "I don't see where there
        * could be a ramp"). */
       if (global.Airlock) global.Airlock.state(G.ship);
+      /* Her rooms through her glass from the chase camera too (windows). */
       Render.drawShipModel(ctx, cam, G.ship, sunDir,
-        G.ship.crashed ? '#ff8a7a' : null);
+        G.ship.crashed ? '#ff8a7a' : null, { windows: !G.walk && glLive() && V.dist(G.ship.pos, cam.eye) < WINDOWS_KM });
       /* Her tube to you, while you are joined (boarding.js). */
       drawTube(cam);
       drawCannonMountGlow(ctx, cam, lenPx);

@@ -44,6 +44,34 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **See-through windows on other ships (2026-10-31).** Astra: *"See
+  through windows on other ships"*.
+  - **What you see.** Within 400 m, with the GPU renderer on, a ship's
+    canopy is glass. Through it you see her real cockpit: the same room,
+    seat and fittings you would walk in if you boarded her, lit as
+    indoors, in the place it sits inside her. This applies to traffic, a
+    disabled ship you are crossing to in a suit, and your own ship from
+    the chase camera or a spacewalk.
+  - **How it is cut.** A hull model's glass is a dark panel on her skin,
+    and on most hulls it sits a metre or more ahead of and above the
+    cockpit room. So the opening is the *well* between the two: a box
+    from the room's front wall out past her glass, as wide and tall as
+    either. It is cut per pixel in the shader, because cutting whole
+    faces either left her big forward plates standing or tore holes the
+    size of them. Her glass panels near the cockpit are drawn at 32%
+    opacity, and the room's own panes at 30%.
+  - **Towered hulls** (Capital, Crawler) open their tower the same way
+    their bridge view already did.
+  - **Fixed along the way.** The shader's cut box can now have a lid
+    (`uBoxTop`; unset means open-topped, as before). A mesh queued with a
+    box no longer throws: the draw loop read a `cam` it did not have,
+    which nothing had exercised until now.
+  - **Still to tune.** The cabin reads dim through glass, because it
+    uses the same indoors lighting as station interiors. The Mule's
+    cockpit sits about four metres behind her canopy, so you see a deep
+    well before you see the seat. Both are noted, not fixed.
+  - Probe: `tools/probe-windows.js`.
+
 - **Every ship's rooms fit inside her own hull (2026-10-31).** Astra:
   *"all ships should have interiors that exist as part of the ship
   itself"*, and they *"should follow the rules of making physical
