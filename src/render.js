@@ -12689,7 +12689,8 @@
     if (!hull || !hull.grabArms) return;
     var spec = cockpitSpec(ship);
     var k = spec.arch.room * spec.size;
-    var closed = false;
+    /* The jaws close as the pilot closes them (arms.js, 2026-10-31). */
+    var jaw = Math.max(0, Math.min(1, (ship.arms && ship.arms.jaw) || 0));
     var faces = [];
 
     /* A beam from a to b, with half-thickness hx (sideways) and hy (up),
@@ -12731,7 +12732,7 @@
       }
       /* The jaws: two prongs from the wrist, reaching in toward the line
        * of flight, open while she waits. */
-      var gap = closed ? 0.05 : 0.28;
+      var gap = 0.28 - 0.23 * jaw;
       beam([x1, y1, 7.0], [xj, y1 + gap, 8.3], 0.06, 0.06, ARM_STEEL);
       beam([x1, y1, 7.0], [xj, y1 - gap, 8.3], 0.06, 0.06, ARM_STEEL);
     });
@@ -12741,6 +12742,103 @@
       var poly = clipProject(cam, localPoly(ship, faces[i].pts));
       if (poly) fillPoly(ctx, poly, faces[i].col, 'rgba(0,0,0,0.35)');
     }
+  }
+
+  /* WHERE THE JAWS MEET, in the world (arms.js, 2026-10-31): the point
+   * between the two jaw tips, in the same cockpit metres drawGrabArms
+   * draws them in. `ship` is the cockpit's frame (eye at its pos), as
+   * drawCockpitShell is given. Null on a hull without arms. */
+  var ARM_GRIP = [0, -0.72, 8.3];
+  function armGrip(ship) {
+    var HL = global.Combat && global.Combat.HULLS;
+    var hull = HL && HL[ship && ship.hullId];
+    if (!hull || !hull.grabArms || !ship.pos || !ship.fwd) return null;
+    var spec = cockpitSpec(ship), k = spec.arch.room * spec.size;
+    return localToWorld(ship, ARM_GRIP[0] * k * M, ARM_GRIP[1] * k * M, ARM_GRIP[2] * k * M);
+  }
+
+  /* THE ARM CAMERA (Astra, 2026-10-31: "the [tug's] cockpit should have a
+   * vidscreen to operate those grab arms"). A camera on the arms' cross-
+   * member, a few metres behind and above the jaws, looking past them:
+   * what you are about to take hold of, at the scale you take hold of it.
+   * Painted in 2D into its own screen, with its own camera, because the
+   * world layer draws one view. `info` is Arms.view: the target, how far,
+   * how fast, whether it is in reach, and what the jaws hold. */
+  function drawArmCam(ctx, cam, ship, rect, info) {
+    var grip = armGrip(ship);
+    if (!grip || !rect) return;
+    var x = rect.x, y = rect.y, w = rect.w, h = rect.h;
+    ctx.save();
+    ctx.fillStyle = '#071014';
+    ctx.fillRect(x, y, w, h);
+    ctx.beginPath(); ctx.rect(x + 2, y + 2, w - 4, h - 4); ctx.clip();
+    var c2 = Object.create(Camera.prototype);
+    c2.cockpitFov = 50 * DEG;
+    var eye = V.addScaled(V.addScaled(grip, ship.fwd, -0.006), ship.up, 0.0025);
+    var look = V.addScaled(grip, ship.fwd, 0.010);
+    c2.buildFree(eye, V.sub(look, eye), ship.up, w, h);
+    c2.cx += x; c2.cy += y;
+    c2.near = 0.0005;
+    var sun = ship.up;
+    /* What is out there: her, a canister, whatever is near the jaws. */
+    (info && info.near || []).forEach(function (o) {
+      if (o.kind === 'canister') {
+        var p = c2.project(o.pos);
+        if (!p) return;
+        var s = Math.max(3, 0.004 * p.scale);
+        ctx.fillStyle = o.held ? '#ffd36b' : '#c9a86a';
+        ctx.fillRect(p.x - s / 2, p.y - s / 2, s, s);
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.strokeRect(p.x - s / 2, p.y - s / 2, s, s);
+      } else if (o.kind === 'ship' && o.state && o.state.pos) {
+        try {
+          var mesh = hullPreviewMesh(o.state.hullId || 'talon', o.state);
+          paintMesh(ctx, c2, o.state, mesh, hullLength(o.state), sun, null);
+        } catch (e) { /* nothing drawn is better than a broken screen */ }
+      }
+    });
+    /* The jaws, from just behind them: two prongs reaching in, closing. */
+    var jaw = (info && info.jaw) || 0;
+    [-1, 1].forEach(function (side) {
+      var gap = 0.0016 * (1 - jaw * 0.8);
+      var a = V.addScaled(V.addScaled(grip, ship.right, side * 0.0030), ship.fwd, -0.0015);
+      var b = V.addScaled(V.addScaled(grip, ship.right, side * gap), ship.fwd, 0.0006);
+      var pa = c2.project(a), pb = c2.project(b);
+      if (!pa || !pb) return;
+      ctx.strokeStyle = '#d9a521'; ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); ctx.stroke();
+    });
+    /* The reticle: where the jaws close. */
+    var pg = c2.project(grip);
+    if (pg) {
+      ctx.strokeStyle = info && info.inReach ? '#7dffb0' : 'rgba(150,220,255,0.55)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(pg.x, pg.y, 9, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(pg.x - 16, pg.y); ctx.lineTo(pg.x - 11, pg.y);
+      ctx.moveTo(pg.x + 11, pg.y); ctx.lineTo(pg.x + 16, pg.y); ctx.stroke();
+    }
+    ctx.restore();
+    /* The frame and the readout, outside the clip. */
+    ctx.save();
+    ctx.strokeStyle = '#3b5560'; ctx.lineWidth = 2; ctx.strokeRect(x, y, w, h);
+    /* Bands behind the lettering, so a canister filling the lens does not
+     * swallow the readout. */
+    ctx.fillStyle = 'rgba(7,16,20,0.82)';
+    ctx.fillRect(x + 2, y + 2, w - 4, 20);
+    ctx.fillRect(x + 2, y + h - 36, w - 4, 34);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#9fd8e8';
+    ctx.fillText('ARM CAM', x + 8, y + 15);
+    ctx.textAlign = 'right';
+    ctx.fillText(jaw > 0.95 ? 'JAWS SHUT' : jaw < 0.05 ? 'JAWS OPEN' : 'JAWS MOVING', x + w - 8, y + 15);
+    ctx.textAlign = 'left';
+    var line1 = !info ? '' : info.held ? 'HOLDING ' + info.held
+              : info.target ? info.target + '  ' + info.dist + ' m  ' + info.rel + ' m/s' : 'nothing in reach';
+    var line2 = !info ? '' : info.note || (info.held ? 'G  let go' : info.inReach ? 'G  close the jaws' : '');
+    ctx.fillStyle = info && (info.held || info.inReach) ? '#7dffb0' : '#9fd8e8';
+    ctx.fillText(line1, x + 8, y + h - 22);
+    ctx.fillStyle = '#7e93b3';
+    ctx.fillText(line2, x + 8, y + h - 8);
+    ctx.restore();
   }
 
   function shade(hex, f) {
@@ -14150,6 +14248,7 @@
     boltPath: boltPath,
     DRIVE_SPEC: DRIVE_SPEC,
     paintMesh: paintMesh,
+    armGrip: armGrip, drawArmCam: drawArmCam,
     drawHullPortrait: drawHullPortrait, hullPreviewMesh: hullPreviewMesh,
     faceMaterial: faceMaterial,
     shipMeshes: shipMeshes,

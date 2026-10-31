@@ -1760,6 +1760,8 @@
          * which means the shift is now the only thing on it. */
         case 'g':
           if (e.shiftKey) toggleGear();
+          /* Unshifted, a tug's jaws (arms.js, 2026-10-31). */
+          else if (global.Arms && Arms.hasArms(G.ship)) Arms.toggle(G, cockpitShip(), HOOKS);
           break;
         /* H is the help overlay. SHIFT+H is having a word with whoever is
          * about to transmit — a separate action on a shared key because
@@ -6114,6 +6116,8 @@
      * Runs after the encounter step so an NPC turned hostile this frame
      * steers on it next frame — one frame of lag nobody can perceive. */
     Combat.update(G.sys, G, G.t, G.lastDtSim || 0, HOOKS);
+    /* What a tug's jaws hold comes with her (arms.js). */
+    if (global.Arms && G.ship.arms) Arms.update(G, cockpitShip(), G.lastDtSim || 0, HOOKS);
 
     /* The band: captains' own maydays off the seeded schedule, and the
      * ones who answered YOURS arriving to see whether you told the truth
@@ -11824,6 +11828,14 @@
       drawDashPanels(ctx, inner.mfds, false);
       Render.drawProjectionWash(ctx, aperture, inner.emitters, w, h,
                                 Math.floor(performance.now() / 90));
+      /* THE ARM CAMERA on a tug (arms.js, 2026-10-31): a vidscreen set
+       * high on the right of the canopy frame, where the arms' own view
+       * of the jaws is. */
+      if (global.Arms && Arms.hasArms(G.ship) && Render.drawArmCam) {
+        var awW = Math.round(Math.min(340, w * 0.24)), awH = Math.round(awW * 0.66);
+        var cs = cockpitShip();
+        Render.drawArmCam(ctx, cam, cs, { x: w - awW - 18, y: 18, w: awW, h: awH }, Arms.view(G, cs));
+      }
     }
 
     /* Taking a hit, from inside. Half a second of red across the whole

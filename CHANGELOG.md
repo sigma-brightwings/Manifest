@@ -72,6 +72,40 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **A tug's grab arms, worked from the seat (2026-10-31).** Astra: *"the
+  [tug's] cockpit should have a vidscreen to operate those grab arms"*.
+  She chose canisters, towing disabled ships and moving station modules.
+  The Bollard and the Hawser carry the arms; the Mule does not.
+  - **The arm camera.** A vidscreen high on the right of a tug's canopy
+    frame shows the view from the arms, just behind and above the jaws,
+    looking past them. It shows:
+    - what is there (her hull, a canister) and the reticle where the jaws
+      meet, green when in reach;
+    - the jaws closing;
+    - a readout: what it is, how far off, how fast against you, and what G
+      will do.
+  - **G** shuts the jaws on whatever is in reach, and opens them again.
+    Shift+G is still the gear. "In reach" means within 12 m ahead of where
+    the jaw tips meet, 9 m ahead of the seat on a Bollard, at under 4 m/s
+    against you. Closing on nothing, or too fast, says so.
+  - **A canister** is held at the jaws and swung into the hold after five
+    seconds. No scoop is needed: that's what the arms are for. With the
+    hold full, it stays in the jaws until you let go.
+  - **A disabled ship** is clamped where she was when the jaws shut. She
+    comes with you, turning as you turn, and her mass is added to yours
+    (`ship.armLoad`), so a tug pushing a freighter accelerates like one. A
+    ship under way slips out of the jaws. Letting go leaves her adrift.
+    Dock with her on the arms and the harbour takes her for **salvage at
+    20 cr a tonne**. If you were seen to attack her, nobody pays: "Nobody
+    pays salvage on a ship they watched you shoot."
+  - **Station modules: not yet.** Founding a station from a Crawler isn't
+    built (construction.js: "founding comes next"), so a module has
+    nowhere to be carried to. The arms are the hands it will be built with.
+  - Not saved: a load lets go of whatever the jaws held.
+  - `src/arms.js` (new). Test: `test/arms.test.js` (21 checks). Probe:
+    `tools/probe-arms.js`. In the real game, a lifted, disabled trader is
+    clamped and towed with 0.00 m of drift.
+
 - **Small open items (2026-10-31).**
   - **The freight office** in the cargo hall now opens the contract board
     (F7, MISSIONS), where hauls are let, instead of the market screen.

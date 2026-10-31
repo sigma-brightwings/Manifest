@@ -883,7 +883,9 @@
   }
 
   function shipMass(ship) {
-    return ship.dryMass + ship.fuel + (ship.thrusterFuel || 0) + cargoMass(ship);
+    /* + whatever a tug has on her arms (arms.js): a freighter on the end of
+     * them is mass you push. */
+    return ship.dryMass + ship.fuel + (ship.thrusterFuel || 0) + cargoMass(ship) + (ship.armLoad || 0);
   }
 
   /* Exhaust velocity, km/s. Isp is quoted in seconds as everyone quotes it. */
@@ -3411,6 +3413,8 @@
       if (V.dist(o.pos, ship.pos) > size + reach) continue;
       if (skip && (o === skip || o.spec === skip)) continue;
       if (tether && ((o.route && o.route.id === tether) || o.name === tether)) continue;
+      /* The ship on your arms is meant to be touching you. */
+      if (ship.arms && ship.arms.held && ship.arms.held.spec && o.spec === ship.arms.held.spec) continue;
       /* Where she was when the step began: a live ship by her own
        * velocity (she is integrated with it), a rail ship off her rail —
        * a rail's `vel` does not even agree with how she moves. */
