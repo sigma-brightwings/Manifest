@@ -75,6 +75,21 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **An arm-tip camera on the tugs (2026-10-31).** Astra: *"the tugs need
+  a fwd camera on the end of one of the arms, and a screen in the cockpit
+  for when there's a crate in the arms"*. A crate in the jaws fills the
+  arm camera and most of the windscreen.
+  - The camera rides on the end of the starboard arm, just outboard of the
+    crate, looking straight ahead past it. Its screen sits high on the
+    left of the canopy frame, opposite the arm camera, and is up only
+    while a station crate is in the jaws.
+  - It shows the Crawler you are building, with brackets round her. When
+    she is off the picture, an arrow on its edge points the way.
+  - The readout gives the metres left to her frame, how fast you are
+    closing, and *AT HER FRAME - it goes in* once you are there.
+  - Probe: `tools/probe-founding.js` now takes the tip camera facing away
+    from her (the arrow) and turned to her (the brackets).
+
 - **Founding a station from a Crawler (2026-10-31).** Astra: *"yeah,
   let's do that next"*. Her choices: a licence now, orbit and surface, a
   full port with traffic, and the arms helping build her (her crew's tugs

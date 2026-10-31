@@ -58,7 +58,7 @@
   var MIN_PAD_KM = 40;            // nor on top of another pad on the ground
   var LOW_OVER = 2.0;             // a surface site: within 2 radii of the centre
   var INSTALL_KM = 0.35;          // a crate is in when brought this close to her
-                                  // centre: alongside a hull ~480 m long
+                                  // centre: alongside her (she is 164 m long)
   var FLOAT_RING_KM = 0.6;        // where her crates float, round her
   var PORT_MASS = 2e9;
   var STATION_RADIUS_KM = 1.3;    // the smallest of the generated ports
@@ -141,6 +141,18 @@
     var hs = Sim.bodyState(host, sys, t);
     var rel = K.state(st.parkOrbit, host.mu, t);
     return { pos: V.add(hs.pos, rel.pos), vel: V.add(hs.vel, rel.vel), host: host };
+  }
+
+  /* And how she lies: nose along her orbit, deck to the world. For the
+   * renderer and the arms' tip camera. */
+  function crawlerPose(st, sys, t) {
+    var cs = crawlerState(st, sys, t);
+    if (!cs) return null;
+    var hs = global.Sim.bodyState(cs.host, sys, t);
+    var up = V.norm(V.sub(cs.pos, hs.pos));
+    var rv = V.sub(cs.vel, hs.vel);
+    var fwd = V.norm(V.sub(rv, V.scale(up, V.dot(rv, up))));
+    return { pos: cs.pos, vel: cs.vel, host: cs.host, up: up, fwd: fwd, right: V.norm(V.cross(fwd, up)) };
   }
 
   /* What is still floating at the site at time t, and where. */
@@ -485,7 +497,7 @@
     FLOAT_RING_KM: FLOAT_RING_KM, ROLE_FOR: ROLE_FOR, LOW_OVER: LOW_OVER,
     list: list, byId: byId, portId: portId,
     crewOrder: crewOrder, cubesOf: cubesOf, schedule: schedule, opensAt: opensAt, isOpen: isOpen,
-    cratesIn: cratesIn, siteState: siteState, crawlerState: crawlerState,
+    cratesIn: cratesIn, siteState: siteState, crawlerState: crawlerState, crawlerPose: crawlerPose,
     floatingCrates: floatingCrates, cratesHere: cratesHere, buildingHere: buildingHere,
     installByHand: installByHand, atFrame: atFrame,
     typeFor: typeFor, nearestType: nearestType, refusal: refusal, found: found,

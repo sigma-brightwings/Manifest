@@ -156,7 +156,7 @@
       fd.held = b.obj.idx;
       var Cn = global.Construction;
       var tonnes = Math.round(Sts.cubesOf(b.obj.crateId) * ((Cn && Cn.TONNES_PER_CUBE) || 25));
-      st.held = { kind: 'crate', station: fd.id, idx: b.obj.idx, name: b.name, mass: tonnes, at: G.t };
+      st.held = { kind: 'crate', station: fd.id, idx: b.obj.idx, name: b.name, size: b.obj.size, mass: tonnes, at: G.t };
       s.armLoad = tonnes;
       if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(s);
       say(hooks, 'Jaws shut on the ' + b.name + ' - ' + tonnes + ' t. Carry it to her frame and it goes in.', 6);
@@ -303,6 +303,25 @@
     if (!hasArms(s)) return null;
     var st = state(s), sv = survey(G, frame) || { near: [] }, b = sv.best;
     var out = { jaw: st.jaw, near: sv.near };
+    if (st.held && st.held.kind === 'crate') {
+      /* THE TIP CAMERA'S READOUT (Astra, 2026-10-31: "the tugs need a fwd
+       * camera on the end of one of the arms, and a screen in the cockpit
+       * for when there's a crate in the arms"). The crate fills the arm
+       * camera, so the screen on the arm's end says where her frame is:
+       * how far to her, how fast you are closing, and whether you are in. */
+      var Sts = global.Stations, fd = Sts && Sts.byId(G, st.held.station);
+      var pose = fd && G.sys ? Sts.crawlerPose(fd, G.sys, G.t || 0) : null;
+      out.crateSize = st.held.size || 'M';
+      if (pose) {
+        var gp = grip(frame) || s.pos;
+        var to = V.sub(pose.pos, gp), d = V.len(to);
+        var closing = d > 1e-9 ? -V.dot(V.sub(s.vel, pose.vel), V.scale(to, -1 / d)) : 0;
+        out.frame = { name: fd.name, crawler: { hullId: 'crawler', pos: pose.pos, fwd: pose.fwd, up: pose.up, right: pose.right,
+                                                livery: fd.crawler && fd.crawler.livery, modules: [] },
+                      dist: Math.round(Math.max(0, d - Sts.INSTALL_KM) * 1000), closing: (closing * 1000).toFixed(1),
+                      inside: d <= Sts.INSTALL_KM };
+      }
+    }
     if (st.held) {
       out.held = st.held.kind === 'ship'
         ? 'the ' + st.held.name + ', ' + Math.round(st.held.mass) + ' t'

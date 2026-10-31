@@ -11901,8 +11901,14 @@
        * of the jaws is. */
       if (global.Arms && Arms.hasArms(G.ship) && Render.drawArmCam) {
         var awW = Math.round(Math.min(340, w * 0.24)), awH = Math.round(awW * 0.66);
-        var cs = cockpitShip();
-        Render.drawArmCam(ctx, cam, cs, { x: w - awW - 18, y: 18, w: awW, h: awH }, Arms.view(G, cs));
+        var cs = cockpitShip(), armInfo = Arms.view(G, cs);
+        Render.drawArmCam(ctx, cam, cs, { x: w - awW - 18, y: 18, w: awW, h: awH }, armInfo);
+        /* THE ARM-TIP CAMERA, only while a station crate is in the jaws:
+         * the crate fills the arm camera, so the camera on the end of the
+         * starboard arm looks past it, on its own screen high on the left. */
+        if (armInfo && armInfo.crateSize && Render.drawTipCam) {
+          Render.drawTipCam(ctx, cam, cs, { x: 18, y: 18, w: awW, h: awH }, armInfo);
+        }
       }
     }
 

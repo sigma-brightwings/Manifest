@@ -90,6 +90,20 @@ holdAt(crateNow().pos);
 await key('g');
 await wait(300);
 out.push('held ' + (G.ship.arms && G.ship.arms.held ? G.ship.arms.held.kind + ' ' + G.ship.arms.held.mass + ' t' : 'nothing'));
+/* The tip camera, looking past the crate: first facing away from her (an
+ * arrow should point the way), then turned to her. */
+await wait(300);
+const tv = window.Arms.view(G, frame());
+out.push('tip cam: ' + JSON.stringify(tv.frame ? { d: tv.frame.dist, c: tv.frame.closing, in: tv.frame.inside } : null));
+await shot('3b-tip-cam-away');
+{
+  const keepGrip = R.armGrip(frame());
+  face(cs().pos);
+  G.ship.pos = V.add(G.ship.pos, V.sub(keepGrip, R.armGrip(frame())));
+  G.ship.vel = V.clone(cs().vel);
+}
+await wait(400);
+await shot('3c-tip-cam-on-her');
 /* Carry it to her frame. */
 const before = S.opensAt(st);
 for (let i = 0; i < 20 && G.ship.arms && G.ship.arms.held; i++) {

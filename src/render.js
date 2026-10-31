@@ -12842,6 +12842,98 @@
     ctx.restore();
   }
 
+  /* THE ARM-TIP CAMERA (Astra, 2026-10-31: "the tugs need a fwd camera on
+   * the end of one of the arms, and a screen in the cockpit for when
+   * there's a crate in the arms"). A crate in the jaws fills the arm
+   * camera, and most of the windscreen with it. This one rides on the end
+   * of the starboard arm, just outboard of the crate's flank, looking
+   * straight ahead past it: her - the Crawler whose frame the crate is
+   * going to - with brackets round her.
+   * `info` is Arms.view; `info.frame` says where she is and how far. When
+   * she is off the screen an arrow on its edge points the way. */
+  var TIP_HALF_KM = { S: 0.004, M: 0.006, L: 0.009, XL: 0.013 };
+  var TIP_CRATE = null;
+  function drawTipCam(ctx, cam, ship, rect, info) {
+    var grip = armGrip(ship);
+    if (!grip || !rect || !info) return;
+    var x = rect.x, y = rect.y, w = rect.w, h = rect.h;
+    var half = TIP_HALF_KM[info.crateSize] || 0.006;
+    ctx.save();
+    ctx.fillStyle = '#071014';
+    ctx.fillRect(x, y, w, h);
+    ctx.beginPath(); ctx.rect(x + 2, y + 2, w - 4, h - 4); ctx.clip();
+    var c2 = Object.create(Camera.prototype);
+    c2.cockpitFov = 55 * DEG;
+    /* Just outboard of the crate's starboard face, a little behind its
+     * front edge, so the crate's flank runs down the left of the picture. */
+    var eye = V.addScaled(V.addScaled(grip, ship.right, half + 0.0012), ship.fwd, half * 1.2 - 0.0015);
+    c2.buildFree(eye, ship.fwd, ship.up, w, h);
+    c2.cx += x; c2.cy += y;
+    c2.near = 0.0003;
+    var sun = ship.up;
+    var fr = info.frame;
+    if (fr && fr.crawler) {
+      try {
+        var cm = hullPreviewMesh('crawler', fr.crawler);
+        paintMesh(ctx, c2, fr.crawler, cm, hullLength(fr.crawler), sun, null);
+      } catch (e) { /* nothing drawn is better than a broken screen */ }
+    }
+    /* The crate in the jaws, down the left of the picture. */
+    if (!TIP_CRATE) TIP_CRATE = box(1, 0.8, 1.2);
+    try {
+      paintMesh(ctx, c2, { pos: grip, fwd: ship.fwd, up: ship.up, right: ship.right }, TIP_CRATE, half, sun, '#c99b3e');
+    } catch (e) { /* fine */ }
+    /* Her frame: brackets on her, or an arrow on the edge pointing the way. */
+    if (fr && fr.crawler) {
+      var col = fr.inside ? '#7dffb0' : '#ffd36b';
+      var toHer = V.sub(fr.crawler.pos, eye);
+      var p = V.dot(toHer, ship.fwd) > 0 ? c2.project(fr.crawler.pos) : null;
+      var onScreen = p && p.x > x + 14 && p.x < x + w - 14 && p.y > y + 26 && p.y < y + h - 40;
+      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 2;
+      if (onScreen) {
+        /* Round her, however near: her length on the screen, or 14 px. */
+        var r = Math.max(14, Math.min(w * 0.4, hullLength(fr.crawler) * p.scale * 0.55));
+        [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(function (c) {
+          ctx.beginPath();
+          ctx.moveTo(p.x + c[0] * r, p.y + c[1] * (r - 6));
+          ctx.lineTo(p.x + c[0] * r, p.y + c[1] * r);
+          ctx.lineTo(p.x + c[0] * (r - 6), p.y + c[1] * r);
+          ctx.stroke();
+        });
+      } else {
+        var to = V.sub(fr.crawler.pos, eye);
+        var ang = Math.atan2(-V.dot(to, ship.up), V.dot(to, ship.right));
+        /* Inside the picture, clear of both lettering bands. */
+        var top = y + 34, bot = y + h - 48;
+        var cx = x + w / 2, cy = (top + bot) / 2;
+        var ex = cx + Math.cos(ang) * (w / 2 - 22), ey = cy + Math.sin(ang) * ((bot - top) / 2);
+        ctx.save();
+        ctx.translate(ex, ey); ctx.rotate(ang);
+        ctx.beginPath(); ctx.moveTo(10, 0); ctx.lineTo(-6, -8); ctx.lineTo(-6, 8); ctx.closePath(); ctx.fill();
+        ctx.restore();
+      }
+    }
+    ctx.restore();
+    ctx.save();
+    ctx.strokeStyle = '#3b5560'; ctx.lineWidth = 2; ctx.strokeRect(x, y, w, h);
+    ctx.fillStyle = 'rgba(7,16,20,0.82)';
+    ctx.fillRect(x + 2, y + 2, w - 4, 20);
+    ctx.fillRect(x + 2, y + h - 36, w - 4, 34);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#9fd8e8';
+    ctx.fillText('ARM TIP CAM', x + 8, y + 15);
+    ctx.textAlign = 'right';
+    ctx.fillText('HOLDING', x + w - 8, y + 15);
+    ctx.textAlign = 'left';
+    var l1 = !fr ? 'no frame to take it to' : fr.inside ? 'AT HER FRAME - it goes in'
+           : 'her frame  ' + fr.dist + ' m  closing ' + fr.closing + ' m/s';
+    ctx.fillStyle = fr && fr.inside ? '#7dffb0' : '#ffd36b';
+    ctx.fillText(l1, x + 8, y + h - 22);
+    ctx.fillStyle = '#7e93b3';
+    ctx.fillText(fr ? fr.name + '  -  G  let go' : 'G  let go', x + 8, y + h - 8);
+    ctx.restore();
+  }
+
   function shade(hex, f) {
     var n = parseInt(hex.slice(1), 16);
     var r = Math.round(((n >> 16) & 255) * f), g = Math.round(((n >> 8) & 255) * f), b = Math.round((n & 255) * f);
@@ -14249,7 +14341,7 @@
     boltPath: boltPath,
     DRIVE_SPEC: DRIVE_SPEC,
     paintMesh: paintMesh,
-    armGrip: armGrip, drawArmCam: drawArmCam,
+    armGrip: armGrip, drawArmCam: drawArmCam, drawTipCam: drawTipCam,
     drawHullPortrait: drawHullPortrait, hullPreviewMesh: hullPreviewMesh,
     faceMaterial: faceMaterial,
     shipMeshes: shipMeshes,

@@ -170,6 +170,9 @@ var ha = hooks();
 var tg = Arms.toggle(G, frame(), ha);
 check('the jaws shut on it, its mass on the arms', tg.held === 'crate' && G.ship.armLoad > 0 && st.held === crate.idx, ha.said[0]);
 check('it is out of the ring while you carry it', S.floatingCrates(st, sys, G.t).length === 2);
+var av = Arms.view(G, frame());
+check('the arm-tip camera knows where her frame is', av.crateSize === 'M' && av.frame && av.frame.crawler &&
+      av.frame.dist > 0 && !av.frame.inside, av.frame && (av.frame.dist + ' m to go'));
 var before = S.opensAt(st);
 G.ship.pos = V.add(G.ship.pos, V.sub(S.crawlerState(st, sys, G.t).pos, R.armGrip(frame())));
 var hu = hooks();
