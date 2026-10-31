@@ -44,6 +44,54 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **Every ship's rooms fit inside her own hull (2026-10-31).** Astra:
+  *"all ships should have interiors that exist as part of the ship
+  itself"*, and they *"should follow the rules of making physical
+  sense"*.
+  - **How a deck is fitted.** Each hull's deck is now planned against the
+    hull itself (`ShipDeck.planFitted`, asking `Render.hullFitter`
+    whether a point is inside her).
+    - Every room except the cockpit is sampled every half metre, at floor
+      and ceiling height, a hand's width in from its walls. The cockpit's
+      canopy stands proud of her skin by design.
+    - The first room that is not wholly inside is dealt with, then the
+      deck is planned again, until every room fits or nothing more can be
+      done.
+  - **What gives.** Asked, she chose *shrink, then drop*. A room is cut
+    down to a size it can still do its job in, and only below that is it
+    left out.
+    - A side room is narrowed from its outboard wall.
+    - The hold is narrowed, then given a lower deckhead (down to what two
+      stacked containers need), then shortened from aft.
+    - The airlock gets a narrower ramp before it gets anything else.
+    - A decked hull's tramway is shortened until engineering is inside
+      her.
+  - **What it did, today:**
+    - airlocks narrowed on the Talon, Mule, Longhaul, Tanker, Trader and
+      Enforcer;
+    - quarters narrowed on the Dart, Samaritan, Longhaul, Tanker, Trader
+      and Crawler;
+    - medbays narrowed on the Samaritan and Crawler.
+
+    Nothing was left out of any hull.
+  - **The Capital's tramway is now 6 m.** Her conning tower stands 44 m off
+    her centreline, and a tram straight aft from under it left her skin at
+    30 m.
+  - **Measured first, and corrected.** The first measurement said only
+    four hulls of twenty-three held every room. That number was wrong: it
+    counted the cockpit, and a ray-parity test that her open meshes break.
+    Measured against her hull above and below, most rooms were already
+    nearly inside. What stuck out were outboard walls, a few corners, and
+    the Capital's engineering, which was wholly outside.
+  - **Seams and slots.** A point exactly on a seam between two panels, or
+    in a slot under half a metre wide between hull sections (the Cutter
+    has one across her belly), counts as inside her.
+  - **Known:** the Crawler's lift car, on her two lower decks, runs a metre
+    across an opening in her frame.
+  - **Tools and tests:** `tools/interior-fit.js` reports every hull. A
+    test fails if any room stands outside its hull, or if fitting ever
+    leaves a room out.
+
 - **Boarding, part 3: a disabled ship, taken by force (2026-10-31).**
   This is the third way aboard, after docking beside her at a station and
   being invited in through her tube. Astra's answers set each piece.
@@ -102,7 +150,7 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
     - It goes on the charge at base price.
     - It hangs below her at 2 m/s (a jettison is 12) for your scoop.
   - The crates in a hold now carry their containers and tonnes.
-  - `test/boarding3.test.js` (62 checks) covers each piece.
+  - `test/boarding3.test.js` (64 checks) covers each piece.
     `tools/probe-eva.js` runs all of it in the game, including a flight
     across on the jets.
 

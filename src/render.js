@@ -12938,8 +12938,10 @@
     var fit = hullFit(ship), capScale = 1;
     var popts = { hullId: ship.hullId, libId: libId, size: hull && hull.size, key: spec.key, crew: crew, turret: tur,
                   rampDrop: fit && (fit.dropRoom || fit.drop), rampReach: fit && fit.drop,
-                  load: load.load };
-    var plan = SD.plan(g, popts);
+                  load: load.load,
+                  /* Every room inside her own hull (shipdeck.js planFitted). */
+                  fit: hullFitter(ship) };
+    var plan = (SD.planFitted || SD.plan)(g, popts);
     /* A ship bigger than her hull's fitted length (hullFit, `lengthKm`):
      * the same rooms, the cockpit at the same point of her model, and her
      * hold (or, with none, her passage) run on aft by however much further
@@ -12953,7 +12955,7 @@
       var base0 = SD.roomByKind(plan, 'cargo');
       if (stretch > 0.5) {
         popts.stretch = stretch;
-        plan = SD.plan(g, popts);
+        plan = (SD.planFitted || SD.plan)(g, popts);
       }
       /* AND WIDENED (2026-10-29, Astra: "widen the hold"). As wide as her
        * own hull is, all the way down the bay, at floor and at ceiling, a
@@ -12967,7 +12969,7 @@
         var hw0 = (cg.x1 - cg.x0) / 2, hw = widestHold(ship, plan, cg, hw0, hw0 * fit.scale);
         if (hw > hw0 + 0.3) {
           popts.cargoHW = hw;
-          plan = SD.plan(g, popts);
+          plan = (SD.planFitted || SD.plan)(g, popts);
           cg = SD.roomByKind(plan, 'cargo');
         }
         /* Her capacity is the one the timetable sized her by (generate.js
@@ -12977,7 +12979,7 @@
           capScale = fit.scale * fit.scale;
           var load2 = holdLoad(ship, hull, capScale);
           popts.load = load2.load;
-          plan = SD.plan(g, popts);
+          plan = (SD.planFitted || SD.plan)(g, popts);
         }
       }
     }
@@ -13023,6 +13025,34 @@
     };
     if (HULL_COLS) HULL_COLS.set(mesh, ix);
     return ix;
+  }
+  /* ---- HER ROOMS INSIDE HER (2026-10-31) ----------------------------------
+   * Astra: "all ships should have interiors that exist as part of the ship
+   * itself", and they "should follow the rules of making physical sense".
+   * Measured that day, only four hulls of twenty-three held every room
+   * inside their skin. This is the question the deck planner asks of her
+   * hull (shipdeck.js planFitted): is this point, in the plan's metres,
+   * inside her — her hull both above and below it, the column test
+   * widestHold already uses. */
+  function hullFitter(ship) {
+    var mesh = ship && ship.hullId ? hullPreviewMesh(ship.hullId, ship) : null;
+    if (!mesh || !mesh.f) return null;
+    var ix = hullColumns(mesh), Lm = hullLength(ship) * 1000, at = cockpitAt(ship) || [0, 0, 0];
+    var one = function (x, y, z) { return ix.inside((at[0] + x) / Lm, (at[1] + y) / Lm, (at[2] + z) / Lm); };
+    return {
+      /* A point that lands exactly on a seam between two of her panels
+       * falls through both (measured: whole rows of a Mule's quarters and
+       * a Kestrel's hold "outside" at one z), and some hulls are built of
+       * sections with a slot of daylight between them across the whole
+       * belly (a Cutter's, a hand's width, at one frame). Asked again a few
+       * centimetres off, and a quarter-metre fore and aft: a seam or a slot
+       * narrower than half a metre is part of her, an opening any wider is
+       * not. */
+      inside: function (x, y, z) {
+        return one(x, y, z) || one(x + 0.031, y, z + 0.037) || one(x - 0.029, y, z - 0.033) ||
+               one(x, y, z + 0.25) || one(x, y, z - 0.25);
+      }
+    };
   }
   function widestHold(ship, plan, cg, lo, hi) {
     var mesh = hullPreviewMesh(ship.hullId, ship);
@@ -14088,7 +14118,7 @@
     BOLT_MIN_W: BOLT_MIN_W, BOLT_MAX_W: BOLT_MAX_W, BOLT_SEGS: BOLT_SEGS,
     SHIP_LEN: SHIP_LEN, TRUE_LEN: TRUE_LEN, hullLength: hullLength,
     BRIDGE: BRIDGE, bridgeSpec: bridgeSpec, bridgeFrame: bridgeFrame, bridgeCutMesh: bridgeCutMesh,
-    hullFit: hullFit, cockpitAt: cockpitAt, rampExterior: rampExterior, hatchModel: hatchModel, hullSegmentHit: hullSegmentHit, hullSolidOf: hullSolidOf, outsidePlan: outsidePlan, groundPatch: groundPatch,
+    hullFit: hullFit, cockpitAt: cockpitAt, rampExterior: rampExterior, hatchModel: hatchModel, hullSegmentHit: hullSegmentHit, hullSolidOf: hullSolidOf, hullFitter: hullFitter, outsidePlan: outsidePlan, groundPatch: groundPatch,
     OUTSIDE_CROUCH: OUTSIDE_CROUCH,
     drawAttitudeLadder: unblurred(drawAttitudeLadder),
     drawFlightPathMarker: drawFlightPathMarker,

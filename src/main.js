@@ -10546,14 +10546,18 @@
     if (!G.ship || G.ship.docked || G.ship.landed || G.hyper) { G.eva = null; return; }
     G.warpIndex = 0;
     if (!flying()) return;
-    var mine = rampFootWorld(G.ship), tg = evaTarget();
+    /* The ships have already stepped this frame and the suit has not: ask
+     * where it is about to be, or at 55 km/s every distance is a frame
+     * (900 m) stale. */
+    var ahead = V.addScaled(e.pos, e.vel, dt);
+    var mine = rampFootWorld(G.ship), tg = evaTarget(ahead);
     var ref = { pos: G.ship.pos, vel: G.ship.vel || V.zero(), name: G.ship.shipName || 'your ship', mine: true };
-    if (tg && tg.dist < V.dist(e.pos, G.ship.pos)) ref = { pos: tg.live.pos, vel: tg.live.vel || V.zero(), name: tg.spec.name };
+    if (tg && tg.dist < V.dist(ahead, G.ship.pos)) ref = { pos: tg.live.pos, vel: tg.live.vel || V.zero(), name: tg.spec.name };
     var g = Sim.acceleration ? Sim.acceleration(e.pos, G.sys, G.t) : null;
     var was = V.clone(e.pos);
     E.step(e, keys, dt, { g: g, ref: ref, home: mine ? { pos: mine.world, vel: G.ship.vel || V.zero() } : null });
     evaCollide(was, dt);
-    e.mine = mine; e.tg = tg; e.ref = ref;
+    e.mine = mine; e.tg = evaTarget(); e.ref = ref;
   }
   /* SOLID HULLS AND WALLS FOR THE SUIT (2026-10-31). Astra: "collision
    * detection with ships and station walls, so we aren't flying through
@@ -10582,8 +10586,18 @@
       var hit = null, hv = null, ha = null;
       for (var j = 0; j < hulls.length; j++) {
         var s = hulls[j], sv = s.vel || V.zero();
+        /* A ship on her rail moves as her rail says, not as her `vel`
+         * says (they disagree by up to hundreds of km/s, boarding.js): her
+         * motion this frame is where the rail had her a frame ago. A path
+         * built off her `vel` swept kilometres and flung the suit with it. */
+        if (s.route && !s.spec && Sim.trafficState) {
+          try { var pr = Sim.trafficState(s.route, G.sys, G.t - dt).pos; sv = V.scale(V.sub(s.pos, pr), 1 / dt); } catch (err) { /* keep vel */ }
+        }
         /* Her motion this frame taken off yours: the path relative to her. */
         var a = V.addScaled(was, sv, dt);
+        /* No suit crosses 50 m of anybody's hull in one frame: a path that
+         * long is a bad guess at her motion, not a collision. */
+        if (V.dist(a, e.pos) > 0.05) continue;
         var h = R.hullSegmentHit(s, a, e.pos, SUIT_R_KM);
         if (h && (!hit || h.t < hit.t)) { hit = h; hv = sv; ha = a; }
       }

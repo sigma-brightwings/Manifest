@@ -231,5 +231,33 @@ for (var fi = 0; fi < ramp.f.length; fi++) {
 var lone = sideX.filter(function (x) { return !sideX.some(function (y) { var d = Math.abs(x - y); return d > 0.02 && d < 0.1; }); });
 check('no ramp rail is a plane with no width', sideX.length > 0 && lone.length === 0, sideX.length + ' rail sides, ' + lone.length + ' without a twin');
 
+console.log('every room inside her own hull');
+/* Astra: "all ships should have interiors that exist as part of the ship
+ * itself". Every hull's deck is planned against her hull (planFitted) and
+ * every room but the cockpit (whose canopy stands proud by design) is
+ * sampled inside her. Known, and said so: the Crawler's lift car on her
+ * lower decks runs a metre across an opening in her frame. */
+var KNOWN_OUT = { crawler: ['lift'] };
+var notIn = [], dropped = [];
+Object.keys(Combat.HULLS).forEach(function (id) {
+  var shp = { hullId: id, bornId: 'b3fit|' + id, dryMass: Combat.HULLS[id].dryMass, cargo: {} };
+  var dd = R.shipInterior(shp), fitr = R.hullFitter(shp);
+  if (!dd || !fitr) return;
+  var allow = KNOWN_OUT[id] || [];
+  (dd.plan.decks ? Object.keys(dd.plan.decks).map(function (k) { return dd.plan.decks[k]; }) : [dd.plan]).forEach(function (dp) {
+    dp.rooms.forEach(function (rm) {
+      if (rm.kind === 'cockpit' || allow.indexOf(rm.kind) >= 0) return;
+      var ok = true, sx = Math.max(0.1, Math.min(0.5, rm.x1 - rm.x0 - 0.2));
+      for (var x = rm.x0 + 0.1; ok && x <= rm.x1 - 0.1 + 1e-9; x += sx)
+        for (var z = rm.z0 + 0.1; ok && z <= rm.z1 - 0.1 + 1e-9; z += 0.5)
+          if (!fitr.inside(x, dp.floorY + 0.1, z) || !fitr.inside(x, dp.floorY + (rm.y1 || 2.2) - 0.1, z)) ok = false;
+      if (!ok) notIn.push(id + ' ' + rm.kind);
+    });
+  });
+  if (dd.plan.fitted && dd.plan.fitted.omitted.length) dropped.push(id + ': ' + dd.plan.fitted.omitted.join(' '));
+});
+check('no room stands outside her skin, on any hull', !notIn.length, notIn.slice(0, 8).join('; '));
+check('and fitting them took nothing away from any hull today', !dropped.length, dropped.join('; '));
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 if (fail) process.exit(1);

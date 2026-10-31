@@ -492,7 +492,13 @@ decked.forEach(function (id) {
   /* The engine room is down at the junction, at the tram's far end. */
   var engs = p.rooms.filter(function (r) { return r.kind === 'engine'; });
   if (engs.length !== 1 || engs[0].deck !== 'junction' || !(engs[0].z1 <= p.tram.z0)) badDeck.push(id + ' engine room');
-  if (!(p.tram.z1 - p.tram.z0 >= 30)) badDeck.push(id + ' spine ' + (p.tram.z1 - p.tram.z0));
+  /* A long spine, unless her hull is not there to hold one (shipdeck.js
+   * planFitted, 2026-10-31: the Capital's tower stands 44 m off her
+   * centreline, and a tramway straight aft from under it leaves her skin
+   * at 30 m). */
+  var spineFit = p.fitted && p.fitted.shortened && p.fitted.shortened.spine;
+  if (!(p.tram.z1 - p.tram.z0 >= 30) && !spineFit) badDeck.push(id + ' spine ' + (p.tram.z1 - p.tram.z0));
+  if (spineFit && !(p.tram.z1 - p.tram.z0 >= 4)) badDeck.push(id + ' fitted spine ' + (p.tram.z1 - p.tram.z0));
   if (!p.decks.main.items.some(function (it) { return it.kind === 'hatch'; })) badDeck.push(id + ' no hatch on the main deck');
   if (p.decks.main.rooms.some(function (r) { return r.kind === 'cockpit'; })) badDeck.push(id + ' cockpit below');
   /* Below the junction, the hangar clears it: its roof is under the

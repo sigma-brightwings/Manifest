@@ -312,6 +312,12 @@
     var size = sizeLetter(opts.size);
     var k = geom.k;
     var rooms = [], doors = [], items = [];
+    /* FITTED TO HER HULL (planFitted, 2026-10-31): rooms left out, and
+     * rooms narrowed or shortened, so that every room is inside her skin.
+     * Each is only ever made smaller than it would have been. */
+    var omit = opts.omit || {};
+    function W(kind, dflt) { var v = opts.roomW && opts.roomW[kind]; return v > 0 ? Math.min(dflt, v) : dflt; }
+    function Ln(kind, dflt) { var v = opts.roomL && opts.roomL[kind]; return v > 0 ? Math.min(dflt, v) : dflt; }
     /* Which deck the next item is on (only decked hulls have more than one). */
     var itemDeck = 'bridge';
     var H = geom.ceilY - geom.floorY;
@@ -335,7 +341,7 @@
 
     /* Who works her: a station per hand, and a bunk per hand plus yours. */
     var roles = size === 'S' ? [] : stationRoles(opts.crew);
-    var crewed = roles.length > 0 || (size !== 'S' && opts.crew && opts.crew.total > 0);
+    var crewed = (roles.length > 0 || (size !== 'S' && opts.crew && opts.crew.total > 0)) && !omit.quarters;
     var sides = geom.sideX >= 1.5 ? [-1, 1] : [-1];
     var perSide = Math.ceil(roles.length / sides.length);
     var deckLen = roles.length ? perSide * STATION_LEN + 1.0 : 0;
@@ -359,12 +365,17 @@
      * and the turret to port, the medbay and the engine room to starboard. */
     var big = size !== 'S';
     var decked = !!(DECKED[opts.hullId] && opts.decks !== false);
-    var gunners = big && opts.turret ? 1 : 0;
+    var gunners = big && opts.turret && !omit.turret ? 1 : 0;
     var tLen = gunners ? 0.6 + gunners * TURRET_SEAT + 0.2 : 0;
     /* On a decked hull the engine room is far aft, down at the junction. */
-    var med = big ? MED[size] : null, eng = big && !decked ? ENGINE[size] : null;
+    var med = big && !omit.medbay ? MED[size].slice() : null, eng = big && !decked && !omit.engine ? ENGINE[size].slice() : null;
+    if (med) med[0] = W('medbay', med[0]);
+    if (eng) eng[0] = W('engine', eng[0]);
     /* The airlock is the last room down the port side, on every hull. */
     var rs = rampShape(opts.rampDrop, size);
+    /* Fitted (planFitted): a narrower ramp, where her hull will not take
+     * an airlock as wide as the usual one round it. */
+    if (opts.rampHW > 0) rs.hw = Math.min(rs.hw, opts.rampHW);
     /* The room is sized for `rampDrop` (hullfit's, rounded up a quarter
      * metre so the fit tool and the game build the same room); the ramp is
      * angled for her true height, `rampReach`, so its foot is on the ground
@@ -375,7 +386,7 @@
     } else if (opts.rampReach > 0) rs.drop = opts.rampReach;
     var lockLen = LOCK_LAND + rs.len + 0.25;
     var portNeed = (crewed ? qLen : 0) + (tLen ? SIDE_GAP + WALL_T + tLen : 0) + SIDE_GAP + WALL_T + lockLen;
-    var stbdNeed = big ? med[1] + (eng ? SIDE_GAP + WALL_T + eng[1] : 0) : 0;
+    var stbdNeed = big ? (med ? med[1] : 0) + (eng ? (med ? SIDE_GAP + WALL_T : 0) + eng[1] : 0) : 0;
     var len = PASSAGE_LEN[size] * (0.9 + 0.2 * rng.next());
     if (crewed) len = Math.max(len, qLen + 0.6);
     len = Math.max(len, portNeed + 0.6);
@@ -414,7 +425,8 @@
     var quarters = null;
     if (crewed) {
       var qx1 = -PASSAGE_HW - WALL_T, qz1 = p1 - 0.3;
-      quarters = room('quarters', 'quarters', qx1 - QUARTERS_W, qx1, qz1 - qLen, qz1, QUARTERS_H, 'Crew quarters');
+      quarters = room('quarters', 'quarters', qx1 - W('quarters', QUARTERS_W), qx1, qz1 - qLen, qz1, QUARTERS_H, 'Crew quarters');
+      quarters.side = -1;
       var zc = qz1 - 0.7;
       doors.push({ id: 'quarters', a: passage.id, b: quarters.id, axis: 'x', at: -PASSAGE_HW, w: DOOR_HW * 2, h: DOOR_H,
                    x0: qx1 - 0.8, x1: -PASSAGE_HW + 0.8, z0: zc - DOOR_HW, z1: zc + DOOR_HW, zc: zc,
@@ -441,19 +453,23 @@
       var zTop = p1 - SIDE_GAP;
       if (gunners) {
         var tz1 = quarters ? quarters.z0 - SIDE_GAP - WALL_T : zTop;
-        turret = sideRoom('turret', 'turret', -1, tz1, TURRET_W, tLen, QUARTERS_H, 'Turret', 'Turret door');
+        turret = sideRoom('turret', 'turret', -1, tz1, W('turret', TURRET_W), tLen, QUARTERS_H, 'Turret', 'Turret door');
       }
-      medbay = sideRoom('medbay', 'medbay', 1, zTop, med[0], med[1], QUARTERS_H, 'Medbay', 'Medbay door');
-      if (eng) engine = sideRoom('engine', 'engine', 1, medbay.z0 - SIDE_GAP - WALL_T, eng[0], eng[1], ENGINE_H,
+      if (med) medbay = sideRoom('medbay', 'medbay', 1, zTop, med[0], med[1], QUARTERS_H, 'Medbay', 'Medbay door');
+      if (eng) engine = sideRoom('engine', 'engine', 1, medbay ? medbay.z0 - SIDE_GAP - WALL_T : zTop, eng[0], eng[1], ENGINE_H,
                                  'Engine room', 'Engine room door');
       /* The cargo bay, off the passage's aft end (2026-10-26: it was aft of
        * the airlock, which now stands beside the passage). */
       /* `cargoHW`: a hold widened to her own beam (render.js shipInterior,
        * a ship bigger than her hull's fitted length). */
-      var cz1 = p0 - WALL_T, cw = Math.max(Math.max(CARGO[size][0], 2 * LOCK_HW) / 2, opts.cargoHW > 0 ? opts.cargoHW : 0);
-      cargo = room('cargo', 'cargo', -cw, cw, cz1 - CARGO[size][1] - stretch, cz1, CARGO_H, 'Cargo bay');
-      var dCargo = slider('cargo', passage, cargo, p0, 'Cargo door');
-      dCargo.z0 = cz1 - 0.8; dCargo.z1 = p0 + 0.8; dCargo.wall = [cz1, p0];
+      if (!omit.cargo) {
+        /* Fitted: `roomW.cargo` is a half-width, `roomL.cargo` a length. */
+        var cz1 = p0 - WALL_T, cw = W('cargo', Math.max(Math.max(CARGO[size][0], 2 * LOCK_HW) / 2, opts.cargoHW > 0 ? opts.cargoHW : 0));
+        var ch = opts.roomH && opts.roomH.cargo > 0 ? Math.min(CARGO_H, opts.roomH.cargo) : CARGO_H;
+        cargo = room('cargo', 'cargo', -cw, cw, cz1 - Ln('cargo', CARGO[size][1] + stretch), cz1, ch, 'Cargo bay');
+        var dCargo = slider('cargo', passage, cargo, p0, 'Cargo door');
+        dCargo.z0 = cz1 - 0.8; dCargo.z1 = p0 + 0.8; dCargo.wall = [cz1, p0];
+      }
     }
     /* THE AIRLOCK, last down the port side: the inner door in the passage
      * wall at its forward end, the landing inside it, the ramp aft of that
@@ -461,7 +477,7 @@
      * shut whenever the room is not at the ship's own pressure. */
     var portTop = turret ? turret.z0 - SIDE_GAP - WALL_T
                 : quarters ? quarters.z0 - SIDE_GAP - WALL_T : p1 - SIDE_GAP;
-    var lock = sideRoom('airlock', 'airlock', -1, portTop, LOCK_W, lockLen, LOCK_H, 'Airlock', 'Airlock door');
+    var lock = sideRoom('airlock', 'airlock', -1, portTop, Math.max(2 * rs.hw + 0.3, W('airlock', LOCK_W)), lockLen, LOCK_H, 'Airlock', 'Airlock door');
     var dLock = doors[doors.length - 1];
     dLock.id = 'lock'; dLock.seal = true;
     var hinge = lock.z1 - LOCK_LAND, rxc = (lock.x0 + lock.x1) / 2;
@@ -787,7 +803,7 @@
       var platA = room('platform-fwd', 'platform', -PLAT_HW, PLAT_HW, pa1 - PLAT_L, pa1, CAR_H + 0.4, 'Tram platform');
       var dlj = slider('lift-junction', cars.junction, platA, carZ[0], 'Lift');
       dlj.z0 = pa1 - 0.8; dlj.z1 = carZ[0] + 0.8; dlj.wall = [pa1, carZ[0]]; dlj.deck = 'junction'; dlj.lift = true;
-      var spine = SPINE[opts.hullId] || 32;
+      var spine = Ln('spine', SPINE[opts.hullId] || 32);
       var way = room('tramway', 'tramway', -TRAM_HW, TRAM_HW, platA.z0 - spine, platA.z0, CAR_H + 0.4, 'Tramway');
       way.walk = false;
       var platB = room('platform-aft', 'platform', -PLAT_HW, PLAT_HW, way.z0 - PLAT_L, way.z0, CAR_H + 0.4, 'Tram platform');
@@ -899,6 +915,109 @@
       });
     }
     return out;
+  }
+
+  /* ---- A DECK THAT FITS HER (2026-10-31) -----------------------------------
+   * Astra: "all ships should have interiors that exist as part of the ship
+   * itself", "that follow the rules of making physical sense". Asked what
+   * gives when a room will not fit, she chose shrink, then drop: a room is
+   * narrowed or shortened to her hull, down to a size it can still do its
+   * job in, and below that it is left out (its job goes to the consoles
+   * that remain).
+   *
+   * `opts.fit.inside(x, y, z)` (render.js hullFitter) says whether a point,
+   * in the plan's metres, is inside her hull. Each room is sampled a hand's
+   * width in from its walls, at its floor and its ceiling; the first one
+   * that is not wholly inside is dealt with — narrowed from its outboard
+   * side, shortened from its aft end, or left out — and the deck is planned
+   * again, until every room is inside or nothing more can be done. The
+   * cockpit is not asked: its canopy stands proud of her skin by design. */
+  var FIT_MIN_W = { quarters: BUNK_W + 0.9, turret: 1.5, medbay: 2.0, engine: 2.4, airlock: 0 };
+  var FIT_MIN_CARGO_HW = 1.4, FIT_MIN_CARGO_L = 2.6, FIT_MIN_SPINE = 4;
+  var FIT_DROP = { turret: 1, engine: 1, medbay: 1, quarters: 1, cargo: 1 };
+  var FIT_MARGIN = 0.12;
+  function roomInside(fit, r, fy, x0, x1, z0, z1) {
+    var h = r.y1 || 2.2, ys = [fy + 0.1, fy + h - 0.1];
+    var sx = Math.max(0.1, Math.min(0.5, x1 - x0 - 0.2)), ok = true;
+    for (var x = x0 + 0.1; ok && x <= x1 - 0.1 + 1e-9; x += sx) {
+      for (var z = z0 + 0.1; ok && z <= z1 - 0.1 + 1e-9; z += 0.5) {
+        for (var i = 0; i < ys.length; i++) if (!fit.inside(x, ys[i], z)) { ok = false; break; }
+      }
+    }
+    return ok;
+  }
+  function fitRooms(p) {
+    var out = [];
+    (p.decks ? Object.keys(p.decks).map(function (k) { return p.decks[k]; }) : [p]).forEach(function (dp) {
+      dp.rooms.forEach(function (r) { if (r.kind !== 'cockpit' && r.walk !== false) out.push({ r: r, fy: dp.floorY }); });
+    });
+    return out;
+  }
+  function planFitted(geom, opts) {
+    var fit = opts && opts.fit;
+    if (!fit || !fit.inside) return plan(geom, opts);
+    var o = {};
+    for (var k in opts) o[k] = opts[k];
+    o.omit = {}; o.roomW = {}; o.roomL = {}; o.roomH = {};
+    var p = null, misfit = [];
+    for (var pass = 0; pass < 24; pass++) {
+      p = plan(geom, o);
+      var bad = null;
+      fitRooms(p).some(function (e) {
+        if (misfit.indexOf(e.r.kind) >= 0) return false;
+        if (roomInside(fit, e.r, e.fy, e.r.x0, e.r.x1, e.r.z0, e.r.z1)) return false;
+        bad = e; return true;
+      });
+      if (!bad) break;
+      var r = bad.r, kind = r.kind, done = false;
+      /* A side room: as wide as she allows from the passage wall out. */
+      if (r.side && FIT_MIN_W[kind] !== undefined) {
+        var inb = r.side < 0 ? r.x1 : r.x0, w = r.x1 - r.x0, best = 0;
+        for (var tw = w - 0.1; tw >= 0.5; tw -= 0.1) {
+          var a = r.side < 0 ? inb - tw : inb, b = r.side < 0 ? inb : inb + tw;
+          if (roomInside(fit, r, bad.fy, a - (r.side < 0 ? FIT_MARGIN : 0), b + (r.side > 0 ? FIT_MARGIN : 0), r.z0, r.z1)) { best = tw; break; }
+        }
+        var need = kind === 'airlock' ? (p.ramp ? (p.ramp.x1 - p.ramp.x0) + 0.3 : 1.8) : FIT_MIN_W[kind];
+        if (best >= need) { o.roomW[kind] = best; done = true; }
+        /* The airlock cannot be left out: a narrower ramp in it instead,
+         * down to one a body still walks down comfortably. */
+        else if (kind === 'airlock' && best > 0 && (best - 0.3) / 2 >= 0.55 && !(o.rampHW > 0 && o.rampHW <= (best - 0.3) / 2)) {
+          o.rampHW = (best - 0.3) / 2; o.roomW.airlock = best; done = true;
+        }
+      } else if (kind === 'cargo') {
+        /* The hold: narrower both sides, then shorter from aft. */
+        var hw = (r.x1 - r.x0) / 2, bh = 0;
+        for (var th = hw - 0.1; th >= FIT_MIN_CARGO_HW; th -= 0.1) {
+          if (roomInside(fit, r, bad.fy, -th - FIT_MARGIN, th + FIT_MARGIN, r.z0, r.z1)) { bh = th; break; }
+        }
+        if (bh) { o.roomW.cargo = bh; done = true; }
+        /* A lower deckhead, down to what two containers stacked need. */
+        if (!done) {
+          for (var thh = (r.y1 || 2.9) - 0.1; thh >= 2.6 - 1e-9; thh -= 0.1) {
+            if (roomInside(fit, { y1: thh }, bad.fy, r.x0, r.x1, r.z0, r.z1)) {
+              o.roomH = o.roomH || {}; o.roomH.cargo = thh; done = true; break;
+            }
+          }
+        }
+        if (!done) {
+          var bl = 0;
+          for (var tl = (r.z1 - r.z0) - 0.5; tl >= FIT_MIN_CARGO_L; tl -= 0.5) {
+            if (roomInside(fit, r, bad.fy, r.x0, r.x1, r.z1 - tl - FIT_MARGIN, r.z1)) { bl = tl; break; }
+          }
+          if (bl) { o.roomL.cargo = bl; done = true; }
+        }
+      } else if (kind === 'engine' || (kind === 'platform' && r.id === 'platform-aft')) {
+        /* Down at the junction: the tramway shorter, so engineering comes
+         * forward into her. */
+        var cur = o.roomL.spine || 999, sp0 = p.tram ? (p.tram.z1 - p.tram.z0) : 0;
+        var next = Math.min(cur, sp0) - 4;
+        if (sp0 && next >= FIT_MIN_SPINE) { o.roomL.spine = next; done = true; }
+      }
+      if (!done && FIT_DROP[kind] && !o.omit[kind]) { o.omit[kind] = true; done = true; }
+      if (!done) misfit.push(kind);
+    }
+    p.fitted = { omitted: Object.keys(o.omit), narrowed: o.roomW, shortened: o.roomL, lowered: o.roomH, misfit: misfit };
+    return p;
   }
 
   /* ---- the doors, every frame --------------------------------------------
@@ -1290,7 +1409,7 @@
     passageDetail(room, pal, fy, ps, portZ, stbdZ, p, !!(dC && cg));
 
     if (dC && cg) {
-      bulkhead(room, pal, fy, dC.wall[1], PASSAGE_HW, fy + PASSAGE_H, dC.wall[0], cg.x1, fy + CARGO_H, false, [pal.passWall, pal.lockWall]);
+      bulkhead(room, pal, fy, dC.wall[1], PASSAGE_HW, fy + PASSAGE_H, dC.wall[0], cg.x1, fy + (cg.y1 || CARGO_H), false, [pal.passWall, pal.lockWall]);
     }
 
     /* THE AIRLOCK (2026-10-26): off the port side, its inner door in the
@@ -2105,7 +2224,7 @@
   /* THE CARGO BAY: crates stacked down both walls, hazard lines either side
    * of the aisle, lights in rows, the manifest terminal by the door. */
   function cargoMesh(m, pal, fy, r, p) {
-    var top = fy + CARGO_H;
+    var top = fy + (r.y1 || CARGO_H);
     boxRoom(m, r.x0, fy, r.z0, r.x1, top, r.z1, pal.lockWall, pal.passFloor, pal.ceil, ['z1']);
     var CRATE = ['#4a5a4a', '#5a4e3a', '#3e4c5e', '#5e3e36'];
     /* THE CONTAINERS (2026-10-30): one kind per kind of cargo, from Claude
@@ -2378,7 +2497,7 @@
     LOCK_HW: LOCK_HW, DOOR_REACH: DOOR_REACH, DOOR_TIME: DOOR_TIME, SEAT: SEAT,
     PALETTES: PALETTES, SYNDICATE: SYNDICATE, NAVY: NAVY,
     CRATE_STACK: CRATE_STACK, CRATE_SCALE: CRATE_SCALE,
-    paletteFor: paletteFor, plan: plan, updateDoors: updateDoors, leafTravel: leafTravel,
+    paletteFor: paletteFor, plan: plan, planFitted: planFitted, updateDoors: updateDoors, leafTravel: leafTravel,
     meshes: meshes, frame: frame,
     stationScreen: stationScreen, STATION_SCREEN_PX: STATION_SCREEN_PX,
     DECKED: DECKED, TOWER: TOWER, LIFT_SPEED: LIFT_SPEED, liftSpeed: liftSpeed, TRAM_SPEED: TRAM_SPEED, DECK_NAME: DECK_NAME,

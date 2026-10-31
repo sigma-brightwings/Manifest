@@ -79,8 +79,12 @@ lookAt(V.addScaled(G.eva.pos, V.sub(G.eva.pos, tg.foot.world), 1)); await wait(4
 const tFly = performance.now();
 let shot2 = false;
 while (performance.now() - tFly < 150000) {
-  const ft = G.eva.tg && G.eva.tg.foot ? G.eva.tg.foot.world : null;
-  if (!ft) break;
+  const ft = G.eva && G.eva.tg && G.eva.tg.foot ? G.eva.tg.foot.world : null;
+  if (!ft) {
+    notes.push('lost her: suit ' + !!G.eva + (G.eva ? ', ' + (V.dist(G.eva.pos, L.pos) * 1000).toFixed(0) + ' m from her, tg ' + !!G.eva.tg : '') +
+               ', her disabled ' + spec.disabled + ' dead ' + !!spec.dead + ' live ' + !!spec.live + '  (' + G.message + ')');
+    break;
+  }
   const d = V.dist(G.eva.pos, ft);
   if (d < 0.003) break;
   lookAt(ft);
