@@ -1234,8 +1234,13 @@
   function buildPortDressing(sys, base) {
     var rng = base.fork('port-dressing');
     var ports = sys.ports || [];
-    for (var i = 0; i < ports.length; i++) {
-      var port = ports[i];
+    for (var i = 0; i < ports.length; i++) dressPort(sys, ports[i], rng);
+  }
+
+  /* One port's dressing. buildPortDressing runs it over every port on one
+   * stream, so the draws are what they always were; a station the player
+   * founds (stations.js) runs it once on a stream of its own. */
+  function dressPort(sys, port, rng) {
       var host = port.parentBody || null;
       port.dressing = {
         signs: portSigns(port, rng),
@@ -1256,7 +1261,6 @@
          * dressing or the galaxy. */
         citySeed: port.surface ? new RNG('city|' + ((sys && sys.seed) || '') + '|' + port.id).range(0, 1) : null
       };
-    }
   }
 
   function collectLandable(body, out) {
@@ -3915,6 +3919,93 @@
     fillLinerSeats(sys, tr);
   }
 
+  /* ---- a port that was not there at generation (stations.js) -----------
+   * A station the player founds joins a system long after generateSystem
+   * ran. attachPort does for one body what finalize did for all of them,
+   * and puts it in every list the flight loop reads: the host's children,
+   * sys.bodies/byId, sys.ports, and sys.pads when it is on a surface.
+   * Nothing else in the system moves. */
+  function attachPort(sys, host, port) {
+    if (!sys || !host || !port || sys.byId[port.id]) return port;
+    if (!host.children) host.children = [];
+    host.children.push(port);
+    port.children = port.children || [];
+    port.depth = (host.depth || 0) + 1;
+    port.parentBody = host;
+    port.mu = V.G * port.mass;
+    if (port.orbit) port.orbit.period = K.period(port.orbit.a, host.mu + port.mu);
+    sys.bodies.push(port);
+    sys.byId[port.id] = port;
+    if (sys.ports && sys.ports.indexOf(port) < 0) sys.ports.push(port);
+    if (port.surface && sys.pads && sys.pads.indexOf(port) < 0) sys.pads.push(port);
+    if (sys._cache) sys._cache.t = NaN;
+    sys._traffic = null; sys._ships = null;
+    return port;
+  }
+
+  /* ITS OWN TRAFFIC, AND NOBODY ELSE'S MOVES. Rebuilding the timetable
+   * with one more port would reshuffle every ship in the system, so a
+   * freighter half way across the sky would jump the moment a station
+   * opened. Instead the new port gets routes of its own, built exactly as
+   * buildTraffic builds them - local hops to every port above the same
+   * world, then the best interplanetary pairs by what each end wants -
+   * with their clocks starting the day she opens (t0 = opensAt): her
+   * first ships leave her berths that day. Ids are 'ps|<port>|<n>'. */
+  var PORT_ROUTES_MAX = 4;
+  function addPortRoutes(sys, port, rng, opensAt) {
+    if (!sys || !port || !port.market) return [];
+    sys.traffic = sys.traffic || [];
+    var pre = 'ps|' + port.id + '|';
+    sys.traffic = sys.traffic.filter(function (r) { return String(r.id).indexOf(pre) !== 0; });
+    var ports = (sys.ports || []).filter(function (p) { return p !== port && p.market; });
+    var pairs = [];
+    ports.forEach(function (B) {
+      if (B.parentBody === port.parentBody) { pairs.push({ b: B, local: true, score: 1e9 }); return; }
+      var mOut = manifestFor(port, B, rng), mBack = manifestFor(B, port, rng);
+      var score = 0, k;
+      for (k = 0; k < mOut.length; k++) score += mOut[k].qty;
+      for (k = 0; k < mBack.length; k++) score += mBack[k].qty;
+      if (score >= 1) pairs.push({ b: B, local: false, score: score, out: mOut, back: mBack });
+    });
+    pairs.sort(function (x, y) { return y.score - x.score; });
+    pairs = pairs.slice(0, PORT_ROUTES_MAX);
+    var made = [];
+    pairs.forEach(function (pr, i) {
+      var A = port, B = pr.b;
+      var out = pr.out || manifestFor(A, B, rng);
+      var back = pr.back || manifestFor(B, A, rng);
+      var cls = classifyRoute(out.concat(back), pr.local, A, B);
+      var spec = SHIP_CLASSES[cls];
+      var parent = commonParent(A, B, sys);
+      var ra = radiusAbout(A, parent, sys), rb = radiusAbout(B, parent, sys);
+      var dist = pr.local ? Math.max(Math.abs(ra - rb), (ra + rb) * 0.45)
+                          : Math.sqrt(ra * ra + rb * rb);
+      var cruise = Math.max(600, Math.min(2 * Math.sqrt(dist / spec.accel), 90 * 86400));
+      var layover = (pr.local ? rng.range(0.15, 1.1) : rng.range(0.8, 4.0)) * 86400;
+      var route = {
+        id: pre + i,
+        name: rng.pick(LINE_NAMES) + ' ' + rng.pick(HULL_NAMES),
+        cls: cls, className: spec.label,
+        size: spec.size * rng.range(0.8, 1.3),
+        color: spec.color,
+        from: A.id, to: B.id, parentId: parent.id,
+        local: !!pr.local,
+        cruise: cruise, layover: layover, period: 2 * (cruise + layover),
+        t0: opensAt || 0,
+        out: out, back: back,
+        distance: dist,
+        playerPort: port.id
+      };
+      sizeForLoad(route, rng, true, pr.local ? 0.1 * 86400 : 0.5 * 86400);
+      registerDeliveries(B, route.out, route.t0, route.cruise, route.period);
+      registerDeliveries(A, route.back, route.t0, 2 * route.cruise + route.layover, route.period);
+      sys.traffic.push(route);
+      made.push(route);
+    });
+    sys._traffic = null; sys._ships = null;
+    return made;
+  }
+
   /* ---- what the local runs are carrying ----------------------------------
    * Astra: local traffic carries nothing, and the comms channel made it
    * audible — a ship announcing an empty hold between two docks over the
@@ -4447,6 +4538,7 @@
     radiusFromMass: radiusFromMass,
     buildEconomy: buildEconomy,
     buildTraffic: buildTraffic,
+    attachPort: attachPort, addPortRoutes: addPortRoutes, dressPort: dressPort,
     commonParent: commonParent,
     radiusAbout: radiusAbout,
     atmosphereComposition: atmosphereComposition,

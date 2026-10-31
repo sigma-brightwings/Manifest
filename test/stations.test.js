@@ -1,0 +1,257 @@
+/* stations.test.js - founding a station from a Crawler (2026-10-31).
+ *
+ *     node test/stations.test.js
+ *
+ * Astra: a licence now, orbit and surface, a full port with traffic, and
+ * her crew's tugs unpacking at the agreed rate while any crate you carry in
+ * yourself goes in at once. Pinned:
+ *  - who may found, and where not: a Crawler, cast off, carrying a load
+ *    that founds a type, over a world, clear of every port, with a licence;
+ *    on a surface, low over a claimed world with a shuttle in the bay;
+ *  - founding: her crates become hers, you are put in one of her tugs (her
+ *    crew is a tug short while you fly it), and she stands on a circular
+ *    orbit through where the Crawler was;
+ *  - the schedule: biggest crates first at the crew's rate; a surface site
+ *    waits on the shuttles too; a crate carried in by hand is in at once
+ *    and brings the opening forward;
+ *  - the arms lift a floating crate and carry it to her frame;
+ *  - opening: a port of her type, with a market and berths, in every list
+ *    the flight loop reads, with routes of her own that start the day she
+ *    opens - and nobody else's ships moved;
+ *  - she comes back with the system: a fresh generation, and a save;
+ *  - a forged licence caught and unpaid: she is seized.
+ */
+'use strict';
+global.window = global.window || global;
+['vec3', 'rng', 'kepler', 'economy', 'generate', 'sim'].forEach(function (m) { require('../src/' + m + '.js'); });
+var Combat = require('../src/combat.js');
+require('../src/crew.js');
+require('../src/hulls.js');
+require('../src/walk.js');
+require('../src/shipdeck.js');
+require('../src/render.js');
+require('../src/journal.js');
+var Galaxy = require('../src/galaxy.js');
+var Cn = require('../src/construction.js');
+var L = require('../src/licence.js');
+var Arms = require('../src/arms.js');
+var S = require('../src/stations.js');
+var Save = require('../src/save.js');
+var V = global.V, Sim = global.Sim, Gen = global.Gen, R = global.Render;
+
+var pass = 0, fail = 0;
+function check(n, c, d) {
+  if (c) { pass++; console.log('  ok   ' + n + (d ? '   ' + d : '')); }
+  else { fail++; console.log('  FAIL  ' + n + (d ? '   ' + d : '')); }
+}
+function hooks() { var h = { said: [], say: function (m) { h.said.push(m); } }; return h; }
+Sim.shipsAll = function () { return []; };
+
+var g = Galaxy.build('kawartha');
+/* A lawful system with a port above a rocky world, so both kinds can be
+ * tried in one place. */
+var star = null, sys = null, world = null;
+for (var si = 0; si < g.stars.length && !world; si++) {
+  var cand = g.stars[si], f = g.factionById[cand.factionId];
+  if (!f || f.outlaw || f.minor || f.pirate) continue;
+  var sy = Gen.generateSystem(cand.seed, Galaxy.systemOpts(g, cand));
+  sy.starId = cand.id;
+  if (!sy.ports || sy.ports.length < 2) continue;
+  for (var bi = 0; bi < sy.bodies.length; bi++) {
+    var b = sy.bodies[bi];
+    if ((b.kind === 'planet' || b.kind === 'moon') && b.type !== 'gasGiant' && b.type !== 'iceGiant' && b.radius > 1500) {
+      star = cand; sys = sy; world = b; break;
+    }
+  }
+}
+check('a lawful system with a rocky world to build over', !!world, world && (sys.name + ' / ' + world.name));
+
+var T0 = 5e6;
+function crawler() {
+  var H = Combat.HULLS.crawler;
+  var s = { hullId: 'crawler', shipName: 'Patience', dryMass: H.dryMass, fuel: H.fuelCap, fuelCap: H.fuelCap,
+            thrusterFuel: 10, thrusterCap: H.thrusterCap, cargo: { grain: 12 }, cargoCap: H.cargoCap,
+            thrustKN: H.thrustKN, hullMax: H.hullMax, hullHp: H.hullMax, crew: [{ id: 'c1', name: 'Ilse' }],
+            credits: 1e6, craftBay: 'standard', fit: {}, modules: [],
+            pos: null, vel: null, fwd: V.vec ? V.vec(0, 0, 1) : { x: 0, y: 0, z: 1 }, up: { x: 0, y: 1, z: 0 }, right: { x: -1, y: 0, z: 0 } };
+  return s;
+}
+function game(crates) {
+  var G = { seed: 'kawartha', t: T0, ship: crawler(), here: star, sys: sys, galaxy: g,
+            stationModules: [], stations: [], licences: {}, standing: {}, claims: {}, journal: [] };
+  crates.forEach(function (id, i) {
+    var rec = { id: 'sc-' + i + '-' + id, crateId: id, aboard: true, due: 0 };
+    G.stationModules.push(rec);
+    G.ship.modules.push({ id: rec.id, crateId: id });
+  });
+  G.licences[star.id] = { fac: L.issuer(sys), forged: false, at: 0 };
+  return G;
+}
+/* Put her `alt` world radii out from the world's centre, on the side away
+ * from its ports, moving at circular speed. */
+function placeOver(G, body, alt) {
+  var hs = Sim.bodyState(body, sys, G.t);
+  var best = null;
+  for (var k = 0; k < 24; k++) {
+    var a = k / 24 * Math.PI * 2;
+    var dir = { x: Math.cos(a), y: Math.sin(a), z: 0 };
+    var pos = V.add(hs.pos, V.scale(dir, body.radius * alt));
+    var clear = (sys.ports || []).every(function (p) { return p.surface || V.dist(Sim.bodyPosition(p, sys, G.t), pos) > 800; });
+    if (clear) { best = { dir: dir, pos: pos }; break; }
+  }
+  var vc = Math.sqrt(body.mu / (body.radius * alt));
+  G.ship.pos = best.pos;
+  G.ship.vel = V.add(hs.vel, V.scale({ x: -best.dir.y, y: best.dir.x, z: 0 }, vc));
+  return best;
+}
+
+console.log('who may found, and where');
+var MARKET = ['market', 'warehouse', 'quarters'];
+var G = game(MARKET);
+placeOver(G, world, 1.6);
+var dom = Sim.dominantBody(G.ship.pos, sys, G.t);
+check('placed where the world dominates', dom === world, dom && dom.name);
+var talon = game(MARKET); placeOver(talon, world, 1.6); talon.ship.hullId = 'talon';
+check('only a Crawler', /Crawler/.test(S.refusal(talon, sys, T0, 'orbital')));
+var dk = game(MARKET); placeOver(dk, world, 1.6); dk.ship.docked = 'b3';
+check('cast off first', /cast off/.test(S.refusal(dk, sys, T0, 'orbital')));
+var thin = game(['market', 'quarters']); placeOver(thin, world, 1.6);
+var why = S.refusal(thin, sys, T0, 'orbital');
+check('a load that founds nothing says what is missing', /Warehouse/.test(why), why);
+var nolic = game(MARKET); placeOver(nolic, world, 1.6); nolic.licences = {};
+check('no licence, no founding', /licence/.test(S.refusal(nolic, sys, T0, 'orbital')));
+var near = game(MARKET);
+var p0 = sys.ports.filter(function (p) { return !p.surface; })[0];
+near.ship.pos = V.add(Sim.bodyPosition(p0, sys, T0), { x: 50, y: 0, z: 0 });
+near.ship.vel = Sim.bodyState(p0, sys, T0).vel;
+var wn = S.refusal(near, sys, T0, 'orbital');
+check('not on top of a port', /too close|between/.test(wn), wn);
+check('clear over a world, with a licence: yes', S.refusal(G, sys, T0, 'orbital') === null, S.refusal(G, sys, T0, 'orbital'));
+check('the surface wants a claim', /claim/.test(S.refusal(G, sys, T0, 'surface')));
+
+console.log('founding in orbit');
+var was = V.clone(G.ship.pos);
+var h = hooks();
+var r = S.found(G, sys, T0, 'orbital', h);
+check('founded', r.ok, r.why || h.said[0]);
+var st = r.st;
+check('a market station, of her type', st && st.type === 'market' && st.typeName === 'Market station');
+check('you are in one of her tugs, with arms', G.ship.hullId === 'bollard' && Arms.hasArms(G.ship) && G.ship.tugOf === st.id);
+check('her crates and her freight stay with her', !G.ship.modules.length && !Object.keys(G.ship.cargo).length &&
+      st.stock.grain === 12 && G.stationModules.every(function (m) { return m.station === st.id && !m.aboard; }));
+check('her crew stays with her, and your credits with you', st.crew.length === 1 && G.ship.credits === 1e6);
+var site = S.siteState(st, sys, T0);
+check('she stands where the Crawler was', V.dist(site.pos, was) < 0.01, V.dist(site.pos, was).toFixed(4) + ' km');
+var site2 = S.siteState(st, sys, T0 + 7200), hs2 = Sim.bodyState(world, sys, T0 + 7200);
+check('on a circular orbit round the world', Math.abs(V.dist(site2.pos, hs2.pos) - world.radius * 1.6) < 0.5);
+check('a tug short: the bay\'s rate less one', Math.abs(st.rates.unpack - 1.5) < 1e-9);
+
+console.log('the schedule');
+var sch = S.schedule(st);
+check('biggest first', sch.crateIn[st.crates.indexOf('market')] < sch.crateIn[st.crates.indexOf('warehouse')]);
+var cubes = 0.5 + 0.25 + 0.25;
+check('opens at cubes / rate', Math.abs((sch.opensAt - T0) / 86400 - cubes / 1.5) < 1e-6, ((sch.opensAt - T0) / 86400).toFixed(3) + ' d');
+check('three crates floating at the start', S.floatingCrates(st, sys, T0).length === 3);
+var fc = S.floatingCrates(st, sys, T0);
+check('in a ring round her', fc.every(function (c) { return Math.abs(V.dist(c.pos, site.pos) - S.FLOAT_RING_KM) < 1e-6; }));
+var mid = sch.crateIn[st.order[0]] + 1;
+check('one in when her crew has unpacked it', S.floatingCrates(st, sys, mid).length === 2 && S.cratesIn(st, mid) === 1);
+
+console.log('the arms');
+G.t = T0 + 60;
+var crate = S.floatingCrates(st, sys, G.t).filter(function (c) { return c.crateId === 'quarters'; })[0];
+function frame() { return R.bridgeFrame(G.ship); }
+var gp = R.armGrip(frame());
+G.ship.pos = V.add(G.ship.pos, V.sub(crate.pos, gp));
+G.ship.vel = V.clone(crate.vel);
+var sv = Arms.survey(G, frame());
+check('the camera sees her crate in reach', sv.best && sv.best.kind === 'crate', sv.best && sv.best.name);
+var ha = hooks();
+var tg = Arms.toggle(G, frame(), ha);
+check('the jaws shut on it, its mass on the arms', tg.held === 'crate' && G.ship.armLoad > 0 && st.held === crate.idx, ha.said[0]);
+check('it is out of the ring while you carry it', S.floatingCrates(st, sys, G.t).length === 2);
+var before = S.opensAt(st);
+G.ship.pos = V.add(G.ship.pos, V.sub(S.crawlerState(st, sys, G.t).pos, R.armGrip(frame())));
+var hu = hooks();
+Arms.update(G, frame(), 0.1, hu);
+check('brought to her frame, it is in at once', st.hand[crate.idx] === G.t && !G.ship.arms.held && G.ship.armLoad === 0, hu.said[0]);
+check('and she opens sooner', S.opensAt(st) < before, ((before - S.opensAt(st)) / 3600).toFixed(1) + ' h sooner');
+
+console.log('opening');
+var routesBefore = sys.traffic.map(function (q) { return q.id + '@' + q.t0 + '/' + q.period; }).join(',');
+var nb = sys.bodies.length;
+var at = S.opensAt(st);
+check('not a port before she opens', S.inject(G, sys, star.id) === 0 && !sys.byId[S.portId(st)]);
+G.t = at + 1;
+var ho = hooks();
+S.update(G, sys, G.t, ho);
+var port = sys.byId[S.portId(st)];
+check('the day she opens, a port in the system', !!port && /open/.test(ho.said[0]), ho.said[0]);
+check('in every list the flight loop reads', port && sys.ports.indexOf(port) >= 0 && sys.bodies.length === nb + 1 &&
+      world.children.indexOf(port) >= 0 && port.parentBody === world);
+check('docking, and yours', port && port.docking && port.player && S.owns(G, port));
+check('a market of her type', port && port.market && port.market.role === 'orbital' && port.market.roleName === 'Market station' &&
+      Object.keys(port.market.rows).length > 3);
+check('where her site was', port && V.dist(Sim.bodyPosition(port, sys, G.t), S.siteState(st, sys, G.t).pos) < 0.01);
+var mine = sys.traffic.filter(function (q) { return q.playerPort === port.id; });
+check('her own traffic, starting the day she opens', mine.length >= 1 && mine.every(function (q) { return q.t0 === at && (q.from === port.id); }),
+      mine.length + ' routes');
+var others = sys.traffic.filter(function (q) { return !q.playerPort; }).map(function (q) { return q.id + '@' + q.t0 + '/' + q.period; }).join(',');
+check('and nobody else\'s ships moved', others === routesBefore);
+check('once only', S.inject(G, sys, star.id) === 0 && sys.traffic.filter(function (q) { return q.playerPort; }).length === mine.length);
+var dockR = Sim.dockShip ? (function () { try { var sh = { pos: Sim.bodyPosition(port, sys, G.t), vel: Sim.bodyState(port, sys, G.t).vel,
+  fwd: { x: 0, y: 0, z: 1 }, up: { x: 0, y: 1, z: 0 }, right: { x: -1, y: 0, z: 0 }, dryMass: 30, cargo: {}, fuel: 1 };
+  Sim.dockShip(sh, port, sys, G.t); return sh.docked === port.id; } catch (e) { return e.message; } })() : 'no dockShip';
+check('a ship can berth at her', dockR === true, String(dockR));
+
+console.log('she comes back with the system');
+var fresh = Gen.generateSystem(star.seed, Galaxy.systemOpts(g, star)); fresh.starId = star.id;
+S.inject(G, fresh, star.id);
+var fp = fresh.byId[S.portId(st)];
+check('a regenerated system has her, in the same place', fp && V.dist(Sim.bodyPosition(fp, fresh, G.t), Sim.bodyPosition(port, sys, G.t)) < 1e-6);
+check('with the same market and routes', fp && fp.market.role === port.market.role &&
+      fresh.traffic.filter(function (q) { return q.playerPort; }).length === mine.length);
+var snap = JSON.parse(JSON.stringify(Save.snapshot(Object.assign({}, G, { visited: {}, charted: {} }))));
+check('saved', Array.isArray(snap.stations) && snap.stations.length === 1 && snap.stations[0].id === st.id);
+
+console.log('on a surface');
+var Gs = game(MARKET);
+Gs.t = T0 + 1000;     // her own id: a founding is named by its time
+placeOver(Gs, world, 1.3);
+Gs.claims[star.id + ':' + world.id] = { key: star.id + ':' + world.id, star: star.id, body: world.id, t: 0, until: 1e12 };
+var hiG = game(MARKET); placeOver(hiG, world, 2.5); hiG.claims = Gs.claims;
+check('too high over the world says so', /too high/.test(S.refusal(hiG, sys, T0, 'surface')));
+var noSh = game(MARKET); placeOver(noSh, world, 1.3); noSh.claims = Gs.claims; noSh.ship.craftBay = 'orbital';
+check('no shuttle, no surface station', /shuttle/.test(S.refusal(noSh, sys, T0, 'surface')));
+var rs = S.found(Gs, sys, Gs.t, 'surface', hooks());
+check('founded on a claimed world, low over it', rs.ok, rs.why);
+var sst = rs.st;
+check('a site on the ground under her', sst && sst.kind === 'surface' && sst.at && typeof sst.at.lat === 'number');
+check('the shuttles make it slower than in orbit', sst && S.opensAt(sst) - T0 > (st.startedAt ? (cubes / 1.5) * 86400 : 0) + 1,
+      ((S.opensAt(sst) - T0) / 86400).toFixed(2) + ' d');
+check('her crates float with the Crawler, up in orbit', S.floatingCrates(sst, sys, T0).every(function (c) {
+  return V.dist(c.pos, Sim.bodyPosition(world, sys, T0)) > world.radius * 1.2; }));
+Gs.t = S.opensAt(sst) + 1;
+S.update(Gs, sys, Gs.t, hooks());
+var sp = sys.byId[S.portId(sst)];
+check('opens as a pad on the ground', sp && sp.surface && sys.pads.indexOf(sp) >= 0 &&
+      Math.abs(V.dist(Sim.bodyPosition(sp, sys, Gs.t), Sim.bodyPosition(world, sys, Gs.t)) - world.radius) < 1,
+      sp ? (sp.surface + ' pads:' + (sys.pads.indexOf(sp) >= 0) + ' r:' + (V.dist(Sim.bodyPosition(sp, sys, Gs.t), Sim.bodyPosition(world, sys, Gs.t)) - world.radius).toFixed(3)) : 'no port');
+
+console.log('a forged licence');
+var Gf = game(MARKET); Gf.t = T0 + 2000; placeOver(Gf, world, 1.7);
+Gf.licences = {}; Gf.forgedBlanks = 1;
+check('a forged blank will do', S.refusal(Gf, sys, Gf.t, 'orbital') === null, S.refusal(Gf, sys, Gf.t, 'orbital'));
+var rf = S.found(Gf, sys, Gf.t, 'orbital', hooks());
+check('founded on it', rf.ok && rf.forged && rf.st.licence.forged, rf.why);
+var lr = L.rec(Gf, sys);
+lr.caught = true; lr.caughtAt = T0; lr.dueBy = T0 + 1;
+Gf.t = S.opensAt(rf.st) + 10;
+var hz = hooks();
+S.update(Gf, sys, Gf.t, hz);
+check('caught and unpaid: seized', rf.st.seized && hz.said.some(function (m) { return /seized/.test(m); }));
+var fport = sys.byId[S.portId(rf.st)];
+check('she stays open, under their flag', fport && !fport.player && !S.owns(Gf, fport) && fport.faction === rf.st.seizedBy);
+
+console.log('\n' + pass + ' passed, ' + fail + ' failed');
+process.exit(fail ? 1 : 0);

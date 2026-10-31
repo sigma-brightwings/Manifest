@@ -431,6 +431,12 @@
     /* The pirate mark (combat.js, Phase 18) and the pirates already
      * credited against it, by id. */
     marks: G.marks || {},
+    /* Station licences by star id, and forged blanks (licence.js). */
+    licences: G.licences || {},
+    forgedBlanks: G.forgedBlanks || 0,
+    /* Stations you founded (stations.js): the founding records, from which
+     * her schedule and her port are rebuilt. Additive. */
+    stations: G.stations || [],
     markCredited: G.markCredited || {},
       /* WHAT YOU DID FOR OTHER SHIPS (upkeep.js): mass passed, money that
        * changed hands, the legs you pulled ships out of. Everything else
@@ -552,6 +558,12 @@
   function restore(G, data, deps) {
     var Sim = global.Sim, V = global.V;
     G.t = data.t;
+    /* Before the system is entered, so main.js systemFor puts any station
+     * you founded back into it - the save may be docked at one. */
+    G.stations = Array.isArray(data.stations) ? data.stations : [];
+    /* The arms are not saved, so nor is a crate in them: it is back in her ring. */
+    G.stations.forEach(function (st) { if (st) st.held = null; });
+    if (global.Stations && G.sys && G.here) global.Stations.inject(G, G.sys, G.here.id);
 
     for (var i = 0; i < (data.visited || []).length; i++) G.visited[data.visited[i]] = true;
     /* An old save has no charted list, and everywhere it had BEEN is
@@ -667,6 +679,8 @@
     G.rescue = data.rescue || null;
     G.tenderKills = data.tenderKills || 0;
     G.marks = (data.marks && typeof data.marks === 'object') ? data.marks : {};
+    G.licences = (data.licences && typeof data.licences === 'object') ? data.licences : {};
+    G.forgedBlanks = data.forgedBlanks || 0;
     G.markCredited = (data.markCredited && typeof data.markCredited === 'object') ? data.markCredited : {};
     G.npcLedger = (data.npcLedger && typeof data.npcLedger === 'object') ? data.npcLedger : {};
     G.notes = typeof data.notes === 'string' ? data.notes : '';

@@ -9642,7 +9642,7 @@
     orderList: orderList, stockFit: stockFit, quoteOrder: quoteOrder,
     HULL_STOCK: HULL_STOCK, fitStock: fitStock, standardProbe: standardProbe, buyPrice: buyPrice,
     hullGate: hullGate, BUILD_DAYS_CARRIER: BUILD_DAYS_CARRIER,
-    outfitOver: outfitOver, floorQuote: floorQuote,
+    outfitOver: outfitOver, floorQuote: floorQuote, addHullStandard: addHullStandard,
     commission: commission, quoteCommission: quoteCommission, buildDays: buildDays,
     orders: orders, orderEta: orderEta, deliverOrders: deliverOrders,
     takeCommand: takeCommand, commandRefusal: commandRefusal, tradeInValue: tradeInValue,

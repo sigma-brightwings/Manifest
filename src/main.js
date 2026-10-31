@@ -319,6 +319,7 @@
     G.fleet = [];
     G.orders = [];                 // hulls on the slips — Combat.commission
     G.stationModules = [];         // station modules, ordered or carried — construction.js
+    G.stations = [];               // stations you founded - stations.js
     /* Owns no plants, and has changed no system. */
     G.holdings = [];
     G.uplift = {};
@@ -384,6 +385,9 @@
        * needs the system to know its own name. */
       G.systemCache[star.id].starId = star.id;
     }
+    /* Any station you founded here that has opened since this system was
+     * generated (stations.js). Idempotent, and cheap when there are none. */
+    if (typeof Stations !== 'undefined') Stations.inject(G, G.systemCache[star.id], star.id);
     return G.systemCache[star.id];
   }
   /* Your ships working in other systems book their sales against that
@@ -6007,6 +6011,9 @@
       var arrived = Fleet.tick(G, G.sys, G.t);
       for (var ai = 0; ai < arrived.length; ai++) logTrade(arrived[ai]);
     }
+    /* Stations you founded open on the day, wherever you are; a forged
+     * licence here is looked at once a week (stations.js). */
+    if (global.Stations && G.stations && G.stations.length) Stations.update(G, G.sys, G.t, HOOKS);
     /* Thefts from other prospectors' drones are reported when the owner
      * next comes round - on the clock, wherever you are. */
     if (global.Claims && G.thefts && G.thefts.length) global.Claims.tickThefts(G, G.t, HOOKS);
@@ -7646,6 +7653,8 @@
      * toggle: Y hides the timetable, and what is left of a ship you shot is
      * not the timetable. */
     drawDebris(ctx, cam);
+    /* A station of yours going up: the Crawler, and her crates (stations.js). */
+    if (!inside) drawFoundings(ctx, cam);
 
     /* Weapons fire, missiles and explosions render regardless of the
      * traffic toggle: Y hides the timetable, not the fight. */
@@ -8970,6 +8979,65 @@
   function sinkTint(glow) {
     var c = sinkRGB(glow);
     return 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
+  }
+
+  /* ---- a founding, while she is built (stations.js, 2026-10-31) ---------
+   * The Crawler where she stopped - on her orbit, nose along it, deck to
+   * the world - with her cubes opened, and her crates in a ring round her
+   * until her crew or your arms put them in. A crate in your jaws is drawn
+   * at the jaws. Plain boxes in the crate colours of her cubes. */
+  var FOUNDING_STANDINS = {};
+  var CRATE_HALF_KM = { S: 0.004, M: 0.006, L: 0.009, XL: 0.013 };
+  var CRATE_MESH = null;
+  function crateMesh() {
+    if (CRATE_MESH) return CRATE_MESH;
+    var m = Render.box(1, 0.8, 1.2);
+    m.c = m.f.map(function (f, i) { return i < 4 ? '#c99b3e' : '#a9884d'; });
+    CRATE_MESH = m;
+    return m;
+  }
+  function drawCrate(ctx, cam, pos, size, sunDir) {
+    var GLW = global.GLWorld;
+    var fr = { pos: pos, fwd: { x: 0, y: 0, z: 1 }, up: { x: 0, y: 1, z: 0 }, right: { x: 1, y: 0, z: 0 } };
+    if (GLW && GLW.queueMesh && glLive() && GLW.queueMesh(cam, fr, crateMesh(), CRATE_HALF_KM[size] || 0.006, sunDir)) return;
+    Render.paintMesh(ctx, cam, fr, crateMesh(), CRATE_HALF_KM[size] || 0.006, sunDir, null);
+  }
+  function drawFoundings(ctx, cam) {
+    var Sts = global.Stations;
+    if (!Sts || !G.stations || !G.stations.length) return;
+    var list = Sts.buildingHere(G, G.sys, G.t);
+    if (!list.length) return;
+    var sunPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
+    list.forEach(function (st) {
+      var cs = Sts.crawlerState(st, G.sys, G.t);
+      if (!cs) return;
+      var hs = Sim.bodyState(cs.host, G.sys, G.t);
+      var up = V.norm(V.sub(cs.pos, hs.pos));
+      var rv = V.sub(cs.vel, hs.vel);
+      var fwd = V.norm(V.sub(rv, V.scale(up, V.dot(rv, up))));
+      var right = V.norm(V.cross(fwd, up));
+      var sunDir = V.norm(V.sub(sunPos, cs.pos));
+      var v = FOUNDING_STANDINS[st.id];
+      if (!v) {
+        var hd = Combat.HULLS.crawler || {};
+        v = FOUNDING_STANDINS[st.id] = {
+          hullId: 'crawler', bornId: 'found|' + st.id, dryMass: hd.dryMass || 640, shipName: st.crawler.name,
+          livery: st.crawler.livery, liveryFaction: st.crawler.liveryFaction, paint: st.crawler.paint,
+          craftBay: st.bay, modules: [], cargo: {}, crew: [], visitor: true, docked: null, landed: false };
+      }
+      v.pos = cs.pos; v.vel = cs.vel; v.fwd = fwd; v.up = up; v.right = right;
+      var far = V.dist(cs.pos, cam.eye);
+      if (glLive() && far < WINDOWS_KM * 4) Render.drawShipModel(ctx, cam, v, sunDir, null);
+      else Render.drawHullModel(ctx, cam, v, Render.hullLength(v), sunDir, '#b5af9e', 'crawler');
+      if (far > 40) return;
+      Sts.floatingCrates(st, G.sys, G.t).forEach(function (c) { drawCrate(ctx, cam, c.pos, c.size, sunDir); });
+    });
+    var h = G.ship.arms && G.ship.arms.held;
+    if (h && h.kind === 'crate' && h.pos) {
+      var hst = Sts.byId(G, h.station), Cn = global.Construction;
+      var cr = hst && Cn ? Cn.BY_ID[hst.crates[h.idx]] : null;
+      drawCrate(ctx, cam, h.pos, cr ? cr.size : 'M', V.norm(V.sub(sunPos, h.pos)));
+    }
   }
 
   function drawDebris(ctx, cam) {

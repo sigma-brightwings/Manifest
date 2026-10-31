@@ -567,7 +567,11 @@
   function buildPortMarket(port, host, sys, rng) {
     var dev = host.economy ? host.economy.dev : developmentOf(host, rng);
     var pop = host.economy ? host.economy.pop : populationOf(host, dev);
+    /* A station the player founded is the type her crates made it
+     * (stations.js); every generated port still draws its role as before,
+     * and the draw is still taken so the rng stream is unchanged. */
     var roleId = pickRole(port, host, dev, rng);
+    if (port.forceRole && ROLE_BY_ID[port.forceRole]) roleId = port.forceRole;
     var role = ROLE_BY_ID[roleId];
 
     var rows = {};

@@ -663,6 +663,21 @@
                  color: (mob && mob.color) || '#c86bff' });
     }
 
+    /* YOUR CREW (stations.js, 2026-10-31): flying a Crawler, the channel
+     * to her own crew is where a station is founded; with a station of
+     * yours going up here, it is where her crew says how it is going. A
+     * frequency, so range 0. */
+    var Sts = global.Stations, Cn0 = global.Construction;
+    var building = Sts ? Sts.buildingHere(G, G.sys, G.t) : [];
+    if (Sts && Cn0 && (Cn0.isCrawler(G.ship) || building.length)) {
+      out.push({ kind: 'crew', obj: building[0] || null,
+                 name: Cn0.isCrawler(G.ship) ? (G.ship.shipName || 'Your Crawler') + ' - crew' : building[0].name + ' - crew',
+                 range: 0,
+                 who: Cn0.isCrawler(G.ship) ? 'Found a station here'
+                    : Sts.cratesIn(building[0], G.t) + ' of ' + building[0].crates.length + ' crates in',
+                 color: '#ffd36b' });
+    }
+
     /* Police channels, one per faction flying a flag here.
      *
      * Range 0 on purpose, so they sort to the top of a list that is
@@ -843,7 +858,7 @@
        * to press a key that does not exist rather than as a marker in a
        * list. A glyph in a legend has to be typeable even when nothing
        * asks you to type it. */
-      ctx.fillText(c.kind === 'authority' ? '*'
+      ctx.fillText(c.kind === 'authority' || c.kind === 'crew' ? '*'
                  : c.kind === 'collector' ? '$'
                  : c.kind === 'station' ? '#'
                  : (c.hostile ? '!' : '>'), pad + 12, yy);
@@ -1448,12 +1463,87 @@
         note: tst === 'paid' ? 'paid' : tst === 'suspected' ? 'refused — SUSPECTED this week' : 'they will take you for the law',
         fn: function () { tAnswer(global.Tithe.refuse(G, G.sys, G.t)); }
       });
+      /* A STATION LICENCE (licence.js, 2026-10-31): from whoever governs
+       * here, for founding a station from a Crawler. */
+      if (global.Licence && global.Licence.issuer(G.sys) === 'outlaw') {
+        var licR = global.Licence.rec(G, G.sys), licWhy = global.Licence.refusal(G, G.sys);
+        opts.push({
+          label: licR && licR.forged && licR.caught ? 'Station licence - pay the real fee, now'
+               : 'Station licence - ' + global.Licence.price(G.sys) + ' cr',
+          enabled: !licWhy,
+          note: licR && !licR.forged ? 'held - you may found a station here'
+              : licR && licR.caught ? 'FORGED, found out - due in ' + Math.max(0, Math.ceil((licR.dueBy - G.t) / 86400)) + ' days'
+              : licWhy || 'to found a station from a Crawler in this system',
+          fn: function () { var r = global.Licence.buy(G, G.sys, G.t, hooksFor()); if (!r.ok) say('No: ' + r.why, 5); }
+        });
+      }
+      /* And paper for anywhere else: a blank, filled in when you found. */
+      if (global.Licence) {
+        var fWhy = global.Licence.forgeRefusal(G, G.sys);
+        opts.push({
+          label: 'Forged licence, blank - ' + global.Licence.forgedPrice() + ' cr',
+          enabled: !fWhy,
+          note: fWhy || ((G.forgedBlanks || 0) ? G.forgedBlanks + ' in your papers already - ' : '') +
+                       'reads as real until somebody checks',
+          fn: function () { var r = global.Licence.buyForged(G, G.sys, G.t, hooksFor()); if (!r.ok) say('No: ' + r.why, 5); }
+        });
+      }
+      return opts;
+    }
+
+    if (c.kind === 'crew') {
+      var Sx = global.Stations, Cx = global.Construction;
+      if (Cx.isCrawler(G.ship)) {
+        ['orbital', 'surface'].forEach(function (kind) {
+          var why = Sx.refusal(G, G.sys, G.t, kind);
+          var host = Sim.dominantBody(G.ship.pos, G.sys, G.t);
+          var ids = Cx.aboard(G.ship).map(function (a) { return a.crateId; });
+          var ty = Sx.typeFor(ids);
+          opts.push({
+            label: kind === 'orbital' ? 'Found her here, in orbit' + (host ? ' of ' + host.name : '')
+                                      : 'Found her on the ground below' + (host ? ', on ' + host.name : ''),
+            enabled: !why,
+            note: why || ((ty ? ty.name : 'A station') + ' - she stops here for good, and you take one of her tugs'),
+            fn: function () {
+              var r = Sx.found(G, G.sys, G.t, kind, hooksFor());
+              if (!r.ok) say('No: ' + r.why, 5);
+            }
+          });
+        });
+      }
+      Sx.buildingHere(G, G.sys, G.t).forEach(function (st) {
+        var left = Math.max(0, Sx.opensAt(st) - G.t);
+        var sch = Sx.schedule(st), next = null;
+        st.order.forEach(function (i) { if (sch.crateIn[i] > G.t && (next === null || sch.crateIn[i] < sch.crateIn[next])) next = i; });
+        opts.push({
+          label: st.name + ' - opens in ' + (left / 86400).toFixed(1) + ' days',
+          enabled: false,
+          note: Sx.cratesIn(st, G.t) + ' of ' + st.crates.length + ' crates in' +
+                (next !== null ? '; her crew is on the ' + Cx.BY_ID[st.crates[next]].name.toLowerCase() : '') +
+                ' - carry one to her frame with the arms (G) and it is in at once',
+          fn: function () {}
+        });
+      });
       return opts;
     }
 
     if (c.kind === 'authority') {
       /* The police channel. Reporting a crime is a later piece of work;
        * these are the two you need when the trouble is your own. */
+      /* A STATION LICENCE (licence.js, 2026-10-31): from whoever governs
+       * here, for founding a station from a Crawler. */
+      if (global.Licence && global.Licence.issuer(G.sys) === c.obj.id) {
+        var licR = global.Licence.rec(G, G.sys), licWhy = global.Licence.refusal(G, G.sys);
+        opts.push({
+          label: licR && licR.forged && licR.caught ? 'Station licence - pay the real fee, now'
+               : 'Station licence - ' + global.Licence.price(G.sys) + ' cr',
+          enabled: !licWhy,
+          note: licR && !licR.forged ? 'held - you may found a station here'
+              : licR && licR.caught ? 'FORGED, found out - due in ' + Math.max(0, Math.ceil((licR.dueBy - G.t) / 86400)) + ' days'
+              : licWhy || 'to found a station from a Crawler in this system',
+          fn: function () { var r = global.Licence.buy(G, G.sys, G.t, hooksFor()); if (!r.ok) say('No: ' + r.why, 5); }
+        });
+      }
       var owed = Math.round((G.wanted || {})[c.obj.id] || 0);
       var fugitive = Combat.isFugitive(G, c.obj.id);
       opts.push({
@@ -3629,7 +3719,7 @@
       var load = Cn.aboard(s);
       var found = Cn.canFound(load);
       var near = found.filter(function (f) { return f.ok || f.defining; });
-      row('THIS LOAD FOUNDS', near.length ? 'a Crawler becomes a station\'s first bay — founding comes next'
+      row('THIS LOAD FOUNDS', near.length ? 'a Crawler becomes a station\'s first bay - cast off, then found her on her crew channel'
                                           : 'nothing yet: Crew quarters, a defining crate, and what it needs',
           function () {}, true);
       near.forEach(function (f) {

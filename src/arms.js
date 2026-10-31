@@ -22,9 +22,11 @@
  *   and the harbour takes her: salvage paid by the tonne - unless she is a
  *   ship you were seen to attack, which no harbour pays you for.
  *
- *   STATION MODULES have no place to go yet: founding a station from a
- *   Crawler is the next slice of construction (construction.js), and the
- *   arms are the hands it will be built with.
+ *   A STATION CRATE floating at a founding (stations.js) is lifted out of
+ *   her ring and carried: bring it to her frame - within INSTALL_KM of the
+ *   Crawler - and it is in at once, out of her crew's queue. Its mass is
+ *   on the arms while you carry it. Let go short of her and her crew lines
+ *   it back up in the ring.
  *
  * Nothing here is saved. A load lets go of whatever the jaws held; a ship
  * clamped at the moment of the save is where she was, adrift.
@@ -39,6 +41,7 @@
   var NEAR_KM = 0.25;            // what the arm camera bothers to show
   var STOW_S = 5;                // the swing from the jaws to the hatch
   var JAW_RATE = 1.6;            // of travel per second
+  var CRATE_REACH_KM = { S: 0.006, M: 0.008, L: 0.012, XL: 0.016 };  // half a crate, and the jaws
   var SALVAGE_PER_T = 20;        // cr a tonne, harbour salvage: a hauler's
                                  // 320 t is 6,400 cr, a good hold's worth
 
@@ -96,6 +99,16 @@
         best = { kind: 'canister', obj: c, d: d, rel: rel, name: c.torpInert ? 'disarmed torpedo' : 'cargo canister' };
       }
     });
+    var Sts = global.Stations;
+    (Sts && G.sys ? Sts.cratesHere(G, G.sys, G.t || 0) : []).forEach(function (c) {
+      var d = V.dist(c.pos, g);
+      if (d > NEAR_KM) return;
+      near.push({ kind: 'crate', pos: c.pos });
+      var rel = V.dist(c.vel || s.vel, s.vel);
+      if (d <= (CRATE_REACH_KM[c.size] || 0.008) && (!best || d < best.d)) {
+        best = { kind: 'crate', obj: c, d: d, rel: rel, name: c.name.toLowerCase() };
+      }
+    });
     var R = global.Render;
     shipsNear(G, g).forEach(function (o) {
       near.push({ kind: 'ship', state: o });
@@ -137,6 +150,18 @@
       say(hooks, 'Jaws shut on a ' + b.name + ' - swinging it in', 4);
       return { ok: true, held: 'canister' };
     }
+    if (b.kind === 'crate') {
+      var Sts = global.Stations, fd = Sts && Sts.byId(G, b.obj.station);
+      if (!fd) return { ok: true, empty: true };
+      fd.held = b.obj.idx;
+      var Cn = global.Construction;
+      var tonnes = Math.round(Sts.cubesOf(b.obj.crateId) * ((Cn && Cn.TONNES_PER_CUBE) || 25));
+      st.held = { kind: 'crate', station: fd.id, idx: b.obj.idx, name: b.name, mass: tonnes, at: G.t };
+      s.armLoad = tonnes;
+      if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(s);
+      say(hooks, 'Jaws shut on the ' + b.name + ' - ' + tonnes + ' t. Carry it to her frame and it goes in.', 6);
+      return { ok: true, held: 'crate' };
+    }
     if (!b.ok) {
       say(hooks, 'The jaws close on the ' + b.name + '\'s hull and slip: she is under way. Only a dead ship can be taken in tow.', 6);
       return { ok: true, empty: true };
@@ -160,6 +185,12 @@
       st.held.can._inJaws = false;
       st.held.can.vel = V.clone(s.vel);
       say(hooks, 'Let go of the ' + st.held.name, 3);
+    } else if (st.held.kind === 'crate') {
+      var fd = global.Stations && global.Stations.byId(G, st.held.station);
+      if (fd && fd.held === st.held.idx) fd.held = null;
+      s.armLoad = 0;
+      if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(s);
+      say(hooks, 'Let go of the ' + st.held.name + ' - her crew lines it back up in the ring', 4);
     } else if (st.held.kind === 'ship') {
       if (st.held.spec && st.held.spec.live) st.held.spec.live.vel = V.clone(s.vel);
       s.armLoad = 0;
@@ -212,6 +243,24 @@
       }
       return;
     }
+    if (h.kind === 'crate') {
+      var Sts = global.Stations, fd = Sts && Sts.byId(G, h.station), gp = frame ? grip(frame) : null;
+      /* Her crew got to it first, or she opened: nothing left to carry. */
+      if (!fd || Sts.isOpen(fd, G.t || 0) || fd.held !== h.idx || Sts.schedule(fd).crateIn[h.idx] <= (G.t || 0)) {
+        st.held = null; st.want = 0; s.armLoad = 0;
+        if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(s);
+        return;
+      }
+      h.pos = gp;
+      if (gp && Sts.atFrame(fd, G.sys, G.t || 0, gp) && Sts.installByHand(fd, h.idx, G.t || 0)) {
+        st.held = null; st.want = 0; s.armLoad = 0;
+        if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(s);
+        var left = fd.crates.length - Sts.cratesIn(fd, G.t || 0);
+        say(hooks, 'The ' + h.name + ' is in - ' + (left ? left + ' to go' : 'that was the last of them'), 5);
+        if (hooks && hooks.sound) hooks.sound('dock');
+      }
+      return;
+    }
     if (h.kind === 'ship') {
       var sp = h.spec;
       if (!sp || sp.dead || !sp.live) { st.held = null; s.armLoad = 0; return; }
@@ -257,6 +306,8 @@
     if (st.held) {
       out.held = st.held.kind === 'ship'
         ? 'the ' + st.held.name + ', ' + Math.round(st.held.mass) + ' t'
+        : st.held.kind === 'crate'
+        ? 'the ' + st.held.name + ' - carry it to her frame'
         : st.held.name + (st.held.full ? ' - hold full' : ' - swinging it in');
       return out;
     }
@@ -264,7 +315,7 @@
       out.target = b.name;
       out.dist = Math.round(b.d * 1000);
       out.rel = (b.rel * 1000).toFixed(1);
-      out.inReach = b.rel <= MATCH_KMS && (b.kind === 'canister' || b.ok);
+      out.inReach = b.rel <= MATCH_KMS && (b.kind === 'canister' || b.kind === 'crate' || b.ok);
       if (b.kind === 'ship' && !b.ok) out.note = 'under way - only a dead ship can be towed';
       else if (b.rel > MATCH_KMS) out.note = 'match speed to under ' + Math.round(MATCH_KMS * 1000) + ' m/s';
     }

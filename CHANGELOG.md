@@ -69,8 +69,64 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 - **Epoch 4: existing careers do not carry over.** The pirates were split
   from the Syndicate, so the map was redrawn. Astra chose it knowing
   that: *"Bump, careers reset"*.
+- **Additive: station licences, forged blanks and founded stations**
+  (`licences`, `forgedBlanks`, `stations`). An older save loads with none.
+  A crate in the arms at the save is back in her ring on load.
 
 ### Added
+
+- **Founding a station from a Crawler (2026-10-31).** Astra: *"yeah,
+  let's do that next"*. Her choices: a licence now, orbit and surface, a
+  full port with traffic, and the arms helping build her (her crew's tugs
+  unpack at the agreed rate; a crate you carry in yourself goes in at
+  once). `src/stations.js`, `src/licence.js`.
+  - **A licence first.** Bought on the authority channel from whoever
+    governs the system, for about a mid-tier ship's price (more in a richer
+    system), at WARM standing or better, and never by a marked pirate. In a
+    Syndicate hold the collector sells it. A pirate band's space needs
+    none.
+    - A **forged blank** is sold by the Syndicate's collector in its holds
+      for about a third of the real fee, and is filled in when you found.
+      It is checked once a week; a clean system checks far more often than
+      a corrupt one. Caught, you have a week to pay the real fee on the
+      authority channel, or the station is **seized**: she stays open,
+      under their flag, and is no longer yours.
+  - **Founding.** Fly the Crawler there, cast off, and open her crew
+    channel on the comms list (marked `*`, at the top). It offers *Found
+    her here, in orbit of ...* and *Found her on the ground below*, each
+    with the reason it can't be done when it can't. She needs:
+    - a load that founds a type (Crew quarters, a defining crate, and what
+      it needs);
+    - a world below her, 500 km clear of every port and of your own sites;
+    - a licence, or a forged blank;
+    - for the surface: within one world radius of the ground, a mining
+      claim on that world, and a shuttle in her bay.
+  - **She stops for good.** In orbit she stands on the circular orbit
+    through where she was. On a surface her site is the ground below her,
+    and she waits on a parking orbit above it while her shuttles take the
+    crates down. Her freight and her crew stay with her; your credits stay
+    with you.
+  - **You leave in one of her tugs** (a Bollard, or the Hawser if that is
+    her only tug). That tug is off her shift while you fly it, so her
+    crew works at the bay's rate less one tug.
+  - **Her crates float in a ring round her**, 600 m out. Her crew unpacks
+    them biggest first, at cubes per day. On a surface each one then
+    waits on the shuttles' ferry rate.
+    - Any crate you take in the tug's arms (G) and bring within 350 m of
+      her is in at once and comes out of her crew's queue, so she opens
+      sooner. The arm camera shows the crates. Let go short of her and
+      her crew lines it back up.
+    - The crew channel says how many crates are in, which one her crew is
+      on, and when she opens.
+  - **The day she opens she is a port like any other.** She has berths,
+    a market of her type (market station, refinery, skimmer, mining head,
+    hab as a highport, shipyard), her own dressing, and up to four
+    routes of her own whose first ships leave her that day. Nobody else's
+    ship moves when she opens. She is put back every time the system is
+    generated or loaded.
+  - Probe: `tools/probe-founding.js` founds a market station over a world
+    and carries the crew quarters crate in with the arms (4 hours sooner).
+    It then runs the clock to her opening and flies up to her berths.
 
 - **A tug's grab arms, worked from the seat (2026-10-31).** Astra: *"the
   [tug's] cockpit should have a vidscreen to operate those grab arms"*.

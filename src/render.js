@@ -12782,10 +12782,11 @@
     var sun = ship.up;
     /* What is out there: her, a canister, whatever is near the jaws. */
     (info && info.near || []).forEach(function (o) {
-      if (o.kind === 'canister') {
+      if (o.kind === 'canister' || o.kind === 'crate') {
         var p = c2.project(o.pos);
         if (!p) return;
-        var s = Math.max(3, 0.004 * p.scale);
+        /* A station crate (stations.js) is a bigger box than a canister. */
+        var s = Math.max(3, (o.kind === 'crate' ? 0.012 : 0.004) * p.scale);
         ctx.fillStyle = o.held ? '#ffd36b' : '#c9a86a';
         ctx.fillRect(p.x - s / 2, p.y - s / 2, s, s);
         ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.strokeRect(p.x - s / 2, p.y - s / 2, s, s);

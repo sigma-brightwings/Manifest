@@ -438,7 +438,7 @@
   function announce(G, t) {
     var out = [];
     owned(G).forEach(function (r) {
-      if (r.announced || !ready(r, t)) return;
+      if (r.announced || r.station || !ready(r, t)) return;   // a founded crate is her part now
       r.announced = true;
       var c = BY_ID[r.crateId];
       out.push('Your ' + c.name.toLowerCase() + ' crate is ready at ' + (r.portName || 'the yard') +
