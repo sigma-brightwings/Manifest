@@ -1054,10 +1054,23 @@
       if (dot(nrm, hinge) < 0) nrm = scl(nrm, -1);
       var o = add3(hinge, scl(nrm, EPS));
       var L = Math.sqrt(dot(sub(outer, hinge), sub(outer, hinge)));
+      /* A few centimetres past the pane's outer edge (2026-10-31): the
+       * corner where this wall meets the one back to the side wall is a V
+       * opening away from the seat, and sight lines just past the pane's
+       * edge went out between the two. */
       frame(room, o, u, v, toPlane(g.quarters[qi], hinge, u, v),
-            [[0, fy], [L, fy], [L, cy], [0, cy]], pal.wall);
+            [[0, fy], [L + 0.05, fy], [L + 0.05, cy], [0, cy]], pal.wall);
       var R = [side * g.sideX, 0, g.meetZ];
-      quad(room, [outer[0], fy, outer[2]], [R[0], fy, R[2]], [R[0], cy, R[2]], [outer[0], cy, outer[2]], pal.wall);
+      /* From the corner of the quarter-light's wall as built - EPS out from
+       * the glass and a hair past its end - so the two walls close on each
+       * other instead of leaving a crack down the corner (2026-10-31: the
+       * taller side windows put a sight line right through it). */
+      var Qs = add3(add3(outer, scl(nrm, EPS)), scl(u, EPS));
+      /* ...and on out past it a little along its own line (which is the
+       * line of sight, so the overlap is seen edge-on): a sight line that
+       * lands exactly on the corner meets one wall or the other. */
+      Qs = add3(Qs, scl(unit(sub(Qs, R)), 0.03));
+      quad(room, [Qs[0], fy, Qs[2]], [R[0], fy, R[2]], [R[0], cy, R[2]], [Qs[0], cy, Qs[2]], pal.wall);
     });
 
     /* The side walls, each framing its side window — or the part of it aft
@@ -1077,18 +1090,49 @@
      * from the seat, so a fan from the seat covers it exactly. */
     var foot = [[-g.sideX, g.bulkZ], [g.sideX, g.bulkZ], [g.sideX, g.meetZ], [QX, QZ],
                 [g.hingeX, g.frontZ], [-g.hingeX, g.frontZ], [-QX, QZ], [-g.sideX, g.meetZ]];
-    [[fy, pal.floor], [cy, pal.ceil]].forEach(function (lv) {
-      for (var fi = 0; fi < foot.length; fi++) {
-        var a2 = foot[fi], b2 = foot[(fi + 1) % foot.length];
-        tri(room, [0, lv[0], 0], [a2[0], lv[0], a2[1]], [b2[0], lv[0], b2[1]], lv[1]);
+    for (var fi = 0; fi < foot.length; fi++) {
+      var a2 = foot[fi], b2 = foot[(fi + 1) % foot.length];
+      tri(room, [0, fy, 0], [a2[0], fy, a2[1]], [b2[0], fy, b2[1]], pal.floor);
+    }
+    /* THE CEILING, with the roof glass cut through it (2026-10-31): aft of
+     * the glass a plain slab; across it, each half of the ship framed
+     * round its pane; forward of it, the bulge out to the quarter-lights. */
+    if (g.roofs && g.roofs.length === 2) {
+      var zs0 = g.roofZ0 - 0.06, zs1 = g.meetZ, co = [0, cy, 0], cu = [1, 0, 0], cv = [0, 0, 1];
+      if (zs0 > g.bulkZ + 1e-6) {
+        quad(room, [-g.sideX, cy, g.bulkZ], [g.sideX, cy, g.bulkZ], [g.sideX, cy, zs0], [-g.sideX, cy, zs0], pal.ceil);
+      } else zs0 = g.bulkZ;
+      g.roofs.forEach(function (r) {
+        var right = r[0][0] > 0;
+        var rect = right ? [[0, zs0], [g.sideX, zs0], [g.sideX, zs1], [0, zs1]]
+                         : [[-g.sideX, zs0], [0, zs0], [0, zs1], [-g.sideX, zs1]];
+        frame(room, co, cu, cv, r.map(function (p) { return [p[0], p[2]]; }), rect, pal.ceil);
+      });
+      var fwdC = [[-g.sideX, zs1], [g.sideX, zs1], [QX, QZ], [g.hingeX, g.frontZ], [-g.hingeX, g.frontZ], [-QX, QZ]];
+      var cxm = 0, czm = 0;
+      fwdC.forEach(function (p) { cxm += p[0] / fwdC.length; czm += p[1] / fwdC.length; });
+      for (fi = 0; fi < fwdC.length; fi++) {
+        var c2 = fwdC[fi], d2 = fwdC[(fi + 1) % fwdC.length];
+        tri(room, [cxm, cy, czm], [c2[0], cy, c2[1]], [d2[0], cy, d2[1]], pal.ceil);
       }
-    });
-    /* Two light strips down the ceiling, aft of the overhead panel. */
-    [-1, 1].forEach(function (s) {
-      var x0 = s * 0.50 * k, x1 = s * 0.56 * k, y = cy - 0.006;
-      quad(room, [x0, y, g.bulkZ + 0.25], [x1, y, g.bulkZ + 0.25], [x1, y, g.overheadZ0 - 0.05],
-           [x0, y, g.overheadZ0 - 0.05], pal.light);
-    });
+    } else {
+      for (fi = 0; fi < foot.length; fi++) {
+        var a3 = foot[fi], b3 = foot[(fi + 1) % foot.length];
+        tri(room, [0, cy, 0], [a3[0], cy, a3[1]], [b3[0], cy, b3[1]], pal.ceil);
+      }
+    }
+    /* Two light strips down the ceiling, aft of the overhead panel - and
+     * aft of the roof glass, which they would otherwise be stuck across. */
+    var stripEnd = Math.min(g.overheadZ0, g.roofs ? g.roofZ0 : Infinity) - 0.05;
+    if (stripEnd > g.bulkZ + 0.35) {
+      [-1, 1].forEach(function (s) {
+        var x0 = s * 0.50 * k, x1 = s * 0.56 * k, y = cy - 0.006;
+        quad(room, [x0, y, g.bulkZ + 0.25], [x1, y, g.bulkZ + 0.25], [x1, y, stripEnd],
+             [x0, y, stripEnd], pal.light);
+      });
+    }
+    /* This ship's frame bars across its panes (cockpitGeometry `bars`). */
+    (g.bars || []).forEach(function (b) { quad(room, b[0], b[1], b[2], b[3], pal.jamb || pal.wall); });
 
     /* THE FOOTWELL under the dash slot, floored with the landing window. */
     var fw = g.floorWin, fo = fw[3], fu = [1, 0, 0];

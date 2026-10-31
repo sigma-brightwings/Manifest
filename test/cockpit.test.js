@@ -198,7 +198,10 @@ console.log('--- the landing window ---');
   var cam = new Render.Camera();
   cam.buildCockpit(ship, w, h, { yaw: 0, pitch: 0 });
 
-  var floor = Render.clipProject(cam, Render.localPoly(ship, Render.FLOOR_WINDOW));
+  /* This ship's own landing window and console slot (2026-10-31: both
+   * are shaped by hull now, Render.canopyStyle). */
+  var spec = Render.cockpitSpec(ship), geo = Render.cockpitGeometry(spec);
+  var floor = Render.clipProject(cam, Render.localPoly(ship, geo.floorWin));
   var ap = Render.aperturePath(cam, ship);
   check('the floor window is somewhere on screen', !!floor && !!ap);
   if (!floor || !ap) return;
@@ -211,8 +214,8 @@ console.log('--- the landing window ---');
   /* The slot in the console has to be at least as wide as the pane, or the
    * dashboard covers the edges of the view you cut it for. */
   var slot = Render.clipProject(cam, Render.localPoly(ship, [
-    Render.dashPoint(Render.SLOT_S[0], 0.04), Render.dashPoint(Render.SLOT_S[1], 0.04),
-    Render.dashPoint(Render.SLOT_S[1], 1), Render.dashPoint(Render.SLOT_S[0], 1)]));
+    Render.dashPoint(spec.slot[0], 0.04, spec), Render.dashPoint(spec.slot[1], 0.04, spec),
+    Render.dashPoint(spec.slot[1], 1, spec), Render.dashPoint(spec.slot[0], 1, spec)]));
   check('the console is cut away in front of it', !!slot);
   if (slot) {
     var sb = Render.polyBounds(slot);
@@ -226,8 +229,8 @@ console.log('--- the landing window ---');
    * the pitch clamp, or the window exists at an angle the neck cannot
    * reach. The clamp lives in main.js; 1.15 rad is the number it uses. */
   var steepest = 0;
-  Render.FLOOR_WINDOW.forEach(function (p) {
-    steepest = Math.max(steepest, Math.atan2(-p[1], p[2]));
+  geo.floorWin.forEach(function (p) {
+    steepest = Math.max(steepest, Math.atan2(-p[1], p[2] - 0.08));
   });
   check('looking down far enough to use it is within the neck clamp', steepest < 1.15,
         (steepest / DEG).toFixed(1) + '° down');
@@ -672,6 +675,94 @@ console.log('--- the screens do not repaint every frame ---');
   check('without a GPU every frame redraws', Render.mfdDue(flat));
 
   global.document = hadDoc; global.GLWorld = hadGl; global.performance = hadPerf;
+})();
+
+/* ---- the glass, by role and by hull (2026-10-31) ------------------------
+ * Astra: "I want the canopy glass in the ships to give a better view to
+ * either side, as well as above and below, while also being unique to
+ * every ship." She chose glass by role and unique both ways: each hull
+ * type its own layout, each ship its own frame bars. */
+console.log('--- the glass, by role and by hull ---');
+(function () {
+  var ids = Object.keys(Render.COCKPIT_ARCH);
+  function hullShip(id, born) {
+    var s = makeFrame({ x: 0, y: 0, z: 1 }, { x: 0, y: 1, z: 0 });
+    s.hullId = id; s.bornId = born || id + '@test'; s.dryMass = 42;
+    return s;
+  }
+  function area(p) {
+    /* Area of a planar 3D polygon. */
+    var a = [0, 0, 0];
+    for (var i = 1; i + 1 < p.length; i++) {
+      var u = [p[i][0] - p[0][0], p[i][1] - p[0][1], p[i][2] - p[0][2]];
+      var v = [p[i + 1][0] - p[0][0], p[i + 1][1] - p[0][1], p[i + 1][2] - p[0][2]];
+      a[0] += u[1] * v[2] - u[2] * v[1]; a[1] += u[2] * v[0] - u[0] * v[2]; a[2] += u[0] * v[1] - u[1] * v[0];
+    }
+    return Math.hypot(a[0], a[1], a[2]) / 2;
+  }
+  var out = [], slotBad = [], famGlass = { bubble: [], wrap: [], framed: [] }, keys = {};
+  var old = { side: 0, roof: 0 };
+  ids.forEach(function (id) {
+    var s = hullShip(id), spec = Render.cockpitSpec(s), g = Render.cockpitGeometry(spec), k = spec.size;
+    /* Every pane inside the room it is cut through. */
+    [g.sides[0], g.sides[1], g.floorWin, g.roofs[0], g.roofs[1]].forEach(function (w) {
+      /* (The landing window is in the footwell, which dips a few
+       * centimetres under the cockpit floor.) */
+      w.forEach(function (p) {
+        if (Math.abs(p[0]) > g.sideX + 1e-6 || p[1] > g.ceilY + 1e-6 || p[1] < g.floorY - 0.06 ||
+            p[2] < g.bulkZ - 1e-6) out.push(id + ' ' + p.map(function (v) { return v.toFixed(2); }).join(','));
+      });
+    });
+    /* The landing window seen whole through its slot, hull by hull. */
+    var cam = new Render.Camera();
+    cam.buildCockpit(s, 1600, 900, { yaw: 0, pitch: 0 });
+    var fl = Render.clipProject(cam, Render.localPoly(s, g.floorWin));
+    var sl = Render.clipProject(cam, Render.localPoly(s, [
+      Render.dashPoint(spec.slot[0], 0.04, spec), Render.dashPoint(spec.slot[1], 0.04, spec),
+      Render.dashPoint(spec.slot[1], 1, spec), Render.dashPoint(spec.slot[0], 1, spec)]));
+    if (fl && sl) {
+      var fb = Render.polyBounds(fl), sb = Render.polyBounds(sl);
+      if (!(sb.minX <= fb.minX + 2 && sb.maxX >= fb.maxX - 2)) slotBad.push(id);
+    }
+    /* Glass above and to the sides, in the hull's own size. */
+    var glass = (area(g.sides[0]) + area(g.roofs[0])) / (k * k);
+    famGlass[spec.canopy.family].push(glass);
+    keys[id] = JSON.stringify([spec.canopy.q, spec.canopy.side, spec.canopy.roof, spec.canopy.floor]);
+  });
+  /* What the Talon used to have: a side window 0.86 m long and about
+   * 0.65 m tall, and no roof glass. */
+  var oldSide = area(Render.SIDE_WINDOW);
+  check('every pane is inside the room it is cut through', !out.length, out.slice(0, 5).join(', '));
+  check('every hull sees its whole landing window through its console slot', !slotBad.length, slotBad.join(', '));
+  var mean = function (a) { return a.reduce(function (x, y) { return x + y; }, 0) / (a.length || 1); };
+  check('every hull has more glass to the side and above than the old cockpit',
+        Math.min.apply(null, famGlass.bubble.concat(famGlass.wrap, famGlass.framed)) > oldSide * 1.3,
+        'least ' + Math.min.apply(null, famGlass.bubble.concat(famGlass.wrap, famGlass.framed)).toFixed(2) +
+        ' m2 vs ' + oldSide.toFixed(2));
+  check('fighters get the most glass, freighters the least',
+        mean(famGlass.bubble) > mean(famGlass.wrap) && mean(famGlass.wrap) > mean(famGlass.framed),
+        mean(famGlass.bubble).toFixed(2) + ' / ' + mean(famGlass.wrap).toFixed(2) + ' / ' + mean(famGlass.framed).toFixed(2));
+  var vals = Object.keys(keys).map(function (id) { return keys[id]; });
+  check('no two hulls have the same glass', new Set(vals).size === vals.length, new Set(vals).size + ' of ' + vals.length);
+
+  /* Per ship: two Talons bought apart are framed apart, the same one is
+   * the same every time. */
+  var bars = function (born) { return JSON.stringify(Render.cockpitGeometry(Render.cockpitSpec(hullShip('talon', born))).bars); };
+  var seen = {};
+  for (var i = 0; i < 12; i++) seen[bars('talon@yard#' + i)] = 1;
+  check('two ships of one hull get their own frame bars', Object.keys(seen).length >= 8,
+        Object.keys(seen).length + ' different of 12');
+  check('the same ship gets the same bars every time', bars('talon@yard#3') === bars('talon@yard#3'));
+  var sameHull = Render.cockpitSpec(hullShip('talon', 'a')).canopy === Render.cockpitSpec(hullShip('talon', 'b')).canopy;
+  check('but the same hull keeps the same panes', sameHull);
+  /* A bar never runs through the middle fifth of its pane, where the eye
+   * goes first - across a few hundred ships. */
+  var mid = 0, n = 0;
+  for (var b = 0; b < 300; b++) {
+    var fb = Render.cockpitSpec(hullShip(ids[b % ids.length], 'yard#' + b)).flair.bars;
+    fb.side.concat(fb.roof, fb.quarter).forEach(function (f) { n++; if (f > 0.4 && f < 0.6) mid++; });
+  }
+  check('no frame bar runs through the middle of a pane', mid === 0 && n > 100, mid + ' of ' + n + ' bars');
 })();
 
 console.log('');

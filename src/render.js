@@ -144,7 +144,8 @@
    * above it. The same projection as the seat, so the room, the screens
    * and the world through the glass all line up exactly as they do there. */
   Camera.prototype.buildWalker = function (ship, w, floorY, wpx, hpx) {
-    var eyeH = (global.Walk && global.Walk.EYE) || 1.65;
+    /* Crouched or standing: the walker's own eye height (walk.js eyeOf). */
+    var eyeH = (global.Walk && global.Walk.eyeOf) ? global.Walk.eyeOf(w) : ((global.Walk && global.Walk.EYE) || 1.65);
     this.eye = localToWorld(ship, w.x * M, (floorY + eyeH) * M, w.z * M);
     var cp = Math.cos(w.pitch), sp = Math.sin(w.pitch);
     var sy = Math.sin(w.yaw), cy = Math.cos(w.yaw);
@@ -10437,6 +10438,26 @@
     return poly.map(function (p) { return [-p[0], p[1], p[2]]; });
   }
 
+  /* A frame bar across a four-cornered pane, from edge 0->1 to edge 3->2
+   * at fraction f along both, `w` wide, lying 5 mm inside the glass on the
+   * seat's side (2026-10-31, the per-ship canopy bars). */
+  var BAR_EYE = [0, 0, 0.08];
+  function barQuad(pane, f, w) {
+    if (!pane || pane.length !== 4) return null;
+    var p0 = pane[0], p1 = pane[1], p2 = pane[2], p3 = pane[3];
+    function lerp(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
+    function sub3(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+    function unit3(a) { var l = Math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; }
+    var e0 = unit3(sub3(p1, p0)), e1 = unit3(sub3(p2, p3));
+    var u = sub3(p1, p0), v = sub3(p3, p0);
+    var n = unit3([u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]);
+    var toEye = sub3(BAR_EYE, p0);
+    if (n[0] * toEye[0] + n[1] * toEye[1] + n[2] * toEye[2] < 0) n = [-n[0], -n[1], -n[2]];
+    var a = lerp(p0, p1, f), b = lerp(p3, p2, f), h = w / 2, d = 0.005;
+    function at(p, e, s) { return [p[0] + e[0] * h * s + n[0] * d, p[1] + e[1] * h * s + n[1] * d, p[2] + e[2] * h * s + n[2] * d]; }
+    return [at(a, e0, -1), at(a, e0, 1), at(b, e1, 1), at(b, e1, -1)];
+  }
+
   /* Interior surfaces, in draw order. Painted AFTER the hull and after the
    * glass, because they are physically between the pilot and the canopy —
    * which is why the dashboard correctly occludes the bottom of the HUD. */
@@ -10773,6 +10794,91 @@
   var COCKPIT_CLASS = { talon: 'courier', dart: 'fighter',
                         kestrel: 'trader', mule: 'freighter' };
 
+  /* ---- THE GLASS, BY ROLE AND BY HULL (2026-10-31) -------------------------
+   * Astra: "I want the canopy glass in the ships to give a better view to
+   * either side, as well as above and below, while also being unique to
+   * every ship." Asked, she chose glass BY ROLE (fighters near a bubble,
+   * couriers generous wraparound, freighters more frame but still roof and
+   * lower glass) and unique BOTH ways: each hull type its own layout, each
+   * individual ship its own frame bars within it.
+   *
+   * Three families, in the Talon's metres (scaled per hull like the rest of
+   * the room):
+   *   q      the quarter-lights' heights at the hinge (hTop, hBot) and the
+   *          outer edge (oTop, oBot); `reach` multiplies how far round
+   *   side   the side windows' top (fore and aft) and how far aft they run
+   *   roof   glass in the ceiling either side of a spine that carries the
+   *          overhead panel: spine half-width, outer edge (fraction of the
+   *          side wall), and how far aft (z0)
+   *   floor  the landing window's half-width and how much further forward
+   *          it reaches; the console slot widens to match
+   * The windscreen itself is NOT changed: it carries the HUD and its
+   * proportions are what the cockpit suite holds the forward view to.
+   *
+   * PER HULL: each family's numbers are moved within a band by a stream
+   * seeded on the hull id alone, plus three choices of shape — so every
+   * Talon has the Talon's glass and no other hull has quite that glass.
+   * PER SHIP: the frame bars across the roof, side and quarter panes come
+   * from the ship's own cockpit seed (bornId), in cockpitSpec's flair. */
+  var CANOPY_FAMILY = {
+    bubble: { q: { hTop: 0.66, hBot: -0.42, oTop: 0.60, oBot: -0.40 }, reach: 1.30,
+              side: { top: 0.80, aft: -0.75 }, roof: { spine: 0.20, out: 0.94, z0: -0.75 },
+              floor: { hw: 0.40, fwd: 0.30, aft: 0.58 } },
+    wrap:   { q: { hTop: 0.50, hBot: -0.30, oTop: 0.44, oBot: -0.30 }, reach: 1.12,
+              side: { top: 0.66, aft: -0.20 }, roof: { spine: 0.34, out: 0.86, z0: -0.15 },
+              floor: { hw: 0.33, fwd: 0.18, aft: 0.72 } },
+    framed: { q: { hTop: 0.40, hBot: -0.22, oTop: 0.34, oBot: -0.22 }, reach: 1.00,
+              side: { top: 0.54, aft: 0.10 }, roof: { spine: 0.46, out: 0.78, z0: 0.18 },
+              floor: { hw: 0.29, fwd: 0.08, aft: 0.86 } }
+  };
+  var CANOPY_OF = {
+    dart: 'bubble', fighter: 'bubble', runner: 'bubble', cutter: 'bubble', enforcer: 'bubble',
+    talon: 'wrap', wren: 'wrap', kestrel: 'wrap', heavyshuttle: 'wrap', samaritan: 'wrap',
+    trader: 'wrap', enforcerheavy: 'wrap', capital: 'wrap',
+    mule: 'framed', bollard: 'framed', sump: 'framed', longhaul: 'framed', tanker: 'framed',
+    meridian: 'framed', leviathan: 'framed', crawler: 'framed', heavytug: 'framed', carrier: 'framed'
+  };
+  var CANOPY_STYLE_CACHE = {};
+  function canopyStyle(hullId, arch) {
+    var id = hullId || 'talon';
+    if (CANOPY_STYLE_CACHE[id]) return CANOPY_STYLE_CACHE[id];
+    var fam = CANOPY_OF[id] ||
+      (arch && arch.wrap >= 1.12 ? 'bubble' : arch && arch.wrap <= 0.92 ? 'framed' : 'wrap');
+    var b = CANOPY_FAMILY[fam], r = new RNG('canopy-style|' + id);
+    var j = function (v, d) { return v + r.range(-d, d); };
+    var q = { hTop: j(b.q.hTop, 0.06), hBot: j(b.q.hBot, 0.05) };
+    var swept = r.range(0, 1) < 0.5;
+    q.oTop = swept ? q.hTop - r.range(0.06, 0.14) : j(b.q.oTop, 0.04);
+    q.oBot = j(b.q.oBot, 0.05);
+    var top = j(b.side.top, 0.07), shape = r.pick(['level', 'taper', 'rise']);
+    var st = {
+      family: fam,
+      q: q, reach: j(b.reach, 0.08),
+      side: { topF: shape === 'rise' ? top - 0.12 : top, topA: shape === 'taper' ? top - 0.14 : top,
+              aft: j(b.side.aft, 0.15), shape: shape },
+      roof: { spine: Math.max(0.16, j(b.roof.spine, 0.06)), out: Math.min(0.96, j(b.roof.out, 0.05)),
+              z0: j(b.roof.z0, 0.15), trap: r.range(0, 1) < 0.5 ? r.range(0.08, 0.22) : 0 },
+      floor: { hw: j(b.floor.hw, 0.03), fwd: Math.max(0, j(b.floor.fwd, 0.06)), aft: j(b.floor.aft, 0.05) }
+    };
+    /* The console slot is cut to see the whole landing window through. */
+    /* The nearer its aft edge comes, the wider it looks from the seat. */
+    st.slot = Math.max(0.105, st.floor.hw * (0.40 + (1.04 - st.floor.aft) * 0.30));
+    CANOPY_STYLE_CACHE[id] = st;
+    return st;
+  }
+  /* Frame bars across a pane, for one ship: their positions keep clear of
+   * the pane's middle (the eye goes there first, and the cockpit suite
+   * aims at it), and their count and width are the ship's own. */
+  function canopyBars(rng) {
+    function set(max) {
+      var n = Math.floor(rng.range(0, max + 0.999)), out = [];
+      if (n === 1) out.push(rng.range(0, 1) < 0.5 ? rng.range(0.28, 0.40) : rng.range(0.60, 0.72));
+      else if (n >= 2) out.push(rng.range(0.26, 0.40), rng.range(0.60, 0.74));
+      return out;
+    }
+    return { w: rng.range(0.030, 0.055), side: set(2), roof: set(2), quarter: set(1) };
+  }
+
   var FINENESS_CACHE = {};
 
   /* Length over width of the hull's own mesh. A long fine nose wants steeply
@@ -11043,6 +11149,10 @@
       panes: 3 + (rng.range(0, 1) < 0.45 ? 2 : 0),
       trim: rng.pick(['#1a222e', '#1b2530', '#182029'])
     };
+    /* Drawn after the old flair, so every ship keeps the lean and trim it
+     * already had (2026-10-31). */
+    flair.bars = canopyBars(rng);
+    var canopy = canopyStyle(ship.hullId, arch);
 
     /* Rake, measured where possible. Fineness runs about 2 for a blunt hull
      * and 5+ for a needle; mapped onto a lean the eye reads as the glass
@@ -11062,6 +11172,7 @@
       key: key,
       arch: arch, size: size, flair: flair, rake: rake, rakeBias: rakeBias,
       fineness: fine,
+      canopy: canopy, slot: [0.5 - canopy.slot, 0.5 + canopy.slot],
       /* Distance from the eye to the glass, and the arc it covers. */
       reach: CANOPY_Z * arch.room * size,
       /* The main screen keeps the span the old flat window had — its
@@ -11140,12 +11251,20 @@
      * cannot drift away from it, swept outboard and aft — flat panes at an
      * angle, which is what makes the frame between them read as structure
      * rather than as a seam. `wrap` decides how far round they reach. */
-    var reach = 0.34 * spec.arch.wrap;
+    /* Taller and further round since 2026-10-31, by the hull's own canopy
+     * style (canopyStyle): up toward the ceiling and down past the sill,
+     * which is most of the "above and below" to either side. Kept inside
+     * the room's floor and ceiling, which cockpitGeometry derives the same
+     * way. */
+    var cs = spec.canopy || canopyStyle('talon');
+    var reach = 0.34 * spec.arch.wrap * cs.reach;
+    var hiY = Math.max(0.80 * k, -1.10 * k + HEADROOM) - 0.07, loY = -1.10 * k + 0.15;
+    var cy = function (v) { return Math.max(loY, Math.min(hiY, v * k)); };
     var side = [
-      [1.22 * k, 0.30 * k, CANOPY_Z * z * k],
-      [(1.22 + reach) * k, (0.30 - 0.02) * k, CANOPY_Z * z * k * (1 - reach * 0.62)],
-      [(1.22 + reach) * k, (-0.16 - 0.04) * k, CANOPY_Z * z * k * (1 - reach * 0.62)],
-      [1.22 * k, -0.16 * k, CANOPY_Z * z * k]
+      [1.22 * k, cy(cs.q.hTop), CANOPY_Z * z * k],
+      [(1.22 + reach) * k, cy(cs.q.oTop), CANOPY_Z * z * k * (1 - reach * 0.62)],
+      [(1.22 + reach) * k, cy(cs.q.oBot), CANOPY_Z * z * k * (1 - reach * 0.62)],
+      [1.22 * k, cy(cs.q.hBot), CANOPY_Z * z * k]
     ];
     out.push(side);
     out.push(mirrorX(side));
@@ -11214,10 +11333,14 @@
       add(s === 0 ? 'front' : ('front-' + s),
           clipProject(cam, localPoly(ship, segs[s])));
     }
-    var side = scalePts(SIDE_WINDOW, spec.size);
-    add('left', clipProject(cam, localPoly(ship, side)));
-    add('right', clipProject(cam, localPoly(ship, mirrorX(side))));
-    add('floor', clipProject(cam, localPoly(ship, scalePts(FLOOR_WINDOW, spec.size))));
+    /* Side, floor and roof glass from the room's own geometry, which shapes
+     * them by hull (canopyStyle, 2026-10-31). */
+    var g = cockpitGeometry(spec);
+    add('left', clipProject(cam, localPoly(ship, g.sides[0])));
+    add('right', clipProject(cam, localPoly(ship, g.sides[1])));
+    add('floor', clipProject(cam, localPoly(ship, g.floorWin)));
+    add('roof-right', clipProject(cam, localPoly(ship, g.roofs[0])));
+    add('roof-left', clipProject(cam, localPoly(ship, g.roofs[1])));
     return list;
 
     /* Drop anything that clipping left entirely off screen. A window you
@@ -11260,6 +11383,9 @@
    * the Talon's bay, because the person standing in it is the same size.
    * The two rear screens moved outboard of the door with it. */
   var BULK_Z = -1.30, FLOOR_Y = -1.10, HEADROOM = 2.05;
+  /* The roof glass hangs this far under the ceiling it is cut through,
+   * the same gap shipdeck.js leaves between every other pane and its wall. */
+  var EPS_GLASS = 0.012;
   var FOOT_HW = 0.32, DASH_NEAR_Z = 0.40, CONSOLE_X = 0.80, CONSOLE_Z0 = 0.12;
 
   function cockpitGeometry(spec) {
@@ -11289,11 +11415,40 @@
     var floorY = FLOOR_Y * k;
     var ceilY = Math.max(0.80 * k, floorY + HEADROOM);
     var bulkZ = BULK_Z * Math.max(1, k);
-    var sideL = scalePts(SIDE_WINDOW, k), sideR = mirrorX(sideL);
-    var floorWin = scalePts(FLOOR_WINDOW, k);
+    /* THE GLASS BY HULL (2026-10-31, canopyStyle). The side windows reach
+     * up toward the ceiling and further aft; the sill stays on the top of
+     * the side console, which is in the way of anything lower. */
+    var cs = spec.canopy || canopyStyle('talon');
+    var topMax = ceilY - 0.07;
+    var sAft = Math.max(bulkZ + 0.35, cs.side.aft * k);
+    /* Its forward edge is where the side wall turns in toward the
+     * quarter-light (meetZ): a pane forward of that would stand in the air
+     * inside the room, and as tall as these are now it would cut sky into
+     * the frame round the quarter-light behind it. From the seat the turn
+     * is edge-on, so side window and quarter-light read as one wrap. */
+    var sFwd = Math.min(1.06 * k, meetZ - 0.01);
+    var sideL = [
+      [-1.30 * k, Math.min(topMax, cs.side.topF * k), sFwd],
+      [-1.30 * k, Math.min(topMax, cs.side.topA * k), sAft + 0.04 * k],
+      [-1.30 * k, -0.24 * k, sAft],
+      [-1.30 * k, -0.29 * k, sFwd - 0.04 * k]
+    ];
+    var sideR = mirrorX(sideL);
+    /* The landing window: wider, further forward, and back under the desk
+     * toward your feet - all of the footwell you can see down through the
+     * console slot - on the same slope. */
+    var fwx = cs.floor.hw / 0.28, fwd = cs.floor.fwd, aftZ = Math.max(0.52, cs.floor.aft || 1.04);
+    var floorWin = FLOOR_WINDOW.map(function (p) {
+      var dz = p[2] > 1.3 ? fwd : aftZ - p[2];
+      return [p[0] * fwx * k, (p[1] + dz * 0.161) * k, (p[2] + dz) * k];
+    });
     var footZ = 0;
     for (i = 0; i < floorWin.length; i++) footZ = Math.max(footZ, floorWin[i][2]);
     footZ = Math.max(footZ + 0.06, frontZ + 0.05);
+    var floorHalf = 0;
+    for (i = 0; i < floorWin.length; i++) floorHalf = Math.max(floorHalf, Math.abs(floorWin[i][0]));
+    var footHW = Math.max(FOOT_HW * k, floorHalf + 0.04 * k);
+    var slot = spec.slot || [SLOT_S0, SLOT_S1];
 
     /* The dash: near edge where it always was (scaled), far edge on the
      * windscreen's sill. */
@@ -11311,12 +11466,12 @@
     var dashFaces = [];
     /* Glare shield and desk, each in two halves round the floor-window
      * slot, exactly the four surfaces the 2D interior always filled. */
-    [[-0.98, -0.98 + SLOT_S0 * 1.96], [-0.98 + SLOT_S1 * 1.96, 0.98]].forEach(function (h) {
+    [[-0.98, -0.98 + slot[0] * 1.96], [-0.98 + slot[1] * 1.96, 0.98]].forEach(function (h) {
       var x0 = h[0] * k, x1 = h[1] * k;
       dashFaces.push({ tone: 'glare', pts: [[x0, sillY, frontZ], [x1, sillY, frontZ],
         [x1 * 0.88, sillY - 0.06 * k, frontZ - 0.22 * k], [x0 * 0.88, sillY - 0.06 * k, frontZ - 0.22 * k]] });
     });
-    [[0, SLOT_S0], [SLOT_S1, 1]].forEach(function (h) {
+    [[0, slot[0]], [slot[1], 1]].forEach(function (h) {
       dashFaces.push({ tone: 'console', desk: true,
                        pts: [dp(h[0], 0.04), dp(h[1], 0.04), dp(h[1], 1), dp(h[0], 1)] });
     });
@@ -11333,16 +11488,47 @@
       { side: -1, top: cl, inner: [cl[2], cl[3]], end: [cl[1], cl[2]], front: [cl[0], cl[3]] },
       { side: 1, top: cr, inner: [cr[2], cr[1]], end: [cr[3], cr[2]], front: [cr[0], cr[1]] }
     ];
-    var overhead = sc(INTERIOR[2].pts);
+    /* THE ROOF GLASS (2026-10-31): a pane either side of a spine down the
+     * middle of the ceiling, from the side wall's turn (meetZ) aft as far
+     * as the hull's style takes it. The overhead panel narrows to that
+     * spine and stops where the roof glass starts forward, so it never
+     * hangs across the top of the windscreen. */
+    var spineX = cs.roof.spine * k, roofZ1 = meetZ - 0.04;
+    var roofZ0 = Math.min(roofZ1 - 0.4, Math.max(bulkZ + 0.30, cs.roof.z0 * kz));
+    var roofXi = spineX + 0.05 * k, roofXo = Math.max(roofXi + 0.25, cs.roof.out * sideX - 0.06);
+    var trap = (cs.roof.trap || 0) * k, roofY = ceilY - EPS_GLASS;
+    var roofR = [[roofXi, roofY, roofZ1], [roofXi, roofY, roofZ0],
+                 [roofXo, roofY, roofZ0 + trap], [roofXo, roofY, roofZ1 - trap * 0.5]];
+    var roofs = [roofR, mirrorX(roofR)];
+    var ohs = cs.roof.spine / 0.86;
+    var overhead = sc(INTERIOR[2].pts).map(function (p) {
+      return [p[0] * ohs, p[1], Math.min(p[2], Math.max(roofZ1 + 0.02, 0.46 * kz + 0.12))];
+    });
+
+    /* FRAME BARS, this ship's own (cockpitSpec flair.bars): vertical bars
+     * across the side windows, bars across the roof panes, and maybe one
+     * across each quarter-light. Each lies a few millimetres inside its
+     * pane, toward the seat. */
+    var fb = (spec.flair && spec.flair.bars) || { w: 0.04, side: [], roof: [], quarter: [] };
+    var bars = [];
+    function barsOn(pane, fs) {
+      fs.forEach(function (f) { var q = barQuad(pane, f, fb.w * k); if (q) bars.push(q); });
+    }
+    barsOn(sideL, fb.side); barsOn(sideR, fb.side);
+    roofs.forEach(function (r) { barsOn(r, fb.roof); });
+    barsOn(qR, fb.quarter); barsOn(qL, fb.quarter);
     var bulkhead = [[-sideX, ceilY, bulkZ + 0.002], [sideX, ceilY, bulkZ + 0.002],
                     [sideX, floorY, bulkZ + 0.002], [-sideX, floorY, bulkZ + 0.002]];
 
     var g = {
       k: k, frontZ: frontZ, sillY: sillY, hingeX: hingeX, sideX: sideX, meetZ: meetZ,
       quarterOuter: [Math.max(qx, sideX), qz],
-      floorY: floorY, ceilY: ceilY, bulkZ: bulkZ, footHW: FOOT_HW * k, footZ: footZ,
+      floorY: floorY, ceilY: ceilY, bulkZ: bulkZ, footHW: footHW, footZ: footZ,
       main: main, quarters: [qR, qL], sides: [sideL, sideR], floorWin: floorWin,
-      windows: [main, qR, qL, sideL, sideR, floorWin],
+      roofs: roofs, roofZ0: roofZ0, roofZ1: roofZ1, spineX: spineX, bars: bars, slot: slot,
+      /* Order matters: the suites index main, quarters, sides and floor
+       * as 0..5; the roof panes come after. */
+      windows: [main, qR, qL, sideL, sideR, floorWin, roofs[0], roofs[1]],
       dash: dash, dashNearZ: dashNearZ, dashHW: 0.98 * k, deskY: deskY, dashFaces: dashFaces,
       consoles: consoles, consoleX: CONSOLE_X * k, consoleZ0: CONSOLE_Z0 * kz,
       overhead: overhead, overheadZ0: 0.46 * kz, bulkhead: bulkhead, kz: kz,
@@ -11508,6 +11694,16 @@
       ctx.stroke();
     }
     ctx.restore();
+
+    /* This ship's frame bars across its panes (cockpitGeometry `bars`).
+     * With the GPU room they are part of the room and depth-tested there. */
+    if (!gpu) {
+      var bspec = cockpitSpec(ship), bgeo = cockpitGeometry(bspec);
+      for (a = 0; a < bgeo.bars.length; a++) {
+        var bp = clipProject(cam, localPoly(ship, bgeo.bars[a]));
+        if (bp) fillPoly(ctx, bp, bspec.flair.trim, 'rgba(140,170,205,0.16)');
+      }
+    }
 
     /* Corner gussets and a short centre mullion at the top of the canopy.
      * Deliberately kept out of the boresight: a strut across the middle of
@@ -12267,7 +12463,8 @@
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round';
-    var spans = [[0.02, SLOT_S0 - 0.01], [SLOT_S1 + 0.01, 0.98]];
+    var sl = (spec && spec.slot) || [SLOT_S0, SLOT_S1];
+    var spans = [[0.02, sl[0] - 0.01], [sl[1] + 0.01, 0.98]];
     for (var s = 0; s < spans.length; s++) {
       var a = projLocal(cam, ship, dashPoint(spans[s][0], 0.045, spec));
       var b = projLocal(cam, ship, dashPoint(spans[s][1], 0.045, spec));
@@ -12282,7 +12479,7 @@
     /* And down the edges of the floor window, so the slot is a lit opening
      * rather than a gap. */
     for (var e = 0; e < 2; e++) {
-      var s0 = e ? SLOT_S1 : SLOT_S0;
+      var s0 = e ? sl[1] : sl[0];
       var p0 = projLocal(cam, ship, dashPoint(s0, 0.08, spec));
       var p1 = projLocal(cam, ship, dashPoint(s0, 0.95, spec));
       if (!p0 || !p1) continue;
@@ -12876,19 +13073,63 @@
       var yTop = a[1], hull = {}, k, low = yTop, skinVotes = {};
       for (k in mesh) if (k.charAt(0) !== '_') hull[k] = mesh[k];
       hull.f = []; hull.c = mesh.c ? [] : null;
+      /* CUT EXACTLY (2026-10-31). The well used to drop only the faces
+       * whose MIDDLE was over it, so a big panel straddling the opening
+       * stayed whole across it - and walking her ramp in her hangar, Astra:
+       * "the ship hull needs to be cut away where the ramp is, because
+       * otherwise we're phasing through the hull". Now every face that
+       * reaches over the well is clipped at its four edges: what lies
+       * outside them is kept (as new polygons), what lies inside and below
+       * the deck goes. */
+      hull.v = mesh.v.slice();
+      function split(P, ax, val) {
+        var lo = [], hi = [];
+        for (var s = 0; s < P.length; s++) {
+          var A = P[s], B = P[(s + 1) % P.length], da = A[ax] - val, db = B[ax] - val;
+          if (da <= 0) lo.push(A);
+          if (da >= 0) hi.push(A);
+          if ((da < 0 && db > 0) || (da > 0 && db < 0)) {
+            var tt = da / (da - db), X = [A[0] + (B[0] - A[0]) * tt, A[1] + (B[1] - A[1]) * tt, A[2] + (B[2] - A[2]) * tt];
+            lo.push(X); hi.push(X);
+          }
+        }
+        return { lo: lo.length >= 3 ? lo : null, hi: hi.length >= 3 ? hi : null };
+      }
+      function keepPoly(P, i) {
+        var n0 = hull.v.length;
+        P.forEach(function (q) { hull.v.push(q); });
+        var idx = [];
+        for (var s = 0; s < P.length; s++) idx.push(n0 + s);
+        hull.f.push(idx);
+        if (mesh.c) hull.c.push(mesh.c[i]);
+      }
       for (var i = 0; i < mesh.f.length; i++) {
-        var f = mesh.f[i], cx = 0, cy = 0, cz = 0;
-        for (var j = 0; j < f.length; j++) { var v = mesh.v[f[j]]; cx += v[0]; cy += v[1]; cz += v[2]; }
-        cx /= f.length; cy /= f.length; cz /= f.length;
-        if (cx > x0 && cx < x1 && cz > z0 && cz < z1 && cy < yTop) {
-          for (j = 0; j < f.length; j++) low = Math.min(low, mesh.v[f[j]][1]);
-          /* What colour her skin was where the well is cut, so the doors
-           * that close it are painted to match. */
-          if (mesh.c && typeof mesh.c[i] === 'string') skinVotes[mesh.c[i]] = (skinVotes[mesh.c[i]] || 0) + 1;
+        var f = mesh.f[i], bx0 = Infinity, bx1 = -Infinity, bz0 = Infinity, bz1 = -Infinity, by0 = Infinity;
+        for (var j = 0; j < f.length; j++) {
+          var v = mesh.v[f[j]];
+          bx0 = Math.min(bx0, v[0]); bx1 = Math.max(bx1, v[0]); bz0 = Math.min(bz0, v[2]); bz1 = Math.max(bz1, v[2]); by0 = Math.min(by0, v[1]);
+        }
+        /* Nowhere near the well, or wholly above the deck: as it was. */
+        if (bx1 <= x0 || bx0 >= x1 || bz1 <= z0 || bz0 >= z1 || by0 >= yTop) {
+          hull.f.push(f);
+          if (mesh.c) hull.c.push(mesh.c[i]);
           continue;
         }
-        hull.f.push(f);
-        if (mesh.c) hull.c.push(mesh.c[i]);
+        var rest = f.map(function (ix) { return mesh.v[ix]; }), sp;
+        sp = split(rest, 0, x0); if (sp.lo) keepPoly(sp.lo, i); rest = sp.hi;
+        if (rest) { sp = split(rest, 0, x1); if (sp.hi) keepPoly(sp.hi, i); rest = sp.lo; }
+        if (rest) { sp = split(rest, 2, z0); if (sp.lo) keepPoly(sp.lo, i); rest = sp.hi; }
+        if (rest) { sp = split(rest, 2, z1); if (sp.hi) keepPoly(sp.hi, i); rest = sp.lo; }
+        if (!rest) continue;
+        /* The piece over the well: gone if it is below the deck. */
+        var my = 0;
+        rest.forEach(function (q) { my += q[1]; });
+        my /= rest.length;
+        if (my >= yTop) { keepPoly(rest, i); continue; }
+        rest.forEach(function (q) { low = Math.min(low, q[1]); });
+        /* What colour her skin was where the well is cut, so the doors
+         * that close it are painted to match. */
+        if (mesh.c && typeof mesh.c[i] === 'string') skinVotes[mesh.c[i]] = (skinVotes[mesh.c[i]] || 0) + 1;
       }
       /* The bay: walls from her lowest cut skin to the deck, and the
        * airlock's box over it. In the plan's metres, then to the model. */

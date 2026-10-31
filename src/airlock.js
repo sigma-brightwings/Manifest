@@ -81,6 +81,21 @@
     dt = Math.max(0, dt || 0);
     var door = innerDoor(plan);
     var ev = null;
+    /* BERTHED IN A HANGAR (2026-10-31). Astra, asked whether the cycle
+     * rule holds in a pressurised station: "Open while docked". So while
+     * she sits in her hangar (`ctx.berth`) the ramp comes down and stays
+     * down, and the inner door works like any other - one walk from her
+     * seat to the station deck. The rule comes back the moment she leaves:
+     * the ramp comes up and the room is the ship's again. */
+    if (ctx.berth) {
+      if (!a.berth) { a.berth = true; a.cycle = null; a.side = 'out'; a.want = 1; a.hatch = 0; ev = 'berth'; }
+      if (door) door.locked = false;
+      var stepB = dt / RAMP_S;
+      if (a.ramp < a.want) a.ramp = Math.min(a.want, a.ramp + stepB);
+      else if (a.ramp > a.want) a.ramp = Math.max(a.want, a.ramp - stepB);
+      return ev;
+    }
+    if (a.berth) { a.berth = false; a.side = 'in'; a.want = 0; a.hatch = 0; a.cycle = null; }
     /* Nobody opens the inner door while the room is not the ship's. */
     if (door) door.locked = !(a.side === 'in' && !a.cycle);
     var innerShut = !door || door.open <= INNER_SHUT;
@@ -126,6 +141,13 @@
     var a = state(ship);
     ctx = ctx || {};
     if (!a) return { ok: false, why: 'no ship' };
+    /* In her hangar the ramp stays down and both doors work: the lift
+     * hulls' controls still raise and lower their platform. */
+    if (a.berth) {
+      if (action === 'raise') { a.want = 0; return { ok: true, say: 'Lift coming up' }; }
+      if (action === 'lower') { a.want = 1; return { ok: true, say: 'Lift coming down' }; }
+      return { ok: false, why: 'she is open to the hangar while she is berthed' };
+    }
     if (a.cycle) return { ok: false, why: 'the airlock is cycling' };
     if (action === 'out') {
       if (a.side === 'out') {
@@ -161,6 +183,7 @@
   function panelLabel(ship, ctx) {
     var a = state(ship);
     ctx = ctx || {};
+    if (a.berth) return 'Berthed  -  open to the hangar';
     if (a.cycle) return a.cycle.to === 'out' ? 'Cycling out…' : 'Cycling in…';
     if (a.side === 'in') return ctx.landed ? 'Cycle out and lower the ramp' : ctx.docked ? 'Cycle out to the berth' : 'Airlock  —  sealed';
     return a.ramp > 0 || a.hatch ? 'Close up and cycle in' : 'Cycle in';
@@ -169,7 +192,7 @@
   /* For the airlock's lamp: green when the way out is open to you. */
   function lampGreen(ship) {
     var a = state(ship);
-    return !!a && a.side === 'out' && !a.cycle;
+    return !!a && (a.berth || (a.side === 'out' && !a.cycle));
   }
 
   var Airlock = {

@@ -1656,6 +1656,9 @@
        * the seat, is how you stand up. */
       var wk = e.key.toLowerCase();
       if (G.walk && flying() && wk !== 'escape') {
+        /* Left Ctrl crouches (2026-10-31), for as long as it is held. The
+         * right one is left alone. */
+        if (e.code === 'ControlLeft') { G.keys.crouch = true; e.preventDefault(); return; }
         G.keys[wk] = true;
         if (wk === 'e' || wk === 'enter') { e.preventDefault(); walkUse(); }
         return;
@@ -2013,6 +2016,7 @@
        * release came back as the wrong Alt is a ship that has stopped
        * answering the mouse for no visible reason. */
       if (e.key === 'Alt') { setCursorMode(false); setFreeLook(false); return; }
+      if (e.code === 'ControlLeft') G.keys.crouch = false;
       G.keys[e.key.toLowerCase()] = false;
     });
     /* Alt-tabbing away releases the key somewhere we will never hear about
@@ -5460,6 +5464,7 @@
           else {
             global.Walk.step(G.walk, G.keys, dtReal);
             if (G.walk.ship) { rampWalk(); rideLift(); }
+            else if (G.walk.plan.hangar) hangarWalk();
             npcFacing();
             if (G.walk.ship) lockLabels();
             /* Doors on the wall clock, like the walking itself. */
@@ -6916,6 +6921,9 @@
 
   function clampCameraToEnclosure() {
     if (G.viewMode === 'cockpit') return;   // the eye is the pilot's, not a boom
+    /* Berthed in her hangar, the hangar is the room (hangarChase). */
+    var hc = hangarChase();
+    if (hc) { G.cutaway = null; clampCameraToDeckHangar(hc); return; }
     /* The clamp follows the ENCLOSURE, not the docked flag. Half way down
      * the shaft the hull is inside a tube and the boom has to be shortened
      * or the eye ends up in the rock; on the apron it is outside and must
@@ -7593,7 +7601,11 @@
 
     if (mainCtx) { ctx = mainCtx; mainCtx = null; }
     if (G.viewMode === 'cockpit') drawCockpitView(ctx, cam, w, h);
-    else drawShip(ctx, cam);
+    else {
+      /* Berthed, from outside her: the hangar you walk in, round her. */
+      if (hangarChase()) queueHangarFromShip(cam);
+      drawShip(ctx, cam);
+    }
     /* On foot aboard, nobody is flying: no markers, no labels, no flight
      * hints. drawShipWalkView drew the walker's own overlay and the bar. */
     if (shipWalkGpu()) return;
@@ -9410,9 +9422,11 @@
     var port = G.sys && G.sys.byId ? G.sys.byId[s.docked] : null;
     if (!port) return;
     G.aboard = null;
-    var plan = Walk.layout(port.id, {
+    /* With her hangar in it, where she has a ramp to walk up. */
+    var plan = hangarPlan() || Walk.layout(port.id, {
       seed: G.seed || (G.galaxy && G.galaxy.seed) || '',
       yard: !!(Combat.isShipyard && Combat.isShipyard(port)),
+      livery: port.livery || 'civ', outfitter: outfitterFor(port),
       ships: walkShips(),
       others: walkOthers(port)
     });
@@ -9431,6 +9445,225 @@
     say(atBerth ? 'Back on the deck at ' + G.walk.portName
                 : 'You step out into your berth at ' + G.walk.portName +
                   '  —  WASD to walk, the mouse looks, E to use, hold Alt for the pointer, Esc for the menu', atBerth ? 4 : 8);
+  }
+
+  /* ---- YOUR SHIP IN HER HANGAR (2026-10-31) --------------------------------
+   * Astra: "we want to be able to get into our ship, not walk into a room
+   * and use a door. I want the inside of the ship and the inside of the
+   * station to be a clean, walkable path." Asked, she chose a hangar with
+   * her ramp over a docking collar, and an airlock left open while she is
+   * berthed (airlock.js ctx.berth).
+   *
+   * So the berth of the ship you fly is a hangar sized to her (walk.js
+   * placeShip), and the deck is drawn in a frame made from HER frame
+   * (hangarFrame): her model, her rooms and the hangar floor all line up,
+   * and the only seam is her ramp. Down it, the walker goes from her plan
+   * to the deck's (stepIntoHangar); up it, back (boardFromHangar). Nothing
+   * to press. Her hull is solid on the hangar floor where her belly is low
+   * (armHangar, off render.js outsidePlan) and you crouch where it is low
+   * enough to need it (hangarWalk). */
+  var hangarCache = null;
+  /* For the station's outfitter ads at a port with no yard of its own:
+   * the nearest port in the system that has one (2026-10-31). */
+  function outfitterFor(port) {
+    if (!Combat.isShipyard || Combat.isShipyard(port)) return null;
+    var list = (G.sys && G.sys.ports) || [], best = null, bd = Infinity;
+    list.forEach(function (p) {
+      if (!p || p === port || !Combat.isShipyard(p)) return;
+      var d = (p.pos && port.pos) ? Math.hypot(p.pos[0] - port.pos[0], p.pos[1] - port.pos[1], (p.pos[2] || 0) - (port.pos[2] || 0)) : 0;
+      if (d < bd) { bd = d; best = p; }
+    });
+    return best ? (best.name || null) : null;
+  }
+  /* Berthed at a port, in your own ship, and she has a ramp to walk. */
+  function berthHangar() {
+    var s = G.ship;
+    if (!s || !s.docked || s.docked === 'tube' || (s.tether && s.tether.joined) || G.aboard) return false;
+    if (!global.Walk || !global.Walk.hangarToShip || !Render.outsidePlan) return false;
+    var op = Render.outsidePlan(s);
+    return !!(op && op.ramp);
+  }
+  /* Her measure, in her cockpit's metres: hull box, the ramp's foot, the
+   * floor her gear stands on, and how tall she is above it. */
+  function hangarSpec(ship) {
+    var d = Render.shipInterior ? Render.shipInterior(ship) : null;
+    var op = Render.outsidePlan ? Render.outsidePlan(ship) : null;
+    var hm = Render.hatchModel ? Render.hatchModel(ship) : null;
+    if (!d || !d.plan.ramp || !op || !hm || !Render.cockpitAt) return null;
+    var at = Render.cockpitAt(ship) || [0, 0, 0], Lm = Render.hullLength(ship) * 1000, rp = d.plan.ramp;
+    var hx0 = hm.lo[0] * Lm - at[0], hx1 = hm.hi[0] * Lm - at[0];
+    var hz0 = hm.lo[2] * Lm - at[2], hz1 = hm.hi[2] * Lm - at[2], top = hm.hi[1] * Lm - at[1];
+    var foot = { x: (rp.x0 + rp.x1) / 2, z: op.footZ };
+    return { box: [Math.min(hx0, foot.x - 1.5), Math.min(hz0, foot.z - 2.5), Math.max(hx1, foot.x + 1.5), hz1],
+             hull: [hx0, hz0, hx1, hz1], height: top - op.floorY, foot: foot, gy: op.floorY };
+  }
+  /* The deck plan for this port with her hangar in it, built once per
+   * port and ship (and per fleet here) and kept while she is berthed. */
+  function hangarPlan() {
+    if (!berthHangar()) { hangarCache = null; return null; }
+    var s = G.ship, port = G.sys && G.sys.byId ? G.sys.byId[s.docked] : null;
+    if (!port) return null;
+    var ships = walkShips();
+    var key = port.id + '|' + (port.livery || 'civ') + '|' + (s.hullId || '') + '|' + ships.map(function (x) { return x.id + x.size; }).join(',');
+    if (hangarCache && hangarCache.key === key) return hangarCache.plan;
+    var hs = hangarSpec(s);
+    if (!hs) return null;
+    ships[0].hangar = hs;
+    var plan = global.Walk.layout(port.id, {
+      seed: G.seed || (G.galaxy && G.galaxy.seed) || '',
+      yard: !!(Combat.isShipyard && Combat.isShipyard(port)),
+      livery: port.livery || 'civ', outfitter: outfitterFor(port),
+      ships: ships, others: walkOthers(port)
+    });
+    if (!plan.hangar) return null;
+    armHangar(plan);
+    hangarCache = { key: key, plan: plan };
+    return plan;
+  }
+  /* Her hull is solid on the hangar floor where her belly is too low to
+   * get under, and her ramp is floor only when it is all the way down -
+   * render.js outsidePlan's own rule, asked in her metres. */
+  function armHangar(plan) {
+    var H = plan.hangar;
+    if (!H || plan._hangarArmed) return;
+    var room = plan.rooms.filter(function (r) { return r.id === H.room; })[0];
+    plan.blocked = function (X, Z) {
+      if (!room || X < room.x0 || X > room.x1 || Z < room.z0 || Z > room.z1) return false;
+      var op = Render.outsidePlan(G.ship);
+      if (!op) return false;
+      var q = global.Walk.hangarToShip(H, X, Z);
+      return op.blocked(q.x, q.z);
+    };
+    plan._hangarArmed = true;
+  }
+  /* The deck's frame: her cockpit's, turned by theta and moved so the
+   * hangar is where she stands in it, its floor her gear's. */
+  function hangarFrame(H) {
+    var F = cockpitShip(), M = Render.M, c = H.cos, s = H.sin;
+    var right = V.add(V.scale(F.right, c), V.scale(F.fwd, s));
+    var fwd = V.add(V.scale(F.right, -s), V.scale(F.fwd, c));
+    var sx = -H.X0 * c + H.Z0 * s, sz = -H.X0 * s - H.Z0 * c;
+    var off = V.add(V.add(V.scale(F.right, sx), V.scale(F.up, H.gy)), V.scale(F.fwd, sz));
+    return { pos: V.add(F.pos, V.scale(off, M)), right: right, up: F.up, fwd: fwd };
+  }
+  /* The frame a station deck plan is drawn in: her hangar's when the plan
+   * has her in it, the docked ship's otherwise (as before). */
+  function stationFrameFor(p) {
+    if (p && p.hangar && berthHangar()) return hangarFrame(p.hangar);
+    var s = G.ship;
+    return { pos: s.pos, right: s.right, up: s.up, fwd: s.fwd };
+  }
+  /* On the hangar floor: her ramp under your feet, her belly over your
+   * head, and the top of the ramp, where you are aboard. */
+  function hangarWalk() {
+    var w = G.walk, p = w.plan, H = p.hangar, SD = global.ShipDeck;
+    w.mustCrouch = false; w.eyeDy = 0; w.dy = 0;
+    if (!H || !SD || !berthHangar()) return;
+    var lp = lockPlan(), rp = lp && lp.ramp, op = Render.outsidePlan(G.ship);
+    if (!rp || !op) return;
+    var q = global.Walk.hangarToShip(H, w.x, w.z), t = (G.ship.airlock && G.ship.airlock.ramp) || 0, fy = lockFloorY();
+    var inX = q.x >= rp.x0 && q.x <= rp.x1;
+    if (rp.mode === 'lift') {
+      if (inX && q.z <= rp.hinge && q.z >= rp.foot) {
+        w.dy = Math.max(0, (fy - rp.drop * t) - H.gy);
+        if (t <= 0.001) boardFromHangar(q, fy);
+        return;
+      }
+    } else {
+      var f = t >= 0.999 && inX ? SD.rampFloor(rp, fy, t, q.x, q.z) : null;
+      if (f !== null) {
+        w.dy = Math.max(0, f - H.gy);
+        if (q.z > rp.hinge - 0.35) boardFromHangar(q, f);
+        return;
+      }
+    }
+    /* Under her belly: down on your haunches where you cannot stand, and
+     * the eye lower still where even that does not clear. */
+    var clear = op.clearAt(q.x, q.z), EYE = global.Walk.EYE || 1.65, CE = global.Walk.CROUCH_EYE || 1.1;
+    /* A head is about 15 cm over the eye: under 1.8 m of her you stoop. */
+    if (clear < EYE + 0.15) w.mustCrouch = true;
+    if (clear < CE + 0.3) w.eyeDy = Math.max(-0.7, clear - 0.3 - global.Walk.eyeOf(w));
+  }
+  /* Up her ramp and aboard: the same walker on her main deck, where you
+   * stood, facing the way you were. */
+  function boardFromHangar(q, f) {
+    var w = G.walk, H = w.plan.hangar, mp = mainDeckPlan();
+    if (!mp) return;
+    w.plan = mp; w.ship = true; w.outside = false; w.near = null;
+    w.x = q.x; w.z = q.z; w.yaw = w.yaw - H.theta;
+    w.dy = f - mp.floorY; w.eyeDy = 0; w.mustCrouch = false;
+    var lp = lockPlan();
+    if (lp && lp.decks) setLive(lp, { carY: mp.floorY, moving: false });
+    armRampWell(lp);
+    var hull = (Combat.HULLS && Combat.HULLS[G.ship.hullId]) || {};
+    w.portName = G.ship.shipName || hull.name || 'your ship';
+  }
+  /* Down her ramp and onto the hangar floor. False when there is no
+   * hangar to step into (the caller does what it always did). */
+  function stepIntoHangar(f) {
+    var w = G.walk, sp = hangarPlan();
+    if (!sp) return false;
+    var H = sp.hangar, st = global.Walk.hangarToStation(H, w.x, w.z);
+    w.plan = sp; w.ship = false; w.outside = false; w.near = null;
+    w.x = st.x; w.z = st.z; w.yaw = w.yaw + H.theta;
+    w.dy = Math.max(0, f - H.gy); w.eyeDy = 0;
+    var port = G.sys && G.sys.byId ? G.sys.byId[G.ship.docked] : null;
+    w.portName = (port && port.name) || 'the station';
+    G.aboard = null;
+    return true;
+  }
+  /* From aboard her, the hangar round her: down her ramp and through her
+   * windows. */
+  function queueHangarFromShip(cam) {
+    if (!glLive() || !global.GLWorld || !global.GLWorld.queueMesh) return;
+    var hp = hangarPlan();
+    if (!hp) return;
+    var F = hangarFrame(hp.hangar);
+    Render.setIndoors(true);
+    global.GLWorld.queueMesh(cam, F, global.Walk.meshFor(hp), Render.M, F.up, 0);
+    Render.setIndoors(false);
+  }
+
+  /* ---- THE CHASE CAMERA IN HER HANGAR (2026-10-31) -------------------------
+   * Astra: "the interior of the station is not visible when using the
+   * chase camera that orbits the ship." Seated, with the boom out, the view
+   * was still the station MODEL's own bay - a big plain box that is not the
+   * hangar you walk in, with none of the deck through its door. So while
+   * she is berthed in her hangar and you are looking at her from outside,
+   * the hangar of the walking deck IS the room: it is drawn round her in
+   * her hangar frame (the same deck you step onto down her ramp, ads and
+   * all, the spine through the door), the station model's bay is not drawn
+   * (it would stand in the same space), and the boom stays inside the
+   * hangar's walls, as it stays inside a bay's. */
+  function hangarChase() {
+    if (G.viewMode === 'cockpit' || G.walk || G.focus && !G.followShip) return null;
+    if (typeof mapMode === 'function' && mapMode()) return null;
+    if (!glLive() || !berthHangar()) return null;
+    var hp = hangarPlan();
+    return hp && hp.hangar ? hp : null;
+  }
+  /* The longest boom, along the camera's own direction, that keeps the eye
+   * inside her hangar: a slab test in the hangar's frame (metres), 0.6 m
+   * off the walls and the ceiling, 0.4 m off the floor. */
+  function clampCameraToDeckHangar(hp) {
+    var H = hp.hangar, room = H.room && H.room.x0 !== undefined ? H.room : null;
+    if (!room) room = hp.rooms.filter(function (r) { return r.hangar; })[0];
+    if (!room) return;
+    var F = hangarFrame(H), M = Render.M;
+    var cp = Math.cos(G.cam.pitch), sp = Math.sin(G.cam.pitch);
+    var cyw = Math.cos(G.cam.yaw), syw = Math.sin(G.cam.yaw);
+    var dir = { x: cp * cyw, y: cp * syw, z: sp };
+    var rel = V.sub(G.cam.target, F.pos);
+    var L = [V.dot(rel, F.right) / M, V.dot(rel, F.up) / M, V.dot(rel, F.fwd) / M];
+    var D = [V.dot(dir, F.right) / M, V.dot(dir, F.up) / M, V.dot(dir, F.fwd) / M];
+    var lo = [room.x0 + 0.6, 0.4, room.z0 + 0.6], hi = [room.x1 - 0.6, (room.y1 || 6) - 0.6, room.z1 - 0.6];
+    var t = Infinity;
+    for (var k = 0; k < 3; k++) {
+      if (D[k] > 1e-12) t = Math.min(t, (hi[k] - L[k]) / D[k]);
+      else if (D[k] < -1e-12) t = Math.min(t, (lo[k] - L[k]) / D[k]);
+    }
+    if (!(t < Infinity)) return;
+    G.cam.dist = Math.max(MIN_CAM_DIST, Math.min(G.cam.dist, t));
   }
 
   /* ---- on foot in your own ship (2026-10-24) -----------------------------
@@ -9529,6 +9762,8 @@
     var s = walkHull();
     return { landed: !!(s.landed && !s.crashed), docked: !!(s.docked || (s.tether && s.tether.joined)),
              tube: !!((s.tether && s.tether.joined) || s.docked === 'tube'),
+             /* In her hangar, open to it (airlock.js ctx.berth). */
+             berth: s === G.ship && berthHangar(),
              breathable: global.Airlock ? global.Airlock.breathable(s.landedOn) : true };
   }
   function lockFloorY() { var p = lockPlan(); return p ? (p.decks ? p.decks.main.floorY : p.floorY) : 0; }
@@ -9554,7 +9789,8 @@
      * running finishes; hers is the one whose events you hear. */
     if (G.aboard && G.ship && Render.shipInterior) {
       var mine = Render.shipInterior(G.ship);
-      if (mine) AL.step(G.ship, mine.plan, dt, { landed: !!(G.ship.landed && !G.ship.crashed), docked: !!G.ship.docked, breathable: true });
+      if (mine) AL.step(G.ship, mine.plan, dt, { landed: !!(G.ship.landed && !G.ship.crashed), docked: !!G.ship.docked, breathable: true,
+                                                  berth: !!G.ship.docked && G.ship.docked !== 'tube' && !!(Render.outsidePlan && Render.outsidePlan(G.ship)) });
     }
     var p = lockPlan();
     if (!p) return;
@@ -9597,6 +9833,9 @@
       var onMain = !w.plan.deck || w.plan.deck === 'main';
       var f = onMain && t >= 0.999 && inX ? SD.rampFloor(rp, fy, t, w.x, w.z) : null;
       w.dy = f !== null ? f - w.plan.floorY : 0;
+      /* Berthed in her hangar, the ramp runs down onto its floor: a step
+       * off the top of it and you are on the station's deck. */
+      if (f !== null && w.z < rp.hinge - 0.45 && berthHangar() && stepIntoHangar(f)) return;
       /* Off the bottom of it, onto the ground. A lift: stepping off its
        * platform once it is down. */
       var bottom = rp.mode === 'lift' ? rp.foot + 0.15 : rp.hinge - run + 0.15;
@@ -9642,6 +9881,7 @@
     if (!w.outside) {
       w.dy = -rp.drop * t;
       if (t >= 0.999) {
+        if (berthHangar() && stepIntoHangar(fy - rp.drop)) return;
         var op = Render.outsidePlan(walkHull());
         if (op) { w.plan = op; w.outside = true; w.dy = 0; }
       }
@@ -9664,6 +9904,8 @@
       it.label = a.ramp > 0 ? 'Lift  —  coming down' : '▼  Lower the lift';
       return;
     }
+    /* Berthed in her hangar the ramp is simply the way down. */
+    if (it.kind === 'ramp' && a.berth) { it.label = 'Ramp  -  down into the hangar'; return; }
     if (it.kind === 'hatch') it.label = AL.panelLabel(walkHull(), c);
     else if (it.kind === 'ramp') {
       it.label = a.side !== 'out' ? 'Ramp  —  sealed to the ship'
@@ -9678,6 +9920,7 @@
     if (!AL) return false;
     var a = AL.state(walkHull()), c = lockCtx(), w = G.walk, r;
     c.inLock = true;
+    if (a.berth && it.kind === 'ramp') { say('Walk down her ramp  -  the hangar is at the foot of it', 3); return true; }
     if (it.kind === 'hatch') {
       if (a.cycle) { say('The airlock is cycling', 2); return true; }
       if (a.side === 'out' && a.ramp > 0 && onRamp(w) && lockPlan().ramp.mode !== 'lift') { say('Step off the ramp first', 3); return true; }
@@ -9817,8 +10060,12 @@
       var sun0 = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), G.ship.pos));
       if (gp0) global.GLWorld.queueMesh(cam, G.ship, gp0, Render.hullLength(G.ship), sun0, 0, null);
     }
+    /* Berthed: the hangar she stands in, down her ramp and out of her
+     * windows. */
+    if (berthHangar()) queueHangarFromShip(cam);
     var p = G.walk.plan, clip = shipWalkClip(cam);
     queueNpcs(cam);
+    queueSelf(cam);
     drawOwnHullFromBridge(ctx, cam);
     Render.drawCockpitShell(ctx, cam, cockpitShip(), w, h, { seat: true, walking: true, clip: clip });
     var inner = Render.drawCockpitInterior(ctx, cam, cockpitShip(), w, h,
@@ -9835,11 +10082,14 @@
     var s = G.ship;
     var sunDir = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), s.pos));
     Render.drawShipModel(ctx, cam, s, sunDir, null);
-    var gp = Render.groundPatch ? Render.groundPatch(s) : null;
+    /* In her hangar the floor is the hangar's, not a world's. */
+    var gp = berthHangar() ? null : (Render.groundPatch ? Render.groundPatch(s) : null);
     if (gp && glLive()) global.GLWorld.queueMesh(cam, s, gp, Render.hullLength(s), sunDir, 0, null);
+    if (berthHangar()) queueHangarFromShip(cam);
     if (Render.queueCockpitRoom && Render.cockpitGpu && Render.cockpitGpu()) {
       Render.queueCockpitRoom(cam, cockpitShip(), { noPortals: true });
     }
+    queueSelf(cam);
     var p = G.walk.plan;
     drawWalkLabels(ctx, cam, p, global.Walk.roomAt(p, G.walk.x, G.walk.z), w, h,
                    cockpitShip(), p.floorY + 1.6);
@@ -10336,9 +10586,35 @@
     /* Your own crew are in your rooms, which on a tower hull are up in the
      * tower; a station's people are in the station's frame. */
     if (sc.kind === 'ship') s = cockpitShip();
+    /* A station's people stand on its deck, in its frame (her hangar's,
+     * when the deck has her in it). */
+    else s = stationFrameFor(sc.plan);
     var eye = G.walk ? { x: G.walk.x, z: G.walk.z } : { x: 0, z: 0 };
     NG.queue(cam, { pos: s.pos, right: s.right, up: s.up, fwd: s.fwd }, Render.M,
              global.Npc.figures(sc, eye, 2));
+  }
+
+  /* YOUR OWN BODY (2026-10-31): walk.js poses it (Walk.selfFigure) and it
+   * goes to npcgl.js like anyone else's, in the frame you are walking in -
+   * your ship's (or her conning tower's) aboard her, the docked ship's on a
+   * station deck. Its feet are on the floor the camera stands on. */
+  function selfFloorY() {
+    var w = G.walk;
+    return w.ship ? w.plan.floorY + (w.rideDy || 0) + (w.dy || 0) : (w.dy || 0);
+  }
+  function selfFig() {
+    if (!G.walk || !global.Walk || !global.Walk.selfFigure) return null;
+    try {
+      return global.Walk.selfFigure(G.walk, selfFloorY(), 'Commander', 'civ');
+    } catch (e) { if (global.console) console.error(e); return null; }
+  }
+  function queueSelf(cam) {
+    var NG = global.NpcGL;
+    if (!NG || !glLive() || !G.walk || !G.ship) return;
+    var f = selfFig();
+    if (!f) return;
+    var s = G.walk.ship ? cockpitShip() : stationFrameFor(G.walk.plan);
+    NG.queue(cam, { pos: s.pos, right: s.right, up: s.up, fwd: s.fwd }, Render.M, [f]);
   }
 
   /* Without the GPU, the nearest few bodies go into walk.js's painter's
@@ -10369,13 +10645,25 @@
               global.GLWorld && global.GLWorld.queueCockpit && G.ship && G.ship.pos && G.ship.fwd);
   }
   function drawStationWalkGpu(ctx, cam, w, h) {
-    var p = G.walk.plan, s = G.ship;
-    cam.buildWalker(s, G.walk, 0, w, h - FBAR_H);
-    global.GLWorld.queueCockpit(cam, { pos: s.pos, right: s.right, up: s.up, fwd: s.fwd }, null,
-                                global.Walk.meshFor(p), [], Render.M);
+    var p = G.walk.plan, F = stationFrameFor(p);
+    /* On her ramp you are above the floor; under her belly, ducked. */
+    cam.buildWalker(F, G.walk, (G.walk.dy || 0) + (G.walk.eyeDy || 0), w, h - FBAR_H);
+    if (p.hangar && berthHangar()) {
+      /* Her hangar: the deck, her, and her rooms through her open ramp -
+       * all lit as a room. The deck goes through the mesh pass here, since
+       * her rooms take the cockpit pass. */
+      Render.setIndoors(true);
+      global.GLWorld.queueMesh(cam, F, global.Walk.meshFor(p), Render.M, F.up, 0);
+      Render.drawShipModel(ctx, cam, G.ship, F.up, null);
+      Render.setIndoors(false);
+      if (Render.queueCockpitRoom && Render.cockpitGpu && Render.cockpitGpu()) Render.queueCockpitRoom(cam, cockpitShip(), { noPortals: true });
+    } else {
+      global.GLWorld.queueCockpit(cam, F, null, global.Walk.meshFor(p), [], Render.M);
+    }
     queueNpcs(cam);
+    queueSelf(cam);
     var room = global.Walk.roomAt(p, G.walk.x, G.walk.z);
-    drawWalkLabels(ctx, cam, p, room, w, h);
+    drawWalkLabels(ctx, cam, p, room, w, h, F, 2.4 + (G.walk.dy || 0));
     drawWalkOverlay(ctx, w, h, room);
   }
   /* The things to use in the room you are in, labelled where they stand,
@@ -10517,7 +10805,7 @@
       for (var i = 0; i < MODES.length; i++) if (MODES[i].id === id) return i;
       return -1;
     };
-    if (it.kind === 'market') { selectPanel(3); return; }
+    if (it.kind === 'market' || it.kind === 'freight') { selectPanel(3); return; }
     if (it.kind === 'yard') { G.yardTab = 'hulls'; selectPanel(idx('ship') >= 0 ? idx('ship') : 4); return; }
     if (it.kind === 'crew') { G.yardTab = 'crew'; selectPanel(idx('ship') >= 0 ? idx('ship') : 4); return; }
     if (it.kind === 'bar') { say('The bar is quiet — the people who drink here come next', 5); return; }
@@ -10525,7 +10813,16 @@
 
   function drawWalkView(ctx, w, h) {
     var Walk = global.Walk;
-    var view = Walk.draw(ctx, G.walk, w, h - FBAR_H, npcQuads2D());
+    var extra = npcQuads2D() || [];
+    var me = selfFig(), NM = global.NpcModel;
+    if (me && NM) {
+      var cols = NM.faceColours(me.model);
+      for (var t = 0; t < me.model.tris; t++) {
+        extra.push({ pts: [NM.posed(me.model, me.mats, t * 3), NM.posed(me.model, me.mats, t * 3 + 1),
+                           NM.posed(me.model, me.mats, t * 3 + 2)], col: cols[t] });
+      }
+    }
+    var view = Walk.draw(ctx, G.walk, w, h - FBAR_H, extra.length ? extra : null);
     drawWalkOverlay(ctx, w, h, view && view.room);
   }
 
@@ -14313,6 +14610,12 @@
 
   function drawBody(ctx, cam, item, starScreen) {
     var b = item.body, sp = item.sp, rpx = item.rpx;
+
+    /* Berthed in her hangar and seen from outside her: the walking deck's
+     * hangar is the room, and this station's own bay would stand in the
+     * same space (hangarChase). The camera cannot leave the hangar, so
+     * there is nothing of the rest of the station to see either. */
+    if (b.kind === 'station' && G.ship.docked === b.id && hangarChase()) return;
 
     if (b.kind === 'station') {
       /* Same scale rule as everything else: real geometry once it would

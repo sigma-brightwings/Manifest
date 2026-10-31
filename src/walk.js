@@ -67,6 +67,17 @@
   var TURN = 2.2;              // rad/s, arrow keys
   var DOOR_W = 1.8, DOOR_H = 2.4, BIG_DOOR_W = 6, BIG_DOOR_H = 4.5;
   var REACH = 1.8;             // m, how far E reaches
+  /* Crouching (2026-10-31, Astra: "we also need to be able to crouch with
+   * L Ctrl"). Held, not toggled. CROUCH_EYE is only the fallback for when
+   * there is no body to measure (node, or no NpcModel): with a body, the
+   * eye is wherever the crouched body's eyes actually are (selfFigure). */
+  var CROUCH_EYE = 1.1;        // m
+  var CROUCH = 0.8;            // m/s, walking crouched; no running
+  var CROUCH_RATE = 5;         // 1/s, how fast you go down and come up
+  /* How far down you can look: 83 degrees, up from the 69 the deck had
+   * before there was a body to look down at - at 69 a standing walker
+   * saw the toes of their boots and nothing else. Up stays at 1.2. */
+  var LOOK_DOWN = 1.45;        // rad
 
   /* A berth's airlock room, by the size of ship it serves. */
   var BERTH_ROOM = { L: { w: 12, d: 12, h: 5 }, M: { w: 9, d: 9, h: 4 }, S: { w: 7, d: 7, h: 3.4 } };
@@ -120,6 +131,20 @@
     var order = [];
     ['L', 'M', 'S'].forEach(function (sz) { for (var i = 0; i < count[sz]; i++) order.push(sz); });
 
+    /* THE HANGAR (2026-10-31). Astra: "we want to be able to get into our
+     * ship, not walk into a room and use a door. I want the inside of the
+     * ship and the inside of the station to be a clean, walkable path" -
+     * and, asked, a hangar with her ramp rather than a docking collar. The
+     * berth of the ship you are flying is sized to HER (main.js hands her
+     * measurements in as ships[].hangar: her hull's box and her ramp's
+     * foot in her cockpit's metres, and the floor her gear stands on), her
+     * nose pointing out away from the spine so her ramp faces the door you
+     * come in by. plan.hangar says where she stands in it, which is all
+     * main.js needs to walk you from this floor up her ramp and back. */
+    var hs = null;
+    (opts.ships || []).forEach(function (s) { if (s.current && s.hangar) hs = s; });
+    var hangarSize = hs ? sizeClass(hs.size) : null, hangarDone = false, hangar = null;
+
     /* The L port at the south end, the spine running north from it. */
     var lport = room('lport', 'lport', -10, 10, -16, 0, 7, 'L docking port');
     /* Berths alternate sides up the spine, biggest nearest the L port. */
@@ -128,6 +153,8 @@
     var berthRooms = [];
     for (var i = 0; i < order.length; i++) {
       var sz = order[i], dim = BERTH_ROOM[sz];
+      var isHangar = !!(hs && !hangarDone && sz === hangarSize);
+      if (isHangar) { dim = hangarDims(hs.hangar); hangarDone = true; }
       var side = (i % 2 === 0) ? -1 : 1;
       var list = side < 0 ? west : east;
       var zc = (list.length ? list[list.length - 1].zEnd + 1 : 2) + dim.d / 2;
@@ -135,6 +162,7 @@
       var br = room('berth' + i, 'berth', x0, x0 + dim.w, zc - dim.d / 2, zc + dim.d / 2, dim.h,
                     'Berth ' + (i + 1) + '  ·  ' + sz);
       br.size = sz; br.side = side; br.index = i;
+      if (isHangar) hangar = placeShip(br, hs.hangar);
       list.push({ zEnd: zc + dim.d / 2 });
       berthRooms.push(br);
     }
@@ -145,17 +173,28 @@
     door(lport, spine, 'z', 0, 0, BIG_DOOR_W > SPINE_W ? SPINE_W - 0.4 : BIG_DOOR_W, DOOR_H + 0.4);
     berthRooms.forEach(function (br) {
       var wallX = br.side < 0 ? br.x1 : br.x0;
-      door(spine, br, 'x', wallX, (br.z0 + br.z1) / 2, DOOR_W + (br.size === 'L' ? 1.2 : 0), DOOR_H + 0.3);
+      /* A hangar's door is wide enough to bring a cargo cart through. */
+      door(spine, br, 'x', wallX, (br.z0 + br.z1) / 2, br.hangar ? 3.2 : DOOR_W + (br.size === 'L' ? 1.2 : 0), DOOR_H + 0.3);
     });
 
-    /* The concourse, north of the spine, and what is in it. */
+    /* THE CARGO HALL (2026-10-31). Astra: "there should be a central cargo
+     * area on the station". Between the spine and the concourse, so every
+     * walk from a berth to the bar goes through it: the station's freight
+     * comes and goes here, and the freight office (`freight`, the market
+     * by another door) is on its east wall. */
+    var CARGO_W = 24, CARGO_D = 18;
+    var cargo = room('cargo', 'cargohall', -CARGO_W / 2, CARGO_W / 2, spineLen, spineLen + CARGO_D, 9, 'Cargo hall');
+    door(spine, cargo, 'z', spineLen, 0, SPINE_W - 0.4, DOOR_H + 0.4);
+    var hub = spineLen + CARGO_D;
+
+    /* The concourse, north of the cargo hall, and what is in it. */
     var cw = 26, cd = 20;
-    var conc = room('concourse', 'concourse', -cw / 2, cw / 2, spineLen, spineLen + cd, 6, 'Concourse');
-    door(spine, conc, 'z', spineLen, 0, SPINE_W - 0.4, DOOR_H + 0.4);
-    var bar = room('bar', 'bar', -cw / 2 - 12, -cw / 2, spineLen + 4, spineLen + 16, 3.6, 'The bar');
-    door(conc, bar, 'x', -cw / 2, spineLen + 10, 2.4, DOOR_H);
-    var hall = room('crewhall', 'crewhall', cw / 2, cw / 2 + 10, spineLen + 3, spineLen + 13, 3.4, 'Crew hall');
-    door(conc, hall, 'x', cw / 2, spineLen + 8, 2.0, DOOR_H);
+    var conc = room('concourse', 'concourse', -cw / 2, cw / 2, hub, hub + cd, 6, 'Concourse');
+    door(cargo, conc, 'z', hub, 0, 4.4, DOOR_H + 0.8);
+    var bar = room('bar', 'bar', -cw / 2 - 12, -cw / 2, hub + 4, hub + 16, 3.6, 'The bar');
+    door(conc, bar, 'x', -cw / 2, hub + 10, 2.4, DOOR_H);
+    var hall = room('crewhall', 'crewhall', cw / 2, cw / 2 + 10, hub + 3, hub + 13, 3.4, 'Crew hall');
+    door(conc, hall, 'x', cw / 2, hub + 8, 2.0, DOOR_H);
 
     /* Things to use, each a spot you stand near and face. */
     function item(kind, x, zz, label, extra) {
@@ -164,10 +203,18 @@
       items.push(it);
       return it;
     }
-    item('market', 6, spineLen + cd - 1.2, 'Market desk', { counter: [3, spineLen + cd - 1.4, 9, spineLen + cd] });
-    if (opts.yard) item('yard', -6, spineLen + cd - 1.2, 'Shipyard counter', { counter: [-9, spineLen + cd - 1.4, -3, spineLen + cd] });
-    item('bar', -cw / 2 - 10.5, spineLen + 10, 'The bar', { counter: [-cw / 2 - 12, spineLen + 6, -cw / 2 - 11, spineLen + 14] });
-    item('crew', cw / 2 + 8.8, spineLen + 8, 'Crew hall board', { counter: [cw / 2 + 9.4, spineLen + 5, cw / 2 + 10, spineLen + 11] });
+    item('market', 6, hub + cd - 1.2, 'Market desk', { counter: [3, hub + cd - 1.4, 9, hub + cd] });
+    if (opts.yard) item('yard', -6, hub + cd - 1.2, 'Shipyard counter', { counter: [-9, hub + cd - 1.4, -3, hub + cd] });
+    /* The freight office, on the cargo hall's east wall: the same trade
+     * as the market desk, at the window the freight goes past. */
+    item('freight', CARGO_W / 2 - 1.6, spineLen + 5, 'Freight office', { counter: [CARGO_W / 2 - 1.0, spineLen + 3, CARGO_W / 2, spineLen + 7] });
+    /* The bar counter stands 1.3 m off its wall (2026-10-31), so the
+     * bartender works behind it and the back bar (dressing.js) is behind
+     * them; it used to be flush to the wall, with the bartender on the
+     * customers' side. */
+    item('bar', -cw / 2 - 9.4, hub + 10, 'The bar', { counter: [-cw / 2 - 10.7, hub + 6, -cw / 2 - 10, hub + 14],
+                                                       post: { x: -cw / 2 - 11.3, z: hub + 10, yaw: Math.PI / 2 } });
+    item('crew', cw / 2 + 8.8, hub + 8, 'Crew hall board', { counter: [cw / 2 + 9.4, hub + 5, cw / 2 + 10, hub + 11] });
 
     /* Your ships into berths of their size, the current one first. */
     var ships = (opts.ships || []).slice().sort(function (a, b) { return (b.current ? 1 : 0) - (a.current ? 1 : 0); });
@@ -180,6 +227,16 @@
       if (k < 0) return;
       var br = free.splice(k, 1)[0];
       br.ship = s;
+      /* In her hangar there is no hatch to use: her ramp is the way
+       * aboard, walked. The item marks its foot (silent - nothing to press)
+       * and that is where you stand on the deck by default. */
+      if (br.hangar && hangar && s.current) {
+        var ft = hangar.foot;
+        item('mine', ft.x, ft.z, 'Your ship  -  ' + (s.name || 'ship'), { ship: s, berth: br.id, silent: true });
+        var away = br.side < 0 ? 1 : -1;
+        spawn = { x: ft.x + away * 1.6, z: ft.z, yaw: away > 0 ? Math.PI / 2 : -Math.PI / 2 };
+        return;
+      }
       /* The hatch is on the berth's outer wall, opposite its door. */
       var hx = br.side < 0 ? br.x0 + 0.9 : br.x1 - 0.9;
       item(s.current ? 'mine' : 'fleet', hx, (br.z0 + br.z1) / 2,
@@ -205,7 +262,18 @@
     });
     if (!spawn) spawn = { x: 0, z: -6, yaw: 0 };
 
-    return { portId: portId, rooms: rooms, doors: doors, items: items, spawn: spawn };
+    var plan = { portId: portId, rooms: rooms, doors: doors, items: items, spawn: spawn };
+    if (hangar) plan.hangar = hangar;
+    /* Whose port it is (generate.js stampLiveries: civ, navy or syn, and
+     * pir should one ever fly it): the walls' colours here, and the whole
+     * of the dressing's style. */
+    plan.livery = opts.livery || 'civ';
+    /* What is in the rooms (dressing.js): furniture, fittings, neon, and
+     * the ads - for the bar, and for the outfitters (the yard counter, or
+     * opts.outfitter: the nearest port in the system that has one). Its
+     * own seeded stream, so this changes nothing above. */
+    if (global.Dressing && global.Dressing.apply) global.Dressing.apply(plan, opts.seed || '', { livery: plan.livery, outfitter: opts.outfitter || null });
+    return plan;
   }
 
   /* ---- where you may stand ---------------------------------------------
@@ -247,9 +315,53 @@
     return null;
   }
 
+  /* ---- the hangar's geometry ----------------------------------------------
+   * `hg` is main.js's measure of her: { box: [x0, z0, x1, z1] (her hull
+   * and the ramp's foot, in her cockpit's metres), height (her top above
+   * the floor), foot: { x, z } (the ramp's foot), gy (that floor, in her
+   * cockpit's metres) }. The room is her box with HANGAR_MARGIN round it,
+   * her length running out from the spine. */
+  /* 7 m round her and 5 m over her (was 4 and 2, 2026-10-31): enough for
+   * the chase camera to swing round her inside the hangar without riding
+   * on her hull - main.js clampCameraToDeckHangar keeps the eye in here. */
+  var HANGAR_MARGIN = 7;       // m of floor round her
+  function hangarDims(hg) {
+    var b = hg.box;
+    return { w: (b[3] - b[1]) + 2 * HANGAR_MARGIN, d: Math.max(9, (b[2] - b[0]) + 2 * HANGAR_MARGIN),
+             h: Math.max(8, (hg.height || 4) + 5) };
+  }
+  /* Where she stands in the room: her box centred in it, her nose (+z in
+   * her frame) pointing away from the spine. A deck point (X, Z) and a
+   * point of hers (sx, sz) are a rotation by theta and a shift apart:
+   *   X = sx cos + sz sin + X0,   Z = -sx sin + sz cos + Z0,
+   * and a heading turns by theta (yaw on the deck = her yaw + theta). */
+  function placeShip(br, hg) {
+    var th = br.side < 0 ? -Math.PI / 2 : Math.PI / 2, c = Math.cos(th), s = Math.sin(th);
+    var b = hg.box, hcx = (b[0] + b[2]) / 2, hcz = (b[1] + b[3]) / 2;
+    var RX = (br.x0 + br.x1) / 2, RZ = (br.z0 + br.z1) / 2;
+    var H = { room: br.id, theta: th, cos: c, sin: s, gy: hg.gy || 0,
+              X0: RX - (hcx * c + hcz * s), Z0: RZ - (-hcx * s + hcz * c) };
+    var f = toStation(H, hg.foot.x, hg.foot.z);
+    H.foot = { x: f.x, z: f.z };
+    /* Her hull's footprint on this floor, for the dressing to keep clear. */
+    var hb = hg.hull || b, cs = [[hb[0], hb[1]], [hb[2], hb[1]], [hb[2], hb[3]], [hb[0], hb[3]]].map(function (q) { return toStation(H, q[0], q[1]); });
+    br.hangar = true;
+    br.hullBox = [Math.min.apply(null, cs.map(function (q) { return q.x; })), Math.min.apply(null, cs.map(function (q) { return q.z; })),
+                  Math.max.apply(null, cs.map(function (q) { return q.x; })), Math.max.apply(null, cs.map(function (q) { return q.z; }))];
+    br.rampFoot = H.foot;
+    br.label = br.label.replace(/^Berth/, 'Hangar');
+    return H;
+  }
+  function toStation(H, sx, sz) { return { x: sx * H.cos + sz * H.sin + H.X0, z: -sx * H.sin + sz * H.cos + H.Z0 }; }
+  function toShip(H, X, Z) {
+    var dx = X - H.X0, dz = Z - H.Z0;
+    return { x: dx * H.cos - dz * H.sin, z: dx * H.sin + dz * H.cos };
+  }
+
   /* ---- the walker -------------------------------------------------------- */
   function start(plan) {
-    return { plan: plan, x: plan.spawn.x, z: plan.spawn.z, yaw: plan.spawn.yaw, pitch: 0, near: null };
+    return { plan: plan, x: plan.spawn.x, z: plan.spawn.z, yaw: plan.spawn.yaw, pitch: 0, near: null,
+             crouch: 0, gait: 0, phase: 0 };
   }
 
   /* One step. `keys` is the game's held-key map. Moves are tried one axis
@@ -259,23 +371,38 @@
     if (keys.arrowleft) w.yaw -= TURN * dt;
     if (keys.arrowright) w.yaw += TURN * dt;
     if (keys.arrowup) w.pitch = Math.min(1.2, w.pitch + TURN * 0.6 * dt);
-    if (keys.arrowdown) w.pitch = Math.max(-1.2, w.pitch - TURN * 0.6 * dt);
+    if (keys.arrowdown) w.pitch = Math.max(-LOOK_DOWN, w.pitch - TURN * 0.6 * dt);
+    /* Left Ctrl, held: down; let go: up. Eased, not snapped. */
+    /* ...or held down for you, where her belly is too low to stand under
+     * (main.js hangarWalk sets w.mustCrouch). */
+    var cw = (keys.crouch || w.mustCrouch) ? 1 : 0, c0 = w.crouch || 0;
+    w.crouch = cw > c0 ? Math.min(cw, c0 + CROUCH_RATE * dt) : Math.max(cw, c0 - CROUCH_RATE * dt);
     var f = (keys.w ? 1 : 0) - (keys.s ? 1 : 0);
     var r = (keys.d ? 1 : 0) - (keys.a ? 1 : 0);
+    var x0 = w.x, z0 = w.z;
     if (f || r) {
-      var sp = (keys.shift ? RUN : WALK) * dt / (f && r ? Math.SQRT2 : 1);
+      var pace = keys.shift && w.crouch < 0.5 ? RUN : WALK;
+      pace += (CROUCH - pace) * w.crouch;
+      var sp = pace * dt / (f && r ? Math.SQRT2 : 1);
       var sy = Math.sin(w.yaw), cy = Math.cos(w.yaw);
       var dx = (sy * f + cy * r) * sp, dz = (cy * f - sy * r) * sp;
       if (standable(w.plan, w.x + dx, w.z)) w.x += dx;
       if (standable(w.plan, w.x, w.z + dz)) w.z += dz;
     }
+    /* The legs' clock: one stride per 1.4 m actually covered (a wall you
+     * are pushing into does not walk you on the spot), and the gait eased
+     * in and out so a stop is not a freeze mid-step. */
+    var moved = Math.hypot(w.x - x0, w.z - z0);
+    w.phase = ((w.phase || 0) + moved * Math.PI * 2 / 1.4) % (Math.PI * 2);
+    var gw = moved > 1e-5 ? Math.min(1, moved / Math.max(dt, 1e-6) / WALK) : 0;
+    w.gait = (w.gait || 0) + (gw - (w.gait || 0)) * Math.min(1, dt * 8);
     w.near = facing(w);
     return w;
   }
 
   function look(w, dyaw, dpitch) {
     w.yaw += dyaw;
-    w.pitch = Math.max(-1.2, Math.min(1.2, w.pitch + dpitch));
+    w.pitch = Math.max(-LOOK_DOWN, Math.min(1.2, w.pitch + dpitch));
   }
 
   /* What E would act on: the nearest thing within reach that is in front of
@@ -313,16 +440,46 @@
     berth:     { floor: '#30343a', wall: '#434a53', ceil: '#22262c', trim: '#d9a521' },
     concourse: { floor: '#3a3631', wall: '#5a5248', ceil: '#2a2622', trim: '#7fd6c0' },
     bar:       { floor: '#2f2620', wall: '#4b3a30', ceil: '#211a16', trim: '#ff9f5a' },
-    crewhall:  { floor: '#2e3330', wall: '#46504a', ceil: '#222724', trim: '#9fc7d2' }
+    crewhall:  { floor: '#2e3330', wall: '#46504a', ceil: '#222724', trim: '#9fc7d2' },
+    cargohall: { floor: '#2c3034', wall: '#3e444b', ceil: '#1c2024', trim: '#d9a521' }
   };
+  /* WHOSE PORT IT IS (2026-10-31, Astra: "stations should vary by
+   * faction"). The Navy keeps its ports clean, light and bright; the
+   * Syndicate's are near-black with one gold accent (the same language as
+   * its people, npcmodel.js); a pirate hole is rust. The bar keeps a
+   * darker version of each, being a bar. A civilian port is as it was. */
+  var FACTION_PAL = {
+    navy: { floor: '#59636f', wall: '#8994a1', ceil: '#4b5561', trim: '#7fc8ff',
+            bar: { floor: '#3a424c', wall: '#56616e', ceil: '#2c333b', trim: '#7fc8ff' } },
+    syn:  { floor: '#17171b', wall: '#222226', ceil: '#0e0e10', trim: '#c9a227',
+            bar: { floor: '#140d0a', wall: '#22150f', ceil: '#0c0807', trim: '#c9a227' } },
+    pir:  { floor: '#2b2420', wall: '#3d3027', ceil: '#1a1410', trim: '#ff5a3c',
+            bar: { floor: '#231a14', wall: '#33251c', ceil: '#140e0a', trim: '#ff5a3c' } }
+  };
+  function palFor(plan, room) {
+    var base = PAL[room.kind] || PAL.corridor, f = FACTION_PAL[plan && plan.livery];
+    if (!f) return base;
+    var o = room.kind === 'bar' ? f.bar : f;
+    return { floor: o.floor, wall: o.wall, ceil: o.ceil, trim: o.trim || base.trim };
+  }
   var TILE = 2;
+
+  /* How high your eye is now: the body's eyes when there is a body
+   * (selfFigure sets w.bodyEye each frame it poses you), otherwise eased
+   * between standing and CROUCH_EYE. */
+  function eyeOf(w) {
+    if (w && typeof w.bodyEye === 'number') return w.bodyEye;
+    var c = (w && w.crouch) || 0;
+    c = c * c * (3 - 2 * c);
+    return EYE + (CROUCH_EYE - EYE) * c;
+  }
 
   function camera(w, W, H) {
     var cp = Math.cos(w.pitch), sp = Math.sin(w.pitch);
     var f = [Math.sin(w.yaw) * cp, sp, Math.cos(w.yaw) * cp];
     var r = [Math.cos(w.yaw), 0, -Math.sin(w.yaw)];
     var u = [f[1] * r[2] - f[2] * r[1], f[2] * r[0] - f[0] * r[2], f[0] * r[1] - f[1] * r[0]];
-    return { eye: [w.x, EYE, w.z], f: f, r: r, u: u, cx: W / 2, cy: H / 2, flen: H * 0.85 };
+    return { eye: [w.x, eyeOf(w), w.z], f: f, r: r, u: u, cx: W / 2, cy: H / 2, flen: H * 0.85 };
   }
   function toCam(c, p) {
     var v = [p[0] - c.eye[0], p[1] - c.eye[1], p[2] - c.eye[2]];
@@ -400,7 +557,7 @@
   }
 
   function roomQuads(plan, room, out) {
-    var pal = PAL[room.kind] || PAL.corridor;
+    var pal = palFor(plan, room);
     for (var x = room.x0; x < room.x1 - 1e-6; x += TILE) {
       var x1 = Math.min(room.x1, x + TILE);
       for (var z = room.z0; z < room.z1 - 1e-6; z += TILE) {
@@ -411,7 +568,9 @@
       }
     }
     ['x0', 'x1', 'z0', 'z1'].forEach(function (s) { wallQuads(plan, room, s, out, pal); });
-    /* Ceiling light strips down the long axis. */
+    /* Ceiling light strips down the long axis - not in a room lit by its
+     * own lamps (dressing.js noStrip: the bar). */
+    if (room.noStrip) return;
     var long = (room.x1 - room.x0) > (room.z1 - room.z0);
     var cx = (room.x0 + room.x1) / 2, cz = (room.z0 + room.z1) / 2, y = room.y1 - 0.02;
     var strip = long
@@ -467,8 +626,12 @@
     plan.items.forEach(function (it) {
       var r = roomAt(plan, it.x, it.z);
       if (!r || !show[r.id]) return;
-      if (it.counter) boxQuads(it.counter, 0, 1.05, it.kind === 'bar' ? '#6b4a33' : '#3f5560', quads);
+      if (it.counter && !it.prop) boxQuads(it.counter, 0, 1.05, it.kind === 'bar' ? '#6b4a33' : '#3f5560', quads);
       if (it.ship || it.other) hatchQuads(it, r, quads);
+    });
+    if (plan.dress) Object.keys(show).forEach(function (id) {
+      var dq = plan.dress[id];
+      if (dq) for (var di = 0; di < dq.length; di++) quads.push(dq[di]);
     });
     if (extra) for (var e = 0; e < extra.length; e++) quads.push(extra[e]);
     /* Far to near. */
@@ -554,12 +717,15 @@
     plan.items.forEach(function (it) {
       var r = roomAt(plan, it.x, it.z);
       if (!r) return;
-      if (it.counter) boxQuads(it.counter, 0, 1.05, it.kind === 'bar' ? '#6b4a33' : '#3f5560', quads);
+      if (it.counter && !it.prop) boxQuads(it.counter, 0, 1.05, it.kind === 'bar' ? '#6b4a33' : '#3f5560', quads);
       if (it.ship || it.other) hatchQuads(it, r, quads);
+    });
+    if (plan.dress) Object.keys(plan.dress).forEach(function (id) {
+      plan.dress[id].forEach(function (q) { quads.push(q); });
     });
     var m = { v: [], f: [], c: [] };
     quads.forEach(function (q) {
-      var col = hexOf(q.col), lit = col.toLowerCase() === '#e8f4ff' || (q.bias || 0) <= -0.04;
+      var col = hexOf(q.col), lit = q.lit || col.toLowerCase() === '#e8f4ff' || (q.bias || 0) <= -0.04;
       var n = m.v.length;
       q.pts.forEach(function (p) { m.v.push([p[0], p[1], p[2]]); });
       for (var i = 1; i + 1 < q.pts.length; i++) { m.f.push([n, n + i, n + i + 1]); m.c.push((lit ? '!' : '') + col); }
@@ -568,8 +734,132 @@
     return m;
   }
 
+  /* ---- your own body (2026-10-31) -------------------------------------
+   * Astra: "Can we give the player first person view a body when we look
+   * down?" The same generator the crew are built by (npcmodel.js), in a
+   * pilot's pressure suit, posed every frame from what walk.js already
+   * knows: the stride clock, the gait, the crouch.
+   *
+   * THE HEAD IS NOT DRAWN. The camera is where the eyes are, so the head
+   * would be the inside of a helmet an inch from the lens. The body is cut
+   * off at the collar; what you see is what you would see of yourself:
+   * chest, arms, legs, boots.
+   *
+   * THE BODY IS FITTED TO THE EYE, not the eye to the body. A body comes in
+   * a few centimetres either side of 1.65 m at the eyes, so it is scaled
+   * about the feet until its eyes are at EYE. Crouched, the feet are put on
+   * the floor (the lowest boot vertex, measured each frame) and the camera
+   * goes where the crouched body's eyes then are - w.bodyEye - so the two
+   * can never disagree about how low you are. */
+  var SELF = { key: null, model: null, feet: null, eye: null, fit: 1 };
+  var CHIN = 1.50;             // rest-pose metres per unit height: the cut
+
+  function selfModel(name, liv) {
+    var NM = global.NpcModel;
+    if (!NM || !NM.build) return null;
+    var key = name + '|' + liv;
+    if (SELF.key === key) return SELF.model;
+    var m = NM.build('pilot', name, liv);
+    if (!m) return null;
+    var h = (m.look && m.look.h) || 1, cut = CHIN * h;
+    var keep = [];
+    for (var t = 0; t < m.tris; t++) {
+      var hi = Math.max(m.pos[t * 9 + 1], m.pos[t * 9 + 4], m.pos[t * 9 + 7]);
+      if (hi <= cut) keep.push(t);
+    }
+    var out = {};
+    for (var k in m) if (Object.prototype.hasOwnProperty.call(m, k) && k.charAt(0) !== '_') out[k] = m[k];
+    out.pos = new m.pos.constructor(keep.length * 9);
+    out.uv = new m.uv.constructor(keep.length * 6);
+    out.bone = new m.bone.constructor(keep.length * 3);
+    out.emis = new m.emis.constructor(keep.length * 3);
+    keep.forEach(function (t, j) {
+      for (var i = 0; i < 9; i++) out.pos[j * 9 + i] = m.pos[t * 9 + i];
+      for (var i2 = 0; i2 < 6; i2++) out.uv[j * 6 + i2] = m.uv[t * 6 + i2];
+      for (var i3 = 0; i3 < 3; i3++) { out.bone[j * 3 + i3] = m.bone[t * 3 + i3]; out.emis[j * 3 + i3] = m.emis[t * 3 + i3]; }
+    });
+    out.tris = keep.length; out.count = keep.length * 3; out.self = true;
+    /* The boot vertices, for putting the feet on the floor. */
+    var ankles = [m.bones.names.indexOf('ankleL'), m.bones.names.indexOf('ankleR')];
+    var feet = [];
+    for (var v = 0; v < out.count; v++) if (ankles.indexOf(out.bone[v]) >= 0) feet.push(v);
+    var F = (NM.HEAD_FIT && (NM.HEAD_FIT.pilot || NM.HEAD_FIT._)) || { eye: 1.644, front: 0.168 };
+    SELF.key = key; SELF.model = out; SELF.feet = feet;
+    /* Where the camera goes, in the rest pose, riding the torso (bone 0):
+     * at the eyes' height and a few centimetres IN FRONT of the visor. A
+     * real eye is ahead of the chest, so looking down you see the outside
+     * of it; put the camera where the model's eyes are and it sits just
+     * behind the chest line, and looking down looks into the collar
+     * (2026-10-31, the first probe: a yellow ring filling the view). */
+    SELF.eye = [0, F.eye * h, (F.front + 0.04) * h];
+    SELF.fit = EYE / (F.eye * h);
+    return out;
+  }
+
+  /* Left-multiply every bone matrix by "scale s about point p". */
+  function scaleAbout(mats, n, s, px, py, pz) {
+    for (var b = 0; b < n; b++) {
+      var o = b * 16;
+      for (var c = 0; c < 4; c++) {
+        var i = o + c * 4, w = mats[i + 3];
+        mats[i] = px * w + s * (mats[i] - px * w);
+        mats[i + 1] = py * w + s * (mats[i + 1] - py * w);
+        mats[i + 2] = pz * w + s * (mats[i + 2] - pz * w);
+      }
+    }
+  }
+  function apply(mats, b, p) {
+    var o = b * 16;
+    return [mats[o] * p[0] + mats[o + 4] * p[1] + mats[o + 8] * p[2] + mats[o + 12],
+            mats[o + 1] * p[0] + mats[o + 5] * p[1] + mats[o + 9] * p[2] + mats[o + 13],
+            mats[o + 2] * p[0] + mats[o + 6] * p[1] + mats[o + 10] * p[2] + mats[o + 14]];
+  }
+
+  /* The pose: npc.js's walk cycle, blended into a squat by the crouch. */
+  function selfPose(w) {
+    var g = w.gait || 0, ph = w.phase || 0, c = w.crouch || 0;
+    c = c * c * (3 - 2 * c);
+    var sw = Math.sin(ph), sw2 = Math.sin(ph + Math.PI), st = 1 - c * 0.6;
+    var o = { x: 0, y: 0, z: 0, yaw: w.yaw, sink: 0, lean: 0.32 * c };
+    o.hipL = g * 0.42 * sw * st + c * 1.45; o.hipR = g * 0.42 * sw2 * st + c * 1.45;
+    o.kneeL = g * 0.55 * Math.max(0, Math.sin(ph - 0.9)) * st + c * 2.15;
+    o.kneeR = g * 0.55 * Math.max(0, Math.sin(ph + Math.PI - 0.9)) * st + c * 2.15;
+    o.ankleL = c * 0.7; o.ankleR = c * 0.7;
+    o.shL = g * 0.35 * sw2 * st + c * 0.35; o.shR = g * 0.35 * sw * st + c * 0.35;
+    o.elbowL = 0.15 + g * 0.2 + c * 0.5; o.elbowR = 0.15 + g * 0.2 + c * 0.5;
+    return o;
+  }
+
+  /* This frame's figure for npcgl.js / the 2D painter: { model, mats,
+   * person }, in the same metres as the deck, the feet on floorY. Sets
+   * w.bodyEye (relative to floorY's deck, like EYE) for the camera. */
+  function selfFigure(w, floorY, name, liv) {
+    var NM = global.NpcModel;
+    var m = selfModel(name || 'Commander', liv || 'civ');
+    if (!m || !NM || !NM.skin) { delete w.bodyEye; return null; }
+    var n = m.bones.names.length;
+    w._selfMats = NM.skin(m, selfPose(w), w._selfMats);
+    var mats = w._selfMats;
+    scaleAbout(mats, n, SELF.fit, 0, 0, 0);
+    /* Feet on the floor. */
+    var lo = Infinity;
+    for (var i = 0; i < SELF.feet.length; i++) {
+      var v = SELF.feet[i], q = apply(mats, m.bone[v], [m.pos[v * 3], m.pos[v * 3 + 1], m.pos[v * 3 + 2]]);
+      if (q[1] < lo) lo = q[1];
+    }
+    if (!isFinite(lo)) lo = 0;
+    var e = apply(mats, 0, SELF.eye);
+    /* Eyes over the walker's position, boots on the deck. */
+    var tx = w.x - e[0], ty = floorY - lo, tz = w.z - e[2];
+    for (var b = 0; b < n; b++) { mats[b * 16 + 12] += tx; mats[b * 16 + 13] += ty; mats[b * 16 + 14] += tz; }
+    w.bodyEye = e[1] - lo;
+    return { model: m, mats: mats, person: { id: 'self', x: w.x, z: w.z, self: true } };
+  }
+
   var Walk = {
     EYE: EYE, RADIUS: RADIUS, WALK: WALK, RUN: RUN, REACH: REACH,
+    CROUCH_EYE: CROUCH_EYE, CROUCH: CROUCH, eyeOf: eyeOf, selfFigure: selfFigure, selfPose: selfPose,
+    hangarToShip: toShip, hangarToStation: toStation, HANGAR_MARGIN: HANGAR_MARGIN,
     layout: layout, standable: standable, roomAt: roomAt,
     start: start, step: step, look: look, facing: facing, draw: draw,
     sizeClass: sizeClass, meshFor: meshFor

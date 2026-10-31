@@ -378,6 +378,10 @@
     itemsOfKind(plan, 'crew').forEach(function (it) {
       people.push(person(key + '|steward', staffName('steward'), 'loadmaster', 'civ', 'steward', { post: postBy(plan, it), staff: 'Hall steward' }));
     });
+    /* The cargo hall's freight office (2026-10-31). */
+    itemsOfKind(plan, 'freight').forEach(function (it) {
+      people.push(person(key + '|freight', staffName('freight'), 'loadmaster', 'civ', 'clerk', { post: postBy(plan, it), staff: 'Freight clerk' }));
+    });
 
     /* Security, by whose port it is: the Syndicate keeps its own; a port
      * with a Navy garrison has marines at the big lock and an officer on
@@ -390,7 +394,7 @@
       if (conc) people.push(person(key + '|officer', staffName('officer'), 'officer', 'navy', 'officer', { patrol: ['concourse', 'spine'] }));
       people.push(person(key + '|sec1', staffName('sec1'), 'security', 'civ', 'security', { patrol: ['spine', 'concourse'] }));
     } else {
-      people.push(person(key + '|sec1', staffName('sec1'), 'security', 'civ', 'security', { patrol: ['spine', 'concourse', 'bar'] }));
+      people.push(person(key + '|sec1', staffName('sec1'), 'security', 'civ', 'security', { patrol: ['spine', 'cargo', 'concourse', 'bar'] }));
       if (lport) people.push(person(key + '|tac1', staffName('tac1'), 'tactical', 'civ', 'tactical', { post: guardPost(plan, lport, 'tac1') }));
     }
 
@@ -496,6 +500,8 @@
    * into the room — the counters are against walls, so there is no
    * "behind". */
   function postBy(plan, it) {
+    /* A counter with a "behind" (the bar, 2026-10-31) says where. */
+    if (it.post) return { x: it.post.x, z: it.post.z, yaw: it.post.yaw };
     var c = it.counter, room = roomAt(plan, it.x, it.z);
     if (!c || !room) return { x: it.x, z: it.z, yaw: 0 };
     var cx = (room.x0 + room.x1) / 2, cz = (room.z0 + room.z1) / 2;
@@ -640,6 +646,13 @@
     }
     if (p.room) {
       var r = roomById(plan, p.room);
+      /* Somebody who sits, sits on something (dressing.js seats,
+       * 2026-10-31): a stool, a chair, the booth. */
+      var seatsHere = p.sitting && plan.seats ? plan.seats.filter(function (s) { return s.room === p.room; }) : [];
+      if (r && seatsHere.length) {
+        var st = seatsHere[Math.floor(draw(p.id, 'seat') * seatsHere.length)];
+        return { at: { x: st.x, z: st.z }, act: 'sit', yaw: st.yaw, hold: hold * 4 };
+      }
       if (r) return { at: spotIn(plan, r, p.id, n), act: p.sitting ? 'sit' : 'stand', yaw: draw(p.id, n + 'y') * 6.28, hold: hold * (p.sitting ? 4 : 1) };
     }
     if (p.patrol) {

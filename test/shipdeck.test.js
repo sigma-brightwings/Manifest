@@ -51,7 +51,12 @@ ids.forEach(function (id) {
   var domes = (d.plan.turrets || []).length * (2 * 10 * 2 + 10);
   /* And on the two with a conning tower, the tower's glass all round the
    * bridge deck and lobby (towers.test.js) — more, never fewer. */
-  var seatPanes = 6 + 2 + 2 + 2 + 2 + 2 + domes, nP = d.meshes.portals.f.length;
+  /* And, since 2026-10-31, glass in the roof either side of the spine
+   * (Render.canopyStyle): a fan of (corners - 2) triangles per pane,
+   * counted off the geometry so a pane's shape can change. */
+  var seatPanes = d.geom.windows.reduce(function (n, w) { return n + w.length - 2; }, 0) + domes;
+  var nP = d.meshes.portals.f.length;
+  if (d.geom.windows.length !== 8) badPanes.push(id + ': ' + d.geom.windows.length + ' panes, not 8');
   if (d.plan.tower ? nP <= seatPanes : nP !== seatPanes) badPanes.push(id + ':' + nP);
   ['room', 'portals', 'seat'].forEach(function (k) {
     d.meshes[k].v.forEach(function (v) { if (!v.every(isFinite)) nan.push(id + ':' + k); });

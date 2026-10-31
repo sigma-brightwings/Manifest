@@ -44,6 +44,144 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **Canopies with more glass, shaped by role, unique to every ship
+  (2026-10-31).** Astra: *"I want the canopy glass in the ships to give a
+  better view to either side, as well as above and below, while also being
+  unique to every ship."*
+  - Asked, she chose:
+    - **glass by role:** fighters and interceptors get near-bubble
+      canopies; couriers and shuttles get generous wraparound glass;
+      freighters, tugs and the big hulls get more frame and less glass, but
+      still roof and lower windows;
+    - **unique both ways:** each hull type has its own layout, and each
+      individual ship has its own frame bars within it.
+  - **Above:** there is glass in the roof either side of a spine down the
+    middle of the ceiling. The overhead panel has narrowed onto that spine
+    and no longer hangs across the top of the windscreen. Bubble hulls'
+    roof glass runs most of the way aft; freighters' is a pair of
+    skylights.
+  - **To the sides:**
+    - The side windows now run from the top of the side console up toward
+      the ceiling, and further aft.
+    - The quarter-lights beside the windscreen are taller, reaching well
+      above and below where they used to stop, and they reach further round.
+    - The side window now begins where the wall turns in toward the
+      quarter-light, so the two read as one wrap.
+  - **Below:** the landing window is wider, reaches further forward, and
+    comes back under the desk toward your feet. The console slot widens to
+    match, so you see all of it.
+  - **The windscreen is unchanged.** It carries the HUD, and the forward
+    view keeps the proportions it was tuned to.
+  - **Unique per hull:** each family's sizes are moved within a band by a
+    seed taken from the hull id. Three choices of shape are made the same
+    way: the side window's top edge is level, tapers aft, or rises aft; the
+    quarter-lights are swept or square; the roof panes are rectangles or
+    trapezoids. No two hull types have the same glass.
+  - **Unique per ship:** frame bars are seeded from the ship's own birth id,
+    which never changes:
+    - 0–2 bars across each side window;
+    - 0–2 across each roof pane;
+    - 0–1 across each quarter-light;
+    - their width is per ship too.
+
+    Bars never run through the middle fifth of a pane. Two Talons bought
+    apart are framed apart, and renaming a ship changes nothing.
+  - **Fixes found on the way:**
+    - The corner where a quarter-light's wall meets the short wall back to
+      the side wall left a gap that a sight line could pass through. Both
+      walls now overlap there.
+    - The light strips in the ceiling stop short of the roof glass.
+  - Code:
+    - render.js: `CANOPY_FAMILY`, `CANOPY_OF`, `canopyStyle`, `canopyBars`
+      and `barQuad`; `spec.canopy` and `spec.slot`. `canopySegments` takes
+      the quarter-light heights from the style. `cockpitGeometry` gains
+      `roofs`, `bars`, `roofZ0`/`roofZ1`, `spineX` and `slot`, a per-hull
+      `footHW`, and the side and floor windows from the style; `windows`
+      now has 8 panes, with the roof's last. `apertureSet` punches roof
+      panes `roof-right`/`roof-left`. The 2D path draws the bars.
+    - shipdeck.js: the ceiling is framed round the roof panes; the bars are
+      added to the room.
+    - Tests: cockpit.test.js has 9 new checks:
+      - every pane is inside its room;
+      - every hull sees its whole landing window through its slot;
+      - every hull has more side and roof glass than the old cockpit;
+      - fighters have the most glass and freighters the least;
+      - no two hulls have the same glass;
+      - each ship has its own bars, the same every time;
+      - bars stay out of the middle of a pane.
+
+      shipdeck.test.js counts panes off the geometry.
+    - Probe: `tools/probe-canopy.js` (ahead, port, up, down and
+      starboard-up, per hull).
+  - **Saves:** unaffected. Existing ships keep their old lean and trim,
+    because the bars are drawn after them from the same seed.
+
+- **The chase camera sees your hangar (2026-10-31).** Astra: *"the interior
+  of the station is not visible when using the chase camera that orbits
+  the ship."*
+  - Seated and berthed, the orbiting camera used to show the station
+    model's own docking bay: a big plain box, not the hangar you walk in.
+  - Now, whenever your ship is berthed in her hangar and you look at her
+    from outside, the hangar you walk in is drawn round her: the same floor,
+    crates, signs and ads, with the spine through its door. The station
+    model's bay is not drawn, because it would stand in the same space.
+  - The camera stays inside the hangar's walls (0.6 m off walls and
+    ceiling, 0.4 m off the floor), as it stays inside a station bay. You
+    can't zoom out through the walls here.
+  - **The hangar is bigger** so the camera has room to swing round her: 7 m
+    of floor round her instead of 4, and 5 m over her instead of 2.
+  - Code: main.js `hangarChase`, `clampCameraToDeckHangar` (a slab test in
+    the hangar's frame), a skip in `drawBody` for the docked station, and
+    `queueHangarFromShip` in the exterior view. walk.js `HANGAR_MARGIN` 7,
+    and headroom height + 5. Probe: `tools/probe-chase-hangar.js`.
+
+- **Stations by faction, wall ads, and a cargo hall (2026-10-31).** Astra:
+  *"Yes, stations should vary by faction. There should be advertisements on
+  the walls for the bar and outfitters, and there should be a central cargo
+  area on the station."*
+  - **A cargo hall** (24 x 18 m, 9 m high) now sits between the spine and
+    the concourse, so every walk from the berths to the shops crosses it.
+    - Container stacks (some two high) line both sides of a clear aisle,
+      which is marked in dashed yellow. Hazard stripes run round the walls.
+    - There is a gantry crane with its hoist and hook, a parked forklift,
+      pallets of crates, and high-bay lamps.
+    - Hanging signs point **^ CONCOURSE** and **^ BERTHS**.
+    - **The freight office** is on the right-hand wall: a lit window with
+      FREIGHT over it and a freight clerk at the counter. E there opens the
+      market screen, as the market desk does.
+    - Station security now patrols through the hall.
+  - **Ads on the walls** in the spine, the cargo hall, the L port, the crew
+    hall and your hangar. They are kept clear of doors.
+    - **Bar ads** carry that station's own bar name and say DRINKS.
+    - **Outfitter ads** say OUTFITTERS / SHIPYARD where the station has a
+      yard. Where it has none, they say OUTFITTERS / AT and the name of a
+      port in the system that does.
+    - Each ad has a big **< or > arrow** at the end that points along its
+      wall toward the bar or the yard counter, as you face it.
+  - **Each faction dresses its own stations** (from the port's livery). The
+    rooms and their layout stay the same; only the look changes.
+    - **Free ports** keep the neon-and-grime look.
+    - **Navy** ports are clean and blue-grey, with white light and almost no
+      grime. Tall rooms hang blue banners with a white chevron.
+    - **Syndicate** ports are near-black and oxblood, with gold trim round
+      every room, red and gold neon, and black banners with a gold diamond.
+    - **Pirate** holes are rust, with graffiti on the walls, a third of
+      their light fittings dead, and twice the grime.
+  - Code:
+    - `dressing.js`: `STYLES` / `useStyle`, `dressCargoHall`, `placeAds` /
+      `adBoard` / `wallSpans`, and `factionDetail`. `apply(plan, seed, opts)`
+      now does a second pass for ads and faction marks on its own random
+      stream, so the first-pass dressing of every room is unchanged.
+    - `walk.js`: the cargo hall room and freight item, the concourse moved
+      back by 18 m, and `FACTION_PAL` for walls and floors.
+    - `main.js`: passes `livery` and `outfitter` (`outfitterFor`), and the
+      freight counter.
+    - `npc.js`: the freight clerk.
+    - `dressing.test.js` has 14 new checks: the hall is between the spine
+      and the concourse, the aisle is clear, each faction's marks are there
+      and only there, the rooms are unchanged, and every station has ads.
+    - Probe: `tools/probe-faction.js`.
+
 - **A NOTES tab on the F5 ship screen (2026-10-30).** Astra: *"add a Notes
   section to the F5 menu, under a new tab."* She chose both a notepad and a
   log the game keeps, saved with the game and exportable to a file.
@@ -2553,6 +2691,165 @@ Astra has seen it working.
     against a server that has only the `.gz` files, both plain and
     `Content-Encoding: gzip`. The page must unpack the same vertices and
     faces as the stored copy, and a station with no file must fire onfail.
+- **A body when you look down, and crouching on Left Ctrl (2026-10-31).**
+  Astra: *"Can we give the player first person view a body when we look
+  down? And we also need to be able to crouch with L Ctrl"*.
+  - **Your body** is built by the crew's generator (npcmodel.js) in a
+    pilot's pressure suit and posed every frame in walk.js
+    (`Walk.selfFigure`):
+    - the walk cycle follows the distance you actually cover;
+    - it settles when you stop;
+    - it squats when you crouch.
+  - **What you see.** The head is not drawn: the camera is where the eyes
+    are, a few centimetres ahead of the chest. Looking down you see your
+    chest harness, belt, arms, legs and boots, as a real person would.
+  - **Fitted to the eye.** The body is scaled so its eyes are at the
+    standing eye height (1.65 m), and its boots are put on the deck each
+    frame.
+  - **Where it is drawn:**
+    - in your own ship, outside her on the ground, and on a station deck;
+    - on the GPU like the crew;
+    - on the 2D fallback through the painter's sort.
+  - **Crouching** is Left Ctrl, held, eased down and back up:
+    - the eye drops to where the crouched body's eyes are (about
+      1.16 m), so the view and the body always agree;
+    - you walk at 0.8 m/s and Shift does not run;
+    - the right Ctrl is left alone.
+  - **Looking down** now goes to 83 degrees instead of 69. At 69 a
+    standing walker saw only the toes of their boots. The up limit is
+    unchanged.
+  - **Tests and probe.** `test/self.test.js` has 23 checks (crouch timing
+    and speed, boots on the floor standing and crouched, eye heights,
+    the head cut, the gait). `tools/probe-self.js` shoots it in your ship
+    and on a station deck.
+  - **In a browser,** Ctrl+W still closes the tab (no page can stop it),
+    so walking forward while crouched is safe in the exe but not on the
+    web build.
+- **Station interiors, dressed: Firefly by way of Blade Runner (2026-10-31).**
+  Astra: *"the inside of stations needs more detail: there are many rooms but
+  they contain nothing"*, and asked what it should feel like, *"a kind of
+  Firefly / Blade Runner aesthetic"*. That means lived in and patched, warm
+  practical light against cold blue, and neon in more than one script.
+  - **`src/dressing.js` (new)** dresses every room kind on a station deck:
+    the bar, the concourse, the crew hall, the spine, the L port and the
+    berths.
+    - It is seeded from its own stream (`dress|seed|port|room`), so the
+      same port's bar is the same bar every visit.
+    - It moves nothing else: the rooms and doors are identical with or
+      without it.
+    - It adds plates to both walk.js renderers (the GPU mesh and the 2D
+      painter's sort), and solid footprints that you and the people walk
+      round.
+  - **The bar.** Each port's bar has a seeded name, put up in neon
+    (*The Drifting Lantern*, *Ivo's*, *Last Call* and so on); the name
+    also shows as the room label.
+    - The counter stands 1.3 m off the wall, so the bartender works
+      behind it. Behind them is a back bar of glowing bottles on three
+      shelves against a dark mirror.
+    - Stools line the counter. There are three or four round tables with
+      mismatched chairs and crates, and a red vinyl booth.
+    - A warm lamp on a drop hangs over each table in place of the white
+      ceiling strip. A column of glyph neon stands by the door, with
+      pipes, wall ribs and grime round the room.
+  - **The concourse** is a street under the station roof:
+    - a noodle stand with red lanterns and stools;
+    - shuttered shopfronts with glyph signs, a few with the shutter up
+      and warm light inside;
+    - ad panels high on the walls, and pillars with light rings;
+    - an info kiosk, benches, planters and crate stacks;
+    - MARKET and SHIPYARD in neon over their desks, with terminals on
+      them, and a departures board;
+    - hanging signs that point the way, `< BAR`, `CREW >` and
+      `^ BERTHS`. Direction is always an arrow, not a word.
+  - **The crew hall** has lockers, a cork job board covered in pinned
+    paper under a HIRING sign, benches, a KAFE vending machine and a
+    coffee urn.
+  - **The spine** has hazard stripes down the floor edges and pipe runs.
+    Each berth door carries its number and size in neon, coloured by
+    size (L amber, M cyan, S green). Overhead signs read `^ CONCOURSE`
+    one way and `^ L PORT` the other. There are fire cabinets, and
+    fixtures every four metres instead of one white slab.
+  - **The L port** has a yellow loading square, a gantry crane, crate
+    stacks clear of the guards' posts, hazard chevrons and amber beacons
+    over the outer doors.
+  - **Each berth** has a yellow box on the floor in front of the hatch,
+    a fuel line and hose reel, the berth number in its size colour,
+    lockers, crates and a terminal by the door.
+  - **People** sit on real seats: a person who sits (the Syndicate fixer)
+    takes a stool, a chair or the booth. The bartender's post is behind
+    the counter (`it.post`, read by npc.js `postBy`).
+  - **The font** gained digits and the arrows `<`, `>` and `^`.
+  - **Tests and probes.** `test/dressing.test.js` has 21 checks across
+    24 generated ports:
+    - every room is dressed;
+    - a second visit is identical;
+    - bars get their own names;
+    - the plan is unmoved;
+    - a flood-fill from your berth reaches every room and every usable
+      thing;
+    - a metre each side of every door is clear;
+    - the bartender stands behind the counter;
+    - every seat is in its room with floor beside it.
+    `tools/probe-bar.js` and `tools/probe-dressing.js` shoot the rooms; a
+    station deck draws about 6,500 plates at 57 fps.
+- **Your ship in her hangar: one walk from her seat to the station deck
+  (2026-10-31).** Astra: *"we want to be able to get into our ship, not
+  walk into a room and use a door. I want the inside of the ship and the
+  inside of the station to be a clean, walkable path."* Asked, she chose a
+  hangar with her ramp over a docking collar, and the airlock open while
+  she is berthed. Then, watching it: *"the ship hull needs to be cut away
+  where the ramp is, because otherwise we're phasing through the hull"*.
+  - **The hangar** (walk.js). The berth of the ship you are flying is a
+    hangar sized to her: her length out from the spine, her beam along
+    it, 4 m of floor round her, and headroom over her.
+    - Her nose points away from the spine, so her ramp faces the door
+      you come in by.
+    - `plan.hangar` says where she stands: a rotation and a shift
+      between her frame and the deck's (`Walk.hangarToShip` and
+      `hangarToStation`).
+    - It is dressed (dressing.js `dressHangar`) with:
+      - a yellow stand line round her and a hatched box at her ramp;
+      - hazard-striped walls, ribs and a gantry rail;
+      - crates and a fuel bowser kept clear of her;
+      - a terminal by the door and HANGAR n in neon over it.
+  - **One frame** (main.js). The deck is drawn in a frame built from her
+    cockpit's (`hangarFrame`), so her model, her rooms and the hangar
+    floor line up exactly.
+    - Walk down her ramp and at its top you are simply on the deck
+      (`stepIntoHangar`). Walk up it and you are aboard
+      (`boardFromHangar`). Nothing to press: the old E-at-the-hatch is
+      gone for the ship you fly.
+    - In the hangar you see her: her hull, engines and gear, her ramp
+      down, and her lit airlock and rooms through it. From aboard, the
+      hangar shows down her ramp.
+  - **Her hull is solid** on the hangar floor where her belly is low,
+    using the same clearance map render.js already builds for standing
+    beside her on a planet. Under 1.8 m of her you stoop automatically;
+    the crouch is held down for you.
+  - **Open while docked** (airlock.js `ctx.berth`). Berthed in her
+    hangar, her ramp comes down on its own and the inner door works, so
+    there is no cycle. The panel says *Berthed - open to the hangar*.
+    Undocked, the 26 October rule is back: sealed to the ship, ramp up.
+  - **The ramp's cut through her hull is exact** (render.js
+    `rampExterior`).
+    - It used to drop only hull faces whose middle lay over the opening,
+      so a big panel straddling it stayed whole and you walked through
+      it.
+    - Every face reaching over the opening is now clipped at its four
+      edges: the parts outside are kept, the part inside and below the
+      deck goes.
+    - This is the same cut she uses landed, so the planet ramp benefits
+      too.
+  - Ships with no ramp, a tube berth, and boarding someone else keep
+    the old way.
+  - **Tests and probe.** `test/hangar.test.js` has 39 checks:
+    - sizing, fit and headroom;
+    - the two frames converting exactly, as a rotation;
+    - her nose out and her ramp at the door;
+    - nothing standing on her;
+    - berth mode open, and sealing again on undock.
+    `tools/probe-hangar.js` walks it with W alone: down her ramp onto the
+    hangar floor, round her, back up and aboard.
 - **The whole history without Git LFS, ready for a fresh GitHub repo
   (2026-10-30).** Astra: *"we do a fresh repo and delete the former, but
   first we test"*.
