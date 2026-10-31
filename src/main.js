@@ -4522,7 +4522,7 @@
     var owed = Math.round((G.wanted || {})[fac.id] || 0);
     var fugitive = Combat.isFugitive(G, fac.id);
     var standing = Math.round((G.standing || {})[fac.id] || 0);
-    var label = global.Missions ? Missions.standingLabel(standing) : '';
+    var label = global.Missions ? Missions.standingLabel(standing, G, fac.id) : '';
 
     if (!owed && !fugitive) {
       G.payOffer = null;
@@ -5659,12 +5659,17 @@
        * frame at a million times — the bug that let weapon cooldowns fire
        * sixty shots a second was exactly that. */
       var towWarp = Math.max(Combat.TOW_MIN_WARP, warp);
+      /* A witness's eight seconds are real seconds (framing the tug,
+       * Phase 18): compressed, the window to buy her crew would be gone
+       * inside one frame. */
+      if (G.pendingReport && G.t < G.pendingReport.at) towWarp = 1;
       G.lastDtSim = Math.min(towWarp * dtReal, (G.ship.tow.dur || 1) / 12);
       G.t += G.lastDtSim;
       var towStep = Sim.stepTow(G.ship, G.sys, G.t);
       G.arrivalPose = null;
       if (towStep && towStep.done) {
         G.warpIndex = 0;
+        if (Combat.towDelivered) Combat.towDelivered(G, G.sys.byId[towStep.port], HOOKS);
         say('Cable off — ' + (G.sys.byId[towStep.port] || {}).name + ' has you.', 6);
       }
     } else if (!G.paused && Sim.arrivalActive(G.ship)) {

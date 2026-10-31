@@ -270,7 +270,9 @@
          * position and the destination is an id, so nothing live is in it. */
         tow: s.tow ? { port: s.tow.port, at: s.tow.at, dur: s.tow.dur,
                        from: { x: s.tow.from.x, y: s.tow.from.y, z: s.tow.from.z },
-                       handedOff: !!s.tow.handedOff } : null,
+                       handedOff: !!s.tow.handedOff,
+                 tug: s.tow.tug || null, planted: s.tow.planted || null,
+                 framed: s.tow.framed || null } : null,
         /* The racks themselves, copied rather than referenced so a later
          * shot cannot edit a snapshot that has already been taken. The two
          * fields above are the ARMED rack's view of this and are written
@@ -419,6 +421,10 @@
        * ETA flown after it. */
       rescue: G.rescue || null,
       tenderKills: G.tenderKills || 0,
+    /* The pirate mark (combat.js, Phase 18) and the pirates already
+     * credited against it, by id. */
+    marks: G.marks || {},
+    markCredited: G.markCredited || {},
       /* WHAT YOU DID FOR OTHER SHIPS (upkeep.js): mass passed, money that
        * changed hands, the legs you pulled ships out of. Everything else
        * about their tanks and purses is a function of time. Additive. */
@@ -577,7 +583,9 @@
     s.tow = (d.tow && d.tow.port) ? { port: d.tow.port, at: d.tow.at || 0,
                                       dur: d.tow.dur || 1,
                                       from: d.tow.from || { x: 0, y: 0, z: 0 },
-                                      handedOff: !!d.tow.handedOff } : null;
+                                      handedOff: !!d.tow.handedOff,
+                                     tug: d.tow.tug || null, planted: d.tow.planted || null,
+                                     framed: d.tow.framed || null } : null;
     s.missileId = d.missileId; s.missileBatch = d.missileBatch;
     /* A save from before racks has none, and Combat.racksOf builds the one
      * rack its counter describes the first time anything asks — so the
@@ -651,6 +659,8 @@
     G.uplift = (data.uplift && typeof data.uplift === 'object') ? data.uplift : {};
     G.rescue = data.rescue || null;
     G.tenderKills = data.tenderKills || 0;
+    G.marks = (data.marks && typeof data.marks === 'object') ? data.marks : {};
+    G.markCredited = (data.markCredited && typeof data.markCredited === 'object') ? data.markCredited : {};
     G.npcLedger = (data.npcLedger && typeof data.npcLedger === 'object') ? data.npcLedger : {};
     G.notes = typeof data.notes === 'string' ? data.notes : '';
     G.journal = Array.isArray(data.journal) ? data.journal : [];

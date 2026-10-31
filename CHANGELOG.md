@@ -66,6 +66,39 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **The pirate mark, and framing a tug (Phase 18, 2026-10-31).** Astra
+  chose to build the framing along with the mark, since the mark needs
+  something to put it on you.
+  - **Framing.** While a tug has you on the cable, her hold is open to
+    you. COMMS (F4), on the authority channel, lists a **PLANT** row for
+    each piece of contraband in your hold, worst first. Each row says what
+    it would cost you.
+    - Her crew are the witness by definition. They have your transponder
+      on the end of their cable, so it is never anonymous, even running
+      silent. The usual eight seconds to buy them off or lean on them
+      apply. A Navy tender's log is sealed, as a capital ship's is.
+    - The tow drops to 1x while a report is pending, or the window would
+      pass inside one frame.
+    - **Narcotics** are a `frame`: 1,500 cr on the bounty.
+    - **Restricted arms or milfuel** are a `frameSerious`: 9,000 cr, and if
+      it is reported, **the mark**.
+    - **Nobody files:** the tug carries it in. At the port, customs board
+      *her*, and her crew are charged.
+  - **The mark is a floor, not a number.** Standing with the faction whose
+    crew filed is set to −100 and pinned there. Nothing raises or moves
+    it. F5 and the police channel read **MARKED n/12**, not HOSTILE, so a
+    locked reputation is not mistaken for a bad one. Everything else
+    (closed ports, patrols, an empty board, the yard's gates) follows from
+    the standing that already exists.
+  - **The road back: twelve pirate kills, anywhere.** A dead pirate
+    reports itself, so no witness is needed and any space counts. Each
+    pirate counts once, by its id, so a wing can't be farmed. Every
+    faction holding a mark is credited at once. On the twelfth, the mark
+    lifts and standing resumes at −40.
+  - The mark, the pirates already credited, and the tug with what is in
+    her hold are all saved.
+  - Test: `test/mark.test.js` (29 checks).
+
 - **Today's loose ends (2026-10-31).**
   - **C crouches** as well as Left Ctrl, while walking. Ctrl+W is a
     browser's close-tab, and crouching while walking forward is exactly

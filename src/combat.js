@@ -3193,6 +3193,10 @@
              * than the hose. */
             global.Sim.beginTow(s, sys.byId[G.rescue.dest], sys, t,
                                 G.rescue.towSeconds || 3600);
+            /* Who has you on the cable, for framing (plantInTug). */
+            if (s.tow) s.tow.tug = { name: spec.name || 'the tug',
+                                     fac: spec.faction || sys.byId[G.rescue.dest].faction || 'civil',
+                                     who: (quote && quote.operator) || (spec.outlaw ? 'syndicate' : 'harbour') };
             G.towsTaken = (G.towsTaken || 0) + 1;
             what = 'on the cable for ' + sys.byId[G.rescue.dest].name;
           } else {
@@ -3325,7 +3329,13 @@
    * is that everyone agrees not to. */
   var BOUNTY = { demand: 400, assault: 300, kill: 2800, killPolice: 6000,
                  killNavy: 12000, killLiner: 9000, killTender: 14000,
-                 smuggling: 0, sabotage: 30000 };
+                 smuggling: 0, sabotage: 30000,
+                 /* FRAMING A TUG (Phase 18, 2026-10-31): planting cargo in
+                  * the hold of the boat towing you, and being seen at it.
+                  * Narcotics are ugly smuggling with somebody else's name on
+                  * it; restricted arms or milfuel is a serious frame, and a
+                  * serious frame that is reported also marks you (markPirate). */
+                 frame: 1500, frameSerious: 9000 };
   /* THE MORE YOU TAKE, THE WORSE THE CRIME (2026-10-30). Astra, when a
    * transfer at gunpoint came to 41,028 cr: "that's a lot of money, it
    * should be a more serious crime the more money you take." So a hold-up
@@ -4632,6 +4642,8 @@
       /* Nobody will miss it — but people will hear about it. A pirate
        * kill goes on the public record that captains read you by. */
       if (global.Captains) global.Captains.bumpRecord(G, 'pirateKills', 1, { sys: sys, ship: spec, t: t });
+      /* And it counts against a pirate mark, from anywhere (Phase 18). */
+      creditPirateKill(G, spec, t, hooks);
       if (hooks && hooks.say) hooks.say('Pirate destroyed — nobody will miss it', 4);
     }
 
@@ -4829,9 +4841,10 @@
     if (hooks && hooks.sound) hooks.sound('warn');
   }
 
-  function crime(sys, G, t, kind, victim, hooks) {
+  function crime(sys, G, t, kind, victim, hooks, seenBy) {
     if (!victim || victim.kind === 'pirate') return;    // no law for outlaws
     if (victim.reported === kind) return;               // one report per act
+    var framing = /^frame/.test(kind);
 
     /* THE VICTIM REMEMBERS, whether or not anybody else saw it. The law
      * needs a witness; the captain whose hull you just holed does not —
@@ -4839,7 +4852,7 @@
      * act nobody reported is still an act somebody will greet you about.
      * See captains.js. The public record counts each victim once per kind
      * of act, so a burst of fire is one assault on the books, not six. */
-    if (global.Captains) {
+    if (global.Captains && !framing) {
       var ev = kind === 'demand' ? 'robbed'
              : (kind === 'assault') ? 'attacked'
              : (/^kill/.test(kind)) ? 'attacked' : null;
@@ -4853,8 +4866,10 @@
     }
 
     var scene = victim.live ? victim.live.pos : G.ship.pos;
-    var anon = !!(G.ship && G.ship.silent);
-    var witness = witnessNear(sys, t, scene, victim, G);
+    /* A frame is never anonymous and never unwitnessed: the crew you are
+     * framing has you on the end of their cable, transponder and all. */
+    var anon = !framing && !!(G.ship && G.ship.silent);
+    var witness = seenBy || witnessNear(sys, t, scene, victim, G);
 
     if (witness) {
       /* A witness used to file instantly. It now takes them a few seconds
@@ -4877,7 +4892,7 @@
           by: witness.name || 'a witness',
           /* A warship's log is not a thing anybody sells. See
            * capitalWatching for why this is the whole of the feature. */
-          sealed: witness.kind === 'capital',
+          sealed: witness.kind === 'capital' || !!witness.sealed,
           victimName: victim.name || null
         };
         /* Quote the price in the warning itself. The window is eight
@@ -5355,6 +5370,10 @@
     G.wanted = G.wanted || {};
     var extra = lootBounty(loot);
     G.wanted[fac] = (G.wanted[fac] || 0) + (BOUNTY[kind] || 300) + extra;
+    /* A serious frame, reported, is the one act in the game that marks you
+     * (Phase 18). On the report, not the act: a crew that was bought or
+     * leaned on never files, and nothing marks you. */
+    if (kind === 'frameSerious') markPirate(G, fac, G.t || 0, hooks);
     jot(G, 'crime', 'Reported for ' + kind + (victim.name ? ' against the ' + victim.name : '') +
         ' (' + how + ')' + (extra ? ', ' + Math.round(loot) + ' cr taken' : '') +
         '. Bounty with ' + facName(G, fac) + ' now ' + Math.round(G.wanted[fac]) + ' cr');
@@ -5364,6 +5383,145 @@
                 ' — bounty now ' + Math.round(G.wanted[fac]) + ' cr', 6);
     }
     if (hooks && hooks.sound) hooks.sound('warn');
+  }
+
+  /* ---- THE PIRATE MARK, AND FRAMING A TUG (Phase 18, 2026-10-31) ---------
+   * Astra chose: build the framing too (the mark needs something to put it
+   * on you), as PLAN.md Phase 18 has it.
+   *
+   * FRAMING. A tug's hold is open to you while it has you on the cable, so
+   * you can leave something in it. The tug's crew is a witness by
+   * definition (they are watching the hull on the end of their cable, and
+   * they know its transponder), so the act goes through crime() with them
+   * as the witness, and the ordinary eight-second window to buy or lean on
+   * them applies. A Navy tender's log is sealed, as a capital's is.
+   * Narcotics are a 'frame'; restricted arms or milfuel (severity 2+) are
+   * a 'frameSerious'. If nobody files, the tug carries it in and is the
+   * one boarded at the far end (towDelivered).
+   *
+   * THE MARK is not a new number. It is a FLOOR: standing with the faction
+   * whose crew filed is set to -100 and pinned there. bumpStanding computes
+   * a rise and does not apply it (missions.js), and the readout says
+   * MARKED, not HOSTILE, so a locked reputation is not mistaken for a bad
+   * one. Everything else is machinery that already reads standing.
+   *
+   * THE ROAD BACK. A dead pirate reports itself, so a pirate kill counts
+   * from anywhere, unwitnessed. Twelve lift a mark; standing resumes at
+   * -40. Every faction holding a mark on you is credited at once (an open
+   * channel claim, not a favour for one government), and each pirate
+   * counts once, keyed on its id, so a wing cannot be farmed. If the
+   * chapter plays too short, raise MARK_KILLS: one number, right lever. */
+  var MARK_FLOOR = -100;
+  var MARK_KILLS = 12;
+  var MARK_RELEASE = -40;
+  var FRAME_SERIOUS_SEV = 2;
+
+  function isMarked(G, fac) { return !!(G && G.marks && fac && G.marks[fac]); }
+  function markOf(G, fac) { return isMarked(G, fac) ? G.marks[fac] : null; }
+
+  function markPirate(G, fac, t, hooks) {
+    if (!fac || fac === 'civil') return false;
+    G.marks = G.marks || {};
+    if (G.marks[fac]) return false;
+    G.marks[fac] = { at: t || 0, kills: 0 };
+    G.standing = G.standing || {};
+    G.standing[fac] = MARK_FLOOR;
+    jot(G, 'crime', 'MARKED as a pirate by ' + facName(G, fac) + '. Standing pinned at ' + MARK_FLOOR +
+        ' until ' + MARK_KILLS + ' pirates are dead by your hand');
+    if (hooks && hooks.say) {
+      hooks.say('MARKED - ' + facName(G, fac) + ' names you a pirate. Their ports are shut and their patrols will shoot. ' +
+                MARK_KILLS + ' pirate kills, anywhere, lift it.', 10);
+    }
+    if (hooks && hooks.sound) hooks.sound('warn');
+    return true;
+  }
+
+  /* A pirate died by your hand (killNpc). Once per pirate; every mark at once. */
+  function creditPirateKill(G, spec, t, hooks) {
+    if (!G || !G.marks || !spec) return 0;
+    var facs = Object.keys(G.marks);
+    if (!facs.length) return 0;
+    var id = spec.id || spec.bornId || spec.name;
+    if (!id) return 0;
+    G.markCredited = G.markCredited || {};
+    if (G.markCredited[id]) return 0;
+    G.markCredited[id] = t || 0;
+    var lifted = [], left = 0;
+    facs.forEach(function (fac) {
+      var m = G.marks[fac];
+      m.kills = (m.kills || 0) + 1;
+      if (m.kills >= MARK_KILLS) {
+        delete G.marks[fac];
+        G.standing = G.standing || {};
+        G.standing[fac] = MARK_RELEASE;
+        lifted.push(facName(G, fac));
+        jot(G, 'law', 'The mark is lifted by ' + facName(G, fac) + '. Standing ' + MARK_RELEASE);
+      } else left = Math.max(left, MARK_KILLS - m.kills);
+    });
+    if (hooks && hooks.say) {
+      if (lifted.length) hooks.say('MARK LIFTED - ' + lifted.join(', ') + ' will deal with you again. Standing ' + MARK_RELEASE, 9);
+      if (left) hooks.say('Pirate kill on the open channel - ' + left + ' more to clear your mark', 6);
+    }
+    return lifted.length ? -lifted.length : 1;
+  }
+
+  /* What in your hold could go into the tug's: contraband, by how serious
+   * the tug's own faction would think it. */
+  function plantables(G) {
+    var ship = G && G.ship, tow = ship && ship.tow;
+    if (!tow || tow.handedOff || !tow.tug) return [];
+    var out = [];
+    for (var cid in (ship.cargo || {})) {
+      var q = ship.cargo[cid];
+      if (!(q >= 1)) continue;
+      var sev = contrabandSeverity(G, cid, tow.tug.fac || 'civil');
+      if (sev > 0) out.push({ cid: cid, tonnes: Math.floor(q), sev: sev });
+    }
+    out.sort(function (a, b) { return b.sev - a.sev || b.tonnes - a.tonnes; });
+    return out;
+  }
+
+  function plantInTug(sys, G, t, cid, hooks) {
+    var ship = G.ship, tow = ship && ship.tow;
+    if (!tow || tow.handedOff || !tow.tug) return { ok: false, why: 'not on a cable' };
+    var q = Math.floor((ship.cargo || {})[cid] || 0);
+    if (q < 1) return { ok: false, why: 'none aboard' };
+    var tug = tow.tug;
+    var sev = contrabandSeverity(G, cid, tug.fac || 'civil');
+    if (!(sev > 0)) return { ok: false, why: 'nothing anyone would charge them for' };
+    ship.cargo[cid] -= q;
+    if (ship.cargo[cid] <= 1e-9) delete ship.cargo[cid];
+    if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(ship);
+    tow.planted = tow.planted || {};
+    tow.planted[cid] = (tow.planted[cid] || 0) + q;
+    var kind = sev >= FRAME_SERIOUS_SEV ? 'frameSerious' : 'frame';
+    tow.framed = tow.framed === 'frameSerious' ? tow.framed : kind;
+    var name = (global.Economy && global.Economy.BY_ID[cid] && global.Economy.BY_ID[cid].name) || cid;
+    if (hooks && hooks.say) hooks.say(q + 't ' + name + ' goes through the cable lock into the ' + tug.name + "'s hold.", 6);
+    var victim = { name: tug.name, faction: tug.fac || 'civil', kind: 'tug', live: null };
+    crime(sys, G, t, kind, victim, hooks,
+          { name: tug.name + "'s crew", kind: 'tug', sealed: tug.who === 'navy' });
+    return { ok: true, kind: kind, tonnes: q };
+  }
+
+  /* The cable comes off at the port. Whatever is still in the tug's hold
+   * goes in with her: if her crew filed, it is evidence against you and the
+   * report already did its work; if they did not, the port's customs find
+   * it on HER, and her operator answers for it. */
+  function towDelivered(G, port, hooks) {
+    var tow = G && G.ship && G.ship.tow;
+    if (!tow || !tow.tug || !tow.planted) return null;
+    var bits = [];
+    for (var cid in tow.planted) {
+      var nm = (global.Economy && global.Economy.BY_ID[cid] && global.Economy.BY_ID[cid].name) || cid;
+      bits.push(tow.planted[cid] + 't ' + nm);
+    }
+    var line = 'Customs at ' + ((port && port.name) || 'the port') + ' board the ' + tow.tug.name + ': ' +
+               bits.join(', ') + ' in her hold. Her crew are charged.';
+    jot(G, 'crime', line);
+    if (hooks && hooks.say) hooks.say(line, 8);
+    tow.planted = null;
+    return line;
   }
 
   /* ---- corruption: a fact about the government, and a lever on top -----
@@ -9454,6 +9612,9 @@
     UNCLEARED_FINE: UNCLEARED_FINE,
     initShip: initShip, npcHull: npcHull,
     update: update,
+    isMarked: isMarked, markOf: markOf, markPirate: markPirate, creditPirateKill: creditPirateKill,
+    plantables: plantables, plantInTug: plantInTug, towDelivered: towDelivered,
+    MARK_KILLS: MARK_KILLS, MARK_FLOOR: MARK_FLOOR, MARK_RELEASE: MARK_RELEASE,
     fireGun: fireGun, fireGroup: fireGroup, fireMissile: fireMissile,
     /* For the gunnery test (2026-10-25): seekers can lose a lock now. */
     updateMissiles: updateMissiles, SEEKER_TRACK: SEEKER_TRACK, SEEKER_COMMIT: SEEKER_COMMIT,

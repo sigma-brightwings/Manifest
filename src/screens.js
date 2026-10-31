@@ -1561,6 +1561,26 @@
           });
         }
       }
+      /* ---- on the cable: framing the tug (Phase 18) ---------------------
+       * Her hold is open to you while she has you. One row per thing you
+       * could leave in it, worst first, each saying what it would cost if
+       * her crew report it. */
+      if (Sim.towActive(G.ship) && Combat.plantables && G.ship.tow.tug) {
+        var tugName = G.ship.tow.tug.name;
+        Combat.plantables(G).forEach(function (pl) {
+          var nm = (Eco && Eco.BY_ID[pl.cid] && Eco.BY_ID[pl.cid].name) || pl.cid;
+          opts.push({
+            label: 'PLANT ' + pl.tonnes + 't ' + nm + ' in the ' + tugName + "'s hold",
+            enabled: true,
+            note: pl.sev >= 2 ? 'serious: if her crew report it, you are MARKED a pirate'
+                              : 'smuggling with their name on it; her crew are watching',
+            fn: function () {
+              var r = Combat.plantInTug(G.sys, G, G.t, pl.cid, hooksFor());
+              if (!r.ok) say('No: ' + r.why, 5);
+            }
+          });
+        });
+      }
       return opts;
     }
     if (c.kind === 'station') {
@@ -4981,7 +5001,7 @@
       ctx.fillStyle = facs[f].color || MFD_INK;
       ctx.fillText(clipText(facs[f].name, 26), pad + 14, yy);
       ctx.fillStyle = st < -9 ? '#ff8a76' : st > 9 ? '#7dffb0' : MFD_DIM;
-      ctx.fillText(Missions.standingLabel(st) + ' (' + st + ')', pad + leftW * 0.55, yy);
+      ctx.fillText(Missions.standingLabel(st, G, facs[f].id) + ' (' + st + ')', pad + leftW * 0.55, yy);
       if (owed > 0) {
         ctx.fillStyle = '#ff5a5a';
         ctx.textAlign = 'right';

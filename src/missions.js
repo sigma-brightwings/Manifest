@@ -1220,10 +1220,17 @@
   function bumpStanding(G, fac, delta) {
     if (!fac) return;
     G.standing = G.standing || {};
+    /* THE PIRATE MARK (combat.js, Phase 18) is a floor, pinned: a rise is
+     * computed and not applied, and nothing else moves it either. */
+    if (G.marks && G.marks[fac]) { G.standing[fac] = -100; return; }
     G.standing[fac] = Math.max(-100, Math.min(100, (G.standing[fac] || 0) + delta));
   }
 
-  function standingLabel(v) {
+  /* With G and a faction, a pinned mark reads as what it is: MARKED, and
+   * how far along the road back you are. */
+  function standingLabel(v, G, fac) {
+    var mk = G && fac && G.marks && G.marks[fac];
+    if (mk) return 'MARKED ' + (mk.kills || 0) + '/' + ((global.Combat && global.Combat.MARK_KILLS) || 12);
     return v <= -40 ? 'HOSTILE' : v <= -10 ? 'cold'
          : v < 10 ? 'neutral' : v < 40 ? 'warm' : 'ALLIED';
   }
