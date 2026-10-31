@@ -421,8 +421,19 @@
    * so three holds are three regions and not one lumpy one. Each hold then
    * claims its nearest unclaimed neighbours, which is what makes a pocket
    * contiguous. */
-  var PIRATE_HOLDS = 3;
-  var PIRATE_SHARE = 0.17;    // of all stars — measured, see below
+  /* SYNDICATE_*, not PIRATE_* (2026-10-31): the Syndicate is the mafia, and
+   * the pirates are its disposable muscle (Astra, 2026-09-24), bands of
+   * their own below. The id stays the literal 'outlaw'. */
+  var SYNDICATE_HOLDS = 3;
+  var SYNDICATE_SHARE = 0.17;
+  /* PIRATE BANDS (2026-10-31). Small, violent, low-corruption: a few
+   * systems each, no ban, no racket, leaning to anarchy. They answer to the
+   * Syndicate (parentId 'outlaw'), and sit in the empire round them
+   * (empireId) for whose navy hunts them. */
+  var PIRATE_BANDS = 3;
+  var PIRATE_BAND_STARS = 3;
+  var BAND_STEM = ['Raiders', 'Reavers', 'Corsairs', 'Free Company', 'Blades', 'Wolves'];
+  var BAND_COLORS = ['#e8574a', '#d9733b', '#c94a6a'];    // of all stars — measured, see below
   var MINOR_POWERS = 3;
   var MINOR_SHARE  = 0.10;
 
@@ -520,11 +531,11 @@
      * Syndicate's frontier outposts go there, below). */
     var owned = byRemote.filter(function (r) { return !!r.st.factionId; });
     var nClaimed = owned.length;
-    var remoteThird = owned.slice(0, Math.max(PIRATE_HOLDS, Math.floor(nClaimed / 3)))
+    var remoteThird = owned.slice(0, Math.max(SYNDICATE_HOLDS, Math.floor(nClaimed / 3)))
                               .map(function (r) { return r.st; })
                               .filter(function (st) { return !capitalIds[st.id]; });
     var pirateSeeds = [];
-    seedPocket(remoteThird, pirateSeeds, PIRATE_HOLDS);
+    seedPocket(remoteThird, pirateSeeds, SYNDICATE_HOLDS);
     var pirate = {
       id: 'outlaw',
       /* Two-syllable name like the empires (Astra, 2026-10-14); the title
@@ -540,7 +551,7 @@
       wasteBan: true,
       holdIds: pirateSeeds.map(function (st) { return st.id; })
     };
-    var pirateWant = Math.round(nClaimed * PIRATE_SHARE);   // shares of claimed space since 2026-10-24
+    var pirateWant = Math.round(nClaimed * SYNDICATE_SHARE);   // shares of claimed space since 2026-10-24
     /* One parent per HOLD, aligned with holdIds, plus the dominant one on
      * the faction itself. A syndicate with three strongholds may well be
      * embedded in more than one empire at once, and which empire a given
@@ -560,6 +571,47 @@
       if (holdTally[hp] > bestHold) { bestHold = holdTally[hp]; pirate.parentId = hp; }
     }
     if (pirateSeeds.length) powers.push(pirate);
+
+    /* --- pirate bands: the Syndicate's muscle (2026-10-31) --------------
+     * In the far reaches still unclaimed after the Syndicate's holds, by
+     * the same farthest-point sampling, each a few systems. Their own RNG
+     * stream, so the minor powers below draw exactly what they did. */
+    if (pirateSeeds.length) {
+      var br = new RNG('galaxy-bands|' + rootSeed);
+      var bandPool = remoteThird.filter(function (st) { return !claimed[st.id]; });
+      var bandSeeds = [];
+      if (bandPool.length) {
+        bandSeeds.push(bandPool[br.int(0, bandPool.length - 1)]);
+        while (bandSeeds.length < PIRATE_BANDS && bandSeeds.length < bandPool.length) {
+          var bBest = null, bBestD = -1;
+          for (var ba = 0; ba < bandPool.length; ba++) {
+            if (bandSeeds.indexOf(bandPool[ba]) >= 0) continue;
+            var bNear = Infinity;
+            for (var bb = 0; bb < bandSeeds.length; bb++) bNear = Math.min(bNear, distance3(bandPool[ba], bandSeeds[bb]));
+            if (bNear > bBestD) { bBestD = bNear; bBest = bandPool[ba]; }
+          }
+          if (!bBest) break;
+          bandSeeds.push(bBest);
+        }
+      }
+      for (i = 0; i < bandSeeds.length; i++) {
+        var band = {
+          id: 'pb' + i,
+          name: 'The ' + Gen.makeFactionName(br) + ' ' + br.pick(BAND_STEM),
+          color: BAND_COLORS[i % BAND_COLORS.length],
+          outlaw: true,
+          pirate: true,
+          wasteBan: false,
+          capitalId: bandSeeds[i].id,
+          parentId: 'outlaw'
+        };
+        var bgrew = grow(bandSeeds[i], PIRATE_BAND_STARS, band.id);
+        if (bgrew.got > 0) {
+          band.empireId = bgrew.parent;
+          powers.push(band);
+        }
+      }
+    }
 
     /* --- minor powers ---------------------------------------------------
      * Small polities with a flag and no fleet. They sit in the middle
@@ -990,8 +1042,10 @@
     chartOffer: chartOffer,
     rivalsOf: rivalsOf,
     CHART_RADIUS_LY: CHART_RADIUS_LY,
-    PIRATE_HOLDS: PIRATE_HOLDS,
-    PIRATE_SHARE: PIRATE_SHARE,
+    SYNDICATE_HOLDS: SYNDICATE_HOLDS,
+    SYNDICATE_SHARE: SYNDICATE_SHARE,
+    PIRATE_BANDS: PIRATE_BANDS,
+    PIRATE_BAND_STARS: PIRATE_BAND_STARS,
     MINOR_POWERS: MINOR_POWERS,
     MINOR_SHARE: MINOR_SHARE
   };

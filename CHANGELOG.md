@@ -64,7 +64,43 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
     shot at each one. Every step is now clean, from the hangar floor into
     her airlock.
 
+### Saves
+
+- **Epoch 4: existing careers do not carry over.** The pirates were split
+  from the Syndicate, so the map was redrawn. Astra chose it knowing
+  that: *"Bump, careers reset"*.
+
 ### Added
+
+- **The pirates split from the Syndicate (2026-10-31).** Astra: *"Syndicate
+  is mafia. Pirates are like their disposable muscle."*
+  - **Three pirate bands** (`pb0`–`pb2`), with names like *The Vezor
+    Corsairs* and *The Goros Reavers*. Each holds up to three systems in
+    the far reaches still unclaimed after the Syndicate's holds. They
+    answer to the Syndicate (`parentId: 'outlaw'`) and sit inside an empire
+    (`empireId`). No waste ban, no racket. They draw from their own RNG
+    stream, so the minor powers draw what they did.
+  - **What a band's space is like.** Measured across six seeds:
+    - It is violent and not very corrupt (violence 66, corruption 31).
+      The Syndicate's space is the reverse (26 and 76).
+    - Anarchy is a band's commonest government, about a third of its
+      systems.
+    - A band runs **no police and no customs**. Its raiders are out in
+      force, two more per system.
+    - **The navy crosses it far more often**, because it hunts pirates and
+      cannot see a mafia.
+    - The Syndicate's tithe isn't collected there, and no Syndicate heavies
+      keep station. A band's ports don't wear Syndicate colours, except a
+      milfuel plant licensed by the Syndicate.
+    - The star chart reads *PIRATE HELD - no law, no customs, raiders*.
+  - **`sys.heldBy`** is `'syndicate'`, `'pirate'` or null. `pirateHeld`
+    stays true for both, so nothing that means "lawless territory" breaks.
+    The Syndicate and pirate violence/corruption bonuses are now two pairs,
+    +6/+22 and +26/−6.
+  - `PIRATE_HOLDS`/`PIRATE_SHARE` are renamed `SYNDICATE_HOLDS` and
+    `SYNDICATE_SHARE`. The literal id `'outlaw'` stays the Syndicate's.
+  - Tests: `test/split.test.js` (13 checks), and three new map checks in
+    `test/galaxy.test.js`.
 
 - **The pirate mark, and framing a tug (Phase 18, 2026-10-31).** Astra
   chose to build the framing along with the mark, since the mark needs

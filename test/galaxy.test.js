@@ -153,14 +153,17 @@ console.log('--- galactic territory ---');
    * of them for a capital is what crashed the file. */
   var majors  = g.factions.filter(function (f) { return !f.minor && !f.outlaw; });
   var minors  = g.factions.filter(function (f) { return f.minor; });
-  var outlaws = g.factions.filter(function (f) { return f.outlaw; });
+  /* The Syndicate, by its reserved id; the pirate bands are outlaws too
+   * since the split (2026-10-31), and answer to it. */
+  var outlaws = g.factions.filter(function (f) { return f.id === 'outlaw'; });
+  var bands = g.factions.filter(function (f) { return f.pirate; });
 
   check('two or three majors hold the galaxy between them',
         majors.length >= 2 && majors.length <= 3, majors.length + ' majors');
   /* 2026-10-24: its holds inside the empires, plus outposts in no-man's land */
   check('exactly one outlaw power, and it holds pockets rather than a realm',
         outlaws.length === 1 && !outlaws[0].capitalId &&
-        (outlaws[0].holdIds || []).length === Galaxy.PIRATE_HOLDS + (outlaws[0].frontierHolds || 0) &&
+        (outlaws[0].holdIds || []).length === Galaxy.SYNDICATE_HOLDS + (outlaws[0].frontierHolds || 0) &&
         (outlaws[0].frontierHolds || 0) >= 1,
         outlaws.length + ' outlaw, ' +
         ((outlaws[0] || {}).holdIds || []).length + ' holds');
@@ -217,8 +220,8 @@ console.log('--- galactic territory ---');
     return n + (count[f.id] || 0);
   }, 0) / claimedAll;
   check('the Syndicate holds about the share it was designed to',
-        Math.abs(pirateShare - Galaxy.PIRATE_SHARE) < 0.06,
-        (pirateShare * 100).toFixed(0) + '% vs ' + (Galaxy.PIRATE_SHARE * 100) + '%');
+        Math.abs(pirateShare - Galaxy.SYNDICATE_SHARE) < 0.06,
+        (pirateShare * 100).toFixed(0) + '% vs ' + (Galaxy.SYNDICATE_SHARE * 100) + '%');
   check('and the brokers between them hold about theirs',
         Math.abs(minorShare - Galaxy.MINOR_SHARE) < 0.05,
         (minorShare * 100).toFixed(0) + '% vs ' + (Galaxy.MINOR_SHARE * 100) + '%');
@@ -233,16 +236,32 @@ console.log('--- galactic territory ---');
   });
   check('every broker and the Syndicate name the empire they sit inside',
         orphans.length === 0, orphans.map(function (f) { return f.name; }).join(', '));
-  check('and a parent is always a major, never another pocket',
+  check('and a parent is always a major, never another pocket - except a band, whose is the Syndicate',
         g.factions.every(function (f) {
           if (!f.parentId) return true;
           var p = g.factionById[f.parentId];
+          if (f.pirate) return p && p.id === 'outlaw';
           return p && !p.minor && !p.outlaw;
         }));
+
+  /* THE SPLIT (2026-10-31). Astra: "Syndicate is mafia. Pirates are like
+   * their disposable muscle." Three bands, a few systems each, answering
+   * to the Syndicate, inside an empire. */
+  check('there are pirate bands, the Syndicate\'s muscle',
+        bands.length === Galaxy.PIRATE_BANDS && bands.every(function (f) {
+          return f.outlaw && f.parentId === 'outlaw' && !f.wasteBan && /^pb\d$/.test(f.id);
+        }), bands.map(function (f) { return f.id + ' ' + f.name; }).join(', '));
+  check('each holds a few systems of its own, and sits inside an empire',
+        bands.every(function (f) {
+          return (count[f.id] || 0) >= 1 && (count[f.id] || 0) <= Galaxy.PIRATE_BAND_STARS &&
+                 g.factionById[f.empireId] && !g.factionById[f.empireId].outlaw;
+        }), bands.map(function (f) { return f.id + ':' + count[f.id] + ' in ' + f.empireId; }).join(', '));
+  check('a band holds far less than the Syndicate',
+        bands.reduce(function (n, f) { return n + (count[f.id] || 0); }, 0) < (count.outlaw || 0) / 2);
   /* the holds inside the empires name one; a frontier outpost has none */
   check('the Syndicate records a parent for each of its holds',
         (outlaws[0].holdParents || []).length === outlaws[0].holdIds.length &&
-        outlaws[0].holdParents.every(function (p, hi) { return hi < Galaxy.PIRATE_HOLDS ? !!g.factionById[p] : p === null; }),
+        outlaws[0].holdParents.every(function (p, hi) { return hi < Galaxy.SYNDICATE_HOLDS ? !!g.factionById[p] : p === null; }),
         (outlaws[0].holdParents || []).join(', '));
 
   // Determinism, same as everything else in this game.

@@ -6184,7 +6184,11 @@
           }
           infoRows.push(['corruption', corruptTxt]);
         }
-        if (known.pirateHeld) {
+        /* Whose since the split (2026-10-31): a band bans nothing and runs
+         * no customs; its raiders are the only patrol. */
+        if (known.heldBy === 'pirate') {
+          infoRows.push(['territory', 'PIRATE HELD — no law, no customs, raiders']);
+        } else if (known.pirateHeld) {
           infoRows.push(['territory', 'SYNDICATE HELD — waste banned on arrival']);
         }
         if (plan.to.restricted) {

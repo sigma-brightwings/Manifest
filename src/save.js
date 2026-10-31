@@ -68,7 +68,14 @@
    * no longer exist in the same seed, so there is nothing to migrate it to.
    * Astra chose it knowing that ("a new galaxy, so current saves won't
    * carry over"). The shelf was empty; nothing else goes with it. */
-  var VERSION = 3;
+  /* EPOCH 4 — the pirates split from the Syndicate (2026-10-31).
+   *
+   * Territory was redrawn again: three pirate bands (pb0..pb2) now hold a
+   * few systems each in the far reaches, as the Syndicate's muscle, and
+   * the governments, police and traffic of those systems change with them.
+   * Astra chose it knowing a career resets ("Bump, careers reset"). The
+   * shelf was empty; nothing else goes with it. */
+  var VERSION = 4;
 
   /* Written but no longer read. Delete the lot at the next epoch bump, then
    * empty this list. Each entry says what replaced it, because "why is this

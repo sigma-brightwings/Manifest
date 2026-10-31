@@ -59,7 +59,9 @@
   }
 
   /* A Syndicate hold: the system the overboss runs. */
-  function held(sys) { return !!(sys && sys.pirateHeld); }
+  /* The Syndicate's tithe, so the Syndicate's holds: a pirate band's space
+   * (heldBy 'pirate', 2026-10-31) is lawless, not taxed. */
+  function held(sys) { return !!(sys && sys.pirateHeld && sys.heldBy !== 'pirate'); }
 
   function book(G) {
     if (!G.tithe || typeof G.tithe !== 'object') G.tithe = {};

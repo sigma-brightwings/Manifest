@@ -855,7 +855,7 @@
     for (var k = 0; k < ports.length; k++) {
       var p = ports[k], role = p.market && p.market.role;
       var liv = 'civ';
-      if (sys.pirateHeld || p.faction === 'outlaw') liv = 'syn';
+      if (sys.heldBy === 'syndicate' || p.faction === 'outlaw') liv = 'syn';
       else if (role === 'carrier') liv = 'navy';
       /* A milfuel factory wears its LICENSOR's colours (2026-09-25): the
        * building is the navy refinery, and it is the navy's unless the
@@ -2296,7 +2296,7 @@
      * power instead of to the word "Unaligned". */
     var pirate = null;
     var all = opts.allFactions || [];
-    for (i = 0; i < all.length; i++) if (all[i].outlaw) { pirate = all[i]; break; }
+    for (i = 0; i < all.length; i++) if (all[i].id === 'outlaw') { pirate = all[i]; break; }
     if (!pirate) pirate = OUTLAW;
 
     if (opts.faction) {
@@ -2346,7 +2346,7 @@
        * happens — a legitimate front door with a legitimate harbourmaster,
        * standing in a system the syndicate owns. Drop this and pirate
        * space becomes a wall instead of a market. */
-      var heldHere = !!(opts.faction && opts.faction.outlaw);
+      var heldHere = !!(opts.faction && opts.faction.id === 'outlaw');
       var contested = rivals.length > 0 && fr.chance(heldHere ? 0.50 : 0.16);
       var rival = contested ? rivals[w % rivals.length] : null;
       var ports = worlds[w].children.filter(isStation);
@@ -2473,13 +2473,19 @@
    * That is why the weighting below pushes TOWARD the corrupt governments
    * and away from Anarchy. An anarchy would be a syndicate's failure: no
    * institution left to buy, and therefore nothing to sell. */
-  var PIRATE_VIOLENCE = 10;    // added — the muscle is real
-  var PIRATE_CORRUPT  = 18;    // added — the officials are theirs
+  /* Two pairs since the split (2026-10-31): the Syndicate owns officials
+   * (corruption up, some muscle); a pirate band owns guns (violence well
+   * up, and less to buy, because there is less institution left). */
+  var SYNDICATE_VIOLENCE = 6;
+  var SYNDICATE_CORRUPT  = 22;
+  var PIRATE_VIOLENCE    = 26;
+  var PIRATE_CORRUPT     = -6;
 
   function buildGovernment(sys, base, opts) {
     var gr = base.fork('government');
     var dev = systemDevelopment(sys);
     var held = !!(opts && opts.faction && opts.faction.outlaw);
+    var band = held && !!opts.faction.pirate;
 
     // Weight each government by how well its lowTechBias matches this
     // system's actual development, with a floor so nothing is ever
@@ -2490,7 +2496,11 @@
       var w = 1 + 4 * align * align;
       /* In a hold, a government is worth having in proportion to how
        * buyable it is. Anarchy (corrupt 10) is all but excluded. */
-      if (held) w *= 0.4 + 1.6 * (g.corrupt / 100);
+      if (held && !band) w *= 0.4 + 1.6 * (g.corrupt / 100);
+      /* A pirate band wants the opposite of an institution to buy: the
+       * more violent the government, the more at home it is, and squared
+       * so Anarchy is where a band usually lives. */
+      if (band) w *= 0.2 + 3.0 * Math.pow(g.violence / 100, 2);
       return { g: g, w: w };
     });
     var total = weighted.reduce(function (s, w) { return s + w.w; }, 0);
@@ -2510,8 +2520,8 @@
     var violence = clamp01to100(chosen.violence + (0.5 - dev) * 40 + gr.gauss(0, 8));
     var corrupt  = clamp01to100(chosen.corrupt  + (dev - 0.5) * 14 + gr.gauss(0, 9));
     if (held) {
-      violence = clamp01to100(violence + PIRATE_VIOLENCE);
-      corrupt  = clamp01to100(corrupt  + PIRATE_CORRUPT);
+      violence = clamp01to100(violence + (band ? PIRATE_VIOLENCE : SYNDICATE_VIOLENCE));
+      corrupt  = clamp01to100(corrupt  + (band ? PIRATE_CORRUPT : SYNDICATE_CORRUPT));
     }
 
     sys.government = chosen;
@@ -2519,7 +2529,11 @@
     sys.corruption = Math.round(corrupt);
     /* Still the name every downstream reader knows it by. */
     sys.crimeScore = permissivity(violence, corrupt);
+    /* pirateHeld stays true for both, so nothing downstream that means
+     * "lawless territory" breaks; heldBy says whose. */
     sys.pirateHeld = held;
+    sys.heldBy = !held ? null : band ? 'pirate' : 'syndicate';
+    sys.heldById = held ? opts.faction.id : null;
     sys.development = dev;
   }
 
@@ -2877,6 +2891,9 @@
      * the nearest neighbouring port, which is a more interesting line to
      * fly anyway. */
     (sys.factions || []).forEach(function (fac) {
+      /* A pirate band runs no police and searches nobody (2026-10-31): its
+       * own raiders are the only patrol, below. */
+      if (fac.pirate) return;
       var mine = ports.filter(function (p) { return p.faction === fac.id; });
       if (!mine.length) return;
       // A permissive system is thinly policed, which is HOW it stays
@@ -3037,7 +3054,7 @@
       var sr = rng.fork ? rng.fork('syndicate') : rng;
       var devS = sys.development === undefined ? 0.5 : sys.development;
       var crimeS = sys.crimeScore === undefined ? 40 : sys.crimeScore;
-      if (!sys.pirateHeld && (crimeS < 58 || devS < 0.28)) return;
+      if (sys.heldBy !== 'syndicate' && (crimeS < 58 || devS < 0.28)) return;
       /* MEASURED like the navy's was. Eleven systems in sixty clear the
        * gate; at 0.40 that produced four flagships against the navy's
        * eight, which reads as the Syndicate being half the power rather
@@ -3085,7 +3102,7 @@
      * Uncommon, because the interesting fact about pirate space is that
      * the navy is usually NOT there. It flies the nearest major's colours:
      * a fleet crossing somebody else's territory is still somebody's. */
-    if (sys.pirateHeld && ports.length >= 2 && rng.chance(0.18)) {
+    if (sys.pirateHeld && ports.length >= 2 && rng.chance(sys.heldBy === 'pirate' ? 0.55 : 0.18)) {
       var majors = (sys.factions || []).filter(function (f) { return !f.outlaw; });
       if (majors.length) {
         var pf = majors[rng.int(0, majors.length - 1)];
@@ -3267,6 +3284,8 @@
     });
     if (!lanes.length) return;
     var nPirates = rng.int(1, Math.min(4, Math.max(1, Math.round(ports.length / 2))));
+    /* In a band's own space, the band is out in force (2026-10-31). */
+    if (sys.heldBy === 'pirate') nPirates += 2;
     for (var q = 0; q < nPirates; q++) {
       var near = lanes[Math.min(lanes.length - 1, rng.int(0, 2))];
       var world = near.parentBody;
@@ -3330,7 +3349,7 @@
   var HEAVY_TWO_AT = 10;            // own ports before a hold rates a second
 
   function buildSyndicateHeavies(sys, base) {
-    if (!sys.pirateHeld) return;
+    if (sys.heldBy !== 'syndicate') return;
     var fac = (sys.factionById && sys.factionById.outlaw) || sys.outlaw;
     if (!fac) return;
     var mine = (sys.ports || []).filter(function (p) { return p.faction === 'outlaw'; });
