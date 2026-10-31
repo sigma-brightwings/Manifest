@@ -265,6 +265,18 @@
     logMessage(msg);
   }
 
+  /* A station model that cannot be loaded used to fail in silence: the
+   * procedural stand-in drew instead and nothing said why. On 2026-10-31
+   * a misconfigured Pages deploy did exactly that to every station, and
+   * it looked like months of station work had been lost. So say it, once
+   * per model, on the comms line (and so in the log). */
+  if (global.PortGeo && global.PortGeo.onfail) {
+    global.PortGeo.onfail(function (id) {
+      if (typeof G === 'undefined' || !G) return;
+      say('Station model "' + id + '" failed to load - showing a stand-in', 8);
+    });
+  }
+
   /* ---- setup ---------------------------------------------------------- */
 
   /* Real seconds since the page loaded. Anything that blinks, flashes or

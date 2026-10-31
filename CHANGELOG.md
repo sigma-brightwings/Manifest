@@ -2530,6 +2530,29 @@ Astra has seen it working.
     point at sigma-brightwings/Manifest again.
   - The pushed history is the LFS-free one: the same commits and release
     tags, with models stored gzipped.
+- **Web stations unpack themselves, and a missing station model says so
+  (2026-10-31).** The first site off the recreated repo was published with
+  Pages on "Deploy from a branch". The repo stores the station geometry as
+  `src/ports/<id>.js.gz`, so every `.js` the game asked for was a 404, and
+  every station drew as the old blocky procedural ring. Astra: *"why are the
+  stations like this, we did so much work to not have them so blocky and
+  simple"*, then *"yeah can you fix this?"*
+  - **The page unpacks the packed copy itself.** When `ports/<id>.js` is
+    missing, the loader in `src/ports.js` fetches `<id>.js.gz` and unpacks it
+    in the browser (DecompressionStream). It then draws the real station
+    the same way a late-arriving model always has. A host that sends the
+    file already decoded is caught by a magic-number check. So the game
+    shows its stations on any static host, not only through our Pages
+    workflow, the exe or `tools/serve.js`.
+  - **A failed model is no longer silent.** `PortGeo.onfail` tells
+    listeners, and the game puts *Station model "<id>" failed to load -
+    showing a stand-in* on the comms line, and so in the log.
+  - The same loader is in the `tools/glb2hulls.js` template, so
+    regenerating ports.js keeps it.
+  - `test/packed-browser.test.js` (16 checks) runs ports.js as a page
+    against a server that has only the `.gz` files, both plain and
+    `Content-Encoding: gzip`. The page must unpack the same vertices and
+    faces as the stored copy, and a station with no file must fire onfail.
 - **The whole history without Git LFS, ready for a fresh GitHub repo
   (2026-10-30).** Astra: *"we do a fresh repo and delete the former, but
   first we test"*.

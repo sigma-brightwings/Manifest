@@ -29,8 +29,21 @@
    * synchronous fetch first, so the first answer is already the real one,
    * and falls back to a <script> tag when the scheme will not allow that
    * (file:// in a browser). The async path tells its listeners on arrival
-   * so anything that cached "no model" can forget it. */
-  var GEO_STATE = {}, GEO_LISTENERS = [];
+   * so anything that cached "no model" can forget it.
+   *
+   * STORED PACKED (tools/pack.cjs, 2026-10-30). The repo holds
+   * ports/<id>.js.gz; the plain .js exists only where something unpacked
+   * it (the exe's game:// scheme, tools/serve.js, the Pages workflow). On a
+   * host that serves the repo as it stands, the .js is a 404 - and that is
+   * exactly what a branch-deployed GitHub Pages did on 2026-10-31, so every
+   * station drew as its procedural stand-in. So when the .js is missing the
+   * page fetches the .js.gz and unpacks it itself (DecompressionStream).
+   * A host that already sends it decoded (Content-Encoding: gzip) is
+   * caught by the magic-number check and read as plain text.
+   *
+   * A model that still cannot be had is no longer silent: onfail
+   * listeners are told, and the game says so on the comms line. */
+  var GEO_STATE = {}, GEO_LISTENERS = [], GEO_FAIL_LISTENERS = [];
   var GEO_BASE = null;
   if (typeof document !== 'undefined' && document.currentScript && document.currentScript.src) {
     GEO_BASE = document.currentScript.src.replace(/[^\/]*$/, '') + 'ports/';
@@ -49,6 +62,30 @@
     var ok = geoMerge(id, bag[id]);
     delete bag[id];
     return ok;
+  }
+  function geoTell(list, id) {
+    for (var i = 0; i < list.length; i++) {
+      try { list[i](id); } catch (e) { /* a listener is not allowed to stop the others */ }
+    }
+  }
+  function geoFail(id) { GEO_STATE[id] = 'failed'; geoTell(GEO_FAIL_LISTENERS, id); }
+  /* The packed copy, unpacked in the page. Always async: a browser has no
+   * synchronous gunzip, so the procedural mesh draws until it lands. */
+  function geoPacked(id) {
+    if (typeof fetch !== 'function' || typeof DecompressionStream === 'undefined') { geoFail(id); return; }
+    fetch(GEO_BASE + id + '.js.gz').then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.arrayBuffer();
+    }).then(function (buf) {
+      var b = new Uint8Array(buf);
+      if (b.length > 1 && b[0] === 0x1f && b[1] === 0x8b) {
+        return new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+      }
+      return new TextDecoder('utf-8').decode(b);
+    }).then(function (text) {
+      (new Function(text))();
+      if (geoTake(id)) geoTell(GEO_LISTENERS, id); else geoFail(id);
+    }).catch(function () { geoFail(id); });
   }
   function geoLoad(id) {
     var m = global.PortLib && global.PortLib[id];
@@ -69,9 +106,10 @@
         }
         if (global.PortGeoData) delete global.PortGeoData[id];
         return geoMerge(id, d);
-      } catch (e) { GEO_STATE[id] = 'failed'; return false; }
+      } catch (e) { geoFail(id); return false; }
     }
-    if (!GEO_BASE || typeof XMLHttpRequest === 'undefined') { GEO_STATE[id] = 'failed'; return false; }
+    if (!GEO_BASE || typeof XMLHttpRequest === 'undefined') { geoFail(id); return false; }
+    var missing = false;
     try {
       var x = new XMLHttpRequest();
       x.open('GET', GEO_BASE + id + '.js', false);
@@ -80,18 +118,15 @@
         (new Function(x.responseText))();
         if (geoTake(id)) return true;
       }
+      missing = x.status === 404;
     } catch (e) { /* the scheme refused a synchronous read: go async */ }
     GEO_STATE[id] = 'pending';
+    if (missing) { geoPacked(id); return false; }
     var s = document.createElement('script');
     s.src = GEO_BASE + id + '.js';
     s.async = true;
-    s.onload = function () {
-      if (!geoTake(id)) { GEO_STATE[id] = 'failed'; return; }
-      for (var i = 0; i < GEO_LISTENERS.length; i++) {
-        try { GEO_LISTENERS[i](id); } catch (e) { /* a listener is not allowed to stop the others */ }
-      }
-    };
-    s.onerror = function () { GEO_STATE[id] = 'failed'; };
+    s.onload = function () { if (geoTake(id)) geoTell(GEO_LISTENERS, id); else geoPacked(id); };
+    s.onerror = function () { geoPacked(id); };
     (document.head || document.documentElement).appendChild(s);
     return false;
   }
@@ -100,6 +135,7 @@
     loaded: function (id) { var m = global.PortLib && global.PortLib[id]; return !!(m && !m.lazy); },
     state: function (id) { return GEO_STATE[id] || null; },
     onload: function (fn) { if (typeof fn === 'function') GEO_LISTENERS.push(fn); },
+    onfail: function (fn) { if (typeof fn === 'function') GEO_FAIL_LISTENERS.push(fn); },
     prefetch: function (ids) { (ids || []).forEach(function (id) { geoLoad(id); }); }
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = global.PortLib;
