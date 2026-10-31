@@ -82,6 +82,21 @@
     return null;
   }
   function portId(st) { return 'ps-' + st.id; }
+  /* A SURFACE STATION HAS TWO HALVES (Astra, 2026-10-31: "She stays up as
+   * the orbital half"). The Crawler has no gear, so she stays on her
+   * parking orbit over the pad as the station's up-port - you dock in her
+   * belly as at any station of yours - and the ground port below is the
+   * other half. One station, one account, one market (the two ports share
+   * the market object); her own shuttle runs between them as a local
+   * route. */
+  function upId(st) { return portId(st) + '-up'; }
+  function portIds(st) { return st.kind === 'surface' ? [portId(st), upId(st)] : [portId(st)]; }
+  function portsOf(sys, st) {
+    var out = [];
+    if (!sys || !sys.byId) return out;
+    portIds(st).forEach(function (id) { if (sys.byId[id]) out.push(sys.byId[id]); });
+    return out;
+  }
 
   /* ---- the schedule -------------------------------------------------------- */
   /* The order her crew unpacks in: biggest first, as they came out of her
@@ -443,6 +458,15 @@
     }
     if (Gen.dressPort) Gen.dressPort(sys, port, new RNG('ps-dress|' + seedOf(st)));
     port.livery = 'civ';
+    /* The orbital half, before the routes: her shuttle's run down to the
+     * pad is a local hop like any two ports over one world. */
+    if (st.kind === 'surface') {
+      var up = upPortFor(st, host);
+      Gen.attachPort(sys, host, up);
+      up.market = port.market;
+      if (Gen.dressPort) Gen.dressPort(sys, up, new RNG('ps-dress-up|' + seedOf(st)));
+      up.livery = 'civ';
+    }
     if (Gen.addPortRoutes) Gen.addPortRoutes(sys, port, new RNG('ps-traffic|' + seedOf(st)), opensAt(st));
     /* Her books, from what she has just become; and dark if she was. */
     takeBooks(st, port, sys, opensAt(st));
@@ -474,6 +498,26 @@
     port.crawlerLivery = (st.crawler && st.crawler.livery) || null;
     port.crawlerCrates = st.crates.slice(0, st.foundN || st.crates.length);
     return port;
+  }
+
+  /* The up-port: the Crawler on her parking orbit over the pad. */
+  function upPortFor(st, host) {
+    var o = st.parkOrbit;
+    var up = { kind: 'station', type: 'station', typeName: 'Station',
+               mass: PORT_MASS, radius: STATION_RADIUS_KM, color: '#e8d9a8',
+               docking: true, dockCaptureRadius: Math.max(1.2, STATION_RADIUS_KM * 4), dockMaxSpeed: 0.006,
+               orbit: { parent: o.parent, a: o.a, e: o.e, inc: o.inc, lan: o.lan, argp: o.argp, m0: o.m0 },
+               children: [] };
+    up.id = upId(st);
+    up.name = st.name + ' Orbital';
+    up.player = !st.seized;
+    up.playerStation = st.id;
+    up.upHalf = true;
+    up.forceRole = ROLE_FOR[st.type] || 'orbital';
+    up.faction = st.seized ? (st.seizedBy || st.faction) : st.faction;
+    up.crawlerLivery = (st.crawler && st.crawler.livery) || null;
+    up.crawlerCrates = st.crates.slice(0, st.foundN || st.crates.length);
+    return up;
   }
 
   /* HER SEED IS HER SITE. What her market, her dressing and her traffic
@@ -513,6 +557,7 @@
                crew: (s.crew || []).slice(), stock: {} };
     if (kind === 'surface') {
       st.at = Sim.landSpot(host, sys, t, s.pos); st.at.elevation = 0;
+      st.parkOrbit = circularHere(s.pos, s.vel, host, hs, host.mu, t);
     } else {
       st.orbit = circularHere(s.pos, s.vel, host, hs, host.mu + V.G * PORT_MASS, t);
     }
@@ -530,6 +575,14 @@
     shadow.ports.push(port);
     try {
       Eco.buildPortMarket(port, host, shadow, new RNG('ps-market|' + seedOf(st)));
+      if (kind === 'surface') {
+        var upF = upPortFor(st, host);
+        upF.id = 'ps-forecast-up';
+        upF.parentBody = host; upF.depth = port.depth; upF.mu = V.G * upF.mass;
+        upF.market = port.market;
+        shadow.byId[upF.id] = upF;
+        shadow.ports.push(upF);
+      }
       if (Gen.addPortRoutes) Gen.addPortRoutes(shadow, port, new RNG('ps-traffic|' + seedOf(st)), t);
       takeBooks(st, port, shadow, t);
     } finally {
@@ -568,8 +621,10 @@
     });
     if (sys && sys.byId && inject(G, sys, star) && G.orbitPaths) {
       list(G).forEach(function (st) {
-        var p = sys.byId[portId(st)];
-        if (p && p.orbit && !G.orbitPaths[p.id]) G.orbitPaths[p.id] = K.samplePath(p.orbit, 96);
+        /* Both halves of a surface station: the Crawler up top has an orbit. */
+        portsOf(sys, st).forEach(function (p) {
+          if (p.orbit && !G.orbitPaths[p.id]) G.orbitPaths[p.id] = K.samplePath(p.orbit, 96);
+        });
       });
     }
     /* Her week, wherever you are: money moves by wire. */
@@ -590,8 +645,7 @@
     if (st.seized) return;
     st.seized = true;
     st.seizedBy = (st.licence && st.licence.fac) || st.faction;
-    var p = sys && sys.byId && sys.byId[portId(st)];
-    if (p) { p.player = false; p.faction = st.seizedBy; }
+    portsOf(sys, st).forEach(function (q) { q.player = false; q.faction = st.seizedBy; });
     var L = global.Licence, rec = L && L.rec(G, sys);
     if (rec && rec.forged && G.licences) delete G.licences[starOf(G, sys)];
     var line = st.name + ' is seized under the licensing law - she flies their flag now, not yours';
@@ -664,7 +718,10 @@
     }
     var visits = 0;
     (sys.traffic || []).forEach(function (r) {
-      if (r.playerPort === port.id && r.period > 0) visits += WEEK / r.period;
+      /* Her own shuttle between her two halves pays her no berth fee. */
+      if (r.playerPort === port.id && r.period > 0 && !(sys.byId[r.to] && sys.byId[r.to].playerStation === port.playerStation)) {
+        visits += WEEK / r.period;
+      }
     });
     var fp = null;
     try { fp = Eco && Eco.price ? Eco.price(port, 'fissile', t) : null; } catch (e) { fp = null; }
@@ -785,8 +842,7 @@
     st.foreclosed = true;
     st.seizedBy = (st.licence && st.licence.fac) || st.faction;
     var sys = G.systemCache && G.systemCache[st.star];
-    var p = sys && sys.byId && sys.byId[portId(st)];
-    if (p) { p.player = false; p.faction = st.seizedBy; }
+    portsOf(sys, st).forEach(function (q) { q.player = false; q.faction = st.seizedBy; });
     var line = st.name + ' is FORECLOSED for ' + Math.round(-st.balance) + ' cr of arrears - she runs on under new owners';
     say(hooks, line, 12);
     journal(G, line);
@@ -794,7 +850,7 @@
 
   /* ---- at her desk -------------------------------------------------------- */
   function dockedAt(G, st) {
-    return !!(G.ship && G.ship.docked === portId(st) && st.star === starOf(G, G.sys));
+    return !!(G.ship && portIds(st).indexOf(G.ship.docked) >= 0 && st.star === starOf(G, G.sys));
   }
   /* Fissiles from your hold into her reactor tank. Free: it is your fuel. */
   function fuelFromHold(G, st) {
@@ -832,7 +888,7 @@
     if (!p) return;
     var dark = !!st.dark && !st.seized;
     if (p.dark === dark) return;
-    p.dark = dark;
+    portsOf(sys, st).forEach(function (q) { q.dark = dark; });
     var Gen = global.Gen, RNG = global.RNG;
     if (dark) {
       sys.traffic = (sys.traffic || []).filter(function (r) { return r.playerPort !== p.id; });
@@ -864,7 +920,7 @@
     if (!Cn.aboard(s).length) return 'her cubes hold no station crates';
     if (st.star !== starOf(G, sys)) return st.name + ' is in another system';
     if (!isOpen(st, t)) return st.name + ' is still being built';
-    if (s.docked === portId(st)) return null;
+    if (portIds(st).indexOf(s.docked) >= 0) return null;
     var cs = crawlerState(st, sys, t);
     if (!cs) return 'cannot find her';
     var d = V.dist(cs.pos, s.pos);
@@ -906,7 +962,7 @@
      * nothing cached against the old one is read again. */
     var foundN = st.foundN || st.crates.length, sch = schedule(st), shown = st.crates.slice(0, foundN);
     for (var ci = foundN; ci < st.crates.length; ci++) if (t >= sch.crateIn[ci]) shown.push(st.crates[ci]);
-    p.crawlerCrates = shown;
+    portsOf(sys, st).forEach(function (q) { q.crawlerCrates = shown; });
     /* Berth clamps are berths in her model (Render.crawlerPortLib counts
      * them off her crates), so the bay, the berth positions and the
      * capacity all agree. */
@@ -938,7 +994,7 @@
     wagesWeek: wagesWeek, upkeepWeek: upkeepWeek, incomeWeek: incomeWeek,
     settle: settle, settleOne: settleOne, foreclose: foreclose,
     dockedAt: dockedAt, fuelFromHold: fuelFromHold, payIn: payIn, applyLight: applyLight,
-    forecastSite: forecastSite, siteKey: siteKey,
+    forecastSite: forecastSite, siteKey: siteKey, upId: upId, portIds: portIds, portsOf: portsOf,
     fitted: fitted, pending: pending, workHere: workHere, UNLOAD_KM: UNLOAD_KM, DOES: DOES,
     unloadRefusal: unloadRefusal, unloadTo: unloadTo, applyUpgrades: applyUpgrades,
     incomeMul: incomeMul, tankWeeksCap: tankWeeksCap

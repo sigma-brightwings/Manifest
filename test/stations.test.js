@@ -252,6 +252,14 @@ check('fitted: a berth clamp is one more berth', Sim.berthCapacity(port) === ber
 check('fitted: a warehouse holds 30% more', port.market.rows[capKey].cap === Math.round(cap0 * 1.3), cap0 + ' -> ' + port.market.rows[capKey].cap);
 check('fitted: a fuel cell is three more weeks of tank', S.tankWeeksCap(st) === S.TANK_WEEKS + 3);
 check('a battery is fitted and counted', nf.battery === 1);
+var bset = {}, bok = true, bg7 = Gen.bayGeometry(port);
+for (var bk = 0; bk < Sim.berthCapacity(port); bk++) {
+  var bo = Gen.berthOffset(port, bk), key7 = bo.x.toFixed(4) + ',' + bo.y.toFixed(4);
+  if (bset[key7]) bok = false;
+  bset[key7] = 1;
+  if (Math.abs(bo.x) > bg7.chamberX + 1e-9 || Math.abs(bo.y) > bg7.chamberY + 1e-9) bok = false;
+}
+check('seven berths, seven places, all inside her hangar', bok && Object.keys(bset).length === 7, Object.keys(bset).join(' '));
 check('and applying twice changes nothing', (S.applyUpgrades(Gu, sys, st, fitT), Sim.berthCapacity(port) === berths0 + 1 &&
       port.market.rows[capKey].cap === Math.round(cap0 * 1.3)));
 
@@ -274,6 +282,7 @@ var hiG = game(MARKET); placeOver(hiG, world, 2.5); hiG.claims = Gs.claims;
 check('too high over the world says so', /too high/.test(S.refusal(hiG, sys, T0, 'surface')));
 var noSh = game(MARKET); placeOver(noSh, world, 1.3); noSh.claims = Gs.claims; noSh.ship.craftBay = 'orbital';
 check('no shuttle, no surface station', /shuttle/.test(S.refusal(noSh, sys, T0, 'surface')));
+var fcS = S.forecastSite(Gs, sys, Gs.t, 'surface');
 var rs = S.found(Gs, sys, Gs.t, 'surface', hooks());
 check('founded on a claimed world, low over it', rs.ok, rs.why);
 var sst = rs.st;
@@ -288,6 +297,26 @@ var sp = sys.byId[S.portId(sst)];
 check('opens as a pad on the ground', sp && sp.surface && sys.pads.indexOf(sp) >= 0 &&
       Math.abs(V.dist(Sim.bodyPosition(sp, sys, Gs.t), Sim.bodyPosition(world, sys, Gs.t)) - world.radius) < 1,
       sp ? (sp.surface + ' pads:' + (sys.pads.indexOf(sp) >= 0) + ' r:' + (V.dist(Sim.bodyPosition(sp, sys, Gs.t), Sim.bodyPosition(world, sys, Gs.t)) - world.radius).toFixed(3)) : 'no port');
+
+var up = sys.byId[S.upId(sst)];
+check('and her Crawler stays up as the orbital half', up && !up.surface && up.upHalf && up.playerStation === sst.id &&
+      /^crawler:/.test(global.Render.portModelFor(up)) &&
+      V.dist(Sim.bodyPosition(up, sys, Gs.t), S.crawlerState(sst, sys, Gs.t).pos) < 0.05, up && global.Render.portModelFor(up));
+check('one station: the two halves share one market', up && up.market === sp.market);
+var hop = sys.traffic.filter(function (q) { return q.playerPort === sp.id && (q.to === up.id || q.from === up.id); });
+check('her own shuttle runs between them', hop.length === 1 && hop[0].local, hop.length + ' routes');
+check('and pays her no berth fee', (function () {
+  var v = 0; sys.traffic.forEach(function (q) { if (q.playerPort === sp.id && q.to !== up.id) v += S.WEEK / q.period; });
+  return Math.abs(v - sst.books.visits) < 1e-9; })());
+check('the forecast for the site was her, both halves and all', fcS && fcS.market === S.forecast(sst).market &&
+      fcS.berths === S.forecast(sst).berths, fcS && (fcS.berths + '/' + S.forecast(sst).berths));
+var upDock = (function () { try { var sh = { pos: Sim.bodyPosition(up, sys, Gs.t), vel: Sim.bodyState(up, sys, Gs.t).vel,
+  fwd: { x: 0, y: 0, z: 1 }, up: { x: 0, y: 1, z: 0 }, right: { x: -1, y: 0, z: 0 }, dryMass: 30, cargo: {}, fuel: 1 };
+  Sim.dockShip(sh, up, sys, Gs.t); return sh.docked === up.id; } catch (e) { return e.message; } })();
+check('a ship berths in her belly, up top', upDock === true, String(upDock));
+Gs.ship.docked = up.id; Gs.sys = sys;
+check('and her desk is either half', S.dockedAt(Gs, sst));
+Gs.ship.docked = null;
 
 console.log('a forged licence');
 var Gf = game(MARKET); Gf.t = T0 + 2000; placeOver(Gf, world, 1.7);

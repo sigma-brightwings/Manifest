@@ -84,6 +84,35 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **Surface stations have two halves, and Berth clamps have places
+  (2026-10-31).** Astra: *"let's do surface stations as well as extra
+  berths"*. Her choice for the Crawler: *"She stays up as the orbital
+  half"*.
+  - **The pad and her Crawler.** A station founded on a surface opens as
+    two ports with one name: the pad on the ground, and the Crawler on her
+    parking orbit over it as *<name> Orbital*. You dock in the Crawler's
+    belly, as at any station of yours. The two halves:
+    - share one market and one account;
+    - go dark, are seized and are foreclosed together;
+    - each count as her desk.
+
+    Her own shuttle runs between them as a local route, and pays her no
+    berth fee. Upgrades for a surface station float round her Crawler up
+    top, and her shuttles ferry them down.
+  - The site forecast for a surface station includes both halves, and
+    matches the station founded there.
+  - **Seven berths and up.** A Berth clamp is one more berth in her belly
+    hangar. Past six, the two walls share the berths evenly across
+    eight-tenths of the hangar, the near wall taking the odd one. The old
+    layout put the seventh berth on top of the fourth. Six or fewer is
+    exactly the layout every station always had.
+  - A body that joins a system after you entered it gets its orbit line
+    drawn the first time it is needed. The Crawler up top was throwing an
+    error every frame.
+  - Probes: `tools/probe-surface-station.js` founds an ore works on a
+    claimed world, then shows the orbital half and the pad below.
+    `tools/probe-station-crawler.js` now also berths in the seventh berth.
+
 - **Your station's books, her reactor, growing her, and her own Crawler
   for a hull (2026-10-31).** Astra: *"keep working on it, we'll push after
   the station founding stuff is complete"*. Her choices: every port takes

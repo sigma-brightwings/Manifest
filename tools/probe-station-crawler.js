@@ -81,6 +81,14 @@ await shot('3-berthed-chase');
 G.viewMode = 'cockpit';
 await wait(1200);
 await shot('4-berthed-cockpit');
+/* 5. The berth her Berth clamp added: the seventh, the last on the far wall. */
+G.ship.docked = null; G.ship.dockOffset = null;
+G.ship.pos = V.add(pp(), V.scale(basis.up, 0.9)); G.ship.vel = pv();
+try { Sim.dockShip(G.ship, port, G.sys, G.t, Sim.berthCapacity(port) - 1); } catch (e) { out.push('dock7 threw ' + e.message); }
+out.push('docked7 berth ' + (G.ship.dockOffset && G.ship.dockOffset.berth));
+G.viewMode = 'orbit';
+await wait(1500);
+await shot('5-seventh-berth-chase');
 const bg = window.Gen.bayGeometry(port);
 out.push('bay floor ' + bg.floorZ.toFixed(3) + ' ceil ' + bg.ceilZ.toFixed(3) + ' berths ' + bg.berths + ' cap ' + Sim.berthCapacity(port));
 return out.join(' | ');

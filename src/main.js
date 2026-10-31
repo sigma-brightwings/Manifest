@@ -7471,6 +7471,10 @@
         var fade = Math.min(1, Math.min(rel / 0.012, (26 - rel) / 12));
 
         var pts = G.orbitPaths[b.id];
+        /* A body that joined the system after it was entered (a station
+         * you founded, stations.js) gets its path sampled the first time
+         * it is drawn, rather than throwing every frame. */
+        if (!pts) pts = G.orbitPaths[b.id] = K.samplePath(b.orbit, b.kind === 'planet' ? 192 : 96);
         var off = Sim.bodyPosition(G.sys.byId[b.orbit.parent], G.sys, G.t);
         var col = b.kind === 'planet' ? '#4a6f9c'
                 : b.kind === 'moon' ? '#6b7f8f' : '#7fd6c0';

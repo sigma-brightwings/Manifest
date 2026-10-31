@@ -2071,6 +2071,18 @@
      * berth is in is the only form of this that survives the room being
      * resized, and the room has been resized twice. */
     var x = BERTH_FX[k % BERTH_FX.length] * g.chamberX;
+    /* MORE THAN SIX (2026-10-31): a station you founded takes one more
+     * berth for every Berth clamp she carries. Three to a wall left berth
+     * 7 parked on top of berth 4, so past six the walls share them out
+     * evenly instead: half each, the + wall taking the odd one, spread
+     * across the same eight-tenths of the room. Six or fewer is exactly
+     * the table it always was. */
+    if (n > BERTH_FX.length * 2) {
+      var perWall = Math.ceil(n / 2);
+      side = k < perWall ? 1 : -1;
+      var j = side > 0 ? k : k - perWall, m = side > 0 ? perWall : n - perWall;
+      x = (m > 1 ? -0.8 + 1.6 * j / (m - 1) : 0) * g.chamberX;
+    }
     return {
       x: x,
       y: side * g.berthY,
