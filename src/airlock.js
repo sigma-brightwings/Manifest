@@ -113,6 +113,9 @@
           if (a.side === 'out') {
             if (then === 'open' && ctx.landed) { a.want = 1; ev = 'lowering'; }
             else if (then === 'open' && ctx.docked) { a.hatch = 1; ev = 'hatch'; }
+            /* Out in open space (2026-10-31, the spacewalk): the ramp
+             * opens onto nothing, and down it is the way out in a suit. */
+            else if (then === 'open' && ctx.vacuum) { a.want = 1; ev = 'vacuum'; }
           }
           if (door) door.locked = !(a.side === 'in');
         }
@@ -121,7 +124,7 @@
     /* The ramp goes only from the outside's side of the seal, and only
      * where there is ground under it. */
     if (a.side === 'in' || a.cycle && a.cycle.to === 'in') a.want = 0;
-    if (!ctx.landed && a.want > 0) a.want = 0;
+    if (!ctx.landed && !ctx.vacuum && a.want > 0) a.want = 0;
     if (!ctx.docked) a.hatch = 0;
     var stepR = dt / RAMP_S;
     if (a.ramp < a.want) a.ramp = Math.min(a.want, a.ramp + stepR);
@@ -151,13 +154,17 @@
     if (a.cycle) return { ok: false, why: 'the airlock is cycling' };
     if (action === 'out') {
       if (a.side === 'out') {
-        if (ctx.landed && a.ramp < 1) { a.want = 1; return { ok: true, say: 'Ramp coming down' }; }
+        if ((ctx.landed || ctx.vacuum) && a.ramp < 1) { a.want = 1; return { ok: true, say: ctx.vacuum ? 'Ramp opening onto open space' : 'Ramp coming down' }; }
         if (ctx.docked && !a.hatch) { a.hatch = 1; return { ok: true, say: 'Hatch open' }; }
         return { ok: false, why: 'the way out is already open' };
       }
-      if (!ctx.landed && !ctx.docked) return { ok: false, why: 'nothing out there but vacuum  —  set her down or dock first' };
+      /* `vacuum`: in open space, and the caller says a spacewalk is a thing
+       * this ship's people can do (main.js lockCtx, 2026-10-31). Without
+       * it, the old refusal stands. */
+      if (!ctx.landed && !ctx.docked && !ctx.vacuum) return { ok: false, why: 'nothing out there but vacuum  —  set her down or dock first' };
       a.cycle = { to: 'out', t: 0, then: 'open' };
-      return { ok: true, say: ctx.breathable === false ? 'Cycling out  —  suit on, pumping down' : 'Cycling out  —  equalising' };
+      return { ok: true, say: ctx.vacuum ? 'Cycling out  —  suit sealed, pumping down to vacuum'
+                         : ctx.breathable === false ? 'Cycling out  —  suit on, pumping down' : 'Cycling out  —  equalising' };
     }
     if (action === 'in') {
       if (a.side === 'in') return { ok: false, why: 'the airlock is already sealed to the ship' };
@@ -167,9 +174,9 @@
     }
     if (action === 'lower') {
       if (a.side !== 'out') return { ok: false, why: 'the airlock is sealed to the ship  —  cycle out first' };
-      if (!ctx.landed) return { ok: false, why: 'no ground under her to lower it onto' };
+      if (!ctx.landed && !ctx.vacuum) return { ok: false, why: 'no ground under her to lower it onto' };
       a.want = 1;
-      return { ok: true, say: 'Ramp coming down' };
+      return { ok: true, say: ctx.vacuum ? 'Ramp opening onto open space' : 'Ramp coming down' };
     }
     if (action === 'raise') {
       if (a.ramp <= 0 && a.want === 0) return { ok: false, why: 'the ramp is already up' };
@@ -185,7 +192,8 @@
     ctx = ctx || {};
     if (a.berth) return 'Berthed  -  open to the hangar';
     if (a.cycle) return a.cycle.to === 'out' ? 'Cycling out…' : 'Cycling in…';
-    if (a.side === 'in') return ctx.landed ? 'Cycle out and lower the ramp' : ctx.docked ? 'Cycle out to the berth' : 'Airlock  —  sealed';
+    if (a.side === 'in') return ctx.landed ? 'Cycle out and lower the ramp' : ctx.docked ? 'Cycle out to the berth'
+                             : ctx.vacuum ? 'Suit up and cycle out  —  open space' : 'Airlock  —  sealed';
     return a.ramp > 0 || a.hatch ? 'Close up and cycle in' : 'Cycle in';
   }
 

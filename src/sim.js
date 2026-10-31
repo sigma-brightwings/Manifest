@@ -2288,12 +2288,16 @@
      * She coasts under gravity and keeps her slow tumble, as she did on
      * her rail, until somebody passes her mass (Upkeep.transfer clears
      * this) or she is reaped back onto her timetable. */
-    if (spec.adrift) {
+    /* And a ship whose drive you knocked out, or who cut it to surrender
+     * (combat.js disableNpc, boarding part 3): the same coast, whatever her
+     * mode says, but a little slower in the tumble (she was not drifting
+     * long before you got to her). */
+    if (spec.adrift || spec.disabled) {
       var dtD = Math.max(0, dtSim);
       var gD = acceleration(live.pos, sys, t);
       live.vel = V.addScaled(live.vel, gD, dtD);
       live.pos = V.addScaled(live.pos, live.vel, dtD);
-      var aD = dtD * 0.0035, cD = Math.cos(aD), sD = Math.sin(aD), f0 = live.fwd, u0 = live.up;
+      var aD = dtD * (spec.adrift ? 0.0035 : 0.0012), cD = Math.cos(aD), sD = Math.sin(aD), f0 = live.fwd, u0 = live.up;
       if (f0 && u0) {
         live.fwd = V.norm(V.add(V.scale(f0, cD), V.scale(u0, sD)));
         live.up = V.norm(V.sub(V.scale(u0, cD), V.scale(f0, sD)));
@@ -2301,7 +2305,8 @@
       }
       live.throttle = 0;
       live.mode = spec.mode;
-      live.adrift = true;
+      live.adrift = !!spec.adrift;
+      if (spec.disabled) live.disabled = spec.disabled;
       return V.dist(ship.pos, live.pos);
     }
 
@@ -3377,6 +3382,63 @@
    * enough that hitting a station reads as hitting a station. */
   var WALL_SLIDE_KEEP = 0.2;
 
+  /* ---- OTHER SHIPS ARE SOLID (2026-10-31) ---------------------------------
+   * Astra: "collision detection with ships and station walls". The step's
+   * path RELATIVE TO HER — where she was at the start of it taken off
+   * where you were, so two ships coasting together at 55 km/s are two
+   * ships sitting still — against her drawn hull (Render.hullSegmentHit),
+   * as a bundle at your own half-width. Resolved as checkStationImpact
+   * resolves a wall: back down the path, a metre off her plate, the motion
+   * into her killed, and above LAND_SAFE_SPEED most of the rest too.
+   *
+   * Only for a real step of a second or less: at high warp a hull's step
+   * is kilometres, the traffic list would be re-evaluated every substep,
+   * and nobody is flying close enough to anyone to hit them. `skip` is
+   * a ship you are deliberately joined to (her tube). */
+  var HULL_STEP_MAX_S = 1;
+  function checkHullImpact(ship, sys, t, from, fromT, skip) {
+    var R = global.Render;
+    if (!R || !R.hullSegmentHit || !from || fromT === undefined || !(t - fromT > 0) || t - fromT > HULL_STEP_MAX_S) return null;
+    var dt = t - fromT, list = shipsAll(sys, t);
+    var myL = R.hullLength ? R.hullLength(ship) : 0.03;
+    var rad = myL * 0.12;
+    var reach = V.dist(from, ship.pos) + myL;
+    var tether = ship.tether && (ship.tether.key || ship.tether.name);
+    for (var i = 0; i < list.length; i++) {
+      var o = list[i];
+      if (!o || o.dead || !o.pos || !o.fwd || o.phase === 'jump') continue;
+      var size = o.size || 0.03;
+      if (V.dist(o.pos, ship.pos) > size + reach) continue;
+      if (skip && (o === skip || o.spec === skip)) continue;
+      if (tether && ((o.route && o.route.id === tether) || o.name === tether)) continue;
+      /* Where she was when the step began: a live ship by her own
+       * velocity (she is integrated with it), a rail ship off her rail —
+       * a rail's `vel` does not even agree with how she moves. */
+      var prev = null;
+      if (o.route && !o.spec && typeof trafficState === 'function') {
+        try { prev = trafficState(o.route, sys, fromT).pos; } catch (e) { prev = null; }
+      }
+      if (!prev) prev = V.addScaled(o.pos, o.vel || V.zero(), -dt);
+      var a = V.add(from, V.sub(o.pos, prev));
+      var hit = R.hullSegmentHit(o, a, ship.pos, rad);
+      if (!hit) continue;
+      var seg = V.sub(ship.pos, a), segLen = V.len(seg);
+      var back = segLen > 1e-9 ? Math.min(1, WALL_BACKOFF_KM / segLen + 1e-4) : 0;
+      ship.pos = V.addScaled(V.addScaled(a, seg, Math.max(0, hit.t - back)), hit.normal, WALL_SKIN_KM);
+      var ov = segLen >= 0 && dt > 0 ? V.scale(V.sub(o.pos, prev), 1 / dt) : (o.vel || V.zero());
+      var rel = V.sub(ship.vel, ov), into = -V.dot(rel, hit.normal), relLen = V.len(rel);
+      if (into < 0) into = 0;
+      ship.vel = V.addScaled(ship.vel, hit.normal, into);
+      var bite = into;
+      if (relLen > LAND_SAFE_SPEED) {
+        ship.vel = V.add(ov, V.scale(V.sub(ship.vel, ov), WALL_SLIDE_KEEP));
+        bite = relLen;
+      }
+      return { port: null, ship: o, speed: bite };
+    }
+    return null;
+  }
+
   function checkStationImpact(ship, sys, t, from, fromT) {
     var R = global.Render;
     if (!R || !R.SOLID_WALL) return null;
@@ -3694,6 +3756,9 @@
      * wall. */
     var landing = allowDock ? berthCapture(ship, sys, t) : null;
     var wall = (allowDock && !landing) ? checkStationImpact(ship, sys, t, from, fromT) : null;
+    /* And other ships' hulls (2026-10-31), the same way and at the same
+     * price: a touch slides, a ram is a crash. */
+    if (!wall && allowDock && !landing) wall = checkHullImpact(ship, sys, t, from, fromT);
     if (wall) {
       var wdmg = landingDamage(wall.speed, !!ship.gear);
       if (wdmg > 0) {
@@ -6528,7 +6593,7 @@
     berthCapture: berthCapture,
     airlockState: airlockState,
     stationDoorState: stationDoorState,
-    checkStationImpact: checkStationImpact,
+    checkStationImpact: checkStationImpact, checkHullImpact: checkHullImpact,
     stationSolidity: stationSolidity,
     stationSolidAt: stationSolidAt,
     insideStation: insideStation,

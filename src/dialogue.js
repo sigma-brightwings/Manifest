@@ -1081,6 +1081,51 @@
     }
   };
 
+  /* ---- the standoff in her airlock (boarding part 3, 2026-10-31) ----
+   * You forced her outer door; her master is in the lock with you, her
+   * inner door shut behind them. Four ways it can go, each with its odds
+   * on the line, and every one of them ends the conversation: Combat.standoff
+   * settles it and main.js does what it says (her inner door opens, or you
+   * are thrown out into open space, or you climb back out). */
+  function standSpec(ctx) { return ctx.person.spec || null; }
+  function pct(p) { return Math.round(p * 100) + '%'; }
+  function standRun(how) {
+    return function (ctx) {
+      var Cb = global.Combat, r = Cb && Cb.standoff ? Cb.standoff(ctx.sys, ctx.G, ctx.t, standSpec(ctx), how, null) : { ok: false, line: '...' };
+      ctx.state.standoff = { how: how, ok: !!r.ok, thrown: !!r.thrown, back: !!r.back };
+      ctx.state.end = true;
+      return r.line;
+    };
+  }
+  function standOdds(ctx, how) {
+    var Cb = global.Combat;
+    return Cb && Cb.standoffOdds ? Cb.standoffOdds(ctx.sys, ctx.G, standSpec(ctx), how) : 0;
+  }
+  var STAND_THREAT = {
+    id: 'sthreat', label: function (ctx) { return 'Stand aside or this gets ugly  (' + pct(standOdds(ctx, 'threaten')) + ')'; },
+    run: standRun('threaten')
+  };
+  var STAND_TALK = {
+    id: 'stalk', label: function (ctx) { return 'Nobody has to get hurt over cargo  (' + pct(standOdds(ctx, 'talk')) + ')'; },
+    run: standRun('talk')
+  };
+  var STAND_PAY = {
+    id: 'spay', label: function (ctx) {
+      var Cb = global.Combat, p = Cb && Cb.standoffPrice ? Cb.standoffPrice(ctx.sys, standSpec(ctx)) : 0;
+      return p + ' cr says you never saw me';
+    },
+    when: function (ctx) {
+      var Cb = global.Combat, p = Cb && Cb.standoffPrice ? Cb.standoffPrice(ctx.sys, standSpec(ctx)) : 0;
+      return credits(ctx.G) >= p ? true : 'you have ' + credits(ctx.G) + ' cr';
+    },
+    run: standRun('pay')
+  };
+  var STAND_BACK = {
+    id: 'sback', label: 'All right. I am leaving.',
+    run: standRun('back')
+  };
+  var STANDOFF = [STAND_THREAT, STAND_TALK, STAND_PAY, STAND_BACK];
+
   /* Who has which topics, after WHO and HEARD and before LEAVE. */
   var TOPICS = {
     yours: [STATUS, MOOD, PRAISE],
@@ -1116,6 +1161,15 @@
   function options(G, sys, port, state) {
     var ctx = ctxOf(G, sys, port, state), out = [];
     var list;
+    /* In her airlock with you uninvited, there is nothing else to say. */
+    var sp0 = state.person.spec;
+    if (state.person.standoff && !(sp0 && (sp0.yielded || sp0.surrendered))) {
+      STANDOFF.forEach(function (tp) {
+        var w = tp.when ? tp.when(ctx) : true;
+        out.push({ id: tp.id, label: labelOf(tp, ctx), ok: w === true, why: w === true ? null : w, topic: tp });
+      });
+      return out;
+    }
     if (state.node && SUB[state.node]) list = SUB[state.node];
     else {
       list = [WHO, HEARD].concat((state.person.aboard && TOPICS.aboard) || TOPICS[ctx.p.kind] || []);
@@ -1141,6 +1195,13 @@
     if (m.met == null) m.met = t;
     ctx.m = m;
     var line = greeting(G, sys, ctx.op, t || 0);
+    /* Her master, between you and her inner door. */
+    var sp1 = person.spec;
+    if (person.standoff && !(sp1 && (sp1.yielded || sp1.surrendered))) {
+      line = sayLine(ctx, ['That door is not opening. You have about ten seconds to tell me why it should.',
+                           'You cut your way onto my ship. Talk fast.',
+                           'Far enough. There are four of us behind that door and one of you.'], 'standoff');
+    }
     /* The law asks you first. */
     if ((ctx.p.kind === 'customs' || ctx.p.kind === 'marine') && ctx.op.band !== 'furious' && !(m.done && m.done.asked === Math.floor((t || 0) / DAY))) {
       m.done = m.done || {}; m.done.asked = Math.floor((t || 0) / DAY);

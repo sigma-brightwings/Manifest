@@ -163,6 +163,22 @@
     this.w = wpx; this.h = hpx;
   };
 
+  /* IN A SUIT (eva.js, 2026-10-31): an eye and a frame, no ship to hang
+   * them off. The seat's field of view, and the camera's own 10 cm near
+   * plane, since the nearest thing to a visor is a hull you are about to
+   * touch. */
+  Camera.prototype.buildFree = function (eye, f, u, wpx, hpx) {
+    this.eye = V.clone(eye);
+    this.f = V.norm(f);
+    this.r = V.norm(V.cross(this.f, u));
+    this.u = V.norm(V.cross(this.r, this.f));
+    this.look = { yaw: 0, pitch: 0 };
+    var fov = this.cockpitFov || 68 * DEG;
+    this.flen = (0.5 * hpx) / Math.tan(fov / 2);
+    this.cx = wpx / 2; this.cy = hpx / 2;
+    this.w = wpx; this.h = hpx;
+  };
+
   /* World point -> screen. Returns null behind the camera.
    * `scale` converts a world length at that depth into pixels. */
   Camera.prototype.project = function (p) {
@@ -13246,6 +13262,126 @@
     return d._hatch;
   }
 
+  /* ---- A HULL IS SOLID (2026-10-31) ---------------------------------------
+   * Astra, watching the first spacewalk: "There needs to be collision
+   * detection with ships and station walls, so we aren't flying through the
+   * hull of a ship like I just saw." Stations already stop you
+   * (sim.js checkStationImpact, against their triangles); ships did not.
+   *
+   * The test is the station's, on the hull you see: a step's PATH against
+   * her triangles (so nothing tunnels between two frames), as a bundle of
+   * five parallel segments at the mover's own half-width (so a body has a
+   * body), in her model frame where her length is one. The mesh is the one
+   * she is drawn with — a hull with a ramp is tested with her ramp's well
+   * cut out of it exactly as it is drawn, so you can climb up into her
+   * airlock and cannot climb through anything else.
+   *
+   *   hullSegmentHit(ship, a, b, radKm) -> null | { t, normal }   (world)
+   *   hullSolidOf(ship) -> { mesh, L }                             (km)  */
+  var HULL_COLL = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  function hullSolidOf(ship) {
+    if (!ship) return null;
+    var mesh = null, L = 0;
+    if (ship.hullId) {
+      mesh = hullPreviewMesh(ship.hullId, ship);
+      L = hullLength(ship);
+      if (mesh && ship.airlock && shipInterior(ship) && shipInterior(ship).plan.ramp) {
+        var ext = null;
+        try { ext = rampExterior(Object.create(ship, { airlock: { value: { ramp: 1 } } }), mesh, L); } catch (e) { ext = null; }
+        if (ext && ext.hull) mesh = ext.hull;
+      }
+    } else {
+      var kind = ship.hullClass || ship.cls, letter = ship.sizeLetter;
+      if (letter) { var sw = hullIdForSpec({ cls: kind, sizeLetter: letter }); if (sw) mesh = libHull(sw); }
+      mesh = mesh || shipMeshes()[kind] || shipMeshes().courier;
+      L = ship.size || ship.lengthKm || 0;
+    }
+    return mesh && mesh.v && mesh.f && L > 0 ? { mesh: mesh, L: L } : null;
+  }
+  /* The mesh as flat triangles (polygons fanned) and the radius of the
+   * sphere round it, once per mesh. */
+  function hullTris(mesh) {
+    var c = HULL_COLL && HULL_COLL.get(mesh);
+    if (c) return c;
+    var tri = [], R = 0;
+    for (var i = 0; i < mesh.f.length; i++) {
+      var f = mesh.f[i];
+      for (var k = 1; k + 1 < f.length; k++) tri.push(mesh.v[f[0]], mesh.v[f[k]], mesh.v[f[k + 1]]);
+    }
+    for (var j = 0; j < mesh.v.length; j++) {
+      var p = mesh.v[j], r = Math.sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+      if (r > R) R = r;
+    }
+    c = { tri: tri, R: R };
+    if (HULL_COLL) HULL_COLL.set(mesh, c);
+    return c;
+  }
+  /* One segment against the triangles: the first crossing, or null. */
+  function trisSegment(c, a, b) {
+    var dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+    if (dx === 0 && dy === 0 && dz === 0) return null;
+    var tri = c.tri, best = Infinity, bn = null;
+    for (var t0 = 0; t0 < tri.length; t0 += 3) {
+      var p0 = tri[t0], p1 = tri[t0 + 1], p2 = tri[t0 + 2];
+      var e1x = p1[0] - p0[0], e1y = p1[1] - p0[1], e1z = p1[2] - p0[2];
+      var e2x = p2[0] - p0[0], e2y = p2[1] - p0[1], e2z = p2[2] - p0[2];
+      var hx = dy * e2z - dz * e2y, hy = dz * e2x - dx * e2z, hz = dx * e2y - dy * e2x;
+      var det = e1x * hx + e1y * hy + e1z * hz;
+      if (det > -1e-14 && det < 1e-14) continue;
+      var f = 1 / det, sx = a[0] - p0[0], sy = a[1] - p0[1], sz = a[2] - p0[2];
+      var u = (sx * hx + sy * hy + sz * hz) * f;
+      if (u < 0 || u > 1) continue;
+      var qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
+      var v = (dx * qx + dy * qy + dz * qz) * f;
+      if (v < 0 || u + v > 1) continue;
+      var t = (e2x * qx + e2y * qy + e2z * qz) * f;
+      if (t < 0 || t > 1 || t >= best) continue;
+      best = t;
+      bn = [e1y * e2z - e1z * e2y, e1z * e2x - e1x * e2z, e1x * e2y - e1y * e2x];
+    }
+    return bn ? { t: best, n: bn } : null;
+  }
+  function hullSegmentHit(ship, a, b, radKm) {
+    var hs = hullSolidOf(ship);
+    if (!hs || !ship.pos || !ship.fwd || !ship.up || !ship.right) return null;
+    var L = hs.L, c = hullTris(hs.mesh);
+    var toM = function (w) {
+      var rx = w.x - ship.pos.x, ry = w.y - ship.pos.y, rz = w.z - ship.pos.z;
+      return [(rx * ship.right.x + ry * ship.right.y + rz * ship.right.z) / L,
+              (rx * ship.up.x + ry * ship.up.y + rz * ship.up.z) / L,
+              (rx * ship.fwd.x + ry * ship.fwd.y + rz * ship.fwd.z) / L];
+    };
+    var A = toM(a), B = toM(b), rr = (radKm || 0) / L;
+    /* Nowhere near her: the segment's closest approach to her middle is
+     * outside the sphere round her. */
+    var dx = B[0] - A[0], dy = B[1] - A[1], dz = B[2] - A[2], dd = dx * dx + dy * dy + dz * dz;
+    var s = dd > 0 ? Math.max(0, Math.min(1, -(A[0] * dx + A[1] * dy + A[2] * dz) / dd)) : 0;
+    var cx = A[0] + dx * s, cy = A[1] + dy * s, cz = A[2] + dz * s;
+    if (Math.sqrt(cx * cx + cy * cy + cz * cz) > c.R + rr) return null;
+    var best = trisSegment(c, A, B);
+    var Ld = Math.sqrt(dd);
+    if (rr > 0 && Ld > 1e-12) {
+      var ux = 0, uy = 1, uz = 0;
+      if (Math.abs(dy / Ld) > 0.9) { ux = 1; uy = 0; }
+      var d1 = (ux * dx + uy * dy + uz * dz) / Ld;
+      ux -= dx / Ld * d1; uy -= dy / Ld * d1; uz -= dz / Ld * d1;
+      var ul = Math.sqrt(ux * ux + uy * uy + uz * uz) || 1;
+      ux /= ul; uy /= ul; uz /= ul;
+      var vx = (dy * uz - dz * uy) / Ld, vy = (dz * ux - dx * uz) / Ld, vz = (dx * uy - dy * ux) / Ld;
+      [[ux, uy, uz], [-ux, -uy, -uz], [vx, vy, vz], [-vx, -vy, -vz]].forEach(function (o) {
+        var h = trisSegment(c, [A[0] + o[0] * rr, A[1] + o[1] * rr, A[2] + o[2] * rr],
+                               [B[0] + o[0] * rr, B[1] + o[1] * rr, B[2] + o[2] * rr]);
+        if (h && (!best || h.t < best.t)) best = h;
+      });
+    }
+    if (!best) return null;
+    /* The face's normal in the world, turned to face the way you came. */
+    var n = best.n;
+    var nw = V.norm(V.add(V.add(V.scale(ship.right, n[0]), V.scale(ship.up, n[1])), V.scale(ship.fwd, n[2])));
+    if (V.dot(nw, V.sub(b, a)) > 0) nw = V.scale(nw, -1);
+    return { t: best.t, normal: nw };
+  }
+
   /* ---- ON THE GROUND BESIDE HER (2026-10-26) ------------------------------
    * The walk.js plan for standing outside your ship once the ramp is down:
    * in her cockpit's frame like her rooms (so one walker crosses from one
@@ -13415,7 +13551,11 @@
      * far down it is, in the same metres as the room. */
     var AL = global.Airlock, base = ship._base || ship;
     parts.push({ mesh: (AL && base.airlock ? AL.lampGreen(base) : false) ? d.meshes.lampOk : d.meshes.lampNo });
-    if (d.plan.ramp && SD.rampMesh) {
+    /* Not from outside her (noPortals): there her exterior model draws the
+     * ramp, and drawing it a second time here, in the room's metres, put
+     * two copies of every rail in the same place - the shimmer Astra saw
+     * on the ramp (2026-10-31). */
+    if (d.plan.ramp && SD.rampMesh && !opts.noPortals) {
       var rt = Math.round(Math.max(0, Math.min(1, (base.airlock && base.airlock.ramp) || 0)) * 20) / 20;
       d.rampMeshes = d.rampMeshes || {};
       if (!d.rampMeshes[rt]) {
@@ -13948,7 +14088,7 @@
     BOLT_MIN_W: BOLT_MIN_W, BOLT_MAX_W: BOLT_MAX_W, BOLT_SEGS: BOLT_SEGS,
     SHIP_LEN: SHIP_LEN, TRUE_LEN: TRUE_LEN, hullLength: hullLength,
     BRIDGE: BRIDGE, bridgeSpec: bridgeSpec, bridgeFrame: bridgeFrame, bridgeCutMesh: bridgeCutMesh,
-    hullFit: hullFit, cockpitAt: cockpitAt, rampExterior: rampExterior, hatchModel: hatchModel, outsidePlan: outsidePlan, groundPatch: groundPatch,
+    hullFit: hullFit, cockpitAt: cockpitAt, rampExterior: rampExterior, hatchModel: hatchModel, hullSegmentHit: hullSegmentHit, hullSolidOf: hullSolidOf, outsidePlan: outsidePlan, groundPatch: groundPatch,
     OUTSIDE_CROUCH: OUTSIDE_CROUCH,
     drawAttitudeLadder: unblurred(drawAttitudeLadder),
     drawFlightPathMarker: drawFlightPathMarker,

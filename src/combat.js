@@ -4093,7 +4093,266 @@
     }
     crime(sys, G, t, 'assault', spec, hooks);
 
-    if (spec.hullHp <= 0) killNpc(sys, G, spec, t, hooks);
+    if (spec.hullHp <= 0) { killNpc(sys, G, spec, t, hooks); return; }
+
+    /* Her drive, and her nerve (boarding part 3, 2026-10-31). */
+    if (driveHit(spec, split.hull, from)) disableNpc(sys, G, spec, 'drive', t, hooks);
+    else if (!spec.disabled && beatenSurrender(spec)) disableNpc(sys, G, spec, 'surrender', t, hooks);
+  }
+
+  /* ---- KNOCKING HER DRIVE OUT (boarding part 3, 2026-10-31) ---------------
+   * Astra: a ship ends up disabled "both ways" - her drive can be knocked
+   * out, and crews that would rather live can surrender before that. Asked
+   * how the drive goes, she chose hull damage with aim: the drive fails
+   * once the damage it has taken reaches DRIVE_FAIL of her hull (so about
+   * a third of her hull left, if every hit is anywhere), and a hit from
+   * astern - on her engines - counts double toward it. Crippling rather
+   * than killing is a choice you fly for.
+   *
+   * DISABLED she is a lifted spec that coasts under gravity with her drive
+   * cold (sim.js steerNpc treats `disabled` like a dead tank), keeps her
+   * guns if she has any, and can be boarded by force (boarding.js). */
+  var DRIVE_FAIL = 0.67;
+  var AFT_COS = -0.5;                  // within 60 degrees of dead astern
+  var SURRENDER_HULL = 0.6;            // below this much hull she weighs it up
+  var NEVER_DISABLED = { capital: true, carrier: true };
+
+  /* A seeded 0..1 per ship and per question. Salt first, and an avalanche
+   * tail, because FNV does not carry a last-character change upward (the
+   * wake-arc bug, SLIPSPACE-TODO "a hash is not automatically a hash"). */
+  function roll01(salt, id) {
+    var s = salt + '|' + id, h = 2166136261;
+    for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16;
+    return (h >>> 0) / 4294967296;
+  }
+
+  function driveHit(spec, hull, from) {
+    if (!(hull > 0) || spec.disabled || NEVER_DISABLED[spec.cls]) return false;
+    npcHull(spec);
+    var live = spec.live, k = 1;
+    if (from && live && live.pos && live.fwd) {
+      var d = V.sub(from, live.pos), l = V.len(d);
+      if (l > 1e-9 && V.dot(d, live.fwd) / l < AFT_COS) k = 2;
+    }
+    spec.driveDmg = (spec.driveDmg || 0) + hull * k;
+    return spec.driveDmg >= DRIVE_FAIL * (spec.hullMax || 50);
+  }
+
+  /* How likely a crew is to give up rather than be shot to pieces: a
+   * merchantman most, a pirate seldom, the law and the Navy never. */
+  function surrenderBase(spec) {
+    if (!spec || NEVER_DISABLED[spec.cls]) return 0;
+    if (spec.kind === 'police' || spec.kind === 'navy' || spec.cls === 'navy' || spec.cls === 'cutter') return 0;
+    if (spec.kind === 'pirate') return 0.12;
+    if (spec.kind === 'merc') return 0.25;
+    return isArmedNpc(spec) ? 0.45 : 0.7;
+  }
+  /* Asked once, the first time her hull falls under SURRENDER_HULL. */
+  function beatenSurrender(spec) {
+    if (spec.disabled || spec.surrenderWeighed) return false;
+    npcHull(spec);
+    if (!(spec.hullHp < SURRENDER_HULL * (spec.hullMax || 50))) return false;
+    spec.surrenderWeighed = true;
+    return roll01('beaten', spec.id) < surrenderBase(spec);
+  }
+
+  function disableNpc(sys, G, spec, why, t, hooks) {
+    if (!spec || spec.disabled) return;
+    spec.disabled = why;
+    spec.disabledAt = t;
+    spec.surrendered = why === 'surrender';
+    spec.mode = 'disabled'; spec.modeSince = 0;
+    /* Surrendered, she stops shooting; knocked out, she keeps her guns and
+     * whatever she thought of you. */
+    if (spec.surrendered) { spec.hostileToPlayer = false; spec.defending = false; }
+    if (spec.live) { spec.live.disabled = why; spec.live.throttle = 0; }
+    if (hooks && hooks.say) {
+      hooks.say(why === 'surrender'
+        ? (spec.name || 'She') + ' on an open channel: "Enough! We are cutting our drive. Come aboard, nobody needs to get hurt."'
+        : 'The ' + (spec.name || 'ship') + '\'s drive is out  -  she is dead in space. Close to under 150 m to board her.', 7);
+    }
+    jot(G, 'crime', (why === 'surrender' ? 'The ' + spec.name + ' surrendered and cut her drive'
+                                          : 'Knocked out the ' + spec.name + '\'s drive'));
+  }
+
+  /* "Heave to and stand by to be boarded", over the band, with a gun on
+   * her. The act is a demand (the crime is the asking, as demandFrom has
+   * it); the answer is seeded per ship and per minute, so asking again at
+   * once gets the same answer. Damage she has taken and guns she lacks
+   * make her likelier to say yes. */
+  var SURRENDER_RANGE_KM = 60;
+  function surrenderOdds(sys, G, spec) {
+    var p = surrenderBase(spec);
+    if (!(p > 0)) return 0;
+    npcHull(spec);
+    var frac = Math.max(0, Math.min(1, (spec.hullHp || 0) / (spec.hullMax || 50)));
+    p += (1 - frac) * 0.45;
+    var s = G.ship, armed = !!(s && (s.gun || s.missiles > 0 || (s.fit && Object.keys(s.fit).some(function (k) { return /^hardpoint/.test(k) && s.fit[k]; }))));
+    if (!armed) return 0;
+    if (spec.hostileToPlayer) p -= 0.15;
+    return Math.max(0, Math.min(0.95, p));
+  }
+  function demandSurrender(sys, G, t, contactState, hooks) {
+    var s = G.ship;
+    var spec = contactState.spec || liftTrader(sys, contactState, t);
+    if (!spec) return { ok: false, why: 'No answer.' };
+    if (spec.disabled) return { ok: false, why: 'She is already dead in space' };
+    var range = V.dist(spec.live ? spec.live.pos : contactState.pos, s.pos);
+    if (range > SURRENDER_RANGE_KM) return { ok: false, why: 'Too far out to sound like a threat  -  close to under ' + SURRENDER_RANGE_KM + ' km' };
+    crime(sys, G, t, 'demand', spec, hooks);
+    var odds = surrenderOdds(sys, G, spec);
+    if (!(odds > 0)) {
+      var hard = spec.kind === 'pirate' || spec.kind === 'police' || spec.kind === 'navy' || spec.kind === 'merc';
+      if (hard && isArmedNpc(spec)) { spec.hostileToPlayer = true; spec.mode = 'attack'; }
+      else spec.mode = 'breakoff';
+      return { ok: false, why: (spec.name || 'She') + (hard ? ': "Come and take it." Weapons hot.' : ' scans you, finds no guns, and ignores you.') };
+    }
+    var r = roll01('surrender|' + Math.floor(t / 60), spec.id);
+    if (r < odds) {
+      disableNpc(sys, G, spec, 'surrender', t, hooks);
+      return { ok: true, odds: odds };
+    }
+    spec.mode = 'breakoff';
+    if (isArmedNpc(spec)) spec.defending = true;
+    return { ok: false, odds: odds, why: (spec.name || 'She') + ': "Not today." She runs.' };
+  }
+
+  /* ---- THE STANDOFF (boarding part 3, 2026-10-31) ---------------------------
+   * In her airlock with her outer door forced, her master between you and
+   * her inner door. You can lean on her (a gun on your hip and hers holed),
+   * talk her round, buy her off, or back off. Astra, on what happens when
+   * it goes wrong: "They fight back" — her people throw you out of the
+   * lock, dog the door shut behind you, and her gunners open up on your
+   * ship. A ship that struck to you when you called on her to heave to has
+   * already yielded; there is no standoff with her.
+   *
+   * Seeded per ship, per way of asking and per minute, like the call to
+   * heave to: the same words a second later get the same answer. */
+  var REPEL_S = 900;            // s her door stays dogged after she throws you off
+  var BACKED_S = 300;           // s, after you backed off of your own accord
+  function playerArmed(G) {
+    var s = G && G.ship;
+    return !!(s && (s.gun || s.missiles > 0 || (s.fit && Object.keys(s.fit).some(function (k) { return /^hardpoint/.test(k) && s.fit[k]; }))));
+  }
+  function hardCrew(spec) {
+    return spec.kind === 'pirate' || spec.kind === 'merc' || spec.kind === 'police' || spec.kind === 'navy';
+  }
+  function holdValue(sys, spec) {
+    var man = holdOf(sys, spec), v = 0, E = global.Economy;
+    for (var i = 0; i < man.length; i++) {
+      var c = E && E.BY_ID ? E.BY_ID[man[i].cid] : null;
+      v += ((man[i].qty || man[i].tonnes) || 0) * Math.max(0, c ? c.base : 0);
+    }
+    return v;
+  }
+  /* What she takes to stand aside: a third of what is in her hold, at base
+   * price, and never less than a crew would risk a beating for. */
+  function standoffPrice(sys, spec) {
+    return Math.max(250, Math.round(holdValue(sys, spec) * 0.3 / 10) * 10);
+  }
+  function standoffOdds(sys, G, spec, how) {
+    if (!spec) return 0;
+    if (how === 'back') return 1;
+    if (how === 'pay') return ((G.ship && G.ship.credits) || 0) >= standoffPrice(sys, spec) ? 1 : 0;
+    npcHull(spec);
+    var frac = Math.max(0, Math.min(1, (spec.hullHp || 0) / (spec.hullMax || 50)));
+    var p;
+    if (how === 'threaten') {
+      p = 0.5 + (1 - frac) * 0.3 + (playerArmed(G) ? 0.1 : -0.25);
+      if (hardCrew(spec)) p -= 0.3;
+      if (isArmedNpc(spec)) p -= 0.1;
+      return Math.max(0.05, Math.min(0.92, p));
+    }
+    /* Talking: a merchant crew with no guns would rather not get hurt; a
+     * raider would rather hurt you. */
+    p = 0.3 + (1 - frac) * 0.15 + (isArmedNpc(spec) ? 0 : 0.2) - (hardCrew(spec) ? 0.2 : 0);
+    return Math.max(0.05, Math.min(0.8, p));
+  }
+  function standoff(sys, G, t, spec, how, hooks) {
+    if (!spec) return { ok: false, line: 'There is nobody here.' };
+    if (spec.yielded || spec.surrendered) return { ok: true, line: 'Take what you came for.' };
+    if (how === 'back') {
+      spec.repelledUntil = t + BACKED_S;
+      return { ok: false, back: true, line: 'Go on, then. Back to your own ship.' };
+    }
+    if (how === 'pay') {
+      var price = standoffPrice(sys, spec);
+      if (!(((G.ship && G.ship.credits) || 0) >= price)) return { ok: false, line: 'You do not have it.', refused: true };
+      G.ship.credits -= price;
+      spec.yielded = 'paid'; spec.paidOff = price;
+      jot(G, 'robbery', 'Paid the ' + spec.name + '\'s crew ' + price + ' cr to stand aside');
+      return { ok: true, price: price, line: 'All right. ' + price + ' and we did not see a thing. Take it and go.' };
+    }
+    /* Leaning on her, or talking: either way you are in her lock uninvited,
+     * which is the robbery you already called in by boarding her. */
+    crime(sys, G, t, 'demand', spec, hooks);
+    var odds = standoffOdds(sys, G, spec, how);
+    var r = roll01('standoff|' + how + '|' + Math.floor(t / 60), spec.id);
+    if (r < odds) {
+      spec.yielded = how;
+      jot(G, 'robbery', (how === 'threaten' ? 'Faced down' : 'Talked round') + ' the ' + spec.name + '\'s crew in her airlock');
+      return { ok: true, odds: odds,
+               line: how === 'threaten' ? 'All right! All right. The hold is aft. Take it and get off my ship.'
+                                        : 'Fine. Nobody here is paid enough to die for it. Hold is aft.' };
+    }
+    /* They fight back. */
+    spec.repelledUntil = t + REPEL_S;
+    spec.yielded = false;
+    if (isArmedNpc(spec)) { spec.hostileToPlayer = true; spec.defending = true; }
+    jot(G, 'crime', 'The ' + spec.name + '\'s crew threw you out of her airlock');
+    return { ok: false, odds: odds, thrown: true,
+             line: how === 'threaten' ? 'Wrong ship. Get them out of here!' : 'Nice speech. Out you go.' };
+  }
+
+  /* ---- HER CARGO, SHIFTED BY HER OWN CREW (2026-10-31) ----------------------
+   * Astra: "Pick, they shift it". You point at a container in her hold; her
+   * people manhandle it out of her outer door, one every PUSH_S seconds,
+   * and your scoop picks them up out there. What goes out comes off her
+   * manifest — the one hold every path reads (holdOf) — and onto the
+   * charge at base price, as a robbery's dump does. */
+  var PUSH_S = 6;
+  function pushCargo(sys, spec, cid, tonnes) {
+    if (!spec || !cid || !(tonnes > 0)) return 0;
+    var man = holdOf(sys, spec), have = 0;
+    for (var i = 0; i < man.length; i++) if (man[i].cid === cid) have += (man[i].qty || man[i].tonnes) || 0;
+    var queued = 0;
+    (spec.pushQ || []).forEach(function (q) { if (q.cid === cid) queued += q.t; });
+    var n = Math.min(tonnes, have - queued);
+    if (!(n > 0)) return 0;
+    (spec.pushQ = spec.pushQ || []).push({ cid: cid, t: n });
+    return n;
+  }
+  function tickPushes(sys, G, t, hooks) {
+    var ps = (sys && sys.patrols) || [];
+    for (var i = 0; i < ps.length; i++) {
+      var spec = ps[i];
+      if (!spec.pushQ || !spec.pushQ.length || spec.dead || !spec.live) continue;
+      if (t < (spec.pushNext || 0)) continue;
+      var q = spec.pushQ.shift(), man = holdOf(sys, spec), took = 0;
+      for (var j = 0; j < man.length && took < q.t; j++) {
+        if (man[j].cid !== q.cid) continue;
+        var have = (man[j].qty || man[j].tonnes) || 0, n = Math.min(have, q.t - took);
+        if (man[j].qty !== undefined) man[j].qty -= n; else man[j].tonnes = have - n;
+        took += n;
+      }
+      for (var z = man.length - 1; z >= 0; z--) if (!((man[z].qty || man[z].tonnes) > 0)) man.splice(z, 1);
+      spec.manifest = man;
+      spec.pushNext = t + PUSH_S;
+      if (!(took > 0)) continue;
+      /* Out of her belly: dropCanister shoves it astern of `fwd`, so her up
+       * sends it down out of the ramp. */
+      var L = spec.live, out = L.up || L.fwd;
+      var can = global.Sim.dropCanister(sys, { pos: L.pos, vel: L.vel, fwd: out }, q.cid, took, t);
+      /* Pushed by hand, not blown out: 2 m/s, where a jettison is twelve,
+       * so they hang below her for your scoop rather than scattering. */
+      if (can && out) { can.pos = V.addScaled(L.pos, V.norm(out), -0.03); can.vel = V.addScaled(L.vel, V.norm(out), -0.002); }
+      var com = global.Economy && global.Economy.BY_ID ? global.Economy.BY_ID[q.cid] : null;
+      chargeLoot(G, sys, t, spec, took * Math.max(0, com ? com.base : 0), hooks);
+      if (hooks && hooks.say) hooks.say('Her crew push ' + Math.round(took) + ' t of ' + (com ? com.name.toLowerCase() : q.cid) +
+                                        ' out of her airlock' + (spec.pushQ.length ? '  —  ' + spec.pushQ.length + ' more to come' : '') +
+                                        '  —  your scoop can take it', 5);
+    }
   }
 
   /* ---- a hold is a pure function of the ship that carries it --------------
@@ -9238,6 +9497,11 @@
     contrabandAboardFor: contrabandAboardFor,
     dockRefused: dockRefused, dockRefusal: dockRefusal, payBounty: payBounty,
     demandFrom: demandFrom, syndicateStanding: syndicateStanding,
+    /* Boarding part 3 (2026-10-31): her drive, her nerve. */
+    demandSurrender: demandSurrender, surrenderOdds: surrenderOdds, disableNpc: disableNpc,
+    standoff: standoff, standoffOdds: standoffOdds, standoffPrice: standoffPrice, REPEL_S: REPEL_S,
+    pushCargo: pushCargo, tickPushes: tickPushes, PUSH_S: PUSH_S,
+    driveHit: driveHit, roll01: roll01, DRIVE_FAIL: DRIVE_FAIL, SURRENDER_RANGE_KM: SURRENDER_RANGE_KM,
     repairCost: repairCost, repair: repair, deadPanelCount: deadPanelCount,
     buyOutfit: buyOutfit, buyHull: buyHull,
     stripForRespawn: stripForRespawn

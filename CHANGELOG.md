@@ -44,6 +44,97 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **Boarding, part 3: a disabled ship, taken by force (2026-10-31).**
+  This is the third way aboard, after docking beside her at a station and
+  being invited in through her tube. Astra's answers set each piece.
+  - **Her drive** ("hull damage + aim"):
+    - Hits on her hull also wear down her drive, and hits from within 60°
+      of dead astern count double.
+    - When the drive has taken two thirds of her hull's worth, she is dead
+      in space. She coasts and tumbles slowly.
+    - A ship that drops below 60% hull may also strike, once: often for an
+      unarmed merchantman, seldom for a pirate, never for the law, the Navy
+      or a warship.
+  - **Calling on her to heave to.** The piracy menu has a new row, "Heave
+    to — stand by to be boarded", with the odds on it.
+    - Her odds go up as her hull goes down. She ignores you if you have no
+      guns.
+    - If she agrees, she cuts her drive and stops shooting.
+    - If she refuses, she runs, and fights back if she is armed.
+    - Asking is the robbery: it is reported like a demand.
+  - **The spacewalk** ("fly the suit"):
+    - In open space your airlock cycles out to vacuum and the ramp opens
+      onto nothing. Walk off the end of it and you are in your suit.
+    - **Controls:**
+      - WASD, Space and Left Ctrl fire the cold-gas jets: 0.6 m/s², and a
+        full pack is 30 m/s of change.
+      - X brakes you against the nearest ship.
+      - The mouse turns you.
+    - **Safety line:** a 300 m line clipped to your own ramp. Holding H
+      reels you in at 1.5 m/s and uses no gas, so running dry costs you
+      the crossing, never your life.
+    - **Marks:** both ramps carry a diamond and their distance. A ramp
+      that is off screen gets an arrow on the edge of the view pointing at
+      it.
+    - **Readout:** gas, line, and your drift against the nearest ship.
+    - E within 4 m of a ramp takes hold of it. Your own ramp puts you back
+      aboard. Her belly door is forced open, and her ramp comes down for
+      you.
+    - The suit steps on the same clock as the ships. The first try used the
+      wall clock, and at 55 km/s that put a quarter of a kilometre between
+      you and your ramp in the first second.
+  - **The standoff** ("they fight back"). Her master meets you in her
+    airlock and her crew hold the inner door. You can:
+    - lean on him;
+    - talk him round;
+    - pay him a third of her hold's value;
+    - back off.
+
+    Each way shows its odds. The answer is seeded per ship, per way of
+    asking and per minute, so asking again at once gets the same answer.
+    If it goes wrong, her crew throw you out of the lock, dog the door shut
+    for fifteen minutes, and an armed crew start shooting at your ship.
+  - **Her cargo** ("pick, they shift it"). Once she has yielded, press E
+    on a container stack in her hold and her crew push it out of her
+    airlock, one container every 6 s.
+    - Each container comes off her manifest, the same hold every other path
+      reads.
+    - It goes on the charge at base price.
+    - It hangs below her at 2 m/s (a jettison is 12) for your scoop.
+  - The crates in a hold now carry their containers and tonnes.
+  - `test/boarding3.test.js` (62 checks) covers each piece.
+    `tools/probe-eva.js` runs all of it in the game, including a flight
+    across on the jets.
+
+- **Hulls are solid (2026-10-31).** Astra, watching the first spacewalk:
+  *"There needs to be collision detection with ships and station walls,
+  so we aren't flying through the hull of a ship like I just saw."* She
+  chose collision for both the suit and the ship, and a touch that slides
+  where a hit does damage.
+  - **The test** is the one stations already used. It checks the PATH of
+    each step against the hull's triangles as she is drawn (so nothing
+    tunnels between two frames), as a bundle of five segments at the
+    mover's own half-width. It is taken relative to her: where she was at
+    the start of the step comes off where you were, so two ships coasting
+    together are two ships sitting still. A hull with a ramp is tested
+    with her ramp's well cut out, so her doorway lets you in.
+  - **Your ship** now meets other ships' hulls as it meets a station's
+    walls:
+    - you are stopped a metre off her plate;
+    - the motion into her is killed;
+    - above the safe landing speed most of the rest goes too, and the hit
+      costs hull as a hard landing does.
+  - **Your suit** meets every hull near it, and station walls as a ship
+    does. Above 2.5 m/s a hit bruises you and knocks a jet line loose,
+    which costs gas.
+  - **A hull you are floating beside** is no longer culled when her middle
+    leaves the screen. She used to vanish at the moment you reached her
+    ramp.
+  - **The ship you are boarding** is drawn as a ship rather than as
+    traffic: her ramp's bay is cut out, her ramp is down once it has been
+    forced, and her lit airlock shows up the ramp. The mark points at her
+    belly door while her ramp is up.
+
 - **Canopies with more glass, shaped by role, unique to every ship
   (2026-10-31).** Astra: *"I want the canopy glass in the ships to give a
   better view to either side, as well as above and below, while also being
@@ -3333,6 +3424,20 @@ Astra has seen it working.
   hull hop). Bays with no lift skip the ride legs and take no extra time.
 
 ### Fixed
+
+- **The ramp's glitching (2026-10-31).** Astra: *"Ensure that ramp
+  structures aren't width 0."* There were two causes.
+  - **Flat rails:** the rails were single flat quads with no thickness,
+    so seen along their length they broke up into a line of pixels. Every
+    post and handrail is now a box, and a test fails if any rail side has
+    no twin across from it.
+  - **Drawn twice:** from outside a ship, her ramp was drawn twice, once
+    by her hull and once by her room, in slightly different units. The two
+    copies fought for the same pixels. The room no longer draws it when
+    you are outside.
+- **Planet names over your ramp (2026-10-31).** In a suit, or on your own
+  ramp in open space, the orbit chart's labels no longer draw over the
+  view, as they already didn't when standing on the ground.
 
 - **A ship adrift stays adrift when you rob or hail her (2026-10-30).** Robbing
   her, or anything else that takes her off her timetable, used to hand her a

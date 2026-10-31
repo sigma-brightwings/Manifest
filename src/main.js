@@ -1655,6 +1655,17 @@
        * launch the ship you have just walked away from. O, docked and in
        * the seat, is how you stand up. */
       var wk = e.key.toLowerCase();
+      /* IN A SUIT (eva.js, 2026-10-31): the jets on WASD, Space and Left
+       * Ctrl; X brakes against the nearest ship; H reels you in on your
+       * line; E takes hold of a ramp within reach. Nothing reaches the
+       * flight controls: your ship is out there without you. */
+      if (G.eva && flying() && wk !== 'escape') {
+        if (e.code === 'ControlLeft') { G.keys.crouch = true; e.preventDefault(); return; }
+        G.keys[wk] = true;
+        if (wk === ' ') e.preventDefault();
+        if (wk === 'e' || wk === 'enter') { e.preventDefault(); evaGrab(); }
+        return;
+      }
       if (G.walk && flying() && wk !== 'escape') {
         /* Left Ctrl crouches (2026-10-31), for as long as it is held. The
          * right one is left alone. */
@@ -1672,8 +1683,8 @@
        * ship holds while you are up. So the controls are yours only from
        * the seat: a pilot in the crew takes the helm and keeps whatever
        * the autopilot was doing, and with nobody to hand her to she simply
-       * coasts on the course she had. The outer door stays sealed in
-       * flight (airlock.js already refuses to cycle out into nothing). */
+       * coasts on the course she had. In flight the airlock cycles out
+       * to vacuum, and down the ramp is a spacewalk (eva.js, 2026-10-31). */
       if (wk === 'o' && flying() && !G.hyper && !G.walk && !G.ship.crashed) {
         if (G.ship.docked || G.ship.landed || tubed()) { startShipWalk('seat'); return; }
         standUpUnderway(); return;
@@ -2150,6 +2161,13 @@
        * held, and it has to be, now that the buttons are triggers: keeping
        * the old drag requirement would have meant you could only turn the
        * ship while firing it. Everywhere else a drag is still a drag. */
+      /* In a suit the mouse turns you, all the way round any way. */
+      if (G.eva && flying() && !menuOpen() && global.Eva) {
+        if (pointerLocked()) global.Eva.look(G.eva, (e.movementX || 0) * WALK_LOOK, -(e.movementY || 0) * WALK_LOOK);
+        else if (dragging) global.Eva.look(G.eva, (e.clientX - lastX) * 0.0045, -(e.clientY - lastY) * 0.0045);
+        lastX = e.clientX; lastY = e.clientY;
+        return;
+      }
       /* On foot a drag turns your head and body together. */
       if (G.walk && flying() && !menuOpen()) {
         /* With the pointer captured (mouselook, below) the mouse IS your
@@ -3823,7 +3841,7 @@
     return !!(canvas && typeof document !== 'undefined' && document.pointerLockElement === canvas);
   }
   function walkLookWanted() {
-    return !!(G.walk && flying() && !menuOpen() && !(G.cursor && G.cursor.active) && !G.talk);
+    return !!((G.walk || G.eva) && flying() && !menuOpen() && !(G.cursor && G.cursor.active) && !G.talk);
   }
   /* `ask` only from inside an input event; every frame only ever lets go. */
   function syncPointerLock(ask) {
@@ -5465,16 +5483,33 @@
             global.Walk.step(G.walk, G.keys, dtReal);
             if (G.walk.ship) { rampWalk(); rideLift(); }
             else if (G.walk.plan.hangar) hangarWalk();
-            npcFacing();
-            if (G.walk.ship) lockLabels();
-            /* Doors on the wall clock, like the walking itself. */
-            if (G.walk.ship && global.ShipDeck) global.ShipDeck.updateDoors(G.walk.plan, G.walk, dtReal, npcHold);
+            /* Off the end of the ramp into open space, the walk is over
+             * (startEva): the suit has the keys from here. */
+            if (G.walk) {
+              npcFacing();
+              if (G.walk.ship) lockLabels();
+              /* Doors on the wall clock, like the walking itself. */
+              if (G.walk.ship && global.ShipDeck) global.ShipDeck.updateDoors(G.walk.plan, G.walk, dtReal, npcHold);
+            }
           }
         }
         heldKeys = G.keys;
         G.keys = {};
       }
     }
+    /* In the suit: the jets take the held keys, and the flight controls
+     * never see them (eva.js). */
+    if (G.eva && !heldKeys) { heldKeys = G.keys; G.keys = {}; }
+    /* Boarded by force (boarding part 3): her master speaks to you the
+     * moment you are in her lock, and a standoff that went wrong puts you
+     * back out of it. */
+    if (G.aboard && G.aboard.how === 'eva' && G.walk) {
+      var ab = G.aboard;
+      if (ab.throwAt && performance.now() >= ab.throwAt) { var how = ab.throwHow; ab.throwAt = 0; throwOff(how); }
+      else if (!ab.hailed && !forceYielded() && !G.talk && !onRamp(G.walk) && flying()) { ab.hailed = true; standoffTalk(); }
+    }
+    /* Her crew shifting containers out of her lock. */
+    if (Combat.tickPushes && G.sys && flying()) Combat.tickPushes(G.sys, G, G.t, HOOKS);
     /* Off her decks by any road but her hatch — sold out from under you,
      * ordered off, the walk ended — and you are not aboard her any more. */
     if (G.aboard && !G.walk) { G.aboard = null; npcScene = null; }
@@ -5486,7 +5521,14 @@
       var deck = global.Render.shipInterior(G.ship);
       if (deck) global.ShipDeck.updateDoors(deck.plan, null, dtReal, npcHold);
     }
+    var tPre = G.t;
     try { updateWorld(dtReal); } finally { if (heldKeys) G.keys = heldKeys; }
+    /* The suit steps on the SAME clock the ships just did. Two ships and a
+     * suit coast together at tens of km/s, and stepping the suit on the
+     * wall clock while the ships stepped on the game's put a quarter of a
+     * kilometre between you and your ramp in the first second (probe,
+     * 2026-10-31): a fraction of a percent of 55 km/s is a sprint. */
+    if (G.eva) evaUpdate(Math.max(0, G.t - tPre), G.keys);
   }
 
   /* ---- standing on open ground, and leaving it (2026-10-26) -------------
@@ -7183,7 +7225,9 @@
       var viewH = (flying() && !bandShown()) ? h - FBAR_H : h;
       /* On foot in your own ship, the eye is the walker's: standing, in the
        * ship's frame, through the same projection as the seat. */
-      if (shipWalkGpu()) cam.buildWalker(cockpitShip(), G.walk, G.walk.plan.floorY + (G.walk.rideDy || 0) +
+      /* In the suit, the eye is your helmet's, in nobody's frame. */
+      if (G.eva) cam.buildFree(G.eva.pos, G.eva.f, G.eva.u, w, h - FBAR_H);
+      else if (shipWalkGpu()) cam.buildWalker(cockpitShip(), G.walk, G.walk.plan.floorY + (G.walk.rideDy || 0) +
                                          (G.walk.dy || 0) + (G.walk.eyeDy || 0), w, h - FBAR_H);
       else {
         cam.buildCockpit(cockpitShip(), w, viewH, G.look);
@@ -7245,7 +7289,10 @@
        * any more. Orbit lines, body markers and labels, traffic and the
        * predicted path go to a canvas nobody sees until the walk view is
        * drawn; the screen keeps the world and the person in it. */
-      if (G.walk && G.walk.outside) { mainCtx = ctx; ctx = offscreenCtx(w, h, ps); }
+      /* The same in a suit, and on your own ramp below her deck in open
+       * space (eva.js, 2026-10-31): planet names over your ramp are a
+       * chart, not a view. */
+      if ((G.walk && (G.walk.outside || (G.walk.ship && (G.walk.dy || 0) < -0.3))) || G.eva) { mainCtx = ctx; ctx = offscreenCtx(w, h, ps); }
       /* HOW MUCH LIGHTNING TO DRAW, decided by the clock rather than by
        * the weather. A stroke lasts about a tenth of a second; at warp the
        * frames are seconds or minutes apart, so sampling it would give
@@ -7600,6 +7647,9 @@
     }
 
     if (mainCtx) { ctx = mainCtx; mainCtx = null; }
+    /* In the suit: your own ship from outside, the hatches marked, and the
+     * suit's own readout in place of the flight HUD (eva.js). */
+    if (G.eva) { drawEvaView(ctx, cam, w, h); return; }
     if (G.viewMode === 'cockpit') drawCockpitView(ctx, cam, w, h);
     else {
       /* Berthed, from outside her: the hangar you walk in, round her. */
@@ -8324,9 +8374,23 @@
 
     for (var i = 0; i < list.length; i++) {
       var s = list[i];
+      /* The ship you are spacewalking to is drawn as a ship, with her ramp
+       * and her rooms (drawEvaView), not as traffic. */
+      if (s.spec && ((G.eva && G.eva.tg && s.spec === G.eva.tg.spec) || (G.aboard && G.aboard.spec === s.spec))) continue;
       var sp = cam.project(s.pos);
-      if (!sp) continue;
-      if (sp.x < -60 || sp.x > cam.w + 60 || sp.y < -60 || sp.y > cam.h + 60) continue;
+      /* CLOSE ENOUGH TO TOUCH (the spacewalk, 2026-10-31): a hull you are
+       * floating beside fills the view while her middle is off screen or
+       * behind you, and culling her by her middle made her vanish at the
+       * very moment you reached her ramp. Within her own length she is
+       * drawn whatever her centre does; the label and the bracket, which
+       * are about her middle, are not. */
+      var touching = V.dist(s.pos, cam.eye) < (s.size || 0) * 1.5;
+      if (!sp && !touching) continue;
+      if (!touching && (sp.x < -60 || sp.x > cam.w + 60 || sp.y < -60 || sp.y > cam.h + 60)) continue;
+      if (touching && (!sp || sp.x < -60 || sp.x > cam.w + 60 || sp.y < -60 || sp.y > cam.h + 60)) {
+        Render.drawHullModel(ctx, cam, s, s.size, V.norm(V.sub(sunPos, s.pos)), s.color, s.hullClass || s.cls);
+        continue;
+      }
 
       /* Which hull to draw. Usually the class, but a ship may name its own
        * — a Syndicate enforcer is a police-kind patrol wearing an enforcer
@@ -9760,10 +9824,15 @@
   }
   function lockCtx() {
     var s = walkHull();
-    return { landed: !!(s.landed && !s.crashed), docked: !!(s.docked || (s.tether && s.tether.joined)),
+    var landed = !!(s.landed && !s.crashed), docked = !!(s.docked || (s.tether && s.tether.joined));
+    var berth = s === G.ship && berthHangar();
+    return { landed: landed, docked: docked,
              tube: !!((s.tether && s.tether.joined) || s.docked === 'tube'),
              /* In her hangar, open to it (airlock.js ctx.berth). */
-             berth: s === G.ship && berthHangar(),
+             berth: berth,
+             /* In open space: the ramp opens onto nothing and down it is a
+              * spacewalk (eva.js, 2026-10-31). */
+             vacuum: !landed && !docked && !berth && !!global.Eva,
              breathable: global.Airlock ? global.Airlock.breathable(s.landedOn) : true };
   }
   function lockFloorY() { var p = lockPlan(); return p ? (p.decks ? p.decks.main.floorY : p.floorY) : 0; }
@@ -9789,7 +9858,11 @@
      * running finishes; hers is the one whose events you hear. */
     if (G.aboard && G.ship && Render.shipInterior) {
       var mine = Render.shipInterior(G.ship);
-      if (mine) AL.step(G.ship, mine.plan, dt, { landed: !!(G.ship.landed && !G.ship.crashed), docked: !!G.ship.docked, breathable: true,
+      var myLanded = !!(G.ship.landed && !G.ship.crashed), myDocked = !!(G.ship.docked || tubed());
+      /* In open space your ramp stays open behind you while you are aboard
+       * her: it is the way home (eva.js). */
+      if (mine) AL.step(G.ship, mine.plan, dt, { landed: myLanded, docked: myDocked, breathable: true,
+                                                  vacuum: !myLanded && !myDocked && !!global.Eva,
                                                   berth: !!G.ship.docked && G.ship.docked !== 'tube' && !!(Render.outsidePlan && Render.outsidePlan(G.ship)) });
     }
     var p = lockPlan();
@@ -9799,7 +9872,8 @@
     var ev = AL.step(walkHull(), p, dt, ctx);
     if (!ev) return;
     var air = ctx.breathable ? '' : '  —  suit sealed, the air out there is not air';
-    if (ev === 'lowering') say('Cycled out  —  ramp coming down' + air, 5);
+    if (ev === 'vacuum') say('Cycled out to vacuum  —  the ramp is opening; walk down it and you are out in your suit', 6);
+    else if (ev === 'lowering') say('Cycled out  —  ramp coming down' + air, 5);
     else if (ev === 'hatch') say('Cycled out  —  the hatch is open to your berth', 5);
     else if (ev === 'out') say('Cycled out' + air, 4);
     else if (ev === 'in') say('Cycled in  —  the inner door is yours', 4);
@@ -9840,6 +9914,8 @@
        * platform once it is down. */
       var bottom = rp.mode === 'lift' ? rp.foot + 0.15 : rp.hinge - run + 0.15;
       if (onMain && t >= 0.999 && inX && w.z < bottom) {
+        /* In open space, off the end of it is a spacewalk (eva.js). */
+        if (lockCtx().vacuum) { startEva(walkHull()); return; }
         var op = Render.outsidePlan(walkHull());
         if (op) {
           w.plan = op; w.outside = true; w.near = null;
@@ -9880,7 +9956,11 @@
     if (!on) return;
     if (!w.outside) {
       w.dy = -rp.drop * t;
+      /* Raised off the bottom, the hold that kept you from going straight
+       * back out after climbing aboard from a spacewalk lets go. */
+      if (t < 0.99) w.evaHold = false;
       if (t >= 0.999) {
+        if (lockCtx().vacuum) { if (!w.evaHold) startEva(walkHull()); return; }
         if (berthHangar() && stepIntoHangar(fy - rp.drop)) return;
         var op = Render.outsidePlan(walkHull());
         if (op) { w.plan = op; w.outside = true; w.dy = 0; }
@@ -9923,6 +10003,13 @@
     if (a.berth && it.kind === 'ramp') { say('Walk down her ramp  -  the hangar is at the foot of it', 3); return true; }
     if (it.kind === 'hatch') {
       if (a.cycle) { say('The airlock is cycling', 2); return true; }
+      /* Come aboard by force, her people hold her inner door until they
+       * have stood aside (boarding part 3, the standoff). */
+      if (G.aboard && G.aboard.how === 'eva' && a.side === 'out' && !forceYielded()) {
+        say('Her crew are holding the inner door against you  —  her master is in the airlock with you', 5);
+        standoffTalk(true);
+        return true;
+      }
       if (a.side === 'out' && a.ramp > 0 && onRamp(w) && lockPlan().ramp.mode !== 'lift') { say('Step off the ramp first', 3); return true; }
       r = AL.request(walkHull(), a.side === 'in' ? 'out' : 'in', c);
       say(r.ok ? r.say : 'Not now  —  ' + r.why, r.ok ? 4 : 4);
@@ -10079,9 +10166,13 @@
    * see the world through), a patch of her world's ground under her, and
    * what there is to use. */
   function drawOutsideView(ctx, cam, w, h) {
-    var s = G.ship;
+    /* Hers when it is her ramp you are on (walkHull): the hull is the one
+     * whose rooms are up the ramp. Yours as well, in open space, where she
+     * is out there beside her. */
+    var s = walkHull();
     var sunDir = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), s.pos));
     Render.drawShipModel(ctx, cam, s, sunDir, null);
+    if (s !== G.ship && !G.ship.docked) Render.drawShipModel(ctx, cam, G.ship, sunDir, null);
     /* In her hangar the floor is the hangar's, not a world's. */
     var gp = berthHangar() ? null : (Render.groundPatch ? Render.groundPatch(s) : null);
     if (gp && glLive()) global.GLWorld.queueMesh(cam, s, gp, Render.hullLength(s), sunDir, 0, null);
@@ -10149,6 +10240,8 @@
   }
   function poseVisitor() {
     var a = G.aboard;
+    /* Boarded by force from a spacewalk: wherever she is drifting. */
+    if (a && a.how === 'eva') { poseEvaVisitor(); return; }
     /* At the other end of a tube: where she is on her own rail, lying the
      * way your hull lies (the tube joins you belly to belly). */
     if (a && a.ship && a.how === 'tube') {
@@ -10354,6 +10447,331 @@
   /* Joined to a ship by her tube — not merely waiting for her to come. */
   function tubed() { return !!(G.ship && G.ship.tether && G.ship.tether.joined); }
 
+  /* ---- THE SPACEWALK (eva.js, boarding part 3, 2026-10-31) ---------------
+   * Astra: "Fly the suit". Cycle out in open space and the ramp opens onto
+   * nothing; walk off the end of it and you are in your suit, on a safety
+   * line clipped to your own ramp. A ship you have disabled is marked, her
+   * ramp foot is where you go in (her outer door is forced from outside),
+   * and E within reach of a ramp foot takes hold of it.
+   *
+   * Every ramp foot is found the one way: off her interior plan, in her
+   * bridge frame (Render.bridgeFrame), posed wherever she is right now, so
+   * the point you aim at is the point the walk puts you on. */
+  function rampFootWorld(ship) {
+    var d = ship && Render.shipInterior ? Render.shipInterior(ship) : null;
+    var p = d && d.plan, rp = p && p.ramp, SD = global.ShipDeck;
+    if (!rp) return null;
+    var fy = p.decks ? p.decks.main.floorY : p.floorY;
+    var x = (rp.x0 + rp.x1) / 2, y, z;
+    if (rp.mode === 'lift') { z = (rp.foot + rp.hinge) / 2; y = fy - rp.drop; }
+    else {
+      z = rp.hinge - rp.len * Math.cos(rp.angle);
+      y = SD && SD.rampFloor ? SD.rampFloor(rp, fy, 1, x, z + 0.05) : null;
+      if (y === null || y === undefined || !isFinite(y)) y = fy - rp.len * Math.sin(rp.angle);
+    }
+    var F = Render.bridgeFrame ? Render.bridgeFrame(ship) : ship;
+    return { world: Render.localToWorld(F, x * Render.M, y * Render.M, z * Render.M),
+             x: x, y: y, z: z, lift: rp.mode === 'lift', plan: p };
+  }
+  /* A ship somebody can walk: hers, from her spec, posed at her live state. */
+  function specRoute(spec) {
+    return spec.liftedFrom || { id: spec.id, name: spec.name, cls: spec.cls, className: spec.className,
+                                size: spec.size, faction: spec.faction };
+  }
+  function specVisitor(spec) {
+    if (!spec._visit) {
+      spec._visit = makeVisitor(specRoute(spec), null);
+      spec._visit.docked = null;
+      var hd = (Combat.HULLS || {})[spec._visit.hullId] || {};
+      spec._visit.cargoCap = hd.cargoCap || 0;
+    }
+    var v = spec._visit, L = spec.live;
+    if (L) {
+      v.pos = V.clone(L.pos); v.vel = V.clone(L.vel || V.zero());
+      v.fwd = V.clone(L.fwd); v.up = V.clone(L.up); v.right = V.clone(L.right);
+    }
+    return v;
+  }
+  var EVA_LOOK_KM = 3;              // a disabled ship this close is marked
+  /* The disabled ship nearest the suit (or your ship, when you are not out). */
+  function evaTarget(from) {
+    var list = (G.sys && G.sys.patrols) || [], best = null, bd = EVA_LOOK_KM;
+    from = from || (G.eva ? G.eva.pos : G.ship.pos);
+    for (var i = 0; i < list.length; i++) {
+      var s = list[i];
+      if (!s || !s.disabled || s.dead || !s.live) continue;
+      var d = V.dist(from, s.live.pos);
+      if (d < bd) { bd = d; best = s; }
+    }
+    if (!best) return null;
+    var v = specVisitor(best);
+    var foot = rampFootWorld(v);
+    /* Her ramp is up until somebody forces it: what you aim at is the door
+     * in her belly skin, not the empty space where her ramp would land. */
+    var a = global.Airlock ? global.Airlock.state(v) : v.airlock;
+    var hm = foot && Render.hatchModel ? Render.hatchModel(v) : null;
+    if (foot && hm && !(a && a.ramp > 0.5)) {
+      var Lh = Render.hullLength(v);
+      foot.world = Render.localToWorld(v, hm.hatch[0] * Lh, hm.hatch[1] * Lh - 0.0008, hm.hatch[2] * Lh);
+    }
+    return { spec: best, live: best.live, visitor: v, foot: foot, dist: bd };
+  }
+  /* Off the end of a ramp in open space. `ship` is whose ramp: yours, or
+   * hers on the way back from her. */
+  function startEva(ship, shove) {
+    var w = G.walk, E = global.Eva;
+    if (!w || !E) return;
+    var F = cockpitShip();
+    G.cam.buildWalker(F, w, w.plan.floorY + (w.rideDy || 0) + (w.dy || 0) + (w.eyeDy || 0), 100, 100);
+    var eye = V.clone(G.cam.eye), f = V.clone(G.cam.f);
+    var left = G.aboard && G.aboard.how === 'eva' ? G.aboard.spec : null;
+    /* Off the ramp at a walk (half a metre a second), or thrown. */
+    var vel = V.addScaled(V.clone(ship.vel || G.ship.vel || V.zero()), shove ? shove.dir : f, shove ? shove.kms : 0.0005);
+    if (!G.aboard) G.evaHelm = w.helm || null;
+    G.walk = null;
+    G.aboard = null; npcScene = null;
+    if (G.talk) G.talk = null;
+    G.eva = E.start({ pos: eye, vel: vel, fwd: f, up: F.up });
+    G.eva.from = left ? left.id : null;
+    G.warpIndex = 0;
+    G.viewMode = 'cockpit';
+    if (!shove) say(left ? 'Out of her and into open space  —  your line still runs back to your own ramp; H reels you in'
+                         : 'Out in your suit  —  WASD, Space and Ctrl fire the jets, X brakes, H reels you in on the line, E takes hold of a ramp', 8);
+  }
+  function evaUpdate(dt, keys) {
+    var e = G.eva, E = global.Eva;
+    if (!e || !E) return;
+    /* Nothing to be out in: your ship docked, landed or jumped without you
+     * cannot happen from the controls, but a load or a scripted move can. */
+    if (!G.ship || G.ship.docked || G.ship.landed || G.hyper) { G.eva = null; return; }
+    G.warpIndex = 0;
+    if (!flying()) return;
+    var mine = rampFootWorld(G.ship), tg = evaTarget();
+    var ref = { pos: G.ship.pos, vel: G.ship.vel || V.zero(), name: G.ship.shipName || 'your ship', mine: true };
+    if (tg && tg.dist < V.dist(e.pos, G.ship.pos)) ref = { pos: tg.live.pos, vel: tg.live.vel || V.zero(), name: tg.spec.name };
+    var g = Sim.acceleration ? Sim.acceleration(e.pos, G.sys, G.t) : null;
+    var was = V.clone(e.pos);
+    E.step(e, keys, dt, { g: g, ref: ref, home: mine ? { pos: mine.world, vel: G.ship.vel || V.zero() } : null });
+    evaCollide(was, dt);
+    e.mine = mine; e.tg = tg; e.ref = ref;
+  }
+  /* SOLID HULLS AND WALLS FOR THE SUIT (2026-10-31). Astra: "collision
+   * detection with ships and station walls, so we aren't flying through
+   * the hull of a ship like I just saw". Your path this frame relative to
+   * each hull near you — your own, hers, anyone's — against the hull as it
+   * is drawn (Render.hullSegmentHit), and against a station's triangles as
+   * a ship is (Sim.checkStationImpact). A touch stops you and lets you
+   * slide along the plate; a hit above SUIT_SAFE_KMS bruises you, knocks
+   * a jet line loose (gas lost) and says so. */
+  var SUIT_R_KM = 0.0005;          // half a metre of suit and pack
+  var SUIT_SAFE_KMS = 0.0025;      // 2.5 m/s: faster than this is a blow
+  function evaCollide(was, dt) {
+    var e = G.eva, R = global.Render;
+    if (!e || !R || !R.hullSegmentHit || !(dt > 0)) return;
+    var hulls = [G.ship], list = Sim.shipsAll ? Sim.shipsAll(G.sys, G.t) : [];
+    for (var i = 0; i < list.length; i++) {
+      var o = list[i];
+      if (!o || !o.pos || !o.fwd || !(V.dist(o.pos, e.pos) < (o.size || 0.03) * 1.5 + 0.05)) continue;
+      /* The ship you are boarding is solid as she is drawn: her walked
+       * hull with her ramp's well cut out, so her own doorway lets you in. */
+      if (e.tg && o.spec && o.spec === e.tg.spec && e.tg.visitor) hulls.push(e.tg.visitor);
+      else hulls.push(o);
+    }
+    var worst = 0;
+    for (var pass = 0; pass < 3; pass++) {
+      var hit = null, hv = null, ha = null;
+      for (var j = 0; j < hulls.length; j++) {
+        var s = hulls[j], sv = s.vel || V.zero();
+        /* Her motion this frame taken off yours: the path relative to her. */
+        var a = V.addScaled(was, sv, dt);
+        var h = R.hullSegmentHit(s, a, e.pos, SUIT_R_KM);
+        if (h && (!hit || h.t < hit.t)) { hit = h; hv = sv; ha = a; }
+      }
+      if (!hit) break;
+      var seg = V.sub(e.pos, ha), L = V.len(seg);
+      var back = L > 1e-9 ? Math.min(1, 0.0003 / L) : 0;
+      e.pos = V.addScaled(V.addScaled(ha, seg, Math.max(0, hit.t - back)), hit.normal, 0.0002);
+      var rel = V.sub(e.vel, hv), into = -V.dot(rel, hit.normal), sp = V.len(rel);
+      if (into > 0) e.vel = V.addScaled(e.vel, hit.normal, into);
+      if (sp > SUIT_SAFE_KMS) e.vel = V.add(hv, V.scale(V.sub(e.vel, hv), 0.3));
+      if (sp > worst) worst = sp;
+      was = V.addScaled(e.pos, hv, -dt);
+    }
+    /* A station's walls, as a ship meets them. */
+    if (Sim.checkStationImpact) {
+      var body = { pos: e.pos, vel: e.vel };
+      var w = Sim.checkStationImpact(body, G.sys, G.t, was, G.t - dt);
+      if (w) { e.pos = body.pos; e.vel = body.vel; if (w.speed > worst) worst = w.speed; }
+    }
+    if (worst > SUIT_SAFE_KMS && (!e.bruisedAt || performance.now() - e.bruisedAt > 1500)) {
+      e.bruisedAt = performance.now();
+      var lost = Math.min(e.gas, (worst - SUIT_SAFE_KMS) * 1000 * 2);
+      e.gas = Math.max(0, e.gas - lost);
+      say('You hit the hull at ' + (worst * 1000).toFixed(1) + ' m/s  —  bruised, and a jet line knocked loose: ' +
+          Math.round(lost / E_GAS() * 100) + '% of your gas gone', 5);
+    }
+  }
+  function E_GAS() { return (global.Eva && global.Eva.GAS_S) || 50; }
+  /* E in the suit: whichever ramp foot is within reach. */
+  function evaGrab() {
+    var e = G.eva, E = global.Eva;
+    if (!e || !E) return;
+    var mine = rampFootWorld(G.ship), tg = evaTarget();
+    if (mine && E.reach(e, mine.world)) { evaHome(mine); return; }
+    if (tg && tg.foot && E.reach(e, tg.foot.world)) {
+      if ((tg.spec.repelledUntil || 0) > G.t) {
+        say('Her outer door is dogged shut against you  —  her crew will not open it again for ' + fmtTime(tg.spec.repelledUntil - G.t), 5);
+        return;
+      }
+      boardByForce(tg);
+      return;
+    }
+    say('Nothing in reach  —  get within ' + Math.round(E.REACH_KM * 1000) + ' m of a ramp (the marked diamonds)', 3);
+  }
+  /* Onto a ramp foot, as a walker: on the ramp itself, just above the
+   * bottom of it; on a lift's platform, held so it does not drop you
+   * straight back out before you raise it. */
+  function placeOnRamp(foot) {
+    var w = G.walk;
+    if (!w || !foot) return;
+    var rp = foot.plan.ramp;
+    w.x = foot.x; w.yaw = 0; w.pitch = 0; w.outside = false; w.near = null;
+    if (foot.lift) { w.z = foot.z; w.evaHold = true; }
+    else w.z = foot.z + 0.6;
+    w.plan = foot.plan.decks ? foot.plan.decks.main : foot.plan;
+    if (global.ShipDeck && global.ShipDeck.rampFloor && !foot.lift) {
+      var fy = foot.plan.decks ? foot.plan.decks.main.floorY : foot.plan.floorY;
+      var f = global.ShipDeck.rampFloor(rp, fy, 1, w.x, w.z);
+      if (f !== null && f !== undefined) w.dy = f - w.plan.floorY;
+    }
+  }
+  function evaHome(mine) {
+    G.eva = null;
+    G.aboard = null;
+    startShipWalk('aboard');
+    if (!G.walk) return;
+    G.walk.underway = true;
+    G.walk.helm = G.evaHelm || null;
+    placeOnRamp(rampFootWorld(G.ship));
+    say(rampFootWorld(G.ship).lift ? 'On your own lift  —  the post raises it; the controls by the inner door cycle you in'
+                                   : 'On your own ramp  —  up it into the airlock; the controls by the inner door cycle you in', 6);
+  }
+  /* Her outer door, forced from outside: you are in her airlock and her
+   * people know it. Her inner door is theirs to hold (lockUse) until she
+   * yields — the standoff. */
+  function boardByForce(tg) {
+    var spec = tg.spec, v = tg.visitor;
+    if (!Render.shipInterior || !Render.shipInterior(v)) { say('Her hull has no way in that a suit can work', 4); return; }
+    if (global.Airlock) {
+      var al = global.Airlock.state(v);
+      al.side = 'out'; al.ramp = 1; al.want = 1; al.cycle = null; al.hatch = 0;
+    }
+    G.eva = null;
+    G.aboard = { ship: v, route: specRoute(spec), port: null, how: 'eva', spec: spec };
+    v.cargo = {};
+    var man = Combat.holdOf ? Combat.holdOf(G.sys, spec) : (spec.manifest || []);
+    (man || []).forEach(function (m) { v.cargo[m.cid] = (v.cargo[m.cid] || 0) + (m.qty || m.tonnes || 0); });
+    startShipWalk('aboard');
+    if (!G.walk) return;
+    G.walk.underway = true;
+    var al2 = global.Airlock ? global.Airlock.state(v) : null;
+    if (al2) { al2.side = 'out'; al2.ramp = 1; al2.want = 1; }
+    placeOnRamp(rampFootWorld(v));
+    say(forceYielded()
+        ? 'Aboard the ' + spec.name + '  —  she struck to you; her inner door is open to you'
+        : 'You force the ' + spec.name + '\'s outer door  —  her crew are in the airlock waiting for you', 7);
+  }
+  /* Has she given in: struck when you called on her to heave to, or
+   * talked, bought or frightened into standing aside (the standoff). */
+  function forceYielded() {
+    var s = G.aboard && G.aboard.spec;
+    return !!(s && (s.yielded || s.surrendered));
+  }
+  function poseEvaVisitor() {
+    var a = G.aboard;
+    if (a && a.how === 'eva' && a.spec) specVisitor(a.spec);
+  }
+
+  /* ---- THE STANDOFF (boarding part 3, 2026-10-31) -------------------------
+   * Her master stands at the inboard end of her airlock, facing you, until
+   * she yields; then he goes back to his helm. Talking to him is the
+   * standoff (dialogue.js STANDOFF), and what it settles is done here. */
+  function standoffScene(sc, plan) {
+    var spec = G.aboard && G.aboard.spec, at = plan && plan.aboard;
+    if (!sc || !spec || !at) return;
+    var deckPlan = plan.decks ? plan.decks.main : plan;
+    var room = global.Walk && global.Walk.roomAt ? global.Walk.roomAt(deckPlan, at.x, at.z) : null;
+    /* Back against her inner door, an arm's length and more from you. */
+    var z = room ? Math.max(at.z + 0.8, Math.min(room.z1 - 0.35, at.z + 1.6)) : at.z + 1.4;
+    sc.people.forEach(function (p) {
+      if (!p.master) return;
+      p.standoff = true; p.spec = spec;
+      if (spec.yielded || spec.surrendered) return;
+      p.holdAt = { x: at.x, z: z, yaw: Math.PI, deck: plan.decks ? 'main' : null };
+      p.helmSeat = false; p.away = false;
+      p.x = at.x; p.z = z; p.yaw = Math.PI; p.sit = 0; p.lie = 0;
+      p.task = { at: { x: at.x, z: z }, act: 'stand', yaw: Math.PI, hold: 600, deck: p.holdAt.deck };
+      p.act = 'walk'; p.until = 0;
+    });
+  }
+  function standoffMaster() {
+    var sc = npcSceneNow();
+    if (!sc || !sc.people) return null;
+    for (var i = 0; i < sc.people.length; i++) if (sc.people[i].master && sc.people[i].standoff) return sc.people[i];
+    return null;
+  }
+  function standoffTalk() {
+    if (!G.walk || G.talk || !global.Dialogue) return;
+    var m = standoffMaster();
+    if (m) openTalk(m);
+  }
+  /* What the standoff settled (talkChoose hands it here). */
+  function resolveStandoff(so) {
+    var a = G.aboard, spec = a && a.spec;
+    if (!a || !spec) return;
+    if (so.ok) {
+      var m = standoffMaster();
+      if (m) { m.holdAt = null; m.helmSeat = true; m.until = 0; }
+      say((so.how === 'pay' ? 'Paid off' : 'She yields') + '  —  her inner door is yours; point at a container in her hold and her crew shift it out of her airlock', 8);
+      return;
+    }
+    /* Thrown out, or climbing out: a beat for the last word to land. */
+    a.throwAt = performance.now() + (so.thrown ? 1600 : 900);
+    a.throwHow = so.thrown ? 'thrown' : 'back';
+  }
+  /* Out of her lock and into space: at her ramp foot, and with a shove if
+   * her people did it for you. */
+  function throwOff(how) {
+    var a = G.aboard;
+    if (!a || !G.walk) return;
+    var v = a.ship, foot = rampFootWorld(v), spec = a.spec;
+    if (G.talk) closeTalk();
+    if (foot) placeOnRamp(foot);
+    if (foot && !foot.lift) G.walk.z = foot.z + 0.05;
+    /* Straight down out of her well: anything with a slant in it put you
+     * into the side of her bay on the way out. */
+    var out = V.scale(v.up, -1);
+    startEva(v, how === 'thrown' ? { dir: out, kms: 0.003 } : null);
+    if (how === 'thrown') {
+      var armed = spec && spec.hostileToPlayer;
+      say('Her crew bundle you out of the lock and dog the door behind you' +
+          (armed ? '  —  her gunners are going for your ship' : '') + '  —  H reels you home', 8);
+    }
+  }
+  /* Her crew shifting what you pointed at, once she has yielded. */
+  function pushCrate(it) {
+    var a = G.aboard, spec = a && a.spec;
+    if (!spec || !Combat.pushCargo) return;
+    if (!forceYielded()) { say('Her crew are not taking orders from you', 3); return; }
+    var lv = (it.levels && it.levels.length) ? it.levels : (it.cid ? [{ cid: it.cid, t: it.tonnes || 10 }] : []);
+    var n = 0, k = 0;
+    lv.forEach(function (v) { var got = Combat.pushCargo(G.sys, spec, v.cid, v.t > 0 ? v.t : 10); if (got > 0) { n += got; k++; } });
+    if (!n) { say('That one is already on its way out  —  or empty', 3); return; }
+    var E = global.Economy, c = E && E.BY_ID ? E.BY_ID[lv[0].cid] : null;
+    say('Her crew start shifting ' + Math.round(n) + ' t' + (c && k === 1 ? ' of ' + c.name.toLowerCase() : '') + ' to her outer door  —  ' +
+        k + ' container' + (k > 1 ? 's' : '') + ', one every ' + (Combat.PUSH_S || 6) + ' s; your scoop takes them outside', 7);
+  }
+
   /* Down your ramp's well into the tube, and up into her airlock. Her outer
    * hatch is open to the tube, as a berth hatch is to a station. */
   function boardByTube() {
@@ -10532,6 +10950,9 @@
       npcScene.people.forEach(function (p) {
         if (p.master) p.contactOf = function () { var c = visitContact(herName, herRoute); return c ? c.obj : null; };
       });
+      /* Boarded by force: her master in her airlock, between you and her
+       * inner door, until she yields (the standoff). */
+      if (G.aboard.how === 'eva') standoffScene(npcScene, dv.plan);
       npcScene.roster = roster;
       return npcScene;
     }
@@ -10718,6 +11139,12 @@
       if (it.kind === 'tram') { startRide('tram', it); return; }
       var her = G.aboard.ship.shipName;
       if (it.kind === 'cargo') { say(visitHoldLine(), 7); return; }
+      /* Boarded by force and yielded: point, and her crew shift it. */
+      if (it.kind === 'crate') {
+        if (G.aboard.how === 'eva') pushCrate(it);
+        else say(visitHoldLine(), 6);
+        return;
+      }
       if (it.kind === 'seat') { say('Her helm  —  her master\'s chair, not yours', 4); return; }
       if (it.kind === 'station' || it.kind === 'copilot' || it.kind === 'turret' || it.kind === 'engine') {
         say('The ' + her + '\'s ' + (it.kind === 'turret' ? 'turret' : it.kind === 'engine' ? 'drive console' : 'console') +
@@ -10826,6 +11253,150 @@
     drawWalkOverlay(ctx, w, h, view && view.room);
   }
 
+  /* ---- in the suit: what you see, and the suit's readout (eva.js) -------
+   * Your own ship from outside (her ramp down, the airlock lit up it), the
+   * disabled ship drawn as the traffic draws her, and both ramp feet marked
+   * with a diamond and the distance; one that is off screen is an arrow on
+   * the edge pointing at it, never a word for which way to turn. */
+  function evaDist(km) {
+    var m = km * 1000;
+    return m < 1000 ? Math.round(m) + ' m' : (km < 100 ? km.toFixed(1) : Math.round(km)) + ' km';
+  }
+  /* `taken`: the label boxes already drawn this frame, so two marks that
+   * land together (both ramps behind you) stack instead of overprinting. */
+  function evaText(ctx, txt, x, y, w, taken) {
+    var tw = ctx.measureText(txt).width;
+    x = Math.max(tw / 2 + 6, Math.min(w - tw / 2 - 6, x));
+    for (var n = 0; n < 4; n++) {
+      var hit = false;
+      for (var i = 0; i < taken.length; i++) {
+        var b = taken[i];
+        if (Math.abs(b.x - x) < (b.w + tw) / 2 + 4 && Math.abs(b.y - y) < 14) { hit = true; break; }
+      }
+      if (!hit) break;
+      y += y > 60 ? -16 : 16;
+    }
+    taken.push({ x: x, y: y, w: tw });
+    ctx.fillText(txt, x, y);
+  }
+  function evaMark(ctx, cam, p, label, col, w, vh, taken) {
+    if (!p) return;
+    taken = taken || [];
+    var d = V.dist(G.eva.pos, p), txt = label + '  ' + evaDist(d);
+    var sp = cam.project(p), M = 26;
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    if (sp && sp.x >= M && sp.x <= w - M && sp.y >= M && sp.y <= vh - M) {
+      var r = 7;
+      ctx.strokeStyle = col; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(sp.x, sp.y - r); ctx.lineTo(sp.x + r, sp.y); ctx.lineTo(sp.x, sp.y + r); ctx.lineTo(sp.x - r, sp.y);
+      ctx.closePath(); ctx.stroke();
+      ctx.fillStyle = col;
+      evaText(ctx, txt, sp.x, sp.y + r + 14, w, taken);
+    } else {
+      /* Off screen or behind you: the way to it, on the screen's edge. */
+      var v = V.sub(p, cam.eye), sx = V.dot(v, cam.r), sy = -V.dot(v, cam.u);
+      if (Math.hypot(sx, sy) < 1e-12) sx = 1;
+      var a = Math.atan2(sy, sx), ca = Math.cos(a), sa = Math.sin(a);
+      var hx = w / 2 - M - 20, hy = vh / 2 - M - 20;
+      var k = Math.min(hx / Math.max(1e-6, Math.abs(ca)), hy / Math.max(1e-6, Math.abs(sa)));
+      var ex = w / 2 + ca * k, ey = vh / 2 + sa * k;
+      Render.drawArrow(ctx, ex - ca * 14, ey - sa * 14, ca, sa, 30, col, 2.4, 9);
+      ctx.fillStyle = col;
+      evaText(ctx, txt, ex - ca * 34, ey - sa * 34 + 4, w, taken);
+    }
+    ctx.restore();
+  }
+  function drawEvaView(ctx, cam, w, h) {
+    var e = G.eva, E = global.Eva, vh = h - FBAR_H;
+    var sunDir = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), G.ship.pos));
+    if (global.Airlock) global.Airlock.state(G.ship);
+    Render.drawShipModel(ctx, cam, G.ship, sunDir, null);
+    /* Close in, the room up her ramp: her airlock is where the light is. */
+    if (V.dist(e.pos, G.ship.pos) < 0.25 && Render.queueCockpitRoom && Render.cockpitGpu && Render.cockpitGpu()) {
+      Render.queueCockpitRoom(cam, cockpitShip(), { noPortals: true });
+    }
+    var mine = e.mine || rampFootWorld(G.ship), tg = e.tg;
+    /* HER, AS A SHIP AND NOT A SILHOUETTE: the hull her decks are walked in
+     * (the visitor), her ramp's bay cut out and the ramp down when her
+     * outer door has been forced, her lit airlock up it — the same drawing
+     * your own ship gets. drawTraffic leaves her out (evaDrawn). */
+    if (tg && tg.visitor) {
+      var v = tg.visitor;
+      if (global.Airlock) global.Airlock.state(v);
+      var sunV = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), v.pos));
+      Render.drawShipModel(ctx, cam, v, sunV, null);
+      if (v.airlock && v.airlock.ramp > 0 && V.dist(e.pos, v.pos) < 0.25 && Render.queueCockpitRoom && Render.cockpitGpu && Render.cockpitGpu()) {
+        Render.queueCockpitRoom(cam, Render.bridgeFrame ? Render.bridgeFrame(v) : v, { noPortals: true });
+      }
+    }
+    var taken = [];
+    evaMark(ctx, cam, mine && mine.world, 'YOUR RAMP', '#7dfaff', w, vh, taken);
+    if (tg && tg.foot) evaMark(ctx, cam, tg.foot.world, (tg.spec.name || 'her').toUpperCase() + ' — RAMP', '#ffb35a', w, vh, taken);
+    /* The readout, bottom left. */
+    var lines = [], gasF = e.gas / E.GAS_S;
+    var homeD = mine ? V.dist(e.pos, mine.world) : 0;
+    lines.push({ t: 'Line  ' + evaDist(homeD) + ' of ' + Math.round(E.LINE_KM * 1000) + ' m' + (e.taut ? '  —  TAUT' : ''),
+                 c: e.taut ? '#ffcf7a' : '#bfe8ff' });
+    if (e.ref) lines.push({ t: 'Drift against ' + (e.ref.mine ? 'your ship' : 'the ' + e.ref.name) + '  ' + (E.relSpeed(e, e.ref) * 1000).toFixed(1) + ' m/s', c: '#bfe8ff' });
+    if (tg) {
+      var how = tg.spec.surrendered ? 'struck to you' : 'drive out';
+      lines.push({ t: tg.spec.name + '  —  ' + how + ', ' + evaDist(V.dist(e.pos, tg.live.pos)) + ' off', c: '#ffcf9a' });
+      if ((tg.spec.repelledUntil || 0) > G.t) lines.push({ t: 'Her outer door is dogged shut  —  ' + fmtTime(tg.spec.repelledUntil - G.t), c: '#ff9a8a' });
+    }
+    ctx.save();
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.textAlign = 'left';
+    var bx = 16, by = vh - 22 - lines.length * 17 - 24;
+    ctx.fillStyle = 'rgba(6,16,22,0.72)';
+    ctx.fillRect(bx - 8, by - 18, 360, lines.length * 17 + 46);
+    ctx.fillStyle = '#bfe8ff';
+    ctx.fillText('SUIT JETS', bx, by);
+    ctx.strokeStyle = 'rgba(191,232,255,0.6)'; ctx.lineWidth = 1;
+    ctx.strokeRect(bx + 84, by - 10, 180, 11);
+    ctx.fillStyle = gasF > 0.25 ? '#7dfaff' : gasF > 0 ? '#ffb35a' : '#ff6b6b';
+    ctx.fillRect(bx + 85, by - 9, 178 * Math.max(0, gasF), 9);
+    ctx.fillStyle = e.thrusting ? '#ffffff' : '#bfe8ff';
+    ctx.fillText(gasF > 0 ? Math.round(gasF * 100) + '%' : 'DRY', bx + 272, by);
+    for (var i = 0; i < lines.length; i++) {
+      ctx.fillStyle = lines[i].c;
+      ctx.fillText(lines[i].t, bx, by + 20 + i * 17);
+    }
+    /* What E would do, under the middle of the view. */
+    var prompt = null;
+    if (mine && E.reach(e, mine.world)) prompt = 'E  —  take hold of your ramp';
+    else if (tg && tg.foot && E.reach(e, tg.foot.world)) {
+      prompt = (tg.spec.repelledUntil || 0) > G.t ? 'Her outer door is dogged shut' : 'E  —  force her outer door';
+    }
+    ctx.textAlign = 'center';
+    if (prompt) {
+      ctx.font = 'bold 13px ui-monospace, monospace';
+      var tw = ctx.measureText(prompt).width;
+      ctx.fillStyle = 'rgba(6,16,22,0.8)';
+      ctx.fillRect(w / 2 - tw / 2 - 12, vh / 2 + 26, tw + 24, 24);
+      ctx.fillStyle = '#ffe9a8';
+      ctx.fillText(prompt, w / 2, vh / 2 + 43);
+    }
+    ctx.fillStyle = 'rgba(220,240,255,0.7)';
+    ctx.beginPath(); ctx.arc(w / 2, vh / 2, 2, 0, Math.PI * 2); ctx.fill();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(180,240,255,0.55)';
+    ctx.fillText('WASD, Space, Ctrl  jets  ·  X brake  ·  H reel in  ·  mouse look  ·  E take hold  ·  Esc menu', w / 2, vh - 10);
+    if (G.message && performance.now() < G.messageUntil) {
+      ctx.font = 'bold 14px ui-monospace, monospace';
+      var mw = ctx.measureText(G.message).width;
+      ctx.fillStyle = 'rgba(6,16,22,0.85)';
+      ctx.fillRect(w / 2 - mw / 2 - 14, vh - 66, mw + 28, 30);
+      ctx.fillStyle = '#e6f0ff';
+      ctx.fillText(G.message, w / 2, vh - 46);
+    }
+    ctx.restore();
+    G.hotspots = [];
+    drawIconBar(ctx, w, vh);
+  }
+
   /* What is in front of you, where you are, and how to move: the same over
    * a station's deck and your own (2026-10-24). */
   function drawWalkOverlay(ctx, w, h, room) {
@@ -10891,6 +11462,8 @@
     global.Dialogue.choose(G, G.sys, talkPort(), tk.st, i);
     /* Signing someone on changes who is on the deck. */
     if (tk.st.hired) npcScene = null;
+    /* The standoff in her airlock, settled (boarding part 3). */
+    if (tk.st.standoff) { var so = tk.st.standoff; tk.st.standoff = null; resolveStandoff(so); }
     /* Her master opened her books (dialogue.js DEAL): the hailed-ship board
      * on the comms page, pinned to her by name as a hailed deal is. */
     if (tk.st.trade && tk.person.contactOf) {

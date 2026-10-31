@@ -1928,6 +1928,25 @@
           }
         });
       }
+      /* BOARDING BY FORCE (boarding part 3, 2026-10-31): her drive cut on
+       * your say-so, and then you go over. The odds are on the row, as the
+       * prices are on the trade rows. */
+      var herSpec = c.obj && (c.obj.spec || null);
+      var dead = !!(herSpec && herSpec.disabled) || !!(c.obj && c.obj.disabled);
+      if (Combat.demandSurrender) {
+        var oddsS = herSpec && Combat.surrenderOdds ? Combat.surrenderOdds(G.sys, G, herSpec) : null;
+        opts.push({
+          label: dead ? 'She is dead in space' : 'Heave to  -  stand by to be boarded', enabled: !dead,
+          note: dead ? 'park within 150 m, match her, and go across in your suit'
+              : oddsS !== null ? 'she cuts her drive and waits for you  -  about ' + Math.round(oddsS * 100) + '% she does'
+              : 'she cuts her drive and waits for you  -  or runs',
+          fn: function () {
+            G.piracyMenu = null;
+            var r = Combat.demandSurrender(G.sys, G, G.t, c.obj, hooksFor());
+            if (!r.ok && r.why) say(r.why, 6);
+          }
+        });
+      }
       opts.push({
         label: 'Never mind', enabled: true,
         fn: function () { G.piracyMenu = null; }

@@ -558,6 +558,9 @@
        * marines, her security, her raiders — stand their watch in a room
        * rather than at a seat. Both flags are only ever set by visitScene,
        * so your own crew's scripts are untouched. */
+      /* Held to one spot (main.js, boarding part 3, 2026-10-31): her master
+       * in her airlock, between a boarder and her inner door. */
+      if (p.holdAt) return on({ at: { x: p.holdAt.x, z: p.holdAt.z }, act: 'stand', yaw: p.holdAt.yaw || 0, hold: 600 }, p.holdAt.deck || null);
       if (p.helmSeat) {
         var hs = itemsOfKind(W, 'seat')[0];
         if (hs) return on({ at: { x: hs.x, z: hs.sitZ !== undefined ? hs.sitZ : hs.z - 0.08 }, act: 'sit', yaw: 0, hold: 600, station: true }, hs.deck);

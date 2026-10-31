@@ -715,7 +715,11 @@
         var lbl = !cr.cid ? ''
           : cr.mixed ? cr.levels.map(function (v) { return nameOf(v.cid) + (unitT ? ' ' + tFmt(v.t) : ''); }).join('  /  ')
           : nameOf(cr.cid) + (cr.tonnes ? '  ·  ' + tFmt(cr.tonnes) : '');
-        item('crate', cr.x0 + 0.55, cr.z0 + 0.55, lbl, { silent: !lbl, counter: [cr.x0, cr.z0, cr.x1, cr.z1], cid: cr.cid || null });
+        /* What is in it, for a boarder pointing at it (boarding part 3):
+         * the containers' cargoes and the stack's tonnes. */
+        item('crate', cr.x0 + 0.55, cr.z0 + 0.55, lbl, { silent: !lbl, counter: [cr.x0, cr.z0, cr.x1, cr.z1], cid: cr.cid || null,
+                                                         levels: (cr.levels || []).map(function (v) { return { cid: v.cid, t: v.t }; }),
+                                                         tonnes: cr.tonnes || 0 });
       });
       item('cargo', cargo.x1 - 0.35, cargo.z1 - 0.25, 'Cargo manifest', { counter: [cargo.x1 - 0.6, cargo.z1 - 0.4, cargo.x1, cargo.z1] });
     }
@@ -1756,17 +1760,34 @@
     }
     quad(m, P(x0, yy, z0), P(x0 + 0.06, yy, z0), P(x0 + 0.06, yy, z1), P(x0, yy, z1), pal.hazard);
     quad(m, P(x1 - 0.06, yy, z0), P(x1, yy, z0), P(x1, yy, z1), P(x1 - 0.06, yy, z1), pal.hazard);
-    /* The rails, which fold flat with it when it is up. */
+    /* The rails, which fold flat with it when it is up. SOLID (2026-10-31):
+     * each post and each handrail was one flat quad, a plane with no
+     * thickness, so from the ramp itself - looking along a rail - it was
+     * seen edge-on and shimmered as a line of broken pixels (Astra: "ensure
+     * that ramp structures aren't width 0"). Every one is a box now. */
     if (t > 0.02) {
       var rh = 0.9 * Math.min(1, t * 1.5);
-      [x0 + 0.03, x1 - 0.03].forEach(function (xr) {
+      [x0 + 0.04, x1 - 0.04].forEach(function (xr) {
         for (var zp = z1 - 0.2; zp > z0 + 0.1; zp -= 1.2) {
-          quad(m, P(xr - 0.02, fy, zp - 0.03), P(xr + 0.02, fy, zp - 0.03), P(xr + 0.02, fy + rh, zp - 0.03), P(xr - 0.02, fy + rh, zp - 0.03), pal.rib);
+          rampBox(m, P, xr - 0.025, fy, zp - 0.025, xr + 0.025, fy + rh, zp + 0.025, pal.rib);
         }
-        quad(m, P(xr, fy + rh - 0.04, z0 + 0.1), P(xr, fy + rh - 0.04, z1 - 0.2), P(xr, fy + rh, z1 - 0.2), P(xr, fy + rh, z0 + 0.1), pal.trim);
+        rampBox(m, P, xr - 0.025, fy + rh - 0.05, z0 + 0.1, xr + 0.025, fy + rh, z1 - 0.2, pal.trim);
       });
     }
     return m;
+  }
+  /* A box in the ramp's own frame: its eight corners through `P`, which
+   * lays the ramp down at its angle. Six faces, so it has thickness from
+   * every side. */
+  function rampBox(m, P, x0, y0, z0, x1, y1, z1, col) {
+    var a = P(x0, y0, z0), b = P(x1, y0, z0), c = P(x1, y0, z1), d = P(x0, y0, z1);
+    var e = P(x0, y1, z0), f = P(x1, y1, z0), g = P(x1, y1, z1), h = P(x0, y1, z1);
+    quad(m, e, f, g, h, col);      // top
+    quad(m, a, d, c, b, col);      // bottom
+    quad(m, a, b, f, e, col);      // foot end
+    quad(m, d, h, g, c, col);      // hinge end
+    quad(m, a, e, h, d, col);      // outboard
+    quad(m, b, c, g, f, col);      // inboard
   }
 
   /* Where your feet are on the ramp, in the room's metres: the height of
