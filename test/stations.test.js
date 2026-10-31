@@ -387,5 +387,81 @@ check('eight weeks owing: foreclosed, and she runs on under new owners', st.seiz
       hx.said.some(function (m) { return /FORECLOSED/.test(m); }), hx.said[hx.said.length - 1]);
 st.books.trade = saveBooks; st.books.visits = saveVisits;
 
+console.log('the rest of her crates, her freight and her crew');
+/* A yard with a second trade aboard, a relay and a battery, a rated crew
+ * and some freight - founded over the same world at another time. */
+var Gy = game(['slipway', 'repair', 'quarters', 'market', 'relay', 'battery']);
+Gy.t = T0 + 9000; placeOver(Gy, world, 1.9);
+Gy.ship.crew = [{ id: 'c1', name: 'Ilse', rating: 5 }, { id: 'c2', name: 'Oro', rating: 4 }];
+Gy.ship.cargo = { grain: 30 };
+check('a rated crew works faster', S.crewMul(Gy.ship.crew) > 1.2, S.crewMul(Gy.ship.crew).toFixed(2) + 'x');
+var ry = S.found(Gy, sys, Gy.t, 'orbital', hooks());
+check('a shipyard founded with a market hall aboard', ry.ok && ry.st.type === 'shipyard', ry.why);
+var sy = ry.st;
+check('her crew rate carries their skill', Math.abs(sy.rates.unpack - 1.5 * S.crewMul(sy.crew)) < 1e-9, sy.rates.unpack + ' vs ' + 1.5 * S.crewMul(sy.crew));
+Gy.t = S.opensAt(sy) + 1;
+S.update(Gy, sys, Gy.t, hooks());
+var py = sys.byId[S.portId(sy)];
+check('she trades as both', py && S.typesOf(sy, Gy.t).join(',') === 'shipyard,market' && /Shipyard & Market station/.test(py.market.roleName),
+      py && py.market.roleName);
+var yr = global.Economy.ROLE_BY_ID.shipyard.bias;
+check('her shipyard goods are on her floor', yr.every(function (c) { return py.market.rows[c] && py.market.rows[c].prod > 0; }));
+check('her freight went onto her shelves, and onto her account', sy.stockSold && sy.stockValue > 0 && sy.balance >= sy.stockValue,
+      sy.stockValue + ' cr');
+check('a relay brings more ships: 15% more berth fees', Math.abs(S.relayMul(sy) - 1.15) < 1e-9 || S.batteries(sy) === 1);
+check('a founding battery counts', S.batteries(sy) === 1 && S.takeWeeks(sy) === S.TAKE_WEEKS + 2);
+
+console.log('the Syndicate wants its cut');
+var G2 = { stations: [], ship: { credits: 0 }, t: 0 };
+var rsys = { corruption: 90, starId: star.id, factions: [] };
+check('in a corrupt system they ask', S.racketApplies(G2, rsys));
+check('not in a clean one', !S.racketApplies(G2, { corruption: 10, starId: star.id }));
+check('not in pirate space: bands raid, they do not run rackets', !S.racketApplies(G2, { corruption: 95, heldBy: 'pirate' }));
+sy.racketHere = true; sy.racket = { paying: true, refused: 0 };
+var b0y = sy.balance; Gy.t = sy.paidTo;
+S.settle(Gy, Gy.t + S.WEEK + 1, hooks());
+var incY = S.incomeWeek(sy);
+check('paying: a quarter of her takings goes to them', sy.lastWeek && sy.lastWeek.income === incY.market + incY.berths);
+S.setPaying(Gy, sy, false);
+var hr = hooks(); Gy.t = sy.paidTo;
+S.settle(Gy, Gy.t + S.WEEK + 1, hr);
+check('refused: the first week is a warning', sy.racket.refused === 1 && hr.said.some(function (m) { return /protection/.test(m); }), hr.said[0]);
+var hs = hooks(); Gy.t = sy.paidTo;
+S.settle(Gy, Gy.t + (S.takeWeeks(sy) - 2) * S.WEEK + 1, hs);   // one short of the count
+check('then sabotage, loudly, and a count to when they take her', !sy.seized && sy.racket.refused === S.takeWeeks(sy) - 1 &&
+      hs.said.some(function (m) { return /SABOTAGED|counting/.test(m) && /take her in 1/.test(m); }),
+      JSON.stringify({ refused: sy.racket.refused, take: S.takeWeeks(sy), seized: sy.seized, said: hs.said }));
+var ht = hooks(); Gy.t = sy.paidTo;
+S.settle(Gy, Gy.t + S.WEEK + 1, ht);
+check('refused long enough, they take her', sy.seized && sy.takenBy === 'outlaw' && py.faction === 'outlaw' && !S.owns(Gy, py),
+      JSON.stringify({ refused: sy.racket.refused, seized: sy.seized, took: sy.takenBy, said: ht.said }));
+
+console.log('buying her back');
+Gy.ship.docked = null; Gy.sys = sys;
+check('only at her own desk', /desk/.test(S.buyBackRefusal(Gy, sys, sy)));
+Gy.ship.docked = py.id;
+Gy.ship.credits = 10;
+check('for more than she cost', S.buyBackPrice(sy) > S.buildCost(sy) && /wants/.test(S.buyBackRefusal(Gy, sys, sy)), S.buyBackPrice(sy) + ' cr');
+Gy.ship.credits = 1e7;
+var bb = S.buyBack(Gy, sys, sy, hooks());
+check('bought back: yours again', bb.ok && !sy.seized && S.owns(Gy, py) && py.faction === sy.faction, bb.why || bb.price + ' cr');
+Gy.ship.docked = null;
+
+console.log('stitching an XL yard');
+var Cm = Combat;
+check('one Crawler builds no XL hulls', /XL yard/.test(Cm.orderRefusal({ ship: { credits: 1e9 }, standing: {} }, py, 'leviathan')));
+var Gx = game(['berth']);
+Gx.stations = Gy.stations; Gx.t = Gy.t + 3600;
+var csx = S.crawlerState(sy, sys, Gx.t);
+Gx.ship.pos = V.add(csx.pos, { x: 4, y: 0, z: 0 }); Gx.ship.vel = V.clone(csx.vel);
+var mk1 = global.Render.portModelFor(py);
+var rxs = S.stitch(Gx, sys, sy, Gx.t, hooks());
+check('a second Crawler stitched on', rxs.ok && sy.crawlers === 2 && Gx.ship.hullId === 'bollard' && py.xlYard, rxs.why);
+check('she brought her crates as upgrades', S.pending(sy, Gx.t) >= 1);
+var mk2 = global.Render.portModelFor(py), lib2 = global.Render.libPort(mk2), lib1 = global.Render.libPort(mk1);
+check('drawn as two Crawlers side by side', /:x2$/.test(mk2) && lib2 && lib1 && lib2.shell.f.length > lib1.shell.f.length * 1.8, mk2);
+check('an XL yard builds XL hulls', !/XL yard/.test(Cm.orderRefusal({ ship: { credits: 1e9 }, standing: {} }, py, 'leviathan') || ''));
+check('and calls herself one', /XL shipyard/.test(S.typeName(sy, Gx.t)), S.typeName(sy, Gx.t));
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

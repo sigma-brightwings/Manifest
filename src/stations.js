@@ -398,7 +398,8 @@
     var id = 'st' + Math.round(t) + '-' + G.stations.length;
     /* The tug you take is off her shift. */
     var took = loadout.craft.indexOf('tug') >= 0 ? 'tug' : 'tugM';
-    var crewRates = { unpack: Math.max(0, rates.unpack - Cn.CRAFT[took].unpack), ferry: rates.ferry };
+    var cm = crewMul(s.crew);
+    var crewRates = { unpack: Math.max(0, rates.unpack - Cn.CRAFT[took].unpack) * cm, ferry: rates.ferry * cm };
     var st = {
       id: id, name: (opts && opts.name) || nameFor(G, type.id, host),
       star: star, starName: G.here ? G.here.name : null,
@@ -470,8 +471,10 @@
     if (Gen.addPortRoutes) Gen.addPortRoutes(sys, port, new RNG('ps-traffic|' + seedOf(st)), opensAt(st));
     /* Her books, from what she has just become; and dark if she was. */
     takeBooks(st, port, sys, opensAt(st));
+    sellStock(st, port, opensAt(st));
     applyLight(null, sys, st);
     applyUpgrades(null, sys, st, opensAt(st));
+    if (st.racketHere === undefined) st.racketHere = racketApplies({}, sys);
     return port;
   }
   /* The body she is, not yet in any system. */
@@ -629,7 +632,8 @@
     }
     /* Her week, wherever you are: money moves by wire. */
     settle(G, t, hooks).forEach(function (l) { out.push(l); });
-    list(G).forEach(function (st) { if (st.star === star) { applyLight(G, sys, st); applyUpgrades(G, sys, st, t); } });
+    var rh = racketApplies(G, sys);
+    list(G).forEach(function (st) { if (st.star === star) { st.racketHere = rh; applyLight(G, sys, st); applyUpgrades(G, sys, st, t); } });
     var L = global.Licence, mine = list(G).filter(function (st) {
       return st.star === star && !st.seized && st.licence && st.licence.forged;
     });
@@ -763,7 +767,8 @@
   function incomeWeek(st) {
     var b = st.books;
     if (!b) return { market: 0, berths: 0 };
-    return { market: Math.round(MARGIN * Math.sqrt(Math.max(0, b.trade)) * incomeMul(st)), berths: Math.round(b.visits * BERTH_FEE) };
+    return { market: Math.round(MARGIN * Math.sqrt(Math.max(0, b.trade)) * incomeMul(st)),
+             berths: Math.round(b.visits * BERTH_FEE * relayMul(st)) };
   }
   /* What a week looks like, from her books, before fuel. */
   function forecast(st) {
@@ -785,13 +790,21 @@
     if (!(weeks > 0)) return null;
     var tot = { income: 0, costs: 0, fuelBought: 0, wired: 0, dark: 0, weeks: weeks };
     var b = st.books;
+    tot.racket = 0; tot.sabotaged = 0; tot.warned = false;
     for (var w = 0; w < weeks; w++) {
       var lit = !st.dark;
       var inc = incomeWeek(st);
       var income = lit ? inc.market + inc.berths : 0;
+      /* THE SYNDICATE'S CUT (racketWeek): paid, or refused - and a refused
+       * week may be a sabotaged one, which earns nothing. */
+      var rk = racketWeek(G, st, income, st.paidTo + (w + 1) * WEEK);
+      if (rk.sabotaged) { income = 0; tot.sabotaged++; }
+      if (rk.warned) tot.warned = true;
+      tot.racket += rk.paid;
       var costs = wagesWeek(st) + upkeepWeek(st);
-      st.balance += income - costs;
+      st.balance += income - costs - rk.paid;
       tot.income += income; tot.costs += costs;
+      if (rk.taken) { takenBySyndicate(G, st, hooks); break; }
       /* The reactor: burn from the tank, then buy it back up. */
       var need = b.burn * 7;
       st.tank = Math.max(0, (st.tank || 0) - need);
@@ -818,9 +831,21 @@
     st.paidTo += weeks * WEEK;
     st.lastWeek = { at: t, income: Math.round(tot.income / weeks), costs: Math.round(tot.costs / weeks),
                     fuel: Math.round(tot.fuelBought / weeks), wired: Math.round(tot.wired), weeks: weeks };
-    var line = st.name + (st.seized ? ' FORECLOSED' : '') +
+    var counting = st.racketHere && st.racket && !st.racket.paying && st.racket.refused > 1;
+    if (tot.warned || tot.sabotaged || counting) {
+      /* Loud every week they are counting, sabotaged or not. */
+      var left = st.racket ? Math.max(0, takeWeeks(st) - st.racket.refused) : 0;
+      var rl = st.takenBy && st.seized ? null
+        : tot.sabotaged ? st.name + ': SABOTAGED by the Syndicate (' + tot.sabotaged + ' wk with nothing earned) - pay their cut, or they take her in ' +
+          left + ' weeks'
+        : counting ? st.name + ': the Syndicate is counting - their cut refused ' + st.racket.refused + ' weeks; they take her in ' + left
+        : st.name + ': the Syndicate wants a quarter of her takings for protection. Pay it in INDUSTRY, or expect trouble.';
+      if (rl) { say(hooks, rl, 12); journal(G, rl); }
+    }
+    var line = st.name + (st.seized ? (st.takenBy ? ' TAKEN' : ' FORECLOSED') : '') +
       ': ' + weeks + ' wk, in ' + Math.round(tot.income) + ' cr, out ' + Math.round(tot.costs + tot.fuelBought) +
-      ' cr' + (tot.wired ? ', ' + Math.round(tot.wired) + ' cr wired to you' : '') +
+      ' cr' + (tot.racket ? ', ' + Math.round(tot.racket) + ' cr to the Syndicate' : '') +
+      (tot.wired ? ', ' + Math.round(tot.wired) + ' cr wired to you' : '') +
       (st.balance < 0 ? ', OWES ' + Math.round(-st.balance) + ' cr (' + st.owingWeeks + ' of ' + FORECLOSE_WEEKS + ' weeks to foreclosure)' : '') +
       (st.dark ? ', DARK - her reactor is out of fuel' : '');
     if (!st.seized && (st.balance < 0 || st.dark)) {
@@ -841,7 +866,7 @@
     st.seized = true;
     st.foreclosed = true;
     st.seizedBy = (st.licence && st.licence.fac) || st.faction;
-    var sys = G.systemCache && G.systemCache[st.star];
+    var sys = sysOfStar(G, st.star);
     portsOf(sys, st).forEach(function (q) { q.player = false; q.faction = st.seizedBy; });
     var line = st.name + ' is FORECLOSED for ' + Math.round(-st.balance) + ' cr of arrears - she runs on under new owners';
     say(hooks, line, 12);
@@ -912,7 +937,10 @@
    * second trade - each is its own slice, and the station screen says so. */
   var UNLOAD_KM = 20;
   var DOES = { berth: 'one more berth', warehouse: 'shelves hold 30% more', reactor: '10% more trade',
-               fuelcell: 'three more weeks of reactor tank' };
+               fuelcell: 'three more weeks of reactor tank',
+               battery: 'holds off the Syndicate\'s enforcers', relay: '15% more ships call',
+               market: 'a second trade', refinery: 'a second trade', skimrig: 'a second trade',
+               oreworks: 'a second trade', habring: 'a second trade', slipway: 'a second trade' };
   function unloadRefusal(G, sys, st, t) {
     var s = G.ship, Cn = C();
     if (!st || st.seized) return 'not yours';
@@ -954,7 +982,11 @@
     var n = fitted(st, t);
     st.fittedCounts = n;
     if (!p) return n;
-    var key = JSON.stringify(n);
+    var key = JSON.stringify(n) + '|' + (st.crawlers || 1) + '|' + (st.seized ? 1 : 0);
+    portsOf(sys, st).forEach(function (q) {
+      q.xlYard = (st.crawlers || 1) >= 2 && typesOf(st, t).indexOf('shipyard') >= 0;
+      q.crawlerCount = st.crawlers || 1;
+    });
     if (p._upgradeKey === key) return n;
     p._upgradeKey = key;
     /* Her cubes show what is fitted: her founding crates and her upgrades
@@ -963,6 +995,9 @@
     var foundN = st.foundN || st.crates.length, sch = schedule(st), shown = st.crates.slice(0, foundN);
     for (var ci = foundN; ci < st.crates.length; ci++) if (t >= sch.crateIn[ci]) shown.push(st.crates[ci]);
     portsOf(sys, st).forEach(function (q) { q.crawlerCrates = shown; });
+    /* A SECOND DEFINING CRATE IS A SECOND TRADE: her founding type's
+     * goods and the other's, both, on one floor. */
+    addTrades(st, sys, t);
     /* Berth clamps are berths in her model (Render.crawlerPortLib counts
      * them off her crates), so the bay, the berth positions and the
      * capacity all agree. */
@@ -974,6 +1009,252 @@
   }
   function incomeMul(st) { return 1 + 0.1 * ((st.fittedCounts && st.fittedCounts.reactor) || 0); }
   function tankWeeksCap(st) { return TANK_WEEKS + 3 * ((st.fittedCounts && st.fittedCounts.fuelcell) || 0); }
+
+  /* ---- what the rest of her crates do (2026-10-31, "build all the
+   * leftovers") -------------------------------------------------------------
+   *
+   *   Defence battery  guns that answer when somebody shoots at her. What
+   *                    shoots at a station is the Syndicate's enforcers:
+   *                    each battery takes a fifth off the odds of a
+   *                    sabotaged week, and holds them off two more weeks
+   *                    before they can take her.
+   *   Comms relay      her prices and news go out sooner, so more ships
+   *                    come: 15% more calls (and berth fees) each.
+   *   A second         defining crate (fitted at founding or later): she
+   *                    trades as both. Its trade's goods are added to her
+   *                    floor as production (Economy.addProduction), and her
+   *                    books are re-taken.
+   *   Her freight      is on her shelves the day she opens, sold into her
+   *                    own market at her prices onto her account.
+   *   Her crew         from the Crawler know the work: each point of
+   *                    rating is 3% on her crew's unpack and ferry rates,
+   *                    to half again at most. */
+  var DEFINES = { market: 'market', refinery: 'refinery', skimrig: 'skimmer', oreworks: 'mining',
+                  habring: 'hab', slipway: 'shipyard' };
+  var TYPE_NAME = { market: 'Market station', refinery: 'Refinery', skimmer: 'Skimmer station',
+                    mining: 'Mining station', hab: 'Passenger hab', shipyard: 'Shipyard' };
+  function crewMul(crew) {
+    var r = 0;
+    (crew || []).forEach(function (c) { r += (c && c.rating) || 0; });
+    return Math.min(1.5, 1 + 0.03 * r);
+  }
+  function relayMul(st) { return 1 + 0.15 * ((st.fittedCounts && st.fittedCounts.relay) || 0); }
+  function batteries(st) {
+    var n = (st.fittedCounts && st.fittedCounts.battery) || 0;
+    (st.crates || []).slice(0, st.foundN || st.crates.length).forEach(function (id) { if (id === 'battery') n++; });
+    return n;
+  }
+  /* Her trades: her founding type first, then every other defining crate
+   * she has in, founding or fitted. */
+  function typesOf(st, t) {
+    var out = [st.type], sch = schedule(st), foundN = st.foundN || st.crates.length;
+    st.crates.forEach(function (id, i) {
+      var ty = DEFINES[id];
+      if (!ty || out.indexOf(ty) >= 0) return;
+      if (i >= foundN && !(t >= sch.crateIn[i])) return;
+      out.push(ty);
+    });
+    return out;
+  }
+  function typeName(st, t) {
+    var ts = typesOf(st, t);
+    if ((st.crawlers || 1) >= 2 && ts.indexOf('shipyard') >= 0) ts = ts.map(function (x) { return x === 'shipyard' ? 'shipyardXL' : x; });
+    return ts.map(function (x) { return x === 'shipyardXL' ? 'XL shipyard' : (TYPE_NAME[x] || x); }).join(' & ');
+  }
+  function grossOf(port) {
+    var Eco = global.Economy, gross = 0, rows = (port.market && port.market.rows) || {};
+    for (var cid in rows) {
+      var c = Eco && Eco.BY_ID ? Eco.BY_ID[cid] : null;
+      if (!c || c.waste) continue;
+      gross += (rows[cid].prod + rows[cid].cons) * c.base * rows[cid].local;
+    }
+    return gross;
+  }
+  function addTrades(st, sys, t) {
+    var p = sys && sys.byId && sys.byId[portId(st)], Eco = global.Economy;
+    if (!p || !p.market || !Eco || !Eco.addProduction || !Eco.ROLE_BY_ID) return;
+    p._trades = p._trades || [st.type];
+    var ts = typesOf(st, t), added = false;
+    /* A trade's goods at what a busy row of hers moves already. */
+    var flows = [];
+    for (var c in p.market.rows) flows.push(p.market.rows[c].prod + p.market.rows[c].cons);
+    flows.sort(function (a, b) { return a - b; });
+    var flow = flows.length ? flows[Math.floor(flows.length * 0.75)] : 10;
+    ts.forEach(function (ty) {
+      if (p._trades.indexOf(ty) >= 0) return;
+      var role = Eco.ROLE_BY_ID[ROLE_FOR[ty]];
+      (role && role.bias || []).forEach(function (cid) { Eco.addProduction(p, cid, flow * 0.8); });
+      p._trades.push(ty);
+      added = true;
+    });
+    var nm = typeName(st, t);
+    portsOf(sys, st).forEach(function (q) { if (q.market) q.market.roleName = nm; });
+    if (added && st.books) st.books.trade = grossOf(p);
+  }
+  function sellStock(st, port, t) {
+    var Eco = global.Economy;
+    if (st.stockSold || !st.stock || !port.market || !Eco) return 0;
+    var got = 0;
+    for (var cid in st.stock) {
+      var q = st.stock[cid];
+      if (!(q > 0) || !port.market.rows[cid]) continue;
+      var pr = null;
+      try { pr = Eco.price(port, cid, t); } catch (e) { pr = null; }
+      var each = pr && pr.sell ? pr.sell : (Eco.BY_ID[cid] ? Eco.BY_ID[cid].base : 0);
+      got += q * each;
+      if (Eco.applyTrade) Eco.applyTrade(port, cid, -q, t);
+    }
+    st.stockSold = true;
+    st.stockValue = Math.round(got);
+    st.balance = (st.balance || 0) + Math.round(got);
+    return got;
+  }
+
+  /* ---- the Syndicate's protection (agreed 2026-10-15, built 2026-10-31) --
+   * In a Syndicate hold, or anywhere corrupt enough (CORRUPT_RACKET), they
+   * want a quarter of her takings. PAY: she runs, and nothing else happens.
+   * REFUSE: slow and loud, like every way of losing her - the first week a
+   * warning; after it, each week a chance her takings are sabotaged
+   * (SABOTAGE, a fifth less for each Defence battery); and after
+   * TAKE_WEEKS refused weeks (two more for each battery) they take her.
+   * She runs on, theirs. Paying again stops the count but does not undo it. */
+  var RACKET_CUT = 0.25, SABOTAGE = 0.5, TAKE_WEEKS = 6, CORRUPT_RACKET = 60;
+  function takeWeeks(st) { return TAKE_WEEKS + 2 * batteries(st); }
+  function racketApplies(G, sys) {
+    var Ti = global.Tithe, H = global.Holdings, Cm = global.Combat;
+    if (!sys) return false;
+    if (Ti && Ti.held && Ti.held(sys)) return true;
+    if (sys.heldBy === 'pirate') return false;          // bands run no rackets: they raid
+    var corr = H && H.corruptionOf ? H.corruptionOf(G, sys, starOf(G, sys))
+             : Cm && Cm.systemCorruption ? Cm.systemCorruption(G, sys) : (sys.corruption || 0);
+    return corr >= CORRUPT_RACKET;
+  }
+  function racketRoll(st, wk) {
+    var RNGc = global.RNG;
+    var h = RNGc && RNGc.hashString ? RNGc.hashString('racket|' + st.id + '|' + Math.floor(wk / WEEK)) : (wk * 2654435761) >>> 0;
+    return (h % 10000) / 10000;
+  }
+  function racketWeek(G, st, income, wkEnd) {
+    var out = { paid: 0, sabotaged: false, warned: false, taken: false };
+    if (!st.racketHere || st.seized) return out;
+    st.racket = st.racket || { paying: false, refused: 0 };
+    if (st.racket.paying) { out.paid = Math.round(income * RACKET_CUT); return out; }
+    st.racket.refused++;
+    if (st.racket.refused === 1) { out.warned = true; return out; }
+    if (racketRoll(st, wkEnd) < Math.max(0, SABOTAGE - 0.2 * batteries(st))) out.sabotaged = true;
+    if (st.racket.refused >= takeWeeks(st)) out.taken = true;
+    return out;
+  }
+  function setPaying(G, st, paying) {
+    if (!st || st.seized) return { ok: false, why: 'not yours' };
+    st.racket = st.racket || { paying: false, refused: 0 };
+    st.racket.paying = !!paying;
+    if (paying) st.racket.refused = 0;
+    return { ok: true, paying: st.racket.paying };
+  }
+  function takenBySyndicate(G, st, hooks) {
+    if (st.seized) return;
+    st.seized = true;
+    st.takenBy = 'outlaw';
+    st.seizedBy = 'outlaw';
+    var sys = sysOfStar(G, st.star);
+    portsOf(sys, st).forEach(function (q) { q.player = false; q.faction = 'outlaw'; });
+    var line = st.name + ' is TAKEN by the Syndicate - you refused their cut for ' + st.racket.refused +
+      ' weeks. She runs on under them; dock there to buy her back.';
+    say(hooks, line, 12);
+    journal(G, line);
+  }
+
+  /* ---- buying her back (story-spine beat C, at station scale) ------------
+   * Whoever has her keeps her running, and sells her back for more than she
+   * is worth: a quarter over what she cost, and whatever she owed. At her
+   * own desk. Taken under the law (a forged licence, or foreclosure), the
+   * law wants a real licence first; the Syndicate wants only the money. */
+  var BUYBACK = 1.25;
+  function buyBackPrice(st) { return Math.round(buildCost(st) * BUYBACK + Math.max(0, -(st.balance || 0))); }
+  function buyBackRefusal(G, sys, st) {
+    if (!st || !st.seized) return 'she is yours';
+    if (!dockedAtAny(G, st)) return 'at her own desk - dock at ' + st.name;
+    if (!st.takenBy) {
+      var L = global.Licence, rec = L && L.rec(G, sys);
+      if (L && L.needed(sys) && !(rec && !rec.forged)) return 'the law wants a real licence for this system first';
+    }
+    var price = buyBackPrice(st);
+    if ((G.ship.credits || 0) < price) return (st.takenBy ? 'the Syndicate wants ' : 'the liquidator wants ') + price + ' cr';
+    return null;
+  }
+  function dockedAtAny(G, st) {
+    return !!(G.ship && portIds(st).indexOf(G.ship.docked) >= 0 && st.star === starOf(G, G.sys));
+  }
+  function buyBack(G, sys, st, hooks) {
+    var why = buyBackRefusal(G, sys, st);
+    if (why) return { ok: false, why: why };
+    var price = buyBackPrice(st);
+    G.ship.credits -= price;
+    st.seized = false; st.foreclosed = false; st.takenBy = null; st.seizedBy = null;
+    st.balance = 0; st.owingWeeks = 0;
+    if (st.racket) { st.racket.refused = 0; }
+    if (st.licence && st.licence.forged) st.licence.forged = false;
+    portsOf(sys, st).forEach(function (q) { q.player = true; q.faction = st.faction; });
+    var line = st.name + ' is yours again - ' + price + ' cr';
+    say(hooks, line, 10);
+    journal(G, line);
+    return { ok: true, price: price };
+  }
+
+  /* ---- stitching (the XL shipyard) ---------------------------------------
+   * Astra: "To get the XL sized shipyards, we stitch two crawlers together",
+   * and chains of more. A loaded or empty Crawler within UNLOAD_KM of your
+   * shipyard (or berthed with her) is stitched on along her flank links:
+   * she stops for good as the founding Crawler did, her crates go into the
+   * ring as upgrades, and you leave in one of her tugs. Two or more make a
+   * shipyard an XL shipyard: the only one of yours that builds XL hulls. */
+  function stitchRefusal(G, sys, st, t) {
+    var Cn = C();
+    if (!st || st.seized) return 'not yours';
+    if (!Cn.isCrawler(G.ship)) return 'only a Crawler is stitched on';
+    if (st.kind === 'surface') return 'a Crawler is stitched along an orbital station\'s flank';
+    if (typesOf(st, t).indexOf('shipyard') < 0) return 'only a shipyard is stitched into an XL yard';
+    if (st.star !== starOf(G, sys)) return st.name + ' is in another system';
+    if (!isOpen(st, t)) return st.name + ' is still being built';
+    if (global.Combat && global.Combat.lienRefusal) {
+      var lien = global.Combat.lienRefusal(G);
+      if (lien) return lien;
+    }
+    var cs = crawlerState(st, sys, t);
+    if (!cs) return 'cannot find her';
+    var d = V.dist(cs.pos, G.ship.pos);
+    if (d > UNLOAD_KM) return Math.round(d) + ' km from her - come within ' + UNLOAD_KM + ' km of her flank';
+    var rates = Cn.craftRates(Cn.loadoutOf(G.ship));
+    if (!rates.tugs) return 'she needs a tug in her bay for you to leave in';
+    return null;
+  }
+  function stitch(G, sys, st, t, hooks) {
+    var why = stitchRefusal(G, sys, st, t);
+    if (why) return { ok: false, why: why };
+    var s = G.ship, Cn = C();
+    if (Cn.aboard(s).length) unloadTo(G, sys, st, t, { say: function () {} });
+    var loadout = Cn.loadoutOf(s);
+    st.crawlers = (st.crawlers || 1) + 1;
+    st.stitched = st.stitched || [];
+    st.stitched.push({ name: s.shipName || null, livery: s.livery || null, at: t });
+    (s.crew || []).forEach(function (c) { st.crew.push(c); });
+    var tug = boardTug(G, st, loadout);
+    var cs = crawlerState(st, sys, t);
+    if (cs) { s.pos = V.add(cs.pos, { x: 0, y: 0, z: 0.5 }); s.vel = V.clone(cs.vel); }
+    applyUpgrades(G, sys, st, t);
+    var line = 'Stitched onto ' + st.name + ' - ' + st.crawlers + ' Crawlers' +
+      (st.crawlers >= 2 ? ': an XL shipyard, building XL hulls' : '');
+    say(hooks, line, 10);
+    journal(G, line);
+    return { ok: true, crawlers: st.crawlers, tug: tug };
+  }
+
+  /* Her system, if it has been generated: the cache, or the one you are in. */
+  function sysOfStar(G, star) {
+    if (G.systemCache && G.systemCache[star]) return G.systemCache[star];
+    return G.sys && starOf(G, G.sys) === star ? G.sys : null;
+  }
 
   function mineAt(G, port) { return port && port.playerStation ? byId(G, port.playerStation) : null; }
   function owns(G, port) { var st = mineAt(G, port); return !!st && !st.seized; }
@@ -997,7 +1278,12 @@
     forecastSite: forecastSite, siteKey: siteKey, upId: upId, portIds: portIds, portsOf: portsOf,
     fitted: fitted, pending: pending, workHere: workHere, UNLOAD_KM: UNLOAD_KM, DOES: DOES,
     unloadRefusal: unloadRefusal, unloadTo: unloadTo, applyUpgrades: applyUpgrades,
-    incomeMul: incomeMul, tankWeeksCap: tankWeeksCap
+    incomeMul: incomeMul, tankWeeksCap: tankWeeksCap,
+    DEFINES: DEFINES, crewMul: crewMul, relayMul: relayMul, batteries: batteries, typesOf: typesOf, typeName: typeName,
+    sellStock: sellStock, RACKET_CUT: RACKET_CUT, SABOTAGE: SABOTAGE, TAKE_WEEKS: TAKE_WEEKS, takeWeeks: takeWeeks,
+    racketApplies: racketApplies, racketWeek: racketWeek, setPaying: setPaying, takenBySyndicate: takenBySyndicate,
+    BUYBACK: BUYBACK, buyBackPrice: buyBackPrice, buyBackRefusal: buyBackRefusal, buyBack: buyBack,
+    stitchRefusal: stitchRefusal, stitch: stitch
   };
   global.Stations = Stations;
   if (typeof module !== 'undefined' && module.exports) module.exports = Stations;

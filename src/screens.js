@@ -1525,6 +1525,21 @@
           });
         });
       }
+      /* STITCHED ON: a Crawler alongside a shipyard of yours makes it an
+       * XL yard (Sx.stitch). */
+      if (Cx.isCrawler(G.ship)) {
+        Sx.list(G).forEach(function (st) {
+          if (st.seized || st.star !== (G.here && G.here.id) || !Sx.isOpen(st, G.t)) return;
+          if (Sx.typesOf(st, G.t).indexOf('shipyard') < 0) return;
+          var sw = Sx.stitchRefusal(G, G.sys, st, G.t);
+          opts.push({
+            label: 'Stitch her onto ' + st.name,
+            enabled: !sw,
+            note: sw || ('she stops for good alongside her - ' + ((st.crawlers || 1) + 1) + ' Crawlers, an XL shipyard'),
+            fn: function () { var r = Sx.stitch(G, G.sys, st, G.t, hooksFor()); if (!r.ok) say('No: ' + r.why, 5); }
+          });
+        });
+      }
       /* ANOTHER CRAWLER BRINGS UPGRADES: unload her crates for a station
        * of yours here, berthed with her or within Sx.UNLOAD_KM. */
       if (Cx.isCrawler(G.ship) && Cx.aboard(G.ship).length) {
@@ -3732,8 +3747,15 @@
         function () {}, true);
     all.forEach(function (st) {
       if (st.seized) {
-        row('  ' + st.name + '  ·  ' + (st.foreclosed ? 'FORECLOSED' : 'SEIZED'),
+        row('  ' + st.name + '  ·  ' + (st.takenBy ? 'TAKEN BY THE SYNDICATE' : st.foreclosed ? 'FORECLOSED' : 'SEIZED'),
             (st.starName || '') + '  ·  runs under ' + (st.seizedBy || 'new owners') + ' now', function () {}, true);
+        /* BUY HER BACK, at her own desk, for more than she is worth. */
+        var bw = Sx.buyBackRefusal(G, G.sys, st);
+        row('    BUY HER BACK  —  ' + Sx.buyBackPrice(st) + ' cr', bw || 'she is yours again the moment you pay',
+            function () {
+              var r = Sx.buyBack(G, G.sys, st, hooksFor());
+              if (!r.ok) say('No: ' + r.why, 5);
+            }, !!bw, { hot: !bw });
         return;
       }
       if (!Sx.isOpen(st, G.t)) {
@@ -3748,7 +3770,7 @@
         return;
       }
       var fc = Sx.forecast(st), tw = Sx.tankWeeks(st);
-      row('  ' + (st.dark ? 'DARK  ' : '') + st.name + '  ·  ' + (fc.net >= 0 ? '+' : '') + fc.net + ' cr/wk',
+      row('  ' + (st.dark ? 'DARK  ' : '') + st.name + '  ·  ' + Sx.typeName(st, G.t) + '  ·  ' + (fc.net >= 0 ? '+' : '') + fc.net + ' cr/wk',
           'market ' + fc.market + ' + berths ' + fc.berths + '  −  wages ' + fc.wages + ', upkeep ' + fc.upkeep +
           ', reactor ' + fc.fuel + '  ·  ' + (st.starName || ''),
           function () {}, true, { hot: !st.dark && fc.net >= 0 });
@@ -3756,6 +3778,18 @@
           st.balance < 0 ? (st.owingWeeks || 0) + ' of ' + Sx.FORECLOSE_WEEKS + ' weeks owing before foreclosure'
                          : 'her float, for fuel when her tank runs low',
           function () {}, true);
+      /* THE SYNDICATE'S CUT, where they ask for one. */
+      if (st.racketHere) {
+        var rk = st.racket || { paying: false, refused: 0 };
+        row('    SYNDICATE\'S CUT  ·  ' + (rk.paying ? 'PAYING ' + Math.round(Sx.RACKET_CUT * 100) + '%' :
+              'REFUSED ' + rk.refused + ' of ' + Sx.takeWeeks(st) + ' weeks'),
+            rk.paying ? 'click to stop paying - and take what comes'
+                      : 'click to pay a quarter of her takings - or they sabotage her, then take her (each Defence battery holds them off)',
+            function () {
+              var r = Sx.setPaying(G, st, !(st.racket && st.racket.paying));
+              say(r.ok ? (r.paying ? 'You pay the Syndicate their cut for ' + st.name : 'You stop paying the Syndicate. They will notice.') : 'No: ' + r.why, 6);
+            }, false, { hot: !rk.paying && rk.refused > 0 });
+      }
       var want = st.balance < 0 ? Math.ceil(-st.balance) : 10000;
       row('    PAY IN ' + want + ' cr', st.balance < 0 ? 'clears what she owes' : 'onto her account',
           function () {

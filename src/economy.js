@@ -413,6 +413,39 @@
 
   function clamp(x, lo, hi) { return x < lo ? lo : x > hi ? hi : x; }
 
+  /* MORE OF SOMETHING, MADE HERE, after the market was built (2026-10-31).
+   * A station you founded with a second defining crate trades as both
+   * (stations.js): the second trade's goods are added to her rows as
+   * production, and the row's price factor, fill and exporter flag are
+   * recomputed by the same rules buildPortMarket uses. A row she did not
+   * have is made with a fill wobble from a stream of its own (port id and
+   * good), so nothing else in the economy draws differently. */
+  function addProduction(port, cid, tonnesPerDay) {
+    var m = port && port.market;
+    if (!m || !BY_ID[cid] || !(tonnesPerDay > 0)) return null;
+    var row = m.rows[cid];
+    if (!row) {
+      var RNGc = global.RNG || (typeof require !== 'undefined' ? require('./rng.js') : null);
+      var r = new RNGc('addprod|' + port.id + '|' + cid);
+      row = m.rows[cid] = { id: cid, prod: 0, cons: 0, cap: 0, local: 1, value: BY_ID[cid].base,
+                            amp: r.range(0.03, 0.11), periodS: r.range(9, 40) * DAY, phase: r.angle() };
+      if (m.order && m.order.indexOf(cid) < 0) {
+        m.order.push(cid);
+        m.order.sort(function (a, b) { return (BY_ID[a].tier - BY_ID[b].tier) || (BY_ID[a].base - BY_ID[b].base); });
+      }
+    }
+    row.prod += tonnesPerDay;
+    var throughput = Math.max(row.prod, row.cons, 1);
+    row.cap = Math.max(row.cap, shelfCapFor(cid, throughput) || Math.round(throughput * 9 + 120));
+    var net = row.prod - row.cons;
+    var ratio = net / Math.max(row.prod + row.cons, 1e-6);
+    row.local = clamp(1 - ratio * 0.34, 0.6, 1.5);
+    row.exporter = net > throughput * 0.08;
+    row.importer = net < -throughput * 0.08;
+    row.base = clamp(0.5 + ratio * 0.34, 0.10, 0.93);
+    return row;
+  }
+
   /* ---- how much of a thing a port keeps on the shelf ---------------------
    * Everything ordinary holds a week or two of throughput plus a floor,
    * because a port with nothing on the shelf is a port you cannot trade
@@ -1965,6 +1998,7 @@
     WASTE_PER_FISSILE: WASTE_PER_FISSILE,
     FISSILE_PER_MILFUEL: FISSILE_PER_MILFUEL,
     REACTOR_BURN: REACTOR_BURN, reactorDark: reactorDark,
+    ROLE_BY_ID: ROLE_BY_ID, addProduction: addProduction,
     ENRICH_MARGIN: ENRICH_MARGIN,
     shelfCapFor: shelfCapFor,
     MILFUEL_ID: 'milfuel'

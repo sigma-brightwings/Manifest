@@ -84,6 +84,54 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **The station leftovers: every crate does something, the Syndicate's
+  cut, buying her back, and the XL shipyard (2026-10-31).** Astra: *"Build
+  all the leftovers, then push."*
+  - **A Defence battery holds the Syndicate off.** Each one takes a fifth
+    off the odds of a sabotaged week, and adds two weeks before they can
+    take her.
+  - **A Comms relay brings more ships.** Her prices go out sooner: 15%
+    more calls, and berth fees, for each one.
+  - **A second defining crate is a second trade.** Fitted at founding or
+    later (a market hall aboard a shipyard, say), she trades as both.
+    - The second trade's goods are added to her floor as production
+      (`Economy.addProduction`, which recomputes the row by the market's
+      own rules), and her books are re-taken.
+    - Her name reads both, e.g. "Shipyard & Market station".
+  - **Her freight.** Whatever the Crawler carried as freight is on her
+    shelves the day she opens: sold into her own market at her prices,
+    onto her account.
+  - **Her crew.** The Crawler's crew know the work: each point of rating
+    adds 3% to her unpack and ferry rates, to half again at most.
+  - **The Syndicate's cut.** In a Syndicate hold, or a system at
+    corruption 60 or over, they want a quarter of her takings. Pirate
+    bands raid; they don't run rackets.
+    - **Pay** (INDUSTRY tab, under her account) and she runs; nothing else
+      happens.
+    - **Refuse** and it is slow and loud. The first week is a warning.
+      After that, each week has a 50% chance (less 20% per battery) of
+      being sabotaged and earning nothing. Every week you hear the count.
+      After six refused weeks (plus two per battery) they take her: she
+      runs on, theirs.
+    - Paying again stops the count.
+  - **Buying her back** (story-spine beat C, at station scale). A station
+    you lost (seized, foreclosed or taken) is sold back at her own desk for
+    a quarter more than she cost, plus anything she owed. The law wants a
+    real licence first; the Syndicate wants only the money.
+  - **Stitching: the XL shipyard.** A Crawler within 20 km of a shipyard
+    of yours gets *Stitch her onto ...* on her crew channel.
+    - She stops for good alongside the station, on her flank links.
+    - Her crates go into the ring as upgrades, and you leave in one of
+      her tugs.
+    - Chains of more alternate to either side.
+    - Two or more make an **XL shipyard**, drawn as the Crawlers side by
+      side.
+    - A shipyard you founded builds hulls up to L on one Crawler; XL hulls
+      need the XL yard. Every other yard is unchanged.
+  - Probe: `tools/probe-xl-yard.js` founds a shipyard, stitches a second
+    Crawler on, and looks at the pair. `test/stations.test.js` covers all
+    of the above (116 checks).
+
 - **Surface stations have two halves, and Berth clamps have places
   (2026-10-31).** Astra: *"let's do surface stations as well as extra
   berths"*. Her choice for the Crawler: *"She stays up as the orbital

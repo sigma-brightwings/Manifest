@@ -8542,6 +8542,12 @@
     if (!h) return 'no such hull';
     if (!port) return 'only on the clamps';
     if (!isShipyard(port)) return 'only a shipyard builds to order';
+    /* A SHIPYARD YOU FOUNDED builds up to L on one Crawler; an XL hull
+     * needs two stitched together (stations.js stitch). Every other yard
+     * is as it always was. */
+    if (port.playerStation && sizeOf(hullId) === 'XL' && !port.xlYard) {
+      return 'an XL hull needs an XL yard - stitch a second Crawler onto her';
+    }
     var enc = lienRefusal(G);
     if (enc) return enc;
     var gate = hullGate(G, port, h);

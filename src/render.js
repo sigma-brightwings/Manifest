@@ -930,7 +930,8 @@
   var CR_PORT = {};
   function crawlerPortKey(station) {
     var liv = station.crawlerLivery === 'syn' || station.crawlerLivery === 'navy' ? station.crawlerLivery : 'civ';
-    return 'crawler:' + liv + ':' + (station.crawlerCrates || []).slice().sort().join(',');
+    return 'crawler:' + liv + ':' + (station.crawlerCrates || []).slice().sort().join(',') +
+      ((station.crawlerCount || 1) > 1 ? ':x' + station.crawlerCount : '');
   }
   function crToStation(q) {
     return [q[2] - CR_HX, -q[0], -q[1] + CR_HZ];
@@ -940,6 +941,7 @@
     CR_PORT[role] = null;
     var parts = role.split(':');
     var liv = parts[1], crates = parts[2] ? parts[2].split(',') : [];
+    var count = parts[3] && parts[3].charAt(0) === 'x' ? Math.max(1, parseInt(parts[3].slice(1), 10) || 1) : 1;
     var cid = liv === 'syn' ? HULL_ASSIGN.crawler_syndicate : liv === 'navy' ? HULL_ASSIGN.crawler_navy : HULL_ASSIGN.crawler;
     var base = libHull(cid) || libHull(HULL_ASSIGN.crawler);
     if (!base || !base.v) return null;
@@ -962,6 +964,23 @@
       var dst = k ? leaves[k - 1] : hull;
       dst.f.push([put(dst, k, f[0]), put(dst, k, f[1]), put(dst, k, f[2])]);
       dst.c.push(full.c ? full.c[fi] : '#9a9a94');
+    }
+    /* STITCHED CRAWLERS (an XL shipyard, and chains of more): each one
+     * more is her frame again, alongside along her flank links - her beam
+     * (153 m) and a 10 m gap apart, alternately to either side - her own
+     * belly doors left shut. The first Crawler's hangar stays the bay. */
+    for (var sc = 1; sc < count; sc++) {
+      var side = sc % 2 ? 1 : -1, off = Math.ceil(sc / 2) * (163 / CR_LEN_M) * side;
+      var b0 = hull.v.length;
+      for (var vi2 = 0; vi2 < full.v.length; vi2++) {
+        var q2 = crToStation(full.v[vi2]);
+        hull.v.push([q2[0], q2[1] + off, q2[2]]);
+      }
+      for (var fi2 = 0; fi2 < full.f.length; fi2++) {
+        var f2 = full.f[fi2];
+        hull.f.push([f2[0] + b0, f2[1] + b0, f2[2] + b0]);
+        hull.c.push(full.c ? full.c[fi2] : '#9a9a94');
+      }
     }
     /* Each leaf slides its own width: port leaf to the station's -y, the
      * starboard one to +y (ship x maps to station -y). */
