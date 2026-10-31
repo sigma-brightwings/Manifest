@@ -668,13 +668,13 @@
      * yours going up here, it is where her crew says how it is going. A
      * frequency, so range 0. */
     var Sts = global.Stations, Cn0 = global.Construction;
-    var building = Sts ? Sts.buildingHere(G, G.sys, G.t) : [];
+    var building = Sts ? Sts.workHere(G, G.sys, G.t) : [];
     if (Sts && Cn0 && (Cn0.isCrawler(G.ship) || building.length)) {
       out.push({ kind: 'crew', obj: building[0] || null,
                  name: Cn0.isCrawler(G.ship) ? (G.ship.shipName || 'Your Crawler') + ' - crew' : building[0].name + ' - crew',
                  range: 0,
-                 who: Cn0.isCrawler(G.ship) ? 'Found a station here'
-                    : Sts.cratesIn(building[0], G.t) + ' of ' + building[0].crates.length + ' crates in',
+                 who: Cn0.isCrawler(G.ship) ? 'Found a station, or unload for one'
+                    : Sts.pending(building[0], G.t) + ' crate' + (Sts.pending(building[0], G.t) === 1 ? '' : 's') + ' to go in',
                  color: '#ffd36b' });
     }
 
@@ -1499,11 +1499,25 @@
           var host = Sim.dominantBody(G.ship.pos, G.sys, G.t);
           var ids = Cx.aboard(G.ship).map(function (a) { return a.crateId; });
           var ty = Sx.typeFor(ids);
+          /* WILL SHE PAY (Stations.forecastSite): the station she would be,
+           * here, put through the real market and traffic code. Cached by
+           * the hour and the site - it builds a market to answer. */
+          var fk = kind + '|' + (host && host.id) + '|' + ids.join(',') + '|' + Math.floor(G.t / 3600);
+          G._siteForecast = G._siteForecast || {};
+          if (!(fk in G._siteForecast)) {
+            var fcs = null;
+            try { fcs = Sx.forecastSite(G, G.sys, G.t, kind); } catch (e) { fcs = null; }
+            if (Object.keys(G._siteForecast).length > 8) G._siteForecast = {};
+            G._siteForecast[fk] = fcs;
+          }
+          var fcs2 = G._siteForecast[fk];
+          var fcNote = fcs2 ? '  ·  FORECAST ' + (fcs2.net >= 0 ? '+' : '') + fcs2.net + ' cr/wk (market ' + fcs2.market +
+            ', berths ' + fcs2.berths + ', costs ' + (fcs2.wages + fcs2.upkeep + fcs2.fuel) + ')' : '';
           opts.push({
             label: kind === 'orbital' ? 'Found her here, in orbit' + (host ? ' of ' + host.name : '')
                                       : 'Found her on the ground below' + (host ? ', on ' + host.name : ''),
             enabled: !why,
-            note: why || ((ty ? ty.name : 'A station') + ' - she stops here for good, and you take one of her tugs'),
+            note: (why || ((ty ? ty.name : 'A station') + ' - she stops here for good, and you take one of her tugs')) + fcNote,
             fn: function () {
               var r = Sx.found(G, G.sys, G.t, kind, hooksFor());
               if (!r.ok) say('No: ' + r.why, 5);
@@ -1511,7 +1525,30 @@
           });
         });
       }
-      Sx.buildingHere(G, G.sys, G.t).forEach(function (st) {
+      /* ANOTHER CRAWLER BRINGS UPGRADES: unload her crates for a station
+       * of yours here, berthed with her or within Sx.UNLOAD_KM. */
+      if (Cx.isCrawler(G.ship) && Cx.aboard(G.ship).length) {
+        Sx.list(G).forEach(function (st) {
+          if (st.seized || st.star !== (G.here && G.here.id) || !Sx.isOpen(st, G.t)) return;
+          var uw = Sx.unloadRefusal(G, G.sys, st, G.t);
+          opts.push({
+            label: 'Unload her crates for ' + st.name,
+            enabled: !uw,
+            note: uw || (Cx.aboard(G.ship).length + ' crates into her ring - her crew fits them, or carry them in'),
+            fn: function () { var r = Sx.unloadTo(G, G.sys, st, G.t, hooksFor()); if (!r.ok) say('No: ' + r.why, 5); }
+          });
+        });
+      }
+      Sx.workHere(G, G.sys, G.t).forEach(function (st) {
+        if (Sx.isOpen(st, G.t)) {
+          opts.push({
+            label: st.name + ' - ' + Sx.pending(st, G.t) + ' upgrade crate' + (Sx.pending(st, G.t) === 1 ? '' : 's') + ' to fit',
+            enabled: false,
+            note: 'her crew fits them in turn - carry one to her with the arms (G) and it is in at once',
+            fn: function () {}
+          });
+          return;
+        }
         var left = Math.max(0, Sx.opensAt(st) - G.t);
         var sch = Sx.schedule(st), next = null;
         st.order.forEach(function (i) { if (sch.crateIn[i] > G.t && (next === null || sch.crateIn[i] < sch.crateIn[next])) next = i; });
@@ -3678,7 +3715,73 @@
         }
       })(mine[j]);
     }
+    drawYardStations(row, s);
     return 0;
+  }
+
+  /* YOUR STATIONS (stations.js, 2026-10-31): each one's week, her tank and
+   * her account, and - at her own desk - fuelling her from your hold. Pay
+   * in at any desk: it is a transfer. */
+  function drawYardStations(row, s) {
+    var Sx = global.Stations;
+    if (!Sx) return;
+    var all = Sx.list(G);
+    if (!all.length) return;
+    row('YOUR STATIONS  ·  ' + all.filter(function (st) { return !st.seized; }).length,
+        'settled every week wherever you are  ·  over ' + Sx.RESERVE + ' cr on her account is wired to you',
+        function () {}, true);
+    all.forEach(function (st) {
+      if (st.seized) {
+        row('  ' + st.name + '  ·  ' + (st.foreclosed ? 'FORECLOSED' : 'SEIZED'),
+            (st.starName || '') + '  ·  runs under ' + (st.seizedBy || 'new owners') + ' now', function () {}, true);
+        return;
+      }
+      if (!Sx.isOpen(st, G.t)) {
+        row('  ' + st.name + '  ·  BUILDING', (st.starName || '') + '  ·  ' + Sx.cratesIn(st, G.t) + ' of ' +
+            st.crates.length + ' crates in, opens in ' + ((Sx.opensAt(st) - G.t) / 86400).toFixed(1) + ' days',
+            function () {}, true);
+        return;
+      }
+      if (!st.books) {
+        row('  ' + st.name + '  ·  OPEN', (st.starName || '') + '  ·  her first books are taken when you are next in her system',
+            function () {}, true);
+        return;
+      }
+      var fc = Sx.forecast(st), tw = Sx.tankWeeks(st);
+      row('  ' + (st.dark ? 'DARK  ' : '') + st.name + '  ·  ' + (fc.net >= 0 ? '+' : '') + fc.net + ' cr/wk',
+          'market ' + fc.market + ' + berths ' + fc.berths + '  −  wages ' + fc.wages + ', upkeep ' + fc.upkeep +
+          ', reactor ' + fc.fuel + '  ·  ' + (st.starName || ''),
+          function () {}, true, { hot: !st.dark && fc.net >= 0 });
+      row('    ACCOUNT ' + Math.round(st.balance) + ' cr' + (st.balance < 0 ? '  ·  OWES' : ''),
+          st.balance < 0 ? (st.owingWeeks || 0) + ' of ' + Sx.FORECLOSE_WEEKS + ' weeks owing before foreclosure'
+                         : 'her float, for fuel when her tank runs low',
+          function () {}, true);
+      var want = st.balance < 0 ? Math.ceil(-st.balance) : 10000;
+      row('    PAY IN ' + want + ' cr', st.balance < 0 ? 'clears what she owes' : 'onto her account',
+          function () {
+            var r = Sx.payIn(G, st, want);
+            say(r.ok ? 'Paid ' + Math.round(r.paid) + ' cr to ' + st.name + (st.dark ? '' : ' - she is lit') : 'No: ' + r.why, 5);
+          }, s.credits < 1);
+      var here = Sx.dockedAt(G, st), fis = (s.cargo && s.cargo.fissile) || 0;
+      row('    REACTOR ' + (isFinite(tw) ? tw.toFixed(1) + ' weeks' : '-') + '  ·  ' + (st.tank || 0).toFixed(1) + ' t',
+          here ? (fis > 0 ? 'FUEL HER: ' + fis.toFixed(1) + ' t of fissiles from your hold, free' : 'bring fissiles in your hold to fuel her free')
+               : 'fuel her at her own desk, from your hold',
+          function () {
+            var r = Sx.fuelFromHold(G, st);
+            say(r.ok ? r.tonnes.toFixed(1) + ' t into her reactor - ' + r.weeks.toFixed(1) + ' weeks of burn' : 'No: ' + r.why, 5);
+          }, !(here && fis > 0), { hot: here && fis > 0 });
+      /* What has been added to her since she opened (another Crawler's
+       * crates), and what each one does - or that it does nothing yet. */
+      if (st.foundN && st.crates.length > st.foundN) {
+        var fit = Sx.fitted(st, G.t), Cn2 = global.Construction, parts = [];
+        for (var fid in fit) {
+          var cr2 = Cn2.BY_ID[fid];
+          parts.push(fit[fid] + 'x ' + (cr2 ? cr2.name : fid) + ' (' + (Sx.DOES[fid] || 'fitted, does nothing yet') + ')');
+        }
+        var pend = Sx.pending(st, G.t);
+        row('    UPGRADES' + (pend ? '  ·  ' + pend + ' to fit' : ''), parts.join(', ') || 'none fitted yet', function () {}, true);
+      }
+    });
   }
 
   /* --- MODULES: station crates and the Crawler that carries them ----------

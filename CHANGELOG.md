@@ -44,6 +44,15 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Fixed
 
+- **A rumours test sampled the exact instant a ship casts off (2026-10-31).**
+  A route's period is twice its cruise plus layover, so a ship leaves her
+  far port at exactly t0 + n.5 periods. `rumours.test.js` sampled at
+  0.37k + 0.11i periods, which lands on a half for some k and i. Whether
+  she was still berthed at that instant came down to a rounding error.
+  Universal reactor demand moved the timetables, and one sample tipped
+  over. The samples are now nudged off the half; the game's code is
+  unchanged.
+
 - **Her ramp, walked up or down (2026-10-31).** Astra: *"when traversing
   the ramp, ship detail flashes on screen"*, with a screenshot of a slab
   of sunlit hull standing in her airlock.
@@ -74,6 +83,74 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
   A crate in the arms at the save is back in her ring on load.
 
 ### Added
+
+- **Your station's books, her reactor, growing her, and her own Crawler
+  for a hull (2026-10-31).** Astra: *"keep working on it, we'll push after
+  the station founding stuff is complete"*. Her choices: every port takes
+  fissiles; another Crawler hauls upgrades; the station is drawn as the
+  Crawler herself and you dock in her belly hangar.
+  - **Every port runs a fission reactor.** Every port now buys fissiles
+    for it, NPC ports included. A port in a bright sky tops up with solar
+    and burns little; one round a dim star's outer moon burns the most.
+    - Measured over 80 systems (`tools/measure-reactor.cjs`): every one of
+      656 ports now has a fissile row (462 before).
+    - The median price where fissiles are not exported is unchanged at
+      1,313 cr/t.
+    - The plant-to-press spread on the milfuel ladder is 501 cr/t (510
+      before), and the ladder still climbs.
+  - **Her week.** It is settled wherever you are, and money moves by wire.
+    - **In:** her market, on what crosses her floor, and berth fees from her
+      traffic.
+    - **Out:** her crew's and staff's wages, upkeep on what she cost, and
+      fissiles for her reactor.
+    - Over 35 sites a type (`tools/measure-stations.cjs`), median net a
+      week: market station +7k, refinery +11k, mining +26k, hab +33k,
+      shipyard +22k. Every type has sites that lose money.
+    - Her account keeps a 25,000 cr float for fuel. Anything over that is
+      wired to you each week.
+  - **Dark.** Her tank empty and no money to fill it: her market closes,
+    her traffic stops calling, and she earns nothing while her wages and
+    upkeep still run. Fuel her from your hold at her desk (free), or pay
+    into her account, and she lights again.
+  - **Foreclosure, slow and loud.** Every week she owes, you are told. After
+    eight weeks she is foreclosed: she goes to the licensing power, keeps
+    running, and pays you nothing.
+  - **Will she pay?** On her crew channel, each *Found her here* row now
+    carries a **FORECAST**: the station she would be at that spot, run
+    through the real market and traffic code. It shows what she would earn
+    and cost a week. A station founded there has the same market and berths
+    as its forecast, because her numbers come from her site, not from the
+    day she is founded. Asking changes nothing in the system.
+  - **The INDUSTRY tab** lists YOUR STATIONS. For each one it shows:
+    - building, or her week line by line;
+    - her account, with PAY IN;
+    - her reactor in weeks and tonnes, with FUEL HER at her own desk;
+    - her upgrades and what each one does.
+  - **Growing her.** A loaded Crawler within 20 km of your station gets
+    *Unload her crates for ...* on her crew channel. The crates go into
+    the station's ring. Her crew fits them in turn from the day they
+    arrive, or you carry them in with a tug's arms. Fitted:
+    - a Berth clamp is one more berth;
+    - a Warehouse makes her shelves 30% deeper;
+    - a Reactor pile adds 10% more trade;
+    - a Fuel cell is three more weeks of reactor tank.
+
+    A Defence battery, a Comms relay and a second defining crate are
+    fitted and counted, and do nothing yet (the screen says so).
+  - **She is her Crawler.** A station founded in orbit is drawn as the
+    Crawler you founded her from, in her livery, with her crates in her
+    cubes, fitted upgrades included. She is laid so her belly faces the
+    way every station's bay faces. Her belly hangar is the bay:
+    - you are cleared in through her two belly leaves, cut out of her own
+      model and sliding apart to port and starboard;
+    - you park on her ceiling pad;
+    - collision is her own hull.
+
+    Measured off Astra's re-export: hangar 200 x 116 x 37 m, door 58 m
+    wide. The port is 478 m, her length.
+  - Probes: `tools/probe-station-crawler.js` shows her flank, her belly and
+    a berth inside her; `tools/probe-founding.js` still founds, carries and
+    opens.
 
 - **An arm-tip camera on the tugs (2026-10-31).** Astra: *"the tugs need
   a fwd camera on the end of one of the arms, and a screen in the cockpit

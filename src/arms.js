@@ -245,8 +245,8 @@
     }
     if (h.kind === 'crate') {
       var Sts = global.Stations, fd = Sts && Sts.byId(G, h.station), gp = frame ? grip(frame) : null;
-      /* Her crew got to it first, or she opened: nothing left to carry. */
-      if (!fd || Sts.isOpen(fd, G.t || 0) || fd.held !== h.idx || Sts.schedule(fd).crateIn[h.idx] <= (G.t || 0)) {
+      /* Her crew got to it first: nothing left to carry. */
+      if (!fd || fd.held !== h.idx || Sts.schedule(fd).crateIn[h.idx] <= (G.t || 0)) {
         st.held = null; st.want = 0; s.armLoad = 0;
         if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(s);
         return;

@@ -564,6 +564,17 @@
 
   /* Everything a single port trades, as flow rates in tonnes per day plus
    * the warehouse capacity that turns those flows into a stock level. */
+  /* How dark a port's sky is, 0..1: starlight at the world it orbits
+   * (insolation, Earth = 1), or at that world's planet for a moon. A
+   * bright inner world runs on sunlight and tops up; a dark outer moon
+   * runs on its reactor. */
+  var REACTOR_BURN = 0.02;         // of a port's base flow, in a dark sky
+  function reactorDark(host) {
+    var ins = host && typeof host.insolation === 'number' ? host.insolation
+            : host && host.parentBody && typeof host.parentBody.insolation === 'number' ? host.parentBody.insolation : 1;
+    return Math.max(0.08, Math.min(1, 1 / (1 + ins)));
+  }
+
   function buildPortMarket(port, host, sys, rng) {
     var dev = host.economy ? host.economy.dev : developmentOf(host, rng);
     var pop = host.economy ? host.economy.pop : populationOf(host, dev);
@@ -703,6 +714,17 @@
       reclaimed = intake / WASTE_PER_FISSILE;
     }
 
+    /* EVERY STATION RUNS A FISSION REACTOR (decided 2026-10-15, built
+     * 2026-10-31): Astra, "the only real way to power something that big
+     * far from a star." So every port burns fissiles, and buys them. A
+     * port in a bright sky supplements with solar and burns little; one
+     * round a red dwarf's outer moon burns the most (reactorDark). No rng
+     * draw here, and a port that had no fissile row gets one AFTER every
+     * other row, so the draws the shelf loop below takes for the rows that
+     * were already there are the ones they always were. */
+    var reactor = flow * REACTOR_BURN * reactorDark(host);
+    ensure('fissile').cons += reactor;
+
     /* Turn flows into stock: capacity is a few days of throughput, floored
      * so a tiny port still has something on the shelf. */
     var ids = Object.keys(rows);
@@ -745,6 +767,8 @@
        * agree with them afterwards, which is exactly the sort of arithmetic
        * that goes quietly wrong when each reader recomputes it. */
       reclaim: reclaimed, slugs: 0, feed: 0,
+      /* Tonnes of fissiles a day her reactor burns (above). */
+      reactor: reactor,
       inbound: [],       // filled in once traffic routes exist
       ledger: {},        // player-caused perturbation, decays
       live: null,        // stepped near-field state, or null when dormant
@@ -1940,6 +1964,7 @@
     WASTE_PER_MILFUEL: WASTE_PER_MILFUEL,
     WASTE_PER_FISSILE: WASTE_PER_FISSILE,
     FISSILE_PER_MILFUEL: FISSILE_PER_MILFUEL,
+    REACTOR_BURN: REACTOR_BURN, reactorDark: reactorDark,
     ENRICH_MARGIN: ENRICH_MARGIN,
     shelfCapFor: shelfCapFor,
     MILFUEL_ID: 'milfuel'

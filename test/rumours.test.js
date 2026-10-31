@@ -75,7 +75,14 @@ section('berthing times match the timetable');
     var r = sys.traffic[i];
     [r.from, r.to].forEach(function (X) {
       for (var k = 0; k < 6; k++) {
-        var t = r.t0 + (k * 0.37 + i * 0.11) * r.period;
+        /* Off the exact half-period. A route's period is 2 x (cruise +
+         * layover), so she casts off from her far port at exactly t0 +
+         * (n + 0.5) periods - and these samples land there whenever
+         * 0.37k + 0.11i comes out at a half (k 5, i 15; k 2, i 16). At
+         * that instant "berthed" and "gone" differ by a rounding error,
+         * which is not what this checks. Found 2026-10-31, when every
+         * port took a reactor's fissiles and the timetables moved. */
+        var t = r.t0 + (k * 0.37 + i * 0.11 + 0.013) * r.period;
         var bt = Rum.berthTime(r, X, t, sys);
         var st = Sim.trafficState(r, sys, bt + 1);
         n++;

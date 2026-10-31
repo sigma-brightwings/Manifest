@@ -4190,6 +4190,9 @@
     }
     var port = G.sys.byId[G.ship.docked];
     if (!port.market) { say('No registered market at ' + port.name, 3); return; }
+    /* A station of yours gone dark (stations.js): her reactor is out of
+     * fuel, so is her market. Fuel her from INDUSTRY at the yard desk. */
+    if (port.dark) { say(port.name + ' is DARK - no power, no market. Fuel her reactor (INDUSTRY tab) or pay her account up.', 6); return; }
     /* Drop any keys the player was holding when they opened the console, or
      * a thruster stays lit behind a menu that has stopped listening to it. */
     G.keys = {};
@@ -9005,7 +9008,8 @@
   function drawFoundings(ctx, cam) {
     var Sts = global.Stations;
     if (!Sts || !G.stations || !G.stations.length) return;
-    var list = Sts.buildingHere(G, G.sys, G.t);
+    /* Building, or open and taking an upgrade: crates in her ring. */
+    var list = Sts.workHere(G, G.sys, G.t);
     if (!list.length) return;
     var sunPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
     list.forEach(function (st) {
@@ -9027,8 +9031,12 @@
       }
       v.pos = cs.pos; v.vel = cs.vel; v.fwd = fwd; v.up = up; v.right = right;
       var far = V.dist(cs.pos, cam.eye);
-      if (glLive() && far < WINDOWS_KM * 4) Render.drawShipModel(ctx, cam, v, sunDir, null);
-      else Render.drawHullModel(ctx, cam, v, Render.hullLength(v), sunDir, '#b5af9e', 'crawler');
+      /* Open, she is drawn as the port she is; the stand-in is for the
+       * days she is still a Crawler with her cubes open. */
+      if (!Sts.isOpen(st, G.t)) {
+        if (glLive() && far < WINDOWS_KM * 4) Render.drawShipModel(ctx, cam, v, sunDir, null);
+        else Render.drawHullModel(ctx, cam, v, Render.hullLength(v), sunDir, '#b5af9e', 'crawler');
+      }
       if (far > 40) return;
       Sts.floatingCrates(st, G.sys, G.t).forEach(function (c) { drawCrate(ctx, cam, c.pos, c.size, sunDir); });
     });

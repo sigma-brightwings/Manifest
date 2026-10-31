@@ -896,6 +896,107 @@
    * share a mesh object with a hub that does not. */
   var PORT_CACHE = {};
 
+  /* ---- A FOUNDED STATION IS HER CRAWLER (2026-10-31) ---------------------
+   * Astra chose it: "Draw her as the Crawler with her crates in the cubes,
+   * and dock in her belly hangar." Her model is the Crawler's own art,
+   * with her crates in her cubes (crawlerLoaded), laid into a station's
+   * frame so that her belly hangar IS the station's bay:
+   *
+   *   ship (x, y, z)  ->  station (z - HX, -x, -y + HZ)
+   *
+   * a proper rotation (no mirror, windings kept): her length along the
+   * station's x, her beam along y, and her belly - where the hangar door
+   * is - facing +z, the way every station's bay faces. HX centres her
+   * hangar on the bay's axis; HZ puts the outer face of her belly door at
+   * the bay's mouth (Gen SBAY_MOUTH_Z, 0.40). One station unit is her
+   * length, 478 m, so the port's radius is 0.478 km.
+   *
+   * Measured off ref/crawler-src/crawler_allLiveries_14of24.glb, in metres
+   * (divide by 478 for model units): berthHangar x +-58, y -94..-57, z
+   * -57..143; padL on its ceiling at y -59.3; the two belly leaves
+   * (berthDoorPort/Starboard_leaf) at y -96.8..-94.4, x -29..29, z
+   * -51..137, sliding apart to port and starboard.
+   *
+   * The leaves are cut out of her hull here by where their faces lie and
+   * drawn as the bay's doors (PORT_DOORS), so the door that opens for you
+   * is her own. The bay's numbers (`geom`) are her hangar's, so a ship is
+   * flown in through her belly and parked on her ceiling pad: up, in the
+   * station's frame, is out of her belly. */
+  var CR_LEN_M = 478;
+  var CR_HX = 43 / CR_LEN_M;                 // her hangar's centre, along her length
+  var CR_HZ = 0.40 - 96.8 / CR_LEN_M;        // her door's outer face to the mouth
+  var CR_DOOR = { y0: -96.9 / CR_LEN_M, y1: -94.3 / CR_LEN_M, x: 29.2 / CR_LEN_M,
+                  z0: -51.2 / CR_LEN_M, z1: 137.2 / CR_LEN_M };
+  var CR_PORT = {};
+  function crawlerPortKey(station) {
+    var liv = station.crawlerLivery === 'syn' || station.crawlerLivery === 'navy' ? station.crawlerLivery : 'civ';
+    return 'crawler:' + liv + ':' + (station.crawlerCrates || []).slice().sort().join(',');
+  }
+  function crToStation(q) {
+    return [q[2] - CR_HX, -q[0], -q[1] + CR_HZ];
+  }
+  function crawlerPortLib(role) {
+    if (CR_PORT[role] !== undefined) return CR_PORT[role];
+    CR_PORT[role] = null;
+    var parts = role.split(':');
+    var liv = parts[1], crates = parts[2] ? parts[2].split(',') : [];
+    var cid = liv === 'syn' ? HULL_ASSIGN.crawler_syndicate : liv === 'navy' ? HULL_ASSIGN.crawler_navy : HULL_ASSIGN.crawler;
+    var base = libHull(cid) || libHull(HULL_ASSIGN.crawler);
+    if (!base || !base.v) return null;
+    var full = crawlerLoaded(cid, base, { hullId: 'crawler', cargo: {},
+                                         modules: crates.map(function (id) { return { crateId: id }; }) }) || base;
+    var hull = { v: [], f: [], c: [] }, leaves = [{ v: [], f: [], c: [] }, { v: [], f: [], c: [] }];
+    var mapV = [hull, leaves[0], leaves[1]].map(function () { return {}; });
+    function put(dst, k, vi) {
+      var m = mapV[k];
+      if (m[vi] === undefined) { m[vi] = dst.v.length; dst.v.push(crToStation(full.v[vi])); }
+      return m[vi];
+    }
+    for (var fi = 0; fi < full.f.length; fi++) {
+      var f = full.f[fi], a = full.v[f[0]], b = full.v[f[1]], c = full.v[f[2]];
+      var cx = (a[0] + b[0] + c[0]) / 3, cy = (a[1] + b[1] + c[1]) / 3, cz = (a[2] + b[2] + c[2]) / 3;
+      var door = cy >= CR_DOOR.y0 && cy <= CR_DOOR.y1 && Math.abs(cx) <= CR_DOOR.x &&
+                 cz >= CR_DOOR.z0 && cz <= CR_DOOR.z1;
+      /* The port leaf is the one at +x (she slides it further to port). */
+      var k = door ? (cx > 0 ? 1 : 2) : 0;
+      var dst = k ? leaves[k - 1] : hull;
+      dst.f.push([put(dst, k, f[0]), put(dst, k, f[1]), put(dst, k, f[2])]);
+      dst.c.push(full.c ? full.c[fi] : '#9a9a94');
+    }
+    /* Each leaf slides its own width: port leaf to the station's -y, the
+     * starboard one to +y (ship x maps to station -y). */
+    var travel = 30 / CR_LEN_M;
+    PORT_DOORS[role] = {
+      hull: hull,
+      leaves: [
+        { mesh: leaves[0], axis: [0, -1, 0], travel: travel, berthMid: null },
+        { mesh: leaves[1], axis: [0, 1, 0], travel: travel, berthMid: null }
+      ]
+    };
+    var hz = function (yM) { return -yM / CR_LEN_M + CR_HZ; };
+    CR_PORT[role] = {
+      kind: 'crawler',
+      shell: hull,
+      solidShell: hull,                       // the door is open to collision: you are cleared through it
+      movers: null, city: null, interior: null, spin: null,
+      anchors: null,
+      geom: {
+        mouthR: 28 / CR_LEN_M,                // her door, a hair inside its 58 m
+        throatR: 28 / CR_LEN_M,
+        chamberX: 100 / CR_LEN_M,             // her hangar, 200 x 116 m, less a wall
+        chamberY: 58 / CR_LEN_M,
+        floorZ: hz(-59.3),                    // her ceiling pad: the deck you park on
+        ceilZ: hz(-94.4),                     // and her door's inner face above it
+        berthY: 29 / CR_LEN_M,                // two rows down her length
+        /* Six on her pad, and one more for every berth clamp she carries. */
+        berths: 6 + crates.filter(function (id) { return id === 'berth'; }).length
+      },
+      entrances: null, carriers: null
+    };
+    return CR_PORT[role];
+  }
+  var CRAWLER_PORT_RADIUS_KM = CR_LEN_M / 1000;
+
   function decompress(src) {
     var mesh = { v: src.v, f: src.f, c: [] };
     for (var i = 0; i < src.ci.length; i++) mesh.c.push(src.pal[src.ci[i]]);
@@ -903,6 +1004,7 @@
   }
 
   function libPort(role) {
+    if (role && role.charAt(0) === 'c' && role.indexOf('crawler:') === 0) return crawlerPortLib(role);
     var lib = global.PortLib;
     if (!lib || !role || !lib[role]) return null;
     if (PORT_CACHE[role]) return PORT_CACHE[role];
@@ -1629,6 +1731,8 @@
    * in orbit. */
   function portRole(station) {
     if (!station) return 'orbital';
+    /* A station you founded in orbit IS her Crawler (stations.js). */
+    if (station.playerStation && !station.surface) return 'crawler';
     if (station.underground) return 'underground';
     /* Every surface port is a shaft now, so the flat apron model is no
      * longer what any of them look like — a shallow field gets the same
@@ -1952,6 +2056,9 @@
      * the SHIP library, folded into the mesh table by stationMeshes, so the
      * answer here is simply its own name. */
     if (role === 'carrier') return role;
+    /* HER OWN CRAWLER, with her crates in her cubes: one model per livery
+     * and load, built by crawlerPortLib. */
+    if (role === 'crawler') return crawlerPortKey(station);
 
     /* THE MILFUEL FACTORY IS ONE BUILDING (Astra, 2026-09-25: "This will
      * be a Navy refinery structure, size L."). Not pooled, not sized by
@@ -8649,6 +8756,7 @@
   }
 
   function drawStationInterior(ctx, cam, frame, radiusKm, sunDir, role, tint) {
+    if (role && role.indexOf('crawler:') === 0) return false;     // her hangar is in her hull
     if (drawPortPart(ctx, cam, frame, radiusKm, sunDir, role, 'interior', tint)) return true;
     var mesh = accented(stationMeshes().hall);
     if (!mesh || !mesh.f.length) return false;
@@ -14342,6 +14450,7 @@
     DRIVE_SPEC: DRIVE_SPEC,
     paintMesh: paintMesh,
     armGrip: armGrip, drawArmCam: drawArmCam, drawTipCam: drawTipCam,
+    crawlerPortKey: crawlerPortKey, crawlerPortLib: crawlerPortLib, CRAWLER_PORT_RADIUS_KM: CRAWLER_PORT_RADIUS_KM,
     drawHullPortrait: drawHullPortrait, hullPreviewMesh: hullPreviewMesh,
     faceMaterial: faceMaterial,
     shipMeshes: shipMeshes,

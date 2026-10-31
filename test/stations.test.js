@@ -128,6 +128,13 @@ var wn = S.refusal(near, sys, T0, 'orbital');
 check('not on top of a port', /too close|between/.test(wn), wn);
 check('clear over a world, with a licence: yes', S.refusal(G, sys, T0, 'orbital') === null, S.refusal(G, sys, T0, 'orbital'));
 check('the surface wants a claim', /claim/.test(S.refusal(G, sys, T0, 'surface')));
+var inboundBefore = sys.ports.map(function (p) { return p.market ? p.market.inbound.length : 0; }).join(',');
+var trafficBefore = sys.traffic.length, bodiesBefore = sys.bodies.length;
+var fcO = S.forecastSite(G, sys, T0, 'orbital');
+check('will she pay: a forecast for this site', fcO && fcO.market > 0 && fcO.type === 'Market station', fcO && JSON.stringify(fcO));
+check('and asking changes nothing in the system', sys.traffic.length === trafficBefore && sys.bodies.length === bodiesBefore &&
+      sys.ports.map(function (p) { return p.market ? p.market.inbound.length : 0; }).join(',') === inboundBefore &&
+      !sys.byId['ps-forecast']);
 
 console.log('founding in orbit');
 var was = V.clone(G.ship.pos);
@@ -206,6 +213,47 @@ var dockR = Sim.dockShip ? (function () { try { var sh = { pos: Sim.bodyPosition
   fwd: { x: 0, y: 0, z: 1 }, up: { x: 0, y: 1, z: 0 }, right: { x: -1, y: 0, z: 0 }, dryMass: 30, cargo: {}, fuel: 1 };
   Sim.dockShip(sh, port, sys, G.t); return sh.docked === port.id; } catch (e) { return e.message; } })() : 'no dockShip';
 check('a ship can berth at her', dockR === true, String(dockR));
+console.log('she is her Crawler');
+var R = global.Render;
+var mkey = R.portModelFor(port);
+check('drawn as her own Crawler, her crates in the key', /^crawler:civ:/.test(mkey) && mkey.indexOf('market') > 0, mkey);
+var lib = R.libPort(mkey);
+check('her model: the Crawler laid into the station frame', lib && lib.shell && lib.shell.f.length > 5000, lib && lib.shell.f.length + ' faces');
+var bgm = Gen.bayGeometry(port);
+check('her bay is her belly hangar: pad, then door, then mouth', bgm.floorZ < bgm.ceilZ && bgm.ceilZ <= bgm.mouthZ + 1e-9 &&
+      Math.abs((bgm.ceilZ - bgm.floorZ) * 478 - 35.1) < 1, 'floor ' + bgm.floorZ.toFixed(3) + ' ceil ' + bgm.ceilZ.toFixed(3) + ' mouth ' + bgm.mouthZ);
+var dr = R.portDoors ? R.portDoors(mkey) : null;
+check('her belly leaves are her doors, sliding apart', dr && dr.leaves.length === 2 && dr.leaves[0].mesh.f.length > 0 &&
+      dr.leaves[1].mesh.f.length > 0 && dr.leaves[0].axis[1] === -dr.leaves[1].axis[1],
+      dr && (dr.leaves[0].mesh.f.length + ' + ' + dr.leaves[1].mesh.f.length + ' faces'));
+check('a port the size of her: 478 m', Math.abs(port.radius - 0.478) < 1e-9);
+
+console.log('upgrades: another Crawler brings them');
+var Gu = game(['berth', 'warehouse', 'fuelcell', 'battery']);
+Gu.stations = G.stations; Gu.t = G.t + 3600;
+var csu = S.crawlerState(st, sys, Gu.t);
+Gu.ship.pos = V.add(csu.pos, { x: 60, y: 0, z: 0 }); Gu.ship.vel = V.clone(csu.vel);
+check('too far off to unload says so', /km/.test(S.unloadRefusal(Gu, sys, st, Gu.t)));
+Gu.ship.pos = V.add(csu.pos, { x: 5, y: 0, z: 0 });
+var opened = S.opensAt(st), n0 = st.crates.length, berths0 = Sim.berthCapacity(port);
+var cap0 = port.market.rows.grain ? port.market.rows.grain.cap : port.market.rows[Object.keys(port.market.rows)[0]].cap;
+var capKey = port.market.rows.grain ? 'grain' : Object.keys(port.market.rows)[0];
+var ru = S.unloadTo(Gu, sys, st, Gu.t, hooks());
+check('within reach: her crates unload into the station\'s ring', ru.ok && st.crates.length === n0 + 4 && !Gu.ship.modules.length &&
+      S.pending(st, Gu.t) === 4 && S.floatingCrates(st, sys, Gu.t).length === 4, ru.why);
+check('her opening day does not move', S.opensAt(st) === opened);
+var sch2 = S.schedule(st);
+var lastIn = Math.max.apply(null, st.added.map(function (a) { return sch2.crateIn[a.idx]; }));
+check('her crew fits them from the day they arrive', st.added.every(function (a) { return sch2.crateIn[a.idx] > Gu.t; }),
+      ((lastIn - Gu.t) / 86400).toFixed(2) + ' days for all four');
+var fitT = lastIn + 1;
+var nf = S.applyUpgrades(Gu, sys, st, fitT);
+check('fitted: a berth clamp is one more berth', Sim.berthCapacity(port) === berths0 + 1, berths0 + ' -> ' + Sim.berthCapacity(port));
+check('fitted: a warehouse holds 30% more', port.market.rows[capKey].cap === Math.round(cap0 * 1.3), cap0 + ' -> ' + port.market.rows[capKey].cap);
+check('fitted: a fuel cell is three more weeks of tank', S.tankWeeksCap(st) === S.TANK_WEEKS + 3);
+check('a battery is fitted and counted', nf.battery === 1);
+check('and applying twice changes nothing', (S.applyUpgrades(Gu, sys, st, fitT), Sim.berthCapacity(port) === berths0 + 1 &&
+      port.market.rows[capKey].cap === Math.round(cap0 * 1.3)));
 
 console.log('she comes back with the system');
 var fresh = Gen.generateSystem(star.seed, Galaxy.systemOpts(g, star)); fresh.starId = star.id;
@@ -255,6 +303,60 @@ S.update(Gf, sys, Gf.t, hz);
 check('caught and unpaid: seized', rf.st.seized && hz.said.some(function (m) { return /seized/.test(m); }));
 var fport = sys.byId[S.portId(rf.st)];
 check('she stays open, under their flag', fport && !fport.player && !S.owns(Gf, fport) && fport.faction === rf.st.seizedBy);
+
+console.log('her books');
+var Eco = global.Economy;
+check('every port in the system burns fissiles', sys.ports.every(function (p) { return !p.market || (p.market.rows.fissile && p.market.reactor > 0); }));
+var outer = { insolation: 0.01 }, inner = { insolation: 9 };
+check('a dark sky burns more than a bright one', Eco.reactorDark(outer) > Eco.reactorDark(inner) * 5,
+      Eco.reactorDark(outer).toFixed(2) + ' vs ' + Eco.reactorDark(inner).toFixed(2));
+check('her books are taken when she opens', st.books && st.books.trade > 0 && st.books.burn > 0 && st.books.visits > 0,
+      st.books && JSON.stringify({ trade: Math.round(st.books.trade), burn: st.books.burn.toFixed(2), visits: st.books.visits.toFixed(1) }));
+var fc = S.forecast(st);
+check('the forecast was her: the same market and berths', fcO && fc.market === fcO.market && fc.berths === fcO.berths,
+      fcO && (fc.market + '/' + fcO.market + ', ' + fc.berths + '/' + fcO.berths));
+check('a week: market and berths in, wages, upkeep and reactor out', fc.market > 0 && fc.berths > 0 && fc.wages > 0 &&
+      fc.upkeep > 0 && fc.fuel > 0 && fc.net === fc.market + fc.berths - fc.wages - fc.upkeep - fc.fuel, JSON.stringify(fc));
+check('she opens with fuel in her tank', S.tankWeeks(st) >= 1.9, S.tankWeeks(st).toFixed(1) + ' weeks');
+var c0 = G.ship.credits;
+st.balance = 0; st.paidTo = G.t;
+var hw = hooks();
+S.settle(G, G.t + 3 * S.WEEK + 10, hw);
+var expectNet = st.balance + (G.ship.credits - c0);
+check('three weeks settle: over her float is wired to you', st.paidTo === G.t + 3 * S.WEEK && (fc.net < 0 || G.ship.credits >= c0),
+      'wired ' + Math.round(G.ship.credits - c0) + ', account ' + Math.round(st.balance));
+check('and her tank is kept topped up from her account', S.tankWeeks(st) > 1, S.tankWeeks(st).toFixed(1) + ' weeks');
+/* Dark: no fuel, no money, and fuel dear. */
+G.t = st.paidTo;
+st.tank = 0; st.balance = 0; st.books.fuelPrice = 1e9;
+var hd = hooks();
+S.settle(G, G.t + S.WEEK + 1, hd);
+check('out of fuel and money: she goes dark, and says so', st.dark && hd.said.some(function (m) { return /DARK/.test(m); }), hd.said[0]);
+S.applyLight(G, sys, st);
+check('dark: her traffic stops calling', port.dark && !sys.traffic.some(function (q) { return q.playerPort === port.id; }));
+check('dark: she earns nothing', (function () { var b0 = st.balance; G.t = st.paidTo; S.settle(G, G.t + S.WEEK + 1, hooks()); return st.balance < b0; })());
+G.ship.docked = port.id; G.sys = sys;
+G.ship.cargo = { fissile: 40 };
+var rfh = S.fuelFromHold(G, st);
+check('fissiles from your hold, at her desk: lit again', rfh.ok && !st.dark && !G.ship.cargo.fissile, rfh.why || (rfh.weeks.toFixed(1) + ' weeks'));
+S.applyLight(G, sys, st);
+check('and her traffic comes back', !port.dark && sys.traffic.filter(function (q) { return q.playerPort === port.id; }).length === mine.length);
+/* Arrears, loud, then foreclosure. */
+st.books.fuelPrice = 900;
+var saveBooks = st.books.trade, saveVisits = st.books.visits;
+st.books.trade = 0; st.books.visits = 0;
+st.balance = -1; st.owingWeeks = 0; G.t = st.paidTo;
+var hf = hooks();
+S.settle(G, G.t + 3 * S.WEEK + 1, hf);
+check('weeks owing are told, every time', st.owingWeeks === 3 && hf.said.some(function (m) { return /OWES/.test(m); }) && !st.seized, hf.said[0]);
+var pi = S.payIn(G, st, -st.balance + 5000);
+check('paying in clears it', pi.ok && st.balance >= 0 && st.owingWeeks === 0);
+st.balance = -1e6; G.t = st.paidTo;
+var hx = hooks();
+S.settle(G, G.t + 9 * S.WEEK + 1, hx);
+check('eight weeks owing: foreclosed, and she runs on under new owners', st.seized && st.foreclosed && !S.owns(G, port) &&
+      hx.said.some(function (m) { return /FORECLOSED/.test(m); }), hx.said[hx.said.length - 1]);
+st.books.trade = saveBooks; st.books.visits = saveVisits;
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
