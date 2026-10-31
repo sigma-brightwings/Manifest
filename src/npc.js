@@ -433,6 +433,27 @@
       });
     });
 
+    /* YOUR HANGAR'S HAND (2026-10-31). A berth with your ship in it is
+     * worked like anyone else's: one of the port's hands stands in a corner
+     * clear of her, by the door end, so the chase camera round her has
+     * somebody in it as well as the walker. The first corner that is floor
+     * and not under her (plan.blocked, where the hangar was armed). */
+    var hgr = plan.hangar && plan.hangar.room;
+    if (plan.hangar && !(hgr && hgr.x0 !== undefined)) hgr = plan.rooms.filter(function (r) { return r.hangar; })[0];
+    if (hgr && hgr.x0 !== undefined) {
+      var corners = [[hgr.x0 + 1.4, hgr.z0 + 1.4], [hgr.x1 - 1.4, hgr.z0 + 1.4],
+                     [hgr.x0 + 1.4, hgr.z1 - 1.4], [hgr.x1 - 1.4, hgr.z1 - 1.4]];
+      var spot = corners.filter(function (c) {
+        return standable(plan, c[0], c[1]) && !(typeof plan.blocked === 'function' && plan.blocked(c[0], c[1]));
+      })[0];
+      if (spot) {
+        var hcx = (hgr.x0 + hgr.x1) / 2, hcz = (hgr.z0 + hgr.z1) / 2;
+        people.push(person(key + '|hangarhand', staffName('hangarhand'), 'loadmaster', 'civ', 'loadmaster',
+          { post: { x: spot[0], z: spot[1], yaw: Math.atan2(hcx - spot[0], hcz - spot[1]), working: true },
+            staff: 'Berth hand' }));
+      }
+    }
+
     /* A Syndicate face in the bar: more likely where the port is bought, and
      * possible even in a clean port (Astra, 2026-10-20: "there might be a
      * syndicate contact in the bar of any station, even outside syndicate

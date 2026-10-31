@@ -19,6 +19,10 @@ if (!port) return 'FAIL: no orbital port';
 Sim.dockShip(G.ship, port, G.sys, G.t);
 G.panel = 0; G.viewMode = 'cockpit';
 await wait(6000);
+/* From the seat first: her hangar out of the glass, not the model's bay. */
+G.viewMode = 'cockpit';
+await wait(800);
+await shot('seat');
 await key('F1');
 await wait(300);
 if (G.viewMode === 'cockpit') G.viewMode = 'orbit';
@@ -40,5 +44,12 @@ G.cam.dist = d0 * 5; G.cam.pitch = 0.5;
 await wait(1200);
 info.push('asked ' + (d0 * 5000).toFixed(0) + ' m, got ' + (G.cam.dist * 1000).toFixed(1) + ' m');
 await shot('chase-far');
+/* Round her from as far back as the walls allow: the berth hand and the
+ * pointer that is no longer there (2026-10-31). */
+for (let i = 1; i <= 4; i++) {
+  G.cam.yaw += Math.PI / 2; G.cam.pitch = 0.35; G.cam.dist = d0 * 5;
+  await wait(1000);
+  await shot('round-' + i);
+}
 info.push('cam keys ' + Object.keys(G.cam).join(','));
 return info.join(' | ');

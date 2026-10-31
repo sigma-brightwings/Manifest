@@ -1660,7 +1660,7 @@
        * line; E takes hold of a ramp within reach. Nothing reaches the
        * flight controls: your ship is out there without you. */
       if (G.eva && flying() && wk !== 'escape') {
-        if (e.code === 'ControlLeft') { G.keys.crouch = true; e.preventDefault(); return; }
+        if (e.code === 'ControlLeft') { G.keys.crouchCtrl = G.keys.crouch = true; e.preventDefault(); return; }
         G.keys[wk] = true;
         if (wk === ' ') e.preventDefault();
         if (wk === 'e' || wk === 'enter') { e.preventDefault(); evaGrab(); }
@@ -1668,8 +1668,14 @@
       }
       if (G.walk && flying() && wk !== 'escape') {
         /* Left Ctrl crouches (2026-10-31), for as long as it is held. The
-         * right one is left alone. */
-        if (e.code === 'ControlLeft') { G.keys.crouch = true; e.preventDefault(); return; }
+         * right one is left alone. C does too (2026-10-31): Ctrl+W is a
+         * browser's close-tab, and crouching while walking forward is
+         * exactly Ctrl+W. Each is tracked on its own, so letting go of one
+         * while the other is held keeps you down. */
+        if (e.code === 'ControlLeft' || wk === 'c') {
+          if (wk === 'c') G.keys.crouchC = true; else G.keys.crouchCtrl = true;
+          G.keys.crouch = true; e.preventDefault(); return;
+        }
         G.keys[wk] = true;
         if (wk === 'e' || wk === 'enter') { e.preventDefault(); walkUse(); }
         return;
@@ -2027,7 +2033,9 @@
        * release came back as the wrong Alt is a ship that has stopped
        * answering the mouse for no visible reason. */
       if (e.key === 'Alt') { setCursorMode(false); setFreeLook(false); return; }
-      if (e.code === 'ControlLeft') G.keys.crouch = false;
+      if (e.code === 'ControlLeft') G.keys.crouchCtrl = false;
+      if (e.key.toLowerCase() === 'c') G.keys.crouchC = false;
+      G.keys.crouch = !!(G.keys.crouchCtrl || G.keys.crouchC);
       G.keys[e.key.toLowerCase()] = false;
     });
     /* Alt-tabbing away releases the key somewhere we will never hear about
@@ -7653,7 +7661,9 @@
     if (G.viewMode === 'cockpit') drawCockpitView(ctx, cam, w, h);
     else {
       /* Berthed, from outside her: the hangar you walk in, round her. */
-      if (hangarChase()) queueHangarFromShip(cam);
+      /* And the people on it (2026-10-31): the station's scene is the
+       * hangar deck's while you watch her there (npcSceneNow). */
+      if (hangarChase()) { queueHangarFromShip(cam); queueNpcs(cam); }
       drawShip(ctx, cam);
     }
     /* On foot aboard, nobody is flying: no markers, no labels, no flight
@@ -9706,6 +9716,17 @@
     var hp = hangarPlan();
     return hp && hp.hangar ? hp : null;
   }
+  /* SEATED IN HER, BERTHED (2026-10-31). The same hangar out of her
+   * windows: the view from the seat was still the station MODEL's bay, a
+   * room that is not the one you walk out into. GPU only, as the chase
+   * view is; the 2D path keeps the bay. */
+  function hangarSeat() {
+    if (G.viewMode !== 'cockpit' || G.walk || G.eva) return null;
+    if (typeof mapMode === 'function' && mapMode()) return null;
+    if (!glLive() || !berthHangar()) return null;
+    var hp = hangarPlan();
+    return hp && hp.hangar ? hp : null;
+  }
   /* The longest boom, along the camera's own direction, that keeps the eye
    * inside her hangar: a slab test in the hangar's frame (metres), 0.6 m
    * off the walls and the ceiling, 0.4 m off the floor. */
@@ -10955,8 +10976,12 @@
     if (!NpcM || !G.ship) return null;
     var signed = (Crew && Crew.aboard ? Crew.aboard(G.ship) : []).map(function (c) { return c.id || c.name; });
     var roster = signed.join(',');
-    if (G.walk && !G.walk.ship && G.walk.plan) {
-      var plan = G.walk.plan;
+    /* The chase camera in her hangar (2026-10-31) looks at the station's
+     * deck as well as a walker does, so the station's people are there:
+     * the scene is the hangar deck's, the one you would step onto. */
+    var chaseHp = (!G.walk && !G.aboard) ? hangarChase() : null;
+    if ((G.walk && !G.walk.ship && G.walk.plan) || chaseHp) {
+      var plan = chaseHp || G.walk.plan;
       /* Rebuilt when you sign somebody on: they leave the hall. */
       if (npcScene && npcScene.plan === plan && npcScene.roster === roster) return npcScene;
       var port = G.sys && G.sys.byId ? G.sys.byId[plan.portId] : null;
@@ -11051,7 +11076,9 @@
     /* A station's people stand on its deck, in its frame (her hangar's,
      * when the deck has her in it). */
     else s = stationFrameFor(sc.plan);
-    var eye = G.walk ? { x: G.walk.x, z: G.walk.z } : { x: 0, z: 0 };
+    var hpE = (!G.walk && sc.kind !== 'ship' && sc.plan && sc.plan.hangar) ? sc.plan.hangar : null;
+    var eye = G.walk ? { x: G.walk.x, z: G.walk.z }
+            : hpE && hpE.foot ? { x: hpE.foot.x, z: hpE.foot.z } : { x: 0, z: 0 };
     NG.queue(cam, { pos: s.pos, right: s.right, up: s.up, fwd: s.fwd }, Render.M,
              global.Npc.figures(sc, eye, 2));
   }
@@ -11455,7 +11482,7 @@
     ctx.fillStyle = 'rgba(180,240,255,0.8)';
     ctx.fillText((G.walk.portName || '') + (room ? '  ·  ' + room.label : ''), w / 2, 22);
     ctx.fillStyle = 'rgba(180,240,255,0.55)';
-    ctx.fillText('WASD walk  ·  Shift run  ·  mouse or arrows to look  ·  E use  ·  hold Alt for the pointer  ·  Esc menu', w / 2, h - FBAR_H - 10);
+    ctx.fillText('WASD walk  ·  Shift run  ·  Ctrl or C crouch  ·  mouse or arrows to look  ·  E use  ·  hold Alt for the pointer  ·  Esc menu', w / 2, h - FBAR_H - 10);
     if (G.message && performance.now() < G.messageUntil) {
       ctx.font = 'bold 14px ui-monospace, monospace';
       var mw = ctx.measureText(G.message).width;
@@ -11625,6 +11652,8 @@
     G.ship.capGlow = cgC.length ? { fitted: cgC.length, k: hotC } : null;
     if (shipWalkGpu()) { drawShipWalkView(ctx, cam, w, h); return; }
     drawOwnHullFromBridge(ctx, cam);
+    /* Berthed: her hangar out of the glass (hangarSeat). */
+    if (hangarSeat()) { queueHangarFromShip(cam); }
     var shell = G.showCockpitFrame ? Render.drawCockpitShell(ctx, cam, cockpitShip(), w, h) : null;
     /* Your crew at their stations, behind you on the bridge deck. */
     if (shell && Render.cockpitGpu && Render.cockpitGpu()) queueNpcs(cam);
@@ -15223,7 +15252,7 @@
      * hangar is the room, and this station's own bay would stand in the
      * same space (hangarChase). The camera cannot leave the hangar, so
      * there is nothing of the rest of the station to see either. */
-    if (b.kind === 'station' && G.ship.docked === b.id && hangarChase()) return;
+    if (b.kind === 'station' && G.ship.docked === b.id && (hangarChase() || hangarSeat())) return;
 
     if (b.kind === 'station') {
       /* Same scale rule as everything else: real geometry once it would
@@ -17230,6 +17259,10 @@
 
   function drawStationPointer(ctx, w, h) {
     if (!G.homeStation) return;
+    /* Not while you are docked at it (2026-10-31): from inside her hangar
+     * it pointed at the station's centre, kilometres off through the
+     * hangar wall, and floated over the view. You know where you are. */
+    if (G.ship && G.ship.docked === G.homeStation.id) return;
     var pos = Sim.bodyPosition(G.homeStation, G.sys, G.t);
     var sp = G.cam.project(pos);
     var range = V.dist(pos, G.ship.pos);

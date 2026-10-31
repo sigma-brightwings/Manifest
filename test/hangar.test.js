@@ -106,5 +106,22 @@ console.log('--- the airlock while she is berthed ---');
   ok(ship.airlock.ramp === 0 && AL.sealed(ship), 'and fit to fly');
 }
 
+console.log('--- somebody works her berth (2026-10-31) ---');
+{
+  require(path.join(ROOT, 'src', 'npc.js'));
+  const Npc = globalThis.Npc;
+  const p = W.layout('port-x', { seed: 'h', ships: ships('M') });
+  const r = p.rooms.find(q => q.id === p.hangar.room);
+  /* Her footprint, as main.js arms it (plan.blocked). */
+  p.blocked = (x, z) => x > r.hullBox[0] && x < r.hullBox[2] && z > r.hullBox[1] && z < r.hullBox[3];
+  const sc = Npc.stationScene(p, { id: 'port-x' }, {}, { t: 1000, seed: 'h' });
+  const hand = sc.people.find(q => q.staff === 'Berth hand');
+  ok(!!hand, 'a berth hand is posted in your hangar');
+  ok(hand && hand.post.x > r.x0 && hand.post.x < r.x1 && hand.post.z > r.z0 && hand.post.z < r.z1 && !p.blocked(hand.post.x, hand.post.z),
+     'in the hangar, clear of her', hand && (hand.post.x.toFixed(1) + ', ' + hand.post.z.toFixed(1)));
+  const none = Npc.stationScene(W.layout('port-x', { seed: 'h' }), { id: 'port-x' }, {}, { t: 1000, seed: 'h' });
+  ok(!none.people.some(q => q.staff === 'Berth hand'), 'and none on a deck without a hangar');
+}
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

@@ -4387,7 +4387,11 @@
         }
       }
     }
-    if (well) global.GLWorld.setCutaway({ box: wellBox(ship, well) });
+    /* One cut box per mesh: her canopy well when looking in at her
+     * windows, otherwise her airlock (rampExterior's lockBox) when her
+     * ramp is out - the one you can look up into. */
+    var cutBox = well ? wellBox(ship, well) : (ramp && ramp.lockBox && gpuWorld()) ? wellBox(ship, { well: ramp.lockBox }) : null;
+    if (cutBox) global.GLWorld.setCutaway({ box: cutBox });
     if (!(gpuWorld() && global.GLWorld.queueMesh(cam, ship, mesh, L, sunDir,
                                                  ship.reentryGlow || 0, ship.windDir,
                                                  undefined, pr))) {
@@ -4395,8 +4399,8 @@
       try { paintMesh(ctx, cam, ship, mesh, L, sunDir, tint); }
       finally { PAINT_NOW = null; }
     }
+    if (cutBox) global.GLWorld.setCutaway(CUT_NOW);
     if (well) {
-      global.GLWorld.setCutaway(CUT_NOW);
       if (well.glass.f.length) global.GLWorld.queueMesh(cam, ship, well.glass, L, sunDir, 0, null, HULL_GLASS_ALPHA);
     }
     /* The legs go on the plain queueMesh path rather than the plasma one.
@@ -13269,10 +13273,15 @@
         if (rest) { sp = split(rest, 2, z1); if (sp.hi) keepPoly(sp.hi, i); rest = sp.lo; }
         if (!rest) continue;
         /* The piece over the well: gone if it is below the deck. */
-        var my = 0;
-        rest.forEach(function (q) { my += q[1]; });
-        my /= rest.length;
-        if (my >= yTop) { keepPoly(rest, i); continue; }
+        /* Cut at the deck too (2026-10-31): a sloping plate whose middle
+         * was above the deck was kept whole, and its low edge hung down
+         * into the well - the slab you walked up into on her ramp (Astra:
+         * "ship detail flashes on screen"). What is above the deck stays;
+         * what is below it goes. */
+        var sy = split(rest, 1, yTop);
+        if (sy.hi) keepPoly(sy.hi, i);
+        if (!sy.lo) continue;
+        rest = sy.lo;
         rest.forEach(function (q) { low = Math.min(low, q[1]); });
         /* What colour her skin was where the well is cut, so the doors
          * that close it are painted to match. */
@@ -13310,7 +13319,24 @@
       }
       var skinCol = null, skinN = 0;
       for (var sc in skinVotes) if (skinVotes[sc] > skinN) { skinN = skinVotes[sc]; skinCol = sc; }
-      c = per[key] = { hull: hull, bay: bay, ramps: {}, lowM: lowM, skin: skinCol };
+      /* HER AIRLOCK IS EMPTY OF HULL (2026-10-31). Astra: "when traversing
+       * the ramp, ship detail flashes on screen". The library model has
+       * plating and greebles of its own standing where her airlock room is,
+       * and from her ramp you look straight up into that room - so a slab
+       * of sunlit skin swung across the view at every step. The room's box
+       * (a few cm proud all round) is cut out of her hull per pixel when
+       * she is drawn; see drawShipModel. */
+      /* The well's own footprint is in it too: where the well runs out
+       * past the room's end, her deck plating at deck height lay across
+       * the top of the ramp, a slab you walked up into. */
+      var lzf = Math.min(rp.foot, rp.hinge), lzh = Math.max(rp.foot, rp.hinge);
+      var lockBox = lockR ? {
+        cx: at[0] + (lockR.x0 + lockR.x1) / 2,
+        hw: Math.max((lockR.x1 - lockR.x0) / 2, Math.max(rp.x1 - (lockR.x0 + lockR.x1) / 2, (lockR.x0 + lockR.x1) / 2 - rp.x0)) + 0.03,
+        z0: at[2] + Math.min(lockR.z0, lzf) - 0.03, z1: at[2] + Math.max(lockR.z1, lzh) + 0.03,
+        y0: at[1] + fy - 0.03, y1: at[1] + top + 0.03
+      } : null;
+      c = per[key] = { hull: hull, bay: bay, ramps: {}, lowM: lowM, skin: skinCol, lockBox: lockBox };
     }
     /* The ramp at a twentieth of its travel at a time. */
     var t = Math.round(Math.max(0, Math.min(1, ship.airlock.ramp || 0)) * 20) / 20;
@@ -13363,7 +13389,7 @@
       band(zf, zh, rp.x1, rp.x1 + b, PZ);
       rm = c.ramps[t] = { v: mv.map(function (v) { return U(v[0], v[1], v[2]); }), f: mf, c: mc };
     }
-    return { hull: c.hull, bay: c.bay, ramp: rm, lowM: c.lowM };
+    return { hull: c.hull, bay: c.bay, ramp: rm, lowM: c.lowM, lockBox: c.lockBox };
   }
 
   /* ---- WHERE HER HATCH IS, FROM OUTSIDE (2026-10-29) ---------------------

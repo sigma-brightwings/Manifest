@@ -42,7 +42,47 @@ before they update.
 
 Since Abby. Changes made on the 1.1 line after the release was cut.
 
+### Fixed
+
+- **Her ramp, walked up or down (2026-10-31).** Astra: *"when traversing
+  the ramp, ship detail flashes on screen"*, with a screenshot of a slab
+  of sunlit hull standing in her airlock.
+  - **What it was.** Two pieces of the hull model itself, in the way of
+    the room you walk into.
+    - A sloping plate over the well. Its middle was above the deck, so the
+      well cut kept it whole, and its low edge hung down across the top of
+      the ramp. That is the slab you walked up into. The well cut now also
+      splits every plate at the deck: what is above stays, what is below
+      goes.
+    - Plating and greebles where her airlock room stands. They are now
+      cut out of her hull per pixel, over the airlock and the whole well
+      footprint, from deck to ceiling (`lockBox`), whenever she is drawn
+      with her ramp out.
+  - This was also today's open item, *"climbing the ramp you see the grey
+    end wall of the belly well"*. The grey was the same plate.
+  - Probe: `tools/probe-ramp-flash.js` walks her ramp in 16 steps with a
+    shot at each one. Every step is now clean, from the hangar floor into
+    her airlock.
+
 ### Added
+
+- **Today's loose ends (2026-10-31).**
+  - **C crouches** as well as Left Ctrl, while walking. Ctrl+W is a
+    browser's close-tab, and crouching while walking forward is exactly
+    Ctrl+W. Each key is tracked on its own, so letting go of one while
+    the other is held keeps you down. The walking hint says *Ctrl or C
+    crouch*.
+  - **Seated in her, berthed in her hangar**, the windows now show the
+    hangar you walk out into, not the station model's bay
+    (`hangarSeat`). GPU only, as the chase view is.
+  - **People in the chase view of her hangar.** The station's scene is the
+    hangar deck's while you watch her there. A berth hand
+    (`Berth hand`, a loadmaster) now works your hangar, posted in the
+    first corner that is floor and clear of her. Test: three new checks
+    in `test/hangar.test.js`.
+  - **The floating label is gone.** The pointer to your home station is
+    not drawn while you are docked at it. From the hangar it pointed
+    kilometres off through the wall.
 
 - **See-through windows on other ships (2026-10-31).** Astra: *"See
   through windows on other ships"*.
