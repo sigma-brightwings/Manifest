@@ -84,6 +84,31 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **Her Defence batteries fire (2026-10-31).** Astra: *"build that
+  next"*. Until now a battery only held the Syndicate off on paper.
+  - **What they fire at.** Ships that are after you within 25 km of her,
+    whether you are flying or docked with her. In this build nothing hunts
+    anybody else, so a ship hunting you is the only kind of target there
+    is.
+  - **An owner's switch** (Astra's choice). By default they fire on
+    outlaws: pirates, the Syndicate's ships and bounty hunters. *FIRE ON
+    THE LAW TOO*, under her row in YOUR STATIONS, adds police and Navy.
+    Every hit on the law is an assault booked to you as her owner, with a
+    witness and a hush price, the same as your own guns.
+  - **A kill is yours** (Astra: *"Counts as yours"*). It goes on your
+    public record, and a pirate kill counts toward lifting a pirate mark,
+    the same as one by your turret.
+  - **Each battery is its own mount**, firing every 1.5 s for 9 damage,
+    falling off with range. Several batteries spread their fire over the
+    nearest targets. A surface station's batteries alternate between her
+    pad and her Crawler up top.
+  - **What they leave alone.** A ship whose drive is out, or who has
+    struck: a hulk you might board is not a target. They hold fire under
+    time compression, the same as your own trigger. A station that has
+    been seized, or is not open yet, does not fire.
+  - First numbers, like the rest of her books. The switch is saved with
+    her; an older save loads with it off.
+
 - **The station leftovers: every crate does something, the Syndicate's
   cut, buying her back, and the XL shipyard (2026-10-31).** Astra: *"Build
   all the leftovers, then push."*

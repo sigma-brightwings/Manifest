@@ -3790,6 +3790,17 @@
               say(r.ok ? (r.paying ? 'You pay the Syndicate their cut for ' + st.name : 'You stop paying the Syndicate. They will notice.') : 'No: ' + r.why, 6);
             }, false, { hot: !rk.paying && rk.refused > 0 });
       }
+      /* HER BATTERIES: what they fire on (Astra: "Owner's switch"). */
+      var nb = Sx.batteries(st);
+      if (nb > 0) {
+        row('    BATTERIES ' + nb + '  ·  ' + (st.fireOnLaw ? 'FIRE ON THE LAW TOO' : 'OUTLAWS ONLY'),
+            st.fireOnLaw ? 'click to hold fire on police and Navy'
+                         : 'click to fire on police and Navy hunting you too - every hit an assault booked to you',
+            function () {
+              var r = Sx.setFireOnLaw(G, st, !st.fireOnLaw);
+              say(r.ok ? (r.fireOnLaw ? st.name + '\'s batteries will fire on the law' : st.name + '\'s batteries hold fire on the law') : 'No: ' + r.why, 5);
+            }, false, { hot: !!st.fireOnLaw });
+      }
       var want = st.balance < 0 ? Math.ceil(-st.balance) : 10000;
       row('    PAY IN ' + want + ' cr', st.balance < 0 ? 'clears what she owes' : 'onto her account',
           function () {

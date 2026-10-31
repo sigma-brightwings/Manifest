@@ -634,6 +634,7 @@
     settle(G, t, hooks).forEach(function (l) { out.push(l); });
     var rh = racketApplies(G, sys);
     list(G).forEach(function (st) { if (st.star === star) { st.racketHere = rh; applyLight(G, sys, st); applyUpgrades(G, sys, st, t); } });
+    defend(G, sys, t, hooks);
     var L = global.Licence, mine = list(G).filter(function (st) {
       return st.star === star && !st.seized && st.licence && st.licence.forged;
     });
@@ -1250,6 +1251,89 @@
     return { ok: true, crawlers: st.crawlers, tug: tug };
   }
 
+  /* ---- her batteries fire (2026-10-31) -----------------------------------
+   * Until now a Defence battery only held the Syndicate off on paper. It
+   * fires now - at ships that are after YOU within BATTERY.range of her,
+   * because in this build nothing hunts anybody else. Astra chose an
+   * owner's switch: outlaws by default (pirates, the Syndicate's ships,
+   * bounty hunters), and "fire on the law" in YOUR STATIONS for the day you
+   * would rather fight the police at your own door. Every police hit is an
+   * assault booked to you, her owner - damageNpc books it, as it books your
+   * own guns. And a kill is yours, as your turret's is (Astra: "Counts as
+   * yours"): the record, and a pirate kill toward lifting a mark.
+   *
+   * A ship whose drive is out or who has struck is left alone: a hulk you
+   * might board is not a target. Each battery is its own mount with its own
+   * cooldown; a surface station's alternate between the pad and her
+   * Crawler up top, so each half covers its own sky. Not under
+   * time compression - the same rule as your own trigger. */
+  var BATTERY = { id: 'battery', name: 'Defence battery', dmg: 9, range: 25, cooldown: 1.5,
+                  falloff: 0.3, color: '#ff8a5b' };
+  var LAW_KINDS = { police: true, navy: true }, LAW_CLS = { cutter: true, navy: true, capital: true, carrier: true };
+  function isLaw(spec) { return !!spec && (LAW_KINDS[spec.kind] || LAW_CLS[spec.cls]); }
+  function setFireOnLaw(G, st, on) {
+    if (!st || st.seized) return { ok: false, why: 'not yours' };
+    st.fireOnLaw = !!on;
+    return { ok: true, fireOnLaw: st.fireOnLaw };
+  }
+  /* Where her guns are: her Crawler, and a surface station's pad too. */
+  function mounts(st, sys, t) {
+    var out = [], cs = crawlerState(st, sys, t);
+    if (cs) out.push(cs.pos);
+    if (st.kind === 'surface') { var ss = siteState(st, sys, t); if (ss) out.push(ss.pos); }
+    return out;
+  }
+  function batteryTargets(G, sys, st, mount) {
+    var out = [];
+    (sys && sys.patrols || []).forEach(function (sp) {
+      if (!sp || sp.dead || !sp.live || !sp.hostileToPlayer || sp.disabled || sp.surrendered) return;
+      if (isLaw(sp) && !st.fireOnLaw) return;
+      var d = V.dist(sp.live.pos, mount);
+      if (d <= BATTERY.range) out.push({ spec: sp, d: d });
+    });
+    out.sort(function (a, b) { return a.d - b.d; });
+    return out;
+  }
+  function defend(G, sys, t, hooks) {
+    var Cm = global.Combat, star = starOf(G, sys), shots = 0;
+    if (!Cm || !Cm.damageNpc || !sys || !sys.patrols || !sys.patrols.length) return 0;
+    if (G.warpIndex > 0) return 0;
+    var cool = G._batteryCool = G._batteryCool || {};
+    var said = G._batterySaid = G._batterySaid || {};
+    var now = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+    list(G).forEach(function (st) {
+      if (st.star !== star || st.seized || !isOpen(st, t)) return;
+      var n = batteries(st);
+      if (!n) return;
+      var ms = mounts(st, sys, t);
+      if (!ms.length) return;
+      for (var i = 0; i < n; i++) {
+        var key = st.id + '|' + i;
+        /* A load can put the clock back; a cooldown from the future is void. */
+        if (cool[key] > t + BATTERY.cooldown) cool[key] = 0;
+        if (t < (cool[key] || -Infinity)) continue;
+        var mount = ms[i % ms.length];
+        var tg = batteryTargets(G, sys, st, mount);
+        if (!tg.length) continue;
+        /* Spread over what is there: battery i takes the i-th nearest. */
+        var pick = tg[i % tg.length], sp = pick.spec;
+        cool[key] = t + BATTERY.cooldown;
+        (G.beams = G.beams || []).push({ from: V.clone(mount), to: V.clone(sp.live.pos), target: sp.live,
+                                         color: BATTERY.color, until: now + 0.09 });
+        var sk = st.id + '|' + sp.id;
+        if (!said[sk]) {
+          said[sk] = true;
+          say(hooks, st.name + '\'s batteries engaging the ' + (sp.name || 'ship') +
+              (isLaw(sp) ? ' - firing on the law, booked to you' : ''), 5);
+        }
+        Cm.damageNpc(sys, G, sp, Cm.damageAtRange(BATTERY, pick.d), t, hooks, BATTERY, mount);
+        shots++;
+      }
+    });
+    if (shots && hooks && hooks.sound) hooks.sound('turret');
+    return shots;
+  }
+
   /* Her system, if it has been generated: the cache, or the one you are in. */
   function sysOfStar(G, star) {
     if (G.systemCache && G.systemCache[star]) return G.systemCache[star];
@@ -1283,7 +1367,9 @@
     sellStock: sellStock, RACKET_CUT: RACKET_CUT, SABOTAGE: SABOTAGE, TAKE_WEEKS: TAKE_WEEKS, takeWeeks: takeWeeks,
     racketApplies: racketApplies, racketWeek: racketWeek, setPaying: setPaying, takenBySyndicate: takenBySyndicate,
     BUYBACK: BUYBACK, buyBackPrice: buyBackPrice, buyBackRefusal: buyBackRefusal, buyBack: buyBack,
-    stitchRefusal: stitchRefusal, stitch: stitch
+    stitchRefusal: stitchRefusal, stitch: stitch,
+    BATTERY: BATTERY, isLaw: isLaw, setFireOnLaw: setFireOnLaw, mounts: mounts,
+    batteryTargets: batteryTargets, defend: defend
   };
   global.Stations = Stations;
   if (typeof module !== 'undefined' && module.exports) module.exports = Stations;

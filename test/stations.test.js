@@ -463,5 +463,50 @@ check('drawn as two Crawlers side by side', /:x2$/.test(mk2) && lib2 && lib1 && 
 check('an XL yard builds XL hulls', !/XL yard/.test(Cm.orderRefusal({ ship: { credits: 1e9 }, standing: {} }, py, 'leviathan') || ''));
 check('and calls herself one', /XL shipyard/.test(S.typeName(sy, Gx.t)), S.typeName(sy, Gx.t));
 
+console.log('her batteries fire');
+/* Astra: an owner's switch - outlaws by default, the law on a toggle - and
+ * a kill counts as yours. */
+var savedPatrols = sys.patrols;
+var Gb = Gx; Gb.t = Gx.t + 60; Gb.warpIndex = 0;
+var mnt = S.mounts(sy, sys, Gb.t)[0];
+function hostile(id, kind, cls, km) {
+  return { id: id, name: id, kind: kind, cls: cls, faction: kind === 'police' ? sy.faction : 'outlaw',
+           hostileToPlayer: true, hullMax: 200, hullHp: 200, shieldHp: 0,
+           live: { pos: V.add(mnt, { x: km, y: 0, z: 0 }), vel: { x: 0, y: 0, z: 0 }, fwd: { x: 1, y: 0, z: 0 } } };
+}
+var pir = hostile('pir-1', 'pirate', 'fighter', 8), far = hostile('pir-far', 'pirate', 'fighter', 40);
+var cop = hostile('cop-1', 'police', 'cutter', 6), hulk = hostile('pir-hulk', 'pirate', 'fighter', 5);
+hulk.disabled = 'drive';
+sys.patrols = [pir, far, cop, hulk];
+var hb = hooks(); Gb.beams = [];
+var shots = S.defend(Gb, sys, Gb.t, hb);
+check('a battery fires on a pirate after you, near her', shots === 1 && pir.hullHp < 200 && Gb.beams.length === 1,
+      shots + ' shots, hull ' + pir.hullHp);
+check('and says so', hb.said.some(function (m) { return /batteries engaging the pir-1/.test(m); }), hb.said[0]);
+check('not past her range', far.hullHp === 200);
+check('not at a hulk you might board', hulk.hullHp === 200);
+check('not at the law, by default', cop.hullHp === 200 && !S.isLaw(pir) && S.isLaw(cop));
+check('one shot per battery per cooldown', S.defend(Gb, sys, Gb.t + 0.5, hooks()) === 0);
+Gb.warpIndex = 2;
+check('not under time compression', S.defend(Gb, sys, Gb.t + 10, hooks()) === 0);
+Gb.warpIndex = 0;
+/* She moves along her orbit; keep the targets where they were to her. */
+function besideHer(sp, km, t) { sp.live.pos = V.add(S.mounts(sy, sys, t)[0], { x: km, y: 0, z: 0 }); }
+besideHer(cop, 6, Gb.t + 10);
+sys.patrols = [cop];
+var lw = S.setFireOnLaw(Gb, sy, true);
+var hl = hooks();
+S.defend(Gb, sys, Gb.t + 10, hl);
+check('switched on, she fires on the law too', lw.ok && sy.fireOnLaw && cop.hullHp < 200, 'hull ' + cop.hullHp);
+check('and the assault is booked to you', !!(cop.distressAt || Gb.pendingReport) &&
+      hl.said.some(function (m) { return /booked to you/.test(m); }), hl.said.join(' | '));
+S.setFireOnLaw(Gb, sy, false);
+pir.hullHp = 1; sys.patrols = [pir]; besideHer(pir, 8, Gb.t + 20);
+var hk = hooks();
+S.defend(Gb, sys, Gb.t + 20, hk);
+check('a pirate her batteries kill counts as yours', pir.dead && hk.said.some(function (m) { return /Pirate destroyed/.test(m); }), hk.said.join(' | '));
+check('a battery saved with her switch', JSON.parse(JSON.stringify(Gb.stations)).some(function (x) { return x.id === sy.id && x.fireOnLaw === false; }));
+sys.patrols = savedPatrols;
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
