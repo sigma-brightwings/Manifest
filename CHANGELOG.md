@@ -117,8 +117,9 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
     civilian within 600 km. She fires first, with no "heave to", knocks the
     drive out, comes alongside and strips her. The victim calls it in.
   - She only picks a fight she can win: an unarmed ship, or one no tougher
-    than she is. A raiding runner carries a real gun (NPC_GUN), not a
-    freighter's popgun.
+    than she is. Once she has fired she carries a real gun (NPC_GUN), on
+    you as on a freighter and on a scanner's readout; until then she reads
+    as a freighter.
   - **And you** (Astra's call). Measured across 6 seeds
     (`tools/measure-runner-turns.cjs`), only 0.2% of runners have an NPC
     civilian within reach at any moment, because traffic lanes do not

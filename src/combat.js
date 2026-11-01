@@ -3620,8 +3620,10 @@
 
   function npcArmament(spec, sys, ship) {
     if (!isArmedNpc(spec)) return { armed: false, text: 'unarmed' };
-    var civil = spec.kind === 'trader' || spec.kind === 'trade' || spec.kind === 'fleet' ||
-                spec.defending || !spec.kind;
+    /* A runner reads as a freighter until she shows her gun. */
+    var civil = !(spec.raider || spec.firedOnYouAt !== undefined) &&
+                (spec.kind === 'trader' || spec.kind === 'trade' || spec.kind === 'fleet' ||
+                 spec.defending || !spec.kind);
     var elite = spec.kind === 'police' && spec.faction === 'outlaw';
     var gun = civil ? TRADER_GUN : elite ? SYNDICATE_GUN : NPC_GUN;
     var name = civil ? 'defensive gun' : elite ? 'muon beam' : 'patrol laser';
@@ -7716,7 +7718,11 @@
        * enforcement wing can buy. See SYNDICATE_GUN. */
       var elite = sp.kind === 'police' && sp.faction === 'outlaw';
       var cop = sp.kind === 'police' && !sp.defending;
-      var gun = (sp.kind === 'trader' || sp.defending) ? TRADER_GUN
+      /* A Syndicate runner who has opened fire (aggression.js) shoots the
+       * gun under her cargo hatch, the same one she uses on a freighter. */
+      var showed = sp.raider || sp.firedOnYouAt !== undefined;
+      var gun = showed ? NPC_GUN
+              : (sp.kind === 'trader' || sp.defending) ? TRADER_GUN
               : elite ? SYNDICATE_GUN : cop ? POLICE_GUN : NPC_GUN;
       var d = V.dist(sp.live.pos, s.pos);
       /* A cop with a fugitive in reach and a missile left: away it goes,
