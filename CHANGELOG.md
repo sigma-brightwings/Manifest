@@ -93,6 +93,10 @@ before they update.
   it lays no smoke at all (it was a fat grey slab beside the rock), and its
   flash is drawn at its real 1 km blast radius, not 3.5 km. A pirate's rack
   cooking off is drawn at last: it had no timestamp, so its age was NaN.
+- **A hull hit on your own ship no longer breaks the exterior frame.**
+  Your ship has no `size` (NPC specs do), so the hull bloom's radius was
+  NaN and the gradient threw, taking the rest of the frame with it. Found
+  filming the shields; it uses the hull's length now.
 - **One roll for an NPC's shot at you.** The picture rolled for a miss and
   the damage rolled again, so a bolt drawn wide could still hit you.
 

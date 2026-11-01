@@ -8975,14 +8975,19 @@
 
       /* On the hull, on the side it came from. Half the ship's own length
        * out from the centre puts it on the plating rather than inside. */
+      /* YOUR ship has no `size` — NPC specs do — so a hull hit on your own
+       * ship in the exterior view made the radius NaN, and the gradient
+       * threw and took the rest of the frame with it (found filming the
+       * shields, 2026-11-01). Its length is what it has. */
+      var sz = s.size > 0 ? s.size : shipLen(s);
       var at = s.pos;
-      if (im.dir) at = V.addScaled(s.pos, im.dir, s.size * 0.42);
+      if (im.dir) at = V.addScaled(s.pos, im.dir, sz * 0.42);
       var p = cam.project(at);
       if (!p) continue;
 
       /* Grows a little and fades a lot — an expanding shell of hot vapour
        * coming off the plating, which is what the damage actually is. */
-      var rPx = Math.max(2.2, s.size * 0.35 * p.scale) * (0.45 + 1.15 * u);
+      var rPx = Math.max(2.2, sz * 0.35 * p.scale) * (0.45 + 1.15 * u);
       var a = (1 - u) * (1 - u) * Math.min(1, 0.35 + im.hull / 30);
       if (!(a > 0.004)) continue;
 
