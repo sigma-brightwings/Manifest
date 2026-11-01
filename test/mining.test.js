@@ -322,6 +322,30 @@ check('thrown hard - 10 to 40 m/s, a field to chase', Math.min.apply(null, sp0) 
 check('the pilot 1.5 km back is outside the blast', Gt.ship.hullHp === Gt.ship.hullMax);
 check('a chunk is a chunk the laser could have cut', ore.every(function (c) { return c.kind === 'debris' && c.life === Mn.CHUNK_LIFE; }));
 
+/* The game's order, not the rig's (2026-11-01): the panel launches at G.t
+ * and the next update comes with the clock already a frame on. The torpedo
+ * was then a frame behind the rocks for its whole flight - 0.87 km at belt
+ * speed and 15 fps - and passed through a 240 m rock without going off. */
+(function () {
+  var saveCan = bsys.canisters, saveMs = bsys.missiles;
+  bsys.canisters = []; bsys.missiles = [];
+  var Gl = torpRig(rock);
+  Gl.torpCover = true;
+  var hk2 = { say: function () {}, sound: function () {} };
+  Combat.launchTorpedo(bsys, Gl, t0, 'rocktorp', hk2);
+  var dtF = 1 / 15, tl = t0, went = null, closest = Infinity;
+  for (var k = 0; k < 300 && !went; k++) {
+    tl += dtF;                                         // the clock moves first
+    Mn.updateTorpedoes(bsys, Gl, tl, dtF, hk2);
+    var tpl = (bsys.missiles || []).filter(function (m) { return m.torp; })[0];
+    if (!tpl) went = tl;
+  }
+  check('launched between frames, it still goes off on the rock',
+        !!went && Gl.lastTorpedo && Gl.lastTorpedo.chunks >= 6,
+        went ? ((went - t0).toFixed(2) + ' s, ' + (Gl.lastTorpedo && Gl.lastTorpedo.chunks) + ' chunks') : 'flew through');
+  bsys.canisters = saveCan; bsys.missiles = saveMs;
+})();
+
 /* The refund: a safed torpedo (fired at nothing) earns half back; one that
  * paid for itself does not. */
 function bareTorp(price, guild) { return { torp: true, id: 'tq' + price + guild, guild: guild, price: price, from: { x: 0, y: 0, z: 0 } }; }

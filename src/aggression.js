@@ -596,9 +596,9 @@
       var chance = Math.max(cop ? 0.25 : 0.12, Math.min(0.85, 1.0 - d / gun.range * 0.5 - transverse * (cop ? 0.8 : 1.4)));
       var hit = hash01('shot|' + sp.id + '|' + Math.floor(t * 10)) < chance;
       if (near(G, sp)) {
-        (G.beams = G.beams || []).push({ from: V.clone(sp.live.pos), to: V.clone(tg.live.pos), target: tg.live,
-                                         color: cop ? '#8fd0ff' : sp.kind === 'pirate' ? '#ff8a76' : '#ffc46b',
-                                         until: now + 0.07, miss: !hit });
+        (G.beams = G.beams || []).push(Cm.shotFx(V.clone(sp.live.pos), V.clone(tg.live.pos), tg.live,
+                                         sp.hunter ? '#9fe8ff' : cop ? '#8fd0ff' : sp.kind === 'pirate' ? '#ff8a76' : '#ffc46b',
+                                         Cm.npcShotVariety(sp, gun), now, !hit));
       }
       if (hit) Cm.damageNpc(sys, G, tg, gun.dmg, t, hooks, gun, V.clone(sp.live.pos), sp);
     });

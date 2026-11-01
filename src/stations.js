@@ -1323,8 +1323,10 @@
         /* Spread over what is there: battery i takes the i-th nearest. */
         var pick = tg[i % tg.length], sp = pick.spec;
         cool[key] = t + BATTERY.cooldown;
-        (G.beams = G.beams || []).push({ from: V.clone(mount), to: V.clone(sp.live.pos), target: sp.live,
-                                         color: BATTERY.color, until: now + 0.09 });
+        /* A battery throws heavy bolts (2026-11-01, the weapons pass). */
+        (G.beams = G.beams || []).push(global.Combat && global.Combat.shotFx
+          ? global.Combat.shotFx(V.clone(mount), V.clone(sp.live.pos), sp.live, BATTERY.color, 'pulse', now, false)
+          : { from: V.clone(mount), to: V.clone(sp.live.pos), target: sp.live, color: BATTERY.color, until: now + 0.09 });
         var sk = st.id + '|' + sp.id;
         if (!said[sk]) {
           said[sk] = true;

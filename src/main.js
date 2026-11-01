@@ -1387,7 +1387,8 @@
    * warrants all survive, because none of those were in the hull. */
   function playerDestroyed() {
     (G.explosions = G.explosions || []).push({
-      pos: V.clone(G.ship.pos), at: performance.now(), size: 2.5
+      pos: V.clone(G.ship.pos), at: performance.now(), size: 2.5,
+      vel: V.clone(G.ship.vel), t: G.t
     });
     HOOKS.sound('explosion');
     loseModulesAboard();
@@ -9362,12 +9363,95 @@
    * and the difference between the varieties is one you only see up close.
    * That is the correct way round: at 20 km you are being told a shot
    * happened, not which emitter fired it. */
-  function worldTracer(ctx, cam, origin, seg, f0, f1, col, a0, a1, wScale) {
-    var rib = Render.boltRibbon(cam, origin, seg, f0, f1, wScale);
+  /* `opt` (2026-11-01, the weapons pass): `maxW` lets a beam be fatter than
+   * a bolt up close, `halo` overrides the halo's width multiple, and `core`
+   * adds a third, white pass down the middle at that fraction of the width.
+   * The core is what makes a shot read as HOT rather than as a coloured
+   * line: under 'lighter' the white adds onto the colour and the centre
+   * burns out, the way an overexposed laser does on film. */
+  function worldTracer(ctx, cam, origin, seg, f0, f1, col, a0, a1, wScale, opt) {
+    var rib = Render.boltRibbon(cam, origin, seg, f0, f1, wScale, opt && opt.maxW);
     if (!rib) return false;
-    worldTracerPass(ctx, cam, rib, col, a0, a1, TRACER_HALO_W, TRACER_HALO_A);
+    var hw = (opt && opt.halo) || TRACER_HALO_W;
+    worldTracerPass(ctx, cam, rib, col, a0, a1, hw, TRACER_HALO_A);
     worldTracerPass(ctx, cam, rib, col, a0, a1, 1, 1);
+    if (opt && opt.core) worldTracerPass(ctx, cam, rib, '#ffffff', a0, a1, opt.core, opt.coreA || 0.85);
     return true;
+  }
+
+  /* ---- muzzle, impact and sparks (2026-11-01) ------------------------------
+   * Astra: "thicker, glowing beam, impact flash and sparks, muzzle flash" —
+   * and "for the pulse and intermittent laser, we want bolts. For the beam
+   * laser we want a beam."
+   *
+   * All three are glows with no surface, so they are screen-space radial
+   * gradients like the hull blooms, sized off a WORLD radius against the
+   * projection's own scale and then clamped — the same rule the bolt width
+   * follows, so a flash beside the canopy is a flash and one at 20 km is a
+   * spark of light, not a disc the size of the target.
+   *
+   * Every one is cosmetic. Whether the shot hit was decided in combat.js
+   * before the first pixel; these only say so. The sparks' directions are
+   * hashed off the shot's own birth time, so a spray does not reshuffle
+   * itself frame to frame (a Math.random per frame would boil). */
+  var MUZZLE_FLASH_S = 0.09;      // a bolt's flash at the emitter
+  var MUZZLE_KM = 0.010;          // its world radius
+  var IMPACT_FLASH_S = 0.16;      // the flash where a bolt lands
+  var IMPACT_KM = 0.016;
+  var SPARK_S = 0.36;             // how long a spray lasts
+  var SPARK_KM = 0.030;           // how far the sparks fly
+  var SPARK_N = 7;                // sparks per strike
+  var FX_MIN_PX = 4, FX_MAX_PX = 30;
+  var BEAM_MAX_W = 6.5;           // px — a beam's body may grow to this
+  var BEAM_HALO = 2.6;            // a beam's halo, as a multiple of the body
+  var BURST_N = 3;                // bolts drawn for one intermittent shot
+  var BURST_GAP_S = 0.055;        // between them
+  var IMPACT_MIN_PX = 12;         // a strike's flash is never smaller than this
+  var SPARK_MIN_PX = 13;          // nor its spray (x1.6 reach)
+  var BOLT_HEAD_KM = 0.009;       // the bright knot at a bolt's head
+  var SEAT_FLASH_PX = 48;         // a muzzle flash seen from the seat
+  var ROCK_SPARK = '#ffb25a';     // stone cut by a beam throws orange, not the beam's colour
+
+  /* `minPx`: a strike seen down the boresight from the seat is at the far
+   * end of a few kilometres of ray, where its true size is a pixel or two
+   * under the crosshair pip. The flash and the spray are floored higher than
+   * the rest so a hit still READS there (measured in headless Chrome,
+   * 2026-11-01: at 2 km the 4 px floor was lost behind the pip). */
+  function fxRadius(cam, p, km, minPx) {
+    var sc = p.scale || (cam.flen / Math.max(1e-6, p.depth || 1));
+    var r = km * sc, lo = minPx || FX_MIN_PX;
+    return r < lo ? lo : (r > FX_MAX_PX ? FX_MAX_PX : r);
+  }
+  function fxGlow(ctx, x, y, r, col, a) {
+    if (!(r > 0.5) || !(a > 0.004)) return;
+    a = Math.min(1, a);
+    var g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, 'rgba(255,255,255,' + a.toFixed(3) + ')');
+    g.addColorStop(0.22, hexToRgba(col, a * 0.85));
+    g.addColorStop(1, hexToRgba(col, 0));
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, K.TAU); ctx.fill();
+  }
+  /* A spray: short streaks thrown out from the strike, fastest first and
+   * slowing, cooling from white to the colour as they go. `seed` fixes the
+   * directions for this strike. */
+  function fxSparks(ctx, cam, p, col, seed, age, a) {
+    if (!(age >= 0) || age > SPARK_S || !(a > 0.004)) return;
+    var u = age / SPARK_S, R = fxRadius(cam, p, SPARK_KM, SPARK_MIN_PX) * 1.6;
+    var reach = Math.pow(u, 0.5), cool = 1 - u;
+    ctx.lineCap = 'round';
+    for (var k = 0; k < SPARK_N; k++) {
+      var ang = hashUnit(seed + k * 7.31) * K.TAU;
+      var sp = 0.45 + 0.75 * hashUnit(seed + k * 3.17 + 0.5);
+      var d1 = R * sp * reach, d0 = Math.max(0, d1 - R * 0.28 * sp * cool - 1.5);
+      var cx = Math.cos(ang), cy = Math.sin(ang);
+      ctx.strokeStyle = k % 2 ? hexToRgba('#ffffff', a * cool) : hexToRgba(col, a * cool);
+      ctx.lineWidth = 0.6 + 1.1 * cool;
+      ctx.beginPath();
+      ctx.moveTo(p.x + cx * d0, p.y + cy * d0);
+      ctx.lineTo(p.x + cx * d1, p.y + cy * d1);
+      ctx.stroke();
+    }
   }
 
   /* The beam colours in the catalogue are '#rrggbb'; a gradient needs an
@@ -9427,6 +9511,19 @@
         if (beam.target && beam.target.pos) far = beam.target.pos;
         else if (beam.fromShip && beam.range) far = V.addScaled(origin, G.ship.fwd, beam.range);
         a = cam.project(origin); b = cam.project(far);
+        /* A shot at YOU, seen from the seat, ends at the camera, and the
+         * camera's own position projects nowhere — so until now every
+         * incoming bolt was skipped in the cockpit and only the canopy flare
+         * said anything had happened. Stop it a few tens of metres short:
+         * it comes at the glass and ends there. */
+        var atEye = false;
+        if (a && !b) {
+          var segE = V.sub(far, origin), lenE = V.len(segE);
+          if (lenE > 0.1) {
+            far = V.addScaled(origin, segE, (lenE - 0.06) / lenE);
+            b = cam.project(far); atEye = !!b;
+          }
+        }
         if (!a || !b) continue;
 
         /* A miss is drawn missing: skewed past the target rather than
@@ -9499,50 +9596,96 @@
         var w0 = TRACER_NEAR_W * dim, w1 = TRACER_FAR_W * dim;
         var hx = a.x + dx * head, hy = a.y + dy * head;
 
-        if (beam.variety === 'intermittent') {
-          /* A broken line: the delivery is bursts, so the tracer is too. The
-           * dashes are cut from the WORLD ray, so they crowd together toward
-           * the far end exactly as evenly spaced things do when they recede —
-           * which on the old screen-space parameterisation they never did. */
-          var DASH = 7, lit = 0.62, d, t0, t1;
-          for (d = 0; d < DASH; d++) {
-            t0 = (d / DASH) * head; t1 = ((d + lit) / DASH) * head;
-            if (tiny || !worldTracer(ctx, cam, origin, seg, t0, t1, col,
-                                     fade * (0.95 - 0.75 * t0),
-                                     fade * (0.95 - 0.75 * t1), dim)) {
-              glowTracer(ctx,
-                a.x + dx * t0, a.y + dy * t0, a.x + dx * t1, a.y + dy * t1,
-                w0 + (w1 - w0) * t0, w0 + (w1 - w0) * t1,
-                col, fade * (0.95 - 0.75 * t0), fade * (0.95 - 0.75 * t1));
+        /* Where it lands, and whether there is anything to throw sparks off.
+         * A miss strikes nothing; a shot run out to its range with no target
+         * strikes nothing; a shot ending at your own eye is the canopy
+         * flare's business, not this. */
+        var strikes = !beam.miss && !atEye && (!!beam.target || !beam.fromShip);
+        var onRock = !!(beam.target && beam.target.rock);
+        var sparkCol = onRock ? ROCK_SPARK : col;
+        var seed = ((beam.born || 0) * 977.13) % 1000;
+        /* From the seat the apparent muzzle is under the instrument deck
+         * (seatMuzzle), so a flash its true size is hidden behind the
+         * panels. Big enough that it spills up over the deck's edge and
+         * lights the bottom of the glass, which is what a gun going off
+         * under your feet looks like from inside. */
+        var seatFlash = (beam.fromShip && G.viewMode === 'cockpit') ? SEAT_FLASH_PX : 0;
+        var hitP = { x: ex, y: ey, scale: b.scale, depth: b.depth };
+
+        if (beam.variety === 'beam') {
+          /* A BEAM: continuous, the full length from the first frame, and
+           * the fattest thing a gun makes — a coloured body inside a wide
+           * halo with a white core down it, flickering a little because a
+           * beam held on a target is a load being delivered, not a lamp. The
+           * flicker is on the wall clock and hashed per shot so two beams
+           * side by side do not pulse in step. */
+          var fl = 0.86 + 0.14 * Math.sin(nowS * 83 + seed * 6.1);
+          if (tiny || !worldTracer(ctx, cam, origin, seg, 0, 1, col,
+                                   fade * 0.95 * fl, fade * 0.35 * fl, dim * 2.2,
+                                   { maxW: BEAM_MAX_W, halo: BEAM_HALO, core: 0.34, coreA: 0.9 })) {
+            glowTracer(ctx, a.x, a.y, ex, ey, w0 * 2.0, w1 * 1.4, col,
+                       fade * 0.95 * fl, fade * 0.3 * fl);
+          }
+          /* And it glows at both ends for as long as it is on: the emitter,
+           * and the face it is burning. Sparks keep coming, a fresh spray
+           * every SPARK_S/2, so a beam held on a rock or a hull sprays all
+           * the time it is held. */
+          fxGlow(ctx, a.x, a.y, Math.max(fxRadius(cam, a, MUZZLE_KM) * 1.2, seatFlash), col, fade * 0.75 * fl);
+          if (strikes) {
+            fxGlow(ctx, ex, ey, fxRadius(cam, b, IMPACT_KM, IMPACT_MIN_PX), sparkCol, fade * 0.9 * fl);
+            var half = SPARK_S / 2, ph = age / half, gen = Math.floor(ph);
+            for (var sg = gen; sg >= gen - 1 && sg >= 0; sg--) {
+              fxSparks(ctx, cam, hitP, sparkCol, seed + sg * 13.7, age - sg * half, fade);
             }
           }
-        } else if (beam.variety === 'beam') {
-          // Continuous, and the widest of the three: the load never stops.
-          if (tiny || !worldTracer(ctx, cam, origin, seg, 0, head, col,
-                                   fade * 0.95, fade * 0.12, dim * 1.25)) {
-            glowTracer(ctx, a.x, a.y, hx, hy, w0 * 1.25, w1, col,
-                       fade * 0.95, fade * 0.12);
-          }
         } else {
-          /* A pulse is a packet of particles, and a packet debunches — so it
-           * is drawn as a streak that ELONGATES behind its head rather than
-           * as a fixed-length slug sliding along the run. Render.boltSpan
-           * carries the reasoning and the two numbers.
+          /* BOLTS, for the pulse and the intermittent. A pulse is one bolt;
+           * an intermittent is a short burst of BURST_N, which is what its
+           * delivery is. The damage is the same one hitscan shot either way
+           * (combat.js) — the burst is how it LOOKS, so the two varieties
+           * read as different guns across a fight.
            *
-           * Bright at the head and falling away down the tail, because that
-           * is which end the dense part of the bunch is at: the leaders have
-           * outrun the stragglers, so the light thins out behind them.
-           *
-           * Measured against the floored `head` rather than span.head, so the
-           * first-frame floor survives into the length test — otherwise a
-           * shot's opening frame computes a zero-length streak and draws
-           * nothing at all. */
-          if (head - span.tail > 1e-4) {
-            if (tiny || !worldTracer(ctx, cam, origin, seg, span.tail, head,
-                                     col, fade * 0.05, fade * 1.0, dim * 0.7)) {
-              glowTracer(ctx, a.x + dx * span.tail, a.y + dy * span.tail,
-                         hx, hy, w0 * 0.5, w0 * 0.9, col,
-                         fade * 0.05, fade * 1.0);
+           * Each bolt is a streak that elongates behind its head
+           * (Render.boltSpan), bright at the head and falling away down the
+           * tail, now with a white core so it reads hot, a flash at the
+           * emitter as it leaves, and a flash and a spray where it lands. */
+          var nb = beam.variety === 'intermittent' ? BURST_N : 1;
+          for (var k = 0; k < nb; k++) {
+            var ak = age - k * BURST_GAP_S;
+            if (ak < 0) continue;
+            var sk = k ? Render.boltSpan(ak, TRACER_CROSS) : span;
+            var hk = k ? Math.max(0.06, sk.head) : head;
+            if (hk - sk.tail > 1e-4) {
+              if (tiny || !worldTracer(ctx, cam, origin, seg, sk.tail, hk,
+                                       col, fade * 0.05, fade * 1.0, dim * 1.1,
+                                       { core: 0.4, coreA: 0.9 })) {
+                glowTracer(ctx, a.x + dx * sk.tail, a.y + dy * sk.tail,
+                           a.x + dx * hk, a.y + dy * hk, w0 * 0.6, w0 * 1.0, col,
+                           fade * 0.05, fade * 1.0);
+              }
+            }
+            /* THE HEAD, as a ball of light. Measured from the seat: the gun
+             * is a few metres off your eye and the target kilometres off, so
+             * a bolt flying at a steady speed is within two pixels of the
+             * crosshair after its first frame — perspective is right and the
+             * streak alone is gone almost at once. What the eye follows is
+             * the bright knot at the front, shrinking as it goes, so draw
+             * that: a glow at the head sized off its own depth. */
+            if (hk < 1) {
+              var hp = cam.project(V.addScaled(origin, seg, hk));
+              if (hp) fxGlow(ctx, hp.x, hp.y, fxRadius(cam, hp, BOLT_HEAD_KM), col, fade * dim * 0.9);
+            }
+            if (ak < MUZZLE_FLASH_S) {
+              fxGlow(ctx, a.x, a.y, Math.max(fxRadius(cam, a, MUZZLE_KM), seatFlash),
+                     col, (1 - ak / MUZZLE_FLASH_S) * dim);
+            }
+            var since = ak - TRACER_CROSS;          // since this bolt arrived
+            if (strikes && since >= 0) {
+              if (since < IMPACT_FLASH_S) {
+                fxGlow(ctx, ex, ey, fxRadius(cam, b, IMPACT_KM, IMPACT_MIN_PX), sparkCol,
+                       1 - since / IMPACT_FLASH_S);
+              }
+              fxSparks(ctx, cam, hitP, sparkCol, seed + k * 31.3, since, 1);
             }
           }
         }
@@ -9581,11 +9724,32 @@
       ctx.globalCompositeOperation = 'lighter';
       for (i = 0; i < G.explosions.length; i++) {
         var ex = G.explosions[i];
-        var ep = cam.project(ex.pos);
+        /* A blast drifts with what blew up (2026-11-01). Left where it went
+         * off in absolute space, a torpedo's fireball in a belt slid off the
+         * screen at 13 km/s inside two frames — doctrine 3, the same fix the
+         * contrails got. Old blasts with no `vel` stay where they were. */
+        var ep = cam.project(ex.vel ? V.addScaled(ex.pos, ex.vel, G.t - (ex.t || G.t)) : ex.pos);
         if (!ep) continue;
-        var age = (nowS * 1000 - ex.at) / 900;         // 0..1
+        var age = (nowS * 1000 - ex.at) / (ex.life || 900);   // 0..1
         if (age < 0 || age > 1) continue;
         var r = Math.max(3, ex.size * ep.scale) * (0.3 + age * 1.6);
+        /* THE FIREBALL (2026-11-01, with the weapons pass). The rings were
+         * the whole of it, and an outline is a diagram of a blast rather
+         * than a blast: there was nothing for the eye to be dazzled by. A
+         * filled glow under them now, white at the heart and cooling to
+         * orange, gone faster than the shock ring that outruns it. */
+        var fb = Math.pow(1 - age, 1.6);
+        if (fb > 0.01) {
+          var fr = r * (0.55 + 0.25 * (1 - age));
+          var fg = ctx.createRadialGradient(ep.x, ep.y, 0, ep.x, ep.y, fr);
+          fg.addColorStop(0, 'rgba(255,255,255,' + (0.95 * fb).toFixed(3) + ')');
+          fg.addColorStop(0.3, 'rgba(255,214,140,' + (0.75 * fb).toFixed(3) + ')');
+          fg.addColorStop(0.7, 'rgba(255,110,40,' + (0.35 * fb).toFixed(3) + ')');
+          fg.addColorStop(1, 'rgba(160,40,10,0)');
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = fg;
+          ctx.beginPath(); ctx.arc(ep.x, ep.y, fr, 0, K.TAU); ctx.fill();
+        }
         ctx.globalAlpha = (1 - age) * 0.9;
         ctx.strokeStyle = '#ffd9a0';
         ctx.lineWidth = 2.5 * (1 - age) + 0.5;
@@ -15284,7 +15448,19 @@
     return G.contrails;
   }
 
-  function layPoint(key, pos, life) {
+  /* EVERY POINT DRIFTS WITH A FRAME (2026-11-01). Laid in absolute space
+   * and left there, a point was left behind at the speed of everything
+   * round it — some thirteen kilometres a second in a belt, and as fast as
+   * the planet orbits in an atmosphere — so a torpedo's smoke, filmed for
+   * Astra, was a grey bar kilometres off across the sky instead of a trail
+   * behind it. CLAUDE.md doctrine 3: a thing frozen in absolute space drifts
+   * away from what it belonged to. So each point carries `v`, the velocity
+   * of the frame it was laid in, and is drawn at p + v * age:
+   *   - air: the body whose air it is, because the air goes round with it;
+   *   - a missile's smoke: YOUR ship's, because the fight is in your frame
+   *     and smoke that holds still against the rock and the ships you are
+   *     looking at is what reads as left behind. */
+  function layPoint(key, pos, life, vel) {
     var store = trailStore();
     var tr = store.by[key];
     if (!tr) {
@@ -15297,7 +15473,7 @@
     tr.life = life;
     if (G.t - tr.last < CONTRAIL_STEP) return tr;
     tr.last = G.t;
-    tr.pts.push({ p: V.clone(pos), t: G.t });
+    tr.pts.push({ p: V.clone(pos), t: G.t, v: vel ? V.clone(vel) : null });
     if (tr.pts.length > CONTRAIL_MAX_PTS) tr.pts.shift();
     return tr;
   }
@@ -15342,7 +15518,9 @@
       var f = flyers[i];
       var strength = airTrailStrength(f.pos, f.vel);
       if (strength <= 0) continue;
-      var tr = layPoint(f.key, f.pos, CONTRAIL_LIFE);
+      var dom = Sim.dominantBody ? Sim.dominantBody(f.pos, G.sys, G.t) : null;
+      var tr = layPoint(f.key, f.pos, CONTRAIL_LIFE,
+                        dom && Sim.bodyVelocity ? Sim.bodyVelocity(dom, G.sys, G.t) : null);
       tr.air = strength;
     }
 
@@ -15352,8 +15530,11 @@
     var ms = G.sys.missiles || [];
     for (i = 0; i < ms.length; i++) {
       var m = ms[i];
+      /* A rock torpedo COASTS — no motor, nothing to smoke — so it lays no
+       * trail. Filmed, its smoke was a fat grey slab beside the rock. */
+      if (m.torp) continue;
       if (!m.trailKey) m.trailKey = 'm' + (m.born || 0) + '|' + i + '|' + Math.round((m.dies || 0) * 100);
-      layPoint(m.trailKey, m.pos, MISSILE_TRAIL_LIFE);
+      layPoint(m.trailKey, m.pos, MISSILE_TRAIL_LIFE, G.ship.vel);
     }
 
     /* Ageing out. A trail whose last point is older than its life is gone
@@ -15375,7 +15556,10 @@
       var tr = store.by[store.order[i]];
       if (!tr || tr.pts.length < 2) continue;
       var missile = store.order[i].charAt(0) === 'm';
-      Render.drawContrail(ctx, cam, tr.pts, G.t, {
+      var pts = tr.pts.map(function (q) {
+        return q.v ? { p: V.addScaled(q.p, q.v, G.t - q.t), t: q.t } : q;
+      });
+      Render.drawContrail(ctx, cam, pts, G.t, {
         life: tr.life,
         /* A motor smokes heavier than a wingtip, and a hull in thick air
          * heavier than one scraping the top of it. */

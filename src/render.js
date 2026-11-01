@@ -2349,9 +2349,14 @@
   var BOLT_MAX_W = 3.6;       // px
   var BOLT_SEGS = 4;          // samples-1; the line is straight, only w varies
 
-  function boltRibbon(cam, origin, seg, f0, f1, wScale) {
+  /* `maxW` (2026-11-01): a BEAM may be fatter up close than a bolt. Astra
+   * asked for "a thicker, glowing beam", and the 3.6 px cap is what kept
+   * every variety the same hairline at the ranges you actually see them. A
+   * bolt keeps the old cap; the caller raises it for a beam only. */
+  function boltRibbon(cam, origin, seg, f0, f1, wScale, maxW) {
     var n = BOLT_SEGS, out = [], i;
     var s = wScale > 0 ? wScale : 1;
+    var cap = maxW > 0 ? maxW : BOLT_MAX_W;
     for (i = 0; i <= n; i++) {
       var f = f0 + (f1 - f0) * (i / n);
       var p = cam.project({ x: origin.x + seg.x * f,
@@ -2360,7 +2365,7 @@
       if (!p) return null;
       var w = BOLT_R * p.scale * s;
       if (w < BOLT_MIN_W) w = BOLT_MIN_W;
-      else if (w > BOLT_MAX_W) w = BOLT_MAX_W;
+      else if (w > cap) w = cap;
       out.push({ x: p.x, y: p.y, w: w, depth: p.depth });
     }
     return out;

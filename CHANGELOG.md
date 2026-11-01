@@ -40,7 +40,61 @@ before they update.
 
 ## Unreleased
 
-Nothing yet since Brian.
+### Changed
+
+- **2026-11-01 — Weapons fire, by kind (Astra: "for the pulse and
+  intermittent laser, we want bolts. For the beam laser we want a beam").**
+  A pulse laser fires one bolt; an intermittent fires a burst of three; a
+  beam laser (the mining laser included) is a continuous, thicker beam with
+  a white-hot core, a wide halo and a slight flicker, glowing at the
+  emitter and at whatever it is burning. Every bolt now has a white core,
+  a bright knot at its head that shrinks as it flies (from the seat a bolt
+  is at the crosshair within a frame, so the knot is what the eye follows),
+  a muzzle flash as it leaves, and a flash and a spray of sparks where it
+  lands. A beam held on a hull or a rock sprays the whole time; stone
+  throws orange sparks whatever the beam's colour. A miss throws nothing.
+  From the seat the muzzle flash spills up over the instrument deck.
+  (main.js `drawCombatFx`; `Render.boltRibbon` takes a width cap so only a
+  beam is allowed to be fat.)
+- **NPC guns fire visible shots.** They had no birth time and a 70 ms life,
+  so what showed was a stub a few percent out of the barrel. Pirates and
+  freighters now fire pulse bolts, the police fire bursts, the Syndicate's
+  enforcers and the navy (hunters included) fire beams; station batteries
+  and your point-defence turret fire bolts. Picture only: the field is `fx`,
+  not `variety`, because a gun's `variety` feeds the thermal split in
+  `damagePlayer` and would have changed what their hits do.
+  (`Combat.shotFx`, `Combat.npcShotVariety`.)
+- **A shot at you is drawn from the seat.** It ends at your eye, which
+  projects nowhere, so incoming fire was skipped in the cockpit and only the
+  canopy flare showed. It now stops 60 m short and comes at the glass.
+- **Explosions have a fireball** under the shock rings, white at the heart
+  and cooling to orange. A rock torpedo's lasts 1.6 s against a kill's 0.9.
+
+### Fixed
+
+- **2026-11-01 — A rock torpedo flew straight through the rock.** Filmed in
+  the game for Astra's demonstration: launched from the panel between
+  frames, the torpedo's position was one frame older than the rocks it was
+  tested against for its whole flight — 0.87 km at belt speed and 15 fps —
+  and it passed through the middle of a 240 m rock and coasted on. The test
+  rig launched and stepped at the same instant, so it never saw it; the
+  hunters had the same one-tick bug this morning. A torpedo now carries the
+  time its position is for and coasts any gap before the test.
+  (mining.test: "launched between frames, it still goes off on the rock".)
+- **Missile smoke is no longer a grey bar across the sky.** Contrail points
+  were laid in absolute space and left there, so in a belt doing 13 km/s
+  round the star the trail was left kilometres behind within a second
+  (doctrine 3). Each point now drifts with its frame: an atmosphere's with
+  its planet, a missile's with your ship.
+- **Blasts drift with what blew up.** The same doctrine-3 bug: an
+  explosion stayed where it went off in absolute space, so a torpedo's
+  fireball in a belt slid off the screen inside two frames. Every blast now
+  carries the velocity of the thing that went up. A rock torpedo coasts, so
+  it lays no smoke at all (it was a fat grey slab beside the rock), and its
+  flash is drawn at its real 1 km blast radius, not 3.5 km. A pirate's rack
+  cooking off is drawn at last: it had no timestamp, so its age was NaN.
+- **One roll for an NPC's shot at you.** The picture rolled for a miss and
+  the damage rolled again, so a bolt drawn wide could still hit you.
 
 ---
 

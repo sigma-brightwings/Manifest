@@ -2290,7 +2290,7 @@
      NPC_SHED.pirate) means a pirate firing flat out is nowhere near
      cooking on its own; what tips one over is somebody else's heat on
      top. */
-  var NPC_GUN = { dmg: 5, range: 12, cooldown: 1.1, heat: 5 };
+  var NPC_GUN = { dmg: 5, range: 12, cooldown: 1.1, heat: 5, fx: 'pulse' };
 
   /* The Syndicate's own enforcement wing — a `police`-kind patrol flying
    * under the outlaw flag, spawned by the same loop as any legitimate
@@ -2305,7 +2305,7 @@
    * A player who sees one of these is not being mugged, they are being
    * policed by an organisation with better hardware than the law usually
    * has. */
-  var SYNDICATE_GUN = { dmg: 11, range: 18, cooldown: 0.85, heat: 9 };
+  var SYNDICATE_GUN = { dmg: 11, range: 18, cooldown: 0.85, heat: 9, fx: 'beam' };
 
   /* THE LAW'S OWN GUN, and its missiles (Astra, 2026-10-18): the starting
    * ship could outrun any Mirven police, wanted and under fire, because
@@ -2317,7 +2317,7 @@
    * is still up. A police missile is slower than a Hawk and burns out
    * sooner, so running early from far out is a real escape and running
    * late from close in is not. */
-  var POLICE_GUN = { dmg: 9, range: 16, cooldown: 0.9, heat: 7 };
+  var POLICE_GUN = { dmg: 9, range: 16, cooldown: 0.9, heat: 7, fx: 'intermittent' };
   var POLICE_MISSILE = { dmg: 34, accel: 0.05, life: 40, fuse: 0.09, speed0: 0.12,
                          range: 30, every: 18, rack: 3 };
 
@@ -2337,7 +2337,31 @@
    * A shuttle stays unarmed, and that is a role rather than a weakness —
    * it is the hull nobody scans twice, which is exactly what you want when
    * the cargo is a sabotage device. */
-  var TRADER_GUN = { dmg: 2, range: 8, cooldown: 2.2, heat: 2 };
+  var TRADER_GUN = { dmg: 2, range: 8, cooldown: 2.2, heat: 2, fx: 'pulse' };
+
+  /* HOW AN NPC'S SHOT LOOKS (2026-11-01). NPC guns had no variety, so every
+   * one of them was drawn the same way, and drawn badly: no birth time, a
+   * 70 ms life, and so a stub a few percent of the way out of the barrel
+   * that was gone before it had flown. Now each gun names its delivery the
+   * way the catalogue lasers do (as `fx`, see below) — a pirate's and a freighter's popgun fire
+   * pulse bolts, the law fires bursts, the Syndicate's enforcers the muon
+   * beam their scanner line already called it — and the navy, hunters
+   * included, fires a beam: you should know at a glance it is not a cutter.
+   * PURELY the picture. Damage, range and cadence stay the gun's own. */
+  var SHOT_FX_S = 0.62;          // a bolt's life on screen: flight, strike, sparks
+  var BEAM_FX_S = 0.42;          // a beam's, which is lit the whole time
+  function npcShotVariety(sp, gun) {
+    if (sp && (sp.hunter || sp.kind === 'navy')) return 'beam';
+    /* `fx`, NOT `variety`: an NPC gun's `variety` would be read by the
+     * thermal split in damagePlayer (THERMAL_SHARE) and quietly change what
+     * a hit does to you. This is a picture, so it gets its own name. */
+    return (gun && gun.fx) || 'pulse';
+  }
+  function shotFx(from, to, target, color, variety, now, miss) {
+    var v = variety || 'pulse';
+    return { from: from, to: to, target: target || null, color: color, variety: v,
+             born: now, until: now + (v === 'beam' ? BEAM_FX_S : SHOT_FX_S), miss: !!miss };
+  }
   /* A rescue tender is unarmed for the same reason an ambulance is: what
    * protects it is that shooting one is unthinkable and expensive, not
    * that it can shoot back. See BOUNTY.killTender. */
@@ -3815,7 +3839,11 @@
             sp.hullHp = Math.max(0, sp.hullHp - RACK_DAMAGE);
           }
           (G.explosions = G.explosions || []).push({
-            pos: V.clone(sp.live.pos), born: t, small: true
+            pos: V.clone(sp.live.pos), born: t, small: true, size: 0.4,
+            /* `at` on the wall clock like every other blast: without it the
+             * renderer's age was NaN and the cook-off was never drawn. */
+            at: (typeof performance !== 'undefined' ? performance.now() : 0),
+            vel: V.clone(sp.live.vel || V.zero()), t: t
           });
           if (hooks && hooks.say) {
             hooks.say((sp.name || 'A pirate') + "'s rack cooked off.", 5);
@@ -4617,7 +4645,7 @@
     if (at) {
       (G.explosions = G.explosions || []).push({
         pos: V.clone(at), at: (typeof performance !== 'undefined' ? performance.now() : 0),
-        size: (spec.size || 0.06) * 30
+        size: (spec.size || 0.06) * 30, vel: V.clone(vel), t: t
       });
 
       /* The hold spills. Same canisters the airlock makes, so the scoop,
@@ -6950,7 +6978,8 @@
      * firing, for anything that wants a straight answer and as the fallback
      * once a target stops existing. */
     /* `variety` and `born` are for the renderer: a pulse is drawn as a bolt
-     * that travels, an intermittent as a broken line, a beam as a solid one.
+     * that travels, an intermittent as a burst of them, a beam as a solid glowing
+     * line (main.js drawCombatFx, 2026-11-01).
      * THE TRACER IS THE ONLY THING THAT MOVES. The weapon is still hitscan
      * and the damage above has already landed — a beam at combat ranges is
      * instantaneous and this game's whole weapon design rests on that, so
@@ -6962,7 +6991,7 @@
       to: hit ? V.clone(hit.pos) : (rockEnd || beamEnd),
       target: hit || (rockEnd ? { pos: rockEnd, rock: true } : null), range: gun.range,
       variety: gun.variety || 'pulse', side: mz.r < 0 ? -1 : 1,
-      color: gun.color, born: now, until: now + 0.42
+      color: gun.color, born: now, until: now + (gun.variety === 'beam' ? BEAM_FX_S : SHOT_FX_S)
     });
 
     /* The hull pays for the shot, and this is the line that finally gives
@@ -7148,12 +7177,13 @@
     });
     if (inc) {
       G.turretCoolUntil = t + tur.cooldown / man.rate;
-      (G.beams = G.beams || []).push({ from: V.clone(s.pos), to: V.clone(inc.pos), color: tur.color, until: now + 0.07 });
+      (G.beams = G.beams || []).push(shotFx(V.clone(s.pos), V.clone(inc.pos), inc, tur.color, 'pulse', now, false));
       addHeat(G, (tur.heat || 0) * (tur.cooldown || 0));
       if (hooks && hooks.sound) hooks.sound('turret');
       if (Math.random() < PD.hit) {
         inc.dead = true;
-        (G.explosions = G.explosions || []).push({ pos: V.clone(inc.pos), at: now * 1000, size: 0.5 });
+        (G.explosions = G.explosions || []).push({ pos: V.clone(inc.pos), at: now * 1000, size: 0.5,
+                                                   vel: V.clone(s.vel), t: t });
         if (hooks && hooks.say) hooks.say('Turret: seeker down', 2);
       }
       return;
@@ -7202,7 +7232,7 @@
     (G.beams = G.beams || []).push({
       from: muzzleWorld(s, turMz), muzzle: turMz, fromShip: true,
       to: V.clone(best.live.pos), target: best.live,
-      color: tur.color, until: now + 0.07
+      color: tur.color, variety: 'pulse', born: now, until: now + SHOT_FX_S
     });
     if (hooks && hooks.sound) hooks.sound('turret');
     /* The turret is bolted to the same hull and its waste heat goes the same
@@ -7677,7 +7707,8 @@
       if (hitIt || V.dist(tgt.live.pos, ms.pos) < ms.fuse) {
         (G.explosions = G.explosions || []).push({
           pos: V.clone(ms.pos),
-          at: (typeof performance !== 'undefined' ? performance.now() : 0), size: 1.2
+          at: (typeof performance !== 'undefined' ? performance.now() : 0), size: 1.2,
+          vel: V.clone(tgt.live.vel || ms.vel), t: t
         });
         /* No delivery and no direction: a warhead has no variety, and it goes
          * off ON the hull rather than arriving from anywhere. Both arguments
@@ -7752,12 +7783,15 @@
        * lost to speed than a pirate's. */
       var chance = Math.max(cop ? 0.25 : 0.12, Math.min(0.85,
         1.0 - d / gun.range * 0.5 - transverse * (cop ? 0.8 : 1.4)));
-      (G.beams = G.beams || []).push({
-        from: V.clone(sp.live.pos), to: V.clone(s.pos),
-        color: gun === TRADER_GUN ? '#ffc46b' : elite ? '#c86bff' : '#ff8a76',
-        until: now + 0.07, miss: Math.random() > chance
-      });
-      if (Math.random() < chance) {
+      /* ONE roll, drawn and dealt. There were two: the picture rolled for
+       * a miss and the damage rolled again, so a bolt drawn wide could
+       * still take your shield down and one drawn on target could do
+       * nothing (2026-11-01). */
+      var connects = Math.random() < chance;
+      (G.beams = G.beams || []).push(shotFx(V.clone(sp.live.pos), V.clone(s.pos), null,
+        gun === TRADER_GUN ? '#ffc46b' : elite ? '#c86bff' : sp.hunter ? '#9fe8ff' : cop ? '#8fd0ff' : '#ff8a76',
+        npcShotVariety(sp, gun), now, !connects));
+      if (connects) {
         damagePlayer(G, gun.dmg, hooks, gun, V.clone(sp.live.pos));
       }
       else if (hooks && hooks.sound) hooks.sound('nearMiss');
@@ -7877,7 +7911,7 @@
     if (G.beams) G.beams = G.beams.filter(function (b) { return b.until > nowS; });
     if (G.explosions) {
       var nowMs2 = nowS * 1000;
-      G.explosions = G.explosions.filter(function (e) { return nowMs2 - e.at < 900; });
+      G.explosions = G.explosions.filter(function (e) { return nowMs2 - e.at < (e.life || 900); });
     }
   }
 
@@ -9641,6 +9675,7 @@
     EQUIPMENT: EQUIPMENT, LEGACY_GUN: LEGACY_GUN,
     SLOT_ORDER: SLOT_ORDER, SLOT_LABEL: SLOT_LABEL, RESALE: RESALE,
     LASER_DELIVERY: LASER_DELIVERY, PARTICLE: PARTICLE,
+    shotFx: shotFx, npcShotVariety: npcShotVariety, SHOT_FX_S: SHOT_FX_S, BEAM_FX_S: BEAM_FX_S,
     damageAtRange: damageAtRange,
     slotKeys: slotKeys, slotType: slotType, firstFreeSlot: firstFreeSlot,
     fittedList: fittedList, fitSummary: fitSummary, canFit: canFit,

@@ -517,7 +517,7 @@
       id: 'torp' + (sys.canisterSeq = (sys.canisterSeq || 0) + 1) + ':' + Math.round(t),
       pos: V.addScaled(s.pos, s.fwd, 0.06),
       vel: V.addScaled(s.vel, s.fwd, TORP_SPEED),
-      from: V.clone(s.pos), born: t, dies: t + TORP_LIFE,
+      from: V.clone(s.pos), born: t, dies: t + TORP_LIFE, at: t,
       domId: dom ? dom.id : null
     };
     (sys.missiles = sys.missiles || []).push(tp);
@@ -564,6 +564,18 @@
       var tp = list[i];
       if (!tp.torp) { keep.push(tp); continue; }
       var body = tp.domId && sys.byId ? sys.byId[tp.domId] : null;
+      /* ONE TICK BEHIND, the hunters' bug again (2026-11-01). The panel
+       * launches at G.t, but the game has already advanced the clock when
+       * it next calls this, so the torpedo's position was a frame older
+       * than the rocks it was tested against. At belt speeds that is the
+       * rock's whole orbital velocity times a frame — 0.87 km at 15 fps —
+       * and filmed for Astra the torpedo flew straight through the middle
+       * of a 240 m rock without going off. The test rig never saw it: it
+       * launches and steps at the same t. So `tp.at` says when its position
+       * is FOR, and any gap is coasted across before the test. */
+      if (tp.at !== undefined && t > tp.at && t - tp.at < 5) {
+        tp.pos = V.addScaled(tp.pos, tp.vel, t - tp.at);
+      }
       var p0 = tp.pos;
       /* EVERYTHING IN THE TARGET'S FRAME. Out here a rock, a ship and the
        * torpedo are all doing some thirteen kilometres a second round the
@@ -601,6 +613,7 @@
       if (!boom && t + dt >= tp.dies) boom = { at: p1, spent: true };
       if (boom) { detonate(sys, G, t, tp, boom, hooks); continue; }
       tp.pos = p1;
+      tp.at = t + dt;
       keep.push(tp);
     }
     sys.missiles = keep;
@@ -609,8 +622,13 @@
   /* The bang, and everything it does. */
   function detonate(sys, G, t, tp, boom, hooks) {
     var Cb = global.Combat, Eco = global.Economy;
+    /* `life` 1.6 s against an ordinary kill's 0.9: it is a small nuclear
+     * charge, and the flash should outlast a hull going up. Sized to the
+     * blast radius it actually has, not the 3.5 km it was drawn at, which
+     * from a pilot 1.5 km off filled the screen (2026-11-01). */
     (G.explosions = G.explosions || []).push({
-      pos: V.clone(boom.at), size: 3.5,
+      pos: V.clone(boom.at), size: TORP_BLAST, life: 1600,
+      vel: V.clone((boom.rock && boom.rock.vel) || tp.vel || V.zero()), t: t,
       at: (typeof performance !== 'undefined' ? performance.now() : 0)
     });
     if (hooks && hooks.sound) hooks.sound('explosion');
