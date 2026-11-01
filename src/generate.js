@@ -3962,6 +3962,7 @@
     fillLocalHolds(sys, tr, ports);
     buildFeeders(sys, tr, ports);
     buildHeavies(sys, tr, ports);
+    buildFamilyFeeders(sys, tr, ports);
     /* LAST, so it sees the heavies too. A liner lying off a station with
      * four hundred people aboard is the same object as one under way with
      * four hundred people aboard, and the pass that fills them has no
@@ -4395,6 +4396,109 @@
         n++;
       }
     }
+  }
+
+  /* ---- feeders between a planet and her moons (2026-11-01) --------------
+   * Astra: "increase the number of civilian ships that we might come
+   * across that don't want to shoot at us."
+   *
+   * Measured first (tools/measure-encounters.cjs, 6 seeds, 93 systems): a
+   * port that shares her world with another had a ship within 3,000 km
+   * (Sim.WAKE_RANGE) 79% of the time; a port ALONE over her world, 44% of
+   * all ports, was empty 96% of the time. buildFeeders only runs feeders
+   * between two docks above the same body, and its fallback for a lonely
+   * station fires only when the WHOLE system has no such pair, so a moon
+   * station with a sister station over the planet below got nothing.
+   *
+   * 57% of those lonely ports do have a neighbour in the same planet-and-
+   * moons family, a median million km off: a run the size of a local hop,
+   * not an interplanetary one. This flies feeders between them, built
+   * exactly as buildFeeders builds its own: shuttles (unarmed, so nobody
+   * here shoots at anybody), carrying a share of the scheduled run if the
+   * timetable keeps one, and registered with no market, so not one price
+   * moves. Its own forks, after everything else, so every existing route
+   * keeps every draw it had. The ports alone round a planet with no
+   * neighbour at all (the other 43%) are left for a later pass. */
+  var FAMILY_FEEDERS = 12;
+  function planetFamily(body) {
+    var b = body;
+    while (b && b.parentBody && b.kind !== 'planet' && b.parentBody.kind !== 'star') b = b.parentBody;
+    return b;
+  }
+  function scheduledBetween(sys, A, B) {
+    var t = sys.traffic || [];
+    for (var i = 0; i < t.length; i++) {
+      var r = t[i];
+      if (r.feeder || r.heavy || r.outboard) continue;
+      if (r.from === A.id && r.to === B.id) return { route: r, forward: true };
+      if (r.from === B.id && r.to === A.id) return { route: r, forward: false };
+    }
+    return null;
+  }
+  function buildFamilyFeeders(sys, tr, ports) {
+    var fr = tr.fork('familyfeeder'), sr = tr.fork('familyshare'), hf = tr.fork('familyhold');
+    var mr = tr.fork('familyflow');
+    var pairs = [], seen = {};
+    ports.forEach(function (A) {
+      if (!A.parentBody || !A.market) return;
+      var lone = !ports.some(function (q) { return q !== A && q.parentBody === A.parentBody; });
+      if (!lone) return;
+      var fam = planetFamily(A.parentBody);
+      var B = null, bd = Infinity;
+      ports.forEach(function (q) {
+        if (q === A || !q.market || planetFamily(q.parentBody) !== fam) return;
+        var parent = commonParent(A, q, sys);
+        var d = Math.abs(radiusAbout(A, parent, sys) - radiusAbout(q, parent, sys)) +
+                Math.min(radiusAbout(A, parent, sys), radiusAbout(q, parent, sys)) * 0.2;
+        if (d < bd) { bd = d; B = q; }
+      });
+      if (!B) return;
+      var key = A.id < B.id ? A.id + '|' + B.id : B.id + '|' + A.id;
+      if (seen[key]) return;
+      seen[key] = true;
+      pairs.push([A, B]);
+    });
+    var n = 0;
+    pairs.forEach(function (pr) {
+      var A = pr[0], B = pr[1];
+      var parent = commonParent(A, B, sys);
+      var ra = radiusAbout(A, parent, sys), rb = radiusAbout(B, parent, sys);
+      var dist = Math.max(Math.abs(ra - rb), (ra + rb) * 0.2);
+      var sched = scheduledBetween(sys, A, B);
+      var flowOut = sched ? (sched.forward ? sched.route.out : sched.route.back) : null;
+      var flowBack = sched ? (sched.forward ? sched.route.back : sched.route.out) : null;
+      /* No scheduled run between them: the flow a local run would carry
+       * (feederManifest, what lands at one end that the other trades), as
+       * fillLocalHolds reads it, but NOT registered: like every feeder,
+       * these are the trade made visible, not more of it. Without this a
+       * share of the new feeders flew empty, against Astra's rule that
+       * ships mostly travel full (economy.test caught it). */
+      if (!sched) {
+        flowOut = feederManifest(A, B, mr).map(function (m) { return { cid: m.cid, qty: m.qty * FAMILY_FEEDERS }; });
+        flowBack = feederManifest(B, A, mr).map(function (m) { return { cid: m.cid, qty: m.qty * FAMILY_FEEDERS }; });
+      }
+      for (var k = 0; k < FAMILY_FEEDERS; k++) {
+        var spec = SHIP_CLASSES.shuttle;
+        var cruise = Math.max(240, Math.min(2 * Math.sqrt(dist / spec.accel), 6 * 3600));
+        var layover = fr.range(0.02, 0.10) * 86400;
+        var period = 2 * (cruise + layover);
+        sys.traffic.push({
+          id: 'ff' + n, name: fr.pick(LINE_NAMES) + ' ' + fr.pick(HULL_NAMES),
+          cls: 'shuttle', className: spec.label,
+          size: spec.size * fr.range(0.85, 1.15),
+          color: spec.color,
+          from: A.id, to: B.id, parentId: parent.id,
+          local: true, feeder: true, family: true,
+          cruise: cruise, layover: layover, period: period,
+          t0: fr.range(0, period),
+          out: shareOf(flowOut, FAMILY_FEEDERS, sr),
+          back: shareOf(flowBack, FAMILY_FEEDERS, sr),
+          distance: dist
+        });
+        sizeForLoad(sys.traffic[sys.traffic.length - 1], hf, false);
+        n++;
+      }
+    });
   }
 
   function registerDeliveries(port, manifest, t0, offset, period, via) {

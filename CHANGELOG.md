@@ -107,6 +107,23 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **More peaceful ships round lonely stations (2026-11-01).** Astra:
+  *"increase the number of civilian ships that we might come across that
+  don't want to shoot at us."* Measured first (`tools/measure-encounters.cjs`,
+  6 seeds, 93 systems, ships within 3,000 km): a port sharing her world with
+  another had company 80% of the time; a port alone over her world, 44% of
+  all ports, was empty 96% of the time. Feeders only ran between docks over
+  the same body, so a moon station with a sister station over the planet
+  below got none.
+  - Twelve feeder shuttles now run between a lonely port and her nearest
+    neighbour in the same planet-and-moons family (57% of lonely ports have
+    one, a median million km off). Shuttles are unarmed, carry a share of
+    the trade between the two, and are registered with no market, so no
+    price moves and every existing route keeps every draw.
+  - Lonely ports: empty 96% of the time before, 73% now. All ports: 55% to
+    43%. Cost: about 0.06 ms more per traffic pass.
+  - Saves survive: the new routes are additive (`ff` ids).
+
 - **Syndicate runners can fire first, and then the law comes for them
   (2026-11-01).** Astra, in October: *"Syndicate runners don't get chased
   by cops unless they are firing on a civilian vessel as the aggressor.
