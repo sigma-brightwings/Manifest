@@ -329,6 +329,58 @@ if (law) {
   }
 }
 
+section('a hull pays out of her own purse, and what you pay her refills it');
+if (law) {
+  var G = law.G, c = law.c, t = law.t;
+  G.shipTrade = null; G.standing = {};
+  var b0 = ST.board(G, G.sys, t, c);
+  check('every hull has a purse', b0.purseCap > 0 && b0.purse === b0.purseCap,
+        b0.purse + ' of ' + b0.purseCap);
+  /* Sell her something dear, more than her purse can cover. The ledger is
+   * faked to give her room, so only the purse can say no. */
+  var dear = null;
+  for (var di = 0; di < b0.rows.length; di++) {
+    var dr = b0.rows[di];
+    if (dr.buyEach !== null) { dear = dr; break; }
+  }
+  if (dear) {
+    G.ship.cargo = {}; G.ship.cargo[dear.cid] = 100000;
+    G.ship.cargoCap = 1000000; Sim.refreshShip(G.ship);
+    var bs = ST.board(G, G.sys, t, c);
+    var srow = bs.rows.filter(function (r) { return r.cid === dear.cid; })[0];
+    if (srow && srow.sellEach !== null) {
+      /* Room past what her purse covers, so the purse is the binding limit. */
+      var leg = ST.legOf(G, G.sys, c, t);
+      G.shipTrade = { legs: {}, standing: {} };
+      G.shipTrade.legs[leg.key] = { until: leg.until, took: {}, sold: -100000, paid: 0, got: 0 };
+      var bp = ST.board(G, G.sys, t, c);
+      var want = Math.floor(bp.purse / srow.sellEach) + 5;
+      var sale = ST.deal(G, G.sys, t, c, dear.cid, -want);
+      check('she buys no more than her purse covers',
+            sale.ok && sale.qty === Math.floor(bp.purse / srow.sellEach) && sale.total <= bp.purse,
+            JSON.stringify({ qty: sale.qty, total: sale.total, purse: bp.purse }));
+      var dry = ST.deal(G, G.sys, t, c, dear.cid, -1);
+      check('and then says it is the money, not the room',
+            dry.ok === false && /left this trip/.test(dry.text) && !/No room/.test(dry.text), dry.text);
+      var before = ST.board(G, G.sys, t, c).purse;
+      var bought = ST.deal(G, G.sys, t, c, dear.cid, 1);
+      var after = ST.board(G, G.sys, t, c).purse;
+      check('buying off her puts your money in her purse',
+            bought.ok && after === before + bought.total, before + ' -> ' + after);
+      check('maxSell agrees with the deal', ST.maxSell(G, ST.board(G, G.sys, t, c),
+            ST.board(G, G.sys, t, c).rows.filter(function (r) { return r.cid === dear.cid; })[0]) ===
+            Math.floor(after / srow.sellEach));
+    }
+  }
+  /* A ledger saved before the purse existed has no paid/got. */
+  var leg2 = ST.legOf(G, G.sys, c, t);
+  G.shipTrade = { legs: {}, standing: {} };
+  G.shipTrade.legs[leg2.key] = { until: leg2.until, took: {}, sold: 0 };
+  var bo = ST.board(G, G.sys, t, c);
+  check('an old ledger reads as a full purse', bo.purse === bo.purseCap, bo.purse);
+  G.shipTrade = null;
+}
+
 /* ---- standing ------------------------------------------------------------ */
 
 section('standing: by the size of the deal, fractions kept, capped per day');

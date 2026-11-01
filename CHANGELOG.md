@@ -44,6 +44,18 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Fixed
 
+- **A hull pays out of her own purse (2026-11-01).** Selling to a hailed
+  ship was limited only by her spare room, so a shuttle with six tonnes
+  free would take 20,000 cr of AI cores she had nowhere to keep. Each
+  hull now carries a purse for the voyage, by class (`PURSE` in
+  `shiptrade.js`: shuttle 4k, liner 5k, hauler 6k, tanker 8k, freighter
+  25k, bulker 70k, others 12k), and what you pay her for her own goods
+  goes into it. The trade screen shows it, and when she is short she says
+  it is the money, not the room. Sized by class rather than read off her
+  hold because, measured over 8 seeds, most hulls with room are empty on
+  the leg you meet them, which is when a captain has most cash. Saves
+  survive: a voyage ledger from before reads as a full purse.
+
 - **A rumours test sampled the exact instant a ship casts off (2026-10-31).**
   A route's period is twice its cruise plus layover, so a ship leaves her
   far port at exactly t0 + n.5 periods. `rumours.test.js` sampled at

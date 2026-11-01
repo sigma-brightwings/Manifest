@@ -97,6 +97,31 @@
   var SPARE_ROOM = { shuttle: 6, freighter: 40, tanker: 12, hauler: 10,
                      liner: 8, bulk: 120 };
   var DEFAULT_ROOM = 20;
+
+  /* ---- purse ------------------------------------------------------------ */
+  /* What a hull can PAY you on one voyage. Until 2026-11-01 she had no
+   * purse at all: a shuttle with six tonnes spare would take six tonnes of
+   * AI cores, 20,000 cr she had nowhere to keep, because only her room
+   * ever said no.
+   *
+   * Why a table by class and not her manifest. The obvious anchor was
+   * "a captain carries working capital in proportion to the trade she
+   * does", read off the value of her hold. Measured over 8 seeds and
+   * ~112,000 legs, most of the hulls that have room are EMPTY on the leg
+   * you meet them (freighters 60% empty, tankers 67%, every bulker and
+   * liner sampled) — they are on the backhaul, which is exactly when a
+   * captain has just been paid and has most cash. Read off the hold, the
+   * purse would be zero on the ships most able to pay. So it is the
+   * hull's answer again, like SPARE_ROOM: about her room at ~600 cr a
+   * tonne, which lets mid-priced goods fill her spare and makes
+   * electronics, medicine and luxuries the cargo that runs her dry.
+   *
+   * What you pay her for her own goods goes into the same purse, so
+   * buying off a ship is how you make her able to buy from you — a trade
+   * rather than a sale. */
+  var PURSE = { shuttle: 4000, freighter: 25000, tanker: 8000, hauler: 6000,
+                liner: 5000, bulk: 70000 };
+  var DEFAULT_PURSE = 12000;
   /* How long a voyage's ledger outlives an unknown voyage — a contact with
    * no timetable (a lane hauler, a drop-out) has no "end of trip" to read,
    * and a week is longer than anyone sits beside one. */
@@ -202,7 +227,7 @@
 
   function legRecordForWrite(G, leg) {
     var b = book(G).legs;
-    if (!b[leg.key]) b[leg.key] = { until: leg.until, took: {}, sold: 0 };
+    if (!b[leg.key]) b[leg.key] = { until: leg.until, took: {}, sold: 0, paid: 0, got: 0 };
     return b[leg.key];
   }
 
@@ -331,7 +356,7 @@
   function board(G, sys, t, contact) {
     var E = Eco(), M = Missions();
     var out = { refusal: refusal(G, sys, contact), rows: [], flag: null, space: null,
-                room: 0, roomCap: 0, swing: 0, standing: 0, label: 'neutral',
+                room: 0, roomCap: 0, purse: 0, purseCap: 0, swing: 0, standing: 0, label: 'neutral',
                 consequence: null };
     if (!contact || !E) return out;
 
@@ -350,6 +375,10 @@
     out.label = M ? M.standingLabel(st) : 'neutral';
     out.roomCap = cap;
     out.room = Math.max(0, cap - ((rec && rec.sold) || 0));
+    /* paid/got are additive fields: a ledger saved before they existed
+     * reads them as 0, which is a full purse — the right answer. */
+    out.purseCap = PURSE[cls] !== undefined ? PURSE[cls] : DEFAULT_PURSE;
+    out.purse = Math.max(0, Math.floor(out.purseCap + ((rec && rec.got) || 0) - ((rec && rec.paid) || 0)));
     out.consequence = consequence(G, sys, flag);
 
     var byCid = {}, order = [];
@@ -530,6 +559,7 @@
       s.cargo[cid] = (s.cargo[cid] || 0) + qty;
       var rec = legRecordForWrite(G, leg);
       rec.took[cid] = (rec.took[cid] || 0) + qty;
+      rec.got = (rec.got || 0) + total;
       text = contact.name + ' transfers ' + qty + ' t of ' + row.name.toLowerCase() +
              ' for ' + total.toLocaleString('en-US') + ' cr.';
       /* And her destination goes without it. */
@@ -547,16 +577,21 @@
         return no(contact.name + ': "We will not take it — ' + (row.sellWhy || 'no') + '."');
       }
       each = row.sellEach;
-      qty = Math.min(-tonnes, Math.floor(row.yours), b.room);
+      var byPurse = Math.floor(b.purse / each);
+      qty = Math.min(-tonnes, Math.floor(row.yours), b.room, byPurse);
       if (qty < 1) {
         return no(b.room < 1 ? contact.name + ': "No room left this trip."'
-                             : 'Nothing to sell.');
+                : byPurse < 1 ? contact.name + ': "' + each + ' cr a tonne and we have ' +
+                                b.purse.toLocaleString('en-US') + ' left this trip. Can\'t do it."'
+                : 'Nothing to sell.');
       }
       total = qty * each;
       s.cargo[cid] = Math.max(0, (s.cargo[cid] || 0) - qty);
       if (!s.cargo[cid]) delete s.cargo[cid];
       s.credits += total;
-      legRecordForWrite(G, leg).sold += qty;
+      var srec = legRecordForWrite(G, leg);
+      srec.sold += qty;
+      srec.paid = (srec.paid || 0) + total;
       text = contact.name + ' takes ' + qty + ' t of ' + row.name.toLowerCase() +
              ' for ' + total.toLocaleString('en-US') + ' cr.';
     }
@@ -594,13 +629,20 @@
                                 Math.floor(G.ship.credits / row.buyEach)));
   }
 
+  /* Most she will take of a row right now: your goods, her room, her purse. */
+  function maxSell(G, b, row) {
+    if (!row || row.sellEach === null) return 0;
+    return Math.max(0, Math.min(Math.floor(row.yours), b.room, Math.floor(b.purse / row.sellEach)));
+  }
+
   var ShipTrade = {
     BUY_MARKUP: BUY_MARKUP, SELL_DISCOUNT: SELL_DISCOUNT,
     STANDING_SWING: STANDING_SWING, CR_PER_STANDING: CR_PER_STANDING,
     DAILY_CAP: DAILY_CAP, SPARE_ROOM: SPARE_ROOM, DEFAULT_ROOM: DEFAULT_ROOM,
     flagOf: flagOf, spaceOf: spaceOf, legOf: legOf,
     refusal: refusal, board: board, consequence: consequence,
-    deal: deal, maxBuy: maxBuy, prune: prune,
+    deal: deal, maxBuy: maxBuy, maxSell: maxSell, prune: prune,
+    PURSE: PURSE, DEFAULT_PURSE: DEFAULT_PURSE,
     arrivalOf: arrivalOf, shortDelivery: shortDelivery, attach: attach,
     SHORT_FORGET: SHORT_FORGET
   };

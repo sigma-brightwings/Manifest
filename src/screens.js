@@ -1036,6 +1036,7 @@
     ] : [];
     var roomParts = [
       'their room ' + b.room + ' of ' + b.roomCap + ' t this trip',
+      'their purse ' + fmtCredits(b.purse),
       'your hold free ' + Math.floor(Math.max(0, G.ship.cargoCap - global.Sim.cargoMass(G.ship))) + ' t',
       fmtCredits(G.ship.credits)
     ];
@@ -1159,9 +1160,11 @@
       var buyLine = cur.buyEach !== null
         ? (most > 0 ? 'buy up to ' + most + ' t' : 'buy: no room or credits')
         : 'buy: ' + (cur.buyWhy || 'not aboard');
-      var canSell = Math.min(Math.floor(cur.yours), b.room);
+      var canSell = ST.maxSell(G, b, cur);
       var sellLine = cur.sellEach !== null
-        ? (canSell > 0 ? 'sell up to ' + canSell + ' t' : 'sell: no room left this trip')
+        ? (canSell > 0 ? 'sell up to ' + canSell + ' t'
+           : b.room < 1 ? 'sell: no room left this trip'
+           : 'sell: their purse is short (' + fmtCredits(b.purse) + ')')
         : 'sell: ' + (cur.held > 0 ? (cur.sellWhy || 'no') : 'none aboard');
       ctx.font = 'bold 12px ui-monospace, monospace';
       ctx.fillStyle = '#d8f4ff';
