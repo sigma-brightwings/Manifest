@@ -1948,6 +1948,43 @@ console.log('--- leaving a berth ---');
 
 Render.assignPort('orbital', null);   // leave the library as we found it
 
+/* IN THE ROADS (2026-11-01): a ship bound for a ground port holds over the
+ * field before her final descent, and while she holds she is not in a
+ * berth. Orbital ports are untouched. */
+console.log('--- in the roads ---');
+(function () {
+  var sawAnch = 0, inBerth = 0, aboveBad = 0, orbitalHold = 0, oneWayHold = 0, checked = 0;
+  ['kawartha', 'alpha', 'pigeon', 'manifest', 'reverie'].forEach(function (seed) {
+    var sys = Gen.generateSystem(seed);
+    (sys.traffic || []).forEach(function (r) {
+      var B = sys.byId[r.to];
+      if (!B) return;
+      var hold = Sim.arrivalHold(r, B);
+      if (!(B.surface || B.underground)) { if (hold > 0) orbitalHold++; return; }
+      if (r.oneWay && hold > 0) oneWayHold++;
+      if (!(hold > 0)) return;
+      checked++;
+      var t = r.t0 + r.cruise + hold * 0.5;
+      var st = Sim.trafficState(r, sys, t);
+      if (st.phase !== 'anchored') return;
+      sawAnch++;
+      var occ = Sim.berthOccupants(B, sys, t);
+      if (occ.some(function (o) { return o.route === r; })) inBerth++;
+      var host = Sim.bodyPosition(B.parentBody, sys, t), pad = Sim.bodyPosition(B, sys, t);
+      var alt = V.dist(st.pos, host) - V.dist(pad, host);
+      if (!(alt > 100 && V.dist(st.pos, pad) < 3000)) aboveBad++;
+    });
+  });
+  check('ground-port arrivals hold in the roads', sawAnch > 0 && sawAnch === checked, sawAnch + ' of ' + checked);
+  check('a ship in the roads is not in a berth', inBerth === 0, inBerth + ' counted');
+  check('she holds above the field, within reach of it', aboveBad === 0, aboveBad + ' bad');
+  check('nothing holds over an orbital port', orbitalHold === 0, orbitalHold + ' routes');
+  check('a ship of yours goes straight in', oneWayHold === 0);
+  var lay = { layover: 1200 };
+  check('a short layover still leaves time to land and berth',
+        Sim.arrivalHold(lay, { surface: true }) + Sim.FINAL_DESCENT_S <= 1200 * 0.8 + 1e-6);
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

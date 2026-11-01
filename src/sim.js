@@ -1791,6 +1791,45 @@
     return { pos: V.add(ds.pos, spot.vec), vel: ds.vel, up: up, fwd: fwd };
   }
 
+  /* Where a ship holds over a ground port, waiting to go down: a few
+   * hundred km above the field, spread round it by the same route hash the
+   * apron uses so a dozen of them read as a holding stack and not as one
+   * ship drawn twelve times. Pure function of t, like the rest. */
+  var ANCHOR_FRAC = 0.5;              // of her layover, at the start of it
+  var ANCHOR_MAX_S = 8 * 3600;        // and never more than eight hours of it
+  var FINAL_DESCENT_S = 600;          // the stack to the pad
+  /* How long a ship arriving at `dst` on `route` holds in the roads before
+   * her final descent, or 0 for one that goes straight in: a ship of yours
+   * (oneWay), a heavy (already lying off), one bound for a station you
+   * founded, and anything bound for an orbital port, which she lies
+   * alongside anyway. Swept with tools/measure-encounters.cjs: lonely
+   * ground ports empty 69-73% of samples with no hold; 0.3 capped at 4 h
+   * 51%; 0.5 capped at 8 h 46%; 0.6 capped at 24 h 42%. */
+  function arrivalHold(route, dst) {
+    if (!route || !dst || !(dst.surface || dst.underground)) return 0;
+    if (route.oneWay || route.outboard || route.playerPort) return 0;
+    var lay = route.layover || 0;
+    var hold = Math.min(lay * ANCHOR_FRAC, ANCHOR_MAX_S);
+    /* Room for the final descent and some time in the berth. */
+    if (hold + FINAL_DESCENT_S > lay * 0.8) hold = Math.max(0, lay * 0.8 - FINAL_DESCENT_S);
+    return hold;
+  }
+  function anchorPose(dst, sys, t, parent, route) {
+    var host = dst.parentBody || parent;
+    var hs = bodyState(host, sys, t);
+    var ds = bodyState(dst, sys, t);
+    var up = V.norm(V.sub(ds.pos, hs.pos));
+    if (V.len(up) < 1e-9) up = { x: 0, y: 0, z: 1 };
+    var side = anyPerpendicular(up), side2 = V.norm(V.cross(up, side));
+    var h = portHash({ id: String(route && route.id) + '@roads@' + dst.id });
+    var ang = ((h % 4096) / 4096) * Math.PI * 2;
+    var spread = 40 + ((h >>> 12) % 160);         // km round the stack (>>> : h is unsigned)
+    var alt = 250 + ((h >>> 20) % 400);           // km above the field
+    var vec = V.add(V.scale(up, alt), V.add(V.scale(side, Math.cos(ang) * spread), V.scale(side2, Math.sin(ang) * spread)));
+    var fwd = V.norm(V.add(side, V.scale(side2, 0.3)));
+    return { pos: V.add(ds.pos, vec), vel: ds.vel, up: up, fwd: fwd };
+  }
+
   /* The last of an approach and the first of a departure are flown as a
    * descent and a climb rather than as more of the crossing. This is the
    * fraction of a leg each of those takes. */
@@ -1869,6 +1908,51 @@
 
     var src = outbound ? A : B, dst = outbound ? B : A;
 
+    /* IN THE ROADS (2026-11-01). Astra asked for more peaceful ships to
+     * come across. Measured (tools/measure-encounters.cjs): a port on the
+     * ground or down a shaft, alone over her world, had nothing within
+     * 3,000 km two times in three, because her ships are inside the shaft
+     * (see economy.test, "down inside it") and her approaches are minutes
+     * long. Now an arriving ship's crossing ends in a holding stack over
+     * the field; she holds there for the first part of her layover
+     * (arrivalHold), flies a short final descent, and only then is she in
+     * her berth.
+     *
+     * Holding or descending she is NOT in a berth: her phase is 'anchored'
+     * or 'descent', and Sim.berthOccupants counts only 'moored', so the
+     * berth model needs no change of its own and cannot count a ship that
+     * is visibly outside. rumours.js berthTime reads the same hold. */
+    var hold = moored ? arrivalHold(route, dst) : 0;
+    if (hold > 0) {
+      var since = outbound ? ph - cruise : ph - (2 * cruise + lay);
+      if (since >= 0 && since < hold + FINAL_DESCENT_S) {
+        var ap = anchorPose(dst, sys, t, parent, route);
+        if (since < hold) {
+          var anch = finishTraffic(route, ap.pos, ap.vel, ap.fwd, ap.up, 'anchored', u, src, dst, outbound);
+          anch.throttle = 0.05;           // station-keeping, not parked
+          anch.anchoredUntil = t - since + hold;
+          return anch;
+        }
+        /* The final descent: the stack to the pad, nose coming up as she
+         * gets close, the same flare the crossing's own touchdown uses. */
+        var dp = dockPose(dst, sys, t, parent, route);
+        var fe = smootherstep((since - hold) / FINAL_DESCENT_S);
+        var fpos = V.add(ap.pos, V.scale(V.sub(dp.pos, ap.pos), fe));
+        var fvel = V.add(ap.vel, V.scale(V.sub(dp.vel, ap.vel), fe));
+        var flare = V.dist(fpos, dp.pos);
+        var up0 = dp.up || ap.up;
+        var faceUp = 1 - Math.min(1, flare / Math.max((dst.radius || 0.05) * 60, 8));
+        var down = V.norm(V.sub(dp.pos, ap.pos));
+        var ffwd = V.norm(V.add(V.scale(down, 1 - faceUp), V.scale(up0, faceUp)));
+        if (V.len(ffwd) < 1e-9) ffwd = up0;
+        var fin = finishTraffic(route, fpos, fvel, ffwd, ap.fwd, 'descent', u, src, dst, outbound);
+        fin.throttle = Math.max(0.25, 1 - fe * 0.75);
+        fin.braking = true;
+        fin.landing = fe;
+        return fin;
+      }
+    }
+
     if (moored) {
       var pose = dockPose(dst, sys, t, parent, route);
       var moor = finishTraffic(route, pose.pos, pose.vel, pose.fwd, pose.up,
@@ -1930,11 +2014,15 @@
      *
      * Only surface pads and underground bays get this. A station in orbit
      * is already where a moored ship should be. */
-    var phase = 'cruise', landing = 0, pose = null;
+    var phase = 'cruise', landing = 0, pose = null, toRoads = false;
     if (u > 1 - TRAFFIC_TOUCHDOWN && (dst.surface || dst.underground)) {
-      pose = dockPose(dst, sys, t, parent);
+      /* Bound for the roads (arrivalHold): the crossing ends in the
+       * holding stack, nose along her way rather than up, and the landing
+       * proper is flown after the hold. */
+      toRoads = arrivalHold(route, dst) > 0;
+      pose = toRoads ? anchorPose(dst, sys, t, parent, route) : dockPose(dst, sys, t, parent);
       landing = smootherstep((u - (1 - TRAFFIC_TOUCHDOWN)) / TRAFFIC_TOUCHDOWN);
-      phase = 'descent';
+      phase = toRoads ? 'approach' : 'descent';
     } else if (u < TRAFFIC_TOUCHDOWN && (src.surface || src.underground)) {
       pose = dockPose(src, sys, t, parent);
       landing = smootherstep(1 - u / TRAFFIC_TOUCHDOWN);
@@ -1958,7 +2046,7 @@
        * way — the manoeuvre belongs to the last few pad-widths, so it is
        * driven by the distance that is actually left. */
       var flare = V.dist(wpos, pose.pos);
-      var faceUp = 1 - Math.min(1, flare / Math.max((dst.radius || 0.05) * 60, 8));
+      var faceUp = toRoads ? 0 : 1 - Math.min(1, flare / Math.max((dst.radius || 0.05) * 60, 8));
       facing = V.norm({
         x: facing.x + (pose.up.x - facing.x) * faceUp,
         y: facing.y + (pose.up.y - facing.y) * faceUp,
@@ -2796,6 +2884,9 @@
       text = 'adrift, tank gone — anyone with mass to spare';
     } else if (souls > 0 && st.phase !== 'moored' && (h >>> 5) % 2 === 0) {
       text = souls + ' aboard for ' + (dst ? dst.name : 'onward');
+    } else if (st.phase === 'anchored') {
+      /* In the roads over a ground port (arrivalHold), waiting her turn. */
+      text = 'holding over ' + (dst ? dst.name : 'the field') + ', waiting on a slot';
     } else if (st.phase === 'descent') {
       text = 'on final into ' + (dst ? dst.name : 'the port');
     } else if (st.phase === 'liftoff') {
@@ -6663,7 +6754,8 @@
     trafficAll: trafficAll,
     berthStatus: berthStatus,
     berthCapacity: berthCapacity,
-    berthOccupants: berthOccupants,
+    berthOccupants: berthOccupants, anchorPose: anchorPose, arrivalHold: arrivalHold,
+    ANCHOR_FRAC: ANCHOR_FRAC, ANCHOR_MAX_S: ANCHOR_MAX_S, FINAL_DESCENT_S: FINAL_DESCENT_S,
     needsLargeBerth: needsLargeBerth,
     nearestTraffic: nearestTraffic,
     chatterFor: chatterFor, chatterNear: chatterNear, SAY_WINDOW: SAY_WINDOW,

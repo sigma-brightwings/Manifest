@@ -423,12 +423,25 @@ console.log('--- traffic on rails ---');
     var atArrive = Sim.trafficState(r, sys, r.t0 + r.cruise - 1e-6);
     var aPos = Sim.bodyPosition(A, sys, r.t0 + 1e-6);
     if (V.dist(atDepart.pos, aPos) > A.dockCaptureRadius) endpointBad++;
-    var bPos = Sim.bodyPosition(B, sys, r.t0 + r.cruise - 1e-6);
-    if (V.dist(atArrive.pos, bPos) > B.dockCaptureRadius) endpointBad++;
-    // ... and the cruise/moored handover itself must not jump.
-    var justBefore = Sim.trafficState(r, sys, r.t0 + r.cruise - 0.001);
-    var justAfter = Sim.trafficState(r, sys, r.t0 + r.cruise + 0.001);
-    if (V.dist(justBefore.pos, justAfter.pos) > 1) endpointBad++;
+    /* A ground port's arrivals end the crossing in the roads, holding
+     * over the field (Sim.arrivalHold, 2026-11-01), and are at the port
+     * once the hold and the final descent are flown. Every seam on the way
+     * must be continuous. */
+    var hold = Sim.arrivalHold ? Sim.arrivalHold(r, B) : 0;
+    var land = hold > 0 ? hold + Sim.FINAL_DESCENT_S : 0;
+    if (hold > 0) {
+      var ap = Sim.anchorPose(B, sys, r.t0 + r.cruise - 1e-6, parent, r);
+      if (V.dist(atArrive.pos, ap.pos) > 1) endpointBad++;
+    }
+    var atDown = Sim.trafficState(r, sys, r.t0 + r.cruise + land + 1);
+    var bPos = Sim.bodyPosition(B, sys, r.t0 + r.cruise + land + 1);
+    if (V.dist(atDown.pos, bPos) > B.dockCaptureRadius) endpointBad++;
+    // ... and each handover itself must not jump.
+    [r.t0 + r.cruise].concat(hold > 0 ? [r.t0 + r.cruise + hold, r.t0 + r.cruise + land] : []).forEach(function (seam) {
+      var justBefore = Sim.trafficState(r, sys, seam - 0.001);
+      var justAfter = Sim.trafficState(r, sys, seam + 0.001);
+      if (V.dist(justBefore.pos, justAfter.pos) > 1) endpointBad++;
+    });
 
     /* 3. The spiral must never pass through the body both ports orbit —
      *    a straight line between opposite sides of a star very much would.
@@ -581,7 +594,10 @@ console.log('--- traffic arrives at ports, not near them ---');
        * long way out and has every right to be pointing along its path. So
        * this samples the last instant of the leg and the moored phase that
        * follows it. */
-      [r.t0 + r.cruise - 0.001, r.t0 + r.cruise + 1].forEach(function (t) {
+      /* Touchdown is after the roads, for a run that holds there. */
+      var land2 = Sim.arrivalHold && Sim.arrivalHold(r, sys.byId[r.to]) > 0
+        ? Sim.arrivalHold(r, sys.byId[r.to]) + Sim.FINAL_DESCENT_S : 0;
+      [r.t0 + r.cruise + land2 - 0.001, r.t0 + r.cruise + land2 + 1].forEach(function (t) {
         var st = Sim.trafficState(r, sys, t);
         var port = st.to;
         if (!port.parentBody || !(port.surface || port.underground)) return;

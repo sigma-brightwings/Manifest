@@ -16,7 +16,8 @@ global.window = global.window || global;
 var Galaxy = require('../src/galaxy.js');
 var V = global.V, Sim = global.Sim, Gen = global.Gen;
 var R = 3000;
-var port = [], lane = [], portSib = [], portLone = [], laneNone = 0, portNone = 0, routes = [];
+var MODE = process.argv[2] || 'visible';    // 'visible' (alongside counts) or 'flying'
+var port = [], lane = [], portSib = [], portLone = [], loneKind = {}, laneNone = 0, portNone = 0, routes = [];
 ['kawartha', 'alpha', 'pigeon', 'manifest', 'reverie', 'orrin'].forEach(function (seed) {
   var g = Galaxy.build(seed);
   for (var s = 0; s < g.stars.length && s < 30; s++) {
@@ -27,7 +28,11 @@ var port = [], lane = [], portSib = [], portLone = [], laneNone = 0, portNone = 
     routes.push((sys.traffic || []).length);
     for (var k = 0; k < 12; k++) {
       var t = 2e6 + k * 51234;
-      var list = Sim.trafficAll(sys, t).filter(function (x) { return x.pos && x.phase !== 'moored' && !x.landed && !x.inside && !(x.route && x.route.runner); });
+      /* Moored at an ORBITAL port means alongside her on the apron, out in
+       * space where you can see and hail her (Sim.dockPose); only a ship on
+       * a pad or down a shaft is out of reach. FLYING excludes those too. */
+      var all = Sim.trafficAll(sys, t).filter(function (x) { return x.pos && !x.landed && !x.inside && !(x.route && x.route.runner); });
+      var list = MODE === 'flying' ? all.filter(function (x) { return x.phase !== 'moored'; }) : all;
       sys.ports.forEach(function (p) {
         var pp = Sim.bodyPosition(p, sys, t);
         if (!pp) return;
@@ -36,6 +41,7 @@ var port = [], lane = [], portSib = [], portLone = [], laneNone = 0, portNone = 
         port.push(n); if (!n) portNone++;
         var sib = sys.ports.some(function (q) { return q !== p && q.parentBody === p.parentBody; });
         (sib ? portSib : portLone).push(n);
+        if (!sib) { var kk = p.underground ? 'underground' : p.surface ? 'surface' : 'orbital'; (loneKind[kk] = loneKind[kk] || []).push(n); }
       });
       list.forEach(function (x) {
         if (!x.route || x.route.local || x.phase !== 'cruise') return;
@@ -50,8 +56,10 @@ function stats(a) {
   var mean = a.reduce(function (p, c) { return p + c; }, 0) / (a.length || 1);
   return 'n=' + a.length + ' mean ' + mean.toFixed(2) + ' median ' + a[Math.floor(a.length / 2)] + ' p90 ' + a[Math.floor(a.length * 0.9)];
 }
+console.log('counting:', MODE);
 console.log('routes per system:', stats(routes));
 console.log('PORT: ships within ' + R + ' km:', stats(port), ' empty ' + (100 * portNone / port.length).toFixed(0) + '%');
 console.log('  port with a sibling over her world:', stats(portSib), ' empty ' + (100 * portSib.filter(function (x) { return !x; }).length / (portSib.length || 1)).toFixed(0) + '%');
 console.log('  port alone over her world:        ', stats(portLone), ' empty ' + (100 * portLone.filter(function (x) { return !x; }).length / (portLone.length || 1)).toFixed(0) + '%');
+Object.keys(loneKind).forEach(function (k) { var a = loneKind[k]; console.log('    lone ' + k + ':', stats(a), ' empty ' + (100 * a.filter(function (x) { return !x; }).length / a.length).toFixed(0) + '%'); });
 console.log('LANE: other ships within ' + R + ' km:', stats(lane), ' empty ' + (100 * laneNone / lane.length).toFixed(0) + '%');

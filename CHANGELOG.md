@@ -107,6 +107,32 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **Ships hold in the roads over ground ports (2026-11-01).** Astra, after
+  the feeders: yes to ships lying off a port. Measured first, and the
+  measure was wrong the first time: counting ships moored alongside an
+  orbital station (which is out in space, on the apron), lonely orbital
+  ports were already busy (empty 17% of the time). The empty ones were
+  lonely ports on the ground or down a shaft, empty about 70% of the time,
+  because their ships are inside and their approaches last minutes.
+  - An arriving ship's crossing now ends in a holding stack 250-650 km
+    over the field. She holds for half her layover (at most eight hours),
+    flies a ten-minute final descent, and is then in her berth. Comms:
+    "holding over Lowgate Landing, waiting on a slot".
+  - Holding or descending she is not in a berth, so the berth model is
+    unchanged and never counts a ship you can see outside. Rumours read
+    the same hold when they work out who berthed where.
+  - Your own ships, heavies, ships bound for a station you founded, and
+    anything bound for an orbital port go straight in, as before.
+  - Swept: no hold, lonely ground ports empty about 70%; 0.3 of the layover
+    capped at 4 h, 51%; 0.5 capped at 8 h, 46%; 0.6 capped at 24 h, 42%.
+    With the feeders, every port: empty 29% of the time to 20%; lonely ports
+    63% to 44%. Ports with a sister port over the same world: never empty.
+  - Found on the way: a signed shift in the stack's hash put some holding
+    ships underground; the apron's own hash already used the unsigned one.
+  - New checks in `test/berths.test.js`; `economy.test.js` now checks
+    every seam of the arrival (crossing, hold, final descent) and
+    nose-up at the real touchdown.
+
 - **More peaceful ships round lonely stations (2026-11-01).** Astra:
   *"increase the number of civilian ships that we might come across that
   don't want to shoot at us."* Measured first (`tools/measure-encounters.cjs`,

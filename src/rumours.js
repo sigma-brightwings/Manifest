@@ -140,7 +140,11 @@
    * tug brings her in, not when the timetable said she would arrive: she
    * is in the berth from the tug's arrival — earlier or later than the
    * timetable — to the end of the layover, as Sim.trafficState has her. */
-  function berthTime(sched, X, t, sys) {
+  /* `hsys`, when given, is the system to read the roads hold from even
+   * where breakdowns are not wanted (a patrol on a route rail flies the
+   * same timetable, hold and all, but has no upkeep). */
+  function berthTime(sched, X, t, sys, hsys) {
+    var HS = hsys || sys;
     var P = sched.period, c = sched.cruise, l = sched.layover;
     var U = sys ? global.Upkeep : null;
     var k = Math.floor((t - sched.t0) / P);
@@ -148,6 +152,12 @@
       var cs = sched.t0 + j * P, s, e, leg;
       if (X === sched.to) { s = cs + c; e = cs + c + l; leg = 2 * j; }
       else { s = cs + 2 * c + l; e = cs + P; leg = 2 * j + 1; }
+      /* A ship bound for a ground port holds in the roads and flies her
+       * final descent before she is in a berth (Sim.arrivalHold). */
+      if (HS && global.Sim && global.Sim.arrivalHold && HS.byId) {
+        var hold = global.Sim.arrivalHold(sched, HS.byId[X]);
+        if (hold > 0) s += hold + global.Sim.FINAL_DESCENT_S;
+      }
       if (U) {
         var bd = U.breakOn(sched, sys, leg);
         if (bd) s = bd.towAt;
@@ -162,7 +172,7 @@
     var tc;
     if (ship.orbit) tc = ship.orbit === X ? t + (ship.lag || 0) : Infinity;
     else if (X !== ship.ports[0] && X !== ship.ports[1]) return Infinity;
-    else tc = berthTime(ship.sched, X, t, ship.timetabled ? sys : null);
+    else tc = berthTime(ship.sched, X, t, ship.timetabled ? sys : null, sys);
     /* A ship destroyed before she got there tells nobody. A dead ship
      * with no recorded time (an older save) is taken as always dead. */
     var o = ship.owner;
