@@ -44,6 +44,17 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Fixed
 
+- **The web copy can no longer run scripts from two builds at once
+  (2026-11-01).** Astra hit `error: cam is not defined` in the exterior
+  view on the GitHub Pages copy. The live code was clean: her browser had
+  kept a `gl.js` from 2026-10-30 (the one with that bug, fixed in
+  "See-through windows on other ships") inside an otherwise current game,
+  because Pages lets each file go stale on its own clock. The Pages build
+  now stamps every script tag with the commit (`?v=<sha>`), so each push
+  is a fresh set of URLs, and `ports.js` carries the same stamp onto the
+  station art it fetches later. The build refuses to publish if fewer than
+  50 tags were stamped. Running from disk or the desktop app is unchanged.
+
 - **A hull pays out of her own purse (2026-11-01).** Selling to a hailed
   ship was limited only by her spare room, so a shuttle with six tonnes
   free would take 20,000 cr of AI cores she had nowhere to keep. Each

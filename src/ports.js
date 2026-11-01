@@ -45,8 +45,16 @@
    * listeners are told, and the game says so on the comms line. */
   var GEO_STATE = {}, GEO_LISTENERS = [], GEO_FAIL_LISTENERS = [];
   var GEO_BASE = null;
+  /* The build stamp this script was loaded with (`?v=<commit>`, added by
+   * the Pages workflow), carried onto every geometry file it fetches later.
+   * Without it a browser can hold one station's art from an older push
+   * while the code that reads it is new. Empty when run from disk. */
+  var GEO_VER = '';
   if (typeof document !== 'undefined' && document.currentScript && document.currentScript.src) {
-    GEO_BASE = document.currentScript.src.replace(/[^\/]*$/, '') + 'ports/';
+    var geoSrc = document.currentScript.src;
+    var q = geoSrc.indexOf('?');
+    if (q >= 0) { GEO_VER = geoSrc.slice(q); geoSrc = geoSrc.slice(0, q); }
+    GEO_BASE = geoSrc.replace(/[^\/]*$/, '') + 'ports/';
   }
   function geoMerge(id, d) {
     var m = global.PortLib && global.PortLib[id];
@@ -73,7 +81,7 @@
    * synchronous gunzip, so the procedural mesh draws until it lands. */
   function geoPacked(id) {
     if (typeof fetch !== 'function' || typeof DecompressionStream === 'undefined') { geoFail(id); return; }
-    fetch(GEO_BASE + id + '.js.gz').then(function (r) {
+    fetch(GEO_BASE + id + '.js.gz' + GEO_VER).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.arrayBuffer();
     }).then(function (buf) {
@@ -112,7 +120,7 @@
     var missing = false;
     try {
       var x = new XMLHttpRequest();
-      x.open('GET', GEO_BASE + id + '.js', false);
+      x.open('GET', GEO_BASE + id + '.js' + GEO_VER, false);
       x.send(null);
       if ((x.status === 200 || x.status === 0) && x.responseText) {
         (new Function(x.responseText))();
@@ -123,7 +131,7 @@
     GEO_STATE[id] = 'pending';
     if (missing) { geoPacked(id); return false; }
     var s = document.createElement('script');
-    s.src = GEO_BASE + id + '.js';
+    s.src = GEO_BASE + id + '.js' + GEO_VER;
     s.async = true;
     s.onload = function () { if (geoTake(id)) geoTell(GEO_LISTENERS, id); else geoPacked(id); };
     s.onerror = function () { geoPacked(id); };

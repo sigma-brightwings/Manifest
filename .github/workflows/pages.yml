@@ -66,6 +66,18 @@ jobs:
           mkdir -p _site/play
           cp -r site/. _site/
           cp index.html _site/play/
+          # STAMP EVERY SCRIPT WITH THIS BUILD (2026-11-01). Pages serves each
+          # file with its own cache lifetime, so after a push a browser could
+          # run some scripts from the new build and some from an older one.
+          # That is how an exterior view crashed on `cam is not defined`: a
+          # stale gl.js from 2026-10-30 inside an otherwise current game. A
+          # query string per commit makes every push a fresh set of URLs.
+          # ports.js passes the same stamp on to the station art it fetches.
+          v="${GITHUB_SHA:0:12}"
+          sed -i -E "s#(src=\"src/[^\"?]+\.js)\"#\1?v=$v\"#g" _site/play/index.html
+          n=$(grep -c "?v=$v" _site/play/index.html)
+          echo "stamped $n scripts with $v"
+          if [ "$n" -lt 50 ]; then echo "::error::Script stamping matched only $n tags"; exit 1; fi
           cp -r src _site/play/src
           find _site/play/src -name '*.cjs' -delete
           # The packed copies were unpacked above; the browser never reads them.
