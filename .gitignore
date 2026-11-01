@@ -12,6 +12,9 @@ node_modules/
 lang/
 vendor/
 dist/
+# A local build that must not overwrite a named release in dist/ (2026-11-01):
+# npx electron-builder --win portable --x64 -c.directories.output=dist-dev
+dist-dev/
 build/icon.png
 
 # ref/ is deliberately NOT ignored. tools/glb2hulls.js consumes the .glb
