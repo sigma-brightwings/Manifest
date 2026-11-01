@@ -107,6 +107,33 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **Syndicate runners can fire first, and then the law comes for them
+  (2026-11-01).** Astra, in October: *"Syndicate runners don't get chased
+  by cops unless they are firing on a civilian vessel as the aggressor.
+  The syndicate pays off the police."* The rule was written down then, but
+  nothing could break it: runners never fired on anyone.
+  - A runner near you turns on 12% of her legs (seeded per leg, so the
+    same leg chooses the same way on every reload), on the softest, richest
+    civilian within 600 km. She fires first, with no "heave to", knocks the
+    drive out, comes alongside and strips her. The victim calls it in.
+  - She only picks a fight she can win: an unarmed ship, or one no tougher
+    than she is. A raiding runner carries a real gun (NPC_GUN), not a
+    freighter's popgun.
+  - **And you** (Astra's call). Measured across 6 seeds
+    (`tools/measure-runner-turns.cjs`), only 0.2% of runners have an NPC
+    civilian within reach at any moment, because traffic lanes do not
+    cross close. The civilian a runner actually meets is you, so she
+    scores you the way a pirate does. Armed and tougher than her, you are
+    left be.
+  - Firing first marks her as the aggressor for 30 minutes. Any lawful
+    cutter that sees her runs her down like a pirate ("your papers do not
+    cover firing on a civilian"), and a runner chasing you drops you to
+    run.
+  - Shooting back at a runner who fired on you first is self-defence, not
+    assault.
+  - A runner who has fired on nobody is still left alone by the law.
+  - 16 new checks in `test/aggression.test.js`.
+
 - **The sealed courier parcel has contents (2026-11-01).** PLAN.md Phase
   10, built. Until now the parcel was one tonne of nothing that proved you
   reached the star.

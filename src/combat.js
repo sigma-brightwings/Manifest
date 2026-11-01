@@ -4912,6 +4912,10 @@
     /* Nor for a ship the law is already running down (aggression.js): a
      * smuggler bolting from a cutter is fair game to the cutter's side. */
     if (victim.fugitive && !victim.fugitive.dead) return;
+    /* Nor for shooting back at a Syndicate runner who opened fire on you
+     * first (aggression.js, 2026-11-01): that is self-defence, and the
+     * law is the side that wants her. */
+    if (victim.firedOnYouAt !== undefined && t - victim.firedOnYouAt < 1800) return;
     if (victim.reported === kind) return;               // one report per act
     var framing = /^frame/.test(kind);
 
@@ -9656,7 +9660,7 @@
     RESCUE_CLOSE: RESCUE_CLOSE,
     addHeat: addHeat, updateSink: updateSink,
     WITNESS_RANGE: WITNESS_RANGE, DISTRESS_DELAY: DISTRESS_DELAY,
-    TRADER_GUN: TRADER_GUN, NPC_GUN: NPC_GUN, SYNDICATE_GUN: SYNDICATE_GUN,
+    TRADER_GUN: TRADER_GUN, NPC_GUN: NPC_GUN, SYNDICATE_GUN: SYNDICATE_GUN, NPC_HULL: NPC_HULL,
     POLICE_GUN: POLICE_GUN, POLICE_MISSILE: POLICE_MISSILE, firePoliceMissile: firePoliceMissile,
     DECOY: DECOY, FLARE: FLARE, ECM: ECM, PD: PD, decoyRackSize: decoyRackSize, hasEcm: hasEcm,
     launchDecoy: launchDecoy, dropFlare: dropFlare, toggleEcm: toggleEcm,

@@ -50,6 +50,14 @@
   var HELP_KILL = 5, HELP_DRIVEOFF = 2, HELP_ARREST = 3, HELP_WINDOW = 600;
   var INTERFERE = 10, INTERFERE_EMPIRE = 5;
   var SEE_KM = 6000;            // said aloud if it happens this near you
+  /* A Syndicate runner that turns on a civilian (2026-11-01). Astra, in
+   * October: "Syndicate runners don't get chased by cops unless they are
+   * firing on a civilian vessel as the aggressor. The syndicate pays off
+   * the police." The payoff covers what she carries, not what she does. */
+  var RUNNER_TURN_P = 0.12;     // of a runner's legs near you, she turns on somebody
+  var RUNNER_PREY_KM = 600;     // and only on a ship already close: opportunity, not a hunt
+  var RUNNER_LOOK_S = 8;        // how often the runners near you are looked over
+  var AGGRESSOR_S = 1800;       // firing first marks her this long in the law's eyes
 
   function C() { return global.Combat; }
   function S() { return global.Sim; }
@@ -244,6 +252,152 @@
     });
   }
 
+  /* ---- Syndicate runners who fire first (2026-11-01) --------------------
+   * A runner is ordinary traffic flying the Syndicate's flag (generate.js
+   * buildRunners). The law leaves her alone, because the Syndicate pays it
+   * to. Some legs she turns on a soft civilian beside her, and FIRES
+   * FIRST, no "heave to": she is the aggressor, which is the one thing the
+   * payoff does not cover. Any lawful cutter that sees her then runs her
+   * down exactly as it would a pirate.
+   *
+   * Seeded per leg (route id and cycle), so the same runner on the same
+   * leg makes the same choice however often you reload; only near you,
+   * because a fight is a thing that happens while you are there; and only
+   * an armed hull (a shuttle has nothing to fire). */
+  function legKey(st, t) {
+    var r = st.route;
+    var cyc = r && r.period > 0 && r.t0 !== undefined ? Math.floor((t - r.t0) / r.period) : 0;
+    return r.id + '|' + cyc + (st.outbound === false ? 'b' : 'o');
+  }
+  function civilianState(st) {
+    return !!(st && st.route && !st.route.runner && st.route.flag !== 'outlaw' && !st.route.dead &&
+              !st.route.joined && !st.route.oneWay && st.pos && st.phase !== 'moored' &&
+              !st.landed && !st.inside && !st.towed);
+  }
+  function runners(sys, G, t, hooks) {
+    var Sm = S(), ship = G.ship;
+    if (!ship || !ship.pos || !Sm.trafficAll) return;
+    if (t < (sys._runnerLookAt || 0)) return;
+    sys._runnerLookAt = t + RUNNER_LOOK_S;
+    var list = Sm.trafficAll(sys, t);
+    for (var i = 0; i < list.length; i++) {
+      var st = list[i];
+      if (!st || !st.route || !st.route.runner || !st.pos || st.phase === 'moored' || st.landed || st.inside) continue;
+      if (st.route.dead || st.route.suppressed) continue;           // already lifted, or gone
+      if (V.dist(st.pos, ship.pos) > SEE_KM) continue;
+      if (!C().isArmedNpc({ cls: st.cls || st.route.cls })) continue;
+      var key = legKey(st, t);
+      if (st.route.turnLeg === key) continue;                       // asked once a leg
+      st.route.turnLeg = key;
+      if (hash01('runner-turn|' + (sys.seed || '') + '|' + key) >= RUNNER_TURN_P) continue;
+      /* The softest, richest civilian close by, and only one she can
+       * take: unarmed, or no tougher than she is. The first runner tried
+       * in the suite was a 40-hull hauler that picked a 55-hull freighter,
+       * lost the exchange and died; a captain running for the Syndicate
+       * knows better. */
+      var myHull = hullOfCls(st.cls || st.route.cls);
+      var best = null;
+      for (var j = 0; j < list.length; j++) {
+        var c = list[j];
+        if (c === st || !civilianState(c)) continue;
+        var ccls = c.cls || c.route.cls;
+        if (C().isArmedNpc({ cls: ccls }) && hullOfCls(ccls) > myHull) continue;
+        var d = V.dist(c.pos, st.pos);
+        if (d > RUNNER_PREY_KM) continue;
+        var val = cargoValue(c.manifest);
+        if (!(val > 0)) continue;
+        var sc = val * stateVuln(c) / Math.max(d, PREY_FLOOR_KM);
+        if (!best || sc > best.score) best = { state: c, score: sc };
+      }
+      /* AND YOU (Astra's call, 2026-11-01). Measured across 6 seeds
+       * (tools/measure-runner-turns.cjs), 0.2% of runners have an NPC
+       * civilian within reach at any moment: traffic lanes do not cross
+       * close. The civilian a runner actually meets is you. Scored the
+       * same way a pirate scores you (your hold, how soft you look), and
+       * held to the same rule: armed and tougher than her, you are left
+       * be. */
+      if (!ship.docked && !ship.landed) {
+        var dp = V.dist(ship.pos, st.pos);
+        var tough = playerArmed(ship) && (ship.hullMax || 100) > myHull;
+        if (dp <= RUNNER_PREY_KM && !tough) {
+          var ps = playerValue(ship) * playerVuln(ship) / Math.max(dp, PREY_FLOOR_KM);
+          if (ps > 0 && (!best || ps > best.score)) best = { player: true, score: ps };
+        }
+      }
+      if (best && best.player) turnOnPlayer(sys, G, st, t, hooks);
+      else if (best) turnRunner(sys, G, st, best.state, t, hooks);
+    }
+  }
+  function turnOnPlayer(sys, G, st, t, hooks) {
+    var r = C().liftTrader(sys, st, t);
+    if (!r || !r.live) return null;
+    r.runner = true;
+    r.hostileToPlayer = true;
+    r.mode = 'attack';
+    r.aggressorAt = t;
+    r.firedOnYouAt = t;          // combat.js crime(): shooting back is not assault
+    if (hooks && hooks.say) hooks.say('Syndicate runner ' + nm(r) + ' opens fire on you without a word', 6);
+    if (hooks && hooks.sound) hooks.sound('warn');
+    return r;
+  }
+  function hullOfCls(cls) {
+    var H = C().NPC_HULL;
+    return (H && H[cls]) || 50;
+  }
+  function turnRunner(sys, G, st, preyState, t, hooks) {
+    var r = C().liftTrader(sys, st, t);
+    var v = r && C().liftTrader(sys, preyState, t);
+    if (!r || !r.live || !v || !v.live) return null;
+    v._state = preyState;
+    r.runner = true;
+    r.raider = true;
+    r.target = v;
+    r.mode = 'chase'; r.standoffKm = CHASE_KM;
+    r.aggressorAt = t;
+    r.preyName = v.name;
+    v.threat = r; v.mode = 'breakoff'; v.refused = true;
+    if (C().isArmedNpc(v)) v.defendTarget = r;
+    if (C().broadcastDistress && !v.callSent) {
+      v.callSent = true;
+      C().broadcastDistress(sys, G, t, v, 'assault', near(G, v) ? hooks : null);
+    }
+    say(G, hooks, r, 'Syndicate runner ' + nm(r) + ' opens fire on ' + the(v) + ' without a word', 6);
+    return r;
+  }
+  /* Her run, frame by frame: knock the drive out, come alongside, strip
+   * her, go. Running from the law takes precedence over all of it. */
+  function raid(sys, G, r, t, hooks) {
+    var v = r.target;
+    if (alive(r.fugitive)) return;
+    var d = dist(r, v);
+    if (v.disabled) {
+      r.mode = 'chase'; r.standoffKm = 0.3;
+      if (d < LOOT_KM) {
+        if (!r.lootSince) r.lootSince = t;
+        if (t - r.lootSince >= LOOT_S) strip(sys, G, r, v, t, hooks);
+      } else r.lootSince = 0;
+      return;
+    }
+    r.mode = 'chase'; r.standoffKm = CHASE_KM;
+    /* Her guns are not meant to kill: a freighter with no drive is the
+     * prize. Same line the law draws (COP_DISABLE_HULL). */
+    if (hullFrac(v) < COP_DISABLE_HULL && C().disableNpc) C().disableNpc(sys, G, v, 'drive', t, hooks, r);
+  }
+  function raiders(sys, G, t, hooks) {
+    sys.patrols.forEach(function (sp) {
+      if (!alive(sp) || !sp.raider || sp.hostileToPlayer) return;
+      if (!alive(sp.target)) return;
+      /* Her own drive out: she can still strip a ship she is already
+       * alongside, but she cannot chase one. */
+      if (sp.disabled && dist(sp, sp.target) >= LOOT_KM) return;
+      raid(sys, G, sp, t, hooks);
+    });
+  }
+  /* Fired first within the window: the payoff no longer covers her. */
+  function aggressor(sp, t) {
+    return !!(sp && sp.runner && sp.aggressorAt !== undefined && t - sp.aggressorAt < AGGRESSOR_S);
+  }
+
   /* ---- the law ---------------------------------------------------------- */
   /* An independent smuggler: a line through a port with a fence, never a
    * Syndicate runner (paid for), seeded per route. */
@@ -254,7 +408,7 @@
     return !!fence && hash01('smuggle|' + (sys.seed || '') + '|' + route.id) < SMUGGLER_P;
   }
 
-  function startPursuit(sys, G, cop, f, t, hooks, why) {
+  function startPursuit(sys, G, cop, f, t, hooks, why, line) {
     cop.target = f;
     cop.mode = 'chase'; cop.standoffKm = CHASE_KM;
     cop.pursuing = why;
@@ -265,8 +419,10 @@
     if (f.target) { if (f.target.threat === f) f.target.threat = null; f.target = null; }
     f.mode = 'breakoff';
     f.threat = cop;
+    /* A runner who turned on you drops you to run from the law. */
+    if (why === 'runner') f.hostileToPlayer = false;
     if (C().isArmedNpc && C().isArmedNpc(f)) f.defendTarget = cop;
-    say(G, hooks, cop, nm(cop) + ': "' + nm(f) + ', heave to and stand by to be boarded." She runs.', 5);
+    say(G, hooks, cop, line || (nm(cop) + ': "' + nm(f) + ', heave to and stand by to be boarded." She runs.'), 5);
   }
 
   function arrest(sys, G, cop, f, t, hooks) {
@@ -320,6 +476,18 @@
         if (d < bd) { bd = d; best = p; }
       });
       if (best) { startPursuit(sys, G, cop, best, t, hooks, 'pirate'); return; }
+      /* A runner who fired first, in sight. Paid for or not. */
+      var rb = null, rd = LAW_SEE_KM;
+      pats.forEach(function (p) {
+        if (!alive(p) || !aggressor(p, t) || (alive(p.fugitive) && p.fugitive !== cop)) return;
+        var d = dist(cop, p);
+        if (d < rd) { rd = d; rb = p; }
+      });
+      if (rb) {
+        startPursuit(sys, G, cop, rb, t, hooks, 'runner',
+          nm(cop) + ': "' + nm(rb) + ', your papers do not cover firing on a civilian. Heave to." She runs.');
+        return;
+      }
       /* A trader's papers, every so often, if one is passing. */
       if (t < (cop.scanAt || 0)) return;
       cop.scanAt = t + SCAN_EVERY;
@@ -393,6 +561,11 @@
   /* ---- guns -------------------------------------------------------------- */
   function gunOf(sp) {
     var Cm = C();
+    /* A runner on a raid is fitted for it: the Syndicate's ships pass as
+     * freighters, and the gun under the cargo hatch is the part that
+     * does not. With a freighter's own popgun she lost the exchange to
+     * the 55-hull freighter she had picked on (aggression.test, 2026-11-01). */
+    if (sp.raider) return Cm.NPC_GUN;
     if (sp.kind === 'trader' || sp.cls === 'shuttle') return Cm.TRADER_GUN;
     if (sp.kind === 'police' && sp.faction === 'outlaw') return Cm.SYNDICATE_GUN;
     if (sp.kind === 'police' || sp.kind === 'navy' || sp.kind === 'capital') return Cm.POLICE_GUN;
@@ -436,6 +609,20 @@
   function onNpcHit(sys, G, v, by, t, hooks) {
     if (!v || v.dead) return;
     var Cm = C();
+    /* A runner on a raid answers fire like a pirate does, rather than
+     * fleeing the freighter she is robbing; and every shot she lands on a
+     * civilian renews her mark as the aggressor. */
+    if (by && by.raider && alive(by.target) && by.target === v) by.aggressorAt = t;
+    if (v.raider) {
+      if (lawful(by) && !alive(v.fugitive)) {
+        startPursuit(sys, G, by, v, t, hooks, 'runner'); return;
+      }
+      if (alive(v.fugitive)) { v.defendTarget = by; return; }
+      if (hullFrac(v) < PIRATE_RUN_HULL) {
+        v.raider = false; v.target = null; v.mode = 'breakoff'; v.threat = by; return;
+      }
+      return;
+    }
     if (v.kind === 'trader' || v.cls === 'shuttle') {
       v.mode = 'breakoff';
       v.threat = by;
@@ -533,6 +720,8 @@
     tidy(sys, t);
     hostileOnSight(sys, G, t, hooks);
     pirates(sys, G, t, hooks);
+    runners(sys, G, t, hooks);
+    raiders(sys, G, t, hooks);
     law(sys, G, t, hooks);
     rivals(sys, G, t, hooks);
     fire(sys, G, t, hooks);
@@ -573,6 +762,8 @@
     HOSTILE_STANDING: HOSTILE_STANDING, HELP_KILL: HELP_KILL, HELP_DRIVEOFF: HELP_DRIVEOFF,
     HELP_ARREST: HELP_ARREST, INTERFERE: INTERFERE, INTERFERE_EMPIRE: INTERFERE_EMPIRE,
     SMUGGLER_P: SMUGGLER_P, LOOT_S: LOOT_S,
+    RUNNER_TURN_P: RUNNER_TURN_P, RUNNER_PREY_KM: RUNNER_PREY_KM, AGGRESSOR_S: AGGRESSOR_S,
+    runners: runners, turnRunner: turnRunner, turnOnPlayer: turnOnPlayer, aggressor: aggressor, legKey: legKey,
     focusOf: focusOf, choosePrey: choosePrey, startRobbery: startRobbery, strip: strip,
     smuggler: smuggler, startPursuit: startPursuit, arrest: arrest, lawful: lawful, empireOf: empireOf,
     gunOf: gunOf, aimOf: aimOf, withdraw: withdraw,

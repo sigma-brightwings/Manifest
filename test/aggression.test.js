@@ -402,5 +402,132 @@ check('runners are not robbed', psys.traffic.filter(function (r) { return r.runn
   return !psys.ports.some(function (p) { return (p.market && p.market.inbound || []).some(function (d) { return d.route === r.id; }); });
 }));
 
+console.log('a Syndicate runner who fires first (2026-11-01)');
+/* Astra: "Syndicate runners don't get chased by cops unless they are
+ * firing on a civilian vessel as the aggressor." Two cruising lines from
+ * this system's timetable stand in: one flagged a runner for the test,
+ * the laden freighter as her prey. */
+(function () {
+  fresh();
+  var G = game();
+  var list = Sim.trafficAll(sys, T);
+  /* A runner that could take her: armed, and no softer than she is. */
+  var H = Combat.NPC_HULL, preyHull = H[st0.cls || st0.route.cls] || 50;
+  var rs = list.filter(function (s) {
+    var c = s.cls || s.route.cls;
+    return s.phase === 'cruise' && s.route !== st0.route && Combat.isArmedNpc({ cls: c }) && (H[c] || 50) >= preyHull;
+  })[0];
+  check('an armed line to fly the Syndicate flag', !!rs, rs && rs.route.name);
+  if (!rs) return;
+  var wasRunner = rs.route.runner, wasFlag = rs.route.flag;
+  rs.route.runner = true; rs.route.flag = 'outlaw';
+  try {
+    /* Paid for: a runner who has fired at nobody is left alone. */
+    var quiet = Combat.liftTrader(sys, rs, T); quiet.runner = true;
+    var cop0 = npc('police', sys.ports[0].faction, V.add(quiet.live.pos, { x: 200, y: 0, z: 0 }), quiet.live.vel);
+    A.update(sys, G, T, 1, hooks());
+    check('the law leaves a quiet runner alone', !cop0.target, cop0.target && cop0.target.name);
+
+    fresh();
+    G = game();
+    var h = hooks();
+    var r = A.turnRunner(sys, G, rs, st0, T, h);
+    var v = r && r.target;
+    check('she turns on the freighter', !!(r && v && v.liftedFrom === st0.route), r && v && v.name);
+    check('as the aggressor: no demand, she opens fire', r && r.aggressorAt === T && v.refused === true &&
+          A.aimOf(r) === v, r && String(r.aggressorAt));
+    check('and the freighter calls it in', (G.distress || []).some(function (c) { return c.from === v.id; }));
+    check('the mark fades', A.aggressor(r, T + 10) && !A.aggressor(r, T + A.AGGRESSOR_S + 1));
+
+    /* Close together, nobody else about: she disables and strips her. */
+    r.live.pos = V.add(v.live.pos, { x: 1, y: 0, z: 0 }); r.live.vel = V.clone(v.live.vel);
+    var tt = T;
+    for (var k = 0; k < 600 && !v.robbed; k++) {
+      tt += 1; A.update(sys, G, tt, 1, h);
+      if (!r.live) break;
+    }
+    check('she knocks out the drive and strips her', !!(v.robbed && v.robbed.by === r.id),
+          'hull ' + Math.round(v.hullHp) + '/' + v.hullMax + (v.disabled ? ' disabled' : ''));
+    check('she came through the freighter shooting back', !!r.live && !r.dead,
+          r.live ? Math.round(r.hullHp) + '/' + r.hullMax : 'lost');
+    if (!r.live) return;
+
+    /* A cutter sees her within the window: paid for or not, she is run down. */
+    var cop = npc('police', sys.ports[0].faction, V.add(r.live.pos, { x: 300, y: 0, z: 0 }), r.live.vel);
+    var h2 = hooks();
+    G.ship.pos = V.add(r.live.pos, { x: 1000, y: 0, z: 0 });     // near enough to hear it
+    A.update(sys, G, tt + 1, 1, h2);
+    check('the law runs her down', cop.target === r && cop.pursuing === 'runner' && r.fugitive === cop,
+          cop.target ? cop.target.name + ' / ' + cop.pursuing : 'no target');
+    check('and says why', saidAny(h2, /papers do not cover firing on a civilian/), h2.said.join(' | '));
+
+    /* Seeded per leg: asking again on the same leg changes nothing. */
+    fresh();
+    var G3 = game(); G3.ship.pos = V.clone(rs.pos);
+    rs.route.turnLeg = null;
+    sys._runnerLookAt = 0;
+    A.runners(sys, G3, T, hooks());
+    var first = rs.route.turnLeg;
+    var n1 = sys.patrols.length;
+    sys._runnerLookAt = 0;
+    A.runners(sys, G3, T, hooks());
+    check('a runner is asked once a leg', first === A.legKey(rs, T) && sys.patrols.length === n1);
+    /* The civilian a runner actually meets is you (Astra's call). */
+    var turned = null, tk = T;
+    for (var cyc = 0; cyc < 400 && !turned; cyc++) {
+      fresh();
+      tk = T + cyc * rs.route.period;
+      var sNow = Sim.trafficAll(sys, tk).filter(function (x) { return x.route === rs.route; })[0];
+      if (!sNow || sNow.phase === 'moored' || sNow.landed || sNow.inside) continue;
+      var G4 = game();
+      G4.ship.pos = V.add(sNow.pos, { x: 100, y: 0, z: 0 }); G4.ship.vel = V.clone(sNow.vel);
+      G4.ship.fit = {}; G4.ship.gun = null; G4.ship.cargo = { grain: 30 };
+      sys._runnerLookAt = 0; rs.route.turnLeg = null;
+      var h4 = hooks();
+      A.runners(sys, G4, tk, h4);
+      turned = sys.patrols.filter(function (p) { return p.runner && p.hostileToPlayer; })[0] || null;
+    }
+    check('on some leg, a runner passing an unarmed pilot turns on her', !!turned, turned && turned.name);
+    if (turned) {
+      check('she is marked as having fired first on you', turned.firedOnYouAt === tk && A.aggressor(turned, tk));
+      /* A witness right beside you, so the only thing that can stop a
+       * report is the self-defence rule. The control shows it would file. */
+      var wit = npc('police', sys.ports[0].faction, V.add(G4.ship.pos, { x: 5, y: 0, z: 0 }), G4.ship.vel);
+      G4.pendingReport = null;
+      Combat.crime(sys, G4, tk + 5, 'assault', turned, null, wit);
+      var defended = !G4.pendingReport;
+      var keep = turned.firedOnYouAt; delete turned.firedOnYouAt;
+      G4.pendingReport = null; turned.reported = null;
+      Combat.crime(sys, G4, tk + 5, 'assault', turned, null, wit);
+      var control = !!G4.pendingReport;
+      turned.firedOnYouAt = keep; G4.pendingReport = null;
+      sys.patrols.splice(sys.patrols.indexOf(wit), 1);
+      check('shooting back is not booked as assault', defended && control,
+            'defended ' + defended + ', control would report ' + control);
+      var cop4 = npc('police', sys.ports[0].faction, V.add(turned.live.pos, { x: 300, y: 0, z: 0 }), turned.live.vel);
+      A.update(sys, G4, tk + 1, 1, hooks());
+      check('the law runs her down for it, and she drops you to run',
+            cop4.target === turned && !turned.hostileToPlayer && turned.threat === cop4);
+    }
+    var G5 = game();
+    G5.ship.fit = { hardpoint1: 'pulse' }; G5.ship.gun = 'pulse'; G5.ship.hullMax = 400; G5.ship.cargo = { grain: 30 };
+    var safe = true;
+    for (var cyc2 = 0; cyc2 < 400; cyc2++) {
+      fresh();
+      var tk2 = T + cyc2 * rs.route.period;
+      var s2 = Sim.trafficAll(sys, tk2).filter(function (x) { return x.route === rs.route; })[0];
+      if (!s2 || s2.phase === 'moored' || s2.landed || s2.inside) continue;
+      G5.ship.pos = V.add(s2.pos, { x: 100, y: 0, z: 0 });
+      sys._runnerLookAt = 0; rs.route.turnLeg = null;
+      A.runners(sys, G5, tk2, hooks());
+      if (sys.patrols.some(function (p) { return p.runner && p.hostileToPlayer; })) { safe = false; break; }
+    }
+    check('an armed pilot tougher than her is left be, every leg', safe);
+  } finally {
+    rs.route.runner = wasRunner; rs.route.flag = wasFlag; rs.route.turnLeg = undefined;
+    fresh();
+  }
+})();
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
