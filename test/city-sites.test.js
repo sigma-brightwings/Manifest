@@ -51,6 +51,15 @@ function artCityTris(id) {
 var ids = Object.keys(Sites || {});
 check('there are city sites to move', ids.length === 6, ids.join(' '));
 
+function portFile(id) {
+  var fs = require('fs'), zlib = require('zlib');
+  var base = path.join(ROOT, 'src', 'ports', id + '.js');
+  if (fs.existsSync(base)) return require(base);
+  var mod = { exports: {} };
+  (new Function('module', 'exports', zlib.gunzipSync(fs.readFileSync(base + '.gz')).toString('utf8')))(mod, mod.exports);
+  return mod.exports;
+}
+
 console.log('--- the cut ---');
 ids.forEach(function (id) {
   var lib = R.libPort(id);
@@ -60,7 +69,12 @@ ids.forEach(function (id) {
   /* NOTHING LOST: the game's own copy of the model, face for face. The
    * solid shell is the port without the city (cars included), and the
    * drawn shell is that without the cars. */
-  var file = require(path.join(ROOT, 'src', 'ports', id + '.js'));
+  /* The station art is stored packed (tools/pack.cjs, 2026-10-30): the
+   * repo holds <id>.js.gz and the plain .js is only a working copy, which a
+   * fresh clone (CI, the release build) does not have. Read whichever is
+   * there, the way ports.js itself does. Found when the 1.2.0-beta "Brian"
+   * build failed on both runners on this line. */
+  var file = portFile(id);
   var cars = (lib.movers || []).reduce(function (a, m) { return a + m.mesh.f.length; }, 0);
   check(id + ': the port without its city, and the city, are the whole model',
     lib.solidShell.f.length + got === file.f.length && lib.shell.f.length + cars === lib.solidShell.f.length,
