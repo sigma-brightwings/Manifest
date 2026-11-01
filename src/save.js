@@ -359,6 +359,8 @@
        * the same way a dented hull does. */
       deadPanels: G.deadPanels || {},
       wanted: G.wanted || {},
+      /* The navy's ledger (hunters.js): additive, an older save has none. */
+      notoriety: G.notoriety || {},
       /* How many times you have taken an occupied berth, per faction. Additive
          and NO version bump: an old career loads with none recorded, which is
          the right answer for a pilot who has never done it. */
@@ -661,6 +663,7 @@
     G.standing = data.standing || {};
     G.deadPanels = data.deadPanels || {};
     G.wanted = data.wanted || {};
+    G.notoriety = data.notoriety || {};
     G.queueJumps = data.queueJumps || {};
     G.pendingReport = data.pendingReport || null;
     G.distress = data.distress || [];

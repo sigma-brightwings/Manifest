@@ -5449,6 +5449,9 @@
      * (Phase 18). On the report, not the act: a crew that was bought or
      * leaned on never files, and nothing marks you. */
     if (kind === 'frameSerious') markPirate(G, fac, G.t || 0, hooks);
+    /* A loud act, reported: the navy's ledger (hunters.js), which is not
+     * the bounty and cannot be paid off. */
+    if (global.Hunters && global.Hunters.onReport) global.Hunters.onReport(G, kind, fac, G.t || 0, hooks);
     jot(G, 'crime', 'Reported for ' + kind + (victim.name ? ' against the ' + victim.name : '') +
         ' (' + how + ')' + (extra ? ', ' + Math.round(loot) + ' cr taken' : '') +
         '. Bounty with ' + facName(G, fac) + ' now ' + Math.round(G.wanted[fac]) + ' cr');
@@ -7717,7 +7720,9 @@
        * stays on NPC_GUN like it always has — carries what its own
        * enforcement wing can buy. See SYNDICATE_GUN. */
       var elite = sp.kind === 'police' && sp.faction === 'outlaw';
-      var cop = sp.kind === 'police' && !sp.defending;
+      /* A naval hunter (hunters.js) fights like the law, trained and
+       * missile-armed, with the law's gun: frightening is the point. */
+      var cop = (sp.kind === 'police' || sp.hunter) && !sp.defending;
       /* A Syndicate runner who has opened fire (aggression.js) shoots the
        * gun under her cargo hatch, the same one she uses on a freighter. */
       var showed = sp.raider || sp.firedOnYouAt !== undefined;

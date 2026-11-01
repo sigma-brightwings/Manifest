@@ -2370,6 +2370,11 @@
   function pursuing(spec) {
     return spec.hostileToPlayer || (spec.mode === 'chase' && !!spec.target);
   }
+  /* A hunter flies the intercept down to inside her own gun range (16 km,
+   * POLICE_GUN): handed over at 200 km, the attack law parked her 47 km off
+   * near a world, the spring too weak against the difference in gravity
+   * between her and you. */
+  var HUNTER_NEAR_KM = 12;
   function accelOf(spec) {
     var a = spec.accel || 0;
     if (spec.kind === 'police' && spec.faction !== 'outlaw' && spec.className !== 'enforcer' && pursuing(spec)) a *= POLICE_BURN;
@@ -2378,7 +2383,20 @@
 
   function steerNpc(spec, sys, t, dtSim, ship) {
     var live = spec.live;
-    var toShip = V.sub(ship.pos, live.pos);
+    /* ONE TICK BEHIND (found 2026-11-01, Astra's guess, and right). You
+     * are moved to t before updateEncounters runs; she is still where she
+     * was at t - dt until she steps below. Measuring her standoff against
+     * where you are NOW, she held it against a place you would only reach
+     * a tick later, and settled one tick of your velocity off: about 1 km
+     * at 60 fps (the "hovering about 1 km out" in the alongside notes), 49
+     * km in a one-second step, and more under time warp, which kept a
+     * pursuer out of gun range. So the target is taken at HER time: back
+     * by one step if it has already moved (you always have; another ship
+     * has if updateEncounters reached her first, `_stepT`). The chase and
+     * alongside laws step her first instead, and keep their own aim. */
+    var stepped = ship._stepT === undefined || ship._stepT === t;
+    var shipThen = stepped && ship.vel && dtSim > 0 ? V.addScaled(ship.pos, ship.vel, -dtSim) : ship.pos;
+    var toShip = V.sub(shipThen, live.pos);
     var range = V.len(toShip);
     /* Attackers close to knife range; everyone else holds a polite
      * distance. 6 km against 12 km guns means a fight is a fight, not an
@@ -2502,6 +2520,36 @@
       return V.dist(ship.pos, live.pos);
     }
 
+    /* A NAVAL HUNTER FAR OFF (hunters.js) flies an intercept, not a
+     * station-keep. The law below is a spring: fine over the few thousand
+     * km anything else is woken at, but from a port a million km away it
+     * saturated, passed you at 300 km/s, swung a million km out the other
+     * side and came back, for ever (measured 2026-11-01). Closing at the
+     * speed she can still brake from, sqrt(2 a d), matched to your
+     * velocity, she arrives; inside HUNTER_NEAR_KM the ordinary attack
+     * law takes over and she fights like anyone else. */
+    if (spec.hunter && range > HUNTER_NEAR_KM) {
+      var aH = Math.max(accelOf(spec) || 0, 1e-4);
+      var dirH = V.scale(toShip, 1 / range);
+      var vH = Math.sqrt(2 * aH * Math.max(0, range - HUNTER_NEAR_KM * 0.5) * 0.8);
+      var wantH = V.addScaled(ship.vel, dirH, vH);
+      var stepH = Math.max(0, dtSim), leftH = stepH;
+      for (var ih = 0; ih < 80 && leftH > 1e-6; ih++) {
+        var hh = Math.min(leftH, 5);
+        var dvH = V.sub(wantH, live.vel), dvLH = V.len(dvH), limH = aH * hh;
+        if (dvLH > limH) dvH = V.scale(dvH, limH / dvLH);
+        var gH = acceleration(live.pos, sys, t);
+        live.vel = V.add(V.addScaled(live.vel, gH, hh), dvH);
+        live.pos = V.addScaled(live.pos, live.vel, hh);
+        leftH -= hh;
+      }
+      var fH = V.sub(wantH, live.vel);
+      turnTo(live, V.len(fH) > 1e-6 ? V.norm(fH) : dirH, live.up, Math.min(1, stepH * 0.9));
+      live.mode = spec.mode;
+      live.throttle = 1;
+      return V.dist(ship.pos, live.pos);
+    }
+
     var aim;
     var matchVel = ship.vel;
     if (spec.mode === 'breakoff') {
@@ -2532,7 +2580,7 @@
       // A RESCUE holds a hose-length off and matches the drifting hull's
       // velocity — the stranded ship is falling, and a place is not.
       var bearing = range > 1e-6 ? V.scale(toShip, -1 / range) : { x: 1, y: 0, z: 0 };
-      aim = V.addScaled(ship.pos, bearing, standoff);
+      aim = V.addScaled(shipThen, bearing, standoff);
     }
 
     var offset = V.sub(aim, live.pos);
@@ -2614,8 +2662,12 @@
       var wakeAt = loud ? WAKE_RANGE * ECM_REACH : ship.silent ? SILENT_WAKE_KM : WAKE_RANGE;
       if (!spec.live && !safe && range < wakeAt && !spec.rescue) { wakeNpc(spec, state, sys); }
 
+      /* A naval hunter (hunters.js) has no rail to go back to: she is not
+       * put to sleep by range, and she waits out a dock rather than going
+       * home. Nothing fires on a docked ship (Combat.updateNpcFire). */
+      var keep = !!(global.Hunters && global.Hunters.keepAwake && global.Hunters.keepAwake(spec));
       if (spec.live) {
-        if (safe) { sleepNpc(spec); continue; }
+        if (safe && !keep) { sleepNpc(spec); continue; }
 
         /* Paid up, mid-encounter: they see the mark and go. A pirate already
          * shooting (`hostileToPlayer`) is past caring. */
@@ -2653,7 +2705,7 @@
         var busy = focus !== ship;
         spec.modeSince += dtSim;
 
-        if (range > (loud ? SLEEP_RANGE * ECM_REACH : SLEEP_RANGE)) { sleepNpc(spec); continue; }
+        if (!keep && range > (loud ? SLEEP_RANGE * ECM_REACH : SLEEP_RANGE)) { sleepNpc(spec); continue; }
         /* An unidentified jammer: the law comes back for another look, and
          * one that keeps watching writes it up. */
         if (loud && spec.kind === 'police' && spec.faction !== 'outlaw') {

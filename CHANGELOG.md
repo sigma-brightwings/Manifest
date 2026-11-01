@@ -107,6 +107,42 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **Naval hunters, sent after you on notoriety (2026-11-01).** PLAN.md
+  Phase 9, the second half; Astra: "the navy hunters".
+  - A second ledger beside your bounty, `G.notoriety`, per empire: it grows
+    on REPORTED loud acts (a killing 12, a police cutter 25, a navy ship 40,
+    a liner or a tender 30), halves every three days, and cannot be paid
+    off. Paying your bounty clears the police; it does nothing for this.
+    The Syndicate has no navy to send.
+  - At 60 (three cutters in a few hours) you are told the navy has your
+    name. Half an hour after you are in that empire's space, two naval
+    interceptors launch from its nearest port and hunt you (three at 120).
+    They open with no demand, fly the law's guns and missiles, are tougher
+    than a cutter and a little faster than one. They wait out a dock and
+    are never put back on a rail; leave the system and the hunt is over.
+    Once a hunt ends, the next waits six hours. The same dispatch sends the
+    same ships on a reload. Saves carry the ledger (additive).
+  - Simulated chases (`test/hunters.test.js`, 28 checks): first hit at
+    28 minutes from 16,000 km, 55 minutes from 83,000 km, 4.3 hours from
+    1.8 million km.
+
+### Fixed
+
+- **NPCs steered one tick behind you (2026-11-01).** Found building the
+  hunters, on Astra's guess. You are moved to the new time before the
+  encounter loop runs; an NPC still stands where she was a tick ago until
+  she steps. The station-keeping law measured her standoff against where
+  you are NOW, so she settled one tick of your velocity off: about 1 km at
+  60 fps (the "hovering about 1 km out" in the boarding notes), and the
+  whole step at warp, which could keep a pursuer out of gun range. She now
+  steers against where you were at her own time. A check that fails
+  without the fix (44 km off at 1 s steps, against a 6 km standoff) and
+  passes with it.
+- **A hunter from far off no longer swings past you for ever.** The same
+  spring law, from a million km, saturated, passed you at 300 km/s and
+  oscillated. A hunter flies an intercept (closing at the speed she can
+  still brake from) until she is inside her gun range.
+
 - **Ships hold in the roads over ground ports (2026-11-01).** Astra, after
   the feeders: yes to ships lying off a port. Measured first, and the
   measure was wrong the first time: counting ships moored alongside an

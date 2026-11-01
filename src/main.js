@@ -312,6 +312,7 @@
     /* A new seed is a new career: no debts, no friends, no warrants. */
     G.standing = {};
     G.wanted = {};
+    G.notoriety = {};             // the navy's ledger (hunters.js)
     G.shipTrade = null;
     G.shipDeal = null;
     G.missions = [];
@@ -6101,6 +6102,11 @@
     /* Who hunts whom among the ships you can see (aggression.js). */
     if (global.Aggression && !G.paused) {
       try { global.Aggression.update(G.sys, G, G.t, G.lastDtSim || 0, HOOKS); }
+      catch (e) { if (global.console) console.error(e); }
+    }
+    /* The navy, if your notoriety has reached it (hunters.js). */
+    if (global.Hunters && !G.paused) {
+      try { global.Hunters.update(G.sys, G, G.t, HOOKS); }
       catch (e) { if (global.console) console.error(e); }
     }
     /* Joined by her tube: you go where she has just gone. */
