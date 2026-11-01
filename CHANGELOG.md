@@ -40,7 +40,36 @@ before they update.
 
 ## Unreleased
 
-Since Abby. Changes made on the 1.1 line after the release was cut.
+Nothing yet since Brian.
+
+---
+
+## 1.2.0-beta "Brian" (2026-11-01)
+
+Named for Brian, a pigeon from the rescue. Everything below, down to Abby,
+is in this release: seventeen days, from 2026-10-15 to today.
+
+**You can get out of the chair now.** Every ship has rooms that fit inside
+her own hull, an airlock and a belly ramp, and on the big ships decks, a
+lift and a tram. Stations have interiors to walk, dressed Firefly by way of
+Blade Runner. People are in pressure suits, every skin tone and build, and
+you can talk to them. You can board another ship at a station, in space by
+invitation, or by force once her drive is out.
+
+**The sky has people in it who want things.** Every ship has a captain who
+remembers you, rumours travel at the speed of ships, and a small language
+model reads what you type on the band. Pirates pick the best prey and rob
+it; the law runs pirates and smugglers down and arrests them; rival
+empires skirmish; Syndicate runners can fire first, and then the law comes
+for them. Kill enough of an empire's ships and its navy sends hunters.
+Courier parcels have contents, sometimes not what the client said.
+
+**And you can build.** Survey, claim and mine (the laser, drones, gas
+skimming, ring laser ships), found a station from a Crawler and run its
+books, and buy into industry. Every ship in the sky can be flown, built and
+bought.
+
+Everything that changed is listed below, by kind, newest first.
 
 ### Fixed
 
@@ -1763,8 +1792,6 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
     size, that every room and everything labelled in it can be walked to
     from the airlock, the turret seats per gunner, and the crew in them.
     `tools/probe-rooms.js` photographs them in the real game.
-Since 1.1.0-beta "Abby". Not yet a release: nothing here is pushed until
-Astra has seen it working.
 
 ### Added
 
