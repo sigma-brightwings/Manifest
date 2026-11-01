@@ -3581,7 +3581,11 @@
   var INDOORS = false;
   function setIndoors(on) {
     INDOORS = !!on;
-    if (global.GLWorld && global.GLWorld.setIndoors) global.GLWorld.setIndoors(!!on);
+    /* A number above 1 is a brighter indoors (gl.js); anything else is a
+     * plain on or off, as it always was. */
+    if (global.GLWorld && global.GLWorld.setIndoors) {
+      global.GLWorld.setIndoors(typeof on === 'number' && on > 0 ? on : !!on);
+    }
   }
 
   /* See gl.js setCutaway. The 2D painter cannot cut a hole in a wall —
@@ -4604,11 +4608,17 @@
   /* Her rooms in her (the whole deck, indoors-lit, in her cockpit's frame)
    * and her panes over them as tinted glass. */
   var WINDOW_ALPHA = 0.3;
+  /* BRIGHTER THAN A ROOM YOU STAND IN (2026-11-01, Astra's choice from
+   * unfinished.md). Lit the same as a station room, her cabin read as a
+   * dark well from outside: right for the eye of someone inside, wrong
+   * for a lit window seen across space, where the cabin is the bright
+   * thing and everything round it is dark. The indoor lamp, times this. */
+  var CABIN_SEEN_GLOW = 1.8;
   function queueRoomsInPlace(cam, ship, d, sunDir) {
     var G2 = global.GLWorld;
     if (!G2 || !G2.queueMesh || !d.meshes || !d.meshes.room) return;
     var F = bridgeFrame(ship);
-    setIndoors(true);
+    setIndoors(CABIN_SEEN_GLOW);
     G2.queueMesh(cam, F, d.meshes.room, M, F.up, 0);
     if (d.meshes.fittings) G2.queueMesh(cam, F, d.meshes.fittings, M, F.up, 0);
     setIndoors(false);
@@ -10642,9 +10652,22 @@
   /* The window itself, as seen from inside, counter-clockwise. Chamfered
    * corners rather than a rectangle: a square hole in a hull reads as a
    * cut-out, and the angled corners are what make it read as a canopy. */
+  /* TALLER SINCE 2026-11-01 (Astra, choosing from unfinished.md: "the
+   * windscreen could go taller"). The top edge rose from 0.62 to 0.70 and
+   * the upper chamfers from 0.30 to 0.38; the sill and lower chamfers did
+   * not move, because the dash, the HUD's floor and the landing window all
+   * hang off them.
+   *
+   * WHY 0.70 AND NOT MORE. The cockpit camera's view runs out just above
+   * 0.72 dead ahead. Measured on screen at the default look, the strip of
+   * frame above the glass was 9.5% of the height at 0.62; 6.8% at 0.66;
+   * 4.2% at 0.70; 2.9% at 0.72; and at 0.76 the glass ran off the top of
+   * the screen, which is what cockpit.test's "hull is visible above the
+   * window" exists to stop: with no frame overhead you stop reading as
+   * sat in a ship. 0.70 halves the strip and keeps it. */
   var APERTURE = [
-    [-0.92,  0.62], [ 0.92,  0.62], [ 1.22,  0.30], [ 1.22, -0.16],
-    [ 0.98, -0.46], [-0.98, -0.46], [-1.22, -0.16], [-1.22,  0.30]
+    [-0.92,  0.70], [ 0.92,  0.70], [ 1.22,  0.38], [ 1.22, -0.16],
+    [ 0.98, -0.46], [-0.98, -0.46], [-1.22, -0.16], [-1.22,  0.38]
   ];
 
   /* Side windows. These exist because you can now turn your head, and a
@@ -11949,7 +11972,7 @@
       var bspec = cockpitSpec(ship), bgeo = cockpitGeometry(bspec);
       for (a = 0; a < bgeo.bars.length; a++) {
         var bp = clipProject(cam, localPoly(ship, bgeo.bars[a]));
-        if (bp) fillPoly(ctx, bp, bspec.flair.trim, 'rgba(140,170,205,0.16)');
+        if (bp) fillPoly(ctx, bp, barColour(ship), 'rgba(140,170,205,0.16)');
       }
     }
 
@@ -13061,6 +13084,23 @@
     ctx.restore();
   }
 
+  /* THE CANOPY BARS IN HER LIVERY (2026-11-01, Astra's choice from
+   * unfinished.md). They were the cockpit's trim, one of three near-blacks.
+   * Now they are the trim you chose at the yard (paint.t), a touch darker
+   * so a frame reads as painted metal and not as a lamp; with no paint, the
+   * hull's own accent (greebleStyle, the colour of the dash strip), well
+   * darkened. Used by both the GPU room (shipdeck.js) and the 2D painter. */
+  function hexShade(hex, f) {
+    var n = parseInt(hex.slice(1), 16);
+    var r = Math.round(((n >> 16) & 255) * f), g = Math.round(((n >> 8) & 255) * f), b = Math.round((n & 255) * f);
+    return '#' + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
+  }
+  function barColour(ship) {
+    var t = ship && ship.paint && ship.paint.t;
+    if (typeof t === 'string' && /^#[0-9a-f]{6}$/i.test(t)) return hexShade(t, 0.8);
+    return hexShade(greebleStyle(ship).accent, 0.5);
+  }
+
   function shade(hex, f) {
     var n = parseInt(hex.slice(1), 16);
     var r = Math.round(((n >> 16) & 255) * f), g = Math.round(((n >> 8) & 255) * f), b = Math.round((n & 255) * f);
@@ -13350,8 +13390,11 @@
      * goods, not every tonne, so scooping a canister does not rebuild a
      * ship's worth of meshes. */
     var load = holdLoad(ship, hull);
+    /* Her canopy bars are her livery's colour, so a repaint rebuilds the
+     * room too (barColour). */
+    var bars = barColour(ship);
     if (spec._deck && spec._deck.libId === libId && spec._deck.turret === tur &&
-        spec._deck.loadKey === load.key) return spec._deck;
+        spec._deck.loadKey === load.key && spec._deck.bars === bars) return spec._deck;
     var g = cockpitGeometry(spec);
     /* Who works her, with you at the helm (crew.js), off the hull's own
      * default outfit so a refit does not move the furniture. */
@@ -13406,7 +13449,9 @@
         }
       }
     }
+    plan.barColour = bars;
     spec._deck = { spec: spec, geom: g, plan: plan, meshes: SD.meshes(g, plan), libId: libId, turret: tur, loadKey: load.key,
+                   bars: bars,
                    /* What her hold takes, at the size it is drawn (her screens read it). */
                    holdCap: (ship.cargoCap || (hull && hull.cargoCap) || 0) * capScale };
     return spec._deck;
@@ -14469,6 +14514,7 @@
     DRIVE_SPEC: DRIVE_SPEC,
     paintMesh: paintMesh,
     armGrip: armGrip, drawArmCam: drawArmCam, drawTipCam: drawTipCam,
+    barColour: barColour,
     crawlerPortKey: crawlerPortKey, crawlerPortLib: crawlerPortLib, CRAWLER_PORT_RADIUS_KM: CRAWLER_PORT_RADIUS_KM,
     drawHullPortrait: drawHullPortrait, hullPreviewMesh: hullPreviewMesh,
     faceMaterial: faceMaterial,

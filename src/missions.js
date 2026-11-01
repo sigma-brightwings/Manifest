@@ -45,6 +45,84 @@
     }
   }
 
+  /* ---- what is in the sealed parcel (2026-11-01) --------------------------
+   * PLAN.md Phase 10. Until today the parcel was a token: one tonne of
+   * nothing so completeAtDock had something to check. Now it has contents,
+   * hashed off the contract's id in its own substream ('parcel|<id>'), so
+   * it is decided once, owned, and not a die you can reload.
+   *
+   * Most of it is mundane and specific. Some of it is not, and the board
+   * says so honestly but never in words: the fee, the client, the tone and
+   * the destination all lean the same way as the odds. That correlation is
+   * the mechanic. If a nervous client and a fat fee did not actually mean
+   * dirtier parcels, players would learn to ignore both inside an hour.
+   *
+   * The dirty contents name a real contraband commodity, so customs grades
+   * them with the same severity ladder as anything else in a hold. */
+  var PARCEL_CLEAN = [
+    { id: 'deeds', name: 'Legal instruments under seal' },
+    { id: 'samples', name: 'Medical samples in a cold case' },
+    { id: 'part', name: 'A machine part nobody would trust to general freight' },
+    { id: 'seed', name: 'Seed stock, in numbered vials' },
+    { id: 'core', name: 'A data core' },
+    { id: 'ashes', name: 'Somebody\u2019s ashes' },
+    { id: 'letters', name: 'Letters, a great many of them' },
+    { id: 'heirloom', name: 'A family heirloom, insured beyond its worth' }
+  ];
+  var PARCEL_DIRTY = [
+    { id: 'narc', name: 'Narcotics, vacuum-packed', cid: 'narcotics' },
+    { id: 'buds', name: 'Gold buds, pressed into bricks', cid: 'goldbuds' },
+    { id: 'arms', name: 'Restricted arms, broken down for transit', cid: 'arms' }
+  ];
+  /* The odds a parcel is dirty. Each term is a fact the player can read
+   * off the board before signing:
+   *   - the fee's place in the courier band (payPressure): nothing below
+   *     the middle, rising steeply to the top. A mid-band fee is clean
+   *     very nearly always, which is what keeps this from being a coin flip
+   *     that ruins a run with no warning.
+   *   - the destination's owner. PLAN.md asked for its crime score, but
+   *     reading that means generating the far system, a full generation
+   *     per board. Syndicate or pirate ownership is on the star map, is
+   *     what MAKES a system lawless (galaxy.js, assignPockets), and costs
+   *     nothing.
+   *   - the crime of the system you are signing in.
+   * Measured with tools/measure-parcels.cjs (8 seeds, ~24,000 courier
+   * offers): dirty 14% overall; 1.8% for a fee below the middle of the
+   * band, to lawful ground, out of a system at crime 50 or under; 29% in
+   * the top quarter of the band; 31% bound for Syndicate or pirate ground;
+   * 47% for both at once. */
+  var PARCEL_BASE = 0.015;
+  var PARCEL_FEE = 0.34;
+  var PARCEL_HELD = 0.2;
+  var PARCEL_CRIME = 0.1;
+  function parcelOdds(offer, f) {
+    var p = PARCEL_BASE;
+    var pp = payPressure(offer);
+    if (pp !== null && pp > 0.5) p += PARCEL_FEE * Math.pow((pp - 0.5) / 0.5, 1.5);
+    if (f && f.destHeld) p += PARCEL_HELD;
+    if (f && f.crime !== null && f.crime > 50) p += PARCEL_CRIME * (f.crime - 50) / 50;
+    return Math.min(0.75, p);
+  }
+  function parcelContents(offer, f) {
+    var r = new RNG('parcel|' + offer.id);
+    var dirty = r.next() < parcelOdds(offer, f);
+    var c = r.pick(dirty ? PARCEL_DIRTY : PARCEL_CLEAN);
+    return { id: c.id, name: c.name, cid: c.cid || null, dirty: dirty };
+  }
+  /* A courier client or a tone line is SHADY or it is not, and which one
+   * the board shows is drawn to agree with the contents more often than
+   * not: a dirty parcel comes from a shady voice 7 times in 10, a clean
+   * one 1 time in 8. Never certain either way, so the voice is a tell and
+   * not an answer. */
+  var SHADY_CLIENT = ['A quiet man', 'Someone who did not give a name',
+                      'A clerk who kept checking the door'];
+  var PROPER_CLIENT = ['A legal office', 'A shipping agent', 'A station registrar',
+                       'A woman with a courier bond and no small talk', 'An estate solicitor'];
+  var SHADY_TONE = ['No questions, and none expected.', 'Discretion is most of the fee.',
+                    'You are being paid to not be curious.'];
+  var PROPER_TONE = ['Sealed, and it stays sealed.', 'Hand it over intact and that is that.',
+                     'The seal is their word, not yours.'];
+
   function windowIndex(t) { return Math.floor(t / WINDOW); }
 
   /* Ports in this system that will take waste — the disposal mission needs
@@ -187,7 +265,7 @@
       roleName: null, role: null, dev: null,
       surface: false, underground: false,
       wantsIt: false, shortThere: false, glutHere: false,
-      crime: null, lyAway: null
+      crime: null, lyAway: null, destHeld: null
     };
 
     var dst = ctx.toPort;
@@ -211,6 +289,9 @@
       if (srow) f.glutHere = srow.prod > srow.cons * 1.6;
     }
     if (ctx.sys && ctx.sys.crimeScore !== undefined) f.crime = ctx.sys.crimeScore;
+    /* Whose ground the far star is, when it is the Syndicate's or a pirate
+     * band's: a true fact on the star map, and one of the parcel's tells. */
+    if (ctx.toFac && (ctx.toFac.outlaw || ctx.toFac.parentId === 'outlaw')) f.destHeld = ctx.toFac.name;
     if (ctx.here && ctx.toStar && global.Galaxy && global.Galaxy.distance3) {
       var d = global.Galaxy.distance3(ctx.here, ctx.toStar);
       if (d > 0) f.lyAway = d;
@@ -336,9 +417,18 @@
     var out = [];
 
     if (offer.type === 'courier') {
+      /* The voice agrees with the contents, more often than not. Its own
+       * substream, and AFTER the draws above, so no other line moves. */
+      if (offer.contents) {
+        var rv = new RNG('parcelvoice|' + offer.id);
+        var shady = rv.next() < (offer.contents.dirty ? 0.7 : 0.125);
+        who = rv.pick(shady ? SHADY_CLIENT : PROPER_CLIENT);
+        tone = rv.pick(shady ? SHADY_TONE : PROPER_TONE);
+      }
       out.push(who + ' at ' + offer.fromName +
                ' wants a sealed parcel carried to ' + where + '.');
       if (f.lyAway !== null) out.push(far.replace('{ly}', f.lyAway.toFixed(1) + ' ly'));
+      if (f.destHeld) out.push('That is ' + f.destHeld + ' ground.');
     } else if (offer.type === 'disposal') {
       out.push(who + ' at ' + offer.fromName + ' has ' + offer.tonnes +
                ' tonnes of reactor waste to move to ' + where +
@@ -375,6 +465,12 @@
    * a generated headline from its `core`. */
   function finish(offer, ctx) {
     var f = factsFor(offer, ctx);
+    /* A board courier's parcel gets its contents here, where the facts
+     * that weight them are in hand. A campaign chapter's does not: its
+     * parcel belongs to the chain's story, not to this table. */
+    if (offer.type === 'courier' && !offer.campaign && offer.contents === undefined) {
+      offer.contents = parcelContents(offer, f);
+    }
     if (!offer.text) offer.text = headline(offer, f);
     if (offer.text.length > TEXT_MAX) {
       offer.text = offer.text.slice(0, TEXT_MAX - 1) + '…';
@@ -461,7 +557,8 @@
           deadline: t - (t % WINDOW) + COURIER_DEADLINE,
           core: 'sealed parcel to the ' + star.name + ' system'
         });
-        ctxs.push({ fromPort: port, sys: sys, here: here, toStar: star });
+        ctxs.push({ fromPort: port, sys: sys, here: here, toStar: star,
+                    toFac: galaxy.factionById ? galaxy.factionById[star.factionId] : null });
       } else if (takers.length) {
         // DISPOSAL: their waste, your problem, everyone's premium.
         var tk = rng.pick(takers.filter(function (p) { return p !== port; }));
@@ -969,7 +1066,12 @@
        * chain delivers chapter one and then simply stops, which is what
        * happened. */
       power: offer.power || null,
-      arcId: offer.arcId, step: offer.step
+      arcId: offer.arcId, step: offer.step,
+      /* A courier's parcel: what is in it, and whether the seal is still
+       * somebody else's word. Absent on contracts signed before 2026-11-01
+       * and on campaign chapters, which read as clean and unknown. */
+      contents: offer.contents || null,
+      sealed: offer.type === 'courier' ? true : undefined
     });
     /* A campaign hook (chapter zero of a faction's chain) also opens the
      * chain's own progress record — everything after this rides on it. */
@@ -1235,6 +1337,86 @@
          : v < 10 ? 'neutral' : v < 40 ? 'warm' : 'ALLIED';
   }
 
+  /* ---- the seal ------------------------------------------------------------
+   * Courier contracts whose parcels are aboard, in contract order. The hold
+   * counts parcels in tonnes and not by name, so after a jettison the first
+   * N contracts are taken to be the ones still aboard. */
+  function parcelsAboard(G) {
+    var n = Math.floor(((G.ship && G.ship.cargo && G.ship.cargo.parcel) || 0) + 1e-9);
+    var out = [];
+    (G.missions || []).forEach(function (m) {
+      if (m.type === 'courier' && m.cid === 'parcel' && !m.carrier && out.length < n) out.push(m);
+    });
+    return out;
+  }
+  function sealedParcelsAboard(G) {
+    return parcelsAboard(G).filter(function (m) { return m.sealed !== false; });
+  }
+
+  /* What you KNOW about a parcel, which is not what is in it. A good
+   * scanner (the combat scanner's "the numbers", scan 2 and up) reads a
+   * sealed parcel without breaking the seal, and is the first thing a
+   * courier pilot has a specific reason to buy. */
+  function parcelKnown(G, m) {
+    if (!m || m.type !== 'courier') return null;
+    var c = m.contents;
+    var scan = (global.Combat && global.Combat.scanLevel) ? global.Combat.scanLevel(G.ship) : 0;
+    if (!c) return { known: false, line: 'Sealed. ' + (scan >= 2 ? 'Your scanner reads nothing out of the ordinary.' : 'What is in it is their business.') };
+    if (scan >= 2) {
+      return { known: true, dirty: c.dirty, by: 'scanner',
+               line: 'Sealed. Your scanner reads it: ' + c.name.toLowerCase() + '.' };
+    }
+    return { known: false, line: 'Sealed. What is in it is their business.' };
+  }
+
+  /* A customs search found it still sealed (combat.js, resolveScan).
+   * Owner's decision, 2026-11-01: seized and fined, and the contract is
+   * void, but NO standing hit, because a sealed parcel is not your crime.
+   * You did not know; the seal was somebody else's word. */
+  function seizeSealedParcel(G, m) {
+    var list = G.missions || [];
+    var i = list.indexOf(m);
+    if (i >= 0) list.splice(i, 1);
+    (G.doneMissions = G.doneMissions || {})[m.id] = true;
+    if (G.ship.cargo.parcel) {
+      G.ship.cargo.parcel = Math.max(0, G.ship.cargo.parcel - (m.tonnes || 1));
+      if (G.ship.cargo.parcel <= 1e-9) delete G.ship.cargo.parcel;
+    }
+    jot(G, 'mission', 'Courier contract to ' + m.toName + ' void: customs seized the sealed parcel (' +
+        (m.contents ? m.contents.name.toLowerCase() : 'contents unknown') + ')');
+  }
+
+  /* BREAKING THE SEAL. The contract voids: no fee, and a standing hit with
+   * the client's flag for the breach. In exchange you know what you are
+   * carrying. A dirty parcel becomes the tonne of contraband it always
+   * was, so the ordinary hold, jettison and scan rules take it from here
+   * and, opened, it IS your crime. A clean one stays aboard as a parcel
+   * with nowhere to go. */
+  function breakSeal(G, missionId, hooks) {
+    var list = G.missions || [];
+    var m = null;
+    for (var i = 0; i < list.length; i++) if (list[i].id === missionId) { m = list[i]; break; }
+    if (!m || m.type !== 'courier') return { ok: false, why: 'no such courier contract' };
+    if (parcelsAboard(G).indexOf(m) < 0) return { ok: false, why: 'the parcel is not aboard' };
+    var c = m.contents || { name: 'Papers, nothing more', cid: null, dirty: false };
+    list.splice(list.indexOf(m), 1);
+    (G.doneMissions = G.doneMissions || {})[m.id] = true;
+    bumpStanding(G, m.faction, -STANDING_LOSS);
+    if (c.cid) {
+      G.ship.cargo.parcel = Math.max(0, (G.ship.cargo.parcel || 0) - (m.tonnes || 1));
+      if (G.ship.cargo.parcel <= 1e-9) delete G.ship.cargo.parcel;
+      G.ship.cargo[c.cid] = (G.ship.cargo[c.cid] || 0) + (m.tonnes || 1);
+    }
+    if (global.Sim) global.Sim.refreshShip(G.ship);
+    var text = 'SEAL BROKEN — ' + c.name + '. The contract to ' + m.toName +
+               ' is void, and ' + (m.fromName || 'the client') + ' will hear of it.' +
+               (c.cid ? ' It is in your hold now, and it is yours.' : '');
+    jot(G, 'mission', 'Broke the seal on a parcel for ' + m.toName + ': ' + c.name.toLowerCase());
+    if (hooks && hooks.say) hooks.say(text, 8);
+    if (hooks && hooks.sound) hooks.sound('warn');
+    return { ok: true, contents: c, text: text };
+  }
+
   registerParcel();
 
   var Missions = {
@@ -1251,7 +1433,11 @@
     carriedBy: carriedBy, loadRefusal: loadRefusal, loadOnto: loadOnto,
     unloadRefusal: unloadRefusal, unloadFrom: unloadFrom,
     deliverByCarrier: deliverByCarrier,
-    TEXT_MAX: TEXT_MAX, describe: describe, finish: finish
+    TEXT_MAX: TEXT_MAX, describe: describe, finish: finish,
+    parcelOdds: parcelOdds, parcelContents: parcelContents,
+    parcelsAboard: parcelsAboard, sealedParcelsAboard: sealedParcelsAboard,
+    parcelKnown: parcelKnown, seizeSealedParcel: seizeSealedParcel, breakSeal: breakSeal,
+    PARCEL_CLEAN: PARCEL_CLEAN, PARCEL_DIRTY: PARCEL_DIRTY
   };
 
   global.Missions = Missions;

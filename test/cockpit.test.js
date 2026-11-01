@@ -765,6 +765,22 @@ console.log('--- the glass, by role and by hull ---');
   check('no frame bar runs through the middle of a pane', mid === 0 && n > 100, mid + ' of ' + n + ' bars');
 })();
 
+/* The canopy bars in her livery (2026-11-01, Astra's choice): the yard
+ * trim she was painted with, darkened; her hull's own accent without one. */
+console.log('--- the bars wear her livery ---');
+(function () {
+  var plain = Render.barColour({ hullId: 'dart' });
+  var painted = Render.barColour({ hullId: 'dart', paint: { p: '#22406e', t: '#e0a63a' } });
+  var other = Render.barColour({ hullId: 'dart', paint: { p: '#22406e', t: '#2f6040' } });
+  var hex = /^#[0-9a-f]{6}$/;
+  check('a bar colour is a hex the room mesh can take', hex.test(plain) && hex.test(painted), plain + ' ' + painted);
+  check('her trim decides it', painted !== plain && painted !== other, painted + ' / ' + other);
+  check('darker than the paint, so it reads as metal and not a lamp',
+        parseInt(painted.slice(1, 3), 16) < 0xe0, painted);
+  check('a hull with no paint takes her own accent, not a fixed grey',
+        Render.barColour({ hullId: 'dart' }) !== Render.barColour({ hullId: 'kestrel' }));
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

@@ -5185,6 +5185,16 @@
        * way to see it was to hope the generated headline mentioned it. */
       ctx.fillStyle = '#7fd6c0';
       ctx.fillText(clipText(destinationLine(m), subCols), pad + 14, y + 27);
+      /* THE PARCEL (2026-11-01): what you know about what you carry. Only
+       * for a parcel actually aboard; "sealed" with no scanner, the
+       * contents once a combat scanner or better reads through the seal,
+       * amber when what it reads is contraband. */
+      var know = (m.type === 'courier' && Missions.parcelsAboard(G).indexOf(m) >= 0)
+        ? Missions.parcelKnown(G, m) : null;
+      if (know) {
+        ctx.fillStyle = know.known && know.dirty ? '#ffb86b' : MFD_DIM;
+        ctx.fillText(clipText(know.line, subCols), pad + 14, y + 40);
+      }
       ctx.restore();
 
       /* DETAILS, on the contract this time. `desc` is deliberately CARRIED
@@ -5202,7 +5212,7 @@
               return function () { G.missionDesc = (G.missionDesc === id) ? null : id; };
             })(m.id), { font: 10 });
       }
-      y += 46;
+      y += know ? 59 : 46;
 
       if (openC && m.desc) {
         var dlines = wrapText(m.desc, Math.max(20, Math.floor((leftW - 44) / 6.49)));
@@ -5219,6 +5229,21 @@
         }
         ctx.restore();
         y += dlines.length * 13 + 16;
+        /* BREAK THE SEAL, behind a second press: it voids the contract and
+         * costs standing, and there is no undo. Lives in DETAILS so it is
+         * never a stray click on the list. */
+        if (know) {
+          var arming = G.sealConfirm === m.id;
+          btn(ctx, pad + 14, y - 8, 190, 24, arming ? 'SURE? VOIDS THE CONTRACT' : 'BREAK THE SEAL',
+              (function (id, armed) {
+                return function () {
+                  if (!armed) { G.sealConfirm = id; return; }
+                  G.sealConfirm = null;
+                  Missions.breakSeal(G, id, hooksFor());
+                };
+              })(m.id, arming), { font: 10 });
+          y += 26;
+        }
       }
       if (y > top + pad + colH * 0.62) break;
     }

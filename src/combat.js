@@ -5966,6 +5966,19 @@
         found.push({ cid: cid, sev: 1, hot: global.Claims.hotOf(G, cid) });
       }
     }
+    /* SEALED COURIER PARCELS (2026-11-01). Searched like anything else in
+     * the hold, but graded by what is inside the seal. A dirty one is
+     * seized and fined; the standing hit is left out below, because a
+     * sealed parcel is not your crime (Astra's call, PLAN.md Phase 10).
+     * Opened, it is no longer a parcel: breakSeal turns it into the
+     * contraband it was, and the loop above finds it as that. */
+    if (global.Missions && global.Missions.sealedParcelsAboard) {
+      global.Missions.sealedParcelsAboard(G).forEach(function (m) {
+        if (!m.contents || !m.contents.cid) return;
+        var psev = contrabandSeverity(G, m.contents.cid, scanFac);
+        if (psev > 0) found.push({ cid: 'parcel', sev: psev, parcel: m });
+      });
+    }
     var hotDrones = (scanFac !== 'outlaw' && ship.hotDrones > 0) ? ship.hotDrones : 0;
     if (hotDrones) found.push({ cid: null, sev: 1, drones: hotDrones });
     if (!found.length) {
@@ -5986,7 +5999,7 @@
     var bribeChance = Math.max(0, Math.min(0.75, (corrupt - HUSH_MIN_CORRUPTION) / 100));
     if (bribeChance > 0 && Math.random() < bribeChance) {
       var wouldBeFine = 0;
-      found.forEach(function (f) { wouldBeFine += fineFor(f.drones ? f.drones * 5 : f.hot || ship.cargo[f.cid], f.sev); });
+      found.forEach(function (f) { wouldBeFine += fineFor(f.drones ? f.drones * 5 : f.parcel ? (f.parcel.tonnes || 1) : f.hot || ship.cargo[f.cid], f.sev); });
       var ask = Math.max(50, Math.round(wouldBeFine * 0.55));
       if (ship.credits >= ask) {
         ship.credits -= ask;
@@ -6001,8 +6014,18 @@
       // Can't afford the quiet word — the book gets thrown after all.
     }
 
-    var fine = 0, seized = [], worst = 0;
+    var fine = 0, seized = [], worst = 0, sealedOnly = true;
     found.forEach(function (f) {
+      if (f.parcel) {
+        /* Fined on its one tonne at its own severity, and it does NOT set
+         * `worst`: the standing hit below is for what you knowingly
+         * carried. */
+        fine += fineFor(f.parcel.tonnes || 1, f.sev);
+        seized.push('a sealed parcel (' + f.parcel.contents.name.toLowerCase() + ')');
+        global.Missions.seizeSealedParcel(G, f.parcel);
+        return;
+      }
+      sealedOnly = false;
       if (f.drones) {
         fine += fineFor(f.drones * 5, f.sev);
         if (f.sev > worst) worst = f.sev;
@@ -6032,17 +6055,18 @@
      * Graded by the WORST thing found, not the sum: being caught with a
      * hold of narcotics and one tonne of naval fuel is a naval-fuel
      * problem, and averaging it would say otherwise. */
-    if (global.Missions) {
+    if (global.Missions && !sealedOnly) {
       global.Missions.bumpStanding(G, fac, STANDING_HIT[worst] || STANDING_HIT[1]);
     }
 
     if (hooks && hooks.say) {
       hooks.say((worst >= 3 ? 'NAVAL MATERIEL FOUND: ' : 'CONTRABAND FOUND: ') +
-                seized.join(', ') + ' seized — fined ' + fine + ' cr', 7);
+                seized.join(', ') + ' seized — fined ' + fine + ' cr' +
+                (sealedOnly ? '. The courier contract is void; the seal kept your name clean.' : ''), 8);
     }
     if (hooks && hooks.sound) hooks.sound('warn');
     return { searched: true, contraband: true, fine: fine, seized: seized,
-             severity: worst };
+             severity: worst, sealedOnly: sealedOnly };
   }
 
   /* ---- dumping ----------------------------------------------------------

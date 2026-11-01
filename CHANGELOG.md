@@ -107,6 +107,37 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **The sealed courier parcel has contents (2026-11-01).** PLAN.md Phase
+  10, built. Until now the parcel was one tonne of nothing that proved you
+  reached the star.
+  - What is inside is hashed off the contract (`parcelContents`, its own
+    substream): mostly mundane and specific (legal instruments, medical
+    samples, seed stock, a data core, somebody's ashes), sometimes
+    narcotics, gold buds or restricted arms.
+  - The odds lean on what the board shows: the fee's place in the courier
+    band, whether the far star is Syndicate or pirate ground, and the
+    crime of the system you sign in. The client and tone are drawn to
+    agree with the contents more often than not. Measured over 8 seeds
+    (`tools/measure-parcels.cjs`): dirty 14% overall, 1.8% for a mid-band
+    fee to lawful ground out of a quiet system, 47% for the top of the
+    band bound for Syndicate or pirate ground; 48% with a shady client
+    against 5% with a proper one.
+  - A courier contract now says when the far star is Syndicate or pirate
+    ground (a true fact, and one of the tells).
+  - **Customs finding it sealed** (Astra's call): the parcel is seized and
+    fined, the contract is void, and your standing is left alone. You did
+    not know; the seal was somebody else's word.
+  - **Breaking the seal**: DETAILS on the contract, then BREAK THE SEAL,
+    twice. The contract voids and the client's flag takes a standing hit.
+    A dirty parcel becomes the tonne of contraband it was, and opened it
+    is your crime like any other. A clean one stays aboard as a parcel.
+  - **A reason to buy a scanner**: a combat scanner or better reads a
+    sealed parcel through the seal, on the contract line. The hull scanner
+    does not.
+  - Saves survive: a contract signed before today reads as clean and
+    unknown. Campaign chapters' parcels are not drawn from this table.
+  - `test/parcel.test.js`, 32 checks.
+
 - **Police interceptors burn harder in a chase (2026-10-31).** Astra:
   *"give police extra thrust for their interceptors"*.
   - A lawful interceptor running somebody down gets 1.5 times her cruising
@@ -3300,6 +3331,25 @@ Astra has seen it working.
   skimmer's and spine's cars stay at rest. `test/transfer.test.js`.
 
 ### Changed
+
+- **A taller windscreen (2026-11-01).** Astra's choice from
+  `unfinished.md`. The top edge rose from 0.62 to 0.70 and the upper
+  chamfers from 0.30 to 0.38; the sill did not move, so the dash, the HUD
+  and the landing window are where they were. The cockpit camera's view
+  ends just above 0.72, and at 0.76 the glass ran off the top of the
+  screen, so 0.70 halves the strip of frame overhead (9.5% of the screen
+  to 4.2%) and keeps it.
+
+- **Canopy bars wear her livery (2026-11-01).** Astra's choice. They were
+  one of three near-black trims; now they are the trim she was painted at
+  the yard (`paint.t`), a touch darker, or her hull's own accent, darkened,
+  on an unpainted ship. Both the GPU room and the 2D painter use
+  `Render.barColour`, and a repaint rebuilds the room.
+
+- **Another ship's cabin, seen through her windows, is brighter
+  (2026-11-01).** Astra's choice. It was lit like a station room you stand
+  in, which from outside read as a dark well. The same indoor lamp, times
+  1.8 (`CABIN_SEEN_GLOW`); every room you stand in is lit as before.
 
 - **One line, really: the mining work and the ship cuts come in (2026-10-30).**
   Asked to test the mining drones, the work turned out not to be on master

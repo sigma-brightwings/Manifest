@@ -1254,8 +1254,10 @@
              [x0, y, stripEnd], pal.light);
       });
     }
-    /* This ship's frame bars across its panes (cockpitGeometry `bars`). */
-    (g.bars || []).forEach(function (b) { quad(room, b[0], b[1], b[2], b[3], pal.jamb || pal.wall); });
+    /* This ship's frame bars across its panes (cockpitGeometry `bars`), in
+     * her livery when the caller says what it is (render.js barColour,
+     * 2026-11-01), the room's jamb otherwise. */
+    (g.bars || []).forEach(function (b) { quad(room, b[0], b[1], b[2], b[3], p.barColour || pal.jamb || pal.wall); });
 
     /* THE FOOTWELL under the dash slot, floored with the landing window. */
     var fw = g.floorWin, fo = fw[3], fu = [1, 0, 0];

@@ -1399,9 +1399,13 @@
     '    base = mix(vCol, min(pc, vec3(1.0)), uPaint.w);',
     '  }',
     '  vec3 lit = base * (0.26 + 0.70 * lam);',
-    '  vec3 dim = base * (0.10 + 0.55 * lamp);',
-    '  vec3 c = vEmis > 0.5 ? vCol * 1.15 : mix(lit, dim, uIndoors);',
-    '  float glow = vEmis > 0.5 ? mix(1.0, 0.28, uIndoors) : 0.0;',
+    /* uIndoors above 1 is the same indoor lamp, brighter (2026-11-01):
+     * another ship's cabin seen through her windows (render.js,
+     * CABIN_SEEN_GLOW). At exactly 1, every room is lit as it was. */
+    '  float ind = min(uIndoors, 1.0);',
+    '  vec3 dim = base * (0.10 + 0.55 * lamp) * max(1.0, uIndoors);',
+    '  vec3 c = vEmis > 0.5 ? vCol * 1.15 : mix(lit, dim, ind);',
+    '  float glow = vEmis > 0.5 ? mix(1.0, 0.28, ind) : 0.0;',
     /* THE ROOM STEPS BACK WHILE YOU LOOK THROUGH IT (2026-10-11). With the
      * keyhole open the subject is the cut and the ship at the bottom of
      * it, and the hangar's neon strips — every one a full-strength lamp —
@@ -2435,7 +2439,7 @@
    * wall by the sun in a room with no sun in it. main.js sets it around the
    * station it is inside and clears it after. */
   var indoorsFlag = 0;
-  GL.setIndoors = function (on) { indoorsFlag = on ? 1 : 0; };
+  GL.setIndoors = function (on) { indoorsFlag = !on ? 0 : (typeof on === 'number' ? on : 1); };
 
   /* THE CUTAWAY, for everything queued until it is cleared — the same
    * set-and-clear shape as setIndoors, for the same reason.
