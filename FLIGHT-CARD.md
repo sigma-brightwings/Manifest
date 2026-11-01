@@ -84,7 +84,9 @@ button launches. `Enter` toggles; the sensitivity is on the same screen.
 
 **4. `F3` — local navigation.** Everything in the system, nearest first, with the
 lock in detail beside it and the scope at full height. `[` and `]` cycle the lock
-from anywhere; on this screen you can also just click a contact.
+from anywhere; on this screen you can also just click a contact. **`\` locks
+what is ahead:** the ship or station nearest the line of your nose, within 25°.
+Press it again within four seconds to step to the next one out from the nose.
 
 **5. Fly manually.** `W`/`S` prograde and retrograde, `A`/`D` radial, `R`/`F` normal.
 Arrow keys and `Q`/`E` point the nose — attitude is independent of thrust. Watch for

@@ -1606,5 +1606,23 @@ section('the arrival rail');
               shortest.toFixed(1) + '-' + longest.toFixed(1) + ' s');
 })();
 
+console.log('\n--- what is ahead (2026-11-01) ---');
+(function () {
+  var pos = { x: 0, y: 0, z: 0 }, fwd = { x: 1, y: 0, z: 0 };
+  var list = [
+    { id: 'dead-ahead-far', pos: { x: 5000, y: 0, z: 0 } },
+    { id: 'ten-off', pos: { x: 100, y: 17.6, z: 0 } },       // about 10 degrees
+    { id: 'behind', pos: { x: -100, y: 0, z: 0 } },
+    { id: 'abeam', pos: { x: 0, y: 100, z: 0 } },
+    { id: 'thirty-off', pos: { x: 100, y: 57.7, z: 0 } }     // outside the cone
+  ];
+  var a = Sim.aheadOf(list, pos, fwd);
+  check('only what is within the cone ahead', a.map(function (e) { return e.id; }).join() === 'dead-ahead-far,ten-off',
+        a.map(function (e) { return e.id; }).join());
+  check('the line of the nose first, however far', a[0].id === 'dead-ahead-far');
+  check('with its angle off the nose', Math.abs(a[1].off * 180 / Math.PI - 10) < 0.5, (a[1].off * 180 / Math.PI).toFixed(2));
+  check('nothing ahead is an empty list', Sim.aheadOf([list[2], list[3]], pos, fwd).length === 0);
+})();
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);

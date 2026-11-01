@@ -1889,6 +1889,8 @@
           }
           break;
         case '[': cycleNavTarget(-1); break;
+        /* The ship or station nearest the line of the nose (targetAhead). */
+        case '\\': targetAhead(); break;
         /* SHIFT+] IS THE VECTOR ASSIST, and it is on punctuation for the
          * same reason flight assist is: every letter key was already spoken
          * for before either of them existed. The shifted glyph is listed
@@ -4162,6 +4164,48 @@
     G.navCursor = idx;
     G.navTarget = { kind: list[idx].kind, id: list[idx].id };
     say('Locked: ' + list[idx].name + '   ' + fmtDist(list[idx].range), 2.5);
+  }
+
+  /* TARGET AHEAD, on `\` (2026-11-01). Ships and stations only: the
+   * planet you are falling toward is not what anyone means by "the thing
+   * in front of me", and `[ ]` still reach every body. Pressing again
+   * within a few seconds steps outward from the line of the nose, so a
+   * crowded apron is a few taps, not a sweep of the whole system. Ships
+   * beyond AHEAD_SHIP_KM are left out: in front of you, a freighter on the
+   * far side of the star is not. */
+  var AHEAD_SHIP_KM = 1e6, AHEAD_REPEAT_S = 4;
+  function targetAhead() {
+    var list = [], i;
+    var ships = Sim.shipsAll(G.sys, G.t);
+    for (i = 0; i < ships.length; i++) {
+      var s = ships[i];
+      if (!s.pos || s.landed || s.inside) continue;
+      if (V.dist(s.pos, G.ship.pos) > AHEAD_SHIP_KM) continue;
+      list.push({ kind: 'ship', id: s.id, name: s.name, pos: s.pos, what: s.className || 'ship' });
+    }
+    (G.sys.ports || []).forEach(function (p) {
+      var bs = Sim.bodyState(p, G.sys, G.t);
+      list.push({ kind: 'body', id: p.id, name: p.name, pos: bs.pos, what: p.typeName || 'station' });
+    });
+    var ahead = Sim.aheadOf(list, G.ship.pos, G.ship.fwd);
+    if (!ahead.length) {
+      say('Nothing ahead - no ship or station within ' + Math.round(Sim.AHEAD_CONE * 180 / Math.PI) +
+          '\u00b0 of the nose.  [ ] cycles everything', 3);
+      return;
+    }
+    var now = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+    var idx = 0;
+    if (G.aheadLast && now - G.aheadLast.at < AHEAD_REPEAT_S && G.navTarget) {
+      for (i = 0; i < ahead.length; i++) {
+        if (ahead[i].kind === G.navTarget.kind && ahead[i].id === G.navTarget.id) { idx = (i + 1) % ahead.length; break; }
+      }
+    }
+    var pick = ahead[idx];
+    G.aheadLast = { at: now };
+    G.navTarget = { kind: pick.kind, id: pick.id };
+    say('Locked ahead: ' + pick.name + ' (' + pick.what + ')   ' + fmtDist(pick.range) + '   ' +
+        (pick.off * 180 / Math.PI).toFixed(0) + '\u00b0 off the nose' +
+        (ahead.length > 1 ? '   \\ again: next of ' + ahead.length : ''), 3);
   }
 
   function clearNavTarget() {

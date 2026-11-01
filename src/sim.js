@@ -2375,6 +2375,31 @@
    * near a world, the spring too weak against the difference in gravity
    * between her and you. */
   var HUNTER_NEAR_KM = 12;
+
+  /* ---- WHAT IS AHEAD (2026-11-01) ----------------------------------------
+   * Astra: "we need a faster way to target ships and stations in front of
+   * our ship from the cockpit." `[` and `]` step through every body and
+   * ship in the system in range order, so the freighter dead ahead could be
+   * a dozen presses away. This is the list `\` walks instead: what lies
+   * within AHEAD_CONE of the nose, nearest the line of it first. Pure, so
+   * the suite can ask it without a frame. Entries are { pos, ... }; the
+   * angle off the nose is added as `off` (radians). */
+  var AHEAD_CONE = 25 * Math.PI / 180;
+  function aheadOf(list, pos, fwd, cone) {
+    var c = cone || AHEAD_CONE, out = [];
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i];
+      var d = V.sub(e.pos, pos), r = V.len(d);
+      if (!(r > 1e-6)) continue;
+      var cosA = V.dot(d, fwd) / r;
+      if (cosA <= Math.cos(c)) continue;
+      e.off = Math.acos(Math.max(-1, Math.min(1, cosA)));
+      e.range = r;
+      out.push(e);
+    }
+    out.sort(function (a, b) { return a.off - b.off || a.range - b.range; });
+    return out;
+  }
   function accelOf(spec) {
     var a = spec.accel || 0;
     if (spec.kind === 'police' && spec.faction !== 'outlaw' && spec.className !== 'enforcer' && pursuing(spec)) a *= POLICE_BURN;
@@ -6806,6 +6831,7 @@
     trafficAll: trafficAll,
     berthStatus: berthStatus,
     berthCapacity: berthCapacity,
+    aheadOf: aheadOf, AHEAD_CONE: AHEAD_CONE,
     berthOccupants: berthOccupants, anchorPose: anchorPose, arrivalHold: arrivalHold,
     ANCHOR_FRAC: ANCHOR_FRAC, ANCHOR_MAX_S: ANCHOR_MAX_S, FINAL_DESCENT_S: FINAL_DESCENT_S,
     needsLargeBerth: needsLargeBerth,

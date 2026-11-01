@@ -803,6 +803,42 @@ var MODES_COUNT = 10;   // slots in the icon bar; hotspots beyond these are cont
   frames(2);
 })();
 
+console.log('--- \\ locks what is ahead (2026-11-01) ---');
+(function () {
+  var keydown = listeners.keydown[0];
+  function press(k) { keydown({ key: k, shiftKey: false, preventDefault: function () {} }); }
+  newFlying('kawartha');
+  G.panel = 0; G.viewMode = 'cockpit';
+  var ports = G.sys.ports || [];
+  var p = ports[0], pp = Sim.bodyState(p, G.sys, G.t).pos;
+  G.ship.fwd = V.norm(V.sub(pp, G.ship.pos));
+  var u0 = Math.abs(G.ship.fwd.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 0, y: 1, z: 0 };
+  G.ship.right = V.norm(V.cross(G.ship.fwd, u0)); G.ship.up = V.cross(G.ship.right, G.ship.fwd);
+  G.navTarget = null; G.aheadLast = null;
+  var mark = drawn.texts.length;
+  press('\\');
+  var ahead = Sim.aheadOf(ports.map(function (q) { return { id: q.id, pos: Sim.bodyState(q, G.sys, G.t).pos }; }),
+                          G.ship.pos, G.ship.fwd);
+  check('\\ locks a station on the nose', !!G.navTarget && G.navTarget.kind === 'body' && G.navTarget.id === ahead[0].id,
+        JSON.stringify(G.navTarget) + ' vs ' + (ahead[0] && ahead[0].id));
+  var first = G.navTarget && G.navTarget.id;
+  press('\\');
+  var everything = Sim.aheadOf(
+    ports.map(function (q) { return { id: q.id, pos: Sim.bodyState(q, G.sys, G.t).pos }; })
+      .concat(Sim.shipsAll(G.sys, G.t).filter(function (s) { return s.pos && !s.landed && !s.inside && V.dist(s.pos, G.ship.pos) < 1e6; })
+      .map(function (s) { return { id: s.id, pos: s.pos }; })), G.ship.pos, G.ship.fwd);
+  check('again steps to the next one out, when there is one',
+        everything.length < 2 || (G.navTarget && G.navTarget.id !== first), everything.length + ' ahead');
+  G.ship.fwd = V.scale(G.ship.fwd, -1); G.ship.right = V.scale(G.ship.right, -1);
+  G.aheadLast = null;
+  var before = JSON.stringify(G.navTarget);
+  press('\\');
+  check('and with nothing ahead it says so and keeps the lock',
+        JSON.stringify(G.navTarget) === before || Sim.aheadOf([{ pos: pp }], G.ship.pos, G.ship.fwd).length > 0);
+  check('no errors pressing it', errorsSince(mark).length === 0, errorsSince(mark)[0]);
+  G.viewMode = 'orbit'; G.navTarget = null; G.aheadLast = null;
+})();
+
 console.log('--- the hull library ---');
 (function () {
   var R = W.Render;

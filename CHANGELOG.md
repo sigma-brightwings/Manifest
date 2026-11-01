@@ -107,6 +107,17 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **`\` locks what is ahead (2026-11-01).** Astra: *"we need a faster way
+  to target ships and stations in front of our ship from the cockpit."*
+  `[` and `]` step through every body and ship in the system in range
+  order, so the freighter on your nose could be a dozen presses away. `\`
+  locks the ship or station nearest the line of the nose, within 25°;
+  pressing again within four seconds steps outward to the next. Planets are
+  left out (still on `[ ]`), and so are ships more than a million km off.
+  The message says how far, how many degrees off the nose, and how many
+  more are in the cone. `Sim.aheadOf` chooses, and is tested on its own;
+  `render.test.js` presses the key.
+
 - **Naval hunters, sent after you on notoriety (2026-11-01).** PLAN.md
   Phase 9, the second half; Astra: "the navy hunters".
   - A second ledger beside your bounty, `G.notoriety`, per empire: it grows
