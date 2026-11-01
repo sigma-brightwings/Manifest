@@ -1402,10 +1402,24 @@
         var arrival = first + (n - k) * d.period;
         var age = t - arrival;
         if (age < 0) continue;
-        add += d.qty * Math.exp(-age / (d.period * 0.55));
+        /* Robbed on the way in (an off-screen raid): she lands light. */
+        var q = d.raidP > 0 && raidedArrival(d, n - k) ? d.qty * (1 - RAID_TAKE) : d.qty;
+        add += q * Math.exp(-age / (d.period * 0.55));
       }
     }
     return add;
+  }
+
+  /* OFF-SCREEN RAIDS (2026-10-31, aggression.js). Astra: fights near you,
+   * and "off-screen as news" everywhere else. Closed form, like the rest of
+   * this market: arrival n of a delivery was raided when a hash of her
+   * route, her leg and n falls under the system's odds (generate.js
+   * attachRaids sets d.raidP and d.raidKey). No state, no save - the same
+   * raid every time you ask. */
+  var RAID_TAKE = 0.6;
+  function raidedArrival(d, n) {
+    if (!(d && d.raidP > 0) || n < 0) return false;
+    return (RNG.hashString(d.raidKey + '|' + n) % 100000) / 100000 < d.raidP;
   }
 
   /* DELIVERIES THAT NEVER CAME (2026-10-21). Astra: "buying cargo off a
@@ -1969,7 +1983,7 @@
     populationOf: populationOf,
     buildPortMarket: buildPortMarket,
     analyticStock: analyticStock,
-    shortfalls: shortfalls,
+    shortfalls: shortfalls, raidedArrival: raidedArrival, RAID_TAKE: RAID_TAKE,
     ledgerAt: ledgerAt,
     stock: stock,
     price: price,

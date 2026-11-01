@@ -4053,7 +4053,12 @@
    * passes neither — it has no variety and detonates on contact rather than
    * arriving from anywhere in particular — and gets a flat split and a
    * bloom on the hull's own centre, which is the truth about a missile. */
-  function damageNpc(sys, G, spec, dmg, t, hooks, delivery, from) {
+  /* `by` (2026-10-31, NPC aggression): the ship that fired, when it was not
+   * you. Everything that books a shot to YOU - the heat attribution, the
+   * crime, the captain's memory - is skipped, and the victim answers HER
+   * attacker rather than you (aggression.js). */
+  function damageNpc(sys, G, spec, dmg, t, hooks, delivery, from, by) {
+    if (by) return damageNpcBy(sys, G, spec, dmg, t, hooks, delivery, from, by);
     npcHull(spec);
     npcShield(spec);
     var split = splitDamage(spec.shieldHp, dmg, delivery);
@@ -4101,6 +4106,10 @@
       spec.mode = 'attack';
       spec.hostileToPlayer = true;
     }
+    /* What she was doing when you hit her, for aggression.js: helping a
+     * victim, or getting in the way of an arrest. Before the crime, which
+     * reads `fugitive`. */
+    if (global.Aggression && global.Aggression.onPlayerHit) global.Aggression.onPlayerHit(sys, G, spec, t, hooks);
     crime(sys, G, t, 'assault', spec, hooks);
 
     if (spec.hullHp <= 0) { killNpc(sys, G, spec, t, hooks); return; }
@@ -4108,6 +4117,37 @@
     /* Her drive, and her nerve (boarding part 3, 2026-10-31). */
     if (driveHit(spec, split.hull, from)) disableNpc(sys, G, spec, 'drive', t, hooks);
     else if (!spec.disabled && beatenSurrender(spec)) disableNpc(sys, G, spec, 'surrender', t, hooks);
+  }
+
+  /* ONE SHIP SHOOTING ANOTHER (2026-10-31). The same hull, shield, heat and
+   * drive model as your own guns; none of the bookkeeping that makes a shot
+   * YOURS. The victim's answer is aggression.js's business (Aggression.
+   * onNpcHit): a merchantman runs from her attacker, anything armed turns
+   * on it. Nobody files a crime against you for a fight you were not in. */
+  function theName(sp) { var n = (sp && sp.name) || 'ship'; return /^the /i.test(n) ? n : 'the ' + n; }
+  function damageNpcBy(sys, G, spec, dmg, t, hooks, delivery, from, by) {
+    if (!spec || spec.dead) return;
+    npcHull(spec);
+    npcShield(spec);
+    var split = splitDamage(spec.shieldHp, dmg, delivery);
+    spec.shieldHp -= split.shield;
+    spec.hullHp -= split.hull;
+    spec.lastHitAt = t;
+    spec.lastHitBy = by;
+    spec.shieldIdleAt = t + MODULES.shield.regenDelay;
+    markImpact(spec, from, split);
+    var share = THERMAL_SHARE[(delivery && delivery.variety) || ''];
+    if (share === undefined) share = THERMAL_DEFAULT;
+    if (split.hull > 0 && share > 0) addNpcHeat(spec, split.hull * share * THERMAL_GAIN, by.id || null);
+    /* A border clash between rival patrols is not a war: it never knocks
+     * a drive out or a hull open - the beaten one withdraws (aggression.js
+     * withdraw), and the lanes keep their patrols. */
+    var clash = spec.skirmish && spec.target === by;
+    if (global.Aggression && global.Aggression.onNpcHit) global.Aggression.onNpcHit(sys, G, spec, by, t, hooks);
+    if (clash) { if (spec.hullHp < 1) spec.hullHp = 1; return; }
+    if (spec.hullHp <= 0) { killNpc(sys, G, spec, t, hooks, by); return; }
+    if (driveHit(spec, split.hull, from)) disableNpc(sys, G, spec, 'drive', t, hooks, by);
+    else if (!spec.disabled && beatenSurrender(spec)) disableNpc(sys, G, spec, 'surrender', t, hooks, by);
   }
 
   /* ---- KNOCKING HER DRIVE OUT (boarding part 3, 2026-10-31) ---------------
@@ -4167,7 +4207,7 @@
     return roll01('beaten', spec.id) < surrenderBase(spec);
   }
 
-  function disableNpc(sys, G, spec, why, t, hooks) {
+  function disableNpc(sys, G, spec, why, t, hooks, by) {
     if (!spec || spec.disabled) return;
     spec.disabled = why;
     spec.disabledAt = t;
@@ -4177,6 +4217,17 @@
      * whatever she thought of you. */
     if (spec.surrendered) { spec.hostileToPlayer = false; spec.defending = false; }
     if (spec.live) { spec.live.disabled = why; spec.live.throttle = 0; }
+    /* Somebody else's fight: said only if you are close enough to see it,
+     * and nothing goes in your log as your doing. */
+    if (by) {
+      spec.disabledBy = by;
+      if (spec.surrendered) spec.target = null;
+      if (hooks && hooks.say && spec.live && G.ship && G.ship.pos && V.dist(spec.live.pos, G.ship.pos) < WITNESS_RANGE) {
+        hooks.say((by.name || 'A ship') + (why === 'surrender' ? ' has forced ' + theName(spec) + ' to strike'
+                                                              : ' has knocked out ' + theName(spec) + '\'s drive'), 5);
+      }
+      return;
+    }
     if (hooks && hooks.say) {
       hooks.say(why === 'surrender'
         ? (spec.name || 'She') + ' on an open channel: "Enough! We are cutting our drive. Come aboard, nobody needs to get hurt."'
@@ -4554,9 +4605,10 @@
     return spec.purse;
   }
 
-  function killNpc(sys, G, spec, t, hooks) {
+  function killNpc(sys, G, spec, t, hooks, by) {
     spec.dead = true;
-    jot(G, 'kill', 'Destroyed ' + (spec.kind === 'pirate' ? 'the pirate ' : 'the ') + (spec.name || 'ship'));
+    if (by) spec.killedBy = by;
+    else jot(G, 'kill', 'Destroyed ' + (spec.kind === 'pirate' ? 'the pirate ' : 'the ') + (spec.name || 'ship'));
     var at = spec.live ? spec.live.pos : null;
     var vel = spec.live ? spec.live.vel : V.zero();
 
@@ -4625,6 +4677,20 @@
     spec.diedAt = t;
     sys._rumourGen = (sys._rumourGen || 0) + 1;
     if (global.Rumours && global.Rumours.onDeath) global.Rumours.onDeath(G, sys, t);
+    /* SOMEBODY ELSE'S KILL: no crime of yours, no friend blaming you, no
+     * credit. Said if you were near enough to see the flash. */
+    if (by) {
+      if (global.Aggression && global.Aggression.onNpcKill) global.Aggression.onNpcKill(sys, G, spec, by, t, hooks);
+      if (hooks && hooks.say && at && G.ship && G.ship.pos && V.dist(at, G.ship.pos) < WITNESS_RANGE) {
+        hooks.say((by.name || 'A ship') + ' destroyed ' + theName(spec), 5);
+      }
+      spec.live = null;
+      sys._ships = null;
+      if (hooks && hooks.sound && at && G.ship && G.ship.pos && V.dist(at, G.ship.pos) < WITNESS_RANGE) hooks.sound('explosion');
+      return;
+    }
+    /* Helping a victim (aggression.js): before the crime and the credit. */
+    if (global.Aggression && global.Aggression.onPlayerKill) global.Aggression.onPlayerKill(sys, G, spec, t, hooks);
     /* Her friend knows who did it (favours.js). Before the crime is
      * booked, so the friend's memory is keyed to the colours you wore. */
     if (global.Favours && global.Favours.died) global.Favours.died(G, sys, spec, t);
@@ -4843,6 +4909,9 @@
 
   function crime(sys, G, t, kind, victim, hooks, seenBy) {
     if (!victim || victim.kind === 'pirate') return;    // no law for outlaws
+    /* Nor for a ship the law is already running down (aggression.js): a
+     * smuggler bolting from a cutter is fair game to the cutter's side. */
+    if (victim.fugitive && !victim.fugitive.dead) return;
     if (victim.reported === kind) return;               // one report per act
     var framing = /^frame/.test(kind);
 
@@ -7610,6 +7679,8 @@
        * robbed by them. The second is new — a merchantman that fires
        * while it runs. */
       if (!sp.hostileToPlayer && !sp.defending) continue;
+      /* Busy with somebody else (aggression.js fires those guns). */
+      if ((sp.target || sp.defendTarget) && !sp.hostileToPlayer) continue;
       if (!isArmedNpc(sp)) continue;                    // shuttles carry nothing
 
       /* The Syndicate's own police patrol — not a loitering pirate, which
@@ -9569,7 +9640,7 @@
     updateCountermeasures: updateCountermeasures, spawnDecoy: spawnDecoy, updateTurret: updateTurret,
     updateMissiles: updateMissiles,
     SYNDICATE_TRUST: SYNDICATE_TRUST,
-    updateNpcFire: updateNpcFire,
+    updateNpcFire: updateNpcFire, damageNpcBy: damageNpcBy, holdOf: holdOf,
     UNARMED_CLASSES: UNARMED_CLASSES,
     DISTRESS_DELAY_ARMED: DISTRESS_DELAY_ARMED,
     DISTRESS_DELAY_CIVIL: DISTRESS_DELAY_CIVIL,

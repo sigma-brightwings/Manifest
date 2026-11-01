@@ -84,6 +84,97 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **Who hunts whom: NPC aggression, the law, and standing (2026-10-31).**
+  Astra: *"we need to add NPC aggression, including pirates, police
+  arresting or disabling fleeing ships, and have that tie into the faction
+  standing stuff."* Until now nothing in the game fought anything but you.
+  New module `src/aggression.js`. Her choices:
+  - **Where fights happen: near you, and off-screen as news.** Fights you
+    can see are flown for real: any NPC woken within about 3,000 km of you.
+    Everywhere else, a raid is rolled from the timetable (see off-screen
+    raids, below).
+  - **Best prey wins.** An idle pirate looks round every few seconds and
+    scores every candidate within 2,500 km, you included: what her hold
+    is worth, times how soft she is, over the distance.
+    - Unarmed hulls and damaged ones score higher. An armed ship scores
+      half; waste is worth nothing.
+    - So a laden, unarmed freighter is robbed before a lean, armed ship.
+    - Ships flying near a patrol lane are left alone, as they already were
+      for you.
+  - **A robbery.** The pirate lifts the freighter off her lane and runs her
+    down. Within 15 km she calls on her to heave to, and the call goes out
+    on the band.
+    - The answer is seeded per pair of ships. An unarmed freighter usually
+      yields; an armed one usually refuses.
+    - Yielding, she gives up 60% of every line in her hold. Her port is
+      short of it when she docks, saved like cargo bought off a ship. The
+      pirate breaks away to sell it and looks for no one else for an hour.
+    - Refusing, she is fired on, fires back if she has a gun, and sends a
+      MAYDAY. If her drive goes or she strikes, the pirate comes alongside
+      and strips her.
+    - None of it is your crime.
+  - **The law: pirates and smugglers run, and police disable and arrest.**
+    - A lawful cutter or warship that sees a pirate within 1,500 km runs
+      her down. The pirate drops whoever she was robbing and runs, firing
+      back.
+    - Cutters also check the papers of freighters passing within 400 km.
+      Independent smugglers (8% of lines through a port with a fence)
+      bolt. Syndicate runners are never stopped: "the syndicate pays off
+      the police".
+    - The law wants the crew, not the wreck. Under 15% hull, a fugitive's
+      drive is shot out.
+    - The cutter then comes alongside. After 20 seconds the crew is taken
+      off and the ship impounded: she is gone, and her line is off the
+      timetable.
+  - **Standing.** Astra chose all four:
+    - *HOSTILE means shot on sight.* At standing -40 or below, a faction's
+      patrols open fire on you within 1,500 km, whether or not you owe them
+      a bounty.
+    - *Helping a victim raises standing.* Killing a ship that was attacking
+      someone else: +5 with the victim's flag. Hurting a pirate badly
+      enough that she breaks off: +2. Answering the MAYDAY: the existing
+      +8.
+    - *Helping an arrest.* Your shots in a fugitive before the law takes
+      her: +3 with that force. Shooting a ship the law is already chasing
+      is no crime.
+    - *Interfering costs you.* Firing on a cutter mid-arrest: -10 with the
+      force and -5 with the empire above it, and the fugitive gets away.
+      The crime is booked as well.
+    - *Rival empires skirmish.* Where two rival empires' patrols meet within
+      800 km, they open fire on each other. These are border clashes, not
+      a war: nobody's drive is knocked out and nobody dies. The beaten one
+      withdraws at half hull, and neither starts again for an hour.
+  - **Off-screen raids, as news.** In a system with pirates, a share of
+    every line's arrivals has been robbed on the way in and lands 60%
+    light. Her port's shelf shows it.
+    - The share is 2% plus a tenth of the system's crime score, more in a
+      pirate band's own space, at most 18%.
+    - Closed form like the rest of the market: the same raid every time,
+      with nothing to save.
+    - Dock at that port within a day of it and the word is on the dock:
+      *"the Halcyon Wain came in from Pilgrim Depot robbed by pirates -
+      farm machinery is short here."*
+    - Syndicate runners, your own lines and feeders are not raided.
+  - **Steering (sim.js).** An NPC now flies at her own target, or away
+    from her own threat, instead of always at you. Pursuit uses a new
+    `chase` mode built on the flown approach a ship uses to come alongside
+    you, plus gravity, with the target's next position predicted.
+    - The old spring trailed a target that keeps accelerating by about
+      250 km, so no cutter ever came within gun range.
+    - A cutter's drive is about 23% stronger than a pirate's, so from
+      30 km she reaches gun range in about 75 seconds at 1x.
+  - **Combat.** `Combat.damageNpc` takes the ship that fired, and
+    `damageNpcBy` books nothing to you. Kills and disables by somebody else
+    are said aloud only when you are close enough to see them.
+  - First numbers throughout. Nothing new is saved: a fight ends when you
+    leave or dock, as an encounter always has.
+  - **Your station defends her traffic.** Her Defence batteries now also
+    fire on a pirate robbing any ship within their 25 km, as well as on
+    ships that are after you.
+  - Tests: `test/aggression.test.js`. Probe:
+    `tools/probe-aggression.js` (a robbery and an arrest in the real
+    shell).
+
 - **Her Defence batteries fire (2026-10-31).** Astra: *"build that
   next"*. Until now a battery only held the Syndicate off on paper.
   - **What they fire at.** Ships that are after you within 25 km of her,

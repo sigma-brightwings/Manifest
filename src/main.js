@@ -6098,6 +6098,11 @@
       if (titheTick) { say(titheTick.say, 8); G.sys.tithe = global.Tithe.status(G, G.sys, G.t); }
     }
     G.encounter = Sim.updateEncounters(G.sys, G.t, G.lastDtSim || 0, G.ship);
+    /* Who hunts whom among the ships you can see (aggression.js). */
+    if (global.Aggression && !G.paused) {
+      try { global.Aggression.update(G.sys, G, G.t, G.lastDtSim || 0, HOOKS); }
+      catch (e) { if (global.console) console.error(e); }
+    }
     /* Joined by her tube: you go where she has just gone. */
     if (!G.paused && tubed()) holdTether();
 
@@ -6219,6 +6224,11 @@
       G.dockEdge = false;
       var dockedPort = G.ship.docked && G.sys.byId[G.ship.docked];
       if (dockedPort) Missions.completeAtDock(G, dockedPort, G.sys, G.t, HOOKS);
+      /* Word on the dock: a freighter robbed on her way in (aggression.js). */
+      if (dockedPort && global.Aggression && global.Aggression.raidNews) {
+        var raidLine = global.Aggression.raidNews(G.sys, dockedPort, G.t);
+        if (raidLine) say(raidLine, 8);
+      }
       /* A ROCK TORPEDO DOES NOT COME HOME. Docking with one aboard is the
        * one search with no roll: the berth scans what comes into it. */
       if (dockedPort && Combat.torpedoSearch) {

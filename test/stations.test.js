@@ -505,6 +505,16 @@ pir.hullHp = 1; sys.patrols = [pir]; besideHer(pir, 8, Gb.t + 20);
 var hk = hooks();
 S.defend(Gb, sys, Gb.t + 20, hk);
 check('a pirate her batteries kill counts as yours', pir.dead && hk.said.some(function (m) { return /Pirate destroyed/.test(m); }), hk.said.join(' | '));
+/* NPC aggression: a pirate robbing a freighter near her is fired on too. */
+var frt = hostile('frt-1', 'trader', 'trader', 10);
+frt.hostileToPlayer = false;
+var rob = hostile('pir-rob', 'pirate', 'fighter', 12);
+rob.hostileToPlayer = false; rob.target = frt;
+besideHer(frt, 10, Gb.t + 30); besideHer(rob, 12, Gb.t + 30);
+sys.patrols = [rob, frt];
+var hd2 = hooks();
+S.defend(Gb, sys, Gb.t + 30, hd2);
+check('she defends her traffic: a pirate robbing a ship near her is fired on', rob.hullHp < 200 && frt.hullHp === 200, 'hull ' + rob.hullHp);
 check('a battery saved with her switch', JSON.parse(JSON.stringify(Gb.stations)).some(function (x) { return x.id === sy.id && x.fireOnLaw === false; }));
 sys.patrols = savedPatrols;
 

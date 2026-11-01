@@ -1254,7 +1254,8 @@
   /* ---- her batteries fire (2026-10-31) -----------------------------------
    * Until now a Defence battery only held the Syndicate off on paper. It
    * fires now - at ships that are after YOU within BATTERY.range of her,
-   * because in this build nothing hunts anybody else. Astra chose an
+   * and (with NPC aggression, later the same night) at a pirate robbing
+   * any ship within that range: she defends her traffic. Astra chose an
    * owner's switch: outlaws by default (pirates, the Syndicate's ships,
    * bounty hunters), and "fire on the law" in YOUR STATIONS for the day you
    * would rather fight the police at your own door. Every police hit is an
@@ -1286,7 +1287,11 @@
   function batteryTargets(G, sys, st, mount) {
     var out = [];
     (sys && sys.patrols || []).forEach(function (sp) {
-      if (!sp || sp.dead || !sp.live || !sp.hostileToPlayer || sp.disabled || sp.surrendered) return;
+      if (!sp || sp.dead || !sp.live || sp.disabled || sp.surrendered) return;
+      /* After you, or (aggression.js) a pirate working one of her ships -
+       * any ship near her: she defends her traffic. */
+      var raiding = sp.kind === 'pirate' && sp.target && !sp.target.dead && sp.target.live;
+      if (!sp.hostileToPlayer && !raiding) return;
       if (isLaw(sp) && !st.fireOnLaw) return;
       var d = V.dist(sp.live.pos, mount);
       if (d <= BATTERY.range) out.push({ spec: sp, d: d });

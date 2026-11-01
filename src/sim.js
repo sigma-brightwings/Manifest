@@ -2282,6 +2282,8 @@
                  /* A ship you asked aboard (boarding.js), coming to a tube's
                   * length off your hull. */
                  : spec.mode === 'alongside' ? (spec.standoffKm || 0.03)
+                 /* A chase holds what aggression.js asked for (CHASE_KM). */
+                 : spec.mode === 'chase' ? (spec.standoffKm || 4)
                  : spec.kind === 'pirate' ? PIRATE_STANDOFF : POLICE_STANDOFF;
 
     /* A DEAD TANK (upkeep.js, 2026-10-30). A trader lifted off her rail
@@ -2321,7 +2323,12 @@
      * capped), on top of your own velocity, the change limited to her
      * acceleration per step. Gravity pulls you both the same way, and she
      * matches whatever you are doing, so it needs no term of its own. */
-    if (spec.mode === 'alongside') {
+    /* CHASE (2026-10-31, aggression.js) is the same flown approach, held at
+     * spec.standoffKm off a ship that is running. The spring below trails a
+     * target that keeps accelerating by accel/w^2 - about 250 km for a
+     * pirate's drive - so a cutter on it never came within gun range;
+     * flying the approach, a faster drive closes. */
+    if (spec.mode === 'alongside' || spec.mode === 'chase') {
       /* HER CLOCK FIRST (2026-10-29). This runs after your ship has taken
        * this frame's step, so her position is a frame older than yours.
        * Steering from that and stepping afterwards settled her exactly one
@@ -2344,8 +2351,16 @@
         live.mode = spec.mode;
         return V.dist(ship.pos, live.pos);
       }
+      /* A chase falls as well: near a world, the ship she is after is
+       * pulled faster than her drive could make up per step. */
+      if (spec.mode === 'chase') live.vel = V.addScaled(live.vel, acceleration(live.pos, sys, t), dtA);
       live.pos = V.addScaled(live.pos, live.vel, dtA);
-      toShip = V.sub(ship.pos, live.pos);
+      /* And a ship she is chasing may not have taken this step yet (she
+       * comes later in the list): aim where she will be, not where she
+       * was - at orbital speed a step is hundreds of km. `_stepT` is set by
+       * updateEncounters once a live ship has moved to t. */
+      var tgtPos = spec.mode === 'chase' && ship._stepT !== t ? V.addScaled(ship.pos, ship.vel, dtA) : ship.pos;
+      toShip = V.sub(tgtPos, live.pos);
       range = V.len(toShip);
       /* HER SLOT (2026-10-29). Astra: "why are the ships coming together
        * nose to nose?" — they were aimed centre to centre, 30 m apart, with
@@ -2360,11 +2375,12 @@
                                      V.scale(ship.fwd, slot.off[2])));
       } else {
         var brg = range > 1e-6 ? V.scale(toShip, -1 / range) : { x: 1, y: 0, z: 0 };
-        aimA = V.addScaled(ship.pos, brg, standoff);
+        aimA = V.addScaled(tgtPos, brg, standoff);
       }
       var offA = V.sub(aimA, live.pos), dA = V.len(offA);
       var aMax = Math.max(spec.accel || 0, 0.03);
-      var vClose = Math.min(0.4, Math.sqrt(2 * aMax * dA));
+      /* 0.4 km/s is a docking approach; a chase closes at up to 1.5. */
+      var vClose = Math.min(spec.mode === 'chase' ? 1.5 : 0.4, Math.sqrt(2 * aMax * dA));
       var wantV = dA > 1e-9 ? V.addScaled(ship.vel, offA, vClose / dA) : V.clone(ship.vel);
       var dvA = V.sub(wantV, live.vel), dvL = V.len(dvA), lim = aMax * Math.max(dtSim, 1e-6);
       if (dvL > lim) dvA = V.scale(dvA, lim / dvL);
@@ -2385,7 +2401,9 @@
     if (spec.mode === 'breakoff') {
       // Run for it: aim well past the player's far side.
       aim = V.addScaled(live.pos, V.norm(V.sub(live.pos, ship.pos)), SLEEP_RANGE);
-      matchVel = V.zero();
+      /* Running from a SHIP (aggression.js: `ship` here is her threat):
+       * away from it, in its frame, not braking against the star's. */
+      matchVel = spec.threat ? ship.vel : V.zero();
     } else if (spec.mode === 'respond' && spec.respondPos) {
       /* ANSWERING A CALL. Every other mode in this function steers relative
        * to the player, which was true of everything an NPC had ever been
@@ -2503,9 +2521,10 @@
         }
 
         /* A ship that refused the tithe is fair game: the overboss's
-         * pirates do not back off for a patrol over it. */
+         * pirates do not back off for a patrol over it. A pirate working
+         * somebody else (aggression.js) weighed the law when she chose. */
         if (spec.kind === 'pirate' && spec.mode !== 'breakoff' && sys.tithe !== 'suspected' &&
-            policeNearby(sys, t, ship.pos)) {
+            !spec.target && policeNearby(sys, t, ship.pos)) {
           spec.mode = 'breakoff';
           spec.brokeOffBecause = 'police';
         }
@@ -2516,7 +2535,15 @@
           spec.scanned = false; spec.scanHoldTime = 0; spec.modeSince = 0;
         }
 
-        range = steerNpc(spec, sys, t, dtSim, ship);
+        /* WHO SHE IS FLYING AT (2026-10-31, Phase 9's one structural
+         * change). You, unless aggression.js has given her somebody else:
+         * a target to close on, or a threat to run from. The range that
+         * wakes and sleeps her is still the range to YOU. */
+        var focus = global.Aggression && global.Aggression.focusOf ? global.Aggression.focusOf(spec, ship) : ship;
+        range = steerNpc(spec, sys, t, dtSim, focus);
+        if (spec.live) spec.live._stepT = t;
+        if (focus !== ship) range = V.dist(spec.live.pos, ship.pos);
+        var busy = focus !== ship;
         spec.modeSince += dtSim;
 
         if (range > (loud ? SLEEP_RANGE * ECM_REACH : SLEEP_RANGE)) { sleepNpc(spec); continue; }
@@ -2534,7 +2561,7 @@
          * position to demand something. Requiring BOTH proximity and a low
          * relative speed is what stops a fly-past at 40 km/s counting as a
          * hold-up. */
-        if (spec.kind === 'pirate' && spec.mode === 'intercept') {
+        if (spec.kind === 'pirate' && spec.mode === 'intercept' && !busy) {
           var relSpeed = V.dist(spec.live.vel, ship.vel);
           if (range < CLOSE_RANGE && relSpeed < 0.9) {
             spec.holdTime = (spec.holdTime || 0) + dtSim;
@@ -2549,7 +2576,7 @@
          * which is why this is a one-shot `scanNow` flag rather than a
          * mode the caller has to keep noticing. `spec.scanned` stops the
          * same patrol re-rolling every frame for the rest of the hold. */
-        if (spec.kind === 'police' && spec.mode === 'inspect' && !spec.scanned) {
+        if (spec.kind === 'police' && spec.mode === 'inspect' && !spec.scanned && !busy) {
           var relSpeedP = V.dist(spec.live.vel, ship.vel);
           if (range < CLOSE_RANGE && relSpeedP < 0.9) {
             spec.scanHoldTime = (spec.scanHoldTime || 0) + dtSim;
@@ -2573,7 +2600,7 @@
          * own comment), so there is nothing here to react to and no reason
          * to make leaving afterward crawl at 1×. */
         var dangerous = spec.hostileToPlayer ||
-          (spec.kind === 'pirate' && (spec.mode === 'intercept' || spec.mode === 'demand'));
+          (spec.kind === 'pirate' && !busy && (spec.mode === 'intercept' || spec.mode === 'demand'));
         if (dangerous) result.dangerClosest = Math.min(result.dangerClosest, range);
       }
     }
@@ -2595,6 +2622,8 @@
   function sleepNpc(spec) {
     spec.live = null;
     spec.mode = null;
+    /* Whatever fight she was in ends when you are not there to see it. */
+    spec.target = null; spec.threat = null; spec.defendTarget = null;
     spec.demanding = false;
     spec.holdTime = 0;
     spec.scanned = false;

@@ -815,7 +815,45 @@
     /* And the plants over the giants act on what they were just stamped as:
      * skimmers scoop hydrogen, navy and Syndicate refineries press milfuel. */
     if (Eco.runGiantPlants) Eco.runGiantPlants(sys);
+    /* Off-screen raids (aggression.js): last, reading the pirates and the
+     * timetable, drawing nothing. */
+    attachRaids(sys);
     return sys;
+  }
+
+  /* ---- OFF-SCREEN RAIDS (2026-10-31) --------------------------------------
+   * Astra: fights where you are, and "off-screen as news" everywhere else.
+   * A system with pirates in it loses a share of its deliveries to them:
+   * the odds rise with crime and in a pirate band's own space, and are nil
+   * where nobody raids. Set on each scheduled delivery as raidP, with the
+   * key economy.js hashes per arrival (Economy.raidedArrival). Syndicate
+   * runners are not robbed (the bands are the Syndicate's), nor your own
+   * lines. No rng: every seed's draws are what they were. */
+  function raidOdds(sys) {
+    var pirates = (sys.patrols || []).filter(function (p) { return p.kind === 'pirate'; }).length;
+    if (!pirates) return 0;
+    var crime = sys.crimeScore === undefined ? 40 : sys.crimeScore;
+    var p = 0.02 + 0.10 * crime / 100 + ((sys.pirateHeld || sys.heldBy === 'pirate') ? 0.05 : 0);
+    return Math.min(0.18, p);
+  }
+  function attachRaids(sys) {
+    var p = raidOdds(sys);
+    sys.raidOdds = p;
+    if (!(p > 0)) return;
+    (sys.traffic || []).forEach(function (r) {
+      if (r.runner || r.oneWay || r.playerPort || r.feeder) return;
+      var A = sys.byId[r.from], B = sys.byId[r.to];
+      [[B, r.cruise, 0], [A, 2 * r.cruise + r.layover, 1]].forEach(function (leg) {
+        var port = leg[0];
+        if (!port || !port.market || !port.market.inbound) return;
+        port.market.inbound.forEach(function (d) {
+          if (d.route || d.t0 !== r.t0 || d.cruise !== leg[1] || d.period !== r.period) return;
+          d.route = r.id; d.leg = leg[2];
+          d.raidKey = 'raid|' + (sys.seed || '') + '|' + r.id + '|' + leg[2];
+          d.raidP = p;
+        });
+      });
+    });
   }
 
   /* ---- WHOSE BUILDING IS IT (2026-09-22) ---------------------------------
@@ -4550,6 +4588,7 @@
     radiusFromMass: radiusFromMass,
     buildEconomy: buildEconomy,
     buildTraffic: buildTraffic,
+    raidOdds: raidOdds, attachRaids: attachRaids,
     attachPort: attachPort, addPortRoutes: addPortRoutes, dressPort: dressPort,
     commonParent: commonParent,
     radiusAbout: radiusAbout,
