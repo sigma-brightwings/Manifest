@@ -84,6 +84,18 @@ Since Abby. Changes made on the 1.1 line after the release was cut.
 
 ### Added
 
+- **Police interceptors burn harder in a chase (2026-10-31).** Astra:
+  *"give police extra thrust for their interceptors"*.
+  - A lawful interceptor running somebody down gets 1.5 times her cruising
+    acceleration. That covers a fugitive she is chasing, and you, when
+    she is hunting you.
+  - From 30 km behind a fleeing pirate she now reaches gun range in about
+    37 s at 1x, down from about 75.
+  - Shadowing or inspecting, she cruises as before.
+  - The Syndicate's enforcers don't get it (they already carry the better
+    gun). Nor does the Navy: a warship doesn't chase, it arrives.
+  - `Sim.accelOf`, `Sim.POLICE_BURN`; tested in `test/aggression.test.js`.
+
 - **Who hunts whom: NPC aggression, the law, and standing (2026-10-31).**
   Astra: *"we need to add NPC aggression, including pirates, police
   arresting or disabling fleeing ships, and have that tie into the faction

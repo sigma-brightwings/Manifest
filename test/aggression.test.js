@@ -323,16 +323,26 @@ var runner = npc('pirate', 'outlaw', V.add(st0.pos, { x: 0, y: 0, z: 0 }), st0.v
 var chaser = npc('police', lawFac, V.add(st0.pos, { x: -30, y: 0, z: 0 }), st0.vel, { accel: 0.0315 });
 A.startPursuit(sys, G, chaser, runner, T, hooks(), 'pirate');
 G.ship.pos = V.add(st0.pos, { x: 0, y: 1500, z: 0 }); G.ship.vel = V.clone(st0.vel);
-var gap0 = V.dist(chaser.live.pos, runner.live.pos), gapMin = gap0;
+var gap0 = V.dist(chaser.live.pos, runner.live.pos), gapMin = gap0, inRange = -1;
 for (var cq = 0; cq < 300; cq++) {
   G.ship.vel = V.clone(runner.live.vel);
   G.ship.pos = V.add(runner.live.pos, { x: 0, y: 1500, z: 0 });
   Sim.updateEncounters(sys, T + cq, 1, G.ship);
   if (!runner.live || !chaser.live) break;
   gapMin = Math.min(gapMin, V.dist(chaser.live.pos, runner.live.pos));
+  if (inRange < 0 && gapMin < Combat.POLICE_GUN.range) inRange = cq;
 }
 check('a faster cutter closes on a running pirate, inside her gun\'s range', gapMin < Combat.POLICE_GUN.range,
       Math.round(gap0) + ' -> ' + gapMin.toFixed(1) + ' km');
+/* Astra: "give police extra thrust for their interceptors". */
+check('her interceptor burns harder in pursuit: in gun range from 30 km inside 50 s', inRange >= 0 && inRange < 50, inRange + ' s');
+var idleCop = { kind: 'police', faction: lawFac, accel: 0.0315, mode: 'shadow' };
+var huntCop = { kind: 'police', faction: lawFac, accel: 0.0315, mode: 'attack', hostileToPlayer: true };
+var enforcer = { kind: 'police', faction: 'outlaw', className: 'enforcer', accel: 0.0315, mode: 'chase', target: runner };
+var navyShip = { kind: 'navy', faction: lawFac, accel: 0.009, mode: 'chase', target: runner };
+check('the burn is for the chase only: shadowing, she cruises', Sim.accelOf(idleCop) === 0.0315);
+check('hunting you, she burns too', Sim.accelOf(huntCop) === 0.0315 * Sim.POLICE_BURN);
+check('not the Syndicate\'s enforcers, not the Navy', Sim.accelOf(enforcer) === 0.0315 && Sim.accelOf(navyShip) === 0.009);
 
 console.log('asleep, the fight ends');
 fresh();

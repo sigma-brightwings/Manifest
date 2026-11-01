@@ -2270,6 +2270,24 @@
     turnTo(live, ship.fwd, V.add(V.scale(live.up || up, 1 - k), V.scale(up, k)), k);
   }
 
+  /* THE INTERCEPTOR'S BURN (Astra, 2026-10-31: "give police extra thrust
+   * for their interceptors"). A lawful interceptor running somebody down -
+   * a fugitive (aggression.js chase) or you, hunted - pours it on at
+   * POLICE_BURN times her cruising acceleration. Measured before it: a
+   * cutter only 23% quicker than a pirate took ~75 s to close 30 km to
+   * gun range. Not the Syndicate's enforcers (they have better guns), not
+   * the Navy (it does not chase, it ARRIVES), and not while she is only
+   * shadowing or inspecting. */
+  var POLICE_BURN = 1.5;
+  function pursuing(spec) {
+    return spec.hostileToPlayer || (spec.mode === 'chase' && !!spec.target);
+  }
+  function accelOf(spec) {
+    var a = spec.accel || 0;
+    if (spec.kind === 'police' && spec.faction !== 'outlaw' && spec.className !== 'enforcer' && pursuing(spec)) a *= POLICE_BURN;
+    return a;
+  }
+
   function steerNpc(spec, sys, t, dtSim, ship) {
     var live = spec.live;
     var toShip = V.sub(ship.pos, live.pos);
@@ -2378,7 +2396,7 @@
         aimA = V.addScaled(tgtPos, brg, standoff);
       }
       var offA = V.sub(aimA, live.pos), dA = V.len(offA);
-      var aMax = Math.max(spec.accel || 0, 0.03);
+      var aMax = Math.max(accelOf(spec) || 0, 0.03);
       /* 0.4 km/s is a docking approach; a chase closes at up to 1.5. */
       var vClose = Math.min(spec.mode === 'chase' ? 1.5 : 0.4, Math.sqrt(2 * aMax * dA));
       var wantV = dA > 1e-9 ? V.addScaled(ship.vel, offA, vClose / dA) : V.clone(ship.vel);
@@ -2438,7 +2456,8 @@
       z: offset.z * w * w + vErr.z * 2 * w
     };
     var mag = V.len(cmd);
-    if (mag > spec.accel) cmd = V.scale(cmd, spec.accel / mag);
+    var acc = accelOf(spec);
+    if (mag > acc) cmd = V.scale(cmd, acc / mag);
 
     /* Integrate in sim seconds, substepped. Capped rather than unbounded:
      * beyond this the caller has already pinned warp down, so a slight lag
@@ -2466,7 +2485,7 @@
     live.up = V.cross(live.right, live.fwd);
     live.mode = spec.mode;
     // A woken NPC is manoeuvring hard, and the plume should say so.
-    live.throttle = Math.min(1, mag / spec.accel);
+    live.throttle = Math.min(1, mag / acc);
     return range;
   }
 
@@ -6651,7 +6670,7 @@
     bodyStateAt: bodyStateAt,
     patrolState: patrolState, railState: railState, wakeNpc: wakeNpc,
     RESCUE_HANDOFF: RESCUE_HANDOFF, RESCUE_STANDOFF: RESCUE_STANDOFF,
-    shipsAll: shipsAll,
+    shipsAll: shipsAll, accelOf: accelOf, POLICE_BURN: POLICE_BURN,
     nearestShip: nearestShip,
     updateEncounters: updateEncounters,
     policeNearby: policeNearby,
