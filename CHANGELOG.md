@@ -62,6 +62,41 @@ before they update.
   at 9.4-11.3 m. The exemption is gone: boarding3's "no room stands outside
   her skin, on any hull" now covers the Crawler's lift, and fitting took
   nothing away from any hull.
+- **Every cockpit at its canopy glass** (2026-11-02). Astra, of the Talon:
+  "the cockpit on the starting ship is recessed into the block that juts
+  out with the cockpit glass on it ... it should be cut into the nose
+  block"; asked which block, she chose the jutting one, a step up from the
+  passage; then "the cockpit fix should apply to all ships IF the glass
+  isn't the forward-most part of the cockpit." The cause: `fit-hulls`
+  puts the eye at the lowest point her deck fits, for a short ramp, and
+  never looks at the glass, so the Talon's pilot sat a metre aft of the
+  canopy and level with its bottom edge, down in the wedge under the nose
+  block with its sloping skin through the room. Moving the whole deck does
+  not fit (her passage comes out of the block's top), so the cockpit alone
+  moves: a room may now carry a floor of its own (`y0`), and a hull in
+  shipdeck.js `RAISED` has her cockpit `rise` up (or down) and `fwd`
+  forward, a stair of a few treads aft of it down to the bridge door on
+  the deck (`stairMesh`), and the rest of her deck exactly where it was in
+  her hull. `ShipDeck.floorAt` is the floor under you; the walker climbs
+  the stair (main.js `stepWalk`), her people stand on it (npc.js), the
+  door leaves, bulkhead and rear screens are at the stair's foot, and her
+  windows from outside cut the well round the raised room. The Talon's eye
+  is now 0.5 m up and 1.2 m forward, behind the glass, its floor on the
+  block's underside. `tools/fit-raised.js` measured every hull's canopy
+  box against her cockpit and found the raise for each: raised (or
+  levelled and moved forward), the Talon, Dart, Kestrel, Wren, Longhaul
+  and Syndicate Enforcer; down a stair, the Sump, the Hawser Heavy Tug,
+  the Tallyman and the Lance (their glass is below the old eye); moved
+  aft, the Bollard (her windscreen stood ahead of her glass). Left alone:
+  the Samaritan and Heron (already at their glass); the Coldwater Tanker,
+  Naval Cutter, Corsair Runner and Syndicate Heavy (their glass box is
+  off-centre or aft, not a canopy); the five decked and towered hulls
+  (their cockpit is a deck reached by lift); and the Mule, which
+  qualifies but whose bridge deck comes out of her skin at every eye
+  tried. New `test/nosecockpit.test.js`: each raised eye within 0.5 m of
+  its glass, the cockpit inside her but its windscreen, every other room
+  where it was, no jump on the stair, and every other hull unmoved.
+  **Saves survive**: nothing saved changes.
 
 ### Added
 

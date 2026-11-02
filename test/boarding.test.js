@@ -337,7 +337,9 @@ console.log('--- the walkway ---');
      * height, and the same passage code dresses it. */
     if (!d || d.plan.decks || !d.meshes) return;
     var ps = SD.roomByKind(d.plan, 'passage');
-    var room = d.meshes.room, fy = d.geom.floorY;
+    /* The deck's floor: the plan's, which a raised cockpit (shipdeck.js
+     * RAISED) stands above; the cockpit's own is geom's. */
+    var room = d.meshes.room, fy = d.plan.floorY;
     if (!ps || !room || !room.v) return;
     seen++;
     var worst = 0;

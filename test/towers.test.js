@@ -162,9 +162,14 @@ TOWERS.forEach(function (id) {
 var talon = ship('talon');
 /* 2026-10-26: not her origin any more but where tools/fit-hulls.js put
  * the cockpit so her rooms are inside her — and still no tower. */
-var tAt = R.cockpitAt(talon), tFit = global.HullFit && global.HullFit.talon;
-check('an ordinary hull\'s cockpit is where her fit put it, with no tower', !R.bridgeSpec(talon) && !!tAt && !!tFit &&
-      tAt[0] === tFit.at[0] && tAt[1] === tFit.at[1] && tAt[2] === tFit.at[2]);
+/* 2026-11-02: and the Talon's is up in her nose block, her fit's eye plus
+ * her raise (shipdeck.js RAISED); a hull with no raise is exactly her fit. */
+var tAt = R.cockpitAt(talon), tFit = global.HullFit && global.HullFit.talon, tRz = SD.raisedCockpit('talon');
+check('an ordinary hull\'s cockpit is where her fit put it, with no tower', !R.bridgeSpec(talon) && !!tAt && !!tFit && !!tRz &&
+      tAt[0] === tFit.at[0] && Math.abs(tAt[1] - tFit.at[1] - tRz.rise) < 1e-9 && Math.abs(tAt[2] - tFit.at[2] - tRz.fwd) < 1e-9);
+var kes = ship('samaritan'), kAt = R.cockpitAt(kes), kFit = global.HullFit && global.HullFit.samaritan;
+check('and a hull with no raise is exactly where her fit put it', !SD.raisedCockpit('samaritan') && !!kAt && !!kFit &&
+      kAt[0] === kFit.at[0] && kAt[1] === kFit.at[1] && kAt[2] === kFit.at[2]);
 check('and its hull is never cut', R.bridgeCutMesh(HullLib['capital-l'], talon) === HullLib['capital-l']);
 check('and its lift (if any) is the ordinary one', SD.liftSpeed('meridian') === SD.LIFT_SPEED);
 var mer = R.shipInterior(ship('meridian'));

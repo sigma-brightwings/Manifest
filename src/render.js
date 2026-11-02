@@ -432,11 +432,40 @@
   /* Where the cockpit is in her, in her own metres: up the tower on the
    * two that have one, and on every other hull wherever fit-hulls put it
    * so her rooms are inside her (2026-10-26: it used to be her centre). */
+  /* RAISED (shipdeck.js, 2026-11-02): fit-hulls' `at` is the eye the deck
+   * was planned round; a cockpit up in her nose block has its eye `rise` up
+   * and `fwd` forward of that, and every room aft of it is planned that much
+   * further aft and down, so the deck is where it was in her. One array per
+   * fit, kept: callers hold on to it. */
+  var RAISED_AT = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  /* Her raise, at her size. A ship drawn longer than her fitted hull
+   * (hullFit `scale`) has her cockpit at the same point of her model, so
+   * the eye's move scales with her and the stair is re-cut for the new
+   * rise (treads no taller than the fitter's). One per fit, kept. */
+  function raiseOf(ship, f) {
+    var SD = global.ShipDeck, rz = SD && SD.raisedCockpit ? SD.raisedCockpit(ship && (ship.hullId || ship)) : null;
+    var k = f && f.scale > 1 ? f.scale : 1;
+    if (!rz || k === 1 || !RAISED_AT) return rz;
+    var e = RAISED_AT.get(f);
+    if (e && e.base === rz && e.scaled) return e.scaled;
+    var rise = rz.rise * k, n = Math.abs(rise) < 0.05 ? 0 : Math.ceil(Math.abs(rise) / 0.22 - 1e-9);
+    var sc = { rise: n ? rise : 0, fwd: rz.fwd * k, treads: n, run: n ? (n + 1) * 0.25 : 0 };
+    RAISED_AT.set(f, { base: rz, scaled: sc, a: null });
+    return sc;
+  }
   function cockpitAt(ship) {
     var b = bridgeSpec(ship);
     if (b) return b.at;
     var f = hullFit(ship);
-    return f && f.at && (f.at[0] || f.at[1] || f.at[2]) ? f.at : null;
+    if (!(f && f.at && (f.at[0] || f.at[1] || f.at[2]))) return null;
+    var rz = raiseOf(ship, f);
+    if (!rz || !RAISED_AT) return f.at;
+    /* Keyed on the raise too, so tools/fit-raised.js can try one after
+     * another on the same hull. */
+    var e = RAISED_AT.get(f);
+    if (!e || (e.rz !== rz && e.scaled !== rz)) { e = { rz: rz, a: null }; RAISED_AT.set(f, e); }
+    if (!e.a) e.a = [f.at[0], f.at[1] + rz.rise, f.at[2] + rz.fwd];
+    return e.a;
   }
   function bridgeFrame(ship) {
     var at = ship && cockpitAt(ship);
@@ -4569,7 +4598,9 @@
     if (per[key]) return per[key];
     var fy = d.plan.floorY;
     var rx0 = at[0] + ck.x0, rx1 = at[0] + ck.x1, cx = (rx0 + rx1) / 2, rhw = (rx1 - rx0) / 2;
-    var ry0 = at[1] + fy, ry1 = ry0 + (ck.y1 || 2.4), rz0 = at[2] + ck.z0, rz1 = at[2] + ck.z1;
+    /* A room's `y0`/`y1` are over the deck's floor: a raised cockpit
+     * (shipdeck.js RAISED) stands on its own floor `y0` up. */
+    var ry0 = at[1] + fy + (ck.y0 || 0), ry1 = at[1] + fy + (ck.y1 || 2.4), rz0 = at[2] + ck.z0, rz1 = at[2] + ck.z1;
     var opaque = { v: mesh.v, f: [], c: [] }, glass = { v: mesh.v, f: [], c: [] }, k;
     for (k in mesh) if (k.charAt(0) !== '_' && !(k in opaque)) opaque[k] = glass[k] = mesh[k];
     var g = null;
@@ -10880,6 +10911,10 @@
     }
     hw *= f; hh *= f;
     var cx = s * m.r * k * f, cz = c * m.r * k * f;
+    /* The rear screens stand off the bulkhead, which on a raised cockpit
+     * (shipdeck.js RAISED) is at the foot of the stair behind the seat:
+     * there with it, rather than hanging over the top step. */
+    if (spec && spec.raised && Math.abs(m.bearing) > Math.PI / 2) cz -= spec.raised.run;
     var rx = c, rz = -s;                                   // along the width
     var sl = Math.sin(m.lean), cl = Math.cos(m.lean);
     var ux = s * sl, uy = cl, uz = c * sl;                 // up the height
@@ -11397,6 +11432,20 @@
            (ship.bornId || ship.hullId || 'origin');
   }
 
+  /* The stair of a raised cockpit (shipdeck.js RAISED) when it is right
+   * behind the helm, so the bulkhead and its rear screens stand at its
+   * foot. Not on a hull with a bridge deck: there the helm keeps its own
+   * bulkhead, arch and screens, and the stair is aft of the bridge deck
+   * (measured: moved with it, a Kestrel's rear screens stood a metre
+   * behind that bulkhead, blank). Her raise at her size (raiseOf). */
+  function stairBehindHelm(ship) {
+    var SD = global.ShipDeck;
+    if (!SD || !SD.raisedCockpit || !ship || !SD.raisedCockpit(ship.hullId)) return null;
+    var HL = global.Combat && global.Combat.HULLS, hull = HL && HL[ship.hullId];
+    if (hull && hull.size !== 'S' && SD.stationRoles && global.Crew && global.Crew.crewNeeded &&
+        SD.stationRoles(global.Crew.crewNeeded(ship.hullId, true)).length) return null;
+    return raiseOf(ship, hullFit(ship));
+  }
   function cockpitSpec(ship) {
     if (!ship) ship = {};
     var key = cockpitSeed(ship);
@@ -11466,7 +11515,11 @@
        * more structure above the glass, an interceptor almost none. */
       topAngle: Math.atan(0.62 / (CANOPY_Z * arch.room) / arch.brow) - rakeBias,
       botAngle: -Math.atan(0.46 / (CANOPY_Z * arch.room)) - rakeBias,
-      mfdScale: size
+      mfdScale: size,
+      /* A cockpit up in her nose, a stair aft of it down to the deck
+       * (shipdeck.js RAISED): its bulkhead and the rear screens on it are
+       * at the stair's foot, not where the seat's old bulkhead was. */
+      raised: stairBehindHelm(ship)
     };
     ship._cockpit = spec;
     return spec;
@@ -11793,13 +11846,16 @@
     barsOn(sideL, fb.side); barsOn(sideR, fb.side);
     roofs.forEach(function (r) { barsOn(r, fb.roof); });
     barsOn(qR, fb.quarter); barsOn(qL, fb.quarter);
-    var bulkhead = [[-sideX, ceilY, bulkZ + 0.002], [sideX, ceilY, bulkZ + 0.002],
-                    [sideX, floorY, bulkZ + 0.002], [-sideX, floorY, bulkZ + 0.002]];
+    /* Raised (shipdeck.js RAISED): the bulkhead is the one at the foot of
+     * the stair, `run` further aft, down on the deck `rise` below. */
+    var rzd = spec.raised, bz = bulkZ - (rzd ? rzd.run : 0), bfy = floorY - (rzd ? rzd.rise : 0);
+    var bulkhead = [[-sideX, ceilY, bz + 0.002], [sideX, ceilY, bz + 0.002],
+                    [sideX, bfy, bz + 0.002], [-sideX, bfy, bz + 0.002]];
 
     var g = {
       k: k, frontZ: frontZ, sillY: sillY, hingeX: hingeX, sideX: sideX, meetZ: meetZ,
       quarterOuter: [Math.max(qx, sideX), qz],
-      floorY: floorY, ceilY: ceilY, bulkZ: bulkZ, footHW: footHW, footZ: footZ,
+      floorY: floorY, ceilY: ceilY, bulkZ: bulkZ, bulkFloorY: bfy, footHW: footHW, footZ: footZ,
       main: main, quarters: [qR, qL], sides: [sideL, sideR], floorWin: floorWin,
       roofs: roofs, roofZ0: roofZ0, roofZ1: roofZ1, spineX: spineX, bars: bars, slot: slot,
       /* Order matters: the suites index main, quarters, sides and floor
@@ -11832,7 +11888,8 @@
    * the real screens so neither can be greebled over whatever size the
    * room is. */
   function bulkheadRegions(g, spec) {
-    var W = 2 * g.sideX, Hh = g.ceilY - g.floorY;
+    var bfl = g.bulkFloorY !== undefined ? g.bulkFloorY : g.floorY;
+    var W = 2 * g.sideX, Hh = g.ceilY - bfl;
     var uOf = function (x) { return (x + g.sideX) / W; };
     var vOf = function (y) { return (g.ceilY - y) / Hh; };
     var door0 = uOf(-g.doorHW - 0.08), door1 = uOf(g.doorHW + 0.08);
@@ -13410,6 +13467,8 @@
     var popts = { hullId: ship.hullId, libId: libId, size: hull && hull.size, key: spec.key, crew: crew, turret: tur,
                   rampDrop: fit && (fit.dropRoom || fit.drop), rampReach: fit && fit.drop,
                   load: load.load,
+                  /* Her cockpit up in her nose block (shipdeck.js RAISED). */
+                  raised: raiseOf(ship, hullFit(ship)),
                   /* Every room inside her own hull (shipdeck.js planFitted). */
                   fit: hullFitter(ship) };
     var plan = (SD.planFitted || SD.plan)(g, popts);
@@ -13421,7 +13480,9 @@
      * `stretch`, so the rest of her is the same ship. */
     if (fit && fit.scale > 1.01) {
       var aftR = SD.roomByKind(plan, 'cargo') || SD.roomByKind(plan, 'passage');
-      var aftZ = aftR ? aftR.z0 : 0;
+      /* From the deck's eye, not a raised cockpit's (shipdeck.js RAISED):
+       * the deck is planned `fwd` further aft of that. */
+      var aftZ = aftR ? aftR.z0 + (popts.raised ? popts.raised.fwd : 0) : 0;
       var stretch = aftZ < 0 ? Math.max(0, -aftZ * (fit.scale - 1) - 1.0) : 0;
       var base0 = SD.roomByKind(plan, 'cargo');
       if (stretch > 0.5) {
