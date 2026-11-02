@@ -5819,7 +5819,10 @@
   function drawGroundDrive(ctx, w, h) {
     var s = G.ship;
     if (!s.landed || s.crashed || s.docked || G.walk || G.title || G.panel) return;
-    var st = s.drive || 'cold', y = Math.round(h * 0.68);
+    /* Under the heading tape, not at the canopy's foot: down there it sat
+     * on top of the key-hint line and the say() message, and the first
+     * screenshot of it was three lines of text printed over each other. */
+    var st = s.drive || 'cold', y = Math.round(h * 0.24);
     var label = st === 'hot' ? 'ON THE GROUND  ·  DRIVE HOT  ·  HOLD R TO LIFT'
               : st === 'spool' ? 'DRIVE SPOOLING  ' + Math.round((s.spool || 0) * 100) + '%'
               : 'ON THE GROUND  ·  DRIVE COLD  ·  R TO START';
@@ -5828,7 +5831,7 @@
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     var tw = ctx.measureText(label).width + 24;
-    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
     ctx.fillRect(w / 2 - tw / 2, y - 11, tw, 22);
     var col = st === 'hot' ? '#7fe08a' : st === 'spool' ? '#ffc861' : '#9fb4c8';
     if (st === 'spool') {

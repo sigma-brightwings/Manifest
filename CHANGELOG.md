@@ -67,7 +67,9 @@ before they update.
   with enough thrust to beat the world, but nothing said so once the
   touchdown message had faded, and a drive that was always running could
   not be seen to start. Now a touchdown away from a port shuts the drive
-  down, and the band says so for as long as you sit there: **ON THE GROUND
+  down, and a strip under the heading tape says so for as long as you sit
+  there (first placed at the canopy's foot, where the screenshot showed it
+  printed over the key hints and the message line): **ON THE GROUND
   · DRIVE COLD · R TO START**. The first R (or W with her nose to the sky)
   starts her: three seconds of real time winding up, a bar filling on the
   band and the drive heard spooling, which runs to the end once begun.
