@@ -9609,8 +9609,13 @@
           var drop = ((deckTop(cam.h) + 26) - cam.cy) / cam.flen;
           mz = Render.seatMuzzle(beam.side || 1, drop);
         }
+        /* An NPC's muzzle is live too (Combat.shotFx, 2026-11-02): read
+         * off the shooter's body now, or carried along by the frame it was
+         * fired in — never left where it was in absolute space. */
         var origin = (beam.fromShip && mz)
           ? Render.localToWorld(cockpitShip(), mz.r, mz.u, mz.f)
+          : (beam.src && beam.src.pos) ? beam.src.pos
+          : (beam.fromVel && beam.t0 !== undefined) ? V.addScaled(beam.from, beam.fromVel, G.t - beam.t0)
           : beam.from;
         /* And the far end has to be just as live, or the beam pivots about
          * its muzzle as the ship moves and the view fills with a fan of

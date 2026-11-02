@@ -2128,6 +2128,37 @@ section('--- the law has bite (2026-10-18) ---');
   check('no missiles at somebody who is not wanted', !(G3.sys.missiles || []).length);
 })();
 
+section('--- an NPC\'s tracer stays on both ships (2026-11-02) ---');
+(function () {
+  /* Astra, climbing off Unysh IV b with a cutter on her: a long white-blue
+   * bar detached behind the hull. The cutter's bolts froze both ends in
+   * absolute space at the instant of firing, and lived 0.62 s while the
+   * moon carried both ships three kilometres a frame. The tracer must
+   * name the shooter's live body and the ship it was fired at. */
+  var G = makeG(true);
+  var cop = fakeVictim(G, { kind: 'police', cls: 'police', faction: 'lawfac', range: 4, name: 'Patrol Cutter' });
+  cop.hostileToPlayer = true;
+  cop.missilesLeft = 0;
+  G.beams = [];
+  Combat.updateNpcFire(G.sys, G, 0, 0.1, HOOKS);
+  var b = (G.beams || []).filter(function (x) { return !x.fromShip; })[0];
+  check('a cutter firing at you records a tracer', !!b);
+  check('its near end is the cutter itself, live', b && b.src === cop.live);
+  check('and its far end your ship, live', b && b.target === G.ship);
+  var ctx = { src: b && b.src, target: b && b.target };
+  /* Both ships carried a long way in absolute space: the tracer's ends go
+   * with them, because they ARE them. */
+  if (b) {
+    G.ship.pos = V.add(G.ship.pos, { x: 3000, y: 0, z: 0 });
+    cop.live.pos = V.add(cop.live.pos, { x: 3000, y: 0, z: 0 });
+    check('so a frame later, 3,000 km on, it is still between them',
+          V.dist(ctx.src.pos, cop.live.pos) === 0 && V.dist(ctx.target.pos, G.ship.pos) === 0);
+  }
+  var bat = Combat.shotFx({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, null, '#fff', 'pulse', 0, false,
+                          { t: 10, fromVel: { x: 5, y: 0, z: 0 } });
+  check('a muzzle with no body rides with the frame it was fired in', bat.t0 === 10 && bat.fromVel.x === 5);
+})();
+
 section('--- countermeasures (2026-10-18) ---');
 (function () {
   var realRandom = Math.random;

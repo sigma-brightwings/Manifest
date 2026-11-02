@@ -1329,7 +1329,9 @@
         cool[key] = t + BATTERY.cooldown;
         /* A battery throws heavy bolts (2026-11-01, the weapons pass). */
         (G.beams = G.beams || []).push(global.Combat && global.Combat.shotFx
-          ? global.Combat.shotFx(V.clone(mount), V.clone(sp.live.pos), sp.live, BATTERY.color, 'pulse', now, false)
+          ? global.Combat.shotFx(V.clone(mount), V.clone(sp.live.pos), sp.live, BATTERY.color, 'pulse', now, false,
+                                 /* the mount rides with the fight's frame, not absolute space */
+                                 { t: t, fromVel: sp.live.vel })
           : { from: V.clone(mount), to: V.clone(sp.live.pos), target: sp.live, color: BATTERY.color, until: now + 0.09 });
         var sk = st.id + '|' + sp.id;
         if (!said[sk]) {

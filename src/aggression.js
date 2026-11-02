@@ -598,7 +598,7 @@
       if (near(G, sp)) {
         (G.beams = G.beams || []).push(Cm.shotFx(V.clone(sp.live.pos), V.clone(tg.live.pos), tg.live,
                                          sp.hunter ? '#9fe8ff' : cop ? '#8fd0ff' : sp.kind === 'pirate' ? '#ff8a76' : '#ffc46b',
-                                         Cm.npcShotVariety(sp, gun), now, !hit));
+                                         Cm.npcShotVariety(sp, gun), now, !hit, { src: sp.live, t: t }));
       }
       if (hit) Cm.damageNpc(sys, G, tg, gun.dmg, t, hooks, gun, V.clone(sp.live.pos), sp);
     });

@@ -205,6 +205,20 @@ before they update.
 
 ### Fixed
 
+- **2026-11-02 — The long white-blue bar on take-off.** Astra, climbing off
+  Unysh IV b: a tapered white-blue bar detached behind the hull. It was a
+  police cutter's bolts. Every NPC tracer froze both ends in absolute space
+  at the instant of firing — harmless while a tracer lived 70 ms, and a
+  disaster once the 2026-11-01 weapons pass gave it 0.62 s to fly: a moon
+  carries both ships about 3 km a frame, so the bolts were drawn up to 30 km
+  from either ship. Now both ends are live, as the player's own beams have
+  been since the 25x-warp fan: the near end is the shooter's live body, the
+  far end the ship it was fired at (your own, when it is you), and a muzzle
+  with no body (a station battery) rides with the fight's frame
+  (`Combat.shotFx` opt `{ src, t, fromVel }`; NPC fire at you, NPC against
+  NPC, the turret's point defence and station batteries).
+  combat.test: "an NPC's tracer stays on both ships".
+
 - **2026-11-01 — A rock torpedo flew straight through the rock.** Filmed in
   the game for Astra's demonstration: launched from the panel between
   frames, the torpedo's position was one frame older than the rocks it was

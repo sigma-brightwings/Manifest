@@ -2399,10 +2399,27 @@
      * a hit does to you. This is a picture, so it gets its own name. */
     return (gun && gun.fx) || 'pulse';
   }
-  function shotFx(from, to, target, color, variety, now, miss) {
+  /* `opt` (2026-11-02, the take-off streak): { src, t, fromVel }. BOTH ENDS
+   * OF AN NPC'S TRACER ARE LIVE, the same correctness condition the
+   * player's own beams have had since the 25x-warp fan. Until today an NPC
+   * shot froze `from` and `to` at the instant of firing, in absolute space —
+   * harmless while it lived 70 ms, and a disaster once the weapons pass
+   * gave it 0.62 s to fly: a ship climbing off Unysh IV b with a cutter on
+   * her saw its bolts drawn where both ships HAD been, kilometres away
+   * (measured: 3.1 km a frame, the moon's own orbital speed, 30 km by the
+   * end of a bolt's life) — Astra's long white-blue bar, detached behind
+   * the hull. So: `src` is the shooter's live body and the target is the
+   * target's (the player's own ship when it is you), and the drawing reads
+   * their positions now. For a muzzle with no live body (a station
+   * battery) `fromVel` and `t` let the frozen point ride along with the
+   * fight's frame instead of being left in absolute space. */
+  function shotFx(from, to, target, color, variety, now, miss, opt) {
     var v = variety || 'pulse';
+    var o = opt || {};
     return { from: from, to: to, target: target || null, color: color, variety: v,
-             born: now, until: now + (v === 'beam' ? BEAM_FX_S : SHOT_FX_S), miss: !!miss };
+             born: now, until: now + (v === 'beam' ? BEAM_FX_S : SHOT_FX_S), miss: !!miss,
+             src: o.src || null, t0: o.t, fromVel: o.fromVel ? V.clone(o.fromVel) : null,
+             toVel: o.toVel ? V.clone(o.toVel) : null };
   }
   /* A rescue tender is unarmed for the same reason an ambulance is: what
    * protects it is that shooting one is unthinkable and expensive, not
@@ -7239,7 +7256,7 @@
     });
     if (inc) {
       G.turretCoolUntil = t + tur.cooldown / man.rate;
-      (G.beams = G.beams || []).push(shotFx(V.clone(s.pos), V.clone(inc.pos), inc, tur.color, 'pulse', now, false));
+      (G.beams = G.beams || []).push(shotFx(V.clone(s.pos), V.clone(inc.pos), inc, tur.color, 'pulse', now, false, { src: s, t: t }));
       addHeat(G, (tur.heat || 0) * (tur.cooldown || 0));
       if (hooks && hooks.sound) hooks.sound('turret');
       if (Math.random() < PD.hit) {
@@ -7857,9 +7874,9 @@
        * still take your shield down and one drawn on target could do
        * nothing (2026-11-01). */
       var connects = Math.random() < chance;
-      (G.beams = G.beams || []).push(shotFx(V.clone(sp.live.pos), V.clone(s.pos), null,
+      (G.beams = G.beams || []).push(shotFx(V.clone(sp.live.pos), V.clone(s.pos), s,
         gun === TRADER_GUN ? '#ffc46b' : elite ? '#c86bff' : sp.hunter ? '#9fe8ff' : cop ? '#8fd0ff' : '#ff8a76',
-        npcShotVariety(sp, gun), now, !connects));
+        npcShotVariety(sp, gun), now, !connects, { src: sp.live, t: t }));
       if (connects) {
         damagePlayer(G, gun.dmg, hooks, gun, V.clone(sp.live.pos));
       }
