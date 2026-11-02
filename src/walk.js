@@ -701,9 +701,34 @@
     /* The trim stripe lies ON its wall. The painter's sort kept it in front
      * with a bias; a depth buffer needs it actually in front, so it is
      * stood a centimetre off the wall into the room, or the two flicker. */
+    /* AND EVERY WALL STANDS A FEW MILLIMETRES INTO ITS OWN ROOM (2026-11-02).
+     * Astra, at the bar on Downwell Bunker's concourse: "the door is
+     * glitchy". Two rooms that share a wall each build that wall at the
+     * same plane — the concourse's x0 and the bar's x1 are both x = -13 —
+     * and the GPU culls nothing, so the two faces were drawn at one depth
+     * and fought for every pixel round the doorway, the light concourse
+     * wall and the dark bar wall flickering through each other as you
+     * moved. Stood WALL_INSET into its own room, each room's wall is the
+     * nearer one from inside that room, and the fight is over. The trim
+     * stays a centimetre further in still, in front of its own wall. */
+    var WALL_INSET = 0.006;
+    var onPlane = function (q, r) {
+      var axes = [['x', 0, r.x0, 1], ['x', 0, r.x1, -1], ['z', 2, r.z0, 1], ['z', 2, r.z1, -1]];
+      for (var a = 0; a < axes.length; a++) {
+        var k = axes[a][1], at = axes[a][2];
+        if (q.pts.every(function (p) { return Math.abs(p[k] - at) < 1e-6; })) return axes[a];
+      }
+      return null;
+    };
     plan.rooms.forEach(function (r) {
       var from = quads.length;
       roomQuads(plan, r, quads);
+      for (var w0 = from; w0 < quads.length; w0++) {
+        if (quads[w0].bias) continue;            // the trim: its own centimetre, below
+        var ax = onPlane(quads[w0], r);
+        if (!ax) continue;
+        quads[w0].pts = quads[w0].pts.map(function (p) { var q = p.slice(); q[ax[1]] += ax[3] * WALL_INSET; return q; });
+      }
       for (var i = from; i < quads.length; i++) {
         if (!quads[i].bias || quads[i].bias > -0.01 || quads[i].bias < -0.03) continue;
         quads[i].pts = quads[i].pts.map(function (p) {

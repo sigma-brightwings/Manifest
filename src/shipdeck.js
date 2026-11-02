@@ -213,6 +213,17 @@
    * Carrier's island cab ~35 m over one just under her flight deck. */
   var TOWER = { capital: 41.5, carrier: 35, leviathan: 8, crawler: 5, meridian: 4 };
   var LOBBY_L = 1.8, LOBBY_HW = 1.0;
+  /* A LONGER LOBBY WHERE THE SHAFT HAS TO GO FURTHER AFT (2026-11-02).
+   * Astra: "fit the lift in the crawler to the hull". The car sits straight
+   * aft of the lobby, and on the Crawler that put the shaft 7.3-9.2 m aft
+   * of the bridge door, where her bridge deck is wide but the decks below
+   * pass through a gap in her frame: the car on the main and junction decks
+   * ran a metre outside her plating (the fit test carried an exemption for
+   * it). Measured over every deck at once, a centred 2 x 1.9 m shaft is
+   * inside her from 10 m aft to 20 m aft, so the lobby runs on 2.1 m and
+   * the shaft lands at 9.4-11.3 m, a little more than a metre clear of
+   * the gap. */
+  var LOBBY_EXTRA = { crawler: 2.1 };
   var CAR_HW = 1.0, CAR_D = 1.9, CAR_H = 2.4;
   var LIFT_SPEED = 3.0;                    // m/s, the car between decks
   /* A fast car in the tall towers, or forty metres is a quarter-minute in
@@ -401,7 +412,7 @@
     var lobby = null, cars = {}, carZ = null;
     var p1 = doorFront - WALL_T;
     if (decked) {
-      lobby = room('lobby', 'lobby', -LOBBY_HW, LOBBY_HW, p1 - LOBBY_L, p1, PASSAGE_H, 'Lift lobby');
+      lobby = room('lobby', 'lobby', -LOBBY_HW, LOBBY_HW, p1 - LOBBY_L - (LOBBY_EXTRA[opts.hullId] || 0), p1, PASSAGE_H, 'Lift lobby');
       carZ = [lobby.z0 - WALL_T - CAR_D, lobby.z0 - WALL_T];
       p1 = carZ[0] - WALL_T;
     }

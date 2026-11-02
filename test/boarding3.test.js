@@ -235,9 +235,10 @@ console.log('every room inside her own hull');
 /* Astra: "all ships should have interiors that exist as part of the ship
  * itself". Every hull's deck is planned against her hull (planFitted) and
  * every room but the cockpit (whose canopy stands proud by design) is
- * sampled inside her. Known, and said so: the Crawler's lift car on her
- * lower decks runs a metre across an opening in her frame. */
-var KNOWN_OUT = { crawler: ['lift'] };
+ * sampled inside her. No exemptions: the Crawler's lift car used to run a
+ * metre across an opening in her frame on her lower decks, and her lobby
+ * is 2.1 m longer now so the shaft stands clear of it (2026-11-02). */
+var KNOWN_OUT = {};
 var notIn = [], dropped = [];
 Object.keys(Combat.HULLS).forEach(function (id) {
   var shp = { hullId: id, bornId: 'b3fit|' + id, dryMass: Combat.HULLS[id].dryMass, cargo: {} };

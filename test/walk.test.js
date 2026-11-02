@@ -128,5 +128,38 @@ w2.yaw += Math.PI;
 Walk.step(w2, {}, 0.016);
 check('turn round and E acts on your own ship', w2.near === mine, w2.near && w2.near.label);
 
+/* NO TWO WALLS IN ONE PLANE (2026-11-02). Astra, at the bar: "the door is
+ * glitchy". Neighbouring rooms each built their shared wall at the same
+ * plane, and with nothing culled on the GPU the two faces fought for every
+ * pixel round the doorway. In the mesh, a wall face of one colour must not
+ * lie in the same plane as an overlapping wall face of another. */
+(function () {
+  var pl = Walk.layout('port-7', { seed: 'kawartha', yard: true, ships: ships });
+  var m = Walk.meshFor(pl);
+  var walls = [];
+  for (var fi = 0; fi < m.f.length; fi++) {
+    var tri = m.f[fi].map(function (ix) { return m.v[ix]; });
+    var ax = [0, 2].filter(function (k) { return tri.every(function (p) { return Math.abs(p[k] - tri[0][k]) < 1e-9; }); })[0];
+    if (ax === undefined || tri.every(function (p) { return Math.abs(p[1] - tri[0][1]) < 1e-9; })) continue;
+    var o = ax === 0 ? 2 : 0;
+    walls.push({ ax: ax, at: tri[0][ax], c: m.c[fi].replace('!', ''),
+                 u0: Math.min.apply(null, tri.map(function (p) { return p[o]; })), u1: Math.max.apply(null, tri.map(function (p) { return p[o]; })),
+                 v0: Math.min.apply(null, tri.map(function (p) { return p[1]; })), v1: Math.max.apply(null, tri.map(function (p) { return p[1]; })) });
+  }
+  var byPlane = {}, fights = 0, eg = '';
+  walls.forEach(function (w) { var k = w.ax + '|' + w.at.toFixed(4); (byPlane[k] = byPlane[k] || []).push(w); });
+  Object.keys(byPlane).forEach(function (k) {
+    var L = byPlane[k];
+    for (var i = 0; i < L.length && fights < 50; i++) for (var j = i + 1; j < L.length; j++) {
+      var a = L[i], b = L[j];
+      if (a.c === b.c) continue;
+      if (Math.min(a.u1, b.u1) - Math.max(a.u0, b.u0) > 0.05 && Math.min(a.v1, b.v1) - Math.max(a.v0, b.v0) > 0.05) {
+        fights++; if (!eg) eg = k + ' ' + a.c + ' vs ' + b.c;
+      }
+    }
+  });
+  check('no two rooms\' walls are drawn in the same plane (the bar door\'s flicker)', fights === 0, fights + ' ' + eg);
+})();
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 if (fail) process.exit(1);

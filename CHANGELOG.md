@@ -40,6 +40,29 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-02, deck fixes)
+
+- **The glitchy bar door** (Astra, on Downwell Bunker's concourse: "this is
+  the bar; the door is glitchy"). Every pair of rooms that share a wall
+  built that wall twice in one plane — the concourse's at x = -13 and the
+  bar's — and the GPU culls nothing, so the light concourse wall and the
+  dark bar wall fought for every pixel round the doorway and shimmered as
+  you moved. It was true of every shared wall on every station deck; the
+  bar was where it showed worst. In the deck's GPU mesh (`Walk.meshFor`)
+  each room's walls now stand 6 mm into their own room, so from inside a
+  room its own wall is always the nearer. walk.test: "no two rooms' walls
+  are drawn in the same plane" (it found 50+ fights before).
+- **The Crawler's lift is inside her hull** (Astra: "fit the lift in the
+  crawler to the hull"). The car sat straight aft of her lift lobby, which
+  put the shaft where her lower decks pass a gap in her frame, and on the
+  main and junction decks it ran a metre outside her plating — the fit
+  test carried an exemption for it. Measured over all three decks at once,
+  a centred shaft fits from 10 m aft of the bridge door to 20 m, so her
+  lobby is 2.1 m longer (`LOBBY_EXTRA` in shipdeck.js) and the shaft stands
+  at 9.4-11.3 m. The exemption is gone: boarding3's "no room stands outside
+  her skin, on any hull" now covers the Crawler's lift, and fitting took
+  nothing away from any hull.
+
 ### Added
 
 - **2026-11-02 — The mass driver** (`massdriver.js`). A coil gun, and the
