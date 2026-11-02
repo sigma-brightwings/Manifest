@@ -73,12 +73,13 @@
    * shipyard now buys its hull metal (3.45 -> 0.91), a farm buys seed
    * stock and its richer neighbours' meat (grape 3.50 -> 1.66, gold
    * 5.06 -> 1.84), and a reprocessing plant no longer pays for tractors
-   * it never used (3.99 -> 5.72). `refinery` has no plants of its own to
-   * measure and keeps the refinery plant's figure. */
+   * it never used (3.99 -> 5.72). Then again after the port signatures
+   * (books read `local`): the figures below. `refinery` has no plants of
+   * its own to measure and keeps the refinery plant's figure. */
   var KIND_MEDIAN = {
-    agri: 1.46, mining: 3.21, reprocessing: 5.72, shipyard: 0.91,
-    refinery: 0.88, 'plant-refinery': 0.88, 'plant-skimmer': 0.24,
-    'farm-gold': 1.84, 'farm-grape': 1.66
+    agri: 1.72, mining: 2.83, reprocessing: 4.24, shipyard: 1.01,
+    refinery: 0.75, 'plant-refinery': 0.75, 'plant-skimmer': 0.21,
+    'farm-gold': 2.07, 'farm-grape': 1.90
   };
   var SKIM_WEIGHT = 0.6;          // corruption's cut, at 100
   var VIOLENCE_WEIGHT = 0.3;      // violence's cut, at 100

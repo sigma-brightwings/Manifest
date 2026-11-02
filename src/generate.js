@@ -815,6 +815,10 @@
     /* And the plants over the giants act on what they were just stamped as:
      * skimmers scoop hydrogen, navy and Syndicate refineries press milfuel. */
     if (Eco.runGiantPlants) Eco.runGiantPlants(sys);
+    /* Every port's signature — a major and a minor each way, the rest
+     * near list price (Economy.signature, 2026-11-02). Last of the market
+     * passes, because every pass above rewrites rows. No draws. */
+    if (Eco.applySignatures) Eco.applySignatures(sys);
     /* Off-screen raids (aggression.js): last, reading the pirates and the
      * timetable, drawing nothing. */
     attachRaids(sys);

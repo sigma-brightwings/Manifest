@@ -42,6 +42,36 @@ before they update.
 
 ### Changed
 
+- **2026-11-02 — The market review, part two: every port has a signature.**
+  Astra asked that every port have a major and a minor import and export.
+  Measured, almost all already did; the real fault was the other end — half
+  of all ports listed 8+ imports, a third 8+ MAJOR ones, so the board stopped
+  saying what a place is. Now, as the last market pass of every system
+  (`Economy.applySignatures`, after fuel haulage, the giant plants and the
+  licence, which all rewrite rows):
+  - by trade value, the top export and top import are the port's MAJOR
+    (full price signal, held to at least 0.78x / 1.22x base), the second on
+    each side its MINOR (0.88x / 1.12x), and everything else keeps 40% of
+    its signal: still made, still sold, priced near list;
+  - **essentials are never softened as imports**: food (grain, livestock,
+    fish, fruit), fissiles for the reactor and hydrogen keep at least minor
+    strength wherever a port needs them;
+  - a port short of two on a side promotes the row that leans hardest that
+    way; a skimmer (hydrogen and nothing else) flips the need it comes
+    closest to meeting into a minor export. Measured after: 0% of ports
+    with no major export or import, 0.7% with fewer than two exports (pure
+    consumers with nothing made to promote), 0% with fewer than two imports;
+  - the market screen prints it beside the name: EXPORT / IMPORT in capitals
+    for the major, lower case for the minor, "needs" for an essential.
+  - Founded stations get the same pass.
+  - Computers were still a glut (41% of ports made them, 14.5% bought):
+    mining heads, refineries and reprocessing plants now buy them. 50% now.
+  - The market colours' cut-offs re-measured the same way (sixty systems,
+    quartiles and twentieths): an ask is news under 0.73x base (was 0.50x),
+    a bid over 1.34x (was 1.62x). The economy tests' ramp checks now read
+    the ramp's own ends rather than the old numbers.
+  - `holdings.js` KIND_MEDIAN re-measured again (books read `local`).
+
 - **2026-11-02 — The market review, part one (Astra: "do a meta-analysis
   of our current market and suggest changes", then "start on your
   recommendations").** Measured over 3,043 ports in 229 systems with the new

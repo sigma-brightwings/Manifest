@@ -17421,6 +17421,23 @@
       ctx.fillStyle = isWaste ? '#ffb86b'
                     : markColour(held > 0 ? '#e6f0ff' : '#a9bcd6', mk.row);
       ctx.fillText(r.name, px + 44, y);
+      /* THE SIGNATURE, in words (2026-11-02): what this port is about.
+       * Capitals for the major, lower case for the minor, so the eye finds
+       * the reason to come here first. */
+      if (!isWaste && r.sig) {
+        var sigTxt = r.sig === 'essential' ? 'needs'
+                   : (r.exporter ? 'export' : 'import');
+        if (r.sig === 'major') sigTxt = sigTxt.toUpperCase();
+        ctx.font = (r.sig === 'major' ? 'bold ' : '') + '10px ui-monospace, monospace';
+        ctx.fillStyle = r.sig === 'major' ? (r.exporter ? '#9dffb0' : '#ffd36b')
+                      : r.sig === 'minor' ? (r.exporter ? 'rgba(157,255,176,0.6)' : 'rgba(255,211,107,0.6)')
+                      : 'rgba(170,190,214,0.55)';
+        ctx.font = 'bold 12px ui-monospace, monospace';
+        var nmW = ctx.measureText(r.name).width;
+        ctx.font = (r.sig === 'major' ? 'bold ' : '') + '10px ui-monospace, monospace';
+        ctx.fillText(sigTxt, px + 44 + nmW + 8, y);
+        ctx.font = 'bold 12px ui-monospace, monospace';
+      }
       if (isWaste) {
         ctx.fillStyle = 'rgba(255,184,107,0.65)';
         ctx.font = 'bold 10px ui-monospace, monospace';

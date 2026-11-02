@@ -620,6 +620,117 @@
     return Math.max(0.08, Math.min(1, 1 / (1 + ins)));
   }
 
+  /* ---- A PORT'S SIGNATURE (2026-11-02, the market review) --------------
+   * Astra: "all ports should have at least one major and one minor
+   * import/export product." Measured, every port already had that — the
+   * fault was the other end: half of all ports listed 8+ imports and a
+   * third 8+ MAJOR ones, every row a strong price signal, so the board
+   * stopped saying what a place IS and nearly any cargo sold nearly
+   * anywhere at a premium.
+   *
+   * So each side keeps a signature. By trade value (net tonnes x base):
+   *   the MAJOR export and the MAJOR import keep their full price signal;
+   *   the MINOR one (second on each side) keeps MINOR_KEEP of it;
+   *   everything else keeps SIGNATURE_SOFT — still traded, still flagged,
+   *   still sold where it is made, but priced near list: "trades in", not
+   *   "the reason to come here".
+   * ESSENTIALS are never softened as an import: food, fissiles for the
+   * reactor and hydrogen. Astra: "all ports import food", and a station
+   * short of fissiles or fuel should say so in its prices whatever else it
+   * is. They keep at least the minor strength.
+   *
+   * Scales both halves of the structure together — `local` (the price
+   * factor) and `base` (where the shelf sits, which drives scarcity) —
+   * because softening one alone leaves the other doing all the work. No
+   * draws: a pure pass over the rows, so no seed moves except in price. */
+  var SIGNATURE_SOFT = 0.4;
+  var MINOR_KEEP = 0.75;
+  var ESSENTIAL_IMPORT = { grain: 1, livestock: 1, fish: 1, fruit: 1, fissile: 1, hydrogen: 1 };
+  function signature(rows) {
+    var ex = [], im = [];
+    for (var cid in rows) {
+      var r = rows[cid], com = BY_ID[cid];
+      if (!com || com.waste || com.milfuel || com.contraband) continue;   // specials keep their own rules
+      var v = Math.abs(r.prod - r.cons) * Math.abs(com.base);
+      if (r.exporter) ex.push({ r: r, v: v }); else if (r.importer) im.push({ r: r, v: v, ess: !!ESSENTIAL_IMPORT[cid] });
+    }
+    /* THE FLOOR, then: a port short of two on a side promotes the row that
+     * leans hardest that way — the best-supplied good it makes, or the
+     * worst-supplied one it uses — so every port has a major and a minor
+     * in each direction (measured before this: 2.6% had fewer than two
+     * exports, 0.2% fewer than two imports). */
+    function promote(list, out) {
+      if (list.length >= 2) return;
+      var best = null, bestK = -1;
+      for (var cid in rows) {
+        var r = rows[cid], com = BY_ID[cid];
+        if (!com || com.waste || com.milfuel || com.contraband || r.exporter || r.importer) continue;
+        var k = out ? (r.prod > 0 ? r.prod / (r.cons + 1e-6) : -1) : (r.cons > 0 ? r.cons / (r.prod + 1e-6) : -1);
+        if (k > bestK) { bestK = k; best = r; }
+      }
+      /* A skimmer over a giant is the case that needed more: hydrogen and
+       * nothing else, every other row a need. Then the side's minor is the
+       * need it comes closest to meeting itself — some alloys or textiles
+       * made on the station, sold on though she buys more — flipped. */
+      if (!best || bestK < 0) {
+        for (var cid2 in rows) {
+          var r2 = rows[cid2], com2 = BY_ID[cid2];
+          if (!com2 || com2.waste || com2.milfuel || com2.contraband || ESSENTIAL_IMPORT[cid2]) continue;
+          if (out ? !(r2.importer && r2.prod > 0) : !(r2.exporter && r2.cons > 0)) continue;
+          var k2 = out ? r2.prod / r2.cons : r2.cons / r2.prod;
+          if (k2 > bestK) { bestK = k2; best = r2; }
+        }
+        if (!best) return;
+        if (out) best.importer = false; else best.exporter = false;
+        for (var j = 0; j < (out ? im : ex).length; j++) {
+          if ((out ? im : ex)[j].r === best) { (out ? im : ex).splice(j, 1); break; }
+        }
+      }
+      if (out) best.exporter = true; else best.importer = true;
+      list.push({ r: best, v: 0, ess: !out && !!ESSENTIAL_IMPORT[best.id], promoted: true });
+    }
+    promote(ex, true); promote(im, false);
+    function apply(list, out) {
+      list.sort(function (a, b) { return b.v - a.v; });
+      for (var i = 0; i < list.length; i++) {
+        var keep = i === 0 ? 1 : i === 1 ? MINOR_KEEP : SIGNATURE_SOFT;
+        if (list[i].ess && keep < MINOR_KEEP) keep = MINOR_KEEP;
+        var row = list[i].r;
+        row.sig = i === 0 ? 'major' : i === 1 ? 'minor' : list[i].ess ? 'essential' : null;
+        if (keep < 1) {
+          row.local = 1 + (row.local - 1) * keep;
+          row.base = 0.5 + (row.base - 0.5) * keep;
+        }
+        /* And the signature is held to its word: a major is priced as one,
+         * a minor at least as a minor, whatever the tonnage said. Without
+         * this, 8.7% of ports had a "major" export priced like a sideline. */
+        if (row.sig === 'major' || row.sig === 'minor') {
+          var m = row.sig === 'major';
+          if (out) {
+            row.local = Math.min(row.local, m ? MAJOR_EX_LOCAL : MINOR_EX_LOCAL);
+            row.base = Math.max(row.base, m ? 0.78 : 0.64);
+          } else {
+            row.local = Math.max(row.local, m ? MAJOR_IM_LOCAL : MINOR_IM_LOCAL);
+            row.base = Math.min(row.base, m ? 0.22 : 0.36);
+          }
+        }
+      }
+    }
+    apply(ex, true); apply(im, false);
+  }
+  /* RUN LAST, over the finished system: the fuel haulage, the giant plants
+   * and the licence all rewrite rows after buildPortMarket, and a signature
+   * stamped before them was undone (measured: refineries' hydrogen back at
+   * 0.79-0.87 and their second export gone). generate.js calls this once
+   * at the end of generateSystem, stations.js after building a founded
+   * station's market. */
+  function applySignatures(sys) {
+    var ports = (sys && sys.ports) || [];
+    for (var i = 0; i < ports.length; i++) if (ports[i].market) signature(ports[i].market.rows);
+  }
+  var MAJOR_EX_LOCAL = 0.78, MINOR_EX_LOCAL = 0.88;
+  var MAJOR_IM_LOCAL = 1.22, MINOR_IM_LOCAL = 1.12;
+
   function buildPortMarket(port, host, sys, rng) {
     var dev = host.economy ? host.economy.dev : developmentOf(host, rng);
     var pop = host.economy ? host.economy.pop : populationOf(host, dev);
@@ -784,6 +895,12 @@
     if (roleId === 'agri' || (canFarm(host) && port.surface)) wants('genetech', flow * (0.02 + 0.03 * hRow('genetech')));
     if (roleId === 'highport') wants('genetech', flow * (0.015 + 0.02 * hRow('genetech')));
     if (roleId === 'mining' || roleId === 'refinery') wants('medical', flow * (0.04 + 0.08 * hRow('medical')));
+    /* Computers were the other glut (41% of ports made them, 14.5% bought,
+     * after the first pass): the working ports run on them too — survey and
+     * assay at a mining head, process control at a refinery or a plant. */
+    if (roleId === 'mining' || roleId === 'refinery' || roleId === 'reprocessing') {
+      wants('computers', flow * (0.03 + 0.05 * hRow('computers')));
+    }
     /* And a yard eats ore as well as alloy where it is still young enough
      * to do its own smelting. */
     if (roleId === 'shipyard' && dev < 0.7) wants('ores', flow * (0.3 + 0.4 * hRow('yardores')));
@@ -1614,6 +1731,8 @@
       sell: mid * (1 - SPREAD / 2),     // what the player is paid per tonne
       stock: st, cap: row.cap, fill: fill,
       exporter: row.exporter, importer: row.importer,
+      /* 'major' | 'minor' | 'essential' | null — the port's signature. */
+      sig: row.sig || null,
       tradeable: sells, accepts: true
     };
   }
@@ -1703,10 +1822,16 @@
    * distribution IS: asks bunch under base and trail a long way above it.
    * Matching the ramps to each other would have been tidier and would have
    * made the wrong half of the screen shout. */
-  var MARK_BUY_GOOD = 0.50, MARK_BUY_FULL = 0.44;
-  var MARK_BUY_BAD = 0.92, MARK_BUY_WORST = 2.06;
-  var MARK_SELL_GOOD = 1.62, MARK_SELL_FULL = 1.81;
-  var MARK_SELL_BAD = 0.54, MARK_SELL_WORST = 0.42;
+  /* RE-MEASURED 2026-11-02, the same way (sixty systems, quartiles and
+   * twentieths), after the market review gave every port a signature: a
+   * major and a minor each way, everything else near list price. The
+   * distribution tightened toward 1 as it was meant to — asks start being
+   * news at 0.73x (was 0.50x), bids at 1.34x (was 1.62x) — and the
+   * extremes, the true bargains and the true hunger, are where they were. */
+  var MARK_BUY_GOOD = 0.73, MARK_BUY_FULL = 0.50;
+  var MARK_BUY_BAD = 1.01, MARK_BUY_WORST = 1.71;
+  var MARK_SELL_GOOD = 1.34, MARK_SELL_FULL = 1.68;
+  var MARK_SELL_BAD = 0.77, MARK_SELL_WORST = 0.51;
 
   /* Strength in 0..1 for a value that has passed `from` on its way to
    * `to`, either direction. Zero at the threshold, one at full. */
@@ -2066,6 +2191,7 @@
     developmentOf: developmentOf,
     populationOf: populationOf,
     buildPortMarket: buildPortMarket,
+    applySignatures: applySignatures, signature: signature,
     analyticStock: analyticStock,
     shortfalls: shortfalls, raidedArrival: raidedArrival, RAID_TAKE: RAID_TAKE,
     ledgerAt: ledgerAt,
@@ -2074,6 +2200,7 @@
     priceList: priceList,
     priceMark: priceMark,
     MARK_BUY_GOOD: MARK_BUY_GOOD, MARK_BUY_BAD: MARK_BUY_BAD,
+    MARK_BUY_FULL: MARK_BUY_FULL, MARK_SELL_FULL: MARK_SELL_FULL,
     MARK_SELL_GOOD: MARK_SELL_GOOD, MARK_SELL_BAD: MARK_SELL_BAD,
     applyTrade: applyTrade,
     goLive: goLive,

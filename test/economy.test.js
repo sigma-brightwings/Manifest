@@ -1665,16 +1665,22 @@ console.log('--- the price worth flying for ---');
    * prices in the galaxy should not look the same. */
   function askAt(x) { return Eco.priceMark({ id: 'grain', buy: base * x, sell: null }).buy; }
   function bidAt(x) { return Eco.priceMark({ id: 'grain', buy: null, sell: base * x }).sell; }
+  /* Read off the ramp's own ends, so the checks say what the ramp DOES
+   * and survive the cut-offs being re-measured (2026-11-02, the market
+   * review moved them). `at(f)` is f of the way from start to full. */
+  var aG = Eco.MARK_BUY_GOOD, aF = Eco.MARK_BUY_FULL, bG = Eco.MARK_SELL_GOOD, bF = Eco.MARK_SELL_FULL;
+  function askF(f) { return askAt(aG + (aF - aG) * f); }
+  function bidF(f) { return bidAt(bG + (bF - bG) * f); }
   check('an ask just past the threshold is barely green',
-        askAt(0.499) > 0 && askAt(0.499) < 0.1, askAt(0.499).toFixed(3));
+        askF(0.02) > 0 && askF(0.02) < 0.1, askF(0.02).toFixed(3));
   check('and a far better one is fully green',
-        askAt(0.43) > 0.99, askAt(0.43).toFixed(3));
+        askAt(aF - 0.01) > 0.99, askAt(aF - 0.01).toFixed(3));
   check('the ramp is monotonic in between',
-        askAt(0.49) < askAt(0.47) && askAt(0.47) < askAt(0.45),
-        [askAt(0.49), askAt(0.47), askAt(0.45)].map(function (v) { return v.toFixed(2); }).join(' < '));
+        askF(0.2) < askF(0.5) && askF(0.5) < askF(0.8),
+        [askF(0.2), askF(0.5), askF(0.8)].map(function (v) { return v.toFixed(2); }).join(' < '));
   check('a bid ramps the same way, upward',
-        bidAt(1.63) < bidAt(1.72) && bidAt(1.72) < bidAt(1.80) && bidAt(1.9) > 0.99,
-        [bidAt(1.63), bidAt(1.72), bidAt(1.80)].map(function (v) { return v.toFixed(2); }).join(' < '));
+        bidF(0.1) < bidF(0.5) && bidF(0.5) < bidF(0.9) && bidAt(bF + 0.1) > 0.99,
+        [bidF(0.1), bidF(0.5), bidF(0.9)].map(function (v) { return v.toFixed(2); }).join(' < '));
   check('and nothing ever exceeds full strength',
         askAt(0.01) <= 1 && bidAt(40) <= 1 &&
         Eco.priceMark({ id: 'grain', buy: base * 40, sell: null }).buy >= -1);
@@ -1682,7 +1688,7 @@ console.log('--- the price worth flying for ---');
    * except this one: the whole point is that the middle of the ramp is
    * neither nothing nor everything. */
   check('the middle of the ramp is genuinely in the middle',
-        askAt(0.47) > 0.3 && askAt(0.47) < 0.7, askAt(0.47).toFixed(3));
+        askF(0.5) > 0.3 && askF(0.5) < 0.7, askF(0.5).toFixed(3));
 
   /* Waste runs backwards on purpose and has its own colour already. */
   var w = Eco.priceList(Gen.generateSystem('seed-3').ports.filter(function (p) {

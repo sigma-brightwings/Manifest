@@ -453,6 +453,7 @@
     Gen.attachPort(sys, host, port);
     if (Eco && Eco.buildPortMarket) {
       Eco.buildPortMarket(port, host, sys, new RNG('ps-market|' + seedOf(st)));
+      if (Eco.signature) Eco.signature(port.market.rows);   // a major and a minor each way, as every port
       port.market.roleName = st.typeName;
       if (st.type === 'skimmer') port.plant = 'skimmer';
       else if (st.type === 'refinery') port.plant = 'refinery';
@@ -578,6 +579,7 @@
     shadow.ports.push(port);
     try {
       Eco.buildPortMarket(port, host, shadow, new RNG('ps-market|' + seedOf(st)));
+      if (Eco.signature) Eco.signature(port.market.rows);
       if (kind === 'surface') {
         var upF = upPortFor(st, host);
         upF.id = 'ps-forecast-up';
