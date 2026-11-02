@@ -282,7 +282,10 @@ forever (yours is on F5; theirs are on the target page and the comms channel).
 
 **The career persists.** Auto-saved every dock and on closing the tab, per
 seed. Starting over is `Esc` → *Quit to main menu* → *New career*, which takes
-two deliberate steps because it discards one. Sound is synthesised live — thrust rumble,
+two deliberate steps because it discards one. *New career* then asks the
+difficulty (Easy / Normal / Hard), the focus (Trade / Mining / Combat — Hard
+has none, it is the classic Talon), and the seed: `▲ ▼` choose, `Enter` takes
+it, `Esc` or `◂` steps back one question. Sound is synthesised live — thrust rumble,
 lasers, the dock clunk — and unmutes on your first keypress.
 
 ---

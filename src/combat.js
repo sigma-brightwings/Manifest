@@ -9755,6 +9755,9 @@
   }
 
   var Combat = {
+    /* What every hull leaves a yard with; start.js files it first on a
+     * preset start for the same reason buyHull does. */
+    HULL_STANDARD: HULL_STANDARD,
     TURRET_SLEW: TURRET_SLEW,
     npcHeat: npcHeat, addNpcHeat: addNpcHeat, NPC_SHED: NPC_SHED,
     pirateRack: pirateRack, updateNpcHeat: updateNpcHeat,

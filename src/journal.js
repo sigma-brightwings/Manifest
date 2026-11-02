@@ -41,7 +41,10 @@
     trade:   { label: 'TRADE',   group: 'trade',  color: '#b4f0ff' },
     mission: { label: 'CONTRACT', group: 'trade', color: '#d8c8ff' },
     tithe:   { label: 'TITHE',   group: 'trade',  color: '#ffd36b' },
-    travel:  { label: 'ARRIVED', group: 'travel', color: '#8fa8b8' }
+    travel:  { label: 'ARRIVED', group: 'travel', color: '#8fa8b8' },
+    /* What a focus start set you up for (start.js), the first line of a
+     * career that chose one. */
+    start:   { label: 'CAREER',  group: 'travel', color: '#ffe6a8' }
   };
   var GROUPS = [
     { id: 'all',    label: 'ALL' },
