@@ -292,7 +292,11 @@
    * and fifty stars, of which star zero carries the seed unchanged — so
    * #kawartha still drops you into precisely the system it always did, with
    * everywhere else arranged around it. */
-  function newGame(seed) {
+  /* `start` is the title screen's choice, { difficulty, focus } — see
+   * start.js. Absent (boot, a load, a seed in the URL) or HARD, this is
+   * the career it always was, line for line: the plan is null and every
+   * branch below that reads it does nothing. */
+  function newGame(seed, start) {
     /* A new career means you are IN the career. Boot puts the title card up
      * after this returns, which is the one caller that wants it — every
      * other way in here is somebody who has already chosen. */
@@ -352,7 +356,14 @@
     G.explosions = [];
     G.hullWarned = false;
     G.wasDocked = false;
-    enterSystem(G.galaxy.home, { fresh: true });
+    /* Which start this career chose, kept for the save (additively — an
+     * older career has none, and reads as the start it actually had). */
+    G.start = start ? { difficulty: start.difficulty || 'hard', focus: start.focus || null } : null;
+    var plan = (start && global.Start) ? global.Start.plan(start.difficulty, start.focus) : null;
+    var where = focusStartPort(plan);
+    G.startRefused = null;
+    enterSystem(where ? where.star : G.galaxy.home,
+                { fresh: true, start: plan, startPortId: where ? where.port.id : null });
 
     if (typeof location !== 'undefined' &&
         decodeURIComponent((location.hash || '').replace(/^#/, '')) !== String(seed)) {
@@ -364,11 +375,19 @@
      * meant the first was overwritten before it was ever drawn, so the
      * player was told which key launches and never told what they were
      * sitting on. */
-    if (G.startedDocked) {
+    if (G.startedDocked && plan) {
+      /* A focus start says what it set you up for — in one line on the
+       * pad, and in full in the captain's log, where it is still there
+       * after the message has faded. */
+      say(global.Start.dockLine(plan, G.startedDocked), 14);
+      if (global.Journal) global.Journal.add(G, 'start', global.Start.arrivalLine(plan, G.startedDocked));
+      G.startedDocked = null;
+    } else if (G.startedDocked) {
       say('Docked at ' + G.startedDocked.name +
           '  —  F4 to trade or ask to launch, F5 for the yard, then U', 12);
       G.startedDocked = null;
     }
+    if (G.startRefused && G.startRefused.length) console.warn('start fit refused', G.startRefused);
   }
 
   /* Systems are cached by star, not regenerated. Generation is
@@ -395,6 +414,53 @@
    * system's market at a desk (Fleet.bookAllWork) - through this cache, so
    * the dent they leave is still there when you arrive. */
   if (typeof Fleet !== 'undefined') Fleet.systemFor = systemFor;
+
+  /* Start in orbit above a world worth being above: prefer one with a
+   * station, then a habitable one, then just something in the middle.
+   *
+   * A function of its own since the focus starts (start.js), which measure
+   * "the nearest mining head" FROM this world before the system is
+   * entered — and a second copy of the rule would be a second answer. */
+  function startHost(sys) {
+    var stationHost = null, habitable = null;
+    for (var j = 0; j < sys.bodies.length; j++) {
+      var body = sys.bodies[j];
+      if (body.kind === 'station' && !body.surface && !stationHost) stationHost = body.parentBody;
+      if (body.kind === 'planet' && body.habitable && !habitable) habitable = body;
+    }
+    return stationHost || habitable ||
+           sys.bodies.filter(function (b) { return b.kind === 'planet'; })[1];
+  }
+
+  /* WHERE A FOCUS START BEGINS: the star and the port, or null for "where
+   * a career has always begun". Home first. A miner whose home system has
+   * no mining head (4 seeds in 30, measured) is started at the nearest
+   * unrestricted star that has one, up to twelve out — a Guild hall one
+   * jump away is a better first morning than a mining laser in a system
+   * with nothing to sell ore to. A fighter with no yard at home stays home
+   * at the best outfitter (Start.pickPort): a yard is a convenience to a
+   * combat pilot, not the job. Nothing here is random. */
+  function focusStartPort(plan) {
+    if (!plan || plan.focus === 'trade' || !global.Start) return null;
+    var home = G.galaxy.home;
+    var hs = systemFor(home);
+    var p = global.Start.pickPort(hs, plan.focus, startHost(hs));
+    if (p) return { star: home, port: p };
+    if (plan.focus !== 'mining') return null;
+    var near = G.galaxy.stars.filter(function (st) { return st !== home && !st.restricted; })
+      .map(function (st) {
+        var dx = st.x - home.x, dy = st.y - home.y, dz = st.z - home.z;
+        return { st: st, d: dx * dx + dy * dy + dz * dz };
+      })
+      .sort(function (a, b) { return a.d - b.d || (a.st.id < b.st.id ? -1 : 1); })
+      .slice(0, 12);
+    for (var i = 0; i < near.length; i++) {
+      var sys = systemFor(near[i].st);
+      var mp = global.Start.pickPort(sys, 'mining', startHost(sys));
+      if (mp) return { star: near[i].st, port: mp };
+    }
+    return null;
+  }
 
   function enterSystem(star, opts) {
     opts = opts || {};
@@ -473,16 +539,7 @@
       if (b.orbit) G.orbitPaths[b.id] = K.samplePath(b.orbit, b.kind === 'planet' ? 192 : 96);
     }
 
-    // Start in orbit above a world worth being above: prefer one with a
-    // station, then a habitable one, then just something in the middle.
-    var host = null, stationHost = null, habitable = null;
-    for (var j = 0; j < G.sys.bodies.length; j++) {
-      var body = G.sys.bodies[j];
-      if (body.kind === 'station' && !body.surface && !stationHost) stationHost = body.parentBody;
-      if (body.kind === 'planet' && body.habitable && !habitable) habitable = body;
-    }
-    host = stationHost || habitable ||
-           G.sys.bodies.filter(function (b) { return b.kind === 'planet'; })[1];
+    var host = startHost(G.sys);
 
     // Find that world's station, if it has one, and start just below its
     // orbit — a lower orbit is a faster orbit, so you slowly catch up to it.
@@ -497,6 +554,12 @@
       });
       if (bestPort) host = bestPort.parentBody;
     }
+    /* A FOCUS START NAMES ITS PORT (start.js). newGame has already chosen
+     * it — a mining head for a miner, a yard for a fighter — and the world
+     * it stands on becomes the host, so the parking orbit, the respawn
+     * world and the camera all follow the port rather than the default. */
+    var focusPort = (opts.fresh && opts.startPortId && G.sys.byId[opts.startPortId]) || null;
+    if (focusPort) host = focusPort.parentBody;
 
     /* ORBITAL only (2026-10-24): arriving where the busiest port is a pad
      * made the pad `station`, and a pad has no orbit to park under - every
@@ -560,6 +623,13 @@
       G.reported = false;
     } else {
       spawnShip(host, station, G.t);
+      /* THE HULL BEFORE THE PAD. Sim.dockShip picks a berth by dry mass
+       * (over 260 t takes the big one), so a Tallyman docked as the Talon
+       * spawnShip just made would be parked in the wrong bay. HARD has no
+       * plan, and this line does nothing. */
+      if (opts.fresh && opts.start && global.Start) {
+        G.startRefused = global.Start.outfit(G.ship, opts.start, G);
+      }
       /* A NEW CAREER STARTS ON A PAD, not in a parking orbit.
        *
        * It used to open in a circular orbit above the home world, which
@@ -599,7 +669,7 @@
          *
          * So the station case snaps the ship onto the clamps first, and the
          * ground case needs nothing. */
-        var startPort = (G.sys.ports || []).filter(function (p) {
+        var startPort = focusPort || (G.sys.ports || []).filter(function (p) {
           return p.surface && p.parentBody === host && p.market;
         })[0] || station;
         if (startPort) {
@@ -18224,13 +18294,14 @@
   }
 
   function titleItems() {
+    if (G.title && G.title.pick) return startPickItems(G.title);
     return [
       { label: 'Resume career', hint: currentCareerLine(),
         run: function () { G.title = null; } },
       { label: 'Load game', hint: 'a slot from any galaxy',
         run: function () { G.title = null; G.menu = { page: 'load', sel: 0, edit: null, note: null, fromTitle: true }; } },
       { label: 'New career', hint: 'a seed is a universe',
-        run: beginSeedEntry },
+        run: beginStartPick },
       { label: 'Options', hint: 'sound, display, flight, keys',
         run: function () { G.title = null; G.menu = { page: 'options', sel: firstOption(), edit: null, note: null, fromTitle: true }; } },
       /* Last, and set apart by its hint rather than by a separator: it is the
@@ -18317,15 +18388,86 @@
     }
   }
 
-  function beginSeedEntry() {
+  /* ---- choosing a start (start.js, 2026-11-02) ---------------------------
+   * New career is three questions, in the order a pilot would ask them:
+   * how hard, at what, and in which universe. The first two are ROWS on the
+   * title card rather than a new screen, so they inherit everything the
+   * card already does — the highlight, the click targets, the keys and the
+   * hover — and the third is the seed field it has always been.
+   *
+   * Every row says the ship, the hold, the guns and the money, because the
+   * choice IS those four things, and Astra should not have to start a
+   * career to find out what a focus hands her. HARD skips the focus
+   * question: it is the one start with no focus, the Talon as it always
+   * was. Back is a row as well as Esc, with a pointer on it — direction
+   * cues on this card are glyphs, not words. */
+  function beginStartPick() {
+    if (!global.Start) { beginSeedEntry(null); return; }
+    G.title.pick = { stage: 'difficulty', difficulty: null };
+    G.title.sel = 1;                 // Normal: the middle, and the start most people mean
+  }
+
+  function backFromPick(t) {
+    if (t.pick && t.pick.stage === 'focus') {
+      t.sel = Math.max(0, global.Start.DIFFICULTIES.indexOf(t.pick.difficulty));
+      t.pick = { stage: 'difficulty', difficulty: null };
+    } else {
+      t.pick = null;
+      t.sel = 2;                     // back onto New career
+    }
+  }
+
+  function startPickItems(t) {
+    var S = global.Start, pk = t.pick;
+    var back = { label: '\u25c2 Back', hint: pk.stage === 'focus' ? 'pick a difficulty' : 'the main menu',
+                 run: function () { backFromPick(t); } };
+    if (pk.stage === 'difficulty') {
+      var words = { easy: 'a working hull built for the job', normal: 'the small hull of each trade',
+                    hard: 'the classic start - no focus' };
+      return S.DIFFICULTIES.map(function (d) {
+        return {
+          label: S.DIFF_NAME[d], hint: words[d], sub: S.diffLine(d),
+          run: function () {
+            if (d === 'hard') { t.pick = null; beginSeedEntry({ difficulty: 'hard', focus: null }); return; }
+            t.pick = { stage: 'focus', difficulty: d };
+            t.sel = 0;
+          }
+        };
+      }).concat([back]);
+    }
+    return S.FOCI.map(function (f) {
+      var plan = S.plan(pk.difficulty, f);
+      return {
+        label: S.FOCUS_NAME[f], hint: S.hintLine(plan), sub: S.rowLine(plan),
+        run: function () {
+          t.pick = null;
+          beginSeedEntry({ difficulty: pk.difficulty, focus: f });
+        }
+      };
+    }).concat([back]);
+  }
+
+  function startPickHeading(t) {
+    var S = global.Start;
+    if (t.pick.stage === 'difficulty') return 'NEW CAREER  \u25b8  DIFFICULTY';
+    return 'NEW CAREER  \u25b8  ' + S.DIFF_NAME[t.pick.difficulty].toUpperCase() + '  \u25b8  FOCUS';
+  }
+
+  function beginSeedEntry(start) {
+    var S = global.Start;
+    /* Says which start the seed is for, in no more room than the old
+     * title took: the field's own key hint follows it on the same line. */
+    var what = (start && S && start.focus)
+      ? S.DIFF_NAME[start.difficulty].toLowerCase() + ' ' + S.FOCUS_NAME[start.focus].toLowerCase()
+      : (start && start.difficulty === 'hard' ? 'hard' : '');
     G.title.edit = {
-      title: 'Seed for the new career',
+      title: what ? 'Seed: ' + what + ' career' : 'Seed for the new career',
       value: G.seed,
       max: 32,
       commit: function (text) {
         var seed = (text || '').trim() || G.seed;
         if (global.Save) global.Save.clear(seed);   // NEW means new
-        newGame(seed);
+        newGame(seed, start || null);
         G.title = null;
         G.menu = null;
         G.panel = 0;
@@ -18618,9 +18760,13 @@
     var k = e.key.toLowerCase();
     t.note = null;
     var items = titleItems();
+    if (t.sel >= items.length) t.sel = 0;
     if (k === 'arrowup') { t.sel = (t.sel - 1 + items.length) % items.length; return; }
     if (k === 'arrowdown') { t.sel = (t.sel + 1) % items.length; return; }
     if (k === 'enter' || k === ' ') { items[t.sel].run(); return; }
+    /* Inside the start questions, Escape and the left arrow step back one
+     * question — the pointer on the Back row is the cue for both. */
+    if (t.pick && (k === 'escape' || k === 'arrowleft' || k === 'backspace')) { backFromPick(t); return; }
     /* Escape out of the title screen resumes: it is a menu, not a wall. */
     if (k === 'escape') { G.title = null; return; }
   }
@@ -18658,15 +18804,17 @@
 
   /* One row painter for every list on these screens, so the highlight, the
    * click target and the hover all behave the same wherever you are. */
-  function menuRow(ctx, box, i, y, label, value, selected, onPick, dim) {
-    var x = box.x + 18, rw = box.w - 36;
+  /* `tall` grows the highlight and the click target downward, for a row
+   * that carries a second line under it (the start rows). */
+  function menuRow(ctx, box, i, y, label, value, selected, onPick, dim, tall) {
+    var x = box.x + 18, rw = box.w - 36, rh = 24 + (tall || 0);
     if (selected) {
       ctx.save();
       ctx.fillStyle = 'rgba(120,190,235,0.16)';
-      ctx.fillRect(x, y - 15, rw, 24);
+      ctx.fillRect(x, y - 15, rw, rh);
       ctx.strokeStyle = 'rgba(140,210,245,0.5)';
       ctx.lineWidth = 1;
-      ctx.strokeRect(x + 0.5, y - 14.5, rw - 1, 23);
+      ctx.strokeRect(x + 0.5, y - 14.5, rw - 1, rh - 1);
       ctx.restore();
     }
     ctx.save();
@@ -18689,7 +18837,7 @@
       ctx.textAlign = 'left';
     }
     ctx.restore();
-    if (onPick) hot(x, y - 15, rw, 24, onPick);
+    if (onPick) hot(x, y - 15, rw, rh, onPick);
   }
 
   function drawEditField(ctx, box, edit) {
@@ -18902,7 +19050,11 @@
      * this screen will. Wide: lockup in the left column, menu and story
      * stacked on the right. Narrow: stacked, story left out. */
     var L = Logo.layout(w, h, MENU_W);
-    var panelH = 74 + items.length * 32;
+    /* The start questions have two lines a row (what she is, then what she
+     * carries) and a heading saying which question this is. */
+    var picking = !!t.pick;
+    var rowH = picking ? 48 : 32, headH = picking ? 26 : 0;
+    var panelH = 74 + headH + items.length * rowH;
     var storyH = 74 + 5 * 32;          // the menu box's own size, as Astra asked
     var px = L.menuX, py;
     if (L.wide) py = Math.round((h - (panelH + 26 + storyH)) / 2);
@@ -18955,17 +19107,41 @@
     ctx.globalAlpha = aMenu;
     panel(ctx, px, py, MENU_W, panelH, true);
 
-    var box = { x: px, y: py, w: MENU_W, h: panelH, top: py + 30 };
+    var box = { x: px, y: py, w: MENU_W, h: panelH, top: py + 30 + headH };
+    if (picking) {
+      ctx.save();
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = Logo.INK.gold;
+      spacedText(ctx, startPickHeading(t), px + 30, py + 30, 1.2);
+      ctx.restore();
+    }
     for (var i = 0; i < items.length; i++) {
       (function (i) {
-        menuRow(ctx, box, i, box.top + i * 32, items[i].label, items[i].hint, i === t.sel,
-                function () { t.sel = i; items[i].run(); });
+        var y = box.top + i * rowH, sel = i === t.sel;
+        /* A pointer on the chosen row, so which one Enter takes is shown
+         * by a glyph as well as by the highlight. */
+        var label = picking ? (sel && items[i].label.charAt(0) !== '\u25c2' ? '\u25b8 ' : '  ') + items[i].label
+                            : items[i].label;
+        menuRow(ctx, box, i, y, label, items[i].hint, sel,
+                function () { t.sel = i; items[i].run(); }, false, items[i].sub ? rowH - 32 : 0);
+        if (items[i].sub) {
+          ctx.save();
+          ctx.font = '12px ui-monospace, monospace';
+          ctx.fillStyle = sel ? '#d6e6f7' : '#8aa4c2';
+          /* Clipped by measurement, not by a guessed glyph width: this line
+           * is the one that carries the detail, so it gets every pixel. */
+          var sub = items[i].sub, room = MENU_W - 60;
+          while (sub.length > 1 && ctx.measureText(sub).width > room) sub = sub.slice(0, -2) + '\u2026';
+          ctx.fillText(sub, px + 30, y + 21);
+          ctx.restore();
+        }
       })(i);
     }
     ctx.save();
     ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(160,185,220,0.55)';
-    ctx.fillText('arrows move  ·  Enter chooses  ·  Esc resumes', px + 30, py + panelH - 18);
+    ctx.fillText(picking ? '\u25b2 \u25bc move  \u00b7  Enter chooses  \u00b7  \u25c2 Esc back'
+                         : 'arrows move  ·  Enter chooses  ·  Esc resumes', px + 30, py + panelH - 18);
     ctx.restore();
     if (t.note) drawMenuNote(ctx, box, t.note);
     if (t.edit) drawEditField(ctx, box, t.edit);

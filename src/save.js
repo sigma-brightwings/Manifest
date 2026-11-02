@@ -366,6 +366,11 @@
       wanted: G.wanted || {},
       /* The navy's ledger (hunters.js): additive, an older save has none. */
       notoriety: G.notoriety || {},
+      /* WHICH START THIS CAREER CHOSE (start.js): { difficulty, focus }.
+       * Additive and no version bump: an older career has none, which reads
+       * as the only start there was before the choice existed. Kept so a
+       * report can say "easy mining, seed kawartha" and be a test case. */
+      start: G.start || null,
       /* How many times you have taken an occupied berth, per faction. Additive
          and NO version bump: an old career loads with none recorded, which is
          the right answer for a pilot who has never done it. */
@@ -669,6 +674,7 @@
     G.deadPanels = data.deadPanels || {};
     G.wanted = data.wanted || {};
     G.notoriety = data.notoriety || {};
+    G.start = (data.start && typeof data.start === 'object') ? data.start : null;
     G.queueJumps = data.queueJumps || {};
     G.pendingReport = data.pendingReport || null;
     G.distress = data.distress || [];

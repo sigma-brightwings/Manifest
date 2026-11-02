@@ -124,6 +124,43 @@ before they update.
 
 ### Added
 
+- **2026-11-02 — Choose your start: difficulty, then focus** (`start.js`).
+  Astra: "I also want to be able to select the ship I start with based on
+  what I'm wanting to focus on - trade, mining, combat." New career now
+  asks how hard, then at what (skipped on Hard), then the seed, as rows on
+  the title card; every row names the hull and the credits, with the
+  hold, the guns and the kit on the line under it. Pointers (▸ ◂ ▲ ▼) are
+  the direction cues, not words.
+  - **Easy** (107,600 cr of ship and cash, any focus): trade = Tallyman
+    Trader, intermittent + pulse, shield, trade analyser, 15,000 cr;
+    mining = Sump Waste Hauler, mining laser, survey scanner, shield,
+    16,200 cr; combat = Dart Interceptor, beam + pulse, shield, four Hawk
+    seekers, 30,720 cr.
+  - **Normal** (71,400 cr): trade = Talon Courier, pulse, trade analyser,
+    shield, 20,500 cr; mining = Bollard Tug, mining laser, survey scanner,
+    shield, 6,000 cr; combat = Lance Fighter, beam + intermittent, four
+    Hawks, 11,520 cr. The Lance carries no shield because one will not go
+    in: a generator is 4 t of her 6 t fit budget, and with it aboard there
+    is room for no gun (the test pins the refusal).
+  - **Hard** is the career as it always was — Talon, pulse laser,
+    3,200 cr — and is not a preset at all: no plan, the old path, line for
+    line (the test compares it field for field with a career started with
+    no choice).
+  - Value is hull + fittings + seekers at list, plus cash; the dearest
+    kit at each difficulty gets the floor (15,000 easy, 6,000 normal) and
+    the others the difference, computed rather than written down so a
+    repriced laser cannot make one focus richer. Every hull still gets the
+    standard scoop and cruise drive.
+  - Where: trade docks where a career always has; mining at the nearest
+    mining head (all are Guild halls), from the home world — 26 of 30
+    measured home systems have one, and the other four start at the
+    nearest unrestricted star that does; combat at the nearest shipyard
+    (15 of 30 homes), else the best-developed port. No random draws, so
+    the same seed starts at the same port. The pad says what the focus
+    set you up for, and the full line goes in the captain's log as CAREER.
+  - The choice is saved as `start: { difficulty, focus }`, additively; no
+    save-version bump, and an older save loads with none. `test/start.test.js`.
+
 - **2026-11-02 — The mass driver** (`massdriver.js`). A coil gun, and the
   first weapon that has to obey the game's physics. Astra's ruling on
   shields: "50% of the slug's damage to the hull and 50% to the shield ...
