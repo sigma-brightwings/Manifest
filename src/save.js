@@ -309,7 +309,12 @@
          * instead means load re-docks it at the berth, which is also the
          * honest reading: you were on your way in, so you arrived.
          * Additive, and old saves have no `arrival` to consult. */
-        docked: s.docked || (s.arrival ? s.arrival.port : null),
+        /* And the same for the hold over the exit pad (Sim.stepPadHold,
+         * 2026-11-02): `padHold` is not written, so restoring the position
+         * alone would hand back a hull hanging over the pad with nothing
+         * holding it — on a heavy world, the fall-back-and-crash the hold
+         * exists to prevent. Saved there, it comes back in the berth. */
+        docked: s.docked || (s.arrival ? s.arrival.port : null) || (s.padHold ? s.padHold.port : null),
         hullId: s.hullId, hullHp: s.hullHp,
         /* Additive: the outside a hull is wearing, when it is not its own. */
         meshKind: s.meshKind || null,

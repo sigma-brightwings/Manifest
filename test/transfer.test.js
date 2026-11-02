@@ -292,5 +292,151 @@ console.log('--- the airlock, then the lift ---');
   Render.assignPort('orbital', null);
 })();
 
+/* ---- 2026-11-02: the transfer, and what it leaves you in ---------------
+ * Astra: "when I was requesting being moved to the launch pad the ship just
+ * clipped through walls instead of following the internal geometry of the
+ * station"; "no elevators in internal elevator shafts"; "if anything
+ * interrupts the 'move me to the launch pad' it softlocks the game"; "half
+ * the ship was buried in the surface and I couldn't gain any altitude". */
+(function () {
+  console.log('--- the shed: down its own duct, inside its own hall ---');
+  var sheds = [];
+  for (var s5 = 0; s5 < gal.stars.length && sheds.length < 4; s5++) {
+    var sy5 = Gen.generateSystem(gal.stars[s5].seed, optsFor(gal.stars[s5]));
+    (sy5.ports || []).forEach(function (p) {
+      if (sheds.length < 4 && p.surface && Render.portModelFor(p) === 'underground') sheds.push({ sys: sy5, port: p });
+    });
+  }
+  check('the galaxy has procedural sheds to sample', sheds.length > 0, sheds.length + '');
+  var outDuct = 0, outHall = 0, samples = 0, worst = 0;
+  sheds.forEach(function (f) {
+    var port = f.port, sys = f.sys, g = Gen.bayGeometry(port), r = port.radius;
+    var duct = (g.mouthR + g.throatR) / 2;
+    var basis = Sim.portBasis(port, sys, 0);
+    for (var b = 0; b < g.berths; b++) {
+      var tot = Sim.arrivalTotal(port, b);
+      for (var el = 0; el <= tot; el += tot / 300) {
+        /* Every pose under the ground, not just the enclosed legs: the
+         * drop itself is the `pad` leg (slot 1 to the shaft foot), which is
+         * where the old incline left the duct. */
+        var pose = Sim.arrivalPose(port, sys, 0, b, el);
+        if (!pose) continue;
+        var d = V.sub(pose.pos, basis.entrance.pos);
+        var x = V.dot(d, basis.east) / r, y = V.dot(d, basis.north) / r, z = V.dot(d, basis.up) / r;
+        if (z >= 0) continue;
+        samples++;
+        /* Above the hall's ceiling the only open rock is the duct. */
+        if (z > g.ceilZ && (Math.abs(x) > duct || Math.abs(y) > duct)) {
+          outDuct++; worst = Math.max(worst, Math.max(Math.abs(x), Math.abs(y)) - duct);
+        }
+        if (z <= g.ceilZ && (Math.abs(x) > g.chamberX || Math.abs(y) > g.chamberY)) {
+          outHall++; worst = Math.max(worst, Math.max(Math.abs(x) - g.chamberX, Math.abs(y) - g.chamberY));
+        }
+      }
+    }
+  });
+  /* It was a 45-degree incline nobody had modelled: the shaft foot four pad
+   * radii outside a hall 0.42 wide, and the hull in rock the whole way. */
+  check('in the shaft, the hull is inside the duct', samples > 0 && outDuct === 0, outDuct + ' of ' + samples + ' outside');
+  check('in the hall, the hull is inside its walls', outHall === 0, outHall + ' outside, worst ' + worst.toFixed(3) + ' radii');
+
+  console.log('--- a ridden lift is under the hull riding it ---');
+  /* Every orbital model whose heavy-bay route rides a lift on its way
+   * across: while the hull is boarding, riding and getting off, the car
+   * the renderer draws (Render.moverPose, keel at the rail's standoff) has
+   * its top at the keel, not above it. It was up to 0.42 radii above. */
+  var seen = {}, rides = 0, above = 0, worstR = 0, worstAt = '';
+  var frame = { pos: { x: 0, y: 0, z: 0 }, right: { x: 1, y: 0, z: 0 }, up: { x: 0, y: 1, z: 0 }, fwd: { x: 0, y: 0, z: 1 } };
+  for (var s6 = 0; s6 < gal.stars.length; s6++) {
+    var sy6 = Gen.generateSystem(gal.stars[s6].seed, optsFor(gal.stars[s6]));
+    (sy6.ports || []).forEach(function (p) {
+      var id = Render.portModelFor(p);
+      if (p.surface || seen[id]) return;
+      seen[id] = true;
+      var lib = global.PortLib && global.PortLib[id];
+      if (!lib || !lib.movers) return;
+      var g6 = Gen.bayGeometry(p), basis = Sim.portBasis(p, sy6, 0), r = p.radius;
+      for (var b = 0; b < g6.berths; b++) {
+        var path = Sim.arrivalPath(p, b);
+        if (!path || !(path.rideAt >= 1) || !path.rideMover) continue;
+        var mv = lib.movers.filter(function (m) { return m.node === path.rideMover; })[0];
+        var tot = Sim.arrivalTotal(p, b);
+        for (var el = 0; el <= tot; el += tot / 300) {
+          var pose = Sim.arrivalPose(p, sy6, 0, b, el);
+          if (!pose || !(pose.ride === 'board' || pose.ride === 'ride' || pose.ride === 'alight')) continue;
+          var d = V.sub(pose.pos, basis.entrance.pos);
+          var loc = { x: V.dot(d, basis.east) / r, y: V.dot(d, basis.north) / r, z: V.dot(d, basis.up) / r };
+          Render.setMoverRiders([{ pos: loc, keelKm: g6.standoff }]);
+          var sp = Render.moverPose(mv, frame, 1);
+          var top = mv.max[2] + mv.axis[2] * sp;
+          var gap = (loc.z - g6.standoff) - top;
+          rides++;
+          if (gap < -0.002) { above++; if (-gap > worstR) { worstR = -gap; worstAt = id + ' b' + b; } }
+        }
+      }
+    });
+  }
+  Render.setMoverRiders([]);
+  check('there are ridden lifts to check', rides > 0, rides + ' samples');
+  check('and no car is ever above the keel of the hull it carries', above === 0,
+        above + ' above, worst ' + worstR.toFixed(3) + ' radii at ' + worstAt);
+
+  console.log('--- handed the stick clear of the ground, and held there ---');
+  var held = 0, cleared = 0, stayed = 0, letGo = 0, timedOut = 0, n7 = 0, lowest = Infinity;
+  found.concat(sheds).forEach(function (f) {
+    var sys = f.sys, port = f.port, t = 0;
+    var st = Sim.bodyState(port, sys, t);
+    var sh = newShip(st.pos, st.vel);
+    Sim.dockShip(sh, port, sys, t);
+    if (sh.docked !== port.id) return;
+    sh.launchOk = 'x';
+    Sim.undockShip(sh, sys, t, 0.003, { transfer: true });
+    var tt = t, steps = 0;
+    while (sh.arrival && steps++ < 4000) { tt += 0.25; Sim.stepArrival(sh, sys, tt); }
+    n7++;
+    if (sh.padHold) held++;
+    var len = Render.hullLength ? Render.hullLength(sh) : 0.025;
+    var gb = Sim.groundBasis(port, sys, tt);
+    var hAt = function (time) {
+      var g2 = Sim.groundBasis(port, sys, time);
+      return V.dot(V.sub(sh.pos, g2.entrance.pos), g2.up);
+    };
+    /* Nobody at the stick for a minute: lifted clear, and not let fall. */
+    var minH = Infinity;
+    for (var k = 1; k <= 240; k++) {
+      var r7 = Sim.stepPadHold(sh, sys, tt + k * 0.25, false);
+      if (!r7.holding) break;
+      /* A mountain portal hands over 73 m below the ground: twelve seconds
+       * of lift before it is clear. Judged once it has had the time. */
+      if (k > 120) minH = Math.min(minH, hAt(tt + k * 0.25));
+    }
+    if (sh.padHold && minH >= Sim.PAD_HOLD_CLEAR + len - 1e-6) cleared++;
+    lowest = Math.min(lowest, minH - len);
+    if (sh.padHold && V.dot(sh.fwd, gb.up) > 0.99) stayed++;
+    /* The pilot's thrust lets go. */
+    var r8 = Sim.stepPadHold(sh, sys, tt + 61, true);
+    if (!r8.holding && !sh.padHold && r8.released === 'pilot') letGo++;
+    /* And nobody at all: it does not hover forever. */
+    sh.padHold = { port: port.id, at: tt, e: 0, n: 0, h0: 0 };
+    var r9 = Sim.stepPadHold(sh, sys, tt + Sim.PAD_HOLD_MAX + 1, false);
+    if (!r9.holding && !sh.padHold && r9.released === 'timeout') timedOut++;
+  });
+  check('the transfer ends in the pad\'s hold, not in free fall', n7 > 0 && held === n7, held + '/' + n7);
+  check('the hold lifts the whole hull clear of the ground and keeps it there', cleared === n7,
+        cleared + '/' + n7 + ', lowest keel ' + (lowest * 1000).toFixed(0) + ' m up');
+  check('nose to the sky while held', stayed === n7, stayed + '/' + n7);
+  check('thrust takes the stick back', letGo === n7, letGo + '/' + n7);
+  check('and an empty cockpit is let go after PAD_HOLD_MAX', timedOut === n7, timedOut + '/' + n7);
+
+  /* Docking ends a hold the way it ends an arrival. */
+  var f0 = found[0];
+  if (f0) {
+    var sh0 = newShip(Sim.bodyState(f0.port, f0.sys, 0).pos, Sim.bodyState(f0.port, f0.sys, 0).vel);
+    sh0.padHold = { port: f0.port.id, at: 0, e: 0, n: 0, h0: 0 };
+    Sim.dockShip(sh0, f0.port, f0.sys, 0);
+    check('docking clears a hold', !sh0.padHold);
+  }
+})();
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
