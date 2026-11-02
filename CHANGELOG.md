@@ -66,8 +66,10 @@ before they update.
     spark where it strikes. 7,400 cr, needs development 0.5.
   - It carries the time its position is for, so a slug fired inside a frame
     is never tested a frame behind (the hunters' and torpedoes' bug).
-  - NPCs do not carry it yet, and a missed slug does not go on an orbit to
-    hit a station later — both offered to Astra.
+  - A missed slug never goes on an orbit: Astra ruled it out ("we could
+    very quickly end up with a Kessler syndrome"). Rounds are frangible —
+    the charge cracks them to dust after their 20 s.
+  - NPCs do not carry it yet.
   - test/massdriver.test.js (22 checks): the split, recoil, the round spent,
     travel time, the gap coasted, a crossing target missed when aimed at
     and hit when led, buying slugs and every refusal.

@@ -30,9 +30,12 @@
  *
  * A MISSED SLUG keeps flying for SLUG_LIFE and is then gone. It is a real
  * object in that time — it can hit the next ship along the line — but it
- * is not put on an orbit forever. (Offered to Astra as a later choice: a
- * miss that can hit a station minutes later, and the law treating a mass
- * driver near a port the way it treats a rock torpedo.)
+ * is never put on an orbit. DECIDED, 2026-11-02: offered a miss that could
+ * hit a station minutes later, Astra said no — "we could very quickly end
+ * up with a Kessler syndrome." In the world, rounds are frangible: the
+ * same charge the coils leave on them cracks a slug apart into dust once
+ * it has flown its twenty seconds, which is also why no yard will sell you
+ * a solid one.
  *
  * THE ONE-TICK RULE, learnt twice on 2026-11-01 (hunters, torpedoes): a
  * slug carries `at`, the time its position is for, and any gap between
