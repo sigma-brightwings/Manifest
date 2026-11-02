@@ -7243,11 +7243,13 @@ console.log('--- zooming out of her hangar ---');
         check(kind + ': with the station cut away round her', !!G.cutaway && G.cutaway.port === port,
               G.cutaway ? 'cut belongs to ' + (G.cutaway.port && G.cutaway.port.name) : 'no cut');
         if (kind === 'surface' && G.cutaway && G.cutaway.box && Sim.portBasis) {
-          /* Looking DOWN on the port: the boom's pitch is in the system's
-           * frame, so it is aimed from the port's own up. */
+          /* Looking DOWN on the port. The boom is measured in the ground's
+           * own frame at a ground port now (G.cam.frame), so this is aimed
+           * from the port's up through whatever frame the camera holds. */
           var pb = Sim.portBasis(port, G.sys, G.t);
           var dir = V.add(V.scale(pb.up, Math.sin(0.95)), V.scale(pb.east, Math.cos(0.95)));
-          G.cam.pitch = Math.asin(dir.z); G.cam.yaw = Math.atan2(dir.y, dir.x);
+          var ang = R.camAngles(dir, G.cam.frame);
+          G.cam.pitch = ang.pitch; G.cam.yaw = ang.yaw;
           frames(1);
           /* Held to the sight-line where it crosses the street, not to the
            * eye: at 8 km a box sized to the eye was a pit kilometres across
@@ -7274,6 +7276,142 @@ console.log('--- zooming out of her hangar ---');
     W.GLWorld = saved;
     Object.keys(keep).forEach(function (k) { R[k] = keep[k]; });
     G.ship.docked = null; G.hangarOut = false;
+  }
+})();
+
+console.log('--- the ground under a ground port (2026-11-02) ---');
+/* Astra's zoom-out sheet from Ashford Undercroft: the hangar floating in
+ * black space with stars under it, the horizon on its side, the eye in the
+ * rock beside an 860 m bay. The camera's angles were in the star system's
+ * frame, not the ground's. Pinned here, at every port on the start world
+ * and an open-pad one elsewhere, over a sweep of booms and angles:
+ *   - the boom is measured in the ground's own frame (G.cam.frame);
+ *   - once the boom can reach the street, the eye is above it;
+ *   - shorter than that, the eye is in the section, never in the rock —
+ *     the box holds the eye AND the ship, so the whole sight-line between
+ *     them is cut (Astra: "we're gonna be able to see through the walls of
+ *     the station when we're docked inside the ground port");
+ *   - the planet is drawn under the site exactly when the eye is above the
+ *     street (its shader discards when the eye is inside the sphere), and
+ *     from under the street the town is not drawn and the port is lit as
+ *     indoors — the pale slab was the shed's wall in sunlight;
+ *   - the shaft's hole in the planet has a floor, so nothing shows
+ *     through it but rock. */
+(function () {
+  var saved = W.GLWorld, R = W.Render;
+  var keep = {};
+  var holes = [];
+  W.GLWorld = new Proxy({ available: true,
+    setSurfaceHole: function (b, p, r, d) { holes.push(d || 0); } }, {
+    get: function (t, k) { return k in t ? t[k] : function () { return false; }; }
+  });
+  /* The stub canvas never reaches a port's own draw (no GL models here), so
+   * what is pinned is the predicate the draw turns on, and that the draw
+   * does turn on it. */
+  var src = require('fs').readFileSync(__dirname + '/../src/main.js', 'utf8');
+  check('ground port: the town is not drawn from under the street',
+        /tier === 'near' && !underStreet\) \{\s*Render\.drawPortDressing/.test(src));
+  check('ground port: under the street the port is lit as indoors',
+        /if \(underStreet\) indoors = true;/.test(src));
+  check('ground port: under the street the sky is rock, not stars',
+        /!eyeUnderStreet\(G\.cutaway\.port, cam\)\) buried = null;/.test(src));
+  function sweep(port) {
+    var stats = { n: 0, frame: 0, aboveFail: [], rockFail: [], groundFail: [], darkFail: [] };
+    G.ship.docked = null; G.hangarOut = false;
+    Sim.dockShip(G.ship, port, G.sys, G.t);
+    G.viewMode = 'orbit'; G.followShip = true; G.focus = null; G.walk = null;
+    G.cam.dist = 0.005; frames(2);
+    var host = port.parentBody;
+    [0.15, 0.6, 1.2].forEach(function (el) {
+      [0.3, 2.4].forEach(function (az) {
+        [0.05, 0.3, 0.9, 3, 8].forEach(function (d) {
+          var gb = Sim.groundBasis(port, G.sys, G.t);
+          var dir = V.add(V.scale(gb.up, Math.sin(el)),
+                          V.add(V.scale(gb.east, Math.cos(el) * Math.cos(az)),
+                                V.scale(gb.north, Math.cos(el) * Math.sin(az))));
+          var a = R.camAngles(dir, G.cam.frame);
+          G.cam.yaw = a.yaw; G.cam.pitch = a.pitch; G.cam.dist = d;
+          holes.length = 0;
+          frames(1);
+          /* Out of the room, with the section open — the hangar view itself
+           * is the room and has its own clamps. */
+          if (!(G.cutaway && G.cutaway.surface)) return;
+          stats.n++;
+          if (G.cam.frame && G.cam.frame.port === port.id) stats.frame++;
+          gb = Sim.groundBasis(port, G.sys, G.t);
+          var eye = R.camEye(G.cam);
+          var h = V.dot(V.sub(eye, gb.entrance.pos), gb.up);
+          var tgt = V.dot(V.sub(G.cam.target, gb.entrance.pos), gb.up);
+          var tag = port.name + ' el ' + el + ' az ' + az + ' ' + d + ' km';
+          /* The boom can reach the street with room to spare: then it must. */
+          if (G.cam.dist > (0.005 - tgt) * 1.02 + G.cam.dist * 0.07 && h < 0)
+            stats.aboveFail.push(tag + ': eye ' + (h * 1000).toFixed(0) + ' m');
+          if (h < 0) {
+            /* In the cut, with the ship: the eye and the target both inside
+             * the section box, so the segment between them is too. */
+            var bx = G.cutaway && G.cutaway.box;
+            var inBox = function (p) {
+              var q = V.sub(p, bx.origin), qa = V.dot(q, bx.a), qb = V.dot(q, bx.b), qz = V.dot(q, bx.u);
+              return qa >= bx.aMin - 1e-6 && qa <= bx.aMax + 1e-6 && Math.abs(qb) <= bx.bHalf + 1e-6 && qz >= bx.zMin - 1e-6;
+            };
+            if (!bx || !inBox(eye) || !inBox(G.cam.target))
+              stats.rockFail.push(tag + ': eye ' + (h * 1000).toFixed(0) + ' m, ' + (bx ? 'outside the cut' : 'no cut'));
+            if (!G.eyeUnderStreet(port, { eye: eye })) stats.darkFail.push(tag + ': not seen as under the street');
+          } else {
+            if (G.eyeUnderStreet(port, { eye: eye })) stats.darkFail.push(tag + ': above the street, seen as under it');
+            var hc = Sim.bodyPosition(host, G.sys, G.t);
+            if (!(V.dist(eye, hc) > host.radius)) stats.groundFail.push(tag + ': eye inside the planet');
+          }
+          if (!holes.length || !(holes[0] > 0)) stats.groundFail.push(tag + ': shaft hole with no floor');
+        });
+      });
+    });
+    return stats;
+  }
+  try {
+    G.newGame('kawartha');
+    frames(1);
+    var style = G.cutawayStyle; G.cutawayStyle = 0;
+    var tried = [];
+    var run = function (port) {
+      var st = sweep(port);
+      if (!st.n) return;
+      tried.push(port.name);
+      check('ground port ' + port.name + ': the boom stands on the local vertical',
+            st.frame === st.n, st.frame + ' of ' + st.n);
+      check('ground port ' + port.name + ': the eye is above the street once the boom can reach it',
+            !st.aboveFail.length, st.aboveFail.slice(0, 3).join('; '));
+      check('ground port ' + port.name + ': under the street the eye is in the cut with her, never the rock',
+            !st.rockFail.length, st.rockFail.slice(0, 3).join('; '));
+      check('ground port ' + port.name + ': from under the street, no street and no sun',
+            !st.darkFail.length, st.darkFail.slice(0, 3).join('; '));
+      check('ground port ' + port.name + ': from above it, the planet is drawn under the site, and the hole has a floor',
+            !st.groundFail.length, st.groundFail.slice(0, 3).join('; '));
+    };
+    var deep = G.sys.ports.filter(function (p) { return p.surface && p.underground; })[0];
+    if (deep) run(deep);
+    /* An open pad: kawartha's start world has none, so the next star out. */
+    for (var si = 1; si < 12 && tried.length < 2; si++) {
+      G.enterSystem(G.galaxy.stars[si]); frames(1);
+      var pad = G.sys.ports.filter(function (p) { return p.surface && !p.underground; })[0];
+      if (pad) run(pad);
+    }
+    check('ground-port zoom-out swept a deep bay and an open pad', tried.length === 2, tried.join(', '));
+    /* And none of it leaks into space: undocked, the boom is the system's. */
+    G.ship.docked = null; frames(1);
+    check('away from a ground port the boom is back in the system frame', !G.cam.frame || !!cameraFrameOk(),
+          G.cam.frame ? 'frame for ' + G.cam.frame.port : '');
+    G.cutawayStyle = style;
+  } finally {
+    W.GLWorld = saved;
+    Object.keys(keep).forEach(function (k) { R[k] = keep[k]; });
+    G.ship.docked = null; G.hangarOut = false;
+  }
+  function cameraFrameOk() {
+    /* Still at a ground port's apron after undocking is legitimately the
+     * ground's frame; anywhere else it is not. */
+    var p = G.sys.byId[G.cam.frame.port];
+    return p && V.dist(G.ship.pos, Sim.portEntrance(p, G.sys, G.t).pos) < 5;
   }
 })();
 

@@ -70,6 +70,47 @@ before they update.
   8 km, the station is cut round her, the street section stays small, and
   wheeling back in restores the hangar clamp. It fails on the old build.
 
+### Fixed (2026-11-02, ground ports seen from outside)
+
+- **Zoomed out of a ground port, the camera stands on the ground.** Astra's
+  sheet from Ashford Undercroft showed the hangar floating in black space
+  with stars under it, a dark trench, huge striped walls, a pale-blue slab
+  and her ship a speck. One cause under most of it: the camera's yaw and
+  pitch were angles against the star system's axes, and a port on a planet
+  has its own vertical wherever the planet's spin has carried it. At a
+  ground port the boom is now measured in the ground's own frame
+  (`Sim.groundBasis`): yaw round the local vertical, pitch above the local
+  horizon, and the picture level with the street. Handover into and out of
+  that frame converts the angles, so the view does not jump.
+- **Once the boom can reach the street, the eye is above it.** Same
+  closed-form arc as the deck clamp, round the local vertical, with a
+  margin that grows with the boom (5 m at the least, about 4 degrees down
+  on a long shot). Shorter than that — Ashford's bay is 860 m down — the
+  eye stays in the section, which is built round it and her, so the walls
+  between the camera and the ship are always cut away. Between half that
+  length and all of it the allowed arc closes onto the vertical, so wheeling
+  out cranes the camera up the cut and out through the top of it.
+- **The surface is only there when you are above it** (Astra). Under the
+  street the port is lit as indoors (the pale slab was the shed's wall lit
+  by the sun 860 m underground), the town is not drawn, and what the
+  section's walls do not cover is rock, not stars.
+- **The shaft's hole in the planet has a floor**, at the bay floor's depth
+  in the section's rock colour, so looking down an open pad from the air
+  is no longer a black disc with space showing through the ground.
+- **The rock beds in the section's walls thicken with depth**, from 5 m to
+  at most 60 m, so a deep wall is a few strata rather than a moiré of 170
+  stripes. **She is bracketed** when a cutaway is open and her hull is
+  under 28 px on screen. The ecliptic grid is not drawn at a ground port.
+- render.test: "the ground under a ground port" sweeps a deep bay (Ashford
+  Undercroft) and an open pad (Downwell Starport, Oruun) across three
+  elevations, two azimuths and booms of 0.05 to 8 km: the frame is the
+  ground's, the eye is above the street whenever the boom reaches it, under
+  the street the eye and the ship are both inside the section box, and the
+  planet is drawn under the site with a floored hole. The draw itself
+  (town, indoor light, rock sky) is pinned to the same predicate rather
+  than observed, because the stub canvas never reaches a port's model. Not
+  saved; no save change.
+
 ### Fixed (2026-11-02, deck fixes)
 
 - **The glitchy bar door** (Astra, on Downwell Bunker's concourse: "this is
