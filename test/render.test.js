@@ -7277,6 +7277,66 @@ console.log('--- zooming out of her hangar ---');
   }
 })();
 
+/* THE DRIVE ON THE GROUND (Astra, 2026-11-02): "we also need a means of
+ * starting our engine and launching off the surface when we land away from
+ * a port." Touchdown on open ground shuts her down; R starts her, the start
+ * runs to the end once begun, and R lifts her once she is hot. Held
+ * straight through, R is still the whole instruction. */
+console.log('--- the drive on the ground ---');
+(function () {
+  newFlying('kawartha');
+  /* Whatever the sections above left standing — a screen, a walk, the
+   * title — the band is the flight view's, so the flight view it is. */
+  G.title = null; G.panel = 0; G.walk = null; G.eva = null; G.talk = null;
+  var s = G.ship;
+  var b = G.sys.bodies.filter(function (x) {
+    return (x.kind === 'planet' || x.kind === 'moon') && x.radius > 100 && !x.gas && x.type !== 'gas';
+  }).sort(function (a, c) { return Sim.surfaceG(a) - Sim.surfaceG(c); })[0];
+  function down() {
+    var bp = Sim.bodyPosition(b, G.sys, G.t), bv = Sim.bodyVelocity(b, G.sys, G.t);
+    var n = V.norm(V.sub(s.pos, bp));
+    s.pos = V.add(bp, V.scale(n, b.radius + 0.02));
+    s.vel = V.sub(bv, V.scale(n, 0.005));
+    s.up = n; s.fwd = V.norm(V.cross(n, { x: 0, y: 0, z: 1 })); s.right = V.norm(V.cross(s.fwd, s.up));
+    s.gear = true; G.warpIndex = 0; G.paused = false; G.keys = {};
+    for (var i = 0; i < 120 && !s.landed; i++) frame(100);
+    frames(3, 100);
+  }
+  down();
+  check('a clean touchdown on open ground', s.landed && !s.crashed && !!s.landedAt, b.name);
+  check('touchdown shuts the drive down', s.drive === 'cold', String(s.drive));
+  var mark = drawn.texts.length;
+  frames(1);
+  check('the band says so, and says how to start her',
+        drawn.texts.slice(mark).some(function (t) { return /DRIVE COLD/.test(t) && /R TO START/.test(t); }),
+        [G.viewMode, G.panel, !!G.title, !!G.walk, G.hyper ? 'hyper' : '', G.cruise ? 'cruise' : ''].join(' '));
+
+  G.keys = { r: true };
+  frames(10, 100);
+  check('R starts her rather than lifting a cold drive', s.landed && s.drive === 'spool',
+        s.drive + ' ' + (s.spool || 0).toFixed(2));
+  G.keys = {};
+  frames(25, 100);
+  check('the start runs to the end with R let go', s.drive === 'hot' && s.landed, String(s.drive));
+  mark = drawn.texts.length; frames(1);
+  check('hot is on the band too', drawn.texts.slice(mark).some(function (t) { return /DRIVE HOT/.test(t); }));
+  G.keys = { r: true };
+  frames(5, 100);
+  check('hot, R lifts her', !s.landed && s.drive === null, String(s.landed));
+  G.keys = {};
+
+  /* And held straight through from cold: she lifts the moment she is hot,
+   * not before. */
+  down();
+  check('down again, cold again', s.landed && s.drive === 'cold');
+  G.keys = { r: true };
+  frames(25, 100);
+  check('held from cold: still on the ground at 2.5 s', s.landed);
+  frames(10, 100);
+  check('held from cold: up by 3.5 s', !s.landed);
+  G.keys = {};
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

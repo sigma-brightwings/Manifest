@@ -158,6 +158,13 @@ auto-dock line up over the mouth and take you straight down — same capture-and
 as any pad, just tighter (2.4x radius, 18 m/s) because you are landing inside a
 wall on every side rather than in the open. Undocking climbs back up the same shaft.
 
+**11c. Set down away from a port** — on a claim, to plant a mining drone (`N`).
+Gear down (`Shift+G`), come in slow, and she stands on her gear. Touchdown shuts the
+drive down; the band reads **DRIVE COLD · R TO START**. `R` starts her — three
+seconds of spool that runs out once begun — and once the band says **DRIVE HOT**,
+`R` lifts her. Hold `R` straight through and she goes the moment she is hot. The
+ramp has to be up, and walking out of the seat shuts her down again.
+
 ---
 
 ## Fighting, robbing, and getting paid

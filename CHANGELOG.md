@@ -40,6 +40,35 @@ before they update.
 
 ## Unreleased
 
+### Added (2026-11-02, the drive on the ground)
+
+- **Starting her on open ground.** Astra: "we also need a means of
+  starting our engine and launching off the surface when we land away from
+  a port, like for setting up a mining drone." The way off was always R
+  with enough thrust to beat the world, but nothing said so once the
+  touchdown message had faded, and a drive that was always running could
+  not be seen to start. Now a touchdown away from a port shuts the drive
+  down, and the band says so for as long as you sit there: **ON THE GROUND
+  · DRIVE COLD · R TO START**. The first R (or W with her nose to the sky)
+  starts her: three seconds of real time winding up, a bar filling on the
+  band and the drive heard spooling, which runs to the end once begun.
+  Then **DRIVE HOT · HOLD R TO LIFT**, and R lifts her exactly as before.
+  Held straight through from cold, she lifts the moment she is hot, so
+  "hold R" is still the whole instruction. Leaving the seat — walking out
+  to plant a drone — shuts her down again; so does loading a save on the
+  ground. Refusals say why: no reaction mass ("the drive has nothing to
+  light"), and W with her nose level ("W would push her along the ground —
+  R lifts her straight up") instead of doing nothing at all.
+- **The ramp check now covers open ground too.** It was only asked on the
+  no-spot branch; a ship set down on open ground lifted with her ramp
+  hanging open.
+- The drive's state is transient (cold is the truth of a ship that has
+  been sitting on the ground), so nothing is added to the save. No save
+  change.
+- render.test: "the drive on the ground" — touchdown is cold and says so,
+  R starts rather than lifts, the start completes with R let go, hot R
+  lifts, and R held from cold is still down at 2.5 s and up by 3.5 s.
+
 ### Fixed (2026-11-02, station cutaway)
 
 - **Zooming out of a berth reaches the outside again, with your ship in

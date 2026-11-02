@@ -5663,23 +5663,113 @@
   /* Lift off: more push straight up than her world pulls down, and her
    * ramp up. She leaves the ground with the ground's own motion and a
    * metre a second of climb, and from there the integrator has her. */
-  function liftOff() {
+  function liftOff(dtReal) {
     var s = G.ship, b = s.landedOn;
     if (!b || !s.thrust || G.walk) return;
     var bp = Sim.bodyPosition(b, G.sys, G.t);
     var n = V.norm(V.sub(s.pos, bp));
     var push = V.dot(s.thrust, n), pull = V.len(Sim.acceleration(s.pos, G.sys, G.t));
+    if (!groundDrive(dtReal || 0, push > 0)) return;
     if (!(push > pull * 1.02)) return;
-    if (global.Airlock && !global.Airlock.sealed(s)) {
-      if (!G.rampWarned) { say('The ramp is not up  —  she will not lift with it hanging open', 4); G.rampWarned = true; }
-      return;
-    }
-    G.rampWarned = false;
+    if (!rampUpForLift()) return;
     var bv = Sim.bodyVelocity ? Sim.bodyVelocity(b, G.sys, G.t) : V.zero();
     s.landed = false; s.landedOn = null; s.crashed = false; s.settled = false;
+    s.drive = null;
     s.vel = V.add(bv, V.scale(n, 0.001));
     s.pos = V.add(s.pos, V.scale(n, 0.0005));
     say('Lift-off', 2);
+  }
+
+  /* The ramp is a refusal with a reason, and both ways off the ground ask it
+   * (the open-ground branch used to skip it: she lifted with it hanging). */
+  function rampUpForLift() {
+    if (global.Airlock && !global.Airlock.sealed(G.ship)) {
+      if (!G.rampWarned) { say('The ramp is not up  —  she will not lift with it hanging open', 4); G.rampWarned = true; }
+      return false;
+    }
+    G.rampWarned = false;
+    return true;
+  }
+
+  /* ---- the drive on the ground (Astra, 2026-11-02) ---------------------
+   * "We need a means of starting our engine and launching off the surface
+   * when we land away from a port, like for setting up a mining drone."
+   * The way off was always there — R, with thrust that beat the world —
+   * but nothing on the ground SAID so once the touchdown message faded,
+   * and a drive that is simply always running is not one you can be seen
+   * to start. So she has one now, with three states:
+   *
+   *   cold   — shut down. Every touchdown on open ground ends here, as
+   *            does a save loaded on the ground, and leaving the seat
+   *            (you do not walk out to plant a drone with her burning).
+   *   spool  — the first R (or W nose-up) starts her: SPOOL_S of real
+   *            time winding up, which runs to the end once begun, and
+   *            cannot be cancelled by letting go — it is an ignition, not
+   *            a throttle.
+   *   hot    — ready. Holding the lift key now lifts her, exactly as
+   *            before. Hold R straight through and she lifts the moment
+   *            she is hot, so "hold R" is still the whole instruction.
+   *
+   * Real time, not game time: at 10,000x warp a three-second spool would
+   * be over before the frame was drawn, and at 1x a game-time spool on a
+   * paused clock would never finish. `drive` is transient — a loaded
+   * ship on the ground is cold, which is the truth of a ship that has
+   * been sitting there — so it adds nothing to the save. */
+  var SPOOL_S = 3;
+  function groundDrive(dtReal, asking) {
+    var s = G.ship;
+    if (!s.drive) s.drive = 'cold';
+    if (G.walk) {
+      if (s.drive !== 'cold') { s.drive = 'cold'; s.spool = 0; say('Drive shut down  —  nobody in the seat', 3); }
+      return false;
+    }
+    if (s.drive === 'hot') return true;
+    if (s.drive === 'cold') {
+      if (!asking) return false;
+      if ((s.thrusterFuel || 0) <= 0) {
+        if (!G.driveWarned) { G.driveWarned = true; say('No reaction mass  —  the drive has nothing to light', 5); }
+        return false;
+      }
+      G.driveWarned = false;
+      s.drive = 'spool'; s.spool = 0;
+      say('Drive starting  —  ' + SPOOL_S + ' seconds to hot', SPOOL_S + 1);
+      if (global.Sound && global.Sound.fx) global.Sound.fx('click');
+      return false;
+    }
+    s.spool = Math.min(1, (s.spool || 0) + Math.max(0, dtReal) / SPOOL_S);
+    if (s.spool < 1) return false;
+    s.drive = 'hot';
+    say('Drive hot  —  hold R to lift off', 4);
+    return asking;
+  }
+
+  /* What the band shows on the ground: the drive's state, all the time
+   * you are in the seat, because a message that faded is how she came to
+   * look like a ship with no way to start. */
+  function drawGroundDrive(ctx, w, h) {
+    var s = G.ship;
+    if (!s.landed || s.crashed || s.docked || G.walk || G.title || G.panel) return;
+    var st = s.drive || 'cold', y = Math.round(h * 0.68);
+    var label = st === 'hot' ? 'ON THE GROUND  ·  DRIVE HOT  ·  HOLD R TO LIFT'
+              : st === 'spool' ? 'DRIVE SPOOLING  ' + Math.round((s.spool || 0) * 100) + '%'
+              : 'ON THE GROUND  ·  DRIVE COLD  ·  R TO START';
+    ctx.save();
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    var tw = ctx.measureText(label).width + 24;
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(w / 2 - tw / 2, y - 11, tw, 22);
+    var col = st === 'hot' ? '#7fe08a' : st === 'spool' ? '#ffc861' : '#9fb4c8';
+    if (st === 'spool') {
+      ctx.fillStyle = 'rgba(255,200,97,0.22)';
+      ctx.fillRect(w / 2 - tw / 2, y - 11, tw * (s.spool || 0), 22);
+    }
+    ctx.strokeStyle = col; ctx.lineWidth = 1;
+    ctx.strokeRect(w / 2 - tw / 2 + 0.5, y - 10.5, tw - 1, 21);
+    ctx.fillStyle = col;
+    ctx.fillText(label, w / 2, y);
+    ctx.restore();
   }
 
   function updateWorld(dtReal) {
@@ -5833,9 +5923,20 @@
        * reached. */
       var lvUp = Sim.localVertical ? Sim.localVertical(G.ship.pos, G.sys, G.t) : null;
       var noseUp = lvUp && V.dot(G.ship.fwd, lvUp.up || lvUp) > 0.6;
-      if ((G.keys['r'] || (G.keys['w'] && noseUp)) && (G.ship.throttle || 0) > 0) {
+      var asking = (G.keys['r'] || (G.keys['w'] && noseUp)) && (G.ship.throttle || 0) > 0;
+      /* W with her nose level is the main drive pointed at the horizon: it
+       * would drag her along the dirt, so it does nothing — and silence
+       * there reads as "she will not start". Say which key does. */
+      if (G.keys['w'] && !noseUp && !G.walk) {
+        if (!G.wLevelWarned) { G.wLevelWarned = true; say('W would push her along the ground  —  R lifts her straight up', 4); }
+      } else if (!G.keys['w']) G.wLevelWarned = false;
+      var driveHot = groundDrive(dtReal, asking);
+      if (asking && driveHot && !rampUpForLift()) {
+        /* refused, with the reason said by rampUpForLift */
+      } else if (asking && driveHot) {
         var lo = Sim.liftOff(G.ship, G.sys, G.t);
         if (lo.ok) {
+          G.ship.drive = null;
           G.warpIndex = 0;
           say('Lift-off', 3);
         } else if (lo.g && !G.liftWarned) {
@@ -5844,7 +5945,7 @@
             ? 'Full thrust (drop Shift) - ' + (lo.g * 1000).toFixed(1) + ' m/s² to beat here, ' + (lo.accel * 1000).toFixed(1) + ' at this setting'
             : 'This drive cannot lift off here - ' + (lo.max * 1000).toFixed(1) + ' m/s² against ' + (lo.g * 1000).toFixed(1) + ' of gravity', 5);
         }
-      } else {
+      } else if (!asking) {
         G.liftWarned = false;
       }
     } else if (!G.paused && G.ship.landed && !G.ship.crashed) {
@@ -5857,7 +5958,7 @@
       /* Stood up on her gear the first frame she is down, however she got
        * there (a touchdown, a load, a script). */
       if (!G.ship.settled) settleLanded();
-      liftOff();
+      liftOff(dtReal);
     } else if (!G.paused && !G.ship.landed) {
       var dtSim = warp * dtReal;
       if (dtSim > maxDt) {
@@ -5987,10 +6088,10 @@
       }
       if (G.ship.landed && !G.reported) {
         G.reported = true;
-        if (!G.ship.crashed) settleLanded();
+        if (!G.ship.crashed) { settleLanded(); G.ship.drive = 'cold'; G.ship.spool = 0; }
         say(G.ship.crashed
           ? 'Impact with ' + G.ship.landedOn.name + ' at ' + fmtSpeed(G.ship.impactSpeed) + '   (B to respawn)'
-          : 'Touchdown on ' + G.ship.landedOn.name + '  —  R to lift off', 8);
+          : 'Touchdown on ' + G.ship.landedOn.name + '  —  drive shut down. R starts her, and lifts her once she is hot', 8);
         G.warpIndex = 0;
       }
       if (!G.ship.landed) G.reported = false;
@@ -6353,7 +6454,11 @@
 
     /* The drive's noise follows the throttle. */
     if (global.Sound) {
-      global.Sound.thrust((G.ship.docked || G.ship.landed) ? 0 : (G.ship.throttle || 0));
+      global.Sound.thrust(G.ship.docked ? 0
+        /* On the ground the drive is heard winding up and idling, not
+         * the throttle: it is the only sign from outside that she is lit. */
+        : G.ship.landed ? (G.ship.drive === 'spool' ? 0.06 + 0.18 * (G.ship.spool || 0) : G.ship.drive === 'hot' ? 0.1 : 0)
+        : (G.ship.throttle || 0));
     }
 
     /* Nearest other ship, for the cockpit's contact readout. Range-limited:
@@ -17034,6 +17139,7 @@
   }
 
   function drawOverlays(ctx, w, h) {
+    drawGroundDrive(ctx, w, h);
     /* --- taking fire: the screen itself flinches --- */
     watchShield();
     var sinceHit = performance.now() - (G.ship.lastHitAt || -1e9);
