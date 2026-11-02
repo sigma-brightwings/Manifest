@@ -5897,19 +5897,35 @@
 
   /* ---- THE GROUND-PORT SECTION'S WALLS ------------------------------------
    *
-   * main.js's groundCutFor decides the box; the shaders take out what is
-   * inside it; this draws what a cut through a street would actually show.
-   * The planet is an analytic sphere and the town is a few boxes — there is
-   * no ground under the street to reveal, so the cut faces are built here:
-   * the box's two sides, its back, and its floor beyond the hangar, each
-   * with the hangar's own opening left out of it so you see into the room.
+   * main.js's groundConeFor decides the cone; the shaders take out what is
+   * inside it; this draws what a cut through the ground would actually
+   * show. The planet is an analytic sphere and the town is a few boxes —
+   * there is no ground under the street to reveal, so the cut faces are
+   * built here.
+   *
+   * THE PIT WALL IS THE CONE'S OWN SURFACE (2026-11-02, second round). The
+   * first version was a box — two sides, a back and a floor — and from
+   * the air it read as a trench with a grey disc of open hole beside it.
+   * Astra wanted the walls "along the cone drawn from the center of the
+   * radial camera out to the edge of the screen", which is what a cone
+   * round the line from the eye to her looks like from the eye: its
+   * surface runs from the ship at the middle of the picture out past every
+   * edge. So the wall is that surface, wherever it is in the ground —
+   * clipped at the street, and left out where the cone runs through open
+   * air in the bay (the room and the shaft, from the same table the port's
+   * mesh is built from) so it is never painted across a room you should
+   * see into. Its far end, just past her, is capped, so a ray that goes
+   * down the cone and past her meets rock rather than open sky.
    *
    * IN LAYERS, top down, because that is the whole of what makes a section
    * read as one: road, paving, the street's concrete slab, a services
-   * course with pipe ends in it, fill, and then rock in alternating beds to
-   * the hangar floor. Thicknesses are in metres, so a big port and a small
-   * one cut through the same street. Flat colours, no lamp, no glow — this
-   * is a drawing of the ground, not a light in it. */
+   * course, fill, and then rock in beds that thicken with depth. The bed
+   * boundaries are cut across the cone as horizontal planes, so the strata
+   * run level round the pit whichever way the cone leans. Thicknesses are
+   * in metres, so a big port and a small one cut through the same street.
+   * Flat colours, no lamp, no glow — this is a drawing of the ground, not
+   * a light in it. (The box had pipe ends in its services course; a cone's
+   * wall is curved and they are left out.) */
   var SECTION_BANDS = [
     [0.35, '#2b2d31'],     // road
     [0.25, '#8d9096'],     // paving
@@ -5921,50 +5937,17 @@
   var SECTION_ROCK_BED = 5;            // metres, the first bed under the fill
   var SECTION_ROCK_BED_MAX = 60;       // metres, the thickest any bed gets
   var SECTION_FLOOR = '#3a3631';
-  var SECTION_PIPES = ['#9a8f7f', '#b23b2e', '#2e6fd8', '#9a8f7f'];
+  var SECTION_SIDES = 48;              // generators round the cone
+  var SECTION_CAP_BACK = 3.2;          // cap, in ship-end radii past her
   var SECTION_LAST = { key: null, mesh: null };
 
-  function sectionMesh(sc) {
-    var q = 0.002;
-    var key = [sc.ax, sc.sg, sc.aMin, sc.aMax, sc.bHalf, sc.ship[0], sc.ship[1],
-               sc.ship[2], sc.floor, sc.ceil, sc.ground, sc.r].map(function (v) {
-      return Math.round(v / q);
-    }).join('|');
-    if (SECTION_LAST.key === key) return SECTION_LAST.mesh;
-
-    var m = 0.001 / sc.r;                       // one metre, in model units
-    var mesh = { v: [], f: [], c: [], noAccent: true };
-    var S = sc.ship, ax = sc.ax, bx = 1 - sc.ax, sg = sc.sg, lift = sc.lift;
-    function P(a, b, z) {
-      var p = [0, 0, z + lift];
-      p[ax] = S[ax] + sg * a;
-      p[bx] = S[bx] + b;
-      return p;
-    }
-    function quad(p0, p1, p2, p3, col) {
-      var o = mesh.v.length;
-      mesh.v.push(p0, p1, p2, p3);
-      mesh.f.push([o, o + 1, o + 2], [o, o + 2, o + 3]);
-      mesh.c.push(col, col);
-    }
-    /* A rectangle with a rectangular hole in it, as up to four rectangles. */
-    function minus(u0, u1, v0, v1, h) {
-      if (!h) return [[u0, u1, v0, v1]];
-      var hu0 = Math.max(u0, h[0]), hu1 = Math.min(u1, h[1]);
-      var hv0 = Math.max(v0, h[2]), hv1 = Math.min(v1, h[3]);
-      if (!(hu1 > hu0 && hv1 > hv0)) return [[u0, u1, v0, v1]];
-      var out = [];
-      if (hu0 > u0) out.push([u0, hu0, v0, v1]);
-      if (u1 > hu1) out.push([hu1, u1, v0, v1]);
-      if (hv0 > v0) out.push([hu0, hu1, v0, hv0]);
-      if (v1 > hv1) out.push([hu0, hu1, hv1, v1]);
-      return out;
-    }
-    /* The bands as [zTop, zBottom, colour], from the street down. */
-    var bands = [], z = sc.ground, i;
-    for (i = 0; i < SECTION_BANDS.length && z > sc.floor; i++) {
-      var zb = Math.max(sc.floor, z - SECTION_BANDS[i][0] * m);
-      bands.push([z, zb, SECTION_BANDS[i][1], i === 3]);
+  /* The beds as [zTop, zBottom, colour] from the street (z = 0) down to
+   * `deep`, in model units of `m` per metre. */
+  function sectionBands(deep, m) {
+    var bands = [], z = 0, i;
+    for (i = 0; i < SECTION_BANDS.length && z > deep; i++) {
+      var zb = Math.max(deep, z - SECTION_BANDS[i][0] * m);
+      bands.push([z, zb, SECTION_BANDS[i][1]]);
       z = zb;
     }
     /* THE BEDS THICKEN WITH DEPTH (2026-11-02). Five-metre beds were right
@@ -5974,59 +5957,113 @@
      * walls" on Astra's sheet. Rock is laid down that way anyway: thin
      * beds near the top, thicker ones below. Capped so a deep wall still
      * has a few lines in it rather than one slab. */
-    for (i = 0; z > sc.floor; i++) {
+    for (i = 0; z > deep; i++) {
       var bed = Math.min(SECTION_ROCK_BED_MAX, SECTION_ROCK_BED * Math.pow(1.22, i));
-      var zr = Math.max(sc.floor, z - bed * m);
-      bands.push([z, zr, SECTION_ROCK[i % 2], false]);
+      var zr = Math.max(deep, z - bed * m);
+      bands.push([z, zr, SECTION_ROCK[i % 2]]);
       z = zr;
     }
-    /* One wall: `at(u, v)` maps its own 2D coordinates (u along the wall,
-     * v = model z) to a point; `inward` is the unit step into the cut. */
-    function wall(u0, u1, hole, at, inward) {
-      var rects = minus(u0, u1, sc.floor, sc.ground, hole);
-      for (var ri = 0; ri < rects.length; ri++) {
-        var rc = rects[ri];
-        for (var bi = 0; bi < bands.length; bi++) {
-          var top = Math.min(rc[3], bands[bi][0]), bot = Math.max(rc[2], bands[bi][1]);
-          if (!(top > bot)) continue;
-          quad(at(rc[0], bot), at(rc[1], bot), at(rc[1], top), at(rc[0], top), bands[bi][2]);
-          /* Pipe ends in the services course, every four metres. */
-          if (bands[bi][3]) {
-            var mid = (top + bot) * 0.5, hs = Math.min(0.25 * m, (top - bot) * 0.3);
-            for (var pu = rc[0] + 2 * m, k = 0; pu < rc[1] - m; pu += 4 * m, k++) {
-              var c = at(pu, mid);
-              var c2 = [c[0] + inward[0] * 0.2 * m, c[1] + inward[1] * 0.2 * m, c[2]];
-              var col = SECTION_PIPES[k % SECTION_PIPES.length];
-              var uu = at(pu + hs, mid), d = [uu[0] - c[0], uu[1] - c[1], uu[2] - c[2]];
-              addBox(mesh, c2, d, [0, 0, hs], [inward[0] * 0.2 * m, inward[1] * 0.2 * m, 0], col);
-            }
-          }
-        }
+    return bands;
+  }
+
+  /* Is the local point `p` (ground frame, pad radii, street z = 0) in the
+   * port's open air — its room or its shaft? Model z is local z less the
+   * table's lift. */
+  function sectionInAir(sc, p) {
+    var z = p[2] - sc.lift, R = sc.room;
+    if (R && p[0] > R.x0 && p[0] < R.x1 && p[1] > R.y0 && p[1] < R.y1 &&
+        z > R.z0 && z < R.z1) return true;
+    var top = R ? R.z1 : -Infinity;
+    return Math.abs(p[0]) < sc.duct && Math.abs(p[1]) < sc.duct && z >= top && p[2] < 0;
+  }
+
+  function sectionMesh(sc) {
+    var q = 0.002;
+    var key = [sc.ship[0], sc.ship[1], sc.ship[2], sc.eye[0], sc.eye[1], sc.eye[2],
+               sc.rShip, sc.rEye, sc.r].map(function (v) {
+      return Math.round(v / q);
+    }).join('|');
+    if (SECTION_LAST.key === key) return SECTION_LAST.mesh;
+
+    var m = 0.001 / sc.r;                       // one metre, in model units
+    var mesh = { v: [], f: [], c: [], noAccent: true };
+    var S = sc.ship, E = sc.eye;
+    var ax = [S[0] - E[0], S[1] - E[1], S[2] - E[2]];
+    var L = Math.sqrt(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]);
+    if (!(L > 1e-9)) return mesh;
+    ax = [ax[0] / L, ax[1] / L, ax[2] / L];
+    /* Two directions square to the axis. */
+    var h = Math.abs(ax[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+    var p1 = [ax[1] * h[2] - ax[2] * h[1], ax[2] * h[0] - ax[0] * h[2], ax[0] * h[1] - ax[1] * h[0]];
+    var l1 = Math.sqrt(p1[0] * p1[0] + p1[1] * p1[1] + p1[2] * p1[2]);
+    p1 = [p1[0] / l1, p1[1] / l1, p1[2] / l1];
+    var p2 = [ax[1] * p1[2] - ax[2] * p1[1], ax[2] * p1[0] - ax[0] * p1[2], ax[0] * p1[1] - ax[1] * p1[0]];
+    function quad(a, b, c2, d, col) {
+      var o = mesh.v.length;
+      mesh.v.push(a, b, c2, d);
+      mesh.f.push([o, o + 1, o + 2], [o, o + 2, o + 3]);
+      mesh.c.push(col, col);
+    }
+    /* Generators: from her end of the cone (s = 0) to the eye's (s = 1). */
+    var gens = [], deep = 0, i;
+    for (i = 0; i < SECTION_SIDES; i++) {
+      var th = i / SECTION_SIDES * Math.PI * 2, c = Math.cos(th), sn = Math.sin(th);
+      var w = [p1[0] * c + p2[0] * sn, p1[1] * c + p2[1] * sn, p1[2] * c + p2[2] * sn];
+      var a0 = [S[0] + w[0] * sc.rShip, S[1] + w[1] * sc.rShip, S[2] + w[2] * sc.rShip];
+      var a1 = [E[0] + w[0] * sc.rEye, E[1] + w[1] * sc.rEye, E[2] + w[2] * sc.rEye];
+      gens.push({ a: a0, b: a1, w: w });
+      deep = Math.min(deep, a0[2], a1[2]);
+    }
+    var bands = sectionBands(deep - m, m);
+    function at(g, s) {
+      return [g.a[0] + (g.b[0] - g.a[0]) * s, g.a[1] + (g.b[1] - g.a[1]) * s,
+              g.a[2] + (g.b[2] - g.a[2]) * s];
+    }
+    /* The stretch of a generator between two depths, clipped to the
+     * ground (z <= 0) and to the cone's own length. */
+    function span(g, zTop, zBot) {
+      var z0 = g.a[2], dz = g.b[2] - g.a[2], lo, hi;
+      if (Math.abs(dz) < 1e-12) {
+        if (z0 > zTop || z0 < zBot || z0 > 0) return null;
+        lo = 0; hi = 1;
+      } else {
+        var sa = (zTop - z0) / dz, sb = (zBot - z0) / dz;
+        lo = Math.max(0, Math.min(sa, sb)); hi = Math.min(1, Math.max(sa, sb));
+      }
+      return hi > lo + 1e-9 ? [lo, hi] : null;
+    }
+    for (var bi = 0; bi < bands.length; bi++) {
+      var zt = Math.min(0, bands[bi][0]), zb2 = bands[bi][1];
+      for (i = 0; i < SECTION_SIDES; i++) {
+        var g0 = gens[i], g1 = gens[(i + 1) % SECTION_SIDES];
+        var u = span(g0, zt, zb2), v = span(g1, zt, zb2);
+        if (!u || !v) continue;
+        var A = at(g0, u[0]), B = at(g0, u[1]), C = at(g1, v[1]), D = at(g1, v[0]);
+        /* Either half in the air and the quad goes: a wall face across the
+         * room's doorway is exactly the thing this must not draw. */
+        var m1 = [(A[0] + B[0] + C[0]) / 3, (A[1] + B[1] + C[1]) / 3, (A[2] + B[2] + C[2]) / 3];
+        var m2 = [(A[0] + C[0] + D[0]) / 3, (A[1] + C[1] + D[1]) / 3, (A[2] + C[2] + D[2]) / 3];
+        if (sectionInAir(sc, m1) || sectionInAir(sc, m2)) continue;
+        quad(A, B, C, D, bands[bi][2]);
       }
     }
-    function unitOf(axis, sign) { var u = [0, 0]; u[axis] = sign; return u; }
-    var inA = unitOf(ax, sg), inB = unitOf(bx, 1);
-    /* The two sides. */
-    [1, -1].forEach(function (side) {
-      var bw = side * sc.bHalf;
-      var hole = (bw > sc.rB0 && bw < sc.rB1) ? [sc.rA0, sc.rA1, sc.floor, sc.ceil] : null;
-      wall(sc.aMin, sc.aMax, hole, function (u, v) { return P(u, bw, v); },
-           [-inB[0] * side, -inB[1] * side]);
-    });
-    /* The back. */
-    var backHole = (sc.aMin > sc.rA0 && sc.aMin < sc.rA1)
-      ? [sc.rB0, sc.rB1, sc.floor, sc.ceil] : null;
-    wall(-sc.bHalf, sc.bHalf, backHole, function (u, v) { return P(sc.aMin, u, v); },
-         [inA[0], inA[1]]);
-    /* The floor, where the hangar's own floor does not reach. A hair under
-     * the deck so the two never fight over the same pixels. */
-    var fz = sc.floor - 0.05 * m;
-    var floors = minus(sc.aMin, sc.aMax, -sc.bHalf, sc.bHalf,
-                       [sc.rA0, sc.rA1, sc.rB0, sc.rB1]);
-    for (i = 0; i < floors.length; i++) {
-      var fr = floors[i];
-      quad(P(fr[0], fr[2], fz), P(fr[1], fr[2], fz), P(fr[1], fr[3], fz),
-           P(fr[0], fr[3], fz), SECTION_FLOOR);
+    /* The cap past her: a disc square to the axis, wide enough to close
+     * the narrow end as the eye sees it. Underground it is the rock beyond
+     * the bottom of the pit; inside the room it sits under the deck and
+     * the floor hides it. */
+    var back = sc.rShip * SECTION_CAP_BACK;
+    var cc = [S[0] + ax[0] * back, S[1] + ax[1] * back, S[2] + ax[2] * back];
+    if (cc[2] < 0) {
+      var cr = sc.rShip * (1 + back / L) * 1.25, o = mesh.v.length;
+      mesh.v.push(cc);
+      for (i = 0; i < SECTION_SIDES; i++) {
+        var w2 = gens[i].w;
+        mesh.v.push([cc[0] + w2[0] * cr, cc[1] + w2[1] * cr, cc[2] + w2[2] * cr]);
+      }
+      for (i = 0; i < SECTION_SIDES; i++) {
+        mesh.f.push([o, o + 1 + i, o + 1 + (i + 1) % SECTION_SIDES]);
+        mesh.c.push(SECTION_FLOOR);
+      }
     }
 
     if (SECTION_LAST.mesh && global.GLWorld && global.GLWorld.releaseMesh) {
@@ -6036,7 +6073,8 @@
     return mesh;
   }
 
-  /* `sc` is G.cutaway.section from main.js's groundCutFor. */
+  /* `sc` is G.cutaway.section from main.js's groundConeFor: the ground
+   * frame (east, north, up) and the street at the shaft mouth. */
   function drawGroundSection(ctx, cam, sc, sunDir) {
     if (!sc || !gpuWorld()) return;
     var mesh = sectionMesh(sc);
@@ -14673,6 +14711,7 @@
     standTopKm: standTopKm,
     drawCutGreebles: drawCutGreebles,
     drawGroundSection: drawGroundSection,
+    sectionMesh: sectionMesh,
     drawStationTraffic: drawStationTraffic,
     stationTenders: stationTenders,
     cutGreebleMesh: cutGreebleMesh,

@@ -40,6 +40,56 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-02, ground ports seen from outside, second round)
+
+- **The ground-port view was upside down.** The first round's camera frame
+  took `Sim.groundBasis` as it is, and that basis is left-handed (its north
+  is east x up), so the picture's up pointed into the ground: sky at the
+  bottom of the screen, the near side of the pit at the top. Found from
+  Downwell Starport at 8 km as "a V in the sky". The camera's frame is now
+  right-handed (north = up x east). render.test now checks that the
+  picture's up is the ground's up, and that check fails on the old frame.
+- **The cut is a cone, and it cuts only what is in the way** (Astra: "the
+  pit walls should appear along the cone drawn from the center of the
+  radial camera out to the edge of the screen; and the 'laser cut' effect
+  should only be drawn instead of whatever is in between the ship and the
+  camera"). The square section is gone. A ground port is cut the way an
+  orbital dock is: one cone round the line from the eye to her, a hull
+  length of clearing at her end, widening by the same 20 degrees toward
+  the eye. The port's meshes go only inside it (the keyhole, hot rim and
+  all, with her deck kept on the ground's vertical). So the shaft collar,
+  the apron, the town and the rest of the hangar draw whole round the hole.
+  The planet's surface goes where the cone crosses it, in the same test.
+- **The pit wall is the cone's own surface**, drawn as rock wherever it is
+  in the ground. It is clipped at the street and left out where the cone
+  runs through the bay's open air. Its strata are horizontal planes, so
+  they run level round the pit. It is capped just past her, so a ray down
+  the cone meets rock. From the camera the wall runs from her at the
+  middle of the screen out past the edges.
+- **Daytime sky in the cut** (Astra: "put daytime sky when looking up out
+  of the cut"). The game had no sky as seen from the ground: rays that
+  missed the planet fell through to near-black space. In the cut, the
+  frame now clears to a sky built from the same two numbers the planet's
+  halo already uses: the world's air tint and how much air it has. That is
+  lit by the sun's height over the port. Day is the tint, a low sun warms
+  it toward dusk, and below the horizon it fades to night over a few
+  degrees. Airless worlds stay black. There are no stars by day. It is one
+  flat colour, with no gradient.
+- **The shaft's hole in the planet has round rock walls** down to its
+  floor, in the same beds, instead of a flat floor that read as a grey
+  disc from the air.
+- render.test, "the ground under a ground port", is extended:
+  - the picture is the right way up;
+  - the cone narrows to her, and its middle is cut, while a point beside
+    it and the deck just past her are not (`GLWorld.coneCuts` mirrors the
+    shaders, whose text is pinned to the same expression);
+  - every pit-wall face is on the cone, below the street and outside the
+    bay's air;
+  - the sky over the port is the world's air in the sun, and black at
+    night or on an airless world;
+  - the hole in the street is no wider than the cone there.
+- Not saved; no save change.
+
 ### Changed (2026-11-02, the test suite in groups)
 
 - **`npm test` runs the suite in ten groups** (Astra: "if the full test

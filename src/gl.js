@@ -97,6 +97,9 @@
     'uniform float uHoleR;',      // its radius, km; 0 disables the cut
     'uniform float uHoleDepth;',  // km down to the pit floor; 0 = open to space
     'uniform float uHaloPush;',   // km behind the centre the halo sits; a ring's outer radius
+    /* The ground-port cone — see GL.setGroundCone. */
+    'uniform vec4 uConeS;',       // eye -> ship, km; w = 1 when on
+    'uniform vec2 uConeR;',       // radius at the ship, at the eye, km
     /* The ground-port section box — see GL.setGroundCut. */
     'uniform vec4 uBoxO;',        // eye -> ship, km; w = 1 when on
     'uniform vec3 uBoxA, uBoxB, uBoxU;',
@@ -319,18 +322,54 @@
      * mouth, square to the local vertical, in the colour of the section's
      * own rock. The port's model stands in the pit in front of it and wins
      * the depth test; only the gaps between its walls see the floor. */
+    /* AND WALLS (second round). A floor alone read from the air as a flat
+     * grey disc round the port. So the ray goes on down the hole and stops
+     * at whichever it meets first: the hole's own round wall — a cylinder
+     * of the hole's radius on the local vertical — or the floor. The wall
+     * is the section's rock, in the same beds as the cone's pit wall
+     * (Render.sectionBands: a fill course, then beds thickening by 1.22
+     * each from 5 m), lit by the sun on its inward face. */
     '  if (uHoleR > 0.0 && distance(hit, uHoleRel) < uHoleR) {',
     '    if (uHoleDepth <= 0.0) discard;',
     '    vec3 hn = normalize(uHoleRel - oc);',
     '    vec3 p0 = uHoleRel - hn * uHoleDepth;',
     '    float dn = dot(rd, hn);',
-    '    if (dn > -1e-6) discard;',
-    '    float tp = dot(p0, hn) / dn;',
-    '    if (tp <= 0.0) discard;',
-    '    vec3 pf = rd * tp;',
-    '    gl_FragDepth = encodeDepth(dot(pf, uFwd));',
-    '    frag = vec4(0.20, 0.185, 0.17, 1.0);',
+    '    float tp = dn < -1e-6 ? dot(p0, hn) / dn : 1e30;',
+    '    vec3 rp = rd - hn * dn;',
+    '    vec3 op = -uHoleRel - hn * dot(-uHoleRel, hn);',
+    '    float ca = dot(rp, rp), cb = 2.0 * dot(rp, op), cc = dot(op, op) - uHoleR * uHoleR;',
+    '    float cd = cb * cb - 4.0 * ca * cc;',
+    '    float tw = (ca > 1e-12 && cd >= 0.0) ? (-cb + sqrt(cd)) / (2.0 * ca) : 1e30;',
+    '    if (tw < tHit) tw = 1e30;',
+    '    if (min(tw, tp) >= 1e29 || min(tw, tp) <= 0.0) discard;',
+    '    vec3 pc;',
+    '    if (tw < tp) {',
+    '      pc = rd * tw;',
+    '      vec3 q = pc - uHoleRel;',
+    '      float dep = -dot(q, hn) * 1000.0;',      // metres down the wall
+    '      vec3 wn = -normalize(q - hn * dot(q, hn));',
+    '      float bed = floor(log(1.0 + max(0.0, dep - 6.4) * 0.044) / log(1.22));',
+    '      vec3 rock = mod(bed, 2.0) < 0.5 ? vec3(0.31, 0.29, 0.267) : vec3(0.357, 0.337, 0.306);',
+    '      if (dep < 6.4) rock = vec3(0.42, 0.325, 0.22);',
+    '      frag = vec4(rock * (0.40 + 0.55 * max(0.0, dot(wn, uSunDir))), 1.0);',
+    '    } else {',
+    '      pc = rd * tp;',
+    '      frag = vec4(0.20, 0.185, 0.17, 1.0);',
+    '    }',
+    '    gl_FragDepth = encodeDepth(dot(pc, uFwd));',
     '    return;',
+    '  }',
+    /* AND THE CONE (2026-11-02, second round). Astra: the pit walls
+     * "should appear along the cone drawn from the center of the radial
+     * camera out to the edge of the screen". The ground goes where the
+     * cone between the eye and her crosses it, and only there: the same
+     * keyhole the mesh shader cuts the port with, so the hole in the street
+     * and the hole in the buildings are one hole. GLWorld.coneCuts is this
+     * line in JS, for the test. */
+    '  if (uConeS.w > 0.5) {',
+    '    float cL2 = max(dot(uConeS.xyz, uConeS.xyz), 1e-12);',
+    '    float ct = dot(hit, uConeS.xyz) / cL2;',
+    '    if (ct > 0.0 && ct < 1.0 && length(hit - uConeS.xyz * ct) < mix(uConeR.y, uConeR.x, ct)) discard;',
     '  }',
     /* And the section, when the camera has been pulled up out of a ground
      * port: the street over the hangar is not there. */
@@ -1954,6 +1993,7 @@
                               'uOcean', 'uSeaColor', 'uIce',
                               'uCenterRel', 'uScreenPx', 'uFlen',
                               'uHoleRel', 'uHoleR', 'uHoleDepth', 'uHaloPush',
+                              'uConeS', 'uConeR',
                               'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD', 'uBoxTop',
                               'uTear', 'uTearK', 'uTearN']);
 
@@ -2719,6 +2759,26 @@
    * drawing of a building does. `box` is { origin (world km, the ship),
    * a, b, u (unit axes), aMin, aMax, bHalf, zMin (km, from the origin) }. */
   var groundCut = null;
+  /* THE GROUND-PORT CONE (2026-11-02): { pos (world km, the ship), rShip,
+   * rEye (km) }, the eye end being this frame's eye. Replaces the box for
+   * the zoom-out view; the box stays for what else uses it. */
+  var groundCone = null;
+  GL.setGroundCone = function (bodyId, cone) {
+    groundCone = (bodyId && cone) ? { bodyId: bodyId, cone: cone } : null;
+  };
+  /* The same test as the two shaders, in JS: is `p` (world km) inside the
+   * cone between `eye` and `cone.pos`? For render.test, which cannot run
+   * GLSL. */
+  GL.coneCuts = function (p, eye, cone) {
+    var cx = cone.pos.x - eye.x, cy = cone.pos.y - eye.y, cz = cone.pos.z - eye.z;
+    var px = p.x - eye.x, py = p.y - eye.y, pz = p.z - eye.z;
+    var L2 = Math.max(cx * cx + cy * cy + cz * cz, 1e-12);
+    var t = (px * cx + py * cy + pz * cz) / L2;
+    if (!(t > 0 && t < 1)) return false;
+    var ox = px - cx * t, oy = py - cy * t, oz = pz - cz * t;
+    var r = cone.rEye + (cone.rShip - cone.rEye) * t;
+    return Math.sqrt(ox * ox + oy * oy + oz * oz) < r;
+  };
   GL.setGroundCut = function (bodyId, box) {
     groundCut = (bodyId && box) ? { bodyId: bodyId, box: box } : null;
   };
@@ -2754,6 +2814,7 @@
     tearN = 0;
     hole = null;
     groundCut = null;
+    groundCone = null;
     if (!gl) return;
     gl.bindFramebuffer(gl.FRAMEBUFFER, postReady() ? post.msFbo : null);
     /* Alpha cleared to ZERO, not one: in the offscreen buffer alpha is the
@@ -3060,13 +3121,7 @@
        * an airless rock needs no margin at all and should not pay for one. */
       var pad = isStar ? 3.2 : (at ? 1.22 : 1.0);
 
-      var atmoStrength = 0;
-      if (at) {
-        /* Thicker air glows harder, but only up to a point — a gas giant
-         * should not be a lamp. Anchored on Earth's 1.225 kg/m^3 reading as
-         * "a proper atmosphere", i.e. about 0.6. */
-        atmoStrength = Math.min(1, Math.sqrt(at.rho0 / 1.225) * 0.6);
-      }
+      var atmoStrength = airOf(b);
 
       gl.uniform2f(uni.uCenterPx, q.x, q.y);
       /* The quad only has to CONTAIN the sphere's screen footprint — the
@@ -3153,6 +3208,14 @@
         gl.uniform1f(uni.uHoleDepth, hole.depth || 0);
       } else {
         gl.uniform1f(uni.uHoleR, 0);
+      }
+      if (groundCone && groundCone.bodyId === b.id) {
+        var gc = groundCone.cone;
+        gl.uniform4f(uni.uConeS, gc.pos.x - cam.eye.x, gc.pos.y - cam.eye.y,
+                     gc.pos.z - cam.eye.z, 1);
+        gl.uniform2f(uni.uConeR, gc.rShip, gc.rEye);
+      } else {
+        gl.uniform4f(uni.uConeS, 0, 0, 0, 0);
       }
       if (groundCut && groundCut.bodyId === b.id) {
         uploadBox(uni, groundCut.box, cam);
@@ -3339,6 +3402,60 @@
   function atmoTint(b) {
     return rgb(ATMO_TINT[b.type] || '#9fc8ff', [0.62, 0.78, 1.0]);
   }
+  /* Thicker air glows harder, but only up to a point — a gas giant should
+   * not be a lamp. Anchored on Earth's 1.225 kg/m^3 reading as "a proper
+   * atmosphere", i.e. about 0.6. (Lifted out of the body pass so the sky
+   * below can ask the same question.) */
+  function airOf(b) {
+    var at = b && b.atmosphere;
+    return at ? Math.min(1, Math.sqrt(at.rho0 / 1.225) * 0.6) : 0;
+  }
+
+  /* ---- the sky from the ground (2026-11-02) ------------------------------
+   *
+   * Astra, looking up out of the cut at a ground port: "put daytime sky".
+   * There was no sky from the ground to reuse: the planet pass draws the
+   * world as a sphere seen from outside, its halo is the limb of that
+   * sphere, and every ray that misses the ground fell through to the clear
+   * colour — near-black space. So the sky is built from the SAME two
+   * numbers the halo is: this world's air tint (atmoTint) and how much air
+   * it has (airOf), lit by how high the sun stands over the place you are.
+   * Nothing new is drawn from: an airless world's sky is black at noon, and
+   * a thin one is a dim version of its haze.
+   *
+   * Day is the tint at a brightness that rides the air; the sun going down
+   * through the last fifteen degrees warms it toward a dusk the colour of
+   * the low sun through that air; below the horizon it fades out over
+   * about six degrees of twilight to the night clear. Flat — a single
+   * colour behind everything, the clear colour of the frame — which is
+   * what it is seen through: the mouth of a pit, or above a horizon that
+   * the planet pass already hazes with its halo. `sunUp` is the sine of
+   * the sun's elevation. Returns [r, g, b] in 0..1, and `lit` 0..1 for
+   * whether the stars should show. */
+  var SKY_NIGHT = [0x04 / 255, 0x06 / 255, 0x0c / 255];
+  var SKY_DUSK = [1.0, 0.52, 0.28];
+  function skyFor(tint, air, sunUp) {
+    var day = Math.max(0, Math.min(1, (sunUp + 0.10) / 0.36));
+    day = day * day * (3 - 2 * day);
+    var low = 1 - Math.max(0, Math.min(1, sunUp / 0.26));
+    var bright = air > 0 ? (0.32 + 0.68 * Math.min(1, air / 0.6)) : 0;
+    var lit = day * Math.min(1, air / 0.25);
+    var out = [];
+    for (var i = 0; i < 3; i++) {
+      var c = tint[i] * bright;
+      c = c + (SKY_DUSK[i] * bright * 0.85 - c) * low * 0.55;
+      out.push(SKY_NIGHT[i] + (c - SKY_NIGHT[i]) * lit);
+    }
+    out.lit = lit;
+    return out;
+  }
+  GL.skyFor = skyFor;
+  /* The sky over `body` at a place whose local vertical is `up`, with the
+   * sun along `sunDir` (both unit, world). */
+  GL.skyOver = function (body, up, sunDir) {
+    var sunUp = up.x * sunDir.x + up.y * sunDir.y + up.z * sunDir.z;
+    return skyFor(atmoTint(body), airOf(body), sunUp);
+  };
 
   /* ---- how a world turns, for the shader --------------------------------
    *

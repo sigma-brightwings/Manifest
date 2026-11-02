@@ -6639,7 +6639,14 @@
   function syncCameraFrame() {
     var port = cameraGroundPort();
     var gb = port && Sim.groundBasis ? Sim.groundBasis(port, G.sys, G.t) : null;
-    var next = gb ? { east: gb.east, north: gb.north, up: gb.up, port: port.id } : null;
+    /* RIGHT-HANDED, which groundBasis is not: its north is east x up, so
+     * east x north is DOWN. Handed that frame, the camera's up came out
+     * pointing into the ground and every ground-port shot of the first
+     * round was upside down — sky at the bottom of the screen, the near
+     * side of the pit at the top, which is how the second round found it
+     * (Downwell Starport from 8 km: "a V in the sky"). The camera's own
+     * north is up x east instead; yaw just turns the other way round. */
+    var next = gb ? { east: gb.east, north: V.cross(gb.up, gb.east), up: gb.up, port: port.id } : null;
     var cur = G.cam.frame;
     if (!cur && !next) return;
     if (cur && next && cur.port === next.port) { G.cam.frame = next; return; }
@@ -6653,6 +6660,16 @@
    * is the sphere the planet is drawn as, at the port: the shaft mouth sits
    * on it (Sim.groundBasis' entrance), so height is measured from there
    * along the local vertical. */
+  /* The sky over a ground port, as GLWorld.skyOver builds it from the
+   * world's own air and the sun's height there. Null off the GPU. */
+  function groundSky(port) {
+    var GW = global.GLWorld;
+    if (!GW || !GW.skyOver || !port || !port.parentBody || !Sim.groundBasis) return null;
+    var gb = Sim.groundBasis(port, G.sys, G.t);
+    if (!gb) return null;
+    var sun = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), gb.entrance.pos));
+    return GW.skyOver(port.parentBody, gb.up, sun);
+  }
   function eyeUnderStreet(port, cam) {
     var gb = Sim.groundBasis ? Sim.groundBasis(port, G.sys, G.t) : null;
     var eye = cam && cam.eye ? cam.eye : Render.camEye(G.cam);
@@ -7302,102 +7319,67 @@
 
   /* ---- THE GROUND-PORT SECTION ------------------------------------------
    *
-   * A square cut, straight down from the street to the hangar floor, the
-   * way an architect's cutaway drawing shows a building: the part of the
-   * town, the road and the hangar roof between you and the ship is simply
-   * not there, and the faces of the cut show what the street is made of.
-   * Astra chose square and following the camera.
+   * HOW IT STARTED: a square cut, straight down from the street to the
+   * hangar floor, the way an architect's cutaway drawing shows a building,
+   * square to the hangar and turned in quarter turns to face the camera
+   * (Astra chose square and following the camera). It took EVERYTHING above
+   * the deck inside its footprint, and from the air its footprint was the
+   * sight-line's whole run to the street — at Ashford Undercroft, a trench
+   * a kilometre long with the shaft collar, the apron and half the shed
+   * roof gone with it, and a black disc of open hole beside it.
    *
-   * SQUARE TO THE HANGAR, not to the camera. The box turns in quarter
-   * turns, to whichever of the hangar's own four sides faces the camera
-   * best, so its walls stay parallel to the room's and the section reads
-   * as a drawing rather than as a slot gouged at an angle. It is wide
-   * enough to hold the eye wherever the camera has been swung within that
-   * quarter, so you never look out from inside solid ground.
+   * A CONE NOW (2026-11-02, second round). Astra: "The pit walls should
+   * appear along the cone drawn from the center of the radial camera out
+   * to the edge of the screen; and the 'laser cut' effect should only be
+   * drawn instead of whatever is in between the ship and the camera." So
+   * the ground port is cut exactly the way an orbital dock is (cutawayFor):
+   * one cone, its narrow end round her — a hull length of clearing, the
+   * same CUT_SHIP — and widening by CUT_CONE toward the eye. Seen from the
+   * camera its wall runs from her at the middle of the screen out to the
+   * edges, and that wall, where it is in the ground, is drawn as rock
+   * (Render.drawGroundSection). Only what is INSIDE the cone is cut — the
+   * mesh shader's keyhole, with its hot rim, and the planet's own surface
+   * where the cone crosses it (GL.setGroundCone) — so the collar, the
+   * apron, the town and the rest of the hangar are drawn whole round it.
    *
-   * WHAT IS KEPT. The hangar floor and anything at it (the ship stands a
-   * couple of metres up, and so does the line where the cut starts), and
-   * a strip of the room behind the ship — the back of the hangar, still
-   * roofed, is what tells you it is a room and not a pit. The walls of the
-   * cut are drawn by Render.drawGroundSection in layers: road, paving,
-   * slab, services, fill, rock.
-   *
-   * Everything is in the port's own frame and its own units (pad radii,
-   * model z — `rel z / r - lift`), the same ones clampCameraToHangar and
-   * Sim.berthRoom use, so the cut and the room cannot disagree. */
-  var GCUT_BACK = 0.3;          // of the room's half-depth, kept behind the ship
-  var GCUT_SIDE = 0.7;          // of the room's half-width, the least the cut takes
-  var GCUT_FLOOR_M = 2;         // metres above the deck where the cut begins
-
-  function groundCutFor(port, asked) {
-    if (!Gen || !Gen.bayGeometry || !Sim.portBasis) return null;
-    var basis = Sim.portBasis(port, G.sys, G.t);
-    if (!basis) return null;
+   * The deck under her survives the keyhole's bubble, measured on the
+   * ground's vertical, so she stands on a floor at the bottom of the pit.
+   * The section walls are built in the ground frame and pad radii (`rel /
+   * r`, street at z = 0), with the room and shaft from the same table the
+   * mesh is built from, so the wall is left out where the cone runs
+   * through open air in the bay rather than painted across it. */
+  function groundConeFor(port, asked) {
+    if (!Gen || !Gen.bayGeometry || !Sim.groundBasis) return null;
+    var gb = Sim.groundBasis(port, G.sys, G.t);
+    if (!gb) return null;
     var g = Gen.bayGeometry(port);
     var r = port.radius || 1;
     var room = (Sim.berthRoom && Sim.berthRoom(port, currentBerth())) ||
       { x0: -g.chamberX, x1: g.chamberX, y0: -g.chamberY, y1: g.chamberY,
         z0: g.floorZ, z1: g.ceilZ };
-    function model(p) {
-      var rel = V.sub(p, basis.entrance.pos);
-      return [V.dot(rel, basis.east) / r, V.dot(rel, basis.north) / r,
-              V.dot(rel, basis.up) / r - (g.lift || 0)];
-    }
     var eyeW = V.addScaled(G.cam.target, camBoomDir(), asked);
-    var S = model(G.cam.target), E = model(eyeW);
-    var de = E[0] - S[0], dn = E[1] - S[1];
-    /* Which side of the room faces the camera: axis 0 (east) or 1 (north),
-     * and which way along it. */
-    var ax = Math.abs(de) >= Math.abs(dn) ? 0 : 1;
-    var sg = (ax === 0 ? de : dn) >= 0 ? 1 : -1;
-    var bx = 1 - ax;
-    var lo = [room.x0, room.y0], hi = [room.x1, room.y1];
-    var halfA = (hi[ax] - lo[ax]) * 0.5, halfB = (hi[bx] - lo[bx]) * 0.5;
-    /* Room limits along the cut, measured from the ship, toward the camera
-     * positive. */
-    var rA0 = sg > 0 ? lo[ax] - S[ax] : S[ax] - hi[ax];
-    var rA1 = sg > 0 ? hi[ax] - S[ax] : S[ax] - lo[ax];
-    var rB0 = lo[bx] - S[bx], rB1 = hi[bx] - S[bx];
-    var eyeA = sg * (E[ax] - S[ax]), eyeB = E[bx] - S[bx];
-    /* ONLY AS FAR AS THE STREET (2026-11-02). The box grows to hold the
-     * eye so that you never look out from inside solid ground — but once
-     * the eye is up in the air above the street there is no ground round
-     * it to be inside, and holding it anyway made the cut as big as the
-     * zoom: at 8 km out over Ashford Undercroft the pit was kilometres
-     * across, and you looked down through a hole in the planet at the
-     * stars beyond. What the cut has to clear from up there is the line of
-     * sight, and that only runs through ground between the deck and the
-     * street: so the box takes the sight-line's offset where it crosses
-     * street level, which is the eye's offset scaled by how much of the
-     * climb is underground. */
-    var ground = -(g.lift || 0);
-    if (E[2] > ground && E[2] > S[2]) {
-      var under = Math.max(0, Math.min(1, (ground - S[2]) / (E[2] - S[2])));
-      eyeA *= under; eyeB *= under;
+    var rShip = shipLen() * CUT_SHIP;
+    var rEye = rShip + asked * CUT_CONE;
+    function local(p) {
+      var rel = V.sub(p, gb.entrance.pos);
+      return [V.dot(rel, gb.east) / r, V.dot(rel, gb.north) / r, V.dot(rel, gb.up) / r];
     }
-    var hull = (Render.SHIP_LEN || 0.025) / r;
-    var margin = Math.max(hull, halfB * 0.1);
-    var aMin = -Math.max(GCUT_BACK * halfA, hull * 0.8);
-    var aMax = Math.max(rA1 + margin, eyeA + margin);
-    var bHalf = Math.max(GCUT_SIDE * halfB, Math.abs(eyeB) + margin, hull * 1.2);
-    var zMin = (room.z0 - S[2]) + GCUT_FLOOR_M * 0.001 / r;
-    var unit = function (i) {
-      return i === 0 ? basis.east : basis.north;
-    };
-    var A = V.scale(unit(ax), sg), B = unit(bx);
     return {
       port: port,
       surface: true,
       outside: true,
-      /* What the shader cuts with, in km. */
-      box: { origin: V.clone(G.cam.target), a: A, b: B, u: basis.up,
-             aMin: aMin * r, aMax: aMax * r, bHalf: bHalf * r, zMin: zMin * r },
-      /* What the section walls are built from, in model units. */
-      section: { ship: S, ax: ax, sg: sg, aMin: aMin, aMax: aMax, bHalf: bHalf,
-                 floor: room.z0, ceil: room.z1, ground: -(g.lift || 0),
-                 rA0: rA0, rA1: rA1, rB0: rB0, rB1: rB1, lift: g.lift || 0,
-                 r: r, entrance: basis.entrance.pos,
-                 east: basis.east, north: basis.north, up: basis.up }
+      pos: V.clone(G.cam.target),
+      eye: eyeW,
+      up: gb.up,
+      rShip: rShip,
+      rEye: rEye,
+      /* What the pit walls are built from: ground frame, pad radii, the
+       * street at z = 0. `room` and `duct` are the open air the wall must
+       * not be drawn across; model z is local z minus the table's lift. */
+      section: { ship: local(G.cam.target), eye: local(eyeW),
+                 rShip: rShip / r, rEye: rEye / r, r: r, lift: g.lift || 0,
+                 room: room, duct: ((g.mouthR || 0.55) + (g.throatR || 0.45)) / 2,
+                 entrance: gb.entrance.pos, east: gb.east, north: gb.north, up: gb.up }
     };
   }
 
@@ -7529,7 +7511,7 @@
        * ground ports, make it more of a cutaway through the street level
        * than a laser cutting the station open". Only once BERTHED: on the
        * way down the shaft the camera is in a moving tube and the clamp
-       * above is the right answer. See groundCutFor. */
+       * above is the right answer. See groundConeFor. */
       var canCut = glLive() && G.cutawayStyle !== 2 && G.cam.dist < asked * 0.999 &&
                    (!port.surface || (G.ship.docked === port.id && !G.arrivalPose));
       if (canCut) {
@@ -7542,7 +7524,7 @@
         G.cam.dist = asked;
         keepCameraAboveDeck(port);
         if (port.surface) keepCameraAboveStreet(port);
-        G.cutaway = port.surface ? groundCutFor(port, asked)
+        G.cutaway = port.surface ? groundConeFor(port, asked)
                                  : cutawayFor(port, roomDist, asked);
         if (!G.cutaway) G.cam.dist = roomDist;
         return;
@@ -7755,8 +7737,16 @@
      * round it. The planet is not drawn from inside it (the GL shader's
      * cq < 0), so the clear colour is the only thing that can say where
      * you are. */
-    if (G.cutaway && G.cutaway.surface && !mapMode() &&
-        !eyeUnderStreet(G.cutaway.port, cam)) buried = null;
+    /* AND WITH THE CONE, THE CUT HAS WALLS ALL ROUND (second round, the
+     * same day). The pit's rock wall runs from her out past the edges of
+     * the screen, the far end of it is capped, so the only way a ray gets
+     * out of the cut without meeting something is UP, through the top of
+     * it — and up is the sky. So in the cut the frame is cleared to the
+     * sky over the port (groundSky), above the street or below it: day
+     * by day, dusk and night as they are there, black on an airless
+     * world. Astra: "put daytime sky when looking up out of the cut". */
+    var groundSkyNow = (G.cutaway && G.cutaway.surface && !mapMode()) ? groundSky(G.cutaway.port) : null;
+    if (groundSkyNow) buried = null;
     /* Berthed in a shed: the shed is the world. See enclosedPort.
      *
      * EXCEPT IN THE ORBIT MAP, which is a chart rather than a window. F2 is
@@ -7778,7 +7768,7 @@
 
     if (glLive()) {
       ctx.clearRect(0, 0, w, h);
-      global.GLWorld.begin(rock ? ROCK_CLEAR : null);
+      global.GLWorld.begin(rock ? ROCK_CLEAR : groundSkyNow);
       /* STANDING OUTSIDE HER (2026-10-26): the world is the GL layer's to
        * draw — sky, sun, the ground — and the chart over it is not yours
        * any more. Orbit lines, body markers and labels, traffic and the
@@ -7809,9 +7799,9 @@
       if (shaft) {
         global.GLWorld.setSurfaceHole(shaft.hostId, shaft.mouth, shaft.radius, shaft.depth);
       }
-      if (G.cutaway && G.cutaway.surface && global.GLWorld.setGroundCut &&
+      if (G.cutaway && G.cutaway.surface && global.GLWorld.setGroundCone &&
           G.cutaway.port.parentBody) {
-        global.GLWorld.setGroundCut(G.cutaway.port.parentBody.id, G.cutaway.box);
+        global.GLWorld.setGroundCone(G.cutaway.port.parentBody.id, G.cutaway);
       }
     } else {
       ctx.fillStyle = rock ? ROCK_CLEAR_CSS : '#04060c';
@@ -7879,7 +7869,8 @@
                  dist: ft.ts.dist };
       }));
     }
-    if (!buried && !inside) {
+    /* No stars through a daylit sky. */
+    if (!buried && !inside && !(groundSkyNow && groundSkyNow.lit > 0.35)) {
       if (gpuSky) global.GLWorld.drawStars(cam, G.cruise ? G.ship.fwd : null, cruiseBeta);
       else if (!warpOwnsSky) Render.drawStarfield(ctx, cam, G.stars);
     }
@@ -16218,7 +16209,9 @@
   function stationCutShader(b) {
     var c = G.cutaway;
     if (!c || c.port !== b || !Render.setCutaway) return null;
-    if (c.surface) return { box: c.box };
+    /* A ground port's cone is the same keyhole, round her where she
+     * stands and with the deck's bubble on the ground's vertical. */
+    if (c.surface) return { pos: c.pos, rShip: c.rShip, rEye: c.rEye, rim: CUT_RIM, up: c.up };
     var cutBasis = Sim.portBasis ? Sim.portBasis(b, G.sys, G.t) : null;
     return { pos: G.ship.pos, rShip: c.rShip, rEye: c.rEye, rim: CUT_RIM,
              up: cutBasis ? cutBasis.up : null };
@@ -16448,9 +16441,13 @@
           /* The town, the boards and the pad lighting. Held to a higher
            * threshold than the pad itself: the dressing is detail, and
            * detail smaller than a few pixels is cost without information. */
-          /* Not from under it: the town is ON the street, and from below
-           * the street it is the underside of a slab hanging over the cut. */
-          if (b.surface && rpx > 14 && tier === 'near' && !underStreet) {
+          /* From under the street too, since the cone (second round): the
+           * town stands round the top of the pit, uncut except where the
+           * cone runs through it, and from the bottom of it you see the
+           * buildings at the rim against the sky. (The first round left it
+           * out from below, when the cut was a box that took the street
+           * whole and the town hung over it as slabs.) */
+          if (b.surface && rpx > 14 && tier === 'near') {
             Render.drawPortDressing(ctx, cam, frame, b, b.radius, sun);
           }
           /* The lamps come in earlier than the rest of the dressing: a
@@ -19837,6 +19834,7 @@
    * drawing of a ground port turns on (street, sun, sky) when you are
    * zoomed out of its bay. */
   G.eyeUnderStreet = eyeUnderStreet;
+  G.groundSky = groundSky;
   /* Exposed for the suite: the readout says VECTOR or HOVER or why not, and
    * a test that cannot ask the same question the HUD asks would be testing
    * its own copy of the rule. */
