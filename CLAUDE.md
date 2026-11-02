@@ -84,6 +84,16 @@ the previous build and let you conclude the wrong thing.
   Commander's shell to run node and git. If Desktop Commander is
   disconnected, you can still edit but cannot run tests — say so rather
   than claiming work is verified.
+- **The full suite runs on the target machine** (Astra, 2026-11-02: "you can
+  run your tests here while having agents do work on your end"). The cloud
+  workspace has ~7 GB and two cores, and the suite died of memory there
+  beside two headless browsers; the Crawler has 32 GB and is the machine
+  that matters anyway. Edits and agents stay in the cloud; push, then on
+  the Crawler `git -C X:\Shared_AI\manifest-test pull`, `npm run unpack`,
+  `node tools/run-tests.js`. That checkout is for tests only — Astra's own
+  working copy is `X:\Shared_AI\Procedural Space Game` and is not to be
+  pulled into or reset. First run there: 79 green in 7 m 2 s; peaks are
+  higher on Windows (berths 3.6 GB, transfer 2.9 GB, render 1.2 GB).
 - `npm` via PowerShell fails on script-signing policy; call
   `node test\<name>.test.js` directly, or use `cmd`.
 - Ship models: `.glb` files in `ref/glb`, converted by
