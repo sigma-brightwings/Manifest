@@ -67,6 +67,21 @@ before they update.
 - **A shot at you is drawn from the seat.** It ends at your eye, which
   projects nowhere, so incoming fire was skipped in the cockpit and only the
   canopy flare showed. It now stops 60 m short and comes at the glass.
+- **2026-11-01 — You can see your shield (Astra: "what effect do we have
+  to show that there even is a shield around our ship?" — none, until it
+  was hit; she chose all four of these).**
+  - From outside, your own field shows as a faint skin whenever it is up,
+    fainter as it drains. Other ships stay dark until hit, so whether a
+    stranger carries a shield is still yours to find out.
+  - It ripples over the hull from the nose when it comes online and again
+    when it finishes recharging (the impact curve, pointed down the nose).
+  - From the seat, a thin line of the field's colour runs round the inside
+    of the canopy while it is up: blue full, through violet to dull orange,
+    gone when it is down, brighter for a moment after a soaked hit or as it
+    comes up.
+  - The screen's hit flinch is red only when something got through to the
+    hull. A hit the shield soaked whole flinches in the field's colour;
+    before, the red drowned the blue flare that said it was holding.
 - **Explosions have a fireball** under the shock rings, white at the heart
   and cooling to orange. A rock torpedo's lasts 1.6 s against a kill's 0.9.
 

@@ -8889,6 +8889,48 @@
     return s - Math.floor(s);
   }
 
+  /* THE RIM (Astra, 2026-11-01): a thin line of the field's colour round
+   * the inside of the glass while the shield is up — blue full, through
+   * violet to dull orange spent, and gone when it is down. A gauge read out
+   * of the corner of your eye, with the number on a panel you are not
+   * looking at in a fight. Brighter for a moment after a hit it soaked.
+   *
+   * Stroked along the aperture's own outline from inside the glass clip,
+   * so only the inner half of the stroke shows and it follows whatever
+   * shape the canopy is. With no aperture (no cockpit model) it runs round
+   * the view instead. */
+  var RIM_A = 0.20, RIM_HIT_A = 0.45, RIM_W = 16;
+  function drawCanopyShieldRim(ctx, aperture, w, h) {
+    var s = G.ship;
+    var cap = s.shield ? Combat.MODULES.shield.cap : 0;
+    if (!(cap > 0) || !(s.shieldHp > 0)) return;
+    var chg = Math.min(1, s.shieldHp / cap);
+    var col = Render.shieldTint(chg);
+    var sinceHit = (performance.now() - (s.lastHitAt || -1e9)) / 1000;
+    var boost = sinceHit >= 0 && sinceHit < 0.6 ? (1 - sinceHit / 0.6) : 0;
+    var pulseAge = nowSeconds() - shieldWatch.pulseAt;
+    if (pulseAge >= 0 && pulseAge < 1.2) boost = Math.max(boost, 1 - pulseAge / 1.2);
+    var a = (RIM_A * (0.5 + 0.5 * chg)) + (RIM_HIT_A - RIM_A) * boost;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    if (aperture && aperture.length > 2) {
+      ctx.moveTo(aperture[0].x, aperture[0].y);
+      for (var i = 1; i < aperture.length; i++) ctx.lineTo(aperture[i].x, aperture[i].y);
+      ctx.closePath();
+    } else {
+      ctx.rect(0, 0, w, deckTop(h));
+    }
+    ctx.strokeStyle = hexToRgba(col, a * 0.45);
+    ctx.lineWidth = RIM_W * 2;
+    ctx.stroke();
+    ctx.strokeStyle = hexToRgba(col, a);
+    ctx.lineWidth = 4;
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function drawCanopyShieldFlare(ctx, cam, w, h) {
     var s = G.ship;
     var cap = s.shield ? Combat.MODULES.shield.cap : 0;
@@ -12122,6 +12164,7 @@
      * it should be cut off by the frame exactly as the sky is. */
     drawCanopyPlasma(ctx, cam, w, h);
     drawCanopyShieldFlare(ctx, cam, w, h);
+    drawCanopyShieldRim(ctx, aperture, w, h);
     drawCanopyWeather(ctx, cam, w, h);
     Render.glassEnd(ctx);
 
@@ -16310,6 +16353,25 @@
    * NPC does — shieldMax, shieldHp and impacts — because damagePlayer and
    * damageNpc go through one splitDamage and one markImpact, so there is
    * nothing here to keep in step with the other path. */
+  /* How lit your own field is at rest, against 1 for just-hit. Faint: the
+   * base wash is 5.5% of the shell's colour at the rim, so at this it is a
+   * skin you notice when you look for it, not a bubble over the hull. */
+  var SHIELD_IDLE_LIT = 0.45;
+  /* Watching your own shield for the two moments worth a ripple: coming
+   * online (fitted, or back from empty) and finishing a recharge. Kept
+   * here rather than on G.ship so it is never saved. */
+  var shieldWatch = { up: false, full: false, pulseAt: -1e9 };
+  function watchShield() {
+    var s = G.ship;
+    var cap = s && s.shield ? Combat.MODULES.shield.cap : 0;
+    var up = cap > 0 && s.shieldHp > 0;
+    var full = up && s.shieldHp >= cap - 1e-6;
+    if ((up && !shieldWatch.up) || (full && !shieldWatch.full && shieldWatch.up)) {
+      shieldWatch.pulseAt = nowSeconds();
+    }
+    shieldWatch.up = up; shieldWatch.full = full;
+  }
+
   function playerShieldShell(ctx, cam) {
     var s = G.ship;
     var cap = s.shield ? Combat.MODULES.shield.cap : 0;
@@ -16321,12 +16383,29 @@
      * otherwise be handed two different units and quietly believe both. */
     var sinceS = ((typeof performance !== 'undefined' ? performance.now() : 0)
                   - (s.lastHitAt || -1e9)) / 1000;
-    if (!(sinceS >= 0) || sinceS > SHIELD_LINGER) return;
-    var leftS = SHIELD_LINGER - sinceS;
-    var lit = leftS >= SHIELD_FADE ? 1 : leftS / SHIELD_FADE;
-    var lenPx = Render.shipScreenLength(cam, s);
+    var lit = 0;
+    if (sinceS >= 0 && sinceS <= SHIELD_LINGER) {
+      var leftS = SHIELD_LINGER - sinceS;
+      lit = leftS >= SHIELD_FADE ? 1 : leftS / SHIELD_FADE;
+    }
     var nowS = nowSeconds();
     var live = liveImpacts(s, nowS);
+    /* AT REST, AND COMING UP (Astra, 2026-11-01: "what effect do we have
+     * to show that there even is a shield around our ship?" — none, until
+     * it was hit). YOUR OWN field now shows faintly whenever it is up, and
+     * ripples over the hull from the nose when it comes online or finishes
+     * recharging. Other ships keep the September rule (dark until hit), so
+     * whether a stranger carries a shield is still something you find out.
+     * The ripple is an ordinary impact pointed down the nose: the same
+     * spot-spread-dissipate curve, so it reads as the field, not a new
+     * effect. */
+    lit = Math.max(lit, SHIELD_IDLE_LIT);
+    var pulseAge = nowS - shieldWatch.pulseAt;
+    if (pulseAge >= 0 && pulseAge <= Render.SHIELD_FLASH_LIFE) {
+      lit = Math.max(lit, 1 - pulseAge / Render.SHIELD_FLASH_LIFE);
+      live = live.concat([{ dir: V.clone(s.fwd), at: shieldWatch.pulseAt, soaked: true, shield: 1, hull: 0 }]);
+    }
+    var lenPx = Render.shipScreenLength(cam, s);
     if (lenPx >= SHELL_MIN_PX) {
       Render.drawShellField(ctx, cam, s, shipLen(s), 'hull:' + (s.hullId || 'talon'),
                             s.shieldHp / cap, lit, live, nowS);
@@ -16703,14 +16782,29 @@
 
   function drawOverlays(ctx, w, h) {
     /* --- taking fire: the screen itself flinches --- */
+    watchShield();
     var sinceHit = performance.now() - (G.ship.lastHitAt || -1e9);
     if (sinceHit < 320) {
       ctx.save();
       var f = 1 - sinceHit / 320;
+      /* RED ONLY WHEN IT GOT THROUGH (Astra, 2026-11-01). The flinch was red
+       * for every hit, so a shot the shield soaked whole looked exactly like
+       * one in the plating, and from the seat it drowned the blue flare on
+       * the glass — the one thing saying the shield was holding. A soaked
+       * hit flinches in the field's own colour, a little softer. */
+      var imps = G.ship.impacts, lastIm = imps && imps.length ? imps[imps.length - 1] : null;
+      var held = lastIm && lastIm.soaked && !lastIm.through;
+      var fc = '255,60,40', fa = 0.38;
+      if (held) {
+        var cap0 = Combat.MODULES.shield.cap || 1;
+        var tn = parseInt(Render.shieldTint(Math.max(0, G.ship.shieldHp) / cap0).slice(1), 16);
+        fc = ((tn >> 16) & 255) + ',' + ((tn >> 8) & 255) + ',' + (tn & 255);
+        fa = 0.30;
+      }
       var vg = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.32,
                                         w / 2, h / 2, Math.max(w, h) * 0.72);
-      vg.addColorStop(0, 'rgba(255,60,40,0)');
-      vg.addColorStop(1, 'rgba(255,60,40,' + (0.38 * f).toFixed(3) + ')');
+      vg.addColorStop(0, 'rgba(' + fc + ',0)');
+      vg.addColorStop(1, 'rgba(' + fc + ',' + (fa * f).toFixed(3) + ')');
       ctx.fillStyle = vg;
       ctx.fillRect(0, 0, w, h);
       ctx.restore();
