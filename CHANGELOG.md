@@ -40,6 +40,36 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-02, station cutaway)
+
+- **Zooming out of a berth reaches the outside again, with your ship in
+  it** (Astra: "the station cutaway thing should allow me to zoom out and
+  view the station from the outside, and show my ship. This isn't working
+  now ... even for planet side stations"). Since the walking deck's hangar
+  became the chase view round a berthed ship (2026-10-31), its walls
+  clamped the boom every frame — measured at 21 m at Waypoint Dock and 6 m
+  at Ashford Undercroft, whatever the wheel asked — and the station's own
+  model was not drawn, so there was no outside to reach. Now the hangar is
+  the view until you wheel past its wall (8% over its reach); from there
+  the camera belongs to the station as it does in flight: the cutaway
+  opens the hull round her at an orbital dock, the street section opens the
+  ground over her at a surface or underground port, and further out it is
+  the station from space or the port from the air. Her hangar deck is still
+  drawn round her, cut the same way, so she stands on a floor rather than
+  hanging in the bay's box. Wheel back in under 92% of the reach and the
+  hangar is the room again (two thresholds, so a boom resting on the wall
+  does not flicker). Not saved; no save change.
+- **The street section is only as big as it needs to be.** It grew with
+  the camera's distance so the eye was never inside solid ground; zoomed
+  out over a port that made a pit kilometres across, with the stars
+  showing through the planet. Once the eye is above the street the
+  section only has to clear the line of sight, so it takes the sight-line's
+  offset where it crosses street level — about 0.6 km over Ashford
+  Undercroft's 860 m-deep bay at 8 km out, where it was over 4 km.
+- render.test: "zooming out of her hangar" — leaves the hangar, reaches
+  8 km, the station is cut round her, the street section stays small, and
+  wheeling back in restores the hangar clamp. It fails on the old build.
+
 ### Fixed (2026-11-02, deck fixes)
 
 - **The glitchy bar door** (Astra, on Downwell Bunker's concourse: "this is

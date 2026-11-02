@@ -7185,6 +7185,98 @@ console.log('--- sound ---');
   check('a system with no Syndicate port has no comsat', homeOutlaw || lc.length === 0, lc.map(function (c) { return c.name; }).join(', '));
 })();
 
+/* ---- ZOOMING OUT OF HER HANGAR (2026-11-02) --------------------------------
+ * Astra: "the station cutaway thing should allow me to zoom out and view the
+ * station from the outside, and show my ship. This isn't working now ... even
+ * for planet side stations." Since the walking deck's hangar became the chase
+ * view round a berthed ship (2026-10-31), its walls clamped the boom every
+ * frame — 21 m at an orbital dock, 6 m at a ground port, whatever the wheel
+ * asked for — and the station model was not drawn, so there was no outside to
+ * zoom out to. The hangar is the view only until you ask past its wall.
+ *
+ * The chase hangar and the cutaway are GPU-only, and gl.js is not in this
+ * harness, so a stand-in GLWorld that says yes and draws nothing puts
+ * main.js on the GPU branch. Nor are the ship decks: her ramp and hatch are
+ * stood in for with a box, which is all the hangar's layout asks of them.
+ * Run last, because it loads walk.js into the harness. The pictures were
+ * looked at in Chrome (orbital and ground port, 5 m to 8 km). */
+console.log('--- zooming out of her hangar ---');
+(function () {
+  var saved = W.GLWorld, R = W.Render;
+  var keep = { outsidePlan: R.outsidePlan, shipInterior: R.shipInterior,
+               hatchModel: R.hatchModel, cockpitAt: R.cockpitAt };
+  if (!W.Walk) require('../src/walk.js');
+  W.GLWorld = new Proxy({ available: true }, {
+    get: function (t, k) { return k in t ? t[k] : function () { return false; }; }
+  });
+  R.outsidePlan = function () { return { ramp: true, footZ: -6, floorY: -2 }; };
+  R.shipInterior = function () { return { plan: { ramp: { x0: -1, x1: 1 } } }; };
+  R.hatchModel = function () { return { lo: [-0.2, -0.1, -0.4], hi: [0.2, 0.1, 0.4] }; };
+  R.cockpitAt = R.cockpitAt || function () { return [0, 0, 0]; };
+  try {
+    G.newGame('kawartha');
+    frames(1);
+    /* The cut is an option, and an earlier section may have left it off. */
+    var style = G.cutawayStyle; G.cutawayStyle = 0;
+    var tried = [];
+    ['orbital', 'surface'].forEach(function (kind) {
+      var ports = G.sys.ports.filter(function (p) { return !!p.surface === (kind === 'surface'); });
+      for (var i = 0; i < ports.length; i++) {
+        var port = ports[i];
+        G.ship.docked = null; G.hangarOut = false;
+        Sim.dockShip(G.ship, port, G.sys, G.t);
+        G.viewMode = 'orbit'; G.followShip = true; G.focus = null; G.walk = null;
+        G.cam.yaw = 0.9; G.cam.pitch = 0.45; G.cam.dist = 0.005;
+        frames(2);
+        if (G.hangarOut) continue;
+        G.cam.dist = 3; frames(1);
+        var out = G.cam.dist;
+        /* Not every berth has a ramp and the deck hangar round her; one
+         * that does not never had the problem, so try the next. Before the
+         * fix no berth ever set the flag, and the last check below fails. */
+        if (!G.hangarOut) continue;
+        check(kind + ': zooming out leaves the hangar at ' + port.name,
+              out > 1, 'asked 3 km, got ' + (out * 1000).toFixed(0) + ' m');
+        G.cam.dist = 8; frames(1);
+        check(kind + ': and keeps going, to the station from outside', G.cam.dist > 5 && G.hangarOut,
+              (G.cam.dist * 1000).toFixed(0) + ' m');
+        check(kind + ': with the station cut away round her', !!G.cutaway && G.cutaway.port === port,
+              G.cutaway ? 'cut belongs to ' + (G.cutaway.port && G.cutaway.port.name) : 'no cut');
+        if (kind === 'surface' && G.cutaway && G.cutaway.box && Sim.portBasis) {
+          /* Looking DOWN on the port: the boom's pitch is in the system's
+           * frame, so it is aimed from the port's own up. */
+          var pb = Sim.portBasis(port, G.sys, G.t);
+          var dir = V.add(V.scale(pb.up, Math.sin(0.95)), V.scale(pb.east, Math.cos(0.95)));
+          G.cam.pitch = Math.asin(dir.z); G.cam.yaw = Math.atan2(dir.y, dir.x);
+          frames(1);
+          /* Held to the sight-line where it crosses the street, not to the
+           * eye: at 8 km a box sized to the eye was a pit kilometres across
+           * with the stars showing through the planet. */
+          var bx = G.cutaway && G.cutaway.box;
+          check('surface: the street section stays the size of what it has to clear',
+                bx && bx.aMax < 2 && bx.bHalf < 2,
+                bx ? 'aMax ' + bx.aMax.toFixed(2) + ' km, bHalf ' + bx.bHalf.toFixed(2) + ' km' : 'no section');
+        }
+        G.cam.dist = 0.0001; frames(1);
+        check(kind + ': and wheeling back in puts her in her hangar again', !G.hangarOut && G.cam.dist < 0.1,
+              (G.cam.dist * 1000).toFixed(0) + ' m, out ' + G.hangarOut);
+        tried.push(kind);
+        return;
+      }
+    });
+    check('zooming out of a deck hangar reaches the station, orbital and surface', tried.length === 2, tried.join(','));
+    /* And the hangar is still the room when you have not asked out of it. */
+    G.cam.dist = 0.0001; frames(1);
+    check('a boom inside the hangar is still held to its walls', !G.hangarOut && G.cam.dist < 0.05,
+          (G.cam.dist * 1000).toFixed(0) + ' m');
+    G.cutawayStyle = style;
+  } finally {
+    W.GLWorld = saved;
+    Object.keys(keep).forEach(function (k) { R[k] = keep[k]; });
+    G.ship.docked = null; G.hangarOut = false;
+  }
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

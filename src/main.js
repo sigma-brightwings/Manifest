@@ -7066,6 +7066,22 @@
     var rA1 = sg > 0 ? hi[ax] - S[ax] : S[ax] - lo[ax];
     var rB0 = lo[bx] - S[bx], rB1 = hi[bx] - S[bx];
     var eyeA = sg * (E[ax] - S[ax]), eyeB = E[bx] - S[bx];
+    /* ONLY AS FAR AS THE STREET (2026-11-02). The box grows to hold the
+     * eye so that you never look out from inside solid ground — but once
+     * the eye is up in the air above the street there is no ground round
+     * it to be inside, and holding it anyway made the cut as big as the
+     * zoom: at 8 km out over Ashford Undercroft the pit was kilometres
+     * across, and you looked down through a hole in the planet at the
+     * stars beyond. What the cut has to clear from up there is the line of
+     * sight, and that only runs through ground between the deck and the
+     * street: so the box takes the sight-line's offset where it crosses
+     * street level, which is the eye's offset scaled by how much of the
+     * climb is underground. */
+    var ground = -(g.lift || 0);
+    if (E[2] > ground && E[2] > S[2]) {
+      var under = Math.max(0, Math.min(1, (ground - S[2]) / (E[2] - S[2])));
+      eyeA *= under; eyeB *= under;
+    }
     var hull = (Render.SHIP_LEN || 0.025) / r;
     var margin = Math.max(hull, halfB * 0.1);
     var aMin = -Math.max(GCUT_BACK * halfA, hull * 0.8);
@@ -7111,9 +7127,37 @@
     return p;
   }
 
+  var HANGAR_OUT = 1.08;       // of the hangar's reach: a wheel notch past its wall leaves it
+  var HANGAR_IN = 0.92;        // and back in under this, the hangar is the room again
   function clampCameraToEnclosure() {
     if (G.viewMode === 'cockpit') return;   // the eye is the pilot's, not a boom
     /* Berthed in her hangar, the hangar is the room (hangarChase). */
+    /* ZOOM OUT OF HER HANGAR (2026-11-02). Astra: "the station cutaway
+     * thing should allow me to zoom out and view the station from the
+     * outside, and show my ship. This isn't working now ... even for
+     * planet side stations." Since the walkable hangar went round a
+     * berthed ship (2026-10-31), that hangar was the whole view: the boom
+     * was clamped to its walls every frame (21 m at Waypoint Dock, 6 m at
+     * Ashford Undercroft, measured) and the station's own model was not
+     * drawn at all, so every notch of the wheel was undone and there was
+     * no outside to reach.
+     *
+     * So the hangar is the view until you ask past its wall: a notch out
+     * beyond HANGAR_OUT of its reach leaves it, and from there the camera
+     * belongs to the station as it does in flight — the room clamps
+     * measure, the GPU cutaway opens the hull round her (orbital) or the
+     * street section opens the ground over her (surface), and further out
+     * it is the station from space with your ship in it. Back in under
+     * HANGAR_IN of the reach and the hangar is the room again. Two
+     * thresholds, so a boom resting on the wall does not flicker between
+     * the two. */
+    var hcRaw = hangarChaseRaw();
+    if (!hcRaw) G.hangarOut = false;
+    else {
+      var reach = deckHangarReach(hcRaw);
+      if (!G.hangarOut && reach < Infinity && G.cam.dist > reach * HANGAR_OUT) G.hangarOut = true;
+      else if (G.hangarOut && reach < Infinity && G.cam.dist < reach * HANGAR_IN) G.hangarOut = false;
+    }
     var hc = hangarChase();
     if (hc) { G.cutaway = null; clampCameraToDeckHangar(hc); return; }
     /* The clamp follows the ENCLOSURE, not the docked flag. Half way down
@@ -7813,6 +7857,15 @@
       /* And the people on it (2026-10-31): the station's scene is the
        * hangar deck's while you watch her there (npcSceneNow). */
       if (hangarChase()) { queueHangarFromShip(cam); queueNpcs(cam); }
+      /* Zoomed out of it (2026-11-02): still her hangar round her, but cut
+       * by the station's own cut, so from outside you look in through the
+       * opening at her standing on its deck rather than at a ship hanging
+       * in the bay's empty box. Not the people: at this range they are
+       * specks, and the scene they belong to is the deck's. */
+      else if (G.hangarOut && G.cutaway && hangarChaseRaw()) {
+        var hcut = stationCutShader(G.cutaway.port);
+        if (hcut) { Render.setCutaway(hcut); queueHangarFromShip(cam); Render.setCutaway(null); }
+      }
       drawShip(ctx, cam);
     }
     /* On foot aboard, nobody is flying: no markers, no labels, no flight
@@ -10250,6 +10303,12 @@
    * (it would stand in the same space), and the boom stays inside the
    * hangar's walls, as it stays inside a bay's. */
   function hangarChase() {
+    /* Zoomed out past her hangar's wall (2026-11-02): the station is the
+     * view again, cut away round her (clampCameraToEnclosure). */
+    if (G.hangarOut) return null;
+    return hangarChaseRaw();
+  }
+  function hangarChaseRaw() {
     if (G.viewMode === 'cockpit' || G.walk || G.focus && !G.followShip) return null;
     if (typeof mapMode === 'function' && mapMode()) return null;
     if (!glLive() || !berthHangar()) return null;
@@ -10271,9 +10330,14 @@
    * inside her hangar: a slab test in the hangar's frame (metres), 0.6 m
    * off the walls and the ceiling, 0.4 m off the floor. */
   function clampCameraToDeckHangar(hp) {
+    var t = deckHangarReach(hp);
+    if (!(t < Infinity)) return;
+    G.cam.dist = Math.max(MIN_CAM_DIST, Math.min(G.cam.dist, t));
+  }
+  function deckHangarReach(hp) {
     var H = hp.hangar, room = H.room && H.room.x0 !== undefined ? H.room : null;
     if (!room) room = hp.rooms.filter(function (r) { return r.hangar; })[0];
-    if (!room) return;
+    if (!room) return Infinity;
     var F = hangarFrame(H), M = Render.M;
     var cp = Math.cos(G.cam.pitch), sp = Math.sin(G.cam.pitch);
     var cyw = Math.cos(G.cam.yaw), syw = Math.sin(G.cam.yaw);
@@ -10287,8 +10351,7 @@
       if (D[k] > 1e-12) t = Math.min(t, (hi[k] - L[k]) / D[k]);
       else if (D[k] < -1e-12) t = Math.min(t, (lo[k] - L[k]) / D[k]);
     }
-    if (!(t < Infinity)) return;
-    G.cam.dist = Math.max(MIN_CAM_DIST, Math.min(G.cam.dist, t));
+    return t;
   }
 
   /* ---- on foot in your own ship (2026-10-24) -----------------------------
@@ -15823,13 +15886,28 @@
     return d <= Math.max(NEAR_STATION_KM, b.radius * NEAR_STATION_RADII) ? 'near' : 'mid';
   }
 
+  /* The cut as the shader takes it, for whatever is drawn in this
+   * station's space: its own meshes (drawBody) and, zoomed out of her
+   * hangar, the walking deck's hangar round her (draw) — one place, so the
+   * two cannot be cut differently. Null when nothing is cut here. */
+  function stationCutShader(b) {
+    var c = G.cutaway;
+    if (!c || c.port !== b || !Render.setCutaway) return null;
+    if (c.surface) return { box: c.box };
+    var cutBasis = Sim.portBasis ? Sim.portBasis(b, G.sys, G.t) : null;
+    return { pos: G.ship.pos, rShip: c.rShip, rEye: c.rEye, rim: CUT_RIM,
+             up: cutBasis ? cutBasis.up : null };
+  }
+
   function drawBody(ctx, cam, item, starScreen) {
     var b = item.body, sp = item.sp, rpx = item.rpx;
 
     /* Berthed in her hangar and seen from outside her: the walking deck's
      * hangar is the room, and this station's own bay would stand in the
-     * same space (hangarChase). The camera cannot leave the hangar, so
-     * there is nothing of the rest of the station to see either. */
+     * same space (hangarChase). While the camera is in the hangar there
+     * is nothing of the rest of the station to see either. Zoomed out past
+     * its wall (G.hangarOut, 2026-11-02) hangarChase is null and the
+     * station is drawn again — that, cut away round her, is the outside. */
     if (b.kind === 'station' && G.ship.docked === b.id && (hangarChase() || hangarSeat())) return;
 
     if (b.kind === 'station') {
@@ -15875,13 +15953,7 @@
                      !G.cutaway.surface) ? G.cutaway : null;
           var gcut = (G.cutaway && G.cutaway.port === b && Render.setCutaway &&
                       G.cutaway.surface) ? G.cutaway : null;
-          if (gcut) Render.setCutaway({ box: gcut.box });
-          if (cut) {
-            var cutBasis = Sim.portBasis ? Sim.portBasis(b, G.sys, G.t) : null;
-            Render.setCutaway({ pos: G.ship.pos, rShip: cut.rShip,
-                                rEye: cut.rEye, rim: CUT_RIM,
-                                up: cutBasis ? cutBasis.up : null });
-          }
+          if (gcut || cut) Render.setCutaway(stationCutShader(b));
           /* WHOSE DOCK THIS IS, in paint. Astra asked for red accents on
            * Syndicate stations "like the syndicate ships do"; the rule is
            * written for every power instead, so a dock wears the same
