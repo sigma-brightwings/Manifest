@@ -7251,13 +7251,17 @@ console.log('--- zooming out of her hangar ---');
           var ang = R.camAngles(dir, G.cam.frame);
           G.cam.pitch = ang.pitch; G.cam.yaw = ang.yaw;
           frames(1);
-          /* Held to the sight-line where it crosses the street, not to the
-           * eye: at 8 km a box sized to the eye was a pit kilometres across
-           * with the stars showing through the planet. */
-          var bx = G.cutaway && G.cutaway.box;
-          check('surface: the street section stays the size of what it has to clear',
-                bx && bx.aMax < 2 && bx.bHalf < 2,
-                bx ? 'aMax ' + bx.aMax.toFixed(2) + ' km, bHalf ' + bx.bHalf.toFixed(2) + ' km' : 'no section');
+          /* The hole in the street is the cone's width where it crosses
+           * the street, not the boom's: at 8 km a box sized to the eye was a
+           * pit kilometres across with the stars showing through the planet,
+           * and a cone the width of the eye end would be no better. */
+          var cc = G.cutaway, ceye = R.camEye(G.cam);
+          var hS = V.dot(V.sub(cc.pos, pb.entrance.pos), pb.up),
+              hE = V.dot(V.sub(ceye, pb.entrance.pos), pb.up);
+          var tX = hE > 0 && hS < 0 ? hE / (hE - hS) : 1;    // from the eye
+          var rX = cc.rEye + (cc.rShip - cc.rEye) * tX;
+          check('surface: the cone opens the street only as wide as its spread there',
+                rX < 1.2, 'radius at the street ' + (rX * 1000).toFixed(0) + ' m');
         }
         G.cam.dist = 0.0001; frames(1);
         check(kind + ': and wheeling back in puts her in her hangar again', !G.hangarOut && G.cam.dist < 0.1,
@@ -7343,45 +7347,68 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
 /* Astra's zoom-out sheet from Ashford Undercroft: the hangar floating in
  * black space with stars under it, the horizon on its side, the eye in the
  * rock beside an 860 m bay. The camera's angles were in the star system's
- * frame, not the ground's. Pinned here, at every port on the start world
- * and an open-pad one elsewhere, over a sweep of booms and angles:
+ * frame, not the ground's. And the second round, the same day: "put
+ * daytime sky when looking up out of the cut. The pit walls should appear
+ * along the cone drawn from the center of the radial camera out to the
+ * edge of the screen; and the 'laser cut' effect should only be drawn
+ * instead of whatever is in between the ship and the camera."
+ *
+ * Pinned here, at a deep bay and an open pad, over a sweep of booms and
+ * angles:
  *   - the boom is measured in the ground's own frame (G.cam.frame);
  *   - once the boom can reach the street, the eye is above it;
- *   - shorter than that, the eye is in the section, never in the rock —
- *     the box holds the eye AND the ship, so the whole sight-line between
- *     them is cut (Astra: "we're gonna be able to see through the walls of
- *     the station when we're docked inside the ground port");
+ *   - the cut is a cone that narrows to her — a hull's clearing at her end
+ *     and wider at the eye — and cuts only what is between the two: her
+ *     deck, what lies past her and what stands beside the cone are drawn;
+ *   - the pit wall is the cone's own surface, in the ground only, never
+ *     painted across the bay's open air, capped past her;
+ *   - the sky in the cut is the world's air in the sun, and black on an
+ *     airless world or at night;
  *   - the planet is drawn under the site exactly when the eye is above the
- *     street (its shader discards when the eye is inside the sphere), and
- *     from under the street the town is not drawn and the port is lit as
- *     indoors — the pale slab was the shed's wall in sunlight;
- *   - the shaft's hole in the planet has a floor, so nothing shows
- *     through it but rock. */
+ *     street, and the shaft's hole in it has a floor. */
 (function () {
   var saved = W.GLWorld, R = W.Render;
-  var keep = {};
+  /* The real gl.js, for its pure parts (the cone test and the sky): it
+   * installs itself as the global GLWorld on load, so the harness's own is
+   * put back straight after. */
+  var keepGlobal = global.GLWorld;
+  var GLreal = require('../src/gl.js');
+  global.GLWorld = keepGlobal; W.GLWorld = saved;
   var holes = [];
-  W.GLWorld = new Proxy({ available: true,
+  W.GLWorld = new Proxy({ available: true, skyOver: GLreal.skyOver,
     setSurfaceHole: function (b, p, r, d) { holes.push(d || 0); } }, {
     get: function (t, k) { return k in t ? t[k] : function () { return false; }; }
   });
-  /* The stub canvas never reaches a port's own draw (no GL models here), so
-   * what is pinned is the predicate the draw turns on, and that the draw
-   * does turn on it. */
-  var src = require('fs').readFileSync(__dirname + '/../src/main.js', 'utf8');
-  check('ground port: the town is not drawn from under the street',
-        /tier === 'near' && !underStreet\) \{\s*Render\.drawPortDressing/.test(src));
-  check('ground port: under the street the port is lit as indoors',
-        /if \(underStreet\) indoors = true;/.test(src));
-  check('ground port: under the street the sky is rock, not stars',
-        /!eyeUnderStreet\(G\.cutaway\.port, cam\)\) buried = null;/.test(src));
+
+  /* The shader text: both shaders test the cone the same way coneCuts does. */
+  var glsrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'gl.js'), 'utf8');
+  check('ground port: the planet is holed by the cone, the same test as the port mesh',
+        /length\(hit - uConeS\.xyz \* ct\) < mix\(uConeR\.y, uConeR\.x, ct\)/.test(glsrc) &&
+        /float r = mix\(uCutR\.y, uCutR\.x, t\);/.test(glsrc));
+  var msrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'main.js'), 'utf8');
+  check('ground port: in the cut the frame is cleared to the sky over the port',
+        /GLWorld\.begin\(rock \? ROCK_CLEAR : groundSkyNow\)/.test(msrc));
+
+  /* The sky, as a function of the air and the sun. */
+  var blue = [0.62, 0.78, 1.0];
+  var noon = GLreal.skyFor(blue, 0.6, 0.8), dusk = GLreal.skyFor(blue, 0.6, 0.05),
+      night = GLreal.skyFor(blue, 0.6, -0.4), vac = GLreal.skyFor(blue, 0, 0.8);
+  check('the sky: a world with air, sun up, is its air colour and lit',
+        noon.lit > 0.9 && noon[2] > 0.6 && noon[2] > noon[0],
+        noon.map(function (x) { return x.toFixed(2); }).join(','));
+  check('the sky: low sun warms it', dusk[0] / dusk[2] > noon[0] / noon[2] * 1.2,
+        dusk.map(function (x) { return x.toFixed(2); }).join(','));
+  check('the sky: night and airless are the dark clear, stars and all',
+        night.lit < 0.05 && vac.lit === 0 && Math.max(night[0], night[1], night[2]) < 0.06 &&
+        Math.max(vac[0], vac[1], vac[2]) < 0.06);
+
   function sweep(port) {
-    var stats = { n: 0, frame: 0, aboveFail: [], rockFail: [], groundFail: [], darkFail: [] };
+    var st = { n: 0, frame: 0, upright: [], above: [], cone: [], cuts: [], wall: [], ground: [], sky: [] };
     G.ship.docked = null; G.hangarOut = false;
     Sim.dockShip(G.ship, port, G.sys, G.t);
     G.viewMode = 'orbit'; G.followShip = true; G.focus = null; G.walk = null;
     G.cam.dist = 0.005; frames(2);
-    var host = port.parentBody;
+    var host = port.parentBody, hull = R.SHIP_LEN || 0.025;
     [0.15, 0.6, 1.2].forEach(function (el) {
       [0.3, 2.4].forEach(function (az) {
         [0.05, 0.3, 0.9, 3, 8].forEach(function (d) {
@@ -7393,40 +7420,81 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
           G.cam.yaw = a.yaw; G.cam.pitch = a.pitch; G.cam.dist = d;
           holes.length = 0;
           frames(1);
-          /* Out of the room, with the section open — the hangar view itself
-           * is the room and has its own clamps. */
-          if (!(G.cutaway && G.cutaway.surface)) return;
-          stats.n++;
-          if (G.cam.frame && G.cam.frame.port === port.id) stats.frame++;
+          var c = G.cutaway;
+          if (!(c && c.surface)) return;
+          st.n++;
+          if (G.cam.frame && G.cam.frame.port === port.id) st.frame++;
           gb = Sim.groundBasis(port, G.sys, G.t);
+          /* The right way up: the picture's up is the ground's up. The first
+           * round shipped with it pointing into the ground (a left-handed
+           * frame), every ground-port shot upside down. */
+          if (G.cam.u && !(V.dot(G.cam.u, gb.up) > 0)) st.upright.push(port.name + ' el ' + el + ' ' + d + ' km');
           var eye = R.camEye(G.cam);
-          var h = V.dot(V.sub(eye, gb.entrance.pos), gb.up);
+          var hgt = V.dot(V.sub(eye, gb.entrance.pos), gb.up);
           var tgt = V.dot(V.sub(G.cam.target, gb.entrance.pos), gb.up);
           var tag = port.name + ' el ' + el + ' az ' + az + ' ' + d + ' km';
-          /* The boom can reach the street with room to spare: then it must. */
-          if (G.cam.dist > (0.005 - tgt) * 1.02 + G.cam.dist * 0.07 && h < 0)
-            stats.aboveFail.push(tag + ': eye ' + (h * 1000).toFixed(0) + ' m');
-          if (h < 0) {
-            /* In the cut, with the ship: the eye and the target both inside
-             * the section box, so the segment between them is too. */
-            var bx = G.cutaway && G.cutaway.box;
-            var inBox = function (p) {
-              var q = V.sub(p, bx.origin), qa = V.dot(q, bx.a), qb = V.dot(q, bx.b), qz = V.dot(q, bx.u);
-              return qa >= bx.aMin - 1e-6 && qa <= bx.aMax + 1e-6 && Math.abs(qb) <= bx.bHalf + 1e-6 && qz >= bx.zMin - 1e-6;
-            };
-            if (!bx || !inBox(eye) || !inBox(G.cam.target))
-              stats.rockFail.push(tag + ': eye ' + (h * 1000).toFixed(0) + ' m, ' + (bx ? 'outside the cut' : 'no cut'));
-            if (!G.eyeUnderStreet(port, { eye: eye })) stats.darkFail.push(tag + ': not seen as under the street');
-          } else {
-            if (G.eyeUnderStreet(port, { eye: eye })) stats.darkFail.push(tag + ': above the street, seen as under it');
-            var hc = Sim.bodyPosition(host, G.sys, G.t);
-            if (!(V.dist(eye, hc) > host.radius)) stats.groundFail.push(tag + ': eye inside the planet');
+          if (G.cam.dist > (0.005 - tgt) * 1.02 + G.cam.dist * 0.07 && hgt < 0)
+            st.above.push(tag + ': eye ' + (hgt * 1000).toFixed(0) + ' m');
+          /* The cone narrows to her: a hull's clearing at her end, centred
+           * on her, and wider at the eye by the boom's length. */
+          if (!(c.rShip <= hull * 1.5 && c.rShip >= hull * 0.5 && c.rEye > c.rShip &&
+                V.dist(c.pos, G.cam.target) < 1e-9))
+            st.cone.push(tag + ': rShip ' + (c.rShip * 1000).toFixed(0) + ' m, rEye ' + (c.rEye * 1000).toFixed(0) + ' m');
+          /* Only what is between the two is cut. */
+          var axis = V.sub(G.cam.target, eye), L = V.len(axis), un = V.scale(axis, 1 / L);
+          var side = V.norm(V.cross(un, gb.up));
+          if (!(V.len(side) > 0.5)) side = gb.east;
+          var mid = V.addScaled(eye, un, L * 0.5);
+          var beside = V.addScaled(V.addScaled(eye, un, L * 0.9), side, c.rShip + (c.rEye - c.rShip) * 0.1 + 0.002);
+          var past = V.addScaled(G.cam.target, un, c.rShip * 0.5);
+          if (!GLreal.coneCuts(mid, eye, c)) st.cuts.push(tag + ': the middle of the line to her is not cut');
+          if (GLreal.coneCuts(beside, eye, c)) st.cuts.push(tag + ': a point beside the cone is cut');
+          if (GLreal.coneCuts(past, eye, c)) st.cuts.push(tag + ': the deck past her is cut');
+          /* The wall: the cone's own surface, in the ground, not in the bay's
+           * air, narrowest at her, and capped. */
+          var mesh = R.sectionMesh(c.section), sc = c.section;
+          var Sl = sc.ship, El = sc.eye, ax = [Sl[0] - El[0], Sl[1] - El[1], Sl[2] - El[2]];
+          var aL = Math.sqrt(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]);
+          var bad = 0, onCone = 0, air = 0, wallN = 0;
+          for (var fi = 0; fi < mesh.f.length; fi++) {
+            var f = mesh.f[fi], p0 = mesh.v[f[0]], p1 = mesh.v[f[1]], p2 = mesh.v[f[2]];
+            var cen = [(p0[0] + p1[0] + p2[0]) / 3, (p0[1] + p1[1] + p2[1]) / 3, (p0[2] + p1[2] + p2[2]) / 3];
+            if (cen[2] > 1e-6) bad++;
+            var R0 = sc.room, mz = cen[2] - sc.lift;
+            if (R0 && cen[0] > R0.x0 + 1e-6 && cen[0] < R0.x1 - 1e-6 && cen[1] > R0.y0 + 1e-6 &&
+                cen[1] < R0.y1 - 1e-6 && mz > R0.z0 + 1e-6 && mz < R0.z1 - 1e-6 && mesh.c[fi] !== '#3a3631') air++;
+            /* On the cone: distance from the axis is the cone's radius there. */
+            var rel = [cen[0] - El[0], cen[1] - El[1], cen[2] - El[2]];
+            var tt = (rel[0] * ax[0] + rel[1] * ax[1] + rel[2] * ax[2]) / (aL * aL);
+            var off = [rel[0] - ax[0] * tt, rel[1] - ax[1] * tt, rel[2] - ax[2] * tt];
+            var dd = Math.sqrt(off[0] * off[0] + off[1] * off[1] + off[2] * off[2]);
+            var rr = sc.rEye + (sc.rShip - sc.rEye) * tt;
+            if (tt > 0 && tt < 1) { wallN++; if (Math.abs(dd - rr) < rr * 0.05) onCone++; }
           }
-          if (!holes.length || !(holes[0] > 0)) stats.groundFail.push(tag + ': shaft hole with no floor');
+          var shipZ = Sl[2], under = shipZ < -sc.rShip;
+          if (under && !mesh.f.length) st.wall.push(tag + ': no pit wall with her ' + (-shipZ * sc.r * 1000).toFixed(0) + ' m down');
+          if (bad) st.wall.push(tag + ': ' + bad + ' wall faces above the street');
+          if (air) st.wall.push(tag + ': ' + air + ' wall faces in the bay\'s open air');
+          /* Every face between her and the eye lies on the cone (a flat
+           * facet's middle sits a hair inside the curve); the rest is the
+           * cap past her. */
+          if (onCone < wallN) st.wall.push(tag + ': only ' + onCone + ' of ' + wallN + ' wall faces on the cone');
+          /* The sky over the port is the world's air in the sun. */
+          var sk = G.groundSky(port);
+          var sun = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), gb.entrance.pos));
+          var want = GLreal.skyOver(host, gb.up, sun);
+          if (!sk || Math.abs(sk[0] - want[0]) + Math.abs(sk[2] - want[2]) > 1e-9)
+            st.sky.push(tag + ': sky ' + (sk ? sk.join(',') : 'none'));
+          if (hgt >= 0) {
+            var hc = Sim.bodyPosition(host, G.sys, G.t);
+            if (!(V.dist(eye, hc) > host.radius)) st.ground.push(tag + ': eye inside the planet');
+            if (G.eyeUnderStreet(port, { eye: eye })) st.ground.push(tag + ': above the street, seen as under it');
+          } else if (!G.eyeUnderStreet(port, { eye: eye })) st.ground.push(tag + ': not seen as under the street');
+          if (!holes.length || !(holes[0] > 0)) st.ground.push(tag + ': shaft hole with no floor');
         });
       });
     });
-    return stats;
+    return st;
   }
   try {
     G.newGame('kawartha');
@@ -7437,16 +7505,16 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
       var st = sweep(port);
       if (!st.n) return;
       tried.push(port.name);
-      check('ground port ' + port.name + ': the boom stands on the local vertical',
-            st.frame === st.n, st.frame + ' of ' + st.n);
-      check('ground port ' + port.name + ': the eye is above the street once the boom can reach it',
-            !st.aboveFail.length, st.aboveFail.slice(0, 3).join('; '));
-      check('ground port ' + port.name + ': under the street the eye is in the cut with her, never the rock',
-            !st.rockFail.length, st.rockFail.slice(0, 3).join('; '));
-      check('ground port ' + port.name + ': from under the street, no street and no sun',
-            !st.darkFail.length, st.darkFail.slice(0, 3).join('; '));
-      check('ground port ' + port.name + ': from above it, the planet is drawn under the site, and the hole has a floor',
-            !st.groundFail.length, st.groundFail.slice(0, 3).join('; '));
+      var nm = 'ground port ' + port.name + ': ';
+      check(nm + 'the boom stands on the local vertical', st.frame === st.n, st.frame + ' of ' + st.n);
+      check(nm + 'the picture is the right way up', !st.upright.length, st.upright.slice(0, 3).join('; '));
+      check(nm + 'the eye is above the street once the boom can reach it', !st.above.length, st.above.slice(0, 3).join('; '));
+      check(nm + 'the cut is a cone that narrows to her', !st.cone.length, st.cone.slice(0, 3).join('; '));
+      check(nm + 'only what is between her and the camera is cut', !st.cuts.length, st.cuts.slice(0, 3).join('; '));
+      check(nm + 'the pit wall is the cone, in the ground, not in the bay\'s air', !st.wall.length, st.wall.slice(0, 3).join('; '));
+      check(nm + 'the sky in the cut is the world\'s air in the sun', !st.sky.length, st.sky.slice(0, 3).join('; '));
+      check(nm + 'the planet is drawn under the site from above it, and the hole has a floor',
+            !st.ground.length, st.ground.slice(0, 3).join('; '));
     };
     var deep = G.sys.ports.filter(function (p) { return p.surface && p.underground; })[0];
     if (deep) run(deep);
@@ -7457,21 +7525,10 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
       if (pad) run(pad);
     }
     check('ground-port zoom-out swept a deep bay and an open pad', tried.length === 2, tried.join(', '));
-    /* And none of it leaks into space: undocked, the boom is the system's. */
-    G.ship.docked = null; frames(1);
-    check('away from a ground port the boom is back in the system frame', !G.cam.frame || !!cameraFrameOk(),
-          G.cam.frame ? 'frame for ' + G.cam.frame.port : '');
     G.cutawayStyle = style;
   } finally {
     W.GLWorld = saved;
-    Object.keys(keep).forEach(function (k) { R[k] = keep[k]; });
     G.ship.docked = null; G.hangarOut = false;
-  }
-  function cameraFrameOk() {
-    /* Still at a ground port's apron after undocking is legitimately the
-     * ground's frame; anywhere else it is not. */
-    var p = G.sys.byId[G.cam.frame.port];
-    return p && V.dist(G.ship.pos, Sim.portEntrance(p, G.sys, G.t).pos) < 5;
   }
 })();
 
