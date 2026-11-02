@@ -619,6 +619,17 @@
    * The directory of everyone in range you could talk to. The conversations
    * themselves are the next piece of work; what exists now is the channel
    * list, which is the part the rest of it hangs off. */
+  /* A Syndicate by id, from wherever this system or the galaxy keeps it. */
+  function syndicateOf(id) {
+    return (G.galaxy && G.galaxy.factionById && G.galaxy.factionById[id]) ||
+           (G.sys.factionById && G.sys.factionById[id]) || null;
+  }
+  /* Does this outlaw flag (the Syndicate or one of its bands) hold a port
+   * in the current system? */
+  function outlawHoldsHere(fid) {
+    return (G.sys.ports || []).some(function (p) { return p && p.faction === fid; });
+  }
+
   function commsContacts() {
     var out = [];
     var i;
@@ -686,9 +697,28 @@
      * time you badly want to find this channel is the one time you are in
      * trouble and should not have to scroll for it. */
     var facs = (G.sys.factions || []);
+    var comsat = {};
     for (i = 0; i < facs.length; i++) {
       var f = facs[i];
-      if (!f || f.outlaw) continue;
+      if (!f) continue;
+      if (f.outlaw) {
+        /* THE SYNDICATE'S COMSAT (Astra, 2026-11-01: "pirates should have
+         * the comsat for the syndicate that runs their territory"). A band
+         * runs no police, so a pirate-held system had no channel at all,
+         * and with it went the mayday, the tow and PLANT. The band answers
+         * to the Syndicate it is parented to, so the Syndicate's comsat is
+         * the frequency there — and in the Syndicate's own systems too,
+         * which had the same hole. One channel per Syndicate, whichever of
+         * its bands brought it here; only where it actually holds a port,
+         * so a flag in the faction list is not a radio. */
+        var root = f.pirate && f.parentId ? syndicateOf(f.parentId) : f;
+        if (!root || comsat[root.id] || !outlawHoldsHere(f.id)) continue;
+        comsat[root.id] = true;
+        out.push({ kind: 'authority', obj: root, name: root.name + ' comsat',
+                   range: 0, who: 'Syndicate channel', comsat: true,
+                   color: root.color || '#c86bff' });
+        continue;
+      }
       out.push({ kind: 'authority', obj: f, name: f.name + ' Control',
                  range: 0, who: 'Police channel',
                  color: f.color || '#7dfaff' });
@@ -1619,7 +1649,7 @@
       });
       opts.push({
         label: 'Report a crime', enabled: false,
-        note: 'channel not staffed for this yet',
+        note: c.obj.outlaw ? 'the Syndicate does not take reports' : 'channel not staffed for this yet',
         fn: function () {}
       });
 

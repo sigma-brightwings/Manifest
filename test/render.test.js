@@ -7138,6 +7138,53 @@ console.log('--- sound ---');
   W.Sound = savedSound;
 })();
 
+/* ---- the Syndicate's comsat (2026-11-01) ---------------------------------
+ * Astra: "pirates should have the comsat for the syndicate that runs their
+ * territory." A band runs no police, so a pirate-held system had no channel
+ * at all, and the mayday, the tow and PLANT went with it. */
+(function () {
+  console.log('--- the Syndicate comsat ---');
+  var G = W.Game, g = G.galaxy;
+  function find(kind) {
+    for (var i = 0; i < g.stars.length; i++) {
+      var sy = W.Gen.generateSystem(g.stars[i].seed, W.Galaxy.systemOpts(g, g.stars[i]));
+      if (sy.heldBy === kind) return g.stars[i];
+    }
+    return null;
+  }
+  function channels(star) {
+    G.here = star;
+    G.enterSystem(star, {});
+    G.panel = 3;
+    frames(1);
+    return W.Screens.commsContacts().filter(function (c) { return c.kind === 'authority'; });
+  }
+  var home = G.here;
+  var pir = find('pirate'), syn = find('syndicate');
+  check('there is a pirate-held and a Syndicate-held system to test', !!pir && !!syn);
+  if (!pir || !syn) return;
+  var pc = channels(pir);
+  var band = G.sys.ports.filter(function (p) { return g.factionById[p.faction] && g.factionById[p.faction].pirate; })[0];
+  var parent = band && g.factionById[g.factionById[band.faction].parentId];
+  var cs = pc.filter(function (c) { return c.comsat; });
+  check('a pirate-held system has a comsat', cs.length === 1, pc.map(function (c) { return c.name; }).join(', '));
+  check('and it is the Syndicate the band answers to, not the band',
+        cs[0] && parent && cs[0].obj.id === parent.id && !cs[0].obj.pirate,
+        cs[0] && cs[0].name);
+  if (cs[0]) {
+    G.commsSel = W.Screens.commsContacts().indexOf(W.Screens.commsContacts().filter(function (c) { return c.comsat; })[0]);
+    G.commsSel = W.Screens.commsContacts().map(function (c) { return c.name; }).indexOf(cs[0].name);
+    frames(2);
+    var may = G.hotspots.filter(function (h) { return /MAYDAY/.test(h.hint || ''); });
+    check('the mayday is on it', may.length >= 1, G.hotspots.map(function (h) { return h.hint; }).slice(0, 12).join(' | '));
+  }
+  var sc = channels(syn).filter(function (c) { return c.comsat; });
+  check('the Syndicate\'s own systems have it too', sc.length === 1 && sc[0].obj.outlaw, sc.map(function (c) { return c.name; }).join(', '));
+  var lc = channels(home).filter(function (c) { return c.comsat; });
+  var homeOutlaw = G.sys.ports.some(function (p) { var f = g.factionById[p.faction]; return f && f.outlaw; });
+  check('a system with no Syndicate port has no comsat', homeOutlaw || lc.length === 0, lc.map(function (c) { return c.name; }).join(', '));
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

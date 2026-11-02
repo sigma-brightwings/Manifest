@@ -42,6 +42,17 @@ before they update.
 
 ### Changed
 
+- **2026-11-01 — Pirate space has a comsat (Astra: "pirates should have
+  the comsat for the syndicate that runs their territory").** A pirate band
+  runs no police, so a pirate-held system had no authority channel at all,
+  and the mayday, the tow and PLANT in COMMS went with it. The band answers
+  to the Syndicate it is parented to, so that Syndicate's comsat is now the
+  channel there: status and standing, settling what you owe it, both
+  maydays, the tow and PLANT. The Syndicate's own systems had the same hole
+  and get the same channel. One channel per Syndicate, and only where it or
+  one of its bands holds a port. It does not take crime reports. (screens.js
+  `commsContacts`; render.test "the Syndicate comsat".)
+
 - **2026-11-01 — Weapons fire, by kind (Astra: "for the pulse and
   intermittent laser, we want bolts. For the beam laser we want a beam").**
   A pulse laser fires one bolt; an intermittent fires a burst of three; a

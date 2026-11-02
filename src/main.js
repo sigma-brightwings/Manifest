@@ -4574,6 +4574,8 @@
    * take. Reporting a crime is a later piece of work; this is the half you
    * need when the trouble is your own. */
   function hailAuthority(fac) {
+    /* The Syndicate answers on its comsat, not a police "Control". */
+    var who = fac.name + (fac.outlaw ? ' comsat' : ' Control');
     var owed = Math.round((G.wanted || {})[fac.id] || 0);
     var fugitive = Combat.isFugitive(G, fac.id);
     var standing = Math.round((G.standing || {})[fac.id] || 0);
@@ -4581,7 +4583,7 @@
 
     if (!owed && !fugitive) {
       G.payOffer = null;
-      say(fac.name + ' Control: "No outstanding matters. Standing ' +
+      say(who + ': "No outstanding matters. Standing ' +
           label + '." ', 6);
       return;
     }
@@ -4591,9 +4593,9 @@
      * on one press, and the second key is also where the price gets to be
      * stated plainly before it is taken. */
     var cost = fugitive ? Math.round(owed * 1.2) : Math.round(owed * 1.6);
-    G.payOffer = { faction: fac.id, name: fac.name, cost: cost,
+    G.payOffer = { faction: fac.id, name: fac.name, who: who, cost: cost,
                    fugitive: fugitive, until: G.t + 60 };
-    say(fac.name + ' Control: "' + (fugitive ? 'You are logged FUGITIVE. ' : '') +
+    say(who + ': "' + (fugitive ? 'You are logged FUGITIVE. ' : '') +
         owed + ' cr outstanding, ' + cost + ' cr to settle including costs. ' +
         'Standing ' + label + '."   — Y to pay', 8);
   }
@@ -4610,7 +4612,7 @@
       return;
     }
     G.payOffer = null;
-    say(off.name + ' Control: "Settled, ' + paid + ' cr. Fly safe."', 6);
+    say((off.who || off.name + ' Control') + ': "Settled, ' + paid + ' cr. Fly safe."', 6);
     HOOKS.sound('click');
   }
 
