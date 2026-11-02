@@ -109,6 +109,9 @@
   var FX = {
     laser:     function () { tone('sawtooth', 880, 140, 0.12, 0.16); },
     turret:    function () { tone('square', 620, 200, 0.08, 0.10); },
+    /* The mass driver: a coil dumping into a slug — a hard electric crack
+     * over a low knock you feel through the deck (2026-11-02). */
+    massdriver: function () { noise(0.10, 0.30, 3200, 1.5, 600); tone('sine', 140, 55, 0.22, 0.20); },
     missile:   function () { noise(0.7, 0.22, 400, 0.8, 2400); tone('sine', 90, 240, 0.5, 0.12); },
     explosion: function () { noise(1.1, 0.5, 180, 0.5, 40); tone('sine', 70, 24, 0.9, 0.3); },
     hit:       function () { noise(0.18, 0.35, 900, 1.2, 200); },

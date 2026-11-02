@@ -9513,6 +9513,68 @@
            (n & 255) + ',' + a.toFixed(3) + ')';
   }
 
+  /* ---- the mass driver's slugs and its lead pip (2026-11-02) --------------
+   * A slug is a real object at 8 km/s, so it is drawn where it IS: a hot
+   * knot with a short streak behind it of its motion relative to you (a
+   * streak in absolute space would be its orbital speed, kilometres long).
+   * The knot is sized off its depth like a bolt's head and floored, so a
+   * slug at 10 km is still a point of light you can follow onto the target. */
+  var SLUG_STREAK_S = 0.015;      // s of relative travel drawn behind the knot
+  function drawSlugs(ctx, cam) {
+    var L = G.sys && G.sys.slugs;
+    if (!L || !L.length) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (var i = 0; i < L.length; i++) {
+      var sl = L[i];
+      var p = cam.project(sl.pos);
+      if (!p) continue;
+      var rel = V.sub(sl.vel, G.ship.vel);
+      var q = cam.project(V.addScaled(sl.pos, rel, -SLUG_STREAK_S));
+      if (q) {
+        ctx.strokeStyle = hexToRgba(sl.color, 0.55);
+        ctx.lineWidth = 1.6;
+        ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(q.x, q.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+      }
+      fxGlow(ctx, p.x, p.y, fxRadius(cam, p, 0.006, 3), sl.color, 0.9);
+    }
+    ctx.restore();
+  }
+
+  /* WHERE TO AIM. Only with a driver fitted and a ship locked: a diamond
+   * at the intercept point (MassDriver.lead), with a thin line from the
+   * target to it so it is plain which ship it belongs to, and the slug's
+   * flight time beside it. Nothing when they are outrunning a slug. */
+  var LEAD_MAX_KM = 40;
+  function drawLeadPip(ctx, cam) {
+    var MD = global.MassDriver;
+    if (!MD || !MD.hasDriver(G.ship) || !G.navTarget || G.navTarget.kind !== 'ship') return;
+    if (G.ship.docked || G.ship.landed) return;
+    var e = navTargetState();
+    if (!e || !e.pos || e.range > LEAD_MAX_KM) return;
+    var Ld = MD.lead(G.ship.pos, G.ship.vel, e.pos, e.vel || G.ship.vel, MD.SLUG_SPEED);
+    if (!Ld) return;
+    var a = cam.project(e.pos), b = cam.project(Ld.point);
+    if (!b) return;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(232,240,255,0.85)';
+    ctx.lineWidth = 1.4;
+    if (a) {
+      ctx.setLineDash && ctx.setLineDash([3, 4]);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      ctx.setLineDash && ctx.setLineDash([]);
+    }
+    var r = 7;
+    ctx.beginPath();
+    ctx.moveTo(b.x, b.y - r); ctx.lineTo(b.x + r, b.y); ctx.lineTo(b.x, b.y + r); ctx.lineTo(b.x - r, b.y);
+    ctx.closePath(); ctx.stroke();
+    ctx.fillStyle = 'rgba(232,240,255,0.85)';
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.fillText(Ld.t.toFixed(1) + ' s', b.x + r + 4, b.y + 3);
+    ctx.restore();
+  }
+
   function drawCombatFx(ctx, cam) {
     var i, a, b;
     var nowS = performance.now() / 1000;
@@ -9741,6 +9803,9 @@
       }
       ctx.restore();
     }
+
+    drawSlugs(ctx, cam);
+    drawLeadPip(ctx, cam);
 
     /* Contrails UNDER the missiles and the explosions, so a warhead going
      * off is in front of its own smoke. */

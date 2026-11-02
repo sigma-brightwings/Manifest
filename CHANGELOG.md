@@ -40,6 +40,38 @@ before they update.
 
 ## Unreleased
 
+### Added
+
+- **2026-11-02 — The mass driver** (`massdriver.js`). A coil gun, and the
+  first weapon that has to obey the game's physics. Astra's ruling on
+  shields: "50% of the slug's damage to the hull and 50% to the shield ...
+  residual static charge on the projectile after electromagnetic
+  acceleration" — so half of every hit is charge a shield can catch and
+  half is a slug it cannot (`split` in `splitDamage`; charge the shield
+  cannot hold goes through too). The rest are Claude's first numbers:
+  - **It travels**: 8 km/s on top of your own velocity, no falloff, 30
+    damage every 1.6 s. Nothing is hit when you fire; it lands when its
+    flight says, and a miss flies on for 20 s (160 km) and can hit the next
+    ship along the line.
+  - **A lead pip**: with a driver fitted and a ship locked, a diamond at
+    the intercept point, a dashed line to it from the target, and the
+    slug's flight time. Nothing when they are outrunning a slug.
+  - **Recoil**: every shot pushes you back down the nose by the slug's
+    momentum over your mass — about 2 m/s a shot on a 95 t Kestrel.
+  - **Ammunition with mass**: slugs ride in the hold, 25 kg a round, forty
+    to the tonne, 480 cr a tonne at any outfitter while a driver is fitted.
+    Dry, it clicks and says where to get more.
+  - Runs cool (3 heat a shot), its own sound, a white-hot slug drawn where
+    it actually is with a short streak of its motion relative to you, and a
+    spark where it strikes. 7,400 cr, needs development 0.5.
+  - It carries the time its position is for, so a slug fired inside a frame
+    is never tested a frame behind (the hunters' and torpedoes' bug).
+  - NPCs do not carry it yet, and a missed slug does not go on an orbit to
+    hit a station later — both offered to Astra.
+  - test/massdriver.test.js (22 checks): the split, recoil, the round spent,
+    travel time, the gap coasted, a crossing target missed when aimed at
+    and hit when led, buying slugs and every refusal.
+
 ### Changed
 
 - **2026-11-02 — The market review, part two: every port has a signature.**

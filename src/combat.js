@@ -237,6 +237,28 @@
      * somewhere developed, and being liked is exactly what a career of
      * piracy costs. Go outlaw and you can still arm yourself — never
      * well. */
+    /* THE MASS DRIVER (2026-11-02, massdriver.js). A coil gun: a slug that
+     * TRAVELS at 8 km/s on top of your own velocity, so you lead your
+     * target; recoil off every shot; slugs in the hold as ammunition; a
+     * little heat. Half of each hit is the static charge the coils leave on
+     * the slug, which a shield catches, and half is the slug, which it does
+     * not (Astra's ruling; `split` in splitDamage). No falloff — a slug
+     * does not decay — and `range` is where the lead pip stops being worth
+     * drawing, not where the slug stops. */
+    massdriver: (function () {
+      var g = laser('massdriver', 'Mass driver', 'photon', 'pulse',
+                    7400, 2.2, 6.0, 30, 1.60, 25, 3, '#e8f0ff', [0.50, 0],
+                    'Half of it the shield never sees. Lead them, mind the kick, and buy slugs by the tonne.');
+      g.kinetic = true;
+      g.variety = 'kinetic';
+      g.particle = 'slug';
+      g.falloff = 0;
+      g.split = 0.5;
+      g.vsShield = 1; g.vsHull = 1;
+      g.speed = 8;
+      return g;
+    })(),
+
     greyphint: greyGun(
       laser('greyphint', 'Bootleg intermittent laser', 'photon', 'intermittent',
             1105, 2.4, 2.4, 13, 1.00, 24, 8, '#d08a5c', [0, -100, 0, true],
@@ -3710,7 +3732,7 @@
    * nets about +13/s, which walks a cold hull up to the cook-off band in
    * roughly six seconds of held fire. Enough to be a tactic, nowhere near
    * enough to replace shooting the thing. */
-  var THERMAL_SHARE = { pulse: 0.35, intermittent: 0.50, beam: 1.00 };
+  var THERMAL_SHARE = { pulse: 0.35, intermittent: 0.50, beam: 1.00, kinetic: 0.10 };   // a slug is a blow, not a burn
   var THERMAL_DEFAULT = 0.35;
   var THERMAL_GAIN = 1.6;
 
@@ -3934,6 +3956,18 @@
      * shot is the one that empties it. */
     if (d.shieldAbsorbs) {
       return { shield: Math.min(shieldHp, dmg * vs), hull: 0, through: false };
+    }
+    /* SPLIT (the mass driver, 2026-11-02). Astra: "50% of the slug's damage
+     * to the hull and 50% to the shield ... residual static charge on the
+     * projectile after electromagnetic acceleration." The charge is the
+     * share a shield can catch; the slug is the share it cannot, and goes
+     * through whatever the shield's state. Charge the shield could not hold
+     * (it ran out) goes on into the plating with the slug. */
+    if (d.split > 0) {
+      var toShield = dmg * d.split * vs;
+      var held = Math.min(shieldHp, toShield);
+      var hullPart = dmg * (1 - d.split) * vh + (toShield - held) / vs * vh;
+      return { shield: held, hull: hullPart, through: hullPart > 1e-9 };
     }
     var offered = dmg * vs;
     var soaked = Math.min(shieldHp, offered);
@@ -6934,6 +6968,13 @@
   function fireOne(sys, G, t, gun, key, hooks) {
     var s = G.ship;
     var now = (typeof performance !== 'undefined' ? performance.now() : 0) / 1000;
+    /* A slug is not hitscan: it leaves the muzzle and flies (massdriver.js). */
+    if (gun.kinetic) {
+      if (!global.MassDriver) return null;
+      var sl = global.MassDriver.fire(sys, G, t, gun, muzzleWorld(s, muzzleOf(s, key)), hooks);
+      if (sl) addHeat(G, (gun.heat || 0) * (gun.cooldown || 0));
+      return null;
+    }
 
     /* The muzzle moves where the beam is DRAWN from and nothing else. The
      * hit test below still runs from the ship's origin down its own nose,
@@ -7076,7 +7117,7 @@
     }
 
     var cools = G.gunCool = G.gunCool || {};
-    var fired = 0;
+    var fired = 0, lasers = 0;
     /* OVER BUDGET (2026-10-25). The yard never lets you fit past the
      * reactor, but a cool hand's saving counts there (crew.js gunnery), so
      * paying one off can leave a ship drawing more than she makes. Nothing
@@ -7120,11 +7161,12 @@
 
       fireOne(sys, G, t, e.item, e.key, hooks);
       fired++;
+      if (!e.item.kinetic) lasers++;           // a driver makes its own report
       breakCover(G, t);
     }
     /* One report for the volley. Three emitters cycling together should
      * sound like a ship firing, not like three ships. */
-    if (fired && hooks && hooks.sound) hooks.sound('laser');
+    if (lasers && hooks && hooks.sound) hooks.sound('laser');
     return fired;
   }
 
@@ -7855,6 +7897,7 @@
     updateSink(G, t, hooks, sys);
     updateTurret(sys, G, t, hooks);
     updateMissiles(sys, G, t, dtSim, hooks);
+    if (global.MassDriver) global.MassDriver.update(sys, G, t, dtSim, hooks);
     updateCountermeasures(sys, G, t, dtSim, hooks);
     if (global.Mining) global.Mining.updateTorpedoes(sys, G, t, dtSim, hooks);
     updateNpcFire(sys, G, t, dtSim, hooks);

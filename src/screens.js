@@ -4437,6 +4437,17 @@
           }, dFull);
     }
 
+    /* Slugs for a mass driver (massdriver.js, 2026-11-02): cargo, a tonne
+     * at a time, only where there is a driver aboard to feed. */
+    var MD = global.MassDriver;
+    if (MD && MD.hasDriver(s)) {
+      row('DRIVER SLUGS, 1 t (40 rounds) — ' + MD.SLUG_PRICE_T + ' cr',
+          MD.roundsAboard(s) + ' rounds aboard  “Twenty-five kilos each. You will feel every one leave.”',
+          function () {
+            var r = MD.buySlugs(G, 1);
+            say(r.ok ? 'Slugs aboard — ' + r.rounds + ' rounds' : 'No: ' + r.why, 4);
+          }, false);
+    }
     var rack = Combat.sinkRackSize(s);
     if (rack) {
       var sFull = s.sinks >= rack;
