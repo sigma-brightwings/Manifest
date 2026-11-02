@@ -186,13 +186,20 @@ file edit and a reload.
 ## Testing
 
 ```
-npm test
+npm test                 # every group, one file at a time
+npm run test:ships       # one group: core, render, view, berths, ships,
+                         #   transfer, combat, economy, ground, story
+node tools/run-tests.js ships combat --stop    # several, stop at the first red
+npm run test:list        # what is in each group
 ```
 
-Nine suites, no framework, each one a plain node script that prints `ok` or
-`FAIL` and exits. They cover physics, orbital nodes, generation
-determinism, the economy, combat and the law, the save round-trip, and a
-good deal of the renderer's geometry.
+Close to eighty test files, no framework, each a plain node script that
+prints `ok` or `FAIL` and exits, grouped by `tools/run-tests.js`. Each file
+runs in its own process, one at a time, and is reported with its time and
+peak memory; a failing file does not stop the rest, and the summary names
+every red one. Every test file has to be in a group — a new one that is not
+fails the run before anything starts. `render`, `berths` and `transfer` are
+groups of one because they are the heavy files (one to two gigabytes each).
 
 **They are blind to layout.** A test can tell you a panel's quad projects
 where it should; it cannot tell you the panel is readable. Anything visual

@@ -59,8 +59,16 @@ has already happened at least once.
 ## Testing
 
 ```
-npm test          # every suite in package.json, plain node, no framework
+npm test              # every group, one file at a time, plain node, no framework
+npm run test:<group>  # core, render, view, berths, ships, transfer, combat, economy, ground, story
 ```
+
+Groups live in `tools/run-tests.js`, and **a new test file must be added to
+one** — an ungrouped file fails the run. Each file is reported with its time
+and peak memory, and a red file does not stop the rest. Run one group at a
+time when anything else heavy (a headless browser, another worktree's
+suite) is running: the full suite died of memory on 2026-11-02 doing
+exactly that, in `berths.test.js`.
 
 Suites print `ok` / `FAIL` and exit non-zero. **They are blind to layout** —
 a test can prove a panel's quad projects where it should, never that the

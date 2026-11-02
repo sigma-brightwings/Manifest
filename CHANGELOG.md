@@ -40,6 +40,25 @@ before they update.
 
 ## Unreleased
 
+### Changed (2026-11-02, the test suite in groups)
+
+- **`npm test` runs the suite in ten groups** (Astra: "if the full test
+  suite isn't running, we have to break the tests into various suites").
+  It was one 79-command `&&` chain: it stopped at the first red file, hid
+  everything after it, could not run only the part a change touched, and
+  when `berths.test.js` was killed for memory beside two headless browsers
+  it said nothing about which file or how big. `tools/run-tests.js` now
+  runs `core`, `render`, `view`, `berths`, `ships`, `transfer`, `combat`,
+  `economy`, `ground` and `story`, each file in its own process and one at
+  a time, reporting every file's time and peak memory; a red file does not
+  stop the rest, and the summary names every one. `npm run test:<group>`
+  runs one group, `npm run test:list` shows them, `--stop` stops at the
+  first failure. Every test file must be in a group — an ungrouped one
+  fails the run before anything starts.
+- Measured on the first run (79 green, 7 m 19 s): `transfer.test.js` peaks
+  at 2.2 GB, `berths.test.js` 2.2 GB, `render.test.js` 1.1 GB; nothing else
+  passes 0.75 GB. Those three are groups of one.
+
 ### Added (2026-11-02, the drive on the ground)
 
 - **Starting her on open ground.** Astra: "we also need a means of
