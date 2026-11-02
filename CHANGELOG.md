@@ -242,6 +242,53 @@ before they update.
   NPC, the turret's point defence and station batteries).
   combat.test: "an NPC's tracer stays on both ships".
 
+- **2026-11-02 — The transfer to the exit pad went through walls in every
+  procedural shed.** Astra: "the ship just clipped through walls instead of
+  following the internal geometry of the station". The shed's rail took a
+  45-degree incline by default, because that is what the modelled cargo
+  lifts are — but nothing ever set the incline, and the shed render.js
+  draws is a vertical duct over a hall 0.42 pad radii wide. So the foot of
+  the shaft was four pad radii outside the hall, and the hull spent the
+  drop and most of the traverse in rock. The shed's lift now goes straight
+  down its own duct (`arrivalPath`); the modelled sites keep their own
+  routes. `transfer.test.js` samples every pose under the ground against
+  the duct and the hall.
+- **2026-11-02 — No car in the lift shafts.** Astra, with a screenshot of
+  a hull hanging in a shaft below the yellow platform meant to carry it:
+  "no elevators in internal elevator shafts ... this needs fixed". Two
+  causes. In orbit, a route that rides a lift across (the cylinder's bores,
+  the cradle's and the skimmer's hoists, the spine's) boarded at the
+  converter's corners, which are the shaft's air. The car can only go where
+  the art's travel lets it, so it stopped as much as 0.42 radii above the
+  hull. The ride's two corners are now seated on the car itself, standoff
+  above its top (`Sim.seatRide`). The keel the renderer puts the car under
+  is now the rail's standoff, not a fifth of a nominal hull. In a
+  procedural shed there was no car at all, so one is drawn under the hull
+  for the drop (`drawShedCar`).
+- **2026-11-02 — Interrupting the transfer could softlock the game.**
+  Astra: "if anything interrupts the 'move me to the launch pad' it
+  softlocks the game". Each interruption was probed (pause, the menu, every
+  panel key, held thrust, other commands, save and load, a pose that will
+  not build), at a shed and at three routed orbital berths. Cruise was the
+  one that broke it. Cruise is the first branch of `updateWorld`, ahead of
+  the rail, so engaging it mid-transfer froze the rail and flew the hull
+  out of the station: eight billion kilometres in the probe, with `arrival`
+  still set, so dropping out snapped it back into the shaft. Cruise and
+  the jump drive now refuse while the port has you, and say why
+  (`portHasYou`). A save made in the pad hold reloads in the berth instead
+  of hanging over the pad with nothing holding it.
+- **2026-11-02 — Half buried and unable to climb after the transfer.**
+  Astra: "it appeared that half the ship was buried in the surface and I
+  couldn't gain any altitude". Measured at Oruun's ground ports: a mountain
+  portal handed the hull over 50–73 m below the ground. On a heavy world
+  the hand-off's 4 m/s climb was gone in two seconds, and the hull fell
+  back and crashed at 43 m/s before the pilot could act. The rail now hands
+  over to a hold (`Sim.stepPadHold`). The hold lifts the hull straight up
+  until a hull length and 45 m of air are under it, then keeps it there
+  nose-up until you thrust (or for 120 s). On the ground, a nose-up ship
+  also lifts off on W, not only R. A hull whose drive cannot beat the
+  world's gravity is refused the transfer at the counter, with both
+  numbers.
 - **2026-11-01 — A rock torpedo flew straight through the rock.** Filmed in
   the game for Astra's demonstration: launched from the panel between
   frames, the torpedo's position was one frame older than the rocks it was

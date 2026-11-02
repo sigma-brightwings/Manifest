@@ -4200,6 +4200,7 @@
      * `arrival` would have stepArrival dragging the hull back onto the rail
      * on the next frame, one frame after dockShip parked it. */
     if (ship) ship.arrival = null;
+    if (ship) ship.padHold = null;
     /* Docked is the end of any departure, whatever the geometry says. */
     if (ship) ship.departed = null;
 
@@ -4921,9 +4922,20 @@
     var stand = g.floorZ + g.lift + g.standoff;
     var deck = g.lift + g.standoff;
     /* How far inboard the shaft foot sits. `incline` is the modelled
-     * angle when there is a model; 45 degrees is the default because that
-     * is what the cargo lifts are, and tan(45) = 1 makes run == drop. */
-    var ang = (port.incline && port.incline.angle) || 45;
+     * angle when there is a model.
+     *
+     * It used to default to 45 degrees, "because that is what the cargo
+     * lifts are" — and nothing has ever set `incline`, so every procedural
+     * shed took it. But the shed render.js draws is a VERTICAL duct centred
+     * on the pad, over a hall whose walls stand at y = ±chamberY (0.42 pad
+     * radii). At 45 degrees run == drop == 4, so the shaft foot sat four
+     * pad radii outside the hall and the hull spent the whole descent and
+     * most of the traverse inside solid rock. Astra, 2026-11-02, on the
+     * transfer out: "the ship just clipped through walls instead of
+     * following the internal geometry of the station". The 45-degree lifts
+     * belong to the modelled sites, and those ride Gen.berthDoorRoute
+     * above; the shed is a lift straight down its own duct. */
+    var ang = (port.incline && port.incline.angle) || 90;
     var run = ang >= 89.5 ? 0
             : Math.abs(g.floorZ) / Math.tan(ang * Math.PI / 180);
     return [
@@ -4978,6 +4990,72 @@
       };
     }
     return null;
+  }
+
+  /* ON THE CAR, NOT UNDER IT (2026-11-02). Astra, with a screenshot of a
+   * hull hanging in a bore below the yellow platform that was meant to be
+   * carrying it: "no elevators in internal elevator shafts ... this needs
+   * fixed".
+   *
+   * A route that rides a lift on its way across (routePhases) boards and
+   * alights at two of the converter's corners. Those corners are the
+   * shaft's AIR — the converter walks voxels, it does not know a car is
+   * there — while the car the renderer draws (drawMovers) can only go
+   * where the art's travel lets it. Measured across every model with a
+   * ridden lift: the cylinder's bores boarded 0.03 radii BELOW the car's
+   * lowest pose, the cradle's hoist 0.01, the spine's hoists 0.002–0.01;
+   * at station sizes that is tens of metres of hull hanging under a floor
+   * that has stopped. moverPose clamps to the travel, so no amount of
+   * renderer could put the car under that hull.
+   *
+   * So the two ride corners are seated on the car instead: the mover whose
+   * axis is the ride's own direction and whose line runs through it, each
+   * corner moved to the car's top at that point of its travel (clamped to
+   * the travel the art allows), standoff above it — the same height every
+   * stand in the game holds a hull at, and the one liftRide uses for the
+   * ring's car. The car is then wherever the hull is, by construction. */
+  function seatRide(port, p10, stand) {
+    var R = global.Render, Gen = global.Gen;
+    var id = (R && R.portModelFor) ? R.portModelFor(port) : null;
+    var lib = id && global.PortLib ? global.PortLib[id] : null;
+    var mvs = lib && lib.movers;
+    if (!mvs || !mvs.length) return;
+    var pl = [p10[ROUTED_TRANSFER_LEG]].concat(p10.through, [stand]);
+    var k = p10.rideAt;
+    if (k + 1 >= pl.length) return;
+    var A = pl[k], B = pl[k + 1];
+    var dx = B.x - A.x, dy = B.y - A.y, dz = B.z - A.z;
+    var dl = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (dl < 1e-9) return;
+    var g = Gen && Gen.bayGeometry ? Gen.bayGeometry(port) : null;
+    var lift = (g && g.standoff) || 0;
+    var best = null, bestOff = Infinity;
+    for (var i = 0; i < mvs.length; i++) {
+      var mv = mvs[i], ax = mv && mv.axis;
+      if (!ax || !mv.mid || !mv.range || !mv.max || !mv.min) continue;
+      if (Math.abs((dx * ax[0] + dy * ax[1] + dz * ax[2]) / dl) < 0.9) continue;
+      /* How far the ride's midpoint is off the car's line of travel. */
+      var mx = (A.x + B.x) / 2 - mv.mid[0], my = (A.y + B.y) / 2 - mv.mid[1], mz = (A.z + B.z) / 2 - mv.mid[2];
+      var al = mx * ax[0] + my * ax[1] + mz * ax[2];
+      var ox = mx - ax[0] * al, oy = my - ax[1] * al, oz = mz - ax[2] * al;
+      var off = Math.sqrt(ox * ox + oy * oy + oz * oz);
+      var span = Math.max(mv.max[0] - mv.min[0], mv.max[1] - mv.min[1], mv.max[2] - mv.min[2]);
+      if (off > span * 2 || off >= bestOff) continue;
+      best = mv; bestOff = off;
+    }
+    if (!best) return;
+    var ax2 = best.axis;
+    function seat(P) {
+      var s = (P.x - best.mid[0]) * ax2[0] + (P.y - best.mid[1]) * ax2[1] + (P.z - best.mid[2]) * ax2[2];
+      s = Math.max(best.range[0], Math.min(best.range[1], s));
+      return { x: best.mid[0] + ax2[0] * s, y: best.mid[1] + ax2[1] * s,
+               z: best.max[2] + ax2[2] * s + lift };
+    }
+    /* `through` holds corners 1..n of the polyline; the last corner may be
+     * the stand itself, which is not ours to move. */
+    if (k >= 1 && k - 1 < p10.through.length) p10.through[k - 1] = seat(A);
+    if (k < p10.through.length) p10.through[k] = seat(B);
+    p10.rideMover = best.node;
   }
 
   /* The station's, in the same frame and the same five slots.
@@ -5052,6 +5130,7 @@
          * corner as an index into the transfer leg's polyline
          * [foot].concat(through, [stand]), so via index i is polyline i + 1. */
         p10.rideAt = (!ride && route.ride && typeof route.ride[0] === 'number') ? route.ride[0] + 1 : -1;
+        if (p10.rideAt >= 1) seatRide(port, p10, stand);
         return p10;
       }
     }
@@ -5524,6 +5603,23 @@
           }
           ship.departed = { port: port.id, berth: fromBerth || 0, surface: true };
           ship.launchOk = null;               // spent: the doors close behind you
+          /* AND THE PORT KEEPS HOLD OF YOU until you take the stick
+           * (2026-11-02). Astra: "when taking off from the planet, it
+           * appeared that half the ship was buried in the surface and I
+           * couldn't gain any altitude." Measured across Oruun's ground
+           * ports: a mountain portal hands the hull over 50 m BELOW the
+           * ground (its door is at the foot of the face), and on a heavy
+           * world the 4 m/s climb the hand-off gave was gone in two seconds
+           * and the hull fell back and crashed at 43 m/s before a pilot who
+           * had just been handed the stick could do anything. So the rail
+           * hands over to a HOLD instead of to gravity: the hull is lifted
+           * straight up until it stands clear of the ground, then held
+           * there, nose to the sky, until the pilot thrusts (or
+           * PAD_HOLD_MAX passes). See stepPadHold. */
+          if (gb) {
+            var offH = toPortFrame(gb, V.sub(ship.pos, gb.entrance.pos));
+            ship.padHold = { port: port.id, at: t, e: offH.e, n: offH.n, h0: offH.u };
+          }
           return null;
         }
         var pb = portBasis(port, sys, t);
@@ -5585,6 +5681,56 @@
     ship.vel = pose.vel;
     ship.fwd = pose.fwd; ship.up = pose.up; ship.right = pose.right;
     return pose;
+  }
+
+  /* ---- THE HOLD AFTER THE EXIT PAD (2026-11-02) ---------------------------
+   * See stepArrival's surface hand-off. The port's frame has its origin at
+   * the entrance, which is ON the ground (elevation 0), so `u` in that frame
+   * is height above the ground near the pad, curvature aside.
+   *
+   *   PAD_HOLD_CLEAR  how high the hull is lifted before it is let go: a
+   *                   hull's own length above the ground and then some, so
+   *                   no part of her is under the surface.
+   *   PAD_HOLD_RISE   how fast it is lifted — a cargo platform's pace.
+   *   PAD_HOLD_MAX    after this long with nobody at the stick, the hold
+   *                   lets go anyway (the hull is clear by then); a port
+   *                   does not hover a ship over its door forever.
+   *
+   * Released by the pilot's own thrust once clear, which is the whole
+   * reason it is a hold and not a timer: a pilot who was handed a ship
+   * falling at 11 m/s² had two seconds, and a pilot handed one held still
+   * has as long as they need. */
+  var PAD_HOLD_CLEAR = 0.045;      // km above the ground
+  var PAD_HOLD_RISE = 0.012;       // km/s
+  var PAD_HOLD_MAX = 120;          // s
+
+  /* Where the hold has the hull at t, and whether it is still holding.
+   * `pilot` is true while the pilot is commanding thrust. Returns
+   * { holding, released, clear, height } and moves the ship when holding. */
+  function stepPadHold(ship, sys, t, pilot) {
+    var ph = ship && ship.padHold;
+    if (!ph) return { holding: false };
+    var port = sys.byId[ph.port];
+    var gb = port ? (groundBasis(port, sys, t) || portBasis(port, sys, t)) : null;
+    if (!gb) { ship.padHold = null; return { holding: false, released: 'lost' }; }
+    var r = global.Render;
+    var len = (r && r.hullLength) ? (r.hullLength(ship) || 0.025) : 0.025;
+    var clearH = PAD_HOLD_CLEAR + len;
+    var el = Math.max(0, t - ph.at);
+    var h = Math.max(ph.h0, Math.min(clearH, ph.h0 + PAD_HOLD_RISE * el));
+    var clear = h >= clearH - 1e-6;
+    if ((clear && pilot) || el > PAD_HOLD_MAX) {
+      ship.padHold = null;
+      return { holding: false, released: pilot ? 'pilot' : 'timeout', clear: clear, height: h };
+    }
+    ship.pos = V.add(gb.entrance.pos, fromPortFrame(gb, { e: ph.e, n: ph.n, u: h }));
+    ship.vel = V.addScaled(gb.entrance.vel, gb.up, clear ? 0 : PAD_HOLD_RISE);
+    ship.fwd = V.clone(gb.up);
+    if (Math.abs(V.dot(ship.right || { x: 0, y: 0, z: 0 }, gb.up)) > 0.5 || !ship.right) ship.right = anyPerpendicular(ship.fwd);
+    ship.right = V.norm(V.addScaled(ship.right, ship.fwd, -V.dot(ship.right, ship.fwd)));
+    ship.up = V.cross(ship.right, ship.fwd);
+    ship.thrust = V.zero();
+    return { holding: true, clear: clear, height: h };
   }
 
   /* km/s up, handed to a hull the exit-pad transfer has just released: a
@@ -6762,6 +6908,7 @@
     controlState: controlState, controlInRange: controlInRange,
     beginArrival: beginArrival, stepArrival: stepArrival,
     arrivalActive: arrivalActive, arrivalPose: arrivalPose,
+    stepPadHold: stepPadHold, PAD_HOLD_CLEAR: PAD_HOLD_CLEAR, PAD_HOLD_MAX: PAD_HOLD_MAX,
     beginTow: beginTow, stepTow: stepTow, towActive: towActive,
     cancelTow: cancelTow, TOW_EASE: TOW_EASE,
     arrivalPath: arrivalPath, arrivalTotal: arrivalTotal,

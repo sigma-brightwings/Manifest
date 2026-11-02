@@ -938,6 +938,7 @@
     }
     if (G.ship.landed) { say('Cannot jump from a planetary surface', 3); return; }
     if (G.hyper) return;
+    if (portHasYou()) { say(portHasYou() + ' — no jump until you are clear of it', 4); return; }
 
     /* ARRIVING DIRTY. The Syndicate bans radioactive waste in the systems
      * it holds, and a Chernobyl breeds the stuff into your hold on the way
@@ -2813,12 +2814,31 @@
     };
   }
 
+  /* WHILE THE PORT HAS YOU (2026-11-02): on its rail (the transfer to the
+   * exit pad, an undock out through a heavy bay, an arrival) or in the
+   * hold over the pad after one. Neither is flight, and two things that
+   * assume flight used to engage anyway. Cruise is the first branch of
+   * updateWorld, ahead of the rail, so engaging it mid-transfer froze the
+   * rail where it stood and flew the hull out of the station's insides on
+   * its nose — eight billion kilometres in the probe, with `arrival` still
+   * set, so dropping out snapped it back into the shaft. A jump left from
+   * half way up a lift shaft. Astra: "if anything interrupts the 'move me
+   * to the launch pad' it softlocks the game". Both now refuse, and say
+   * why. Returns the reason, or '' when the ship is its own. */
+  function portHasYou() {
+    if (!G.ship) return '';
+    if (Sim.arrivalActive(G.ship)) return 'The port has you on its rail';
+    if (G.ship.padHold) return 'The pad is holding you — thrust to take the stick';
+    return '';
+  }
+
   /* `keepAuto` is passed by the autopilot, which spins the drive up itself
    * on a long approach — without it, engaging cruise would cancel the very
    * autopilot that asked for it. */
   function toggleCruise(keepAuto) {
     if (G.cruise) { dropCruise('disengaged'); return; }
     if (G.hyper) return;
+    if (portHasYou()) { say(portHasYou() + ' — cruise when you are clear of it', 4); return; }
     var lock = cruiseLock();
     if (!lock.can) {
       say(G.ship.docked ? 'Cruise drive will not spin up on the clamps'
@@ -4654,10 +4674,24 @@
    * berth reached through one). */
   function exitTransfer(port) {
     if (!port || G.ship.docked !== port.id) { say('Not docked here', 2); return false; }
+    /* A HULL THAT CANNOT CLIMB IS NOT SENT UP (2026-11-02). Handed over at
+     * the pad, it would sit in the pad's hold or fall back onto it and
+     * never leave — a softlock dressed as a launch. Refused here, while
+     * the pilot is still at a counter that can fix it, with the numbers. */
+    if (port.surface && port.parentBody && Sim.surfaceG) {
+      var gH = Sim.surfaceG(port.parentBody);
+      if (!(G.ship.maxAccel > gH * 1.05)) {
+        say('Transfer refused — this hull cannot climb out here: ' + (G.ship.maxAccel * 1000).toFixed(1) +
+            ' m/s² of drive against ' + (gH * 1000).toFixed(1) + ' of gravity. Lighten the hold first.', 8);
+        HOOKS.sound('warn');
+        return false;
+      }
+    }
     if (port.surface && !Combat.launchCleared(G, port)) {
       var r = Combat.requestLaunch(G, port, HOOKS);
       if (!r || !r.granted) return false;
     }
+    G.padHoldSaid = false;
     var left = Sim.undockShip(G.ship, G.sys, G.t, 0.003, { transfer: true });
     G.dockTarget = null;
     G.dockStatus = null;
@@ -5361,6 +5395,12 @@
     return want;
   }
 
+  /* Is the pilot asking for thrust this frame? The pad hold lets go on it. */
+  function padPilot() {
+    var k = G.keys || {};
+    return !!(k['w'] || k['s'] || k['a'] || k['d'] || k['r'] || k['f'] || k['q'] || k['e']);
+  }
+
   function applyControls(dtReal) {
     var fr = orbitalFrame();
     var acc = V.zero();
@@ -5741,6 +5781,19 @@
       G.t += G.lastDtSim;
       G.warpIndex = 0;
       G.arrivalPose = Sim.stepArrival(G.ship, G.sys, G.t);
+    } else if (!G.paused && G.ship.padHold &&
+               Sim.stepPadHold(G.ship, G.sys, G.t + dtReal, padPilot()).holding) {
+      /* HELD OFF THE EXIT PAD (Sim.stepPadHold, 2026-11-02): lifted clear
+       * of the ground and held there, nose up, until the pilot thrusts.
+       * Real time, like the ride that put it here. */
+      G.lastDtSim = dtReal;
+      G.t += G.lastDtSim;
+      G.warpIndex = 0;
+      G.arrivalPose = null;
+      if (!G.padHoldSaid) {
+        G.padHoldSaid = true;
+        say('Held clear of the pad — W to climb out. The hold lets go when you thrust.', 6);
+      }
     } else if (!G.paused && tubed()) {
       /* JOINED TO HER BY A TUBE (boarding.js, 2026-10-29). Held off her at
        * the tube's length, on her velocity, with nothing to integrate —
@@ -5773,7 +5826,14 @@
       /* R lifts off - thrust up, the same key that means up in the air.
        * F pushes into the ground and does nothing; the other keys would
        * drag the hull along the dirt, so they do nothing either. */
-      if (G.keys['r'] && (G.ship.throttle || 0) > 0) {
+      /* AND W, WHEN THE NOSE IS TO THE SKY (2026-11-02). Set down nose-up
+       * — the exit pad's hand-off, a tail-sitter — the pilot's instinct is
+       * the main drive, and R alone left that pilot pressing W at the
+       * ground forever: one of the ways "couldn't gain any altitude" was
+       * reached. */
+      var lvUp = Sim.localVertical ? Sim.localVertical(G.ship.pos, G.sys, G.t) : null;
+      var noseUp = lvUp && V.dot(G.ship.fwd, lvUp.up || lvUp) > 0.6;
+      if ((G.keys['r'] || (G.keys['w'] && noseUp)) && (G.ship.throttle || 0) > 0) {
         var lo = Sim.liftOff(G.ship, G.sys, G.t);
         if (lo.ok) {
           G.warpIndex = 0;
@@ -5781,8 +5841,8 @@
         } else if (lo.g && !G.liftWarned) {
           G.liftWarned = true;
           say(lo.max > lo.g
-            ? 'Full thrust (drop Shift) - ' + (lo.g * 1000).toFixed(1) + ' m/sÂ² to beat here, ' + (lo.accel * 1000).toFixed(1) + ' at this setting'
-            : 'This drive cannot lift off here - ' + (lo.max * 1000).toFixed(1) + ' m/sÂ² against ' + (lo.g * 1000).toFixed(1) + ' of gravity', 5);
+            ? 'Full thrust (drop Shift) - ' + (lo.g * 1000).toFixed(1) + ' m/s² to beat here, ' + (lo.accel * 1000).toFixed(1) + ' at this setting'
+            : 'This drive cannot lift off here - ' + (lo.max * 1000).toFixed(1) + ' m/s² against ' + (lo.g * 1000).toFixed(1) + ' of gravity', 5);
         }
       } else {
         G.liftWarned = false;
@@ -7725,6 +7785,7 @@
     drawDebris(ctx, cam);
     /* A station of yours going up: the Crawler, and her crates (stations.js). */
     if (!inside) drawFoundings(ctx, cam);
+    drawShedCar(ctx, cam);
 
     /* Weapons fire, missiles and explosions render regardless of the
      * traffic toggle: Y hides the timetable, not the fight. */
@@ -9119,6 +9180,45 @@
     if (GLW && GLW.queueMesh && glLive() && GLW.queueMesh(cam, fr, crateMesh(), CRATE_HALF_KM[size] || 0.006, sunDir)) return;
     Render.paintMesh(ctx, cam, fr, crateMesh(), CRATE_HALF_KM[size] || 0.006, sunDir, null);
   }
+  /* ---- the car in a procedural shed's shaft (2026-11-02) ---------------
+   * Astra: "no elevators in internal elevator shafts ... this needs fixed".
+   * A modelled site's lifts are the art's own cars (Render.drawMovers puts
+   * them under the hull), but the procedural shed — every 'underground'
+   * port — is a duct and a hall and nothing else, so the hull went up and
+   * down its shaft standing on air. Drawn here rather than in the shed's
+   * mesh because it moves with the hull: a slab the size of the duct,
+   * hazard-yellow on top, `standoff` under the keel (the height every
+   * stand and car-top in the rail holds a hull at). The drop itself is the
+   * `pad` leg (slot 1 to the shaft foot — the leg names run a slot behind
+   * the waypoints), so the car is drawn for that and for `descend`, which
+   * rolls it off the foot of the shaft; after that it is the traverser's
+   * floor. */
+  var SHED_CAR = null;
+  function shedCarMesh() {
+    if (SHED_CAR) return SHED_CAR;
+    var m = Render.box(1, 1, 0.06);
+    m.c = m.f.map(function (f, i) { return (i === 2 || i === 3) ? '#d8b43a' : '#6f7378'; });
+    SHED_CAR = m;
+    return m;
+  }
+  function drawShedCar(ctx, cam) {
+    var ap = G.arrivalPose, arr = G.ship && G.ship.arrival;
+    if (!ap || !arr || (ap.legId !== 'pad' && ap.legId !== 'descend')) return;
+    var port = G.sys.byId[arr.port];
+    if (!port || !port.surface || Render.portModelFor(port) !== 'underground') return;
+    var gb = Sim.groundBasis ? Sim.groundBasis(port, G.sys, G.t) : null;
+    var g = Gen.bayGeometry ? Gen.bayGeometry(port) : null;
+    if (!gb || !g) return;
+    var r = port.radius || 0.2;
+    var half = (g.mouthR + g.throatR) / 2 * 0.92 * r;      // inside the duct's walls
+    var top = V.addScaled(G.ship.pos, gb.up, -(g.standoff || 0.012) * r);
+    var fr = { pos: V.addScaled(top, gb.up, -0.06 * half), right: gb.east, up: gb.north, fwd: gb.up };
+    var sunDir = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), top));
+    var GLW = global.GLWorld;
+    if (GLW && GLW.queueMesh && glLive() && GLW.queueMesh(cam, fr, shedCarMesh(), half, sunDir)) return;
+    Render.paintMesh(ctx, cam, fr, shedCarMesh(), half, sunDir, null);
+  }
+
   function drawFoundings(ctx, cam) {
     var Sts = global.Stations;
     if (!Sts || !G.stations || !G.stations.length) return;
@@ -15822,7 +15922,16 @@
            * a length below its centre, which is roughly where every hull in
            * the library sits on its gear. */
           if (Render.setMoverRiders) {
-            var riders = G.ship ? [{ pos: G.ship.pos, keelKm: (Render.SHIP_LEN || 0.025) * 0.2 }] : [];
+            /* The keel is where the rail holds it: `standoff` above whatever
+             * it stands on, which is how every stand and every car-top in
+             * the rail is set (Sim.seatRide, liftRide). A fifth of a nominal
+             * length was a guess that disagreed with that by up to half
+             * the standoff, so the car was drawn a few metres off the hull
+             * it was carrying (2026-11-02). */
+            var gStand = Gen.bayGeometry ? Gen.bayGeometry(b) : null;
+            var keelKm = (gStand && gStand.standoff > 0) ? gStand.standoff * b.radius
+                       : (Render.SHIP_LEN || 0.025) * 0.2;
+            var riders = G.ship ? [{ pos: G.ship.pos, keelKm: keelKm }] : [];
             /* And the traffic: a freighter riding the lift down to its bay
              * gets a floor under it too. Asked once per frame, and only
              * here, where a station is close enough to be a model. */
