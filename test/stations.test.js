@@ -404,7 +404,7 @@ S.update(Gy, sys, Gy.t, hooks());
 var py = sys.byId[S.portId(sy)];
 check('she trades as both', py && S.typesOf(sy, Gy.t).join(',') === 'shipyard,market' && /Shipyard & Market station/.test(py.market.roleName),
       py && py.market.roleName);
-var yr = global.Economy.ROLE_BY_ID.shipyard.bias;
+var yr = global.Economy.ROLE_BY_ID.shipyard.bias.filter(function (c) { return c.charAt(0) !== '-'; });   // '-' = eaten (2026-11-02)
 check('her shipyard goods are on her floor', yr.every(function (c) { return py.market.rows[c] && py.market.rows[c].prod > 0; }));
 check('her freight went onto her shelves, and onto her account', sy.stockSold && sy.stockValue > 0 && sy.balance >= sy.stockValue,
       sy.stockValue + ' cr');

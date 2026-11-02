@@ -66,10 +66,19 @@
    * needs it: under DISTRESS, 7.4% of plants in clean systems (corruption
    * under 40) and 29.7% in corrupt ones (60 and over). Nothing places them
    * there. The books do. */
+  /* RE-MEASURED 2026-11-02 after the market review gave seven goods
+   * buyers, moved the farm-machinery import to farms and turned shipyards
+   * into alloy buyers (kawartha + alpha, 80 stars each, the test's own
+   * way). The biggest moves are the ones the review meant to make: a
+   * shipyard now buys its hull metal (3.45 -> 0.91), a farm buys seed
+   * stock and its richer neighbours' meat (grape 3.50 -> 1.66, gold
+   * 5.06 -> 1.84), and a reprocessing plant no longer pays for tractors
+   * it never used (3.99 -> 5.72). `refinery` has no plants of its own to
+   * measure and keeps the refinery plant's figure. */
   var KIND_MEDIAN = {
-    agri: 1.42, mining: 2.92, reprocessing: 3.99, shipyard: 3.45,
-    refinery: 0.92, 'plant-refinery': 0.92, 'plant-skimmer': 0.25,
-    'farm-gold': 5.06, 'farm-grape': 3.50
+    agri: 1.46, mining: 3.21, reprocessing: 5.72, shipyard: 0.91,
+    refinery: 0.88, 'plant-refinery': 0.88, 'plant-skimmer': 0.24,
+    'farm-gold': 1.84, 'farm-grape': 1.66
   };
   var SKIM_WEIGHT = 0.6;          // corruption's cut, at 100
   var VIOLENCE_WEIGHT = 0.3;      // violence's cut, at 100

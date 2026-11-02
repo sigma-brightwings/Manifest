@@ -42,6 +42,39 @@ before they update.
 
 ### Changed
 
+- **2026-11-02 — The market review, part one (Astra: "do a meta-analysis
+  of our current market and suggest changes", then "start on your
+  recommendations").** Measured over 3,043 ports in 229 systems with the new
+  `tools/measure-markets.cjs`; the review itself is `claude/market-review.md`
+  in the project.
+  - **Seven goods had no buyer anywhere** (livestock, timber, fish,
+    textiles, fusion cells, AI cores, gene therapies), so they could only be
+    sold back to a producer. Now: livestock and fish are eaten past
+    subsistence (dev > 0.45), most at highports and carriers; timber builds
+    developing worlds (0.2-0.65); textiles go anywhere with people; fusion
+    cells go to shipyards and carriers; AI cores to shipyards and highports;
+    gene therapies to farms (seed stock) and highports; medical supplies
+    also to mining heads and refineries, where people get hurt. Every one
+    of them now has buyers at 7-50% of ports.
+  - **AI cores and gene therapies are thin buyers**: a 24 t shelf floor and
+    a price ceiling of 1.12x base where they are newly wanted, because at
+    the ordinary rules they measured 2,669 and 2,448 cr/t of margin, double
+    luxuries. Now 1,745 and 1,656, beside luxuries' 1,589.
+  - **Farm machinery is a farm import again.** The test was "has a grain
+    row", which every port has (everyone eats), so 98-100% of mining heads,
+    refineries and reprocessing plants bought tractors. It now asks whether
+    the world can farm.
+  - **Shipyards buy hull metal.** They were biased to make alloys and 99.6%
+    exported them; now every yard imports alloys (1.8x the old draw as
+    appetite), and a younger yard (dev < 0.7) buys ore as well.
+  - No seed's universe moves except through these rows: every new amount is
+    the port's own hash, rows this creates take their shelf numbers from
+    the hash too, and the farm and shipyard draws are still taken where they
+    always were.
+  - `holdings.js` KIND_MEDIAN re-measured against the new books (shipyard
+    3.45 -> 0.91, farms roughly halved, reprocessing up); distress is still
+    7.5% of plants in clean systems against 24.1% in corrupt ones.
+
 - **2026-11-01 — Pirate space has a comsat (Astra: "pirates should have
   the comsat for the syndicate that runs their territory").** A pirate band
   runs no police, so a pirate-held system had no authority channel at all,

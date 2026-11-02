@@ -386,7 +386,11 @@
     { id: 'orbital',      name: 'Orbital port',   bias: [] },
     { id: 'highport',     name: 'Highport',       bias: ['luxuries', 'medical', 'computers'] },
     { id: 'refinery',     name: 'Refinery',       bias: ['hydrogen', 'chemicals'] },
-    { id: 'shipyard',     name: 'Shipyard',       bias: ['alloys', 'robotics'] },
+    /* '-alloys': a shipyard EATS hull metal (2026-11-02, the market
+     * review). It was biased to MAKE alloys, and 99.6% of yards exported
+     * the one thing the yard should be hungriest for. The draw is still
+     * taken in the same place, so nothing else in the port moves. */
+    { id: 'shipyard',     name: 'Shipyard',       bias: ['-alloys', 'robotics'] },
     { id: 'agri',         name: 'Agricultural co-op', bias: ['grain', 'livestock', 'fish'] },
     { id: 'mining',       name: 'Mining head',    bias: ['ores', 'rare', 'fissile'] },
     { id: 'reprocessing', name: 'Reprocessing plant', bias: [], wasteSink: true },
@@ -602,6 +606,14 @@
    * bright inner world runs on sunlight and tops up; a dark outer moon
    * runs on its reactor. */
   var REACTOR_BURN = 0.02;         // of a port's base flow, in a dark sky
+  /* A shipyard's alloy appetite, against the draw the old bias made as
+   * production. Large enough that a yard on a world whose industry also
+   * makes alloys is still a buyer (2026-11-02). */
+  var YARD_APPETITE = 1.8;
+  /* A thin top-tier buyer's shelf floor and price ceiling (see the shelf
+   * loop in buildPortMarket). */
+  var THIN_SHELF = 24;
+  var THIN_LOCAL_MAX = 1.12;
   function reactorDark(host) {
     var ins = host && typeof host.insolation === 'number' ? host.insolation
             : host && host.parentBody && typeof host.parentBody.insolation === 'number' ? host.parentBody.insolation : 1;
@@ -619,6 +631,7 @@
     var role = ROLE_BY_ID[roleId];
 
     var rows = {};
+    var hashRows = {};                           // rows the 2026-11-02 demand created: shelf off the hash
     var scale = 0.9 + rng.range(0, 0.6);          // this port's share of trade
     var flow = (8 + pop * 0.06) * scale;          // tonnes/day, the base unit
 
@@ -677,8 +690,10 @@
      * orbiting a gas giant still trades everything, it just moves a great
      * deal more hydrogen than the next port over. */
     for (var b = 0; b < role.bias.length; b++) {
-      var br = ensure(role.bias[b]);
-      br.prod += flow * rng.range(0.4, 1.1);
+      var bid = role.bias[b], eats = bid.charAt(0) === '-';
+      var br = ensure(eats ? bid.slice(1) : bid);
+      var bq = flow * rng.range(0.4, 1.1);
+      if (eats) br.cons += bq * YARD_APPETITE; else br.prod += bq;
     }
 
     /* Consumption. Everyone eats and drinks; industry eats feedstock; and
@@ -710,10 +725,68 @@
     }
     // Agricultural worlds are machinery importers — that is the classic
     // Frontier trade and it should exist in every system that has a farm.
-    if (rows.grain || rows.livestock || rows.fish) {
-      ensure('farmmach').cons += flow * rng.range(0.10, 0.30);
-      if (dev > 0.4) ensure('robotics').cons += flow * rng.range(0.03, 0.09);
+    /* THE FARM TEST ASKS THE WORLD (2026-11-02). It used to ask whether
+     * the port had a grain row, and every port has one — grain is in
+     * UNIVERSAL_DEMAND, added a few lines up — so every mining head,
+     * refinery and dump in the galaxy imported farm machinery (98-100% of
+     * them, measured), and the classic run was smeared over everything.
+     * Both draws are still taken wherever they were, so a port that is not
+     * a farm keeps every later number it had; it just stops buying tractors. */
+    var fmQ = flow * rng.range(0.10, 0.30);
+    var frQ = dev > 0.4 ? flow * rng.range(0.03, 0.09) : 0;
+    if (canFarm(host)) {
+      ensure('farmmach').cons += fmQ;
+      if (frQ) ensure('robotics').cons += frQ;
     }
+
+    /* ---- WHO BUYS WHAT NOBODY BOUGHT (2026-11-02, the market review) ----
+     * Seven goods were made and never consumed anywhere — livestock,
+     * timber, fish, textiles, fusion cells, AI cores, gene therapies — so
+     * the only place to sell them was back at a producer, and three of the
+     * four richest legal cargoes in the table were worthless to haul. Each
+     * now has buyers, by who would plausibly want it:
+     *
+     *   food basket   livestock and fish: anywhere past subsistence
+     *                 (dev > 0.45), most at a highport. Grain stays what
+     *                 everyone eats; meat and fish are what money eats.
+     *   timber        building: developing worlds, 0.2 < dev < 0.65.
+     *   textiles      clothing: anywhere with people (dev > 0.2).
+     *   fusion cells  drive cores: shipyards and fleet carriers.
+     *   AI cores      shipyards and highports, THIN — at the full price
+     *                 spread they would be the best legal cargo in the
+     *                 game, so a few tonnes fill the need.
+     *   gene therapy  seed stock at farms, medicine at highports, thin.
+     *   medical       where people get hurt: mining heads and refineries
+     *                 (the tech glut — 41% of ports made it, 14% bought).
+     *
+     * NO RNG. Every amount is the port's own hash, as wine and fruit are,
+     * and any row this creates takes its shelf numbers from the hash too
+     * (hashRows, below) — so every row a port already had keeps every
+     * number it had. */
+    var hRow = function (cid) { return (RNG.hashString('demand|' + cid + '|' + port.id) % 1000) / 1000; };
+    var wants = function (cid, q) {
+      if (!(q > 0)) return;
+      if (!rows[cid]) hashRows[cid] = true;
+      ensure(cid).cons += q;
+    };
+    var rich = roleId === 'highport' || roleId === 'carrier';
+    if (dev > 0.45) {
+      wants('livestock', flow * dev * (0.10 + 0.18 * hRow('livestock')) * (rich ? 2.2 : 1));
+      wants('fish', flow * dev * (0.08 + 0.14 * hRow('fish')) * (rich ? 2.2 : 1));
+    }
+    if (dev > 0.2 && dev < 0.65) wants('timber', flow * (0.12 + 0.25 * hRow('timber')));
+    if (dev > 0.2) wants('textiles', flow * (0.06 + 0.12 * hRow('textiles')));
+    if (roleId === 'shipyard' || roleId === 'carrier') {
+      wants('fusion', flow * (0.12 + 0.20 * hRow('fusion')));
+      wants('aicores', flow * (0.02 + 0.03 * hRow('aicores')));
+    }
+    if (roleId === 'highport') wants('aicores', flow * (0.015 + 0.02 * hRow('aicores')));
+    if (roleId === 'agri' || (canFarm(host) && port.surface)) wants('genetech', flow * (0.02 + 0.03 * hRow('genetech')));
+    if (roleId === 'highport') wants('genetech', flow * (0.015 + 0.02 * hRow('genetech')));
+    if (roleId === 'mining' || roleId === 'refinery') wants('medical', flow * (0.04 + 0.08 * hRow('medical')));
+    /* And a yard eats ore as well as alloy where it is still young enough
+     * to do its own smelting. */
+    if (roleId === 'shipyard' && dev < 0.7) wants('ores', flow * (0.3 + 0.4 * hRow('yardores')));
 
     /* Radioactive waste. Output scales with the SQUARE of development: a
      * subsistence outpost makes almost none, a fully industrialised world
@@ -766,8 +839,18 @@
       var throughput = Math.max(row.prod, row.cons, flow * 0.05);
       /* The draw happens either way, so a commodity with its own shelf rule
        * does not shift every later number in this port's stream. */
-      var span = rng.range(5, 14);
-      row.cap = shelfCapFor(ids[k], throughput) || Math.round(throughput * span + 120);
+      var hr = hashRows[ids[k]] ? function (lo, hi, salt) {
+        return lo + (hi - lo) * ((RNG.hashString('shelf|' + salt + '|' + ids[k] + '|' + port.id) % 1000) / 1000);
+      } : null;
+      var span = hr ? hr(5, 14, 'span') : rng.range(5, 14);
+      /* A THIN BUYER (2026-11-02): a top-tier good this port only wants a
+       * little of, newly given demand by the market review. Without this,
+       * AI cores and gene therapies measured 2,669 and 2,448 cr/t of
+       * margin with an ordinary 120 t shelf behind them — a 64 t hold worth
+       * twice the tuned milfuel run. A small shelf fills in a hold's worth,
+       * so the price falls as you sell; see THIN_LOCAL_MAX for the rest. */
+      var thin = hr && BY_ID[ids[k]].tier >= 4;
+      row.cap = shelfCapFor(ids[k], throughput) || Math.round(throughput * span + (thin ? THIN_SHELF : 120));
 
       var net = row.prod - row.cons;
       /* Structural price factor. A place that makes more than it uses sells
@@ -775,15 +858,16 @@
        * a trade route actually IS. */
       var ratio = net / Math.max(row.prod + row.cons, 1e-6);   // -1..+1
       row.local = clamp(1 - ratio * 0.34, 0.6, 1.5);
+      if (thin && row.local > THIN_LOCAL_MAX) row.local = THIN_LOCAL_MAX;
       row.exporter = net > throughput * 0.08;
       row.importer = net < -throughput * 0.08;
 
       /* Baseline fill and its seasonal wobble. Exporters sit on a pile;
        * importers run close to empty and depend on deliveries arriving. */
       row.base = clamp(0.5 + ratio * 0.34, 0.10, 0.93);
-      row.amp = rng.range(0.03, 0.11);
-      row.periodS = rng.range(9, 40) * DAY;
-      row.phase = rng.angle();
+      row.amp = hr ? hr(0.03, 0.11, 'amp') : rng.range(0.03, 0.11);
+      row.periodS = (hr ? hr(9, 40, 'period') : rng.range(9, 40)) * DAY;
+      row.phase = hr ? hr(0, TAU, 'phase') : rng.angle();
     }
 
     port.market = {

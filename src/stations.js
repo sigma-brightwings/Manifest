@@ -1084,7 +1084,9 @@
     ts.forEach(function (ty) {
       if (p._trades.indexOf(ty) >= 0) return;
       var role = Eco.ROLE_BY_ID[ROLE_FOR[ty]];
-      (role && role.bias || []).forEach(function (cid) { Eco.addProduction(p, cid, flow * 0.8); });
+      /* A '-' entry is something the trade EATS (a shipyard's alloys,
+       * 2026-11-02); a second trade adds what it makes, not its appetite. */
+      (role && role.bias || []).forEach(function (cid) { if (cid.charAt(0) !== '-') Eco.addProduction(p, cid, flow * 0.8); });
       p._trades.push(ty);
       added = true;
     });
