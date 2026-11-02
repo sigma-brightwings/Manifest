@@ -150,8 +150,10 @@ console.log('--- the combat analyser reads the gun the NPC would fire ---');
   var cop = Combat.npcArmament(spec('police', 'police', 'navyfac'), sys);
   check('a cutter carries the patrol laser', cop.dmg === Combat.NPC_GUN.dmg && /patrol laser/.test(cop.gun));
   var mob = Combat.npcArmament(spec('police', 'police', 'outlaw'), sys);
-  check("the Syndicate's own wing carries the muon beam",
-        mob.dmg === Combat.SYNDICATE_GUN.dmg && /muon/.test(mob.gun));
+  /* Astra, 2026-11-02: "mass drivers are a syndicate/navy only weapon" —
+   * the wing's muon beam became a mass driver. */
+  check("the Syndicate's own wing carries a mass driver",
+        mob.dmg === Combat.NPC_DRIVER.dmg && /mass driver/.test(mob.gun));
   check('and it is the strongest thing on the list', mob.dps > cop.dps && cop.dps > trader.dps);
   var pir = Combat.npcArmament(spec('pirate', 'pirate'), sys);
   check('a pirate reads its rack the way its first shot would settle it',
@@ -165,7 +167,7 @@ console.log('--- the combat analyser reads the gun the NPC would fire ---');
   check('one photon pulse out-guns a trader\'s pea-shooter', vsOne.vsYou < 1 &&
         Math.abs(vsOne.vsYou - (Combat.TRADER_GUN.dmg / Combat.TRADER_GUN.cooldown) / Combat.playerDps(bare)) < 1e-9);
   var vsMob = Combat.npcArmament(spec('police', 'police', 'outlaw'), sys, bare);
-  check('and the Syndicate beam out-guns one photon pulse', vsMob.vsYou > 1);
+  check('and the Syndicate driver out-guns one photon pulse', vsMob.vsYou > 1);
   check('no ship, no comparison', Combat.npcArmament(spec('trader', 'freighter'), sys).vsYou === undefined);
   var fleet = Combat.npcArmament({ kind: 'fleet', cls: 'courier', id: 'fleet|x' }, sys);
   check('a ship of yours under orders reads as a civil hull', fleet.armed && /defensive/.test(fleet.gun));

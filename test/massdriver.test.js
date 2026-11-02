@@ -159,6 +159,47 @@ G.ship.credits = 1e6; G.ship.cargo.ballast = G.ship.cargoCap;
 var b3 = MD.buySlugs(G, 1);
 check('or the hold', !b3.ok && /room/.test(b3.why), b3.why);
 
+console.log('--- Syndicate and navy only ---');
+/* Astra: "mass drivers are a syndicate/navy only weapon." */
+function shelf(G2, port) {
+  return Combat.stockAt(G2, port).filter(function (e) { return e.item.id === 'massdriver'; })[0];
+}
+G = game();
+var lawful = sys.ports.filter(function (p) { return p.faction && p.faction !== 'outlaw' && p.market && p.market.role !== 'carrier' && p.market.role !== 'shipyard'; })[0];
+check('an ordinary lawful port does not stock it at all', lawful && !shelf(G, lawful), lawful && lawful.name);
+var carrier = { id: 'md-carrier', name: 'Test carrier', faction: lawful.faction, fleet: true, market: { role: 'carrier', dev: 0.2 } };
+var cs = shelf(G, carrier);
+check('a fleet carrier has it on the shelf', !!cs);
+check('but not for a stranger, and says why', cs && !cs.available && /navy issue/.test(cs.why), cs && cs.why);
+G.standing[lawful.faction] = 60;
+check('to someone the navy trusts, it sells', shelf(G, carrier).available);
+var synPort = { id: 'md-syn', name: 'Test den', faction: 'outlaw', market: { role: 'orbital', dev: 0.3 } };
+var ss = shelf(G, synPort);
+check('on the Syndicate\'s turf it is stocked, behind their trust', ss && !ss.available && /Syndicate/.test(ss.why), ss && ss.why);
+
+console.log('--- in their hands ---');
+check('the navy and the Syndicate\'s enforcers carry one; a pirate and a cutter do not',
+      Combat.carriesDriver({ kind: 'navy' }) && Combat.carriesDriver({ kind: 'police', faction: 'outlaw' }) &&
+      Combat.carriesDriver({ kind: 'police', hunter: true }) &&
+      !Combat.carriesDriver({ kind: 'pirate' }) && !Combat.carriesDriver({ kind: 'police', faction: 'gf0' }));
+check('and a scan says so', /mass driver/.test(Combat.npcArmament({ kind: 'navy', cls: 'navy', faction: 'gf0', hullMax: 200 }).text),
+      Combat.npcArmament({ kind: 'navy', cls: 'navy', faction: 'gf0', hullMax: 200 }).text);
+function npcShot(jink) {
+  sys.slugs = [];
+  var Gn = game();
+  var nv = target(Gn, 9, 0);
+  nv.kind = 'navy'; nv.faction = lawful.faction;
+  nv.live.fwd = V.scale(Gn.ship.fwd, -1);
+  var hull0 = Gn.ship.hullHp, sh0 = Gn.ship.shieldHp || 0;
+  var real = Math.random; Math.random = function () { return 0.5; };   // dead on: no spread
+  try { MD.fireNpc(sys, Gn, Gn.t, nv, Combat.NPC_DRIVER, quiet); } finally { Math.random = real; }
+  if (jink) Gn.ship.vel = V.addScaled(Gn.ship.vel, Gn.ship.right, 0.15);   // 150 m/s sideways, after the shot
+  for (var j = 0; j < 40; j++) step(Gn, 0.05, nv);
+  return Gn.ship.hullHp < hull0 || (Gn.ship.shieldHp || 0) < sh0;
+}
+check('their slug finds a ship that holds its course', npcShot(false));
+check('and misses one that jinks after the shot', !npcShot(true));
+
 sys.patrols = (sys.patrols || []).filter(function (s) { return s.id.indexOf('md-') !== 0; });
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

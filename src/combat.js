@@ -108,6 +108,9 @@
    * sat behind most of a career of Syndicate work; fifty is "they know
    * your name", which is when a mob starts treating you as one of theirs. */
   var SYNDICATE_TRUST = 50;
+  /* What the navy asks before it will sell you its own gun: the same
+   * "they know your name" line the Syndicate draws, for the same reason. */
+  var RESTRICTED_STANDING = 50;
 
   function laser(id, name, particle, variety, price, power, mass, dmg, cooldown,
                  range, heat, color, avail, pitch) {
@@ -250,6 +253,7 @@
                     7400, 2.2, 6.0, 30, 1.60, 25, 3, '#e8f0ff', [0.50, 0],
                     'Half of it the shield never sees. Lead them, mind the kick, and buy slugs by the tonne.');
       g.kinetic = true;
+      g.restricted = true;          // Syndicate or navy only (stockAt)
       g.variety = 'kinetic';
       g.particle = 'slug';
       g.falloff = 0;
@@ -2328,6 +2332,22 @@
    * policed by an organisation with better hardware than the law usually
    * has. */
   var SYNDICATE_GUN = { dmg: 11, range: 18, cooldown: 0.85, heat: 9, fx: 'beam' };
+  /* THE MASS DRIVER IN THEIR HANDS (2026-11-02). Astra: "mass drivers are
+   * a syndicate/navy only weapon." So the Syndicate's enforcement wing and
+   * the navy — hunters included — carry one, and nobody else does. Their
+   * slugs fly like yours (massdriver.js), led at where you will be with a
+   * gunner's spread, so a ship that keeps changing its mind is hard to hit
+   * — the first enemy fire in the game you can actually dodge. Half to the
+   * shield, half through, the same as yours. 26 a round every 1.8 s:
+   * still the strongest gun on any scanner (14.4/s against a muon beam's
+   * 12.9 it replaced and a cutter's 10), a little under your own issue. */
+  var NPC_DRIVER = { name: 'Mass driver', dmg: 26, range: 20, cooldown: 1.8, heat: 3,
+                     kinetic: true, variety: 'kinetic', split: 0.5, vsShield: 1, vsHull: 1,
+                     speed: 8, color: '#e8f0ff', fx: 'kinetic' };
+  function carriesDriver(sp) {
+    if (!sp || sp.defending) return false;
+    return sp.kind === 'navy' || !!sp.hunter || (sp.kind === 'police' && sp.faction === 'outlaw');
+  }
 
   /* THE LAW'S OWN GUN, and its missiles (Astra, 2026-10-18): the starting
    * ship could outrun any Mirven police, wanted and under fire, because
@@ -3671,8 +3691,8 @@
                 (spec.kind === 'trader' || spec.kind === 'trade' || spec.kind === 'fleet' ||
                  spec.defending || !spec.kind);
     var elite = spec.kind === 'police' && spec.faction === 'outlaw';
-    var gun = civil ? TRADER_GUN : elite ? SYNDICATE_GUN : NPC_GUN;
-    var name = civil ? 'defensive gun' : elite ? 'muon beam' : 'patrol laser';
+    var gun = civil ? TRADER_GUN : carriesDriver(spec) ? NPC_DRIVER : elite ? SYNDICATE_GUN : NPC_GUN;
+    var name = civil ? 'defensive gun' : gun === NPC_DRIVER ? 'mass driver' : elite ? 'muon beam' : 'patrol laser';
     var rack;
     if (sys) rack = !!pirateRack(sys, spec);
     else rack = spec.rack === undefined ? null : !!spec.rack;
@@ -7801,6 +7821,7 @@
       var showed = sp.raider || sp.firedOnYouAt !== undefined;
       var gun = showed ? NPC_GUN
               : (sp.kind === 'trader' || sp.defending) ? TRADER_GUN
+              : carriesDriver(sp) ? NPC_DRIVER
               : elite ? SYNDICATE_GUN : cop ? POLICE_GUN : NPC_GUN;
       var d = V.dist(sp.live.pos, s.pos);
       /* A cop with a fugitive in reach and a missile left: away it goes,
@@ -7820,6 +7841,12 @@
          its own guns did that to itself. */
       addNpcHeat(sp, (gun.heat || 0) * (gun.cooldown || 0), null);
 
+      /* A slug is fired, not rolled: it flies, and whether it hits is
+       * where it goes against where you go (massdriver.js fireNpc). */
+      if (gun.kinetic) {
+        if (global.MassDriver) global.MassDriver.fireNpc(sys, G, t, sp, gun, hooks);
+        continue;
+      }
       var transverse = V.len(V.sub(s.vel, sp.live.vel));
       /* Police gunnery is trained for a runner: a firmer floor and less
        * lost to speed than a pirate's. */
@@ -8980,7 +9007,29 @@
       if (it.unlisted) continue;
       var verdict = null;
 
-      if (it.syndicate) {
+      if (it.restricted) {
+        /* SYNDICATE OR NAVY ONLY (Astra, 2026-11-02: "mass drivers are a
+         * syndicate/navy only weapon"). On the Syndicate's own turf, once
+         * they trust you, as their issue gear is sold; in lawful space only
+         * where the navy keeps an armoury — a fleet carrier, or a shipyard
+         * in a system with a naval garrison — and only to someone that
+         * faction trusts as far. Anywhere else it is not on the shelf at
+         * all: a listing with a reason would be a shop window into an
+         * armoury you cannot walk into. */
+        if (fac === 'outlaw') {
+          if (hot) verdict = 'they will not arm someone they want';
+          else if (syndicateStanding(G) < SYNDICATE_TRUST) verdict = 'needs ' + SYNDICATE_TRUST + '+ standing with the Syndicate';
+        } else {
+          var armoury = fleetPort(port) ||
+                        (port.market && port.market.role === 'shipyard' && global.Economy && global.Economy.navyPresent && global.Economy.navyPresent(sys));
+          if (!armoury) continue;
+          if (hot) verdict = 'they will not arm someone they want';
+          else if (standing < RESTRICTED_STANDING) {
+            verdict = 'navy issue - needs ' + (global.Missions ? global.Missions.standingLabel(RESTRICTED_STANDING).toUpperCase() : RESTRICTED_STANDING + '+') +
+                      ' standing with ' + facName;
+          }
+        }
+      } else if (it.syndicate) {
         /* Syndicate-issue goods exist only where the Syndicate itself is
          * the landlord, and only once THEY trust you — a different
          * faction's standing has no say here, which is the whole point:
@@ -9817,6 +9866,7 @@
     muzzleOf: muzzleOf, muzzleWorld: muzzleWorld, hullLen: hullLen, cannonGlow: cannonGlow,
     manifestFor: manifestFor, holdOf: holdOf, purseOf: purseOf,
     npcShield: npcShield, splitDamage: splitDamage, hullSize: hullSize,
+    NPC_DRIVER: NPC_DRIVER, carriesDriver: carriesDriver,
     NPC_SHIELD: NPC_SHIELD, MAX_IMPACTS: MAX_IMPACTS,
     damageNpc: damageNpc, damagePlayer: damagePlayer, killNpc: killNpc,
     blastAt: blastAt, reportSabotage: reportSabotage, torpedoSoldAt: torpedoSoldAt,

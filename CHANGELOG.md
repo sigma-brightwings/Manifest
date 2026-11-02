@@ -69,7 +69,17 @@ before they update.
   - A missed slug never goes on an orbit: Astra ruled it out ("we could
     very quickly end up with a Kessler syndrome"). Rounds are frangible —
     the charge cracks them to dust after their 20 s.
-  - NPCs do not carry it yet.
+  - **Syndicate and navy only** (Astra: "mass drivers are a syndicate/navy
+    only weapon"). Sold on the Syndicate's own turf to anyone they trust
+    (50+), and in lawful space only where the navy keeps an armoury — a
+    fleet carrier, or a shipyard in a system with a naval garrison — to
+    50+ standing with that faction; nowhere else is it on the shelf.
+  - **They carry it**: the navy (hunters included) and the Syndicate's
+    enforcement wing fire slugs instead of their lasers — 26 a round every
+    1.8 s, led at where you will be, with a gunner's spread that widens the
+    faster you cross their sight. A ship that holds its course is hit; one
+    that jinks after the shot is not. Their slugs are tested against you
+    only. The enforcers' muon beam is retired; scanners read "mass driver".
   - test/massdriver.test.js (22 checks): the split, recoil, the round spent,
     travel time, the gap coasted, a crossing target missed when aimed at
     and hit when led, buying slugs and every refusal.

@@ -105,6 +105,43 @@
     return slug;
   }
 
+  /* AN NPC'S ROUND (Syndicate enforcers and the navy, Combat.carriesDriver).
+   * Led at where you will be, then thrown off by a gunner's spread: an
+   * angle error, wider the faster you cross their line of sight. Fly a
+   * straight line and they will find you; jink and the lead they computed
+   * is already wrong by the time the slug gets there. In-the-moment roll,
+   * the same class as every other shot connecting. */
+  var NPC_SPREAD = 0.0035;      // rad, a steady target at any range
+  var NPC_SPREAD_CROSS = 0.004; // rad more per km/s of crossing speed
+  function fireNpc(sys, G, t, sp, gun, hooks) {
+    var s = G.ship, live = sp.live;
+    if (!live || !live.pos) return null;
+    var speed = gun.speed || SLUG_SPEED;
+    var Ld = lead(live.pos, live.vel, s.pos, s.vel, speed);
+    var aim = Ld ? Ld.point : s.pos;
+    var dir = V.norm(V.sub(aim, live.pos));
+    var rel = V.sub(s.vel, live.vel), along = V.dot(rel, dir);
+    var cross = V.len(V.addScaled(rel, dir, -along));
+    var spread = NPC_SPREAD + NPC_SPREAD_CROSS * cross;
+    var a = (Math.random() - 0.5) * 2 * spread, b = (Math.random() - 0.5) * 2 * spread;
+    var side = Math.abs(dir.z) < 0.9 ? V.norm(V.cross(dir, { x: 0, y: 0, z: 1 })) : { x: 1, y: 0, z: 0 };
+    var up = V.cross(side, dir);
+    dir = V.norm(V.add(dir, V.add(V.scale(side, a), V.scale(up, b))));
+    var muzzle = V.addScaled(live.pos, dir, Math.max(0.02, (sp.size || 0.05) * 0.6));
+    var slug = {
+      pos: muzzle, vel: V.addScaled(live.vel, dir, speed),
+      at: t, born: t, dies: t + SLUG_LIFE,
+      dmg: gun.dmg, gun: gun, fromPlayer: false, by: sp, from: V.clone(live.pos),
+      color: sp.faction === 'outlaw' ? '#e0c8ff' : '#d8ecff',
+      bornS: (typeof performance !== 'undefined' ? performance.now() : 0) / 1000
+    };
+    var L = list(sys);
+    L.push(slug);
+    while (L.length > MAX_SLUGS) L.shift();
+    if (hooks && hooks.sound && V.dist(live.pos, s.pos) < 30) hooks.sound('massdriver');
+    return slug;
+  }
+
   /* Closest approach of the relative path over the next dt: the time and
    * the miss distance. Same idea as the torpedo's fuse. */
   function closest(a, va, b, vb, dt) {
@@ -131,6 +168,31 @@
       if (sl.at !== undefined && t > sl.at && t - sl.at < 5) sl.pos = V.addScaled(sl.pos, sl.vel, t - sl.at);
       var reach = V.len(V.sub(sl.vel, G.ship.vel)) * dt + 1;
       var best = null, bestS = Infinity;
+      /* THEIR ROUNDS are for you. An NPC's slug is tested against your
+       * ship, nobody else's: their gunners do not shoot through their own
+       * wingmen, and a miss that clipped a passing freighter would be a
+       * crime nobody committed. */
+      if (!sl.fromPlayer) {
+        var me = G.ship;
+        if (!me.docked && !me.landed && V.dist(me.pos, sl.pos) < reach + 0.5) {
+          var cm = closest(sl.pos, sl.vel, me.pos, me.vel, dt);
+          var rMe = Math.max(SLUG_HIT_MIN, ((Cb.hullLen && Cb.hullLen(me)) || 0.03) * 0.6);
+          if (cm.d < rMe) {
+            if (Cb.damagePlayer) Cb.damagePlayer(G, sl.dmg, hooks, sl.gun, sl.from);
+            if (hooks && hooks.sound) hooks.sound('hit');
+            continue;
+          }
+          if (cm.d < rMe * 6 && !sl.whizzed) {
+            sl.whizzed = true;
+            if (hooks && hooks.sound) hooks.sound('nearMiss');
+          }
+        }
+        if (Sm && Sm.acceleration) sl.vel = V.addScaled(sl.vel, Sm.acceleration(sl.pos, sys, t), dt);
+        sl.pos = V.addScaled(sl.pos, sl.vel, dt);
+        sl.at = t + dt;
+        keep.push(sl);
+        continue;
+      }
       for (var k = 0; k < ships.length; k++) {
         var st = ships[k];
         if (!st || !st.pos || (st.route && st.route.suppressed && !st.spec)) continue;
@@ -204,7 +266,8 @@
     SLUG_SPEED: SLUG_SPEED, SLUG_T: SLUG_T, SLUG_LIFE: SLUG_LIFE,
     SLUG_PRICE_T: SLUG_PRICE_T,
     fire: fire, update: update, lead: lead, roundsAboard: roundsAboard, register: register,
-    hasDriver: hasDriver, buySlugs: buySlugs
+    hasDriver: hasDriver, buySlugs: buySlugs, fireNpc: fireNpc,
+    NPC_SPREAD: NPC_SPREAD, NPC_SPREAD_CROSS: NPC_SPREAD_CROSS
   };
   global.MassDriver = MassDriver;
   if (typeof module !== 'undefined' && module.exports) module.exports = MassDriver;

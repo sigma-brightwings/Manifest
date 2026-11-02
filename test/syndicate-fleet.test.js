@@ -118,7 +118,7 @@ check('live state carries the hull key', st && st.hullClass === 'enforcer_heavy'
 check('and keeps its kind as cls, which combat reads', st && st.cls === 'police');
 check('and its size letter, so the renderer picks S/M/L', st && st.sizeLetter === sampleHeavy.sizeLetter);
 var arm = Combat.npcArmament(sampleHeavy, sampleSys);
-check('a heavy carries the enforcement wing\'s gun', arm.armed && arm.dmg === Combat.SYNDICATE_GUN.dmg, arm.gun);
+check('a heavy carries the enforcement wing\'s gun, a mass driver (Astra, 2026-11-02)', arm.armed && arm.dmg === Combat.NPC_DRIVER.dmg, arm.gun);
 check('it answers a call for security', Combat.eligibleResponder(sampleHeavy, Combat.HELP_SECURITY));
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
