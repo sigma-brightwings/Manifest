@@ -95,6 +95,7 @@
     'uniform vec3 uCenterRel;',   // eye -> body centre, km, double-subtracted in JS
     'uniform vec3 uHoleRel;',     // eye -> a shaft mouth on this body, km
     'uniform float uHoleR;',      // its radius, km; 0 disables the cut
+    'uniform float uHoleDepth;',  // km down to the pit floor; 0 = open to space
     'uniform float uHaloPush;',   // km behind the centre the halo sits; a ring's outer radius
     /* The ground-port section box — see GL.setGroundCut. */
     'uniform vec4 uBoxO;',        // eye -> ship, km; w = 1 when on
@@ -309,7 +310,28 @@
      * One hole at a time. You can only be at one port, and the moment two
      * would be on screen at once they are both far enough away that the
      * mouth is sub-pixel anyway. */
-    '  if (uHoleR > 0.0 && distance(hit, uHoleRel) < uHoleR) discard;',
+    /* AND THE HOLE HAS A BOTTOM (2026-11-02). Cut and left at that, a
+     * ray through the mouth went on into nothing and the frame's clear
+     * colour showed through — black, with stars in it: from above an open
+     * pad on Astra's zoom-out sheet, a black disc in the ground round the
+     * port with the sky visible through the planet. A sphere has no inside
+     * to draw, so the pit is given a floor: the plane uHoleDepth below the
+     * mouth, square to the local vertical, in the colour of the section's
+     * own rock. The port's model stands in the pit in front of it and wins
+     * the depth test; only the gaps between its walls see the floor. */
+    '  if (uHoleR > 0.0 && distance(hit, uHoleRel) < uHoleR) {',
+    '    if (uHoleDepth <= 0.0) discard;',
+    '    vec3 hn = normalize(uHoleRel - oc);',
+    '    vec3 p0 = uHoleRel - hn * uHoleDepth;',
+    '    float dn = dot(rd, hn);',
+    '    if (dn > -1e-6) discard;',
+    '    float tp = dot(p0, hn) / dn;',
+    '    if (tp <= 0.0) discard;',
+    '    vec3 pf = rd * tp;',
+    '    gl_FragDepth = encodeDepth(dot(pf, uFwd));',
+    '    frag = vec4(0.20, 0.185, 0.17, 1.0);',
+    '    return;',
+    '  }',
     /* And the section, when the camera has been pulled up out of a ground
      * port: the street over the hangar is not there. */
     '  if (uBoxO.w > 0.5) {',
@@ -1931,7 +1953,7 @@
                               'uNear', 'uInvLogRange', 'uBanded', 'uBand',
                               'uOcean', 'uSeaColor', 'uIce',
                               'uCenterRel', 'uScreenPx', 'uFlen',
-                              'uHoleRel', 'uHoleR', 'uHaloPush',
+                              'uHoleRel', 'uHoleR', 'uHoleDepth', 'uHaloPush',
                               'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD', 'uBoxTop',
                               'uTear', 'uTearK', 'uTearN']);
 
@@ -2711,9 +2733,11 @@
      * means open to the sky, as every box was before. */
     gl.uniform1f(uni.uBoxTop, typeof bx.zMax === 'number' ? bx.zMax : 1e9);
   }
-  GL.setSurfaceHole = function (bodyId, worldPos, radiusKm) {
+  /* `depthKm`, optional, puts a floor in the hole that far down (see the
+   * shader); without one the hole is open, as it always was. */
+  GL.setSurfaceHole = function (bodyId, worldPos, radiusKm, depthKm) {
     hole = (bodyId && worldPos && radiusKm > 0)
-      ? { bodyId: bodyId, pos: worldPos, radius: radiusKm } : null;
+      ? { bodyId: bodyId, pos: worldPos, radius: radiusKm, depth: depthKm || 0 } : null;
   };
 
   /* `bg` is an optional [r,g,b] in 0..1. It exists for one case: the eye
@@ -3126,6 +3150,7 @@
         gl.uniform3f(uni.uHoleRel, hole.pos.x - cam.eye.x,
                      hole.pos.y - cam.eye.y, hole.pos.z - cam.eye.z);
         gl.uniform1f(uni.uHoleR, hole.radius);
+        gl.uniform1f(uni.uHoleDepth, hole.depth || 0);
       } else {
         gl.uniform1f(uni.uHoleR, 0);
       }

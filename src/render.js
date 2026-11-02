@@ -23,6 +23,46 @@
     this.pitch = 0.45;      // radians above the ecliptic
     this.fov = 55 * DEG;
     this.near = 1e-4;
+    /* THE FRAME THE BOOM IS MEASURED IN (2026-11-02). Null is the star
+     * system's own axes, which is right in space and was right everywhere
+     * until the camera could be pulled out of a hangar dug into a planet.
+     * There, a pitch against the ecliptic says nothing about the ground:
+     * Ashford Undercroft's vertical is wherever the planet's spin has put
+     * it, so "above the ship" could be sideways into the rock, the horizon
+     * stood on end across the screen, and Astra's zoom-out sheet was a
+     * hangar floating in black space with stars underneath it. With a
+     * frame { east, north, up } set, yaw is round the LOCAL vertical and
+     * pitch is above the LOCAL horizon, and the picture's right-hand axis
+     * is level with the ground. main.js sets it at ground ports (see
+     * syncCameraFrame) and clears it everywhere else. */
+    this.frame = null;
+  }
+
+  /* Target -> eye unit vector for a yaw and pitch, in `frame` when there is
+   * one. Every place that rebuilds the eye from G.cam asks this, so the
+   * clamps and the picture cannot disagree about where the eye is — which
+   * is exactly the disagreement a second copy of the formula would buy. */
+  function camDir(yaw, pitch, frame) {
+    var cp = Math.cos(pitch), sp = Math.sin(pitch);
+    var cy = Math.cos(yaw), sy = Math.sin(yaw);
+    if (!frame) return { x: cp * cy, y: cp * sy, z: sp };
+    var e = frame.east, n = frame.north, u = frame.up;
+    return { x: cp * cy * e.x + cp * sy * n.x + sp * u.x,
+             y: cp * cy * e.y + cp * sy * n.y + sp * u.y,
+             z: cp * cy * e.z + cp * sy * n.z + sp * u.z };
+  }
+  function camEye(cam) {
+    return V.addScaled(cam.target, camDir(cam.yaw, cam.pitch, cam.frame), cam.dist);
+  }
+  /* A world direction as the yaw and pitch that point the boom along it in
+   * `frame` — for handing the camera from one frame to another without the
+   * picture jumping. */
+  function camAngles(d, frame) {
+    var x = frame ? V.dot(d, frame.east) : d.x;
+    var y = frame ? V.dot(d, frame.north) : d.y;
+    var z = frame ? V.dot(d, frame.up) : d.z;
+    var l = Math.sqrt(x * x + y * y + z * z) || 1;
+    return { yaw: Math.atan2(y, x), pitch: Math.asin(Math.max(-1, Math.min(1, z / l))) };
   }
 
   /* THE NEAREST AIM THAT KEEPS THE EYE OFF THE FLOOR.
@@ -44,8 +84,12 @@
    * Returns the pitch unchanged when it already clears. `above` must be at
    * least `margin` — the caller owns that, because "the target is itself
    * under the floor" is a different question with a different answer. */
-  function pitchAboveFloor(yaw, pitch, dist, up, above, margin) {
+  /* `frame`, when given, is the camera's own (Camera.frame): the floor's
+   * normal is re-expressed in it and the same arc falls out. */
+  function pitchAboveFloor(yaw, pitch, dist, up, above, margin, frame) {
     if (!(dist > 0) || !up) return pitch;
+    if (frame) up = { x: V.dot(up, frame.east), y: V.dot(up, frame.north),
+                      z: V.dot(up, frame.up) };
     var a = up.x * Math.cos(yaw) + up.y * Math.sin(yaw);
     var b = up.z;
     var R = Math.sqrt(a * a + b * b);
@@ -61,9 +105,8 @@
   }
 
   Camera.prototype.build = function (w, h) {
-    var cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
     var cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
-    var d = { x: cp * cy, y: cp * sy, z: sp };     // target -> eye
+    var d = camDir(this.yaw, this.pitch, this.frame);   // target -> eye
     this.eye = V.addScaled(this.target, d, this.dist);
     this.f = V.scale(d, -1);                        // eye -> target
     /* The right vector comes straight from the yaw, not from a cross
@@ -79,7 +122,11 @@
      *
      * Below 90° this is exactly the vector the old code produced, so
      * nothing about the ordinary view changes. */
-    this.r = { x: -sy, y: cy, z: 0 };
+    /* In a ground frame the same thing, level with the GROUND: the horizon
+     * stays a horizon instead of a diagonal through the shot. */
+    var F = this.frame;
+    this.r = F ? V.add(V.scale(F.east, -sy), V.scale(F.north, cy))
+               : { x: -sy, y: cy, z: 0 };
     this.u = V.cross(this.r, this.f);
     this.flen = (0.5 * h) / Math.tan(this.fov / 2);
     this.cx = w / 2; this.cy = h / 2;
@@ -5871,7 +5918,8 @@
     [3.0,  '#6b5338']      // fill
   ];
   var SECTION_ROCK = ['#4f4a44', '#5b564e'];
-  var SECTION_ROCK_BED = 5;            // metres per bed
+  var SECTION_ROCK_BED = 5;            // metres, the first bed under the fill
+  var SECTION_ROCK_BED_MAX = 60;       // metres, the thickest any bed gets
   var SECTION_FLOOR = '#3a3631';
   var SECTION_PIPES = ['#9a8f7f', '#b23b2e', '#2e6fd8', '#9a8f7f'];
   var SECTION_LAST = { key: null, mesh: null };
@@ -5919,8 +5967,16 @@
       bands.push([z, zb, SECTION_BANDS[i][1], i === 3]);
       z = zb;
     }
+    /* THE BEDS THICKEN WITH DEPTH (2026-11-02). Five-metre beds were right
+     * for a shallow bay; at Ashford Undercroft the floor is 860 m down, a
+     * hundred and seventy alternating stripes, and from a kilometre up
+     * they shimmered as a moiré across the whole wall — the "huge striped
+     * walls" on Astra's sheet. Rock is laid down that way anyway: thin
+     * beds near the top, thicker ones below. Capped so a deep wall still
+     * has a few lines in it rather than one slab. */
     for (i = 0; z > sc.floor; i++) {
-      var zr = Math.max(sc.floor, z - SECTION_ROCK_BED * m);
+      var bed = Math.min(SECTION_ROCK_BED_MAX, SECTION_ROCK_BED * Math.pow(1.22, i));
+      var zr = Math.max(sc.floor, z - bed * m);
       bands.push([z, zr, SECTION_ROCK[i % 2], false]);
       z = zr;
     }
@@ -14518,6 +14574,9 @@
     aperturePath: aperturePath,
     apertureSet: apertureSet,
     pitchAboveFloor: pitchAboveFloor,
+    camDir: camDir,
+    camEye: camEye,
+    camAngles: camAngles,
     clipProject: clipProject,
     localPoly: localPoly,
     canopyPoly: canopyPoly,
