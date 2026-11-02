@@ -5656,7 +5656,7 @@
           if (G.walk.ride) advanceRide(dtReal, npcHold);
           else {
             global.Walk.step(G.walk, G.keys, dtReal);
-            if (G.walk.ship) { rampWalk(); rideLift(); }
+            if (G.walk.ship) { rampWalk(); rideLift(); stepWalk(); }
             else if (G.walk.plan.hangar) hangarWalk();
             /* Off the end of the ramp into open space, the walk is over
              * (startEva): the suit has the keys from here. */
@@ -7661,7 +7661,9 @@
       /* The same in a suit, and on your own ramp below her deck in open
        * space (eva.js, 2026-10-31): planet names over your ramp are a
        * chart, not a view. */
-      if ((G.walk && (G.walk.outside || (G.walk.ship && (G.walk.dy || 0) < -0.3))) || G.eva) { mainCtx = ctx; ctx = offscreenCtx(w, h, ps); }
+      /* (Not down the stair into a cockpit below her deck: shipdeck.js RAISED.) */
+      var downStr = G.walk && G.walk.plan && G.walk.plan.raised && global.ShipDeck.floorAt(G.walk.plan, G.walk.x, G.walk.z) < -0.05;
+      if ((G.walk && (G.walk.outside || (G.walk.ship && (G.walk.dy || 0) < -0.3 && !downStr))) || G.eva) { mainCtx = ctx; ctx = offscreenCtx(w, h, ps); }
       /* HOW MUCH LIGHTNING TO DRAW, decided by the clock rather than by
        * the weather. A stroke lasts about a tenth of a second; at warp the
        * frames are seconds or minutes apart, so sampling it would give
@@ -10558,6 +10560,9 @@
     G.walk = global.Walk.start(p);
     G.walk.x = at.x; G.walk.z = at.z; G.walk.yaw = at.yaw; G.walk.pitch = 0;
     G.walk.ship = true;
+    /* Up out of the seat of a raised cockpit you stand on its floor, not
+     * the deck's (stepWalk). */
+    stepWalk();
     /* In from the berth, you are in the airlock with the hatch you came
      * through still open behind you, the room at the berth's pressure:
      * the controls by the inner door cycle you in (airlock.js). */
@@ -10744,6 +10749,20 @@
     var clear = op2.clearAt ? op2.clearAt(w.x, w.z) : Infinity;
     var EYE = global.Walk.EYE || 1.65;
     if (clear < EYE + 0.2 && !(inX && w.z <= rp.hinge && w.z >= op2.footZ - 0.3)) w.eyeDy = Math.max(-1.3, clear - 0.2 - EYE);
+  }
+  /* UP THE STAIR INTO A RAISED COCKPIT (shipdeck.js RAISED, 2026-11-02).
+   * Astra chose the Talon's cockpit up in her nose block, a step up from
+   * the passage; the deck's floor is the plan's, and the cockpit's is
+   * `rise` above it, eased up the stair between the bridge door and the
+   * seat (ShipDeck.floorAt). After rampWalk and rideLift, which own your
+   * feet on the ramp and its lift; everywhere else on a raised hull's deck
+   * this is where your feet are, so stepping back down the stair puts them
+   * on the deck again rather than leaving them hanging at its top. */
+  function stepWalk() {
+    var w = G.walk, SD = global.ShipDeck;
+    if (!w || !w.ship || w.outside || w.ride || !SD || !SD.floorAt || !w.plan || !w.plan.raised) return;
+    if (onRamp(w) || onPlatform(w)) return;
+    w.dy = SD.floorAt(w.plan, w.x, w.z);
   }
   /* The lift platform, ridden: standing on it while it moves carries you
    * between her airlock and the ground. */
@@ -10939,7 +10958,10 @@
   function drawShipWalkView(ctx, cam, w, h) {
     /* Out of her, or on the ramp below her deck (2026-10-26): she is the
      * thing you are looking at, not a room you are in. */
-    if (G.walk.outside || (G.walk.dy || 0) < -0.3) { drawOutsideView(ctx, cam, w, h); return; }
+    /* ...but not down the stair of a cockpit that sits below her deck
+     * (shipdeck.js RAISED, a negative rise): that is still a room. */
+    var downStair = G.walk.plan && G.walk.plan.raised && global.ShipDeck.floorAt(G.walk.plan, G.walk.x, G.walk.z) < -0.05;
+    if (G.walk.outside || ((G.walk.dy || 0) < -0.3 && !downStair)) { drawOutsideView(ctx, cam, w, h); return; }
     /* Down through an open ramp's well, the ground she is standing on. */
     if (G.ship.landed && G.ship.airlock && G.ship.airlock.ramp > 0 && glLive() && Render.groundPatch) {
       var gp0 = Render.groundPatch(G.ship);

@@ -825,6 +825,9 @@
   function pose(sc, p) {
     var g = p.gait, ph = p.phase, sw = Math.sin(ph), sw2 = Math.sin(ph + Math.PI);
     var o = { x: p.x, z: p.z, y: sc.floorY || 0, yaw: p.yaw, sink: 0, lean: 0 };
+    /* Up in a raised cockpit, or on its stair (shipdeck.js RAISED). */
+    var SDn = global.ShipDeck;
+    if (sc.kind === 'ship' && sc.plan && sc.plan.raised && SDn && SDn.floorAt) o.y += SDn.floorAt(sc.plan, p.x, p.z);
     o.hipL = g * 0.42 * sw; o.hipR = g * 0.42 * sw2;
     o.kneeL = g * 0.55 * Math.max(0, Math.sin(ph - 0.9)); o.kneeR = g * 0.55 * Math.max(0, Math.sin(ph + Math.PI - 0.9));
     o.ankleL = 0; o.ankleR = 0;

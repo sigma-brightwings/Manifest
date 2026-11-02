@@ -118,6 +118,76 @@
    * behind the backrest. */
   var SEAT_SIT_Z = -0.16;
 
+  /* ---- A COCKPIT UP IN HER NOSE (2026-11-02) --------------------------------
+   * Astra, of the Talon: "the cockpit on the starting ship is recessed into
+   * the block that juts out with the cockpit glass on it ... it should be
+   * cut into the nose block." Asked which block, she chose the jutting one:
+   * the pilot sits up in it, right behind the glass, a step up from the
+   * passage.
+   *
+   * Why it was recessed: tools/fit-hulls.js puts the eye at the lowest point
+   * where every room fits, so the ramp is short, and never looks at the
+   * glass. On the Talon that left the eye a metre aft of the canopy and
+   * level with its bottom edge, the cockpit floor down in the wedge below
+   * the nose block, and the wedge's own sloping skin running through the
+   * room. Moving the whole deck up and forward to fix it does not fit: her
+   * passage then comes out through the top of the block and her airlock
+   * through her side (measured: 19 core samples out at the eye she wanted,
+   * and lengthening her to 34 m does not cure it).
+   *
+   * So the cockpit alone goes up into the block, and the deck stays exactly
+   * where fit-hulls put it. `rise` lifts the cockpit's floor above the
+   * deck's (negative: the cockpit is DOWN a stair); `fwd` moves the eye
+   * forward of where fit-hulls put it (render.js cockpitAt adds both); `run`
+   * is the stair between them, `treads` of it, aft of the old bulkhead (aft
+   * of the bridge deck, on a hull with one: it goes up with the helm), the
+   * bridge door at its foot on the deck. Every room aft of the door is
+   * planned `fwd - run` further aft in the cockpit's frame, which is where
+   * it was in her hull. Only hulls listed here are changed; fit-hulls knows
+   * nothing of this, and its `at` stays the deck's eye (the eye before).
+   *
+   * EVERY HULL WHOSE GLASS IS NOT THE FRONT OF HER COCKPIT (same day).
+   * Astra: "the cockpit fix should apply to all ships IF the glass isn't
+   * the forward-most part of the cockpit." Measured per hull by
+   * tools/fit-raised.js — her model's canopy box against her planned
+   * cockpit — and each raise below is what it found: the eye within half a
+   * metre of the glass, the windscreen no further forward than it, every
+   * room still inside her and none given up, and no wall of the cockpit
+   * but its windscreen outside her skin. Rerun it when a model, a deck
+   * plan or hullfit.js changes. Left alone, and why (the tool says so too):
+   *   - at her glass already: Samaritan Tender, Heron Heavy Shuttle;
+   *   - glass box not a canopy (off her centreline, or aft of her middle:
+   *     a side window or a wing panel named as glass): Coldwater Tanker,
+   *     Naval Cutter, Corsair Runner, Syndicate Heavy;
+   *   - decked or towered, her cockpit a deck of its own reached by lift:
+   *     Meridian, Leviathan, Crawler, Capital, Carrier;
+   *   - the Mule qualifies (eye 8.3 m from her glass) but no raise fits:
+   *     her bridge deck, raised with the helm, comes out through her skin
+   *     at every eye the tool tried. */
+  var RAISED = {
+    /* Chosen by hand before the tool existed, and kept: eye 0.5 m up and
+     * 1.2 m forward, [0, -0.05, 10.6] in her 25 m hull, 0.15 m aft of the
+     * canopy, the windscreen across the glass's height, the cockpit floor
+     * (-1.15) on the block's own underside, and not one sample of the
+     * cockpit outside her (the tool's own pick has its windscreen row
+     * grazing the glass). */
+    talon: { rise: 0.5, fwd: 1.2, run: 0.6, treads: 2 },
+    /* tools/fit-raised.js, 2026-11-02. */
+    dart: { rise: -0.078, fwd: 3.587, run: 0.5, treads: 1 },
+    kestrel: { rise: 0.611, fwd: 3.421, run: 1, treads: 3 },
+    wren: { rise: 0.262, fwd: 2.016, run: 0.75, treads: 2 },
+    /* Her windscreen stood 0.3 m ahead of her glass: moved aft, no stair. */
+    bollard: { rise: 0, fwd: -0.45, run: 0, treads: 0 },
+    /* The tugs' glass is a long way BELOW the eye: down six treads. */
+    sump: { rise: -1.302, fwd: 1.25, run: 1.75, treads: 6 },
+    heavytug: { rise: -1.306, fwd: 1.301, run: 1.75, treads: 6 },
+    longhaul: { rise: 0.458, fwd: 2.616, run: 1, treads: 3 },
+    trader: { rise: -0.27, fwd: 0.837, run: 0.75, treads: 2 },
+    enforcer: { rise: 0.535, fwd: 5.119, run: 1, treads: 3 },
+    fighter: { rise: -0.775, fwd: 4.287, run: 1.25, treads: 4 }
+  };
+  function raisedCockpit(hullId) { return (hullId && RAISED[hullId]) || null; }
+
   /* ---- the bridge and the crew (2026-10-24, second pass) -----------------
    * Astra: "All ship cockpits have to be sized to the type of ship they
    * operate - M and L size ships might have multiple crew stations on the
@@ -362,14 +432,26 @@
     var perWall = twoWalls ? Math.ceil(stacks / 2) : stacks;
     var qLen = crewed ? Math.max(2.6, perWall * BUNK_LEN + 1.4) : 0;
 
-    var bridge = room('cockpit', 'cockpit', -geom.sideX, geom.sideX, geom.bulkZ, geom.frontZ, H, 'Cockpit');
+    /* A cockpit up in the nose (RAISED): not on a hull with a bridge deck
+     * or decks, whose door is not at the cockpit's own bulkhead. */
+    /* A cockpit up in (or down into) her nose (RAISED). Not on a decked
+     * hull, whose cockpit is a deck of its own reached by lift. */
+    var rz = opts.raised && !DECKED[opts.hullId] ? opts.raised : null;
+    var rise = rz ? rz.rise : 0, run = rz ? rz.run : 0, lead = rz ? rz.fwd - rz.run : 0;
+    var bridge = room('cockpit', 'cockpit', -geom.sideX, geom.sideX, geom.bulkZ - (deckLen ? 0 : run), geom.frontZ, H, 'Cockpit');
+    /* Its floor `rise` over the deck's forward of `stepZ`, the stair aft
+     * of that down (or up) to the deck: floorAt. */
+    if (rz) { bridge.y0 = rise; bridge.y1 = rise + H; }
     /* The bridge door's wall: the cockpit's own bulkhead on a one-seat
-     * ship, the aft end of the bridge deck on a crewed one. */
-    var doorFront = geom.bulkZ, deck = null;
+     * ship, the aft end of the bridge deck on a crewed one — at the foot
+     * of the stair, when she has one. The bridge deck goes up with the
+     * helm: its stations are worked from the helm's own floor. */
+    var doorFront = geom.bulkZ - run, deck = null, stepZ = geom.bulkZ;
     if (deckLen) {
       var dz1 = geom.bulkZ - WALL_T, dz0 = dz1 - deckLen;
-      deck = room('bridgedeck', 'bridgedeck', -geom.sideX, geom.sideX, dz0, dz1, H, 'Bridge');
-      doorFront = dz0;
+      deck = room('bridgedeck', 'bridgedeck', -geom.sideX, geom.sideX, dz0 - run, dz1, H, 'Bridge');
+      if (rz) { deck.y0 = rise; deck.y1 = rise + H; }
+      doorFront = dz0 - run; stepZ = dz0;
     }
     /* The rooms off the passage (2026-10-25), measured first because the
      * passage has to be long enough for both of its walls: the quarters
@@ -407,6 +489,9 @@
      * her passage does. No draw is taken for it. */
     var stretch = opts.stretch > 0 ? opts.stretch : 0;
     if (!big) len += stretch;
+    /* Raised (RAISED): the passage runs on forward under the cockpit to the
+     * foot of its stair, and everything off it stays where it was. */
+    len += lead;
     /* The lift (decked hulls): a lobby aft of the bridge door, then the
      * car; the main deck's passage starts aft of the car, a deck down. */
     var lobby = null, cars = {}, carZ = null;
@@ -417,6 +502,9 @@
       p1 = carZ[0] - WALL_T;
     }
     var p0 = p1 - len;
+    /* Where the rooms off the passage hang from: its forward end, less how
+     * far it was run on forward under a raised cockpit. */
+    var pTop = p1 - lead;
     var passage = room('passage', 'passage', -PASSAGE_HW, PASSAGE_HW, p0, p1, PASSAGE_H, 'Passage');
     /* The bulkhead has thickness, and the plan's rooms are boxes that must
      * meet at a shared wall for a door to join them. So each door's box is
@@ -435,7 +523,7 @@
      * forward end. Its leaves slide fore and aft into the passage wall. */
     var quarters = null;
     if (crewed) {
-      var qx1 = -PASSAGE_HW - WALL_T, qz1 = p1 - 0.3;
+      var qx1 = -PASSAGE_HW - WALL_T, qz1 = pTop - 0.3;
       quarters = room('quarters', 'quarters', qx1 - W('quarters', QUARTERS_W), qx1, qz1 - qLen, qz1, QUARTERS_H, 'Crew quarters');
       quarters.side = -1;
       var zc = qz1 - 0.7;
@@ -461,7 +549,7 @@
     }
     var turret = null, medbay = null, engine = null, cargo = null;
     if (big) {
-      var zTop = p1 - SIDE_GAP;
+      var zTop = pTop - SIDE_GAP;
       if (gunners) {
         var tz1 = quarters ? quarters.z0 - SIDE_GAP - WALL_T : zTop;
         turret = sideRoom('turret', 'turret', -1, tz1, W('turret', TURRET_W), tLen, QUARTERS_H, 'Turret', 'Turret door');
@@ -487,7 +575,7 @@
      * in the floor. Its door is `lock` and it SEALS: airlock.js holds it
      * shut whenever the room is not at the ship's own pressure. */
     var portTop = turret ? turret.z0 - SIDE_GAP - WALL_T
-                : quarters ? quarters.z0 - SIDE_GAP - WALL_T : p1 - SIDE_GAP;
+                : quarters ? quarters.z0 - SIDE_GAP - WALL_T : pTop - SIDE_GAP;
     var lock = sideRoom('airlock', 'airlock', -1, portTop, Math.max(2 * rs.hw + 0.3, W('airlock', LOCK_W)), lockLen, LOCK_H, 'Airlock', 'Airlock door');
     var dLock = doors[doors.length - 1];
     dLock.id = 'lock'; dLock.seal = true;
@@ -777,9 +865,10 @@
       /* Low on the bulkhead, to port of the door, where a hand finds it
        * from the seat's side and nothing covers the glass. */
       var mkx1 = -DOOR_HW - 0.12, mkx0 = Math.max(-geom.sideX + 0.06, mkx1 - 0.55);
-      medkit = { x0: mkx0, x1: mkx1, z: geom.bulkZ };
-      item('medkit', (mkx0 + mkx1) / 2, geom.bulkZ + 0.3, 'Medical supplies',
-           { counter: [mkx0, geom.bulkZ, mkx1, geom.bulkZ + 0.24] });
+      /* Raised: on the bulkhead at the foot of the stair, on the deck. */
+      medkit = { x0: mkx0, x1: mkx1, z: doorFront, dy: -rise };
+      item('medkit', (mkx0 + mkx1) / 2, doorFront + 0.3, 'Medical supplies',
+           { counter: [mkx0, doorFront, mkx1, doorFront + 0.24] });
     }
 
     /* ---- THE DECKS (2026-10-25) ---------------------------------------------
@@ -897,7 +986,7 @@
     rooms.forEach(function (r) { roomDeck[r.id] = r.deck; });
     doors.forEach(function (d) {
       if (!d.deck) d.deck = decked ? (d.id === 'helm' || d.id === 'bridge' ? 'bridge' : roomDeck[d.a] || 'main') : 'main';
-      d.yOff = deckY ? deckY[d.deck] - geom.floorY : 0;
+      d.yOff = deckY ? deckY[d.deck] - geom.floorY : -rise;
     });
     if (!decked) items.forEach(function (it) { it.deck = 'main'; });
 
@@ -905,7 +994,10 @@
       kind: 'ship', hullId: opts.hullId || '', palette: paletteFor(opts.hullId, opts.libId),
       tower: !!(decked && TOWER_GLASS[opts.hullId]),
       rooms: rooms, doors: doors, items: items, spawn: spawn, aboard: aboard,
-      floorY: geom.floorY, k: k, bay: bay, size: size,
+      /* The deck's floor. A raised cockpit's is `raised.rise` above it
+       * (floorAt); every other hull's cockpit is on the deck. */
+      floorY: geom.floorY - rise, k: k, bay: bay, size: size,
+      raised: rz ? { rise: rise, run: run, fwd: rz.fwd, treads: rz.treads || 0, stepZ: stepZ, doorZ: doorFront } : null,
       stations: stations, bunks: bunks, bunkAt: bunkAt, sides: sides,
       turrets: turrets, beds: beds, crates: crates, drive: drive, second: second, medkit: medkit,
       ramp: rampSpec
@@ -1330,21 +1422,44 @@
     var dB = doorById(p, 'bridge'), dL = doorById(p, 'lock');
     var dH = doorById(p, 'helm'), dQ = doorById(p, 'quarters');
     var deck = roomByKind(p, 'bridgedeck'), qr = roomByKind(p, 'quarters');
+    /* Everything from the bridge door aft goes into a mesh of its own that
+     * is moved down to its deck at the end: on a decked hull the main deck
+     * (below), on a raised cockpit (RAISED) the deck the stair comes down
+     * to. Built at the cockpit's floor height like every leaf is. */
+    var shipRoom = room, shipPortals = portals, dyMain = 0, rs = p.raised;
     if (dH && deck) {
       /* The helm's bulkhead stays where the seat has always had it, rear
        * screens and all, with the doorway open as an arch; the bridge deck
        * is through it, and the sliding door at the deck's aft end. */
       bulkhead(room, pal, fy, dH.wall[1], g.sideX, cy, dH.wall[0], g.sideX, cy, true, [pal.bulk, pal.wall]);
-      boxRoom(room, deck.x0, fy, deck.z0, deck.x1, cy, deck.z1, pal.wall, pal.floor, pal.ceil, ['z0', 'z1']);
+      /* Raised (RAISED): the deck at the helm's height forward of its
+       * stair, which runs down aft of it to the bridge door. */
+      var dzs = rs ? rs.stepZ : deck.z0;
+      boxRoom(room, deck.x0, fy, dzs, deck.x1, cy, deck.z1, pal.wall, pal.floor, pal.ceil, ['z0', 'z1']);
       [-1, 1].forEach(function (s) {
         var x0 = s * 0.50 * k, x1 = s * 0.56 * k, y = cy - 0.006;
-        quad(room, [x0, y, deck.z0 + 0.25], [x1, y, deck.z0 + 0.25], [x1, y, deck.z1 - 0.25], [x0, y, deck.z1 - 0.25], pal.light);
+        quad(room, [x0, y, dzs + 0.25], [x1, y, dzs + 0.25], [x1, y, deck.z1 - 0.25], [x0, y, deck.z1 - 0.25], pal.light);
       });
       /* A hazard line down the middle of the deck: the way aft. */
-      quad(room, [-0.03, fy + 0.004, deck.z0], [0.03, fy + 0.004, deck.z0], [0.03, fy + 0.004, deck.z1], [-0.03, fy + 0.004, deck.z1], pal.hazard);
+      quad(room, [-0.03, fy + 0.004, dzs], [0.03, fy + 0.004, dzs], [0.03, fy + 0.004, deck.z1], [-0.03, fy + 0.004, deck.z1], pal.hazard);
       p.stations.forEach(function (st) { if (!st.cockpit) station(room, pal, fy, g.sideX, st); });
       if (p.tower) towerGlass(room, portals, pal, fy, cy, deck, dB, true);
-      bulkhead(room, pal, fy, dB.wall[1], g.sideX, cy, dB.wall[0], p.decks ? LOBBY_HW : PASSAGE_HW, fy + PASSAGE_H, true, [pal.wall, pal.passWall]);
+      if (rs) {
+        var cyS = stairMesh(room, pal, g, fy, cy, rs);
+        dyMain = -rs.rise;
+        room = mesh(); portals = mesh();
+        bulkhead(room, pal, fy, dB.wall[1], g.sideX, cyS + rs.rise, dB.wall[0], PASSAGE_HW, fy + PASSAGE_H, true, [pal.wall, pal.passWall]);
+      } else {
+        bulkhead(room, pal, fy, dB.wall[1], g.sideX, cy, dB.wall[0], p.decks ? LOBBY_HW : PASSAGE_HW, fy + PASSAGE_H, true, [pal.wall, pal.passWall]);
+      }
+    } else if (rs) {
+      /* The stair, in the cockpit's own mesh at its true heights; then the
+       * bulkhead at its foot, in the deck's, its cockpit face up to the
+       * cockpit's ceiling once it is moved down. */
+      var cyS2 = stairMesh(room, pal, g, fy, cy, rs);
+      dyMain = -rs.rise;
+      room = mesh(); portals = mesh();
+      bulkhead(room, pal, fy, dB.wall[1], g.sideX, cyS2 + rs.rise, dB.wall[0], PASSAGE_HW, fy + PASSAGE_H, true);
     } else {
       bulkhead(room, pal, fy, dB.wall[1], g.sideX, cy, dB.wall[0], p.decks ? LOBBY_HW : PASSAGE_HW, fy + PASSAGE_H, true);
     }
@@ -1355,7 +1470,6 @@
      * down to the main deck at the end. Door leaves are moved there by
      * their door's `yOff` (render.js), so they are built here at the
      * bridge's height like every other leaf. */
-    var shipRoom = room, shipPortals = portals, dyMain = 0;
     if (p.decks) {
       var lob = roomByKind(p, 'lobby'), dLB = doorById(p, 'lift-bridge');
       boxRoom(room, lob.x0, fy, lob.z0, lob.x1, fy + PASSAGE_H, lob.z1, pal.passWall, pal.passFloor, pal.ceil, ['z0', 'z1']);
@@ -1492,15 +1606,15 @@
     }
     p.stations.forEach(function (st) { if (st.cockpit) station(fittings, pal, fy, g.sideX, st); });
     if (p.medkit) {
-      var mk = p.medkit, mz = mk.z + 0.004;
+      var mk = p.medkit, mz = mk.z + 0.004, mfy = fy + (mk.dy || 0);
       /* Below the rear screens' panels, which come down to about knee
        * height on the bulkhead. */
-      box(fittings, mk.x0, fy + 0.06, mz, mk.x1, fy + 0.50, mz + 0.2, MEDCOL.cab);
+      box(fittings, mk.x0, mfy + 0.06, mz, mk.x1, mfy + 0.50, mz + 0.2, MEDCOL.cab);
       /* Its green band and the clasp, so it reads as the kit and not a box. */
-      quad(fittings, [mk.x0 + 0.03, fy + 0.40, mz + 0.204], [mk.x1 - 0.03, fy + 0.40, mz + 0.204],
-           [mk.x1 - 0.03, fy + 0.45, mz + 0.204], [mk.x0 + 0.03, fy + 0.45, mz + 0.204], MEDCOL.lit);
-      quad(fittings, [(mk.x0 + mk.x1) / 2 - 0.04, fy + 0.20, mz + 0.204], [(mk.x0 + mk.x1) / 2 + 0.04, fy + 0.20, mz + 0.204],
-           [(mk.x0 + mk.x1) / 2 + 0.04, fy + 0.30, mz + 0.204], [(mk.x0 + mk.x1) / 2 - 0.04, fy + 0.30, mz + 0.204], pal.rib);
+      quad(fittings, [mk.x0 + 0.03, mfy + 0.40, mz + 0.204], [mk.x1 - 0.03, mfy + 0.40, mz + 0.204],
+           [mk.x1 - 0.03, mfy + 0.45, mz + 0.204], [mk.x0 + 0.03, mfy + 0.45, mz + 0.204], MEDCOL.lit);
+      quad(fittings, [(mk.x0 + mk.x1) / 2 - 0.04, mfy + 0.20, mz + 0.204], [(mk.x0 + mk.x1) / 2 + 0.04, mfy + 0.20, mz + 0.204],
+           [(mk.x0 + mk.x1) / 2 + 0.04, mfy + 0.30, mz + 0.204], [(mk.x0 + mk.x1) / 2 - 0.04, mfy + 0.30, mz + 0.204], pal.rib);
     }
 
     /* THE SEAT, drawn only while you are out of it. */
@@ -1522,6 +1636,11 @@
       if (p.deckY.hangar !== undefined) hangarMesh(room, pal, p);
       car = carMesh(pal, p);
       tramCar = tramMesh(pal);
+    } else if (rs) {
+      merge(shipRoom, room, dyMain);
+      merge(shipPortals, portals, dyMain);
+      [lampOk, lampNo].forEach(function (lm) { lm.v = lm.v.map(function (v) { return [v[0], v[1] + dyMain, v[2]]; }); });
+      room = shipRoom; portals = shipPortals;
     }
 
     return {
@@ -1556,6 +1675,58 @@
   /* One bulkhead with a door through it: the face toward the front at z1
    * (half-width w1, up to y1), the face toward the back at z0 (w0, y0), and
    * the jambs and head of the opening between them. */
+  /* A RAISED COCKPIT'S STAIR (RAISED, 2026-11-02): between the bridge door
+   * at `doorZ` and the cockpit's old bulkhead line at `stepZ`, the width of
+   * the cockpit, two treads up from the deck to the cockpit's floor `fy`.
+   * Its side walls run from the deck to the cockpit's ceiling and it is
+   * roofed at the cockpit's ceiling, so from the seat looking aft the room
+   * simply goes on back and down to the door. */
+  function stairMesh(m, pal, g, fy, cy, rs) {
+    var x0 = -g.sideX, x1 = g.sideX, d0 = rs.doorZ, sz = rs.stepZ, y0 = fy - rs.rise;
+    var n = rs.treads || 0;
+    if (n > 0) {
+      /* The landing at the door, then `n` treads of equal rise up to the
+       * cockpit's floor at `stepZ`: each riser faces aft, each nosing a
+       * hazard edge. */
+      var tz = rs.run / (n + 1), dh = rs.rise / n;
+      quad(m, [x0, y0, d0], [x1, y0, d0], [x1, y0, d0 + tz], [x0, y0, d0 + tz], pal.floor);
+      for (var t = 1; t <= n; t++) {
+        var za = d0 + tz * t, zb = t === n ? sz : za + tz, ya = y0 + dh * (t - 1), yb = y0 + dh * t;
+        quad(m, [x0, ya, za], [x1, ya, za], [x1, yb, za], [x0, yb, za], pal.wall);
+        quad(m, [x0, yb, za], [x1, yb, za], [x1, yb, zb], [x0, yb, zb], pal.floor);
+        quad(m, [x0, yb + 0.003, za], [x1, yb + 0.003, za], [x1, yb + 0.003, za + 0.05], [x0, yb + 0.003, za + 0.05], pal.hazard);
+      }
+    } else {
+      /* No rise: the cockpit only moved, and the room runs back flat. */
+      quad(m, [x0, fy, d0], [x1, fy, d0], [x1, fy, sz], [x0, fy, sz], pal.floor);
+    }
+    /* Roofed at the cockpit's ceiling, or, where the cockpit is DOWN a
+     * stair (a negative rise), at the passage's, so the bridge door at
+     * the stair's head still fits under it; a soffit closes the step down
+     * to the cockpit's lower ceiling. */
+    var cs = Math.max(cy, y0 + PASSAGE_H);
+    [x0, x1].forEach(function (x) { quad(m, [x, Math.min(y0, fy), d0], [x, Math.min(y0, fy), sz], [x, cs, sz], [x, cs, d0], pal.wall); });
+    quad(m, [x0, cs, d0], [x1, cs, d0], [x1, cs, sz], [x0, cs, sz], pal.ceil);
+    if (cs > cy + 0.001) quad(m, [x0, cy, sz], [x1, cy, sz], [x1, cs, sz], [x0, cs, sz], pal.wall);
+    return cs;
+  }
+  /* How far above the deck's floor the floor is at (x, z) in plan `p`: a
+   * raised cockpit's `rise` up in it, eased up its stair, 0 everywhere
+   * else. The walker stands on it (main.js stepWalk) and her people do
+   * (npc.js). Eased over the whole stair rather than stepped tread by
+   * tread, so the eye climbs it instead of jumping. */
+  function floorAt(p, x, z) {
+    var rs = p && (p.raised || (p.ship && p.ship.raised));
+    if (!rs || (p.deck && p.deck !== 'main')) return 0;
+    var r = roomByKind(p, 'cockpit'), bd = roomByKind(p, 'bridgedeck');
+    var inR = function (q) { return q && x >= q.x0 && x <= q.x1 && z >= q.z0 && z <= q.z1; };
+    if (z < rs.doorZ || !(inR(r) || inR(bd))) return 0;
+    if (z >= rs.stepZ) return rs.rise;
+    if (rs.stepZ - rs.doorZ < 0.2) return rs.rise;
+    var u = (z - rs.doorZ - 0.1) / (rs.stepZ - rs.doorZ - 0.1);
+    return rs.rise * Math.max(0, Math.min(1, u));
+  }
+
   function bulkhead(m, pal, fy, z1, w1, y1, z0, w0, y0, bridge, cols) {
     var dh = fy + DOOR_H;
     var c1 = cols ? cols[0] : (bridge ? pal.bulk : pal.passWall);
@@ -2517,6 +2688,7 @@
     CAR_H: CAR_H, HANGAR: HANGAR,
     stationRoles: stationRoles, ROLE_NAME: ROLE_NAME, STATION_MAX: STATION_MAX,
     doorById: doorById, roomByKind: roomByKind,
+    RAISED: RAISED, raisedCockpit: raisedCockpit, floorAt: floorAt,
     rampShape: rampShape, rampMesh: rampMesh, rampFloor: rampFloor, rampPoint: rampPoint,
     LOCK_W: LOCK_W, LOCK_LAND: LOCK_LAND, RAMP_MAX: RAMP_MAX
   };
