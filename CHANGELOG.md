@@ -40,6 +40,61 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-03, her hull is solid when you walk under it; half a metre higher on her gear; a longer ramp)
+
+Astra, on foot in a hangar at the foot of her Talon's ramp: "interior of ship
+visible, no collision on underside so we're clipping through the bottom,
+please fix"; "the ramp should be longer"; and "the ship should sit about one
+half meter higher on the landing gear".
+
+- **Her underside is solid.** The clearance under a parked hull was sampled at
+  the middle of each half-metre cell only, so a keel fin narrower than a cell
+  (the Talon's, 5 cm off the floor) was invisible from every cell beside it;
+  only the walker's centre was asked, not the 0.3 m round it; and a head under
+  1.4 m of hull was squashed down to an eye 0.4 m off the floor instead of
+  being stopped. Now every triangle of her as drawn (the ramp's well, the
+  airlock cut, her legs) is clipped to every cell it crosses, the walker's
+  whole disc is asked, and the rule is two heads: under 1.83 m you crouch,
+  under 1.34 m she is solid. The eye is held 18 cm under her skin wherever
+  you are (the near plane's corners), so it cannot end up inside her while a
+  crouch eases down. On a Talon in her hangar, 791 of 14,476 cells are now
+  solid. The field is built once per hull and berth: 13-50 ms for the small
+  hulls, 240 ms for the Crawler, up to 390 ms for the Carrier.
+- **A lift has a way out of its pit.** The Crawler's lift comes down between
+  her tracks into a pit closed fore and aft by cross-members 0.66 m off the
+  ground, and her model has no door in them. A lift now has a lane straight
+  out to open ground where you duck under (13.7 m on the Crawler). This is a
+  model issue: a door in her skirt would fix it properly.
+- **Half a metre higher on her gear**, at station berths, ground ports, sea
+  pads and on open ground. A geared hull stands 0.5 m higher in her own frame
+  (the ground beside her, her hangar's floor, her ramp's drop), her legs are
+  drawn telescoped to meet the floor, and the sim carries her the same 0.5 m
+  higher off whatever deck the berth reports, every frame and along the
+  arrival rail. Hulls that sit on their bellies (Mule, Long Haul, Cutter,
+  Meridian, Leviathan, Capital, Crawler) are not lifted. Her feet stay on the
+  same patch of deck.
+- **A longer, gentler ramp.** Cut at 22 degrees instead of 30: the Talon's and
+  Kestrel's ramps are 8.7 m at 21 degrees (were 5.5 m at 28.5), the Mule's
+  9.3 m at 21 (7.0 at 28.5), the Cutter's 7.3 m at 21 (5.5 at 29), the Long
+  Haul's 10 m at 25 (8.5 at 29). A drop too tall for 22 degrees takes the
+  whole 10 m up to 33 degrees before it becomes a stair. A ramp stops short
+  of a gear leg in its path, which keeps the Bollard's at 8.0 m and 31
+  degrees (7.5 m at 29 before) and the Fighter's at 9.75 m and 29. The ramp
+  lies in the airlock's floor, so a longer ramp makes a longer airlock, and
+  it is never allowed to cost a hull a room the old ramp left her: the
+  Enforcer's stops at 6.8 m and 26 degrees (was 5.0 m at 29) so her cargo
+  bay stays, 1 m shorter than it was. Stairs (Dart, Samaritan, Trader,
+  Runner, Heavy Shuttle, Heavy Enforcer) stay stairs, 0.5-0.75 m longer.
+
+Bays: every geared hull still fits under every bay's ceiling at the new height
+except the Carrier, which was already 31 m over every ground-port and sea-pad
+ceiling before this change. Pinned in airlock.test (every hull in three hangars,
+the flood from hatch to door, the lift agreeing between the sim and the renderer
+at a station, a ground port and a sea pad, the ramp's slope, no room lost).
+
+**Saves:** survive. Nothing about the lift is stored: a ship saved docked at the
+old height stands at the new one on the first frame after it loads.
+
 ### Fixed (2026-11-03, docked at Mirven: the zoom, the floor, the doors and the lamps)
 
 From Astra's playtest of the Mirven start (seed `kawartha`, Threshold Dock).

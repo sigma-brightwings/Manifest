@@ -153,7 +153,10 @@ var lens = ['S', 'M', 'L', 'XL'].map(function (sz) {
 });
 /* A small ship's passage is as long as her airlock beside it needs, which
  * can be as long as a medium one's: never shorter. */
-check('a bigger ship has a longer passage (never a shorter one)', lens[0] <= lens[1] && lens[1] < lens[2] && lens[2] < lens[3],
+/* Since the 22° ramp (2026-11-03) that airlock - a 6.9 m ramp in its
+ * floor for this default 2.6 m drop - sets the passage for a large one
+ * too, so S, M and L can tie; a bigger ship's is still never the shorter. */
+check('a bigger ship has a longer passage (never a shorter one)', lens[0] <= lens[1] && lens[1] <= lens[2] && lens[2] < lens[3],
       lens.map(function (l) { return l.toFixed(1); }).join(' < '));
 check('the bulkhead is a metre and more behind the seat', t.geom.bulkZ <= -1.3, t.geom.bulkZ.toFixed(2) + ' m');
 

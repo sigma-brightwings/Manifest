@@ -11076,24 +11076,9 @@
     var op = Render.outsidePlan(s);
     return !!(op && op.ramp);
   }
-  /* Her measure, in her cockpit's metres: hull box, the ramp's foot, the
-   * floor her gear stands on, and how tall she is above it. */
-  function hangarSpec(ship) {
-    var d = Render.shipInterior ? Render.shipInterior(ship) : null;
-    var op = Render.outsidePlan ? Render.outsidePlan(ship) : null;
-    var hm = Render.hatchModel ? Render.hatchModel(ship) : null;
-    if (!d || !d.plan.ramp || !op || !hm || !Render.cockpitAt) return null;
-    var at = Render.cockpitAt(ship) || [0, 0, 0], Lm = Render.hullLength(ship) * 1000, rp = d.plan.ramp;
-    var hx0 = hm.lo[0] * Lm - at[0], hx1 = hm.hi[0] * Lm - at[0];
-    var hz0 = hm.lo[2] * Lm - at[2], hz1 = hm.hi[2] * Lm - at[2], top = hm.hi[1] * Lm - at[1];
-    var foot = { x: (rp.x0 + rp.x1) / 2, z: op.footZ };
-    /* `origin`: where her position is, in the same metres (walk.js
-     * placeShip centres a sea pad's plan on it, so the plan stands on the
-     * rig). */
-    return { box: [Math.min(hx0, foot.x - 1.5), Math.min(hz0, foot.z - 2.5), Math.max(hx1, foot.x + 1.5), hz1],
-             hull: [hx0, hz0, hx1, hz1], height: top - op.floorY, foot: foot, gy: op.floorY,
-             origin: { x: -at[0], z: -at[2] } };
-  }
+  /* Her measure, in her cockpit's metres (render.js hangarSpec, moved
+   * there 2026-11-03 so walk.test.js builds the same hangar). */
+  function hangarSpec(ship) { return Render.hangarSpec ? Render.hangarSpec(ship) : null; }
   /* The deck plan for this port with her hangar in it, built once per
    * port and ship (and per fleet here) and kept while she is berthed. */
   function hangarPlan() {
@@ -11120,19 +11105,11 @@
   }
   /* Her hull is solid on the hangar floor where her belly is too low to
    * get under, and her ramp is floor only when it is all the way down -
-   * render.js outsidePlan's own rule, asked in her metres. */
+   * render.js outsidePlan's own rule, asked in her metres (walk.js
+   * armHangar, 2026-11-03, so walk.test.js arms the plan it checks the
+   * same way). */
   function armHangar(plan) {
-    var H = plan.hangar;
-    if (!H || plan._hangarArmed) return;
-    var room = plan.rooms.filter(function (r) { return r.id === H.room; })[0];
-    plan.blocked = function (X, Z) {
-      if (!room || X < room.x0 || X > room.x1 || Z < room.z0 || Z > room.z1) return false;
-      var op = Render.outsidePlan(G.ship);
-      if (!op) return false;
-      var q = global.Walk.hangarToShip(H, X, Z);
-      return op.blocked(q.x, q.z);
-    };
-    plan._hangarArmed = true;
+    if (global.Walk.armHangar) global.Walk.armHangar(plan, function () { return Render.outsidePlan(G.ship); });
   }
   /* The deck's frame: her cockpit's, turned by theta and moved so the
    * hangar is where she stands in it, its floor her gear's. */
@@ -11164,23 +11141,34 @@
     if (rp.mode === 'lift') {
       if (inX && q.z <= rp.hinge && q.z >= rp.foot) {
         w.dy = Math.max(0, (fy - rp.drop * t) - H.gy);
-        if (t <= 0.001) boardFromHangar(q, fy);
-        return;
+        if (t <= 0.001) { boardFromHangar(q, fy); return; }
       }
     } else {
       var f = t >= 0.999 && inX ? SD.rampFloor(rp, fy, t, q.x, q.z) : null;
       if (f !== null) {
         w.dy = Math.max(0, f - H.gy);
-        if (q.z > rp.hinge - 0.35) boardFromHangar(q, f);
-        return;
+        if (q.z > rp.hinge - 0.35) { boardFromHangar(q, f); return; }
       }
     }
-    /* Under her belly: down on your haunches where you cannot stand, and
-     * the eye lower still where even that does not clear. */
-    var clear = op.clearAt(q.x, q.z), EYE = global.Walk.EYE || 1.65, CE = global.Walk.CROUCH_EYE || 1.1;
-    /* A head is about 15 cm over the eye: under 1.8 m of her you stoop. */
-    if (clear < EYE + 0.15) w.mustCrouch = true;
-    if (clear < CE + 0.3) w.eyeDy = Math.max(-0.7, clear - 0.3 - global.Walk.eyeOf(w));
+    /* Her belly over your head, on the floor and up her ramp alike - the
+     * ramp used to return before this, so the head went on up into her
+     * wherever the ramp passed under her skin. */
+    bellyHead(w, op, q.x, q.z);
+  }
+  /* UNDER HER BELLY (2026-11-03): down on your haunches where a standing
+   * head will not clear (lower than a crouched one, outsidePlan.blocked
+   * has already stopped you), and the eye held a near plane under her skin
+   * whatever you are doing - the crouch eases, and a walk into lower skin
+   * is faster than the ease.
+   * `w.dy` is what you stand on above her floor; `x, z` in her metres. */
+  function bellyHead(w, op, x, z) {
+    if (!op || !op.headroom) return;
+    var head = op.headroom(x, z);
+    if (!(head < Infinity)) return;
+    var M = op.HEAD_MARGIN || 0.18;
+    if (head < (op.STAND_CLEAR || 1.83)) w.mustCrouch = true;
+    var eye = global.Walk.eyeOf(w);
+    w.eyeDy = Math.min(0, head - M - eye);
   }
   /* Up her ramp and aboard: the same walker on her main deck, where you
    * stood, facing the way you were. */
@@ -11469,8 +11457,13 @@
     var t = (walkHull().airlock && walkHull().airlock.ramp) || 0, fy = lockFloorY();
     var run = rp.mode === 'lift' ? 0 : rp.len * Math.cos(rp.angle * t);
     var inX = w.x >= rp.x0 && w.x <= rp.x1;
-    w.eyeDy = 0;
-    if (rp.mode === 'lift') return;           // ridden, not walked: rideLift
+    w.eyeDy = 0; w.mustCrouch = false;
+    if (rp.mode === 'lift') {
+      /* Ridden, not walked (rideLift) - but on the ground round her the
+       * belly rule holds as it does for a ramp. */
+      if (w.outside) bellyHead(w, w.plan, w.x, w.z);
+      return;
+    }
     if (!w.outside) {
       var onMain = !w.plan.deck || w.plan.deck === 'main';
       var f = onMain && t >= 0.999 && inX ? SD.rampFloor(rp, fy, t, w.x, w.z) : null;
@@ -11509,10 +11502,9 @@
       w.dy = SD.rampFloor(rp, fy, t, w.x, Math.min(w.z, rp.hinge)) - w.plan.floorY;
       return;
     }
-    /* Under her belly, you duck. */
-    var clear = op2.clearAt ? op2.clearAt(w.x, w.z) : Infinity;
-    var EYE = global.Walk.EYE || 1.65;
-    if (clear < EYE + 0.2 && !(inX && w.z <= rp.hinge && w.z >= op2.footZ - 0.3)) w.eyeDy = Math.max(-1.3, clear - 0.2 - EYE);
+    /* Under her belly, you duck - the same rule as her hangar's floor
+     * (bellyHead), on the ramp too. */
+    bellyHead(w, op2, w.x, w.z);
   }
   /* UP THE STAIR INTO A RAISED COCKPIT (shipdeck.js RAISED, 2026-11-02).
    * Astra chose the Talon's cockpit up in her nose block, a step up from
@@ -11845,7 +11837,10 @@
     if (typeof idx !== 'number') idx = a.berth = (mine + 1) % Math.max(1, cap);
     var bs = Sim.berthState(a.port, G.sys, G.t, idx);
     var s = a.ship;
-    s.pos = bs ? bs.pos : V.clone(G.ship.pos);
+    /* On her own gear's height over the berth, as Sim.updateDockedShip
+     * stands yours (standLiftKm, 2026-11-03). */
+    var upL = bs && bs.basis && bs.basis.up && Sim.standLiftKm ? Sim.standLiftKm(s) : 0;
+    s.pos = bs ? (upL ? V.addScaled(bs.pos, bs.basis.up, upL) : bs.pos) : V.clone(G.ship.pos);
     s.vel = bs ? bs.vel : V.clone(G.ship.vel || V.zero());
     s.fwd = G.ship.fwd; s.up = G.ship.up; s.right = G.ship.right;
   }

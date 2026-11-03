@@ -665,6 +665,24 @@
     br.label = br.label.replace(/^Berth/, 'Hangar');
     return H;
   }
+  /* HER HULL IS SOLID ON THE HANGAR FLOOR (2026-10-31; moved here from
+   * main.js 2026-11-03 so walk.test.js arms the same plan the game does).
+   * `opOf()` is her outside plan (render.js outsidePlan: her clearance
+   * field, her ramp, the rails), asked in her own metres: where she will
+   * not let you, the deck will not either. Only inside her hangar. */
+  function armHangar(plan, opOf) {
+    var H = plan.hangar;
+    if (!H || plan._hangarArmed) return;
+    var room = plan.rooms.filter(function (r) { return r.id === H.room; })[0];
+    plan.blocked = function (X, Z) {
+      if (!room || X < room.x0 || X > room.x1 || Z < room.z0 || Z > room.z1) return false;
+      var op = opOf();
+      if (!op) return false;
+      var q = toShip(H, X, Z);
+      return op.blocked(q.x, q.z);
+    };
+    plan._hangarArmed = true;
+  }
   function toStation(H, sx, sz) { return { x: sx * H.cos + sz * H.sin + H.X0, z: -sx * H.sin + sz * H.cos + H.Z0 }; }
   function toShip(H, X, Z) {
     var dx = X - H.X0, dz = Z - H.Z0;
@@ -1316,7 +1334,7 @@
   var Walk = {
     EYE: EYE, RADIUS: RADIUS, WALK: WALK, RUN: RUN, REACH: REACH,
     CROUCH_EYE: CROUCH_EYE, CROUCH: CROUCH, eyeOf: eyeOf, selfFigure: selfFigure, selfPose: selfPose,
-    hangarToShip: toShip, hangarToStation: toStation, HANGAR_MARGIN: HANGAR_MARGIN,
+    hangarToShip: toShip, hangarToStation: toStation, HANGAR_MARGIN: HANGAR_MARGIN, armHangar: armHangar,
     layout: layout, standable: standable, roomAt: roomAt,
     start: start, step: step, look: look, facing: facing, draw: draw,
     sizeClass: sizeClass, meshFor: meshFor, panesFor: panesFor,

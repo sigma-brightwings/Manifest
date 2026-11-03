@@ -5401,6 +5401,40 @@
     ship.up = V.cross(ship.right, ship.fwd);
   }
 
+  /* HER OWN HEIGHT ON HER GEAR, on top of whatever deck the berth reports
+   * (2026-11-03). Astra: "the ship should sit about one half meter higher
+   * on the landing gear". render.js hullFit stands a GEARED hull GEAR_LIFT
+   * higher in her own frame (`gearLift`, metres) - the ground beside her,
+   * her hangar's floor, her ramp's drop, her legs drawn telescoped to meet
+   * it - so the berth has to carry her that much higher too, or the
+   * renderer's legs push half a metre into a deck the sim never moved.
+   *
+   * It is a HULL term, not a port one. An earlier pass added it to
+   * generate.js cappedStandoff, which lifted every hull at every berth -
+   * the gearless ones (Mule, Long Haul, Cutter...) as well, which sit on
+   * their bellies and would have hung half a metre over the deck - and
+   * moved the number the deck work on the camera/cutaway branch reads as
+   * "the berth's own deck". So berthState still says where the berth is,
+   * and this says where THIS hull stands on it. Km, along the deck's up. */
+  function standLiftKm(ship) {
+    var R = global.Render;
+    if (!ship || !ship.hullId || !R || !R.hullFit) return 0;
+    var f = R.hullFit(ship);
+    return f && f.gearLift > 0 ? f.gearLift / 1000 : 0;
+  }
+  /* arrivalPose for THIS ship: the same rail, carried her stand height up
+   * off it the whole way, so the hand-over to the berth (dockShip, then
+   * updateDockedShip) does not pop her half a metre at the end of the ride
+   * and the pull-in measures from where she is actually drawn. */
+  function shipArrivalPose(ship, port, sys, t, berth, el) {
+    var pose = arrivalPose(port, sys, t, berth, el);
+    var lift = standLiftKm(ship);
+    if (!pose || !lift) return pose;
+    var b = portBasis(port, sys, t);
+    if (b && b.up) pose.pos = V.addScaled(pose.pos, b.up, lift);
+    return pose;
+  }
+
   /* Recompute a docked ship's world position/velocity from wherever its
    * target is right now. Call this every frame instead of advanceShip while
    * ship.docked is set. */
@@ -5423,7 +5457,10 @@
        * stands on the floor that is drawn rather than near it. */
       var bs = berthState(target, sys, t, ship.dockOffset && ship.dockOffset.berth);
       if (bs) {
-        ship.pos = bs.pos;
+        /* Her stand height over the berth (standLiftKm): every frame, so a
+         * save made docked before the lift loads at the new height on its
+         * first frame - nothing about it is stored. */
+        ship.pos = bs.basis && bs.basis.up ? V.addScaled(bs.pos, bs.basis.up, standLiftKm(ship)) : bs.pos;
         ship.vel = bs.vel;
         /* ON A SEA PAD SHE TURNS WITH THE WORLD TOO (2026-11-02). Her
          * attitude was set once, at dockShip, and held in absolute space
@@ -5474,7 +5511,7 @@
     if (off && off.station) {
       var sbs = berthState(target, sys, t, off.berth);
       if (sbs) {
-        ship.pos = sbs.pos;
+        ship.pos = sbs.basis && sbs.basis.up ? V.addScaled(sbs.pos, sbs.basis.up, standLiftKm(ship)) : sbs.pos;
         ship.vel = sbs.vel;
         return target;
       }
@@ -6601,7 +6638,7 @@
     if (!ship || !port) return false;
     if (!arrivalPath(port, 0)) return false;
     var berth = assignBerth(ship, port);
-    var pose0 = arrivalPose(port, sys, t, berth, 0);
+    var pose0 = shipArrivalPose(ship, port, sys, t, berth, 0);
     if (!pose0) return false;
 
     /* DRAWN IN, NOT TELEPORTED. The capture envelope is kilometres across
@@ -6671,7 +6708,7 @@
     if (ship.arrival.reverse) {
       var dur = ship.arrival.dur;
       if (el >= dur) {
-        var endPose = arrivalPose(port, sys, t, ship.arrival.berth, 0);
+        var endPose = shipArrivalPose(ship, port, sys, t, ship.arrival.berth, 0);
         var entry = ship.arrival.entry;
         var fromBerth = ship.arrival.berth;
         ship.arrival = null;
@@ -6722,7 +6759,7 @@
         ship.departed = { port: port.id, berth: typeof entry === 'number' ? entry : 0 };
         return null;
       }
-      var poseR = arrivalPose(port, sys, t, ship.arrival.berth, Math.max(0, dur - el));
+      var poseR = shipArrivalPose(ship, port, sys, t, ship.arrival.berth, Math.max(0, dur - el));
       /* A pose that cannot be built this instant (a nose turning through
        * dead ahead of the frame's up) is skipped, not the ride abandoned:
        * abandoning it left the hull wherever it was, under the ground. */
@@ -6742,7 +6779,7 @@
       return null;
     }
     var lead = ship.arrival.lead || 0;
-    var pose = arrivalPose(port, sys, t, ship.arrival.berth, Math.max(0, el - lead));
+    var pose = shipArrivalPose(ship, port, sys, t, ship.arrival.berth, Math.max(0, el - lead));
     if (!pose) { ship.arrival = null; dockShip(ship, port, sys, t); return null; }
     if (el < lead && ship.arrival.from) {
       /* The pull-in: the rail's first pose, plus whatever of the starting
@@ -6950,8 +6987,10 @@
       if (basis0 && Gen0 && Gen0.bayGeometry) {
         var g0 = Gen0.bayGeometry(target);
         var r0 = target.radius || 1;
+        /* Her own stand height on top (standLiftKm), as in her berth, so
+         * the hand-over is still a step UP from where she stood. */
         ship.pos = V.addScaled(basis0.entrance.pos, basis0.up,
-                               (g0.floorZ + g0.lift + g0.standoff * 2) * r0);
+                               (g0.floorZ + g0.lift + g0.standoff * 2) * r0 + standLiftKm(ship));
         ship.vel = V.clone(basis0.entrance.vel);
       } else {
         ship.pos = V.addScaled(ship.pos, away, target.radius * 0.5);
@@ -8071,7 +8110,7 @@
     updateDockedShip: updateDockedShip,
     controlState: controlState, controlInRange: controlInRange,
     beginArrival: beginArrival, stepArrival: stepArrival,
-    arrivalActive: arrivalActive, arrivalPose: arrivalPose,
+    arrivalActive: arrivalActive, arrivalPose: arrivalPose, shipArrivalPose: shipArrivalPose, standLiftKm: standLiftKm,
     stepPadHold: stepPadHold, PAD_HOLD_CLEAR: PAD_HOLD_CLEAR, PAD_HOLD_MAX: PAD_HOLD_MAX,
     beginTow: beginTow, stepTow: stepTow, towActive: towActive,
     cancelTow: cancelTow, TOW_EASE: TOW_EASE,

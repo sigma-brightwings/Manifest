@@ -95,16 +95,40 @@
   var LOCK_W = 2.4;                        // across the ship
   var LOCK_LAND = 1.6;                     // the landing: inner door to the ramp's head
   var RAMP_HW = { S: 0.6, M: 0.75, L: 0.85, XL: 1.0 };
-  var RAMP_SLOPE = 30 * Math.PI / 180, STAIR_SLOPE = 42 * Math.PI / 180;
+  /* A LONGER, GENTLER RAMP (2026-11-03). Astra: "the ramp should be
+   * longer", asked the same day as her ship standing half a metre higher
+   * on her gear (render.js GEAR_LIFT). It was cut at 30°: 5.5 m of ramp at
+   * 28.5° on a Talon, which is a stair's pitch with no treads, and the
+   * lift alone would have steepened it (6.5 m at 28.7° once the room was
+   * re-sized for the higher deck). 22° is about 1 in 2.5 - still steeper
+   * than a building's ramp (1 in 12) but the pitch of a loading ramp or a
+   * ship's gangway, walkable upright without reaching for the rail; on a
+   * Talon that is 8.7 m of ramp at 21.1°. A drop too tall for 22° inside
+   * RAMP_MAX no longer jumps straight to a 40° stair: it takes the whole
+   * RAMP_MAX at whatever pitch that gives, up to 33° (RAMP_STEEP: the old
+   * cut was 30°, and the Bollard, whose ramp has to stop short of a gear
+   * door at 8 m, needs 32.1° for her room's quarter-metre drop - 31.3° as
+   * built - to stay a ramp rather than become a 41° stair), and only past
+   * that is it a stair. Measured over every hull
+   * with her lifted drop: every room stays inside her (airlock.test.js). */
+  var RAMP_SLOPE = 22 * Math.PI / 180, RAMP_STEEP = 33 * Math.PI / 180, STAIR_SLOPE = 42 * Math.PI / 180;
+  /* The old cut, kept as the yardstick render.js shipInterior plans against:
+   * a longer ramp is never allowed to cost her a room that 30° left her. */
+  var RAMP_CUT_SLOPE = 30 * Math.PI / 180;
   var RAMP_MAX = 10.0;                     // m of ramp a room is allowed to hold
   var LIFT_LEN = 2.6;                      // m, a lift platform, fore and aft
-  function rampShape(drop, size) {
+  /* `maxLen` (optional): the longest ramp her own hull leaves room for
+   * under her - render.js shipInterior measures where her gear legs stand
+   * in the ramp's path, so a lengthened ramp does not run through a leg
+   * (the Kestrel's and the Bollard's did, measured 2026-11-03). */
+  function rampShape(drop, size, maxLen) {
     drop = drop > 0 ? drop : 2.6;
-    var hw = RAMP_HW[size] || 0.75;
+    var hw = RAMP_HW[size] || 0.75, MAX = maxLen > 0 ? Math.min(RAMP_MAX, maxLen) : RAMP_MAX;
     var len = drop / Math.sin(RAMP_SLOPE);
-    if (len <= RAMP_MAX) return { mode: 'ramp', len: Math.max(1.6, len), angle: Math.asin(Math.min(1, drop / Math.max(1.6, len))), drop: drop, hw: hw };
+    if (len <= MAX) return { mode: 'ramp', len: Math.max(1.6, len), angle: Math.asin(Math.min(1, drop / Math.max(1.6, len))), drop: drop, hw: hw };
+    if (drop / MAX <= Math.sin(RAMP_STEEP) + 1e-9) return { mode: 'ramp', len: MAX, angle: Math.asin(drop / MAX), drop: drop, hw: hw };
     len = drop / Math.sin(STAIR_SLOPE);
-    if (len <= RAMP_MAX) return { mode: 'stair', len: len, angle: STAIR_SLOPE, drop: drop, hw: hw };
+    if (len <= MAX) return { mode: 'stair', len: len, angle: STAIR_SLOPE, drop: drop, hw: hw };
     return { mode: 'lift', len: LIFT_LEN, angle: 0, drop: drop, hw: Math.max(hw, 1.0) };
   }
   /* How near a sliding door has to be before it opens for you, and how long
@@ -465,7 +489,7 @@
     if (med) med[0] = W('medbay', med[0]);
     if (eng) eng[0] = W('engine', eng[0]);
     /* The airlock is the last room down the port side, on every hull. */
-    var rs = rampShape(opts.rampDrop, size);
+    var rs = rampShape(opts.rampDrop, size, opts.rampMax);
     /* Fitted (planFitted): a narrower ramp, where her hull will not take
      * an airlock as wide as the usual one round it. */
     if (opts.rampHW > 0) rs.hw = Math.min(rs.hw, opts.rampHW);
@@ -2690,7 +2714,7 @@
     doorById: doorById, roomByKind: roomByKind,
     RAISED: RAISED, raisedCockpit: raisedCockpit, floorAt: floorAt,
     rampShape: rampShape, rampMesh: rampMesh, rampFloor: rampFloor, rampPoint: rampPoint,
-    LOCK_W: LOCK_W, LOCK_LAND: LOCK_LAND, RAMP_MAX: RAMP_MAX
+    LOCK_W: LOCK_W, LOCK_LAND: LOCK_LAND, RAMP_MAX: RAMP_MAX, RAMP_SLOPE: RAMP_SLOPE, RAMP_CUT_SLOPE: RAMP_CUT_SLOPE
   };
 
   global.ShipDeck = ShipDeck;
