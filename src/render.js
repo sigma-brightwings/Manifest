@@ -11666,6 +11666,37 @@
   }
 
 
+  /* Names that would overprint, stacked (main.js placeShipTags, and the
+   * reasons there). `tags` { text, x, y, pri }; `taken` boxes { x, y, w, h }
+   * already drawn; `reserved` boxes { x0, x1, y0, y1 } to keep off
+   * (hudReadoutBoxes); `foot` the view's usable bottom; `widthOf` measures
+   * a text. Returns the drawn ones as { q, x, y, more }, where `more` is
+   * how many names lost their place to this one. Pure: airdata.test.js
+   * holds it to the boxes. */
+  var STACK_ROWS = [0, 13, -13, 26, -26];
+  function stackLabels(tags, taken, reserved, foot, widthOf) {
+    var list = tags.slice().sort(function (a, b) { return b.pri - a.pri; });
+    var boxes = (taken || []).slice(), placed = [];
+    for (var i = 0; i < list.length; i++) {
+      var q = list[i], tw = widthOf(q.text), at = null, firstHit = null;
+      for (var r = 0; r < STACK_ROWS.length && !at; r++) {
+        var y = q.y + STACK_ROWS[r];
+        if (reserved) y = labelOffReadouts(q.x, y, tw, reserved, foot);
+        var box = { x: q.x - 2, y: y - 10, w: tw + 4, h: 13 }, hit = null;
+        for (var j = 0; j < boxes.length && !hit; j++) {
+          var o = boxes[j];
+          if (box.x < o.x + o.w && box.x + box.w > o.x && box.y < o.y + o.h && box.y + box.h > o.y) hit = o;
+        }
+        if (!hit) at = { box: box, y: y };
+        else if (!firstHit) firstHit = hit;
+      }
+      if (!at) { if (firstHit && firstHit.tag) firstHit.tag.more++; continue; }
+      var rec = { x: at.box.x, y: at.box.y, w: at.box.w, h: at.box.h, tag: { q: q, x: q.x, y: at.y, more: 0 } };
+      boxes.push(rec); placed.push(rec.tag);
+    }
+    return placed;
+  }
+
   function fmtG(g) {
     var a = Math.abs(g);
     return a < 10 ? g.toFixed(1) : Math.round(g).toString();
@@ -16763,7 +16794,7 @@
     drawFlightPathMarker: drawFlightPathMarker,
     drawBankScale: unblurred(drawBankScale),
     drawHeadingTape: drawHeadingTape,
-    drawAirData: drawAirData, hudReadoutBoxes: hudReadoutBoxes, labelOffReadouts: labelOffReadouts,
+    drawAirData: drawAirData, hudReadoutBoxes: hudReadoutBoxes, labelOffReadouts: labelOffReadouts, stackLabels: stackLabels,
     facingInfo: facingInfo, drawFacingCue: drawFacingCue,
     airSpeedReadout: airSpeedReadout, altitudeReadout: altitudeReadout,
     vsReadout: vsReadout, airReadout: airReadout

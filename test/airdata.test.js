@@ -318,5 +318,37 @@ console.log('--- the world\'s labels keep off the readouts (2026-11-03) ---');
   });
 })();
 
+console.log('--- ships in one berth do not overprint each other (2026-11-03) ---');
+(function () {
+  /* Terminus Downport (Cydoren): three ships in the pit, their names all
+   * written at the same few pixels. Seven at one spot, beside the port's
+   * own name already placed: none of the drawn names may touch another or
+   * the port's, the extra ones are counted on one that was drawn, and
+   * nothing goes into the hint line at the foot of the view. */
+  var tags = [];
+  for (var i = 0; i < 7; i++) tags.push({ text: ['Redsail Tender', 'Coldwater Lighter', 'Overwater Wain', 'Juno Runner',
+                                               'Halcyon Carrier', 'Fender 6  [port tug]', 'Ironwake Packet'][i],
+                                       x: 600 + i * 0.4, y: 440 + i * 0.3, pri: 10 - i });
+  var portBox = { x: 640, y: 466, w: 120, h: 13 };
+  var foot = 478, reserved = [{ id: 'foot', x0: 0, x1: 1280, y0: foot - 21, y1: 760 }];
+  var placed = Render.stackLabels(tags, [portBox], reserved, foot, function (t) { return t.length * 6.6; });
+  var boxes = placed.map(function (p) { return { x: p.x - 2, y: p.y - 10, w: p.q.text.length * 6.6 + 4, h: 13 }; });
+  var touch = 0;
+  for (var a = 0; a < boxes.length; a++) {
+    var A = boxes[a];
+    if (A.x < portBox.x + portBox.w && A.x + A.w > portBox.x && A.y < portBox.y + portBox.h && A.y + A.h > portBox.y) touch++;
+    if (A.y + A.h > foot - 21) touch++;
+    for (var b = a + 1; b < boxes.length; b++) {
+      var B = boxes[b];
+      if (A.x < B.x + B.w && A.x + A.w > B.x && A.y < B.y + B.h && A.y + A.h > B.y) touch++;
+    }
+  }
+  var more = placed.reduce(function (n, p) { return n + p.more; }, 0);
+  check('no two ship names, the port\'s name or the hint line overlap', touch === 0, touch + ' overlaps, ' + placed.length + ' drawn');
+  check('several are drawn, stacked, and every one left out is counted on one that is',
+        placed.length >= 3 && placed.length + more === tags.length, placed.length + ' drawn + ' + more + ' counted');
+  check('the first by priority keeps its own spot', placed[0].q.text === 'Redsail Tender' && placed[0].y === 440);
+})();
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

@@ -9507,6 +9507,7 @@
   function drawTraffic(ctx, cam) {
     var list = Sim.shipsAll(G.sys, G.t);
     if (!list.length) return;
+    var tags = [];
     var blink = (performance.now() / 1000) % 2;
 
     for (var i = 0; i < list.length; i++) {
@@ -9602,15 +9603,38 @@
       // Name only when it is genuinely nearby; otherwise the sky fills with
       // labels for ships you cannot see.
       if (lenPx > 2.2 || (s.spec && s.spec.live)) {
-        ctx.save();
-        ctx.font = 'bold 11px ui-monospace, monospace';
-        ctx.fillStyle = s.hostile ? 'rgba(255,150,130,0.9)' : 'rgba(190,215,240,0.75)';
         var tag = s.name;
         if (s.kind !== 'trade') tag += '  [' + s.className + ']';
-        ctx.fillText(tag, sp.x + 9, sp.y + 3);
-        ctx.restore();
+        tags.push({ text: tag, x: sp.x + 9, y: sp.y + 3, hostile: !!s.hostile,
+                    pri: (s.hostile ? 1e6 : 0) + (s.spec && s.spec.live ? 1e5 : 0) + lenPx });
       }
     }
+    placeShipTags(ctx, tags, cam);
+  }
+
+  /* SHIP NAMES THAT DO NOT OVERPRINT (2026-11-03). Each ship's name used
+   * to be written beside her wherever she was, and a ground port's pit
+   * with four ships berthed in it is four names on one spot — seen at
+   * Terminus Downport as an unreadable smear of "Coldwater Lighter" and
+   * three others. They are placed now as the bodies' names are
+   * (placeLabels, whose boxes they also keep off — the port's own name
+   * among them): the hostile and the awake first, then the larger on
+   * screen. A name that would land on one already placed tries the rows
+   * just under and over its own; one with nowhere to go is not drawn, and
+   * the name it lost to says "+1", so a crowded berth reads as crowded
+   * rather than as one ship. In the cockpit they keep off the glass's
+   * readouts too. */
+  function placeShipTags(ctx, tags, cam) {
+    if (!tags.length) return;
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    var placed = Render.stackLabels(tags, labelBoxes, labelHud, labelFoot,
+                                    function (t) { return ctx.measureText(t).width; });
+    placed.forEach(function (t) {
+      ctx.fillStyle = t.q.hostile ? 'rgba(255,150,130,0.9)' : 'rgba(190,215,240,0.75)';
+      ctx.fillText(t.q.text + (t.more ? '  +' + t.more : ''), t.x, t.y);
+    });
+    ctx.restore();
   }
 
   /* ---- shields, and what a hit does to one ------------------------------
@@ -17652,12 +17676,21 @@
     return Render.hudReadoutBoxes(w, hv, lv.body.name.toUpperCase(), Math.min(hv, deckTop(h)));
   }
 
+  /* What placeLabels drew this frame, for the ships' names after it
+   * (placeShipTags) to keep off. Reset by it every frame it runs. */
+  var labelBoxes = [], labelHud = null, labelFoot = 0;
   function placeLabels(ctx, queue, w, h, hv) {
+    labelBoxes = [];
     queue.sort(function (a, b) { return b.pri - a.pri; });
     ctx.save();
     ctx.font = 'bold 12px ui-monospace, SFMono-Regular, Menlo, monospace';
     var taken = [];
-    var hud = cockpitReadoutBoxes(w, hv || h, h);
+    labelFoot = Math.min(hv || h, deckTop(h));
+    /* Outside the cockpit there are no readouts on the glass, but the
+     * key-hint line along the foot of the view is still there, and a
+     * crowded berth's stacked names ran down into it. */
+    var hud = cockpitReadoutBoxes(w, hv || h, h) || [{ id: 'foot', x0: 0, x1: w, y0: labelFoot - 21, y1: h + 40 }];
+    labelHud = hud;
     for (var i = 0; i < queue.length; i++) {
       var q = queue[i];
       var x = q.sp.x + q.offset, y = q.sp.y + 3;
@@ -17665,7 +17698,7 @@
       var tw = ctx.measureText(q.text).width;
       /* Clear of the cockpit's readouts (Render.hudReadoutBoxes): a planet
        * just under the nose printed its name across the PITCH line. */
-      if (hud) y = Render.labelOffReadouts(x, y, tw, hud, Math.min(hv || h, deckTop(h)));
+      if (hud) y = Render.labelOffReadouts(x, y, tw, hud, labelFoot);
       var box = { x: x - 2, y: y - 10, w: tw + 4, h: 13 };
       var clash = false;
       for (var j = 0; j < taken.length; j++) {
@@ -17675,6 +17708,7 @@
       }
       if (clash) continue;
       taken.push(box);
+      labelBoxes.push(box);
       ctx.fillStyle = q.color;
       ctx.globalAlpha = 0.92;
       ctx.fillText(q.text, x, y);
