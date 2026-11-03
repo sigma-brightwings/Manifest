@@ -3672,6 +3672,20 @@
      * geometry. */
     var leaf = odd ? 0.95 : 1;
     var ROWS = [1.00, 0.95, 1.04, 0.97, 1.02, 0.94, 1.0];
+    /* AND THE CROWN A STEP DARKER (2026-11-03, third round). Under a high
+     * sun the crowns still washed out — measured at Linis's Low Strip with
+     * the sun 72 degrees up, crown and shoulder read 161 and 154 of 255, a
+     * pale sky-blue with nothing between them, so the dome lost its top.
+     * A plate facing straight up takes the sun's full cosine AND the whole
+     * sky's fill (gl.js uSkyFill, a third again), where the shoulder sees
+     * half the sky and the sun at a slant; the same paint all over is
+     * therefore brightest exactly where the eye looks for the curve. So the
+     * rows are toned from 0.80 at the crown back to the plate's own grey
+     * at the foot — about the ratio of the light the two receive at noon —
+     * which keeps the crown in range overhead and, under a low sun, gives
+     * the dome a darker top to read its shape by. Row i = 0 is the crown;
+     * the hazard band (the last row) is left alone. */
+    var CROWN_TONE = [0.80, 0.84, 0.88, 0.92, 0.96, 1.0, 1.0];
     [[0, '#8c969e', '#6c747b', '#d9b23a'], [0.0012, '#59626a', '#4a5158', '#59626a']].forEach(function (skin, inner) {
       var base = m.v.length;
       for (var i = 0; i <= NA; i++) {
@@ -3684,7 +3698,7 @@
         for (j = 0; j < NU; j++) {
           var a0 = base + i * (NU + 1) + j, a1 = a0 + 1, b0 = a0 + NU + 1, b1 = b0 + 1;
           var col = i === NA - 1 ? skin[3] : (j === 0 || j === NU - 1) ? skin[2] : skin[1];
-          if (!inner && i !== NA - 1) col = petalShade(col, leaf * ROWS[i] * (j === 2 ? 1.03 : 1));
+          if (!inner && i !== NA - 1) col = petalShade(col, leaf * ROWS[i] * CROWN_TONE[i] * (j === 2 ? 1.03 : 1));
           m.f.push([a0, b0, b1]); m.c.push(col);
           m.f.push([a0, b1, a1]); m.c.push(col);
         }
