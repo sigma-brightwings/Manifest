@@ -6519,7 +6519,14 @@
        * the leg so a door is caught half open rather than popping. */
       gates: {
         apron: mixGate(L.apron, LEGS[Math.max(0, leg - 1)].apron, u),
-        inner: mixGate(L.inner, LEGS[Math.max(0, leg - 1)].inner, u),
+        /* On a route through a heavy bay the transfer leg starts at the L
+         * stand and drives out through that bay's inner gate, so the gate
+         * shuts behind her over the LAST part of the leg, not the first
+         * (2026-11-03: it has leaves now, and shut over the first 35% they
+         * closed on the hull before it reached them). */
+        inner: (leg === ROUTED_TRANSFER_LEG && typeof path.entry === 'number')
+          ? LEGS[leg - 1].inner + (L.inner - LEGS[leg - 1].inner) * Math.max(0, Math.min(1, (u - 0.65) / 0.35))
+          : mixGate(L.inner, LEGS[Math.max(0, leg - 1)].inner, u),
         lift: L.id === 'descend' ? u : L.lift,
         bay: mixGate(L.bay, LEGS[Math.max(0, leg - 1)].bay, u),
         /* THE FAR BERTH'S INNER GATE (2026-11-03), 0 open and 1 sealed like

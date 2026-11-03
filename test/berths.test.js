@@ -717,6 +717,9 @@ console.log('--- and the doors are doors ---');
        * and a hatch is there-or-not like a field. transfer.test.js pins
        * both — where the car is drawn, and what you hit. */
       if (lf.car || lf.hatch) return;
+      /* The floor a lift's pit is capped with (carShafts, 2026-11-03) is a
+       * fixed part, not a door, and does not move by design. */
+      if (lf.fixed) return;
       if (!(lf.travel > 0)) { bad++; console.log('  FAIL  ' + modelId + ' leaf ' + lf.node + ' does not move'); return; }
       movers++;
       minTravel = Math.min(minTravel, lf.travel);
