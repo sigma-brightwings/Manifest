@@ -1808,10 +1808,10 @@
    * ships and their cargo from the waves, and a central bar, connected by
    * covered tubes."
    *
-   * So a sea platform is a hub and six pads, each its own semi-submersible
+   * So a sea platform is a hub and eight pads, each its own semi-submersible
    * (columns standing on pontoons under the swell, a deck above it), joined
-   * to the hub by a covered tube. Berth k is pad k. Berth 0 is the large one,
-   * as everywhere else.
+   * to the hub by a covered tube. Berth k is pad k. Berth 0 is a large one,
+   * as everywhere else, and so is berth 4 (see SEA_PADS).
    *
    * IT DOES NOT BOB. A semi-submersible is built to be still: the pontoons
    * sit under the wave base, the columns are thin where the water line
@@ -1838,22 +1838,35 @@
   var SEA_HUB_KM = 0.046;           // the hub's half-width
   var SEA_DOME_KM = [0.085, 0.050]; // dome radius: large pad, ordinary pad
   var SEA_DOME_RISE = 0.62;         // of the dome's radius: its height over the deck
-  var SEA_TUBE_KM = 0.040;          // hub wall to dome rim, along the tube
-  var SEA_PADS = 6;
+  /* EIGHT PADS, TWO OF THEM LARGE, and both numbers are measured. These
+   * ports are on busy worlds (highports, shipyards, the settled oceans),
+   * and over 120 kawartha systems and three days a sea platform had a
+   * median of five ships moored at once and eight or fewer 92% of the time
+   * (ten or fewer 97%); two or more large hulls at once 2.5% of the time.
+   * Six pads with one large, the shed's count, would have had ships
+   * sharing a pad a third of the time. Over eight, the extras hold off the
+   * rig (Sim.dockPose) rather than stand two to a dome.
+   *
+   * The tube is long because the ring has to be: eight domes round a hub,
+   * with room between neighbours for their petals to open (seaplatform
+   * .test measures the closest an open leaf comes to the next dome). */
+  var SEA_TUBE_KM = 0.120;          // hub wall to dome rim, along the tube
+  var SEA_PADS = 8;
+  function seaLarge(k) { return k === 0 || k === SEA_PADS / 2; }
 
   function isSeaPlatform(port) { return !!(port && port.seaPlatform); }
 
   /* Pad k, in KILOMETRES in the port frame (east, north, up off the sea at
-   * the port's lat/lon). Berth 0 due north, the rest every sixty degrees
-   * round from it. */
+   * the port's lat/lon). Berth 0 due north, the rest every forty-five
+   * degrees round from it; 0 and 4, north and south, are the large pads. */
   function seaPad(k) {
     var n = SEA_PADS, kk = ((k % n) + n) % n;
-    var dome = kk === 0 ? SEA_DOME_KM[0] : SEA_DOME_KM[1];
+    var dome = seaLarge(kk) ? SEA_DOME_KM[0] : SEA_DOME_KM[1];
     var ring = SEA_HUB_KM + SEA_TUBE_KM + dome;
     var a = Math.PI / 2 + kk * 2 * Math.PI / n;
     return {
       k: kk, a: a, x: Math.cos(a) * ring, y: Math.sin(a) * ring,
-      ring: ring, dome: dome, rise: dome * SEA_DOME_RISE, large: kk === 0,
+      ring: ring, dome: dome, rise: dome * SEA_DOME_RISE, large: seaLarge(kk),
       deck: SEA_DECK_KM
     };
   }
@@ -5164,7 +5177,7 @@
     shaftBay: shaftBay,
     stationBay: stationBay,
     seaBay: seaBay, seaPad: seaPad, seaLayout: seaLayout, isSeaPlatform: isSeaPlatform,
-    makeSeaPlatforms: makeSeaPlatforms, SEA_DECK_KM: SEA_DECK_KM, SEA_PADS: SEA_PADS,
+    makeSeaPlatforms: makeSeaPlatforms, SEA_DECK_KM: SEA_DECK_KM, SEA_PADS: SEA_PADS, seaLarge: seaLarge,
     berthOffset: berthOffset,
     tableBerthOffset: tableBerthOffset,
     modelledBerths: modelledBerths,

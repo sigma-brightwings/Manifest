@@ -391,6 +391,14 @@
   function assignBerth(ship, port) {
     var Gen = global.Gen;
     var boxes = berthBoxes(port);
+    /* A sea platform: a large pad for a large hull, otherwise the port's
+     * own ordinary pad - hashed, as the shed's is, so it is the same pad
+     * every visit. */
+    if (port && port.seaPlatform && Gen && Gen.seaLarge) {
+      var smalls = seaSmallPads(), larges = seaLargePads();
+      if ((ship && ship.dryMass || 0) > 260) return larges[portHash(port) % larges.length];
+      return smalls[portHash(port) % smalls.length];
+    }
     if (!boxes || !boxes.length) {
       var n0 = (Gen && Gen.BERTH_COUNT) || 6;
       var big = (ship && ship.dryMass || 0) > 260;   // t; freighters and up
@@ -1763,6 +1771,33 @@
     var up = V.norm(V.sub(ds.pos, hs.pos));
     if (V.len(up) < 1e-9) up = { x: 0, y: 0, z: 1 };
 
+    if (dst.seaPlatform) {
+      /* ON A PAD, UNDER ITS DOME (2026-11-02): the pad the timetable gives
+       * her (seaTrafficPad), standing on the deck where a hull of yours
+       * would, nose to the hub. */
+      var padK = seaTrafficPad(dst, sys, t, route);
+      /* EVERY PAD SHE COULD USE WAS TAKEN when she came in (the deck holds
+       * eight; see SEA_PADS): she holds off the rig, low over the water on
+       * station-keeping, until her slot in the timetable is over - in plain
+       * sight, waiting, rather than parked inside another ship's dome. */
+      if (padK === SEA_OFF) {
+        var gbO = groundBasis(dst, sys, t);
+        if (gbO) {
+          var hO = portHash({ id: String(route && route.id) + '@off@' + dst.id });
+          var aO = ((hO % 4096) / 4096) * Math.PI * 2;
+          var LO = global.Gen.seaLayout(), rO = LO.reach + 0.25 + ((hO >>> 12) % 200) / 1000;
+          var pO = V.addScaled(V.addScaled(V.addScaled(gbO.entrance.pos, gbO.east, Math.cos(aO) * rO),
+                                           gbO.north, Math.sin(aO) * rO), gbO.up, 0.06 + ((hO >>> 20) % 60) / 1000);
+          return { pos: pO, vel: V.clone(gbO.entrance.vel), up: gbO.up,
+                   fwd: V.norm(V.add(V.scale(gbO.east, -Math.sin(aO)), V.scale(gbO.north, Math.cos(aO)))), holding: true };
+        }
+      }
+      var bsS = (padK === null || padK === SEA_OFF) ? null : berthState(dst, sys, t, padK);
+      if (bsS) {
+        return { pos: bsS.pos, vel: bsS.vel, up: bsS.basis.up,
+                 fwd: berthFacing(bsS.basis, bsS.off), landed: true, pad: padK };
+      }
+    }
     if (dst.underground) {
       /* Down the shaft and out of sight. Parked a little below the collar,
        * so from orbit the bay reads as occupied rather than as a ship
@@ -1801,6 +1836,274 @@
     var fwd = V.len(along) > 1e-9 ? V.norm(along) : up;
     var spot = parkOffset(dst, sys, t, parent, route);
     return { pos: V.add(ds.pos, spot.vec), vel: ds.vel, up: up, fwd: fwd };
+  }
+
+  /* ---- WHO IS ON WHICH PAD, AND WHEN EACH DOME OPENS (2026-11-02) --------
+   *
+   * A sea platform's traffic stands on its pads, under its domes, so a
+   * moored ship needs a pad and the pad's dome needs to know when she is
+   * coming and going. Both CLOSED FORM off the timetable, like berth
+   * occupancy itself (berthOccupants): nothing to save, the same answer
+   * after a warp or a reload.
+   *
+   * WHICH PAD. A ship's stay is one moored window of her route: arrival
+   * at its start (after her hold in the roads and final descent, when she
+   * has one), departure at its end. She takes a pad when she ARRIVES and
+   * keeps it until she leaves - the large pad for a route that needs it,
+   * otherwise her own home pad (hashed off the route, so the deck is not
+   * always filled from one side) or the next free one round the ring.
+   * "Free" is judged against the ships already standing there when she
+   * came in, each at the pad THEY chose the same way (stayPad, to a
+   * bounded depth). seaplatform.test counts the ships that end up two to
+   * a pad over the kawartha platforms. */
+  var SEA_SETTLE_S = 20;        // on the stand, before her dome starts to shut
+  var SEA_DEPART_LEAD_S = 30;   // her dome opens this long before she lifts
+  var SEA_CLEAR_KM = 1.5;       // ... and stays open until she is this far off
+  var SEA_ARRIVE_KM = 3.0;      // ... and opens as she comes inside this
+  var SEA_ARRIVE_LEAD_S = 60;   // ... or this long before she is due down, whichever first
+
+  /* The moored window of `route` at `port` that contains t (or the next
+   * one to begin, or null): { a: arrival on the pad, d: departure }. */
+  var SEA_STAY_TAIL_S = 600;    // a departure's dome window, at most
+  function seaStay(route, port, t) {
+    if (!route || route.outboard) return null;
+    var atB = route.to === port.id, atA = route.from === port.id;
+    if (!atB && !atA) return null;
+    var cycle = Math.floor((t - route.t0) / route.period);
+    var best = null;
+    for (var c = cycle - 1; c <= cycle + 1; c++) {
+      var cs = route.t0 + c * route.period;
+      var starts = [];
+      if (atB) starts.push({ s: cs + route.cruise, e: cs + route.cruise + route.layover });
+      if (atA) starts.push({ s: cs + 2 * route.cruise + route.layover, e: cs + route.period + route.cruise * 0 });
+      for (var k = 0; k < starts.length; k++) {
+        var w = starts[k];
+        if (route.oneWay && (c !== 0 || w.s !== route.t0 + route.cruise)) continue;
+        var hold = arrivalHold(route, port);
+        var arr = w.s + (hold > 0 ? hold + FINAL_DESCENT_S : 0);
+        var dep = route.oneWay ? Infinity : w.e;
+        /* The stay she is in, or the next one: a stay that ended more than
+         * SEA_STAY_TAIL_S ago is over, whatever its arrival time. */
+        if (t <= dep + SEA_STAY_TAIL_S && (!best || arr < best.a)) best = { a: arr, d: dep, cycle: c };
+      }
+    }
+    return best;
+  }
+
+  /* The pads in the order a route tries them: the large pads for a large
+   * route, else the ordinary ones from its own home pad (hashed off the
+   * route, so the deck is not always filled from one side) on round, then
+   * the large ones; the player's own pad (assignBerth's) left to last, so a
+   * ship of yours coming in finds it free whenever the deck has room. */
+  function padOrder(port, route) {
+    var smalls = seaSmallPads(), larges = seaLargePads();
+    var playerPad = smalls[portHash(port) % smalls.length];
+    var h = portHash({ id: String(route.id) + '@pad@' + port.id });
+    function rot(list) {
+      var o = [];
+      for (var i = 0; i < list.length; i++) o.push(list[(h + i) % list.length]);
+      return o;
+    }
+    var mine = routeNeedsLargeBerth(route) ? rot(larges) : rot(smalls).filter(function (k) { return k !== playerPad; });
+    /* A small hull takes a free LARGE pad before your own, and before
+     * holding off: the deck is busier than eight, and a large pad is free
+     * most of the time (one or more large hulls in 20% of samples). */
+    if (!routeNeedsLargeBerth(route)) mine = mine.concat(rot(larges), [playerPad]);
+    return mine;
+  }
+
+  /* Which pad `route` stands on at `port` for the stay containing t (or
+   * about to begin), or null when she is not due here, or SEA_OFF when
+   * every pad she could use was taken when she came in.
+   *
+   * A SWEEP, NOT A GUESS. She takes the first pad of her order that no
+   * ship standing on the deck when she arrived is on - and those ships were
+   * placed the same way. That is a chain back through the timetable: two
+   * earlier attempts that cut it short (one step back, then a bounded
+   * recursion) put ships two to a dome a third of the time, because an
+   * earlier ship's pad as the cut chain saw it was not the pad she was
+   * actually drawn on. So the deck is swept forward from a fixed epoch
+   * (SEA_EPOCH_S before t = 0), every stay of every route that calls here
+   * in arrival order, each given a pad against the ships still standing;
+   * the result is kept on the port and the sweep only ever moves on from
+   * where it stopped. Pure in the only sense that matters: the answer for
+   * a stay is a function of the timetable alone, whatever order anything
+   * asked in. A query before the sweep's position for a stay it has
+   * already forgotten (a save loaded earlier than the last one) starts the
+   * sweep again from the epoch, which costs a few milliseconds.
+   *
+   * Measured with the sweep: no ship shares a pad (seaplatform.test). */
+  var SEA_EPOCH_S = -2 * 86400;
+  var SEA_FORGET_S = 2 * 86400;    // keep a stay's pad this long after she leaves
+  var SEA_OFF = -1;
+  function routeStaysFrom(route, port, from) {
+    /* The arrival-ordered stays of one route here, starting at the cycle
+     * before `from`; a cursor yields them one at a time. */
+    var atB = route.to === port.id, atA = route.from === port.id;
+    var hold = arrivalHold(route, port);
+    var c = Math.floor((from - route.t0) / route.period) - 1, slot = 0, done = false;
+    function stayAt(cc, sl) {
+      var cs = route.t0 + cc * route.period, w;
+      if (sl === 0) { if (!atB) return null; w = { s: cs + route.cruise, e: cs + route.cruise + route.layover }; }
+      else { if (!atA) return null; w = { s: cs + 2 * route.cruise + route.layover, e: cs + route.period }; }
+      if (route.oneWay && !(cc === 0 && sl === 0)) return null;
+      return { a: w.s + (hold > 0 ? hold + FINAL_DESCENT_S : 0), d: route.oneWay ? Infinity : w.e };
+    }
+    return {
+      next: function () {
+        for (var guard = 0; guard < 8 && !done; guard++) {
+          var st = stayAt(c, slot);
+          if (slot === 1) { slot = 0; c++; } else slot = 1;
+          if (route.oneWay && c > 1) done = true;
+          if (st) return st;
+        }
+        return null;
+      }
+    };
+  }
+  function seaSweep(port, sys, T) {
+    var sw = port._sweep;
+    if (!sw || sw.sys !== sys || T < sw.from) {
+      sw = port._sweep = { sys: sys, t: SEA_EPOCH_S, from: SEA_EPOCH_S, present: [], assign: {}, heads: [] };
+      /* The ships already standing at the epoch go on first, in the order
+       * they came in; then the sweep proper, from the epoch on. */
+      var early = [];
+      (sys.traffic || []).forEach(function (route) {
+        if (route.outboard || (route.from !== port.id && route.to !== port.id)) return;
+        var cur = routeStaysFrom(route, port, SEA_EPOCH_S), st = cur.next();
+        while (st && st.a < SEA_EPOCH_S) {
+          if (st.d > SEA_EPOCH_S) early.push({ route: route, st: st });
+          st = cur.next();
+        }
+        if (st) sw.heads.push({ route: route, cur: cur, st: st });
+      });
+      early.sort(function (x, y) { return x.st.a - y.st.a || (String(x.route.id) < String(y.route.id) ? -1 : 1); });
+      early.forEach(function (e) { seatStay(sw, port, e.route, e.st); });
+    }
+    for (var guard = 0; guard < 200000; guard++) {
+      var bi = -1;
+      for (var i = 0; i < sw.heads.length; i++) {
+        var h = sw.heads[i];
+        if (!h.st) continue;
+        if (bi < 0 || h.st.a < sw.heads[bi].st.a ||
+            (h.st.a === sw.heads[bi].st.a && String(h.route.id) < String(sw.heads[bi].route.id))) bi = i;
+      }
+      if (bi < 0 || sw.heads[bi].st.a > T) break;
+      var hd = sw.heads[bi];
+      seatStay(sw, port, hd.route, hd.st);
+      sw.t = hd.st.a;
+      hd.st = hd.cur.next();
+    }
+    /* Forget stays long gone, so the record does not grow for ever. */
+    if (sw.t - (sw.pruned || SEA_EPOCH_S) > SEA_FORGET_S) {
+      var keep = {}, cut = sw.t - SEA_FORGET_S;
+      Object.keys(sw.assign).forEach(function (k) { if (sw.assign[k].d > cut) keep[k] = sw.assign[k]; });
+      sw.assign = keep; sw.pruned = sw.t; sw.from = cut;
+    }
+    return sw;
+  }
+  /* One ship onto the deck: off goes everyone who has left, and she takes
+   * the first pad of her order nobody still standing is on. */
+  function seatStay(sw, port, route, me) {
+    sw.present = sw.present.filter(function (x) { return x.d > me.a; });
+    var taken = {};
+    sw.present.forEach(function (x) { if (x.pad !== SEA_OFF) taken[x.pad] = true; });
+    var order = padOrder(port, route), got = SEA_OFF;
+    for (var j = 0; j < order.length; j++) if (!taken[order[j]]) { got = order[j]; break; }
+    sw.assign[route.id + '@' + me.a] = { pad: got, d: me.d };
+    sw.present.push({ d: me.d, pad: got });
+  }
+  function seaTrafficPad(port, sys, t, route) {
+    if (!port || !port.seaPlatform || !route || !sys || !sys.traffic) return null;
+    var me = seaStay(route, port, t);
+    if (!me) return null;
+    var sw = seaSweep(port, sys, Math.max(me.a, SEA_EPOCH_S));
+    var got = sw.assign[route.id + '@' + me.a];
+    if (!got && me.d > SEA_EPOCH_S) {
+      /* Swept past and forgotten: start again from the epoch. */
+      port._sweep = null;
+      sw = seaSweep(port, sys, me.a);
+      got = sw.assign[route.id + '@' + me.a];
+    }
+    return got ? got.pad : padOrder(port, route)[0];
+  }
+
+  /* WHICH DOMES SHOULD BE OPEN, now: an array of targets, 1 open and 0
+   * shut, one per pad, each with the reason. Pure; main.js eases the
+   * petals toward it on the wall clock (as it does the shed's doors).
+   *
+   *   - TRAFFIC: open from when she comes within SEA_ARRIVE_KM until
+   *     SEA_SETTLE_S after she is on the stand; shut while she is berthed;
+   *     open SEA_DEPART_LEAD_S before she lifts until she is SEA_CLEAR_KM
+   *     off. Distances from trafficState, the same pose that is drawn.
+   *   - YOU: open while you are cleared to land here and inside the
+   *     envelope (the pad you will be given, assignBerth's); open while a
+   *     hull of yours is inside the dome's own volume and not berthed -
+   *     the guard that means a dome never shuts on a ship in the air,
+   *     however it got there; on the rail, whatever the rail says (it is
+   *     returned as `rail` so the caller can use the continuous value).
+   *   - Otherwise shut: berthed ships are what the domes are FOR. */
+  function seaDomeTargets(port, sys, t, ship, opts) {
+    opts = opts || {};
+    var Gen = global.Gen;
+    if (!port || !port.seaPlatform || !Gen || !Gen.seaPad) return null;
+    var n = Gen.SEA_PADS || 6, out = [], k;
+    for (k = 0; k < n; k++) out.push({ open: 0, why: 'shut' });
+    var basis = groundBasis(port, sys, t);
+    if (!basis) return out;
+    var r = port.radius || 1;
+    function padWorld(kk) {
+      var sp = Gen.seaPad(kk);
+      var p = V.addScaled(basis.entrance.pos, basis.east, sp.x);
+      p = V.addScaled(p, basis.north, sp.y);
+      return V.addScaled(p, basis.up, sp.deck);
+    }
+    function set(kk, why) { if (kk !== null && kk >= 0 && kk < n && !out[kk].open) out[kk] = { open: 1, why: why }; }
+
+    var routes = sys.traffic || [];
+    for (var i = 0; i < routes.length; i++) {
+      var route = routes[i];
+      if (route.from !== port.id && route.to !== port.id) continue;
+      var stay = seaStay(route, port, t);
+      if (!stay) continue;
+      var pad = seaTrafficPad(port, sys, t, route);
+      if (pad === null || pad === SEA_OFF) continue;
+      if (t >= stay.a + SEA_SETTLE_S && t <= stay.d - SEA_DEPART_LEAD_S) continue;   // berthed: shut
+      if (t >= stay.d - SEA_DEPART_LEAD_S && t <= stay.d) { set(pad, 'departing ' + (route.name || route.id)); continue; }
+      /* Open ahead of her by the clock as well as by distance: on a short
+       * hop the last three kilometres of her descent are seconds long. */
+      if (t >= stay.a - SEA_ARRIVE_LEAD_S && t <= stay.a + SEA_SETTLE_S) { set(pad, (t < stay.a ? 'arriving ' : 'settling ') + (route.name || route.id)); continue; }
+      var near = t < stay.a ? SEA_ARRIVE_KM : SEA_CLEAR_KM;
+      if (t > stay.a + SEA_SETTLE_S && t < stay.d) continue;
+      var ts = trafficState(route, sys, t);
+      if (!ts || !ts.pos) continue;
+      if (V.dist(ts.pos, padWorld(pad)) < near) set(pad, (t < stay.a ? 'arriving ' : t <= stay.a + SEA_SETTLE_S ? 'settling ' : 'leaving ') + (route.name || route.id));
+    }
+
+    if (ship) {
+      var mine = assignBerth(ship, port);
+      if (ship.arrival && ship.arrival.port === port.id && typeof ship.arrival.berth === 'number') {
+        var el = t - ship.arrival.at - (ship.arrival.reverse ? 0 : (ship.arrival.lead || 0));
+        if (ship.arrival.reverse) el = (ship.arrival.dur || 0) - (t - ship.arrival.at);
+        var pose = arrivalPose(port, sys, t, ship.arrival.berth, Math.max(0, el));
+        var dv = pose && pose.gates && typeof pose.gates.dome === 'number' ? pose.gates.dome : 1;
+        out[ship.arrival.berth] = { open: dv > 0.5 ? 1 : 0, rail: dv, why: ship.arrival.reverse ? 'you, lifting off' : 'you, landing' };
+      } else if (ship.docked === port.id) {
+        var b = ship.dockOffset && typeof ship.dockOffset.berth === 'number' ? ship.dockOffset.berth : mine;
+        if (opts.launch) set(b, 'you, cleared to lift');
+      } else if (ship.pos) {
+        if (opts.cleared && V.dist(ship.pos, padWorld(mine)) < Math.max(port.dockCaptureRadius || 2.5, SEA_ARRIVE_KM)) {
+          set(mine, 'you, cleared to land');
+        }
+        for (k = 0; k < n; k++) {
+          var sp = Gen.seaPad(k), rel = V.sub(ship.pos, padWorld(k));
+          var hz = V.dot(rel, basis.up);
+          var hx = Math.hypot(V.dot(rel, basis.east), V.dot(rel, basis.north));
+          if (hz > -0.002 && hz < sp.rise + SEA_CLEAR_KM * 0.1 && hx < sp.dome * 1.4) set(k, 'you, inside the dome');
+        }
+      }
+    }
+    return out;
   }
 
   /* Where a ship holds over a ground port, waiting to go down: a few
@@ -2032,11 +2335,13 @@
        * holding stack, nose along her way rather than up, and the landing
        * proper is flown after the hold. */
       toRoads = arrivalHold(route, dst) > 0;
-      pose = toRoads ? anchorPose(dst, sys, t, parent, route) : dockPose(dst, sys, t, parent);
+      /* `route` for a sea platform, whose pose is the pad the timetable
+       * gives this ship (seaTrafficPad); every other ground port ignores it. */
+      pose = toRoads ? anchorPose(dst, sys, t, parent, route) : dockPose(dst, sys, t, parent, route);
       landing = smootherstep((u - (1 - TRAFFIC_TOUCHDOWN)) / TRAFFIC_TOUCHDOWN);
       phase = toRoads ? 'approach' : 'descent';
     } else if (u < TRAFFIC_TOUCHDOWN && (src.surface || src.underground)) {
-      pose = dockPose(src, sys, t, parent);
+      pose = dockPose(src, sys, t, parent, route);
       landing = smootherstep(1 - u / TRAFFIC_TOUCHDOWN);
       phase = 'liftoff';
     }
@@ -3085,6 +3390,17 @@
     return ((route && route.size) || 0) >= LARGE_ROUTE_SIZE;
   }
 
+  function seaLargePads() {
+    var Gen = global.Gen, n = (Gen && Gen.SEA_PADS) || 8, out = [];
+    for (var k = 0; k < n; k++) if (Gen.seaLarge(k)) out.push(k);
+    return out;
+  }
+  function seaSmallPads() {
+    var Gen = global.Gen, n = (Gen && Gen.SEA_PADS) || 8, out = [];
+    for (var k = 0; k < n; k++) if (!Gen.seaLarge(k)) out.push(k);
+    return out;
+  }
+
   function berthCapacity(port) {
     if (!port) return 0;
     if (typeof port.berths === 'number') return port.berths;
@@ -3146,6 +3462,8 @@
     for (i = 0; i < occ.length; i++) { if (occ[i].large) large++; else small++; }
 
     var largeCap = cap >= 2 ? 1 : cap;          // berth 0, as assignBerth has it
+    /* A sea platform has two large pads (Gen.SEA_PADS). */
+    if (port && port.seaPlatform && global.Gen && global.Gen.seaLarge) largeCap = seaLargePads().length;
     var smallCap = Math.max(0, cap - largeCap);
 
     var wantsLarge = needsLargeBerth(ship);
@@ -3938,6 +4256,9 @@
     for (var i = 0; i < pads.length; i++) {
       var p = pads[i];
       if (!p.surface || p.parentBody !== host) continue;
+      /* A platform stands on the sea: nothing of it is below the surface
+       * a ship could fly through, so under it is under the water. */
+      if (p.seaPlatform) continue;
       var r = p.radius || 1;
       var basis = groundBasis(p, sys, t);
       if (!basis) continue;
@@ -4555,6 +4876,37 @@
    * rather than hardcoding an index. */
   var ARRIVAL_ENCLOSED_FROM = 2;
 
+  /* ---- AND AT A SEA PLATFORM (2026-11-02) ---------------------------------
+   *
+   * No shaft and no traverser: a pad under a dome. Five slots like the
+   * shed's (see seaPath): held over the dome, at its open crown, a few
+   * metres over the stand, on the stand, on the stand. `dome` is the dome
+   * over THIS pad, 1 open and 0 shut, posed exactly as the shed's gates
+   * are (mixGate: it moves at the start of the leg that wants it moved).
+   *
+   * THE DOME IS OPEN FOR THE WHOLE OF THE WAY DOWN and only starts to shut
+   * on `seal`, when the hull is already standing on the deck. It is open
+   * on `approach` too, because a ship is only put on this rail by the pad
+   * capturing it, and the capture is inside the envelope where traffic
+   * control has already opened it (Sim.seaDomeTargets) - so the dome is
+   * never asked to open with a hull on top of it, nor to close over one
+   * that is still in the air.
+   *
+   * Run backwards it is the departure (undockShip): sat on the stand
+   * while the petals swing open (`seal`, reversed), lifted off, up through
+   * the crown, and handed over held above it. */
+  var SEA_LEGS = [
+    { id: 'approach', dur: 3.0, apron: 1, inner: 1, lift: 0, bay: 1, dome: 1 },
+    { id: 'descend', dur: 5.0, apron: 1, inner: 1, lift: 0, bay: 1, dome: 1 },
+    { id: 'settle', dur: 2.0, apron: 1, inner: 1, lift: 0, bay: 1, dome: 1 },
+    { id: 'seal', dur: 4.0, apron: 1, inner: 1, lift: 0, bay: 1, dome: 0 },
+    { id: 'berth', dur: 1.0, apron: 1, inner: 1, lift: 0, bay: 0, dome: 0 }
+  ];
+  /* The hold over the crown, and how far above the stand the descent leg
+   * ends before the hull is set down: km. */
+  var SEA_HOLD_KM = 0.090;
+  var SEA_FLARE_KM = 0.012;
+
   /* ---- and the same show in orbit ---------------------------------------
    *
    * A station has no shaft and no lift, so the legs above do not describe
@@ -4848,6 +5200,7 @@
   /* The leg table for this berth, with its timings fitted to the berth's
    * own path. */
   function legsFor(port, berth) {
+    if (port && port.seaPlatform) return SEA_LEGS;
     if (!port || port.surface) return ARRIVAL_LEGS;
     /* PER BERTH, ALWAYS (2026-10-17). This used to key every unrouted
      * berth on berth 0's path — harmless while every orbital table had
@@ -4867,6 +5220,10 @@
   }
 
   function enclosedFrom(port) {
+    /* A dome is not a shaft: the sky never goes, and the eye is not in
+     * rock. A berthed hull is still in a room (dockedPort answers that),
+     * but nothing on the rail is "underground". */
+    if (port && port.seaPlatform) return SEA_LEGS.length + 1;
     return (port && !port.surface) ? ORBITAL_ENCLOSED_FROM : ARRIVAL_ENCLOSED_FROM;
   }
 
@@ -4901,6 +5258,7 @@
     var Gen = global.Gen;
     if (!Gen || !Gen.bayGeometry || !Gen.berthOffset) return null;
     if (port && !port.surface) return orbitalPath(port, berth);
+    if (port && port.seaPlatform) return seaPath(port, berth);
     var g = Gen.bayGeometry(port);
     var off = Gen.berthOffset(port, berth || 0);
 
@@ -4956,6 +5314,26 @@
       { x: 0, y: -run, z: stand },         // shaft foot
       { x: off.x, y: -run, z: stand },     // across the hall on the traverser
       { x: off.x, y: off.y, z: off.z + g.lift + g.standoff }  // the stand
+    ];
+  }
+
+  /* A sea platform's five slots, in the port frame and pad radii: over the
+   * pad's dome, at its crown, a flare's height over the stand, the stand,
+   * the stand. Straight down the pad's own axis, so the hull never passes
+   * over a neighbouring dome or the tube. */
+  function seaPath(port, berth) {
+    var Gen = global.Gen;
+    var g = Gen.bayGeometry(port);
+    var off = Gen.berthOffset(port, berth || 0);
+    var sp = Gen.seaPad(berth || 0), r = port.radius || 1;
+    var crown = (sp.deck + sp.rise) / r + 0.006 / r;
+    var stand = off.z + g.lift;
+    return [
+      { x: off.x, y: off.y, z: crown + SEA_HOLD_KM / r },
+      { x: off.x, y: off.y, z: crown },
+      { x: off.x, y: off.y, z: stand + SEA_FLARE_KM / r },
+      { x: off.x, y: off.y, z: stand },
+      { x: off.x, y: off.y, z: stand }
     ];
   }
 
@@ -5326,7 +5704,13 @@
         apron: mixGate(L.apron, LEGS[Math.max(0, leg - 1)].apron, u),
         inner: mixGate(L.inner, LEGS[Math.max(0, leg - 1)].inner, u),
         lift: L.id === 'descend' ? u : L.lift,
-        bay: mixGate(L.bay, LEGS[Math.max(0, leg - 1)].bay, u)
+        bay: mixGate(L.bay, LEGS[Math.max(0, leg - 1)].bay, u),
+        /* The dome over this pad at a sea platform (SEA_LEGS), 1 open.
+         * Its own easing: a petal is slow, so it takes the whole leg. */
+        dome: (typeof L.dome === 'number')
+          ? (L.dome === LEGS[Math.max(0, leg - 1)].dome ? L.dome
+             : LEGS[Math.max(0, leg - 1)].dome + (L.dome - LEGS[Math.max(0, leg - 1)].dome) * u)
+          : null
       }
     };
   }
@@ -5563,6 +5947,11 @@
       var holdLoc = arrivalPath(port, berth)[0];
       var rr = port.radius || 1;
       via = pullRoute(from, { e: -holdLoc.x * rr, n: -holdLoc.y * rr, u: -holdLoc.z * rr }, rr);
+    } else if (from && port.seaPlatform && global.Gen && global.Gen.seaLayout) {
+      /* Round the rig, not through the hub's derrick or a neighbour's
+       * dome: the same secants, about the deck's centre. */
+      var holdS = arrivalPath(port, berth)[0], rS = port.radius || 1, LS = global.Gen.seaLayout();
+      via = pullRoute(from, { e: -holdS.x * rS, n: -holdS.y * rS, u: LS.deck - holdS.z * rS }, LS.reach);
     }
     var rt = (global.Gen && global.Gen.berthRoute) ? global.Gen.berthRoute(port, berth) : null;
     ship.arrival = { port: port.id, berth: berth, at: t, lead: lead,
@@ -5824,6 +6213,21 @@
      * where stepArrival hands the ship over pointed at the sky. Asked for
      * explicitly (opts.transfer) so a caller that wants the old instant
      * launch — a test, a save restore — still gets it. */
+    /* OFF A SEA PLATFORM, ALWAYS BY THE RAIL (2026-11-02): sat on the
+     * stand while the dome opens over you, lifted up through its crown and
+     * handed over held above it - the arrival backwards. There is no
+     * instant way out, because there is no instant way through a shut
+     * dome. */
+    if (target.seaPlatform && arrivalPath(target, bR)) {
+      ship.docked = null;
+      ship.dockOffset = null;
+      ship.departed = { port: target.id, berth: bR, surface: true };
+      ship.arrival = { port: target.id, berth: bR, at: t, lead: 0, reverse: true,
+                       entry: null, dur: arrivalTotal(target, bR) };
+      ship.thrust = V.zero();
+      ship.throttle = 0;
+      return target;
+    }
     if (target.surface && opts && opts.transfer && arrivalPath(target, bR)) {
       ship.docked = null;
       ship.dockOffset = null;
@@ -6930,6 +7334,9 @@
     ORBITAL_ENCLOSED_FROM: ORBITAL_ENCLOSED_FROM,
     legsFor: legsFor,
     undockShip: undockShip,
+    seaDomeTargets: seaDomeTargets, seaTrafficPad: seaTrafficPad, seaStay: seaStay, SEA_OFF: SEA_OFF,
+    SEA_LEGS: SEA_LEGS, SEA_SETTLE_S: SEA_SETTLE_S, SEA_DEPART_LEAD_S: SEA_DEPART_LEAD_S,
+    SEA_ARRIVE_KM: SEA_ARRIVE_KM, SEA_CLEAR_KM: SEA_CLEAR_KM,
     GEAR_DRAG_FACTOR: GEAR_DRAG_FACTOR,
     airDensity: airDensity,
     atmosphereContext: atmosphereContext,

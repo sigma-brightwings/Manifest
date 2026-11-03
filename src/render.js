@@ -3142,6 +3142,271 @@
    * orbit before you have read a single word of its market. Normalised to
    * radius 1; z is the spin axis for anything that turns. */
   var STATION_MESHES = null;
+  /* ---- THE SEA PLATFORM (2026-11-02) --------------------------------------
+   *
+   * Astra: "a floating oil rig style of port ... pads that have protected
+   * domes open and close to protect ships and their cargo from the waves,
+   * and a central bar, connected by covered tubes."
+   *
+   * Everything here is read off Gen.seaLayout, in KILOMETRES in the port
+   * frame (x east, y north, z up off the sea), and drawn at scale 1. The
+   * berths, the camera's dome room and the walk are read off the same
+   * table, so the pad a hull stands on is the pad that is drawn.
+   *
+   * SEMI-SUBMERSIBLE, AND STILL. Every structure stands on square columns
+   * that go down through the water line onto pontoons below it (the sea,
+   * which is the planet's own sphere, hides everything under z = 0), with
+   * the deck SEA_DECK_KM up. Nothing here moves with the swell, and that
+   * is deliberate: a semi-sub is stable by design, and a pad that bobbed
+   * would put every berth and rail at the mercy of the sea state. Only the
+   * domes move, and only when a ship is coming or going.
+   *
+   * SQUARE WHERE IT CAN BE (Astra does not want round ports): decks,
+   * columns, the hub's blocks and the derrick are boxes. The domes and the
+   * tubes are round because she asked for domes and tubes.
+   *
+   * THE DOMES ARE PETALS, not a clamshell. Eight segments of a flattened
+   * dome, each hinged at the top of the pad's drum wall, swing up and out
+   * to stand open like a flower and fold back down to seal. Petals because
+   * opening reads from any side (a clamshell seen edge-on looks shut while
+   * it is open), because each leaf is an eighth of the weight and swings
+   * an eighth of the arc - so it can open over the drum without sweeping
+   * the deck where the ship is, or the tube's doorway - and because a
+   * shut petal dome reads as a shell against the weather, which is the
+   * point of it. The petals are drawn separately (drawSeaDomes), one
+   * frame each, because a petal's pose is a rotation about its hinge and
+   * the shared mesh pipeline only moves whole meshes. */
+  var SEA_MESH_SCALE = 1;          // the meshes below are in km
+  var SEA_DRUM_KM = 0.006;         // the ring wall the petals hinge on
+  var SEA_PETALS = 8;
+  var SEA_PETAL_OPEN = 100 * Math.PI / 180;   // swung up and out, past vertical
+  var SEA_TUBE_R = 0.0045;         // the covered walkway's radius
+  var SEA_COL_DOWN = 0.030;        // how far the columns go below the water
+
+  /* `src` placed with its x, y, z axes along `ax`, `ay`, `az` (unit
+   * triples) and its origin at t. The one transform the rig needs that
+   * merge does not do: rotating a part about the vertical, or laying a
+   * tube along a bearing. */
+  function mergeAxes(dst, src, t, ax, ay, az, col) {
+    var base = dst.v.length, i;
+    for (i = 0; i < src.v.length; i++) {
+      var p = src.v[i];
+      dst.v.push([t[0] + ax[0] * p[0] + ay[0] * p[1] + az[0] * p[2],
+                  t[1] + ax[1] * p[0] + ay[1] * p[1] + az[1] * p[2],
+                  t[2] + ax[2] * p[0] + ay[2] * p[1] + az[2] * p[2]]);
+    }
+    if (col && !dst.c) {
+      dst.c = [];
+      while (dst.c.length < dst.f.length) dst.c.push(null);
+    }
+    for (i = 0; i < src.f.length; i++) {
+      dst.f.push([src.f[i][0] + base, src.f[i][1] + base, src.f[i][2] + base]);
+      if (dst.c) dst.c.push(src.c ? src.c[i] : (col || null));
+    }
+    return dst;
+  }
+  /* A part turned `a` radians about the vertical, then placed. */
+  function mergeTurned(dst, src, x, y, z, a, col) {
+    var c = Math.cos(a), s = Math.sin(a);
+    return mergeAxes(dst, src, [x, y, z], [c, s, 0], [-s, c, 0], [0, 0, 1], col);
+  }
+
+  var SEA_PLATFORM_MESH = null;
+  function seaPlatformMesh() {
+    if (SEA_PLATFORM_MESH) return SEA_PLATFORM_MESH;
+    var Gen = global.Gen;
+    var L = Gen && Gen.seaLayout ? Gen.seaLayout() : null;
+    var m = emptyMesh();
+    if (!L) return (SEA_PLATFORM_MESH = m);
+    var D = L.deck, H = L.hub;
+    var STEEL = '#8d969e', DARK = '#4a5158', RUST = '#a5603a', DECK = '#5d646b',
+        PAINT = '#d9b23a', WHITE = '#dfe6ea';
+    /* A square column from under the water to the underside of a deck. */
+    function column(x, y, half, a) {
+      var top = D - 0.003, bot = -SEA_COL_DOWN, hz = (top - bot) / 2;
+      mergeTurned(m, box(half, half, hz), x, y, bot + hz, a || 0, STEEL);
+      /* The splash zone: a dark band where the water line crosses it, the
+       * way a real column's anti-fouling and rust read from a distance. */
+      mergeTurned(m, box(half * 1.04, half * 1.04, 0.0025), x, y, 0.0005, a || 0, RUST);
+    }
+
+    /* THE HUB: four columns on a ring pontoon, a deck, and the bar's block
+     * on it - two storeys of windows, a lit band, the derrick and a crane
+     * so it reads as a rig from two kilometres. */
+    var hc = H * 0.66;
+    [[1, 1], [-1, 1], [-1, -1], [1, -1]].forEach(function (q) { column(q[0] * hc, q[1] * hc, 0.0085); });
+    merge(m, box(H * 0.82, 0.007, 0.006), 0, hc, -0.022, 1, DARK);
+    merge(m, box(H * 0.82, 0.007, 0.006), 0, -hc, -0.022, 1, DARK);
+    merge(m, box(H, H, 0.003), 0, 0, D - 0.003, 1, DECK);                 // deck
+    merge(m, box(H * 1.01, H * 1.01, 0.0012), 0, 0, D - 0.0062, 1, DARK);  // deck's edge girder
+    merge(m, box(H * 0.74, H * 0.66, 0.0075), 0, 0, D + 0.0075, 1, WHITE); // the bar, lower storey
+    merge(m, box(H * 0.745, H * 0.665, 0.0012), 0, 0, D + 0.0082, 1, '!#ffd28f'); // lit windows
+    merge(m, box(H * 0.50, H * 0.46, 0.006), -H * 0.08, 0, D + 0.021, 1, STEEL);  // upper storey
+    merge(m, box(H * 0.505, H * 0.465, 0.0010), -H * 0.08, 0, D + 0.0215, 1, '!#bfe2ff');
+    merge(m, box(H * 0.22, H * 0.22, 0.0008), -H * 0.08, 0, D + 0.0278, 1, PAINT); // helideck mark
+    /* A sign-like lit name band on the north face, toward the large pad. */
+    merge(m, box(H * 0.42, 0.0006, 0.0018), 0, H * 0.665, D + 0.0115, 1, '!#7fe9ff');
+    /* The derrick: four legs leaning in, three girdles. */
+    var dx = H * 0.62, dy = -H * 0.58, dh = 0.060;
+    for (var leg = 0; leg < 4; leg++) {
+      var lx = (leg & 1 ? 1 : -1) * 0.006, ly = (leg & 2 ? 1 : -1) * 0.006;
+      merge(m, box(0.0008, 0.0008, dh / 2), dx + lx, dy + ly, D + dh / 2, 1, PAINT);
+    }
+    [0.2, 0.5, 0.8].forEach(function (f) {
+      merge(m, box(0.0066, 0.0066, 0.0006), dx, dy, D + dh * f, 1, PAINT);
+    });
+    merge(m, box(0.0012, 0.0012, 0.0012), dx, dy, D + dh + 0.001, 1, '!#ff4a3a'); // air light
+    /* The crane on the opposite corner, boom out over the water. */
+    merge(m, box(0.003, 0.003, 0.008), -H * 0.70, H * 0.62, D + 0.008, 1, PAINT);
+    mergeAxes(m, box(0.028, 0.0012, 0.0012), [-H * 0.70 - 0.020, H * 0.62 + 0.012, D + 0.022],
+              [-0.82, 0.40, 0.41], [0.44, 0.9, 0], [-0.37, 0.18, 0.91], PAINT);
+    /* Deck lights at the hub's corners. */
+    [[1, 1], [-1, 1], [-1, -1], [1, -1]].forEach(function (q) {
+      merge(m, box(0.0012, 0.0012, 0.0012), q[0] * H * 0.96, q[1] * H * 0.96, D + 0.0012, 1, '!#fff2c8');
+    });
+
+    /* THE PADS, each its own semi-sub, and the tube to each. */
+    L.pads.forEach(function (p) {
+      var a = p.a, R = p.dome, c = Math.cos(a), s = Math.sin(a);
+      var half = R * 1.10;
+      var pc = half * 0.72;
+      /* Columns under the pad's corners, turned to face the hub. */
+      [[1, 1], [-1, 1], [-1, -1], [1, -1]].forEach(function (q) {
+        var ux = q[0] * pc, uy = q[1] * pc;
+        column(p.x + ux * c - uy * s, p.y + ux * s + uy * c, R * 0.13, a);
+      });
+      mergeTurned(m, box(half * 0.9, R * 0.1, 0.006), p.x, p.y, -0.022, a, DARK);   // pontoon
+      mergeTurned(m, box(half, half, 0.003), p.x, p.y, D - 0.003, a, DECK);         // the pad's deck
+      mergeTurned(m, box(half * 1.01, half * 1.01, 0.0012), p.x, p.y, D - 0.0062, a, DARK);
+      /* The drum the petals hinge on: a ring wall round the landing circle,
+       * with the tube's doorway in it facing the hub. */
+      merge(m, tube(32, R, R, SEA_DRUM_KM / 2, false), p.x, p.y, D + SEA_DRUM_KM / 2, 1, STEEL);
+      merge(m, tube(32, R * 1.02, R * 1.02, 0.0008, false), p.x, p.y, D + SEA_DRUM_KM, 1, PAINT); // hinge rail
+      /* The landing circle: a ring of lamps, amber on the large pad, and a
+       * painted cross to land on. */
+      var lamps = 16, lr = R * 0.62, lc = p.large ? '!#ffb45c' : '!#9fe3ff';
+      for (var li = 0; li < lamps; li++) {
+        var la = li / lamps * Math.PI * 2;
+        merge(m, box(0.0011, 0.0011, 0.0005), p.x + Math.cos(la) * lr, p.y + Math.sin(la) * lr, D + 0.0005, 1, lc);
+      }
+      mergeTurned(m, box(R * 0.42, R * 0.05, 0.0003), p.x, p.y, D + 0.0003, a, PAINT);
+      mergeTurned(m, box(R * 0.05, R * 0.42, 0.0003), p.x, p.y, D + 0.0003, a, PAINT);
+
+      /* THE TUBE: from the hub's wall to the drum, a covered walkway on two
+       * trestles standing in the sea, with a lit window strip down each
+       * side so it reads at night. */
+      var start = H, end = p.ring - R * 0.98, len = end - start, mid = (start + end) / 2;
+      var tz = D + SEA_TUBE_R + 0.0006;
+      var dir = [c, s, 0], side = [-s, c, 0], upv = [0, 0, 1];
+      mergeAxes(m, tube(12, SEA_TUBE_R, SEA_TUBE_R, len / 2, false), [c * mid, s * mid, tz],
+                side, upv, dir, '#c4ccd2');
+      /* Two window strips, one down each flank: thin, so the tube reads as
+       * a tube with lights in it rather than as a lit bar. */
+      [-1, 1].forEach(function (sd) {
+        mergeAxes(m, box(0.0004, 0.0007, len / 2 * 0.96),
+                  [c * mid + side[0] * sd * SEA_TUBE_R * 0.98, s * mid + side[1] * sd * SEA_TUBE_R * 0.98, tz + 0.0012],
+                  side, upv, dir, '!#ffe2a8');
+      });
+      /* Its floor deck, the girder it rides on and the trestles. */
+      mergeAxes(m, box(SEA_TUBE_R * 1.2, 0.0012, len / 2), [c * mid, s * mid, D - 0.0006],
+                side, upv, dir, DARK);
+      [0.33, 0.67].forEach(function (f) {
+        var r0 = start + len * f, top = D - 0.0012, bot = -SEA_COL_DOWN, hz = (top - bot) / 2;
+        mergeTurned(m, box(0.0022, SEA_TUBE_R * 0.9, hz), c * r0, s * r0, bot + hz, a, STEEL);
+        mergeTurned(m, box(0.0024, SEA_TUBE_R, 0.0022), c * r0, s * r0, 0.0005, a, RUST);
+      });
+      /* Collars where it meets the hub and the drum. */
+      [start + 0.001, end - 0.001].forEach(function (r0) {
+        mergeAxes(m, tube(12, SEA_TUBE_R * 1.25, SEA_TUBE_R * 1.25, 0.0012, false), [c * r0, s * r0, tz],
+                  side, upv, dir, PAINT);
+      });
+    });
+    return (SEA_PLATFORM_MESH = m);
+  }
+
+  /* ONE PETAL, in its hinge's frame: x along the hinge (the drum's
+   * tangent), y radially OUT, z up; the hinge line through the origin.
+   * Closed, it is an eighth of a flattened dome of radius R and rise h
+   * standing on the drum: its base on the circle of radius R round the pad
+   * centre at (0, -R, 0), its tip at the crown. Two skins a metre apart so
+   * it has an inside, painted, and a thin lit seam along its edges. */
+  var SEA_PETAL_CACHE = {};
+  function seaPetalMesh(R, h) {
+    var key = R.toFixed(5) + '|' + h.toFixed(5);
+    if (SEA_PETAL_CACHE[key]) return SEA_PETAL_CACHE[key];
+    var m = emptyMesh();
+    var NA = 7, NU = 4, half = Math.PI / SEA_PETALS;
+    function pt(alpha, phi, inset) {
+      /* alpha 0 at the crown, pi/2 at the rim; phi the azimuth off this
+       * petal's centre line. The petal's own base point is (0, 0, 0). */
+      var rr = (R - inset) * Math.sin(alpha), zz = (h - inset) * Math.cos(alpha);
+      return [rr * Math.sin(phi), rr * Math.cos(phi) - R, zz];
+    }
+    /* Outer skin pale, inner skin dark; the seams between petals a shade
+     * darker so the dome reads as eight leaves even shut, and a hazard band
+     * round the foot where the leaves meet the drum. Colour per face, no
+     * extra geometry. */
+    [[0, '#cfd6db', '#9aa3aa', '#d9b23a'], [0.0012, '#59626a', '#4a5158', '#59626a']].forEach(function (skin) {
+      var base = m.v.length;
+      for (var i = 0; i <= NA; i++) {
+        for (var j = 0; j <= NU; j++) {
+          m.v.push(pt(i / NA * Math.PI / 2, -half + 2 * half * j / NU, skin[0]));
+        }
+      }
+      if (!m.c) m.c = [];
+      for (i = 0; i < NA; i++) {
+        for (j = 0; j < NU; j++) {
+          var a0 = base + i * (NU + 1) + j, a1 = a0 + 1, b0 = a0 + NU + 1, b1 = b0 + 1;
+          var col = i === NA - 1 ? skin[3] : (j === 0 || j === NU - 1) ? skin[2] : skin[1];
+          m.f.push([a0, b0, b1]); m.c.push(col);
+          m.f.push([a0, b1, a1]); m.c.push(col);
+        }
+      }
+    });
+    var tipBase = pt(Math.PI / 2 * 0.92, 0, -0.0005);
+    merge(m, box(0.0009, 0.0009, 0.0009), tipBase[0], tipBase[1], tipBase[2], 1, '!#ffcf6a');
+    /* The hinge sits on the drum, so the petal is lifted onto it; z here
+     * is measured from the top of the drum. */
+    SEA_PETAL_CACHE[key] = m;
+    return m;
+  }
+
+  /* Every dome on the platform, posed. `domes[k]` is pad k's openness, 0
+   * shut to 1 open (Sim.domeState decides it; main.js eases it). `frame`
+   * is the platform's own: origin on the sea at the port, right east, up
+   * north, fwd up - the same frame the rig mesh is drawn in. */
+  function drawSeaDomes(ctx, cam, frame, sunDir, tint, domes) {
+    var Gen = global.Gen;
+    var L = Gen && Gen.seaLayout ? Gen.seaLayout() : null;
+    if (!L) return;
+    var E = frame.right, N = frame.up, U = frame.fwd;
+    for (var k = 0; k < L.pads.length; k++) {
+      var p = L.pads[k];
+      var open = Math.max(0, Math.min(1, (domes && domes[k]) || 0));
+      /* Eased so the leaves start and stop gently, as a hydraulic ram does. */
+      var th = SEA_PETAL_OPEN * (open * open * (3 - 2 * open));
+      var ct = Math.cos(th), st = Math.sin(th);
+      var mesh = seaPetalMesh(p.dome, p.rise);
+      var cx = p.x, cy = p.y, cz = L.deck + SEA_DRUM_KM;
+      for (var i = 0; i < SEA_PETALS; i++) {
+        var az = (i + 0.5) / SEA_PETALS * Math.PI * 2;
+        var ox = Math.cos(az), oy = Math.sin(az);
+        /* Radial out, the hinge's tangent, and up, in the world. */
+        var rad = V.add(V.scale(E, ox), V.scale(N, oy));
+        var tan = V.add(V.scale(E, -oy), V.scale(N, ox));
+        var hinge = { x: frame.pos.x + (E.x * (cx + ox * p.dome) + N.x * (cy + oy * p.dome) + U.x * cz) * SEA_MESH_SCALE,
+                      y: frame.pos.y + (E.y * (cx + ox * p.dome) + N.y * (cy + oy * p.dome) + U.y * cz) * SEA_MESH_SCALE,
+                      z: frame.pos.z + (E.z * (cx + ox * p.dome) + N.z * (cy + oy * p.dome) + U.z * cz) * SEA_MESH_SCALE };
+        /* Swung about the hinge: the petal's y (radially out) and z (up)
+         * turn together, z toward out. See the note above seaPetalMesh. */
+        var fy = V.add(V.scale(rad, ct), V.scale(U, -st));
+        var fz = V.add(V.scale(rad, st), V.scale(U, ct));
+        var fr = { pos: hinge, right: tan, up: fy, fwd: fz };
+        paintPart(ctx, cam, fr, mesh, SEA_MESH_SCALE, sunDir, tint);
+      }
+    }
+  }
+
   function stationMeshes() {
     if (STATION_MESHES) return STATION_MESHES;
 
@@ -3626,7 +3891,10 @@
       shipyard: shipyard, agri: agri, mining: mining,
       reprocessing: reprocessing, milfuel: milfuel, carrier: carrier,
       surface: surface,
-      bay: bay, underground: underground, hall: hall
+      bay: bay, underground: underground, hall: hall,
+      /* In KILOMETRES, not pad radii - see seaPlatformMesh. Drawn at scale
+       * 1 (SEA_MESH_SCALE) by whoever draws it. */
+      seaplatform: seaPlatformMesh()
     };
 
     /* Imported models take over any role they are supplied for; the
@@ -14868,6 +15136,8 @@
     drawHoloTarget: drawHoloTarget,
     drawHullModel: drawHullModel,
     drawStationModel: drawStationModel,
+    drawSeaDomes: drawSeaDomes, seaPlatformMesh: seaPlatformMesh, seaPetalMesh: seaPetalMesh,
+    SEA_DRUM_KM: SEA_DRUM_KM, SEA_PETALS: SEA_PETALS, SEA_PETAL_OPEN: SEA_PETAL_OPEN, SEA_MESH_SCALE: SEA_MESH_SCALE,
     berthDressing: berthDressing, berthAds: berthAds, adSlot: adSlot,
     ADS: ADS, AD_SECONDS: AD_SECONDS,
     drawPortDressing: drawPortDressing,

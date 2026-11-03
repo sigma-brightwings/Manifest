@@ -61,7 +61,10 @@ console.log('--- which ports ---');
 var platforms = [], coastalLeft = 0, byRole = {}, byWorld = {}, sameRest = true, rolledUg = 0;
 var sameIdentity = true, notFlagged = true, waterOnly = true, wasCoastal = 0, cleared = true;
 var sampleSys = null;
-gal.stars.forEach(function (st) {
+/* SEA_QUICK=1 sweeps the first 60 systems only, for working on the later
+ * sections; the counts then fail, which is the point - it is not a run. */
+var STARS = process.env.SEA_QUICK ? gal.stars.slice(0, 60) : gal.stars;
+STARS.forEach(function (st) {
   var o = Galaxy.systemOpts(gal, st);
   var sy = Gen.generateSystem(st.seed, o);
   var sea = {};
@@ -144,8 +147,9 @@ console.log('--- the bay ---');
   check('each berth is its own pad, standing on the deck', ok);
   check('no two domes touch', minGap > 0.005, (minGap * 1000).toFixed(1) + ' m between the nearest rims');
   check('every dome stands clear of the hub, with a tube between', hubGap >= L.tube - 1e-12, (hubGap * 1000).toFixed(1) + ' m');
-  check('berth 0 is the large pad and the only one', Gen.berthOffset(p, 0).large &&
-        [1, 2, 3, 4, 5].every(function (k) { return !Gen.berthOffset(p, k).large; }));
+  var larges = [];
+  for (var lk = 0; lk < Gen.SEA_PADS; lk++) if (Gen.berthOffset(p, lk).large) larges.push(lk);
+  check('berths 0 and 4 are the large pads, and the only ones', larges.join(',') === '0,4', larges.join(','));
   /* Sized for the traffic: a hull a dome is to protect fits under it. */
   var big = Gen.SHIP_CLASSES.tanker.size, small = Gen.SHIP_CLASSES.hauler.size;
   check('the large dome covers a tanker and an ordinary one a waste hauler',
@@ -182,6 +186,271 @@ console.log('--- saves ---');
   check('a save docked at the port loads onto one of its pads',
         q && q.seaPlatform && ship.docked === p.id && bs && V.dist(ship.pos, bs.pos) < 1e-6,
         'berth ' + b);
+})();
+
+console.log('--- the mesh ---');
+var Rn = null;
+try { require('../src/render.js'); Rn = global.Render; } catch (e) { Rn = null; }
+(function () {
+  if (!Rn || !Rn.seaPlatformMesh) { check('render.js loads under node for the mesh checks', false); return; }
+  var L = Gen.seaLayout(), m = Rn.seaPlatformMesh();
+  check('the rig mesh is built, finite, in kilometres', m.f.length > 1000 &&
+        m.v.every(function (v) { return v.every(isFinite) && Math.abs(v[0]) < L.reach * 1.3 && Math.abs(v[1]) < L.reach * 1.3; }),
+        m.f.length + ' faces, ' + (L.reach * 2000).toFixed(0) + ' m across');
+  /* NOTHING OF THE RIG STANDS INSIDE A DOME above the deck except the
+   * landing circle's own lamps and paint: a hull parks there, and the
+   * camera's dome room (berthRoom) is drawn round it. */
+  var intrude = 0;
+  m.v.forEach(function (v) {
+    L.pads.forEach(function (p) {
+      var dx = v[0] - p.x, dy = v[1] - p.y;
+      if (dx * dx + dy * dy < Math.pow(p.dome * 0.97, 2) && v[2] > L.deck + 0.0015) intrude++;
+    });
+  });
+  check('nothing of the rig stands inside a dome over its deck', intrude === 0, intrude + ' vertices');
+  var deckTop = true;
+  L.pads.forEach(function (p) { if (Math.abs(Gen.berthOffset({ seaPlatform: true, surface: true, radius: 0.2 }, p.k).z * 0.2 - L.deck) > 0.004) deckTop = false; });
+  check('every stand is on the deck that is drawn', deckTop);
+
+  /* The petals. Closed they meet at the crown; open they stand clear of
+   * the landing circle, so a leaf never sweeps the deck a hull stands on. */
+  function petalWorld(p, i, open) {
+    var mesh = Rn.seaPetalMesh(p.dome, p.rise), th = Rn.SEA_PETAL_OPEN * open;
+    var az = (i + 0.5) / Rn.SEA_PETALS * Math.PI * 2, ox = Math.cos(az), oy = Math.sin(az);
+    var ct = Math.cos(th), st = Math.sin(th), hz = L.deck + Rn.SEA_DRUM_KM;
+    return mesh.v.map(function (v) {
+      /* x tangent, y radial (turned), z up (turned) - drawSeaDomes' frame. */
+      var ry = v[1] * ct + v[2] * st, rz = -v[1] * st + v[2] * ct;
+      return [p.x + ox * p.dome - oy * v[0] + ox * ry, p.y + oy * p.dome + ox * v[0] + oy * ry, hz + rz];
+    });
+  }
+  var crownOk = true, clearOk = true, nearest = Infinity;
+  L.pads.forEach(function (p) {
+    for (var i = 0; i < Rn.SEA_PETALS; i++) {
+      var shut = petalWorld(p, i, 0), top = 0;
+      shut.forEach(function (w) { top = Math.max(top, w[2]); });
+      if (Math.abs(top - (L.deck + Rn.SEA_DRUM_KM + p.rise)) > 0.002) crownOk = false;
+      petalWorld(p, i, 1).forEach(function (w) {
+        var rr = Math.hypot(w[0] - p.x, w[1] - p.y);
+        if (rr < p.dome * 0.95 && w[2] > L.deck) clearOk = false;
+        /* And how near an open leaf comes to a NEIGHBOUR's shut dome: the
+         * dome's own surface, a flattened half-ellipsoid on its drum. */
+        L.pads.forEach(function (q) {
+          if (q === p) return;
+          var dh = Math.hypot(w[0] - q.x, w[1] - q.y), dz = w[2] - (L.deck + Rn.SEA_DRUM_KM);
+          var inDrum = dz < 0 && dh < q.dome;
+          var e = dz >= 0 ? Math.sqrt(dh * dh / (q.dome * q.dome) + dz * dz / (q.rise * q.rise)) : dh / q.dome;
+          nearest = Math.min(nearest, inDrum ? -1 : (e - 1) * q.dome);
+        });
+      });
+    }
+  });
+  check('shut, the petals meet at the crown', crownOk);
+  check('open, no petal stands over the landing circle', clearOk);
+  check('an open petal never reaches a neighbour\'s shut dome', nearest > 0, (nearest * 1000).toFixed(1) + ' m at the closest');
+})();
+
+console.log('--- the domes ---');
+(function () {
+  var p = sampleSys.port, sy = sampleSys.sys, r = p.radius;
+  /* YOUR ARRIVAL. Captured, then carried: the dome over your pad is open
+   * every moment the hull is off the deck, starts to shut only once it is
+   * standing on it, and is shut when the rail ends. */
+  var ship = Sim.makeShip(V.zero(), V.zero());
+  var t0 = 40000;
+  var berth = Sim.assignBerth(ship, p);
+  var holdPose = Sim.arrivalPose(p, sy, t0, berth, 0);
+  ship.pos = V.clone(holdPose.pos); ship.vel = V.clone(holdPose.vel);
+  ship.fwd = holdPose.fwd; ship.up = holdPose.up; ship.right = holdPose.right;
+  var began = Sim.beginArrival(ship, p, sy, t0);
+  var dur = Sim.arrivalTotal(p, berth), seq = [], airOk = true, standZ = Sim.arrivalPath(p, berth)[3].z;
+  var bs = Sim.berthState(p, sy, t0, berth);
+  for (var el = 0; el <= dur; el += 0.25) {
+    var pose = Sim.arrivalPose(p, sy, t0 + el, berth, el);
+    var gb = Sim.groundBasis(p, sy, t0 + el);
+    var z = V.dot(V.sub(pose.pos, gb.entrance.pos), gb.up) / r;
+    if (z > standZ + 0.5 / 1000 / r && pose.gates.dome < 0.999) airOk = false;
+    var tag = pose.legId + (pose.gates.dome > 0.999 ? ':open' : pose.gates.dome < 0.001 ? ':shut' : ':moving');
+    if (seq[seq.length - 1] !== tag) seq.push(tag);
+  }
+  console.log('     arrival: ' + seq.join(' > '));
+  check('an arrival rail starts at a platform', began && !!holdPose);
+  check('the dome is open whenever the hull is off the deck', airOk);
+  check('it shuts only once she is standing on the pad, and is shut at the end',
+        seq.join(',') === 'approach:open,descend:open,settle:open,seal:open,seal:moving,berth:shut', seq.join(','));
+
+  /* YOUR DEPARTURE: the rail backwards. The dome is open before the hull
+   * leaves the stand. */
+  Sim.dockShip(ship, p, sy, t0);
+  var t1 = t0 + 600;
+  Sim.updateDockedShip(ship, sy, t1);
+  var left = Sim.undockShip(ship, sy, t1, 0.003);
+  var dep = [], liftOk = true;
+  check('undocking from a platform runs the rail backwards', left === p && ship.arrival && ship.arrival.reverse);
+  for (var e2 = 0; e2 <= ship.arrival.dur; e2 += 0.25) {
+    var pr = Sim.arrivalPose(p, sy, t1 + e2, berth, Math.max(0, ship.arrival.dur - e2));
+    var gb2 = Sim.groundBasis(p, sy, t1 + e2);
+    var z2 = V.dot(V.sub(pr.pos, gb2.entrance.pos), gb2.up) / r;
+    if (z2 > standZ + 0.5 / 1000 / r && pr.gates.dome < 0.999) liftOk = false;
+    var tg2 = pr.legId + (pr.gates.dome > 0.999 ? ':open' : pr.gates.dome < 0.001 ? ':shut' : ':moving');
+    if (dep[dep.length - 1] !== tg2) dep.push(tg2);
+  }
+  console.log('     departure: ' + dep.join(' > '));
+  check('leaving, the dome is open before the hull lifts off the stand', liftOk);
+  /* Through stepArrival to the end: handed over above the crown, held. */
+  var tt = t1;
+  while (ship.arrival && tt < t1 + 60) { tt += 0.25; Sim.stepArrival(ship, sy, tt); }
+  var gb3 = Sim.groundBasis(p, sy, tt), sp = Gen.seaPad(berth);
+  var up3 = V.dot(V.sub(ship.pos, gb3.entrance.pos), gb3.up);
+  check('and she is handed over held above her dome', !ship.arrival && up3 > sp.deck + sp.rise, (up3 * 1000).toFixed(0) + ' m up');
+
+  /* THE TARGETS: cleared and inside the envelope, your pad opens; inside a
+   * dome's volume, that dome is open whatever the clearance says. */
+  var s2 = Sim.makeShip(V.zero(), V.zero());
+  var gb4 = Sim.groundBasis(p, sy, t0), mine = Sim.assignBerth(s2, p), spm = Gen.seaPad(mine);
+  s2.pos = V.addScaled(V.addScaled(V.addScaled(gb4.entrance.pos, gb4.east, spm.x), gb4.north, spm.y), gb4.up, 1.0);
+  var tA = Sim.seaDomeTargets(p, sy, t0, s2, { cleared: true });
+  var tB = Sim.seaDomeTargets(p, sy, t0, s2, { cleared: false });
+  check('cleared and a kilometre up, your pad\'s dome is open', tA[mine].open === 1 && /cleared/.test(tA[mine].why), tA[mine].why);
+  check('not cleared, it is not opened for you', !(tB[mine].open === 1 && /you/.test(tB[mine].why)));
+  s2.pos = V.addScaled(V.addScaled(V.addScaled(gb4.entrance.pos, gb4.east, spm.x), gb4.north, spm.y), gb4.up, spm.deck + 0.010);
+  var tC = Sim.seaDomeTargets(p, sy, t0, s2, { cleared: false });
+  check('a hull inside a dome\'s volume holds it open, cleared or not', tC[mine].open === 1, tC[mine].why);
+
+  /* TRAFFIC. Over three days at every platform with traffic: a ship on her
+   * pad, berthed, under a shut dome; her dome open while she is coming in
+   * and going out; never shut while she is in the air within reach of it. */
+  var berthedShut = 0, berthedOpen = 0, airShut = 0, airOpen = 0, poseOff = 0, shared = 0, stays = 0, offDeck = 0, nextDue = 0;
+  var look = platforms.slice(0, 24);
+  look.forEach(function (x) {
+    var P = x.p, S = x.sys;
+    var routes = (S.traffic || []).filter(function (rt) { return (rt.to === P.id || rt.from === P.id) && !rt.outboard; });
+    for (var tt2 = 1000; tt2 < 3 * 86400; tt2 += 1800) {
+      var tg = Sim.seaDomeTargets(P, S, tt2, null, {});
+      var onPad = {};
+      routes.forEach(function (rt) {
+        var st = Sim.trafficState(rt, S, tt2);
+        var stay = Sim.seaStay(rt, P, tt2);
+        var pad = Sim.seaTrafficPad(P, S, tt2, rt);
+        if (!st || pad === null || !stay) return;
+        if (pad === Sim.SEA_OFF) { if (st.phase === 'moored' && st.to && st.to.id === P.id) offDeck++; return; }
+        if (st.phase === 'moored' && st.to && st.to.id === P.id) {
+          stays++;
+          var bsx = Sim.berthState(P, S, tt2, pad);
+          if (V.dist(st.pos, bsx.pos) > 1e-6) poseOff++;
+          if (onPad[pad]) shared++;
+          onPad[pad] = true;
+          if (tt2 > stay.a + Sim.SEA_SETTLE_S && tt2 < stay.d - Sim.SEA_DEPART_LEAD_S) {
+            /* Open over a berthed ship only for ANOTHER ship's sake: the
+             * next one due down on her pad as she leaves. */
+            if (!tg[pad].open) berthedShut++;
+            else if (tg[pad].why.indexOf(' ' + (rt.name || rt.id)) >= 0) berthedOpen++;
+            else nextDue++;
+          }
+        }
+      });
+    }
+    /* Fine-grained round each arrival and departure: in the air near the
+     * pad, the dome must be open. */
+    routes.slice(0, 6).forEach(function (rt) {
+      var stay = Sim.seaStay(rt, P, 20000);
+      if (!stay || !isFinite(stay.d)) return;
+      var pad = Sim.seaTrafficPad(P, S, stay.a, rt);
+      if (pad === Sim.SEA_OFF || pad === null) return;
+      [[stay.a - 120, stay.a + 30], [stay.d - 40, stay.d + 300]].forEach(function (win) {
+        for (var tq = win[0]; tq <= win[1]; tq += 2) {
+          var st2 = Sim.trafficState(rt, S, tq);
+          if (!st2 || !st2.pos) continue;
+          var gbq = Sim.groundBasis(P, S, tq), spq = Gen.seaPad(pad);
+          var padW = V.addScaled(V.addScaled(V.addScaled(gbq.entrance.pos, gbq.east, spq.x), gbq.north, spq.y), gbq.up, spq.deck);
+          var rel = V.sub(st2.pos, padW), h = V.dot(rel, gbq.up);
+          if (h > 0.004 && V.len(rel) < 0.5) {
+            if (Sim.seaDomeTargets(P, S, tq, null, {})[pad].open) airOpen++; else airShut++;
+          }
+        }
+      });
+    });
+  });
+  console.log('     traffic over 3 days at ' + look.length + ' platforms: ' + stays + ' moored samples, ' +
+              shared + ' sharing a pad, ' + offDeck + ' holding off the rig (deck full); berthed ' + berthedShut + ' shut / ' + berthedOpen + ' open; in the air near the pad ' +
+              airOpen + ' open / ' + airShut + ' shut');
+  check('a moored ship stands on the pad the timetable gives her', poseOff === 0 && stays > 0, poseOff + ' off');
+  check('a berthed ship is under a shut dome, never opened for her own sake', berthedShut > 0 && berthedOpen === 0,
+        berthedOpen + ' opened for her; ' + nextDue + ' open for the ship due next onto her pad');
+  check('never shut on a ship in the air over her pad', airShut === 0 && airOpen > 0);
+  check('no two ships ever share a pad', shared === 0, shared + ' of ' + stays);
+  /* Measured, not chosen: the sweep's overflow at eight pads. Over this
+   * many ships the deck is full now and then and the extras hold off. */
+  check('a full deck is uncommon: few ships have to hold off the rig', offDeck <= (stays + offDeck) * 0.10, offDeck + ' of ' + (stays + offDeck) + ' (' + (100 * offDeck / Math.max(1, stays + offDeck)).toFixed(1) + '%)');
+})();
+
+console.log('--- the walk ---');
+(function () {
+  var Walk = require('../src/walk.js');
+  var L = Gen.seaLayout(), mine = 3;
+  var spec = { tube: L.tube * 1000, dome: Gen.seaPad(mine).dome * 1000, mine: mine,
+               pads: L.pads.map(function (p) { return { k: p.k, large: p.large, mine: p.k === mine }; }) };
+  /* A hull of 25 m with her ramp at the stern, as main.js hangarSpec
+   * measures one. */
+  var hg = { box: [-6, -14, 6, 12], hull: [-6, -12, 6, 12], height: 7, foot: { x: 0, z: -13 }, gy: 0 };
+  var plan = Walk.layout('sea-test', { seed: 'kawartha', sea: spec, livery: 'civ',
+    ships: [{ id: 'me', size: 'M', name: 'Test', current: true, hangar: hg }],
+    others: [{ name: 'Overwater Barge', size: 'L', pad: 0 }, { name: 'Kestrel Barge', size: 'M', pad: 5 }] });
+  var tube = plan.rooms.filter(function (r) { return r.id === 'tube'; })[0];
+  var dome = plan.rooms.filter(function (r) { return r.id === 'berth0'; })[0];
+  var barIt = plan.items.filter(function (it) { return it.kind === 'bar'; })[0];
+  check('a platform\'s walk has your dome, your tube and the bar', !!(tube && dome && barIt && plan.hangar));
+  check('your tube is the real one: as long as the rig\'s', tube && Math.abs((tube.x1 - tube.x0) - L.tube * 1000) < 1e-6,
+        tube ? (tube.x1 - tube.x0).toFixed(0) + ' m' : '');
+  var dR = Gen.seaPad(mine).dome * 1000;
+  check('the hangar is inside the dome', dome && Math.hypot((dome.x1 - dome.x0) / 2, (dome.z1 - dome.z0) / 2) <= dR + 1e-6,
+        dome ? ((dome.x1 - dome.x0).toFixed(0) + ' x ' + (dome.z1 - dome.z0).toFixed(0) + ' m under a ' + (2 * dR).toFixed(0) + ' m dome') : '');
+  /* BFS over the standable floor, half a metre a step: from her ramp's
+   * foot to the bar counter, and back. */
+  function reach(from, to) {
+    var S = 0.5, key = function (x, z) { return Math.round(x / S) + ',' + Math.round(z / S); };
+    var seen = {}, q = [[from.x, from.z, null]], prev = {}, goal = null;
+    seen[key(from.x, from.z)] = true;
+    for (var qi = 0; qi < q.length && qi < 400000; qi++) {
+      var c = q[qi];
+      if (Math.hypot(c[0] - to.x, c[1] - to.z) < 2.0) { goal = c; break; }
+      [[S, 0], [-S, 0], [0, S], [0, -S]].forEach(function (d) {
+        var nx = c[0] + d[0], nz = c[1] + d[1], k = key(nx, nz);
+        if (seen[k] || !Walk.standable(plan, nx, nz)) return;
+        seen[k] = true; prev[k] = key(c[0], c[1]); q.push([nx, nz]);
+      });
+    }
+    if (!goal) return null;
+    var rooms = {}, k2 = key(goal[0], goal[1]), steps = 0;
+    while (k2 && steps < 100000) {
+      var xz = k2.split(',').map(function (v) { return +v * S; });
+      var r = Walk.roomAt(plan, xz[0], xz[1]);
+      if (r) rooms[r.id] = true;
+      k2 = prev[k2]; steps++;
+    }
+    return { rooms: rooms, len: steps * S };
+  }
+  var foot = plan.hangar.foot, barAt = { x: barIt.x, z: barIt.z };
+  var there = reach({ x: foot.x + 1.6, z: foot.z }, barAt);
+  var back = reach(barAt, { x: foot.x + 1.6, z: foot.z });
+  check('from her ramp, through the dome door and the tube, to the bar',
+        !!(there && there.rooms.berth0 && there.rooms.tube && there.rooms.concourse && there.rooms.bar),
+        there ? Object.keys(there.rooms).join(' > ') + ', ' + there.len.toFixed(0) + ' m walked' : 'no way through');
+  check('and back again', !!(back && back.rooms.tube), back ? back.len.toFixed(0) + ' m' : 'no way back');
+  /* The only way between the dome and the hub is the tube. */
+  var cut = { rooms: plan.rooms.filter(function (r) { return r.id !== 'tube'; }), doors: plan.doors.filter(function (d) { return d.a !== 'tube' && d.b !== 'tube'; }), items: plan.items };
+  var savePlan = plan; plan = cut;
+  var noTube = reach({ x: foot.x + 1.6, z: foot.z }, barAt);
+  plan = savePlan;
+  check('the tube is the only way from the pad to the bar', !noTube);
+  var ow = plan.items.filter(function (it) { return it.kind === 'other'; });
+  check('a ship moored on another pad is boarded at the end of that pad\'s tube',
+        ow.length === 2 && ow.every(function (it) { return /^tube\d/.test(it.berth); }), ow.map(function (it) { return it.label; }).join('; '));
+  /* Same plan every time. */
+  var again = Walk.layout('sea-test', { seed: 'kawartha', sea: spec, livery: 'civ',
+    ships: [{ id: 'me', size: 'M', name: 'Test', current: true, hangar: hg }],
+    others: [{ name: 'Overwater Barge', size: 'L', pad: 0 }, { name: 'Kestrel Barge', size: 'M', pad: 5 }] });
+  check('the same platform walks the same', JSON.stringify(again.rooms) === JSON.stringify(plan.rooms));
 })();
 
 module.exports = { platforms: platforms, sample: sampleSys };
