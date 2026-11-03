@@ -138,6 +138,31 @@ Look for **Radioactive waste**: industrial worlds *pay you* to take it. Roughly
 9,000 credits a run against your 3,200 starting balance, if you can find a
 reprocessing plant to dump it at.
 
+**7b. `Y` — the trade analyser** (1,000 cr at any yard, a utility slot).
+Docked, `Y` — from the cockpit or from the market screen — opens a month of the
+port you are on: every good it trades with its ask and bid and a small graph,
+and one large graph of the good you pick. The **ask** (what you pay) is a solid
+line with round markers, the **bid** (what you are paid) a dashed line with
+square ones. Two averages are drawn — this port's and the whole system's — and,
+with a target locked, your **break-even**: the ask plus the fuel for the trip
+shared over a full hold. Lock a port (`T`) for an in-system run, or plot a star
+for a jump (`Enter` on the chart, or on the analyser's own systems list).
+
+| Key | In the analyser |
+|---|---|
+| `↑` `↓` | Pick the commodity |
+| `Tab` | Flip between this port's graph and **other systems** (prices as last reported, aged by distance) |
+| `PgUp` `PgDn` | Pick a system on the other-systems list |
+| `Enter` | Plot that system as your trip, for the break-even |
+| `Esc` or `Y` | Close (back to the market if it was open) |
+
+In flight `Y` reads the port you have locked, anywhere in the system, but
+does not cost a trip until you dock. **No fitting?** Walk out onto the station
+(`O`, then down your ramp): the concourse has a **public trade terminal**. `E`
+at it opens the same screen for that port, less the break-even — a public
+terminal cannot see your ship's lock. The mouse works too: click a row, a
+tab, or the close box.
+
 **8. `F5` — throw something out of the airlock.** Every cargo line has EJECT 1t and
 EJECT ALL beside it; `Del` and `Shift+Del` do the same from the keyboard. Fitted
 equipment is listed on the same screen and deliberately has no button.

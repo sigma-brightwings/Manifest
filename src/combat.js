@@ -568,11 +568,52 @@
      * once, from orbit, which is the whole of what you are paying for. A
      * utility slot, like the scanners, because it is a receiver listening
      * to the system's markets and that is where the receivers go. */
-    tradescan: { id: 'tradescan', name: 'Trade analyser', slot: 'utility',
+    /* RENAMED 2026-11-03, the id kept. Astra asked for a second, cheaper
+     * instrument and called THAT one the trade analyser ("add a trade
+     * analyzer as a buyable upgrade, 1000 cr"), so the word goes to the
+     * thing she named with it, and this one is called for what it does:
+     * it surveys every market under the star at once. The id stays
+     * `tradescan` because saves, start kits and yard fits store ids, and
+     * a renamed id would quietly strip it off every ship that has one.
+     * hasTradeAnalyser keeps its name for the same reason — it asks about
+     * this fitting (kind 'analyser'), and the new one is kind 'portanalyser'
+     * precisely so the TRADE page cannot mistake one for the other. */
+    tradescan: { id: 'tradescan', name: 'Market survey array', slot: 'utility',
                  kind: 'analyser', price: 7800, power: 0.9, mass: 1,
                  unique: true,
                  minDev: 0.45, minStanding: -100, minCrime: 0, grey: false,
                  pitch: 'Every warehouse in the system, sorted by who is desperate.' },
+
+    /* ---- the trade analyser (2026-11-03) ---------------------------------
+     * Astra: "add a trade analyzer as a buyable upgrade, 1000 cr, shows the
+     * graph of how every commodity buys and sells at that port, and what
+     * the average price is, your break-even price when factoring fuel in".
+     *
+     * DEPTH WHERE THE SURVEY ARRAY HAS BREADTH. The array reads every port
+     * under the star and sorts them; this reads ONE port — the one you are
+     * clamped to, or in flight the one you have locked — and gives you its
+     * month: every good it trades, drawn, with both averages, the break-even
+     * against your locked trip, and the last reports from other systems.
+     * Same market model, same numbers, a different question. That is why
+     * the two coexist and why this one is a seventh of the price: it is a
+     * display for figures a port already publishes, not a receiver.
+     *
+     * A utility slot like every other instrument, light and nearly free on
+     * the reactor (a screen and a datalink), sold at every yard and outfitter
+     * that sells anything (`minDev: 0`) because a first-career trader is
+     * the one who needs it most. The Talon has two utility slots and her
+     * cargo scoop takes one, so it fits the hard start's Talon in the
+     * other — but the normal trade start has put the survey array there,
+     * so on that ship it costs you the array or the scoop, and canFit says
+     * so in words.
+     * The public terminal on a station's concourse draws the same screen
+     * without it (tradeanalyser.js), less the break-even: a terminal does
+     * not know where your ship is going. */
+    portanalyser: { id: 'portanalyser', name: 'Trade analyser', slot: 'utility',
+                    kind: 'portanalyser', price: 1000, power: 0.3, mass: 0.5,
+                    unique: true,
+                    minDev: 0, minStanding: -100, minCrime: 0, grey: false,
+                    pitch: 'One port, its month on a graph, and what a run costs you in fuel.' },
 
     /* ---- survey instruments (mining rung 1, 2026-10-16; graded 2026-10-21)
      * Astra: "scan planet for minerals and mining", and then: "a grade 1
@@ -3686,6 +3727,14 @@
   function hasTradeAnalyser(ship) {
     var list = fittedList(ship);
     for (var i = 0; i < list.length; i++) if (list[i].item.kind === 'analyser') return true;
+    return false;
+  }
+
+  /* The 1,000 cr trade analyser (kind 'portanalyser'), which is NOT what
+   * hasTradeAnalyser asks about — see the EQUIPMENT entry for the names. */
+  function hasPortAnalyser(ship) {
+    var list = fittedList(ship);
+    for (var i = 0; i < list.length; i++) if (list[i].item.kind === 'portanalyser') return true;
     return false;
   }
 
@@ -9811,7 +9860,7 @@
     ensureCruiseDrive: ensureCruiseDrive,
     SINK: SINK, sinkRackSize: sinkRackSize, armSink: armSink,
     scanLevel: scanLevel, scanShip: scanShip, hasScoop: hasScoop, hasSkimmer: hasSkimmer, surveyLevel: surveyLevel,
-    npcArmament: npcArmament, hasTradeAnalyser: hasTradeAnalyser, playerDps: playerDps,
+    npcArmament: npcArmament, hasTradeAnalyser: hasTradeAnalyser, hasPortAnalyser: hasPortAnalyser, playerDps: playerDps,
     hailRumour: hailRumour, rumourFacts: rumourFacts, RUMOUR_DAY: RUMOUR_DAY,
     startRescue: startRescue, updateRescue: updateRescue, restoreRescue: restoreRescue,
     endRescue: endRescue, stranded: stranded, launchPortBoat: launchPortBoat,

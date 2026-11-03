@@ -40,6 +40,76 @@ before they update.
 
 ## Unreleased
 
+### Added (2026-11-03, the trade analyser)
+
+Astra: "add a trade analyzer as a buyable upgrade, 1000 cr, shows the graph of
+how every commodity buys and sells at that port, and what the average price is,
+your break-even price when factoring fuel in, and the buy and sell prices should
+be visually distinct from one another. Trade analyzer text will be in bold, and
+I need you to generate a line graph showing the prices of the commodities. This
+screen will also be reachable by walking out of your ship and onto a station in
+order to read it off a public computer terminal."
+
+- **The Trade analyser**, a new fitting (`portanalyser`): 1,000 cr, a utility
+  slot, 0.3 MW and half a tonne, one per ship, sold at every yard (`minDev 0`).
+  `Y` opens it, from the cockpit or from the market screen. Docked it reads the
+  port you are on; in flight, the port you have locked, anywhere in the system,
+  with no range limit (the market survey array already reads every port from
+  orbit; a cheaper display of one port's figures failing where that works would
+  be a rule with no reason). Without it, `Y` says so and names the terminal.
+- **The screen, all in bold.** Every good the port trades — ask, bid and a
+  30-day sparkline — and one large line graph of the selected good over **30
+  days, a point every 12 hours**, with price ticks in cr and day ticks. **Ask
+  solid with round markers, bid dashed with square ones**, in two colours, so
+  colour never carries it alone; a legend draws each. A port that only buys a
+  good, or a waste producer that only pays you, shows one line and says so.
+- **Two averages**, each a labelled reference line: this port's over the
+  window and the system's (every port quoting it, over the same window). The
+  average is the **mid** (halfway between ask and bid) where the port quotes
+  both, and the one line's own price where it quotes one; the screen says which.
+- **Break-even = ask + trip fuel ÷ tonnes**, on a **full hold of the good,
+  capped by credits and by stock** (the screen says which cap bit). The trip is
+  to your lock: a **port** (`T`) costs the cruise drive's reaction mass over
+  the straight line between the two ports; a **star** — plotted on the chart
+  with `Enter`, or on the analyser's systems list — costs `Galaxy.jumpPlan`'s
+  jump fuel for the ship *with the load aboard*. Fuel is priced at this port's
+  hydrogen ask (list price if it sells none; milfuel's ask on a military
+  drive). It is compared with the locked port's bid now, or the locked star's
+  best reported bid, as a margin per tonne. Nothing locked: the ask alone, and
+  "lock a target to cost the trip".
+- **Other systems** (`Tab`): the selected good's best bid and best ask, with
+  their ports, in the 8 nearest systems you can reach on the fuel aboard, then
+  systems you have visited, to 12. **Prices as last reported**: news rides the
+  freighters, so a report is as old as a class II hull takes to cross
+  (`Slipspace.hoursPerLy(400 t)`, 11.8 h per ly — five light years is 2.5 days
+  old). Systems come from the same cache a visit uses, so the markets are the
+  ones you would find, less the age. Filled one system a frame (5–70 ms each,
+  median 19 ms, over twenty seeds), never per frame after.
+- **A public trade terminal on every station concourse** (and every sea
+  platform's hub): a pedestal with a lit screen and header, placed from its own
+  seeded stream on clear floor facing the way you come in. `E` at it opens the
+  same screen for that port, no fitting needed — and no break-even: it cannot
+  see your ship's lock, and says so. Placed after the dressing, so every
+  concourse is dressed exactly as before.
+- **`Economy.priceAt(port, cid, t)`**: the market as it was at `t` — the closed
+  form, plus your own trades only from when you made them. `price()` cannot be
+  asked about the past at a port you are docked at (it answers from the live
+  shelf). `price()` and `priceAt()` now share one `quote()`, so they cannot
+  price stock two ways.
+
+### Changed (2026-11-03, the trade analyser)
+
+- **The old 7,800 cr "Trade analyser" is now the Market survey array.** Same
+  id (`tradescan`), same job (every port's shortages and gluts on the TRADE
+  page), same price: the name went to the instrument Astra asked for with it.
+  The TRADE page, the start kits' lines and the tests say the new name.
+
+### Saves (2026-11-03, the trade analyser)
+
+**Old saves survive.** No save version change. Nothing new is saved: the
+screen is a screen, the plotted star for the analyser lives for the session,
+and a ship that already carries `tradescan` keeps it under its new name.
+
 ### Changed (2026-11-03, warmer, fuller habitable zones: stars stage 2)
 
 Stage 2 of the star programme. **Every seed's planets move**: Astra accepted the

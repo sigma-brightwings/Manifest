@@ -274,6 +274,7 @@
      * opts.outfitter: the nearest port in the system that has one). Its
      * own seeded stream, so this changes nothing above. */
     if (global.Dressing && global.Dressing.apply) global.Dressing.apply(plan, opts.seed || '', { livery: plan.livery, outfitter: opts.outfitter || null });
+    placeTradeTerminal(plan, opts.seed || '');
     return plan;
   }
 
@@ -428,7 +429,159 @@
     if (hangar) plan.hangar = hangar;
     plan.livery = opts.livery || 'civ';
     if (global.Dressing && global.Dressing.apply) global.Dressing.apply(plan, opts.seed || '', { livery: plan.livery, outfitter: opts.outfitter || null });
+    placeTradeTerminal(plan, opts.seed || '');
     return plan;
+  }
+
+  /* ---- THE PUBLIC TRADE TERMINAL (2026-11-03) ------------------------------
+   * Astra: "This screen will also be reachable by walking out of your ship
+   * and onto a station in order to read it off a public computer terminal."
+   *
+   * A pedestal on the concourse floor with a screen on it. Walk up, E, and
+   * it opens the trade analyser's screen for THIS port (tradeanalyser.js,
+   * via 'terminal') with no fitting needed.
+   *
+   * PLACED LAST, after the dressing, and on purpose. Put in the plan before
+   * Dressing.apply, it would have been one more item for blockedNear to
+   * steer round, the concourse dresser would have dropped a bench or a
+   * crate stack near it, and every later draw from that room's stream would
+   * have landed somewhere else — every concourse in the galaxy re-dressed
+   * for one pedestal. Afterwards, the dressing is exactly what it was and
+   * the terminal takes a spot the dressing left clear.
+   *
+   * THE SPOT: every point of a half-metre grid on the concourse floor that
+   * is two metres off the walls, clear of every counter and prop by a body
+   * and a bit, clear of the doorways by enough to walk past, and has a
+   * three metres of open floor in front of it to read from. Then one of
+   * those, picked by its OWN stream (`tradeterm|seed|port`), so no other
+   * draw anywhere moves. The screen faces the door you come in by. A concourse with nowhere clear gets no terminal (none has
+   * so far: see tradeanalyser.test.js, which walks to it on every layout
+   * it builds). */
+  var TERM_HALF = [0.35, 0.3];   // m, the pedestal's half-footprint (along its face, deep)
+  function placeTradeTerminal(plan, seed) {
+    var room = null;
+    for (var r = 0; r < plan.rooms.length; r++) if (plan.rooms[r].kind === 'concourse') { room = plan.rooms[r]; break; }
+    if (!room) return null;
+    var cx = (room.x0 + room.x1) / 2, cz = (room.z0 + room.z1) / 2;
+    /* The way in from your berth: the cargo hall's door on a station, your
+     * tube's at a sea platform. */
+    var kindOf = {};
+    plan.rooms.forEach(function (rm) { kindOf[rm.id] = rm; });
+    var entry = null;
+    plan.doors.forEach(function (d) {
+      if (entry || (d.a !== room.id && d.b !== room.id)) return;
+      var other = kindOf[d.a === room.id ? d.b : d.a];
+      if (other && (other.kind === 'cargohall' || (other.kind === 'tube' && other.id === 'tube'))) entry = d;
+    });
+    var cands = [];
+    for (var x = room.x0 + 2; x <= room.x1 - 2 + 1e-9; x += 0.5) {
+      for (var z = room.z0 + 2; z <= room.z1 - 2 + 1e-9; z += 0.5) {
+        var clear = plan.items.every(function (it) {
+          if (Math.hypot(it.x - x, it.z - z) < 1.8) return false;
+          var c = it.counter;
+          return !c || !(x > c[0] - 1.4 && x < c[2] + 1.4 && z > c[1] - 1.4 && z < c[3] + 1.4);
+        }) && plan.doors.every(function (d) {
+          return !(x > d.x0 - 2.5 && x < d.x1 + 2.5 && z > d.z0 - 2.5 && z < d.z1 + 2.5);
+        }) && (plan.seats || []).every(function (st) { return Math.hypot(st.x - x, st.z - z) > 1.4; });
+        if (!clear) continue;
+        /* Facing the door you come in by, square to the walls, with three
+         * metres of open floor in front of it — the first placement faced
+         * the middle of the room and put the concourse kiosk squarely in
+         * front of the screen, so from the doorway it could not be seen. */
+        var fx = 0, fz = 0;
+        if (entry) {
+          if (entry.axis === 'z') fz = entry.at > z ? 1 : -1; else fx = entry.at > x ? 1 : -1;
+        } else if (Math.abs(cx - x) > Math.abs(cz - z)) fx = cx > x ? 1 : -1; else fz = cz > z ? 1 : -1;
+        if (!fx && !fz) fz = -1;
+        var open = true;
+        for (var ahead = 1.0; ahead <= 3.0 + 1e-9; ahead += 0.5) {
+          if (!standable(plan, x + fx * ahead, z + fz * ahead)) { open = false; break; }
+        }
+        if (!open) continue;
+        cands.push({ x: x, z: z, fx: fx, fz: fz });
+      }
+    }
+    if (!cands.length) return null;
+    var trng = stream('tradeterm|' + seed + '|' + plan.portId);
+    var pick = trng.pick(cands);
+    /* What its screen shows: two traces, an ask over a bid, seven points
+     * each. Drawn from the same stream AFTER the pick, so the spot does not
+     * depend on them, and nothing else does either. */
+    var ask = [], bid = [], lvl = 0.55 + trng.next() * 0.2;
+    for (var k = 0; k < 7; k++) {
+      lvl = Math.max(0.35, Math.min(0.85, lvl + (trng.next() - 0.5) * 0.22));
+      ask.push(lvl);
+      bid.push(Math.max(0.08, lvl - 0.18 - trng.next() * 0.1));
+    }
+    var hw = pick.fx ? TERM_HALF[1] : TERM_HALF[0], hd = pick.fx ? TERM_HALF[0] : TERM_HALF[1];
+    var it = { kind: 'tradeterm', term: true, x: pick.x, z: pick.z, label: 'Trade terminal',
+               face: { x: pick.fx, z: pick.fz }, trace: { ask: ask, bid: bid },
+               counter: [pick.x - hw, pick.z - hd, pick.x + hw, pick.z + hd] };
+    plan.items.push(it);
+    return it;
+  }
+
+  /* The pedestal, its screen tilted back toward whoever reads it, and a
+   * lit header over it so it can be found from across the concourse —
+   * the same cyan the market's own screen uses for "this is information". */
+  function termQuads(it, out) {
+    var c = it.counter, f = it.face;
+    boxQuads(c, 0, 0.95, '#2b3138', out);
+    /* Corners of the face: across is perpendicular to the facing. */
+    var ax = f.z ? 1 : 0, az = f.x ? 1 : 0;
+    var half = f.x ? (c[3] - c[1]) / 2 : (c[2] - c[0]) / 2;
+    var fx = it.x + f.x * 0.12, fz = it.z + f.z * 0.12;
+    var bx = it.x - f.x * 0.18, bz = it.z - f.z * 0.18;
+    var P = function (ox, oz, s, y) { return [ox + ax * s, y, oz + az * s]; };
+    /* The screen: low at the front, high at the back, dark glass lit from
+     * inside — with what the analyser would show on it: a header strip and
+     * two traces, the ask over the bid, in the screen's own two colours.
+     * Everything on the glass stands a centimetre off it, along its normal
+     * (the screen leans back 0.30 m over 0.42 m of rise), so nothing is
+     * coplanar with anything else. */
+    var nH = 0.814, nY = 0.581;
+    var S = function (u, v, off) {
+      return [fx + (bx - fx) * v + ax * u + f.x * nH * off, 1.0 + 0.42 * v + nY * off,
+              fz + (bz - fz) * v + az * u + f.z * nH * off];
+    };
+    var rect = function (u0, v0, u1, v1, off, col, bias) {
+      out.push({ pts: [S(u0, v0, off), S(u1, v0, off), S(u1, v1, off), S(u0, v1, off)], col: col, lit: true, bias: bias });
+    };
+    /* Its bezel a centimetre BEHIND the glass along that normal. It used
+     * to lie in the glass's own plane, a little bigger, and on the GPU the
+     * two fought: the bezel won the upper half of the screen. */
+    out.push({ pts: [S(-half - 0.04, -0.12, -0.01), S(half + 0.04, -0.12, -0.01), S(half + 0.04, 1.12, -0.01), S(-half - 0.04, 1.12, -0.01)],
+               col: '#1b2026', bias: 0.01 });
+    rect(-half, 0, half, 1, 0, '#0b2a33', -0.02);
+    rect(-half + 0.03, 0.82, half - 0.03, 0.93, 0.01, '#7dfaff', -0.03);
+    /* A trace as thin strips between its points. */
+    var tr = it.trace || { ask: [0.6, 0.62, 0.58, 0.64, 0.6, 0.66, 0.63], bid: [0.4, 0.42, 0.38, 0.44, 0.4, 0.46, 0.43] };
+    var u0 = -half + 0.05, u1 = half - 0.05, vlo = 0.1, vhi = 0.74, th = 0.025;
+    [[tr.ask, '#7dc8ff'], [tr.bid, '#ffc46b']].forEach(function (line) {
+      var pts = line[0];
+      for (var k = 0; k + 1 < pts.length; k++) {
+        var ua = u0 + (u1 - u0) * k / (pts.length - 1), ub = u0 + (u1 - u0) * (k + 1) / (pts.length - 1);
+        var va = vlo + (vhi - vlo) * pts[k], vb = vlo + (vhi - vlo) * pts[k + 1];
+        out.push({ pts: [S(ua, va - th, 0.01), S(ub, vb - th, 0.01), S(ub, vb + th, 0.01), S(ua, va + th, 0.01)],
+                   col: line[1], lit: true, bias: -0.03 });
+      }
+    });
+    /* The post and the header. */
+    boxQuads([it.x - f.x * 0.3 - 0.04 - ax * 0.04, it.z - f.z * 0.3 - 0.04 - az * 0.04,
+              it.x - f.x * 0.3 + 0.04 + ax * 0.04, it.z - f.z * 0.3 + 0.04 + az * 0.04], 0.95, 2.2, '#3a4048', out);
+    /* A centimetre proud of the post's front face, not on it: two faces
+     * in one plane fight on the GPU (walk.test.js, the bar door). */
+    var hx = it.x - f.x * 0.25, hz = it.z - f.z * 0.25;
+    out.push({ pts: [P(hx, hz, -half - 0.1, 2.0), P(hx, hz, half + 0.1, 2.0), P(hx, hz, half + 0.1, 2.35), P(hx, hz, -half - 0.1, 2.35)],
+               col: '#ffd36b', lit: true, bias: -0.02 });
+    /* Three dark marks on the sign, a centimetre proud of it again, for
+     * lettering at a distance. */
+    var gx = it.x - f.x * 0.24, gz = it.z - f.z * 0.24;
+    for (var g = 0; g < 3; g++) {
+      var s0 = -half + 0.02 + g * (2 * half - 0.04) / 3, s1 = s0 + (2 * half - 0.04) / 3 - 0.06;
+      out.push({ pts: [P(gx, gz, s0, 2.09), P(gx, gz, s1, 2.09), P(gx, gz, s1, 2.26), P(gx, gz, s0, 2.26)],
+                 col: '#2a2410', bias: -0.03 });
+    }
   }
 
   /* ---- where you may stand ---------------------------------------------
@@ -901,7 +1054,8 @@
     plan.items.forEach(function (it) {
       var r = roomAt(plan, it.x, it.z);
       if (!r || !show[r.id]) return;
-      if (it.counter && !it.prop) boxQuads(it.counter, 0, 1.05, it.kind === 'bar' ? '#6b4a33' : '#3f5560', quads);
+      if (it.term) termQuads(it, quads);
+      else if (it.counter && !it.prop) boxQuads(it.counter, 0, 1.05, it.kind === 'bar' ? '#6b4a33' : '#3f5560', quads);
       if (it.ship || it.other) hatchQuads(it, r, quads);
     });
     if (plan.dress) Object.keys(show).forEach(function (id) {
@@ -1017,7 +1171,8 @@
     plan.items.forEach(function (it) {
       var r = roomAt(plan, it.x, it.z);
       if (!r) return;
-      if (it.counter && !it.prop) boxQuads(it.counter, 0, 1.05, it.kind === 'bar' ? '#6b4a33' : '#3f5560', quads);
+      if (it.term) termQuads(it, quads);
+      else if (it.counter && !it.prop) boxQuads(it.counter, 0, 1.05, it.kind === 'bar' ? '#6b4a33' : '#3f5560', quads);
       if (it.ship || it.other) hatchQuads(it, r, quads);
     });
     if (plan.dress) Object.keys(plan.dress).forEach(function (id) {
@@ -1164,7 +1319,8 @@
     hangarToShip: toShip, hangarToStation: toStation, HANGAR_MARGIN: HANGAR_MARGIN,
     layout: layout, standable: standable, roomAt: roomAt,
     start: start, step: step, look: look, facing: facing, draw: draw,
-    sizeClass: sizeClass, meshFor: meshFor, panesFor: panesFor
+    sizeClass: sizeClass, meshFor: meshFor, panesFor: panesFor,
+    placeTradeTerminal: placeTradeTerminal
   };
 
   global.Walk = Walk;

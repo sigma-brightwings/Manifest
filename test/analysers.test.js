@@ -29,7 +29,7 @@ var Combat = require(path.join(SRC, 'combat.js'));
 var pass = 0, fail = 0;
 function check(n, c, d) { if (c) pass++; else { fail++; console.log('  FAIL  ' + n + (d ? '   ' + d : '')); } }
 
-console.log('--- the trade analyser reads the market, it does not have one ---');
+console.log('--- the market survey array (tradescan) reads the market, it does not have one ---');
 (function () {
   var T = 3 * 86400, seen = 0, sysN = 0, agree = true, order = true;
   for (var k = 0; k < 12; k++) {
@@ -104,7 +104,7 @@ console.log('--- a run is a rate when the caller says how fast it flies ---');
 console.log('--- the fittings ---');
 (function () {
   var ta = Combat.EQUIPMENT.tradescan, ca = Combat.EQUIPMENT.combatanalyser;
-  check('the trade analyser is a utility fitting of its own kind',
+  check('the market survey array is a utility fitting of its own kind',
         ta && ta.slot === 'utility' && ta.kind === 'analyser' && ta.unique);
   check('the combat analyser is the third rung of the scanner ladder',
         ca && ca.kind === 'scanner' && ca.scan === 3 && ca.uniqueGroup === 'scanner');
