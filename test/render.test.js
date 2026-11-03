@@ -160,6 +160,9 @@ require('../src/missions.js');
 require('../src/arcs.js');
 /* Trade with a hailed ship — the COMMS trade board draws from it. */
 require('../src/shiptrade.js');
+/* The trade analyser's data (2026-11-03): main.js reaches it as
+ * global.TradeAnalyser and the page draws nothing without it. */
+require('../src/tradeanalyser.js');
 require('../src/sound.js');
 require('../src/save.js');
 /* The title card's artwork — the wordmark outline and the compass rose. */
@@ -4284,6 +4287,34 @@ scenario('closing the trade console', function () {
   delete G.ship.cargo.ores;
   Sim.refreshShip(G.ship);
 }, 1);
+
+/* The trade analyser (2026-11-03): refused in words without the fitting,
+ * then drawn docked — graph, other systems — and closed. The layout is
+ * checked by eye (see the CHANGELOG); this is that it draws at all and
+ * says the right things. */
+(function () {
+  var port = G.sys.ports.filter(function (p) { return p.market && !p.dark && !p.surface; })[0];
+  var wasDocked = G.ship.docked, wasFit = JSON.stringify(G.ship.fit);
+  if (!wasDocked) Sim.dockShip(G.ship, port, G.sys, G.t);
+  port = G.sys.byId[G.ship.docked];
+  G.message = null;
+  G.openAnalyser('fitting');
+  check('the analyser refuses without the fitting, and names the terminal',
+        !G.analyser && /terminal/.test(String(G.message || '')), String(G.message));
+  for (var k in G.ship.fit) if (/^utility/.test(k) && G.ship.fit[k] !== 'cargoscoop') delete G.ship.fit[k];
+  var fitted = Combat.fitItem(G.ship, 'portanalyser');
+  check('the trade analyser fits the ship the render suite flies', fitted && fitted.ok, fitted && fitted.why);
+  scenario('the trade analyser renders, docked', function () { G.openAnalyser('fitting'); }, 3);
+  check('it opened on the docked port, with its rows', G.analyser && G.analyser.portId === port.id && G.analyser.data.rows.length > 0);
+  check('the page is bold throughout', drawn.texts.indexOf('TRADE ANALYSER') !== -1);
+  scenario('the trade analyser, other systems', function () { G.analyser.view = 'systems'; }, 6);
+  check('and the other systems reported in, a system a frame',
+        G.analyser && Object.keys(G.analyser.reports).length > 0, G.analyser && Object.keys(G.analyser.reports).length);
+  scenario('closing the trade analyser', function () { G.analyser = null; }, 1);
+  G.ship.fit = JSON.parse(wasFit);
+  if (!wasDocked && G.ship.docked) Sim.undockShip(G.ship, G.sys, G.t, 0.003);
+  Sim.refreshShip(G.ship);
+})();
 
 scenario('the help card renders', function () { G.showHelp = true; }, 2);
 scenario('closing the help card', function () { G.showHelp = false; }, 1);

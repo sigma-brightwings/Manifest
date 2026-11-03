@@ -1690,11 +1690,43 @@
    * whether this world is a natural source or sink for the good, which is
    * what separates a trade route from noise. */
   function price(port, cid, t) {
+    var row = port.market.rows[cid];
+    if (!row) return null;
+    return quote(port, cid, stock(port, cid, t));
+  }
+
+  /* WHAT THE MARKET SAID AT `t`, asked after the fact (the trade analyser's
+   * history, 2026-11-03). price() cannot be asked about the past: a port
+   * within LIVE_RANGE answers stock() from its stepped state, which is a
+   * NOW and nothing else, so a graph drawn from price(port, cid, t - 10
+   * days) at a port you are docked at would be a flat line of today.
+   *
+   * So this is the closed form at `t` — the same analyticStock every
+   * dormant port is priced from, deliveries, raids and shortfalls
+   * included, all of them timestamped already — plus the player's own
+   * footprint ONLY from the moment it was made. ledgerAt deliberately
+   * answers a time before its entry with the full entry (a trade cannot
+   * be undone by asking earlier), which is right for "now" and wrong for
+   * history: it would show the dent you made this morning on a price
+   * three weeks old. The ledger keeps one entry per good, the newest trade
+   * folded into the rest, so a second trade's time stands for the first
+   * one's too and the older one is forgotten a little early. That is the
+   * one approximation here, and it errs toward the market as it was. */
+  function priceAt(port, cid, t) {
+    var mkt = port.market;
+    var row = mkt && mkt.rows[cid];
+    if (!row) return null;
+    var e = mkt.ledger && mkt.ledger[cid];
+    var mine = e && t >= e.t0 ? ledgerAt(mkt, cid, t) : 0;
+    return quote(port, cid, clamp(analyticStock(port, cid, t) + mine, 0, row.cap));
+  }
+
+  /* The quote for a given amount on the shelf. One function, so the
+   * present (price) and the past (priceAt) cannot price stock two ways. */
+  function quote(port, cid, st) {
     var mkt = port.market;
     var row = mkt.rows[cid];
-    if (!row) return null;
     var com = BY_ID[cid];
-    var st = stock(port, cid, t);
     var fill = row.cap > 0 ? clamp(st / row.cap, 0, 1) : 0.5;
 
     if (com.waste) return wastePrice(port, row, st, fill);
@@ -2203,6 +2235,7 @@
     ledgerAt: ledgerAt,
     stock: stock,
     price: price,
+    priceAt: priceAt,
     priceList: priceList,
     priceMark: priceMark,
     MARK_BUY_GOOD: MARK_BUY_GOOD, MARK_BUY_BAD: MARK_BUY_BAD,

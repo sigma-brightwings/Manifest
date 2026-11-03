@@ -1848,7 +1848,7 @@ console.log('--- what the local runs are carrying ---');
         heaviesLoaded === 0, heaviesLoaded + ' of ' + heavies + ' loaded');
 })();
 
-/* SCANNER AUDIT 2026-10-17: the trade analyser never sends you to load
+/* SCANNER AUDIT 2026-10-17: the market survey array (then the "trade analyser") never sends you to load
  * at a port with nothing in the warehouse. Over a spread of dates, so
  * the warehouses have had time to run dry somewhere. */
 (function () {

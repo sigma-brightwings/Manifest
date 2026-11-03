@@ -81,9 +81,9 @@
     normal: {
       floor: 6000,
       /* The Talon is the hard start's hull too; what normal adds is the
-       * trade analyser and a shield, and most of all the money. */
+       * market survey array and a shield, and most of all the money. */
       trade: { hull: 'talon', fit: ['phpulse', 'tradescan', 'shield'],
-               note: 'a Talon with an analyser and a shield' },
+               note: 'a Talon with a market survey array and a shield' },
       mining: { hull: 'bollard', fit: ['mininglaser', 'surveyscan', 'shield'],
                 note: 'ore-fitted: the laser takes the only hardpoint' },
       /* NO SHIELD, and not by choice. A generator is four tonnes and the
@@ -439,7 +439,10 @@
   }
 
   /* The rest of what she carries that a choice would turn on. */
-  var KIT_SHORT = { shield: 'shield', tradescan: 'trade analyser', surveyscan: 'survey scanner' };
+  /* `tradescan` is the market survey array since 2026-11-03 — the words
+   * "trade analyser" went to the 1,000 cr single-port instrument Astra named
+   * with them (combat.js EQUIPMENT). */
+  var KIT_SHORT = { shield: 'shield', tradescan: 'market survey', portanalyser: 'trade analyser', surveyscan: 'survey scanner' };
   function kitLine(p) {
     var out = [];
     for (var i = 0; i < p.fit.length; i++) if (KIT_SHORT[p.fit[i]]) out.push(KIT_SHORT[p.fit[i]]);
@@ -491,7 +494,7 @@
     var gear = [];
     for (var i = 0; i < p.fit.length; i++) {
       var id = p.fit[i];
-      if (id === 'mininglaser' || id === 'surveyscan' || id === 'shield' || id === 'tradescan') gear.push(itemName(id).toLowerCase());
+      if (id === 'mininglaser' || id === 'surveyscan' || id === 'shield' || id === 'tradescan' || id === 'portanalyser') gear.push(itemName(id).toLowerCase());
     }
     var at = port ? port.name : 'port';
     var why = p.focus === 'mining'

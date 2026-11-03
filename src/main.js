@@ -125,6 +125,8 @@
     cruise: null,         // the cruise drive, while engaged
     autodock: null,       // auto-dock guidance, while flying it
     market: null,         // open trade console: { port, rows, sel } or null
+    analyser: null,       // the trade analyser's screen (TradeAnalyser), or null
+    courseStar: null,     // star id last plotted on the chart, for the analyser's break-even
     marketQty: 1,         // how many tonnes a single buy/sell moves
     ledgerLog: [],        // recent transactions, newest first
 
@@ -758,7 +760,7 @@
     G.impactForecast = null;
     G.impactForecastStale = 0;
     G.lastMassiveBody = host;
-    G.market = null;
+    G.market = null; G.analyser = null;
     G.contact = null;
     /* A lock on something in the system you just left is not a lock, it is
      * a stale id that happens to match a different body. Release it —
@@ -906,7 +908,7 @@
     G.impactForecast = null;
     G.impactForecastStale = 0;
     G.lastMassiveBody = sun;
-    G.market = null;
+    G.market = null; G.analyser = null;
     G.contact = null;
     G.navTarget = npc ? { kind: 'ship', id: spec.id } : null;
     G.dockTarget = null;
@@ -1083,7 +1085,7 @@
     }
     Sim.refreshShip(G.ship);
     G.starMap = null;
-    G.market = null;
+    G.market = null; G.analyser = null;
     G.paused = false;
     G.keys = {};
     G.ship.thrust = V.zero();
@@ -1411,7 +1413,16 @@
     if (key === 'pagedown') { m.sel = Math.min(m.list.length - 1, m.sel + 10); return true; }
     if (key === 'pageup') { m.sel = Math.max(0, m.sel - 10); return true; }
     if (key === 'home') { m.sel = 0; return true; }
-    if (key === 'enter') { selectPanel(7); return true; }
+    /* Enter is the act of plotting, so it is also what the trade analyser
+     * reads as "the star you are going to" (G.courseStar, 2026-11-03): the
+     * chart's own selection is dropped the moment you leave the chart, and
+     * a break-even against a course the game has forgotten is no use. */
+    if (key === 'enter') {
+      var pc = plottedCourse();
+      if (pc) G.courseStar = pc.to.id;
+      selectPanel(7);
+      return true;
+    }
     return false;
   }
 
@@ -1447,7 +1458,7 @@
     Sim.refreshShip(G.ship);
     G.reported = false;
     G.dockTarget = null;
-    G.market = null;
+    G.market = null; G.analyser = null;
     G.viewMode = 'orbit';
   }
 
@@ -1642,7 +1653,7 @@
        * has left the deck MFD cycle. Handled here, above the mode dispatch,
        * so it beats Tab's other meanings; everywhere else Tab falls through
        * to them unchanged. */
-      if (e.key === 'Tab' && !G.hyper && !G.market && modeId() === 'ship') {
+      if (e.key === 'Tab' && !G.hyper && !G.market && !G.analyser && modeId() === 'ship') {
         e.preventDefault();
         var st = ['status', 'guns', 'ordnance', 'panels', 'notes'];
         var si = st.indexOf(G.shipTab);
@@ -1694,7 +1705,7 @@
       var fk = /^F(10|[1-9])$/.exec(e.key);
       if (fk) {
         e.preventDefault();
-        if (!G.hyper && !G.market) {
+        if (!G.hyper && !G.market && !G.analyser) {
           var fkIdx = parseInt(fk[1], 10) - 1;
           /* Shift+F2 is the manoeuvre planner, parked beside the orbit map
            * it belongs with after F10 went to the manifest. Same shift-splits-
@@ -1710,7 +1721,7 @@
       }
       /* The number row mirrors the function keys. 0 is the tenth mode
        * because it sits where a 10 key would if keyboards had one. */
-      if (!G.hyper && !G.market && /^[0-9]$/.test(e.key)) {
+      if (!G.hyper && !G.market && !G.analyser && /^[0-9]$/.test(e.key)) {
         var numIdx = e.key === '0' ? 9 : parseInt(e.key, 10) - 1;
         if (numIdx === 0 && flying()) toggleView();
         else selectPanel(numIdx);
@@ -1737,6 +1748,8 @@
         }
         return;
       }
+      /* Above the market, because it opens over the market. */
+      if (G.analyser) { handleAnalyserKey(e); return; }
       if (G.market) { handleMarketKey(e); return; }
       /* A full-screen mode gets first refusal on the keyboard: the arrow
        * keys mean "walk this list" while a list is what you are looking at,
@@ -2091,6 +2104,12 @@
         /* Backspace is gone: F5 and F10 both carry EJECT buttons on every
          * cargo line, and waste is the one thing you jettison deliberately
          * rather than in a hurry. */
+        /* Y: the trade analyser (2026-11-03) — the docked port, or in
+         * flight the port you have locked. Refused in words without the
+         * fitting, and the refusal names the terminal. */
+        case 'y':
+          openAnalyser('fitting');
+          break;
         case 'u':
           /* Joined to a ship: U reels her tube in and leaves you adrift. */
           if (G.ship.tether && !G.walk) {
@@ -4056,7 +4075,7 @@
     return !!(canvas && typeof document !== 'undefined' && document.pointerLockElement === canvas);
   }
   function walkLookWanted() {
-    return !!((G.walk || G.eva) && flying() && !menuOpen() && !(G.cursor && G.cursor.active) && !G.talk);
+    return !!((G.walk || G.eva) && flying() && !menuOpen() && !(G.cursor && G.cursor.active) && !G.talk && !G.analyser);
   }
   /* `ask` only from inside an input event; every frame only ever lets go. */
   function syncPointerLock(ask) {
@@ -4488,6 +4507,9 @@
     if (key === 'arrowdown') { m.sel = Math.min(rows.length - 1, m.sel + 1); return; }
     if (key === 'arrowup') { m.sel = Math.max(0, m.sel - 1); return; }
     if (key === 'f') { refuelFull(); return; }
+    /* The trade analyser, over the market, for this port (2026-11-03).
+     * Esc there comes back here. */
+    if (key === 'y') { openAnalyser('fitting'); return; }
     if (key === 'u') {
       var left = Sim.undockShip(G.ship, G.sys, G.t, 0.003);
       G.dockTarget = null; G.dockStatus = null; G.market = null;
@@ -4500,6 +4522,117 @@
     if (key === 'arrowleft') { trade(row, -step); return; }
     if (key === 'home') { trade(row, maxBuyable(row)); return; }
     if (key === 'end') { trade(row, -heldTonnes(row.id)); return; }
+  }
+
+
+  /* ---- THE TRADE ANALYSER (2026-11-03) -----------------------------------
+   * Astra: "add a trade analyzer as a buyable upgrade, 1000 cr ... This
+   * screen will also be reachable by walking out of your ship and onto a
+   * station in order to read it off a public computer terminal."
+   *
+   * One screen, two ways in, and the data is TradeAnalyser's (route,
+   * build, detail): the fitting from the cockpit (Y) or from the docked
+   * market (Y), and the terminal on a concourse (E at it). What this
+   * file keeps is the cache and the cursor. G.analyser is an overlay like
+   * G.market — it takes the keyboard while it is up and nothing under it
+   * moves — and it is not saved: it is a screen, not a state of the world.
+   *
+   * WHAT IS CACHED, AND HOW OFTEN. The rows and their months are ~1,000
+   * price calls, measured at under a millisecond, rebuilt once a sim-minute
+   * like the TRADE page's survey; the selected good's system average is
+   * another few hundred, rebuilt with them or when the cursor moves. The
+   * other systems' reports are the dear part — each needs its system
+   * generated (5–70 ms, median 19, measured over twenty seeds) — so they
+   * are filled ONE SYSTEM A FRAME while the list is on screen, out of
+   * main's own systemFor cache, and kept for the life of the screen. A
+   * system you have already been to or reported on costs nothing. */
+  function analyserRoute(via, port) {
+    return global.TradeAnalyser.route(G, via, {
+      port: port, courseStar: G.courseStar || null, burnPerKm: CRUISE_BURN, systemFor: systemFor,
+      adjust: global.Tithe ? function (pt, q) { return global.Tithe.adjustRow(G, G.sys, pt, q, G.t); } : null
+    });
+  }
+
+  function openAnalyser(via, port) {
+    if (!global.TradeAnalyser) { say('The trade analyser is not in this build', 3); return; }
+    var r = analyserRoute(via, port);
+    if (!r.ok) { say(r.why, 6); return; }
+    G.keys = {};
+    G.ship.thrust = V.zero();
+    G.analyser = { via: r.via, portId: r.port.id, sel: 0, view: 'graph', sysSel: 0,
+                   ctx: r, data: null, key: null, det: null, detKey: null,
+                   cands: null, reports: {} };
+    refreshAnalyser();
+  }
+
+  /* Rebuilt from the route each minute, so a lock you change in flight or
+   * a port you undock from is the screen's next answer, not a stale one.
+   * A route that no longer holds (undocked with no lock, the fitting sold)
+   * closes the screen and says why. */
+  function refreshAnalyser() {
+    var a = G.analyser, TA = global.TradeAnalyser;
+    if (!a) return;
+    var bucket = Math.floor(G.t / 60);
+    var lockKey = (G.navTarget ? G.navTarget.id : '') + '|' + (G.courseStar || '') + '|' + (G.ship.docked || '');
+    var key = bucket + '|' + lockKey;
+    if (a.key !== key) {
+      var port = a.via === 'terminal' ? G.sys.byId[a.portId] : null;
+      var r = analyserRoute(a.via, port);
+      if (!r.ok) { G.analyser = null; say(r.why, 5); return; }
+      if (r.port.id !== a.portId) { a.portId = r.port.id; a.sel = 0; a.cands = null; }
+      a.ctx = r;
+      a.data = TA.build(r);
+      a.key = key;
+      a.detKey = null;
+      if (a.sel >= a.data.rows.length) a.sel = Math.max(0, a.data.rows.length - 1);
+    }
+    if (!a.cands) a.cands = TA.candidates(a.ctx);
+    /* A locked star is a candidate even if it was not when the list was
+     * made (plotted from this very screen). */
+    if (a.ctx.lock && a.ctx.lock.kind === 'star' &&
+        !a.cands.some(function (c) { return c.star === a.ctx.lock.star; })) a.cands = TA.candidates(a.ctx);
+    /* One system's report a frame: the locked star's first, then the list
+     * while it is on screen. */
+    var want = [];
+    if (a.ctx.lock && a.ctx.lock.kind === 'star') want.push(a.ctx.lock.star);
+    if (a.view === 'systems') a.cands.forEach(function (c) { want.push(c.star); });
+    for (var i = 0; i < want.length; i++) {
+      var st = want[i];
+      if (a.reports[st.id]) continue;
+      var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+      a.reports[st.id] = TA.systemReport(systemFor(st), st, Galaxy.distance3(G.here, st), G.t, a.ctx.adjust);
+      if (t0) a.lastReportMs = performance.now() - t0;
+      break;
+    }
+    var row = a.data.rows[a.sel];
+    var dk = key + '|' + (row ? row.id : '') + '|' + Object.keys(a.reports).length;
+    if (row && a.detKey !== dk) { a.det = TA.detail(a.ctx, a.data, row.id, a.reports); a.detKey = dk; }
+  }
+
+  function analyserPlot(st) {
+    if (!st) return;
+    G.courseStar = st.id;
+    say('Course plotted for the analyser: ' + st.name + '  —  break-even now costs that jump', 4);
+    if (G.analyser) { G.analyser.key = null; refreshAnalyser(); }
+  }
+
+  function handleAnalyserKey(e) {
+    var a = G.analyser, key = e.key.toLowerCase();
+    if (key === 'escape' || key === 'y') { G.analyser = null; return; }
+    if (!a.data) return;
+    var n = a.data.rows.length;
+    if (key === 'arrowdown') { a.sel = Math.min(n - 1, a.sel + 1); refreshAnalyser(); return; }
+    if (key === 'arrowup') { a.sel = Math.max(0, a.sel - 1); refreshAnalyser(); return; }
+    if (key === 'tab') { e.preventDefault(); a.view = a.view === 'graph' ? 'systems' : 'graph'; return; }
+    if (a.view === 'systems' && a.cands && a.cands.length) {
+      if (key === 'pagedown') { a.sysSel = Math.min(a.cands.length - 1, a.sysSel + 1); return; }
+      if (key === 'pageup') { a.sysSel = Math.max(0, a.sysSel - 1); return; }
+      if (key === 'enter') {
+        if (a.via === 'terminal') { say('The terminal cannot plot your course — that is your ship\'s nav computer', 4); return; }
+        analyserPlot(a.cands[Math.min(a.sysSel, a.cands.length - 1)].star);
+        return;
+      }
+    }
   }
 
   function holdFree() { return G.ship.cargoCap - Sim.cargoMass(G.ship); }
@@ -12668,6 +12801,13 @@
       return -1;
     };
     if (it.kind === 'market') { selectPanel(3); return; }
+    /* The public trade terminal (walk.js placeTradeTerminal): the trade
+     * analyser's screen for this port, no fitting needed. */
+    if (it.kind === 'tradeterm') {
+      var tp = G.sys && G.sys.byId && w.plan ? G.sys.byId[w.plan.portId] : null;
+      openAnalyser('terminal', tp);
+      return;
+    }
     /* The freight office is where contracts are let (2026-10-31): it opens
      * the contract board, not the market screen beside it. */
     if (it.kind === 'freight') { selectPanel(idx('missions') >= 0 ? idx('missions') : 6); return; }
@@ -12864,6 +13004,9 @@
     ctx.restore();
     if (G.talk) drawTalkPanel(ctx, w, h - FBAR_H);
     drawIconBar(ctx, w, h - FBAR_H);
+    /* The trade terminal's screen, over the deck: the walk view returns
+     * before drawConsole is ever reached, so on foot this is its place. */
+    if (G.analyser) drawAnalyser(ctx, w, h);
   }
 
   /* ---- talking to people (dialogue.js, 2026-10-25) ------------------------
@@ -15063,20 +15206,22 @@
   }
 
   /* --- TRADE: what this system is short of, and what it has too much of --
-   * Astra's trade analyser. The arithmetic is Economy.systemAnalysis; this
+   * Astra's first trade instrument, the market survey array (named the
+   * "trade analyser" until 2026-11-03, when that name went to the 1,000 cr
+   * single-port screen she asked for). The arithmetic is Economy.systemAnalysis; this
    * is only the page. NOTHING WITHOUT THE FITTING — not a blank list, which
    * would read as "this system has no shortages", a claim the instrument
    * has no right to make when it is not aboard. */
   function drawTradePage(ctx) {
     var fitted = Combat.hasTradeAnalyser && Combat.hasTradeAnalyser(G.ship);
     mfdShell(ctx, 'TRADE', fitted ? 'shortages   ·   excesses   ·   best run'
-                                  : 'no trade analyser fitted');
+                                  : 'no market survey array fitted');
     if (!fitted) {
       ctx.font = 'bold 12px ui-monospace, monospace';
       ctx.fillStyle = MFD_DIM;
       ctx.fillText('NO ANALYSER', 12, MFD_BODY_TOP + 20);
       ctx.font = 'bold 10px ui-monospace, monospace';
-      ctx.fillText('a trade analyser reads every market in the system at once.', 12, MFD_BODY_TOP + 36);
+      ctx.fillText('a market survey array reads every market in the system at once.', 12, MFD_BODY_TOP + 36);
       ctx.fillText('the yard sells one where development is 0.45 or better.', 12, MFD_BODY_TOP + 50);
       return;
     }
@@ -18272,6 +18417,7 @@
 
     if (G.showHelp) drawHelp(ctx, w, h);
     if (G.market) drawMarket(ctx, w, h);
+    if (G.analyser) drawAnalyser(ctx, w, h);
     /* The captain's card goes over the market, because half his lessons are
      * read while you are standing at it; under the menu and the title. Not
      * in transit: the HUD's transit path skips drawConsole, which is what
@@ -18802,6 +18948,493 @@
     ctx.restore();
   }
 
+  /* ---- the trade analyser's page (2026-11-03) ----------------------------
+   * The data is TradeAnalyser's; this only draws it. EVERYTHING IS BOLD —
+   * Astra: "Trade analyzer text will be in bold" — so every font string
+   * here starts 'bold', the small print included.
+   *
+   * ASK AND BID NEVER RELY ON COLOUR. The ask (what you pay) is a solid
+   * line with round markers, the bid (what you are paid) a dashed line with
+   * square ones, in two colours as well — so the two read apart in
+   * greyscale, to a colour-blind eye, and on a washed-out screen. The
+   * legend draws each line's own stroke. The three reference lines are
+   * thinner and labelled in words at the plot's edge: the averages dotted
+   * and dash-dotted, the break-even a long red dash.
+   *
+   * The palette is the market screen's: its gold for names and credits,
+   * its blue-grey for headers, its green and red for good and bad news. */
+  var TA_ASK = '#7dc8ff', TA_BID = '#ffc46b', TA_AVG = '#c9a6ff', TA_SYS = '#9fe0c8',
+      TA_BE = '#ff7a7a', TA_HEAD = '#7e93b3', TA_INK = '#cfe0ff', TA_DIM = 'rgba(160,185,220,0.7)';
+
+  function taFont(px) { return 'bold ' + px + 'px ui-monospace, monospace'; }
+  function taDash(ctx, d) { if (ctx.setLineDash) ctx.setLineDash(d); }
+
+  /* Ticks a person would choose: 1, 2 or 5 times a power of ten. */
+  function niceStep(range, n) {
+    var raw = range / Math.max(1, n), p = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+    var f = raw / p;
+    return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p;
+  }
+
+  /* One line through a series. `key` is 'buy' or 'sell'; nulls break it. */
+  function taLine(ctx, series, key, X, Y, col, dash, width) {
+    ctx.save();
+    ctx.strokeStyle = col; ctx.lineWidth = width; taDash(ctx, dash);
+    ctx.beginPath();
+    var pen = false;
+    for (var i = 0; i < series.length; i++) {
+      var v = series[i][key];
+      if (v === null || v === undefined) { pen = false; continue; }
+      if (!pen) ctx.moveTo(X(i), Y(v)); else ctx.lineTo(X(i), Y(v));
+      pen = true;
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /* Markers every `every` points: round for the ask, square for the bid. */
+  function taMarks(ctx, series, key, X, Y, col, shape, every) {
+    ctx.save();
+    ctx.fillStyle = col;
+    for (var i = series.length - 1; i >= 0; i -= every) {
+      var v = series[i][key];
+      if (v === null || v === undefined) continue;
+      var x = X(i), y = Y(v);
+      ctx.beginPath();
+      if (shape === 'round') ctx.arc(x, y, 3, 0, Math.PI * 2);
+      else ctx.rect(x - 2.6, y - 2.6, 5.2, 5.2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function taLegendSwatch(ctx, x, y, col, dash, shape) {
+    ctx.save();
+    ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = shape ? 2 : 1.4; taDash(ctx, dash);
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 22, y); ctx.stroke();
+    taDash(ctx, []);
+    if (shape === 'round') { ctx.beginPath(); ctx.arc(x + 11, y, 3, 0, Math.PI * 2); ctx.fill(); }
+    else if (shape === 'square') ctx.fillRect(x + 8.4, y - 2.6, 5.2, 5.2);
+    ctx.restore();
+  }
+
+  function taCr(v) { return v === null || v === undefined ? '—' : fmtCredits(v); }
+
+  function drawAnalyser(ctx, w, h) {
+    refreshAnalyser();
+    var a = G.analyser;
+    if (!a || !a.data) return;
+    var data = a.data, det = a.det, port = data.port, rowsA = data.rows;
+
+    /* Clear of the icon bar, which stays live under every screen. And
+     * opaque: the market is usually open under it, and its rows showing
+     * through the list here read as a second list. */
+    var room = h - FBAR_H;
+    var pw = Math.min(w - 24, 1080), ph = Math.min(room - 16, 700);
+    var px = Math.round((w - pw) / 2), py = Math.round((room - ph) / 2);
+    ctx.save();
+    ctx.fillStyle = '#05090f';
+    ctx.fillRect(px + 2, py + 2, pw - 4, ph - 4);
+    ctx.restore();
+    panel(ctx, px, py, pw, ph, true);
+    ctx.save();
+    ctx.textBaseline = 'alphabetic';
+
+    /* ---- the head: whose market, read how, and the close box ---- */
+    ctx.font = taFont(15);
+    ctx.fillStyle = '#ffe6a8';
+    ctx.fillText('TRADE ANALYSER', px + 18, py + 26);
+    var tW = ctx.measureText('TRADE ANALYSER').width;
+    ctx.fillStyle = '#ffe6a8';
+    ctx.font = taFont(13);
+    ctx.fillText(clipText('·  ' + port.name, Math.max(8, Math.floor((pw - tW - 230) / 7.8))), px + 18 + tW + 10, py + 26);
+    ctx.textAlign = 'right';
+    ctx.font = taFont(13);
+    ctx.fillText(fmtCredits(G.ship.credits), px + pw - 46, py + 26);
+    ctx.textAlign = 'left';
+    /* The close box: a pointer, not a word. */
+    ctx.strokeStyle = 'rgba(160,185,220,0.6)'; ctx.lineWidth = 1.4;
+    ctx.strokeRect(px + pw - 34, py + 12, 20, 20);
+    ctx.beginPath(); ctx.moveTo(px + pw - 29, py + 17); ctx.lineTo(px + pw - 19, py + 27);
+    ctx.moveTo(px + pw - 19, py + 17); ctx.lineTo(px + pw - 29, py + 27); ctx.stroke();
+    hot(px + pw - 34, py + 12, 20, 20, function () { G.analyser = null; }, 'close');
+
+    var src = data.via === 'terminal' ? 'public terminal on the concourse'
+            : G.ship.docked ? 'your trade analyser  ·  docked here'
+            : 'your trade analyser  ·  reading your locked port from ' +
+              fmtDist(V.dist(Sim.bodyPosition(port, G.sys, G.t), G.ship.pos));
+    ctx.font = taFont(11);
+    ctx.fillStyle = '#7fd6c0';
+    ctx.fillText(clipText(src + '  ·  ' + (port.market.roleName || '') , Math.floor((pw - 300) / 6.7)), px + 18, py + 44);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#9fb6d4';
+    ctx.fillText('hold ' + Sim.cargoMass(G.ship).toFixed(0) + '/' + G.ship.cargoCap + ' t  ·  fuel ' +
+                 G.ship.fuel.toFixed(1) + '/' + G.ship.fuelCap + ' t', px + pw - 18, py + 44);
+    ctx.textAlign = 'left';
+
+    /* ---- the list: every good, ask, bid, and its month in small ---- */
+    var narrow = pw < 900;
+    var LW = narrow ? 296 : 360, lx = px + 14, ly = py + 70;
+    var sparkW = narrow ? 52 : 72;
+    var cAsk = lx + LW - sparkW - 74, cBid = lx + LW - sparkW - 10;
+    ctx.font = taFont(10);
+    ctx.fillStyle = TA_HEAD;
+    ctx.fillText('COMMODITY', lx + 16, ly);
+    ctx.textAlign = 'right';
+    ctx.fillText('ASK', cAsk, ly);
+    ctx.fillText('BID', cBid, ly);
+    ctx.textAlign = 'left';
+    ctx.fillText(global.TradeAnalyser.WINDOW_DAYS + ' DAYS', lx + LW - sparkW, ly);
+    var rowH = 18, listTop = ly + 16, footY = py + ph - 14;
+    var maxRows = Math.max(3, Math.floor((footY - 40 - listTop) / rowH));
+    var first = Math.max(0, Math.min(a.sel - Math.floor(maxRows / 2), rowsA.length - maxRows));
+    if (rowsA.length <= maxRows) first = 0;
+    var nameChars = Math.floor((cAsk - 60 - (lx + 16)) / 7.2);
+    for (var i = first; i < Math.min(rowsA.length, first + maxRows); i++) {
+      var r = rowsA[i], y = listTop + (i - first) * rowH;
+      if (i === a.sel) {
+        ctx.fillStyle = 'rgba(125,250,255,0.10)';
+        ctx.fillRect(lx, y - 12, LW, 17);
+        ctx.fillStyle = '#7dfaff';
+        ctx.font = taFont(11);
+        ctx.fillText('▶', lx + 3, y);
+      }
+      (function (idx) { hot(lx, y - 12, LW, 17, function () { G.analyser.sel = idx; refreshAnalyser(); }); })(i);
+      ctx.font = taFont(12);
+      ctx.fillStyle = r.waste ? '#ffb86b' : i === a.sel ? '#e6f0ff' : '#a9bcd6';
+      ctx.fillText(clipText(r.name, nameChars), lx + 16, y);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = r.buy === null ? '#4c5c72' : TA_ASK;
+      ctx.fillText(r.buy === null ? '—' : Math.round(r.buy) + '', cAsk, y);
+      ctx.fillStyle = r.sell === null ? '#4c5c72' : TA_BID;
+      ctx.fillText(r.sell === null ? '—' : Math.round(r.sell) + '', cBid, y);
+      ctx.textAlign = 'left';
+      /* The sparkline, on its own scale: the shape of the month, not its
+       * level — the level is the two numbers beside it. */
+      var lo = Infinity, hi = -Infinity;
+      r.series.forEach(function (p) {
+        if (p.buy !== null) { lo = Math.min(lo, p.buy); hi = Math.max(hi, p.buy); }
+        if (p.sell !== null) { lo = Math.min(lo, p.sell); hi = Math.max(hi, p.sell); }
+      });
+      if (isFinite(lo) && r.series.length > 1) {
+        var sx0 = lx + LW - sparkW, sy0 = y - 11, sh = 12, span = (hi - lo) || 1;
+        var SX = function (k) { return sx0 + k / (r.series.length - 1) * (sparkW - 6); };
+        var SY = function (v) { return sy0 + sh - (v - lo) / span * sh; };
+        taLine(ctx, r.series, 'buy', SX, SY, TA_ASK, [], 1.3);
+        taLine(ctx, r.series, 'sell', SX, SY, TA_BID, [2, 2], 1.3);
+      }
+    }
+    if (first > 0) { ctx.fillStyle = TA_DIM; ctx.font = taFont(10); ctx.fillText('▲ ' + first + ' more', lx + 16, listTop - 13 + 0); }
+    var below = rowsA.length - (first + maxRows);
+    if (below > 0) { ctx.fillStyle = TA_DIM; ctx.font = taFont(10); ctx.fillText('▼ ' + below + ' more', lx + 16, listTop + maxRows * rowH - 4); }
+
+    /* ---- the right side: the graph, or the other systems ---- */
+    var gx0 = lx + LW + 22, gx1 = px + pw - 18;
+    var tabY = py + 62;
+    ['graph', 'systems'].forEach(function (v, k) {
+      var label = v === 'graph' ? 'THIS PORT, ' + global.TradeAnalyser.WINDOW_DAYS + ' DAYS' : 'OTHER SYSTEMS';
+      ctx.font = taFont(11);
+      var tw = ctx.measureText(label).width + 18, tx = gx0 + (k ? 0 : 0);
+      tx = k === 0 ? gx0 : gx0 + ctx.measureText('THIS PORT, ' + global.TradeAnalyser.WINDOW_DAYS + ' DAYS').width + 30;
+      var on = a.view === v;
+      ctx.fillStyle = on ? 'rgba(125,250,255,0.14)' : 'rgba(120,160,220,0.06)';
+      ctx.fillRect(tx, tabY - 13, tw, 19);
+      ctx.strokeStyle = on ? 'rgba(125,250,255,0.6)' : 'rgba(120,160,220,0.25)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(tx + 0.5, tabY - 12.5, tw - 1, 18);
+      ctx.fillStyle = on ? '#7dfaff' : TA_DIM;
+      ctx.fillText(label, tx + 9, tabY + 1);
+      hot(tx, tabY - 13, tw, 19, function () { G.analyser.view = v; });
+    });
+    ctx.font = taFont(10);
+    ctx.fillStyle = TA_DIM;
+    ctx.textAlign = 'right';
+    ctx.fillText('Tab', gx1, tabY + 1);
+    ctx.textAlign = 'left';
+
+    var sel = rowsA[a.sel];
+    if (!sel || !det) { ctx.restore(); drawAnalyserFoot(ctx, px, pw, footY, a); return; }
+    if (a.view === 'graph') drawAnalyserGraph(ctx, a, sel, det, gx0, tabY + 22, gx1, footY - 34);
+    else drawAnalyserSystems(ctx, a, sel, det, gx0, tabY + 22, gx1, footY - 34);
+    ctx.restore();
+    drawAnalyserFoot(ctx, px, pw, footY, a);
+  }
+
+  function drawAnalyserFoot(ctx, px, pw, footY, a) {
+    ctx.save();
+    ctx.font = taFont(11);
+    ctx.fillStyle = TA_DIM;
+    var keys = '↑↓ commodity   ·   Tab ' + (a.view === 'graph' ? 'other systems' : 'this port') +
+               (a.view === 'systems' ? '   ·   PgUp PgDn system' + (a.via === 'terminal' ? '' : '   ·   Enter plot it') : '') +
+               '   ·   Esc close';
+    ctx.fillText(clipText(keys, Math.floor((pw - 36) / 6.7)), px + 18, footY);
+    ctx.restore();
+  }
+
+  /* The graph and the numbers under it. */
+  function drawAnalyserGraph(ctx, a, sel, det, x0, y0, x1, y1) {
+    var be = det.be || {};
+    var series = sel.series;
+    /* Title and legend. */
+    ctx.font = taFont(13);
+    ctx.fillStyle = '#ffe6a8';
+    ctx.fillText(clipText(sel.name, 26), x0, y0 + 4);
+    ctx.font = taFont(11);
+    var note = sel.waste ? (sel.buy !== null ? 'pays you to take it: one line' : 'you pay to unload: one line')
+             : sel.onlyBuys ? 'only BUYS it here: one line'
+             : sel.onlySells ? 'only SELLS it here: one line' : '';
+    if (note) {
+      ctx.fillStyle = '#ffd36b';
+      ctx.textAlign = 'right';
+      ctx.fillText(clipText(note, Math.floor((x1 - x0 - 200) / 6.7)), x1, y0 + 4);
+      ctx.textAlign = 'left';
+    }
+    var ly = y0 + 24, lxp = x0;
+    function legend(label, col, dash, shape) {
+      taLegendSwatch(ctx, lxp, ly - 4, col, dash, shape);
+      ctx.fillStyle = col;
+      ctx.fillText(label, lxp + 28, ly);
+      lxp += 28 + ctx.measureText(label).width + 16;
+    }
+    ctx.font = taFont(11);
+    if (sel.buy !== null || series.some(function (p) { return p.buy !== null; })) legend('ASK  you pay', TA_ASK, [], 'round');
+    if (sel.sell !== null || series.some(function (p) { return p.sell !== null; })) legend('BID  you are paid', TA_BID, [6, 4], 'square');
+
+    /* The plot box, and under it exactly the room the readout needs. */
+    var readout = function (draw, ry) { return analyserReadout(ctx, a, sel, det, x0, x1, draw, ry); };
+    var infoH = readout(false, 0) + 8;
+    var bx0 = x0 + 56, bx1 = x1 - 64, by0 = ly + 14, by1 = y1 - infoH - 18;
+    if (by1 - by0 < 80) by1 = by0 + 80;
+    /* The y range: both lines and every reference line, so nothing is
+     * drawn off the box. */
+    var vals = [];
+    series.forEach(function (p) { if (p.buy !== null) vals.push(p.buy); if (p.sell !== null) vals.push(p.sell); });
+    if (det.portAvg !== null) vals.push(det.portAvg);
+    if (det.sysAvg !== null) vals.push(det.sysAvg);
+    if (be.price) vals.push(be.price);
+    if (be.compare && be.compare.bid !== null) vals.push(be.compare.bid);
+    var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+    if (!(hi > lo)) { hi = lo + Math.max(1, Math.abs(lo) * 0.1); lo -= Math.max(1, Math.abs(lo) * 0.1); }
+    var pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+    var step = niceStep(hi - lo, Math.max(3, Math.floor((by1 - by0) / 36)));
+    lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+    var X = function (k) { return bx0 + k / Math.max(1, series.length - 1) * (bx1 - bx0); };
+    var Y = function (v) { return by1 - (v - lo) / (hi - lo) * (by1 - by0); };
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(120,160,220,0.04)';
+    ctx.fillRect(bx0, by0, bx1 - bx0, by1 - by0);
+    ctx.strokeStyle = 'rgba(120,160,220,0.30)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx0 + 0.5, by0 + 0.5, bx1 - bx0, by1 - by0);
+    /* Price ticks, in cr. */
+    ctx.font = taFont(10);
+    ctx.textAlign = 'right';
+    for (var v = lo; v <= hi + step * 0.01; v += step) {
+      var yy = Math.round(Y(v)) + 0.5;
+      ctx.strokeStyle = 'rgba(120,160,220,0.12)';
+      ctx.beginPath(); ctx.moveTo(bx0, yy); ctx.lineTo(bx1, yy); ctx.stroke();
+      ctx.fillStyle = TA_HEAD;
+      ctx.fillText(Math.round(v).toLocaleString('en-US'), bx0 - 6, yy + 3.5);
+    }
+    ctx.save();
+    ctx.translate(x0 + 8, (by0 + by1) / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'center';
+    ctx.fillText('cr / t', 0, 0);
+    ctx.restore();
+    /* Time ticks: every five days, "now" at the right. */
+    ctx.textAlign = 'center';
+    var per = 24 / global.TradeAnalyser.STEP_H;
+    for (var d = 0; d <= global.TradeAnalyser.WINDOW_DAYS; d += 5) {
+      var k = series.length - 1 - d * per;
+      if (k < 0) break;
+      var xx = Math.round(X(k)) + 0.5;
+      ctx.strokeStyle = 'rgba(120,160,220,0.12)';
+      ctx.beginPath(); ctx.moveTo(xx, by0); ctx.lineTo(xx, by1 + 4); ctx.stroke();
+      ctx.fillStyle = TA_HEAD;
+      ctx.fillText(d === 0 ? 'now' : '−' + d + ' d', xx, by1 + 15);
+    }
+    ctx.textAlign = 'left';
+
+    /* Reference lines first, so the price lines lie on top of them. Each
+     * labelled at the right edge, the labels pushed apart if two lines
+     * are close, so no two words print over one another. */
+    var refs = [];
+    if (det.portAvg !== null) refs.push({ v: det.portAvg, col: TA_AVG, dash: [2, 3], label: 'avg here' });
+    if (det.sysAvg !== null && det.sysN > 1) refs.push({ v: det.sysAvg, col: TA_SYS, dash: [8, 3, 2, 3], label: 'avg system' });
+    if (be.price) refs.push({ v: be.price, col: TA_BE, dash: [12, 5], label: 'break-even', w: 2 });
+    refs.forEach(function (rf) {
+      var yy = Y(rf.v);
+      ctx.strokeStyle = rf.col; ctx.lineWidth = rf.w || 1.4; taDash(ctx, rf.dash);
+      ctx.beginPath(); ctx.moveTo(bx0, yy); ctx.lineTo(bx1, yy); ctx.stroke();
+    });
+    taDash(ctx, []);
+    var labs = refs.map(function (rf) { return { y: Y(rf.v), rf: rf }; }).sort(function (p, q) { return p.y - q.y; });
+    for (var li = 1; li < labs.length; li++) if (labs[li].y - labs[li - 1].y < 12) labs[li].y = labs[li - 1].y + 12;
+    ctx.font = taFont(10);
+    labs.forEach(function (lb) {
+      ctx.fillStyle = lb.rf.col;
+      ctx.fillText(lb.rf.label, bx1 + 5, lb.y + 3.5);
+    });
+
+    /* The two price lines: the ask solid with round markers, the bid
+     * dashed with square ones. */
+    taLine(ctx, series, 'buy', X, Y, TA_ASK, [], 2);
+    taLine(ctx, series, 'sell', X, Y, TA_BID, [6, 4], 2);
+    taMarks(ctx, series, 'buy', X, Y, TA_ASK, 'round', 6);
+    taMarks(ctx, series, 'sell', X, Y, TA_BID, 'square', 6);
+    ctx.restore();
+
+    readout(true, by1 + 32);
+  }
+
+  /* The numbers under the graph. Asked twice: once to count its lines
+   * (draw false), so the graph can give up exactly the room they need,
+   * then to draw them. Wrapped rather than clipped — at 800 wide this
+   * column is about sixty characters, and a break-even cut off at its
+   * verdict is the one number on the screen that must never be cut. */
+  function analyserReadout(ctx, a, sel, det, x0, x1, draw, ry) {
+    var be = det.be || {}, maxW = x1 - x0, days = global.TradeAnalyser.WINDOW_DAYS;
+    function line(text, col, px) {
+      ctx.font = taFont(px || 11);
+      ctx.fillStyle = col || TA_INK;
+      taWrap(ctx, text, maxW).forEach(function (ln) { if (draw) ctx.fillText(ln, x0, ry); ry += 14; });
+    }
+    line('now   ask ' + taCr(sel.buy) + '   ·   bid ' + taCr(sel.sell), TA_INK);
+    line('avg here ' + taCr(det.portAvg) + '   ·   avg system ' +
+         (det.sysN > 1 ? taCr(det.sysAvg) + ' (' + det.sysN + ' ports)' : '— no other port quotes it so'), TA_AVG);
+    line(det.basis === 'mid' ? 'averages: mid of ask and bid, ' + days + ' days'
+       : 'averages: of the ' + (det.basis === 'sell' ? 'bid' : 'ask') + ', the one price here, ' + days + ' days', TA_DIM);
+    if (be.price) {
+      var tr = be.trip;
+      line('trip  →  ' + a.ctx.lock.name + ',  ' + (tr.kind === 'port' ? fmtDist(tr.km) : fmtLy(tr.ly)), TA_INK);
+      line(taTonnes(tr.fuelT) + ' ' + tr.what + ' × ' + Math.round(tr.price) + ' cr' +
+           (/list/.test(tr.note) ? ' (list)' : ' (ask here)') + '  =  ' + taMoney(tr.fuelCr) +
+           (tr.overTank ? '   more than one tank' : ''), TA_INK);
+      line('on ' + be.load.tonnes + ' t: a full hold, capped by ' + be.load.by +
+           (tr.free ? '   ·   the clamp refills reaction mass free' : ''), TA_DIM);
+      line('BREAK-EVEN  ' + fmtCredits(be.price) + ' /t', TA_BE, 12);
+      var cmp = be.compare;
+      if (cmp && cmp.bid !== null) {
+        var m = cmp.bid - be.price;
+        line(cmp.where + ' bids ' + fmtCredits(cmp.bid) +
+             (cmp.ageDays > 0.05 ? ' (' + cmp.ageDays.toFixed(1) + ' d old)' : ' now') +
+             '   →   ' + (m >= 0 ? '+' : '−') + Math.abs(Math.round(m)).toLocaleString('en-US') + ' cr /t',
+             m >= 0 ? MARK_GOOD : MARK_BAD);
+      } else if (cmp) {
+        line('nobody at ' + cmp.where + ' reported a bid for it', MARK_BAD);
+      } else {
+        line('reading ' + a.ctx.lock.name + '\'s report…', TA_DIM);
+      }
+    } else {
+      line('BREAK-EVEN', TA_BE, 12);
+      line(be.why || '—', '#ffd36b');
+      if (be.buy !== undefined && be.buy !== null) line('without a trip it is the ask alone: ' + fmtCredits(be.buy) + ' /t', TA_DIM);
+    }
+    return ry;
+  }
+
+  function taWrap(ctx, text, maxW) {
+    if (ctx.measureText(text).width <= maxW) return [text];
+    var words = text.split(' '), out = [], cur = '';
+    for (var i = 0; i < words.length; i++) {
+      var next = cur ? cur + ' ' + words[i] : words[i];
+      if (cur && ctx.measureText(next).width > maxW) { out.push(cur); cur = words[i]; }
+      else cur = next;
+    }
+    if (cur) out.push(cur);
+    return out;
+  }
+  function taTonnes(t) { return t < 0.01 ? (t * 1000).toFixed(t < 0.001 ? 2 : 1) + ' kg' : t.toFixed(t < 1 ? 2 : 1) + ' t'; }
+  function taMoney(c) { return Math.abs(c) < 10 ? c.toFixed(2) + ' cr' : fmtCredits(c); }
+
+  /* What the selected good fetched elsewhere, as last reported. */
+  function drawAnalyserSystems(ctx, a, sel, det, x0, y0, x1, y1) {
+    var TA = global.TradeAnalyser;
+    ctx.font = taFont(13);
+    ctx.fillStyle = '#ffe6a8';
+    ctx.fillText(clipText(sel.name + '  elsewhere', 34), x0, y0 + 4);
+    ctx.font = taFont(10);
+    ctx.fillStyle = TA_DIM;
+    ctx.fillText(clipText('as last reported: news rides the freighters, ' + TA.reportHoursPerLy().toFixed(1) +
+                          ' h per ly (a class II hull)', Math.floor((x1 - x0) / 6.1)), x0, y0 + 20);
+    var cands = a.cands || [];
+    var narrow = x1 - x0 < 560;
+    var cLy = x0 + (narrow ? 120 : 150), cAge = cLy + 52, cBid = x1 - (narrow ? 132 : 190), cAsk = x1 - 4;
+    var hy = y0 + 42;
+    ctx.fillStyle = TA_HEAD;
+    ctx.fillText('SYSTEM', x0 + 14, hy);
+    ctx.textAlign = 'right';
+    ctx.fillText('LY', cLy, hy);
+    ctx.fillText('AGE', cAge, hy);
+    ctx.fillText('BEST BID', cBid, hy);
+    ctx.fillText('BEST ASK', cAsk, hy);
+    ctx.textAlign = 'left';
+    var rowH = 30, maxRows = Math.max(2, Math.floor((y1 - 40 - hy) / rowH));
+    if (a.sysSel >= cands.length) a.sysSel = Math.max(0, cands.length - 1);
+    var first = Math.max(0, Math.min(a.sysSel - Math.floor(maxRows / 2), cands.length - maxRows));
+    if (cands.length <= maxRows) first = 0;
+    var pending = 0, here = sel.sell, hereAsk = sel.buy;
+    var lockStar = a.ctx.lock && a.ctx.lock.kind === 'star' ? a.ctx.lock.star : null;
+    for (var i = first; i < Math.min(cands.length, first + maxRows); i++) {
+      var c = cands[i], rep = a.reports[c.star.id], y = hy + 18 + (i - first) * rowH;
+      if (i === a.sysSel) {
+        ctx.fillStyle = 'rgba(125,250,255,0.10)';
+        ctx.fillRect(x0, y - 12, x1 - x0, rowH - 2);
+        ctx.fillStyle = '#7dfaff';
+        ctx.font = taFont(11);
+        ctx.fillText('▶', x0 + 2, y);
+      }
+      (function (idx) { hot(x0, y - 12, x1 - x0, rowH - 2, function () { G.analyser.sysSel = idx; }); })(i);
+      ctx.font = taFont(12);
+      ctx.fillStyle = c.star === lockStar ? '#ffe6a8' : G.visited[c.star.id] ? '#e6f0ff' : '#a9bcd6';
+      ctx.fillText(clipText((c.star === lockStar ? '◆ ' : '') + c.star.name, Math.max(6, Math.floor((cLy - 34 - (x0 + 14)) / 7.2))), x0 + 14, y);
+      ctx.textAlign = 'right';
+      ctx.font = taFont(11);
+      ctx.fillStyle = TA_INK;
+      ctx.fillText(c.ly.toFixed(1), cLy, y);
+      ctx.fillStyle = TA_DIM;
+      ctx.fillText(TA.reportAgeDays(c.ly).toFixed(1) + ' d', cAge, y);
+      if (!rep) {
+        pending++;
+        ctx.fillText('reading…', cAsk, y);
+        ctx.textAlign = 'left';
+        continue;
+      }
+      var g = rep.goods[sel.id];
+      ctx.font = taFont(12);
+      if (!g) {
+        ctx.fillStyle = '#4c5c72';
+        ctx.fillText('nobody trades it', cAsk, y);
+      } else {
+        ctx.fillStyle = g.bid === null ? '#4c5c72' : (here !== null && hereAsk !== null && g.bid > hereAsk ? MARK_GOOD : TA_BID);
+        ctx.fillText(g.bid === null ? '—' : Math.round(g.bid) + '', cBid, y);
+        ctx.fillStyle = g.ask === null ? '#4c5c72' : TA_ASK;
+        ctx.fillText(g.ask === null ? '—' : Math.round(g.ask) + '', cAsk, y);
+        /* Where, under the numbers, small. */
+        ctx.font = taFont(10);
+        ctx.fillStyle = TA_DIM;
+        ctx.fillText(g.bidPort ? clipText(g.bidPort, narrow ? 14 : 22) : '', cBid, y + 12);
+        ctx.fillText(g.askPort ? clipText(g.askPort, narrow ? 14 : 22) : '', cAsk, y + 12);
+      }
+      ctx.textAlign = 'left';
+    }
+    var fy = y1 - 18;
+    ctx.font = taFont(11);
+    var chars = Math.floor((x1 - x0) / 6.7);
+    ctx.fillStyle = TA_DIM;
+    ctx.fillText(clipText((pending ? 'reading ' + pending + ' more report' + (pending === 1 ? '' : 's') + '   ·   ' : '') +
+                          'the ' + TA.NEAREST_CAP + ' nearest in reach, then where you have been', chars), x0, fy);
+    ctx.fillStyle = hereAsk !== null ? MARK_GOOD : TA_DIM;
+    ctx.fillText(clipText(hereAsk !== null ? 'green bid = more than the ask here (' + Math.round(hereAsk) + ' cr), before fuel'
+                                           : 'this port sells none of it: the bids are where yours would go', chars), x0, fy + 15);
+    if (a.via === 'terminal') {
+      ctx.fillStyle = '#ffd36b';
+      ctx.fillText(clipText('a public terminal cannot plot your course', chars), x0, fy - 15);
+    }
+  }
+
   /* The thrust rose: six arrows, each pointing the way that burn pushes you.
    * Arrows rather than words, and orbital-frame names rather than screen
    * directions, because "prograde" is true from any camera angle. */
@@ -19102,7 +19735,7 @@
   function openMenu() {
     if (G.hyper) { say('Not mid-jump', 2); return; }
     G.menu = { page: 'main', sel: 0, edit: null, note: null };
-    G.market = null;
+    G.market = null; G.analyser = null;
     HOOKS.sound('click');
   }
 
@@ -19116,7 +19749,7 @@
   function quitToTitle() {
     if (global.Save && G.ship && !G.ship.crashed) global.Save.store(G);
     G.menu = null;
-    G.market = null;
+    G.market = null; G.analyser = null;
     G.title = { sel: 0, edit: null, note: 'Career committed to the autosave.' };
   }
 
@@ -19316,7 +19949,7 @@
   function startPickOpen() {
     G.menu = { page: 'startpick', sel: 1, edit: null, note: null,
                pick: { stage: 'difficulty', difficulty: null } };
-    G.market = null;
+    G.market = null; G.analyser = null;
     G.startPickAsked = G.ship ? G.ship.docked : null;
     HOOKS.sound('click');
   }
@@ -20224,6 +20857,8 @@
       ['L', 'release the lock'],
       ['T', 'assign the docking clamp to a locked station'],
       ['J', 'slipspace chart'],
+      ['Y', 'trade analyser (fitted): this port\'s month, or the locked port\'s'],
+      ['', 'no fitting? the concourse has a public terminal — E at it'],
       ['', ''],
       ['SLIPSPACE WAKES  (red where a ship left, blue where one arrived)', ''],
       ['', 'they hang outside the last planet, each on the bearing of'],
@@ -20651,6 +21286,11 @@
    * zoomed out of its bay. */
   G.eyeUnderStreet = eyeUnderStreet;
   G.groundSky = groundSky;
+  /* Stepping out onto the deck and opening the trade analyser, the two
+   * ways a playtest reaches that screen without walking a ship's length to
+   * get there (2026-11-03). The same functions the keys call. */
+  G.startWalk = startWalk;
+  G.openAnalyser = openAnalyser;
   /* Exposed for the suite: the readout says VECTOR or HOVER or why not, and
    * a test that cannot ask the same question the HUD asks would be testing
    * its own copy of the rule. */
