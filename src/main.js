@@ -12787,7 +12787,17 @@
       var sx = cam.cx + (vx * cam.r.x + vy * cam.r.y + vz * cam.r.z) * cam.flen / dpt;
       var sy = cam.cy - (vx * cam.u.x + vy * cam.u.y + vz * cam.u.z) * cam.flen / dpt;
       ctx.fillStyle = it === G.walk.near ? '#ffe9a8' : 'rgba(180,240,255,0.75)';
-      ctx.fillText(it.label, sx, sy);
+      /* Off the room title and the use-prompt (walk.js labelClear): at the
+       * trade terminal, looking down, the 2.4 m label sat on the title. */
+      var ly = global.Walk.labelClear(sx, sy, ctx.measureText(it.label).width,
+                                      global.Walk.walkReserved(w, h - FBAR_H, G.talk ? null : G.walk.near));
+      /* A dark edge round the letters, so a label still reads where it
+       * lands on a lit sign (the concourse's MARKET board is cyan). */
+      var fs = ctx.fillStyle;
+      ctx.strokeStyle = 'rgba(4,10,14,0.85)'; ctx.lineWidth = 3; ctx.lineJoin = 'round';
+      ctx.strokeText(it.label, sx, ly);
+      ctx.fillStyle = fs;
+      ctx.fillText(it.label, sx, ly);
     });
     ctx.fillStyle = 'rgba(220,240,255,0.7)';
     ctx.beginPath(); ctx.arc(w / 2, (h - FBAR_H) / 2, 2, 0, Math.PI * 2); ctx.fill();
@@ -13098,9 +13108,22 @@
       ctx.fillStyle = '#ffe9a8';
       ctx.fillText(line, w / 2, (h - FBAR_H) / 2 + 43);
     }
+    /* THE ROOM'S NAME ON ITS OWN PLATE (2026-11-03). It was bare pale
+     * text over whatever the deck put behind it, and at Waypoint Dock's
+     * concourse that was a lit yellow sign: pale cyan on pale yellow,
+     * unreadable. A dark plate, as the use-prompt has, reads over a lit
+     * sign, a dark wall and the sky through a pane alike. Its band is
+     * reserved for it (walk.js TITLE_BAND), so no label prints through. */
     ctx.font = 'bold 11px ui-monospace, monospace';
-    ctx.fillStyle = 'rgba(180,240,255,0.8)';
-    ctx.fillText((G.walk.portName || '') + (room ? '  ·  ' + room.label : ''), w / 2, 22);
+    var title = (G.walk.portName || '') + (room ? '  ·  ' + room.label : '');
+    var tb = global.Walk.TITLE_BAND, ttw = ctx.measureText(title).width;
+    ctx.fillStyle = 'rgba(6,16,22,0.82)';
+    ctx.fillRect(w / 2 - ttw / 2 - 12, tb.y0, ttw + 24, tb.y1 - tb.y0);
+    ctx.strokeStyle = 'rgba(120,200,230,0.35)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(w / 2 - ttw / 2 - 11.5, tb.y0 + 0.5, ttw + 23, tb.y1 - tb.y0 - 1);
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText(title, w / 2, 22);
     ctx.fillStyle = 'rgba(180,240,255,0.55)';
     ctx.fillText('WASD walk  ·  Shift run  ·  Ctrl or C crouch  ·  mouse or arrows to look  ·  E use  ·  hold Alt for the pointer  ·  Esc menu', w / 2, h - FBAR_H - 10);
     if (G.message && performance.now() < G.messageUntil) {

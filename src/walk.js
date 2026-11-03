@@ -1118,7 +1118,11 @@
       var cs = toCam(c, [it.x, 2.4, it.z]);
       if (!p || cs.d < 0.3 || cs.d > 30) return;
       ctx.fillStyle = it === w.near ? '#ffe9a8' : 'rgba(180,240,255,0.75)';
-      ctx.fillText(it.label, p[0].x, p[0].y);
+      /* Clear of the title band and the use-prompt (labelClear). */
+      var ly = labelClear(p[0].x, p[0].y, ctx.measureText(it.label).width, walkReserved(W, H, w.near));
+      ctx.strokeStyle = 'rgba(4,10,14,0.85)'; ctx.lineWidth = 3; ctx.lineJoin = 'round';
+      ctx.strokeText(it.label, p[0].x, ly);
+      ctx.fillText(it.label, p[0].x, ly);
     });
     ctx.textAlign = 'left';
     /* A dot where you are looking. */
@@ -1331,7 +1335,45 @@
     return { model: m, mats: mats, person: { id: 'self', x: w.x, z: w.z, self: true } };
   }
 
+  /* ---- the screen furniture a label must keep off (2026-11-03) ---------
+   * Seen at Waypoint Dock: on foot right at the trade terminal, looking
+   * down at it, its label — pinned 2.4 m up over the thing — projected to
+   * the top of the screen and printed through the room title. The title
+   * band and the use-prompt under the dot are fixed places on the screen,
+   * so they are reserved here, and a label that would land on one moves
+   * clear of it rather than being dropped: a label you cannot read is
+   * worse than one a little off its spot, and one that vanishes when you
+   * look down at the thing is a thing that seems to have stopped working.
+   * Pure, so walk.test.js can hold the boxes apart. */
+  var TITLE_BAND = { y0: 6, y1: 31 };        // drawWalkOverlay's plate, px from the top
+  function walkReserved(w, h, near) {
+    var out = [{ x0: 0, x1: w, y0: TITLE_BAND.y0, y1: TITLE_BAND.y1 + 4 }];
+    /* The "E — use it" plate under the dot, when there is one. */
+    if (near) out.push({ x0: w / 2 - 160, x1: w / 2 + 160, y0: h / 2 + 24, y1: h / 2 + 52 });
+    return out;
+  }
+  /* A label's box: centred on sx, its baseline at sy, `tw` wide and 11 px
+   * type. Returns the baseline to draw at. Pushed DOWN out of the title
+   * band (it is the top of the screen; there is nowhere above), and
+   * otherwise to whichever side of a reserved box is nearer. */
+  function labelClear(sx, sy, tw, reserved) {
+    var asc = 10, desc = 3;
+    for (var pass = 0; pass < 3; pass++) {
+      var moved = false;
+      for (var i = 0; i < reserved.length; i++) {
+        var r = reserved[i];
+        if (sx + tw / 2 <= r.x0 || sx - tw / 2 >= r.x1 || sy + desc <= r.y0 || sy - asc >= r.y1) continue;
+        var down = r.y1 + asc + 2, up = r.y0 - desc - 2;
+        sy = (i === 0 || up - asc < 0 || Math.abs(down - sy) <= Math.abs(sy - up)) ? down : up;
+        moved = true;
+      }
+      if (!moved) break;
+    }
+    return sy;
+  }
+
   var Walk = {
+    TITLE_BAND: TITLE_BAND, walkReserved: walkReserved, labelClear: labelClear,
     EYE: EYE, RADIUS: RADIUS, WALK: WALK, RUN: RUN, REACH: REACH,
     CROUCH_EYE: CROUCH_EYE, CROUCH: CROUCH, eyeOf: eyeOf, selfFigure: selfFigure, selfPose: selfPose,
     hangarToShip: toShip, hangarToStation: toStation, HANGAR_MARGIN: HANGAR_MARGIN, armHangar: armHangar,
