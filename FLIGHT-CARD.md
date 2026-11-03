@@ -37,7 +37,7 @@ reading, and the old 178-pixel instrument band was pretending you could do both.
 | `F3` | Local navigation — contacts, lock, scope, autopilot |
 | `F4` | Comms |
 | `F5` | Ship status & inventory |
-| `F6` | Galaxy map & course plotter |
+| `F6` | Galaxy map & course plotter. **The chart zooms:** wheel over the plot (anchored on the pointer), `=` / `-` (or `+`, numpad included) or the on-chart `+` `−` buttons, `WHOLE` to come back out; drag pans; `C` centres on your star, `Shift+C` on the selection. Off the plot, the selection and your own star each get an arrow on the plot's edge pointing at them. Zoom and pan last the session |
 | `F7` | Mission status |
 | `F8` | Jump to hyperspace |
 | `F9` | Keyboard / mouse aim |

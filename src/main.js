@@ -1413,6 +1413,21 @@
     if (key === 'pagedown') { m.sel = Math.min(m.list.length - 1, m.sel + 10); return true; }
     if (key === 'pageup') { m.sel = Math.max(0, m.sel - 10); return true; }
     if (key === 'home') { m.sel = 0; return true; }
+    /* THE ZOOM (2026-11-03). + and - are the flight camera's zoom keys, and
+     * with the chart up the camera is behind a full-screen page nobody can
+     * see, so here they mean the chart; both spellings of each, since they
+     * differ by keyboard layout and the numpad sends + and - as well. */
+    var Scr = global.Screens;
+    if (Scr && (key === '=' || key === '+')) { Scr.chartKeyZoom(Scr.CHART_KEY_STEP); return true; }
+    if (Scr && (key === '-' || key === '_')) { Scr.chartKeyZoom(1 / Scr.CHART_KEY_STEP); return true; }
+    /* C centres on where you are, Shift+C on the selection. Except while
+     * somebody is holding you up: then C is compliance everywhere, the
+     * demand panel says so, and a chart that ate it would be a screen you
+     * cannot surrender from. */
+    if (Scr && key === 'c' && !(G.encounter && G.encounter.demand)) {
+      Scr.chartCentre(e.shiftKey ? 'selected' : 'here');
+      return true;
+    }
     /* Enter is the act of plotting, so it is also what the trade analyser
      * reads as "the star you are going to" (G.courseStar, 2026-11-03): the
      * chart's own selection is dropped the moment you leave the chart, and
@@ -2195,6 +2210,14 @@
        * whatever its last on-screen position was. */
       var spot = pointerLocked() ? null : overHot(e.clientX, e.clientY);
       if (spot) { HOOKS.sound('click'); spot.fn(); return; }
+      /* A press on the F6 chart's plot is a pan or a star click, and only
+       * the release can say which — so it is the chart's, after the
+       * buttons (its own zoom buttons sit on the plot) and before anything
+       * that would turn a camera behind it. */
+      if (global.Screens && global.Screens.chartPointer && mouseButton(e) === 0 && !pointerLocked()) {
+        var cr = canvas.getBoundingClientRect();
+        if (global.Screens.chartPointer('down', e.clientX - cr.left, e.clientY - cr.top)) return;
+      }
 
       if (G.cursor.active) {
         cursorAt(e.clientX, e.clientY);
@@ -2250,6 +2273,10 @@
     });
     window.addEventListener('mouseup', function (e) {
       dragging = false;
+      if (global.Screens && global.Screens.chartPointer) {
+        var cr = canvas.getBoundingClientRect();
+        global.Screens.chartPointer('up', e.clientX - cr.left, e.clientY - cr.top);
+      }
       /* Only the two buttons that ARE triggers release one. The `else` here
        * used to catch the side button too, so launching a missile mid-burst
        * cut your own guns. */
@@ -2279,6 +2306,14 @@
       /* Where the pointer is, for anything drawn that lights up under it
        * (the talk panel's replies, 2026-10-29). */
       G.mouseAt = { x: e.clientX, y: e.clientY };
+      /* A drag on the chart pans the chart and nothing else. */
+      if (global.Screens && global.Screens.chartPointer) {
+        var cr = canvas.getBoundingClientRect();
+        if (global.Screens.chartPointer('move', e.clientX - cr.left, e.clientY - cr.top)) {
+          lastX = e.clientX; lastY = e.clientY;
+          return;
+        }
+      }
       /* With the cursor out, the mouse belongs to the interface: it does not
        * turn the pilot's head and it does not swing the camera. This is the
        * whole point of the modifier — a drag handle you cannot reach without
@@ -2349,6 +2384,13 @@
        * a stand-in window object, so a bare `Screens` is not in scope even
        * when `global.Screens` is set. */
       if (global.Screens && global.Screens.wheelAt(e.clientX, e.clientY, e.deltaY)) return;
+      /* The F6 chart's own zoom, anchored on the pointer. Canvas-relative,
+       * like the hotspots, because the chart's anchor has to be the pixel
+       * under the pointer exactly or the star you were reaching for slides. */
+      if (global.Screens && global.Screens.chartWheel) {
+        var wr = canvas.getBoundingClientRect();
+        if (global.Screens.chartWheel(e.clientX - wr.left, e.clientY - wr.top, e.deltaY)) return;
+      }
       zoomBy(Math.pow(1.0016, e.deltaY));
     }, { passive: false });
 
@@ -20890,6 +20932,8 @@
       ['F4', 'Comms — everyone in range you could talk to'],
       ['F5', 'Ship status and inventory — with a jettison control per cargo'],
       ['F6', 'Galaxy map and course plotter'],
+      ['', 'on it: wheel or + / - zoom, drag pans, C centres on you,'],
+      ['', 'Shift+C on the selection; an edge arrow points to it off-chart'],
       ['F7', 'Mission status'],
       ['F8', 'Jump to hyperspace — engages the course F6 laid in'],
       ['F9', 'Keyboard / mouse aim'],
