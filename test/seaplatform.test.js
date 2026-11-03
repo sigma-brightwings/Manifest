@@ -518,7 +518,7 @@ console.log('--- no hull stands on her tail at a rig (2026-11-03) ---');
    * 3 km of a rig pointed within 32 degrees of straight up. Here, Taolmai's
    * Terminus Hold (the system the case was found in) and every route at
    * it, through a whole cycle: none may. */
-  var star = gal.stars[5], sys = Gen.generateSystem(star.seed);
+  var star = gal.stars[5], sys = Gen.generateSystem(star.seed, Galaxy.systemOpts(gal, star));
   var port = (sys.ports || []).filter(function (p) { return p.seaPlatform; })[0];
   check('Taolmai has its sea platform', !!port, star.name);
   if (!port) return;
