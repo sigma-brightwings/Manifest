@@ -56,7 +56,7 @@ var GROUPS = {
   view: [
     'test/cockpit.test.js', 'test/greebles.test.js', 'test/dressing.test.js',
     'test/hangar.test.js', 'test/cruisesky.test.js', 'test/navsystem.test.js',
-    'test/tear.test.js', 'test/groundport-look.test.js'
+    'test/tear.test.js', 'test/groundport-look.test.js', 'test/galaxyzoom.test.js'
   ],
   berths: ['test/berths.test.js'],
   ships: [

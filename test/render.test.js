@@ -4290,6 +4290,146 @@ scenario('the star chart with a far selection', function () {
 }, 2);
 scenario('closing the chart', function () { G.starMap = null; }, 1);
 
+/* ---- the chart zooms (2026-11-03) ---------------------------------------
+ * Astra: "on the F6 tab I want to be able to zoom in and out on the galaxy
+ * now that we're running so many more stars."
+ *
+ * The transform's arithmetic is galaxyzoom.test.js. This is the real
+ * thing end to end: F6, then the real wheel, mouse and key listeners, and
+ * the chart drawing at every zoom without an error — plus the three ways
+ * this could quietly go wrong: the wheel ALSO zooming the flight camera
+ * behind the screen, a drag selecting a star, and the zoom being lost
+ * when the chart is closed and opened again. */
+console.log('--- the chart zooms ---');
+(function () {
+  newFlying('kawartha');
+  frames(2);
+  var keydown = listeners.keydown[0];
+  function press(k, shift) { keydown({ key: k, shiftKey: !!shift, preventDefault: function () {} }); }
+  function each(name, ev) { (listeners[name] || []).forEach(function (fn) { fn(ev); }); }
+  function mouse(name, x, y) {
+    each(name, { clientX: x, clientY: y, button: 0, shiftKey: false, preventDefault: function () {} });
+  }
+  function wheelAt(x, y, dy) {
+    listeners.wheel[0]({ clientX: x, clientY: y, deltaY: dy, preventDefault: function () {} });
+  }
+  var mark = drawn.texts.length;
+  press('F6'); frames(1);
+  check('F6 opens the chart for the zoom tests', !!G.starMap && !!G.starMap.view);
+  var Scr = global.window.Screens, C = Scr.chart;
+  var plot = Scr.chartPlot();
+  check('the chart reports its plot', !!plot && plot.size > 300, plot && plot.size);
+  check('it opens at the whole galaxy', G.starMap.view.z === 1);
+  var st0 = Scr.chartStat();
+  check('zoomed out, nothing is culled — the whole galaxy is on the plot',
+        st0.culled === 0 && st0.drawn === G.galaxy.stars.length, st0.drawn + ' drawn, ' + st0.culled + ' culled');
+
+  // ---- the wheel zooms the chart, and only the chart
+  var camBefore = G.cam.dist, fovBefore = G.cockpitFov;
+  var ax = plot.cx + 60, ay = plot.cy - 40;
+  var under = C.toGalaxy(C.xf(G.starMap.view, plot), ax, ay);
+  for (var i = 0; i < 10; i++) { wheelAt(ax, ay, -100); frames(1); }
+  check('the wheel over the plot zooms the chart in', G.starMap.view.z > 3, '×' + G.starMap.view.z.toFixed(2));
+  check('and does not also zoom the flight camera behind it',
+        G.cam.dist === camBefore && G.cockpitFov === fovBefore);
+  var after = C.toGalaxy(C.xf(G.starMap.view, Scr.chartPlot()), ax, ay);
+  check('the galaxy point under the pointer stayed under it, through the real listener',
+        Math.hypot(after.x - under.x, after.y - under.y) < 1e-6);
+  var st1 = Scr.chartStat();
+  check('zoomed in, most of the galaxy is culled before it is drawn',
+        st1.culled > st1.drawn, st1.drawn + ' drawn, ' + st1.culled + ' culled');
+
+  /* Mid zoom, about 16 px per ly: every tier is eligible for a name, and
+   * the view still holds a few dozen stars, so this is where the thinning
+   * actually has work to do. */
+  check('at mid zoom more stars are named than at the whole galaxy',
+        st1.labels > st0.labels, st0.labels + ' -> ' + st1.labels + ' (of ' + st1.cands + ' eligible)');
+
+  // ---- the closest zoom, labels and all
+  for (var j = 0; j < 30; j++) { wheelAt(ax, ay, -100); frames(1); }
+  plot = Scr.chartPlot();
+  check('the wheel stops at the closest zoom',
+        Math.abs(C.xf(G.starMap.view, plot).scale - C.MAX_PX_PER_LY) < 1e-6);
+  var st2 = Scr.chartStat();
+  check('at the closest zoom every star on the plot has its name',
+        st2.cands > 0 && st2.labels === st2.cands, st2.labels + ' of ' + st2.cands);
+  var ov = 0;
+  st2.placed.forEach(function (p, a) {
+    st2.placed.slice(a + 1).forEach(function (q) {
+      if (p.bx < q.bx + q.bw && p.bx + p.bw > q.bx && p.by < q.by + q.bh && p.by + p.bh > q.by) ov++;
+    });
+  });
+  check('and no two names overprint', ov === 0, ov + ' overlaps');
+
+  // ---- a click picks the star under it
+  var xf = C.xf(G.starMap.view, plot), target = null;
+  G.galaxy.stars.forEach(function (s) {
+    if (target || s === G.here) return;
+    var d = C.dot(xf, s);
+    if (C.inPlot(plot, d.x, d.y, -30)) target = s;
+  });
+  check('there is a star on the plot to click', !!target);
+  if (target) {
+    var td = C.dot(xf, target);
+    var pick = C.pick(G.galaxy.stars, xf, plot, td.x + 2, td.y - 2);
+    mouse('mousedown', td.x + 2, td.y - 2); mouse('mouseup', td.x + 2, td.y - 2); frames(1);
+    check('clicking a dot at the closest zoom selects that star',
+          G.starMap.list[G.starMap.sel].to === pick && pick === target,
+          G.starMap.list[G.starMap.sel].to.name + ' vs ' + target.name);
+  }
+
+  // ---- a drag pans and does not select
+  var sel0 = G.starMap.sel, gx0 = G.starMap.view.gx, gy0 = G.starMap.view.gy;
+  mouse('mousedown', plot.cx, plot.cy);
+  mouse('mousemove', plot.cx + 30, plot.cy + 10);
+  mouse('mousemove', plot.cx + 80, plot.cy + 30);
+  mouse('mouseup', plot.cx + 80, plot.cy + 30);
+  frames(1);
+  check('a drag pans the chart', G.starMap.view.gx < gx0 && G.starMap.view.gy > gy0);
+  check('and does not change the selection', G.starMap.sel === sel0);
+
+  // ---- the edge arrow, the keys, and C / Shift+C
+  G.starMap.sel = G.starMap.list.length - 1;   // the farthest star there is
+  frames(1);
+  var far = G.starMap.list[G.starMap.sel].to;
+  check('the farthest star is off the plot zoomed in', !C.inPlot(plot, C.dot(C.xf(G.starMap.view, plot), far).x,
+        C.dot(C.xf(G.starMap.view, plot), far).y));
+  check('and the chart says where it is, at the edge', drawn.texts.some(function (t) {
+    return t.indexOf(far.name + ' ') === 0;
+  }));
+  press('C', true); frames(1);
+  var fd = C.dot(C.xf(G.starMap.view, plot), far);
+  check('Shift+C brings the selection onto the plot', C.inPlot(plot, fd.x, fd.y));
+  press('c'); frames(1);
+  var hd = C.dot(C.xf(G.starMap.view, plot), G.here);
+  check('C centres on where you are', Math.hypot(hd.x - plot.cx, hd.y - plot.cy) < 1.5 || C.inPlot(plot, hd.x, hd.y));
+  var z0 = G.starMap.view.z, cam0 = G.cam.dist, fov0 = G.cockpitFov;
+  press('-'); frames(1);
+  check('- zooms the chart out', G.starMap.view.z < z0);
+  press('='); frames(1);
+  check('= zooms it back in', Math.abs(G.starMap.view.z - z0) < 1e-9);
+  check('and neither touched the flight camera', G.cam.dist === cam0 && G.cockpitFov === fov0);
+
+  // ---- remembered for the session
+  var zKeep = G.starMap.view.z, gxKeep = G.starMap.view.gx;
+  press('Escape'); frames(1);
+  check('Esc closes the chart', !G.starMap);
+  press('F6'); frames(1);
+  check('reopened, the chart is at the same zoom and pan',
+        G.starMap && Math.abs(G.starMap.view.z - zKeep) < 1e-9 && Math.abs(G.starMap.view.gx - gxKeep) < 1e-9);
+  check('the chart drew at every zoom without an error', errorsSince(mark).length === 0, errorsSince(mark)[0]);
+
+  /* F8 keeps G.starMap but draws no plot: a click there must not be taken
+   * by the chart that is not on screen. */
+  press('F8'); frames(1);
+  check('on F8 the chart owns no plot', Scr.chartPlot() === null);
+  press('Escape'); frames(1);
+  press('F6'); frames(1);
+  for (var k = 0; k < 20; k++) press('-');
+  frames(1);
+  press('Escape'); frames(1);
+})();
+
 scenario('the trade console renders', function () {
   G.ship.cargo.ores = 12;
   Sim.refreshShip(G.ship);

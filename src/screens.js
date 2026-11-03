@@ -5996,57 +5996,93 @@
     return out;
   }
 
-  function territoryField(plotSize, cx, cy, scale) {
+  /* ANCHORED TO THE GALAXY, NOT TO THE PLOT (2026-11-03, the zoomable
+   * chart). The grid used to start at the plot's top-left corner, which was
+   * fine while the galaxy never moved under it. Once the chart pans, a grid
+   * pinned to the plot would have to be rebuilt every frame of a drag —
+   * thousands of nearest-star searches and a full repaint, sixty times a
+   * second. So a cell is now numbered from the galaxy's ORIGIN at the
+   * current scale: column c is the strip of the screen starting c cells
+   * right of where (0, 0) is drawn. Panning moves the origin, the cells move
+   * with it, and the cached picture is simply blitted somewhere else.
+   *
+   * The field covers the view plus a margin on each side, so a drag stays
+   * inside what was computed for a while; it is rebuilt when the view
+   * leaves that, when the scale changes, or when you chart something. With
+   * the chart zoomed all the way out there is nowhere to pan, so no margin
+   * is paid for.
+   *
+   * xf is the chart transform (chartXf): scale in px per ly, and (ox, oy)
+   * the screen position of the galaxy's origin. plot is the plot square. */
+  function territoryField(plot, xf, pannable) {
     var stars = chartedStars();
-    var key = stars.length + '|' + plotSize + '|' + Math.round(scale * 1000) +
-              '|' + (G.seed || '');
-    if (terrCache && terrCache.key === key) return terrCache;
+    var cell = TERRITORY_CELL, scale = xf.scale;
+    var c0 = Math.floor((plot.x0 - xf.ox) / cell), c1 = Math.ceil((plot.x0 + plot.size - xf.ox) / cell);
+    var r0 = Math.floor((plot.y0 - xf.oy) / cell), r1 = Math.ceil((plot.y0 + plot.size - xf.oy) / cell);
+    var base = stars.length + '|' + Math.round(scale * 1000) + '|' + (G.seed || '');
+    if (terrCache && terrCache.base === base &&
+        c0 >= terrCache.c0 && c1 <= terrCache.c0 + terrCache.nc &&
+        r0 >= terrCache.r0 && r1 <= terrCache.r0 + terrCache.nr) return terrCache;
 
-    var n = Math.max(2, Math.ceil(plotSize / TERRITORY_CELL));
-    var x0 = cx - plotSize / 2, y0 = cy - plotSize / 2;
+    var mg = pannable ? Math.ceil(plot.size / 4 / cell) : 0;
+    c0 -= mg; r0 -= mg; c1 += mg; r1 += mg;
+    var nc = Math.max(2, c1 - c0), nr = Math.max(2, r1 - r0);
     var reachPx = TERRITORY_REACH_LY * scale;
-    var owner = new Array(n * n), ctl = new Array(n * n);
-    var gx = [], gy = [], i;
-    /* Star positions in PLOT space once, rather than per cell. The stem is
-     * deliberately not applied: a star's dot is drawn lifted by its height
-     * but its territory belongs where it is on the floor of the plot, and
-     * lifting the region too would slide every border off its own stars. */
+    var owner = new Array(nc * nr), ctl = new Array(nc * nr);
+    var gx = [], gy = [], near = [], i;
+    /* Star positions relative to the ORIGIN'S screen point, once, rather
+     * than per cell. The stem is deliberately not applied: a star's dot is
+     * drawn lifted by its height but its territory belongs where it is on
+     * the floor of the plot, and lifting the region too would slide every
+     * border off its own stars.
+     *
+     * And only the stars whose flag can reach the field at all. Zoomed in,
+     * that is a few dozen of the galaxy's charted hundreds, which is what
+     * keeps a rebuild in the middle of a drag cheap. */
+    var fx0 = c0 * cell - reachPx, fx1 = (c0 + nc) * cell + reachPx;
+    var fy0 = r0 * cell - reachPx, fy1 = (r0 + nr) * cell + reachPx;
     for (i = 0; i < stars.length; i++) {
-      gx.push(cx + stars[i].x * scale);
-      gy.push(cy - stars[i].y * scale);
+      var sx = stars[i].x * scale, sy = -stars[i].y * scale;
+      if (sx < fx0 || sx > fx1 || sy < fy0 || sy > fy1) continue;
+      gx.push(sx); gy.push(sy); near.push(stars[i]);
     }
 
-    for (var r = 0; r < n; r++) {
-      var py2 = y0 + (r + 0.5) * TERRITORY_CELL;
-      for (var c = 0; c < n; c++) {
-        var px2 = x0 + (c + 0.5) * TERRITORY_CELL;
+    for (var r = 0; r < nr; r++) {
+      var py2 = (r0 + r + 0.5) * cell;
+      for (var c = 0; c < nc; c++) {
+        var px2 = (c0 + c + 0.5) * cell;
         var best = -1, bestD = reachPx * reachPx;
-        for (i = 0; i < stars.length; i++) {
+        for (i = 0; i < near.length; i++) {
           var ddx = px2 - gx[i], ddy = py2 - gy[i];
           var d2 = ddx * ddx + ddy * ddy;
           if (d2 < bestD) { bestD = d2; best = i; }
         }
-        var k = r * n + c;
+        var k = r * nc + c;
         if (best < 0) { owner[k] = null; ctl[k] = 0; continue; }
-        owner[k] = stars[best].factionId;
+        owner[k] = near[best].factionId;
         /* Control of the SYSTEM, faded toward the edge of that star's
          * reach — so a lone charted system reads as a claim that runs out
          * rather than as a hard-edged tile, and a cluster of them reads as
          * one region. */
         var fade = 1 - Math.sqrt(bestD) / reachPx;
-        ctl[k] = Galaxy.control(G.galaxy, stars[best]) * (0.45 + 0.55 * fade);
+        ctl[k] = Galaxy.control(G.galaxy, near[best]) * (0.45 + 0.55 * fade);
       }
     }
-    terrCache = { key: key, n: n, x0: x0, y0: y0, owner: owner, ctl: ctl };
+    terrBuilds++;
+    terrCache = { base: base, key: base + '|' + c0 + ',' + r0 + ',' + nc + ',' + nr,
+                  nc: nc, nr: nr, c0: c0, r0: r0,
+                  x0: c0 * cell, y0: r0 * cell, owner: owner, ctl: ctl };
     return terrCache;
   }
+  var terrBuilds = 0;   // how many times the field was rebuilt — the tests read it
 
   /* PAINTED ONCE, THEN BLITTED. Measured: drawing the fill and the borders
    * live cost 4,900 fillRects and one border sweep per power every frame,
    * and took a fully-charted galaxy from 77 fps to 15. The field was
    * already cached; the PICTURE of it now is too, on an offscreen surface
    * keyed the same way, so a frame costs one drawImage and the whole thing
-   * is rebuilt only when you chart something new or the window resizes.
+   * is rebuilt only when you chart something new, the scale changes, or a
+   * pan runs off the edge of what was painted.
    *
    * Falls back to drawing straight onto the chart when there is no document
    * to make a canvas from — the headless test harness, which cares that the
@@ -6065,47 +6101,48 @@
     return terrSurface;
   }
 
-  function drawTerritory(ctx, px, py, plotSize, cx, cy, scale) {
+  function drawTerritory(ctx, plot, xf, pannable) {
     if (!G.galaxy || !G.charted) return;
-    var f = territoryField(plotSize, cx, cy, scale);
-    var side = f.n * TERRITORY_CELL;
-    var surf = territorySurface(Math.ceil(side), Math.ceil(side));
+    var f = territoryField(plot, xf, pannable);
+    var cw = f.nc * TERRITORY_CELL, ch = f.nr * TERRITORY_CELL;
+    /* The origin rounded to a whole pixel: the cells inside the picture are
+     * snapped to whole pixels (see paintTerritory), and blitting them at a
+     * fractional offset would smear every seam the snapping was for. */
+    var ox = Math.round(xf.ox), oy = Math.round(xf.oy);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(plot.x0, plot.y0, plot.size, plot.size);
+    ctx.clip();
+    var surf = territorySurface(cw, ch);
     if (surf) {
       if (surf.key !== f.key) {
         surf.ctx.clearRect(0, 0, surf.canvas.width, surf.canvas.height);
         paintTerritory(surf.ctx, f, -f.x0, -f.y0);
         surf.key = f.key;
       }
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(f.x0, f.y0, side, side);
-      ctx.clip();
-      ctx.drawImage(surf.canvas, f.x0, f.y0);
-      ctx.restore();
-      return;
+      ctx.drawImage(surf.canvas, ox + f.x0, oy + f.y0);
+    } else {
+      paintTerritory(ctx, f, ox, oy);
     }
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(f.x0, f.y0, side, side);
-    ctx.clip();
-    paintTerritory(ctx, f, 0, 0);
     ctx.restore();
   }
 
-  /* The fill and the borders, in plot coordinates offset by (ox, oy) — zero
-   * when painting straight onto the chart, and minus the field's origin
-   * when painting into the offscreen surface. */
+  /* The fill and the borders. The field's coordinates are relative to the
+   * galaxy origin's screen point, so (ox, oy) is that point when painting
+   * straight onto the chart, and minus the field's own corner when painting
+   * into the offscreen surface. The grid is nc wide and nr tall — no longer
+   * square, since the margin a pan needs is cut to what the galaxy has. */
   function paintTerritory(ctx, f, ox, oy) {
-    var n = f.n, cell = TERRITORY_CELL;
+    var nc = f.nc, nr = f.nr, cell = TERRITORY_CELL;
     var byId = G.galaxy.factionById || {};
     var r, c, k;
 
     /* THE FILL. One pass, no gradients: a flat wash per cell whose alpha is
      * the control reading. Cells of the same colour abut exactly, so a
      * region reads as one shape rather than as tiles. */
-    for (r = 0; r < n; r++) {
-      for (c = 0; c < n; c++) {
-        k = r * n + c;
+    for (r = 0; r < nr; r++) {
+      for (c = 0; c < nc; c++) {
+        k = r * nc + c;
         var fid = f.owner[k];
         if (!fid) continue;
         var fac = byId[fid];
@@ -6142,21 +6179,21 @@
         if (!path) { ctx.beginPath(); path = true; }
         ctx.moveTo(ax, ay); ctx.lineTo(bx, by);
       }
-      for (var r2 = 0; r2 < n; r2++) {
-        for (var c2 = 0; c2 < n; c2++) {
-          var kk = r2 * n + c2;
+      for (var r2 = 0; r2 < nr; r2++) {
+        for (var c2 = 0; c2 < nc; c2++) {
+          var kk = r2 * nc + c2;
           if (f.owner[kk] !== fac.id) continue;
           var X = ox + f.x0 + c2 * cell, Y = oy + f.y0 + r2 * cell;
           if (c2 === 0 || f.owner[kk - 1] !== fac.id) {
             seg(X + inset, Y, X + inset, Y + cell);
           }
-          if (c2 === n - 1 || f.owner[kk + 1] !== fac.id) {
+          if (c2 === nc - 1 || f.owner[kk + 1] !== fac.id) {
             seg(X + cell - inset, Y, X + cell - inset, Y + cell);
           }
-          if (r2 === 0 || f.owner[kk - n] !== fac.id) {
+          if (r2 === 0 || f.owner[kk - nc] !== fac.id) {
             seg(X, Y + inset, X + cell, Y + inset);
           }
-          if (r2 === n - 1 || f.owner[kk + n] !== fac.id) {
+          if (r2 === nr - 1 || f.owner[kk + nc] !== fac.id) {
             seg(X, Y + cell - inset, X + cell, Y + cell - inset);
           }
         }
@@ -6172,7 +6209,328 @@
     });
   }
 
+  /* ---- THE CHART ZOOMS (2026-11-03) ------------------------------------
+   * Astra: "on the F6 tab I want to be able to zoom in and out on the
+   * galaxy now that we're running so many more stars."
+   *
+   * 450 stars in a 73 ly disc, drawn at one scale on a ~600 px plot, is
+   * about 4 px per light year — the median gap to a star's nearest
+   * neighbour is under a dozen pixels, so the middle of the cluster was a
+   * smear you could click into but not read. The chart now has a VIEW:
+   * a zoom (1 = the whole galaxy, the old fixed scale) and the galaxy
+   * point at the middle of the plot. Everything below that turns galaxy
+   * coordinates into pixels goes through chartXf, so the stars, the
+   * territory, the range ring, the click and the edge arrows cannot
+   * disagree about where a star is.
+   *
+   * THE CLOSEST ZOOM IS A PIXEL DENSITY, not a multiple, so it means the
+   * same thing on any window: CHART_MAX_PX_PER_LY. Measured on 40 seeds
+   * (kawartha and 39 others, 18,000 stars): the gap from a star to its
+   * nearest neighbour AS DRAWN — x across, y minus height up, because the
+   * stem lifts each dot — has a median of 2.86 ly, a 10th percentile of
+   * 1.16 and a 5th of 0.80. At 40 px/ly the 5th-percentile pair sits
+   * 32 px apart, two dots plus their rings with daylight between, and a
+   * median pair 114 px apart, room for both names. The view at that zoom
+   * is still ~15 ly across, so there are always neighbours in it. What
+   * no zoom fixes is the 1%: pairs closer than 0.35 ly on screen, which
+   * are not close in space (nothing is nearer than 1.1 ly in 3D) but
+   * stacked one above the other — the stems tell them apart, not the
+   * scale. Pushing past 40 for their sake would leave the plot holding
+   * one star. */
+  var CHART_MAX_PX_PER_LY = 40;
+  var CHART_KEY_STEP = 1.25;        // + and -, the same step the flight camera uses
+  var CHART_WHEEL_BASE = 1.0016;    // per wheel unit, again the camera's
+  var CHART_CLICK_PX = 12;          // how near a click must land to a dot to pick it
+  var CHART_DRAG_PX = 4;            // movement before a press becomes a pan, not a click
+
+  /* Kept for the SESSION, by seed: closing the chart drops G.starMap (a
+   * dozen places do, on purpose), and coming back to it to find the zoom
+   * thrown away would make zooming in a chore you repeat. Not saved — a
+   * view is not a fact about the career. */
+  var chartMemory = null;
+  var chartPlot = null;    // last frame's plot square, for the wheel and the pointer
+  var chartPress = null;   // a press on the plot: a click until it moves, then a pan
+  var chartStat = { drawn: 0, culled: 0, labels: 0, ms: 0, builds: 0 };
+
+  function chartFit(plotSize, radius) { return (plotSize / 2) / (radius * 1.06); }
+  function chartMaxZoom(plot) { return Math.max(1, CHART_MAX_PX_PER_LY / plot.fit); }
+
+  /* The transform: scale in px per ly, and the screen point of the
+   * galaxy's origin. Screen y runs down, galaxy y up. */
+  function chartXf(view, plot) {
+    var s = plot.fit * view.z;
+    return { scale: s, ox: plot.cx - view.gx * s, oy: plot.cy + view.gy * s };
+  }
+  function chartToScreen(xf, gx, gy) { return { x: xf.ox + gx * xf.scale, y: xf.oy - gy * xf.scale }; }
+  function chartToGalaxy(xf, sx, sy) { return { x: (sx - xf.ox) / xf.scale, y: (xf.oy - sy) / xf.scale }; }
+  /* Where a star's DOT is drawn: lifted off its floor point by its stem. */
+  function chartDot(xf, s) { return { x: xf.ox + s.x * xf.scale, y: xf.oy - (s.y + s.z) * xf.scale }; }
+
+  /* Zoom between the whole galaxy and the closest; the centre kept where
+   * the plot still has galaxy in it. Per axis, so at full zoom-out there is
+   * no slack at all and the galaxy sits exactly where the old chart drew
+   * it, and zoomed in the view can reach the rim star with it mid-plot. */
+  function chartClamp(view, plot) {
+    view.z = Math.max(1, Math.min(chartMaxZoom(plot), view.z));
+    var half = (plot.size / 2) / (plot.fit * view.z);
+    var lim = Math.max(0, plot.radius * 1.06 - half);
+    view.gx = Math.max(-lim, Math.min(lim, view.gx));
+    view.gy = Math.max(-lim, Math.min(lim, view.gy));
+    return view;
+  }
+
+  /* Zoom by `factor` about a screen point, keeping the galaxy point under
+   * it where it is — which is what makes the wheel feel like reaching into
+   * the map rather than the map sliding away from the cursor. Only the
+   * clamp can move that point, and only at the edges of the galaxy. */
+  function chartZoomAt(view, plot, factor, sx, sy) {
+    var under = chartToGalaxy(chartXf(view, plot), sx, sy);
+    view.z = Math.max(1, Math.min(chartMaxZoom(plot), view.z * factor));
+    var s = plot.fit * view.z;
+    view.gx = under.x - (sx - plot.cx) / s;
+    view.gy = under.y + (sy - plot.cy) / s;
+    return chartClamp(view, plot);
+  }
+  function chartPan(view, plot, dxPx, dyPx) {
+    var s = plot.fit * view.z;
+    view.gx -= dxPx / s;
+    view.gy += dyPx / s;
+    return chartClamp(view, plot);
+  }
+  /* Centre on a star's dot, as drawn — its height included, or a star
+   * high above the plane would come to rest well off the middle. */
+  function chartCentreOn(view, plot, s) {
+    view.gx = s.x; view.gy = s.y + s.z;
+    return chartClamp(view, plot);
+  }
+  function chartInPlot(plot, x, y, margin) {
+    margin = margin || 0;
+    return x >= plot.x0 - margin && x <= plot.x0 + plot.size + margin &&
+           y >= plot.y0 - margin && y <= plot.y0 + plot.size + margin;
+  }
+
+  /* The star a click means: the nearest DRAWN dot within reach of the
+   * pointer, among the ones actually on the plot. Nearest rather than the
+   * first box hit — the old per-star 18 px boxes overlapped wherever two
+   * dots were close, and the later one in galaxy order won the click
+   * whether or not it was the one under the pointer. */
+  function chartPick(stars, xf, plot, sx, sy, maxPx) {
+    if (!chartInPlot(plot, sx, sy)) return null;
+    var best = null, bestD = (maxPx || CHART_CLICK_PX) * (maxPx || CHART_CLICK_PX);
+    for (var i = 0; i < stars.length; i++) {
+      var d = chartDot(xf, stars[i]);
+      var dx = d.x - sx, dy = d.y - sy, d2 = dx * dx + dy * dy;
+      if (d2 < bestD && chartInPlot(plot, d.x, d.y)) { bestD = d2; best = stars[i]; }
+    }
+    return best;
+  }
+
+  /* A round number of light years between 60 and 150 px long. */
+  function chartScaleBar(scale) {
+    var steps = [0.5, 1, 2, 5, 10, 20, 50];
+    var pick = steps[0];
+    for (var i = 0; i < steps.length; i++) if (steps[i] * scale <= 150) pick = steps[i];
+    return { ly: pick, px: pick * scale };
+  }
+
+  /* Where an off-plot point's arrow goes: on the line from the plot's
+   * middle toward it, pulled in to `inset` px inside the edge. */
+  function chartEdge(plot, x, y, inset) {
+    var dx = x - plot.cx, dy = y - plot.cy;
+    var half = plot.size / 2 - inset;
+    var k = half / Math.max(Math.abs(dx), Math.abs(dy), 1e-9);
+    return { x: plot.cx + dx * k, y: plot.cy + dy * k, ang: Math.atan2(dy, dx) };
+  }
+
+  /* A CIRCLE, ONLY AS MUCH OF IT AS THE PLOT SHOWS. Zoomed in, the 70 ly
+   * distance ring is 2,800 px across and the dashed reach ring several
+   * hundred dashes round, nearly all of it outside the clip — and a canvas
+   * strokes the whole of a path before it clips any of it. So: nothing
+   * when the circle misses the plot or swallows it whole, the full circle
+   * when it is small, and otherwise just the arc that faces the plot. */
+  function chartArc(ctx, plot, x, y, R) {
+    var corners = [[plot.x0, plot.y0], [plot.x0 + plot.size, plot.y0],
+                   [plot.x0, plot.y0 + plot.size], [plot.x0 + plot.size, plot.y0 + plot.size]];
+    var dmax = 0, i;
+    for (i = 0; i < 4; i++) dmax = Math.max(dmax, Math.hypot(corners[i][0] - x, corners[i][1] - y));
+    var nx = Math.max(plot.x0, Math.min(plot.x0 + plot.size, x));
+    var ny = Math.max(plot.y0, Math.min(plot.y0 + plot.size, y));
+    var dmin = Math.hypot(nx - x, ny - y);
+    if (R < dmin - 2 || R > dmax + 2) return false;
+    ctx.beginPath();
+    if (dmin === 0 || R < plot.size) { ctx.arc(x, y, R, 0, K.TAU); return true; }
+    var a = Math.atan2(plot.cy - y, plot.cx - x), half = 0;
+    for (i = 0; i < 4; i++) {
+      var da = Math.atan2(corners[i][1] - y, corners[i][0] - x) - a;
+      while (da > Math.PI) da -= K.TAU;
+      while (da < -Math.PI) da += K.TAU;
+      half = Math.max(half, Math.abs(da));
+    }
+    ctx.arc(x, y, R, a - half - 0.02, a + half + 0.02);
+    return true;
+  }
+
+  /* LABELS THAT DO NOT OVERPRINT. Candidates arrive sorted by priority
+   * (selected, here, plotted course, visited, in reach, the rest) and each
+   * takes the first of four places around its dot — beside it either way,
+   * above, below — that collides with nothing already placed and stays on
+   * the plot. A name that has nowhere to go is dropped, never squeezed:
+   * the high-priority names were placed first, so what is lost is always
+   * the least important. Widths are counted, not measured — the face is
+   * monospace, and measureText per candidate per frame is the expensive
+   * way to learn a number that is length times a constant. */
+  function chartCharW(px) { return px * 0.61; }
+  function chartLabels(cands, plot, maxN, blocked) {
+    var placed = [];
+    /* Things a name must not land on either — the scale bar, the buttons,
+     * the news line, the other stars' dots — go in as boxes that are
+     * already "placed", and are taken off the front before returning. */
+    var nBlocked = (blocked || []).length;
+    for (var bi = 0; bi < nBlocked; bi++) placed.push(blocked[bi]);
+    for (var i = 0; i < cands.length && placed.length - nBlocked < (maxN || 80); i++) {
+      var c = cands[i];
+      var tw = c.text.length * chartCharW(c.size), th = c.size + 2;
+      var gap = c.r + 6;
+      var spots = [
+        [c.x + gap, c.y - th / 2], [c.x - gap - tw, c.y - th / 2],
+        [c.x - tw / 2, c.y - gap - th], [c.x - tw / 2, c.y + gap]
+      ];
+      for (var j = 0; j < spots.length; j++) {
+        var bx = spots[j][0], by = spots[j][1];
+        if (bx < plot.x0 + 2 || by < plot.y0 + 2 ||
+            bx + tw > plot.x0 + plot.size - 2 || by + th > plot.y0 + plot.size - 2) continue;
+        var hit = false;
+        for (var k = 0; k < placed.length; k++) {
+          var p = placed[k];
+          if (bx < p.bx + p.bw + 3 && bx + tw + 3 > p.bx && by < p.by + p.bh && by + th > p.by) { hit = true; break; }
+        }
+        if (hit) continue;
+        placed.push({ c: c, bx: bx, by: by, bw: tw, bh: th });
+        break;
+      }
+      /* WHERE YOU ARE AND WHERE YOU ARE POINTING ARE ALWAYS NAMED. In the
+       * crowded middle at the whole-galaxy zoom every spot round them
+       * touches some other dot, and the first version of this dropped both
+       * names — the two the chart had always shown. For those two, other
+       * stars' dots do not count; furniture and names already placed still
+       * do. */
+      if (j === spots.length && c.tier <= 1 && !c.retry) {
+        var again = { text: c.text, x: c.x, y: c.y, r: c.r, tier: c.tier, size: c.size,
+                      color: c.color, d: c.d, retry: true, src: c };
+        var keep = placed.filter(function (q) { return !q.dot; });
+        var got = chartLabels([again], plot, 1, keep);
+        if (got.length) { got[0].c = c; placed.push(got[0]); }
+      }
+    }
+    return placed.slice(nBlocked);
+  }
+
+  /* The labels' tiers, and how far in you must be before each appears. The
+   * three that are about YOU — where you are, where you are pointing,
+   * where you said you were going — show at every zoom; the overlap rule
+   * keeps them apart. The rest come in as there is room for them to mean
+   * something: at the whole-galaxy scale a name for every visited star is
+   * a wall of text across the middle of the cluster. */
+  var CHART_TIER_PX = [0, 0, 0, 7, 10, 16];   // px per ly: selected, here, course, visited, in reach, other
+
+  function chartView(plot) {
+    var m = G.starMap;
+    if (!m.view) {
+      var mem = chartMemory && chartMemory.seed === G.seed ? chartMemory : null;
+      m.view = mem ? { z: mem.z, gx: mem.gx, gy: mem.gy } : { z: 1, gx: 0, gy: 0 };
+    }
+    chartClamp(m.view, plot);
+    chartMemory = { seed: G.seed, z: m.view.z, gx: m.view.gx, gy: m.view.gy };
+    return m.view;
+  }
+
+  /* ---- input, routed here from main.js -------------------------------- */
+  function chartLive() {
+    return !!(G && G.starMap && G.starMap.view && chartPlot && chartPlot.seed === G.seed);
+  }
+
+  /* The wheel over the plot zooms the chart, and returns true so main.js
+   * never also hands it to the flight camera behind the screen. */
+  function chartWheel(x, y, deltaY) {
+    if (!chartLive() || !chartInPlot(chartPlot, x, y)) return false;
+    chartZoomAt(G.starMap.view, chartPlot, Math.pow(CHART_WHEEL_BASE, -deltaY), x, y);
+    return true;
+  }
+
+  /* + and -: about the selected star while it is on the plot, so it stays
+   * put under your eye; about the middle otherwise. */
+  function chartKeyZoom(factor) {
+    if (!chartLive()) return false;
+    var m = G.starMap, plan = m.list && m.list[m.sel];
+    var xf = chartXf(m.view, chartPlot);
+    var ax = chartPlot.cx, ay = chartPlot.cy;
+    if (plan) {
+      var d = chartDot(xf, plan.to);
+      if (chartInPlot(chartPlot, d.x, d.y)) { ax = d.x; ay = d.y; }
+    }
+    chartZoomAt(m.view, chartPlot, factor, ax, ay);
+    return true;
+  }
+  function chartCentre(which) {
+    if (!chartLive()) return false;
+    var m = G.starMap;
+    var s = which === 'here' ? G.here : (m.list[m.sel] && m.list[m.sel].to);
+    if (!s) return false;
+    chartCentreOn(m.view, chartPlot, s);
+    return true;
+  }
+  function chartWhole() {
+    if (!chartLive()) return false;
+    G.starMap.view.z = 1;
+    chartClamp(G.starMap.view, chartPlot);
+    return true;
+  }
+
+  /* A press on the plot is a click until it moves CHART_DRAG_PX, then it
+   * is a pan for the rest of the drag; a click selects the nearest dot. */
+  function chartPointer(kind, x, y) {
+    if (kind === 'down') {
+      if (!chartLive() || !chartInPlot(chartPlot, x, y)) { chartPress = null; return false; }
+      chartPress = { x: x, y: y, lx: x, ly: y, moved: false };
+      return true;
+    }
+    if (!chartPress) return false;
+    if (!chartLive()) { chartPress = null; return false; }
+    if (kind === 'move') {
+      if (!chartPress.moved && Math.hypot(x - chartPress.x, y - chartPress.y) >= CHART_DRAG_PX) {
+        chartPress.moved = true;
+      }
+      if (chartPress.moved) chartPan(G.starMap.view, chartPlot, x - chartPress.lx, y - chartPress.ly);
+      chartPress.lx = x; chartPress.ly = y;
+      return true;
+    }
+    if (kind === 'up') {
+      var was = chartPress; chartPress = null;
+      if (!was.moved) {
+        var m = G.starMap;
+        var hit = chartPick(G.galaxy.stars, chartXf(m.view, chartPlot), chartPlot, x, y);
+        if (hit) {
+          var ix = indexOfStar(m.list, hit);
+          if (ix >= 0) m.sel = ix;
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+  /* Which row of the candidate list is this star? The chart draws stars in
+   * galaxy order and the list is sorted by distance, so clicking one has to
+   * translate between the two. Asked once per CLICK now: it used to be
+   * asked for every star on every frame, 450 x 450 comparisons a frame just
+   * to build hot boxes, and it answered 0 — the nearest star — for a star
+   * that was not in the list, so clicking your own star plotted a jump. */
+  function indexOfStar(list, star) {
+    for (var i = 0; i < list.length; i++) if (list[i].to === star) return i;
+    return -1;
+  }
+
   function drawStarMap(ctx, w, h) {
+    var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     var m = G.starMap;
     m.list = jumpCandidates();
     if (m.sel >= m.list.length) m.sel = Math.max(0, m.list.length - 1);
@@ -6182,17 +6540,27 @@
     var px = (w - pw) / 2, py = (h - ph) / 2;
     panel(ctx, px, py, pw, ph, true);
 
-    var plotSize = Math.min(ph - 90, pw * 0.56);
+    /* Twelve pixels shorter than it was, for the second line of keys under
+     * it — the zoom's keys are the ones nobody would guess. */
+    var plotSize = Math.min(ph - 102, pw * 0.56);
     var cx = px + 30 + plotSize / 2, cy = py + 62 + plotSize / 2;
-    var scale = (plotSize / 2) / (G.galaxy.radius * 1.06);
+    var plot = { x0: cx - plotSize / 2, y0: cy - plotSize / 2, size: plotSize, cx: cx, cy: cy,
+                 fit: chartFit(plotSize, G.galaxy.radius), radius: G.galaxy.radius, seed: G.seed };
+    var view = chartView(plot);
+    chartPlot = plot;
+    var xf = chartXf(view, plot);
+    var scale = xf.scale;
+    var zoomed = view.z > 1.0001;
 
     function toScreen(s) {
-      return { x: cx + s.x * scale, y: cy - s.y * scale, stem: s.z * scale };
+      return { x: xf.ox + s.x * scale, y: xf.oy - s.y * scale, stem: s.z * scale };
     }
 
     var dx = px + plotSize + 56, dw = pw - plotSize - 86;
 
-    drawTerritory(ctx, px, py, plotSize, cx, cy, scale);
+    var builds0 = terrBuilds;
+    drawTerritory(ctx, plot, xf, zoomed);
+    chartStat.builds += terrBuilds - builds0;
 
     /* Legend — the powers you have actually met, in the order the chart
      * shows them. A power whose space you have never charted is not on it:
@@ -6230,26 +6598,46 @@
                  px + 24, py + 48);
     ctx.restore();
 
+    /* EVERYTHING ON THE PLOT IS CLIPPED TO IT. At the whole-galaxy zoom
+     * that changes nothing — the disc fits — but zoomed in, a ring, a
+     * course line or a stem would otherwise run out across the readout. */
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(plot.x0, plot.y0, plotSize, plotSize);
+    ctx.clip();
+
     // Distance rings, so the scale is readable without a legend.
+    var orig = chartToScreen(xf, 0, 0);
     ctx.save();
     ctx.strokeStyle = 'rgba(120,160,220,0.16)';
     ctx.lineWidth = 1;
     for (var ring = 10; ring <= G.galaxy.radius; ring += 10) {
-      ctx.beginPath(); ctx.arc(cx, cy, ring * scale, 0, K.TAU); ctx.stroke();
+      if (chartArc(ctx, plot, orig.x, orig.y, ring * scale)) ctx.stroke();
     }
     ctx.restore();
 
     var hereScreen = toScreen(G.here);
+    var reachLy = Galaxy.maxRange(G.ship);
 
     /* The reachable set, drawn as a circle around you. It is honestly a
      * SPHERE — a star directly above you is closer than it looks here —
-     * which is exactly why every star also carries its height stem. */
+     * which is exactly why every star also carries its height stem.
+     * Centred on your FLOOR point, where the sphere's centre is in the
+     * plane; zoomed in, the ring is big enough to say what it is, so it
+     * does, at the top of the ring if that is on the plot. */
     ctx.save();
     ctx.strokeStyle = 'rgba(125,250,255,0.35)';
     ctx.setLineDash([4, 4]);
-    ctx.beginPath();
-    ctx.arc(hereScreen.x, hereScreen.y, Galaxy.maxRange(G.ship) * scale, 0, K.TAU);
-    ctx.stroke();
+    if (chartArc(ctx, plot, hereScreen.x, hereScreen.y, reachLy * scale)) ctx.stroke();
+    ctx.setLineDash([]);
+    var ringTopY = hereScreen.y - reachLy * scale;
+    if (reachLy * scale > 60 && chartInPlot(plot, hereScreen.x, ringTopY, -14)) {
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(125,250,255,0.75)';
+      ctx.textAlign = 'center';
+      ctx.fillText('reach ' + fmtLy(reachLy), hereScreen.x, ringTopY - 4);
+      ctx.textAlign = 'left';
+    }
     ctx.restore();
 
     // The selected jump, as a line you can see the length of.
@@ -6276,13 +6664,27 @@
       warHist = Wr.history(G.galaxy, G, G.t);
       warHist.wars.forEach(function (wv) { if (wv.won && wv.t1 <= G.t) takenBy[wv.star] = wv; });
     }
+    /* CULLED TO THE VIEW. A star whose dot and floor point are both off
+     * the plot draws nothing anyone can see — not the dot, not the stem,
+     * not a marker — so it is skipped before any of that is worked out.
+     * Zoomed in that is most of the galaxy; zoomed out it is none of it,
+     * and the frame costs what it always did. The margin is the widest
+     * marker (the war cross, r + 6) so nothing is cut off at the edge. */
+    var nDrawn = 0, nCulled = 0, labelCands = [], dotBoxes = [];
+    var CULL_PAD = 14;
     for (var i = 0; i < G.galaxy.stars.length; i++) {
       var s = G.galaxy.stars[i];
       var sp = toScreen(s);
+      var y = sp.y - sp.stem;
+      if (!chartInPlot(plot, sp.x, y, CULL_PAD) && !chartInPlot(plot, sp.x, sp.y, CULL_PAD)) {
+        nCulled++;
+        continue;
+      }
+      nDrawn++;
       var isHere = s === G.here;
       var seen = !!G.visited[s.id];
       var d = Galaxy.distance3(G.here, s);
-      var canReach = !isHere && d <= Galaxy.maxRange(G.ship);
+      var canReach = !isHere && d <= reachLy;
 
       ctx.save();
       // Height stem — the whole reason this reads as 3D.
@@ -6291,11 +6693,11 @@
         ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(sp.x, sp.y); ctx.lineTo(sp.x, sp.y - sp.stem); ctx.stroke();
       }
-      var y = sp.y - sp.stem;
       var r = 1.8 + Math.min(2.6, Math.log(1 + s.luminosity) * 1.1);
       ctx.globalAlpha = canReach || isHere ? 1 : (seen ? 0.75 : 0.42);
       ctx.fillStyle = s.color;
       ctx.beginPath(); ctx.arc(sp.x, y, r, 0, K.TAU); ctx.fill();
+      dotBoxes.push({ bx: sp.x - r - 1, by: y - r - 1, bw: 2 * r + 2, bh: 2 * r + 2, dot: true });
       if (seen && !isHere) {
         ctx.strokeStyle = 'rgba(125,255,176,0.6)';
         ctx.lineWidth = 1;
@@ -6343,27 +6745,142 @@
         ctx.moveTo(sp.x + r + 3, y); ctx.lineTo(sp.x + r + 9, y);
         ctx.stroke();
       }
-      /* Click a star to plot to it. Same act as walking the list with the
-       * arrow keys, and the hit box is generous because a 4-pixel dot is
-       * not a target. */
-      hot(sp.x - 9, y - 9, 18, 18, (function (idx) {
-        return function () { G.starMap.sel = idx; };
-      })(indexOfPlan(m.list, s)));
+      /* Clicking a star is no longer a hot box per star: a press on the
+       * plot is either a pan or a click, and only the release can tell
+       * which (chartPointer). The click picks the nearest dot. */
 
-      if (plan && s === plan.to) {
+      var isSel = plan && s === plan.to;
+      if (isSel) {
         ctx.strokeStyle = plan.possible ? '#7dffb0' : '#ff7a7a';
         ctx.lineWidth = 1.6;
         ctx.strokeRect(sp.x - r - 6, y - r - 6, (r + 6) * 2, (r + 6) * 2);
-        ctx.font = 'bold 12px ui-monospace, monospace';
-        ctx.fillStyle = plan.possible ? '#7dffb0' : '#ff7a7a';
-        ctx.fillText(s.name, sp.x + r + 10, y + 3);
-      } else if (isHere) {
-        ctx.font = 'bold 12px ui-monospace, monospace';
-        ctx.fillStyle = '#ffe6a8';
-        ctx.fillText(s.name, sp.x + r + 10, y + 3);
       }
       ctx.restore();
+
+      /* A NAME, IF IT HAS EARNED ONE AT THIS ZOOM. Tiers in order of who
+       * the name is for; chartLabels places them highest first. */
+      var tier = isSel ? 0 : isHere ? 1 : (G.courseStar === s.id) ? 2 : seen ? 3 : canReach ? 4 : 5;
+      if (scale >= CHART_TIER_PX[tier] && chartInPlot(plot, sp.x, y)) {
+        labelCands.push({
+          text: s.name, x: sp.x, y: y, r: r + (tier <= 1 ? 4 : 0), tier: tier, d: d,
+          size: tier <= 2 ? 12 : 11,
+          color: tier === 0 ? (plan.possible ? '#7dffb0' : '#ff7a7a')
+               : tier === 1 ? '#ffe6a8'
+               : tier === 2 ? '#ffd27a'
+               : tier === 3 ? 'rgba(160,240,200,0.85)'
+               : tier === 4 ? 'rgba(200,220,245,0.85)' : 'rgba(160,185,220,0.6)'
+        });
+      }
     }
+
+    /* The chart's own furniture, which a name must not land on: the
+     * scale bar and the marks key along the bottom, the zoom buttons at
+     * the top right, the news line along the top — and every dot. */
+    var bar = chartScaleBar(scale);
+    var bx0 = plot.x0 + 12, by0 = plot.y0 + plotSize - 14;
+    var barBox = { bx: bx0 - 6, by: by0 - 20, bw: Math.max(bar.px, 90) + 70, bh: 28 };
+    var keyW = 52 * chartCharW(10);
+    var blocked = dotBoxes.concat([
+      barBox,
+      { bx: plot.x0 + plotSize - 8 - keyW, by: plot.y0 + plotSize - 18, bw: keyW, bh: 12 },
+      { bx: plot.x0 + plotSize - 66, by: plot.y0 + 6, bw: 66, bh: 64 },
+      { bx: plot.x0, by: plot.y0, bw: plotSize, bh: 10 }
+    ]);
+    labelCands.sort(function (a, b) { return a.tier - b.tier || a.d - b.d; });
+    var placed = chartLabels(labelCands, plot, 80, blocked);
+    ctx.save();
+    placed.forEach(function (pl) {
+      ctx.font = 'bold ' + pl.c.size + 'px ui-monospace, monospace';
+      ctx.fillStyle = pl.c.color;
+      ctx.fillText(pl.c.text, pl.bx, pl.by + pl.c.size);
+    });
+    ctx.restore();
+
+    ctx.restore();   // the plot clip
+
+    /* OFF THE PLOT, BUT NOT OUT OF MIND. Zoomed in, the star you have
+     * selected — or the one you are sitting at — can be anywhere, and a
+     * selection you cannot find is a selection you will plot by accident.
+     * An arrow on the plot's edge, on the bearing from the middle of the
+     * view, with the name and how far. */
+    function edgeArrow(star, color, label) {
+      var dot = chartDot(xf, star);
+      if (chartInPlot(plot, dot.x, dot.y)) return;
+      var e = chartEdge(plot, dot.x, dot.y, 12);
+      ctx.save();
+      ctx.translate(e.x, e.y);
+      ctx.rotate(e.ang);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(9, 0); ctx.lineTo(-6, -7); ctx.lineTo(-2, 0); ctx.lineTo(-6, 7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      /* The words sit on the inward side of the arrow, so a label at the
+       * right-hand edge does not run off the plot. */
+      ctx.save();
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = color;
+      var tw = label.length * chartCharW(11);
+      var lx = e.x - Math.cos(e.ang) * 16 - tw / 2 * (1 + Math.cos(e.ang));
+      var ly = e.y - Math.sin(e.ang) * 16 + 4;
+      lx = Math.max(plot.x0 + 4, Math.min(plot.x0 + plotSize - tw - 4, lx));
+      ly = Math.max(plot.y0 + 14, Math.min(plot.y0 + plotSize - 6, ly));
+      ctx.fillText(label, lx, ly);
+      ctx.restore();
+    }
+    if (zoomed) {
+      if (plan) edgeArrow(plan.to, plan.possible ? '#7dffb0' : '#ff7a7a',
+                          plan.to.name + ' ' + fmtLy(plan.distance));
+      edgeArrow(G.here, '#ffe6a8', 'here: ' + G.here.name);
+    }
+
+    /* The frame of the plot, so it is plain where the clip is — zoomed in,
+     * the stars stop at an edge, and an edge nobody drew looks like a bug. */
+    ctx.save();
+    ctx.strokeStyle = zoomed ? 'rgba(120,160,220,0.35)' : 'rgba(120,160,220,0.12)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(plot.x0 + 0.5, plot.y0 + 0.5, plotSize - 1, plotSize - 1);
+    ctx.restore();
+
+    /* THE SCALE BAR, a round number of light years, and the zoom. Bottom
+     * corner of the plot, where nothing else on the chart lives. */
+    ctx.save();
+    ctx.fillStyle = 'rgba(6,14,22,0.75)';
+    ctx.fillRect(barBox.bx, barBox.by, barBox.bw, barBox.bh);
+    ctx.strokeStyle = '#cfe0ff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(bx0, by0 - 4); ctx.lineTo(bx0, by0); ctx.lineTo(bx0 + bar.px, by0); ctx.lineTo(bx0 + bar.px, by0 - 4);
+    ctx.stroke();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#cfe0ff';
+    ctx.fillText((bar.ly < 1 ? bar.ly.toFixed(1) : String(bar.ly)) + ' ly', bx0, by0 - 7);
+    ctx.fillStyle = 'rgba(160,185,220,0.75)';
+    ctx.fillText('×' + (view.z < 10 ? view.z.toFixed(1) : view.z.toFixed(0)), bx0 + bar.px + 10, by0 + 2);
+    ctx.restore();
+
+    /* The key to the marks, in the other bottom corner. It used to trail
+     * off the end of the keys line, which ran it under the readout. */
+    ctx.save();
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(160,185,220,0.6)';
+    ctx.textAlign = 'right';
+    ctx.fillText('green ring = visited  ·  dashed circle = your reach',
+                 plot.x0 + plotSize - 8, plot.y0 + plotSize - 8);
+    ctx.textAlign = 'left';
+    ctx.restore();
+
+    /* Buttons for the same thing the wheel and the keys do — for a
+     * trackpad with no wheel, and so the chart says it can zoom at all. */
+    var zbx = plot.x0 + plotSize - 30, zby = plot.y0 + 8;
+    btn(ctx, zbx, zby, 22, 20, '+', function () { chartKeyZoom(CHART_KEY_STEP); }, { bold: true, font: 13 });
+    btn(ctx, zbx, zby + 24, 22, 20, '−', function () { chartKeyZoom(1 / CHART_KEY_STEP); }, { bold: true, font: 13 });
+    if (zoomed) btn(ctx, zbx - 34, zby + 48, 56, 18, 'WHOLE', chartWhole, { font: 10 });
+
+    chartStat.drawn = nDrawn; chartStat.culled = nCulled; chartStat.labels = placed.length; chartStat.cands = labelCands.length;
+    chartStat.placed = placed.map(function (pl) { return { text: pl.c.text, tier: pl.c.tier, bx: pl.bx, by: pl.by, bw: pl.bw, bh: pl.bh }; });
+    chartStat.t0 = t0;
 
     /* --- the news: the fronts, or the last war, or the reserves --- */
     if (Wr && warHist) {
@@ -6387,6 +6904,12 @@
       }
       ctx.save();
       ctx.font = 'bold 12px ui-monospace, monospace';
+      /* Zoomed in, stars and territory run right up under this line, so
+       * it gets a backing; zoomed out the disc never reaches the corner. */
+      if (view.z > 1.0001) {
+        ctx.fillStyle = 'rgba(6,14,22,0.8)';
+        ctx.fillRect(plot.x0, plot.y0, plotSize - 70, 9);
+      }
       ctx.fillStyle = warList.length ? '#ff7a6a' : '#9fb4d0';
       /* Under the chart's own header line: the right column's length
        * depends on the system described, the bottom belongs to the keys. */
@@ -6617,20 +7140,20 @@
     ctx.save();
     ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(160,185,220,0.7)';
-    ctx.fillText('↑↓ or click a star   ·   PgUp/PgDn ten   ·   Home nearest   ·   ' +
-                 'Enter lays in the course   ·   F8 engages      ' +
-                 '(green ring = visited · dashed circle = your reach)',
-                 px + 24, py + ph - 18);
+    /* Two lines now: the zoom keys are new and they are the ones nobody
+     * will guess, so they get a line of their own rather than being
+     * squeezed onto the end of the list keys. */
+    ctx.fillText('↑↓ or click a star · PgUp/PgDn ten · Home nearest · ' +
+                 'Enter lays in the course · F8 engages',
+                 px + 24, py + ph - 24);
+    ctx.fillText('wheel or + / − zoom · drag pans · C centres on you · ' +
+                 'Shift+C on the selection',
+                 px + 24, py + ph - 10);
     ctx.restore();
+    var t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    chartStat.ms = t1 - chartStat.t0;
   }
 
-  /* Which row of the candidate list is this star? The chart draws stars in
-   * galaxy order and the list is sorted by distance, so clicking one has to
-   * translate between the two. */
-  function indexOfPlan(list, star) {
-    for (var i = 0; i < list.length; i++) if (list[i].to === star) return i;
-    return 0;
-  }
 
 
   /* Which screen draws is decided here, keyed by the mode id main.js keeps
@@ -6641,6 +7164,10 @@
      * the panel that made it and go on eating the wheel from a screen
      * nobody is looking at. */
     SCROLL = null;
+    /* The same for the chart's plot: only the frame that drew the chart
+     * leaves one behind, so F8 — which keeps G.starMap but draws no plot —
+     * cannot have its clicks taken by a chart that is not on the screen. */
+    chartPlot = null;
     switch (id) {
       case 'system':     drawSystemScreen(ctx, w, bottom); return true;
       case 'navigation': drawNavScreen(ctx, w, bottom); return true;
@@ -6674,7 +7201,21 @@
     beginNotes: beginNotes, writingNotes: writingNotes, stopNotes: stopNotes,
     exportNotes: exportNotes, scrollNotesLog: scrollNotesLog,
     /* main.js routes the wheel here before the camera zoom sees it. */
-    wheelAt: wheelAt
+    wheelAt: wheelAt,
+    /* The F6 chart's zoom and pan (2026-11-03): the wheel, the pointer and
+     * the keys, routed from main.js; `chart` is the pure transform the
+     * tests check, and chartStat what the last frame drew and what it cost. */
+    chartWheel: chartWheel, chartPointer: chartPointer, chartKeyZoom: chartKeyZoom,
+    chartCentre: chartCentre, chartWhole: chartWhole, CHART_KEY_STEP: CHART_KEY_STEP,
+    chartStat: function () { return chartStat; },
+    chartPlot: function () { return chartPlot; },
+    chart: {
+      fit: chartFit, maxZoom: chartMaxZoom, xf: chartXf, toScreen: chartToScreen,
+      toGalaxy: chartToGalaxy, dot: chartDot, clamp: chartClamp, zoomAt: chartZoomAt,
+      pan: chartPan, centreOn: chartCentreOn, inPlot: chartInPlot, pick: chartPick,
+      scaleBar: chartScaleBar, edge: chartEdge, labels: chartLabels,
+      MAX_PX_PER_LY: CHART_MAX_PX_PER_LY
+    }
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = global.Screens;
 })(typeof window !== 'undefined' ? window : globalThis);
