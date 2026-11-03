@@ -8178,7 +8178,8 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
           var sun = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), gb.entrance.pos));
           /* Under the weather there, since 2026-11-03 (Weather.overhead;
            * null under this file's stand-in GL layer, which is a clear sky). */
-          var want = GLreal.skyOver(host, gb.up, sun, global.Weather.overhead(host, gb.up, G.t));
+          var Wx = global.Weather;   // absent in this section's stand-in world, and then main.js has none either
+          var want = GLreal.skyOver(host, gb.up, sun, Wx && Wx.overhead ? Wx.overhead(host, gb.up, G.t) : null);
           if (!sk || Math.abs(sk[0] - want[0]) + Math.abs(sk[2] - want[2]) > 1e-9)
             st.sky.push(tag + ': sky ' + (sk ? sk.join(',') : 'none'));
           if (hgt >= 0) {
