@@ -351,5 +351,110 @@ check('the same hull is the same clearance every time', !detErr.length, detErr.j
 console.log('  note  per hull: field build / hangar cells blocked / standable / least ramp headroom (m): ' + nums.join('; ') +
             '  (' + ((Date.now() - tAll) / 1000).toFixed(1) + ' s)');
 
+
+console.log('--- half a metre higher on her gear, the sim and the renderer agreeing (2026-11-03) ---');
+/* Astra: "the ship should sit about one half meter higher on the landing
+ * gear". render.js hullFit stands a geared hull GEAR_LIFT higher in her own
+ * frame and draws her legs telescoped to reach; Sim.standLiftKm carries her
+ * that much higher off whatever deck the berth reports. Checked at a
+ * station berth, a ground port's berth and a sea pad, for a geared hull and
+ * one that sits on her belly:
+ *   - her origin is the berth's point plus exactly her lift, along its up;
+ *   - so her feet, where the renderer draws them, are where they were;
+ *   - her walking plan's floor (outsidePlan, hangarSpec) is the same lifted
+ *     ground the renderer stands her legs on;
+ *   - a docked save restored at the old height is at the new one after its
+ *     first frame (nothing about the lift is stored);
+ *   - the arrival rail carries the same lift, so the hand-over does not pop;
+ *   - and two runs agree to the bit. */
+var Galaxy = require('../src/galaxy.js'), V = global.V, Sim = global.Sim, Gen = global.Gen;
+try { require('../src/ports.js'); } catch (e) { /* optional: every role falls back to its procedural mesh */ }
+var gal = Galaxy.build('kawartha'), found = {};
+for (var gs = 0; gs < gal.stars.length && !(found.orbital && found.ground && found.sea); gs++) {
+  var gst = gal.stars[gs], gfac = gal.factionById ? gal.factionById[gst.factionId] : null;
+  var gsys = Gen.generateSystem(gst.seed, gfac ? { faction: gfac, allFactions: gal.factions } : undefined);
+  (gsys.ports || []).forEach(function (p) {
+    if (!p.docking) return;
+    var k = p.seaPlatform ? 'sea' : p.surface ? 'ground' : 'orbital';
+    if (!found[k] && (k !== 'ground' || (p.parentBody && p.parentBody.mu))) found[k] = { sys: gsys, port: p };
+  });
+}
+check('the galaxy has a station, a ground port and a sea pad', !!(found.orbital && found.ground && found.sea), Object.keys(found).join(', '));
+var liftErr = [], footErr = [], floorErr = [], loadErr = [], railErr = [], liftNums = [], railN = 0;
+function dockedShip(id) {
+  var h = Combat.HULLS[id];
+  return { hullId: id, bornId: id + '-1', dryMass: h.dryMass, hullHp: 100, gear: true, thrusterCap: 10,
+           pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 }, cargo: {}, thrust: { x: 0, y: 0, z: 0 },
+           fwd: { x: 1, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 }, right: { x: 0, y: -1, z: 0 }, cleared: {} };
+}
+['talon', 'mule'].forEach(function (id) {
+  var fit = R.hullFit(id), raw = F[id], lift = fit.gearLift || 0;
+  var geared = id === 'talon';
+  if (geared ? Math.abs(lift - R.GEAR_LIFT) > 1e-12 : lift !== 0) liftErr.push(id + ' gearLift ' + lift);
+  if (Math.abs((raw.ground - fit.ground) - lift) > 1e-9) liftErr.push(id + ' ground ' + raw.ground + ' -> ' + fit.ground);
+  /* Her walking floor is the ground her legs are drawn on. */
+  var ws = dockedShip(id), at = R.cockpitAt(ws) || [0, 0, 0], op = R.outsidePlan(ws), hs = R.hangarSpec(ws);
+  if (op && Math.abs(op.floorY - (fit.ground - at[1])) > 1e-9) floorErr.push(id + ' outside floor ' + op.floorY);
+  if (hs && Math.abs(hs.gy - (fit.ground - at[1])) > 1e-9) floorErr.push(id + ' hangar floor ' + hs.gy);
+  Object.keys(found).forEach(function (k) {
+    var P = found[k], t = 4000, sh = dockedShip(id);
+    var ps = Sim.bodyState(P.port, P.sys, t);
+    sh.pos = V.clone(ps.pos); sh.vel = V.clone(ps.vel);
+    Sim.dockShip(sh, P.port, P.sys, t);
+    Sim.updateDockedShip(sh, P.sys, t);
+    var bs = Sim.berthState(P.port, P.sys, t, sh.dockOffset && sh.dockOffset.berth);
+    if (!bs || !bs.basis) { liftErr.push(id + '@' + k + ' no berth'); return; }
+    var d = V.sub(sh.pos, bs.pos), up = V.dot(d, bs.basis.up) * 1000, side = V.len(V.addScaled(d, bs.basis.up, -V.dot(d, bs.basis.up))) * 1000;
+    if (Math.abs(up - lift) > 1e-3 || side > 1e-3) liftErr.push(id + '@' + k + ' ' + up.toFixed(4) + ' m up, ' + side.toFixed(4) + ' m aside');
+    /* Her feet in the port's frame, as the renderer stands them (her pos,
+     * her up, her lifted ground): where the unlifted hull's were. */
+    var feet = V.dot(V.addScaled(sh.pos, sh.up, fit.ground / 1000), bs.basis.up) * 1000;
+    var was = V.dot(V.addScaled(bs.pos, bs.basis.up, raw.ground / 1000), bs.basis.up) * 1000;
+    if (Math.abs(feet - was) > 1e-3) footErr.push(id + '@' + k + ' ' + (feet - was).toFixed(4) + ' m');
+    /* A save made docked at the old height: restored, then one frame. */
+    var saved = JSON.parse(JSON.stringify(sh));
+    saved.pos = V.clone(bs.pos);
+    Sim.updateDockedShip(saved, P.sys, t + 1);
+    var bs1 = Sim.berthState(P.port, P.sys, t + 1, saved.dockOffset.berth);
+    if (Math.abs(V.dot(V.sub(saved.pos, bs1.pos), bs1.basis.up) * 1000 - lift) > 1e-3) loadErr.push(id + '@' + k);
+    /* The rail: her pose on it is the rail's plus her lift, the whole way. */
+    var b0 = sh.dockOffset.berth;
+    [0, 5, 20, 60].forEach(function (el) {
+      var a = Sim.arrivalPose(P.port, P.sys, t, b0, el), m = Sim.shipArrivalPose(sh, P.port, P.sys, t, b0, el);
+      if (!a || !m) return;
+      railN++;
+      var pb = Sim.portBasis(P.port, P.sys, t), dd = V.sub(m.pos, a.pos);
+      if (Math.abs(V.dot(dd, pb.up) * 1000 - lift) > 1e-3 || V.len(dd) * 1000 > lift + 1e-3) railErr.push(id + '@' + k + ' el ' + el);
+    });
+    liftNums.push(id + '@' + k + ' +' + up.toFixed(3) + ' m');
+  });
+});
+check('a geared hull is lifted GEAR_LIFT (0.5 m) in her own frame, a belly-sitter not at all', !liftErr.length && R.GEAR_LIFT === 0.5, liftErr.join(', '));
+check('her walking floor is the ground her legs are drawn on', !floorErr.length, floorErr.join(', '));
+check('docked at a station, a ground port and a sea pad, her feet are where they were and she is the lift higher', !footErr.length && !liftErr.length, footErr.join(', '));
+check('a docked save loads at the new height on its first frame', !loadErr.length, loadErr.join(', '));
+check('the arrival rail carries her lift too, so the hand-over does not pop', railN > 0 && !railErr.length, railN + ' poses' + (railErr.length ? ': ' + railErr.join(', ') : ''));
+console.log('  note  ' + liftNums.join('; '));
+
+
+console.log('--- a longer, gentler ramp (2026-11-03) ---');
+/* Astra: "the ramp should be longer". Cut at 30° it was 5.5 m at 28.5° on a
+ * Talon; shipdeck.js RAMP_SLOPE is 22° now, a drop too tall for that takes
+ * the whole RAMP_MAX up to RAMP_STEEP (33°) before it becomes a stair, and
+ * a ramp stops short of a gear leg in its path (render.js rampLegLimit). */
+var steep = [], gentleErr = [], rampTab = [];
+ids.forEach(function (id) {
+  var rp = R.shipInterior(ship(id)).plan.ramp, deg = rp.angle * 180 / Math.PI;
+  rampTab.push(id + ' ' + rp.mode + (rp.mode === 'lift' ? '' : ' ' + rp.len.toFixed(2) + ' m @ ' + deg.toFixed(1) + '°'));
+  if (rp.mode === 'ramp' && deg > 33 + 1e-6) steep.push(id + ' ' + deg.toFixed(1));
+});
+['talon', 'kestrel', 'cutter', 'enforcer'].forEach(function (id) {
+  var rp = R.shipInterior(ship(id)).plan.ramp;
+  if (rp.mode !== 'ramp' || rp.angle * 180 / Math.PI > 22.5 || rp.len < 7) gentleErr.push(id + ' ' + rp.mode + ' ' + rp.len.toFixed(2));
+});
+check('no ramp is steeper than 33° (past that it is a stair)', !steep.length, steep.join(', '));
+check('the small hulls\' ramps are 7 m or more at 22° or less (were 5.0-5.5 m at 28-29°)', !gentleErr.length, gentleErr.join(', '));
+console.log('  note  ' + rampTab.join('; '));
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 if (fail) process.exitCode = 1;
