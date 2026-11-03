@@ -10191,8 +10191,10 @@
       if (lf.inner) {
         /* A blast door between a berth and the station: shut unless this is
          * the berth whose airlock is cycling, then as far as its inner gate
-         * is (innerGateLeaves). Not part of any one doorway's question. */
-        if (doors && doors.onlyMine) continue;
+         * is (innerGateLeaves). Not part of any one doorway's question -
+         * except a route's (`routeInner`, routeDoors): the bays a transfer
+         * does not belong to keep theirs shut, and it must go round. */
+        if (doors && doors.onlyMine && !doors.routeInner) continue;
         f = innerLeafOpen(lf, doors);
       } else if (lf.car || lf.hatch) {
         /* Neither is a door leaf, so a question about one doorway leaves
@@ -10354,6 +10356,17 @@
    * new polyline, ends unchanged, and `.blocked`, the number of legs that
    * could not be cleared (kept as they were). */
   var ROUTE_DOORS = { open: 1, inner: 1, onlyMine: true, berthMid: [9, 9, 9] };
+  /* A transfer's doors (2026-11-03): every outer door, car and hatch out of
+   * the question as before, and the blast doors of the two bays it runs
+   * between open - every OTHER bay's shut, which is how the airlock poses
+   * them on the way through. A route through a third bay's hall used to be
+   * found through its blast door (cradle-s, once its hoist bore was whole
+   * again: the leg from berthLBeta's side ran through its shut inner gate). */
+  function routeDoors(entryMid, destMid) {
+    if (!entryMid && !destMid) return ROUTE_DOORS;
+    return { open: 1, inner: 1, onlyMine: true, routeInner: true, berthMid: entryMid || [9, 9, 9],
+             innerTo: 1, innerToMid: destMid || null };
+  }
   var ROUTE_CELLS = 6e5;               // the most cells one leg's grid may have
 
   function routeOffsets(a, b, half) {
@@ -10372,12 +10385,12 @@
             [u[0] * h, u[1] * h, u[2] * h], [-u[0] * h * 0.6, -u[1] * h * 0.6, -u[2] * h * 0.6]];
   }
 
-  function routeLegClear(role, a, b, half) {
+  function routeLegClear(role, a, b, half, doors) {
     var offs = routeOffsets(a, b, half);
     for (var i = 0; i < offs.length; i++) {
       var o = offs[i];
       if (portSegmentHit(role, [a[0] + o[0], a[1] + o[1], a[2] + o[2]],
-                         [b[0] + o[0], b[1] + o[1], b[2] + o[2]], ROUTE_DOORS)) return false;
+                         [b[0] + o[0], b[1] + o[1], b[2] + o[2]], doors || ROUTE_DOORS)) return false;
     }
     return true;
   }
@@ -10395,8 +10408,8 @@
     do { r = gen.next(); } while (!r.done);
     return r.value;
   }
-  function routeLeg(role, a, b, half, grow, tight) { return drainJob(routeLegJob(role, a, b, half, grow, tight)); }
-  function* routeLegJob(role, a, b, half, grow, tight) {
+  function routeLeg(role, a, b, half, grow, tight, doors) { return drainJob(routeLegJob(role, a, b, half, grow, tight, doors)); }
+  function* routeLegJob(role, a, b, half, grow, tight, doors) {
     var ix = portTriangles(role);
     if (!ix) return null;
     var work = 0;
@@ -10454,6 +10467,32 @@
           }
         }
       }
+    }
+
+    /* And the shut blast doors of other bays, when the route is asked with
+     * them (routeDoors): walls like any other. */
+    var dd = doors && doors.routeInner ? portDoors(role) : null;
+    for (var li = 0; dd && li < dd.leaves.length; li++) {
+      var lfr = dd.leaves[li];
+      if (!lfr.inner || innerLeafOpen(lfr, doors) >= 0.5) continue;
+      var lm = lfr.mesh;
+      for (var lfi = 0; lfi < lm.f.length; lfi++) {
+        var lface = lm.f[lfi];
+        for (var lj = 1; lj + 1 < lface.length; lj++) {
+          var q0 = lm.v[lface[0]], q1 = lm.v[lface[lj]], q2 = lm.v[lface[lj + 1]];
+          var le = 0;
+          for (var lk = 0; lk < 3; lk++) le = Math.max(le, Math.abs(q1[lk] - q0[lk]), Math.abs(q2[lk] - q0[lk]), Math.abs(q2[lk] - q1[lk]));
+          var lns = Math.min(512, Math.max(1, Math.ceil(le * inv * 2)));
+          for (var li2 = 0; li2 <= lns; li2++) for (var lj2 = 0; li2 + lj2 <= lns; lj2++) {
+            var lu = li2 / lns, lv = lj2 / lns;
+            var lx = Math.floor((q0[0] + (q1[0] - q0[0]) * lu + (q2[0] - q0[0]) * lv - lo[0]) * inv);
+            var ly = Math.floor((q0[1] + (q1[1] - q0[1]) * lu + (q2[1] - q0[1]) * lv - lo[1]) * inv);
+            var lz = Math.floor((q0[2] + (q1[2] - q0[2]) * lu + (q2[2] - q0[2]) * lv - lo[2]) * inv);
+            if (lx >= 0 && ly >= 0 && lz >= 0 && lx < NX && ly < NY && lz < NZ) wall[at(lx, ly, lz)] = 1;
+          }
+        }
+      }
+      yield 0;
     }
 
     /* Grown by her half-extent: steps to the nearest surface, out to `grow`. */
@@ -10565,12 +10604,12 @@
     var outp = [pts[0]], i5 = 0;
     while (i5 < pts.length - 1) {
       var loI = i5 + 1, hiI = pts.length - 1, bestI = i5 + 1;
-      if (routeLegClear(role, pts[i5], pts[hiI], half)) bestI = hiI;
+      if (routeLegClear(role, pts[i5], pts[hiI], half, doors)) bestI = hiI;
       else {
         while (loI <= hiI) {
           yield 0;
           var mid = (loI + hiI) >> 1;
-          if (routeLegClear(role, pts[i5], pts[mid], half)) { bestI = mid; loI = mid + 1; }
+          if (routeLegClear(role, pts[i5], pts[mid], half, doors)) { bestI = mid; loI = mid + 1; }
           else hiI = mid - 1;
         }
       }
@@ -10586,7 +10625,7 @@
    * the way round it is one of the six axis-ordered dog-legs between the
    * two ends (along x then y then z, and the other five orders), or that
    * again on either half. Tried shortest first, each judged exactly. */
-  function* dogLegJob(role, a, b, half, depth) {
+  function* dogLegJob(role, a, b, half, depth, doors) {
     var orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
     var tries = [];
     for (var o = 0; o < orders.length; o++) {
@@ -10603,7 +10642,7 @@
     for (var t = 0; t < tries.length; t++) {
       var ok = true;
       for (var k = 1; k < tries[t].length && ok; k++) {
-        ok = routeLegClear(role, tries[t][k - 1], tries[t][k], half);
+        ok = routeLegClear(role, tries[t][k - 1], tries[t][k], half, doors);
         yield 0;
       }
       if (ok) return tries[t];
@@ -10613,10 +10652,10 @@
       var mids = [[(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, a[2]], [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, b[2]],
                   [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]];
       for (var m = 0; m < mids.length; m++) {
-        var h1 = routeLegClear(role, a, mids[m], half) ? [a, mids[m]] : (yield* dogLegJob(role, a, mids[m], half, depth - 1));
+        var h1 = routeLegClear(role, a, mids[m], half, doors) ? [a, mids[m]] : (yield* dogLegJob(role, a, mids[m], half, depth - 1, doors));
         yield 0;
         if (!h1) continue;
-        var h2 = routeLegClear(role, mids[m], b, half) ? [mids[m], b] : (yield* dogLegJob(role, mids[m], b, half, depth - 1));
+        var h2 = routeLegClear(role, mids[m], b, half, doors) ? [mids[m], b] : (yield* dogLegJob(role, mids[m], b, half, depth - 1, doors));
         yield 0;
         if (h2) return h1.concat(h2.slice(1));
       }
@@ -10624,23 +10663,23 @@
     return null;
   }
 
-  function clearRoute(role, pts, half) { return drainJob(clearRouteJob(role, pts, half)); }
-  function* clearRouteJob(role, pts, half) {
+  function clearRoute(role, pts, half, doors) { return drainJob(clearRouteJob(role, pts, half, doors)); }
+  function* clearRouteJob(role, pts, half, doors) {
     if (!pts || pts.length < 2 || !half) return pts;
     var out = [pts[0]], blocked = 0;
     for (var i = 1; i < pts.length; i++) {
       var a = pts[i - 1], b = pts[i];
       yield 0;
-      if (routeLegClear(role, a, b, half)) { out.push(b); continue; }
+      if (routeLegClear(role, a, b, half, doors)) { out.push(b); continue; }
       /* Her clearance first; failing that a wider box; failing that the
        * bare surfaces, with the exact pull still the judge. */
-      var leg = yield* dogLegJob(role, a, b, half, 1);
+      var leg = yield* dogLegJob(role, a, b, half, 1, doors);
       yield 0;
-      if (!leg) leg = yield* routeLegJob(role, a, b, half, 0.35);
+      if (!leg) leg = yield* routeLegJob(role, a, b, half, 0.35, false, doors);
       if (leg) {
         for (var c = 1; c < leg.length; c++) {
           yield 0;
-          if (!routeLegClear(role, leg[c - 1], leg[c], half)) { leg = null; break; }
+          if (!routeLegClear(role, leg[c - 1], leg[c], half, doors)) { leg = null; break; }
         }
       }
       if (!leg) { blocked++; out.push(b); continue; }
@@ -16963,7 +17002,7 @@
     setAccent: setAccent, accented: accented, accentSwap: accentSwap,
     drawContrail: drawContrail,
     portSolidity: portSolidity,
-    clearRouteJob: clearRouteJob, portReady: portReady, berthDeckJob: berthDeckJob, berthDeckReady: berthDeckReady, trianglesJob: function (role) {
+    clearRouteJob: clearRouteJob, routeDoors: routeDoors, portReady: portReady, berthDeckJob: berthDeckJob, berthDeckReady: berthDeckReady, trianglesJob: function (role) {
       return TRIDEX[role] !== undefined ? null : (TRI_JOBS[role] || (TRI_JOBS[role] = trianglesJob(role)));
     },
     portSections: portSections,

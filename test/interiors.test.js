@@ -164,8 +164,17 @@ console.log('--- the legs inside the station ---');
   console.log('  ' + berths + ' berths, ' + bad.length + ' with an inner leg through something, ' +
               blocked + ' with a leg no open route was found for');
   bad.forEach(function (s) { console.log('    ' + s); });
-  check('the berths with an inner leg through something are no more than the 55 measured 2026-11-03',
-        bad.length <= 55, bad.length + '');
+  /* 52 since the second pass (2026-11-03): the cylinders' arm bores whole
+   * again (glb2hulls clipBores had cut armBoreC away and opened the hub to
+   * space, so no cylinder bay could be routed and all of them were bridged
+   * in a straight line), each route riding its arm's car; and a transfer
+   * routed round the shut blast doors of bays it does not belong to
+   * (Render.routeDoors). What is left is listed above: the arm bores' hub
+   * ends, which open into the hub only through structure at the fleet's
+   * width, the skimmers' hoists, the yards' tracks, two spine-l berths and
+   * four cradle berths. */
+  check('the berths with an inner leg through something are no more than the 52 measured 2026-11-03 (55 before the second pass)',
+        bad.length <= 52, bad.length + '');
   check('no ring, refinery or small/medium spine berth has an inner leg through anything',
         !bad.some(function (s) { return /^(ring|refinery)/.test(s) || /^spine-[ms] /.test(s); }),
         bad.filter(function (s) { return /^(ring|refinery)/.test(s) || /^spine-[ms] /.test(s); }).join('; '));
@@ -298,6 +307,42 @@ console.log('--- the lifts ---');
   check('nothing plates across any car\'s run', plated.length === 0, plated.join('; '));
   check('the lower end of every run is cut away and capped flush', pit.length === 0, pit.join('; '));
   check('the hatch over every shaft\'s upper end is gone with the car there and shut with it away', hatchBad.length === 0, hatchBad.join('; '));
+})();
+
+/* ---- THE INCLINED BORES ARE WHOLE, AND END ON WHAT THEY MEET (items 1-2) ---
+ * glb2hulls clipBores cut a bore where its own centreline first "saw" open
+ * space, which on a cylinder is a third of the way along every arm: armBoreC
+ * kept 3 faces of ~140 between the hub and its pod, the hub's hole for it
+ * opened onto space, and no cylinder bay could be routed. Each bore end is
+ * now cut on the plane of the surface its walls cross there (the pod roof
+ * armBoreA used to hang 0.053 radii through). Every inclined car's bore has
+ * walls all along its run, in tenths. */
+console.log('--- the inclined bores are whole ---');
+(function () {
+  var broken = [], n = 0;
+  PLAIN.forEach(function (id) {
+    var lib = Render.libPort(id);
+    (lib.movers || []).forEach(function (m) {
+      if (!m.axis || !(Math.abs(m.axis[2]) > 0.3 && Math.abs(m.axis[2]) < 0.95) || !/^armBore/.test(m.node)) return;
+      n++;
+      /* Across the bore from its axis, four ways, at tenths of the run: a
+       * wall within 0.06 radii on at least three sides. */
+      var ax = m.axis, la = Math.abs(ax[2]) < 0.9 ? [ax[1], -ax[0], 0] : [1, 0, 0];
+      var ll = Math.sqrt(la[0] * la[0] + la[1] * la[1] + la[2] * la[2]);
+      la = [la[0] / ll, la[1] / ll, la[2] / ll];
+      var lb = [ax[1] * la[2] - ax[2] * la[1], ax[2] * la[0] - ax[0] * la[2], ax[0] * la[1] - ax[1] * la[0]];
+      var bins = [], r0 = m.range[0], r1 = m.range[1], ONLY = { open: 1, inner: 1, onlyMine: true, berthMid: [9, 9, 9] };
+      for (var u = 0.15; u < 0.9; u += 0.1) {
+        var sv = r0 + (r1 - r0) * u, o = [m.mid[0] + ax[0] * sv, m.mid[1] + ax[1] * sv, m.mid[2] + ax[2] * sv], walls = 0;
+        [la, lb, [-la[0], -la[1], -la[2]], [-lb[0], -lb[1], -lb[2]]].forEach(function (d) {
+          if (Render.portSegmentHit(id, o, [o[0] + d[0] * 0.06, o[1] + d[1] * 0.06, o[2] + d[2] * 0.06], ONLY)) walls++;
+        });
+        bins.push(walls);
+      }
+      if (bins.some(function (w) { return w < 3; })) broken.push(id + ' ' + m.node + ' [' + bins.join(' ') + ']');
+    });
+  });
+  check('every arm bore has walls the whole length of its car\'s run', n >= 8 && broken.length === 0, n + ' bores; ' + broken.join('; '));
 })();
 
 /* ---- F: THE BLAST DOORS BETWEEN THE BERTHS AND THE STATION ----------------

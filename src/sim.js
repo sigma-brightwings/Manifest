@@ -6257,11 +6257,16 @@
     var pieces = (k >= 1 && k + 1 < arr.length)
       ? [arr.slice(0, k + 1), arr.slice(k + 1)] : [arr];
     var outA = [], rideAt = -1, blocked = 0;
+    /* The two bays' blast doors open, every other bay's shut (routeDoors). */
+    var Gn = global.Gen;
+    var apE = Gn && Gn.berthApertures && typeof p10.entry === 'number' ? Gn.berthApertures(port, p10.entry) : null;
+    var apD = Gn && Gn.berthApertures ? Gn.berthApertures(port, berth) : null;
+    var rdoors = R.routeDoors ? R.routeDoors(apE && apE.mid, apD && apD.mid) : null;
     var tj = R.trianglesJob ? R.trianglesJob(role) : null;
     if (tj) yield* tj;
     for (var pi = 0; pi < pieces.length; pi++) {
-      var got = (R.clearRouteJob ? (yield* R.clearRouteJob(role, pieces[pi], half))
-                                 : R.clearRoute(role, pieces[pi], half)) || pieces[pi];
+      var got = (R.clearRouteJob ? (yield* R.clearRouteJob(role, pieces[pi], half, rdoors))
+                                 : R.clearRoute(role, pieces[pi], half, rdoors)) || pieces[pi];
       blocked += got.blocked || 0;
       if (pi === 1) rideAt = outA.length - 1;     // the boarding stop
       for (var q = 0; q < got.length; q++) outA.push(got[q]);
