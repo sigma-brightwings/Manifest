@@ -7098,7 +7098,22 @@
     var gb = Sim.groundBasis(port, G.sys, G.t);
     if (!gb) return null;
     var sun = sunDirAt(gb.entrance.pos);
-    return GW.skyOver(port.parentBody, gb.up, sun);
+    return GW.skyOver(port.parentBody, gb.up, sun, overheadAt(port, gb));
+  }
+  /* How much of the sky the deck over the eye hides this frame - the GL
+   * ground sky's veil (GLWorld.overcastFor), 0 with no ground sky. */
+  function deckVeil() {
+    var GW = global.GLWorld;
+    var gi = GW && GW.groundSkyInputs ? GW.groundSkyInputs() : null;
+    return gi && gi.over ? gi.over.veil : 0;
+  }
+  /* THE WEATHER OVER A GROUND PORT, for its sky (2026-11-03): Weather's
+   * field at the port's own vertical, now - the one source for the cover at
+   * a place and time, which the forecast and the planet's painted deck also
+   * read. Null without weather (no air, or none to speak of). */
+  function overheadAt(port, gb) {
+    if (!Weather || !Weather.overhead || !port || !port.parentBody || !gb) return null;
+    return Weather.overhead(port.parentBody, gb.up, G.t);
   }
   function eyeUnderStreet(port, cam) {
     var gb = Sim.groundBasis ? Sim.groundBasis(port, G.sys, G.t) : null;
@@ -8414,7 +8429,7 @@
       if (groundSkyNow && global.GLWorld.setGroundSky) {
         var skyPort = skyPortNow, skyGb = Sim.groundBasis(skyPort, G.sys, G.t);
         global.GLWorld.setGroundSky(skyPort.parentBody, skyGb.up,
-          sunDirAt(skyGb.entrance.pos));
+          sunDirAt(skyGb.entrance.pos), overheadAt(skyPort, skyGb));
         global.GLWorld.drawGroundSky(cam);
       }
       /* STANDING OUTSIDE HER (2026-10-26): the world is the GL layer's to
@@ -17343,6 +17358,11 @@
       // dropline so you can see it sits above or below the ecliptic.
       if (b.kind === 'star') {
         // Never let the light source of the system degrade to a grey speck.
+        /* ...unless there is a deck between you and it (2026-11-03): under
+         * an overcast this glow was the sun shining through the cloud. The
+         * label stays - it is the chart saying where the sun is. */
+        ctx.save();
+        ctx.globalAlpha = 1 - deckVeil();
         var sg = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, 14);
         sg.addColorStop(0, 'rgba(255,240,200,0.85)');
         sg.addColorStop(0.3, 'rgba(255,215,150,0.35)');
@@ -17351,6 +17371,7 @@
         ctx.beginPath(); ctx.arc(sp.x, sp.y, 14, 0, K.TAU); ctx.fill();
         ctx.fillStyle = '#fff6e0';
         ctx.beginPath(); ctx.arc(sp.x, sp.y, 2.4, 0, K.TAU); ctx.fill();
+        ctx.restore();
         queueLabel(sp, b.name, '#ffe6a8', 10, 100);
         return;
       }
@@ -17371,8 +17392,11 @@
       var glow = ctx.createRadialGradient(sp.x, sp.y, rpx * 0.9, sp.x, sp.y, rpx * 5);
       glow.addColorStop(0, 'rgba(255,220,150,0.45)');
       glow.addColorStop(1, 'rgba(255,200,120,0)');
+      ctx.save();
+      ctx.globalAlpha = 1 - deckVeil();
       ctx.fillStyle = glow;
       ctx.beginPath(); ctx.arc(sp.x, sp.y, rpx * 5, 0, K.TAU); ctx.fill();
+      ctx.restore();
     }
 
     if (!sp.behindEye) {

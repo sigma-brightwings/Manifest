@@ -362,6 +362,121 @@ console.log('--- the pace of a storm ---');
         pctGrid < 25, pctGrid.toFixed(1) + '% within 50 ms of a whole slot, 11% is chance');
 })();
 
+/* ---- an overcast from underneath (2026-11-03) ------------------------------
+ * The sea polish kept the painted deck off the ground below 3 km of eye
+ * height, and the ground sky had no weather, so an overcast day looked
+ * clear from the street. Weather.overhead is the cover at a place and hour;
+ * GLWorld.overcastFor turns it into the ground sky's shading inputs. These
+ * read the INPUTS (GLWorld.groundSkyInputs), not pixels. */
+console.log('--- an overcast from underneath ---');
+(function () {
+  var seeds = ['kawartha', 'elsewhere', 'holton', 'seed-9', 'mirven', 'thalisa', 'zueth', 'seed-22', 'seed-31'];
+  var ports = [];
+  seeds.forEach(function (sd) {
+    var sys = Gen.generateSystem(sd);
+    sys.ports.forEach(function (p) {
+      if (W.hasWeather(p) && p.surface && p.parentBody.atmosphere.cloud > 0) ports.push({ p: p, sys: sys });
+    });
+  });
+  check('ports with weather over them, to stand under', ports.length > 8, ports.length + ' ports');
+  /* An hour of each kind at the same port: clear, broken, overcast. */
+  var found = null;
+  ports.some(function (e) {
+    var gb = Sim.groundBasis(e.p, e.sys, 0);
+    var kinds = {};
+    for (var q = 0; q < 600 && !(kinds.clear && kinds.broken && kinds.over); q++) {
+      var t = q * 3600, g = Sim.groundBasis(e.p, e.sys, t);
+      var wx = W.overhead(e.p.parentBody, g.up, t);
+      if (!wx) break;
+      if (wx.cloud < 0.02 && !kinds.clear) kinds.clear = { t: t, wx: wx, up: g.up };
+      else if (wx.cloud > 0.35 && wx.cloud < 0.65 && !kinds.broken) kinds.broken = { t: t, wx: wx, up: g.up };
+      else if (wx.cloud > 0.9 && !kinds.over) kinds.over = { t: t, wx: wx, up: g.up };
+    }
+    if (kinds.clear && kinds.broken && kinds.over) { found = { e: e, k: kinds }; return true; }
+    return false;
+  });
+  check('one port has a clear, a broken and an overcast hour in 600', !!found, found && found.e.p.name);
+  if (!found) return;
+  var host = found.e.p.parentBody, k = found.k;
+
+  /* The same field the forecast reads, at the same point. */
+  var rep = W.report(found.e.p, found.e.sys, k.over.t);
+  check('overhead is the cover the port\'s own forecast gives', Math.abs(rep.cloud - k.over.wx.cloud) < 1e-6,
+        rep.cloud.toFixed(4) + ' vs ' + k.over.wx.cloud.toFixed(4));
+
+  function inputs(kind, sunUp) {
+    var up = k[kind].up;
+    /* A sun at the given height, in the plane of up and any horizontal. */
+    var h = Math.abs(up.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+    var hz = { x: up.y * h.z - up.z * h.y, y: up.z * h.x - up.x * h.z, z: up.x * h.y - up.y * h.x };
+    var hl = Math.sqrt(hz.x * hz.x + hz.y * hz.y + hz.z * hz.z);
+    var c = Math.sqrt(1 - sunUp * sunUp);
+    var sun = { x: up.x * sunUp + hz.x / hl * c, y: up.y * sunUp + hz.y / hl * c, z: up.z * sunUp + hz.z / hl * c };
+    GL.setGroundSky(host, up, sun, k[kind].wx);
+    var got = GL.groundSkyInputs();
+    return { over: got.over, fill: got.fill, sky: GL.skyOver(host, up, sun, k[kind].wx),
+             clearSky: GL.skyOver(host, up, sun), up: up, sun: sun };
+  }
+  var noon = { clear: inputs('clear', 0.85), broken: inputs('broken', 0.85), over: inputs('over', 0.85) };
+  ['clear', 'broken', 'over'].forEach(function (kind) {
+    var o = noon[kind].over, wx = k[kind].wx;
+    check(kind + ': the sky\'s cover is Weather\'s, unchanged', o.cover === wx.cloud && o.storm === wx.storm,
+          o.cover.toFixed(4));
+    check(kind + ': its brightness is Weather\'s gloom (the canopy wash\'s number)', Math.abs(o.skyK - (1 - 0.45 * wx.gloom)) < 1e-12 &&
+          Math.abs(wx.gloom - W.gloomOf(wx)) < 1e-12);
+  });
+  var c = noon.clear.over, b = noon.broken.over, o = noon.over.over;
+  check('clear: full sun, no deck light, nothing hidden', c.sunK > 0.98 && c.diffuse < 0.005 && c.veil < 0.02,
+        'sun ' + c.sunK.toFixed(3));
+  check('broken cloud sits between clear and overcast - it scales with the cover',
+        c.sunK > b.sunK && b.sunK > o.sunK && c.diffuse < b.diffuse && b.diffuse < o.diffuse && c.veil < b.veil && b.veil < o.veil,
+        'sun ' + [c.sunK, b.sunK, o.sunK].map(function (x) { return x.toFixed(2); }).join(' > '));
+  /* The mesh shader's own terms: sun side 0.26 + 0.70 sunK + fill, shade
+   * side 0.26 + fill. Flatter is the point. */
+  function contrast(n) { var f = n.fill[1]; return (0.26 + 0.70 * n.over.sunK + f) / (0.26 + f); }
+  check('overcast: the direct sun is mostly gone, and sun side and shade side nearly meet',
+        o.sunK < 0.2 && o.diffuse > 0.12 && contrast(noon.over) < 1.25 && contrast(noon.clear) > 2.0,
+        'sun ' + o.sunK.toFixed(2) + ', diffuse ' + o.diffuse.toFixed(2) + ', lit:shade ' +
+        contrast(noon.clear).toFixed(2) + ' -> ' + contrast(noon.broken).toFixed(2) + ' -> ' + contrast(noon.over).toFixed(2));
+  check('overcast: the sun itself is behind it', o.veil > 0.85, o.veil.toFixed(2));
+  function sat(rgb) { var mx = Math.max(rgb[0], rgb[1], rgb[2]), mn = Math.min(rgb[0], rgb[1], rgb[2]); return mx > 0 ? (mx - mn) / mx : 0; }
+  function lum(rgb) { return 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]; }
+  var so = noon.over.sky, sc0 = noon.over.clearSky;
+  check('overcast: the sky is dimmer and greyer than a clear one at the same sun',
+        lum(so) < lum(sc0) && sat(so) < sat(sc0) * 0.6,
+        'lum ' + lum(sc0).toFixed(2) + ' -> ' + lum(so).toFixed(2) + ', sat ' + sat(sc0).toFixed(2) + ' -> ' + sat(so).toFixed(2));
+  check('clear weather leaves the sky exactly as it was', noon.clear.sky.every(function (x, i) {
+    return Math.abs(x - noon.clear.clearSky[i]) < 0.02; }));
+  /* No weather handed over is a clear sky: the shaders get their old values. */
+  GL.setGroundSky(host, noon.over.up, noon.over.sun);
+  var none = GL.groundSkyInputs().over;
+  check('no weather given: every shading input at its clear value', none.cover === 0 && none.sunK === 1 && none.diffuse === 0 && none.skyK === 1 && none.veil === 0);
+  /* Dusk and night: the deck light is daylight, and the stars go. */
+  var dusk = inputs('over', 0.03), night = inputs('over', -0.5);
+  check('overcast dusk: less deck light than noon, and none at night',
+        dusk.over.diffuse < o.diffuse && night.over.diffuse === 0, dusk.over.diffuse.toFixed(3) + ' / ' + night.over.diffuse);
+  check('overcast night: no stars through it', night.sky.lit >= o.cover && night.clearSky.lit < 0.1,
+        'lit ' + night.sky.lit.toFixed(2) + ' vs clear ' + night.clearSky.lit.toFixed(2));
+  /* Airless: nothing to be overcast. */
+  var bare = null;
+  seeds.some(function (sd) { var sy = Gen.generateSystem(sd); return sy.bodies.some(function (bb) { if (bb.kind === 'planet' && !bb.atmosphere) { bare = bb; return true; } return false; }); });
+  check('no air, no deck', !!bare && W.overhead(bare, { x: 0, y: 0, z: 1 }, 0) === null);
+  /* The shader text: the deck is read from these, the film stays off the
+   * ground (the edge-on shell the fade hides), and the ceiling fades into
+   * its own mean toward the horizon rather than being drawn edge-on. */
+  var src = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'gl.js'), 'utf8');
+  check('the painted deck stays off the ground below 3 km', /mask \*= smoothstep\(3\.0, 10\.0, sqrt\(dot\(oc, oc\)\) - uWorldRadius\)/.test(src));
+  check('the ceiling goes to its mean toward the horizon', /float hz = smoothstep\(0\.10, 0\.40, e\);/.test(src) && /float op = mix\(cov, m, hz\)/.test(src));
+  check('the ground, the sea, the meshes and the sun all read it',
+        /if \(uSkyA\.w > 0\.0\) lam = lam \* uSkyC\.z \+ uSkyC\.w;/.test(src) &&
+        /if \(uSkyA\.w > 0\.0\) l2 = l2 \* uSkyC\.z \+ uSkyC\.w;/.test(src) &&
+        /0\.70 \* lam \* uSunK/.test(src) && /frag = vec4\(c, 1\.0 - uSkyVeil\)/.test(src));
+  var msrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'main.js'), 'utf8');
+  check('main.js hands the ground sky Weather.overhead',
+        /setGroundSky\(skyPort\.parentBody, skyGb\.up,\s*sunDirAt\(skyGb\.entrance\.pos\), overheadAt\(skyPort, skyGb\)\)/.test(msrc) &&
+        /Weather\.overhead\(port\.parentBody, gb\.up, G\.t\)/.test(msrc));
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
