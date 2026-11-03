@@ -40,6 +40,33 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-02, one burnt edge where a building stands on the cut)
+
+- **Where a station building stands on the cut's edge, there is one burnt
+  edge, not two.** From the hole outward you used to see the street's hot
+  band, a thin dark strip (the street's scorched half, seen through the
+  cut-away building), then the building's own hot and scorched band: the
+  "double orange line" Astra rejected on 2026-10-26. Her call: the
+  building's edge wins.
+  - The street's band and the pit wall's lip band are now left out wherever
+    one of the port's cut meshes (the model, its city, its dressing) stands
+    over the street. Open street and the lip away from buildings are
+    unchanged.
+  - How: those meshes are drawn once more, straight down, into a 1024²
+    footprint mask in the ground frame; only surfaces at least a metre over
+    the world's sphere mark it, so the shaft and the hangar mark nothing.
+    The mask is laid round where the cone crosses the street (about a metre
+    a texel at Ashford from 1.4 km) and redrawn only when a mesh moves or
+    the crossing moves by a quarter of the mask. The CPU cost per frame is
+    a placement key per mesh.
+  - Under a building you now see the plain street through the cut-away
+    building, between the hole and the building's band.
+  - The test stands a 20 m block on the street's hot band: under it there
+    is no band, across the hole in open street the band is still there, and
+    the same block sunk under the street changes nothing. The lip has the
+    same rule, and the mask's square is checked to cover the edge.
+  - Saves are unaffected.
+
 ### Fixed (2026-11-02, the ground port's burnt edge, the horizon seam, the haze)
 
 - **The cut through the street now has the glowing edge.** Astra: "why is

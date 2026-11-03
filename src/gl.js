@@ -152,8 +152,22 @@
     /* ---- the burnt edge (2026-11-02, fifth round) --------------------- */
     'uniform vec4 uWPlanet;',     // the world's centre relative to the eye, km; its radius
     'uniform vec4 uWRim;',        // the cut-face band's colour, and its width as a fraction of the cone's radius
+    /* ---- ONE EDGE WHERE A BUILDING STANDS (2026-11-02, sixth round) ---- */
+    'uniform sampler2D uWMask;',  // the port's footprint on the street, 1 under a building (streetFootprint)
+    'uniform vec4 uWMaskB;',      // its centre east, north of the mouth, km; half its side, km; w = 1 when there is one
     'out vec4 frag;',
     'float whash(float a, float b) { return fract(sin(a * 12.9898 + b * 78.233) * 43758.5453); }',
+    /* Whether a point (relative to the eye, km) stands under one of the
+     * port's own cut meshes — a building, a shed, the city. The street's
+     * band and the lip's are left out there: the building's own cut face is
+     * that place's edge. See THE FOOTPRINT over FRAG_FOOT. */
+    'bool underFoot(vec3 rel) {',
+    '  if (uWMaskB.w < 0.5) return false;',
+    '  vec3 q = rel - uWEnt;',
+    '  vec2 uv = (vec2(dot(q, uWE), dot(q, uWN)) - uWMaskB.xy) / (2.0 * uWMaskB.z) + 0.5;',
+    '  if (uv.x <= 0.0 || uv.y <= 0.0 || uv.x >= 1.0 || uv.y >= 1.0) return false;',
+    '  return texture(uWMask, uv).r > 0.5;',
+    '}',
     'void main() {',
     '  vec3 rd = normalize(uRight * (vPx.x - uScreenPx.x) + uUp * (uScreenPx.y - vPx.y) + uFwd * uFlen);',
     '  float L = length(uWS);',
@@ -204,8 +218,11 @@
     '        bool inCone = tt > 0.0 && tt < 1.0 && ds < rs;',
     '        if (!inCone) {',
     '          vec3 ns = normalize(hs - uWPlanet.xyz);',
+    /* Not under a building (sixth round): there the building's band is the
+     * edge, and the street's, seen through the cut-away building just
+     * inside it, was a second orange line with a dark strip between. */
     '          if (tt > 0.0 && tt < 1.0 && ds < rs * (1.0 + uWRim.w) &&',
-    '              abs(dot(ns, offs / max(ds, 1e-9))) < 0.8) {',
+    '              abs(dot(ns, offs / max(ds, 1e-9))) < 0.8 && !underFoot(hs)) {',
     '            float ru = (ds - rs) / (rs * uWRim.w);',
     '            frag = ru < 0.35 ? vec4(uWRim.rgb, 0.85) : vec4(0.16, 0.11, 0.085, 0.0);',
     '            float sd = dot(hs, uFwd) * 0.9995;',
@@ -283,12 +300,54 @@
      * the rim reads as one burnt edge round the hole, street and rock. */
     '  float rh = cyl ? cap : (uWR.y + k * t * c);',
     '  float lipM = rh * uWRim.w * 1000.0;',
-    '  if (-hm < lipM) {',
+    /* (Sixth round: and not under a building, for the street's reason.) */
+    '  if (-hm < lipM && !underFoot(vRel)) {',
     '    float lu = -hm / max(lipM, 1e-6);',
     '    frag = lu < 0.35 ? vec4(uWRim.rgb, 0.85) : vec4(0.16, 0.11, 0.085, 0.0);',
     '  }',
     '  float depth = dot(vRel, uFwd);',
     '  gl_FragDepth = clamp(log2(max(uNear, depth) / uNear) * uInvLogRange, 0.0, 1.0);',
+    '}'
+  ].join('\n');
+
+  /* ---- THE FOOTPRINT (2026-11-02, sixth round) ----------------------------
+   * What FRAG_WALL's underFoot reads: the port's cut meshes seen straight
+   * down, into a small mask in the ground frame. Each mesh the cut was on
+   * this frame is drawn again with its own buffers, flattened onto the
+   * street, and a fragment survives only where the surface stands above
+   * the street (FOOT_MIN) — so a roof marks its building, a wall that is
+   * a line from above marks nothing on its own, and the shaft, the hangar
+   * and anything else under the ground mark nothing at all. The height is
+   * over the world's SPHERE (the street the planet pass draws), by the
+   * flat frame's height plus d^2/2R. The vertex stage is built once the
+   * mesh program has linked, at its aPos location, because these are the
+   * mesh pass's own vertex arrays. */
+  function vertFootSrc(loc) {
+    return [
+      '#version 300 es',
+      'layout(location = ' + loc + ') in vec3 aPos;',
+      'uniform vec3 uFOff;',     // the mesh's origin east, north, up of the mouth, km
+      'uniform mat3 uFRot;',     // its axes in east, north, up
+      'uniform float uFScale;',
+      'uniform vec3 uFBox;',     // the mask's centre east, north, km; half its side, km
+      'uniform float uFCurv;',   // 1 / 2R, per km
+      'out float vH;',
+      'void main() {',
+      '  vec3 g = uFOff + uFRot * (aPos * uFScale);',
+      '  vH = g.z + dot(g.xy, g.xy) * uFCurv;',
+      '  gl_Position = vec4((g.xy - uFBox.xy) / uFBox.z, 0.0, 1.0);',
+      '}'
+    ].join('\n');
+  }
+  var FRAG_FOOT = [
+    '#version 300 es',
+    'precision highp float;',
+    'in float vH;',
+    'uniform float uFMin;',
+    'out vec4 frag;',
+    'void main() {',
+    '  if (vH < uFMin) discard;',
+    '  frag = vec4(1.0);',
     '}'
   ].join('\n');
 
@@ -2537,6 +2596,7 @@
   var gl = null, canvas = null, prog = null, uni = null, quad = null, vao = null;
   var skyProg = null, skyUni = null, groundSky = null;
   var wallProg = null, wallUni = null, wallQ = null;
+  var footProg = null, footUni = null, foot = null;   // THE FOOTPRINT (sixth round)
   /* The glow pass's resources — see POST. `post` stays null when any of it
    * failed, and then every frame goes straight to the canvas as before. */
   var post = null;
@@ -2642,8 +2702,18 @@
       wallUni = uniforms(gl, wallProg, ['uWS', 'uWR', 'uRight', 'uUp', 'uFwd', 'uScreenPx',
                                         'uFlen', 'uCenterPx', 'uQuadPx', 'uViewportPx', 'uNear', 'uInvLogRange',
                                         'uWEnt', 'uWE', 'uWN', 'uWU', 'uWRoomA', 'uWRoomB',
-                                        'uWShip', 'uWFold', 'uWPh3', 'uSunDir', 'uWPlanet', 'uWRim']);
+                                        'uWShip', 'uWFold', 'uWPh3', 'uSunDir', 'uWPlanet', 'uWRim',
+                                        'uWMask', 'uWMaskB']);
     } catch (e) { wallProg = null; if (global.console) console.error(e.message); }
+    /* Its footprint pass (THE FOOTPRINT). Its own try: without it the
+     * street keeps its band everywhere, as before the sixth round. */
+    try {
+      var aPosLoc = meshProg ? gl.getAttribLocation(meshProg, 'aPos') : -1;
+      if (aPosLoc >= 0) {
+        footProg = link(gl, vertFootSrc(aPosLoc), FRAG_FOOT, 'footprint');
+        footUni = uniforms(gl, footProg, ['uFOff', 'uFRot', 'uFScale', 'uFBox', 'uFCurv', 'uFMin']);
+      }
+    } catch (e) { footProg = null; if (global.console) console.error(e.message); }
 
     /* The ground sky pass (GL.drawGroundSky). Its own try: a sky that
      * fails to compile costs the sky, not the world. */
@@ -4116,6 +4186,166 @@
    *   square to the eye-ship line), rShip, rEye, cap (km), r (km per pad
    *   radius), room { x0, x1, y0, y1, z0, z1 } pad radii, lift, duct,
    *   shipXY [x, y] metres from the mouth, seed, dip [x, y], ph [3], sun. */
+  /* ---- ONE EDGE WHERE A BUILDING STANDS (2026-11-02, sixth round) --------
+   * Where a station building stood on the cut's edge there were two burnt
+   * edges, one inside the other: the street's band, seen THROUGH the
+   * cut-away building (its roof is nearer the eye, so the cone takes it
+   * wider on screen than it takes the ground under it), a thin dark strip
+   * that was the street's scorched half, then the building's own band. The
+   * "double orange line" Astra rejected on 2026-10-26, back by another
+   * road. Her call: the building's edge wins. So the street's band and the
+   * lip's are left out wherever one of the port's cut meshes stands over
+   * the street, and each place has exactly one edge.
+   *
+   * Which meshes: exactly those the cut was on this frame (meshQueue
+   * entries carrying `cut`) — the port's model, its city and its dressing,
+   * whatever art the port has, with no second list of what a building is to
+   * fall out of step with. Their footprint is drawn once into a small mask
+   * (THE FOOTPRINT over FRAG_FOOT) and kept until one of them moves in the
+   * ground frame or the set changes — a door leaf on its run, a mesh
+   * swapped in when its art arrives. The CPU's part per frame is a dozen
+   * dot products a mesh, to make the key that says nothing moved. */
+  var FOOT_MIN = 0.001;   // km: what stands a metre over the street is standing on it
+  var FOOT_N = 1024;      // texels a side
+  /* WHERE THE MASK LIES. The edge exists only where the cone crosses the
+   * street, so the mask is laid round that crossing, not round the port:
+   * a square twice the cone's band there across, stretched by 1/sin of the
+   * axis's elevation (a slanted cone meets the street in a long ellipse),
+   * its side a power of two in km and its centre snapped to a quarter of
+   * that, so an orbiting eye moves it — and redraws it — only now and then.
+   * At Ashford from 1.4 km that is a 1 km square, a metre a texel. With
+   * the eye under the street there is no crossing, and FOOT_REACH pad
+   * radii round the mouth are covered. Off the mask the street keeps its
+   * band, as it did before. */
+  var FOOT_REACH = 3, FOOT_MAX = 8;   // pad radii; km
+  /* A mesh's placement in the ground frame: its origin east, north, up of
+   * the mouth (km) and its three axes in east, north, up — the numbers
+   * FRAG_FOOT is given, and the key. `ent` is the mouth relative to the
+   * same eye the mesh's `rel` was taken from. */
+  GL.groundPlace = function (w, ent, m) {
+    var E = w.east, N = w.north, U = w.up;
+    var ox = m.rel.x - ent.x, oy = m.rel.y - ent.y, oz = m.rel.z - ent.z;
+    function p(v) { return [v.x * E.x + v.y * E.y + v.z * E.z, v.x * N.x + v.y * N.y + v.z * N.z,
+                            v.x * U.x + v.y * U.y + v.z * U.z]; }
+    var r = p(m.r), u = p(m.u), f = p(m.f);
+    return { off: p({ x: ox, y: oy, z: oz }), rot: [r[0], r[1], r[2], u[0], u[1], u[2], f[0], f[1], f[2]],
+             scale: m.scale };
+  };
+  /* -> [centre east, centre north (km from the mouth), half the side (km)],
+   * for the eye at `eye` (world km). */
+  GL.footprintBox = function (w, eye) {
+    var U = w.up, E = w.east, N = w.north;
+    function d(a, b) { return (a.x - b.x) * U.x + (a.y - b.y) * U.y + (a.z - b.z) * U.z; }
+    var hS = d(w.ship, w.entrance), hE = d(eye, w.entrance);
+    var ax = { x: eye.x - w.ship.x, y: eye.y - w.ship.y, z: eye.z - w.ship.z };
+    var L = Math.sqrt(ax.x * ax.x + ax.y * ax.y + ax.z * ax.z);
+    if (!(hE > 0 && hS < hE && L > 1e-9 && w.cap > 0)) return [0, 0, FOOT_REACH * w.r];
+    var s = -hS / (hE - hS);
+    var X = { x: w.ship.x + ax.x * s - w.entrance.x, y: w.ship.y + ax.y * s - w.entrance.y,
+              z: w.ship.z + ax.z * s - w.entrance.z };
+    var xe = X.x * E.x + X.y * E.y + X.z * E.z, xn = X.x * N.x + X.y * N.y + X.z * N.z;
+    var want = Math.min(FOOT_MAX, w.cap * (1 + (w.rim || 0)) * 2 / Math.max((hE - hS) / L, 0.05));
+    var half = Math.pow(2, Math.ceil(Math.log(want) / Math.LN2)), q = half / 2;
+    return [Math.round(xe / q) * q, Math.round(xn / q) * q, half];
+  };
+  /* FRAG_FOOT in JS, without the texels: whether the point `p` (world km)
+   * stands under any of `items` ({ mesh, place } from GL.groundPlace) —
+   * inside a face's shadow straight down, where that face is FOOT_MIN or
+   * more over the street. Also the arithmetic FRAG_WALL's underFoot reads
+   * back, so the test can hold the band to it. */
+  GL.footprintAt = function (w, items, p) {
+    var q = { x: p.x - w.entrance.x, y: p.y - w.entrance.y, z: p.z - w.entrance.z };
+    var pe = q.x * w.east.x + q.y * w.east.y + q.z * w.east.z;
+    var pn = q.x * w.north.x + q.y * w.north.y + q.z * w.north.z;
+    var curv = (w.planet && w.planet.radius > 0) ? 1 / (2 * w.planet.radius) : 0;
+    for (var i = 0; i < items.length; i++) {
+      var M = items[i].mesh, P = items[i].place, R = P.rot, o = P.off, s = P.scale;
+      var g = function (v) {
+        var x = v[0] * s, y = v[1] * s, z = v[2] * s;
+        var gx = o[0] + R[0] * x + R[3] * y + R[6] * z, gy = o[1] + R[1] * x + R[4] * y + R[7] * z;
+        var gz = o[2] + R[2] * x + R[5] * y + R[8] * z;
+        return [gx, gy, gz + (gx * gx + gy * gy) * curv];
+      };
+      for (var k = 0; k < M.f.length; k++) {
+        var a = g(M.v[M.f[k][0]]), b = g(M.v[M.f[k][1]]), c = g(M.v[M.f[k][2]]);
+        var det = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1]);
+        if (Math.abs(det) < 1e-18) continue;
+        var l1 = ((b[1] - c[1]) * (pe - c[0]) + (c[0] - b[0]) * (pn - c[1])) / det;
+        var l2 = ((c[1] - a[1]) * (pe - c[0]) + (a[0] - c[0]) * (pn - c[1])) / det;
+        var l3 = 1 - l1 - l2;
+        if (l1 < 0 || l2 < 0 || l3 < 0) continue;
+        if (l1 * a[2] + l2 * b[2] + l3 * c[2] >= FOOT_MIN) return true;
+      }
+    }
+    return false;
+  };
+  function streetFootprint(w, eye) {
+    if (!footProg || !w || !(w.r > 0) || !w.east) return null;
+    var items = [], key = [];
+    for (var i = 0; i < meshQueue.length; i++) {
+      var m = meshQueue[i];
+      if (!m.cut || !m.mesh._gl) continue;
+      var e = m.cam.eye;
+      var pl = GL.groundPlace(w, { x: w.entrance.x - e.x, y: w.entrance.y - e.y, z: w.entrance.z - e.z }, m);
+      items.push({ m: m, pl: pl });
+      key.push(m.mesh._gl.id, Math.round(pl.off[0] * 1e4), Math.round(pl.off[1] * 1e4), Math.round(pl.off[2] * 1e4),
+               pl.rot.map(function (v) { return Math.round(v * 1e5); }).join(':'), pl.scale);
+    }
+    if (!items.length) return null;
+    var box = GL.footprintBox(w, eye);
+    var curv = (w.planet && w.planet.radius > 0) ? 1 / (2 * w.planet.radius) : 0;
+    key.push(box.join(':'), Math.round(curv * 1e9));
+    key = key.join(',');
+    if (foot && foot.key === key) return foot;
+    if (!foot) {
+      var tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, FOOT_N, FOOT_N, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      var fbo = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      var ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, postReady() ? post.msFbo : null);
+      if (!ok) { gl.deleteFramebuffer(fbo); gl.deleteTexture(tex); footProg = null; return null; }
+      foot = { tex: tex, fbo: fbo, key: null, box: null, builds: 0 };
+    }
+    /* Drawn now, between the hulls and the wall, into its own target; the
+     * frame's target, viewport and clear colour are put back after. */
+    var vp = gl.getParameter(gl.VIEWPORT), cc = gl.getParameter(gl.COLOR_CLEAR_VALUE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, foot.fbo);
+    gl.viewport(0, 0, FOOT_N, FOOT_N);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.colorMask(true, true, true, true);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(footProg);
+    gl.uniform3f(footUni.uFBox, box[0], box[1], box[2]);
+    gl.uniform1f(footUni.uFCurv, curv);
+    gl.uniform1f(footUni.uFMin, FOOT_MIN);
+    for (i = 0; i < items.length; i++) {
+      var it = items[i], up = it.m.mesh._gl;
+      gl.uniform3f(footUni.uFOff, it.pl.off[0], it.pl.off[1], it.pl.off[2]);
+      gl.uniformMatrix3fv(footUni.uFRot, false, it.pl.rot);
+      gl.uniform1f(footUni.uFScale, it.pl.scale);
+      gl.bindVertexArray(up.vao);
+      gl.drawArrays(gl.TRIANGLES, 0, up.count);
+    }
+    gl.bindVertexArray(null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, postReady() ? post.msFbo : null);
+    gl.viewport(vp[0], vp[1], vp[2], vp[3]);
+    gl.clearColor(cc[0], cc[1], cc[2], cc[3]);
+    foot.key = key; foot.box = box; foot.builds++;
+    return foot;
+  }
+  /* For a probe: how often the footprint has been drawn, and over what. */
+  GL.footprintInfo = function () { return foot ? { builds: foot.builds, box: foot.box } : null; };
+
   GL.queueGroundWall = function (cam, w) {
     if (!gl || !wallProg || !w) return false;
     wallQ = { cam: cam, w: w };
@@ -4125,6 +4355,7 @@
     var q = wallQ;
     if (!q || !wallProg) return;
     var cam = q.cam, w = q.w, u = wallUni, e = cam.eye;
+    var fp = streetFootprint(w, e);       // before the wall's own state: it draws
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LESS);
     gl.disable(gl.BLEND);
@@ -4160,7 +4391,17 @@
     else gl.uniform4f(u.uWPlanet, 0, 0, 0, 0);
     var rc = w.rimColor || CUT_RIM;
     gl.uniform4f(u.uWRim, rc[0], rc[1], rc[2], w.rim || 0);
+    /* The footprint, on its own unit so nothing else's binding moves. */
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, fp ? fp.tex : null);
+    gl.uniform1i(u.uWMask, 2);
+    gl.activeTexture(gl.TEXTURE0);
+    if (fp) gl.uniform4f(u.uWMaskB, fp.box[0], fp.box[1], fp.box[2], 1);
+    else gl.uniform4f(u.uWMaskB, 0, 0, 1, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindVertexArray(null);
     gl.colorMask(true, true, true, true);
     gl.enable(gl.BLEND);
@@ -4190,8 +4431,10 @@
   /* The street's burnt edge in JS (FRAG_WALL's first block): at a point
    * `p` on the ground (world km) seen from `eye`, 'cut' inside the cone,
    * 'hot' or 'scorched' in the band just outside it, null beyond — the
-   * same radius and the same fraction as FRAG_MESH's keyhole band. */
-  GL.streetBand = function (w, eye, p) {
+   * same radius and the same fraction as FRAG_MESH's keyhole band. With
+   * `items` (THE FOOTPRINT: { mesh, place } as GL.footprintAt takes), no
+   * band under a building, as underFoot leaves it out (sixth round). */
+  GL.streetBand = function (w, eye, p, items) {
     var Sx = w.ship.x - eye.x, Sy = w.ship.y - eye.y, Sz = w.ship.z - eye.z;
     var px = p.x - eye.x, py = p.y - eye.y, pz = p.z - eye.z;
     var L2 = Math.max(Sx * Sx + Sy * Sy + Sz * Sz, 1e-12);
@@ -4201,6 +4444,7 @@
     var ox = px - Sx * tt, oy = py - Sy * tt, oz = pz - Sz * tt, ds = Math.sqrt(ox * ox + oy * oy + oz * oz);
     if (ds < rs) return 'cut';
     if (ds >= rs * (1 + w.rim)) return null;
+    if (items && items.length && GL.footprintAt(w, items, p)) return null;
     return (ds - rs) / (rs * w.rim) < 0.35 ? 'hot' : 'scorched';
   };
   /* groundHaze's blend fraction in JS: `dist` km of path from an eye `h0`
@@ -4221,10 +4465,11 @@
   };
   /* The pit wall's lip band (FRAG_WALL's last block) in JS: `depthM`
    * metres down the wall from the street where the cone's radius is `rh`
-   * km — 'hot', 'scorched', or null for the rock below. */
-  GL.lipBand = function (w, rh, depthM) {
+   * km — 'hot', 'scorched', or null for the rock below; and null
+   * `under` a building (sixth round), where the building's band is the edge. */
+  GL.lipBand = function (w, rh, depthM, under) {
     var lipM = rh * w.rim * 1000;
-    if (!(depthM < lipM)) return null;
+    if (!(depthM < lipM) || under) return null;
     return depthM / Math.max(lipM, 1e-6) < 0.35 ? 'hot' : 'scorched';
   };
   /* FRAG_WALL in JS, up to the bed: null where the wall is not drawn

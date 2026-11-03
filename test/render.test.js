@@ -7376,7 +7376,12 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
   var keepGlobal = global.GLWorld;
   var GLreal = require('../src/gl.js');
   global.GLWorld = keepGlobal; W.GLWorld = saved;
-  var holes = [], meshCuts = [];
+  var holes = [], meshCuts = [], footChecked = 0;
+  /* A unit block standing on z = 0 (x, y in -1..1, z in 0..1), for the
+   * one-edge check: GLWorld.footprintAt reads only v and f. */
+  var FOOT_BLOCK = { v: [[-1, -1, 0], [1, -1, 0], [1, 1, 0], [-1, 1, 0], [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]],
+                     f: [[0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5],
+                         [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]] };
   W.GLWorld = new Proxy({ available: true, skyOver: GLreal.skyOver,
     setSurfaceHole: function (b, p, r, d) { holes.push(d || 0); },
     /* The keyhole main.js hands the meshes (stationCutShader), so the
@@ -7567,7 +7572,7 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
             var mc = meshCuts[meshCuts.length - 1];
             if (!mc) st.wall.push(tag + ': no keyhole handed to the meshes');
             else if (wall.planet) {
-              var pc = wall.planet.pos, pR = wall.planet.radius, met = 0, diff = 0, seen = {};
+              var pc = wall.planet.pos, pR = wall.planet.radius, met = 0, diff = 0, seen = {}, hotAt = [];
               /* Where the axis itself goes into the ground, and the cone's
                * radius there: the edge of the hole in the street. */
               var ocA = V.sub(eye, pc), bA = V.dot(un, ocA), dA = bA * bA - (V.dot(ocA, ocA) - pR * pR);
@@ -7589,17 +7594,52 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
                   var hp = V.addScaled(eye, rd8, t8);
                   var sb = GLreal.streetBand(wall, eye, hp), mb = GLreal.meshBand(mc, eye, hp);
                   met++; if (sb) seen[sb] = 1;
+                  if (sb === 'hot' && !hotAt[k8]) hotAt[k8] = hp;
                   if (sb !== mb) diff++;
                 }
               }
               if (diff) st.wall.push(tag + ': street band and building band differ at ' + diff + ' of ' + met + ' street points');
               if (!(seen.cut && seen.hot && seen.scorched)) st.wall.push(tag + ': the walk across the edge never crossed the band (' + Object.keys(seen) + ')');
+              /* ONE EDGE WHERE A BUILDING STANDS (sixth round): a 20 m
+               * block, 10 m tall, stood on the street's hot band in one
+               * direction. Under it the street has no band — the block's
+               * own cut face is the edge there — and the same band across
+               * the hole, in open street, is untouched. A block sunk under
+               * the street stands on nothing and takes nothing away. */
+              if (hotAt[0] && hotAt[4]) {
+                var foot = function (at, sink) {
+                  /* Its base on the street at that point — the world's
+                   * sphere, which far from the mouth is well under the
+                   * flat frame's z = 0 — or `sink` km under it. */
+                  var org = V.addScaled(V.sub(at, wall.entrance), wall.up, -(sink || 0));
+                  var ent0 = { x: 0, y: 0, z: 0 };
+                  return [{ mesh: FOOT_BLOCK, place: GLreal.groundPlace(wall, ent0,
+                            { rel: org, r: wall.east, u: wall.north, f: wall.up, scale: 0.01 }) }];
+                };
+                var onB = foot(hotAt[0]), sunk = foot(hotAt[0], 0.02);
+                var fb = [GLreal.streetBand(wall, eye, hotAt[0], onB), GLreal.streetBand(wall, eye, hotAt[4], onB),
+                          GLreal.streetBand(wall, eye, hotAt[0], sunk), GLreal.streetBand(wall, eye, hotAt[0])];
+                if (fb.join() !== ',hot,hot,hot') st.wall.push(tag + ': street band with a block on it ' + fb.join());
+                if (!GLreal.footprintAt(wall, onB, hotAt[0]) || GLreal.footprintAt(wall, onB, hotAt[4]))
+                  st.wall.push(tag + ': the block\'s footprint is not where it stands');
+                /* And the mask the GPU draws it into covers the whole edge:
+                 * both hot points, a band's width either side. */
+                var bx = GLreal.footprintBox(wall, eye);
+                [hotAt[0], hotAt[4]].forEach(function (hq) {
+                  var dq = V.sub(hq, wall.entrance);
+                  var ge = V.dot(dq, wall.east) - bx[0], gn = V.dot(dq, wall.north) - bx[1];
+                  if (!(Math.abs(ge) < bx[2] * 0.98 && Math.abs(gn) < bx[2] * 0.98))
+                    st.wall.push(tag + ': the footprint mask does not reach the edge (' + ge.toFixed(3) + ', ' + gn.toFixed(3) + ' of ' + bx[2] + ' km)');
+                });
+                footChecked++;
+              }
             }
             /* Down the wall's lip: the same width in metres as the street's
              * band at the same radius, hot then scorched, then rock. */
             var rL = wall.cap > 0 ? wall.cap : rq, wM = rL * wall.rim * 1000;
             var lips = [GLreal.lipBand(wall, rL, wM * 0.1), GLreal.lipBand(wall, rL, wM * 0.6), GLreal.lipBand(wall, rL, wM * 1.1)];
             if (lips.join() !== 'hot,scorched,') st.wall.push(tag + ': lip band ' + lips.join());
+            if (GLreal.lipBand(wall, rL, wM * 0.1, true) !== null) st.wall.push(tag + ': lip band under a building');
           }
           /* The bowl is not rebuilt for a small move of the eye: the CPU's
            * part per frame is the wall's uniforms, nothing else. */
@@ -7652,6 +7692,7 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
       if (pad) run(pad);
     }
     check('ground-port zoom-out swept a deep bay and an open pad', tried.length === 2, tried.join(', '));
+    check('a building on the cut\'s edge was stood on the street\'s band and checked', footChecked > 0, footChecked + ' views');
     G.cutawayStyle = style;
   } finally {
     W.GLWorld = saved;
