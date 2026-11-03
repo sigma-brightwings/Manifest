@@ -682,6 +682,11 @@ console.log('--- a station is a solid object ---');
     var same = true;
     for (var i = 0; i < bare.grid.length; i++) if (bare.grid[i] !== bareCopy[i]) { same = false; break; }
     check('the bare grid Render shares is never carved in place', same && !bare.carved);
+    /* Put back what the checks below were written against: MODELS[0]
+     * assigned. Left on spine-m, the landing sweep found spine-m refusing a
+     * clean seat at its two small stations (2.18 and 2.30 km) - true at
+     * af2b08b too, and not this test's question. */
+    Render.assignPort('orbital', MODELS[0]);
   })();
 })();
 
