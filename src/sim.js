@@ -551,6 +551,59 @@
     return (ap.mid[0] - sx) * n[0] + (ap.mid[1] - sy) * n[1] + (ap.mid[2] - sz) * n[2];
   }
 
+  /* THE DOOR OF A MODELLED ORBITAL BERTH, AND THE LINE IN TO IT, in the
+   * model's normalised frame: `door`, the centre of the aperture (the box's
+   * middle carried out to the outer leaves, which is where Gen.berthApertures
+   * measures `gate` from); `entry`, the unit way out to open space; `bent`
+   * when that is not the normal. The arrival rail (orbitalPath), the approach
+   * lamps (Render.stationLightKit) and the carve that opens the occupancy grid
+   * all read this, so the lights show the line that is flown and the line
+   * that is flown is the one that is open. Null for a berth with no door. */
+  function berthDoor(port, i) {
+    var Gen = global.Gen;
+    var ap = Gen && Gen.berthApertures ? Gen.berthApertures(port, i) : null;
+    if (!ap || !ap.normal || !ap.mid || typeof ap.gate !== 'number') return null;
+    var n = ap.normal, g = ap.gate;
+    var e = ap.entry || n;
+    var door = [ap.mid[0] + n[0] * g, ap.mid[1] + n[1] * g, ap.mid[2] + n[2] * g];
+    /* AT THE HULL'S OWN HEIGHT in a door in a wall: centred across the
+     * opening, level with the stand it rolls on to. The box's middle is
+     * half a bay up in a tall throat (157 m at Threshold Dock's), and a run
+     * in from there to the floor cuts the corner through whatever stands in
+     * the throat — every civil yard's cradle frame, measured. A hatch in a
+     * roof or a floor keeps its centre: the hull rises through its middle. */
+    if (Math.abs(n[2]) < 0.5 && Gen.berthOffset && Gen.bayGeometry) {
+      var off = Gen.berthOffset(port, i);
+      door[2] = off.z + (Gen.bayGeometry(port).lift || 0);
+    }
+    return {
+      door: door,
+      normal: n.slice(), entry: e.slice(),
+      bent: (e[0] * n[0] + e[1] * n[1] + e[2] * n[2]) < 0.999
+    };
+  }
+
+  /* HOW FAR OUTSIDE THE LEAVES THE HULL WAITS for them to open, in station
+   * radii: half the longest hull in the fleet, a quarter again for the
+   * nose's turn and the leaves' own thickness, and 5 m. A threshold AT the
+   * door plane put the front half of every hull through the shut doors for
+   * the two and a half seconds they take to run back. */
+  var DOOR_CLEAR_EXTRA_KM = 0.005;
+  var longestHull = null;
+  function doorClear(port) {
+    var R = global.Render;
+    if (longestHull === null) {
+      longestHull = 0;
+      var kinds = (R && R.HULL_ASSIGN) ? Object.keys(R.HULL_ASSIGN) : [];
+      for (var i = 0; i < kinds.length; i++) {
+        var sp = R.hullSpan(kinds[i]);
+        if (sp && sp.l > longestHull) longestHull = sp.l;
+      }
+      if (!(longestHull > 0)) longestHull = (R && R.SHIP_LEN) || 0.025;
+    }
+    return (longestHull * 0.5 * 1.25 + DOOR_CLEAR_EXTRA_KM) / ((port && port.radius) || 1);
+  }
+
   function stationSolidity(port) {
     var R = global.Render, Gen = global.Gen;
     if (!R || !R.portSolidity || !Gen || !port || port.surface) return null;
@@ -595,6 +648,17 @@
                        off.z + ap.normal[2] * lead],
                       [-ap.normal[0], -ap.normal[1], -ap.normal[2]],
                       lead + deep, g.mouthR);
+        /* And down the lamps' line from the door's centre, which is the
+         * line the rail now flies outside the doors (berthDoor). The same
+         * corridor wherever the stand is level with the door's middle; a
+         * second, higher one in a bay taller than a hull. */
+        var bd = berthDoor(port, i);
+        if (bd) {
+          var lead2 = holdLead(port) + 0.2 + doorClear(port);
+          R.carveThroat(sol, [bd.door[0] + bd.normal[0] * lead2, bd.door[1] + bd.normal[1] * lead2,
+                              bd.door[2] + bd.normal[2] * lead2],
+                        [-bd.normal[0], -bd.normal[1], -bd.normal[2]], lead2 + Math.max(0, ap.gate), g.mouthR);
+        }
       }
       cut++;
     }
@@ -675,6 +739,25 @@
       if (at === R.SOLID_IN || at === R.SOLID_DOOR) return p;
     }
     return null;
+  }
+
+  /* IS THIS POINT IN OPEN SPACE, as far as this station is concerned — not
+   * in a room of it, not in a doorway, and NOT IN ITS METAL (2026-11-03).
+   *
+   * insideStation answers "is something over your head" and so says null for
+   * a point buried in a wall: a wall is not a room. That was the right
+   * answer for the sky and the wrong one for the camera. main.js asked
+   * `insideStation(eye) !== port` to decide that the cut-off view had
+   * reached the outside, so a boom whose eye had only got as far as the
+   * hull plating counted as out, and the view handed over to "the station
+   * from space" with the eye inside a bulkhead — a screen of dark slab.
+   * Measured by the sweep in berths.test.js: along the boom out of a berth
+   * the eye passes through metal before it reaches space at most bays.
+   * Outside means SOLID_OUT. */
+  function outsideStation(port, pos, sys, t) {
+    var R = global.Render;
+    if (!R || !port) return true;
+    return stationSolidAt(port, pos, sys, t) === R.SOLID_OUT;
   }
 
   /* Where in the world berth `i` of this port is, and which way the ship
@@ -4317,7 +4400,12 @@
       berth = (typeof s.arrival.entry === 'number') ? s.arrival.entry : s.arrival.berth;
       arriving = true;
     } else if (s && s.docked === port.id) {
-      berth = (typeof s.dockBerth === 'number') ? s.dockBerth : 0;
+      /* THE BERTH SHE IS IN (2026-11-03). This read `s.dockBerth`, which
+       * nothing has ever set, so a ship docked anywhere ran berth 0's
+       * airlock: berth 0's inner gate opened for her, hers stayed shut, and
+       * on undock her own doors started from cold. */
+      berth = (s.dockOffset && typeof s.dockOffset.berth === 'number') ? s.dockOffset.berth
+            : (typeof s.dockBerth === 'number') ? s.dockBerth : 0;
     } else if (s && s.departed && s.departed.port === port.id &&
                insideStation(s.pos, sys, t) === port) {
       /* On the way out, and still in the passage. See undockShip: this is
@@ -6116,26 +6204,33 @@
     }
 
     if (ap && ap.normal && typeof ap.gate === 'number') {
-      var n = ap.normal;
-      /* The door plane measured from this stand, not from the box's middle
-       * (doorFromStand). Zero for every side bay. */
-      var gate = ap.gate + doorFromStand(ap, off.x, off.y, z);
-      var at = function (d) {
-        return { x: off.x + n[0] * d, y: off.y + n[1] * d, z: z + n[2] * d };
+      /* ONE ENTRY LINE, THE LAMPS' (2026-11-03). Astra at Waypoint Dock:
+       * "ship is not aligned with the navigation landing lights", and on the
+       * way out "we phased through the wall just above it". This rail ran
+       * along the normal at the STAND's height, out from the stand, and the
+       * approach strings (Render.stationLightKit) run along `entry` from the
+       * DOOR's centre — the middle of the aperture. In a bay taller than a
+       * hull those are two lines tens of metres apart, and where `entry` is
+       * not the normal they diverge outright. And its threshold — the slot
+       * the hull waits at while the doors open — was the door plane itself,
+       * so half the hull stood through the shut leaves (berths.test.js
+       * measured it at every berth of every model).
+       *
+       * So the outside of the rail is the lamp line, from Sim.berthDoor:
+       * the hold out along `entry` from the door's centre, the threshold a
+       * hull's half-length (DOOR_CLEAR) outboard of the leaves on that same
+       * line, and the run in from there to the stand, which crosses the
+       * door plane in its middle. The lamps read the same function. */
+      var dp = berthDoor(port, berth || 0);
+      var along = function (d) {
+        return { x: dp.door[0] + dp.entry[0] * d, y: dp.door[1] + dp.entry[1] * d,
+                 z: dp.door[2] + dp.entry[2] * d };
       };
-      /* THE HOLD IS WHERE THE WAY IN MEETS OPEN SPACE (Gen.berthApertures'
-       * entry). Straight out along the normal for a berth that opens onto
-       * space — the numbers it always had — and out along the clear line
-       * for one that does not: the cylinder's bays face across its bore, so
-       * the hold is beyond the bore's mouth and the first leg runs down the
-       * bore to the door. */
-      var e = ap.entry;
-      var hold = at(gate + holdLead(port));
-      if (e && (e[0] * n[0] + e[1] * n[1] + e[2] * n[2]) < 0.999) {
-        var g0 = at(gate), dist = (ap.exit || 1) + holdLead(port);
-        hold = { x: g0.x + e[0] * dist, y: g0.y + e[1] * dist, z: g0.z + e[2] * dist };
-      }
-      return [hold, at(gate), at(gate), at(0), at(0)];
+      var thr = along(doorClear(port));
+      var bentE = dp.bent ? (ap.exit || 1) : 0;
+      var hold = along(Math.max(doorClear(port) * 2, bentE + holdLead(port)));
+      var standO = { x: off.x, y: off.y, z: z };
+      return [hold, thr, thr, standO, standO];
     }
 
     /* No modelled berth: in through the hatch. */
@@ -8036,6 +8131,8 @@
     checkStationImpact: checkStationImpact, checkHullImpact: checkHullImpact,
     stationSolidity: stationSolidity,
     stationSolidAt: stationSolidAt,
+    berthDoor: berthDoor, doorClear: doorClear,
+    outsideStation: outsideStation,
     insideStation: insideStation,
     /* Exported so a test can ask what the berth's own facing IS, rather than
      * re-deriving it and pinning its own arithmetic instead of the game's. */

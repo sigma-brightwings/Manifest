@@ -1990,6 +1990,325 @@ console.log('--- in the roads ---');
         Sim.arrivalHold(lay, { surface: true }) + Sim.FINAL_DESCENT_S <= 1200 * 0.8 + 1e-6);
 })();
 
+/* ---- SEEING HER FROM OUTSIDE, AT EVERY BERTH (2026-11-03) -----------------
+ * Astra, at Threshold Dock in the new home system: "camera doesn't zoom out
+ * more than 21 m while docked at Mirven, cutaway doesn't work". The zoom half
+ * is main.js's and render.test.js pins it; this is the half that is about the
+ * MODELS, swept so a re-exported station or a moved berth cannot quietly
+ * bring it back somewhere nobody happened to dock.
+ *
+ * Every orbital model, every berth, the ship docked there, and the boom laid
+ * out along five directions in the berth's own frame (out of the bay, out and
+ * to the side, over the top, straight up the station's axis, back across the
+ * bay) at five lengths from 30 m to 2 km. Three questions, each answered
+ * against the solidity grid — the station's own idea of where its metal is:
+ *
+ *   1. She is not parked in metal. A stand inside the hull draws as a ship
+ *      missing from the hole the cutaway opens for her.
+ *   2. With the cut ON, nothing the shader keeps is between the eye and her.
+ *      The cone takes everything round the line of sight except the island
+ *      of deck it leaves under her (FRAG_MESH's keyhole, `deck`), so a wall
+ *      sample on any line from the eye to her bow, middle or stern that the
+ *      shader's own test does not discard is a wall in front of the ship.
+ *   3. With the cut OFF, the view hands over to "the station from space"
+ *      only with the eye in OPEN space (Sim.outsideStation). The old test —
+ *      not in a room — passed an eye buried in the plating, and the screen
+ *      was a slab of the inside of a wall. Printed beside it: how many of
+ *      these booms the old rule would have handed over in metal, and that
+ *      every boom does reach open space within three station radii, so the
+ *      cut-off view always has an outside to reach. */
+console.log('--- seeing her from outside, at every berth ---');
+(function () {
+  var sys = Gen.generateSystem('cut-sweep');
+  var station = (sys.ports || []).filter(function (p) { return !p.surface && p.docking; })[0];
+  check('there is a station to look into', !!station);
+  if (!station) return;
+  var role = Render.portRole(station);
+  var WALL = Render.SOLID_WALL, OUT = Render.SOLID_OUT;
+  var LEN = Render.SHIP_LEN || 0.025;
+  var rShip = LEN * 1.0;                                 // main.js CUT_SHIP
+  var CONE = Math.tan(20 * Math.PI / 180);               // main.js CUT_CONE
+  var DISTS = [0.03, 0.1, 0.3, 0.8, 2.0];
+  /* The shader's keyhole (gl.js FRAG_MESH), deck bubble and all: true when
+   * the fragment at `p` would be thrown away. */
+  function discards(p, eye, ship, rEye, up) {
+    var c = V.sub(ship, eye), v = V.sub(p, eye);
+    var t = V.dot(v, c) / Math.max(V.dot(c, c), 1e-12);
+    var q = V.sub(v, c);
+    var deck = V.len(q) < rShip && V.dot(q, up) < rShip * 0.15;
+    if (!(t > 0 && t < 1) || deck) return false;
+    var r = rEye + (rShip - rEye) * t;
+    return V.len(V.sub(v, V.scale(c, t))) < r;
+  }
+  var models = 0, skipped = [], berths = 0, booms = 0;
+  var inMetal = [], blocked = [], oldInMetal = 0, newInMetal = 0, noOutside = [];
+  MODELS.forEach(function (modelId) {
+    Render.assignPort(role, modelId);
+    if (Render.portModelFor(station) !== modelId) { skipped.push(modelId); return; }
+    models++;
+    var n = Math.max(1, Gen.bayGeometry(station).berths);
+    for (var i = 0; i < n; i++) {
+      var ship = { cls: 'courier', dryMass: 80, pos: V.zero(), vel: V.zero(), thrust: V.zero(),
+                   fwd: { x: 1, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 }, right: { x: 0, y: -1, z: 0 },
+                   cleared: {} };
+      Sim.refreshShip(ship);
+      Sim.dockShip(ship, station, sys, 0, i);
+      if (!ship.dockOffset || ship.dockOffset.berth !== i) continue;
+      berths++;
+      var S = ship.pos, F = V.norm(ship.fwd);
+      var bs = Sim.berthState(station, sys, 0, i);
+      var up = bs.basis.up, nrm = Sim.berthFacing(bs.basis, bs.off);
+      var side = V.cross(nrm, up);
+      if (V.len(side) < 0.1) side = bs.basis.east;     // a bay that opens up the axis
+      side = V.norm(side);
+      var ends = [S, V.addScaled(S, F, LEN / 2), V.addScaled(S, F, -LEN / 2)];
+      for (var e = 0; e < ends.length; e++) {
+        if (Sim.stationSolidAt(station, ends[e], sys, 0) === WALL) {
+          inMetal.push(modelId + ' berth ' + i + ['', ' bow', ' stern'][e]); break;
+        }
+      }
+      var dirs = [V.add(nrm, V.scale(up, 0.6)), V.add(V.add(nrm, side), V.scale(up, 0.6)),
+                  V.add(V.scale(nrm, 0.3), up), up, V.add(V.scale(nrm, -1), V.scale(up, 0.8))];
+      dirs.forEach(function (d0, di) {
+        var d = V.norm(d0);
+        DISTS.forEach(function (dist) {
+          booms++;
+          var eye = V.addScaled(S, d, dist), rEye = rShip + dist * CONE;
+          /* 2: every wall sample the shader keeps, on the line to bow, middle
+           * and stern. 1 m steps for the first 40 m out from her, where the
+           * deck island is; past that the lines run inside the cone (an
+           * offset of half a hull at her end, the cone's radius a whole one
+           * and growing), so the middle line alone at 10 m steps. */
+          var kept = 0;
+          for (var k = 0; k < ends.length && !kept; k++) {
+            var L = V.dist(eye, ends[k]), u = V.norm(V.sub(eye, ends[k]));
+            var stop = k === 0 ? L : Math.min(L, 0.04);
+            for (var s = 0.002; s < stop && !kept; s += s < 0.04 ? 0.001 : 0.01) {
+              var p = V.addScaled(ends[k], u, s);
+              if (Sim.stationSolidAt(station, p, sys, 0) === WALL && !discards(p, eye, S, rEye, up)) kept++;
+            }
+          }
+          if (kept) blocked.push(modelId + ' b' + i + ' dir' + di + ' ' + (dist * 1000) + ' m');
+          /* 3: what the old rule said about the eye, and the new one. */
+          var at = Sim.stationSolidAt(station, eye, sys, 0);
+          var oldOut = Sim.insideStation(eye, sys, 0) !== station;
+          if (oldOut && at === WALL) oldInMetal++;
+          if (Sim.outsideStation(station, eye, sys, 0) && at !== OUT) newInMetal++;
+        });
+        /* And there is an outside to reach along this boom at all. */
+        var reach = -1;
+        for (var q = 0.01; q < station.radius * 3; q += 0.005) {
+          if (Sim.outsideStation(station, V.addScaled(S, d, q), sys, 0)) { reach = q; break; }
+        }
+        if (reach < 0) noOutside.push(modelId + ' b' + i + ' dir' + di);
+      });
+    }
+  });
+  Render.assignPort(role, null);
+  console.log('  ' + models + ' models, ' + berths + ' berths, ' + booms + ' booms' +
+              (skipped.length ? '   (not assignable here: ' + skipped.join(', ') + ')' : ''));
+  console.log('  the old "outside" rule would hand over with the eye in metal on ' +
+              oldInMetal + ' of ' + booms + ' booms');
+  check('every model was swept', models === MODELS.length, skipped.join(', '));
+  /* PRINTED, NOT CHECKED. Both of these ask the occupancy grid, whose cells
+   * are a 48th of the model across — 100 to 200 m at these stations, four
+   * to eight hull lengths — so a "wall" sample beside a 25 m hull is often
+   * the cell she is in rather than anything drawn. Measured 2026-11-03:
+   * the 9 "in metal" stands are cylinder bays whose deck plate is thinner
+   * than a cell, and the 250 "kept" booms are all 800 m over the top, where
+   * the line runs down through cells the cone does take on screen. The
+   * floor itself is checked against the triangles, below ("on the bay's
+   * floor"); what is on screen is checked by looking (cutfix-shots). */
+  console.log('  stands in a wall cell of the grid: ' + inMetal.length +
+              (inMetal.length ? ' (' + inMetal.slice(0, 4).join('; ') + ')' : ''));
+  console.log('  booms with a wall cell the cone keeps: ' + blocked.length + ' of ' + booms);
+  check('with the cut off, "outside" means open space, never the plating', newInMetal === 0,
+        newInMetal + ' of ' + booms);
+  check('and every boom reaches open space within three radii', noOutside.length === 0,
+        noOutside.length + ': ' + noOutside.slice(0, 6).join('; '));
+})();
+
+
+/* ---- ON THE BAY'S FLOOR, NOT ITS LINTEL (2026-11-03) ----------------------
+ * Astra at Mirven: "the ship is sitting at the top of the inside of the bay
+ * rather than at the base of it, which it should be." Render.berthDeck read
+ * the first surface under each anchor box's top as the deck, which is right
+ * for a box that hangs below its deck and wrong for one that IS the throat,
+ * floor to lintel: the lintel's upper face won, and the hull was parked on
+ * top of its own doorway. The cradle's heavy throat also lies 1.2 m above
+ * its own floor plate, so the floor was thrown out as "outside the box".
+ *
+ * Every orbital model, every berth, against the TRIANGLES (not the grid):
+ * straight down from where the hull rests, the first surface is the deck
+ * it was put on; there is a hull's height clear over it; and there is no
+ * floor lower in the bay with most of the bay clear over it — the lintel's
+ * signature. Measured 2026-11-03: 97 berths off their floor before, 40
+ * after, every one of the 40 a bay whose door faces down or sideways out of
+ * a tilted face (the cylinders' bore bays, the navy and Syndicate yards),
+ * where there is no level floor for this rule to find. Those are listed
+ * every run and held to that count; none of them is at a spine, a ring, a
+ * cradle, a refinery or a skimmer. */
+console.log('--- on the bay\'s floor, not its lintel ---');
+(function () {
+  var sys = Gen.generateSystem('cut-sweep');
+  var st = sys.ports.filter(function (p) { return !p.surface && p.docking; })[0];
+  var role = Render.portRole(st), R0 = st.radius;
+  st.radius = 2.0;
+  var hullH = Render.hullSpan('courier').h / st.radius;
+  function column(lib, x, y) {
+    var zs = [];
+    ['shell', 'interior', 'spin'].forEach(function (key) {
+      var m = lib[key];
+      if (!m || !m.f) return;
+      m.f.forEach(function (tri) {
+        for (var j = 1; j + 1 < tri.length; j++) {
+          var a = m.v[tri[0]], b = m.v[tri[j]], c = m.v[tri[j + 1]];
+          if (Math.max(a[0], b[0], c[0]) < x || Math.min(a[0], b[0], c[0]) > x ||
+              Math.max(a[1], b[1], c[1]) < y || Math.min(a[1], b[1], c[1]) > y) continue;
+          var d0 = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+          if (Math.abs(d0) < 1e-14) continue;
+          var u = ((x - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (y - a[1])) / d0;
+          var v = ((b[0] - a[0]) * (y - a[1]) - (x - a[0]) * (b[1] - a[1])) / d0;
+          if (u < 0 || v < 0 || u + v > 1) continue;
+          zs.push(a[2] + u * (b[2] - a[2]) + v * (c[2] - a[2]));
+        }
+      });
+    });
+    return zs.sort(function (p, q) { return p - q; });
+  }
+  var n = 0, bad = [], lintel = [];
+  MODELS.forEach(function (id) {
+    Render.assignPort(role, id);
+    var lib = Render.libPort(id);
+    var sorted = lib.anchors.berths.slice().sort(function (a, b) {
+      return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
+    });
+    var nb = Math.max(1, Gen.bayGeometry(st).berths);
+    for (var i = 0; i < nb; i++) {
+      n++;
+      var b = sorted[i % sorted.length], off = Gen.berthOffset(st, i), deck = Render.berthDeck(id, i);
+      var zs = column(lib, off.x, off.y), boxH = b.max[2] - b.min[2];
+      var under = Math.max(0.004, boxH * 0.03), why = [];
+      var below = zs.filter(function (z) { return z < off.z; });
+      var above = zs.filter(function (z) { return z > off.z; });
+      var gapB = below.length ? off.z - below[below.length - 1] : Infinity;
+      var gapA = above.length ? above[0] - off.z : Infinity;
+      if (Math.abs(gapB - (off.z - deck)) > hullH * 0.75) why.push('nothing under her for ' + m(gapB * st.radius));
+      if (gapA < hullH) why.push(m(gapA * st.radius) + ' over her');
+      for (var q = 0; q < zs.length; q++) {
+        var z = zs[q];
+        if (z >= deck - hullH || z < b.min[2] - under) continue;
+        var room = zs[q + 1] === undefined ? Infinity : zs[q + 1] - z;
+        if (room >= Math.max(0.03, boxH * 0.6)) {
+          why.push('a floor ' + m((deck - z) * st.radius) + ' under her');
+          if (!/^(cylinder|yard)/.test(id)) lintel.push(id + ' b' + i);
+          break;
+        }
+      }
+      if (why.length) bad.push(id + ' b' + i + ': ' + why.join(', '));
+    }
+  });
+  Render.assignPort(role, null);
+  st.radius = R0;
+  console.log('  ' + n + ' berths, ' + bad.length + ' not on a level floor');
+  bad.forEach(function (s) { console.log('    ' + s); });
+  check('no hull is parked on a lintel at a spine, ring, cradle, refinery or skimmer',
+        lintel.length === 0, lintel.join('; '));
+  check('the berths off a level floor are no more than the 40 measured 2026-11-03',
+        bad.length <= 40, bad.length + '');
+})();
+
+/* ---- THE RAIL WAITS OUTSIDE THE DOORS, ON THE LAMPS' LINE (2026-11-03) ----
+ * Astra at Waypoint Dock: "ship is not aligned with the navigation landing
+ * lights", and leaving it "we phased through the wall just above it". The
+ * rail's outer slots ran along the berth's normal at the stand's height,
+ * from the stand; the lamps run along `entry` from the door's centre; and
+ * the threshold, where the hull waits while the doors run back, was the
+ * door plane — half the hull through the shut leaves, at every berth of
+ * every model (sweep: 23 of 23 at the four Mirven models). Now both read
+ * Sim.berthDoor, and the threshold is Sim.doorClear outboard of the leaves.
+ *
+ * Every orbital model, every berth with doors: the hold and the threshold
+ * lie on the lamp line, the threshold is outside the door plane by the
+ * fleet's longest half-hull, and the outer legs (lined up, doors opening,
+ * drawn in) pass the hull's cross-section through no surface — shut leaves
+ * included, posed exactly as the rail poses them. One model per family
+ * (the navy and Syndicate liveries share the plain one's shell). */
+console.log('--- the rail waits outside the doors, on the lamps\' line ---');
+(function () {
+  var sys = Gen.generateSystem('cut-sweep');
+  var st = sys.ports.filter(function (p) { return !p.surface && p.docking; })[0];
+  var role = Render.portRole(st), R0 = st.radius;
+  st.radius = 4.184;                                     // Waypoint Dock's
+  var span = Render.hullSpan('courier');
+  var basis = Sim.portBasis(st, sys, 0);
+  function toM(pos) {
+    var d = V.sub(pos, basis.entrance.pos);
+    return [V.dot(d, basis.east) / st.radius, V.dot(d, basis.north) / st.radius, V.dot(d, basis.up) / st.radius];
+  }
+  function dirM(v) { return [V.dot(v, basis.east), V.dot(v, basis.north), V.dot(v, basis.up)]; }
+  /* NOT THE CIVIL YARDS, and printed: yard-s/m/l carry their door leaves
+   * in the INTERIOR bucket, where Render.portDoors does not look, so their
+   * doors are welded shut into the hull and never open for anything — a
+   * separate fault in the door split (found 2026-11-03, still open). */
+  var plain = MODELS.filter(function (id) { return !/-(navy|syn)-/.test(id) && !/^yard-[sml]$/.test(id); });
+  ['yard-s', 'yard-m', 'yard-l'].forEach(function (id) {
+    if (global.PortLib[id] && !Render.portDoors(id)) console.log('  ' + id + ': doors not separated (interior bucket) - not swept');
+  });
+  var berths = 0, offLine = [], inDoor = [], through = [];
+  plain.forEach(function (id) {
+    Render.assignPort(role, id);
+    var nb = Math.max(1, Gen.bayGeometry(st).berths);
+    for (var i = 0; i < nb; i++) {
+      var rt = Gen.berthRoute(st, i), entry = rt ? rt.entry : i;
+      var bd = Sim.berthDoor(st, entry);
+      var path = Sim.arrivalPath(st, i);
+      if (!bd || !path) continue;
+      berths++;
+      [0, 1].forEach(function (k) {
+        var p = path[k], q = [p.x - bd.door[0], p.y - bd.door[1], p.z - bd.door[2]];
+        var t = q[0] * bd.entry[0] + q[1] * bd.entry[1] + q[2] * bd.entry[2];
+        var miss = Math.sqrt(Math.max(0, q[0] * q[0] + q[1] * q[1] + q[2] * q[2] - t * t));
+        if (miss * st.radius > 0.001) offLine.push(id + ' b' + i + ' slot ' + k + ' ' + m(miss * st.radius));
+        if (k === 1) {
+          var out = (q[0] * bd.normal[0] + q[1] * bd.normal[1] + q[2] * bd.normal[2]) * st.radius;
+          if (out < span.l / 2) inDoor.push(id + ' b' + i + ' ' + m(out));
+        }
+      });
+      var apE = Gen.berthApertures(st, entry), prev = null, dur = 0;
+      var LEGS_OUT = 3;                                   // lineup, open, enter
+      for (var el = 0; el < 400; el += 0.5) {
+        var pose = Sim.arrivalPose(st, sys, 0, i, el);
+        if (!pose || pose.leg >= LEGS_OUT) break;
+        var p0 = toM(pose.pos), ri = dirM(pose.right), up = dirM(pose.up);
+        var doors = { open: 1 - pose.gates.apron, inner: 1 - pose.gates.inner, berth: entry,
+                      berthMid: apE && apE.mid, car: pose.car || null };
+        if (prev) {
+          var hw = span.w / 2 / st.radius * 0.9, hh = span.h / 2 / st.radius * 0.9;
+          var offs = [[0, 0], [hw, 0], [-hw, 0], [0, hh], [0, -hh]], hit = false;
+          for (var o = 0; o < offs.length && !hit; o++) {
+            var oo = offs[o];
+            var a = [prev[0] + ri[0] * oo[0] + up[0] * oo[1], prev[1] + ri[1] * oo[0] + up[1] * oo[1], prev[2] + ri[2] * oo[0] + up[2] * oo[1]];
+            var b = [p0[0] + ri[0] * oo[0] + up[0] * oo[1], p0[1] + ri[1] * oo[0] + up[1] * oo[1], p0[2] + ri[2] * oo[0] + up[2] * oo[1]];
+            if (Render.portSegmentHit(id, a, b, doors)) hit = true;
+          }
+          if (hit) { through.push(id + ' b' + i + ' ' + pose.legId + ' at ' + el.toFixed(1) + ' s'); break; }
+        }
+        prev = p0;
+      }
+    }
+  });
+  Render.assignPort(role, null);
+  st.radius = R0;
+  console.log('  ' + plain.length + ' models, ' + berths + ' berths with doors');
+  check('the hold and the threshold are on the approach lamps\' line', offLine.length === 0,
+        offLine.length + ': ' + offLine.slice(0, 4).join('; '));
+  check('the threshold is half the longest hull outside the doors', inDoor.length === 0,
+        inDoor.length + ': ' + inDoor.slice(0, 4).join('; '));
+  check('lined up, doors opening and drawn in, the hull touches nothing', through.length === 0,
+        through.length + ': ' + through.slice(0, 6).join('; '));
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

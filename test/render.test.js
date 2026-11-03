@@ -7509,7 +7509,7 @@ console.log('--- zooming out of her hangar ---');
     frames(1);
     /* The cut is an option, and an earlier section may have left it off. */
     var style = G.cutawayStyle; G.cutawayStyle = 0;
-    var tried = [];
+    var tried = [], hit = {};
     ['orbital', 'surface'].forEach(function (kind) {
       var ports = G.sys.ports.filter(function (p) { return !!p.surface === (kind === 'surface'); });
       for (var i = 0; i < ports.length; i++) {
@@ -7560,10 +7560,66 @@ console.log('--- zooming out of her hangar ---');
         check(kind + ': and wheeling back in puts her in her hangar again', !G.hangarOut && G.cam.dist < 0.1,
               (G.cam.dist * 1000).toFixed(0) + ' m, out ' + G.hangarOut);
         tried.push(kind);
+        hit[kind] = port;
         return;
       }
     });
     check('zooming out of a deck hangar reaches the station, orbital and surface', tried.length === 2, tried.join(','));
+    /* AND BY THE WHEEL, IN SMALL STEPS (2026-11-03). The checks above set
+     * G.cam.dist, which jumps the boom in one go; Astra's trackpad on
+     * Electron sends many small wheel deltas, and the hangar let go only
+     * when one frame's step took the boom past 1.08 of its wall — every
+     * smaller step was undone by the clamp before the next arrived, and she
+     * sat at 21 m ("camera doesn't zoom out more than 21 m while docked at
+     * Mirven"). Measured in Chrome before the fix: deltaY 8 twice a frame,
+     * or 40 once, stayed at 18 m for ever, cut on or off; with the cut off
+     * even a mouse notch stopped at the station wall. The request is now
+     * kept apart from the boom (main.js camAsked), so the same steps walk
+     * out of the hangar, through the station and out to space. */
+    var wheel = listeners.wheel && listeners.wheel[0];
+    check('the canvas listens for the wheel', !!wheel);
+    function roll(dy, n, per) {
+      for (var f = 0; f < n; f++) {
+        for (var k = 0; k < (per || 1); k++) {
+          wheel({ deltaY: dy, clientX: 800, clientY: 300, preventDefault: function () {} });
+        }
+        frames(1);
+      }
+    }
+    [['orbital', 0], ['orbital', 2], ['surface', 0]].forEach(function (c) {
+      var port = hit[c[0]];
+      if (!port || !wheel) return;
+      G.ship.docked = null; G.hangarOut = false;
+      Sim.dockShip(G.ship, port, G.sys, G.t);
+      G.viewMode = 'orbit'; G.followShip = true; G.focus = null; G.walk = null;
+      G.cutawayStyle = c[1];
+      G.cam.yaw = 0.9; G.cam.pitch = 0.45; G.cam.dist = 0.005; G.cam.ask = 0;
+      frames(2);
+      var what = c[0] + (c[1] === 2 ? ', cut off' : ', cut on') + ' at ' + port.name;
+      check(what + ': she starts in her hangar', !G.hangarOut, (G.cam.dist * 1000).toFixed(1) + ' m');
+      /* Two deltas of 8 a frame: x1.026, under a third of the 1.08 needed
+       * in one go. 400 frames is under seven seconds of rolling. */
+      var outAt = -1;
+      for (var f = 0; f < 400 && outAt < 0; f++) { roll(8, 1, 2); if (G.hangarOut) outAt = f; }
+      check(what + ': small wheel steps leave the hangar', outAt >= 0,
+            'still in at ' + (G.cam.dist * 1000).toFixed(1) + ' m');
+      roll(8, 300, 2);
+      var far = G.cam.dist;
+      check(what + ': and keep going, out past the station', far > port.radius * 1.5,
+            (far * 1000).toFixed(0) + ' m against a ' + (port.radius * 1000).toFixed(0) + ' m station');
+      if (c[1] === 2) {
+        check(what + ': to the station from outside, nothing cut', G.viewOutside === port && !G.cutaway,
+              'outside ' + (G.viewOutside && G.viewOutside.name) + ', cut ' + !!G.cutaway);
+      } else {
+        check(what + ': with the station cut round her', !!G.cutaway && G.cutaway.port === port);
+      }
+      /* And back the same way. Rolling in judges the request too, so the
+       * hangar takes her back once the request is inside its wall. */
+      roll(-8, 900, 2);
+      check(what + ': small steps the other way put her back in her hangar', !G.hangarOut && G.cam.dist < 0.05,
+            (G.cam.dist * 1000).toFixed(1) + ' m, out ' + G.hangarOut);
+    });
+    G.cutawayStyle = 0;
     /* And the hangar is still the room when you have not asked out of it. */
     G.cam.dist = 0.0001; frames(1);
     check('a boom inside the hangar is still held to its walls', !G.hangarOut && G.cam.dist < 0.05,

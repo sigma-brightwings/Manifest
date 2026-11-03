@@ -40,6 +40,48 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-03, docked at Mirven: the zoom, the floor, the doors and the lamps)
+
+From Astra's playtest of the Mirven start (seed `kawartha`, Threshold Dock).
+
+- **The camera zooms out of a berth on a trackpad.** "Camera doesn't zoom
+  out more than 21 m while docked." The hangar let go of the boom only when
+  one frame's zoom carried it past 1.08 of its wall, and the wall put it back
+  every frame, so a trackpad's small steps were undone one by one (measured:
+  stuck at 19 m for ever). The wheel's request is now kept apart from the
+  boom, and the walls that are meant to let go judge the request. With the
+  cut off, the view hands over to "the station from outside" only once the
+  eye is in open space, not in the hull plating.
+- **Hulls stand on the bay's floor, not on top of the doorway.** "The ship
+  is sitting at the top of the inside of the bay rather than at the base of
+  it." Where an anchor box is the throat itself, floor to lintel, the deck
+  reading took the lintel's upper face; and the cradle's heavy throat lies
+  just above its own floor plate, so the floor was thrown out. Measured over
+  every orbital model: 97 of 378 berths off a level floor before, 40 after
+  (all of them doors that face down or out of a tilted face, listed by
+  berths.test). Every cradle, spine, refinery and skimmer bay that sat on a
+  lintel is fixed; Aubade Array, Coldwater Post and Pilgrim Depot are among
+  them.
+- **The approach follows the landing lights, and waits outside the doors.**
+  "Ship is not aligned with the navigation landing lights", and on the way
+  out "we phased through the wall just above it". The rail and the lamps now
+  share one entry line from the door, and the hull waits half the longest
+  hull's length outside the leaves while they open instead of at the door
+  plane, where half of it stood through the shut doors. Before: the hull
+  went through a shut door at every berth of every model swept (45 of 45 at
+  eight models); after: none, outside the civil yards (below).
+- **Your own berth's airlock runs while you are docked.** The doors read
+  berth 0's airlock for a docked ship wherever she was parked, so her own
+  inner gate stayed shut and her own doors started cold on undock.
+
+Still open, found on the way: the civil yards' (yard-s/m/l) door leaves are
+in the model's interior bucket, which the door split does not read, so their
+doors never open; the cylinders' bore bays have no level floor for the deck
+rule to find.
+
+**Saves:** unaffected. No save field changed; a ship saved docked is parked
+on the corrected deck when the career loads.
+
 ### Added (2026-11-03, the galaxy chart zooms)
 
 Astra: "on the F6 tab I want to be able to zoom in and out on the galaxy now

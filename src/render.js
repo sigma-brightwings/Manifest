@@ -5788,10 +5788,15 @@
       var ap = Gen.berthApertures(port, b);
       chase[b] = null;
       if (!ap || !ap.reachable || !ap.entry) continue;
-      var door = [ap.mid[0] + ap.normal[0] * (ap.gate || 0),
+      /* The door and the line in from Sim.berthDoor — the one the arrival
+       * rail flies (2026-11-03: "ship is not aligned with the navigation
+       * landing lights"). */
+      var bdr = (global.Sim && global.Sim.berthDoor) ? global.Sim.berthDoor(port, b) : null;
+      var door = bdr ? bdr.door
+               : [ap.mid[0] + ap.normal[0] * (ap.gate || 0),
                   ap.mid[1] + ap.normal[1] * (ap.gate || 0),
                   ap.mid[2] + ap.normal[2] * (ap.gate || 0)];
-      var e = ap.entry;
+      var e = bdr ? bdr.entry : ap.entry;
       /* Across the corridor: any axis not along it, made perpendicular. */
       var ref = Math.abs(e[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
       var x = [e[1] * ref[2] - e[2] * ref[1], e[2] * ref[0] - e[0] * ref[2], e[0] * ref[1] - e[1] * ref[0]];
@@ -8709,6 +8714,12 @@
    * times the tallest hull (11 m), so a header or a plate's underside
    * (0.009–0.013 measured) is never mistaken for it and a real bay is. */
   var DECK_MIN_ROOM = 0.03;
+  /* How far under its anchor box a berth's floor may lie and still be its
+   * floor: 3% of the box's height, or 0.004 radii (a floor plate's
+   * thickness, the same tolerance the gate leaves are matched with). The
+   * cradle's heavy throat is 0.18 radii tall and its floor is 0.0011 under
+   * the box; nothing else in the library is further out than that. */
+  var DECK_UNDER_BOX = 0.03, DECK_UNDER_PLATE = 0.004;
 
   function berthDeck(role, i) {
     var lib = libPort(role);
@@ -8752,7 +8763,8 @@
      * box has no such surface — the ring's, which hang below their deck,
      * all plate inside — does the old most-room rule decide. */
     var boxH = b.max[2] - b.min[2];
-    var hits = [];
+    var underTol = Math.max(DECK_UNDER_PLATE, boxH * DECK_UNDER_BOX);
+    var hits = [], floors = [];
     var TOP = b.max[2] + 0.002, STEPS = 8;
     /* A DOOR IS NOT A FLOOR EITHER (2026-11-03). The ring's heavy bay opens
      * UPWARD: its box is the hall inside the hub, floor to roof, and its
@@ -8802,8 +8814,16 @@
           var dn = castZ([cx, cy, sz], -1);
           if (!isFinite(dn)) continue;
           var zc = sz - dn;
-          /* A deck outside the box it belongs to is not this berth's deck. */
-          if (zc < b.min[2] || zc > TOP) continue;
+          /* A deck outside the box it belongs to is not this berth's deck —
+           * but a deck a hair UNDER the box is. The cradle's heavy throat
+           * (berthLAlphaThroatFloor) is anchored with its bottom 1.2 m above
+           * its own floor plate, so the floor fell outside the box, every
+           * candidate left was the lintel, and the hull was parked on the
+           * roof of its own doorway — Astra at Mirven: "the ship is sitting
+           * at the top of the inside of the bay rather than at the base of
+           * it" (2026-11-03). DECK_UNDER_BOX of the box's height, or a
+           * plate's thickness, whichever is more. */
+          if (zc < b.min[2] - underTol || zc > TOP) continue;
           if (onLeaf(cx, cy, zc)) continue;
           var kz = zc.toFixed(5);
           if (seen[kz]) continue;
@@ -8815,7 +8835,7 @@
             floorRoom = up; floorPick = zc;
           }
         }
-        if (floorPick !== null) pick = floorPick;
+        if (floorPick !== null) { pick = floorPick; floors.push(floorPick); }
         if (pick !== null) hits.push(pick);
       }
     }
@@ -8841,6 +8861,26 @@
        * in the library moves. */
       var upRoom = castZ([o[0], o[1], zRoom + 1e-4], 1);
       if (upRoom >= DECK_MIN_ROOM) z = zRoom;
+    }
+    /* AND A LINTEL IS NOT A FLOOR (2026-11-03). The original reading — the
+     * first surface under the box's top — is right for a box that hangs
+     * below its deck (the ring's: plate inside, the deck at its top). It is
+     * wrong for a box that IS the throat, floor to lintel: there the first
+     * surface under the top is the lintel's own upper face, the open room
+     * over a doorway counts as "room above", and the hull was parked on top
+     * of the doorway. That is the cradle's heavy throat at Mirven, and
+     * Astra's "sitting at the top of the inside of the bay rather than at
+     * the base of it". So where most of the columns found a FLOOR — low in
+     * the box with most of the box clear over it (floorPick above) — and it
+     * is under the reading, the floor wins. A box that hangs below its deck
+     * has no such floor (it is plate inside), so the ring keeps its reading. */
+    /* Only a reading AT the top of the box (its top tenth) is a lintel's:
+     * the civil yards' cradles stand in the middle of boxes seven hundred
+     * metres tall, open to space over them, and are not doorways. */
+    if (floors.length * 2 > hits.length && z >= b.max[2] - boxH * 0.1) {
+      floors.sort(function (p, q) { return p - q; });
+      var zFloor = floors[Math.floor(floors.length / 2)];
+      if (zFloor < z - DECK_MIN_ROOM * 0.5) z = zFloor;
     }
     DECK[key] = z;
     return z;
