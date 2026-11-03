@@ -18938,9 +18938,26 @@
     ctx.save();
     ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(160,185,220,0.7)';
-    ctx.fillText('↑↓ select   ·   → buy 1t   ·   ← sell 1t   ·   hold Shift for 10t   ·   ' +
-                 'Home buy max   ·   End sell all   ·   F fill tank   ·   U undock   ·   Esc or M close',
-                 px + 20, py + ph - 34);
+    /* WRAPPED TO THE PANEL, NOT WRITTEN PAST IT. Astra, 2026-11-03:
+     * "there are options along the bottom ... floating off the box
+     * they're sitting inside of". One fixed line was wider than the panel
+     * at any width under about 1,350 px, so its tail ran out over the
+     * border. The keys are laid out a phrase at a time and broken onto a
+     * second line where the panel ends, the extra line growing UP so the
+     * last trade line below keeps its place. Y (the trade analyser) is
+     * listed now too: the old line had no room for it. */
+    var keys = ['↑↓ select', '→ buy 1t', '← sell 1t', 'hold Shift for 10t', 'Home buy max',
+                'End sell all', 'F fill tank', 'Y trade analyser', 'U undock', 'Esc or M close'];
+    var maxW = pw - 40, sep = '   ·   ', rows = [''];
+    for (var ki = 0; ki < keys.length; ki++) {
+      var cur = rows[rows.length - 1];
+      var tryLine = cur ? cur + sep + keys[ki] : keys[ki];
+      if (cur && ctx.measureText(tryLine).width > maxW) rows.push(keys[ki]);
+      else rows[rows.length - 1] = tryLine;
+    }
+    for (var ri = 0; ri < rows.length; ri++) {
+      ctx.fillText(rows[ri], px + 20, py + ph - 34 - (rows.length - 1 - ri) * 14);
+    }
     if (G.ledgerLog.length) {
       ctx.fillStyle = '#7fd6c0';
       ctx.fillText(G.ledgerLog[0].text, px + 20, py + ph - 16);
