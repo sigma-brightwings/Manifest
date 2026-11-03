@@ -83,8 +83,7 @@ var GROUPS = {
   ],
   ground: [
     'test/survey.test.js', 'test/claims.test.js', 'test/ground.test.js',
-    'test/mining.test.js', 'test/prospectors.test.js'
-  ],
+    'test/mining.test.js', 'test/prospectors.test.js', 'test/biomes.test.js'],
   story: [
     'test/arcs.test.js', 'test/captains.test.js', 'test/captain-stories.test.js',
     'test/messages.test.js', 'test/favours.test.js', 'test/rumours.test.js',

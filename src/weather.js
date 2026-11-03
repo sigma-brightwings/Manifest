@@ -460,11 +460,194 @@
       var edge = T.ice * (0.85 + 0.30 * elev);
       ice = smoothstep(1 - edge - 0.06, 1 - edge + 0.06, lat);
     }
-    return { elev: elev, sea: sea, ice: ice, lava: !!T.lava };
+    var bio = biomeAt(body, p, elev, sea, ice, sunB);
+    return { elev: elev, sea: sea, ice: ice, lava: !!T.lava, biome: bio.name, bio: bio };
+  }
+
+  /* ---- BIOMES (2026-11-02) ----------------------------------------------
+   *
+   * Astra: "Can we also have some more earthlike biomes on planets?" A
+   * terran world was one land colour with a coastline cut into it. Now its
+   * land is split the way Whittaker split Earth's: by TEMPERATURE and by
+   * MOISTURE, read off things the world already has.
+   *
+   *   TEMPERATURE. The world's own warmth is its insolation (generate.js,
+   *   Earth = 1). Measured across 40 systems in four galaxies, terran
+   *   worlds run 0.33 to 1.74 (median 0.69), oceans 0.35 to 1.65, tundras
+   *   0.11 to 2.47; so `warm` is 0.62 + 0.30 log2(insolation), which puts
+   *   the median terran's equator in the warm-temperate band and its poles
+   *   in tundra, the cold edge of the zone at a temperate equator and the
+   *   hot edge at a tropical one. Latitude comes off the real spin axis;
+   *   height above the sea cools it (a lapse rate in elevation units, as a
+   *   fraction of the world's own relief).
+   *
+   *   MOISTURE. Close to the sea is wet; the rest is a low-frequency noise
+   *   field (a second fbm, offset from the elevation's), so the interior
+   *   of a continent has its own wet and dry country.
+   *
+   * The colour is a 4 x 3 grid in (temperature, moisture), interpolated
+   * bilinearly, so no two biomes ever meet at a line; wetland, bare rock
+   * and snow lie over it on their own smooth ramps. It is then tinted a
+   * little toward the world's own colour, and blended into it by `mix`:
+   * a desert keeps most of its sand and gets scrub and oases at the edges
+   * of its dry basins; a tundra keeps its cold palette.
+   *
+   * ONE COPY, TWO LANGUAGES. gl.js builds its GLSL from this table and
+   * this arithmetic (GL.planetShaderSource; test/biomes.test.js holds the
+   * two together), and nothing here draws from any stream: the moisture
+   * field is the elevation field's own lookup, offset. Same seed, same
+   * biomes.
+   *
+   * `biome` is a NAME for what is under you, for the game to say. Nothing
+   * reads it for gameplay yet. */
+  var BIOME = {
+    /* Per world type. `mix`: how far the land goes from the world's colour
+     * to the biome colour. `moist`: added to the moisture everywhere.
+     * `warm`: added to the warmth — a TUNDRA is a cold world by type, and
+     * measured it can sit at a median terran's insolation (Kawartha star
+     * 4's tundra is at 0.69); read off insolation alone it came out as
+     * green as a terran from orbit, which is the type lying. `marsh`: how
+     * much wetland its coasts grow. A desert's dry basins are not shores,
+     * and ringed with marsh they read from orbit as dark holes. */
+    worlds: {
+      terran: { mix: 0.78, moist: 0.00, warm: 0.00, marsh: 1.0 },
+      ocean:  { mix: 0.78, moist: 0.15, warm: 0.00, marsh: 1.0 },
+      tundra: { mix: 0.40, moist: -0.05, warm: -0.35, marsh: 0.6 },
+      desert: { mix: 0.50, moist: -0.42, warm: 0.00, marsh: 0.0 }
+    },
+    warmBase: 0.62, warmLog: 0.30, warmMin: -0.40, warmMax: 1.10,
+    equator: 0.25,       // the equator is this much warmer than the world...
+    pole: 0.80,          // ...and the pole this much colder (x lat^2)
+    /* MOUNTAINS are absolute height on the elevation field, not height
+     * above the sea: measured over 40 worlds the field's 90th percentile is
+     * 0.562, its 99th 0.637 and its 99.9th 0.690, the same on every world.
+     * Measured from a desert's dry-basin level (0.16) instead, 87% of every
+     * desert came out mountain or snow. hM runs 0 at 0.56 to 1 at 0.66. */
+    mountLo: 0.56, mountSpan: 0.10,
+    lapse: 0.50,         // cooling at hM = 1
+    snowT: -0.30,        // below this it is snow, whatever grows above it
+    /* A terminator world's temperature is where you are across its ring
+     * (the sun's height, ndl), not latitude. Centred temperate and running
+     * cool to the night edge and warm to the day edge. A first cut of 0.55 +
+     * 1.4(ndl - 0.15) made the ring hot, and Low Deep's band (Kaynxa) went
+     * from the old olive to savanna tan: right by the numbers, but the
+     * band is the one living place on the world and it stopped looking
+     * alive. Its air circulates day to night, so its moisture is floored. */
+    ringT: 0.45, ringSlope: 1.0, ringMoist: 0.10,
+    coast: 0.10,         // height above the sea within which the coast is wet
+    coastWet: 0.55, noiseWet: 0.70,
+    moistScale: 1.7, moistOffset: 11.3,
+    tint: 0.25,          // toward the world's own hue
+    /* Rows: polar, cold, temperate, hot. Columns: dry, mid, wet. */
+    grid: [
+      [[0.56, 0.53, 0.46], [0.50, 0.51, 0.42], [0.43, 0.48, 0.39]],
+      [[0.62, 0.58, 0.43], [0.40, 0.46, 0.30], [0.17, 0.30, 0.20]],
+      [[0.72, 0.64, 0.47], [0.47, 0.57, 0.28], [0.19, 0.38, 0.16]],
+      [[0.84, 0.70, 0.46], [0.65, 0.59, 0.31], [0.10, 0.32, 0.11]]
+    ],
+    wet: [0.26, 0.35, 0.24], rock: [0.55, 0.51, 0.47], snow: [0.93, 0.95, 0.98]
+  };
+  var BIOME_NONE = { mix: 0, moist: 0, warm: 0, marsh: 0 };
+  function biomeParams(body) {
+    var w = BIOME.worlds[body && body.type] || BIOME_NONE;
+    var ins = (body && body.insolation > 0) ? body.insolation : 1;
+    var warm = BIOME.warmBase + BIOME.warmLog * Math.log(ins) / Math.LN2 + w.warm;
+    warm = Math.max(BIOME.warmMin, Math.min(BIOME.warmMax, warm));
+    /* A twilight world's living band is its oasis whatever the world is
+     * (generate.js: "Desert and tundra worlds qualify too — the ring is
+     * the oasis"), so a dry world's band is not made dry again here, nor
+     * washed back to sand: blended at a desert's 0.5, Low Deep's ring
+     * (Kaynxa) went from the old flat olive to tan, and the oasis was gone.
+     * Only the band ever shows this colour (gl.js uses it as the band's
+     * verdure), so the world outside it is untouched. */
+    var band = body && (body.habitableBand === 'terminator' || body.habitableBand === 'equator');
+    return { mix: band ? Math.max(BIOME.worlds.terran.mix, w.mix) : w.mix, moist: band ? Math.max(BIOME.ringMoist, w.moist) : w.moist, warm: warm, marsh: band ? Math.max(0.6, w.marsh) : w.marsh };
+  }
+  function hexRgb(h) {
+    var m = /^#?([0-9a-f]{6})$/i.exec(h || '');
+    if (!m) return [0.5, 0.5, 0.5];
+    var v = parseInt(m[1], 16);
+    return [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
+  }
+  function mix3(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
+  /* The shader's biomeColour, line for line. `p` body-fixed unit, `elev`
+   * the warped elevation, `ndl` the sun's height (a terminator world's
+   * temperature is its ring position, not its latitude). Returns the
+   * colour, the two axes and the overlay weights, and the name. */
+  function biomeAt(body, p, elev, sea, ice, sunB) {
+    var T0 = terrainOf(body), bp = biomeParams(body);
+    var k = spinAxis(body), band = body && body.habitableBand;
+    var lat = Math.abs(p.x * k.x + p.y * k.y + p.z * k.z);
+    var h = elev - T0.ocean;
+    var hN = Math.max(0, elev - BIOME.mountLo) / BIOME.mountSpan;
+    var t;
+    if (band === 'terminator') {
+      var ndl = sunB ? (p.x * sunB.x + p.y * sunB.y + p.z * sunB.z) : 0.15;
+      t = BIOME.ringT + BIOME.ringSlope * (ndl - 0.15);
+    } else {
+      t = bp.warm + BIOME.equator - BIOME.pole * lat * lat;
+    }
+    t -= BIOME.lapse * hN;
+    var sd = hashSeed(body.id);
+    var q = BIOME.moistScale * 2.6, o = sd + BIOME.moistOffset;
+    var mn = fbm(p.x * q + o, p.y * q + o, p.z * q + o);
+    mn = Math.max(0, Math.min(1, 0.5 + (mn - 0.47) * 3.2));
+    var coastW = 1 - smoothstep(0, BIOME.coast, h);
+    var m = Math.max(0, Math.min(1, BIOME.coastWet * coastW + BIOME.noiseWet * (mn - 0.5) + 0.40 + bp.moist));
+    var col = biomeGrid(t, m);
+    var wetW = (1 - smoothstep(0.0, 0.02, h)) * smoothstep(0.55, 0.75, m) * smoothstep(0.20, 0.35, t) * bp.marsh;
+    col = mix3(col, BIOME.wet, wetW);
+    var rockW = smoothstep(0.35, 0.70, hN);
+    col = mix3(col, BIOME.rock, rockW);
+    var snowW = Math.max(smoothstep(0.85, 1.0, hN) * (1 - smoothstep(0.25, 0.45, t)),
+                         1 - smoothstep(BIOME.snowT - 0.12, BIOME.snowT, t));
+    col = mix3(col, BIOME.snow, snowW);
+    var wc = hexRgb(body && body.color);
+    var wl = Math.max((wc[0] + wc[1] + wc[2]) / 3, 0.05);
+    var tinted = [col[0] * (1 + (wc[0] / wl - 1) * BIOME.tint), col[1] * (1 + (wc[1] / wl - 1) * BIOME.tint),
+                  col[2] * (1 + (wc[2] / wl - 1) * BIOME.tint)];
+    var rgb = mix3(wc, tinted, bp.mix);
+    return { name: biomeName(body, T0, bp, t, m, sea, ice, wetW, rockW, snowW, sunB, p, elev),
+             rgb: rgb, t: t, m: m, wet: wetW, rock: rockW, snow: snowW };
+  }
+  function biomeGrid(t, m) {
+    var g = BIOME.grid;
+    var ti = Math.max(0, Math.min(1, t)) * 3, mi = Math.max(0, Math.min(1, m)) * 2;
+    var i0 = Math.min(2, Math.floor(ti)), j0 = Math.min(1, Math.floor(mi));
+    var ft = ti - i0, fm = mi - j0;
+    var a = mix3(g[i0][j0], g[i0][j0 + 1], fm), b = mix3(g[i0 + 1][j0], g[i0 + 1][j0 + 1], fm);
+    return mix3(a, b, ft);
+  }
+  /* What it is called. Not a shader line: the picture blends, the name
+   * picks whichever thing dominates. */
+  function biomeName(body, T0, bp, t, m, sea, ice, wetW, rockW, snowW, sunB, p, elev) {
+    var type = body && body.type;
+    if (sea > 0.5) return T0.lava ? 'lava sea' : type === 'desert' ? 'salt flat' : 'sea';
+    if (ice > 0.5) return 'ice cap';
+    var band = body && body.habitableBand;
+    if (band === 'terminator' && sunB) {
+      var ndl = p.x * sunB.x + p.y * sunB.y + p.z * sunB.z;
+      if (smoothstep(0.40, 0.64, ndl + (elev - 0.5) * 0.16) > 0.5) return 'scorched rock';
+    } else if (band === 'equator') {
+      var k = spinAxis(body);
+      if (smoothstep(0.34, 0.58, Math.abs(p.x * k.x + p.y * k.y + p.z * k.z) + (elev - 0.5) * 0.12) > 0.5) return 'polar waste';
+    }
+    if (!(bp.mix > 0)) return type === 'molten' ? 'lava plain' : type === 'iceball' ? 'ice' : 'bare rock';
+    if (snowW > 0.5) return 'snowfield';
+    if (rockW > 0.5) return 'mountain';
+    if (wetW > 0.5) return 'wetland';
+    /* A desert world's scrub only counts where the biome has actually
+     * coloured the ground; elsewhere it is the world's own sand. */
+    if (type === 'desert' && m < 0.30) return 'desert';
+    if (t < 1 / 6) return 'tundra';
+    if (t < 0.5) return m < 0.25 ? 'steppe' : 'taiga';
+    if (t < 5 / 6) return m < 0.25 ? 'desert' : m < 0.62 ? 'grassland' : 'temperate forest';
+    return m < 0.30 ? 'desert' : m < 0.65 ? 'savanna' : 'rainforest';
   }
 
   var Weather = {
     TERRAIN: TERRAIN, terrainOf: terrainOf, terrainAt: terrainAt,
+    BIOME: BIOME, biomeParams: biomeParams, biomeAt: biomeAt, biomeGrid: biomeGrid,
     elevationAt: elevationAt, bodyFixed: bodyFixed, spinAxis: spinAxis,
     K: K, fbm: fbm, hashSeed: hashSeed, sample: sample, lookup: lookup,
     report: report, describe: describe, hasWeather: hasWeather,

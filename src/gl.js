@@ -430,6 +430,63 @@
     '}'
   ].join('\n');
 
+  /* ---- BIOMES, the GLSL half (2026-11-02) -------------------------------
+   * Weather.BIOME and Weather.biomeAt are the reasoning and the numbers;
+   * this is the same arithmetic, built FROM that table at load so a
+   * constant cannot be nudged in one language and not the other
+   * (test/biomes.test.js checks the built source against the table). gl.js
+   * loaded on its own (the hull viewer) has no Weather, and gets a stub
+   * that returns the world's own colour, which is what every world looked
+   * like before. */
+  var BIOME_GLSL = (function () {
+    var W = global.Weather, B = W && W.BIOME;
+    var f = function (v) { return (+v).toFixed(5); };
+    var v3 = function (c) { return 'vec3(' + f(c[0]) + ', ' + f(c[1]) + ', ' + f(c[2]) + ')'; };
+    var head = 'uniform vec4 uBio;';     // x: mix, y: moisture bias, z: warmth, w: marsh
+    if (!B) return [head, 'vec3 biomeColour(vec3 sp, vec3 n, float elev, float ndl, float gdx) { return uColor; }'].join('\n');
+    var cells = [];
+    for (var i = 0; i < 4; i++) for (var j = 0; j < 3; j++) cells.push(v3(B.grid[i][j]));
+    return [
+      head,
+      'const vec3 BIOME_GRID[12] = vec3[12](' + cells.join(', ') + ');',
+      'vec3 biomeCell(int i, int j) { return BIOME_GRID[i * 3 + j]; }',
+      'vec3 biomeGrid(float t, float m) {',
+      '  float ti = clamp(t, 0.0, 1.0) * 3.0, mi = clamp(m, 0.0, 1.0) * 2.0;',
+      '  int i0 = min(2, int(floor(ti))), j0 = min(1, int(floor(mi)));',
+      '  float ft = ti - float(i0), fm = mi - float(j0);',
+      '  vec3 a = mix(biomeCell(i0, j0), biomeCell(i0, j0 + 1), fm);',
+      '  vec3 b = mix(biomeCell(i0 + 1, j0), biomeCell(i0 + 1, j0 + 1), fm);',
+      '  return mix(a, b, ft);',
+      '}',
+      /* `sp` is the terrain block's body-fixed lookup (n * 2.6 + uSeed);
+       * `gdx` the ground detail's brightness term, so biome edges are
+       * ragged at ground scale too (zero from orbit). */
+      'vec3 biomeColour(vec3 sp, vec3 n, float elev, float ndl, float gdx) {',
+      '  float lat = abs(dot(n, uSpinAxis));',
+      '  float h = elev - uOcean;',
+      '  float hN = max(0.0, elev - ' + f(B.mountLo) + ') / ' + f(B.mountSpan) + ';',
+      '  float t = (uBand > 0.5 && uBand < 1.5) ? ' + f(B.ringT) + ' + ' + f(B.ringSlope) + ' * (ndl - 0.15)',
+      '          : uBio.z + ' + f(B.equator) + ' - ' + f(B.pole) + ' * lat * lat;',
+      '  t -= ' + f(B.lapse) + ' * hN;',
+      '  vec3 mp = (sp - uSeed) * ' + f(B.moistScale) + ' + uSeed + ' + f(B.moistOffset) + ';',
+      '  float mn = clamp(0.5 + (fbm(mp) - 0.47) * 3.2, 0.0, 1.0);',
+      '  float coastW = 1.0 - smoothstep(0.0, ' + f(B.coast) + ', h);',
+      '  float m = clamp(' + f(B.coastWet) + ' * coastW + ' + f(B.noiseWet) + ' * (mn - 0.5) + 0.40 + uBio.y + gdx * 0.25, 0.0, 1.0);',
+      '  vec3 col = biomeGrid(t, m);',
+      '  float wetW = (1.0 - smoothstep(0.0, 0.02, h)) * smoothstep(0.55, 0.75, m) * smoothstep(0.20, 0.35, t) * uBio.w;',
+      '  col = mix(col, ' + v3(B.wet) + ', wetW);',
+      '  float rockW = smoothstep(0.35, 0.70, hN);',
+      '  col = mix(col, ' + v3(B.rock) + ', rockW);',
+      '  float snowW = max(smoothstep(0.85, 1.0, hN) * (1.0 - smoothstep(0.25, 0.45, t)),',
+      '                    1.0 - smoothstep(' + f(B.snowT - 0.12) + ', ' + f(B.snowT) + ', t));',
+      '  col = mix(col, ' + v3(B.snow) + ', snowW);',
+      '  float wl = max(dot(uColor, vec3(1.0 / 3.0)), 0.05);',
+      '  vec3 tinted = col * (vec3(1.0) + (uColor / wl - vec3(1.0)) * ' + f(B.tint) + ');',
+      '  return mix(uColor, tinted, uBio.x);',
+      '}'
+    ].join('\n');
+  })();
+
   var FRAG_BODY = [
     '#version 300 es',
     'precision highp float;',
@@ -595,6 +652,8 @@
     '}',
     /* Near-ground detail, in its own functions: see GD above. */
     GROUND_DETAIL_GLSL,
+    /* Biomes: see BIOME_GLSL above and Weather.BIOME. */
+    BIOME_GLSL,
 
     'void main() {',
     /* The view ray for this pixel, in world axes, from the eye. */
@@ -838,7 +897,11 @@
     /* GD: the coast and the cap edge, crinkled at ground scale. */
     '  elev += gd.z;',
 
-    '  vec3 base = uColor;',
+    /* BIOMES: the land colour from temperature and moisture (Weather.
+     * BIOME). A twilight world keeps its own colour outside its band and
+     * takes the biome as the band's living colour below. */
+    '  vec3 bio = uBio.x > 0.0 ? biomeColour(sp, n, elev, ndl, gd.x) : uColor;',
+    '  vec3 base = uBand > 0.5 ? uColor : bio;',
     '  float sea = 0.0;',
     '  if (uOcean > 0.001) {',
     '    sea = 1.0 - smoothstep(uOcean - 0.035, uOcean + 0.035, elev);',
@@ -866,7 +929,8 @@
      * like somewhere things grow rather than more of the same sand. */
     '  vec3 scorch = vec3(0.92, 0.82, 0.64) * (0.86 + 0.22 * elev);',
     '  vec3 frost = vec3(0.86, 0.91, 0.97);',
-    '  vec3 verdure = vec3(0.30, 0.46, 0.24) * (0.80 + 0.40 * elev);',
+    '  vec3 verdure = uBio.x > 0.0 ? bio * (0.80 + 0.40 * elev)',
+    '                               : vec3(0.30, 0.46, 0.24) * (0.80 + 0.40 * elev);',
     '  if (uBand > 0.5 && uBand < 1.5) {',
     '    float jag = (elev - 0.5) * 0.16;',
     /* The ring sits a little sunward of the geometric terminator — the
@@ -2380,7 +2444,7 @@
                               'uHoleRel', 'uHoleR', 'uHoleDepth', 'uHaloPush',
                               'uConeS', 'uConeR', 'uSkyA', 'uSkyUp', 'uSkySun',
                               'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD', 'uBoxTop',
-                              'uGdOn', 'uGdAnchorRel', 'uGdAnchorCell', 'uGdCq',
+                              'uGdOn', 'uGdAnchorRel', 'uGdAnchorCell', 'uGdCq', 'uBio',
                               'uTear', 'uTearK', 'uTearN']);
 
     /* The pit wall (GL.queueGroundWall): one full-screen pass. */
@@ -3600,6 +3664,9 @@
       gl.uniform1f(uni.uOcean, (isStar || banded) ? 0 : terr.ocean);
       gl.uniform3f(uni.uSeaColor, sc[0], sc[1], sc[2]);
       gl.uniform1f(uni.uIce, (isStar || banded) ? 0 : terr.ice);
+      var bpar = (!isStar && !banded && global.Weather && global.Weather.biomeParams)
+                 ? global.Weather.biomeParams(b) : null;
+      gl.uniform4f(uni.uBio, bpar ? bpar.mix : 0, bpar ? bpar.moist : 0, bpar ? bpar.warm : 0, bpar ? bpar.marsh : 0);
       gl.uniform1f(uni.uSeed, hashSeed(b.id));
       var sp2 = spinOf(b, q.t);
       gl.uniform3f(uni.uSpinAxis, sp2.ax.x, sp2.ax.y, sp2.ax.z);

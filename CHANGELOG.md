@@ -228,6 +228,54 @@ before they update.
   not yet measured on the Crawler.
 - Not saved; no save change.
 
+### Added (2026-11-02, biomes)
+
+- **Earthlike biomes** (Astra: "Can we also have some more earthlike
+  biomes on planets?"). The land on terran, ocean and tundra worlds, and
+  more lightly on deserts, is split Whittaker-style by temperature and
+  moisture.
+  - **Temperature** comes from the world's insolation
+    (`warm` = 0.62 + 0.30 log2(insolation), measured against the range
+    across 40 systems), cooled by latitude off the real spin axis and by
+    height on the mountains.
+  - **Moisture** comes from distance to the sea plus a low-frequency
+    noise field.
+  - **Colour:** a 4 x 3 colour grid interpolated bilinearly, with wetland,
+    bare rock and snow on smooth ramps over it, so nothing meets at a
+    line. Each world's own colour tints it a little, and per-type
+    blending means a desert keeps most of its sand and a tundra its cold
+    grey.
+  - **Twilight worlds** take the biome as their band's living colour.
+    Green appears only in the band: the suite checks 2,749 green samples
+    in the ring and none outside it, over 26 terminator worlds.
+  - **No biomes** on rocky, molten or iceball worlds, or on giants.
+- **One copy, two languages.** `Weather.BIOME` holds the table and
+  `Weather.biomeAt` the arithmetic. gl.js builds its GLSL (`biomeColour`)
+  from that table at load. `terrainAt` now also returns `biome`, a name
+  such as taiga, savanna, ice cap or wetland. Nothing in gameplay reads it
+  yet.
+- **Ground detail and biomes.** Up close, the ground detail multiplies
+  the biome colour and nudges the moisture, so biome edges are ragged at
+  ground scale (this part is shader-only and zero from orbit).
+- **Distribution** (test/biomes.test.js, 261 worlds, four galaxies):
+  - **Terran land** (11.9% of the surface; the rest is sea, as before):
+    taiga 28%, ice cap 16%, tundra 16%, temperate forest 13%, mountain 9%,
+    wetland 9%, grassland 4%, snowfield 3%, rainforest 1.4%,
+    savanna 0.9%. It runs boreal because the median terran gets 0.69 of
+    Earth's sunlight.
+  - **Desert:** desert 84%, ice cap 6%, savanna 5%, mountain 2%.
+  - **Tundra:** tundra 45%, ice cap 33%, snowfield 11%, taiga 6%.
+- **Nothing the survey reads moved.** Elevation, sea and ice from
+  `terrainAt` are bit-identical (checked on 4,000 points). The survey,
+  ground, claims, mining, prospectors, farms and weather suites pass
+  unchanged.
+- Found while measuring: **a desert's "dry basins" never appear.** Their
+  level is 0.16 on the elevation field, and the field's 1st percentile is
+  0.294. This was already true before this change and was left alone.
+- **Cost:** one more 4-octave fbm per planet pixel on biome worlds,
+  against the eight the terrain and cloud shading already pay.
+- New test file `test/biomes.test.js` (group `ground`).
+
 ### Fixed (2026-11-02, ground ports seen from outside, second round)
 
 - **The ground-port view was upside down.** The first round's camera frame
