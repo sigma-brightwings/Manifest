@@ -170,7 +170,14 @@ check('density x speed x area x facing, in tonnes', Math.abs(got - expect) < 1e-
 function aimed(fwd) { var Ga = { here: { id: 'test' }, extracted: {} }; Ga.ship = inAir(giant, gsys, 0.85, t0); Ga.ship.fwd = fwd;
   return { got: Mn.skimStep(Ga, gsys, t0, 1, true), sk: Ga.skimming }; }
 var side = aimed({ x: 1, y: 0, z: 0 }), tail = aimed({ x: 0, y: -1, z: 0 });
-var off60 = aimed(V.norm({ x: 0, y: 0.5, z: Math.sqrt(3) / 2 }));
+/* 60 degrees off the AIR, which turns with the giant (2026-11-03): the
+ * oncoming air is no longer exactly along the orbit (+y) once the giant's
+ * spin - tilted, and a few km/s at this height - is taken off it, so the
+ * angle is measured from the wind the scoop actually meets (sk.airDir).
+ * This was 60 degrees off +y, which was 60 degrees off the air only while
+ * the air stood still. */
+var aDir = sk.airDir, aPerp = V.norm(V.cross(aDir, { x: 1, y: 0, z: 0 }));
+var off60 = aimed(V.norm(V.add(V.scale(aDir, 0.5), V.scale(aPerp, Math.sqrt(3) / 2))));
 check('side-on, the scoop takes nothing', side.got === 0 && side.sk && side.sk.face === 0);
 check('tail first, nothing', tail.got === 0);
 check('60 degrees off, about half', Math.abs(off60.got / got - 0.5) < 0.03, (off60.got / got).toFixed(3));

@@ -49,7 +49,8 @@ var GROUPS = {
     'test/self.test.js', 'test/release.test.js', 'test/physics.test.js',
     'test/nodes.test.js', 'test/galaxy.test.js', 'test/weather.test.js',
     'test/orbitline.test.js', 'test/heading.test.js', 'test/airdata.test.js',
-    'test/twilight.test.js', 'test/polar.test.js', 'test/rings.test.js'
+    'test/twilight.test.js', 'test/polar.test.js', 'test/rings.test.js',
+    'test/turningground.test.js'
   ],
   render: ['test/render.test.js'],
   view: [

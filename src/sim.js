@@ -1109,7 +1109,40 @@
     var st = bodyState(dom, sys, t);
     var alt = V.dist(pos, st.pos) - dom.radius;
     if (alt >= dom.atmosphere.top) return null;
-    return { body: dom, pos: st.pos, vel: st.vel };
+    /* `vel` stays the world's CENTRE velocity (mining, the contrails and
+     * the vector assist's body all read it as that); `omega` is how fast the
+     * air turns with the ground, so airVelocity can give the wind a point in
+     * it actually feels. See the note on dragAccel for why that matters. */
+    return { body: dom, pos: st.pos, vel: st.vel, omega: spinOmega(dom) };
+  }
+
+  /* A world's spin as a vector, rad/s - omega built exactly as surfaceOffset
+   * builds it (the same period, tilt and az; the same default day for a
+   * world with no rotation given), so omega x r at a port's ground is the
+   * port's own velocity about the centre to the last digit. One copy: the
+   * ground speed on the HUD, the drag, the heat and the landing check all
+   * have to agree about how fast the ground under them is going. */
+  function spinOmega(body) {
+    var rot = body.rotation || { period: 86400, tilt: 0, phase: 0 };
+    var w = K.TAU / rot.period, ct = Math.cos(rot.tilt || 0), s = Math.sin(rot.tilt || 0);
+    var om = { x: 0, y: -s * w, z: ct * w };
+    if (rot.az) {
+      var ca = Math.cos(rot.az), sa = Math.sin(rot.az);
+      om = { x: ca * om.x - sa * om.y, y: sa * om.x + ca * om.y, z: om.z };
+    }
+    return om;
+  }
+
+  /* The air's own velocity at `pos`, from an atmosphereContext: the world's
+   * centre plus omega x r. A context with no omega (built by hand, or from
+   * an older caller) is treated as still air, the old behaviour. */
+  function airVelocity(atmo, pos) {
+    var om = atmo.omega;
+    if (!om) return atmo.vel;
+    var rx = pos.x - atmo.pos.x, ry = pos.y - atmo.pos.y, rz = pos.z - atmo.pos.z;
+    return { x: atmo.vel.x + om.y * rz - om.z * ry,
+             y: atmo.vel.y + om.z * rx - om.x * rz,
+             z: atmo.vel.z + om.x * ry - om.y * rx };
   }
 
   /* Drag acceleration, km/s^2.
@@ -1123,14 +1156,28 @@
    * Velocity is measured RELATIVE TO THE BODY, not absolutely: a ship
    * parked in a planet's atmosphere is still doing 30 km/s around the star,
    * and charging it drag for the planet's own orbital motion would burn it
-   * up while sitting on the pad. Rotation of the atmosphere itself is
-   * ignored; it is a few hundred m/s against entry speeds in the thousands. */
+   * up while sitting on the pad.
+   *
+   * AND RELATIVE TO THE AIR, WHICH TURNS WITH ITS WORLD (2026-11-03). This
+   * used to say rotation of the atmosphere was ignored, "a few hundred m/s
+   * against entry speeds in the thousands". Measured over 40 kawartha
+   * systems it is not a few hundred: rocky worlds with air turn their
+   * equators at up to 2,040 m/s (median 118), and the giants at up to
+   * 20 km/s (median 7,030). And entry speed is not the case that bit - a
+   * ship HOVERING still over the ground at a fast equator was charged drag
+   * for the world's whole spin, so the hover assist fought a gale that was
+   * not there, and the HUD (which since 2026-11-02 reads speed against the
+   * turning ground) said she was still while the air said she was flying.
+   * So: the wind at each RK4 stage's own point, the centre's velocity plus
+   * omega x r (airVelocity). What it changes in play is real and wanted: a
+   * prograde entry or skim meets the air slower than its orbital speed by
+   * the ground's spin, a retrograde one faster - and heat goes as the cube. */
   function dragAccel(pos, vel, atmo, ship) {
     if (!atmo) return ZERO_ACC;
     var alt = V.dist(pos, atmo.pos) - atmo.body.radius;
     var rho = airDensity(atmo.body, alt);
     if (rho <= 0) return ZERO_ACC;
-    var rel = V.sub(vel, atmo.vel);
+    var rel = V.sub(vel, airVelocity(atmo, pos));
     var speed = V.len(rel);
     if (speed < 1e-9) return ZERO_ACC;
     var k = 0.5 * rho * speed * (ship.dragArea || DEFAULT_DRAG_AREA) * DRAG_SCALE /
@@ -1387,7 +1434,9 @@
     var alt = V.dist(ship.pos, atmo.pos) - atmo.body.radius;
     var rho = airDensity(atmo.body, alt);
     if (rho <= 0) { ship.windDir = null; return 0; }
-    var rel = V.sub(ship.vel, atmo.vel);
+    /* Through the air that is THERE - turning with its world, the same wind
+     * dragAccel charges (2026-11-03). */
+    var rel = V.sub(ship.vel, airVelocity(atmo, ship.pos));
     var v = V.len(rel);
     /* Which way the air is arriving from, in world space. Stored rather
      * than recomputed by the renderer: it falls out of the flux
@@ -4441,20 +4490,39 @@
          * radius on purpose. Without this the first metre of a launch is
          * a crash into the planet you are standing in a hangar inside. */
         if (insideShaft(ship, sys, t, b)) continue;
-        var bv = bodyVelocity(b, sys, t);
-        var relSpeed = V.dist(ship.vel, bv);
+        // Sit on the surface rather than inside it.
+        var n = V.norm(V.sub(ship.pos, bp));
+        var contactPt = V.add(bp, V.scale(n, b.radius));
+        /* AGAINST THE GROUND SHE TOUCHES, NOT THE WORLD'S CENTRE (2026-11-03).
+         * This was V.dist(ship.vel, bodyVelocity(b)): the centre's velocity,
+         * which on a turning world is not the velocity of any ground there is.
+         * At a fast equator (1.8 km/s on an airful world with a port, 476 m/s
+         * on an airless one - measured over 60 systems) a hull sitting dead
+         * still on the dirt was "arriving" at the ground's own spin and
+         * crashed, and one sliding in at that spin against the ground set
+         * down clean, because against the centre she was standing still. The
+         * ground under the contact point moves at surfaceVelocity there. */
+        var gv = surfaceVelocity(b, contactPt, sys, t);
+        var relSpeed = V.dist(ship.vel, gv);
 
         ship.landed = true;
         ship.landedOn = b;
         /* Gear down, 100 m/s relative is a hard but survivable arrival.
          * Gear up, there is no such thing as a good one — you are landing
-         * on the hull, and the number that matters is not your speed. */
+         * on the hull, and the number that matters is not your speed.
+         *
+         * THE 100 m/s IS KEPT, and it is a feel decision rather than a
+         * physics one (2026-11-03, to put to Astra). It is far more forgiving
+         * than a pad, where landingDamage starts charging at 20 and kills at
+         * 90. While it measured against the wrong frame it was loose by
+         * however fast the ground turned; now that it measures the right
+         * speed it is merely generous. Unifying open ground with the pad's
+         * damage ramp is the obvious next step and changes how landing in
+         * the wild feels, so it is not done silently here. */
         ship.crashed = !ship.gear || relSpeed > 0.1;
         ship.impactSpeed = relSpeed;
-        // Sit on the surface rather than inside it.
-        var n = V.norm(V.sub(ship.pos, bp));
-        ship.pos = V.add(bp, V.scale(n, b.radius));
-        ship.vel = V.clone(bv);
+        ship.pos = contactPt;
+        ship.vel = gv;
         /* A clean landing is a place on the world, not a frozen frame:
          * see landSpot / updateLandedShip. A crash stays a crash. */
         ship.landedAt = ship.crashed ? null : landSpot(b, sys, t, ship.pos);
@@ -4513,6 +4581,26 @@
     if (lon > Math.PI) lon -= K.TAU; else if (lon < -Math.PI) lon += K.TAU;
     return { body: body.id, lat: lat, lon: lon, elevation: 0.004 };
   }
+
+  /* A direction between the world's frame and the body's own turning one -
+   * the same spin, tilt and az, in the same order, as surfaceOffset puts a
+   * point on the ground. `toBody` true goes world -> body. */
+  function bodyFixedDir(body, t, v, toBody) {
+    var rot = body.rotation || { period: 86400, tilt: 0, phase: 0 };
+    var th = (rot.phase || 0) + (K.TAU / rot.period) * t;
+    var ct = Math.cos(rot.tilt || 0), st = Math.sin(rot.tilt || 0);
+    var ca = Math.cos(rot.az || 0), sa = Math.sin(rot.az || 0);
+    var c = Math.cos(th), s = Math.sin(th), x, y, z;
+    if (toBody) {
+      x = ca * v.x + sa * v.y; y = -sa * v.x + ca * v.y; z = v.z;            // undo az
+      var y1 = y * ct + z * st; z = -y * st + z * ct; y = y1;                 // undo tilt
+      return { x: c * x + s * y, y: -s * x + c * y, z: z };                   // undo spin
+    }
+    x = c * v.x - s * v.y; y = s * v.x + c * v.y; z = v.z;                    // spin
+    var y2 = y * ct - z * st; z = y * st + z * ct; y = y2;                    // tilt
+    return { x: ca * x - sa * y, y: sa * x + ca * y, z: z };                  // az
+  }
+
   function updateLandedShip(ship, sys, t) {
     var at = ship.landedAt;
     var body = at && sys.byId[at.body];
@@ -4520,12 +4608,25 @@
     var hs = bodyState(body, sys, t);
     var off = surfaceOffset(body, at, t);
     ship.pos = V.add(hs.pos, off.pos);
+    /* off.vel is omega x r at her spot: hs.vel + off.vel is surfaceVelocity
+     * there, which is what a hull standing on the ground is doing. */
     ship.vel = V.add(hs.vel, off.vel);
-    /* Sitting on its gear: up is the local vertical, the nose kept level. */
+    /* Sitting on its gear: up is the local vertical, the nose kept level.
+     *
+     * AND THE NOSE TURNS WITH THE GROUND (2026-11-03). Position rode the
+     * spin from the first day (surfaceOffset), but the nose was taken from
+     * ship.fwd and only levelled - a direction fixed in absolute space - so
+     * over a day a ship standing still on the dirt swung once round her own
+     * gear, against the ground, while nothing pushed her. `fwdB` is her nose
+     * in the body's own turning frame, kept on landedAt so it saves with the
+     * spot. A spot without one (a fresh touchdown, a save from before this)
+     * takes it from the nose she has now, which is exactly the migration. */
     var up = V.norm(off.pos);
-    var fwd = V.sub(ship.fwd || anyPerpendicular(up), V.scale(up, V.dot(ship.fwd || up, up)));
+    var have = at.fwdB ? bodyFixedDir(body, t, at.fwdB, false) : (ship.fwd || up);
+    var fwd = V.sub(have, V.scale(up, V.dot(have, up)));
     if (V.len(fwd) < 1e-6) fwd = anyPerpendicular(up);
     ship.fwd = V.norm(fwd); ship.up = up; ship.right = V.cross(ship.fwd, ship.up);
+    if (!at.fwdB) at.fwdB = bodyFixedDir(body, t, ship.fwd, true);
     return true;
   }
   function surfaceG(body) {
@@ -4824,8 +4925,16 @@
          * stands on the rig only while she faces the hub (walk.js
          * seaLayout) - so here she is re-faced every frame, the same way
          * dockShip faces her. (Every other surface port has the same drift;
-         * left as it is, and said so in the CHANGELOG.) */
-        if (target.seaPlatform && bs.basis) {
+         * left as it is, and said so in the CHANGELOG.)
+         *
+         * EVERY SURFACE PORT NOW (2026-11-03). The drift the note above
+         * left alone is the same bug at a shaft hangar: a hull berthed at
+         * dusk was lying across her own berth by midnight and nose-down
+         * into the floor by dawn, because the hangar turned with the world
+         * and she did not. dockShip already faces every surface berth with
+         * berthFacing, so re-facing every frame is the same pose held, not a
+         * new one. */
+        if (bs.basis) {
           ship.fwd = berthFacing(bs.basis, bs.off);
           ship.up = V.clone(bs.basis.up);
           ship.right = V.cross(ship.fwd, ship.up);
@@ -4837,6 +4946,14 @@
       var up = V.norm(V.sub(ts.pos, host.pos));
       ship.pos = V.addScaled(ts.pos, up, ship.dockOffset.height);
       ship.vel = V.clone(ts.vel);
+      /* Nose up, as dockShip stood her - and kept up as the world turns
+       * (2026-11-03), rather than left pointing where up was at docking. */
+      if (ship.fwd && V.dot(ship.fwd, up) < 0.999999) {
+        var keepR = V.sub(ship.right || anyPerpendicular(up), V.scale(up, V.dot(ship.right || up, up)));
+        ship.fwd = V.clone(up);
+        ship.right = V.len(keepR) > 1e-6 ? V.norm(keepR) : anyPerpendicular(up);
+        ship.up = V.cross(ship.right, ship.fwd);
+      }
       return target;
     }
 
@@ -6578,20 +6695,20 @@
    * az; the same default day for a world with no rotation given), so a
    * point fixed to a port's ground has exactly the port's velocity.
    *
-   * DISPLAY ONLY. Nothing that flies the ship reads this: the flight
-   * assist's lock, the vector assist's hover, the landing check and the
-   * autodock keep what they measure against (see the CHANGELOG entry, which
-   * says what each one is). */
+   * It was DISPLAY ONLY when it was written (2026-11-02) - and that was the
+   * bug, found the next day: the HUD read against the turning ground while
+   * everything that FLIES the ship still measured against the centre. A
+   * ship at rest on a fast equator was a crash at the ground's own speed,
+   * one arriving at that speed against the ground set down clean, a landed
+   * ship's nose turned once a day against the dirt under her, and the air
+   * stood still while the ground went round under it. Now the open-ground
+   * landing check (checkImpact), the drag and heat (airVelocity, the same
+   * omega), the vector assist's hover and the lift-off off open ground all
+   * measure against this. The flight assist's lock and the autodock already
+   * measured against the port, whose velocity carries the spin. */
   function surfaceVelocity(body, pos, sys, t) {
     var st = bodyState(body, sys, t);
-    var rot = body.rotation || { period: 86400, tilt: 0, phase: 0 };
-    var w = K.TAU / rot.period, ct = Math.cos(rot.tilt || 0), s = Math.sin(rot.tilt || 0);
-    var om = { x: 0, y: -s * w, z: ct * w };
-    if (rot.az) {
-      var ca = Math.cos(rot.az), sa = Math.sin(rot.az);
-      om = { x: ca * om.x - sa * om.y, y: sa * om.x + ca * om.y, z: om.z };
-    }
-    return V.add(st.vel, V.cross(om, V.sub(pos, st.pos)));
+    return V.add(st.vel, V.cross(spinOmega(body), V.sub(pos, st.pos)));
   }
 
   /* How near is near. Inside a world's air, always: there the speed that
@@ -7430,7 +7547,7 @@
     scanForImpact: scanForImpact,
     dockingStatus: dockingStatus,
     dockShip: dockShip,
-    landSpot: landSpot, updateLandedShip: updateLandedShip, liftOff: liftOff, surfaceG: surfaceG,
+    landSpot: landSpot, bodyFixedDir: bodyFixedDir, updateLandedShip: updateLandedShip, liftOff: liftOff, surfaceG: surfaceG,
     updateDockedShip: updateDockedShip,
     controlState: controlState, controlInRange: controlInRange,
     beginArrival: beginArrival, stepArrival: stepArrival,
@@ -7450,7 +7567,8 @@
     SEA_ARRIVE_KM: SEA_ARRIVE_KM, SEA_CLEAR_KM: SEA_CLEAR_KM,
     GEAR_DRAG_FACTOR: GEAR_DRAG_FACTOR,
     airDensity: airDensity,
-    atmosphereContext: atmosphereContext,
+    atmosphereContext: atmosphereContext, airVelocity: airVelocity, spinOmega: spinOmega,
+    dragAccel: dragAccel, airFlux: airFlux,
     heatFlux: heatFlux,
     updateHeating: updateHeating,
     coronaContext: coronaContext, starFlux: starFlux, coronaDensity: coronaDensity, coronaLineAlt: coronaLineAlt,

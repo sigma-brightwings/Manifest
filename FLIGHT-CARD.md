@@ -199,9 +199,16 @@ number: your speed against the ground turning under you, which is what you are a
 to touch. Sitting still over a pad reads about 0. Out of the air and higher than
 that, the band reads plain `speed`, against the world's centre, as an orbit is
 measured; the orbit map (`F2`) always shows that orbital `speed`.
+It is also the speed the ship is flown and judged by near the ground. Touchdown,
+lift-off, the air's drag and heat, and the vector assist's hover all measure
+against the ground and the air that turn with the world. Hold still over the
+ground and nothing pulls you along. Run an entry or a giant skim the way the
+world spins and you meet the air slower than your orbit, so there is less heat;
+run it against the spin and there is more.
 
 **11c. Set down away from a port** — on a claim, to plant a mining drone (`N`).
-Gear down (`Shift+G`), come in slow, and she stands on her gear. Touchdown shuts the
+Gear down (`Shift+G`), come in slow (under 100 m/s of `gnd speed`/`airspeed`), and she
+stands on her gear, nose where you left it, turning with the ground. Touchdown shuts the
 drive down; the band reads **DRIVE COLD · R TO START**. `R` starts her — two
 seconds of spool for a courier, longer for a bigger drive, that runs out once begun — and once the band says **DRIVE HOT**,
 `R` lifts her. Hold `R` straight through and she goes the moment she is hot. The
