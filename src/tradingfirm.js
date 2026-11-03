@@ -165,19 +165,34 @@
    * All of it is in TUNE so tools/measure-firms.cjs can try the
    * alternatives against the same seeds; the game never changes it. */
   var TUNE = {
-    /* THE HOUSE'S DENT FORGETS SLOWER THAN YOURS. Measured both ways on the
-     * same 30 seeds (tools/measure-firms.cjs depth): see the report numbers
-     * in CHANGELOG. A deeper dent per tonne cut EVERY run, the first on a
-     * fresh lane included, by the same slippage; a slower half-life leaves
-     * the first run of a rich lane as rich as it ever was and flattens the
-     * second, third and fourth — which is what "a rich lane should flatten
-     * after a few runs, so the house has to rotate routes" asks for. The
-     * market itself still forgets your trades and the house's on its own
-     * four days (Economy.LEDGER_HALFLIFE); what is slower is the house's
-     * book of where it has been selling: the brokers, the contracts and the
-     * buyers who have learnt it is coming. */
+    /* MARKET DEPTH, BOTH WAYS, MEASURED (tools/measure-firms.cjs depth and
+     * sweep, 2026-11-03; numbers in CHANGELOG). Two knobs, each doing a
+     * different job, and the house needs both:
+     *
+     *   footHalfLife — how long the house's OWN book remembers where it has
+     *   been selling. The market forgets your trades and the house's on its
+     *   own four days (Economy.LEDGER_HALFLIFE); the brokers, contracts and
+     *   buyers who have learnt a house is coming remember longer. At 16 days
+     *   a run repeating a lane inside a fortnight makes 0.65x a fresh one
+     *   (0.93x at four days), so a rich lane flattens after a few runs and
+     *   the house rotates — "so the house has to rotate routes". On its own
+     *   it hardly moved the quarter (2.85M → 2.50M median at rating 4),
+     *   because there are always other rich lanes to rotate to.
+     *
+     *   depthMul — how far the house's lot moves a shelf per tonne, against
+     *   yours at 1: a house buys through brokers in announced lots, and the
+     *   desk prices a known buyer accordingly. This is what cuts the quarter
+     *   (x2, x3, x4: rating-5 median 2.16M, 1.51M, 1.30M), and it is where
+     *   information shows: a house that prices its own size against the
+     *   shelf (rating 3 up, DEPTH_FROM) buys a lot the shelf can bear; one
+     *   that prices at the top of the book (1 and 2) overbuys, and at x4
+     *   loses money in 62% (rating 1) and 12% (rating 2) of quarters, with
+     *   real losses on real runs. x3 gave 12% and 6%. x4 it is: a back-
+     *   street house is a bad bet, a small one a risky one, and a sound one
+     *   steady. YOUR trades at the counter are untouched — this multiplies
+     *   only the house's own view and its own execution. */
     footHalfLife: 16 * DAY,
-    depthMul: 1,
+    depthMul: 4,
     insHullDay: 0.0008,       // of the hull's list price, per day out of port
     insCargoRun: 0.02,        // of what the load cost, per run
     berthMinDays: 1
@@ -774,6 +789,9 @@
       c.burnt[leg.toStar + '|' + leg.to + '|' + leg.cid] = ta + BURN_DAYS * DAY;
       for (var bk in c.burnt) if (c.burnt[bk] <= ta) delete c.burnt[bk];
     }
+    /* MEASUREMENT ONLY: tools/measure-firms.cjs asks for every run, to see
+     * how fast a lane flattens. Nothing in the game sets it. */
+    if (c.traceRuns && leg.cid) c.traceRuns.push([ta, leg.fromStar + '|' + leg.from, leg.toStar + '|' + leg.to, leg.cid, Math.round(net)]);
     tr.made = (tr.made || 0) + net;
     tr.runs = (tr.runs || 0) + (leg.cid ? 1 : 0);
     tr.last = leg;
