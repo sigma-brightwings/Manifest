@@ -52,6 +52,7 @@ before they update.
 - render.test: "the drive on the ground" now checks a courier spools in
   about 2 s and lifts just after, and a heavy hull is still spooling when a
   courier would be up and is hot in its own (capped) time.
+
 ### Added (2026-11-02, sea platforms: a port on the open water)
 
 - **Astra: "for ocean worlds, we want like a floating oil rig style of port,
