@@ -7259,9 +7259,11 @@ console.log('--- zooming out of her hangar ---');
           var hS = V.dot(V.sub(cc.pos, pb.entrance.pos), pb.up),
               hE = V.dot(V.sub(ceye, pb.entrance.pos), pb.up);
           var tX = hE > 0 && hS < 0 ? hE / (hE - hS) : 1;    // from the eye
-          var rX = cc.rEye + (cc.rShip - cc.rEye) * tX;
-          check('surface: the cone opens the street only as wide as its spread there',
-                rX < 1.2, 'radius at the street ' + (rX * 1000).toFixed(0) + ' m');
+          var rX = Math.min(cc.rEye + (cc.rShip - cc.rEye) * tX, cc.cap > 0 ? cc.cap : Infinity);
+          /* And no wider than the bay (third round): from far out the cone
+           * used to cross the street a kilometre wide. */
+          check('surface: the cone opens the street no wider than the bay',
+                rX < 0.45, 'radius at the street ' + (rX * 1000).toFixed(0) + ' m');
         }
         G.cam.dist = 0.0001; frames(1);
         check(kind + ': and wheeling back in puts her in her hangar again', !G.hangarOut && G.cam.dist < 0.1,
@@ -7383,21 +7385,31 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
   /* The shader text: both shaders test the cone the same way coneCuts does. */
   var glsrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'gl.js'), 'utf8');
   check('ground port: the planet is holed by the cone, the same test as the port mesh',
-        /length\(hit - uConeS\.xyz \* ct\) < mix\(uConeR\.y, uConeR\.x, ct\)/.test(glsrc) &&
-        /float r = mix\(uCutR\.y, uCutR\.x, t\);/.test(glsrc));
+        /length\(hit - uConeS\.xyz \* ct\) < min\(mix\(uConeR\.y, uConeR\.x, ct\), uConeR\.z\)/.test(glsrc) &&
+        /float r = min\(mix\(uCutR\.y, uCutR\.x, t\), uCutCap\);/.test(glsrc));
   var msrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'main.js'), 'utf8');
   check('ground port: in the cut the frame is cleared to the sky over the port',
         /GLWorld\.begin\(rock \? ROCK_CLEAR : groundSkyNow\)/.test(msrc));
 
   /* The sky, as a function of the air and the sun. */
   var blue = [0.62, 0.78, 1.0];
-  var noon = GLreal.skyFor(blue, 0.6, 0.8), dusk = GLreal.skyFor(blue, 0.6, 0.05),
+  /* Dusk is low in the sky toward the sun: the horizon, looking at it. */
+  var noon = GLreal.skyAt(blue, 0.6, 0.8, 0.05, 1, 0), dusk = GLreal.skyAt(blue, 0.6, 0.05, 0.05, 1, 0),
       night = GLreal.skyFor(blue, 0.6, -0.4), vac = GLreal.skyFor(blue, 0, 0.8);
   check('the sky: a world with air, sun up, is its air colour and lit',
         noon.lit > 0.9 && noon[2] > 0.6 && noon[2] > noon[0],
         noon.map(function (x) { return x.toFixed(2); }).join(','));
   check('the sky: low sun warms it', dusk[0] / dusk[2] > noon[0] / noon[2] * 1.2,
         dusk.map(function (x) { return x.toFixed(2); }).join(','));
+  /* Not the air's own colour (third round): on Oruun the sky took the
+   * ground's orange and there was no horizon. */
+  var orange = [1.0, 0.6, 0.36], osky = GLreal.skyFor(orange, 0.6, 0.8);
+  check('the sky: paler and bluer than the air it is made of',
+        osky[2] / osky[0] > orange[2] / orange[0] + 0.3,
+        osky.map(function (x) { return x.toFixed(2); }).join(','));
+  var zen = GLreal.skyAt(blue, 0.6, 0.8, 1, 0.5, 0), hor = GLreal.skyAt(blue, 0.6, 0.8, 0, 0.5, 0);
+  check('the sky: darker toward the zenith than at the horizon',
+        zen[0] + zen[1] + zen[2] < (hor[0] + hor[1] + hor[2]) * 0.75);
   check('the sky: night and airless are the dark clear, stars and all',
         night.lit < 0.05 && vac.lit === 0 && Math.max(night[0], night[1], night[2]) < 0.06 &&
         Math.max(vac[0], vac[1], vac[2]) < 0.06);
@@ -7450,25 +7462,36 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
           if (!GLreal.coneCuts(mid, eye, c)) st.cuts.push(tag + ': the middle of the line to her is not cut');
           if (GLreal.coneCuts(beside, eye, c)) st.cuts.push(tag + ': a point beside the cone is cut');
           if (GLreal.coneCuts(past, eye, c)) st.cuts.push(tag + ': the deck past her is cut');
+          /* Held to the bay from far out — but never at the cost of the line
+           * to her: a hull's width round the whole sight-line stays cut, at
+           * steep angles and shallow ones. */
+          if (hgt > 0 && !(c.cap > 0 && c.cap <= 0.45)) st.cone.push(tag + ': cone not held to the bay above the street (cap ' + c.cap + ')');
+          for (var ti = 1; ti < 10; ti++) {
+            var onLine = V.addScaled(eye, un, L * ti / 10);
+            var offLine = V.addScaled(onLine, side, hull * 0.5);
+            if (!GLreal.coneCuts(onLine, eye, c) || !GLreal.coneCuts(offLine, eye, c)) {
+              st.cuts.push(tag + ': the sight-line to her is blocked at ' + ti / 10); break;
+            }
+          }
           /* The wall: the cone's own surface, in the ground, not in the bay's
            * air, narrowest at her, and capped. */
           var mesh = R.sectionMesh(c.section), sc = c.section;
           var Sl = sc.ship, El = sc.eye, ax = [Sl[0] - El[0], Sl[1] - El[1], Sl[2] - El[2]];
           var aL = Math.sqrt(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]);
           var bad = 0, onCone = 0, air = 0, wallN = 0;
-          for (var fi = 0; fi < mesh.f.length; fi++) {
+          for (var fi = 0; fi < (mesh.bowlFrom || mesh.f.length); fi++) {
             var f = mesh.f[fi], p0 = mesh.v[f[0]], p1 = mesh.v[f[1]], p2 = mesh.v[f[2]];
             var cen = [(p0[0] + p1[0] + p2[0]) / 3, (p0[1] + p1[1] + p2[1]) / 3, (p0[2] + p1[2] + p2[2]) / 3];
             if (cen[2] > 1e-6) bad++;
             var R0 = sc.room, mz = cen[2] - sc.lift;
             if (R0 && cen[0] > R0.x0 + 1e-6 && cen[0] < R0.x1 - 1e-6 && cen[1] > R0.y0 + 1e-6 &&
-                cen[1] < R0.y1 - 1e-6 && mz > R0.z0 + 1e-6 && mz < R0.z1 - 1e-6 && mesh.c[fi] !== '#3a3631') air++;
+                cen[1] < R0.y1 - 1e-6 && mz > R0.z0 + 1e-6 && mz < R0.z1 - 1e-6) air++;
             /* On the cone: distance from the axis is the cone's radius there. */
             var rel = [cen[0] - El[0], cen[1] - El[1], cen[2] - El[2]];
             var tt = (rel[0] * ax[0] + rel[1] * ax[1] + rel[2] * ax[2]) / (aL * aL);
             var off = [rel[0] - ax[0] * tt, rel[1] - ax[1] * tt, rel[2] - ax[2] * tt];
             var dd = Math.sqrt(off[0] * off[0] + off[1] * off[1] + off[2] * off[2]);
-            var rr = sc.rEye + (sc.rShip - sc.rEye) * tt;
+            var rr = Math.min(sc.rEye + (sc.rShip - sc.rEye) * tt, sc.rCap > 0 ? sc.rCap : Infinity);
             if (tt > 0 && tt < 1) { wallN++; if (Math.abs(dd - rr) < rr * 0.05) onCone++; }
           }
           var shipZ = Sl[2], under = shipZ < -sc.rShip;
@@ -7476,8 +7499,8 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
           if (bad) st.wall.push(tag + ': ' + bad + ' wall faces above the street');
           if (air) st.wall.push(tag + ': ' + air + ' wall faces in the bay\'s open air');
           /* Every face between her and the eye lies on the cone (a flat
-           * facet's middle sits a hair inside the curve); the rest is the
-           * cap past her. */
+           * facet's middle sits a hair inside the curve); after them comes
+           * the bowl of rock the pit is set in. */
           if (onCone < wallN) st.wall.push(tag + ': only ' + onCone + ' of ' + wallN + ' wall faces on the cone');
           /* The sky over the port is the world's air in the sun. */
           var sk = G.groundSky(port);

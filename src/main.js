@@ -7360,6 +7360,27 @@
     var eyeW = V.addScaled(G.cam.target, camBoomDir(), asked);
     var rShip = shipLen() * CUT_SHIP;
     var rEye = rShip + asked * CUT_CONE;
+    /* AND IT STOPS GROWING AT THE STREET (third round). Widening all the
+     * way to the eye, from 2 km out the cone crossed the street a
+     * kilometre wide: a perfect round black hole at Ashford Undercroft,
+     * slicing the port's buildings with the hot edge. Above the street
+     * the line to her is open sky and needs no cut; in the ground, only
+     * the bay is in the way. So the cone's radius is held to the lesser of
+     * its width where it reaches the street and the bay's own footprint —
+     * the room's half-diagonal and a hull of margin — and is a cylinder
+     * from there out. Never under twice her clearing, so a small room
+     * still frames her. With the eye under the street there is no street
+     * crossing and nothing is held. */
+    var hS = V.dot(V.sub(G.cam.target, gb.entrance.pos), gb.up);
+    var hE = V.dot(V.sub(eyeW, gb.entrance.pos), gb.up);
+    var rCap = 0;
+    if (hE > 0 && hS < hE) {
+      var sSt = Math.max(0, Math.min(1, -hS / (hE - hS)));   // from her toward the eye
+      var rStreet = rShip + (rEye - rShip) * sSt;
+      var foot = Math.sqrt(Math.pow((room.x1 - room.x0) / 2, 2) +
+                           Math.pow((room.y1 - room.y0) / 2, 2)) * r + shipLen();
+      rCap = Math.max(rShip * 2, Math.min(rStreet, foot));
+    }
     function local(p) {
       var rel = V.sub(p, gb.entrance.pos);
       return [V.dot(rel, gb.east) / r, V.dot(rel, gb.north) / r, V.dot(rel, gb.up) / r];
@@ -7373,11 +7394,14 @@
       up: gb.up,
       rShip: rShip,
       rEye: rEye,
+      cap: rCap,
       /* What the pit walls are built from: ground frame, pad radii, the
        * street at z = 0. `room` and `duct` are the open air the wall must
        * not be drawn across; model z is local z minus the table's lift. */
       section: { ship: local(G.cam.target), eye: local(eyeW),
-                 rShip: rShip / r, rEye: rEye / r, r: r, lift: g.lift || 0,
+                 rShip: rShip / r, rEye: rEye / r, rCap: rCap > 0 ? rCap / r : 0,
+                 r: r, lift: g.lift || 0, seed: port.id,
+                 planetR: (port.parentBody && port.parentBody.radius || 1e9) / r,
                  room: room, duct: ((g.mouthR || 0.55) + (g.throatR || 0.45)) / 2,
                  entrance: gb.entrance.pos, east: gb.east, north: gb.north, up: gb.up }
     };
@@ -7769,6 +7793,16 @@
     if (glLive()) {
       ctx.clearRect(0, 0, w, h);
       global.GLWorld.begin(rock ? ROCK_CLEAR : groundSkyNow);
+      /* THE SKY OVER THE PORT, AS A SKY (2026-11-02, third round): a
+       * gradient pass behind everything, and the same sky handed to the
+       * planet pass for the haze that makes the horizon. See GLWorld.skyAt.
+       * Its own lines, apart from the ground's shading, on purpose. */
+      if (groundSkyNow && global.GLWorld.setGroundSky) {
+        var skyPort = G.cutaway.port, skyGb = Sim.groundBasis(skyPort, G.sys, G.t);
+        global.GLWorld.setGroundSky(skyPort.parentBody, skyGb.up,
+          V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), skyGb.entrance.pos)));
+        global.GLWorld.drawGroundSky(cam);
+      }
       /* STANDING OUTSIDE HER (2026-10-26): the world is the GL layer's to
        * draw — sky, sun, the ground — and the chart over it is not yours
        * any more. Orbit lines, body markers and labels, traffic and the
@@ -16211,7 +16245,7 @@
     if (!c || c.port !== b || !Render.setCutaway) return null;
     /* A ground port's cone is the same keyhole, round her where she
      * stands and with the deck's bubble on the ground's vertical. */
-    if (c.surface) return { pos: c.pos, rShip: c.rShip, rEye: c.rEye, rim: CUT_RIM, up: c.up };
+    if (c.surface) return { pos: c.pos, rShip: c.rShip, rEye: c.rEye, cap: c.cap, rim: CUT_RIM, up: c.up };
     var cutBasis = Sim.portBasis ? Sim.portBasis(b, G.sys, G.t) : null;
     return { pos: G.ship.pos, rShip: c.rShip, rEye: c.rEye, rim: CUT_RIM,
              up: cutBasis ? cutBasis.up : null };

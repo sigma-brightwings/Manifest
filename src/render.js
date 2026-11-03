@@ -5937,8 +5937,16 @@
   var SECTION_ROCK_BED = 5;            // metres, the first bed under the fill
   var SECTION_ROCK_BED_MAX = 60;       // metres, the thickest any bed gets
   var SECTION_FLOOR = '#3a3631';
-  var SECTION_SIDES = 48;              // generators round the cone
-  var SECTION_CAP_BACK = 3.2;          // cap, in ship-end radii past her
+  /* 48 flat facets read as spokes radiating from her — each lit at its
+   * own angle (third round). 104, with smooth normals, does not. */
+  var SECTION_SIDES = 104;             // generators round the cone
+  var SECTION_DIP = 0.09;              // the beds' tilt, rise per run (about 5 degrees)
+  var SECTION_WAVE_M = 140;            // metres, the wavelength of the beds' undulation
+  var SECTION_STEPS = 64;              // grid rows along the cone, her end to the eye's
+  var SECTION_EDGE_SPLIT = 2;          // a cell a bed's edge crosses, split this many ways each way
+  var SECTION_FOLD_M = 22;             // metres, how far the beds fold up and down
+  var SECTION_FOLD_EASE = 40;          // metres below the street before the folding is full
+  var SECTION_BOWL_KM = 2.5;           // the least radius of the rock round the pit
   var SECTION_LAST = { key: null, mesh: null };
 
   /* The beds as [zTop, zBottom, colour] from the street (z = 0) down to
@@ -5977,92 +5985,248 @@
     return Math.abs(p[0]) < sc.duct && Math.abs(p[1]) < sc.duct && z >= top && p[2] < 0;
   }
 
+  /* A small deterministic hash of the port's id, for the beds' tilt and
+   * undulation: the same port shows the same rock every visit (doctrine 1),
+   * and nothing here draws from any generator stream (doctrine 2). */
+  function sectionHash(str, k) {
+    var h = 2166136261 ^ k;
+    str = String(str);
+    for (var i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return ((h >>> 0) % 100000) / 100000;
+  }
+  /* A rock colour nudged per bed, warmer or cooler, lighter or darker. */
+  function bedColour(hex, seed, k) {
+    var n = parseInt(hex.slice(1), 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+    var light = 0.86 + 0.28 * sectionHash(seed, 101 + k * 7);
+    var warm = (sectionHash(seed, 211 + k * 13) - 0.5) * 18;
+    var c = function (x) { return Math.max(0, Math.min(255, Math.round(x))); };
+    return '#' + ((1 << 24) | (c(r * light + warm) << 16) | (c(g * light) << 8) | c(b * light - warm)).toString(16).slice(1);
+  }
+
+  /* THE THIRD ROUND (2026-11-02). Level beds on a cone, seen down the
+   * cone's own axis, are concentric rings round her — and with the 48
+   * facets lit one by one, a cartoon tunnel: rings and spokes. Astra and
+   * the coordinator both read it as a vortex. So:
+   *   - the wall shades smoothly (per-vertex normals, GLWorld uploadMesh's
+   *     `vn`) on 104 generators, and the facet spokes are gone;
+   *   - the beds are not level: they dip along one direction for this
+   *     port and fold up and down together on a ~140 m wavelength, so
+   *     neighbours never cross, and each bed's colour is nudged warmer,
+   *     cooler, lighter, darker;
+   *   - the cone stops growing where main.js caps it (sc.rCap) and runs on
+   *     as a cylinder;
+   *   - the black cap past her is gone. In its place the pit is set in a
+   *     bowl of rock — a hemisphere, rim at the street, round her and wider
+   *     than the eye's whole reach — so anything that misses the wall, the
+   *     room and the shaft (the voids beside the bay, the gaps where the
+   *     wall is left out for the room's air, the far end past her) meets
+   *     rock rather than the sky. Up is still open: the bowl stops at the
+   *     street. */
   function sectionMesh(sc) {
+    /* REBUILT ONLY WHEN THE EYE HAS MOVED A LITTLE OF THE BOOM (third
+     * round). The wall is ~10,000 quads now, and keyed to the half-metre it
+     * was rebuilt on every frame of an orbit: measured 6-30 ms a build in
+     * headless Chrome on the two-core cloud box (not yet measured on the
+     * Crawler), plus the upload. Eight parts in a thousand of the boom is
+     * a pixel or two of wall at the ranges the cut is seen from. */
     var q = 0.002;
-    var key = [sc.ship[0], sc.ship[1], sc.ship[2], sc.eye[0], sc.eye[1], sc.eye[2],
-               sc.rShip, sc.rEye, sc.r].map(function (v) {
+    var Lk = Math.sqrt(Math.pow(sc.ship[0] - sc.eye[0], 2) + Math.pow(sc.ship[1] - sc.eye[1], 2) +
+                       Math.pow(sc.ship[2] - sc.eye[2], 2));
+    var qe = Math.max(q, Lk * 0.008);
+    var key = [sc.ship[0], sc.ship[1], sc.ship[2], sc.r].map(function (v) {
       return Math.round(v / q);
-    }).join('|');
+    }).concat([sc.eye[0], sc.eye[1], sc.eye[2], sc.rEye, sc.rCap || 0].map(function (v) {
+      return Math.round(v / qe);
+    })).join('|') + '|' + sc.seed;
     if (SECTION_LAST.key === key) return SECTION_LAST.mesh;
 
     var m = 0.001 / sc.r;                       // one metre, in model units
-    var mesh = { v: [], f: [], c: [], noAccent: true };
+    var mesh = { v: [], f: [], c: [], vn: [], vcol: [], noAccent: true };
     var S = sc.ship, E = sc.eye;
     var ax = [S[0] - E[0], S[1] - E[1], S[2] - E[2]];
     var L = Math.sqrt(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]);
     if (!(L > 1e-9)) return mesh;
     ax = [ax[0] / L, ax[1] / L, ax[2] / L];
-    /* Two directions square to the axis. */
     var h = Math.abs(ax[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
     var p1 = [ax[1] * h[2] - ax[2] * h[1], ax[2] * h[0] - ax[0] * h[2], ax[0] * h[1] - ax[1] * h[0]];
     var l1 = Math.sqrt(p1[0] * p1[0] + p1[1] * p1[1] + p1[2] * p1[2]);
     p1 = [p1[0] / l1, p1[1] / l1, p1[2] / l1];
     var p2 = [ax[1] * p1[2] - ax[2] * p1[1], ax[2] * p1[0] - ax[0] * p1[2], ax[0] * p1[1] - ax[1] * p1[0]];
-    function quad(a, b, c2, d, col) {
+    function hexRgb(hex) {
+      var n = parseInt(hex.slice(1), 16);
+      return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+    }
+    function quad(a, b, c2, d, col, na, nb, nc, nd, vc) {
       var o = mesh.v.length;
       mesh.v.push(a, b, c2, d);
+      mesh.vn.push(na, nb, nc, nd);
+      if (vc) mesh.vcol.push(vc[0], vc[1], vc[2], vc[3]);
+      else { var cc = hexRgb(col); mesh.vcol.push(cc, cc, cc, cc); }
       mesh.f.push([o, o + 1, o + 2], [o, o + 2, o + 3]);
       mesh.c.push(col, col);
     }
-    /* Generators: from her end of the cone (s = 0) to the eye's (s = 1). */
-    var gens = [], deep = 0, i;
+
+    /* The cone's radius along its axis, from her (s = 0) to the eye
+     * (s = 1): growing, then held at the cap. The generators are two
+     * straight runs either side of that break, the same s for every one,
+     * so neighbouring generators' quads always pair up. */
+    var cap = sc.rCap > 0 ? sc.rCap : Infinity;
+    var grow = sc.rEye - sc.rShip;
+    var sBreak = (cap < Infinity && grow > 0) ? Math.max(0, Math.min(1, (cap - sc.rShip) / grow)) : 1;
+    var cuts = sBreak > 1e-6 && sBreak < 1 - 1e-6 ? [0, sBreak, 1] : [0, 1];
+    function rad(sv) { return Math.min(sc.rShip + grow * sv, cap); }
+    function onAxis(sv) { return [S[0] - ax[0] * L * sv, S[1] - ax[1] * L * sv, S[2] - ax[2] * L * sv]; }
+    /* The normal of the cone's wall at angle w: radial, tipped by the slope. */
+    var slope = grow / L;
+    var gens = [], deep = 0, i, j;
     for (i = 0; i < SECTION_SIDES; i++) {
       var th = i / SECTION_SIDES * Math.PI * 2, c = Math.cos(th), sn = Math.sin(th);
       var w = [p1[0] * c + p2[0] * sn, p1[1] * c + p2[1] * sn, p1[2] * c + p2[2] * sn];
-      var a0 = [S[0] + w[0] * sc.rShip, S[1] + w[1] * sc.rShip, S[2] + w[2] * sc.rShip];
-      var a1 = [E[0] + w[0] * sc.rEye, E[1] + w[1] * sc.rEye, E[2] + w[2] * sc.rEye];
-      gens.push({ a: a0, b: a1, w: w });
-      deep = Math.min(deep, a0[2], a1[2]);
+      var segs = [];
+      for (j = 0; j + 1 < cuts.length; j++) {
+        var s0 = cuts[j], s1 = cuts[j + 1];
+        var A0 = onAxis(s0), A1 = onAxis(s1), r0 = rad(s0), r1 = rad(s1);
+        var pa = [A0[0] + w[0] * r0, A0[1] + w[1] * r0, A0[2] + w[2] * r0];
+        var pb = [A1[0] + w[0] * r1, A1[1] + w[1] * r1, A1[2] + w[2] * r1];
+        var sl = (s1 <= sBreak + 1e-9) ? slope : 0;
+        var nn = [w[0] + ax[0] * sl, w[1] + ax[1] * sl, w[2] + ax[2] * sl];
+        var nl = Math.sqrt(nn[0] * nn[0] + nn[1] * nn[1] + nn[2] * nn[2]) || 1;
+        segs.push({ a: pa, b: pb, n: [nn[0] / nl, nn[1] / nl, nn[2] / nl] });
+        deep = Math.min(deep, pa[2], pb[2]);
+      }
+      gens.push(segs);
     }
     var bands = sectionBands(deep - m, m);
-    function at(g, s) {
-      return [g.a[0] + (g.b[0] - g.a[0]) * s, g.a[1] + (g.b[1] - g.a[1]) * s,
-              g.a[2] + (g.b[2] - g.a[2]) * s];
+
+    /* Where a bed boundary really is, at horizontal (x, y): the level the
+     * table gives it, dipped and undulating. Boundary 0 is the street and
+     * stays put. */
+    var dipA = sectionHash(sc.seed, 1) * Math.PI * 2;
+    var dx = Math.cos(dipA) * SECTION_DIP, dy = Math.sin(dipA) * SECTION_DIP;
+    var k1 = Math.PI * 2 / (SECTION_WAVE_M * m), ph1 = sectionHash(sc.seed, 2) * 6.283,
+        ph2 = sectionHash(sc.seed, 3) * 6.283, ph3 = sectionHash(sc.seed, 4) * 6.283;
+    function wander(x, y) {
+      return 0.6 * Math.sin(x * k1 + ph1) * Math.cos(y * k1 * 0.83 + ph2) +
+             0.4 * Math.sin((x * 0.61 - y * 0.79) * k1 * 1.7 + ph3);
     }
-    /* The stretch of a generator between two depths, clipped to the
-     * ground (z <= 0) and to the cone's own length. */
-    function span(g, zTop, zBot) {
-      var z0 = g.a[2], dz = g.b[2] - g.a[2], lo, hi;
-      if (Math.abs(dz) < 1e-12) {
-        if (z0 > zTop || z0 < zBot || z0 > 0) return null;
-        lo = 0; hi = 1;
-      } else {
-        var sa = (zTop - z0) / dz, sb = (zBot - z0) / dz;
-        lo = Math.max(0, Math.min(sa, sb)); hi = Math.min(1, Math.max(sa, sb));
-      }
-      return hi > lo + 1e-9 ? [lo, hi] : null;
+    /* THE WALL AS A GRID, COLOURED BY BED. The first cut at this traced
+     * each bed's boundary across every generator and joined neighbours —
+     * exact on a steep cone, and on a near-level one (Ashford from 14
+     * degrees) a fan of long slivers, because a level boundary runs almost
+     * ALONG a level generator and the neighbour meets it a hundred metres
+     * further on. Those slivers were the bright spokes. So the wall is a
+     * plain grid — SECTION_SIDES round, SECTION_STEPS along, each
+     * generator clipped at the street first so the top row lies on it —
+     * and each face takes the colour of the bed its middle is in. The
+     * beds' edges step at the grid's pitch, a few metres, and nothing can
+     * sliver. */
+    function at(seg, u) {
+      return [seg.a[0] + (seg.b[0] - seg.a[0]) * u, seg.a[1] + (seg.b[1] - seg.a[1]) * u,
+              seg.a[2] + (seg.b[2] - seg.a[2]) * u];
     }
-    for (var bi = 0; bi < bands.length; bi++) {
-      var zt = Math.min(0, bands[bi][0]), zb2 = bands[bi][1];
+    var colours = bands.map(function (bd, k) { return bedColour(bd[2], sc.seed, k); });
+    var rgbs = colours.map(hexRgb);
+    /* Each corner takes the colour of the bed it is in, and the GPU blends
+     * across the face: the beds' edges are soft over a cell instead of
+     * stepping cell by cell. */
+    function vcolAt(p) { return rgbs[bedAt(p)]; }
+    function tri3(a, b, c) { return [(a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3]; }
+    var tops = bands.map(function (bd) { return bd[0]; });
+    function bedAt(p) {
+      var z = p[2], depth = -z;
+      var ease = Math.min(1, depth / (SECTION_FOLD_EASE * m));
+      var zl = z - (((p[0] - S[0]) * dx + (p[1] - S[1]) * dy) + wander(p[0], p[1]) * SECTION_FOLD_M * m) * ease;
+      for (var k = tops.length - 1; k >= 0; k--) if (zl <= tops[k] + 1e-12 && (k === tops.length - 1 || zl > tops[k + 1])) return k;
+      return zl > 0 ? 0 : tops.length - 1;
+    }
+    for (j = 0; j + 1 < cuts.length; j++) {
+      var steps = Math.max(4, Math.round(SECTION_STEPS * (cuts[j + 1] - cuts[j])));
+      /* Each generator's run in the ground, as `steps` points. */
+      var cols = [], vcs = [];
       for (i = 0; i < SECTION_SIDES; i++) {
-        var g0 = gens[i], g1 = gens[(i + 1) % SECTION_SIDES];
-        var u = span(g0, zt, zb2), v = span(g1, zt, zb2);
-        if (!u || !v) continue;
-        var A = at(g0, u[0]), B = at(g0, u[1]), C = at(g1, v[1]), D = at(g1, v[0]);
-        /* Either half in the air and the quad goes: a wall face across the
-         * room's doorway is exactly the thing this must not draw. */
-        var m1 = [(A[0] + B[0] + C[0]) / 3, (A[1] + B[1] + C[1]) / 3, (A[2] + B[2] + C[2]) / 3];
-        var m2 = [(A[0] + C[0] + D[0]) / 3, (A[1] + C[1] + D[1]) / 3, (A[2] + C[2] + D[2]) / 3];
-        if (sectionInAir(sc, m1) || sectionInAir(sc, m2)) continue;
-        quad(A, B, C, D, bands[bi][2]);
+        var sg = gens[i][j], z0 = sg.a[2], z1 = sg.b[2], lo = 0, hi = 1;
+        if (z0 > 0 && z1 > 0) { cols.push(null); vcs.push(null); continue; }
+        if (z0 > 0) lo = z0 / (z0 - z1); else if (z1 > 0) hi = z0 / (z0 - z1);
+        var pts = [], pcs = [];
+        for (var st2 = 0; st2 <= steps; st2++) {
+          var pp = at(sg, lo + (hi - lo) * st2 / steps);
+          pts.push(pp); pcs.push(vcolAt(pp));
+        }
+        cols.push(pts); vcs.push(pcs);
+      }
+      for (i = 0; i < SECTION_SIDES; i++) {
+        var c0 = cols[i], c1 = cols[(i + 1) % SECTION_SIDES];
+        if (!c0 || !c1) continue;
+        var n0 = gens[i][j].n, n1 = gens[(i + 1) % SECTION_SIDES][j].n;
+        for (st2 = 0; st2 < steps; st2++) {
+          var A = c0[st2], B = c0[st2 + 1], C = c1[st2 + 1], D = c1[st2];
+          var m1 = [(A[0] + B[0] + C[0]) / 3, (A[1] + B[1] + C[1]) / 3, (A[2] + B[2] + C[2]) / 3];
+          var m2 = [(A[0] + C[0] + D[0]) / 3, (A[1] + C[1] + D[1]) / 3, (A[2] + C[2] + D[2]) / 3];
+          /* Either half in the air and the quad goes: a wall face across
+           * the room's doorway is exactly the thing this must not draw. */
+          if (sectionInAir(sc, m1) || sectionInAir(sc, m2)) continue;
+          var q0 = vcs[i], q1 = vcs[(i + 1) % SECTION_SIDES];
+          var ca = q0[st2], cb = q0[st2 + 1], cc2 = q1[st2 + 1], cd = q1[st2];
+          if (ca === cb && cb === cc2 && cc2 === cd) {
+            quad(A, B, C, D, colours[0], n0, n0, n1, n1, [ca, cb, cc2, cd]);
+            continue;
+          }
+          /* A cell a bed's edge runs through is split SECTION_EDGE_SPLIT
+           * ways each way, so the edge steps at half the pitch and the
+           * blend across each small face hides the rest. Only these cells:
+           * the rest of the wall stays one quad a cell, which is what keeps
+           * a rebuild to a few milliseconds. */
+          var nS = SECTION_EDGE_SPLIT;
+          var lerp4 = function (uu, vv) {
+            var a0 = [A[0] + (B[0] - A[0]) * vv, A[1] + (B[1] - A[1]) * vv, A[2] + (B[2] - A[2]) * vv];
+            var a1 = [D[0] + (C[0] - D[0]) * vv, D[1] + (C[1] - D[1]) * vv, D[2] + (C[2] - D[2]) * vv];
+            return [a0[0] + (a1[0] - a0[0]) * uu, a0[1] + (a1[1] - a0[1]) * uu, a0[2] + (a1[2] - a0[2]) * uu];
+          };
+          var nmix = function (uu) {
+            var x = n0[0] + (n1[0] - n0[0]) * uu, y = n0[1] + (n1[1] - n0[1]) * uu, z = n0[2] + (n1[2] - n0[2]) * uu;
+            var l = Math.sqrt(x * x + y * y + z * z) || 1;
+            return [x / l, y / l, z / l];
+          };
+          var sub = [];
+          for (var su = 0; su <= nS; su++) {
+            var rowS = [];
+            for (var sv = 0; sv <= nS; sv++) { var pq = lerp4(su / nS, sv / nS); rowS.push({ p: pq, c: vcolAt(pq) }); }
+            sub.push(rowS);
+          }
+          for (su = 0; su < nS; su++) {
+            var na2 = nmix(su / nS), nb2 = nmix((su + 1) / nS);
+            for (sv = 0; sv < nS; sv++) {
+              var e00 = sub[su][sv], e01 = sub[su][sv + 1], e11 = sub[su + 1][sv + 1], e10 = sub[su + 1][sv];
+              if (sectionInAir(sc, tri3(e00.p, e01.p, e11.p)) || sectionInAir(sc, tri3(e00.p, e11.p, e10.p))) continue;
+              quad(e00.p, e01.p, e11.p, e10.p, colours[0], na2, na2, nb2, nb2, [e00.c, e01.c, e11.c, e10.c]);
+            }
+          }
+        }
       }
     }
-    /* The cap past her: a disc square to the axis, wide enough to close
-     * the narrow end as the eye sees it. Underground it is the rock beyond
-     * the bottom of the pit; inside the room it sits under the deck and
-     * the floor hides it. */
-    var back = sc.rShip * SECTION_CAP_BACK;
-    var cc = [S[0] + ax[0] * back, S[1] + ax[1] * back, S[2] + ax[2] * back];
-    if (cc[2] < 0) {
-      var cr = sc.rShip * (1 + back / L) * 1.25, o = mesh.v.length;
-      mesh.v.push(cc);
-      for (i = 0; i < SECTION_SIDES; i++) {
-        var w2 = gens[i].w;
-        mesh.v.push([cc[0] + w2[0] * cr, cc[1] + w2[1] * cr, cc[2] + w2[2] * cr]);
+
+    /* The bowl of rock the pit is set in: a hemisphere under the street,
+     * centred under her, normals inward. */
+    var Rb = Math.max(SECTION_BOWL_KM, (L * sc.r) * 1.6 + 0.4) / sc.r;
+    var lat = 12, lon = 48, rows = [], bowlCol = bedColour('#555048', sc.seed, 99);
+    for (var la = 0; la <= lat; la++) {
+      var ph = la / lat * Math.PI / 2, cph = Math.cos(ph), sph = Math.sin(ph), row = [];
+      for (var lo2 = 0; lo2 < lon; lo2++) {
+        var tl = lo2 / lon * Math.PI * 2;
+        var dir = [cph * Math.cos(tl), cph * Math.sin(tl), -sph];
+        /* Sunk with the planet's curve: a bowl whose rim sat on the flat
+         * street plane stood out of the ground kilometres off as a dark
+         * ring round the horizon (8 km out over Ashford). */
+        var sag = (cph * Rb) * (cph * Rb) / (2 * (sc.planetR || 1e9)) * 1.1 + 2 * m;
+        row.push({ p: [S[0] + dir[0] * Rb, S[1] + dir[1] * Rb, -sph * Rb - sag],
+                   n: [-dir[0], -dir[1], -dir[2]] });
       }
-      for (i = 0; i < SECTION_SIDES; i++) {
-        mesh.f.push([o, o + 1 + i, o + 1 + (i + 1) % SECTION_SIDES]);
-        mesh.c.push(SECTION_FLOOR);
+      rows.push(row);
+    }
+    for (la = 0; la < lat; la++) {
+      for (lo2 = 0; lo2 < lon; lo2++) {
+        var a2 = rows[la][lo2], b2 = rows[la + 1][lo2], c3 = rows[la + 1][(lo2 + 1) % lon], d2 = rows[la][(lo2 + 1) % lon];
+        quad(a2.p, b2.p, c3.p, d2.p, bowlCol, a2.n, b2.n, c3.n, d2.n);
       }
     }
 
@@ -6070,6 +6234,7 @@
       global.GLWorld.releaseMesh(SECTION_LAST.mesh);
     }
     SECTION_LAST = { key: key, mesh: mesh };
+    mesh.bowlFrom = mesh.f.length - lat * lon * 2;     // for the test: faces from here on are the bowl
     return mesh;
   }
 

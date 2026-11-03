@@ -73,6 +73,52 @@
     '}'
   ].join('\n');
 
+  /* ---- THE GROUND SKY, in GLSL (2026-11-02, third round) ----------------
+   * Shared by the sky pass (FRAG_SKY) and the planet pass's horizon haze,
+   * and mirrored line for line by skyAt() in JS below, which is what the
+   * test reads. Its own block so a change to the planet's own shading
+   * merges round it. See the long note over skyAt for what it does. */
+  var SKY_GLSL = [
+    'uniform vec4 uSkyA;',        // tint rgb, air (0 = off)
+    'uniform vec3 uSkyUp;',       // local vertical at the port
+    'uniform vec3 uSkySun;',      // unit vector to the sun
+    'vec3 groundSkyAt(vec3 rd) {',
+    '  float sunUp = dot(uSkySun, uSkyUp);',
+    '  float air = uSkyA.w;',
+    '  float dayT = clamp((sunUp + 0.10) / 0.36, 0.0, 1.0);',
+    '  float day = dayT * dayT * (3.0 - 2.0 * dayT);',
+    '  float lit = day * min(1.0, air / 0.25);',
+    '  float bright = air > 0.0 ? 0.32 + 0.68 * min(1.0, air / 0.6) : 0.0;',
+    '  vec3 sc = mix(uSkyA.rgb, vec3(0.70, 0.83, 1.0), 0.62);',
+    '  vec3 zen = sc * 0.58 * bright;',
+    '  vec3 hor = mix(sc, vec3(1.0), 0.38) * bright * 1.04;',
+    '  float e = dot(rd, uSkyUp);',
+    '  vec3 col = mix(hor, zen, pow(clamp(e, 0.0, 1.0), 0.55));',
+    '  float low = 1.0 - clamp(sunUp / 0.26, 0.0, 1.0);',
+    '  vec3 sunH = uSkySun - uSkyUp * sunUp;',
+    '  float toward = 0.5 + 0.5 * dot(normalize(rd - uSkyUp * e + 1e-6), normalize(sunH + 1e-6));',
+    '  col = mix(col, vec3(1.0, 0.52, 0.28) * bright * 0.92, low * 0.62 * (1.0 - clamp(e * 2.0, 0.0, 1.0)) * toward);',
+    '  col += vec3(1.0, 0.94, 0.82) * pow(max(0.0, dot(rd, uSkySun)), 80.0) * 0.55 * lit;',
+    '  return mix(vec3(0.0157, 0.0235, 0.047), col, lit);',
+    '}'
+  ].join('\n');
+
+  var FRAG_SKY = [
+    '#version 300 es',
+    'precision highp float;',
+    'in vec2 vDisc;',
+    'in vec2 vPx;',
+    'uniform vec3 uRight, uUp, uFwd;',
+    'uniform vec2 uScreenPx;',
+    'uniform float uFlen;',
+    SKY_GLSL,
+    'out vec4 frag;',
+    'void main() {',
+    '  vec3 rd = normalize(uRight * (vPx.x - uScreenPx.x) + uUp * (uScreenPx.y - vPx.y) + uFwd * uFlen);',
+    '  frag = vec4(groundSkyAt(rd), 0.0);',
+    '}'
+  ].join('\n');
+
   var FRAG_BODY = [
     '#version 300 es',
     'precision highp float;',
@@ -99,7 +145,21 @@
     'uniform float uHaloPush;',   // km behind the centre the halo sits; a ring's outer radius
     /* The ground-port cone — see GL.setGroundCone. */
     'uniform vec4 uConeS;',       // eye -> ship, km; w = 1 when on
-    'uniform vec2 uConeR;',       // radius at the ship, at the eye, km
+    'uniform vec3 uConeR;',       // radius at the ship, at the eye, and the most it may be, km
+    /* The ground sky, for the horizon haze (groundHaze). */
+    SKY_GLSL,
+    /* AERIAL PERSPECTIVE (2026-11-02, third round): the ground fades into
+     * the horizon's own sky colour with distance through the air, a shade
+     * darker than the sky itself so the horizon stays a line. Only for the
+     * world the ground sky is over (uSkyA.w > 0); the planet seen from
+     * space is untouched. Its own function so a change to the ground's
+     * shading above it merges round it. */
+    'vec3 groundHaze(vec3 col, vec3 rd, float dist) {',
+    '  if (uSkyA.w <= 0.0) return col;',
+    '  vec3 flat_ = normalize(rd - uSkyUp * dot(rd, uSkyUp) + 1e-6);',
+    '  float f = 1.0 - exp(-dist * uSkyA.w * 0.045);',
+    '  return mix(col, groundSkyAt(flat_) * 0.86, f * 0.92);',
+    '}',
     /* The ground-port section box — see GL.setGroundCut. */
     'uniform vec4 uBoxO;',        // eye -> ship, km; w = 1 when on
     'uniform vec3 uBoxA, uBoxB, uBoxU;',
@@ -369,7 +429,7 @@
     '  if (uConeS.w > 0.5) {',
     '    float cL2 = max(dot(uConeS.xyz, uConeS.xyz), 1e-12);',
     '    float ct = dot(hit, uConeS.xyz) / cL2;',
-    '    if (ct > 0.0 && ct < 1.0 && length(hit - uConeS.xyz * ct) < mix(uConeR.y, uConeR.x, ct)) discard;',
+    '    if (ct > 0.0 && ct < 1.0 && length(hit - uConeS.xyz * ct) < min(mix(uConeR.y, uConeR.x, ct), uConeR.z)) discard;',
     '  }',
     /* And the section, when the camera has been pulled up out of a ground
      * port: the street over the hangar is not there. */
@@ -741,6 +801,7 @@
     '    col += uAtmoColor * rim * uAtmo * (0.08 + 0.45 * lam);',
     '  }',
 
+    '  col = groundHaze(col, rd, tHit);',
     '  frag = vec4(col, 1.0);',
     '}'
   ].join('\n');
@@ -1292,6 +1353,7 @@
      * See GL.setCutaway for why it is a cone and not a plane. */
     'uniform vec4 uCut;',
     'uniform vec3 uCutR;',
+    'uniform float uCutCap;',     // the most the cone's radius may be, km (third round)
     'uniform vec3 uCutRim;',
     /* (widest the cut-face band may get in km, quiet zone as a fraction of
      * the local radius, how much colour the quiet zone drains, 0..1). */
@@ -1393,7 +1455,7 @@
     '    vec3 q = vRel - uCut.xyz;',
     '    bool deck = length(q) < uCutR.x && dot(q, uCutUp) < uCutR.x * 0.15;',
     '    if (t > 0.0 && t < 1.0 && !deck) {',
-    '      float r = mix(uCutR.y, uCutR.x, t);',
+    '      float r = min(mix(uCutR.y, uCutR.x, t), uCutCap);',
     '      vec3 off = vRel - uCut.xyz * t;',
     '      float d = length(off);',
     '      if (d < r) discard;',
@@ -1899,6 +1961,7 @@
   /* ---- the layer -------------------------------------------------------- */
 
   var gl = null, canvas = null, prog = null, uni = null, quad = null, vao = null;
+  var skyProg = null, skyUni = null, groundSky = null;
   /* The glow pass's resources — see POST. `post` stays null when any of it
    * failed, and then every frame goes straight to the canvas as before. */
   var post = null;
@@ -1972,7 +2035,7 @@
                                         'uNear', 'uInvLogRange', 'uIndoors',
                                         'uGlow', 'uWind',
                                         'uAlpha', 'uCut', 'uCutR', 'uCutRim',
-                                        'uCutBand', 'uCutUp',
+                                        'uCutBand', 'uCutUp', 'uCutCap',
                                         'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD', 'uBoxTop',
                                         'uPaint', 'uTrim',
                                         'uTear', 'uTearK', 'uTearN']);
@@ -1993,9 +2056,18 @@
                               'uOcean', 'uSeaColor', 'uIce',
                               'uCenterRel', 'uScreenPx', 'uFlen',
                               'uHoleRel', 'uHoleR', 'uHoleDepth', 'uHaloPush',
-                              'uConeS', 'uConeR',
+                              'uConeS', 'uConeR', 'uSkyA', 'uSkyUp', 'uSkySun',
                               'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD', 'uBoxTop',
                               'uTear', 'uTearK', 'uTearN']);
+
+    /* The ground sky pass (GL.drawGroundSky). Its own try: a sky that
+     * fails to compile costs the sky, not the world. */
+    try {
+      skyProg = link(gl, VERT_BODY, FRAG_SKY, 'sky');
+      skyUni = uniforms(gl, skyProg, ['uCenterPx', 'uQuadPx', 'uViewportPx',
+                                      'uRight', 'uUp', 'uFwd', 'uScreenPx', 'uFlen',
+                                      'uSkyA', 'uSkyUp', 'uSkySun']);
+    } catch (e) { skyProg = null; if (global.console) console.error(e.message); }
 
     quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
@@ -2452,8 +2524,20 @@
       for (var k = 0; k < 3; k++) {
         var o = i * 9 + k * 3;
         pos[o] = tri[k][0]; pos[o + 1] = tri[k][1]; pos[o + 2] = tri[k][2];
-        nrm[o] = nx; nrm[o + 1] = ny; nrm[o + 2] = nz;
-        col[o] = rgbv[0]; col[o + 1] = rgbv[1]; col[o + 2] = rgbv[2];
+        /* A mesh may carry its own per-vertex normals (`vn`, parallel to
+         * `v`) for a curved surface that should shade smoothly rather than
+         * by facet — the ground-port pit wall, whose 48 flat facets read as
+         * spokes radiating from the ship (2026-11-02, third round). */
+        var vnk = mesh.vn ? mesh.vn[f[k]] : null;
+        if (vnk) { nrm[o] = vnk[0]; nrm[o + 1] = vnk[1]; nrm[o + 2] = vnk[2]; }
+        else { nrm[o] = nx; nrm[o + 1] = ny; nrm[o + 2] = nz; }
+        /* And its own per-vertex colours (`vcol`, [r, g, b] 0..1 parallel
+         * to `v`), so a colour can change across a face rather than at its
+         * edge: the pit wall's rock beds, which coloured by face stepped
+         * round the pit like a staircase. */
+        var vck = mesh.vcol ? mesh.vcol[f[k]] : null;
+        if (vck) { col[o] = vck[0]; col[o + 1] = vck[1]; col[o + 2] = vck[2]; }
+        else { col[o] = rgbv[0]; col[o + 1] = rgbv[1]; col[o + 2] = rgbv[2]; }
         emi[i * 3 + k] = lit ? 1 : 0;
         alp[i * 3 + k] = fa;
       }
@@ -2575,6 +2659,7 @@
                        y: cutFlag.pos.y - cam.eye.y,
                        z: cutFlag.pos.z - cam.eye.z,
                        rShip: cutFlag.rShip, rEye: cutFlag.rEye,
+                       cap: cutFlag.cap > 0 ? cutFlag.cap : 1e9,
                        rim: cutFlag.rim || 0, color: cutFlag.color || CUT_RIM,
                        /* typeof, not ||, so a caller can ask for 0. */
                        bandMax: typeof cutFlag.bandMax === 'number'
@@ -2776,7 +2861,7 @@
     var t = (px * cx + py * cy + pz * cz) / L2;
     if (!(t > 0 && t < 1)) return false;
     var ox = px - cx * t, oy = py - cy * t, oz = pz - cz * t;
-    var r = cone.rEye + (cone.rShip - cone.rEye) * t;
+    var r = Math.min(cone.rEye + (cone.rShip - cone.rEye) * t, cone.cap > 0 ? cone.cap : 1e9);
     return Math.sqrt(ox * ox + oy * oy + oz * oz) < r;
   };
   GL.setGroundCut = function (bodyId, box) {
@@ -2815,6 +2900,7 @@
     hole = null;
     groundCut = null;
     groundCone = null;
+    groundSky = null;
     if (!gl) return;
     gl.bindFramebuffer(gl.FRAMEBUFFER, postReady() ? post.msFbo : null);
     /* Alpha cleared to ZERO, not one: in the offscreen buffer alpha is the
@@ -3213,10 +3299,13 @@
         var gc = groundCone.cone;
         gl.uniform4f(uni.uConeS, gc.pos.x - cam.eye.x, gc.pos.y - cam.eye.y,
                      gc.pos.z - cam.eye.z, 1);
-        gl.uniform2f(uni.uConeR, gc.rShip, gc.rEye);
+        gl.uniform3f(uni.uConeR, gc.rShip, gc.rEye, gc.cap > 0 ? gc.cap : 1e9);
       } else {
         gl.uniform4f(uni.uConeS, 0, 0, 0, 0);
       }
+      /* The horizon haze, on the world the ground sky is over. */
+      if (groundSky && groundSky.bodyId === b.id) setSkyUniforms(uni, groundSky);
+      else gl.uniform4f(uni.uSkyA, 0, 0, 0, 0);
       if (groundCut && groundCut.bodyId === b.id) {
         uploadBox(uni, groundCut.box, cam);
       } else {
@@ -3344,6 +3433,7 @@
       if (m.cut) {
         gl.uniform4f(meshUni.uCut, m.cut.x, m.cut.y, m.cut.z, 1);
         gl.uniform3f(meshUni.uCutR, m.cut.rShip, m.cut.rEye, m.cut.rim);
+        gl.uniform1f(meshUni.uCutCap, m.cut.cap);
         gl.uniform3f(meshUni.uCutRim, m.cut.color[0], m.cut.color[1], m.cut.color[2]);
         gl.uniform3f(meshUni.uCutBand, m.cut.bandMax, m.cut.quiet, m.cut.drain);
         gl.uniform3f(meshUni.uCutUp, m.cut.up.x, m.cut.up.y, m.cut.up.z);
@@ -3420,41 +3510,99 @@
    * colour — near-black space. So the sky is built from the SAME two
    * numbers the halo is: this world's air tint (atmoTint) and how much air
    * it has (airOf), lit by how high the sun stands over the place you are.
-   * Nothing new is drawn from: an airless world's sky is black at noon, and
-   * a thin one is a dim version of its haze.
+   * An airless world's sky is black at noon, a thin one a dim one.
    *
-   * Day is the tint at a brightness that rides the air; the sun going down
-   * through the last fifteen degrees warms it toward a dusk the colour of
-   * the low sun through that air; below the horizon it fades out over
-   * about six degrees of twilight to the night clear. Flat — a single
-   * colour behind everything, the clear colour of the frame — which is
-   * what it is seen through: the mouth of a pit, or above a horizon that
-   * the planet pass already hazes with its halo. `sunUp` is the sine of
-   * the sun's elevation. Returns [r, g, b] in 0..1, and `lit` 0..1 for
-   * whether the stars should show. */
+   * THE SECOND VERSION (third round, the same day). The first was the air
+   * tint itself, flat, and on Oruun — where the air, the halo and the
+   * ground are all the same orange — there was no horizon at all: the deck
+   * ended and orange carried on. So the sky has its own colour now:
+   *   - the tint carried 62% of the way to a scattered blue-white, the way
+   *     a sky is paler and bluer than the air's colour seen edgewise;
+   *   - a gradient, palest at the horizon (38% further toward white) and
+   *     darkening to 58% toward the zenith;
+   *   - dusk warms the low sky toward the sun's side only, over the last
+   *     fifteen degrees of its height, and twilight fades it to the night
+   *     clear over about six degrees below the horizon;
+   *   - a soft glare round the sun itself.
+   * And the planet pass hazes the ground into the horizon's colour with
+   * distance (groundHaze), a shade darker than the sky so the horizon stays
+   * a line. SKY_GLSL above is the shader copy; this is the one the test
+   * reads. `e` is the sine of the view's elevation, `toward` 0..1 how far
+   * round toward the sun's azimuth it looks. Returns [r, g, b] 0..1 with
+   * `lit` 0..1, which says whether the stars show. */
   var SKY_NIGHT = [0x04 / 255, 0x06 / 255, 0x0c / 255];
   var SKY_DUSK = [1.0, 0.52, 0.28];
-  function skyFor(tint, air, sunUp) {
-    var day = Math.max(0, Math.min(1, (sunUp + 0.10) / 0.36));
-    day = day * day * (3 - 2 * day);
-    var low = 1 - Math.max(0, Math.min(1, sunUp / 0.26));
-    var bright = air > 0 ? (0.32 + 0.68 * Math.min(1, air / 0.6)) : 0;
+  var SKY_SCATTER = [0.70, 0.83, 1.0];
+  function skyAt(tint, air, sunUp, e, toward, sunCos) {
+    var dayT = Math.max(0, Math.min(1, (sunUp + 0.10) / 0.36));
+    var day = dayT * dayT * (3 - 2 * dayT);
     var lit = day * Math.min(1, air / 0.25);
+    var bright = air > 0 ? (0.32 + 0.68 * Math.min(1, air / 0.6)) : 0;
+    var low = 1 - Math.max(0, Math.min(1, sunUp / 0.26));
+    var k = Math.pow(Math.max(0, Math.min(1, e)), 0.55);
+    var dusk = low * 0.62 * (1 - Math.max(0, Math.min(1, e * 2))) * (toward === undefined ? 0.5 : toward);
+    var glare = Math.pow(Math.max(0, sunCos || 0), 80) * 0.55 * lit;
     var out = [];
     for (var i = 0; i < 3; i++) {
-      var c = tint[i] * bright;
-      c = c + (SKY_DUSK[i] * bright * 0.85 - c) * low * 0.55;
+      var sc = tint[i] + (SKY_SCATTER[i] - tint[i]) * 0.62;
+      var zen = sc * 0.58 * bright, hor = (sc + (1 - sc) * 0.38) * bright * 1.04;
+      var c = hor + (zen - hor) * k;
+      c = c + (SKY_DUSK[i] * bright * 0.92 - c) * dusk;
+      c += [1.0, 0.94, 0.82][i] * glare;
       out.push(SKY_NIGHT[i] + (c - SKY_NIGHT[i]) * lit);
     }
     out.lit = lit;
     return out;
   }
+  GL.skyAt = skyAt;
+  /* The flat version, for the frame's clear colour and the stars: the sky
+   * a third of the way up, looking across the sun. */
+  function skyFor(tint, air, sunUp) { return skyAt(tint, air, sunUp, 0.33, 0.5, 0); }
   GL.skyFor = skyFor;
   /* The sky over `body` at a place whose local vertical is `up`, with the
    * sun along `sunDir` (both unit, world). */
   GL.skyOver = function (body, up, sunDir) {
     var sunUp = up.x * sunDir.x + up.y * sunDir.y + up.z * sunDir.z;
     return skyFor(atmoTint(body), airOf(body), sunUp);
+  };
+  function setSkyUniforms(u, sk) {
+    gl.uniform4f(u.uSkyA, sk.tint[0], sk.tint[1], sk.tint[2], sk.air);
+    gl.uniform3f(u.uSkyUp, sk.up.x, sk.up.y, sk.up.z);
+    gl.uniform3f(u.uSkySun, sk.sun.x, sk.sun.y, sk.sun.z);
+  }
+  /* Set by main.js each frame the ground sky is wanted, cleared by begin;
+   * it hazes that body's ground. */
+  GL.setGroundSky = function (body, up, sunDir) {
+    groundSky = body ? { bodyId: body.id, tint: atmoTint(body), air: airOf(body),
+                         up: up, sun: sunDir } : null;
+  };
+  /* The sky itself: one full-screen quad behind everything, no depth, no
+   * glow. Called right after begin, before the stars, so at dusk the stars
+   * come out over it. */
+  GL.drawGroundSky = function (cam) {
+    if (!gl || !skyProg || !groundSky || !(groundSky.air > 0)) return;
+    gl.disable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    gl.disable(gl.BLEND);
+    gl.colorMask(true, true, true, false);
+    gl.useProgram(skyProg);
+    gl.bindVertexArray(vao);
+    gl.uniform2f(skyUni.uViewportPx, vw, vh);
+    gl.uniform2f(skyUni.uCenterPx, vw / 2, vh / 2);
+    gl.uniform1f(skyUni.uQuadPx, vw + vh);
+    gl.uniform3f(skyUni.uRight, cam.r.x, cam.r.y, cam.r.z);
+    gl.uniform3f(skyUni.uUp, cam.u.x, cam.u.y, cam.u.z);
+    gl.uniform3f(skyUni.uFwd, cam.f.x, cam.f.y, cam.f.z);
+    gl.uniform2f(skyUni.uScreenPx, cam.cx, cam.cy);
+    gl.uniform1f(skyUni.uFlen, cam.flen);
+    setSkyUniforms(skyUni, groundSky);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindVertexArray(null);
+    gl.colorMask(true, true, true, true);
+    gl.depthMask(true);
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   };
 
   /* ---- how a world turns, for the shader --------------------------------

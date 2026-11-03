@@ -40,6 +40,61 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-02, ground ports seen from outside, third round)
+
+- **The sky has its own colour, and there is a horizon.** On Oruun the sky
+  took the same orange as the air, the halo and the ground, so from the
+  street the deck ended and orange carried on. Now:
+  - By day the sky is the air tint carried most of the way to a scattered
+    blue-white.
+  - It is a gradient: palest at the horizon, darker toward the zenith, with
+    a soft glare round the sun. Dusk warms the low sky on the sun's side;
+    night and airless worlds are dark, as before.
+  - It is drawn as its own full-screen pass behind everything
+    (`GLWorld.drawGroundSky`).
+  - The ground hazes into the horizon's colour with distance, a shade
+    darker than the sky, so the horizon is a line (`groundHaze`).
+  - Measured from the street at Downwell at 3 km: sky L* 77 against ground
+    L* 58, hue 349 degrees against 14, deltaE 49. With the sun forced lower,
+    deltaE is 39 at 9 degrees, 22 at 2 degrees, 14 just after sunset and
+    5.5 at full night, where both are near black and only the stars tell
+    them apart.
+  - The sky and the haze are their own GLSL block and function (`SKY_GLSL`,
+    `groundHaze`), mirrored in JS by `GLWorld.skyAt`.
+- **The pit wall reads as cut rock, not a vortex.**
+  - The 48 flat facets each lit at their own angle were the spokes. The wall
+    now shades smoothly through per-vertex normals: `uploadMesh` takes an
+    optional `vn`, and an optional `vcol` for per-vertex colour.
+  - Down a near-level cone, the beds traced across the generators had
+    become long slivers. The wall is now a grid of 104 generators by 64
+    rows, each face coloured by the bed it is in. Cells a bed edge crosses
+    are split 2x2 and blended per vertex.
+  - The beds dip one way per port and fold together about 22 m on a 140 m
+    wavelength. Each bed's colour is nudged per bed. All of this comes from
+    a hash of the port's id, so the same port shows the same rock every
+    visit.
+  - The black cap past her is gone. The pit is set in a bowl of rock under
+    the street, sunk with the planet's curve. Anything that misses the wall
+    and the bay meets rock; up is still open to the sky.
+- **No crater from far out.** The cone stops growing at the street: its
+  radius is held to the lesser of its width there and the bay's footprint
+  (the room's half-diagonal plus a hull). It is a cylinder from there on,
+  in the shaders and in the wall alike. At Ashford from 2 km the hole went
+  from about 1 km across to the bay's size, about 0.7 km.
+- render.test checks:
+  - the street hole is no wider than the bay;
+  - the cone is held to the bay whenever the eye is above the street;
+  - a hull's width round the whole sight-line to her stays cut at every
+    angle swept;
+  - the sky is paler and bluer than its air, and darker at the zenith than
+    at the horizon;
+  - every wall face lies on the capped cone, below the street and outside
+    the bay's air.
+- The wall is rebuilt only when the eye has moved 0.8% of the boom. A
+  rebuild measured 6-30 ms in headless Chrome on the two-core cloud box;
+  not yet measured on the Crawler.
+- Not saved; no save change.
+
 ### Fixed (2026-11-02, ground ports seen from outside, second round)
 
 - **The ground-port view was upside down.** The first round's camera frame
