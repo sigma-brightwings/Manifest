@@ -172,6 +172,9 @@ require('../src/hulls.js');
 require('../src/weather.js');
 /* The captain's notes and log (F5 NOTES). */
 require('../src/journal.js');
+/* Captain Halloway's lessons: a fresh career opens with his card up, so
+ * every frame below draws it. */
+require('../src/tutorial.js');
 require('../src/render.js');
 require('../src/screens.js');
 require('../src/main.js');
@@ -5214,6 +5217,76 @@ console.log('--- auto-dock ---');
   frames(2);
   check('any manual burn hands control back', !G.autodock);
   G.keys.w = false;
+})();
+
+/* ---- auto-dock at a FULL port asks, holds, and never offends ---------------
+ * Astra, 2026-11-02: "auto-docking should never make you a criminal.
+ * Auto-dock now includes auto-contact the dock for permission to land once
+ * we drop out of cruise." Found playing the tutorial: two docks in a row at
+ * ports carrying eleven ships in six berths, each a 500 cr fine and
+ * FUGITIVE for a ship the player never touched. The port is FORCED full
+ * here (Sim.berthStatus wrapped), because whether a real one happens to be
+ * full at this minute is the timetable's business, not this test's. */
+console.log('--- auto-dock at a full port ---');
+(function () {
+  newFlying('kawartha');
+  frames(2);
+  var keydown = listeners.keydown[0];
+  function press(k) { keydown({ key: k, shiftKey: false, preventDefault: function () {} }); }
+  var port = G.sys.ports.filter(function (p) { return !p.surface && p.docking; })[0];
+  var realStatus = Sim.berthStatus, full = true;
+  Sim.berthStatus = function (p, sys, t, ship) {
+    var s = realStatus(p, sys, t, ship);
+    if (full && p === port) {
+      s = Object.assign({}, s, { full: true, free: 0, waitFor: 40,
+                                 occupied: (s.capacity || 6) + 5 });
+    }
+    return s;
+  };
+  try {
+    var ps = Sim.bodyState(port, G.sys, G.t);
+    G.ship.pos = V.addScaled(ps.pos, { x: 1, y: 0.3, z: 0.2 }, 260);
+    G.ship.vel = V.clone(ps.vel);
+    G.ship.docked = null; G.cruise = null; G.autodock = null;
+    G.ship.cleared = {}; G.fugitive = null; G.wanted = {};
+    Sim.refreshShip(G.ship);
+    G.navTarget = { kind: 'body', id: port.id };
+    frames(1);
+    /* By time, not by length: the log is capped at thirty and a full log
+     * keeps the same length while it scrolls. */
+    var tStart = G.t;
+    press('t'); press('t');
+    check('auto-dock engages on a full port', !!G.autodock);
+    var held = false, guard = 0, minRange = Infinity;
+    while (G.autodock && !G.ship.docked && guard++ < 3000) {
+      frame();
+      if (G.autodock && G.autodock.phase === 'hold') held = true;
+      var r = V.dist(G.ship.pos, Sim.bodyPosition(port, G.sys, G.t));
+      if (held) minRange = Math.min(minRange, r);
+      if (held && guard > 400) break;
+    }
+    var said = (G.msgLog || []).filter(function (m) { return m.at >= tStart; })
+                               .map(function (m) { return m.text; }).join(' | ');
+    check('the autopilot asked the port itself', /berths occupied/.test(said), said.slice(0, 200));
+    check('told it was full, it holds', held && !!G.autodock && G.autodock.phase === 'hold',
+          G.autodock && G.autodock.phase);
+    check('it is not docked while it holds', !G.ship.docked);
+    check('it holds outside the capture envelope', minRange > (port.dockCaptureRadius || 2) * 2,
+          minRange.toFixed(1) + ' km');
+    check('holding is no crime', !G.fugitive && !Combat.dockRefusal(G, port));
+
+    /* A berth frees. The next ask is granted and it goes in. */
+    full = false;
+    guard = 0;
+    while (G.autodock && !G.ship.docked && guard++ < 14000) frame();
+    check('when a berth frees, it asks again, is cleared, and docks', G.ship.docked === port.id,
+          'docked=' + G.ship.docked + ' phase=' + (G.autodock && G.autodock.phase) + ' after ' + guard);
+    check('and arrives a guest, not a fugitive', !G.fugitive && !Combat.dockRefusal(G, port),
+          G.fugitive ? 'FUGITIVE' : '');
+  } finally {
+    Sim.berthStatus = realStatus;
+    G.fugitive = null; G.wanted = {};
+  }
 })();
 
 /* THE AUTOPILOT AND THE GROUND. Every port above hangs in space, where the

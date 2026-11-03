@@ -1171,6 +1171,7 @@
         }
         var cut = passageCut(G, m);
         G.ship.credits += cut.pay;
+        if (global.Tutorial) global.Tutorial.note(G, 'contract', { id: m.id, pay: cut.pay });
         jot(G, 'mission', 'Passage to ' + port.name + ' done: ' + cut.text);
         bumpStanding(G, m.faction, cut.standing);
         if (hooks && hooks.say) hooks.say(cut.text, 6);
@@ -1191,6 +1192,8 @@
       if (G.ship.cargo[m.cid] <= 1e-9) delete G.ship.cargo[m.cid];
       Sim.refreshShip(G.ship);
       G.ship.credits += m.pay;
+      /* Captain Halloway's last lesson is a delivery (tutorial.js). */
+      if (global.Tutorial) global.Tutorial.note(G, 'contract', { id: m.id, pay: m.pay });
       bumpStanding(G, m.faction, STANDING_WIN[m.type] || 3);
       (G.doneMissions = G.doneMissions || {})[m.id] = true;
       list.splice(i, 1);
