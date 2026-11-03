@@ -17875,7 +17875,10 @@
 
   function panel(ctx, x, y, w, h, solid) {
     ctx.save();
-    ctx.fillStyle = solid ? 'rgba(5,9,16,0.975)' : 'rgba(8,14,24,0.78)';
+    /* Solid means solid: at 0.975 the say() line and the HUD behind the
+     * market still read through it as a ghost of text between the rows
+     * (seen 2026-11-03). */
+    ctx.fillStyle = solid ? 'rgb(5,9,16)' : 'rgba(8,14,24,0.78)';
     ctx.strokeStyle = 'rgba(120,160,220,0.28)';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -18899,10 +18902,21 @@
         ctx.font = 'bold 12px ui-monospace, monospace';
       }
       if (isWaste) {
+        /* KEPT OUT OF THE BUY COLUMN. The name was measured in the 10px
+         * note font rather than the 12px it is drawn in, and the long note
+         * then ran straight through the price beside it ("pays you to
+         * haul it" printed over "-277 cr", seen 2026-11-03). Measured in
+         * its own font now, and the note steps down to a shorter form, or
+         * to nothing, if it would reach the column. */
+        ctx.font = 'bold 12px ui-monospace, monospace';
+        var wx = px + 44 + ctx.measureText(r.name).width + 8;
         ctx.fillStyle = 'rgba(255,184,107,0.65)';
         ctx.font = 'bold 10px ui-monospace, monospace';
-        ctx.fillText(r.sink ? '  (accepts for disposal)' : '  (pays you to haul it)',
-                     px + 44 + ctx.measureText(r.name).width + 34, y);
+        var room = px + 330 - 60 - wx;   // the widest ask, '-1,234 cr', is ~56 px at 12px
+        var notes = r.sink ? ['(accepts for disposal)', '(takes it)'] : ['(pays you to haul it)', '(paid to haul)'];
+        for (var ni = 0; ni < notes.length; ni++) {
+          if (ctx.measureText(notes[ni]).width <= room) { ctx.fillText(notes[ni], wx, y); break; }
+        }
         ctx.font = 'bold 12px ui-monospace, monospace';
       }
 
@@ -18938,9 +18952,26 @@
     ctx.save();
     ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(160,185,220,0.7)';
-    ctx.fillText('↑↓ select   ·   → buy 1t   ·   ← sell 1t   ·   hold Shift for 10t   ·   ' +
-                 'Home buy max   ·   End sell all   ·   F fill tank   ·   U undock   ·   Esc or M close',
-                 px + 20, py + ph - 34);
+    /* WRAPPED TO THE PANEL, NOT WRITTEN PAST IT. Astra, 2026-11-03:
+     * "there are options along the bottom ... floating off the box
+     * they're sitting inside of". One fixed line was wider than the panel
+     * at any width under about 1,350 px, so its tail ran out over the
+     * border. The keys are laid out a phrase at a time and broken onto a
+     * second line where the panel ends, the extra line growing UP so the
+     * last trade line below keeps its place. Y (the trade analyser) is
+     * listed now too: the old line had no room for it. */
+    var keys = ['↑↓ select', '→ buy 1t', '← sell 1t', 'hold Shift for 10t', 'Home buy max',
+                'End sell all', 'F fill tank', 'Y trade analyser', 'U undock', 'Esc or M close'];
+    var maxW = pw - 40, sep = '   ·   ', rows = [''];
+    for (var ki = 0; ki < keys.length; ki++) {
+      var cur = rows[rows.length - 1];
+      var tryLine = cur ? cur + sep + keys[ki] : keys[ki];
+      if (cur && ctx.measureText(tryLine).width > maxW) rows.push(keys[ki]);
+      else rows[rows.length - 1] = tryLine;
+    }
+    for (var ri = 0; ri < rows.length; ri++) {
+      ctx.fillText(rows[ri], px + 20, py + ph - 34 - (rows.length - 1 - ri) * 14);
+    }
     if (G.ledgerLog.length) {
       ctx.fillStyle = '#7fd6c0';
       ctx.fillText(G.ledgerLog[0].text, px + 20, py + ph - 16);
