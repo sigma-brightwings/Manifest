@@ -40,6 +40,124 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-02, sea platforms, third round: windows, lamps, glint, domes, the HUD's speed)
+
+- **The tube's windows are windows.** Astra: "the walking view can show it
+  through windows though". The second round painted each pane sea below and
+  sky above. Now, on foot at a platform with the GPU, the world is drawn first
+  from the walker's eye (main.js `seaWalkWorld`), the same world the chase
+  camera sees: the sky over the platform, the swell, the rig, the other domes
+  and the ships on their pads. The deck goes over it. The panes are left out of
+  the deck's mesh and drawn depth-only before it (walk.js `panesFor`, gl.js
+  `GLWorld.queueWindows`), so the wall behind each pane is not drawn and the
+  world shows through. It is the cockpit's trick (`queueCockpit`), moved into
+  the mesh pass because her hangar and hull share that pass. The depth buffer
+  is cleared between the world and the deck, since the rig's own hub, dome and
+  tube stand all round the deck.
+  - **The plan stands on the rig.** Through a window the world must be seen
+    from the right place, so the deck plan is laid where the rig is:
+    - she stands at the pad's centre, centred by her own origin (the new
+      `origin` in main.js `hangarSpec`), not by her hull box;
+    - she faces the door, nose to the hub, as her berth faces her
+      (`noseIn`);
+    - the tube ends at the drum, 0.98 R from her, where the rig's tube ends.
+      A short passage through the drum joins it to the pad room, which is
+      still the square inside the dome.
+    Measured in the browser at Kestrel Undercroft, pad 4: the plan's tube runs
+    from (-118.1, -118.1) to (-33.2, -33.2) m in the port frame, and the rig's
+    tube runs from (-118.1, -118.1) to (-32.5, -32.5).
+  - **The rig's own tube is cut away round you** while you walk it (main.js
+    `seaWalkTubeCut`, the mesh shader's cut box). From inside, its shell and
+    floor girder stood between every pane and the sea.
+  - **Only your tube is glazed.** The stubs to the other pads are drawn inside
+    the hub's block, so glass in them would look out at the inside of a wall.
+  - **A ship on a sea pad turns with the world** (Sim `updateDockedShip`). Her
+    attitude was set once, at docking, and held still in absolute space while
+    her berth went round with the world. Half a day later she was turned on the
+    pad, and the deck plan, which is drawn in her frame, turned with her. **Every
+    other surface port has the same drift.** It is left alone there, because a
+    launch script stands ships up while they are still docked.
+  - Without a GPU there is no world to see, so the 2D walk fills the panes with
+    one flat glass colour, not a painted horizon.
+- **The tube's ceiling light** was the generic room strip: one self-lit plate
+  half a metre wide and 120 m long, which from one end of the tube was a hard
+  white wedge. Now there is one lamp per pane, on the glazing's rhythm. Each
+  lamp is a bright lens in two rings that step down to the ceiling's colour,
+  with a lighter pool on the floor under it (walk.js `tubeLights`).
+- **The sea's glint** (gl.js `seaShade`) was a wide lobe (power 140) at full
+  strength whatever the sun's height, added on top of the water and clipped.
+  It is now:
+  - a tight lobe (power 900), broken up by the swell into sparkle;
+  - Fresnel-weighted, 2% looking straight down and most of the light at
+    grazing angles;
+  - dimmed and reddened by the sun's path through the air (about
+    1/sin(altitude)), and gone below the horizon;
+  - screened onto the water rather than added, so it nears white without
+    passing it.
+- **Most of the "white patch" was cloud.** The cloud deck is painted onto the
+  planet's surface, which is right from orbit. Under the world's own sky it was
+  painted on the sea round your feet, so on a cloudy hour the swell was a white,
+  streaked snowfield from 28 m up and from 300 m. Under the ground sky the deck
+  now fades off the ground below 3 km of eye height and is fully back by 10 km,
+  where you look down on it. This applies to ground ports too. **The sky pass
+  has no clouds in it, so an overcast day now reads clear from under it.**
+- **The domes** read nearly white and flat in full sun: a skin of #cfd6db plus
+  the sun and the sky fill went past white. The plate is now #8c969e (about 0.58 of white; the sky fill adds about a third again on every side):
+  - each row of a leaf is its own sheet, a few per cent lighter or darker by a
+    fixed pattern;
+  - the seams are darker;
+  - odd and even leaves differ by a shade;
+  - a sun highlight is added for meshes that ask for one (gl.js `uSheen`,
+    `GLWorld.setSheen`; only the petals do, and every other mesh is unchanged).
+- **The HUD's speed, near a world, is against its ground or its air.** Coming
+  down onto a platform, the band read about 178 m/s (257 m/s at Harrow
+  Starport). That was the world's spin, the same cause as the contrail bug.
+  The new `Sim.hudSpeed` and `Sim.surfaceVelocity` give the velocity of the
+  ground under you, built exactly as `surfaceOffset` turns a port, so a point
+  fixed to a port's ground has the port's velocity.
+  - **When:** inside the world's air (atmosphere tops over 60 systems are
+    72-286 km), or within 30 km of an airless world's ground (`SURFACE_SPEED_KM`;
+    airless worlds with ports turn their equators at 0-476 m/s, median 23).
+  - **What changed on screen** (two lines of main.js):
+    - the STATUS row reads `airspeed` or `gnd speed` instead of `speed`;
+    - the speed box on the glass carries `AIR` or `GND` after its unit.
+    Out of the air and higher up, both read the orbit, as before. The orbit map
+    (F2) always reads the orbit's `speed`. Vertical speed is unchanged, since
+    the spin has no vertical part.
+  - **Display only.** Here is what each flying system measures against,
+    checked, not changed:
+    - **autodock** and the **flight-assist lock**: the target port's own
+      velocity, which includes the spin, so they are surface-relative at a
+      port;
+    - the **vector assist's hover**: `atmosphereContext`'s velocity, which is
+      the world's CENTRE, not the turning air;
+    - **landing damage** (Sim `checkImpact`): the world's
+      CENTRE too;
+    - **drag**: the centre, by its own comment ("rotation of the atmosphere
+      itself is ignored").
+    So on a fast-spinning world, a ship that reads 0 `gnd speed` and sets down
+    away from a port is judged to have touched down at the spin speed. That
+    is a physics question, raised and not touched here.
+- **Tests:**
+  - seaplatform.test (group `ground`): your tube is glazed and the stubs are
+    not; the panes are their own mesh; no face of the deck carries the old
+    painted sea or sky; every pane is in the tube's walls, just in front of
+    them; main.js draws them with `queueWindows`; she stands at the pad's
+    centre 0.98 R from the tube's end, nose to the hub.
+  - airdata.test (group `core`): a ship sitting still on 12 surface ports'
+    turning worlds reads 0 (the old reading was up to 124 m/s); it says air or
+    ground; a 5 m/s descent over a pad reads 5 m/s; in orbit it is the orbit's.
+- **Saves survive**, version unchanged. Nothing new is saved.
+- **Not done:**
+  - Planetary rings, tears and lightning bolts are not seen through the
+    tube's panes. They draw after the depth clear and fail against the panes.
+  - **The walk's floor is about 2 m under the rig's deck.** It is her gear's
+    floor, and she stands a fixed standoff over the deck, not her own gear
+    height: at Harrow Starport the courier's gear is 2.3 m under the deck
+    plate. So through the panes your eye is just under the neighbouring
+    decks' tops, and you see their edges as slabs. This is a berth-height
+    question for every pad, not a window one.
+
 ### Changed (2026-11-02, the drive on the ground: two seconds, longer for bigger hulls)
 
 - **The ground spool is 2 s for a courier and grows with the size of the

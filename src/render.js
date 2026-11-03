@@ -3361,8 +3361,9 @@
   /* THE PETALS' PAINT (2026-11-02, second round). In full sun the domes
    * read nearly white and flat: the skin was #cfd6db, 0.81 of white, and
    * under the sun plus the sky fill that is past 1 - clipped, every facet
-   * the same white. Now the plate is a mid grey-blue (#a9b2b9, about 0.69)
-   * so a sunlit face lands in range, and every plate differs a little:
+   * the same white. Now the plate is a mid grey-blue (#8c969e, about 0.58)
+   * so a sunlit face lands in range - the sky fill (gl.js uSkyFill) adds
+   * about a third again on every side - and every plate differs a little:
    * each row of the leaf is a separate sheet (a few per cent lighter or
    * darker by a fixed pattern, never Math.random - the same dome every
    * time), the seams down a leaf's edges are darker, and the odd leaves
@@ -3391,7 +3392,7 @@
      * geometry. */
     var leaf = odd ? 0.95 : 1;
     var ROWS = [1.00, 0.95, 1.04, 0.97, 1.02, 0.94, 1.0];
-    [[0, '#a9b2b9', '#7f878e', '#d9b23a'], [0.0012, '#59626a', '#4a5158', '#59626a']].forEach(function (skin, inner) {
+    [[0, '#8c969e', '#6c747b', '#d9b23a'], [0.0012, '#59626a', '#4a5158', '#59626a']].forEach(function (skin, inner) {
       var base = m.v.length;
       for (var i = 0; i <= NA; i++) {
         for (var j = 0; j <= NU; j++) {
@@ -3427,7 +3428,7 @@
     if (!L) return;
     var E = frame.right, N = frame.up, U = frame.fwd;
     /* The petals' highlight (gl.js uSheen): painted sheet. */
-    if (global.GLWorld && global.GLWorld.setSheen) global.GLWorld.setSheen(0.30);
+    if (global.GLWorld && global.GLWorld.setSheen) global.GLWorld.setSheen(0.22);
     for (var k = 0; k < L.pads.length; k++) {
       var p = L.pads[k];
       var open = Math.max(0, Math.min(1, (domes && domes[k]) || 0));

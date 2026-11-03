@@ -1482,6 +1482,17 @@
      * is what the old note was protecting and is still true. */
     '    float thresh = mix(@THRESH_HI@, @THRESH_LO@, clamp(uCloud, 0.0, 1.0));',
     '    float mask = smoothstep(thresh, thresh + @EDGE@, cl);',
+    /* NOT ON THE GROUND UNDER YOU (2026-11-02, sea platform polish). The
+     * deck is painted onto the surface - right from orbit, where it is a
+     * film on the world - and so from under this world's own sky (uSkyA.w,
+     * the ground sky is engaged) it was painted on the sea round your feet:
+     * at a platform on a cloudy hour the swell turned white and streaked,
+     * like a snowfield, from 28 m up and from 300 m. That was most of "the
+     * sea toward a low sun is a white patch". Under the ground sky the deck
+     * is taken off the ground below 3 km of eye height and back by 10 km,
+     * where you are looking down on it. (The sky pass has no clouds in it,
+     * so from under them an overcast day now reads clear; noted.) */
+    '    if (uSkyA.w > 0.0) mask *= smoothstep(3.0, 10.0, sqrt(dot(oc, oc)) - uWorldRadius);',
     '    vec3 cloudCol = mix(vec3(0.90, 0.93, 0.97), uAtmoColor, 0.22);',
 
     /* ---- where the weather is actually happening -------------------- */
