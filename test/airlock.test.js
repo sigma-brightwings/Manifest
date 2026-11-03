@@ -404,19 +404,27 @@ function dockedShip(id) {
     Sim.updateDockedShip(sh, P.sys, t);
     var bs = Sim.berthState(P.port, P.sys, t, sh.dockOffset && sh.dockOffset.berth);
     if (!bs || !bs.basis) { liftErr.push(id + '@' + k + ' no berth'); return; }
+    /* AT A STATION, HER OWN STANCE (2026-11-03, Sim.standLiftKm with the
+     * port): her centre stands her own gear's height over the deck, so the
+     * shift off the berth's point is that less the berth's standoff, and her
+     * feet are ON the deck rather than where the fleet's standoff left them.
+     * At a ground port and a sea pad it is still the half metre. */
+    var want = Sim.standLiftKm(sh, P.port) * 1000;
     var d = V.sub(sh.pos, bs.pos), up = V.dot(d, bs.basis.up) * 1000, side = V.len(V.addScaled(d, bs.basis.up, -V.dot(d, bs.basis.up))) * 1000;
-    if (Math.abs(up - lift) > 1e-3 || side > 1e-3) liftErr.push(id + '@' + k + ' ' + up.toFixed(4) + ' m up, ' + side.toFixed(4) + ' m aside');
+    if (Math.abs(up - want) > 1e-3 || side > 1e-3) liftErr.push(id + '@' + k + ' ' + up.toFixed(4) + ' m up, ' + side.toFixed(4) + ' m aside');
     /* Her feet in the port's frame, as the renderer stands them (her pos,
      * her up, her lifted ground): where the unlifted hull's were. */
     var feet = V.dot(V.addScaled(sh.pos, sh.up, fit.ground / 1000), bs.basis.up) * 1000;
-    var was = V.dot(V.addScaled(bs.pos, bs.basis.up, raw.ground / 1000), bs.basis.up) * 1000;
+    var was = k === 'orbital'
+      ? V.dot(V.addScaled(bs.pos, bs.basis.up, -Gen.bayGeometry(P.port).standoff * P.port.radius), bs.basis.up) * 1000
+      : V.dot(V.addScaled(bs.pos, bs.basis.up, raw.ground / 1000), bs.basis.up) * 1000;
     if (Math.abs(feet - was) > 1e-3) footErr.push(id + '@' + k + ' ' + (feet - was).toFixed(4) + ' m');
     /* A save made docked at the old height: restored, then one frame. */
     var saved = JSON.parse(JSON.stringify(sh));
     saved.pos = V.clone(bs.pos);
     Sim.updateDockedShip(saved, P.sys, t + 1);
     var bs1 = Sim.berthState(P.port, P.sys, t + 1, saved.dockOffset.berth);
-    if (Math.abs(V.dot(V.sub(saved.pos, bs1.pos), bs1.basis.up) * 1000 - lift) > 1e-3) loadErr.push(id + '@' + k);
+    if (Math.abs(V.dot(V.sub(saved.pos, bs1.pos), bs1.basis.up) * 1000 - want) > 1e-3) loadErr.push(id + '@' + k);
     /* The rail: her pose on it is the rail's plus her lift, the whole way. */
     var b0 = sh.dockOffset.berth;
     [0, 5, 20, 60].forEach(function (el) {
@@ -424,14 +432,14 @@ function dockedShip(id) {
       if (!a || !m) return;
       railN++;
       var pb = Sim.portBasis(P.port, P.sys, t), dd = V.sub(m.pos, a.pos);
-      if (Math.abs(V.dot(dd, pb.up) * 1000 - lift) > 1e-3 || V.len(dd) * 1000 > lift + 1e-3) railErr.push(id + '@' + k + ' el ' + el);
+      if (Math.abs(V.dot(dd, pb.up) * 1000 - want) > 1e-3 || V.len(dd) * 1000 > Math.abs(want) + 1e-3) railErr.push(id + '@' + k + ' el ' + el);
     });
     liftNums.push(id + '@' + k + ' +' + up.toFixed(3) + ' m');
   });
 });
 check('a geared hull is lifted GEAR_LIFT (0.5 m) in her own frame, a belly-sitter not at all', !liftErr.length && R.GEAR_LIFT === 0.5, liftErr.join(', '));
 check('her walking floor is the ground her legs are drawn on', !floorErr.length, floorErr.join(', '));
-check('docked at a station, a ground port and a sea pad, her feet are where they were and she is the lift higher', !footErr.length && !liftErr.length, footErr.join(', '));
+check('docked at a station her feet are on the deck; at a ground port and a sea pad where they were, the lift higher', !footErr.length && !liftErr.length, footErr.join(', '));
 check('a docked save loads at the new height on its first frame', !loadErr.length, loadErr.join(', '));
 check('the arrival rail carries her lift too, so the hand-over does not pop', railN > 0 && !railErr.length, railN + ' poses' + (railErr.length ? ': ' + railErr.join(', ') : ''));
 console.log('  note  ' + liftNums.join('; '));

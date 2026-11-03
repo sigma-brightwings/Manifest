@@ -280,8 +280,15 @@ console.log('--- the airlock, then the lift ---');
                                                 car: { node: car.node, f: 1 } });
     var shut = Render.leafHit(id, down, up2, { open: 0, inner: 0, berthMid: Lmid,
                                                 car: { node: car.node, f: 1 } });
-    check(id + ': the car is solid where it is, and gone from where it was',
-          !!atRest && !gone, 'at rest ' + (atRest ? 'hit' : 'miss') + ', ridden away ' + (gone ? 'hit' : 'miss'));
+    /* RIDDEN AWAY, THE SHAFT IS COVERED (2026-11-03). Astra: "when the
+     * elevator is not there, there should be a blast door covering the
+     * shaft". The hatch over the shaft is shut exactly while the car is
+     * away (Render carShafts / partState), so where the car was is still
+     * solid - the hatch, not the car - whatever the inner gate says. */
+    var hatchOnly = Render.leafHit(id, down, up2, { open: 0, inner: 1, berthMid: Lmid,
+                                                     car: { node: car.node, f: 1 } });
+    check(id + ': the car is solid where it is, and its shaft is covered once it has gone',
+          !!atRest && !!gone && !!hatchOnly, 'at rest ' + (atRest ? 'hit' : 'miss') + ', ridden away ' + (gone ? 'hit' : 'miss'));
     check(id + ': and a shut hatch still closes the well', !!shut, shut ? 'hit' : 'miss');
   });
   /* A routed model with no lift under its heavy bay: no ride, no idling. */
@@ -372,8 +379,11 @@ console.log('--- the airlock, then the lift ---');
           var d = V.sub(pose.pos, basis.entrance.pos);
           var loc = { x: V.dot(d, basis.east) / r, y: V.dot(d, basis.north) / r, z: V.dot(d, basis.up) / r };
           Render.setMoverRiders([{ pos: loc, keelKm: g6.standoff }]);
-          var sp = Render.moverPose(mv, frame, 1);
-          var top = mv.max[2] + mv.axis[2] * sp;
+          /* The car's DECK (Render.libPort movers, 2026-11-03), not its box:
+           * an inclined car's box top is far over the deck it carries on. */
+          var mvR = (Render.libPort(id).movers || []).filter(function (m) { return m.node === mv.node; })[0] || mv;
+          var sp = Render.moverPose(mvR, frame, 1);
+          var top = (typeof mvR.deck === 'number' ? mvR.deck : mv.max[2]) + mv.axis[2] * sp;
           var gap = (loc.z - g6.standoff) - top;
           rides++;
           if (gap < -0.002) { above++; if (-gap > worstR) { worstR = -gap; worstAt = id + ' b' + b; } }

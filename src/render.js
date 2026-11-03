@@ -1201,7 +1201,10 @@
     };
     gateFacesToShell(out, src);
     out.sheetsThickened = 0;
-    ['shell', 'interior'].forEach(function (k) {
+    /* The stations only (G is a report about them): a ground site's city
+     * and street are split by face count (city-sites.test), and its bay
+     * is under rock. */
+    if (src.kind === 'orbital' && !src.entrances && !/-site-[sml]$/.test(role)) ['shell', 'interior'].forEach(function (k) {
       var got = thickenSheets(out[k]);
       if (got) { out[k] = got; out.sheetsThickened += got.thickened; }
     });
