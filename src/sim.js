@@ -34,8 +34,19 @@
   var SPEC = (Gen && Gen.SHIP_SPEC) || {};
 
   /* Gravitational parameter governing a body's orbit about its parent.
-   * Using (parent + self) keeps finalize() and the evaluator in agreement. */
+   * Using (parent + self) keeps finalize() and the evaluator in agreement.
+   *
+   * `orbit.mu`, when present, overrides it (2026-11-03, stars plan stage 1,
+   * claude/stars-and-systems-plan.md §2). A star in a binary rides an
+   * ellipse about the pair's BARYCENTRE, which is a point and not a mass:
+   * the pull that bends star A round it is the other star's, G·M_B/r², with
+   * r the separation, not A's distance from the centre. Written in A's own
+   * distance r_A = r·M_B/M that is mu = G·M_B³/M² — which no (parent +
+   * self) sum can produce, so the orbit carries it. finalize() reads the
+   * same field for the period, so the two still cannot disagree. Nothing
+   * sets it yet; every orbit in every generated system takes the old path. */
   function orbitMu(body, sys) {
+    if (body.orbit.mu != null) return body.orbit.mu;
     var parent = sys.byId[body.orbit.parent];
     return parent.mu + body.mu;
   }
@@ -734,6 +745,107 @@
     return best;
   }
 
+  /* ---- which body a FRAME is measured against (2026-11-03) ------------
+   * dominantBody answers "who pulls hardest here", and for a single star
+   * that is also the right answer to "what is my orbit about". Round a
+   * close binary it is not: out in circumbinary space the two stars trade
+   * the strongest pull back and forth every half binary period, and a
+   * trajectory plot, an apoapsis readout or an attitude ladder measured
+   * against "the dominant body" would flip between them with it — the
+   * orbit you are actually on is about the PAIR. So beyond FRAME_BARY
+   * binary separations from a barycentre, a star of it hands the frame up
+   * to the barycentre itself (whose mu is the pair's summed mass, so the
+   * conics come out right). Close in to either star you are in its own
+   * well, and the star answers.
+   *
+   * Only a STAR climbs. A planet or moon that dominates is the frame
+   * whatever it orbits — a circumbinary world is a world.
+   *
+   * 3 is the plan's figure (claude/stars-and-systems-plan.md §2): inside
+   * ~2-3 a_bin no orbit is stable anyway, and outside it the pair is very
+   * nearly a point mass. To be re-measured, per doctrine 6, once stage 2
+   * generates real binaries.
+   *
+   * For a system whose dominant body has no barycentre over it — every
+   * system the generator makes today — this is dominantBody exactly. */
+  var FRAME_BARY = 3;
+  function frameBody(pos, sys, t) {
+    var dom = dominantBody(pos, sys, t);
+    var b = dom;
+    while (b && (b.kind === 'star' || b.kind === 'barycentre') &&
+           b.parentBody && b.parentBody.kind === 'barycentre') {
+      var bc = b.parentBody;
+      if (!(bc.separation > 0) ||
+          V.dist(pos, bodyPosition(bc, sys, t)) <= FRAME_BARY * bc.separation) break;
+      b = bc;
+    }
+    return b;
+  }
+
+  /* ---- where the light comes from (2026-11-03) ------------------------
+   * Every lighting site used to take its sun direction off sys.root, which
+   * is the star — until a binary's root is a barycentre, a point of empty
+   * space with no light in it. This is the one place that answers instead:
+   * up to three lights from sys.stars, each with its direction from `pos`,
+   * its flux in the units `insolation` uses (L☉ / AU², so Earth = 1), and
+   * its colour, plus `dir`, the flux-weighted direction a single-light
+   * renderer should use until the shaders take several (stage 4 of
+   * claude/stars-and-systems-plan.md).
+   *
+   * With ONE star, `dir` is that light's own dir, computed exactly as every
+   * caller used to — V.norm(V.sub(bodyPosition(root), pos)) — and not run
+   * through the weighting, so the floats are the old floats to the last
+   * bit (test/stars.test.js holds it to that). Each light also carries its
+   * star's `pos`, for the few sites that normalise by 1/len rather than
+   * through V.norm and must keep doing so to stay bit-identical.
+   *
+   * `primary` is the brightest light here: the one a lens flare or a 2D
+   * terminator, which can only have one, should be drawn toward. */
+  var AU_KM = (Gen && Gen.AU) || 1.495978707e8;
+  var MAX_LIGHTS = 3;
+  function lightsAt(pos, sys, t) {
+    var stars = (sys && sys.stars) || (sys && sys.root ? [sys.root] : []);
+    var lights = [];
+    for (var i = 0; i < stars.length; i++) {
+      var s = stars[i];
+      var sp = bodyPosition(s, sys, t);
+      var to = V.sub(sp, pos);
+      var dAU = V.len(to) / AU_KM;
+      lights.push({ body: s, pos: sp, dir: V.norm(to),
+                    flux: (s.luminosity || 0) / (dAU * dAU), color: s.color });
+    }
+    if (lights.length === 1) return { lights: lights, dir: lights[0].dir, primary: lights[0] };
+    if (lights.length > MAX_LIGHTS) {
+      lights.sort(function (a, b) { return b.flux - a.flux; });
+      lights.length = MAX_LIGHTS;
+    }
+    var sx = 0, sy = 0, sz = 0, primary = lights[0] || null;
+    for (var j = 0; j < lights.length; j++) {
+      var L = lights[j];
+      if (L.flux > primary.flux) primary = L;
+      /* Sitting on a star's centre gives it infinite flux and no direction;
+       * it is left out of the blend rather than turning it into NaN. */
+      if (!isFinite(L.flux)) continue;
+      sx += L.dir.x * L.flux; sy += L.dir.y * L.flux; sz += L.dir.z * L.flux;
+    }
+    return { lights: lights, dir: V.norm({ x: sx, y: sy, z: sz }), primary: primary };
+  }
+
+  /* What the HUD's "star" rows print. A single star prints exactly what
+   * they always printed — its type, its luminosity — and a barycentre root
+   * prints its stars' types joined ("G2+K5") and their summed light, rather
+   * than throwing on a body that has neither. */
+  function starLabel(sys) {
+    var r = sys.root;
+    if (r && r.kind === 'star') return r.type;
+    return (sys.stars || []).map(function (s) { return s.type; }).join('+');
+  }
+  function starLuminosity(sys) {
+    var r = sys.root;
+    if (r && r.kind === 'star') return r.luminosity;
+    return (sys.stars || []).reduce(function (a, s) { return a + (s.luminosity || 0); }, 0);
+  }
+
   /* ---- the ship ------------------------------------------------------- */
 
   /* Any unit vector not parallel to v, for building a starting basis. */
@@ -750,7 +862,7 @@
    * so the ladder is always well-defined, just not always meaningful to
    * "level" against. */
   function localVertical(pos, sys, t) {
-    var dom = dominantBody(pos, sys, t);
+    var dom = frameBody(pos, sys, t);
     var toBody = V.sub(bodyPosition(dom, sys, t), pos);
     var d = V.len(toBody);
     return { up: d > 1e-9 ? V.scale(toBody, -1 / d) : { x: 0, y: 0, z: 1 }, body: dom };
@@ -1399,13 +1511,27 @@
   var STAR_HEAT = 160;           // heat units/s at a sun-like photosphere
   var CORONA_RHO = 3.6e-6;       // kg/m^3 at the photosphere, falling as (R/r)^4
   function starTempFactor(star) { var k = (star.temp || 5778) / 5778; return k * k * k * k; }
+  /* Every STAR has a corona, not just the root (2026-11-03, stars plan
+   * stage 1): with a binary the root is a barycentre, and a test that
+   * demanded `sys.root.kind === 'star'` would have quietly switched off
+   * the heat and the scoop at both stars. The loop answers the star whose
+   * corona you are deepest in (smallest r / R), which with one star is the
+   * one star — the same body, the same state, the same r as before. */
   function coronaContext(pos, sys, t) {
-    var star = sys && sys.root;
-    if (!star || star.kind !== 'star' || !(star.radius > 0)) return null;
-    var st = bodyState(star, sys, t);
-    var r = V.dist(pos, st.pos);
-    if (r >= CORONA_TOP * star.radius || r <= star.radius) return null;
-    return { body: star, pos: st.pos, vel: st.vel, r: r };
+    var stars = sys && (sys.stars || (sys.root ? [sys.root] : null));
+    if (!stars) return null;
+    var best = null;
+    for (var i = 0; i < stars.length; i++) {
+      var star = stars[i];
+      if (!star || star.kind !== 'star' || !(star.radius > 0)) continue;
+      var st = bodyState(star, sys, t);
+      var r = V.dist(pos, st.pos);
+      if (r >= CORONA_TOP * star.radius || r <= star.radius) continue;
+      if (!best || r / star.radius < best.r / best.body.radius) {
+        best = { body: star, pos: st.pos, vel: st.vel, r: r };
+      }
+    }
+    return best;
   }
   function starFlux(star, r) {
     return STAR_HEAT * starTempFactor(star) * (star.radius / r) * (star.radius / r);
@@ -6528,7 +6654,7 @@
     var maxPoints = opts.maxPoints || 900;
     var horizon = opts.horizon;         // seconds of look-ahead
     var includeThrust = !!opts.includeThrust;
-    var ref = opts.reference || dominantBody(ship.pos, sys, t);
+    var ref = opts.reference || frameBody(ship.pos, sys, t);
 
     var ghost = makeShip(ship.pos, ship.vel);
     if (includeThrust) ghost.thrust = V.clone(ship.thrust);
@@ -6597,7 +6723,7 @@
     var maxPoints = opts.maxPoints || 900;
     var horizon = opts.horizon;         // seconds of look-ahead
     var includeThrust = !!opts.includeThrust;
-    var ref = opts.reference || dominantBody(ship.pos, sys, t);
+    var ref = opts.reference || frameBody(ship.pos, sys, t);
 
     /* An optional wall-clock ceiling, in milliseconds. This is a SAFETY NET,
      * not the main cost control — the caller is expected to size maxPoints so
@@ -6643,7 +6769,7 @@
    * that matters — under thrust, or on a path heading for a surface — the
    * caller integrates instead, which is what predictTrajectory is for. */
   function ellipsePath(ship, sys, t, segments, reference) {
-    var dom = reference || dominantBody(ship.pos, sys, t);
+    var dom = reference || frameBody(ship.pos, sys, t);
     if (!dom || !(dom.mu > 0)) return null;
     var rel = V.sub(ship.pos, bodyPosition(dom, sys, t));
     var vrel = V.sub(ship.vel, bodyVelocity(dom, sys, t));
@@ -6668,7 +6794,7 @@
   /* The ship's current osculating orbit about its dominant body — the
    * ellipse it would follow from here if everything else vanished. */
   function oscElements(ship, sys, t) {
-    var dom = dominantBody(ship.pos, sys, t);
+    var dom = frameBody(ship.pos, sys, t);
     if (!dom) return null;
     var rel = V.sub(ship.pos, bodyPosition(dom, sys, t));
     var vrel = V.sub(ship.vel, bodyVelocity(dom, sys, t));
@@ -6727,7 +6853,7 @@
    * (the ladder's); otherwise the dominant one. `orbital` forces the
    * orbital frame (the map). */
   function hudSpeed(ship, sys, t, body, orbital) {
-    var dom = body || dominantBody(ship.pos, sys, t);
+    var dom = body || frameBody(ship.pos, sys, t);
     if (!dom) return null;
     var st = bodyState(dom, sys, t);
     var alt = V.dist(ship.pos, st.pos) - (dom.radius || 0);
@@ -6819,7 +6945,7 @@
    * answer different questions: that one takes a state already relative to
    * its primary, this one works out which primary applies. */
   function orbitalBasisAt(pos, vel, sys, t) {
-    var dom = dominantBody(pos, sys, t);
+    var dom = frameBody(pos, sys, t);
     var bs = bodyState(dom, sys, t);
     var rel = V.sub(pos, bs.pos);
     var vrel = V.sub(vel, bs.vel);
@@ -6983,7 +7109,7 @@
    * hyperbola has a periapsis but may already be past it) or a circle (where
    * no apsis is defined and snapping would be meaningless). */
   function apsisTimes(ship, sys, t) {
-    var dom = dominantBody(ship.pos, sys, t);
+    var dom = frameBody(ship.pos, sys, t);
     if (!dom || !(dom.mu > 0)) return null;
     var bs = bodyState(dom, sys, t);
     var rel = V.sub(ship.pos, bs.pos);
@@ -7174,7 +7300,7 @@
    * integrating out of range, which froze the canister in absolute space
    * while the planet it was orbiting flew off at 42 km/s. */
   function canisterRail(c, sys, t) {
-    var dom = dominantBody(c.pos, sys, t);
+    var dom = frameBody(c.pos, sys, t);
     if (!dom || !(dom.mu > 0)) return null;
     var bs = bodyState(dom, sys, t);
     var el = K.elementsFromState(V.sub(c.pos, bs.pos), V.sub(c.vel, bs.vel), dom.mu);
@@ -7529,6 +7655,8 @@
     bodyVelocity: bodyVelocity,
     acceleration: acceleration,
     dominantBody: dominantBody,
+    frameBody: frameBody, FRAME_BARY: FRAME_BARY,
+    lightsAt: lightsAt, starLabel: starLabel, starLuminosity: starLuminosity,
     localVertical: localVertical,
     relativeToShipFrame: relativeToShipFrame,
     attitudeAngles: attitudeAngles,

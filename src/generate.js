@@ -4933,7 +4933,11 @@
   var FAMILY_FEEDERS = 12;
   function planetFamily(body) {
     var b = body;
-    while (b && b.parentBody && b.kind !== 'planet' && b.parentBody.kind !== 'star') b = b.parentBody;
+    /* Stops at a barycentre as it does at a star (2026-11-03): a world
+     * circling a binary pair is its own family head, not a member of the
+     * pair's. */
+    while (b && b.parentBody && b.kind !== 'planet' && b.parentBody.kind !== 'star' &&
+           b.parentBody.kind !== 'barycentre') b = b.parentBody;
     return b;
   }
   function scheduledBetween(sys, A, B) {
@@ -5091,33 +5095,86 @@
     return p.orbit ? p.orbit.a : (body.orbit ? body.orbit.a : 1);
   }
 
-  /* Flatten the tree, compute gravitational parameters, and index by id. */
+  /* Flatten the tree, compute gravitational parameters, and index by id.
+   *
+   * BARYCENTRES (2026-11-03, stars plan stage 1 — claude/stars-and-systems-
+   * plan.md §1-2). A close binary's root is the pair's centre of mass, a
+   * `kind: 'barycentre'` body: no radius, nothing to see, nothing to land
+   * on. Its `mass` is the sum of what orbits it, so a planet circling the
+   * pair gets the pair's mu from the ordinary (parent + self) rule; its
+   * stars ride override orbits (`orbit.mu`, see Sim.orbitMu). It goes in
+   * byId — bodyState walks parents through it — and in sys.barycentres,
+   * but NOT in sys.bodies: every list the game draws, cycles, targets,
+   * charts or integrates is built off sys.bodies, and a massless point
+   * with radius 0 belongs in none of them. Keeping it out at the source is
+   * one rule instead of a filter at every one of those loops. Nothing
+   * generates one yet; every system today has a star at its root and
+   * comes out of here exactly as it did.
+   *
+   * sys.stars: the system's real stars, in tree order. [sys.root] today. */
   function finalize(sys) {
-    var bodies = [];
+    var bodies = [], barycentres = [];
+    function heldMass(b) {
+      var m = 0;
+      for (var i = 0; i < b.children.length; i++) {
+        var c = b.children[i];
+        if (c.kind === 'star') m += c.mass;
+        else if (c.kind === 'barycentre') m += c.mass > 0 ? c.mass : heldMass(c);
+      }
+      return m;
+    }
     (function walk(b, depth, parent) {
       b.depth = depth;
       b.parentBody = parent || null;
+      if (b.kind === 'barycentre') {
+        if (!(b.mass > 0)) b.mass = heldMass(b);
+        b.radius = 0;
+      }
       b.mu = V.G * b.mass;
       if (b.orbit) {
-        b.orbit.period = K.period(b.orbit.a, (parent ? parent.mu : 0) + b.mu);
+        b.orbit.period = K.period(b.orbit.a, b.orbit.mu != null ? b.orbit.mu
+                                             : (parent ? parent.mu : 0) + b.mu);
       }
-      bodies.push(b);
+      (b.kind === 'barycentre' ? barycentres : bodies).push(b);
       for (var i = 0; i < b.children.length; i++) walk(b.children[i], depth + 1, b);
     })(sys.root, 0, null);
 
     sys.bodies = bodies;
+    sys.barycentres = barycentres;
+    sys.stars = bodies.filter(function (b) { return b.kind === 'star'; });
     sys.byId = {};
     for (var i = 0; i < bodies.length; i++) sys.byId[bodies[i].id] = bodies[i];
+    for (var q = 0; q < barycentres.length; q++) {
+      var bc = barycentres[q];
+      sys.byId[bc.id] = bc;
+      /* The pair's separation, a_A + a_B, which Sim.frameBody measures
+       * "far from the pair" in. Off the two heaviest things on it. */
+      var held = bc.children.filter(function (c) { return c.kind === 'star' || c.kind === 'barycentre'; })
+        .sort(function (x, y) { return y.mass - x.mass; });
+      bc.separation = held.slice(0, 2).reduce(function (a, c) { return a + (c.orbit ? c.orbit.a : 0); }, 0);
+    }
 
     /* Only bodies that meaningfully bend a trajectory go in the gravity loop.
      * Skipping station-scale masses costs nothing physically (their pull is
-     * ~1e-20 of a planet's) and keeps the integrator cheap. */
-    sys.gravBodies = bodies.filter(function (b) { return b.mass > 1e18; });
+     * ~1e-20 of a planet's) and keeps the integrator cheap. A barycentre is
+     * already out (it is not in `bodies`); said again here because it is
+     * the one place where letting it in would be wrong rather than untidy —
+     * its stars already pull, and the pair would pull twice. */
+    sys.gravBodies = bodies.filter(function (b) { return b.mass > 1e18 && b.kind !== 'barycentre'; });
     // Landing pads, indexed once: the flight loop asks "am I over a pad"
     // every physics substep and should not walk the whole system to find out.
     sys.pads = bodies.filter(function (b) { return !!b.surface; });
     sys._cache = { t: NaN, pos: {}, vel: {} };
     return sys;
+  }
+
+  /* The gravitational parameter a star on a barycentric orbit needs
+   * (stars plan §2): A at r_A = r·M_B/M from the centre feels G·M_B/r², and
+   * in r_A that is mu = G·M_B³/M². Kept here beside finalize so stage 2's
+   * generator and the suite's hand-built pair use the one formula. */
+  function barycentricMu(mSelf, mOther) {
+    var M = mSelf + mOther;
+    return V.G * mOther * mOther * mOther / (M * M);
   }
 
   /* Stable, comparable snapshot of a system's static definition — used by the
@@ -5200,6 +5257,7 @@
     buildContraband: buildContraband,
     generateSystem: generateSystem,
     interstellarSystem: interstellarSystem,
+    barycentricMu: barycentricMu,
     starPreview: starPreview,
     finalize: finalize,
     describe: describe,
