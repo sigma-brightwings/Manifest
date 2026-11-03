@@ -59,7 +59,7 @@ var GROUPS = {
     'test/tear.test.js', 'test/groundport-look.test.js', 'test/outworks.test.js',
     'test/galaxyzoom.test.js'
   ],
-  berths: ['test/berths.test.js'],
+  berths: ['test/berths.test.js', 'test/interiors.test.js'],
   ships: [
     'test/ships.test.js', 'test/shipyard.test.js', 'test/start.test.js',
     'test/crew.test.js', 'test/fleet.test.js', 'test/shipdeck.test.js',

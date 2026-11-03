@@ -1200,7 +1200,111 @@
       carriers: src.carriers || null
     };
     gateFacesToShell(out, src);
+    out.sheetsThickened = 0;
+    ['shell', 'interior'].forEach(function (k) {
+      var got = thickenSheets(out[k]);
+      if (got) { out[k] = got; out.sheetsThickened += got.thickened; }
+    });
     PORT_CACHE[role] = out;
+    return out;
+  }
+
+  /* ---- SURFACES MORE THAN A PIXEL THICK (2026-11-03) ---------------------
+   *
+   * Astra: "can you ensure that the surfaces are more than 1px thick?"
+   *
+   * Some of the art's walls and floors are single sheets: a connected piece
+   * of the mesh flat to within 1e-5 of a radius on one axis. Measured on the
+   * Mirven models, 30-440 such pieces per station, almost all of them decals,
+   * marks and caution strips laid on a surface (well under a hundredth of a
+   * radius across, and meant to be flat); but 16-32 per station are panels
+   * a hundredth of a radius or more across — a wall, a floor, a bulkhead —
+   * and seen edge-on, or cut by the cutaway, a sheet is a line one pixel
+   * wide or nothing at all.
+   *
+   * So each of those becomes a slab SHEET_SLAB thick: its faces copied that
+   * far along the flat axis and the open edges walled, both sides painted
+   * as the sheet was. A floor is thickened DOWN (its top stays the deck a
+   * hull stands on); a wall away from the model's middle, so a room keeps
+   * its size. 0.0008 of a radius is a metre at Threshold Dock and 4 m at
+   * Halden Dock: several pixels at any cutaway distance, and inside the
+   * plating either way. Returns the new mesh with `thickened`, or null. */
+  var SHEET_FLAT = 1e-5, SHEET_MIN_ACROSS = 0.01, SHEET_SLAB = 0.0008;
+  function thickenSheets(m) {
+    if (!m || !m.f || !m.f.length) return null;
+    var par = {}, idOf = {}, nid = 0;
+    function find(x) { while (par[x] !== undefined && par[x] !== x) x = par[x] = par[par[x]]; return par[x] === undefined ? (par[x] = x) : x; }
+    function key(p) { return Math.round(p[0] * 1e5) + '|' + Math.round(p[1] * 1e5) + '|' + Math.round(p[2] * 1e5); }
+    var fk = new Array(m.f.length);
+    for (var i = 0; i < m.f.length; i++) {
+      var f = m.f[i], first = -1;
+      for (var k = 0; k < f.length; k++) {
+        var p = m.v[f[k]];
+        if (!p) continue;
+        var q = key(p), id = idOf[q];
+        if (id === undefined) id = idOf[q] = nid++;
+        if (first < 0) first = id; else { var a = find(first), b = find(id); if (a !== b) par[a] = b; }
+      }
+      fk[i] = first;
+    }
+    var C = {};
+    for (i = 0; i < m.f.length; i++) {
+      if (fk[i] < 0) continue;
+      var g = find(fk[i]), c = C[g] || (C[g] = { lo: [Infinity, Infinity, Infinity], hi: [-Infinity, -Infinity, -Infinity], faces: [] });
+      c.faces.push(i);
+      for (k = 0; k < m.f[i].length; k++) {
+        var v = m.v[m.f[i][k]];
+        for (var ax = 0; ax < 3; ax++) { if (v[ax] < c.lo[ax]) c.lo[ax] = v[ax]; if (v[ax] > c.hi[ax]) c.hi[ax] = v[ax]; }
+      }
+    }
+    var v2 = null, f2 = null, c2 = null, oi2 = null, count = 0;
+    Object.keys(C).forEach(function (gk) {
+      var c = C[gk], ext = [c.hi[0] - c.lo[0], c.hi[1] - c.lo[1], c.hi[2] - c.lo[2]];
+      var flat = -1;
+      for (var a2 = 0; a2 < 3; a2++) if (ext[a2] < SHEET_FLAT) flat = a2;
+      if (flat < 0) return;
+      var across = Math.max(ext[(flat + 1) % 3], ext[(flat + 2) % 3]);
+      if (across < SHEET_MIN_ACROSS) return;
+      if (!v2) { v2 = m.v.slice(); f2 = m.f.slice(); c2 = m.c ? m.c.slice() : null; oi2 = m.oi ? m.oi.slice() : null; }
+      var level = (c.lo[flat] + c.hi[flat]) / 2;
+      var dir = flat === 2 ? -1 : (level >= 0 ? 1 : -1);
+      var off = [0, 0, 0]; off[flat] = dir * SHEET_SLAB;
+      var copy = {}, edges = {};
+      c.faces.forEach(function (fi) {
+        var face = m.f[fi], nf = [];
+        for (var k3 = 0; k3 < face.length; k3++) {
+          var vi = face[k3];
+          if (copy[vi] === undefined) {
+            var pv = m.v[vi];
+            copy[vi] = v2.length;
+            v2.push([pv[0] + off[0], pv[1] + off[1], pv[2] + off[2]]);
+          }
+          nf.push(copy[vi]);
+          var va = face[k3], vb = face[(k3 + 1) % face.length];
+          var ek = va < vb ? va + ',' + vb : vb + ',' + va;
+          edges[ek] = (edges[ek] || 0) + 1;
+        }
+        f2.push(nf.slice().reverse());
+        if (c2) c2.push(m.c[fi]);
+        if (oi2) oi2.push(-1);
+      });
+      /* The open edges (used by one face of the sheet) get a wall. */
+      var col = m.c ? m.c[c.faces[0]] : null;
+      Object.keys(edges).forEach(function (ek) {
+        if (edges[ek] !== 1) return;
+        var ab = ek.split(','), va2 = +ab[0], vb2 = +ab[1];
+        var ca = copy[va2], cb = copy[vb2];
+        if (ca === undefined || cb === undefined) return;
+        f2.push([va2, vb2, cb]); f2.push([va2, cb, ca]);
+        if (c2) { c2.push(col); c2.push(col); }
+        if (oi2) { oi2.push(-1); oi2.push(-1); }
+      });
+      count++;
+    });
+    if (!count) return null;
+    var out = { v: v2, f: f2, c: m.c ? c2 : m.c };
+    if (oi2) out.oi = oi2;
+    out.thickened = count;
     return out;
   }
 
@@ -16548,6 +16652,7 @@
     leafHit: leafHit,
     sectionAt: sectionAt,
     roomAt: roomAt,
+    partState: partState,
     portTriangles: portTriangles,
     portSegmentHit: portSegmentHit,
     clearRoute: clearRoute,
