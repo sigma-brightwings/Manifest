@@ -6121,6 +6121,30 @@
     return m;
   }
 
+  /* The outermost crossing of the ray from the model's centre along unit
+   * `dir` with any of its faces (Moller-Trumbore), in model units; 0 when
+   * the ray crosses none. Once per outwork try, and the result is cached
+   * with the outworks, so the cost is paid once per port. */
+  function hullReach(hull, dir) {
+    var best = 0, f = hull.f, v = hull.v;
+    for (var i = 0; i < f.length; i++) {
+      var a = v[f[i][0]], b = v[f[i][1]], c = v[f[i][2]];
+      var e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+      var pv = vcross(dir, e2);
+      var det = e1[0] * pv[0] + e1[1] * pv[1] + e1[2] * pv[2];
+      if (Math.abs(det) < 1e-12) continue;
+      var inv = 1 / det, tv = [-a[0], -a[1], -a[2]];
+      var u = (tv[0] * pv[0] + tv[1] * pv[1] + tv[2] * pv[2]) * inv;
+      if (u < 0 || u > 1) continue;
+      var qv = vcross(tv, e1);
+      var w = (dir[0] * qv[0] + dir[1] * qv[1] + dir[2] * qv[2]) * inv;
+      if (w < 0 || u + w > 1) continue;
+      var t = (e2[0] * qv[0] + e2[1] * qv[1] + e2[2] * qv[2]) * inv;
+      if (t > best) best = t;
+    }
+    return best;
+  }
+
   function stationOutworks(port, model) {
     var key = model + '|' + port.id;
     if (port._outworks && port._outworks.key === key) return port._outworks.mesh;
@@ -6160,12 +6184,29 @@
     var menu = OUTWORK_MENU[role] || OUTWORK_MENU.orbital;
     var want = 2 + rng.int(0, 2);
     var mesh = emptyMesh(); mesh.c = [];
-    var placed = [];
+    var placed = [], ties = [];
     for (var tries = 0; tries < 60 && placed.length < want; tries++) {
       /* A direction on the sphere, then a distance just off the hull. */
       var zz = rng.range(-0.8, 0.8), th = rng.range(0, Math.PI * 2), rr = Math.sqrt(1 - zz * zz);
       var out = [rr * Math.cos(th), rr * Math.sin(th), zz];
-      var dist = R * rng.range(1.18, 1.55) + 0.12;
+      /* HOW FAR THE HULL REACHES THIS WAY, not how far its furthest
+       * corner reaches any way. Astra, 2026-11-03, a tank farm hanging in
+       * space on two trusses that stopped short of everything: "what is
+       * this floating in space unconnected to anything?" The distance and
+       * the tether were both measured off R, the radius of the model's
+       * furthest vertex — right for a round hub, and wrong by most of the
+       * station for a long one: off the flank of a spine or a yard the
+       * hull is a fraction of R away, so the outwork stood out at 1.2-1.5
+       * R and its truss ended at 0.92 R, in empty space. So ask the mesh:
+       * the outermost face the ray from the centre crosses in this
+       * direction (`hullReach`), and stand off THAT. A direction that
+       * crosses no face (a gap between arms) has nothing to tie to and is
+       * skipped. The same draws in the same order, so each port keeps the
+       * kinds it had; only where they stand changes. */
+      var stand = rng.range(1.18, 1.55);
+      var reach = hullReach(hull, out);
+      if (!(reach > 0)) continue;
+      var dist = reach * stand + 0.12;
       var p = [out[0] * dist, out[1] * dist, out[2] * dist];
       if (!clear(p)) continue;
       var crowded = false;
@@ -6175,18 +6216,19 @@
       }
       if (crowded) continue;
       placed.push(p);
+      ties.push({ dir: out, dist: dist, reach: reach, inner: reach * 0.97 - 0.04, R: R });
       var az = vnorm(out);
       var ref = Math.abs(az[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
       var ax = vnorm(vcross(ref, az)), ay = vcross(az, ax);
       mergeAxes(mesh, outworkPart(rng.pick(menu), rng), p, ax, ay, az);
       /* The tether: a truss from the outwork back to just inside the
        * hull's outer reach, so it reads as attached rather than parked. */
-      var tl = (dist - R * 0.92) / 2;
+      var tl = (dist - reach * 0.97) / 2;
       mergeAxes(mesh, box(0.006, 0.006, tl),
                 [out[0] * (dist - tl - 0.04), out[1] * (dist - tl - 0.04), out[2] * (dist - tl - 0.04)],
                 ax, ay, az, OUT_TRUSS);
     }
-    port._outworks = { key: key, mesh: mesh };
+    port._outworks = { key: key, mesh: mesh, ties: ties };
     return mesh;
   }
 
@@ -15235,6 +15277,7 @@
     drawPortDressing: drawPortDressing,
     drawStationLights: drawStationLights,
     drawStationOutworks: drawStationOutworks,
+    stationOutworks: stationOutworks, hullReach: hullReach,
     drawPortLamps: drawPortLamps,
     drawPortDoors: drawPortDoors,
     /* How far a leaf slides, in PAD RADII, for anything that needs to
