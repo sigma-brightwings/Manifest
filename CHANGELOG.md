@@ -40,6 +40,25 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-03, outworks tied to the station they belong to)
+
+Astra, of a tank farm hanging off Threshold Dock on two trusses that ended in
+empty space: "what is this floating in space unconnected to anything?" The
+outbuildings round a dock (tank farms, cargo stacks, solar wings, masts,
+scaffolds, greenhouse rings: render.js `stationOutworks`) stood off, and were
+tethered back to, the radius of the model's FURTHEST vertex. That is right for a
+round hub and wrong by most of the station for a long one: off the flank of a
+spine or a yard the hull is a fraction of that radius away, so the outwork stood
+well out and its truss stopped short. They now stand off the hull's own reach in
+their direction (`hullReach`, the outermost face the ray from the centre
+crosses), and the truss ends just inside it; a direction that crosses no face
+has nothing to tie to and is skipped. Same draws in the same order, so each port
+keeps the kinds of outwork it had; only where they stand changes. Measured over
+375 orbital ports in 37 models: 0 tethers now end outside the hull; the old
+measure left 871 of 938 short of it. New `test/outworks.test.js` (view group).
+
+**Saves:** survive. Nothing saved; the layout is a pure function of the port.
+
 ### Changed (2026-11-03, the trade starts carry the trade analyser)
 
 Astra: "for trader start, it gets the analyser, mining start gets the survey
