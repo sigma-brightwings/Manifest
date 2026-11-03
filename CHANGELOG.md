@@ -72,7 +72,11 @@ nearest neighbour; the middle of the cluster was a smear.
 - **Culled to the view:** stars off the plot are skipped before anything is
   worked out about them; territory is built only for charted stars whose
   flag reaches the view, anchored to the galaxy so a pan blits the cached
-  picture instead of rebuilding it. COST_LINE
+  picture instead of rebuilding it. Measured in headless Chrome (software
+  GL, a shared box, so read the ratios): the whole galaxy draws all 450 stars
+  at a frame median of 10.9 ms against 11.7 ms before the change; ×4.2 draws
+  59 and culls 391 (chart 4.7 ms); the closest zoom draws 17 and culls 433
+  (chart 2.5 ms). A 200 px drag over 40 frames rebuilt the territory once.
 - Zoom and pan last the session (per seed), not the save.
 - Key hints on the chart, the H card and FLIGHT-CARD.md say all of it.
   Pinned in galaxyzoom.test (the transform) and render.test (the real
