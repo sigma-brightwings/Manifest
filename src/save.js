@@ -460,6 +460,10 @@
       journal: Array.isArray(G.journal) ? G.journal : [],
       doneMissions: G.doneMissions || {},
       campaigns: G.campaigns || {},
+      /* CAPTAIN HALLOWAY'S LESSONS (tutorial.js): which one you are on and
+       * what you have done towards it. Additive; an older save has none,
+       * and loads with no tutorial at all. */
+      tutorial: G.tutorial || null,
       /* Ship-to-ship trade: what each voyage has already sold or bought
        * (so a reload cannot refill a hold you emptied) and the day's
        * standing tally (so a reload cannot reset the daily cap). Added
@@ -701,6 +705,7 @@
     G.journal = Array.isArray(data.journal) ? data.journal : [];
     G.doneMissions = data.doneMissions || {};
     G.campaigns = data.campaigns || {};
+    G.tutorial = (data.tutorial && typeof data.tutorial === 'object') ? data.tutorial : null;
     G.shipTrade = data.shipTrade || null;
     G.surveys = (data.surveys && typeof data.surveys === 'object') ? data.surveys : {};
     G.extracted = (data.extracted && typeof data.extracted === 'object') ? data.extracted : {};

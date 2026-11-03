@@ -3,6 +3,13 @@
 Double-click `index.html`. No server needed. Seed goes in the URL fragment:
 `index.html#kawartha` is the system everything has been developed against.
 
+**A new career opens with Captain Oren Halloway on the channel.** His card
+sits top right, and on any screen it becomes a strip across the title bar.
+He walks you through one honest run: buy, launch, climb, lock, auto-dock,
+sell, sign a contract, turn the nose, burn prograde, deliver. At the end his
+Tallyman Trader, the *Patience*, is yours on F5 → FLEET. SKIP STEP passes a
+lesson, and END LESSONS (click twice) lets him retire without the handover.
+
 **Press `H` in game for the authoritative control list** — it is generated from the
 real bindings, so it cannot drift from what the code actually does. What follows is
 a suggested route through the features, not a manual.

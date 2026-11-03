@@ -40,6 +40,86 @@ before they update.
 
 ## Unreleased
 
+### Added (2026-11-02, Captain Halloway's tutorial — from Astra's working copy)
+
+**Saves**
+
+Saves from Brian load unchanged. One field was added (`tutorial`), and a
+career saved before it has no tutorial.
+
+**Added**
+
+- **2026-11-02: Captain Halloway's last run, a tutorial that plays like a
+  mission.** Astra: "a tutorial which plays like a mission, but teaches the
+  player exactly how to maneuver their ship, how to make money ... an old
+  ship captain retiring and wanting to show the ropes to a new pilot, and
+  when you complete his tutorial, you get his old ship."
+  Every new career now opens with Oren Halloway on the channel: forty years
+  hauling out of your home system, retiring, and offering you his Tallyman
+  Trader, the *Patience*, if you fly one run his way. Fourteen lessons
+  (`src/tutorial.js`), each passed by what the ship and the ledger actually
+  do, never by a key the tutorial listens for:
+  buy a cargo he picks from real prices (F4, Market) · request launch and
+  ride the car up (F4, U) · climb on W · lock the station (F3, or `[` `]`) ·
+  auto-dock (T, T) · sell it and see the profit · sign a contract (F7) ·
+  undock and fly out of the hull · turn the nose (arrows, Q/E) · raise the
+  far side of the orbit with a prograde burn (`/`, V, W) · deliver the
+  contract · take command of the *Patience* on F5, FLEET.
+  The *Patience* is an ordinary fleet record on the clamp beside you, with
+  her yard outfit and a month's berth paid. You can keep the Talon or trade
+  it in. Running ahead passes lessons early. SKIP STEP passes one, END LESSONS
+  (two clicks) ends them with no ship, and HIDE folds the card to a line.
+  - **The run is measured.** Across 40 sampled openings, 39 had a good worth
+    carrying. The median first hold clears about 4,700 cr against the 3,200
+    you start with. The destination is scored down by distance (half per
+    ~100 million km), because on profit alone 70% of first runs left the
+    home world, one of them 82 AU out.
+  - **The card is in the corner when flying and a strip on the screens.**
+    At 800 × 600 the full card covered COMMS's launch row and the market's
+    sell column, the two things his first lessons ask you to press, so every
+    full-screen mode gets a one-line strip across its title bar (MORE brings
+    the card back). In flight it folds to one line while a collision, chase
+    or node banner is up.
+  - The captain's face is the composite-sketch portrait (`portrait.js`):
+    the oldest plain face out of sixty draws, a merchant and not a pirate.
+  - Hooks: `Tutorial.note` from the market's `trade()` and from
+    `Missions.completeAtDock`, `Tutorial.update` once a frame after
+    `Missions.update`, and `G.tutorial` in `save.js`.
+    `test/tutorial.test.js` (100 checks) walks every lesson and measures
+    the run across 40 galaxies.
+
+**Changed**
+
+- **2026-11-02: auto-dock asks for clearance, and holds for a berth.**
+  Astra: "auto-docking should never make you a criminal. Auto-dock now
+  includes auto-contact the dock for permission to land once we drop out of
+  cruise." The autopilot sends the same hail F4 does when it drops out of
+  cruise, or at once if the approach is too short to cruise. If clearance
+  is granted it goes in. If the port is full it holds off the port (the
+  autopilot reads HOLD) and asks again when the timetable says a berth
+  frees, with the clock wound up while it waits. If you are barred it stands
+  down and the port says why. The capture is also guarded, so no autopilot
+  docking ever closes the clamps uncleared. Flying in by hand without asking
+  is still your choice and still an offence. `render.test.js` flies it at a
+  port forced full.
+
+**Found by playing the tutorial**
+
+- **Auto-dock into a full port made you a fugitive.** Both test ports were
+  carrying more ships than berths (11 in 6). A port never offers clearance
+  while it is full, and the autopilot docked anyway, so a new player's first
+  docking booked a queue jump, 500 cr and FUGITIVE. Fixed the same day in
+  the autopilot itself (under Changed). Halloway's stopgap, where he set the
+  clearance himself, is gone.
+- **An orbital undock can leave you inside the hull.** The clamp lets go
+  with a 3 m/s push, nose out. Turning and burning in there put the test
+  ship through a bulkhead and lost her with the contract freight. The undock
+  lesson now passes only once `Sim.insideStation` says you are out.
+- **The flight frame survives a new career.** ORBITAL left on from the burn
+  lesson made W prograde at the top of the shaft, and the next career's
+  climb flew sideways into the ground at 178 m/s. The climb lesson reads the
+  frame and tells you to press `/`.
+
 ### Changed (2026-11-02, the drive on the ground: two seconds, longer for bigger hulls)
 
 - **The ground spool is 2 s for a courier and grows with the size of the
