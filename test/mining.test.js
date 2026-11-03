@@ -54,9 +54,12 @@ check('it barely scratches a hull', gun.dmg <= 1 && gun.dmg / gun.cooldown < 10)
 
 /* A belt field, and a rock in it a little way off the ship. */
 var bsys = null, bfield = null, bbelt = null;
+/* A star's own belt, not a giant's Trojans: stars stage 2 gave kawartha a
+ * gas giant, and the first field anywhere became its Trojan swarm, whose
+ * first chunk is slag - which skipped the booking and ore-share checks. */
 systems.some(function (sys) {
   return (sys.belts || []).some(function (b) {
-    if (b.fields && b.fields.length) { bsys = sys; bbelt = b; bfield = b.fields[0]; return true; }
+    if (b.kind === 'belt' && b.fields && b.fields.length) { bsys = sys; bbelt = b; bfield = b.fields[0]; return true; }
     return false;
   });
 });
@@ -141,7 +144,10 @@ systems.forEach(function (sys) {
   sys.bodies.forEach(function (b) {
     if (!b.atmosphere) return;
     if (!giant && b.type === 'iceGiant') { giant = b; gsys = sys; }
-    if (!gasG && b.type === 'gasGiant') gasG = { b: b, sys: sys };
+    /* At least Saturn's mass (95 M_earth): since stars stage 2 the first gas
+     * giant of all is Mirven VI, a light 72 M_earth one whose top runs at
+     * 129 against the shield's 148; 65 of 76 giants in 40 systems exceed it. */
+    if (!gasG && b.type === 'gasGiant' && b.mass >= 95 * 5.9722e24) gasG = { b: b, sys: sys };
     if (!rocky && !Mn.isGiant(b) && b.kind === 'planet') { rocky = b; rsys = sys; }
   });
 });
@@ -194,7 +200,11 @@ Gf.ship = inAir(giant, gsys, 0.6, t0);
 Gf.ship.cargo.ores = Math.floor(Gf.ship.cargoCap - Sim.cargoMass(Gf.ship)) - 0.5;
 Sim.refreshShip(Gf.ship);
 var fill = 0;
-for (var k = 0; k < 30; k++) fill += Mn.skimStep(Gf, gsys, t0 + k, 1, true);
+/* All at t0: skimStep does not move the ship, and the giant does. At t0 + k
+ * the static ship was in the air for 30 s only by luck of orbital phase;
+ * stars stage 2 moved Oruun VII to 2.05 AU and it now leaves her behind in
+ * under ten, so the hold-full check saw no air at all. */
+for (var k = 0; k < 30; k++) fill += Mn.skimStep(Gf, gsys, t0, 1, true);
 check('never past the hold', Sim.cargoMass(Gf.ship) <= Gf.ship.cargoCap + 1e-9 && Gf.skimming.full, fill.toFixed(2) + ' t then full');
 if (rocky) {
   var Gr = { here: { id: 'test' }, extracted: {} };

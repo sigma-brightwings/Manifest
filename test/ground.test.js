@@ -432,7 +432,17 @@ console.log('--- inland ---');
    * berth (Sim.portEntrance, bodyState) stand over the new spot, not the
    * old; traffic bound for the port moors at the new spot; and a moved
    * mining head's province - the rich ground - is under it. */
-  var mx = moved[0];
+  /* The first moved port that has traffic: since stars stage 2 the first
+   * moved port of all (Harrow Deep) has none, and the mooring check below
+   * was skipped rather than run. */
+  var mx = moved.filter(function (m) {
+    var tr = (m.sys.traffic || []).filter(function (r) { return r.to === m.p.id || r.from === m.p.id; })[0];
+    for (var k = 0; tr && k < 400; k++) {
+      var sk = Sim.trafficState(tr, m.sys, tr.period * k / 400);
+      if (sk && sk.landed) return true;
+    }
+    return false;
+  })[0] || moved[0];
   if (mx) {
     var p = mx.p, b = p.parentBody, sy = mx.sys, t = 3600;
     var wp = Sim.bodyPosition(b, sy, t);

@@ -66,11 +66,11 @@ for (var i = 0; i < gal.stars.length && i < 80 && !port; i++) {
 check('found a busy port to stand in', !!port, port ? port.name + ' at ' + star.name : '');
 var T = 3 * 86400;
 
-function freshGame() {
+function freshGame(at) {
   return {
     seed: SEED, t: T, here: star, sys: sys, galaxy: gal, standing: {}, wanted: {},
     ship: { hullId: 'talon', credits: 100000, cargo: { grain: 12 }, crew: [], hullHp: 100, hullMax: 100,
-            fuel: 30, fuelCap: 60, thrusterFuel: 10, thrusterCap: 20, missiles: 2, docked: port.id,
+            fuel: 30, fuelCap: 60, thrusterFuel: 10, thrusterCap: 20, missiles: 2, docked: (at || port).id,
             shipName: 'Abby', reg: 'AB-1234', wagesTo: T }
   };
 }
@@ -215,9 +215,22 @@ if (bt) {
 console.log('--- hiring ---');
 var hands = sc.people.filter(function (p) { return D.kindOf(p) === 'hire'; });
 check('the crew hall has hands to talk to', hands.length > 0, hands.length + '');
+/* "Some will, some will not" is a claim about a crowd, and one crew hall
+ * holds two hands. Since stars stage 2 the port above is a different one
+ * and both its hands are mercenary-or-cold (0 of 2), so the halls of the
+ * system's other orbital ports are pooled in until there are six. */
+var pool = hands.map(function (h) { return { h: h, port: port }; });
+sys.bodies.filter(function (b) { return b.market && !b.surface && !b.underground && b !== port; })
+  .forEach(function (op) {
+    if (pool.length >= 6) return;
+    var opPlan = Walk.layout(op.id, { seed: SEED, yard: true, ships: [{ id: 's', size: 'M', name: 'Abby', current: true }] });
+    Npc.stationScene(opPlan, op, sys, { t: T, seed: SEED, livery: op.livery, corruption: sys.corruption })
+      .people.forEach(function (p) { if (D.kindOf(p) === 'hire') pool.push({ h: p, port: op }); });
+  });
 var signedOne = null, haggled = 0;
-hands.forEach(function (h) {
-  G = freshGame(); global.Game = G;
+pool.forEach(function (ph) {
+  var h = ph.h, port = ph.port;
+  G = freshGame(port); global.Game = G;
   var hs = D.open(G, sys, port, h, T), ho = D.options(G, sys, port, hs), hgi = -1;
   ho.forEach(function (o, ix) { if (o.id === 'haggle') hgi = ix; });
   if (hgi < 0) return;
@@ -235,7 +248,7 @@ hands.forEach(function (h) {
   }
   delete h.forHire.wageMul; delete h.forHire.feeMul;
 });
-check('some hands will take less from a stranger, and some will not', haggled > 0 && haggled <= hands.length, haggled + ' of ' + hands.length);
+check('some hands will take less from a stranger, and some will not', haggled > 0 && haggled < pool.length, haggled + ' of ' + pool.length);
 check('one haggled down signs on at the agreed fee and wage', !signedOne || signedOne.ok, signedOne ? signedOne.fee + ' cr, ' + signedOne.wage : 'nobody agreed this seed');
 
 console.log('--- a warrant ---');

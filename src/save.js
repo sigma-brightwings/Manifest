@@ -75,7 +75,19 @@
    * the governments, police and traffic of those systems change with them.
    * Astra chose it knowing a career resets ("Bump, careers reset"). The
    * shelf was empty; nothing else goes with it. */
-  var VERSION = 4;
+  /* EPOCH 5 — the star programme (2026-11-03, stars stage 2).
+   *
+   * The one deliberate break of doctrine 4 for the whole programme. Stage
+   * 2 rebuilt where planets sit (a warm anchor world and a compact chain
+   * through the habitable zone) and what the zone's worlds are, so every
+   * seed's planets, ports, markets and traffic moved: a career from epoch
+   * 4 is docked at a port that is no longer there. Astra chose it knowing
+   * that: "we don't need to have saves be cross-compatible if we're
+   * altering the star generation". LATER STAR STAGES (binaries, remnants,
+   * the cluster's centre) RIDE THIS SAME EPOCH — bump once for the
+   * programme, not once per stage. The shelf was empty; nothing else goes
+   * with it. */
+  var VERSION = 5;
 
   /* Written but no longer read. Delete the lot at the next epoch bump, then
    * empty this list. Each entry says what replaced it, because "why is this

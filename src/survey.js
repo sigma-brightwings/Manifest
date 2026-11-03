@@ -318,6 +318,25 @@
     });
     var metalHeads = heads.filter(function (h) { return h.cid !== 'fissile'; });
     var nProv = Math.max(metalHeads.length + 1, 2 + Math.floor(hash01(tag + 'prov#') * 4));
+    /* ORE STANDS ON DRY LAND WHERE THERE IS ANY (fixed 2026-11-03). Two ways
+     * a world with land used to end up with its best ore offshore or under
+     * a cap, both found when stars stage 2 made wet worlds common (282 of
+     * 286 land worlds passed ground.test; the four were all one of these):
+     *   - A mostly-ocean world, 5-22 dry cells of 288: twelve random tries
+     *     at a dry spot all fall in the sea about as often as not, and the
+     *     fallback was one more random spot, wet. Now the fallback is the
+     *     dry cell nearest that spot — still seed data, still no draws, and
+     *     only the provinces that used to miss move.
+     *   - Every mine standing on ice or at a sea platform: the province is
+     *     the mine (that is right, a mine is where the ore is), but then no
+     *     province on land was at full strength. Now the first province
+     *     that is not a mine's is, in that case only. */
+    var dryCell = function (i) { return terr.sea[i] < 0.5 && terr.ice[i] < 0.5; };
+    var landCells = [];
+    if (terr && !terr.lava) for (var lc = 0; lc < NCELL; lc++) if (dryCell(lc)) landCells.push(lc);
+    var headOnLand = !terr || terr.lava || metalHeads.some(function (h) {
+      return dryCell(cellOfLatLon(Math.asin(h.c[2]), Math.atan2(h.c[1], h.c[0])));
+    });
     var prov = [];
     for (var j = 0; j < nProv; j++) {
       var pt = tag + 'prov' + j + ':', c = null;
@@ -328,13 +347,24 @@
         var ci = cellOfLatLon(Math.asin(cand[2]), Math.atan2(cand[1], cand[0]));
         if (terr.sea[ci] < 0.5 && terr.ice[ci] < 0.5) c = cand;
       }
-      c = c || sphereDir(pt + 'last');
+      if (!c) {
+        c = sphereDir(pt + 'last');
+        if (landCells.length) {
+          var bestDot = -2, bestC = null;
+          for (var lk = 0; lk < landCells.length; lk++) {
+            var lcc = CELL_CENTRES[landCells[lk]], dd = dot3(lcc, c);
+            if (dd > bestDot) { bestDot = dd; bestC = lcc; }
+          }
+          c = [bestC[0], bestC[1], bestC[2]];
+        }
+      }
       var share = hash01(pt + 'share');
       share = share * share;
       var isHead = j < metalHeads.length;
       if (isHead && metalHeads[j].cid === 'rare') share = Math.max(share, 0.8);
+      var fullDry = !headOnLand && j === metalHeads.length && landCells.length > 0;
       prov.push({ c: c, r: 0.16 + 0.38 * hash01(pt + 'r'),
-                  w: (j === 0 || isHead) ? 1 : 0.45 + 0.5 * hash01(pt + 'w'),
+                  w: (j === 0 || isHead || fullDry) ? 1 : 0.45 + 0.5 * hash01(pt + 'w'),
                   share: share });
     }
     if (g.ores) {

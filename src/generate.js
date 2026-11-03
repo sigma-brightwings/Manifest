@@ -302,7 +302,23 @@
    * planet 0.1 AU from a dim red dwarf and one 1 AU from a bright F star are
    * comparably warm; keying off distance alone made every system's innermost
    * world a lava planet, which is neither varied nor true. */
-  function classify(aAU, frostAU, hzInner, hzOuter, insol, rng) {
+  /* WARMTH BANDS inside the zone (stars stage 2, 2026-11-03). The zone used
+   * to be one flat pick — terran, terran, ocean, desert, tundra — whether a
+   * world sat in Venus's sunlight or Mars's. So a habitable world was as
+   * likely to be a cold edge-of-zone one as an Earth, and the median
+   * habitable world got 0.77 of Earth's light. Now the pick leans on the
+   * light: a warm world (S ≥ 0.65) is wet more often than not, a cool one
+   * (under 0.45) is mostly tundra. Each list is still ONE pick off the
+   * planet's own prng, so every draw after it lands where it always did.
+   * Thresholds from the variant-C sweep (1,800 systems); see
+   * test/habitable.test.js for what they produce. */
+  var HZ_WARM = 0.65, HZ_COOL = 0.45;
+  var HZ_PICK_WARM = ['terran', 'terran', 'ocean', 'ocean', 'desert'];
+  var HZ_PICK_MILD = ['terran', 'ocean', 'tundra', 'desert'];
+  var HZ_PICK_COOL = ['tundra', 'tundra', 'terran', 'desert'];
+  var HZ_PICK_LEGACY = ['terran', 'terran', 'ocean', 'desert', 'tundra'];
+
+  function classify(aAU, frostAU, hzInner, hzOuter, insol, rng, legacy) {
     if (aAU > frostAU * 1.15) {
       // Beyond the frost line, a planet can hold onto its volatiles.
       if (rng.chance(0.55)) return 'gasGiant';
@@ -311,7 +327,9 @@
     }
     if (insol > 6) return 'molten';              // >6x Earth's sunlight
     if (aAU >= hzInner && aAU <= hzOuter) {
-      return rng.pick(['terran', 'terran', 'ocean', 'desert', 'tundra']);
+      if (legacy) return rng.pick(HZ_PICK_LEGACY);
+      return rng.pick(insol >= HZ_WARM ? HZ_PICK_WARM
+                    : insol >= HZ_COOL ? HZ_PICK_MILD : HZ_PICK_COOL);
     }
     if (aAU < hzInner) {
       return insol > 2.5
@@ -319,6 +337,75 @@
         : rng.pick(['rocky', 'rocky', 'desert', 'tundra']);
     }
     return rng.pick(['tundra', 'iceball', 'rocky']);
+  }
+
+  /* THE WARM CHAIN (stars stage 2, 2026-11-03).
+   *
+   * The old orbits started anywhere from 0.22 to 0.55·√L and multiplied by
+   * 1.30–1.75 each step, so where the zone fell between them was luck: the
+   * zone spans a ratio of 2.36, about two of those steps, and most systems
+   * dropped one world in it, often near an edge. Measured over 40 kawartha
+   * systems, only 12% had two warm (S ≥ 0.6) habitable worlds, and the
+   * median habitable world got 0.77 of Earth's light — the cold side.
+   *
+   * Now the zone is built from the middle. One world, the ANCHOR, sits at
+   * S₀ ~ log-uniform(0.80, 1.35) Earth units, a = √(L/S₀). From it the
+   * chain goes inward 1–3 steps and outward for as long as the last world
+   * is still inside the zone, at a compact ratio U(r_min, r_min + 0.18);
+   * past the zone's outer edge the old, looser spacing takes over at
+   * U(1.35, 1.80) until the drawn count is reached. Compact chains of
+   * temperate worlds are what the real red-dwarf systems look like
+   * (TRAPPIST-1 runs ratios of 1.2–1.5), and what makes a settled system
+   * feel settled: neighbours.
+   *
+   * r_min is what keeps the chain stable, not taste. Two worlds of mass m
+   * round a star M have a mutual Hill radius of ∛(2m/3M) times their
+   * distance; spacings under ~8–9 of those go unstable over a system's
+   * life. So r_min = 1 + 8.8·∛(2·m_max/3M★), m_max = 4.2 M⊕ — the
+   * heaviest solid world the mass draw below can produce (logRange(0.06,
+   * 4.2)); giants never fall inside the zone, since they need the frost
+   * line. That comes to ~1.31 at 0.2 M☉ and ~1.23 at 0.5 M☉, floored at
+   * 1.20 — the non-crossing limit at e ≤ 0.09 (1.09/0.91 = 1.198) — for G
+   * and up. Real masses are far below m_max, so measured pairs sit well
+   * above 8.5 (see test/habitable.test.js).
+   *
+   * THE COUNT. The drawn 6–12 is still the target, but the zone is never
+   * cut short: if the chain needs more worlds than were drawn, it gets
+   * them. That lifts a 6 to 7 or 8 in a few systems; the cap is the
+   * fourteen numerals there are names for. Every draw is on
+   * 'planet-orbits', the stream the orbits always came from, in a fixed
+   * order: count, S₀, inward steps, inward ratios, outward ratios. */
+  var CHAIN_HILL = 8.8;
+  var CHAIN_M_MAX = 4.2;          // M⊕, the top of the solid-world mass draw
+  var CHAIN_FLOOR = 1.20;
+  var CHAIN_SPREAD = 0.18;
+  var MAX_PLANETS = 14;           // ROMAN's length
+
+  function chainRatioMin(massSol) {
+    var mMax = CHAIN_M_MAX * M_EARTH / M_SUN;
+    return Math.max(CHAIN_FLOOR, 1 + CHAIN_HILL * Math.cbrt(2 * mMax / (3 * massSol)));
+  }
+
+  function warmChainAxes(pr, count, luminosity, massSol, hzOuterAU) {
+    var rMin = chainRatioMin(massSol);
+    var s0 = pr.logRange(0.80, 1.35);
+    var anchor = Math.sqrt(luminosity / s0);       // AU
+    var nIn = pr.int(1, 3);
+    var axes = [anchor];
+    var a = anchor;
+    for (var k = 0; k < nIn; k++) {
+      a /= pr.range(rMin, rMin + CHAIN_SPREAD);
+      axes.unshift(a);
+    }
+    a = anchor;
+    while (axes.length < MAX_PLANETS) {
+      var inZone = a <= hzOuterAU;
+      if (!inZone && axes.length >= count) break;
+      a *= inZone ? pr.range(rMin, rMin + CHAIN_SPREAD) : pr.range(1.35, 1.80);
+      axes.push(a);
+    }
+    for (var i = 0; i < axes.length; i++) axes[i] *= AU;
+    return axes;
   }
 
   /* Just the star, for a fraction of the cost of the whole system.
@@ -387,19 +474,27 @@
     var pr = base.fork('planet-orbits');
     var count = pr.int(opts.minPlanets || 6, opts.maxPlanets || 12);
     var axes = [];
-    var a = pr.range(0.22, 0.55) * Math.sqrt(luminosity) * AU;
-    for (var i = 0; i < count; i++) {
-      axes.push(a);
-      /* Titius-Bode-ish geometric spacing with jitter.
-       *
-       * The old floor of 1.42 was described as guaranteeing the
-       * non-crossing constraint, but the actual constraint is looser than
-       * that: two orbits do not cross while a₁(1+e) < a₂(1−e), and this
-       * generator caps eccentricity at 0.09 (below), so the true floor is
-       * 1.09/0.91 = 1.198. 1.30 keeps a comfortable margin over that and
-       * fits noticeably more worlds into the habitable zone, which is the
-       * whole point of the change. */
-      a *= pr.range(1.30, 1.75);
+    /* opts.legacyOrbits builds the orbits and the zone's types exactly as
+     * they were before stars stage 2. It is a test instrument and nothing
+     * else: the suite uses it to show what moved and by how much. */
+    var legacy = !!opts.legacyOrbits;
+    if (legacy) {
+      var a = pr.range(0.22, 0.55) * Math.sqrt(luminosity) * AU;
+      for (var i = 0; i < count; i++) {
+        axes.push(a);
+        /* Titius-Bode-ish geometric spacing with jitter.
+         *
+         * The old floor of 1.42 was described as guaranteeing the
+         * non-crossing constraint, but the actual constraint is looser than
+         * that: two orbits do not cross while a₁(1+e) < a₂(1−e), and this
+         * generator caps eccentricity at 0.09 (below), so the true floor is
+         * 1.09/0.91 = 1.198. 1.30 keeps a comfortable margin over that and
+         * fits noticeably more worlds into the habitable zone, which is the
+         * whole point of the change. */
+        a *= pr.range(1.30, 1.75);
+      }
+    } else {
+      axes = warmChainAxes(pr, count, luminosity, pre.massSol, hzOuter);
     }
 
     var planets = [];
@@ -414,7 +509,7 @@
       var flavRng = base.fork('flavor-' + p);
       var aAU = axes[p] / AU;
       var insol = luminosity / (aAU * aAU);     // Earth = 1
-      var type = classify(aAU, frostAU, hzInner, hzOuter, insol, prng);
+      var type = classify(aAU, frostAU, hzInner, hzOuter, insol, prng, legacy);
       var def = PLANET_TYPES[type];
 
       var massKg;
@@ -3444,6 +3539,19 @@
     };
   }
 
+  /* The development a system needs before a power garrisons it (the
+   * cutter) or parks a capital over it. Both are RANKS dressed as numbers
+   * — "the better-run part of the galaxy" — so when the development
+   * distribution moves, they have to move with it or they stop meaning
+   * what they say. Measured across every claimed system in kawartha (212)
+   * and in beaverton + driftwood (424), legacy orbits against the warm
+   * chain (kawartha / the other two):
+   *                 eligible, legacy   warm chain, old gate   new gate
+   *   cutter        28.8% / 27.6%      45.8% / 46.9% (0.55)   27.8% / 26.9% (0.63)
+   *   capital       13.7% / 13.2%      30.7% / 29.5% (0.60)   13.2% / 10.8% (0.68) */
+  var NAVY_MIN_DEV = 0.63;
+  var CAPITAL_MIN_DEV = 0.68;
+
   function buildPatrols(sys, base) {
     var rng = base.fork('patrols');
     sys.patrols = [];
@@ -3531,9 +3639,20 @@
        * every system that exists. 0.55 and 55 put a navy in roughly the
        * top third of well-run systems, which is what "rare but real" wants
        * to mean here. */
+      /* RE-MEASURED 2026-11-03 (stars stage 2), and moved UP, which is the
+       * same doctrine run the other way. The warm chain settled more of
+       * every system — mean development 0.56 → 0.64 across kawartha — and
+       * at 0.55 the gate let in 46% of every claimed system (was 29%) and
+       * 79% of the well-run ones (was 53%): a garrison stopped being a sign
+       * of anything. 0.63 lets in the share 0.55 used to — 27.8% in
+       * kawartha (59 of 212 claimed systems, against 61), 26.9% across
+       * beaverton and driftwood (114 of 424, against 117) — and systems
+       * with a cutter go 21.2% → 19.8% and 19.8% → 18.6%. The irony that
+       * 0.62 was once the number that excluded everything is noted; the
+       * distribution moved under it. */
       var dev = sys.development === undefined ? 0.5 : sys.development;
       var crime = sys.crimeScore === undefined ? 40 : sys.crimeScore;
-      if (dev < 0.55 || crime > 55) return;
+      if (dev < NAVY_MIN_DEV || crime > 55) return;
       /* Even then, not every time. A seeded coin so two systems with the
        * same numbers do not both get one. */
       if (!rng.chance(0.45)) return;
@@ -3570,7 +3689,13 @@
        * is not "rare", it is "absent" — the same failure the cutter's first
        * 0.62 threshold had. 0.60/45 puts one over a handful of the
        * best-run systems and none at all in most. */
-      if (devC < 0.60 || crimeC > 45) return;
+      /* RE-MEASURED 2026-11-03 (stars stage 2), for the reason the cutter's
+       * was: with development up 0.56 → 0.64, 0.60 let in 30.7% of held
+       * kawartha systems (was 13.7%) and 26 systems had a capital where 12
+       * had. 0.68 lets in 13.2% (28 of 212) and puts a capital over 11;
+       * across beaverton and driftwood 10.8% eligible (46 of 424, was 56)
+       * and 21 capitals (was 22). */
+      if (devC < CAPITAL_MIN_DEV || crimeC > 45) return;
       if (!rng.chance(0.35)) return;
       var CA = mineC[rng.int(0, mineC.length - 1)];
       var CB = mineC.filter(function (p) { return p !== CA; })[0];
@@ -3983,7 +4108,16 @@
     var open = (sys.ports || []).filter(function (p) {
       return p.market && (p.market.role || p.market.roleId) !== 'mining';
     });
-    if (open.length && !open.some(function (p) { return p.market.blackMarket; })) {
+    /* A GOLD FARM IS A BACK ROOM TOO (2026-11-03). Economy.plantFarms runs
+     * later and marks a Syndicate grow-op blackMarket, so a system whose
+     * only back room was going to be a gold farm used to get a fence as
+     * well - two in a system the rule meant to give exactly one. Never seen
+     * in 120 kawartha systems before stars stage 2; two of 120 after, as
+     * wetter, richer worlds grew more farms. goldFarmAt is a hash of the
+     * port and reads only what buildGovernment has already fixed, so asking
+     * here is the same answer plantFarms will get. */
+    var willFarm = function (p) { return !!(Eco.goldFarmAt && Eco.goldFarmAt(p, p.parentBody, sys)); };
+    if (open.length && !open.some(function (p) { return p.market.blackMarket || willFarm(p); })) {
       open.sort(function (a, b) {
         return ((a.market.dev || 0) - (b.market.dev || 0)) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
       });
@@ -5258,6 +5392,11 @@
     generateSystem: generateSystem,
     interstellarSystem: interstellarSystem,
     barycentricMu: barycentricMu,
+    /* The warm chain's spacing floor and warmth bands, for
+     * test/habitable.test.js to hold the generator to its own numbers. */
+    chainRatioMin: chainRatioMin,
+    HZ_WARM: HZ_WARM, HZ_COOL: HZ_COOL,
+    NAVY_MIN_DEV: NAVY_MIN_DEV, CAPITAL_MIN_DEV: CAPITAL_MIN_DEV,
     starPreview: starPreview,
     finalize: finalize,
     describe: describe,

@@ -108,7 +108,10 @@ console.log('     ' + platforms.length + ' sea platforms in ' + gal.stars.length
 check('every port flagged coastal on water is now a sea platform', notFlagged && wasCoastal === platforms.length,
       wasCoastal + ' flagged without the pass, ' + platforms.length + ' platforms');
 check('none is left flagged coastal', coastalLeft === 0, coastalLeft + ' left');
-check('the kawartha count is the one the inland pass reported (117)', platforms.length === 117, String(platforms.length));
+/* 229 since stars stage 2 (2026-11-03): the warm chain made ocean worlds
+ * common - 78 global-habitable worlds in 40 systems where there were 45 -
+ * and with them pads with nowhere dry to go. It was 117. */
+check('the kawartha count is the one the inland pass reported (229)', platforms.length === 229, String(platforms.length));
 check('only on water, never on lava', waterOnly);
 check('never on a desert: a salt basin is ground, and its ports stay buried', !platforms.some(function (x) { return x.p.parentBody.type === 'desert'; }) &&
       noDesertCoastal, 'desert pads flagged coastal anywhere: ' + (noDesertCoastal ? 0 : 'some'));

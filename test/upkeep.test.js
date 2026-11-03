@@ -139,7 +139,11 @@ section('--- adrift, then towed, then back on the timetable ---');
       var m = Sim.trafficState(r, sys, (bd.towAt + lb.legEnd) / 2);
       if (m.phase !== 'moored' || !m.towed || m.to !== sys.byId[bd.outbound ? r.to : r.from]) mooredOk = false;
     }
-    var after = Math.max(lb.legEnd, bd.towAt) + 1;
+    /* Back on her timetable once it has her BERTHED, not at the leg's end:
+     * at a ground port the leg ends in the holding stack, and a towed hull
+     * no longer lifts back into it (upkeep.js towedUntil, 2026-11-03). */
+    var dstB = sys.byId[bd.outbound ? r.to : r.from], holdB = Sim.arrivalHold(r, dstB);
+    var after = Math.max(lb.legEnd + (holdB > 0 ? holdB + Sim.FINAL_DESCENT_S : 0), bd.towAt) + 1;
     if (V.dist(Sim.trafficState(r, sys, after).pos, Sim.trafficCore(r, sys, after).pos) > 1e-9) backOk = false;
   });
   check('she is adrift from the moment of the leak', jumps === 0, jumps);

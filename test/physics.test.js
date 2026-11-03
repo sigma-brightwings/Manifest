@@ -892,7 +892,10 @@ section('--- a destroyed ship comes apart ---');
   var sys = Gen.generateSystem('kawartha');
   var planet = sys.bodies.filter(function (b) { return b.kind === 'planet'; })[0];
   var here = Sim.bodyPosition(planet, sys, 0);
-  var at = { x: here.x + 400, y: here.y, z: here.z };
+  /* 400 km off the SURFACE, not off the centre: stars stage 2 moved the
+   * first world out to 0.39 AU and the old point, deep inside it, now throws
+   * shards past the 3,000 km wake range in 30 s (they fell 2,100 km before). */
+  var at = { x: here.x + planet.radius + 400, y: here.y, z: here.z };
   var vel = { x: 0, y: 3, z: 0 };
   sys.canisters = [];
 
@@ -1133,10 +1136,27 @@ section('--- drag and aerobraking ---');
 
 section('--- re-entry heat ---');
 (function () {
-  var sys = Gen.generateSystem('kawartha');
-  var body = sys.bodies.filter(function (b) {
-    return b.atmosphere && b.kind === 'planet';
-  })[0];
+  /* The first solid world with air thick enough that the band below is the
+   * shield's to decide, searching kawartha and then its neighbours. This was
+   * kawartha's own first air-bearing world, a heavy molten Mirven I; stars
+   * stage 2 made that world a thin-aired desert (flux 2.5 in the band) and
+   * the only deep air left at home is a gas giant's, whose 7 km/s of turning
+   * air breaks the cube-law comparison below for reasons that are not about
+   * heat. (Found: kawartha:s3's Syyshai III, a 4 M_earth terran.) */
+  var sys = null, body = null;
+  for (var si = 0; si < 40 && !body; si++) {
+    sys = Gen.generateSystem(si ? 'kawartha:s' + si : 'kawartha');
+    body = sys.bodies.filter(function (b) {
+      if (!b.atmosphere || b.kind !== 'planet' || /Giant$/.test(b.type)) return false;
+      var s0 = Sim.circularOrbit(b, sys, 0, b.atmosphere.top * 0.7, 0, 0);
+      Sim.refreshShip(s0);
+      var v0 = Sim.bodyState(b, sys, 0).vel;
+      s0.vel = { x: v0.x + (s0.vel.x - v0.x) * 0.6, y: v0.y + (s0.vel.y - v0.y) * 0.6,
+                 z: v0.z + (s0.vel.z - v0.z) * 0.6 };
+      var f0 = Sim.heatFlux(s0, sys, 0);
+      return f0 > 18 && f0 < 18 + Combat.MODULES.heatshield.shed;
+    })[0] || null;
+  }
   function shipAt(altKm) {
     var s = Sim.circularOrbit(body, sys, 0, altKm, 0, 0);
     s.hullHp = 100; s.hullMax = 100;

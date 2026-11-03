@@ -184,7 +184,17 @@
     var hs = bodyState(host, sys, t);
     var up = V.norm(V.sub(ss.pos, hs.pos));
     if (V.len(up) < 1e-9) return null;
-    var prograde = V.norm(V.sub(ss.vel, hs.vel));
+    /* Prograde is made square to `up` before it is used (2026-11-03). On an
+     * orbit with any eccentricity at all the velocity leans off the
+     * horizontal by the flight-path angle, ~e·sin ν, so `north` and `up`
+     * were not quite at right angles and the frame breathed as the station
+     * went round: a berthed hull drifted against its own station by up to
+     * 7e-4 of its offset in a tenth of an orbit (physics.test's docked
+     * check, which had been passing only because kawartha's first station
+     * happened to sit where the angle barely changes). Squared, every
+     * station holds to ~1e-8, which is rounding. */
+    var prograde = V.sub(ss.vel, hs.vel);
+    prograde = V.norm(V.sub(prograde, V.scale(up, V.dot(prograde, up))));
     var normal = V.cross(up, prograde);
     if (V.len(normal) < 1e-9) return null;
     normal = V.norm(normal);
@@ -2045,7 +2055,21 @@
    * one to begin, or null): { a: arrival on the pad, d: departure }. */
   var SEA_STAY_TAIL_S = 600;    // a departure's dome window, at most
   var SEA_ASK_LEAD_S = 900;     // how far ahead of her arrival her distance is asked
-  function seaStay(route, port, t) {
+  /* A TOWED SHIP IS ON THE DECK EARLY (2026-11-03). A run that broke down
+   * (upkeep.js) is towed in at bd.towAt and stands on her pad from then
+   * until the timetable's arrival and on through her layover - trafficState
+   * says 'moored' the whole time - but the sweep only knew the timetable,
+   * so it handed her pad to someone else while she sat on it: 4 shared
+   * samples in 15,392 at the first 24 kawartha platforms once stars stage 2
+   * put a broken-down freighter on one. With `sys`, her stay starts at the
+   * tow. `leg` is upkeep's numbering: 2c arrives at the route's `to`, 2c+1
+   * at its `from`. Closed form (Upkeep.breakOn), no draws. */
+  function towedArrival(route, sys, leg) {
+    var U = sys ? upkeepMod() : null;
+    var bd = U && U.breakOn ? U.breakOn(route, sys, leg) : null;
+    return bd ? bd.towAt : null;
+  }
+  function seaStay(route, port, t, sys) {
     if (!route || route.outboard) return null;
     var atB = route.to === port.id, atA = route.from === port.id;
     if (!atB && !atA) return null;
@@ -2054,13 +2078,15 @@
     for (var c = cycle - 1; c <= cycle + 1; c++) {
       var cs = route.t0 + c * route.period;
       var starts = [];
-      if (atB) starts.push({ s: cs + route.cruise, e: cs + route.cruise + route.layover });
-      if (atA) starts.push({ s: cs + 2 * route.cruise + route.layover, e: cs + route.period + route.cruise * 0 });
+      if (atB) starts.push({ s: cs + route.cruise, e: cs + route.cruise + route.layover, leg: 2 * c });
+      if (atA) starts.push({ s: cs + 2 * route.cruise + route.layover, e: cs + route.period + route.cruise * 0, leg: 2 * c + 1 });
       for (var k = 0; k < starts.length; k++) {
         var w = starts[k];
         if (route.oneWay && (c !== 0 || w.s !== route.t0 + route.cruise)) continue;
         var hold = arrivalHold(route, port);
         var arr = w.s + (hold > 0 ? hold + FINAL_DESCENT_S : 0);
+        var towed = towedArrival(route, sys, w.leg);
+        if (towed !== null && towed < arr) arr = towed;
         var dep = route.oneWay ? Infinity : w.e;
         /* The stay she is in, or the next one: a stay that ended more than
          * SEA_STAY_TAIL_S ago is over, whatever its arrival time. */
@@ -2125,7 +2151,7 @@
   var SEA_PREROLL_S = 1 * 86400;
   var SEA_FORGET_S = 2 * 86400;    // keep a stay's pad this long after she leaves
   var SEA_OFF = -1;
-  function routeStaysFrom(route, port, from) {
+  function routeStaysFrom(route, port, from, sys) {
     /* The arrival-ordered stays of one route here, starting at the cycle
      * before `from`; a cursor yields them one at a time. */
     var atB = route.to === port.id, atA = route.from === port.id;
@@ -2136,7 +2162,10 @@
       if (sl === 0) { if (!atB) return null; w = { s: cs + route.cruise, e: cs + route.cruise + route.layover }; }
       else { if (!atA) return null; w = { s: cs + 2 * route.cruise + route.layover, e: cs + route.period }; }
       if (route.oneWay && !(cc === 0 && sl === 0)) return null;
-      return { a: w.s + (hold > 0 ? hold + FINAL_DESCENT_S : 0), d: route.oneWay ? Infinity : w.e };
+      var a = w.s + (hold > 0 ? hold + FINAL_DESCENT_S : 0);
+      var towed = towedArrival(route, sys, 2 * cc + sl);
+      if (towed !== null && towed < a) a = towed;
+      return { a: a, d: route.oneWay ? Infinity : w.e };
     }
     return {
       next: function () {
@@ -2167,7 +2196,7 @@
       var early = [];
       (sys.traffic || []).forEach(function (route) {
         if (route.outboard || (route.from !== port.id && route.to !== port.id)) return;
-        var cur = routeStaysFrom(route, port, SEA_EPOCH_S), st = cur.next();
+        var cur = routeStaysFrom(route, port, SEA_EPOCH_S, sys), st = cur.next();
         while (st && st.a < SEA_EPOCH_S) {
           if (st.d > SEA_EPOCH_S) early.push({ route: route, st: st });
           st = cur.next();
@@ -2212,7 +2241,7 @@
   }
   function seaTrafficPad(port, sys, t, route) {
     if (!port || !port.seaPlatform || !route || !sys || !sys.traffic) return null;
-    var me = seaStay(route, port, t);
+    var me = seaStay(route, port, t, sys);
     if (!me) return null;
     /* The block of the TIME ASKED, not of her arrival: every ship on the
      * deck at t is then read off one sweep, which never puts two on a pad.
@@ -2271,7 +2300,7 @@
     for (var i = 0; i < routes.length; i++) {
       var route = routes[i];
       if (route.from !== port.id && route.to !== port.id) continue;
-      var stay = seaStay(route, port, t);
+      var stay = seaStay(route, port, t, sys);
       /* Not due for a while: nothing of hers to open for, and no pad to
        * look up (a stay a month off would sweep a block of its own). */
       if (!stay || t < stay.a - SEA_ASK_LEAD_S) continue;
