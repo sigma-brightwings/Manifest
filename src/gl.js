@@ -654,16 +654,37 @@
     /* The ground sky, for the horizon haze (groundHaze). */
     SKY_GLSL,
     /* AERIAL PERSPECTIVE (2026-11-02, third round): the ground fades into
-     * the horizon's own sky colour with distance through the air, a shade
-     * darker than the sky itself so the horizon stays a line. Only for the
-     * world the ground sky is over (uSkyA.w > 0); the planet seen from
+     * the horizon's own sky colour with distance through the air. Only for
+     * the world the ground sky is over (uSkyA.w > 0); the planet seen from
      * space is untouched. Its own function so a change to the ground's
-     * shading above it merges round it. */
-    'vec3 groundHaze(vec3 col, vec3 rd, float dist) {',
+     * shading above it merges round it.
+     *
+     * FIFTH ROUND, two fixes the coordinator found at Downwell:
+     *   - THE SEAM. The haze went toward a colour a shade darker than the
+     *     sky (0.86 of it) and never all the way (0.92), and the planet's
+     *     limb halo laid a thin bright orange line on top, so the horizon
+     *     was a hard line with a band on it. Now the haze goes all the way
+     *     to groundSkyAt along the horizontal, which IS the sky's colour at
+     *     the horizon, and the halo is left out for this world (the sky
+     *     pass replaces it): ground and sky meet in one colour.
+     *   - TOO MUCH HAZE FROM ABOVE. It grew with straight distance through
+     *     air of the same thickness everywhere, so 8 km straight down was as
+     *     hazy as 8 km along the ground and the frame washed pink. Now it is
+     *     the optical depth of the path through an atmosphere that thins
+     *     with height (scale height HAZE_H, 6 km): a path that starts high
+     *     and runs down is mostly thin air, a path along the ground is all
+     *     thick air. `h0` is the eye's height over the sphere. */
+    'vec3 groundHaze(vec3 col, vec3 rd, float dist, float h0) {',
     '  if (uSkyA.w <= 0.0) return col;',
     '  vec3 flat_ = normalize(rd - uSkyUp * dot(rd, uSkyUp) + 1e-6);',
-    '  float f = 1.0 - exp(-dist * uSkyA.w * 0.045);',
-    '  return mix(col, groundSkyAt(flat_) * 0.86, f * 0.92);',
+    '  float H = 6.0;',
+    '  float od = h0 > 0.01 ? dist * H * (1.0 - exp(-h0 / H)) / h0 : dist;',
+    '  float f = 1.0 - exp(-od * uSkyA.w * 0.03);',
+    /* And all the way at the horizon itself, however low the eye: a ray
+     * that only just meets the ground is the horizon, and the horizon is
+     * where ground and sky are one colour. Over the last five degrees. */
+    '  f = max(f, 1.0 - smoothstep(0.0, 0.08, -dot(rd, uSkyUp)));',
+    '  return mix(col, groundSkyAt(flat_), f);',
     '}',
     /* The ground-port section box — see GL.setGroundCut. */
     'uniform vec4 uBoxO;',        // eye -> ship, km; w = 1 when on
@@ -842,6 +863,9 @@
     /* ---- the lit limb, outside the disc -------------------------------- */
     '  if (r > 1.0) {',
     '    if (uAtmo <= 0.0) discard;',
+    /* Not under the ground sky (fifth round): from the ground the sky
+     * pass is the air, and the limb halo was a bright line on the horizon. */
+    '    if (uSkyA.w > 0.0) discard;',
     /* Normal at the silhouette in this direction: z = 0, so the normal lies
      * in the screen plane. Whether the halo is bright here is decided by the
      * same sun term the surface uses, which is what makes the glow a
@@ -1319,10 +1343,15 @@
      * fought the terrain for the same pixels. Haze should thicken toward
      * the edge, not bleach the middle. */
     '    float rim = pow(1.0 - z, 3.0);',
+    /* Not from under this world's own sky (fifth round): seen from near
+     * its surface EVERY ray is near the limb by this measure, so the rim
+     * haze washed the whole ground pink from 8 km up. groundHaze is the
+     * haze there, by the air the ray actually crosses. */
+    '    if (uSkyA.w > 0.0) rim = 0.0;',
     '    col += uAtmoColor * rim * uAtmo * (0.08 + 0.45 * lam);',
     '  }',
 
-    '  col = groundHaze(col, rd, tHit);',
+    '  col = groundHaze(col, rd, tHit, sqrt(dot(oc, oc)) - uWorldRadius);',
     '  frag = vec4(col, 1.0);',
     '}'
   ].join('\n');
