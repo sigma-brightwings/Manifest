@@ -15149,49 +15149,20 @@
     function headroom(x, z) {
       return onRampAt(x, z) ? clearAt(x, z, HEAD_R, above) - rampSurface(z) : clearAt(x, z);
     }
-    /* THE WAY OUT FROM A LIFT'S PIT (2026-11-03). A lift is the one way
-     * off a hull whose deck is too high for a ramp, and on the Crawler it
-     * comes down into a pit: 1.80 m of headroom between her tracks, closed
-     * fore and aft by cross-members 0.66 m off the ground and 2.5-3.5 m
-     * deep (measured: the fore one z -9.5 to -12.0, the aft -75.0 to -78.0,
-     * in her metres). Her model has no door in them. With her hull solid
-     * under a crouched head that pit was a cell with a lift in it - the
-     * walk-out test found her the only hull trapped. So a lift has a LANE:
-     * its own width plus a walker's radius, straight out from the platform
-     * the shorter way to open ground, and in it you duck under the member
-     * (blocked only under DUCK_CLEAR, the eye held under her skin by main.js
-     * bellyHead as everywhere). Nowhere else is that low allowed. Reported
-     * as a model issue rather than papered over: a door in her skirt is the
-     * real answer. `lane` is null where the lift's foot is already open. */
-    var DUCK_CLEAR = 0.42 + HEAD_MARGIN;  // the old squash's floor (OUTSIDE_CROUCH was 0.6): an eye 0.42 m up, and its margin
-    var lane = null;
-    if (rp.mode === 'lift') {
-      var lx0 = rp.x0 - HEAD_R, lx1 = rp.x1 + HEAD_R, lxc = (rp.x0 + rp.x1) / 2;
-      var scan = function (dir) {
-        var low = false, z0 = dir < 0 ? footZ : rp.hinge;
-        for (var dz = 0; dz < reach; dz += STEP / 2) {
-          var z = z0 + dir * dz, c = Math.min(clearAt(lx0 + HEAD_R, z), clearAt(lxc, z), clearAt(lx1 - HEAD_R, z));
-          /* Something even a duck will not pass (a leg, a wall): no lane
-           * this way - the Tanker's and the Carrier's lifts met their own
-           * gear 5 cm and 0 cm off the floor, and need no lane anyway. */
-          if (c < DUCK_CLEAR) return null;
-          if (c < CROUCH_CLEAR) low = true;
-          else if (low) return { len: dz, z: z };
-          if (c === Infinity) return low ? { len: dz, z: z } : { len: 0, z: z };
-        }
-        return null;
-      };
-      var fw = scan(1), bk = scan(-1);
-      var best = [fw, bk].filter(function (q) { return q; }).sort(function (p0, p1) { return p0.len - p1.len; })[0];
-      if (best && best.len > 0) {
-        lane = best === fw ? { x0: lx0, x1: lx1, z0: footZ - 0.3, z1: best.z + HEAD_R }
-                           : { x0: lx0, x1: lx1, z0: best.z - HEAD_R, z1: rp.hinge + 0.3 };
-      }
-    }
-    function inLane(x, z) { return !!lane && x >= lane.x0 && x <= lane.x1 && z >= lane.z0 && z <= lane.z1; }
+    /* THE WAY OUT FROM A LIFT'S PIT (2026-11-03). The Crawler's lift comes
+     * down into a pit closed fore and aft by her skirt's cross-members,
+     * 0.66 m off the ground, and her model had no door in them: with her
+     * hull solid under a crouched head the walk-out test found her the
+     * only hull trapped. For a day this plan carried a "lift lane", a strip
+     * straight out from the platform where you ducked under the member to
+     * an eye 0.42 m off the floor - a model problem worked round in code.
+     * The model is mended now (tools/glb-patch.js cuts a framed 2.30 x
+     * 2.13 m door through her fore cross-member on the lift's line), so
+     * the lane is gone and a lift is walked off like anything else: the
+     * same crouch rule everywhere, and no exception to it. */
     var plan = {
       kind: 'outside', outside: true, rooms: rooms, doors: [], items: items,
-      spawn: { x: (rp.x0 + rp.x1) / 2, z: footZ - 1.2, yaw: Math.PI }, floorY: gy, lane: lane, inLane: inLane,
+      spawn: { x: (rp.x0 + rp.x1) / 2, z: footZ - 1.2, yaw: Math.PI }, floorY: gy,
       ramp: rp, ship: d.plan, clearAt: clearAt, skinAt: skinAt, headroom: headroom, rampSurface: rampSurface,
       footZ: footZ, field: field,
       HEAD_MARGIN: HEAD_MARGIN, STAND_CLEAR: STAND_CLEAR, CROUCH_CLEAR: CROUCH_CLEAR,
@@ -15207,7 +15178,6 @@
          * on it, the bay overhead is open up into her airlock, and a head
          * that would not clear is stopped like anywhere else. */
         if (onRampAt(x, z)) return t < 0.999 || headroom(x, z) < CROUCH_CLEAR;   // nobody crawls up a ramp
-        if (inLane(x, z)) return clearAt(x, z) < DUCK_CLEAR;
         return clearAt(x, z) < CROUCH_CLEAR;
       }
     };

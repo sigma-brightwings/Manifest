@@ -202,7 +202,7 @@ console.log('--- her hull is solid over the hangar floor (2026-11-03) ---');
  *   - her ramp is walkable from her hatch to the hangar's door;
  *   - and the same hull is the same field every time. */
 var HP = ['port-3', 'port-11', 'port-27'];
-var hullErr = [], fieldErr = [], rampErr = [], floodErr = [], detErr = [], gearErr = [], nums = [];
+var hullErr = [], fieldErr = [], rampErr = [], floodErr = [], detErr = [], gearErr = [], laneErr = [], nums = [];
 var tAll = Date.now();
 (process.env.HULLS ? process.env.HULLS.split(',') : ids).forEach(function (id) {
   var s = ship(id), hl = Combat.HULLS[id];
@@ -273,10 +273,11 @@ var tAll = Date.now();
       }
     return m;
   };
-  /* The ramp and hatch corridor, and a lift's lane out of its pit
-   * (render.js outsidePlan `lane`: the Crawler's, under her cross-member). */
-  var inCorr = function (x, z) { return (x >= rp.x0 - 0.3 && x <= rp.x1 + 0.3 && z >= op.footZ - 0.6 && z <= rp.hinge + 0.3) || op.inLane(x, z); };
-  if (op.lane) nums.push(id + ' lift lane ' + (op.lane.z1 - op.lane.z0).toFixed(1) + ' m');
+  /* The ramp and hatch corridor. (A lift's "lane" out of its pit, where
+   * you ducked under the Crawler's cross-member, was here until her model
+   * got a door in it, 2026-11-03: no exception any more.) */
+  var inCorr = function (x, z) { return x >= rp.x0 - 0.3 && x <= rp.x1 + 0.3 && z >= op.footZ - 0.6 && z <= rp.hinge + 0.3; };
+  if (op.lane !== undefined) laneErr.push(id);
   /* Up her ramp: a crouched head clears her, by the samples. */
   var rampLo = Infinity;
   for (var rz = op.footZ; rz <= rp.hinge - 0.35; rz += 0.1) {
@@ -348,8 +349,59 @@ check('her clearance never claims more room than her hull leaves, so the eye hel
 check('up her ramp a crouched head clears her all the way', !rampErr.length, rampErr.join(', '));
 check('from her hatch, down her ramp, you can walk to the hangar door, in every hangar', !floodErr.length, floodErr.slice(0, 6).join('; '));
 check('the same hull is the same clearance every time', !detErr.length, detErr.join(', '));
+check('no walking plan carries a lift lane: every way out is walked by the one crouch rule', !laneErr.length, laneErr.join(', '));
 console.log('  note  per hull: field build / hangar cells blocked / standable / least ramp headroom (m): ' + nums.join('; ') +
             '  (' + ((Date.now() - tAll) / 1000).toFixed(1) + ' s)');
+
+
+console.log('--- her skin is closed, and the Crawler has a door (2026-11-03) ---');
+/* Astra, on the model problems the hull-walk fix could not mend in code:
+ * "can you not fix the models?" tools/glb-patch.js mends the art itself.
+ * Checked on every hull AS THE GAME DRAWS HER (hullPreviewMesh, each of
+ * the Crawler's three liveries, her crates' cubes and all), in her own
+ * metres, with the walk grid's own spacing: a vertical ray through every
+ * column crosses her skin an even number of times. Before the patch the
+ * Cutter had 38 odd columns (four lidless belly blisters) and each Crawler
+ * 1,592 (open sheets and tubes: her RCS bells' throats 8 m up her track
+ * sides, her lamps, stripes, struts, domes); every other hull had none. */
+var Seal = require('../tools/hull-seal.js');
+var sealErr = [], sealN = 0, sealCols = 0;
+ids.forEach(function (id) {
+  (id === 'crawler' ? [null, 'navy', 'syn'] : [null]).forEach(function (liv) {
+    var s = ship(id);
+    if (liv) s.livery = liv;
+    var mesh = R.hullPreviewMesh(id, s), at = R.cockpitAt(s) || [0, 0, 0], Lm = R.hullLength(s) * 1000;
+    var r = Seal.oddColumns(mesh, Lm > 60 ? 0.5 : 0.25, function (v) { return [v[0] * Lm - at[0], v[1] * Lm - at[1], v[2] * Lm - at[2]]; });
+    sealN++; sealCols += r.columns;
+    if (r.odd.length) sealErr.push(id + (liv ? '/' + liv : '') + ' ' + r.odd.length + ' e.g. (' + r.odd[0].x.toFixed(1) + ', ' + r.odd[0].z.toFixed(1) + ')');
+  });
+});
+check('every hull\'s skin is closed: no vertical ray under her crosses it an odd number of times', !sealErr.length,
+      sealErr.length ? sealErr.join('; ') : sealN + ' hulls and liveries, ' + sealCols + ' columns, 0 odd');
+/* The Crawler walks off her lift through her own door. Along the lift's
+ * line, from its foot forward to open ground: nowhere a crouched walker is
+ * stopped (the field's own rule, no lane), and through the doorway in her
+ * cross-member - where a 0.66 m beam was - a standing head clears. The pit
+ * itself is her closed belly doors' underside, 1.80 m; measured, said. */
+var doorErr = [], doorNums = [];
+[null, 'navy', 'syn'].forEach(function (liv) {
+  var s = ship('crawler');
+  if (liv) s.livery = liv;
+  s.airlock = { side: 'out', ramp: 1, want: 1, hatch: 1 };
+  var op = R.outsidePlan(s), rp = op.ramp, xc = (rp.x0 + rp.x1) / 2, tag = liv || 'civ';
+  var least = Infinity, through = null, z = rp.hinge + 0.35;       // off her platform's fore edge, toward the door
+  for (; z < rp.hinge + 40; z += 0.1) {
+    var h = op.headroom(xc, z);
+    if (h === Infinity || h > 10) break;               // out from under her
+    if (op.blocked(xc, z)) { doorErr.push(tag + ' blocked at z ' + z.toFixed(1)); break; }
+    if (h < least) least = h;
+    if (h > 2 && through === null) through = h;        // the doorway, under its header
+  }
+  if (through === null || through < op.STAND_CLEAR) doorErr.push(tag + ' no standing doorway (' + through + ')');
+  doorNums.push(tag + ': out at z ' + z.toFixed(1) + ', doorway ' + (through || 0).toFixed(2) + ' m, least ' + least.toFixed(2) + ' m (the belly doors)');
+});
+check('the Crawler walks off her lift forward through a door in her cross-member, standing in the doorway, no duck', !doorErr.length, doorErr.join('; '));
+console.log('  note  ' + doorNums.join('; '));
 
 
 console.log('--- half a metre higher on her gear, the sim and the renderer agreeing (2026-11-03) ---');
