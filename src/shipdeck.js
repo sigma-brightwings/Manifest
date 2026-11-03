@@ -112,6 +112,9 @@
    * that is it a stair. Measured over every hull
    * with her lifted drop: every room stays inside her (airlock.test.js). */
   var RAMP_SLOPE = 22 * Math.PI / 180, RAMP_STEEP = 33 * Math.PI / 180, STAIR_SLOPE = 42 * Math.PI / 180;
+  /* The old cut, kept as the yardstick render.js shipInterior plans against:
+   * a longer ramp is never allowed to cost her a room that 30° left her. */
+  var RAMP_CUT_SLOPE = 30 * Math.PI / 180;
   var RAMP_MAX = 10.0;                     // m of ramp a room is allowed to hold
   var LIFT_LEN = 2.6;                      // m, a lift platform, fore and aft
   /* `maxLen` (optional): the longest ramp her own hull leaves room for
@@ -2711,7 +2714,7 @@
     doorById: doorById, roomByKind: roomByKind,
     RAISED: RAISED, raisedCockpit: raisedCockpit, floorAt: floorAt,
     rampShape: rampShape, rampMesh: rampMesh, rampFloor: rampFloor, rampPoint: rampPoint,
-    LOCK_W: LOCK_W, LOCK_LAND: LOCK_LAND, RAMP_MAX: RAMP_MAX
+    LOCK_W: LOCK_W, LOCK_LAND: LOCK_LAND, RAMP_MAX: RAMP_MAX, RAMP_SLOPE: RAMP_SLOPE, RAMP_CUT_SLOPE: RAMP_CUT_SLOPE
   };
 
   global.ShipDeck = ShipDeck;

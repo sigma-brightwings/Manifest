@@ -450,10 +450,25 @@ ids.forEach(function (id) {
 });
 ['talon', 'kestrel', 'cutter', 'enforcer'].forEach(function (id) {
   var rp = R.shipInterior(ship(id)).plan.ramp;
-  if (rp.mode !== 'ramp' || rp.angle * 180 / Math.PI > 22.5 || rp.len < 7) gentleErr.push(id + ' ' + rp.mode + ' ' + rp.len.toFixed(2));
+  if (rp.mode !== 'ramp' || rp.angle * 180 / Math.PI > 26 || rp.len < 6.5) gentleErr.push(id + ' ' + rp.mode + ' ' + rp.len.toFixed(2));
 });
+/* And no hull lost a room to it (render.js shipInterior plans against the
+ * old 30° cut and shortens the ramp until she has every room it left her). */
+var lostRoom = [], nCut = 0;
+ids.forEach(function (id) {
+  var s0 = ship(id), d0 = R.shipInterior(s0), rp0 = d0.plan.ramp;
+  if (!rp0 || rp0.mode !== 'ramp') return;
+  var kinds = function (pl) { var k = {}; pl.rooms.forEach(function (r) { k[r.kind] = (k[r.kind] || 0) + 1; }); return k; };
+  var have = kinds(d0.plan);
+  /* Her plan as it stands is what the game uses; the yardstick is the old cut. */
+  var want = d0.plan.cutRooms;
+  if (!want) return;          // her ramp is no longer than the old cut's: nothing to lose
+  nCut++;
+  for (var k in want) if ((have[k] || 0) < want[k]) lostRoom.push(id + ' ' + k);
+});
+check('and the longer ramp cost no hull a room the old 30° ramp left her', nCut > 0 && !lostRoom.length, nCut + ' hulls with a longer ramp' + (lostRoom.length ? ': ' + lostRoom.join(', ') : ''));
 check('no ramp is steeper than 33° (past that it is a stair)', !steep.length, steep.join(', '));
-check('the small hulls\' ramps are 7 m or more at 22° or less (were 5.0-5.5 m at 28-29°)', !gentleErr.length, gentleErr.join(', '));
+check('the small hulls\' ramps are 6.5 m or more at 26° or less (were 5.0-5.5 m at 28-29°)', !gentleErr.length, gentleErr.join(', '));
 console.log('  note  ' + rampTab.join('; '));
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

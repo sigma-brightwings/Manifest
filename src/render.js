@@ -14265,6 +14265,29 @@
                   /* Every room inside her own hull (shipdeck.js planFitted). */
                   fit: hullFitter(ship) };
     var plan = (SD.planFitted || SD.plan)(g, popts);
+    /* A LONGER RAMP NEVER COSTS HER A ROOM (2026-11-03). The ramp lies in
+     * her airlock's floor, so the 22° ramp makes the airlock that much
+     * longer, and on the Enforcer that pushed her cargo bay out of her hull
+     * altogether (boarding3.test.js: "fitting them took nothing away from
+     * any hull today"). So the plan at the old 30° cut is the yardstick: if
+     * the longer ramp's plan is missing any room that one has, the ramp is
+     * shortened a quarter metre at a time until it is not - as long as her
+     * hull allows, never shorter than it was. */
+    var cutWant = null;
+    if (plan.ramp && plan.ramp.mode === 'ramp' && SD.RAMP_CUT_SLOPE && plan.ramp.drop > 0) {
+      var cutLen = plan.ramp.drop / Math.sin(SD.RAMP_CUT_SLOPE);
+      var kindsOf = function (pl) { var k = {}; pl.rooms.forEach(function (r) { k[r.kind] = (k[r.kind] || 0) + 1; }); return k; };
+      var lacks = function (pl, want) { for (var kk in want) if ((kindsOf(pl)[kk] || 0) < want[kk]) return true; return false; };
+      if (plan.ramp.len > cutLen + 0.05) {
+        var cutOpts = Object.create(popts); cutOpts.rampMax = cutLen;
+        var want = kindsOf((SD.planFitted || SD.plan)(g, cutOpts));
+        for (var rl = plan.ramp.len - 0.25; lacks(plan, want) && rl > cutLen - 1e-9; rl -= 0.25) {
+          popts.rampMax = Math.max(cutLen, rl);
+          plan = (SD.planFitted || SD.plan)(g, popts);
+        }
+        cutWant = want;
+      }
+    }
     /* HER RAMP STOPS SHORT OF HER LEGS (2026-11-03). Lengthened to 22°
      * (shipdeck.js RAMP_SLOPE), the Kestrel's and the Bollard's ramps ran
      * through a main gear leg standing aft of the old foot. So where one of
@@ -14279,6 +14302,9 @@
       popts.rampMax = (popts.rampMax ? Math.min(popts.rampMax, lim) : lim);
       plan = (SD.planFitted || SD.plan)(g, popts);
     }
+    /* What the old cut left her, kept on the plan so airlock.test.js can
+     * hold the longer ramp to it. */
+    if (cutWant) plan.cutRooms = cutWant;
     /* A ship bigger than her hull's fitted length (hullFit, `lengthKm`):
      * the same rooms, the cockpit at the same point of her model, and her
      * hold (or, with none, her passage) run on aft by however much further
@@ -15115,10 +15141,16 @@
    * hullFit) and how tall she is above it. `origin` is where her position
    * is, in the same metres (walk.js placeShip centres a sea pad's plan on
    * it, so the plan stands on the rig). */
+  /* Through the exported object, not the closures: render.test.js stands
+   * stubs in for Render.outsidePlan/shipInterior/hatchModel to put a ramp
+   * on a hull that has none, and the copy of this in main.js it replaced
+   * asked through Render.*, so a closure here would quietly ignore them
+   * (the deck-hangar zoom test, 2026-11-03). */
   function hangarSpec(ship) {
-    var d = shipInterior(ship), op = outsidePlan(ship), hm = hatchModel(ship);
+    var X = global.Render || {};
+    var d = (X.shipInterior || shipInterior)(ship), op = (X.outsidePlan || outsidePlan)(ship), hm = (X.hatchModel || hatchModel)(ship);
     if (!d || !d.plan.ramp || !op || !hm) return null;
-    var at = cockpitAt(ship) || [0, 0, 0], Lm = hullLength(ship) * 1000, rp = d.plan.ramp;
+    var at = (X.cockpitAt || cockpitAt)(ship) || [0, 0, 0], Lm = (X.hullLength || hullLength)(ship) * 1000, rp = d.plan.ramp;
     var hx0 = hm.lo[0] * Lm - at[0], hx1 = hm.hi[0] * Lm - at[0];
     var hz0 = hm.lo[2] * Lm - at[2], hz1 = hm.hi[2] * Lm - at[2], top = hm.hi[1] * Lm - at[1];
     var foot = { x: (rp.x0 + rp.x1) / 2, z: op.footZ };

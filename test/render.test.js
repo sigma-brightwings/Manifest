@@ -389,9 +389,12 @@ console.log('--- a new career starts on a pad ---');
     var oBerthed = Sim.berthState(orbPort, G.sys, G.t,
                                   (G.ship.dockOffset || {}).berth);
     check('berthState answers for an orbital port too', !!oBerthed);
+    /* Standing in it on her own gear: the berth's point, her stand height
+     * (Sim.standLiftKm, half a metre on a geared hull, 2026-11-03) up. */
+    var standAt = function (bs) { return V.addScaled(bs.pos, bs.basis.up, Sim.standLiftKm ? Sim.standLiftKm(G.ship) : 0); };
     check('and the hull is standing in it rather than beside the station',
-          !!oBerthed && V.dist(G.ship.pos, oBerthed.pos) < 1e-6,
-          oBerthed ? V.dist(G.ship.pos, oBerthed.pos).toFixed(6) + ' km off its berth'
+          !!oBerthed && V.dist(G.ship.pos, standAt(oBerthed)) < 1e-6,
+          oBerthed ? V.dist(G.ship.pos, standAt(oBerthed)).toFixed(6) + ' km off its berth'
                    : 'no berth');
 
     /* And it keeps answering as the station moves and turns: a docked hull
@@ -404,8 +407,8 @@ console.log('--- a new career starts on a pad ---');
       var oLater = Sim.berthState(orbPort, G.sys, G.t,
                                   (G.ship.dockOffset || {}).berth);
       check('and it is still standing in it two seconds later',
-            !!oLater && V.dist(G.ship.pos, oLater.pos) < 1e-6,
-            oLater ? V.dist(G.ship.pos, oLater.pos).toFixed(6) + ' km off' : 'no berth');
+            !!oLater && V.dist(G.ship.pos, standAt(oLater)) < 1e-6,
+            oLater ? V.dist(G.ship.pos, standAt(oLater)).toFixed(6) + ' km off' : 'no berth');
       check('and it moved with the station rather than staying put in space',
             V.dist(G.ship.pos, slidePos) > 0,
             'moved ' + V.dist(G.ship.pos, slidePos).toFixed(4) + ' km');

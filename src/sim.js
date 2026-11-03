@@ -6892,8 +6892,10 @@
       if (basis0 && Gen0 && Gen0.bayGeometry) {
         var g0 = Gen0.bayGeometry(target);
         var r0 = target.radius || 1;
+        /* Her own stand height on top (standLiftKm), as in her berth, so
+         * the hand-over is still a step UP from where she stood. */
         ship.pos = V.addScaled(basis0.entrance.pos, basis0.up,
-                               (g0.floorZ + g0.lift + g0.standoff * 2) * r0);
+                               (g0.floorZ + g0.lift + g0.standoff * 2) * r0 + standLiftKm(ship));
         ship.vel = V.clone(basis0.entrance.vel);
       } else {
         ship.pos = V.addScaled(ship.pos, away, target.radius * 0.5);
