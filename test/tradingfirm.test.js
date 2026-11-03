@@ -173,6 +173,10 @@ console.log('--- every refusal says why ---');
   var contraband = Object.keys(Eco.BY_ID).filter(function (k) { return Eco.BY_ID[k].contraband; })[0];
   check('a contraband good on the list', /honest house/.test(why({ hulls: [ok.id], budget: 50000, goods: [contraband] })), contraband);
   check('no such ship', /no such ship/.test(why({ hulls: ['nobody'], budget: 50000 })));
+  /* Every hull in the game has a hold today; the refusal is for one that
+   * does not (a record whose hull is gone from the catalogue). */
+  var nohold = JSON.parse(JSON.stringify(ok)); nohold.hullId = 'no-such-hull';
+  check('a hull with no hold to trade with', /no hold to trade with/.test(TF.hullRefusal(G, nohold, f, G.here.id)));
 
   var r = TF.engage(G, f, p, sys, { hulls: [ok.id], budget: 50000 }, G.t);
   check('and with everything in order, it opens', r.ok && G.ship.credits === 10000, r.why);
@@ -182,6 +186,8 @@ console.log('--- every refusal says why ---');
   check('Fleet will not send a traded hull anywhere', /trades for .* stand her down/.test(Fleet.canOrder(G, ok, sys, 'x').why), Fleet.canOrder(G, ok, sys, 'x').why);
   check('nor set her to work', /trades for/.test(Fleet.planWork(G, ok, sys, 'x', 'sell').why));
   check('nor can you take command of her', /trading for a firm/.test(Combat.commandRefusal(G, ok, 'keep')));
+  check('her hail says whose book she is on', /trading for /.test(Fleet.report(G, ok, G.t)), Fleet.report(G, ok, G.t));
+  check('and the fleet list says she is trading', /trading/.test(Fleet.describe(ok, sys)));
   var other = sys.ports.filter(function (q) { return q !== p && q.market; })[0];
   check('withdrawals only at the office', /made at their office/.test(TF.canWithdraw(G, c, 100, other).why));
   check('not more than the cash', /holds 50,000 cr in cash/.test(TF.canWithdraw(G, c, 60000, p).why), TF.canWithdraw(G, c, 60000, p).why);
