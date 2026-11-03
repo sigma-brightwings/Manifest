@@ -166,6 +166,23 @@ auto-dock line up over the mouth and take you straight down — same capture-and
 as any pad, just tighter (2.4x radius, 18 m/s) because you are landing inside a
 wall on every side rather than in the open. Undocking climbs back up the same shaft.
 
+**11b'. Land on a sea platform.** On an ocean world (and on a few twilight worlds
+whose living band is all water) the port is a rig on the open sea: a hub with the
+bar in it, and eight pads round it on their own pontoons, each under a dome and
+joined to the hub by a covered tube. Comms and the nav list call it a "Sea Platform".
+Hail it and close in as for any pad: once you are cleared and inside its envelope
+(2.5 km), the dome over YOUR pad swings open, and the pad catches you and carries you
+down through the crown onto the deck. The dome shuts over you once you are standing
+on the deck, and stays shut while you are berthed — that is what it is for. Pads 1
+and 5 (north and south) are the large ones. The domes over other ships' pads open
+and shut as they come and go; a dome never shuts on a ship still in the air.
+Undocking: ask for launch clearance as usual — you sit on the stand while the dome
+opens, are lifted up through it and handed over held above it; thrust to leave.
+Step out (as at any port) and you are on your pad under the dome: the door in the
+dome's wall leads into the 120 m tube, and the tube to the hub's concourse, the bar
+and the crew hall. The `` ` `` cutaway at a platform cuts a cone through the dome
+over you, the way a station's hull is cut, rather than a section through the street.
+
 **11c. Set down away from a port** — on a claim, to plant a mining drone (`N`).
 Gear down (`Shift+G`), come in slow, and she stands on her gear. Touchdown shuts the
 drive down; the band reads **DRIVE COLD · R TO START**. `R` starts her — two

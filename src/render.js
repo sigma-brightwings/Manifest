@@ -3154,8 +3154,9 @@
    * table, so the pad a hull stands on is the pad that is drawn.
    *
    * SEMI-SUBMERSIBLE, AND STILL. Every structure stands on square columns
-   * that go down through the water line onto pontoons below it (the sea,
-   * which is the planet's own sphere, hides everything under z = 0), with
+   * that go down through the water line onto pontoons awash at it (see
+   * SEA_PONTOON_Z; the sea, which is the planet's own sphere, hides
+   * everything under it), with
    * the deck SEA_DECK_KM up. Nothing here moves with the swell, and that
    * is deliberate: a semi-sub is stable by design, and a pad that bobbed
    * would put every berth and rail at the mercy of the sea state. Only the
@@ -3182,6 +3183,17 @@
   var SEA_PETAL_OPEN = 100 * Math.PI / 180;   // swung up and out, past vertical
   var SEA_TUBE_R = 0.0045;         // the covered walkway's radius
   var SEA_COL_DOWN = 0.030;        // how far the columns go below the water
+  /* PONTOON-STABILISED (Astra, 2026-11-02: "water has a floating,
+   * pontoon-stabilized port"). The columns stand on pontoons, and the
+   * pontoons are what hold the rig still: their buoyancy sits low, under
+   * the wave base where the swell barely moves the water, and the columns
+   * that pierce the surface are thin, so a passing crest changes the lift
+   * very little - which is why a semi-submersible does not bob and why
+   * this one is drawn bolted still. They are drawn AWASH, their decks a
+   * metre over the calm water line, so the swell (gl.js SEA_GLSL) washes
+   * over them and uncovers them, and you can see what the columns stand
+   * on. Rust-dark, like any hull at its water line. */
+  var SEA_PONTOON_Z = -0.0032, SEA_PONTOON_HZ = 0.0040;   // centre and half-height, km: top 0.8 m up
 
   /* `src` placed with its x, y, z axes along `ax`, `ay`, `az` (unit
    * triples) and its origin at t. The one transform the rig needs that
@@ -3212,6 +3224,11 @@
   }
 
   var SEA_PLATFORM_MESH = null;
+  /* Everything of the rig that stands in the water - columns and trestles,
+   * [x, y, half-width] in km - for the sea's foam (gl.js SEA_GLSL). Filled
+   * by the mesh builder, so the foam is round what is drawn. */
+  var SEA_POST_LIST = [];
+  function seaPosts() { seaPlatformMesh(); return SEA_POST_LIST; }
   function seaPlatformMesh() {
     if (SEA_PLATFORM_MESH) return SEA_PLATFORM_MESH;
     var Gen = global.Gen;
@@ -3219,10 +3236,12 @@
     var m = emptyMesh();
     if (!L) return (SEA_PLATFORM_MESH = m);
     var D = L.deck, H = L.hub;
+    var PONTOON = '#3c2f2a';
     var STEEL = '#8d969e', DARK = '#4a5158', RUST = '#a5603a', DECK = '#5d646b',
         PAINT = '#d9b23a', WHITE = '#dfe6ea';
     /* A square column from under the water to the underside of a deck. */
     function column(x, y, half, a) {
+      SEA_POST_LIST.push([x, y, half]);
       var top = D - 0.003, bot = -SEA_COL_DOWN, hz = (top - bot) / 2;
       mergeTurned(m, box(half, half, hz), x, y, bot + hz, a || 0, STEEL);
       /* The splash zone: a dark band where the water line crosses it, the
@@ -3235,8 +3254,11 @@
      * so it reads as a rig from two kilometres. */
     var hc = H * 0.66;
     [[1, 1], [-1, 1], [-1, -1], [1, -1]].forEach(function (q) { column(q[0] * hc, q[1] * hc, 0.0085); });
-    merge(m, box(H * 0.82, 0.007, 0.006), 0, hc, -0.022, 1, DARK);
-    merge(m, box(H * 0.82, 0.007, 0.006), 0, -hc, -0.022, 1, DARK);
+    /* The hub's pontoons, a square ring of them under the columns. */
+    merge(m, box(H * 0.82, 0.007, SEA_PONTOON_HZ), 0, hc, SEA_PONTOON_Z, 1, PONTOON);
+    merge(m, box(H * 0.82, 0.007, SEA_PONTOON_HZ), 0, -hc, SEA_PONTOON_Z, 1, PONTOON);
+    merge(m, box(0.007, H * 0.82, SEA_PONTOON_HZ), hc, 0, SEA_PONTOON_Z, 1, PONTOON);
+    merge(m, box(0.007, H * 0.82, SEA_PONTOON_HZ), -hc, 0, SEA_PONTOON_Z, 1, PONTOON);
     merge(m, box(H, H, 0.003), 0, 0, D - 0.003, 1, DECK);                 // deck
     merge(m, box(H * 1.01, H * 1.01, 0.0012), 0, 0, D - 0.0062, 1, DARK);  // deck's edge girder
     merge(m, box(H * 0.74, H * 0.66, 0.0075), 0, 0, D + 0.0075, 1, WHITE); // the bar, lower storey
@@ -3275,7 +3297,11 @@
         var ux = q[0] * pc, uy = q[1] * pc;
         column(p.x + ux * c - uy * s, p.y + ux * s + uy * c, R * 0.13, a);
       });
-      mergeTurned(m, box(half * 0.9, R * 0.1, 0.006), p.x, p.y, -0.022, a, DARK);   // pontoon
+      /* Two pontoons under each pad, along its columns, awash. */
+      [-1, 1].forEach(function (sd) {
+        var ox = -s * sd * pc, oy = c * sd * pc;
+        mergeTurned(m, box(half * 0.92, R * 0.14, SEA_PONTOON_HZ), p.x + ox, p.y + oy, SEA_PONTOON_Z, a, PONTOON);
+      });
       mergeTurned(m, box(half, half, 0.003), p.x, p.y, D - 0.003, a, DECK);         // the pad's deck
       mergeTurned(m, box(half * 1.01, half * 1.01, 0.0012), p.x, p.y, D - 0.0062, a, DARK);
       /* The drum the petals hinge on: a ring wall round the landing circle,
@@ -3305,7 +3331,7 @@
       [-1, 1].forEach(function (sd) {
         mergeAxes(m, box(0.0004, 0.0007, len / 2 * 0.96),
                   [c * mid + side[0] * sd * SEA_TUBE_R * 0.98, s * mid + side[1] * sd * SEA_TUBE_R * 0.98, tz + 0.0012],
-                  side, upv, dir, '!#ffe2a8');
+                  side, upv, dir, '!#d9b27a');
       });
       /* Its floor deck, the girder it rides on and the trestles. */
       mergeAxes(m, box(SEA_TUBE_R * 1.2, 0.0012, len / 2), [c * mid, s * mid, D - 0.0006],
@@ -3313,6 +3339,7 @@
       [0.33, 0.67].forEach(function (f) {
         var r0 = start + len * f, top = D - 0.0012, bot = -SEA_COL_DOWN, hz = (top - bot) / 2;
         mergeTurned(m, box(0.0022, SEA_TUBE_R * 0.9, hz), c * r0, s * r0, bot + hz, a, STEEL);
+        SEA_POST_LIST.push([c * r0, s * r0, SEA_TUBE_R * 0.7]);
         mergeTurned(m, box(0.0024, SEA_TUBE_R, 0.0022), c * r0, s * r0, 0.0005, a, RUST);
       });
       /* Collars where it meets the hub and the drum. */
@@ -15136,7 +15163,7 @@
     drawHoloTarget: drawHoloTarget,
     drawHullModel: drawHullModel,
     drawStationModel: drawStationModel,
-    drawSeaDomes: drawSeaDomes, seaPlatformMesh: seaPlatformMesh, seaPetalMesh: seaPetalMesh,
+    drawSeaDomes: drawSeaDomes, seaPlatformMesh: seaPlatformMesh, seaPetalMesh: seaPetalMesh, seaPosts: seaPosts,
     SEA_DRUM_KM: SEA_DRUM_KM, SEA_PETALS: SEA_PETALS, SEA_PETAL_OPEN: SEA_PETAL_OPEN, SEA_MESH_SCALE: SEA_MESH_SCALE,
     berthDressing: berthDressing, berthAds: berthAds, adSlot: adSlot,
     ADS: ADS, AD_SECONDS: AD_SECONDS,

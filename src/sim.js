@@ -1794,8 +1794,12 @@
       }
       var bsS = (padK === null || padK === SEA_OFF) ? null : berthState(dst, sys, t, padK);
       if (bsS) {
+        /* `rest`: the attitude she comes to rest in, level, which the
+         * descent flares to instead of to nose-up - a hull stood on her tail
+         * would be taller than the dome over her. */
+        var restS = berthFacing(bsS.basis, bsS.off);
         return { pos: bsS.pos, vel: bsS.vel, up: bsS.basis.up,
-                 fwd: berthFacing(bsS.basis, bsS.off), landed: true, pad: padK };
+                 fwd: restS, rest: restS, landed: true, pad: padK };
       }
     }
     if (dst.underground) {
@@ -1865,6 +1869,7 @@
   /* The moored window of `route` at `port` that contains t (or the next
    * one to begin, or null): { a: arrival on the pad, d: departure }. */
   var SEA_STAY_TAIL_S = 600;    // a departure's dome window, at most
+  var SEA_ASK_LEAD_S = 900;     // how far ahead of her arrival her distance is asked
   function seaStay(route, port, t) {
     if (!route || route.outboard) return null;
     var atB = route.to === port.id, atA = route.from === port.id;
@@ -1933,7 +1938,16 @@
    * sweep again from the epoch, which costs a few milliseconds.
    *
    * Measured with the sweep: no ship shares a pad (seaplatform.test). */
-  var SEA_EPOCH_S = -2 * 86400;
+  /* IN BLOCKS. One sweep from a single epoch cost 1.9 s the first time a
+   * platform was asked about a year into a career (measured, 46 routes),
+   * which is a hitch on entering the system. So time is cut into blocks of
+   * SEA_BLOCK_S and each block is swept on its own, starting SEA_PREROLL_S
+   * before it: a day of the timetable is long enough for the deck to turn
+   * over, so the pre-roll mostly arrives at the pads the previous block's
+   * sweep did (see seaTrafficPad for what happens when it does not). A
+   * cold block costs tens of milliseconds. */
+  var SEA_BLOCK_S = 8 * 86400;
+  var SEA_PREROLL_S = 1 * 86400;
   var SEA_FORGET_S = 2 * 86400;    // keep a stay's pad this long after she leaves
   var SEA_OFF = -1;
   function routeStaysFrom(route, port, from) {
@@ -1961,10 +1975,18 @@
       }
     };
   }
-  function seaSweep(port, sys, T) {
-    var sw = port._sweep;
-    if (!sw || sw.sys !== sys || T < sw.from) {
-      sw = port._sweep = { sys: sys, t: SEA_EPOCH_S, from: SEA_EPOCH_S, present: [], assign: {}, heads: [] };
+  function seaSweep(port, sys, T, block) {
+    var cache = port._sweeps || (port._sweeps = {});
+    var sw = cache[block];
+    var SEA_EPOCH_S = block * SEA_BLOCK_S - SEA_PREROLL_S;
+    /* Only a missing sweep is rebuilt here; one that has moved past T
+     * still holds every stay that has not long since left (seaTrafficPad
+     * rebuilds it when a stay it needs has been forgotten). */
+    if (!sw || sw.sys !== sys) {
+      /* Three blocks kept, the farthest from this one dropped first. */
+      var ks = Object.keys(cache).sort(function (a, b) { return Math.abs(+b - block) - Math.abs(+a - block); });
+      while (ks.length >= 3) delete cache[ks.shift()];
+      sw = cache[block] = { sys: sys, t: SEA_EPOCH_S, from: SEA_EPOCH_S, present: [], assign: {}, heads: [] };
       /* The ships already standing at the epoch go on first, in the order
        * they came in; then the sweep proper, from the epoch on. */
       var early = [];
@@ -1995,7 +2017,7 @@
       hd.st = hd.cur.next();
     }
     /* Forget stays long gone, so the record does not grow for ever. */
-    if (sw.t - (sw.pruned || SEA_EPOCH_S) > SEA_FORGET_S) {
+    if (sw.t - (sw.pruned || sw.from) > SEA_FORGET_S) {
       var keep = {}, cut = sw.t - SEA_FORGET_S;
       Object.keys(sw.assign).forEach(function (k) { if (sw.assign[k].d > cut) keep[k] = sw.assign[k]; });
       sw.assign = keep; sw.pruned = sw.t; sw.from = cut;
@@ -2017,12 +2039,22 @@
     if (!port || !port.seaPlatform || !route || !sys || !sys.traffic) return null;
     var me = seaStay(route, port, t);
     if (!me) return null;
-    var sw = seaSweep(port, sys, Math.max(me.a, SEA_EPOCH_S));
+    /* The block of the TIME ASKED, not of her arrival: every ship on the
+     * deck at t is then read off one sweep, which never puts two on a pad.
+     * Keyed by her arrival, a ship that came in before the block began was
+     * read off the last block's sweep while the ships round her were read
+     * off this one's pre-roll, and the two disagreed for as long as she
+     * stayed (2% of moored samples, measured). The price is the other way
+     * round: at a block's first instant a ship that has been standing since
+     * before it can find herself on another pad - once every eight days, and
+     * under a shut dome. */
+    var block = Math.floor(t / SEA_BLOCK_S);
+    var sw = seaSweep(port, sys, Math.max(me.a, block * SEA_BLOCK_S - SEA_PREROLL_S), block);
     var got = sw.assign[route.id + '@' + me.a];
-    if (!got && me.d > SEA_EPOCH_S) {
-      /* Swept past and forgotten: start again from the epoch. */
-      port._sweep = null;
-      sw = seaSweep(port, sys, me.a);
+    if (!got) {
+      /* Swept past and forgotten: sweep this block again. */
+      if (port._sweeps) delete port._sweeps[block];
+      sw = seaSweep(port, sys, Math.max(me.a, block * SEA_BLOCK_S - SEA_PREROLL_S), block);
       got = sw.assign[route.id + '@' + me.a];
     }
     return got ? got.pad : padOrder(port, route)[0];
@@ -2065,7 +2097,9 @@
       var route = routes[i];
       if (route.from !== port.id && route.to !== port.id) continue;
       var stay = seaStay(route, port, t);
-      if (!stay) continue;
+      /* Not due for a while: nothing of hers to open for, and no pad to
+       * look up (a stay a month off would sweep a block of its own). */
+      if (!stay || t < stay.a - SEA_ASK_LEAD_S) continue;
       var pad = seaTrafficPad(port, sys, t, route);
       if (pad === null || pad === SEA_OFF) continue;
       if (t >= stay.a + SEA_SETTLE_S && t <= stay.d - SEA_DEPART_LEAD_S) continue;   // berthed: shut
@@ -2075,6 +2109,10 @@
       if (t >= stay.a - SEA_ARRIVE_LEAD_S && t <= stay.a + SEA_SETTLE_S) { set(pad, (t < stay.a ? 'arriving ' : 'settling ') + (route.name || route.id)); continue; }
       var near = t < stay.a ? SEA_ARRIVE_KM : SEA_CLEAR_KM;
       if (t > stay.a + SEA_SETTLE_S && t < stay.d) continue;
+      /* Only near her own comings and goings is her position worth asking
+       * for: trafficState solves her leg, and asking it of every ship on
+       * the timetable every frame cost 21 ms (measured, 46 routes). */
+      if (!(t >= stay.a - SEA_ASK_LEAD_S && t <= stay.a) && !(t >= stay.d && t <= stay.d + SEA_STAY_TAIL_S)) continue;
       var ts = trafficState(route, sys, t);
       if (!ts || !ts.pos) continue;
       if (V.dist(ts.pos, padWorld(pad)) < near) set(pad, (t < stay.a ? 'arriving ' : t <= stay.a + SEA_SETTLE_S ? 'settling ' : 'leaving ') + (route.name || route.id));
@@ -2255,12 +2293,12 @@
         var fpos = V.add(ap.pos, V.scale(V.sub(dp.pos, ap.pos), fe));
         var fvel = V.add(ap.vel, V.scale(V.sub(dp.vel, ap.vel), fe));
         var flare = V.dist(fpos, dp.pos);
-        var up0 = dp.up || ap.up;
+        var up0 = dp.rest || dp.up || ap.up;
         var faceUp = 1 - Math.min(1, flare / Math.max((dst.radius || 0.05) * 60, 8));
         var down = V.norm(V.sub(dp.pos, ap.pos));
         var ffwd = V.norm(V.add(V.scale(down, 1 - faceUp), V.scale(up0, faceUp)));
         if (V.len(ffwd) < 1e-9) ffwd = up0;
-        var fin = finishTraffic(route, fpos, fvel, ffwd, ap.fwd, 'descent', u, src, dst, outbound);
+        var fin = finishTraffic(route, fpos, fvel, ffwd, dp.rest ? dp.up : ap.fwd, 'descent', u, src, dst, outbound);
         fin.throttle = Math.max(0.25, 1 - fe * 0.75);
         fin.braking = true;
         fin.landing = fe;
@@ -2364,12 +2402,13 @@
        * driven by the distance that is actually left. */
       var flare = V.dist(wpos, pose.pos);
       var faceUp = toRoads ? 0 : 1 - Math.min(1, flare / Math.max((dst.radius || 0.05) * 60, 8));
+      var restF = pose.rest || pose.up;
       facing = V.norm({
-        x: facing.x + (pose.up.x - facing.x) * faceUp,
-        y: facing.y + (pose.up.y - facing.y) * faceUp,
-        z: facing.z + (pose.up.z - facing.z) * faceUp
+        x: facing.x + (restF.x - facing.x) * faceUp,
+        y: facing.y + (restF.y - facing.y) * faceUp,
+        z: facing.z + (restF.z - facing.z) * faceUp
       });
-      if (V.len(facing) < 1e-9) facing = pose.up;
+      if (V.len(facing) < 1e-9) facing = restF;
     }
 
     var st = finishTraffic(route, wpos, wvel, facing, dir, phase, u, src, dst, outbound);

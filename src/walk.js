@@ -576,7 +576,7 @@
     cargohall: { floor: '#2c3034', wall: '#3e444b', ceil: '#1c2024', trim: '#d9a521' },
     /* A sea platform's covered tube: pale, with the sea-blue trim of its
      * window strips (render.js seaPlatformMesh). */
-    tube:      { floor: '#3a4046', wall: '#8b969e', ceil: '#5d6870', trim: '#9fe3ff' }
+    tube:      { floor: '#4a5158', wall: '#9aa6ae', ceil: '#7a868e', trim: '#9fe3ff' }
   };
   /* WHOSE PORT IT IS (2026-10-31, Astra: "stations should vary by
    * faction"). The Navy keeps its ports clean, light and bright; the

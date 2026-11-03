@@ -557,6 +557,107 @@
   }
 
   function gdFloat(v) { return v.toFixed(6); }
+  /* ---- THE SEA AT A SEA PLATFORM (2026-11-02) ---------------------------
+   *
+   * Astra wants domes over the pads "to protect ships and their cargo from
+   * the waves" - so near a platform the sea has to visibly HAVE waves, and
+   * they have to break on the columns. Kept to this block, GL.setSeaPort
+   * and the three marked lines in the planet shader, so it stays out of
+   * the way of the haze, sky and ground-detail work in this file.
+   *
+   * WHAT IT IS: a swell of four long-crested trains (64, 41, 23 and 13 m,
+   * deep-water speeds, about 1.2 m of amplitude between them) in a disc
+   * SEA_WAVE_KM round the port, evaluated per fragment on the planet's own
+   * sphere. It tilts the normal the sun is shaded with and puts a sun
+   * glint on the slopes; it lifts the DEPTH the sea writes by the wave
+   * height, so the water line climbs and drops on every column and trestle
+   * (the rig's meshes are depth-tested against it); and it paints foam in
+   * a ring round each of them, thicker as a crest passes. Whitecaps on the
+   * highest crests. Each train fades out by its own wavelength with
+   * distance, so nothing shimmers at the edge of the disc or from 2 km up.
+   *
+   * WHAT IT IS NOT: an ocean simulation. Nothing is integrated and nothing
+   * is stored; it is a closed function of where and of sim time, so the
+   * same second is the same sea. And the rig does NOT move with it - see
+   * render.js, the platform is a semi-submersible and is meant to be still.
+   *
+   * COST: on the CPU, a handful of uniforms per frame while a platform is
+   * within SEA_UPLOAD_KM (setSeaPort; the post list is built once per
+   * port). On the GPU, the four sines everywhere in the disc, and the post
+   * loop (fifty-six at most; the rig has fifty-two) only within the rig's own reach. */
+  var SEA_WAVE_KM = 2.5;      // radius of the swell round a platform
+  var SEA_POSTS = 56;            // and literally 56 in SEA_GLSL and its uniform: GLSL wants a constant. The rig has 52.
+  var SEA_GLSL = [
+    /* Height (km) and slope of the swell at p (km, port frame), sea time t
+     * (s), seen from `dist` km away. */
+    'vec3 seaSwell(vec2 p, float t, float dist) {',
+    '  vec3 acc = vec3(0.0);',
+    '  vec4 lam = vec4(64.0, 41.0, 23.0, 13.0);',      // metres
+    '  vec4 amp = vec4(0.55, 0.36, 0.20, 0.10);',      // metres
+    '  vec4 ang = vec4(0.35, 1.25, -0.55, 2.30);',
+    '  vec2 pm = p * 1000.0;',
+    '  for (int i = 0; i < 4; i++) {',
+    '    float L = lam[i], k = 6.2831853 / L, w = sqrt(9.81 * k);',
+    '    vec2 d = vec2(cos(ang[i]), sin(ang[i]));',
+    /* Gone by the time a crest is a few pixels: past that it is a moire. */
+    '    float fade = 1.0 - smoothstep(L * 8.0, L * 30.0, dist * 1000.0);',
+    '    float ph = k * dot(d, pm) - w * t + float(i) * 1.7;',
+    '    float a = amp[i] * fade;',
+    '    acc.x += a * sin(ph);',
+    '    acc.yz += a * k * cos(ph) * d;',
+    '  }',
+    '  acc.x *= 0.001;',                               // metres -> km
+    '  return acc;',
+    '}',
+    /* x: height (km), yz: slope along uSeaE, uSeaN, w: foam 0..1 - or all
+     * zero away from a platform. `hit` is eye-relative, km. */
+    'vec4 seaWaves(vec3 hit, float tHit) {',
+    '  if (uSeaRel.w <= 0.0) return vec4(0.0);',
+    '  vec3 q = hit - uSeaRel.xyz;',
+    '  vec2 lp = vec2(dot(q, uSeaE), dot(q, uSeaN));',
+    '  float r = length(lp);',
+    '  if (r > uSeaRel.w) return vec4(0.0);',
+    '  float edge = 1.0 - smoothstep(uSeaRel.w * 0.55, uSeaRel.w, r);',
+    '  vec3 sw = seaSwell(lp, uSeaK.x, tHit) * edge * uSeaK.z;',
+    '  float foam = 0.0;',
+    '  if (r < uSeaK.w) {',
+    '    for (int i = 0; i < 56; i++) {',
+    '      vec4 po = uSeaPost[i];',
+    '      if (po.z <= 0.0) break;',
+    '      vec2 dd = abs(lp - po.xy) - vec2(po.z);',
+    '      float e = length(max(dd, 0.0)) * 1000.0;',  // metres off the column's face
+    '      float crest = sw.x * 1000.0;',
+    '      float ring = 1.0 - smoothstep(0.8, 4.5 + 3.0 * max(0.0, crest), e);',
+    /* Breaking: brightest as a crest arrives, ebbing between, and torn up
+     * by a little noise round the column so it is spray, not a halo. */
+    '      float wash = 0.45 + 0.55 * smoothstep(-0.2, 0.6, crest);',
+    '      vec2 rel = lp - po.xy;',
+    '      float az = atan(rel.y, rel.x);',
+    '      float tear = clamp(0.5 + 0.5 * sin(az * 7.0 + e * 1.3 - uSeaK.x * 1.7 + po.x * 4000.0)',
+    '                       * sin(az * 3.0 - uSeaK.x * 0.9 + po.y * 3000.0) + 0.25, 0.0, 1.0);',
+    '      foam = max(foam, ring * wash * tear);',
+    '    }',
+    '  }',
+    /* Whitecaps: the highest crests break on their own. */
+    '  float cap = smoothstep(0.95, 1.25, sw.x * 1000.0) * (1.0 - smoothstep(0.4, 1.6, tHit));',
+    '  foam = max(foam, cap * 0.6);',
+    '  return vec4(sw.x, sw.y, sw.z, foam * edge);',
+    '}',
+    /* The sea's colour under the swell: the slope-tilted normal for the
+     * sun, a glint, and the foam. `sea` is the shader's own sea mask, so
+     * a coast in the disc keeps its land. */
+    'vec3 seaShade(vec3 col, vec3 base, vec3 n, vec3 rd, float sea, vec4 sw) {',
+    '  if (uSeaRel.w <= 0.0 || sea < 0.01) return col;',
+    '  vec3 n2 = normalize(n - (sw.y * uSeaE + sw.z * uSeaN));',
+    '  float l2 = smoothstep(-0.14, 0.30, dot(n2, uSunDir));',
+    '  vec3 c2 = base * (0.055 + 0.95 * l2);',
+    '  float g = pow(max(0.0, dot(reflect(rd, n2), uSunDir)), 140.0) * l2;',
+    '  c2 += vec3(1.0, 0.96, 0.86) * g * 0.55;',
+    '  c2 = mix(c2, vec3(0.88, 0.93, 0.96) * (0.12 + 0.88 * l2), clamp(sw.w, 0.0, 1.0));',
+    '  return mix(col, c2, sea);',
+    '}'
+  ].join('\n');
+
   var GROUND_DETAIL_GLSL = [
     'uniform float uGdOn;',         // 0..1 strength by altitude; 0 skips the block
     'uniform vec3 uGdAnchorRel;',   // eye -> lattice anchor, km
@@ -776,6 +877,11 @@
     'uniform vec3 uHoleRel;',     // eye -> a shaft mouth on this body, km
     'uniform float uHoleR;',      // its radius, km; 0 disables the cut
     'uniform float uHoleDepth;',  // km down to the pit floor; 0 = open to space
+    /* The sea at a platform (SEA_GLSL, GL.setSeaPort). */
+    'uniform vec4 uSeaRel;',      // eye -> the platform on the sea, km; w = swell radius, 0 = none
+    'uniform vec3 uSeaE, uSeaN;', // the port frame along the sea
+    'uniform vec4 uSeaK;',        // sea time s, lift the depth (1/0), amplitude scale, post reach km
+    'uniform vec4 uSeaPost[56];',   // columns: x, y, half-width (km); z 0 ends the list
     'uniform float uHaloPush;',   // km behind the centre the halo sits; a ring's outer radius
     /* The ground-port cone — see GL.setGroundCone. */
     'uniform vec4 uConeS;',       // eye -> ship, km; w = 1 when on
@@ -945,6 +1051,7 @@
     '}',
     /* Near-ground detail, in its own functions: see GD above. */
     GROUND_DETAIL_GLSL,
+    SEA_GLSL,
     /* Biomes: see BIOME_GLSL above and Weather.BIOME. */
     BIOME_GLSL,
 
@@ -1107,7 +1214,9 @@
     '    float ba = dot(bq, uBoxA), bb = dot(bq, uBoxB), bz = dot(bq, uBoxU);',
     '    if (ba > uBoxD.x && ba < uBoxD.y && abs(bb) < uBoxD.z && bz > uBoxD.w && bz < uBoxTop) discard;',
     '  }',
-    '  gl_FragDepth = encodeDepth(dot(hit, uFwd));',
+    /* SEA: the swell, and its height lifting the depth the sea writes. */
+    '  vec4 seaW = seaWaves(hit, tHit);',
+    '  gl_FragDepth = encodeDepth(dot(hit + normalize(hit - oc) * seaW.x * uSeaK.y, uFwd));',
     '  vec3 n = normalize(hit - oc);',
     '  float ndl = dot(n, uSunDir);',
     /* A soft terminator. A hard max(0.0, ndl) gives a knife edge that reads
@@ -1463,6 +1572,8 @@
     '  }',
 
     '  vec3 col = base * (0.055 + 0.95 * lam);',
+    /* SEA: shaded under the swell, with its glint and foam. */
+    '  col = seaShade(col, base, n, rd, sea, seaW);',
     /* THE STORMS, LIT FROM INSIDE. Added after the sun, because that is
      * what a light source is — and weighted toward the dark side, which
      * is not artistic licence: a flash is lost in daylight and is the
@@ -2748,6 +2859,7 @@
                               'uOcean', 'uSeaColor', 'uIce',
                               'uCenterRel', 'uScreenPx', 'uFlen',
                               'uHoleRel', 'uHoleR', 'uHoleDepth', 'uHaloPush',
+                              'uSeaRel', 'uSeaE', 'uSeaN', 'uSeaK', 'uSeaPost',
                               'uConeS', 'uConeR', 'uSkyA', 'uSkyUp', 'uSkySun',
                               'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD', 'uBoxTop',
                               'uGdOn', 'uGdAnchorRel', 'uGdCell', 'uGdFrac', 'uGdCq', 'uBio',
@@ -3608,6 +3720,42 @@
   }
   /* `depthKm`, optional, puts a floor in the hole that far down (see the
    * shader); without one the hole is open, as it always was. */
+  /* THE SEA AT A PLATFORM: where it is and what stands in it, or null.
+   * `port`: { bodyId, pos (world km, on the sea), east, north (unit),
+   * posts: [[x, y, half], ...] km in that frame, reach (km round the
+   * origin the posts lie within), disp (lift the depth), t (sim s) }.
+   * main.js sets it while a platform is near and clears it otherwise. */
+  var seaPort = null, seaPostBuf = new Float32Array(SEA_POSTS * 4);
+  GL.setSeaPort = function (port) {
+    seaPort = port || null;
+    if (!seaPort) return;
+    if (seaPort.posts !== seaPort._packedFrom) {
+      seaPostBuf.fill(0);
+      var n = Math.min(SEA_POSTS, seaPort.posts.length);
+      for (var i = 0; i < n; i++) {
+        seaPostBuf[i * 4] = seaPort.posts[i][0]; seaPostBuf[i * 4 + 1] = seaPort.posts[i][1];
+        seaPostBuf[i * 4 + 2] = seaPort.posts[i][2];
+      }
+      seaPort._packedFrom = seaPort.posts;
+    }
+  };
+  GL.SEA_WAVE_KM = SEA_WAVE_KM; GL.SEA_POSTS = SEA_POSTS;
+  function uploadSeaPort(b, cam) {
+    if (!seaPort || seaPort.bodyId !== b.id) { gl.uniform4f(uni.uSeaRel, 0, 0, 0, 0); return; }
+    gl.uniform4f(uni.uSeaRel, seaPort.pos.x - cam.eye.x, seaPort.pos.y - cam.eye.y,
+                 seaPort.pos.z - cam.eye.z, SEA_WAVE_KM);
+    gl.uniform3f(uni.uSeaE, seaPort.east.x, seaPort.east.y, seaPort.east.z);
+    gl.uniform3f(uni.uSeaN, seaPort.north.x, seaPort.north.y, seaPort.north.z);
+    /* Sea time wrapped to an hour of the slowest train's whole periods, so
+     * float32 keeps its precision a year into a career. 3200 s carries
+     * 64 m waves (6.4 s) round exactly 500 times; the shorter trains do
+     * not divide it, and at the wrap they step - once an hour, invisibly
+     * small next to the swell itself. */
+    var ts = ((seaPort.t % 3200) + 3200) % 3200;
+    gl.uniform4f(uni.uSeaK, ts, seaPort.disp ? 1 : 0, 1, seaPort.reach || 0);
+    gl.uniform4fv(uni.uSeaPost, seaPostBuf);
+  }
+
   GL.setSurfaceHole = function (bodyId, worldPos, radiusKm, depthKm) {
     hole = (bodyId && worldPos && radiusKm > 0)
       ? { bodyId: bodyId, pos: worldPos, radius: radiusKm, depth: depthKm || 0 } : null;
@@ -4029,6 +4177,7 @@
       } else {
         gl.uniform1f(uni.uHoleR, 0);
       }
+      uploadSeaPort(b, cam);
       if (groundCone && groundCone.bodyId === b.id) {
         var gc = groundCone.cone;
         gl.uniform4f(uni.uConeS, gc.pos.x - cam.eye.x, gc.pos.y - cam.eye.y,

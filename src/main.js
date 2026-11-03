@@ -6653,6 +6653,13 @@
     if (G.viewMode === 'cockpit' || !G.ship || !G.sys) return null;
     var p = dockedPort();
     if (p && p.surface) return p;
+    /* Coming down onto (or lifting off) a sea platform's pad: nothing
+     * encloses her - a dome is not a shaft - but the shot is still a shot
+     * at a port on the ground, and in the world's axes the sea stood on
+     * its side across the screen. */
+    if (G.ship.arrival && G.sys.byId[G.ship.arrival.port] && G.sys.byId[G.ship.arrival.port].seaPlatform) {
+      return G.sys.byId[G.ship.arrival.port];
+    }
     p = enclosedPort();
     return (p && p.surface) ? p : null;
   }
@@ -6793,6 +6800,31 @@
       depth: shaftPitDepth(port)
     };
   }
+  /* The sea platform close enough for its swell to be worth drawing - the
+   * one you are at, or the nearest within SEA_UPLOAD_KM of the eye - in
+   * the shape GLWorld.setSeaPort takes; null otherwise. The posts are the
+   * rig's own (Render.seaPosts), built once. */
+  var SEA_UPLOAD_KM = 30;
+  function seaPortNear(cam) {
+    if (!G.ship || !G.sys || !cam || !cam.eye || !Render.seaPosts) return null;
+    var best = null, bestD = SEA_UPLOAD_KM, list = G.sys.pads || [];
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i];
+      if (!p.seaPlatform || !p.parentBody) continue;
+      var d = V.dist(Sim.portEntrance(p, G.sys, G.t).pos, cam.eye);
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    if (!best) return null;
+    var gb = Sim.groundBasis(best, G.sys, G.t);
+    if (!gb) return null;
+    var Lr = Gen.seaLayout();
+    return { bodyId: best.parentBody.id, pos: gb.entrance.pos, east: gb.east, north: gb.north,
+             posts: Render.seaPosts(), reach: Lr.reach + 0.02,
+             /* Lift the depth only on a world that is sea all round: on a
+              * terran shore the swell's height must not raise the land. */
+             disp: best.parentBody.type === 'ocean', t: G.t };
+  }
+
   function shaftPitDepth(port) {
     var g = Gen && Gen.bayGeometry ? Gen.bayGeometry(port) : null;
     var r = port.radius || 1;
@@ -7901,6 +7933,9 @@
        * the sphere has no hole in it — so from outside you get a painted
        * circle where a hole should be, and from just inside the collar you
        * get ground where the sky should be. */
+      /* The swell round a sea platform (gl.js SEA_GLSL): set every frame
+       * from the nearest one, or cleared. */
+      if (global.GLWorld.setSeaPort) global.GLWorld.setSeaPort(seaPortNear(cam));
       var shaft = activeShaft();
       if (shaft) {
         global.GLWorld.setSurfaceHole(shaft.hostId, shaft.mouth, shaft.radius, shaft.depth);

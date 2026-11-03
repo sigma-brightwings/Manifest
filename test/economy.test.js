@@ -173,7 +173,9 @@ console.log('--- underground bays ---');
   seeds(250).forEach(function (sd) {
     var sys = Gen.generateSystem(sd);
     sys.ports.forEach(function (p) {
-      if (!p.surface) return;
+      /* A sea platform (2026-11-02) is the one surface port that is not a
+       * shaft: pads on a deck over the water. seaplatform.test holds it. */
+      if (!p.surface || p.seaPlatform) return;
       if (!p.underground) shallowChecked++;
       if (!(p.shaftDepth > 0) ||
           p.elevation !== -p.shaftDepth ||
@@ -527,6 +529,8 @@ console.log('--- traffic arrives at ports, not near them ---');
         var port = st.to;
         var host = port.parentBody;
         if (!host) continue;
+        /* On a pad over the sea, under a dome: seaplatform.test. */
+        if (port.seaPlatform) continue;
         var hostPos = Sim.bodyPosition(host, sys, t);
         var alt = V.dist(st.pos, hostPos) - host.radius;
 
@@ -601,6 +605,8 @@ console.log('--- traffic arrives at ports, not near them ---');
         var st = Sim.trafficState(r, sys, t);
         var port = st.to;
         if (!port.parentBody || !(port.surface || port.underground)) return;
+        /* Level on a pad under a dome, not stood on her tail inside it. */
+        if (port.seaPlatform) return;
         checkedTouchdown++;
         var up = V.norm(V.sub(st.pos, Sim.bodyPosition(port.parentBody, sys, t)));
         var dot = V.dot(st.fwd, up);

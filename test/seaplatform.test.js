@@ -60,7 +60,7 @@ function strip(sy, sea) {
 console.log('--- which ports ---');
 var platforms = [], coastalLeft = 0, byRole = {}, byWorld = {}, sameRest = true, rolledUg = 0;
 var sameIdentity = true, notFlagged = true, waterOnly = true, wasCoastal = 0, cleared = true;
-var sampleSys = null;
+var sampleSys = null, noDesertCoastal = true;
 /* SEA_QUICK=1 sweeps the first 60 systems only, for working on the later
  * sections; the counts then fail, which is the point - it is not a run. */
 var STARS = process.env.SEA_QUICK ? gal.stars.slice(0, 60) : gal.stars;
@@ -70,6 +70,7 @@ STARS.forEach(function (st) {
   var sea = {};
   sy.ports.forEach(function (p) {
     if (p.coastal) coastalLeft++;
+    if (p.surface && p.parentBody && p.parentBody.type === 'desert' && (p.coastal || p.seaPlatform)) noDesertCoastal = false;
     if (!p.seaPlatform) return;
     sea[p.id] = true;
     platforms.push({ p: p, sys: sy, star: st });
@@ -109,6 +110,8 @@ check('every port flagged coastal on water is now a sea platform', notFlagged &&
 check('none is left flagged coastal', coastalLeft === 0, coastalLeft + ' left');
 check('the kawartha count is the one the inland pass reported (117)', platforms.length === 117, String(platforms.length));
 check('only on water, never on lava', waterOnly);
+check('never on a desert: a salt basin is ground, and its ports stay buried', !platforms.some(function (x) { return x.p.parentBody.type === 'desert'; }) &&
+      noDesertCoastal, 'desert pads flagged coastal anywhere: ' + (noDesertCoastal ? 0 : 'some'));
 check('a platform is not a shaft, carries its reason, and the coastal flag is gone', cleared);
 check('a platform keeps its id, name, faction and market', sameIdentity);
 check('nothing else in any system changed, bit for bit', sameRest);
@@ -245,6 +248,12 @@ try { require('../src/render.js'); Rn = global.Render; } catch (e) { Rn = null; 
       });
     }
   });
+  var GLW = null;
+  try { GLW = require('../src/gl.js'); } catch (e) { GLW = null; }
+  if (GLW && GLW.SEA_POSTS) {
+    check('every column and trestle in the water gets its foam (the shader\'s post list holds them all)',
+          Rn.seaPosts().length <= GLW.SEA_POSTS, Rn.seaPosts().length + ' of ' + GLW.SEA_POSTS);
+  }
   check('shut, the petals meet at the crown', crownOk);
   check('open, no petal stands over the landing circle', clearOk);
   check('an open petal never reaches a neighbour\'s shut dome', nearest > 0, (nearest * 1000).toFixed(1) + ' m at the closest');
@@ -361,6 +370,11 @@ console.log('--- the domes ---');
         for (var tq = win[0]; tq <= win[1]; tq += 2) {
           var st2 = Sim.trafficState(rt, S, tq);
           if (!st2 || !st2.pos) continue;
+          /* Her pad as of this instant: pads are read off the sweep of
+           * the time asked (Sim.seaTrafficPad). */
+          var padQ = Sim.seaTrafficPad(P, S, tq, rt);
+          if (padQ === null || padQ === Sim.SEA_OFF) continue;
+          pad = padQ;
           var gbq = Sim.groundBasis(P, S, tq), spq = Gen.seaPad(pad);
           var padW = V.addScaled(V.addScaled(V.addScaled(gbq.entrance.pos, gbq.east, spq.x), gbq.north, spq.y), gbq.up, spq.deck);
           var rel = V.sub(st2.pos, padW), h = V.dot(rel, gbq.up);

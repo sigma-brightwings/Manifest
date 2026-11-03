@@ -1813,9 +1813,11 @@
    * to the hub by a covered tube. Berth k is pad k. Berth 0 is a large one,
    * as everywhere else, and so is berth 4 (see SEA_PADS).
    *
-   * IT DOES NOT BOB. A semi-submersible is built to be still: the pontoons
-   * sit under the wave base, the columns are thin where the water line
-   * crosses them, and the deck rides above the swell. And a pad that moved
+   * IT DOES NOT BOB. It is pontoon-stabilised, a semi-submersible built to
+   * be still (Astra: "water has a floating, pontoon-stabilized port"): the
+   * pontoons' buoyancy sits low, the columns are thin where the water line
+   * crosses them so a crest changes the lift very little, and the deck
+   * rides above the swell. And a pad that moved
    * would turn every berth, every arrival rail and every camera clamp into
    * a function of the sea state as well as of t. So the deck is bolted to
    * the world exactly as a ground port is - lat, lon, spin - and only the
@@ -2756,6 +2758,11 @@
     (sys.bodies || []).forEach(function (w) {
       if (w.kind !== 'planet' && w.kind !== 'moon') return;
       if (W.terrainOf(w).lava) return;
+      /* A DESERT's "sea" is a dry salt basin, ground to dig in (Astra: "a
+       * dry salt flat has a buried port, water has a floating, pontoon-
+       * stabilized port"). placeInland never flags one (Weather.digFloor
+       * is null there), and this says so rather than relying on it. */
+      if (w.type === 'desert') return;
       (w.children || []).forEach(function (pad) {
         if (!pad.surface || !pad.coastal) return;
         makeSeaPlatform(pad, w);
