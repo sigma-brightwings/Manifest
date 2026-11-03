@@ -413,7 +413,7 @@
     if (!boxes || !boxes.length) {
       var n0 = (Gen && Gen.BERTH_COUNT) || 6;
       var big = (ship && ship.dryMass || 0) > 260;   // t; freighters and up
-      if (big || n0 < 2) return 0;
+      if (big || n0 < 2 || (ship && port && ship.lentBay === port.id)) return 0;
       return 1 + (portHash(port) % (n0 - 1));
     }
 
@@ -472,6 +472,15 @@
       return best < 0 ? 0 : best;
     }
 
+    /* UNLESS THE PORT LENT HER THE HEAVY BAY (2026-11-03): its small
+     * berths were full and the heavy one free when it cleared her
+     * (Combat.grantClearance, from berthStatus `lend`). Then the largest bay
+     * that takes her — the heavy bay, wherever the model put it. */
+    if (ship && port && ship.lentBay === port.id) {
+      var big2 = fits[0];
+      for (i = 1; i < fits.length; i++) if (boxVol(boxes[fits[i]]) > boxVol(boxes[big2])) big2 = fits[i];
+      return big2;
+    }
     /* The SMALLEST bay that takes it, so a courier does not park in the
      * heavy berth and leave a freighter circling. Ties broken by the port's
      * own hash, so the choice is still stable across a save and a reload. */
@@ -522,6 +531,26 @@
    *
    * A station with no modelled berths gets the hall's hatch cut instead,
    * straight down the hub axis, which is the route its arrival flies. */
+  /* HOW FAR ALONG THE BERTH'S NORMAL THE STAND IS FROM THE BOX'S MIDDLE,
+   * negated: add it to an aperture distance (gate, inner) to measure that
+   * aperture from the stand instead.
+   *
+   * Gen.berthApertures measures the doors from the berth box's `mid` — the
+   * renderer opens them there (berthMid) — while the arrival and the carve
+   * walk out from the stand the hull parks on. For every side bay the two
+   * points differ only across the normal, so this is zero and nothing
+   * moved. For a bay that opens UPWARD (the ring's heavy bay) the stand is
+   * on the floor and the middle is half a hall above it, and reading
+   * `gate` from the stand put the doors 0.17 radii below the hatch they
+   * belong to (2026-11-03, found with the deck fix in Render.berthDeck:
+   * before that the stand was on the roof, and the doors read 0.19 radii
+   * ABOVE the hatch, in open space). */
+  function doorFromStand(ap, sx, sy, sz) {
+    if (!ap || !ap.mid || !ap.normal) return 0;
+    var n = ap.normal;
+    return (ap.mid[0] - sx) * n[0] + (ap.mid[1] - sy) * n[1] + (ap.mid[2] - sz) * n[2];
+  }
+
   function stationSolidity(port) {
     var R = global.Render, Gen = global.Gen;
     if (!R || !R.portSolidity || !Gen || !port || port.surface) return null;
@@ -536,11 +565,15 @@
       var ap = Gen.berthApertures ? Gen.berthApertures(port, i) : null;
       if (!ap || !ap.normal || typeof ap.gate !== 'number') continue;
       var off = Gen.berthOffset(port, i);
+      /* The doors are measured from the BOX'S middle (berthApertures), and
+       * everything here walks from the STAND — see doorFromStand. */
+      var shift = doorFromStand(ap, off.x, off.y, off.z);
+      var gate = ap.gate + shift;
       /* From well outside the doors, in past the berth to the inner gate.
        * The lead matters: a corridor that starts AT the door plane leaves a
        * ship on final approach outside the cut and therefore inside a wall. */
-      var lead = ap.gate + holdLead(port) + 0.2;
-      var deep = (typeof ap.inner === 'number') ? Math.abs(ap.inner) : 0.2;
+      var lead = gate + holdLead(port) + 0.2;
+      var deep = (typeof ap.inner === 'number') ? Math.max(0, -(ap.inner + shift)) : 0.2;
       var e0 = ap.entry;
       var bent = e0 && (e0[0] * ap.normal[0] + e0[1] * ap.normal[1] + e0[2] * ap.normal[2]) < 0.999;
       if (bent) {
@@ -548,13 +581,13 @@
          * down to the door, then the throat itself — and never the straight
          * lead along the normal, which for a bay across a bore would carve
          * a corridor into the bay opposite. */
-        var gx = off.x + ap.normal[0] * ap.gate, gy = off.y + ap.normal[1] * ap.gate,
-            gz = off.z + ap.normal[2] * ap.gate;
+        var gx = off.x + ap.normal[0] * gate, gy = off.y + ap.normal[1] * gate,
+            gz = off.z + ap.normal[2] * gate;
         var run = (ap.exit || 1) + holdLead(port) + 0.2;
         R.carveThroat(sol, [gx + e0[0] * run, gy + e0[1] * run, gz + e0[2] * run],
                       [-e0[0], -e0[1], -e0[2]], run, g.mouthR);
         R.carveThroat(sol, [gx, gy, gz],
-                      [-ap.normal[0], -ap.normal[1], -ap.normal[2]], ap.gate + deep, g.mouthR);
+                      [-ap.normal[0], -ap.normal[1], -ap.normal[2]], gate + deep, g.mouthR);
       } else {
         R.carveThroat(sol,
                       [off.x + ap.normal[0] * lead,
@@ -2045,7 +2078,21 @@
    * one to begin, or null): { a: arrival on the pad, d: departure }. */
   var SEA_STAY_TAIL_S = 600;    // a departure's dome window, at most
   var SEA_ASK_LEAD_S = 900;     // how far ahead of her arrival her distance is asked
-  function seaStay(route, port, t) {
+  /* A TOWED SHIP IS ON THE DECK EARLY (2026-11-03). A run that broke down
+   * (upkeep.js) is towed in at bd.towAt and stands on her pad from then
+   * until the timetable's arrival and on through her layover - trafficState
+   * says 'moored' the whole time - but the sweep only knew the timetable,
+   * so it handed her pad to someone else while she sat on it: 4 shared
+   * samples in 15,392 at the first 24 kawartha platforms once stars stage 2
+   * put a broken-down freighter on one. With `sys`, her stay starts at the
+   * tow. `leg` is upkeep's numbering: 2c arrives at the route's `to`, 2c+1
+   * at its `from`. Closed form (Upkeep.breakOn), no draws. */
+  function towedArrival(route, sys, leg) {
+    var U = sys ? upkeepMod() : null;
+    var bd = U && U.breakOn ? U.breakOn(route, sys, leg) : null;
+    return bd ? bd.towAt : null;
+  }
+  function seaStay(route, port, t, sys) {
     if (!route || route.outboard) return null;
     var atB = route.to === port.id, atA = route.from === port.id;
     if (!atB && !atA) return null;
@@ -2054,13 +2101,15 @@
     for (var c = cycle - 1; c <= cycle + 1; c++) {
       var cs = route.t0 + c * route.period;
       var starts = [];
-      if (atB) starts.push({ s: cs + route.cruise, e: cs + route.cruise + route.layover });
-      if (atA) starts.push({ s: cs + 2 * route.cruise + route.layover, e: cs + route.period + route.cruise * 0 });
+      if (atB) starts.push({ s: cs + route.cruise, e: cs + route.cruise + route.layover, leg: 2 * c });
+      if (atA) starts.push({ s: cs + 2 * route.cruise + route.layover, e: cs + route.period + route.cruise * 0, leg: 2 * c + 1 });
       for (var k = 0; k < starts.length; k++) {
         var w = starts[k];
         if (route.oneWay && (c !== 0 || w.s !== route.t0 + route.cruise)) continue;
         var hold = arrivalHold(route, port);
         var arr = w.s + (hold > 0 ? hold + FINAL_DESCENT_S : 0);
+        var towed = towedArrival(route, sys, w.leg);
+        if (towed !== null && towed < arr) arr = towed;
         var dep = route.oneWay ? Infinity : w.e;
         /* The stay she is in, or the next one: a stay that ended more than
          * SEA_STAY_TAIL_S ago is over, whatever its arrival time. */
@@ -2125,7 +2174,7 @@
   var SEA_PREROLL_S = 1 * 86400;
   var SEA_FORGET_S = 2 * 86400;    // keep a stay's pad this long after she leaves
   var SEA_OFF = -1;
-  function routeStaysFrom(route, port, from) {
+  function routeStaysFrom(route, port, from, sys) {
     /* The arrival-ordered stays of one route here, starting at the cycle
      * before `from`; a cursor yields them one at a time. */
     var atB = route.to === port.id, atA = route.from === port.id;
@@ -2136,7 +2185,10 @@
       if (sl === 0) { if (!atB) return null; w = { s: cs + route.cruise, e: cs + route.cruise + route.layover }; }
       else { if (!atA) return null; w = { s: cs + 2 * route.cruise + route.layover, e: cs + route.period }; }
       if (route.oneWay && !(cc === 0 && sl === 0)) return null;
-      return { a: w.s + (hold > 0 ? hold + FINAL_DESCENT_S : 0), d: route.oneWay ? Infinity : w.e };
+      var a = w.s + (hold > 0 ? hold + FINAL_DESCENT_S : 0);
+      var towed = towedArrival(route, sys, 2 * cc + sl);
+      if (towed !== null && towed < a) a = towed;
+      return { a: a, d: route.oneWay ? Infinity : w.e };
     }
     return {
       next: function () {
@@ -2167,7 +2219,7 @@
       var early = [];
       (sys.traffic || []).forEach(function (route) {
         if (route.outboard || (route.from !== port.id && route.to !== port.id)) return;
-        var cur = routeStaysFrom(route, port, SEA_EPOCH_S), st = cur.next();
+        var cur = routeStaysFrom(route, port, SEA_EPOCH_S, sys), st = cur.next();
         while (st && st.a < SEA_EPOCH_S) {
           if (st.d > SEA_EPOCH_S) early.push({ route: route, st: st });
           st = cur.next();
@@ -2212,7 +2264,7 @@
   }
   function seaTrafficPad(port, sys, t, route) {
     if (!port || !port.seaPlatform || !route || !sys || !sys.traffic) return null;
-    var me = seaStay(route, port, t);
+    var me = seaStay(route, port, t, sys);
     if (!me) return null;
     /* The block of the TIME ASKED, not of her arrival: every ship on the
      * deck at t is then read off one sweep, which never puts two on a pad.
@@ -2271,7 +2323,7 @@
     for (var i = 0; i < routes.length; i++) {
       var route = routes[i];
       if (route.from !== port.id && route.to !== port.id) continue;
-      var stay = seaStay(route, port, t);
+      var stay = seaStay(route, port, t, sys);
       /* Not due for a while: nothing of hers to open for, and no pad to
        * look up (a stay a month off would sweep a block of its own). */
       if (!stay || t < stay.a - SEA_ASK_LEAD_S) continue;
@@ -2451,6 +2503,25 @@
      * berth model needs no change of its own and cannot count a ship that
      * is visibly outside. rumours.js berthTime reads the same hold. */
     var hold = moored ? arrivalHold(route, dst) : 0;
+    /* A BERTH OR THE ROADS (2026-11-03). A booked visit holds until its
+     * booking starts (bookVisit), not only for the roads' own fraction of
+     * the layover; an unbooked one holds its whole layover in the roads and
+     * flies its final descent in the last minutes, touching the port only
+     * to leave on time (see bookVisit for why it never shifts the
+     * timetable). Below, `hold` is simply "how long before the descent". */
+    var book = (moored && bookable(route, dst)) ? bookVisit(sys, dst, route, cycle, outbound) : null;
+    var arrT = outbound ? cycleStart + cruise : cycleStart + 2 * cruise + lay;
+    /* With no roads to hold in (an orbital port: the crossing ends parked
+     * alongside, where every ship there is drawn), she waits right there,
+     * station-keeping — 'anchored', in no berth — and the descent below is
+     * not flown. A jump out to a stack 250 km off and back would be a
+     * teleport at both ends. */
+    var alongside = !!(book && !(hold > 0));
+    var inBerth = !!(book && book.pool && t >= book.b);
+    if (book && !alongside) {
+      if (book.pool) hold = book.b - arrT;
+      else hold = Math.max(0, lay - FINAL_DESCENT_S);
+    }
     if (hold > 0) {
       var since = outbound ? ph - cruise : ph - (2 * cruise + lay);
       if (since >= 0 && since < hold + FINAL_DESCENT_S) {
@@ -2477,17 +2548,25 @@
         fin.throttle = Math.max(0.25, 1 - fe * 0.75);
         fin.braking = true;
         fin.landing = fe;
+        /* Coming down to a berth that is hers: it is booked from here. */
+        if (book && book.pool) fin.berthPool = book.pool;
         return fin;
       }
     }
 
     if (moored) {
       var pose = dockPose(dst, sys, t, parent, route);
+      var waiting = alongside && !inBerth;
       var moor = finishTraffic(route, pose.pos, pose.vel, pose.fwd, pose.up,
-                               'moored', u, src, dst, outbound);
-      moor.throttle = 0;              // parked; drives cold
+                               waiting ? 'anchored' : 'moored', u, src, dst, outbound);
+      moor.throttle = waiting ? 0.05 : 0;   // parked, drives cold; or station-keeping
+      if (waiting) moor.anchoredUntil = book.pool ? book.b : arrT + lay;
       moor.landed = !!pose.landed;
       moor.inside = !!pose.inside;
+      /* Which berth pool she is taking. A route the queue does not book (a
+       * standing-order ship of yours, a sea pad) counts as it always did,
+       * by its size. */
+      moor.berthPool = book ? (waiting ? null : book.pool) : (routeNeedsLargeBerth(route) ? 'large' : 'small');
       return moor;
     }
 
@@ -3641,8 +3720,13 @@
        * were added. */
       if (route.outboard) continue;
       var st = trafficState(route, sys, t);
-      if (!st || st.phase !== 'moored') continue;
-      if (!st.to || st.to.id !== port.id) continue;
+      if (!st || !st.to || st.to.id !== port.id) continue;
+      /* IN A BERTH IS WHAT THE BOOKING SAYS (2026-11-03): moored on one, or
+       * on her final descent to one. Holding in the roads is not. A ship
+       * towed in is moored where the tow left her, by her size. */
+      var pool = st.berthPool || (st.towed && st.phase === 'moored'
+        ? (routeNeedsLargeBerth(route) ? 'large' : 'small') : null);
+      if (!pool) continue;
       /* When this one goes. The moored window runs from the end of a cruise
          to the end of the layover, so the departure is the start of the
          moored phase plus the layover — derived from the route's own cycle
@@ -3654,7 +3738,7 @@
         ? cycleStart + route.cruise + route.layover
         : cycleStart + route.period;
       out.push({ route: route, name: route.name, leavesAt: leaves,
-                 large: routeNeedsLargeBerth(route) });
+                 large: pool === 'large' });
     }
     out.sort(function (a, b) { return a.leavesAt - b.leavesAt; });
     return out;
@@ -3669,6 +3753,212 @@
    * a third of the time. That asymmetry is the whole feature: it makes what
    * you fly matter at the door.
    */
+  /* WHEN A BERTH OF THIS KIND ACTUALLY FREES — not when the next ship of
+   * that kind leaves (2026-11-03).
+   *
+   * Traffic is a timetable, and a timetable does not queue: a busy port
+   * carries more ships than berths (seven moored in five small berths at
+   * kawartha's Threshold Dock). So the first departure does not free a
+   * berth, it takes the count from seven to six. The wait used to be read
+   * off that first departure anyway, which made it a lie a pilot acts on:
+   * render.test.js's mid-range auto-dock was told 13 minutes, asked again,
+   * was told 7, then 23, then 25 — 68.5 minutes of holding announced as a
+   * quarter of an hour, four times over. "Telling a freighter it can go in
+   * four minutes because a shuttle is leaving would be a lie it could act
+   * on" was always the rule here; it was only kept for the KIND of berth.
+   *
+   * Occupancy is closed-form, so this walks it forward: the next departure
+   * of the right kind, then the occupancy just after it — arrivals in the
+   * meantime included — until the count drops under the berths there are.
+   * Occupancy only falls at a departure, so no free moment is stepped over.
+   * Bounded; past the bound the last departure found is the honest floor,
+   * and it is still later than the old answer. Asked once per hail, not
+   * per frame (the autopilot re-asks when this says to). */
+  var BERTH_WALK_MAX = 24;
+  function berthFreesAt(port, sys, t, occ, wantsLarge, smallCap, largeCap) {
+    var tq = t, last = 0;
+    for (var guard = 0; guard < BERTH_WALK_MAX; guard++) {
+      var dep = Infinity;
+      for (var i = 0; i < occ.length; i++) {
+        var o = occ[i];
+        /* A small hull can use either kind (the heavy bay lent), a heavy
+         * one only its own. */
+        if ((!wantsLarge || o.large) && o.leavesAt > tq && o.leavesAt < dep) dep = o.leavesAt;
+      }
+      if (!isFinite(dep)) break;
+      last = dep;
+      /* A second past it: at the instant itself the route is still moored. */
+      occ = berthOccupants(port, sys, dep + 1);
+      var nl = 0, ns = 0;
+      for (var j = 0; j < occ.length; j++) { if (occ[j].large) nl++; else ns++; }
+      if (wantsLarge ? nl < largeCap : (ns < smallCap || nl < largeCap)) return dep;
+      tq = dep + 1;
+    }
+    return last;
+  }
+
+  /* ---- the queue: traffic books a berth or holds in the roads ------------
+   * (Astra, 2026-11-03: "timetabled traffic holds off a full port instead
+   * of mooring over capacity".)
+   *
+   * The timetable used to moor every ship that arrived, so a busy port held
+   * more ships than berths — seven in five at kawartha's Threshold Dock — and
+   * a pilot was told to wait for the third departure, or the tenth. Now a
+   * visit BOOKS a berth for the rest of its layover, or holds in the roads
+   * (anchorPose, the same stack ground ports already use) and does not take
+   * one at all.
+   *
+   * CLOSED FORM, BY PRIORITY, NOT BY ARRIVAL. A first-come queue is a
+   * recursion over the whole history of the port — who got in depends on
+   * who got in before them, back to the epoch — and that is integration,
+   * not rails (doctrine 3). So the order is fixed instead: a route's place
+   * in sys.traffic, which puts the scheduled lines ahead of the feeders that
+   * were built after them (generate.js buildFeeders, its own fork). A visit
+   * is booked from the earliest moment in its layover from which the berths
+   * booked by HIGHER-priority visits leave one free until it leaves. That
+   * depends only on higher-priority bookings, so the recursion bottoms out
+   * at the first route, and at any instant the count is at most the
+   * capacity: take the lowest-priority ship present — every other is above
+   * it, and it was only booked where those left a berth.
+   *
+   * THE TIMETABLE DOES NOT SHIFT. A held ship leaves when it always would
+   * have; her cargo moves as before (the same as the heavies, which lie off
+   * the station with lighters working them), so no price or manifest moves.
+   * Delaying her departures would make every later leg depend on the queue,
+   * which is the history recursion again by another door. So "until a berth
+   * frees" is the hold within her stay, and a stay with no berth in it is
+   * spent in the roads, coming in only to leave on time.
+   *
+   * THE HEAVY BAY IS LENT TO A PILOT, NOT TO THE TIMETABLE. A small hull
+   * you fly may take a free heavy bay when the small berths are full
+   * (berthStatus `lend`); timetabled small ships do not, except at a port
+   * with no small berth at all. Measured both ways (40 seeds x 20 times,
+   * 6,240 samples): letting traffic spill took a heavy pilot from 21% of
+   * ports full to 67%, because shuttles sat in the bay — the freighter left
+   * circling that assignBerth's smallest-bay rule exists to prevent. A
+   * timetabled ship has the roads and lighters to wait in; a pilot does
+   * not. Kept to itself, heavies are 19% full, much as before.
+   *
+   * Memoised per visit on the system (the answer is a pure function of the
+   * timetable, so a cache can only be right or absent), and cleared when it
+   * grows. Routes the queue does not book: the heavies (outboard), your own
+   * standing-order ships (oneWay: pinned in a berth, counted first), and sea
+   * platforms, whose pads have their own sweep. */
+  var BOOK_MIN_STAY = 2 * FINAL_DESCENT_S;   // s: a booking leaves room to come down and stop
+  var BOOK_CACHE_MAX = 200000;
+  function bookable(route, port) {
+    return !!(route && port && !route.outboard && !route.oneWay && !port.seaPlatform);
+  }
+  function poolCaps(port) {
+    var cap = berthCapacity(port);
+    var largeCap = cap >= 2 ? 1 : cap;        // berth 0, as assignBerth has it
+    return { large: largeCap, small: Math.max(0, cap - largeCap) };
+  }
+  /* The routes that call at a port, in priority order. */
+  function portRoutes(sys, port) {
+    var c = sys._portRoutes || (sys._portRoutes = {});
+    if (c[port.id] && c[port.id].n === sys.traffic.length) return c[port.id].list;
+    var list = [];
+    for (var i = 0; i < sys.traffic.length; i++) {
+      var r = sys.traffic[i];
+      if (r.from === port.id || r.to === port.id) list.push({ r: r, i: i });
+    }
+    c[port.id] = { n: sys.traffic.length, list: list };
+    return list;
+  }
+  /* Visit k of a route at one end: atB is the outbound arrival at `to`. */
+  function visitWindow(route, k, atB) {
+    var base = route.t0 + k * route.period;
+    var arr = atB ? base + route.cruise : base + 2 * route.cruise + route.layover;
+    return { arr: arr, dep: arr + route.layover };
+  }
+  /* How long after arriving a visit is in the roads before its final
+   * descent (0: no roads, or straight in), and whether she gets a berth at
+   * all — what trafficCore flies, for callers that check the seams. */
+  /* `inAt`: seconds from her arrival to being moored in the berth. */
+  function visitHold(sys, route, k, atB) {
+    var port = sys.byId[atB ? route.to : route.from];
+    var hold0 = arrivalHold(route, port);
+    var book = bookable(route, port) ? bookVisit(sys, port, route, k, atB) : null;
+    if (!book) return { hold: hold0, berth: true, inAt: hold0 > 0 ? hold0 + FINAL_DESCENT_S : 0 };
+    if (!(hold0 > 0)) return { hold: 0, berth: !!book.pool, inAt: book.pool ? book.b - book.arr : Infinity };
+    var h = book.pool ? book.b - book.arr : Math.max(0, route.layover - FINAL_DESCENT_S);
+    return { hold: h, berth: !!book.pool, inAt: book.pool ? h + FINAL_DESCENT_S : Infinity };
+  }
+  function bookVisit(sys, port, route, k, atB) {
+    var list = portRoutes(sys, port), me = -1, i;
+    for (i = 0; i < list.length; i++) if (list[i].r === route) { me = i; break; }
+    if (me < 0) return null;
+    return bookAt(sys, port, list, me, k, atB);
+  }
+  function bookAt(sys, port, list, me, k, atB) {
+    var cache = sys._book || (sys._book = { n: 0 });
+    var key = port.id + '|' + list[me].i + '|' + k + '|' + (atB ? 1 : 0);
+    if (cache[key]) return cache[key];
+    var route = list[me].r;
+    var w = visitWindow(route, k, atB);
+    var e0 = w.arr + arrivalHold(route, port), e1 = w.dep;
+    var iv = { small: [], large: [] };
+    for (var j = 0; j < list.length; j++) {
+      var o = list[j].r;
+      if (o.outboard) continue;
+      /* Your own ships, pinned in a berth from their arrival on: above
+       * everyone, and not booked (they are already there). */
+      if (o.oneWay) {
+        if (o.to === port.id) iv[routeNeedsLargeBerth(o) ? 'large' : 'small'].push([o.t0 + o.cruise, Infinity]);
+        continue;
+      }
+      if (j >= me) continue;
+      var ends = [];
+      if (o.to === port.id) ends.push(true);
+      if (o.from === port.id) ends.push(false);
+      for (var q = 0; q < ends.length; q++) {
+        var k0 = Math.floor((e0 - o.t0) / o.period) - 1, k1 = Math.floor((e1 - o.t0) / o.period) + 1;
+        for (var kk = k0; kk <= k1; kk++) {
+          var ow = visitWindow(o, kk, ends[q]);
+          if (ow.dep <= e0 || ow.arr >= e1) continue;
+          var ob = bookAt(sys, port, list, j, kk, ends[q]);
+          if (ob.pool && ob.b < e1 && ob.dep > e0) iv[ob.pool].push([ob.b, ob.dep]);
+        }
+      }
+    }
+    var caps = poolCaps(port);
+    /* Small traffic keeps to the small berths, except at a port that has
+     * none (see the note above bookable). */
+    var pools = routeNeedsLargeBerth(route) ? ['large'] : (caps.small > 0 ? ['small'] : ['large']);
+    var best = null;
+    for (var pi = 0; pi < pools.length; pi++) {
+      var b = earliestFit(iv[pools[pi]], e0, e1 - BOOK_MIN_STAY, e1, caps[pools[pi]]);
+      if (b !== null && (!best || b < best.b)) best = { pool: pools[pi], b: b };
+    }
+    var res = { arr: w.arr, dep: w.dep, b: best ? best.b : null, pool: best ? best.pool : null };
+    if (cache.n > BOOK_CACHE_MAX) { sys._book = cache = { n: 0 }; }
+    cache[key] = res; cache.n++;
+    return res;
+  }
+  /* The earliest start in [lo, hiStart] from which fewer than `cap` of the
+   * intervals [s, d) are ever present before `end`, or null. The count
+   * only rises at a start, so it is enough to try lo and each end. */
+  function earliestFit(list, lo, hiStart, end, cap) {
+    if (!(cap > 0) || hiStart < lo) return null;
+    var cands = [lo];
+    for (var i = 0; i < list.length; i++) if (list[i][1] > lo && list[i][1] <= hiStart) cands.push(list[i][1]);
+    cands.sort(function (a, b) { return a - b; });
+    for (var c = 0; c < cands.length; c++) {
+      var t0 = cands[c], worst = 0;
+      /* The count at t0 and at every start inside [t0, end). */
+      var probes = [t0];
+      for (var p = 0; p < list.length; p++) if (list[p][0] > t0 && list[p][0] < end) probes.push(list[p][0]);
+      for (var pr = 0; pr < probes.length && worst < cap; pr++) {
+        var n = 0, at = probes[pr];
+        for (var m = 0; m < list.length; m++) if (list[m][0] <= at && list[m][1] > at) n++;
+        if (n > worst) worst = n;
+      }
+      if (worst < cap) return t0;
+    }
+    return null;
+  }
+
   function berthStatus(port, sys, t, ship) {
     var cap = berthCapacity(port);
     var occ = berthOccupants(port, sys, t);
@@ -3681,23 +3971,27 @@
     var smallCap = Math.max(0, cap - largeCap);
 
     var wantsLarge = needsLargeBerth(ship);
-    var used = wantsLarge ? large : small;
-    var mine = wantsLarge ? largeCap : smallCap;
-    var full = used >= mine;
+    /* A SMALL HULL MAY TAKE A FREE HEAVY BAY (Astra, 2026-11-03) when every
+     * small berth is taken — the same rule the timetable's own small ships
+     * book by (bookVisit). Free means free now, counted from the same
+     * occupancy as everything else here. `lend` says the berth on offer is
+     * the heavy one, so the clearance and the arrival send her there. */
+    var smallFull = small >= smallCap, largeFull = large >= largeCap;
+    var full = wantsLarge ? largeFull : (smallFull && largeFull);
+    var lend = !wantsLarge && smallFull && !largeFull;
+    var mine = wantsLarge ? largeCap : smallCap + largeCap;
+    var used = wantsLarge ? large : small + large;
 
     /* The wait is until a berth OF THE RIGHT KIND frees, not until anything
        moves: telling a freighter it can go in four minutes because a shuttle
        is leaving would be a lie it could act on. */
     var next = 0;
-    if (full) {
-      for (i = 0; i < occ.length; i++) {
-        if (occ[i].large === wantsLarge) { next = occ[i].leavesAt; break; }
-      }
-    }
+    if (full) next = berthFreesAt(port, sys, t, occ, wantsLarge, smallCap, largeCap);
     return {
       capacity: cap, largeCapacity: largeCap, smallCapacity: smallCap,
       occupied: occ.length, large: large, small: small,
       wantsLarge: wantsLarge,
+      lend: lend,
       free: Math.max(0, mine - used),
       full: full,
       nextFreeAt: next || t,
@@ -5823,6 +6117,9 @@
 
     if (ap && ap.normal && typeof ap.gate === 'number') {
       var n = ap.normal;
+      /* The door plane measured from this stand, not from the box's middle
+       * (doorFromStand). Zero for every side bay. */
+      var gate = ap.gate + doorFromStand(ap, off.x, off.y, z);
       var at = function (d) {
         return { x: off.x + n[0] * d, y: off.y + n[1] * d, z: z + n[2] * d };
       };
@@ -5833,12 +6130,12 @@
        * the hold is beyond the bore's mouth and the first leg runs down the
        * bore to the door. */
       var e = ap.entry;
-      var hold = at(ap.gate + holdLead(port));
+      var hold = at(gate + holdLead(port));
       if (e && (e[0] * n[0] + e[1] * n[1] + e[2] * n[2]) < 0.999) {
-        var g0 = at(ap.gate), dist = (ap.exit || 1) + holdLead(port);
+        var g0 = at(gate), dist = (ap.exit || 1) + holdLead(port);
         hold = { x: g0.x + e[0] * dist, y: g0.y + e[1] * dist, z: g0.z + e[2] * dist };
       }
-      return [hold, at(ap.gate), at(ap.gate), at(0), at(0)];
+      return [hold, at(gate), at(gate), at(0), at(0)];
     }
 
     /* No modelled berth: in through the hatch. */
@@ -7753,6 +8050,9 @@
     trafficCore: trafficCore,
     trafficAll: trafficAll,
     berthStatus: berthStatus,
+    /* For the queue measurements in test/berths.test.js and tools; the same
+     * booking trafficState flies. */
+    _bookVisit: bookVisit, visitHold: visitHold,
     berthCapacity: berthCapacity,
     aheadOf: aheadOf, AHEAD_CONE: AHEAD_CONE,
     berthOccupants: berthOccupants, anchorPose: anchorPose, arrivalHold: arrivalHold,

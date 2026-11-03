@@ -73,7 +73,11 @@ function optsFor(st) {
 var airy = null, pad = null, orbital = null;
 for (var s = 0; s < gal.stars.length && (!airy || !pad || !orbital); s++) {
   var sys = Gen.generateSystem(gal.stars[s].seed, optsFor(gal.stars[s]));
-  if (!airy) sys.gravBodies.forEach(function (b) { if (!airy && b.atmosphere && b.radius) airy = { sys: sys, body: b }; });
+  /* The first MOLTEN world with air, the kind the brick below was measured
+   * on: kawartha's first air-bearing world was molten Mirven I (17.45 G at
+   * full drag); since stars stage 2 it is a thin-aired desert, and the first
+   * molten world is kawartha:s2's Linethor I. */
+  if (!airy) sys.gravBodies.forEach(function (b) { if (!airy && b.atmosphere && b.radius && b.type === 'molten') airy = { sys: sys, body: b }; });
   (sys.ports || []).forEach(function (p) {
     if (!p.docking) return;
     if (!pad && p.surface && p.parentBody && p.parentBody.mu) pad = { sys: sys, port: p };
@@ -95,9 +99,11 @@ if (airy) {
   var expect = 0.5 * rho * 2 * 2 * 14 * Sim.DRAG_SCALE / 80;
   check('coasting through air, drag is what you feel', near(fd, expect, expect * 1e-6), (fd / Sim.G0).toFixed(3) + ' G');
   /* Astra, 2026-10-19: "make the air drag less brutal". The same coast
-   * read 17.4 G before; a quarter of that now. */
+   * read 17.4 G before on Mirven I; on Linethor I (stars stage 2, see the
+   * pick above) it would read 28.08 G at full drag, and a quarter of that
+   * now. */
   check('and it is a quarter of the brick it used to be', Sim.DRAG_SCALE === 0.25 &&
-        near(fd / Sim.G0, 17.448 * 0.25, 0.01), (fd / Sim.G0).toFixed(2) + ' G, was 17.45');
+        near(fd / Sim.G0, 28.078 * 0.25, 0.01), (fd / Sim.G0).toFixed(2) + ' G, was 28.08');
 }
 
 console.log('--- felt G in a berth ---');

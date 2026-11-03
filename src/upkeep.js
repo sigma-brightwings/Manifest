@@ -230,8 +230,22 @@
     if (!bd || t < bd.at) return null;
     if (t < bd.towAt) return { adrift: true, leg: bd.leg, at: bd.at, towAt: bd.towAt, outbound: bd.outbound,
                                state: driftState(bd, sys, t) };
-    if (t < bd.legEnd) return { adrift: false, towed: true, leg: bd.leg, at: bd.at, towAt: bd.towAt, outbound: bd.outbound };
+    if (t < towedUntil(route, sys, bd)) return { adrift: false, towed: true, leg: bd.leg, at: bd.at, towAt: bd.towAt, outbound: bd.outbound };
     return null;
+  }
+
+  /* TOWED IN IS DOWN (2026-11-03). Until today the tow ended at the leg's
+   * scheduled end, which at a ground port is not her berthing but her
+   * arrival in the holding stack (Sim.arrivalHold): so a hull the tug had
+   * set on the pad lifted off it, sat in the roads, and flew the final
+   * descent back onto it. Found when a towed freighter turned up two to a
+   * dome at a sea platform (seaplatform.test, after stars stage 2). She now
+   * stays where the tug left her until the timetable has her berthed. */
+  function towedUntil(route, sys, bd) {
+    var S = mod('Sim');
+    var dst = sys && sys.byId ? sys.byId[bd.outbound ? route.to : route.from] : null;
+    var hold = (S && S.arrivalHold && dst) ? S.arrivalHold(route, dst) : 0;
+    return bd.legEnd + (hold > 0 ? hold + S.FINAL_DESCENT_S : 0);
   }
 
   /* The breakdown that actually happens on a leg: none if you pulled her

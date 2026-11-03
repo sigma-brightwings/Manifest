@@ -429,7 +429,9 @@ console.log('--- traffic on rails ---');
      * over the field (Sim.arrivalHold, 2026-11-01), and are at the port
      * once the hold and the final descent are flown. Every seam on the way
      * must be continuous. */
-    var hold = Sim.arrivalHold ? Sim.arrivalHold(r, B) : 0;
+    /* Through the berth queue (2026-11-03): a visit it held is longer in the
+     * roads than the roads' own share, so the hold is the one she flies. */
+    var hold = Sim.visitHold ? Sim.visitHold(sys, r, 0, true).hold : (Sim.arrivalHold ? Sim.arrivalHold(r, B) : 0);
     var land = hold > 0 ? hold + Sim.FINAL_DESCENT_S : 0;
     if (hold > 0) {
       var ap = Sim.anchorPose(B, sys, r.t0 + r.cruise - 1e-6, parent, r);
@@ -599,9 +601,11 @@ console.log('--- traffic arrives at ports, not near them ---');
        * this samples the last instant of the leg and the moored phase that
        * follows it. */
       /* Touchdown is after the roads, for a run that holds there. */
-      var land2 = Sim.arrivalHold && Sim.arrivalHold(r, sys.byId[r.to]) > 0
-        ? Sim.arrivalHold(r, sys.byId[r.to]) + Sim.FINAL_DESCENT_S : 0;
-      [r.t0 + r.cruise + land2 - 0.001, r.t0 + r.cruise + land2 + 1].forEach(function (t) {
+      /* The hold she flies, through the berth queue (2026-11-03). */
+      var vh2 = Sim.visitHold(sys, r, 0, true);
+      var land2 = vh2.hold > 0 ? vh2.hold + Sim.FINAL_DESCENT_S : 0;
+      /* One held out of a berth touches down only to leave: no moored instant after. */
+      [r.t0 + r.cruise + land2 - 0.001].concat(vh2.berth ? [r.t0 + r.cruise + land2 + 1] : []).forEach(function (t) {
         var st = Sim.trafficState(r, sys, t);
         var port = st.to;
         if (!port.parentBody || !(port.surface || port.underground)) return;
@@ -1303,7 +1307,7 @@ console.log('--- higher-tech worlds make higher-tech goods and more mess ---');
 console.log('--- government and crime permissivity ---');
 (function () {
   var withGov = 0, badScore = 0, noneEver = { anarchy: 0, technocracy: 0 };
-  var lowDevCrime = [], highDevCrime = [];
+  var lowDevCrime = [], highDevCrime = [], byDev = [];
   seeds(150).forEach(function (sd) {
     var sys = Gen.generateSystem(sd);
     if (!sys.government || sys.crimeScore === undefined) return;
@@ -1313,6 +1317,7 @@ console.log('--- government and crime permissivity ---');
     if (sys.government.id === 'anarchy') noneEver.anarchy++;
     if (sys.government.id === 'technocracy') noneEver.technocracy++;
     (sys.development < 0.3 ? lowDevCrime : sys.development > 0.7 ? highDevCrime : []).push(sys.crimeScore);
+    byDev.push([sys.development, sys.crimeScore]);
   });
   check('every sampled system got a government and a crime score', withGov === 150);
   check('crime score always lands in [0,100]', badScore === 0, badScore + ' bad');
@@ -1321,9 +1326,19 @@ console.log('--- government and crime permissivity ---');
   check('technocracy shows up somewhere across 150 seeds', noneEver.technocracy > 0);
 
   function mean(a) { return a.reduce(function (s, x) { return s + x; }, 0) / a.length; }
+  /* The bottom quarter of development against the top quarter, not "under
+   * 0.3" against "over 0.7": since stars stage 2 settled the galaxy, these
+   * 150 seeds hold ONE system under 0.3, and a mean of one is not a trend
+   * (it read 31.0 against 38.1). Re-measured, the trend is real and a
+   * little gentler: crime falls 46 points per unit of development over 600
+   * seeds (53 before); here the quarters read 41.7 vs 37.4 (51.5 vs 35.6). */
+  byDev.sort(function (x, y) { return x[0] - y[0]; });
+  var qn = Math.floor(byDev.length / 4);
+  var loQ = byDev.slice(0, qn).map(function (x) { return x[1]; });
+  var hiQ = byDev.slice(byDev.length - qn).map(function (x) { return x[1]; });
   check('low-development systems trend more crime-permissive than high-development ones',
-        lowDevCrime.length && highDevCrime.length && mean(lowDevCrime) > mean(highDevCrime),
-        mean(lowDevCrime || [0]).toFixed(1) + ' vs ' + mean(highDevCrime || [0]).toFixed(1));
+        mean(loQ) > mean(hiQ),
+        mean(loQ).toFixed(1) + ' vs ' + mean(hiQ).toFixed(1) + ' (development quarters)');
 
   // The user's rule explicitly: NOT every low-tech system is high crime.
   /* Low-development systems are rare — five in these 150 seeds, one
@@ -1866,6 +1881,95 @@ console.log('--- what the local runs are carrying ---');
   });
   check('every analyser run starts where there is cargo to load', runs > 0 && loadable === runs,
         loadable + ' of ' + runs + (bad ? '  e.g. ' + bad : ''));
+})();
+
+/* ---- a full port is full, not oversubscribed (2026-11-03) ---------------
+ * The timetable used to moor every ship that arrived, seven in five berths
+ * at kawartha's home station, and the wait a pilot was told was read off
+ * the first departure: 13 minutes for a 68-minute hold. Now a visit books a
+ * berth or holds in the roads (Sim bookVisit), a small hull you fly may take
+ * a free heavy bay, and the wait is to the departure that actually frees
+ * one. Pinned: never over capacity in either pool, the same answer in any
+ * order of asking, the heavy bay lent only when it is free, and the wait
+ * told is the wait there is. */
+console.log('--- a full port is full, not oversubscribed ---');
+(function () {
+  var courier = { cls: 'courier', dryMass: 80 };
+  var over = 0, samples = 0, full = 0, lent = 0, lendBad = 0, waitBad = 0, waited = 0, heldSeen = 0, heldBad = 0;
+  for (var sd = 0; sd < 12; sd++) {
+    var sys = Gen.generateSystem('queue-sweep-' + sd);
+    sys.ports.filter(function (p) { return p.docking && !p.seaPlatform; }).forEach(function (p) {
+      for (var k = 0; k < 10; k++) {
+        var t = k * 3600 * 9.1 + sd * 777;
+        var st = Sim.berthStatus(p, sys, t, courier);
+        samples++;
+        if (st.small > st.smallCapacity || st.large > st.largeCapacity) over++;
+        if (st.lend) {
+          lent++;
+          if (!(st.small >= st.smallCapacity && st.large < st.largeCapacity) || st.full) lendBad++;
+        }
+        if (st.full) {
+          full++;
+          /* Told the truth: a second after the wait it names, there is room. */
+          if (st.waitFor > 0 && st.waitFor < 3 * 86400) {
+            waited++;
+            if (Sim.berthStatus(p, sys, t + st.waitFor + 1, courier).full) waitBad++;
+          }
+        }
+      }
+      /* A ship the queue held is in the roads, not in a berth. */
+      sys.traffic.forEach(function (r) {
+        if (r.outboard || r.oneWay || r.to !== p.id) return;
+        var b = Sim._bookVisit(sys, p, r, 3, true);
+        if (!b || b.pool) return;
+        heldSeen++;
+        var mid = (b.arr + b.dep) / 2;
+        var ts = Sim.trafficState(r, sys, mid);
+        if (!ts || ts.phase !== 'anchored' || ts.berthPool) heldBad++;
+      });
+    });
+  }
+  /* The same port asked in another order, in a system generated afresh. */
+  var A = Gen.generateSystem('queue-sweep-0'), B = Gen.generateSystem('queue-sweep-0'), orderBad = 0;
+  var pa = A.ports.filter(function (p) { return p.docking && !p.surface; })[0];
+  var pb = B.ports.filter(function (p) { return p.id === pa.id; })[0];
+  var times = [];
+  for (var q = 0; q < 30; q++) times.push(q * 5432.1);
+  var ra = times.map(function (t) { return Sim.berthStatus(pa, A, t, courier).occupied; });
+  var rb = times.slice().reverse().map(function (t) { return Sim.berthStatus(pb, B, t, courier).occupied; }).reverse();
+  for (q = 0; q < times.length; q++) if (ra[q] !== rb[q]) orderBad++;
+
+  console.log('  ' + samples + ' samples: small hull turned away ' + (100 * full / samples).toFixed(1) +
+              '%, lent the heavy bay ' + (100 * lent / samples).toFixed(1) + '%; ' + heldSeen + ' visits held in the roads');
+  check('no port ever has more ships in a pool than berths', over === 0, over + ' of ' + samples);
+  check('the heavy bay is lent only when every small berth is taken and it is free', lent > 0 && lendBad === 0,
+        lendBad + ' wrong of ' + lent);
+  check('the wait a full port names is the wait there is', waited > 0 && waitBad === 0,
+        waitBad + ' still full of ' + waited);
+  check('a ship the queue held waits in the roads, not in a berth', heldSeen > 0 && heldBad === 0,
+        heldBad + ' of ' + heldSeen);
+  check('the queue is the same in any order of asking', orderBad === 0, orderBad + ' of ' + times.length);
+
+  /* And the clearance sends her there. */
+  var s2 = Gen.generateSystem('queue-sweep-1'), found = null;
+  s2.ports.forEach(function (p) {
+    if (found || !p.docking || p.surface || p.seaPlatform) return;
+    for (var k2 = 0; k2 < 40 && !found; k2++) {
+      var bs = Sim.berthStatus(p, s2, k2 * 4000, courier);
+      if (bs.lend) found = { p: p, bs: bs };
+    }
+  });
+  check('there is a port with the heavy bay to lend', !!found);
+  if (found) {
+    var G2 = { ship: { cls: 'courier', dryMass: 80 }, sys: s2, standing: {}, wanted: {} };
+    var res = Combat.requestClearance(G2, found.p, null, found.bs);
+    check('the port clears a small hull into its free heavy bay, and says so',
+          res && res.granted && res.lend && /heavy bay/.test(res.text) && G2.ship.lentBay === found.p.id,
+          res && res.text);
+    var plain = Sim.assignBerth({ cls: 'courier', dryMass: 80 }, found.p);
+    check('and the arrival is given that bay', Sim.assignBerth(G2.ship, found.p) === 0 && plain !== 0,
+          Sim.assignBerth(G2.ship, found.p) + ' lent, ' + plain + ' otherwise');
+  }
 })();
 
 console.log('');

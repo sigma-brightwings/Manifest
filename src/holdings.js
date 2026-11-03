@@ -75,7 +75,13 @@
    * 5.06 -> 1.84), and a reprocessing plant no longer pays for tractors
    * it never used (3.99 -> 5.72). Then again after the port signatures
    * (books read `local`): the figures below. `refinery` has no plants of
-   * its own to measure and keeps the refinery plant's figure. */
+   * its own to measure and keeps the refinery plant's figure.
+   * RE-MEASURED 2026-11-03 after stars stage 2 (same 80 + 80 stars) and
+   * KEPT: measured over these, agri 0.89, farm-gold 0.77 (27 plants),
+   * plant-refinery 1.11 and the rest within 4%, while the gate they feed
+   * barely moved - distress 7.3% -> 7.8% of plants in clean systems, 25.7%
+   * -> 28.7% in corrupt ones. A scale that still sorts the same plants for
+   * sale is not one to re-pin for its own sake. */
   var KIND_MEDIAN = {
     agri: 1.72, mining: 2.83, reprocessing: 4.24, shipyard: 1.01,
     refinery: 0.75, 'plant-refinery': 0.75, 'plant-skimmer': 0.21,

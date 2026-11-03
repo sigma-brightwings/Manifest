@@ -162,6 +162,29 @@
    * street by the curve alone: at most 0.18 m measured (half a kilometre
    * out on a 650 km world). The shaft and the hangar are metres under the
    * street and still mark nothing. */
+  /* HEIGHT OVER THE WORLD'S SPHERE, EXACTLY (2026-11-03), of a point `xy`
+   * km east and north of the mouth and `z` km up its flat frame, on a world
+   * of radius R (0: flat). This was z + d^2/2R, the parabola, which is the
+   * sphere only to second order: it reads low by d^4/8R^3. On a planet that
+   * is nothing, but stage 2 put ports on small moons — Harrow Hold sits on
+   * a 134 km one, and from a grazing 8 km boom the cut crosses the street
+   * 3.9 km from the mouth, where the parabola had a 10 m building 11 mm
+   * short (render.test.js) and is 0.2 m short at the mask's 8 km reach,
+   * which is FOOT_MIN's own size. This form is exact and still stable in
+   * single precision: |p - C| - R rewritten so nothing of size R is
+   * subtracted from anything of size R. The mask (FRAG_FOOT), the wall's
+   * test (FRAG_WALL) and both JS twins below use it, so they agree. */
+  function overSphere(e, n, z, R) {
+    if (!(R > 0)) return z;
+    var d2 = e * e + n * n;
+    return (d2 + z * (2 * R + z)) / (Math.sqrt(d2 + (R + z) * (R + z)) + R);
+  }
+  var OVER_SPHERE_GLSL =
+    'float overSphere(vec2 xy, float z, float R) {' +
+    '  if (!(R > 0.0)) return z;' +
+    '  float d2 = dot(xy, xy);' +
+    '  return (d2 + z * (2.0 * R + z)) / (sqrt(d2 + (R + z) * (R + z)) + R);' +
+    '}';
   var FOOT_MIN = 0.00025; // km
   var FOOT_TOP = 0.5;     // km
   var FRAG_WALL = [
@@ -191,6 +214,7 @@
     'uniform vec4 uWMaskB;',      // its centre east, north of the mouth, km; half its side, km; w = 1 when there is one
     'out vec4 frag;',
     'float whash(float a, float b) { return fract(sin(a * 12.9898 + b * 78.233) * 43758.5453); }',
+    OVER_SPHERE_GLSL,
     /* How tall the port's own cut meshes stand over a point (relative to
      * the eye, km) — a building, a shed, the city — in km, and 0 where
      * nothing does. The street's band and the lip's are left out where
@@ -341,7 +365,7 @@
     '            vec3 pe = rd * te;',
     '            vec3 qe = pe - uWEnt;',
     '            float ee = dot(qe, uWE), en = dot(qe, uWN);',
-    '            float he = dot(qe, uWU) + (ee * ee + en * en) * 0.5 / uWPlanet.w;',
+    '            float he = overSphere(vec2(ee, en), dot(qe, uWU), uWPlanet.w);',
     '            float fe = footH(pe);',
     '            if (fe > 0.0 && he < fe) {',
     '              frag = vec4(' + SCORCHED_GLSL + ', 0.0);',
@@ -455,8 +479,8 @@
    * the street (FOOT_MIN) — so a roof marks its building, a wall that is
    * a line from above marks nothing on its own, and the shaft, the hangar
    * and anything else under the ground mark nothing at all. The height is
-   * over the world's SPHERE (the street the planet pass draws), by the
-   * flat frame's height plus d^2/2R, and each texel keeps the TALLEST
+   * over the world's SPHERE (the street the planet pass draws), exactly —
+   * overSphere, no longer the d^2/2R parabola — and each texel keeps the TALLEST
    * surface over it (MAX blending), which is how high the building's cut
    * face runs there. The vertex stage is built once the
    * mesh program has linked, at its aPos location, because these are the
@@ -471,9 +495,10 @@
       'uniform vec3 uFBox;',     // the mask's centre east, north, km; half its side, km
       'uniform float uFCurv;',   // 1 / 2R, per km
       'out float vH;',
+      OVER_SPHERE_GLSL,
       'void main() {',
       '  vec3 g = uFOff + uFRot * (aPos * uFScale);',
-      '  vH = g.z + dot(g.xy, g.xy) * uFCurv;',
+      '  vH = overSphere(g.xy, g.z, uFCurv > 0.0 ? 0.5 / uFCurv : 0.0);',
       '  gl_Position = vec4((g.xy - uFBox.xy) / uFBox.z, 0.0, 1.0);',
       '}'
     ].join('\n');
@@ -4661,14 +4686,14 @@
     var q = { x: p.x - w.entrance.x, y: p.y - w.entrance.y, z: p.z - w.entrance.z };
     var pe = q.x * w.east.x + q.y * w.east.y + q.z * w.east.z;
     var pn = q.x * w.north.x + q.y * w.north.y + q.z * w.north.z;
-    var curv = (w.planet && w.planet.radius > 0) ? 1 / (2 * w.planet.radius) : 0, top = 0;
+    var pR = (w.planet && w.planet.radius > 0) ? w.planet.radius : 0, top = 0;
     for (var i = 0; i < items.length; i++) {
       var M = items[i].mesh, P = items[i].place, R = P.rot, o = P.off, s = P.scale;
       var g = function (v) {
         var x = v[0] * s, y = v[1] * s, z = v[2] * s;
         var gx = o[0] + R[0] * x + R[3] * y + R[6] * z, gy = o[1] + R[1] * x + R[4] * y + R[7] * z;
         var gz = o[2] + R[2] * x + R[5] * y + R[8] * z;
-        return [gx, gy, gz + (gx * gx + gy * gy) * curv];
+        return [gx, gy, overSphere(gx, gy, gz, pR)];
       };
       for (var k = 0; k < M.f.length; k++) {
         var a = g(M.v[M.f[k][0]]), b = g(M.v[M.f[k][1]]), c = g(M.v[M.f[k][2]]);
@@ -4860,8 +4885,8 @@
       if (hit && hit.t < rl) {
         var qx = hit.p.x - w.entrance.x, qy = hit.p.y - w.entrance.y, qz = hit.p.z - w.entrance.z;
         var qe = qx * w.east.x + qy * w.east.y + qz * w.east.z, qn = qx * w.north.x + qy * w.north.y + qz * w.north.z;
-        var curv = (w.planet && w.planet.radius > 0) ? 1 / (2 * w.planet.radius) : 0;
-        var he = qx * w.up.x + qy * w.up.y + qz * w.up.z + (qe * qe + qn * qn) * curv;
+        var he = overSphere(qe, qn, qx * w.up.x + qy * w.up.y + qz * w.up.z,
+                            (w.planet && w.planet.radius > 0) ? w.planet.radius : 0);
         var fe = GL.footprintAt(w, items, hit.p);
         if (fe > 0 && he < fe) return 'face';
       }

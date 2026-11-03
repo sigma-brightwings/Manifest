@@ -1966,6 +1966,11 @@ console.log('--- in the roads ---');
       checked++;
       var t = r.t0 + r.cruise + hold * 0.5;
       var st = Sim.trafficState(r, sys, t);
+      /* A run that broke down is not in the roads: adrift until the tug
+       * reaches her, then already down (upkeep.js towedUntil, 2026-11-03),
+       * not climbing back up to wait. Since stars stage 2 one of each falls
+       * on a sampled instant (reverie r0 adrift, a kawartha one towed). */
+      if (st.towed || st.adrift) { checked--; return; }
       if (st.phase !== 'anchored') return;
       sawAnch++;
       var occ = Sim.berthOccupants(B, sys, t);

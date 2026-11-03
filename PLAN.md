@@ -37,7 +37,7 @@ verified by loading the modules and inspecting what is actually there.
 | **Heat sinks** *(part of Phase 5)* | launcher, charges, `armSink`, `addHeat`, `updateSink`, ejection record |
 | **Hull roles** *(not originally a phase)* | `liner` traffic class, `navy` patrol class, hull assignments, `killNavy` / `killLiner` charges, navy as a piracy deterrent |
 | **The settlement chain** *(not originally a phase)* | `Eco.setPressure` 0.25–3.0, `Eco.galaxyProfile`, byte-identical at 1.0, tested |
-| **Wider habitable zone, more planets** *(not originally a phase)* | 6–12 planets, optimistic HZ, tighter orbit spacing; 2+ habitable worlds in half of systems |
+| **Wider habitable zone, more planets** *(not originally a phase)* | 6–12 planets, optimistic HZ. Since stars stage 2 (2026-11-03): a warm anchor world at S 0.80–1.35 and a compact chain through the zone at r_min = max(1.20, 1 + 8.8·∛(2·4.2 M⊕/3M★)), zone types by warmth; 2+ habitable worlds in 92% of systems, 2+ warm ones (S ≥ 0.6) in ~60%; `opts.legacyOrbits` rebuilds the old orbits (test/habitable.test.js) |
 | **Model pipeline** *(not originally a phase)* | `glb2hulls` splits cockpit interiors from hulls and emits the canopy box; 33 redesigned models imported |
 | **Slipspace core** *(not originally a phase)* | Mass-scaled transit time, interstellar lane timetable, wakes and wake scanning, `Shift+J` wake-following, a flyable interdiction corridor with HUD, the interstellar drop-out locale — see Phase 15 |
 | **Phase 4 — death, debris and salvage** | Eight-shard mesh pool built once, wreckage spawned on `killNpc` and hashed off the victim, a cheap ballistic path in `sys.canisters` with no rail, a global cap, salvage through the existing scoop — see Phase 4 |

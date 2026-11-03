@@ -315,16 +315,22 @@ if (law) {
   check('and the old voyage is forgotten once it is over',
         Object.keys(G.shipTrade.legs).length === 0, JSON.stringify(G.shipTrade.legs));
 
-  /* Room is the hull's, per voyage. */
-  G.ship.cargo = {}; G.ship.cargo[row.cid] = 500;
+  /* Room is the hull's, per voyage. Her purse is topped up first, the way
+   * the purse section below empties it, so it is room and not money that
+   * says no: since stars stage 2 this hull's line runs 884 cr a tonne and
+   * her purse ran out at 4 t of the 6 she had room for. */
+  var rowR = row, legR = ST.legOf(G, G.sys, c, t);
+  G.shipTrade = G.shipTrade || { legs: {}, standing: {} };
+  G.shipTrade.legs[legR.key] = { until: legR.until, took: {}, sold: 0, paid: 0, got: 1e7 };
+  G.ship.cargo = {}; G.ship.cargo[rowR.cid] = 500;
   G.ship.cargoCap = 1000; Sim.refreshShip(G.ship);
   var bb = ST.board(G, G.sys, t, c);
-  var sr = bb.rows.filter(function (r) { return r.cid === row.cid; })[0];
+  var sr = bb.rows.filter(function (r) { return r.cid === rowR.cid; })[0];
   if (sr.sellEach !== null) {
-    var sold = ST.deal(G, G.sys, t, c, row.cid, -1000);
+    var sold = ST.deal(G, G.sys, t, c, rowR.cid, -1000);
     check('they take only what their hull has room for',
           sold.ok && sold.qty === bb.room, JSON.stringify({ qty: sold.qty, room: bb.room }));
-    var again = ST.deal(G, G.sys, t, c, row.cid, -1);
+    var again = ST.deal(G, G.sys, t, c, rowR.cid, -1);
     check('and then say so', again.ok === false && /room/i.test(again.text), again.text);
   }
 }

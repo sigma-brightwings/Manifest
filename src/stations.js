@@ -494,6 +494,9 @@
                children: [] };
     }
     port.id = portId(st);
+    /* Her site, for the market's own hashes (Economy marketKey): the
+     * forecast builds her under another id and must draw what she will. */
+    port.siteKey = seedOf(st);
     port.name = st.name;
     port.player = !st.seized;
     port.playerStation = st.id;
