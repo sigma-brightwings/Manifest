@@ -40,6 +40,103 @@ before they update.
 
 ## Unreleased
 
+### Changed (2026-11-03, warmer, fuller habitable zones: stars stage 2)
+
+Stage 2 of the star programme. **Every seed's planets move**: Astra accepted the
+reshuffle and that careers from before the star programme reset (see **Saves**).
+
+- **A warm anchor.** One world in every system sits at insolation S₀ ~
+  log-uniform(0.80, 1.35) Earth units, a = √(L/S₀).
+- **A compact chain through the zone** (`warmChainAxes`, fork `'planet-orbits'`):
+  1–3 steps inward and outward while the last world is inside the zone, at a
+  ratio U(r_min, r_min + 0.18) with r_min = max(1.20, 1 + 8.8·∛(2·m_max/3M★)),
+  m_max = 4.2 M⊕ (the top of the solid-world mass draw): 1.306 at 0.2 M☉, 1.225
+  at 0.5 M☉, 1.20 for G and up. Past the zone ×U(1.35, 1.80) to the drawn count
+  (6–12; the zone is never cut short, and measured counts stayed 6–12).
+- **Zone types by warmth**, one pick on the planet's own prng as before: S ≥ 0.65
+  terran, terran, ocean, ocean, desert; 0.45–0.65 terran, ocean, tundra, desert;
+  under 0.45 tundra, tundra, terran, desert.
+- **`opts.legacyOrbits`** rebuilds today's orbits and zone types exactly (a test
+  instrument; `test/habitable.test.js` holds 10 systems to names, types and
+  semi-major axes captured from 44cd871).
+
+Measured, legacy against new (kawartha's first 40 stars; first 200 in brackets):
+
+| | before | after |
+|---|---|---|
+| ≥2 warm (S ≥ 0.6) global-habitable worlds | 10.0% (11.0%) | **62.5% (58.0%)** |
+| median global-habitable insolation | 0.806 (0.737) | **0.924 (0.899)** |
+| ≥2 habitable worlds, any band | 57.5% (58.5%) | 92.5% (92.5%) |
+| global-habitable worlds | 45 (251) | 78 (405) |
+| terminator / equator worlds | 41 / 5 (188 / 18) | 51 / 7 (254 / 29) |
+| mean development | 0.552 (0.563) | 0.619 (0.638) |
+| ports per system | 13.52 (13.70) | 15.28 (15.31) |
+| closest adjacent solid pair, mutual Hill radii | 12.65 | 9.19 |
+
+Beaverton: 17.5% → 65.0%, median 0.689 → 0.950; driftwood: 15.0% → 67.5%, 0.824
+→ 0.996. Across all 1,350 stars of the three galaxies, 2 of 7,189 adjacent
+solid pairs fall under 8.5 Hill radii (8.39, 8.42; both heavy pairs at r_min
+round an M dwarf). Terminator worlds +24% (+35% over 200), mostly round M
+dwarfs; if they read as too many, the lever is `TWILIGHT_INNER` (left at 0.80).
+
+**Gates re-measured (doctrine 6), before → after, and what moved:**
+- **Navy cutter** `NAVY_MIN_DEV` 0.55 → **0.63**: at 0.55 it let in 45.8% of
+  claimed kawartha systems (was 28.8%); at 0.63, 27.8%. Beaverton + driftwood
+  27.6% → 26.9%. Systems with a cutter 21.2% → 19.8%.
+- **Naval capital** `CAPITAL_MIN_DEV` 0.60 → **0.68**: 13.7% → 30.7% at 0.60,
+  13.2% at 0.68; capitals over 300 seed-i systems 57 (master) → 59.
+- **Syndicate flagship** `FLAGSHIP_MIN_CRIME` 58 → **56**: richer systems are less
+  violent, and at 58 it let in 55 of 300 seed-i systems (was 64); 56 lets in 62.
+  Flagships per naval capital 0.61 (master) → 0.58.
+- **Port tugs**: highports doubled (48 → 86 in 25 claimed systems) and tugs went
+  3.12 → 5.08 a system, the clutter the tug's first cut was cut back from. A
+  world's highports now share one tug (shipyards and carriers keep their own):
+  3.32 a system (3.17 over rescue-0..23, was 2.96). Every inhabited system now
+  has a tug; the deep, not the system, is where you are on your own.
+- **Liners**: unchanged rule (one settled end). Two settled worlds in a system is
+  now common (34% → 48.5% of 200 systems); liners +10%, in the same 102 systems.
+- **Syndicate tithe**: unaffected — it reads holds, not development (17 holds in
+  200 before and after). **The pirate mark** reads standing only.
+- **KIND_MEDIAN**: kept (80 + 80 stars): agri 0.89 of it, farm-gold 0.77,
+  plant-refinery 1.11, the rest within 4%; distress 7.3% → 7.8% clean, 25.7% →
+  28.7% corrupt.
+- **Government and crime**: mix much the same (anarchy 4% → 3%, feudal 10% → 8%,
+  corporate 12% → 14%); median permissivity 48 → 44, violence 24.2 → 20.1. The
+  low-dev/high-dev trend is real and a little gentler: −53 → −46 permissivity per
+  unit of development over 600 seeds. economy.test's check compared a mean of ONE
+  system under 0.3 (31.0 vs 38.1); it now compares development quarters.
+
+**Fixed, found by the reshuffle:**
+- **Ore on dry land** (survey.js): a mostly-ocean world's twelve random tries at a
+  dry province could all land in the sea, and the fallback was wet; now it is the
+  nearest dry cell. And where every mine stands on ice or a sea platform, the
+  first non-mine province is at full strength. (ground.test, 282 of 286.)
+- **A surface station's own shuttle** (generate.js `addPortRoutes`): every local
+  hop scored the same, so with more than four ports over her world her own
+  orbital half was the one cut (stations.test, 0 routes). Her half goes first.
+- **Forecast ≠ the station** (economy.js `marketKey`, stations.js `siteKey`): the
+  market's demand, wine and shelf hashes read the port id, and the forecast is
+  built under a stand-in id; once a site passed dev 0.45 the two disagreed. A
+  station of yours hashes on her site.
+- **A gold farm is a back room** (generate.js `buildContraband`): a system whose
+  only back room was a later gold farm also got a placed fence.
+- **Towed in is down** (upkeep.js `towedUntil`, sim.js sea stays): a towed run sat
+  on a sea pad the sweep had given to another ship (4 of 15,392 samples), and at
+  a ground port lifted back into the holding stack after the tug set her down.
+
+**Still red, reported rather than re-picked away:** berths.test's ring-s at
+radius 1.57 km never reads indoors (master's code does the same at that radius);
+render.test's cutaway sweep at Harrow Hold (a 134 km moon) and Downwell Starport
+(now on a 1,917 km moon) fails at grazing 8 km views; render.test's mid-range
+auto-dock to Threshold Dock takes 71.9 min — from 114 Mm, mass-locked, and home
+berths are fuller (samples with every orbital berth taken: 53.9% → 60.5%).
+
+**Saves:** **do not survive.** `save.js` VERSION 4 → **5**, the one deliberate
+break of doctrine 4 for the whole star programme (Astra: "we don't need to have
+saves be cross-compatible if we're altering the star generation"). Careers from
+before the star programme reset; later star stages ride this same epoch. The
+DEPRECATED shelf was empty.
+
 ### Changed (2026-11-03, more than one star: the plumbing, stage 1)
 
 Stage 1 of the star programme (project doc `claude/stars-and-systems-plan.md`:
