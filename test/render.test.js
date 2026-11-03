@@ -4351,8 +4351,18 @@ console.log('--- the chart zooms ---');
   check('the wheel stops at the closest zoom',
         Math.abs(C.xf(G.starMap.view, plot).scale - C.MAX_PX_PER_LY) < 1e-6);
   var st2 = Scr.chartStat();
+  /* Every name that has anywhere to go: a dot sitting under the chart's
+   * own furniture (the scale bar, the buttons, the news line) can have its
+   * name crowded out by it, and that is the furniture's right, not a lost
+   * label. Every other star in view must be named. */
+  var crowded = st2.unnamed.filter(function (u) {
+    return st2.furniture.some(function (b) {
+      return u.x > b.bx - 24 && u.x < b.bx + b.bw + 24 && u.y > b.by - 24 && u.y < b.by + b.bh + 24;
+    });
+  });
   check('at the closest zoom every star on the plot has its name',
-        st2.cands > 0 && st2.labels === st2.cands, st2.labels + ' of ' + st2.cands);
+        st2.cands > 0 && st2.labels + crowded.length === st2.cands, st2.labels + ' of ' + st2.cands +
+        (st2.unnamed.length ? ' — unnamed ' + JSON.stringify(st2.unnamed) + ' plot ' + JSON.stringify([plot.x0, plot.y0, plot.size]) : ''));
   var ov = 0;
   st2.placed.forEach(function (p, a) {
     st2.placed.slice(a + 1).forEach(function (q) {
@@ -4360,6 +4370,29 @@ console.log('--- the chart zooms ---');
     });
   });
   check('and no two names overprint', ov === 0, ov + ' overlaps');
+
+  /* ---- the territory, zoomed in, is still the galaxy's territory.
+   * The field is built in screen pixels relative to the galaxy origin;
+   * every cell's owner must be what the galaxy itself says about that
+   * point — the nearest charted star within its reach, worked out here in
+   * light years — or a pan or a zoom has slid the borders off their stars. */
+  (function () {
+    Scr.chartCentre('here'); frames(1);   // your own space is charted, so there is a border to check
+    var f = C.territory(), sc = C.xf(G.starMap.view, plot).scale;
+    var charted = G.galaxy.stars.filter(function (s) { return G.charted && G.charted[s.id] && s.factionId; });
+    var cell = C.TERRITORY_CELL, reach = C.TERRITORY_REACH_LY, bad = 0, owned = 0, n = 0;
+    for (var r = 0; r < f.nr; r++) for (var c = 0; c < f.nc; c++) {
+      var gx = (f.x0 + (c + 0.5) * cell) / sc, gy = -(f.y0 + (r + 0.5) * cell) / sc;
+      var best = null, bd = reach;
+      charted.forEach(function (s) { var d = Math.hypot(s.x - gx, s.y - gy); if (d < bd) { bd = d; best = s; } });
+      var want = best ? best.factionId : null;
+      if (want) owned++;
+      if (want !== f.owner[r * f.nc + c]) bad++;
+      n++;
+    }
+    check('zoomed in, every territory cell belongs to the power the galaxy says it does',
+          owned > 0 && bad === 0, bad + ' wrong of ' + n + ' cells (' + owned + ' owned, ' + charted.length + ' charted stars)');
+  })();
 
   // ---- a click picks the star under it
   var xf = C.xf(G.starMap.view, plot), target = null;

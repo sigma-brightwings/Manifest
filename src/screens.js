@@ -6225,10 +6225,13 @@
    *
    * THE CLOSEST ZOOM IS A PIXEL DENSITY, not a multiple, so it means the
    * same thing on any window: CHART_MAX_PX_PER_LY. Measured on 40 seeds
-   * (kawartha and 39 others, 18,000 stars): the gap from a star to its
-   * nearest neighbour AS DRAWN — x across, y minus height up, because the
-   * stem lifts each dot — has a median of 2.86 ly, a 10th percentile of
-   * 1.16 and a 5th of 0.80. At 40 px/ly the 5th-percentile pair sits
+   * (kawartha and seed1..seed39, 18,000 stars, every galaxy 72.75 ly in
+   * radius): the gap from a star to its nearest neighbour AS DRAWN — x
+   * across, y plus height up, because the stem lifts each dot — has a
+   * median of 2.89 ly, a 10th percentile of 1.17, a 5th of 0.83 and a 1st
+   * of 0.34. (In 3D the same gaps are 4.22, 2.24, 1.84 and 1.33 ly, and
+   * the closest pair of all is 1.10.) An earlier pass over a different
+   * 39 got 2.86 / 1.16 / 0.80 — the numbers are the galaxy's, not luck. At 40 px/ly the 5th-percentile pair sits
    * 32 px apart, two dots plus their rings with daylight between, and a
    * median pair 114 px apart, room for both names. The view at that zoom
    * is still ~15 ly across, so there are always neighbours in it. What
@@ -6397,6 +6400,16 @@
       ];
       for (var j = 0; j < spots.length; j++) {
         var bx = spots[j][0], by = spots[j][1];
+        /* SLID ALONG ITS OWN SIDE, not dropped, when it only overhangs the
+         * edge that way. A dot a few pixels off the bottom of the plot had
+         * every one of its four spots hanging over that edge and lost its
+         * name at the closest zoom, where there is room for every name.
+         * A name beside its dot may slide up or down, one above or below
+         * may slide across; neither can slide onto its own dot. */
+        var lo = plot.y0 + 2, hi = plot.y0 + plot.size - 2 - th;
+        var lx = plot.x0 + 2, hx = plot.x0 + plot.size - 2 - tw;
+        if (j < 2) by = Math.max(lo, Math.min(hi, by));
+        else bx = Math.max(lx, Math.min(hx, bx));
         if (bx < plot.x0 + 2 || by < plot.y0 + 2 ||
             bx + tw > plot.x0 + plot.size - 2 || by + th > plot.y0 + plot.size - 2) continue;
         var hit = false;
@@ -6880,6 +6893,10 @@
 
     chartStat.drawn = nDrawn; chartStat.culled = nCulled; chartStat.labels = placed.length; chartStat.cands = labelCands.length;
     chartStat.placed = placed.map(function (pl) { return { text: pl.c.text, tier: pl.c.tier, bx: pl.bx, by: pl.by, bw: pl.bw, bh: pl.bh }; });
+    var named = {}; placed.forEach(function (pl) { named[pl.c.text] = true; });
+    chartStat.unnamed = labelCands.filter(function (c) { return !named[c.text]; })
+      .map(function (c) { return { text: c.text, tier: c.tier, x: c.x, y: c.y }; });
+    chartStat.furniture = blocked.filter(function (b) { return !b.dot; });
     chartStat.t0 = t0;
 
     /* --- the news: the fronts, or the last war, or the reserves --- */
@@ -7207,14 +7224,24 @@
      * tests check, and chartStat what the last frame drew and what it cost. */
     chartWheel: chartWheel, chartPointer: chartPointer, chartKeyZoom: chartKeyZoom,
     chartCentre: chartCentre, chartWhole: chartWhole, CHART_KEY_STEP: CHART_KEY_STEP,
-    chartStat: function () { return chartStat; },
+    /* A COPY: the frame overwrites the same object, and a test that held
+     * the last frame's reading and compared it with this one's was
+     * comparing an object with itself (it did, the first time). */
+    chartStat: function () {
+      var o = {}; for (var k in chartStat) o[k] = chartStat[k];
+      return o;
+    },
     chartPlot: function () { return chartPlot; },
     chart: {
       fit: chartFit, maxZoom: chartMaxZoom, xf: chartXf, toScreen: chartToScreen,
       toGalaxy: chartToGalaxy, dot: chartDot, clamp: chartClamp, zoomAt: chartZoomAt,
       pan: chartPan, centreOn: chartCentreOn, inPlot: chartInPlot, pick: chartPick,
       scaleBar: chartScaleBar, edge: chartEdge, labels: chartLabels,
-      MAX_PX_PER_LY: CHART_MAX_PX_PER_LY
+      MAX_PX_PER_LY: CHART_MAX_PX_PER_LY,
+      /* The last territory field built, and what it was built from, so a
+       * test can check a zoomed-in border against the galaxy itself. */
+      territory: function () { return terrCache; },
+      TERRITORY_REACH_LY: TERRITORY_REACH_LY, TERRITORY_CELL: TERRITORY_CELL
     }
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = global.Screens;
