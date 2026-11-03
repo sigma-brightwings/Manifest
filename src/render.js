@@ -14806,22 +14806,24 @@
    * gearMeshes), is clipped to every cell it crosses and the cell keeps the
    * lowest point of what is left, so nothing slips between samples. The
    * question is asked over the whole disc a walker fills (clearAt), and the
-   * rules are three heads, each an eye plus HEAD_MARGIN: under STAND_CLEAR
-   * you are made to crouch, under CROUCH_CLEAR to crawl, and under
-   * CRAWL_CLEAR you cannot go. The crawl is the old squash kept, so the
-   * Crawler's lift, which comes down in a pit walled by 0.66 m skirts, is
-   * not a cell - but the eye is now held under her skin (main.js
-   * bellyHead) instead of being let down to 0.4 m wherever it was. */
+   * rules are two heads, each an eye plus HEAD_MARGIN: under STAND_CLEAR
+   * you are made to crouch, and under CROUCH_CLEAR she is SOLID - you cannot
+   * go. (A first pass kept the old squash as a third, crawling, head at
+   * 0.6 m; dropped the same day: the walker has no crawl, and an eye 0.4 m
+   * off the floor under a belly is the clipping she reported, held a few
+   * centimetres further off.) Inside the ramp's corridor the ramp's own
+   * rule holds instead (headroom over its face), and the eye is held under
+   * her skin wherever you are (main.js bellyHead), so it never ends up
+   * inside her while a crouch eases down. */
   var HEAD_R = 0.3;                        // m: the walker's own radius (walk.js RADIUS)
   var HEAD_MARGIN = 0.18;                  // m over the eye: the near plane's corners, and skin
   var STAND_CLEAR = 1.65 + HEAD_MARGIN;    // m: walk.js EYE, standing
   /* A crouched eye is 1.10 m (walk.js CROUCH_EYE) and the posed body's is
    * 1.16 (selfFigure); the larger, so the body's own head clears too. */
   var CROUCH_CLEAR = 1.16 + HEAD_MARGIN;
-  /* On hands and knees: an eye 0.42 m up, which makes this the 0.6 m the
-   * old OUTSIDE_CROUCH was. */
-  var CRAWL_CLEAR = 0.42 + HEAD_MARGIN;
-  var OUTSIDE_CROUCH = CRAWL_CLEAR;
+  /* Below a crouched head she is solid. Kept under its old export name
+   * (it was 0.6 m, "nobody gets under her - not even on hands and knees"). */
+  var OUTSIDE_CROUCH = CROUCH_CLEAR;
   /* The ramp's rails: no stepping off its side once it is more than a
    * kerb above the floor, and the walker's middle kept a body's width in
    * from them (or its head is in the bay's wall). */
@@ -15039,12 +15041,52 @@
     function headroom(x, z) {
       return onRampAt(x, z) ? clearAt(x, z, HEAD_R, above) - rampSurface(z) : clearAt(x, z);
     }
+    /* THE WAY OUT FROM A LIFT'S PIT (2026-11-03). A lift is the one way
+     * off a hull whose deck is too high for a ramp, and on the Crawler it
+     * comes down into a pit: 1.80 m of headroom between her tracks, closed
+     * fore and aft by cross-members 0.66 m off the ground and 2.5-3.5 m
+     * deep (measured: the fore one z -9.5 to -12.0, the aft -75.0 to -78.0,
+     * in her metres). Her model has no door in them. With her hull solid
+     * under a crouched head that pit was a cell with a lift in it - the
+     * walk-out test found her the only hull trapped. So a lift has a LANE:
+     * its own width plus a walker's radius, straight out from the platform
+     * the shorter way to open ground, and in it you duck under the member
+     * (blocked only under DUCK_CLEAR, the eye held under her skin by main.js
+     * bellyHead as everywhere). Nowhere else is that low allowed. Reported
+     * as a model issue rather than papered over: a door in her skirt is the
+     * real answer. `lane` is null where the lift's foot is already open. */
+    var DUCK_CLEAR = 0.42 + HEAD_MARGIN;  // the old squash's floor (OUTSIDE_CROUCH was 0.6): an eye 0.42 m up, and its margin
+    var lane = null;
+    if (rp.mode === 'lift') {
+      var lx0 = rp.x0 - HEAD_R, lx1 = rp.x1 + HEAD_R, lxc = (rp.x0 + rp.x1) / 2;
+      var scan = function (dir) {
+        var low = false, z0 = dir < 0 ? footZ : rp.hinge;
+        for (var dz = 0; dz < reach; dz += STEP / 2) {
+          var z = z0 + dir * dz, c = Math.min(clearAt(lx0 + HEAD_R, z), clearAt(lxc, z), clearAt(lx1 - HEAD_R, z));
+          /* Something even a duck will not pass (a leg, a wall): no lane
+           * this way - the Tanker's and the Carrier's lifts met their own
+           * gear 5 cm and 0 cm off the floor, and need no lane anyway. */
+          if (c < DUCK_CLEAR) return null;
+          if (c < CROUCH_CLEAR) low = true;
+          else if (low) return { len: dz, z: z };
+          if (c === Infinity) return low ? { len: dz, z: z } : { len: 0, z: z };
+        }
+        return null;
+      };
+      var fw = scan(1), bk = scan(-1);
+      var best = [fw, bk].filter(function (q) { return q; }).sort(function (p0, p1) { return p0.len - p1.len; })[0];
+      if (best && best.len > 0) {
+        lane = best === fw ? { x0: lx0, x1: lx1, z0: footZ - 0.3, z1: best.z + HEAD_R }
+                           : { x0: lx0, x1: lx1, z0: best.z - HEAD_R, z1: rp.hinge + 0.3 };
+      }
+    }
+    function inLane(x, z) { return !!lane && x >= lane.x0 && x <= lane.x1 && z >= lane.z0 && z <= lane.z1; }
     var plan = {
       kind: 'outside', outside: true, rooms: rooms, doors: [], items: items,
-      spawn: { x: (rp.x0 + rp.x1) / 2, z: footZ - 1.2, yaw: Math.PI }, floorY: gy,
+      spawn: { x: (rp.x0 + rp.x1) / 2, z: footZ - 1.2, yaw: Math.PI }, floorY: gy, lane: lane, inLane: inLane,
       ramp: rp, ship: d.plan, clearAt: clearAt, skinAt: skinAt, headroom: headroom, rampSurface: rampSurface,
       footZ: footZ, field: field,
-      HEAD_MARGIN: HEAD_MARGIN, STAND_CLEAR: STAND_CLEAR, CROUCH_CLEAR: CROUCH_CLEAR, CRAWL_CLEAR: CRAWL_CLEAR,
+      HEAD_MARGIN: HEAD_MARGIN, STAND_CLEAR: STAND_CLEAR, CROUCH_CLEAR: CROUCH_CLEAR,
       blocked: function (x, z) {
         var t = (ship.airlock && ship.airlock.ramp) || 0;
         var inSpan = z >= footZ - 0.3 && z <= rp.hinge;
@@ -15057,7 +15099,8 @@
          * on it, the bay overhead is open up into her airlock, and a head
          * that would not clear is stopped like anywhere else. */
         if (onRampAt(x, z)) return t < 0.999 || headroom(x, z) < CROUCH_CLEAR;   // nobody crawls up a ramp
-        return clearAt(x, z) < CRAWL_CLEAR;
+        if (inLane(x, z)) return clearAt(x, z) < DUCK_CLEAR;
+        return clearAt(x, z) < CROUCH_CLEAR;
       }
     };
     var t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();

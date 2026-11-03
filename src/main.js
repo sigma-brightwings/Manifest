@@ -11027,7 +11027,7 @@
    * head, and the top of the ramp, where you are aboard. */
   function hangarWalk() {
     var w = G.walk, p = w.plan, H = p.hangar, SD = global.ShipDeck;
-    w.mustCrouch = false; w.crawl = false; w.eyeDy = 0; w.dy = 0;
+    w.mustCrouch = false; w.eyeDy = 0; w.dy = 0;
     if (!H || !SD || !berthHangar()) return;
     var lp = lockPlan(), rp = lp && lp.ramp, op = Render.outsidePlan(G.ship);
     if (!rp || !op) return;
@@ -11051,9 +11051,10 @@
     bellyHead(w, op, q.x, q.z);
   }
   /* UNDER HER BELLY (2026-11-03): down on your haunches where a standing
-   * head will not clear, on hands and knees where a crouched one will not,
-   * and the eye held a near plane under her skin whatever you are doing -
-   * the crouch eases, and a walk into lower skin is faster than the ease.
+   * head will not clear (lower than a crouched one, outsidePlan.blocked
+   * has already stopped you), and the eye held a near plane under her skin
+   * whatever you are doing - the crouch eases, and a walk into lower skin
+   * is faster than the ease.
    * `w.dy` is what you stand on above her floor; `x, z` in her metres. */
   function bellyHead(w, op, x, z) {
     if (!op || !op.headroom) return;
@@ -11061,7 +11062,6 @@
     if (!(head < Infinity)) return;
     var M = op.HEAD_MARGIN || 0.18;
     if (head < (op.STAND_CLEAR || 1.83)) w.mustCrouch = true;
-    if (head < (op.CROUCH_CLEAR || 1.34)) w.crawl = true;
     var eye = global.Walk.eyeOf(w);
     w.eyeDy = Math.min(0, head - M - eye);
   }
@@ -11352,7 +11352,7 @@
     var t = (walkHull().airlock && walkHull().airlock.ramp) || 0, fy = lockFloorY();
     var run = rp.mode === 'lift' ? 0 : rp.len * Math.cos(rp.angle * t);
     var inX = w.x >= rp.x0 && w.x <= rp.x1;
-    w.eyeDy = 0; w.mustCrouch = false; w.crawl = false;
+    w.eyeDy = 0; w.mustCrouch = false;
     if (rp.mode === 'lift') {
       /* Ridden, not walked (rideLift) - but on the ground round her the
        * belly rule holds as it does for a ramp. */
@@ -11732,7 +11732,10 @@
     if (typeof idx !== 'number') idx = a.berth = (mine + 1) % Math.max(1, cap);
     var bs = Sim.berthState(a.port, G.sys, G.t, idx);
     var s = a.ship;
-    s.pos = bs ? bs.pos : V.clone(G.ship.pos);
+    /* On her own gear's height over the berth, as Sim.updateDockedShip
+     * stands yours (standLiftKm, 2026-11-03). */
+    var upL = bs && bs.basis && bs.basis.up && Sim.standLiftKm ? Sim.standLiftKm(s) : 0;
+    s.pos = bs ? (upL ? V.addScaled(bs.pos, bs.basis.up, upL) : bs.pos) : V.clone(G.ship.pos);
     s.vel = bs ? bs.vel : V.clone(G.ship.vel || V.zero());
     s.fwd = G.ship.fwd; s.up = G.ship.up; s.right = G.ship.right;
   }

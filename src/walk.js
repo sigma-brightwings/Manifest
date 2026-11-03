@@ -714,9 +714,6 @@
     if (f || r) {
       var pace = keys.shift && w.crouch < 0.5 ? RUN : WALK;
       pace += (CROUCH - pace) * w.crouch;
-      /* On hands and knees under her skirts (main.js bellyHead sets
-       * w.crawl, 2026-11-03): half a crouch's pace. */
-      if (w.crawl) pace = Math.min(pace, CROUCH * 0.5);
       var sp = pace * dt / (f && r ? Math.SQRT2 : 1);
       var sy = Math.sin(w.yaw), cy = Math.cos(w.yaw);
       var dx = (sy * f + cy * r) * sp, dz = (cy * f - sy * r) * sp;

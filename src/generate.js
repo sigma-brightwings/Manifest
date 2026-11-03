@@ -2035,19 +2035,9 @@
     }
     return FLEET_HALF_H;
   }
-  /* HALF A METRE HIGHER ON HER GEAR (2026-11-03, Astra), at every berth
-   * and pad: render.js GEAR_LIFT stands a geared hull that much higher in
-   * her own frame (her hangar's floor, the ground by her, her ramp), and
-   * this is the same half metre in the port's frame, so the rails, the
-   * keel and every berth consumer that reads `standoff` move with her.
-   * Added OUTSIDE the cap: a small pad that keeps the fractional answer
-   * still lifts her, or the pad would be the one place she did not. Kept
-   * as its own constant, not a bump to GEAR_CLEAR_KM, so the two reasons
-   * stay separate. */
-  var STAND_LIFT_KM = 0.0005;
   function cappedStandoff(port, frac) {
     var r = port.radius || 1;
-    return Math.min(frac, (fleetHalfHeight() + GEAR_CLEAR_KM) / r) + STAND_LIFT_KM / r;
+    return Math.min(frac, (fleetHalfHeight() + GEAR_CLEAR_KM) / r);
   }
 
   function bayGeometry(port) {

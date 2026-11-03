@@ -194,8 +194,8 @@ console.log('--- her hull is solid over the hangar floor (2026-11-03) ---');
  * every point of her low enough to matter is spread over the walker's
  * radius. Then, on the hangar's own walking plan (walk.js armHangar, as
  * main.js arms it), at every hull in three hangars:
- *   - nowhere you can stand has her skin within a crawling head of the
- *     floor, ramp and hatch corridor aside (the ramp has its own rule);
+ *   - nowhere you can stand has her skin under a crouched head (eye plus
+ *     margin), ramp and hatch corridor aside (the ramp has its own rule);
  *   - the field never claims more room than the samples show, so the eye
  *     main.js holds under it (bellyHead) is never inside her;
  *   - up her ramp, a crouched head clears her the whole way;
@@ -204,7 +204,7 @@ console.log('--- her hull is solid over the hangar floor (2026-11-03) ---');
 var HP = ['port-3', 'port-11', 'port-27'];
 var hullErr = [], fieldErr = [], rampErr = [], floodErr = [], detErr = [], gearErr = [], nums = [];
 var tAll = Date.now();
-ids.forEach(function (id) {
+(process.env.HULLS ? process.env.HULLS.split(',') : ids).forEach(function (id) {
   var s = ship(id), hl = Combat.HULLS[id];
   s.airlock = { side: 'out', ramp: 1, want: 1, hatch: 1 };
   var op = R.outsidePlan(s), hs = R.hangarSpec(s);
@@ -255,7 +255,10 @@ ids.forEach(function (id) {
   });
   /* Her lowest sampled skin over the disc a walker at (x, z) fills; on her
    * ramp, what is above its face less a kerb (as the field asks). */
-  var RAD = 0.3;
+  /* A hair inside the field's 0.3 m disc: a skin point exactly on the
+   * rim is a floating-point coin toss for the cell beside it (measured on
+   * the Carrier, a wall's edge 0.300 m off). */
+  var RAD = 0.295;
   var sampled = function (x, z, cut) {
     var m = Infinity;
     for (var i = Math.floor((x - RAD) / BK); i <= Math.floor((x + RAD) / BK); i++)
@@ -270,7 +273,10 @@ ids.forEach(function (id) {
       }
     return m;
   };
-  var inCorr = function (x, z) { return x >= rp.x0 - 0.3 && x <= rp.x1 + 0.3 && z >= op.footZ - 0.6 && z <= rp.hinge + 0.3; };
+  /* The ramp and hatch corridor, and a lift's lane out of its pit
+   * (render.js outsidePlan `lane`: the Crawler's, under her cross-member). */
+  var inCorr = function (x, z) { return (x >= rp.x0 - 0.3 && x <= rp.x1 + 0.3 && z >= op.footZ - 0.6 && z <= rp.hinge + 0.3) || op.inLane(x, z); };
+  if (op.lane) nums.push(id + ' lift lane ' + (op.lane.z1 - op.lane.z0).toFixed(1) + ' m');
   /* Up her ramp: a crouched head clears her, by the samples. */
   var rampLo = Infinity;
   for (var rz = op.footZ; rz <= rp.hinge - 0.35; rz += 0.1) {
@@ -287,18 +293,19 @@ ids.forEach(function (id) {
     if (!plan.hangar) { hullErr.push(id + '@' + pid + ' no hangar'); return; }
     Walk.armHangar(plan, function () { return op; });
     var H = plan.hangar, room = plan.rooms.filter(function (r) { return r.id === H.room; })[0];
-    var G = Lm > 60 ? 0.5 : 0.25, bad = 0, over = 0, worst = '';
+    var G = Lm > 60 ? 0.5 : 0.25, bad = 0, over = 0, worst = '', overEg = '';
     for (var X = room.x0 + 0.3; X < room.x1 - 0.3; X += G) for (var Z = room.z0 + 0.3; Z < room.z1 - 0.3; Z += G) {
       var q = Walk.hangarToShip(H, X, Z);
       if (!Walk.standable(plan, X, Z)) { if (hi === 0) blockedN++; continue; }
       if (hi === 0) standN++;
       if (inCorr(q.x, q.z)) continue;
       var sk = sampled(q.x, q.z, -Infinity);
-      if (sk < op.CRAWL_CLEAR - 0.02) { bad++; if (!worst) worst = ' e.g. (' + q.x.toFixed(1) + ', ' + q.z.toFixed(1) + ') skin ' + sk.toFixed(2); }
-      if (op.headroom(q.x, q.z) > sk + 0.02) over++;
+      if (sk < op.CROUCH_CLEAR - 0.02) { bad++; if (!worst) worst = ' e.g. (' + q.x.toFixed(1) + ', ' + q.z.toFixed(1) + ') skin ' + sk.toFixed(2); }
+      var hrq = op.headroom(q.x, q.z);
+      if (hrq > sk + 0.02) { over++; if (!overEg) overEg = ' e.g. (' + q.x.toFixed(2) + ', ' + q.z.toFixed(2) + ') field ' + hrq.toFixed(2) + ' skin ' + sk.toFixed(2); }
     }
     if (bad) hullErr.push(id + '@' + pid + ' ' + bad + worst);
-    if (over && hi === 0) fieldErr.push(id + ' ' + over);
+    if (over && hi === 0) fieldErr.push(id + ' ' + over + overEg);
     /* Hatch to door: a flood on the walking plan from the top of her ramp. */
     var top = Walk.hangarToStation(H, (rp.x0 + rp.x1) / 2, rp.mode === 'lift' ? rp.hinge - 0.4 : rp.hinge - 0.45);
     var dr = plan.doors.filter(function (d0) {
@@ -336,7 +343,7 @@ ids.forEach(function (id) {
   nums.push(id + ' ' + keep.field.ms.toFixed(0) + 'ms/' + blockedN + 'blk/' + standN + 'ok/ramp' + rampLo.toFixed(2));
 });
 check('her legs are drawn down to the ground she is stood on, half a metre lower', !gearErr.length, gearErr.join(', '));
-check('nowhere you can stand in her hangar has her skin within a crawling head of you (ramp aside)', !hullErr.length, hullErr.slice(0, 6).join('; '));
+check('nowhere you can stand in her hangar has her skin under a crouched head (ramp and hatch aside)', !hullErr.length, hullErr.slice(0, 6).join('; '));
 check('her clearance never claims more room than her hull leaves, so the eye held under it is never in her', !fieldErr.length, fieldErr.join(', '));
 check('up her ramp a crouched head clears her all the way', !rampErr.length, rampErr.join(', '));
 check('from her hatch, down her ramp, you can walk to the hangar door, in every hangar', !floodErr.length, floodErr.slice(0, 6).join('; '));
