@@ -109,6 +109,9 @@ systems, "both"; and "Trading firms measure their traders by the quarter year."
   which it keeps and which is saved, so a reload trades exactly as no reload
   would have; its trades also dent the real market, so you see them at the
   counter.
+- **The FLEET tab's "1-11 of 13"** no longer sits under the FITTING button: it
+  goes on the budget bar when there is room before the tabs, and at the foot of
+  the list, right-aligned, when there is not.
 - **F5 → FLEET** shows each account (worth, this quarter, the review, last
   quarter's verdict and commission, cash) and each traded hull (her run, ETA,
   her runs and what she has made the account). Her hail reports the run.
@@ -119,18 +122,63 @@ systems, "both"; and "Trading firms measure their traders by the quarter year."
   hull already trading; withdrawals only at the office; more than the cash;
   under the floor while open; a deposit you cannot cover. A traded hull cannot
   be ordered, set to work or taken command of until she stands down.
-- **Measured, and the headline for Astra.** With the house's choice of goods,
-  a Talon on a 20,000 budget made a **median quarter of 1.65M (rating 1) to
-  3.35M (rating 5)**, and **no quarter lost money at any rating: 0 of 520**
-  (`tools/measure-firms.cjs quarters 30 4`). That is this economy's margins
-  (luxuries at ~1,600 cr/t, documented below) at the lanes' pace — about 18,000
-  cr a game day for one Talon, against a work order's few thousand. **That is a
-  balance question for Astra, not settled here**: the knobs are the turns at the
-  clamp and the commission. Cut to one
-  cheap good, 5% of quarters lose at ratings 4–5 (every one a quarter with
-  nothing worth carrying, profit exactly 0) and 7–11% at 1–3 (small real
-  losses, the worst −960). So one quarter as the verdict does not sack good
-  houses on real losses; it does sack an idle one, which is the rule as given.
+- **Running costs, out of the account** (Astra: "costs + market depth"). The
+  crew's wages by the day (`Crew.dailyWage`; the payroll at your desk stops
+  charging you for a hull from the hour she is handed over, and starts again
+  when she stands down); **a berth at every stop**, the fleet's own weekly fee
+  by the day at the clamp, a day at least (the old exemption is gone);
+  **insurance**, 0.08% of the hull's list price a day out of port and 2% of the
+  load per run; and the jump hydrogen as before. Reaction mass is not charged,
+  because nothing in the game charges for it. What the account cannot cover is
+  owed, taken from the next sale and counted off the equity; **an account with
+  nothing left closes** ("the account is empty"), so a house can still lose its
+  budget and never more.
+- **Market depth, for the house only.** Your trades at the counter are exactly
+  as they were. The house's own book carries its lots **4x as deep per tonne**
+  as yours and remembers them **16 days** against the market's 4. Both were
+  measured on the same seeds (`tools/measure-firms.cjs depth`, `sweep`):
+  - the slower memory makes a lane flatten: a run repeating a lane inside a
+    fortnight made 0.65x a fresh one (0.93x at 4 days), so the house rotates —
+    but on its own it barely moved a quarter (rating 4: 2.85M → 2.50M);
+  - the deeper dent is what cuts the quarter (rating 5: 2.16M, 1.51M, 1.30M at
+    x2, x3, x4), and it is where information shows: a house that prices its own
+    size against the shelf (rating 3 up) buys what the shelf will bear, one that
+    reads the top of the book (1 and 2) overbuys. With both, rating 1 loses in
+    about two quarters in three (62% and 69% in two samples) and rating 2 in
+    9–12%; with the dent alone (4 days) rating 1 lost in only 6%.
+- **An idle quarter is a warning, not the sack** (Astra: "warning only"). A
+  quarter with no run sold is said and journalled as a WARNING, no commission,
+  and the account carries on; only a quarter that lost money on its runs ends
+  it. **A second idle quarter in a row closes the account**: the markets cycle
+  over weeks, so one dead quarter can be bad luck on a narrow list, two is the
+  list or the house, and the account has paid her wages and berths throughout.
+  Measured on a one-cheap-good list, 72–78% of quarters are idle at every
+  rating: a list that is idle once is idle again.
+- **The numbers now** (`tools/measure-firms.cjs quarters 20 2`, each quarter a
+  fresh 50,000 cr account, a Talon, a rating-3 pilot, the house's choice of
+  goods; 32 quarters per line):
+
+  | | median quarter | p10 / p90 | quarters losing money on real runs |
+  |---|---|---|---|
+  | hand-flown Talon (baseline) | 19.9M | 15.9M / 25.7M | 0% |
+  | rating 1 | −24k | −42k / +20k | 69% |
+  | rating 2 | +82k | +11k / +263k | 9% |
+  | rating 3 | +1.04M | 0.84M / 1.26M | 0% |
+  | rating 4 | +1.24M | 0.98M / 1.49M | 0% |
+  | rating 5 | +1.36M | 1.06M / 1.56M | 0% |
+
+  **The baseline** is the same decision rule handed what a captain flying her
+  own Talon has (the analyser's prices now, the counter's own price, her own
+  footprint on the market's 4 days, the cruise drive's pace — 20x a hired
+  pilot's timetable — and an hour or two at each clamp, no wages to a house,
+  no commission), **flown end to end for the whole quarter: 623 runs, about 32k
+  each.** It is a ceiling, not what a player at the keys makes; a good house's
+  quarter is about 0.07x of it, roughly 40 hand-flown runs. Read against a
+  part-time player rather than that ceiling, a good house is a few days of
+  your own trading a quarter, on a hull you are not flying.
+  Cut to one cheap good, every rating idles in 72–78% of quarters and runs
+  at about −26k (the running costs); the hand-flown baseline on one good makes
+  a median of 4.4k.
 
 **Saves:** survive. One additive field, `firms` (the accounts and the houses'
 footprint), absent in an older career; a traded hull's run state rides on its
