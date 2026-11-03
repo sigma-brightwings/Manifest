@@ -147,6 +147,8 @@ require('../src/generate.js');
 require('../src/galaxy.js');
 require('../src/sim.js');
 require('../src/combat.js');
+/* The lead pip and the intercept assist's law (2026-11-03). */
+require('../src/intercept.js');
 /* The ships you own and are not flying. */
 /* The people aboard. */
 require('../src/crew.js');
