@@ -6163,6 +6163,66 @@
     p10.rideMover = best.node;
   }
 
+  /* THE TRANSFER THROUGH OPEN SPACE ONLY (2026-11-03). The route's corners
+   * are the converter's, pulled taut on a grid that let a line cross a
+   * carrier "deck plating and all" (Render.clearRoute has the measurement:
+   * 85 of 131 routed berths had the transfer or the lift through a surface).
+   * The transfer leg's polyline is handed to Render.clearRoute in pieces
+   * between its FIXED points — the car's foot or the L stand, the two stops
+   * of a ridden lift, the stand — so a ride stays a ride and a stand stays
+   * where the hull is parked, and only the legs that cross a surface are
+   * routed again.
+   *
+   * Her cross-section is the fleet's widest: every hull is drawn to the
+   * same 25 m span, and the widest of them (the runner, the heavy enforcer)
+   * fill all of it across, so a route clear for the fleet's half-width and
+   * half-height is clear for whichever hull is riding it. Cached per port,
+   * berth and model: the routing is a grid search, done once. */
+  var TRANSFER_CACHE = {};
+  var fleetHalfKm = null;
+  function fleetHalf() {
+    if (fleetHalfKm) return fleetHalfKm;
+    var R = global.Render, w = 0, h = 0;
+    var kinds = (R && R.HULL_ASSIGN) ? Object.keys(R.HULL_ASSIGN) : [];
+    for (var i = 0; i < kinds.length; i++) {
+      var sp = R.hullSpan(kinds[i]);
+      if (!sp) continue;
+      if (sp.w / 2 > w) w = sp.w / 2;
+      if (sp.h / 2 > h) h = sp.h / 2;
+    }
+    if (!(w > 0)) w = h = ((R && R.SHIP_LEN) || 0.025) / 2;
+    fleetHalfKm = { w: w, h: h };
+    return fleetHalfKm;
+  }
+  function clearTransfer(port, berth, p10) {
+    var R = global.Render;
+    if (!R || !R.clearRoute || !R.portModelFor) return;
+    var role = R.portModelFor(port), r = port.radius || 1;
+    var key = port.id + '#' + berth + '@' + role + '/' + r;
+    var T = ROUTED_TRANSFER_LEG;
+    var hit = TRANSFER_CACHE[key];
+    if (!hit) {
+      var pl = [p10[T]].concat(p10.through, [p10[T + 1]]);
+      var arr = pl.map(function (p) { return [p.x, p.y, p.z]; });
+      var fh = fleetHalf(), half = { w: fh.w / r, h: fh.h / r };
+      var k = p10.rideAt;
+      var pieces = (k >= 1 && k + 1 < arr.length)
+        ? [arr.slice(0, k + 1), arr.slice(k + 1)] : [arr];
+      var outA = [], rideAt = -1, blocked = 0;
+      for (var pi = 0; pi < pieces.length; pi++) {
+        var got = R.clearRoute(role, pieces[pi], half) || pieces[pi];
+        blocked += got.blocked || 0;
+        if (pi === 1) rideAt = outA.length - 1;     // the boarding stop
+        for (var q = 0; q < got.length; q++) outA.push(got[q]);
+      }
+      hit = TRANSFER_CACHE[key] = { pts: outA, rideAt: rideAt, blocked: blocked };
+    }
+    var pts = hit.pts;
+    p10.through = pts.slice(1, -1).map(function (p) { return { x: p[0], y: p[1], z: p[2] }; });
+    if (p10.rideAt >= 1) p10.rideAt = hit.rideAt;
+    p10.blocked = hit.blocked;
+  }
+
   /* The station's, in the same frame and the same five slots.
    *
    * THE MODELLED ROUTE is a straight line along the berth's own normal:
@@ -6236,6 +6296,7 @@
          * [foot].concat(through, [stand]), so via index i is polyline i + 1. */
         p10.rideAt = (!ride && route.ride && typeof route.ride[0] === 'number') ? route.ride[0] + 1 : -1;
         if (p10.rideAt >= 1) seatRide(port, p10, stand);
+        clearTransfer(port, berth || 0, p10);
         return p10;
       }
     }

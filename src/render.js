@@ -7913,7 +7913,11 @@
     function blank(m) { return m ? { v: m.v, f: [], c: m.c ? [] : null } : null; }
     var out = [], structure = { hull: blank(hull), interior: blank(inner) };
     for (var s2 = 0; s2 < berths.length; s2++) {
-      out.push({ hull: blank(hull), interior: blank(inner), mid: berths[s2].mid.slice() });
+      /* The berth anchor's own box rides along: it is the ROOM, and roomAt
+       * asks it (2026-11-03). Measured over every orbital model, 98-100% of
+       * the hull faces inside a berth's box are that berth's section. */
+      out.push({ hull: blank(hull), interior: blank(inner), mid: berths[s2].mid.slice(),
+                 box: { min: berths[s2].min.slice(), max: berths[s2].max.slice() } });
     }
     for (var b3 = 0; b3 < buckets.length; b3++) {
       var m3 = buckets[b3].mesh, kk = buckets[b3].key;
@@ -7996,6 +8000,47 @@
       reach += e * e;
     }
     return bestD < reach * 0.25 ? best : -1;
+  }
+
+  /* IN A ROOM, NOT MERELY NEAR ONE (2026-11-03). Astra, mid-transfer at
+   * Halden Dock: "station interiors in transitory spaces isn't drawn", and
+   * "shaft walls are not drawn during transit for the angled shafts". Her
+   * screenshot was a floor slab and two loose leaves against black: the
+   * cars (drawn first, always), and the room's own leaves, and nothing else.
+   *
+   * sectionAt answers "the nearest berth within a berth's diagonal", which
+   * is right for a hull parked in a bay and wrong for one riding a bore or
+   * crossing a hall between two of them: the bore is within reach of a bay,
+   * the bay's section was drawn, and with the inner gate shut behind her the
+   * renderer drew that bay ALONE. A section is a room (98-100% of the faces
+   * inside a berth's box are its section's, every orbital model measured),
+   * so a hull is in it only when it is inside that box. Everything else a
+   * transit crosses — the bores, the halls, the transfer decks — belongs to
+   * the structure, and the structure is only drawn with the whole hull.
+   *
+   * `pad` widens the box by that fraction of its own size on each axis, so
+   * a hull whose centre is on the stand at a box's edge still counts. */
+  function roomAt(role, p, pad) {
+    var S = portSections(role);
+    if (!S || !p) return -1;
+    var k = typeof pad === 'number' ? pad : 0.05;
+    /* Neighbouring alcoves' boxes can overlap (see sectionAt), so of the
+     * boxes that hold the point, the one whose berth is nearest. */
+    var best = -1, bestD = Infinity;
+    for (var i = 0; i < S.sections.length; i++) {
+      var sc = S.sections[i], bx = sc.box;
+      if (!bx) continue;
+      var inside = true;
+      for (var a = 0; a < 3 && inside; a++) {
+        var w = (bx.max[a] - bx.min[a]) * k;
+        if (p[a] < bx.min[a] - w || p[a] > bx.max[a] + w) inside = false;
+      }
+      if (!inside) continue;
+      var dx = p[0] - sc.mid[0], dy = p[1] - sc.mid[1], dz = p[2] - sc.mid[2];
+      var dd = dx * dx + dy * dy + dz * dz;
+      if (dd < bestD) { bestD = dd; best = i; }
+    }
+    return best;
   }
 
   /* ---- THE BERTH, AT THE SIZE OF THE SHIP -------------------------------
@@ -9477,6 +9522,298 @@
     var leaf = leafHit(role, a, b, doors);
     if (leaf && (!hull || leaf.t < hull.t)) return leaf;
     return hull;
+  }
+
+  /* ---- A ROUTE THROUGH OPEN SPACE ONLY (2026-11-03) ----------------------
+   *
+   * Astra, of a transfer at Halden Dock: "phased through the wall". The
+   * corners an S/M route rides between were found by glb2hulls on its
+   * 128-cell route grid and then string-pulled by line of sight on that
+   * same grid — and the grid lets a route cross a CARRIER's volume "deck
+   * plating and all", and is 80 m a cell at a 5 km station. So a pulled
+   * corner-to-corner line could run four kilometres straight through the
+   * cylinder's structure (cylinder-m b0, the second corner to the third),
+   * and measured over every orbital model with the hull's own half-extents,
+   * 85 of 131 berths had the transfer or lift leg through a surface.
+   *
+   * So each leg between two FIXED points (a stand, a car stop) is asked
+   * against the triangles, with the hull's cross-section: a line down the
+   * middle and one at each side and above and below, as berths.test sweeps
+   * it. A leg that is clear is kept exactly. A leg that is not is routed
+   * again, here, on a grid fitted to that leg and to the hull — a cell is
+   * three quarters of her half-width — over the triangles the collision
+   * uses, every surface grown by her half-extent, then pulled taut again
+   * by the exact test rather than by the grid. Doors do not block a route
+   * (they open for her) and nor do cars or hatches, which is how the art's
+   * own route was found.
+   *
+   * `pts` are [x, y, z] in the model's normalised frame; `half` is { w, h },
+   * the hull's half-width and half-height in the same units. Returns the
+   * new polyline, ends unchanged, and `.blocked`, the number of legs that
+   * could not be cleared (kept as they were). */
+  var ROUTE_DOORS = { open: 1, inner: 1, onlyMine: true, berthMid: [9, 9, 9] };
+  var ROUTE_CELLS = 6e5;               // the most cells one leg's grid may have
+
+  function routeOffsets(a, b, half) {
+    var d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    var L = Math.sqrt(dot3(d, d));
+    if (!(L > 1e-12)) return [[0, 0, 0]];
+    d = [d[0] / L, d[1] / L, d[2] / L];
+    /* Across: level and square to the leg. Up: the third axis. A leg
+     * straight up a shaft takes x for across. */
+    var r = [d[1], -d[0], 0], rl = Math.sqrt(r[0] * r[0] + r[1] * r[1]);
+    r = rl > 1e-6 ? [r[0] / rl, r[1] / rl, 0] : [1, 0, 0];
+    var u = [d[1] * r[2] - d[2] * r[1], d[2] * r[0] - d[0] * r[2], d[0] * r[1] - d[1] * r[0]];
+    var w = half.w * 0.9, h = half.h * 0.9;
+    return [[0, 0, 0],
+            [r[0] * w, r[1] * w, r[2] * w], [-r[0] * w, -r[1] * w, -r[2] * w],
+            [u[0] * h, u[1] * h, u[2] * h], [-u[0] * h * 0.6, -u[1] * h * 0.6, -u[2] * h * 0.6]];
+  }
+
+  function routeLegClear(role, a, b, half) {
+    var offs = routeOffsets(a, b, half);
+    for (var i = 0; i < offs.length; i++) {
+      var o = offs[i];
+      if (portSegmentHit(role, [a[0] + o[0], a[1] + o[1], a[2] + o[2]],
+                         [b[0] + o[0], b[1] + o[1], b[2] + o[2]], ROUTE_DOORS)) return false;
+    }
+    return true;
+  }
+
+  function routeLeg(role, a, b, half, grow, tight) {
+    var ix = portTriangles(role);
+    if (!ix) return null;
+    var span = Math.max(half.w, half.h);
+    var len = Math.sqrt(Math.pow(b[0] - a[0], 2) + Math.pow(b[1] - a[1], 2) + Math.pow(b[2] - a[2], 2));
+    var margin = Math.max(span * 12, len * (grow || 0.35));
+    var lo = [], hi = [];
+    for (var ax = 0; ax < 3; ax++) {
+      lo[ax] = Math.min(a[ax], b[ax]) - margin;
+      hi[ax] = Math.max(a[ax], b[ax]) + margin;
+    }
+    /* Three quarters of her half-width, unless the box would hold more than
+     * ROUTE_CELLS cells — a long leg at a big station is coarser, and the
+     * exact pull below is what says whether the result is clear. */
+    var vol = (hi[0] - lo[0]) * (hi[1] - lo[1]) * (hi[2] - lo[2]);
+    var cell = Math.max(half.w * 0.75, Math.cbrt(vol / ROUTE_CELLS));
+    var n = [], inv = 1 / cell;
+    for (ax = 0; ax < 3; ax++) n[ax] = Math.max(2, Math.ceil((hi[ax] - lo[ax]) * inv));
+    var NX = n[0], NY = n[1], NZ = n[2], NXY = NX * NY, NN = NXY * NZ;
+    var wall = new Uint8Array(NN);
+    function at(x, y, z) { return (z * NY + y) * NX + x; }
+
+    /* The surfaces, from the collision's own triangle bins over this box. */
+    var tri = ix.tri, TN = ix.n;
+    var b0 = [], b1 = [];
+    for (ax = 0; ax < 3; ax++) {
+      b0[ax] = Math.max(0, Math.floor((lo[ax] - ix.lo[ax]) * ix.inv[ax]));
+      b1[ax] = Math.min(TN - 1, Math.floor((hi[ax] - ix.lo[ax]) * ix.inv[ax]));
+    }
+    ix.mark++;
+    var mark = ix.mark;
+    for (var bx = b0[0]; bx <= b1[0]; bx++) for (var by = b0[1]; by <= b1[1]; by++) for (var bz = b0[2]; bz <= b1[2]; bz++) {
+      var bin = ix.bins[(bx * TN + by) * TN + bz];
+      if (!bin) continue;
+      for (var q = 0; q < bin.length; q++) {
+        var t0 = bin[q];
+        if (ix.seen[t0 / 3] === mark) continue;
+        ix.seen[t0 / 3] = mark;
+        var p0 = tri[t0], p1 = tri[t0 + 1], p2 = tri[t0 + 2];
+        var e = 0;
+        for (var k = 0; k < 3; k++) {
+          e = Math.max(e, Math.abs(p1[k] - p0[k]), Math.abs(p2[k] - p0[k]), Math.abs(p2[k] - p1[k]));
+        }
+        var ns = Math.min(512, Math.max(1, Math.ceil(e * inv * 2)));
+        for (var i = 0; i <= ns; i++) {
+          for (var j = 0; i + j <= ns; j++) {
+            var u = i / ns, v = j / ns;
+            var gx = Math.floor((p0[0] + (p1[0] - p0[0]) * u + (p2[0] - p0[0]) * v - lo[0]) * inv);
+            var gy = Math.floor((p0[1] + (p1[1] - p0[1]) * u + (p2[1] - p0[1]) * v - lo[1]) * inv);
+            var gz = Math.floor((p0[2] + (p1[2] - p0[2]) * u + (p2[2] - p0[2]) * v - lo[2]) * inv);
+            if (gx < 0 || gy < 0 || gz < 0 || gx >= NX || gy >= NY || gz >= NZ) continue;
+            wall[at(gx, gy, gz)] = 1;
+          }
+        }
+      }
+    }
+
+    /* Grown by her half-extent: steps to the nearest surface, out to `grow`. */
+    var reach = tight ? 0 : Math.max(1, Math.ceil(span * inv));
+    var dist = new Uint8Array(NN).fill(255), qu = new Int32Array(NN), qh = 0, qt = 0;
+    for (var w0 = 0; w0 < NN; w0++) if (wall[w0]) { dist[w0] = 0; qu[qt++] = w0; }
+    while (qh < qt) {
+      var c = qu[qh++], dn = dist[c] + 1;
+      if (dn > reach + 3) continue;
+      var cz = (c / NXY) | 0, cr = c - cz * NXY, cy = (cr / NX) | 0, cx = cr - cy * NX;
+      if (cx > 0 && dist[c - 1] > dn) { dist[c - 1] = dn; qu[qt++] = c - 1; }
+      if (cx < NX - 1 && dist[c + 1] > dn) { dist[c + 1] = dn; qu[qt++] = c + 1; }
+      if (cy > 0 && dist[c - NX] > dn) { dist[c - NX] = dn; qu[qt++] = c - NX; }
+      if (cy < NY - 1 && dist[c + NX] > dn) { dist[c + NX] = dn; qu[qt++] = c + NX; }
+      if (cz > 0 && dist[c - NXY] > dn) { dist[c - NXY] = dn; qu[qt++] = c - NXY; }
+      if (cz < NZ - 1 && dist[c + NXY] > dn) { dist[c + NXY] = dn; qu[qt++] = c + NXY; }
+    }
+    function cellOf(p) {
+      return [Math.max(0, Math.min(NX - 1, Math.floor((p[0] - lo[0]) * inv))),
+              Math.max(0, Math.min(NY - 1, Math.floor((p[1] - lo[1]) * inv))),
+              Math.max(0, Math.min(NZ - 1, Math.floor((p[2] - lo[2]) * inv)))];
+    }
+    var ca = cellOf(a), cb = cellOf(b);
+    var sq = at(ca[0], ca[1], ca[2]), gq = at(cb[0], cb[1], cb[2]);
+    /* The two ends are where the art put her (a stand, a car's stop) and
+     * stand a standoff off a floor, inside the grown margin by design: the
+     * cells round each end are hers. */
+    var endR = reach + 1;
+    function passable(q, x, y, z) {
+      if (dist[q] > reach && !wall[q]) return true;
+      if (wall[q]) return false;
+      return (Math.abs(x - ca[0]) <= endR && Math.abs(y - ca[1]) <= endR && Math.abs(z - ca[2]) <= endR) ||
+             (Math.abs(x - cb[0]) <= endR && Math.abs(y - cb[1]) <= endR && Math.abs(z - cb[2]) <= endR);
+    }
+
+    /* A*, 26 neighbours, a binary heap. A cell near a surface costs a
+     * little more, so the route keeps to the middle of a passage. */
+    var g = new Float32Array(NN).fill(Infinity), from = new Int32Array(NN).fill(-1);
+    var closed = new Uint8Array(NN);
+    var heap = [], hf = [];
+    function push(qq, f) {
+      heap.push(qq); hf.push(f);
+      var i2 = heap.length - 1;
+      while (i2 > 0) {
+        var p = (i2 - 1) >> 1;
+        if (hf[p] <= hf[i2]) break;
+        var tq = heap[p]; heap[p] = heap[i2]; heap[i2] = tq;
+        var tf = hf[p]; hf[p] = hf[i2]; hf[i2] = tf;
+        i2 = p;
+      }
+    }
+    function pop() {
+      var top = heap[0], last = heap.pop(), lf = hf.pop();
+      if (heap.length) {
+        heap[0] = last; hf[0] = lf;
+        var i3 = 0;
+        for (;;) {
+          var l = i3 * 2 + 1, r2 = l + 1, m = i3;
+          if (l < heap.length && hf[l] < hf[m]) m = l;
+          if (r2 < heap.length && hf[r2] < hf[m]) m = r2;
+          if (m === i3) break;
+          var tq2 = heap[m]; heap[m] = heap[i3]; heap[i3] = tq2;
+          var tf2 = hf[m]; hf[m] = hf[i3]; hf[i3] = tf2;
+          i3 = m;
+        }
+      }
+      return top;
+    }
+    function hcost(x, y, z) {
+      return Math.sqrt((x - cb[0]) * (x - cb[0]) + (y - cb[1]) * (y - cb[1]) + (z - cb[2]) * (z - cb[2]));
+    }
+    g[sq] = 0;
+    push(sq, hcost(ca[0], ca[1], ca[2]));
+    var found = false, steps = 0;
+    while (heap.length && steps < ROUTE_CELLS) {
+      var cq = pop();
+      if (closed[cq]) continue;
+      closed[cq] = 1; steps++;
+      if (cq === gq) { found = true; break; }
+      var z3 = (cq / NXY) | 0, r3 = cq - z3 * NXY, y3 = (r3 / NX) | 0, x3 = r3 - y3 * NX;
+      for (var dz = -1; dz <= 1; dz++) for (var dy = -1; dy <= 1; dy++) for (var dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy && !dz) continue;
+        var nx = x3 + dx, ny = y3 + dy, nz = z3 + dz;
+        if (nx < 0 || ny < 0 || nz < 0 || nx >= NX || ny >= NY || nz >= NZ) continue;
+        var nq = at(nx, ny, nz);
+        if (closed[nq] || !passable(nq, nx, ny, nz)) continue;
+        var step = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        var near = dist[nq] <= reach + 3 ? (reach + 4 - dist[nq]) * 0.3 : 0;
+        var ng = g[cq] + step + near;
+        if (ng < g[nq]) { g[nq] = ng; from[nq] = cq; push(nq, ng + hcost(nx, ny, nz)); }
+      }
+    }
+    if (!found) return null;
+    var cells = [];
+    for (var cc = gq; cc >= 0; cc = from[cc]) cells.push(cc);
+    cells.reverse();
+    var pts = cells.map(function (q3) {
+      var z4 = (q3 / NXY) | 0, r4 = q3 - z4 * NXY, y4 = (r4 / NX) | 0, x4 = r4 - y4 * NX;
+      return [lo[0] + (x4 + 0.5) * cell, lo[1] + (y4 + 0.5) * cell, lo[2] + (z4 + 0.5) * cell];
+    });
+    pts[0] = a.slice(); pts[pts.length - 1] = b.slice();
+    /* Pulled taut by the EXACT test, so a corner is dropped only where the
+     * hull's whole cross-section clears the triangles between its
+     * neighbours. Binary search on the furthest visible cell keeps it to a
+     * few dozen tests a leg. */
+    var outp = [pts[0]], i5 = 0;
+    while (i5 < pts.length - 1) {
+      var loI = i5 + 1, hiI = pts.length - 1, bestI = i5 + 1;
+      if (routeLegClear(role, pts[i5], pts[hiI], half)) bestI = hiI;
+      else {
+        while (loI <= hiI) {
+          var mid = (loI + hiI) >> 1;
+          if (routeLegClear(role, pts[i5], pts[mid], half)) { bestI = mid; loI = mid + 1; }
+          else hiI = mid - 1;
+        }
+      }
+      outp.push(pts[bestI]);
+      i5 = bestI;
+    }
+    return outp;
+  }
+
+  /* THE CHEAP WAY ROUND FIRST: a corner cut by the converter's pull is
+   * usually a diagonal across the corner of a doorway or a deck edge, and
+   * the way round it is one of the six axis-ordered dog-legs between the
+   * two ends (along x then y then z, and the other five orders), or that
+   * again on either half. Tried shortest first, each judged exactly. */
+  function dogLeg(role, a, b, half, depth) {
+    var orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+    var tries = [];
+    for (var o = 0; o < orders.length; o++) {
+      var c1 = a.slice(), c2;
+      c1[orders[o][0]] = b[orders[o][0]];
+      c2 = c1.slice();
+      c2[orders[o][1]] = b[orders[o][1]];
+      var pts = [a, c1, c2, b].filter(function (p, i, arr) {
+        return i === 0 || Math.abs(p[0] - arr[i - 1][0]) + Math.abs(p[1] - arr[i - 1][1]) +
+                          Math.abs(p[2] - arr[i - 1][2]) > 1e-9;
+      });
+      tries.push(pts);
+    }
+    for (var t = 0; t < tries.length; t++) {
+      var ok = true;
+      for (var k = 1; k < tries[t].length && ok; k++) ok = routeLegClear(role, tries[t][k - 1], tries[t][k], half);
+      if (ok) return tries[t];
+    }
+    if (depth > 0) {
+      /* Halve it, at the level of either end, and try each half. */
+      var mids = [[(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, a[2]], [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, b[2]],
+                  [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]];
+      for (var m = 0; m < mids.length; m++) {
+        var h1 = routeLegClear(role, a, mids[m], half) ? [a, mids[m]] : dogLeg(role, a, mids[m], half, depth - 1);
+        if (!h1) continue;
+        var h2 = routeLegClear(role, mids[m], b, half) ? [mids[m], b] : dogLeg(role, mids[m], b, half, depth - 1);
+        if (h2) return h1.concat(h2.slice(1));
+      }
+    }
+    return null;
+  }
+
+  function clearRoute(role, pts, half) {
+    if (!pts || pts.length < 2 || !half) return pts;
+    var out = [pts[0]], blocked = 0;
+    for (var i = 1; i < pts.length; i++) {
+      var a = pts[i - 1], b = pts[i];
+      if (routeLegClear(role, a, b, half)) { out.push(b); continue; }
+      /* Her clearance first; failing that a wider box; failing that the
+       * bare surfaces, with the exact pull still the judge. */
+      var leg = dogLeg(role, a, b, half, 1) || routeLeg(role, a, b, half, 0.35);
+      if (leg) {
+        for (var c = 1; c < leg.length; c++) {
+          if (!routeLegClear(role, leg[c - 1], leg[c], half)) { leg = null; break; }
+        }
+      }
+      if (!leg) { blocked++; out.push(b); continue; }
+      for (var k = 1; k < leg.length; k++) out.push(leg[k]);
+    }
+    out.blocked = blocked;
+    return out;
   }
 
   var SOLID_N = 48;
@@ -15825,8 +16162,11 @@
     portSections: portSections,
     leafHit: leafHit,
     sectionAt: sectionAt,
+    roomAt: roomAt,
     portTriangles: portTriangles,
     portSegmentHit: portSegmentHit,
+    clearRoute: clearRoute,
+    routeLegClear: routeLegClear,
     berthDeck: berthDeck,
     berthBoom: berthBoom,
     boomLimit: boomLimit,

@@ -7552,9 +7552,19 @@
     if (!basis) return null;
     var r = port.radius || 1;
     var rel = V.sub(G.ship.pos, basis.entrance.pos);
-    var sec = Render.sectionAt(model, [V.dot(rel, basis.east) / r,
-                                       V.dot(rel, basis.north) / r,
-                                       V.dot(rel, basis.up) / r]);
+    var loc = [V.dot(rel, basis.east) / r, V.dot(rel, basis.north) / r, V.dot(rel, basis.up) / r];
+    /* IN A ROOM, NOT NEAR ONE (2026-11-03). Flying or carried through the
+     * station, a compartment is only the answer when the hull is inside
+     * that berth's own room (Render.roomAt). sectionAt's "nearest berth in
+     * reach" handed back a bay for a hull riding the bore beside it, and
+     * with the inner gate shut drawStationModel then drew that bay alone:
+     * Astra's mid-transfer void at Halden Dock, a car and two leaves in
+     * black space. Out of every room, the whole hull is drawn. */
+    if (Render.roomAt) {
+      var room = Render.roomAt(model, loc);
+      return room >= 0 ? room : null;
+    }
+    var sec = Render.sectionAt(model, loc);
     return sec >= 0 ? sec : null;
   }
 
@@ -17006,7 +17016,17 @@
           var underStreet = !!(b.surface && G.cutaway && G.cutaway.port === b &&
                                eyeUnderStreet(b, cam));
           if (underStreet) indoors = true;
-          if (indoors) Render.setIndoors(true);
+          /* AND IN HER METAL WITH THE CUT ON (2026-11-03): an orbital cut
+           * whose eye is still inside the station (cutawayFor's `outside`
+           * false) is a view of rooms and corridors, not of a hull in the
+           * sun. Lit by the sun, every interior wall facing away from it was
+           * near-black on black: the other half of "station interiors in
+           * transitory spaces isn't drawn". */
+          /* The light only: what is drawn, and the lamps and traffic that
+           * `indoors` keeps out of a room, are as they were. */
+          var roomLit = indoors || !!(G.cutaway && G.cutaway.port === b && !G.cutaway.surface &&
+                                      !G.cutaway.outside);
+          if (roomLit) Render.setIndoors(true);
           /* And the keyhole, round this station's meshes only — see
            * cutawayFor. Cleared after the outworks below. */
           var cut = (G.cutaway && G.cutaway.port === b && Render.setCutaway &&
@@ -17148,7 +17168,7 @@
             Render.drawStationInterior(ctx, cam, frame, b.radius, sun,
                                        model, b.color);
           }
-          if (indoors) Render.setIndoors(false);
+          if (roomLit) Render.setIndoors(false);
           Render.setAccent(null);
           /* Beacons and approach strings on an orbital dock — see
            * Render.drawStationLights. From outside only, and early: like
