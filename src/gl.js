@@ -4401,7 +4401,25 @@
       var mq = meshQueue[i];
       /* GL.queueWindows: the world so far is finished, its depth is
        * dropped, and the windows go in depth-only (see there). */
-      if (mq.clearDepth) { gl.depthMask(true); gl.clear(gl.DEPTH_BUFFER_BIT); continue; }
+      if (mq.clearDepth) {
+        /* THE REST OF THE WORLD FIRST (2026-11-03): the tears, the bolts
+         * and the rings are passes of their own after this one, and once
+         * the depth below is cleared and the deck drawn they would be
+         * tested against the deck and the panes — so a planet's ring and a
+         * storm's lightning were never seen through the tube's windows,
+         * while the outside view drew both. Drawn here, while the depth
+         * is still the world's, they are in the picture the panes show;
+         * their queues are then emptied so GL.end does not draw them a
+         * second time over the room. */
+        drawTears(); drawBolts(); drawRings();
+        tearQueue.length = 0; boltQueue.length = 0; ringQueue.length = 0;
+        /* drawRings leaves alpha writes off (the glow mask), and the room
+         * after this must write them as the mesh pass always has. */
+        gl.colorMask(true, true, true, true);
+        gl.depthMask(true); gl.clear(gl.DEPTH_BUFFER_BIT);
+        meshPassBegin(mq.cam);
+        continue;
+      }
       if (mq.depthOnly) {
         gl.colorMask(false, false, false, false);
         drawQueuedMesh(mq);
@@ -4428,10 +4446,11 @@
    * drawn through the room. Then the panes, depth only. Everything queued
    * after (the deck, her hull) is depth-tested against the panes alone: a
    * wall behind a pane is further than the pane and is not drawn, so the
-   * world's colour stays there. What the depth clear costs: the passes
-   * after the mesh pass (rings, tears, lightning bolts) are tested against
-   * the deck and the panes, so a planetary ring is not seen through a
-   * pane. A sea platform's sky rarely has one in it; noted, not fixed. */
+   * world's colour stays there. What the depth clear used to cost: the
+   * passes after the mesh pass (rings, tears, lightning bolts) were tested
+   * against the deck and the panes, so a planetary ring was not seen
+   * through a pane. Since 2026-11-03 drawMeshes draws them at the depth
+   * clear, before the room (see there). */
   GL.queueWindows = function (cam, frame, mesh, scale) {
     if (!gl || !meshProg || !mesh || !mesh.f || !mesh.f.length) return false;
     meshQueue.push({ clearDepth: true, cam: cam });
