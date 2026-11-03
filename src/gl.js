@@ -741,13 +741,31 @@
     /* The sea's colour under the swell: the slope-tilted normal for the
      * sun, a glint, and the foam. `sea` is the shader's own sea mask, so
      * a coast in the disc keeps its land. */
+    /* THE GLINT, TONED (2026-11-02, second round). Looking toward a low sun
+     * it was a large white patch, blown out: a wide lobe (power 140, half
+     * width ~6 degrees), at full strength whatever the sun's height, added
+     * on top of the water and clipped. Now:
+     *   - a tight lobe (power 900, ~2 degrees): the sun's image on the
+     *     water, broken up by the swell's slopes into sparkle, not a sheet;
+     *   - Fresnel: water reflects 2% looking straight down and most of the
+     *     light at grazing, which is where a low sun's glitter path is;
+     *   - the sun's light through the air: its path is about 1/sin(height)
+     *     atmospheres long, so a low sun is dimmer and redder in its own
+     *     reflection, and below the horizon it has none;
+     *   - and screened onto the water, never added: it approaches white
+     *     without ever passing it, so nothing clips. */
     'vec3 seaShade(vec3 col, vec3 base, vec3 n, vec3 rd, float sea, vec4 sw) {',
     '  if (uSeaRel.w <= 0.0 || sea < 0.01) return col;',
     '  vec3 n2 = normalize(n - (sw.y * uSeaE + sw.z * uSeaN));',
     '  float l2 = smoothstep(-0.14, 0.30, dot(n2, uSunDir));',
     '  vec3 c2 = base * (0.055 + 0.95 * l2);',
-    '  float g = pow(max(0.0, dot(reflect(rd, n2), uSunDir)), 140.0) * l2;',
-    '  c2 += vec3(1.0, 0.96, 0.86) * g * 0.55;',
+    '  float mu = dot(n, uSunDir);',                       // sine of the sun's height over the flat sea
+    '  float tr = mu > 0.0 ? exp(-0.10 / max(mu, 0.015)) : 0.0;',
+    '  vec3 sunC = vec3(1.0, 0.96, 0.88) * mix(vec3(1.0, 0.62, 0.38), vec3(1.0), smoothstep(0.02, 0.45, mu));',
+    '  float fres = 0.02 + 0.98 * pow(1.0 - max(0.0, -dot(rd, n2)), 5.0);',
+    '  float g = pow(max(0.0, dot(reflect(rd, n2), uSunDir)), 900.0) * (0.15 + 0.85 * fres) * tr;',
+    '  vec3 hl = sunC * min(g * 2.2, 0.85);',
+    '  c2 = 1.0 - (1.0 - c2) * (1.0 - hl);',
     '  c2 = mix(c2, vec3(0.88, 0.93, 0.96) * (0.12 + 0.88 * l2), clamp(sw.w, 0.0, 1.0));',
     '  return mix(col, c2, sea);',
     '}'
@@ -1556,6 +1574,17 @@
      * is what the old note was protecting and is still true. */
     '    float thresh = mix(@THRESH_HI@, @THRESH_LO@, clamp(uCloud, 0.0, 1.0));',
     '    float mask = smoothstep(thresh, thresh + @EDGE@, cl);',
+    /* NOT ON THE GROUND UNDER YOU (2026-11-02, sea platform polish). The
+     * deck is painted onto the surface - right from orbit, where it is a
+     * film on the world - and so from under this world's own sky (uSkyA.w,
+     * the ground sky is engaged) it was painted on the sea round your feet:
+     * at a platform on a cloudy hour the swell turned white and streaked,
+     * like a snowfield, from 28 m up and from 300 m. That was most of "the
+     * sea toward a low sun is a white patch". Under the ground sky the deck
+     * is taken off the ground below 3 km of eye height and back by 10 km,
+     * where you are looking down on it. (The sky pass has no clouds in it,
+     * so from under them an overcast day now reads clear; noted.) */
+    '    if (uSkyA.w > 0.0) mask *= smoothstep(3.0, 10.0, sqrt(dot(oc, oc)) - uWorldRadius);',
     '    vec3 cloudCol = mix(vec3(0.90, 0.93, 0.97), uAtmoColor, 0.22);',
 
     /* ---- where the weather is actually happening -------------------- */
@@ -2225,6 +2254,7 @@
      * on the same frame. */
     'uniform float uIndoors;',
     'uniform vec3 uSkyFill;',     // the ground sky's light, as ambient; 0 off the ground
+    'uniform float uSheen;',      // a sun highlight, 0..1 (GL.setSheen); 0 for everything that never asked
     /* Whole-mesh opacity, multiplied into the per-face alpha. 1.0 is the
      * default and the opaque path short-circuits on it, so a hull costs one
      * float compare and nothing else. */
@@ -2424,6 +2454,15 @@
      * backlit against the sun, went near-black over a bright sea. Outdoors
      * only (the mix with `dim` below takes it away indoors). */
     '  lit += base * uSkyFill;',
+    /* SHEEN (2026-11-02): a sea platform's domes are painted sheet, and in
+     * full sun they read as flat white blobs - diffuse alone, at an albedo
+     * near white, says nothing about their curve. A Blinn highlight, only
+     * on meshes that ask for it (GL.setSheen; every hull and station is 0
+     * and unchanged), moves across the faceted petals as the eye does. */
+    '  if (uSheen > 0.0 && lam > 0.0) {',
+    '    float nh = max(0.0, dot(n, normalize(uSunDir + toCam)));',
+    '    lit += vec3(1.0, 0.97, 0.92) * pow(nh, 40.0) * uSheen;',
+    '  }',
     /* uIndoors above 1 is the same indoor lamp, brighter (2026-11-01):
      * another ship's cabin seen through her windows (render.js,
      * CABIN_SEEN_GLOW). At exactly 1, every room is lit as it was. */
@@ -2936,7 +2975,7 @@
       meshUni = uniforms(gl, meshProg, ['uModelRel', 'uRot', 'uScale',
                                         'uRight', 'uUp', 'uFwd', 'uFlen',
                                         'uCenterPx', 'uViewportPx', 'uSunDir',
-                                        'uNear', 'uInvLogRange', 'uIndoors', 'uSkyFill',
+                                        'uNear', 'uInvLogRange', 'uIndoors', 'uSkyFill', 'uSheen',
                                         'uGlow', 'uWind',
                                         'uAlpha', 'uCut', 'uCutR', 'uCutRim',
                                         'uCutBand', 'uCutUp', 'uCutCap',
@@ -3510,6 +3549,10 @@
    * wall by the sun in a room with no sun in it. main.js sets it around the
    * station it is inside and clears it after. */
   var indoorsFlag = 0;
+  /* A sun highlight for the meshes queued while it is set (the sea
+   * platform's domes, render.js drawSeaDomes); 0 for everything else. */
+  var sheenFlag = 0;
+  GL.setSheen = function (k) { sheenFlag = k > 0 ? k : 0; };
   GL.setIndoors = function (on) { indoorsFlag = !on ? 0 : (typeof on === 'number' ? on : 1); };
 
   /* THE CUTAWAY, for everything queued until it is cleared — the same
@@ -3576,6 +3619,7 @@
                       * are both queued on the same frame and only one of
                       * them is being looked at from within. */
                      indoors: indoorsFlag,
+                     sheen: sheenFlag,
                      /* Relative to the eye here, in doubles, for the same
                       * reason `rel` is. */
                      box: (cutFlag && cutFlag.box) ? cutFlag.box : null,
@@ -4317,10 +4361,48 @@
      * blending on would cost fill rate for nothing and would not make the
      * glass any more correct. */
     meshPassBegin(meshQueue[0].cam);
-    for (var i = 0; i < meshQueue.length; i++) drawQueuedMesh(meshQueue[i]);
+    for (var i = 0; i < meshQueue.length; i++) {
+      var mq = meshQueue[i];
+      /* GL.queueWindows: the world so far is finished, its depth is
+       * dropped, and the windows go in depth-only (see there). */
+      if (mq.clearDepth) { gl.depthMask(true); gl.clear(gl.DEPTH_BUFFER_BIT); continue; }
+      if (mq.depthOnly) {
+        gl.colorMask(false, false, false, false);
+        drawQueuedMesh(mq);
+        gl.colorMask(true, true, true, true);
+        continue;
+      }
+      drawQueuedMesh(mq);
+    }
     gl.bindVertexArray(null);
     gl.enable(gl.BLEND);
   }
+
+  /* ---- WINDOWS IN A ROOM DRAWN INTO THE WORLD (2026-11-02) ---------------
+   * The sea platform's covered tube: the deck walk.js lays out stands on
+   * the rig, and through its panes you see the rig, the sea and the sky.
+   * It is the cockpit's trick (queueCockpit, below) moved into the mesh
+   * pass, because the deck is a mesh-pass item there (her hangar shares
+   * the pass with her hull, and her rooms take the cockpit pass after).
+   *
+   * Everything queued before this call is the world, drawn from the
+   * walker's eye. Then the DEPTH is cleared - the rig's own shell, the hub
+   * and the dome stand all round the deck and some of their faces are
+   * nearer the eye than the deck's walls; left in the buffer they would be
+   * drawn through the room. Then the panes, depth only. Everything queued
+   * after (the deck, her hull) is depth-tested against the panes alone: a
+   * wall behind a pane is further than the pane and is not drawn, so the
+   * world's colour stays there. What the depth clear costs: the passes
+   * after the mesh pass (rings, tears, lightning bolts) are tested against
+   * the deck and the panes, so a planetary ring is not seen through a
+   * pane. A sea platform's sky rarely has one in it; noted, not fixed. */
+  GL.queueWindows = function (cam, frame, mesh, scale) {
+    if (!gl || !meshProg || !mesh || !mesh.f || !mesh.f.length) return false;
+    meshQueue.push({ clearDepth: true, cam: cam });
+    if (!GL.queueMesh(cam, frame, mesh, scale, ZERO3, 0)) return false;
+    meshQueue[meshQueue.length - 1].depthOnly = true;
+    return true;
+  };
 
   function meshPassBegin(cam) {
     gl.enable(gl.DEPTH_TEST);
@@ -4410,6 +4492,7 @@
         gl.uniform4f(meshUni.uPaint, 0, 0, 0, 0);
       }
       gl.uniform1f(meshUni.uIndoors, m.indoors);
+      gl.uniform1f(meshUni.uSheen, m.sheen || 0);
       var fill = groundSky && groundSky.fill;
       gl.uniform3f(meshUni.uSkyFill, fill ? fill[0] : 0, fill ? fill[1] : 0, fill ? fill[2] : 0);
       /* m.cam: this loop has no `cam` of its own, and until the canopy

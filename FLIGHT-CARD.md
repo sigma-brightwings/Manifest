@@ -189,6 +189,16 @@ Step out (as at any port) and you are on your pad under the dome: the door in th
 dome's wall leads into the 120 m tube, and the tube to the hub's concourse, the bar
 and the crew hall. The `` ` `` cutaway at a platform cuts a cone through the dome
 over you, the way a station's hull is cut, rather than a section through the street.
+The tube's windows are real: through them you see the swell, the sky, the other
+domes and the hub from where you are standing.
+
+**Speed near a world is against its ground.** Inside a world's air, or within 30 km
+of an airless one, the STATUS band reads `airspeed` (in the air) or `gnd speed` (on
+an airless world), and the speed box on the glass carries `AIR` or `GND` under the
+number: your speed against the ground turning under you, which is what you are about
+to touch. Sitting still over a pad reads about 0. Out of the air and higher than
+that, the band reads plain `speed`, against the world's centre, as an orbit is
+measured; the orbit map (`F2`) always shows that orbital `speed`.
 
 **11c. Set down away from a port** — on a claim, to plant a mining drone (`N`).
 Gear down (`Shift+G`), come in slow, and she stands on her gear. Touchdown shuts the

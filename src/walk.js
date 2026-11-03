@@ -350,10 +350,33 @@
      * least as big as her hangar wants and no bigger than the dome. */
     var inside = domeR * 1.41;
     dim = { w: Math.min(inside, Math.max(dim.w, 24)), d: Math.min(inside, Math.max(dim.d, 24)), h: Math.max(dim.h, 12) };
-    var x1 = tube.x0, br = room('berth0', 'berth', x1 - dim.w, x1, tz - dim.d / 2, tz + dim.d / 2, dim.h,
+    /* THE DECK PLAN STANDS WHERE THE RIG IS (2026-11-02, the see-through
+     * tube). Astra: "the walking view can show it through windows though"
+     * - and through a window the world has to be the right world: the sea,
+     * the other domes, the hub, from where the pane really is. So the plan
+     * is laid on the rig, not merely the right size for it. The pad's
+     * centre is where she stands (Gen.tableBerthOffset), and the tube runs
+     * from the drum, 0.98 of the dome's radius out from it, to the hub
+     * (render.js seaPlatformMesh draws it there). So the tube ends at the
+     * drum; the pad room is still the square inside the dome, centred on
+     * her (by her own origin, not her hull box: `origin`, main.js
+     * hangarSpec), and a short passage through the drum's doorway joins
+     * the two - 0.98 R from her centre to the tube, less the square's half.
+     * She faces the door, nose to the hub, the way the berth faces her
+     * (`noseIn`). */
+    var gap = Math.max(1, domeR * 0.98 - dim.w / 2);
+    var vest = room('domedoor', 'corridor', tube.x0 - gap, tube.x0, tz - 1.6, tz + 1.6, TUBE_H,
+                    'Through the drum  ·  to the pad');
+    door(tube, vest, 'x', tube.x0, tz, 3.2, TUBE_H - 0.2);
+    var x1 = vest.x0, br = room('berth0', 'berth', x1 - dim.w, x1, tz - dim.d / 2, tz + dim.d / 2, dim.h,
                                 'Pad ' + ((sea.mine || 0) + 1) + '  ·  under the dome');
-    br.size = hs ? sizeClass(hs.size) : 'M'; br.side = -1; br.index = 0; br.dome = true;
-    door(tube, br, 'x', x1, tz, 3.2, TUBE_H - 0.2);
+    br.size = hs ? sizeClass(hs.size) : 'M'; br.side = -1; br.index = 0; br.dome = true; br.noseIn = true;
+    door(vest, br, 'x', x1, tz, 3.2, TUBE_H - 0.2);
+    /* Only your own tube is glazed. The stubs stand for tubes the rig runs
+     * out at forty-five degrees (see above); where they are drawn they are
+     * inside the hub's block, so glass in them would look out at the inside
+     * of a wall. */
+    tube.glazed = true;
     var hangar = null, spawn = null;
     if (hs && hs.hangar) {
       hangar = placeShip(br, hs.hangar);
@@ -467,9 +490,14 @@
    * point of hers (sx, sz) are a rotation by theta and a shift apart:
    *   X = sx cos + sz sin + X0,   Z = -sx sin + sz cos + Z0,
    * and a heading turns by theta (yaw on the deck = her yaw + theta). */
+  /* `br.noseIn` (a sea pad): her nose toward the room's door instead, and
+   * centred on her own origin (`hg.origin`, where her position is) rather
+   * than her box - see seaLayout, where the plan has to stand on the rig. */
   function placeShip(br, hg) {
-    var th = br.side < 0 ? -Math.PI / 2 : Math.PI / 2, c = Math.cos(th), s = Math.sin(th);
+    var out = br.side < 0 ? -Math.PI / 2 : Math.PI / 2;
+    var th = br.noseIn ? -out : out, c = Math.cos(th), s = Math.sin(th);
     var b = hg.box, hcx = (b[0] + b[2]) / 2, hcz = (b[1] + b[3]) / 2;
+    if (br.noseIn && hg.origin) { hcx = hg.origin.x; hcz = hg.origin.z; }
     var RX = (br.x0 + br.x1) / 2, RZ = (br.z0 + br.z1) / 2;
     var H = { room: br.id, theta: th, cos: c, sin: s, gy: hg.gy || 0,
               X0: RX - (hcx * c + hcz * s), Z0: RZ - (-hcx * s + hcz * c) };
@@ -703,7 +731,7 @@
       }
     }
     ['x0', 'x1', 'z0', 'z1'].forEach(function (s) { wallQuads(plan, room, s, out, pal); });
-    if (room.kind === 'tube') tubeQuads(room, out, pal);
+    if (room.kind === 'tube') { tubeQuads(room, out, pal); tubeLights(room, out, pal); return; }
     /* Ceiling light strips down the long axis - not in a room lit by its
      * own lamps (dressing.js noStrip: the bar). */
     if (room.noStrip) return;
@@ -719,10 +747,24 @@
    * walker's collision is boxes), and this dresses it as the tube it is.
    * Chamfer panels across all four long edges make the section an
    * octagon; down both flanks runs a glazed strip, pane by pane between
-   * mullions, each pane the sea and sky outside it - painted, lit, a
-   * horizon across it - since the deck view draws no world through a wall.
-   * That is the one cheat here, and it is said. */
+   * mullions.
+   *
+   * THE PANES ARE WINDOWS, NOT PICTURES (second round, the same day). The
+   * first round painted each pane sea below and sky above, on the belief
+   * that the deck view could not draw the world through a wall. Astra:
+   * "the walking view can show it through windows though" - and it can:
+   * it is how the seat view has always seen out of a cockpit (gl.js
+   * queueCockpit). The panes are marked `pane` and left out of the deck's
+   * mesh (meshFor); panesFor gives them as their own mesh, which main.js
+   * draws depth-only before the deck, so the wall behind each fails the
+   * depth test and the world - drawn first, from the walker's eye - is
+   * what shows: the swell, the sky, the other domes, the hub.
+   *
+   * Without a GPU there is no world to see (Walk.draw is the whole
+   * picture), so the 2D path fills them with one flat glass colour -
+   * not a painted horizon pretending to be the sea. */
   var TUBE_CHAMFER = 0.9;      // m, across each long edge
+  var PANE_GLASS_2D = '#2a3b48';
   function tubeQuads(room, out, pal) {
     var alongX = (room.x1 - room.x0) >= (room.z1 - room.z0);
     var a0 = alongX ? room.x0 : room.z0, a1 = alongX ? room.x1 : room.z1;
@@ -739,15 +781,77 @@
       quad([P(a0, h - c, w + sd * IN), P(a1, h - c, w + sd * IN), P(a1, h - IN, w + sd * c), P(a0, h - IN, w + sd * c)], ceilC);
       quad([P(a0, c * 0.5, w + sd * IN), P(a1, c * 0.5, w + sd * IN), P(a1, IN, w + sd * c * 0.5), P(a0, IN, w + sd * c * 0.5)], floorC);
       /* The glazing: panes 2.6 m long, 0.35 m mullions, from 1.0 m to
-       * 2.25 m up; sky above the horizon at 1.55 m, sea below. */
-      var y0 = 1.0, yH = 1.55, y1 = Math.min(h - c - 0.1, 2.25), off = w + sd * IN * 2;
+       * 2.25 m up, each in a thin dark frame. Only a glazed tube (your
+       * own; seaLayout says why the stubs are not). */
+      if (!room.glazed) return;
+      var y0 = 1.0, y1 = Math.min(h - c - 0.1, 2.25), off = w + sd * IN * 2, fr = 0.05;
+      var frameC = shade(pal.wall, 0.45);
       for (var x = a0 + 1.0; x + 2.6 <= a1 - 1.0; x += 2.95) {
-        quad([P(x, yH, off), P(x + 2.6, yH, off), P(x + 2.6, y1, off), P(x, y1, off)], '#4a7fa6', true);
-        quad([P(x, y0, off), P(x + 2.6, y0, off), P(x + 2.6, yH, off), P(x, yH, off)], '#1f4a6b', true);
-        quad([P(x, yH - 0.015, off + sd * 0.002), P(x + 2.6, yH - 0.015, off + sd * 0.002),
-              P(x + 2.6, yH + 0.015, off + sd * 0.002), P(x, yH + 0.015, off + sd * 0.002)], '#9cc6dc', true);
+        out.push({ pts: [P(x, y0, off), P(x + 2.6, y0, off), P(x + 2.6, y1, off), P(x, y1, off)],
+                   col: PANE_GLASS_2D, pane: true });
+        /* The frame: four strips just proud of the wall round the pane, so
+         * the edge of the view is a window's edge and not a hole's. */
+        var fo = w + sd * IN * 1.5;
+        [[x - fr, y0 - fr, x + 2.6 + fr, y0], [x - fr, y1, x + 2.6 + fr, y1 + fr],
+         [x - fr, y0, x, y1], [x + 2.6, y0, x + 2.6 + fr, y1]].forEach(function (s) {
+          quad([P(s[0], s[1], fo), P(s[2], s[1], fo), P(s[2], s[3], fo), P(s[0], s[3], fo)], frameC);
+        });
       }
     });
+  }
+  /* THE TUBE'S LIGHTS (2026-11-02, second round). It had the generic
+   * room's ceiling strip: one self-lit plate half a metre wide and the
+   * whole 120 m long, which from one end of the tube is a hard white
+   * wedge converging on the far door - Astra's frames read it as a solid
+   * triangle, not a light. A tube is lit the way a real walkway is: a
+   * fitting every bay (one per pane, so the lights and the glazing keep
+   * the same rhythm), each a bright lens in two soft rings that step down
+   * to the ceiling's own colour, and a pool on the floor under it, lighter
+   * in the middle. A run of separate lamps reads as lamps at any distance
+   * and has no edge long enough to become a wedge. Flat-coloured faces
+   * only, so the 2D path draws the same thing. */
+  function tubeLights(room, out, pal) {
+    var alongX = (room.x1 - room.x0) >= (room.z1 - room.z0);
+    var a0 = alongX ? room.x0 : room.z0, a1 = alongX ? room.x1 : room.z1;
+    var mid = alongX ? (room.z0 + room.z1) / 2 : (room.x0 + room.x1) / 2, h = room.y1;
+    function P(al, y, ac) { return alongX ? [al, y, ac] : [ac, y, al]; }
+    function rect(cA, cW, hA, hW, y, col, lit) {
+      out.push({ pts: [P(cA - hA, y, cW - hW), P(cA + hA, y, cW - hW), P(cA + hA, y, cW + hW), P(cA - hA, y, cW + hW)],
+                 col: col, lit: !!lit, bias: lit ? -0.05 : -0.01 });
+    }
+    var outer = shade(pal.ceil, 1.28), inner = shade(pal.ceil, 1.75), lens = '#fff4e2';
+    var pool1 = shade(pal.floor, 1.12), pool2 = shade(pal.floor, 1.24);
+    /* On the pane rhythm of tubeQuads (2.95 m from 1 m in), at each
+     * pane's middle; a short stub gets one every bay the same way. */
+    for (var x = a0 + 1.0; x + 2.6 <= a1 - 1.0; x += 2.95) {
+      var cA = x + 1.3;
+      rect(cA, mid, 0.95, 0.42, h - 0.012, outer, true);
+      rect(cA, mid, 0.80, 0.22, h - 0.020, inner, true);
+      rect(cA, mid, 0.65, 0.09, h - 0.030, lens, true);
+      rect(cA, mid, 1.30, 1.30, 0.004, pool1, false);
+      rect(cA, mid, 0.80, 0.80, 0.008, pool2, false);
+    }
+  }
+
+  /* The panes of every glazed room, as one mesh in the plan's metres (the
+   * same { v, f, c } as meshFor), for main.js to draw depth-only: the
+   * windows the world is seen through. Null when there are none. */
+  function panesFor(plan) {
+    if (plan._panes !== undefined) return plan._panes;
+    var m = { v: [], f: [], c: [] };
+    plan.rooms.forEach(function (r) {
+      if (r.kind !== 'tube' || !r.glazed) return;
+      var qs = [];
+      tubeQuads(r, qs, palFor(plan, r));
+      qs.forEach(function (q) {
+        if (!q.pane) return;
+        var n = m.v.length;
+        q.pts.forEach(function (p) { m.v.push([p[0], p[1], p[2]]); });
+        for (var i = 1; i + 1 < q.pts.length; i++) { m.f.push([n, n + i, n + i + 1]); m.c.push('#000000'); }
+      });
+    });
+    plan._panes = m.f.length ? m : null;
+    return plan._panes;
   }
 
   function boxQuads(b, y0, y1, col, out) {
@@ -921,6 +1025,8 @@
     });
     var m = { v: [], f: [], c: [] };
     quads.forEach(function (q) {
+      /* A pane is a window, not a plate: see tubeQuads and panesFor. */
+      if (q.pane) return;
       var col = hexOf(q.col), lit = q.lit || col.toLowerCase() === '#e8f4ff' || (q.bias || 0) <= -0.04;
       var n = m.v.length;
       q.pts.forEach(function (p) { m.v.push([p[0], p[1], p[2]]); });
@@ -1058,7 +1164,7 @@
     hangarToShip: toShip, hangarToStation: toStation, HANGAR_MARGIN: HANGAR_MARGIN,
     layout: layout, standable: standable, roomAt: roomAt,
     start: start, step: step, look: look, facing: facing, draw: draw,
-    sizeClass: sizeClass, meshFor: meshFor
+    sizeClass: sizeClass, meshFor: meshFor, panesFor: panesFor
   };
 
   global.Walk = Walk;

@@ -4816,6 +4816,20 @@
       if (bs) {
         ship.pos = bs.pos;
         ship.vel = bs.vel;
+        /* ON A SEA PAD SHE TURNS WITH THE WORLD TOO (2026-11-02). Her
+         * attitude was set once, at dockShip, and held in absolute space
+         * while the berth went round with the world: a day later she stood
+         * on her tail on the pad. At a platform that also turns the deck
+         * she walks out onto - the walk's plan is drawn in her frame and
+         * stands on the rig only while she faces the hub (walk.js
+         * seaLayout) - so here she is re-faced every frame, the same way
+         * dockShip faces her. (Every other surface port has the same drift;
+         * left as it is, and said so in the CHANGELOG.) */
+        if (target.seaPlatform && bs.basis) {
+          ship.fwd = berthFacing(bs.basis, bs.off);
+          ship.up = V.clone(bs.basis.up);
+          ship.right = V.cross(ship.fwd, ship.up);
+        }
         return target;
       }
       // Fallback: no bay geometry available, so sit on the pad itself.
@@ -6550,6 +6564,64 @@
     return oe;
   }
 
+  /* ---- WHAT THE HUD'S SPEED IS MEASURED AGAINST (2026-11-02) -------------
+   * Coming down slowly onto a sea platform the STATUS band read 178 m/s:
+   * the speed was against the world's CENTRE, so a hull held still over a
+   * pad was "doing" the world's own spin at that latitude - the same cause
+   * as the contrail that streamed off a berthed ship (main.js
+   * airTrailStrength). Near a world, a pilot wants the speed against what
+   * they are about to touch.
+   *
+   * surfaceVelocity: the velocity of the ground (or the air turning with
+   * it) under `pos` - the body's own velocity plus omega x r, with omega
+   * built exactly as surfaceOffset builds it (the same period, tilt and
+   * az; the same default day for a world with no rotation given), so a
+   * point fixed to a port's ground has exactly the port's velocity.
+   *
+   * DISPLAY ONLY. Nothing that flies the ship reads this: the flight
+   * assist's lock, the vector assist's hover, the landing check and the
+   * autodock keep what they measure against (see the CHANGELOG entry, which
+   * says what each one is). */
+  function surfaceVelocity(body, pos, sys, t) {
+    var st = bodyState(body, sys, t);
+    var rot = body.rotation || { period: 86400, tilt: 0, phase: 0 };
+    var w = K.TAU / rot.period, ct = Math.cos(rot.tilt || 0), s = Math.sin(rot.tilt || 0);
+    var om = { x: 0, y: -s * w, z: ct * w };
+    if (rot.az) {
+      var ca = Math.cos(rot.az), sa = Math.sin(rot.az);
+      om = { x: ca * om.x - sa * om.y, y: sa * om.x + ca * om.y, z: om.z };
+    }
+    return V.add(st.vel, V.cross(om, V.sub(pos, st.pos)));
+  }
+
+  /* How near is near. Inside a world's air, always: there the speed that
+   * matters is through the air (and every atmosphere top measured over 60
+   * kawartha systems is 72-286 km up, well clear of any orbit you would
+   * rather read as an orbit). On an airless world, below SURFACE_SPEED_KM:
+   * the approach to a pad. Above that, the orbit - the number the ORBIT
+   * page and the map are about. Measured the same 60 systems: the 282
+   * airless worlds with a port turn their equators at 0 to 476 m/s
+   * (median 23), the 151 with air at up to 1,815 m/s (median 93) - near
+   * the ground the difference is real. 30 km is a pad approach; it is not
+   * an orbit anyone flies on purpose over the smallest of them (81 km). */
+  var SURFACE_SPEED_KM = 30;
+  /* { kms, frame: 'air' | 'ground' | 'orbit', body, ref } - `ref` the
+   * velocity it is against. `body` optional: the HUD's own reference body
+   * (the ladder's); otherwise the dominant one. `orbital` forces the
+   * orbital frame (the map). */
+  function hudSpeed(ship, sys, t, body, orbital) {
+    var dom = body || dominantBody(ship.pos, sys, t);
+    if (!dom) return null;
+    var st = bodyState(dom, sys, t);
+    var alt = V.dist(ship.pos, st.pos) - (dom.radius || 0);
+    var world = dom.kind === 'planet' || dom.kind === 'moon';
+    var air = world && !!dom.atmosphere && alt < dom.atmosphere.top;
+    var near = world && (air || alt < SURFACE_SPEED_KM);
+    if (orbital || !near) return { kms: V.len(V.sub(ship.vel, st.vel)), frame: 'orbit', body: dom, ref: st.vel };
+    var ref = surfaceVelocity(dom, ship.pos, sys, t);
+    return { kms: V.len(V.sub(ship.vel, ref)), frame: air ? 'air' : 'ground', body: dom, ref: ref };
+  }
+
   /* Put a ship into a clean circular orbit at a given altitude above a body —
    * used to place the player at the start, and handy for testing. */
   function circularOrbit(body, sys, t, altitude, inclination, phase) {
@@ -7390,7 +7462,7 @@
     beginPrediction: beginPrediction,
     stepPrediction: stepPrediction,
     ellipsePath: ellipsePath,
-    oscElements: oscElements,
+    oscElements: oscElements, surfaceVelocity: surfaceVelocity, hudSpeed: hudSpeed, SURFACE_SPEED_KM: SURFACE_SPEED_KM,
     orbitalBasis: orbitalBasis,
     orbitalBasisAt: orbitalBasisAt,
     makeNode: makeNode,

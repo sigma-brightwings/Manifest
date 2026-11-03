@@ -3358,8 +3358,25 @@
    * centre at (0, -R, 0), its tip at the crown. Two skins a metre apart so
    * it has an inside, painted, and a thin lit seam along its edges. */
   var SEA_PETAL_CACHE = {};
-  function seaPetalMesh(R, h) {
-    var key = R.toFixed(5) + '|' + h.toFixed(5);
+  /* THE PETALS' PAINT (2026-11-02, second round). In full sun the domes
+   * read nearly white and flat: the skin was #cfd6db, 0.81 of white, and
+   * under the sun plus the sky fill that is past 1 - clipped, every facet
+   * the same white. Now the plate is a mid grey-blue (#8c969e, about 0.58)
+   * so a sunlit face lands in range - the sky fill (gl.js uSkyFill) adds
+   * about a third again on every side - and every plate differs a little:
+   * each row of the leaf is a separate sheet (a few per cent lighter or
+   * darker by a fixed pattern, never Math.random - the same dome every
+   * time), the seams down a leaf's edges are darker, and the odd leaves
+   * (`odd`) are a shade off the even ones, the way panels from different
+   * batches weather. With the faceted normals and the highlight the
+   * domes ask for (GL.setSheen, drawSeaDomes), the curve shows. */
+  function petalShade(hex, f) {
+    var n = parseInt(hex.slice(1), 16);
+    var c = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(function (v) { return Math.max(0, Math.min(255, Math.round(v * f))); });
+    return '#' + c.map(function (v) { return ('0' + v.toString(16)).slice(-2); }).join('');
+  }
+  function seaPetalMesh(R, h, odd) {
+    var key = R.toFixed(5) + '|' + h.toFixed(5) + (odd ? '|b' : '');
     if (SEA_PETAL_CACHE[key]) return SEA_PETAL_CACHE[key];
     var m = emptyMesh();
     var NA = 7, NU = 4, half = Math.PI / SEA_PETALS;
@@ -3369,11 +3386,13 @@
       var rr = (R - inset) * Math.sin(alpha), zz = (h - inset) * Math.cos(alpha);
       return [rr * Math.sin(phi), rr * Math.cos(phi) - R, zz];
     }
-    /* Outer skin pale, inner skin dark; the seams between petals a shade
-     * darker so the dome reads as eight leaves even shut, and a hazard band
-     * round the foot where the leaves meet the drum. Colour per face, no
-     * extra geometry. */
-    [[0, '#cfd6db', '#9aa3aa', '#d9b23a'], [0.0012, '#59626a', '#4a5158', '#59626a']].forEach(function (skin) {
+    /* Outer skin, inner skin; the seams between petals a shade darker so
+     * the dome reads as eight leaves even shut, and a hazard band round
+     * the foot where the leaves meet the drum. Colour per face, no extra
+     * geometry. */
+    var leaf = odd ? 0.95 : 1;
+    var ROWS = [1.00, 0.95, 1.04, 0.97, 1.02, 0.94, 1.0];
+    [[0, '#8c969e', '#6c747b', '#d9b23a'], [0.0012, '#59626a', '#4a5158', '#59626a']].forEach(function (skin, inner) {
       var base = m.v.length;
       for (var i = 0; i <= NA; i++) {
         for (var j = 0; j <= NU; j++) {
@@ -3385,6 +3404,7 @@
         for (j = 0; j < NU; j++) {
           var a0 = base + i * (NU + 1) + j, a1 = a0 + 1, b0 = a0 + NU + 1, b1 = b0 + 1;
           var col = i === NA - 1 ? skin[3] : (j === 0 || j === NU - 1) ? skin[2] : skin[1];
+          if (!inner && i !== NA - 1) col = petalShade(col, leaf * ROWS[i] * (j === 2 ? 1.03 : 1));
           m.f.push([a0, b0, b1]); m.c.push(col);
           m.f.push([a0, b1, a1]); m.c.push(col);
         }
@@ -3407,13 +3427,14 @@
     var L = Gen && Gen.seaLayout ? Gen.seaLayout() : null;
     if (!L) return;
     var E = frame.right, N = frame.up, U = frame.fwd;
+    /* The petals' highlight (gl.js uSheen): painted sheet. */
+    if (global.GLWorld && global.GLWorld.setSheen) global.GLWorld.setSheen(0.22);
     for (var k = 0; k < L.pads.length; k++) {
       var p = L.pads[k];
       var open = Math.max(0, Math.min(1, (domes && domes[k]) || 0));
       /* Eased so the leaves start and stop gently, as a hydraulic ram does. */
       var th = SEA_PETAL_OPEN * (open * open * (3 - 2 * open));
       var ct = Math.cos(th), st = Math.sin(th);
-      var mesh = seaPetalMesh(p.dome, p.rise);
       var cx = p.x, cy = p.y, cz = L.deck + SEA_DRUM_KM;
       for (var i = 0; i < SEA_PETALS; i++) {
         var az = (i + 0.5) / SEA_PETALS * Math.PI * 2;
@@ -3429,9 +3450,10 @@
         var fy = V.add(V.scale(rad, ct), V.scale(U, -st));
         var fz = V.add(V.scale(rad, st), V.scale(U, ct));
         var fr = { pos: hinge, right: tan, up: fy, fwd: fz };
-        paintPart(ctx, cam, fr, mesh, SEA_MESH_SCALE, sunDir, tint);
+        paintPart(ctx, cam, fr, seaPetalMesh(p.dome, p.rise, i & 1), SEA_MESH_SCALE, sunDir, tint);
       }
     }
+    if (global.GLWorld && global.GLWorld.setSheen) global.GLWorld.setSheen(0);
   }
 
   function stationMeshes() {

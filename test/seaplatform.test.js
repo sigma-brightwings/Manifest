@@ -465,6 +465,44 @@ console.log('--- the walk ---');
     ships: [{ id: 'me', size: 'M', name: 'Test', current: true, hangar: hg }],
     others: [{ name: 'Overwater Barge', size: 'L', pad: 0 }, { name: 'Kestrel Barge', size: 'M', pad: 5 }] });
   check('the same platform walks the same', JSON.stringify(again.rooms) === JSON.stringify(plan.rooms));
+
+  /* THE TUBE'S WINDOWS SEE THE WORLD (2026-11-02, second round). Astra:
+   * "the walking view can show it through windows though". The panes are
+   * not painted sea and sky any more: they are left out of the deck's mesh
+   * and given as their own (Walk.panesFor), which main.js draws
+   * depth-only after the world (GLWorld.queueWindows). */
+  console.log('--- the tube\'s windows ---');
+  var PAINTED = ['#4a7fa6', '#1f4a6b', '#9cc6dc'];
+  var deck = Walk.meshFor(plan), panes = Walk.panesFor(plan);
+  check('your tube is glazed and the stubs are not', tube.glazed &&
+        plan.rooms.filter(function (r) { return r.kind === 'tube' && r.id !== 'tube'; }).every(function (r) { return !r.glazed; }));
+  check('the panes are their own mesh, not plates of the deck', !!(panes && panes.f.length >= 2 * 2 * 30),
+        panes ? (panes.f.length / 2) + ' panes' : 'none');
+  var painted = deck.c.filter(function (c) { return PAINTED.indexOf(String(c).replace('!', '').toLowerCase()) >= 0; }).length;
+  check('no pane is a fixed colour in the deck: no painted sea or sky', painted === 0, painted + ' painted faces');
+  /* Every pane lies inside the tube, on its long walls, 4 cm in, at
+   * window height - so it stands in front of the wall it is cut in. */
+  var inWall = panes && panes.v.every(function (p) {
+    var onWall = Math.abs(p[2] - (tube.z0 + 0.04)) < 1e-6 || Math.abs(p[2] - (tube.z1 - 0.04)) < 1e-6;
+    return onWall && p[0] >= tube.x0 && p[0] <= tube.x1 && p[1] >= 0.99 && p[1] <= 2.26;
+  });
+  check('every pane is in your tube\'s walls, just in front of them', !!inWall);
+  var src = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'main.js'), 'utf8');
+  check('the walk draws them as windows (queueWindows with panesFor)',
+        /Walk\.panesFor\(p\)/.test(src) && /GLWorld\.queueWindows\(cam, F, panes/.test(src));
+
+  /* THE PLAN STANDS ON THE RIG: she is at the pad's centre, 0.98 of the
+   * dome's radius from the tube's end (where the rig's tube meets the
+   * drum), on the tube's line, nose toward the hub. */
+  var hgO = { box: [-6, -14, 6, 12], hull: [-6, -12, 6, 12], height: 7, foot: { x: 0, z: -13 }, gy: 0, origin: { x: 0.4, z: -1.5 } };
+  var plan2 = Walk.layout('sea-test', { seed: 'kawartha', sea: spec, livery: 'civ',
+    ships: [{ id: 'me', size: 'M', name: 'Test', current: true, hangar: hgO }], others: [] });
+  var t2 = plan2.rooms.filter(function (r) { return r.id === 'tube'; })[0];
+  var at2 = Walk.hangarToStation(plan2.hangar, hgO.origin.x, hgO.origin.z);
+  var nose = Walk.hangarToStation(plan2.hangar, hgO.origin.x, hgO.origin.z + 10);
+  check('she stands at the pad\'s centre, the tube\'s end 0.98 R off', Math.abs((t2.x0 - at2.x) - dR * 0.98) < 1e-6 &&
+        Math.abs(at2.z - (t2.z0 + t2.z1) / 2) < 1e-6, (t2.x0 - at2.x).toFixed(2) + ' m, ' + (dR * 0.98).toFixed(2) + ' wanted');
+  check('nose toward the hub, down her tube', nose.x - at2.x > 9.99, (nose.x - at2.x).toFixed(2));
 })();
 
 module.exports = { platforms: platforms, sample: sampleSys };

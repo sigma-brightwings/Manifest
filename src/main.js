@@ -7619,6 +7619,9 @@
   function viewEnclosure() {
     var p = enclosedPort();
     if (p && G.cutaway && G.cutaway.port === p) return null;
+    /* On foot at a sea platform the deck is the room, and the world is
+     * outside its windows (seaWalkWorld): not a shed to suppress it. */
+    if (p && p.seaPlatform && seaWalkWorld()) return null;
     /* And with the cut off and the camera out past her walls, the station
      * is seen from outside, whole (see the cut-off branch below). */
     if (p && G.viewOutside === p) return null;
@@ -7958,7 +7961,12 @@
      * rock so nothing outside shows through the 2D layer's floor. Your own
      * ship, with the GPU room, is drawn as the world it sits in instead —
      * see drawShipWalkView. */
-    if (G.walk && flying() && !menuOpen() && global.Walk && !shipWalkGpu()) {
+    /* SEA PLATFORM TUBE (2026-11-02): on foot at a platform the world IS
+     * drawn first, from the walker's eye, and seen through the tube's
+     * panes. See seaWalkWorld. */
+    var seaWalk = !!(G.walk && flying() && !menuOpen() && seaWalkWorld());
+    if (seaWalk) buildSeaWalkCam(cam, w, h);
+    if (G.walk && flying() && !menuOpen() && global.Walk && !shipWalkGpu() && !seaWalk) {
       if (glLive()) { ctx.clearRect(0, 0, w, h); global.GLWorld.begin(ROCK_CLEAR); }
       /* With the GPU the station deck is drawn on the world layer like your
        * ship's rooms, so the people on it can stand in it (2026-10-25). */
@@ -7974,7 +7982,7 @@
      * the room was cut out of — so the background stops being black with
      * stars in it and becomes something you can believe is a wall. Without
      * this you look past the end of the hangar and see the galaxy. */
-    var buried = undergroundHost(cam);
+    var buried = seaWalk ? null : undergroundHost(cam);
     /* Pulled up out of a ground port through its section, the eye can sit
      * below street level and still be in the open — in the cut, not in the
      * rock — so the sky stays sky. */
@@ -8045,7 +8053,7 @@
        * chart, not a view. */
       /* (Not down the stair into a cockpit below her deck: shipdeck.js RAISED.) */
       var downStr = G.walk && G.walk.plan && G.walk.plan.raised && global.ShipDeck.floorAt(G.walk.plan, G.walk.x, G.walk.z) < -0.05;
-      if ((G.walk && (G.walk.outside || (G.walk.ship && (G.walk.dy || 0) < -0.3 && !downStr))) || G.eva) { mainCtx = ctx; ctx = offscreenCtx(w, h, ps); }
+      if ((G.walk && (G.walk.outside || (G.walk.ship && (G.walk.dy || 0) < -0.3 && !downStr))) || G.eva || seaWalk) { mainCtx = ctx; ctx = offscreenCtx(w, h, ps); }
       /* HOW MUCH LIGHTNING TO DRAW, decided by the clock rather than by
        * the weather. A stroke lasts about a tenth of a second; at warp the
        * frames are seconds or minutes apart, so sampling it would give
@@ -8415,6 +8423,8 @@
     }
 
     if (mainCtx) { ctx = mainCtx; mainCtx = null; }
+    /* On foot at a sea platform: the deck, over the world just drawn. */
+    if (seaWalk) { drawStationWalkGpu(ctx, cam, w, h); return; }
     /* In the suit: your own ship from outside, the hatches marked, and the
      * suit's own readout in place of the flight HUD (eva.js). */
     if (G.eva) { drawEvaView(ctx, cam, w, h); return; }
@@ -10741,8 +10751,12 @@
     var hx0 = hm.lo[0] * Lm - at[0], hx1 = hm.hi[0] * Lm - at[0];
     var hz0 = hm.lo[2] * Lm - at[2], hz1 = hm.hi[2] * Lm - at[2], top = hm.hi[1] * Lm - at[1];
     var foot = { x: (rp.x0 + rp.x1) / 2, z: op.footZ };
+    /* `origin`: where her position is, in the same metres (walk.js
+     * placeShip centres a sea pad's plan on it, so the plan stands on the
+     * rig). */
     return { box: [Math.min(hx0, foot.x - 1.5), Math.min(hz0, foot.z - 2.5), Math.max(hx1, foot.x + 1.5), hz1],
-             hull: [hx0, hz0, hx1, hz1], height: top - op.floorY, foot: foot, gy: op.floorY };
+             hull: [hx0, hz0, hx1, hz1], height: top - op.floorY, foot: foot, gy: op.floorY,
+             origin: { x: -at[0], z: -at[2] } };
   }
   /* The deck plan for this port with her hangar in it, built once per
    * port and ship (and per fleet here) and kept while she is berthed. */
@@ -12347,10 +12361,51 @@
     return !!(G.walk && !G.walk.ship && G.walk.plan && glLive() && global.Walk && global.Walk.meshFor &&
               global.GLWorld && global.GLWorld.queueCockpit && G.ship && G.ship.pos && G.ship.fwd);
   }
+  /* ==== SEA PLATFORM: THE WORLD THROUGH THE TUBE'S PANES (2026-11-02) ====
+   * Astra: "the walking view can show it through windows though". On foot
+   * at a platform, with the GPU, draw() does not clear to rock and paint
+   * the deck alone: it builds the walker's eye first (buildSeaWalkCam),
+   * draws the world from it exactly as it would from the chase camera -
+   * the sky over the platform, the swell, the rig, the other domes, the
+   * traffic on their pads - and then the deck over it
+   * (drawStationWalkGpu), whose tube panes are windows (GLWorld.
+   * queueWindows, walk.js panesFor). For that to be the RIGHT world the
+   * deck plan stands where the rig's own tube is (walk.js seaLayout,
+   * Sim.updateDockedShip), and the rig's own shell round your tube is cut
+   * away while you walk (seaWalkTubeCut) - from inside, its walls are
+   * between every pane and the sea. */
+  function seaWalkWorld() {
+    if (!stationWalkGpu() || !G.walk.plan.sea || !global.GLWorld.queueWindows || !global.Walk.panesFor) return false;
+    var p = dockedPort();
+    return !!(p && p.seaPlatform);
+  }
+  function buildSeaWalkCam(cam, w, h) {
+    cam.buildWalker(stationFrameFor(G.walk.plan), G.walk, (G.walk.dy || 0) + (G.walk.eyeDy || 0), w, h - FBAR_H);
+  }
+  /* Your pad's tube, as the shader's cut box (gl.js uBoxO): from the
+   * hub's wall to just inside the drum, wider than the tube's collars and
+   * from under the walking deck's floor to over the tube's crown, in the
+   * rig's frame (`frame`: right east, up north, fwd up, km). Null when
+   * you are not walking it. */
+  function seaWalkTubeCut(b, frame) {
+    if (!b.seaPlatform || !seaWalkWorld() || dockedPort() !== b || !Gen.seaLayout) return null;
+    var L = Gen.seaLayout(), sp = Gen.seaPad(currentBerth()), c = Math.cos(sp.a), s = Math.sin(sp.a);
+    var a = V.norm(V.add(V.scale(frame.right, c), V.scale(frame.up, s)));
+    var bb = V.norm(V.add(V.scale(frame.right, -s), V.scale(frame.up, c)));
+    return { box: { origin: frame.pos, a: a, b: bb, u: frame.fwd,
+                    aMin: L.hub - 0.0004, aMax: sp.ring - sp.dome * 0.98 + 0.0006,
+                    bHalf: 0.0060, zMin: L.deck - 0.0030, zMax: L.deck + 0.0120 } };
+  }
+  /* ==== end of the sea platform's tube ==== */
+
   function drawStationWalkGpu(ctx, cam, w, h) {
     var p = G.walk.plan, F = stationFrameFor(p);
     /* On her ramp you are above the floor; under her belly, ducked. */
     cam.buildWalker(F, G.walk, (G.walk.dy || 0) + (G.walk.eyeDy || 0), w, h - FBAR_H);
+    /* The tube's panes, over the world draw() has just drawn: see
+     * seaWalkWorld. Before the deck, which is tested against them. */
+    var panes = seaWalkWorld() ? global.Walk.panesFor(p) : null;
+    if (panes) global.GLWorld.queueWindows(cam, F, panes, Render.M);
     if (p.hangar && berthHangar()) {
       /* Her hangar: the deck, her, and her rooms through her open ramp -
        * all lit as a room. The deck goes through the mesh pass here, since
@@ -12955,12 +13010,17 @@
       var refSt = Sim.bodyState(lv.body, G.sys, G.t);
       var rRel = V.sub(G.ship.pos, refSt.pos);
       var rLen = V.len(rRel);
-      var vRel = V.sub(G.ship.vel, refSt.vel);
+      /* Near the world, against its ground or air (Sim.hudSpeed), with the
+       * frame under the number; in orbit, against its centre, as before. */
+      var hspG = Sim.hudSpeed ? Sim.hudSpeed(G.ship, G.sys, G.t, lv.body) : null;
+      var vRel = V.sub(G.ship.vel, hspG ? hspG.ref : refSt.vel);
       var altKm = rLen - (lv.body.radius || 0);
       var cruising = !!G.cruise;
+      var spdBox = Render.airSpeedReadout(cruising ? G.cruise.speed : V.len(vRel), cruising);
+      if (!cruising && hspG && hspG.frame !== 'orbit') spdBox.unit += hspG.frame === 'air' ? ' AIR' : ' GND';
       Render.drawAirData(ctx, w, h, {
         cy: hv / 2,
-        speed: Render.airSpeedReadout(cruising ? G.cruise.speed : V.len(vRel), cruising),
+        speed: spdBox,
         g: felt,
         peak: G.gPeak,
         alt: Render.altitudeReadout(altKm),
@@ -14296,7 +14356,12 @@
     } else if (oe) {
       row('re', oe.body.name);
       row('altitude', fmtDist(oe.altitude));
-      row('speed', fmtSpeed(oe.relSpeed));
+      /* NEAR A WORLD, AGAINST ITS GROUND OR ITS AIR (2026-11-02): see
+       * Sim.hudSpeed. The label says which; plain 'speed' is the orbit's,
+       * which is also what the map shows wherever you are. */
+      var hsp = Sim.hudSpeed ? Sim.hudSpeed(G.ship, G.sys, G.t, oe.body, mapMode()) : null;
+      if (hsp && hsp.frame !== 'orbit') row(hsp.frame === 'air' ? 'airspeed' : 'gnd speed', fmtSpeed(hsp.kms));
+      else row('speed', fmtSpeed(oe.relSpeed));
     } else if (G.ship.landed) {
       row('on', G.ship.landedOn ? G.ship.landedOn.name : '—',
           G.ship.crashed ? '#ff7a7a' : null);
@@ -16590,6 +16655,10 @@
           var gcut = (G.cutaway && G.cutaway.port === b && Render.setCutaway &&
                       G.cutaway.surface) ? G.cutaway : null;
           if (gcut || cut) Render.setCutaway(stationCutShader(b));
+          /* On foot in a sea platform's tube: the rig's own tube round you
+           * is cut away, so the panes look out at the sea (seaWalkWorld). */
+          var seaCut = (gcut || cut) ? null : seaWalkTubeCut(b, frame);
+          if (seaCut) Render.setCutaway(seaCut);
           /* WHOSE DOCK THIS IS, in paint. Astra asked for red accents on
            * Syndicate stations "like the syndicate ships do"; the rule is
            * written for every power instead, so a dock wears the same
@@ -16662,6 +16731,7 @@
           if (b.seaPlatform && Render.drawSeaDomes) {
             Render.drawSeaDomes(ctx, cam, frame, sun, b.color, seaDomes(b));
           }
+          if (seaCut) Render.setCutaway(null);
           if (b.surface && !b.seaPlatform && !indoors && Render.drawPortCity) {
             Render.drawPortCity(ctx, cam, frame, b, b.radius, sun, model, b.color);
           }
