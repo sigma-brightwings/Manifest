@@ -49,7 +49,8 @@ var PORTS = [];
   for (var i = 0; i < 5; i++) {
     var st = g.stars[i], fac = g.factionById ? g.factionById[st.factionId] : null;
     var sys = Gen.generateSystem(st.seed, fac ? { faction: fac, allFactions: g.factions } : undefined);
-    (sys.ports || []).forEach(function (p) { if (p.surface) PORTS.push({ p: p, sys: sys }); });
+    /* Sea platforms have no hatch, collar lamps or street (seaplatform.test). */
+    (sys.ports || []).forEach(function (p) { if (p.surface && !p.seaPlatform) PORTS.push({ p: p, sys: sys }); });
   }
 });
 

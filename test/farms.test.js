@@ -86,13 +86,16 @@ for (var s = 0; s < stars.length && s < 60; s++) {
        * runway site (24-09), which is the same kind of building. */
       if (!/^runway-(city-)?site/.test(model)) iceBad++;
     }
-    if (p.surface && !p.underground && !p.crop && !(p.siteKind && p.siteKind.indexOf('runway-') === 0)) {
+    /* Not a sea platform: it wears its own rig (seaplatform.test). */
+    if (p.surface && !p.underground && !p.seaPlatform && !p.crop && !(p.siteKind && p.siteKind.indexOf('runway-') === 0)) {
       groundSites++;
       if (!/^(pad|mountain|runway|pad-city|runway-city)-site/.test(model)) groundBad++;
       var dr0 = Gen.berthDoorRoute ? Gen.berthDoorRoute(p, 0) : null;
       if (dr0) groundRouted++;
     }
-    if (p.crop) {
+    /* A sea platform with a crop trades it (the market is the port's) but
+     * wears the rig: there is no field on the water to stand a farm in. */
+    if (p.crop && !p.seaPlatform) {
       farmModels++;
       var want = p.crop === 'gold' ? /^farm-syn-[sml]$/ : /^farm(-navy)?-[sml]$/;
       if (!want.test(model)) farmModelBad++;

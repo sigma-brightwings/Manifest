@@ -40,6 +40,119 @@ before they update.
 
 ## Unreleased
 
+### Added (2026-11-02, sea platforms: a port on the open water)
+
+- **Astra: "for ocean worlds, we want like a floating oil rig style of port,
+  and it would be pads that have protected domes open and close to protect
+  ships and their cargo from the waves, and a central bar, connected by
+  covered tubes."** And: "a dry salt flat has a buried port, water has a
+  floating, pontoon-stabilized port."
+- **Which ports.** Every pad the inland pass could not put on dry ground, on
+  WATER, is now a sea platform where it was rolled (`Gen.makeSeaPlatforms`,
+  straight after `placeInland`, no draws). Over the kawartha galaxy that is all
+  117 of the `coastal` flags: 102 on ocean-type worlds, 15 on terran twilight
+  worlds (14 ring, 1 band). None is left flagged coastal. Never on lava, never
+  on a desert (its "sea" is a dry salt basin: ground, buried ports as before).
+  - By market role: 38 orbital, 34 highport, 27 shipyard, 18 agri. The
+    "orbital" and "highport" here are MARKET roles (`Economy.PORT_ROLES`),
+    not kinds of station: "orbital" is the default role any port gets when it
+    has no special one (named "Orbital port", which is misleading on a surface
+    port, and missions.js already declines to say it), and "highport" is a hub
+    on a developed habitable world. Every one of the 117 is a surface pad
+    rolled by `makeSurfacePort`; none is an orbital station that strayed onto
+    the ground. So all of them make sense as platforms.
+  - 24 of them had been rolled as buried bays. A platform is never
+    underground; the roll is kept as `seaRolledUnderground`.
+- **Identity kept.** id, name, radius, faction, market, missions, the timetable,
+  a save's references: unchanged. The farm rules and the town's draws read the
+  rolled flag, so nothing else in ANY system moves (seaplatform.test generates
+  all 450 systems with and without the pass and compares every port, route,
+  patrol and body). New fields: `seaPlatform`, `platformWhy`,
+  `seaRolledUnderground`; `typeName` 'Sea Platform'; `coastal` cleared.
+- **The rig** (render.js `seaPlatformMesh`, in kilometres, `Gen.seaLayout`):
+  - a hub on four columns and a ring of pontoons, with the bar's two-storey
+    block, a lit name band, a derrick and a crane;
+  - **eight pads**, each its own small semi-submersible on four columns and two
+    pontoons, a drum wall round the landing circle (lamps, amber on the large
+    pads), and a **covered tube** 120 m to the hub on two trestles, with window
+    strips;
+  - **pontoon-stabilised and still.** The pontoons are drawn awash at the
+    water line (their tops 0.8 m up, so the swell washes over them); the
+    columns stand on them; the deck is 28 m up. A semi-submersible's buoyancy
+    sits low and its columns are thin at the water line, so it does not bob,
+    and the rig is bolted to the world like any ground port. Only the water
+    and the domes move.
+  - **Why eight pads, two large (north and south):** measured over 120 systems
+    and three days, a platform had a median of five ships moored at once and
+    eight or fewer 92% of the time. Domes are 100 m across (a waste hauler,
+    the largest hull not routed to a large bay) and 170 m on the large pads
+    (a tanker).
+- **The domes are petals, not a clamshell.** Eight leaves per dome, hinged on
+  the drum, swinging up and out past vertical to open. Petals because they read
+  as open from every side (a clamshell edge-on looks shut), each leaf sweeps
+  only an eighth of the arc and never over the landing circle or the tube's
+  doorway, and shut they read as a shell against the weather. Measured: an open
+  leaf comes no nearer than 14 m to a neighbour's shut dome.
+- **The dome sequence** (Sim `SEA_LEGS`, `seaDomeTargets`):
+  - **You, arriving:** cleared and inside the 2.5 km envelope, your pad's dome
+    opens; the pad catches you and the rail runs approach (held 90 m over the
+    crown) > descend (through the open crown) > settle (onto the stand) > seal
+    (the dome closes, over the whole leg) > berth. The dome is open every
+    moment the hull is off the deck and starts to shut only once it stands on it.
+  - **You, leaving:** undocking always runs that rail backwards: sat on the
+    stand while the dome opens, lifted out through it, handed over held above
+    it (the ground ports' pad hold). There is no instant way out through a shut
+    dome.
+  - **Any hull inside a dome's volume and not berthed holds that dome open**,
+    cleared or not: the guard that means a dome never shuts on a ship in the air.
+  - **Traffic:** open from 60 s or 3 km before she is down until 20 s after;
+    shut while she is berthed; open 30 s before she lifts until she is 1.5 km
+    off. Measured over three days at 24 platforms: 0 samples of a dome shut on a
+    ship in the air over her pad, 0 opened for a berthed ship's own sake.
+  - Petals are eased on the wall clock (4 s), like the shed's doors.
+- **Traffic stands on the pads** (`Sim.seaTrafficPad`), under the domes, one ship
+  to a pad. Closed form off the timetable, swept forward in eight-day blocks
+  with a day's pre-roll, so it is the same answer after a warp or a reload.
+  Your own pad is left for last. When every pad a ship could use is taken
+  (7% of moored ship-samples over three days at 24 platforms; small hulls take a free large pad before
+  that) she holds off the rig on station-keeping, low over the water, in plain
+  sight, rather than share a dome.
+- **Walking** (walk.js `seaLayout`): down her ramp onto the pad under the dome,
+  through the dome's door, along the 120 m covered tube, into the hub: concourse
+  (market desk, shipyard counter where there is a yard, freight office), the
+  bar, the crew hall. The tube is the only way between them. The other pads'
+  tubes leave the hub as stubs with the hatch at the end, where a ship moored on
+  that pad is boarded. (The deck plan is axis-aligned boxes, so those stubs
+  stand for tubes the rig runs out at 45 degrees; your own tube and dome are
+  the real length and size.)
+- **The cutaway at a platform** is the orbital cone, cut through the dome over
+  you, not a street section: there is no ground over you to open, only petals.
+  No hole is cut in the planet; nothing of the rig is below the sea.
+- **Waves** (gl.js `SEA_GLSL`, `GLWorld.setSeaPort`): a swell of four trains
+  (64, 41, 23, 13 m) in a 2.5 km disc round the platform, a closed function of
+  sim time: tilted sun shading with a glint; the depth the sea writes lifted by
+  the wave height, so the water line climbs and drops on every column (ocean
+  worlds; on a terran shore the land is not lifted); foam round each of the 52
+  columns and trestles, thicker as a crest passes; whitecaps on the highest
+  crests. Each train fades out by its own wavelength with distance.
+  - **CPU:** `seaPortNear` (nearest platform within 30 km) and a handful of
+    uniforms per frame; `seaDomeTargets` 0.09 ms a frame at the busiest
+    platform measured (46 routes); a cold pad sweep 8 to 63 ms, once on arrival
+    in a system.
+  - **GPU:** four sines per sea fragment inside the disc, plus the 52-post
+    foam loop for fragments within the rig's reach (330 m). Not measured on the
+    RX 540 (the cloud container has no GPU); see the report.
+- **Also:** missions name "the sea platform at ..."; the HUD says "Sea platform"
+  and "at sea on"; the control cabinet stands on the hub's deck; the shaft
+  doors, collar lamps, the town and its boards are not drawn at a platform.
+- **Tests:** `test/seaplatform.test.js` (group `ground`): which ports, identity,
+  nothing else changes, determinism, the bay table, the mesh, the petals, the
+  arrival and departure dome sequences, the targets, traffic on pads, the walk
+  from the ramp to the bar and back, saves. ground.test reads platforms as the
+  coastal flags they replaced.
+- **Saves survive**, version unchanged. A save docked at one of these ports
+  loads onto a pad of it (restore docks by id).
+
 ### Fixed (2026-11-02, the ground port's burnt edge, the horizon seam, the haze)
 
 - **The cut through the street now has the glowing edge.** Astra: "why is
