@@ -200,6 +200,155 @@
     return refused;
   }
 
+  /* ---- choosing after the lessons (2026-11-03) ----------------------------
+   * Astra: "make the tutorial go first, then you get to choose your ship."
+   * Every new career now opens as HARD — the Talon at home, with Captain
+   * Halloway on the channel — and when his lessons end the same picker the
+   * title card used to show opens at a dock. What she decided:
+   *
+   *   SWAP SHIP, KEEP PROFIT. The Talon is traded in for the chosen start's
+   *   hull, kit and credits, and what the lessons made goes on top. You
+   *   stay where you are: the focus start's own port (a mining head, a
+   *   yard) was a convenience for a career with nothing to go on, and this
+   *   one has a run behind it and a ship to fly to one.
+   *
+   * The kit goes on through outfit(), the one function a direct start uses
+   * — rule 1 above is why there is no second copy of it here — so a
+   * swapped Easy Dart is the Easy Dart a direct start builds, fitting for
+   * fitting and rack for rack (start.test pins it).
+   *
+   * THE PROFIT is what the career is worth now against what a classic
+   * start was handed: credits, plus the cargo aboard at this port's buying
+   * price, less the classic 3,200. Cargo counts because otherwise a pilot
+   * could turn the money into freight the minute before choosing, show a
+   * loss, and keep both the freight and a full preset purse.
+   *
+   * FLOORED AT NOTHING. A lesson that went badly — a crash, a fine, a
+   * hold bought dear — does not come off the start. The row's number is
+   * the preset's promise, and he was teaching, not lending: the picker
+   * comes after the lessons only so that you know what you are choosing,
+   * and choosing late must not be choosing poorer than the title card
+   * would have let you. HARD keeps whatever you actually have, losses and
+   * all, because HARD changes nothing.
+   *
+   * THE HOLD crosses to the new hull as far as it fits. Contract freight
+   * first (it is somebody else's and it is due), then what this port will
+   * not buy (it could not be sold here anyway), then the dearest per
+   * tonne. What is left over is sold at this port's price, into the same
+   * market a sale at the desk moves — and it is in the profit already, as
+   * cash instead of cargo, so selling it changes nothing you are handed.
+   * Freight that will not fit refuses the row, with the reason: a contract
+   * cannot be sold, and dropping it would be a fine you never chose.
+   *
+   * ONLY FROM THE TALON. The trade-in is for the ship the lessons started
+   * you in. Flying something else — a hull bought at the yard, or the
+   * Patience in a career saved under the old order — the row says why it
+   * is shut, and HARD (keep what you fly) is still open. */
+  var CLASSIC_HULL = 'talon';
+
+  function classicCredits() {
+    var spec = (global.Gen && global.Gen.SHIP_SPEC) || {};
+    return spec.credits || 3200;
+  }
+
+  /* What this port would give for a tonne of each good: its buying price,
+   * or nothing where it will not take it (null) or charges to (waste). */
+  function portBids(port, t) {
+    var Eco = global.Economy, out = {};
+    if (!Eco || !port || !port.market) return out;
+    Eco.priceList(port, t).forEach(function (r) { out[r.id] = r.sell > 0 ? r.sell : 0; });
+    return out;
+  }
+
+  function bonded(G, cid) {
+    var M = global.Missions;
+    return M && M.bondedTonnes ? M.bondedTonnes(G, cid) : 0;
+  }
+
+  /* Everything the picker row shows and the swap does, worked out without
+   * touching anything: { ok, why, credits, profit, keep, sell, left }. */
+  function quote(G, p, port, t) {
+    var s = G && G.ship;
+    if (!s) return { ok: false, why: 'no ship' };
+    if (!port) return { ok: false, why: 'dock anywhere to choose your ship' };
+    if (s.hullId !== CLASSIC_HULL) {
+      var C = Combat(), h = C.HULLS[s.hullId];
+      return { ok: false, why: 'the trade-in is for the Talon, and you are flying the ' + (h ? h.name : 'ship you bought') };
+    }
+    var bids = portBids(port, t);
+    var cargo = s.cargo || {}, rows = [], worth = s.credits || 0;
+    for (var cid in cargo) {
+      var n = cargo[cid] || 0;
+      if (n <= 1e-9) continue;
+      var b = bids[cid] || 0;
+      worth += n * b;
+      rows.push({ cid: cid, n: n, bid: b, bond: Math.min(n, bonded(G, cid)) });
+    }
+    var room = p.cargoCap, keep = {}, sell = [], left = [];
+    /* Contract freight first, whatever else is aboard. */
+    var bondN = 0;
+    rows.forEach(function (r) { bondN += r.bond; });
+    if (bondN > room + 1e-9) {
+      return { ok: false, why: 'the ' + p.hullName + ' holds ' + room + ' t and ' + Math.ceil(bondN) +
+                               ' t aboard is contract freight - deliver it first' };
+    }
+    rows.forEach(function (r) { if (r.bond > 0) { keep[r.cid] = r.bond; room -= r.bond; } });
+    /* Then what cannot be sold here, then the dearest. Ties by id, so the
+     * same hold always splits the same way. */
+    rows.sort(function (a, b) {
+      return ((a.bid > 0) - (b.bid > 0)) || (b.bid - a.bid) || (a.cid < b.cid ? -1 : a.cid > b.cid ? 1 : 0);
+    });
+    rows.forEach(function (r) {
+      var rest = r.n - r.bond;
+      if (rest <= 1e-9) return;
+      var k = Math.max(0, Math.min(rest, room));
+      if (k > 0) { keep[r.cid] = (keep[r.cid] || 0) + k; room -= k; }
+      var over = rest - k;
+      if (over > 1e-9) (r.bid > 0 ? sell : left).push({ cid: r.cid, n: over, bid: r.bid });
+    });
+    var kept = 0;
+    for (var kc in keep) kept += keep[kc] * (bids[kc] || 0);
+    var profit = Math.max(0, Math.round(worth - classicCredits()));
+    return { ok: true, profit: profit, credits: Math.round(p.credits + profit - kept),
+             keep: keep, sell: sell, left: left };
+  }
+
+  /* Trade the Talon in for the start `p`, docked at `port`. Returns the
+   * quote it acted on (or its refusal), plus `refused` from outfit. Does
+   * not touch G.fleet: the Patience and any other record are the fleet's,
+   * and this is a deal about the ship you are in. */
+  function swap(G, p, port, t) {
+    var q = quote(G, p, port, t);
+    if (!q.ok) return q;
+    var s = G.ship, Eco = global.Economy;
+    /* The overflow goes into the port's market, as a desk sale would. */
+    q.sell.forEach(function (r) { if (Eco && Eco.applyTrade) Eco.applyTrade(port, r.cid, -r.n, t); });
+    s.cargo = {};
+    for (var cid in q.keep) s.cargo[cid] = q.keep[cid];
+    /* A traded-in hull's paint and colours stay with her, as at buyHull;
+     * her name and papers are yours and move across. */
+    s.paint = null;
+    s.livery = null;
+    s.liveryFaction = null;
+    q.refused = outfit(s, p, G);
+    s.credits = q.credits;
+    if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(s);
+    return q;
+  }
+
+  /* HARD's row in the picker: the ship you are in, as she stands. */
+  function keepLine(G) {
+    var C = Combat(), s = G && G.ship, h = s && C.HULLS[s.hullId];
+    if (!h) return '';
+    var guns = [];
+    for (var k in (s.fit || {})) {
+      var it = C.EQUIPMENT[s.fit[k]];
+      if (it && it.slot === 'hardpoint') guns.push(gunName(it));
+    }
+    return h.name + ' · ' + (s.cargoCap || h.cargoCap) + ' t hold · guns: ' +
+           (guns.length ? guns.join(', ') : 'unarmed') + ' · ' + fmt(s.credits || 0) + ' cr';
+  }
+
   /* ---- where she starts --------------------------------------------------
    * TRADE: wherever a new career has always started (null here means
    * "leave enterSystem's own choice alone").
@@ -305,7 +454,11 @@
    * the hull and the cash on the row itself (the cash is the number a
    * choice turns on, so it is never the part that gets clipped), and the
    * hold, the guns and the kit on the line under it. */
-  function hintLine(p) { return p.hullName + '  \u00b7  ' + fmt(p.credits) + ' cr'; }
+  /* `credits` overrides the preset's: the in-career picker prints what the
+   * swap will actually hand you, profit and all (quote). */
+  function hintLine(p, credits) {
+    return p.hullName + '  \u00b7  ' + fmt(credits === undefined ? p.credits : credits) + ' cr';
+  }
 
   function rowLine(p) {
     var kit = kitLine(p);
@@ -372,7 +525,9 @@
     plan: plan, kitValue: kitValue, totalFor: totalFor,
     outfit: outfit, pickPort: pickPort, isMiningHead: isMiningHead,
     rowLine: rowLine, hintLine: hintLine, gunsLine: gunsLine, kitLine: kitLine, hardLine: hardLine, diffLine: diffLine,
-    arrivalLine: arrivalLine, dockLine: dockLine, fmt: fmt
+    arrivalLine: arrivalLine, dockLine: dockLine, fmt: fmt,
+    CLASSIC_HULL: CLASSIC_HULL, classicCredits: classicCredits,
+    quote: quote, swap: swap, keepLine: keepLine
   };
   global.Start = Start;
   if (typeof module !== 'undefined' && module.exports) module.exports = Start;

@@ -6,9 +6,17 @@ Double-click `index.html`. No server needed. Seed goes in the URL fragment:
 **A new career opens with Captain Oren Halloway on the channel.** His card
 sits top right, and on any screen it becomes a strip across the title bar.
 He walks you through one honest run: buy, launch, climb, lock, auto-dock,
-sell, sign a contract, turn the nose, burn prograde, deliver. At the end his
-Tallyman Trader, the *Patience*, is yours on F5 → FLEET. SKIP STEP passes a
-lesson, and END LESSONS (click twice) lets him retire without the handover.
+sell, sign a contract, turn the nose, burn prograde, deliver. Every new
+career starts in the classic Talon for this; **when the lessons end you
+choose your ship** — Easy / Normal / Hard, then Trade / Mining / Combat (Hard
+has none: it keeps the Talon). Easy and Normal trade the Talon in where you
+stand for that start's hull, kit and credits, with what the run made on top;
+each row shows the money it will actually hand you. Not docked when they
+end? *Dock anywhere to choose your ship* — it opens at the next dock, and
+`Esc` → *Choose your ship* reopens it if you closed it. Then his Tallyman
+Trader, the *Patience*, is brought round to the clamp beside you, yours on
+F5 → FLEET. SKIP STEP passes a lesson; END LESSONS (click twice) ends them
+early, and you still get the picker and the *Patience*.
 
 **Press `H` in game for the authoritative control list** — it is generated from the
 real bindings, so it cannot drift from what the code actually does. What follows is
@@ -338,10 +346,10 @@ forever (yours is on F5; theirs are on the target page and the comms channel).
 
 **The career persists.** Auto-saved every dock and on closing the tab, per
 seed. Starting over is `Esc` → *Quit to main menu* → *New career*, which takes
-two deliberate steps because it discards one. *New career* then asks the
-difficulty (Easy / Normal / Hard), the focus (Trade / Mining / Combat — Hard
-has none, it is the classic Talon), and the seed: `▲ ▼` choose, `Enter` takes
-it, `Esc` or `◂` steps back one question. Sound is synthesised live — thrust rumble,
+two deliberate steps because it discards one. *New career* asks only the
+seed; the ship is chosen after Halloway's lessons (see the top of this card):
+`▲ ▼` choose, `Enter` takes it, `Esc` or `◂` steps back one question, and out
+of the first one closes it for later. Sound is synthesised live — thrust rumble,
 lasers, the dock clunk — and unmutes on your first keypress.
 
 ---

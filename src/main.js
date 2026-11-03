@@ -292,10 +292,17 @@
    * and fifty stars, of which star zero carries the seed unchanged — so
    * #kawartha still drops you into precisely the system it always did, with
    * everywhere else arranged around it. */
-  /* `start` is the title screen's choice, { difficulty, focus } — see
-   * start.js. Absent (boot, a load, a seed in the URL) or HARD, this is
-   * the career it always was, line for line: the plan is null and every
-   * branch below that reads it does nothing. */
+  /* `start` is an explicit choice, { difficulty, focus } — see start.js.
+   * Absent or HARD, this is the career it always was, line for line: the
+   * plan is null and every branch below that reads it does nothing.
+   *
+   * ABSENT IS NOW THE NEW CAREER (2026-11-03). Astra: "make the tutorial
+   * go first, then you get to choose your ship". The title card's New
+   * career no longer asks; it starts the Talon at home with Halloway on the
+   * channel, and the picker opens when his lessons end (startPick, below).
+   * A seed in the URL is the same road. An explicit start — the tests, or
+   * anything else that already knows what it wants — is taken at its word
+   * and is never asked again. */
   function newGame(seed, start) {
     /* A new career means you are IN the career. Boot puts the title card up
      * after this returns, which is the one caller that wants it — every
@@ -370,6 +377,12 @@
      * replaces this with whatever it carried (save.js), which for a career
      * older than him is nothing at all. */
     G.tutorial = global.Tutorial ? global.Tutorial.begin(G, G.sys, G.t) : null;
+    /* Asked its ship when the lessons end only if it has not chosen one.
+     * Additive in the save: G.startPending is up from the end of the
+     * lessons until a row is taken (tutorial.js endLessons). */
+    if (G.tutorial) G.tutorial.pickAtEnd = !start;
+    G.startPending = false;
+    G.startPickAsked = null;
 
     if (typeof location !== 'undefined' &&
         decodeURIComponent((location.hash || '').replace(/^#/, '')) !== String(seed)) {
@@ -6630,6 +6643,8 @@
      * contract that just blew its deadline sends the lesson back to the
      * board in the same frame. */
     if (global.Tutorial && G.tutorial && !G.tutorial.done) global.Tutorial.update(G, tutorialEnv());
+    /* And when they are over, the ship picker at the first dock (startPick). */
+    startPickCheck();
 
     /* THE GROUND TRACK. With a survey instrument aboard, whatever world you
      * are in orbit about is being mapped under you (survey.js). */
@@ -19153,7 +19168,7 @@
   }
 
   function menuItems() {
-    return [
+    var items = [
       { label: 'Resume', hint: 'back to the ship', run: closeMenu },
       { label: 'Save game', hint: 'write a career to one of six slots',
         run: function () { G.menu.page = 'save'; G.menu.sel = 0; } },
@@ -19163,17 +19178,33 @@
         run: function () { G.menu.page = 'options'; G.menu.sel = firstOption(); } },
       { label: 'Quit to main menu', hint: 'commits the autosave first', run: quitToTitle }
     ];
+    /* A SHIP STILL TO CHOOSE (startPick): second, under Resume, for as
+     * long as it waits, so closing the picker with Esc is never the end of
+     * it. Undocked, the row is still here and says why it will not open —
+     * the trade-in is done at a port. */
+    if (G.startPending && G.ship) {
+      items.splice(1, 0, {
+        label: 'Choose your ship',
+        hint: G.ship.docked ? 'trade the Talon in, keep the profit' : 'dock anywhere to choose',
+        run: function () {
+          if (!G.ship.docked) { G.menu.note = 'Dock anywhere to choose: the trade-in is done at a port.'; return; }
+          startPickOpen();
+        }
+      });
+    }
+    return items;
   }
 
   function titleItems() {
-    if (G.title && G.title.pick) return startPickItems(G.title);
     return [
       { label: 'Resume career', hint: currentCareerLine(),
         run: function () { G.title = null; } },
       { label: 'Load game', hint: 'a slot from any galaxy',
         run: function () { G.title = null; G.menu = { page: 'load', sel: 0, edit: null, note: null, fromTitle: true }; } },
+      /* Straight to the seed (2026-11-03): the ship is chosen after
+       * Halloway's lessons, in the career, not here. */
       { label: 'New career', hint: 'a seed is a universe',
-        run: beginStartPick },
+        run: function () { beginSeedEntry(null); } },
       { label: 'Options', hint: 'sound, display, flight, keys',
         run: function () { G.title = null; G.menu = { page: 'options', sel: firstOption(), edit: null, note: null, fromTitle: true }; } },
       /* Last, and set apart by its hint rather than by a separator: it is the
@@ -19260,69 +19291,127 @@
     }
   }
 
-  /* ---- choosing a start (start.js, 2026-11-02) ---------------------------
-   * New career is three questions, in the order a pilot would ask them:
-   * how hard, at what, and in which universe. The first two are ROWS on the
-   * title card rather than a new screen, so they inherit everything the
-   * card already does — the highlight, the click targets, the keys and the
-   * hover — and the third is the seed field it has always been.
+  /* ---- choosing a start (start.js, 2026-11-02; moved 2026-11-03) ---------
+   * Two questions, in the order a pilot would ask them: how hard, and at
+   * what. They used to be rows on the title card, before the seed. Since
+   * Astra's "make the tutorial go first, then you get to choose your
+   * ship", they are a page of the pause menu that opens at a dock when
+   * Halloway's lessons end (or when they are ended), with the world
+   * stopped behind it the way every menu stops it. One picker, here; the
+   * title card no longer has one.
    *
    * Every row says the ship, the hold, the guns and the money, because the
-   * choice IS those four things, and Astra should not have to start a
-   * career to find out what a focus hands her. HARD skips the focus
-   * question: it is the one start with no focus, the Talon as it always
-   * was. Back is a row as well as Esc, with a pointer on it — direction
-   * cues on this card are glyphs, not words. */
-  function beginStartPick() {
-    if (!global.Start) { beginSeedEntry(null); return; }
-    G.title.pick = { stage: 'difficulty', difficulty: null };
-    G.title.sel = 1;                 // Normal: the middle, and the start most people mean
+   * choice IS those four things — and the money is what the swap will
+   * actually hand you, the preset's credits plus the lessons' profit
+   * (Start.quote), not the preset's alone. HARD skips the focus question
+   * and changes nothing: it is "keep the Talon". Back is a row as well as
+   * Esc, with a pointer on it — direction cues here are glyphs, not words.
+   *
+   * ESC CLOSES IT, and that is not a lost choice. A modal you cannot leave
+   * is a wall (the title card says the same of itself), and a pilot may
+   * well want to look at the yard or the market before deciding. The
+   * choice stays pending (G.startPending, in the save), the pause menu
+   * carries a row that reopens it, and it opens itself again at the next
+   * dock — not on every frame of this one, which would be the wall again. */
+  function startPickOpen() {
+    G.menu = { page: 'startpick', sel: 1, edit: null, note: null,
+               pick: { stage: 'difficulty', difficulty: null } };
+    G.market = null;
+    G.startPickAsked = G.ship ? G.ship.docked : null;
+    HOOKS.sound('click');
   }
 
-  function backFromPick(t) {
-    if (t.pick && t.pick.stage === 'focus') {
-      t.sel = Math.max(0, global.Start.DIFFICULTIES.indexOf(t.pick.difficulty));
-      t.pick = { stage: 'difficulty', difficulty: null };
+  /* Once a frame, after the lessons: up at a dock if a choice is waiting.
+   * startPickAsked is the dock it last opened at, and is not saved — so a
+   * career loaded while a choice is waiting is asked straight away. */
+  function startPickCheck() {
+    if (!G.startPending || !G.ship) return;
+    if (!G.ship.docked) { G.startPickAsked = null; return; }
+    if (G.menu || G.title || G.hyper) return;
+    if (G.startPickAsked === G.ship.docked) return;
+    startPickOpen();
+  }
+
+  function backFromPick(m) {
+    if (m.pick && m.pick.stage === 'focus') {
+      m.sel = Math.max(0, global.Start.DIFFICULTIES.indexOf(m.pick.difficulty));
+      m.pick = { stage: 'difficulty', difficulty: null };
     } else {
-      t.pick = null;
-      t.sel = 2;                     // back onto New career
+      G.menu = null;               // still pending: see the note above
     }
   }
 
-  function startPickItems(t) {
-    var S = global.Start, pk = t.pick;
-    var back = { label: '\u25c2 Back', hint: pk.stage === 'focus' ? 'pick a difficulty' : 'the main menu',
-                 run: function () { backFromPick(t); } };
+  /* Take a row. HARD keeps what you fly; the others go through Start.swap,
+   * which is outfit() — the same code a direct start is built by — with
+   * the profit on top. The fleet is not touched: the Patience comes round
+   * after this, at this dock, as one of it (tutorial.js HANDOVER). */
+  function takeStart(start) {
+    var S = global.Start, m = G.menu;
+    var port = G.ship.docked ? G.sys.byId[G.ship.docked] : null;
+    if (start.difficulty === 'hard') {
+      G.start = { difficulty: 'hard', focus: null };
+      say('You keep the ' + Combat.HULLS[G.ship.hullId].name + '  —  ' + fmtCredits(G.ship.credits), 8);
+    } else {
+      var plan = S.plan(start.difficulty, start.focus);
+      var r = S.swap(G, plan, port, G.t);
+      if (!r.ok) { if (m) m.note = 'Not now: ' + r.why; return; }
+      if (r.refused && r.refused.length) console.warn('start fit refused', r.refused);
+      G.start = { difficulty: start.difficulty, focus: start.focus };
+      var soldT = 0;
+      r.sell.forEach(function (x) { soldT += x.n; });
+      say('The Talon is traded in: ' + plan.hullName + ', ' + fmtCredits(G.ship.credits) +
+          (r.profit ? ' with ' + fmtCredits(r.profit) + ' of the run on top' : '') +
+          (soldT ? '  ·  ' + Math.round(soldT) + 't that would not fit sold here' : ''), 12);
+      if (global.Journal) global.Journal.add(G, 'start', S.arrivalLine(Object.assign({}, plan, { credits: G.ship.credits }), port));
+    }
+    G.startPending = false;
+    if (G.tutorial) G.tutorial.picked = true;
+    G.menu = null;
+    HOOKS.sound('pay');
+  }
+
+  function startPickItems(m) {
+    var S = global.Start, pk = m.pick;
+    var port = G.ship && G.ship.docked ? G.sys.byId[G.ship.docked] : null;
+    var back = pk.stage === 'focus'
+      ? { label: '\u25c2 Back', hint: 'pick a difficulty', run: function () { backFromPick(m); } }
+      : { label: '\u25c2 Later', hint: 'Esc menu has it  ·  or the next dock', run: function () { backFromPick(m); } };
     if (pk.stage === 'difficulty') {
       var words = { easy: 'a working hull built for the job', normal: 'the small hull of each trade',
-                    hard: 'the classic start - no focus' };
+                    hard: 'keep the ' + (Combat.HULLS[G.ship.hullId] || { name: 'Talon' }).name.split(' ')[0] };
       return S.DIFFICULTIES.map(function (d) {
         return {
-          label: S.DIFF_NAME[d], hint: words[d], sub: S.diffLine(d),
+          label: S.DIFF_NAME[d], hint: words[d], sub: d === 'hard' ? S.keepLine(G) : S.diffLine(d),
           run: function () {
-            if (d === 'hard') { t.pick = null; beginSeedEntry({ difficulty: 'hard', focus: null }); return; }
-            t.pick = { stage: 'focus', difficulty: d };
-            t.sel = 0;
+            if (d === 'hard') { takeStart({ difficulty: 'hard', focus: null }); return; }
+            m.pick = { stage: 'focus', difficulty: d };
+            m.sel = 0;
           }
         };
       }).concat([back]);
     }
     return S.FOCI.map(function (f) {
       var plan = S.plan(pk.difficulty, f);
+      var q = S.quote(G, plan, port, G.t);
       return {
-        label: S.FOCUS_NAME[f], hint: S.hintLine(plan), sub: S.rowLine(plan),
-        run: function () {
-          t.pick = null;
-          beginSeedEntry({ difficulty: pk.difficulty, focus: f });
-        }
+        label: S.FOCUS_NAME[f],
+        hint: q.ok ? S.hintLine(plan, q.credits) : 'shut',
+        sub: q.ok ? S.rowLine(plan) : q.why,
+        dim: !q.ok,
+        run: function () { takeStart({ difficulty: pk.difficulty, focus: f }); }
       };
     }).concat([back]);
   }
 
-  function startPickHeading(t) {
+  /* The profit in the heading, once, rather than on every row: it is the
+   * same on all of them, and the row's own number already includes it. */
+  function startPickHeading(m) {
     var S = global.Start;
-    if (t.pick.stage === 'difficulty') return 'NEW CAREER  \u25b8  DIFFICULTY';
-    return 'NEW CAREER  \u25b8  ' + S.DIFF_NAME[t.pick.difficulty].toUpperCase() + '  \u25b8  FOCUS';
+    var port = G.ship && G.ship.docked ? G.sys.byId[G.ship.docked] : null;
+    var any = S.quote(G, S.plan('easy', 'trade'), port, G.t);
+    var tail = any.ok ? '  \u00b7  run profit ' + fmtCredits(any.profit) + ' on top' : '';
+    if (m.pick.stage === 'difficulty') return 'LESSONS DONE  \u25b8  DIFFICULTY' + tail;
+    return 'LESSONS DONE  \u25b8  ' + S.DIFF_NAME[m.pick.difficulty].toUpperCase() + '  \u25b8  FOCUS' + tail;
   }
 
   function beginSeedEntry(start) {
@@ -19574,6 +19663,18 @@
     var k = e.key.toLowerCase();
     m.note = null;
 
+    if (m.page === 'startpick') {
+      var picks = startPickItems(m);
+      if (m.sel >= picks.length) m.sel = 0;
+      if (k === 'arrowup') { m.sel = (m.sel - 1 + picks.length) % picks.length; return; }
+      if (k === 'arrowdown') { m.sel = (m.sel + 1) % picks.length; return; }
+      if (k === 'enter' || k === ' ') { picks[m.sel].run(); return; }
+      /* Escape and the left arrow step back one question, and out of the
+       * first one — the pointer on the Back / Later row is the cue. */
+      if (k === 'escape' || k === 'arrowleft' || k === 'backspace') { backFromPick(m); return; }
+      return;
+    }
+
     if (k === 'escape') {
       if (m.page === 'main') { closeMenu(); return; }
       if (m.fromTitle) { G.menu = null; G.title = { sel: 0, edit: null, note: null }; return; }
@@ -19636,9 +19737,6 @@
     if (k === 'arrowup') { t.sel = (t.sel - 1 + items.length) % items.length; return; }
     if (k === 'arrowdown') { t.sel = (t.sel + 1) % items.length; return; }
     if (k === 'enter' || k === ' ') { items[t.sel].run(); return; }
-    /* Inside the start questions, Escape and the left arrow step back one
-     * question — the pointer on the Back row is the cue for both. */
-    if (t.pick && (k === 'escape' || k === 'arrowleft' || k === 'backspace')) { backFromPick(t); return; }
     /* Escape out of the title screen resumes: it is a menu, not a wall. */
     if (k === 'escape') { G.title = null; return; }
   }
@@ -19746,6 +19844,7 @@
     var m = G.menu;
     if (m.page === 'options') return drawOptionsPage(ctx, w, h);
     if (m.page === 'save' || m.page === 'load') return drawSlotsPage(ctx, w, h);
+    if (m.page === 'startpick') return drawStartPickPage(ctx, w, h);
 
     var items = menuItems();
     var box = menuShell(ctx, w, h, 'PAUSED', currentCareerLine(), items.length + 1);
@@ -19761,6 +19860,60 @@
     ctx.fillText('arrows move  ·  Enter chooses  ·  Esc resumes',
                  box.x + 30, box.y + box.h - 20);
     ctx.restore();
+    /* The Choose-your-ship row's refusal lands here when you are not
+     * docked; the main page never had anything to say before. */
+    if (m.note) drawMenuNote(ctx, box, m.note);
+  }
+
+  /* TWO-LINE ROWS: what she is on the row, what she carries under it.
+   * Was the title card's own loop; it is the picker's now, and a function
+   * so that a second list of two-line rows does not grow a second copy of
+   * the clipping. A pointer on the chosen row, so which one Enter takes is
+   * shown by a glyph as well as by the highlight. */
+  function drawTwoLineRows(ctx, box, items, sel, rowH, onPick) {
+    for (var i = 0; i < items.length; i++) {
+      (function (i) {
+        var it = items[i], y = box.top + i * rowH, on = i === sel;
+        var label = (on && it.label.charAt(0) !== '\u25c2' ? '\u25b8 ' : '  ') + it.label;
+        menuRow(ctx, box, i, y, label, it.hint, on, function () { onPick(i); }, it.dim,
+                it.sub ? rowH - 32 : 0);
+        if (it.sub) {
+          ctx.save();
+          ctx.font = '12px ui-monospace, monospace';
+          ctx.fillStyle = it.dim ? '#c99a6a' : on ? '#d6e6f7' : '#8aa4c2';
+          /* Clipped by measurement, not by a guessed glyph width: this line
+           * is the one that carries the detail, so it gets every pixel. */
+          var sub = it.sub, room = box.w - 60;
+          while (sub.length > 1 && ctx.measureText(sub).width > room) sub = sub.slice(0, -2) + '\u2026';
+          ctx.fillText(sub, box.x + 30, y + 21);
+          ctx.restore();
+        }
+      })(i);
+    }
+  }
+
+  /* The picker, in the menu's shell: time is stopped behind it because
+   * G.menu is up (see "the pause menu" above). */
+  function drawStartPickPage(ctx, w, h) {
+    var m = G.menu;
+    var items = startPickItems(m);
+    if (m.sel >= items.length) m.sel = 0;
+    var rowH = 48;
+    /* The shell sizes itself in 30 px rows; these are 48. Sized to the
+     * rows, the note line and the key hint, no more: the first version
+     * asked for two rows too many and left a hole under Later. */
+    var box = menuShell(ctx, w, h, 'CHOOSE YOUR SHIP', startPickHeading(m),
+                        Math.ceil(items.length * rowH / 30));
+    box.top += 8;                    // clear of the heading line
+    drawTwoLineRows(ctx, box, items, m.sel, rowH, function (i) { m.sel = i; items[i].run(); });
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(160,185,220,0.55)';
+    ctx.fillText(m.pick.stage === 'focus' ? '\u25b2 \u25bc move  \u00b7  Enter chooses  \u00b7  \u25c2 Esc back'
+                                          : '\u25b2 \u25bc move  \u00b7  Enter chooses  \u00b7  \u25c2 Esc later',
+                 box.x + 30, box.y + box.h - 20);
+    ctx.restore();
+    if (m.note) drawMenuNote(ctx, box, m.note);
   }
 
   function drawSlotsPage(ctx, w, h) {
@@ -19922,11 +20075,10 @@
      * this screen will. Wide: lockup in the left column, menu and story
      * stacked on the right. Narrow: stacked, story left out. */
     var L = Logo.layout(w, h, MENU_W);
-    /* The start questions have two lines a row (what she is, then what she
-     * carries) and a heading saying which question this is. */
-    var picking = !!t.pick;
-    var rowH = picking ? 48 : 32, headH = picking ? 26 : 0;
-    var panelH = 74 + headH + items.length * rowH;
+    /* (The start questions used to be rows here, two lines each; since
+     * 2026-11-03 they come after the lessons — drawStartPickPage.) */
+    var rowH = 32;
+    var panelH = 74 + items.length * rowH;
     var storyH = 74 + 5 * 32;          // the menu box's own size, as Astra asked
     var px = L.menuX, py;
     if (L.wide) py = Math.round((h - (panelH + 26 + storyH)) / 2);
@@ -19979,41 +20131,17 @@
     ctx.globalAlpha = aMenu;
     panel(ctx, px, py, MENU_W, panelH, true);
 
-    var box = { x: px, y: py, w: MENU_W, h: panelH, top: py + 30 + headH };
-    if (picking) {
-      ctx.save();
-      ctx.font = 'bold 12px ui-monospace, monospace';
-      ctx.fillStyle = Logo.INK.gold;
-      spacedText(ctx, startPickHeading(t), px + 30, py + 30, 1.2);
-      ctx.restore();
-    }
+    var box = { x: px, y: py, w: MENU_W, h: panelH, top: py + 30 };
     for (var i = 0; i < items.length; i++) {
       (function (i) {
-        var y = box.top + i * rowH, sel = i === t.sel;
-        /* A pointer on the chosen row, so which one Enter takes is shown
-         * by a glyph as well as by the highlight. */
-        var label = picking ? (sel && items[i].label.charAt(0) !== '\u25c2' ? '\u25b8 ' : '  ') + items[i].label
-                            : items[i].label;
-        menuRow(ctx, box, i, y, label, items[i].hint, sel,
-                function () { t.sel = i; items[i].run(); }, false, items[i].sub ? rowH - 32 : 0);
-        if (items[i].sub) {
-          ctx.save();
-          ctx.font = '12px ui-monospace, monospace';
-          ctx.fillStyle = sel ? '#d6e6f7' : '#8aa4c2';
-          /* Clipped by measurement, not by a guessed glyph width: this line
-           * is the one that carries the detail, so it gets every pixel. */
-          var sub = items[i].sub, room = MENU_W - 60;
-          while (sub.length > 1 && ctx.measureText(sub).width > room) sub = sub.slice(0, -2) + '\u2026';
-          ctx.fillText(sub, px + 30, y + 21);
-          ctx.restore();
-        }
+        menuRow(ctx, box, i, box.top + i * rowH, items[i].label, items[i].hint, i === t.sel,
+                function () { t.sel = i; items[i].run(); });
       })(i);
     }
     ctx.save();
     ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(160,185,220,0.55)';
-    ctx.fillText(picking ? '\u25b2 \u25bc move  \u00b7  Enter chooses  \u00b7  \u25c2 Esc back'
-                         : 'arrows move  ·  Enter chooses  ·  Esc resumes', px + 30, py + panelH - 18);
+    ctx.fillText('arrows move  ·  Enter chooses  ·  Esc resumes', px + 30, py + panelH - 18);
     ctx.restore();
     if (t.note) drawMenuNote(ctx, box, t.note);
     if (t.edit) drawEditField(ctx, box, t.edit);

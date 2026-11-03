@@ -13,6 +13,12 @@
  * and deliver — and at the end his Tallyman, the Patience, is handed over
  * on the clamp beside you as one of your fleet.
  *
+ * AND THEN YOU CHOOSE YOUR SHIP (2026-11-03). Every new career starts
+ * him in the classic Talon now; when his lessons end — by CLOSE or by END
+ * LESSONS, see endLessons — the ship picker opens at a dock (main.js
+ * startPick), and the Patience comes round after it. She is given either
+ * way: Astra, "the Patience is always given".
+ *
  * NOTHING HERE IS A SCRIPTED SANDBOX. Every lesson is the real system:
  * the real market, the real launch clearance, the real autopilot, the real
  * mission board, and a lesson is passed by reading the ship and the
@@ -531,42 +537,80 @@
       }
     },
 
-    handover: {
-      done: function (G, tut, env) {
-        if (!tut.given && G.ship.docked) give(G, tut, env);
-        if (!tut.given) return false;
-        var F = global.Fleet;
-        return G.ship.hullId === CAPTAIN.hullId || (F && !F.byId(G, tut.recId));
-      },
-      words: function (G, tut) {
-        if (!tut.given) return 'Dock anywhere and I\'ll have her brought round to you.';
-        return (tut.delivered ? 'Paid, and on time. ' : '') + 'That\'s the trade. The rest is doing it again ' +
-          'somewhere further away. The ' + CAPTAIN.ship + ' is on the clamp beside you at ' + tut.givenAt +
-          ', berth paid for a month. Take command on the FLEET tab. Keep the Talon if you like, ' +
-          'or trade her in.';
-      },
-      goal: function (G, tut) {
-        return tut.given ? 'F5 → FLEET → TAKE COMMAND  ·  or LATER' : 'dock at any port';
-      }
-    },
-
+    /* THE LAST WORDS COME BEFORE THE KEYS (2026-11-03). Astra: "make the
+     * tutorial go first, then you get to choose your ship". So he says
+     * goodbye here, CLOSE ends the lessons, the ship picker opens (main.js
+     * startPick), and only then is the Patience brought round — see
+     * HANDOVER, which is now last for exactly that reason. */
     farewell: {
       talk: true,
       words: function (G, tut) {
+        return 'That\'s the trade. The rest is doing it again somewhere further away. ' +
+          (tut.pickAtEnd
+            ? 'One choice first: the yard will take the Talon in against a ship built for the work you want, ' +
+              'and what you made today goes on top. Or keep her. Either way the ' + CAPTAIN.ship + ' is yours as well. '
+            : 'Dock and I\'ll have the ' + CAPTAIN.ship + ' brought round. ') +
+          'Jumps are F6 and F8, the yard is F5, and H lists every key there is. Fly safe, Captain.';
+      },
+      goal: function (G, tut) {
+        return tut.pickAtEnd ? 'CLOSE to end the lessons and choose your ship' : 'CLOSE to end the lessons';
+      }
+    },
+
+    /* AFTER THE LESSONS, and after the choice. Two reasons it is last:
+     *  - the ship picker trades in the ship you are flying, and that must
+     *    be the Talon. Handed over first, the Patience could be the hull
+     *    you are sitting in when the picker opens (TAKE COMMAND is one
+     *    click), and an Easy pick would then have traded HER in;
+     *  - END LESSONS lands here too (endLessons), so a pilot who skips him
+     *    still gets the ship he promised. Astra: the Patience is always
+     *    given.
+     * So she waits while G.startPending is up, and comes round the moment
+     * the choice is made, at that dock. */
+    handover: {
+      done: function (G, tut, env) {
+        if (!tut.given && G.ship.docked && !G.startPending) give(G, tut, env);
+        if (!tut.given) return false;
+        /* Taken command of: her record is gone. Not "flying a Tallyman"
+         * any more, as it was — an Easy trade start IS a Tallyman, and
+         * would have passed this before she was ever looked at. */
+        var F = global.Fleet;
+        return !!F && !F.byId(G, tut.recId);
+      },
+      words: function (G, tut) {
+        if (!tut.given) {
+          /* Docked with a choice waiting is the picker open, or closed for
+           * later: say which way back to it, not "dock anywhere" to a pilot
+           * sitting on a clamp (found by looking, 2026-11-03). */
+          if (G.startPending) {
+            return G.ship.docked
+              ? 'Choose your ship first. The moment you have, I\'ll have the ' + CAPTAIN.ship + ' brought round to this clamp.'
+              : 'Dock anywhere and choose your ship. I\'ll have the ' + CAPTAIN.ship + ' brought round to you there.';
+          }
+          return 'Dock anywhere and I\'ll have her brought round to you.';
+        }
         /* "She wants hands": a Tallyman is too much ship for one pilot
          * (Crew.needsCrew), and the yard says so the moment you take her. */
-        var hers = G.ship.hullId === CAPTAIN.hullId;
-        return 'She pulls a little on a hard burn. Always has. Don\'t let anybody at a yard tell you ' +
-          'that\'s a fault. ' + (hers ? 'She wants a hand or two aboard; the CREW tab at any yard. ' : '') +
-          'The rest you\'ll learn the way I did. Jumps are F6 and F8, the yard is F5, ' +
-          'and H lists every key there is. Fly safe, Captain. It\'s your name on the manifest now.';
+        return (tut.delivered ? 'Paid, and on time. ' : '') + 'The ' + CAPTAIN.ship + ' is on the clamp beside you at ' +
+          tut.givenAt + ', berth paid for a month. She pulls a little on a hard burn. Always has. Don\'t let ' +
+          'anybody at a yard tell you that\'s a fault. She wants a hand or two aboard: the CREW tab at any yard. ' +
+          'Take command on the FLEET tab. It\'s your name on the manifest now.';
       },
-      goal: function () { return 'CLOSE to end the lessons'; }
+      goal: function (G, tut) {
+        return tut.given ? 'F5 → FLEET → TAKE COMMAND  ·  or LATER'
+             : G.startPending ? (G.ship.docked ? 'choose your ship  ·  Esc → Choose your ship'
+                                               : 'Dock anywhere to choose your ship')
+             : 'dock at any port';
+      }
     }
   };
 
+  /* Farewell before handover since 2026-11-03 — see HANDOVER. A career
+   * saved with the old order sitting on HANDOVER is walked into
+   * endLessons by update(), so it gets the picker before the ship. */
   var ORDER = ['hello', 'buy', 'launch', 'climb', 'lock', 'autodock', 'sell',
-               'contract', 'undock', 'attitude', 'burn', 'deliver', 'handover', 'farewell'];
+               'contract', 'undock', 'attitude', 'burn', 'deliver', 'farewell', 'handover'];
+  var LAST_LESSON = 'farewell';
 
   function burnTarget(tut) {
     var a = tut.orbit0 ? tut.orbit0.apo : 0;
@@ -619,19 +663,40 @@
   /* ---- moving along -------------------------------------------------------- */
   function advance(G, tut, env, quietly) {
     var i = ORDER.indexOf(tut.step);
+    /* Out of the last lesson is the end of the lessons, the same moment
+     * END LESSONS reaches (endLessons). */
+    if (tut.step === LAST_LESSON) { endLessons(G, tut, false); return; }
     tut.step = ORDER[i + 1] || null;
     tut.entered = false;
     tut.endArmedAt = null;
-    if (!tut.step) { finish(G, tut, false); return; }
+    if (!tut.step) { finish(G, tut); return; }
     if (!quietly && env && env.hooks && env.hooks.sound) env.hooks.sound('click');
   }
 
-  function finish(G, tut, skipped) {
-    tut.done = true;
-    tut.step = null;
+  /* THE LESSONS ARE OVER — by his CLOSE or by END LESSONS, which are now
+   * the same road (2026-11-03). Both go to HANDOVER, so the Patience is
+   * given either way, and both raise G.startPending for a career that has
+   * not chosen its ship yet (tut.pickAtEnd, set by main.js newGame). The
+   * flag is on G rather than on the tutorial because it outlives him: the
+   * picker can still be waiting after the card has gone. main.js opens it
+   * at a dock and clears the flag when a row is taken. */
+  function endLessons(G, tut, skipped) {
+    if (tut.ended) return;
+    tut.ended = true;
+    tut.skipped = !!skipped;
+    tut.step = 'handover';
+    tut.entered = false;
+    tut.endArmedAt = null;
+    if (tut.pickAtEnd && !tut.picked) G.startPending = true;
     jot(G, 'favour', skipped
       ? 'Told Captain ' + CAPTAIN.name + ' you knew the trade already'
       : 'Captain ' + CAPTAIN.name + '\'s lessons done');
+  }
+
+  /* The card goes: his ship is handed over and taken or left for LATER. */
+  function finish(G, tut) {
+    tut.done = true;
+    tut.step = null;
   }
 
   /* Once a frame, from main.js update(). Steps that do not apply, and
@@ -642,9 +707,14 @@
   function update(G, env) {
     var tut = G && G.tutorial;
     if (!tut || tut.done || !G.ship || !env) return;
+    /* A career saved under the old order (handover, then farewell) and
+     * sitting on HANDOVER has not ended its lessons: end them now, so it
+     * is asked its ship before the Patience is given — and if she was
+     * given already, handover reads that and passes as it always did. */
+    if (tut.step === 'handover' && !tut.ended) endLessons(G, tut, false);
     for (var guard = 0; guard < ORDER.length + 2; guard++) {
       var L = LESSONS[tut.step];
-      if (!L) { finish(G, tut, false); return; }
+      if (!L) { finish(G, tut); return; }
       if (L.skipIf && L.skipIf(G, tut, env)) { advance(G, tut, env, true); continue; }
       if (!tut.entered) { tut.entered = true; tut.stepAt = env.t || 0; if (L.enter) L.enter(G, tut, env); }
       if (L.talk) return;
@@ -691,7 +761,7 @@
       var now = env && env.now;
       if (tut.endArmedAt !== null && tut.endArmedAt !== undefined &&
           now - tut.endArmedAt >= 0 && now - tut.endArmedAt < END_CONFIRM_S) {
-        finish(G, tut, true);
+        endLessons(G, tut, true);
       } else {
         tut.endArmedAt = now;
       }
@@ -714,7 +784,9 @@
     else if (tut.step === 'handover') { if (tut.given) buttons.push({ id: 'later', label: 'LATER' }); }
     else buttons.push({ id: 'skip', label: 'SKIP STEP' });
     buttons.push({ id: 'hide', label: 'HIDE' });
-    if (tut.step !== 'farewell') {
+    /* Not on his goodbye, and not after it: once the lessons have ended
+     * there is nothing left for END LESSONS to end. */
+    if (tut.step !== 'farewell' && !tut.ended) {
       var armed = tut.endArmedAt !== null && tut.endArmedAt !== undefined &&
                   env && env.now - tut.endArmedAt >= 0 && env.now - tut.endArmedAt < END_CONFIRM_S;
       buttons.push({ id: 'end', label: armed ? 'SURE? CLICK AGAIN' : 'END LESSONS', warn: armed });
@@ -738,7 +810,7 @@
     CAPTAIN: CAPTAIN, ORDER: ORDER, LESSONS: LESSONS,
     CLIMB_KM: CLIMB_KM, TURN_DEG: TURN_DEG, APO_GAIN: APO_GAIN, APO_MIN_KM: APO_MIN_KM, BERTH_DAYS: BERTH_DAYS,
     plan: plan, begin: begin, update: update, note: note, press: press, card: card,
-    give: give, burnTarget: burnTarget
+    give: give, burnTarget: burnTarget, endLessons: endLessons
   };
   global.Tutorial = Tutorial;
   if (typeof module !== 'undefined' && module.exports) module.exports = Tutorial;
