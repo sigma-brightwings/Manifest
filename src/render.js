@@ -421,10 +421,57 @@
    * (the cockpit at the same point of her model), and her hold is
    * stretched aft to fill the extra (shipInterior). Hulls you fly carry no
    * `lengthKm` and are exactly as they were. */
+  /* HALF A METRE HIGHER ON HER GEAR (2026-11-03). Astra, walking under her
+   * Talon in her hangar: the ship should sit about half a metre higher on
+   * her landing gear. Measured that day: the Talon's keel fin came down to
+   * 5 cm off the floor her gear stood on, and over most of her belly a
+   * standing head had 10-20 cm to spare.
+   *
+   * hullfit.js is GENERATED (tools/fit-hulls.js) from the gear as it is
+   * modelled, and regenerating it re-runs the length search for every
+   * hull, so the lift is not baked into the table: it is added here, the
+   * one door every consumer of `ground` and `drop` comes through - the
+   * landed stance (main.js settleLanded), the ground beside her
+   * (outsidePlan), her hangar's floor (main.js hangarSpec), the ramp's drop
+   * (shipInterior) - and the legs are drawn that much longer to meet it
+   * (gearExtend). Only a hull that HAS gear is lifted: one with none
+   * (Mule, Long Haul, Cutter, Meridian, Leviathan, Capital, Crawler) sits
+   * on her belly, and half a metre under that would be air. The fit tool
+   * keeps measuring the modelled legs, so a regenerated table does not
+   * count the lift twice. */
+  var GEAR_LIFT = 0.5;                     // m
+  var LIFTED = {};
+  function q4m(drop) { return Math.ceil(drop * 4 - 1e-9) / 4; }   // fit-hulls' quarter-metre room rounding
+  function liftedFit(id, f) {
+    if (LIFTED[id] && LIFTED[id].base === f) return LIFTED[id].fit;
+    var mesh = null;
+    try { mesh = hullPreviewMesh(id, null); } catch (e) { mesh = null; }
+    var geared = !!(mesh && mesh.gear && mesh.gear.some(function (p) { return p.role !== 'door'; }));
+    var out = f;
+    if (geared && typeof f.ground === 'number') {
+      out = {};
+      for (var k in f) out[k] = f[k];
+      out.ground = f.ground - GEAR_LIFT;
+      if (typeof f.drop === 'number') { out.drop = f.drop + GEAR_LIFT; out.dropRoom = q4m(out.drop); }
+      out.gearLift = GEAR_LIFT;
+      /* How far her legs must reach past where they are modelled to stand
+       * on that ground, in metres at her fitted length. Not simply the
+       * lift: the table is a measure from the day it was generated, and
+       * the legs have been re-rigged since (the fold, 2026-10-21; the tuck,
+       * 2026-10-29) - measured 2026-11-03, the Talon's modelled feet stood
+       * 0.20 m below the floor the table stood her on, the Tanker's 0.56
+       * m, the Trader's 0.03 m above it. So the legs telescope (or, by a
+       * few centimetres on the Tanker, close) to exactly the floor. */
+      var gb = gearBounds(mesh, 1);
+      out.gearExt = gb && isFinite(gb.lo[1]) ? gb.lo[1] * f.len - out.ground : GEAR_LIFT;
+    }
+    LIFTED[id] = { base: f, fit: out };
+    return out;
+  }
   function hullFit(x) {
     var id = typeof x === 'string' ? x : (x && x.hullId);
     var F = global.HullFit;
-    var f = (id && F && F[id] && F[id].len) ? F[id] : null;
+    var f = (id && F && F[id] && F[id].len) ? liftedFit(id, F[id]) : null;
     if (!f || typeof x !== 'object' || !(x.lengthKm > 0) || x.lengthKm * 1000 <= f.len + 1e-6) return f;
     var k = x.lengthKm * 1000 / f.len;
     if (x._fitScaled && x._fitScaled.k === k && x._fitScaled.base === f) return x._fitScaled.fit;
@@ -433,6 +480,9 @@
     s.len = f.len * k;
     if (f.at) s.at = [f.at[0] * k, f.at[1] * k, f.at[2] * k];
     if (typeof f.ground === 'number') s.ground = f.ground * k;
+    /* Her legs grow with her, so the lift does too (gearExtend reads it). */
+    if (f.gearLift) s.gearLift = f.gearLift * k;
+    if (f.gearExt) s.gearExt = f.gearExt * k;
     s.scale = k;
     try { Object.defineProperty(x, '_fitScaled', { value: { k: k, base: f, fit: s }, writable: true, configurable: true, enumerable: false }); }
     catch (e) { /* a frozen object: unscaled caching is fine */ }
@@ -4797,11 +4847,42 @@
     }
   }
 
+  /* THE LEGS REACH THE LIFTED GROUND (2026-11-03). hullFit stands a geared
+   * hull GEAR_LIFT higher than her legs as modelled; drawn as modelled,
+   * they would stop half a metre short of the floor she is standing on. So
+   * each leg telescopes the difference over the last half of its travel,
+   * as an oleo strut does: an upper `strut` is stretched along her up axis
+   * about its own hinge until its foot is `ext` lower, and a lower `shin`
+   * is carried down the same `ext`, so the knee stays a knee. `extU` is
+   * the reach in model units (her length is one): hullFit's `gearExt`,
+   * which is the lift plus whatever the modelled feet were already off
+   * the table's ground. Returned: how much to stretch (k - 1, along up,
+   * about the pivot) and how far to drop. */
+  function gearExtend(p, travel, extU) {
+    if (!extU || p.role === 'door') return null;
+    var e = extU * gearPhase(p.role, travel);
+    if (!e) return null;
+    if (p.role === 'shin') return { stretch: 0, drop: e };
+    if (p._hang === undefined) {
+      var lo = partLowest(p, 0).lo;
+      p._hang = isFinite(lo) ? p.pivot[1] - lo : 0;
+    }
+    return p._hang > Math.abs(e) + 1e-6 ? { stretch: e / p._hang, drop: 0 } : { stretch: 0, drop: e };
+  }
+  /* One basis vector stretched by `k1` (k - 1) along `U`. */
+  function stretchAlong(v, U, k1) {
+    var d = (v.x * U.x + v.y * U.y + v.z * U.z) * k1;
+    return { x: v.x + U.x * d, y: v.y + U.y * d, z: v.z + U.z * d };
+  }
+  function gearLiftU(frame, lengthKm) {
+    var f = frame && frame.hullId ? hullFit(frame) : null;
+    return f && f.gearExt && lengthKm > 0 ? f.gearExt / (lengthKm * 1000) : 0;
+  }
   function drawHullGear(ctx, cam, frame, mesh, lengthKm, sunDir, tint, travel) {
     var parts = mesh && mesh.gear;
     if (!parts || !parts.length) return;
     tuckGear(mesh);
-    var R = frame.right, U = frame.up, F = frame.fwd;
+    var R = frame.right, U = frame.up, F = frame.fwd, extU = gearLiftU(frame, lengthKm);
 
     for (var i = 0; i < parts.length; i++) {
       var p = parts[i];
@@ -4828,6 +4909,15 @@
       gearFrame.right = rotAxis(R, k, c, s, kd);
       gearFrame.up = rotAxis(U, k, c, s, kd);
       gearFrame.fwd = rotAxis(F, k, c, s, kd);
+      var ex = gearExtend(p, travel, extU);
+      if (ex) {
+        if (ex.stretch) {
+          gearFrame.right = stretchAlong(gearFrame.right, U, ex.stretch);
+          gearFrame.up = stretchAlong(gearFrame.up, U, ex.stretch);
+          gearFrame.fwd = stretchAlong(gearFrame.fwd, U, ex.stretch);
+        }
+        if (ex.drop) gearFrame.pos = V.addScaled(gearFrame.pos, U, -ex.drop * lengthKm);
+      }
 
       if (gpuWorld() && global.GLWorld.queueMesh(cam, gearFrame, p.mesh, lengthKm, sunDir)) continue;
       paintMesh(ctx, cam, gearFrame, p.mesh, lengthKm, sunDir, tint);
@@ -4845,11 +4935,35 @@
   var HULL_U = { x: 0, y: 1, z: 0 };
   var HULL_F = { x: 0, y: 0, z: 1 };
 
-  function gearBounds(mesh, travel) {
+  /* `extU` (optional, model units): the legs telescoped as drawHullGear
+   * draws them for a lifted hull (gearExtend). Without it, the legs as
+   * modelled - what tools/fit-hulls.js measures `ground` from. */
+  function gearBounds(mesh, travel, extU) {
     var parts = mesh && mesh.gear;
     if (!parts || !parts.length) return null;
     tuckGear(mesh);
     var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    var pts = gearPoints(mesh, travel, extU);
+    for (var j = 0; j < pts.length; j++) {
+      for (var b = 0; b < 3; b++) {
+        if (pts[j][b] < lo[b]) lo[b] = pts[j][b];
+        if (pts[j][b] > hi[b]) hi[b] = pts[j][b];
+      }
+    }
+    return { lo: lo, hi: hi };
+  }
+  /* Every part's mesh posed as it is drawn, in her model frame: one
+   * { v, f } per part. What gearBounds measures and what the walker's
+   * clearance under her (outsidePlan) rasterises - her legs are solid. */
+  function gearPoints(mesh, travel, extU) {
+    var out = [];
+    gearMeshes(mesh, travel, extU).forEach(function (m) { for (var i = 0; i < m.v.length; i++) out.push(m.v[i]); });
+    return out;
+  }
+  function gearMeshes(mesh, travel, extU) {
+    var parts = mesh && mesh.gear, out = [];
+    if (!parts || !parts.length) return out;
+    tuckGear(mesh);
     for (var i = 0; i < parts.length; i++) {
       var p = parts[i];
       var pose = gearPose(p, travel), ang = pose.ang, piv = pose.piv;
@@ -4859,18 +4973,20 @@
       var R = rotAxis(HULL_R, k, c, s, kd);
       var U = rotAxis(HULL_U, k, c, s, kd);
       var F = rotAxis(HULL_F, k, c, s, kd);
+      var ex = gearExtend(p, travel, extU), st = ex ? ex.stretch : 0, dr = ex ? ex.drop : 0;
+      var vs = [];
       for (var v = 0; v < p.mesh.v.length; v++) {
         var q = p.mesh.v[v];
         var w = [piv[0] + R.x * q[0] + U.x * q[1] + F.x * q[2],
                  piv[1] + R.y * q[0] + U.y * q[1] + F.y * q[2],
                  piv[2] + R.z * q[0] + U.z * q[1] + F.z * q[2]];
-        for (var b = 0; b < 3; b++) {
-          if (w[b] < lo[b]) lo[b] = w[b];
-          if (w[b] > hi[b]) hi[b] = w[b];
-        }
+        if (st) w[1] = piv[1] + (w[1] - piv[1]) * (1 + st);
+        w[1] -= dr;
+        vs.push(w);
       }
+      out.push({ v: vs, f: p.mesh.f || [] });
     }
-    return { lo: lo, hi: hi };
+    return out;
   }
 
   /* How far this ship's gear has actually travelled. `gearTravel` is what
@@ -14149,6 +14265,20 @@
                   /* Every room inside her own hull (shipdeck.js planFitted). */
                   fit: hullFitter(ship) };
     var plan = (SD.planFitted || SD.plan)(g, popts);
+    /* HER RAMP STOPS SHORT OF HER LEGS (2026-11-03). Lengthened to 22°
+     * (shipdeck.js RAMP_SLOPE), the Kestrel's and the Bollard's ramps ran
+     * through a main gear leg standing aft of the old foot. So where one of
+     * her legs (as drawn, telescoped to the lifted ground) stands in the
+     * ramp's path - across its width and a body either side, below the
+     * deck - the ramp is cut back to end a stride short of it and planned
+     * again: steeper on those two, and a stair if that is what it takes.
+     * Twice at most, since the room can move the hinge. */
+    for (var rpass = 0; rpass < 2 && plan.ramp && plan.ramp.mode !== 'lift' && fit && fit.drop > 0; rpass++) {
+      var lim = rampLegLimit(ship, plan, fit);
+      if (!(lim > 0) || lim >= plan.ramp.len - 0.05) break;
+      popts.rampMax = (popts.rampMax ? Math.min(popts.rampMax, lim) : lim);
+      plan = (SD.planFitted || SD.plan)(g, popts);
+    }
     /* A ship bigger than her hull's fitted length (hullFit, `lengthKm`):
      * the same rooms, the cockpit at the same point of her model, and her
      * hold (or, with none, her passage) run on aft by however much further
@@ -14654,57 +14784,244 @@
    * is how much headroom she leaves at a spot (her lowest skin over it,
    * the ramp's bay cut out), and where it is less than a crouch you
    * cannot go. A post at the ramp's foot works it from out here. */
-  var OUTSIDE_CROUCH = 0.6;                // m: lower than this, nobody gets under her — not even on hands and knees
+  /* WHAT A HEAD NEEDS UNDER HER (2026-11-03). Astra, in her hangar at the
+   * foot of her Talon's ramp: "interior of ship visible, no collision on
+   * underside so we're clipping through the bottom". Three things let her:
+   *
+   *   - the clearance was sampled at each half-metre cell's MIDDLE only,
+   *     so a keel fin narrower than a cell (the Talon's, 5 cm off the floor)
+   *     was invisible from every cell beside it, and walking along it your
+   *     shoulders and head went through it - measured: 456 of 6,974
+   *     standable spots under a Talon had her skin inside the head's reach,
+   *     the worst 1.8 m inside;
+   *   - only the walker's centre was asked, not the 0.3 m round it that the
+   *     walls of a room keep (walk.js RADIUS), and the eye has a near plane
+   *     10 cm out whose corners reach 17 cm (gl.js; 68° at 16:9);
+   *   - a head under 1.4 m of her was squashed down to a crawl at 0.4 m
+   *     rather than stopped, so a belly 0.6 m up was "walkable".
+   *
+   * So the field is now exact and conservative: each triangle of her, as
+   * she is DRAWN (the ramp's well cut, the airlock box cut per pixel by the
+   * shader, the bay's walls, and her legs telescoped to the lifted ground -
+   * gearMeshes), is clipped to every cell it crosses and the cell keeps the
+   * lowest point of what is left, so nothing slips between samples. The
+   * question is asked over the whole disc a walker fills (clearAt), and the
+   * rules are three heads, each an eye plus HEAD_MARGIN: under STAND_CLEAR
+   * you are made to crouch, under CROUCH_CLEAR to crawl, and under
+   * CRAWL_CLEAR you cannot go. The crawl is the old squash kept, so the
+   * Crawler's lift, which comes down in a pit walled by 0.66 m skirts, is
+   * not a cell - but the eye is now held under her skin (main.js
+   * bellyHead) instead of being let down to 0.4 m wherever it was. */
+  var HEAD_R = 0.3;                        // m: the walker's own radius (walk.js RADIUS)
+  var HEAD_MARGIN = 0.18;                  // m over the eye: the near plane's corners, and skin
+  var STAND_CLEAR = 1.65 + HEAD_MARGIN;    // m: walk.js EYE, standing
+  /* A crouched eye is 1.10 m (walk.js CROUCH_EYE) and the posed body's is
+   * 1.16 (selfFigure); the larger, so the body's own head clears too. */
+  var CROUCH_CLEAR = 1.16 + HEAD_MARGIN;
+  /* On hands and knees: an eye 0.42 m up, which makes this the 0.6 m the
+   * old OUTSIDE_CROUCH was. */
+  var CRAWL_CLEAR = 0.42 + HEAD_MARGIN;
+  var OUTSIDE_CROUCH = CRAWL_CLEAR;
+  /* The ramp's rails: no stepping off its side once it is more than a
+   * kerb above the floor, and the walker's middle kept a body's width in
+   * from them (or its head is in the bay's wall). */
+  var RAMP_STEP = 0.35;
+  /* Sutherland-Hodgman against one axis-aligned plane: the part of P with
+   * P[ax] <= val (keepLo) or >= val. */
+  function clipAx(P, ax, val, keepLo) {
+    var out = [];
+    for (var s = 0; s < P.length; s++) {
+      var A = P[s], B = P[(s + 1) % P.length];
+      var da = keepLo ? val - A[ax] : A[ax] - val, db = keepLo ? val - B[ax] : B[ax] - val;
+      if (da >= 0) out.push(A);
+      if ((da > 0 && db < 0) || (da < 0 && db > 0)) {
+        var t = da / (da - db);
+        out.push([A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t, A[2] + (B[2] - A[2]) * t]);
+      }
+    }
+    return out;
+  }
+  function minY(P) { var m = Infinity; for (var i = 0; i < P.length; i++) if (P[i][1] < m) m = P[i][1]; return m; }
+  /* The lowest point of polygon P that is drawn: the part inside `box`
+   * (x0,x1,z0,z1,y0,y1, the shader's airlock cut) is not. */
+  function minYOutsideBox(P, box) {
+    if (!box) return minY(P);
+    var m = Infinity, rest = P, piece;
+    piece = clipAx(rest, 0, box.x0, true); if (piece.length >= 3) m = Math.min(m, minY(piece));
+    rest = clipAx(rest, 0, box.x0, false); if (rest.length < 3) return m;
+    piece = clipAx(rest, 0, box.x1, false); if (piece.length >= 3) m = Math.min(m, minY(piece));
+    rest = clipAx(rest, 0, box.x1, true); if (rest.length < 3) return m;
+    piece = clipAx(rest, 2, box.z0, true); if (piece.length >= 3) m = Math.min(m, minY(piece));
+    rest = clipAx(rest, 2, box.z0, false); if (rest.length < 3) return m;
+    piece = clipAx(rest, 2, box.z1, false); if (piece.length >= 3) m = Math.min(m, minY(piece));
+    rest = clipAx(rest, 2, box.z1, true); if (rest.length < 3) return m;
+    piece = clipAx(rest, 1, box.y0, true); if (piece.length >= 3) m = Math.min(m, minY(piece));
+    piece = clipAx(rest, 1, box.y1, false); if (piece.length >= 3) m = Math.min(m, minY(piece));
+    return m;
+  }
+  /* Her underside as a field of clearances over the floor, in the plan's
+   * metres: { cx0, cz0, n, step, low } with low[j*n+i] the lowest drawn
+   * point of her over cell (i, j), above the floor (Infinity: nothing of
+   * hers over it). `parts` are { v, f, box? } meshes already in plan
+   * metres with y above the floor. */
+  /* `floorOf(i, j)` (optional): a height under which nothing counts for
+   * cell (i, j) - over her ramp, what is under the walking face is under
+   * your feet, not over your head (the bay's end wall below her airlock's
+   * floor, at the ramp's top). Those cells get a second answer in `above`;
+   * every other cell's `above` is its `low`. */
+  function clearanceField(parts, cx0, cz0, n, STEP, floorOf) {
+    var low = new Float32Array(n * n), above = floorOf ? new Float32Array(n * n) : low;
+    for (var i = 0; i < low.length; i++) { low[i] = Infinity; above[i] = Infinity; }
+    var tris = 0;
+    parts.forEach(function (pt) {
+      var V3 = pt.v;
+      for (var fi = 0; fi < pt.f.length; fi++) {
+        var fc = pt.f[fi];
+        for (var k = 1; k + 1 < fc.length; k++) {
+          var T = [V3[fc[0]], V3[fc[k]], V3[fc[k + 1]]];
+          tris++;
+          var x0 = Math.min(T[0][0], T[1][0], T[2][0]), x1 = Math.max(T[0][0], T[1][0], T[2][0]);
+          var z0 = Math.min(T[0][2], T[1][2], T[2][2]), z1 = Math.max(T[0][2], T[1][2], T[2][2]);
+          var ia = Math.max(0, Math.floor((x0 - cx0) / STEP)), ib = Math.min(n - 1, Math.floor((x1 - cx0) / STEP));
+          var ja = Math.max(0, Math.floor((z0 - cz0) / STEP)), jb = Math.min(n - 1, Math.floor((z1 - cz0) / STEP));
+          if (ia > ib || ja > jb) continue;
+          var tMin = minY(T), box = pt.box;
+          for (var ii = ia; ii <= ib; ii++) {
+            var gx0 = cx0 + ii * STEP, gx1 = gx0 + STEP;
+            var strip = clipAx(clipAx(T, 0, gx0, false), 0, gx1, true);
+            if (strip.length < 3) continue;
+            for (var jj = ja; jj <= jb; jj++) {
+              var o = jj * n + ii, cut = floorOf ? floorOf(ii, jj) : null;
+              /* Already lower than anything this triangle can give: no
+               * point clipping it (the common case, under her belly). */
+              if (!box && low[o] <= tMin && (cut === null || above[o] <= tMin)) continue;
+              var gz0 = cz0 + jj * STEP;
+              var P = clipAx(clipAx(strip, 2, gz0, false), 2, gz0 + STEP, true);
+              if (P.length < 3) continue;
+              var y = minYOutsideBox(P, box);
+              if (y < low[o]) low[o] = y;
+              if (cut === null) { if (y < above[o]) above[o] = y; continue; }
+              var up = clipAx(P, 1, cut, false);
+              if (up.length < 3) continue;
+              var ya = minYOutsideBox(up, box);
+              if (ya < above[o]) above[o] = ya;
+            }
+          }
+        }
+      }
+    });
+    return { cx0: cx0, cz0: cz0, n: n, step: STEP, low: low, above: above, tris: tris };
+  }
+  /* The longest ramp, hinged where `plan` hinges it, that no leg of hers
+   * stands in: null when none is in its way. A leg is in the way where it
+   * crosses the ramp's own width inside the body-high slab over the ramp's
+   * face (a hand under it to two metres over it), or where you step off
+   * its foot. Her legs as they stand on the lifted ground (gearMeshes at
+   * full travel). Tried from the plan's length down by quarter metres. */
+  function rampLegLimit(ship, plan, fit) {
+    var rp = plan.ramp, mesh = ship && ship.hullId ? hullPreviewMesh(ship.hullId, ship) : null;
+    if (!rp || !mesh || !mesh.gear || !(fit.drop > 0)) return null;
+    var at = cockpitAt(ship) || [0, 0, 0], Lm = hullLength(ship) * 1000;
+    var gyR = fit.ground - at[1], drop = fit.drop, legs = [];
+    /* Each part as the box of it that is over the ramp's width: a strut
+     * runs from the floor to her belly, and its two ends can both be
+     * outside the slab while the strut goes straight through it. */
+    gearMeshes(mesh, 1, (fit.gearExt || 0) / Lm).forEach(function (m) {
+      var b = null;
+      m.v.forEach(function (v) {
+        var x = v[0] * Lm - at[0], y = v[1] * Lm - at[1] - gyR, z = v[2] * Lm - at[2];
+        if (x < rp.x0 || x > rp.x1 || z > rp.hinge) return;
+        if (!b) b = { y0: y, y1: y, z0: z, z1: z };
+        b.y0 = Math.min(b.y0, y); b.y1 = Math.max(b.y1, y); b.z0 = Math.min(b.z0, z); b.z1 = Math.max(b.z1, z);
+      });
+      if (b) legs.push(b);
+    });
+    if (!legs.length) return null;
+    var hits = function (len) {
+      if (len <= drop) return true;
+      var run = Math.sqrt(len * len - drop * drop), foot = rp.hinge - run;
+      var face = function (z) { return z < foot ? 0 : drop * (z - foot) / run; };
+      for (var i = 0; i < legs.length; i++) {
+        var b = legs[i];
+        if (b.z1 < foot - 0.8) continue;
+        /* Over the face, not under it: the Kestrel's open gear door hangs
+         * just under her ramp's edge (its top 2.20 m, the face over it
+         * 2.21), which is the ramp passing over it, not into it. */
+        if (b.y1 > face(b.z0) && b.y0 < face(b.z1) + 2.0) return true;
+      }
+      return false;
+    };
+    if (!hits(rp.len)) return null;
+    for (var len = rp.len - 0.25; len > drop; len -= 0.25) if (!hits(len)) return len;
+    return 0.01;
+  }
   function outsidePlan(ship) {
     var d = shipInterior(ship), SD = global.ShipDeck, f = hullFit(ship);
     if (!d || !d.plan.ramp || !SD || !f) return null;
     if (d.outside) return d.outside;
+    var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     var at = cockpitAt(ship) || [0, 0, 0], rp = d.plan.ramp;
     var L = hullLength(ship), Lm = L * 1000;
     var gy = f.ground - at[1];                     // the ground, in the room's metres
+    var fy = d.plan.decks ? d.plan.decks.main.floorY : d.plan.floorY;
     var mesh = hullPreviewMesh(ship.hullId, ship);
     var ext = rampExterior(Object.create(ship, { airlock: { value: { ramp: 1 } } }), mesh, L);
     var hull = ext ? ext.hull : mesh;
-    /* Her lowest skin over every half-metre of ground, as clearance. */
-    var STEP = 0.5, half = Lm * 0.6 + 2;
+    /* Model units to the plan's metres, y above the floor. */
+    var toPlan = function (v) { return [v[0] * Lm - at[0], v[1] * Lm - at[1] - gy, v[2] * Lm - at[2]]; };
+    var lb = ext && ext.lockBox, box = lb ? { x0: lb.cx - lb.hw - at[0], x1: lb.cx + lb.hw - at[0], z0: lb.z0 - at[2], z1: lb.z1 - at[2],
+                                              y0: lb.y0 - at[1] - gy, y1: lb.y1 - at[1] - gy } : null;
+    var parts = [{ v: hull.v.map(toPlan), f: hull.f, box: box }];
+    if (ext && ext.bay && ext.bay.f.length) parts.push({ v: ext.bay.v.map(toPlan), f: ext.bay.f });
+    gearMeshes(mesh, 1, (f.gearExt || 0) / Lm).forEach(function (m) { parts.push({ v: m.v.map(toPlan), f: m.f }); });
+    /* A quarter-metre cell on a hull you can walk round in a minute; half a
+     * metre under the big ones, where the field is 400 cells a side. */
+    var STEP = Lm > 60 ? 0.5 : 0.25, half = Lm * 0.6 + 2;
     var cx0 = -at[0] - half, cz0 = -at[2] - half, n = Math.ceil(half * 2 / STEP);
-    var low = new Float32Array(n * n);
-    for (var i = 0; i < low.length; i++) low[i] = Infinity;
-    for (var fi = 0; fi < hull.f.length; fi++) {
-      var fc = hull.f[fi];
-      for (var k = 1; k + 1 < fc.length; k++) {
-        var a = hull.v[fc[0]], b = hull.v[fc[k]], c = hull.v[fc[k + 1]];
-        /* Exactly where she is over each cell's middle, not her bounding
-         * box: a big slanted panel would otherwise wall off all the
-         * ground under it at the height of its lowest corner. */
-        var ax = a[0] * Lm - at[0], az = a[2] * Lm - at[2], bx = b[0] * Lm - at[0], bz = b[2] * Lm - at[2];
-        var qx = c[0] * Lm - at[0], qz = c[2] * Lm - at[2];
-        var det = (bz - qz) * (ax - qx) + (qx - bx) * (az - qz);
-        if (Math.abs(det) < 1e-9) continue;
-        var ay = a[1] * Lm - at[1] - gy, by = b[1] * Lm - at[1] - gy, qy = c[1] * Lm - at[1] - gy;
-        var x0 = Math.min(ax, bx, qx), x1 = Math.max(ax, bx, qx), z0 = Math.min(az, bz, qz), z1 = Math.max(az, bz, qz);
-        var ia = Math.max(0, Math.ceil((x0 - cx0) / STEP - 0.5)), ib = Math.min(n - 1, Math.floor((x1 - cx0) / STEP - 0.5));
-        var ja = Math.max(0, Math.ceil((z0 - cz0) / STEP - 0.5)), jb = Math.min(n - 1, Math.floor((z1 - cz0) / STEP - 0.5));
-        for (var ii = ia; ii <= ib; ii++) for (var jj = ja; jj <= jb; jj++) {
-          var px = cx0 + (ii + 0.5) * STEP, pz = cz0 + (jj + 0.5) * STEP;
-          var l1 = ((bz - qz) * (px - qx) + (qx - bx) * (pz - qz)) / det;
-          if (l1 < -1e-6 || l1 > 1 + 1e-6) continue;
-          var l2 = ((qz - az) * (px - qx) + (ax - qx) * (pz - qz)) / det, l3 = 1 - l1 - l2;
-          if (l2 < -1e-6 || l3 < -1e-6) continue;
-          var y = l1 * ay + l2 * by + l3 * qy, o = jj * n + ii;
-          if (y < low[o]) low[o] = y;
-        }
-      }
+    var run = rp.mode === 'lift' ? 0 : rp.len * Math.cos(rp.angle);
+    var footZ = rp.hinge - (rp.mode === 'lift' ? rp.len : run);
+    /* Her ramp's walking face over a point, above the floor (0 off it). */
+    function rampSurface(z) {
+      var fz = SD.rampFloor(rp, fy, 1, (rp.x0 + rp.x1) / 2, Math.min(z, rp.hinge));
+      return fz === null ? 0 : Math.max(0, fz - gy);
     }
-    function clearAt(x, z) {
+    /* Over the ramp and a head's width either side of it, what is below
+     * the face, or less than a kerb above it, is underfoot or beside you,
+     * not overhead: at her ramp's top the landing's own floor is level with
+     * it, and the bay's end wall hangs below that. The highest the face is
+     * across the cell, so nothing a stride up the ramp is missed. */
+    var floorOf = function (ii, jj) {
+      var gx0 = cx0 + ii * STEP, gz0 = cz0 + jj * STEP;
+      if (gx0 + STEP < rp.x0 - HEAD_R || gx0 > rp.x1 + HEAD_R || gz0 + STEP < footZ - 0.3 || gz0 > rp.hinge + HEAD_R) return null;
+      return Math.max(rampSurface(gz0), rampSurface(gz0 + STEP)) + RAMP_STEP;
+    };
+    var field = clearanceField(parts, cx0, cz0, n, STEP, floorOf), low = field.low, above = field.above;
+    /* Her skin over one point: the cell it is in. */
+    function skinAt(x, z) {
       var ii = Math.floor((x - cx0) / STEP), jj = Math.floor((z - cz0) / STEP);
-      /* Over nothing of hers, nothing overhead. */
       if (ii < 0 || jj < 0 || ii >= n || jj >= n) return Infinity;
       return low[jj * n + ii];
     }
+    /* Her lowest skin over the disc a walker at (x, z) fills: every cell
+     * that disc reaches into. Infinity: nothing of hers over any of it. */
+    function clearAt(x, z, r, arr) {
+      r = r === undefined ? HEAD_R : r;
+      var low = arr || field.low;
+      var ia = Math.floor((x - r - cx0) / STEP), ib = Math.floor((x + r - cx0) / STEP);
+      var ja = Math.floor((z - r - cz0) / STEP), jb = Math.floor((z + r - cz0) / STEP);
+      var m = Infinity;
+      for (var ii = Math.max(0, ia); ii <= Math.min(n - 1, ib); ii++) {
+        var gx = Math.max(cx0 + ii * STEP, Math.min(x, cx0 + (ii + 1) * STEP)) - x;
+        for (var jj = Math.max(0, ja); jj <= Math.min(n - 1, jb); jj++) {
+          var gz = Math.max(cz0 + jj * STEP, Math.min(z, cz0 + (jj + 1) * STEP)) - z;
+          if (gx * gx + gz * gz > r * r) continue;
+          var v = low[jj * n + ii];
+          if (v < m) m = v;
+        }
+      }
+      return m;
+    }
     var reach = Math.max(70, Lm * 1.4);
-    var run = rp.mode === 'lift' ? 0 : rp.len * Math.cos(rp.angle);
-    var footZ = rp.hinge - (rp.mode === 'lift' ? rp.len : run);
     var rooms = [
       { id: 'ramp', kind: 'ramp', x0: rp.x0, x1: rp.x1, z0: footZ - 0.3, z1: rp.hinge, y0: 0, y1: 3, label: 'Ramp' },
       { id: 'ground', kind: 'ground', x0: -at[0] - reach, x1: -at[0] + reach, z0: -at[2] - reach, z1: -at[2] + reach,
@@ -14715,20 +15032,56 @@
     var items = [post];
     /* A lift is ridden: its own control on the platform, to take you up. */
     if (rp.mode === 'lift') items.push({ kind: 'rampctl', x: rp.xc, z: rp.hinge - 0.4, label: 'Lift controls' });
+    var rampW = rp.x1 - rp.x0, rail = Math.min(HEAD_R, rampW * 0.25);
+    function onRampAt(x, z) { return x >= rp.x0 && x <= rp.x1 && z >= footZ - 0.3 && z <= rp.hinge; }
+    /* How much head room a walker standing at (x, z) has: her skin over
+     * the disc they fill, less what they are standing on. */
+    function headroom(x, z) {
+      return onRampAt(x, z) ? clearAt(x, z, HEAD_R, above) - rampSurface(z) : clearAt(x, z);
+    }
     var plan = {
       kind: 'outside', outside: true, rooms: rooms, doors: [], items: items,
       spawn: { x: (rp.x0 + rp.x1) / 2, z: footZ - 1.2, yaw: Math.PI }, floorY: gy,
-      ramp: rp, ship: d.plan, clearAt: clearAt, footZ: footZ,
+      ramp: rp, ship: d.plan, clearAt: clearAt, skinAt: skinAt, headroom: headroom, rampSurface: rampSurface,
+      footZ: footZ, field: field,
+      HEAD_MARGIN: HEAD_MARGIN, STAND_CLEAR: STAND_CLEAR, CROUCH_CLEAR: CROUCH_CLEAR, CRAWL_CLEAR: CRAWL_CLEAR,
       blocked: function (x, z) {
-        var onRamp = x >= rp.x0 && x <= rp.x1 && z >= footZ - 0.3 && z <= rp.hinge;
         var t = (ship.airlock && ship.airlock.ramp) || 0;
-        /* The ramp is somewhere to stand only when it is all the way down. */
-        if (onRamp) return t < 0.999;
-        return clearAt(x, z) < OUTSIDE_CROUCH;
+        var inSpan = z >= footZ - 0.3 && z <= rp.hinge;
+        /* Her rails: once the ramp is a step above the floor, nobody comes
+         * on or off it over the side, and nobody walks its edge with their
+         * head in the bay's wall. */
+        if (inSpan && t >= 0.999 && rampSurface(z) > RAMP_STEP &&
+            ((x > rp.x0 - HEAD_R && x < rp.x0 + rail) || (x > rp.x1 - rail && x < rp.x1 + HEAD_R))) return true;
+        /* The ramp is somewhere to stand only when it is all the way down;
+         * on it, the bay overhead is open up into her airlock, and a head
+         * that would not clear is stopped like anywhere else. */
+        if (onRampAt(x, z)) return t < 0.999 || headroom(x, z) < CROUCH_CLEAR;   // nobody crawls up a ramp
+        return clearAt(x, z) < CRAWL_CLEAR;
       }
     };
+    var t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    field.ms = t1 - t0;
     d.outside = plan;
     return plan;
+  }
+
+  /* HER MEASURE FOR HER HANGAR (main.js, moved here 2026-11-03 so the
+   * tests build the hangar the game builds): in her cockpit's metres, hull
+   * box, the ramp's foot, the floor her gear stands on (the LIFTED ground,
+   * hullFit) and how tall she is above it. `origin` is where her position
+   * is, in the same metres (walk.js placeShip centres a sea pad's plan on
+   * it, so the plan stands on the rig). */
+  function hangarSpec(ship) {
+    var d = shipInterior(ship), op = outsidePlan(ship), hm = hatchModel(ship);
+    if (!d || !d.plan.ramp || !op || !hm) return null;
+    var at = cockpitAt(ship) || [0, 0, 0], Lm = hullLength(ship) * 1000, rp = d.plan.ramp;
+    var hx0 = hm.lo[0] * Lm - at[0], hx1 = hm.hi[0] * Lm - at[0];
+    var hz0 = hm.lo[2] * Lm - at[2], hz1 = hm.hi[2] * Lm - at[2], top = hm.hi[1] * Lm - at[1];
+    var foot = { x: (rp.x0 + rp.x1) / 2, z: op.footZ };
+    return { box: [Math.min(hx0, foot.x - 1.5), Math.min(hz0, foot.z - 2.5), Math.max(hx1, foot.x + 1.5), hz1],
+             hull: [hx0, hz0, hx1, hz1], height: top - op.floorY, foot: foot, gy: op.floorY,
+             origin: { x: -at[0], z: -at[2] } };
   }
 
   /* A patch of ground under her, so there is something to stand on even
@@ -15270,7 +15623,7 @@
     faceMaterial: faceMaterial,
     shipMeshes: shipMeshes,
     libHull: libHull,
-    gearPhase: gearPhase, gearPose: gearPose, gearBounds: gearBounds, gearTravelOf: gearTravelOf,
+    gearPhase: gearPhase, gearPose: gearPose, gearBounds: gearBounds, gearMeshes: gearMeshes, gearExtend: gearExtend, GEAR_LIFT: GEAR_LIFT, gearTravelOf: gearTravelOf,
     hullIds: hullIds, assignHull: assignHull,
     HULL_ASSIGN: HULL_ASSIGN,
     hullSpan: hullSpan,
@@ -15363,7 +15716,7 @@
     BOLT_MIN_W: BOLT_MIN_W, BOLT_MAX_W: BOLT_MAX_W, BOLT_SEGS: BOLT_SEGS,
     SHIP_LEN: SHIP_LEN, TRUE_LEN: TRUE_LEN, hullLength: hullLength,
     BRIDGE: BRIDGE, bridgeSpec: bridgeSpec, bridgeFrame: bridgeFrame, bridgeCutMesh: bridgeCutMesh,
-    hullFit: hullFit, cockpitAt: cockpitAt, rampExterior: rampExterior, hatchModel: hatchModel, hullSegmentHit: hullSegmentHit, hullSolidOf: hullSolidOf, hullFitter: hullFitter, outsidePlan: outsidePlan, groundPatch: groundPatch,
+    hullFit: hullFit, cockpitAt: cockpitAt, rampExterior: rampExterior, hatchModel: hatchModel, hullSegmentHit: hullSegmentHit, hullSolidOf: hullSolidOf, hullFitter: hullFitter, outsidePlan: outsidePlan, hangarSpec: hangarSpec, groundPatch: groundPatch,
     OUTSIDE_CROUCH: OUTSIDE_CROUCH,
     drawAttitudeLadder: unblurred(drawAttitudeLadder),
     drawFlightPathMarker: drawFlightPathMarker,

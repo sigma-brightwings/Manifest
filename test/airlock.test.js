@@ -111,7 +111,10 @@ check('and you can walk into it from the passage', !noIn.length, noIn.join(', ')
 console.log('--- the ramp reaches the ground, and you can get out from under her ---');
 var short = [], trapped = [];
 ids.forEach(function (id) {
-  var s = ship(id), d = R.shipInterior(s), p = d.plan, rp = p.ramp, f = F[id], at = R.cockpitAt(s) || [0, 0, 0];
+  /* Her stance as the game stands her (render.js hullFit: the table's
+   * ground, half a metre lower on a geared hull, 2026-11-03), not the raw
+   * generated table. */
+  var s = ship(id), d = R.shipInterior(s), p = d.plan, rp = p.ramp, f = R.hullFit(id), at = R.cockpitAt(s) || [0, 0, 0];
   var fy = p.decks ? p.decks.main.floorY : p.floorY;
   var ground = f.ground - at[1];
   /* Down: the walking face at its foot is on the ground. */
@@ -180,6 +183,166 @@ AL.step(s, p, 0.1, flying);
 check('and the hatch is shut the moment she is not docked', s.airlock.hatch === 0);
 check('the air: a terran world is breathable, vacuum is not',
       AL.breathable({ composition: 'nitrogen/oxygen — breathable' }) && !AL.breathable({ composition: 'none — hard vacuum' }) && !AL.breathable(null));
+
+console.log('--- her hull is solid over the hangar floor (2026-11-03) ---');
+/* Astra, at the foot of her Talon's ramp in her hangar: "interior of ship
+ * visible, no collision on underside so we're clipping through the
+ * bottom". Checked here against her hull INDEPENDENTLY of the clearance
+ * field: every triangle of her as drawn (render.js outsidePlan's parts -
+ * the ramp's well cut, the airlock box the shader cuts, the bay, her legs
+ * telescoped to the lifted ground) is sampled at a few centimetres, and
+ * every point of her low enough to matter is spread over the walker's
+ * radius. Then, on the hangar's own walking plan (walk.js armHangar, as
+ * main.js arms it), at every hull in three hangars:
+ *   - nowhere you can stand has her skin within a crawling head of the
+ *     floor, ramp and hatch corridor aside (the ramp has its own rule);
+ *   - the field never claims more room than the samples show, so the eye
+ *     main.js holds under it (bellyHead) is never inside her;
+ *   - up her ramp, a crouched head clears her the whole way;
+ *   - her ramp is walkable from her hatch to the hangar's door;
+ *   - and the same hull is the same field every time. */
+var HP = ['port-3', 'port-11', 'port-27'];
+var hullErr = [], fieldErr = [], rampErr = [], floodErr = [], detErr = [], gearErr = [], nums = [];
+var tAll = Date.now();
+ids.forEach(function (id) {
+  var s = ship(id), hl = Combat.HULLS[id];
+  s.airlock = { side: 'out', ramp: 1, want: 1, hatch: 1 };
+  var op = R.outsidePlan(s), hs = R.hangarSpec(s);
+  if (!op || !hs) return;
+  var rp = op.ramp, fit = R.hullFit(s), at = R.cockpitAt(s) || [0, 0, 0], Lm = R.hullLength(s) * 1000;
+  var mesh = R.hullPreviewMesh(id, s);
+  /* Her legs reach the ground she is stood on: the lifted one. */
+  if (mesh.gear && mesh.gear.some(function (g) { return g.role !== 'door'; })) {
+    var gb = R.gearBounds(mesh, 1, (fit.gearExt || 0) / Lm);
+    var footY = gb.lo[1] * Lm;
+    if (Math.abs(footY - fit.ground) > 0.03 || Math.abs(fit.gearLift - 0.5) > 1e-9) gearErr.push(id + ' feet ' + (footY - fit.ground).toFixed(2) + ' m off the floor');
+  }
+  /* The drawn parts, as outsidePlan builds them, sampled. */
+  var ext = R.rampExterior(Object.create(s, { airlock: { value: { ramp: 1 } } }), mesh, R.hullLength(s));
+  var lb = ext && ext.lockBox;
+  var inBox = function (v) { return lb && v[0] > lb.cx - lb.hw && v[0] < lb.cx + lb.hw && v[2] > lb.z0 && v[2] < lb.z1 && v[1] > lb.y0 && v[1] < lb.y1; };
+  var srcParts = [{ m: ext ? ext.hull : mesh, box: true }];
+  if (ext && ext.bay) srcParts.push({ m: ext.bay });
+  R.gearMeshes(mesh, 1, (fit.gearExt || 0) / Lm).forEach(function (g) { srcParts.push({ m: g }); });
+  var BK = 0.5, bucket = {}, SP = Lm > 60 ? 0.2 : 0.08, CARE = Math.max(3.0, (fit.drop || 0) + 3.0);
+  var put = function (x, y, z) {
+    var k = Math.floor(x / BK) + ',' + Math.floor(z / BK);
+    (bucket[k] = bucket[k] || []).push(x, y, z);
+  };
+  srcParts.forEach(function (sp) {
+    var m = sp.m;
+    m.f.forEach(function (f) {
+      for (var k = 1; k + 1 < f.length; k++) {
+        var A = m.v[f[0]], B = m.v[f[k]], C = m.v[f[k + 1]];
+        var P = [A, B, C].map(function (v) { return [v[0] * Lm - at[0], v[1] * Lm - at[1] - op.floorY, v[2] * Lm - at[2], v]; });
+        if (Math.min(P[0][1], P[1][1], P[2][1]) > CARE) continue;
+        var e = Math.max(Math.hypot(P[1][0] - P[0][0], P[1][1] - P[0][1], P[1][2] - P[0][2]),
+                         Math.hypot(P[2][0] - P[0][0], P[2][1] - P[0][1], P[2][2] - P[0][2]),
+                         Math.hypot(P[2][0] - P[1][0], P[2][1] - P[1][1], P[2][2] - P[1][2]));
+        var N = Math.max(1, Math.ceil(e / SP));
+        for (var a = 0; a <= N; a++) for (var b = 0; a + b <= N; b++) {
+          var u = a / N, v = b / N, w = 1 - u - v;
+          var y = P[0][1] * w + P[1][1] * u + P[2][1] * v;
+          if (y > CARE) continue;
+          if (sp.box) {
+            var mv = [0, 1, 2].map(function (q) { return P[0][3][q] * w + P[1][3][q] * u + P[2][3][q] * v; }).map(function (q) { return q * Lm; });
+            if (inBox(mv)) continue;
+          }
+          put(P[0][0] * w + P[1][0] * u + P[2][0] * v, y, P[0][2] * w + P[1][2] * u + P[2][2] * v);
+        }
+      }
+    });
+  });
+  /* Her lowest sampled skin over the disc a walker at (x, z) fills; on her
+   * ramp, what is above its face less a kerb (as the field asks). */
+  var RAD = 0.3;
+  var sampled = function (x, z, cut) {
+    var m = Infinity;
+    for (var i = Math.floor((x - RAD) / BK); i <= Math.floor((x + RAD) / BK); i++)
+      for (var j = Math.floor((z - RAD) / BK); j <= Math.floor((z + RAD) / BK); j++) {
+        var bk = bucket[i + ',' + j];
+        if (!bk) continue;
+        for (var q = 0; q < bk.length; q += 3) {
+          var dx = bk[q] - x, dz = bk[q + 2] - z;
+          if (dx * dx + dz * dz > RAD * RAD || bk[q + 1] <= cut) continue;
+          if (bk[q + 1] < m) m = bk[q + 1];
+        }
+      }
+    return m;
+  };
+  var inCorr = function (x, z) { return x >= rp.x0 - 0.3 && x <= rp.x1 + 0.3 && z >= op.footZ - 0.6 && z <= rp.hinge + 0.3; };
+  /* Up her ramp: a crouched head clears her, by the samples. */
+  var rampLo = Infinity;
+  for (var rz = op.footZ; rz <= rp.hinge - 0.35; rz += 0.1) {
+    var face = op.rampSurface(rz), xc = (rp.x0 + rp.x1) / 2;
+    var hr = sampled(xc, rz, face + 0.35) - face;
+    if (hr < rampLo) rampLo = hr;
+  }
+  if (rampLo < R.outsidePlan(s).CROUCH_CLEAR) rampErr.push(id + ' ' + rampLo.toFixed(2) + ' m');
+  /* Every hull's three hangars. */
+  var size = hl.size === 'XL' ? 'L' : hl.size;
+  var blockedN = 0, standN = 0;
+  HP.forEach(function (pid, hi) {
+    var plan = Walk.layout(pid, { seed: 'kawartha', ships: [{ id: 'me', size: size, name: 'Mine', current: true, hangar: hs }] });
+    if (!plan.hangar) { hullErr.push(id + '@' + pid + ' no hangar'); return; }
+    Walk.armHangar(plan, function () { return op; });
+    var H = plan.hangar, room = plan.rooms.filter(function (r) { return r.id === H.room; })[0];
+    var G = Lm > 60 ? 0.5 : 0.25, bad = 0, over = 0, worst = '';
+    for (var X = room.x0 + 0.3; X < room.x1 - 0.3; X += G) for (var Z = room.z0 + 0.3; Z < room.z1 - 0.3; Z += G) {
+      var q = Walk.hangarToShip(H, X, Z);
+      if (!Walk.standable(plan, X, Z)) { if (hi === 0) blockedN++; continue; }
+      if (hi === 0) standN++;
+      if (inCorr(q.x, q.z)) continue;
+      var sk = sampled(q.x, q.z, -Infinity);
+      if (sk < op.CRAWL_CLEAR - 0.02) { bad++; if (!worst) worst = ' e.g. (' + q.x.toFixed(1) + ', ' + q.z.toFixed(1) + ') skin ' + sk.toFixed(2); }
+      if (op.headroom(q.x, q.z) > sk + 0.02) over++;
+    }
+    if (bad) hullErr.push(id + '@' + pid + ' ' + bad + worst);
+    if (over && hi === 0) fieldErr.push(id + ' ' + over);
+    /* Hatch to door: a flood on the walking plan from the top of her ramp. */
+    var top = Walk.hangarToStation(H, (rp.x0 + rp.x1) / 2, rp.mode === 'lift' ? rp.hinge - 0.4 : rp.hinge - 0.45);
+    var dr = plan.doors.filter(function (d0) {
+      /* Her hangar's own door: in one of its long walls (a door spans the
+       * wall's thickness, so its ends straddle the wall's line). */
+      return [room.x0, room.x1].some(function (wx) { return d0.x0 <= wx + 1e-6 && d0.x1 >= wx - 1e-6; }) &&
+             d0.z0 >= room.z0 - 1e-6 && d0.z1 <= room.z1 + 1e-6;
+    });
+    var FS = 0.25, seen = {}, qq = [[Math.round(top.x / FS), Math.round(top.z / FS)]], got = false, head = 0;
+    if (!Walk.standable(plan, top.x, top.z)) { floodErr.push(id + '@' + pid + ' the top of the ramp is not standable'); return; }
+    seen[qq[0].join(',')] = 1;
+    while (head < qq.length && !got && qq.length < 600000) {
+      var c = qq[head++];
+      for (var di = 0; di < dr.length; di++) {
+        var dd = dr[di];
+        if (c[0] * FS >= dd.x0 - 0.5 && c[0] * FS <= dd.x1 + 0.5 && c[1] * FS >= dd.z0 && c[1] * FS <= dd.z1) { got = true; break; }
+      }
+      [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(function (o) {
+        var nn = [c[0] + o[0], c[1] + o[1]], k = nn.join(',');
+        if (seen[k] || !Walk.standable(plan, nn[0] * FS, nn[1] * FS)) return;
+        seen[k] = 1; qq.push(nn);
+      });
+    }
+    if (!dr.length) floodErr.push(id + '@' + pid + ' no door found');
+    else if (!got) floodErr.push(id + '@' + pid);
+  });
+  /* The same hull, the same field. */
+  var d0 = R.shipInterior(s), keep = d0.outside;
+  d0.outside = null;
+  var again = R.outsidePlan(s);
+  var same = again.field.low.length === keep.field.low.length;
+  for (var li = 0; same && li < keep.field.low.length; li++) if (keep.field.low[li] !== again.field.low[li]) same = false;
+  if (!same) detErr.push(id);
+  d0.outside = keep;
+  nums.push(id + ' ' + keep.field.ms.toFixed(0) + 'ms/' + blockedN + 'blk/' + standN + 'ok/ramp' + rampLo.toFixed(2));
+});
+check('her legs are drawn down to the ground she is stood on, half a metre lower', !gearErr.length, gearErr.join(', '));
+check('nowhere you can stand in her hangar has her skin within a crawling head of you (ramp aside)', !hullErr.length, hullErr.slice(0, 6).join('; '));
+check('her clearance never claims more room than her hull leaves, so the eye held under it is never in her', !fieldErr.length, fieldErr.join(', '));
+check('up her ramp a crouched head clears her all the way', !rampErr.length, rampErr.join(', '));
+check('from her hatch, down her ramp, you can walk to the hangar door, in every hangar', !floodErr.length, floodErr.slice(0, 6).join('; '));
+check('the same hull is the same clearance every time', !detErr.length, detErr.join(', '));
+console.log('  note  per hull: field build / hangar cells blocked / standable / least ramp headroom (m): ' + nums.join('; ') +
+            '  (' + ((Date.now() - tAll) / 1000).toFixed(1) + ' s)');
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 if (fail) process.exitCode = 1;
