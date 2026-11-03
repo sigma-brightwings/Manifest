@@ -38,6 +38,8 @@ var path = require('path');
 var argv = process.argv.slice(2).filter(function (a) { return a !== '--ports'; });
 var PORTS = process.argv.indexOf('--ports') >= 0;
 
+var SEAL = require('./hull-seal.js');
+var SEAL_N = 400;                    // columns along her length: 9 cm on a Cutter, 41 cm on a Crawler
 var srcDir = argv[0] || '.';
 var outFile = argv[1] || path.join(__dirname, '..', 'src',
                                    PORTS ? 'ports.js' : 'hulls.js');
@@ -1303,6 +1305,7 @@ function convert(file) {
   var emitters = [];        // one accumulated bounding box per laserEmitter
   var engines = [];         // one accumulated bounding box per engineGlow
   var hinged = [];          // one bucket per Hinge node — the parts that move
+  var extTag = [];          // per exterior face, the node it came from (hull-seal's report; not emitted)
 
   function walk(nodeIdx, parentMat, inInterior, inEmitter, inHinge, legName, inEngine) {
     var node = j.nodes[nodeIdx];
@@ -1400,6 +1403,7 @@ function convert(file) {
         for (var t = 0; t < idx.length; t += 3) {
           into.f.push([base + idx[t], base + idx[t + 1], base + idx[t + 2]]);
           into.c.push(col);
+          if (into === ext) extTag.push(mname);
         }
       }
     }
@@ -1571,6 +1575,16 @@ function convert(file) {
     });
     if (parts.length) out.gear = shapeGear(parts, ext.v, ext.f, id);
   }
+
+  /* IS HER SKIN CLOSED (2026-11-03)? Measured on the exterior exactly as
+   * it is emitted (placed and rounded), with tools/hull-seal.js - the same
+   * code the tests use. Kept off the emitted object (not enumerable), so
+   * hulls.js is byte-for-byte what it was. See the report in the loop at
+   * the bottom, and tools/glb-patch.js for what to do about a warning. */
+  Object.defineProperty(out, 'seal', { enumerable: false, value: {
+    open: SEAL.openEdges(out),
+    cols: SEAL.oddColumns(out, 1 / SEAL_N, null, extTag)
+  } });
 
   var live = emitters.filter(function (e) { return isFinite(e.min[0]); });
   if (live.length) {
@@ -2882,7 +2896,24 @@ for (var fi = 0; fi < files.length; fi++) {
                * found — and a model that silently loses its gear back into
                * the baked mesh looks completely normal in every other line
                * of this output. */
-              (m.gear ? '   + ' + m.gear.length + ' hinged' : '   NO GEAR'));
+              (m.gear ? '   + ' + m.gear.length + ' hinged' : '   NO GEAR') +
+              '   open edges ' + m.seal.open);
+  /* An open edge is often harmless (an engine bell's mouth, an upright
+   * decal); a column a vertical ray crosses an odd number of times is a
+   * hole you can see into from under her, or a lone sheet with nothing
+   * behind it, and the hangar's clearance reads her by exactly those rays.
+   * Said loudly, under the model, with the parts that do it. */
+  var oc = m.seal.cols;
+  if (oc.odd.length) {
+    var worst = Object.keys(oc.by).sort(function (p, q) { return oc.by[q] - oc.by[p]; }).slice(0, 6);
+    console.log('  ! WARNING: skin open to ' + oc.odd.length + ' of ' + oc.columns + ' vertical rays, from ' +
+                worst.map(function (k) { return k + ' (' + oc.by[k] + ')'; }).join(', ') +
+                (Object.keys(oc.by).length > 6 ? ' ...' : '') + '. See tools/glb-patch.js.');
+  }
+}
+if (!PORTS) {
+  var leaky = Object.keys(lib).filter(function (k) { return lib[k].seal && lib[k].seal.cols.odd.length; });
+  if (leaky.length) console.log('\n' + leaky.length + ' model(s) with an open skin (odd vertical rays): ' + leaky.join(', '));
 }
 /* Loud, because a model that arrives without an interior is not an error —
  * it is an older export, and the only way to notice is to be told. */

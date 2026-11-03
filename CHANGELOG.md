@@ -40,6 +40,51 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-03, the Cutter's and the Crawler's models mended; a door out of the Crawler's lift pit)
+
+Astra, on the two model problems the hull-walk fix reported and could not mend
+in code: "can you not fix the models?"
+
+- **The models themselves are fixed**, in `ref/glb`, by a new tool,
+  `tools/glb-patch.js`, that edits the `.glb` files directly. It only touches
+  the parts it names, and only those still open. Running it again changes
+  nothing.
+- **The Cutter's belly.** Four blisters under her (two on the keel, two sensor
+  blisters) were domes with no lid. Their open rims sat a centimetre inside her
+  belly, so they could not be seen, but they were holes. Each now has its lid
+  (24 faces). Her radar dishes, each two open bowls whose rims missed by a
+  centimetre, get their back faces.
+- **The Crawler, all three liveries.** Her frame was built of open parts:
+  single-sided lamps, hazard stripes, deck markings and her canopy panes;
+  downward RCS bells open at the throat, 8 m up her track sides, which you could
+  see up into her through; and open-ended struts, pipes and link tubes, plus
+  point-defence domes with no base. Sheets get their back face, which looks the
+  same because nothing is culled. Shells get lids in their own colour. Bells get
+  their throat capped and their mouths left open. That is 65 parts and about
+  2,400 faces per livery.
+- **A door out of the Crawler's lift pit.** Her lift comes down into a pit
+  boxed in by her skirt, with no way through it. Her fore cross-member now has a
+  doorway, 2.30 m wide and 2.13 m clear, on the lift's line, framed in her hazard
+  amber, with a door leaf in her belly doors' colour slid open beside it. The
+  0.6 m "lift lane" you used to duck along is gone; a lift is walked off by the
+  same rule as everywhere else. The pit itself is still 1.80 m under her closed
+  belly doors, which is 3 cm short of standing height, so you crouch for the
+  10 m from the lift to the door. The doors were not moved, because the
+  founded-station Crawler finds them by their position.
+- **Caught if it comes back.** `glb2hulls` prints every model's open edges
+  and warns, naming the parts, on any model a vertical ray crosses an odd
+  number of times. `test/hull-seal.test.js` fails on it. Three models no
+  player walks under still have the Cutter's lidless blisters (`navy-l`,
+  `navy-s`) or an open beacon (`police-s`). They are pinned at their
+  measured counts, and the same tool would close them.
+
+Before: the Cutter had 38 odd columns and each Crawler livery had 1,592. Now
+every hull and livery has 0, in airlock.test, which also walks the Crawler
+forward off her lift and through the doorway. The other 53 models in
+`src/hulls.js` are byte-identical.
+
+**Saves:** survive. Only the art changed; nothing about a hull is stored.
+
 ### Fixed (2026-11-03, inside a station on the way through: the rooms are drawn, the routes miss the walls, the lifts carry you, the blast doors are back)
 
 Astra, at Halden Dock, Waypoint Dock, Threshold Dock and Halden Yard:
