@@ -624,15 +624,18 @@
     '    for (int i = 0; i < 56; i++) {',
     '      vec4 po = uSeaPost[i];',
     '      if (po.z <= 0.0) break;',
-    '      vec2 dd = abs(lp - po.xy) - vec2(po.z);',
-    '      float e = length(max(dd, 0.0)) * 1000.0;',  // metres off the column's face
+    /* ROUND, not the column's square: a wash spreads from a column as a
+     * ring, and a square halo read from mid-distance as an outline drawn
+     * round each one (2026-11-02). Its edge is torn by `tear` below. */
+    '      vec2 rel0 = lp - po.xy;',
+    '      float e = (length(rel0) - po.z * 1.15) * 1000.0;',  // metres off the column, roughly
     '      float crest = sw.x * 1000.0;',
-    '      float ring = 1.0 - smoothstep(0.8, 4.5 + 3.0 * max(0.0, crest), e);',
+    '      if (e > 9.0) continue;',
+    '      float ring = 1.0 - smoothstep(-1.0, 3.5 + 3.0 * max(0.0, crest), e);',
     /* Breaking: brightest as a crest arrives, ebbing between, and torn up
      * by a little noise round the column so it is spray, not a halo. */
     '      float wash = 0.45 + 0.55 * smoothstep(-0.2, 0.6, crest);',
-    '      vec2 rel = lp - po.xy;',
-    '      float az = atan(rel.y, rel.x);',
+    '      float az = atan(rel0.y, rel0.x);',
     '      float tear = clamp(0.5 + 0.5 * sin(az * 7.0 + e * 1.3 - uSeaK.x * 1.7 + po.x * 4000.0)',
     '                       * sin(az * 3.0 - uSeaK.x * 0.9 + po.y * 3000.0) + 0.25, 0.0, 1.0);',
     '      foam = max(foam, ring * wash * tear);',
@@ -2129,6 +2132,7 @@
      * shades one way seen from space and another from a berth inside it,
      * on the same frame. */
     'uniform float uIndoors;',
+    'uniform vec3 uSkyFill;',     // the ground sky's light, as ambient; 0 off the ground
     /* Whole-mesh opacity, multiplied into the per-face alpha. 1.0 is the
      * default and the opaque path short-circuits on it, so a hull costs one
      * float compare and nothing else. */
@@ -2323,6 +2327,11 @@
     '    base = mix(vCol, min(pc, vec3(1.0)), uPaint.w);',
     '  }',
     '  vec3 lit = base * (0.26 + 0.70 * lam);',
+    /* SKY FILL (2026-11-02): under a daylit ground sky the shade side of a
+     * structure is lit by the sky, not black - a sea platform's domes,
+     * backlit against the sun, went near-black over a bright sea. Outdoors
+     * only (the mix with `dim` below takes it away indoors). */
+    '  lit += base * uSkyFill;',
     /* uIndoors above 1 is the same indoor lamp, brighter (2026-11-01):
      * another ship's cabin seen through her windows (render.js,
      * CABIN_SEEN_GLOW). At exactly 1, every room is lit as it was. */
@@ -2835,7 +2844,7 @@
       meshUni = uniforms(gl, meshProg, ['uModelRel', 'uRot', 'uScale',
                                         'uRight', 'uUp', 'uFwd', 'uFlen',
                                         'uCenterPx', 'uViewportPx', 'uSunDir',
-                                        'uNear', 'uInvLogRange', 'uIndoors',
+                                        'uNear', 'uInvLogRange', 'uIndoors', 'uSkyFill',
                                         'uGlow', 'uWind',
                                         'uAlpha', 'uCut', 'uCutR', 'uCutRim',
                                         'uCutBand', 'uCutUp', 'uCutCap',
@@ -4309,6 +4318,8 @@
         gl.uniform4f(meshUni.uPaint, 0, 0, 0, 0);
       }
       gl.uniform1f(meshUni.uIndoors, m.indoors);
+      var fill = groundSky && groundSky.fill;
+      gl.uniform3f(meshUni.uSkyFill, fill ? fill[0] : 0, fill ? fill[1] : 0, fill ? fill[2] : 0);
       /* m.cam: this loop has no `cam` of its own, and until the canopy
        * wells (2026-10-31) nothing queued a mesh with a box to find out. */
       if (m.box) uploadBox(meshUni, m.box, m.cam);
@@ -4801,6 +4812,14 @@
   GL.setGroundSky = function (body, up, sunDir) {
     groundSky = body ? { bodyId: body.id, tint: atmoTint(body), air: airOf(body),
                          up: up, sun: sunDir } : null;
+    /* The sky's light on the shade side of whatever stands under it: the
+     * sky half-way up, at about half strength - an overcast-ish fill, not
+     * a second sun. */
+    if (groundSky) {
+      var su = up.x * sunDir.x + up.y * sunDir.y + up.z * sunDir.z;
+      var sk = skyAt(groundSky.tint, groundSky.air, su, 0.5, 0.5, 0);
+      groundSky.fill = [sk[0] * 0.55, sk[1] * 0.55, sk[2] * 0.55];
+    }
   };
   /* The sky itself: one full-screen quad behind everything, no depth, no
    * glow. Called right after begin, before the stars, so at dusk the stars
