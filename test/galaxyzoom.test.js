@@ -237,5 +237,56 @@ console.log('--- labels do not overprint ---');
   check('and every label is on the plot', inside);
 })();
 
+console.log('--- the two names that are always shown pick a clear side ---');
+(function () {
+  /* 2026-11-03, seen on F6 at the whole-galaxy zoom: "Mirven" and
+   * "Rhoameor" in the crowded middle, the two names that may not be
+   * dropped, were placed ignoring every dot, and landed on their
+   * neighbours. With every star's dot in as a blocked box, as drawStarMap
+   * passes them, the forced names must find a side that covers no dot
+   * when one exists within reach — and still overlap no other name. */
+  var xf = C.xf({ z: 1, gx: 0, gy: 0 }, plot);
+  var dots = gal.stars.map(function (s) {
+    var d = C.dot(xf, s);
+    return { bx: d.x - 4, by: d.y - 4, bw: 8, bh: 8, dot: true };
+  });
+  /* The two stars nearest the middle as selected and here: the densest
+   * place on the chart. At this zoom only those tiers are named
+   * (CHART_TIER_PX), so they are the only candidates, as in the game. */
+  var mid = gal.stars.slice().sort(function (a, b) { return Math.hypot(a.x, a.y) - Math.hypot(b.x, b.y); });
+  var cands = mid.slice(0, 2).map(function (s, i) {
+    var d = C.dot(xf, s);
+    return { text: s.name, x: d.x, y: d.y, r: i < 2 ? 7 : 3, tier: i === 0 ? 0 : i === 1 ? 1 : 3, d: i, size: i < 2 ? 12 : 11 };
+  });
+  var placed = C.labels(cands, plot, 80, dots);
+  var forced = placed.filter(function (pl) { return pl.c.tier <= 1; });
+  check('both always-shown names are placed', forced.length === 2, forced.map(function (f) { return f.c.text; }).join(', '));
+  var under = forced.map(function (pl) {
+    return dots.filter(function (q) { return pl.bx < q.bx + q.bw && pl.bx + pl.bw > q.bx && pl.by < q.by + q.bh && pl.by + pl.bh > q.by; }).length;
+  });
+  check('and neither sits on another star\'s dot', under.every(function (n) { return n === 0; }), 'dots under: ' + under.join(', '));
+  var overlaps = 0;
+  for (var a = 0; a < placed.length; a++) for (var b = a + 1; b < placed.length; b++) {
+    var p = placed[a], q = placed[b];
+    if (p.bx < q.bx + q.bw && p.bx + p.bw > q.bx && p.by < q.by + q.bh && p.by + p.bh > q.by) overlaps++;
+  }
+  check('and no two names overlap', overlaps === 0);
+
+  /* The border: a field split down the middle of a forced name's first
+   * spot. With the edge cost, it goes to a side clear of the line. */
+  var f = { nc: 40, nr: 40, x0: -160, y0: -160, owner: [] };
+  for (var k = 0; k < 1600; k++) f.owner.push((k % 40) < 22 ? 'a' : 'b');   // a border at x = +16 px
+  var xf0 = { ox: 400, oy: 400, scale: 1 };
+  var cost = C.edgeCost(f, xf0);
+  var one = [{ text: 'Rhoameor', x: 400, y: 400, r: 5, tier: 1, d: 0, size: 12 }];
+  /* Dots block both beside-spots, so the name is forced. */
+  var block = [{ bx: 412, by: 390, bw: 10, bh: 20, dot: true }, { bx: 370, by: 390, bw: 10, bh: 20, dot: true },
+               { bx: 380, by: 375, bw: 40, bh: 10, dot: true }, { bx: 380, by: 412, bw: 40, bh: 10, dot: true }];
+  var withCost = C.labels(one, { x0: 0, y0: 0, size: 800 }, 1, block, cost)[0];
+  check('a forced name keeps off a territory border when it can',
+        withCost && cost(withCost.bx, withCost.by, withCost.bw, withCost.bh) === 0,
+        withCost ? 'box x ' + withCost.bx.toFixed(0) + '..' + (withCost.bx + withCost.bw).toFixed(0) : 'none');
+})();
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 if (fail) process.exit(1);

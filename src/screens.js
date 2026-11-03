@@ -107,6 +107,12 @@
     ctx.font = 'bold 15px ui-monospace, monospace';
     ctx.fillStyle = '#b4f0ff';
     ctx.fillText(title, 16, 20);
+    /* Where the title ends, for Halloway's lesson strip (main.js
+     * drawTutorialCard), which is drawn later in the same frame across this
+     * bar. It used to start at a fixed 170 px and so sat on any title
+     * longer than COMMS — "GALAXY MAP & COURSE PLOTTER" lost everything
+     * after "COU". The strip reads this and consumes it. */
+    G.modeTitleRight = 16 + ctx.measureText(title).width;
 
     ctx.font = 'bold 12px ui-monospace, monospace';
     ctx.fillStyle = '#5d8fa4';
@@ -6383,13 +6389,14 @@
    * monospace, and measureText per candidate per frame is the expensive
    * way to learn a number that is length times a constant. */
   function chartCharW(px) { return px * 0.61; }
-  function chartLabels(cands, plot, maxN, blocked) {
+  function chartLabels(cands, plot, maxN, blocked, edgeCost) {
     var placed = [];
     /* Things a name must not land on either — the scale bar, the buttons,
      * the news line, the other stars' dots — go in as boxes that are
      * already "placed", and are taken off the front before returning. */
     var nBlocked = (blocked || []).length;
     for (var bi = 0; bi < nBlocked; bi++) placed.push(blocked[bi]);
+    var forced = [];
     for (var i = 0; i < cands.length && placed.length - nBlocked < (maxN || 80); i++) {
       var c = cands[i];
       var tw = c.text.length * chartCharW(c.size), th = c.size + 2;
@@ -6427,15 +6434,111 @@
        * names — the two the chart had always shown. For those two, other
        * stars' dots do not count; furniture and names already placed still
        * do. */
-      if (j === spots.length && c.tier <= 1 && !c.retry) {
-        var again = { text: c.text, x: c.x, y: c.y, r: c.r, tier: c.tier, size: c.size,
-                      color: c.color, d: c.d, retry: true, src: c };
-        var keep = placed.filter(function (q) { return !q.dot; });
-        var got = chartLabels([again], plot, 1, keep);
-        if (got.length) { got[0].c = c; placed.push(got[0]); }
-      }
+      /* AND THEY TOO PICK THE CLEAREST SIDE (2026-11-03). Ignoring the
+       * dots outright meant taking the first legal spot whatever lay
+       * under it, and at the whole-galaxy zoom that put "Rhoameor" across
+       * a territory border and its neighbours' dots, and "Mirven" on the
+       * dots beside it, when a spot a little further out was clear. So a
+       * forced name now looks at sixteen bearings at several reaches and
+       * takes the one covering the fewest dots and border cells, nearer
+       * winning a tie; a name pushed out past the first reach is drawn
+       * with a leader back to its dot (`lead`), so it still says which
+       * dot it belongs to. Names and furniture may still never be covered.
+       *
+       * The two are placed TOGETHER, not one after the other: on kawartha
+       * they are 4 px apart, and the first, placed greedily, took the
+       * only clear side the second had. They are deferred until the
+       * first ordinary name, so nothing else takes their room first. */
+      if (j === spots.length && c.tier <= 1) forced.push({ c: c, tw: tw, th: th, gap: gap });
+      var nextT = i + 1 < cands.length ? cands[i + 1].tier : 99;
+      if (forced.length && nextT > 1) { placeForced(forced, plot, placed, edgeCost); forced = []; }
     }
     return placed.slice(nBlocked);
+  }
+  /* Reaches past the dot's own gap, in px, and sixteen bearings at each:
+   * measured on kawartha at the whole-galaxy zoom, the nearest clear side
+   * for Mirven is ~20 px out and for Rhoameor ~15, where the four spots
+   * the ordinary names try are all on a neighbour. */
+  var CHART_FORCED_REACH = [0, 6, 12, 20, 30];
+  var CHART_FORCED_BEARINGS = 16;
+  function boxesTouch(a, b, m) {
+    return a.bx < b.bx + b.bw + m && a.bx + a.bw + m > b.bx && a.by < b.by + b.bh && a.by + a.bh > b.by;
+  }
+  /* Every legal spot for one forced name, with its cost. */
+  function forcedSpots(f, plot, placed, edgeCost) {
+    var c = f.c, tw = f.tw, th = f.th, out = [];
+    var lo = plot.y0 + 2, hi = plot.y0 + plot.size - 2 - th;
+    var lx = plot.x0 + 2, hx = plot.x0 + plot.size - 2 - tw;
+    for (var ri = 0; ri < CHART_FORCED_REACH.length; ri++) {
+      var g = f.gap + CHART_FORCED_REACH[ri];
+      for (var ai = 0; ai < CHART_FORCED_BEARINGS; ai++) {
+        /* The box's centre pushed out along the bearing until its near
+         * side is g from the dot. */
+        var an = ai * K.TAU / CHART_FORCED_BEARINGS, ux = Math.cos(an), uy = Math.sin(an);
+        var mcx = c.x + ux * (g + (tw / 2) * Math.abs(ux)), mcy = c.y + uy * (g + (th / 2) * Math.abs(uy));
+        var bx = Math.max(lx, Math.min(hx, mcx - tw / 2));
+        var by = Math.max(lo, Math.min(hi, mcy - th / 2));
+        /* Clamped onto the plot, it must not have slid onto its own dot:
+         * that is the one overlap the reader cannot work out. */
+        if (c.x + c.r > bx && c.x - c.r < bx + tw && c.y + c.r > by && c.y - c.r < by + th) continue;
+        var box = { c: c, bx: bx, by: by, bw: tw, bh: th, lead: ri > 0 };
+        var dots = 0, hit = false;
+        for (var k = 0; k < placed.length && !hit; k++) {
+          var p = placed[k];
+          /* Names keep the 3 px gutter they keep from each other; a dot
+           * only has to be not under the text. */
+          if (!boxesTouch(box, p, p.dot ? 0 : 3)) continue;
+          if (p.dot) dots++; else hit = true;
+        }
+        if (hit) continue;
+        box.dotsUnder = dots;
+        box.cost = dots * 4 + (edgeCost ? edgeCost(bx, by, tw, th) : 0) + ri * 0.75 + ai * 0.001;
+        out.push(box);
+      }
+    }
+    return out.sort(function (a, b) { return a.cost - b.cost; });
+  }
+  function placeForced(forced, plot, placed, edgeCost) {
+    var A = forcedSpots(forced[0], plot, placed, edgeCost);
+    if (forced.length === 1) { if (A.length) placed.push(A[0]); return; }
+    var B = forcedSpots(forced[1], plot, placed, edgeCost);
+    /* Each other's dot counts against a spot too: the pair search below
+     * only keeps their names apart. */
+    var dotOf = function (f) { var r = Math.max(2, f.c.r - 3); return { bx: f.c.x - r, by: f.c.y - r, bw: 2 * r, bh: 2 * r }; };
+    var dA = dotOf(forced[0]), dB = dotOf(forced[1]);
+    var best = null, bestCost = Infinity;
+    for (var a = 0; a < A.length && A[a].cost < bestCost; a++) {
+      var ca = A[a].cost + (boxesTouch(A[a], dB, 0) ? 4 : 0);
+      for (var b = 0; b < B.length && ca + B[b].cost < bestCost; b++) {
+        if (boxesTouch(A[a], B[b], 3)) continue;
+        var cost = ca + B[b].cost + (boxesTouch(B[b], dA, 0) ? 4 : 0);
+        if (cost < bestCost) { bestCost = cost; best = [A[a], B[b]]; }
+      }
+    }
+    if (best) { placed.push(best[0]); placed.push(best[1]); return; }
+    if (A.length) placed.push(A[0]);
+  }
+  /* How much territory border a label's box would sit on: the cells under
+   * it whose owner differs from the next cell east or south — which is
+   * exactly where paintTerritory strokes its dotted line. Null when no
+   * field was built this frame, so a stale field from another zoom never
+   * steers a name. */
+  function chartEdgeCost(f, xf) {
+    if (!f || !f.owner) return null;
+    var cell = TERRITORY_CELL, ox = Math.round(xf.ox) + f.x0, oy = Math.round(xf.oy) + f.y0;
+    return function (bx, by, bw, bh) {
+      var c0 = Math.max(0, Math.floor((bx - ox) / cell)), c1 = Math.min(f.nc - 1, Math.floor((bx + bw - ox) / cell));
+      var r0 = Math.max(0, Math.floor((by - oy) / cell)), r1 = Math.min(f.nr - 1, Math.floor((by + bh - oy) / cell));
+      var n = 0;
+      for (var r = r0; r <= r1; r++) {
+        for (var c = c0; c <= c1; c++) {
+          var k = r * f.nc + c, o = f.owner[k];
+          if (c + 1 < f.nc && f.owner[k + 1] !== o) n++;
+          if (r + 1 < f.nr && f.owner[k + f.nc] !== o) n++;
+        }
+      }
+      return n;
+    };
   }
 
   /* The labels' tiers, and how far in you must be before each appears. The
@@ -6803,9 +6906,22 @@
       { bx: plot.x0, by: plot.y0, bw: plotSize, bh: 10 }
     ]);
     labelCands.sort(function (a, b) { return a.tier - b.tier || a.d - b.d; });
-    var placed = chartLabels(labelCands, plot, 80, blocked);
+    var terrNow = (G.galaxy && G.charted) ? chartEdgeCost(terrCache, xf) : null;
+    var placed = chartLabels(labelCands, plot, 80, blocked, terrNow);
     ctx.save();
     placed.forEach(function (pl) {
+      /* A forced name pushed out to a clear side says which dot is its
+       * own with a hairline from the box's nearest point to the dot. */
+      if (pl.lead) {
+        var qx = Math.max(pl.bx, Math.min(pl.bx + pl.bw, pl.c.x)), qy = Math.max(pl.by, Math.min(pl.by + pl.bh, pl.c.y));
+        var ld = Math.hypot(qx - pl.c.x, qy - pl.c.y);
+        if (ld > pl.c.r + 3) {
+          var ux = (qx - pl.c.x) / ld, uy = (qy - pl.c.y) / ld;
+          ctx.strokeStyle = pl.c.color; ctx.globalAlpha = 0.6; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(pl.c.x + ux * (pl.c.r + 2), pl.c.y + uy * (pl.c.r + 2)); ctx.lineTo(qx - ux, qy - uy); ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
+      }
       ctx.font = 'bold ' + pl.c.size + 'px ui-monospace, monospace';
       ctx.fillStyle = pl.c.color;
       ctx.fillText(pl.c.text, pl.bx, pl.by + pl.c.size);
@@ -7251,7 +7367,7 @@
       fit: chartFit, maxZoom: chartMaxZoom, xf: chartXf, toScreen: chartToScreen,
       toGalaxy: chartToGalaxy, dot: chartDot, clamp: chartClamp, zoomAt: chartZoomAt,
       pan: chartPan, centreOn: chartCentreOn, inPlot: chartInPlot, pick: chartPick,
-      scaleBar: chartScaleBar, edge: chartEdge, labels: chartLabels,
+      scaleBar: chartScaleBar, edge: chartEdge, labels: chartLabels, edgeCost: chartEdgeCost,
       MAX_PX_PER_LY: CHART_MAX_PX_PER_LY,
       /* The last territory field built, and what it was built from, so a
        * test can check a zoomed-in border against the galaxy itself. */

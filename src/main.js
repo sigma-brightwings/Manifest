@@ -18592,8 +18592,18 @@
      * that, and MORE brings the whole card back for as long as you want
      * it. You read what he says in the cockpit; on a screen you only need
      * to know what to do. */
+    /* AND IT GIVES WAY TO THE PAGE'S NAME (2026-11-03). Seen on F6: the
+     * fixed 170 px start covered "GALAXY MAP & COURSE PLOTTER" from its
+     * fourth word. Every full-screen page writes its name through
+     * modeFrame (screens.js), which leaves where the name ends in
+     * G.modeTitleRight; the strip starts past that. Consumed here, so a
+     * page that does not draw a title bar never inherits the last one's. */
+    var titleR = G.modeTitleRight || 0;
+    G.modeTitleRight = 0;
     if ((!flying() || G.market) && !G.tutMore) {
-      var sx = Math.min(170, Math.round(w * 0.2)), sw = w - sx - 8, sy = 3, sh = 42;
+      var sx = Math.min(170, Math.round(w * 0.2)), sy = 3, sh = 42;
+      if (!flying() && titleR) sx = Math.max(sx, Math.min(Math.round(titleR + 14), w - 300));
+      var sw = w - sx - 8;
       panel(ctx, sx, sy, sw, sh, true);
       ctx.font = 'bold 12px ui-monospace, monospace';
       var head = 'HALLOWAY ' + c.lesson + '/' + c.of + '  ▶ ' + c.goal;
