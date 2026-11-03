@@ -4057,13 +4057,21 @@
       TFs.contracts(G).forEach(function (c) {
         if (c.closed) return;
         var eq = TFs.equity(G, c), so = eq - c.qStart - c.qFlows;
-        row('ACCOUNT  ·  ' + c.firmName.toUpperCase() + (c.closing ? '  ·  CLOSING' : ''),
-            fmtCr(c.cash) + ' cash  ·  ' + fmtCr(eq) + ' all told  ·  this quarter ' + (so >= 0 ? '+' : '') + fmtCr(so) +
-            '  ·  ' + TFs.quarterLine(c, G.t) + '  ·  ' + c.hulls.length + ' hull' + (c.hulls.length === 1 ? '' : 's'),
-            function () {
-              say('Your account with ' + c.firmShort + ' is kept at their office at ' + c.portName +
-                  (c.starName ? ', ' + c.starName : '') + ' — withdraw, deposit or close it there', 6);
-            }, true);
+        var last = c.history && c.history.length ? c.history[c.history.length - 1] : null;
+        var tell = function () {
+          say('Your account with ' + c.firmShort + ' is kept at their office at ' + c.portName +
+              (c.starName ? ', ' + c.starName : '') + ' — withdraw, deposit or close it there', 6);
+        };
+        /* Two rows, short: the first draft put all of it on one and the
+         * row cut the last quarter off at the right edge, which is the one
+         * number the house is judged on. */
+        row('ACCOUNT  ·  ' + c.firmShort.toUpperCase() + (c.closing ? '  ·  CLOSING' : ''),
+            'worth ' + fmtCr(eq) + '  ·  this quarter ' + (so >= 0 ? '+' : '') + fmtCr(so) +
+            (c.nextReview != null ? '  ·  review in ' + TFs.fmtSpan(Math.max(0, c.nextReview - G.t)) : ''), tell);
+        row('   LAST QUARTER',
+            (last ? (last.profit >= 0 ? '+' : '') + fmtCr(last.profit) + ', ' + last.verdict + ', ' + fmtCr(last.commission) + ' commission'
+                  : 'none yet — the first review is the end of this one') +
+            '  ·  ' + fmtCr(c.cash) + ' cash  ·  ' + c.hulls.length + ' hull' + (c.hulls.length === 1 ? '' : 's'), tell);
       });
     }
 
@@ -4095,15 +4103,19 @@
          * action here — she is the house's to direct until you stand her
          * down at its office. */
         if (rec.trade && TFs) {
-          var tc = TFs.contractFor(G, rec), made = rec.trade.made || 0;
+          var tc = TFs.contractFor(G, rec), made = rec.trade.made || 0, tl = rec.trade.leg;
+          var hailHer = function () {
+            say(rec.name + ' is ' + TFs.phaseOf(rec, G.t) + ' for ' + (tc ? tc.firmShort : 'the house') +
+                ' — you can hail her on the channel', 6);
+          };
           row(rec.name.toUpperCase() + '  ·  TRADING FOR ' + (tc ? tc.firmShort.toUpperCase() : 'A HOUSE'),
-              TFs.phaseOf(rec, G.t) + '  ·  ' + (rec.trade.runs || 0) + ' run' + (rec.trade.runs === 1 ? '' : 's') + ', ' +
-              (made >= 0 ? '+' : '') + fmtCr(made) + ' to the account' +
-              (tc ? '  ·  account ' + fmtCr(TFs.equity(G, tc)) + '  ·  ' + TFs.quarterLine(tc, G.t) : ''),
-              function () {
-                say(rec.name + ' is ' + TFs.phaseOf(rec, G.t) + ' for ' + (tc ? tc.firmShort : 'the house') +
-                    ' — you can hail her on the channel', 6);
-              }, true);
+              tl ? (tl.cid ? tl.qty + ' t ' + TFs.goodName(tl.cid) : 'empty') + ' → ' + tl.toName +
+                   (tl.kind === 'jump' ? ' (' + (tl.toStarName || 'another star') + ')' : '') +
+                   '  ·  in ' + TFs.fmtSpan(Math.max(0, tl.arrive - G.t))
+                 : 'at ' + (rec.portName || 'her port') + '  ·  next run in ' + TFs.fmtSpan(Math.max(0, rec.trade.next - G.t)),
+              hailHer);
+          row('   HER RUNS', (rec.trade.runs || 0) + ' run' + (rec.trade.runs === 1 ? '' : 's') + ', ' +
+              (made >= 0 ? '+' : '') + fmtCr(made) + ' to the account', hailHer);
           return;
         }
         if (rec.work) {

@@ -740,7 +740,7 @@
     var eq = T.equity(G, c);
     return 'Your account: ' + crs(c.cash) + ' in cash, ' + crs(eq) + ' all told; this quarter so far ' +
            ((eq - c.qStart - c.qFlows) >= 0 ? '+' : '') + crs(eq - c.qStart - c.qFlows) + '. ' +
-           T.quarterLine(c, t) + '. ' + (hulls.length ? 'On the book: ' + hulls.join('; ') + '.' : 'No hulls on the book.') +
+           (function (q) { return q.charAt(0).toUpperCase() + q.slice(1); })(T.quarterLine(c, t)) + '. ' + (hulls.length ? 'On the book: ' + hulls.join('; ') + '.' : 'No hulls on the book.') +
            (c.closing ? ' The account is closing.' : '');
   }
   var ACCOUNT = {
