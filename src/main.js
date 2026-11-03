@@ -353,6 +353,12 @@
     G.hullWarned = false;
     G.wasDocked = false;
     enterSystem(G.galaxy.home, { fresh: true });
+    /* AND AN OLD MAN ON THE CHANNEL (tutorial.js, 2026-11-02). Captain
+     * Halloway's lessons open every new career, once the ship is on its
+     * pad — he picks the run from where you are standing. A loaded save
+     * replaces this with whatever it carried (save.js), which for a career
+     * older than him is nothing at all. */
+    G.tutorial = global.Tutorial ? global.Tutorial.begin(G, G.sys, G.t) : null;
 
     if (typeof location !== 'undefined' &&
         decodeURIComponent((location.hash || '').replace(/^#/, '')) !== String(seed)) {
@@ -3092,6 +3098,60 @@
     if (why) say('Auto-dock ' + why, 3);
   }
 
+  /* THE AUTOPILOT'S HAIL (Astra, 2026-11-02). 'go', 'hold' or 'refused'.
+   *
+   * The same request the F4 hail makes (Combat.requestClearance), so the
+   * port answers in its own words on the comms line and the refusal
+   * reasons are the ones a pilot asking by hand would hear. Asked once,
+   * then again only when the port's own timetable says a berth comes free
+   * — never every frame, which would be a port being shouted at. A port
+   * that has already hailed YOU (offerClearanceNearby) has cleared you,
+   * and this just says go. */
+  var AUTO_HOLD_MIN = 10;            // s of game time between asks, at least
+  function autodockClearance(ad, st) {
+    if (Combat.isCleared(G, st)) { ad.holding = null; return 'go'; }
+    if (ad.holding && G.t < ad.holding.askAt) return 'hold';
+    var res = Combat.requestClearance(G, st, HOOKS, Sim.berthStatus(st, G.sys, G.t, G.ship));
+    if (res && res.granted) { ad.holding = null; return 'go'; }
+    if (res && res.reason === 'full') {
+      ad.holding = { askAt: G.t + Math.max(AUTO_HOLD_MIN, isFinite(res.wait) ? res.wait : 30),
+                     at: ad.holding ? ad.holding.at : null };
+      return 'hold';
+    }
+    cancelAutodock('stood down — ' + ((res && res.text) || 'no clearance'));
+    return 'refused';
+  }
+
+  /* HOLDING FOR A BERTH: stay where the port told you to wait, moving with
+   * it, until the next ask. "Where" is wherever the hold began, relative to
+   * the port, pushed out past four capture radii if the ship was already
+   * closer than that — a ship waiting for a berth does not wait inside the
+   * envelope, where the capture would take it. Over a world the same
+   * station-keeping holds the ship up against gravity, as the descent
+   * does. The clock is wound up while it waits, as a pilot would. */
+  function holdOffPort(ad, st, ss, dtReal) {
+    ad.phase = 'hold';
+    if (!ad.holding.at) {
+      var off = V.sub(G.ship.pos, ss.pos);
+      var keep = (st.dockCaptureRadius || 2) * 4;
+      var len = V.len(off);
+      ad.holding.at = len < keep ? V.scale(len > 1e-9 ? V.scale(off, 1 / len) : { x: 1, y: 0, z: 0 }, keep) : off;
+    }
+    var waitLeft = Math.max(0, ad.holding.askAt - G.t);
+    var onWorld = !!(st.surface || st.underground);
+    G.warpIndex = Math.min(onWorld ? 2 : (waitLeft > 60 ? 3 : waitLeft > 5 ? 2 : 1), WARPS.length - 1);
+    var to = V.sub(V.add(ss.pos, ad.holding.at), G.ship.pos);
+    var d = V.len(to);
+    var v = Math.min(0.2, Math.sqrt(2 * G.ship.maxAccel * 0.55 * Math.max(0, d)));
+    var dir = d > 1e-9 ? V.scale(to, 1 / d) : V.zero();
+    var cmd = V.scale(V.sub(V.addScaled(ss.vel, dir, v), G.ship.vel), 0.5);
+    if (onWorld) cmd = holdUpThenSteer(cmd);
+    var mag = V.len(cmd);
+    if (mag > G.ship.maxAccel) cmd = V.scale(cmd, G.ship.maxAccel / mag);
+    slewNose(V.len(cmd) > G.ship.maxAccel * 0.15 ? cmd : V.sub(ss.pos, G.ship.pos), dtReal);
+    return cmd;
+  }
+
   /* Point the ship at whatever the autopilot is chasing, and drop out of
    * cruise once we are close enough for the approach law to take it. Used
    * only while the bubble is up. */
@@ -3545,6 +3605,33 @@
       if (G.cruise) return V.zero();
     } else if (G.cruise) {
       dropCruise('holding off ' + ss.name, leadPt ? leadPt.vel : null);
+    }
+
+    /* ---- ASK BEFORE GOING IN -------------------------------------------
+     * Astra, 2026-11-02: "auto-docking should never make you a criminal.
+     * Auto-dock now includes auto-contact the dock for permission to land
+     * once we drop out of cruise."
+     *
+     * Found playing the tutorial: busy ports carry more ships than berths
+     * (eleven in six at one), a full port never offers clearance, and the
+     * autopilot flew straight in regardless — a queue jump, 500 cr and
+     * FUGITIVE for touching nothing. So out of cruise (or at once, for an
+     * approach too short to cruise), the autopilot hails the port the way
+     * F4 / Enter does. Granted: in it goes. Full: it holds off the port
+     * and asks again when the timetable says a berth frees. Barred: it
+     * stands down and says why. The final capture below is guarded too, so
+     * nothing the autopilot flies can close the clamps uncleared.
+     *
+     * NOT WHILE THE LONG LEG IS STILL AHEAD. A drive that will not spin up
+     * (mass locked under a world) leaves the autopilot crossing on thrust,
+     * and asking out there would mean holding out there: just off a pad,
+     * that is a ship told to wait 45,000 km short of a station with the
+     * ground underneath it. It asks inside the range the drive would have
+     * dropped it at, which is where a cruise arrival asks too. */
+    if (ad.mode === 'dock' && !G.cruise && !(dLead > cruiseFrom)) {
+      var gate = autodockClearance(ad, st);
+      if (gate === 'refused') return null;
+      if (gate === 'hold') return holdOffPort(ad, st, ss, dtReal);
     }
 
     if (range > 5e5 && !G.cruise && ad.phase !== 'cruise') {
@@ -4346,6 +4433,7 @@
       Eco.applyTrade(port, cid, tonnes, G.t);
       logTrade((cost < 0 ? 'Collected ' : 'Bought ') + tonnes + 't ' + row.name +
                '  ' + fmtCredits(-cost));
+      if (global.Tutorial) global.Tutorial.note(G, 'buy', { cid: cid, tonnes: tonnes, cr: cost });
     } else {
       /* NOT THE FREIGHT. Contract cargo rides in the same hold and is not
        * yours to sell — see Missions.bondedTonnes for why that is a rule
@@ -4408,6 +4496,7 @@
                                 (cut.cleared ? ' — LIEN CLEARED'
                                              : ', ' + cut.left + ' cr still owed')
                               : ''));
+      if (global.Tutorial) global.Tutorial.note(G, 'sell', { cid: cid, tonnes: qty, cr: gain - cut.taken });
     }
     Sim.refreshShip(G.ship);
   }
@@ -5953,7 +6042,16 @@
       // sloppy final few metres is exactly when this matters most.
       if (G.dockTarget && !G.ship.landed) {
         G.dockStatus = Sim.dockingStatus(G.ship, G.dockTarget, G.sys, G.t);
-        if (G.dockStatus.inRange && G.dockStatus.slowEnough) {
+        /* AN AUTOPILOT DOES NOT CLOSE THE CLAMPS UNCLEARED (2026-11-02).
+         * It asks on the way in and holds if the answer is "full"; this is
+         * the belt to that's braces, so a ship drifting into the envelope
+         * while it waits is not taken by the capture and booked for it. A
+         * pilot flying by hand still can — arriving unannounced is an
+         * offence with a price, not a locked door, and that stays hers to
+         * choose. */
+        var autoUncleared = G.autodock && G.autodock.mode === 'dock' &&
+                            !Combat.isCleared(G, G.dockTarget);
+        if (G.dockStatus.inRange && G.dockStatus.slowEnough && !autoUncleared) {
           /* Traffic control has a warrant list. A wanted ship sitting in
            * the envelope is not docked; it is loitering outside a door
            * that will not open. Surface pads stay usable — nobody can
@@ -6223,6 +6321,11 @@
 
     /* Contracts age whether or not you are looking at them. */
     Missions.update(G, G.t, HOOKS);
+    /* Captain Halloway watches the ship and moves his lesson on when you
+     * have done the thing (tutorial.js). After Missions.update, so a
+     * contract that just blew its deadline sends the lesson back to the
+     * board in the same frame. */
+    if (global.Tutorial && G.tutorial && !G.tutorial.done) global.Tutorial.update(G, tutorialEnv());
 
     /* THE GROUND TRACK. With a survey instrument aboard, whatever world you
      * are in orbit about is being mapped under you (survey.js). */
@@ -16833,11 +16936,170 @@
 
     if (G.showHelp) drawHelp(ctx, w, h);
     if (G.market) drawMarket(ctx, w, h);
+    /* The captain's card goes over the market, because half his lessons are
+     * read while you are standing at it; under the menu and the title. Not
+     * in transit: the HUD's transit path skips drawConsole, which is what
+     * empties the click list each frame. */
+    if (G.tutorial && !G.tutorial.done && !G.showHelp && !G.hyper) drawTutorialCard(ctx, w, h);
     /* Last of all, and in this order: the menu covers the market, and the
      * title screen covers everything including the menu. Both clear the
      * hotspot list as they draw, so nothing behind them can be clicked. */
     if (G.menu) drawPauseMenu(ctx, w, h);
     if (G.title) drawTitleScreen(ctx, w, h);
+  }
+
+  /* ---- Captain Halloway's card (tutorial.js, 2026-11-02) -----------------
+   * What the lessons can see of the world that is not on G. */
+  function tutorialEnv() {
+    return { sys: G.sys, t: G.t, hooks: HOOKS, marketOpen: !!G.market,
+             autodock: !!G.autodock, autodockPhase: G.autodock ? G.autodock.phase : null,
+             now: nowSeconds() };
+  }
+
+  /* TOP RIGHT, and small. Every screen in the game owns its middle and its
+   * bottom: the market sits in the centre, the band and the icon bar
+   * along the foot, and the clearance and collision banners drop down the
+   * middle from the top. The corner is the one place a card can stay for
+   * the whole of a lesson without sitting on what the lesson is about —
+   * and HIDE folds it to one line when it is in the way anyway. */
+  function drawTutorialCard(ctx, w, h) {
+    var T = global.Tutorial;
+    var c = T && T.card(G, tutorialEnv());
+    if (!c) return;
+    var tap = function (id) { return function () { T.press(G, id, tutorialEnv()); }; };
+    var pad = 10, cw = Math.min(470, w - 32), cx = w - cw - 16, cy = 14;
+    ctx.save();
+
+    /* ON A SCREEN, A STRIP ACROSS THE TITLE BAR. Found by looking: at
+     * 800 x 600 the full card sat squarely on COMMS's launch-permission
+     * row and on the market's sell column — the two things his first
+     * lessons ask you to press. A mode screen's title bar holds only its
+     * name and a key reminder, so the lesson's goal and progress take
+     * that, and MORE brings the whole card back for as long as you want
+     * it. You read what he says in the cockpit; on a screen you only need
+     * to know what to do. */
+    if ((!flying() || G.market) && !G.tutMore) {
+      var sx = Math.min(170, Math.round(w * 0.2)), sw = w - sx - 8, sy = 3, sh = 42;
+      panel(ctx, sx, sy, sw, sh, true);
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      var head = 'HALLOWAY ' + c.lesson + '/' + c.of + '  ▶ ' + c.goal;
+      var full = head;
+      while (head.length > 12 && ctx.measureText(head).width > sw - 2 * pad) head = head.slice(0, -2);
+      if (head !== full) head = head.slice(0, -1) + '…';
+      ctx.fillStyle = '#ffd36b';
+      ctx.fillText(head, sx + pad, sy + 16);
+      var sb = [{ id: 'more', label: 'MORE' }];
+      c.buttons.forEach(function (b) { if (b.id === 'next' || b.id === 'skip' || b.id === 'later' || b.id === 'close') sb.push(b); });
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      var rx = sx + sw - pad;
+      for (var q = sb.length - 1; q >= 0; q--) {
+        var qb = sb[q], qw = ctx.measureText(qb.label).width + 14;
+        rx -= qw;
+        ctx.fillStyle = 'rgba(120,160,220,0.12)';
+        ctx.fillRect(rx, sy + 23, qw, 15);
+        ctx.strokeStyle = 'rgba(120,160,220,0.45)';
+        ctx.strokeRect(rx + 0.5, sy + 23.5, qw - 1, 14);
+        ctx.fillStyle = '#9fb4d0';
+        ctx.fillText(qb.label, rx + 7, sy + 34);
+        hot(rx, sy + 23, qw, 15, qb.id === 'more' ? function () { G.tutMore = true; } : tap(qb.id), qb.label.toLowerCase());
+        rx -= 6;
+      }
+      if (c.progress) {
+        ctx.font = '11px ui-monospace, monospace';
+        var prog = c.progress;
+        while (prog.length > 6 && ctx.measureText(prog).width > rx - sx - 2 * pad) prog = prog.slice(0, -2);
+        ctx.fillStyle = '#7dffb0';
+        ctx.fillText(prog, sx + pad, sy + 35);
+      }
+      ctx.restore();
+      return;
+    }
+    /* Back in the cockpit the card is the card again. */
+    if (flying() && !G.market) G.tutMore = false;
+
+    /* A WARNING OUTRANKS A LESSON. The collision, chase and node banners
+     * hang centred from y 64; the full card reaches well below that, and
+     * on a narrow window it reaches the middle too — it was found sitting
+     * on "impact predicted" during the climb, which is exactly when that
+     * line matters. While one is up and the two would touch, the card
+     * folds to its one line above them. */
+    var banner = G.impactWarning || (G.wakeChase && !G.hyper) || G.node;
+    var yield_ = flying() && banner && cx < w / 2 + 240;
+
+    if (c.collapsed || yield_) {
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      var whole = yield_ && !c.collapsed
+        ? 'HALLOWAY ' + c.lesson + '/' + c.of + '  ▶ ' + c.goal + (c.progress ? '  ·  ' + c.progress : '')
+        : '▸ ' + c.name + '  ·  ' + c.goal;
+      var line = whole;
+      while (line.length > 8 && ctx.measureText(line).width > cw - 2 * pad) line = line.slice(0, -2);
+      if (line !== whole) line = line.slice(0, -1) + '…';
+      panel(ctx, cx, cy, cw, 28, true);
+      ctx.fillStyle = '#ffd36b';
+      ctx.fillText(line, cx + pad, cy + 18);
+      hot(cx, cy, cw, 28, tap('show'), 'show the captain');
+      ctx.restore();
+      return;
+    }
+
+    var pc = global.Portrait ? global.Portrait.canvasFor(c.person) : null;
+    var picW = pc ? 72 : 0, picH = pc ? 90 : 0;
+    var tx = cx + pad + (pc ? picW + pad : 0), tw = cx + cw - pad - tx;
+
+    ctx.font = '12px ui-monospace, monospace';
+    var words = wrapToWidth(ctx, '“' + c.words + '”', tw, tw);
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    var goal = wrapToWidth(ctx, '▶ ' + c.goal, tw, tw);
+    var textH = 18 + words.length * 15 + 6 + goal.length * 15 + (c.progress ? 16 : 0);
+    var ch = Math.max(textH, picH) + pad * 2 + 30;
+    panel(ctx, cx, cy, cw, ch, true);
+    if (pc) {
+      ctx.drawImage(pc, cx + pad, cy + pad, picW, picH);
+      ctx.strokeStyle = 'rgba(120,160,220,0.35)';
+      ctx.strokeRect(cx + pad + 0.5, cy + pad + 0.5, picW - 1, picH - 1);
+    }
+
+    var y = cy + pad + 12;
+    ctx.fillStyle = '#ffe6a8';
+    ctx.fillText(c.name, tx, y);
+    ctx.fillStyle = '#7e93b3';
+    ctx.textAlign = 'right';
+    ctx.fillText(c.lesson + ' / ' + c.of, cx + cw - pad, y);
+    ctx.textAlign = 'left';
+    y += 18;
+    ctx.font = '12px ui-monospace, monospace';
+    ctx.fillStyle = '#cfe0ff';
+    for (var i = 0; i < words.length; i++) { ctx.fillText(words[i], tx, y); y += 15; }
+    y += 6;
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = '#ffd36b';
+    for (var j = 0; j < goal.length; j++) { ctx.fillText(goal[j], tx, y); y += 15; }
+    if (c.progress) {
+      ctx.font = '11px ui-monospace, monospace';
+      ctx.fillStyle = '#7dffb0';
+      ctx.fillText(c.progress, tx, y + 1);
+    }
+
+    /* The buttons, right to left along the foot of the card. */
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    var bx = cx + cw - pad, by = cy + ch - pad - 20;
+    for (var k = c.buttons.length - 1; k >= 0; k--) {
+      var b = c.buttons[k];
+      var bw = ctx.measureText(b.label).width + 18;
+      bx -= bw;
+      var primary = b.id === 'next' || b.id === 'close';
+      ctx.fillStyle = primary ? 'rgba(255,211,107,0.18)' : b.warn ? 'rgba(255,120,100,0.18)' : 'rgba(120,160,220,0.10)';
+      ctx.fillRect(bx, by, bw, 20);
+      ctx.strokeStyle = primary ? 'rgba(255,211,107,0.7)' : b.warn ? 'rgba(255,120,100,0.7)' : 'rgba(120,160,220,0.4)';
+      ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, 19);
+      ctx.fillStyle = primary ? '#ffd36b' : b.warn ? '#ff8a76' : '#9fb4d0';
+      ctx.fillText(b.label, bx + 9, by + 14);
+      /* HIDE on a screen goes back to the strip, not to a folded card. */
+      hot(bx, by, bw, 20, b.id === 'hide' && (!flying() || G.market)
+        ? function () { G.tutMore = false; } : tap(b.id), b.label.toLowerCase());
+      bx -= 8;
+    }
+    ctx.restore();
   }
 
   function fmtLy(d) { return d.toFixed(2) + ' ly'; }
