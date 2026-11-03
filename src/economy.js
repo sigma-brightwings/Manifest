@@ -1449,8 +1449,14 @@
 
   function hash01(key) { return (RNG.hashString(key) % 1000) / 1000; }
 
+  /* Was this pad rolled as a buried bay? A sea platform (generate.js
+   * makeSeaPlatforms) is never underground, but the farm rules read the
+   * ROLL, so a port that became a platform trades exactly as it would
+   * have: its market is part of its identity (2026-11-02). */
+  function buriedPad(port) { return !!(port.underground || port.seaRolledUnderground); }
+
   function goldFarmAt(port, host, sys) {
-    if (!port || !port.surface || port.underground || !canFarm(host)) return false;
+    if (!port || !port.surface || buriedPad(port) || !canFarm(host)) return false;
     if (vineyardAt(port, host)) return false;
     var share = (sys && sys.pirateHeld) ? GOLD_SHARE_HELD
               : ((sys && sys.corruption >= GOLD_CORRUPTION) ? GOLD_SHARE_CORRUPT : 0);
@@ -1467,7 +1473,7 @@
       var host = p.parentBody;
       u = hash01('farmrate|' + p.id);
       var flow = 8 + (m.pop || 0) * 0.06;
-      if (p.surface && !p.underground && vineyardAt(p, host)) {
+      if (p.surface && !buriedPad(p) && vineyardAt(p, host)) {
         p.crop = 'grape';
         addRow(m, 'fruit', flow * (0.20 + u * 0.25), 0);
       } else if (goldFarmAt(p, host, sys)) {

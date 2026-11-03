@@ -272,6 +272,9 @@
     if (dst) {
       f.surface = !!dst.surface;
       f.underground = !!dst.underground;
+      /* A sea platform (2026-11-02): out on the open water, and the
+       * board says so, the way it names a buried bay. */
+      f.sea = !!dst.seaPlatform;
       if (dst.market) {
         f.role = dst.market.role || null;
         f.roleName = dst.market.roleName || null;
@@ -307,6 +310,7 @@
     var name = offer.toName;
     if (offer.type === 'courier') return 'the ' + name;   // toName is "<star> system"
     if (f.underground) return 'the underground bay at ' + name;
+    if (f.sea) return 'the sea platform at ' + name;
     /* 'orbital' is the role a port gets when it has no particular role —
      * PORT_ROLES gives it an empty bias list — so naming it says nothing
      * and merely lengthens every second sentence on the board. Every other
@@ -369,6 +373,7 @@
     if (offer.type === 'disposal' || offer.type === 'courier') return null;
     if (f.shortThere) return '— they are short';
     if (f.underground) return '— underground bay';
+    if (f.sea) return '— sea platform';
     return null;
   }
 

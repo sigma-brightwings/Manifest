@@ -278,7 +278,9 @@ console.log('--- inland ---');
   });
   var wet = pads.filter(function (x) { return W.digFloor(x.p.parentBody) !== null; });
   var moved = pads.filter(function (x) { return !!x.p.movedInland; });
-  var coastal = pads.filter(function (x) { return !!x.p.coastal; });
+  /* Flagged coastal, or - since 2026-11-02 - built as a sea platform for
+   * the same reason (generate.js makeSeaPlatforms): either way, nowhere dry. */
+  var coastal = pads.filter(function (x) { return !!(x.p.coastal || x.p.seaPlatform); });
   console.log('     ' + pads.length + ' surface ports in ' + sample.length + ' systems, ' + wet.length +
               ' on worlds with a sea, ' + moved.length + ' moved inland, ' + coastal.length + ' flagged coastal');
 
@@ -299,13 +301,13 @@ console.log('--- inland ---');
     return true;
   }
   var notDry = pads.filter(function (x) {
-    return !x.p.coastal && !(Gen.footprintDry(W, x.p.parentBody, Gen.qOfLatLon(x.p.lat, x.p.lon), Gen.inlandFootKm(x.p)) && denseDry(x.p));
+    return !x.p.coastal && !x.p.seaPlatform && !(Gen.footprintDry(W, x.p.parentBody, Gen.qOfLatLon(x.p.lat, x.p.lon), Gen.inlandFootKm(x.p)) && denseDry(x.p));
   });
   check('every surface port\'s underground footprint is dry, unless flagged coastal', notDry.length === 0,
         notDry.length + ' wet: ' + notDry.slice(0, 3).map(function (x) { return x.p.name; }).join(', '));
   check('the 40 seeds put some ports in the sea to begin with, and moved them', moved.length > 0, moved.length + ' moved');
-  check('a coastal flag carries its reason', coastal.every(function (x) { return typeof x.p.coastalWhy === 'string' && x.p.coastalWhy.length > 20; }),
-        coastal.length ? coastal[0].p.coastalWhy : 'none flagged');
+  check('a coastal flag carries its reason', coastal.every(function (x) { var w = x.p.coastalWhy || x.p.platformWhy; return typeof w === 'string' && w.length > 20; }),
+        coastal.length ? (coastal[0].p.coastalWhy || coastal[0].p.platformWhy) : 'none flagged');
   /* Where a flagged port is, there really is no site: no ground on that
    * world (in its band) clears the floor anywhere. A coarse sweep is enough
    * to catch a flag set on a world with plenty of land. */
@@ -381,12 +383,16 @@ console.log('--- inland ---');
    * moved one differs, and nothing else - names, ids, markets, orbits,
    * roles - moved anywhere, because the pass takes no draws. */
   var sameDry = true, sameRest = true, moveSeen = true, n = 0;
-  function strip(sy) {
+  /* `sea`: the ids built as sea platforms in the inland run. The building
+   * a platform stands as (siteKind) is its own; everything else about it
+   * must be what it would have been. */
+  function strip(sy, sea) {
     return JSON.stringify(sy.ports.map(function (p) {
       var m = p.market || {};
-      return [p.id, p.name, p.radius, p.underground, m.role || m.roleId || null,
+      if (sea && sea[p.id]) p = Object.assign({}, p, { seaPlatform: true, seaRolledUnderground: p.seaPlatform ? p.seaRolledUnderground : p.underground });
+      return [p.id, p.name, p.radius, p.seaPlatform ? p.seaRolledUnderground : p.underground, m.role || m.roleId || null,
               Object.keys(m.rows || {}).sort().map(function (k) { return k + ':' + (m.rows[k].prod || 0) + ':' + (m.rows[k].base || 0); }).join(','),
-              p.orbit ? p.orbit.a : null, p.faction, p.livery, p.siteKind || null];
+              p.orbit ? p.orbit.a : null, p.faction, p.livery, p.seaPlatform ? null : (p.siteKind || null)];
     })) + JSON.stringify((sy.traffic || []).map(function (r) { return [r.from, r.to, r.period, r.phase]; }));
   }
   sample.slice(0, 20).forEach(function (sy) {
@@ -402,7 +408,9 @@ console.log('--- inland ---');
         if (q.lat !== p.movedInland.lat || q.lon !== p.movedInland.lon) moveSeen = false;
       } else if (q.lat !== p.lat || q.lon !== p.lon) sameDry = false;
     });
-    if (strip(off) !== strip(sy)) sameRest = false;
+    var seaIds = {};
+    sy.ports.forEach(function (p) { if (p.seaPlatform) seaIds[p.id] = true; });
+    if (strip(off, seaIds) !== strip(sy, seaIds)) sameRest = false;
   });
   check('a port already dry is exactly where it was (bit for bit)', sameDry && n > 0, n + ' pads compared');
   check('a moved port started from the rolled spot, and is somewhere else', moveSeen);
@@ -412,7 +420,7 @@ console.log('--- inland ---');
   var st1 = sample[3]._star;
   var r1 = Gen.generateSystem(st1.seed, Galaxy.systemOpts(gal, st1));
   var r2 = Gen.generateSystem(st1.seed, Galaxy.systemOpts(gal, st1));
-  var key = function (sy) { return JSON.stringify(sy.ports.filter(function (p) { return p.surface; }).map(function (p) { return [p.id, p.lat, p.lon, !!p.coastal]; })); };
+  var key = function (sy) { return JSON.stringify(sy.ports.filter(function (p) { return p.surface; }).map(function (p) { return [p.id, p.lat, p.lon, !!(p.coastal || p.seaPlatform)]; })); };
   var allSame = true;
   sample.forEach(function (sy) {
     var again = Gen.generateSystem(sy._star.seed, Galaxy.systemOpts(gal, sy._star));
