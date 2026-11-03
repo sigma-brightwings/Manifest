@@ -43,6 +43,13 @@
    * scoop." The mouth is on the nose, so what it swallows is the flow
    * through its face: density x speed x area x cos(the angle between the
    * nose and the oncoming air). Side-on or tail-first, nothing goes in. */
+  /* AND THE SCOOP SWALLOWS MORE, FOR THE SAME REASON (2026-11-03). Intake is
+   * density x speed, and since the air co-rotated a prograde pass meets it
+   * slower: x0.81 of the old intake per pass (q10 0.71, q90 0.85; the same
+   * 40-giant measurement as sim.js GIANT_HEAT_GAIN), retrograde x1.19.
+   * 1 / 0.81 = 1.25 puts a prograde pass back where it was. Giants only -
+   * a corona does not turn, and its intake never moved. */
+  var SKIM_GIANT_GAIN = 1.25;
   var SKIM_ALIGN_MIN = 0.17;     // cos 80 deg - beyond this the mouth sees no flow
   var SKIM_MIN_GRADE = 0.3;      // a giant this poor in hydrogen is not worth the dive
   var STAR_GRADE = 0.9;          // a star's corona: hydrogen, near enough all of it (2026-10-24)
@@ -442,6 +449,7 @@
       top = at.top;
     }
     var tonnes = rho * v * 1000 * SKIM_AREA * face * dt / 1000 * frac;  // kg/m^3 * m/s * m^2 * s -> kg -> t
+    if (!star) tonnes *= SKIM_GIANT_GAIN;
     /* Into the HOLD. The pilot decides when it goes into the tanks
      * (refuelFromHold, below; Astra 2026-10-24: "you skim and then choose to
      * refuel from inside the ship menu"). */
@@ -830,7 +838,7 @@
   function isShattered(G, id) { return isGone(G, id); }
 
   var Mining = {
-    CUT_PER_CHUNK: CUT_PER_CHUNK, CHUNK_LIFE: CHUNK_LIFE, SKIM_AREA: SKIM_AREA, SKIM_MIN_GRADE: SKIM_MIN_GRADE,
+    CUT_PER_CHUNK: CUT_PER_CHUNK, CHUNK_LIFE: CHUNK_LIFE, SKIM_AREA: SKIM_AREA, SKIM_GIANT_GAIN: SKIM_GIANT_GAIN, SKIM_MIN_GRADE: SKIM_MIN_GRADE,
     TORP_SPEED: TORP_SPEED, TORP_LIFE: TORP_LIFE, TORP_ARM: TORP_ARM, TORP_BLAST: TORP_BLAST,
     TORP_SHATTER: TORP_SHATTER, SABOTAGE_DAYS: SABOTAGE_DAYS, TORP_CLEAR_OF_PORT: TORP_CLEAR_OF_PORT,
     rocksNear: rocksNear, rayRock: rayRock, chunkOf: chunkOf, cut: cut, spawnChunk: spawnChunk,

@@ -1533,6 +1533,26 @@
    * out afterwards. Heat belongs to the one real ship, so it is applied
    * from the live update and nowhere else. */
   var HEAT_K = 4.0;             // tunes sqrt(rho) * v^3 into heat units/s
+  /* A GIANT'S AIR BITES HARDER, BY WHAT ITS TURNING TOOK OFF (2026-11-03).
+   * Once the air co-rotated (airVelocity), a skim flown WITH a giant's spin
+   * met the air slower by the equator's speed - up to 20 km/s - and the
+   * cube law turned that into far less heat. Measured over 40 kawartha
+   * giants, an equatorial pass (apoapsis 3 radii, periapsis at 0.85 and
+   * 0.7 of the air's top, nose into the wind, flown with drag) against the
+   * same pass with the air held still, which reproduces 274be91^ to the
+   * digit: prograde heat x0.53 (q10 0.41, q90 0.62), retrograde x1.70.
+   * Every giant's skim got roughly twice as easy the right way round, which
+   * is the whole of what made a gas giant "a short plunge whatever you
+   * fit". Astra, 2026-11-03: retune so a typical prograde pass costs what
+   * it did, and keep against-the-spin harder. 1 / 0.53 = 1.9, giants only:
+   * a rocky world's spin is a few hundred m/s against entry speeds of
+   * kilometres, and its re-entry was never what moved. Retrograde now pays
+   * ~3.2x the old figure. heatLineAlt reads the same gain, so the panel's
+   * line is the line the hull meets. */
+  var GIANT_HEAT_GAIN = 1.9;
+  function heatK(body) {
+    return (body && (body.type === 'gasGiant' || body.type === 'iceGiant')) ? HEAT_K * GIANT_HEAT_GAIN : HEAT_K;
+  }
   var HEAT_LIMIT = 100;         // hull starts cooking above this
   /* Stored heat is capped rather than left to accumulate. Uncapped, a steep
    * entry ran the figure to twelve times the limit within seconds, which
@@ -1570,7 +1590,7 @@
   function heatLineAlt(body, v, shed) {
     var at = body && body.atmosphere;
     if (!at || !(v > 0)) return 0;
-    var rhoMax = Math.pow(shed / (HEAT_K * v * v * v), 2);
+    var rhoMax = Math.pow(shed / (heatK(body) * v * v * v), 2);
     if (rhoMax >= at.rho0) return 0;
     return Math.min(at.top, at.scaleHeight * Math.log(at.rho0 / rhoMax));
   }
@@ -1688,7 +1708,7 @@
      * fire; one that glows only where it is hitting the air looks like it
      * is going too fast, which is the thing being communicated. */
     ship.windDir = v > 1e-9 ? { x: rel.x / v, y: rel.y / v, z: rel.z / v } : null;
-    return HEAT_K * Math.sqrt(rho) * v * v * v;
+    return heatK(atmo.body) * Math.sqrt(rho) * v * v * v;
   }
 
   /* Returns hull damage dealt this step, so the caller can react to it
@@ -8323,6 +8343,7 @@
     padCapture: padCapture,
     landingDamage: landingDamage,
     LAND_SAFE_SPEED: LAND_SAFE_SPEED, LAND_FATAL_SPEED: LAND_FATAL_SPEED,
+    GIANT_HEAT_GAIN: GIANT_HEAT_GAIN,
     smootherstep: smootherstep,
     trafficState: trafficState,
     trafficCore: trafficCore,
