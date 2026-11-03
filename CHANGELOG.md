@@ -40,6 +40,87 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-03, the open UI items: labels that overprinted, a lent bay that was forgotten, a hull on her tail, the sea's glint and domes)
+
+Astra: "let's do all the still open stuff." Each of these was seen in a
+screenshot, and each was looked at again after the fix at 800 × 600 and
+1280 × 720/800.
+
+- **Halloway's lesson strip leaves the page's name showing.** On a full-screen
+  page the strip started 170 px in, which covered any title longer than
+  COMMS. On F6 you could read only "GALAXY MAP & COU". Each page now records
+  where its title ends (`screens.js` `modeFrame`), and the strip starts after
+  that.
+- **The galaxy chart's two always-shown names pick a clear side.** At the
+  whole-galaxy zoom, "Mirven" and "Rhoameor" are always named, and they used
+  to take the first spot that did not touch another name, whatever stars lay
+  under it. Now they try sixteen directions at five distances and take the
+  spot with the fewest star dots and territory border under it. The two are
+  placed together, so one cannot take the only clear spot the other had (on
+  kawartha they are 4 px apart). A name placed further out gets a thin line
+  back to its star.
+- **On foot, labels stay off the room title and the "E — use" prompt.** At the
+  trade terminal, looking down, the terminal's label (set 2.4 m up) landed on
+  the room title. A label that would hit either one now moves clear instead
+  of vanishing (`walk.js` `labelClear`). The room title also has its own dark
+  plate now. It used to be pale cyan text on whatever was behind it, and on
+  the concourse's yellow sign it could not be read. Walk labels have a dark
+  outline too.
+- **In the cockpit, planet names stay off the readouts.** A planet just below
+  the nose printed its name across PITCH / ROLL / REF. `Render.hudReadoutBoxes`
+  gives the areas used by the heading tape, speed and altitude boxes, the
+  attitude line, the facing cue and the key-hint line. These are worked out
+  from the same numbers the HUD itself uses, and a test checks that every
+  readout falls inside them. A label that would land on one moves above or
+  below it.
+- **Ships' names in a crowded berth stack instead of overprinting.** A ground
+  port's pit with three ships berthed in it printed three names on one spot
+  (Terminus Downport, Cydoren). Ship names are now placed like planet names
+  (`Render.stackLabels`): they keep off the names already drawn, try the rows
+  just above and below, and a name with no room left adds "+1" to the name it
+  lost to.
+- **A ship saved in a lent heavy bay reloads in it.** `ship.lentBay` (set when
+  every small berth was full and the port lent you its heavy bay) was not
+  saved. On reload `assignBerth` treated you as a normal arrival and parked
+  you in a small berth your hull does not fit. It is now saved and restored
+  before the ship is docked.
+- **No hull stands on her tail at a sea rig.** Heavies (`outboard`: they lie
+  off with lighters working them) never get a pad, and a boat based at a port
+  has no route. At a sea platform both fell through to the open-pad pose:
+  nose up, in the middle of the rig. That is where the "Ironwake Packet" was
+  seen. They now hold off the rig, level, as a ship turned away from a full
+  deck does. The holding pose also carries its level heading (`rest`), so a
+  ship arriving to hold no longer tips nose-up for its last few hundred
+  metres. Over 71 kawartha systems this was 70,473 of 2.27 million samples
+  near a rig. Now it is none.
+- **The sun's glint on the sea is easy to see.** Gain 2.2 → 4.5 in `gl.js`
+  `seaShade`, chosen after trying 2.2, 3.5, 4.5, 6 and 9. At 2.2 the
+  brightest point of the sun's reflection never got near its 0.85 cap (0.58
+  for a low sun, 0.33 for a high one). At 4.5 it reaches the cap under a low
+  or middling sun and 0.67 under a high one. At 9 the distant glint looked
+  like a second sun. The cap is unchanged, so the glint still cannot blow
+  out.
+- **The tube's windows show rings and lightning.** Rings, tears and lightning
+  bolts are drawn in passes after the mesh pass, and the windowed room clears
+  depth before it draws the deck. So those passes were hidden behind the deck
+  and the panes. They are now drawn at the depth clear, before the room.
+- **Dome crowns keep their shape under a high sun.** A plate facing straight
+  up gets the sun's full strength plus the light from the whole sky, so the
+  crowns were the palest part: 161 of 255 against the shoulder's 154 at
+  Linis's Low Strip with the sun 72° up. The petal rows are now toned from
+  0.80 at the crown to the plate's own grey at the foot. The crown now reads
+  128 against 140, darker than the shoulder.
+
+Not fixed: the **torn strip at the top of Terminus Downport's pit** did not
+show up. I looked at six Terminus Downports in kawartha from above, from the
+pit's rim, at a grazing angle and from inside the berth, with the cutaway on
+and off. All I saw was the cut's intended scorched edge. A screenshot of the
+tear, or the seed, port and camera, would let it be found.
+
+**Saves:** survive, version unchanged. One optional field was added:
+`ship.lentBay`, a port id or null. A save from before it loads as "not lent",
+which is what it was.
+
 ### Fixed (2026-11-03, the Cutter's and the Crawler's models mended; a door out of the Crawler's lift pit)
 
 Astra, on the two model problems the hull-walk fix reported and could not mend
