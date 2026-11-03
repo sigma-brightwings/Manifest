@@ -6384,11 +6384,16 @@
     return null;
   }
 
-  function grantClearance(G, port) {
+  function grantClearance(G, port, berths) {
     var k = portKey(port);
     if (!k || !G.ship) return false;
     G.ship.cleared = G.ship.cleared || {};
     G.ship.cleared[k] = true;
+    /* THE HEAVY BAY, LENT (2026-11-03). Every small berth taken and the
+     * heavy one free: the clearance is for that bay, and Sim.assignBerth
+     * reads this to send the arrival into it. Set or cleared by every
+     * grant, so it is always the last port's word. */
+    G.ship.lentBay = (berths && berths.lend) ? port.id : null;
     return true;
   }
 
@@ -6399,9 +6404,11 @@
     var name = port.name || 'Port control';
     var res = clearanceRefusal(G, port, berths);
     if (!res) {
-      grantClearance(G, port);
-      res = { granted: true, reason: null,
-              text: name + ': "Clearance granted. Pad is yours."' };
+      grantClearance(G, port, berths);
+      res = { granted: true, reason: null, lend: !!(berths && berths.lend),
+              text: name + (berths && berths.lend
+                ? ': "Small berths are full. Clearance granted to the heavy bay."'
+                : ': "Clearance granted. Pad is yours."') };
     }
 
     if (hooks && hooks.say) hooks.say(res.text, 6);
@@ -6436,11 +6443,12 @@
     if (!G || !G.ship || !port) return null;
     if (isCleared(G, port)) return null;
     if (clearanceRefusal(G, port, berths)) return null;
-    if (!grantClearance(G, port)) return null;
+    if (!grantClearance(G, port, berths)) return null;
     var name = port.name || 'Port control';
-    var res = { granted: true, reason: null, auto: true,
+    var res = { granted: true, reason: null, auto: true, lend: !!(berths && berths.lend),
                 text: name + ': "We have you on approach. Cleared in — ' +
-                      (port.surface ? 'pad' : 'berth') + ' is yours."' };
+                      (berths && berths.lend ? 'small berths are full, the heavy bay'
+                                             : (port.surface ? 'pad' : 'berth')) + ' is yours."' };
     if (hooks && hooks.say) hooks.say(res.text, 6);
     if (hooks && hooks.sound) hooks.sound('click');
     return res;

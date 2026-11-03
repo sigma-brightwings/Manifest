@@ -159,13 +159,58 @@ the reseed exposed, not a stage-2 regression.
   five berths to six. The mid-range auto-dock was told 13 min, then 7, 23 and 25.
   It held 68.5 of its 71.9 minutes. The wait now walks the timetable to the
   departure that actually frees a berth (bounded at 24 departures, so a floor),
-  and the port says "until a berth frees". **Still red, by design:** that
-  render.test assertion (under 15 min) is a feel call for Astra, left unchanged.
-  Breakdown: cruise 0.6 min, holding for a berth 68.5, approach 2.7. The heavy
-  bay stood empty the whole time. Measured over 40 seeds × 20 times (6,240
-  samples), a courier finds the small berths full 65.8% of the time (master
-  55.8%). 89% of those are oversubscribed, and the true wait has a median of
-  2.6 h at the walk's floor. The old figure was 6.4 min.
+  and the port says "until a berth frees".
+- **Full ports, both of Astra's fixes (2026-11-03, later).** *(a)* **A small
+  hull may take a free heavy bay** when every small berth is taken. `berthStatus`
+  gives `lend` from the same occupancy count. The clearance says so ("Small
+  berths are full. Clearance granted to the heavy bay"; combat.js
+  `grantClearance` sets `ship.lentBay`), and `Sim.assignBerth` then gives the
+  arrival the largest bay that takes her. The auto-dock asks through the same
+  hail. *(b)* **Timetabled traffic books a berth or holds** (sim.js `bookVisit`,
+  `earliestFit`, `visitHold`; `trafficCore`, `berthOccupants`). A visit books
+  from the earliest moment in its layover from which the berths booked by
+  higher-priority visits leave one free until it leaves; otherwise it holds for
+  the whole stay, then comes in only to leave on time.
+  - **Where she holds.** A ground port's ships hold in the roads. An orbital
+    port's ships hold where the crossing ends, alongside, station-keeping and
+    in no berth, so there is no jump out to a stack and back.
+  - **Priority is fixed, not first-come.** It is a route's place in
+    `sys.traffic`: the scheduled lines first, then the feeders built after
+    them. That keeps it a pure function of seed and t. A first-come queue
+    recurses through the port's whole history, which is integration. At any
+    instant a pool holds at most its capacity.
+  - **The timetable does not shift.** Departures and every later leg are
+    unchanged, and cargo moves as before (the heavies' lighters do the same).
+    Delaying departures would make every later leg depend on the queue.
+  - **Traffic does not take the heavy bay**, except at a port with no small
+    berth. Measured with it allowed, a heavy pilot found the heavy bay full at
+    67% of samples instead of 21%: the freighter left circling that the
+    smallest-bay rule exists to prevent. One line in `bookAt` switches it.
+
+  Measured, 40 seeds × 20 times (6,240 orbital-port samples; 5,900 surface),
+  before → after:
+
+  | | before | after |
+  |---|---|---|
+  | courier turned away (orbital) | 65.8% | **6.7%** (lent the heavy bay 34.6%) |
+  | true wait, courier, median / p90 | ≥156 / ≥249 min | **15.5 / 44.7 min** |
+  | courier turned away (surface) | 11.4% | 0.4% (lent 8.2%) |
+  | heavy pilot turned away (orbital) | 21.3% | 18.7% (true wait median 8.6 h) |
+  | traffic visits held for the whole stay | — | 48.0% (orbital), 38.3% (surface) |
+  | delayed, median / p90 | — | 39 / 89 min (orbital) |
+
+  The courier waits are in minutes, as `berths-and-queue` intended. The "third
+  turned away" target no longer reads the same way: a small pilot is now lent
+  the heavy bay instead of turned away, and almost never waits. The pressure has
+  moved onto the feeders, most of which hold in the roads. `trafficAll` costs a
+  median 0.48 ms a frame (0.35 before); the first ask in a new system fills the
+  cache (28 ms once). The mid-range auto-dock is cleared into the heavy bay and
+  docks in **3.4 min** (was 71.9). Its assertion now passes; it was not changed.
+  `economy.test` pins it all: no pool over capacity, the heavy bay lent only
+  when free, the named wait is the wait there is, a held ship is in no berth,
+  and the queue reads the same in any order. Its seam checks now take the hold a
+  ship actually flies, and so does rumours.js `berthTime`: a visit with no berth
+  is skipped, to the next one that has one.
 
 **Saves:** **do not survive.** `save.js` VERSION 4 → **5**, the one deliberate
 break of doctrine 4 for the whole star programme (Astra: "we don't need to have

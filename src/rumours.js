@@ -148,13 +148,21 @@
     var P = sched.period, c = sched.cruise, l = sched.layover;
     var U = sys ? global.Upkeep : null;
     var k = Math.floor((t - sched.t0) / P);
-    for (var j = k - 1; j <= k + 1; j++) {
+    /* Out to k + 6: a visit the berth queue held is no berth at all, and
+     * the next one is the answer (2026-11-03). */
+    for (var j = k - 1; j <= k + 6; j++) {
       var cs = sched.t0 + j * P, s, e, leg;
       if (X === sched.to) { s = cs + c; e = cs + c + l; leg = 2 * j; }
       else { s = cs + 2 * c + l; e = cs + P; leg = 2 * j + 1; }
       /* A ship bound for a ground port holds in the roads and flies her
-       * final descent before she is in a berth (Sim.arrivalHold). */
-      if (HS && global.Sim && global.Sim.arrivalHold && HS.byId) {
+       * final descent before she is in a berth (Sim.arrivalHold) — and a
+       * port with every berth booked holds her longer, or for the whole
+       * stay (Sim.visitHold, the berth queue, 2026-11-03). */
+      if (HS && global.Sim && global.Sim.visitHold && HS.byId) {
+        var vh = global.Sim.visitHold(HS, sched, j, X === sched.to);
+        if (!isFinite(vh.inAt)) continue;
+        s += vh.inAt;
+      } else if (HS && global.Sim && global.Sim.arrivalHold && HS.byId) {
         var hold = global.Sim.arrivalHold(sched, HS.byId[X]);
         if (hold > 0) s += hold + global.Sim.FINAL_DESCENT_S;
       }
