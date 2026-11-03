@@ -719,7 +719,16 @@ console.log('--- the renderer turns a world the way the world turns ---');
         if (sv[c] < lo[c]) lo[c] = sv[c];
         if (sv[c] > hi[c]) hi[c] = sv[c];
       }
-      var key = sv[0].toFixed(6);
+      /* The WHOLE salt, not its first component (2026-11-02). Weather's
+       * salt32 is quantised to 1,000,003 levels, so one component of four
+       * thousand draws collides about n^2/2N = 8 times by pure chance and
+       * `dup < 4` on it failed a sound hash. It passed only while this suite
+       * ran without weather.js and gl.js fell back to its own saltOf; since
+       * generate.js began reading the coastline (placeInland) Weather is
+       * always loaded here, as it is in the game, and the game's own salt
+       * met the test for the first time. A real collapse repeats all three
+       * at once; chance does that about once in 10^18. */
+      var key = sv.join(',');
       if (seen[key]) dup++; else seen[key] = 1;
     }
     check('the storm salt still spans its range after four thousand buckets',

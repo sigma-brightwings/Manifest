@@ -40,6 +40,77 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-02, ground ports inland: no shaft under the sea)
+
+- **Astra: "placement needs to not ignore coastlines. All planetside ports
+  should be set up far enough inland that no underground geometry
+  protrudes into the water."**
+  - Pads were rolled anywhere on their world and the sea was never asked.
+  - Over the 450 kawartha systems, 302 of the 465 pads on worlds with a sea
+    or a lava sea had their shaft and hangar at least partly in it. Kestrel
+    Pads and Terminus Groundport were two of them.
+- **The test for a site** (`Weather.dryAt`, `Gen.footprintDry`):
+  - The footprint is a circle of 1.45 pad radii. That is everything a
+    ground port can put underground, measured from the art: the widest
+    ground site model is runway-city-site-s at 1.41 pad radii, the deep
+    bay's tunnel is 1.35, the shed's corner is 0.75, and the walk deck is
+    81 m.
+  - The worst model is used rather than each port's own, so the answer is
+    the same with or without a renderer loaded.
+  - Every sample must stand at least 0.046 above sea level. That is the
+    shader's soft coastline edge (0.035), plus the most gl.js's ground
+    crinkle can ever move a coast (GD.elev / 2 = 0.010, a bound and not a
+    sample), plus 0.001 of slack.
+  - 25 samples: the centre, 8 at half the radius and 16 on the rim, all
+    under 0.2 km apart. A 400-point disc agrees on every pad.
+  - **Water is water**: a sea under an ice cap counts.
+  - **Lava** is no-go too.
+  - A **desert's** sea is a dry salt basin, so it counts as ground.
+- **Moving a wet pad** (`Gen.placeInland`, right after the twilight fold
+  and before anything reads a pad's position):
+  - The pad goes to the nearest site that is dry, inside its twilight band
+    if it has one, and clear of the world's other pads.
+  - It is found by branch-and-bound over the cube-sphere. "Nearest" holds
+    to within 0.25 km and 2% of the distance.
+  - No draws are taken. A dry pad is untouched bit for bit, and nothing
+    else in any system changes (ground.test generates with and without the
+    pass and compares).
+  - The rolled spot is kept as `port.movedInland {lat, lon, km}`.
+  - 185 of 1,489 surface ports move. The median move is 1,436 km; 10% move
+    less than 282 km and 10% more than 3,740 km (19 km to 7,385 km). That
+    is 124 terran, 43 molten and 18 tundra.
+  - The distances are long because the elevation field is smooth: about
+    1.5e-4 per km. So 0.046 of elevation is roughly 300 km of ground, and
+    the nearest ground that high is often across a sea.
+- **Nowhere dry: 117 surface ports (7.9%) on 80 worlds, flagged
+  `port.coastal = true` with `coastalWhy` and left where they were.**
+  Astra decides what they get.
+  - 102 are on ocean-type worlds, and every ocean-type world has no land
+    at all. Sea level 0.78 is above the field's maximum, about 0.66.
+  - 15 are on terran twilight worlds whose ring or band never clears the
+    floor (best 0.03 above sea), though land does exist outside the band.
+  - No system loses all of its pads to the flag.
+  - By role: 38 orbital, 34 highport, 27 shipyard, 18 agri.
+- **Everything that hangs off a port follows it**, because all of it is
+  computed from `lat/lon` at run time: shaft, berth, approach, town, signs,
+  traffic timetable, and the survey's mining province. ground.test checks
+  the mouth, the berth, a moored trader and a moved mine's rich ground.
+- **Cost:** generating all 450 systems went from 0.9 s to about 2 s. The
+  worst single system is about 50 ms.
+- **Tests:**
+  - ground.test adds the inland section: dry footprints, flags with
+    reasons, art inside the footprint, the dig margin covering
+    `GD.elev / 2`, padDir agreeing with Sim, untouched pads, determinism
+    and dependants.
+  - galaxy.test's storm-salt collision check now keys on the whole salt.
+    Weather is always loaded there now, and its salt32 has only 1,000,003
+    levels, so one component of 4,000 draws repeats about 8 times by
+    chance.
+- Saves: survive, version unchanged. A pad's position is generated, not
+  saved. A save docked at a moved port re-docks at its new site (docked is
+  an id). A ship saved landed in the open keeps its own body-relative spot.
+  A career that remembers where a port was will find it somewhere else.
+
 ### Fixed (2026-11-02, ground detail: the oblique streaks)
 
 - **Cause of the diagonal smears in the upper half of Downwell's 0.6 and

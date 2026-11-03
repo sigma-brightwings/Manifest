@@ -754,6 +754,12 @@
 
     buildRotations(sys, base);
     settleTwilightPads(sys);
+    /* After the twilight fold (which decides where in its band a pad may
+     * stand) and before anything reads a pad's position - the survey's
+     * mining provinces, the economy, the traffic. No draws. opts.noInland
+     * turns it off, for the suite to prove a dry pad is left bit for bit
+     * where it was and that nothing else in the system moved. */
+    if (!opts.noInland) placeInland(sys);
     /* Rings and belts (2026-10-15). Their own substreams, forked off the
      * seed, so nothing generated before or after them moves — and after the
      * rotations, because a ring lies in its planet's equator. Read at call
@@ -2289,6 +2295,323 @@
         }
       }
     }
+  }
+
+  /* --- inland: no shaft under the sea (2026-11-02) ----------------------
+   * Astra: "placement needs to not ignore coastlines. All planetside ports
+   * should be set up far enough inland that no underground geometry
+   * protrudes into the water." The pads were rolled anywhere on their
+   * world and the sea was never asked: over the 450 kawartha systems, 302
+   * of the 465 pads on a world with a sea (or a lava sea) had shaft and
+   * hangar at least partly in it - Kestrel Pads and Terminus Groundport
+   * among them. 185 now move; 117 have nowhere dry to go (below).
+   *
+   * THE FOOTPRINT is a circle, because the port's heading is the model's
+   * business and not decided here: INLAND_FOOT pad radii about the pad
+   * centre. That is the furthest any part of anything a ground port can be
+   * - measured from the art, every vertex of every ground site model (the
+   * widest is runway-city-site-s, 1.41 pad radii from its origin; the
+   * underground tunnel is 1.35, the procedural shed's corner 0.75, the
+   * walk-deck plan 81 m, inside every one of them) - rounded up. Taking
+   * the worst model rather than this port's own keeps the answer the same
+   * with or without a renderer loaded, which it has to be: the same seed
+   * is the same universe in node and in the browser alike. ground.test
+   * re-measures the art against INLAND_FOOT, so a wider model fails there.
+   *
+   * DRY means Weather.dryAt at every sample: sea level plus the shader's
+   * soft edge plus the most its ground crinkle can move a coast (the
+   * margin is argued there). Samples: the centre, eight at half the
+   * radius, sixteen on the rim - under 0.2 km apart, where the CPU field
+   * cannot change by a tenth of the slack in between (measured against a
+   * 400-point disc; ground.test repeats it).
+   *
+   * MOVING: a pad that fails goes to the NEAREST site that is dry, in its
+   * twilight band if it has one, and clear of the world's other pads. Found
+   * by branch and bound over the cube-sphere, best first by distance: a cell
+   * whose centre stands more than INLAND_SLOPE x its radius below the floor
+   * cannot hold a dry point and is dropped, the rest are split down to
+   * INLAND_LEAF_KM; a cell centre that passes the whole footprint test goes
+   * back on the heap at its exact distance, and the first of those off the
+   * heap is the answer. A first draft walked rings outward instead, and
+   * took twenty times as long to build the galaxy (0.9 s to 20 s - wars.js
+   * builds every system at once), most of it searching worlds with no dry
+   * ground at all end to end; it also stepped past small dry patches once
+   * its rings grew coarse. No draws, so nothing else in any seed moves, and
+   * a pad that was already dry is not touched at all.
+   *
+   * NOWHERE DRY ENOUGH: the pad stays where it was rolled, flagged
+   * `coastal` with the reason, until Astra decides what such a world gets
+   * (CHANGELOG has the numbers). */
+  var INLAND_FOOT = 1.45;          // pad radii - see above
+  /* The finest cell the search splits to: a quarter of a kilometre, or
+   * 0.002 rad of arc on a world big enough that a quarter kilometre would
+   * be millions of cells. The elevation field's finest octave is about
+   * 0.046 rad across, so 0.002 is a twentieth of it; measured over the 40
+   * seeds, 0.001, 0.002 and 0.003 put every pad in the same place, 0.005
+   * began to move them. (A leaf in kilometres alone took one system 8.6 s,
+   * on a 6,000 km world.) */
+  var INLAND_LEAF_KM = 0.25;
+  var INLAND_LEAF_RAD = 0.002;
+  /* How fast the elevation field can change, per radian of arc, which is
+   * what lets a cell be dropped unopened. The field is a function of
+   * direction alone (Weather.elevationAt never reads the radius), so it is
+   * one number for every world: over 600,000 points on 300 worlds the
+   * median was 0.57, the 99.99th percentile 4.52, the steepest 6.04. The
+   * analytic bound of the warped fbm is about 200 and would prune nothing.
+   * 4.5 is the 99.99th percentile, and what it trades is time, not
+   * answers: over all 450 kawartha systems, bounds of 3, 4.5, 6.5 and 8
+   * put every one of the 302 pads that move or are flagged in exactly the
+   * same place, and 8 takes the galaxy's build from 0.9 s to 3.9 s where
+   * 4.5 takes it to 2.0. On ground steeper than any measured the search
+   * could pass over a dry spot for a further one - never settle on a wet
+   * one, because the footprint test at the answer is exact. */
+  var INLAND_SLOPE = 4.5;
+  /* "Nearest" to within a leaf and 2% of the distance (see the loop). */
+  var INLAND_NEAR_FRAC = 0.02;
+  var INLAND_SEP = 3.0;            // pad radii each: two towns (portBlocks reach 3) clear
+  /* Exactly the strip settleTwilightPads folds a pad into and no wider:
+   * latitude squeezed by 0.15 from the generator's own +-1.45, longitude
+   * its +-0.06 of jitter about the ring. twilight.test holds pads to these
+   * (0.23 and 0.07), and its sun-height check - the star low over a ring
+   * pad all year - is the reason the ring cannot simply be widened. */
+  var TWILIGHT_BAND_LAT = 1.45 * 0.15;
+  var TWILIGHT_RING_LON = 0.06;
+
+  function inlandWeather() {
+    return global.Weather || (typeof require !== 'undefined' ? require('./weather.js') : null);
+  }
+  function qOfLatLon(lat, lon) {
+    var c = Math.cos(lat);
+    return [c * Math.cos(lon), c * Math.sin(lon), Math.sin(lat)];
+  }
+  function latLonOfQ(q) {
+    var lon = Math.atan2(q[1], q[0]);
+    if (lon < 0) lon += 2 * Math.PI;
+    return { lat: Math.asin(Math.max(-1, Math.min(1, q[2]))), lon: lon };
+  }
+  /* North and east at q, in the untilted lat/lon frame. */
+  function tangentsAt(q) {
+    var e = [-q[1], q[0], 0], el = Math.hypot(e[0], e[1]);
+    if (el < 1e-9) { e = [0, 1, 0]; el = 1; }
+    e = [e[0] / el, e[1] / el, 0];
+    var n = [q[1] * e[2] - q[2] * e[1], q[2] * e[0] - q[0] * e[2], q[0] * e[1] - q[1] * e[0]];
+    return { n: n, e: e };
+  }
+  function stepFrom(q, tg, ang, bear) {
+    var ca = Math.cos(ang), sa = Math.sin(ang), cb = Math.cos(bear), sb = Math.sin(bear);
+    return [q[0] * ca + (tg.n[0] * cb + tg.e[0] * sb) * sa,
+            q[1] * ca + (tg.n[1] * cb + tg.e[1] * sb) * sa,
+            q[2] * ca + (tg.n[2] * cb + tg.e[2] * sb) * sa];
+  }
+  var FOOT_RINGS = [[0.5, 8], [1.0, 16]];
+  /* Every sample of a footprint of `rf` km about q on `world`, dry? */
+  function footprintDry(W, world, q, rf) {
+    var ll = latLonOfQ(q);
+    if (!W.dryAt(world, W.padDir(world, ll.lat, ll.lon))) return false;
+    var tg = tangentsAt(q);
+    for (var r = 0; r < FOOT_RINGS.length; r++) {
+      var ang = rf * FOOT_RINGS[r][0] / world.radius, n = FOOT_RINGS[r][1];
+      for (var k = 0; k < n; k++) {
+        var s = latLonOfQ(stepFrom(q, tg, ang, 2 * Math.PI * k / n));
+        if (!W.dryAt(world, W.padDir(world, s.lat, s.lon))) return false;
+      }
+    }
+    return true;
+  }
+  function inlandFootKm(pad) { return INLAND_FOOT * (pad.radius || 0.24); }
+
+  function placeInland(sys) {
+    var W = inlandWeather();
+    if (!W || !W.dryAt || !W.padDir) return;
+    for (var i = 0; i < sys.bodies.length; i++) {
+      var w = sys.bodies[i];
+      if (w.kind !== 'planet' && w.kind !== 'moon') continue;
+      if (W.digFloor(w) === null) continue;
+      var pads = w.children.filter(function (c) { return c.surface && typeof c.lat === 'number'; });
+      for (var j = 0; j < pads.length; j++) movePadInland(W, w, pads[j], pads);
+      delete w._inlandNone;
+    }
+  }
+
+  function movePadInland(W, w, pad, pads) {
+    var rf = inlandFootKm(pad), R = w.radius;
+    var q0 = qOfLatLon(pad.lat, pad.lon);
+    if (footprintDry(W, w, q0, rf)) return;          // untouched, bit for bit
+    var band = w.kind === 'planet' ? w.habitableBand : null;
+    var ringLon = null;
+    if (band === 'terminator') {
+      var l = ((pad.lon % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+      ringLon = (l < Math.PI ? 1 : -1) * (Math.PI / 2 - TWILIGHT_PAD_SUNWARD);
+    }
+    var others = pads.filter(function (o) { return o !== pad; });
+    /* A world already searched end to end, in this band, for a footprint no
+     * bigger than this one, without the other pads standing in the way of
+     * anything: nothing was dry, and nothing will be. Two pads on one ocean
+     * world is the common case, and the search is the expensive part. */
+    var memo = w._inlandNone || [];
+    for (var mi = 0; mi < memo.length; mi++) {
+      if (memo[mi].ring === ringLon && memo[mi].band === band && memo[mi].rf <= rf) { markCoastal(W, w, pad, band); return; }
+    }
+    var sepHit = false;
+    function allowed(q, ll) {
+      if (Math.abs(ll.lat) > 1.45) return false;
+      if (band === 'equator' && Math.abs(ll.lat) > TWILIGHT_BAND_LAT) return false;
+      if (ringLon !== null) {
+        var dl = Math.atan2(Math.sin(ll.lon - ringLon), Math.cos(ll.lon - ringLon));
+        if (Math.abs(dl) > TWILIGHT_RING_LON) return false;
+      }
+      for (var o = 0; o < others.length; o++) {
+        var qo = qOfLatLon(others[o].lat, others[o].lon);
+        var cosg = q[0] * qo[0] + q[1] * qo[1] + q[2] * qo[2];
+        var km = Math.acos(Math.max(-1, Math.min(1, cosg))) * R;
+        if (km < INLAND_SEP * ((pad.radius || 0) + (others[o].radius || 0))) { sepHit = true; return false; }
+      }
+      return true;
+    }
+    var floor = W.digFloor(w);
+    var elevAt = function (q) { var ll = latLonOfQ(q); return W.elevationAt(w, W.padDir(w, ll.lat, ll.lon)); };
+    /* Can any point of a cell with centre c and angular radius rad be in
+     * the band at all? Cheap, and only ever says no when it is sure. */
+    var bandNear = function (c, rad) {
+      var lat = Math.asin(Math.max(-1, Math.min(1, c[2])));
+      if (Math.abs(lat) - rad > 1.45) return false;
+      if (band === 'equator' && Math.abs(lat) - rad > TWILIGHT_BAND_LAT) return false;
+      if (ringLon !== null) {
+        /* The ring is a lune |dlon| <= TWILIGHT_RING_LON about one half of
+         * a meridian: no further than that from the meridian's plane, and
+         * on the ring's own side of the axis. */
+        var mx = -Math.sin(ringLon), my = Math.cos(ringLon);
+        var off = Math.asin(Math.min(1, Math.abs(c[0] * mx + c[1] * my)));
+        if (off - rad > TWILIGHT_RING_LON) return false;
+        if (c[0] * Math.cos(ringLon) + c[1] * Math.sin(ringLon) < -Math.sin(rad)) return false;
+      }
+      return true;
+    };
+    var clampToBand = function (q) {
+      var ll = latLonOfQ(q), lat = ll.lat, lon = ll.lon;
+      var latMax = band === 'equator' ? TWILIGHT_BAND_LAT : 1.45;
+      lat = Math.max(-latMax, Math.min(latMax, lat));
+      if (ringLon !== null) {
+        var dl = Math.atan2(Math.sin(lon - ringLon), Math.cos(lon - ringLon));
+        if (Math.abs(dl) > TWILIGHT_RING_LON) lon = ringLon + (dl < 0 ? -1 : 1) * TWILIGHT_RING_LON;
+      }
+      if (lat === ll.lat && lon === ll.lon) return q;
+      return qOfLatLon(lat, lon);
+    };
+    var leaf = Math.max(INLAND_LEAF_KM / R, INLAND_LEAF_RAD);
+    var heap = [], serial = 0;
+    var push = function (key, item) { item.k = key; item.s = serial++; heap.push(item); heapUp(heap, heap.length - 1); };
+    for (var f = 0; f < 6; f++) pushCell(f, -1, -1, 1, 1);
+    function pushCell(face, u0, v0, u1, v1) {
+      var c = cubeDir(face, (u0 + u1) / 2, (v0 + v1) / 2);
+      var rad = 0, corners = [[u0, v0], [u1, v0], [u0, v1], [u1, v1]];
+      for (var ci = 0; ci < 4; ci++) {
+        var p = cubeDir(face, corners[ci][0], corners[ci][1]);
+        rad = Math.max(rad, angleBetween(c, p));
+      }
+      if (!bandNear(c, rad)) return;
+      var e = elevAt(c);
+      if (e + INLAND_SLOPE * rad < floor) return;          // nothing dry in here
+      push(Math.max(0, angleBetween(q0, c) - rad), { cell: [face, u0, v0, u1, v1], c: c, rad: rad, e: e });
+    }
+    /* NEAREST TO WITHIN a leaf and INLAND_NEAR_FRAC of the distance: once a
+     * site is in hand, a cell that could at best beat it by less than that
+     * is not opened. Without this every cell inside dry ground near the
+     * answer has a lower bound under the answer's own distance and is split
+     * all the way down to leaves before the answer is accepted (measured: a
+     * single system took 8.6 s). */
+    var best = null;
+    while (heap.length) {
+      var it = heapPop(heap);
+      if (it.point) { if (!best || it.k < best.k) best = it; break; }
+      if (best && it.k >= best.k - (leaf + INLAND_NEAR_FRAC * best.k)) break;
+      /* The candidate is the cell's centre, CLAMPED INTO THE BAND. A cell
+       * straddling the band's edge with its centre outside used to yield
+       * no candidate and be split to leaves all along the edge - thousands
+       * of kilometres of it on a terminator ring, 4.4 million elevation
+       * calls for one system. Clamped, it offers the nearest in-band point
+       * it holds, and the search can stop. */
+      var cq = clampToBand(it.c);
+      /* The centre's own elevation is already known: an unclamped centre
+       * below the floor is no candidate, without asking the field again. */
+      if (cq === it.c && it.e < floor) cq = null;
+      if (cq && angleBetween(cq, it.c) <= it.rad && allowed(cq, latLonOfQ(cq)) && footprintDry(W, w, cq, rf)) {
+        var dk = angleBetween(q0, cq);
+        if (!best || dk < best.k) best = { k: dk, c: cq };
+        push(dk, { point: true, c: cq });
+      }
+      if (it.rad > leaf) {
+        var cl = it.cell, um = (cl[1] + cl[3]) / 2, vm = (cl[2] + cl[4]) / 2;
+        pushCell(cl[0], cl[1], cl[2], um, vm); pushCell(cl[0], um, cl[2], cl[3], vm);
+        pushCell(cl[0], cl[1], vm, um, cl[4]); pushCell(cl[0], um, vm, cl[3], cl[4]);
+      }
+    }
+    if (best) {
+      var ll = latLonOfQ(best.c);
+      /* Where it was rolled, kept: the test suite and the CHANGELOG read
+       * it, and a future sea-platform port would start from it.
+       * Additive - nothing that predates this reads it. */
+      pad.movedInland = { lat: pad.lat, lon: pad.lon, km: best.k * R };
+      pad.lat = ll.lat; pad.lon = ll.lon;
+      return;
+    }
+    if (!sepHit) (w._inlandNone = memo).push({ ring: ringLon, band: band, rf: rf });
+    markCoastal(W, w, pad, band);
+  }
+  /* A point on cube face `f` (+x -x +y -y +z -z) at face coordinates
+   * u, v in [-1, 1], projected onto the sphere. The cells are bounded by
+   * great circles, so each is convex and its furthest point from its
+   * centre is a corner: the radius pushCell takes is exact. */
+  function cubeDir(f, u, v) {
+    var x, y, z;
+    switch (f) {
+      case 0: x = 1; y = u; z = v; break;
+      case 1: x = -1; y = -u; z = v; break;
+      case 2: x = -u; y = 1; z = v; break;
+      case 3: x = u; y = -1; z = v; break;
+      case 4: x = -v; y = u; z = 1; break;
+      default: x = v; y = u; z = -1;
+    }
+    var l = Math.sqrt(x * x + y * y + z * z);
+    return [x / l, y / l, z / l];
+  }
+  function angleBetween(a, b) {
+    /* atan2 of |a x b| and a.b: accurate at the tiny angles the leaves are,
+     * where acos of a dot product is all rounding. */
+    var cx = a[1] * b[2] - a[2] * b[1], cy = a[2] * b[0] - a[0] * b[2], cz = a[0] * b[1] - a[1] * b[0];
+    return Math.atan2(Math.sqrt(cx * cx + cy * cy + cz * cz), a[0] * b[0] + a[1] * b[1] + a[2] * b[2]);
+  }
+  /* A binary min-heap on (k, then insertion order): the order is total, so
+   * ties break the same way on every machine. */
+  function heapLess(h, i, j) { return h[i].k < h[j].k || (h[i].k === h[j].k && h[i].s < h[j].s); }
+  function heapUp(h, i) {
+    while (i > 0) {
+      var p = (i - 1) >> 1;
+      if (!heapLess(h, i, p)) break;
+      var t = h[i]; h[i] = h[p]; h[p] = t; i = p;
+    }
+  }
+  function heapPop(h) {
+    var top = h[0], last = h.pop();
+    if (h.length) {
+      h[0] = last;
+      var i = 0;
+      for (;;) {
+        var l = 2 * i + 1, r = l + 1, m = i;
+        if (l < h.length && heapLess(h, l, m)) m = l;
+        if (r < h.length && heapLess(h, r, m)) m = r;
+        if (m === i) break;
+        var t = h[i]; h[i] = h[m]; h[m] = t; i = m;
+      }
+    }
+    return top;
+  }
+  function markCoastal(W, w, pad, band) {
+    pad.coastal = true;
+    pad.coastalWhy = 'no ground on ' + (w.name || 'its world') + ' stands far enough above the ' +
+      (W.terrainOf(w).lava ? 'lava' : 'sea') + ' to hold its shaft and hangar' +
+      (band ? ' inside the habitable ' + (band === 'terminator' ? 'ring' : 'band') : '') +
+      ' - left where it was rolled';
   }
 
   /* --- factions ---------------------------------------------------------
@@ -4641,6 +4964,8 @@
     surfaceGravity: surfaceGravity,
     buildRotations: buildRotations,
     makeSurfacePort: makeSurfacePort,
+    placeInland: placeInland, footprintDry: footprintDry, INLAND_FOOT: INLAND_FOOT,
+    qOfLatLon: qOfLatLon, inlandFootKm: inlandFootKm,
     buildFactions: buildFactions,
     FACTION_STEM: FACTION_STEM,
     PIRATE_STEM: PIRATE_STEM,

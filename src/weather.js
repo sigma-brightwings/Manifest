@@ -442,9 +442,13 @@
    * 0..1 as the shader blends them, `elev` the field. `sunB` is the star's
    * direction in the same frame, needed only for a tidally locked world,
    * whose ice is its night side rather than its poles. */
+  /* The sea's soft edge, in elevation units, either side of the level:
+   * the shader's smoothstep(uOcean - 0.035, uOcean + 0.035). Named so the
+   * inland-port test (dryAt, below) reads the same edge the picture does. */
+  var SEA_EDGE = 0.035;
   function terrainAt(body, p, sunB) {
     var T = terrainOf(body), elev = elevationAt(body, p);
-    var sea = T.ocean > 0.001 ? 1 - smoothstep(T.ocean - 0.035, T.ocean + 0.035, elev) : 0;
+    var sea = T.ocean > 0.001 ? 1 - smoothstep(T.ocean - SEA_EDGE, T.ocean + SEA_EDGE, elev) : 0;
     var ice = 0, k = spinAxis(body);
     var band = body.habitableBand;
     if (band === 'terminator') {
@@ -462,6 +466,56 @@
     }
     var bio = biomeAt(body, p, elev, sea, ice, sunB);
     return { elev: elev, sea: sea, ice: ice, lava: !!T.lava, biome: bio.name, bio: bio };
+  }
+
+  /* ---- IS THIS GROUND DRY ENOUGH TO DIG IN? (2026-11-02) -----------------
+   *
+   * Astra: "placement needs to not ignore coastlines. All planetside ports
+   * should be set up far enough inland that no underground geometry
+   * protrudes into the water." generate.js placeInland asks this, over
+   * every sample of a port's footprint.
+   *
+   * WATER IS WATER: a sea under an ice cap is still a sea, so ice does not
+   * enter into it - only the elevation against sea level does. LAVA is no
+   * better to dig under than water. A DESERT's "sea" is a dry basin the
+   * picture paints as salt flat (biomeName), not water, and is ground.
+   *
+   * THE MARGIN IS THE SHADER'S, NOT A GUESS. The picture's coast is this
+   * field plus gl.js's ground-detail nudge (GD.elev times a brightness
+   * normalised into [-0.5, 0.5] by construction: every octave's value noise
+   * is 0..1, centred and divided by the sum of the amplitudes), so the
+   * nudge can never exceed GD.elev / 2 = 0.010. Land at SEA_EDGE + that
+   * above sea level is dry in the picture at every altitude, whatever the
+   * crinkle does - the worst case, proven rather than sampled. COAST_SLACK
+   * is the rest: the CPU field over the gap between two samples (its
+   * steepest measured slope, 5.4e-4 per km over 176 ports in 40 seeds,
+   * times a sample spacing under 0.2 km, is 1e-4) rounded up tenfold. */
+  var DIG_NUDGE = 0.010, COAST_SLACK = 0.001;
+  var DIG_MARGIN = SEA_EDGE + DIG_NUDGE + COAST_SLACK;
+  /* Elevation the ground has to clear, or null on a world with nothing
+   * wet to keep out of. */
+  function digFloor(body) {
+    var T = terrainOf(body);
+    if (!(T.ocean > 0.001)) return null;
+    if (body && body.type === 'desert') return null;
+    return T.ocean + DIG_MARGIN;
+  }
+  function dryAt(body, p) {
+    var f = digFloor(body);
+    return f === null || elevationAt(body, p) >= f;
+  }
+  /* A pad's latitude and longitude to the body-fixed direction terrainAt
+   * reads - sim.js surfaceOffset at the world's rest phase: the equatorial
+   * frame, tipped about x by the tilt, turned about z by `az`. The spin
+   * phase drops out, because bodyFixed undoes exactly the turn that
+   * surfaceOffset adds. ground.test holds this to Sim. */
+  function padDir(body, lat, lon) {
+    var rot = body.rotation || {}, tilt = rot.tilt || 0, az = rot.az || 0;
+    var cl = Math.cos(lat), x = cl * Math.cos(lon), y = cl * Math.sin(lon), z = Math.sin(lat);
+    var ct = Math.cos(tilt), st = Math.sin(tilt);
+    var py = y * ct - z * st, pz = y * st + z * ct;
+    var ca = Math.cos(az), sa = Math.sin(az);
+    return { x: x * ca - py * sa, y: x * sa + py * ca, z: pz };
   }
 
   /* ---- BIOMES (2026-11-02) ----------------------------------------------
@@ -663,6 +717,7 @@
 
   var Weather = {
     TERRAIN: TERRAIN, terrainOf: terrainOf, terrainAt: terrainAt,
+    dryAt: dryAt, digFloor: digFloor, padDir: padDir, DIG_MARGIN: DIG_MARGIN, DIG_NUDGE: DIG_NUDGE,
     BIOME: BIOME, biomeParams: biomeParams, biomeAt: biomeAt, biomeGrid: biomeGrid,
     elevationAt: elevationAt, bodyFixed: bodyFixed, spinAxis: spinAxis,
     K: K, fbm: fbm, hashSeed: hashSeed, sample: sample, lookup: lookup,
