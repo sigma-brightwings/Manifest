@@ -6243,7 +6243,9 @@
       seed: sectionHash(sc.seed, 0) * 1000,
       dip: [Math.cos(dipA) * SECTION_DIP, Math.sin(dipA) * SECTION_DIP],
       ph: [sectionHash(sc.seed, 2) * 6.283, sectionHash(sc.seed, 3) * 6.283, sectionHash(sc.seed, 4) * 6.283],
-      sun: sunDir || { x: 0, y: 0, z: 1 }
+      sun: sunDir || { x: 0, y: 0, z: 1 },
+      planet: sc.planetW ? { pos: sc.planetW, radius: sc.planetKm } : null,
+      rim: sc.rim || 0
     };
   }
 

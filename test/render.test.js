@@ -7376,9 +7376,12 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
   var keepGlobal = global.GLWorld;
   var GLreal = require('../src/gl.js');
   global.GLWorld = keepGlobal; W.GLWorld = saved;
-  var holes = [];
+  var holes = [], meshCuts = [];
   W.GLWorld = new Proxy({ available: true, skyOver: GLreal.skyOver,
-    setSurfaceHole: function (b, p, r, d) { holes.push(d || 0); } }, {
+    setSurfaceHole: function (b, p, r, d) { holes.push(d || 0); },
+    /* The keyhole main.js hands the meshes (stationCutShader), so the
+     * street's burnt edge is held to the cut actually drawn. */
+    setCutaway: function (c) { if (c && !c.box) meshCuts.push(c); } }, {
     get: function (t, k) { return k in t ? t[k] : function () { return false; }; }
   });
 
@@ -7410,6 +7413,39 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
   var zen = GLreal.skyAt(blue, 0.6, 0.8, 1, 0.5, 0), hor = GLreal.skyAt(blue, 0.6, 0.8, 0, 0.5, 0);
   check('the sky: darker toward the zenith than at the horizon',
         zen[0] + zen[1] + zen[2] < (hor[0] + hor[1] + hor[2]) * 0.75);
+  /* The haze (fifth round): by the air the ray crosses, not the distance
+   * alone, and all the way to the sky's colour at the horizon. */
+  check('the haze: straight down from 8 km through thick air, the ground stays clear',
+        GLreal.hazeAt(0.94, 8.5, 8, 0.9) < 0.15, GLreal.hazeAt(0.94, 8.5, 8, 0.9).toFixed(3));
+  check('the haze: along the ground to the horizon, it is the sky',
+        GLreal.hazeAt(0.94, 30, 0.1, 0.006) > 0.95 && GLreal.hazeAt(0.94, 30, 0.1, 0) === 1);
+  check('the haze: more of it the lower and longer the path',
+        GLreal.hazeAt(0.94, 20, 0.2, 0.2) > GLreal.hazeAt(0.94, 20, 8, 0.2));
+  /* The seam (fifth round): at the TRUE horizon — below the horizontal by
+   * the dip, from any height — the ground is all haze, and the haze is the
+   * sky's horizon colour: groundHaze mixes toward groundSkyAt along the
+   * horizontal, and the sky pass, below the horizontal, IS that colour. */
+  var seamOk = true, seamWhy = [];
+  [0.043, 0.18, 0.6, 1.3, 2, 5, 8].forEach(function (h) {
+    var R = 4969, dip = GLreal.horizonDip(h, R), D = Math.sqrt(h * (2 * R + h));
+    var f = GLreal.hazeAt(0.94, D, h, dip, R);
+    if (!(f === 1)) { seamOk = false; seamWhy.push(h + ' km: ' + f.toFixed(4)); }
+  });
+  check('the haze: at the true horizon, from 43 m to 8 km up, the ground is all haze', seamOk, seamWhy.join(', '));
+  var skyBelow = GLreal.skyAt(orange, 0.94, 0.5, -0.05, 0.3, 0), skyHor = GLreal.skyAt(orange, 0.94, 0.5, 0, 0.3, 0);
+  check('the haze: the sky just above the true horizon is the colour the haze goes to',
+        [0, 1, 2].every(function (i) { return Math.abs(skyBelow[i] - skyHor[i]) < 1e-12; }));
+  check('the haze: the shader mixes the ground toward the sky\'s own function, all the way',
+        /return mix\(col, groundSkyAt\(flat_\), f\);/.test(glsrc) &&
+        /smoothstep\(dip, dip \+ 0\.08, -dot\(rd, uSkyUp\)\)/.test(glsrc));
+  /* By the optical path, not altitude alone: the same 8 km eye, straight
+   * down (8 km of path, mostly thin air) against a grazing 60 km look. */
+  check('the haze: from 8 km, straight down stays clear and a grazing look goes hazy',
+        GLreal.hazeAt(0.94, 8, 8, 1, 4969) < 0.15 && GLreal.hazeAt(0.94, 60, 8, 0.13, 4969) > 0.5,
+        GLreal.hazeAt(0.94, 8, 8, 1, 4969).toFixed(3) + ' / ' + GLreal.hazeAt(0.94, 60, 8, 0.13, 4969).toFixed(3));
+  check('the haze: the same path length is clearer the higher it starts',
+        GLreal.hazeAt(0.94, 10, 8, 0.5) < GLreal.hazeAt(0.94, 10, 2, 0.5) &&
+        GLreal.hazeAt(0.94, 10, 2, 0.5) < GLreal.hazeAt(0.94, 10, 0.05, 0.5));
   check('the sky: night and airless are the dark clear, stars and all',
         night.lit < 0.05 && vac.lit === 0 && Math.max(night[0], night[1], night[2]) < 0.06 &&
         Math.max(vac[0], vac[1], vac[2]) < 0.06);
@@ -7507,6 +7543,64 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
           if (bad) st.wall.push(tag + ': ' + bad + ' wall shown above the street');
           if (air) st.wall.push(tag + ': ' + air + ' wall shown in the bay\'s open air');
           if (tgt < -0.05 && hgt < 0 && !shown) st.wall.push(tag + ': no pit wall with her ' + (-tgt * 1000).toFixed(0) + ' m down');
+          /* The burnt edge in the street (fifth round): the band just
+           * outside the cone where it breaks the ground — the same width
+           * rule and fraction as the port's own cut (stationCutShader's
+           * rim) — hot nearest the cut, scorched beyond, nothing past it. */
+          if (hgt > 0 && wall.rim > 0) {
+            var cutRim = c.section.rim;
+            if (!(Math.abs(wall.rim - cutRim) < 1e-12)) st.wall.push(tag + ': street band fraction differs from the cut');
+            var tq = 0.5, ax0 = V.addScaled(eye, un, L * tq);
+            var rq = Math.min(wall.rEye + (wall.rShip - wall.rEye) * tq, wall.cap > 0 ? wall.cap : Infinity);
+            var at2 = function (f2) { return V.addScaled(ax0, side, rq * f2); };
+            var bands = [GLreal.streetBand(wall, eye, at2(0.5)), GLreal.streetBand(wall, eye, at2(1 + wall.rim * 0.1)),
+                         GLreal.streetBand(wall, eye, at2(1 + wall.rim * 0.7)), GLreal.streetBand(wall, eye, at2(1 + wall.rim * 1.3))];
+            if (bands.join() !== 'cut,hot,scorched,') st.wall.push(tag + ': street band ' + bands.join());
+            /* AND ON THE STREET ITSELF IT IS THE BUILDINGS' BAND. Where the
+             * cone breaks the ground, walk out across the edge on the world's
+             * sphere, in eight directions round the hole: at every step the
+             * street's band (FRAG_WALL) and the band a building standing
+             * there would get (FRAG_MESH, with the cut main.js gave the
+             * meshes this frame) must say the same thing — so the two edges
+             * are one width, hot and scorched in the same places, and there
+             * is no seam where a cut wall meets the cut street. */
+            var mc = meshCuts[meshCuts.length - 1];
+            if (!mc) st.wall.push(tag + ': no keyhole handed to the meshes');
+            else if (wall.planet) {
+              var pc = wall.planet.pos, pR = wall.planet.radius, met = 0, diff = 0, seen = {};
+              /* Where the axis itself goes into the ground, and the cone's
+               * radius there: the edge of the hole in the street. */
+              var ocA = V.sub(eye, pc), bA = V.dot(un, ocA), dA = bA * bA - (V.dot(ocA, ocA) - pR * pR);
+              var tA = dA > 0 ? -bA - Math.sqrt(dA) : L * 0.5;
+              var rsA = Math.min(wall.rEye + (wall.rShip - wall.rEye) * tA / L, wall.cap > 0 ? wall.cap : Infinity);
+              var axS = V.addScaled(eye, un, tA);
+              for (var k8 = 0; k8 < 8; k8++) {
+                var th8 = k8 / 8 * Math.PI * 2, p28 = V.cross(un, side);
+                var outw = V.add(V.scale(side, Math.cos(th8)), V.scale(p28, Math.sin(th8)));
+                /* Rays fanning out from the axis: the one that meets the
+                 * sphere at the cone's edge, then a hair either side. */
+                for (var sx = 0.80; sx < 1.30; sx += 0.0025) {
+                  var tgtP = V.addScaled(axS, outw, rsA * sx);
+                  var rd8 = V.norm(V.sub(tgtP, eye)), oc8 = V.sub(eye, pc);
+                  var b8 = V.dot(rd8, oc8), c8 = V.dot(oc8, oc8) - pR * pR, ds8 = b8 * b8 - c8;
+                  if (!(ds8 > 0) || !(c8 > 0)) continue;
+                  var t8 = -b8 - Math.sqrt(ds8);
+                  if (!(t8 > 0)) continue;
+                  var hp = V.addScaled(eye, rd8, t8);
+                  var sb = GLreal.streetBand(wall, eye, hp), mb = GLreal.meshBand(mc, eye, hp);
+                  met++; if (sb) seen[sb] = 1;
+                  if (sb !== mb) diff++;
+                }
+              }
+              if (diff) st.wall.push(tag + ': street band and building band differ at ' + diff + ' of ' + met + ' street points');
+              if (!(seen.cut && seen.hot && seen.scorched)) st.wall.push(tag + ': the walk across the edge never crossed the band (' + Object.keys(seen) + ')');
+            }
+            /* Down the wall's lip: the same width in metres as the street's
+             * band at the same radius, hot then scorched, then rock. */
+            var rL = wall.cap > 0 ? wall.cap : rq, wM = rL * wall.rim * 1000;
+            var lips = [GLreal.lipBand(wall, rL, wM * 0.1), GLreal.lipBand(wall, rL, wM * 0.6), GLreal.lipBand(wall, rL, wM * 1.1)];
+            if (lips.join() !== 'hot,scorched,') st.wall.push(tag + ': lip band ' + lips.join());
+          }
           /* The bowl is not rebuilt for a small move of the eye: the CPU's
            * part per frame is the wall's uniforms, nothing else. */
           var b1 = R.sectionBowl(sc);

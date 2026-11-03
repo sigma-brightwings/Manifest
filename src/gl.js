@@ -149,16 +149,79 @@
     'uniform float uWPh3;',
     'uniform vec3 uSunDir;',
     'uniform float uNear, uInvLogRange;',
+    /* ---- the burnt edge (2026-11-02, fifth round) --------------------- */
+    'uniform vec4 uWPlanet;',     // the world's centre relative to the eye, km; its radius
+    'uniform vec4 uWRim;',        // the cut-face band's colour, and its width as a fraction of the cone's radius
     'out vec4 frag;',
     'float whash(float a, float b) { return fract(sin(a * 12.9898 + b * 78.233) * 43758.5453); }',
     'void main() {',
     '  vec3 rd = normalize(uRight * (vPx.x - uScreenPx.x) + uUp * (uScreenPx.y - vPx.y) + uFwd * uFlen);',
+    '  float L = length(uWS);',
+    /* ---- THE BURNT EDGE IN THE STREET (fifth round) -------------------
+     * Astra: "why is the ground port cutaway not have the glowing edge
+     * effect?" The port's own meshes get the keyhole's cut-face band
+     * (FRAG_MESH, look B: the inner 35% hot and fed to the glow pass, the
+     * rest scorched plate), but the planet's surface was only discarded
+     * inside the cone — so where the cut broke the street there was no
+     * edge at all, and the buildings' rim stopped dead at the ground.
+     *
+     * The band is the SAME test: the ray meets the world's sphere (the
+     * very surface the planet pass draws, so the two agree), and a hit
+     * just outside the cone, within the band's width of it, is painted
+     * the way FRAG_MESH paints a cut wall — with that shader's width rule
+     * (a fraction uWRim.w of the cone's radius there), its 35% split, its
+     * colour and its glow, and its rule that a surface lying ALONG the
+     * line of sight gets no band. Written a hair nearer than the ground so
+     * it wins the depth test against the planet's own fragment there.
+     * A ray that meets the street INSIDE the cone carries on to the wall
+     * below; one that meets it anywhere else is the planet's to draw.
+     *
+     * Here and not in the planet pass, though that is where the street is
+     * cut: drawBodies writes with the glow mask turned off (a world is lit,
+     * it does not glow), and the hot edge's whole look is that it feeds
+     * the glow. This pass writes alpha, and it meets the sphere with the
+     * planet pass's own arithmetic from the same float uniforms, so its
+     * rounding is the planet's rounding and 0.05% nearer is enough to win.
+     *
+     * The width is the mesh band's as it now is — a plain fraction of the
+     * cone's radius. FRAG_MESH's "THE BAND IS CAPPED" note describes a
+     * uCutBand.x ceiling that look B (1248a7b, 2026-10-30) took out; were
+     * it ever put back, it must go in here and on the lip too, or the
+     * street's edge and a building's will part company at the corner. */
+    '  vec3 a0 = uWS / max(L, 1e-9);',
+    '  if (uWPlanet.w > 0.0) {',
+    '    float pb = dot(rd, uWPlanet.xyz);',
+    '    float pc = dot(uWPlanet.xyz, uWPlanet.xyz) - uWPlanet.w * uWPlanet.w;',
+    '    float pdisc = pb * pb - pc;',
+    '    if (pc > 0.0 && pdisc > 0.0) {',
+    '      float ts = pb - sqrt(pdisc);',
+    '      if (ts > 0.0) {',
+    '        vec3 hs = rd * ts;',
+    '        float tt = dot(hs, uWS) / max(L * L, 1e-12);',
+    '        float rs = min(mix(uWR.y, uWR.x, tt), uWR.z);',
+    '        vec3 offs = hs - uWS * tt;',
+    '        float ds = length(offs);',
+    '        bool inCone = tt > 0.0 && tt < 1.0 && ds < rs;',
+    '        if (!inCone) {',
+    '          vec3 ns = normalize(hs - uWPlanet.xyz);',
+    '          if (tt > 0.0 && tt < 1.0 && ds < rs * (1.0 + uWRim.w) &&',
+    '              abs(dot(ns, offs / max(ds, 1e-9))) < 0.8) {',
+    '            float ru = (ds - rs) / (rs * uWRim.w);',
+    '            frag = ru < 0.35 ? vec4(uWRim.rgb, 0.85) : vec4(0.16, 0.11, 0.085, 0.0);',
+    '            float sd = dot(hs, uFwd) * 0.9995;',
+    '            gl_FragDepth = clamp(log2(max(uNear, sd) / uNear) * uInvLogRange, 0.0, 1.0);',
+    '            return;',
+    '          }',
+    '          discard;',
+    '        }',
+    '      }',
+    '    }',
+    '  }',
     /* The ray against the cone. x is along the axis from the eye toward her,
      * c the cosine between ray and axis; the radius at x is rEye + k x, held
      * to the cap. Near the eye it is the cylinder (where the cone would be
      * wider than the cap), then the cone, out to her. */
-    '  float L = length(uWS);',
-    '  vec3 a = uWS / max(L, 1e-9);',
+    '  vec3 a = a0;',
     '  float c = dot(rd, a);',
     '  if (c <= 0.0) discard;',
     '  float sn = sqrt(max(0.0, 1.0 - c * c));',
@@ -213,6 +276,17 @@
     '  if (dot(n, -vRel) < 0.0) n = -n;',
     '  float lam = max(0.0, dot(n, uSunDir));',
     '  frag = vec4(base * (0.26 + 0.70 * lam), 0.0);',
+    /* AND DOWN THE WALL'S LIP (fifth round): the same band, the same width
+     * in metres as the street's beside it — the cone's radius here times
+     * the band fraction — run down from the street, hot at the top where
+     * it meets the street's hot edge, scorched below, then the beds. So
+     * the rim reads as one burnt edge round the hole, street and rock. */
+    '  float rh = cyl ? cap : (uWR.y + k * t * c);',
+    '  float lipM = rh * uWRim.w * 1000.0;',
+    '  if (-hm < lipM) {',
+    '    float lu = -hm / max(lipM, 1e-6);',
+    '    frag = lu < 0.35 ? vec4(uWRim.rgb, 0.85) : vec4(0.16, 0.11, 0.085, 0.0);',
+    '  }',
     '  float depth = dot(vRel, uFwd);',
     '  gl_FragDepth = clamp(log2(max(uNear, depth) / uNear) * uInvLogRange, 0.0, 1.0);',
     '}'
@@ -593,16 +667,44 @@
     /* The ground sky, for the horizon haze (groundHaze). */
     SKY_GLSL,
     /* AERIAL PERSPECTIVE (2026-11-02, third round): the ground fades into
-     * the horizon's own sky colour with distance through the air, a shade
-     * darker than the sky itself so the horizon stays a line. Only for the
-     * world the ground sky is over (uSkyA.w > 0); the planet seen from
+     * the horizon's own sky colour with distance through the air. Only for
+     * the world the ground sky is over (uSkyA.w > 0); the planet seen from
      * space is untouched. Its own function so a change to the ground's
-     * shading above it merges round it. */
-    'vec3 groundHaze(vec3 col, vec3 rd, float dist) {',
+     * shading above it merges round it.
+     *
+     * FIFTH ROUND, two fixes the coordinator found at Downwell:
+     *   - THE SEAM. The haze went toward a colour a shade darker than the
+     *     sky (0.86 of it) and never all the way (0.92), and the planet's
+     *     limb halo laid a thin bright orange line on top, so the horizon
+     *     was a hard line with a band on it. Now the haze goes all the way
+     *     to groundSkyAt along the horizontal, which IS the sky's colour at
+     *     the horizon, and the halo is left out for this world (the sky
+     *     pass replaces it): ground and sky meet in one colour.
+     *   - TOO MUCH HAZE FROM ABOVE. It grew with straight distance through
+     *     air of the same thickness everywhere, so 8 km straight down was as
+     *     hazy as 8 km along the ground and the frame washed pink. Now it is
+     *     the optical depth of the path through an atmosphere that thins
+     *     with height (scale height HAZE_H, 6 km): a path that starts high
+     *     and runs down is mostly thin air, a path along the ground is all
+     *     thick air. `h0` is the eye's height over the sphere. */
+    'vec3 groundHaze(vec3 col, vec3 rd, float dist, float h0, float R) {',
     '  if (uSkyA.w <= 0.0) return col;',
     '  vec3 flat_ = normalize(rd - uSkyUp * dot(rd, uSkyUp) + 1e-6);',
-    '  float f = 1.0 - exp(-dist * uSkyA.w * 0.045);',
-    '  return mix(col, groundSkyAt(flat_) * 0.86, f * 0.92);',
+    '  float H = 6.0;',
+    '  float od = h0 > 0.01 ? dist * H * (1.0 - exp(-h0 / H)) / h0 : dist;',
+    '  float f = 1.0 - exp(-od * uSkyA.w * 0.03);',
+    /* And all the way at the horizon itself, however low the eye: a ray
+     * that only just meets the ground is the horizon, and the horizon is
+     * where ground and sky are one colour. Over the last five degrees
+     * ABOVE THE TRUE HORIZON, which from height sits below the horizontal
+     * by the dip (sine sqrt(h(2R+h))/(R+h): 0.4 degrees at 43 m, 2.9 at
+     * 8 km). Measured from the horizontal, as the first cut of this was,
+     * the forcing at the real horizon fell to 0.84 from 1.3 km up and the
+     * optical depth had to make up the rest — 0.96, a faint line. From
+     * the dip it is exactly 1 there at every height. */
+    '  float dip = h0 > 0.0 ? sqrt(h0 * (2.0 * R + h0)) / (R + h0) : 0.0;',
+    '  f = max(f, 1.0 - smoothstep(dip, dip + 0.08, -dot(rd, uSkyUp)));',
+    '  return mix(col, groundSkyAt(flat_), f);',
     '}',
     /* The ground-port section box — see GL.setGroundCut. */
     'uniform vec4 uBoxO;',        // eye -> ship, km; w = 1 when on
@@ -781,6 +883,9 @@
     /* ---- the lit limb, outside the disc -------------------------------- */
     '  if (r > 1.0) {',
     '    if (uAtmo <= 0.0) discard;',
+    /* Not under the ground sky (fifth round): from the ground the sky
+     * pass is the air, and the limb halo was a bright line on the horizon. */
+    '    if (uSkyA.w > 0.0) discard;',
     /* Normal at the silhouette in this direction: z = 0, so the normal lies
      * in the screen plane. Whether the halo is bright here is decided by the
      * same sun term the surface uses, which is what makes the glow a
@@ -1258,10 +1363,15 @@
      * fought the terrain for the same pixels. Haze should thicken toward
      * the edge, not bleach the middle. */
     '    float rim = pow(1.0 - z, 3.0);',
+    /* Not from under this world's own sky (fifth round): seen from near
+     * its surface EVERY ray is near the limb by this measure, so the rim
+     * haze washed the whole ground pink from 8 km up. groundHaze is the
+     * haze there, by the air the ray actually crosses. */
+    '    if (uSkyA.w > 0.0) rim = 0.0;',
     '    col += uAtmoColor * rim * uAtmo * (0.08 + 0.45 * lam);',
     '  }',
 
-    '  col = groundHaze(col, rd, tHit);',
+    '  col = groundHaze(col, rd, tHit, sqrt(dot(oc, oc)) - uWorldRadius, uWorldRadius);',
     '  frag = vec4(col, 1.0);',
     '}'
   ].join('\n');
@@ -1897,7 +2007,11 @@
      * it. `near` is 1 at the cut face and falls to 0 over uCutBand.y of
      * the local radius; inside it colour is drained toward a dimmed grey
      * by uCutBand.z and lamp glow is turned off, so the cut is the loudest
-     * thing at the hole and the far wall keeps its colour as the backdrop. */
+     * thing at the hole and the far wall keeps its colour as the backdrop.
+     * (Found 2026-11-02: look B, below, dropped both — the band is a plain
+     * fraction uCutR.z again and `near` is never set. The uniforms are still
+     * uploaded. The ground's band in FRAG_WALL matches what is drawn, not
+     * this note.) */
     /* THE BUBBLE IS A FLOOR, NOT A SPHERE (from the trial line). Inside the
      * ground-port section box only what is at or below the deck survives. */
     '  if (uBoxO.w > 0.5) {',
@@ -2528,7 +2642,7 @@
       wallUni = uniforms(gl, wallProg, ['uWS', 'uWR', 'uRight', 'uUp', 'uFwd', 'uScreenPx',
                                         'uFlen', 'uCenterPx', 'uQuadPx', 'uViewportPx', 'uNear', 'uInvLogRange',
                                         'uWEnt', 'uWE', 'uWN', 'uWU', 'uWRoomA', 'uWRoomB',
-                                        'uWShip', 'uWFold', 'uWPh3', 'uSunDir']);
+                                        'uWShip', 'uWFold', 'uWPh3', 'uSunDir', 'uWPlanet', 'uWRim']);
     } catch (e) { wallProg = null; if (global.console) console.error(e.message); }
 
     /* The ground sky pass (GL.drawGroundSky). Its own try: a sky that
@@ -3335,6 +3449,22 @@
     var r = Math.min(cone.rEye + (cone.rShip - cone.rEye) * t, cone.cap > 0 ? cone.cap : 1e9);
     return Math.sqrt(ox * ox + oy * oy + oz * oz) < r;
   };
+  /* FRAG_MESH's keyhole band in JS, for the test that holds the street's
+   * edge to it: at `p` (world km) seen from `eye`, with the cut flag main.js
+   * hands GL.setCutaway, 'cut', 'hot', 'scorched' or null — the shader's
+   * own lines, leaving out the deck bubble and the along-the-surface rule. */
+  GL.meshBand = function (cut, eye, p) {
+    var cx = cut.pos.x - eye.x, cy = cut.pos.y - eye.y, cz = cut.pos.z - eye.z;
+    var px = p.x - eye.x, py = p.y - eye.y, pz = p.z - eye.z;
+    var L2 = Math.max(cx * cx + cy * cy + cz * cz, 1e-12);
+    var t = (px * cx + py * cy + pz * cz) / L2;
+    if (!(t > 0 && t < 1)) return null;
+    var r = Math.min(cut.rEye + (cut.rShip - cut.rEye) * t, cut.cap > 0 ? cut.cap : 1e9);
+    var ox = px - cx * t, oy = py - cy * t, oz = pz - cz * t, d = Math.sqrt(ox * ox + oy * oy + oz * oz);
+    if (d < r) return 'cut';
+    if (!(d < r * (1 + (cut.rim || 0)))) return null;
+    return (d - r) / (r * cut.rim) < 0.35 ? 'hot' : 'scorched';
+  };
   GL.setGroundCut = function (bodyId, box) {
     groundCut = (bodyId && box) ? { bodyId: bodyId, box: box } : null;
   };
@@ -3998,7 +4128,9 @@
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LESS);
     gl.disable(gl.BLEND);
-    gl.colorMask(true, true, true, false);
+    /* Alpha on (fifth round): it is the glow mask, and the hot edge feeds
+     * it as the port's own cut face does. Rock writes 0 there. */
+    gl.colorMask(true, true, true, true);
     gl.useProgram(wallProg);
     gl.bindVertexArray(vao);
     gl.uniform2f(u.uViewportPx, vw, vh);
@@ -4023,6 +4155,11 @@
     gl.uniform4f(u.uWFold, w.dip[0], w.dip[1], w.ph[0], w.ph[1]);
     gl.uniform1f(u.uWPh3, w.ph[2]);
     gl.uniform3f(u.uSunDir, w.sun.x, w.sun.y, w.sun.z);
+    if (w.planet) gl.uniform4f(u.uWPlanet, w.planet.pos.x - e.x, w.planet.pos.y - e.y,
+                               w.planet.pos.z - e.z, w.planet.radius);
+    else gl.uniform4f(u.uWPlanet, 0, 0, 0, 0);
+    var rc = w.rimColor || CUT_RIM;
+    gl.uniform4f(u.uWRim, rc[0], rc[1], rc[2], w.rim || 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.bindVertexArray(null);
     gl.colorMask(true, true, true, true);
@@ -4049,6 +4186,46 @@
     }
     if (t * c >= L) return null;
     return { t: t, p: { x: eye.x + rd.x * t, y: eye.y + rd.y * t, z: eye.z + rd.z * t }, cyl: cyl };
+  };
+  /* The street's burnt edge in JS (FRAG_WALL's first block): at a point
+   * `p` on the ground (world km) seen from `eye`, 'cut' inside the cone,
+   * 'hot' or 'scorched' in the band just outside it, null beyond — the
+   * same radius and the same fraction as FRAG_MESH's keyhole band. */
+  GL.streetBand = function (w, eye, p) {
+    var Sx = w.ship.x - eye.x, Sy = w.ship.y - eye.y, Sz = w.ship.z - eye.z;
+    var px = p.x - eye.x, py = p.y - eye.y, pz = p.z - eye.z;
+    var L2 = Math.max(Sx * Sx + Sy * Sy + Sz * Sz, 1e-12);
+    var tt = (px * Sx + py * Sy + pz * Sz) / L2;
+    if (!(tt > 0 && tt < 1)) return null;
+    var rs = Math.min(w.rEye + (w.rShip - w.rEye) * tt, w.cap > 0 ? w.cap : 1e9);
+    var ox = px - Sx * tt, oy = py - Sy * tt, oz = pz - Sz * tt, ds = Math.sqrt(ox * ox + oy * oy + oz * oz);
+    if (ds < rs) return 'cut';
+    if (ds >= rs * (1 + w.rim)) return null;
+    return (ds - rs) / (rs * w.rim) < 0.35 ? 'hot' : 'scorched';
+  };
+  /* groundHaze's blend fraction in JS: `dist` km of path from an eye `h0`
+   * km up over a world of radius `R` km (absent: flat ground, no dip), the
+   * ray `down` (sine of its angle below the horizontal). */
+  GL.hazeAt = function (air, dist, h0, down, R) {
+    if (!(air > 0)) return 0;
+    var H = 6, od = h0 > 0.01 ? dist * H * (1 - Math.exp(-h0 / H)) / h0 : dist;
+    var f = 1 - Math.exp(-od * air * 0.03);
+    var dip = GL.horizonDip(h0, R);
+    var u = Math.max(0, Math.min(1, (down - dip) / 0.08));
+    return Math.max(f, 1 - u * u * (3 - 2 * u));
+  };
+  /* The sine of the true horizon's angle below the horizontal, `h0` km
+   * over a sphere of radius `R` km. */
+  GL.horizonDip = function (h0, R) {
+    return (R > 0 && h0 > 0) ? Math.sqrt(h0 * (2 * R + h0)) / (R + h0) : 0;
+  };
+  /* The pit wall's lip band (FRAG_WALL's last block) in JS: `depthM`
+   * metres down the wall from the street where the cone's radius is `rh`
+   * km — 'hot', 'scorched', or null for the rock below. */
+  GL.lipBand = function (w, rh, depthM) {
+    var lipM = rh * w.rim * 1000;
+    if (!(depthM < lipM)) return null;
+    return depthM / Math.max(lipM, 1e-6) < 0.35 ? 'hot' : 'scorched';
   };
   /* FRAG_WALL in JS, up to the bed: null where the wall is not drawn
    * (above the street, in the bay's air), else the bed index. */

@@ -40,6 +40,49 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-02, the ground port's burnt edge, the horizon seam, the haze)
+
+- **The cut through the street now has the glowing edge.** Astra: "why is
+  the ground port cutaway not have the glowing edge effect?"
+  - The port's meshes had the look-B band where the cone cuts them, but
+    the planet's surface was only discarded inside the cone, and the pit
+    wall had no band, so the edge stopped where a building met the street.
+  - The street now gets the same band just outside the cone: the hot inner
+    35%, which feeds the glow, then scorched plate. It uses the same width
+    rule (6% of the cone's radius there) and the same colour. The pit wall
+    gets the same band for that width in metres down from the street; below
+    that it is rock strata again.
+  - It is drawn in the pit-wall pass, not the planet pass, because the
+    planet pass never writes the glow mask.
+  - The test walks across the edge on the world's sphere round the hole at
+    42 views and compares the street's band with the band the meshes get
+    from the cut main.js hands them. They agree at every point.
+- **The horizon seam is gone.** At Downwell the hazed ground was pale
+  orange and the sky just above it grey-mauve, with a thin bright line
+  between them.
+  - The haze now runs all the way to the sky's own horizon colour (one
+    function, `groundSkyAt`). Before, it stopped short at 92% of a colour
+    86% as bright.
+  - The planet's limb halo is no longer drawn under the ground sky. It was
+    the bright line.
+  - The haze reaches 1 at the **true** horizon, which from height is below
+    the horizontal.
+  - Largest row-to-row luminance step across the horizon, Downwell low
+    angle: 69.6 → 3.9 at 0.6 km, 68.8 → 3.6 at 2 km.
+- **Less haze from above.** At 8 km the Downwell frame was washed pink.
+  - Haze now grows with the optical depth of the path through air that
+    thins with height (6 km scale height), not with straight distance. A
+    steep look down crosses mostly thin air; a grazing one crosses thick
+    air all the way.
+  - The rim haze, which treated every ray from near the surface as a limb
+    ray, is off under the world's own sky.
+  - Ground detail (std-dev of luminance after a 12 px blur is subtracted,
+    side panels): 8 km straight down went from 1.73 to 2.07, against 2.17
+    at 2 km. At 40 degrees: 2.50 → 3.10 at 8 km, 2.91 → 3.44 at 2 km.
+    Plain std-dev at 8 km straight down went from 5.00 to 5.98; mean
+    luminance went from 139.6 to 129.9.
+- Saves are unaffected.
+
 ### Fixed (2026-11-02, ground detail: the oblique streaks)
 
 - **Cause of the diagonal smears in the upper half of Downwell's 0.6 and
