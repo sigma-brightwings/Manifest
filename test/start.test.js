@@ -17,8 +17,11 @@
  *    Talon, 3,200 cr and a pulse laser;
  *  - the same seed twice gives the same start;
  *  - the choice survives a save, additively;
- *  - the title card walks difficulty, then focus (skipped on HARD), then
- *    seed, and every row says ship, hold, guns and credits.
+ *  - New career goes straight to the seed and is the Talon with the
+ *    lessons (2026-11-03); the picker opens when they end, walks
+ *    difficulty then focus (skipped on HARD), every row says ship, hold,
+ *    guns and the credits it will hand you, and a swap is the direct
+ *    start's kit plus the run's profit.
  *
  * Boots the real main.js headless, in index.html's own script order, so
  * nothing here is a second copy of the new-career path.
@@ -218,40 +221,200 @@ G.newGame('kawartha');
 Save.restore(G, snap, { enterSystem: G.enterSystem });
 check('an older save with no start loads as none', G.start === null);
 
-/* ---- the title card ------------------------------------------------------ */
+/* ---- the title card: New career is the Talon and the lessons ------------- */
 console.log('--- the title card ---');
 G.title = { sel: 2, edit: null, note: null, born: -1e9 };
 key('Enter');
-check('New career asks the difficulty first', G.title && G.title.pick && G.title.pick.stage === 'difficulty');
+check('New career goes straight to the seed field - no picker on the title',
+      G.title && G.title.edit && !G.title.pick, G.title && JSON.stringify(G.title.pick));
+key('Enter');
+check('and Enter starts the classic Talon with the lessons',
+      !G.title && G.ship.hullId === 'talon' && G.ship.credits === 3200 && G.start === null &&
+      G.tutorial && G.tutorial.step === 'hello' && G.tutorial.pickAtEnd === true && G.startPending === false);
+var newKey = careerKey();
+G.newGame('kawartha', { difficulty: 'hard', focus: null });
+check('...which is the hard career field for field', careerKey() === newKey);
+check('an explicit start is never asked again', G.tutorial && G.tutorial.pickAtEnd === false);
+frame();
+
+/* ---- the picker after the lessons ------------------------------------------ */
+console.log('--- choosing after the lessons ---');
+var T = global.Tutorial, Fleet = global.Fleet;
+function endLessons() {
+  T.press(G, 'end', { now: 1 });
+  T.press(G, 'end', { now: 2 });
+}
+/* A new career with `profit` made on the run, its lessons ended, and the
+ * frame run that opens the picker. */
+function freshEnded(profit) {
+  G.newGame('kawartha');
+  G.ship.credits = 3200 + profit;
+  endLessons();
+  frame();
+}
+/* The kit a direct start of this choice is built with, bornId aside (it is
+ * stamped with where and when, and a swap happens elsewhere and later). */
+function kitKey(sh) {
+  return JSON.stringify({ hull: sh.hullId, fit: sh.fit, racks: sh.racks, missileId: sh.missileId, missiles: sh.missiles,
+                          cap: sh.cargoCap, dry: sh.dryMass, fuel: sh.fuel, fuelCap: sh.fuelCap,
+                          hp: sh.hullHp, hullMax: sh.hullMax, thrust: sh.thrustKN, groups: sh.groups });
+}
+
+freshEnded(1500);
+check('ending the lessons docked opens the picker, time stopped', G.menu && G.menu.page === 'startpick' && G.startPending === true);
+check('the Patience waits for the choice', !G.tutorial.given && !(G.fleet || []).length);
 texts.length = 0; frame();
-check('the difficulty rows say ship and money',
-      texts.some(function (t) { return /Tallyman \/ Sump \/ Dart/.test(t); }) &&
-      texts.some(function (t) { return /Talon Courier . 64 t hold . guns: pulse . 3,200 cr/.test(t); }),
-      texts.filter(function (t) { return /cr/.test(t); }).slice(0, 4).join(' | '));
-check('the heading and the pointer are glyphs', texts.some(function (t) { return t.indexOf('▸') >= 0; }) &&
+check('the difficulty stage says the run profit, once, in the heading',
+      texts.some(function (t) { return /LESSONS DONE/.test(t) && /1,500 cr/.test(t); }),
+      texts.filter(function (t) { return /LESSONS/.test(t); }).join(' | '));
+check('HARD reads "keep the Talon" and shows the ship as she stands',
+      texts.some(function (t) { return t === 'keep the Talon'; }) &&
+      texts.some(function (t) { return /Talon Courier . 64 t hold . guns: pulse . 4,700 cr$/.test(t); }));
+check('direction is glyphs', texts.some(function (t) { return t.indexOf('▸') >= 0; }) &&
       texts.some(function (t) { return t.indexOf('◂') >= 0; }));
 key('ArrowUp'); key('Enter');
-check('Easy asks the focus', G.title.pick && G.title.pick.stage === 'focus' && G.title.pick.difficulty === 'easy');
+check('Easy asks the focus', G.menu && G.menu.pick.stage === 'focus' && G.menu.pick.difficulty === 'easy');
 texts.length = 0; frame();
-check('every focus row says hull, hold, guns and credits',
+check('every focus row prints the money it will hand you: preset plus profit',
       S.FOCI.every(function (f) {
         var p = S.plan('easy', f);
-        return texts.some(function (t) { return t.indexOf(p.hullName) === 0 && /[\d,]+ cr$/.test(t); }) &&
+        return texts.some(function (t) { return t === p.hullName + '  ·  ' + S.fmt(p.credits + 1500) + ' cr'; }) &&
                texts.some(function (t) { return t.indexOf(p.cargoCap + ' t hold') === 0 && t.indexOf('guns: ') > 0; });
-      }));
+      }), texts.filter(function (t) { return / cr$/.test(t); }).join(' | '));
 key('Escape');
-check('Esc steps back one question, not out of the card', G.title && G.title.pick && G.title.pick.stage === 'difficulty');
-key('Enter');            // Easy again (the selection was put back on it)
-key('ArrowDown'); key('Enter');
-check('a focus goes to the seed field', G.title.edit && /easy mining career/.test(G.title.edit.title), G.title.edit && G.title.edit.title);
-key('Enter');
-check('and Enter starts the easy mining career', !G.title && G.ship.hullId === 'sump' && G.start.focus === 'mining');
-G.title = { sel: 2, edit: null, note: null, born: -1e9 };
-key('Enter'); key('ArrowDown'); key('Enter');
-check('HARD skips the focus question', G.title.edit && !G.title.pick && /hard career/.test(G.title.edit.title));
-key('Enter');
-check('and is the Talon', !G.title && G.ship.hullId === 'talon' && G.ship.credits === 3200);
+check('Esc steps back one question', G.menu && G.menu.pick.stage === 'difficulty');
+key('Escape');
+check('Esc again closes it, and the choice is still waiting', !G.menu && G.startPending === true);
 frame();
+check('...it does not reopen itself at the same dock', !G.menu);
+key('Escape');
+texts.length = 0; frame();
+check('the pause menu carries a row to reopen it',
+      G.menu && G.menu.page === 'main' && texts.some(function (t) { return t === 'Choose your ship'; }));
+key('ArrowDown'); key('Enter');
+check('...and it does', G.menu && G.menu.page === 'startpick');
+key('Escape'); frame();
+
+/* Every Easy and Normal choice, against a direct start of the same. */
+['easy', 'normal'].forEach(function (d) {
+  S.FOCI.forEach(function (f, fi) {
+    var plan = S.plan(d, f);
+    G.newGame('kawartha', { difficulty: d, focus: f });
+    var direct = kitKey(G.ship);
+    freshEnded(1500);
+    var talonPort = G.ship.docked;
+    if (d === 'easy') key('ArrowUp');
+    key('Enter');
+    for (var n = 0; n < fi; n++) key('ArrowDown');
+    key('Enter');
+    check(d + ' ' + f + ': the Talon is swapped in place for the direct start\'s kit',
+          kitKey(G.ship) === direct && G.ship.docked === talonPort, kitKey(G.ship) + ' vs ' + direct);
+    check(d + ' ' + f + ': credits are the preset\'s plus the profit', G.ship.credits === plan.credits + 1500,
+          G.ship.credits + ' vs ' + (plan.credits + 1500));
+    check(d + ' ' + f + ': the choice is recorded and nothing is waiting',
+          G.start && G.start.difficulty === d && G.start.focus === f && !G.startPending && !G.menu);
+    frame();
+    var rec = Fleet.byId(G, 'fs-halloway');
+    check(d + ' ' + f + ': the Patience comes round after it, at this dock',
+          rec && rec.hullId === 'trader' && rec.port === G.ship.docked && G.fleet.length === 1);
+  });
+});
+
+freshEnded(1500);
+key('ArrowDown'); key('Enter');
+check('HARD keeps the Talon and changes nothing', G.ship.hullId === 'talon' && G.ship.credits === 4700 &&
+      G.start.difficulty === 'hard' && !G.startPending && !G.menu);
+
+/* A run that lost money does not come off the start. */
+freshEnded(-1200);
+key('Enter'); key('Enter');                  // Normal, trade
+check('a loss is floored at nothing: the preset purse, whole', G.ship.credits === S.plan('normal', 'trade').credits,
+      G.ship.credits);
+
+/* Cargo: kept up to the new hold, the rest sold here, all of it counted. */
+G.newGame('kawartha');
+var port0 = G.sys.byId[G.ship.docked];
+var bids = {};
+global.Economy.priceList(port0, G.t).forEach(function (r) { if (r.sell > 0) bids[r.id] = r.sell; });
+var goods = Object.keys(bids).filter(function (id) { return id !== 'waste'; }).sort(function (a, b) { return bids[b] - bids[a]; });
+G.ship.cargo = {}; G.ship.cargo[goods[0]] = 10; G.ship.cargo[goods[goods.length - 1]] = 50;
+G.ship.credits = 3000;
+var lance = S.plan('normal', 'combat');
+var worth = 3000 + 10 * bids[goods[0]] + 50 * bids[goods[goods.length - 1]];
+var q = S.quote(G, lance, port0, G.t);
+check('quote: the dearest good is kept first, and the hold is not overfilled',
+      q.ok && q.keep[goods[0]] === Math.min(10, lance.cargoCap) &&
+      Object.keys(q.keep).reduce(function (a, k) { return a + q.keep[k]; }, 0) <= lance.cargoCap, JSON.stringify(q.keep));
+var keptV = Object.keys(q.keep).reduce(function (a, k) { return a + q.keep[k] * bids[k]; }, 0);
+check('quote: profit counts the cargo, and the cargo kept is not paid twice',
+      q.profit === Math.max(0, Math.round(worth - 3200)) && q.credits === Math.round(lance.credits + q.profit - keptV),
+      q.profit + ' / ' + q.credits);
+endLessons(); frame();
+key('Enter'); key('ArrowDown'); key('ArrowDown'); key('Enter');   // Normal, combat
+var held = Object.keys(G.ship.cargo).reduce(function (a, k) { return a + G.ship.cargo[k]; }, 0);
+check('the swap leaves the hold within the Lance\'s and the overflow sold', G.ship.hullId === 'fighter' &&
+      held <= G.ship.cargoCap + 1e-9 && G.ship.credits === q.credits, held + ' t, ' + G.ship.credits + ' cr');
+
+/* Contract freight that will not fit shuts the row, with the reason. */
+G.newGame('kawartha');
+G.ship.cargo = { grain: 40 };
+G.missions = [{ id: 'mx', type: 'haul', cid: 'grain', tonnes: 40, toName: 'X', deadline: 1e9 }];
+var qx = S.quote(G, lance, G.sys.byId[G.ship.docked], G.t);
+check('contract freight bigger than the new hold refuses, and says why', !qx.ok && /contract freight/.test(qx.why), qx.why);
+G.missions = [];
+
+/* Only from the Talon. */
+G.newGame('kawartha', { difficulty: 'easy', focus: 'trade' });
+var qt = S.quote(G, lance, G.sys.byId[G.ship.docked], G.t);
+check('flying something else, the trade-in refuses with the reason', !qt.ok && /trade-in is for the Talon/.test(qt.why), qt.why);
+
+/* Undocked when they end: pending, plainly. */
+G.newGame('kawartha');
+global.Sim.undockShip(G.ship, G.sys, G.t, 0.003); G.ship.arrival = null;
+var dockId = G.tutorial.home;
+endLessons(); frame();
+check('undocked: nothing opens, the choice waits', !G.menu && G.startPending === true);
+var tc = T.card(G, { sys: G.sys, t: G.t, now: 3 });
+check('...and the card says "Dock anywhere to choose your ship"', tc && tc.goal === 'Dock anywhere to choose your ship', tc && tc.goal);
+key('Escape'); frame();
+key('ArrowDown'); key('Enter');
+check('the pause row says why it will not open undocked', G.menu && G.menu.page === 'main' && /Dock anywhere/.test(G.menu.note || ''),
+      G.menu && G.menu.note);
+key('Escape');
+var sv = JSON.parse(JSON.stringify(Save.snapshot(G)));
+check('the pending flag is in the save', sv.startPending === true);
+var homePort = G.sys.byId[dockId];
+G.ship.cleared = {}; G.ship.cleared[homePort.id] = true;
+var hs = global.Sim.bodyState(homePort, G.sys, G.t);
+G.ship.pos = hs.pos; G.ship.vel = hs.vel;
+global.Sim.dockShip(G.ship, homePort, G.sys, G.t);
+frame();
+check('docking opens the picker', G.menu && G.menu.page === 'startpick');
+key('Escape'); key('Escape');
+
+/* The save, both ways. */
+G.newGame('kawartha');
+Save.restore(G, sv, { enterSystem: G.enterSystem });
+check('the pending flag comes back on load', G.startPending === true && G.tutorial.pickAtEnd === true);
+var sv2 = JSON.parse(JSON.stringify(sv));
+delete sv2.startPending; delete sv2.tutorial.pickAtEnd; delete sv2.tutorial.ended;
+sv2.tutorial.step = 'deliver'; sv2.start = null;
+G.newGame('kawartha');
+Save.restore(G, sv2, { enterSystem: G.enterSystem });
+check('an old mid-lesson save loads with nothing pending, and will be asked when its lessons end',
+      G.startPending === false && G.tutorial.pickAtEnd === true);
+sv2 = JSON.parse(JSON.stringify(sv2));      // restore adopts the object it is handed
+delete sv2.tutorial.pickAtEnd;
+sv2.start = { difficulty: 'easy', focus: 'mining' };
+G.newGame('kawartha');
+Save.restore(G, sv2, { enterSystem: G.enterSystem });
+check('...unless it chose a focus start on the old title card', G.tutorial.pickAtEnd === false);
+sv2.tutorial = null;
+G.newGame('kawartha');
+Save.restore(G, sv2, { enterSystem: G.enterSystem });
+frame();
+check('a career with no tutorial gets no picker', !G.startPending && !G.menu);
+check('the save version did not move', Save.snapshot(G).version === vBefore);
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

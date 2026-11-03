@@ -464,6 +464,10 @@
        * what you have done towards it. Additive; an older save has none,
        * and loads with no tutorial at all. */
       tutorial: G.tutorial || null,
+      /* A SHIP STILL TO CHOOSE (main.js startPick, 2026-11-03): up from the
+       * end of the lessons until a picker row is taken. Additive; an older
+       * save has none, and reads as nothing waiting. */
+      startPending: !!G.startPending,
       /* Ship-to-ship trade: what each voyage has already sold or bought
        * (so a reload cannot refill a hold you emptied) and the day's
        * standing tally (so a reload cannot reset the daily cap). Added
@@ -706,6 +710,16 @@
     G.doneMissions = data.doneMissions || {};
     G.campaigns = data.campaigns || {};
     G.tutorial = (data.tutorial && typeof data.tutorial === 'object') ? data.tutorial : null;
+    G.startPending = !!data.startPending;
+    /* A CAREER SAVED MID-LESSON BEFORE 2026-11-03 has no pickAtEnd. It is
+     * asked its ship when the lessons end unless it already chose a focus
+     * start on the old title card: no start at all, or HARD, was the Talon
+     * — the very career a new one now opens as — and the picker cannot
+     * take anything from it, since its HARD row keeps what you fly. A
+     * finished tutorial is left alone: its lessons will not end again. */
+    if (G.tutorial && !G.tutorial.done && G.tutorial.pickAtEnd === undefined) {
+      G.tutorial.pickAtEnd = !(G.start && G.start.focus);
+    }
     G.shipTrade = data.shipTrade || null;
     G.surveys = (data.surveys && typeof data.surveys === 'object') ? data.surveys : {};
     G.extracted = (data.extracted && typeof data.extracted === 'object') ? data.extracted : {};

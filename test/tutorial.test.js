@@ -251,8 +251,16 @@ Sim.dockShip(G.ship, dest, G.sys, G.t);
 T.note(G, 'contract', { id: 'm2', pay: 900 });
 G.missions = [];
 T.update(G, env(G));
-check('delivering it passes DELIVER, and the Patience is handed over in the same frame',
-      tut.step === 'handover' && tut.given, tut.step + ' given=' + tut.given);
+check('delivering it passes DELIVER to FAREWELL — his goodbye now comes before the ship',
+      tut.step === 'farewell' && !tut.given, tut.step + ' given=' + tut.given);
+check('FAREWELL offers CLOSE and no END LESSONS', T.card(G, env(G)).buttons.some(function (b) { return b.id === 'close'; }) &&
+      !T.card(G, env(G)).buttons.some(function (b) { return b.id === 'end'; }));
+check('FAREWELL no longer promises the Talon stays', !/Keep the Talon if you like/.test(T.card(G, env(G)).words));
+T.press(G, 'close', env(G));
+check('CLOSE ends the lessons and goes to HANDOVER', tut.ended && tut.step === 'handover' && !tut.done, tut.step);
+check('a career that chose its start is not asked again', !G.startPending);
+T.update(G, env(G));
+check('...and the Patience is handed over at this dock in the next frame', tut.step === 'handover' && tut.given);
 
 /* ---------------------------------------------------------------------- */
 section('the Patience');
@@ -273,10 +281,7 @@ var took = Combat.takeCommand(G, rec.id, 'keep');
 check('taking command works', took && took.ok, took && took.why);
 check('...and you are flying a Tallyman', G.ship.hullId === 'trader');
 T.update(G, env(G));
-check('taking command passes HANDOVER to FAREWELL', tut.step === 'farewell', tut.step);
-check('FAREWELL offers CLOSE', T.card(G, env(G)).buttons.some(function (b) { return b.id === 'close'; }));
-T.press(G, 'close', env(G));
-check('CLOSE ends the lessons and the card goes', tut.done && T.card(G, env(G)) === null);
+check('taking command passes HANDOVER, the last card, and the card goes', tut.done && T.card(G, env(G)) === null, tut.step);
 check('the second gift is not given twice', G.fleet.filter(function (r) { return r.id === 'fs-halloway'; }).length <= 1);
 
 /* ---------------------------------------------------------------------- */
@@ -291,8 +296,62 @@ check('one click on END LESSONS only arms it', !t2.done && /SURE/.test(T.card(G2
 T.press(G2, 'end', env(G2, { now: 30 }));
 check('a second click long after does not end it — it re-arms', !t2.done);
 T.press(G2, 'end', env(G2, { now: 31 }));
-check('two clicks inside the window end the lessons', t2.done);
-check('ending early gives no ship', !(G2.fleet || []).length);
+check('two clicks inside the window end the lessons', t2.ended && t2.step === 'handover');
+T.update(G2, env(G2));
+/* Astra, 2026-11-03: the Patience is always given. */
+check('ending early still hands over the Patience', t2.given && Fleet.byId(G2, t2.recId) &&
+      Fleet.byId(G2, t2.recId).hullId === 'trader', JSON.stringify(G2.fleet.map(function (r) { return r.id; })));
+check('...and the journal says you knew the trade', (G2.journal || []).some(function (e) { return /knew the trade/.test(e.text); }));
+check('no END LESSONS on the handover card once they have ended',
+      !T.card(G2, env(G2)).buttons.some(function (b) { return b.id === 'end'; }));
+T.press(G2, 'later', env(G2));
+check('LATER closes the card and leaves her on the clamp', t2.done && !!Fleet.byId(G2, t2.recId));
+
+/* ---------------------------------------------------------------------- */
+section('a career still to choose its ship (pickAtEnd)');
+function endNow(Gx) {
+  T.press(Gx, 'end', env(Gx, { now: 1 }));
+  T.press(Gx, 'end', env(Gx, { now: 2 }));
+}
+var c5 = career('kawartha'), G5 = c5.G, t5 = G5.tutorial;
+t5.pickAtEnd = true;
+endNow(G5);
+check('END LESSONS raises G.startPending', G5.startPending === true);
+T.update(G5, env(G5));
+check('the Patience waits for the choice, even docked', !t5.given && t5.step === 'handover');
+check('the card says what is waiting', /choose your ship/i.test(T.card(G5, env(G5)).goal), T.card(G5, env(G5)).goal);
+G5.startPending = false; t5.picked = true;          // what main.js takeStart does
+T.update(G5, env(G5));
+check('chosen: she comes round at the same dock', t5.given && !!Fleet.byId(G5, t5.recId));
+var j5 = JSON.parse(JSON.stringify(t5));
+check('the end of the lessons round-trips', j5.ended === true && j5.picked === true && j5.pickAtEnd === true);
+
+/* Undocked when they end: it waits, and says so plainly. */
+var c6 = career('kawartha'), G6 = c6.G, t6 = G6.tutorial;
+t6.pickAtEnd = true;
+Sim.undockShip(G6.ship, G6.sys, 0, 0.003); G6.ship.arrival = null;
+endNow(G6);
+T.update(G6, env(G6));
+var card6 = T.card(G6, env(G6));
+check('undocked: the choice is pending', G6.startPending === true && !t6.given);
+check('...and the card reads "Dock anywhere to choose your ship"',
+      card6.goal === 'Dock anywhere to choose your ship' && /Dock anywhere and choose your ship/.test(card6.words), card6.goal);
+
+/* By his CLOSE, the same. */
+var c7 = career('kawartha'), G7 = c7.G, t7 = G7.tutorial;
+t7.pickAtEnd = true;
+t7.step = 'farewell'; t7.entered = false;
+T.update(G7, env(G7));
+check('FAREWELL to a career still to choose says so', /choose your ship/.test(T.card(G7, env(G7)).goal) &&
+      /trade the Talon in|take the Talon in/.test(T.card(G7, env(G7)).words));
+T.press(G7, 'close', env(G7));
+check('CLOSE raises the same flag END LESSONS does', G7.startPending === true && t7.step === 'handover');
+
+/* Saved under the old order: sitting on HANDOVER, lessons never ended. */
+var c8 = career('kawartha'), G8 = c8.G, t8 = G8.tutorial;
+t8.pickAtEnd = true; t8.step = 'handover'; t8.entered = false;
+T.update(G8, env(G8));
+check('an old-order save on HANDOVER is asked its ship before the Patience', t8.ended && G8.startPending && !t8.given);
 
 var c3 = career('kawartha'), G3 = c3.G, t3 = G3.tutorial;
 T.press(G3, 'next', env(G3));

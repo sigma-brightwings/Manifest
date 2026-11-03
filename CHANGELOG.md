@@ -40,6 +40,47 @@ before they update.
 
 ## Unreleased
 
+### Changed (2026-11-03, the lessons first, then the ship)
+
+Astra: "make the tutorial go first, then you get to choose your ship".
+
+- **New career asks only the seed.** It starts the classic career — the
+  Talon at home, 3,200 cr — with Captain Halloway's lessons. A seed in the
+  URL is the same road. The title card no longer has the difficulty and focus
+  rows.
+- **The picker opens when the lessons end**, by his CLOSE or by END LESSONS:
+  the same two questions (difficulty, then focus; Hard skips the focus), as a
+  page of the pause menu, with time stopped. Every row says ship, hold, guns
+  and **the money it will hand you**: the preset's credits plus the run's
+  profit, which the heading also prints once.
+- **Hard keeps the Talon** and changes nothing. **Easy and Normal swap the
+  ship in place**, at the dock you are on, through the same `Start.outfit` a
+  direct start uses, so the kit is identical to a direct start of that choice.
+  Credits become the preset's plus the profit. Profit is credits plus cargo at
+  this port's price, less the classic 3,200, **floored at nothing** — a run
+  that lost money does not come off the start. The hold moves across as far as
+  the new hull takes it (contract freight first, then what this port will not
+  buy, then the dearest), and the rest is sold here; contract freight that
+  will not fit shuts the row and says why. The trade-in is for the Talon only.
+- **Not docked when the lessons end?** The choice waits: the card reads *Dock
+  anywhere to choose your ship* and the picker opens at the next dock. `Esc`
+  closes it without losing it; the pause menu carries a *Choose your ship* row
+  for as long as it waits.
+- **The Patience is always given**, END LESSONS included, and **after** the
+  choice, at the same dock — so the ship traded in is always the Talon, never
+  her. His goodbye now comes before the handover, and neither promises the
+  Talon stays.
+
+### Saves (2026-11-03)
+
+Old saves survive; no version bump. `startPending` is a new, additive field.
+A career saved mid-lesson before this is asked its ship when its lessons end
+— unless it chose an Easy or Normal start on the old title card. One saved
+sitting on the old HANDOVER step is asked before the Patience comes round
+(or, if she already has, the picker's Easy and Normal rows are shut because
+you are not in the Talon, and Hard keeps her). A career whose lessons were
+finished, or that never had them, is never asked.
+
 ### Changed (2026-11-03, more than one star: the plumbing, stage 1)
 
 Stage 1 of the star programme (project doc `claude/stars-and-systems-plan.md`:
