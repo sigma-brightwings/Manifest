@@ -240,12 +240,19 @@ console.log('--- the lifts ---');
   check('an inclined car\'s deck lies under its box top', tilted.length > 0 && tilted.every(function (d) { return d > 0; }),
         tilted.map(function (d) { return d.toFixed(3); }).join(' '));
 
-  var cars = 0, notFlush = [], plated = [], pit = [], hatchBad = [], decorative = [];
+  /* EVERY car now (item 3, 2026-11-03), not only the ring's: the skimmer's
+   * sort lift and the spine's hub lift stopped 0.115 and 0.044-0.07 radii
+   * short of the deck above them and stood a car's thickness proud of the
+   * one below. Render.fitCarRuns refits each run to its decks (the car
+   * definitions as fitted are portDoors(id).cars); carShafts cuts both decks
+   * across the run, caps the lower end and puts a hatch in the upper one. */
+  var cars = 0, notFlush = [], plated = [], pit = [], hatchBad = [], fits = [];
   ORBITAL.forEach(function (id) {
     var raw = global.PortLib[id];
     if (!raw.cars || /-(navy|syn)-/.test(id)) return;
     var d = Render.portDoors(id);
-    raw.cars.forEach(function (c) {
+    fits.push(id + ': ' + (d.carFit || []).join(', '));
+    (d.cars || raw.cars).forEach(function (c) {
       cars++;
       var cx = (c.min[0] + c.max[0]) / 2, cy = (c.min[1] + c.max[1]) / 2;
       var w = c.max[0] - c.min[0], h = c.max[1] - c.min[1];
@@ -261,36 +268,36 @@ console.log('--- the lifts ---');
       }
       var tol = 0.004;
       var bR = beside(rest), bF = beside(far);
-      /* Only the cars something rides: the ring's. The skimmer's sort lift
-       * and the spine's hub lift are never ridden and stop 0.09-0.12 radii
-       * short of the deck above them (printed, left for the art). */
-      var ridden = /^ring/.test(id);
-      if (!ridden) { decorative.push(id + ' ' + c.node + ' far end ' + bF.toFixed(3) + ' off'); return; }
-      if (Math.abs(bR) > tol || Math.abs(bF) > tol) notFlush.push(id + ' rest ' + bR.toFixed(4) + ' far ' + bF.toFixed(4));
+      if (Math.abs(bR) > tol || Math.abs(bF) > tol) notFlush.push(id + ' ' + c.node + ' rest ' + bR.toFixed(4) + ' far ' + bF.toFixed(4));
       var inShaft = column([d.hull], cx, cy).filter(function (z) { return z > Math.min(rest, far) - 0.001 && z < Math.max(rest, far) + 0.001; });
-      if (inShaft.length) plated.push(id + ' ' + inShaft.length + ' surfaces across the run');
-      /* Nothing in the shaft under the cap: the old pit's walls and floor
-       * are gone for a run's tenth below it (the hull's own underside, a
+      if (inShaft.length) plated.push(id + ' ' + c.node + ' ' + inShaft.length + ' surfaces across the run');
+      /* The lower end: nothing in the shaft for a tenth of a run under the
+       * car's underside there but its cap (the hull's own underside, a
        * plate that spans far past the shaft, may lie further down). */
-      var capZ = Math.min(c.min[2], c.min[2] + c.d[2]);
+      var capZ = c.d[2] < 0 ? c.min[2] + c.d[2] : c.min[2];
       var below = column([d.hull], cx, cy).filter(function (z) { return z < capZ - 0.001 && z > capZ - Math.abs(c.d[2]) * 0.1; });
       var cap = d.leaves.filter(function (l) { return l.fixed && l.node === c.node + 'PitFloor'; }).length;
-      if (c.d[2] < 0 && (below.length || !cap)) pit.push(id + ' ' + below.length + ' under the far end, cap ' + cap);
-      d.leaves.filter(function (l) { return l.hatch && l.overCar === c.node; }).forEach(function (l) {
-        var home = Render.partState(l, { car: { node: c.node, f: 0 } }).hidden;
+      if (below.length || !cap) pit.push(id + ' ' + c.node + ' ' + below.length + ' under the lower end, cap ' + cap);
+      /* The hatch over the upper end: gone with the car at that end, shut
+       * with it anywhere else, and with no car pose at all (at rest). */
+      var hatches = d.leaves.filter(function (l) { return l.hatch && l.overCar === c.node; });
+      if (!hatches.length) hatchBad.push(id + ' ' + c.node + ' has no hatch over its upper end');
+      hatches.forEach(function (l) {
+        var end = l.hatchEnd || 0;
+        var there = Render.partState(l, { car: { node: c.node, f: end } }).hidden;
         var away = Render.partState(l, { car: { node: c.node, f: 0.5 } }).hidden;
         var noCar = Render.partState(l, {}).hidden;
-        if (!home || away || !noCar) hatchBad.push(id + ' ' + l.node);
+        if (!there || away || noCar !== (end === 0)) hatchBad.push(id + ' ' + l.node);
       });
     });
   });
   Render.assignPort(role, null);
   st.radius = R0;
-  console.log('  ' + cars + ' cars; never ridden: ' + decorative.join('; '));
-  check('a ridden car is flush with the deck beside its shaft at both ends', notFlush.length === 0, notFlush.join('; '));
-  check('nothing plates across a ridden car\'s run', plated.length === 0, plated.join('; '));
-  check('the pit under a downward run is cut away and capped flush', pit.length === 0, pit.join('; '));
-  check('the hatch over a shaft is gone with the car home and shut with it away', hatchBad.length === 0, hatchBad.join('; '));
+  console.log('  ' + cars + ' cars; fitted: ' + fits.join('; '));
+  check('every car is flush with the deck beside its shaft at both ends', cars >= 9 && notFlush.length === 0, notFlush.join('; '));
+  check('nothing plates across any car\'s run', plated.length === 0, plated.join('; '));
+  check('the lower end of every run is cut away and capped flush', pit.length === 0, pit.join('; '));
+  check('the hatch over every shaft\'s upper end is gone with the car there and shut with it away', hatchBad.length === 0, hatchBad.join('; '));
 })();
 
 /* ---- F: THE BLAST DOORS BETWEEN THE BERTHS AND THE STATION ----------------

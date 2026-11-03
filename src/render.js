@@ -7672,6 +7672,8 @@
     }
 
     if (!out.length) return null;
+    var fitted = fitCarRuns(shell, hullF, out, carDefs);
+    carDefs = fitted.defs;
     hullF = carShafts(shell, hullF, hullC, out, carDefs);
     hullC = hullF.c; hullF = hullF.f;
     /* ---- AND THE DOORWAY IS A HOLE ------------------------------------
@@ -7811,7 +7813,10 @@
     PORT_DOORS[role] = {
       hull: { v: shell.v, f: hullF, c: hullC },
       leaves: out,
-      apertures: apertures
+      apertures: apertures,
+      /* The cars' runs as fitted to their decks (fitCarRuns), and why any
+       * was left alone. */
+      cars: carDefs, carFit: fitted.report
     };
     return PORT_DOORS[role];
   }
@@ -7845,6 +7850,182 @@
    * Returns { f, c }, the hull's faces with the cut made. */
   var SHAFT_INSET = 0.03;              // of the car's footprint, so the shaft walls stay
   var SHAFT_CAP = 0.003;               // radii: the new pit floor's own thickness
+
+  /* ---- EVERY CAR'S RUN ENDS ON A DECK (2026-11-03) ----------------------
+   *
+   * The ring's lift ran deck to deck; the skimmer's sort lift and the
+   * spine's hub lift did not. The art's `motion` stops each of them in
+   * mid-air: the sort lift's car rises 34 m up its guides and stops 0.115
+   * radii (18 m at skimmer-m) under the sort hall's roof, the hub lift's
+   * 22 m up from the hub floor and 0.09 radii under the hub's crown — a
+   * platform hanging at the top of a frame, going nowhere. And both cars
+   * stand ON their floor, a car's thickness proud of it, where the ring's
+   * sits IN its deck.
+   *
+   * So each declared car's run is refitted to the decks beside its shaft,
+   * measured, not assumed: four columns just outside the car's footprint,
+   * the horizontal surfaces in each. The LOWER end's car top is put level
+   * with the deck it stands in (the surface nearest it), and the UPPER
+   * end's level with the TOP of the first plate above the run — the deck
+   * over the shaft, which the car rises into and becomes the floor of.
+   * Both are the median of the columns that found one, and a change is
+   * taken only if it is small against the run (the plate has to be there
+   * on at least two sides). The ring's run already ends on both decks, and
+   * is unchanged by this to a hundred-thousandth.
+   *
+   * carShafts then cuts both decks across the run, caps the lower end at
+   * the car's underside, and a hatch is built into the upper deck's
+   * aperture wherever the art has none, shut while the car is away from
+   * that end (`hatchEnd`, see partState). Returns fitted COPIES of the
+   * car definitions: PortLib's own are never written. */
+  var CAR_FIT_MAX = 0.2;               // radii: the most a run end may move
+  function fitCarRuns(shell, hullF, out, carDefs) {
+    var defs = [], report = [];
+    /* Horizontal faces only, with their boxes, once. */
+    var flat = [];
+    for (var f = 0; f < hullF.length; f++) {
+      var fc = hullF[f];
+      if (fc.length < 3) continue;
+      var a = shell.v[fc[0]], b = shell.v[fc[1]], c = shell.v[fc[2]];
+      var e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+      var nx = e1[1] * e2[2] - e1[2] * e2[1], ny = e1[2] * e2[0] - e1[0] * e2[2], nz = e1[0] * e2[1] - e1[1] * e2[0];
+      var nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      if (Math.abs(nz / nl) < 0.9) continue;
+      flat.push(fc);
+    }
+    function column(x, y) {
+      var zs = [];
+      for (var q = 0; q < flat.length; q++) {
+        var t = flat[q];
+        for (var j = 1; j + 1 < t.length; j++) {
+          var A = shell.v[t[0]], B = shell.v[t[j]], C = shell.v[t[j + 1]];
+          if (Math.max(A[0], B[0], C[0]) < x || Math.min(A[0], B[0], C[0]) > x ||
+              Math.max(A[1], B[1], C[1]) < y || Math.min(A[1], B[1], C[1]) > y) continue;
+          var d0 = (B[0] - A[0]) * (C[1] - A[1]) - (C[0] - A[0]) * (B[1] - A[1]);
+          if (Math.abs(d0) < 1e-14) continue;
+          var u = ((x - A[0]) * (C[1] - A[1]) - (C[0] - A[0]) * (y - A[1])) / d0;
+          var v = ((B[0] - A[0]) * (y - A[1]) - (x - A[0]) * (B[1] - A[1])) / d0;
+          if (u < 0 || v < 0 || u + v > 1) continue;
+          zs.push(A[2] + u * (B[2] - A[2]) + v * (C[2] - A[2]));
+        }
+      }
+      return zs.sort(function (p, q) { return p - q; });
+    }
+    function median(list) {
+      if (list.length < 2) return null;
+      list.sort(function (p, q) { return p - q; });
+      return list[(list.length - 1) >> 1];
+    }
+    for (var i = 0; i < carDefs.length; i++) {
+      var cd = carDefs[i];
+      var cp = { node: cd.node, key: cd.key, min: cd.min && cd.min.slice(), max: cd.max && cd.max.slice(),
+                 mid: cd.mid && cd.mid.slice(), d: cd.d && cd.d.slice() };
+      defs.push(cp);
+      if (!cp.min || !cp.max || !cp.d || Math.abs(cp.d[0]) + Math.abs(cp.d[1]) > 1e-9 || !cp.d[2]) continue;
+      /* A car the art already gave a hatch is a run the art fitted (the
+       * ring's: ridden by every routed ring arrival, its stops measured and
+       * held by Sim.liftRide). Left exactly as drawn. Measured, its top
+       * sits 0.002-0.003 radii under the top of the deck plate it rests in
+       * - inside the plate, not proud of it. */
+      var artHatch = false;
+      for (var hq = 0; hq < out.length; hq++) {
+        var hl0 = out[hq];
+        if (!hl0.hatch || !hl0.mesh) continue;
+        var hx0 = 0, hy0 = 0, hn0 = 0;
+        hl0.mesh.f.forEach(function (face) { face.forEach(function (k) { var v = hl0.mesh.v[k]; if (v) { hx0 += v[0]; hy0 += v[1]; hn0++; } }); });
+        if (hn0 && hx0 / hn0 >= cp.min[0] && hx0 / hn0 <= cp.max[0] && hy0 / hn0 >= cp.min[1] && hy0 / hn0 <= cp.max[1]) artHatch = true;
+      }
+      if (artHatch) { report.push(cd.node + ' as the art has it (its own hatch)'); continue; }
+      var w = cp.max[0] - cp.min[0], h = cp.max[1] - cp.min[1], cx = (cp.min[0] + cp.max[0]) / 2,
+          cy = (cp.min[1] + cp.max[1]) / 2, thick = cp.max[2] - cp.min[2], run = Math.abs(cp.d[2]);
+      var cols = [[cp.min[0] - w * 0.15, cy], [cp.max[0] + w * 0.15, cy], [cx, cp.min[1] - h * 0.15], [cx, cp.max[1] + h * 0.15]]
+        .map(function (pt) { return column(pt[0], pt[1]); });
+      var restTop = cp.max[2], farTop = cp.max[2] + cp.d[2];
+      var up = cp.d[2] > 0, lowTop = up ? restTop : farTop, highTop = up ? farTop : restTop;
+      /* The lower end: the surface nearest the car's top. */
+      var lows = [], highs = [], plate = [];
+      cols.forEach(function (zs) {
+        var best = null;
+        zs.forEach(function (z) { if (Math.abs(z - lowTop) < Math.max(0.01, thick * 3) && (best === null || Math.abs(z - lowTop) < Math.abs(best - lowTop))) best = z; });
+        if (best !== null) lows.push(best);
+        /* The upper end: the first plate above the top of the run (or AT
+         * it, within a car's thickness), and that plate's top. */
+        for (var k = 0; k < zs.length; k++) {
+          if (zs[k] < highTop - Math.max(1e-4, thick * 0.5)) continue;
+          if (zs[k] - highTop > CAR_FIT_MAX) break;
+          var top = zs[k];
+          for (var k2 = k + 1; k2 < zs.length && zs[k2] - zs[k] < 0.008; k2++) top = zs[k2];
+          highs.push(top); plate.push(top - zs[k]);
+          break;
+        }
+      });
+      var lowDeck = median(lows), highDeck = median(highs), plateT = median(plate);
+      if (lowDeck === null || highDeck === null || !(highDeck > lowDeck)) {
+        report.push(cd.node + ' left as it is (no deck on two sides of both ends)');
+        continue;
+      }
+      var shift = (up ? lowDeck : highDeck) - restTop;          // the rest pose moves by this
+      var newD = (up ? highDeck : lowDeck) - (restTop + shift);
+      if (Math.abs(shift) > CAR_FIT_MAX || Math.abs(newD - cp.d[2]) > CAR_FIT_MAX || newD * cp.d[2] <= 0) {
+        report.push(cd.node + ' left as it is (the decks are too far from its run)');
+        continue;
+      }
+      cp.min[2] += shift; cp.max[2] += shift; cp.mid[2] += shift; cp.d[2] = newD;
+      cp.restShift = shift; cp.upperDeck = highDeck; cp.plate = Math.max(plateT || 0, 0.0015);
+      cp.hatchEnd = up ? 1 : 0;
+      report.push(cd.node + ' rest ' + (shift >= 0 ? '+' : '') + shift.toFixed(4) + ', run ' + cd.d[2].toFixed(4) + ' -> ' + newD.toFixed(4));
+      /* The car's own leaf: its travel, and its rest pose moved by `shift`
+       * into vertices of its own (a leaf's array is the whole shell's). */
+      for (var o = 0; o < out.length; o++) {
+        var lf = out[o];
+        if (!lf.car || lf.node !== cd.node) continue;
+        lf.axis = [0, 0, newD > 0 ? 1 : -1];
+        lf.travel = Math.abs(newD);
+        if (Math.abs(shift) > 1e-9) {
+          var nv = [], map = {};
+          lf.mesh.f = lf.mesh.f.map(function (face) {
+            return face.map(function (k) {
+              if (map[k] === undefined) { var p = shell.v[k]; map[k] = nv.length; nv.push([p[0], p[1], p[2] + shift]); }
+              return map[k];
+            });
+          });
+          lf.mesh.v = nv;
+        }
+      }
+    }
+    return { defs: defs, report: report };
+  }
+
+  /* A flat convex polygon minus an axis-aligned rectangle, as up to four
+   * convex pieces: the plane outside the rectangle is the strips x < x0 and
+   * x > x1, and between them y < y0 and y > y1. Each is a clip by two or
+   * three half-planes (Sutherland-Hodgman); z is carried by interpolation. */
+  function clipHalf(poly, ax, k, keepBelow) {
+    var outp = [];
+    for (var i = 0; i < poly.length; i++) {
+      var A = poly[i], B = poly[(i + 1) % poly.length];
+      var ia = keepBelow ? A[ax] <= k : A[ax] >= k, ib = keepBelow ? B[ax] <= k : B[ax] >= k;
+      if (ia) outp.push(A);
+      if (ia !== ib) {
+        var t = (k - A[ax]) / (B[ax] - A[ax]);
+        outp.push([A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t, A[2] + (B[2] - A[2]) * t]);
+      }
+    }
+    return outp;
+  }
+  function outsideRect(poly, x0, x1, y0, y1) {
+    var pieces = [clipHalf(poly, 0, x0, true), clipHalf(poly, 0, x1, false)];
+    var mid = clipHalf(clipHalf(poly, 0, x0, false), 0, x1, true);
+    pieces.push(clipHalf(mid, 1, y0, true), clipHalf(mid, 1, y1, false));
+    return pieces.filter(function (pc) {
+      if (pc.length < 3) return false;
+      var ar = 0;
+      for (var i = 1; i + 1 < pc.length; i++) {
+        ar += Math.abs((pc[i][0] - pc[0][0]) * (pc[i + 1][1] - pc[0][1]) - (pc[i + 1][0] - pc[0][0]) * (pc[i][1] - pc[0][1]));
+      }
+      return ar > 1e-12;
+    });
+  }
 
   function carShafts(shell, hullF, hullC, out, carDefs) {
     var cars = [];
@@ -7896,17 +8077,50 @@
           continue;
         }
         if (flat && pz > T.lo - 0.002 && pz < T.hi + 0.002) cut = true;          // plating across the run
+        if (cut) break;
         if (T.down && isFinite(T.pitLo) && pz < T.farBot - 1e-4 && pz > T.pitLo - SHAFT_CAP * 2) cut = true;
       }
       if (cut) continue;
+      /* A DECK DRAWN AS ONE BIG PLATE (the sort hall's floor and roof, the
+       * hub's floor and crown: one quad from wall to wall) has its middle
+       * out of the shaft, so the centroid test above keeps it whole and the
+       * car runs through it. Such a face is cut round the shaft instead:
+       * what lies outside the footprint is kept, as new triangles on new
+       * vertices (appended: the vertex array is shared with every leaf). */
+      if (flat) {
+        var hole = null;
+        for (var s4 = 0; s4 < shafts.length && !hole; s4++) {
+          var W = shafts[s4];
+          if (pz < W.lo - 0.002 || pz > W.hi + 0.002) continue;
+          var bx0 = Infinity, bx1 = -Infinity, by0 = Infinity, by1 = -Infinity;
+          for (var kq = 0; kq < fc.length; kq++) {
+            var vq = shell.v[fc[kq]];
+            bx0 = Math.min(bx0, vq[0]); bx1 = Math.max(bx1, vq[0]); by0 = Math.min(by0, vq[1]); by1 = Math.max(by1, vq[1]);
+          }
+          if (bx1 > W.x0 && bx0 < W.x1 && by1 > W.y0 && by0 < W.y1) hole = W;
+        }
+        if (hole) {
+          var poly = fc.map(function (k) { return shell.v[k]; });
+          outsideRect(poly, hole.x0, hole.x1, hole.y0, hole.y1).forEach(function (pc) {
+            if (pc.length < 3) return;
+            var base = shell.v.length;
+            pc.forEach(function (pt) { shell.v.push(pt); });
+            for (var tk = 1; tk + 1 < pc.length; tk++) { keepF.push([base, base + tk, base + tk + 1]); keepC.push(hullC[f]); }
+          });
+          continue;
+        }
+      }
       keepF.push(fc); keepC.push(hullC[f]);
     }
     /* The new floor under a run downward: a slab at the car's own
-     * underside, the shaft's footprint, SHAFT_CAP thick. */
+     * underside, the shaft's footprint, SHAFT_CAP thick. And under a run
+     * UPWARD, at the car's underside at rest: the deck it stands in is cut
+     * across the run (plating above), so without a cap the hole would go
+     * on down through the deck (the sort lift, the hub lift). */
     shafts.forEach(function (S) {
-      if (!S.down || !isFinite(S.pitLo)) return;
+      if (S.down ? !isFinite(S.pitLo) : !(S.c.restShift !== undefined)) return;
       var c = S.c, m = { v: [], f: [], c: [] };
-      var o = [(c.min[0] + c.max[0]) / 2, (c.min[1] + c.max[1]) / 2, S.farBot - SHAFT_CAP / 2];
+      var o = [(c.min[0] + c.max[0]) / 2, (c.min[1] + c.max[1]) / 2, (S.down ? S.farBot : c.min[2]) - SHAFT_CAP / 2];
       pushBox(m, o, [0, 0, 1], [1, 0, 0], [0, 1, 0], 0, 0, 0, SHAFT_CAP / 2,
               (c.max[0] - c.min[0]) * 0.53, (c.max[1] - c.min[1]) * 0.53, '#3b434d');
       out.push({ node: c.node + 'PitFloor', mesh: m, box: null, axis: [0, 0, 0], travel: 0,
@@ -7931,6 +8145,25 @@
         if (hx >= U.min[0] && hx <= U.max[0] && hy >= U.min[1] && hy <= U.max[1]) hl.overCar = U.node;
       }
     }
+    /* A hatch in the upper deck where the art drew none (fitCarRuns): the
+     * aperture's footprint, the plate's thickness, its top flush with the
+     * deck, shut while the car is away from that end. */
+    shafts.forEach(function (S) {
+      var c = S.c;
+      if (typeof c.upperDeck !== 'number') return;
+      for (var q = 0; q < out.length; q++) if (out[q].hatch && out[q].overCar === c.node) return;
+      var m = { v: [], f: [], c: [] }, th = c.plate;
+      var o = [(c.min[0] + c.max[0]) / 2, (c.min[1] + c.max[1]) / 2, c.upperDeck - th / 2];
+      pushBox(m, o, [0, 0, 1], [1, 0, 0], [0, 1, 0], 0, 0, 0, th / 2,
+              (c.max[0] - c.min[0]) * 0.5, (c.max[1] - c.min[1]) * 0.5, '#4a525c');
+      /* Caution bands across it, so a shut hatch reads as a hatch. */
+      for (var bnd = -2; bnd <= 2; bnd += 2) {
+        pushBox(m, [o[0], o[1] + (c.max[1] - c.min[1]) * 0.2 * bnd, o[2]], [0, 0, 1], [1, 0, 0], [0, 1, 0], 0, 0, 0,
+                th * 0.52, (c.max[0] - c.min[0]) * 0.46, (c.max[1] - c.min[1]) * 0.04, '#d9a92a');
+      }
+      out.push({ node: c.node + 'Hatch', mesh: m, box: null, axis: [0, 0, 0], travel: 0, field: false,
+                 berthMid: null, built: true, hatch: true, overCar: c.node, hatchEnd: c.hatchEnd });
+    });
     return { f: keepF, c: keepC };
   }
 
@@ -9072,8 +9305,12 @@
        * in it, shut once the car has left. The same `car.f` the car is
        * drawn at, so the two are driven by one number and a car can never
        * come up through a shut hatch. Closed-form, by the rail's legs. */
+      /* `hatchEnd`: which end of the run the hatch is at, 0 the car's rest
+       * (the ring's, in the deck it starts in) or 1 the far end (a lift
+       * whose upper deck is where it goes to). */
       var cc = doors && doors.car;
-      var away = (cc && cc.node === lf.overCar) ? cc.f : 0;
+      var at = (cc && cc.node === lf.overCar) ? Math.max(0, Math.min(1, cc.f)) : 0;
+      var away = Math.abs(at - (lf.hatchEnd || 0));
       return { f: 0, hidden: !(away > HATCH_SHUT_AT) };
     }
     if (lf.hatch) {
