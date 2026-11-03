@@ -40,6 +40,102 @@ before they update.
 
 ## Unreleased
 
+### Added (2026-11-03, trading houses: a factor on the concourse, an account for your ships, judged by the quarter)
+
+Astra: "Is there a way for me to tell my fleet to go buy low and sell high on
+commodities X, Y, Z etc, and actually give the ship a budget, if it increases
+the budget, the captain stays on. NPCs would need a mercantile skill?" Then:
+"we can add another NPC type, they're kinda like the fixer, but civilian, and
+their job is a combination of economist and import/export company"; for other
+systems, "both"; and "Trading firms measure their traders by the quarter year."
+
+- **A trading house at bigger civilian ports** (`src/tradingfirm.js`). Its
+  **factor** stands beside the trade terminal on the concourse (a new `factor`
+  role, a civilian in a suit, with its own portrait leanings). Whether a port
+  has a house, and what the house is, is a pure function of the system's seed
+  and the port, on its own hash, so no other draw moves. More likely where the
+  port is developed, its lanes busy and the law clean; never at a Navy or
+  Syndicate port, a plant, a milfuel works or a carrier. **Measured over 30
+  seeds × the 6 nearest claimed stars (2,690 ports): 1.34 houses a system, at
+  12.5% of civilian ports; 64% of systems have at least one.**
+- **The house's mercantile skill is its rating, 1–5** (measured 14 / 27 / 22 /
+  24 / 12%). It decides how good the house's information is:
+  - **1–3 read boards**: the other ports' prices as they were 5, 3 or 1.5 days
+    ago (plus a corridor's age for another system, the trade analyser's own
+    `reportAgeDays`), with a clerk's error of 10, 7 or 4.5%. From 3 the house
+    prices its own size against the shelf (a 40 t lot moves a price).
+  - **4–5 read forecasts**: the market at the hour the hull will arrive (4
+    halfway there), and they see **your own fleet's footprint** in a market,
+    so two of your hulls do not both pile into one glut. Lower houses see a
+    quarter or half of it, or none.
+  - Better houses get a better price at the desk (up to 1.6%), run more hulls
+    (1–5), charge more commission (8, 10, 13, 17, 22% of a quarter's profit,
+    a seeded half-point either way) and set a floor: **a first-rank house
+    will not open an account under 50,000** ("Not worth our time under
+    50,000."), a serious one under 20,000, a sound one under 5,000.
+- **The economist: a paid market reading** (120–900 cr by rating). For the
+  goods in your hold, or the port's exports if it is empty: which are rising
+  over the next three days and where (this system and the nearest others),
+  with a confidence that is the house's rating, less distance.
+- **Import/export: an account.** At the desk, a deal sheet: a budget (5,000 to
+  1,000,000, clicking past the house's floor and your purse), any of your
+  ships in this system with a pilot aboard, and a goods list (or the house's
+  choice of anything honest). **The budget becomes the account**, separate from
+  your credits: every buy, sale and tank of jump hydrogen the house makes comes
+  out of and goes into it. A bad house can lose its budget, never more. Profit
+  stays in the account, so the budget grows; you withdraw the profit, deposit
+  more, hand over another hull or close the account at the house's office.
+- **The runs are a timetable**, booked closed-form like every other ship of
+  yours under orders: she sits at a port until a decision instant, buys,
+  casts off after a turn at the clamp (12 h between two ports of one world,
+  1.5 days across the system, 2 days before a jump — the lanes' own layovers),
+  and sells the instant she arrives. In-system legs are drawn and heard as
+  your traffic. **Between stars** the leg is clearance, `Galaxy.jumpSeconds` at
+  her laden mass, and a cruise in from the drop; the hydrogen is bought out of
+  the account. Houses trade into the 1–4 nearest claimed stars by rating.
+  Nothing to carry: she runs empty to a better port in the system, or waits a
+  day. Every house remembers a losing run and keeps that good off that port
+  for a week.
+- **Every quarter (91 days)** the account's equity — cash, plus what the loads
+  aboard cost — is put against where the quarter began, less what you moved in
+  or out. **A profit renews it, and the house takes its commission. Anything
+  else ends it**: you drop them, or a first-rank house with a small account
+  drops you. Hulls on a run finish it and stand down; the balance is remitted to
+  your credits when the last is home. Said, and written in the journal.
+- **Booking is exact and idempotent.** All runs of all houses go through one
+  queue in time order: one call or sixty, this hull first or that, the
+  accounts come out the same to the credit, and booking twice books nothing.
+  The house prices off the market's closed form plus **its own footprint**,
+  which it keeps and which is saved, so a reload trades exactly as no reload
+  would have; its trades also dent the real market, so you see them at the
+  counter.
+- **F5 → FLEET** shows each account (worth, this quarter, the review, last
+  quarter's verdict and commission, cash) and each traded hull (her run, ETA,
+  her runs and what she has made the account). Her hail reports the run.
+- **Refusals in words** everywhere: no house here; no ships; the book is full;
+  no budget; under the floor; you cannot cover it; nobody aboard can helm her;
+  she is in another system; under way; working a site; held by the harbour; a
+  partner's ship; cargo aboard; a contraband good; an account already open; a
+  hull already trading; withdrawals only at the office; more than the cash;
+  under the floor while open; a deposit you cannot cover. A traded hull cannot
+  be ordered, set to work or taken command of until she stands down.
+- **Measured, and the headline for Astra.** With the house's choice of goods,
+  a Talon on a 20,000 budget made a **median quarter of 1.65M (rating 1) to
+  3.35M (rating 5)**, and **no quarter lost money at any rating: 0 of 520**
+  (`tools/measure-firms.cjs quarters 30 4`). That is this economy's margins
+  (luxuries at ~1,600 cr/t, documented below) at the lanes' pace — about 18,000
+  cr a game day for one Talon, against a work order's few thousand. **That is a
+  balance question for Astra, not settled here**: the knobs are the turns at the
+  clamp and the commission. Cut to one
+  cheap good, 5% of quarters lose at ratings 4–5 (every one a quarter with
+  nothing worth carrying, profit exactly 0) and 7–11% at 1–3 (small real
+  losses, the worst −960). So one quarter as the verdict does not sack good
+  houses on real losses; it does sack an idle one, which is the rule as given.
+
+**Saves:** survive. One additive field, `firms` (the accounts and the houses'
+footprint), absent in an older career; a traded hull's run state rides on its
+fleet record (`trade`), which is saved whole already. No version bump.
+
 ### Fixed (2026-11-03, the Cutter's and the Crawler's models mended; a door out of the Crawler's lift pit)
 
 Astra, on the two model problems the hull-walk fix reported and could not mend
