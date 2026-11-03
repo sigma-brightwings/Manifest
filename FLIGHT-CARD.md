@@ -130,6 +130,40 @@ relative velocity and stops — the manoeuvre that turns a flyby into a
 rendezvous), and **`Shift+L` follows** it and holds station off it until you
 cancel. Both work on ships as well as worlds.
 
+**6b. The lead pip, and `I` — the intercept assist.** Lock anything (a
+station, a world, a ship) and a **pink ring** appears on the glass: the
+**pip**, where the target will be when you get there. A dashed line runs
+from the target to it, along the way the target is moving, and the label
+gives the time to intercept and the drive the estimate assumes:
+**cruise** when the drive is yours to use for the trip, **thrusters** when it
+is not, and then a second line says why (*cruise: mass locked by Mirven I*).
+On the cruise drive the pip is the point in space itself. On thrusters it is
+that point less your own drift, so it is where to point the nose from where
+you are. Close in, or with a target that barely moves, the pip and the
+target are the same point and the two markers merge into one (*INTERCEPT*
+instead of *PIP*). Off the screen, an arrow on the edge points the way to it.
+
+| | |
+|---|---|
+| `I` | engage the intercept assist on the lock |
+| `I` again | swap who is flying: **AUTO** ⇄ **YOU** |
+| `Shift+I` | stand it down altogether |
+
+The assist does the flying: it turns onto the pip, spins the cruise drive
+up, drops out alongside, and makes the final speed match on its thrusters.
+It parks you at a sensible standoff: four capture radii off a station (`T`
+docks from there in one press), 2 km off a ship, over a ground port at the
+height its descent starts, or in a circular orbit about a world. **Any stick
+or throttle input takes the controls at once.** The assist does not cancel.
+It stands by, still showing the pip, and the banner at the top changes
+from **AUTO** to **YOU**. `I` hands it back. It does not take the ship back by
+itself when you let go, because in space letting go is a choice too.
+
+**The match marker.** Near the end of any intercept (yours or the assist's)
+a yellow diamond with a chevron shows **which way to burn** to match the
+target's velocity, with the size of the burn in m/s beside it (*MATCH 300.0
+m/s*). Put the nose on it and burn until the number runs out.
+
 **7. `F4` while docked — trade.** Comms opens on the port you are standing in,
 and its channel carries **Market**. At a distance the same row reads *Request
 market data* and just tells you what the place deals in — you have to be on the
