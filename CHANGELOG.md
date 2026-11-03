@@ -40,6 +40,79 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-03, inside a station on the way through: the rooms are drawn, the routes miss the walls, the lifts carry you, the blast doors are back)
+
+Astra, at Halden Dock, Waypoint Dock, Threshold Dock and Halden Yard:
+"station interiors in transitory spaces isn't drawn"; "shaft walls are not
+drawn during transit for the angled shafts"; "ship sits on top of the shaft
+for the 45 degree elevator instead of at the base of the shaft"; "why is the
+shaft protruding from the wall at the top and bottom of the shaft?"; "when
+the elevator is not there, there should be a blast door covering the shaft";
+"What happened to having those interleaved blast doors inside, separating the
+berths from the rest of the station interior?"; "can you ensure that the
+surfaces are more than 1px thick?"
+
+- **The station is drawn round you in transit.** The renderer draws one
+  compartment when you are in one, and asked "which berth is nearest" to
+  decide: riding a bore or crossing a hall beside a bay, you were "in" that
+  bay, and with its inner gate shut behind you it was drawn alone - the car
+  and two door leaves in black space. A compartment is now only the room you
+  are inside (its berth's box); everywhere else the whole station is drawn.
+  With the cutaway on and the camera still inside the station's metal, the
+  station is lit as rooms, not as a hull in the sun, so its inside walls are
+  no longer black on black.
+- **Routes through a station go round its walls.** The corners of a small
+  hull's route from the heavy bay were found on a coarse grid that let a
+  line cross a lift's deck plating, and pulled taut on that grid: at Halden
+  Dock one leg ran four kilometres straight through the structure. Each leg
+  that crosses a surface (at the fleet's widest hull) is now routed again
+  round it. Swept at Waypoint Dock's size: 85 of 131 routed and direct berths
+  had an inner leg through something; 55 now, and 51 of those are legs the
+  art has no open way through at all (the cylinders' arm bays, the
+  skimmers' hoists, the yards' tracks), which are listed in
+  interiors.test.js for the art. Every ring, refinery and small or medium
+  spine berth is clear.
+- **The 45-degree lifts carry you on their deck.** A hull riding an inclined
+  car was stood on top of the car's bounding box, which on a tilted car is
+  far above its deck: 127 m at Halden Dock, out through the top of the bore.
+  It stands on the car's deck now, in the bore.
+- **The ring's lift shaft is flush at both ends.** The floor under the
+  parked car was solid (car and hull sank through it), and the shaft went on
+  350 m below the spoke deck the car stops at. The plating across the run is
+  cut, the pit below is cut away and floored at the car's underside, and the
+  hatch over the shaft is shut exactly while the car is away and open while
+  it is home - the car is the floor when it is there.
+- **The inner blast doors are back.** The station set of 2026-09-25 kept
+  every inner gate's frame and none of its doors. Every leafless inner-gate
+  frame (spine, cylinder, yard, refinery, skimmer, cradle: 39 of them) now
+  has a pair of slab doors meeting on interleaved teeth, run by the airlock
+  as the inner gate always was, and on the way through a heavy bay to a
+  small one the far bay's own inner gate opens for you.
+- **The civil yards open their doors.** yard-s, yard-m and yard-l kept their
+  door leaves in the wrong part of the model, so they were welded shut and
+  every arrival flew through them.
+- **Every hull stands on her own gear.** A berth held every hull at one
+  height over the deck, the fleet's: at a small station a Talon's gear was
+  1.2 m into the deck, at a large one she stood 2 m above it, and the Tanker
+  stood 5 m into it. Each hull's feet are now on the deck, half a metre
+  higher on her gear as before.
+- **Walls and floors are slabs, not sheets.** 1,670 walls and floors across
+  the station models were single flat sheets - a 1 px line edge-on or cut by
+  the cutaway. Each is now a slab (a metre at Threshold Dock, four at Halden
+  Dock); decals and marks laid on surfaces stay flat. The new blast doors
+  are built thick.
+
+Not done, for the art: the cylinders' 45-degree bores still stand proud of
+the hull where they meet it (the converter's clipBores trims them by box, not
+along the true angled intersection); the yards' track hatches are still in
+the hull, closed; the skimmer's sort lift and the spine's hub lift stop
+0.04-0.12 radii short of the deck above them (neither is ridden); the yards'
+inner gates open onto a wall of the art's own (the hall InnerCurtain).
+
+**Saves:** survive. Nothing is stored that changed: berths, routes, doors
+and stand heights are all computed from the model and the hull each frame, so
+a ship saved docked loads standing on her own gear.
+
 ### Fixed (2026-11-03, her hull is solid when you walk under it; half a metre higher on her gear; a longer ramp)
 
 Astra, on foot in a hangar at the foot of her Talon's ramp: "interior of ship
