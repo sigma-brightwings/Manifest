@@ -89,7 +89,7 @@ console.log('--- the shader is the table ---');
     var s = 'vec3(' + f(c[0]) + ', ' + f(c[1]) + ', ' + f(c[2]) + ')';
     if (src.indexOf(s) < 0) missing.push(s);
   });
-  ['ringT', 'ringSlope', 'mountLo', 'mountSpan', 'equator', 'pole', 'lapse', 'moistScale', 'moistOffset', 'coast', 'coastWet', 'noiseWet', 'tint']
+  ['ringT', 'ringSlope', 'ridgeScale', 'ridgeAmp', 'ridgeMid', 'rockGrey', 'rockDark', 'mountLo', 'mountSpan', 'equator', 'pole', 'lapse', 'moistScale', 'moistOffset', 'coast', 'coastWet', 'noiseWet', 'tint']
     .forEach(function (k) { if (src.indexOf(f(B[k])) < 0) missing.push(k); });
   if (src.indexOf(f(B.snowT)) < 0 || src.indexOf(f(B.snowT - 0.12)) < 0) missing.push('snowT');
   check('every biome colour and constant in the shader comes from Weather.BIOME', missing.length === 0, missing.join(' '));

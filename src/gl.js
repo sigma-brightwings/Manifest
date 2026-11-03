@@ -305,14 +305,24 @@
     fadeLo: 2.0,        // an octave is gone when its cell is under this many pixels...
     fadeHi: 6.0,        // ...and fully in above this many
     gain: 0.80,         // amplitude, octave to octave (brightness/hue)
-    slopeGain: 1.06,    // slope, octave to octave: steeper as they get smaller
-    bright: 0.55,       // brightness mottle at full strength (x the normalised field)
+    slopeGain: 0.92,    // slope, octave to octave
+    bright: 0.40,       // brightness mottle at full strength (x the normalised field)
     hue: 0.35,          // warm/cool drift, coarse octaves only
     hueOct: 4,          // ...the first this many
     elev: 0.020,        // nudge to the elevation field, for the coast and caps
     relief: 0.16,       // slope at the coarsest octave, per unit gradient
-    reliefMin: 0.65,    // shading clamp
-    reliefMax: 1.40,
+    /* Shading clamps, and a cap on the brightness swing, at every range.
+     * Without them the ground read as a pattern laid over the planet
+     * rather than as terrain (Astra's coordinator, of the Downwell Downport
+     * ice and Low Deep's band at 8 km: "camouflage"). */
+    reliefMin: 0.80,
+    reliefMax: 1.22,
+    swing: 0.18,        // |brightness multiplier - 1| never exceeds this
+    /* BRIGHT GROUND IS SUBTLE. Snow, ice and salt vary as faint blue-grey
+     * shading, not as dark blotches: above `snowLo` luminance the detail is
+     * scaled down to `snowAmp` of itself by `snowHi`, and what is left of
+     * the darkening is turned cool. */
+    snowLo: 0.55, snowHi: 0.85, snowAmp: 0.30,
     /* The floor under the sun term the relief is divided by. Lambert says
      * divide by n.l, and at a low sun that is a large gain: at 0.25 the
      * relief on Ashford Undercroft's moon (sun 9 degrees up) was four times
@@ -328,12 +338,30 @@
   /* The normaliser that keeps the mottle's range independent of how many
    * octaves happen to be in: the sum of every octave's amplitude. */
   GD.norm = (1 - Math.pow(GD.gain, GD.oct)) / (1 - GD.gain);
+  /* EACH OCTAVE TURNED BY ITS OWN ANGLE. Every octave on the same axis-
+   * aligned lattice adds its lattice's own directional bias to the last,
+   * and on a cube-map face seen obliquely that summed into diagonal streaks
+   * across the whole view — brushed metal, or rain, not ground (Downwell,
+   * 0.6 to 8 km). Turning octave k by k golden angles (137.5 degrees,
+   * irrational against the lattice) leaves no two sharing an axis. The
+   * anchor still lands exactly: JS turns the anchor's position by the same
+   * angle in double precision and splits it into an integer cell and a
+   * fraction per face and octave (uGdCell, uGdFrac), so the rotated
+   * lattice is still the same absolute lattice from any anchor. */
+  GD.rot = [];
+  for (var gk = 0; gk < GD.oct; gk++) {
+    var ga = 0.31 + gk * 2.39996323;
+    GD.rot.push([Math.cos(ga), Math.sin(ga)]);
+  }
 
   function gdFloat(v) { return v.toFixed(6); }
   var GROUND_DETAIL_GLSL = [
     'uniform float uGdOn;',         // 0..1 strength by altitude; 0 skips the block
     'uniform vec3 uGdAnchorRel;',   // eye -> lattice anchor, km
-    'uniform ivec3 uGdAnchorCell;', // anchor / GD.cmax, body-fixed, exact
+    'uniform ivec2 uGdCell[' + (3 * GD.oct) + '];', // per face and octave: the turned anchor's cell...
+    'uniform vec2 uGdFrac[' + (3 * GD.oct) + '];',  // ...and its fraction of one
+    'const vec2 GD_ROT[' + GD.oct + '] = vec2[' + GD.oct + '](' + GD.rot.map(function (r) {
+      return 'vec2(' + r[0].toFixed(7) + ', ' + r[1].toFixed(7) + ')'; }).join(', ') + ');',
     'uniform float uGdCq;',         // |eye - centre|^2 - R^2, in double
     /* A lattice corner's value. The integer index is folded to 0..1023
      * first, which is exact in a float, and then hashed with the cheap
@@ -361,16 +389,19 @@
      * plane's two axes. `ax` picks the plane (0: y,z  1: z,x  2: x,y), the
      * cube-map projection, so the lattice stays the body-fixed one and the
      * anchor's integer index carries straight over. */
-    'vec4 gdPlane(vec2 q, ivec2 cell, float foot, float seed) {',
+    'vec4 gdPlane(vec2 q, int face, float foot, float seed) {',
     '  float c = ' + gdFloat(GD.cmax) + ', amp = 1.0, samp = ' + gdFloat(GD.relief) + ';',
     '  float br = 0.0, hu = 0.0;',
     '  vec2 sl = vec2(0.0);',
     '  for (int k = 0; k < ' + GD.oct + '; k++) {',
     '    float w = smoothstep(' + gdFloat(GD.fadeLo) + ' * foot, ' + gdFloat(GD.fadeHi) + ' * foot, c);',
     '    if (w <= 0.0) break;',
-    '    vec2 x = q / c;',
+    '    vec2 cs = GD_ROT[k];',
+    '    int ix = face * ' + GD.oct + ' + k;',
+    '    vec2 x = vec2(cs.x * q.x - cs.y * q.y, cs.y * q.x + cs.x * q.y) / c + uGdFrac[ix];',
     '    vec2 fl = floor(x);',
-    '    vec3 nz = gdNoise((cell << k) + ivec2(fl), x - fl, seed + float(k) * 7.31);',
+    '    vec3 nz = gdNoise(uGdCell[ix] + ivec2(fl), x - fl, seed + float(k) * 7.31);',
+    '    nz.yz = vec2(cs.x * nz.y + cs.y * nz.z, -cs.y * nz.y + cs.x * nz.z);',
     '    float v = (nz.x - 0.5) * w * amp;',
     '    br += v;',
     '    if (k < ' + GD.hueOct + ') hu += v;',
@@ -380,7 +411,6 @@
     '  return vec4(br, hu, sl);',
     '}',
     'vec2 gdPick(vec3 v, int ax) { return ax == 0 ? v.yz : ax == 1 ? v.zx : v.xy; }',
-    'ivec2 gdPickI(ivec3 v, int ax) { return ax == 0 ? v.yz : ax == 1 ? v.zx : v.xy; }',
     'vec3 gdLift(vec2 g, int ax) { return ax == 0 ? vec3(0.0, g) : ax == 1 ? vec3(g.y, 0.0, g.x) : vec3(g, 0.0); }',
     /* x: brightness (zero-mean), y: hue (zero-mean), z: elevation nudge,
      * w: relief (zero-mean, already divided by the sun term). All zero
@@ -403,11 +433,11 @@
     '  int a1 = a0 == 0 ? (an.y >= an.z ? 1 : 2) : a0 == 1 ? (an.x >= an.z ? 0 : 2) : (an.x >= an.y ? 0 : 1);',
     '  float m1 = a1 == 0 ? an.x : a1 == 1 ? an.y : an.z;',
     '  float wb = smoothstep(0.0, ' + gdFloat(GD.seam) + ', m0 - m1);',
-    '  vec4 p0 = gdPlane(gdPick(qb, a0), gdPickI(uGdAnchorCell, a0), foot, seed);',
+    '  vec4 p0 = gdPlane(gdPick(qb, a0), a0, foot, seed);',
     '  vec3 slope = gdLift(p0.zw, a0);',
     '  vec2 bh = p0.xy;',
     '  if (wb < 1.0) {',
-    '    vec4 p1 = gdPlane(gdPick(qb, a1), gdPickI(uGdAnchorCell, a1), foot, seed);',
+    '    vec4 p1 = gdPlane(gdPick(qb, a1), a1, foot, seed);',
     '    bh = mix(p1.xy, bh, wb);',
     '    slope = mix(gdLift(p1.zw, a1), slope, wb);',
     '  }',
@@ -421,12 +451,21 @@
      * sea takes almost none of it: water is flat, and mottled water reads
      * as more land in a different colour (the terrain block says the same
      * about its own relief). */
-    'vec3 groundDetailTint(vec4 gd, float sea) {',
-    '  float land = 1.0 - 0.85 * sea;',
-    '  float m = 1.0 + ' + gdFloat(GD.bright) + ' * gd.x * land;',
-    '  vec3 tint = vec3(1.0) + vec3(0.55, 0.05, -0.50) * (' + gdFloat(GD.hue) + ' * gd.y * land);',
-    '  float r = clamp(1.0 + gd.w * land, ' + gdFloat(GD.reliefMin) + ', ' + gdFloat(GD.reliefMax) + ');',
-    '  return tint * (m * r);',
+    'vec3 groundDetailTint(vec4 gd, float sea, vec3 base) {',
+    '  float snow = smoothstep(' + gdFloat(GD.snowLo) + ', ' + gdFloat(GD.snowHi) + ', dot(base, vec3(0.30, 0.50, 0.20)));',
+    '  float k = (1.0 - 0.85 * sea) * mix(1.0, ' + gdFloat(GD.snowAmp) + ', snow);',
+    /* SOFT limits, not clamps: a clamp turns every swing past it into a
+     * flat plateau with a hard edge, which on screen was a field of
+     * bright, sharp-edged flakes. x A / (A + |x|) approaches A smoothly. */
+    '  float bx = ' + gdFloat(GD.bright) + ' * gd.x * k;',
+    '  float m = 1.0 + bx * ' + gdFloat(GD.swing) + ' / (' + gdFloat(GD.swing) + ' + abs(bx));',
+    '  vec3 tint = vec3(1.0) + vec3(0.55, 0.05, -0.50) * (' + gdFloat(GD.hue) + ' * gd.y * k * (1.0 - snow));',
+    '  float rx = gd.w * k, ra = rx < 0.0 ? ' + gdFloat(1 - GD.reliefMin) + ' : ' + gdFloat(GD.reliefMax - 1) + ';',
+    '  float r = 1.0 + rx * ra / (ra + abs(rx));',
+    '  float mr = m * r;',
+    /* Snow's shading is cool: where it darkens, it darkens toward blue. */
+    '  vec3 cool = vec3(1.0) + vec3(-0.50, -0.20, 0.35) * ((1.0 - mr) * snow);',
+    '  return tint * cool * mr;',
     '}'
   ].join('\n');
 
@@ -472,12 +511,15 @@
       '  float mn = clamp(0.5 + (fbm(mp) - 0.47) * 3.2, 0.0, 1.0);',
       '  float coastW = 1.0 - smoothstep(0.0, ' + f(B.coast) + ', h);',
       '  float m = clamp(' + f(B.coastWet) + ' * coastW + ' + f(B.noiseWet) + ' * (mn - 0.5) + 0.40 + uBio.y + gdx * 0.25, 0.0, 1.0);',
+      '  vec3 rp = (sp - uSeed) * ' + f(B.ridgeScale) + ' + uSeed + 3.7;',
+      '  float rn = 0.67 * vnoise(rp) + 0.33 * vnoise((sp - uSeed) * ' + f(B.ridgeScale * 2.1) + ' + uSeed + 3.7);',
+      '  float hR = hN + ' + f(B.ridgeAmp) + ' * ((1.0 - abs(2.0 * rn - 1.0)) - ' + f(B.ridgeMid) + ');',
       '  vec3 col = biomeGrid(t, m);',
       '  float wetW = (1.0 - smoothstep(0.0, 0.02, h)) * smoothstep(0.55, 0.75, m) * smoothstep(0.20, 0.35, t) * uBio.w;',
       '  col = mix(col, ' + v3(B.wet) + ', wetW);',
-      '  float rockW = smoothstep(0.35, 0.70, hN);',
-      '  col = mix(col, ' + v3(B.rock) + ', rockW);',
-      '  float snowW = max(smoothstep(0.85, 1.0, hN) * (1.0 - smoothstep(0.25, 0.45, t)),',
+      '  float rockW = smoothstep(0.35, 0.70, hR);',
+      '  col = mix(col, mix(col * ' + f(B.rockDark) + ', ' + v3(B.rock) + ', ' + f(B.rockGrey) + '), rockW);',
+      '  float snowW = max(smoothstep(0.95, 1.25, hR) * (1.0 - smoothstep(0.25, 0.45, t)),',
       '                    1.0 - smoothstep(' + f(B.snowT - 0.12) + ', ' + f(B.snowT) + ', t));',
       '  col = mix(col, ' + v3(B.snow) + ', snowW);',
       '  float wl = max(dot(uColor, vec3(1.0 / 3.0)), 0.05);',
@@ -970,7 +1012,7 @@
      * white and a thin-aired desert has a few wisps. */
     /* GD: mottling and relief, on the settled ground colour, under the
      * clouds. */
-    '  base *= groundDetailTint(gd, sea);',
+    '  base *= groundDetailTint(gd, sea, base);',
     /* What the storms put into this pixel on their own account, spent
      * after the sun term below. */
     '  float glow = 0.0;',
@@ -2444,7 +2486,7 @@
                               'uHoleRel', 'uHoleR', 'uHoleDepth', 'uHaloPush',
                               'uConeS', 'uConeR', 'uSkyA', 'uSkyUp', 'uSkySun',
                               'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD', 'uBoxTop',
-                              'uGdOn', 'uGdAnchorRel', 'uGdAnchorCell', 'uGdCq', 'uBio',
+                              'uGdOn', 'uGdAnchorRel', 'uGdCell', 'uGdFrac', 'uGdCq', 'uBio',
                               'uTear', 'uTearK', 'uTearN']);
 
     /* The pit wall (GL.queueGroundWall): one full-screen pass. */
@@ -4252,8 +4294,21 @@
     var eb = rotAbout({ x: ex, y: ey, z: ez }, sp.ax, -sp.phase);
     var cell = [Math.round(eb.x / GD.cmax), Math.round(eb.y / GD.cmax), Math.round(eb.z / GD.cmax)];
     var aw = rotAbout({ x: cell[0] * GD.cmax, y: cell[1] * GD.cmax, z: cell[2] * GD.cmax }, sp.ax, sp.phase);
+    /* Per face and octave, the anchor turned by that octave's angle, split
+     * into its integer cell and fraction — in double, here, once. */
+    var rotCell = new Int32Array(6 * GD.oct), rotFrac = new Float32Array(6 * GD.oct);
+    for (var face = 0; face < 3; face++) {
+      var ii = GD_PICK[face][0], jj = GD_PICK[face][1];
+      var ax0 = cell[ii] * GD.cmax, ay0 = cell[jj] * GD.cmax, cc = GD.cmax;
+      for (var k = 0; k < GD.oct; k++, cc *= 0.5) {
+        var rr = GD.rot[k];
+        var rx = (rr[0] * ax0 - rr[1] * ay0) / cc, ry = (rr[1] * ax0 + rr[0] * ay0) / cc;
+        var fx = Math.floor(rx), fy = Math.floor(ry), o = (face * GD.oct + k) * 2;
+        rotCell[o] = fx; rotCell[o + 1] = fy; rotFrac[o] = rx - fx; rotFrac[o + 1] = ry - fy;
+      }
+    }
     return {
-      on: on, alt: alt, cell: cell,
+      on: on, alt: alt, cell: cell, rotCell: rotCell, rotFrac: rotFrac,
       anchorRel: { x: rel.x + aw.x, y: rel.y + aw.y, z: rel.z + aw.z },
       cq: (d - R) * (d + R)
     };
@@ -4267,7 +4322,8 @@
     if (!f || !(f.on > 0)) { gl.uniform1f(uni.uGdOn, 0); return; }
     gl.uniform1f(uni.uGdOn, f.on);
     gl.uniform3f(uni.uGdAnchorRel, f.anchorRel.x, f.anchorRel.y, f.anchorRel.z);
-    gl.uniform3i(uni.uGdAnchorCell, f.cell[0], f.cell[1], f.cell[2]);
+    gl.uniform2iv(uni.uGdCell, f.rotCell);
+    gl.uniform2fv(uni.uGdFrac, f.rotFrac);
     gl.uniform1f(uni.uGdCq, f.cq);
   }
 
@@ -4292,14 +4348,21 @@
     var k1 = b - a, k2 = c - a, k3 = a - b - c + d;
     return [a + k1 * ux + k2 * uy + k3 * ux * uy, dx * (k1 + k3 * uy), dy * (k2 + k3 * ux)];
   }
-  function gdPlaneJS(qx, qy, cx, cy, foot, seed) {
+  function gdPlaneJS(qx, qy, ax0, ay0, foot, seed) {
     var c = GD.cmax, amp = 1, samp = GD.relief, br = 0, hu = 0, sx = 0, sy = 0, used = 0;
     for (var k = 0; k < GD.oct; k++) {
       var w = smooth(GD.fadeLo * foot, GD.fadeHi * foot, c);
       if (w <= 0) break;
-      var x = qx / c, y = qy / c, flx = Math.floor(x), fly = Math.floor(y);
-      var sh = Math.pow(2, k);
-      var nz = gdNoiseJS((cx * sh + flx) | 0, (cy * sh + fly) | 0, x - flx, y - fly, seed + k * 7.31);
+      var rr = GD.rot[k];
+      /* The anchor's part, split as groundDetailFrame splits it... */
+      var arx = (rr[0] * ax0 - rr[1] * ay0) / c, ary = (rr[1] * ax0 + rr[0] * ay0) / c;
+      var acx = Math.floor(arx), acy = Math.floor(ary);
+      /* ...and the offset's, as the shader adds it. */
+      var x = (rr[0] * qx - rr[1] * qy) / c + (arx - acx), y = (rr[1] * qx + rr[0] * qy) / c + (ary - acy);
+      var flx = Math.floor(x), fly = Math.floor(y);
+      var nz = gdNoiseJS((acx + flx) | 0, (acy + fly) | 0, x - flx, y - fly, seed + k * 7.31);
+      var g0 = nz[1], g1 = nz[2];
+      nz[1] = rr[0] * g0 + rr[1] * g1; nz[2] = -rr[1] * g0 + rr[0] * g1;
       var v = (nz[0] - 0.5) * w * amp;
       br += v; if (k < GD.hueOct) hu += v;
       sx += nz[1] * w * samp; sy += nz[2] * w * samp;
@@ -4317,7 +4380,7 @@
     var wb = smooth(0, GD.seam, an[a0] - an[a1]);
     function plane(ax) {
       var i = GD_PICK[ax][0], j = GD_PICK[ax][1];
-      var r = gdPlaneJS(P[i], P[j], anchor[i], anchor[j], foot, sd);
+      var r = gdPlaneJS(P[i], P[j], anchor[i] * GD.cmax, anchor[j] * GD.cmax, foot, sd);
       var s3 = [0, 0, 0]; s3[i] = r.sx; s3[j] = r.sy;
       return { br: r.br, hu: r.hu, s: s3, used: r.used };
     }
@@ -4334,14 +4397,16 @@
   }
   /* The albedo multiplier the shader's groundDetailTint applies, for a
    * sun direction `lb` (body-fixed) — so the suite can average it. */
-  function groundDetailTintAt(d, nb, lb, sea) {
-    var land = 1 - 0.85 * (sea || 0);
-    var m = 1 + GD.bright * d.bright * land;
+  function groundDetailTintAt(d, nb, lb, sea, base) {
+    base = base || [0.5, 0.5, 0.5];
+    var snow = smooth(GD.snowLo, GD.snowHi, base[0] * 0.30 + base[1] * 0.50 + base[2] * 0.20);
+    var k = (1 - 0.85 * (sea || 0)) * (1 + (GD.snowAmp - 1) * snow);
+    var bx = GD.bright * d.bright * k, m = 1 + bx * GD.swing / (GD.swing + Math.abs(bx));
     var ndl = Math.max(nb.x * lb.x + nb.y * lb.y + nb.z * lb.z, GD.reliefSun);
     var rel = -(d.slope[0] * lb.x + d.slope[1] * lb.y + d.slope[2] * lb.z) / ndl;
-    var r = Math.max(GD.reliefMin, Math.min(GD.reliefMax, 1 + rel * land));
-    var h = GD.hue * d.hue * land;
-    return [(1 + 0.55 * h) * m * r, (1 + 0.05 * h) * m * r, (1 - 0.50 * h) * m * r];
+    var rx = rel * k, ra = rx < 0 ? 1 - GD.reliefMin : GD.reliefMax - 1, r = 1 + rx * ra / (ra + Math.abs(rx));
+    var h = GD.hue * d.hue * k * (1 - snow), mr = m * r, cs = (1 - mr) * snow;
+    return [(1 + 0.55 * h) * (1 - 0.50 * cs) * mr, (1 + 0.05 * h) * (1 - 0.20 * cs) * mr, (1 - 0.50 * h) * (1 + 0.35 * cs) * mr];
   }
   GL.groundDetailTintAt = groundDetailTintAt;
   GL.GROUND_DETAIL = GD;

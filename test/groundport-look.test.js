@@ -212,7 +212,7 @@ console.log('--- B: ground detail, the field ---');
   var a = patch(12.3, 400, 0.004), a2 = patch(12.3, 400, 0.004), b = patch(77.7, 400, 0.004);
   check('the same world gives the same ground', a.sig === a2.sig);
   check('another world gives other ground', a.sig !== b.sig);
-  check('there is detail: the ground varies by more than 8% at 4 m a pixel', a.sd > 0.08, 'sd ' + a.sd.toFixed(3));
+  check('there is detail: the ground varies by more than 5% at 4 m a pixel (and under 15%: terrain, not a pattern)', a.sd > 0.05 && a.sd < 0.15, 'sd ' + a.sd.toFixed(3));
   var far = patch(12.3, 400, 3.0);
   check('and almost none once a cell is a pixel (8 km cells at 3 km a pixel)', far.sd < 0.02, 'sd ' + far.sd.toFixed(4));
   var dev = Math.max.apply(null, a.mean.map(function (m) { return Math.abs(m - 1); }));
@@ -250,8 +250,8 @@ console.log('--- B: the shader carries it ---');
   check('the planet shader has the ground-detail functions', /vec4 groundDetail\(/.test(src) && /vec3 groundDetailTint\(/.test(src));
   check('...computes it once per fragment', (src.match(/= uBanded > 0\.5 \? vec4\(0\.0\) : groundDetail\(/g) || []).length === 1);
   check('...feeds the elevation the coast is cut from', /elev \+= gd\.z;/.test(src));
-  check('...and tints the settled ground before the clouds', src.indexOf('base *= groundDetailTint(gd, sea);') > src.indexOf('float cap = smoothstep') &&
-        src.indexOf('base *= groundDetailTint(gd, sea);') < src.indexOf('float glow = 0.0;'));
+  check('...and tints the settled ground before the clouds', src.indexOf('base *= groundDetailTint(gd, sea, base);') > src.indexOf('float cap = smoothstep') &&
+        src.indexOf('base *= groundDetailTint(gd, sea, base);') < src.indexOf('float glow = 0.0;'));
   check('the shader and the twin agree on the octave count and coarsest cell',
         src.indexOf('k < ' + GL.GROUND_DETAIL.oct + ';') > 0 && src.indexOf('float c = ' + GL.GROUND_DETAIL.cmax.toFixed(6)) > 0);
   check('no Math.random anywhere in the ground detail', !/Math\.random/.test(GL.groundDetailAt.toString() + GL.groundDetailFrame.toString()));

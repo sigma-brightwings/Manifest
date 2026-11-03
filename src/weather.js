@@ -512,7 +512,7 @@
     worlds: {
       terran: { mix: 0.78, moist: 0.00, warm: 0.00, marsh: 1.0 },
       ocean:  { mix: 0.78, moist: 0.15, warm: 0.00, marsh: 1.0 },
-      tundra: { mix: 0.40, moist: -0.05, warm: -0.35, marsh: 0.6 },
+      tundra: { mix: 0.40, moist: -0.05, warm: -0.45, marsh: 0.6 },
       desert: { mix: 0.50, moist: -0.42, warm: 0.00, marsh: 0.0 }
     },
     warmBase: 0.62, warmLog: 0.30, warmMin: -0.40, warmMax: 1.10,
@@ -534,14 +534,25 @@
      * band is the one living place on the world and it stopped looking
      * alive. Its air circulates day to night, so its moisture is floored. */
     ringT: 0.45, ringSlope: 1.0, ringMoist: 0.10,
+    /* MOUNTAINS FOLLOW RIDGES. The elevation field is smooth at continental
+     * scale, so a threshold on it alone is a round blob: a white hole in
+     * the middle of a continent from orbit (Kawartha star 11). Rock and
+     * snow are cut from height plus a ridged noise (1 - |2n - 1|, two
+     * octaves, ~36 cycles a radius), so they break into ranges and patches.
+     * And rock is a darker, greyer version of the ground it stands in, not
+     * one grey for every world: on a desert that grey read as stains. */
+    ridgeScale: 14.0, ridgeAmp: 0.60, ridgeMid: 0.62, rockGrey: 0.45, rockDark: 0.88,
     coast: 0.10,         // height above the sea within which the coast is wet
     coastWet: 0.55, noiseWet: 0.70,
     moistScale: 1.7, moistOffset: 11.3,
     tint: 0.25,          // toward the world's own hue
     /* Rows: polar, cold, temperate, hot. Columns: dry, mid, wet. */
     grid: [
-      [[0.56, 0.53, 0.46], [0.50, 0.51, 0.42], [0.43, 0.48, 0.39]],
-      [[0.62, 0.58, 0.43], [0.40, 0.46, 0.30], [0.17, 0.30, 0.20]],
+      /* Polar and cold rows are lichen and moss, grey-green-brown, not
+       * olive: blended into a tundra world's own grey the first set came
+       * out muddy olive from orbit (Kawartha star 4). */
+      [[0.55, 0.54, 0.50], [0.50, 0.52, 0.47], [0.45, 0.49, 0.45]],
+      [[0.60, 0.57, 0.47], [0.42, 0.47, 0.39], [0.20, 0.31, 0.25]],
       [[0.72, 0.64, 0.47], [0.47, 0.57, 0.28], [0.19, 0.38, 0.16]],
       [[0.84, 0.70, 0.46], [0.65, 0.59, 0.31], [0.10, 0.32, 0.11]]
     ],
@@ -594,12 +605,17 @@
     mn = Math.max(0, Math.min(1, 0.5 + (mn - 0.47) * 3.2));
     var coastW = 1 - smoothstep(0, BIOME.coast, h);
     var m = Math.max(0, Math.min(1, BIOME.coastWet * coastW + BIOME.noiseWet * (mn - 0.5) + 0.40 + bp.moist));
+    var rs = BIOME.ridgeScale * 2.6, ro = sd + 3.7;
+    var rn = 0.67 * vnoise(p.x * rs + ro, p.y * rs + ro, p.z * rs + ro)
+           + 0.33 * vnoise(p.x * rs * 2.1 + ro, p.y * rs * 2.1 + ro, p.z * rs * 2.1 + ro);
+    var ridge = 1 - Math.abs(2 * rn - 1);
+    var hR = hN + BIOME.ridgeAmp * (ridge - BIOME.ridgeMid);
     var col = biomeGrid(t, m);
     var wetW = (1 - smoothstep(0.0, 0.02, h)) * smoothstep(0.55, 0.75, m) * smoothstep(0.20, 0.35, t) * bp.marsh;
     col = mix3(col, BIOME.wet, wetW);
-    var rockW = smoothstep(0.35, 0.70, hN);
-    col = mix3(col, BIOME.rock, rockW);
-    var snowW = Math.max(smoothstep(0.85, 1.0, hN) * (1 - smoothstep(0.25, 0.45, t)),
+    var rockW = smoothstep(0.35, 0.70, hR);
+    col = mix3(col, mix3([col[0] * BIOME.rockDark, col[1] * BIOME.rockDark, col[2] * BIOME.rockDark], BIOME.rock, BIOME.rockGrey), rockW);
+    var snowW = Math.max(smoothstep(0.95, 1.25, hR) * (1 - smoothstep(0.25, 0.45, t)),
                          1 - smoothstep(BIOME.snowT - 0.12, BIOME.snowT, t));
     col = mix3(col, BIOME.snow, snowW);
     var wc = hexRgb(body && body.color);

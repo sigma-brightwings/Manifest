@@ -228,6 +228,44 @@ before they update.
   not yet measured on the Crawler.
 - Not saved; no save change.
 
+### Changed (2026-11-02, ground detail and biomes, second pass)
+
+- **No more directional grain.** At Downwell from 0.6 to 8 km the ground
+  read as brushed metal or diagonal rain. Every octave shared one
+  axis-aligned lattice, and each added the same directional bias.
+  - Each octave is now turned by its own golden-angle rotation.
+  - The anchor stays exact: JS turns it by the same angle in double
+    precision and hands the shader an integer cell and a fraction per face
+    and octave (`uGdCell`, `uGdFrac`).
+  - The JS twin does the same, and the anchor-invariance check still
+    passes.
+- **No camouflage.**
+  - The clamps on brightness and relief are now soft limits,
+    x A / (A + |x|). A hard clamp turned every overshoot into a flat
+    plateau with a hard edge.
+  - The swings are capped, and fine-octave slope is reduced.
+  - Bright ground (snow, ice, salt) gets 30% of the detail, and what
+    darkening remains turns blue-grey.
+- **Measured contrast:** standard deviation of luminance, 0–255, over the
+  top 280 rows of the same shots.
+
+  | Shot | Master | First pass | Now |
+  |---|---|---|---|
+  | Downwell 0.6 km | 12.8 | 17.0 | 14.1 |
+  | Downwell 2 km | 10.0 | 14.2 | 13.7 |
+  | Downwell 8 km | 10.1 | 16.7 | 13.1 |
+  | Downwell Downport ice, 2 km | 2.3 | 27.1 | 4.8 |
+  | Downwell Downport ice, 8 km | 17.4 | 26.0 | 17.5 |
+  | Low Deep 8 km | 13.5 | 24.9 | 17.1 |
+  | Ashford 8 km | 6.3 | 20.5 | 9.4 |
+- **Mountains follow ridges.** Rock and snow are cut from height plus a
+  ridged noise, so a high massif is ranges and crest snow, not a round
+  white hole (Kawartha star 11).
+  - Rock is now a darker, greyer version of the ground it stands in. A
+    desert's mountains no longer read as grey stains from orbit.
+- **Tundra is lichen, not olive.** The polar and cold rows of the colour
+  grid are grey-green-brown, and a tundra world runs 0.1 colder.
+
 ### Added (2026-11-02, biomes)
 
 - **Earthlike biomes** (Astra: "Can we also have some more earthlike
