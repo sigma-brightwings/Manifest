@@ -291,6 +291,18 @@
    * bay's headroom above it rather than whatever the box happened to
    * reach. x and y are the box's own; those the artist did mean. */
   function berthRoom(port, i) {
+    /* A SEA PLATFORM'S ROOM IS THE DOME over the pad (2026-11-02): the
+     * square that fits inside it at the height a hull stands, from the deck
+     * to most of the way up its crown - the box the camera can swing round
+     * a berthed ship in without its eye going through the shell. */
+    var GenS = global.Gen;
+    if (port && port.seaPlatform && GenS && GenS.seaPad) {
+      var sp = GenS.seaPad(i || 0), rS = port.radius || 1;
+      var half = sp.dome * 0.70, deckZ = sp.deck;
+      return { x0: (sp.x - half) / rS, x1: (sp.x + half) / rS,
+               y0: (sp.y - half) / rS, y1: (sp.y + half) / rS,
+               z0: deckZ / rS, z1: (deckZ + sp.rise * 0.85) / rS };
+    }
     var sorted = sortedBerths(port);
     if (!sorted) return null;
     var k = ((i % sorted.length) + sorted.length) % sorted.length;

@@ -760,6 +760,11 @@
      * turns it off, for the suite to prove a dry pad is left bit for bit
      * where it was and that nothing else in the system moved. */
     if (!opts.noInland) placeInland(sys);
+    /* And the pads that had nowhere dry to go become sea platforms
+     * (2026-11-02) - straight after, for the same reason: before anything
+     * reads where a port is or what kind it is. No draws. opts.noSea turns
+     * it off, for the suite to prove nothing else in the system moved. */
+    if (!opts.noInland && !opts.noSea) makeSeaPlatforms(sys);
     /* Rings and belts (2026-10-15). Their own substreams, forked off the
      * seed, so nothing generated before or after them moves — and after the
      * rotations, because a ring lies in its planet's equator. Read at call
@@ -926,7 +931,9 @@
       }
 
       var site = null;
-      if (p.surface && !p.underground) {
+      /* A platform is its own site: the crop under its domes changes the
+       * market, not the building. */
+      if (p.surface && !p.underground && !p.seaPlatform) {
         if (p.crop) site = 'farm';
         else if (p.parentBody && p.parentBody.type === 'iceball') site = 'runway-' + (RUNWAY_BY_ROLE[role] || 'refi');
       }
@@ -1116,7 +1123,10 @@
       : (host && host.habitable ? 0.7 : 0.25);
     var base = Math.round(2 + dev * dev * 34);   // ~2 sheds to ~36 blocks
     base += rng.int(-1, 2);
-    if (port.underground) base = Math.max(2, Math.round(base * 0.45));
+    /* The ROLLED flag: a sea platform (makeSeaPlatforms) has no town to
+     * draw, but the stream this runs on is shared by every port in the
+     * system, so its draws must be the ones the roll would have taken. */
+    if (port.underground || port.seaRolledUnderground) base = Math.max(2, Math.round(base * 0.45));
     base = Math.max(1, base);
     var out = [];
     /* Development buys height and reach as well as count — a rich world
@@ -1276,6 +1286,14 @@
         launchClearance: 'separate'
       }
     };
+    /* At a platform the cabinet stands on the hub's deck, not on the sea
+     * where the shaft table would put it. Moved after the draws, so the
+     * lock's difficulty is the same roll it always was. */
+    if (isSeaPlatform(port)) {
+      var rr = port.radius || 1;
+      port._control.at = { x: port._control.at.x > 0 ? SEA_HUB_KM * 0.7 / rr : -SEA_HUB_KM * 0.7 / rr,
+                           y: 0, z: SEA_DECK_KM / rr };
+    }
     return port._control;
   }
 
@@ -1783,6 +1801,90 @@
     };
   }
 
+  /* ---- THE SEA PLATFORM (2026-11-02) --------------------------------------
+   *
+   * Astra: "for ocean worlds, we want like a floating oil rig style of port,
+   * and it would be pads that have protected domes open and close to protect
+   * ships and their cargo from the waves, and a central bar, connected by
+   * covered tubes."
+   *
+   * So a sea platform is a hub and six pads, each its own semi-submersible
+   * (columns standing on pontoons under the swell, a deck above it), joined
+   * to the hub by a covered tube. Berth k is pad k. Berth 0 is the large one,
+   * as everywhere else.
+   *
+   * IT DOES NOT BOB. A semi-submersible is built to be still: the pontoons
+   * sit under the wave base, the columns are thin where the water line
+   * crosses them, and the deck rides above the swell. And a pad that moved
+   * would turn every berth, every arrival rail and every camera clamp into
+   * a function of the sea state as well as of t. So the deck is bolted to
+   * the world exactly as a ground port is - lat, lon, spin - and only the
+   * water moves (gl.js, the sea section).
+   *
+   * IN KILOMETRES, NOT PAD RADII. A ground port scales with its rolled pad
+   * radius because a shed should; a pad here has to hold a HULL, and a hull
+   * is the same size at every port. The tables below are therefore absolute
+   * and seaBay converts them into this port's pad radii, which is the unit
+   * every consumer of bayGeometry already reads. The radius stays the port's
+   * own (its identity, its capture envelope, its market) - only the
+   * platform's dimensions ignore it.
+   *
+   * SIZED FOR THE TRAFFIC, which is the measured part: SHIP_CLASSES puts a
+   * waste hauler (0.090 km, the largest hull that is NOT routed to the large
+   * bay, Sim.LARGE_ROUTE_SIZE 0.10) on an ordinary pad and a tanker (0.150)
+   * on the large one. A dome has to cover the hull it is protecting, so the
+   * small dome is 100 m across and the large one 170 m. */
+  var SEA_DECK_KM = 0.028;          // deck above the sea, clear of the swell
+  var SEA_HUB_KM = 0.046;           // the hub's half-width
+  var SEA_DOME_KM = [0.085, 0.050]; // dome radius: large pad, ordinary pad
+  var SEA_DOME_RISE = 0.62;         // of the dome's radius: its height over the deck
+  var SEA_TUBE_KM = 0.040;          // hub wall to dome rim, along the tube
+  var SEA_PADS = 6;
+
+  function isSeaPlatform(port) { return !!(port && port.seaPlatform); }
+
+  /* Pad k, in KILOMETRES in the port frame (east, north, up off the sea at
+   * the port's lat/lon). Berth 0 due north, the rest every sixty degrees
+   * round from it. */
+  function seaPad(k) {
+    var n = SEA_PADS, kk = ((k % n) + n) % n;
+    var dome = kk === 0 ? SEA_DOME_KM[0] : SEA_DOME_KM[1];
+    var ring = SEA_HUB_KM + SEA_TUBE_KM + dome;
+    var a = Math.PI / 2 + kk * 2 * Math.PI / n;
+    return {
+      k: kk, a: a, x: Math.cos(a) * ring, y: Math.sin(a) * ring,
+      ring: ring, dome: dome, rise: dome * SEA_DOME_RISE, large: kk === 0,
+      deck: SEA_DECK_KM
+    };
+  }
+  /* The whole rig, for the mesh, the walk and the tests: one table. */
+  function seaLayout() {
+    var pads = [];
+    for (var k = 0; k < SEA_PADS; k++) pads.push(seaPad(k));
+    var reach = 0;
+    pads.forEach(function (p) { reach = Math.max(reach, p.ring + p.dome); });
+    return { deck: SEA_DECK_KM, hub: SEA_HUB_KM, tube: SEA_TUBE_KM, pads: pads, reach: reach };
+  }
+  /* The bay table at a platform, in THIS port's pad radii. A platform has
+   * no shaft (depth 0); its "mouth" is the open top of a dome, and the
+   * floor is the deck. The chamber is the whole rig: it is what the
+   * shaft-shaped consumers (insideShaft's cheap box, the camera's fallback
+   * room) fall back to, and Sim.berthRoom answers with the dome itself for
+   * anything that knows which pad it is on. */
+  function seaBay(port) {
+    var r = port.radius || 1, L = seaLayout();
+    var big = seaPad(0), small = seaPad(1);
+    return {
+      depth: 0,
+      mouthZ: (L.deck + small.rise) / r,
+      mouthR: small.dome / r, throatR: small.dome / r,
+      chamberX: L.reach / r, chamberY: L.reach / r,
+      floorZ: L.deck / r, headroom: big.rise / r,
+      berthY: 0, standoff: BAY_STANDOFF,
+      berths: SEA_PADS, lift: 0, station: false, sea: true
+    };
+  }
+
   /* HOW FAR OFF THE DECK A PARKED HULL SITS, and the reason it cannot stay
    * a fraction.
    *
@@ -1839,7 +1941,8 @@
      * radius outside its own hull — the "ship parked in open space a few
      * hundred metres off a station it is supposedly inside" that the
      * comment on berthState already complains about. */
-    var d = orbitalPort(port) ? stationBay(port) : shaftBay(port);
+    var d = orbitalPort(port) ? stationBay(port)
+          : isSeaPlatform(port) ? seaBay(port) : shaftBay(port);
     var floorZ = num(m.floorZ, d.floorZ);
     return {
       depth: d.depth,
@@ -1866,7 +1969,9 @@
        * the apron does not z-fight the planet's own surface, and the sim
        * has to add it too or the ship parks a few tens of metres under
        * the floor it is supposed to be standing on. */
-      lift: num(m.lift, d.lift)
+      lift: num(m.lift, d.lift),
+      /* A sea platform's table (seaBay): pads under domes, not a shed. */
+      sea: !!d.sea
     };
   }
 
@@ -2112,6 +2217,15 @@
    * measuring the room, not the alcoves an artist placed in some other one. */
   function tableBerthOffset(port, i) {
     var g = bayGeometry(port);
+    /* A platform's berth is its pad: on the deck, nose toward the hub down
+     * its own tube - the way the walkway runs and the way a crew would
+     * want the cargo doors. */
+    if (isSeaPlatform(port)) {
+      var sp = seaPad(i), rr = port.radius || 1;
+      return { x: sp.x / rr, y: sp.y / rr, z: g.floorZ + g.standoff,
+               normal: [-Math.cos(sp.a), -Math.sin(sp.a), 0],
+               facing: Math.sin(sp.a) > 0 ? -1 : 1, large: sp.large, pad: sp };
+    }
     var n = Math.max(1, g.berths);
     var k = ((i % n) + n) % n;
     var side = k < BERTH_FX.length ? 1 : -1;       // which long wall
@@ -2606,6 +2720,56 @@
     }
     return top;
   }
+  /* ---- SEA PLATFORMS: WHICH PORTS (2026-11-02) ---------------------------
+   * Every pad placeInland flagged coastal on WATER - the ocean worlds,
+   * which have no land at all, and the terran twilight worlds whose band
+   * never clears the sea - is rebuilt as a sea platform where it was
+   * rolled. A coastal flag on LAVA is not water and keeps its flag (over
+   * the kawartha galaxy there are none: every molten pad found a dry site;
+   * the case is handled rather than assumed).
+   *
+   * THE PORT KEEPS ITS IDENTITY: id, name, radius, faction, and everything
+   * built later from those - the market, the missions, the timetable, a
+   * save's references. What changes is what it is built as, and those
+   * fields only. `underground` goes false whatever was rolled: a platform
+   * is not a hole, and every branch in the game that asks it means a shaft.
+   * The rolled value is kept as `seaRolledUnderground`, additive.
+   *
+   * No draws. Nothing about any other port changes (ground.test generates
+   * with and without the pass and compares). */
+  function makeSeaPlatforms(sys) {
+    var W = inlandWeather();
+    if (!W || !W.terrainOf) return;
+    (sys.bodies || []).forEach(function (w) {
+      if (w.kind !== 'planet' && w.kind !== 'moon') return;
+      if (W.terrainOf(w).lava) return;
+      (w.children || []).forEach(function (pad) {
+        if (!pad.surface || !pad.coastal) return;
+        makeSeaPlatform(pad, w);
+      });
+    });
+  }
+  function makeSeaPlatform(pad, w) {
+    pad.seaPlatform = true;
+    pad.seaRolledUnderground = !!pad.underground;
+    pad.platformWhy = (pad.coastalWhy || 'no dry ground') + '; built as a sea platform instead';
+    delete pad.coastal;
+    delete pad.coastalWhy;
+    pad.underground = false;
+    pad.typeName = 'Sea Platform';
+    pad.shaftDepth = 0;
+    /* The port's TRUE position is the deck centre over the sea - the
+     * berths are hung off the sea surface (portEntrance, elevation 0) like
+     * every surface port, so this is only what distances and the capture
+     * envelope measure from. */
+    pad.elevation = SEA_DECK_KM;
+    pad.color = '#9fe3ff';
+    /* An open field's envelope and speed, not a deep bay's: the domes are
+     * open sky until the last few metres. */
+    pad.dockCaptureRadius = Math.max(pad.radius * 6, 2.5);
+    pad.dockMaxSpeed = 0.030;
+  }
+
   function markCoastal(W, w, pad, band) {
     pad.coastal = true;
     pad.coastalWhy = 'no ground on ' + (w.name || 'its world') + ' stands far enough above the ' +
@@ -4999,6 +5163,8 @@
      * than pinning the numbers in it, which are tuned and will move again. */
     shaftBay: shaftBay,
     stationBay: stationBay,
+    seaBay: seaBay, seaPad: seaPad, seaLayout: seaLayout, isSeaPlatform: isSeaPlatform,
+    makeSeaPlatforms: makeSeaPlatforms, SEA_DECK_KM: SEA_DECK_KM, SEA_PADS: SEA_PADS,
     berthOffset: berthOffset,
     tableBerthOffset: tableBerthOffset,
     modelledBerths: modelledBerths,

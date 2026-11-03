@@ -1828,6 +1828,11 @@
     if (!station) return 'orbital';
     /* A station you founded in orbit IS her Crawler (stations.js). */
     if (station.playerStation && !station.surface) return 'crawler';
+    /* A sea platform (2026-11-02): pads under domes, a hub, tubes - its
+     * own procedural mesh, and its own bay table (Gen.seaBay), keyed here
+     * so the mesh and the berths cannot come from two different answers.
+     * First, because a platform is never a shaft whatever was rolled. */
+    if (station.seaPlatform) return 'seaplatform';
     if (station.underground) return 'underground';
     /* Every surface port is a shaft now, so the flat apron model is no
      * longer what any of them look like — a shallow field gets the same
@@ -1955,7 +1960,7 @@
   /* One of three, and only three things behave differently. A farm and a
    * runway port are both a building on the ground, so they size as a bay. */
   function portClass(role) {
-    if (role === 'bay' || role === 'farm' || String(role).indexOf('runway-') === 0) return 'bay';
+    if (role === 'bay' || role === 'farm' || role === 'seaplatform' || String(role).indexOf('runway-') === 0) return 'bay';
     return role === 'underground' ? 'underground' : 'orbital';
   }
 
