@@ -778,7 +778,18 @@
      *     atmospheres long, so a low sun is dimmer and redder in its own
      *     reflection, and below the horizon it has none;
      *   - and screened onto the water, never added: it approaches white
-     *     without ever passing it, so nothing clips. */
+     *     without ever passing it, so nothing clips.
+     * THE GAIN, MEASURED (2026-11-03; doctrine 6). Astra saw it faint, and
+     * at 2.2 it was: the lobe's peak, (0.15 + 0.85 fres) * tr, is 0.26 for
+     * a sun 7 degrees up, 0.22 at 17 and 0.15 high, so the brightest pixel
+     * of the sun's image never came near the 0.85 cap — 0.58, 0.48 and
+     * 0.33 screened onto the water — and from 4 km off a sun low over the
+     * swell it was a smudge (ui-shots glint2, g2.2). Swept at 2.2, 3.5,
+     * 4.5, 6 and 9: 4.5 brings the peak to the cap for a low or middling
+     * sun and to 0.67 under a high one, with the lobe over 0.25 about 1.6
+     * degrees across, still broken by the swell into sparkle; 6 caps under
+     * every sun and 9 turned the far glint into a second sun disc. The cap
+     * itself is unchanged, so it still cannot blow out. */
     'vec3 seaShade(vec3 col, vec3 base, vec3 n, vec3 rd, float sea, vec4 sw) {',
     '  if (uSeaRel.w <= 0.0 || sea < 0.01) return col;',
     '  vec3 n2 = normalize(n - (sw.y * uSeaE + sw.z * uSeaN));',
@@ -789,7 +800,7 @@
     '  vec3 sunC = vec3(1.0, 0.96, 0.88) * mix(vec3(1.0, 0.62, 0.38), vec3(1.0), smoothstep(0.02, 0.45, mu));',
     '  float fres = 0.02 + 0.98 * pow(1.0 - max(0.0, -dot(rd, n2)), 5.0);',
     '  float g = pow(max(0.0, dot(reflect(rd, n2), uSunDir)), 900.0) * (0.15 + 0.85 * fres) * tr;',
-    '  vec3 hl = sunC * min(g * 2.2, 0.85);',
+    '  vec3 hl = sunC * min(g * 4.5, 0.85);',
     '  c2 = 1.0 - (1.0 - c2) * (1.0 - hl);',
     '  c2 = mix(c2, vec3(0.88, 0.93, 0.96) * (0.12 + 0.88 * l2), clamp(sw.w, 0.0, 1.0));',
     '  return mix(col, c2, sea);',
