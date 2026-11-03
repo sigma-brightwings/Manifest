@@ -5435,6 +5435,12 @@
     var lift = f && f.gearLift > 0 ? f.gearLift / 1000 : 0;
     var Gen = global.Gen;
     if (!port || !f || typeof f.ground !== 'number' || !(f.ground < 0) || !Gen || !Gen.bayGeometry) return lift;
+    /* ORBITAL BERTHS ONLY, for now. At a ground port the walkable hangar
+     * the boom starts in is fitted round her as she stood (render.test:
+     * "surface, cut on at Harrow Deep: she starts in her hangar" goes red
+     * with her own stance there); the ground ports keep the half metre
+     * until that hangar is fitted to the new height. */
+    if (port.surface) return lift;
     var g = Gen.bayGeometry(port);
     if (!g || !(g.standoff > 0)) return lift;
     return -f.ground / 1000 - g.standoff * (port.radius || 1);

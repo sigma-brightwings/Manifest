@@ -91,11 +91,13 @@ surfaces are more than 1px thick?"
 - **The civil yards open their doors.** yard-s, yard-m and yard-l kept their
   door leaves in the wrong part of the model, so they were welded shut and
   every arrival flew through them.
-- **Every hull stands on her own gear.** A berth held every hull at one
-  height over the deck, the fleet's: at a small station a Talon's gear was
-  1.2 m into the deck, at a large one she stood 2 m above it, and the Tanker
-  stood 5 m into it. Each hull's feet are now on the deck, half a metre
-  higher on her gear as before.
+- **Every hull stands on her own gear at a station.** A station berth held
+  every hull at one height over the deck, the fleet's: at a small station a
+  Talon's gear was 1.2 m into the deck, at a large one she stood 2 m above
+  it, and the Tanker stood 5 m into it. Each hull's feet are now on the
+  deck, half a metre higher on her gear as before. Ground ports keep the
+  old height for now: their walkable hangar is fitted round her as she
+  stood, and has to be refitted first.
 - **Walls and floors are slabs, not sheets.** 1,670 walls and floors across
   the station models were single flat sheets - a 1 px line edge-on or cut by
   the cutaway. Each is now a slab (a metre at Threshold Dock, four at Halden

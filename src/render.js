@@ -1229,9 +1229,11 @@
    * its size. 0.0008 of a radius is a metre at Threshold Dock and 4 m at
    * Halden Dock: several pixels at any cutaway distance, and inside the
    * plating either way. Returns the new mesh with `thickened`, or null. */
-  var SHEET_FLAT = 1e-5, SHEET_MIN_ACROSS = 0.01, SHEET_SLAB = 0.0008;
+  var SHEET_FLAT = 1e-5, SHEET_MIN_ACROSS = 0.01, SHEET_SLAB = 0.0008, SHEET_MESH_MIN = 100;
   function thickenSheets(m) {
-    if (!m || !m.f || !m.f.length) return null;
+    /* A mesh of a handful of faces is a fixture or a fragment, not a
+     * station's walls (render.test's one-triangle bay). */
+    if (!m || !m.f || m.f.length < SHEET_MESH_MIN) return null;
     var par = {}, idOf = {}, nid = 0;
     function find(x) { while (par[x] !== undefined && par[x] !== x) x = par[x] = par[par[x]]; return par[x] === undefined ? (par[x] = x) : x; }
     function key(p) { return Math.round(p[0] * 1e5) + '|' + Math.round(p[1] * 1e5) + '|' + Math.round(p[2] * 1e5); }
