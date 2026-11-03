@@ -40,6 +40,52 @@ before they update.
 
 ## Unreleased
 
+### Changed (2026-11-03, more than one star: the plumbing, stage 1)
+
+Stage 1 of the star programme (project doc `claude/stars-and-systems-plan.md`:
+close binaries, triples, white dwarfs, a pulsar, a black hole at the cluster
+centre). **This is plumbing with no change of behaviour.** Nothing about
+generation changes: no new random draws, no binaries yet. Every system the game
+makes today has one star at its root and plays exactly as it did; the suite
+holds the new code to the old answers bit for bit.
+
+- **`sys.stars`**, set in `finalize` for every system (generated and
+  interstellar): the system's real stars. Today `[sys.root]`.
+- **`orbit.mu` override.** `Sim.orbitMu` and `finalize`'s period read it when
+  present: a star on a barycentric orbit needs G·M_B³/M², which no
+  (parent + self) sum gives. `Gen.barycentricMu` is the one formula.
+- **A `kind: 'barycentre'` body is supported**: mass the sum of its stars, radius
+  0, in `byId` and `sys.barycentres` but kept out of `sys.bodies` — so out of
+  gravity, pads, the draw pass, nav and focus cycling, the scopes and the system
+  manifest at the source. `planetFamily` stops at one as it does at a star.
+- **`Sim.frameBody`**: the body a frame is measured against. `dominantBody` for
+  every system today; with a barycentre root, beyond 3 binary separations a star
+  hands the frame up to the pair, so circumbinary space does not flip between the
+  stars. The trajectory plot, `oscElements`, the ellipse path, apsis times, the
+  orbital basis, the HUD speed reference, the attitude ladder (`localVertical`),
+  the cruise drop-out's circular orbit and far canisters' rails go through it.
+- **`Sim.lightsAt`**: up to three lights from `sys.stars`, flux in insolation
+  units, and the flux-weighted direction. Every lighting site that took the sun
+  off `sys.root` now asks it: the ground-port sky, planets and rings on the GPU,
+  ring chunks and field rocks, traffic hulls, crates, founding crawlers, debris,
+  your own ship, the walking and spacewalk views, the boarding tube, stations,
+  the shed's lift car, the 2D terminator and the lens flare on the glass (these
+  last two take the brightest star). Still single-light in the shaders; several
+  lights is stage 4.
+- **The corona** (`coronaContext`) loops over the stars, so heat and scooping
+  cannot vanish when the root is not one.
+- **The SYSTEM page and the legacy HUD** print the star rows through
+  `Sim.starLabel` / `Sim.starLuminosity`: unchanged for one star, `G2+K5` and the
+  summed light for a pair.
+- Left on `sys.root` on purpose, because they want the point the system turns
+  about rather than a light: the arrival capture orbit, the interstellar drop's
+  rail parent, slipspace wakes, the jump ring and the belt chart's centre.
+- New `test/stars.test.js` (core group): 12,148 samples over 20 kawartha systems
+  bit-identical, and a hand-built pair held over 10⁴ binary periods.
+
+**Saves:** unaffected. No save field and no version changed; no barycentre is
+ever generated, so nothing a save refers to moved.
+
 ### Fixed (2026-11-03, the ground turns: landing, standing, lifting and air against the turning world)
 
 Yesterday the HUD learned to read speed against the turning ground

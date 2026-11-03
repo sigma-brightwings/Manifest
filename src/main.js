@@ -2964,8 +2964,10 @@
     /* Hand back a sane velocity. Coming out of cruise at rest next to a
      * planet would mean falling into it, so we leave in the circular orbit
      * we are standing in — which is where a drive like this would put you
-     * and is the only arrival that is any use. */
-    var dom = Sim.dominantBody(G.ship.pos, G.sys, G.t);
+     * and is the only arrival that is any use. Circular about the FRAME
+     * body (Sim.frameBody, 2026-11-03): in circumbinary space that is the
+     * pair, whose summed mu is the orbit you can actually hold. */
+    var dom = Sim.frameBody(G.ship.pos, G.sys, G.t);
     /* GUARDED, because the guard that was here tested the wrong thing.
      * `dom.mu > 0` reads mu off dom, so a null dom threw one line before
      * the test that was meant to catch it — and `bodyState` dereferences
@@ -4008,7 +4010,7 @@
     G.nodeStale = 0.3;
 
     var ref = (G.trajectory && G.trajectory.reference)
-      || Sim.dominantBody(G.ship.pos, G.sys, G.t);
+      || Sim.frameBody(G.ship.pos, G.sys, G.t);
     G.nodePlan = Sim.nodePlan(G.ship, G.sys, G.t, G.node,
       { samples: 220, reference: ref, maxSteps: 4000 });
     if (G.nodePlan && G.nodePlan.magnitude > 1e-9) {
@@ -5332,8 +5334,10 @@
      * .prograde/.radial/.normal off this without checking, so handing back
      * null would move the crash rather than remove it. The root is always a
      * body, and in the one system where there is nothing else it is also
-     * the correct answer. */
-    var dom = Sim.dominantBody(G.ship.pos, G.sys, G.t) || G.sys.root;
+     * the correct answer. Sim.frameBody, not dominantBody (2026-11-03):
+     * round a binary the frame is the pair, not whichever star is pulling
+     * harder this half-period; for one star the two are the same body. */
+    var dom = Sim.frameBody(G.ship.pos, G.sys, G.t) || G.sys.root;
     var bs = Sim.bodyState(dom, G.sys, G.t);
     var rel = V.sub(G.ship.pos, bs.pos);
     var vrel = V.sub(G.ship.vel, bs.vel);
@@ -5476,7 +5480,8 @@
       var airV = Sim.airVelocity ? Sim.airVelocity(atmo, G.ship.pos) : atmo.vel;
       return { body: atmo.body, pos: atmo.pos, vel: airV, air: true };
     }
-    var dom = Sim.dominantBody(G.ship.pos, G.sys, G.t);
+    /* The frame the HUD speed is read in (Sim.hudSpeed), so the same body. */
+    var dom = Sim.frameBody(G.ship.pos, G.sys, G.t);
     if (!dom) return null;
     var dpos = Sim.bodyPosition(dom, G.sys, G.t);
     /* And over an airless world's ground, the ground - the same rule and the
@@ -6840,7 +6845,7 @@
     if (!GW || !GW.skyOver || !port || !port.parentBody || !Sim.groundBasis) return null;
     var gb = Sim.groundBasis(port, G.sys, G.t);
     if (!gb) return null;
-    var sun = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), gb.entrance.pos));
+    var sun = sunDirAt(gb.entrance.pos);
     return GW.skyOver(port.parentBody, gb.up, sun);
   }
   function eyeUnderStreet(port, cam) {
@@ -7956,6 +7961,38 @@
   }
 
   var _starPos = null;      // this frame's star position, for GL lighting
+  var _rootPos = null;      // this frame's sys.root position, for the belt chart
+
+  /* ---- the sun, from wherever you are (2026-11-03) --------------------
+   * Every one of these used to read V.norm(V.sub(bodyPosition(G.sys.root),
+   * pos)) inline: the sun direction was "toward the root", because the
+   * root was always the star. With a binary the root is the barycentre, a
+   * point of empty space between the two, and lighting toward it is lit by
+   * nothing. Sim.lightsAt is the single answer now (stars plan stage 1,
+   * claude/stars-and-systems-plan.md); with one star its `dir` is the old
+   * expression bit for bit, which test/stars.test.js holds it to.
+   *
+   * sunDirScaled is for the sites that normalised by MULTIPLYING by 1/len
+   * (and fell back to something when on top of the star) rather than
+   * through V.norm, which divides: the two differ in the last bit, and a
+   * refactor promising no behaviour change keeps each site's arithmetic.
+   * With more than one light it takes the blended dir, like everything else.
+   *
+   * primaryStarPos is for what can only point at ONE star — the lens flare
+   * on the glass, the 2D terminator's highlight: the brightest from here. */
+  function sunDirAt(pos) { return Sim.lightsAt(pos, G.sys, G.t).dir; }
+  function sunDirScaled(pos, fallback) {
+    var lit = Sim.lightsAt(pos, G.sys, G.t);
+    if (lit.lights.length === 1) {
+      var to = V.sub(lit.lights[0].pos, pos), l = V.len(to);
+      return l > 1e-9 ? V.scale(to, 1 / l) : fallback;
+    }
+    return V.len2(lit.dir) > 0 ? lit.dir : fallback;
+  }
+  function primaryStarPos(pos) {
+    var p = Sim.lightsAt(pos, G.sys, G.t).primary;
+    return p ? p.pos : Sim.bodyPosition(G.sys.root, G.sys, G.t);
+  }
 
   /* The canvas the chart is drawn to while you are standing outside
    * (draw, 2026-10-26): kept, never shown. */
@@ -8083,7 +8120,7 @@
       if (groundSkyNow && global.GLWorld.setGroundSky) {
         var skyPort = skyPortNow, skyGb = Sim.groundBasis(skyPort, G.sys, G.t);
         global.GLWorld.setGroundSky(skyPort.parentBody, skyGb.up,
-          V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), skyGb.entrance.pos)));
+          sunDirAt(skyGb.entrance.pos));
         global.GLWorld.drawGroundSky(cam);
       }
       /* STANDING OUTSIDE HER (2026-10-26): the world is the GL layer's to
@@ -8219,9 +8256,13 @@
       G.cruiseTrail = null;
     }
 
-    var starPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
+    /* The star the 2D terminator leans toward: the brightest one from the
+     * eye. The root is kept apart (_rootPos) for what is centred on it
+     * rather than lit by it — the belts on the chart. One star, one point. */
+    var starPos = primaryStarPos(cam.eye || (G.ship && G.ship.pos) || V.zero());
     var starScreen = cam.project(starPos);
     _starPos = starPos;
+    _rootPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
 
     /* None of the system's furniture belongs in a hangar. The grid is a
      * plane through the ecliptic, the orbit lines are hundreds of thousands
@@ -8523,9 +8564,8 @@
     var Rg = global.Rings;
     if (!Rg || !G.sys || inside || buried || !glLive()) return;
     var GLW = global.GLWorld;
-    var starPos = _starPos || { x: 0, y: 0, z: 0 };
 
-    /* The rings themselves. */
+    /* The rings themselves. Lit per ring, from where its planet is. */
     if (GLW.queueRing) {
       for (var i = 0; i < G.sys.bodies.length; i++) {
         var b = G.sys.bodies[i];
@@ -8535,12 +8575,10 @@
         var sp = cam.project(bs.pos);
         var px = sp ? b.ring.outer * sp.scale : 0;
         if (px < 1.2 && dEye > b.ring.outer * 1.5) continue;
-        var toStar = V.sub(starPos, bs.pos);
-        var sl = V.len(toStar);
         /* The sheet steps aside where the chunks are drawn — only in
          * flight, since the chart draws no chunks to replace it. */
         GLW.queueRing(b, Rg.ringFrame(b), bs.pos, cam,
-                      sl > 1e-9 ? V.scale(toStar, 1 / sl) : V.scale(cam.f, -1),
+                      sunDirScaled(bs.pos, V.scale(cam.f, -1)),
                       mapMode() ? null : [RING_ROCK_RADIUS * 0.5, RING_ROCK_RADIUS * 2.2]);
       }
     }
@@ -8555,7 +8593,7 @@
       var ps = Sim.bodyState(p, G.sys, G.t);
       if (V.dist(ship, ps.pos) > p.ring.outer + RING_ROCK_RADIUS + 50) continue;
       var ch = Rg.ringChunksNear(p, ps, ship, RING_ROCK_RADIUS, G.t, ROCK_CAP);
-      var sunR = V.norm(V.sub(starPos, ps.pos));
+      var sunR = sunDirAt(ps.pos);
       for (var c = 0; c < ch.length; c++) {
         var ck = ch[c];
         if (global.Mining && global.Mining.isGone(G, ck)) continue;
@@ -8569,7 +8607,7 @@
     var near = Rg.fieldsNear(G.sys, ship, G.t, FIELD_LOOK);
     for (var f = 0; f < near.length && f < 3; f++) {
       var fd = near[f].field, cen = near[f].center, hf = Rg.hillFrame(cen);
-      var sunF = V.norm(V.sub(starPos, cen.pos));
+      var sunF = sunDirAt(cen.pos);
       for (var m = 0; m < fd.count; m++) {
         var rk = Rg.fieldMember(fd, m, G.sys, G.t, cen, hf);
         if (global.Mining && global.Mining.isGone(G, rk)) continue;      // a torpedo or a beam took it
@@ -8622,7 +8660,9 @@
   function drawBeltChart(ctx, cam, inside) {
     var Rg = global.Rings;
     if (!Rg || inside || !G.sys || !G.sys.belts || !G.sys.belts.length) return;
-    var star = _starPos || { x: 0, y: 0, z: 0 };
+    /* Centred on the ROOT, not lit by a star: a belt orbits whatever the
+     * system turns about, which for a binary is the barycentre. */
+    var star = _rootPos || { x: 0, y: 0, z: 0 };
     for (var i = 0; i < G.sys.belts.length; i++) {
       var bl = G.sys.belts[i];
       if (bl.kind === 'belt') {
@@ -8908,6 +8948,9 @@
   function bestWakeRead() {
     var list = wakesNow();
     if (!list.length) return null;
+    /* The ROOT, deliberately, here and in the three wake functions below
+     * (2026-11-03): a wake is placed about the point the jump ring is
+     * centred on, which for a binary is the barycentre. Not light. */
     var sunPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
     var radius = Slip.jumpRingRadius(G.sys);
     var best = null;
@@ -9201,7 +9244,6 @@
   function drawTraffic(ctx, cam) {
     var list = Sim.shipsAll(G.sys, G.t);
     if (!list.length) return;
-    var sunPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
     var blink = (performance.now() / 1000) % 2;
 
     for (var i = 0; i < list.length; i++) {
@@ -9220,7 +9262,7 @@
       if (!sp && !touching) continue;
       if (!touching && (sp.x < -60 || sp.x > cam.w + 60 || sp.y < -60 || sp.y > cam.h + 60)) continue;
       if (touching && (!sp || sp.x < -60 || sp.x > cam.w + 60 || sp.y < -60 || sp.y > cam.h + 60)) {
-        drawTrafficHull(ctx, cam, s, V.norm(V.sub(sunPos, s.pos)), s.hullClass || s.cls);
+        drawTrafficHull(ctx, cam, s, sunDirAt(s.pos), s.hullClass || s.cls);
         continue;
       }
 
@@ -9241,7 +9283,7 @@
 
       var lenPx = s.size * sp.scale;
       if (lenPx > 4) {
-        var sunDir = V.norm(V.sub(sunPos, s.pos));
+        var sunDir = sunDirAt(s.pos);
         drawTrafficHull(ctx, cam, s, sunDir, hullKey);
         // Port red, starboard green, in the ship's own frame — so which way
         // it is facing is readable without a label.
@@ -9886,7 +9928,7 @@
     var half = (g.mouthR + g.throatR) / 2 * 0.92 * r;      // inside the duct's walls
     var top = V.addScaled(G.ship.pos, gb.up, -(g.standoff || 0.012) * r);
     var fr = { pos: V.addScaled(top, gb.up, -0.06 * half), right: gb.east, up: gb.north, fwd: gb.up };
-    var sunDir = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), top));
+    var sunDir = sunDirAt(top);
     var GLW = global.GLWorld;
     if (GLW && GLW.queueMesh && glLive() && GLW.queueMesh(cam, fr, shedCarMesh(), half, sunDir)) return;
     Render.paintMesh(ctx, cam, fr, shedCarMesh(), half, sunDir, null);
@@ -9898,7 +9940,6 @@
     /* Building, or open and taking an upgrade: crates in her ring. */
     var list = Sts.workHere(G, G.sys, G.t);
     if (!list.length) return;
-    var sunPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
     list.forEach(function (st) {
       var cs = Sts.crawlerState(st, G.sys, G.t);
       if (!cs) return;
@@ -9907,7 +9948,7 @@
       var rv = V.sub(cs.vel, hs.vel);
       var fwd = V.norm(V.sub(rv, V.scale(up, V.dot(rv, up))));
       var right = V.norm(V.cross(fwd, up));
-      var sunDir = V.norm(V.sub(sunPos, cs.pos));
+      var sunDir = sunDirAt(cs.pos);
       var v = FOUNDING_STANDINS[st.id];
       if (!v) {
         var hd = Combat.HULLS.crawler || {};
@@ -9931,14 +9972,13 @@
     if (h && h.kind === 'crate' && h.pos) {
       var hst = Sts.byId(G, h.station), Cn = global.Construction;
       var cr = hst && Cn ? Cn.BY_ID[hst.crates[h.idx]] : null;
-      drawCrate(ctx, cam, h.pos, cr ? cr.size : 'M', V.norm(V.sub(sunPos, h.pos)));
+      drawCrate(ctx, cam, h.pos, cr ? cr.size : 'M', sunDirAt(h.pos));
     }
   }
 
   function drawDebris(ctx, cam) {
     var list = G.sys.canisters;
     if (!list || !list.length) return;
-    var sunPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
     var tSec = performance.now() / 1000;
 
     ctx.save();
@@ -9967,7 +10007,7 @@
         var Rg2 = global.Rings, GLW2 = global.GLWorld;
         if (Rg2 && GLW2 && GLW2.queueMesh && glLive() &&
             GLW2.queueMesh(cam, spinFrame(c, tSec), Rg2.rockMesh(c.shape || 0, c.rockKind || 'stone', 1),
-                           c.lengthKm, V.norm(V.sub(sunPos, c.pos)))) continue;
+                           c.lengthKm, sunDirAt(c.pos))) continue;
       }
 
       /* A spent sink is the one piece of debris that is a LIGHT SOURCE, and
@@ -9985,7 +10025,7 @@
       if (lenPx > 3) {
         ctx.globalAlpha = fade;
         Render.drawShardModel(ctx, cam, spinFrame(c, tSec), c.lengthKm,
-                              V.norm(V.sub(sunPos, c.pos)),
+                              sunDirAt(c.pos),
                               c.sink ? sinkTint(glow)
                                      : (c.cid ? '#c8b487' : '#8d949e'), c.shard);
         ctx.globalAlpha = 1;
@@ -11436,7 +11476,7 @@
     /* Down through an open ramp's well, the ground she is standing on. */
     if (G.ship.landed && G.ship.airlock && G.ship.airlock.ramp > 0 && glLive() && Render.groundPatch) {
       var gp0 = Render.groundPatch(G.ship);
-      var sun0 = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), G.ship.pos));
+      var sun0 = sunDirAt(G.ship.pos);
       if (gp0) global.GLWorld.queueMesh(cam, G.ship, gp0, Render.hullLength(G.ship), sun0, 0, null);
     }
     /* Berthed: the hangar she stands in, down her ramp and out of her
@@ -11462,7 +11502,7 @@
      * whose rooms are up the ramp. Yours as well, in open space, where she
      * is out there beside her. */
     var s = walkHull();
-    var sunDir = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), s.pos));
+    var sunDir = sunDirAt(s.pos);
     Render.drawShipModel(ctx, cam, s, sunDir, null);
     if (s !== G.ship && !G.ship.docked) Render.drawShipModel(ctx, cam, G.ship, sunDir, null);
     /* In her hangar the floor is the hangar's, not a world's. */
@@ -12193,7 +12233,7 @@
     var her = global.Boarding.herState(G.sys, G.t, tt.key || tt.name);
     if (!her) return;
     var run = Math.max(0.02, tt.tube || 0), gap = global.Boarding.TUBE_KM;
-    var sunS = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), G.ship.pos));
+    var sunS = sunDirAt(G.ship.pos);
     /* Hatch to hatch, along her slot's line (alongsideSlot), in metres in
      * your frame, run out from her end over TUBE_RUN_S. */
     if (tt.slot && tt.slot.tube) {
@@ -12206,7 +12246,7 @@
     var fwd = V.scale(tt.dir, 1);
     var right = V.norm(V.cross(fwd, Math.abs(fwd.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 }));
     var up = V.cross(right, fwd);
-    var sun = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), G.ship.pos));
+    var sun = sunDirAt(G.ship.pos);
     global.GLWorld.queueMesh(cam, { pos: her.pos, right: right, up: up, fwd: fwd }, tubeMesh(), gap * run, sun, 0, null);
   }
   /* From a tower bridge the rest of her is the view, all the way round —
@@ -12221,7 +12261,7 @@
      * in them. */
     var wk = G.walk;
     if (wk && wk.ship && wk.plan && ((wk.plan.deck && wk.plan.deck !== 'bridge') || Math.abs(wk.rideDy || 0) > 0.05)) return;
-    var sunDir = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), hullS.pos));
+    var sunDir = sunDirAt(hullS.pos);
     Render.drawShipModel(ctx, cam, hullS, sunDir, null, { fromBridge: true });
   }
 
@@ -12694,7 +12734,7 @@
   }
   function drawEvaView(ctx, cam, w, h) {
     var e = G.eva, E = global.Eva, vh = h - FBAR_H;
-    var sunDir = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), G.ship.pos));
+    var sunDir = sunDirAt(G.ship.pos);
     if (global.Airlock) global.Airlock.state(G.ship);
     /* Her rooms in her, through her glass and up her ramp (windows). */
     Render.drawShipModel(ctx, cam, G.ship, sunDir, null, { windows: V.dist(e.pos, G.ship.pos) < WINDOWS_KM });
@@ -12706,7 +12746,7 @@
     if (tg && tg.visitor) {
       var v = tg.visitor;
       if (global.Airlock) global.Airlock.state(v);
-      var sunV = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), v.pos));
+      var sunV = sunDirAt(v.pos);
       Render.drawShipModel(ctx, cam, v, sunV, null, { windows: V.dist(e.pos, v.pos) < WINDOWS_KM });
     }
     var taken = [];
@@ -12983,7 +13023,8 @@
       if (G.hyper || enclosedPort()) {
         Render.drawGlass(ctx, apertures, w, h, {});
       } else {
-        var starPos = Sim.bodyPosition(G.sys.root, G.sys, G.t);
+        /* A flare has one source; the brightest star from the eye. */
+        var starPos = primaryStarPos(cam.eye);
         var starRel = V.sub(starPos, cam.eye);
         Render.drawGlass(ctx, apertures, w, h, {
           starScreen: cam.project(starPos),
@@ -15099,8 +15140,11 @@
     var planets = sys.bodies.filter(function (b) { return b.kind === 'planet'; }).length;
     var moons = sys.bodies.filter(function (b) { return b.kind === 'moon'; }).length;
     var y = MFD_BODY_TOP + 14;
-    mfdRow(ctx, y, 'star', sys.name + ' (' + sys.root.type + ')', MFD_HOT);
-    mfdRow(ctx, y + 16, 'luminosity', sys.root.luminosity.toFixed(2) + ' L☉');
+    /* Sim.starLabel / starLuminosity: the root's type and light for one
+     * star, exactly as before; "G2+K5" and the summed light for a pair
+     * whose root is a barycentre with neither (2026-11-03). */
+    mfdRow(ctx, y, 'star', sys.name + ' (' + Sim.starLabel(sys) + ')', MFD_HOT);
+    mfdRow(ctx, y + 16, 'luminosity', Sim.starLuminosity(sys).toFixed(2) + ' L☉');
     mfdRow(ctx, y + 32, 'worlds', planets + ' planets, ' + moons + ' moons');
     mfdRow(ctx, y + 48, 'habitable', String(sys.bodies.filter(function (b) { return b.habitable; }).length));
     mfdRow(ctx, y + 64, 'ports', String((sys.ports || []).length));
@@ -16641,6 +16685,10 @@
   }
 
   function drawBody(ctx, cam, item, starScreen) {
+    /* A barycentre is a point, not a thing (2026-11-03). It is kept out of
+     * sys.bodies, so it never reaches here; if one ever did, it is skipped
+     * rather than painted as a sub-pixel marker ring round nothing. */
+    if (item.body && item.body.kind === 'barycentre') return;
     var b = item.body, sp = item.sp, rpx = item.rpx;
 
     /* Berthed in her hangar and seen from outside her: the walking deck's
@@ -16681,7 +16729,7 @@
          * berths and the drawing cannot disagree about where a bay is. */
         var frame = stationFrame(b, true);
         if (frame) {
-          var sun = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), item.pos));
+          var sun = sunDirAt(item.pos);
           /* NO SUN IN HERE. Set around THIS station's own meshes and cleared
            * after, so the hull you are parked inside is lit as a room while
            * everything else on the same frame — the next station along, your
@@ -17022,11 +17070,11 @@
      * pinned beside it cannot disagree. */
     var drewOnGpu = false;
     if (glLive() && _starPos) {
-      var toStar = V.sub(_starPos, item.pos);
-      var dlen = V.len(toStar);
       /* A body sitting on top of the star has no meaningful sun direction;
-       * light it from the camera rather than dividing by zero. */
-      var sunDir = dlen > 1e-9 ? V.scale(toStar, 1 / dlen) : V.scale(cam.f, -1);
+       * light it from the camera rather than dividing by zero. Per body,
+       * from where the body is (sunDirScaled: the same 1/len arithmetic
+       * this always used). */
+      var sunDir = sunDirScaled(item.pos, V.scale(cam.f, -1));
       drewOnGpu = global.GLWorld.queueBody(b, sp, rpx, cam, sunDir, G.t, item.pos);
     }
     if (!drewOnGpu && !sp.behindEye) Render.shadeBody(ctx, sp, rpx, b, starScreen);
@@ -17369,7 +17417,7 @@
     // scale rule every other body in this system follows.
     var lenPx = Render.shipScreenLength(cam, G.ship);
     if (lenPx > 4) {
-      var sunDir = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), G.ship.pos));
+      var sunDir = sunDirAt(G.ship.pos);
       /* Her airlock state exists from the first frame, not from the first
        * time you work it: the ramp's bay and its shut doors are drawn off
        * it, and a ship whose lock had never been cycled showed a plain
@@ -17780,7 +17828,7 @@
     ctx.save();
     ctx.font = 'bold 14px ui-monospace, monospace';
     ctx.fillStyle = '#ffe6a8';
-    ctx.fillText(G.sys.name + ' (' + G.sys.root.type + ')', 24, 32);
+    ctx.fillText(G.sys.name + ' (' + Sim.starLabel(G.sys) + ')', 24, 32);
     ctx.restore();
     rows(ctx, 24, 52, [
       ['seed', '"' + G.seed + '"', '#9ff0dc'],

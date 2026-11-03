@@ -50,7 +50,7 @@ var GROUPS = {
     'test/nodes.test.js', 'test/galaxy.test.js', 'test/weather.test.js',
     'test/orbitline.test.js', 'test/heading.test.js', 'test/airdata.test.js',
     'test/twilight.test.js', 'test/polar.test.js', 'test/rings.test.js',
-    'test/turningground.test.js'
+    'test/turningground.test.js', 'test/stars.test.js'
   ],
   render: ['test/render.test.js'],
   view: [
