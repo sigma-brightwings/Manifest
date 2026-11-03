@@ -7410,6 +7410,14 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
   var zen = GLreal.skyAt(blue, 0.6, 0.8, 1, 0.5, 0), hor = GLreal.skyAt(blue, 0.6, 0.8, 0, 0.5, 0);
   check('the sky: darker toward the zenith than at the horizon',
         zen[0] + zen[1] + zen[2] < (hor[0] + hor[1] + hor[2]) * 0.75);
+  /* The haze (fifth round): by the air the ray crosses, not the distance
+   * alone, and all the way to the sky's colour at the horizon. */
+  check('the haze: straight down from 8 km through thick air, the ground stays clear',
+        GLreal.hazeAt(0.94, 8.5, 8, 0.9) < 0.15, GLreal.hazeAt(0.94, 8.5, 8, 0.9).toFixed(3));
+  check('the haze: along the ground to the horizon, it is the sky',
+        GLreal.hazeAt(0.94, 30, 0.1, 0.006) > 0.95 && GLreal.hazeAt(0.94, 30, 0.1, 0) === 1);
+  check('the haze: more of it the lower and longer the path',
+        GLreal.hazeAt(0.94, 20, 0.2, 0.2) > GLreal.hazeAt(0.94, 20, 8, 0.2));
   check('the sky: night and airless are the dark clear, stars and all',
         night.lit < 0.05 && vac.lit === 0 && Math.max(night[0], night[1], night[2]) < 0.06 &&
         Math.max(vac[0], vac[1], vac[2]) < 0.06);
@@ -7507,6 +7515,20 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
           if (bad) st.wall.push(tag + ': ' + bad + ' wall shown above the street');
           if (air) st.wall.push(tag + ': ' + air + ' wall shown in the bay\'s open air');
           if (tgt < -0.05 && hgt < 0 && !shown) st.wall.push(tag + ': no pit wall with her ' + (-tgt * 1000).toFixed(0) + ' m down');
+          /* The burnt edge in the street (fifth round): the band just
+           * outside the cone where it breaks the ground — the same width
+           * rule and fraction as the port's own cut (stationCutShader's
+           * rim) — hot nearest the cut, scorched beyond, nothing past it. */
+          if (hgt > 0 && wall.rim > 0) {
+            var cutRim = c.section.rim;
+            if (!(Math.abs(wall.rim - cutRim) < 1e-12)) st.wall.push(tag + ': street band fraction differs from the cut');
+            var tq = 0.5, ax0 = V.addScaled(eye, un, L * tq);
+            var rq = Math.min(wall.rEye + (wall.rShip - wall.rEye) * tq, wall.cap > 0 ? wall.cap : Infinity);
+            var at2 = function (f2) { return V.addScaled(ax0, side, rq * f2); };
+            var bands = [GLreal.streetBand(wall, eye, at2(0.5)), GLreal.streetBand(wall, eye, at2(1 + wall.rim * 0.1)),
+                         GLreal.streetBand(wall, eye, at2(1 + wall.rim * 0.7)), GLreal.streetBand(wall, eye, at2(1 + wall.rim * 1.3))];
+            if (bands.join() !== 'cut,hot,scorched,') st.wall.push(tag + ': street band ' + bands.join());
+          }
           /* The bowl is not rebuilt for a small move of the eye: the CPU's
            * part per frame is the wall's uniforms, nothing else. */
           var b1 = R.sectionBowl(sc);

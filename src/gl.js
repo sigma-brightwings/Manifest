@@ -4147,6 +4147,31 @@
     if (t * c >= L) return null;
     return { t: t, p: { x: eye.x + rd.x * t, y: eye.y + rd.y * t, z: eye.z + rd.z * t }, cyl: cyl };
   };
+  /* The street's burnt edge in JS (FRAG_WALL's first block): at a point
+   * `p` on the ground (world km) seen from `eye`, 'cut' inside the cone,
+   * 'hot' or 'scorched' in the band just outside it, null beyond — the
+   * same radius and the same fraction as FRAG_MESH's keyhole band. */
+  GL.streetBand = function (w, eye, p) {
+    var Sx = w.ship.x - eye.x, Sy = w.ship.y - eye.y, Sz = w.ship.z - eye.z;
+    var px = p.x - eye.x, py = p.y - eye.y, pz = p.z - eye.z;
+    var L2 = Math.max(Sx * Sx + Sy * Sy + Sz * Sz, 1e-12);
+    var tt = (px * Sx + py * Sy + pz * Sz) / L2;
+    if (!(tt > 0 && tt < 1)) return null;
+    var rs = Math.min(w.rEye + (w.rShip - w.rEye) * tt, w.cap > 0 ? w.cap : 1e9);
+    var ox = px - Sx * tt, oy = py - Sy * tt, oz = pz - Sz * tt, ds = Math.sqrt(ox * ox + oy * oy + oz * oz);
+    if (ds < rs) return 'cut';
+    if (ds >= rs * (1 + w.rim)) return null;
+    return (ds - rs) / (rs * w.rim) < 0.35 ? 'hot' : 'scorched';
+  };
+  /* groundHaze's blend fraction in JS: `dist` km of path from an eye `h0`
+   * km up, the ray `down` (sine of its angle below the horizontal). */
+  GL.hazeAt = function (air, dist, h0, down) {
+    if (!(air > 0)) return 0;
+    var H = 6, od = h0 > 0.01 ? dist * H * (1 - Math.exp(-h0 / H)) / h0 : dist;
+    var f = 1 - Math.exp(-od * air * 0.03);
+    var u = Math.max(0, Math.min(1, down / 0.08));
+    return Math.max(f, 1 - u * u * (3 - 2 * u));
+  };
   /* FRAG_WALL in JS, up to the bed: null where the wall is not drawn
    * (above the street, in the bay's air), else the bed index. */
   GL.wallFrag = function (w, p) {
