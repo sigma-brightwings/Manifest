@@ -8712,6 +8712,36 @@
     var boxH = b.max[2] - b.min[2];
     var hits = [];
     var TOP = b.max[2] + 0.002, STEPS = 8;
+    /* A DOOR IS NOT A FLOOR EITHER (2026-11-03). The ring's heavy bay opens
+     * UPWARD: its box is the hall inside the hub, floor to roof, and its
+     * outer doors are hatch leaves lying flat in that roof. The first thing
+     * under the box's top is therefore the shut hatch, with vacuum above
+     * it — and "most room above" scores vacuum as room, so every ring
+     * parked its heavy hulls ON THE ROOF, on the closed doors, a stand's
+     * height above the hub, outdoors. berths.test.js caught it only at a
+     * 1.57 km ring: at a bigger one the hull's centre (14 m up) fell inside
+     * the carved hatch cell of the occupancy grid and read as indoors by
+     * voxel accident. A surface lying in one of the model's own outer gate
+     * leaves is a door, and a door is shut on a hull, not stood on.
+     *
+     * ONLY WHERE THE BAY OPENS UPWARD. A hull stands on top of a surface
+     * (+z), so a leaf under it is outside the bay only if the bay opens
+     * toward +z. The yard-syn bays that open DOWNWARD lie on their doors
+     * from the inside, which is a trapdoor floor and correct — measured, the
+     * rule without this guard moved those hulls up to their own ceilings. */
+    var opensUp = !!(b.normal && b.normal[2] > 0.5);
+    var leaves = (opensUp && lib.anchors && lib.anchors.gates) || [];
+    var LEAF_TOL = 0.004;
+    function onLeaf(x, y, z) {
+      for (var li = 0; li < leaves.length; li++) {
+        var lf = leaves[li];
+        if (!lf || !lf.min || !lf.max) continue;
+        if (x >= lf.min[0] - LEAF_TOL && x <= lf.max[0] + LEAF_TOL &&
+            y >= lf.min[1] - LEAF_TOL && y <= lf.max[1] + LEAF_TOL &&
+            z >= lf.min[2] - LEAF_TOL && z <= lf.max[2] + LEAF_TOL) return true;
+      }
+      return false;
+    }
     function castZ(p, dz) {
       var best = Infinity;
       for (var t = 0; t < T.length; t += 3) {
@@ -8732,6 +8762,7 @@
           var zc = sz - dn;
           /* A deck outside the box it belongs to is not this berth's deck. */
           if (zc < b.min[2] || zc > TOP) continue;
+          if (onLeaf(cx, cy, zc)) continue;
           var kz = zc.toFixed(5);
           if (seen[kz]) continue;
           seen[kz] = true;
@@ -8757,6 +8788,18 @@
     if (z === null || z < b.min[2] || z > b.max[2]) z = b.max[2];
     var upOld = castZ([o[0], o[1], z + 1e-4], 1);
     if (zRoom !== null && !(upOld >= DECK_MIN_ROOM)) z = zRoom;
+    else if (zRoom !== null && onLeaf(o[0], o[1], z)) {
+      /* Off the shut doors — but only onto something that is itself a
+       * deck. At yard-syn-m and -l the scan's median lands on a ledge a few
+       * metres under the leaves (0.008 radii of room); a hull is no better
+       * off wedged there than on the roof, so those keep the old reading
+       * until someone looks at that art. Measured 2026-11-03: every ring's
+       * heavy bay moves to its hall floor (0.36 radii of room) and
+       * yard-syn-s's upward bay to its throat floor (0.073); nothing else
+       * in the library moves. */
+      var upRoom = castZ([o[0], o[1], zRoom + 1e-4], 1);
+      if (upRoom >= DECK_MIN_ROOM) z = zRoom;
+    }
     DECK[key] = z;
     return z;
   }

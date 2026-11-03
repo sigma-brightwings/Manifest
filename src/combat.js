@@ -6372,7 +6372,10 @@
       var res = { granted: false, reason: 'full', wait: berths.waitFor,
                   queue: berths.occupied, capacity: berths.capacity,
                   text: name + ': "All ' + berths.capacity + ' berths occupied. Hold at the marker — ' +
-                        fmtWait(berths.waitFor) + ' to the next departure."' };
+                        fmtWait(berths.waitFor) + ' until a berth frees."' };
+      /* "Until a berth frees", not "to the next departure" (2026-11-03): a
+       * port holding more ships than berths frees one only after several
+       * leave, and Sim.berthStatus's wait now counts to that one. */
       if (jumps >= FREE_JUMPS) {
         res.text += ' [' + jumps + ' unauthorised arrivals on your record here]';
       }

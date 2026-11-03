@@ -7704,18 +7704,46 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
                 var outw = V.add(V.scale(side, Math.cos(th8)), V.scale(p28, Math.sin(th8)));
                 /* Rays fanning out from the axis: the one that meets the
                  * sphere at the cone's edge, then a hair either side. */
-                for (var sx = 0.80; sx < 1.30; sx += 0.0025) {
-                  var tgtP = V.addScaled(axS, outw, rsA * sx);
+                var streetAt = function (f) {
+                  var tgtP = V.addScaled(axS, outw, rsA * f);
                   var rd8 = V.norm(V.sub(tgtP, eye)), oc8 = V.sub(eye, pc);
                   var b8 = V.dot(rd8, oc8), c8 = V.dot(oc8, oc8) - pR * pR, ds8 = b8 * b8 - c8;
-                  if (!(ds8 > 0) || !(c8 > 0)) continue;
+                  if (!(ds8 > 0) || !(c8 > 0)) return null;
                   var t8 = -b8 - Math.sqrt(ds8);
-                  if (!(t8 > 0)) continue;
-                  var hp = V.addScaled(eye, rd8, t8);
+                  return t8 > 0 ? V.addScaled(eye, rd8, t8) : null;
+                };
+                var prevSx = null, prevSb = null;
+                for (var sx = 0.80; sx < 1.30; sx += 0.0025) {
+                  var hp = streetAt(sx);
+                  if (!hp) continue;
                   var sb = GLreal.streetBand(wall, eye, hp), mb = GLreal.meshBand(mc, eye, hp);
                   met++; if (sb) seen[sb] = 1;
-                  if (sb === 'hot' && !hotAt[k8]) hotAt[k8] = hp;
+                  if (sb === 'hot' && !hotAt[k8]) {
+                    /* A HAIR past the edge, not up to a step past it (2026-11-03).
+                     * Where the cone is held to its cap it is a cylinder the eye
+                     * looks almost straight down, so a street point just outside
+                     * it has its line of sight run along the wall a long way: at
+                     * Downwell from 8 km, 0.4 m outside put the exit 17 m back —
+                     * outside the 20 m blocks stood here below, which can then
+                     * never straddle it. So: the edge by bisection, then the
+                     * first offset whose exit is within half a metre. */
+                    var lo8 = prevSb === 'cut' ? prevSx : sx, hi8 = sx;
+                    for (var bs8 = 0; bs8 < 40 && lo8 < hi8; bs8++) {
+                      var md8 = (lo8 + hi8) / 2, hm8 = streetAt(md8);
+                      if (hm8 && GLreal.streetBand(wall, eye, hm8) === 'cut') lo8 = md8; else hi8 = md8;
+                    }
+                    hotAt[k8] = hp;
+                    for (var of8 = 2.5e-3; of8 > 1e-7; of8 /= 4) {
+                      var hq8 = streetAt(Math.min(sx, hi8 + of8));
+                      if (!hq8 || GLreal.streetBand(wall, eye, hq8) !== 'hot') continue;
+                      hotAt[k8] = hq8;
+                      var wh8 = GLreal.wallHit(wall, eye, V.norm(V.sub(hq8, eye)));
+                      var dq8 = wh8 ? V.sub(wh8.p, hq8) : null;
+                      if (dq8 && V.len(V.sub(dq8, V.scale(wall.up, V.dot(dq8, wall.up)))) < 5e-4) break;
+                    }
+                  }
                   if (sb !== mb) diff++;
+                  prevSx = sx; prevSb = sb;
                 }
               }
               if (diff) st.wall.push(tag + ': street band and building band differ at ' + diff + ' of ' + met + ' street points');
@@ -7849,7 +7877,11 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
                 var cf = GLreal.cutColour('face'), cs = GLreal.cutColour('scorched'), ch = GLreal.cutColour('hot');
                 if (!(cf && cs && ch && cf.join() === cs.join() && cf[3] === 0 && cf.join() !== ch.join()))
                   st.wall.push(tag + ': the sliced wall is painted ' + (cf && cf.join()));
-                if (!(Math.abs(GLreal.footprintAt(wall, onB, hotAt[0]) - 0.01) < 1e-6) || GLreal.footprintAt(wall, onB, hotAt[4]))
+                /* Its top's own height over the sphere, not 10 m flat: stood
+                 * on the mouth's vertical 3.9 km out on a 134 km moon (Harrow
+                 * Hold), a 10 m block leans 1.7 degrees and stands 9.996 m. */
+                var onTop = V.dist(V.addScaled(hotAt[0], wall.up, 0.01), pc) - pR;
+                if (!(Math.abs(GLreal.footprintAt(wall, onB, hotAt[0]) - onTop) < 1e-6) || GLreal.footprintAt(wall, onB, hotAt[4]))
                   st.wall.push(tag + ': the block\'s footprint is not where it stands');
                 /* And the mask the GPU draws it into covers the whole edge:
                  * both hot points, a band's width either side. */

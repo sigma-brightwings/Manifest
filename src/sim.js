@@ -522,6 +522,26 @@
    *
    * A station with no modelled berths gets the hall's hatch cut instead,
    * straight down the hub axis, which is the route its arrival flies. */
+  /* HOW FAR ALONG THE BERTH'S NORMAL THE STAND IS FROM THE BOX'S MIDDLE,
+   * negated: add it to an aperture distance (gate, inner) to measure that
+   * aperture from the stand instead.
+   *
+   * Gen.berthApertures measures the doors from the berth box's `mid` — the
+   * renderer opens them there (berthMid) — while the arrival and the carve
+   * walk out from the stand the hull parks on. For every side bay the two
+   * points differ only across the normal, so this is zero and nothing
+   * moved. For a bay that opens UPWARD (the ring's heavy bay) the stand is
+   * on the floor and the middle is half a hall above it, and reading
+   * `gate` from the stand put the doors 0.17 radii below the hatch they
+   * belong to (2026-11-03, found with the deck fix in Render.berthDeck:
+   * before that the stand was on the roof, and the doors read 0.19 radii
+   * ABOVE the hatch, in open space). */
+  function doorFromStand(ap, sx, sy, sz) {
+    if (!ap || !ap.mid || !ap.normal) return 0;
+    var n = ap.normal;
+    return (ap.mid[0] - sx) * n[0] + (ap.mid[1] - sy) * n[1] + (ap.mid[2] - sz) * n[2];
+  }
+
   function stationSolidity(port) {
     var R = global.Render, Gen = global.Gen;
     if (!R || !R.portSolidity || !Gen || !port || port.surface) return null;
@@ -536,11 +556,15 @@
       var ap = Gen.berthApertures ? Gen.berthApertures(port, i) : null;
       if (!ap || !ap.normal || typeof ap.gate !== 'number') continue;
       var off = Gen.berthOffset(port, i);
+      /* The doors are measured from the BOX'S middle (berthApertures), and
+       * everything here walks from the STAND — see doorFromStand. */
+      var shift = doorFromStand(ap, off.x, off.y, off.z);
+      var gate = ap.gate + shift;
       /* From well outside the doors, in past the berth to the inner gate.
        * The lead matters: a corridor that starts AT the door plane leaves a
        * ship on final approach outside the cut and therefore inside a wall. */
-      var lead = ap.gate + holdLead(port) + 0.2;
-      var deep = (typeof ap.inner === 'number') ? Math.abs(ap.inner) : 0.2;
+      var lead = gate + holdLead(port) + 0.2;
+      var deep = (typeof ap.inner === 'number') ? Math.max(0, -(ap.inner + shift)) : 0.2;
       var e0 = ap.entry;
       var bent = e0 && (e0[0] * ap.normal[0] + e0[1] * ap.normal[1] + e0[2] * ap.normal[2]) < 0.999;
       if (bent) {
@@ -548,13 +572,13 @@
          * down to the door, then the throat itself — and never the straight
          * lead along the normal, which for a bay across a bore would carve
          * a corridor into the bay opposite. */
-        var gx = off.x + ap.normal[0] * ap.gate, gy = off.y + ap.normal[1] * ap.gate,
-            gz = off.z + ap.normal[2] * ap.gate;
+        var gx = off.x + ap.normal[0] * gate, gy = off.y + ap.normal[1] * gate,
+            gz = off.z + ap.normal[2] * gate;
         var run = (ap.exit || 1) + holdLead(port) + 0.2;
         R.carveThroat(sol, [gx + e0[0] * run, gy + e0[1] * run, gz + e0[2] * run],
                       [-e0[0], -e0[1], -e0[2]], run, g.mouthR);
         R.carveThroat(sol, [gx, gy, gz],
-                      [-ap.normal[0], -ap.normal[1], -ap.normal[2]], ap.gate + deep, g.mouthR);
+                      [-ap.normal[0], -ap.normal[1], -ap.normal[2]], gate + deep, g.mouthR);
       } else {
         R.carveThroat(sol,
                       [off.x + ap.normal[0] * lead,
@@ -3688,6 +3712,48 @@
    * a third of the time. That asymmetry is the whole feature: it makes what
    * you fly matter at the door.
    */
+  /* WHEN A BERTH OF THIS KIND ACTUALLY FREES — not when the next ship of
+   * that kind leaves (2026-11-03).
+   *
+   * Traffic is a timetable, and a timetable does not queue: a busy port
+   * carries more ships than berths (seven moored in five small berths at
+   * kawartha's Threshold Dock). So the first departure does not free a
+   * berth, it takes the count from seven to six. The wait used to be read
+   * off that first departure anyway, which made it a lie a pilot acts on:
+   * render.test.js's mid-range auto-dock was told 13 minutes, asked again,
+   * was told 7, then 23, then 25 — 68.5 minutes of holding announced as a
+   * quarter of an hour, four times over. "Telling a freighter it can go in
+   * four minutes because a shuttle is leaving would be a lie it could act
+   * on" was always the rule here; it was only kept for the KIND of berth.
+   *
+   * Occupancy is closed-form, so this walks it forward: the next departure
+   * of the right kind, then the occupancy just after it — arrivals in the
+   * meantime included — until the count drops under the berths there are.
+   * Occupancy only falls at a departure, so no free moment is stepped over.
+   * Bounded; past the bound the last departure found is the honest floor,
+   * and it is still later than the old answer. Asked once per hail, not
+   * per frame (the autopilot re-asks when this says to). */
+  var BERTH_WALK_MAX = 24;
+  function berthFreesAt(port, sys, t, occ, wantsLarge, mine) {
+    var tq = t, last = 0;
+    for (var guard = 0; guard < BERTH_WALK_MAX; guard++) {
+      var dep = Infinity;
+      for (var i = 0; i < occ.length; i++) {
+        var o = occ[i];
+        if (o.large === wantsLarge && o.leavesAt > tq && o.leavesAt < dep) dep = o.leavesAt;
+      }
+      if (!isFinite(dep)) break;
+      last = dep;
+      /* A second past it: at the instant itself the route is still moored. */
+      occ = berthOccupants(port, sys, dep + 1);
+      var used = 0;
+      for (var j = 0; j < occ.length; j++) if (occ[j].large === wantsLarge) used++;
+      if (used < mine) return dep;
+      tq = dep + 1;
+    }
+    return last;
+  }
+
   function berthStatus(port, sys, t, ship) {
     var cap = berthCapacity(port);
     var occ = berthOccupants(port, sys, t);
@@ -3708,11 +3774,7 @@
        moves: telling a freighter it can go in four minutes because a shuttle
        is leaving would be a lie it could act on. */
     var next = 0;
-    if (full) {
-      for (i = 0; i < occ.length; i++) {
-        if (occ[i].large === wantsLarge) { next = occ[i].leavesAt; break; }
-      }
-    }
+    if (full) next = berthFreesAt(port, sys, t, occ, wantsLarge, mine);
     return {
       capacity: cap, largeCapacity: largeCap, smallCapacity: smallCap,
       occupied: occ.length, large: large, small: small,
@@ -5842,6 +5904,9 @@
 
     if (ap && ap.normal && typeof ap.gate === 'number') {
       var n = ap.normal;
+      /* The door plane measured from this stand, not from the box's middle
+       * (doorFromStand). Zero for every side bay. */
+      var gate = ap.gate + doorFromStand(ap, off.x, off.y, z);
       var at = function (d) {
         return { x: off.x + n[0] * d, y: off.y + n[1] * d, z: z + n[2] * d };
       };
@@ -5852,12 +5917,12 @@
        * the hold is beyond the bore's mouth and the first leg runs down the
        * bore to the door. */
       var e = ap.entry;
-      var hold = at(ap.gate + holdLead(port));
+      var hold = at(gate + holdLead(port));
       if (e && (e[0] * n[0] + e[1] * n[1] + e[2] * n[2]) < 0.999) {
-        var g0 = at(ap.gate), dist = (ap.exit || 1) + holdLead(port);
+        var g0 = at(gate), dist = (ap.exit || 1) + holdLead(port);
         hold = { x: g0.x + e[0] * dist, y: g0.y + e[1] * dist, z: g0.z + e[2] * dist };
       }
-      return [hold, at(ap.gate), at(ap.gate), at(0), at(0)];
+      return [hold, at(gate), at(gate), at(0), at(0)];
     }
 
     /* No modelled berth: in through the hatch. */

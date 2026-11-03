@@ -124,12 +124,48 @@ dwarfs; if they read as too many, the lever is `TWILIGHT_INNER` (left at 0.80).
   on a sea pad the sweep had given to another ship (4 of 15,392 samples), and at
   a ground port lifted back into the holding stack after the tug set her down.
 
-**Still red, reported rather than re-picked away:** berths.test's ring-s at
-radius 1.57 km never reads indoors (master's code does the same at that radius);
-render.test's cutaway sweep at Harrow Hold (a 134 km moon) and Downwell Starport
-(now on a 1,917 km moon) fails at grazing 8 km views; render.test's mid-range
-auto-dock to Threshold Dock takes 71.9 min — from 114 Mm, mass-locked, and home
-berths are fuller (samples with every orbital berth taken: 53.9% → 60.5%).
+**The three red files, 2026-11-03.** Each was a latent bug in older code that
+the reseed exposed, not a stage-2 regression.
+
+- **A ring's heavy bay parked its hull on the roof** (render.js `berthDeck`, sim.js
+  `doorFromStand`). The heavy bay opens upward through hatch leaves in the hub's
+  roof, and the deck cast read the shut hatch, with vacuum above it, as the floor:
+  every ring (all nine ring models, and yard-syn-s's one upward bay) stood its
+  heavy hulls on the closed doors, outdoors. berths.test caught it only at a
+  1.57 km ring; at a bigger one the hull's centre fell into the carved hatch cell
+  and read indoors by voxel accident. A surface on one of the bay's own outer gate
+  leaves is no longer a deck where the bay opens upward (and the replacement must
+  itself have room for a hull). The arrival and the carve also measured the doors
+  from the stand rather than from the berth box's middle, where `berthApertures`
+  and the renderer measure them. Zero for every side bay; for the ring's it put
+  the doors 0.19 radii above the hatch. Measured over every orbital model at ten
+  radii from 1,263 m to 6,714 m (the smallest to the largest of 301 stations in 40
+  seeds): rings never indoors 36 → 0 arrivals. Nothing else in the library moved.
+- **The street's height over a small moon** (gl.js `overSphere`). The footprint
+  mask, the pit wall's building test and their JS twins took the height over the
+  sphere as z + d²/2R, which reads low by d⁴/8R³: 11 mm on a 10 m building 3.9 km
+  from Harrow Hold's mouth on its 134 km moon, and 0.2 m (FOOT_MIN's own size) at
+  the mask's 8 km reach. It is exact now, in a form that stays stable in single
+  precision. The cutaway sweep's fixtures were also corrected where they checked
+  the wrong thing. The block's expected height is its top's true height over the
+  sphere (a block on the mouth's vertical leans 1.7° there). The "hot point" now
+  sits a hair past the cut's edge, not up to a sampling step past it: where the
+  cone is held to its cap, the line of sight from a point 0.4 m outside the cut
+  leaves the cone 17 m back, outside the 20 m test blocks (Downwell, Terminus).
+  Before and after shots look identical, as they should for a sub-centimetre fix.
+- **A full port told you the wrong wait** (sim.js `berthFreesAt`, combat.js). A
+  busy port holds more ships than berths, because traffic is a timetable and does
+  not queue. The wait was read off the *next* departure, which takes seven ships in
+  five berths to six. The mid-range auto-dock was told 13 min, then 7, 23 and 25.
+  It held 68.5 of its 71.9 minutes. The wait now walks the timetable to the
+  departure that actually frees a berth (bounded at 24 departures, so a floor),
+  and the port says "until a berth frees". **Still red, by design:** that
+  render.test assertion (under 15 min) is a feel call for Astra, left unchanged.
+  Breakdown: cruise 0.6 min, holding for a berth 68.5, approach 2.7. The heavy
+  bay stood empty the whole time. Measured over 40 seeds × 20 times (6,240
+  samples), a courier finds the small berths full 65.8% of the time (master
+  55.8%). 89% of those are oversubscribed, and the true wait has a median of
+  2.6 h at the walk's floor. The old figure was 6.4 min.
 
 **Saves:** **do not survive.** `save.js` VERSION 4 → **5**, the one deliberate
 break of doctrine 4 for the whole star programme (Astra: "we don't need to have
