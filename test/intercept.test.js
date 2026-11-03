@@ -316,6 +316,29 @@ console.log('--- take-over and hand-back ---');
   check('I while AUTO hands it to you', G.autodock && G.autodock.standby);
   keydown('i', true);
   check('Shift+I stands it down altogether', !G.autodock);
+
+  /* Alongside a station, T is the hand-over to the docking approach. */
+  keydown('i');
+  keydown('t');
+  check('T on the intercept assist hands over to auto-dock, in one press',
+        G.autodock && G.autodock.mode === 'dock' && G.dockTarget === port, G.autodock && G.autodock.mode);
+  G.autodock = null; G.dockTarget = null;
+
+  /* A ground port: the pip is solved, and the point the assist flies to is
+   * above it, not in the rock. */
+  var ground = G.sys.ports.filter(function (p) { return (p.surface || p.underground) && p.parentBody; })[0];
+  if (ground) {
+    G.navTarget = { kind: 'body', id: ground.id };
+    G.intercept = null; frames(2);
+    var gi = G.intercept;
+    check('a ground port gets a pip', !!(gi && gi.res && isFinite(gi.T)), ground.name);
+    /* Both where they will be at the intercept: the aim is planned there. */
+    var tT = G.t + gi.res.T;
+    var gs = Sim.bodyStateAt(ground, G.sys, tT), hp = Sim.bodyStateAt(ground.parentBody, G.sys, tT);
+    var up = V.dist(gi.res.aim, hp.pos) - V.dist(gs.pos, hp.pos);
+    check('and the assist aims above it, at the ground plan\'s crossing height',
+          gi && up > 5 && up < ground.parentBody.radius * 0.2 && V.dist(gi.res.aim, gs.pos) < up * 1.01, gi && (V.dist(gi.res.aim, hp.pos) - V.dist(gs.pos, hp.pos)).toFixed(1) + ' km up');
+  }
 })();
 
 console.log('--- the speed-match marker near the end ---');
