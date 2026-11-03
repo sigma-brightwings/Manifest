@@ -1818,6 +1818,11 @@
          * you and off again to see the sky — so it earns its key in a way
          * the others below did not. */
         case 'v': G.showPrediction = !G.showPrediction; break;
+        /* ` FLIPS THE CUTAWAY (2026-11-02). Astra: "the cutaways should be
+         * toggle on/off so you can see the exterior of the station if so
+         * desired". The Options row says the same thing; this is the one
+         * key on the board that nothing else in any screen answers to. */
+        case '`': toggleCutaway(); break;
         /* THE DISPLAY TOGGLES ARE GONE FROM THE KEYBOARD. Orbit lines, the
          * ecliptic grid, traffic, cockpit chrome and render scale were five
          * letters spent on five checkboxes that were ALREADY in Options, key
@@ -6605,6 +6610,7 @@
     /* Rebuilt every frame by the clamp below, so a cutaway can never
      * outlive the conditions that made it. */
     G.cutaway = null;
+    G.viewOutside = null;
     syncCameraFrame();
     if (G.followShip || !G.focus) clampCameraToEnclosure();
   }
@@ -6674,6 +6680,21 @@
     var gb = Sim.groundBasis ? Sim.groundBasis(port, G.sys, G.t) : null;
     var eye = cam && cam.eye ? cam.eye : Render.camEye(G.cam);
     return !!gb && V.dot(V.sub(eye, gb.entrance.pos), gb.up) < 0;
+  }
+  /* Where the eye would be, outside the port it is docked at? In orbit, off
+   * the station's hull (Sim.insideStation, as cutawayFor asks); on the
+   * ground, above the street. */
+  function eyeOutsidePort(port) {
+    var eye = V.addScaled(G.cam.target, camBoomDir(), G.cam.dist);
+    if (port.surface) return !eyeUnderStreet(port, { eye: eye });
+    var within = Sim.insideStation ? Sim.insideStation(eye, G.sys, G.t) : port;
+    return within !== port;
+  }
+  function toggleCutaway() {
+    G.cutawayStyle = G.cutawayStyle === 2 ? 0 : 2;
+    say(G.cutawayStyle === 2 ? 'Station cutaway off — the outside, nothing cut'
+                             : 'Station cutaway on — the laser cut');
+    storePrefs();
   }
   function camBoomDir() {
     return Render.camDir(G.cam.yaw, G.cam.pitch, G.cam.frame);
@@ -7399,6 +7420,7 @@
        * street at z = 0. `room` and `duct` are the open air the wall must
        * not be drawn across; model z is local z minus the table's lift. */
       section: { ship: local(G.cam.target), eye: local(eyeW),
+                 shipW: V.clone(G.cam.target), eyeW: eyeW,
                  rShip: rShip / r, rEye: rEye / r, rCap: rCap > 0 ? rCap / r : 0,
                  r: r, lift: g.lift || 0, seed: port.id,
                  planetR: (port.parentBody && port.parentBody.radius || 1e9) / r,
@@ -7423,6 +7445,9 @@
   function viewEnclosure() {
     var p = enclosedPort();
     if (p && G.cutaway && G.cutaway.port === p) return null;
+    /* And with the cut off and the camera out past her walls, the station
+     * is seen from outside, whole (see the cut-off branch below). */
+    if (p && G.viewOutside === p) return null;
     return p;
   }
 
@@ -7552,6 +7577,28 @@
                                  : cutawayFor(port, roomDist, asked);
         if (!G.cutaway) G.cam.dist = roomDist;
         return;
+      }
+      /* WITH THE CUT OFF, THE OUTSIDE (2026-11-02). Off used to mean the
+       * camera stopped at the wall, so with it off there was no way to see
+       * the station at all — Astra: "the cutaways should be toggle on/off
+       * so you can see the exterior of the station if so desired". So Off
+       * now means nothing is cut and the boom is free once it would take
+       * the eye OUTSIDE: clear of the station's hull at a dock in orbit
+       * (the same test the cutaway asks), above the street at a ground port
+       * (the street rule decides how). Then it is the station from space,
+       * or the port from the air with the ground whole, and her inside it,
+       * hidden, as she really is. Short of that — the eye would be in the
+       * metal or the rock — the walls still stop it, as before. Inside the
+       * hangar the room is still the view. */
+      var offOut = glLive() && G.cutawayStyle === 2 && G.cam.dist < asked * 0.999 &&
+                   G.ship.docked === port.id && !G.arrivalPose;
+      if (offOut) {
+        var wallDist = G.cam.dist;
+        G.cam.dist = asked;
+        keepCameraAboveDeck(port);
+        if (port.surface) keepCameraAboveStreet(port);
+        if (eyeOutsidePort(port)) { G.viewOutside = port; return; }
+        G.cam.dist = wallDist;
       }
       keepCameraAboveDeck(port);
       if (port.surface) keepCameraAboveStreet(port);
@@ -17755,7 +17802,8 @@
                              : G.mouseAim ? 'mouse aims · R-Alt looks · 1/2 fire · 4 launches'
                                           : 'drag to look') +
           '   ·   wheel / +- zoom   ·   Esc menu   ·   Enter exterior   ·   '
-        : 'H help   ·   drag to orbit   ·   wheel / +- zoom   ·   Esc menu   ·   Enter cockpit   ·   ';
+        : 'H help   ·   drag to orbit   ·   wheel / +- zoom   ·   Esc menu   ·   Enter cockpit   ·   ' +
+          (G.ship && G.ship.docked ? '` cutaway ' + (G.cutawayStyle === 2 ? 'off' : 'on') + '   ·   ' : '');
       ctx.fillText(hint +
                    (G.gridStep ? 'grid ring ' + fmtDist(G.gridStep) + '   ·   ' : '') +
                    Math.round(G.fps) + ' fps', 14, consoleScreensShown() ? 16 : top - 8);
@@ -18751,7 +18799,7 @@
        * hole at all. Stored as before (0 cut, 2 off; an old 1, "clean
        * cut", is now the same as 0). */
       { kind: 'choice', label: 'Station cutaway', key: '',
-        options: ['Laser cut', 'Off — camera stops at the wall'],
+        options: ['Laser cut', 'Off — see the outside, nothing cut'],
         get: function () { return G.cutawayStyle === 2 ? 1 : 0; },
         set: function (i) { G.cutawayStyle = i === 1 ? 2 : 0; } },
       { kind: 'choice', label: 'Cockpit chrome', key: '',
@@ -19591,6 +19639,7 @@
       ['', ''],
       ['VIEW', ''],
       ['V', 'predicted trajectory'],
+      ['`', 'station cutaway on / off (docked, exterior view)'],
       ['Shift+T', 'match orbit with the lock (kill relative velocity)'],
       ['Shift+L', 'follow the lock and hold station off it'],
       ['F11', 'full screen (in the desktop build)'],

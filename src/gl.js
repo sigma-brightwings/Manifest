@@ -103,6 +103,121 @@
     '}'
   ].join('\n');
 
+  /* ---- THE PIT WALL, PER PIXEL (2026-11-02, fourth round) ----------------
+   *
+   * The wall round a ground port's cut used to be built in JS every time the
+   * camera moved — about 10,000 quads from the cone, the strata traced
+   * through them, the cells a bed's edge crossed split and blended — and it
+   * cost 7 to 22 ms a frame while orbiting (measured in the probe, headless
+   * Chrome, cloud box), on a CPU whose budget the trajectory predictor
+   * already spends. A unit grid placed by a vertex shader was the first
+   * answer; Astra pointed out that the orbital cutaway is already per pixel
+   * (the keyhole discard in FRAG_MESH), and asked for the walls the same way.
+   *
+   * So there is no wall mesh at all. One full-screen pass casts each pixel's
+   * view ray against the cone — narrow end round her, widening toward the
+   * eye, held to a cylinder where main.js caps it — and where the ray leaves
+   * the cone, that is the wall: shaded as rock, its depth written so the bay
+   * and her composite against it. The eye sits on the cone's axis at its
+   * wide end, so every ray that does not run out past her meets the wall
+   * exactly once. Then, per pixel:
+   *   - above the street, no wall: the pit's rim is the exact curve where the
+   *     cone meets the ground;
+   *   - in the bay's open air (the room and the shaft), no wall: the edge
+   *     where the rock gives way to the room is a curve too. Those two were
+   *     the cell-quantised sawtooth rim at Ashford from 0.2 and 0.6 km;
+   *   - the beds come from the hit's depth under the street, dipped and
+   *     folded, so their edges are curves rather than stair-steps.
+   * The CPU's part is uniforms. GLWorld.wallHit and GLWorld.wallFrag are the
+   * same arithmetic in JS, which is what the test reads. */
+  var FRAG_WALL = [
+    '#version 300 es',
+    'precision highp float;',
+    'in vec2 vDisc;',
+    'in vec2 vPx;',
+    'uniform vec3 uRight, uUp, uFwd;',
+    'uniform vec2 uScreenPx;',
+    'uniform float uFlen;',
+    'uniform vec3 uWS;',          // her, relative to the eye, km
+    'uniform vec3 uWR;',          // the cone's radius at her, at the eye, and its cap, km
+    'uniform vec3 uWEnt;',        // the shaft mouth on the street, relative to the eye, km
+    'uniform vec3 uWE, uWN, uWU;',// the ground frame: east, north, up
+    'uniform vec4 uWRoomA;',      // room x0, x1, y0, y1, pad radii
+    'uniform vec4 uWRoomB;',      // room z0, z1 (model z), lift, duct
+    'uniform vec4 uWShip;',       // her x, y on the street, metres; pad radius km; seed
+    'uniform vec4 uWFold;',       // dip x, dip y, fold phase 1, phase 2
+    'uniform float uWPh3;',
+    'uniform vec3 uSunDir;',
+    'uniform float uNear, uInvLogRange;',
+    'out vec4 frag;',
+    'float whash(float a, float b) { return fract(sin(a * 12.9898 + b * 78.233) * 43758.5453); }',
+    'void main() {',
+    '  vec3 rd = normalize(uRight * (vPx.x - uScreenPx.x) + uUp * (uScreenPx.y - vPx.y) + uFwd * uFlen);',
+    /* The ray against the cone. x is along the axis from the eye toward her,
+     * c the cosine between ray and axis; the radius at x is rEye + k x, held
+     * to the cap. Near the eye it is the cylinder (where the cone would be
+     * wider than the cap), then the cone, out to her. */
+    '  float L = length(uWS);',
+    '  vec3 a = uWS / max(L, 1e-9);',
+    '  float c = dot(rd, a);',
+    '  if (c <= 0.0) discard;',
+    '  float sn = sqrt(max(0.0, 1.0 - c * c));',
+    '  float k = (uWR.x - uWR.y) / max(L, 1e-9);',
+    '  float cap = min(uWR.z, uWR.y);',
+    '  float xc = k < 0.0 ? max(0.0, (uWR.y - cap) / -k) : 0.0;',
+    '  float t = sn > 1e-6 ? cap / sn : 1e30;',
+    '  bool cyl = t * c <= xc;',
+    '  if (!cyl) {',
+    '    float den = sn - k * c;',
+    '    if (den <= 1e-9) discard;',
+    '    t = uWR.y / den;',
+    '  }',
+    '  if (t * c >= L) discard;',
+    '  vec3 vRel = rd * t;',
+    '  vec3 radial = vRel - a * (t * c);',
+    '  radial /= max(length(radial), 1e-9);',
+    '  vec3 vNrm = cyl ? radial : normalize(radial - a * k);',
+    '  vec3 q = vRel - uWEnt;',
+    '  float hm = dot(q, uWU) * 1000.0;',                 // metres above the street
+    '  if (hm > 0.0) discard;',
+    '  float r = uWShip.z;',
+    '  float lx = dot(q, uWE) / r, ly = dot(q, uWN) / r, lz = hm * 0.001 / r;',
+    '  float mz = lz - uWRoomB.z;',
+    '  if (lx > uWRoomA.x && lx < uWRoomA.y && ly > uWRoomA.z && ly < uWRoomA.w &&',
+    '      mz > uWRoomB.x && mz < uWRoomB.y) discard;',
+    '  if (abs(lx) < uWRoomB.w && abs(ly) < uWRoomB.w && mz >= uWRoomB.y) discard;',
+    /* The beds: dipped and folded together, eased in below the street. */
+    '  float xm = lx * r * 1000.0, ym = ly * r * 1000.0;',
+    '  float ease = min(1.0, -hm / 40.0);',
+    '  float kw = 6.28318530718 / 140.0;',
+    '  float fold = 0.6 * sin(xm * kw + uWFold.z) * cos(ym * kw * 0.83 + uWFold.w) +',
+    '               0.4 * sin((xm * 0.61 - ym * 0.79) * kw * 1.7 + uWPh3);',
+    '  float d = -(hm - ((xm - uWShip.x) * uWFold.x + (ym - uWShip.y) * uWFold.y + fold * 22.0) * ease);',
+    '  vec3 base; float bed;',
+    '  if (d < 0.35) { base = vec3(0.169, 0.176, 0.192); bed = 0.0; }',
+    '  else if (d < 0.60) { base = vec3(0.553, 0.565, 0.588); bed = 1.0; }',
+    '  else if (d < 1.80) { base = vec3(0.651, 0.635, 0.604); bed = 2.0; }',
+    '  else if (d < 3.40) { base = vec3(0.247, 0.227, 0.208); bed = 3.0; }',
+    '  else if (d < 6.40) { base = vec3(0.420, 0.325, 0.220); bed = 4.0; }',
+    '  else {',
+    '    float dd = d - 6.4;',
+    '    float B13 = 5.0 * (pow(1.22, 13.0) - 1.0) / 0.22;',
+    '    float i = dd < B13 ? floor(log(1.0 + dd * 0.044) / log(1.22)) : 13.0 + floor((dd - B13) / 60.0);',
+    '    base = mod(i, 2.0) < 0.5 ? vec3(0.310, 0.290, 0.267) : vec3(0.357, 0.337, 0.306);',
+    '    bed = 5.0 + i;',
+    '  }',
+    '  float light = 0.86 + 0.28 * whash(uWShip.w, bed);',
+    '  float warm = (whash(uWShip.w + 7.0, bed) - 0.5) * 0.07;',
+    '  base = clamp(base * light + vec3(warm, 0.0, -warm), 0.0, 1.0);',
+    '  vec3 n = normalize(vNrm);',
+    '  if (dot(n, -vRel) < 0.0) n = -n;',
+    '  float lam = max(0.0, dot(n, uSunDir));',
+    '  frag = vec4(base * (0.26 + 0.70 * lam), 0.0);',
+    '  float depth = dot(vRel, uFwd);',
+    '  gl_FragDepth = clamp(log2(max(uNear, depth) / uNear) * uInvLogRange, 0.0, 1.0);',
+    '}'
+  ].join('\n');
+
   var FRAG_SKY = [
     '#version 300 es',
     'precision highp float;',
@@ -1962,6 +2077,7 @@
 
   var gl = null, canvas = null, prog = null, uni = null, quad = null, vao = null;
   var skyProg = null, skyUni = null, groundSky = null;
+  var wallProg = null, wallUni = null, wallQ = null;
   /* The glow pass's resources — see POST. `post` stays null when any of it
    * failed, and then every frame goes straight to the canvas as before. */
   var post = null;
@@ -2059,6 +2175,15 @@
                               'uConeS', 'uConeR', 'uSkyA', 'uSkyUp', 'uSkySun',
                               'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD', 'uBoxTop',
                               'uTear', 'uTearK', 'uTearN']);
+
+    /* The pit wall (GL.queueGroundWall): one full-screen pass. */
+    try {
+      wallProg = link(gl, VERT_BODY, FRAG_WALL, 'wall');
+      wallUni = uniforms(gl, wallProg, ['uWS', 'uWR', 'uRight', 'uUp', 'uFwd', 'uScreenPx',
+                                        'uFlen', 'uCenterPx', 'uQuadPx', 'uViewportPx', 'uNear', 'uInvLogRange',
+                                        'uWEnt', 'uWE', 'uWN', 'uWU', 'uWRoomA', 'uWRoomB',
+                                        'uWShip', 'uWFold', 'uWPh3', 'uSunDir']);
+    } catch (e) { wallProg = null; if (global.console) console.error(e.message); }
 
     /* The ground sky pass (GL.drawGroundSky). Its own try: a sky that
      * fails to compile costs the sky, not the world. */
@@ -2901,6 +3026,7 @@
     groundCut = null;
     groundCone = null;
     groundSky = null;
+    wallQ = null;
     if (!gl) return;
     gl.bindFramebuffer(gl.FRAMEBUFFER, postReady() ? post.msFbo : null);
     /* Alpha cleared to ZERO, not one: in the offscreen buffer alpha is the
@@ -3157,6 +3283,7 @@
     if (!gl) return;
     drawBodies();
     drawMeshes();
+    drawGroundWall();
     /* Tears after the hulls, so a ship in front of one covers it, and the
      * lightning after its tear, added on top. */
     drawTears();
@@ -3500,6 +3627,97 @@
     var at = b && b.atmosphere;
     return at ? Math.min(1, Math.sqrt(at.rho0 / 1.225) * 0.6) : 0;
   }
+
+  /* ---- the pit wall's API ------------------------------------------------
+   * `w` is what the wall is, in world terms, and it is all the CPU does per
+   * frame: main.js/render.js fill it from the cone and the port, and the
+   * eye-relative subtraction happens here, in double precision, once.
+   *   ship, entrance (world km), east, north, up (unit), p1, p2 (unit,
+   *   square to the eye-ship line), rShip, rEye, cap (km), r (km per pad
+   *   radius), room { x0, x1, y0, y1, z0, z1 } pad radii, lift, duct,
+   *   shipXY [x, y] metres from the mouth, seed, dip [x, y], ph [3], sun. */
+  GL.queueGroundWall = function (cam, w) {
+    if (!gl || !wallProg || !w) return false;
+    wallQ = { cam: cam, w: w };
+    return true;
+  };
+  function drawGroundWall() {
+    var q = wallQ;
+    if (!q || !wallProg) return;
+    var cam = q.cam, w = q.w, u = wallUni, e = cam.eye;
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LESS);
+    gl.disable(gl.BLEND);
+    gl.colorMask(true, true, true, false);
+    gl.useProgram(wallProg);
+    gl.bindVertexArray(vao);
+    gl.uniform2f(u.uViewportPx, vw, vh);
+    gl.uniform2f(u.uCenterPx, vw / 2, vh / 2);
+    gl.uniform1f(u.uQuadPx, vw + vh);
+    gl.uniform2f(u.uScreenPx, cam.cx, cam.cy);
+    gl.uniform1f(u.uFlen, cam.flen);
+    gl.uniform3f(u.uRight, cam.r.x, cam.r.y, cam.r.z);
+    gl.uniform3f(u.uUp, cam.u.x, cam.u.y, cam.u.z);
+    gl.uniform3f(u.uFwd, cam.f.x, cam.f.y, cam.f.z);
+    gl.uniform1f(u.uNear, DEPTH_NEAR);
+    gl.uniform1f(u.uInvLogRange, INV_LOG_RANGE);
+    gl.uniform3f(u.uWS, w.ship.x - e.x, w.ship.y - e.y, w.ship.z - e.z);
+    gl.uniform3f(u.uWR, w.rShip, w.rEye, w.cap > 0 ? w.cap : 1e9);
+    gl.uniform3f(u.uWEnt, w.entrance.x - e.x, w.entrance.y - e.y, w.entrance.z - e.z);
+    gl.uniform3f(u.uWE, w.east.x, w.east.y, w.east.z);
+    gl.uniform3f(u.uWN, w.north.x, w.north.y, w.north.z);
+    gl.uniform3f(u.uWU, w.up.x, w.up.y, w.up.z);
+    gl.uniform4f(u.uWRoomA, w.room.x0, w.room.x1, w.room.y0, w.room.y1);
+    gl.uniform4f(u.uWRoomB, w.room.z0, w.room.z1, w.lift, w.duct);
+    gl.uniform4f(u.uWShip, w.shipXY[0], w.shipXY[1], w.r, w.seed);
+    gl.uniform4f(u.uWFold, w.dip[0], w.dip[1], w.ph[0], w.ph[1]);
+    gl.uniform1f(u.uWPh3, w.ph[2]);
+    gl.uniform3f(u.uSunDir, w.sun.x, w.sun.y, w.sun.z);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindVertexArray(null);
+    gl.colorMask(true, true, true, true);
+    gl.enable(gl.BLEND);
+  }
+  /* FRAG_WALL's ray cast in JS: where the view ray `rd` (unit, world)
+   * from `eye` meets the wall, as { t (km), p (world), cyl }, or null when
+   * it runs out past her or points away. */
+  GL.wallHit = function (w, eye, rd) {
+    var Sx = w.ship.x - eye.x, Sy = w.ship.y - eye.y, Sz = w.ship.z - eye.z;
+    var L = Math.sqrt(Sx * Sx + Sy * Sy + Sz * Sz);
+    if (!(L > 1e-9)) return null;
+    var c = (rd.x * Sx + rd.y * Sy + rd.z * Sz) / L;
+    if (!(c > 0)) return null;
+    var sn = Math.sqrt(Math.max(0, 1 - c * c));
+    var k = (w.rShip - w.rEye) / L;
+    var cap = Math.min(w.cap > 0 ? w.cap : 1e9, w.rEye);
+    var xc = k < 0 ? Math.max(0, (w.rEye - cap) / -k) : 0;
+    var t = sn > 1e-6 ? cap / sn : 1e30, cyl = t * c <= xc;
+    if (!cyl) {
+      var den = sn - k * c;
+      if (!(den > 1e-9)) return null;
+      t = w.rEye / den;
+    }
+    if (t * c >= L) return null;
+    return { t: t, p: { x: eye.x + rd.x * t, y: eye.y + rd.y * t, z: eye.z + rd.z * t }, cyl: cyl };
+  };
+  /* FRAG_WALL in JS, up to the bed: null where the wall is not drawn
+   * (above the street, in the bay's air), else the bed index. */
+  GL.wallFrag = function (w, p) {
+    var qx = p.x - w.entrance.x, qy = p.y - w.entrance.y, qz = p.z - w.entrance.z;
+    function d3(a) { return qx * a.x + qy * a.y + qz * a.z; }
+    var hm = d3(w.up) * 1000;
+    if (hm > 0) return null;
+    var r = w.r, lx = d3(w.east) / r, ly = d3(w.north) / r, mz = hm * 0.001 / r - w.lift, R = w.room;
+    if (lx > R.x0 && lx < R.x1 && ly > R.y0 && ly < R.y1 && mz > R.z0 && mz < R.z1) return null;
+    if (Math.abs(lx) < w.duct && Math.abs(ly) < w.duct && mz >= R.z1) return null;
+    var xm = lx * r * 1000, ym = ly * r * 1000, ease = Math.min(1, -hm / 40), k = Math.PI * 2 / 140;
+    var fold = 0.6 * Math.sin(xm * k + w.ph[0]) * Math.cos(ym * k * 0.83 + w.ph[1]) +
+               0.4 * Math.sin((xm * 0.61 - ym * 0.79) * k * 1.7 + w.ph[2]);
+    var d = -(hm - ((xm - w.shipXY[0]) * w.dip[0] + (ym - w.shipXY[1]) * w.dip[1] + fold * 22) * ease);
+    if (d < 0.35) return 0; if (d < 0.6) return 1; if (d < 1.8) return 2; if (d < 3.4) return 3; if (d < 6.4) return 4;
+    var dd = d - 6.4, B13 = 5 * (Math.pow(1.22, 13) - 1) / 0.22;
+    return 5 + (dd < B13 ? Math.floor(Math.log(1 + dd * 0.044) / Math.log(1.22)) : 13 + Math.floor((dd - B13) / 60));
+  };
 
   /* ---- the sky from the ground (2026-11-02) ------------------------------
    *

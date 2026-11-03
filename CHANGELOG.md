@@ -40,6 +40,53 @@ before they update.
 
 ## Unreleased
 
+### Changed (2026-11-02, ground ports seen from outside, fourth round)
+
+- **The pit wall is drawn per pixel, with no mesh** (Astra: the orbital
+  cutaway is already per pixel, so do the walls the same way).
+  - Built in JS, the wall was about 10,000 quads remade as the camera moved.
+    In the probe it cost 7–22 ms a frame while orbiting Ashford Undercroft
+    (0.2, 0.6 and 2 km, headless Chrome on the cloud box).
+  - Now one full-screen pass (`FRAG_WALL`) casts each pixel's view ray
+    against the cone (her end, widening toward the eye, held to a cylinder
+    at the cap). Where the ray leaves the cone it shades rock and writes the
+    hit's depth, so the bay and her composite against it.
+  - The same probe now measures 0.01–0.02 ms a frame: uniforms only.
+  - Above the street there is no wall, and none in the bay's open air. The
+    layers are looked up from the hit's depth below the street, with the
+    same tilt, fold and per-layer colour as before.
+  - The bowl of rock round the pit is still a small mesh. It is rebuilt
+    only when she moves or the boom changes size by a quarter.
+  - `GLWorld.wallHit` and `GLWorld.wallFrag` mirror the shader in JS for
+    the tests.
+- **The rim is smooth.** The sawtooth edge round the hole at Ashford from
+  0.2 and 0.6 km came from whole wall cells being dropped where they
+  touched the room or the street. Both tests are per pixel now, so the edge
+  is the true curve.
+- **The cutaway toggle shows the outside** (Astra: "the cutaways should be
+  toggle on/off so you can see the exterior of the station if so desired").
+  - Off used to stop the camera at the wall. Now Off means nothing is cut.
+    The camera goes out past the hangar wall once the eye would be outside:
+    off the hull at a dock in orbit, above the street at a ground port.
+    You see the station from space, or the port from the air with the
+    ground whole, and her hidden inside.
+  - Short of that, the walls still stop the camera. Inside the hangar, the
+    room is still the view.
+  - The Options row now reads "Off — see the outside, nothing cut".
+  - New key: `` ` `` (backtick) flips the cutaway in flight. No other
+    screen uses that key. It says which way it went and saves to prefs as
+    before. The hint line shows its state while docked.
+  - Added to FLIGHT-CARD.md and the H help.
+- render.test:
+  - wall hits from rays fanned round her lie on the capped cone, show only
+    below the street and outside the bay's air, and a ray straight at her
+    meets no wall;
+  - a 0.2 m move does not rebuild the bowl;
+  - with the cut off, an orbital berth and a ground berth reach 8 km with
+    nothing cut and the eye outside; with it on, the same boom cuts again;
+  - `` ` `` flips the cutaway and says so.
+- Not saved beyond the existing prefs field; no save change.
+
 ### Fixed (2026-11-02, ground ports seen from outside, third round)
 
 - **The sky has its own colour, and there is a horizon.** On Oruun the sky

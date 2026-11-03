@@ -49,6 +49,14 @@ hull (`Enter` still works too). Drag to look around inside; `Home` re-centres.
 The band along the bottom is only what you *touch* (burn rose, throttle, tanks),
 the scope, and what the ship most needs to tell you.
 
+**2b-bis. Docked, wheel out of the hangar.** The chase camera leaves her hangar
+when you zoom past its wall. With the **station cutaway** on, the station (or the
+ground, at a planet port) is laser-cut around her so you can see her where she
+stands. With it off, nothing is cut: you see the station from outside, or the
+port from the air, and she is hidden inside it. **`` ` `` (backtick) flips it**,
+and so does Options → Station cutaway. The hint line shows which way it is while
+you are docked.
+
 **2a. Cockpit chrome (Options, `Esc`) — stow the band and fly on the console
 instead.** The dashboard has
 five screens on it now: three on an arc in front of you at ten, twelve and two,

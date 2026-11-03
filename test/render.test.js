@@ -7475,33 +7475,43 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
           }
           /* The wall: the cone's own surface, in the ground, not in the bay's
            * air, narrowest at her, and capped. */
-          var mesh = R.sectionMesh(c.section), sc = c.section;
-          var Sl = sc.ship, El = sc.eye, ax = [Sl[0] - El[0], Sl[1] - El[1], Sl[2] - El[2]];
-          var aL = Math.sqrt(ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]);
-          var bad = 0, onCone = 0, air = 0, wallN = 0;
-          for (var fi = 0; fi < (mesh.bowlFrom || mesh.f.length); fi++) {
-            var f = mesh.f[fi], p0 = mesh.v[f[0]], p1 = mesh.v[f[1]], p2 = mesh.v[f[2]];
-            var cen = [(p0[0] + p1[0] + p2[0]) / 3, (p0[1] + p1[1] + p2[1]) / 3, (p0[2] + p1[2] + p2[2]) / 3];
-            if (cen[2] > 1e-6) bad++;
-            var R0 = sc.room, mz = cen[2] - sc.lift;
-            if (R0 && cen[0] > R0.x0 + 1e-6 && cen[0] < R0.x1 - 1e-6 && cen[1] > R0.y0 + 1e-6 &&
-                cen[1] < R0.y1 - 1e-6 && mz > R0.z0 + 1e-6 && mz < R0.z1 - 1e-6) air++;
-            /* On the cone: distance from the axis is the cone's radius there. */
-            var rel = [cen[0] - El[0], cen[1] - El[1], cen[2] - El[2]];
-            var tt = (rel[0] * ax[0] + rel[1] * ax[1] + rel[2] * ax[2]) / (aL * aL);
-            var off = [rel[0] - ax[0] * tt, rel[1] - ax[1] * tt, rel[2] - ax[2] * tt];
-            var dd = Math.sqrt(off[0] * off[0] + off[1] * off[1] + off[2] * off[2]);
-            var rr = Math.min(sc.rEye + (sc.rShip - sc.rEye) * tt, sc.rCap > 0 ? sc.rCap : Infinity);
-            if (tt > 0 && tt < 1) { wallN++; if (Math.abs(dd - rr) < rr * 0.05) onCone++; }
+          /* The wall, per pixel (fourth round): cast rays from the eye
+           * round her, the way FRAG_WALL does (GLWorld.wallHit), and every
+           * hit must be on the capped cone, between the eye and her; the
+           * wall must show only below the street and outside the bay's air
+           * (GLWorld.wallFrag), and a ray straight at her meets no wall. */
+          var sc = c.section, wall = R.sectionWall(sc, gb.up);
+          if (GLreal.wallHit(wall, eye, un)) st.wall.push(tag + ': a wall across the line to her');
+          var shown = 0, bad = 0, air = 0, off = 0;
+          for (var ang = 0.06; ang < 0.75; ang += 0.11) {
+            for (var rot = 0; rot < 8; rot++) {
+              var th = rot / 8 * Math.PI * 2, p2 = V.cross(un, side);
+              var rd = V.norm(V.add(V.scale(un, Math.cos(ang)),
+                         V.scale(V.add(V.scale(side, Math.cos(th)), V.scale(p2, Math.sin(th))), Math.sin(ang))));
+              var hit = GLreal.wallHit(wall, eye, rd);
+              if (!hit) continue;
+              var rel = V.sub(hit.p, eye), xa = V.dot(rel, un);
+              var radial = V.len(V.sub(rel, V.scale(un, xa)));
+              var want2 = Math.min(wall.rEye + (wall.rShip - wall.rEye) * xa / L, wall.cap > 0 ? wall.cap : Infinity);
+              if (!(xa > 0 && xa < L) || Math.abs(radial - want2) > want2 * 1e-6 + 1e-9) off++;
+              var bed = GLreal.wallFrag(wall, hit.p);
+              if (bed === null) continue;
+              shown++;
+              var hq = V.sub(hit.p, gb.entrance.pos), hz = V.dot(hq, gb.up);
+              if (hz > 1e-9) bad++;
+              var lx = V.dot(hq, gb.east) / sc.r, ly = V.dot(hq, gb.north) / sc.r, mz = hz / sc.r - sc.lift, R0 = sc.room;
+              if (R0 && lx > R0.x0 && lx < R0.x1 && ly > R0.y0 && ly < R0.y1 && mz > R0.z0 && mz < R0.z1) air++;
+            }
           }
-          var shipZ = Sl[2], under = shipZ < -sc.rShip;
-          if (under && !mesh.f.length) st.wall.push(tag + ': no pit wall with her ' + (-shipZ * sc.r * 1000).toFixed(0) + ' m down');
-          if (bad) st.wall.push(tag + ': ' + bad + ' wall faces above the street');
-          if (air) st.wall.push(tag + ': ' + air + ' wall faces in the bay\'s open air');
-          /* Every face between her and the eye lies on the cone (a flat
-           * facet's middle sits a hair inside the curve); after them comes
-           * the bowl of rock the pit is set in. */
-          if (onCone < wallN) st.wall.push(tag + ': only ' + onCone + ' of ' + wallN + ' wall faces on the cone');
+          if (off) st.wall.push(tag + ': ' + off + ' wall hits off the cone');
+          if (bad) st.wall.push(tag + ': ' + bad + ' wall shown above the street');
+          if (air) st.wall.push(tag + ': ' + air + ' wall shown in the bay\'s open air');
+          if (tgt < -0.05 && hgt < 0 && !shown) st.wall.push(tag + ': no pit wall with her ' + (-tgt * 1000).toFixed(0) + ' m down');
+          /* The bowl is not rebuilt for a small move of the eye: the CPU's
+           * part per frame is the wall's uniforms, nothing else. */
+          var b1 = R.sectionBowl(sc);
+          var nudged = Object.assign({}, sc, { eye: [sc.eye[0] + 0.001, sc.eye[1], sc.eye[2]] });
+          if (R.sectionBowl(nudged) !== b1) st.wall.push(tag + ': the bowl rebuilt for a 0.2 m move');
           /* The sky over the port is the world's air in the sun. */
           var sk = G.groundSky(port);
           var sun = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), gb.entrance.pos));
@@ -7534,7 +7544,7 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
       check(nm + 'the eye is above the street once the boom can reach it', !st.above.length, st.above.slice(0, 3).join('; '));
       check(nm + 'the cut is a cone that narrows to her', !st.cone.length, st.cone.slice(0, 3).join('; '));
       check(nm + 'only what is between her and the camera is cut', !st.cuts.length, st.cuts.slice(0, 3).join('; '));
-      check(nm + 'the pit wall is the cone, in the ground, not in the bay\'s air', !st.wall.length, st.wall.slice(0, 3).join('; '));
+      check(nm + 'the pit wall is the cone, per pixel, in the ground, not in the bay\'s air', !st.wall.length, st.wall.slice(0, 3).join('; '));
       check(nm + 'the sky in the cut is the world\'s air in the sun', !st.sky.length, st.sky.slice(0, 3).join('; '));
       check(nm + 'the planet is drawn under the site from above it, and the hole has a floor',
             !st.ground.length, st.ground.slice(0, 3).join('; '));
@@ -7548,6 +7558,58 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
       if (pad) run(pad);
     }
     check('ground-port zoom-out swept a deep bay and an open pad', tried.length === 2, tried.join(', '));
+    G.cutawayStyle = style;
+  } finally {
+    W.GLWorld = saved;
+    G.ship.docked = null; G.hangarOut = false;
+  }
+})();
+
+console.log('--- the cutaway off: the station from outside (2026-11-02) ---');
+/* Astra: "the cutaways should be toggle on/off so you can see the exterior
+ * of the station if so desired". Off used to stop the camera at the wall;
+ * now it is nothing cut and the boom free once the eye is outside. */
+(function () {
+  var saved = W.GLWorld, R = W.Render;
+  W.GLWorld = new Proxy({ available: true }, {
+    get: function (t, k) { return k in t ? t[k] : function () { return false; }; }
+  });
+  try {
+    G.newGame('kawartha');
+    frames(1);
+    var style = G.cutawayStyle;
+    var tried = [];
+    var runOne = function (port) {
+      G.cutawayStyle = 2;
+      G.ship.docked = null; G.hangarOut = false;
+      Sim.dockShip(G.ship, port, G.sys, G.t);
+      G.viewMode = 'orbit'; G.followShip = true; G.focus = null; G.walk = null;
+      G.cam.yaw = 0.9; G.cam.pitch = 0.6; G.cam.dist = 0.005; frames(2);
+      G.cam.dist = 8; frames(2);
+      var eye = R.camEye(G.cam), kind = port.surface ? 'ground' : 'orbital';
+      var outside = port.surface
+        ? V.dot(V.sub(eye, Sim.groundBasis(port, G.sys, G.t).entrance.pos), Sim.groundBasis(port, G.sys, G.t).up) > 0
+        : Sim.insideStation(eye, G.sys, G.t) !== port;
+      check('cutaway off, ' + kind + ' (' + port.name + '): zooming out reaches 8 km with nothing cut, from outside',
+            G.cam.dist > 5 && !G.cutaway && G.viewOutside === port && outside,
+            (G.cam.dist * 1000).toFixed(0) + ' m, cut ' + !!G.cutaway + ', outside ' + outside + ', view ' + (G.viewOutside && G.viewOutside.name));
+      G.cutawayStyle = 0; G.cam.dist = 8; frames(2);
+      check('cutaway on, ' + kind + ': the same boom cuts the station round her again',
+            !!G.cutaway && G.cutaway.port === port && !G.viewOutside);
+      tried.push(kind);
+    };
+    var orb = G.sys.ports.filter(function (p) { return !p.surface; })[0];
+    var gnd = G.sys.ports.filter(function (p) { return p.surface; })[0];
+    if (orb) runOne(orb);
+    if (gnd) runOne(gnd);
+    check('cutaway off swept an orbital and a ground berth', tried.length === 2, tried.join(','));
+    /* And the key: ` flips it and says which way it went. */
+    G.cutawayStyle = 0; G.message = null;
+    listeners.keydown[0]({ key: '`', shiftKey: false, preventDefault: function () {} });
+    var said = String((G.message && (G.message.text || G.message)) || '');
+    check('` turns the cutaway off, and says so', G.cutawayStyle === 2 && /off/.test(said), said);
+    listeners.keydown[0]({ key: '`', shiftKey: false, preventDefault: function () {} });
+    check('` turns it back on', G.cutawayStyle === 0);
     G.cutawayStyle = style;
   } finally {
     W.GLWorld = saved;
