@@ -40,6 +40,38 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-02, ground detail: the oblique streaks)
+
+- **Cause of the diagonal smears in the upper half of Downwell's 0.6 and
+  2 km frames: the sun-lit relief, not the octave fade.**
+  - I measured it by switching each term off in turn. With relief off the
+    streaks were gone; with brightness off they stayed.
+  - Relief lit by one sun is the field's derivative along the sun's
+    azimuth. The derivative of isotropic noise along one axis is a pattern
+    drawn out across that axis, i.e. embossing, and the oblique view lays
+    it over into diagonal streaks.
+- **What changed:**
+  - The slope's spectrum now falls off fast (0.78 an octave, was 0.92).
+  - Each slope octave fades out at 2.5 times the footprint a brightness
+    octave does, since a derivative aliases sooner.
+  - The isotropic brightness mottle carries more of the detail (gain 0.9,
+    swing 0.25).
+  - Contrast is unchanged: standard deviation of luminance at
+    0.6 / 2 / 8 km went from 14.3 / 14.1 / 11.8 to 14.6 / 14.3 / 12.4.
+- **The fade's footprint is now exact and anisotropic**, as Astra's
+  coordinator asked, though it was not the cause.
+  - It comes from ray differentials: how far the hit on the tangent plane
+    moves for one pixel across and one pixel down. The larger of the two
+    decides.
+  - The old estimate was t / (flen cos) with the cosine floored at 0.12, so
+    it stopped growing within 7 degrees of the horizon. At the 40 degree
+    shots the two agree to within a few percent.
+  - The shader computes it analytically, not with dFdx/dFdy, because
+    main() has already returned for some pixels of a quad by then.
+  - `GLWorld.groundFootprint` is the JS twin, and groundport-look.test
+    checks it straight down (t / flen) and at 3 degrees (t / (flen sin el),
+    2.3 times the old floored value).
+
 ### Fixed (2026-11-02, ground ports: what the slabs were, and ground to stand them on)
 
 - **The pink slabs over Downwell's town were the hatch lamps.** The ring

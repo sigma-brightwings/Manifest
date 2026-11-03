@@ -244,6 +244,27 @@ console.log('--- B: ground detail, the field ---');
   check('and off entirely above ' + GD.altHi + ' km, where it costs nothing', hi.on === 0);
 })();
 
+console.log('--- B: octaves fade by the larger footprint ---');
+(function () {
+  /* Ground plane z = 0, normal +z. A camera at the origin looking along a
+   * ray `el` degrees below the horizon, pointed straight at it. */
+  function at(elDeg, t) {
+    var e = elDeg * Math.PI / 180;
+    var fwd = { x: Math.cos(e), y: 0, z: -Math.sin(e) };
+    var right = { x: 0, y: -1, z: 0 };
+    var up = { x: Math.sin(e), y: 0, z: Math.cos(e) };
+    return GL.groundFootprint(fwd, { x: 0, y: 0, z: 1 }, t, right, up, fwd, 667);
+  }
+  var down = at(90, 2);
+  check('looking straight down, a pixel is t / flen', Math.abs(down - 2 / 667) < 1e-9, (down * 1e6).toFixed(1) + ' mm');
+  var g3 = at(3, 2), want = 2 / 667 / Math.sin(3 * Math.PI / 180), old = 2 / (667 * 0.12);
+  check('at 3 degrees it is the stretched axis, t / (flen sin el)', Math.abs(g3 / want - 1) < 1e-6, (g3 * 1000).toFixed(2) + ' m');
+  check('...not floored where the old isotropic estimate stopped growing', g3 > old * 2,
+        'old ' + (old * 1000).toFixed(2) + ' m, now ' + (g3 * 1000).toFixed(2) + ' m');
+  var src = GL.planetShaderSource();
+  check('the shader takes the larger of the two axes', /float foot = max\(length\(dPx\), length\(dPy\)\);/.test(src));
+})();
+
 console.log('--- B: the shader carries it ---');
 (function () {
   var src = GL.planetShaderSource();

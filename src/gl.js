@@ -305,8 +305,20 @@
     fadeLo: 2.0,        // an octave is gone when its cell is under this many pixels...
     fadeHi: 6.0,        // ...and fully in above this many
     gain: 0.80,         // amplitude, octave to octave (brightness/hue)
-    slopeGain: 0.92,    // slope, octave to octave
-    bright: 0.40,       // brightness mottle at full strength (x the normalised field)
+    /* SLOPE IS WHAT STREAKED (2026-11-02, third pass), measured by
+     * switching each term off at Downwell 0.6 km: relief off, the diagonal
+     * smears were gone; brightness off, they stayed. A slope lit by one sun
+     * is the field's derivative along the sun's azimuth, and the derivative
+     * of isotropic noise along one axis is a pattern drawn out across that
+     * axis: embossing, which foreshortening at an oblique view then lays
+     * over into diagonal streaks. Two changes: the slope's spectrum falls
+     * off fast (relief is the big hills, not the gravel), and a slope
+     * octave fades out at `slopeFade` times the footprint a brightness
+     * octave does, because a derivative carries its octave's energy at a
+     * higher frequency and aliases sooner. */
+    slopeGain: 0.78,    // slope, octave to octave
+    slopeFade: 2.5,
+    bright: 0.90,       // brightness mottle at full strength (x the normalised field)
     hue: 0.35,          // warm/cool drift, coarse octaves only
     hueOct: 4,          // ...the first this many
     elev: 0.020,        // nudge to the elevation field, for the coast and caps
@@ -317,7 +329,7 @@
      * ice and Low Deep's band at 8 km: "camouflage"). */
     reliefMin: 0.80,
     reliefMax: 1.22,
-    swing: 0.18,        // |brightness multiplier - 1| never exceeds this
+    swing: 0.25,        // |brightness multiplier - 1| never exceeds this
     /* BRIGHT GROUND IS SUBTLE. Snow, ice and salt vary as faint blue-grey
      * shading, not as dark blotches: above `snowLo` luminance the detail is
      * scaled down to `snowAmp` of itself by `snowHi`, and what is left of
@@ -405,7 +417,8 @@
     '    float v = (nz.x - 0.5) * w * amp;',
     '    br += v;',
     '    if (k < ' + GD.hueOct + ') hu += v;',
-    '    sl += nz.yz * (w * samp);',
+    '    float ws = smoothstep(' + gdFloat(GD.fadeLo * GD.slopeFade) + ' * foot, ' + gdFloat(GD.fadeHi * GD.slopeFade) + ' * foot, c);',
+    '    sl += nz.yz * (ws * samp);',
     '    c *= 0.5; amp *= ' + gdFloat(GD.gain) + '; samp *= ' + gdFloat(GD.slopeGain) + ';',
     '  }',
     '  return vec4(br, hu, sl);',
@@ -421,8 +434,28 @@
     '  vec3 qb = spinAbout(rd * t - uGdAnchorRel, uSpinAxis, -uSpinPhase);',
     '  vec3 nb = spinAbout(n, uSpinAxis, -uSpinPhase);',
     '  vec3 lb = spinAbout(uSunDir, uSpinAxis, -uSpinPhase);',
-    /* Ground per pixel, stretched by how obliquely the ray meets it. */
-    '  float foot = t / (uFlen * max(abs(dot(rd, n)), 0.12));',
+    /* GROUND PER PIXEL, ALONG THE STEEPER SCREEN AXIS (2026-11-02, third
+     * pass). The first estimate was isotropic, t / (flen * cos), with the
+     * cosine floored at 0.12 — so within seven degrees of the horizon it
+     * stopped growing, and everywhere it was only an approximation of the
+     * footprint along the view-tilted axis. Fine octaves outlived the pixel
+     * that way and aliased into horizontal smears in the upper half of the
+     * frame (Downwell, 0.6 and 2 km). Now each pixel's footprint is taken
+     * from ray differentials: how far the hit on the local tangent plane
+     * moves for one pixel right and one pixel down, exactly, and the LARGER
+     * of the two decides when an octave fades. Analytic rather than dFdx /
+     * dFdy because main() has already returned early for some pixels of a
+     * quad by here (the hole, the limb), and screen derivatives in non-
+     * uniform control flow are undefined. GLWorld.groundFootprint is the
+     * same arithmetic in JS. */
+    '  float fz = dot(rd, uFwd) / uFlen;',
+    '  vec3 dRx = (uRight - rd * dot(rd, uRight)) * fz;',
+    '  vec3 dRy = -(uUp - rd * dot(rd, uUp)) * fz;',
+    '  float rn = dot(rd, n);',
+    '  rn = rn < 0.0 ? min(rn, -0.004) : max(rn, 0.004);',
+    '  vec3 dPx = t * (dRx - rd * (dot(dRx, n) / rn));',
+    '  vec3 dPy = t * (dRy - rd * (dot(dRy, n) / rn));',
+    '  float foot = max(length(dPx), length(dPy));',
     '  float seed = fract(uSeed * 0.61803) * 89.0;',
     /* The cube face this ground faces, and the next one. Across the seam
      * between two faces the two projections are blended over a narrow
@@ -4365,7 +4398,8 @@
       nz[1] = rr[0] * g0 + rr[1] * g1; nz[2] = -rr[1] * g0 + rr[0] * g1;
       var v = (nz[0] - 0.5) * w * amp;
       br += v; if (k < GD.hueOct) hu += v;
-      sx += nz[1] * w * samp; sy += nz[2] * w * samp;
+      var ws = smooth(GD.fadeLo * GD.slopeFade * foot, GD.fadeHi * GD.slopeFade * foot, c);
+      sx += nz[1] * ws * samp; sy += nz[2] * ws * samp;
       c *= 0.5; amp *= GD.gain; samp *= GD.slopeGain; used++;
     }
     return { br: br, hu: hu, sx: sx, sy: sy, used: used };
@@ -4409,6 +4443,22 @@
     return [(1 + 0.55 * h) * (1 - 0.50 * cs) * mr, (1 + 0.05 * h) * (1 - 0.20 * cs) * mr, (1 - 0.50 * h) * (1 + 0.35 * cs) * mr];
   }
   GL.groundDetailTintAt = groundDetailTintAt;
+  /* The shader's footprint (groundDetail, "GROUND PER PIXEL"), in JS:
+   * km of ground per pixel along the steeper screen axis, for a unit ray
+   * `rd`, ground normal `n`, distance `t` and a camera basis. */
+  function groundFootprint(rd, n, t, right, up, fwd, flen) {
+    function d3(a, b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+    var fz = d3(rd, fwd) / flen, rr = d3(rd, right), ru = d3(rd, up);
+    var dRx = { x: (right.x - rd.x * rr) * fz, y: (right.y - rd.y * rr) * fz, z: (right.z - rd.z * rr) * fz };
+    var dRy = { x: -(up.x - rd.x * ru) * fz, y: -(up.y - rd.y * ru) * fz, z: -(up.z - rd.z * ru) * fz };
+    var rn = d3(rd, n); rn = rn < 0 ? Math.min(rn, -0.004) : Math.max(rn, 0.004);
+    function dp(dR) {
+      var k = d3(dR, n) / rn;
+      return Math.hypot(t * (dR.x - rd.x * k), t * (dR.y - rd.y * k), t * (dR.z - rd.z * k));
+    }
+    return Math.max(dp(dRx), dp(dRy));
+  }
+  GL.groundFootprint = groundFootprint;
   GL.GROUND_DETAIL = GD;
   GL.groundDetailAt = groundDetailAt;
   GL.groundDetailFrame = groundDetailFrame;
