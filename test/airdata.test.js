@@ -203,5 +203,56 @@ check('the cue says PROGRADE when on it', cueTexts(f0).indexOf('PROGRADE ') >= 0
 check('and gives the angle when off', cueTexts(f40).indexOf('PROGRADE 40° OFF') >= 0, cueTexts(f40).join('|'));
 check('and RETROGRADE when the tail leads', cueTexts(f175).indexOf('RETROGRADE 5° OFF') >= 0, cueTexts(f175).join('|'));
 
+/* THE HUD'S SPEED, NEAR A WORLD (2026-11-02). Coming down onto a sea
+ * platform the band read ~178 m/s against the world's centre: the world's
+ * own spin. Near a world it is measured against the ground or the air
+ * turning with it (Sim.hudSpeed), and a ship sitting still on the turning
+ * ground reads about nothing; in orbit it is the orbit's, as before. */
+console.log('--- the HUD speed, near a world ---');
+var spun = [];
+for (var s2 = 0; s2 < gal.stars.length && spun.length < 12; s2++) {
+  var sy2 = Gen.generateSystem(gal.stars[s2].seed, optsFor(gal.stars[s2]));
+  (sy2.ports || []).forEach(function (p) {
+    var hb = p.parentBody;
+    if (!p.surface || !hb || !hb.rotation || !(hb.kind === 'planet' || hb.kind === 'moon')) return;
+    if (spun.length < 12) spun.push({ sys: sy2, port: p });
+  });
+}
+check('the galaxy has surface ports on turning worlds', spun.length >= 6, spun.length + ' sampled');
+var worstStill = 0, bestSpin = 0, airSeen = 0, gndSeen = 0;
+spun.forEach(function (q) {
+  var t = 7777, ps = Sim.bodyState(q.port, q.sys, t), hb = q.port.parentBody;
+  var still = { pos: ps.pos, vel: ps.vel };
+  var hs = Sim.hudSpeed(still, q.sys, t, hb);
+  worstStill = Math.max(worstStill, hs.kms);
+  if (hs.frame === 'air') airSeen++; else if (hs.frame === 'ground') gndSeen++;
+  bestSpin = Math.max(bestSpin, V.len(V.sub(ps.vel, Sim.bodyVelocity(hb, q.sys, t))));
+  /* The orbital frame on request (the map) is the old number. */
+  var orb = Sim.hudSpeed(still, q.sys, t, hb, true);
+  if (orb.frame !== 'orbit' || Math.abs(orb.kms - V.len(V.sub(ps.vel, Sim.bodyVelocity(hb, q.sys, t)))) > 1e-12) worstStill = Infinity;
+});
+check('a ship sitting still on a turning world reads about 0', worstStill < 1e-6,
+      (worstStill * 1000).toFixed(6) + ' m/s at worst, where the old reading was up to ' + (bestSpin * 1000).toFixed(0) + ' m/s');
+check('and says what it is against: air or ground', airSeen + gndSeen === spun.length, airSeen + ' air, ' + gndSeen + ' ground');
+check('the old reading was the spin, not nothing', bestSpin > 0.02, (bestSpin * 1000).toFixed(0) + ' m/s');
+/* A descent at 5 m/s straight down over a pad reads 5 m/s, not 5 plus the spin. */
+if (spun.length) {
+  var q0 = spun[0], t0 = 7777, p0 = Sim.bodyState(q0.port, q0.sys, t0), hb0 = q0.port.parentBody;
+  var upv = V.norm(V.sub(p0.pos, Sim.bodyPosition(hb0, q0.sys, t0)));
+  var hov = { pos: V.addScaled(p0.pos, upv, 0.2), vel: V.addScaled(p0.vel, upv, -0.005) };
+  var hd = Sim.hudSpeed(hov, q0.sys, t0, hb0);
+  /* 200 m up the ground's own velocity is a hair more than the pad's
+   * (omega x r, r longer by 0.2 km): that is the whole difference. */
+  check('a 5 m/s descent over the pad reads 5 m/s', Math.abs(hd.kms - 0.005) < 0.0005, (hd.kms * 1000).toFixed(2) + ' m/s ' + hd.frame);
+}
+/* Out of the air and high, it is the orbit. */
+if (airy) {
+  var ob = airy.body, ost = Sim.bodyState(ob, airy.sys, 0);
+  var high = Sim.circularOrbit(ob, airy.sys, 0, ob.atmosphere.top + 400, 0, 0);
+  var ho = Sim.hudSpeed(high, airy.sys, 0, ob);
+  check('in orbit over the air, the speed is the orbit\'s', ho.frame === 'orbit' &&
+        Math.abs(ho.kms - V.len(V.sub(high.vel, ost.vel))) < 1e-9, ho.frame + ' ' + ho.kms.toFixed(3) + ' km/s');
+}
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
