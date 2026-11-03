@@ -92,6 +92,7 @@
    * somebody else's. */
   function layout(portId, opts) {
     opts = opts || {};
+    if (opts.sea) return seaLayout(portId, opts);
     var rng = stream('walk|' + (opts.seed || '') + '|' + portId);
     var rooms = [], doors = [], items = [];
 
@@ -276,6 +277,137 @@
     return plan;
   }
 
+  /* ---- A SEA PLATFORM'S DECK (2026-11-02) ----------------------------------
+   *
+   * Astra: "pads that have protected domes ... and a central bar, connected
+   * by covered tubes." So the walk is: down her ramp onto the pad under
+   * the dome (the hangar), out of the dome's door into the covered tube,
+   * along the tube - its real length, opts.sea.tube metres - into the hub,
+   * and the hub is the bar, the concourse with the market desk and the
+   * crew hall, and the freight office. Then back the same way.
+   *
+   * `opts.sea`: { tube: m, dome: m (your dome's radius), pads: [{ k,
+   * large, mine }] }. Your pad's tube runs along x into the hub's west
+   * wall, so placeShip's hangar (which opens on x) is the dome room.
+   *
+   * WHAT IS NOT LITERAL, said plainly: the deck plan is axis-aligned
+   * boxes (the walker's collision is exact for nothing else), so the other
+   * pads' tubes leave the hub as stubs on its walls, each ending in the
+   * hatch at the far end of that tube - a ship moored on that pad is
+   * boarded there - rather than running out at forty-five degrees for
+   * 120 m to a dome of their own. Your own tube and dome are the real
+   * length and size.
+   *
+   * No draws from any stream another plan uses: its own stream, keyed
+   * apart from the station layout's. */
+  var SEA_TUBE_W = 4;          // m: the walkway inside a 9 m tube, floor to the curve
+  function seaLayout(portId, opts) {
+    var sea = opts.sea, rooms = [], doors = [], items = [];
+    function room(id, kind, x0, x1, z0, z1, h, label) {
+      var r = { id: id, kind: kind, x0: x0, x1: x1, z0: z0, z1: z1, y0: 0, y1: h, label: label || '' };
+      rooms.push(r);
+      return r;
+    }
+    function door(a, b, axis, at, along, w, h) {
+      var d = { a: a.id, b: b.id, axis: axis, w: w || DOOR_W, h: h || DOOR_H };
+      if (axis === 'z') { d.x0 = along - d.w / 2; d.x1 = along + d.w / 2; d.z0 = at - 0.8; d.z1 = at + 0.8; d.at = at; }
+      else { d.z0 = along - d.w / 2; d.z1 = along + d.w / 2; d.x0 = at - 0.8; d.x1 = at + 0.8; d.at = at; }
+      doors.push(d);
+      return d;
+    }
+    function item(kind, x, zz, label, extra) {
+      var it = { kind: kind, x: x, z: zz, label: label };
+      for (var k in (extra || {})) it[k] = extra[k];
+      items.push(it);
+      return it;
+    }
+    var TUBE_W = SEA_TUBE_W, TUBE_H = 3.2, tubeLen = Math.max(20, sea.tube || 120);
+    /* THE HUB: the concourse in the middle, the bar off its north wall,
+     * the crew hall beside it. */
+    var cw = 28, cd = 22;
+    var conc = room('concourse', 'concourse', -cw / 2, cw / 2, 0, cd, 6, 'Concourse  ·  hub');
+    var bar = room('bar', 'bar', -cw / 2 + 1, 0, cd, cd + 12, 3.6, 'The bar');
+    door(conc, bar, 'z', cd, -cw / 4, 2.4, DOOR_H);
+    var hall = room('crewhall', 'crewhall', 2, cw / 2 - 1, cd, cd + 10, 3.4, 'Crew hall');
+    door(conc, hall, 'z', cd, cw / 4, 2.0, DOOR_H);
+    item('bar', -cw / 4, cd + 9.4, 'The bar', { counter: [-cw / 4 - 4, cd + 10, -cw / 4 + 4, cd + 10.7],
+                                                post: { x: -cw / 4, z: cd + 11.3, yaw: 0 } });
+    item('crew', cw / 4 + 1, cd + 8.8, 'Crew hall board', { counter: [cw / 4 - 2, cd + 9.4, cw / 4 + 4, cd + 10] });
+    item('market', 6, 1.2, 'Market desk', { counter: [3, 0, 9, 1.4] });
+    if (opts.yard) item('yard', -6, 1.2, 'Shipyard counter', { counter: [-9, 0, -3, 1.4] });
+    item('freight', cw / 2 - 1.6, cd / 2, 'Freight office', { counter: [cw / 2 - 1.0, cd / 2 - 2, cw / 2, cd / 2 + 2] });
+
+    /* YOUR TUBE, west out of the hub, and your dome at the end of it. */
+    var tz = cd / 2;
+    var tube = room('tube', 'tube', -cw / 2 - tubeLen, -cw / 2, tz - TUBE_W / 2, tz + TUBE_W / 2, TUBE_H,
+                    'Covered tube  ·  to your pad');
+    door(tube, conc, 'x', -cw / 2, tz, TUBE_W - 0.4, TUBE_H - 0.2);
+    var hs = null;
+    (opts.ships || []).forEach(function (s) { if (s.current) hs = s; });
+    var domeR = sea.dome || 50;
+    var dim = (hs && hs.hangar) ? hangarDims(hs.hangar) : { w: 30, d: 30, h: 14 };
+    /* The dome's floor is a circle; the room is the square inside it, at
+     * least as big as her hangar wants and no bigger than the dome. */
+    var inside = domeR * 1.41;
+    dim = { w: Math.min(inside, Math.max(dim.w, 24)), d: Math.min(inside, Math.max(dim.d, 24)), h: Math.max(dim.h, 12) };
+    var x1 = tube.x0, br = room('berth0', 'berth', x1 - dim.w, x1, tz - dim.d / 2, tz + dim.d / 2, dim.h,
+                                'Pad ' + ((sea.mine || 0) + 1) + '  ·  under the dome');
+    br.size = hs ? sizeClass(hs.size) : 'M'; br.side = -1; br.index = 0; br.dome = true;
+    door(tube, br, 'x', x1, tz, 3.2, TUBE_H - 0.2);
+    var hangar = null, spawn = null;
+    if (hs && hs.hangar) {
+      hangar = placeShip(br, hs.hangar);
+      br.ship = hs;
+      var ft = hangar.foot;
+      item('mine', ft.x, ft.z, 'Your ship  -  ' + (hs.name || 'ship'), { ship: hs, berth: br.id, silent: true });
+      spawn = { x: ft.x + 1.6, z: ft.z, yaw: Math.PI / 2 };
+    } else if (hs) {
+      var hx = br.x0 + 0.9;
+      br.ship = hs;
+      item('mine', hx, tz, 'Your ship  ·  ' + (hs.name || 'ship'), { ship: hs, berth: br.id });
+      spawn = { x: hx + 1.4, z: tz, yaw: Math.PI / 2 };
+    }
+
+    /* THE OTHER PADS' TUBES, as stubs on the hub's walls with the hatch at
+     * the far end - see above. Ships moored here are put at them in order. */
+    var others = (sea.pads || []).filter(function (p) { return !p.mine; });
+    var slots = [];
+    [-cw / 2 + 4, 0, cw / 2 - 4].forEach(function (x) { slots.push({ wall: 'S', at: x }); });
+    [cd * 0.25, cd * 0.75].forEach(function (z) { slots.push({ wall: 'E', at: z }); });
+    [cd * 0.12, cd * 0.88].forEach(function (z) { slots.push({ wall: 'W', at: z }); });
+    var STUB = 10, oth = (opts.others || []).slice();
+    others.slice(0, slots.length).forEach(function (p, i) {
+      var sl = slots[i], r, hxS, hzS, faceIn;
+      var label = 'Tube to pad ' + (p.k + 1) + (p.large ? '  ·  large' : '');
+      if (sl.wall === 'S') {
+        r = room('tube' + p.k, 'tube', sl.at - TUBE_W / 2, sl.at + TUBE_W / 2, -STUB, 0, TUBE_H, label);
+        door(r, conc, 'z', 0, sl.at, TUBE_W - 0.4, TUBE_H - 0.2);
+        hxS = sl.at; hzS = -STUB + 0.9; faceIn = Math.PI;
+      } else if (sl.wall === 'E') {
+        r = room('tube' + p.k, 'tube', cw / 2, cw / 2 + STUB, sl.at - TUBE_W / 2, sl.at + TUBE_W / 2, TUBE_H, label);
+        door(conc, r, 'x', cw / 2, sl.at, TUBE_W - 0.4, TUBE_H - 0.2);
+        hxS = cw / 2 + STUB - 0.9; hzS = sl.at; faceIn = Math.PI / 2;
+      } else {
+        r = room('tube' + p.k, 'tube', -cw / 2 - STUB, -cw / 2, sl.at - TUBE_W / 2, sl.at + TUBE_W / 2, TUBE_H, label);
+        door(r, conc, 'x', -cw / 2, sl.at, TUBE_W - 0.4, TUBE_H - 0.2);
+        hxS = -cw / 2 - STUB + 0.9; hzS = sl.at; faceIn = -Math.PI / 2;
+      }
+      r.side = sl.wall === 'E' ? 1 : -1; r.pad = p.k;
+      /* Somebody's ship on that pad, if the timetable has one there. */
+      var o = null;
+      for (var j = 0; j < oth.length; j++) if (oth[j].pad === p.k) { o = oth.splice(j, 1)[0]; break; }
+      if (o) item('other', hxS, hzS, 'Board  ·  ' + (o.name || 'ship') + '  (pad ' + (p.k + 1) + ')', { other: o, berth: r.id });
+      else item('padhatch', hxS, hzS, 'Pad ' + (p.k + 1) + '  ·  nobody berthed', { silent: true, faceIn: faceIn });
+    });
+    if (!spawn) spawn = { x: -cw / 2 - 4, z: tz, yaw: Math.PI / 2 };
+
+    var plan = { portId: portId, rooms: rooms, doors: doors, items: items, spawn: spawn, sea: true };
+    if (hangar) plan.hangar = hangar;
+    plan.livery = opts.livery || 'civ';
+    if (global.Dressing && global.Dressing.apply) global.Dressing.apply(plan, opts.seed || '', { livery: plan.livery, outfitter: opts.outfitter || null });
+    return plan;
+  }
+
   /* ---- where you may stand ---------------------------------------------
    * Inside a room, a wall's width (RADIUS) back from its walls; or inside a
    * doorway, a wall's width in from its jambs. Counters are furniture: you
@@ -441,7 +573,10 @@
     concourse: { floor: '#3a3631', wall: '#5a5248', ceil: '#2a2622', trim: '#7fd6c0' },
     bar:       { floor: '#2f2620', wall: '#4b3a30', ceil: '#211a16', trim: '#ff9f5a' },
     crewhall:  { floor: '#2e3330', wall: '#46504a', ceil: '#222724', trim: '#9fc7d2' },
-    cargohall: { floor: '#2c3034', wall: '#3e444b', ceil: '#1c2024', trim: '#d9a521' }
+    cargohall: { floor: '#2c3034', wall: '#3e444b', ceil: '#1c2024', trim: '#d9a521' },
+    /* A sea platform's covered tube: pale, with the sea-blue trim of its
+     * window strips (render.js seaPlatformMesh). */
+    tube:      { floor: '#3a4046', wall: '#8b969e', ceil: '#5d6870', trim: '#9fe3ff' }
   };
   /* WHOSE PORT IT IS (2026-10-31, Astra: "stations should vary by
    * faction"). The Navy keeps its ports clean, light and bright; the

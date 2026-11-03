@@ -6686,6 +6686,7 @@
    * ground, above the street. */
   function eyeOutsidePort(port) {
     var eye = V.addScaled(G.cam.target, camBoomDir(), G.cam.dist);
+    if (port.seaPlatform) return !insideSeaDome(port, eye);
     if (port.surface) return !eyeUnderStreet(port, { eye: eye });
     var within = Sim.insideStation ? Sim.insideStation(eye, G.sys, G.t) : port;
     return within !== port;
@@ -6756,13 +6757,15 @@
       var list = G.sys.pads || [];
       for (var i = 0; i < list.length; i++) {
         var p = list[i];
-        if (!p.surface || !p.parentBody) continue;
+        if (!p.surface || !p.parentBody || p.seaPlatform) continue;
         var d = V.dist(Sim.portEntrance(p, G.sys, G.t).pos, G.ship.pos);
         if (d < bestD) { bestD = d; best = p; }
       }
       port = best;
     }
     if (!port || !port.parentBody) return null;
+    /* A sea platform cuts no hole: nothing of it is below the sea. */
+    if (port.seaPlatform) return null;
     return {
       hostId: port.parentBody.id,
       mouth: Sim.portEntrance(port, G.sys, G.t).pos,
@@ -7578,7 +7581,10 @@
         G.cam.dist = asked;
         keepCameraAboveDeck(port);
         if (port.surface) keepCameraAboveStreet(port);
-        G.cutaway = port.surface ? groundConeFor(port, asked)
+        /* A sea platform is cut the way an orbital dock is - a cone from
+         * her out through the dome over her - not as a street section: there
+         * is no ground over her to open, only the petals. */
+        G.cutaway = (port.surface && !port.seaPlatform) ? groundConeFor(port, asked)
                                  : cutawayFor(port, roomDist, asked);
         if (!G.cutaway) G.cam.dist = roomDist;
         return;
@@ -10454,8 +10460,20 @@
     var occ = Sim.berthOccupants ? Sim.berthOccupants(port, G.sys, G.t) : [];
     return occ.filter(function (o) { return o.route; }).map(function (o) {
       var hd = (Combat.HULLS || {})[hullForClass(o.route.cls || o.route.className)] || {};
-      return { name: o.name, size: hd.size || (o.large ? 'L' : 'M'), route: o.route };
+      return { name: o.name, size: hd.size || (o.large ? 'L' : 'M'), route: o.route,
+               /* Which pad she is on, at a sea platform (Sim.seaTrafficPad):
+                * her hatch is at the end of that pad's tube. */
+               pad: port.seaPlatform && Sim.seaTrafficPad ? Sim.seaTrafficPad(port, G.sys, G.t, o.route) : null };
     });
+  }
+  /* A SEA PLATFORM'S WALK (walk.js seaLayout): your pad, its tube's real
+   * length, your dome's size, and the other pads, from the same table the
+   * rig is drawn and berthed from. Null anywhere else. */
+  function seaWalkSpec(port) {
+    if (!port || !port.seaPlatform || !Gen.seaLayout) return null;
+    var L = Gen.seaLayout(), mine = currentBerth();
+    return { tube: L.tube * 1000, dome: Gen.seaPad(mine).dome * 1000, mine: mine,
+             pads: L.pads.map(function (p) { return { k: p.k, large: p.large, mine: p.k === mine }; }) };
   }
   /* `atBerth`: the berth room to stand in, coming off another ship's hatch
    * (leaveVisitor) — otherwise your own. */
@@ -10471,7 +10489,8 @@
       yard: !!(Combat.isShipyard && Combat.isShipyard(port)),
       livery: port.livery || 'civ', outfitter: outfitterFor(port),
       ships: walkShips(),
-      others: walkOthers(port)
+      others: walkOthers(port),
+      sea: seaWalkSpec(port)
     });
     G.walk = Walk.start(plan);
     if (atBerth) {
@@ -10555,7 +10574,8 @@
     var s = G.ship, port = G.sys && G.sys.byId ? G.sys.byId[s.docked] : null;
     if (!port) return null;
     var ships = walkShips();
-    var key = port.id + '|' + (port.livery || 'civ') + '|' + (s.hullId || '') + '|' + ships.map(function (x) { return x.id + x.size; }).join(',');
+    var key = port.id + '|' + (port.livery || 'civ') + '|' + (s.hullId || '') + '|' + ships.map(function (x) { return x.id + x.size; }).join(',') +
+              (port.seaPlatform ? '|pad' + currentBerth() : '');
     if (hangarCache && hangarCache.key === key) return hangarCache.plan;
     var hs = hangarSpec(s);
     if (!hs) return null;
@@ -10564,7 +10584,7 @@
       seed: G.seed || (G.galaxy && G.galaxy.seed) || '',
       yard: !!(Combat.isShipyard && Combat.isShipyard(port)),
       livery: port.livery || 'civ', outfitter: outfitterFor(port),
-      ships: ships, others: walkOthers(port)
+      ships: ships, others: walkOthers(port), sea: seaWalkSpec(port)
     });
     if (!plan.hangar) return null;
     armHangar(plan);
@@ -16431,12 +16451,17 @@
             }
             Render.setMoverRiders(riders);
           }
-          Render.drawStationModel(ctx, cam, frame, b.radius, sun, model, b.color,
+          /* A sea platform's mesh is in kilometres (Render.seaPlatformMesh),
+           * and its domes are drawn on their own hinges after it. */
+          Render.drawStationModel(ctx, cam, frame, b.seaPlatform ? Render.SEA_MESH_SCALE : b.radius, sun, model, b.color,
                                   stationDoors(b), indoors ? shipSection(b) : null);
           /* A city site's town, where this port's seed put it (Render.citySpot).
            * From outside only: it stands on the surface, out of view of a
            * berth or the hangar under it. */
-          if (b.surface && !indoors && Render.drawPortCity) {
+          if (b.seaPlatform && Render.drawSeaDomes) {
+            Render.drawSeaDomes(ctx, cam, frame, sun, b.color, seaDomes(b));
+          }
+          if (b.surface && !b.seaPlatform && !indoors && Render.drawPortCity) {
             Render.drawPortCity(ctx, cam, frame, b, b.radius, sun, model, b.color);
           }
           if (turns) {
@@ -16488,7 +16513,7 @@
            *
            * Surface ports are excluded because their interior IS the bay
            * mesh, already drawn as the model. */
-          if (indoors && (b.surface ||
+          if (indoors && !b.seaPlatform && (b.surface ||
                           Render.insideInterior(cam, frame, b.radius, model))) {
             Render.drawStationInterior(ctx, cam, frame, b.radius, sun,
                                        model, b.color);
@@ -16533,14 +16558,17 @@
            * buildings at the rim against the sky. (The first round left it
            * out from below, when the cut was a box that took the street
            * whole and the town hung over it as slabs.) */
-          if (b.surface && rpx > 14 && tier === 'near') {
+          /* Not at a sea platform: no town on the open sea, no signboards
+           * on posts in the water, and no shaft doors or collar lamps -
+           * its domes are its doors (drawSeaDomes above). */
+          if (b.surface && !b.seaPlatform && rpx > 14 && tier === 'near') {
             Render.drawPortDressing(ctx, cam, frame, b, b.radius, sun);
           }
           /* The lamps come in earlier than the rest of the dressing: a
            * ring of lights is the first thing you can read about a port on
            * approach, and whether it is red is the thing you most want to
            * know before you have committed to the descent. */
-          if (b.surface && rpx > 5) {
+          if (b.surface && !b.seaPlatform && rpx > 5) {
             /* Wall clock, not G.t: the lamps are a light bulb on a timer in
              * the world, not something the simulation drives. Feeding sim
              * time in means the blink rate rides the time warp and turns
@@ -16553,7 +16581,7 @@
            * the port has said yes, and the doors are that answer made
            * physical — showing one without the other is a port that agrees
            * to take you and stays sealed. */
-          if (b.surface && rpx > 5) {
+          if (b.surface && !b.seaPlatform && rpx > 5) {
             Render.drawPortDoors(ctx, cam, frame, b, b.radius, sun, doorPhase(b));
           }
           /* The section's own walls, drawn after the cut is lifted — they
@@ -16760,6 +16788,44 @@
     return { open: 0, inner: 0, berth: berth, berthMid: ap && ap.mid };
   }
 
+  /* ---- THE DOMES AT A SEA PLATFORM (2026-11-02) ---------------------------
+   * Sim.seaDomeTargets says which should be open and why; the petals run
+   * toward that on the WALL clock, as the shed's doors do (doorPhase), so a
+   * time warp does not turn them into a flicker. On the rail the rail's own
+   * value is used as it stands - it is already a smooth function of the
+   * rail's elapsed time, and it is what the hull is choreographed against. */
+  var DOME_SECONDS = 4.0;
+  function seaDomes(port) {
+    var tg = Sim.seaDomeTargets ? Sim.seaDomeTargets(port, G.sys, G.t, G.ship, {
+      cleared: Combat.isCleared(G, port),
+      launch: Combat.launchCleared ? Combat.launchCleared(G, port) : !!(G.ship && G.ship.launchOk)
+    }) : null;
+    if (!tg) return null;
+    var now = nowSeconds();
+    var st = port._domes;
+    if (!st) { st = port._domes = { at: tg.map(function (x) { return x.open; }), t: now }; }
+    var step = Math.min(1, Math.max(0, now - st.t)) / DOME_SECONDS;
+    st.t = now;
+    for (var k = 0; k < tg.length; k++) {
+      if (typeof tg[k].rail === 'number') { st.at[k] = tg[k].rail; continue; }
+      var want = tg[k].open;
+      if (st.at[k] < want) st.at[k] = Math.min(want, st.at[k] + step);
+      else if (st.at[k] > want) st.at[k] = Math.max(want, st.at[k] - step);
+    }
+    port._domeWhy = tg;
+    return st.at;
+  }
+  /* Is a point inside the dome over the pad the ship is on? The cutaway's
+   * "outside" test at a platform, from the same pad table. */
+  function insideSeaDome(port, p) {
+    var gb = Sim.groundBasis(port, G.sys, G.t), sp = Gen.seaPad(currentBerth());
+    if (!gb || !sp) return false;
+    var rel = V.sub(p, gb.entrance.pos);
+    var e = V.dot(rel, gb.east) - sp.x, n = V.dot(rel, gb.north) - sp.y, u = V.dot(rel, gb.up) - sp.deck;
+    if (u < 0) return true;                       // under the deck is in the structure
+    return (e * e + n * n) / (sp.dome * sp.dome) + (u * u) / (sp.rise * sp.rise) < 1;
+  }
+
   function doorPhase(port) {
     var want = Combat.doorsOpen(G, port) ? 1 : 0;
     var now = nowSeconds();
@@ -16876,7 +16942,11 @@
        * per cent of its own radius (tens of metres, not visible as height)
        * separates them cleanly and costs nothing else. The dressing rides
        * on this same frame, so the town comes up with it. */
-      var lifted = V.addScaled(ss.pos, up, station.radius * PAD_GROUND_LIFT);
+      /* Not at a sea platform: its table has no lift (Gen.seaBay), the deck
+       * stands SEA_DECK_KM proud of the sea on columns, and the berths are
+       * hung off the sea surface itself - the frame has to be too. */
+      var lifted = station.seaPlatform ? ss.pos
+                 : V.addScaled(ss.pos, up, station.radius * PAD_GROUND_LIFT);
       return { pos: lifted, fwd: up, right: east, up: V.cross(east, up) };
     }
   }
@@ -17450,7 +17520,7 @@
     } else if (dockedAt) {
       rows(ctx, px + 12, 52, [
         ['station', dockedAt.name],
-        [dockedAt.underground ? 'under' : dockedAt.surface ? 'on' : 'orbiting', dockedAt.parentBody.name],
+        [dockedAt.underground ? 'under' : dockedAt.seaPlatform ? 'at sea on' : dockedAt.surface ? 'on' : 'orbiting', dockedAt.parentBody.name],
         ['undock', 'press U']
       ], '#7e93b3', '#7dfaff', 226);
     } else {
@@ -18039,6 +18109,7 @@
      * printed over one another. Same fault the menu rows had: two strings
      * sharing a row, neither of them asking how much of it was left. */
     var subLine = (port.underground ? 'Underground bay'
+                   : port.seaPlatform ? 'Sea platform'
                    : port.surface ? 'Surface starport' : port.market.roleName) +
                   '  ·  ' + port.parentBody.name +
                   '  ·  development ' + Math.round(port.market.dev * 100) + '%';
