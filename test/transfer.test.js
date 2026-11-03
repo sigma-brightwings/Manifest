@@ -196,7 +196,12 @@ check('a small bay behind a heavy one is left the way it was entered', orbTried 
  * sitting on the elevator pad." */
 console.log('--- the airlock, then the lift ---');
 (function () {
-  var fx0 = Gen.generateSystem('arrival-sweep').ports.filter(function (p) { return !p.surface; })[0];
+  /* An ORBITAL-role port, the role the ring models are assigned to below:
+   * since stars stage 2 the seed's first orbital port is a shipyard, which
+   * wears the yard's model whatever 'orbital' is set to. */
+  var fx0 = Gen.generateSystem('arrival-sweep').ports.filter(function (p) {
+    return !p.surface && Render.portRole(p) === 'orbital';
+  })[0];
   /* A fresh id per model: Sim caches leg timings per port and berth, and
    * in the game a port never changes which model it wears. */
   var asModel = function (id) {

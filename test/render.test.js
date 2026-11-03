@@ -832,7 +832,17 @@ console.log('--- \\ locks what is ahead (2026-11-01) ---');
       .map(function (s) { return { id: s.id, pos: s.pos }; })), G.ship.pos, G.ship.fwd);
   check('again steps to the next one out, when there is one',
         everything.length < 2 || (G.navTarget && G.navTarget.id !== first), everything.length + ' ahead');
-  G.ship.fwd = V.scale(G.ship.fwd, -1); G.ship.right = V.scale(G.ship.right, -1);
+  /* Turned to face nothing: the first of reversed, then the six axes, with
+   * no port, ship or body inside the cone. Reversed was enough until stars
+   * stage 2 filled kawartha's sky (a port now sits behind the first one). */
+  var cands = ports.map(function (q) { return { pos: Sim.bodyState(q, G.sys, G.t).pos }; })
+    .concat(Sim.shipsAll(G.sys, G.t).filter(function (s) { return s.pos && !s.landed && !s.inside; }).map(function (s) { return { pos: s.pos }; }))
+    .concat(G.sys.bodies.map(function (b) { return { pos: Sim.bodyState(b, G.sys, G.t).pos }; }));
+  var dirs = [V.scale(G.ship.fwd, -1), { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: -1 }, { x: 1, y: 0, z: 0 },
+              { x: -1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, { x: 0, y: -1, z: 0 }];
+  var empty = dirs.filter(function (d) { return Sim.aheadOf(cands, G.ship.pos, d).length === 0; })[0] || dirs[0];
+  var uE = Math.abs(empty.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 0, y: 1, z: 0 };
+  G.ship.fwd = empty; G.ship.right = V.norm(V.cross(empty, uE)); G.ship.up = V.cross(G.ship.right, G.ship.fwd);
   G.aheadLast = null;
   var before = JSON.stringify(G.navTarget);
   press('\\');
@@ -3359,10 +3369,14 @@ console.log('--- contrails ---');
   /* IN AIR, THE SHIP DOES. Put it low and slow over a world with an
    * atmosphere — slow on purpose, because a hypersonic entry is a different
    * test and the integrator spends its whole budget on one. */
+  /* Air thick enough to condense a trail where she flies (the 0.02 floor
+   * in airTrailStrength): since stars stage 2 kawartha's first air-bearing
+   * world is a desert whose air is 0.019 at the SURFACE. */
   var world = null;
   for (var i = 0; i < G.sys.bodies.length; i++) {
     var b = G.sys.bodies[i];
-    if (b.atmosphere && (b.kind === 'planet' || b.kind === 'moon')) { world = b; break; }
+    if (b.atmosphere && (b.kind === 'planet' || b.kind === 'moon') &&
+        Sim.airDensity(b, b.atmosphere.scaleHeight * 0.8) > 0.05) { world = b; break; }
   }
   check('the system has air somewhere', !!world, world && world.name);
   if (world) {

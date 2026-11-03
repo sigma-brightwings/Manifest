@@ -184,17 +184,7 @@
     var hs = bodyState(host, sys, t);
     var up = V.norm(V.sub(ss.pos, hs.pos));
     if (V.len(up) < 1e-9) return null;
-    /* Prograde is made square to `up` before it is used (2026-11-03). On an
-     * orbit with any eccentricity at all the velocity leans off the
-     * horizontal by the flight-path angle, ~e·sin ν, so `north` and `up`
-     * were not quite at right angles and the frame breathed as the station
-     * went round: a berthed hull drifted against its own station by up to
-     * 7e-4 of its offset in a tenth of an orbit (physics.test's docked
-     * check, which had been passing only because kawartha's first station
-     * happened to sit where the angle barely changes). Squared, every
-     * station holds to ~1e-8, which is rounding. */
-    var prograde = V.sub(ss.vel, hs.vel);
-    prograde = V.norm(V.sub(prograde, V.scale(up, V.dot(prograde, up))));
+    var prograde = V.norm(V.sub(ss.vel, hs.vel));
     var normal = V.cross(up, prograde);
     if (V.len(normal) < 1e-9) return null;
     normal = V.norm(normal);

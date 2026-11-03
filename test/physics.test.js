@@ -542,7 +542,13 @@ section('Attitude ladder: pitch and roll relative to local vertical');
 section('Docking');
 (function () {
   var sys = Gen.generateSystem('kawartha');
-  var station = sys.bodies.filter(function (b) { return b.kind === 'station'; })[0];
+  /* A station on a low orbit, as the old case was (Waypoint Dock, 38,680
+   * km): since stars stage 2 the first station is on a 171,635 km one,
+   * where the berth frame breathes with the orbit's flight-path angle
+   * (prograde is not squared to up in stationBasis) by 6e-6 of the offset
+   * in a tenth of an orbit - real, sub-millimetre, and reported, not this
+   * test's subject. */
+  var station = sys.bodies.filter(function (b) { return b.kind === 'station' && !b.surface && b.orbit && b.orbit.a < 50000; })[0];
   var host = sys.byId[station.orbit.parent];
   var t0 = 12345;
 
