@@ -5416,11 +5416,28 @@
    * moved the number the deck work on the camera/cutaway branch reads as
    * "the berth's own deck". So berthState still says where the berth is,
    * and this says where THIS hull stands on it. Km, along the deck's up. */
-  function standLiftKm(ship) {
+  /* ON HER OWN GEAR, NOT THE FLEET'S (2026-11-03). Given the PORT, this is
+   * no longer only the half metre: it is how far her centre stands over the
+   * deck on her own gear (hullFit's `ground`, which carries the half metre
+   * already), less the berth's `standoff`, which is where berthState puts a
+   * centre. The standoff is one number for every hull — the fleet's
+   * tallest half-height and a metre, capped at 0.012 of a port radius — so
+   * at a 0.3 km station it is 3.6 m, and a Talon's feet are 4.8 m under her
+   * centre: her gear stood 1.2 m into the deck. At a big station it is
+   * 6.65 m, and she stood 2 m clear of it; the Tanker, drawn at 51 m on gear
+   * 11.6 m tall, stood in it by five. Now each hull's feet are on the deck,
+   * half a metre higher on her gear as before. Without a port (a caller
+   * that does not know one) it is the half metre it always was. */
+  function standLiftKm(ship, port) {
     var R = global.Render;
     if (!ship || !ship.hullId || !R || !R.hullFit) return 0;
     var f = R.hullFit(ship);
-    return f && f.gearLift > 0 ? f.gearLift / 1000 : 0;
+    var lift = f && f.gearLift > 0 ? f.gearLift / 1000 : 0;
+    var Gen = global.Gen;
+    if (!port || !f || typeof f.ground !== 'number' || !(f.ground < 0) || !Gen || !Gen.bayGeometry) return lift;
+    var g = Gen.bayGeometry(port);
+    if (!g || !(g.standoff > 0)) return lift;
+    return -f.ground / 1000 - g.standoff * (port.radius || 1);
   }
   /* arrivalPose for THIS ship: the same rail, carried her stand height up
    * off it the whole way, so the hand-over to the berth (dockShip, then
@@ -5428,7 +5445,7 @@
    * and the pull-in measures from where she is actually drawn. */
   function shipArrivalPose(ship, port, sys, t, berth, el) {
     var pose = arrivalPose(port, sys, t, berth, el);
-    var lift = standLiftKm(ship);
+    var lift = standLiftKm(ship, port);
     if (!pose || !lift) return pose;
     var b = portBasis(port, sys, t);
     if (b && b.up) pose.pos = V.addScaled(pose.pos, b.up, lift);
@@ -5460,7 +5477,7 @@
         /* Her stand height over the berth (standLiftKm): every frame, so a
          * save made docked before the lift loads at the new height on its
          * first frame - nothing about it is stored. */
-        ship.pos = bs.basis && bs.basis.up ? V.addScaled(bs.pos, bs.basis.up, standLiftKm(ship)) : bs.pos;
+        ship.pos = bs.basis && bs.basis.up ? V.addScaled(bs.pos, bs.basis.up, standLiftKm(ship, target)) : bs.pos;
         ship.vel = bs.vel;
         /* ON A SEA PAD SHE TURNS WITH THE WORLD TOO (2026-11-02). Her
          * attitude was set once, at dockShip, and held in absolute space
@@ -5511,7 +5528,7 @@
     if (off && off.station) {
       var sbs = berthState(target, sys, t, off.berth);
       if (sbs) {
-        ship.pos = sbs.basis && sbs.basis.up ? V.addScaled(sbs.pos, sbs.basis.up, standLiftKm(ship)) : sbs.pos;
+        ship.pos = sbs.basis && sbs.basis.up ? V.addScaled(sbs.pos, sbs.basis.up, standLiftKm(ship, target)) : sbs.pos;
         ship.vel = sbs.vel;
         return target;
       }
@@ -6150,11 +6167,19 @@
     }
     if (!best) return;
     var ax2 = best.axis;
+    /* On the car's DECK (Render.libPort's movers carry it, 2026-11-03), not
+     * the top of its box: an inclined car's box stands far above its deck,
+     * and the hull rode out through the crown of the bore. */
+    var deck = best.max[2];
+    var lm = R && R.libPort ? R.libPort(id) : null;
+    (lm && lm.movers || []).forEach(function (m2) {
+      if (m2.node === best.node && typeof m2.deck === 'number') deck = m2.deck;
+    });
     function seat(P) {
       var s = (P.x - best.mid[0]) * ax2[0] + (P.y - best.mid[1]) * ax2[1] + (P.z - best.mid[2]) * ax2[2];
       s = Math.max(best.range[0], Math.min(best.range[1], s));
       return { x: best.mid[0] + ax2[0] * s, y: best.mid[1] + ax2[1] * s,
-               z: best.max[2] + ax2[2] * s + lift };
+               z: deck + ax2[2] * s + lift };
     }
     /* `through` holds corners 1..n of the polyline; the last corner may be
      * the stand itself, which is not ours to move. */
@@ -6491,6 +6516,14 @@
         inner: mixGate(L.inner, LEGS[Math.max(0, leg - 1)].inner, u),
         lift: L.id === 'descend' ? u : L.lift,
         bay: mixGate(L.bay, LEGS[Math.max(0, leg - 1)].bay, u),
+        /* THE FAR BERTH'S INNER GATE (2026-11-03), 0 open and 1 sealed like
+         * the rest: on a route through a heavy bay the hull goes on into its
+         * own bay from INSIDE the station, through that bay's inner gate,
+         * which now has leaves in it (Render.innerGateLeaves). Shut until
+         * the hull is on its way down (the lift leg runs it back), open for
+         * the transfer. Null on a berth's own doors. */
+        dest: typeof path.entry === 'number'
+          ? (leg < ROUTED_LIFT_LEG ? 1 : leg === ROUTED_LIFT_LEG ? 1 - u : 0) : null,
         /* The dome over this pad at a sea platform (SEA_LEGS), 1 open.
          * Its own easing: a petal is slow, so it takes the whole leg. */
         dome: (typeof L.dome === 'number')
@@ -7051,7 +7084,7 @@
         /* Her own stand height on top (standLiftKm), as in her berth, so
          * the hand-over is still a step UP from where she stood. */
         ship.pos = V.addScaled(basis0.entrance.pos, basis0.up,
-                               (g0.floorZ + g0.lift + g0.standoff * 2) * r0 + standLiftKm(ship));
+                               (g0.floorZ + g0.lift + g0.standoff * 2) * r0 + standLiftKm(ship, target));
         ship.vel = V.clone(basis0.entrance.vel);
       } else {
         ship.pos = V.addScaled(ship.pos, away, target.radius * 0.5);

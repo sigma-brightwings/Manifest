@@ -2247,13 +2247,18 @@ console.log('--- the rail waits outside the doors, on the lamps\' line ---');
     return [V.dot(d, basis.east) / st.radius, V.dot(d, basis.north) / st.radius, V.dot(d, basis.up) / st.radius];
   }
   function dirM(v) { return [V.dot(v, basis.east), V.dot(v, basis.north), V.dot(v, basis.up)]; }
-  /* NOT THE CIVIL YARDS, and printed: yard-s/m/l carry their door leaves
-   * in the INTERIOR bucket, where Render.portDoors does not look, so their
-   * doors are welded shut into the hull and never open for anything — a
-   * separate fault in the door split (found 2026-11-03, still open). */
-  var plain = MODELS.filter(function (id) { return !/-(navy|syn)-/.test(id) && !/^yard-[sml]$/.test(id); });
+  /* THE CIVIL YARDS ARE IN (2026-11-03). yard-s/m/l carried their door
+   * leaves in the INTERIOR bucket, where Render.portDoors did not look, so
+   * their doors were welded shut and every arrival flew through them; they
+   * were left out of this sweep for it. Render.libPort now moves a model's
+   * gate faces into the shell when that is where portDoors will find them
+   * (gateFacesToShell), and the yards are swept like every other model. */
+  var plain = MODELS.filter(function (id) { return !/-(navy|syn)-/.test(id); });
   ['yard-s', 'yard-m', 'yard-l'].forEach(function (id) {
-    if (global.PortLib[id] && !Render.portDoors(id)) console.log('  ' + id + ': doors not separated (interior bucket) - not swept');
+    if (!global.PortLib[id]) return;
+    var yd = Render.portDoors(id);
+    var nl = yd ? yd.leaves.filter(function (lf) { return !lf.car && !lf.hatch && lf.travel > 0; }).length : 0;
+    check(id + ': its door leaves are split out and slide', nl >= 4, nl + ' sliding leaves');
   });
   var berths = 0, offLine = [], inDoor = [], through = [];
   plain.forEach(function (id) {

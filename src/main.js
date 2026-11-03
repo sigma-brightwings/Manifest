@@ -11849,7 +11849,7 @@
     var s = a.ship;
     /* On her own gear's height over the berth, as Sim.updateDockedShip
      * stands yours (standLiftKm, 2026-11-03). */
-    var upL = bs && bs.basis && bs.basis.up && Sim.standLiftKm ? Sim.standLiftKm(s) : 0;
+    var upL = bs && bs.basis && bs.basis.up && Sim.standLiftKm ? Sim.standLiftKm(s, a.port) : 0;
     s.pos = bs ? (upL ? V.addScaled(bs.pos, bs.basis.up, upL) : bs.pos) : V.clone(G.ship.pos);
     s.vel = bs ? bs.vel : V.clone(G.ship.vel || V.zero());
     s.fwd = G.ship.fwd; s.up = G.ship.up; s.right = G.ship.right;
@@ -17087,7 +17087,11 @@
             var gStand = Gen.bayGeometry ? Gen.bayGeometry(b) : null;
             var keelKm = (gStand && gStand.standoff > 0) ? gStand.standoff * b.radius
                        : (Render.SHIP_LEN || 0.025) * 0.2;
-            var riders = G.ship ? [{ pos: G.ship.pos, keelKm: keelKm }] : [];
+            /* Hers is her own stance over the car (Sim.standLiftKm with the
+             * port, 2026-11-03): the rail carries her that far off the
+             * standoff it holds every other hull at. */
+            var myKeel = keelKm + (Sim.standLiftKm ? Sim.standLiftKm(G.ship, b) : 0);
+            var riders = G.ship ? [{ pos: G.ship.pos, keelKm: myKeel }] : [];
             /* And the traffic: a freighter riding the lift down to its bay
              * gets a floor under it too. Asked once per frame, and only
              * here, where a station is close enough to be a model. */
@@ -17416,9 +17420,14 @@
       /* Through a heavy bay (2026-09-24): its doors are the ones that run. */
       berth = (typeof G.ship.arrival.entry === 'number') ? G.ship.arrival.entry : G.ship.arrival.berth;
       ap = Gen.berthApertures ? Gen.berthApertures(port, berth) : ap;
+      var dest = G.arrivalPose.gates.dest;
+      var apT = (typeof dest === 'number' && Gen.berthApertures) ? Gen.berthApertures(port, G.ship.arrival.berth) : null;
       return { open: 1 - G.arrivalPose.gates.apron,
                inner: 1 - G.arrivalPose.gates.inner,
                berth: berth, berthMid: ap && ap.mid,
+               /* And the far bay's inner gate, on a route through a heavy
+                * bay (Sim.arrivalPose gates.dest). */
+               innerTo: typeof dest === 'number' ? 1 - dest : 0, innerToMid: apT && apT.mid,
                /* And the lift car the hull is riding, where it is this
                 * frame (2026-10-17: "the car to ride with the ship"). */
                car: G.arrivalPose.car || null };

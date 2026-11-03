@@ -1199,8 +1199,84 @@
       entrances: src.entrances || null,
       carriers: src.carriers || null
     };
+    gateFacesToShell(out, src);
     PORT_CACHE[role] = out;
     return out;
+  }
+
+  /* THE YARDS' DOORS ARE IN THE WRONG BUCKET (2026-11-03). yard-s, yard-m
+   * and yard-l carry their PortalLeaf groups in the converter's INTERIOR
+   * bucket, and portDoors splits leaves out of the SHELL only: so a yard's
+   * doors stayed welded into the interior mesh, drawn shut and solid to the
+   * collision, and every arrival flew through them (berths.test had to leave
+   * the yards out of its approach sweep for it). The other models put their
+   * leaves in the shell.
+   *
+   * So where the shell has no face in any gate box and the interior does,
+   * those interior faces are the leaves: moved into the shell (their
+   * vertices appended, `oi` -1 so no part run claims them) before anything
+   * reads either bucket. portDoors then finds them where it finds every
+   * other model's, and the interior no longer holds a door. A model whose
+   * leaves are in the shell is untouched. */
+  /* The anchors are written to three decimals, and a leaf drawn as a sheet
+   * (yard-m's inner leaves: 0.000 thick) gets a box of no depth that its own
+   * faces' centres miss by the rounding. Half a rounding step and a little. */
+  var GATE_BOX_PAD = 0.0008;
+  /* Padded only on an axis the box has no depth on: a box with depth is
+   * tested exactly as it always was, so no model's leaves change but the
+   * ones drawn as sheets (G, 2026-11-03: they get thickness elsewhere). */
+  function inGateBox(b, x, y, z) {
+    if (!b || !b.min || !b.max) return false;
+    var p = [x, y, z];
+    for (var a = 0; a < 3; a++) {
+      var e = (b.max[a] - b.min[a]) < GATE_BOX_PAD * 2 ? GATE_BOX_PAD : 0;
+      if (p[a] < b.min[a] - e || p[a] > b.max[a] + e) return false;
+    }
+    return true;
+  }
+  function gateFacesToShell(out, src) {
+    var gates = src.anchors && src.anchors.gates;
+    var sh = out.shell, inn = out.interior;
+    if (!gates || !gates.length || !sh || !inn || !inn.f || !inn.f.length) return;
+    function inGate(m, face) {
+      var x = 0, y = 0, z = 0, n = 0;
+      for (var k = 0; k < face.length; k++) {
+        var v = m.v[face[k]];
+        if (!v) return false;
+        x += v[0]; y += v[1]; z += v[2]; n++;
+      }
+      x /= n; y /= n; z /= n;
+      for (var g = 0; g < gates.length; g++) {
+        if (inGateBox(gates[g], x, y, z)) return true;
+      }
+      return false;
+    }
+    for (var i = 0; i < sh.f.length; i++) if (inGate(sh, sh.f[i])) return;
+    var keepF = [], keepC = [], movedF = [], movedC = [];
+    for (i = 0; i < inn.f.length; i++) {
+      if (inGate(inn, inn.f[i])) { movedF.push(inn.f[i]); movedC.push(inn.c ? inn.c[i] : null); }
+      else { keepF.push(inn.f[i]); keepC.push(inn.c ? inn.c[i] : null); }
+    }
+    if (!movedF.length) return;
+    var base = sh.v.length, v2 = sh.v.slice(), remap = {};
+    var f2 = sh.f.slice(), c2 = sh.c ? sh.c.slice() : null;
+    var oi2 = sh.oi ? sh.oi.slice() : null;
+    if (!oi2) { oi2 = []; for (i = 0; i < sh.f.length; i++) oi2.push(i); }
+    for (i = 0; i < movedF.length; i++) {
+      var face = movedF[i], nf = [];
+      for (var k = 0; k < face.length; k++) {
+        var vi = face[k];
+        if (remap[vi] === undefined) { remap[vi] = v2.length; v2.push(inn.v[vi]); }
+        nf.push(remap[vi]);
+      }
+      f2.push(nf);
+      if (c2) c2.push(movedC[i]);
+      oi2.push(-1);
+    }
+    out.shell = { v: v2, f: f2, c: c2, oi: oi2 };
+    out.interior = { v: inn.v, f: keepF, c: inn.c ? keepC : inn.c };
+    out.gateFacesMoved = movedF.length;
+    void base;
   }
 
   /* ---- MOVERS: the floors that carry a hull (2026-10-16) -----------------
@@ -1254,11 +1330,42 @@
     for (k = 0; k < boxes.length; k++) {
       var s = boxes[k].src;
       if (!boxes[k].f.length) continue;
+      var mmesh = { v: shell.v, f: boxes[k].f, c: shell.c ? boxes[k].c : null };
       out.push({ node: s.node, min: s.min, max: s.max, mid: s.mid, axis: s.axis || null,
                  range: s.range || [0, 0], serves: s.serves || null,
-                 mesh: { v: shell.v, f: boxes[k].f, c: shell.c ? boxes[k].c : null } });
+                 deck: moverDeck(mmesh, s), mesh: mmesh });
     }
     return { shell: { v: shell.v, f: hullF, c: shell.c ? hullC : shell.c, oi: hullO }, movers: out };
+  }
+
+  /* THE CAR'S DECK, NOT ITS BOX (2026-11-03). Astra, of the 45-degree lift
+   * at Halden Dock: "ship sits on top of the shaft for the 45 degree
+   * elevator instead of at the base of the shaft to sit on the elevator".
+   * Everything that stood a hull on a car stood it on the car's BOX top
+   * (`max[2]`), which is the car's deck only for a car that runs straight
+   * up and down. A car on an incline is boxed round its whole tilted
+   * length: armBoreBCar's box tops out 0.026 radii over its deck, 127 m at
+   * Halden Dock, and the hull rode that far above the car — out through the
+   * crown of the bore. The deck is the highest surface of the car's own
+   * mesh straight down its middle; the box top where the mesh has none. */
+  function moverDeck(mesh, mv) {
+    if (!mesh || !mesh.f || !mv || !mv.mid) return mv && mv.max ? mv.max[2] : 0;
+    var x = mv.mid[0], y = mv.mid[1], best = -Infinity;
+    for (var i = 0; i < mesh.f.length; i++) {
+      var t = mesh.f[i];
+      for (var j = 1; j + 1 < t.length; j++) {
+        var a = mesh.v[t[0]], b = mesh.v[t[j]], c = mesh.v[t[j + 1]];
+        if (!a || !b || !c) continue;
+        var d0 = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+        if (Math.abs(d0) < 1e-14) continue;
+        var u = ((x - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (y - a[1])) / d0;
+        var v = ((b[0] - a[0]) * (y - a[1]) - (x - a[0]) * (b[1] - a[1])) / d0;
+        if (u < 0 || v < 0 || u + v > 1) continue;
+        var z = a[2] + u * (b[2] - a[2]) + v * (c[2] - a[2]);
+        if (z > best) best = z;
+      }
+    }
+    return isFinite(best) ? best : mv.max[2];
   }
 
   /* ---- THE CITY ON A CITY SITE STANDS SOMEWHERE OF ITS OWN (2026-10-24) --
@@ -1764,7 +1871,8 @@
        * and a car keeps level, so on anything steeper than a gentle ramp
        * the pose is solved on z; on the flat it follows along the run. */
       var keel = (r.keelKm || 0) / radiusKm, s;
-      if (Math.abs(ax[2]) > 0.3) s = (p[2] - keel - mv.max[2]) / ax[2];
+      var top = typeof mv.deck === 'number' ? mv.deck : mv.max[2];
+      if (Math.abs(ax[2]) > 0.3) s = (p[2] - keel - top) / ax[2];
       else s = along;
       return Math.max(mv.range[0], Math.min(mv.range[1], s));
     }
@@ -7184,8 +7292,7 @@
       var best = -1, bestD = Infinity;
       for (var j = 0; j < boxes.length; j++) {
         var bx = boxes[j];
-        if (px < bx.min[0] || px > bx.max[0] || py < bx.min[1] || py > bx.max[1] ||
-            pz < bx.min[2] || pz > bx.max[2]) continue;
+        if (!inGateBox(bx, px, py, pz)) continue;
         var dx = px - bx.mid[0], dy = py - bx.mid[1], dz = pz - bx.mid[2];
         var d = dx * dx + dy * dy + dz * dz;
         if (d < bestD) { bestD = d; best = j; }
@@ -7426,6 +7533,8 @@
     }
 
     if (!out.length) return null;
+    hullF = carShafts(shell, hullF, hullC, out, carDefs);
+    hullC = hullF.c; hullF = hullF.f;
     /* ---- AND THE DOORWAY IS A HOLE ------------------------------------
      *
      * Astra, parked: "How about the transfer halls between the bay and the
@@ -7485,7 +7594,7 @@
           var lf2 = out[li];
           /* A car or a hatch is no part of a doorway's leaves: counting the
            * ring's floor hatch here would reshape the heavy bay's opening. */
-          if (lf2.field || lf2.car || lf2.hatch || !lf2.berthMid) continue;
+          if (lf2.field || lf2.car || lf2.hatch || lf2.inner || !lf2.berthMid) continue;
           if (lf2.berthMid[0] !== bth.mid[0] || lf2.berthMid[1] !== bth.mid[1] ||
               lf2.berthMid[2] !== bth.mid[2]) continue;
           mine++;
@@ -7558,6 +7667,7 @@
     }
 
     letterTheBays(shell, out, apertures, berths);
+    innerGateLeaves(raw, out, berths);
 
     PORT_DOORS[role] = {
       hull: { v: shell.v, f: hullF, c: hullC },
@@ -7565,6 +7675,245 @@
       apertures: apertures
     };
     return PORT_DOORS[role];
+  }
+
+  /* ---- THE SHAFT A CAR RUNS IN, FLUSH AT BOTH ENDS (2026-11-03) ---------
+   *
+   * Astra, of the lifts: "why is the shaft protruding from the wall at the
+   * top and bottom of the shaft? It should be cut flush with the wall", and
+   * "the bottom of that shaft needs to be flush with the floor, so the
+   * elevator comes down and locks into the floor", and "when the elevator
+   * is not there, there should be a blast door covering the shaft".
+   *
+   * Measured on the ring's heavy-bay lift (the one car every routed ring
+   * arrival rides): its far end of travel is flush with the spoke deck the
+   * hull rolls out onto, to the hundredth of a metre — but the shaft goes on
+   * below it, a pit 0.08 radii deeper (350 m at Waypoint Dock) that the car
+   * never reaches; and at the top, the deck plate under the parked car is
+   * whole, so the car was drawn sinking through the floor it starts in, and
+   * the hull with it (every ring route measured "through a surface" on the
+   * lift leg, just under the start).
+   *
+   * So for every car the art declares:
+   *   - the plating that crosses its run is cut: faces inside the car's own
+   *     footprint, between the two ends of its travel, that face up or down;
+   *   - past the far end of a run downward, the pit is cut away and capped
+   *     with a floor at the car's own underside, so the car comes down and
+   *     locks into it, flush with the deck beside it;
+   *   - and the hatch the art put over the shaft (the ring's) is shut while
+   *     the car is away and gone while it is home (partState): the car is
+   *     the floor when it is there, and the hatch is when it is not.
+   * Returns { f, c }, the hull's faces with the cut made. */
+  var SHAFT_INSET = 0.03;              // of the car's footprint, so the shaft walls stay
+  var SHAFT_CAP = 0.003;               // radii: the new pit floor's own thickness
+
+  function carShafts(shell, hullF, hullC, out, carDefs) {
+    var cars = [];
+    for (var i = 0; i < out.length; i++) {
+      var lf = out[i];
+      if (!lf.car) continue;
+      var cd = null;
+      for (var q = 0; q < carDefs.length; q++) if (carDefs[q].node === lf.node) cd = carDefs[q];
+      if (cd && cd.min && cd.max && cd.d) cars.push({ lf: lf, cd: cd });
+    }
+    if (!cars.length) return { f: hullF, c: hullC };
+    var keepF = [], keepC = [];
+    var shafts = cars.map(function (k) {
+      var c = k.cd, ix = (c.max[0] - c.min[0]) * SHAFT_INSET, iy = (c.max[1] - c.min[1]) * SHAFT_INSET;
+      var restTop = c.max[2], restBot = c.min[2], farTop = c.max[2] + c.d[2], farBot = c.min[2] + c.d[2];
+      return { c: c, x0: c.min[0] + ix, x1: c.max[0] - ix, y0: c.min[1] + iy, y1: c.max[1] - iy,
+               lo: Math.min(restBot, farBot), hi: Math.max(restTop, farTop),
+               down: c.d[2] < 0, farBot: farBot, pitLo: Infinity };
+    });
+    /* The pit's bottom: the lowest face in the footprint within a run's
+     * length under the far end. */
+    for (var f = 0; f < hullF.length; f++) {
+      var face = hullF[f], cx = 0, cy = 0, cz = 0;
+      for (var k2 = 0; k2 < face.length; k2++) { var v = shell.v[face[k2]]; cx += v[0]; cy += v[1]; cz += v[2]; }
+      cx /= face.length; cy /= face.length; cz /= face.length;
+      for (var sI = 0; sI < shafts.length; sI++) {
+        var S = shafts[sI];
+        if (!S.down || cx < S.x0 || cx > S.x1 || cy < S.y0 || cy > S.y1) continue;
+        if (cz < S.farBot && cz > S.farBot - (S.hi - S.lo) * 0.5 && cz < S.pitLo) S.pitLo = cz;
+      }
+    }
+    for (f = 0; f < hullF.length; f++) {
+      var fc = hullF[f], a = shell.v[fc[0]], b = shell.v[fc[1]], c3 = shell.v[fc[2]];
+      var px = (a[0] + b[0] + c3[0]) / 3, py = (a[1] + b[1] + c3[1]) / 3, pz = (a[2] + b[2] + c3[2]) / 3;
+      var e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [c3[0] - a[0], c3[1] - a[1], c3[2] - a[2]];
+      var nx = e1[1] * e2[2] - e1[2] * e2[1], ny = e1[2] * e2[0] - e1[0] * e2[2], nz = e1[0] * e2[1] - e1[1] * e2[0];
+      var nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      var flat = Math.abs(nz / nl) > 0.7, cut = false;
+      for (var s2 = 0; s2 < shafts.length && !cut; s2++) {
+        var T = shafts[s2];
+        if (px < T.x0 || px > T.x1 || py < T.y0 || py > T.y1) {
+          /* Past the far end of a run downward, the shaft's own walls go
+           * too, down to the pit: the footprint without the inset. */
+          if (!T.down || !isFinite(T.pitLo)) continue;
+          var c0 = T.c;
+          if (px < c0.min[0] - (c0.max[0] - c0.min[0]) * 0.06 || px > c0.max[0] + (c0.max[0] - c0.min[0]) * 0.06 ||
+              py < c0.min[1] - (c0.max[1] - c0.min[1]) * 0.06 || py > c0.max[1] + (c0.max[1] - c0.min[1]) * 0.06) continue;
+          if (pz < T.farBot - 1e-4 && pz > T.pitLo - SHAFT_CAP * 2) cut = true;
+          continue;
+        }
+        if (flat && pz > T.lo - 0.002 && pz < T.hi + 0.002) cut = true;          // plating across the run
+        if (T.down && isFinite(T.pitLo) && pz < T.farBot - 1e-4 && pz > T.pitLo - SHAFT_CAP * 2) cut = true;
+      }
+      if (cut) continue;
+      keepF.push(fc); keepC.push(hullC[f]);
+    }
+    /* The new floor under a run downward: a slab at the car's own
+     * underside, the shaft's footprint, SHAFT_CAP thick. */
+    shafts.forEach(function (S) {
+      if (!S.down || !isFinite(S.pitLo)) return;
+      var c = S.c, m = { v: [], f: [], c: [] };
+      var o = [(c.min[0] + c.max[0]) / 2, (c.min[1] + c.max[1]) / 2, S.farBot - SHAFT_CAP / 2];
+      pushBox(m, o, [0, 0, 1], [1, 0, 0], [0, 1, 0], 0, 0, 0, SHAFT_CAP / 2,
+              (c.max[0] - c.min[0]) * 0.53, (c.max[1] - c.min[1]) * 0.53, '#3b434d');
+      out.push({ node: c.node + 'PitFloor', mesh: m, box: null, axis: [0, 0, 0], travel: 0,
+                 field: false, berthMid: null, built: true, fixed: true });
+    });
+    /* Which hatch covers which car's shaft: by footprint. */
+    for (var h = 0; h < out.length; h++) {
+      var hl = out[h];
+      if (!hl.hatch) continue;
+      /* Over its own faces: a leaf's vertex array is the whole shell's. */
+      var hx = 0, hy = 0, hn = 0;
+      for (var hf2 = 0; hf2 < hl.mesh.f.length; hf2++) {
+        for (var hk = 0; hk < hl.mesh.f[hf2].length; hk++) {
+          var hv = hl.mesh.v[hl.mesh.f[hf2][hk]];
+          if (hv) { hx += hv[0]; hy += hv[1]; hn++; }
+        }
+      }
+      if (!hn) continue;
+      hx /= hn; hy /= hn;
+      for (var s3 = 0; s3 < shafts.length; s3++) {
+        var U = shafts[s3].c;
+        if (hx >= U.min[0] && hx <= U.max[0] && hy >= U.min[1] && hy <= U.max[1]) hl.overCar = U.node;
+      }
+    }
+    return { f: keepF, c: keepC };
+  }
+
+  /* ---- THE BLAST DOORS BETWEEN THE BERTHS AND THE STATION (2026-11-03) ---
+   *
+   * Astra: "What happened to having those interleaved blast doors inside,
+   * separating the berths from the rest of the station interior?"
+   *
+   * They went with the art. The retired spine-m (ref/ports-retired) had SM
+   * sliding doors with DoorInterlock teeth and an InnerGate leaf per berth;
+   * the station set that replaced it on 2026-09-25 (33fbda9) kept every
+   * inner gate's FRAME — jambs, sill, lintel, the caution strip — and no
+   * leaf. So the airlock that every arrival cycles (`settle`, `admit`) and
+   * that Sim.stationDoorState runs has been opening and shutting a doorway
+   * with nothing in it, and drawStationModel's "the gate runs back and the
+   * station appears down the corridor" was a gate nobody could see.
+   *
+   * So where a berth's inner gate is a frame with no leaf in it, a pair of
+   * leaves is built into the frame here: slabs that meet in the middle on
+   * interleaved teeth, the way the retired spine's did, and part sideways
+   * into the jambs by their own width and a tooth. They are ordinary leaves
+   * from here on, flagged `inner`, and run on `doors.inner` — the same
+   * number the airlock has always set — rather than on the outer doors'
+   * `open`. Drawn (both renderers: they are meshes like any leaf), hit
+   * where they stand (leafHit), and left out of the aperture cut and the
+   * bay lettering, which are about the outer doors.
+   *
+   * THICKNESS. A leaf is as deep as its frame along the berth's normal,
+   * never less than INNER_LEAF_MIN of a radius (2.6 m at Threshold Dock,
+   * 10 m at Halden Dock): the frames themselves were modelled as 1-3 m
+   * sheets, and a door has to read as a slab, not a 1 px line (G). */
+  var INNER_LEAF_MIN = 0.002;          // of a port radius
+  var INNER_TEETH = 7;                 // bands down the meeting edge
+  var INNER_SLAB = '#56606c', INNER_TOOTH = '#d9a92a', INNER_SEAM = '#1d2126';
+
+  function interleavedPair(o, n, a, u, halfA, halfU, thick, kind) {
+    var td = halfA * 0.1, over = halfA * 0.04, ht = thick / 2;
+    var band = (2 * halfU) / INNER_TEETH;
+    var L = { v: [], f: [], c: [] }, R = { v: [], f: [], c: [] };
+    /* The slab from the jamb (and a little into it) to the tooth line. */
+    var sw = (halfA + over - td) / 2;
+    pushBox(L, o, n, a, u, 0, -(td + sw), 0, ht, sw, halfU, INNER_SLAB);
+    pushBox(R, o, n, a, u, 0, (td + sw), 0, ht, sw, halfU, INNER_SLAB);
+    /* A dark seam on each face a little in from the tooth line, so the
+     * meeting edge reads from across a bay. */
+    pushBox(L, o, n, a, u, 0, -td - halfA * 0.02, 0, ht * 1.08, halfA * 0.01, halfU * 0.98, INNER_SEAM);
+    pushBox(R, o, n, a, u, 0, td + halfA * 0.02, 0, ht * 1.08, halfA * 0.01, halfU * 0.98, INNER_SEAM);
+    /* The teeth: even bands on the left leaf, odd on the right, each the
+     * full overlap across the centreline, so shut they interleave. */
+    for (var k = 0; k < INNER_TEETH; k++) {
+      var cu = -halfU + band * (k + 0.5);
+      pushBox(k % 2 ? R : L, o, n, a, u, 0, 0, cu, ht * 0.96, td, band / 2 * 0.98, INNER_TOOTH);
+    }
+    var travel = halfA + td + over;
+    return [
+      { mesh: L, axis: [-a[0], -a[1], -a[2]], travel: travel },
+      { mesh: R, axis: a.slice(), travel: travel }
+    ];
+  }
+
+  function innerGateLeaves(raw, out, berths) {
+    var ig = raw && raw.anchors && raw.anchors.innerGates;
+    if (!ig || !ig.length || !berths) return;
+    var frames = {};
+    for (var i = 0; i < ig.length; i++) {
+      var g = ig[i], m = /^(.*)InnerGate(JambL|JambR|Sill|Lintel)$/.exec(g.node || '');
+      if (!m || !g.min || !g.max) continue;
+      (frames[m[1]] = frames[m[1]] || {})[m[2]] = g;
+    }
+    Object.keys(frames).forEach(function (pre) {
+      var F = frames[pre];
+      if (!F.JambL || !F.JambR || !F.Sill || !F.Lintel) return;
+      var nrm = F.Sill.normal || F.JambL.normal;
+      if (!nrm) return;
+      /* The opening: between the jambs' inner faces across, between the
+       * sill's top and the lintel's underside, at the frame's own depth. */
+      var nAx = Math.abs(nrm[0]) > 0.5 ? 0 : Math.abs(nrm[1]) > 0.5 ? 1 : 2;
+      var aAx = -1;
+      for (var q = 0; q < 3; q++) {
+        if (q === nAx || q === 2) continue;
+        aAx = q;
+      }
+      if (aAx < 0 || nAx === 2) return;               // a gate in a floor or roof: not this shape
+      var jl = F.JambL, jr = F.JambR;
+      var lo = Math.min(jl.max[aAx], jr.max[aAx]), hi = Math.max(jl.min[aAx], jr.min[aAx]);
+      if (jl.mid && jr.mid) {
+        var left = jl.mid[aAx] < jr.mid[aAx] ? jl : jr, right = left === jl ? jr : jl;
+        lo = left.max[aAx]; hi = right.min[aAx];
+      }
+      var zLo = F.Sill.max[2], zHi = F.Lintel.min[2];
+      if (!(hi - lo > 1e-4) || !(zHi - zLo > 1e-4)) return;
+      var dLo = Math.min(jl.min[nAx], jr.min[nAx], F.Sill.min[nAx], F.Lintel.min[nAx]);
+      var dHi = Math.max(jl.max[nAx], jr.max[nAx], F.Sill.max[nAx], F.Lintel.max[nAx]);
+      var c = [0, 0, 0];
+      c[aAx] = (lo + hi) / 2; c[2] = (zLo + zHi) / 2; c[nAx] = (dLo + dHi) / 2;
+      /* Already has a leaf (the cradle's SM blast doors): leave it be. */
+      for (var k = 0; k < out.length; k++) {
+        var lf = out[k], bx = lf.box;
+        if (!bx || !bx.mid || lf.car || lf.hatch) continue;
+        if (Math.abs(bx.mid[aAx] - c[aAx]) < (hi - lo) / 2 && Math.abs(bx.mid[2] - c[2]) < (zHi - zLo) / 2 &&
+            Math.abs(bx.mid[nAx] - c[nAx]) < Math.max(0.02, (dHi - dLo) * 4)) return;
+      }
+      /* Whose: the berth whose node carries the same prefix, nearest. */
+      var berth = null, bd = Infinity;
+      for (var b = 0; b < berths.length; b++) {
+        var bb = berths[b];
+        if (!bb || !bb.mid || String(bb.node || '').indexOf(pre) !== 0) continue;
+        if (!/^(Throat(Floor|Roof|WallL|WallR|Back)?)?$/.test(String(bb.node).slice(pre.length))) continue;
+        var dd = Math.pow(bb.mid[0] - c[0], 2) + Math.pow(bb.mid[1] - c[1], 2) + Math.pow(bb.mid[2] - c[2], 2);
+        if (dd < bd) { bd = dd; berth = bb; }
+      }
+      if (!berth) return;
+      var nv = [0, 0, 0]; nv[nAx] = 1;
+      var av = [0, 0, 0]; av[aAx] = 1;
+      var thick = Math.max(INNER_LEAF_MIN, dHi - dLo);
+      var pair = interleavedPair(c, nv, av, [0, 0, 1], (hi - lo) / 2, (zHi - zLo) / 2, thick);
+      for (var p = 0; p < pair.length; p++) {
+        out.push({ node: pre + 'InnerGateLeaf' + (p ? 'R' : 'L'), mesh: pair[p].mesh, box: null,
+                   axis: pair[p].axis, travel: pair[p].travel, field: false,
+                   berthMid: berth.mid, inner: true, built: true });
+      }
+    });
   }
 
   /* ---- BAY 4 -------------------------------------------------------------
@@ -8555,11 +8904,38 @@
    *
    * A hatch: hidden while ITS berth's inner gate is open (more than half),
    * matched by position the way every leaf is matched to its berth. */
+  /* The car has cleared its own deck's thickness by about 2% of a run. */
+  var HATCH_SHUT_AT = 0.02;
+
+  function sameMid(a, b) {
+    var dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2];
+    return dx * dx + dy * dy + dz * dz <= 1e-6;
+  }
+
+  /* How far an inner gate's leaf has run back: the airlock's inner number
+   * at the berth it is cycling, the far bay's on a routed arrival, shut
+   * everywhere else. */
+  function innerLeafOpen(lf, doors) {
+    if (!doors || !lf.berthMid) return 0;
+    if (doors.inner > 0 && doors.berthMid && sameMid(lf.berthMid, doors.berthMid)) return Math.min(1, doors.inner);
+    if (doors.innerTo > 0 && doors.innerToMid && sameMid(lf.berthMid, doors.innerToMid)) return Math.min(1, doors.innerTo);
+    return 0;
+  }
+
   function partState(lf, doors) {
     if (lf.car) {
       var c = doors && doors.car;
       var f = (c && c.node === lf.node && c.f > 0) ? Math.min(1, c.f) : 0;
       return { f: f, hidden: false };
+    }
+    if (lf.hatch && lf.overCar) {
+      /* A hatch over a car's shaft (carShafts): gone while the car is home
+       * in it, shut once the car has left. The same `car.f` the car is
+       * drawn at, so the two are driven by one number and a car can never
+       * come up through a shut hatch. Closed-form, by the rail's legs. */
+      var cc = doors && doors.car;
+      var away = (cc && cc.node === lf.overCar) ? cc.f : 0;
+      return { f: 0, hidden: !(away > HATCH_SHUT_AT) };
     }
     if (lf.hatch) {
       var openHere = false;
@@ -8645,7 +9021,10 @@
           continue;
         }
         var f = open;
-        if (mine !== null && lf.berthMid) {
+        /* An inner gate's leaves run on the airlock's inner number, and only
+         * at the berth it belongs to (innerGateLeaves). */
+        if (lf.inner) f = innerLeafOpen(lf, doors);
+        else if (mine !== null && lf.berthMid) {
           /* Whose door. Compared by POSITION rather than by index, because
            * the leaf knows which berth anchor it sits at and the caller
            * knows which berth it was given — and the only thing those two
@@ -9397,7 +9776,13 @@
       /* Only the berth that was given clearance moves; every other leaf in
        * the station is shut, which is the same rule drawStationModel uses. */
       var f = open;
-      if (lf.car || lf.hatch) {
+      if (lf.inner) {
+        /* A blast door between a berth and the station: shut unless this is
+         * the berth whose airlock is cycling, then as far as its inner gate
+         * is (innerGateLeaves). Not part of any one doorway's question. */
+        if (doors && doors.onlyMine) continue;
+        f = innerLeafOpen(lf, doors);
+      } else if (lf.car || lf.hatch) {
         /* Neither is a door leaf, so a question about one doorway leaves
          * them out; otherwise they collide where they are drawn — the same
          * partState the renderer reads. (Both were solid hull before they

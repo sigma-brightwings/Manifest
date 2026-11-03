@@ -391,7 +391,7 @@ console.log('--- a new career starts on a pad ---');
     check('berthState answers for an orbital port too', !!oBerthed);
     /* Standing in it on her own gear: the berth's point, her stand height
      * (Sim.standLiftKm, half a metre on a geared hull, 2026-11-03) up. */
-    var standAt = function (bs) { return V.addScaled(bs.pos, bs.basis.up, Sim.standLiftKm ? Sim.standLiftKm(G.ship) : 0); };
+    var standAt = function (bs) { return V.addScaled(bs.pos, bs.basis.up, Sim.standLiftKm ? Sim.standLiftKm(G.ship, orbPort) : 0); };
     check('and the hull is standing in it rather than beside the station',
           !!oBerthed && V.dist(G.ship.pos, standAt(oBerthed)) < 1e-6,
           oBerthed ? V.dist(G.ship.pos, standAt(oBerthed)).toFixed(6) + ' km off its berth'
