@@ -7421,9 +7421,14 @@
        * not be drawn across; model z is local z minus the table's lift. */
       section: { ship: local(G.cam.target), eye: local(eyeW),
                  shipW: V.clone(G.cam.target), eyeW: eyeW,
+                 /* For the burnt edge in the street (fifth round): the
+                 * world's sphere, as the planet pass draws it, and the same
+                 * band fraction the port's meshes are cut with. */
+                 planetW: port.parentBody ? Sim.bodyPosition(port.parentBody, G.sys, G.t) : null,
+                 planetR: (port.parentBody && port.parentBody.radius || 1e9) / r,
+                 planetKm: port.parentBody ? port.parentBody.radius : 0, rim: CUT_RIM,
                  rShip: rShip / r, rEye: rEye / r, rCap: rCap > 0 ? rCap / r : 0,
                  r: r, lift: g.lift || 0, seed: port.id,
-                 planetR: (port.parentBody && port.parentBody.radius || 1e9) / r,
                  room: room, duct: ((g.mouthR || 0.55) + (g.throatR || 0.45)) / 2,
                  entrance: gb.entrance.pos, east: gb.east, north: gb.north, up: gb.up }
     };

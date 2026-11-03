@@ -149,16 +149,66 @@
     'uniform float uWPh3;',
     'uniform vec3 uSunDir;',
     'uniform float uNear, uInvLogRange;',
+    /* ---- the burnt edge (2026-11-02, fifth round) --------------------- */
+    'uniform vec4 uWPlanet;',     // the world's centre relative to the eye, km; its radius
+    'uniform vec4 uWRim;',        // the cut-face band's colour, and its width as a fraction of the cone's radius
     'out vec4 frag;',
     'float whash(float a, float b) { return fract(sin(a * 12.9898 + b * 78.233) * 43758.5453); }',
     'void main() {',
     '  vec3 rd = normalize(uRight * (vPx.x - uScreenPx.x) + uUp * (uScreenPx.y - vPx.y) + uFwd * uFlen);',
+    '  float L = length(uWS);',
+    /* ---- THE BURNT EDGE IN THE STREET (fifth round) -------------------
+     * Astra: "why is the ground port cutaway not have the glowing edge
+     * effect?" The port's own meshes get the keyhole's cut-face band
+     * (FRAG_MESH, look B: the inner 35% hot and fed to the glow pass, the
+     * rest scorched plate), but the planet's surface was only discarded
+     * inside the cone — so where the cut broke the street there was no
+     * edge at all, and the buildings' rim stopped dead at the ground.
+     *
+     * The band is the SAME test: the ray meets the world's sphere (the
+     * very surface the planet pass draws, so the two agree), and a hit
+     * just outside the cone, within the band's width of it, is painted
+     * the way FRAG_MESH paints a cut wall — with that shader's width rule
+     * (a fraction uWRim.w of the cone's radius there), its 35% split, its
+     * colour and its glow, and its rule that a surface lying ALONG the
+     * line of sight gets no band. Written a hair nearer than the ground so
+     * it wins the depth test against the planet's own fragment there.
+     * A ray that meets the street INSIDE the cone carries on to the wall
+     * below; one that meets it anywhere else is the planet's to draw. */
+    '  vec3 a0 = uWS / max(L, 1e-9);',
+    '  if (uWPlanet.w > 0.0) {',
+    '    float pb = dot(rd, uWPlanet.xyz);',
+    '    float pc = dot(uWPlanet.xyz, uWPlanet.xyz) - uWPlanet.w * uWPlanet.w;',
+    '    float pdisc = pb * pb - pc;',
+    '    if (pc > 0.0 && pdisc > 0.0) {',
+    '      float ts = pb - sqrt(pdisc);',
+    '      if (ts > 0.0) {',
+    '        vec3 hs = rd * ts;',
+    '        float tt = dot(hs, uWS) / max(L * L, 1e-12);',
+    '        float rs = min(mix(uWR.y, uWR.x, tt), uWR.z);',
+    '        vec3 offs = hs - uWS * tt;',
+    '        float ds = length(offs);',
+    '        bool inCone = tt > 0.0 && tt < 1.0 && ds < rs;',
+    '        if (!inCone) {',
+    '          vec3 ns = normalize(hs - uWPlanet.xyz);',
+    '          if (tt > 0.0 && tt < 1.0 && ds < rs * (1.0 + uWRim.w) &&',
+    '              abs(dot(ns, offs / max(ds, 1e-9))) < 0.8) {',
+    '            float ru = (ds - rs) / (rs * uWRim.w);',
+    '            frag = ru < 0.35 ? vec4(uWRim.rgb, 0.85) : vec4(0.16, 0.11, 0.085, 0.0);',
+    '            float sd = dot(hs, uFwd) * 0.9995;',
+    '            gl_FragDepth = clamp(log2(max(uNear, sd) / uNear) * uInvLogRange, 0.0, 1.0);',
+    '            return;',
+    '          }',
+    '          discard;',
+    '        }',
+    '      }',
+    '    }',
+    '  }',
     /* The ray against the cone. x is along the axis from the eye toward her,
      * c the cosine between ray and axis; the radius at x is rEye + k x, held
      * to the cap. Near the eye it is the cylinder (where the cone would be
      * wider than the cap), then the cone, out to her. */
-    '  float L = length(uWS);',
-    '  vec3 a = uWS / max(L, 1e-9);',
+    '  vec3 a = a0;',
     '  float c = dot(rd, a);',
     '  if (c <= 0.0) discard;',
     '  float sn = sqrt(max(0.0, 1.0 - c * c));',
@@ -213,6 +263,17 @@
     '  if (dot(n, -vRel) < 0.0) n = -n;',
     '  float lam = max(0.0, dot(n, uSunDir));',
     '  frag = vec4(base * (0.26 + 0.70 * lam), 0.0);',
+    /* AND DOWN THE WALL'S LIP (fifth round): the same band, the same width
+     * in metres as the street's beside it — the cone's radius here times
+     * the band fraction — run down from the street, hot at the top where
+     * it meets the street's hot edge, scorched below, then the beds. So
+     * the rim reads as one burnt edge round the hole, street and rock. */
+    '  float rh = cyl ? cap : (uWR.y + k * t * c);',
+    '  float lipM = rh * uWRim.w * 1000.0;',
+    '  if (-hm < lipM) {',
+    '    float lu = -hm / max(lipM, 1e-6);',
+    '    frag = lu < 0.35 ? vec4(uWRim.rgb, 0.85) : vec4(0.16, 0.11, 0.085, 0.0);',
+    '  }',
     '  float depth = dot(vRel, uFwd);',
     '  gl_FragDepth = clamp(log2(max(uNear, depth) / uNear) * uInvLogRange, 0.0, 1.0);',
     '}'
@@ -2528,7 +2589,7 @@
       wallUni = uniforms(gl, wallProg, ['uWS', 'uWR', 'uRight', 'uUp', 'uFwd', 'uScreenPx',
                                         'uFlen', 'uCenterPx', 'uQuadPx', 'uViewportPx', 'uNear', 'uInvLogRange',
                                         'uWEnt', 'uWE', 'uWN', 'uWU', 'uWRoomA', 'uWRoomB',
-                                        'uWShip', 'uWFold', 'uWPh3', 'uSunDir']);
+                                        'uWShip', 'uWFold', 'uWPh3', 'uSunDir', 'uWPlanet', 'uWRim']);
     } catch (e) { wallProg = null; if (global.console) console.error(e.message); }
 
     /* The ground sky pass (GL.drawGroundSky). Its own try: a sky that
@@ -3998,7 +4059,9 @@
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LESS);
     gl.disable(gl.BLEND);
-    gl.colorMask(true, true, true, false);
+    /* Alpha on (fifth round): it is the glow mask, and the hot edge feeds
+     * it as the port's own cut face does. Rock writes 0 there. */
+    gl.colorMask(true, true, true, true);
     gl.useProgram(wallProg);
     gl.bindVertexArray(vao);
     gl.uniform2f(u.uViewportPx, vw, vh);
@@ -4023,6 +4086,11 @@
     gl.uniform4f(u.uWFold, w.dip[0], w.dip[1], w.ph[0], w.ph[1]);
     gl.uniform1f(u.uWPh3, w.ph[2]);
     gl.uniform3f(u.uSunDir, w.sun.x, w.sun.y, w.sun.z);
+    if (w.planet) gl.uniform4f(u.uWPlanet, w.planet.pos.x - e.x, w.planet.pos.y - e.y,
+                               w.planet.pos.z - e.z, w.planet.radius);
+    else gl.uniform4f(u.uWPlanet, 0, 0, 0, 0);
+    var rc = w.rimColor || CUT_RIM;
+    gl.uniform4f(u.uWRim, rc[0], rc[1], rc[2], w.rim || 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.bindVertexArray(null);
     gl.colorMask(true, true, true, true);
