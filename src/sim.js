@@ -677,6 +677,25 @@
     return null;
   }
 
+  /* IS THIS POINT IN OPEN SPACE, as far as this station is concerned — not
+   * in a room of it, not in a doorway, and NOT IN ITS METAL (2026-11-03).
+   *
+   * insideStation answers "is something over your head" and so says null for
+   * a point buried in a wall: a wall is not a room. That was the right
+   * answer for the sky and the wrong one for the camera. main.js asked
+   * `insideStation(eye) !== port` to decide that the cut-off view had
+   * reached the outside, so a boom whose eye had only got as far as the
+   * hull plating counted as out, and the view handed over to "the station
+   * from space" with the eye inside a bulkhead — a screen of dark slab.
+   * Measured by the sweep in berths.test.js: along the boom out of a berth
+   * the eye passes through metal before it reaches space at most bays.
+   * Outside means SOLID_OUT. */
+  function outsideStation(port, pos, sys, t) {
+    var R = global.Render;
+    if (!R || !port) return true;
+    return stationSolidAt(port, pos, sys, t) === R.SOLID_OUT;
+  }
+
   /* Where in the world berth `i` of this port is, and which way the ship
    * parked in it faces. */
   function berthState(port, sys, t, i) {
@@ -8036,6 +8055,7 @@
     checkStationImpact: checkStationImpact, checkHullImpact: checkHullImpact,
     stationSolidity: stationSolidity,
     stationSolidAt: stationSolidAt,
+    outsideStation: outsideStation,
     insideStation: insideStation,
     /* Exported so a test can ask what the berth's own facing IS, rather than
      * re-deriving it and pinning its own arithmetic instead of the game's. */

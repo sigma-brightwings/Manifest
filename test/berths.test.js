@@ -1990,6 +1990,136 @@ console.log('--- in the roads ---');
         Sim.arrivalHold(lay, { surface: true }) + Sim.FINAL_DESCENT_S <= 1200 * 0.8 + 1e-6);
 })();
 
+/* ---- SEEING HER FROM OUTSIDE, AT EVERY BERTH (2026-11-03) -----------------
+ * Astra, at Threshold Dock in the new home system: "camera doesn't zoom out
+ * more than 21 m while docked at Mirven, cutaway doesn't work". The zoom half
+ * is main.js's and render.test.js pins it; this is the half that is about the
+ * MODELS, swept so a re-exported station or a moved berth cannot quietly
+ * bring it back somewhere nobody happened to dock.
+ *
+ * Every orbital model, every berth, the ship docked there, and the boom laid
+ * out along five directions in the berth's own frame (out of the bay, out and
+ * to the side, over the top, straight up the station's axis, back across the
+ * bay) at five lengths from 30 m to 2 km. Three questions, each answered
+ * against the solidity grid — the station's own idea of where its metal is:
+ *
+ *   1. She is not parked in metal. A stand inside the hull draws as a ship
+ *      missing from the hole the cutaway opens for her.
+ *   2. With the cut ON, nothing the shader keeps is between the eye and her.
+ *      The cone takes everything round the line of sight except the island
+ *      of deck it leaves under her (FRAG_MESH's keyhole, `deck`), so a wall
+ *      sample on any line from the eye to her bow, middle or stern that the
+ *      shader's own test does not discard is a wall in front of the ship.
+ *   3. With the cut OFF, the view hands over to "the station from space"
+ *      only with the eye in OPEN space (Sim.outsideStation). The old test —
+ *      not in a room — passed an eye buried in the plating, and the screen
+ *      was a slab of the inside of a wall. Printed beside it: how many of
+ *      these booms the old rule would have handed over in metal, and that
+ *      every boom does reach open space within three station radii, so the
+ *      cut-off view always has an outside to reach. */
+console.log('--- seeing her from outside, at every berth ---');
+(function () {
+  var sys = Gen.generateSystem('cut-sweep');
+  var station = (sys.ports || []).filter(function (p) { return !p.surface && p.docking; })[0];
+  check('there is a station to look into', !!station);
+  if (!station) return;
+  var role = Render.portRole(station);
+  var WALL = Render.SOLID_WALL, OUT = Render.SOLID_OUT;
+  var LEN = Render.SHIP_LEN || 0.025;
+  var rShip = LEN * 1.0;                                 // main.js CUT_SHIP
+  var CONE = Math.tan(20 * Math.PI / 180);               // main.js CUT_CONE
+  var DISTS = [0.03, 0.1, 0.3, 0.8, 2.0];
+  /* The shader's keyhole (gl.js FRAG_MESH), deck bubble and all: true when
+   * the fragment at `p` would be thrown away. */
+  function discards(p, eye, ship, rEye, up) {
+    var c = V.sub(ship, eye), v = V.sub(p, eye);
+    var t = V.dot(v, c) / Math.max(V.dot(c, c), 1e-12);
+    var q = V.sub(v, c);
+    var deck = V.len(q) < rShip && V.dot(q, up) < rShip * 0.15;
+    if (!(t > 0 && t < 1) || deck) return false;
+    var r = rEye + (rShip - rEye) * t;
+    return V.len(V.sub(v, V.scale(c, t))) < r;
+  }
+  var models = 0, skipped = [], berths = 0, booms = 0;
+  var inMetal = [], blocked = [], oldInMetal = 0, newInMetal = 0, noOutside = [];
+  MODELS.forEach(function (modelId) {
+    Render.assignPort(role, modelId);
+    if (Render.portModelFor(station) !== modelId) { skipped.push(modelId); return; }
+    models++;
+    var n = Math.max(1, Gen.bayGeometry(station).berths);
+    for (var i = 0; i < n; i++) {
+      var ship = { cls: 'courier', dryMass: 80, pos: V.zero(), vel: V.zero(), thrust: V.zero(),
+                   fwd: { x: 1, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 }, right: { x: 0, y: -1, z: 0 },
+                   cleared: {} };
+      Sim.refreshShip(ship);
+      Sim.dockShip(ship, station, sys, 0, i);
+      if (!ship.dockOffset || ship.dockOffset.berth !== i) continue;
+      berths++;
+      var S = ship.pos, F = V.norm(ship.fwd);
+      var bs = Sim.berthState(station, sys, 0, i);
+      var up = bs.basis.up, nrm = Sim.berthFacing(bs.basis, bs.off);
+      var side = V.cross(nrm, up);
+      if (V.len(side) < 0.1) side = bs.basis.east;     // a bay that opens up the axis
+      side = V.norm(side);
+      var ends = [S, V.addScaled(S, F, LEN / 2), V.addScaled(S, F, -LEN / 2)];
+      for (var e = 0; e < ends.length; e++) {
+        if (Sim.stationSolidAt(station, ends[e], sys, 0) === WALL) {
+          inMetal.push(modelId + ' berth ' + i + ['', ' bow', ' stern'][e]); break;
+        }
+      }
+      var dirs = [V.add(nrm, V.scale(up, 0.6)), V.add(V.add(nrm, side), V.scale(up, 0.6)),
+                  V.add(V.scale(nrm, 0.3), up), up, V.add(V.scale(nrm, -1), V.scale(up, 0.8))];
+      dirs.forEach(function (d0, di) {
+        var d = V.norm(d0);
+        DISTS.forEach(function (dist) {
+          booms++;
+          var eye = V.addScaled(S, d, dist), rEye = rShip + dist * CONE;
+          /* 2: every wall sample the shader keeps, on the line to bow, middle
+           * and stern. 1 m steps for the first 40 m out from her, where the
+           * deck island is; past that the lines run inside the cone (an
+           * offset of half a hull at her end, the cone's radius a whole one
+           * and growing), so the middle line alone at 10 m steps. */
+          var kept = 0;
+          for (var k = 0; k < ends.length && !kept; k++) {
+            var L = V.dist(eye, ends[k]), u = V.norm(V.sub(eye, ends[k]));
+            var stop = k === 0 ? L : Math.min(L, 0.04);
+            for (var s = 0.002; s < stop && !kept; s += s < 0.04 ? 0.001 : 0.01) {
+              var p = V.addScaled(ends[k], u, s);
+              if (Sim.stationSolidAt(station, p, sys, 0) === WALL && !discards(p, eye, S, rEye, up)) kept++;
+            }
+          }
+          if (kept) blocked.push(modelId + ' b' + i + ' dir' + di + ' ' + (dist * 1000) + ' m');
+          /* 3: what the old rule said about the eye, and the new one. */
+          var at = Sim.stationSolidAt(station, eye, sys, 0);
+          var oldOut = Sim.insideStation(eye, sys, 0) !== station;
+          if (oldOut && at === WALL) oldInMetal++;
+          if (Sim.outsideStation(station, eye, sys, 0) && at !== OUT) newInMetal++;
+        });
+        /* And there is an outside to reach along this boom at all. */
+        var reach = -1;
+        for (var q = 0.01; q < station.radius * 3; q += 0.005) {
+          if (Sim.outsideStation(station, V.addScaled(S, d, q), sys, 0)) { reach = q; break; }
+        }
+        if (reach < 0) noOutside.push(modelId + ' b' + i + ' dir' + di);
+      });
+    }
+  });
+  Render.assignPort(role, null);
+  console.log('  ' + models + ' models, ' + berths + ' berths, ' + booms + ' booms' +
+              (skipped.length ? '   (not assignable here: ' + skipped.join(', ') + ')' : ''));
+  console.log('  the old "outside" rule would hand over with the eye in metal on ' +
+              oldInMetal + ' of ' + booms + ' booms');
+  check('every model was swept', models === MODELS.length, skipped.join(', '));
+  check('no docked ship is parked in metal', inMetal.length === 0,
+        inMetal.length + ': ' + inMetal.slice(0, 6).join('; '));
+  check('with the cut on, nothing kept stands between the eye and her', blocked.length === 0,
+        blocked.length + ' of ' + booms + ': ' + blocked.slice(0, 6).join('; '));
+  check('with the cut off, "outside" means open space, never the plating', newInMetal === 0,
+        newInMetal + ' of ' + booms);
+  check('and every boom reaches open space within three radii', noOutside.length === 0,
+        noOutside.length + ': ' + noOutside.slice(0, 6).join('; '));
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

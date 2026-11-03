@@ -2584,9 +2584,40 @@
                 + (G.cockpitFov / DEG).toFixed(0) + '° field)', 1.5);
       }
     } else {
-      G.cam.dist = Math.max(MIN_CAM_DIST * shipLen() / (Render.SHIP_LEN || 0.025), Math.min(MAX_CAM_DIST, G.cam.dist * f));
+      /* From the boom you ASKED for, not the one a wall left you with (see
+       * camAsked). Multiplying the clamped length meant every step was
+       * judged on its own, and a step smaller than the gap to the next
+       * threshold was simply undone. */
+      G.cam.ask = Math.max(MIN_CAM_DIST * shipLen() / (Render.SHIP_LEN || 0.025),
+                           Math.min(MAX_CAM_DIST, camAsked() * f));
+      G.cam.dist = G.cam.ask;
+      G.cam.askAt = G.cam.dist;
       if (announce) say('Camera ' + fmtDist(G.cam.dist), 1.5);
     }
+  }
+
+  /* ---- THE BOOM YOU ASKED FOR (2026-11-03) ------------------------------
+   * Astra, on Electron at Threshold Dock: "camera doesn't zoom out more than
+   * 21 m while docked at Mirven, cutaway doesn't work". The hangar let go of
+   * the boom only when ONE frame's zoom took it past HANGAR_OUT (1.08) of
+   * its wall, and the clamp put it back on the wall at the end of every
+   * frame. A mouse notch (deltaY 100, x1.17) cleared that; a laptop
+   * trackpad or a smooth-scrolling wheel sends many small deltas (x1.01 to
+   * x1.07 a frame), each undone before the next arrived — measured headless,
+   * deltaY 8 twice a frame or 40 once sat at 18 m forever, with the cut on
+   * or off. The same shape held the cut-off view at a station wall (54 m at
+   * Threshold Dock, every request rewritten to the wall), so the outside was
+   * never reached by any input at all with the cut off.
+   *
+   * So the request is kept apart from the boom: G.cam.ask is what the wheel
+   * has asked for, G.cam.dist what the walls allow this frame, and the
+   * clamps that are designed to LET GO (her hangar's wall, the station wall
+   * with the cut off) judge the request. G.cam.askAt is the boom as the
+   * clamp last left it, so anything else that sets G.cam.dist — a view
+   * change, a new career, a test — is taken as the new request rather than
+   * being overridden by a stale one. */
+  function camAsked() {
+    return (G.cam.ask > 0 && G.cam.askAt === G.cam.dist) ? G.cam.ask : G.cam.dist;
   }
 
 
@@ -7008,6 +7039,9 @@
     var eye = V.addScaled(G.cam.target, camBoomDir(), G.cam.dist);
     if (port.seaPlatform) return !insideSeaDome(port, eye);
     if (port.surface) return !eyeUnderStreet(port, { eye: eye });
+    /* In open space, not merely out of the rooms: an eye in the hull's
+     * plating is not outside it (Sim.outsideStation, 2026-11-03). */
+    if (Sim.outsideStation) return Sim.outsideStation(port, eye, G.sys, G.t);
     var within = Sim.insideStation ? Sim.insideStation(eye, G.sys, G.t) : port;
     return within !== port;
   }
@@ -7692,12 +7726,14 @@
 
   function cutawayFor(port, room, asked) {
     var eye = V.addScaled(G.cam.target, camBoomDir(), asked);
-    var within = Sim.insideStation ? Sim.insideStation(eye, G.sys, G.t) : port;
+    /* Out in space, not in the plating either (Sim.outsideStation). */
+    var outside = Sim.outsideStation ? Sim.outsideStation(port, eye, G.sys, G.t)
+                : (Sim.insideStation ? Sim.insideStation(eye, G.sys, G.t) : port) !== port;
     var rShip = shipLen() * CUT_SHIP;
     return {
       port: port,
       room: room,
-      outside: within !== port,
+      outside: outside,
       rShip: rShip,
       rEye: rShip + asked * CUT_CONE
     };
@@ -7826,7 +7862,24 @@
 
   var HANGAR_OUT = 1.08;       // of the hangar's reach: a wheel notch past its wall leaves it
   var HANGAR_IN = 0.92;        // and back in under this, the hangar is the room again
+  /* Set by a clamp that holds the boom short of a request it will honour
+   * once the request is far enough out (camAsked): then the request is kept
+   * for next frame instead of being forgotten at the wall. Every other clamp
+   * — the shaft, the street, a planet's floor — drops the excess as it always
+   * did, so zooming back in from one of them starts from where you see the
+   * camera, not from somewhere past it. */
+  var boomHeld = false;
   function clampCameraToEnclosure() {
+    /* Every frame starts from the request, so the hangar's and the wall's
+     * thresholds below see what the player asked for. */
+    G.cam.dist = camAsked();
+    var want = G.cam.dist;
+    boomHeld = false;
+    clampBoom();
+    G.cam.ask = boomHeld ? want : G.cam.dist;
+    G.cam.askAt = G.cam.dist;
+  }
+  function clampBoom() {
     if (G.viewMode === 'cockpit') return;   // the eye is the pilot's, not a boom
     /* Berthed in her hangar, the hangar is the room (hangarChase). */
     /* ZOOM OUT OF HER HANGAR (2026-11-02). Astra: "the station cutaway
@@ -7856,7 +7909,11 @@
       else if (G.hangarOut && reach < Infinity && G.cam.dist < reach * HANGAR_IN) G.hangarOut = false;
     }
     var hc = hangarChase();
-    if (hc) { G.cutaway = null; clampCameraToDeckHangar(hc); return; }
+    /* Held, not dropped: the request past the wall is what lets go of it
+     * (HANGAR_OUT above), and a request that is ever more than 1.08 of the
+     * reach leaves on this same frame, so what is kept here is never more
+     * than a sliver past the wall. */
+    if (hc) { G.cutaway = null; clampCameraToDeckHangar(hc); boomHeld = true; return; }
     /* The clamp follows the ENCLOSURE, not the docked flag. Half way down
      * the shaft the hull is inside a tube and the boom has to be shortened
      * or the eye ends up in the rock; on the apron it is outside and must
@@ -7975,6 +8032,12 @@
         if (port.surface) keepCameraAboveStreet(port);
         if (eyeOutsidePort(port)) { G.viewOutside = port; return; }
         G.cam.dist = wallDist;
+        /* Still in the station's metal or its rooms at the asked length:
+         * the wall holds the boom, and the request is kept, so the wheel
+         * goes on working through the hull until the eye is out of it
+         * (camAsked). Before, the request was rewritten to the wall here
+         * every frame and the outside could not be reached at all. */
+        boomHeld = true;
       }
       keepCameraAboveDeck(port);
       if (port.surface) keepCameraAboveStreet(port);
@@ -21314,7 +21377,18 @@
    * moment the tab is hidden, which is correct for players and useless for
    * a script trying to playtest through a hidden pane — this is the crank
    * handle on the side of the engine. */
-  G.step = function (dt) { update(dt || 0.016); draw(); };
+  /* AND IT FLUSHES THE WORLD LAYER, as the real frame does (2026-11-03).
+   * It did not: draw() only queues the GL meshes, and GLWorld.end() — the
+   * call that puts them on the canvas — lived in the rAF loop alone. So a
+   * playtest that stubbed requestAnimationFrame and cranked this got a 2D
+   * layer from this frame over a GL layer from whenever the real loop last
+   * ran. That is how the Threshold Dock cutaway was first "seen" to fail:
+   * shots at 45 m and 813 m were the same GL picture, and the ship missing
+   * from them was the probe, not the game. */
+  G.step = function (dt) {
+    update(dt || 0.016); draw();
+    if (glLive()) global.GLWorld.end();
+  };
   /* The same object combat and missions are handed. Exposed so a test — or
    * a console — can put the ship through something the game would do to it
    * rather than reaching in and setting the aftermath by hand. */
