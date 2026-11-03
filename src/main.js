@@ -19260,9 +19260,19 @@
     /* Reference lines first, so the price lines lie on top of them. Each
      * labelled at the right edge, the labels pushed apart if two lines
      * are close, so no two words print over one another. */
+    /* The two averages: avg here a thin SOLID line, avg system a long
+     * dash-dot — patterns that stay apart at small separations. Within a
+     * few pixels of each other they are drawn as ONE line labelled with
+     * both: two dash patterns a pixel apart interleave into a hatched band
+     * that reads as a glitch (the readout below gives both numbers). */
     var refs = [];
-    if (det.portAvg !== null) refs.push({ v: det.portAvg, col: TA_AVG, dash: [2, 3], label: 'avg here' });
-    if (det.sysAvg !== null && det.sysN > 1) refs.push({ v: det.sysAvg, col: TA_SYS, dash: [8, 3, 2, 3], label: 'avg system' });
+    var sysOn = det.sysAvg !== null && det.sysN > 1;
+    if (det.portAvg !== null && sysOn && Math.abs(Y(det.portAvg) - Y(det.sysAvg)) < 5) {
+      refs.push({ v: (det.portAvg + det.sysAvg) / 2, col: TA_AVG, dash: [], label: 'avg here\n≈ system', w: 1.2 });
+    } else {
+      if (det.portAvg !== null) refs.push({ v: det.portAvg, col: TA_AVG, dash: [], label: 'avg here', w: 1.1 });
+      if (sysOn) refs.push({ v: det.sysAvg, col: TA_SYS, dash: [10, 4, 2, 4], label: 'avg system' });
+    }
     if (be.price) refs.push({ v: be.price, col: TA_BE, dash: [12, 5], label: 'break-even', w: 2 });
     refs.forEach(function (rf) {
       var yy = Y(rf.v);
@@ -19271,11 +19281,16 @@
     });
     taDash(ctx, []);
     var labs = refs.map(function (rf) { return { y: Y(rf.v), rf: rf }; }).sort(function (p, q) { return p.y - q.y; });
-    for (var li = 1; li < labs.length; li++) if (labs[li].y - labs[li - 1].y < 12) labs[li].y = labs[li - 1].y + 12;
+    for (var li = 1; li < labs.length; li++) {
+      var need = 12 + 11 * (labs[li - 1].rf.label.split('\n').length - 1);
+      if (labs[li].y - labs[li - 1].y < need) labs[li].y = labs[li - 1].y + need;
+    }
     ctx.font = taFont(10);
     labs.forEach(function (lb) {
       ctx.fillStyle = lb.rf.col;
-      ctx.fillText(lb.rf.label, bx1 + 5, lb.y + 3.5);
+      /* Two words on two lines: the margin is 64 px, and one line of
+       * "avg here ≈ system" would run off the panel. */
+      lb.rf.label.split('\n').forEach(function (part, pi) { ctx.fillText(part, bx1 + 5, lb.y + 3.5 + pi * 11); });
     });
 
     /* The two price lines: the ask solid with round markers, the bid

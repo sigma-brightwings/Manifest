@@ -502,10 +502,20 @@
       }
     }
     if (!cands.length) return null;
-    var pick = stream('tradeterm|' + seed + '|' + plan.portId).pick(cands);
+    var trng = stream('tradeterm|' + seed + '|' + plan.portId);
+    var pick = trng.pick(cands);
+    /* What its screen shows: two traces, an ask over a bid, seven points
+     * each. Drawn from the same stream AFTER the pick, so the spot does not
+     * depend on them, and nothing else does either. */
+    var ask = [], bid = [], lvl = 0.55 + trng.next() * 0.2;
+    for (var k = 0; k < 7; k++) {
+      lvl = Math.max(0.35, Math.min(0.85, lvl + (trng.next() - 0.5) * 0.22));
+      ask.push(lvl);
+      bid.push(Math.max(0.08, lvl - 0.18 - trng.next() * 0.1));
+    }
     var hw = pick.fx ? TERM_HALF[1] : TERM_HALF[0], hd = pick.fx ? TERM_HALF[0] : TERM_HALF[1];
     var it = { kind: 'tradeterm', term: true, x: pick.x, z: pick.z, label: 'Trade terminal',
-               face: { x: pick.fx, z: pick.fz },
+               face: { x: pick.fx, z: pick.fz }, trace: { ask: ask, bid: bid },
                counter: [pick.x - hw, pick.z - hd, pick.x + hw, pick.z + hd] };
     plan.items.push(it);
     return it;
@@ -523,12 +533,39 @@
     var fx = it.x + f.x * 0.12, fz = it.z + f.z * 0.12;
     var bx = it.x - f.x * 0.18, bz = it.z - f.z * 0.18;
     var P = function (ox, oz, s, y) { return [ox + ax * s, y, oz + az * s]; };
-    /* The screen: low at the front, high at the back. */
-    out.push({ pts: [P(fx, fz, -half, 1.0), P(fx, fz, half, 1.0), P(bx, bz, half, 1.42), P(bx, bz, -half, 1.42)],
-               col: '#7dfaff', lit: true, bias: -0.02 });
-    /* Its bezel, a hair behind it. */
-    out.push({ pts: [P(fx, fz, -half - 0.04, 0.95), P(fx, fz, half + 0.04, 0.95), P(bx, bz, half + 0.04, 1.47), P(bx, bz, -half - 0.04, 1.47)],
+    /* The screen: low at the front, high at the back, dark glass lit from
+     * inside — with what the analyser would show on it: a header strip and
+     * two traces, the ask over the bid, in the screen's own two colours.
+     * Everything on the glass stands a centimetre off it, along its normal
+     * (the screen leans back 0.30 m over 0.42 m of rise), so nothing is
+     * coplanar with anything else. */
+    var nH = 0.814, nY = 0.581;
+    var S = function (u, v, off) {
+      return [fx + (bx - fx) * v + ax * u + f.x * nH * off, 1.0 + 0.42 * v + nY * off,
+              fz + (bz - fz) * v + az * u + f.z * nH * off];
+    };
+    var rect = function (u0, v0, u1, v1, off, col, bias) {
+      out.push({ pts: [S(u0, v0, off), S(u1, v0, off), S(u1, v1, off), S(u0, v1, off)], col: col, lit: true, bias: bias });
+    };
+    /* Its bezel a centimetre BEHIND the glass along that normal. It used
+     * to lie in the glass's own plane, a little bigger, and on the GPU the
+     * two fought: the bezel won the upper half of the screen. */
+    out.push({ pts: [S(-half - 0.04, -0.12, -0.01), S(half + 0.04, -0.12, -0.01), S(half + 0.04, 1.12, -0.01), S(-half - 0.04, 1.12, -0.01)],
                col: '#1b2026', bias: 0.01 });
+    rect(-half, 0, half, 1, 0, '#0b2a33', -0.02);
+    rect(-half + 0.03, 0.82, half - 0.03, 0.93, 0.01, '#7dfaff', -0.03);
+    /* A trace as thin strips between its points. */
+    var tr = it.trace || { ask: [0.6, 0.62, 0.58, 0.64, 0.6, 0.66, 0.63], bid: [0.4, 0.42, 0.38, 0.44, 0.4, 0.46, 0.43] };
+    var u0 = -half + 0.05, u1 = half - 0.05, vlo = 0.1, vhi = 0.74, th = 0.025;
+    [[tr.ask, '#7dc8ff'], [tr.bid, '#ffc46b']].forEach(function (line) {
+      var pts = line[0];
+      for (var k = 0; k + 1 < pts.length; k++) {
+        var ua = u0 + (u1 - u0) * k / (pts.length - 1), ub = u0 + (u1 - u0) * (k + 1) / (pts.length - 1);
+        var va = vlo + (vhi - vlo) * pts[k], vb = vlo + (vhi - vlo) * pts[k + 1];
+        out.push({ pts: [S(ua, va - th, 0.01), S(ub, vb - th, 0.01), S(ub, vb + th, 0.01), S(ua, va + th, 0.01)],
+                   col: line[1], lit: true, bias: -0.03 });
+      }
+    });
     /* The post and the header. */
     boxQuads([it.x - f.x * 0.3 - 0.04 - ax * 0.04, it.z - f.z * 0.3 - 0.04 - az * 0.04,
               it.x - f.x * 0.3 + 0.04 + ax * 0.04, it.z - f.z * 0.3 + 0.04 + az * 0.04], 0.95, 2.2, '#3a4048', out);
@@ -537,6 +574,14 @@
     var hx = it.x - f.x * 0.25, hz = it.z - f.z * 0.25;
     out.push({ pts: [P(hx, hz, -half - 0.1, 2.0), P(hx, hz, half + 0.1, 2.0), P(hx, hz, half + 0.1, 2.35), P(hx, hz, -half - 0.1, 2.35)],
                col: '#ffd36b', lit: true, bias: -0.02 });
+    /* Three dark marks on the sign, a centimetre proud of it again, for
+     * lettering at a distance. */
+    var gx = it.x - f.x * 0.24, gz = it.z - f.z * 0.24;
+    for (var g = 0; g < 3; g++) {
+      var s0 = -half + 0.02 + g * (2 * half - 0.04) / 3, s1 = s0 + (2 * half - 0.04) / 3 - 0.06;
+      out.push({ pts: [P(gx, gz, s0, 2.09), P(gx, gz, s1, 2.09), P(gx, gz, s1, 2.26), P(gx, gz, s0, 2.26)],
+                 col: '#2a2410', bias: -0.03 });
+    }
   }
 
   /* ---- where you may stand ---------------------------------------------
