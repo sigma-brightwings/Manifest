@@ -3551,6 +3551,9 @@
    *   capital       13.7% / 13.2%      30.7% / 29.5% (0.60)   13.2% / 10.8% (0.68) */
   var NAVY_MIN_DEV = 0.63;
   var CAPITAL_MIN_DEV = 0.68;
+  /* And the Syndicate flagship's permissivity floor, moved for the same
+   * reason the other way (see its gate). Was 58. */
+  var FLAGSHIP_MIN_CRIME = 56;
 
   function buildPatrols(sys, base) {
     var rng = base.fork('patrols');
@@ -3744,7 +3747,15 @@
       var sr = rng.fork ? rng.fork('syndicate') : rng;
       var devS = sys.development === undefined ? 0.5 : sys.development;
       var crimeS = sys.crimeScore === undefined ? 40 : sys.crimeScore;
-      if (sys.heldBy !== 'syndicate' && (crimeS < 58 || devS < 0.28)) return;
+      /* RE-MEASURED 2026-11-03 (stars stage 2), the mirror of the capital's
+       * move. Richer systems are less violent (median permissivity 48 → 44
+       * across kawartha), so at 58 the gate let in 55 of 300 seed-i systems
+       * where it let in 64, and with the navy's capitals restored the
+       * flagships fell to 0.42-0.53 of them (master: 0.61) - "half the
+       * power", the reading 0.65 below was chosen to avoid. 56 lets in 62
+       * of 300 (was 64), 87 of 212 claimed kawartha systems (was 89) and
+       * 96 of 212 in beaverton (was 94). */
+      if (sys.heldBy !== 'syndicate' && (crimeS < FLAGSHIP_MIN_CRIME || devS < 0.28)) return;
       /* MEASURED like the navy's was. Eleven systems in sixty clear the
        * gate; at 0.40 that produced four flagships against the navy's
        * eight, which reads as the Syndicate being half the power rather
@@ -3859,10 +3870,26 @@
        * cutter and trader downstream of it moved. Its own substream costs
        * one allocation and makes the tugs invisible to everything else. */
       var trng = rng.fork('port-tugs');
+      /* ONE HIGHPORT TUG A WORLD (2026-11-03, stars stage 2). Highports
+       * stand over settled worlds, and the warm chain settled more of them:
+       * 48 highports in 25 claimed kawartha systems became 86, and tugs went
+       * from 3.12 a system to 5.08 — the 5.45 the first cut was cut back
+       * from. A world's highports share one tug now (shipyards and carriers
+       * still each keep their own): 3.32 a system in kawartha's first 40
+       * stars, 3.17 over rescue-0..23 (was 2.96), 3.61 over the next 120.
+       * What did not come back is "not everywhere": every system anybody
+       * holds now has a working port, so every one has a tug; the deep, not
+       * the system, is where you are on your own. */
+      var tugWorlds = {};
       for (var pt = 0; pt < ports.length; pt++) {
         var host = ports[pt];
         var role = host.market && host.market.role;
         if (!PORT_TUG_ROLES[role]) continue;
+        if (role === 'highport') {
+          var tw = (host.parentBody && host.parentBody.id) || host.id;
+          if (tugWorlds[tw]) continue;
+          tugWorlds[tw] = true;
+        }
         var near = null, nearD = Infinity;
         for (var q = 0; q < ports.length; q++) {
           if (ports[q] === host) continue;
@@ -4656,7 +4683,18 @@
     var ports = (sys.ports || []).filter(function (p) { return p !== port && p.market; });
     var pairs = [];
     ports.forEach(function (B) {
-      if (B.parentBody === port.parentBody) { pairs.push({ b: B, local: true, score: 1e9 }); return; }
+      /* HER OWN ORBITAL HALF FIRST (fixed 2026-11-03). Every local hop
+       * scored the same, so with more ports over her world than
+       * PORT_ROUTES_MAX the cut fell in sys.ports order - and her own
+       * up-half, attached last, was the one cut: a surface station whose
+       * shuttle did not run to her own Crawler (stations.test, "0 routes",
+       * once stars stage 2 put four ports and a pad over Mirven II). The
+       * pair is the station; it goes first, then the rest as before. */
+      if (B.parentBody === port.parentBody) {
+        var own = !!(port.playerStation && B.playerStation === port.playerStation);
+        pairs.push({ b: B, local: true, score: own ? 2e9 : 1e9 });
+        return;
+      }
       var mOut = manifestFor(port, B, rng), mBack = manifestFor(B, port, rng);
       var score = 0, k;
       for (k = 0; k < mOut.length; k++) score += mOut[k].qty;
@@ -5396,7 +5434,7 @@
      * test/habitable.test.js to hold the generator to its own numbers. */
     chainRatioMin: chainRatioMin,
     HZ_WARM: HZ_WARM, HZ_COOL: HZ_COOL,
-    NAVY_MIN_DEV: NAVY_MIN_DEV, CAPITAL_MIN_DEV: CAPITAL_MIN_DEV,
+    NAVY_MIN_DEV: NAVY_MIN_DEV, CAPITAL_MIN_DEV: CAPITAL_MIN_DEV, FLAGSHIP_MIN_CRIME: FLAGSHIP_MIN_CRIME,
     starPreview: starPreview,
     finalize: finalize,
     describe: describe,

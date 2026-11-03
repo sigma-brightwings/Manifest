@@ -1303,7 +1303,7 @@ console.log('--- higher-tech worlds make higher-tech goods and more mess ---');
 console.log('--- government and crime permissivity ---');
 (function () {
   var withGov = 0, badScore = 0, noneEver = { anarchy: 0, technocracy: 0 };
-  var lowDevCrime = [], highDevCrime = [];
+  var lowDevCrime = [], highDevCrime = [], byDev = [];
   seeds(150).forEach(function (sd) {
     var sys = Gen.generateSystem(sd);
     if (!sys.government || sys.crimeScore === undefined) return;
@@ -1313,6 +1313,7 @@ console.log('--- government and crime permissivity ---');
     if (sys.government.id === 'anarchy') noneEver.anarchy++;
     if (sys.government.id === 'technocracy') noneEver.technocracy++;
     (sys.development < 0.3 ? lowDevCrime : sys.development > 0.7 ? highDevCrime : []).push(sys.crimeScore);
+    byDev.push([sys.development, sys.crimeScore]);
   });
   check('every sampled system got a government and a crime score', withGov === 150);
   check('crime score always lands in [0,100]', badScore === 0, badScore + ' bad');
@@ -1321,9 +1322,19 @@ console.log('--- government and crime permissivity ---');
   check('technocracy shows up somewhere across 150 seeds', noneEver.technocracy > 0);
 
   function mean(a) { return a.reduce(function (s, x) { return s + x; }, 0) / a.length; }
+  /* The bottom quarter of development against the top quarter, not "under
+   * 0.3" against "over 0.7": since stars stage 2 settled the galaxy, these
+   * 150 seeds hold ONE system under 0.3, and a mean of one is not a trend
+   * (it read 31.0 against 38.1). Re-measured, the trend is real and a
+   * little gentler: crime falls 46 points per unit of development over 600
+   * seeds (53 before); here the quarters read 41.7 vs 37.4 (51.5 vs 35.6). */
+  byDev.sort(function (x, y) { return x[0] - y[0]; });
+  var qn = Math.floor(byDev.length / 4);
+  var loQ = byDev.slice(0, qn).map(function (x) { return x[1]; });
+  var hiQ = byDev.slice(byDev.length - qn).map(function (x) { return x[1]; });
   check('low-development systems trend more crime-permissive than high-development ones',
-        lowDevCrime.length && highDevCrime.length && mean(lowDevCrime) > mean(highDevCrime),
-        mean(lowDevCrime || [0]).toFixed(1) + ' vs ' + mean(highDevCrime || [0]).toFixed(1));
+        mean(loQ) > mean(hiQ),
+        mean(loQ).toFixed(1) + ' vs ' + mean(hiQ).toFixed(1) + ' (development quarters)');
 
   // The user's rule explicitly: NOT every low-tech system is high crime.
   /* Low-development systems are rare — five in these 150 seeds, one

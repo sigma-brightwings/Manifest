@@ -361,9 +361,17 @@
   /* Does THIS port have a vineyard? Planetside only: the vines are under a
    * dome on the ground, so an orbital station cannot have one however rich
    * the world below it is. */
+  /* The key a port's own hashes are taken on: its id, except for a station
+   * of yours, which carries its SITE (stations.js siteKey) so the forecast
+   * for a site - built under a stand-in id - draws the same demand, wine
+   * and shelves as the station founded there (fixed 2026-11-03: once dev
+   * passed 0.45 at the stations.test site, the forecast's livestock, fish,
+   * textiles and wine came off a different hash from the real one's). A
+   * generated port has no siteKey, so every seed's ports hash as before. */
+  function marketKey(port) { return port.siteKey || port.id; }
   function vineyardAt(port, host) {
     if (!port || !port.surface || !canFarm(host)) return false;
-    var h = RNG.hashString('vineyard|' + (host && host.id) + '|' + port.id);
+    var h = RNG.hashString('vineyard|' + (host && host.id) + '|' + marketKey(port));
     return (h % 1000) / 1000 < VINEYARD_SHARE;
   }
 
@@ -783,7 +791,7 @@
      * when there is a vineyard on the world below. It is not growing anything
      * — it is the export point, holding what came up the well, which is why
      * the rate is a share of the ground's and not its own. */
-    var vineHash = RNG.hashString('vinerate|' + port.id) % 1000 / 1000;
+    var vineHash = RNG.hashString('vinerate|' + marketKey(port)) % 1000 / 1000;
     if (vineyardAt(port, host)) {
       ensure('wine').prod += flow * (0.16 + vineHash * 0.22);
     } else if (!port.surface && worldHasVineyard(host, sys)) {
@@ -794,7 +802,7 @@
      * on development because wine is a luxury: a frontier rock has other
      * problems. */
     if (dev > 0.35) {
-      ensure('wine').cons += flow * dev * (0.05 + (RNG.hashString('winedem|' + port.id) % 1000) / 1000 * 0.10);
+      ensure('wine').cons += flow * dev * (0.05 + (RNG.hashString('winedem|' + marketKey(port)) % 1000) / 1000 * 0.10);
     }
 
     /* The role tips the scales rather than replacing the above — a refinery
@@ -874,7 +882,7 @@
      * and any row this creates takes its shelf numbers from the hash too
      * (hashRows, below) — so every row a port already had keeps every
      * number it had. */
-    var hRow = function (cid) { return (RNG.hashString('demand|' + cid + '|' + port.id) % 1000) / 1000; };
+    var hRow = function (cid) { return (RNG.hashString('demand|' + cid + '|' + marketKey(port)) % 1000) / 1000; };
     var wants = function (cid, q) {
       if (!(q > 0)) return;
       if (!rows[cid]) hashRows[cid] = true;
@@ -957,7 +965,7 @@
       /* The draw happens either way, so a commodity with its own shelf rule
        * does not shift every later number in this port's stream. */
       var hr = hashRows[ids[k]] ? function (lo, hi, salt) {
-        return lo + (hi - lo) * ((RNG.hashString('shelf|' + salt + '|' + ids[k] + '|' + port.id) % 1000) / 1000);
+        return lo + (hi - lo) * ((RNG.hashString('shelf|' + salt + '|' + ids[k] + '|' + marketKey(port)) % 1000) / 1000);
       } : null;
       var span = hr ? hr(5, 14, 'span') : rng.range(5, 14);
       /* A THIN BUYER (2026-11-02): a top-tier good this port only wants a

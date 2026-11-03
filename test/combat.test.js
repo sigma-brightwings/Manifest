@@ -218,8 +218,10 @@ section('--- a mayday names what it wants ---');
 
   var r = Combat.mayday(G.sys, G, 0, Combat.HELP_TENDER, HOOKS);
   check('a tender call is transmitted', r.ok && !!r.call.mine);
+  /* A tug answers a fuel call too (eligibleResponder): kawartha had no tug
+   * near enough to be asked until stars stage 2 put highports over Mirven. */
   check('and a tender is what answers it',
-        !r.responder || r.responder.kind === 'tender',
+        !r.responder || r.responder.kind === 'tender' || r.responder.kind === 'tug',
         r.responder ? r.responder.kind : 'none in system');
 
   /* The bug the arithmetic caught: a beacon that lapses before the
@@ -312,7 +314,11 @@ section('--- two rescue services, from two different homes ---');
   check('a tender is sized to its capital, not to its class',
         tenders > 0 && inherited === tenders,
         inherited + ' of ' + tenders);
-  check('tugs exist, and not everywhere', tugs > 0 && tugSystems < N,
+  /* Was "and not everywhere" (21 of 24): since stars stage 2 every
+   * inhabited system has a highport or a yard, so every one has a tug; what
+   * is held now is the clutter bound the per-world rule exists for (5.45 a
+   * system was the cut that was rejected; 3.17 measured, generate.js). */
+  check('tugs exist, and not as clutter (under four a system)', tugs > 0 && tugs / N < 4,
         tugs + ' tugs across ' + tugSystems + ' of ' + N + ' systems');
 
   /* The capital's size letter is per SHIP. Everywhere else in the game a
@@ -967,7 +973,10 @@ section('--- the yard has something to say ---');
 section('--- what a port will sell you ---');
 (function () {
   var G = makeG();
-  var port = (G.sys.ports || [])[0];
+  /* The first port that is not a fleet carrier (whose armoury waives the
+   * development gate by design): since stars stage 2 kawartha's first port
+   * is the carrier FNS Sovereign. */
+  var port = (G.sys.ports || []).filter(function (p) { return !Combat.fleetPort(p); })[0];
   if (!port) { check('a port exists to shop at', false); return; }
   var fac = port.faction || 'civil';
 
@@ -3558,14 +3567,17 @@ section('--- the two flagships, counted ---');
    * flagship goes where its power is strongest. For the Syndicate that is
    * somewhere lawless and worth standing over. */
   var navy = 0, synd = 0;
-  for (var i = 0; i < 60; i++) {
+  /* Three hundred, not sixty: sixty systems hold a dozen capitals, and a
+   * ratio of a dozen is a coin. Since stars stage 2 the first sixty give 9
+   * against 3 while all three hundred give 59 against 34 (master: 57/35). */
+  for (var i = 0; i < 300; i++) {
     var sys = Gen.generateSystem('seed-' + i);
     (sys.patrols || []).forEach(function (p) {
       if (p.kind !== 'capital') return;
       if (p.outlaw) synd++; else navy++;
     });
   }
-  console.log('  across sixty systems: ' + navy + ' naval capitals, ' +
+  console.log('  across three hundred systems: ' + navy + ' naval capitals, ' +
               synd + ' Syndicate flagships');
   check('both powers have a flagship in the sky', navy > 0 && synd > 0,
         navy + ' / ' + synd);
