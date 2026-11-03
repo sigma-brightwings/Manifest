@@ -7355,17 +7355,26 @@
   function openBucket(role, key) {
     var ck = role + '#' + key;
     if (OPEN_BUCKET[ck] !== undefined) return OPEN_BUCKET[ck];
+    return drainJob(openBucketJob(role, key));
+  }
+  /* In slices for Sim.warmTransfers (the triangle index asks for it). Not
+   * stored until it is finished, so a sync caller meanwhile builds its own. */
+  function* openBucketJob(role, key) {
+    var ck = role + '#' + key;
+    if (OPEN_BUCKET[ck] !== undefined) return OPEN_BUCKET[ck];
     var lib = libPort(role);
     var mesh = lib && lib[key];
     var d = portDoors(role);
     var apertures = d && d.apertures;
-    OPEN_BUCKET[ck] = mesh || null;
     if (!mesh || !mesh.f || !mesh.f.length || !apertures || !apertures.length) {
+      OPEN_BUCKET[ck] = mesh || null;
       return OPEN_BUCKET[ck];
     }
     var f = [], c = [], cut = 0;
     var cboxes = corridorBoxes(apertures, true);
+    yield 0;
     for (var i = 0; i < mesh.f.length; i++) {
+      if ((i & 1023) === 1023) yield 0;
       var face = mesh.f[i], x = 0, y = 0, z = 0;
       for (var k = 0; k < face.length; k++) {
         var v = mesh.v[face[k]]; x += v[0]; y += v[1]; z += v[2];
@@ -7377,10 +7386,18 @@
       f.push(face);
       if (mesh.c) c.push(mesh.c[i]);
     }
-    if (!cut) return OPEN_BUCKET[ck];
+    if (OPEN_BUCKET[ck] !== undefined) return OPEN_BUCKET[ck];   // built meanwhile
+    if (!cut) { OPEN_BUCKET[ck] = mesh; return mesh; }
     CUT_COUNT[role] = (CUT_COUNT[role] || 0) + cut;
     OPEN_BUCKET[ck] = { v: mesh.v, f: f, c: mesh.c ? c : mesh.c };
     return OPEN_BUCKET[ck];
+  }
+
+  /* Has the renderer already built this model's library and doors? Asked by
+   * Sim.warmTransfers, which routes only stations that are this far along,
+   * so that warming the routes never pays the model's own build as well. */
+  function portReady(role) {
+    return !!(role && PORT_CACHE[role] && PORT_DOORS[role] !== undefined);
   }
 
   function portDoors(role) {
@@ -9310,8 +9327,9 @@
 
   /* Every triangle of every bucket that could possibly be within reach of
    * the park point, flattened once so the 144 rays share the work. */
-  function boomTris(lib, o) {
-    var out = [], keys = ['shell', 'interior', 'spin'];
+  function boomTris(lib, o) { return drainJob(boomTrisJob(lib, o)); }
+  function* boomTrisJob(lib, o) {
+    var out = [], keys = ['shell', 'interior', 'spin'], work = 0;
     for (var k = 0; k < keys.length; k++) {
       /* The boom takes the shell WHOLE, doors included at their modelled
        * place. A camera should stand back from a doorway whether the leaf
@@ -9319,6 +9337,7 @@
       var m = lib[keys[k]];
       if (!m || !m.f) continue;
       for (var i = 0; i < m.f.length; i++) {
+        if (++work > 15000) { work = 0; yield 0; }
         var tri = m.f[i];
         for (var j = 1; j + 1 < tri.length; j++) {
           var a = m.v[tri[0]], b = m.v[tri[j]], c = m.v[tri[j + 1]];
@@ -9383,7 +9402,20 @@
    * the box; nothing else in the library is further out than that. */
   var DECK_UNDER_BOX = 0.03, DECK_UNDER_PLATE = 0.004;
 
+  /* Run in slices by Sim.warmTransfers (2026-11-03): 162 casts down and up
+   * a big model's triangles is 40-170 ms for one berth, paid in the frame
+   * that first asked where the berth's deck is. berthDeck drains it at once. */
   function berthDeck(role, i) {
+    var job = berthDeckJob(role, i);
+    return drainJob(job);
+  }
+  function berthDeckReady(role, i) {
+    var lib = libPort(role), mb = lib && lib.anchors && lib.anchors.berths;
+    if (!mb || !mb.length) return true;
+    var k = ((i % mb.length) + mb.length) % mb.length;
+    return DECK[role + '#' + k] !== undefined;
+  }
+  function* berthDeckJob(role, i) {
     var lib = libPort(role);
     var mb = lib && lib.anchors && lib.anchors.berths;
     if (!mb || !mb.length) return null;
@@ -9400,7 +9432,8 @@
     /* Start a hair under the box's own ceiling so the cast begins in the
      * open air of the alcove rather than on the lid of the box. */
     var o = [b.mid[0], b.mid[1], b.max[2] - 1e-4];
-    var T = boomTris(lib, o);
+    var T = yield* boomTrisJob(lib, o);
+    yield 0;
     /* NINE CASTS, NOT ONE, and the MEDIAN of what they hit (24-09). The
      * centreline alone fell through the hole a lift platform leaves in the
      * ring's decks and read the plate under it as the floor, which parked
@@ -9473,6 +9506,7 @@
         var floorPick = null, floorRoom = -1;
         for (var st = 0; st <= STEPS; st++) {
           var sz = TOP - (TOP - b.min[2]) * st / STEPS;
+          yield 0;
           var dn = castZ([cx, cy, sz], -1);
           if (!isFinite(dn)) continue;
           var zc = sz - dn;
@@ -9490,6 +9524,7 @@
           var kz = zc.toFixed(5);
           if (seen[kz]) continue;
           seen[kz] = true;
+          yield 0;
           var up = castZ([cx, cy, zc + 1e-4], 1);
           if (!isFinite(up)) up = 1;
           if (up > room + 1e-6) { room = up; pick = zc; }
@@ -9747,11 +9782,20 @@
   var TRI_N = 32;
   var TRIDEX = {};
 
+  /* Built in slices too (Sim.warmTransfers, 2026-11-03): 30-150 ms for a
+   * big model, which the warm-up must not pay in one frame. portTriangles
+   * drains the same job at once; a job half-done by the warm-up is simply
+   * finished. */
+  var TRI_JOBS = {};
   function portTriangles(role) {
     if (TRIDEX[role] !== undefined) return TRIDEX[role];
-    TRIDEX[role] = null;
+    return drainJob(TRI_JOBS[role] || (TRI_JOBS[role] = trianglesJob(role)));
+  }
+  function* trianglesJob(role) {
+    if (TRIDEX[role] !== undefined) return TRIDEX[role];
     var lib = libPort(role);
-    if (!lib) return null;
+    if (!lib) { TRIDEX[role] = null; delete TRI_JOBS[role]; return null; }
+    var work = 0;
 
     /* THE HULL WITHOUT ITS DOOR LEAVES. They used to be in here, baked at
      * their CLOSED position, which made a shut door solid by accident and
@@ -9763,10 +9807,12 @@
     var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     var runs = [];                       // which bucket each run of tri is (a sweep's question)
     for (var k = 0; k < keys.length; k++) {
-      var m = (keys[k] === 'shell' && d0) ? d0.hull : openBucket(role, keys[k]);
+      var m = (keys[k] === 'shell' && d0) ? d0.hull : (yield* openBucketJob(role, keys[k]));
       if (!m || !m.v || !m.f) continue;
       runs.push({ key: keys[k], from: tri.length });
+      yield 0;
       for (var i = 0; i < m.f.length; i++) {
+        if (++work > 3000) { work = 0; yield 0; }
         var f = m.f[i];
         for (var j = 1; j + 1 < f.length; j++) {
           var a = m.v[f[0]], b = m.v[f[j]], c = m.v[f[j + 1]];
@@ -9780,7 +9826,8 @@
         }
       }
     }
-    if (!tri.length) return null;
+    if (!tri.length) { TRIDEX[role] = null; delete TRI_JOBS[role]; return null; }
+    yield 0;
 
     var N = TRI_N, size = [0, 0, 0], inv = [0, 0, 0];
     for (var ax2 = 0; ax2 < 3; ax2++) {
@@ -9798,6 +9845,9 @@
         c0[ax3] = clamp(Math.floor((Math.min(p0[ax3], p1[ax3], p2[ax3]) - lo[ax3]) * inv[ax3]));
         c1[ax3] = clamp(Math.floor((Math.max(p0[ax3], p1[ax3], p2[ax3]) - lo[ax3]) * inv[ax3]));
       }
+      /* Counted in bins touched: one big plate can sit in thousands. */
+      work += 4 + (c1[0] - c0[0] + 1) * (c1[1] - c0[1] + 1) * (c1[2] - c0[2] + 1);
+      if (work > 6000) { work = 0; yield 0; }
       for (var x = c0[0]; x <= c1[0]; x++) {
         for (var y = c0[1]; y <= c1[1]; y++) {
           for (var z = c0[2]; z <= c1[2]; z++) {
@@ -9810,6 +9860,7 @@
     }
     TRIDEX[role] = { n: N, lo: lo, inv: inv, tri: tri, bins: bins, mark: 0, runs: runs,
                      seen: new Int32Array(tri.length / 3) };
+    delete TRI_JOBS[role];
     return TRIDEX[role];
   }
 
@@ -10094,9 +10145,24 @@
     return true;
   }
 
-  function routeLeg(role, a, b, half, grow, tight) {
+  /* IN SLICES (2026-11-03). A leg's grid search is 0.3-2 s at a big station
+   * (measured in node: cylinder-s at 5.99 km, 2.1 s of routeLeg over four
+   * berths), which was paid in one frame the first time a hull was routed to
+   * a berth. So the search is a generator that yields every ROUTE_SLICE units
+   * of work: clearRoute drains it at once as before, and Sim.warmTransfers
+   * drains it a few milliseconds a frame after system entry. Same answer
+   * either way - nothing here depends on when it is run. */
+  var ROUTE_SLICE = 6000;
+  function drainJob(gen) {
+    var r;
+    do { r = gen.next(); } while (!r.done);
+    return r.value;
+  }
+  function routeLeg(role, a, b, half, grow, tight) { return drainJob(routeLegJob(role, a, b, half, grow, tight)); }
+  function* routeLegJob(role, a, b, half, grow, tight) {
     var ix = portTriangles(role);
     if (!ix) return null;
+    var work = 0;
     var span = Math.max(half.w, half.h);
     var len = Math.sqrt(Math.pow(b[0] - a[0], 2) + Math.pow(b[1] - a[1], 2) + Math.pow(b[2] - a[2], 2));
     var margin = Math.max(span * 12, len * (grow || 0.35));
@@ -10138,6 +10204,8 @@
           e = Math.max(e, Math.abs(p1[k] - p0[k]), Math.abs(p2[k] - p0[k]), Math.abs(p2[k] - p1[k]));
         }
         var ns = Math.min(512, Math.max(1, Math.ceil(e * inv * 2)));
+        work += ns * ns / 2 + 8;
+        if (work > ROUTE_SLICE) { work = 0; yield 0; }
         for (var i = 0; i <= ns; i++) {
           for (var j = 0; i + j <= ns; j++) {
             var u = i / ns, v = j / ns;
@@ -10155,7 +10223,9 @@
     var reach = tight ? 0 : Math.max(1, Math.ceil(span * inv));
     var dist = new Uint8Array(NN).fill(255), qu = new Int32Array(NN), qh = 0, qt = 0;
     for (var w0 = 0; w0 < NN; w0++) if (wall[w0]) { dist[w0] = 0; qu[qt++] = w0; }
+    work += NN / 8;
     while (qh < qt) {
+      if (++work > ROUTE_SLICE) { work = 0; yield 0; }
       var c = qu[qh++], dn = dist[c] + 1;
       if (dn > reach + 3) continue;
       var cz = (c / NXY) | 0, cr = c - cz * NXY, cy = (cr / NX) | 0, cx = cr - cy * NX;
@@ -10224,6 +10294,7 @@
     push(sq, hcost(ca[0], ca[1], ca[2]));
     var found = false, steps = 0;
     while (heap.length && steps < ROUTE_CELLS) {
+      if ((work += 30) > ROUTE_SLICE) { work = 0; yield 0; }
       var cq = pop();
       if (closed[cq]) continue;
       closed[cq] = 1; steps++;
@@ -10260,6 +10331,7 @@
       if (routeLegClear(role, pts[i5], pts[hiI], half)) bestI = hiI;
       else {
         while (loI <= hiI) {
+          yield 0;
           var mid = (loI + hiI) >> 1;
           if (routeLegClear(role, pts[i5], pts[mid], half)) { bestI = mid; loI = mid + 1; }
           else hiI = mid - 1;
@@ -10267,6 +10339,7 @@
       }
       outp.push(pts[bestI]);
       i5 = bestI;
+      yield 0;
     }
     return outp;
   }
@@ -10276,7 +10349,7 @@
    * the way round it is one of the six axis-ordered dog-legs between the
    * two ends (along x then y then z, and the other five orders), or that
    * again on either half. Tried shortest first, each judged exactly. */
-  function dogLeg(role, a, b, half, depth) {
+  function* dogLegJob(role, a, b, half, depth) {
     var orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
     var tries = [];
     for (var o = 0; o < orders.length; o++) {
@@ -10292,7 +10365,10 @@
     }
     for (var t = 0; t < tries.length; t++) {
       var ok = true;
-      for (var k = 1; k < tries[t].length && ok; k++) ok = routeLegClear(role, tries[t][k - 1], tries[t][k], half);
+      for (var k = 1; k < tries[t].length && ok; k++) {
+        ok = routeLegClear(role, tries[t][k - 1], tries[t][k], half);
+        yield 0;
+      }
       if (ok) return tries[t];
     }
     if (depth > 0) {
@@ -10300,26 +10376,33 @@
       var mids = [[(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, a[2]], [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, b[2]],
                   [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]];
       for (var m = 0; m < mids.length; m++) {
-        var h1 = routeLegClear(role, a, mids[m], half) ? [a, mids[m]] : dogLeg(role, a, mids[m], half, depth - 1);
+        var h1 = routeLegClear(role, a, mids[m], half) ? [a, mids[m]] : (yield* dogLegJob(role, a, mids[m], half, depth - 1));
+        yield 0;
         if (!h1) continue;
-        var h2 = routeLegClear(role, mids[m], b, half) ? [mids[m], b] : dogLeg(role, mids[m], b, half, depth - 1);
+        var h2 = routeLegClear(role, mids[m], b, half) ? [mids[m], b] : (yield* dogLegJob(role, mids[m], b, half, depth - 1));
+        yield 0;
         if (h2) return h1.concat(h2.slice(1));
       }
     }
     return null;
   }
 
-  function clearRoute(role, pts, half) {
+  function clearRoute(role, pts, half) { return drainJob(clearRouteJob(role, pts, half)); }
+  function* clearRouteJob(role, pts, half) {
     if (!pts || pts.length < 2 || !half) return pts;
     var out = [pts[0]], blocked = 0;
     for (var i = 1; i < pts.length; i++) {
       var a = pts[i - 1], b = pts[i];
+      yield 0;
       if (routeLegClear(role, a, b, half)) { out.push(b); continue; }
       /* Her clearance first; failing that a wider box; failing that the
        * bare surfaces, with the exact pull still the judge. */
-      var leg = dogLeg(role, a, b, half, 1) || routeLeg(role, a, b, half, 0.35);
+      var leg = yield* dogLegJob(role, a, b, half, 1);
+      yield 0;
+      if (!leg) leg = yield* routeLegJob(role, a, b, half, 0.35);
       if (leg) {
         for (var c = 1; c < leg.length; c++) {
+          yield 0;
           if (!routeLegClear(role, leg[c - 1], leg[c], half)) { leg = null; break; }
         }
       }
@@ -16643,6 +16726,9 @@
     setAccent: setAccent, accented: accented, accentSwap: accentSwap,
     drawContrail: drawContrail,
     portSolidity: portSolidity,
+    clearRouteJob: clearRouteJob, portReady: portReady, berthDeckJob: berthDeckJob, berthDeckReady: berthDeckReady, trianglesJob: function (role) {
+      return TRIDEX[role] !== undefined ? null : (TRI_JOBS[role] || (TRI_JOBS[role] = trianglesJob(role)));
+    },
     portSections: portSections,
     leafHit: leafHit,
     sectionAt: sectionAt,

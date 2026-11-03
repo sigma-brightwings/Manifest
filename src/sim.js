@@ -6241,33 +6241,150 @@
     fleetHalfKm = { w: w, h: h };
     return fleetHalfKm;
   }
+  function transferKey(port, berth, role) {
+    return port.id + '#' + berth + '@' + role + '/' + (port.radius || 1);
+  }
+  /* The routing itself, as a generator (Render.clearRouteJob): run to the
+   * end at once by clearTransfer, or a slice a frame by warmTransfers. */
+  function* transferJob(port, berth, p10) {
+    var R = global.Render;
+    var role = R.portModelFor(port), r = port.radius || 1;
+    var T = ROUTED_TRANSFER_LEG;
+    var pl = [p10[T]].concat(p10.through, [p10[T + 1]]);
+    var arr = pl.map(function (p) { return [p.x, p.y, p.z]; });
+    var fh = fleetHalf(), half = { w: fh.w / r, h: fh.h / r };
+    var k = p10.rideAt;
+    var pieces = (k >= 1 && k + 1 < arr.length)
+      ? [arr.slice(0, k + 1), arr.slice(k + 1)] : [arr];
+    var outA = [], rideAt = -1, blocked = 0;
+    var tj = R.trianglesJob ? R.trianglesJob(role) : null;
+    if (tj) yield* tj;
+    for (var pi = 0; pi < pieces.length; pi++) {
+      var got = (R.clearRouteJob ? (yield* R.clearRouteJob(role, pieces[pi], half))
+                                 : R.clearRoute(role, pieces[pi], half)) || pieces[pi];
+      blocked += got.blocked || 0;
+      if (pi === 1) rideAt = outA.length - 1;     // the boarding stop
+      for (var q = 0; q < got.length; q++) outA.push(got[q]);
+    }
+    return { pts: outA, rideAt: rideAt, blocked: blocked };
+  }
+  /* While warmTransfers is building a job it wants orbitalPath's polyline
+   * and not the routing: set, clearTransfer hands p10 back here instead. */
+  var deferTransfer = null;
   function clearTransfer(port, berth, p10) {
     var R = global.Render;
     if (!R || !R.clearRoute || !R.portModelFor) return;
-    var role = R.portModelFor(port), r = port.radius || 1;
-    var key = port.id + '#' + berth + '@' + role + '/' + r;
-    var T = ROUTED_TRANSFER_LEG;
+    var role = R.portModelFor(port);
+    var key = transferKey(port, berth, role);
     var hit = TRANSFER_CACHE[key];
+    if (!hit && deferTransfer) { deferTransfer.p10 = p10; deferTransfer.key = key; return; }
     if (!hit) {
-      var pl = [p10[T]].concat(p10.through, [p10[T + 1]]);
-      var arr = pl.map(function (p) { return [p.x, p.y, p.z]; });
-      var fh = fleetHalf(), half = { w: fh.w / r, h: fh.h / r };
-      var k = p10.rideAt;
-      var pieces = (k >= 1 && k + 1 < arr.length)
-        ? [arr.slice(0, k + 1), arr.slice(k + 1)] : [arr];
-      var outA = [], rideAt = -1, blocked = 0;
-      for (var pi = 0; pi < pieces.length; pi++) {
-        var got = R.clearRoute(role, pieces[pi], half) || pieces[pi];
-        blocked += got.blocked || 0;
-        if (pi === 1) rideAt = outA.length - 1;     // the boarding stop
-        for (var q = 0; q < got.length; q++) outA.push(got[q]);
-      }
-      hit = TRANSFER_CACHE[key] = { pts: outA, rideAt: rideAt, blocked: blocked };
+      var t0 = nowMs();
+      var job = transferJob(port, berth, p10), r;
+      do { r = job.next(); } while (!r.done);
+      hit = TRANSFER_CACHE[key] = r.value;
+      transferStats.cold++;
+      transferStats.coldMs += nowMs() - t0;
     }
     var pts = hit.pts;
     p10.through = pts.slice(1, -1).map(function (p) { return { x: p[0], y: p[1], z: p[2] }; });
     if (p10.rideAt >= 1) p10.rideAt = hit.rideAt;
     p10.blocked = hit.blocked;
+  }
+  function nowMs() {
+    return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  }
+
+  /* ROUTED BEFORE SHE ASKS (2026-11-03). The first arrival at a routed berth
+   * paid its route search in the frame the rail first asked for the path:
+   * measured on cut-sweep's stations in node, 0.1-1.1 s for one berth and
+   * 10.7 s across a system's 58 (a frame-long stall at the docking clamp,
+   * the worst place for one). So after system entry the berths of every
+   * station in it are routed here, a few milliseconds a frame, nearest port
+   * first, into the same cache clearTransfer reads. A job is built from the
+   * same polyline the rail would build (orbitalPath, with the routing
+   * deferred) and runs the same generator, so the cached answer is the one
+   * the cold path would have found. A cache miss at arrival is then rare,
+   * and when it happens it costs what it always did.
+   *
+   * Only stations whose model the renderer has already built (portReady):
+   * building a model's library and doors is its own half-second, and the
+   * renderer pays that the first time it draws the station anyway. Nothing
+   * here is stored in a save. */
+  var warm = { sys: null, queue: null, job: null, done: 0 };
+  var transferStats = { cold: 0, coldMs: 0, warmed: 0, warmMs: 0, slices: 0, worstSliceMs: 0, worstPrepMs: 0 };
+  function warmTransfers(sys, budgetMs, near) {   // near: a port to route first
+    var R = global.Render, Gen = global.Gen;
+    if (!sys || !R || !R.clearRouteJob || !R.portModelFor || !Gen || !Gen.berthRoute) return 0;
+    if (warm.sys !== sys) {
+      warm.sys = sys; warm.job = null; warm.done = 0;
+      var ports = (sys.ports || []).filter(function (p) { return p && !p.surface && p.docking; });
+      /* The port she is flying to first, if she is flying to one. */
+      if (near) ports.sort(function (a, b) { return (b === near) - (a === near); });
+      warm.queue = [];
+      ports.forEach(function (p) {
+        /* Only a modelled station has routed berths (a carrier, a hall
+         * station with no model, has nothing to warm). */
+        var role0 = R.portModelFor(p);
+        if (!role0 || !global.PortLib || !global.PortLib[role0]) return;
+        var nb = Math.max(1, Gen.bayGeometry(p).berths || 1);
+        /* A direct berth needs only its deck found; a routed one, the
+         * decks and then the route. */
+        for (var i = 0; i < nb; i++) warm.queue.push({ port: p, berth: i, routed: !!Gen.berthRoute(p, i) });
+      });
+    }
+    var t0 = nowMs(), budget = budgetMs > 0 ? budgetMs : 3, did = 0;
+    while (nowMs() - t0 < budget) {
+      if (!warm.job) {
+        if (!warm.queue.length) break;
+        var w = warm.queue[0], s1 = nowMs();
+        var role = R.portModelFor(w.port);
+        if (!role || (R.portReady && !R.portReady(role))) {
+          /* Not drawn yet: to the back, and stop if every one waiting is. */
+          warm.queue.push(warm.queue.shift());
+          if (++did > warm.queue.length) break;
+          continue;
+        }
+        /* The model's triangle index first, in slices: the decks, the doors'
+         * entry lines and the routing all ask it. */
+        var tjw = R.trianglesJob ? R.trianglesJob(role) : null;
+        if (tjw) { warm.job = { key: null, kind: 'triangles ' + role, gen: tjw, ms: 0 }; break; }
+        var key0 = transferKey(w.port, w.berth, role);
+        if (w.routed && TRANSFER_CACHE[key0]) { warm.queue.shift(); continue; }
+        /* The decks the rail stands on first (Render.berthDeckJob), each a
+         * job of its own: the rail's polyline asks for them, and finding
+         * one is a few dozen casts through the whole model. */
+        var rtw = Gen.berthRoute(w.port, w.berth), need = -1;
+        [w.berth, rtw ? rtw.entry : w.berth].forEach(function (j) {
+          if (need < 0 && R.berthDeckReady && !R.berthDeckReady(role, j)) need = j;
+        });
+        if (need >= 0) { warm.job = { key: null, kind: 'deck ' + role + ' b' + need, gen: R.berthDeckJob(role, need), ms: 0 }; break; }
+        warm.queue.shift();
+        if (!w.routed) continue;
+        deferTransfer = {};
+        try { orbitalPath(w.port, w.berth); } finally { var d = deferTransfer; deferTransfer = null; }
+        if (!d.p10 || TRANSFER_CACHE[d.key]) continue;
+        warm.job = { key: d.key, kind: 'route ' + d.key, gen: transferJob(w.port, w.berth, d.p10), ms: 0 };
+        var pm = nowMs() - s1;
+        if (pm > transferStats.worstPrepMs) transferStats.worstPrepMs = pm;
+        /* A job's set-up (the rail's own polyline) is a slice of its own. */
+        break;
+      }
+      var s0 = nowMs(), r = warm.job.gen.next(), sl = nowMs() - s0;
+      warm.job.ms += sl;
+      transferStats.slices++;
+      if (sl > transferStats.worstSliceMs) { transferStats.worstSliceMs = sl; transferStats.worstSlice = warm.job.kind; }
+      if (r.done && !warm.job.key) { warm.job = null; continue; }    // a deck, found
+      if (r.done) {
+        TRANSFER_CACHE[warm.job.key] = r.value;
+        transferStats.warmed++;
+        transferStats.warmMs += warm.job.ms;
+        warm.done++;
+        warm.job = null;
+      }
+    }
+    /* How many berths are still to route (0: this system is done). */
+    return warm.queue.length + (warm.job ? 1 : 0);
   }
 
   /* The station's, in the same frame and the same five slots.
@@ -8292,6 +8409,11 @@
     stationDoorState: stationDoorState,
     checkStationImpact: checkStationImpact, checkHullImpact: checkHullImpact,
     stationSolidity: stationSolidity,
+    warmTransfers: warmTransfers, transferStats: transferStats,
+    /* For a test that wants a berth routed cold and then warmed. */
+    forgetTransfers: function (port) {
+      Object.keys(TRANSFER_CACHE).forEach(function (k) { if (k.indexOf(port.id + '#') === 0) delete TRANSFER_CACHE[k]; });
+    },
     stationSolidAt: stationSolidAt,
     berthDoor: berthDoor, doorClear: doorClear,
     outsideStation: outsideStation,

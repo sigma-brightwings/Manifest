@@ -441,6 +441,54 @@ console.log('--- no walls or floors drawn as sheets ---');
   check('no wall or floor in any station mesh is a sheet', bad.length === 0, bad.join('; '));
 })();
 
+/* ---- ROUTED BEFORE SHE ARRIVES (item 10, 2026-11-03) -----------------------
+ * The first arrival at a routed berth paid its whole route search in one
+ * frame (0.1-1.1 s a berth in node, up to 4.4 s on a loaded box).
+ * Sim.warmTransfers routes a system's berths a few milliseconds a frame:
+ * the answer must be the one the cold path finds, nothing may be routed
+ * cold after it, and the work must actually come in slices. */
+console.log('--- routes warmed in slices ---');
+(function () {
+  var wsys = Gen.generateSystem('warm-sweep');
+  var ports = wsys.ports.filter(function (p) {
+    var r = Render.portModelFor(p);
+    return !p.surface && p.docking && r && global.PortLib[r] && /^(cylinder|cradle|spine)/.test(r);
+  }).slice(0, 2);
+  if (!ports.length) { check('a cylinder or cradle to warm', false); return; }
+  /* The cold answer first, then forgotten, so the warm-up has to find it. */
+  var cold = {}, routed = 0;
+  ports.forEach(function (p) {
+    var nb = Math.max(1, Gen.bayGeometry(p).berths);
+    for (var i = 0; i < nb; i++) {
+      if (!Gen.berthRoute(p, i)) continue;
+      routed++;
+      cold[p.id + '#' + i] = JSON.stringify(Sim.arrivalPath(p, i).through);
+    }
+    Sim.forgetTransfers(p);
+  });
+  var before = Sim.transferStats.cold, s0 = Sim.transferStats.slices, w0 = Sim.transferStats.warmed;
+  var frames = 0, worst = 0, two = { ports: ports };
+  for (;;) {
+    var t0 = Date.now(), left = Sim.warmTransfers(two, 3);
+    worst = Math.max(worst, Date.now() - t0);
+    frames++;
+    if (!left || frames > 100000) break;
+  }
+  var same = 0;
+  Object.keys(cold).forEach(function (k) {
+    var p = ports.filter(function (q) { return k.indexOf(q.id + '#') === 0; })[0], i = +k.split('#')[1];
+    if (JSON.stringify(Sim.arrivalPath(p, i).through) === cold[k]) same++;
+  });
+  console.log('  ' + routed + ' routed berths at ' + ports.map(function (p) { return p.name; }).join(', ') +
+              ': ' + frames + ' frames, ' + (Sim.transferStats.slices - s0) + ' slices, worst frame ' + worst + ' ms');
+  check('every routed berth is warmed', Sim.transferStats.warmed - w0 === routed, (Sim.transferStats.warmed - w0) + ' of ' + routed);
+  check('a warmed route is the route the cold path finds', same === routed, same + ' of ' + routed);
+  check('nothing is routed cold once the system is warm', Sim.transferStats.cold - before === 0,
+        (Sim.transferStats.cold - before) + ' cold');
+  check('the work comes in slices, many per route', Sim.transferStats.slices - s0 > routed * 20,
+        (Sim.transferStats.slices - s0) + ' slices');
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
