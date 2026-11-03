@@ -4,6 +4,7 @@
  *     node tools/measure-firms.cjs                 placement + outcomes, 20 seeds
  *     node tools/measure-firms.cjs place 30        placement only, 30 seeds
  *     node tools/measure-firms.cjs quarters 20 4   outcomes: seeds, quarters
+ *     node tools/measure-firms.cjs onegood 20 4    the same, the list cut to one cheap good
  *
  * PLACEMENT: every port of the six nearest claimed stars of each seed's
  * galaxy, through TradingFirm.firmAt — the game's own function, so this is
@@ -69,7 +70,7 @@ function placement(n) {
 
 /* One career: a galaxy, its home, a Talon at the best civilian port, a
  * firm there at `rating`. Returns every quarter's history entry. */
-function run(seed, rating, quarters, budget, hullId) {
+function run(seed, rating, quarters, budget, hullId, oneGood) {
   var gal = Galaxy.build(seed), home = gal.home, cache = {};
   Fleet.systemFor = function (st) {
     if (!cache[st.id]) { cache[st.id] = Gen.generateSystem(st.seed, Galaxy.systemOpts(gal, st)); cache[st.id].starId = st.id; }
@@ -88,7 +89,15 @@ function run(seed, rating, quarters, budget, hullId) {
   var hs = {}; Combat.initShip(hs); hs.hullId = hullId; hs.cargo = {}; hs.fit = {}; hs.crew = [Crew.make('Pilot', 'pilot', 3)];
   var rec = Fleet.park(G, hs, port.id, 'Measured');
   rec.portName = port.name;
-  var r = TF.engage(G, firm, port, sys, { hulls: [rec.id], budget: budget, goods: [] }, G.t);
+  /* `oneGood`: the account restricted to the cheapest good its port
+   * exports — the narrowest list a player might hand over. */
+  var goods = [];
+  if (oneGood) {
+    var ex = port.market.order.filter(function (k) { return port.market.rows[k].exporter && TF.legalGood(k); })
+      .sort(function (a, b) { return Eco.BY_ID[a].base - Eco.BY_ID[b].base; });
+    if (ex.length) goods = [ex[0]];
+  }
+  var r = TF.engage(G, firm, port, sys, { hulls: [rec.id], budget: budget, goods: goods }, G.t);
   if (!r.ok) return null;
   /* A losing quarter would close the account and end the measurement, so
    * the run keeps a SECOND book of what each quarter did by re-opening
@@ -103,7 +112,7 @@ function run(seed, rating, quarters, budget, hullId) {
       TF.book(G, t + k * TF.QUARTER + 30 * 86400);
       if (!rec.trade) {
         var r2 = TF.engage(G, firm, sys.byId[rec.port] || port, TF._systemOf(G, rec.star) || sys,
-                           { hulls: [rec.id], budget: budget, goods: [] }, t + k * TF.QUARTER + 30 * 86400);
+                           { hulls: [rec.id], budget: budget, goods: goods }, t + k * TF.QUARTER + 30 * 86400);
         if (!r2.ok) break;
         c = r2.contract;
         t = t + 30 * 86400;
@@ -113,13 +122,14 @@ function run(seed, rating, quarters, budget, hullId) {
   return out;
 }
 
-function quarters(n, nq) {
-  console.log('--- outcomes: ' + n + ' seeds, ' + nq + ' quarters, Talon, 20,000 cr budget, rating-3 pilot ---');
+function quarters(n, nq, oneGood) {
+  console.log('--- outcomes: ' + n + ' seeds, ' + nq + ' quarters, Talon, 20,000 cr budget, rating-3 pilot' +
+              (oneGood ? ', ONE GOOD (the port\'s cheapest export)' : ', the house\'s choice of goods') + ' ---');
   var budget = 20000;
   for (var r = 1; r <= 5; r++) {
     var profits = [], mult = [], losing = 0, total = 0, seedsLost = 0, t0 = Date.now();
     for (var s = 0; s < n; s++) {
-      var qs = run('seed' + s, r, nq, budget, 'talon');
+      var qs = run('seed' + s, r, nq, budget, 'talon', oneGood);
       if (!qs) continue;
       var lostHere = false;
       qs.forEach(function (h) {
@@ -140,3 +150,4 @@ function quarters(n, nq) {
 if (mode === 'debug') console.log(JSON.stringify(run(process.argv[3] || 'seed0', +(process.argv[4] || 3), 3, 20000, 'talon')));
 if (mode === 'all' || mode === 'place') placement(mode === 'place' ? SEEDS : 30);
 if (mode === 'all' || mode === 'quarters') quarters(SEEDS, QUARTERS);
+if (mode === 'all' || mode === 'onegood') quarters(SEEDS, QUARTERS, true);
