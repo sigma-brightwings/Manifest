@@ -264,5 +264,59 @@ if (airy) {
         Math.abs(ho.kms - V.len(V.sub(high.vel, ost.vel))) < 1e-9, ho.frame + ' ' + ho.kms.toFixed(3) + ' km/s');
 }
 
+console.log('--- the world\'s labels keep off the readouts (2026-11-03) ---');
+(function () {
+  /* Seen in the cockpit: "Seapickle" printed across "PITCH ... REF
+   * MIRVEN I". placeLabels now moves a label off Render.hudReadoutBoxes;
+   * that is only as good as the boxes, so the instruments are drawn here
+   * into a recording context, as drawCockpitView draws them, and every
+   * glyph run they print must lie inside a box. Then labels everywhere
+   * across the middle of the glass must come out clear of every box. */
+  /* The third number is the deck's top where the band covers the foot of
+   * the glass: at 800 x 600 the glass is laid out on 592 px and the band
+   * starts at 378. */
+  [[800, 560], [800, 592, 378], [1280, 640], [1280, 720, 498], [1920, 1000]].forEach(function (vp) {
+    var w = vp[0], hv = vp[1], foot = vp[2] || hv, ref = 'MIRVEN I';
+    var texts = [];
+    var font = '11px';
+    var ctx = {
+      save: function () {}, restore: function () {}, beginPath: function () {}, moveTo: function () {},
+      lineTo: function () {}, closePath: function () {}, stroke: function () {}, fill: function () {},
+      fillRect: function () {}, strokeRect: function () {}, arc: function () {}, setLineDash: function () {},
+      strokeText: function () {}, createLinearGradient: function () { return { addColorStop: function () {} }; },
+      measureText: function (t) { return { width: String(t).length * (parseFloat(/(\d+)px/.exec(this.font || font)[1]) * 0.6) }; },
+      fillText: function (t, x, y) {
+        var px = parseFloat(/(\d+)px/.exec(this.font)[1]), tw = String(t).length * px * 0.6;
+        var x0 = this.textAlign === 'center' ? x - tw / 2 : this.textAlign === 'right' ? x - tw : x;
+        texts.push({ t: String(t), x0: x0, x1: x0 + tw, y0: y - px * 0.8, y1: y + px * 0.2 });
+      },
+      font: '11px monospace', textAlign: 'left'
+    };
+    Render.drawAirData(ctx, w, hv, { cy: hv / 2, speed: { value: '161,987', unit: 'KM/S' }, g: 1.2, peak: 3.4,
+      alt: { value: '161,987', unit: 'KM' }, vs: { text: '-120 m/s', dir: -1 }, air: { text: 'AIR ▼ 161,840 km' } });
+    Render.drawHeadingTape(ctx, w, hv, { heading: 291, bug: 300 }, { cy: Math.max(40, hv * 0.30 - 74 - 44), ref: ref });
+    ctx.font = 'bold 11px ui-monospace, monospace'; ctx.textAlign = 'center';
+    ctx.fillText('PITCH -79.1°   ROLL 168.5°   REF ' + ref, w / 2, hv / 2 + 40);
+    Render.drawFacingCue(ctx, w, hv, { mode: 'retro', deg: 80, locked: false }, hv / 2 + 66);
+    var boxes = Render.hudReadoutBoxes(w, hv, ref, foot);
+    var out = texts.filter(function (t) {
+      return !boxes.some(function (b) { return t.x0 >= b.x0 && t.x1 <= b.x1 && t.y0 >= b.y0 && t.y1 <= b.y1; });
+    });
+    check(w + 'x' + hv + ': every readout the glass prints is inside a reserved box', texts.length > 10 && out.length === 0,
+          texts.length + ' texts; ' + out.map(function (t) { return '"' + t.t + '" ' + t.x0.toFixed(0) + '..' + t.x1.toFixed(0) + ',' + t.y0.toFixed(0) + '..' + t.y1.toFixed(0); }).join('; '));
+    var bad = 0, eg = '';
+    for (var y = 20; y < foot - 20; y += 3) {
+      for (var x = w * 0.15; x < w * 0.85; x += 17) {
+        var tw = 9 * 7.2;   // "Seapickle", bold 12 px
+        var ly = Render.labelOffReadouts(x, y, tw, boxes, foot);
+        boxes.forEach(function (b) {
+          if (x + tw + 2 > b.x0 && x - 2 < b.x1 && ly + 3 > b.y0 && ly - 10 < b.y1) { bad++; if (!eg) eg = b.id + ' at ' + x.toFixed(0) + ',' + y; }
+        });
+      }
+    }
+    check(w + 'x' + hv + ': a planet label anywhere on the glass is moved clear of them', bad === 0, bad + ' ' + eg);
+  });
+})();
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

@@ -8691,7 +8691,7 @@
     G.rocksDrawn = 0;
     drawRingsAndRock(ctx, cam, inside, buried);
     if (G.showOrbits || mapMode()) drawBeltChart(ctx, cam, inside);
-    placeLabels(ctx, G.labelQueue, w, h);
+    placeLabels(ctx, G.labelQueue, w, h, cam.h || h);
 
     /* Predicted trajectory — the whole point of the exercise. Not while
      * berthed: a ship on the clamps has no trajectory worth predicting, and
@@ -17641,16 +17641,31 @@
    * Zoomed out, a dozen names land on the same few pixels; showing all of
    * them is worse than showing the three that matter. Bigger and more
    * significant bodies win. */
-  function placeLabels(ctx, queue, w, h) {
+  /* The glass's readouts, when drawCockpitView will draw them this frame
+   * — the same conditions it tests — as boxes for placeLabels to keep
+   * off; null otherwise. */
+  function cockpitReadoutBoxes(w, hv, h) {
+    if (G.viewMode !== 'cockpit' || G.hyper || G.eva || G.walk || !flying() || !Render.hudReadoutBoxes) return null;
+    if (Math.abs(G.look.yaw) >= 0.42 || Math.abs(G.look.pitch) >= 0.42) return null;
+    var lv = G.ship && Sim.localVertical(G.ship.pos, G.sys, G.t);
+    if (!lv || !lv.body) return null;
+    return Render.hudReadoutBoxes(w, hv, lv.body.name.toUpperCase(), Math.min(hv, deckTop(h)));
+  }
+
+  function placeLabels(ctx, queue, w, h, hv) {
     queue.sort(function (a, b) { return b.pri - a.pri; });
     ctx.save();
     ctx.font = 'bold 12px ui-monospace, SFMono-Regular, Menlo, monospace';
     var taken = [];
+    var hud = cockpitReadoutBoxes(w, hv || h, h);
     for (var i = 0; i < queue.length; i++) {
       var q = queue[i];
       var x = q.sp.x + q.offset, y = q.sp.y + 3;
       if (x < -40 || x > w + 40 || y < 0 || y > h) continue;
       var tw = ctx.measureText(q.text).width;
+      /* Clear of the cockpit's readouts (Render.hudReadoutBoxes): a planet
+       * just under the nose printed its name across the PITCH line. */
+      if (hud) y = Render.labelOffReadouts(x, y, tw, hud, Math.min(hv || h, deckTop(h)));
       var box = { x: x - 2, y: y - 10, w: tw + 4, h: 13 };
       var clash = false;
       for (var j = 0; j < taken.length; j++) {
