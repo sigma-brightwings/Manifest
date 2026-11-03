@@ -9761,9 +9761,11 @@
     var d0 = portDoors(role);
     var tri = [], keys = ['shell', 'interior', 'spin'];
     var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    var runs = [];                       // which bucket each run of tri is (a sweep's question)
     for (var k = 0; k < keys.length; k++) {
       var m = (keys[k] === 'shell' && d0) ? d0.hull : openBucket(role, keys[k]);
       if (!m || !m.v || !m.f) continue;
+      runs.push({ key: keys[k], from: tri.length });
       for (var i = 0; i < m.f.length; i++) {
         var f = m.f[i];
         for (var j = 1; j + 1 < f.length; j++) {
@@ -9806,7 +9808,7 @@
         }
       }
     }
-    TRIDEX[role] = { n: N, lo: lo, inv: inv, tri: tri, bins: bins, mark: 0,
+    TRIDEX[role] = { n: N, lo: lo, inv: inv, tri: tri, bins: bins, mark: 0, runs: runs,
                      seen: new Int32Array(tri.length / 3) };
     return TRIDEX[role];
   }
@@ -9946,7 +9948,10 @@
         var face = m.f[fi];
         for (var j = 1; j + 1 < face.length; j++) {
           var h = segTri(a2, b2, m.v[face[0]], m.v[face[j]], m.v[face[j + 1]]);
-          if (h && (!best || h.t < best.t)) best = h;
+          /* Which part was hit, for a sweep that has to say what is in the
+           * way (a car, a hatch, a neighbour's leaf) and not just that
+           * something is. */
+          if (h && (!best || h.t < best.t)) { best = h; best.part = lf.node; }
         }
       }
     }
@@ -9979,7 +9984,7 @@
      * once, without clearing an array of 32768 bins between calls. */
     ix.mark++;
     var mark = ix.mark, seen = ix.seen;
-    var best = Infinity, bn = null;
+    var best = Infinity, bn = null, bt = -1;
     for (var x = c0[0]; x <= c1[0]; x++) {
       for (var y = c0[1]; y <= c1[1]; y++) {
         for (var z = c0[2]; z <= c1[2]; z++) {
@@ -10008,7 +10013,7 @@
             if (vv < -1e-6 || u + vv > 1 + 1e-6) continue;
             var tt = (e2x * qx + e2y * qy + e2z * qz) * f;
             if (tt < 0 || tt > 1 || tt >= best) continue;
-            best = tt;
+            best = tt; bt = t0;
             var nx = e1y * e2z - e1z * e2y,
                 ny = e1z * e2x - e1x * e2z,
                 nz = e1x * e2y - e1y * e2x;
@@ -10022,7 +10027,9 @@
         }
       }
     }
-    var hull = bn ? { t: best, normal: bn } : null;
+    /* `tri`: which triangle (an index into ix.tri), so a sweep can name the
+     * bucket and the place it hit rather than only that something is there. */
+    var hull = bn ? { t: best, normal: bn, tri: bt } : null;
     /* AND THE DOORS, which the index cannot hold because they move. Nearest
      * of the two wins, so a leaf sliding shut in front of you stops you
      * before the wall behind it does. */

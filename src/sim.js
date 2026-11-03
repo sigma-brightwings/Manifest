@@ -525,9 +525,10 @@
    *
    * The doors are cut here, on first use, because where a berth's throat
    * runs is something Gen.berthApertures answers off the art and render.js
-   * has no business asking a second time. The grid is cached per ROLE and
-   * the cut is in station radii, so every station wearing a model shares
-   * one carved grid — the cut does not depend on how big the station is.
+   * has no business asking a second time. The bare grid is cached per ROLE;
+   * the carved one per role AND radius, because the cut's lead is capped in
+   * kilometres and so is a different length in radii at each size (see
+   * CARVED below — this note used to say the opposite, which was the bug).
    *
    * A station with no modelled berths gets the hall's hatch cut instead,
    * straight down the hub axis, which is the route its arrival flies. */
@@ -604,13 +605,28 @@
     return (longestHull * 0.5 * 1.25 + DOOR_CLEAR_EXTRA_KM) / ((port && port.radius) || 1);
   }
 
+  /* THE CARVE IS PER MODEL AND SIZE, not per model (2026-11-03). The grid
+   * was carved in place, once per role, by whichever port asked first — but
+   * the cut's lead (holdLead), its second corridor's (doorClear) and so its
+   * length are in station radii worked from that port's OWN radius: a lead
+   * capped in kilometres is a longer cut in radii at a small station than at
+   * a big one. So a big station that happened to be asked first left every
+   * smaller one wearing its model with a throat cut too short at the mouth,
+   * and the hull holding off the doors came out in a wall. The bare grid is
+   * still Render's, shared and never written; each (model, radius) gets its
+   * own carved copy, which is 110 KB at SOLID_N 48. */
+  var CARVED = {};
   function stationSolidity(port) {
     var R = global.Render, Gen = global.Gen;
     if (!R || !R.portSolidity || !Gen || !port || port.surface) return null;
     var role = R.portModelFor ? R.portModelFor(port) : null;
     if (!role) return null;
-    var sol = R.portSolidity(role);
-    if (!sol || sol.carved) return sol;
+    var base = R.portSolidity(role);
+    if (!base) return base;
+    var ck = role + '@' + (+(port.radius || 1)).toPrecision(9);
+    if (CARVED[ck] && CARVED[ck].base === base) return CARVED[ck];
+    var sol = CARVED[ck] = { n: base.n, lo: base.lo, inv: base.inv, size: base.size,
+                             grid: base.grid.slice(), carved: false, base: base };
 
     var g = Gen.bayGeometry(port);
     var n = Math.max(1, g.berths), cut = 0;
