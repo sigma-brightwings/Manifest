@@ -40,6 +40,92 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-02, ground ports: what the slabs were, and ground to stand them on)
+
+- **The pink slabs over Downwell's town were the hatch lamps.** The ring
+  of lamps that says whether the port has cleared you (red, or flashing
+  green and white) was still laid out in pad radii for a shaft mouth of
+  0.55, from before the mouth shrank to 0.20. The doors were converted to
+  "mouths" at the time; the lamps were not. At Downwell (pad radius 227 m)
+  that put twelve red boxes, each 23 m wide and 45 m tall, 160 m out from a
+  45 m hatch, which is out over the rooftops. Through the orange haze and
+  the glow pass they were the salmon-pink slabs with a pale outline on
+  Astra's sheet. They now sit on the hatch's collar, a fifth of a mouth
+  outside the opening, and are about 4 x 2.5 x 3 m: runway-light housings
+  that read at a distance by their glow. They stand on the collar top on
+  a procedural port and on the street (z = 0) on a modelled one.
+- **The yellow squares were the pad-rim sodium lamps and the signs.** The
+  rim lamps were 9 m glowing cubes. They are now 2.4 m housings, standing
+  on the apron or street rather than buried in it. The signs were
+  coloured slabs 25 to 60 m across on a 5 m post, with no lettering. Over
+  ground with no detail in it, nothing said any of them stood on
+  anything.
+- **Signs are signs.** Each board now says what the generator always
+  said it says, in Dressing.FONT's stroke letters, lit, on a dark backing
+  panel. It is mounted on one of the town's own blocks: on its roof on two
+  legs, facing the pad, or across the wall that faces the pad if the
+  block already has a board. Letters are 1.6 to 4.5 m tall, sized to the
+  building. Boards are at most 14 m tall and in practice up to 41 m wide.
+  The role board breaks at its dash ("REPROCESSING / WASTE ACCEPTED"), and
+  "&" is spelled out because the font has none. Placement reads only the
+  dressing the generator already made. Nothing new is drawn from any
+  stream, so every seed is unchanged. The first build came out
+  mirror-written: the pad frame is left-handed (`Sim.groundBasis`, east x
+  north = -up). The suite now checks with the game's own camera that the
+  text runs left to right from the pad.
+- **The ground has detail from 0.2 to 10 km up** (Astra: from 8 km over
+  Downwell "the whole screen is flat orange"). The planet's terrain field
+  is looked up at 2.6 cycles per world radius, so its finest octave is a
+  couple of hundred km across. From a few km up the whole view lay inside
+  one cell of it. The planet impostor now adds a body-fixed fractal field
+  from 8 km cells down to 8 m: brightness mottling, a warm/cool hue drift,
+  a small nudge to the elevation the coast and caps are cut from, and
+  relief, where the field's own gradient is lit by the sun as slope.
+  It is GPU only, in its own functions in gl.js (`groundDetail`,
+  `groundDetailTint`, the `GD` table), with two call lines in the terrain
+  block. The sky, the horizon, the cone and its strata are untouched.
+  - **Seeded:** the hash is salted with the world's own `uSeed`. There is
+    no Math.random and no stream draw.
+  - **No pop from orbit:** every term is zero-mean, so averaged over any
+    patch the colour is exactly the orbital colour. In the JS twin, a
+    400 km patch averages to within 0.3%. Each octave also fades out as
+    its cells drop below a few pixels, and the whole block is off above
+    140 km.
+  - **Local brightness:** a small patch is a hillside, not an average. The
+    2 km round Downwell's pad is sunlit ground and reads about 18%
+    brighter than the orbital colour, falling to 6% at 10 km and 0% at
+    40 km.
+  - **Precision:** the field is evaluated on an integer lattice anchored
+    near the eye (`uGdAnchorCell`, exact), with the ray's near root taken
+    as cq / (bq + sqrt(disc)) from a double-precision cq. Single precision
+    cannot place an 8 m cell on a 5,000 km world otherwise. Re-anchoring
+    gives the same ground cell for cell, so it cannot swim.
+  - **Projection:** 2D value noise on a cube-map projection of the
+    body-fixed frame, blended across the face seams.
+- **Cost of the ground detail.** It was not measured on the Crawler; this
+  workspace only has SwiftShader. Under SwiftShader, which runs the shader
+  on the CPU, the whole frame went from 1.0 to 1.3 s at 8 km and 1.3 to
+  2.5 s at 0.2 km. That shows the block's ALU is of the same order as the
+  existing terrain, cloud and storm shading. The estimate for the RX 540 is
+  about 4 hashes and ~80 flops per octave, ~7 octaves on an average
+  ground pixel: ~0.4 GFLOP a frame at 1280 x 720, so roughly 0.5 to 1.5 ms.
+  It is unmeasured; `GLWorld.setGroundDetail(false)` turns it off for an
+  A/B on the Crawler. The CPU side is two rotations per world per frame,
+  and nothing at all above 140 km. The first version used 3D noise with an
+  integer-multiply hash and cost about twice as much; GCN runs a 32-bit
+  multiply at a quarter rate.
+- New test file `test/groundport-look.test.js` (group `view`) covers:
+  - **lamps:** every lamp is under 6 m, outside its hatch and within 1.5
+    mouths of it, on the right street;
+  - **rim lamps:** under 3 m;
+  - **boards:** every board is lettered, on a building, over its
+    footprint, standing on its roof, sign-sized, and reads forwards;
+  - **ground detail:** the field is deterministic per world, differs
+    between worlds, has real variance close up and none once a cell is a
+    pixel, averages to the orbital colour, is anchor-invariant, and is
+    off above 140 km;
+  - **wiring:** the shader is wired as the twin says.
+- Saves: untouched. No generated data changed, only how it is drawn.
 ### Changed (2026-11-02, ground ports seen from outside, fourth round)
 
 - **The pit wall is drawn per pixel, with no mesh** (Astra: the orbital

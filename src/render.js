@@ -2460,6 +2460,25 @@
 
   var LAMP_RINGS = null;
   var DOOR_LEAVES = null;
+  /* Top of the procedural port's collar beams, pad radii: the beams are
+   * box(.., .., 0.05) centred at z 0.03 in the `surface` mesh. */
+  var LAMP_COLLAR_Z = 0.08;
+
+  /* Which lamp set stands on this port's street: the collar set on the
+   * procedural port, the street set on a modelled one (PortLib supplies
+   * the role), since the model brings its own ground at z = 0. */
+  function portStreetIsModelled(port) {
+    var model = portModelFor(port);
+    var lib = global.PortLib;
+    return !!(lib && model && lib[model]);
+  }
+  function lampSetFor(port) {
+    if (!LAMP_RINGS) return null;
+    return portStreetIsModelled(port) ? LAMP_RINGS.street : LAMP_RINGS;
+  }
+  /* The procedural apron slab is box(.., .., 0.05) about z = 0. */
+  var APRON_TOP = 0.05;
+  var PAD_LAMP_HALF_M = 1.2;          // pad-rim lamp housing, half a side, metres
 
   /* Radius of the apron slab around a shaft mouth, in pad radii. Sized so
    * the retracted door leaves end up entirely inside it — the leaves ride
@@ -2507,8 +2526,9 @@
     if (!port || !port.surface) return;
     stationMeshes();                      // ensures LAMP_RINGS is built
     if (!LAMP_RINGS) return;
-    var mesh = !cleared ? LAMP_RINGS.denied
-             : (Math.floor(t * 2) % 2 ? LAMP_RINGS.strobe : LAMP_RINGS.clear);
+    var set = lampSetFor(port);
+    var mesh = !cleared ? set.denied
+             : (Math.floor(t * 2) % 2 ? set.strobe : set.clear);
     if (gpuWorld() && global.GLWorld.queueMesh(cam, frame, mesh, radiusKm, sunDir)) return;
     paintMesh(ctx, cam, frame, mesh, radiusKm, sunDir, '#ffcf7a');
   }
@@ -3542,27 +3562,59 @@
      * to something. Six boxes, twelve triangles each — cheap enough to
      * keep one per state rather than teaching the mesh shader about tints,
      * which would cost every hull in the game a uniform it never uses. */
-    function lampRing(colour) {
+    function lampRing(colour, baseZ) {
       var m = emptyMesh();
       /* Along the four edges of the square hatch, not round a circle: the
        * lamps mark the opening, and the opening has corners. Three to a
        * side, with the corners left clear so the shape of the hole is what
-       * you read rather than a ring of dots. */
-      var edge = 0.70, step = 0.34;
+       * you read rather than a ring of dots.
+       *
+       * IN MOUTHS, NOT PAD RADII (2026-11-02) — the same conversion the
+       * doors had (see DOOR_TRAVEL_MOUTHS) and this ring missed. It was
+       * written as `edge 0.70, step 0.34` and boxes 0.10 x 0.06 x 0.20 pad
+       * radii against a mouth of about 0.55, when the lamps really did sit
+       * on the hatch's edge. The mouth shrank to 0.20 and the ring did not:
+       * at Downwell Starport (pad radius 227 m) it stood 160 m out from a
+       * 45 m hatch, over the town, as twelve glowing red pillars 23 m wide
+       * and 45 m tall. Through the orange haze and the glow pass that is
+       * exactly what Astra's sheet showed — salmon-pink slabs with a pale
+       * outline, building-sized, hanging over the rooftops at the angle the
+       * wide lens gave them. Nobody could say what they were because nothing
+       * about them still looked like a lamp.
+       *
+       * Now: on the collar, a fifth of a mouth outside the hatch, and the
+       * size of a runway light housing — about 4 x 2.5 x 3 m at Downwell.
+       * They still read from a distance because they are '!' faces and the
+       * glow pass blooms them; that, not their size, is how a lamp is seen
+       * from far off. */
+      var MR = mouthR();
+      var edge = MR * 1.18, step = MR * 0.62;
+      var hl = MR * 0.045, hw = MR * 0.028, hz = MR * 0.032;
+      var z = baseZ + hz;
       for (var i = -1; i <= 1; i++) {
         var o = i * step;
-        merge(m, box(0.05, 0.03, 0.10), o, edge, 0.10, 1, '!' + colour);
-        merge(m, box(0.05, 0.03, 0.10), o, -edge, 0.10, 1, '!' + colour);
-        merge(m, box(0.03, 0.05, 0.10), edge, o, 0.10, 1, '!' + colour);
-        merge(m, box(0.03, 0.05, 0.10), -edge, o, 0.10, 1, '!' + colour);
+        merge(m, box(hl, hw, hz), o, edge, z, 1, '!' + colour);
+        merge(m, box(hl, hw, hz), o, -edge, z, 1, '!' + colour);
+        merge(m, box(hw, hl, hz), edge, o, z, 1, '!' + colour);
+        merge(m, box(hw, hl, hz), -edge, o, z, 1, '!' + colour);
       }
       return m;
     }
-    LAMP_RINGS = {
-      denied: lampRing('#ff3b3b'),     // no clearance: the doors stay shut
-      clear:  lampRing('#4dff88'),     // cleared, come ahead
-      strobe: lampRing('#ffffff')      // the white half of the flash
-    };
+    /* Two sets, by what the lamps stand on. The procedural surface port
+     * has a raised apron whose collar tops out at 0.08 pad radii (see the
+     * collar beams in the `surface` mesh); a modelled port's street IS the
+     * frame's z = 0 (generate.js: "a shaft's mouth IS the frame origin").
+     * One height for both either buries the lamps in the procedural apron
+     * or stands them 18 m in the air over a modelled street. */
+    function lampSet(baseZ) {
+      return {
+        denied: lampRing('#ff3b3b', baseZ),     // no clearance: the doors stay shut
+        clear:  lampRing('#4dff88', baseZ),     // cleared, come ahead
+        strobe: lampRing('#ffffff', baseZ)      // the white half of the flash
+      };
+    }
+    LAMP_RINGS = lampSet(LAMP_COLLAR_Z);
+    LAMP_RINGS.street = lampSet(0);
 
     STATION_MESHES = {
       orbital: orbital, highport: highport, refinery: refinery,
@@ -5013,6 +5065,207 @@
   var GLASS_TINT = '#9fc9d8';      // greenhouse panes, cold and a bit dirty
   var GLASS = '~9' + GLASS_TINT;   // ...and 9/15 opaque. See faceMaterial.
 
+  /* ---- THE BOARDS, ON BUILDINGS, IN LETTERS (2026-11-02) -----------------
+   *
+   * What the generator calls a sign used to be drawn as a coloured slab on
+   * a 5 m post: no lettering at all, sized off pad radii (`s.w` 0.10-0.26,
+   * so 25-60 m across), standing on its own out among the town. Lit, and
+   * bloomed by the glow pass, it was a bright yellow or pink square in the
+   * air with nothing under it that you could see — the smaller of the two
+   * unexplained shapes on Astra's Downwell sheet. A sign that says nothing
+   * and belongs to nothing is not a sign.
+   *
+   * So a board is now built from what it SAYS: the text in Dressing.FONT's
+   * stroke letters, lit, on a dark backing panel, sized in METRES so the
+   * letters are a few metres tall at any pad radius, and mounted on one of
+   * the town's own blocks — on its roof, facing the pad, or (a second board
+   * on the same block) across the wall that faces the pad. Every placement
+   * is read off the dressing the generator already made — the sign's own
+   * bearing picks the nearest block — so nothing new is drawn from any
+   * stream and every port keeps the boards it had, in the places it had
+   * them, saying what they said.
+   *
+   * Returned as plain records so the suite can check the sizes and that
+   * each board stands on a building (test/render.test.js); the mesh is
+   * built from exactly these. Units are pad radii, like the rest of the
+   * dressing mesh. */
+  var SIGN_LETTER_M = [1.6, 4.5];     // letter height range, metres
+  var SIGN_LINE_CHARS = 14;           // wrap boards longer than this
+  var SIGN_MAX_TALL_M = 14;           // a board's whole height, at most
+  var SIGN_BACK = '#1d2128';          // backing panel: unlit, dark
+  var SIGN_POST = '#3f454f';
+
+  /* The words as lines the font can draw. The em dash every role board
+   * carries ("REPROCESSING — WASTE ACCEPTED") is a line break, which is how
+   * a two-part board is actually laid out; '&' is spelled out because the
+   * font has no ampersand; anything else the font cannot draw is dropped
+   * rather than left as a gap. */
+  function signLines(text) {
+    var F = (global.Dressing && global.Dressing.FONT) || null;
+    var parts = String(text || '').toUpperCase().replace(/&/g, 'AND').split(/\s*[—–]\s*/);
+    var lines = [];
+    for (var p = 0; p < parts.length; p++) {
+      var words = parts[p].split(/\s+/), line = '';
+      for (var w = 0; w < words.length; w++) {
+        var word = words[w].split('').filter(function (ch) { return !F || F[ch]; }).join('');
+        if (!word) continue;
+        if (line && (line.length + 1 + word.length) > SIGN_LINE_CHARS) { lines.push(line); line = word; }
+        else line = line ? line + ' ' + word : word;
+      }
+      if (line) lines.push(line);
+    }
+    return lines.length ? lines : ['-'];
+  }
+  /* Width of a line in letter-heights — Dressing's own textWidth. */
+  function signLineW(s) { return s.length * 0.95 - 0.28; }
+
+  function portSignBoards(port) {
+    var d = port && port.dressing;
+    if (!d || !d.signs || !d.signs.length) return [];
+    if (port._signBoards) return port._signBoards;
+    var mPerPad = (port.radius || 0.25) * 1000;      // metres in one pad radius
+    var blocks = d.blocks || [];
+    var uses = blocks.map(function () { return 0; });
+    var out = [];
+    for (var i = 0; i < d.signs.length; i++) {
+      var s = d.signs[i];
+      var sx = Math.cos(s.u) * s.r, sy = Math.sin(s.u) * s.r;
+      /* The nearest block to where the generator put the board, with an
+       * already-used block a long way down the list: two boards on one
+       * building is fine, but four on one and none on the rest is not a
+       * town, it is a hoarding. */
+      var bi = -1, best = Infinity;
+      for (var j = 0; j < blocks.length; j++) {
+        var bc = blocks[j];
+        var dd = Math.hypot(Math.cos(bc.u) * bc.r - sx, Math.sin(bc.u) * bc.r - sy) + uses[j] * 4;
+        if (dd < best) { best = dd; bi = j; }
+      }
+      var lines = signLines(s.text);
+      var wUnits = 0;
+      for (var l = 0; l < lines.length; l++) wUnits = Math.max(wUnits, signLineW(lines[l]));
+      var rec = { text: s.text, lines: lines, ink: s.ink, lit: !!s.lit, block: bi };
+      var b = bi >= 0 ? blocks[bi] : null;
+      var bx = b ? Math.cos(b.u) * b.r : sx, by = b ? Math.sin(b.u) * b.r : sy;
+      var mount = b ? (uses[bi] === 1 ? 'wall' : 'roof') : 'post';
+      if (b && uses[bi] >= 2) mount = 'roof';     // and stacked, below
+      /* Facing: a roof board faces the pad, squarely; a wall board lies on
+       * whichever of the block's four walls looks most toward the pad —
+       * the blocks are axis-aligned boxes, so that is ±x or ±y. */
+      var nx, ny, spanPad;
+      if (mount === 'wall') {
+        var toPad = [-bx, -by];
+        if (Math.abs(toPad[0]) >= Math.abs(toPad[1])) { nx = toPad[0] < 0 ? -1 : 1; ny = 0; spanPad = b.d; }
+        else { nx = 0; ny = toPad[1] < 0 ? -1 : 1; spanPad = b.w; }
+      } else {
+        var rl = Math.hypot(bx, by) || 1;
+        nx = -bx / rl; ny = -by / rl;
+        spanPad = b ? Math.max(b.w, b.d) : 0.08;
+      }
+      /* Letter height: what fits the building, held between a size you can
+       * read from the pad and one that is still a sign rather than a
+       * hoarding. A board may overhang its roof a little — they do. */
+      var fitM = (spanPad * mPerPad * 1.35) / Math.max(1, wUnits + 0.8);
+      /* And a four-line board at the tallest letters would stand 18 m:
+       * past a hoarding. Its letters give way to the height first. */
+      var tallFit = SIGN_MAX_TALL_M / (lines.length * 1.45 + 0.35);
+      var H = Math.max(SIGN_LETTER_M[0], Math.min(SIGN_LETTER_M[1], fitM, tallFit)) / mPerPad;
+      var W = (wUnits + 0.8) * H, T = (lines.length * 1.45 + 0.35) * H;
+      var cx, cy, cz;
+      if (mount === 'wall') {
+        var off = (nx !== 0 ? b.w : b.d) / 2;
+        cx = bx + nx * (off + 0.0015); cy = by + ny * (off + 0.0015);
+        /* Under the parapet, and never below the ground on a low shed. */
+        cz = Math.max(T / 2 + 0.002, b.h - T / 2 - 0.15 * H);
+      } else if (mount === 'roof') {
+        var stack = b ? Math.max(0, uses[bi] - 1) : 0;
+        cx = bx; cy = by;
+        cz = (b ? b.h : 0) + 0.6 * H + T / 2 + stack * (T + 0.6 * H);
+      } else {
+        cx = sx; cy = sy; cz = 0.6 * H + T / 2 + 6 / mPerPad;
+      }
+      if (b) uses[bi]++;
+      rec.mount = mount;
+      rec.c = [cx, cy, cz];
+      rec.n = [nx, ny, 0];                 // the face you read, outward
+      rec.w = W; rec.t = T; rec.letter = H;
+      rec.base = cz - T / 2;               // bottom edge of the panel
+      rec.stand = mount === 'wall' ? null : (b && mount === 'roof' ? b.h : 0);
+      rec.wM = W * mPerPad; rec.tM = T * mPerPad; rec.letterM = H * mPerPad;
+      out.push(rec);
+    }
+    port._signBoards = out;
+    return out;
+  }
+
+  /* One board into the dressing mesh: legs (unless it is on a wall), the
+   * dark panel, and the letters a hair proud of it. Text runs along the
+   * reader's right, so it reads forwards from the pad and is hidden behind
+   * the panel from the back, as a real board is. The pad frame (x east,
+   * y north, z up, as stationFrame hands it over) is LEFT-handed in the
+   * world — Sim.groundBasis gives east x north = -up, measured — so the
+   * reader's right for a face whose outward normal is n is (n.y, -n.x),
+   * not the (-n.y, n.x) a right-handed frame would give. The first build
+   * used the latter and every board in the game came out mirror-written;
+   * the screenshot caught it, and render.test.js now checks the sign
+   * against the basis itself ("boards read forwards"). */
+  function signRight(n) { return [n[1], -n[0], 0]; }
+  function addSignBoard(mesh, rec) {
+    var F = (global.Dressing && global.Dressing.FONT) || null;
+    var n = rec.n, rt = signRight(n);
+    var c = rec.c, W = rec.w, T = rec.t, H = rec.letter;
+    var thick = Math.max(0.0012, H * 0.08);
+    if (rec.mount !== 'wall') {
+      var legH = (rec.base - rec.stand) / 2;
+      if (legH > 0) {
+        for (var k = -1; k <= 1; k += 2) {
+          addBox(mesh, [c[0] + rt[0] * k * W * 0.36 - n[0] * thick * 2, c[1] + rt[1] * k * W * 0.36 - n[1] * thick * 2, rec.stand + legH],
+                 [H * 0.07, 0, 0], [0, H * 0.07, 0], [0, 0, legH], SIGN_POST);
+        }
+      }
+    }
+    addBox(mesh, c, [rt[0] * W / 2, rt[1] * W / 2, 0], [n[0] * thick, n[1] * thick, 0], [0, 0, T / 2], SIGN_BACK);
+    var col = rec.lit ? '!' + rec.ink : rec.ink;
+    if (!F) {
+      /* No font loaded (a page without dressing.js): a lit band, which is
+       * at least the right size and in the right place. */
+      addBox(mesh, [c[0] + n[0] * thick * 1.6, c[1] + n[1] * thick * 1.6, c[2]],
+             [rt[0] * W * 0.42, rt[1] * W * 0.42, 0], [n[0] * thick * 0.5, n[1] * thick * 0.5, 0], [0, 0, T * 0.3], col);
+      return;
+    }
+    var stroke = H * 0.065, face = thick * 1.5;
+    var top = c[2] + T / 2 - 0.25 * H;
+    for (var li = 0; li < rec.lines.length; li++) {
+      var line = rec.lines[li];
+      var v0 = top - (li + 1) * 1.45 * H + 0.45 * H;      // baseline
+      var x = -signLineW(line) * H / 2;
+      var k6 = H / 6;
+      for (var ci = 0; ci < line.length; ci++, x += H * 0.95) {
+        var g = F[line.charAt(ci)];
+        if (!g) continue;
+        var polys = g.split('|');
+        for (var pi = 0; pi < polys.length; pi++) {
+          var pts = polys[pi].split(' ').map(function (p) {
+            var xy = p.split(',');
+            return [x + xy[0] * k6 * 0.68, v0 + xy[1] * k6];
+          });
+          for (var q = 0; q + 1 < pts.length; q++) {
+            var a = pts[q], bq = pts[q + 1];
+            var du = bq[0] - a[0], dv = bq[1] - a[1], L = Math.hypot(du, dv);
+            if (L < 1e-9) continue;
+            var mu = (a[0] + bq[0]) / 2, mv = (a[1] + bq[1]) / 2;
+            var hu = du / L * (L / 2 + stroke / 2), hv = dv / L * (L / 2 + stroke / 2);
+            var pu = -dv / L * stroke / 2, pv = du / L * stroke / 2;
+            addBox(mesh,
+                   [c[0] + rt[0] * mu + n[0] * face, c[1] + rt[1] * mu + n[1] * face, mv],
+                   [rt[0] * hu, rt[1] * hu, hv],
+                   [rt[0] * pu, rt[1] * pu, pv],
+                   [n[0] * thick * 0.45, n[1] * thick * 0.45, 0], col);
+          }
+        }
+      }
+    }
+  }
+
   function portDressingMesh(port) {
     if (port._dressMesh !== undefined) return port._dressMesh;
     var d = port.dressing;
@@ -5080,36 +5333,35 @@
              [dm.rad * 1.08, 0, 0], [0, dm.rad * 1.08, 0], [0, 0, 0.006], DRESS_POST);
     }
 
-    /* The boards. A post, and a panel turned to face the pad — the thing
-     * you are looking at on the way in. */
-    for (i = 0; i < d.signs.length; i++) {
-      var s = d.signs[i];
-      u = s.u; cs = Math.cos(u); sn = Math.sin(u);
-      var px = cs * s.r, py = sn * s.r;
-      var tang = [-sn, cs, 0];                 // along the board's width
-      var radial = [cs, sn, 0];                // its thickness, facing in
-      addBox(mesh, [px, py, s.h / 2],
-             [0.012, 0, 0], [0, 0.012, 0], [0, 0, s.h / 2], DRESS_POST);
-      var panelZ = s.h + s.tall / 2;
-      addBox(mesh,
-             [px, py, panelZ],
-             [tang[0] * s.w / 2, tang[1] * s.w / 2, 0],
-             [radial[0] * 0.010, radial[1] * 0.010, 0],
-             [0, 0, s.tall / 2],
-             s.lit ? '!' + s.ink : s.ink);
-    }
+    /* The boards: on the town's buildings, lettered. See portSignBoards. */
+    var boards = portSignBoards(port);
+    for (i = 0; i < boards.length; i++) addSignBoard(mesh, boards[i]);
 
     /* Approach lighting: a ring of lamps on the pad rim. Warm on the
      * ground, cold in orbit — decided by the generator, drawn here. */
+    /* SIZED AS LAMPS, IN METRES (2026-11-02). These were 0.04 pad radii a
+     * side — a 9 m glowing cube at Downwell — and with the glow pass round
+     * each one the ring read from the street as a dozen bright yellow
+     * squares hanging in the sky: the other half of the mystery on Astra's
+     * sheet (the pink slabs were the hatch lamps, drawPortLamps). Over the
+     * flat ground of the time there was nothing to say they were standing
+     * on anything. A runway edge light is a housing a couple of metres
+     * across; the bloom, not the box, is what carries it at a distance.
+     *
+     * And stood on the right street: the procedural port's apron is a slab
+     * whose top is 0.05 pad radii up, which the old 0..0.04 box was buried
+     * in; a modelled port's street is z = 0. */
     var lamp = '!' + (d.padLight || '#ffb45c');
+    var lampHalf = PAD_LAMP_HALF_M / ((port.radius || 0.25) * 1000);
+    var lampZ = (portStreetIsModelled(port) ? 0 : APRON_TOP) + lampHalf;
     for (i = 0; i < 12; i++) {
       /* Math.PI * 2 rather than K.TAU on purpose: this is the only thing in
        * the mesh builder that would drag in the Kepler module, and a mesh
        * builder should be loadable on its own. */
       u = (i / 12) * Math.PI * 2;
       cs = Math.cos(u); sn = Math.sin(u);
-      addBox(mesh, [cs * 1.04, sn * 1.04, 0.02],
-             [0.02, 0, 0], [0, 0.02, 0], [0, 0, 0.02], lamp);
+      addBox(mesh, [cs * 1.04, sn * 1.04, lampZ],
+             [lampHalf, 0, 0], [0, lampHalf, 0], [0, 0, lampHalf], lamp);
     }
 
     port._dressMesh = mesh;
@@ -14622,6 +14874,8 @@
     doorTravel: function () { return mouthR() * DOOR_TRAVEL_MOUTHS; },
     APRON_R: APRON_R,
     portDressingMesh: portDressingMesh,
+    portSignBoards: portSignBoards, signLines: signLines, signRight: signRight,
+    lampSetFor: lampSetFor,
     drawExhaust: drawExhaust,
     drawShipExhaust: drawShipExhaust, nozzlesOf: nozzlesOf,
     drawWake: drawWake,

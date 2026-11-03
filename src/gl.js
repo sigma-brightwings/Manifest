@@ -234,9 +234,206 @@
     '}'
   ].join('\n');
 
+  /* ---- GROUND DETAIL: what the surface looks like from a few km up -------
+   * (2026-11-02)
+   *
+   * Astra, zoomed out over Downwell: the ground is "one flat colour". It
+   * was. The terrain field below is looked up at 2.6 cycles per world
+   * radius, so its finest octave is a couple of hundred kilometres across
+   * — from eight kilometres up the whole view lies inside one cell of it,
+   * and the screen was flat orange with a speck of port in it. That field
+   * is right for what it is for (coastlines from orbit); nothing was
+   * drawing the scales in between.
+   *
+   * WHAT THIS ADDS. A body-fixed fractal field from 8 km cells down to
+   * 8 m, eleven octaves of value noise each half the last, used three
+   * ways: brightness and a warm/cool hue drift (mottling — soil, rock,
+   * dust), a nudge to the elevation the sea and the ice caps are cut from
+   * (so a coast seen from low down is crinkled, not a blur), and RELIEF —
+   * the field's own analytic gradient taken as slope and lit by the sun,
+   * so the ground has hills that face toward the light and away from it.
+   *
+   * IT DOES NOT CHANGE THE PICTURE FROM ORBIT, by construction rather than
+   * by tuning. Every term is zero-mean (a multiplier of 1 + something
+   * centred on 0, a relief that is linear in a slope centred on 0), so
+   * averaged over any patch the colour is exactly the colour without it;
+   * and each octave fades out as its cells shrink below a few pixels, so
+   * by the time the camera is high enough that a cell is sub-pixel there
+   * is nothing left of it to alias. Above GD.altHi the whole block is
+   * skipped. Descending, detail grows in octave by octave out of the
+   * colour that was already there: no pop.
+   *
+   * PRECISION IS THE REASON FOR ITS SHAPE. A world here is thousands of km
+   * across and a cell is 8 m; in single precision a body-fixed position on
+   * the surface is good to about half a metre, and the hash would be
+   * hashing rounding error. So the field is evaluated on an INTEGER
+   * lattice: JS picks an anchor near the eye, snapped to a multiple of the
+   * coarsest cell in the world's body-fixed frame, and hands over its
+   * lattice index (uGdAnchorCell, exact) and its offset from the eye
+   * (uGdAnchorRel, small, subtracted in double). The shader works in the
+   * small offset from that anchor and adds the anchor's index back as an
+   * integer — shifted left by the octave, since every finer cell size is
+   * the coarsest halved. The anchor can therefore move wherever it likes:
+   * the field it describes is the same absolute field, cell for cell, and
+   * re-anchoring cannot make the ground swim. GL.groundDetailAt is the
+   * same arithmetic in JS and test/render.test.js holds it to that.
+   *
+   * And the ray. `bq - sqrt(disc)` loses everything below about half a
+   * metre to cancellation at these radii; uGdCq is |eye-centre|^2 - R^2
+   * computed in double as (d - R)(d + R), and the near root is taken as
+   * cq / (bq + sqrt(disc)), which has no cancellation in it at all.
+   *
+   * SEEDED. The hash is salted with the world's own uSeed (Weather.hashSeed
+   * of the body id) and nothing else: no Math.random, no draw from any
+   * stream, so the same world has the same hills every visit and adding
+   * this changed no other seed.
+   *
+   * TWO DIMENSIONS, CUBE-MAPPED. The field is 2D value noise on whichever
+   * body-fixed plane the ground faces (a cube-map projection), blended with
+   * the next plane across the seams between faces. Half the lookups of 3D
+   * noise, and the projection keeps the integer lattice intact — dropping
+   * a coordinate drops it from the anchor's index too.
+   *
+   * COST. Only fragments of the ground pay: four cheap hashes and a
+   * bilinear blend per octave, and octaves stop at the first one finer
+   * than a few pixels, so a pixel far off pays for three or four and one
+   * under the ship for at most eleven (twice that in the seam band). Off
+   * entirely above GD.altHi. See CHANGELOG for what was measured. */
+  var GD = {
+    cmax: 8.0,          // km — the coarsest cell; every other is this halved
+    oct: 11,            // 8 km .. 7.8 m
+    fadeLo: 2.0,        // an octave is gone when its cell is under this many pixels...
+    fadeHi: 6.0,        // ...and fully in above this many
+    gain: 0.80,         // amplitude, octave to octave (brightness/hue)
+    slopeGain: 1.06,    // slope, octave to octave: steeper as they get smaller
+    bright: 0.55,       // brightness mottle at full strength (x the normalised field)
+    hue: 0.35,          // warm/cool drift, coarse octaves only
+    hueOct: 4,          // ...the first this many
+    elev: 0.020,        // nudge to the elevation field, for the coast and caps
+    relief: 0.16,       // slope at the coarsest octave, per unit gradient
+    reliefMin: 0.65,    // shading clamp
+    reliefMax: 1.40,
+    /* The floor under the sun term the relief is divided by. Lambert says
+     * divide by n.l, and at a low sun that is a large gain: at 0.25 the
+     * relief on Ashford Undercroft's moon (sun 9 degrees up) was four times
+     * its noon contrast and clamped at both ends, so the ground read as
+     * black-and-cream camouflage. Physically a low sun does throw long
+     * shadows; this field has no shadows to throw, only slope, and slope
+     * alone exaggerated that far looks like a fault, not a sunset. */
+    reliefSun: 0.5,
+    altLo: 40,          // km above the surface: full strength below...
+    altHi: 140,         // ...and none at all above
+    seam: 0.04          // cube-face blend band, in |n| difference
+  };
+  /* The normaliser that keeps the mottle's range independent of how many
+   * octaves happen to be in: the sum of every octave's amplitude. */
+  GD.norm = (1 - Math.pow(GD.gain, GD.oct)) / (1 - GD.gain);
+
+  function gdFloat(v) { return v.toFixed(6); }
+  var GROUND_DETAIL_GLSL = [
+    'uniform float uGdOn;',         // 0..1 strength by altitude; 0 skips the block
+    'uniform vec3 uGdAnchorRel;',   // eye -> lattice anchor, km
+    'uniform ivec3 uGdAnchorCell;', // anchor / GD.cmax, body-fixed, exact
+    'uniform float uGdCq;',         // |eye - centre|^2 - R^2, in double
+    /* A lattice corner's value. The integer index is folded to 0..1023
+     * first, which is exact in a float, and then hashed with the cheap
+     * fract hash the rest of this shader uses: the field repeats every 1024
+     * cells of an octave — 8 km for the finest, 8,000 km for the coarsest —
+     * which, under ten coarser octaves that do not repeat with it, is not a
+     * thing anyone can see. An integer-multiply hash was the first version
+     * and cost several times as much on GCN, where a 32-bit multiply runs
+     * at a quarter rate. */
+    'float gdH(ivec2 c, float s) {',
+    '  vec3 p = fract(vec3(vec2(c & 1023), s) * vec3(0.1031, 0.1030, 0.0973));',
+    '  p += dot(p, p.yzx + 33.33);',
+    '  return fract((p.x + p.y) * p.z);',
+    '}',
+    /* 2D value noise with its analytic gradient (per cell): the slope costs
+     * no extra lookups. */
+    'vec3 gdNoise(ivec2 i, vec2 f, float s) {',
+    '  vec2 u = f * f * (3.0 - 2.0 * f), du = 6.0 * f * (1.0 - f);',
+    '  float a = gdH(i, s), b = gdH(i + ivec2(1, 0), s), c = gdH(i + ivec2(0, 1), s), d = gdH(i + ivec2(1, 1), s);',
+    '  float k1 = b - a, k2 = c - a, k3 = a - b - c + d;',
+    '  return vec3(a + k1 * u.x + k2 * u.y + k3 * u.x * u.y,',
+    '              du * vec2(k1 + k3 * u.y, k2 + k3 * u.x));',
+    '}',
+    /* One plane of the field: brightness, hue, and the slope in the
+     * plane's two axes. `ax` picks the plane (0: y,z  1: z,x  2: x,y), the
+     * cube-map projection, so the lattice stays the body-fixed one and the
+     * anchor's integer index carries straight over. */
+    'vec4 gdPlane(vec2 q, ivec2 cell, float foot, float seed) {',
+    '  float c = ' + gdFloat(GD.cmax) + ', amp = 1.0, samp = ' + gdFloat(GD.relief) + ';',
+    '  float br = 0.0, hu = 0.0;',
+    '  vec2 sl = vec2(0.0);',
+    '  for (int k = 0; k < ' + GD.oct + '; k++) {',
+    '    float w = smoothstep(' + gdFloat(GD.fadeLo) + ' * foot, ' + gdFloat(GD.fadeHi) + ' * foot, c);',
+    '    if (w <= 0.0) break;',
+    '    vec2 x = q / c;',
+    '    vec2 fl = floor(x);',
+    '    vec3 nz = gdNoise((cell << k) + ivec2(fl), x - fl, seed + float(k) * 7.31);',
+    '    float v = (nz.x - 0.5) * w * amp;',
+    '    br += v;',
+    '    if (k < ' + GD.hueOct + ') hu += v;',
+    '    sl += nz.yz * (w * samp);',
+    '    c *= 0.5; amp *= ' + gdFloat(GD.gain) + '; samp *= ' + gdFloat(GD.slopeGain) + ';',
+    '  }',
+    '  return vec4(br, hu, sl);',
+    '}',
+    'vec2 gdPick(vec3 v, int ax) { return ax == 0 ? v.yz : ax == 1 ? v.zx : v.xy; }',
+    'ivec2 gdPickI(ivec3 v, int ax) { return ax == 0 ? v.yz : ax == 1 ? v.zx : v.xy; }',
+    'vec3 gdLift(vec2 g, int ax) { return ax == 0 ? vec3(0.0, g) : ax == 1 ? vec3(g.y, 0.0, g.x) : vec3(g, 0.0); }',
+    /* x: brightness (zero-mean), y: hue (zero-mean), z: elevation nudge,
+     * w: relief (zero-mean, already divided by the sun term). All zero
+     * when the block is off. */
+    'vec4 groundDetail(vec3 rd, vec3 n, float bq, float disc) {',
+    '  if (uGdOn <= 0.0) return vec4(0.0);',
+    '  float t = uGdCq / (bq + sqrt(max(disc, 0.0)));',
+    '  vec3 qb = spinAbout(rd * t - uGdAnchorRel, uSpinAxis, -uSpinPhase);',
+    '  vec3 nb = spinAbout(n, uSpinAxis, -uSpinPhase);',
+    '  vec3 lb = spinAbout(uSunDir, uSpinAxis, -uSpinPhase);',
+    /* Ground per pixel, stretched by how obliquely the ray meets it. */
+    '  float foot = t / (uFlen * max(abs(dot(rd, n)), 0.12));',
+    '  float seed = fract(uSeed * 0.61803) * 89.0;',
+    /* The cube face this ground faces, and the next one. Across the seam
+     * between two faces the two projections are blended over a narrow
+     * band, which is the only place a pixel pays for both. */
+    '  vec3 an = abs(nb);',
+    '  int a0 = an.x >= an.y && an.x >= an.z ? 0 : (an.y >= an.z ? 1 : 2);',
+    '  float m0 = a0 == 0 ? an.x : a0 == 1 ? an.y : an.z;',
+    '  int a1 = a0 == 0 ? (an.y >= an.z ? 1 : 2) : a0 == 1 ? (an.x >= an.z ? 0 : 2) : (an.x >= an.y ? 0 : 1);',
+    '  float m1 = a1 == 0 ? an.x : a1 == 1 ? an.y : an.z;',
+    '  float wb = smoothstep(0.0, ' + gdFloat(GD.seam) + ', m0 - m1);',
+    '  vec4 p0 = gdPlane(gdPick(qb, a0), gdPickI(uGdAnchorCell, a0), foot, seed);',
+    '  vec3 slope = gdLift(p0.zw, a0);',
+    '  vec2 bh = p0.xy;',
+    '  if (wb < 1.0) {',
+    '    vec4 p1 = gdPlane(gdPick(qb, a1), gdPickI(uGdAnchorCell, a1), foot, seed);',
+    '    bh = mix(p1.xy, bh, wb);',
+    '    slope = mix(gdLift(p1.zw, a1), slope, wb);',
+    '  }',
+    '  bh /= ' + gdFloat(GD.norm) + ';',
+    '  slope -= nb * dot(slope, nb);',
+    '  float rel = -dot(slope, lb) / max(dot(nb, lb), ' + gdFloat(GD.reliefSun) + ');',
+    '  return vec4(bh.x, bh.y, bh.x * ' + gdFloat(GD.elev) + ', rel) * uGdOn;',
+    '}',
+    /* The albedo multiplier, applied once the ground's colour is settled
+     * (seas, ice, twilight zones) and before the cloud deck covers it. The
+     * sea takes almost none of it: water is flat, and mottled water reads
+     * as more land in a different colour (the terrain block says the same
+     * about its own relief). */
+    'vec3 groundDetailTint(vec4 gd, float sea) {',
+    '  float land = 1.0 - 0.85 * sea;',
+    '  float m = 1.0 + ' + gdFloat(GD.bright) + ' * gd.x * land;',
+    '  vec3 tint = vec3(1.0) + vec3(0.55, 0.05, -0.50) * (' + gdFloat(GD.hue) + ' * gd.y * land);',
+    '  float r = clamp(1.0 + gd.w * land, ' + gdFloat(GD.reliefMin) + ', ' + gdFloat(GD.reliefMax) + ');',
+    '  return tint * (m * r);',
+    '}'
+  ].join('\n');
+
   var FRAG_BODY = [
     '#version 300 es',
     'precision highp float;',
+    'precision highp int;',
     'in vec2 vDisc;',
     'in vec2 vPx;',
     /* A TRUE ray-sphere impostor, not an orthographic disc.
@@ -396,6 +593,8 @@
     '  float c = cos(a), s = sin(a);',
     '  return v * c + cross(k, v) * s + k * (dot(k, v) * (1.0 - c));',
     '}',
+    /* Near-ground detail, in its own functions: see GD above. */
+    GROUND_DETAIL_GLSL,
 
     'void main() {',
     /* The view ray for this pixel, in world axes, from the eye. */
@@ -559,6 +758,8 @@
     /* A soft terminator. A hard max(0.0, ndl) gives a knife edge that reads
      * as a rendering artefact rather than as a sunrise. */
     '  float lam = smoothstep(-0.14, 0.30, ndl);',
+    /* Ground detail (GD): computed once here, spent in two places below. */
+    '  vec4 gd = uBanded > 0.5 ? vec4(0.0) : groundDetail(rd, n, bq, disc);',
 
     /* ---- gas / ice giants: latitude bands, not terrain ------------------
      * A gas giant has no surface and no coastline; what you see is zonal
@@ -634,6 +835,8 @@
      * first is what turns them into coastlines with inlets and peninsulas
      * for almost no extra cost. */
     '  elev = mix(elev, fbm(sp * 0.55 + elev * 1.4), 0.45);',
+    /* GD: the coast and the cap edge, crinkled at ground scale. */
+    '  elev += gd.z;',
 
     '  vec3 base = uColor;',
     '  float sea = 0.0;',
@@ -701,6 +904,9 @@
      * a threshold on noise, filled solid, and lit by the same sun term as the
      * ground. Coverage drives the threshold, so an ocean world is mostly
      * white and a thin-aired desert has a few wisps. */
+    /* GD: mottling and relief, on the settled ground colour, under the
+     * clouds. */
+    '  base *= groundDetailTint(gd, sea);',
     /* What the storms put into this pixel on their own account, spent
      * after the sun term below. */
     '  float glow = 0.0;',
@@ -2174,6 +2380,7 @@
                               'uHoleRel', 'uHoleR', 'uHoleDepth', 'uHaloPush',
                               'uConeS', 'uConeR', 'uSkyA', 'uSkyUp', 'uSkySun',
                               'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD', 'uBoxTop',
+                              'uGdOn', 'uGdAnchorRel', 'uGdAnchorCell', 'uGdCq',
                               'uTear', 'uTearK', 'uTearN']);
 
     /* The pit wall (GL.queueGroundWall): one full-screen pass. */
@@ -3397,6 +3604,7 @@
       var sp2 = spinOf(b, q.t);
       gl.uniform3f(uni.uSpinAxis, sp2.ax.x, sp2.ax.y, sp2.ax.z);
       gl.uniform1f(uni.uSpinPhase, sp2.phase);
+      uploadGroundDetail(b, q, sp2, isStar || banded);
       gl.uniform1f(uni.uDeckPhase, sp2.deck);
       gl.uniform1f(uni.uBandPhase, sp2.band);
       gl.uniform1f(uni.uShearPhase, sp2.shear);
@@ -3952,6 +4160,126 @@
       stormPhase: clock ? clock.phase : wrap(t / STORM_BUCKET, 1)
     };
   }
+
+  /* ---- GROUND DETAIL, the JS half (see GD at the top) -------------------- */
+  var groundDetailOn = true;
+  /* For a probe or the options page: false draws the ground as it was. */
+  GL.setGroundDetail = function (on) { groundDetailOn = !!on; };
+
+  function rotAbout(v, k, a) {
+    var c = Math.cos(a), s = Math.sin(a), kd = k.x * v.x + k.y * v.y + k.z * v.z;
+    return { x: v.x * c + (k.y * v.z - k.z * v.y) * s + k.x * kd * (1 - c),
+             y: v.y * c + (k.z * v.x - k.x * v.z) * s + k.y * kd * (1 - c),
+             z: v.z * c + (k.x * v.y - k.y * v.x) * s + k.z * kd * (1 - c) };
+  }
+  /* The anchor, in double: the eye's own body-fixed position snapped to
+   * the coarsest lattice, and the offsets the shader needs from it. Pure
+   * function of where the eye is and how far the world has turned, so it
+   * is exported for the suite. */
+  function groundDetailFrame(b, rel, sp) {
+    var R = b.radius || 1;
+    var ex = -rel.x, ey = -rel.y, ez = -rel.z;           // centre -> eye, world
+    var d = Math.sqrt(ex * ex + ey * ey + ez * ez);
+    var alt = d - R;
+    var on = 1 - smooth(GD.altLo, GD.altHi, alt);
+    var eb = rotAbout({ x: ex, y: ey, z: ez }, sp.ax, -sp.phase);
+    var cell = [Math.round(eb.x / GD.cmax), Math.round(eb.y / GD.cmax), Math.round(eb.z / GD.cmax)];
+    var aw = rotAbout({ x: cell[0] * GD.cmax, y: cell[1] * GD.cmax, z: cell[2] * GD.cmax }, sp.ax, sp.phase);
+    return {
+      on: on, alt: alt, cell: cell,
+      anchorRel: { x: rel.x + aw.x, y: rel.y + aw.y, z: rel.z + aw.z },
+      cq: (d - R) * (d + R)
+    };
+  }
+  function smooth(e0, e1, x) {
+    var t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+    return t * t * (3 - 2 * t);
+  }
+  function uploadGroundDetail(b, q, sp, skip) {
+    var f = (!skip && groundDetailOn && b.kind !== 'star') ? groundDetailFrame(b, q.rel, sp) : null;
+    if (!f || !(f.on > 0)) { gl.uniform1f(uni.uGdOn, 0); return; }
+    gl.uniform1f(uni.uGdOn, f.on);
+    gl.uniform3f(uni.uGdAnchorRel, f.anchorRel.x, f.anchorRel.y, f.anchorRel.z);
+    gl.uniform3i(uni.uGdAnchorCell, f.cell[0], f.cell[1], f.cell[2]);
+    gl.uniform1f(uni.uGdCq, f.cq);
+  }
+
+  /* The shader's field, line for line, in JS: gdH/gdNoise/gdPlane/
+   * groundDetail before the sun term, in doubles (so not bit-for-bit the
+   * GPU's floats, but the same lattice, the same hash and the same sums —
+   * which is what the suite asks of it: determinism, zero mean, real
+   * variance, and the same ground whichever anchor it is read from). `pb`
+   * is a BODY-FIXED point in km, `nb` the body-fixed normal there,
+   * `anchor` a lattice index and `foot` km per pixel. */
+  function fract(x) { return x - Math.floor(x); }
+  function gdHJS(cx, cy, s) {
+    var px = fract((cx & 1023) * 0.1031), py = fract((cy & 1023) * 0.1030), pz = fract(s * 0.0973);
+    var dd = px * (py + 33.33) + py * (pz + 33.33) + pz * (px + 33.33);
+    px += dd; py += dd; pz += dd;
+    return fract((px + py) * pz);
+  }
+  function gdNoiseJS(ix, iy, fx, fy, s) {
+    var ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+    var dx = 6 * fx * (1 - fx), dy = 6 * fy * (1 - fy);
+    var a = gdHJS(ix, iy, s), b = gdHJS(ix + 1, iy, s), c = gdHJS(ix, iy + 1, s), d = gdHJS(ix + 1, iy + 1, s);
+    var k1 = b - a, k2 = c - a, k3 = a - b - c + d;
+    return [a + k1 * ux + k2 * uy + k3 * ux * uy, dx * (k1 + k3 * uy), dy * (k2 + k3 * ux)];
+  }
+  function gdPlaneJS(qx, qy, cx, cy, foot, seed) {
+    var c = GD.cmax, amp = 1, samp = GD.relief, br = 0, hu = 0, sx = 0, sy = 0, used = 0;
+    for (var k = 0; k < GD.oct; k++) {
+      var w = smooth(GD.fadeLo * foot, GD.fadeHi * foot, c);
+      if (w <= 0) break;
+      var x = qx / c, y = qy / c, flx = Math.floor(x), fly = Math.floor(y);
+      var sh = Math.pow(2, k);
+      var nz = gdNoiseJS((cx * sh + flx) | 0, (cy * sh + fly) | 0, x - flx, y - fly, seed + k * 7.31);
+      var v = (nz[0] - 0.5) * w * amp;
+      br += v; if (k < GD.hueOct) hu += v;
+      sx += nz[1] * w * samp; sy += nz[2] * w * samp;
+      c *= 0.5; amp *= GD.gain; samp *= GD.slopeGain; used++;
+    }
+    return { br: br, hu: hu, sx: sx, sy: sy, used: used };
+  }
+  var GD_PICK = [[1, 2], [2, 0], [0, 1]];
+  function groundDetailAt(seed, pb, nb, anchor, foot) {
+    var sd = fract(seed * 0.61803) * 89;
+    var P = [pb.x - anchor[0] * GD.cmax, pb.y - anchor[1] * GD.cmax, pb.z - anchor[2] * GD.cmax];
+    var an = [Math.abs(nb.x), Math.abs(nb.y), Math.abs(nb.z)];
+    var a0 = (an[0] >= an[1] && an[0] >= an[2]) ? 0 : (an[1] >= an[2] ? 1 : 2);
+    var a1 = a0 === 0 ? (an[1] >= an[2] ? 1 : 2) : a0 === 1 ? (an[0] >= an[2] ? 0 : 2) : (an[0] >= an[1] ? 0 : 1);
+    var wb = smooth(0, GD.seam, an[a0] - an[a1]);
+    function plane(ax) {
+      var i = GD_PICK[ax][0], j = GD_PICK[ax][1];
+      var r = gdPlaneJS(P[i], P[j], anchor[i], anchor[j], foot, sd);
+      var s3 = [0, 0, 0]; s3[i] = r.sx; s3[j] = r.sy;
+      return { br: r.br, hu: r.hu, s: s3, used: r.used };
+    }
+    var p0 = plane(a0), br = p0.br, hu = p0.hu, sl = p0.s;
+    if (wb < 1) {
+      var p1 = plane(a1);
+      br = p1.br + (br - p1.br) * wb; hu = p1.hu + (hu - p1.hu) * wb;
+      sl = [p1.s[0] + (sl[0] - p1.s[0]) * wb, p1.s[1] + (sl[1] - p1.s[1]) * wb, p1.s[2] + (sl[2] - p1.s[2]) * wb];
+    }
+    br /= GD.norm; hu /= GD.norm;
+    var sn = sl[0] * nb.x + sl[1] * nb.y + sl[2] * nb.z;
+    sl = [sl[0] - nb.x * sn, sl[1] - nb.y * sn, sl[2] - nb.z * sn];
+    return { bright: br, hue: hu, elev: br * GD.elev, slope: sl, octaves: p0.used };
+  }
+  /* The albedo multiplier the shader's groundDetailTint applies, for a
+   * sun direction `lb` (body-fixed) — so the suite can average it. */
+  function groundDetailTintAt(d, nb, lb, sea) {
+    var land = 1 - 0.85 * (sea || 0);
+    var m = 1 + GD.bright * d.bright * land;
+    var ndl = Math.max(nb.x * lb.x + nb.y * lb.y + nb.z * lb.z, GD.reliefSun);
+    var rel = -(d.slope[0] * lb.x + d.slope[1] * lb.y + d.slope[2] * lb.z) / ndl;
+    var r = Math.max(GD.reliefMin, Math.min(GD.reliefMax, 1 + rel * land));
+    var h = GD.hue * d.hue * land;
+    return [(1 + 0.55 * h) * m * r, (1 + 0.05 * h) * m * r, (1 - 0.50 * h) * m * r];
+  }
+  GL.groundDetailTintAt = groundDetailTintAt;
+  GL.GROUND_DETAIL = GD;
+  GL.groundDetailAt = groundDetailAt;
+  GL.groundDetailFrame = groundDetailFrame;
 
   /* HOW MUCH OF THE LIGHTNING TO DRAW, set once a frame by main.js from
    * the time warp. At one times it is all of it; by a hundred times the
