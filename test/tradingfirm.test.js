@@ -283,6 +283,22 @@ console.log('--- the running costs come out of the account ---');
   check('and the payroll at your desk does not charge you for her', G.ship.credits === cr0 &&
         !lines.some(function (l) { return /h-a/.test(l); }), lines.join(' | '));
   check('the costs are counted in the runs\' log', c.log.length > 0);
+
+  /* MARKET DEPTH IS THE HOUSE'S, NOT YOURS. The house's own book carries
+   * its lots at TUNE.depthMul and remembers them TUNE.footHalfLife; the
+   * market you trade at is dented by exactly the tonnes moved, on its own
+   * four days, as your own trades are. */
+  check('the house\'s dent is deeper and remembered longer than yours', TF.TUNE.depthMul > 1 &&
+        TF.TUNE.footHalfLife > Eco.LEDGER_HALFLIFE, TF.TUNE.depthMul + ' x, ' + TF.TUNE.footHalfLife / DAY + ' d');
+  var w2 = world('kawartha', { rating: 4, minAccount: 0 });
+  var h2 = w2.hull('h-a', 'talon', 3);
+  TF.engage(w2.G, w2.firm, w2.port, w2.sys, { hulls: [h2.id], budget: 30000 }, T0);
+  var tt = T0;
+  while (!(h2.trade && h2.trade.leg && h2.trade.leg.cid) && tt < T0 + 10 * DAY) { tt += 3600; TF.book(w2.G, tt); }
+  var L = h2.trade.leg, A = w2.sys.byId[L.from];
+  var e = A.market.ledger[L.cid];
+  check('and the real market moved by the tonnes she bought, no more', e && Math.abs(e.q + L.qty) < 1e-6,
+        e && e.q + ' vs ' + (-L.qty));
 })();
 
 console.log('--- a better house makes more money ---');

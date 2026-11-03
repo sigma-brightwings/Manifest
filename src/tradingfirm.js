@@ -689,7 +689,11 @@
      * go on running up a debt nobody can pay: a house can lose its budget,
      * never more. So at the first decision with no cash left the account
      * closes, the way a quarter's loss closes it. */
-    if (!c.closing && c.cash <= 0 && !c.hand) {
+    /* EMPTY means nothing left at all — not cash spent on a load another
+     * of its hulls is carrying (the first draft read c.cash, and a house
+     * whose Talon had just spent the budget on computers closed its own
+     * account at the Kestrel's next look). */
+    if (!c.closing && equity(G, c) <= 0 && !c.hand) {
       c.closing = { at: td, why: 'empty' };
       c.nextReview = null;
       var te = c.firmShort + ': the account is empty — the house stands its hulls down and closes it.';
