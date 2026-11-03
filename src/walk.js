@@ -703,6 +703,7 @@
       }
     }
     ['x0', 'x1', 'z0', 'z1'].forEach(function (s) { wallQuads(plan, room, s, out, pal); });
+    if (room.kind === 'tube') tubeQuads(room, out, pal);
     /* Ceiling light strips down the long axis - not in a room lit by its
      * own lamps (dressing.js noStrip: the bar). */
     if (room.noStrip) return;
@@ -712,6 +713,41 @@
       ? [[room.x0 + 1, y, cz - 0.25], [room.x0 + 1, y, cz + 0.25], [room.x1 - 1, y, cz + 0.25], [room.x1 - 1, y, cz - 0.25]]
       : [[cx - 0.25, y, room.z0 + 1], [cx - 0.25, y, room.z1 - 1], [cx + 0.25, y, room.z1 - 1], [cx + 0.25, y, room.z0 + 1]];
     out.push({ pts: strip, col: '#e8f4ff', bias: -0.05 });
+  }
+
+  /* A SEA PLATFORM'S COVERED TUBE (2026-11-02): the room is a box (the
+   * walker's collision is boxes), and this dresses it as the tube it is.
+   * Chamfer panels across all four long edges make the section an
+   * octagon; down both flanks runs a glazed strip, pane by pane between
+   * mullions, each pane the sea and sky outside it - painted, lit, a
+   * horizon across it - since the deck view draws no world through a wall.
+   * That is the one cheat here, and it is said. */
+  var TUBE_CHAMFER = 0.9;      // m, across each long edge
+  function tubeQuads(room, out, pal) {
+    var alongX = (room.x1 - room.x0) >= (room.z1 - room.z0);
+    var a0 = alongX ? room.x0 : room.z0, a1 = alongX ? room.x1 : room.z1;
+    var w0 = alongX ? room.z0 : room.x0, w1 = alongX ? room.z1 : room.x1;
+    var h = room.y1, c = TUBE_CHAMFER, IN = 0.02;
+    /* [along, height, across] to [x, y, z]. */
+    function P(al, y, ac) { return alongX ? [al, y, ac] : [ac, y, al]; }
+    function quad(pts, col, lit) { out.push({ pts: pts, col: col, lit: !!lit, bias: lit ? 0 : undefined }); }
+    var ceilC = shade(pal.ceil, 1.1), floorC = shade(pal.floor, 0.85);
+    [[w0, 1], [w1, -1]].forEach(function (wall) {
+      var w = wall[0], sd = wall[1];
+      /* The chamfers: the wall's top meets the ceiling on a slant, the
+       * floor's edge meets the wall on another. */
+      quad([P(a0, h - c, w + sd * IN), P(a1, h - c, w + sd * IN), P(a1, h - IN, w + sd * c), P(a0, h - IN, w + sd * c)], ceilC);
+      quad([P(a0, c * 0.5, w + sd * IN), P(a1, c * 0.5, w + sd * IN), P(a1, IN, w + sd * c * 0.5), P(a0, IN, w + sd * c * 0.5)], floorC);
+      /* The glazing: panes 2.6 m long, 0.35 m mullions, from 1.0 m to
+       * 2.25 m up; sky above the horizon at 1.55 m, sea below. */
+      var y0 = 1.0, yH = 1.55, y1 = Math.min(h - c - 0.1, 2.25), off = w + sd * IN * 2;
+      for (var x = a0 + 1.0; x + 2.6 <= a1 - 1.0; x += 2.95) {
+        quad([P(x, yH, off), P(x + 2.6, yH, off), P(x + 2.6, y1, off), P(x, y1, off)], '#4a7fa6', true);
+        quad([P(x, y0, off), P(x + 2.6, y0, off), P(x + 2.6, yH, off), P(x, yH, off)], '#1f4a6b', true);
+        quad([P(x, yH - 0.015, off + sd * 0.002), P(x + 2.6, yH - 0.015, off + sd * 0.002),
+              P(x + 2.6, yH + 0.015, off + sd * 0.002), P(x, yH + 0.015, off + sd * 0.002)], '#9cc6dc', true);
+      }
+    });
   }
 
   function boxQuads(b, y0, y1, col, out) {

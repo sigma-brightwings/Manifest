@@ -6791,6 +6791,23 @@
    * the shape GLWorld.setSeaPort takes; null otherwise. The posts are the
    * rig's own (Render.seaPosts), built once. */
   var SEA_UPLOAD_KM = 30;
+  /* The platform whose sky the eye is under: within SEA_SKY_KM of it and
+   * above the sea. Past that the eye is high enough that the planet seen
+   * from outside its air is the right picture again. */
+  var SEA_SKY_KM = 30;
+  function seaSkyPort(cam) {
+    if (!G.ship || !G.sys || !cam || !cam.eye) return null;
+    var list = G.sys.pads || [], best = null, bestD = SEA_SKY_KM;
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i];
+      if (!p.seaPlatform || !p.parentBody) continue;
+      var d = V.dist(Sim.portEntrance(p, G.sys, G.t).pos, cam.eye);
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    if (!best) return null;
+    if (eyeUnderStreet(best, cam)) return null;
+    return best;
+  }
   function seaPortNear(cam) {
     if (!G.ship || !G.sys || !cam || !cam.eye || !Render.seaPosts) return null;
     var best = null, bestD = SEA_UPLOAD_KM, list = G.sys.pads || [];
@@ -7859,7 +7876,15 @@
      * sky over the port (groundSky), above the street or below it: day
      * by day, dusk and night as they are there, black on an airless
      * world. Astra: "put daytime sky when looking up out of the cut". */
-    var groundSkyNow = (G.cutaway && G.cutaway.surface && !mapMode()) ? groundSky(G.cutaway.port) : null;
+    /* AND OVER A SEA PLATFORM, CUT OR NOT (2026-11-02). There is no street
+     * section at a platform (its cutaway is the orbital cone) and you look
+     * at one from the air far more than from a berth, so the sky over it is
+     * engaged whenever a platform is near the eye - the same sky, horizon
+     * and haze a ground port gets in its cut. Without it a daylit sea had
+     * a black, starry sky over it and the planet's bare limb for a horizon. */
+    var skyPortNow = (G.cutaway && G.cutaway.surface && !mapMode()) ? G.cutaway.port
+                   : (!mapMode() ? seaSkyPort(cam) : null);
+    var groundSkyNow = skyPortNow ? groundSky(skyPortNow) : null;
     if (groundSkyNow) buried = null;
     /* Berthed in a shed: the shed is the world. See enclosedPort.
      *
@@ -7888,7 +7913,7 @@
        * planet pass for the haze that makes the horizon. See GLWorld.skyAt.
        * Its own lines, apart from the ground's shading, on purpose. */
       if (groundSkyNow && global.GLWorld.setGroundSky) {
-        var skyPort = G.cutaway.port, skyGb = Sim.groundBasis(skyPort, G.sys, G.t);
+        var skyPort = skyPortNow, skyGb = Sim.groundBasis(skyPort, G.sys, G.t);
         global.GLWorld.setGroundSky(skyPort.parentBody, skyGb.up,
           V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), skyGb.entrance.pos)));
         global.GLWorld.drawGroundSky(cam);
@@ -10720,8 +10745,20 @@
   }
   /* From aboard her, the hangar round her: down her ramp and through her
    * windows. */
+  /* NOT AT A SEA PLATFORM (2026-11-02). Her berth there is the domed pad,
+   * and the rig is drawn round her as it is: the deck plan's hangar box,
+   * drawn in her hangar frame, stood a black box round her inside the dome
+   * and the plan's tube and hub out over the water beside it as a slab on
+   * legs (the cutaway frame of the first round). The deck plan is still
+   * what you walk on when you step out; it is only not drawn into the
+   * world from outside. */
+  function seaBerth() {
+    var p = G.ship && G.ship.docked && G.sys ? G.sys.byId[G.ship.docked] : null;
+    return !!(p && p.seaPlatform);
+  }
   function queueHangarFromShip(cam) {
     if (!glLive() || !global.GLWorld || !global.GLWorld.queueMesh) return;
+    if (seaBerth()) return;
     var hp = hangarPlan();
     if (!hp) return;
     var F = hangarFrame(hp.hangar);
@@ -10750,7 +10787,7 @@
   function hangarChaseRaw() {
     if (G.viewMode === 'cockpit' || G.walk || G.focus && !G.followShip) return null;
     if (typeof mapMode === 'function' && mapMode()) return null;
-    if (!glLive() || !berthHangar()) return null;
+    if (!glLive() || !berthHangar() || seaBerth()) return null;
     var hp = hangarPlan();
     return hp && hp.hangar ? hp : null;
   }
@@ -10761,7 +10798,7 @@
   function hangarSeat() {
     if (G.viewMode !== 'cockpit' || G.walk || G.eva) return null;
     if (typeof mapMode === 'function' && mapMode()) return null;
-    if (!glLive() || !berthHangar()) return null;
+    if (!glLive() || !berthHangar() || seaBerth()) return null;
     var hp = hangarPlan();
     return hp && hp.hangar ? hp : null;
   }
@@ -16228,7 +16265,19 @@
     var alt = V.dist(pos, atmo.pos) - atmo.body.radius;
     var rho = Sim.airDensity(atmo.body, alt);
     if (!(rho > 0.02)) return 0;                  // the top of the air is thin
-    var through = V.len(V.sub(vel, atmo.vel));
+    /* THROUGH THE AIR, AND THE AIR TURNS WITH ITS WORLD (2026-11-02). The
+     * speed was measured against the world's centre, so a hull held still
+     * over the ground - a sea platform's pad carrying her down, at a few
+     * hundred m/s of the world's own spin - "flew" through air standing
+     * still with her and laid a contrail, and the points, drifting at the
+     * centre's velocity, streamed off into the sky as a white beam. */
+    var airVel = atmo.vel, rot = atmo.body.rotation, W = global.Weather;
+    if (rot && rot.period && W && W.spinAxis) {
+      var ax = W.spinAxis(atmo.body), om = 2 * Math.PI / rot.period;
+      var rr = V.sub(pos, atmo.pos);
+      airVel = V.add(atmo.vel, V.scale(V.cross(ax, rr), om));
+    }
+    var through = V.len(V.sub(vel, airVel));
     if (through < CONTRAIL_MIN_SPEED) return 0;
     return Math.max(0, Math.min(1, rho * 0.9)) * Math.min(1, through / 0.9);
   }

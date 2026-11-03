@@ -152,6 +152,28 @@ before they update.
   coastal flags they replaced.
 - **Saves survive**, version unchanged. A save docked at one of these ports
   loads onto a pad of it (restore docks by id).
+- **Second round, after the first frames:**
+  - **The sky.** A daylit platform had a black, starry sky and the planet's
+    bare limb for a horizon: the ground sky (sky pass, horizon, haze by optical
+    depth) was only engaged by a ground port's street cut. It now runs whenever
+    a sea platform is within 30 km of the eye (main.js `seaSkyPort`), cut or not.
+  - **Sky fill.** Meshes under a daylit ground sky take a share of the sky's
+    light on their shade side (gl.js `uSkyFill`), so backlit domes are not
+    black. Ground ports in their cut get the same fill.
+  - **The tube** is dressed as a tube in the walk view: chamfered upper and
+    lower edges (an octagonal section) and a glazed strip down both flanks,
+    pane by pane, painted sea and sky. The deck view draws no world through a
+    wall, so the view through the glass is a painting, not the sea.
+  - **The black box and slab in the cutaway** were the walking deck's hangar
+    and its tube and hub, drawn into the world round the berthed ship in its
+    hangar frame. At a platform the berth is the domed pad, so that plan is not
+    drawn from outside (it is still what you walk on).
+  - **The white beam from a ship into the sky** was her own contrail. Air speed
+    was measured against the world's centre, so a hull carried round with the
+    ground at the world's spin laid one sitting still, and the points streamed
+    off at the centre's velocity. Contrails now measure against air turning
+    with its world. This was not new to platforms; it showed there first.
+  - **Foam** spreads round each column as a torn ring rather than a square.
 
 ### Fixed (2026-11-02, the ground port's burnt edge, the horizon seam, the haze)
 
