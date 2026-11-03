@@ -40,6 +40,47 @@ before they update.
 
 ## Unreleased
 
+### Added (2026-11-03, the galaxy chart zooms)
+
+Astra: "on the F6 tab I want to be able to zoom in and out on the galaxy now
+that we're running so many more stars." The F6 chart was one fixed scale,
+about 3.9 px per light year, where the median star sits 11 px from its
+nearest neighbour; the middle of the cluster was a smear.
+
+- **Zoom:** the mouse wheel over the plot, anchored on the pointer (the
+  galaxy point under it stays under it); `=` / `+` and `-` (numpad too),
+  anchored on the selected star while it is on the plot; on-chart `+` and
+  `−` buttons, and `WHOLE` to come straight back out. The chart's wheel and
+  keys never also zoom the flight camera behind it.
+- **Limits:** from the whole galaxy (the old scale) to 40 px per light year,
+  set from nearest-neighbour spacing measured over 40 seeds (18,000 stars):
+  as drawn, median 2.89 ly, 5th percentile 0.83 ly, so at the closest zoom a
+  5th-percentile pair is ~33 px apart and a median pair ~115 px, room for
+  both names, while the view is still ~15 ly across.
+- **Pan:** drag the plot; `C` centres on your star, `Shift+C` on the
+  selection. A press is a click until it moves 4 px, so a drag never
+  selects. (`C` still complies with a demand while you are held up.)
+- **What shows as you zoom:** names come in by tier (selected, here, course,
+  visited, in reach, the rest) and are placed highest first, so they never
+  overprint; the reach ring is labelled once it is big enough; a light-year
+  scale bar and the zoom factor sit in the plot's corner; the selection and
+  your own star get an arrow on the plot's edge, with name and distance,
+  when they are off it.
+- **Clicks** pick the nearest drawn dot within 12 px at any zoom — the old
+  per-star boxes overlapped, and the later star in galaxy order won.
+  Clicking your own star no longer silently selects the nearest star.
+- **Culled to the view:** stars off the plot are skipped before anything is
+  worked out about them; territory is built only for charted stars whose
+  flag reaches the view, anchored to the galaxy so a pan blits the cached
+  picture instead of rebuilding it. COST_LINE
+- Zoom and pan last the session (per seed), not the save.
+- Key hints on the chart, the H card and FLIGHT-CARD.md say all of it.
+  Pinned in galaxyzoom.test (the transform) and render.test (the real
+  listeners, culling, labels, territory at zoom, session memory).
+
+**Saves:** survive. Nothing is saved; the zoom is a view, not a fact about
+the career.
+
 ### Changed (2026-11-03, the trade starts carry the trade analyser)
 
 Astra: "for trader start, it gets the analyser, mining start gets the survey

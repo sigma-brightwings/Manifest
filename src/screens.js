@@ -6644,7 +6644,10 @@
     if (chartArc(ctx, plot, hereScreen.x, hereScreen.y, reachLy * scale)) ctx.stroke();
     ctx.setLineDash([]);
     var ringTopY = hereScreen.y - reachLy * scale;
-    if (reachLy * scale > 60 && chartInPlot(plot, hereScreen.x, ringTopY, -14)) {
+    /* 150 px, not less: at the whole-galaxy zoom the ring is ~95 px and
+     * its top runs through the crowded middle, where the words printed
+     * over a row of dots. From about ×1.6 in the ring is clear of them. */
+    if (reachLy * scale > 150 && chartInPlot(plot, hereScreen.x, ringTopY, -14)) {
       ctx.font = 'bold 11px ui-monospace, monospace';
       ctx.fillStyle = 'rgba(125,250,255,0.75)';
       ctx.textAlign = 'center';
@@ -6835,8 +6838,14 @@
       ctx.font = 'bold 11px ui-monospace, monospace';
       ctx.fillStyle = color;
       var tw = label.length * chartCharW(11);
-      var lx = e.x - Math.cos(e.ang) * 16 - tw / 2 * (1 + Math.cos(e.ang));
-      var ly = e.y - Math.sin(e.ang) * 16 + 4;
+      /* Pulled inward off the arrow's point, and then stood off to one
+       * side of the bearing by 14 px: the course line to the selection
+       * runs exactly along that bearing, and the first screenshot had it
+       * striking straight through the name. */
+      var px2 = -Math.sin(e.ang), py2 = Math.cos(e.ang);
+      if (py2 < 0) { px2 = -px2; py2 = -py2; }          // the side nearer the bottom of the plot
+      var lx = e.x - Math.cos(e.ang) * 16 - tw / 2 * (1 + Math.cos(e.ang)) + px2 * 14;
+      var ly = e.y - Math.sin(e.ang) * 16 + 4 + py2 * 14;
       lx = Math.max(plot.x0 + 4, Math.min(plot.x0 + plotSize - tw - 4, lx));
       ly = Math.max(plot.y0 + 14, Math.min(plot.y0 + plotSize - 6, ly));
       ctx.fillText(label, lx, ly);
@@ -6876,6 +6885,12 @@
     /* The key to the marks, in the other bottom corner. It used to trail
      * off the end of the keys line, which ran it under the readout. */
     ctx.save();
+    /* Backed like the scale bar once zoomed: a star whose dot sits under
+     * the key otherwise has the words printed across it. */
+    if (zoomed) {
+      ctx.fillStyle = 'rgba(6,14,22,0.75)';
+      ctx.fillRect(plot.x0 + plotSize - 12 - keyW, plot.y0 + plotSize - 19, keyW + 8, 15);
+    }
     ctx.font = 'bold 10px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(160,185,220,0.6)';
     ctx.textAlign = 'right';
