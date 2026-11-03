@@ -124,9 +124,12 @@ function run(seed, rating, quarters, budget, hullId, opt) {
     TF.book(G, t + TF.QUARTER);
     var h = c.history[0];
     if (h) out.push({ profit: h.profit, start: h.start, verdict: h.verdict, runs: h.runs, jumps: c.jumps || 0 });
-    if (!c.closed) TF.close(G, c, t + TF.QUARTER);
+    if (!c.closed && !c.closing) TF.close(G, c, t + TF.QUARTER);
     var tt = t + TF.QUARTER;
     while (!c.closed && tt < t + TF.QUARTER + 40 * 86400) { tt += 6 * 3600; TF.book(G, tt); }
+    /* An account that ran dry closes before its review: its quarter is the
+     * whole budget gone, less what was remitted. */
+    if (!h) out.push({ profit: Math.round((c.withdrawn || 0) - budget), start: budget, verdict: 'empty', runs: c.legs || 0, jumps: c.jumps || 0 });
     t = c.closedAt || tt;
   }
   out.trace = trace;

@@ -3520,6 +3520,21 @@
     if (cardH && listH < 40) { cardH = Math.max(0, cardH + listH - 40); listH = 40; }
     var perPage = Math.max(1, Math.floor((listH + gap) / (bh + gap)));
     var maxScroll = Math.max(0, rows.length - perPage);
+    /* WHERE THE "1-11 of 13" GOES. On the budget bar after SLOTS when there
+     * is room before the tab buttons; it was drawn there unconditionally,
+     * and on a 1280-wide window with six tabs on the bar it sat under
+     * FITTING (seen on FLEET, 2026-11-03). When the bar has no room, the
+     * list gives up a line at its foot and the counter goes there instead,
+     * right-aligned under the scrollbar it describes. */
+    var tabsLeft = tabRow ? x + w - 12 : x + w - 12 - tabs.length * tabStep;
+    var counterW = 92;                // "999-999 of 999" in bold 10 px, and a gap
+    var counterOnBar = x + 352 + counterW <= tabsLeft && 352 < w - 210;
+    var foot = 0;
+    if (maxScroll > 0 && !counterOnBar) {
+      foot = 14; listH -= foot;
+      perPage = Math.max(1, Math.floor((listH + gap) / (bh + gap)));
+      maxScroll = Math.max(0, rows.length - perPage);
+    }
 
     /* Changing tab starts you at the top of the new one. Carrying a scroll
      * position across from a list of ten hulls to a list of three would
@@ -3540,7 +3555,7 @@
           r.fn, { disabled: r.disabled, font: 11, hot: r.hot });
     }
 
-    if (cardH) drawHullCard(ctx, x, listY + listH + 4, w, cardH - 4);
+    if (cardH) drawHullCard(ctx, x, listY + listH + foot + 4, w, cardH - 4);
 
     if (maxScroll > 0) {
       drawScrollbar(ctx, x + 12 + rowW + 5, listY, sbW, listH,
@@ -3553,16 +3568,15 @@
       });
 
       /* Left-aligned after SLOTS, not right-aligned: the right-hand end of
-       * this row belongs to the tab buttons. */
-      if (352 < w - 210) {
-        ctx.save();
-        ctx.font = 'bold 10px ui-monospace, monospace';
-        ctx.fillStyle = 'rgba(160,185,220,0.55)';
-        ctx.fillText((G.yardScroll + 1) + '-' +
-                     Math.min(rows.length, G.yardScroll + perPage) +
-                     ' of ' + rows.length, x + 352, barY + 11);
-        ctx.restore();
-      }
+       * this row belongs to the tab buttons — and when they leave no room
+       * for it, at the foot of the list (see counterOnBar above). */
+      var ctr = (G.yardScroll + 1) + '-' + Math.min(rows.length, G.yardScroll + perPage) + ' of ' + rows.length;
+      ctx.save();
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(160,185,220,0.55)';
+      if (counterOnBar) ctx.fillText(ctr, x + 352, barY + 11);
+      else { ctx.textAlign = 'right'; ctx.fillText(ctr, x + w - 12, listY + listH + 11); }
+      ctx.restore();
     }
   }
 

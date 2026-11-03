@@ -684,6 +684,17 @@
   function decide(G, c, rec, td, out) {
     var tr = rec.trade;
     payWages(c, rec, td);
+    /* AN EMPTY ACCOUNT STOPS. Wages and berths keep falling due on a hull
+     * with nothing worth carrying, and an account run dry would otherwise
+     * go on running up a debt nobody can pay: a house can lose its budget,
+     * never more. So at the first decision with no cash left the account
+     * closes, the way a quarter's loss closes it. */
+    if (!c.closing && c.cash <= 0 && !c.hand) {
+      c.closing = { at: td, why: 'empty' };
+      c.nextReview = null;
+      var te = c.firmShort + ': the account is empty — the house stands its hulls down and closes it.';
+      lineOut(G, out, te); journal(G, te);
+    }
     if (c.closing) return release(G, c, rec, td, out, null);
     if (!pilotOf(rec)) return release(G, c, rec, td, out, 'nobody aboard can helm her');
     var sysA = systemOf(G, rec.star);
