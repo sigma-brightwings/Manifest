@@ -40,6 +40,46 @@ before they update.
 
 ## Unreleased
 
+### Changed (2026-11-03, landing on open ground, giant skims retuned, the sky under an overcast)
+
+Astra: "I agree with you on all of that, especially the skimming."
+
+- **Open ground charges what a pad charges.** Setting down away from a port
+  was free up to 100 m/s and a wreck past it. It now uses the pad's own damage
+  ramp, the same function: free to 20 m/s, costing more hull the harder you
+  hit, and fatal at 90. A hard touchdown says what it cost on the touchdown
+  line. Gear up on open ground is still a wreck at any speed.
+- **The landing autopilot sets her down at about 10 m/s.** It braked to its
+  final crawl halfway inside a pad's capture envelope, but a pad catches a
+  ship at the envelope's edge, so it caught her still fast. Flown into 47
+  surface pads and bays across 12 seeds from 25 km up, it hit every open pad
+  at about 138 m/s, which is fatal, and Harrow Deep's shaft at 30 m/s. Nobody
+  saw this because pads used to refuse a fast arrival rather than charge for
+  it. It now crawls at the edge, at half the lower of the pad's limit and the
+  speed damage starts. Measured again: 8.6 to 10.5 m/s, no hull lost on any
+  of the 47.
+- **Gas giant skims are back where they were.** Once a giant's air turned
+  with it, a skim flown with the spin met the air slower. Over 40 giants, a
+  prograde pass took 0.53x the heat and 0.81x the hydrogen it used to, and a
+  shielded hull could hold three times deeper. A giant's air heat is now x1.9
+  and its intake x1.25. A prograde pass is back to 1.01x on both; against the
+  spin is about 3.2x the old heat, so it is still the hard way round. Rocky
+  worlds and a star's corona are unchanged. Your skimmers' work orders are
+  unchanged.
+- **An overcast looks overcast from the ground.** At a ground port or a sea
+  platform, the sky now shows the weather over that spot. That is the same
+  weather the planet is painted with and the port's forecast reports. Overcast
+  is a grey cloud ceiling, partial cloud is broken cloud, and the sun and stars
+  go behind it. The light goes flat: less direct sun on the ground, the sea and
+  the buildings, no glint on the water, and the cloud's own diffuse light in
+  the shade. The cloud layer still stays off the ground near your eye, so the
+  white streaks it used to leave on the sea round a rig do not come back.
+
+### Saves
+
+Every save loads. Nothing new is written. The landing note on the ship
+(`touchdown`) exists only at runtime.
+
 ### Fixed (2026-11-03, the Cutter's and the Crawler's models mended; a door out of the Crawler's lift pit)
 
 Astra, on the two model problems the hull-walk fix reported and could not mend

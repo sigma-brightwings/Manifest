@@ -235,13 +235,22 @@ measured; the orbit map (`F2`) always shows that orbital `speed`.
 It is also the speed the ship is flown and judged by near the ground. Touchdown,
 lift-off, the air's drag and heat, and the vector assist's hover all measure
 against the ground and the air that turn with the world. Hold still over the
-ground and nothing pulls you along. Run an entry or a giant skim the way the
+ground and nothing pulls you along. Run an entry the way the
 world spins and you meet the air slower than your orbit, so there is less heat;
-run it against the spin and there is more.
+run it against the spin and there is more. A giant's air is retuned for that
+(2026-11-03): a skim with its spin costs and pays what it always did, and one
+against its spin runs about three times the heat.
+
+**Under the weather.** At a ground port or a sea platform the sky is the weather
+there: an overcast is a grey ceiling, broken cloud is broken, the sun goes behind
+it and the light goes flat. A port's forecast (comms) names the same sky.
 
 **11c. Set down away from a port** — on a claim, to plant a mining drone (`N`).
-Gear down (`Shift+G`), come in slow (under 100 m/s of `gnd speed`/`airspeed`), and she
-stands on her gear, nose where you left it, turning with the ground. Touchdown shuts the
+Gear down (`Shift+G`), come in slow, and she stands on her gear, nose where you
+left it, turning with the ground. Open ground charges what a pad charges: under
+20 m/s of `gnd speed`/`airspeed` is free, harder costs hull, rising steeply, and 90 m/s
+wrecks her. The touchdown line says what a hard one cost. Gear up is a wreck at any
+speed. Touchdown shuts the
 drive down; the band reads **DRIVE COLD · R TO START**. `R` starts her — two
 seconds of spool for a courier, longer for a bigger drive, that runs out once begun — and once the band says **DRIVE HOT**,
 `R` lifts her. Hold `R` straight through and she goes the moment she is hot. The
