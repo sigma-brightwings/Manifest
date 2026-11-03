@@ -4092,14 +4092,36 @@
         for (var j = 0; j < list.length; j++) if (list[j].id === lock.id) return list[j];
         return null;
       };
+      /* THE VELOCITY IS THE RAIL'S OWN DERIVATIVE, not trafficState's
+       * `vel`. Measured on seed ip-14 (Ironwake Lighter, mid-transfer): the
+       * position on the rail moved at 37.5 km/s while the state reported
+       * 32.4, and an assist matched to the reported number sat 650 km off
+       * her for two hours of game time with 3.7 km/s between them that it
+       * believed was zero. A central difference over two seconds is the
+       * velocity of the thing actually drawn on the screen. */
+      var railAt = function (dt) {
+        var a = Sim.trafficState(route, sys, G.t + dt - 1), m = Sim.trafficState(route, sys, G.t + dt),
+            b = Sim.trafficState(route, sys, G.t + dt + 1);
+        if (!m || !m.pos) return null;
+        if (!a || !b || !a.pos || !b.pos) return { pos: m.pos, vel: m.vel || V.zero() };
+        return { pos: m.pos, vel: V.scale(V.sub(b.pos, a.pos), 0.5) };
+      };
       var first = live();
       if (!first) return null;
       return { kind: 'ship', obj: first, name: first.name || 'contact', lock: lock,
         at: function (dt) {
-          if (!dt) { var s0 = live(); return s0 ? { pos: s0.pos, vel: s0.vel || V.zero() } : null; }
+          if (!dt) {
+            var s0 = live();
+            if (!s0) return null;
+            /* On its rail, the rail's own motion (railAt), not the state's
+             * vel field — see below. Woken off it, what the encounter
+             * system says. */
+            if (route && !route.dead && !route.suppressed && !s0.live) { var r0 = railAt(0); if (r0) return { pos: s0.pos, vel: r0.vel }; }
+            return { pos: s0.pos, vel: s0.vel || V.zero() };
+          }
           if (route && !route.dead && !route.suppressed) {
-            var rs = Sim.trafficState(route, sys, G.t + dt);
-            if (rs && rs.pos) return { pos: rs.pos, vel: rs.vel || V.zero() };
+            var rs = railAt(dt);
+            if (rs) return rs;
           }
           if (patrol && !patrol.dead && !patrol.live && Sim.patrolState) {
             var ps = Sim.patrolState(patrol, sys, G.t + dt);
@@ -4224,7 +4246,7 @@
       } : null
     };
     var res = Intercept.solve(opts);
-    res.why = cr.ok ? '' : cr.why;
+    res.why = cr.ok ? (res.drive === 'thrusters' ? 'too close for the drive' : '') : cr.why;
     res.rails = rails;
     res.standoff = aim0.standoff;
     res.tol = aim0.tol;
@@ -4575,6 +4597,24 @@
     return { x: cx + dx * k, y: cy + dy * k, on: false, dx: dx, dy: dy };
   }
 
+  /* A label with a dark backing. The pip moves over whatever the glass is
+   * showing — the attitude readout, a planet's limb, another contact's
+   * name — and pink text over a pale world was unreadable in the first
+   * screenshots (1280x720 and 800x600, kawartha). */
+  function pipLabel(ctx, text, x, y, align) {
+    var tw = ctx.measureText(text).width;
+    var x0 = align === 'center' ? x - tw / 2 : align === 'right' ? x - tw : x;
+    var fill = ctx.fillStyle, a = ctx.globalAlpha;
+    ctx.globalAlpha = 0.62;
+    ctx.fillStyle = '#05080d';
+    ctx.fillRect(x0 - 3, y - 10, tw + 6, 13);
+    ctx.globalAlpha = a;
+    ctx.fillStyle = fill;
+    ctx.textAlign = align || 'left';
+    ctx.fillText(text, x, y);
+    ctx.textAlign = 'left';
+  }
+
   function drawPipRing(ctx, x, y, merged) {
     ctx.beginPath();
     ctx.arc(x, y, merged ? 14 : 9, 0, Math.PI * 2);
@@ -4600,7 +4640,8 @@
     var at = screenOrEdge(ip.drawPos || ip.pos, w, deck);
     var tg = G.cam.project(ip.targetPos);
     var merged = ip.merged || (at.on && tg && Math.hypot(tg.x - at.x, tg.y - at.y) < 12);
-    var label = (merged ? 'INTERCEPT ' : 'PIP ') + fmtTime(ip.T) + '  ' + (ip.drive === 'cruise' ? 'cruise' : 'thrusters');
+    var label = (merged ? 'INTERCEPT ' : 'PIP ') + fmtTime(ip.T);
+    var driveTxt = ip.drive === 'cruise' ? 'cruise' : 'thrusters' + (ip.why ? ' · ' + ip.why : '');
     ctx.save();
     ctx.strokeStyle = PIP_COL; ctx.fillStyle = PIP_COL; ctx.lineWidth = 1.6;
     ctx.font = 'bold 11px ui-monospace, monospace';
@@ -4616,18 +4657,23 @@
         ctx.restore();
       }
       drawPipRing(ctx, at.x, at.y, merged);
-      ctx.fillText(label, at.x + 18, at.y + 4);
-      if (ip.why && ip.drive !== 'cruise') {
-        ctx.globalAlpha = 0.75;
-        ctx.fillText('cruise: ' + ip.why, at.x + 18, at.y + 17);
-      }
+      /* Under the ring, centred: the target's own label sits to its right,
+       * and when the two merge they would otherwise be written on top of
+       * each other (seen, 1280x720, Threshold Dock at 20 km). Two short
+       * lines rather than one long one, so it does not run into the speed
+       * and range boxes either side of the glass at 800 wide. */
+      var ly0 = at.y + (merged ? 34 : 26);
+      pipLabel(ctx, label, at.x, ly0, 'center');
+      ctx.globalAlpha = 0.85;
+      pipLabel(ctx, driveTxt, at.x, ly0 + 13, 'center');
     } else {
       Render.drawArrow(ctx, at.x - at.dx * 28, at.y - at.dy * 28, at.dx, at.dy, 22, PIP_COL, 2, 8);
       drawPipRing(ctx, at.x - at.dx * 40, at.y - at.dy * 40, false);
       var lx = at.x - at.dx * 52, ly = at.y - at.dy * 52;
-      ctx.textAlign = at.dx > 0.3 ? 'right' : at.dx < -0.3 ? 'left' : 'center';
-      ctx.fillText(label, lx, ly + (at.dy > 0.3 ? -10 : 16));
-      ctx.textAlign = 'left';
+      var al = at.dx > 0.3 ? 'right' : at.dx < -0.3 ? 'left' : 'center';
+      pipLabel(ctx, label, lx, ly + (at.dy > 0.3 ? -10 : 16), al);
+      ctx.globalAlpha = 0.85;
+      pipLabel(ctx, driveTxt, lx, ly + (at.dy > 0.3 ? -23 : 29), al);
     }
     ctx.restore();
     G.interceptDrawn = { x: at.x, y: at.y, on: at.on, merged: merged };
@@ -4656,17 +4702,21 @@
     ctx.moveTo(x - 4, y - 3); ctx.lineTo(x, y + 2); ctx.lineTo(x + 4, y - 3);
     ctx.stroke();
     if (!at.on) Render.drawArrow(ctx, at.x - at.dx * 24, at.y - at.dy * 24, at.dx, at.dy, 18, MATCH_COL, 2, 7);
-    ctx.textAlign = !at.on && at.dx > 0.3 ? 'right' : 'left';
-    ctx.fillText(txt, !at.on && at.dx > 0.3 ? x - 16 : x + 16, y + 4);
-    ctx.textAlign = 'left';
+    /* Off the screen, the number goes inward of the marker, toward the
+     * middle, rather than outward into the instrument boxes at the sides. */
+    if (at.on) pipLabel(ctx, txt, x + 16, y + 4, 'left');
+    else pipLabel(ctx, txt, x - at.dx * 14, y - at.dy * 14 + 22, 'center');
     ctx.restore();
     G.matchDrawn = { x: x, y: y, on: at.on, dv: ip.dvMag };
   }
 
   /* WHO IS FLYING. Always on while the assist is engaged, standing by or
    * not — the ASSIST row taught that a mode which does not say whether it
-   * is doing anything reads as broken. Stacked under the wake-chase and
-   * node banners so the three never sit on each other. */
+   * is doing anything reads as broken. At the very top of the glass: the
+   * wake-chase and node banners' row (y 106) lies across the cockpit's
+   * heading tape and its readout box, and a banner that is up for a whole
+   * trip must not hide the heading for a whole trip (seen, 1280x720 and
+   * 800x600). Above the tape there is nothing but the canopy's top edge. */
   function drawInterceptBadge(ctx, w, h) {
     var ad = G.autodock;
     if (!ad || ad.mode !== 'intercept') { G.interceptBadge = null; return; }
@@ -4678,16 +4728,16 @@
     var ip = G.intercept;
     var txt = 'INTERCEPT ' + clipText(ad.target.name || '', 22) + '   ' + who + '   ' + what +
               (ip && ip.res && ad.phase !== 'alongside' ? '   ' + fmtTime(ip.T) : '');
-    var y = 106 + (G.wakeChase ? 32 : 0) + (G.node ? 32 : 0);
+    var y = 10;
     ctx.save();
     ctx.font = 'bold 12px ui-monospace, monospace';
     var tw = ctx.measureText(txt).width;
-    panel(ctx, (w - tw) / 2 - 14, y, tw + 28, 26);
+    panel(ctx, (w - tw) / 2 - 14, y, tw + 28, 24);
     /* AUTO in the autopilot's green, YOU in the pip's colour: the two
      * states must not be told apart by reading. */
     ctx.fillStyle = ad.standby ? PIP_COL : '#7dffb0';
     ctx.textAlign = 'center';
-    ctx.fillText(txt, w / 2, y + 17);
+    ctx.fillText(txt, w / 2, y + 16);
     ctx.textAlign = 'left';
     ctx.restore();
     G.interceptBadge = { who: who, text: txt, y: y };

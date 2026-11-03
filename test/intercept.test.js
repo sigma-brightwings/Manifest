@@ -360,6 +360,11 @@ function runOne(label, lock, startPos, startVel, maxFrames) {
   while (g++ < (maxFrames || 6000)) {
     frame(50);
     if (G.cruise) { cruised = true; if (cruiseT0 === null) cruiseT0 = G.t; cruiseT1 = G.t; }
+    if (process.env.IP_STATE && g % 300 === 0 && G.autodock && G.autodock.rails) {
+      var s0 = G.autodock.rails.at(0), s1 = G.autodock.rails.at(1), sm = G.autodock.rails.at(-1);
+      console.log('        state t ' + (G.t - t0).toFixed(0) + ' gap ' + V.dist(s0.pos, G.ship.pos).toFixed(1) + ' relv ' + V.len(V.sub(G.ship.vel, s0.vel)).toFixed(4) +
+                  ' tgtAcc ' + (V.len(V.sub(s1.vel, sm.vel)) / 2 * 1000).toFixed(2) + ' m/s2 warp ' + G.warpIndex + ' phase ' + G.autodock.phase + ' thrust ' + (V.len(G.ship.thrust) * 1000).toFixed(2) + ' g ' + (V.len(Sim.acceleration(G.ship.pos, G.sys, G.t)) * 1000).toFixed(2) + ' dvdir ' + V.dot(V.norm(V.sub(G.ship.vel, s0.vel)), V.norm(V.sub(s0.pos, G.ship.pos))).toFixed(2) + ' dvpos ' + (V.len(V.sub(s1.pos, sm.pos)) / 2).toFixed(2) + ' vs ' + V.len(s0.vel).toFixed(2));
+    }
     if (process.env.IP_MSG && G.message !== runOne.lastMsg) { runOne.lastMsg = G.message; console.log('        [' + (G.t - t0).toFixed(1) + '] ' + G.message + '  phase ' + (G.autodock && G.autodock.phase)); }
     var ad = G.autodock;
     if (ad && ad.arrival && !arrival) { arrival = ad.arrival; arrivedAt = G.t; break; }
