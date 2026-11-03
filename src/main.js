@@ -17875,7 +17875,10 @@
 
   function panel(ctx, x, y, w, h, solid) {
     ctx.save();
-    ctx.fillStyle = solid ? 'rgba(5,9,16,0.975)' : 'rgba(8,14,24,0.78)';
+    /* Solid means solid: at 0.975 the say() line and the HUD behind the
+     * market still read through it as a ghost of text between the rows
+     * (seen 2026-11-03). */
+    ctx.fillStyle = solid ? 'rgb(5,9,16)' : 'rgba(8,14,24,0.78)';
     ctx.strokeStyle = 'rgba(120,160,220,0.28)';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -18899,10 +18902,21 @@
         ctx.font = 'bold 12px ui-monospace, monospace';
       }
       if (isWaste) {
+        /* KEPT OUT OF THE BUY COLUMN. The name was measured in the 10px
+         * note font rather than the 12px it is drawn in, and the long note
+         * then ran straight through the price beside it ("pays you to
+         * haul it" printed over "-277 cr", seen 2026-11-03). Measured in
+         * its own font now, and the note steps down to a shorter form, or
+         * to nothing, if it would reach the column. */
+        ctx.font = 'bold 12px ui-monospace, monospace';
+        var wx = px + 44 + ctx.measureText(r.name).width + 8;
         ctx.fillStyle = 'rgba(255,184,107,0.65)';
         ctx.font = 'bold 10px ui-monospace, monospace';
-        ctx.fillText(r.sink ? '  (accepts for disposal)' : '  (pays you to haul it)',
-                     px + 44 + ctx.measureText(r.name).width + 34, y);
+        var room = px + 330 - 60 - wx;   // the widest ask, '-1,234 cr', is ~56 px at 12px
+        var notes = r.sink ? ['(accepts for disposal)', '(takes it)'] : ['(pays you to haul it)', '(paid to haul)'];
+        for (var ni = 0; ni < notes.length; ni++) {
+          if (ctx.measureText(notes[ni]).width <= room) { ctx.fillText(notes[ni], wx, y); break; }
+        }
         ctx.font = 'bold 12px ui-monospace, monospace';
       }
 

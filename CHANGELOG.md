@@ -40,6 +40,21 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-03, the market's keys inside its box)
+
+Astra: "there are options along the bottom ... floating off the box they're
+sitting inside of". The market's key line was one fixed line wider than the
+720 px panel, so its tail ran out over the border. It now wraps a phrase at a
+time inside the panel, growing upward, and lists **Y trade analyser**, which the
+old line had no room for. Seen in the same screenshot and fixed with it: the
+waste row's note ("pays you to haul it") was measured in the wrong font and
+printed over the price beside it; it now steps down to "(paid to haul)", or to
+nothing, before it reaches the column. And solid panels are opaque (they were
+97.5%, enough for the docking message behind the market to read through as a
+ghost between the rows).
+
+**Saves:** survive. Drawing only.
+
 ### Changed (2026-11-03, the trade starts carry the trade analyser)
 
 Astra: "for trader start, it gets the analyser, mining start gets the survey
