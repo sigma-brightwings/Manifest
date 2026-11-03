@@ -168,8 +168,8 @@ wall on every side rather than in the open. Undocking climbs back up the same sh
 
 **11c. Set down away from a port** — on a claim, to plant a mining drone (`N`).
 Gear down (`Shift+G`), come in slow, and she stands on her gear. Touchdown shuts the
-drive down; the band reads **DRIVE COLD · R TO START**. `R` starts her — three
-seconds of spool that runs out once begun — and once the band says **DRIVE HOT**,
+drive down; the band reads **DRIVE COLD · R TO START**. `R` starts her — two
+seconds of spool for a courier, longer for a bigger drive, that runs out once begun — and once the band says **DRIVE HOT**,
 `R` lifts her. Hold `R` straight through and she goes the moment she is hot. The
 ramp has to be up, and walking out of the seat shuts her down again.
 

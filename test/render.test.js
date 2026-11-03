@@ -7337,12 +7337,31 @@ console.log('--- the drive on the ground ---');
    * not before. */
   down();
   check('down again, cold again', s.landed && s.drive === 'cold');
+  /* The spool is 2 s for a 42 t courier and grows with the cube root of
+   * dry mass, capped at 8 s (Astra, 2026-11-02). */
+  function spoolFor(m) { return Math.min(8, Math.max(2, 2 * Math.cbrt(Math.max(1, m || 42) / 42))); }
+  var T = spoolFor(s.dryMass);
   G.keys = { r: true };
-  frames(25, 100);
-  check('held from cold: still on the ground at 2.5 s', s.landed);
-  frames(10, 100);
-  check('held from cold: up by 3.5 s', !s.landed);
+  frames(Math.floor(T * 10 * 0.85), 100);
+  check('held from cold: still on the ground just before the spool ends', s.landed, T.toFixed(2) + ' s spool');
+  frames(Math.ceil(T * 10 * 0.15) + 6, 100);
+  check('held from cold: up just after it', !s.landed, T.toFixed(2) + ' s spool');
   G.keys = {};
+  check('a courier-sized hull spools in about two seconds', T >= 2 && T < 2.6, (s.dryMass || 0) + ' t, ' + T.toFixed(2) + ' s');
+
+  /* And a big hull takes longer: the same ship with a capital's dry mass. */
+  var dry0 = s.dryMass;
+  down();
+  s.dryMass = 5000;   // cube root of 5000/42 is ~4.9, so 9.8 s before the 8 s cap
+  var TB = spoolFor(s.dryMass);
+  G.keys = { r: true };
+  frames(Math.floor(T * 10) + 4, 100);
+  check('a heavy drive is still spooling when a courier would be up', s.landed && s.drive === 'spool',
+        s.drive + ' ' + (s.spool || 0).toFixed(2));
+  frames(Math.ceil((TB - T) * 10) + 8, 100);
+  check('and it is hot in its own longer time, capped at 8 s', TB === 8 && s.drive !== 'spool', TB + ' s, ' + s.drive);
+  G.keys = {};
+  s.dryMass = dry0;
 })();
 
 console.log('--- the ground under a ground port (2026-11-02) ---');

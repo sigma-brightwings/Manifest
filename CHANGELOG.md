@@ -40,6 +40,19 @@ before they update.
 
 ## Unreleased
 
+### Changed (2026-11-02, the drive on the ground: two seconds, longer for bigger hulls)
+
+- **The ground spool is 2 s for a courier and grows with the size of the
+  drive** (Astra: "bring the whole engine spool up sequence to 2 seconds,
+  longer for larger ships"). It was a flat 3 s. Now 2 s for a 42 t
+  courier, growing with the cube root of dry mass (a bigger turbopump and
+  chamber take longer to bring up), capped at 8 s: a 260 t freighter is
+  about 3.7 s, a capital hull 8 s. Dry mass, not laden: cargo does not make
+  the engine bigger. The start message says this hull's own time.
+- render.test: "the drive on the ground" now checks a courier spools in
+  about 2 s and lifts just after, and a heavy hull is still spooling when a
+  courier would be up and is hot in its own (capped) time.
+
 ### Fixed (2026-11-02, the ground port's burnt edge, the horizon seam, the haze)
 
 - **The cut through the street now has the glowing edge.** Astra: "why is

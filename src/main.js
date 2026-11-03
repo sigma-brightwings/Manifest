@@ -5777,7 +5777,7 @@
    *   cold   — shut down. Every touchdown on open ground ends here, as
    *            does a save loaded on the ground, and leaving the seat
    *            (you do not walk out to plant a drone with her burning).
-   *   spool  — the first R (or W nose-up) starts her: SPOOL_S of real
+   *   spool  — the first R (or W nose-up) starts her: spoolSeconds() of real
    *            time winding up, which runs to the end once begun, and
    *            cannot be cancelled by letting go — it is an ignition, not
    *            a throttle.
@@ -5785,12 +5785,25 @@
    *            before. Hold R straight through and she lifts the moment
    *            she is hot, so "hold R" is still the whole instruction.
    *
-   * Real time, not game time: at 10,000x warp a three-second spool would
+   * Real time, not game time: at 10,000x warp a two-second spool would
    * be over before the frame was drawn, and at 1x a game-time spool on a
    * paused clock would never finish. `drive` is transient — a loaded
    * ship on the ground is cold, which is the truth of a ship that has
    * been sitting there — so it adds nothing to the save. */
-  var SPOOL_S = 3;
+  /* TWO SECONDS, LONGER FOR A BIGGER DRIVE (Astra, 2026-11-02: "bring the
+   * whole engine spool up sequence to 2 seconds, longer for larger ships").
+   * The first build was a flat 3 s. Now 2 s for a courier-sized hull (the
+   * Talon's 42 t dry) growing with the cube root of dry mass — a drive's
+   * size goes roughly with its thrust, and the time to bring a bigger
+   * turbopump and chamber up to temperature with its linear size — capped
+   * at 8 s so a capital hull is slow to wake, not a wait. Dry mass, not
+   * laden: the cargo does not make the engine bigger. A 260 t freighter
+   * comes out at ~3.7 s. */
+  var SPOOL_MIN_S = 2, SPOOL_MAX_S = 8, SPOOL_REF_T = 42;
+  function spoolSeconds(s) {
+    var m = Math.max(1, (s && s.dryMass) || SPOOL_REF_T);
+    return Math.min(SPOOL_MAX_S, Math.max(SPOOL_MIN_S, SPOOL_MIN_S * Math.cbrt(m / SPOOL_REF_T)));
+  }
   function groundDrive(dtReal, asking) {
     var s = G.ship;
     if (!s.drive) s.drive = 'cold';
@@ -5807,11 +5820,12 @@
       }
       G.driveWarned = false;
       s.drive = 'spool'; s.spool = 0;
-      say('Drive starting  —  ' + SPOOL_S + ' seconds to hot', SPOOL_S + 1);
+      var spoolS = spoolSeconds(s);
+      say('Drive starting  —  ' + spoolS.toFixed(spoolS < 10 ? 1 : 0) + ' seconds to hot', spoolS + 1);
       if (global.Sound && global.Sound.fx) global.Sound.fx('click');
       return false;
     }
-    s.spool = Math.min(1, (s.spool || 0) + Math.max(0, dtReal) / SPOOL_S);
+    s.spool = Math.min(1, (s.spool || 0) + Math.max(0, dtReal) / spoolSeconds(s));
     if (s.spool < 1) return false;
     s.drive = 'hot';
     say('Drive hot  —  hold R to lift off', 4);
