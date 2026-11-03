@@ -7468,7 +7468,7 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
   var keepGlobal = global.GLWorld;
   var GLreal = require('../src/gl.js');
   global.GLWorld = keepGlobal; W.GLWorld = saved;
-  var holes = [], meshCuts = [], footChecked = 0;
+  var holes = [], meshCuts = [], footChecked = 0, edgeChecked = 0;
   /* A unit block standing on z = 0 (x, y in -1..1, z in 0..1), for the
    * one-edge check: GLWorld.footprintAt reads only v and f. */
   var FOOT_BLOCK = { v: [[-1, -1, 0], [1, -1, 0], [1, 1, 0], [-1, 1, 0], [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]],
@@ -7488,6 +7488,19 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
   check('ground port: the planet is holed by the cone, the same test as the port mesh',
         /length\(hit - uConeS\.xyz \* ct\) < min\(mix\(uConeR\.y, uConeR\.x, ct\), uConeR\.z\)/.test(glsrc) &&
         /float r = min\(mix\(uCutR\.y, uCutR\.x, t\), uCutCap\);/.test(glsrc));
+  /* (Seventh round.) What only the GPU does, so only its text can be held:
+   * the street asks the mask where its ray leaves the cone, with the wall's
+   * own ray cast; the lip's band is written ahead of the street on its ray,
+   * so where the planet pass and this one split the last centimetre of the
+   * cut the lip still wins; and a one-texel crack in the mask, building on
+   * both sides, reads as building. */
+  check('ground port: the street asks the footprint where its line of sight leaves the cone',
+        /float te = coneExit\(rd, cylE\);/.test(glsrc) && /float fe = footH\(pe\);/.test(glsrc) &&
+        /float t = coneExit\(rd, cyl\);/.test(glsrc) && !/footH\(hs\) > 0\.0\) discard/.test(glsrc));
+  check('ground port: the lip\'s band is written ahead of the street on its ray',
+        /if \(-hm < lipM && sdS > 0\.0\) depth = min\(depth, sdS \* 0\.9995\);/.test(glsrc));
+  check('ground port: a one-texel crack in the footprint reads as the building',
+        /h = max\(h, max\(min\(l, r\), min\(d, u\)\)\);/.test(glsrc));
   var msrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'main.js'), 'utf8');
   check('ground port: in the cut the frame is cleared to the sky over the port',
         /GLWorld\.begin\(rock \? ROCK_CLEAR : groundSkyNow\)/.test(msrc));
@@ -7695,15 +7708,15 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
               if (!(seen.cut && seen.hot && seen.scorched)) st.wall.push(tag + ': the walk across the edge never crossed the band (' + Object.keys(seen) + ')');
               /* ONE EDGE WHERE A BUILDING STANDS (sixth round): a 20 m
                * block stood on the street's hot band in one direction.
-               * Under it the street has no band of its own — the block's
-               * own cut face is the edge there: 'face' where the line of
-               * sight was inside the cone back up at the block's roof (it
-               * was cut away along that line, and its sliced wall is what
-               * shows), nothing otherwise. A 100 m block always reaches
-               * back into the cone from the hot band; whether a 10 m one
-               * does depends on the view, and it is checked against the
-               * cone main.js cuts with. Across the hole, in open street,
-               * the band is untouched, and a block sunk under the street
+               * There the street has no band of its own — the block's own
+               * cut face is the edge: 'face' where the line of sight left
+               * the cone inside the block (it was cut away along that line,
+               * and its sliced wall is what shows; seventh round: asked
+               * where the ray crosses the cone, not at the street). A 100 m
+               * block always takes the hot band; whether a 10 m one does
+               * depends on the view, and it is checked against the cone
+               * main.js cuts with. Across the hole, in open street, the
+               * band is untouched, and a block sunk under the street
                * stands on nothing and takes nothing away. */
               if (hotAt[0] && hotAt[4]) {
                 var foot = function (at, sink, tall) {
@@ -7720,14 +7733,102 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
                 var fb = [GLreal.streetBand(wall, eye, hotAt[0], tower), GLreal.streetBand(wall, eye, hotAt[4], tower),
                           GLreal.streetBand(wall, eye, hotAt[0], sunk), GLreal.streetBand(wall, eye, hotAt[0])];
                 if (fb.join() !== 'face,hot,hot,hot') st.wall.push(tag + ': street band with a block on it ' + fb.join());
-                /* The 10 m block: its sliced wall exactly where the cone,
-                 * 10 m back up the line of sight, takes it. */
+                /* Where the line of sight from street point `sp` leaves the
+                 * cone, found by bisection on the cut main.js hands the
+                 * meshes (coneCuts) — not by the wall's own ray cast, which
+                 * is what streetBand uses and what this holds it to — and
+                 * that point's height over the world's sphere, km. */
+                var exitOf = function (sp) {
+                  var rdX = V.norm(V.sub(sp, eye)), lo = 0, hi = V.dist(sp, eye);
+                  if (!GLreal.coneCuts(V.addScaled(eye, rdX, hi * 1e-3), eye, c) || GLreal.coneCuts(sp, eye, c)) return null;
+                  for (var bi = 0; bi < 60; bi++) {
+                    var mid = (lo + hi) / 2;
+                    if (GLreal.coneCuts(V.addScaled(eye, rdX, mid), eye, c)) lo = mid; else hi = mid;
+                  }
+                  var xp = V.addScaled(eye, rdX, (lo + hi) / 2);
+                  return { p: xp, h: V.dist(xp, pc) - pR };
+                };
+                /* true / false, or null where the exit lies within a
+                 * millimetre of the block's edge and bisection and the wall's
+                 * ray cast may fairly land either side of it. */
+                var inside = function (sp, items) {
+                  var xq = exitOf(sp);
+                  if (!xq) return false;
+                  var votes = [[0, 0], [1e-6, 0], [-1e-6, 0], [0, 1e-6], [0, -1e-6]].map(function (o) {
+                    var qq = V.addScaled(V.addScaled(xq.p, wall.east, o[0]), wall.north, o[1]);
+                    var fx = GLreal.footprintAt(wall, items, qq);
+                    return fx > 0 && xq.h < fx;
+                  });
+                  return votes.every(function (v) { return v === votes[0]; }) ? votes[0] : null;
+                };
+                /* The 10 m block: its sliced wall exactly where the line of
+                 * sight leaves the cone inside it. */
                 var low = GLreal.streetBand(wall, eye, hotAt[0], onB);
-                var rdL = V.norm(V.sub(hotAt[0], eye)), dnL = -V.dot(rdL, wall.up);
-                var backL = Math.min(GLreal.footprintAt(wall, onB, hotAt[0]) / dnL, V.dist(hotAt[0], eye) * 0.99);
-                var topL = V.addScaled(hotAt[0], rdL, -backL);
-                if (low !== (GLreal.coneCuts(topL, eye, c) ? 'face' : null))
+                var lowIn = inside(hotAt[0], onB);
+                if (lowIn !== null && low !== (lowIn ? 'face' : 'hot'))
                   st.wall.push(tag + ': 10 m block on the band gives ' + low);
+                /* AT A BUILDING'S EDGE (seventh round). From the hot point,
+                 * the line of sight runs back up out of the cone at some
+                 * point X; between the street point and X, a wall. A block
+                 * that stands over X but not over the street point (the
+                 * street just outside its foot, seen through it) is the
+                 * sliced wall there: 'face'. The other way round — over the
+                 * street point, not over X — the ray left the cone in the
+                 * air and went in through the block's wall, which the
+                 * meshes draw and which hides the street by depth: the band
+                 * is still drawn. That was the light diagonal at Ashford's
+                 * corner, where the sixth round took the band out under
+                 * every footprint and the mask's filter reached half a texel
+                 * past the wall's foot into open street. */
+                var x0 = exitOf(hotAt[0]);
+                if (!x0) st.wall.push(tag + ': no exit from the cone behind the hot band');
+                else {
+                  var dq0 = V.sub(x0.p, hotAt[0]), dh = V.sub(dq0, V.scale(wall.up, V.dot(dq0, wall.up)));
+                  var run = V.len(dh);
+                  /* Looking almost straight down the cone the ray leaves it
+                   * a few millimetres from the street point, too close to
+                   * stand an edge between; those views are left out, and
+                   * enough others must have run (counted below). */
+                  if (run > 1e-5) {
+                    edgeChecked++;
+                    var dir = V.scale(dh, 1 / run), crossD = V.cross(wall.up, dir);
+                    var midP = V.addScaled(hotAt[0], dir, run / 2);
+                    var tallZ = Math.max(2, (x0.h * 1.5 + 0.01) / 0.01);   // model units of 10 m, over the exit
+                    var BLK = { v: FOOT_BLOCK.v.map(function (q3) { return [q3[0], q3[1], q3[2] * tallZ]; }), f: FOOT_BLOCK.f };
+                    /* A block of 20 m by 20 m whose edge is the line through
+                     * midP across `dir`, on the street point's side (sgn -1)
+                     * or the exit's (+1); `shift` slides it along that edge. */
+                    var edgeBlock = function (sgn, shift) {
+                      var org = V.addScaled(V.addScaled(V.sub(midP, wall.entrance), dir, sgn * 0.01), crossD, shift || 0);
+                      return [{ mesh: BLK, place: GLreal.groundPlace(wall, { x: 0, y: 0, z: 0 },
+                               { rel: org, r: dir, u: crossD, f: wall.up, scale: 0.01 }) }];
+                    };
+                    var overX = edgeBlock(1), overP = edgeBlock(-1);
+                    if (!(GLreal.footprintAt(wall, overX, x0.p) > 0 && !GLreal.footprintAt(wall, overX, hotAt[0]) &&
+                          GLreal.footprintAt(wall, overP, hotAt[0]) > 0 && !GLreal.footprintAt(wall, overP, x0.p)))
+                      st.wall.push(tag + ': the edge blocks do not straddle the line of sight');
+                    var eb = [GLreal.streetBand(wall, eye, hotAt[0], overX), GLreal.streetBand(wall, eye, hotAt[0], overP)];
+                    if (eb.join() !== 'face,hot') st.wall.push(tag + ': at a building\'s edge the street gives ' + eb.join());
+                    /* AND AT ITS CORNER: the block over X slid along its edge
+                     * so its corner comes past the line of sight, and street
+                     * points walked across the hot band beside it. Each is
+                     * 'face' exactly where its own line of sight left the
+                     * cone inside the block, and the plain band otherwise —
+                     * both met along the way, so the corner is crossed. */
+                    var cnr = edgeBlock(1, 0.01 + run * 0.25), cf2 = 0, cb2 = 0, cbad = 0;
+                    for (var cs3 = -1.5; cs3 <= 1.5; cs3 += 0.05) {
+                      var sp3 = V.addScaled(hotAt[0], crossD, run * cs3);
+                      var o3 = V.sub(sp3, pc); sp3 = V.add(pc, V.scale(o3, pR / V.len(o3)));   // back onto the sphere
+                      var plain = GLreal.streetBand(wall, eye, sp3), got = GLreal.streetBand(wall, eye, sp3, cnr);
+                      if (plain === 'cut') continue;
+                      var in3 = inside(sp3, cnr);
+                      if (in3 !== null && got !== (in3 ? 'face' : plain)) cbad++;
+                      if (got === 'face') cf2++; else if (got) cb2++;
+                    }
+                    if (cbad) st.wall.push(tag + ': at a building\'s corner ' + cbad + ' street points disagree with where the cone is left');
+                    if (!(cf2 && cb2)) st.wall.push(tag + ': the walk past the corner never crossed it (' + cf2 + ' face, ' + cb2 + ' band)');
+                  }
+                }
                 /* And the sliced wall is painted look B's scorched plate,
                  * glowing nothing — the building's outer band's colour, not
                  * the hot edge's. */
@@ -7810,6 +7911,8 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
     }
     check('ground-port zoom-out swept a deep bay and an open pad', tried.length === 2, tried.join(', '));
     check('a building on the cut\'s edge was stood on the street\'s band and checked', footChecked > 0, footChecked + ' views');
+    check('a building\'s edge and its corner were stood across the line of sight and checked', edgeChecked >= footChecked / 2,
+          edgeChecked + ' of ' + footChecked + ' views');
     G.cutawayStyle = style;
   } finally {
     W.GLWorld = saved;

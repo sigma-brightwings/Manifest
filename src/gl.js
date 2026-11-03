@@ -138,10 +138,31 @@
   var CUT_SCORCHED = [0.16, 0.11, 0.085];
   var SCORCHED_GLSL = 'vec3(' + CUT_SCORCHED.join(', ') + ')';
   /* THE FOOTPRINT's two numbers, here because FRAG_WALL is written with
-   * them: what stands a metre over the street is standing on it, and the
-   * mask holds each texel's tallest surface as a fraction of half a
-   * kilometre — two-metre steps in eight bits, taller held at the top. */
-  var FOOT_MIN = 0.001;   // km
+   * them: what stands a quarter of a metre over the street is standing on
+   * it, and the mask holds each texel's tallest surface up to half a
+   * kilometre, taller held at the top.
+   *
+   * FOOT_MIN WAS A METRE, and measuring said otherwise (seventh round,
+   * 2026-11-03; doctrine 6). Over 20 ground ports of kawartha, beaverton
+   * and driftwood the meshes' upward faces near the cut's edge run in an
+   * unbroken spread from the street up: kerbs and plaza slabs at 0.05 to
+   * 0.15 m, pad trims 0.1 to 0.35 m, landing pads 0.6 to 0.9 m (Terminus
+   * Downport's is 0.8 m and 940 m^2), plazas 0.7 to 1.6 m (Groundside
+   * Groundport) and 1.6 to 3 m (Kestrel Groundport), then sheds and decks
+   * from 2.5 m and buildings, whose lowest roofs near an edge were 4.0 to
+   * 4.6 m. There is no gap to put "an apron is not a building" in, and a
+   * metre fell inside two plazas, so one apron's cut was one edge on one
+   * side of the line and two on the other. Not counted, an apron is the
+   * sixth round's double line again, its band and the street's a pad's
+   * height apart — 0.8 m is two pixels at 1.4 km. Counted, it is one edge,
+   * its own, as a building's is. So everything counts down to where the
+   * lines would part by under a pixel there (0.42 m a pixel at 2560
+   * wide), and above
+   * what a slab laid flat on the port's frame stands over the curved
+   * street by the curve alone: at most 0.18 m measured (half a kilometre
+   * out on a 650 km world). The shaft and the hangar are metres under the
+   * street and still mark nothing. */
+  var FOOT_MIN = 0.00025; // km
   var FOOT_TOP = 0.5;     // km
   var FRAG_WALL = [
     '#version 300 es',
@@ -166,7 +187,7 @@
     'uniform vec4 uWPlanet;',     // the world's centre relative to the eye, km; its radius
     'uniform vec4 uWRim;',        // the cut-face band's colour, and its width as a fraction of the cone's radius
     /* ---- ONE EDGE WHERE A BUILDING STANDS (2026-11-02, sixth round) ---- */
-    'uniform sampler2D uWMask;',  // the port's footprint on the street: its tallest surface there, / FOOT_TOP (streetFootprint)
+    'uniform sampler2D uWMask;',  // the port's footprint on the street: sqrt(its tallest surface there / FOOT_TOP) (streetFootprint)
     'uniform vec4 uWMaskB;',      // its centre east, north of the mouth, km; half its side, km; w = 1 when there is one
     'out vec4 frag;',
     'float whash(float a, float b) { return fract(sin(a * 12.9898 + b * 78.233) * 43758.5453); }',
@@ -180,8 +201,52 @@
     '  vec3 q = rel - uWEnt;',
     '  vec2 uv = (vec2(dot(q, uWE), dot(q, uWN)) - uWMaskB.xy) / (2.0 * uWMaskB.z) + 0.5;',
     '  if (uv.x <= 0.0 || uv.y <= 0.0 || uv.x >= 1.0 || uv.y >= 1.0) return 0.0;',
-    '  float h = texture(uWMask, uv).r * ' + FOOT_TOP.toFixed(4) + ';',
-    '  return h >= ' + FOOT_MIN.toFixed(4) + ' ? h : 0.0;',
+    /* The mask holds the square root of the height's fraction of FOOT_TOP
+     * (FRAG_FOOT), so it is decoded by squaring. */
+    '  float h = texture(uWMask, uv).r;',
+    /* A CRACK IS NOT A STREET (seventh round). Two meshes that meet edge
+     * to edge without sharing vertices can leave a one-texel line between
+     * them where no triangle covers a texel's centre (two such texels at
+     * Ashford from 1.4 km). A point there reads as no building and would
+     * get the street's treatment in the middle of one. So an empty sample
+     * whose texel has building on BOTH sides, across or along, is given
+     * the lower of the two — which fills a crack and leaves an outer edge
+     * exactly where it was, since past an edge one side is empty. */
+    '  if (h * h * ' + FOOT_TOP.toFixed(4) + ' < ' + FOOT_MIN.toFixed(6) + ') {',
+    '    ivec2 n = textureSize(uWMask, 0);',
+    '    ivec2 c = clamp(ivec2(uv * vec2(n)), ivec2(1), n - 2);',
+    '    float l = texelFetch(uWMask, c - ivec2(1, 0), 0).r, r = texelFetch(uWMask, c + ivec2(1, 0), 0).r;',
+    '    float d = texelFetch(uWMask, c - ivec2(0, 1), 0).r, u = texelFetch(uWMask, c + ivec2(0, 1), 0).r;',
+    '    h = max(h, max(min(l, r), min(d, u)));',
+    '  }',
+    '  h *= h * ' + FOOT_TOP.toFixed(4) + ';',
+    '  return h >= ' + FOOT_MIN.toFixed(6) + ' ? h : 0.0;',
+    '}',
+    /* Where a view ray leaves the cone, km along it, or -1 when it does not
+     * before her (seventh round: the wall's own ray cast, moved here so the
+     * street's test below can ask it too). The eye sits on the axis, so a
+     * ray starts inside and this is the one place it crosses the surface.
+     * x is along the axis from the eye toward her, c the cosine between ray
+     * and axis; the radius at x is rEye + k x, held to the cap. Near the eye
+     * it is the cylinder (where the cone would be wider than the cap), then
+     * the cone, out to her. */
+    'float coneExit(vec3 rd, out bool cyl) {',
+    '  float L = length(uWS);',
+    '  float c = dot(rd, uWS / max(L, 1e-9));',
+    '  cyl = false;',
+    '  if (c <= 0.0) return -1.0;',
+    '  float sn = sqrt(max(0.0, 1.0 - c * c));',
+    '  float k = (uWR.x - uWR.y) / max(L, 1e-9);',
+    '  float cap = min(uWR.z, uWR.y);',
+    '  float xc = k < 0.0 ? max(0.0, (uWR.y - cap) / -k) : 0.0;',
+    '  float t = sn > 1e-6 ? cap / sn : 1e30;',
+    '  cyl = t * c <= xc;',
+    '  if (!cyl) {',
+    '    float den = sn - k * c;',
+    '    if (den <= 1e-9) return -1.0;',
+    '    t = uWR.y / den;',
+    '  }',
+    '  return t * c >= L ? -1.0 : t;',
     '}',
     'void main() {',
     '  vec3 rd = normalize(uRight * (vPx.x - uScreenPx.x) + uUp * (uScreenPx.y - vPx.y) + uFwd * uFlen);',
@@ -218,6 +283,7 @@
      * it ever put back, it must go in here and on the lip too, or the
      * street's edge and a building's will part company at the corner. */
     '  vec3 a0 = uWS / max(L, 1e-9);',
+    '  float sdS = -1.0;',            // the street's depth on this ray, km along the view axis; -1 for none
     '  if (uWPlanet.w > 0.0) {',
     '    float pb = dot(rd, uWPlanet.xyz);',
     '    float pc = dot(uWPlanet.xyz, uWPlanet.xyz) - uWPlanet.w * uWPlanet.w;',
@@ -226,6 +292,7 @@
     '      float ts = pb - sqrt(pdisc);',
     '      if (ts > 0.0) {',
     '        vec3 hs = rd * ts;',
+    '        sdS = dot(hs, uFwd);',
     '        float tt = dot(hs, uWS) / max(L * L, 1e-12);',
     '        float rs = min(mix(uWR.y, uWR.x, tt), uWR.z);',
     '        vec3 offs = hs - uWS * tt;',
@@ -245,29 +312,43 @@
      * its top edge, on the roof's own cut; together they are one wider
      * burnt edge where a building stands.
      *
-     * Which street points: under the footprint, where the ray, back up at
-     * the height the building stands there, was inside the cone — so the
-     * building was cut away along this line of sight. Anywhere else under
-     * a building (the street under an overhang, seen from the side) is not
-     * a cut face and is left to the planet. GLWorld.streetBand is this in JS. */
-    '          float fh = footH(hs);',
-    '          if (fh > 0.0) {',
-    '            float dn = -dot(rd, uWU);',
-    '            if (dn > 1e-4) {',
-    /* Back up the ray to the roof's height — or most of the way to the
-     * eye, when the eye is lower than the roof and the ray comes in
-     * through the building's side. */
-    '              vec3 pt = hs - rd * min(fh / dn, ts * 0.99);',
-    '              float t2 = dot(pt, uWS) / max(L * L, 1e-12);',
-    '              float r2 = min(mix(uWR.y, uWR.x, t2), uWR.z);',
-    '              if (t2 > 0.0 && t2 < 1.0 && length(pt - uWS * t2) < r2) {',
-    '                frag = vec4(' + SCORCHED_GLSL + ', 0.0);',
-    '                float sd2 = dot(hs, uFwd) * 0.9995;',
-    '                gl_FragDepth = clamp(log2(max(uNear, sd2) / uNear) * uInvLogRange, 0.0, 1.0);',
-    '                return;',
-    '              }',
+     * Which street points (seventh round): those whose line of sight LEFT
+     * THE CONE INSIDE A BUILDING — the cone's surface there, where the ray
+     * crosses it, is within the footprint and under the height the
+     * building stands at that spot. That is what a sliced wall is, and it
+     * asks the mask where the slice is, not where the street is. The sixth
+     * round asked at the street point and then backed the ray up to the
+     * roof's height, which is the same thing in the middle of a building
+     * and wrong at its side: there the ray leaves the cone inside the
+     * building but reaches the street just outside it (or the other way
+     * round), and the street showed through as a hair-thin light diagonal
+     * up the building's side wall at the corner. Asked at the crossing, the
+     * scorched face meets the side wall's own cut band exactly, because
+     * both are where the cone meets that wall.
+     * The height is over the world's sphere, as the mask's is (FRAG_FOOT).
+     * Everywhere else the street keeps its band, under a building or not.
+     * The sixth round discarded it under any footprint, which was right
+     * only while the footprint was asked at the street: a ray that reaches
+     * the street under a building having left the cone in the air came in
+     * through a wall the meshes draw, which hides the band by depth anyway,
+     * and the mask's linear filter reaches half a texel past a wall's foot,
+     * where the discard took the band out of open street and left the
+     * plain street showing — that strip, a pixel wide, was most of the
+     * light diagonal. GLWorld.streetBand is this in JS. */
+    '          bool cylE;',
+    '          float te = coneExit(rd, cylE);',
+    '          if (te > 0.0 && te < ts) {',
+    '            vec3 pe = rd * te;',
+    '            vec3 qe = pe - uWEnt;',
+    '            float ee = dot(qe, uWE), en = dot(qe, uWN);',
+    '            float he = dot(qe, uWU) + (ee * ee + en * en) * 0.5 / uWPlanet.w;',
+    '            float fe = footH(pe);',
+    '            if (fe > 0.0 && he < fe) {',
+    '              frag = vec4(' + SCORCHED_GLSL + ', 0.0);',
+    '              float sd2 = dot(hs, uFwd) * 0.9995;',
+    '              gl_FragDepth = clamp(log2(max(uNear, sd2) / uNear) * uInvLogRange, 0.0, 1.0);',
+    '              return;',
     '            }',
-    '            discard;',
     '          }',
     '          if (tt > 0.0 && tt < 1.0 && ds < rs * (1.0 + uWRim.w) &&',
     '              abs(dot(ns, offs / max(ds, 1e-9))) < 0.8) {',
@@ -282,25 +363,14 @@
     '      }',
     '    }',
     '  }',
-    /* The ray against the cone. x is along the axis from the eye toward her,
-     * c the cosine between ray and axis; the radius at x is rEye + k x, held
-     * to the cap. Near the eye it is the cylinder (where the cone would be
-     * wider than the cap), then the cone, out to her. */
+    /* The ray against the cone (coneExit, above). */
     '  vec3 a = a0;',
     '  float c = dot(rd, a);',
-    '  if (c <= 0.0) discard;',
-    '  float sn = sqrt(max(0.0, 1.0 - c * c));',
     '  float k = (uWR.x - uWR.y) / max(L, 1e-9);',
     '  float cap = min(uWR.z, uWR.y);',
-    '  float xc = k < 0.0 ? max(0.0, (uWR.y - cap) / -k) : 0.0;',
-    '  float t = sn > 1e-6 ? cap / sn : 1e30;',
-    '  bool cyl = t * c <= xc;',
-    '  if (!cyl) {',
-    '    float den = sn - k * c;',
-    '    if (den <= 1e-9) discard;',
-    '    t = uWR.y / den;',
-    '  }',
-    '  if (t * c >= L) discard;',
+    '  bool cyl;',
+    '  float t = coneExit(rd, cyl);',
+    '  if (t < 0.0) discard;',
     '  vec3 vRel = rd * t;',
     '  vec3 radial = vRel - a * (t * c);',
     '  radial /= max(length(radial), 1e-9);',
@@ -359,6 +429,20 @@
     '    frag = (lu < 0.35 && footH(vRel) == 0.0) ? vec4(uWRim.rgb, 0.85) : vec4(' + SCORCHED_GLSL + ', 0.0);',
     '  }',
     '  float depth = dot(vRel, uFwd);',
+    /* THE LIP WINS AT THE SEAM (seventh round). The planet pass and this
+     * one each decide for themselves whether a street point is inside the
+     * cone (the same test, but from different arithmetic, and the street is
+     * the world's sphere while the cone's crossing is found from the ray),
+     * and in the last centimetre either way they can disagree. Where the
+     * planet kept a street pixel this pass sent down the wall, the lip's
+     * top lay a hair beyond that street and lost the depth test to it, so
+     * the plain street showed: the half-dozen light pixels strung along the
+     * strip's inner seam under the building at Ashford from 1.4 km, and
+     * fainter ones in the hot band in open street. The lip's band is never
+     * behind anything real between it and the street a few metres above,
+     * so it is written a hair nearer than the street on its ray, as the
+     * street's own band is. */
+    '  if (-hm < lipM && sdS > 0.0) depth = min(depth, sdS * 0.9995);',
     '  gl_FragDepth = clamp(log2(max(uNear, depth) / uNear) * uInvLogRange, 0.0, 1.0);',
     '}'
   ].join('\n');
@@ -403,8 +487,16 @@
     'void main() {',
     '  if (vH < uFMin) discard;',
     /* Its height, kept by MAX blending: the texel holds its tallest
-     * surface, the roof, which is where the cut face starts down from. */
-    '  frag = vec4(clamp(vH / ' + FOOT_TOP.toFixed(4) + ', 0.0, 1.0));',
+     * surface, the roof, which is where the cut face starts down from.
+     * (Seventh round.) As the square root of its fraction of FOOT_TOP, so
+     * the eight bits are fine where things are low — 10 cm steps at a
+     * 0.3 m pad, 0.7 m at a 20 m roof, 4 m at the top — where plain
+     * fractions were two-metre steps everywhere and a 0.3 m pad read as
+     * 2 m or nothing. And rounded UP, by half a step before the store
+     * rounds to nearest: a roof read a hair high only paints the sliced
+     * wall where the roof itself is drawn in front of it, where one read
+     * low left street showing in a sliver under the roof's band. */
+    '  frag = vec4(min(1.0, sqrt(clamp(vH / ' + FOOT_TOP.toFixed(4) + ', 0.0, 1.0)) + 0.5 / 255.0));',
     '}'
   ].join('\n');
 
@@ -4665,10 +4757,11 @@
    * `p` on the ground (world km) seen from `eye`, 'cut' inside the cone,
    * 'hot' or 'scorched' in the band just outside it, null beyond — the
    * same radius and the same fraction as FRAG_MESH's keyhole band. With
-   * `items` (THE FOOTPRINT: { mesh, place } as GL.footprintAt takes), no
-   * band under a building (sixth round): 'face' where the ray, back up at
-   * the building's height, was inside the cone — its sliced wall, painted
-   * scorched — and null elsewhere under it. */
+   * `items` (THE FOOTPRINT: { mesh, place } as GL.footprintAt takes),
+   * 'face' where the line of sight left the cone inside a building — its
+   * sliced wall, painted scorched — and the band as before everywhere else,
+   * under a building or not (seventh round; see UNDER A BUILDING in
+   * FRAG_WALL for why the sixth round's null under every footprint went). */
   GL.streetBand = function (w, eye, p, items) {
     var Sx = w.ship.x - eye.x, Sy = w.ship.y - eye.y, Sz = w.ship.z - eye.z;
     var px = p.x - eye.x, py = p.y - eye.y, pz = p.z - eye.z;
@@ -4678,16 +4771,17 @@
     var rs = Math.min(w.rEye + (w.rShip - w.rEye) * tt, w.cap > 0 ? w.cap : 1e9);
     var ox = px - Sx * tt, oy = py - Sy * tt, oz = pz - Sz * tt, ds = Math.sqrt(ox * ox + oy * oy + oz * oz);
     if (ds < rs) return 'cut';
-    var fh = (items && items.length) ? GL.footprintAt(w, items, p) : 0;
-    if (fh > 0) {
-      var rl = Math.sqrt(px * px + py * py + pz * pz), U = w.up;
-      var dn = -(px * U.x + py * U.y + pz * U.z) / rl;
-      if (!(dn > 1e-4)) return null;
-      var k = Math.min(fh / dn / rl, 0.99), qx = px * (1 - k), qy = py * (1 - k), qz = pz * (1 - k);
-      var t2 = (qx * Sx + qy * Sy + qz * Sz) / L2;
-      var r2 = Math.min(w.rEye + (w.rShip - w.rEye) * t2, w.cap > 0 ? w.cap : 1e9);
-      var ex = qx - Sx * t2, ey = qy - Sy * t2, ez = qz - Sz * t2;
-      return (t2 > 0 && t2 < 1 && Math.sqrt(ex * ex + ey * ey + ez * ez) < r2) ? 'face' : null;
+    if (items && items.length) {
+      var rl = Math.sqrt(px * px + py * py + pz * pz);
+      var hit = GL.wallHit(w, eye, { x: px / rl, y: py / rl, z: pz / rl });
+      if (hit && hit.t < rl) {
+        var qx = hit.p.x - w.entrance.x, qy = hit.p.y - w.entrance.y, qz = hit.p.z - w.entrance.z;
+        var qe = qx * w.east.x + qy * w.east.y + qz * w.east.z, qn = qx * w.north.x + qy * w.north.y + qz * w.north.z;
+        var curv = (w.planet && w.planet.radius > 0) ? 1 / (2 * w.planet.radius) : 0;
+        var he = qx * w.up.x + qy * w.up.y + qz * w.up.z + (qe * qe + qn * qn) * curv;
+        var fe = GL.footprintAt(w, items, hit.p);
+        if (fe > 0 && he < fe) return 'face';
+      }
     }
     if (ds >= rs * (1 + w.rim)) return null;
     return (ds - rs) / (rs * w.rim) < 0.35 ? 'hot' : 'scorched';
