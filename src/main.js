@@ -1501,6 +1501,16 @@
   /* Hull at zero. Same deal as a crash — the hull and everything bolted to
    * or stacked in it is gone; the pilot, the money, the reputation and the
    * warrants all survive, because none of those were in the hull. */
+  /* A hard set-down on open ground costs hull now (sim.js checkImpact,
+   * 2026-11-03), and a cost nobody mentions reads as a bug - the hull bar
+   * just went down for no reason. The touchdown line says what it cost and
+   * at what speed, and only when THIS landing was the hit. */
+  function groundHitNote(ship) {
+    var h = ship.lastLandingHit;
+    if (!h || !h.ground || !(h.dmg > 0) || h.speed !== ship.impactSpeed) return '';
+    return ', hard: ' + fmtSpeed(h.speed) + ', ' + Math.round(h.dmg) + ' hull';
+  }
+
   function playerDestroyed() {
     (G.explosions = G.explosions || []).push({
       pos: V.clone(G.ship.pos), at: performance.now(), size: 2.5,
@@ -3944,11 +3954,32 @@
        *
        * Half the braking authority, because this is the leg where being
        * wrong costs the hull, and a terminal speed the pad will actually
-       * catch rather than zero. */
-      var stop = (st.dockCaptureRadius || 1.2) * 0.5;
-      var vTerm = (st.dockMaxSpeed || 0.02) * 0.6;
+       * catch rather than zero.
+       *
+       * THE CRAWL IS OWED AT THE ENVELOPE'S EDGE, NOT HALFWAY IN
+       * (2026-11-03). This braked to vTerm at half the capture radius from
+       * the aim - but a pad catches whatever crosses its envelope, at
+       * whatever speed it is doing, so the hull was caught at the RIM with
+       * the half-radius of braking still unspent. Measured over the
+       * surface pads of kawartha and alpha, flown from 25 km overhead: 138
+       * m/s into every open pad (fatal - the pad ramp kills at 90) and 30
+       * m/s into Harrow Deep's shaft. Nobody saw it because the old pads
+       * refused a fast arrival instead of charging for it, and the
+       * autopilot just flew another lap. So the braking curve now runs out
+       * at the envelope, measured from the pad itself (the aim can be the
+       * shaft mouth, which is not where the envelope is centred), with a
+       * tenth of a radius in hand for a frame's overshoot.
+       *
+       * And the crawl is half whichever is lower of the pad's own limit and
+       * the speed a landing starts to cost hull (Sim.LAND_SAFE_SPEED): an
+       * autopilot that hands the pilot a bill for its own touchdown is the
+       * same bug as one that never arrives. */
+      var capR = st.dockCaptureRadius || 1.2;
+      var safe = Math.min(st.dockMaxSpeed || 0.02, Sim.LAND_SAFE_SPEED || 0.02);
+      var vTerm = safe * 0.5;
+      var toEnv = Math.min(dAim, V.dist(G.ship.pos, ss.pos)) - capR * 1.1;
       vWant = Math.min(speedCap,
-                       vTerm + Math.sqrt(2 * brake * 0.5 * Math.max(0, dAim - stop)));
+                       vTerm + Math.sqrt(2 * brake * 0.5 * Math.max(0, toEnv)));
     } else {
       vWant = Math.min(speedCap, Math.sqrt(2 * brake * Math.max(0, dAim)));
     }
@@ -6539,7 +6570,7 @@
         if (!G.ship.crashed) { settleLanded(); G.ship.drive = 'cold'; G.ship.spool = 0; }
         say(G.ship.crashed
           ? 'Impact with ' + G.ship.landedOn.name + ' at ' + fmtSpeed(G.ship.impactSpeed) + '   (B to respawn)'
-          : 'Touchdown on ' + G.ship.landedOn.name + '  —  drive shut down. R starts her, and lifts her once she is hot', 8);
+          : 'Touchdown on ' + G.ship.landedOn.name + groundHitNote(G.ship) + '  —  drive shut down. R starts her, and lifts her once she is hot', 8);
         G.warpIndex = 0;
       }
       if (!G.ship.landed) G.reported = false;

@@ -4879,6 +4879,15 @@
    * copies of the ship through here too, and a ghost latching onto a
    * landing pad would end the prediction with a phantom dock rather than
    * telling the player what they wanted to know. */
+  /* EVERY TOUCHDOWN, hurt or not, and where (2026-11-03). lastLandingHit
+   * only exists when the hull paid, which is the wrong population for the
+   * question "how hard does the autopilot set her down" - a clean seat is
+   * the answer that matters and it left no trace. Runtime only: save.js
+   * lists ship fields by name, so this is never written. */
+  function noteTouchdown(ship, where, speed, gearDown, t) {
+    ship.touchdown = { where: where, speed: speed, gearDown: gearDown, t: t };
+  }
+
   function checkImpact(ship, sys, t, allowDock, from, fromT) {
     /* THE STATION'S OWN HULL — and ONLY on the authoritative pass.
      *
@@ -4935,6 +4944,7 @@
        * exists for anyone who assigns a dock target and lets it fly. */
       var bcap = landing;
       if (bcap) {
+        noteTouchdown(ship, 'berth', bcap.speed, bcap.gearDown, t);
         var bdmg = landingDamage(bcap.speed, bcap.gearDown);
         if (bdmg > 0) {
           ship.hullHp -= bdmg;
@@ -4957,6 +4967,7 @@
       var cap = padCapture(ship, sys, t);
       if (cap) {
         var pad = cap.pad;
+        noteTouchdown(ship, 'pad', cap.speed, cap.gearDown, t);
         /* The landing consequence, FE2-style: how hard you hit costs hull.
          * A clean seat (<= LAND_SAFE_SPEED) is free; a smack ramps to
          * fatal; gear-up multiplies it. This runs ONLY here, inside the
@@ -5015,19 +5026,42 @@
 
         ship.landed = true;
         ship.landedOn = b;
-        /* Gear down, 100 m/s relative is a hard but survivable arrival.
-         * Gear up, there is no such thing as a good one — you are landing
-         * on the hull, and the number that matters is not your speed.
+        /* OPEN GROUND CHARGES WHAT A PAD CHARGES (2026-11-03, Astra: "I
+         * agree with you on all of that"). This was `crashed = relSpeed >
+         * 0.1`: anything up to 100 m/s set down free, anything over was a
+         * wreck, with nothing between - five times more forgiving than a pad,
+         * where landingDamage starts charging at 20 m/s and kills at 90. While
+         * the check measured against the world's centre that looseness hid
+         * behind the frame error; once it measured the ground she touches
+         * (above) it was simply a second, gentler rule for the same act. Now
+         * it is the SAME function, so the dirt and the pad can never drift
+         * apart again: tune landingDamage and both follow.
          *
-         * THE 100 m/s IS KEPT, and it is a feel decision rather than a
-         * physics one (2026-11-03, to put to Astra). It is far more forgiving
-         * than a pad, where landingDamage starts charging at 20 and kills at
-         * 90. While it measured against the wrong frame it was loose by
-         * however fast the ground turned; now that it measures the right
-         * speed it is merely generous. Unifying open ground with the pad's
-         * damage ramp is the obvious next step and changes how landing in
-         * the wild feels, so it is not done silently here. */
-        ship.crashed = !ship.gear || relSpeed > 0.1;
+         * Gear up is still a wreck outright - on the hull the number that
+         * matters is not your speed - which is stricter than a pad, where a
+         * belly seat is caught and charged triple. That difference is kept on
+         * purpose: a pad is a prepared surface and a cradle; open ground is
+         * rock.
+         *
+         * Damage needs a numeric hull. The predictor's ghosts and canisters
+         * have none (makeShip does not set one), so they take nothing - the
+         * same guard the pad branch gets from allowDock - and are judged by
+         * the one speed that kills every hull there is, LAND_FATAL_SPEED. */
+        noteTouchdown(ship, 'ground', relSpeed, !!ship.gear, t);
+        var gdmg = ship.gear ? landingDamage(relSpeed, true) : 0;
+        if (!ship.gear) {
+          ship.crashed = true;
+        } else if (typeof ship.hullHp === 'number') {
+          ship.crashed = false;
+          if (gdmg > 0) {
+            ship.hullHp -= gdmg;
+            ship.lastLandingHit = { dmg: gdmg, speed: relSpeed, gearDown: true,
+                                    t: t, ground: true };
+            if (ship.hullHp <= 0) { ship.hullHp = 0; ship.crashed = true; }
+          }
+        } else {
+          ship.crashed = relSpeed >= LAND_FATAL_SPEED;
+        }
         ship.impactSpeed = relSpeed;
         ship.pos = contactPt;
         ship.vel = gv;
@@ -8288,6 +8322,7 @@
     berthRoom: berthRoom,
     padCapture: padCapture,
     landingDamage: landingDamage,
+    LAND_SAFE_SPEED: LAND_SAFE_SPEED, LAND_FATAL_SPEED: LAND_FATAL_SPEED,
     smootherstep: smootherstep,
     trafficState: trafficState,
     trafficCore: trafficCore,
