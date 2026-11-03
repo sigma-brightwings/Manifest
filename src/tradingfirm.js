@@ -576,7 +576,17 @@
         c.cash -= fcr; leg.fuelCr = fcr;
       }
       var got = execute(G, c, rec.star, sysA, A, plan.cid, plan.qty, td, +1, Math.floor(c.cash));
-      if (!got) { tr.phase = 'idle'; tr.next = td + WAIT; return; }
+      if (!got) {
+        /* The load would not fill after the hydrogen was bought: the
+         * hydrogen goes back across the same desk at the same instant (at
+         * the bid, so the spread is the house's loss), rather than being
+         * paid for and left in a tank she never jumps on. */
+        if (leg.fuelCr) {
+          var back = execute(G, c, rec.star, sysA, A, Eco().FUEL_ID, Math.max(1, Math.ceil(plan.fuelT)), td, -1);
+          if (back) c.cash += back.cr;
+        }
+        tr.phase = 'idle'; tr.next = td + WAIT; return;
+      }
       c.cash -= got.cr;
       rec.cargo = {}; rec.cargo[plan.cid] = got.qty;
       leg.cid = plan.cid; leg.qty = got.qty; leg.cost = got.cr; leg.estProfit = Math.round(plan.estProfit);
