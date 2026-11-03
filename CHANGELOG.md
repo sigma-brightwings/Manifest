@@ -48,7 +48,7 @@ before they update.
   cut-away building), then the building's own hot and scorched band: the
   "double orange line" Astra rejected on 2026-10-26. Her call: the
   building's edge wins.
-  - The street's band and the pit wall's lip band are now left out wherever
+  - The street's band, and the lip's hot top, are now left out wherever
     one of the port's cut meshes (the model, its city, its dressing) stands
     over the street. Open street and the lip away from buildings are
     unchanged.
@@ -59,12 +59,33 @@ before they update.
     a texel at Ashford from 1.4 km) and redrawn only when a mesh moves or
     the crossing moves by a quarter of the mask. The CPU cost per frame is
     a placement key per mesh.
-  - Under a building you now see the plain street through the cut-away
-    building, between the hole and the building's band.
-  - The test stands a 20 m block on the street's hot band: under it there
-    is no band, across the hole in open street the band is still there, and
-    the same block sunk under the street changes nothing. The lip has the
-    same rule, and the mask's square is checked to cover the edge.
+  - **The strip under a building is the building's sliced wall.** In the
+    first cut of this, plain street showed through the cut-away building
+    between the hole and the building's band, and it read as a ledge. That
+    strip is the building's wall where the cone slices it, seen from above,
+    running from its roof down to the street. It is now painted look B's
+    scorched plate and does not glow. The hot third stays where the
+    building already has it, on the roof's cut, so a building reads as one
+    wider burnt edge. The mask keeps each texel's tallest surface (MAX
+    blending, 2 m steps up to 500 m). A street point counts as cut face
+    where the line of sight, followed back up to the roof's height, was
+    inside the cone.
+  - **The lip under a building is scorched for the band's width, then
+    rock.** Left as rock right up to the street, the wall's top beds showed
+    instead: a pale bed 0.25 m deep, a pixel or less from 1.4 km. That bed
+    was the broken light line along the strip's inner seam. It is gone at
+    1.4 km and 2 km.
+  - The scorched colour is one constant now (`CUT_SCORCHED`), written into
+    the mesh shader and the wall shader alike.
+  - The test stands a 20 m block on the street's hot band:
+    - 100 m tall, the street there is the scorched cut face;
+    - 10 m tall, it is cut face exactly where the cone takes the block's
+      roof along the line of sight;
+    - across the hole, in open street, the band is still there;
+    - the same block sunk under the street changes nothing.
+    It also checks that the cut face is the scorched colour, not hot and
+    not glowing, that the lip under a building is scorched then rock, and
+    that the mask's square covers the edge.
   - Saves are unaffected.
 
 ### Fixed (2026-11-02, the ground port's burnt edge, the horizon seam, the haze)

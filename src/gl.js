@@ -130,6 +130,19 @@
    *     folded, so their edges are curves rather than stair-steps.
    * The CPU's part is uniforms. GLWorld.wallHit and GLWorld.wallFrag are the
    * same arithmetic in JS, which is what the test reads. */
+  /* LOOK B'S SCORCHED PLATE, one colour for every cut face that is not hot
+   * (sixth round): the meshes' outer band, the street's, the lip's, and the
+   * building's sliced wall filled in over the street (FRAG_WALL). Written
+   * into each shader from here, so they cannot drift apart; GL.cutColour
+   * hands the test the same numbers. */
+  var CUT_SCORCHED = [0.16, 0.11, 0.085];
+  var SCORCHED_GLSL = 'vec3(' + CUT_SCORCHED.join(', ') + ')';
+  /* THE FOOTPRINT's two numbers, here because FRAG_WALL is written with
+   * them: what stands a metre over the street is standing on it, and the
+   * mask holds each texel's tallest surface as a fraction of half a
+   * kilometre — two-metre steps in eight bits, taller held at the top. */
+  var FOOT_MIN = 0.001;   // km
+  var FOOT_TOP = 0.5;     // km
   var FRAG_WALL = [
     '#version 300 es',
     'precision highp float;',
@@ -153,20 +166,22 @@
     'uniform vec4 uWPlanet;',     // the world's centre relative to the eye, km; its radius
     'uniform vec4 uWRim;',        // the cut-face band's colour, and its width as a fraction of the cone's radius
     /* ---- ONE EDGE WHERE A BUILDING STANDS (2026-11-02, sixth round) ---- */
-    'uniform sampler2D uWMask;',  // the port's footprint on the street, 1 under a building (streetFootprint)
+    'uniform sampler2D uWMask;',  // the port's footprint on the street: its tallest surface there, / FOOT_TOP (streetFootprint)
     'uniform vec4 uWMaskB;',      // its centre east, north of the mouth, km; half its side, km; w = 1 when there is one
     'out vec4 frag;',
     'float whash(float a, float b) { return fract(sin(a * 12.9898 + b * 78.233) * 43758.5453); }',
-    /* Whether a point (relative to the eye, km) stands under one of the
-     * port's own cut meshes — a building, a shed, the city. The street's
-     * band and the lip's are left out there: the building's own cut face is
-     * that place's edge. See THE FOOTPRINT over FRAG_FOOT. */
-    'bool underFoot(vec3 rel) {',
-    '  if (uWMaskB.w < 0.5) return false;',
+    /* How tall the port's own cut meshes stand over a point (relative to
+     * the eye, km) — a building, a shed, the city — in km, and 0 where
+     * nothing does. The street's band and the lip's are left out where
+     * something does: the building's own cut face is that place's edge.
+     * See THE FOOTPRINT over FRAG_FOOT. */
+    'float footH(vec3 rel) {',
+    '  if (uWMaskB.w < 0.5) return 0.0;',
     '  vec3 q = rel - uWEnt;',
     '  vec2 uv = (vec2(dot(q, uWE), dot(q, uWN)) - uWMaskB.xy) / (2.0 * uWMaskB.z) + 0.5;',
-    '  if (uv.x <= 0.0 || uv.y <= 0.0 || uv.x >= 1.0 || uv.y >= 1.0) return false;',
-    '  return texture(uWMask, uv).r > 0.5;',
+    '  if (uv.x <= 0.0 || uv.y <= 0.0 || uv.x >= 1.0 || uv.y >= 1.0) return 0.0;',
+    '  float h = texture(uWMask, uv).r * ' + FOOT_TOP.toFixed(4) + ';',
+    '  return h >= ' + FOOT_MIN.toFixed(4) + ' ? h : 0.0;',
     '}',
     'void main() {',
     '  vec3 rd = normalize(uRight * (vPx.x - uScreenPx.x) + uUp * (uScreenPx.y - vPx.y) + uFwd * uFlen);',
@@ -218,13 +233,46 @@
     '        bool inCone = tt > 0.0 && tt < 1.0 && ds < rs;',
     '        if (!inCone) {',
     '          vec3 ns = normalize(hs - uWPlanet.xyz);',
-    /* Not under a building (sixth round): there the building's band is the
-     * edge, and the street's, seen through the cut-away building just
-     * inside it, was a second orange line with a dark strip between. */
+    /* UNDER A BUILDING (sixth round) the street's band is not drawn: the
+     * building's is the edge, and the street's, seen through the cut-away
+     * building just inside it, was a second orange line with a dark strip
+     * between. What IS seen there, between the hole and the building's
+     * band, is the building's own sliced wall from above — the cone's
+     * surface running down through it from its roof to the street. Left as
+     * street it read as a ledge (the coordinator, on the first cut of
+     * this), so it is painted as what it is: look B's scorched plate,
+     * glowing nothing. The hot third stays where the building has it, at
+     * its top edge, on the roof's own cut; together they are one wider
+     * burnt edge where a building stands.
+     *
+     * Which street points: under the footprint, where the ray, back up at
+     * the height the building stands there, was inside the cone — so the
+     * building was cut away along this line of sight. Anywhere else under
+     * a building (the street under an overhang, seen from the side) is not
+     * a cut face and is left to the planet. GLWorld.streetBand is this in JS. */
+    '          float fh = footH(hs);',
+    '          if (fh > 0.0) {',
+    '            float dn = -dot(rd, uWU);',
+    '            if (dn > 1e-4) {',
+    /* Back up the ray to the roof's height — or most of the way to the
+     * eye, when the eye is lower than the roof and the ray comes in
+     * through the building's side. */
+    '              vec3 pt = hs - rd * min(fh / dn, ts * 0.99);',
+    '              float t2 = dot(pt, uWS) / max(L * L, 1e-12);',
+    '              float r2 = min(mix(uWR.y, uWR.x, t2), uWR.z);',
+    '              if (t2 > 0.0 && t2 < 1.0 && length(pt - uWS * t2) < r2) {',
+    '                frag = vec4(' + SCORCHED_GLSL + ', 0.0);',
+    '                float sd2 = dot(hs, uFwd) * 0.9995;',
+    '                gl_FragDepth = clamp(log2(max(uNear, sd2) / uNear) * uInvLogRange, 0.0, 1.0);',
+    '                return;',
+    '              }',
+    '            }',
+    '            discard;',
+    '          }',
     '          if (tt > 0.0 && tt < 1.0 && ds < rs * (1.0 + uWRim.w) &&',
-    '              abs(dot(ns, offs / max(ds, 1e-9))) < 0.8 && !underFoot(hs)) {',
+    '              abs(dot(ns, offs / max(ds, 1e-9))) < 0.8) {',
     '            float ru = (ds - rs) / (rs * uWRim.w);',
-    '            frag = ru < 0.35 ? vec4(uWRim.rgb, 0.85) : vec4(0.16, 0.11, 0.085, 0.0);',
+    '            frag = ru < 0.35 ? vec4(uWRim.rgb, 0.85) : vec4(' + SCORCHED_GLSL + ', 0.0);',
     '            float sd = dot(hs, uFwd) * 0.9995;',
     '            gl_FragDepth = clamp(log2(max(uNear, sd) / uNear) * uInvLogRange, 0.0, 1.0);',
     '            return;',
@@ -300,10 +348,15 @@
      * the rim reads as one burnt edge round the hole, street and rock. */
     '  float rh = cyl ? cap : (uWR.y + k * t * c);',
     '  float lipM = rh * uWRim.w * 1000.0;',
-    /* (Sixth round: and not under a building, for the street's reason.) */
-    '  if (-hm < lipM && !underFoot(vRel)) {',
+    /* (Sixth round.) Under a building there is no hot top: the street
+     * above it is the building's sliced wall, scorched, and the lip carries
+     * that on down the same width before the rock. Left as rock there, the
+     * wall's top beds showed instead — the dark one 0.35 m deep, then a
+     * pale one 0.25 m deep, a pixel or less from 1.4 km — and that pale bed
+     * was the broken light line along the strip's inner seam. */
+    '  if (-hm < lipM) {',
     '    float lu = -hm / max(lipM, 1e-6);',
-    '    frag = lu < 0.35 ? vec4(uWRim.rgb, 0.85) : vec4(0.16, 0.11, 0.085, 0.0);',
+    '    frag = (lu < 0.35 && footH(vRel) == 0.0) ? vec4(uWRim.rgb, 0.85) : vec4(' + SCORCHED_GLSL + ', 0.0);',
     '  }',
     '  float depth = dot(vRel, uFwd);',
     '  gl_FragDepth = clamp(log2(max(uNear, depth) / uNear) * uInvLogRange, 0.0, 1.0);',
@@ -311,7 +364,7 @@
   ].join('\n');
 
   /* ---- THE FOOTPRINT (2026-11-02, sixth round) ----------------------------
-   * What FRAG_WALL's underFoot reads: the port's cut meshes seen straight
+   * What FRAG_WALL's footH reads: the port's cut meshes seen straight
    * down, into a small mask in the ground frame. Each mesh the cut was on
    * this frame is drawn again with its own buffers, flattened onto the
    * street, and a fragment survives only where the surface stands above
@@ -319,7 +372,9 @@
    * a line from above marks nothing on its own, and the shaft, the hangar
    * and anything else under the ground mark nothing at all. The height is
    * over the world's SPHERE (the street the planet pass draws), by the
-   * flat frame's height plus d^2/2R. The vertex stage is built once the
+   * flat frame's height plus d^2/2R, and each texel keeps the TALLEST
+   * surface over it (MAX blending), which is how high the building's cut
+   * face runs there. The vertex stage is built once the
    * mesh program has linked, at its aPos location, because these are the
    * mesh pass's own vertex arrays. */
   function vertFootSrc(loc) {
@@ -347,7 +402,9 @@
     'out vec4 frag;',
     'void main() {',
     '  if (vH < uFMin) discard;',
-    '  frag = vec4(1.0);',
+    /* Its height, kept by MAX blending: the texel holds its tallest
+     * surface, the roof, which is where the cut face starts down from. */
+    '  frag = vec4(clamp(vH / ' + FOOT_TOP.toFixed(4) + ', 0.0, 1.0));',
     '}'
   ].join('\n');
 
@@ -2221,7 +2278,7 @@
      * line of sight), where a band would read as runway markings. */
     '  if (rim && abs(dot(n, cutW)) < 0.8) {',
     '    if (rimU < 0.35) { c = uCutRim; glow = max(glow, 0.85); }',
-    '    else { c = vec3(0.16, 0.11, 0.085); glow = 0.0; }',
+    '    else { c = ' + SCORCHED_GLSL + '; glow = 0.0; }',
     '  }',
     '  frag = vec4(c, clamp(glow, 0.0, 1.0));',
     '}'
@@ -4195,7 +4252,11 @@
    * "double orange line" Astra rejected on 2026-10-26, back by another
    * road. Her call: the building's edge wins. So the street's band and the
    * lip's are left out wherever one of the port's cut meshes stands over
-   * the street, and each place has exactly one edge.
+   * the street, and each place has exactly one edge. Left at that, the
+   * plain street showed through the cut-away building between the hole
+   * and its band, and read as a ledge — worse than the double line, the
+   * coordinator said on the first shots — so that strip is the building's
+   * sliced wall, scorched (UNDER A BUILDING, in FRAG_WALL).
    *
    * Which meshes: exactly those the cut was on this frame (meshQueue
    * entries carrying `cut`) — the port's model, its city and its dressing,
@@ -4205,8 +4266,7 @@
    * ground frame or the set changes — a door leaf on its run, a mesh
    * swapped in when its art arrives. The CPU's part per frame is a dozen
    * dot products a mesh, to make the key that says nothing moved. */
-  var FOOT_MIN = 0.001;   // km: what stands a metre over the street is standing on it
-  var FOOT_N = 1024;      // texels a side
+  var FOOT_N = 1024;      // texels a side (FOOT_MIN, FOOT_TOP: by FRAG_WALL, which reads them)
   /* WHERE THE MASK LIES. The edge exists only where the cone crosses the
    * street, so the mask is laid round that crossing, not round the port:
    * a square twice the cone's band there across, stretched by 1/sin of the
@@ -4222,6 +4282,15 @@
    * the mouth (km) and its three axes in east, north, up — the numbers
    * FRAG_FOOT is given, and the key. `ent` is the mouth relative to the
    * same eye the mesh's `rel` was taken from. */
+  /* What FRAG_WALL paints each kind of street point, as [r, g, b, glow]:
+   * 'hot', 'scorched', and 'face', a building's sliced wall over the
+   * street. The same constants the shaders are written from. */
+  GL.cutColour = function (kind, rim) {
+    var c = rim || CUT_RIM;
+    if (kind === 'hot') return [c[0], c[1], c[2], 0.85];
+    if (kind === 'scorched' || kind === 'face') return CUT_SCORCHED.concat([0]);
+    return null;
+  };
   GL.groundPlace = function (w, ent, m) {
     var E = w.east, N = w.north, U = w.up;
     var ox = m.rel.x - ent.x, oy = m.rel.y - ent.y, oz = m.rel.z - ent.z;
@@ -4248,16 +4317,16 @@
     var half = Math.pow(2, Math.ceil(Math.log(want) / Math.LN2)), q = half / 2;
     return [Math.round(xe / q) * q, Math.round(xn / q) * q, half];
   };
-  /* FRAG_FOOT in JS, without the texels: whether the point `p` (world km)
-   * stands under any of `items` ({ mesh, place } from GL.groundPlace) —
-   * inside a face's shadow straight down, where that face is FOOT_MIN or
-   * more over the street. Also the arithmetic FRAG_WALL's underFoot reads
-   * back, so the test can hold the band to it. */
+  /* FRAG_FOOT in JS, without the texels: how tall `items` ({ mesh, place }
+   * from GL.groundPlace) stand over the point `p` (world km), in km — the
+   * tallest face whose shadow straight down covers it, of those FOOT_MIN
+   * or more over the street — and 0 where none does. What FRAG_WALL's
+   * footH reads back, so the test can hold the band to it. */
   GL.footprintAt = function (w, items, p) {
     var q = { x: p.x - w.entrance.x, y: p.y - w.entrance.y, z: p.z - w.entrance.z };
     var pe = q.x * w.east.x + q.y * w.east.y + q.z * w.east.z;
     var pn = q.x * w.north.x + q.y * w.north.y + q.z * w.north.z;
-    var curv = (w.planet && w.planet.radius > 0) ? 1 / (2 * w.planet.radius) : 0;
+    var curv = (w.planet && w.planet.radius > 0) ? 1 / (2 * w.planet.radius) : 0, top = 0;
     for (var i = 0; i < items.length; i++) {
       var M = items[i].mesh, P = items[i].place, R = P.rot, o = P.off, s = P.scale;
       var g = function (v) {
@@ -4274,10 +4343,11 @@
         var l2 = ((c[1] - a[1]) * (pe - c[0]) + (a[0] - c[0]) * (pn - c[1])) / det;
         var l3 = 1 - l1 - l2;
         if (l1 < 0 || l2 < 0 || l3 < 0) continue;
-        if (l1 * a[2] + l2 * b[2] + l3 * c[2] >= FOOT_MIN) return true;
+        var hz = l1 * a[2] + l2 * b[2] + l3 * c[2];
+        if (hz >= FOOT_MIN && hz > top) top = Math.min(hz, FOOT_TOP);
       }
     }
-    return false;
+    return top;
   };
   function streetFootprint(w, eye) {
     if (!footProg || !w || !(w.r > 0) || !w.east) return null;
@@ -4320,7 +4390,8 @@
     gl.bindFramebuffer(gl.FRAMEBUFFER, foot.fbo);
     gl.viewport(0, 0, FOOT_N, FOOT_N);
     gl.disable(gl.DEPTH_TEST);
-    gl.disable(gl.BLEND);
+    gl.enable(gl.BLEND);
+    gl.blendEquation(gl.MAX);
     gl.colorMask(true, true, true, true);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -4337,6 +4408,8 @@
       gl.drawArrays(gl.TRIANGLES, 0, up.count);
     }
     gl.bindVertexArray(null);
+    gl.blendEquation(gl.FUNC_ADD);
+    gl.disable(gl.BLEND);
     gl.bindFramebuffer(gl.FRAMEBUFFER, postReady() ? post.msFbo : null);
     gl.viewport(vp[0], vp[1], vp[2], vp[3]);
     gl.clearColor(cc[0], cc[1], cc[2], cc[3]);
@@ -4433,7 +4506,9 @@
    * 'hot' or 'scorched' in the band just outside it, null beyond — the
    * same radius and the same fraction as FRAG_MESH's keyhole band. With
    * `items` (THE FOOTPRINT: { mesh, place } as GL.footprintAt takes), no
-   * band under a building, as underFoot leaves it out (sixth round). */
+   * band under a building (sixth round): 'face' where the ray, back up at
+   * the building's height, was inside the cone — its sliced wall, painted
+   * scorched — and null elsewhere under it. */
   GL.streetBand = function (w, eye, p, items) {
     var Sx = w.ship.x - eye.x, Sy = w.ship.y - eye.y, Sz = w.ship.z - eye.z;
     var px = p.x - eye.x, py = p.y - eye.y, pz = p.z - eye.z;
@@ -4443,8 +4518,18 @@
     var rs = Math.min(w.rEye + (w.rShip - w.rEye) * tt, w.cap > 0 ? w.cap : 1e9);
     var ox = px - Sx * tt, oy = py - Sy * tt, oz = pz - Sz * tt, ds = Math.sqrt(ox * ox + oy * oy + oz * oz);
     if (ds < rs) return 'cut';
+    var fh = (items && items.length) ? GL.footprintAt(w, items, p) : 0;
+    if (fh > 0) {
+      var rl = Math.sqrt(px * px + py * py + pz * pz), U = w.up;
+      var dn = -(px * U.x + py * U.y + pz * U.z) / rl;
+      if (!(dn > 1e-4)) return null;
+      var k = Math.min(fh / dn / rl, 0.99), qx = px * (1 - k), qy = py * (1 - k), qz = pz * (1 - k);
+      var t2 = (qx * Sx + qy * Sy + qz * Sz) / L2;
+      var r2 = Math.min(w.rEye + (w.rShip - w.rEye) * t2, w.cap > 0 ? w.cap : 1e9);
+      var ex = qx - Sx * t2, ey = qy - Sy * t2, ez = qz - Sz * t2;
+      return (t2 > 0 && t2 < 1 && Math.sqrt(ex * ex + ey * ey + ez * ez) < r2) ? 'face' : null;
+    }
     if (ds >= rs * (1 + w.rim)) return null;
-    if (items && items.length && GL.footprintAt(w, items, p)) return null;
     return (ds - rs) / (rs * w.rim) < 0.35 ? 'hot' : 'scorched';
   };
   /* groundHaze's blend fraction in JS: `dist` km of path from an eye `h0`
@@ -4465,11 +4550,13 @@
   };
   /* The pit wall's lip band (FRAG_WALL's last block) in JS: `depthM`
    * metres down the wall from the street where the cone's radius is `rh`
-   * km — 'hot', 'scorched', or null for the rock below; and null
-   * `under` a building (sixth round), where the building's band is the edge. */
+   * km — 'hot', 'scorched', or null for the rock below; and all
+   * 'scorched' `under` a building (sixth round), carrying its sliced wall
+   * down, where the building's own band is the hot edge. */
   GL.lipBand = function (w, rh, depthM, under) {
     var lipM = rh * w.rim * 1000;
-    if (!(depthM < lipM) || under) return null;
+    if (!(depthM < lipM)) return null;
+    if (under) return 'scorched';
     return depthM / Math.max(lipM, 1e-6) < 0.35 ? 'hot' : 'scorched';
   };
   /* FRAG_WALL in JS, up to the bed: null where the wall is not drawn
