@@ -85,16 +85,27 @@ var CRAWLER = [
    * the importer's 1/1000 of her length they lean, and one column over her
    * comms mast went odd. Closed like any other open tube. */
   { op: 'cap', re: /^commsCable(Wrap)?$|^commsElAxle$|^commsLNAArm$/, why: 'open-ended comms mast tubes' },
-  { op: 'door', node: 'berthFrame' }
+  { op: 'door', node: 'berthFrame' },
+  { op: 'raise', re: /^berthDoor(Port|Starboard)$/, dy: 0.478 }
+];
+/* The navy family shares one hull design across sizes, and with it the
+ * Cutter's lidless belly blisters and open dishes: navy-m is the Cutter,
+ * navy-l and navy-s are flown only by others but are the same art, closed
+ * the same way (2026-11-03, second pass). */
+var NAVY = [
+  { op: 'cap', re: /^keelBlister[13]$|^sensorBlister2[LR]$/, why: 'belly blisters with no lid' },
+  /* Each dish is two open bowls, dish and liner, whose rims miss each
+   * other by a centimetre: a ray down the ring between them crosses one
+   * bowl. Sheets, so they get their backs and look as they did. */
+  { op: 'sheet', re: /^sensorDish(Liner)?[LR]$|^commDish(Liner)?$/, why: 'radar dishes: open bowls' }
 ];
 var PATCHES = {
-  'navy-m.glb': [
-    { op: 'cap', re: /^keelBlister[13]$|^sensorBlister2[LR]$/, why: 'belly blisters with no lid' },
-    /* Each dish is two open bowls, dish and liner, whose rims miss each
-     * other by a centimetre: a ray down the ring between them crosses one
-     * bowl. Sheets, so they get their backs and look as they did. */
-    { op: 'sheet', re: /^sensorDish(Liner)?[LR]$|^commDish(Liner)?$/, why: 'radar dishes: open bowls' }
-  ],
+  'navy-l.glb': NAVY,
+  'navy-m.glb': NAVY,
+  'navy-s.glb': NAVY,
+  /* The small police hull's blue beacon is a dome with no base (its
+   * larger sisters' are closed). */
+  'police-s.glb': [{ op: 'cap', re: /^beaconBlue$/, why: 'beacon dome with no base' }],
   'crawler_civilian.glb': CRAWLER,
   'crawler_navy.glb': CRAWLER,
   'crawler_syndicate.glb': CRAWLER
@@ -626,6 +637,42 @@ function patchFile(file, spec) {
     if (s.op === 'door') {
       if (CHECK) { if (!nodes.some(function (n) { return n.node.name === 'berthWalkDoorFrame'; })) { open++; log.push('door: missing'); } return; }
       if (crawlerDoor(g, nodes, log)) changed = true;
+      return;
+    }
+    if (s.op === 'raise') {
+      /* HER BELLY DOORS, RAISED (2026-11-03, second pass). Closed, their
+       * undersides were 1.80 m off the ground at her flown 164 m, and
+       * that is the pit her lift comes down into: 3 cm under a standing
+       * head (render.js STAND_CLEAR 1.83), so you crouched from the lift
+       * to her walk-out door. Each door group (leaf and both hazard
+       * layers) is lifted EXACTLY ONE IMPORT CELL, 0.478 here (glb2hulls
+       * rounds her to 1/1000 of her 478-unit length; 0.164 m flown), so
+       * the pit is 1.97 m after the import. One cell and not "about 0.4":
+       * a lift that is a whole cell moves every rounded corner of the
+       * doors by exactly one cell, so the leaves import as the same faces
+       * one cell higher - which is what lets render.js CR_DOOR, which
+       * finds them for the founded station by where their faces lie, move
+       * by the same cell and find exactly what it found before. A 0.4 lift
+       * rounded some corners up a cell and some not at all, and the box
+       * lost faces. Their tops go 8 cm up into her hangar floor's slab
+       * (-94.0..-93.0), hidden, and import onto the floor's underside
+       * exactly as they did before the lift. Moved by its node's
+       * translation, so the geometry is untouched and the move is one
+       * number Blender shows. */
+      nodes.forEach(function (n) {
+        if (!s.re.test(n.node.name || '')) return;
+        var ex = n.node.extras || {};
+        if (ex.manifestRaise === s.dy) return;            // raised already
+        if (CHECK) { open++; log.push(n.node.name + ' not raised'); return; }
+        if (n.node.matrix || n.node.rotation || n.node.scale) throw new Error(n.node.name + ': raise expects a plain node');
+        /* Relative to wherever an earlier run of this left it, so changing
+         * dy here re-raises rather than stacking. */
+        var t = n.node.translation || [0, 0, 0];
+        n.node.translation = [t[0], t[1] - (ex.manifestRaise || 0) + s.dy, t[2]];
+        n.node.extras = Object.assign({}, ex, { manifestRaise: s.dy, manifestPatch: '2026-11-03 belly door raised ' + s.dy + ', tools/glb-patch.js' });
+        changed = true;
+        log.push('raise ' + n.node.name + ' ' + s.dy + ' (her pit\'s headroom)');
+      });
       return;
     }
     var hit = 0, faces = 0, edges = 0;

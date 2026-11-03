@@ -67,21 +67,27 @@ in code: "can you not fix the models?"
   doorway, 2.30 m wide and 2.13 m clear, on the lift's line, framed in her hazard
   amber, with a door leaf in her belly doors' colour slid open beside it. The
   0.6 m "lift lane" you used to duck along is gone; a lift is walked off by the
-  same rule as everywhere else. The pit itself is still 1.80 m under her closed
-  belly doors, which is 3 cm short of standing height, so you crouch for the
-  10 m from the lift to the door. The doors were not moved, because the
-  founded-station Crawler finds them by their position.
+  same rule as everywhere else.
+- **You stand up in her lift pit.** It was 1.80 m to her closed belly doors,
+  3 cm short of standing height. The doors (leaf and hazard stripes, both sides)
+  are raised one import cell (0.478 m of her art, 0.164 m as flown), as far as
+  her hangar floor allows, so the walk from the lift to the door has 1.92 m or
+  more over the walker's whole footprint. `render.js` `CR_DOOR`, which finds
+  those doors for a founded Crawler station, moved the same cell. It now finds
+  only the doors: before, one strip of each skirt rail's inner face also slid
+  away with them.
+- **The Cutter's sisters too.** `navy-l` and `navy-s` share her lidless
+  blisters and open dishes, and `police-s` had an open beacon dome. No player
+  walks under them, but they are closed the same way.
 - **Caught if it comes back.** `glb2hulls` prints every model's open edges
   and warns, naming the parts, on any model a vertical ray crosses an odd
-  number of times. `test/hull-seal.test.js` fails on it. Three models no
-  player walks under still have the Cutter's lidless blisters (`navy-l`,
-  `navy-s`) or an open beacon (`police-s`). They are pinned at their
-  measured counts, and the same tool would close them.
+  number of times. `test/hull-seal.test.js` fails on any model in the
+  library above 0.
 
 Before: the Cutter had 38 odd columns and each Crawler livery had 1,592. Now
 every hull and livery has 0, in airlock.test, which also walks the Crawler
-forward off her lift and through the doorway. The other 53 models in
-`src/hulls.js` are byte-identical.
+forward off her lift and through the doorway standing up. All 57 library
+models are at 0. The other 50 models in `src/hulls.js` are byte-identical.
 
 **Saves:** survive. Only the art changed; nothing about a hull is stored.
 

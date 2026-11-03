@@ -1051,7 +1051,20 @@
   var CR_LEN_M = 478;
   var CR_HX = 43 / CR_LEN_M;                 // her hangar's centre, along her length
   var CR_HZ = 0.40 - 96.8 / CR_LEN_M;        // her door's outer face to the mouth
-  var CR_DOOR = { y0: -96.9 / CR_LEN_M, y1: -94.3 / CR_LEN_M, x: 29.2 / CR_LEN_M,
+  /* RAISED ONE CELL WITH HER DOORS (2026-11-03). tools/glb-patch.js lifts
+   * both belly door groups 0.478 m in her art - one import cell, so their
+   * rounded faces move exactly one cell - and a walker stands upright in
+   * the pit her lift lowers into. The box that finds them by face centroid
+   * moves the same cell and finds exactly the faces it found before
+   * (test/hull-seal.test.js counts them). Left where they were, on
+   * purpose: CR_HZ and geom.ceilZ, which place her door's faces at the
+   * bay's mouth and ceiling. Moving those moves the whole founded station
+   * by half a metre for nothing a player could see, and the mouth was
+   * already "a hair inside" her door; the ceiling now reads 0.48 m low,
+   * which is
+   * the safe side. */
+  var CR_DOOR_LIFT = 0.478;
+  var CR_DOOR = { y0: (-96.9 + CR_DOOR_LIFT) / CR_LEN_M, y1: (-94.3 + CR_DOOR_LIFT) / CR_LEN_M, x: 29.2 / CR_LEN_M,
                   z0: -51.2 / CR_LEN_M, z1: 137.2 / CR_LEN_M };
   var CR_PORT = {};
   function crawlerPortKey(station) {

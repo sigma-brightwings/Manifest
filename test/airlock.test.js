@@ -378,11 +378,14 @@ ids.forEach(function (id) {
 });
 check('every hull\'s skin is closed: no vertical ray under her crosses it an odd number of times', !sealErr.length,
       sealErr.length ? sealErr.join('; ') : sealN + ' hulls and liveries, ' + sealCols + ' columns, 0 odd');
-/* The Crawler walks off her lift through her own door. Along the lift's
- * line, from its foot forward to open ground: nowhere a crouched walker is
- * stopped (the field's own rule, no lane), and through the doorway in her
- * cross-member - where a 0.66 m beam was - a standing head clears. The pit
- * itself is her closed belly doors' underside, 1.80 m; measured, said. */
+/* The Crawler walks off her lift through her own door, standing. Along
+ * the lift's line and across the walker's whole footprint (headroom is the
+ * field's disc), from its fore edge forward to open ground: never stopped
+ * (no lane), and never under a standing head with a margin to spare - the
+ * pit under her closed belly doors (1.80 m before glb-patch raised them a
+ * cell, 1.97 m now) and the doorway in her cross-member (where a 0.66 m
+ * beam was) alike. The margin is 5 cm over STAND_CLEAR. */
+var UPRIGHT_MARGIN = 0.05;
 var doorErr = [], doorNums = [];
 [null, 'navy', 'syn'].forEach(function (liv) {
   var s = ship('crawler');
@@ -398,9 +401,10 @@ var doorErr = [], doorNums = [];
     if (h > 2 && through === null) through = h;        // the doorway, under its header
   }
   if (through === null || through < op.STAND_CLEAR) doorErr.push(tag + ' no standing doorway (' + through + ')');
-  doorNums.push(tag + ': out at z ' + z.toFixed(1) + ', doorway ' + (through || 0).toFixed(2) + ' m, least ' + least.toFixed(2) + ' m (the belly doors)');
+  if (!(least >= op.STAND_CLEAR + UPRIGHT_MARGIN)) doorErr.push(tag + ' a standing head meets her at ' + least.toFixed(2) + ' m');
+  doorNums.push(tag + ': out at z ' + z.toFixed(1) + ', doorway ' + (through || 0).toFixed(2) + ' m, least ' + least.toFixed(2) + ' m');
 });
-check('the Crawler walks off her lift forward through a door in her cross-member, standing in the doorway, no duck', !doorErr.length, doorErr.join('; '));
+check('the Crawler walks off her lift forward through a door in her cross-member, standing all the way (' + (R.outsidePlan(ship('crawler')).STAND_CLEAR + UPRIGHT_MARGIN).toFixed(2) + ' m over the whole footprint), no duck', !doorErr.length, doorErr.join('; '));
 console.log('  note  ' + doorNums.join('; '));
 
 
