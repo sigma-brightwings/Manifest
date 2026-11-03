@@ -259,6 +259,8 @@
     /* What your working ships have earned comes in BEFORE the wages go
      * out, wherever they are working: the same order a desk would use. */
     lines = lines.concat(bookAllWork(G, t));
+    /* And the trading firms' runs, everywhere, up to now (tradingfirm.js). */
+    if (global.TradingFirm) lines = lines.concat(global.TradingFirm.book(G, t));
 
     var aboard = Crew.aboard(s);
     var mine = payCrew(Crew, aboard, s.wagesTo, t, s.credits);
@@ -302,6 +304,10 @@
        * turnaround is part of the job, not storage. Her berth clock
        * restarts from the arrival that ends the work. */
       if (rec.work) continue;
+      /* A traded hull is in and out on the firm's timetable, and the firm
+       * pays for nothing but the cargo and the hydrogen: her clamp time is
+       * the turnaround, the same as a working ship's. */
+      if (rec.trade) continue;
 
       var berth = berthDue(rec, t);
       rec.berthTo = berth.berthTo;
@@ -362,6 +368,13 @@
    * corridor, a tank of hydrogen, two star systems — and belongs to its
    * own piece of work.
    */
+
+  /* A hull trading for a firm (tradingfirm.js) is on the firm's book, not
+   * yours to send: the refusal names the firm, so the row says who to ask. */
+  function tradeWhy(G, rec) {
+    var TF = global.TradingFirm, c = TF && TF.contractFor ? TF.contractFor(G, rec) : null;
+    return 'she trades for ' + (c ? c.firmShort : 'a firm') + ' - stand her down first';
+  }
 
   /* How long the route says she sits alongside at the far end. Not a
    * layover in the trade sense — the order closes the moment the cruise
@@ -434,6 +447,7 @@
     if (!rec) return { ok: false, why: 'no such ship' };
     if (rec.order) return { ok: false, why: 'she is already under way' };
     if (rec.work) return { ok: false, why: 'she is working ' + rec.work.siteName + ' - recall her first' };
+    if (rec.trade) return { ok: false, why: tradeWhy(G, rec) };
     if (!pilotOf(rec)) return { ok: false, why: 'nobody aboard can helm her' };
     if (rec.star && G && G.here && rec.star !== G.here.id) {
       return { ok: false, why: 'she is at ' + (rec.starName || 'another star') };
@@ -665,6 +679,7 @@
     if (!rec) return { ok: false, why: 'no such ship' };
     if (rec.work) return { ok: false, why: 'she is already working ' + rec.work.siteName };
     if (rec.order) return { ok: false, why: 'she is already under way' };
+    if (rec.trade) return { ok: false, why: tradeWhy(G, rec) };
     var p = pilotOf(rec);
     if (!p) return { ok: false, why: 'nobody aboard can helm her' };
     if (rec.star && G && G.here && rec.star !== G.here.id) {
@@ -941,6 +956,7 @@
   function sigOf(rec) {
     if (rec.work) return 'w|' + rec.work.t0 + '|' + rec.work.site + '|' + (rec.work.kind || 'skim');
     if (rec.order) return 'o|' + rec.order.t0 + '|' + rec.order.to;
+    if (rec.trade && rec.trade.leg) return 't|' + rec.trade.leg.t0 + '|' + rec.trade.leg.to;
     return null;
   }
 
@@ -979,7 +995,11 @@
 
   function routeFor(rec) {
     if (rec.work) return workRouteFor(rec);
-    var o = rec.order;
+    /* A TRADED HULL'S IN-SYSTEM LEG has an order's shape exactly (from, to,
+     * parent, cruise, t0), so she is drawn and heard as one: the firm's
+     * timetable, one leg at a time. Between stars she is in the corridor
+     * and on nobody's scope, which is where every jumping ship is. */
+    var o = rec.order || (rec.trade && rec.trade.leg);
     if (!o) return null;
     var cached = ROUTES[rec.id];
     if (cached && cached.sig === sigOf(rec)) return cached;
@@ -1015,6 +1035,12 @@
     return route;
   }
 
+  function tradeLeg(G, rec) {
+    var TF = global.TradingFirm;
+    return rec.trade && TF && TF.routeLeg ? TF.routeLeg(rec, (G && G.t) || 0) : null;
+  }
+  function forgetRoute(id) { delete ROUTES[id]; }
+
   /* Keep `sys.traffic` in step with the book: every ship of yours under
    * way in this system is on the list exactly once, and nothing of yours
    * that is not under way is on it at all. Cheap enough to run every
@@ -1023,18 +1049,19 @@
   function syncRoutes(G, sys) {
     if (!sys || !sys.traffic) return;
     var mine = list(G), i, any = false;
-    for (i = 0; i < mine.length; i++) if (mine[i].order || mine[i].work) { any = true; break; }
+    for (i = 0; i < mine.length; i++) if (mine[i].order || mine[i].work || tradeLeg(G, mine[i])) { any = true; break; }
     if (!any && !sys._fleetLive) return;
 
     var want = {};
     for (i = 0; i < mine.length; i++) {
       var rec = mine[i];
-      if (!rec.order && !rec.work) continue;
+      var tl = tradeLeg(G, rec);
+      if (!rec.order && !rec.work && !tl) continue;
       /* Port ids are per system — 'b7' names a different dock at every
        * star — so a record has to be from THIS star before its ids mean
        * anything here. */
       if (rec.star && G.here && rec.star !== G.here.id) continue;
-      var ends = rec.work ? [rec.work.port, rec.work.site] : [rec.order.from, rec.order.to];
+      var ends = rec.work ? [rec.work.port, rec.work.site] : tl ? [tl.from, tl.to] : [rec.order.from, rec.order.to];
       if (!sys.byId[ends[0]] || !sys.byId[ends[1]]) continue;
       want['fleet|' + rec.id] = rec;
     }
@@ -1095,6 +1122,13 @@
       var bl = bookWork(G, wr, sys, t);
       for (var b = 0; b < bl.length; b++) lines.push(bl[b]);
     }
+    /* THE TRADING FIRMS (tradingfirm.js): every run of every traded hull,
+     * everywhere, booked up to now. One queue in time order, so per frame
+     * it is a scan for anything due and nothing more. */
+    if (global.TradingFirm) {
+      var tl2 = global.TradingFirm.book(G, t);
+      for (var q = 0; q < tl2.length; q++) lines.push(tl2[q]);
+    }
     syncRoutes(G, sys);
     return lines;
   }
@@ -1108,7 +1142,11 @@
     var M = global.Missions, Eco = global.Economy;
     var who = p ? p.name : 'nobody at the helm';
     var parts = [];
-    if (rec.work) {
+    var TFr = global.TradingFirm;
+    if (rec.trade && TFr) {
+      var cc = TFr.contractFor(G, rec);
+      parts.push('trading for ' + (cc ? cc.firmShort : 'the firm') + '  ·  ' + TFr.phaseOf(rec, t));
+    } else if (rec.work) {
       parts.push(workPhase(rec.work, t) + '  ·  ' + rec.work.booked + ' load' +
                  (rec.work.booked === 1 ? '' : 's') + ' home so far' +
                  (rec.work.stopAfter !== undefined ? '  ·  standing down after this run' : ''));
@@ -1162,6 +1200,7 @@
     var where = rec.portName || 'somewhere';
     if (sys && sys.byId && sys.byId[rec.port]) where = sys.byId[rec.port].name;
     if (rec.order) where = 'under way → ' + rec.order.toName;
+    if (rec.trade) where = 'trading' + (rec.trade.leg ? ' → ' + rec.trade.leg.toName : ' at ' + (rec.portName || 'her port'));
     if (rec.work) where = (rec.work.kind === 'cut' ? 'cutting in ' : 'skimming ') + rec.work.siteName +
                           ' for ' + rec.work.portName;
     if (rec.starName) where += ', ' + rec.starName;
@@ -1184,7 +1223,7 @@
     BERTH_WEEK: BERTH_WEEK, BERTH_CAP: BERTH_CAP,
     RESALE: RESALE,
     /* standing orders */
-    canOrder: canOrder, quote: quote, order: order, eta: eta,
+    canOrder: canOrder, quote: quote, order: order, eta: eta, planLeg: planLeg, forgetRoute: forgetRoute,
     routeFor: routeFor, syncRoutes: syncRoutes, tick: tick,
     orderAccel: orderAccel, massOf: massOf, pilotOf: pilotOf,
     capacityOf: capacityOf, report: report,

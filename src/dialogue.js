@@ -86,6 +86,7 @@
     if (person.role === 'marine') return 'marine';
     if (person.role === 'security' || person.role === 'tactical') return 'security';
     if (person.role === 'fixer') return 'fixer';
+    if (person.role === 'factor') return 'factor';
     if (person.role === 'enforcer' || person.role === 'heavy') return 'syndicate';
     return 'other';
   }
@@ -94,6 +95,7 @@
     yours: null, hire: 'looking for a berth', bartender: 'I keep the bar', market: 'I keep the market desk',
     yard: 'I run the yard desk', steward: 'I keep the crew hall', customs: 'customs officer',
     marine: 'marine on the lock', security: 'port security', fixer: null, syndicate: 'I work for the Syndicate',
+    factor: 'I keep the desk for a trading house',
     other: null
   };
 
@@ -430,6 +432,9 @@
         job = p.role + ' on the ' + (P.shipName || 'ship') + (cap ? ', under Captain ' + cap.family : '');
       } else if (p.kind === 'fixer') {
         job = p.temper === 'gruff' ? 'nobody you need to know' : 'someone who knows people';
+      } else if (p.kind === 'factor') {
+        var fw = firmOf(ctx);
+        if (fw) job = 'factor for ' + fw.name + ' — ' + global.TradingFirm.ratingWord(fw.rating);
       } else if (p.kind === 'hire') {
         var CR = global.Crew;
         job = (CR && CR.ratingWord ? CR.ratingWord(P.forHire.rating) + ' ' : '') + P.forHire.role + ', looking for a berth';
@@ -635,6 +640,232 @@
                            'There is always someone in the bar who does not ask questions.'], 'specialBar');
     }
   };
+
+
+  /* ---- the trading house (tradingfirm.js, 2026-11-03) ----
+   * Astra: "another NPC type, they're kinda like the fixer, but civilian,
+   * and their job is a combination of economist and import/export
+   * company". Two services: a paid market READING, and an ACCOUNT — your
+   * ships, a budget and a goods list, traded on the firm's book and
+   * reviewed every quarter. Everything here is a call into TradingFirm,
+   * which owns the money and the refusals; the talk is only the desk. */
+  function TFm() { return global.TradingFirm; }
+  function firmOf(ctx) {
+    var T = TFm();
+    return T && ctx.port && ctx.sys ? T.firmAt(ctx.port, ctx.sys) : null;
+  }
+  function crs(n) { return Math.round(n).toLocaleString('en-US') + ' cr'; }
+  var BUDGETS = [5000, 10000, 20000, 50000, 100000, 250000, 500000, 1000000];
+  function dealOf(ctx) {
+    var st = ctx.state, f = firmOf(ctx);
+    if (!st.deal) {
+      var b = BUDGETS[0];
+      for (var i = 0; i < BUDGETS.length; i++) if (BUDGETS[i] >= ((f && f.minAccount) || 0)) { b = BUDGETS[i]; break; }
+      st.deal = { hulls: [], goods: [], budget: b };
+    }
+    return st.deal;
+  }
+  /* Your ships the desk could be asked about: every one of yours, those in
+   * this system first. A ship it cannot take is still listed, greyed, with
+   * why — a list that silently leaves your Kestrel out reads as a bug. */
+  function shipsFor(ctx) {
+    var F = global.Fleet, here = ctx.G.here && ctx.G.here.id;
+    var l = F ? F.list(ctx.G).slice() : [];
+    l.sort(function (a, b) {
+      var ah = (a.star || here) === here ? 0 : 1, bh = (b.star || here) === here ? 0 : 1;
+      return ah - bh || (a.id < b.id ? -1 : 1);
+    });
+    return l.slice(0, 6);
+  }
+  function pilotWord(rec) {
+    var F = global.Fleet, CrewM = global.Crew, p = F && F.pilotOf ? F.pilotOf(rec) : null;
+    return p ? p.name + (CrewM && CrewM.ratingWord ? ', ' + CrewM.ratingWord(p.rating) + ' pilot' : '') : 'no pilot';
+  }
+  function goodsWords(list) {
+    var T = TFm();
+    return !list || !list.length ? 'the house\'s choice' : list.map(function (c) { return T.goodName(c); }).join(', ');
+  }
+
+  var FIRM_WHAT = {
+    id: 'firmwhat', label: 'What does your house do?',
+    run: function (ctx) {
+      var f = firmOf(ctx);
+      if (!f) return 'Nothing, these days.';
+      return f.name + ' reads markets and moves cargo on its own book. Hand us a ship with a pilot aboard and a budget; ' +
+             'we choose the buys and the sells, in this system and out of it, and your pilot flies them. We run ' +
+             f.capacity + ' hull' + (f.capacity > 1 ? 's' : '') + ' at most and take ' + Math.round(f.commission * 100) +
+             '% of what a quarter makes. ' + (f.minAccount ? 'Not worth our time under ' + f.minAccount.toLocaleString('en-US') + '. ' : '') +
+             'We are measured by the quarter, like any trader: a quarter that loses money, and we are done.';
+    }
+  };
+  var READING = {
+    id: 'reading', label: function (ctx) { var f = firmOf(ctx); return 'A market reading (' + (f ? f.readingFee : 0) + ' cr)'; },
+    when: function (ctx) {
+      var f = firmOf(ctx);
+      if (!f) return false;
+      if (refusing(ctx)) return 'they will not take your money';
+      if (credits(ctx.G) < f.readingFee) return 'you have ' + credits(ctx.G) + ' cr';
+      return true;
+    },
+    run: function (ctx) {
+      var f = firmOf(ctx), T = TFm();
+      var r = T.reading(ctx.G, f, ctx.port, ctx.sys, ctx.t);
+      ctx.G.ship.credits -= f.readingFee;
+      record(ctx.G, ctx.p.key, 'bought', ctx.t);
+      if (!r.rows.length) return 'For ' + r.whose + ': nothing we can read with any confidence. Keep your money next time.';
+      return 'For ' + r.whose + ' — ' + r.rows.map(function (x) { return x.text; }).join('; ') + '.';
+    }
+  };
+  var ENGAGE = {
+    id: 'engage', label: 'I want you to trade my ships.',
+    when: function (ctx) {
+      var T = TFm(), f = firmOf(ctx);
+      if (!f) return false;
+      if (T.contractWith(ctx.G, f)) return false;
+      if (refusing(ctx)) return 'not for you';
+      return true;
+    },
+    run: function (ctx) {
+      var f = firmOf(ctx);
+      dealOf(ctx);
+      ctx.state.node = 'firm';
+      return 'Then let us draw it up. Which ships, how much, and what may we trade? ' +
+             (f.minAccount ? 'Mind the floor: ' + f.minAccount.toLocaleString('en-US') + ' at least.' : 'Any budget you like.');
+    }
+  };
+  function accountWords(ctx, c) {
+    var T = TFm(), G = ctx.G, t = ctx.t;
+    T.book(G, t);
+    var hulls = T.hullsOf(G, c).map(function (r) { return r.name + ' ' + T.phaseOf(r, t); });
+    var eq = T.equity(G, c);
+    return 'Your account: ' + crs(c.cash) + ' in cash, ' + crs(eq) + ' all told; this quarter so far ' +
+           ((eq - c.qStart - c.qFlows) >= 0 ? '+' : '') + crs(eq - c.qStart - c.qFlows) + '. ' +
+           T.quarterLine(c, t) + '. ' + (hulls.length ? 'On the book: ' + hulls.join('; ') + '.' : 'No hulls on the book.') +
+           (c.closing ? ' The account is closing.' : '');
+  }
+  var ACCOUNT = {
+    id: 'account', label: 'How does my account stand?',
+    when: function (ctx) {
+      var T = TFm(), f = firmOf(ctx);
+      return !!(f && T.contractWith(ctx.G, f));
+    },
+    run: function (ctx) {
+      var c = TFm().contractWith(ctx.G, firmOf(ctx));
+      ctx.state.node = 'account';
+      return accountWords(ctx, c);
+    }
+  };
+
+  /* The deal sheet: one row per term, a SIGN row that says what is wrong
+   * until nothing is. */
+  function firmSheet(ctx) {
+    var T = TFm(), f = firmOf(ctx), d = dealOf(ctx), out = [];
+    if (!f) return [];
+    out.push({ id: 'f-budget', sub: 'firm', label: 'Budget: ' + crs(d.budget) + '  (more)',
+      run: function (c2) {
+        var dd = dealOf(c2), i = BUDGETS.indexOf(dd.budget), f2 = firmOf(c2);
+        var next = BUDGETS[(i + 1) % BUDGETS.length];
+        /* Round past anything under the house's floor or over your purse. */
+        for (var k = 0; k < BUDGETS.length && (next < f2.minAccount || next > credits(c2.G)) && next !== BUDGETS[0]; k++) {
+          next = BUDGETS[(BUDGETS.indexOf(next) + 1) % BUDGETS.length];
+        }
+        dd.budget = next;
+        return crs(next) + '. ' + (next < f2.minAccount ? 'Under our floor of ' + f2.minAccount.toLocaleString('en-US') + ', mind.' : 'Fine.');
+      } });
+    shipsFor(ctx).forEach(function (rec) {
+      var on = d.hulls.indexOf(rec.id) >= 0;
+      var why = T.hullRefusal(ctx.G, rec, f, ctx.G.here && ctx.G.here.id);
+      out.push({ id: 'f-hull-' + rec.id, sub: 'firm',
+        label: (on ? '[x] ' : '[ ] ') + 'the ' + rec.name + ' (' + pilotWord(rec) + ')',
+        when: function () { return why ? why : true; },
+        run: function (c2) {
+          var dd = dealOf(c2), ix = dd.hulls.indexOf(rec.id);
+          if (ix >= 0) { dd.hulls.splice(ix, 1); return 'The ' + rec.name + ' stays yours to fly.'; }
+          dd.hulls.push(rec.id);
+          return 'The ' + rec.name + ', then. ' + pilotWord(rec) + ' at the helm.';
+        } });
+    });
+    out.push({ id: 'f-goods', sub: 'firm', label: 'Goods: ' + goodsWords(d.goods) + '  (choose)',
+      run: function (c2) { c2.state.node = 'firmgoods'; return 'Which goods may we touch? Leave it empty and we trade anything honest.'; } });
+    var can = T.canEngage(ctx.G, f, ctx.port, ctx.sys, d);
+    out.push({ id: 'f-sign', sub: 'firm',
+      label: 'Sign: ' + d.hulls.length + ' hull' + (d.hulls.length === 1 ? '' : 's') + ', ' + crs(d.budget),
+      when: function () { return can.ok ? true : can.why; },
+      run: function (c2) {
+        var r = T.engage(c2.G, f, c2.port, c2.sys, dealOf(c2), c2.t);
+        c2.state.node = null; c2.state.deal = null;
+        if (!r.ok) return 'We cannot: ' + r.why;
+        record(c2.G, c2.p.key, 'bought', c2.t);
+        c2.state.firmSigned = true;
+        return 'Signed. ' + crs(r.contract.cash) + ' on the account, and we will have the first run out by the end of the watch. ' +
+               'The quarter ends in ninety-one days; ask here, or look at FLEET.';
+      } });
+    out.push({ id: 'f-back', sub: 'firm', label: 'Not today.',
+      run: function (c2) { c2.state.node = null; c2.state.deal = null; return 'The offer stands.'; } });
+    return out;
+  }
+  function goodsSheet(ctx) {
+    var T = TFm(), d = dealOf(ctx), out = [];
+    var port = ctx.port, seen = {};
+    var list = (port && port.market ? port.market.order : []).filter(function (c) { return T.legalGood(c); });
+    d.goods.forEach(function (c) { if (list.indexOf(c) < 0) list.push(c); });
+    list.forEach(function (cid) {
+      if (seen[cid]) return; seen[cid] = true;
+      var on = d.goods.indexOf(cid) >= 0;
+      out.push({ id: 'g-' + cid, sub: 'firmgoods', label: (on ? '[x] ' : '[ ] ') + T.goodName(cid),
+        run: function (c2) {
+          var dd = dealOf(c2), ix = dd.goods.indexOf(cid);
+          if (ix >= 0) dd.goods.splice(ix, 1); else dd.goods.push(cid);
+          dd.goods.sort();
+          return 'Goods: ' + goodsWords(dd.goods) + '.';
+        } });
+    });
+    out.push({ id: 'g-any', sub: 'firmgoods', label: 'Anything honest — the house chooses',
+      run: function (c2) { dealOf(c2).goods = []; return 'Anything honest, then.'; } });
+    out.push({ id: 'g-done', sub: 'firmgoods', label: 'Done with the goods.',
+      run: function (c2) { c2.state.node = 'firm'; return 'Goods: ' + goodsWords(dealOf(c2).goods) + '.'; } });
+    return out;
+  }
+  function accountSheet(ctx) {
+    var T = TFm(), f = firmOf(ctx), G = ctx.G, out = [];
+    var c = f ? T.contractWith(G, f) : null;
+    if (!c) return [{ id: 'a-none', sub: 'account', label: 'That is all.', run: function (c2) { c2.state.node = null; return 'Good day.'; } }];
+    var prof = T.profitAvailable(c);
+    var pw = prof > 0 ? T.canWithdraw(G, c, prof, ctx.port) : { ok: false, why: 'no profit above what you put in, yet' };
+    out.push({ id: 'a-profit', sub: 'account', label: 'Withdraw the profit (' + crs(prof) + ')',
+      when: function () { return pw.ok ? true : pw.why; },
+      run: function (c2) {
+        var r = T.withdraw(c2.G, c, prof, c2.t, c2.port);
+        return r.ok ? crs(r.amount) + ', to your account. The budget stands as you gave it.' : 'We cannot: ' + r.why;
+      } });
+    var w10 = T.canWithdraw(G, c, 10000, ctx.port);
+    out.push({ id: 'a-w10', sub: 'account', label: 'Withdraw 10,000 cr',
+      when: function () { return w10.ok ? true : w10.why; },
+      run: function (c2) { var r = T.withdraw(c2.G, c, 10000, c2.t, c2.port); return r.ok ? 'Ten thousand, to you.' : 'We cannot: ' + r.why; } });
+    var d10 = T.canDeposit(G, c, 10000);
+    out.push({ id: 'a-d10', sub: 'account', label: 'Deposit 10,000 cr',
+      when: function () { return d10.ok ? true : d10.why; },
+      run: function (c2) { var r = T.deposit(c2.G, c, 10000, c2.t); return r.ok ? 'Ten thousand more to work with. Thank you.' : 'We cannot: ' + r.why; } });
+    shipsFor(ctx).filter(function (rec) { return !rec.trade; }).slice(0, 3).forEach(function (rec) {
+      var ok = T.canAddHull(G, c, rec);
+      out.push({ id: 'a-add-' + rec.id, sub: 'account', label: 'Hand them the ' + rec.name + ' as well',
+        when: function () { return ok.ok ? true : ok.why; },
+        run: function (c2) { var r = T.addHull(c2.G, c, rec, c2.t); return r.ok ? 'The ' + rec.name + ' is on our book.' : 'We cannot: ' + r.why; } });
+    });
+    out.push({ id: 'a-close', sub: 'account', label: 'Close the account',
+      when: function () { return c.closing ? 'it is already closing' : true; },
+      run: function (c2) {
+        var r = T.close(c2.G, c, c2.t);
+        c2.state.node = null;
+        if (!r.ok) return 'We cannot: ' + r.why;
+        c2.state.firmLines = r.lines;
+        return c.closed ? 'Closed, and remitted. It was a pleasure.' :
+               'As you like. The hulls on a run finish it; we remit the balance when the last is home.';
+      } });
+    out.push({ id: 'a-done', sub: 'account', label: 'That is all.',
+      run: function (c2) { c2.state.node = null; return 'Good day, Captain.'; } });
+    return out;
+  }
 
   /* ---- the yard desk ---- */
   var HULL = {
@@ -1143,10 +1374,13 @@
     marine: [BUSINESS, TROUBLE],
     security: [BUSINESS, TROUBLE, WARRANT],
     fixer: [TITHE, FRIENDS, PAPERS, STANDING],
+    factor: [FIRM_WHAT, READING, ENGAGE, ACCOUNT],
     syndicate: [TITHE, STANDING],
     other: []
   };
-  var SUB = { business: CLAIMS.map(claimTopic) };
+  /* A sub-menu is a list, or a function of the conversation for one whose
+   * rows depend on what you have chosen (the trading house's deal sheet). */
+  var SUB = { business: CLAIMS.map(claimTopic), firm: firmSheet, firmgoods: goodsSheet, account: accountSheet };
 
   /* ---- the conversation ------------------------------------------------------ */
   function ctxOf(G, sys, port, state) {
@@ -1170,7 +1404,7 @@
       });
       return out;
     }
-    if (state.node && SUB[state.node]) list = SUB[state.node];
+    if (state.node && SUB[state.node]) list = typeof SUB[state.node] === 'function' ? SUB[state.node](ctx) : SUB[state.node];
     else {
       list = [WHO, HEARD].concat((state.person.aboard && TOPICS.aboard) || TOPICS[ctx.p.kind] || []);
       /* A furious face has nothing to say to you but goodbye. */
@@ -1218,6 +1452,7 @@
   function speaker(ctx) {
     var P = ctx.person, p = ctx.p;
     if (p.kind === 'yours') return P.name + ', your ' + p.role;
+    if (p.kind === 'factor') { var fw = firmOf(ctx); if (fw) return P.name + ', factor for ' + fw.name; }
     if (P.staff) return P.name + ', ' + P.staff.toLowerCase();
     if (p.kind === 'hire') return P.name + ', looking for a berth';
     if (p.kind === 'shipcrew') return P.name + ' of the ' + (P.shipName || 'ship');

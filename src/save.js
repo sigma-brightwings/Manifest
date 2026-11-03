@@ -530,6 +530,13 @@
        * who you have refused, by system. Additive: an older career owes
        * nobody anything. */
       tithe: G.tithe || {},
+      /* THE TRADING HOUSES (tradingfirm.js, 2026-11-03): every account
+       * you have opened, its cash, its quarters, and the firms' own
+       * footprint in the markets they traded (what lets a reload trade
+       * exactly as no reload would have). Additive: an older career has
+       * never opened an account. The hulls' own run state rides on their
+       * fleet records (`trade`), which are saved whole already. */
+      firms: G.firms || null,
       /* YOUR OWN DISTRESS CALLS still in the air, with who answered and
        * when they arrive (messages.js). Additive. Saved because the
        * arrival is where a lie is found out, and a reload must not be a
@@ -749,6 +756,7 @@
     G.captains = (data.captains && typeof data.captains === 'object') ? data.captains : {};
     G.people = (data.people && typeof data.people === 'object') ? data.people : {};
     G.tithe = (data.tithe && typeof data.tithe === 'object') ? data.tithe : {};
+    G.firms = (data.firms && typeof data.firms === 'object' && Array.isArray(data.firms.contracts)) ? data.firms : null;
     G.record = (data.record && typeof data.record === 'object') ? data.record : null;
     G.broadcasts = Array.isArray(data.broadcasts) ? data.broadcasts : [];
     G.msgDraft = null;

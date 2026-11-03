@@ -4003,6 +4003,7 @@
    * thing worth being able to do. Selling is here because a hull you
    * cannot get rid of is a hull the yard tricked you into.
    */
+  function fmtCr(n) { return Math.round(n || 0).toLocaleString('en-US') + ' cr'; }
   function drawYardFleet(ctx, x, w, row, s, port) {
     var mine = Fleet ? Fleet.list(G) : [];
     var hull = Combat.HULLS[s.hullId || 'talon'];
@@ -4046,6 +4047,26 @@
           function () {}, true);
     });
 
+    /* THE TRADING HOUSES' ACCOUNTS (tradingfirm.js, 2026-11-03): one row
+     * per open account, above the ships, with what is in it and how the
+     * quarter is going — the number the house will be judged on. Read
+     * only: money moves at the house's own desk, where the factor is. */
+    var TFs = global.TradingFirm;
+    if (TFs) {
+      TFs.book(G, G.t);
+      TFs.contracts(G).forEach(function (c) {
+        if (c.closed) return;
+        var eq = TFs.equity(G, c), so = eq - c.qStart - c.qFlows;
+        row('ACCOUNT  ·  ' + c.firmName.toUpperCase() + (c.closing ? '  ·  CLOSING' : ''),
+            fmtCr(c.cash) + ' cash  ·  ' + fmtCr(eq) + ' all told  ·  this quarter ' + (so >= 0 ? '+' : '') + fmtCr(so) +
+            '  ·  ' + TFs.quarterLine(c, G.t) + '  ·  ' + c.hulls.length + ' hull' + (c.hulls.length === 1 ? '' : 's'),
+            function () {
+              say('Your account with ' + c.firmShort + ' is kept at their office at ' + c.portName +
+                  (c.starName ? ', ' + c.starName : '') + ' — withdraw, deposit or close it there', 6);
+            }, true);
+      });
+    }
+
     if (!mine.length) {
       if (!slips.length) {
         row('YOU OWN NO OTHER SHIP', 'buy a hull with KEEP HER and the old one stays yours',
@@ -4069,6 +4090,22 @@
          * is, and clicking it recalls her: she finishes the run she is on
          * and stands down at her port. A second click does nothing new -
          * the row says she is already standing down. */
+        /* ON A TRADING HOUSE'S BOOK: where she is in her run, what she has
+         * made the account, and the account's last quarter. One row, no
+         * action here — she is the house's to direct until you stand her
+         * down at its office. */
+        if (rec.trade && TFs) {
+          var tc = TFs.contractFor(G, rec), made = rec.trade.made || 0;
+          row(rec.name.toUpperCase() + '  ·  TRADING FOR ' + (tc ? tc.firmShort.toUpperCase() : 'A HOUSE'),
+              TFs.phaseOf(rec, G.t) + '  ·  ' + (rec.trade.runs || 0) + ' run' + (rec.trade.runs === 1 ? '' : 's') + ', ' +
+              (made >= 0 ? '+' : '') + fmtCr(made) + ' to the account' +
+              (tc ? '  ·  account ' + fmtCr(TFs.equity(G, tc)) + '  ·  ' + TFs.quarterLine(tc, G.t) : ''),
+              function () {
+                say(rec.name + ' is ' + TFs.phaseOf(rec, G.t) + ' for ' + (tc ? tc.firmShort : 'the house') +
+                    ' — you can hail her on the channel', 6);
+              }, true);
+          return;
+        }
         if (rec.work) {
           var wk = rec.work;
           row(rec.name.toUpperCase() + '  ·  WORKING ' + wk.siteName.toUpperCase(),
