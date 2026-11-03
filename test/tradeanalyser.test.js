@@ -86,12 +86,24 @@ console.log('--- the fitting ---');
   Combat.fitItem(s, 'portanalyser');
   check('fitted, hasPortAnalyser says so and hasTradeAnalyser does not',
         Combat.hasPortAnalyser(s) && !Combat.hasTradeAnalyser(s));
-  /* The NORMAL trade start puts the survey array in that second slot: the
-   * analyser is refused there, and has to say why. */
+  /* A Talon that has put the survey array in that second slot has no room
+   * for the analyser, and has to be told why. (This was the normal trade
+   * start until 2026-11-03; Astra moved it to the analyser, checked below.) */
   var n = talon();
   ['phpulse', 'tradescan', 'shield'].forEach(function (id) { Combat.fitItem(n, id); });
   var fn = Combat.canFit(n, 'portanalyser');
-  check('the normal trade-start Talon has no utility slot left, and is told so', !fn.ok && /utility/.test(fn.why), fn.why);
+  check('a Talon carrying the survey array has no utility slot left, and is told so', !fn.ok && /utility/.test(fn.why), fn.why);
+  /* Astra, 2026-11-03: "for trader start, it gets the analyser, mining
+   * start gets the survey scanner". Both trade starts, both mining starts. */
+  var St = require('../src/start.js');
+  ['easy', 'normal'].forEach(function (d) {
+    var tp = St.plan(d, 'trade'), mp = St.plan(d, 'mining');
+    var tfit = (tp.fit || (tp.preset && tp.preset.fit) || []);
+    var mfit = (mp.fit || (mp.preset && mp.preset.fit) || []);
+    check(d + ' trade start carries the trade analyser, not the survey array',
+          tfit.indexOf('portanalyser') >= 0 && tfit.indexOf('tradescan') < 0, JSON.stringify(tfit));
+    check(d + ' mining start carries the survey scanner', mfit.indexOf('surveyscan') >= 0, JSON.stringify(mfit));
+  });
   var f3 = Combat.canFit(s, 'portanalyser');
   check('a second is refused in words', !f3.ok && typeof f3.why === 'string' && f3.why.length > 3, f3.why);
   var bare = talon();

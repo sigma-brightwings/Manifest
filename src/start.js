@@ -62,8 +62,13 @@
   var PRESETS = {
     easy: {
       floor: 15000,
-      trade: { hull: 'trader', fit: ['phint', 'phpulse', 'shield', 'tradescan'],
-               note: 'the Tallyman\'s own maker\'s fit' },
+      /* The 1,000 cr Trade analyser, not the maker's 7,800 cr market survey
+       * array (Astra, 2026-11-03: "for trader start, it gets the
+       * analyser"). One port's graphs and a break-even is what a first
+       * trader reads; the array's system-wide view is a later purchase. The
+       * difference comes back as cash by rule 2. */
+      trade: { hull: 'trader', fit: ['phint', 'phpulse', 'shield', 'portanalyser'],
+               note: 'the Tallyman\'s guns and shield, with a trade analyser' },
       /* ONE HARDPOINT, and the mining laser takes it: the Sump's stock
        * pulse laser has nowhere to go. A miner with a shield and no gun is
        * the honest version of "fitted for ore" — the belt is where she
@@ -81,9 +86,13 @@
     normal: {
       floor: 6000,
       /* The Talon is the hard start's hull too; what normal adds is the
-       * market survey array and a shield, and most of all the money. */
-      trade: { hull: 'talon', fit: ['phpulse', 'tradescan', 'shield'],
-               note: 'a Talon with a market survey array and a shield' },
+       * trade analyser and a shield, and most of all the money. The
+       * analyser, not the survey array: the Talon's second utility slot is
+       * the scoop's, so the array left the analyser no room at all, and a
+       * trade start that cannot fit the trader's own instrument is a trap
+       * (Astra, 2026-11-03). Mining keeps its survey scanner. */
+      trade: { hull: 'talon', fit: ['phpulse', 'portanalyser', 'shield'],
+               note: 'a Talon with a trade analyser and a shield' },
       mining: { hull: 'bollard', fit: ['mininglaser', 'surveyscan', 'shield'],
                 note: 'ore-fitted: the laser takes the only hardpoint' },
       /* NO SHIELD, and not by choice. A generator is four tonnes and the

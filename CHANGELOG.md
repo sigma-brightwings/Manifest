@@ -40,6 +40,20 @@ before they update.
 
 ## Unreleased
 
+### Changed (2026-11-03, the trade starts carry the trade analyser)
+
+Astra: "for trader start, it gets the analyser, mining start gets the survey
+scanner". Both trade starts (Easy's Tallyman, Normal's Talon) now carry the
+1,000 cr **Trade analyser** in place of the 7,800 cr market survey array. The
+Normal Talon could not fit the analyser at all before (her second utility slot
+held the array, her first the scoop), which made the trader's own instrument a
+thing the trade start could not buy. Both mining starts already carry the
+survey scanner and are unchanged. Every focus at a difficulty is still worth the
+same (start.js rule 2): the 6,800 cr difference comes back as cash, so the
+trade starts open richer in credits. Pinned in tradeanalyser.test.
+
+**Saves:** survive. A career already started keeps the kit it started with.
+
 ### Added (2026-11-03, the trade analyser)
 
 Astra: "add a trade analyzer as a buyable upgrade, 1000 cr, shows the graph of
