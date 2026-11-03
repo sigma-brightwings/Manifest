@@ -416,7 +416,12 @@
     var alt = V.dist(s.pos, atmo.pos) - body.radius;
     var rho = star ? S.coronaDensity(star, atmo.r) : S.airDensity(body, alt);
     if (!(rho > 0)) return 0;
-    var rel = V.sub(s.vel, atmo.vel), v = V.len(rel);       // km/s, through the air
+    /* Through the air that is there: a giant's air turns with it (at up to
+     * 20 km/s at the equator, median 7 - 40 kawartha systems, 2026-11-03),
+     * the same wind the drag and the heat now read (Sim.airVelocity). A
+     * corona has no omega and is still air, as before. */
+    var airV = (!star && S.airVelocity && atmo.omega) ? S.airVelocity(atmo, s.pos) : atmo.vel;
+    var rel = V.sub(s.vel, airV), v = V.len(rel);       // km/s, through the air
     /* Nose into the oncoming air. The air comes at you along -rel, so the
      * nose wants to point along +rel (where you are going through it). */
     var airDir = v > 1e-9 ? V.scale(rel, 1 / v) : null;

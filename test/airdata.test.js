@@ -85,7 +85,11 @@ if (airy) {
   var b = airy.body, st = Sim.bodyState(b, airy.sys, 0);
   var at = b.atmosphere, h = at.scaleHeight * 2;
   var p = V.addScaled(st.pos, { x: 1, y: 0, z: 0 }, b.radius + h);
-  var sh = { pos: p, vel: V.add(st.vel, { x: 0, y: 2, z: 0 }), thrust: { x: 0, y: 0, z: 0 }, mass: 80, dragArea: 14 };
+  /* 2 km/s through the AIR, which turns with its world (2026-11-03): this
+   * was 2 km/s against the world's centre, which was 2 km/s through the air
+   * only while the drag pretended the air stood still. Same coast, same
+   * expected number, measured in the frame the drag now uses. */
+  var sh = { pos: p, vel: V.add(Sim.surfaceVelocity(b, p, airy.sys, 0), { x: 0, y: 2, z: 0 }), thrust: { x: 0, y: 0, z: 0 }, mass: 80, dragArea: 14 };
   var fd = V.len(Sim.feltAccel(sh, airy.sys, 0));
   var rho = Sim.airDensityAt(b, h);
   var expect = 0.5 * rho * 2 * 2 * 14 * Sim.DRAG_SCALE / 80;

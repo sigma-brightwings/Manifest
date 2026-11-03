@@ -749,6 +749,11 @@
     if (!s.docked && d.landedAt && G.sys.byId[d.landedAt.body] && Sim.updateLandedShip) {
       s.landed = true; s.crashed = false; s.landedOn = G.sys.byId[d.landedAt.body];
       s.landedAt = d.landedAt;
+      /* Not yet stood on her gear in THIS session: main.js settles her on
+       * the first frame, which gives a spot saved before 2026-11-03 (4 m up,
+       * no fwdB) her stance and a heading in the world's turning frame. Until
+       * then updateLandedShip takes the heading from the nose saved above. */
+      s.settled = false;
       Sim.updateLandedShip(s, G.sys, G.t);
     }
 

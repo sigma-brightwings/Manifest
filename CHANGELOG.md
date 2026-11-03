@@ -40,6 +40,89 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-03, the ground turns: landing, standing, lifting and air against the turning world)
+
+Yesterday the HUD learned to read speed against the turning ground
+(`Sim.surfaceVelocity`); everything that flies the ship still measured against
+the world's CENTRE, which on a spinning world is the velocity of no ground there
+is. Measured over 40 kawartha systems, equators turn at: rocky worlds with air
+up to 2,040 m/s (median 118), airless up to 798 (median 23), giants' air up to
+20 km/s (median 7,030).
+
+- **Touching down on open ground** (Sim `checkImpact`) is judged against the
+  ground at the contact point. Before, a hull sitting still on a fast equator
+  "arrived" at the ground's spin and crashed (2,040 m/s on Ishtar V), and one
+  sliding in at that speed against the ground set down clean. She is left moving
+  with the ground, and the impact forecast's contact speed is the same number.
+  The open-ground threshold is unchanged: gear down and under 100 m/s, which is
+  far gentler than a pad (damage from 20 m/s, fatal at 90). Whether to put open
+  ground on the pad's damage ramp is a feel question, left for Astra.
+- **Standing on the ground, her nose turns with it.** Her position always rode
+  the spin; her heading was a direction fixed in space, so she swung once a day
+  round her own gear. The heading is now kept in the world's own turning frame
+  (`landedAt.fwdB`, `Sim.bodyFixedDir`).
+- **Her stance lasts.** `settleLanded` stood her on her gear for one frame; the
+  next re-placed her at the touchdown's 4 m. The spot now takes her stance height
+  and heading. A save loaded on the ground is settled on its first frame too.
+- **Lifting off** from the no-spot branch (main.js `liftOff`) leaves with the
+  ground's velocity plus a metre a second of climb, not the centre's (a 2 km/s
+  sideways kick off a fast equator). `Sim.liftOff`, the usual way off, already
+  did this; it is now under test.
+- **The air turns with its world.** Drag, re-entry heat, the plasma's wind
+  direction and the giant skim's intake all read the air's velocity at the
+  ship: `Sim.airVelocity`, the centre plus omega x r, with omega from
+  `Sim.spinOmega`, the same one the ground and `surfaceVelocity` use. A ship
+  hovering still over the ground is no longer charged drag and heat for the
+  spin. **This changes how entries and skims play.** Flying the same way the
+  air turns, you meet it slower than your orbital speed, and heat goes as the
+  cube. Low over the air (0.85 of its top), with the spin:
+  - a giant's air meets you at 0.64-0.85 of orbital speed (median 0.77), so
+    heat is about 0.46 of what it was and skim intake about 0.77;
+  - against the spin it is 1.15-1.36 of orbital speed (median 1.23), about
+    1.9 times the heat;
+  - on rocky worlds the median is 0.98 (0.93 the heat), as low as 0.68 on a
+    small, fast world.
+- **The vector assist's HOVER holds against the air at her**, not the world's
+  centre. Over a fast equator it used to spend the tank dragging her backwards
+  across the ground. In VECTOR mode within 30 km of an airless world it holds
+  against the ground (the same `SURFACE_SPEED_KM` the speed readout uses), so
+  the number on the HUD is still the number it nulls.
+- **Contrails** drift with the air at the point they were laid, and their
+  strength reads the same `Sim.airVelocity`.
+- **Every surface port's berth now turns her with the world.** Only sea pads
+  did (2026-11-02); at a shaft hangar she lay over in her berth as the day went
+  on. Now she is re-faced every frame with the `berthFacing` that `dockShip` used.
+  The no-bay fallback keeps her nose up as the world turns.
+- **Unchanged, on purpose:** the orbit page, the map, the ORBIT readout and
+  the osculating elements stay orbital. Autodock and the flight-assist lock
+  measure against the target port, whose velocity already carries the spin.
+  Station-wall contacts at a surface port use the port's velocity, which is off
+  by omega x d for a hull d km from the port's centre (well under 1 m/s).
+- **Tests:**
+  - new `turningground.test` (group `core`), which fails on the old code:
+    - at rest with the ground at the fastest equators in 30 systems (2,040 m/s
+      with air, 798 without), she lands, placed or dropped from 20 m;
+    - still against the centre there is a crash at the spin;
+    - an hour on the ground keeps the same latitude, longitude and heading;
+    - an old save's spot keeps its saved nose;
+    - lift-off is the ground's velocity plus 4 m/s up;
+    - no drag and no heat moving with the air, where the centre's frame gave
+      0.077 m/s²;
+    - the air's velocity is the ground's;
+    - a berthed ship at a shaft port is still level in her berth a quarter-day
+      later.
+  - Two expectations changed, both because the test built its case in the
+    still-air frame:
+    - airdata.test: the "coasting through air" case is now 2 km/s through the
+      air rather than against the centre. Same expected G.
+    - mining.test: "60 degrees off, about half" is now measured from the wind
+      the scoop meets (`sk.airDir`), not from +y. The tilted giant's spin moves
+      the oncoming air off the orbit line.
+- **Saves survive**, version unchanged. One optional field was added,
+  `landedAt.fwdB`. A save made on open ground before this has none: she loads
+  with the nose she was saved with, and the first frame settles her and records
+  it. Nothing else saved has changed.
+
 ### Fixed (2026-11-03, sea platforms, third round: windows, lamps, glint, domes, the HUD's speed)
 
 - **The tube's windows are windows.** Astra: "the walking view can show it

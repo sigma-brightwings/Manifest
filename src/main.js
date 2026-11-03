@@ -5467,15 +5467,29 @@
   function vectorFrame() {
     var atmo = Sim.atmosphereContext
       ? Sim.atmosphereContext(G.ship.pos, G.sys, G.t) : null;
+    /* THE AIR AT HER, which turns with its world (2026-11-03). This was
+     * atmo.vel - the world's centre - so "hover" held her still against a
+     * point no ground was at: over a fast equator the assist spent the tank
+     * dragging her backwards across the ground at up to 2 km/s, through air
+     * the drag now (rightly) says is moving with the ground. */
     if (atmo && atmo.body) {
-      return { body: atmo.body, pos: atmo.pos, vel: atmo.vel, air: true };
+      var airV = Sim.airVelocity ? Sim.airVelocity(atmo, G.ship.pos) : atmo.vel;
+      return { body: atmo.body, pos: atmo.pos, vel: airV, air: true };
     }
     var dom = Sim.dominantBody(G.ship.pos, G.sys, G.t);
     if (!dom) return null;
-    return {
-      body: dom, pos: Sim.bodyPosition(dom, G.sys, G.t),
-      vel: Sim.bodyVelocity(dom, G.sys, G.t), air: false
-    };
+    var dpos = Sim.bodyPosition(dom, G.sys, G.t);
+    /* And over an airless world's ground, the ground - the same rule and the
+     * same SURFACE_SPEED_KM the speed readout follows (Sim.hudSpeed), so the
+     * promise above still holds: the number on the HUD is the number this
+     * nulls. Above that height the body's centre, as before. */
+    var dvel = Sim.bodyVelocity(dom, G.sys, G.t);
+    var world = dom.kind === 'planet' || dom.kind === 'moon';
+    if (world && Sim.surfaceVelocity && Sim.SURFACE_SPEED_KM &&
+        V.dist(G.ship.pos, dpos) - (dom.radius || 0) < Sim.SURFACE_SPEED_KM) {
+      dvel = Sim.surfaceVelocity(dom, G.ship.pos, G.sys, G.t);
+    }
+    return { body: dom, pos: dpos, vel: dvel, air: false };
   }
 
   /* Is this mode doing anything right now, and what would it call itself?
@@ -5820,7 +5834,27 @@
     var fit = Render.hullFit ? Render.hullFit(s) : null;
     var stand = fit ? -fit.ground / 1000 : (Render.hullLength ? Render.hullLength(s) * 0.2 : 0.005);
     s.pos = V.add(bp, V.scale(n, b.radius + stand));
-    s.vel = Sim.bodyVelocity ? V.clone(Sim.bodyVelocity(b, G.sys, G.t)) : s.vel;
+    /* The GROUND's velocity under her, not the world's centre (2026-11-03):
+     * on a fast equator those differ by up to 2 km/s, and the centre's is
+     * the speed of no ground there is. */
+    s.vel = Sim.surfaceVelocity ? Sim.surfaceVelocity(b, s.pos, G.sys, G.t)
+          : (Sim.bodyVelocity ? V.clone(Sim.bodyVelocity(b, G.sys, G.t)) : s.vel);
+    /* AND THE SPOT SHE IS HELD AT IS THIS POSE (2026-11-03). Open ground
+     * re-places her from landedAt every frame (Sim.updateLandedShip), and
+     * landedAt was the touchdown's - 4 m up, her nose wherever it was in
+     * absolute space - so the stance set here lasted exactly one frame: the
+     * next put her back at 4 m, and her nose then swung once a day against
+     * the dirt. The spot takes this height and this heading, the heading in
+     * the world's own turning frame (fwdB). A save from before this has no
+     * fwdB; updateLandedShip takes it from her restored nose, and the
+     * branch that holds her settles her again on the first frame. */
+    if (s.landedAt && s.landedAt.body === b.id && Sim.landSpot) {
+      var spot = Sim.landSpot(b, G.sys, G.t, s.pos);
+      s.landedAt.lat = spot.lat; s.landedAt.lon = spot.lon;
+      s.landedAt.elevation = stand;
+      s.landedAt.fwdB = Sim.bodyFixedDir ? Sim.bodyFixedDir(b, G.t, s.fwd, true) : undefined;
+      if (!s.landedAt.fwdB) delete s.landedAt.fwdB;
+    }
     s.settled = true;
   }
 
@@ -5836,7 +5870,11 @@
     if (!groundDrive(dtReal || 0, push > 0)) return;
     if (!(push > pull * 1.02)) return;
     if (!rampUpForLift()) return;
-    var bv = Sim.bodyVelocity ? Sim.bodyVelocity(b, G.sys, G.t) : V.zero();
+    /* The ground's own motion is the ground under her, not the world's
+     * centre (2026-11-03): she used to leave with the centre's velocity, a
+     * kick of up to 2 km/s sideways off a fast equator in her first frame. */
+    var bv = Sim.surfaceVelocity ? Sim.surfaceVelocity(b, s.pos, G.sys, G.t)
+           : (Sim.bodyVelocity ? Sim.bodyVelocity(b, G.sys, G.t) : V.zero());
     s.landed = false; s.landedOn = null; s.crashed = false; s.settled = false;
     s.drive = null;
     s.vel = V.add(bv, V.scale(n, 0.001));
@@ -6094,6 +6132,10 @@
       G.t += G.lastDtSim;
       G.arrivalPose = null;
       Sim.updateLandedShip(G.ship, G.sys, G.t);
+      /* Stood on her gear once, however she got here - a touchdown already
+       * did it (below), but a save loaded on the ground had not, and her
+       * spot was still the touchdown's 4 m with no heading of its own. */
+      if (!G.ship.settled) { settleLanded(); Sim.updateLandedShip(G.ship, G.sys, G.t); }
       /* R lifts off - thrust up, the same key that means up in the air.
        * F pushes into the ground and does nothing; the other keys would
        * drag the hull along the dirt, so they do nothing either. */
@@ -6118,6 +6160,7 @@
         var lo = Sim.liftOff(G.ship, G.sys, G.t);
         if (lo.ok) {
           G.ship.drive = null;
+          G.ship.settled = false;
           G.warpIndex = 0;
           say('Lift-off', 3);
         } else if (lo.g && !G.liftWarned) {
@@ -16453,8 +16496,12 @@
      * hundred m/s of the world's own spin - "flew" through air standing
      * still with her and laid a contrail, and the points, drifting at the
      * centre's velocity, streamed off into the sky as a white beam. */
+    /* One copy of the wind since 2026-11-03: the drag's own (Sim.airVelocity,
+     * the omega surfaceOffset turns the ground with). The Weather.spinAxis
+     * path below stays for a build without it. */
     var airVel = atmo.vel, rot = atmo.body.rotation, W = global.Weather;
-    if (rot && rot.period && W && W.spinAxis) {
+    if (Sim.airVelocity && atmo.omega) airVel = Sim.airVelocity(atmo, pos);
+    else if (rot && rot.period && W && W.spinAxis) {
       var ax = W.spinAxis(atmo.body), om = 2 * Math.PI / rot.period;
       var rr = V.sub(pos, atmo.pos);
       airVel = V.add(atmo.vel, V.scale(V.cross(ax, rr), om));
@@ -16490,8 +16537,12 @@
       var strength = airTrailStrength(f.pos, f.vel);
       if (strength <= 0) continue;
       var dom = Sim.dominantBody ? Sim.dominantBody(f.pos, G.sys, G.t) : null;
+      /* A trail is left in the AIR, and drifts with it - the world's spin at
+       * that point, not its centre (2026-11-03); on a fast equator the
+       * difference is a trail sliding off sideways at a couple of km/s. */
       var tr = layPoint(f.key, f.pos, CONTRAIL_LIFE,
-                        dom && Sim.bodyVelocity ? Sim.bodyVelocity(dom, G.sys, G.t) : null);
+                        dom && Sim.surfaceVelocity ? Sim.surfaceVelocity(dom, f.pos, G.sys, G.t)
+                        : (dom && Sim.bodyVelocity ? Sim.bodyVelocity(dom, G.sys, G.t) : null));
       tr.air = strength;
     }
 
