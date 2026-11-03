@@ -188,6 +188,62 @@ before they update.
     with its world. This was not new to platforms; it showed there first.
   - **Foam** spreads round each column as a torn ring rather than a square.
 
+### Fixed (2026-11-03, the burnt edge under a building, cleaned up)
+
+- **The stray light pixels in the scorched strip are gone.** At Ashford
+  Undercroft from 1.4 km, about six pixels of plain street showed along
+  the strip's inner seam, and fainter ones showed in the hot band in open
+  street.
+  - They were not the footprint mask. The planet pass and the pit-wall pass
+    each decide whether a street point is inside the cone, and in the last
+    centimetre they can disagree. Where the planet kept a pixel that the
+    wall pass sent down the pit wall, the lip's top lay a hair beyond the
+    street and lost the depth test.
+  - The lip's band is now written just nearer than the street on its ray,
+    the same way the street's own band is.
+- **The hair-thin light diagonal at the building's corner is gone.** The
+  sliced wall is now found where the line of sight leaves the cone. It is
+  scorched where that point is inside a building's footprint and below the
+  building's height there.
+  - The old test asked at the street point, then backed up to the roof.
+    That works in the middle of a building but not at its side wall.
+  - The street under a building is no longer thrown away. The old discard
+    reached half a mask texel past the wall's foot into open street, and
+    that strip was the light line. Where the band really is under a
+    building, the building's own wall hides it by depth.
+  - The scorched face now meets the side wall's own cut band exactly.
+- **The corner step is left as it is.** Where open street meets a
+  building, the hot line climbs the building's side wall from the street's
+  edge to the roof's edge. That is the real cut through a wall the cone
+  slices, drawn by the building's own band. Blending the two over a few
+  metres would put a hot edge on surfaces that are not cut.
+- **The footprint mask:**
+  - A one-texel crack between two meshes now reads as the building. Two
+    such cracks were found at Ashford from 1.4 km.
+  - Heights are stored as a square root, so the steps are fine where
+    things are low: 10 cm at a 0.3 m pad, 0.7 m at a 20 m roof.
+  - Heights are rounded up, so a roof never reads low.
+- **What counts as standing on the street is now 0.25 m, not 1 m.**
+  Measured over 20 ground ports of kawartha, beaverton and driftwood,
+  low surfaces near the cut's edge run without a gap:
+  - kerbs and slabs at 0.05 to 0.15 m;
+  - pad trims at 0.1 to 0.35 m;
+  - landing pads at 0.6 to 0.9 m;
+  - plazas at 0.7 to 1.6 m and at 1.6 to 3 m;
+  - the lowest roofs near an edge at 4.0 to 4.6 m.
+
+  No height separates an apron from a building. One metre fell inside two
+  plazas, so one apron's cut had one edge on one side and two on the
+  other. Counted, an apron has one edge, its own. 0.25 m is where the two
+  lines would be under a pixel apart at 1.4 km, and above the 0.18 m that
+  a flat slab rises over the curved street by curvature alone.
+- The test now stands a block across the line of sight at a building's
+  edge, one each way, and checks it is the sliced wall over the exit point
+  and the band over the street point. It also walks street points past a
+  block's corner and checks each is the sliced wall exactly where its own
+  line of sight leaves the cone inside the block.
+- Saves are unaffected.
+
 ### Fixed (2026-11-02, one burnt edge where a building stands on the cut)
 
 - **Where a station building stands on the cut's edge, there is one burnt
