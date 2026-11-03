@@ -91,7 +91,11 @@
   var TURN_SYSTEM = 1.5 * DAY;     // across the system
   var TURN_JUMP = 2 * DAY;         // out of it: papers for two governments
   var TURN = TURN_LOCAL;           // the least of them: first look after hand-over
-  function turnFor(d) { return d.kind === 'jump' ? TURN_JUMP : (d.leg && d.leg.local) ? TURN_LOCAL : TURN_SYSTEM; }
+  function turnFor(d, P) {
+    P = P || FIRM_PACE;
+    return d.kind === 'jump' ? P.turnJump : (d.leg && d.leg.local) ? P.turnLocal : P.turnSystem;
+  }
+  var FIRM_PACE = { turnLocal: TURN_LOCAL, turnSystem: TURN_SYSTEM, turnJump: TURN_JUMP };
   /* A firm that sees nothing worth doing waits a day and looks again: the
    * markets move on the scale of days (Economy row.periodS), so asking
    * every hour would be the same answer twenty-four times. */
@@ -127,10 +131,78 @@
    * to that port off its book for a week, whatever its rating: the clerk
    * who was burned does not need a forecast to know not to do it again. */
   var BURN_DAYS = 7;
+  /* Idle quarters in a row before the account closes: one is a warning. */
+  var IDLE_QUARTERS_MAX = 2;
   var DEPTH_FROM = 3;      // from this rating it prices its own size against the shelf
   var FORECAST_FROM = 4;   // from this rating it reads forecasts, and sees your own fleet's footprint
   var MARGIN_MIN = 150;    // cr: a run worth less than this is not worth the turn
   var MARGIN_FRAC = 0.04;  // ...nor one under 4% of what the load cost
+
+  /* ---- what running a ship costs the account (Astra, 2026-11-03: "costs +
+   * market depth") ----------------------------------------------------------
+   * The first build measured no losing quarter in 520 and a Talon making
+   * 1.65–3.35M a quarter off 20,000: the economy's own margins at the
+   * lanes' pace, with nothing taken out but the cargo and the jump
+   * hydrogen. Astra asked for the house to be reined in WITHOUT touching
+   * your own margins at the counter, by two things a real house pays for:
+   *
+   *   RUNNING COSTS, charged to the account as they fall due —
+   *     - the crew's wages, the same Crew.dailyWage the payroll pays, by the
+   *       day (the fleet's payroll stops charging YOU for a hull on a
+   *       house's book, from the day she was handed over);
+   *     - a berth at every stop: the fleet's own weekly fee (a tank of
+   *       hydrogen, capped at 1,500) by the day she is on the clamp, a day
+   *       at least — the old exemption is gone;
+   *     - insurance: a daily premium on the hull's list price for every day
+   *       she is out, and a premium on the cargo per run;
+   *     - fuel: the jump's hydrogen, as before. Reaction mass is not
+   *       charged because nothing in the game charges for it — every clamp
+   *       refills it free (fleet.js startWork, the player's own docking).
+   *
+   *   MARKET DEPTH — see TUNE.footHalfLife below, and the measurement that
+   *   chose it.
+   *
+   * All of it is in TUNE so tools/measure-firms.cjs can try the
+   * alternatives against the same seeds; the game never changes it. */
+  var TUNE = {
+    /* THE HOUSE'S DENT FORGETS SLOWER THAN YOURS. Measured both ways on the
+     * same 30 seeds (tools/measure-firms.cjs depth): see the report numbers
+     * in CHANGELOG. A deeper dent per tonne cut EVERY run, the first on a
+     * fresh lane included, by the same slippage; a slower half-life leaves
+     * the first run of a rich lane as rich as it ever was and flattens the
+     * second, third and fourth — which is what "a rich lane should flatten
+     * after a few runs, so the house has to rotate routes" asks for. The
+     * market itself still forgets your trades and the house's on its own
+     * four days (Economy.LEDGER_HALFLIFE); what is slower is the house's
+     * book of where it has been selling: the brokers, the contracts and the
+     * buyers who have learnt it is coming. */
+    footHalfLife: 16 * DAY,
+    depthMul: 1,
+    insHullDay: 0.0008,       // of the hull's list price, per day out of port
+    insCargoRun: 0.02,        // of what the load cost, per run
+    berthMinDays: 1
+  };
+
+  /* HOW A CONTRACT FLIES AND READS, in one place. A house's profile is its
+   * rating's row of the ladder above. `c.hand` is MEASUREMENT ONLY
+   * (tools/measure-firms.cjs baseline): the same decision rule handed what
+   * a captain flying her own Talon has — the analyser's prices now, no
+   * clerk, the counter's own price, your own footprint on the market's
+   * four-day memory, a torch at full burn rather than a hired pilot's
+   * throttle, an hour or two at each clamp, no wages to a house, no
+   * commission. No contract the game makes ever sets it. */
+  var HAND_PACE = { turnLocal: HOUR, turnSystem: 2 * HOUR, turnJump: 3 * HOUR };
+  function prof(c) {
+    if (c.hand) {
+      return { stale: 0, noise: 0, edge: 0, footSeen: 1, depth: true, forecast: 0, jumps: 3,
+               pace: HAND_PACE, speed: c.hand.speed || 1, costs: false,
+               hl: (Eco() && Eco().LEDGER_HALFLIFE) || 4 * DAY, mul: 1 };
+    }
+    var r = clamp(c.rating | 0, 1, 5);
+    return { stale: STALE_DAYS[r], noise: NOISE[r], edge: EDGE[r], footSeen: FOOT_SEEN[r], depth: r >= DEPTH_FROM,
+             forecast: r >= 5 ? 1 : r >= FORECAST_FROM ? 0.5 : 0, jumps: JUMP_STARS[r],
+             pace: FIRM_PACE, speed: 1, costs: true, hl: TUNE.footHalfLife, mul: TUNE.depthMul };
+  }
 
   /* ---- placement -------------------------------------------------------------
    * "An office or concourse NPC at bigger civilian ports, more likely where
@@ -299,27 +371,29 @@
   function footKey(starId, port, cid) { return starId + '|' + Eco().marketKey(port) + '|' + cid; }
   /* The firm's own dent in a shelf at `t`: every trade it made there up to
    * then, forgotten on the market's own half-life. Positive is stock added. */
-  function footAt(G, k, t) {
+  function footAt(G, k, t, hl) {
     var l = G.firms && G.firms.foot && G.firms.foot[k];
     if (!l) return 0;
-    var hl = Eco().LEDGER_HALFLIFE || 4 * DAY, v = 0;
+    var v = 0;
+    hl = hl || Eco().LEDGER_HALFLIFE || 4 * DAY;
     for (var i = 0; i < l.length; i++) if (l[i][0] <= t) v += l[i][1] * Math.pow(0.5, (t - l[i][0]) / hl);
     return v;
   }
-  function footAdd(G, k, t, q) {
+  function footAdd(G, k, t, q, hl) {
     var F = book0(G), l = F.foot[k] || (F.foot[k] = []);
     l.push([t, q]);
     /* Forgotten past twelve half-lives (1/4096 of the trade). Pruned at the
      * EVENT's time, never the caller's clock, so a month booked in one call
      * and in thirty prunes the same entries at the same moments. */
-    var hl = Eco().LEDGER_HALFLIFE || 4 * DAY;
+    hl = hl || Eco().LEDGER_HALFLIFE || 4 * DAY;
     while (l.length && l[0][0] < t - 12 * hl) l.shift();
   }
 
-  function stockAt(G, starId, port, cid, t, withFoot) {
+  function stockAt(G, starId, port, cid, t, withFoot, P) {
     var E = Eco(), row = port.market && port.market.rows[cid];
     if (!row) return null;
-    var s = E.analyticStock(port, cid, t) + (withFoot ? withFoot * footAt(G, footKey(starId, port, cid), t) : 0);
+    var s = E.analyticStock(port, cid, t) +
+            (withFoot ? withFoot * (P ? P.mul : 1) * footAt(G, footKey(starId, port, cid), t, P && P.hl) : 0);
     return clamp(s, 0, row.cap);
   }
 
@@ -327,15 +401,15 @@
    * what it costs to buy (side +1) or fetches to sell (side -1). With
    * `depth` false the whole lot is priced at the top of the book, which is
    * how a firm that does not price its own size gets it wrong. */
-  function lotValue(port, cid, stock0, qty, side, depth) {
-    var E = Eco(), row = port.market.rows[cid], tot = 0;
+  function lotValue(port, cid, stock0, qty, side, depth, mul) {
+    var E = Eco(), row = port.market.rows[cid], tot = 0, m = mul || 1;
     var n = depth ? SLICES : 1, sl = qty / n, st = stock0;
     for (var i = 0; i < n; i++) {
       var q = E.quoteStock(port, cid, clamp(st, 0, row.cap));
       var each = side > 0 ? q.buy : q.sell;
       if (each === null || each === undefined) return null;
       tot += each * sl;
-      st += side > 0 ? -sl : sl;
+      st += side > 0 ? -sl * m : sl * m;
     }
     return tot;
   }
@@ -344,21 +418,22 @@
    * she is standing at is not a board — it is the price in front of her,
    * true for every house (`atDesk`); the boards are everywhere else. */
   function believedStock(G, c, starId, port, cid, tNow, tAt, ly, atDesk) {
-    if (atDesk) return stockAt(G, starId, port, cid, tNow, 1);
-    var r = c.rating, tq;
-    if (r >= 5) tq = tAt;
-    else if (r >= FORECAST_FROM) tq = (tNow + tAt) / 2;
+    var P = prof(c);
+    if (atDesk) return stockAt(G, starId, port, cid, tNow, 1, P);
+    var tq;
+    if (P.forecast) tq = tNow + (tAt - tNow) * P.forecast;
     else {
       var TA = global.TradeAnalyser;
       var age = ly > 0 && TA && TA.reportAgeDays ? TA.reportAgeDays(ly) : 0;
-      tq = tNow - (STALE_DAYS[r] + age) * DAY;
+      tq = tNow - (P.stale + age) * DAY;
     }
-    return stockAt(G, starId, port, cid, tq, FOOT_SEEN[r]);
+    return stockAt(G, starId, port, cid, tq, P.footSeen, P);
   }
   function clerkError(c, starId, port, cid, tNow, atDesk) {
-    if (atDesk) return 1;
+    var P = prof(c);
+    if (atDesk || !P.noise) return 1;
     var h = draw(c.firmKey, starId + '|' + port.id + '|' + cid + '|' + Math.floor(tNow / DAY));
-    return 1 + NOISE[c.rating] * (2 * h - 1);
+    return 1 + P.noise * (2 * h - 1);
   }
 
   /* ---- the decision rule --------------------------------------------------- */
@@ -396,12 +471,12 @@
    * Memoised per decision, keyed by star, so a reposition that asks the
    * same question from three ports pays for the systems once. */
   function destinations(G, c, rec, sysA, starA, A, localOnly) {
-    var F = FleetM(), Gal = global.Galaxy, Gen = global.Gen, out = [];
+    var F = FleetM(), Gal = global.Galaxy, Gen = global.Gen, out = [], P = prof(c);
     var h = hullOf(rec), cap = h ? h.cargoCap : 0;
     sysA.ports.forEach(function (B) {
       if (B === A || !B.market || B.dark) return;
       var leg = F.planLeg(rec, sysA, B.id);
-      out.push({ port: B, sys: sysA, star: starA, ly: 0, kind: 'local', travel: leg.cruise, leg: leg });
+      out.push({ port: B, sys: sysA, star: starA, ly: 0, kind: 'local', travel: leg.cruise / P.speed, leg: leg });
     });
     var sa = localOnly ? null : starById(G, starA);
     if (!sa || !Gal || !G.galaxy) return out;
@@ -409,14 +484,14 @@
       .map(function (s) { return { s: s, d: Gal.distance3(sa, s) }; })
       .filter(function (x) { return Gal.jumpFuel(corridorProxy(rec, 'x', cap), x.d) <= (h ? h.fuelCap : 0); })
       .sort(function (a, b) { return a.d - b.d || (a.s.id < b.s.id ? -1 : 1); })
-      .slice(0, JUMP_STARS[c.rating]);
+      .slice(0, P.jumps);
     near.forEach(function (x) {
       var sysB = systemOf(G, x.s.id);
       if (!sysB || !sysB.ports) return;
       sysB.ports.forEach(function (B) {
         if (!B.market || B.dark) return;
         var rB = Gen.radiusAbout(B, sysB.root, sysB);
-        var inbound = F.legTimes(rec, rB).cruise;
+        var inbound = F.legTimes(rec, rB).cruise / P.speed;
         out.push({ port: B, sys: sysB, star: x.s.id, starName: x.s.name, ly: x.d, kind: 'jump',
                    inbound: inbound, rB: rB });
       });
@@ -427,7 +502,8 @@
   /* The best run out of port A at instant td, as the firm sees it. */
   function bestCarry(G, c, rec, sysA, starA, A, td, dests, cash) {
     var E = Eco(), Gal = global.Galaxy;
-    var h = hullOf(rec), cap = h ? h.cargoCap : 0, r = c.rating, edge = EDGE[r], depth = r >= DEPTH_FROM;
+    var P = prof(c);
+    var h = hullOf(rec), cap = h ? h.cargoCap : 0, edge = P.edge, depth = P.depth;
     var best = null;
     var goods = A.market.order.filter(function (cid) {
       var row = A.market.rows[cid];
@@ -455,14 +531,17 @@
         if (spend <= 0) continue;
         var qty = Math.floor(Math.min(qty0, spend / (askTop * (1 - edge) * errA * 1.02)));
         if (qty < 1) continue;
-        var turn = turnFor(d), tA = td + turn + travel;
+        var turn = turnFor(d, P.pace), tA = td + turn + travel;
         var stB = believedStock(G, c, d.star, B, cid, td, tA, d.ly);
         if (stB === null) continue;
-        var buyV = lotValue(A, cid, stA, qty, +1, depth), sellV = lotValue(B, cid, stB, qty, -1, depth);
+        var buyV = lotValue(A, cid, stA, qty, +1, depth, P.mul), sellV = lotValue(B, cid, stB, qty, -1, depth, P.mul);
         if (buyV === null || sellV === null) continue;
         buyV *= errA * (1 - edge);
         sellV *= clerkError(c, d.star, B, cid, td) * (1 + edge);
-        var profit = sellV - buyV - fuelCr;
+        /* What the run will cost to run, as well as what the load costs:
+         * a house that did not count its own wages and premiums would take
+         * every thin run and lose on each. */
+        var profit = sellV - buyV - fuelCr - (P.costs ? runCosts(rec, turn, travel, buyV) : 0);
         if (profit < Math.max(MARGIN_MIN, MARGIN_FRAC * buyV)) continue;
         var rate = profit / (turn + travel);
         if (!best || rate > best.rate + 1e-9) {
@@ -489,15 +568,17 @@
     for (var i = 0; i < ports.length; i++) {
       var C = ports[i];
       var leg = F.planLeg(rec, sysA, C.id);
-      var hop = { kind: 'local', leg: leg }, tC = td + turnFor(hop) + leg.cruise;
+      var P = prof(c), hop = { kind: 'local', leg: leg }, cruise = leg.cruise / P.speed;
+      var tC = td + turnFor(hop, P.pace) + cruise;
       var ghost = {};
       for (var k in rec) ghost[k] = rec[k];
       ghost.port = C.id;
       var localDests = destinations(G, c, ghost, sysA, starA, C, true);
       var b = bestCarry(G, c, ghost, sysA, starA, C, tC, localDests, cash);
       if (!b) continue;
-      var rate = b.estProfit / (turnFor(hop) + leg.cruise + b.turn + b.travel);
-      if (!best || rate > best.rate + 1e-9) best = { kind: 'reposition', dest: { port: C, sys: sysA, star: starA, ly: 0, kind: 'local', travel: leg.cruise, leg: leg }, travel: leg.cruise, rate: rate, then: b.cid };
+      var hopCost = P.costs ? runCosts(rec, turnFor(hop, P.pace), cruise, 0) : 0;
+      var rate = (b.estProfit - hopCost) / (turnFor(hop, P.pace) + cruise + b.turn + b.travel);
+      if (rate > 0 && (!best || rate > best.rate + 1e-9)) best = { kind: 'reposition', dest: { port: C, sys: sysA, star: starA, ly: 0, kind: 'local', travel: cruise, leg: leg }, travel: cruise, rate: rate, then: b.cid };
     }
     return best;
   }
@@ -510,12 +591,13 @@
    * real market both. Returns cr, or null. */
   function execute(G, c, starId, sys, port, cid, qty, t, side, maxCr) {
     var E = Eco();
-    var st = stockAt(G, starId, port, cid, t, 1);
+    var P = prof(c);
+    var st = stockAt(G, starId, port, cid, t, 1, P);
     if (st === null) return null;
     if (side > 0) qty = Math.min(qty, Math.floor(st - 0.5));
     if (!(qty > 0)) return null;
-    var mul = side > 0 ? (1 - EDGE[c.rating]) : (1 + EDGE[c.rating]);
-    var v = lotValue(port, cid, st, qty, side, true);
+    var mul = side > 0 ? (1 - P.edge) : (1 + P.edge);
+    var v = lotValue(port, cid, st, qty, side, true, P.mul);
     if (v === null) return null;
     /* NEVER PAST THE CASH. Priced first, committed after: if the slices
      * through the shelf come to more than the account holds, the lot is
@@ -523,11 +605,11 @@
     if (maxCr !== undefined) {
       while (qty > 0 && v * mul > maxCr) {
         qty = Math.floor(qty * Math.min(0.95, maxCr / (v * mul)));
-        v = qty > 0 ? lotValue(port, cid, st, qty, side, true) : 0;
+        v = qty > 0 ? lotValue(port, cid, st, qty, side, true, P.mul) : 0;
       }
       if (!(qty > 0)) return null;
     }
-    footAdd(G, footKey(starId, port, cid), t, side > 0 ? -qty : qty);
+    footAdd(G, footKey(starId, port, cid), t, side > 0 ? -qty : qty, P.hl);
     E.applyTrade(port, cid, side > 0 ? qty : -qty, t);
     return { cr: Math.round(v * mul), qty: qty };
   }
@@ -542,8 +624,51 @@
     if (c.log.length > LOG_MAX) c.log.length = LOG_MAX;
   }
 
+  /* ---- the running costs --------------------------------------------------- */
+  function wagesPerDay(rec) {
+    var Cr = global.Crew, w = 0;
+    if (!Cr || !Cr.dailyWage) return 0;
+    (rec.crew || []).forEach(function (m) { w += Cr.dailyWage(m) || 0; });
+    return w;
+  }
+  function berthPerDay(rec) { var F = FleetM(); return F && F.berthFee ? F.berthFee(rec) / 7 : 0; }
+  function hullPrice(rec) { var h = hullOf(rec); return h ? h.price || 0 : 0; }
+  /* What a run of `turn` at the clamp and `travel` under way will cost to
+   * run, on a load that cost `cargo`: the estimate the decision rule uses,
+   * and the same arithmetic the charges below make. */
+  function runCosts(rec, turn, travel, cargo) {
+    return wagesPerDay(rec) * (turn + travel) / DAY +
+           berthPerDay(rec) * Math.max(TUNE.berthMinDays, turn / DAY) +
+           hullPrice(rec) * TUNE.insHullDay * travel / DAY +
+           (cargo || 0) * TUNE.insCargoRun;
+  }
+  /* Out of the cash, and what the cash cannot cover is owed — taken from
+   * the next sale, and counted off the equity meanwhile. Never below 0. */
+  function charge(c, amt, kind) {
+    /* Whole credits, so the account never carries a fraction it could not
+     * hand back. */
+    amt = Math.round(amt);
+    if (!(amt > 0)) return 0;
+    var pay = Math.min(amt, Math.max(0, c.cash));
+    c.cash -= pay;
+    c.owed = (c.owed || 0) + (amt - pay);
+    c.spent = c.spent || {};
+    c.spent[kind] = Math.round(((c.spent[kind] || 0) + amt) * 100) / 100;
+    return amt;
+  }
+  /* The crew are paid by the day to the instant, from the account, from
+   * the moment she was handed over (fleet.js settle stops charging you). */
+  function payWages(c, rec, t) {
+    var tr = rec.trade, P = prof(c);
+    if (tr.wagesTo == null) tr.wagesTo = tr.since != null ? tr.since : t;
+    var amt = P.costs && t > tr.wagesTo ? wagesPerDay(rec) * (t - tr.wagesTo) / DAY : 0;
+    tr.wagesTo = Math.max(tr.wagesTo, t);
+    return charge(c, amt, 'wages');
+  }
+
   function decide(G, c, rec, td, out) {
     var tr = rec.trade;
+    payWages(c, rec, td);
     if (c.closing) return release(G, c, rec, td, out, null);
     if (!pilotOf(rec)) return release(G, c, rec, td, out, 'nobody aboard can helm her');
     var sysA = systemOf(G, rec.star);
@@ -553,13 +678,15 @@
     var plan = bestCarry(G, c, rec, sysA, rec.star, A, td, dests, c.cash);
     if (!plan) plan = bestReposition(G, c, rec, sysA, rec.star, A, td, c.cash);
     if (!plan) {
+      /* A day on the clamp, paid for like any other. */
+      if (prof(c).costs) charge(c, berthPerDay(rec) * WAIT / DAY, 'berth');
       tr.phase = 'idle'; tr.next = td + WAIT; tr.waits = (tr.waits || 0) + 1;
       return;
     }
     var d = plan.dest, leg = {
       kind: d.kind, from: A.id, fromName: A.name, fromStar: rec.star,
       to: d.port.id, toName: d.port.name, toStar: d.star, toStarName: d.starName || rec.starName || null,
-      depart: td + turnFor(d), cid: null, qty: 0, cost: 0, fuelCr: 0
+      depart: td + turnFor(d, prof(c).pace), cid: null, qty: 0, cost: 0, fuelCr: 0, costs: 0
     };
     if (plan.kind === 'carry') {
       if (d.kind === 'jump') {
@@ -603,11 +730,20 @@
       leg.t0 = leg.depart;
       leg.arrive = leg.depart + DEPART + leg.jump + d.inbound;
     }
+    /* The clamp for the turn, and the premiums for the run. Charged at
+     * the clamp, when they are known, like the fuel. */
+    if (prof(c).costs) {
+      var turnS = leg.depart - td, outS = leg.arrive - leg.depart;
+      leg.costs += charge(c, berthPerDay(rec) * Math.max(TUNE.berthMinDays, turnS / DAY), 'berth');
+      leg.costs += charge(c, hullPrice(rec) * TUNE.insHullDay * outS / DAY + leg.cost * TUNE.insCargoRun, 'insurance');
+      leg.costs += wagesPerDay(rec) * (leg.arrive - td) / DAY;   // for the log; paid as it falls due
+    }
     tr.phase = 'leg'; tr.leg = leg; tr.next = leg.arrive; tr.waits = 0;
   }
 
   function arrive(G, c, rec, ta, out) {
     var tr = rec.trade, leg = tr.leg;
+    payWages(c, rec, ta);
     var sysB = systemOf(G, leg.toStar);
     var B = sysB && sysB.byId ? sysB.byId[leg.to] : null;
     rec.port = leg.to; rec.portName = leg.toName;
@@ -621,7 +757,7 @@
     /* A commission the cash could not cover at the review is owed, and
      * taken out of the next sale. */
     if (c.owed > 0) { var pay = Math.min(c.owed, c.cash); c.cash -= pay; c.owed -= pay; }
-    var net = gross - leg.cost - leg.fuelCr;
+    var net = gross - leg.cost - leg.fuelCr - (leg.costs || 0);
     if (leg.cid) {
       c.legs = (c.legs || 0) + 1;
       if (leg.kind === 'jump') c.jumps = (c.jumps || 0) + 1;
@@ -652,8 +788,12 @@
   /* She is handed back: off the firm's book, on a clamp at the port she is
    * at, with her berth clock starting now. */
   function release(G, c, rec, t, out, why) {
+    /* Her wages to the instant, from the account; from now on the payroll
+     * at your desk pays them again, and her berth clock starts here. */
+    payWages(c, rec, t);
     rec.trade = null;
     rec.berthTo = t;
+    rec.wagesTo = t;
     c.hulls = (c.hulls || []).filter(function (id) { return id !== rec.id; });
     var F = FleetM();
     if (F && F.forgetRoute) F.forgetRoute(rec.id);
@@ -681,16 +821,48 @@
     var entry = { q: c.qNo, from: c.qFrom, to: tq, start: Math.round(c.qStart), end: Math.round(eq),
                   flows: Math.round(c.qFlows), profit: profit, commission: 0, verdict: null };
     c.history = c.history || [];
+    /* IDLE: no run sold all quarter. With running costs an idle quarter is
+     * a small loss (wages and berths while she waits for something worth
+     * carrying), but it is not the house LOSING money on a trade, and
+     * Astra's call (2026-11-03) was a warning, not the sack: "warning only"
+     * for an idle quarter; only an actual loss ends it. */
+    var idle = (c.legs || 0) === (c.qLegs0 || 0);
+    entry.runs = (c.legs || 0) - (c.qLegs0 || 0);
     if (profit > 0) {
+      c.idleRun = 0;
       var comm = Math.round(profit * c.commission);
       var take = Math.min(comm, Math.max(0, c.cash));
       c.cash -= take; c.owed = (c.owed || 0) + (comm - take);
       entry.commission = comm; entry.verdict = 'renewed';
-      c.qStart = eq - comm; c.qFlows = 0; c.qFrom = tq; c.qNo++;
+      c.qStart = eq - comm; c.qFlows = 0; c.qFrom = tq; c.qNo++; c.qLegs0 = c.legs || 0;
       c.nextReview = tq + QUARTER;
       var t1 = c.firmShort + ', quarter ' + entry.q + ': +' + cr(profit) + ' on the account, ' + cr(comm) +
                ' commission — renewed. The account stands at ' + cr(equity(G, c)) + '.';
       lineOut(G, out, t1); journal(G, t1);
+    } else if (idle && (c.idleRun || 0) < IDLE_QUARTERS_MAX - 1) {
+      /* A WARNING. The quarter rolls on from here, with no commission (there
+       * is no profit to take it from). */
+      c.idleRun = (c.idleRun || 0) + 1;
+      entry.verdict = 'warned';
+      c.qStart = eq; c.qFlows = 0; c.qFrom = tq; c.qNo++; c.qLegs0 = c.legs || 0;
+      c.nextReview = tq + QUARTER;
+      var tw = c.firmShort + ', quarter ' + entry.q + ': nothing carried, ' + cr(profit) + ' in running costs — a WARNING. ' +
+               'Another idle quarter and the account closes.';
+      lineOut(G, out, tw); journal(G, tw);
+    } else if (idle) {
+      /* A SECOND IDLE QUARTER IN A ROW ENDS IT. Six months with nothing
+       * worth carrying is not a slow season — the markets cycle over
+       * weeks (Economy row.periodS), so one dead quarter can be bad luck
+       * on a narrow goods list, two is the list or the house — and the
+       * account has been paying her wages and her berths the whole time.
+       * Measured (tools/measure-firms.cjs onegood): see CHANGELOG. */
+      c.idleRun = (c.idleRun || 0) + 1;
+      entry.verdict = 'idle-twice';
+      c.closing = { at: tq, why: 'idle' };
+      c.nextReview = null;
+      var ti = c.firmShort + ', quarter ' + entry.q + ': a second quarter with nothing carried — the account closes. ' +
+               'Their hulls stand down.';
+      lineOut(G, out, ti); journal(G, ti);
     } else {
       /* THE VERDICT. Astra's rule is the captain's: if it does not increase
        * the budget, they are off. Who says so depends on who has the
@@ -834,7 +1006,7 @@
       portId: port.id, portName: port.name,
       goods: (terms.goods || []).slice().sort(),
       hulls: [], cash: 0, owed: 0, deposited: 0, withdrawn: 0,
-      t0: t, qNo: 1, qFrom: t, qStart: budget, qFlows: 0, nextReview: t + QUARTER,
+      t0: t, qNo: 1, qLegs0: 0, idleRun: 0, qFrom: t, qStart: budget, qFlows: 0, nextReview: t + QUARTER,
       history: [], log: [], legs: 0, closing: null, closed: false
     };
     G.ship.credits -= budget;
@@ -850,7 +1022,7 @@
   function attach(G, c, rec, t) {
     rec.star = rec.star || (G.here && G.here.id) || null;
     if (!rec.starName && G.here) rec.starName = G.here.name;
-    rec.trade = { contract: c.id, phase: 'idle', next: t + TURN, leg: null, basis: 0, made: 0, runs: 0, since: t };
+    rec.trade = { contract: c.id, phase: 'idle', next: t + TURN, leg: null, basis: 0, made: 0, runs: 0, since: t, wagesTo: t };
     c.hulls.push(rec.id);
     var F = FleetM();
     if (F && F.forgetRoute) F.forgetRoute(rec.id);
@@ -1028,8 +1200,8 @@
   }
 
   var TradingFirm = {
-    QUARTER: QUARTER, TURN: TURN, TURN_LOCAL: TURN_LOCAL, TURN_SYSTEM: TURN_SYSTEM, TURN_JUMP: TURN_JUMP, WAIT: WAIT, DEPART: DEPART, HORIZON: HORIZON,
-    STALE_DAYS: STALE_DAYS, FOOT_SEEN: FOOT_SEEN, BURN_DAYS: BURN_DAYS, NOISE: NOISE, EDGE: EDGE, COMMISSION: COMMISSION, MIN_ACCOUNT: MIN_ACCOUNT,
+    QUARTER: QUARTER, TUNE: TUNE, runCosts: runCosts, wagesPerDay: wagesPerDay, berthPerDay: berthPerDay, TURN: TURN, TURN_LOCAL: TURN_LOCAL, TURN_SYSTEM: TURN_SYSTEM, TURN_JUMP: TURN_JUMP, WAIT: WAIT, DEPART: DEPART, HORIZON: HORIZON,
+    IDLE_QUARTERS_MAX: IDLE_QUARTERS_MAX, STALE_DAYS: STALE_DAYS, FOOT_SEEN: FOOT_SEEN, BURN_DAYS: BURN_DAYS, NOISE: NOISE, EDGE: EDGE, COMMISSION: COMMISSION, MIN_ACCOUNT: MIN_ACCOUNT,
     READING_FEE: READING_FEE, JUMP_STARS: JUMP_STARS, DEPTH_FROM: DEPTH_FROM, FORECAST_FROM: FORECAST_FROM,
     PLACE_K: PLACE_K,
     placeChance: placeChance, firmAt: firmAt, statsFor: statsFor, keyOf: keyOf, civilian: civilian,

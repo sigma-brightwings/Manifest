@@ -283,6 +283,25 @@
       if (rec.wagesTo == null) rec.wagesTo = t;
       if (rec.berthTo == null) rec.berthTo = t;
 
+      /* ON A TRADING HOUSE'S BOOK (tradingfirm.js): from the hour she was
+       * handed over her wages and her berths are the house's running costs,
+       * paid out of its account. You owe what fell due before that hour,
+       * and nothing after, until she stands down (release() sets her clocks
+       * to that instant). */
+      if (rec.trade) {
+        var upto = Math.min(t, rec.trade.since != null ? rec.trade.since : t);
+        var pre = payCrew(Crew, rec.crew || [], rec.wagesTo, upto, s.credits);
+        if (pre.cr > 0) { s.credits -= pre.cr; lines.push('Wages ' + pre.cr + ' cr  ·  ' + rec.name); }
+        rec.wagesTo = Math.max(rec.wagesTo, upto);
+        var preB = berthDue(rec, upto);
+        rec.berthTo = Math.max(rec.berthTo, upto);
+        if (preB.cr > 0) {
+          if (s.credits >= preB.cr) { s.credits -= preB.cr; lines.push('Berth ' + preB.cr + ' cr  ·  ' + rec.name); }
+          else rec.arrears = (rec.arrears || 0) + preB.cr;
+        }
+        continue;
+      }
+
       var pay = payCrew(Crew, rec.crew || [], rec.wagesTo, t, s.credits);
       rec.wagesTo = pay.paidTo;
       if (pay.cr > 0) {
@@ -304,10 +323,6 @@
        * turnaround is part of the job, not storage. Her berth clock
        * restarts from the arrival that ends the work. */
       if (rec.work) continue;
-      /* A traded hull is in and out on the firm's timetable, and the firm
-       * pays for nothing but the cargo and the hydrogen: her clamp time is
-       * the turnaround, the same as a working ship's. */
-      if (rec.trade) continue;
 
       var berth = berthDue(rec, t);
       rec.berthTo = berth.berthTo;

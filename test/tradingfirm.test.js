@@ -261,6 +261,30 @@ console.log('--- the account and your credits ---');
         prof === Math.max(0, Math.min(TF.withdrawable(c), Math.floor(c.cash - (c.deposited - c.withdrawn)))));
 })();
 
+console.log('--- the running costs come out of the account ---');
+(function () {
+  var w = world('kawartha', { rating: 4, minAccount: 0 });
+  var G = w.G, h = w.hull('h-a', 'kestrel', 3);
+  var c = TF.engage(G, w.firm, w.port, w.sys, { hulls: [h.id], budget: 60000 }, T0).contract;
+  var cr0 = G.ship.credits;
+  TF.book(G, T0 + 30 * DAY);
+  var sp = c.spent || {};
+  var perDay = TF.wagesPerDay(h);
+  /* Paid as they fall due — at each of her events — so up to her last one. */
+  var due = perDay * (h.trade.wagesTo - T0) / DAY;
+  check('wages are paid out of the account, to the hour of her last event', perDay > 0 && h.trade.wagesTo > T0 + 20 * DAY &&
+        Math.abs(sp.wages - due) <= c.legs * 2 + 10, sp.wages + ' vs ' + Math.round(due));
+  check('a berth at every stop', sp.berth > 0 && sp.berth >= Math.round(TF.berthPerDay(h)) * c.legs * 0.5, sp.berth);
+  check('insurance on hull and cargo', sp.insurance > 0, sp.insurance);
+  /* The desk's payroll does not charge you for her while she trades. */
+  var Gs = { t: T0 + 30 * DAY, ship: G.ship, fleet: G.fleet, firms: G.firms };
+  G.ship.wagesTo = Gs.t;
+  var lines = Fleet.settle(Gs, Gs.t);
+  check('and the payroll at your desk does not charge you for her', G.ship.credits === cr0 &&
+        !lines.some(function (l) { return /h-a/.test(l); }), lines.join(' | '));
+  check('the costs are counted in the runs\' log', c.log.length > 0);
+})();
+
 console.log('--- a better house makes more money ---');
 (function () {
   /* The measured direction (tools/measure-firms.cjs quarters 30 4: median
@@ -305,28 +329,50 @@ console.log('--- the quarterly review ---');
   check('and written in the journal', (G.journal || []).some(function (j) { return /quarter 1/.test(j.text); }));
   check('and the next is a quarter after that', c.nextReview === T0 + 2 * Q);
 
-  /* A quarter that makes nothing: the pilot walks, the hull stands down
-   * at her next decision, the account sits idle and the review drops it. */
+  /* An IDLE quarter (Astra, 2026-11-03: "warning only"): the pilot walks,
+   * the hull stands down at her next decision, nothing is carried — a
+   * warning, and the account carries on. A second idle quarter closes it. */
   var w2 = world('kawartha', { rating: 3, minAccount: 0 });
   var G2 = w2.G, h2 = w2.hull('h-a', 'talon', 3);
+  G2.journal = [];
   var c2 = TF.engage(G2, w2.firm, w2.port, w2.sys, { hulls: [h2.id], budget: 20000 }, T0).contract;
   h2.crew = [];
   var l1 = TF.book(G2, T0 + DAY);
   check('a hull whose pilot is gone stands down, and says why', !h2.trade && l1.some(function (l) { return /can helm her/.test(l); }), l1.join(' | '));
   var cr0 = G2.ship.credits;
   var l2 = TF.book(G2, T0 + Q);
-  check('a quarter that did not grow the budget ends the account: you drop them',
-        c2.history[0].verdict === 'dropped' && c2.closed && l2.some(function (l) { return /you drop them/.test(l); }), l2.join(' | '));
-  check('and the balance is remitted to you, all of it', G2.ship.credits === cr0 + 20000, G2.ship.credits - cr0);
+  check('an idle quarter is a WARNING, not the end', c2.history[0].verdict === 'warned' && !c2.closing && !c2.closed &&
+        l2.some(function (l) { return /WARNING/.test(l); }), l2.join(' | '));
+  check('and it is in the journal', G2.journal.some(function (j) { return /WARNING/.test(j.text); }));
+  check('the account carries on into quarter 2', c2.qNo === 2 && c2.nextReview === T0 + 2 * Q);
+  var l3 = TF.book(G2, T0 + 2 * Q);
+  check('a second idle quarter in a row closes it', c2.history[1].verdict === 'idle-twice' && c2.closed &&
+        l3.some(function (l) { return /second quarter with nothing carried/.test(l); }), l3.join(' | '));
+  check('and the balance is remitted to you', Math.abs(G2.ship.credits - (cr0 + c2.withdrawn)) < 1 && c2.withdrawn > 19000,
+        G2.ship.credits - cr0);
 
-  /* A first-rank house with a small account at a loss drops YOU. */
+  /* A REAL LOSS ends it at once. A run that lost money, made by hand on the
+   * book (the review only asks whether runs were sold and what the equity
+   * did): you drop a rating-3 house... */
+  var w5 = world('kawartha', { rating: 3, minAccount: 0 });
+  var G5 = w5.G, h5 = w5.hull('h-a', 'talon', 3);
+  var c5 = TF.engage(G5, w5.firm, w5.port, w5.sys, { hulls: [h5.id], budget: 20000 }, T0).contract;
+  h5.crew = [];
+  TF.book(G5, T0 + DAY);
+  c5.legs = 1; c5.cash -= 3000;
+  var l5 = TF.book(G5, T0 + Q);
+  check('a quarter that lost money on its runs ends the account: you drop them',
+        c5.history[0].verdict === 'dropped' && c5.closed && l5.some(function (l) { return /you drop them/.test(l); }), l5.join(' | '));
+  /* ...and a first-rank house with a small losing account drops YOU. */
   var w3 = world('kawartha', { rating: 5 });
   var G3 = w3.G, h3 = w3.hull('h-a', 'talon', 3);
   var c3 = TF.engage(G3, w3.firm, w3.port, w3.sys, { hulls: [h3.id], budget: 50000 }, T0).contract;
   h3.crew = [];
-  var l3 = TF.book(G3, T0 + Q);
+  TF.book(G3, T0 + DAY);
+  c3.legs = 1; c3.cash -= 3000;
+  var l3b = TF.book(G3, T0 + Q);
   check('a first-rank house drops a small losing account itself',
-        c3.history[0].verdict === 'dropped-you' && l3.some(function (l) { return /they drop you/.test(l); }), l3.join(' | '));
+        c3.history[0].verdict === 'dropped-you' && l3b.some(function (l) { return /they drop you/.test(l); }), l3b.join(' | '));
 
   /* Closing mid-run: the hull finishes her leg, then the account remits. */
   var w4 = world('kawartha', { rating: 4, minAccount: 0 });
@@ -339,7 +385,7 @@ console.log('--- the quarterly review ---');
   check('closing with a hull on a run waits for her', !c4.closed && !!c4.closing && !!h4.trade);
   TF.book(G4, arriveAt + 1);
   check('she sells on arrival, stands down, and the account remits', c4.closed && !h4.trade && G4.ship.credits > cr4 &&
-        Math.abs(c4.cash) < 1e-6, (G4.ship.credits - cr4) + ' remitted');
+        Math.abs(c4.cash) < 1, (G4.ship.credits - cr4) + ' remitted');
 })();
 
 console.log('--- between the stars ---');
