@@ -40,6 +40,73 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-03, station geometry, third pass: Halden Yard's carriages ride, a clean landing at the small spines, ground ports on her own gear)
+
+Astra, of what was still open after the second pass: "let's do all the still
+open stuff".
+
+- **Halden Yard's "elevators" are carriages that move.** The civil yards'
+  S/M bays sit on 45-degree carriages, stored above the hall's crown or
+  under its floor, and nothing ever moved them: the carriage stayed parked
+  in its storage level, and a hull bound for one was carried up the incline
+  through it to stand on the *rail* above (0.36 radii up at yard-m, a
+  quarter of a radius over the carriage's own deck). Each carriage is now a
+  car with faces of its own (`tools/glb2hulls.js`: the bay group's declared
+  `carriage` run, claimed face by face so the rail its bogie rides stays
+  put). It comes down to the hall while she crosses to it, she drives in
+  through its door, and it carries her up to her stand on its deck; the
+  carriage and the hull never part (swept every half second of the ride).
+- **Flush with the floor, and covered when it is away.** The art's own run
+  stopped every carriage in mid-air: the upper ones' deck 0.017 radii over
+  the hall floor (about 90 m at Halden Yard), the lower ones' 0.0075 (40 m),
+  "too high on the right and too high on the left". Each run is now fitted
+  along its incline (`Render.fitCarriages`) until the deck lands level with
+  the floor beside the aperture; the lower carriages come up into the floor
+  and lock there. The track leaves over each aperture were welded into the
+  hall's interior mesh; they are moving parts now, shut while the carriage
+  is home and open from the moment it leaves, so when it is not there the
+  shaft is covered. The cargo cars beside them keep their leaves shut.
+- **Spine-m takes a clean landing at its small stations.** At Marrow
+  Platform (2.30 km) and Waypoint Array (2.18 km) a clean seat in berth 0
+  docked nothing, and had since af2b08b. A curtained bay's box is its force
+  field's sheet, 0.002 radii through, so the bay measured 4.4 m deep there
+  and a courier (8.6 m) "did not fit" her own bay. Curtained bays are now
+  measured by the art's own `hangar` depth (`Sim.curtainDepth`). The same
+  measure was sending every small hull to the heavy bay at stations under
+  about 3 km; she now gets the small bay she was meant to, routed through
+  the heavy one as at the larger stations.
+- **Ground ports stand her on her own gear too.** They kept the old half
+  metre over the berth's standoff, which at Harrow Deep put a Talon's gear
+  2.3 m into the floor and the Tanker's 9.3 m. The walkable hangar was
+  never the obstacle: it is built in her own frame on her own gear, so it
+  moves with her (the hangar view is identical before and after). What went
+  red was a render test's camera, whose angles were converted into the
+  ground's frame on the first frame and came out pointing the boom into the
+  floor; it now sets its shot in the ground's frame. Sea pads keep the half
+  metre: their stand is the pad's own table, and her feet have not been
+  measured against it.
+
+Measured with interiors.test.js's sweep at Waypoint Dock's radius: berths
+with an inner leg through something, 52 of 131 before, 32 now; every one of
+the 20 yard S/M bays was among them and none is now.
+
+Not done yet, with what was found:
+
+- The cylinder bores' hub mouths (B) are not cut; their berths, the
+  skimmers' hoists, spine-l b0/b2 and four cradle bays make up the 32.
+- yard-navy's 17 approaches (C): every one runs into the wall over its
+  heavy bay's door. The heavy bay is a doorway 0.19 radii up the wall of a
+  hall with no floor behind it; `Render.berthDeck` finds nothing in the
+  bay's box and falls back to the box's top, the lintel, and the rail flies
+  in at that height. It wants a stand on the hall floor and a way down to
+  it.
+- The berths off a level floor (D) and the cradle and yard-syn arrivals
+  that go indoors and back out (E) are unchanged.
+
+**Saves:** survive. Nothing stored changed: carriages, runs, stands and
+routes are worked out from the model each session, and a ship saved docked
+in a yard bay loads on her carriage's deck.
+
 ### Fixed (2026-11-03, station geometry, second pass: the cylinders' arms, flush bores, every lift deck to deck, routes ready before you arrive)
 
 Astra, of the station reports still open: "let's do all the still open stuff".
