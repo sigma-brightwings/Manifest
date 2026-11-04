@@ -276,8 +276,38 @@
       rain: Math.max(0, here.cloud - 0.25) / 0.75 *
             (0.35 + 0.65 * here.storm) * below,
       /* How much of the daylight the deck is keeping off you. */
-      gloom: here.cloud * (0.55 + 0.45 * here.storm) * below
+      gloom: gloomOf(here) * below
     };
+  }
+
+  /* How much daylight a deck of this cover and storm keeps off the ground.
+   * One formula for the canopy's wash (aloft) and the ground sky
+   * (overhead), so a cockpit and a camera on the street cannot disagree
+   * about how dark it is. */
+  function gloomOf(here) { return here.cloud * (0.55 + 0.45 * here.storm); }
+
+  /* ---- and over a place on the GROUND (2026-11-03) -----------------------
+   *
+   * The ground sky (gl.js drawGroundSky) had no weather in it: the sea
+   * polish took the cloud film off the ground round your feet below 3 km of
+   * eye height, which was right, and that left an overcast day looking
+   * clear from the street. This is what that sky asks: the cover and the
+   * storm overhead, at the local vertical `up` (unit, world) of a point on
+   * `body` at time t - the same sample() the planet is painted with and a
+   * port's report reads, so the broken cloud over a pad is the broken
+   * cloud the forecast names. Null on an airless world or one with no
+   * weather at all; nothing is invented for it. `deck` is the height of
+   * the deck's base, km, for the ceiling; `phase` is the field's own clock
+   * (spinOf's weather), so the underside drifts as the field does. */
+  function overhead(body, up, t) {
+    var GL = global.GLWorld;
+    var air = body && body.atmosphere;
+    if (!air || !(air.cloud > 0) || !up || !GL || !GL.spinOf) return null;
+    var sp = GL.spinOf(body, t);
+    if (!sp || !sp.ax) return null;            // a stand-in GL layer (tests) has no spin to give
+    var here = sample(up, sp, hashSeed(body.id), air.cloud);
+    return { cloud: here.cloud, storm: here.storm, gloom: gloomOf(here),
+             deck: air.top * DECK_LO, phase: sp.weather };
   }
 
   /* Does this port have weather worth mentioning at all? An orbital clamp
@@ -722,7 +752,7 @@
     elevationAt: elevationAt, bodyFixed: bodyFixed, spinAxis: spinAxis,
     K: K, fbm: fbm, hashSeed: hashSeed, sample: sample, lookup: lookup,
     report: report, describe: describe, hasWeather: hasWeather,
-    aloft: aloft, DECK_LO: DECK_LO, DECK_HI: DECK_HI,
+    aloft: aloft, overhead: overhead, gloomOf: gloomOf, DECK_LO: DECK_LO, DECK_HI: DECK_HI,
     stormClock: stormClock, saltOf: saltOf,
     FLASH_RHYTHMS: FLASH_RHYTHMS, FLASH_CYCLE: FLASH_CYCLE
   };

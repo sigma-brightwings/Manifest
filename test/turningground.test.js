@@ -88,6 +88,9 @@ function hull(pos, vel, up) {
         hit === w.b && still.landed && !still.crashed, 'contact ' + ms(still.impactSpeed || 0));
   check('and she is left moving with the ground', V.dist(still.vel, Sim.surfaceVelocity(w.b, still.pos, w.sys, t)) < 1e-9);
 
+  /* No hullHp on a bare makeShip, so this is judged by LAND_FATAL_SPEED
+   * since open ground took the pad's ramp (2026-11-03); both equators here
+   * are far past it. */
   var spun = hull(a.pos, a.centre, a.up);
   Sim.checkImpact(spun, w.sys, t, false);
   check('still against the CENTRE is the ground\'s spin against the ground: a crash',
@@ -137,6 +140,74 @@ function hull(pos, vel, up) {
           'climb ' + ms(V.dot(climb, upL)) + ', ' + ms(V.dist(lift.vel, Sim.bodyVelocity(w.b, w.sys, tl))) + ' against the centre');
   }
 });
+
+/* ---- open ground charges what a pad charges (2026-11-03) -----------------
+ * Astra: "I agree with you on all of that". Open ground was free to 100 m/s
+ * and a wreck past it; a pad charges landingDamage from 20 m/s and kills at
+ * 90. Now both are the one function, so: the same arrival speed costs the
+ * same hull on the dirt as on a pad, measured through checkImpact on each,
+ * not by calling landingDamage twice. Gear up on the dirt is still a wreck. */
+console.log('--- open ground and a pad, the same ramp ---');
+var SPEEDS = [0, 0.010, 0.020, 0.025, 0.040, 0.060, 0.080, 0.089, 0.095, 0.130];
+function groundHit(w, kms, gear, hp) {
+  var t = 12345, a = spot(w, t, -0.0005);
+  var sh = hull(a.pos, V.addScaled(a.ground, a.up, -kms), a.up);
+  sh.gear = gear;
+  if (hp !== undefined) { sh.hullHp = hp; sh.hullMax = hp; }
+  var h0 = sh.hullHp;
+  Sim.checkImpact(sh, w.sys, t, true);
+  return { ship: sh, dmg: hp === undefined ? 0 : h0 - sh.hullHp };
+}
+function padHit(kms) {
+  var p = shaft.p, sysP = shaft.sys, t = 2000;
+  var ps = Sim.bodyState(p, sysP, t);
+  var up = V.norm(V.sub(ps.pos, Sim.bodyPosition(p.parentBody, sysP, t)));
+  var sh = hull(V.clone(ps.pos), V.addScaled(ps.vel, up, -kms), up);
+  sh.hullHp = 100; sh.hullMax = 100;
+  sh.cleared = {}; sh.cleared[p.id] = true;
+  var hit = Sim.checkImpact(sh, sysP, t, true);
+  return { hit: hit, ship: sh, dmg: 100 - sh.hullHp };
+}
+[['air', airW], ['airless', bareW]].forEach(function (pair) {
+  var w = pair[1]; if (!w) return;
+  var worst = 0, rows = [];
+  SPEEDS.forEach(function (kms) {
+    var g = groundHit(w, kms, true, 100);
+    var want = Math.min(100, Sim.landingDamage(g.ship.impactSpeed, true));
+    worst = Math.max(worst, Math.abs(g.dmg - want));
+    rows.push(Math.round(kms * 1000) + ':' + g.dmg.toFixed(1) + (g.ship.crashed ? 'X' : ''));
+  });
+  check(pair[0] + ': open-ground damage is landingDamage at the contact speed', worst < 1e-9, rows.join(' '));
+  var soft = groundHit(w, 0.015, true, 100), firm = groundHit(w, 0.040, true, 100), hard = groundHit(w, 0.095, true, 100);
+  check(pair[0] + ': 15 m/s on the gear is free', soft.ship.landed && !soft.ship.crashed && soft.dmg === 0);
+  check(pair[0] + ': 40 m/s on the gear costs hull and she survives it, and says so',
+        firm.ship.landed && !firm.ship.crashed && firm.dmg > 0 && firm.ship.lastLandingHit && firm.ship.lastLandingHit.ground,
+        firm.dmg.toFixed(1) + ' hull');
+  check(pair[0] + ': past the fatal speed it is a wreck', hard.ship.crashed && hard.ship.hullHp === 0);
+  check(pair[0] + ': gear up is a wreck even at 5 m/s', groundHit(w, 0.005, false, 100).ship.crashed);
+  var ghostSlow = groundHit(w, 0.050, true), ghostFast = groundHit(w, 0.095, true);
+  check(pair[0] + ': a hull with no hull points (a ghost) lands under the fatal speed, crashes past it',
+        !ghostSlow.ship.crashed && ghostFast.ship.crashed);
+  check(pair[0] + ': every touchdown is noted, hurt or not', soft.ship.touchdown && soft.ship.touchdown.where === 'ground' &&
+        Math.abs(soft.ship.touchdown.speed - soft.ship.impactSpeed) < 1e-12);
+});
+if (shaft && airW) {
+  var mism = 0, prow = [];
+  SPEEDS.forEach(function (kms) {
+    var pd = padHit(kms);
+    var gd = groundHit(airW, kms, true, 100);
+    var pv = pd.ship.touchdown ? pd.ship.touchdown.speed : NaN;
+    /* The same contact speed on each, so compare the ramp at each one's own
+     * contact speed AND the two at the nominal speed: on a pad the contact is
+     * against the pad, on the dirt against the ground, and both are kms.
+     * Tolerance 1e-6 km/s: the pad's velocity comes through bodyState and
+     * the ground's through surfaceVelocity, which agree to ~1e-7. */
+    mism = Math.max(mism, Math.abs(pd.dmg - gd.dmg), Math.abs(pv - gd.ship.impactSpeed));
+    prow.push(Math.round(kms * 1000) + ':' + pd.dmg.toFixed(1) + '/' + gd.dmg.toFixed(1));
+  });
+  check('a pad (' + shaft.p.name + ') and open ground charge the same hull at the same speed', mism < 1e-6,
+        'm/s:pad/ground ' + prow.join(' ') + '  (worst ' + mism.toExponential(1) + ')');
+}
 
 console.log('--- the air turns with its world ---');
 if (airW) {

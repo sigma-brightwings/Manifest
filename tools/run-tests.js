@@ -92,7 +92,7 @@ var GROUPS = {
     'test/arcs.test.js', 'test/captains.test.js', 'test/captain-stories.test.js',
     'test/messages.test.js', 'test/favours.test.js', 'test/rumours.test.js',
     'test/journal.test.js', 'test/tutorial.test.js', 'test/rescue.test.js', 'test/slipspace.test.js',
-    'test/cruisedrive.test.js'
+    'test/cruisedrive.test.js', 'test/intercept.test.js'
   ]
 };
 

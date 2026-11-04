@@ -147,6 +147,8 @@ require('../src/generate.js');
 require('../src/galaxy.js');
 require('../src/sim.js');
 require('../src/combat.js');
+/* The lead pip and the intercept assist's law (2026-11-03). */
+require('../src/intercept.js');
 /* The ships you own and are not flying. */
 /* The people aboard. */
 require('../src/crew.js');
@@ -6702,6 +6704,11 @@ console.log('--- manoeuvre nodes ---');
   check('\\ does nothing from the cockpit', !G.node && !G.nodeBurn);
   press('i');
   check('nor does I', !G.node);
+  /* I in flight is the intercept assist now (2026-11-03): with a lock it
+   * engages, and an autopilot left flying would own the ship through the
+   * node burn below. Stand it down, the way a pilot would. */
+  if (G.autodock && G.autodock.mode === 'intercept') press('i', { shiftKey: true });
+  check('and the intercept assist, if I engaged it, stands down on Shift+I', !G.autodock);
   press('F2');
   var mapPanel = G.panel;
   check('F2 is the orbit map', mapPanel !== 0);
@@ -8176,7 +8183,10 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
           /* The sky over the port is the world's air in the sun. */
           var sk = G.groundSky(port);
           var sun = V.norm(V.sub(Sim.bodyPosition(G.sys.root, G.sys, G.t), gb.entrance.pos));
-          var want = GLreal.skyOver(host, gb.up, sun);
+          /* Under the weather there, since 2026-11-03 (Weather.overhead;
+           * null under this file's stand-in GL layer, which is a clear sky). */
+          var Wx = global.Weather;   // absent in this section's stand-in world, and then main.js has none either
+          var want = GLreal.skyOver(host, gb.up, sun, Wx && Wx.overhead ? Wx.overhead(host, gb.up, G.t) : null);
           if (!sk || Math.abs(sk[0] - want[0]) + Math.abs(sk[2] - want[2]) > 1e-9)
             st.sky.push(tag + ': sky ' + (sk ? sk.join(',') : 'none'));
           if (hgt >= 0) {

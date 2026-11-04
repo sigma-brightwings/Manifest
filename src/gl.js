@@ -82,6 +82,34 @@
     'uniform vec4 uSkyA;',        // tint rgb, air (0 = off)
     'uniform vec3 uSkyUp;',       // local vertical at the port
     'uniform vec3 uSkySun;',      // unit vector to the sun
+    /* THE WEATHER OVERHEAD (2026-11-03) - see overcastFor. */
+    'uniform vec4 uSkyC;',        // cover 0..1, storm 0..1, direct sun kept, overcast diffuse
+    'uniform vec4 uSkyD;',        // deck base km, drift x, drift y, sky brightness kept
+    'uniform float uSkyVeil;',    // how much of a body BEYOND the deck the deck hides (the sun, moons)
+    /* A small 2-D value noise of the sky's own, for the deck's underside.
+     * Its own names: SKY_GLSL is pasted into the planet pass, which has a
+     * hash and an fbm of its own. */
+    /* A hash with no sine in it: the deck is sampled hundreds of km out, and
+     * fract(sin(big)) loses its precision there and draws stripes. */
+    'float skyHash(vec2 p) {',
+    '  vec3 p3 = fract(vec3(p.xyx) * 0.1031);',
+    '  p3 += dot(p3, p3.yzx + 33.33);',
+    '  return fract((p3.x + p3.y) * p3.z);',
+    '}',
+    'float skyNoise(vec2 p) {',
+    '  vec2 i = floor(p), f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  return mix(mix(skyHash(i), skyHash(i + vec2(1.0, 0.0)), f.x),',
+    '             mix(skyHash(i + vec2(0.0, 1.0)), skyHash(i + vec2(1.0, 1.0)), f.x), f.y);',
+    '}',
+    /* Each octave turned against the last (about 37 degrees), or the value
+     * noise's own grid shows through as a field of squares. */
+    'float skyFbm(vec2 p) {',
+    '  float s = 0.0, a = 0.5;',
+    '  mat2 rot = mat2(0.80, 0.60, -0.60, 0.80);',
+    '  for (int i = 0; i < 5; i++) { s += a * skyNoise(p); p = rot * p * 2.03 + 17.0; a *= 0.5; }',
+    '  return s / 0.96875;',
+    '}',
     'vec3 groundSkyAt(vec3 rd) {',
     '  float sunUp = dot(uSkySun, uSkyUp);',
     '  float air = uSkyA.w;',
@@ -99,6 +127,62 @@
     '  float toward = 0.5 + 0.5 * dot(normalize(rd - uSkyUp * e + 1e-6), normalize(sunH + 1e-6));',
     '  col = mix(col, vec3(1.0, 0.52, 0.28) * bright * 0.92, low * 0.62 * (1.0 - clamp(e * 2.0, 0.0, 1.0)) * toward);',
     '  col += vec3(1.0, 0.94, 0.82) * pow(max(0.0, dot(rd, uSkySun)), 80.0) * 0.55 * lit;',
+    /* THE DECK FROM UNDERNEATH (2026-11-03). The cover overhead is
+     * Weather.overhead's - the field the planet is painted with, sampled
+     * at the zenith - and the deck is drawn as a ceiling at its base
+     * height, broken by a fine noise of its own whose threshold is set by
+     * that cover, so a third of the sky in cloud is a third of the ceiling
+     * (the planet's field varies over thousands of km; what is overhead is
+     * its local value, and the texture under it is this).
+     *
+     * NOT THE SHELL SEEN EDGE-ON. The sea polish took the cloud film off
+     * the ground below 3 km of eye height because, painted on the sphere,
+     * it lay on the sea round a rig and streaked it white. That stays off.
+     * This is in the sky pass, behind everything, and toward the horizon -
+     * where a flat deck would be seen edge-on and its texture would crowd
+     * into a hard line - it fades into its own mean: the far deck is a
+     * grey of the cover's weight, which is what a far overcast is. The
+     * haze takes the ground into the same grey, so there is no seam. */
+    '  float cov = uSkyC.x;',
+    '  if (cov > 0.002) {',
+    '    vec3 ax = abs(uSkyUp.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);',
+    '    vec3 dE = normalize(cross(uSkyUp, ax)), dN = cross(uSkyUp, dE);',
+    /* Sampled no lower than 6 degrees: below that the deck is far and
+     * edge-on, its texture is not drawn (op, below), and sampling it would
+     * squeeze the noise into vertical streaks - which is exactly what the
+     * first cut of this did, a curtain hanging from the deck to the
+     * horizon. */
+    '    float ee = max(e, 0.10);',
+    '    vec2 P = vec2(dot(rd, dE), dot(rd, dN)) / ee * uSkyD.x + uSkyD.yz;',
+    '    vec2 wq = P * 0.15;',
+    '    wq += vec2(skyNoise(wq * 0.5 + 3.1), skyNoise(wq * 0.5 + 7.7)) * 1.6;',
+    '    float nz = skyFbm(wq);',
+    /* The fbm sits about 0.5 +- 0.12, so this threshold covers about
+     * `cov` of the ceiling: 10% at 0.1, half at 0.5, 90% at 0.9; past
+     * 0.88 it closes to a lid. */
+    '    float thr = 0.5 + 0.19 * (1.0 - 2.0 * cov);',
+    '    float m = smoothstep(thr - 0.06, thr + 0.06, nz);',
+    '    m = max(m, smoothstep(0.88, 1.0, cov));',
+    '    float hz = smoothstep(0.10, 0.40, e);',
+    '    float op = mix(cov, m, hz) * 0.97;',
+    /* The underside: grey, a little of the air's colour in it, darker
+     * where it is thick and darker again in a storm; brighter round the
+     * sun it is hiding, and warmed from the sun's side at dusk like the
+     * sky it replaces. */
+    '    vec3 grey = mix(vec3(0.74, 0.76, 0.80), sc, 0.15);',
+    /* Its thickness fades to the mean with the texture, or the shading
+     * of the edge-on deck draws the same streaks the cover would. */
+    '    float thick = mix(0.35, smoothstep(thr, thr + 0.25, nz), hz);',
+    /* sqrt of the gloom's dimming, not all of it: the deck's underside is
+     * the bright thing in an overcast sky, and at the full figure a grey
+     * noon at sea read as dusk. */
+    '    vec3 under = grey * (0.95 - 0.35 * thick) * bright * (1.0 - 0.55 * uSkyC.y) * sqrt(uSkyD.w);',
+    '    under += vec3(1.0, 0.95, 0.85) * pow(max(0.0, dot(rd, uSkySun)), 6.0) * 0.18 * (1.0 - 0.5 * cov) * bright;',
+    '    under = mix(under, vec3(1.0, 0.52, 0.28) * bright * 0.50 * uSkyD.w, low * 0.45 * toward);',
+    /* And the gaps are under the same weather: dimmer, not a clear day. */
+    '    col *= mix(1.0, uSkyD.w, cov);',
+    '    col = mix(col, under, op);',
+    '  }',
     '  return mix(vec3(0.0157, 0.0235, 0.047), col, lit);',
     '}'
   ].join('\n');
@@ -794,12 +878,16 @@
     '  if (uSeaRel.w <= 0.0 || sea < 0.01) return col;',
     '  vec3 n2 = normalize(n - (sw.y * uSeaE + sw.z * uSeaN));',
     '  float l2 = smoothstep(-0.14, 0.30, dot(n2, uSunDir));',
+    /* No sun on the water through an overcast, and no glint of it
+     * (2026-11-03; the same terms the ground takes, groundSkyAt's uSkyC). */
+    '  float ovK = uSkyA.w > 0.0 ? uSkyC.z : 1.0;',
+    '  if (uSkyA.w > 0.0) l2 = l2 * uSkyC.z + uSkyC.w;',
     '  vec3 c2 = base * (0.055 + 0.95 * l2);',
     '  float mu = dot(n, uSunDir);',                       // sine of the sun's height over the flat sea
     '  float tr = mu > 0.0 ? exp(-0.10 / max(mu, 0.015)) : 0.0;',
     '  vec3 sunC = vec3(1.0, 0.96, 0.88) * mix(vec3(1.0, 0.62, 0.38), vec3(1.0), smoothstep(0.02, 0.45, mu));',
     '  float fres = 0.02 + 0.98 * pow(1.0 - max(0.0, -dot(rd, n2)), 5.0);',
-    '  float g = pow(max(0.0, dot(reflect(rd, n2), uSunDir)), 900.0) * (0.15 + 0.85 * fres) * tr;',
+    '  float g = pow(max(0.0, dot(reflect(rd, n2), uSunDir)), 900.0) * (0.15 + 0.85 * fres) * tr * ovK;',
     '  vec3 hl = sunC * min(g * 4.5, 0.85);',
     '  c2 = 1.0 - (1.0 - c2) * (1.0 - hl);',
     '  c2 = mix(c2, vec3(0.88, 0.93, 0.96) * (0.12 + 0.88 * l2), clamp(sw.w, 0.0, 1.0));',
@@ -1243,11 +1331,15 @@
     '      float lim = sqrt(max(0.0, 1.0 - r * r));',
     '      vec3 c = mix(uColor, vec3(1.0), pow(lim, 1.6) * 0.85);',
     '      gl_FragDepth = encodeDepth(dot(oc, uFwd) - lim * uWorldRadius);',
-    '      frag = vec4(c, 1.0);',
+    /* Behind an overcast the sun is not there (2026-11-03): uSkyVeil is
+     * how much of the sky the deck over the eye covers, and the sun is
+     * let through the rest - blended over the ground sky, not darkened,
+     * or a hidden sun would be a black disc on grey. */
+    '      frag = vec4(c, 1.0 - uSkyVeil);',
     '    } else {',
     '      float g = exp(-(r - 1.0) * 2.2) * 0.55;',
     '      gl_FragDepth = encodeDepth(dot(oc, uFwd));',
-    '      frag = vec4(uColor * g, g);',
+    '      frag = vec4(uColor * g, g * (1.0 - uSkyVeil));',
     '    }',
     '    return;',
     '  }',
@@ -1420,7 +1512,7 @@
     '      float grim = pow(1.0 - z, 3.0);',
     '      gc += uAtmoColor * grim * uAtmo * (0.08 + 0.45 * lam);',
     '    }',
-    '    frag = vec4(gc, 1.0);',
+    '    frag = vec4(gc, 1.0 - uSkyVeil);',
     '    return;',
     '  }',
 
@@ -1731,6 +1823,12 @@
     '    glow += storm * 0.09 * (1.0 - uFlashGain);',
     '  }',
 
+    /* UNDER AN OVERCAST (2026-11-03): the sun reaches the ground only
+     * through the gaps, and what light there is comes off the whole deck,
+     * so the shading flattens - less direct sun, a little diffuse that
+     * does not care which way the ground faces. Only for the world the
+     * ground sky is over; uSkyC.z is 1 and .w 0 on a clear day. */
+    '  if (uSkyA.w > 0.0) lam = lam * uSkyC.z + uSkyC.w;',
     '  vec3 col = base * (0.055 + 0.95 * lam);',
     /* SEA: shaded under the swell, with its glint and foam. */
     '  col = seaShade(col, base, n, rd, sea, seaW);',
@@ -1759,7 +1857,7 @@
     '  }',
 
     '  col = groundHaze(col, rd, tHit, sqrt(dot(oc, oc)) - uWorldRadius, uWorldRadius);',
-    '  frag = vec4(col, 1.0);',
+    '  frag = vec4(col, 1.0 - uSkyVeil);',
     '}'
   ].join('\n');
 
@@ -2290,6 +2388,7 @@
      * on the same frame. */
     'uniform float uIndoors;',
     'uniform vec3 uSkyFill;',     // the ground sky's light, as ambient; 0 off the ground
+    'uniform float uSunK;',       // how much direct sun gets through the weather overhead; 1 off the ground
     'uniform float uSheen;',      // a sun highlight, 0..1 (GL.setSheen); 0 for everything that never asked
     /* Whole-mesh opacity, multiplied into the per-face alpha. 1.0 is the
      * default and the opaque path short-circuits on it, so a hull costs one
@@ -2484,7 +2583,7 @@
     '    vec3 pc = (pl > 0.62 ? uTrim : uPaint.rgb) * (0.55 + 0.9 * pl);',
     '    base = mix(vCol, min(pc, vec3(1.0)), uPaint.w);',
     '  }',
-    '  vec3 lit = base * (0.26 + 0.70 * lam);',
+    '  vec3 lit = base * (0.26 + 0.70 * lam * uSunK);',
     /* SKY FILL (2026-11-02): under a daylit ground sky the shade side of a
      * structure is lit by the sky, not black - a sea platform's domes,
      * backlit against the sun, went near-black over a bright sea. Outdoors
@@ -2497,7 +2596,7 @@
      * and unchanged), moves across the faceted petals as the eye does. */
     '  if (uSheen > 0.0 && lam > 0.0) {',
     '    float nh = max(0.0, dot(n, normalize(uSunDir + toCam)));',
-    '    lit += vec3(1.0, 0.97, 0.92) * pow(nh, 40.0) * uSheen;',
+    '    lit += vec3(1.0, 0.97, 0.92) * pow(nh, 40.0) * uSheen * uSunK;',
     '  }',
     /* uIndoors above 1 is the same indoor lamp, brighter (2026-11-01):
      * another ship's cabin seen through her windows (render.js,
@@ -3011,7 +3110,7 @@
       meshUni = uniforms(gl, meshProg, ['uModelRel', 'uRot', 'uScale',
                                         'uRight', 'uUp', 'uFwd', 'uFlen',
                                         'uCenterPx', 'uViewportPx', 'uSunDir',
-                                        'uNear', 'uInvLogRange', 'uIndoors', 'uSkyFill', 'uSheen',
+                                        'uNear', 'uInvLogRange', 'uIndoors', 'uSkyFill', 'uSheen', 'uSunK',
                                         'uGlow', 'uWind',
                                         'uAlpha', 'uCut', 'uCutR', 'uCutRim',
                                         'uCutBand', 'uCutUp', 'uCutCap',
@@ -3037,6 +3136,7 @@
                               'uHoleRel', 'uHoleR', 'uHoleDepth', 'uHaloPush',
                               'uSeaRel', 'uSeaE', 'uSeaN', 'uSeaK', 'uSeaPost',
                               'uConeS', 'uConeR', 'uSkyA', 'uSkyUp', 'uSkySun',
+                              'uSkyC', 'uSkyD', 'uSkyVeil',
                               'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD', 'uBoxTop',
                               'uGdOn', 'uGdAnchorRel', 'uGdCell', 'uGdFrac', 'uGdCq', 'uBio',
                               'uTear', 'uTearK', 'uTearN']);
@@ -3066,7 +3166,7 @@
       skyProg = link(gl, VERT_BODY, FRAG_SKY, 'sky');
       skyUni = uniforms(gl, skyProg, ['uCenterPx', 'uQuadPx', 'uViewportPx',
                                       'uRight', 'uUp', 'uFwd', 'uScreenPx', 'uFlen',
-                                      'uSkyA', 'uSkyUp', 'uSkySun']);
+                                      'uSkyA', 'uSkyUp', 'uSkySun', 'uSkyC', 'uSkyD']);
     } catch (e) { skyProg = null; if (global.console) console.error(e.message); }
 
     quad = gl.createBuffer();
@@ -4369,7 +4469,10 @@
       }
       /* The horizon haze, on the world the ground sky is over. */
       if (groundSky && groundSky.bodyId === b.id) setSkyUniforms(uni, groundSky);
-      else gl.uniform4f(uni.uSkyA, 0, 0, 0, 0);
+      else { gl.uniform4f(uni.uSkyA, 0, 0, 0, 0); gl.uniform4f(uni.uSkyC, 0, 0, 1, 0); }
+      /* Anything else in the sky - the sun, a moon, a neighbour - is
+       * above the deck, and the deck hides it (overcastFor's veil). */
+      gl.uniform1f(uni.uSkyVeil, (groundSky && groundSky.over && groundSky.bodyId !== b.id) ? groundSky.over.veil : 0);
       if (groundCut && groundCut.bodyId === b.id) {
         uploadBox(uni, groundCut.box, cam);
       } else {
@@ -4550,6 +4653,7 @@
       gl.uniform1f(meshUni.uSheen, m.sheen || 0);
       var fill = groundSky && groundSky.fill;
       gl.uniform3f(meshUni.uSkyFill, fill ? fill[0] : 0, fill ? fill[1] : 0, fill ? fill[2] : 0);
+      gl.uniform1f(meshUni.uSunK, (groundSky && groundSky.over) ? groundSky.over.sunK : 1);
       /* m.cam: this loop has no `cam` of its own, and until the canopy
        * wells (2026-10-31) nothing queued a mesh with a box to find out. */
       if (m.box) uploadBox(meshUni, m.box, m.cam);
@@ -5024,24 +5128,96 @@
     return out;
   }
   GL.skyAt = skyAt;
+
+  /* ---- an overcast, from underneath (2026-11-03) --------------------------
+   *
+   * Astra's overcast day looked clear from the ground: the cloud film is
+   * kept off the ground below 3 km of eye height (the sea polish, so it is
+   * not laid on the sea round a rig), and the ground sky had no weather in
+   * it. These are the shading inputs that weather turns into, from
+   * Weather.overhead - the one source for the cover at a point and time -
+   * and the sun's height there (sunUp, its sine). All 0..1:
+   *   cover    how much of the ceiling is cloud (the shader breaks it up to
+   *            this fraction; toward the horizon it is this, flat);
+   *   sunK     how much DIRECT sun reaches the ground. The cover is the odds
+   *            the sun is behind cloud, so 1 - 0.9 cover; a storm's cloud is
+   *            thicker again;
+   *   diffuse  the light the deck itself sheds, which does not care which way
+   *            a surface faces: daylight only, 0.28 of full sun under a
+   *            full overcast - so the shading flattens rather than going
+   *            black (an overcast noon is dim, not night);
+   *   skyK     how bright the sky still is, from Weather's gloom (the same
+   *            number the canopy's wash is dimmed by);
+   *   veil     how much of the sun, and anything else above the deck, it
+   *            hides.
+   * Null weather is a clear sky: every input at its clear value, so the
+   * shaders do exactly what they did before this. */
+  function overcastFor(wx, sunUp) {
+    var cover = wx ? Math.max(0, Math.min(1, wx.cloud || 0)) : 0;
+    var storm = wx ? Math.max(0, Math.min(1, wx.storm || 0)) : 0;
+    var gloom = wx ? Math.max(0, Math.min(1, wx.gloom || 0)) : 0;
+    var dayT = Math.max(0, Math.min(1, ((sunUp || 0) + 0.10) / 0.36));
+    var day = dayT * dayT * (3 - 2 * dayT);
+    return {
+      cover: cover, storm: storm, gloom: gloom,
+      sunK: (1 - 0.9 * cover) * (1 - 0.5 * storm),
+      diffuse: 0.28 * cover * (1 - 0.5 * storm) * day,
+      skyK: 1 - 0.45 * gloom,
+      veil: Math.min(0.98, cover * (1 + 0.3 * storm)),
+      deck: wx && wx.deck > 0 ? wx.deck : 8,
+      drift: wx && isFinite(wx.phase) ? [Math.cos(wx.phase * 0.9) * 40, Math.sin(wx.phase * 0.37) * 40] : [0, 0]
+    };
+  }
+  GL.overcastFor = overcastFor;
+  /* The sky at the horizon under that weather: the ceiling at its mean, as
+   * groundSkyAt draws it where the deck is seen edge-on, for the frame's
+   * clear colour and the fill. `sk` is skyAt's clear answer. */
+  function overcastSky(sk, ov, tint, air) {
+    if (!ov || !(ov.cover > 0.002)) return sk;
+    var bright = air > 0 ? (0.32 + 0.68 * Math.min(1, air / 0.6)) : 0;
+    var out = [];
+    for (var i = 0; i < 3; i++) {
+      var sc = tint[i] + (SKY_SCATTER[i] - tint[i]) * 0.62;
+      var grey = [0.74, 0.76, 0.80][i] * 0.85 + sc * 0.15;
+      var under = grey * 0.83 * bright * (1 - 0.55 * ov.storm) * Math.sqrt(ov.skyK);
+      var lit = sk.lit;
+      var clear = (sk[i] - SKY_NIGHT[i] * (1 - lit)) / Math.max(lit, 1e-6);
+      if (!(lit > 1e-6)) { out.push(sk[i]); continue; }
+      var c = clear * (1 + (ov.skyK - 1) * ov.cover);
+      c = c + (under - c) * ov.cover * 0.97;
+      out.push(SKY_NIGHT[i] + (c - SKY_NIGHT[i]) * lit);
+    }
+    /* `lit` says whether the stars show: none through a deck. */
+    out.lit = Math.max(sk.lit, ov.cover);
+    return out;
+  }
+  GL.overcastSky = overcastSky;
   /* The flat version, for the frame's clear colour and the stars: the sky
    * a third of the way up, looking across the sun. */
   function skyFor(tint, air, sunUp) { return skyAt(tint, air, sunUp, 0.33, 0.5, 0); }
   GL.skyFor = skyFor;
   /* The sky over `body` at a place whose local vertical is `up`, with the
    * sun along `sunDir` (both unit, world). */
-  GL.skyOver = function (body, up, sunDir) {
+  /* `wx` (optional) is Weather.overhead there: the sky under its deck. */
+  GL.skyOver = function (body, up, sunDir, wx) {
     var sunUp = up.x * sunDir.x + up.y * sunDir.y + up.z * sunDir.z;
-    return skyFor(atmoTint(body), airOf(body), sunUp);
+    var tint = atmoTint(body), air = airOf(body);
+    var sk = skyFor(tint, air, sunUp);
+    return wx ? overcastSky(sk, overcastFor(wx, sunUp), tint, air) : sk;
   };
   function setSkyUniforms(u, sk) {
     gl.uniform4f(u.uSkyA, sk.tint[0], sk.tint[1], sk.tint[2], sk.air);
     gl.uniform3f(u.uSkyUp, sk.up.x, sk.up.y, sk.up.z);
     gl.uniform3f(u.uSkySun, sk.sun.x, sk.sun.y, sk.sun.z);
+    var ov = sk.over || overcastFor(null, 0);
+    gl.uniform4f(u.uSkyC, ov.cover, ov.storm, ov.sunK, ov.diffuse);
+    gl.uniform4f(u.uSkyD, ov.deck, ov.drift[0], ov.drift[1], ov.skyK);
   }
   /* Set by main.js each frame the ground sky is wanted, cleared by begin;
    * it hazes that body's ground. */
-  GL.setGroundSky = function (body, up, sunDir) {
+  /* `wx` (optional, 2026-11-03) is Weather.overhead at that place and hour;
+   * without it the sky is clear, as it always was. */
+  GL.setGroundSky = function (body, up, sunDir, wx) {
     groundSky = body ? { bodyId: body.id, tint: atmoTint(body), air: airOf(body),
                          up: up, sun: sunDir } : null;
     /* The sky's light on the shade side of whatever stands under it: the
@@ -5049,9 +5225,19 @@
      * a second sun. */
     if (groundSky) {
       var su = up.x * sunDir.x + up.y * sunDir.y + up.z * sunDir.z;
+      groundSky.over = overcastFor(wx || null, su);
       var sk = skyAt(groundSky.tint, groundSky.air, su, 0.5, 0.5, 0);
-      groundSky.fill = [sk[0] * 0.55, sk[1] * 0.55, sk[2] * 0.55];
+      sk = overcastSky(sk, groundSky.over, groundSky.tint, groundSky.air);
+      /* Under a deck the fill is that grey sky, plus the deck's own
+       * diffuse, which is what lights a shade side on an overcast day. */
+      var dif = groundSky.over.diffuse;
+      groundSky.fill = [sk[0] * 0.55 + dif * 0.85, sk[1] * 0.55 + dif * 0.87, sk[2] * 0.55 + dif * 0.90];
     }
+  };
+  /* What the ground sky was last handed, for the test: the shading inputs,
+   * not the pixels. Null when no ground sky is engaged this frame. */
+  GL.groundSkyInputs = function () {
+    return groundSky ? { bodyId: groundSky.bodyId, over: groundSky.over, fill: groundSky.fill } : null;
   };
   /* The sky itself: one full-screen quad behind everything, no depth, no
    * glow. Called right after begin, before the stars, so at dusk the stars

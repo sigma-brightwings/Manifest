@@ -121,6 +121,114 @@ tear, or the seed, port and camera, would let it be found.
 `ship.lentBay`, a port id or null. A save from before it loads as "not lent",
 which is what it was.
 
+### Added (2026-11-03, the lead pip and the intercept assist)
+
+Astra: "can we simplify the orbital mechanics controls for the player? Maybe
+like when you have selected a target, a navigation pip shows up on the HUD, if
+it's in orbit of a star, that pip should track ahead of the target so that your
+ship will end up reaching the target when the target will also be intersecting
+that point in space?" On the timing she chose drive-aware. On the flying: "I
+want the autopilot to do most of the flying with the option to take the
+controls myself."
+
+- **The pip.** Lock anything and a pink ring shows where it will be when you
+  get there. A dashed line runs to it from the target, along the target's
+  motion. Under the ring are the time to intercept and the drive the estimate
+  assumes: **cruise** when the drive is yours to use for the trip, otherwise
+  **thrusters** and why not cruise (*mass locked by Mirven I*, *too close for
+  the drive*). It merges into the target when the two are as good as the same
+  point. Off the screen, an arrow on the edge points to it. It shows in the
+  cockpit and in the exterior view.
+- **How it is solved** (`src/intercept.js`, new). The intercept time T is solved
+  so that the time to fly from here to where the target will be at t+T, arriving
+  matched, equals T. It uses a fixed point and falls back to bisection. The
+  flown-time model is the assist's own flight law:
+  - on thrusters, the close-phase law auto-dock already flies, run forward;
+  - on cruise, the closing law `steerAutoCruise` already flies, under the drive's
+    lock ceiling read along the path, with the turn onto the heading and the
+    detour round any world in the way.
+  It re-solves four times a second. Between solves the pip holds still in space
+  and the count runs down.
+- **`I`: the intercept assist.** It is a mode of the existing autopilot
+  (`G.autodock.mode = 'intercept'`), not a second one. It turns onto the pip,
+  spins the cruise drive up, flies the leg, drops out at the target's velocity
+  and makes the final match on thrusters. It parks at a standoff:
+  - four capture radii off a station (`T` docks from there in one press);
+  - 2 km off a ship;
+  - over a ground port at the height its descent starts;
+  - in a circular orbit about a world.
+- **You can take over at any time.** Any stick or throttle input takes the
+  controls, and the assist stands by instead of cancelling. The banner at the
+  top says **AUTO** or **YOU**. `I` hands it back, and `Shift+I` stands it down.
+  It does not take the ship back when you let go: in space, letting go is a
+  choice too.
+- **The match marker.** Near the end of any intercept, a yellow diamond shows
+  which way to burn to match the target's velocity, with the burn in m/s.
+- **Every refusal says why:** no lock, a lock that is not in this system,
+  docked, on the ground, inside a station, on the port's rail, out of reaction
+  mass. With the cruise drive blocked it still engages, on thrusters, and says
+  why the drive is out.
+
+Measured (`test/intercept.test.js`, 24 seeds × an orbital port from another
+world, the same port from 3,000 km, a moon and a coasting NPC ship, 96 runs):
+
+- **Arrivals.** Every run that started arrived: inside the standoff tolerance
+  and matched to within 2.4 m/s (worlds: into their orbit).
+- **Thruster legs.** Arrival is within 0.5% of the pip's prediction, except a
+  freighter that started a burn mid-chase (86% late).
+- **Cruise legs to ports.** Within 2% typically, and up to 18% late.
+- **Moons.** Within ±25%, and one 68% early, where the real detour round the
+  planet was shorter than the modelled one.
+- **Cost.** A solve takes a median of 0.12 ms and a worst of 2 ms. The pip
+  standing on screen costs about 0.3 ms a frame.
+
+Fixed on the way: a traffic ship's `vel` can disagree with its own rail. One
+freighter moved at 37.5 km/s and reported 32.4. The assist therefore reads a
+ship's velocity off its rail's positions, not the field.
+
+**Saves:** unaffected. Nothing new is saved and the save version is
+unchanged. The assist is not carried across a save, as auto-dock is not.
+
+### Changed (2026-11-03, landing on open ground, giant skims retuned, the sky under an overcast)
+
+Astra: "I agree with you on all of that, especially the skimming."
+
+- **Open ground charges what a pad charges.** Setting down away from a port
+  was free up to 100 m/s and a wreck past it. It now uses the pad's own damage
+  ramp, the same function: free to 20 m/s, costing more hull the harder you
+  hit, and fatal at 90. A hard touchdown says what it cost on the touchdown
+  line. Gear up on open ground is still a wreck at any speed.
+- **The landing autopilot sets her down at about 10 m/s.** It braked to its
+  final crawl halfway inside a pad's capture envelope, but a pad catches a
+  ship at the envelope's edge, so it caught her still fast. Flown into 47
+  surface pads and bays across 12 seeds from 25 km up, it hit every open pad
+  at about 138 m/s, which is fatal, and Harrow Deep's shaft at 30 m/s. Nobody
+  saw this because pads used to refuse a fast arrival rather than charge for
+  it. It now crawls at the edge, at half the lower of the pad's limit and the
+  speed damage starts. Measured again: 8.6 to 10.5 m/s, no hull lost on any
+  of the 47.
+- **Gas giant skims are back where they were.** Once a giant's air turned
+  with it, a skim flown with the spin met the air slower. Over 40 giants, a
+  prograde pass took 0.53x the heat and 0.81x the hydrogen it used to, and a
+  shielded hull could hold three times deeper. A giant's air heat is now x1.9
+  and its intake x1.25. A prograde pass is back to 1.01x on both; against the
+  spin is about 3.2x the old heat, so it is still the hard way round. Rocky
+  worlds and a star's corona are unchanged. Your skimmers' work orders are
+  unchanged.
+- **An overcast looks overcast from the ground.** At a ground port or a sea
+  platform, the sky now shows the weather over that spot. That is the same
+  weather the planet is painted with and the port's forecast reports. Overcast
+  is a grey cloud ceiling, partial cloud is broken cloud, and the sun and stars
+  go behind it. The light goes flat: less direct sun on the ground, the sea and
+  the buildings, no glint on the water, and the cloud's own diffuse light in
+  the shade. The cloud layer still stays off the ground near your eye, so the
+  white streaks it used to leave on the sea round a rig do not come back.
+
+### Saves
+
+Every save loads. Nothing new is written. The landing note on the ship
+(`touchdown`) exists only at runtime.
+
 ### Fixed (2026-11-03, the Cutter's and the Crawler's models mended; a door out of the Crawler's lift pit)
 
 Astra, on the two model problems the hull-walk fix reported and could not mend

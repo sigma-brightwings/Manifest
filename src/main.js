@@ -8,7 +8,7 @@
       Combat = global.Combat, Missions = global.Missions,
       Slip = global.Slipspace, Logo = global.Logo,
       Weather = global.Weather, Fleet = global.Fleet,
-      Crew = global.Crew;
+      Crew = global.Crew, Intercept = global.Intercept;
   var DEG = Math.PI / 180;
   var AU = Gen.AU;
 
@@ -1501,6 +1501,16 @@
   /* Hull at zero. Same deal as a crash — the hull and everything bolted to
    * or stacked in it is gone; the pilot, the money, the reputation and the
    * warrants all survive, because none of those were in the hull. */
+  /* A hard set-down on open ground costs hull now (sim.js checkImpact,
+   * 2026-11-03), and a cost nobody mentions reads as a bug - the hull bar
+   * just went down for no reason. The touchdown line says what it cost and
+   * at what speed, and only when THIS landing was the hit. */
+  function groundHitNote(ship) {
+    var h = ship.lastLandingHit;
+    if (!h || !h.ground || !(h.dmg > 0) || h.speed !== ship.impactSpeed) return '';
+    return ', hard: ' + fmtSpeed(h.speed) + ', ' + Math.round(h.dmg) + ' hull';
+  }
+
   function playerDestroyed() {
     (G.explosions = G.explosions || []).push({
       pos: V.clone(G.ship.pos), at: performance.now(), size: 2.5,
@@ -1831,10 +1841,12 @@
          * would need twenty-odd presses of . to use; this needs one. Any
          * press of , takes the drive off full and holds what you have. */
         case ',':
+          if (G.cruise && interceptOn()) interceptStandby('you took the throttle');
           if (G.cruise) { G.cruise.full = false; G.cruise.speed = Math.max(CRUISE_MIN, G.cruise.speed / 1.6); }
           else G.warpIndex = Math.max(0, G.warpIndex - 1);
           break;
         case '.':
+          if (G.cruise && interceptOn()) interceptStandby('you took the throttle');
           if (G.cruise) {
             G.cruise.speed = Math.min(G.cruise.maxSpeed, G.cruise.speed * 1.6);
             if (G.cruise.speed >= G.cruise.maxSpeed * 0.999) G.cruise.full = true;
@@ -2003,6 +2015,15 @@
            * The obvious binding for auto-dock was A — which is also radial-
            * in thrust, so engaging it registered a manual burn on the same
            * keystroke and it cancelled itself before the next frame. */
+          /* Alongside on the intercept assist (or anywhere on it), T is
+           * the hand-over to the docking approach: one press, because the
+           * station is already the lock and already where you are. */
+          if (interceptOn() && dockCand) {
+            G.autodock = null;
+            G.dockTarget = dockCand;
+            startAutodock();
+            break;
+          }
           if (G.autodock) { cancelAutodock('cancelled'); break; }
           if (dockCand && G.dockTarget === dockCand) { startAutodock(); break; }
           if (dockCand) {
@@ -2012,6 +2033,12 @@
             say('Lock a station first — [ ] cycles the nav list, then T', 3);
           }
           break;
+        /* I IS THE INTERCEPT ASSIST (2026-11-03): engage it on the lock;
+         * again swaps who is flying, AUTO or YOU; Shift+I stands it down.
+         * I was free on the flight keyboard since the node keys moved to
+         * the F2 map (which still answers I itself — modeKey takes it
+         * first there). */
+        case 'i': interceptKey(e.shiftKey); break;
         case '[': cycleNavTarget(-1); break;
         /* The ship or station nearest the line of the nose (targetAhead). */
         case '\\': targetAhead(); break;
@@ -3108,7 +3135,8 @@
     var lock = cruiseLock();
     c.maxSpeed = lock.maxSpeed;
     c.lockBody = lock.body;
-    if (c.full && !(G.autodock && G.autodock.mode === 'dock')) c.speed = c.maxSpeed;
+    if (c.full && !(G.autodock && G.autodock.mode === 'dock') &&
+        !(interceptOn() && !G.autodock.standby)) c.speed = c.maxSpeed;
     if (c.speed > c.maxSpeed) c.speed = c.maxSpeed;
     if (c.speed < CRUISE_MIN) c.speed = CRUISE_MIN;
 
@@ -3175,7 +3203,8 @@
      * cruise while still locked onto the place you were leaving — which is
      * the normal way anyone would use it. */
     var nav = navTargetState();
-    var autoOwnsDrop = G.autodock && G.autodock.mode === 'dock';
+    var autoOwnsDrop = G.autodock && (G.autodock.mode === 'dock' ||
+                                      (G.autodock.mode === 'intercept' && !G.autodock.standby));
     /* On full the lock is already slowing you for the target, so the
      * look-ahead only has to cover a frame or two; 2.5 s of a 10c approach
      * dropped you out 23 million km short (measured, Beta Mirven VII). */
@@ -3736,6 +3765,9 @@
     var range = V.len(rel);
     var vrel = V.sub(G.ship.vel, ss.vel);
 
+    /* ---- intercept: the lead pip's own pilot (advanceIntercept) -------- */
+    if (ad.mode === 'intercept') return advanceIntercept(ad, dtSim, dtReal);
+
     /* ---- match orbit ---------------------------------------------------
      * Null the relative velocity and stop. Not "fly to it" — just stop
      * moving with respect to it, which is the manoeuvre that turns a
@@ -3944,11 +3976,32 @@
        *
        * Half the braking authority, because this is the leg where being
        * wrong costs the hull, and a terminal speed the pad will actually
-       * catch rather than zero. */
-      var stop = (st.dockCaptureRadius || 1.2) * 0.5;
-      var vTerm = (st.dockMaxSpeed || 0.02) * 0.6;
+       * catch rather than zero.
+       *
+       * THE CRAWL IS OWED AT THE ENVELOPE'S EDGE, NOT HALFWAY IN
+       * (2026-11-03). This braked to vTerm at half the capture radius from
+       * the aim - but a pad catches whatever crosses its envelope, at
+       * whatever speed it is doing, so the hull was caught at the RIM with
+       * the half-radius of braking still unspent. Measured over the
+       * surface pads of kawartha and alpha, flown from 25 km overhead: 138
+       * m/s into every open pad (fatal - the pad ramp kills at 90) and 30
+       * m/s into Harrow Deep's shaft. Nobody saw it because the old pads
+       * refused a fast arrival instead of charging for it, and the
+       * autopilot just flew another lap. So the braking curve now runs out
+       * at the envelope, measured from the pad itself (the aim can be the
+       * shaft mouth, which is not where the envelope is centred), with a
+       * tenth of a radius in hand for a frame's overshoot.
+       *
+       * And the crawl is half whichever is lower of the pad's own limit and
+       * the speed a landing starts to cost hull (Sim.LAND_SAFE_SPEED): an
+       * autopilot that hands the pilot a bill for its own touchdown is the
+       * same bug as one that never arrives. */
+      var capR = st.dockCaptureRadius || 1.2;
+      var safe = Math.min(st.dockMaxSpeed || 0.02, Sim.LAND_SAFE_SPEED || 0.02);
+      var vTerm = safe * 0.5;
+      var toEnv = Math.min(dAim, V.dist(G.ship.pos, ss.pos)) - capR * 1.1;
       vWant = Math.min(speedCap,
-                       vTerm + Math.sqrt(2 * brake * 0.5 * Math.max(0, dAim - stop)));
+                       vTerm + Math.sqrt(2 * brake * 0.5 * Math.max(0, toEnv)));
     } else {
       vWant = Math.min(speedCap, Math.sqrt(2 * brake * Math.max(0, dAim)));
     }
@@ -3986,6 +4039,746 @@
     // station otherwise. Rate-limited — see slewNose.
     slewNose(V.len(cmd) > G.ship.maxAccel * 0.15 ? cmd : rel, dtReal);
     return cmd;
+  }
+
+  /* ---- THE LEAD PIP AND THE INTERCEPT ASSIST (2026-11-03) -----------------
+   * Astra: "when you have selected a target, a navigation pip shows up on
+   * the HUD, if it's in orbit of a star, that pip should track ahead of the
+   * target so that your ship will end up reaching the target when the
+   * target will also be intersecting that point in space." And for the
+   * flying: "I want the autopilot to do most of the flying with the option
+   * to take the controls myself."
+   *
+   * The solve and the flight law are in intercept.js, pure, so the number
+   * on the HUD and the thing the assist flies are one function. What lives
+   * here is the glue: the target's rails as a function of time, where the
+   * ship should end up relative to it, whether the cruise drive is the
+   * drive you would actually use, and the assist as one more mode of the
+   * one autopilot (G.autodock.mode === 'intercept') — the same slewNose,
+   * faceAlong, routeAround, toggleCruise and dropCruise auto-dock flies
+   * with, not a second pilot.
+   *
+   * THE RECOMPUTE RATE: four times a second of wall clock. Measured on the
+   * cloud box (2 slow cores) across 40 seeds and every kind of target, the
+   * whole solve costs a median of about 0.1 ms and a worst of about 2 ms —
+   * the worst is a long thruster leg with cruise locked out, the model
+   * walking thousands of steps. Every frame would be affordable at the
+   * median and a visible tax at the worst against a predictor that already
+   * eats most of the frame, so it runs on a clock, and between solves the
+   * pip holds still in space while the countdown runs on: T less the game
+   * time since the solve. A pip is a point the ship is flying to, and one
+   * that twitched every frame would be harder to fly at, not easier. */
+  var INTERCEPT_EVERY = 0.25;          // s of wall clock between solves
+  /* How far off a target the assist parks you, and why each:
+   *   a STATION — four capture radii, the same keep the berth hold uses
+   *     (holdOffPort): outside the envelope, so arriving never docks you
+   *     by accident, and near enough that T-T from there is a short creep;
+   *   a SHIP or a POINT — 2 km, follow mode's floor (Shift+L);
+   *   a GROUND PORT — straight above it at the altitude auto-dock's ground
+   *     plan crosses a world at, which is the height its descent starts;
+   *   a WORLD (planet, moon, star) — a circular orbit at 1.25 keep-outs:
+   *     arriving "matched" to a world means in orbit about it, not hanging
+   *     still over it until gravity takes you in. */
+  var INTERCEPT_SHIP_STANDOFF = 2;     // km
+  var INTERCEPT_WORLD_ORBIT = 1.25;    // keep-out radii
+  /* Beyond this the drive is worth spinning up — auto-dock's own number
+   * for an orbital port (AUTO_CRUISE_MIN), so the two autopilots and the
+   * pip agree on where the cruise leg starts. */
+  var INTERCEPT_CRUISE_MIN = 5e3;      // km
+  /* The nose must be on the cruise heading to this before the drive spins
+   * up: the bubble goes where the nose points, and spinning it up pointing
+   * elsewhere spends the first second of a trip going there. */
+  var INTERCEPT_ALIGN = 0.996;         // cos — about 5 degrees
+
+  function interceptKeyOf(lock) {
+    return lock ? lock.kind + ':' + (lock.id !== undefined ? lock.id : (lock.name || '')) : '';
+  }
+
+  /* THE TARGET'S RAILS. `at(dt)` is where it will be dt seconds of game
+   * time from now. Bodies from Sim.bodyStateAt, which is the uncached
+   * twin of bodyState — bodyState keeps one instant per system, and asking
+   * it about t+T every quarter-second would throw away every body the frame
+   * had already solved for G.t. Traffic from its own route's rail
+   * (Sim.trafficState at a future t is the timetable at that t). A ship
+   * that has been lifted off its rail into the encounter system has no
+   * future written down anywhere, so it is extrapolated on its present
+   * velocity — honest for the few seconds anybody is close to one. */
+  function interceptRails(lock) {
+    if (!lock || !G.sys) return null;
+    var sys = G.sys;
+    if (lock.kind === 'body') {
+      var b = sys.byId[lock.id];
+      if (!b) return null;
+      var kind = b.kind === 'station' ? ((b.surface || b.underground) ? 'ground' : 'station')
+               : (b.mu > 0 ? 'world' : 'station');
+      return { kind: kind, obj: b, name: b.name, lock: lock,
+               at: function (dt) { return Sim.bodyStateAt(b, sys, G.t + dt); } };
+    }
+    if (lock.kind === 'ship') {
+      var route = null, patrol = null, i;
+      for (i = 0; i < (sys.traffic || []).length; i++) if (sys.traffic[i].id === lock.id) { route = sys.traffic[i]; break; }
+      if (!route) for (i = 0; i < (sys.patrols || []).length; i++) if (sys.patrols[i].id === lock.id) { patrol = sys.patrols[i]; break; }
+      var live = function () {
+        var list = Sim.shipsAll(sys, G.t);
+        for (var j = 0; j < list.length; j++) if (list[j].id === lock.id) return list[j];
+        return null;
+      };
+      /* THE VELOCITY IS THE RAIL'S OWN DERIVATIVE, not trafficState's
+       * `vel`. Measured on seed ip-14 (Ironwake Lighter, mid-transfer): the
+       * position on the rail moved at 37.5 km/s while the state reported
+       * 32.4, and an assist matched to the reported number sat 650 km off
+       * her for two hours of game time with 3.7 km/s between them that it
+       * believed was zero. A central difference over two seconds is the
+       * velocity of the thing actually drawn on the screen. */
+      var railAt = function (dt) {
+        var a = Sim.trafficState(route, sys, G.t + dt - 1), m = Sim.trafficState(route, sys, G.t + dt),
+            b = Sim.trafficState(route, sys, G.t + dt + 1);
+        if (!m || !m.pos) return null;
+        if (!a || !b || !a.pos || !b.pos) return { pos: m.pos, vel: m.vel || V.zero() };
+        return { pos: m.pos, vel: V.scale(V.sub(b.pos, a.pos), 0.5) };
+      };
+      var first = live();
+      if (!first) return null;
+      return { kind: 'ship', obj: first, name: first.name || 'contact', lock: lock,
+        at: function (dt) {
+          if (!dt) {
+            var s0 = live();
+            if (!s0) return null;
+            /* On its rail, the rail's own motion (railAt), not the state's
+             * vel field — see below. Woken off it, what the encounter
+             * system says. */
+            if (route && !route.dead && !route.suppressed && !s0.live) { var r0 = railAt(0); if (r0) return { pos: s0.pos, vel: r0.vel }; }
+            return { pos: s0.pos, vel: s0.vel || V.zero() };
+          }
+          if (route && !route.dead && !route.suppressed) {
+            var rs = railAt(dt);
+            if (rs) return rs;
+          }
+          if (patrol && !patrol.dead && !patrol.live && Sim.patrolState) {
+            var ps = Sim.patrolState(patrol, sys, G.t + dt);
+            if (ps && ps.pos) return { pos: ps.pos, vel: ps.vel || V.zero() };
+          }
+          var s1 = live();
+          if (!s1) return null;
+          /* Falling as it goes: a ship off its rail is still in a
+           * gravity well, and leaving the pull out would make its
+           * acceleration — which the assist feeds forward — zero. */
+          var v1 = s1.vel || V.zero();
+          var g1 = Sim.acceleration(s1.pos, sys, G.t);
+          return { pos: V.addScaled(V.addScaled(s1.pos, v1, dt), g1, 0.5 * dt * dt),
+                   vel: V.addScaled(v1, g1, dt) };
+        } };
+    }
+    if (lock.kind === 'point' && lock.pos) {
+      return { kind: 'point', obj: null, name: lock.name || 'point', lock: lock,
+               at: function () { return { pos: lock.pos, vel: V.zero() }; } };
+    }
+    return null;
+  }
+
+  /* Where the ship should end up, given where the target is: the point it
+   * flies to, the velocity it arrives with, and how close counts. `from`
+   * is the ship's position — the standoff is on the side you come from. */
+  function interceptAim(rails, st, dt, from) {
+    var b = rails.obj, off, R;
+    if (rails.kind === 'ground' && b.parentBody) {
+      var host = Sim.bodyStateAt(b.parentBody, G.sys, G.t + dt);
+      var up = V.sub(st.pos, host.pos), ur = V.len(up);
+      up = ur > 1e-9 ? V.scale(up, 1 / ur) : { x: 0, y: 0, z: 1 };
+      var alt = Math.max(b.parentBody.radius * GROUND_CLEAR_FRAC, GROUND_CLEAR_MIN) * 1.25;
+      /* The ground turns: a point straight above the pad moves with it,
+       * faster by the ratio of the radii. */
+      var spin = V.sub(st.vel, host.vel);
+      return { aim: V.addScaled(st.pos, up, alt), standoff: alt, tol: Math.max(0.5, alt * 0.05),
+               aimVel: V.addScaled(host.vel, spin, ur > 1e-9 ? (ur + alt) / ur : 1) };
+    }
+    var side = V.sub(from, st.pos), sl = V.len(side);
+    side = sl > 1e-9 ? V.scale(side, 1 / sl) : { x: 1, y: 0, z: 0 };
+    if (rails.kind === 'world') {
+      R = keepOutRadius(b) * INTERCEPT_WORLD_ORBIT;
+      /* Prograde round the system's pole, so the orbit you are handed is a
+       * sensible one and the same one every time, not whichever way a
+       * nearly-radial approach velocity happened to lean. */
+      var pole = Math.abs(side.z) < 0.95 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+      var along = V.norm(V.cross(pole, side));
+      return { aim: V.addScaled(st.pos, side, R), standoff: R, tol: Math.max(5, R * 0.02), orbit: true,
+               aimVel: V.addScaled(st.vel, along, Math.sqrt(b.mu / R)) };
+    }
+    var stand = rails.kind === 'station' ? Math.max(2, ((b && b.dockCaptureRadius) || 1.2) * 4)
+              : INTERCEPT_SHIP_STANDOFF;
+    return { aim: V.addScaled(st.pos, side, stand), standoff: stand, tol: Math.max(0.1, stand * 0.25),
+             aimVel: st.vel };
+  }
+
+  /* Is the cruise drive the drive you would use from here? The drive's own
+   * rules, in the drive's own words, so the pip saying "thrusters — mass
+   * locked by Mirven I" is the same sentence Z would give. */
+  function interceptCruise() {
+    if (G.cruise) return { ok: true };
+    if (G.ship.docked) return { ok: false, why: 'on the clamps' };
+    if (G.ship.landed) return { ok: false, why: 'on the ground' };
+    var held = portHasYou();
+    if (held) return { ok: false, why: held.toLowerCase() };
+    var lock = cruiseLock();
+    if (!lock.can) return { ok: false, why: 'mass locked by ' + (lock.body ? lock.body.name : 'a world') };
+    if (G.ship.thrusterFuel < 0.5) return { ok: false, why: 'not enough reaction mass to cruise' };
+    return { ok: true };
+  }
+
+  /* The thrust the steering gets once the target's acceleration and our own
+   * gravity are paid — the same split payThenSteer flies with. */
+  function interceptFeedForward(rails) {
+    var h = 1;
+    var a = rails.at(h), b = rails.at(-h);
+    var acc = (a && b) ? V.scale(V.sub(a.vel, b.vel), 1 / (2 * h)) : V.zero();
+    return V.sub(acc, Sim.acceleration(G.ship.pos, G.sys, G.t));
+  }
+  function steerAccel(ff) {
+    var A = G.ship.maxAccel, f = V.len(ff);
+    return Math.sqrt(Math.max(A * A * 0.09, A * A - f * f));
+  }
+
+  /* One solve. Returns the pip, or null with a reason. */
+  function solveIntercept(lock) {
+    var rails = interceptRails(lock);
+    if (!rails) return null;
+    var now = rails.at(0);
+    if (!now) return null;
+    var cr = interceptCruise();
+    var ff = interceptFeedForward(rails);
+    var aim0 = interceptAim(rails, now, 0, G.ship.pos);
+    var opts = {
+      ship: { pos: G.ship.pos, vel: G.ship.vel },
+      accel: steerAccel(ff),
+      tol: aim0.tol,
+      cruiseMin: INTERCEPT_CRUISE_MIN,
+      cap: (rails.kind === 'ground') ? GROUND_TRANSIT_V * 2 : undefined,
+      targetAt: function (dt) {
+        var s = dt > 0 ? rails.at(dt) : now;
+        if (!s) s = now;
+        var a = interceptAim(rails, s, dt, G.ship.pos);
+        return { pos: s.pos, vel: s.vel, aim: a.aim, aimVel: a.aimVel };
+      },
+      /* The turn onto the cruise heading, at the rate slewNose turns. */
+      turnTime: G.cruise ? null : function (aimPos) {
+        var d = V.sub(aimPos, G.ship.pos), dl = V.len(d);
+        if (!(dl > 1e-9)) return 0;
+        return Math.acos(Math.max(-1, Math.min(1, V.dot(G.ship.fwd, d) / dl))) / NOSE_RATE;
+      },
+      cruise: cr.ok ? {
+        top: cruiseTopKms(),
+        dropR: aim0.tol,
+        skipIndex: rails.kind === 'ground' ? G.sys.gravBodies.indexOf(rails.obj.parentBody) : -1,
+        bodiesAt: function (dt) {
+          return G.sys.gravBodies.map(function (gb) {
+            return { pos: Sim.bodyStateAt(gb, G.sys, G.t + dt).pos, keep: keepOutRadius(gb) };
+          });
+        }
+      } : null
+    };
+    var res = Intercept.solve(opts);
+    res.why = cr.ok ? (res.drive === 'thrusters' ? 'too close for the drive' : '') : cr.why;
+    res.rails = rails;
+    res.standoff = aim0.standoff;
+    res.tol = aim0.tol;
+    res.orbit = !!aim0.orbit;
+    res.targetPos = now.pos;
+    res.name = rails.name;
+    return res;
+  }
+
+  /* The pip, kept fresh. Runs every frame but solves on its own clock;
+   * between solves only the countdown and the target's present position
+   * move. A new lock, or the assist changing what it is chasing, solves
+   * at once — a stale pip for somebody else is worse than none. */
+  function updateIntercept(dtReal) {
+    var lock = (G.autodock && G.autodock.mode === 'intercept') ? G.autodock.lock : G.navTarget;
+    var live = lock && G.ship && !G.ship.docked && !G.ship.landed && !G.hyper && !G.walk && !G.eva;
+    if (!live) { G.intercept = null; return; }
+    var key = interceptKeyOf(lock);
+    var ip = G.intercept;
+    if (!ip || ip.key !== key) ip = G.intercept = { key: key, age: Infinity, costs: [] };
+    ip.age += Math.max(0, dtReal || 0);
+    if (ip.age >= INTERCEPT_EVERY) {
+      var t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      var res = solveIntercept(lock);
+      var cost = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
+      ip.age = 0;
+      ip.costs.push(cost);
+      if (ip.costs.length > 120) ip.costs.shift();
+      ip.cost = cost;
+      if (!res || !isFinite(res.T)) {
+        ip.res = null;
+        ip.why = res ? 'no intercept from here' : 'lost the lock';
+      } else {
+        ip.res = res; ip.why = res.why; ip.solvedAt = G.t;
+      }
+    }
+    if (ip.res) {
+      ip.T = Math.max(0, ip.res.T - (G.t - ip.solvedAt));
+      ip.drive = ip.res.drive;
+      ip.pos = ip.res.pos;
+      var nowSt = ip.res.rails.at(0);
+      ip.targetPos = nowSt ? nowSt.pos : ip.res.targetPos;
+      ip.targetVel = nowSt ? nowSt.vel : V.zero();
+      /* Merged: the pip and the target are, for flying purposes, the same
+       * point — inside the standoff, or a hundredth of the range. The HUD
+       * also merges them when they are within a few pixels of each other,
+       * which it can only decide when it knows where they landed. */
+      /* WHERE IT IS DRAWN. On the cruise drive the pip is the point in
+       * space itself: the bubble throws your momentum away and goes where
+       * the nose points, so the place to point is where the target will
+       * be. On thrusters you keep your momentum, and the place to point is
+       * where the target will be RELATIVE TO WHERE YOU WILL BE coasting —
+       * the gunsight's lead, target(t+T) less your own drift over T.
+       * Without that, a ship already moving with a station (the station
+       * and you both doing 30 km/s round the star) saw the pip 1,800 km
+       * ahead of a station it was twelve kilometres from: true in absolute
+       * space and useless to fly at (measured, kawartha, Threshold Dock). */
+      ip.drawPos = ip.drive === 'cruise' ? ip.pos : V.addScaled(ip.pos, G.ship.vel, -ip.T);
+      ip.merged = V.dist(ip.drawPos, ip.targetPos) < Math.max(ip.res.standoff, 0.01 * V.dist(ip.targetPos, G.ship.pos));
+      /* The speed match: what the ship would need to burn to arrive with the
+       * target's velocity (a world's circular one), and whether the trip is
+       * near enough its end for that to be the thing to fly. "Near the end"
+       * is the braking distance — once stopping takes most of what is left,
+       * the burn to match is the burn to make. */
+      var aimNow = nowSt ? interceptAim(ip.res.rails, nowSt, 0, G.ship.pos) : null;
+      if (aimNow) {
+        ip.dv = V.sub(aimNow.aimVel, G.ship.vel);
+        ip.dvMag = V.len(ip.dv);
+        ip.gap = V.dist(aimNow.aim, G.ship.pos);
+        var stopDist = ip.dvMag * ip.dvMag / (2 * Math.max(1e-6, G.ship.maxAccel * Intercept.BRAKE));
+        ip.nearEnd = !G.cruise && (ip.gap < Math.max(ip.res.standoff * 20, stopDist * 1.5));
+      }
+    } else {
+      ip.T = Infinity; ip.nearEnd = false;
+    }
+  }
+
+  /* ---- the assist --------------------------------------------------------
+   * I engages it on the lock. Any stick or throttle input takes the
+   * controls at once and it STANDS BY — still drawing the pip and the
+   * speed-match marker, still saying who is flying — and I hands back.
+   *
+   * WHY A KEY TO HAND BACK, NOT A TIMEOUT. Letting go is itself a control
+   * input in space: a pilot who cuts thrust to coast past something, or
+   * takes their hands off to read the chart, has chosen to coast, and an
+   * autopilot that took the ship back after a quiet second would be one
+   * that argued with that choice exactly when the pilot was looking away.
+   * A car's lane assist can resume on its own because doing nothing in a
+   * car means "keep going as you were"; here it means "keep falling as you
+   * were", which is a different instruction. One key, the one that engaged
+   * it, makes the hand-back a decision rather than an accident. */
+  function interceptOn() { return !!(G.autodock && G.autodock.mode === 'intercept'); }
+  function autoFlying() { return !!G.autodock && !(G.autodock.mode === 'intercept' && G.autodock.standby); }
+
+  /* Is a hand on the stick or the throttle this frame? The thrust keys,
+   * the attitude keys, and the mouse when it is flying the nose. */
+  function stickInput() {
+    var k = G.keys || {};
+    if (k['w'] || k['s'] || k['a'] || k['d'] || k['r'] || k['f'] || k['q'] || k['e'] ||
+        k['arrowup'] || k['arrowdown'] || k['arrowleft'] || k['arrowright']) return true;
+    return !!(G.mouseAim && G.aimCmd && (Math.abs(G.aimCmd.pitch) > 0.05 || Math.abs(G.aimCmd.yaw) > 0.05));
+  }
+
+  function interceptStandby(why) {
+    var ad = G.autodock;
+    if (!ad || ad.mode !== 'intercept' || ad.standby) return;
+    ad.standby = true;
+    ad.phase = 'standby';
+    G.ship.thrust = V.zero();
+    /* Take the clock down with the controls: a pilot who reaches for the
+     * stick at 500x is about to burn five hundred seconds a second. */
+    G.warpIndex = 0;
+    if (G.cruise) G.cruise.full = false;
+    say('You have the controls' + (why ? ' — ' + why : '') + '.  I hands back to the intercept assist', 5);
+  }
+
+  function interceptKey(shift) {
+    if (shift) {
+      if (interceptOn()) { cancelAutodock(null); say('Intercept assist stood down', 3); }
+      else say('No intercept assist to stand down — I engages one on the lock', 3);
+      return;
+    }
+    if (interceptOn()) {
+      var ad = G.autodock;
+      if (ad.standby) {
+        ad.standby = false; ad.phase = 'resume'; ad.cruiseTry = null; ad.cruiseBarred = false;
+        say('Intercept assist has the controls — ' + ad.target.name, 4);
+      } else {
+        interceptStandby('I pressed');
+      }
+      return;
+    }
+    startIntercept();
+  }
+
+  /* Every refusal says why (house rule 5). */
+  function startIntercept() {
+    if (G.ship.docked) { say('Undock first — the intercept assist flies from open space', 3); return; }
+    if (G.ship.landed) { say('On the ground — lift off first', 3); return; }
+    if (G.hyper) { say('Not in the tunnel', 2); return; }
+    if (refuseInsideStation()) return;
+    var held = portHasYou();
+    if (held) { say(held + ' — the intercept assist can take you once you are clear of it', 5); return; }
+    if (!G.navTarget) { say('Lock something first — [ ] cycles the nav list, then I', 4); return; }
+    var lock = G.navTarget;
+    var rails = interceptRails(lock);
+    if (!rails) {
+      say(lock.kind === 'body'
+            ? 'That lock is not in this system — jump there (F8), then lock it again'
+            : 'That contact has gone — it jumped, docked or was destroyed', 5);
+      return;
+    }
+    if (!(G.ship.thrusterFuel > 0)) { say('Out of reaction mass — the thrusters cannot fly an intercept', 5); HOOKS.sound('warn'); return; }
+    if (G.autodock) cancelAutodock(null);
+    if (G.nodeBurn) cancelNodeBurn(null);
+    G.autodock = {
+      mode: 'intercept', target: { name: rails.name, obj: rails.obj }, rails: rails,
+      lock: { kind: lock.kind, id: lock.id, pos: lock.pos, name: lock.name },
+      phase: 'turn', elapsed: 0, standby: false
+    };
+    if (G.intercept) G.intercept.age = Infinity;       // solve for it this frame
+    var cr = interceptCruise();
+    say('Intercept assist: ' + rails.name +
+        (cr.ok ? '' : ' — on thrusters, ' + cr.why + (/mass locked/.test(cr.why) ? '; cruise once clear' : '')) +
+        '.  Any stick input takes over', 6);
+  }
+
+  /* THE THRUSTER LEG, and the hold alongside. Called from advanceAutodock,
+   * so it runs exactly where the other modes run and obeys the same
+   * clipping; returns the commanded acceleration. */
+  function advanceIntercept(ad, dtSim, dtReal) {
+    var rails = ad.rails;
+    var st = rails.at(0);
+    if (!st) { cancelAutodock(null); say('Intercept assist stood down — lost the contact', 5); return null; }
+    /* Lock moved to something else: the assist was flying for the old one,
+     * and a pip for the new lock beside an autopilot flying to the old one
+     * is two answers to one question. */
+    if (G.navTarget && interceptKeyOf(G.navTarget) !== interceptKeyOf(ad.lock)) {
+      cancelAutodock(null); say('Intercept assist stood down — the lock changed', 4); return null;
+    }
+    if (!(G.ship.thrusterFuel > 0)) { cancelAutodock(null); say('Intercept assist stood down — out of reaction mass', 5); return null; }
+    var plan = interceptAim(rails, st, 0, G.ship.pos);
+    var gap = V.dist(plan.aim, G.ship.pos);
+    var ip = G.intercept && G.intercept.res ? G.intercept : null;
+
+    /* THE LONG LEG: turn onto the pip, then spin the drive up. Once a
+     * second at most, as auto-dock does, so a drive that will not engage
+     * (mass locked, dry) leaves the ship crossing on thrust and asking
+     * again as it climbs clear. */
+    if (gap > INTERCEPT_CRUISE_MIN && ad.phase !== 'alongside' && !ad.cruiseBarred) {
+      var cr = interceptCruise();
+      if (cr.ok) {
+        var head = V.norm(V.sub((ip && ip.drive === 'cruise' && ip.res.aim) ? ip.res.aim : plan.aim, G.ship.pos));
+        ad.phase = 'turn';
+        slewNose(head, dtReal);
+        if (V.dot(G.ship.fwd, head) > INTERCEPT_ALIGN && (!ad.cruiseTry || ad.elapsed - ad.cruiseTry > 1)) {
+          ad.cruiseTry = ad.elapsed;
+          toggleCruise(true);
+        }
+        if (G.cruise) return V.zero();
+        /* Turning: hold what we have against the target rather than coast
+         * off — the turn is a couple of seconds and the law is cheap. */
+        G.warpIndex = 0;
+        return V.zero();
+      }
+    }
+
+    var detour = routeAround(G.ship.pos, plan.aim, rails.kind === 'ground' ? rails.obj.parentBody : null);
+    var aimPos = detour ? detour.aim : plan.aim;
+    var refVel = detour ? detour.refVel : plan.aimVel;
+    var r = V.sub(aimPos, G.ship.pos);
+    var w = V.sub(G.ship.vel, refVel);
+    var ff = interceptFeedForward(rails);
+    var cap = detour ? GROUND_TRANSIT_V * 2 : (rails.kind === 'ground' ? GROUND_TRANSIT_V * 2 : undefined);
+    var steer = Intercept.thrustLaw(r, w, G.ship.maxAccel, dtSim, cap);
+    var cmd = Intercept.payThenSteer(ff, steer, G.ship.maxAccel);
+
+    var dvRel = V.len(V.sub(G.ship.vel, plan.aimVel));
+    var arrived = !detour && gap < plan.tol && dvRel < Intercept.ARRIVE_DV;
+    if (arrived && ad.phase !== 'alongside') {
+      ad.phase = 'alongside';
+      ad.arrivedAt = G.t;
+      ad.arrival = { gap: gap, dv: dvRel, t: G.t, tol: plan.tol, standoff: plan.standoff };
+      G.warpIndex = 0;
+      if (plan.orbit) {
+        /* A world: the velocity we arrived with IS the orbit. Let go. */
+        G.autodock = null;
+        G.ship.thrust = V.zero();
+        say('In orbit about ' + rails.name + ' — ' + fmtDist(gap) + ' off the planned orbit, ' +
+            fmtSpeed(dvRel) + ' off its speed', 6);
+        return V.zero();
+      }
+      say('Alongside ' + rails.name + ' — ' + fmtDist(V.dist(st.pos, G.ship.pos)) + ' off, ' +
+          fmtSpeed(dvRel) + ' relative' +
+          (rails.kind === 'station' || rails.kind === 'ground' ? '.  T docks from here' : '') +
+          '.  Holding until you take over', 7);
+    }
+    if (ad.phase !== 'alongside') ad.phase = detour ? (detour.phase === 'climb' ? 'climb' : 'around') : 'close';
+
+    /* The clock, as auto-dock winds it: up for the long empty stretch,
+     * down for the end — and never above 25x round a world. */
+    var want = ad.phase === 'alongside' ? 0
+             : gap > 2.0e4 ? 4 : gap > 2.0e3 ? 3 : gap > plan.tol * 12 ? 2 : 1;
+    if (detour || rails.kind === 'ground') want = Math.min(want, 2);
+    G.warpIndex = Math.min(want, WARPS.length - 1);
+
+    slewNose(V.len(cmd) > G.ship.maxAccel * 0.15 ? cmd : V.sub(st.pos, G.ship.pos), dtReal);
+    return cmd;
+  }
+
+  /* Round a world under cruise, wide: Intercept.cruiseWaypoint, the same
+   * rule the pip's cruise time is computed with (the reasoning is there). */
+  function cruiseDetour(from, aim, skip) {
+    var list = [], skipIndex = -1;
+    for (var i = 0; i < G.sys.gravBodies.length; i++) {
+      var b = G.sys.gravBodies[i];
+      if (b === skip) skipIndex = i;
+      list.push({ pos: Sim.bodyState(b, G.sys, G.t).pos, keep: keepOutRadius(b) });
+    }
+    var wp = Intercept.cruiseWaypoint(from, aim, list, skipIndex);
+    return wp ? { phase: 'around', body: G.sys.gravBodies[wp.index], aim: wp.pos } : null;
+  }
+
+  /* THE CRUISE LEG. updateWorld's cruise branch returns before
+   * applyControls, so this is called from there, as steerAutoCruise is for
+   * auto-dock. The closing law is intercept.js's cruiseClosing — the same
+   * one the pip's time was computed with. */
+  function steerInterceptCruise(dtReal) {
+    var ad = G.autodock;
+    if (!ad || ad.mode !== 'intercept') return;
+    if (stickInput()) { interceptStandby('you took the stick'); return; }
+    if (ad.standby) return;
+    if (G.navTarget && interceptKeyOf(G.navTarget) !== interceptKeyOf(ad.lock)) {
+      cancelAutodock(null); say('Intercept assist stood down — the lock changed', 4); return;
+    }
+    var st = ad.rails.at(0);
+    if (!st) { cancelAutodock(null); say('Intercept assist stood down — lost the contact', 5); return; }
+    var plan = interceptAim(ad.rails, st, 0, G.ship.pos);
+    ad.phase = 'cruise';
+    var detour = cruiseDetour(G.ship.pos, plan.aim, ad.rails.kind === 'ground' ? ad.rails.obj.parentBody : null);
+    var aimPos = detour ? detour.aim : plan.aim;
+    var aimVel = plan.aimVel;
+    var rel = V.sub(aimPos, G.ship.pos);
+    /* The gap the closing law sees is the PATH left, by way of the
+     * waypoint: closing on the waypoint itself would wind the drive down to
+     * arrive at a point nobody wants to be at. */
+    var range = V.len(rel) + (detour ? V.dist(detour.aim, plan.aim) : 0);
+    var L = G.cruise.maxSpeed;
+    /* Squeezed by a world's lock short of the drop point: out here, at the
+     * target's velocity, rather than wherever the drive's own mass-lock
+     * would have dropped us in a circular orbit of its choosing. */
+    /* Only on the way IN. Leaving a world the ceiling is low too, and a
+     * hand-over there would drop out of the bubble before the trip began —
+     * the second half of the gap is the half the target's world owns. */
+    if (!ad.cruiseFrom || range > ad.cruiseFrom) ad.cruiseFrom = Math.max(ad.cruiseFrom || 0, range);
+    if (!detour && L < Intercept.CRUISE_HANDOVER && range < ad.cruiseFrom * 0.5) {
+      /* And not straight back in: the drive would spin up, find the same
+       * lock, and drop out again once a second all the way in. */
+      ad.cruiseBarred = true;
+      dropCruise('mass lock — thrusters for the last ' + fmtDist(range), plan.aimVel);
+      return;
+    }
+    if (!(range > 1e-9)) { dropCruise('alongside ' + ad.rails.name, plan.aimVel); return; }
+    var u = V.norm(rel);
+    var k = Intercept.cruiseClosing(range, V.dot(aimVel, u), V.dot(aimVel, aimVel), L);
+    var want = V.addScaled(aimVel, u, k);
+    var wl = V.len(want);
+    if (!(wl > 1e-9)) return;
+    faceAlong(V.scale(want, 1 / wl));
+    G.cruise.speed = Math.max(CRUISE_MIN, Math.min(G.cruise.maxSpeed, wl));
+    var closeStep = Math.max(0, k) * Math.max(0.016, dtReal || 0.016) * 1.5;
+    if (!detour && range < Math.max(plan.tol, closeStep)) dropCruise('alongside ' + ad.rails.name, plan.aimVel);
+  }
+
+  /* ---- the HUD -------------------------------------------------------------
+   * Three things, in their own functions so they sit beside everything
+   * else on the glass without touching it:
+   *   the PIP — where the target will be when you get there, a ring with a
+   *     dot, joined to the target by a dashed lead line; on an edge arrow
+   *     when it is off the screen; merged into the target when they are as
+   *     good as the same point;
+   *   the MATCH marker, near the end — which way to burn and how much, to
+   *     arrive with the target's velocity;
+   *   the BADGE — who is flying, AUTO or YOU, and what it is doing.
+   * Direction is always geometry, never a word. */
+  var PIP_COL = '#ff9df2';
+  var MATCH_COL = '#ffd36b';
+
+  /* A point inside the world part of the screen, or the edge of it in the
+   * direction of something that is not. Returns {x, y, on, dx, dy}. */
+  function screenOrEdge(pos, w, deck) {
+    var cam = G.cam;
+    var p = cam.project(pos);
+    var m = 34;
+    if (p && p.x > m && p.x < w - m && p.y > m && p.y < deck - m) return { x: p.x, y: p.y, on: true };
+    var vec = V.sub(pos, cam.eye);
+    var sx = V.dot(vec, cam.r), sy = V.dot(vec, cam.u);
+    var fz = cam.f ? V.dot(vec, cam.f) : 1;
+    /* Behind the camera, the projection of its direction lies on the wrong
+     * side of the centre; flip it, so the arrow says "turn this way". */
+    var dx = sx, dy = -sy;
+    if (p && fz > 0) { dx = p.x - w / 2; dy = p.y - deck / 2; }
+    var l = Math.hypot(dx, dy) || 1;
+    dx /= l; dy /= l;
+    var cx = w / 2, cy = deck / 2;
+    var hx = w / 2 - m, hy = deck / 2 - m;
+    var k = Math.min(Math.abs(dx) > 1e-6 ? hx / Math.abs(dx) : Infinity, Math.abs(dy) > 1e-6 ? hy / Math.abs(dy) : Infinity);
+    return { x: cx + dx * k, y: cy + dy * k, on: false, dx: dx, dy: dy };
+  }
+
+  /* A label with a dark backing. The pip moves over whatever the glass is
+   * showing — the attitude readout, a planet's limb, another contact's
+   * name — and pink text over a pale world was unreadable in the first
+   * screenshots (1280x720 and 800x600, kawartha). */
+  function pipLabel(ctx, text, x, y, align) {
+    var tw = ctx.measureText(text).width;
+    var x0 = align === 'center' ? x - tw / 2 : align === 'right' ? x - tw : x;
+    var fill = ctx.fillStyle, a = ctx.globalAlpha;
+    ctx.globalAlpha = 0.62;
+    ctx.fillStyle = '#05080d';
+    ctx.fillRect(x0 - 3, y - 10, tw + 6, 13);
+    ctx.globalAlpha = a;
+    ctx.fillStyle = fill;
+    ctx.textAlign = align || 'left';
+    ctx.fillText(text, x, y);
+    ctx.textAlign = 'left';
+  }
+
+  function drawPipRing(ctx, x, y, merged) {
+    ctx.beginPath();
+    ctx.arc(x, y, merged ? 14 : 9, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+    /* Four ticks outward: a ring alone reads as a planet's halo. */
+    var r0 = merged ? 14 : 9, r1 = r0 + 5;
+    for (var i = 0; i < 4; i++) {
+      var a = i * Math.PI / 2 + Math.PI / 4;
+      ctx.beginPath();
+      ctx.moveTo(x + Math.cos(a) * r0, y + Math.sin(a) * r0);
+      ctx.lineTo(x + Math.cos(a) * r1, y + Math.sin(a) * r1);
+      ctx.stroke();
+    }
+  }
+
+  function drawInterceptPip(ctx, w, h) {
+    var ip = G.intercept;
+    if (!ip || !ip.res || !G.cam || !G.cam.project) return;
+    var deck = deckTop(h);
+    var at = screenOrEdge(ip.drawPos || ip.pos, w, deck);
+    var tg = G.cam.project(ip.targetPos);
+    var merged = ip.merged || (at.on && tg && Math.hypot(tg.x - at.x, tg.y - at.y) < 12);
+    var label = (merged ? 'INTERCEPT ' : 'PIP ') + fmtTime(ip.T);
+    var driveTxt = ip.drive === 'cruise' ? 'cruise' : 'thrusters' + (ip.why ? ' · ' + ip.why : '');
+    ctx.save();
+    ctx.strokeStyle = PIP_COL; ctx.fillStyle = PIP_COL; ctx.lineWidth = 1.6;
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    if (at.on) {
+      /* The lead line: from where the target is to where it will be. It is
+       * the thing that makes "ahead of it on its orbit" legible at a
+       * glance — without it the pip is just a second marker. */
+      if (!merged && tg && tg.x > -w && tg.x < 2 * w && tg.y > -h && tg.y < 2 * h) {
+        ctx.save();
+        ctx.globalAlpha = 0.6;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath(); ctx.moveTo(tg.x, tg.y); ctx.lineTo(at.x, at.y); ctx.stroke();
+        ctx.restore();
+      }
+      drawPipRing(ctx, at.x, at.y, merged);
+      /* Under the ring, centred: the target's own label sits to its right,
+       * and when the two merge they would otherwise be written on top of
+       * each other (seen, 1280x720, Threshold Dock at 20 km). Two short
+       * lines rather than one long one, so it does not run into the speed
+       * and range boxes either side of the glass at 800 wide. */
+      var ly0 = at.y + (merged ? 34 : 26);
+      pipLabel(ctx, label, at.x, ly0, 'center');
+      ctx.globalAlpha = 0.85;
+      pipLabel(ctx, driveTxt, at.x, ly0 + 13, 'center');
+    } else {
+      Render.drawArrow(ctx, at.x - at.dx * 28, at.y - at.dy * 28, at.dx, at.dy, 22, PIP_COL, 2, 8);
+      drawPipRing(ctx, at.x - at.dx * 40, at.y - at.dy * 40, false);
+      var lx = at.x - at.dx * 52, ly = at.y - at.dy * 52;
+      var al = at.dx > 0.3 ? 'right' : at.dx < -0.3 ? 'left' : 'center';
+      pipLabel(ctx, label, lx, ly + (at.dy > 0.3 ? -10 : 16), al);
+      ctx.globalAlpha = 0.85;
+      pipLabel(ctx, driveTxt, lx, ly + (at.dy > 0.3 ? -23 : 29), al);
+    }
+    ctx.restore();
+    G.interceptDrawn = { x: at.x, y: at.y, on: at.on, merged: merged };
+  }
+
+  function drawMatchMarker(ctx, w, h) {
+    var ip = G.intercept;
+    if (!ip || !ip.res || !ip.nearEnd || !(ip.dvMag > Intercept.ARRIVE_DV * 0.5)) { G.matchDrawn = null; return; }
+    var deck = deckTop(h);
+    var dir = V.scale(ip.dv, 1 / ip.dvMag);
+    /* A direction, drawn where the sky in that direction is: a point a long
+     * way off along it from the eye. */
+    var far = V.addScaled(G.cam.eye, dir, 1e7);
+    var at = screenOrEdge(far, w, deck);
+    var txt = 'MATCH ' + fmtSpeed(ip.dvMag);
+    ctx.save();
+    ctx.strokeStyle = MATCH_COL; ctx.fillStyle = MATCH_COL; ctx.lineWidth = 1.8;
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    var x = at.on ? at.x : at.x - at.dx * 40, y = at.on ? at.y : at.y - at.dy * 40;
+    /* A chevron in a diamond: "burn toward here". The nose on it and the
+     * main drive lit is the speed match. */
+    ctx.beginPath();
+    ctx.moveTo(x, y - 10); ctx.lineTo(x + 10, y); ctx.lineTo(x, y + 10); ctx.lineTo(x - 10, y); ctx.closePath();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x - 4, y - 3); ctx.lineTo(x, y + 2); ctx.lineTo(x + 4, y - 3);
+    ctx.stroke();
+    if (!at.on) Render.drawArrow(ctx, at.x - at.dx * 24, at.y - at.dy * 24, at.dx, at.dy, 18, MATCH_COL, 2, 7);
+    /* Off the screen, the number goes inward of the marker, toward the
+     * middle, rather than outward into the instrument boxes at the sides. */
+    if (at.on) pipLabel(ctx, txt, x + 16, y + 4, 'left');
+    else pipLabel(ctx, txt, x - at.dx * 14, y - at.dy * 14 + 22, 'center');
+    ctx.restore();
+    G.matchDrawn = { x: x, y: y, on: at.on, dv: ip.dvMag };
+  }
+
+  /* WHO IS FLYING. Always on while the assist is engaged, standing by or
+   * not — the ASSIST row taught that a mode which does not say whether it
+   * is doing anything reads as broken. At the very top of the glass: the
+   * wake-chase and node banners' row (y 106) lies across the cockpit's
+   * heading tape and its readout box, and a banner that is up for a whole
+   * trip must not hide the heading for a whole trip (seen, 1280x720 and
+   * 800x600). Above the tape there is nothing but the canopy's top edge. */
+  function drawInterceptBadge(ctx, w, h) {
+    var ad = G.autodock;
+    if (!ad || ad.mode !== 'intercept') { G.interceptBadge = null; return; }
+    var who = ad.standby ? 'YOU' : 'AUTO';
+    var what = ad.standby ? 'I hands back  ·  Shift+I stands it down'
+             : ad.phase === 'alongside' ? 'alongside  ·  holding'
+             : ad.phase === 'cruise' ? 'cruise' : ad.phase === 'turn' ? 'turning onto the pip'
+             : ad.phase;
+    var ip = G.intercept;
+    var txt = 'INTERCEPT ' + clipText(ad.target.name || '', 22) + '   ' + who + '   ' + what +
+              (ip && ip.res && ad.phase !== 'alongside' ? '   ' + fmtTime(ip.T) : '');
+    var y = 10;
+    ctx.save();
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    var tw = ctx.measureText(txt).width;
+    panel(ctx, (w - tw) / 2 - 14, y, tw + 28, 24);
+    /* AUTO in the autopilot's green, YOU in the pip's colour: the two
+     * states must not be told apart by reading. */
+    ctx.fillStyle = ad.standby ? PIP_COL : '#7dffb0';
+    ctx.textAlign = 'center';
+    ctx.fillText(txt, w / 2, y + 16);
+    ctx.textAlign = 'left';
+    ctx.restore();
+    G.interceptBadge = { who: who, text: txt, y: y };
+  }
+
+  function drawInterceptHud(ctx, w, h) {
+    if (!flying() || G.hyper || G.walk || G.eva) return;
+    drawInterceptPip(ctx, w, h);
+    drawMatchMarker(ctx, w, h);
+    drawInterceptBadge(ctx, w, h);
   }
 
   /* ---- manoeuvre nodes --------------------------------------------------
@@ -5725,7 +6518,7 @@
     if (G.ship.docked) return 'docked';
     if (G.ship.landed) return 'landed';
     if (G.flightMode !== 'ship') return 'ship frame only';
-    if (G.autodock || G.nodeBurn) return 'autopilot flying';
+    if (autoFlying() || G.nodeBurn) return 'autopilot flying';
     var fr = vectorFrame();
     if (!fr) return 'no reference';
     return fr.air ? 'HOVER' : 'VECTOR';
@@ -5826,7 +6619,11 @@
     /* Auto-dock flies the ship the same way you do — by commanding thrust —
      * so it goes here, and any manual input on the burn keys takes it back.
      * A pilot reaching for the controls should always win. */
-    if (G.autodock) {
+    /* The intercept assist does not let go when you take the stick: it
+     * stands by (interceptStandby) and I hands back. Every other mode
+     * still cancels on a burn, as it always has. */
+    if (interceptOn() && (manual > 0 || stickInput())) interceptStandby('you took the stick');
+    if (autoFlying()) {
       if (manual > 0) {
         cancelAutodock('handed back to you');
       } else {
@@ -5858,7 +6655,7 @@
      * their own relative velocity, and two controllers pushing at the same
      * target is how you get a ship that hunts instead of arriving. */
     if (G.flightMode === 'ship' && G.assist && !G.vector &&
-        !G.ship.docked && !G.ship.landed && !G.autodock && !G.nodeBurn) {
+        !G.ship.docked && !G.ship.landed && !autoFlying() && !G.nodeBurn) {
       var rv = assistRefVelocity();
       if (rv) {
         var rel = V.sub(G.ship.vel, rv);
@@ -6030,6 +6827,7 @@
     }
     var tPre = G.t;
     try { updateWorld(dtReal); } finally { if (heldKeys) G.keys = heldKeys; }
+    updateIntercept(dtReal);
     /* The suit steps on the SAME clock the ships just did. Two ships and a
      * suit coast together at tens of km/s, and stepping the suit on the
      * wall clock while the ships stepped on the game's put a quarter of a
@@ -6235,7 +7033,10 @@
        * returns before applyControls ever runs — so the autopilot gets its
        * one job here: keep the nose on the station, and call the drop-out.
        * Steering it from applyControls looked right and never executed. */
-      if (G.autodock) steerAutoCruise(dtReal);
+      if (G.autodock) {
+        if (G.autodock.mode === 'intercept') steerInterceptCruise(dtReal);
+        else steerAutoCruise(dtReal);
+      }
       /* steerAutoCruise can drop us out of cruise on arrival, and the
        * kinematics must not then run against a bubble that is gone. */
       if (G.cruise) advanceCruise(dtReal);
@@ -6539,7 +7340,7 @@
         if (!G.ship.crashed) { settleLanded(); G.ship.drive = 'cold'; G.ship.spool = 0; }
         say(G.ship.crashed
           ? 'Impact with ' + G.ship.landedOn.name + ' at ' + fmtSpeed(G.ship.impactSpeed) + '   (B to respawn)'
-          : 'Touchdown on ' + G.ship.landedOn.name + '  —  drive shut down. R starts her, and lifts her once she is hot', 8);
+          : 'Touchdown on ' + G.ship.landedOn.name + groundHitNote(G.ship) + '  —  drive shut down. R starts her, and lifts her once she is hot', 8);
         G.warpIndex = 0;
       }
       if (!G.ship.landed) G.reported = false;
@@ -7067,7 +7868,22 @@
     var gb = Sim.groundBasis(port, G.sys, G.t);
     if (!gb) return null;
     var sun = sunDirAt(gb.entrance.pos);
-    return GW.skyOver(port.parentBody, gb.up, sun);
+    return GW.skyOver(port.parentBody, gb.up, sun, overheadAt(port, gb));
+  }
+  /* How much of the sky the deck over the eye hides this frame - the GL
+   * ground sky's veil (GLWorld.overcastFor), 0 with no ground sky. */
+  function deckVeil() {
+    var GW = global.GLWorld;
+    var gi = GW && GW.groundSkyInputs ? GW.groundSkyInputs() : null;
+    return gi && gi.over ? gi.over.veil : 0;
+  }
+  /* THE WEATHER OVER A GROUND PORT, for its sky (2026-11-03): Weather's
+   * field at the port's own vertical, now - the one source for the cover at
+   * a place and time, which the forecast and the planet's painted deck also
+   * read. Null without weather (no air, or none to speak of). */
+  function overheadAt(port, gb) {
+    if (!Weather || !Weather.overhead || !port || !port.parentBody || !gb) return null;
+    return Weather.overhead(port.parentBody, gb.up, G.t);
   }
   function eyeUnderStreet(port, cam) {
     var gb = Sim.groundBasis ? Sim.groundBasis(port, G.sys, G.t) : null;
@@ -8383,7 +9199,7 @@
       if (groundSkyNow && global.GLWorld.setGroundSky) {
         var skyPort = skyPortNow, skyGb = Sim.groundBasis(skyPort, G.sys, G.t);
         global.GLWorld.setGroundSky(skyPort.parentBody, skyGb.up,
-          sunDirAt(skyGb.entrance.pos));
+          sunDirAt(skyGb.entrance.pos), overheadAt(skyPort, skyGb));
         global.GLWorld.drawGroundSky(cam);
       }
       /* STANDING OUTSIDE HER (2026-10-26): the world is the GL layer's to
@@ -14767,7 +15583,8 @@
     }
     if (G.autodock) {
       row(G.autodock.mode === 'match' ? 'MATCHING'
-        : G.autodock.mode === 'follow' ? 'FOLLOWING' : 'AUTODOCK',
+        : G.autodock.mode === 'follow' ? 'FOLLOWING'
+        : G.autodock.mode === 'intercept' ? (G.autodock.standby ? 'INTERCEPT (YOU)' : 'INTERCEPT') : 'AUTODOCK',
           G.autodock.phase.toUpperCase(), '#7dffb0');
     }
     var nav = navTargetState();
@@ -14872,7 +15689,8 @@
 
     if (G.autodock) {
       var adMode = G.autodock.mode === 'match' ? 'MATCH ORBIT'
-                 : G.autodock.mode === 'follow' ? 'FOLLOW' : 'AUTO-DOCK';
+                 : G.autodock.mode === 'follow' ? 'FOLLOW'
+                 : G.autodock.mode === 'intercept' ? (G.autodock.standby ? 'INTERCEPT · YOU' : 'INTERCEPT · AUTO') : 'AUTO-DOCK';
       mfdRow(ctx, y, 'mode', adMode, '#7dffb0');
       mfdRow(ctx, y + 16, 'phase', G.autodock.phase);
       mfdRow(ctx, y + 32, G.autodock.mode === 'dock' ? 'station' : 'contact',
@@ -17359,6 +18177,11 @@
       // dropline so you can see it sits above or below the ecliptic.
       if (b.kind === 'star') {
         // Never let the light source of the system degrade to a grey speck.
+        /* ...unless there is a deck between you and it (2026-11-03): under
+         * an overcast this glow was the sun shining through the cloud. The
+         * label stays - it is the chart saying where the sun is. */
+        ctx.save();
+        ctx.globalAlpha = 1 - deckVeil();
         var sg = ctx.createRadialGradient(sp.x, sp.y, 0, sp.x, sp.y, 14);
         sg.addColorStop(0, 'rgba(255,240,200,0.85)');
         sg.addColorStop(0.3, 'rgba(255,215,150,0.35)');
@@ -17367,6 +18190,7 @@
         ctx.beginPath(); ctx.arc(sp.x, sp.y, 14, 0, K.TAU); ctx.fill();
         ctx.fillStyle = '#fff6e0';
         ctx.beginPath(); ctx.arc(sp.x, sp.y, 2.4, 0, K.TAU); ctx.fill();
+        ctx.restore();
         queueLabel(sp, b.name, '#ffe6a8', 10, 100);
         return;
       }
@@ -17387,8 +18211,11 @@
       var glow = ctx.createRadialGradient(sp.x, sp.y, rpx * 0.9, sp.x, sp.y, rpx * 5);
       glow.addColorStop(0, 'rgba(255,220,150,0.45)');
       glow.addColorStop(1, 'rgba(255,200,120,0)');
+      ctx.save();
+      ctx.globalAlpha = 1 - deckVeil();
       ctx.fillStyle = glow;
       ctx.beginPath(); ctx.arc(sp.x, sp.y, rpx * 5, 0, K.TAU); ctx.fill();
+      ctx.restore();
     }
 
     if (!sp.behindEye) {
@@ -18177,6 +19004,7 @@
      * collision alarm you can miss by having a screen open is not an alarm. */
     if (flying()) drawStationPointer(ctx, w, h);
     if (flying() || G.ship.landed) drawDronePointers(ctx, w, h);
+    drawInterceptHud(ctx, w, h);
     drawOverlays(ctx, w, h);
   }
 
@@ -21115,6 +21943,10 @@
       ['[ and ]', 'step the lock through everything in the system'],
       ['L', 'release the lock'],
       ['T', 'assign the docking clamp to a locked station'],
+      ['I', 'intercept assist on the lock: it flies to the pip and matches'],
+      ['', 'speed; any stick input takes over (YOU), I again hands back (AUTO)'],
+      ['Shift+I', 'stand the intercept assist down'],
+      ['', 'the pink ring is the pip: where the lock will be when you arrive'],
       ['J', 'slipspace chart'],
       ['Y', 'trade analyser (fitted): this port\'s month, or the locked port\'s'],
       ['', 'no fitting? the concourse has a public terminal — E at it'],
@@ -21554,6 +22386,10 @@
    * a test that cannot ask the same question the HUD asks would be testing
    * its own copy of the rule. */
   G.vectorState = vectorState;
+  /* The intercept assist's key and its solve, for test/intercept.test.js:
+   * the same functions I and the HUD use, not copies of their rules. */
+  G.interceptKey = interceptKey;
+  G.solveIntercept = solveIntercept;
   /* One hand-cranked frame. The browser parks requestAnimationFrame the
    * moment the tab is hidden, which is correct for players and useless for
    * a script trying to playtest through a hidden pane — this is the crank

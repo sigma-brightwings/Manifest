@@ -1533,6 +1533,26 @@
    * out afterwards. Heat belongs to the one real ship, so it is applied
    * from the live update and nowhere else. */
   var HEAT_K = 4.0;             // tunes sqrt(rho) * v^3 into heat units/s
+  /* A GIANT'S AIR BITES HARDER, BY WHAT ITS TURNING TOOK OFF (2026-11-03).
+   * Once the air co-rotated (airVelocity), a skim flown WITH a giant's spin
+   * met the air slower by the equator's speed - up to 20 km/s - and the
+   * cube law turned that into far less heat. Measured over 40 kawartha
+   * giants, an equatorial pass (apoapsis 3 radii, periapsis at 0.85 and
+   * 0.7 of the air's top, nose into the wind, flown with drag) against the
+   * same pass with the air held still, which reproduces 274be91^ to the
+   * digit: prograde heat x0.53 (q10 0.41, q90 0.62), retrograde x1.70.
+   * Every giant's skim got roughly twice as easy the right way round, which
+   * is the whole of what made a gas giant "a short plunge whatever you
+   * fit". Astra, 2026-11-03: retune so a typical prograde pass costs what
+   * it did, and keep against-the-spin harder. 1 / 0.53 = 1.9, giants only:
+   * a rocky world's spin is a few hundred m/s against entry speeds of
+   * kilometres, and its re-entry was never what moved. Retrograde now pays
+   * ~3.2x the old figure. heatLineAlt reads the same gain, so the panel's
+   * line is the line the hull meets. */
+  var GIANT_HEAT_GAIN = 1.9;
+  function heatK(body) {
+    return (body && (body.type === 'gasGiant' || body.type === 'iceGiant')) ? HEAT_K * GIANT_HEAT_GAIN : HEAT_K;
+  }
   var HEAT_LIMIT = 100;         // hull starts cooking above this
   /* Stored heat is capped rather than left to accumulate. Uncapped, a steep
    * entry ran the figure to twelve times the limit within seconds, which
@@ -1570,7 +1590,7 @@
   function heatLineAlt(body, v, shed) {
     var at = body && body.atmosphere;
     if (!at || !(v > 0)) return 0;
-    var rhoMax = Math.pow(shed / (HEAT_K * v * v * v), 2);
+    var rhoMax = Math.pow(shed / (heatK(body) * v * v * v), 2);
     if (rhoMax >= at.rho0) return 0;
     return Math.min(at.top, at.scaleHeight * Math.log(at.rho0 / rhoMax));
   }
@@ -1688,7 +1708,7 @@
      * fire; one that glows only where it is hitting the air looks like it
      * is going too fast, which is the thing being communicated. */
     ship.windDir = v > 1e-9 ? { x: rel.x / v, y: rel.y / v, z: rel.z / v } : null;
-    return HEAT_K * Math.sqrt(rho) * v * v * v;
+    return heatK(atmo.body) * Math.sqrt(rho) * v * v * v;
   }
 
   /* Returns hull damage dealt this step, so the caller can react to it
@@ -4892,6 +4912,15 @@
    * copies of the ship through here too, and a ghost latching onto a
    * landing pad would end the prediction with a phantom dock rather than
    * telling the player what they wanted to know. */
+  /* EVERY TOUCHDOWN, hurt or not, and where (2026-11-03). lastLandingHit
+   * only exists when the hull paid, which is the wrong population for the
+   * question "how hard does the autopilot set her down" - a clean seat is
+   * the answer that matters and it left no trace. Runtime only: save.js
+   * lists ship fields by name, so this is never written. */
+  function noteTouchdown(ship, where, speed, gearDown, t) {
+    ship.touchdown = { where: where, speed: speed, gearDown: gearDown, t: t };
+  }
+
   function checkImpact(ship, sys, t, allowDock, from, fromT) {
     /* THE STATION'S OWN HULL — and ONLY on the authoritative pass.
      *
@@ -4948,6 +4977,7 @@
        * exists for anyone who assigns a dock target and lets it fly. */
       var bcap = landing;
       if (bcap) {
+        noteTouchdown(ship, 'berth', bcap.speed, bcap.gearDown, t);
         var bdmg = landingDamage(bcap.speed, bcap.gearDown);
         if (bdmg > 0) {
           ship.hullHp -= bdmg;
@@ -4970,6 +5000,7 @@
       var cap = padCapture(ship, sys, t);
       if (cap) {
         var pad = cap.pad;
+        noteTouchdown(ship, 'pad', cap.speed, cap.gearDown, t);
         /* The landing consequence, FE2-style: how hard you hit costs hull.
          * A clean seat (<= LAND_SAFE_SPEED) is free; a smack ramps to
          * fatal; gear-up multiplies it. This runs ONLY here, inside the
@@ -5028,19 +5059,42 @@
 
         ship.landed = true;
         ship.landedOn = b;
-        /* Gear down, 100 m/s relative is a hard but survivable arrival.
-         * Gear up, there is no such thing as a good one — you are landing
-         * on the hull, and the number that matters is not your speed.
+        /* OPEN GROUND CHARGES WHAT A PAD CHARGES (2026-11-03, Astra: "I
+         * agree with you on all of that"). This was `crashed = relSpeed >
+         * 0.1`: anything up to 100 m/s set down free, anything over was a
+         * wreck, with nothing between - five times more forgiving than a pad,
+         * where landingDamage starts charging at 20 m/s and kills at 90. While
+         * the check measured against the world's centre that looseness hid
+         * behind the frame error; once it measured the ground she touches
+         * (above) it was simply a second, gentler rule for the same act. Now
+         * it is the SAME function, so the dirt and the pad can never drift
+         * apart again: tune landingDamage and both follow.
          *
-         * THE 100 m/s IS KEPT, and it is a feel decision rather than a
-         * physics one (2026-11-03, to put to Astra). It is far more forgiving
-         * than a pad, where landingDamage starts charging at 20 and kills at
-         * 90. While it measured against the wrong frame it was loose by
-         * however fast the ground turned; now that it measures the right
-         * speed it is merely generous. Unifying open ground with the pad's
-         * damage ramp is the obvious next step and changes how landing in
-         * the wild feels, so it is not done silently here. */
-        ship.crashed = !ship.gear || relSpeed > 0.1;
+         * Gear up is still a wreck outright - on the hull the number that
+         * matters is not your speed - which is stricter than a pad, where a
+         * belly seat is caught and charged triple. That difference is kept on
+         * purpose: a pad is a prepared surface and a cradle; open ground is
+         * rock.
+         *
+         * Damage needs a numeric hull. The predictor's ghosts and canisters
+         * have none (makeShip does not set one), so they take nothing - the
+         * same guard the pad branch gets from allowDock - and are judged by
+         * the one speed that kills every hull there is, LAND_FATAL_SPEED. */
+        noteTouchdown(ship, 'ground', relSpeed, !!ship.gear, t);
+        var gdmg = ship.gear ? landingDamage(relSpeed, true) : 0;
+        if (!ship.gear) {
+          ship.crashed = true;
+        } else if (typeof ship.hullHp === 'number') {
+          ship.crashed = false;
+          if (gdmg > 0) {
+            ship.hullHp -= gdmg;
+            ship.lastLandingHit = { dmg: gdmg, speed: relSpeed, gearDown: true,
+                                    t: t, ground: true };
+            if (ship.hullHp <= 0) { ship.hullHp = 0; ship.crashed = true; }
+          }
+        } else {
+          ship.crashed = relSpeed >= LAND_FATAL_SPEED;
+        }
         ship.impactSpeed = relSpeed;
         ship.pos = contactPt;
         ship.vel = gv;
@@ -8301,6 +8355,8 @@
     berthRoom: berthRoom,
     padCapture: padCapture,
     landingDamage: landingDamage,
+    LAND_SAFE_SPEED: LAND_SAFE_SPEED, LAND_FATAL_SPEED: LAND_FATAL_SPEED,
+    GIANT_HEAT_GAIN: GIANT_HEAT_GAIN,
     smootherstep: smootherstep,
     trafficState: trafficState,
     trafficCore: trafficCore,

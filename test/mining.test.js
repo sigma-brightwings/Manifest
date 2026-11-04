@@ -169,7 +169,9 @@ var none = Mn.skimStep(Gg, gsys, t0, 1, false);
 check('no intake, no hydrogen', none === 0 && (Gg.ship.cargo.hydrogen || 0) === hold0);
 var got = Mn.skimStep(Gg, gsys, t0, 1, true);
 var sk = Gg.skimming;
-var expect = sk.rho * sk.v * 1000 * Mn.SKIM_AREA * sk.face / 1000 * sk.frac;
+/* x SKIM_GIANT_GAIN (2026-11-03): a giant's intake is scaled back up by
+ * what its co-rotating air took off a prograde pass - see mining.js. */
+var expect = sk.rho * sk.v * 1000 * Mn.SKIM_AREA * sk.face / 1000 * sk.frac * Mn.SKIM_GIANT_GAIN;
 check('density x speed x area x facing, in tonnes', Math.abs(got - expect) < 1e-9 && got > 0 && sk.face > 0.95,
       got.toFixed(3) + ' t/s at ' + sk.v.toFixed(1) + ' km/s, ' + Math.round(sk.frac * 100) + '% H, face ' + sk.face.toFixed(3));
 /* A RAM SCOOP (Astra, 2026-10-18): face first or nothing. */
@@ -218,6 +220,68 @@ if (gasG) {
   var fluxGas = Sim.heatFlux(inAir(gasG.b, gasG.sys, 0.95, t0), gasG.sys, t0);
   check('a gas giant\'s cannot, for long', fluxGas > shield, gasG.b.name + ': ' + fluxGas.toFixed(0) + ' > ' + shield);
 }
+
+/* ---- a skim pass, retuned for air that turns (2026-11-03) -----------------
+ * Once a giant's air co-rotated, a pass WITH the spin met it slower and ran
+ * x0.53 the heat and x0.81 the intake it used to (40 giants); Astra: put a
+ * typical prograde pass back where it was, keep against-the-spin harder.
+ * Sim.GIANT_HEAT_GAIN and Mining.SKIM_GIANT_GAIN do that. The reference is
+ * the same pass with the giant's spin stopped (period 1e30), which is the
+ * old still-air model exactly - checked against 274be91^ over 32 giants, to
+ * the digit. A pass: equatorial ellipse, apoapsis 3 radii, periapsis at
+ * 0.85 of the air's top, nose held into the wind, flown with drag. */
+console.log('--- a skim pass, with and against the spin ---');
+function skimPass(g, dir, still) {
+  var b = g.b, sys = g.sys, t = 5e5, rot0 = b.rotation;
+  var om = Sim.spinOmega(b), wHat = V.norm(om);
+  var any = Math.abs(wHat.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+  var rHat = V.norm(V.cross(wHat, any)), tHat = V.scale(V.cross(wHat, rHat), dir);
+  var mu = 6.6743e-20 * b.mass, rp = b.radius + b.atmosphere.top * 0.85, ra = 3 * b.radius;
+  var a = (rp + ra) / 2, e = (ra - rp) / (ra + rp), p = a * (1 - e * e), h = Math.sqrt(mu * p);
+  var nu = -Math.acos(Math.max(-1, Math.min(1, (p / (b.radius + b.atmosphere.top * 1.02) - 1) / e)));
+  var rr = p / (1 + e * Math.cos(nu));
+  var posL = V.add(V.scale(rHat, rr * Math.cos(nu)), V.scale(tHat, rr * Math.sin(nu)));
+  var radH = V.norm(posL), tanH = V.norm(V.sub(V.scale(tHat, Math.cos(nu)), V.scale(rHat, Math.sin(nu))));
+  var velL = V.add(V.scale(radH, mu / h * e * Math.sin(nu)), V.scale(tanH, mu / h * (1 + e * Math.cos(nu))));
+  var bs = Sim.bodyState(b, sys, t);
+  var sh = Sim.makeShip(V.add(bs.pos, posL), V.add(bs.vel, velL));
+  sh.cargoCap = 1e9; Sim.refreshShip(sh);
+  var Gp = { here: { id: 'pass' }, extracted: {}, ship: sh };
+  if (still) b.rotation = { period: 1e30, tilt: (rot0 && rot0.tilt) || 0, phase: 0, az: rot0 && rot0.az };
+  var heat = 0, intake = 0, inside = false, tt = t, dt = 0.5;
+  for (var i = 0; i < 40000; i++) {
+    var ctx = Sim.atmosphereContext(sh.pos, sys, tt);
+    if (ctx && ctx.body === b) {
+      inside = true;
+      sh.fwd = V.norm(V.sub(sh.vel, Sim.airVelocity(ctx, sh.pos)));
+      heat += Sim.heatFlux(sh, sys, tt) * dt;
+      intake += Mn.skimStep(Gp, sys, tt, dt, true);
+    } else if (inside) break;
+    Sim.advanceShip(sh, sys, tt, dt, 200); tt += dt;
+    if (sh.landed || sh.crashed) break;
+  }
+  b.rotation = rot0;
+  return { heat: heat, intake: intake };
+}
+var passGiants = [];
+systems.forEach(function (sys) { sys.bodies.forEach(function (b) { if (Mn.isGiant(b) && b.atmosphere && passGiants.length < 12) passGiants.push({ b: b, sys: sys }); }); });
+function median(a) { a = a.slice().sort(function (x, y) { return x - y; }); return a[a.length >> 1]; }
+var proH = [], proI = [], retH = [], ordered = 0;
+passGiants.forEach(function (g) {
+  var ref = skimPass(g, 1, true), pro = skimPass(g, 1, false), ret = skimPass(g, -1, false);
+  /* Still air TODAY carries the gains too, so the old figure is today's
+   * still-air one divided by them - both gains are flat multipliers. */
+  var oldH = ref.heat / Sim.GIANT_HEAT_GAIN, oldI = ref.intake / Mn.SKIM_GIANT_GAIN;
+  proH.push(pro.heat / oldH); proI.push(pro.intake / oldI); retH.push(ret.heat / oldH);
+  if (ret.heat > pro.heat * 1.5) ordered++;
+});
+check('found giants to skim', passGiants.length >= 10, passGiants.length + ' giants');
+check('a prograde pass costs the heat it did in still air (median within 10%)',
+      Math.abs(median(proH) - 1) < 0.10, 'x' + median(proH).toFixed(3) + ' with GIANT_HEAT_GAIN ' + Sim.GIANT_HEAT_GAIN);
+check('and swallows the hydrogen it did (median within 10%)',
+      Math.abs(median(proI) - 1) < 0.10, 'x' + median(proI).toFixed(3) + ' with SKIM_GIANT_GAIN ' + Mn.SKIM_GIANT_GAIN);
+check('against the spin is harder on every giant - over 1.5x the prograde heat',
+      ordered === passGiants.length, ordered + ' of ' + passGiants.length + ', median retrograde x' + median(retH).toFixed(2) + ' of the old still-air pass');
 
 console.log('--- the star (2026-10-24) ---');
 /* Astra: empty systems have "hydrogen for fuel to keep moving at the star
