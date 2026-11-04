@@ -11653,7 +11653,10 @@
    * on the view — until its box is off every reserved one. Moved, not
    * dropped: the planet you are pointing at is the one whose name you
    * want, and it is the one most likely to sit near the readouts. */
-  function labelOffReadouts(x, y, tw, boxes, hv) {
+  /* `extra`: px the label runs on below its baseline — a second line under
+   * it (the intercept pip's drive line) — so the pair moves as one. */
+  function labelOffReadouts(x, y, tw, boxes, hv, extra) {
+    extra = extra || 0;
     /* The first box hit picks the way out — up or down, whichever is
      * nearer and on the view — and the label keeps going that way past
      * any box it then lands on: the attitude line and the facing cue are
@@ -11666,13 +11669,13 @@
         var hitB = null;
         for (var k = 0; k < boxes.length && !hitB; k++) {
           var r = boxes[k];
-          if (!(x + tw + 2 <= r.x0 || x - 2 >= r.x1 || y + 3 <= r.y0 || y - 10 >= r.y1)) hitB = r;
+          if (!(x + tw + 2 <= r.x0 || x - 2 >= r.x1 || y + 3 + extra <= r.y0 || y - 10 >= r.y1)) hitB = r;
         }
         if (!hitB) return y;
-        var up = hitB.y0 - 4, down = hitB.y1 + 11;
+        var up = hitB.y0 - 4 - extra, down = hitB.y1 + 11;
         if (!dir) dir = (up - 10 < 0 || (down < hv && down - y < y - up)) ? 1 : -1;
         y = dir > 0 ? down : up;
-        if (y - 10 < 0 || y > hv) break;
+        if (y - 10 < 0 || y + extra > hv) break;
       }
       dir = -dir;
     }

@@ -4694,6 +4694,18 @@
        * lines rather than one long one, so it does not run into the speed
        * and range boxes either side of the glass at 800 wide. */
       var ly0 = at.y + (merged ? 34 : 26);
+      /* AND OFF THE GLASS'S READOUTS (2026-11-03, fix/ui-polish). A pip
+       * just under the nose put "PIP 17.0 min" and its drive line straight
+       * through PITCH / ROLL / REF. Moved as a pair, up or down, by the same
+       * boxes the planets' names keep off (Render.hudReadoutBoxes, set by
+       * placeLabels this frame). */
+      if (labelHud && Render.labelOffReadouts) {
+        var pw = Math.max(ctx.measureText(label).width, ctx.measureText(driveTxt).width);
+        var ny = Render.labelOffReadouts(at.x - pw / 2, ly0, pw, labelHud, labelFoot, 13);
+        /* Never up onto its own ring: past it, then, to the other side. */
+        if (ny < ly0 && ny + 16 > at.y - (merged ? 20 : 15)) ny = at.y - (merged ? 20 : 15) - 16;
+        ly0 = ny;
+      }
       pipLabel(ctx, label, at.x, ly0, 'center');
       ctx.globalAlpha = 0.85;
       pipLabel(ctx, driveTxt, at.x, ly0 + 13, 'center');
@@ -10323,7 +10335,7 @@
   function drawTraffic(ctx, cam) {
     var list = Sim.shipsAll(G.sys, G.t);
     if (!list.length) return;
-    var tags = [];
+    var tags = [], tagSkip = holoNames();
     var blink = (performance.now() / 1000) % 2;
 
     for (var i = 0; i < list.length; i++) {
@@ -10421,6 +10433,7 @@
       if (lenPx > 2.2 || (s.spec && s.spec.live)) {
         var tag = s.name;
         if (s.kind !== 'trade') tag += '  [' + s.className + ']';
+        if (tagSkip && tagSkip[s.name]) continue;
         tags.push({ text: tag, x: sp.x + 9, y: sp.y + 3, hostile: !!s.hostile,
                     pri: (s.hostile ? 1e6 : 0) + (s.spec && s.spec.live ? 1e5 : 0) + lenPx });
       }
@@ -18503,6 +18516,20 @@
     return Render.hudReadoutBoxes(w, hv, lv.body.name.toUpperCase(), Math.min(hv, deckTop(h)));
   }
 
+  /* NAMED ONCE (2026-11-03, fix/ui-polish). In the cockpit the nav lock
+   * and the docking target are boxed on the glass (drawHoloTarget) with
+   * their names and range beside the box, and the world's own label for
+   * the same body or ship was printed as well, a few pixels off: seen with
+   * the intercept pip on Threshold Dock, the name twice, overprinted. The
+   * box's label is the one that says more, so the world's is skipped. */
+  function holoNames() {
+    if (G.viewMode !== 'cockpit' || !flying() || G.walk || G.eva || G.hyper) return null;
+    var out = null, nav = navTargetState();
+    if (nav && nav.name) (out = out || {})[nav.name] = true;
+    if (G.dockTarget && !G.ship.docked && G.dockTarget.name) (out = out || {})[G.dockTarget.name] = true;
+    return out;
+  }
+
   /* What placeLabels drew this frame, for the ships' names after it
    * (placeShipTags) to keep off. Reset by it every frame it runs. */
   var labelBoxes = [], labelHud = null, labelFoot = 0;
@@ -18518,8 +18545,10 @@
      * crowded berth's stacked names ran down into it. */
     var hud = cockpitReadoutBoxes(w, hv || h, h) || [{ id: 'foot', x0: 0, x1: w, y0: labelFoot - 21, y1: h + 40 }];
     labelHud = hud;
+    var skip = holoNames();
     for (var i = 0; i < queue.length; i++) {
       var q = queue[i];
+      if (skip && skip[q.text]) continue;
       var x = q.sp.x + q.offset, y = q.sp.y + 3;
       if (x < -40 || x > w + 40 || y < 0 || y > h) continue;
       var tw = ctx.measureText(q.text).width;

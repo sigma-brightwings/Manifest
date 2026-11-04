@@ -318,6 +318,27 @@ console.log('--- the world\'s labels keep off the readouts (2026-11-03) ---');
   });
 })();
 
+console.log('--- the intercept pip\'s two-line label keeps off them too (2026-11-03) ---');
+(function () {
+  /* Seen with the pip just under the nose: "PIP 17.0 min" and its drive
+   * line through PITCH / ROLL. main.js moves the pair with labelOffReadouts'
+   * `extra` (13 px: the second line). Both lines must come out clear. */
+  [[800, 592, 378], [1280, 720, 498]].forEach(function (vp) {
+    var w = vp[0], hv = vp[1], foot = vp[2];
+    var boxes = Render.hudReadoutBoxes(w, hv, 'MIRVEN I', foot), bad = 0, eg = '';
+    var tw = 33 * 6.6;   // "thrusters · too close for the drive"
+    for (var y = 30; y < foot - 40; y += 2) {
+      var x = w / 2 - tw / 2, ly = Render.labelOffReadouts(x, y, tw, boxes, foot, 13);
+      boxes.forEach(function (b) {
+        [ly, ly + 13].forEach(function (yy) {
+          if (x + tw + 2 > b.x0 && x - 2 < b.x1 && yy + 3 > b.y0 && yy - 10 < b.y1) { bad++; if (!eg) eg = b.id + ' from ' + y; }
+        });
+      });
+    }
+    check(w + 'x' + hv + ': both lines of the pip\'s label land clear of every readout', bad === 0, bad + ' ' + eg);
+  });
+})();
+
 console.log('--- ships in one berth do not overprint each other (2026-11-03) ---');
 (function () {
   /* Terminus Downport (Cydoren): three ships in the pit, their names all
