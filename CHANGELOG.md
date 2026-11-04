@@ -40,6 +40,137 @@ before they update.
 
 ## Unreleased
 
+### Changed (2026-11-04, the economy retune: narrower spreads on dear goods, lots priced down the shelf, the jump pays more, bigger hulls dearer)
+
+The 2026-11-03 measurements: a hand-flown Talon cleared about 32,000 cr a run,
+the best 64 t run inside a home system about 133,000, and a Tallyman cost
+72,000, two or three runs. Asked whether to bring a run down to 20–40% on
+what you spend, Astra chose **"both, milder"**: narrow the spreads somewhat
+and make deliveries move prices harder; raise the bigger ships' prices
+somewhat; keep longer trips paying more than short ones.
+
+- **Measured first** (`tools/measure-economy.cjs`, new: `runs`, `wear`,
+  `tutorial`, `ships`, `climb`). Every lot is **walked** tonne by tonne down
+  both shelves through the real quote, and the buyer stops at the tonne that
+  no longer pays. Where the spread came from: `base × local × scarcity`
+  counts the same fact twice. A major exporter is cheap by structure and also
+  sits on a full shelf, and a hungry importer is dear by structure and also
+  sits near empty, so the best pair in a system bid 2.4–5× its ask, the same
+  for every good. Every best run was high-tech (AI cores, fusion, robotics,
+  luxuries, gene therapies, computers, fissiles) and waste never was.
+- **Spreads narrow with value per tonne** (`economy.js`, `quote`,
+  `VALUE_REF` / `VALUE_SLOPE` / `VALUE_KMIN`). The price structure is
+  raised to a power `k = 1 − 0.4·log10(base/200)`, floored at 0.4. What
+  lets a price differ between two places is the freight, and freight is per
+  tonne: it is most of what water is worth and almost none of what an AI core
+  is. So staples (≤ 200 cr/t) keep their whole spread, and they are what a
+  3,200 cr Talon can afford to fill a hold with. Farm machinery keeps k 0.85,
+  fissiles 0.72, robotics 0.64, fusion 0.60, luxuries 0.56, AI cores 0.47. A
+  power, so every ordering and every sign is kept. **Military fuel and
+  contraband are exempt**: under the floor exponent milfuel's best run fell
+  from 22,565 to 5,229 cr, below a waste run. Its shelf rations it, and
+  contraband's spread is the price of the risk. Waste is priced on its own
+  path and is unchanged.
+- **A shortage next door is a short haul** (`nearSupply`, run once after the
+  signatures). An import worth over 200 cr/t that another port of the same
+  system exports keeps a quarter of its premium. One the system cannot supply
+  keeps all of it, because only a jump can fill it. No draws.
+- **The desk prices a lot down the shelf** (`Economy.lotPrice`; `main.js`
+  trade). The terminal used to charge a whole lot at the board's first-tonne
+  price, so the dent landed only on the next trade. Splitting a lot into
+  single tonnes already got the walked price, so the board price was a
+  reward for pressing Home. Now a delivery moves its own price: the trading
+  houses always priced this way. A purchase is cut to what the money covers,
+  priced first and committed after. **This replaces the trading-house entry's
+  "your trades at the counter are exactly as they were."**
+- **Price marks re-measured** on the new distribution (sixty home systems,
+  quartiles and twentieths, the same method reproducing the old constants
+  within a few hundredths). Ask green from 0.79× (full 0.61×), dear from
+  1.01× (full 1.77×). Bid green from **1.17×** (was 1.34×, full 1.57×), poor
+  from 0.81× (full 0.60×).
+- **Bigger hulls dearer** (`combat.js` HULLS): Tallyman 72k → 110k, Mule
+  78k → 135k, Kestrel 120k → 150k, Longhaul 165k → 250k, Tanker 150k → 220k,
+  Crawler 450k → 560k, Meridian 420k → 500k, Leviathan 600k → 780k. The small
+  hulls (Talon, Dart, Bollard, Sump, Lance, Wren) and the combat and
+  specialist hulls are unchanged. Trade-in, resale, the start presets' cash
+  (start.js rule 2) and a house's insurance all follow the list price.
+- **The trading houses' depth re-swept** (`tradingfirm.js` `TUNE.depthMul` 4 →
+  1.7). At x4 on the new margins, rating 1 lost in 98% of quarters and rating 2
+  in 86%. The sweep, rating 1 / rating 2 losing quarters: x1 9/0%, x1.4 27/8%,
+  x1.6 45/6%, **x1.7 53/16%**, x1.8 63/22%, x2 64/38%, x3 91/72%. x1.7 puts
+  both back near where x4 had them (62/12%).
+- **Cargo contracts pay three quarters** (`missions.js` `CARGO_PAY` 0.75:
+  haul, courier, disposal). The fees are flat tables, so the retune left them
+  worth 2.5–3× more next to trading. 0.75 instead of the ~0.35 that would
+  restore the old ratio, on purpose: the hard start took the biggest cut, and
+  capital-free work is what a pilot with no capital lives on. Passage (it
+  needs a 14,500 cr habitation unit) and the navy's licensed fuel haul are
+  unchanged.
+
+**The numbers** (40 seeds, home system, t = 10 days, unless noted):
+
+| | before | after |
+|---|---|---|
+| best in-system run, 64 t, walked: profit (median) | 103k on 64k | 31k on 84k |
+| — return on outlay p10 / median / p90 / max | 66 / 160 / 217 / 263% | **20 / 42 / 60 / 76%** |
+| — the same run at the old terminal's board price | 138k, 161% median, max 312% | (no longer charged) |
+| best run to one of the 3 nearest claimed stars, walked, less jump hydrogen | 126k, 151% median | 43k, 44% median (p90 87%) |
+| — next door / at home, per seed, median (p10) | 1.22× (0.82×) | **1.34×** (0.84×) |
+| waste run in-system (paid to load, fee to dump) | 8.9k median | 8.9k (unchanged) |
+| milfuel run in-system (97 systems, 6 stars a seed) | 22.6k median | 22.6k (exempt) |
+| the best lane flown again, one round trip a day: runs 1–4 | 100 / 56 / 22 / 8% | 100 / 30 / 4 / 3% |
+| **Halloway's first run** (39 openings, 3,200 cr Talon): profit, median | 3,338 (min 0, max 7,972) | **1,265** (min 137, max 2,997), on 3.1k |
+| the hard start to a Tallyman, best affordable run twice a day, lanes wearing | 3 runs | **8 runs** |
+| haul / courier contract pay, median | 696 / 3,309 | 522 / 2,482 |
+
+**The yard in runs** (a "good run" is the best mixed hold a hull can carry
+from home, in-system or next door, jump hydrogen paid; a step is the next
+yard price less 70% of the hull you arrive in):
+
+| step | old economy, old prices | new economy, old prices | **new economy, new prices** |
+|---|---|---|---|
+| Talon → Tallyman | 0.5 | 1.4 | **2.2** |
+| Tallyman → Mule | 0.2 | 0.6 | **1.1** |
+| Mule → Longhaul | 0.5 | 1.7 | **2.3** |
+| Longhaul → Leviathan | 1.5 | 5.9 | **7.3** |
+
+A good run is now 45k on a Talon, 64k on a Tallyman, 77k on a Mule, 86k on a
+Longhaul and 92k on a Leviathan (it was 137k / 201k / 250k / 326k / 368k). A
+bigger hold earns much less than its size suggests, because a lane walks its
+shelf flat long before 300 t. That is why the big hulls went up "somewhat"
+and not by their tonnage.
+
+**The trading houses** (`tools/measure-firms.cjs quarters 20 4`, each quarter
+a fresh 50,000 cr account, a Talon, a rating-3 pilot; 64 quarters a line):
+
+| | before (x4) | new economy at x4 | **after (x1.7)** |
+|---|---|---|---|
+| hand-flown baseline, median quarter | 20.3M (664 runs, fresh run 34k) | 5.88M | **5.88M** (548 runs, fresh 12k, repeat 8.6k) |
+| rating 1 | −14k, 59% losing | −44k, 98% | **−4k, 53%** |
+| rating 2 | +95k, 6% | −32k, 86% | **+105k, 16%** |
+| rating 3 | +1.04M | +212k | **+448k** |
+| rating 4 | +1.22M | +295k | **+592k** |
+| rating 5 | +1.28M | +349k | **+674k** |
+
+A good house's quarter is now about a tenth of the hand-flown ceiling (it
+was about a twentieth). Both came down with the margins, and the house's own
+extra depth came down from 4x to 1.7x so that its bottom ranks stay a bad
+bet and a risky one rather than a certain loss.
+
+**Odd, and left for a decision:** the first run took the biggest cut of
+anything. It is ROI-bound (3,200 cr buys a few tonnes of whatever is best),
+so any narrowing of returns lands on it in full. The alternatives are a
+bigger hard-start purse (`Gen.SHIP_SPEC.credits`, which start.js rule 1 and
+many tests pin at 3,200) or a gentler `NEAR_SUPPLY`. With near-supply off,
+the first run is 1,774. Also, the waste run is unchanged and now pays about
+seven times a 3,200 cr pilot's first trade run with no outlay at all. It was
+about three times before.
+
+**Saves:** survive. No field added or removed and no version bump. An old
+career keeps its credits, cargo and hulls; prices are simply what they are
+now. A hull bought at the old price trades in at 70% of the new list price.
+A market's ledger (the player's footprint) keeps decaying as before.
+
 ### Fixed (2026-11-03, the open UI items: labels that overprinted, a lent bay that was forgotten, a hull on her tail, the sea's glint and domes)
 
 Astra: "let's do all the still open stuff." Each of these was seen in a
