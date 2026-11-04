@@ -4081,10 +4081,30 @@
    *     still over it until gravity takes you in. */
   var INTERCEPT_SHIP_STANDOFF = 2;     // km
   var INTERCEPT_WORLD_ORBIT = 1.25;    // keep-out radii
-  /* Beyond this the drive is worth spinning up — auto-dock's own number
-   * for an orbital port (AUTO_CRUISE_MIN), so the two autopilots and the
-   * pip agree on where the cruise leg starts. */
-  var INTERCEPT_CRUISE_MIN = 5e3;      // km
+  /* THE DRIVE IS TRIED BEYOND THIS, AND THE FASTER DRIVE WINS (2026-11-03).
+   * It was 5,000 km, auto-dock's AUTO_CRUISE_MIN, and Astra found the pip
+   * saying "thrusters, too close for the drive, 17 min" at 2,900 km off
+   * Threshold Dock, a trip the drive does at its floor in under a minute.
+   * Asked, she chose "let the pip work out both and take whichever is
+   * faster" (Intercept.solve). So this is no longer the crossover; it is
+   * the floor under which cruise cannot be flown honestly at all.
+   *
+   * Measured with the model (scratch xover.js, Talon to a 500 kg tug's
+   * thrust, 0.002-0.019 km/s^2): the drive spins up at once and drops out
+   * already matched, so its only overhead is the turn (under 2.6 s) and the
+   * drop-out miss — it is dropped the frame the gap falls under one step
+   * at its 60 km/s floor, 1.5 km at 60 fps and 9 km at the 10 fps the
+   * frame clock is capped at, and the thrusters close that. The crossover
+   * came out at 1.1 times the miss in every case (1.6-1.9 km at 60 fps,
+   * 9.3-10 km at 10 fps); thrusters can win only inside it. The floor is
+   * twice the worst-case miss: under 18 km a drop-out could land you no
+   * nearer than you started, and it is also what stops the assist, once
+   * dropped out a miss short, spinning the drive straight back up. */
+  var INTERCEPT_CRUISE_MIN = 2 * CRUISE_MIN * 0.1 * 1.5;   // km — 18
+  /* This frame rate's length, for the model's drop-out miss (above). */
+  function cruiseDropFrame() {
+    return Math.max(1 / 60, Math.min(0.1, G.frameSmooth || 1 / 60));
+  }
   /* The nose must be on the cruise heading to this before the drive spins
    * up: the bubble goes where the nose points, and spinning it up pointing
    * elsewhere spends the first second of a trip going there. */
@@ -4268,6 +4288,7 @@
       cruise: cr.ok ? {
         top: cruiseTopKms(),
         dropR: aim0.tol,
+        dropFrame: cruiseDropFrame(),
         skipIndex: rails.kind === 'ground' ? G.sys.gravBodies.indexOf(rails.obj.parentBody) : -1,
         bodiesAt: function (dt) {
           return G.sys.gravBodies.map(function (gb) {
@@ -4277,7 +4298,13 @@
       } : null
     };
     var res = Intercept.solve(opts);
-    res.why = cr.ok ? (res.drive === 'thrusters' ? 'too close for the drive' : '') : cr.why;
+    /* The reason, honest about the choice: blocked (the drive's own words),
+     * too close to be worth it (under the floor above), or simply slower. */
+    var gap0 = V.dist(aim0.aim, G.ship.pos);
+    res.why = !cr.ok ? cr.why
+            : res.drive === 'cruise' ? ''
+            : !res.alt ? 'too close for the drive'
+            : 'faster than cruise';
     res.rails = rails;
     res.standoff = aim0.standoff;
     res.tol = aim0.tol;
@@ -4299,6 +4326,8 @@
     var ip = G.intercept;
     if (!ip || ip.key !== key) ip = G.intercept = { key: key, age: Infinity, costs: [] };
     ip.age += Math.max(0, dtReal || 0);
+    /* The frame clock, smoothed, for the drive's drop-out miss. */
+    if (dtReal > 0) G.frameSmooth = G.frameSmooth ? G.frameSmooth * 0.9 + Math.min(0.1, dtReal) * 0.1 : Math.min(0.1, dtReal);
     if (ip.age >= INTERCEPT_EVERY) {
       var t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
       var res = solveIntercept(lock);
@@ -4467,7 +4496,11 @@
      * second at most, as auto-dock does, so a drive that will not engage
      * (mass locked, dry) leaves the ship crossing on thrust and asking
      * again as it climbs clear. */
-    if (gap > INTERCEPT_CRUISE_MIN && ad.phase !== 'alongside' && !ad.cruiseBarred) {
+    /* Whichever drive the pip chose (Intercept.solve takes the faster), so
+     * the assist flies the trip the readout promised. Before the first
+     * solve, the floor alone. */
+    var wantCruise = ip ? ip.drive === 'cruise' : gap > INTERCEPT_CRUISE_MIN;
+    if (wantCruise && gap > INTERCEPT_CRUISE_MIN && ad.phase !== 'alongside' && !ad.cruiseBarred) {
       var cr = interceptCruise();
       if (cr.ok) {
         var head = V.norm(V.sub((ip && ip.drive === 'cruise' && ip.res.aim) ? ip.res.aim : plan.aim, G.ship.pos));
@@ -4672,7 +4705,11 @@
     var tg = G.cam.project(ip.targetPos);
     var merged = ip.merged || (at.on && tg && Math.hypot(tg.x - at.x, tg.y - at.y) < 12);
     var label = (merged ? 'INTERCEPT ' : 'PIP ') + fmtTime(ip.T);
-    var driveTxt = ip.drive === 'cruise' ? 'cruise' : 'thrusters' + (ip.why ? ' · ' + ip.why : '');
+    /* The drive it chose, and what the other would take, so the choice can
+     * be checked from the seat. */
+    var alt = ip.res.alt && isFinite(ip.res.alt.T) ? ip.res.alt : null;
+    var driveTxt = (ip.drive === 'cruise' ? 'cruise' : 'thrusters' + (ip.why ? ' · ' + ip.why : '')) +
+                   (alt ? '  (' + alt.drive + ' ' + (alt.over ? 'over ' : '') + fmtTime(alt.T) + ')' : '');
     ctx.save();
     ctx.strokeStyle = PIP_COL; ctx.fillStyle = PIP_COL; ctx.lineWidth = 1.6;
     ctx.font = 'bold 11px ui-monospace, monospace';

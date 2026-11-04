@@ -135,8 +135,10 @@ station, a world, a ship) and a **pink ring** appears on the glass: the
 **pip**, where the target will be when you get there. A dashed line runs
 from the target to it, along the way the target is moving, and the label
 gives the time to intercept and the drive the estimate assumes:
-**cruise** when the drive is yours to use for the trip, **thrusters** when it
-is not, and then a second line says why (*cruise: mass locked by Mirven I*).
+**cruise** or **thrusters**, whichever is faster for this trip, with the
+other drive's time in brackets. When thrusters win, it says why: *faster than
+cruise*, *too close for the drive* (under 18 km), or the drive's own reason
+(*mass locked by Mirven I*).
 On the cruise drive the pip is the point in space itself. On thrusters it is
 that point less your own drift, so it is where to point the nose from where
 you are. Close in, or with a target that barely moves, the pip and the

@@ -40,6 +40,41 @@ before they update.
 
 ## Unreleased
 
+### Changed (2026-11-03, the pip takes the faster drive)
+
+Astra found the pip saying "thrusters, too close for the drive, 17 min" at
+2,900 km off Threshold Dock. The cruise drive does that trip in under a minute,
+even at its 60 km/s floor. The cause was a 5,000 km threshold, auto-dock's
+`AUTO_CRUISE_MIN`, which decided the drive by distance alone. She chose: "let
+the pip work out both and take whichever is faster."
+
+- **Both drives are solved, and the faster one is kept** (`Intercept.solve`).
+  When the drive is allowed, cruise is solved first, then thrusters. The
+  thruster solve gives up once it has taken ten times the cruise time, so a
+  long crossing no longer pays for a thruster solve it would throw away.
+- **The readout says what it chose and what the other drive would take**:
+  `cruise  (thrusters over 6.0 min)`, or `thrusters · faster than cruise
+  (cruise 2.1 min)`. *too close for the drive* now appears only under the
+  floor (below).
+- **The intercept assist flies the drive the pip chose.**
+- **The cruise time now includes the drop-out miss.** The drive is dropped on
+  the frame the gap falls under one step at its floor speed. Measured from
+  2,900 km at 20 fps, that left the ship 5.7 km short and added 38 s of
+  thrusters to a 53 s trip. Without the miss in the model, cruise came out
+  faster than thrusters at any range.
+- **A measured floor of 18 km.** That is twice the worst drop-out miss: one
+  step at 60 km/s with 10 fps frames, times the 1.5 safety factor. It is
+  raised further for a target the drive has to outrun. The modelled
+  crossover was 1.1 times the miss in every case: 1.6–1.9 km at 60 fps, and
+  9.3–10 km at 10 fps, for thrust from 0.002 to 0.019 km/s².
+- **Auto-dock keeps its 5,000 km rule, deliberately.** From the same 2,900 km
+  it reaches its berth phase in 27 s of wall clock, against the assist's 22 s.
+  It flies on thrusters but winds the clock up to 500×, so the player waits
+  about as long either way. Its long leg hands over at its lead point and
+  hails the port. Rewiring that tested approach for 5 s is not worth it.
+
+**Saves:** unaffected.
+
 ### Added (2026-11-03, trading houses: a factor on the concourse, an account for your ships, judged by the quarter)
 
 Astra: "Is there a way for me to tell my fleet to go buy low and sell high on

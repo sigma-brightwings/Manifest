@@ -117,13 +117,16 @@
    * invent an overshoot the real ship would not fly. Measured: under 0.1 ms
    * for a typical trip. */
   var MODEL_STEPS = 20000;
-  function thrusterTime(r0, w0, accel, tol, cap) {
+  function thrusterTime(r0, w0, accel, tol, cap, give) {
     if (!(accel > 0)) return { T: Infinity, why: 'no thrust' };
     var rx = r0.x, ry = r0.y, rz = r0.z, wx = w0.x, wy = w0.y, wz = w0.z, t = 0;
     var r = { x: 0, y: 0, z: 0 }, w = { x: 0, y: 0, z: 0 };
     for (var i = 0; i < MODEL_STEPS; i++) {
       var d = len(rx, ry, rz), s = len(wx, wy, wz);
       if (d < tol && s < ARRIVE_DV) return { T: t, steps: i };
+      /* Racing another drive: past `give` this one has lost, and how badly
+       * does not need working out. */
+      if (give && t > give) return { T: t, steps: i, over: true };
       var vWant = Math.min(cap || V_CAP, Math.sqrt(2 * BRAKE * accel * d));
       var dt = Math.max(0.05, Math.min(600, 0.025 * d / (s + vWant + 1e-6)));
       r.x = rx; r.y = ry; r.z = rz; w.x = wx; w.y = wy; w.z = wz;
@@ -311,7 +314,23 @@
       t += (prev - r) / Math.max(1e-6, cruiseClosing(mid, au, a2, L));
       prev = r;
     }
-    return { T: t, cruise: t, tail: 0, detour: !!wp };
+    /* THE DROP-OUT IS NOT EXACT. The drive moves at its floor, 60 km/s,
+     * and is dropped the frame the gap falls under one frame's step (main.js
+     * steerInterceptCruise, closeStep), so it hands over up to a step short
+     * of the aim point — a kilometre and a half at 60 fps, nine at 10 fps —
+     * and the thrusters close that. It is the one real overhead the drive
+     * has (it spins up at once and drops out already matched), and leaving
+     * it out made cruise "faster" than thrusters at any range at all. */
+    /* The step at the floor is the closing speed the law is clamped to
+     * there — cruiseClosing at no gap, which is more than 60 km/s when the
+     * aim point is running away (a station on a 30 km/s orbit receding along
+     * the line makes it 90). Measured: Threshold Dock from 2,900 km dropped
+     * out 5.7 km short at 20 fps, past the 5.3 km arrival radius, and the
+     * thruster tail was 38 s of a 53 s trip. */
+    var miss = (o.dropFrame || 0) * 1.5 * cruiseClosing(0, au, a2, Infinity), tail = 0;
+    if (miss > o.tol) tail = thrusterTime({ x: ux * miss, y: uy * miss, z: uz * miss }, { x: 0, y: 0, z: 0 },
+                                          o.accel, o.tol, o.cap).T;
+    return { T: t + tail, cruise: t, tail: tail, detour: !!wp };
   }
 
   /* ---- the solve ----------------------------------------------------------
@@ -330,15 +349,14 @@
    * }
    * Returns { T, pos, vel, drive, iters, converged, residual }. */
   var FIXED_ITERS = 10;
-  function flown(o, T, now, b0) {
+  function flown(o, T, now, b0, drive) {
     var tg = o.targetAt(T);
     var rel = { x: now.aim.x - o.ship.pos.x, y: now.aim.y - o.ship.pos.y, z: now.aim.z - o.ship.pos.z };
-    var gap = len(rel.x, rel.y, rel.z);
-    if (o.cruise && gap > (o.cruiseMin || 0)) {
+    if (drive === 'cruise') {
       var b1 = o.cruise.bodiesAt(T);
       var c = cruiseTime({ ship: o.ship.pos, aim: now.aim, aimVel: now.aimVel, accel: o.accel,
                            tol: o.tol, cap: o.cap, top: o.cruise.top, dropR: o.cruise.dropR,
-                           skipIndex: o.cruise.skipIndex },
+                           skipIndex: o.cruise.skipIndex, dropFrame: o.cruise.dropFrame },
                          tg.aim, b0, b1);
       /* And the turn onto the heading first: the bubble goes where the
        * nose points, and the assist will not spin it up until the nose is
@@ -348,16 +366,64 @@
       return { f: c.T + turn, tg: tg, drive: 'cruise', detail: c };
     }
     var w = { x: o.ship.vel.x - now.aimVel.x, y: o.ship.vel.y - now.aimVel.y, z: o.ship.vel.z - now.aimVel.z };
-    var th = thrusterTime(rel, w, o.accel, o.tol, o.cap);
+    var th = thrusterTime(rel, w, o.accel, o.tol, o.cap, o.give);
+    if (th.over) return { f: Infinity, over: th.T, tg: tg, drive: 'thrusters', detail: th };
     return { f: th.T, tg: tg, drive: 'thrusters', detail: th };
   }
 
+  /* BOTH DRIVES, AND THE FASTER ONE (Astra, 2026-11-03). The pip used to
+   * pick cruise or thrusters by a distance threshold — auto-dock's 5,000 km
+   * — and so at 2,900 km off Threshold Dock it said "thrusters, 17 min"
+   * when the drive at its 60 km/s floor would have done it in under a
+   * minute. Asked, she chose: "let the pip work out both and take whichever
+   * is faster." So when the drive is allowed, each drive gets its own solve
+   * — its own fixed point, because the pip moves with T and the two T's are
+   * different — and the shorter one is the answer. The readout names it.
+   *
+   * Below `cruiseMin` the drive is not tried at all. That is not a guess at
+   * the crossover (the comparison finds that); it is the floor under which
+   * cruise cannot be flown honestly — see main.js INTERCEPT_CRUISE_MIN. */
   function solve(o) {
     var now = o.targetAt(0);
-    var b0 = o.cruise ? o.cruise.bodiesAt(0) : null;
+    var gap0 = len(now.aim.x - o.ship.pos.x, now.aim.y - o.ship.pos.y, now.aim.z - o.ship.pos.z);
+    /* The floor (main.js INTERCEPT_CRUISE_MIN, twice the worst drop-out
+     * miss at 60 km/s), raised for a target the drive's floor speed has to
+     * outrun: twice the miss at 10 fps for THIS aim velocity. */
+    var floor = o.cruiseMin || 0;
+    if (o.cruise && floor > 0 && gap0 > 1e-9) {
+      var ux0 = (now.aim.x - o.ship.pos.x) / gap0, uy0 = (now.aim.y - o.ship.pos.y) / gap0, uz0 = (now.aim.z - o.ship.pos.z) / gap0;
+      var av = now.aimVel, au0 = av.x * ux0 + av.y * uy0 + av.z * uz0, aa0 = av.x * av.x + av.y * av.y + av.z * av.z;
+      floor = Math.max(floor, 2 * 0.1 * 1.5 * cruiseClosing(0, au0, aa0, Infinity));
+    }
+    if (!o.cruise || !(gap0 > floor)) return solveWith(o, now, 'thrusters');
+    /* Cruise first, then thrusters RACING it: the thruster model gives up
+     * the moment it has taken longer than the cruise did. Without that a
+     * cruise across the system paid for a thruster solve of the same
+     * crossing — months of game time walked out step by step, the slowest
+     * solve there is — only to throw it away. The readout then says the
+     * thrusters would take "over" that. */
+    var cr = solveWith(o, now, 'cruise');
+    /* Ten times the cruise: still cheap (the slow thruster solves are the
+     * system-crossing ones, months long), and the "over" figure on the
+     * readout then says something — "over 2.3 min", not "over 14 s". */
+    var give = isFinite(cr.T) ? Math.max(cr.T * 10, 60) : 0;
+    var o2 = give ? Object.create(o) : o;
+    if (give) o2.give = give;
+    var th = solveWith(o2, now, 'thrusters');
+    if (th.over || !(th.T < cr.T)) {
+      cr.alt = { drive: 'thrusters', T: th.over ? th.over : th.T, over: !!th.over };
+      return cr;
+    }
+    th.alt = { drive: 'cruise', T: cr.T };
+    return th;
+  }
+
+  function solveWith(o, now, drive) {
+    var b0 = drive === 'cruise' ? o.cruise.bodiesAt(0) : null;
     var T = 0, res = null, it = 0, converged = false;
     for (it = 0; it < FIXED_ITERS; it++) {
-      res = flown(o, T, now, b0);
+      res = flown(o, T, now, b0, drive);
+      if (res.over) return { T: Infinity, over: res.over, drive: drive, converged: false };
       if (!isFinite(res.f)) break;
       var tolT = Math.max(0.05, 1e-3 * res.f);
       if (Math.abs(res.f - T) < tolT) { converged = true; T = res.f; break; }
@@ -368,18 +434,18 @@
      * longest the trip could take, so bisection is guaranteed a root. */
     if (!converged && res && isFinite(res.f)) {
       var lo = 0, hi = Math.max(T, res.f) * 2 + 1;
-      for (var k = 0; k < 40 && flown(o, hi, now, b0).f > hi; k++) hi *= 2;
+      for (var k = 0; k < 40 && flown(o, hi, now, b0, drive).f > hi; k++) hi *= 2;
       for (var j = 0; j < 40; j++) {
         var mid = 0.5 * (lo + hi);
-        if (flown(o, mid, now, b0).f > mid) lo = mid; else hi = mid;
+        if (flown(o, mid, now, b0, drive).f > mid) lo = mid; else hi = mid;
         if (hi - lo < Math.max(0.05, 1e-3 * hi)) break;
       }
       T = 0.5 * (lo + hi);
-      res = flown(o, T, now, b0);
+      res = flown(o, T, now, b0, drive);
       converged = Math.abs(res.f - T) < Math.max(0.5, 5e-3 * T);
       it += j;
     }
-    if (!res || !isFinite(res.f)) return { T: Infinity, drive: res ? res.drive : 'thrusters', converged: false };
+    if (!res || !isFinite(res.f)) return { T: Infinity, drive: drive, converged: false };
     return {
       T: T, pos: res.tg.pos, vel: res.tg.vel, aim: res.tg.aim, drive: res.drive,
       iters: it + 1, converged: converged, residual: res.f - T, detail: res.detail
