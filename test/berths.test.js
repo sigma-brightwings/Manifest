@@ -191,8 +191,12 @@ console.log('--- both halves index a model\'s berths the same way ---');
     });
     for (var i = 0; i < sorted.length; i++) {
       var off = Gen.berthOffset(port, i);
-      if (Math.abs(off.x - sorted[i].mid[0]) > 1e-9 ||
-          Math.abs(off.y - sorted[i].mid[1]) > 1e-9) { bad++; }
+      /* Less a stand moved in off a high wall door (Render.berthStandIn,
+       * 2026-11-04): the navy yards' heavy bays stand on the hall floor
+       * inside their doorway, by a shift the renderer says. */
+      var sIn = Render.berthStandIn(modelId, i) || [0, 0];
+      if (Math.abs(off.x - sIn[0] - sorted[i].mid[0]) > 1e-9 ||
+          Math.abs(off.y - sIn[1] - sorted[i].mid[1]) > 1e-9) { bad++; }
     }
   });
   check('berthOffset and berthBoxes agree on which berth is which',
@@ -1203,7 +1207,10 @@ console.log('--- landing in a berth ---');
         return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
       });
       var b = sorted[k];
-      if (b.min && b.max && (deck < b.min[2] - 1e-6 || deck > b.max[2] + 1e-6)) {
+      /* ...or, for a high wall door whose stand is moved in to the hall's
+       * floor (Render.berthStandIn), under it: the box is the doorway. */
+      var movedIn = !!Render.berthStandIn(id, k);
+      if (b.min && b.max && (deck < b.min[2] - 1e-6 && !movedIn || deck > b.max[2] + 1e-6)) {
         offDeck++;
         console.log('  FAIL  ' + id + ' berth ' + k + ' put its deck outside its own anchor');
       }
@@ -2285,7 +2292,30 @@ console.log('--- on the bay\'s floor, not its lintel ---');
   bad.forEach(function (s) { console.log('    ' + s); });
   check('no hull is parked on a lintel at a spine, ring, cradle, refinery or skimmer',
         lintel.length === 0, lintel.join('; '));
-  check('the berths off a level floor are no more than the 40 measured 2026-11-03',
+  /* And out of a stand moved in off its door (berthStandIn), the way she
+   * came: the push along the bay's normal from the hall floor is through
+   * the wall under the sill, so undocking runs the rail backwards and
+   * hands her over outside. */
+  var inStands = 0, outBad = [];
+  ['yard-navy-s', 'yard-navy-m', 'yard-navy-l'].forEach(function (id) {
+    Render.assignPort(role, id);
+    var nb = Math.max(1, Gen.bayGeometry(st).berths);
+    for (var i = 0; i < nb; i++) {
+      if (!Render.berthStandIn(id, i)) continue;
+      inStands++;
+      var sh = { pos: [0, 0, 0], vel: [0, 0, 0], fwd: [1, 0, 0], up: [0, 0, 1], right: [0, 1, 0], cleared: {} };
+      Sim.dockShip(sh, st, sys, 0, i);
+      Sim.undockShip(sh, sys, 0, 0.002);
+      var ok = !!(sh.arrival && sh.arrival.reverse), tt = 0;
+      while (sh.arrival && tt < 400) { tt += 0.5; Sim.stepArrival(sh, sys, tt); }
+      if (!ok || sh.arrival || !Sim.outsideStation(st, sh.pos, sys, tt)) outBad.push(id + ' b' + i);
+    }
+  });
+  Render.assignPort(role, null);
+  /* Four: yard-navy-s and -l have one heavy garage each, -m two. */
+  check('every navy yard heavy bay stands her on the hall floor inside, and lets her out the way she came',
+        inStands === 4 && outBad.length === 0, inStands + ' stands moved in; ' + outBad.join('; '));
+  check('the berths off a level floor are no more than the 40 measured 2026-11-03 (36 once the navy yards\' heavy bays stand on their hall floor)',
         bad.length <= 40, bad.length + '');
 })();
 
@@ -2324,7 +2354,12 @@ console.log('--- the rail waits outside the doors, on the lamps\' line ---');
    * were left out of this sweep for it. Render.libPort now moves a model's
    * gate faces into the shell when that is where portDoors will find them
    * (gateFacesToShell), and the yards are swept like every other model. */
-  var plain = MODELS.filter(function (id) { return !/-(navy|syn)-/.test(id); });
+  /* AND THE NAVY AND SYNDICATE YARDS (2026-11-04), which are models of
+   * their own and were left out with the liveries: their heavy bays flew
+   * in over the lintel into the wall (yard-navy, 17 of its 60 approaches
+   * counting the S/M bays routed through them), and two Syndicate throats
+   * stood the hull in their shut leaves. */
+  var plain = MODELS.filter(function (id) { return !/-(navy|syn)-/.test(id) || /^yard-/.test(id); });
   ['yard-s', 'yard-m', 'yard-l'].forEach(function (id) {
     if (!global.PortLib[id]) return;
     var yd = Render.portDoors(id);

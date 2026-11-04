@@ -1347,11 +1347,22 @@
   /* Padded only on an axis the box has no depth on: a box with depth is
    * tested exactly as it always was, so no model's leaves change but the
    * ones drawn as sheets (G, 2026-11-03: they get thickness elsewhere). */
+  /* AND ACROSS ITS THINNEST AXIS ALWAYS (2026-11-04). A leaf two rounding
+   * steps thick misses its own faces the same way once one of them has been
+   * lifted off a coplanar panel (glb2hulls liftCoplanar, 2e-5): the navy
+   * yards' garage slats are 0.002 deep, their boxes rounded to -0.584 ..
+   * -0.582, and the lifted face of the middle two at -0.5819 stayed in the
+   * hull - a strip of shut door, the doorway's full height, in the middle
+   * of every open garage (yard-navy's last approaches, "enter"). The pad is
+   * across the leaf's own thin axis only, where nothing else lies within
+   * it but the leaf. */
   function inGateBox(b, x, y, z) {
     if (!b || !b.min || !b.max) return false;
     var p = [x, y, z];
+    var ext = [b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]];
+    var thinA = ext[0] <= ext[1] ? (ext[0] <= ext[2] ? 0 : 2) : (ext[1] <= ext[2] ? 1 : 2);
     for (var a = 0; a < 3; a++) {
-      var e = (b.max[a] - b.min[a]) < GATE_BOX_PAD * 2 ? GATE_BOX_PAD : 0;
+      var e = (ext[a] < GATE_BOX_PAD * 2 || (a === thinA && ext[a] < GATE_BOX_PAD * 4)) ? GATE_BOX_PAD : 0;
       if (p[a] < b.min[a] - e || p[a] > b.max[a] + e) return false;
     }
     return true;
@@ -2053,7 +2064,7 @@
       return !/[a-z0-9-]/i.test(key.charAt(id.length));
     };
     [PORT_CACHE, SOLIDITY, PORT_DOORS, INTERIOR_BOUNDS, CUT_COUNT, OPEN_BUCKET,
-     SECTIONS, DRESS, ADSET, BOOM, DECK, TRIDEX, LEAF_BOUNDS, SHELL_MESHES].forEach(function (c) {
+     SECTIONS, DRESS, ADSET, BOOM, DECK, STAND_IN, TRIDEX, LEAF_BOUNDS, SHELL_MESHES].forEach(function (c) {
       if (!c) return;
       Object.keys(c).forEach(function (k) { if (own(k)) delete c[k]; });
     });
@@ -9050,7 +9061,10 @@
      * than as a number, because a constant scaled by another constant is a
      * bug wearing a disguise. */
     var lift = STAND_LIFT * hullSpan('courier').h * M2U;
-    var o = [bx.mid[0], bx.mid[1], deck + lift];
+    /* Where her stand was moved in to, off a high wall door (berthStandIn):
+     * the stand goes with her, onto the hall floor. */
+    var sIn = berthStandIn(role, k);
+    var o = [bx.mid[0] + (sIn ? sIn[0] : 0), bx.mid[1] + (sIn ? sIn[1] : 0), deck + lift];
     var f = bx.normal ? [bx.normal[0], bx.normal[1], bx.normal[2]] : [1, 0, 0];
     var fl = Math.sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]) || 1;
     f = [f[0] / fl, f[1] / fl, f[2] / fl];
@@ -9970,8 +9984,66 @@
       var zFloor = floors[Math.floor(floors.length / 2)];
       if (zFloor < z - DECK_MIN_ROOM * 0.5) z = zFloor;
     }
+    /* A DOOR HIGH IN A WALL, WITH THE FLOOR INSIDE (2026-11-04). The navy
+     * yards' heavy bays (berthLY0/1, "garage") are a doorway 0.19 radii up
+     * the end wall of a hall whose floor is at -0.318: the box is the
+     * doorway, there is nothing in it to stand on, and every reading above
+     * fell back to the box's top - the lintel. The hull was parked on the
+     * lintel with 613-700 m of nothing under her, and the rail, at the
+     * stand's height, flew in just over it into the wall (17 of yard-navy's
+     * 60 approaches). The floor she belongs on is the hall's, inside. So a
+     * door in a wall (its normal level) whose reading is its own top, with
+     * no floor found in the box, walks in from the box's inner face along
+     * the normal until a straight cast down from the doorway's middle finds
+     * a floor under the sill with the doorway's height clear above it; the
+     * stand is moved in to there and a hull's length past it (STAND_IN,
+     * read by Gen.berthOffset), and Sim takes her in level through the door
+     * and down (orbitalPath). */
+    STAND_IN[key] = null;
+    var nrm = b.normal;
+    if (nrm && Math.abs(nrm[2]) < 0.5 && !floors.length && z >= b.max[2] - boxH * 0.1) {
+      var depth = Math.abs((b.max[0] - b.min[0]) * nrm[0]) / 2 + Math.abs((b.max[1] - b.min[1]) * nrm[1]) / 2;
+      var hl = Math.sqrt(nrm[0] * nrm[0] + nrm[1] * nrm[1]) || 1;
+      var ix0 = -nrm[0] / hl, iy0 = -nrm[1] / hl;
+      for (var dIn = depth; dIn <= depth + 0.25; dIn += 0.004) {
+        var px = b.mid[0] + ix0 * dIn, py = b.mid[1] + iy0 * dIn;
+        yield 0;
+        var dn2 = castZ([px, py, b.mid[2]], -1);
+        if (!isFinite(dn2)) continue;
+        var zf = b.mid[2] - dn2;
+        if (zf >= b.min[2] - underTol) continue;           // still the sill
+        var up2 = castZ([px, py, zf + 1e-4], 1);
+        if (!(up2 >= b.mid[2] - zf)) continue;             // something between her and the door
+        /* Three hull lengths on from the wall's foot (STAND_IN_LEAD), on the
+         * floor found THERE: the first floor in from the wall can be a kerb
+         * along its foot (0.01 radii proud at yard-navy-m), and a stand
+         * measured at the kerb and put past it floated over the hall. */
+        var dS = dIn + STAND_IN_LEAD, sx2 = b.mid[0] + ix0 * dS, sy2 = b.mid[1] + iy0 * dS;
+        var dnS = castZ([sx2, sy2, b.mid[2]], -1), zS = b.mid[2] - dnS;
+        var upS = isFinite(dnS) ? castZ([sx2, sy2, zS + 1e-4], 1) : 0;
+        if (isFinite(dnS) && zS < b.min[2] - underTol && upS >= b.mid[2] - zS) zf = zS;
+        else dS = dIn;
+        STAND_IN[key] = [ix0 * dS, iy0 * dS];
+        z = zf;
+        break;
+      }
+    }
     DECK[key] = z;
     return z;
+  }
+  /* How far the stand of a high wall door is moved in from its box (see
+   * berthDeckJob), [dx, dy] in radii, or null for every other berth. */
+  var STAND_IN = {};
+  /* 0.02 radii: 84 m at Waypoint Dock's size, three hull lengths - the
+   * stand clear of the wall's foot and the door's lamps. */
+  var STAND_IN_LEAD = 0.02;
+  function berthStandIn(role, i) {
+    var lib = libPort(role), mb = lib && lib.anchors && lib.anchors.berths;
+    if (!mb || !mb.length) return null;
+    var k = ((i % mb.length) + mb.length) % mb.length;
+    var key = role + '#' + k;
+    if (DECK[key] === undefined) berthDeck(role, i);
+    return STAND_IN[key] || null;
   }
 
   /* The table for one berth of one model, in PORT RADII, built on first
@@ -17158,7 +17230,7 @@
     setAccent: setAccent, accented: accented, accentSwap: accentSwap,
     drawContrail: drawContrail,
     portSolidity: portSolidity,
-    clearRouteJob: clearRouteJob, routeDoors: routeDoors, portReady: portReady, berthDeckJob: berthDeckJob, berthDeckReady: berthDeckReady, trianglesJob: function (role) {
+    clearRouteJob: clearRouteJob, routeDoors: routeDoors, portReady: portReady, berthDeckJob: berthDeckJob, berthDeckReady: berthDeckReady, berthStandIn: berthStandIn, trianglesJob: function (role) {
       return TRIDEX[role] !== undefined ? null : (TRI_JOBS[role] || (TRI_JOBS[role] = trianglesJob(role)));
     },
     portSections: portSections,

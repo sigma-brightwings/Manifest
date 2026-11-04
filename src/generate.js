@@ -2275,9 +2275,12 @@
        * callers keep the old number. */
       var stand = (R2 && R2.standTopKm && !port.surface && deck !== null && deck !== undefined)
         ? R2.standTopKm() / (port.radius || 1) : 0;
+      /* A door high in a wall stands her inside, on the hall's floor
+       * (Render.berthStandIn, 2026-11-04): the navy yards' heavy bays. */
+      var sIn = (R2 && R2.berthStandIn && !port.surface) ? R2.berthStandIn(R2.portModelFor(port), i) : null;
       return {
-        x: bx.mid[0],
-        y: bx.mid[1],
+        x: bx.mid[0] + (sIn ? sIn[0] : 0),
+        y: bx.mid[1] + (sIn ? sIn[1] : 0),
         /* Floor of the bay, not its middle. */
         z: floorZ + g.standoff + stand,
         /* WHICH WAY THE BAY OPENS, from the throat's own orientation.
