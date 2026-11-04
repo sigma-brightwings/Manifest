@@ -257,15 +257,55 @@
     });
   }
 
+  /* A CURTAIN IS A PLANE, NOT A ROOM (2026-11-03). Astra's spine-m refused
+   * a clean seat in its own berth at its two small stations (Marrow
+   * Platform 2.30 km, Waypoint Array 2.18 km, seed landing-sweep), and had
+   * since af2b08b. A curtained bay's anchor is its force-field curtain - the
+   * group's box is the curtain's sheet, 0.002 radii through along the
+   * berth's normal - so berthBoxes measured the bay as 4.4 m deep at 2.18 km
+   * and a courier (8.6 m in her smallest dimension) "did not fit". The
+   * capture then looked for the nearest bay that did, found the heavy bay
+   * more than BERTH_CAPTURE_KM away, and closed no clamps. Every curtain
+   * berth in the library is a sheet like that (spine 0.002, the rest
+   * 0.003-0.005); the larger stations only got away with it because the
+   * sheet scales with the radius. The room behind the curtain is the art's
+   * own `hangar` depth (model units, per bay group), the same number the
+   * builder laid the bay out with; measured against the triangles it is
+   * about half of what a ray straight in from the curtain travels before it
+   * meets the back wall, so it errs short, which is the safe direction for
+   * a fit. Only the axis the curtain faces along is replaced, and only when
+   * the box is thinner than that. */
+  var curtainDepthCache = {};
+  function curtainDepth(port, b) {
+    var R = global.Render, lib = global.PortLib;
+    var id = (R && R.portModelFor) ? R.portModelFor(port) : null;
+    var e = id && lib ? lib[id] : null;
+    if (!e || !e.extras || !e.metresPerUnit || !b.node) return 0;
+    var c = curtainDepthCache[id];
+    if (!c) {
+      c = curtainDepthCache[id] = {};
+      e.extras.forEach(function (x) {
+        if (x && x.data && typeof x.data.hangar === 'number' && x.data.berthKind) c[x.name] = x.data.hangar / e.metresPerUnit;
+      });
+    }
+    return c[b.node] || 0;
+  }
+
   function berthBoxes(port) {
     var sorted = sortedBerths(port);
     if (!sorted) return null;
     var r = (port && port.radius) || 1;
     return sorted.map(function (b) {
       if (!b.min || !b.max) return null;        // a berth with no extent
-      return [(b.max[0] - b.min[0]) * r,
-              (b.max[1] - b.min[1]) * r,
-              (b.max[2] - b.min[2]) * r];
+      var ext = [b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]];
+      var n = b.normal;
+      if (n) {
+        var ax = Math.abs(n[0]) >= Math.abs(n[1]) ? (Math.abs(n[0]) >= Math.abs(n[2]) ? 0 : 2)
+                                                  : (Math.abs(n[1]) >= Math.abs(n[2]) ? 1 : 2);
+        var deep = curtainDepth(port, b);
+        if (deep > ext[ax]) ext[ax] = deep;
+      }
+      return [ext[0] * r, ext[1] * r, ext[2] * r];
     });
   }
 
@@ -5518,12 +5558,21 @@
     var lift = f && f.gearLift > 0 ? f.gearLift / 1000 : 0;
     var Gen = global.Gen;
     if (!port || !f || typeof f.ground !== 'number' || !(f.ground < 0) || !Gen || !Gen.bayGeometry) return lift;
-    /* ORBITAL BERTHS ONLY, for now. At a ground port the walkable hangar
-     * the boom starts in is fitted round her as she stood (render.test:
-     * "surface, cut on at Harrow Deep: she starts in her hangar" goes red
-     * with her own stance there); the ground ports keep the half metre
-     * until that hangar is fitted to the new height. */
-    if (port.surface) return lift;
+    /* GROUND PORTS TOO (2026-11-03). They kept the half metre while the
+     * walkable hangar was thought to be fitted round her as she stood:
+     * render.test's "surface, cut on at Harrow Deep: she starts in her
+     * hangar" went red with her own stance there. Measured, the hangar was
+     * never the cause - it is built in her own frame on her lifted gear
+     * (Render.hangarSpec: floor at outsidePlan's floorY), so it moves with
+     * her and its floor is where her feet are, which with this stance is
+     * the bay's own deck. What went red was the test's camera: its yaw and
+     * pitch are the world's until the first frame hands the boom to the
+     * port's ground frame, and converted at that moment they pointed the
+     * 5 m boom 70 degrees down, through the floor 2.3 m away. The test now
+     * sets its shot in the ground's frame. A SEA PAD keeps the half metre:
+     * its stand is the pad's own table (seaPath), not this standoff, and
+     * nobody has measured her feet against its deck. */
+    if (port.seaPlatform) return lift;
     var g = Gen.bayGeometry(port);
     if (!g || !(g.standoff > 0)) return lift;
     return -f.ground / 1000 - g.standoff * (port.radius || 1);
@@ -5821,6 +5870,24 @@
     if (leg === ROUTED_LIFT_LEG) return u;
     if (leg < ROUTED_TRANSFER_LEG) return 1;
     return u < 0.5 ? 1 : 1 - ease((u - 0.5) * 2);
+  }
+
+  /* WHERE A YARD CARRIAGE IS, 0 home in its storage level and 1 down in the
+   * hall: it comes down to the hall while she drives across it to the
+   * foot of its incline (the transfer's first phase, so it arrives as she
+   * does and its leaves stay shut until it moves), and carries her home on
+   * the ride phase - the same eased fraction ridePoint moves her by, so the
+   * deck and the hull cannot part. */
+  function carriageAt(phs, leg, u, t) {
+    if (leg !== ROUTED_TRANSFER_LEG || !phs) return 0;
+    /* Down by the time she is two thirds of the way across, not as she
+     * arrives: measured on yard-m, a carriage still settling (f 0.93-0.97)
+     * met her at its own doorway. */
+    if (t < phs.d1) return ease(Math.min(1, t / (phs.d1 * 0.65)));
+    var t0 = phs.d1 + RIDE_SETTLE;
+    if (t < t0) return 1;
+    if (t < t0 + phs.run) return 1 - ease((t - t0) / phs.run);
+    return 0;
   }
 
   /* `enter` is the leg that crosses the door plane. */
@@ -6225,6 +6292,16 @@
    * the travel the art allows), standoff above it — the same height every
    * stand in the game holds a hull at, and the one liftRide uses for the
    * ring's car. The car is then wherever the hull is, by construction. */
+  /* The fitted yard carriage berth `i` is, or null (Render.carriageFor). */
+  function carriageOf(port, i) {
+    var R = global.Render;
+    if (!R || !R.carriageFor || !R.portModelFor) return null;
+    var sorted = sortedBerths(port);
+    if (!sorted || !sorted.length) return null;
+    var b = sorted[((i % sorted.length) + sorted.length) % sorted.length];
+    return b && b.node ? R.carriageFor(R.portModelFor(port), b.node) : null;
+  }
+
   function seatRide(port, p10, stand) {
     var R = global.Render, Gen = global.Gen;
     var id = (R && R.portModelFor) ? R.portModelFor(port) : null;
@@ -6532,6 +6609,50 @@
          * [foot].concat(through, [stand]), so via index i is polyline i + 1. */
         p10.rideAt = (!ride && route.ride && typeof route.ride[0] === 'number') ? route.ride[0] + 1 : -1;
         if (p10.rideAt >= 1) seatRide(port, p10, stand);
+        /* A YARD CARRIAGE (2026-11-03): the bay IS the car. Its run, fitted
+         * to the hall floor (Render.carriageFor), ends at the stand on its
+         * deck at home; the other end, stand + d, is where the hull drives
+         * on in the hall. The art's dockPath ends near there (its foot of
+         * the incline, 0.016 radii off on yard-m); that corner is put on the
+         * fitted foot, and the last leg - foot to stand - is ridden
+         * (routePhases), not driven, with the carriage under her the whole
+         * way (arrivalPose `car`). */
+        var cg = !ride ? carriageOf(port, berth || 0) : null;
+        if (cg) {
+          var cFoot = { x: stand.x + cg.d[0], y: stand.y + cg.d[1], z: stand.z + cg.d[2] };
+          var lastT = p10.through.length ? p10.through[p10.through.length - 1] : null;
+          if (lastT && Math.sqrt(Math.pow(lastT.x - cFoot.x, 2) + Math.pow(lastT.y - cFoot.y, 2) +
+                                 Math.pow(lastT.z - cFoot.z, 2)) < 0.08) p10.through[p10.through.length - 1] = cFoot;
+          else p10.through.push(cFoot);
+          /* ACROSS THE HALL ON ITS FLOOR. The art's dockPath crosses the
+           * hall at the height its carriage's deck stopped at (0.024 radii
+           * over the floor at yard-m, 130 m at Halden Yard), so the hull
+           * drove in at that height and down into the carriage through its
+           * lintel (the door is 0.02 radii tall). Every corner before the
+           * foot that is within a hall's height of it is levelled to it. */
+          for (var lv = p10.through.length - 2; lv >= 0; lv--) {
+            var cz = p10.through[lv];
+            if (Math.abs(cz.z - cFoot.z) > 0.04) break;
+            p10.through[lv] = { x: cz.x, y: cz.y, z: cFoot.z };
+          }
+          /* AND STRAIGHT IN THROUGH ITS DOOR. The carriage's doorway is 0.025
+           * radii wide; the corner in front of it was the art's, on the art's
+           * run, and with the run fitted the foot moved 0.016 sideways - the
+           * hull came in at a slant and through a jamb. That corner is put
+           * on the line out of the door along the bay's own normal. */
+          var cn = Gen.berthApertures ? Gen.berthApertures(port, berth || 0) : null;
+          var nrm = cn && cn.normal;
+          var pc = p10.through.length >= 2 ? p10.through[p10.through.length - 2] : null;
+          if (nrm && pc) {
+            var al = (pc.x - cFoot.x) * nrm[0] + (pc.y - cFoot.y) * nrm[1] + (pc.z - cFoot.z) * nrm[2];
+            var nq = { x: cFoot.x + nrm[0] * al, y: cFoot.y + nrm[1] * al, z: cFoot.z + nrm[2] * al };
+            if (Math.sqrt(Math.pow(nq.x - pc.x, 2) + Math.pow(nq.y - pc.y, 2) + Math.pow(nq.z - pc.z, 2)) < 0.04) {
+              p10.through[p10.through.length - 2] = nq;
+            }
+          }
+          p10.rideAt = p10.through.length;
+          p10.carriage = cg.node;
+        }
         clearTransfer(port, berth || 0, p10);
         return p10;
       }
@@ -6717,7 +6838,8 @@
       /* The lift car this arrival rides, and where along its travel it is
        * (0 top, 1 bottom) — the renderer draws the car there. Same leg and
        * same eased u as the hull, so the two cannot part company. */
-      car: path.car ? { node: path.car, f: carAt(leg, u) } : null,
+      car: path.car ? { node: path.car, f: carAt(leg, u) }
+         : (path.carriage ? { node: path.carriage, f: carriageAt(phs, leg, u, el - acc) } : null),
       enclosed: leg >= enclosedFrom(port),
       /* The mechanism poses, 0 open and 1 sealed, matching the model's own
        * setApronDoors/setInnerGate/setLift/setBayGates. Interpolated within

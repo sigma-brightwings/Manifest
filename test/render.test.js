@@ -7604,6 +7604,22 @@ console.log('--- zooming out of her hangar ---');
       G.viewMode = 'orbit'; G.followShip = true; G.focus = null; G.walk = null;
       G.cutawayStyle = c[1];
       G.cam.yaw = 0.9; G.cam.pitch = 0.45; G.cam.dist = 0.005; G.cam.ask = 0;
+      /* AT A GROUND PORT, A SHOT IN THE GROUND'S FRAME (2026-11-03). The yaw
+       * and pitch above are the world's axes until the first frame hands the
+       * camera over to the port's ground frame (main.js syncCameraFrame), and
+       * the angles it converts to depend on where the planet has turned to:
+       * with her own stance at a ground port the same 0.9/0.45 came out
+       * pitched 70 degrees down, the 5 m boom went through her hangar's floor
+       * 2.3 m away, and "she starts in her hangar" went red for a camera the
+       * test never meant to point at the floor. So once the frame is the
+       * ground's, the shot is set in it: 0.45 rad down from the horizon. */
+      if (port.surface) {
+        frames(1);
+        var pbW = Sim.portBasis(port, G.sys, G.t);
+        var dirW = V.add(V.scale(pbW.up, Math.sin(0.45)), V.scale(pbW.east, Math.cos(0.45)));
+        var angW = R.camAngles(dirW, G.cam.frame);
+        G.cam.yaw = angW.yaw; G.cam.pitch = angW.pitch; G.cam.dist = 0.005; G.cam.ask = 0;
+      }
       frames(2);
       var what = c[0] + (c[1] === 2 ? ', cut off' : ', cut on') + ' at ' + port.name;
       check(what + ': she starts in her hangar', !G.hangarOut, (G.cam.dist * 1000).toFixed(1) + ' m');
