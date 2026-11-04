@@ -29,8 +29,11 @@ var ORBITAL = Object.keys(global.PortLib || {}).filter(function (id) {
          !HELD[id] && !e.entrances && !/-site-[sml]$/.test(id);
 });
 /* One per family: the navy and Syndicate liveries share the plain shell,
- * except the yards' (yard-navy is its own model, and is listed). */
-var PLAIN = ORBITAL.filter(function (id) { return !/-(navy|syn)-/.test(id); });
+ * except the yards'. The comment always said yard-navy was listed, and the
+ * filter left out every yard-navy-* and yard-syn-* (2026-11-04): 26 of
+ * their 35 berths had an inner leg through the structure, every one of
+ * them an elevator bridge, and nothing counted them. */
+var PLAIN = ORBITAL.filter(function (id) { return !/-(navy|syn)-/.test(id) || /^yard-/.test(id); });
 var sys = Gen.generateSystem('cut-sweep');
 var st = sys.ports.filter(function (p) { return !p.surface && p.docking; })[0];
 var role = Render.portRole(st), R0 = st.radius;
@@ -190,8 +193,19 @@ console.log('--- the legs inside the station ---');
   /* 32 since the yards' carriages ride (third pass, 2026-11-03): all 20
    * yard S/M bays were "no open route found", the hull carried up the
    * incline through her own carriage to stand on its rail. */
-  check('the berths with an inner leg through something are no more than the 32 measured 2026-11-03 (52 before the third pass, 55 before the second)',
-        bad.length <= 32, bad.length + '');
+  /* 0 since the fourth pass (2026-11-04), of 166 with the navy and
+   * Syndicate yards in (32 of 131 without them before it, 58 of 166 with):
+   * cylinder arm A's bore turned keel-down in the converter (boreUpright:
+   * the ride ran inside its keel slab), every inclined car boarded and left
+   * along its rails (Sim seatRide), the skimmers' hall field a door and not
+   * a plate (glb2hulls: a field is never interior), the station's own
+   * internal doors open for a transfer (Render.hallLeafOpen), and no
+   * elevator bridge for a bay with a door of its own - the cradles'
+   * outboard pods, spine-l's two, the navy and Syndicate yards' S/M bays
+   * and one at cylinder-m are docked at their own doors. */
+  check('no berth has an inner leg through anything (32 of 131 on 2026-11-03, 58 of 166 with the yards counted)',
+        bad.length === 0, bad.length + '');
+  check('every berth found an open route', blocked === 0, blocked + '');
   check('no yard berth has an inner leg through anything',
         !bad.some(function (s) { return /^yard-[sml] /.test(s); }), bad.filter(function (s) { return /^yard-[sml] /.test(s); }).join('; '));
   check('no ring, refinery or small/medium spine berth has an inner leg through anything',
@@ -365,6 +379,42 @@ console.log('--- the inclined bores are whole ---');
     });
   });
   check('every arm bore has walls the whole length of its car\'s run', n >= 8 && broken.length === 0, n + ' bores; ' + broken.join('; '));
+})();
+
+/* ---- B: THE RIDE IS IN THE BORE'S AIR, NOT ITS WALL -----------------------
+ * Cylinder arm A is the builder's arm rolled half a turn, and its bore came
+ * out keel up: the car pressed under the keel overhead, and the hull, stood
+ * on the car's deck, rode the whole bore inside the keel slab (a segment
+ * inside a slab crosses no surface, so every sweep passed the ride; what
+ * failed was each leg on and off it). glb2hulls boreUpright turns such a
+ * bore keel-down. Every inclined car with a run: at tenths of the run, a
+ * hull's height straight up from the seat she rides at meets nothing. */
+console.log('--- the ride is in the bore, not in its wall ---');
+(function () {
+  st.radius = 4.184;
+  /* Clear air over her seat: 0.012 radii, twice a keel slab's depth
+   * (0.006) and so more than a seat inside one can have, and under the
+   * 0.018 over the seat in the narrowest bore (spine-l's hoists). A hull's
+   * own height (0.003) fits inside the slab and passed the old ride. */
+  var inWall = [], n = 0, CLEAR = 0.012, g = Gen.bayGeometry(st);
+  var ONLY = { open: 1, inner: 1, onlyMine: true, berthMid: [9, 9, 9] };
+  PLAIN.forEach(function (id) {
+    (Render.libPort(id).movers || []).forEach(function (m) {
+      if (!m.axis || !(Math.abs(m.axis[2]) > 0.2 && Math.abs(m.axis[2]) < 0.95)) return;
+      if (!(m.range[1] - m.range[0] > 0.05) || typeof m.deck !== 'number') return;
+      n++;
+      for (var u = 0.15; u < 0.9; u += 0.1) {
+        var sv = m.range[0] + (m.range[1] - m.range[0]) * u;
+        var seat = [m.mid[0] + m.axis[0] * sv, m.mid[1] + m.axis[1] * sv, m.deck + m.axis[2] * sv + g.standoff];
+        if (Render.portSegmentHit(id, seat, [seat[0], seat[1], seat[2] + CLEAR], ONLY)) {
+          inWall.push(id + ' ' + m.node + ' at ' + u.toFixed(2)); break;
+        }
+      }
+    });
+  });
+  st.radius = R0;
+  check('every inclined car is ridden with clear air over her seat, not inside a wall', n >= 8 && inWall.length === 0,
+        n + ' cars; ' + inWall.slice(0, 6).join('; '));
 })();
 
 /* ---- F: THE BLAST DOORS BETWEEN THE BERTHS AND THE STATION ----------------
@@ -677,7 +727,11 @@ console.log('--- routes warmed in slices ---');
   check('a warmed route is the route the cold path finds', same === routed, same + ' of ' + routed);
   check('nothing is routed cold once the system is warm', Sim.transferStats.cold - before === 0,
         (Sim.transferStats.cold - before) + ' cold');
-  check('the work comes in slices, many per route', Sim.transferStats.slices - s0 > routed * 20,
+  /* Several per route, not twenty: since 2026-11-04 no leg at these two
+   * stations needs the grid search (every route's legs clear the exact test
+   * as found), so a route is a handful of exact tests and its decks -
+   * measured 58 slices for 6 routes, worst frame 1 ms. */
+  check('the work comes in slices, several per route', Sim.transferStats.slices - s0 > routed * 4,
         (Sim.transferStats.slices - s0) + ' slices');
 })();
 

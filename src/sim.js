@@ -6285,6 +6285,38 @@
     if (k >= 1 && k - 1 < p10.through.length) p10.through[k - 1] = seat(A);
     if (k < p10.through.length) p10.through[k] = seat(B);
     p10.rideMover = best.node;
+
+    /* ON AND OFF AN INCLINED CAR ALONG ITS RAILS (2026-11-04). A car in a
+     * 45-degree bore (the cylinders' arms) stops at the bore's mouth, inside
+     * the tube: the tube's walls run past it on every side but the end. The
+     * route to the boarding stop was handed to clearRoute as one straight
+     * leg from wherever the hull last was, which comes in through the tube's
+     * side wall, and the route search had to find the mouth on a grid as
+     * coarse as the bore is narrow (12 thousandths of a radius a cell at
+     * cylinder-s, the bore 54 across): at arm B's hub end it never did.
+     * Measured at Waypoint Dock's radius, every cylinder bay on arm B and
+     * every arm-A bay before its bore was turned keel-down. So she drives
+     * onto the car the way the car runs: a corner out along its axis past
+     * the end of its run, by the car's own half-length and a hull's span,
+     * and straight in from there; and off it the same way at the far end.
+     * Not for an upright lift, which is boarded from the side. */
+    if (!(Math.abs(ax2[2]) > 0.2 && Math.abs(ax2[2]) < 0.95) || !(k >= 1) || k >= p10.through.length) return;
+    var hx = (best.max[0] - best.min[0]) / 2, hy = (best.max[1] - best.min[1]) / 2, hz = (best.max[2] - best.min[2]) / 2;
+    var carHalf = Math.abs(hx * ax2[0]) + Math.abs(hy * ax2[1]) + Math.abs(hz * ax2[2]);
+    /* The car's box is boxed round its tilted length, so the sum above is
+     * its whole half-length along the run or more; a hull's span beyond. */
+    var fh = fleetHalf(), r = port.radius || 1;
+    var out = carHalf * 0.5 + (fh.w * 2) / r;
+    var sOn = p10.through[k - 1], sOff = p10.through[k];
+    var sa = (sOn.x - best.mid[0]) * ax2[0] + (sOn.y - best.mid[1]) * ax2[1] + (sOn.z - best.mid[2]) * ax2[2];
+    var sb = (sOff.x - best.mid[0]) * ax2[0] + (sOff.y - best.mid[1]) * ax2[1] + (sOff.z - best.mid[2]) * ax2[2];
+    var sg = sa < sb ? -1 : 1;
+    function beyond(P, s) { return { x: P.x + ax2[0] * s, y: P.y + ax2[1] * s, z: P.z + ax2[2] * s }; }
+    var onC = beyond(sOn, sg * out), offC = beyond(sOff, -sg * out);
+    var t = p10.through;
+    p10.through = t.slice(0, k - 1).concat([onC, t[k - 1], t[k], offC], t.slice(k + 1));
+    /* The boarding stop moved one along: polyline index k + 1. */
+    p10.rideAt = k + 1;
   }
 
   /* THE TRANSFER THROUGH OPEN SPACE ONLY (2026-11-03). The route's corners

@@ -1041,12 +1041,28 @@ function interiorRoutes(buckets, berths, carried, doors) {
    * (bridge, then the declared route as a last resort), so the stations
    * converted this morning route exactly as they did — the shaft report
    * is keyed on those bridges. */
+  /* NO ELEVATOR BRIDGE FOR A BAY WITH A DOOR OF ITS OWN (2026-11-04). The
+   * bridge is a straight line through whatever is between two decks the
+   * grid could not join, and at the game's exact test every bridged route
+   * stayed one: "no open route found", the hull through the structure, at
+   * all 31 bridged bays (the cradles' outboard pods, which hang off the
+   * hull with open space between, spine-l's two, the navy and Syndicate
+   * yards' bays, one at cylinder-m). Each of them has its own mouth to
+   * space, and a bay with no way through the station to it is docked at
+   * that mouth, like a bay that was never routed. Kept for a bay with no
+   * mouth (none in the library today), where the bridge is the only way. */
+  var unrouted = 0;
   small.forEach(function (k) {
     if (routeVoxel(k, false)) { found++; return; }
     if (berths[k].carriage && routeDeclared(k)) { found++; declared++; return; }
-    if (routeVoxel(k, true)) { found++; return; }
-    if (routeDeclared(k)) { found++; declared++; }
+    var ownMouth = /^(door|field|curtain)$/.test(berths[k].kind || '');
+    if (!ownMouth && routeVoxel(k, true)) { found++; return; }
+    if (routeDeclared(k)) { found++; declared++; return; }
+    /* And it says so (doctrine: refusals carry reasons): read by
+     * transfer.test, which holds every S/M bay to a route or this. */
+    if (ownMouth) { unrouted++; berths[k].unrouted = 'no passage from a heavy bay: docked at its own door'; }
   });
+  if (unrouted) console.log('    ' + unrouted + ' S/M bay(s) with no passage from a heavy bay: docked at their own doors');
   if (bridged) console.log('    ' + bridged + ' S/M route(s) joined by elevator across unconnected decks');
   /* A route found some other way - the art's own dockPath, chiefly - that
    * nonetheless runs along a car's line IS a ride: mark the leg, so the
@@ -2126,6 +2142,7 @@ function convertPort(file) {
                             : matFromTRS(node.translation, node.rotation, node.scale);
     var world = matMul(parentMat, local);
     var name = node.name || '';
+    if (BORE_RE.test(name)) world = matMul(world, boreUpright(nodeIdx, world, name));
     var mo = node.extras && node.extras.motion;
     var carKey = inCar || null;
     if (!carKey && mo && mo.kind === 'lift' && typeof mo.from === 'number' &&
@@ -2248,7 +2265,18 @@ function convertPort(file) {
      * the yards' carriages and their hatches were in the interior bucket
      * with the rest of the hall, which nothing ever moves (portDoors splits
      * moving parts out of the shell). */
-    var interior = !mvHere && !carKey && !hatchKey && (inInterior || PORT_INTERIOR_RE.test(name));
+    /* NOR IS A GATE (2026-11-04). The skimmers' `hallGateForceField`, the
+     * field between the hoist's top and the sort hall, starts with `hall`
+     * and so went into the interior bucket - where portDoors, which makes a
+     * gate's faces into doors, never looks. It stayed a solid plate across
+     * the hoist's only way out, and every skimmer S/M bay (13 of them) was
+     * "no open route found", the transfer bridged through it. A gate is
+     * shell, like any other door, wherever it stands. */
+    /* Only a FIELD: the yards' hall doors and track slats are also gates
+     * under a `hall` node, and they are drawn and driven where they are
+     * (the carriages' leaves, fitCarriages), so they are left as they were. */
+    var gateNode = /ForceField$/i.test(name) && PORT_MULTI.gates.test(name);
+    var interior = !mvHere && !carKey && !hatchKey && !gateNode && (inInterior || PORT_INTERIOR_RE.test(name));
     var spin = inSpin || PORT_SPIN_RE.test(name);
 
     /* glTF `extras` is where three.js's GLTFExporter puts userData, and
@@ -2446,6 +2474,58 @@ function convertPort(file) {
       walk(node.children[ch], world, interior, spin, mine, inOmitNext, nodeIdx,
            inGate || gateHere, openHere, ckey, ekey, mvHere, boreHere, carKey, hatchKey);
     }
+  }
+
+  /* A BORE WITH ITS KEEL OVERHEAD IS TURNED KEEL-DOWN (2026-11-04). Astra,
+   * of the cylinders: their small bays were "enclosed" - the boarding leg
+   * into each arm bore never found a way in. The cylinder builder makes one
+   * arm and rolls it round the hub, and arm A's roll is half a turn, so its
+   * bore came out upside down: the keel (with the racks, and the car on its
+   * pinions) on top, the crown underneath. Every hull in the game stands +z
+   * up, and seatRide stood her on the car's deck - which, pressed up under
+   * the keel, put her centreline INSIDE the keel slab for the whole ride
+   * (measured at cylinder-s: the ride at z -0.049 where y = 0.05, in a keel
+   * from -0.0511 to -0.0452). A segment inside a slab crosses no surface,
+   * so the sweep passed the ride; what failed was every leg on or off it,
+   * which had to come out through the slab. Arms B and C, rolled a sixth of
+   * a turn either way, already have the keel the lower side.
+   *
+   * The bore is a straight tube, symmetric about its long axis (keel and
+   * crown the same thickness, the same run, the walls each side the same),
+   * so half a turn about that axis puts its keel, racks, collars, lamps and
+   * car where the crown was and the crown overhead, and the tube's outline
+   * - and the holes the hub and the pod have for it - is unchanged. Applied
+   * to the bore node's frame, so every child, and the car's stops (moverStops
+   * measures them in this frame), turn with it. */
+  function boreUpright(idx, world, name) {
+    var n = j.nodes[idx], keel = null, crown = null;
+    (n.children || []).forEach(function (c) {
+      var cn = j.nodes[c], nm = cn && cn.name || '';
+      if (/Keel$/.test(nm)) keel = c;
+      else if (/Crown$/.test(nm)) crown = c;
+    });
+    if (keel === null || crown === null) return matIdentity();
+    function mid(ci) {
+      var cn = j.nodes[ci];
+      var b = localBox(ci, cn.matrix ? cn.matrix.slice() : matFromTRS(cn.translation, cn.rotation, cn.scale));
+      return b ? [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2] : null;
+    }
+    var kl = mid(keel), cr = mid(crown);
+    if (!kl || !cr) return matIdentity();
+    var kz = toGame(matApply(world, kl))[2], cz = toGame(matApply(world, cr))[2];
+    if (!(kz > cz)) return matIdentity();
+    /* Half a turn about the tube's long axis, through the middle of its
+     * cross-section (its own box: the bore is modelled straight). */
+    var bb = localBox(idx, matIdentity());
+    if (!bb) return matIdentity();
+    var sz = [bb.max[0] - bb.min[0], bb.max[1] - bb.min[1], bb.max[2] - bb.min[2]];
+    var ax = sz.indexOf(Math.max(sz[0], sz[1], sz[2]));
+    var c = [(bb.min[0] + bb.max[0]) / 2, (bb.min[1] + bb.max[1]) / 2, (bb.min[2] + bb.max[2]) / 2];
+    var R = matIdentity();
+    for (var k = 0; k < 3; k++) if (k !== ax) R[k * 5] = -1;
+    for (k = 0; k < 3; k++) R[12 + k] = c[k] - R[k * 5] * c[k];
+    console.log('    ' + name + ' turned keel-down (keel ' + kz.toFixed(1) + ' over crown ' + cz.toFixed(1) + ')');
+    return R;
   }
 
   var scene = j.scenes[j.scene || 0];

@@ -9414,6 +9414,19 @@
   /* How far an inner gate's leaf has run back: the airlock's inner number
    * at the berth it is cycling, the far bay's on a routed arrival, shut
    * everywhere else. */
+  /* A DOOR INSIDE THE STATION, belonging to no berth (2026-11-04): the
+   * skimmers' lock and hall gates, the cradle's lift-well gate. They opened
+   * "with the station" - with whichever berth's outer doors were open - so
+   * on a transfer, outer doors shut behind her, every one she had to pass
+   * was shut, and the skimmers' hoist (whose hall gate was a solid plate
+   * until it became a door) still had a shut door at its top. A transfer
+   * opens them: the far bay's inner gate number (`innerTo`) is the transfer
+   * running, so it is the number these run on too. */
+  function hallLeafOpen(lf, doors, open) {
+    if (lf.inner || lf.berthMid || lf.car || lf.hatch) return open;
+    return Math.max(open, doors && doors.innerTo > 0 ? Math.min(1, doors.innerTo) : 0);
+  }
+
   function innerLeafOpen(lf, doors) {
     if (!doors || !lf.berthMid) return 0;
     if (doors.inner > 0 && doors.berthMid && sameMid(lf.berthMid, doors.berthMid)) return Math.min(1, doors.inner);
@@ -9534,6 +9547,7 @@
         /* An inner gate's leaves run on the airlock's inner number, and only
          * at the berth it belongs to (innerGateLeaves). */
         if (lf.inner) f = innerLeafOpen(lf, doors);
+        else if (!lf.berthMid) f = hallLeafOpen(lf, doors, open);
         else if (mine !== null && lf.berthMid) {
           /* Whose door. Compared by POSITION rather than by index, because
            * the leaf knows which berth anchor it sits at and the caller
@@ -10345,6 +10359,8 @@
         var ps = partState(lf, doors);
         if (ps.hidden) continue;
         f = ps.f;
+      } else if (!lf.berthMid) {
+        f = hallLeafOpen(lf, doors, open);
       } else if (want && lf.berthMid) {
         var dx = lf.berthMid[0] - want[0], dy = lf.berthMid[1] - want[1],
             dz = lf.berthMid[2] - want[2];
