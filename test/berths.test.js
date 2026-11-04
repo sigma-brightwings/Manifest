@@ -2292,6 +2292,24 @@ console.log('--- on the bay\'s floor, not its lintel ---');
   bad.forEach(function (s) { console.log('    ' + s); });
   check('no hull is parked on a lintel at a spine, ring, cradle, refinery or skimmer',
         lintel.length === 0, lintel.join('; '));
+  /* 30 since 2026-11-04 (40 before): the navy yards' heavy bays stand on
+   * their hall's floor inside the door (Render.berthStandIn; there was
+   * nothing under them for 613-700 m), and six Syndicate throats on their
+   * slot's floor, not its roof (the lintel band a fifth of the box, not a
+   * tenth). Every one left is a bay whose own frame is not level - the
+   * art's `up` is off +z: the cylinders' arm B and C pods, rolled 60
+   * degrees round the hub, and the Syndicate yards' garages, 22 degrees.
+   * Every hull stands +z up, so there is no level floor in them to find;
+   * that is the art's to mend, or a tilted stand's. A level-framed bay off
+   * its floor is a failure outright. */
+  var tilted = function (s) {
+    var mm = /^(\S+) b(\d+)/.exec(s), id = mm[1], i = +mm[2];
+    var bb = Render.libPort(id).anchors.berths.slice().sort(function (a, b) {
+      return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
+    })[i];
+    return !!(bb && bb.up && bb.up[2] < 0.99);
+  };
+  var levelBad = bad.filter(function (s) { return !tilted(s); });
   /* And out of a stand moved in off its door (berthStandIn), the way she
    * came: the push along the bay's normal from the hall floor is through
    * the wall under the sill, so undocking runs the rail backwards and
@@ -2315,8 +2333,9 @@ console.log('--- on the bay\'s floor, not its lintel ---');
   /* Four: yard-navy-s and -l have one heavy garage each, -m two. */
   check('every navy yard heavy bay stands her on the hall floor inside, and lets her out the way she came',
         inStands === 4 && outBad.length === 0, inStands + ' stands moved in; ' + outBad.join('; '));
-  check('the berths off a level floor are no more than the 40 measured 2026-11-03 (36 once the navy yards\' heavy bays stand on their hall floor)',
-        bad.length <= 40, bad.length + '');
+  check('every level-framed berth stands on a real floor', levelBad.length === 0, levelBad.join('; '));
+  check('the berths off a level floor are no more than the 30 measured 2026-11-04 (40 the day before), all in tilted bays',
+        bad.length <= 30, bad.length + '');
 })();
 
 /* ---- THE RAIL WAITS OUTSIDE THE DOORS, ON THE LAMPS' LINE (2026-11-03) ----

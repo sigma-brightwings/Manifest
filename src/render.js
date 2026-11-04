@@ -9976,10 +9976,15 @@
      * the box with most of the box clear over it (floorPick above) — and it
      * is under the reading, the floor wins. A box that hangs below its deck
      * has no such floor (it is plate inside), so the ring keeps its reading. */
-    /* Only a reading AT the top of the box (its top tenth) is a lintel's:
-     * the civil yards' cradles stand in the middle of boxes seven hundred
-     * metres tall, open to space over them, and are not doorways. */
-    if (floors.length * 2 > hits.length && z >= b.max[2] - boxH * 0.1) {
+    /* Only a reading AT the top of the box is a lintel's: the civil yards'
+     * cradles stand in the middle of boxes seven hundred metres tall, open
+     * to space over them, and are not doorways. The top FIFTH (2026-11-04),
+     * not the top tenth: the Syndicate yards' S/M throats are a slot whose
+     * roof plate lies 0.105 of the box's height under its top, so the hull
+     * was parked on the roof of the slot, outdoors, 86-101 m over the floor
+     * every column found (6 berths). Measured: a fifth and a third move
+     * exactly those six, and nothing else in the library. */
+    if (floors.length * 2 > hits.length && z >= b.max[2] - boxH * 0.2) {
       floors.sort(function (p, q) { return p - q; });
       var zFloor = floors[Math.floor(floors.length / 2)];
       if (zFloor < z - DECK_MIN_ROOM * 0.5) z = zFloor;
