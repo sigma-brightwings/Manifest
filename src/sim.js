@@ -257,15 +257,55 @@
     });
   }
 
+  /* A CURTAIN IS A PLANE, NOT A ROOM (2026-11-03). Astra's spine-m refused
+   * a clean seat in its own berth at its two small stations (Marrow
+   * Platform 2.30 km, Waypoint Array 2.18 km, seed landing-sweep), and had
+   * since af2b08b. A curtained bay's anchor is its force-field curtain - the
+   * group's box is the curtain's sheet, 0.002 radii through along the
+   * berth's normal - so berthBoxes measured the bay as 4.4 m deep at 2.18 km
+   * and a courier (8.6 m in her smallest dimension) "did not fit". The
+   * capture then looked for the nearest bay that did, found the heavy bay
+   * more than BERTH_CAPTURE_KM away, and closed no clamps. Every curtain
+   * berth in the library is a sheet like that (spine 0.002, the rest
+   * 0.003-0.005); the larger stations only got away with it because the
+   * sheet scales with the radius. The room behind the curtain is the art's
+   * own `hangar` depth (model units, per bay group), the same number the
+   * builder laid the bay out with; measured against the triangles it is
+   * about half of what a ray straight in from the curtain travels before it
+   * meets the back wall, so it errs short, which is the safe direction for
+   * a fit. Only the axis the curtain faces along is replaced, and only when
+   * the box is thinner than that. */
+  var curtainDepthCache = {};
+  function curtainDepth(port, b) {
+    var R = global.Render, lib = global.PortLib;
+    var id = (R && R.portModelFor) ? R.portModelFor(port) : null;
+    var e = id && lib ? lib[id] : null;
+    if (!e || !e.extras || !e.metresPerUnit || !b.node) return 0;
+    var c = curtainDepthCache[id];
+    if (!c) {
+      c = curtainDepthCache[id] = {};
+      e.extras.forEach(function (x) {
+        if (x && x.data && typeof x.data.hangar === 'number' && x.data.berthKind) c[x.name] = x.data.hangar / e.metresPerUnit;
+      });
+    }
+    return c[b.node] || 0;
+  }
+
   function berthBoxes(port) {
     var sorted = sortedBerths(port);
     if (!sorted) return null;
     var r = (port && port.radius) || 1;
     return sorted.map(function (b) {
       if (!b.min || !b.max) return null;        // a berth with no extent
-      return [(b.max[0] - b.min[0]) * r,
-              (b.max[1] - b.min[1]) * r,
-              (b.max[2] - b.min[2]) * r];
+      var ext = [b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]];
+      var n = b.normal;
+      if (n) {
+        var ax = Math.abs(n[0]) >= Math.abs(n[1]) ? (Math.abs(n[0]) >= Math.abs(n[2]) ? 0 : 2)
+                                                  : (Math.abs(n[1]) >= Math.abs(n[2]) ? 1 : 2);
+        var deep = curtainDepth(port, b);
+        if (deep > ext[ax]) ext[ax] = deep;
+      }
+      return [ext[0] * r, ext[1] * r, ext[2] * r];
     });
   }
 

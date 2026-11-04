@@ -628,9 +628,20 @@ console.log('--- a station is a solid object ---');
                  vel: { x: 0, y: 0, z: 0 } };
     if (!Sim.beginArrival(ship, station, sys, 0)) return;
     var b = ship.arrival.berth, total = Sim.arrivalTotal(station);
+    /* THE CARVE'S OWN LEGS ONLY (2026-11-03). A courier now measures as
+     * fitting a curtained bay at a small station (Sim.curtainDepth: the
+     * curtain's box was 0.002-0.005 radii deep, and at solid-sweep's 2.88 km
+     * Marrow Depot she "did not fit" one, so every model sent her to its
+     * heavy bay's own doors). Assigned her small bay, she is routed in
+     * through the heavy bay, and the transfer leg inside runs through the
+     * station's rooms on a grid whose cells are 100-200 m: 8 of 31 points
+     * read as wall at every model. That leg is not cut by the carve this
+     * checks; interiors.test.js sweeps it against the triangles. */
+    var routedB = !!Gen.berthRoute(station, b);
     for (var k = 0; k <= 30; k++) {
       var pose = Sim.arrivalPose(station, sys, 0, b, total * k / 30);
       if (!pose) continue;
+      if (routedB && pose.legId === 'transfer') continue;
       checkedPts++;
       if (Sim.stationSolidAt(station, pose.pos, sys, 0) === Render.SOLID_WALL) {
         blocked++;
@@ -682,10 +693,30 @@ console.log('--- a station is a solid object ---');
     var same = true;
     for (var i = 0; i < bare.grid.length; i++) if (bare.grid[i] !== bareCopy[i]) { same = false; break; }
     check('the bare grid Render shares is never carved in place', same && !bare.carved);
+    /* Left on spine-m, the landing sweep found spine-m refusing a clean seat
+     * at its two small stations (2.18 and 2.30 km), true since af2b08b: a
+     * curtained bay's box is its curtain, 0.002 radii through, so the bay
+     * measured 4.4 m deep and a courier "did not fit" (Sim.curtainDepth now
+     * reads the art's hangar depth). Pinned here for the spines, whose
+     * curtains are the thinnest in the library, at every station of the
+     * landing sweep, small ones included. */
+    ['spine-s', 'spine-m', 'spine-l'].forEach(function (sid) {
+      Render.assignPort('orbital', sid);
+      var lsys = Gen.generateSystem('landing-sweep'), seats = 0, refused = [];
+      (lsys.ports || []).filter(function (p) { return !p.surface && Render.portModelFor(p) === sid; }).forEach(function (p) {
+        var bs = Sim.berthState(p, lsys, 0, 0);
+        if (!bs) return;
+        var sh = { cls: 'courier', dryMass: 80, hullHp: 100, gear: true, pos: V.clone(bs.pos), vel: V.clone(bs.vel),
+                   fwd: { x: 1, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 }, right: { x: 0, y: -1, z: 0 }, cleared: {} };
+        sh.cleared[p.id] = true;
+        Sim.checkImpact(sh, lsys, 0, true);
+        if (sh.docked === p.id) seats++; else refused.push(p.name + ' ' + p.radius.toFixed(2) + ' km');
+      });
+      check(sid + ': a clean seat in berth 0 docks you at every station of the landing sweep, small ones too',
+            refused.length === 0 && seats > 0, seats + ' docked; refused at ' + refused.join(', '));
+    });
     /* Put back what the checks below were written against: MODELS[0]
-     * assigned. Left on spine-m, the landing sweep found spine-m refusing a
-     * clean seat at its two small stations (2.18 and 2.30 km) - true at
-     * af2b08b too, and not this test's question. */
+     * assigned. */
     Render.assignPort('orbital', MODELS[0]);
   })();
 })();
