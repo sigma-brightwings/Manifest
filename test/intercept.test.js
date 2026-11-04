@@ -174,6 +174,27 @@ console.log('--- the solve: converges, leads, merges, switches drive ---');
   var still = I.solve({ ship: { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 } }, accel: 0.019, tol: 1.2,
     targetAt: function () { return { pos: { x: 500, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 }, aim: { x: 500, y: 0, z: 0 }, aimVel: { x: 0, y: 0, z: 0 } }; } });
   check('a stationary target: pip and target coincide', V.dist(still.pos, { x: 500, y: 0, z: 0 }) < 1e-9);
+
+  /* THE CROSSOVER (2026-11-03): both drives solved, the faster kept. A
+   * still target in open space, the drive allowed from any range, with the
+   * drop-out miss given in km (a frame at the 60 km/s floor, times 1.5:
+   * 1.5 km is 60 fps, 9 km is 10 fps). */
+  function race(d, miss) {
+    return I.solve({ ship: { pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 } }, accel: 0.019, tol: 0.5, cruiseMin: 0,
+      turnTime: function () { return 2.6; },
+      targetAt: function () { var p = { x: d, y: 0, z: 0 }, z = { x: 0, y: 0, z: 0 }; return { pos: p, vel: z, aim: p, aimVel: z }; },
+      cruise: { top: 6e8, dropR: 0.5, dropFrame: miss / 90, bodiesAt: function () { return []; } } });
+  }
+  var r1 = race(1, 1.5), r50 = race(50, 1.5), r2900 = race(2900, 1.5), r10fps = race(5, 9);
+  check('a kilometre off, thrusters win', r1.drive === 'thrusters', r1.T.toFixed(1) + ' s vs cruise ' + r1.alt.T.toFixed(1) + ' s');
+  check('fifty kilometres off, cruise wins', r50.drive === 'cruise', r50.T.toFixed(1) + ' s vs thrusters ' + r50.alt.T.toFixed(1) + ' s');
+  var full2900 = I.thrusterTime({ x: 2900, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, 0.019, 0.5).T;
+  check('at 2,900 km cruise wins by far (Astra\'s case)', r2900.drive === 'cruise' && r2900.T < 60 && full2900 > 600,
+        r2900.T.toFixed(1) + ' s vs thrusters ' + full2900.toFixed(0) + ' s');
+  check('the loser is named for the readout, and gave up once it had lost', r2900.alt && r2900.alt.drive === 'thrusters' && r2900.alt.over && r2900.alt.T >= r2900.T);
+  check('at 10 fps the miss is 9 km, and 5 km off is thrusters', r10fps.drive === 'thrusters', r10fps.T.toFixed(1) + ' s');
+  check('the chosen T is the faster of the two, always',
+        [r1, r50, r2900, r10fps].every(function (r) { return r.T <= r.alt.T; }) && race(1, 1.5).alt.T > race(1, 1.5).T);
 })();
 
 /* ======================================================================= */
@@ -251,6 +272,59 @@ newFlying('kawartha');
   check('twelve km off and matched, pip and target merge', ip && ip.merged,
         ip && (V.dist(ip.pos, ip.targetPos).toFixed(3) + ' km apart'));
   check('and the readout says INTERCEPT rather than PIP', drawn.texts.slice(-400).some(function (t) { return /^INTERCEPT \d/.test(t); }));
+
+  /* Astra's case, in the game: 2,900 km off Threshold Dock, moving with its
+   * planet. The pip used to say thrusters, 17 min. */
+  st = Sim.bodyState(port, G.sys, G.t);
+  var hs2 = Sim.bodyState(port.parentBody, G.sys, G.t);
+  var rad2 = V.norm(V.sub(st.pos, hs2.pos)), alo2 = V.norm(V.sub(st.vel, hs2.vel));
+  /* Predicted at the frame rate it is then flown at (20 fps here): the
+   * drop-out miss is a frame's step, so the two must agree. */
+  for (var fs29 = 0; fs29 < 40; fs29++) { placeAt(V.addScaled(V.addScaled(st.pos, rad2, 2500), alo2, -1470), hs2.vel); frame(50); st = Sim.bodyState(port, G.sys, G.t); hs2 = Sim.bodyState(port.parentBody, G.sys, G.t); }
+  placeAt(V.addScaled(V.addScaled(st.pos, rad2, 2500), alo2, -1470), hs2.vel);
+  G.navTarget = { kind: 'body', id: port.id };
+  G.intercept = null; frames(1, 50);
+  ip = G.intercept;
+  var gap29 = V.dist(Sim.bodyState(port, G.sys, G.t).pos, G.ship.pos);
+  check('2,900 km off a station, the pip now chooses cruise', ip && ip.drive === 'cruise',
+        ip && (ip.drive + ' ' + fmtT(ip.T) + ' at ' + gap29.toFixed(0) + ' km, thrusters ' + (ip.res.alt ? fmtT(ip.res.alt.T) : '-')));
+  check('in under two minutes', ip && ip.T < 120, ip && fmtT(ip.T));
+  check('and the readout names both', drawn.texts.slice(-400).some(function (t) { return /^cruise  \(thrusters over /.test(t); }));
+  var assistT0 = G.t, cruised29 = false, g29 = 0, pred29 = ip.T;
+  keydown('i');
+  while (g29++ < 4000 && G.autodock && !G.autodock.arrival) {
+    frame(50); if (G.cruise) cruised29 = true;
+    if (process.env.IP_MSG && G.message !== fmtT.last) { fmtT.last = G.message; console.log('        [' + (G.t - assistT0).toFixed(1) + '] ' + G.message + ' / ' + (G.autodock && G.autodock.phase)); }
+  }
+  var took29 = G.t - assistT0;
+  check('and the assist flies it on the drive, arriving about when it said', cruised29 && G.autodock && G.autodock.arrival &&
+        Math.abs(took29 - pred29) < Math.max(10, 0.25 * pred29), 'pred ' + fmtT(pred29) + ', took ' + fmtT(took29));
+  var real29 = g29 * 0.05;
+  G.autodock = null; G.cruise = null;
+
+  /* AND AUTO-DOCK, from the same spot, for the decision not to give it the
+   * same rule (see CHANGELOG): what matters to a pilot handing over is the
+   * WALL CLOCK, and auto-dock under 5,000 km winds the clock up to 500x on
+   * thrusters. Measured to the berth phase (inside four capture radii, the
+   * intercept's own standoff), at the same 20 fps. */
+  st = Sim.bodyState(port, G.sys, G.t); hs2 = Sim.bodyState(port.parentBody, G.sys, G.t);
+  placeAt(V.addScaled(V.addScaled(st.pos, rad2, 2500), alo2, -1470), hs2.vel);
+  G.navTarget = { kind: 'body', id: port.id }; G.dockTarget = port;
+  var adT0 = G.t, gAd = 0;
+  keydown('t');
+  while (gAd++ < 6000 && G.autodock && G.autodock.phase !== 'berth' && G.autodock.phase !== 'hold' && !G.ship.docked) frame(50);
+  console.log('    from 2,900 km: intercept assist ' + took29.toFixed(0) + ' s game / ' + real29.toFixed(0) + ' s real (cruise); auto-dock to its berth phase ' +
+              (G.t - adT0).toFixed(0) + ' s game / ' + (gAd * 0.05).toFixed(0) + ' s real (thrusters, clock wound up)');
+  G.autodock = null; G.dockTarget = null; G.warpIndex = 0;
+
+  /* Under the floor, it says why. */
+  st = Sim.bodyState(port, G.sys, G.t);
+  placeAt(V.addScaled(st.pos, rad2, 30), st.vel);
+  G.intercept = null; frames(2);
+  ip = G.intercept;
+  check('inside the drive\'s floor it is thrusters, too close for the drive',
+        ip && ip.drive === 'thrusters' && ip.why === 'too close for the drive', ip && (ip.drive + ' / ' + ip.why));
+  function fmtT(x) { return x.toFixed(1) + ' s'; }
 })();
 
 console.log('--- refusals carry reasons ---');
@@ -296,19 +370,22 @@ console.log('--- take-over and hand-back ---');
   check('I engages the assist', G.autodock && G.autodock.mode === 'intercept' && !G.autodock.standby);
   frames(20);
   check('the badge says AUTO', G.interceptBadge && G.interceptBadge.who === 'AUTO', G.interceptBadge && G.interceptBadge.text);
-  check('and the assist is flying (thrust commanded)', V.len(G.ship.thrust) > 0, V.len(G.ship.thrust).toExponential(2));
+  /* 900 km is a cruise now (the faster drive): flying is the bubble or
+   * the thrusters, whichever it chose. */
+  check('and the assist is flying (thrust or the drive)', V.len(G.ship.thrust) > 0 || !!G.cruise || G.autodock.phase === 'turn',
+        G.autodock && G.autodock.phase);
   G.keys.w = true; frames(1); G.keys.w = false;
   check('a burn takes the controls: it stands by, it does not cancel',
         G.autodock && G.autodock.mode === 'intercept' && G.autodock.standby);
   frames(3);
   check('the badge says YOU', G.interceptBadge && G.interceptBadge.who === 'YOU', G.interceptBadge && G.interceptBadge.text);
-  check('standing by it commands nothing', V.len(G.ship.thrust) === 0);
+  check('standing by it commands nothing', V.len(G.ship.thrust) === 0 && !(G.cruise && G.cruise.full));
   check('and the pip is still there', !!(G.intercept && G.intercept.res));
   check('the clock came down with the hand-over', G.warpIndex === 0);
   keydown('i');
   check('I hands back', G.autodock && !G.autodock.standby);
   frames(5);
-  check('and it flies again', V.len(G.ship.thrust) > 0 && G.interceptBadge.who === 'AUTO');
+  check('and it flies again', (V.len(G.ship.thrust) > 0 || !!G.cruise || G.autodock.phase === 'turn') && G.interceptBadge.who === 'AUTO');
   G.keys.arrowleft = true; frames(1); G.keys.arrowleft = false;
   check('the stick takes it too, not only the throttle', G.autodock && G.autodock.standby);
   keydown('i');
