@@ -2120,7 +2120,7 @@ function convertPort(file) {
    * the axis names. glTF front (+Z) therefore becomes the bay's -Y. */
   function toGame(p) { return [p[0], -p[2], p[1]]; }
 
-  function walk(nodeIdx, parentMat, inInterior, inSpin, anchors, inOmit, parentIdx, inGate, inOpen, inCarry, inEntr, inMover, inBore, inCar) {
+  function walk(nodeIdx, parentMat, inInterior, inSpin, anchors, inOmit, parentIdx, inGate, inOpen, inCarry, inEntr, inMover, inBore, inCar, inHatch) {
     var node = j.nodes[nodeIdx];
     var local = node.matrix ? node.matrix.slice()
                             : matFromTRS(node.translation, node.rotation, node.scale);
@@ -2140,6 +2140,34 @@ function convertPort(file) {
       cars[carKey].d = [q1[0] - q0[0], q1[1] - q0[1], q1[2] - q0[2]];
       var cmk = CARRIER_RE.exec(name);
       cars[carKey].key = cmk ? cmk[1].toLowerCase() : null;
+    }
+    /* A YARD CARRIAGE IS A CAR (2026-11-03). Astra at Halden Yard, of the
+     * civil yards' 45-degree carriages: "left elevator protrudes ... with a
+     * cut in the floor there for the elevator to come up through. When the
+     * elevator is not there, there should be a blast door covering the
+     * shaft", and "the bottom of that shaft needs to be flush with the
+     * floor, so the elevator comes down and locks into the floor ... placed
+     * too high on the right and too high on the left". The carriage halls'
+     * S/M bays (and the cargo cars beside them) declare their run as
+     * `carriage: {dir, travel}` in the bay's parent (hall) frame, and
+     * nothing read it: the carriage stayed where the art left it, parked in
+     * its storage level over the hall's crown or under its floor, and the
+     * hull was carried up the incline to stand on the RAIL above it. Now
+     * the bay group is a car like the ring's lift, its own faces claimed
+     * face by face (a box would take the rail its bogie runs on with it),
+     * with `d` its run to the hall end; Render.carriageFit fits that run to
+     * the hall's floor and Sim rides the hull on its deck. */
+    var cxr = node.extras && node.extras.carriage;
+    if (!carKey && cxr && Array.isArray(cxr.dir) && cxr.dir.length === 3 && typeof cxr.travel === 'number') {
+      carKey = name;
+      var cq0 = toGame(matApply(parentMat, [0, 0, 0]));
+      var cq1 = toGame(matApply(parentMat, [cxr.dir[0] * cxr.travel, cxr.dir[1] * cxr.travel, cxr.dir[2] * cxr.travel]));
+      cars[carKey] = box();
+      cars[carKey].node = name;
+      cars[carKey].d = [cq1[0] - cq0[0], cq1[1] - cq0[1], cq1[2] - cq0[2]];
+      cars[carKey].key = null;
+      cars[carKey].carriage = { fromAbove: !!cxr.fromAbove, hatch: typeof cxr.hatch === 'string' ? cxr.hatch : null,
+                                cargo: !!node.extras.cargoCar };
     }
     if (parentIdx === -1 && !rootMat) rootMat = world;
     /* A bore: named as one, and never the car inside it (the car is a
@@ -2211,7 +2239,16 @@ function convertPort(file) {
      * has to be drawn wherever that ship can be seen from - which, with the
      * cutaway, is from outside too. Same lesson as the lift-car fix of
      * 2026-10-13, now by declaration rather than by name. */
-    var interior = !mvHere && (inInterior || PORT_INTERIOR_RE.test(name));
+    /* A HATCH TAKES ITS CHILDREN (2026-11-03): the yards' track leaves are
+     * `trackNLeafF`/`LeafA` groups tagged `hatch`, their plates two unnamed
+     * meshes under them, so the tag on the group claimed no face at all and
+     * the leaves stayed welded into the hall. */
+    var hatchKey = inHatch || ((node.extras && node.extras.hatch === true) ? name : null);
+    /* A car and a hatch are never "interior" either, for the same reason:
+     * the yards' carriages and their hatches were in the interior bucket
+     * with the rest of the hall, which nothing ever moves (portDoors splits
+     * moving parts out of the shell). */
+    var interior = !mvHere && !carKey && !hatchKey && (inInterior || PORT_INTERIOR_RE.test(name));
     var spin = inSpin || PORT_SPIN_RE.test(name);
 
     /* glTF `extras` is where three.js's GLTFExporter puts userData, and
@@ -2395,16 +2432,19 @@ function convertPort(file) {
         }
         var bucketName = into === inr ? 'interior' : (into === spn ? 'spin' : 'shell');
         if (carKey) notePart(carKey, 'car', bucketName, fStart, into.f.length, cars[carKey], into);
-        else if (node.extras && node.extras.hatch === true) {
-          var hb = box();
+        else if (hatchKey) {
+          /* One box per hatch over all its plates: notePart extends the
+           * same part while the run continues, so grow the part's box. */
+          var lastP = parts.length ? parts[parts.length - 1] : null;
+          var hb = (lastP && lastP.node === hatchKey && lastP.kind === 'hatch') ? lastP.box : box();
           for (var hv = 0; hv < pos.length; hv++) grow(hb, toGame(matApply(world, pos[hv])));
-          notePart(name, 'hatch', bucketName, fStart, into.f.length, hb, into);
+          notePart(hatchKey, 'hatch', bucketName, fStart, into.f.length, hb, into);
         }
       }
     }
     for (var ch = 0; ch < (node.children || []).length; ch++) {
       walk(node.children[ch], world, interior, spin, mine, inOmitNext, nodeIdx,
-           inGate || gateHere, openHere, ckey, ekey, mvHere, boreHere, carKey);
+           inGate || gateHere, openHere, ckey, ekey, mvHere, boreHere, carKey, hatchKey);
     }
   }
 
@@ -2843,8 +2883,10 @@ function convertPort(file) {
     var pb = placedBox(cars[cn]);
     if (!pb) return null;
     var dv = cars[cn].d;
-    return { node: cars[cn].node, key: cars[cn].key, min: pb.min, max: pb.max, mid: pb.mid,
-             d: [r3(dv[0] * scale), r3(dv[1] * scale), r3(dv[2] * scale)] };
+    var co = { node: cars[cn].node, key: cars[cn].key, min: pb.min, max: pb.max, mid: pb.mid,
+               d: [r3(dv[0] * scale), r3(dv[1] * scale), r3(dv[2] * scale)] };
+    if (cars[cn].carriage) co.carriage = cars[cn].carriage;
+    return co;
   }).filter(Boolean);
   if (carList.length) out.cars = carList;
   /* And the faces each car and hatch owns, as [from, to) runs into its

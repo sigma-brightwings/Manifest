@@ -5796,6 +5796,24 @@
     return u < 0.5 ? 1 : 1 - ease((u - 0.5) * 2);
   }
 
+  /* WHERE A YARD CARRIAGE IS, 0 home in its storage level and 1 down in the
+   * hall: it comes down to the hall while she drives across it to the
+   * foot of its incline (the transfer's first phase, so it arrives as she
+   * does and its leaves stay shut until it moves), and carries her home on
+   * the ride phase - the same eased fraction ridePoint moves her by, so the
+   * deck and the hull cannot part. */
+  function carriageAt(phs, leg, u, t) {
+    if (leg !== ROUTED_TRANSFER_LEG || !phs) return 0;
+    /* Down by the time she is two thirds of the way across, not as she
+     * arrives: measured on yard-m, a carriage still settling (f 0.93-0.97)
+     * met her at its own doorway. */
+    if (t < phs.d1) return ease(Math.min(1, t / (phs.d1 * 0.65)));
+    var t0 = phs.d1 + RIDE_SETTLE;
+    if (t < t0) return 1;
+    if (t < t0 + phs.run) return 1 - ease((t - t0) / phs.run);
+    return 0;
+  }
+
   /* `enter` is the leg that crosses the door plane. */
   var ORBITAL_ENCLOSED_FROM = 2;
 
@@ -6198,6 +6216,16 @@
    * the travel the art allows), standoff above it — the same height every
    * stand in the game holds a hull at, and the one liftRide uses for the
    * ring's car. The car is then wherever the hull is, by construction. */
+  /* The fitted yard carriage berth `i` is, or null (Render.carriageFor). */
+  function carriageOf(port, i) {
+    var R = global.Render;
+    if (!R || !R.carriageFor || !R.portModelFor) return null;
+    var sorted = sortedBerths(port);
+    if (!sorted || !sorted.length) return null;
+    var b = sorted[((i % sorted.length) + sorted.length) % sorted.length];
+    return b && b.node ? R.carriageFor(R.portModelFor(port), b.node) : null;
+  }
+
   function seatRide(port, p10, stand) {
     var R = global.Render, Gen = global.Gen;
     var id = (R && R.portModelFor) ? R.portModelFor(port) : null;
@@ -6505,6 +6533,50 @@
          * [foot].concat(through, [stand]), so via index i is polyline i + 1. */
         p10.rideAt = (!ride && route.ride && typeof route.ride[0] === 'number') ? route.ride[0] + 1 : -1;
         if (p10.rideAt >= 1) seatRide(port, p10, stand);
+        /* A YARD CARRIAGE (2026-11-03): the bay IS the car. Its run, fitted
+         * to the hall floor (Render.carriageFor), ends at the stand on its
+         * deck at home; the other end, stand + d, is where the hull drives
+         * on in the hall. The art's dockPath ends near there (its foot of
+         * the incline, 0.016 radii off on yard-m); that corner is put on the
+         * fitted foot, and the last leg - foot to stand - is ridden
+         * (routePhases), not driven, with the carriage under her the whole
+         * way (arrivalPose `car`). */
+        var cg = !ride ? carriageOf(port, berth || 0) : null;
+        if (cg) {
+          var cFoot = { x: stand.x + cg.d[0], y: stand.y + cg.d[1], z: stand.z + cg.d[2] };
+          var lastT = p10.through.length ? p10.through[p10.through.length - 1] : null;
+          if (lastT && Math.sqrt(Math.pow(lastT.x - cFoot.x, 2) + Math.pow(lastT.y - cFoot.y, 2) +
+                                 Math.pow(lastT.z - cFoot.z, 2)) < 0.08) p10.through[p10.through.length - 1] = cFoot;
+          else p10.through.push(cFoot);
+          /* ACROSS THE HALL ON ITS FLOOR. The art's dockPath crosses the
+           * hall at the height its carriage's deck stopped at (0.024 radii
+           * over the floor at yard-m, 130 m at Halden Yard), so the hull
+           * drove in at that height and down into the carriage through its
+           * lintel (the door is 0.02 radii tall). Every corner before the
+           * foot that is within a hall's height of it is levelled to it. */
+          for (var lv = p10.through.length - 2; lv >= 0; lv--) {
+            var cz = p10.through[lv];
+            if (Math.abs(cz.z - cFoot.z) > 0.04) break;
+            p10.through[lv] = { x: cz.x, y: cz.y, z: cFoot.z };
+          }
+          /* AND STRAIGHT IN THROUGH ITS DOOR. The carriage's doorway is 0.025
+           * radii wide; the corner in front of it was the art's, on the art's
+           * run, and with the run fitted the foot moved 0.016 sideways - the
+           * hull came in at a slant and through a jamb. That corner is put
+           * on the line out of the door along the bay's own normal. */
+          var cn = Gen.berthApertures ? Gen.berthApertures(port, berth || 0) : null;
+          var nrm = cn && cn.normal;
+          var pc = p10.through.length >= 2 ? p10.through[p10.through.length - 2] : null;
+          if (nrm && pc) {
+            var al = (pc.x - cFoot.x) * nrm[0] + (pc.y - cFoot.y) * nrm[1] + (pc.z - cFoot.z) * nrm[2];
+            var nq = { x: cFoot.x + nrm[0] * al, y: cFoot.y + nrm[1] * al, z: cFoot.z + nrm[2] * al };
+            if (Math.sqrt(Math.pow(nq.x - pc.x, 2) + Math.pow(nq.y - pc.y, 2) + Math.pow(nq.z - pc.z, 2)) < 0.04) {
+              p10.through[p10.through.length - 2] = nq;
+            }
+          }
+          p10.rideAt = p10.through.length;
+          p10.carriage = cg.node;
+        }
         clearTransfer(port, berth || 0, p10);
         return p10;
       }
@@ -6690,7 +6762,8 @@
       /* The lift car this arrival rides, and where along its travel it is
        * (0 top, 1 bottom) — the renderer draws the car there. Same leg and
        * same eased u as the hull, so the two cannot part company. */
-      car: path.car ? { node: path.car, f: carAt(leg, u) } : null,
+      car: path.car ? { node: path.car, f: carAt(leg, u) }
+         : (path.carriage ? { node: path.carriage, f: carriageAt(phs, leg, u, el - acc) } : null),
       enclosed: leg >= enclosedFrom(port),
       /* The mechanism poses, 0 open and 1 sealed, matching the model's own
        * setApronDoors/setInnerGate/setLift/setBayGates. Interpolated within

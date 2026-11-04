@@ -7676,6 +7676,7 @@
     carDefs = fitted.defs;
     hullF = carShafts(shell, hullF, hullC, out, carDefs);
     hullC = hullF.c; hullF = hullF.f;
+    var carriageReport = fitCarriages(lib, shell, hullF, out, carDefs);
     /* ---- AND THE DOORWAY IS A HOLE ------------------------------------
      *
      * Astra, parked: "How about the transfer halls between the bay and the
@@ -7816,7 +7817,7 @@
       apertures: apertures,
       /* The cars' runs as fitted to their decks (fitCarRuns), and why any
        * was left alone. */
-      cars: carDefs, carFit: fitted.report
+      cars: carDefs, carFit: fitted.report, carriageFit: carriageReport
     };
     return PORT_DOORS[role];
   }
@@ -7919,7 +7920,7 @@
     for (var i = 0; i < carDefs.length; i++) {
       var cd = carDefs[i];
       var cp = { node: cd.node, key: cd.key, min: cd.min && cd.min.slice(), max: cd.max && cd.max.slice(),
-                 mid: cd.mid && cd.mid.slice(), d: cd.d && cd.d.slice() };
+                 mid: cd.mid && cd.mid.slice(), d: cd.d && cd.d.slice(), carriage: cd.carriage || null };
       defs.push(cp);
       if (!cp.min || !cp.max || !cp.d || Math.abs(cp.d[0]) + Math.abs(cp.d[1]) > 1e-9 || !cp.d[2]) continue;
       /* A car the art already gave a hatch is a run the art fitted (the
@@ -8027,6 +8028,128 @@
     });
   }
 
+  /* ---- THE YARDS' CARRIAGES, FLUSH WITH THE HALL FLOOR (2026-11-03) ----
+   *
+   * Astra at Halden Yard: "the bottom of that shaft needs to be flush with
+   * the floor, so the elevator comes down and locks into the floor ...
+   * placed too high on the right and too high on the left". Each civil
+   * yard carriage (glb2hulls: a car with `carriage`) runs at 45 degrees
+   * between its storage level and the hall, through an aperture in the
+   * hall's crown (the bays over it) or its floor (the bays under it) that
+   * the art cut and covered with a pair of track leaves. The art's own
+   * `travel` ends the run in mid-air. Measured on yard-m (radii): the
+   * upper carriages' deck stops 0.0166 over the hall floor (91 m at Halden
+   * Yard), the lower ones' 0.0076 (42 m) - both too high, as she saw.
+   *
+   * So each carriage's run is scaled along its own incline until its deck
+   * at the hall end is level with the hall floor beside it: the deck is
+   * the car's own surface with the most room over it, straight down its
+   * middle; the floor is the median, over four columns just outside the
+   * far end's footprint, of the up-facing surface nearest where the deck
+   * lands (shell and interior both - the yards' hall is in the interior).
+   * A change is taken only within 0.7-1.4 of the art's run. The leaves
+   * over its aperture are the carriage's hatch: shut while it is home in
+   * its storage level, open while it is away (partState `openAway`), so
+   * "when the elevator is not there" the shaft is covered. Returns lines
+   * for the report; the fitted run and deck are written onto the def. */
+  function fitCarriages(lib, shell, hullF, out, defs) {
+    var report = [], cs = defs.filter(function (d) { return d.carriage && d.d && d.min && d.max; });
+    if (!cs.length) return report;
+    var flat = [];
+    function addFlat(m, faces) {
+      if (!m || !faces) return;
+      for (var f = 0; f < faces.length; f++) {
+        var t = faces[f];
+        if (!t || t.length < 3) continue;
+        var a = m.v[t[0]], b = m.v[t[1]], c = m.v[t[2]];
+        if (!a || !b || !c) continue;
+        var e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        var nz = e1[0] * e2[1] - e1[1] * e2[0];
+        var nl = Math.sqrt(Math.pow(e1[1] * e2[2] - e1[2] * e2[1], 2) + Math.pow(e1[2] * e2[0] - e1[0] * e2[2], 2) + nz * nz);
+        if (nl > 0 && Math.abs(nz / nl) > 0.7) flat.push([a, b, c]);
+      }
+    }
+    addFlat(shell, hullF);
+    addFlat(lib && lib.interior, lib && lib.interior && lib.interior.f);
+    function zAt(T, x, y) {
+      var A = T[0], B = T[1], C = T[2];
+      if (Math.max(A[0], B[0], C[0]) < x || Math.min(A[0], B[0], C[0]) > x ||
+          Math.max(A[1], B[1], C[1]) < y || Math.min(A[1], B[1], C[1]) > y) return null;
+      var d0 = (B[0] - A[0]) * (C[1] - A[1]) - (C[0] - A[0]) * (B[1] - A[1]);
+      if (Math.abs(d0) < 1e-14) return null;
+      var u = ((x - A[0]) * (C[1] - A[1]) - (C[0] - A[0]) * (y - A[1])) / d0;
+      var v = ((B[0] - A[0]) * (y - A[1]) - (x - A[0]) * (B[1] - A[1])) / d0;
+      if (u < 0 || v < 0 || u + v > 1) return null;
+      return A[2] + u * (B[2] - A[2]) + v * (C[2] - A[2]);
+    }
+    cs.forEach(function (cd) {
+      var leaf = null;
+      for (var o = 0; o < out.length; o++) if (out[o].car && out[o].node === cd.node) leaf = out[o];
+      if (!leaf) { report.push(cd.node + ': no faces'); return; }
+      /* Its leaves, whether or not its run is refitted: a cargo car that
+       * never leaves home keeps them shut. */
+      var stem = cd.carriage.hatch ? cd.carriage.hatch.replace(/Hatch$/, '') + 'Leaf' : null;
+      if (stem) out.forEach(function (lf) {
+        if (lf.hatch && lf.node && lf.node.indexOf(stem) === 0) { lf.overCar = cd.node; lf.openAway = true; }
+      });
+      var cx = (cd.min[0] + cd.max[0]) / 2, cy = (cd.min[1] + cd.max[1]) / 2;
+      var zs = [];
+      leaf.mesh.f.forEach(function (t) {
+        for (var j = 1; j + 1 < t.length; j++) {
+          var z = zAt([leaf.mesh.v[t[0]], leaf.mesh.v[t[j]], leaf.mesh.v[t[j + 1]]], cx, cy);
+          if (z !== null) zs.push(z);
+        }
+      });
+      zs.sort(function (p, q) { return p - q; });
+      var deck = null, gap = 0;
+      for (var k = 0; k + 1 < zs.length; k++) if (zs[k + 1] - zs[k] > gap) { gap = zs[k + 1] - zs[k]; deck = zs[k]; }
+      if (deck === null) { report.push(cd.node + ': no deck'); return; }
+      var land = deck + cd.d[2], w = cd.max[0] - cd.min[0], h = cd.max[1] - cd.min[1];
+      var fx = cx + cd.d[0], fy = cy + cd.d[1], tol = Math.max(0.02, Math.abs(cd.d[2]) * 0.25);
+      var floors = [];
+      [[cd.min[0] + cd.d[0] - w * 0.15, fy], [cd.max[0] + cd.d[0] + w * 0.15, fy],
+       [fx, cd.min[1] + cd.d[1] - h * 0.15], [fx, cd.max[1] + cd.d[1] + h * 0.15]].forEach(function (pt) {
+        var best = null;
+        for (var q = 0; q < flat.length; q++) {
+          var z2 = zAt(flat[q], pt[0], pt[1]);
+          if (z2 !== null && Math.abs(z2 - land) < tol && (best === null || Math.abs(z2 - land) < Math.abs(best - land))) best = z2;
+        }
+        if (best !== null) floors.push(best);
+      });
+      floors.sort(function (p, q) { return p - q; });
+      if (floors.length < 2 || !cd.d[2]) { report.push(cd.node + ' left as the art has it (no floor on two sides)'); cd.deck = deck; return; }
+      var floor = floors[(floors.length - 1) >> 1];
+      var kk = (floor - deck) / cd.d[2];
+      if (!(kk > 0.7 && kk < 1.4)) { report.push(cd.node + ' left as the art has it (run x' + kk.toFixed(3) + ')'); cd.deck = deck; return; }
+      var was = cd.d[2];
+      cd.d = [cd.d[0] * kk, cd.d[1] * kk, cd.d[2] * kk];
+      cd.deck = deck; cd.floor = floor; cd.runScale = kk; cd.artLand = deck + was;
+      var dl = Math.sqrt(dot3(cd.d, cd.d));
+      leaf.axis = [cd.d[0] / dl, cd.d[1] / dl, cd.d[2] / dl];
+      leaf.travel = dl;
+      report.push(cd.node + ' deck ' + deck.toFixed(4) + ', the art landed it ' + (deck + was - floor).toFixed(4) +
+                  ' off the floor, run x' + kk.toFixed(3));
+    });
+    return report;
+  }
+
+  /* The fitted carriage a berth's bay rides, or null: { node, d, deck },
+   * normalised units, the run from home (its storage level) to the hall. */
+  function carriageFor(role, node) {
+    var raw = global.PortLib && global.PortLib[role];
+    if (!raw || !raw.cars || !node) return null;
+    var has = false;
+    for (var i = 0; i < raw.cars.length; i++) if (raw.cars[i].carriage && raw.cars[i].node === node) has = true;
+    if (!has) return null;
+    var d = portDoors(role);
+    var cs = d && d.cars;
+    for (var j = 0; cs && j < cs.length; j++) {
+      var c = cs[j];
+      if (c.node === node && c.carriage && typeof c.deck === 'number') return { node: c.node, d: c.d.slice(), deck: c.deck, fitted: !!c.runScale };
+    }
+    return null;
+  }
+
   function carShafts(shell, hullF, hullC, out, carDefs) {
     var cars = [];
     for (var i = 0; i < out.length; i++) {
@@ -8034,7 +8157,11 @@
       if (!lf.car) continue;
       var cd = null;
       for (var q = 0; q < carDefs.length; q++) if (carDefs[q].node === lf.node) cd = carDefs[q];
-      if (cd && cd.min && cd.max && cd.d) cars.push({ lf: lf, cd: cd });
+      /* Not a yard carriage: its run is a 45-degree incline through an
+       * aperture the art already cut and covered (fitCarriages), and the
+       * vertical shaft below - footprint at rest, pit under it - would cut
+       * the hall floor where the carriage never goes. */
+      if (cd && cd.min && cd.max && cd.d && !cd.carriage) cars.push({ lf: lf, cd: cd });
     }
     if (!cars.length) return { f: hullF, c: hullC };
     var keepF = [], keepC = [];
@@ -9300,6 +9427,13 @@
       var f = (c && c.node === lf.node && c.f > 0) ? Math.min(1, c.f) : 0;
       return { f: f, hidden: false };
     }
+    if (lf.hatch && lf.overCar && lf.openAway) {
+      /* A yard carriage's track leaves (fitCarriages): shut while the car is
+       * home in its storage level, open the moment it leaves for the hall. */
+      var ca = doors && doors.car;
+      var atA = (ca && ca.node === lf.overCar) ? Math.max(0, Math.min(1, ca.f)) : 0;
+      return { f: 0, hidden: atA > HATCH_SHUT_AT };
+    }
     if (lf.hatch && lf.overCar) {
       /* A hatch over a car's shaft (carShafts): gone while the car is home
        * in it, shut once the car has left. The same `car.f` the car is
@@ -9665,6 +9799,12 @@
 
     var b = sorted[k];
     if (!b || !b.mid || !b.min || !b.max) { DECK[key] = null; return null; }
+    /* A BAY THAT IS A CARRIAGE stands its hull on the carriage's own deck
+     * (2026-11-03): cast down from the box top, the yards' upper carriage
+     * bays found the RAIL their bogie runs on (0.36 radii, yard-m) - the
+     * hull was parked on the incline over her carriage. */
+    var cf0 = carriageFor(role, b.node);
+    if (cf0) { DECK[key] = cf0.deck; return cf0.deck; }
 
     /* Start a hair under the box's own ceiling so the cast begins in the
      * open air of the alcove rather than on the lid of the box. */
@@ -17015,6 +17155,7 @@
     clearRoute: clearRoute,
     routeLegClear: routeLegClear,
     berthDeck: berthDeck,
+    carriageFor: carriageFor,
     berthBoom: berthBoom,
     boomLimit: boomLimit,
     portDoors: portDoors,

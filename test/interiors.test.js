@@ -135,7 +135,9 @@ console.log('--- the legs inside the station ---');
       if (!path) continue;
       berths++;
       if (path.blocked) blocked++;
-      var prev = null, hits = 0;
+      var prev = null, hits = 0, prevCar = null;
+      /* A yard carriage's run in model units, for a hull riding it. */
+      var cg = path.carriage ? Render.carriageFor(id, path.carriage) : null;
       for (var el = 0; el <= dur; el += 0.25) {
         var pose = Sim.arrivalPose(st, sys, 0, i, el);
         if (!pose) continue;
@@ -150,10 +152,22 @@ console.log('--- the legs inside the station ---');
             var oo = offs[o];
             var a = [prev[0] + ri[0] * oo[0] + up[0] * oo[1], prev[1] + ri[1] * oo[0] + up[1] * oo[1], prev[2] + ri[2] * oo[0] + up[2] * oo[1]];
             var b = [p[0] + ri[0] * oo[0] + up[0] * oo[1], p[1] + ri[1] * oo[0] + up[1] * oo[1], p[2] + ri[2] * oo[0] + up[2] * oo[1]];
-            if (Render.portSegmentHit(id, a, b, doors)) { hits++; break; }
+            var hit = Render.portSegmentHit(id, a, b, doors);
+            /* RIDING A CARRIAGE, the carriage moves with her: she is still
+             * against its deck, so the carriage itself is asked about her
+             * step in its own frame (where it was a quarter second ago),
+             * and the rest of the station about her step through it. */
+            if (hit && cg && pose.ride === 'ride' && hit.part === path.carriage && prevCar !== null) {
+              var df = pose.car.f - prevCar;
+              var a2 = [a[0] + cg.d[0] * df, a[1] + cg.d[1] * df, a[2] + cg.d[2] * df];
+              var h2 = Render.portSegmentHit(id, a2, b, doors);
+              if (!h2 || h2.part !== path.carriage) hit = null;
+            }
+            if (hit) { hits++; break; }
           }
         }
         prev = p;
+        prevCar = pose.car ? pose.car.f : null;
       }
       if (hits) bad.push(id + ' b' + i + (path.blocked ? ' (no open route found)' : '') + ': ' + hits);
       else if (/^(ring|refinery)/.test(id) || /^spine-[ms]$/.test(id)) clean.push(id);
@@ -173,8 +187,13 @@ console.log('--- the legs inside the station ---');
    * ends, which open into the hub only through structure at the fleet's
    * width, the skimmers' hoists, the yards' tracks, two spine-l berths and
    * four cradle berths. */
-  check('the berths with an inner leg through something are no more than the 52 measured 2026-11-03 (55 before the second pass)',
-        bad.length <= 52, bad.length + '');
+  /* 32 since the yards' carriages ride (third pass, 2026-11-03): all 20
+   * yard S/M bays were "no open route found", the hull carried up the
+   * incline through her own carriage to stand on its rail. */
+  check('the berths with an inner leg through something are no more than the 32 measured 2026-11-03 (52 before the third pass, 55 before the second)',
+        bad.length <= 32, bad.length + '');
+  check('no yard berth has an inner leg through anything',
+        !bad.some(function (s) { return /^yard-[sml] /.test(s); }), bad.filter(function (s) { return /^yard-[sml] /.test(s); }).join('; '));
   check('no ring, refinery or small/medium spine berth has an inner leg through anything',
         !bad.some(function (s) { return /^(ring|refinery)/.test(s) || /^spine-[ms] /.test(s); }),
         bad.filter(function (s) { return /^(ring|refinery)/.test(s) || /^spine-[ms] /.test(s); }).join('; '));
@@ -262,6 +281,9 @@ console.log('--- the lifts ---');
     var d = Render.portDoors(id);
     fits.push(id + ': ' + (d.carFit || []).join(', '));
     (d.cars || raw.cars).forEach(function (c) {
+      /* A yard carriage runs on an incline through an aperture of the art's
+       * own, not up a shaft: section A below measures it. */
+      if (c.carriage) return;
       cars++;
       var cx = (c.min[0] + c.max[0]) / 2, cy = (c.min[1] + c.max[1]) / 2;
       var w = c.max[0] - c.min[0], h = c.max[1] - c.min[1];
@@ -420,6 +442,105 @@ console.log('--- the yards\' doors open ---');
   });
   Render.assignPort(role, null);
   st.radius = R0;
+})();
+
+/* ---- A: THE YARDS' CARRIAGES (2026-11-03) ----------------------------------
+ * Astra at Halden Yard: "left elevator protrudes ... a cut in the floor
+ * there for the elevator to come up through. When the elevator is not there,
+ * there should be a blast door covering the shaft"; "the bottom of that
+ * shaft needs to be flush with the floor, so the elevator comes down and
+ * locks into the floor ... placed too high on the right and too high on the
+ * left". Before: the carriages never moved, the art's run landed the upper
+ * ones' deck 0.017 radii over the hall floor and the lower ones' 0.0075 (both
+ * too high), the track leaves were welded into the interior bucket, and the
+ * hull was carried up the incline to stand on the rail (yard-m, 0.36 radii,
+ * 0.26 over her carriage's deck). Every S/M bay of yard-s/m/l: its carriage
+ * is a car with faces of its own; its run is fitted so its deck at the hall
+ * end is level with the floor beside the aperture (measured here again,
+ * independently, against the interior's triangles); the hull stands on its
+ * deck at home; the route's last leg is the ride, foot to stand exactly the
+ * run; its leaves are no longer in the interior, are shut while it is home
+ * and open while it is away; and the carriage and the hull it carries never
+ * part. */
+console.log('--- A: the yards\' carriages ---');
+(function () {
+  st.radius = 4.184;
+  function column(m, x, y) {
+    var zs = [];
+    if (!m) return zs;
+    m.f.forEach(function (t) {
+      var A = m.v[t[0]], B = m.v[t[1]], C = m.v[t[2]];
+      if (!A || !B || !C) return;
+      var d0 = (B[0] - A[0]) * (C[1] - A[1]) - (C[0] - A[0]) * (B[1] - A[1]);
+      if (Math.abs(d0) < 1e-14) return;
+      var u = ((x - A[0]) * (C[1] - A[1]) - (C[0] - A[0]) * (y - A[1])) / d0;
+      var v = ((B[0] - A[0]) * (y - A[1]) - (x - A[0]) * (B[1] - A[1])) / d0;
+      if (u < 0 || v < 0 || u + v > 1) return;
+      zs.push(A[2] + u * (B[2] - A[2]) + v * (C[2] - A[2]));
+    });
+    return zs;
+  }
+  var bays = 0, offFloor = [], stands = [], rides = [], hatches = [], interiorLeaves = 0, wasHigh = [];
+  ['yard-s', 'yard-m', 'yard-l'].forEach(function (id) {
+    var raw = global.PortLib[id];
+    if (!raw) return;
+    Render.assignPort(role, id);
+    var lib = Render.libPort(id), d = Render.portDoors(id);
+    (raw.parts || []).forEach(function (pt) { if (pt.kind === 'hatch' && pt.bucket === 'interior') interiorLeaves++; });
+    var nb = Math.max(1, Gen.bayGeometry(st).berths);
+    for (var i = 0; i < nb; i++) {
+      var path = Sim.arrivalPath(st, i);
+      if (!path || !path.carriage) continue;
+      bays++;
+      var cg = Render.carriageFor(id, path.carriage);
+      var cd = d.cars.filter(function (c) { return c.node === path.carriage; })[0];
+      if (!cg || !cd || !cd.runScale) { offFloor.push(id + ' b' + i + ' not fitted'); continue; }
+      wasHigh.push(cd.artLand - cd.floor);
+      /* The floor beside the far end, from the interior's own triangles. */
+      var w = cd.max[0] - cd.min[0], fx = (cd.min[0] + cd.max[0]) / 2 + cg.d[0], fy = cd.min[1] + cg.d[1] - (cd.max[1] - cd.min[1]) * 0.15;
+      var land = cg.deck + cg.d[2], near = Infinity;
+      column(lib.interior, fx, fy).concat(column(lib.interior, cd.min[0] + cg.d[0] - w * 0.15, (cd.min[1] + cd.max[1]) / 2 + cg.d[1]))
+        .forEach(function (z) { if (Math.abs(z - land) < Math.abs(near)) near = z - land; });
+      if (!(Math.abs(near) < 1e-4)) offFloor.push(id + ' b' + i + ' deck ' + (near * -1).toFixed(4) + ' off the floor');
+      /* Her centre's height over the deck is the berth's standoff, the
+       * same at every bay of a station: under a hull's height, and over the
+       * deck, never the 0.26 radii she stood over it on the rail. */
+      var stand = path[9], over = stand.z - cg.deck, hullH = Render.hullSpan('courier').h / st.radius;
+      if (!(over > 0 && over < hullH * 2)) stands.push(id + ' b' + i + ' ' + over.toFixed(4) + ' over its deck');
+      var pl = [path[8]].concat(path.through, [path[9]]), ft = pl[path.rideAt];
+      if (path.rideAt !== pl.length - 2 || Math.abs(ft.x - stand.x - cg.d[0]) > 1e-6 || Math.abs(ft.y - stand.y - cg.d[1]) > 1e-6 ||
+          Math.abs(ft.z - stand.z - cg.d[2]) > 1e-6) rides.push(id + ' b' + i + ' foot is not the run');
+      /* The carriage under her: her height over its posed deck, every half
+       * second of the transfer leg while it is in the hall or riding. */
+      var dur = Sim.arrivalTotal(st, i), basis = Sim.portBasis(st, sys, 0), worst = 0, sawOpen = false, sawShut = false;
+      var mine = d.leaves.filter(function (l) { return l.hatch && l.overCar === path.carriage; });
+      for (var el = 0; el <= dur; el += 0.5) {
+        var pose = Sim.arrivalPose(st, sys, 0, i, el);
+        if (!pose || !pose.car) continue;
+        var shut = mine.every(function (l) { return !Render.partState(l, { car: pose.car }).hidden; });
+        if (pose.car.f > 0.05) sawOpen = sawOpen || !shut; else sawShut = sawShut || shut;
+        if (pose.car.f > 0.05 && shut) hatches.push(id + ' b' + i + ' shut on a carriage away at ' + pose.car.f.toFixed(2));
+        if (pose.ride === 'ride') {
+          var rel = V.sub(pose.pos, basis.entrance.pos), z = V.dot(rel, basis.up) / st.radius;
+          var deckNow = cg.deck + cg.d[2] * pose.car.f;
+          worst = Math.max(worst, Math.abs(z - deckNow - over));
+        }
+      }
+      if (worst > 1e-4) rides.push(id + ' b' + i + ' parts from its carriage by ' + worst.toFixed(5));
+      if (mine.length < 2 || !sawShut || !sawOpen) hatches.push(id + ' b' + i + ': ' + mine.length + ' leaves, seen shut ' + sawShut + ', open ' + sawOpen);
+    }
+  });
+  Render.assignPort(role, null);
+  st.radius = R0;
+  console.log('  ' + bays + ' carriage bays; the art landed their decks ' + Math.min.apply(null, wasHigh).toFixed(4) + '-' +
+              Math.max.apply(null, wasHigh).toFixed(4) + ' radii over the hall floor');
+  check('every yard S/M bay rides a carriage', bays === 20, bays + '');
+  check('each carriage comes down flush with the hall floor', offFloor.length === 0, offFloor.slice(0, 4).join('; '));
+  check('the hull stands on her carriage\'s deck at home', stands.length === 0, stands.slice(0, 4).join('; '));
+  check('the last leg is the ride, and she never parts from the carriage', rides.length === 0, rides.slice(0, 4).join('; '));
+  check('no track leaf is left in the interior bucket', interiorLeaves === 0, interiorLeaves + '');
+  check('the leaves over a carriage\'s aperture are shut while it is home and open while it is away',
+        hatches.length === 0, hatches.slice(0, 4).join('; '));
 })();
 
 /* ---- ON HER OWN GEAR -------------------------------------------------------
